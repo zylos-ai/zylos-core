@@ -1,0 +1,13 @@
+{
+  "name": "web-console",
+  "version": "1.0.0",
+  "description": "Web Console for Zylos - browser-based Claude communication",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^9.4.3",
+    "express": "^4.18.2"
+  }
+}

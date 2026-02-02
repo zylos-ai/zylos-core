@@ -12,45 +12,79 @@ Default communication channel - works without any external service.
 Allows users to communicate with Claude even without Telegram/Lark/Discord.
 This is the baseline, always-available interface.
 
+## Quick Start
+
+```bash
+# Install dependencies
+cd ~/.claude/skills/web-console
+npm install
+
+# Start server (default port 3456)
+node server.js
+
+# Or with PM2
+pm2 start server.js --name web-console
+```
+
 ## Access
 
-URL: `https://<your-domain>/console/`
-
-Served by Caddy (C6 HTTP Layer).
-
-## Features
-
-- Send messages to Claude
-- View conversation history
-- Real-time status indicator
-- Mobile-friendly interface
+Direct: `http://localhost:3456`
+Via Caddy: `https://<your-domain>/console/`
 
 ## Architecture
 
 ```
-Browser ──► Web Console ──► C4 Bridge ──► Claude
-                              │
-                              ▼
-                           SQLite
+Browser ──► Web Console Server ──► C4 Bridge ──► Claude
+                  │
+                  ▼
+               SQLite (c4.db)
 ```
 
-## Integration with C4
+## API Endpoints
 
-Web Console uses standard C4 interface:
-- Calls `c4-receive.sh --source web` to send messages
-- Receives replies via WebSocket or polling
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/status` | GET | Get Claude's current status |
+| `/api/conversations/recent` | GET | Get recent conversation history |
+| `/api/send` | POST | Send message to Claude |
+| `/api/poll?since_id=N` | GET | Poll for new messages |
+| `/api/health` | GET | Health check |
 
 ## Files
 
 ```
 ~/.claude/skills/web-console/
 ├── SKILL.md
-├── index.html
-├── app.js
-└── api/
-    └── handler.js
+├── package.json
+├── server.js          # Express API server
+└── public/
+    ├── index.html     # Chat UI
+    ├── styles.css     # Styling
+    └── app.js         # Frontend logic
 ```
 
-## Status
+## Caddy Integration
 
-**TODO**: Implementation pending. Currently a placeholder.
+Add to Caddyfile for HTTPS access:
+
+```
+handle /console/* {
+    uri strip_prefix /console
+    reverse_proxy localhost:3456
+}
+```
+
+## Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `WEB_CONSOLE_PORT` | 3456 | Server port |
+| `ZYLOS_DIR` | ~/zylos | Data directory |
+
+## Features
+
+- Real-time status indicator (busy/idle/offline)
+- Message polling every 2 seconds
+- Auto-resizing input
+- Mobile-friendly responsive design
+- Dark theme
