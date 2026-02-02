@@ -70,7 +70,6 @@ zylos-core/
 │   ├── memory/
 │   ├── pm2.config.js
 │   └── CLAUDE.md
-├── channels/               # Channel interface examples
 └── docs/
 ```
 
@@ -78,29 +77,37 @@ zylos-core/
 
 ```
 ~/.claude/skills/           # Skill code (upgradeable)
-├── self-maintenance/
-├── memory/
-├── comm-bridge/
-├── web-console/
-├── scheduler/
-└── http/
+├── self-maintenance/       # Core: C2
+├── memory/                 # Core: C3
+├── comm-bridge/            # Core: C4
+├── web-console/            # Core: C4+
+├── scheduler/              # Core: C5
+├── http/                   # Core: C6
+├── telegram/               # Optional: Telegram channel
+└── lark/                   # Optional: Lark channel
 
 ~/zylos/                    # User data (preserved)
 ├── .env                    # Configuration
 ├── memory/                 # Memory files
 ├── public/                 # Shared files
 ├── logs/                   # Log files
-├── pm2.config.js          # Service config
-└── CLAUDE.md              # Claude guidance
+├── scheduler/              # Scheduler DB
+├── comm-bridge/            # C4 DB
+├── telegram/               # Telegram config/data
+├── lark/                   # Lark config/data
+├── pm2.config.js           # Service config
+└── CLAUDE.md               # Claude guidance
 ```
 
 ## Optional Channels
 
-Install additional communication channels:
+Channels are skills that implement the C4 communication interface. Install them to `~/.claude/skills/`:
 
 - [zylos-telegram](https://github.com/zylos-ai/zylos-telegram) - Telegram integration
 - [zylos-lark](https://github.com/zylos-ai/zylos-lark) - Lark/Feishu integration
 - [zylos-discord](https://github.com/zylos-ai/zylos-discord) - Discord integration
+
+Each channel skill provides `send.sh` for outgoing messages and stores config in `~/zylos/<channel>/`.
 
 ## Requirements
 

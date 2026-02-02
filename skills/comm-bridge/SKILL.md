@@ -53,7 +53,9 @@ SQLite at `~/zylos/comm-bridge/c4.db`:
 
 ## Channel Interface
 
-Channels must provide: `~/zylos/channels/<name>/send.sh <endpoint_id> <message>`
+Channels are skills installed in `~/.claude/skills/`. Each channel must provide:
+- `~/.claude/skills/<channel>/send.sh <endpoint_id> <message>`
+- Config at `~/zylos/<channel>/config.json` (for data like primary_dm)
 
 Returns 0 on success, non-zero on failure.
 

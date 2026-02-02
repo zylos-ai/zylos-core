@@ -6,7 +6,7 @@
 # Example: c4-send.sh telegram 8101553026 "Hello Howard!"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CHANNELS_DIR="$HOME/zylos/channels"
+SKILLS_DIR="$HOME/.claude/skills"
 
 # Parse arguments
 if [ $# -lt 2 ]; then
@@ -36,8 +36,8 @@ fi
 ENDPOINT_ARG="${ENDPOINT:-null}"
 node "$SCRIPT_DIR/c4-db.js" insert out "$SOURCE" "$ENDPOINT_ARG" "$MESSAGE" > /dev/null 2>&1
 
-# Find and call channel send script
-CHANNEL_SCRIPT="$CHANNELS_DIR/$SOURCE/send.sh"
+# Find and call channel send script (channels are skills in ~/.claude/skills/)
+CHANNEL_SCRIPT="$SKILLS_DIR/$SOURCE/send.sh"
 
 if [ ! -x "$CHANNEL_SCRIPT" ]; then
     echo "Error: Channel script not found or not executable: $CHANNEL_SCRIPT"

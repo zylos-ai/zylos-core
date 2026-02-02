@@ -73,7 +73,7 @@ check_requirements() {
 create_directories() {
     echo -e "\n${BLUE}Creating directories...${NC}"
 
-    mkdir -p "$ZYLOS_DIR"/{memory,public,logs,channels}
+    mkdir -p "$ZYLOS_DIR"/{memory,public,logs,scheduler,comm-bridge}
     mkdir -p "$SKILLS_DIR"
 
     echo "  ✓ $ZYLOS_DIR"
