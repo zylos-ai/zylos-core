@@ -1,0 +1,252 @@
+#!/usr/bin/env node
+/**
+ * C4 Communication Bridge - Database Module
+ * Provides database operations for message logging and checkpoint management
+ */
+
+const Database = require('better-sqlite3');
+const path = require('path');
+const fs = require('fs');
+
+const DB_PATH = path.join(__dirname, 'c4.db');
+const INIT_SQL_PATH = path.join(__dirname, 'init-db.sql');
+
+let db = null;
+
+/**
+ * Get database connection, initializing if needed
+ */
+function getDb() {
+  if (!db) {
+    const isNew = !fs.existsSync(DB_PATH);
+    db = new Database(DB_PATH);
+    db.pragma('journal_mode = WAL');  // Better concurrent access
+
+    if (isNew) {
+      initSchema();
+    }
+  }
+  return db;
+}
+
+/**
+ * Initialize database schema from init-db.sql
+ */
+function initSchema() {
+  const initSql = fs.readFileSync(INIT_SQL_PATH, 'utf8');
+  db.exec(initSql);
+  console.log('[C4-DB] Database initialized');
+}
+
+/**
+ * Insert a conversation record
+ * @param {string} direction - 'in' or 'out'
+ * @param {string} source - 'telegram', 'lark', 'scheduler', etc.
+ * @param {string|null} endpointId - chat_id or null
+ * @param {string} content - message content
+ * @returns {object} - inserted record with id
+ */
+function insertConversation(direction, source, endpointId, content) {
+  const db = getDb();
+
+  // Get current checkpoint
+  const checkpoint = db.prepare(
+    'SELECT id FROM checkpoints ORDER BY id DESC LIMIT 1'
+  ).get();
+
+  const stmt = db.prepare(`
+    INSERT INTO conversations (direction, source, endpoint_id, content, checkpoint_id)
+    VALUES (?, ?, ?, ?, ?)
+  `);
+
+  const result = stmt.run(direction, source, endpointId, content, checkpoint?.id || null);
+
+  return {
+    id: result.lastInsertRowid,
+    direction,
+    source,
+    endpoint_id: endpointId,
+    content,
+    checkpoint_id: checkpoint?.id || null
+  };
+}
+
+/**
+ * Create a checkpoint
+ * @param {string} type - 'memory_sync', 'session_start', or 'manual'
+ * @returns {object} - checkpoint record with id
+ */
+function createCheckpoint(type) {
+  const db = getDb();
+
+  const stmt = db.prepare('INSERT INTO checkpoints (type) VALUES (?)');
+  const result = stmt.run(type);
+
+  return {
+    id: result.lastInsertRowid,
+    type,
+    timestamp: new Date().toISOString()
+  };
+}
+
+/**
+ * Get conversations since last checkpoint
+ * @returns {array} - array of conversation records
+ */
+function getConversationsSinceLastCheckpoint() {
+  const db = getDb();
+
+  // Get timestamp of the last checkpoint
+  const lastCheckpoint = db.prepare(
+    'SELECT timestamp FROM checkpoints ORDER BY timestamp DESC LIMIT 1'
+  ).get();
+
+  if (!lastCheckpoint) {
+    // No checkpoint, return all conversations
+    return db.prepare(
+      'SELECT * FROM conversations ORDER BY timestamp'
+    ).all();
+  }
+
+  // Get all conversations after the checkpoint
+  const conversations = db.prepare(`
+    SELECT * FROM conversations
+    WHERE timestamp > ?
+    ORDER BY timestamp
+  `).all(lastCheckpoint.timestamp);
+
+  return conversations;
+}
+
+/**
+ * Get recent conversations (for debugging/testing)
+ * @param {number} limit - max records to return
+ * @returns {array} - array of conversation records
+ */
+function getRecentConversations(limit = 20) {
+  const db = getDb();
+  return db.prepare(
+    'SELECT * FROM conversations ORDER BY timestamp DESC LIMIT ?'
+  ).all(limit);
+}
+
+/**
+ * Get all checkpoints
+ * @returns {array} - array of checkpoint records
+ */
+function getCheckpoints() {
+  const db = getDb();
+  return db.prepare('SELECT * FROM checkpoints ORDER BY timestamp DESC').all();
+}
+
+/**
+ * Format conversations for session recovery
+ * @param {array} conversations - array of conversation records
+ * @returns {string} - formatted text for Claude context injection
+ */
+function formatForRecovery(conversations) {
+  if (!conversations || conversations.length === 0) {
+    return '';
+  }
+
+  const lines = ['[Session Recovery] The following conversations occurred before the crash:\n'];
+
+  for (const conv of conversations) {
+    const dir = conv.direction === 'in' ? 'IN' : 'OUT';
+    const endpoint = conv.endpoint_id ? `:${conv.endpoint_id}` : '';
+    lines.push(`[${conv.timestamp}] ${dir} (${conv.source}${endpoint}):`);
+    lines.push(conv.content);
+    lines.push('');
+  }
+
+  lines.push('Please continue the previous conversation.');
+
+  return lines.join('\n');
+}
+
+/**
+ * Close database connection
+ */
+function close() {
+  if (db) {
+    db.close();
+    db = null;
+  }
+}
+
+// CLI mode
+if (require.main === module) {
+  const args = process.argv.slice(2);
+  const command = args[0];
+
+  switch (command) {
+    case 'init':
+      getDb();
+      console.log('Database initialized at:', DB_PATH);
+      break;
+
+    case 'insert':
+      // insert <direction> <source> <endpoint_id> <content>
+      if (args.length < 5) {
+        console.error('Usage: c4-db.js insert <direction> <source> <endpoint_id> <content>');
+        process.exit(1);
+      }
+      const record = insertConversation(args[1], args[2], args[3] === 'null' ? null : args[3], args[4]);
+      console.log('Inserted:', JSON.stringify(record));
+      break;
+
+    case 'checkpoint':
+      // checkpoint <type>
+      const type = args[1] || 'manual';
+      const cp = createCheckpoint(type);
+      console.log('Checkpoint created:', JSON.stringify(cp));
+      break;
+
+    case 'recover':
+      const convs = getConversationsSinceLastCheckpoint();
+      if (convs.length === 0) {
+        console.log('No conversations since last checkpoint.');
+      } else {
+        console.log(formatForRecovery(convs));
+      }
+      break;
+
+    case 'recent':
+      const limit = parseInt(args[1]) || 20;
+      const recent = getRecentConversations(limit);
+      console.log(JSON.stringify(recent, null, 2));
+      break;
+
+    case 'checkpoints':
+      const cps = getCheckpoints();
+      console.log(JSON.stringify(cps, null, 2));
+      break;
+
+    default:
+      console.log(`C4 Database CLI
+
+Usage: c4-db.js <command> [args]
+
+Commands:
+  init                                  Initialize database
+  insert <dir> <source> <endpoint> <content>  Insert conversation
+  checkpoint [type]                     Create checkpoint (default: manual)
+  recover                               Get conversations since last checkpoint
+  recent [limit]                        Get recent conversations
+  checkpoints                           List all checkpoints
+`);
+  }
+
+  close();
+}
+
+module.exports = {
+  getDb,
+  insertConversation,
+  createCheckpoint,
+  getConversationsSinceLastCheckpoint,
+  getRecentConversations,
+  getCheckpoints,
+  formatForRecovery,
+  close
+};

@@ -1,0 +1,16 @@
+{
+  "name": "zylos-core",
+  "version": "0.1.0",
+  "description": "Zylos0 Core - C4 Communication Bridge",
+  "main": "c4-db.js",
+  "scripts": {
+    "init": "node c4-db.js init",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": ["zylos", "ai-agent", "communication"],
+  "author": "Zylos AI",
+  "license": "Apache-2.0",
+  "dependencies": {
+    "better-sqlite3": "^12.6.2"
+  }
+}

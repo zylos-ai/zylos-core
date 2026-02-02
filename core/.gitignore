@@ -1,0 +1,10 @@
+# Database files (generated at runtime)
+c4.db
+c4.db-wal
+c4.db-shm
+
+# Dependencies
+node_modules/
+
+# Lock file (regenerated on npm install)
+package-lock.json
