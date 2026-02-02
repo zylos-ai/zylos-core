@@ -65,6 +65,28 @@ function readStatus() {
 }
 
 /**
+ * Strip internal routing info from message content for display
+ */
+function stripReplyVia(content) {
+  // Remove "---- reply via: ..." suffix
+  const idx = content.indexOf(' ---- reply via:');
+  if (idx !== -1) {
+    return content.substring(0, idx);
+  }
+  return content;
+}
+
+/**
+ * Clean message for display (strip internal routing info)
+ */
+function cleanMessageForDisplay(msg) {
+  return {
+    ...msg,
+    content: stripReplyVia(msg.content)
+  };
+}
+
+/**
  * Get new messages since given ID
  */
 function getNewMessages(sinceId) {
@@ -75,7 +97,7 @@ function getNewMessages(sinceId) {
       WHERE source = 'web-console' AND id > ?
       ORDER BY timestamp ASC
     `);
-    return stmt.all(sinceId);
+    return stmt.all(sinceId).map(cleanMessageForDisplay);
   } catch (err) {
     return [];
   }
@@ -224,7 +246,7 @@ app.get('/api/conversations/recent', (req, res) => {
       LIMIT ?
     `);
 
-    const conversations = stmt.all(limit);
+    const conversations = stmt.all(limit).map(cleanMessageForDisplay);
     res.json(conversations.reverse());
   } catch (err) {
     res.status(500).json({ error: err.message });
