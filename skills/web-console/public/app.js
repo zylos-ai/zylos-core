@@ -15,7 +15,19 @@ class ZylosConsole {
     this.pollInterval = null;
     this.statusInterval = null;
 
+    // Detect base path for API calls (handles /console/ proxy)
+    this.apiBase = this.detectApiBase();
+
     this.init();
+  }
+
+  detectApiBase() {
+    // If served from /console/, use relative paths
+    const path = window.location.pathname;
+    if (path.startsWith('/console')) {
+      return '/console';
+    }
+    return '';
   }
 
   init() {
@@ -35,7 +47,7 @@ class ZylosConsole {
 
   async loadConversations() {
     try {
-      const response = await fetch('/api/conversations/recent?limit=100');
+      const response = await fetch(`${this.apiBase}/api/conversations/recent?limit=100`);
       const conversations = await response.json();
 
       if (conversations.length === 0) {
@@ -58,7 +70,7 @@ class ZylosConsole {
 
   async pollMessages() {
     try {
-      const response = await fetch(`/api/poll?since_id=${this.lastMessageId}`);
+      const response = await fetch(`${this.apiBase}/api/poll?since_id=${this.lastMessageId}`);
       const messages = await response.json();
 
       if (messages.length > 0) {
@@ -73,7 +85,7 @@ class ZylosConsole {
 
   async updateStatus() {
     try {
-      const response = await fetch('/api/status');
+      const response = await fetch(`${this.apiBase}/api/status`);
       const status = await response.json();
 
       this.statusDot.className = 'status-dot';
@@ -117,7 +129,7 @@ class ZylosConsole {
     this.addTempMessage(message, tempId);
 
     try {
-      const response = await fetch('/api/send', {
+      const response = await fetch(`${this.apiBase}/api/send`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message }),
