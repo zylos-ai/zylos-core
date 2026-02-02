@@ -62,8 +62,8 @@ async function sendToTmux(message) {
       stdio: 'pipe'
     });
 
-    // Small delay to let tmux process the paste
-    await sleep(100);
+    // 200ms delay to let tmux process the paste (same as telegram-bot)
+    await sleep(200);
 
     // Send Enter key
     execSync(`tmux send-keys -t "${TMUX_SESSION}" Enter`, {
