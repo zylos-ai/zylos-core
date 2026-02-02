@@ -33,31 +33,18 @@ function readJsonFile(filePath) {
 
 function sendViaChannel(channel, endpoint, message) {
   return new Promise((resolve) => {
-    // Try .js first, then .sh
-    const scriptJs = path.join(SKILLS_DIR, channel, 'send.js');
-    const scriptSh = path.join(SKILLS_DIR, channel, 'send.sh');
+    // Channels must provide send.js (Node.js standard)
+    const script = path.join(SKILLS_DIR, channel, 'send.js');
 
-    let script = null;
-    let useNode = false;
-
-    if (fs.existsSync(scriptJs)) {
-      script = scriptJs;
-      useNode = true;
-    } else if (fs.existsSync(scriptSh)) {
-      script = scriptSh;
-      useNode = false;
-    } else {
-      resolve({ success: false, error: 'Script not found' });
+    if (!fs.existsSync(script)) {
+      resolve({ success: false, error: 'send.js not found' });
       return;
     }
 
     const args = endpoint ? [endpoint, message] : [message];
-    const command = useNode ? 'node' : script;
-    const spawnArgs = useNode ? [script, ...args] : args;
 
-    const child = spawn(command, spawnArgs, {
-      stdio: 'pipe',
-      shell: !useNode
+    const child = spawn('node', [script, ...args], {
+      stdio: 'pipe'
     });
 
     child.on('close', (code) => {

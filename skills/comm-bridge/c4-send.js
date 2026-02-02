@@ -53,34 +53,21 @@ async function main() {
     // Silently ignore DB errors
   }
 
-  // Find and call channel send script
-  // Try .js first, then .sh for compatibility
-  const channelScriptJs = path.join(SKILLS_DIR, source, 'send.js');
-  const channelScriptSh = path.join(SKILLS_DIR, source, 'send.sh');
-
+  // Find and call channel send script (must be .js - channel standard)
   const fs = require('fs');
-  let channelScript = null;
-  let useNode = false;
+  const channelScript = path.join(SKILLS_DIR, source, 'send.js');
 
-  if (fs.existsSync(channelScriptJs)) {
-    channelScript = channelScriptJs;
-    useNode = true;
-  } else if (fs.existsSync(channelScriptSh)) {
-    channelScript = channelScriptSh;
-    useNode = false;
-  } else {
-    console.error(`Error: Channel script not found: ${channelScriptJs} or ${channelScriptSh}`);
+  if (!fs.existsSync(channelScript)) {
+    console.error(`Error: Channel script not found: ${channelScript}`);
+    console.error('Channels must provide send.js (Node.js standard)');
     process.exit(1);
   }
 
   // Call channel script
   const scriptArgs = endpoint ? [endpoint, message] : [message];
-  const command = useNode ? 'node' : channelScript;
-  const spawnArgs = useNode ? [channelScript, ...scriptArgs] : scriptArgs;
 
-  const child = spawn(command, spawnArgs, {
-    stdio: 'inherit',
-    shell: !useNode
+  const child = spawn('node', [channelScript, ...scriptArgs], {
+    stdio: 'inherit'
   });
 
   child.on('close', (code) => {

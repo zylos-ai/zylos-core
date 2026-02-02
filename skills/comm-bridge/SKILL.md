@@ -54,10 +54,10 @@ SQLite at `~/zylos/comm-bridge/c4.db`:
 ## Channel Interface
 
 Channels are skills installed in `~/.claude/skills/`. Each channel must provide:
-- `~/.claude/skills/<channel>/send.js <endpoint_id> <message>` (or send.sh for compatibility)
+- `~/.claude/skills/<channel>/send.js <endpoint_id> <message>` (Node.js standard)
 - Config at `~/zylos/<channel>/config.json` (for data like primary_dm)
 
-Returns 0 on success, non-zero on failure.
+Returns exit code 0 on success, non-zero on failure.
 
 ## Reply Protocol
 
