@@ -11,7 +11,7 @@ const path = require('path');
 const { execSync } = require('child_process');
 const { insertConversation } = require('./c4-db');
 
-const TMUX_SESSION = process.env.TMUX_SESSION || 'claude';
+const TMUX_SESSION = process.env.TMUX_SESSION || 'claude-main';
 
 function printUsage() {
   console.log('Usage: node c4-receive.js --source <source> --endpoint <endpoint_id> --content "<message>"');
