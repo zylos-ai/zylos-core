@@ -7,8 +7,12 @@
 const Database = require('better-sqlite3');
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
 
-const DB_PATH = path.join(__dirname, 'c4.db');
+// Data goes to ~/zylos/comm-bridge/, code stays in skills directory
+const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
+const DATA_DIR = path.join(ZYLOS_DIR, 'comm-bridge');
+const DB_PATH = path.join(DATA_DIR, 'c4.db');
 const INIT_SQL_PATH = path.join(__dirname, 'init-db.sql');
 
 let db = null;
@@ -18,6 +22,11 @@ let db = null;
  */
 function getDb() {
   if (!db) {
+    // Ensure data directory exists
+    if (!fs.existsSync(DATA_DIR)) {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+    }
+
     const isNew = !fs.existsSync(DB_PATH);
     db = new Database(DB_PATH);
     db.pragma('journal_mode = WAL');  // Better concurrent access

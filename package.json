@@ -6,9 +6,7 @@
   "bin": {
     "zylos": "./cli/zylos.js"
   },
-  "scripts": {
-    "postinstall": "node scripts/postinstall.js || true"
-  },
+  "scripts": {},
   "repository": {
     "type": "git",
     "url": "https://github.com/zylos-ai/zylos-core.git"

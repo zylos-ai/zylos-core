@@ -5,14 +5,24 @@
 
 const Database = require('better-sqlite3');
 const path = require('path');
+const fs = require('fs');
+const os = require('os');
 
-const DB_PATH = path.join(__dirname, '..', 'scheduler.db');
+// Data goes to ~/zylos/scheduler/, code stays in skills directory
+const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
+const DATA_DIR = path.join(ZYLOS_DIR, 'scheduler');
+const DB_PATH = path.join(DATA_DIR, 'scheduler.db');
 const HISTORY_RETENTION_DAYS = 30;
 
 let db = null;
 
 function getDb() {
   if (!db) {
+    // Ensure data directory exists
+    if (!fs.existsSync(DATA_DIR)) {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+    }
+
     db = new Database(DB_PATH);
     db.pragma('journal_mode = WAL');  // Better concurrent access
     initSchema();
