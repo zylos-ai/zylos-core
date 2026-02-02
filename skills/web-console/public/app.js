@@ -137,7 +137,10 @@ class ZylosConsole {
 
       const result = await response.json();
 
-      if (!result.success) {
+      if (result.success) {
+        // Mark as sent successfully
+        this.markMessageSent(tempId);
+      } else {
         console.error('Failed to send:', result.error);
         this.markMessageError(tempId);
       }
@@ -166,6 +169,23 @@ class ZylosConsole {
 
   addMessage(msg, scroll = true) {
     this.clearEmptyState();
+
+    // Check if message already exists (by id)
+    if (this.messagesContainer.querySelector(`[data-id="${msg.id}"]`)) {
+      return; // Skip duplicate
+    }
+
+    // For incoming user messages, remove matching temp message
+    if (msg.direction === 'in') {
+      const tempMessages = this.messagesContainer.querySelectorAll('[data-temp-id]');
+      for (const temp of tempMessages) {
+        const tempContent = temp.querySelector('.content');
+        if (tempContent && tempContent.textContent === msg.content) {
+          temp.remove();
+          break;
+        }
+      }
+    }
 
     const div = document.createElement('div');
     div.className = `message ${msg.direction === 'in' ? 'user' : 'claude'}`;
@@ -208,6 +228,17 @@ class ZylosConsole {
     this.messagesContainer.appendChild(div);
 
     this.scrollToBottom();
+  }
+
+  markMessageSent(tempId) {
+    const msg = this.messagesContainer.querySelector(
+      `[data-temp-id="${tempId}"]`
+    );
+    if (msg) {
+      msg.classList.remove('sending');
+      const meta = msg.querySelector('.meta');
+      if (meta) meta.textContent = this.formatTime(new Date().toISOString());
+    }
   }
 
   markMessageError(tempId) {
