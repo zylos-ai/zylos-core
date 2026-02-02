@@ -1,11 +1,17 @@
 // PM2 Ecosystem Configuration for Zylos
 // Location: ~/zylos/pm2.config.js
 
+const os = require('os');
+const path = require('path');
+
+const HOME = os.homedir();
+const SKILLS_DIR = path.join(HOME, '.claude', 'skills');
+
 module.exports = {
   apps: [
     {
       name: 'activity-monitor',
-      script: '~/.claude/skills/self-maintenance/activity-monitor.js',
+      script: path.join(SKILLS_DIR, 'self-maintenance', 'activity-monitor.js'),
       interpreter: 'node',
       autorestart: true,
       watch: false,
@@ -14,7 +20,7 @@ module.exports = {
     },
     {
       name: 'scheduler',
-      script: '~/.claude/skills/scheduler/scheduler.js',
+      script: path.join(SKILLS_DIR, 'scheduler', 'scheduler.js'),
       interpreter: 'node',
       autorestart: true,
       watch: false,
@@ -22,13 +28,13 @@ module.exports = {
       restart_delay: 5000,
       env: {
         NODE_ENV: 'production',
-        ZYLOS_DIR: process.env.HOME + '/zylos',
+        ZYLOS_DIR: path.join(HOME, 'zylos'),
       },
     },
     // Optional: Add channel-specific services here
     // {
     //   name: 'telegram-bot',
-    //   script: '~/.claude/skills/telegram/bot.js',
+    //   script: path.join(SKILLS_DIR, 'telegram', 'bot.js'),
     //   ...
     // },
   ],
