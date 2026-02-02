@@ -1,19 +1,25 @@
 #!/usr/bin/env node
 /**
- * Web Console Server
- * Provides HTTP API for browser-based Claude communication
+ * Web Console Server with WebSocket
+ * Provides HTTP API + WebSocket for real-time browser-based Claude communication
  *
  * Run with PM2: pm2 start server.js --name web-console
  * Default port: 3456
  */
 
 const express = require('express');
+const http = require('http');
+const WebSocket = require('ws');
 const path = require('path');
 const os = require('os');
+const fs = require('fs');
 const { spawn } = require('child_process');
 const Database = require('better-sqlite3');
 
 const app = express();
+const server = http.createServer(app);
+const wss = new WebSocket.Server({ server });
+
 const PORT = process.env.WEB_CONSOLE_PORT || 3456;
 
 // Paths
@@ -37,21 +43,147 @@ try {
   process.exit(1);
 }
 
+// Track connected WebSocket clients
+const clients = new Set();
+
+// Last known state for change detection
+let lastStatus = null;
+let lastMessageId = 0;
+
 /**
- * Get Claude status
+ * Read current Claude status
  */
-app.get('/api/status', (req, res) => {
-  const fs = require('fs');
+function readStatus() {
   try {
     if (fs.existsSync(STATUS_FILE)) {
-      const status = JSON.parse(fs.readFileSync(STATUS_FILE, 'utf8'));
-      res.json(status);
-    } else {
-      res.json({ state: 'unknown', message: 'Status file not found' });
+      return JSON.parse(fs.readFileSync(STATUS_FILE, 'utf8'));
     }
+    return { state: 'unknown', message: 'Status file not found' };
   } catch (err) {
-    res.json({ state: 'error', message: err.message });
+    return { state: 'error', message: err.message };
   }
+}
+
+/**
+ * Get new messages since given ID
+ */
+function getNewMessages(sinceId) {
+  try {
+    const stmt = db.prepare(`
+      SELECT id, direction, source, endpoint_id, content, timestamp
+      FROM conversations
+      WHERE source = 'web-console' AND id > ?
+      ORDER BY timestamp ASC
+    `);
+    return stmt.all(sinceId);
+  } catch (err) {
+    return [];
+  }
+}
+
+/**
+ * Broadcast message to all connected clients
+ */
+function broadcast(type, data) {
+  const message = JSON.stringify({ type, data });
+  for (const client of clients) {
+    if (client.readyState === WebSocket.OPEN) {
+      client.send(message);
+    }
+  }
+}
+
+/**
+ * Check for status changes and new messages
+ */
+function checkUpdates() {
+  // Check status changes
+  const currentStatus = readStatus();
+  if (!lastStatus || currentStatus.state !== lastStatus.state) {
+    lastStatus = currentStatus;
+    broadcast('status', currentStatus);
+  }
+
+  // Check for new messages
+  const newMessages = getNewMessages(lastMessageId);
+  if (newMessages.length > 0) {
+    lastMessageId = Math.max(...newMessages.map(m => m.id));
+    broadcast('messages', newMessages);
+  }
+}
+
+// Start update checker (every 500ms for responsiveness)
+setInterval(checkUpdates, 500);
+
+// Initialize lastMessageId
+try {
+  const stmt = db.prepare(`SELECT MAX(id) as maxId FROM conversations WHERE source = 'web-console'`);
+  const result = stmt.get();
+  lastMessageId = result?.maxId || 0;
+} catch (err) {
+  // Ignore
+}
+
+/**
+ * WebSocket connection handler
+ */
+wss.on('connection', (ws) => {
+  clients.add(ws);
+  console.log(`WebSocket client connected (${clients.size} total)`);
+
+  // Send current status immediately
+  const status = readStatus();
+  ws.send(JSON.stringify({ type: 'status', data: status }));
+
+  // Handle client messages
+  ws.on('message', async (data) => {
+    try {
+      const msg = JSON.parse(data);
+
+      if (msg.type === 'send' && msg.content) {
+        // Send message to Claude
+        const c4Receive = path.join(SKILLS_DIR, 'comm-bridge', 'c4-receive.js');
+
+        const child = spawn('node', [
+          c4Receive,
+          '--source', 'web-console',
+          '--endpoint', 'console',
+          '--content', msg.content.trim()
+        ], { stdio: 'pipe' });
+
+        child.on('close', (code) => {
+          if (code === 0) {
+            ws.send(JSON.stringify({ type: 'sent', success: true }));
+          } else {
+            ws.send(JSON.stringify({ type: 'sent', success: false, error: 'Failed to send' }));
+          }
+        });
+
+        child.on('error', (err) => {
+          ws.send(JSON.stringify({ type: 'sent', success: false, error: err.message }));
+        });
+      }
+    } catch (err) {
+      // Ignore invalid messages
+    }
+  });
+
+  ws.on('close', () => {
+    clients.delete(ws);
+    console.log(`WebSocket client disconnected (${clients.size} remaining)`);
+  });
+
+  ws.on('error', (err) => {
+    console.error('WebSocket error:', err.message);
+    clients.delete(ws);
+  });
+});
+
+/**
+ * Get Claude status (HTTP fallback)
+ */
+app.get('/api/status', (req, res) => {
+  res.json(readStatus());
 });
 
 /**
@@ -100,7 +232,7 @@ app.get('/api/conversations/recent', (req, res) => {
 });
 
 /**
- * Send message to Claude
+ * Send message to Claude (HTTP fallback)
  */
 app.post('/api/send', (req, res) => {
   const { message } = req.body;
@@ -109,7 +241,6 @@ app.post('/api/send', (req, res) => {
     return res.status(400).json({ error: 'Message is required' });
   }
 
-  // Use c4-receive.js to forward message to Claude
   const c4Receive = path.join(SKILLS_DIR, 'comm-bridge', 'c4-receive.js');
 
   const child = spawn('node', [
@@ -145,21 +276,12 @@ app.post('/api/send', (req, res) => {
 });
 
 /**
- * Poll for new messages since given ID
+ * Poll for new messages since given ID (HTTP fallback)
  */
 app.get('/api/poll', (req, res) => {
   try {
     const sinceId = parseInt(req.query.since_id) || 0;
-
-    const stmt = db.prepare(`
-      SELECT id, direction, source, endpoint_id, content, timestamp
-      FROM conversations
-      WHERE source = 'web-console' AND id > ?
-      ORDER BY timestamp ASC
-    `);
-
-    const messages = stmt.all(sinceId);
-    res.json(messages);
+    res.json(getNewMessages(sinceId));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -169,7 +291,11 @@ app.get('/api/poll', (req, res) => {
  * Health check
  */
 app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+  res.json({
+    status: 'ok',
+    timestamp: new Date().toISOString(),
+    websocket_clients: clients.size
+  });
 });
 
 // Serve index.html for root
@@ -178,20 +304,23 @@ app.get('/', (req, res) => {
 });
 
 // Start server
-app.listen(PORT, () => {
+server.listen(PORT, () => {
   console.log(`Web Console server running on http://localhost:${PORT}`);
+  console.log(`WebSocket available at ws://localhost:${PORT}`);
   console.log(`Database: ${DB_PATH}`);
 });
 
 // Graceful shutdown
 process.on('SIGINT', () => {
   console.log('Shutting down...');
+  wss.close();
   if (db) db.close();
   process.exit(0);
 });
 
 process.on('SIGTERM', () => {
   console.log('Shutting down...');
+  wss.close();
   if (db) db.close();
   process.exit(0);
 });
