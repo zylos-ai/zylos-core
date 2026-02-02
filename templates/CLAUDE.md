@@ -1,0 +1,69 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code when working in this directory.
+
+## Environment Overview
+
+This is a Zylos-managed workspace for an autonomous AI agent.
+
+## Memory System
+
+Persistent memory stored in `~/zylos/memory/`:
+- `context.md` - Current work focus
+- `decisions.md` - Key decisions made
+- `projects.md` - Active/planned projects
+- `preferences.md` - User preferences
+
+**Important Practices:**
+1. **Start each session** by reading memory files
+2. **Update memory frequently** - don't wait until context is full
+3. **Before context compaction** - always update memory first
+
+## Communication
+
+All external communication goes through C4 Communication Bridge.
+
+When you receive a message like:
+```
+[TG DM] user said: hello ---- reply via: ~/.claude/skills/comm-bridge/c4-send.sh telegram 12345
+```
+
+Reply using the exact path specified in `reply via:`.
+
+## Task Scheduler
+
+The scheduler may send you tasks when idle. After completing a task:
+```bash
+~/.claude/skills/scheduler/task-cli.js done <task-id>
+```
+
+## Available Skills
+
+Skills are located in `~/.claude/skills/`:
+- `self-maintenance/` - Health monitoring, restart, upgrade
+- `memory/` - Memory system guidance
+- `comm-bridge/` - Communication gateway
+- `web-console/` - Built-in web interface
+- `scheduler/` - Task scheduling
+- `http/` - Web server (Caddy)
+
+## Data Directories
+
+User data is in `~/zylos/`:
+- `memory/` - Memory files
+- `public/` - Shared files (served via HTTP)
+- `logs/` - Log files
+- `.env` - Configuration
+
+## Quick Reference
+
+```bash
+# Check status
+zylos status
+
+# View logs
+zylos logs
+
+# Task management
+~/.claude/skills/scheduler/task-cli.js list
+```

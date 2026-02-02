@@ -1,30 +1,35 @@
 # Zylos Core
 
-Minimal viable prototype for autonomous AI agent.
+Autonomous AI Agent Infrastructure - the minimal viable system for running a self-maintaining Claude agent.
 
-## Overview
+## Quick Install
 
-Zylos Core provides the foundational components for running an autonomous AI agent. It follows the principle of **minimal survival unit** - only essential components for agent survival and self-maintenance.
+```bash
+curl -fsSL https://raw.githubusercontent.com/zylos-ai/zylos-core/main/install.sh | bash
+```
 
-## Core Components
+## What's Included
 
-| Component | Purpose |
-|-----------|---------|
-| C1 Claude Runtime | AI reasoning engine (tmux + Claude Code) |
-| C2 Self-Maintenance | Health monitoring, crash recovery, upgrades |
-| C3 Memory System | Persistent memory across sessions |
-| C4 Communication Bridge | Unified message gateway with logging |
-| C5 Task Scheduler | Autonomous task scheduling |
-| C6 HTTP Layer | Web console and file sharing |
+### Core Components (C1-C6)
 
-## Architecture
+| Component | Purpose | Directory |
+|-----------|---------|-----------|
+| C1 | Claude Runtime | (via Claude Code) |
+| C2 | Self-Maintenance | `skills/self-maintenance/` |
+| C3 | Memory System | `skills/memory/` |
+| C4 | Communication Bridge | `skills/comm-bridge/` |
+| C4+ | Web Console | `skills/web-console/` |
+| C5 | Task Scheduler | `skills/scheduler/` |
+| C6 | HTTP Layer | `skills/http/` |
+
+### Architecture
 
 ```
 ┌─────────────────────────────────────────────────────┐
 │                    CORE LAYER                        │
 │  ┌──────────┐ ┌──────────┐ ┌──────────┐            │
 │  │ Memory   │ │   C4     │ │Scheduler │            │
-│  │   C3     │ │ CommBridge│ │   C5     │            │
+│  │   C3     │ │CommBridge│ │   C5     │            │
 │  └──────────┘ └──────────┘ └──────────┘            │
 │                     │                               │
 │              ┌──────────┐                          │
@@ -34,40 +39,74 @@ Zylos Core provides the foundational components for running an autonomous AI age
 └─────────────────────────────────────────────────────┘
 ```
 
+### CLI Commands
+
+```bash
+zylos status    # Show system status
+zylos logs      # View logs (activity|scheduler|caddy|pm2)
+zylos start     # Start services
+zylos stop      # Stop services
+zylos restart   # Restart services
+```
+
 ## Directory Structure
+
+### Repository Structure
 
 ```
 zylos-core/
-├── core/                    # C4 Communication Bridge
-│   ├── c4-receive.sh       # Receive messages from channels
-│   ├── c4-send.sh          # Send messages to channels
-│   ├── c4-checkpoint.sh    # Create memory sync checkpoints
-│   ├── c4-recover.sh       # Recover conversations after crash
-│   └── c4-db.js            # SQLite database operations
-├── scripts/                 # Utility scripts
-│   ├── activity-monitor.sh # C2 Self-Maintenance
-│   ├── restart-claude.sh   # Restart Claude session
-│   └── upgrade-claude.sh   # Upgrade Claude Code
-├── channels/               # Channel send scripts (convention)
-│   └── README.md           # Channel interface spec
-├── docs/                   # Documentation
-│   └── architecture.md     # Full architecture document
-└── install.sh              # Installation script
+├── install.sh              # One-line install entry point
+├── cli/                    # CLI commands
+│   └── zylos.js
+├── skills/                 # Skill implementations
+│   ├── self-maintenance/   # C2
+│   ├── memory/             # C3
+│   ├── comm-bridge/        # C4
+│   ├── web-console/        # C4 built-in channel
+│   ├── scheduler/          # C5
+│   └── http/               # C6
+├── templates/              # Installation templates
+│   ├── .env.example
+│   ├── memory/
+│   ├── pm2.config.js
+│   └── CLAUDE.md
+├── channels/               # Channel interface examples
+└── docs/
 ```
 
-## Quick Start
+### After Installation
 
-```bash
-# Clone
-git clone https://github.com/zylos-ai/zylos-core.git
-cd zylos-core
-
-# Install
-./install.sh
-
-# Start Claude in tmux
-tmux new-session -d -s claude-main 'claude --resume'
 ```
+~/.claude/skills/           # Skill code (upgradeable)
+├── self-maintenance/
+├── memory/
+├── comm-bridge/
+├── web-console/
+├── scheduler/
+└── http/
+
+~/zylos/                    # User data (preserved)
+├── .env                    # Configuration
+├── memory/                 # Memory files
+├── public/                 # Shared files
+├── logs/                   # Log files
+├── pm2.config.js          # Service config
+└── CLAUDE.md              # Claude guidance
+```
+
+## Optional Channels
+
+Install additional communication channels:
+
+- [zylos-telegram](https://github.com/zylos-ai/zylos-telegram) - Telegram integration
+- [zylos-lark](https://github.com/zylos-ai/zylos-lark) - Lark/Feishu integration
+- [zylos-discord](https://github.com/zylos-ai/zylos-discord) - Discord integration
+
+## Requirements
+
+- Node.js 18+
+- PM2 (auto-installed)
+- Claude Code (auto-installed)
 
 ## Key Design Principles
 
@@ -76,13 +115,10 @@ tmux new-session -d -s claude-main 'claude --resume'
 3. **Crash Recovery** - Checkpoint mechanism for session continuity
 4. **Simplicity** - Minimal code, easy to understand and maintain
 
+## Documentation
+
+See [docs/](./docs/) for detailed documentation.
+
 ## License
 
-Apache 2.0
-
-## Related Repositories
-
-- [zylos-upgrades](https://github.com/zylos-ai/zylos-upgrades) - Upgrade documentation
-- [zylos-registry](https://github.com/zylos-ai/zylos-registry) - Component registry
-- [zylos-telegram](https://github.com/zylos-ai/zylos-telegram) - Telegram integration
-- [zylos-lark](https://github.com/zylos-ai/zylos-lark) - Lark/Feishu integration
+MIT License - see [LICENSE](./LICENSE)

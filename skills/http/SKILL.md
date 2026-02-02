@@ -1,0 +1,77 @@
+---
+name: http
+description: Web server for console and file sharing. Core C6 component.
+---
+
+# HTTP Layer (C6)
+
+Caddy-based web server providing:
+- Web Console hosting
+- File sharing via `~/zylos/public/`
+- Health check endpoint
+
+## Setup
+
+```bash
+~/.claude/skills/http/setup-caddy.sh
+```
+
+This will:
+1. Read domain from `~/zylos/.env`
+2. Generate Caddyfile
+3. Configure and start Caddy
+
+## Endpoints
+
+| Path | Description |
+|------|-------------|
+| `/` | File listing or index.html |
+| `/console/` | Web Console interface |
+| `/*.md` | Markdown documents |
+| `/health` | Health check (returns "OK") |
+
+## File Sharing
+
+Place files in `~/zylos/public/` to share:
+
+```bash
+# Share a document
+cp document.md ~/zylos/public/
+chmod 644 ~/zylos/public/document.md
+
+# Access at: https://your.domain.com/document.md
+```
+
+## Configuration
+
+Domain is read from `~/zylos/.env`:
+```
+DOMAIN=your.domain.com
+```
+
+## Caddyfile Template
+
+Located at `~/.claude/skills/http/Caddyfile.template`
+
+Generated config goes to `~/zylos/Caddyfile`
+
+## HTTPS
+
+Caddy handles HTTPS automatically via Let's Encrypt.
+
+Requirements:
+- Domain DNS pointing to server
+- Ports 80 and 443 open
+
+## Troubleshooting
+
+```bash
+# Check Caddy status
+sudo systemctl status caddy
+
+# View logs
+sudo journalctl -u caddy -f
+
+# Access logs
+tail -f ~/zylos/logs/caddy-access.log
+```
