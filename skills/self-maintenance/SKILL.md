@@ -9,15 +9,15 @@ Monitors Claude's running state and ensures continuous operation.
 
 ## Components
 
-- **activity-monitor.sh**: Guardian daemon that monitors Claude and auto-restarts on crash
-- **restart-claude.sh**: Graceful restart with memory save
-- **upgrade-claude.sh**: Upgrade Claude Code to latest version
+- **activity-monitor.js**: Guardian daemon that monitors Claude and auto-restarts on crash
+- **restart-claude.js**: Graceful restart with memory save
+- **upgrade-claude.js**: Upgrade Claude Code to latest version
 
 ## When to Use
 
 - System automatically runs activity-monitor via PM2
-- Use restart-claude.sh when Claude needs a fresh start
-- Use upgrade-claude.sh when new Claude Code version available
+- Use restart-claude.js when Claude needs a fresh start
+- Use upgrade-claude.js when new Claude Code version available
 
 ## Activity Monitor States
 
@@ -48,10 +48,10 @@ OFFLINE → STOPPED → BUSY ↔ IDLE
 cat ~/.claude-status | jq
 
 # Manual restart
-~/.claude/skills/self-maintenance/restart-claude.sh
+node ~/.claude/skills/self-maintenance/restart-claude.js
 
 # Upgrade Claude Code
-~/.claude/skills/self-maintenance/upgrade-claude.sh
+node ~/.claude/skills/self-maintenance/upgrade-claude.js
 ```
 
 ## Service Management

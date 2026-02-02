@@ -5,8 +5,8 @@ module.exports = {
   apps: [
     {
       name: 'activity-monitor',
-      script: '~/.claude/skills/self-maintenance/activity-monitor.sh',
-      interpreter: '/bin/bash',
+      script: '~/.claude/skills/self-maintenance/activity-monitor.js',
+      interpreter: 'node',
       autorestart: true,
       watch: false,
       max_restarts: 10,

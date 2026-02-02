@@ -16,10 +16,10 @@ HTTP server component for Zylos Core, providing file sharing and optional revers
 echo "DOMAIN=your.domain.com" >> ~/zylos/.env
 
 # 2. Run setup
-./setup-caddy.sh
+node setup-caddy.js
 
 # 3. With optional components
-./setup-caddy.sh --with-lark --with-browser
+node setup-caddy.js --with-lark --with-browser
 ```
 
 ## Configuration

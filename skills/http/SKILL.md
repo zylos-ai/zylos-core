@@ -13,7 +13,7 @@ Caddy-based web server providing:
 ## Setup
 
 ```bash
-~/.claude/skills/http/setup-caddy.sh
+node ~/.claude/skills/http/setup-caddy.js
 ```
 
 This will:
