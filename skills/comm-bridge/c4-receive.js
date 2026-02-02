@@ -44,7 +44,11 @@ function parseArgs(args) {
   return result;
 }
 
-function sendToTmux(message) {
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function sendToTmux(message) {
   const bufferName = `c4-msg-${process.pid}-${Date.now()}`;
 
   try {
@@ -57,6 +61,9 @@ function sendToTmux(message) {
     execSync(`tmux paste-buffer -b "${bufferName}" -t "${TMUX_SESSION}"`, {
       stdio: 'pipe'
     });
+
+    // Small delay to let tmux process the paste
+    await sleep(100);
 
     // Send Enter key
     execSync(`tmux send-keys -t "${TMUX_SESSION}" Enter`, {
@@ -75,7 +82,7 @@ function sendToTmux(message) {
   }
 }
 
-function main() {
+async function main() {
   const args = process.argv.slice(2);
   const { source, endpoint, content } = parseArgs(args);
 
@@ -109,7 +116,8 @@ function main() {
   const fullMessage = `${content} ---- ${replyVia}`;
 
   // Send to Claude via tmux paste-buffer
-  if (sendToTmux(fullMessage)) {
+  const success = await sendToTmux(fullMessage);
+  if (success) {
     console.log('[C4] Message received and forwarded to Claude');
   } else {
     process.exit(1);
