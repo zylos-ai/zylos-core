@@ -63,7 +63,7 @@ app.get('/api/conversations', (req, res) => {
     const source = req.query.source || 'web';
 
     const stmt = db.prepare(`
-      SELECT id, direction, source, endpoint, content, timestamp
+      SELECT id, direction, source, endpoint_id, content, timestamp
       FROM conversations
       WHERE source = ?
       ORDER BY timestamp DESC
@@ -85,7 +85,7 @@ app.get('/api/conversations/recent', (req, res) => {
     const limit = parseInt(req.query.limit) || 100;
 
     const stmt = db.prepare(`
-      SELECT id, direction, source, endpoint, content, timestamp
+      SELECT id, direction, source, endpoint_id, content, timestamp
       FROM conversations
       WHERE source = 'web-console'
       ORDER BY timestamp DESC
@@ -152,7 +152,7 @@ app.get('/api/poll', (req, res) => {
     const sinceId = parseInt(req.query.since_id) || 0;
 
     const stmt = db.prepare(`
-      SELECT id, direction, source, endpoint, content, timestamp
+      SELECT id, direction, source, endpoint_id, content, timestamp
       FROM conversations
       WHERE source = 'web-console' AND id > ?
       ORDER BY timestamp ASC
