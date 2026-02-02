@@ -1,0 +1,10 @@
+# Dependencies
+node_modules/
+
+# Database files (generated at runtime)
+*.db
+*.db-wal
+*.db-shm
+
+# Lock file (regenerated on npm install)
+package-lock.json

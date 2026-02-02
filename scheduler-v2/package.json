@@ -1,0 +1,18 @@
+{
+  "name": "zylos-scheduler-v2",
+  "version": "2.0.0",
+  "description": "Production-ready time-based task scheduler for Zylos",
+  "main": "scheduler.js",
+  "bin": {
+    "task-cli": "./task-cli.js"
+  },
+  "scripts": {
+    "start": "node scheduler.js",
+    "cli": "node task-cli.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.7.0",
+    "cron-parser": "^4.9.0",
+    "chrono-node": "^2.7.7"
+  }
+}
