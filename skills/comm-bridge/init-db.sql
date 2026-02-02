@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS conversations (
     source TEXT NOT NULL,           -- 'telegram' | 'lark' | 'scheduler' | 'web'
     endpoint_id TEXT,               -- chat_id, can be NULL (e.g., scheduler)
     content TEXT NOT NULL,          -- message content
+    status TEXT DEFAULT 'pending',  -- 'pending' | 'delivered' (for direction='in' queue)
     checkpoint_id INTEGER,          -- associated checkpoint
     FOREIGN KEY (checkpoint_id) REFERENCES checkpoints(id)
 );
@@ -25,6 +26,7 @@ CREATE TABLE IF NOT EXISTS conversations (
 CREATE INDEX IF NOT EXISTS idx_conversations_timestamp ON conversations(timestamp);
 CREATE INDEX IF NOT EXISTS idx_conversations_checkpoint ON conversations(checkpoint_id);
 CREATE INDEX IF NOT EXISTS idx_conversations_source ON conversations(source);
+CREATE INDEX IF NOT EXISTS idx_conversations_status ON conversations(status);
 
 -- Create initial session_start checkpoint
 INSERT INTO checkpoints (type) VALUES ('session_start');

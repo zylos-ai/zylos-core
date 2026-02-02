@@ -33,6 +33,9 @@ function getDb() {
 
     if (isNew) {
       initSchema();
+    } else {
+      // Run migrations for existing databases
+      runMigrations();
     }
   }
   return db;
@@ -48,14 +51,33 @@ function initSchema() {
 }
 
 /**
+ * Run migrations for existing databases
+ */
+function runMigrations() {
+  // Check if status column exists
+  const tableInfo = db.prepare("PRAGMA table_info(conversations)").all();
+  const hasStatus = tableInfo.some(col => col.name === 'status');
+
+  if (!hasStatus) {
+    console.log('[C4-DB] Running migration: adding status column');
+    db.exec(`
+      ALTER TABLE conversations ADD COLUMN status TEXT DEFAULT 'delivered';
+      CREATE INDEX IF NOT EXISTS idx_conversations_status ON conversations(status);
+    `);
+    console.log('[C4-DB] Migration complete');
+  }
+}
+
+/**
  * Insert a conversation record
  * @param {string} direction - 'in' or 'out'
  * @param {string} source - 'telegram', 'lark', 'scheduler', etc.
  * @param {string|null} endpointId - chat_id or null
  * @param {string} content - message content
+ * @param {string} status - 'pending' or 'delivered' (default: 'pending' for in, 'delivered' for out)
  * @returns {object} - inserted record with id
  */
-function insertConversation(direction, source, endpointId, content) {
+function insertConversation(direction, source, endpointId, content, status = null) {
   const db = getDb();
 
   // Get current checkpoint
@@ -63,12 +85,15 @@ function insertConversation(direction, source, endpointId, content) {
     'SELECT id FROM checkpoints ORDER BY id DESC LIMIT 1'
   ).get();
 
+  // Default status: 'pending' for incoming, 'delivered' for outgoing
+  const finalStatus = status || (direction === 'in' ? 'pending' : 'delivered');
+
   const stmt = db.prepare(`
-    INSERT INTO conversations (direction, source, endpoint_id, content, checkpoint_id)
-    VALUES (?, ?, ?, ?, ?)
+    INSERT INTO conversations (direction, source, endpoint_id, content, status, checkpoint_id)
+    VALUES (?, ?, ?, ?, ?, ?)
   `);
 
-  const result = stmt.run(direction, source, endpointId, content, checkpoint?.id || null);
+  const result = stmt.run(direction, source, endpointId, content, finalStatus, checkpoint?.id || null);
 
   return {
     id: result.lastInsertRowid,
@@ -76,8 +101,46 @@ function insertConversation(direction, source, endpointId, content) {
     source,
     endpoint_id: endpointId,
     content,
+    status: finalStatus,
     checkpoint_id: checkpoint?.id || null
   };
+}
+
+/**
+ * Get next pending message from queue (FIFO)
+ * @returns {object|null} - oldest pending message or null
+ */
+function getNextPending() {
+  const db = getDb();
+  return db.prepare(`
+    SELECT id, direction, source, endpoint_id, content, timestamp
+    FROM conversations
+    WHERE direction = 'in' AND status = 'pending'
+    ORDER BY timestamp ASC
+    LIMIT 1
+  `).get() || null;
+}
+
+/**
+ * Mark a message as delivered
+ * @param {number} id - message id
+ */
+function markDelivered(id) {
+  const db = getDb();
+  db.prepare('UPDATE conversations SET status = ? WHERE id = ?').run('delivered', id);
+}
+
+/**
+ * Get count of pending messages
+ * @returns {number}
+ */
+function getPendingCount() {
+  const db = getDb();
+  const result = db.prepare(`
+    SELECT COUNT(*) as count FROM conversations
+    WHERE direction = 'in' AND status = 'pending'
+  `).get();
+  return result?.count || 0;
 }
 
 /**
@@ -257,5 +320,8 @@ module.exports = {
   getRecentConversations,
   getCheckpoints,
   formatForRecovery,
+  getNextPending,
+  markDelivered,
+  getPendingCount,
   close
 };

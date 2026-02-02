@@ -1,17 +1,17 @@
 #!/usr/bin/env node
 /**
  * C4 Communication Bridge - Receive Interface
- * Receives messages from external channels and forwards to Claude
+ * Receives messages from external channels and queues them for Claude
+ *
+ * Queue mode: Messages are written to DB with status='pending'
+ * The c4-dispatcher process handles serial delivery to Claude
  *
  * Usage: node c4-receive.js --source <source> --endpoint <endpoint_id> --content "<message>"
  * Example: node c4-receive.js --source telegram --endpoint 8101553026 --content "[TG DM] user said: hello"
  */
 
 const path = require('path');
-const { execSync } = require('child_process');
 const { insertConversation } = require('./c4-db');
-
-const TMUX_SESSION = process.env.TMUX_SESSION || 'claude-main';
 
 function printUsage() {
   console.log('Usage: node c4-receive.js --source <source> --endpoint <endpoint_id> --content "<message>"');
@@ -44,45 +44,7 @@ function parseArgs(args) {
   return result;
 }
 
-function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-async function sendToTmux(message) {
-  const bufferName = `c4-msg-${process.pid}-${Date.now()}`;
-
-  try {
-    // Set buffer with the message
-    execSync(`tmux set-buffer -b "${bufferName}" "${message.replace(/"/g, '\\"').replace(/\$/g, '\\$')}"`, {
-      stdio: 'pipe'
-    });
-
-    // Paste buffer to session
-    execSync(`tmux paste-buffer -b "${bufferName}" -t "${TMUX_SESSION}"`, {
-      stdio: 'pipe'
-    });
-
-    // 200ms delay to let tmux process the paste (same as telegram-bot)
-    await sleep(200);
-
-    // Send Enter key
-    execSync(`tmux send-keys -t "${TMUX_SESSION}" Enter`, {
-      stdio: 'pipe'
-    });
-
-    // Delete buffer
-    execSync(`tmux delete-buffer -b "${bufferName}"`, {
-      stdio: 'pipe'
-    });
-
-    return true;
-  } catch (err) {
-    console.error(`[C4] Error sending to tmux: ${err.message}`);
-    return false;
-  }
-}
-
-async function main() {
+function main() {
   const args = process.argv.slice(2);
   const { source, endpoint, content } = parseArgs(args);
 
@@ -97,13 +59,6 @@ async function main() {
     printUsage();
   }
 
-  // Record to database (direction=in)
-  try {
-    insertConversation('in', source, endpoint, content);
-  } catch (err) {
-    // Silently ignore DB errors
-  }
-
   // Assemble message with reply via
   const scriptDir = __dirname;
   let replyVia;
@@ -115,11 +70,13 @@ async function main() {
 
   const fullMessage = `${content} ---- ${replyVia}`;
 
-  // Send to Claude via tmux paste-buffer
-  const success = await sendToTmux(fullMessage);
-  if (success) {
-    console.log('[C4] Message received and forwarded to Claude');
-  } else {
+  // Queue message to database (status='pending')
+  // The c4-dispatcher will handle delivery to Claude
+  try {
+    const record = insertConversation('in', source, endpoint, fullMessage, 'pending');
+    console.log(`[C4] Message queued (id=${record.id})`);
+  } catch (err) {
+    console.error(`[C4] Failed to queue message: ${err.message}`);
     process.exit(1);
   }
 }

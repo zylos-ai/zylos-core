@@ -31,6 +31,15 @@ module.exports = {
         ZYLOS_DIR: path.join(HOME, 'zylos'),
       },
     },
+    {
+      name: 'c4-dispatcher',
+      script: path.join(SKILLS_DIR, 'comm-bridge', 'c4-dispatcher.js'),
+      interpreter: 'node',
+      autorestart: true,
+      watch: false,
+      max_restarts: 10,
+      restart_delay: 1000,  // Fast restart for message delivery
+    },
     // Optional: Add channel-specific services here
     // {
     //   name: 'telegram-bot',
