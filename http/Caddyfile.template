@@ -1,0 +1,53 @@
+# Zylos C6 HTTP Layer - Caddyfile Template
+# Replace {DOMAIN} with your actual domain before deploying
+#
+# Features:
+# - Static file serving from ~/zylos/public/
+# - Markdown rendering (optional, via /docs/ endpoint)
+# - Reverse proxy for optional components (Lark, VNC)
+
+{DOMAIN} {
+    # Root directory for public files
+    root * {ZYLOS_DIR}/public
+
+    # Enable file server with directory browsing disabled
+    file_server {
+        hide .git .env *.db *.json
+    }
+
+    # Serve raw markdown files
+    @markdown path *.md
+    handle @markdown {
+        header Content-Type "text/plain; charset=utf-8"
+    }
+
+    # Health check endpoint
+    handle /health {
+        respond "OK" 200
+    }
+
+    # === Optional: Lark webhook (uncomment if using Lark) ===
+    # handle /lark/* {
+    #     uri strip_prefix /lark
+    #     reverse_proxy localhost:3457
+    # }
+
+    # === Optional: noVNC for browser automation (uncomment if using browser) ===
+    # handle /vnc/* {
+    #     uri strip_prefix /vnc
+    #     reverse_proxy localhost:6080
+    # }
+
+    # === Optional: Browser agent WebSocket ===
+    # handle /ws {
+    #     reverse_proxy localhost:8765
+    # }
+
+    # Logging
+    log {
+        output file {ZYLOS_DIR}/logs/caddy-access.log {
+            roll_size 10mb
+            roll_keep 3
+        }
+    }
+}
