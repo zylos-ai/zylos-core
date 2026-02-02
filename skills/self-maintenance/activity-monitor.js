@@ -22,7 +22,7 @@ const ZYLOS_PATH = ZYLOS_DIR.replace(/\//g, '-');
 const CONV_DIR = path.join(os.homedir(), '.claude', 'projects', ZYLOS_PATH);
 
 const INTERVAL = 1000;        // Check every 1 second (ms)
-const IDLE_THRESHOLD = 15;    // seconds without activity = idle
+const IDLE_THRESHOLD = 5;     // seconds without activity = idle
 const LOG_MAX_LINES = 500;    // Auto-truncate log to this many lines
 const RESTART_DELAY = 5;      // seconds of continuous "not running" before restarting
 
