@@ -1,0 +1,101 @@
+#!/usr/bin/env node
+/**
+ * C4 Communication Bridge - Send Interface
+ * Sends messages from Claude to external channels
+ *
+ * Usage: node c4-send.js <source> [endpoint_id] "<message>"
+ * Example: node c4-send.js telegram 8101553026 "Hello Howard!"
+ */
+
+const path = require('path');
+const os = require('os');
+const { spawn } = require('child_process');
+const { insertConversation } = require('./c4-db');
+
+const SKILLS_DIR = path.join(os.homedir(), '.claude', 'skills');
+
+function printUsage() {
+  console.log('Usage: node c4-send.js <source> [endpoint_id] "<message>"');
+  console.log('Example: node c4-send.js telegram 8101553026 "Hello!"');
+  process.exit(1);
+}
+
+async function main() {
+  const args = process.argv.slice(2);
+
+  if (args.length < 2) {
+    printUsage();
+  }
+
+  const source = args[0];
+  let endpoint = null;
+  let message = null;
+
+  // Check if we have endpoint_id or just message
+  if (args.length === 2) {
+    // Only source and message
+    message = args[1];
+  } else {
+    // source, endpoint, message
+    endpoint = args[1];
+    message = args[2];
+  }
+
+  if (!message) {
+    console.error('Error: Message is required');
+    process.exit(1);
+  }
+
+  // Record to database (direction=out)
+  try {
+    insertConversation('out', source, endpoint, message);
+  } catch (err) {
+    // Silently ignore DB errors
+  }
+
+  // Find and call channel send script
+  // Try .js first, then .sh for compatibility
+  const channelScriptJs = path.join(SKILLS_DIR, source, 'send.js');
+  const channelScriptSh = path.join(SKILLS_DIR, source, 'send.sh');
+
+  const fs = require('fs');
+  let channelScript = null;
+  let useNode = false;
+
+  if (fs.existsSync(channelScriptJs)) {
+    channelScript = channelScriptJs;
+    useNode = true;
+  } else if (fs.existsSync(channelScriptSh)) {
+    channelScript = channelScriptSh;
+    useNode = false;
+  } else {
+    console.error(`Error: Channel script not found: ${channelScriptJs} or ${channelScriptSh}`);
+    process.exit(1);
+  }
+
+  // Call channel script
+  const scriptArgs = endpoint ? [endpoint, message] : [message];
+  const command = useNode ? 'node' : channelScript;
+  const spawnArgs = useNode ? [channelScript, ...scriptArgs] : scriptArgs;
+
+  const child = spawn(command, spawnArgs, {
+    stdio: 'inherit',
+    shell: !useNode
+  });
+
+  child.on('close', (code) => {
+    if (code === 0) {
+      console.log(`[C4] Message sent via ${source}`);
+    } else {
+      console.log(`[C4] Failed to send message via ${source} (exit code: ${code})`);
+    }
+    process.exit(code);
+  });
+
+  child.on('error', (err) => {
+    console.error(`[C4] Error executing channel script: ${err.message}`);
+    process.exit(1);
+  });
+}
+
+main();

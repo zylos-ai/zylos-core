@@ -19,17 +19,17 @@ Lark        ───┘
 
 | Script | Purpose |
 |--------|---------|
-| `c4-receive.sh` | External → Claude (records + forwards) |
-| `c4-send.sh` | Claude → External (records + routes) |
-| `c4-checkpoint.sh` | Create recovery checkpoint |
-| `c4-recover.sh` | Get conversations since last checkpoint |
-| `c4-notify.sh` | Broadcast notification to all channels |
+| `c4-receive.js` | External → Claude (records + forwards) |
+| `c4-send.js` | Claude → External (records + routes) |
+| `c4-checkpoint.js` | Create recovery checkpoint |
+| `c4-recover.js` | Get conversations since last checkpoint |
+| `c4-notify.js` | Broadcast notification to all channels |
 
 ## Message Flow
 
 **Receiving** (external → Claude):
 ```bash
-~/.claude/skills/comm-bridge/c4-receive.sh \
+node ~/.claude/skills/comm-bridge/c4-receive.js \
     --source telegram \
     --endpoint 12345 \
     --content '[TG] user said: hello'
@@ -37,12 +37,12 @@ Lark        ───┘
 
 **Sending** (Claude → external):
 ```bash
-~/.claude/skills/comm-bridge/c4-send.sh telegram 12345 "Hello!"
+node ~/.claude/skills/comm-bridge/c4-send.js telegram 12345 "Hello!"
 ```
 
 **Notify** (broadcast):
 ```bash
-~/.claude/skills/comm-bridge/c4-notify.sh "System alert: low disk space"
+node ~/.claude/skills/comm-bridge/c4-notify.js "System alert: low disk space"
 ```
 
 ## Database
@@ -54,7 +54,7 @@ SQLite at `~/zylos/comm-bridge/c4.db`:
 ## Channel Interface
 
 Channels are skills installed in `~/.claude/skills/`. Each channel must provide:
-- `~/.claude/skills/<channel>/send.sh <endpoint_id> <message>`
+- `~/.claude/skills/<channel>/send.js <endpoint_id> <message>` (or send.sh for compatibility)
 - Config at `~/zylos/<channel>/config.json` (for data like primary_dm)
 
 Returns 0 on success, non-zero on failure.
@@ -63,7 +63,7 @@ Returns 0 on success, non-zero on failure.
 
 Messages to Claude include routing info:
 ```
-[TG DM] user said: hello ---- reply via: ~/.claude/skills/comm-bridge/c4-send.sh telegram 12345
+[TG DM] user said: hello ---- reply via: node ~/.claude/skills/comm-bridge/c4-send.js telegram 12345
 ```
 
 Claude uses the `reply via` path to respond.
