@@ -87,7 +87,7 @@ app.get('/api/conversations/recent', (req, res) => {
     const stmt = db.prepare(`
       SELECT id, direction, source, endpoint, content, timestamp
       FROM conversations
-      WHERE source = 'web'
+      WHERE source = 'web-console'
       ORDER BY timestamp DESC
       LIMIT ?
     `);
@@ -114,7 +114,7 @@ app.post('/api/send', (req, res) => {
 
   const child = spawn('node', [
     c4Receive,
-    '--source', 'web',
+    '--source', 'web-console',
     '--endpoint', 'console',
     '--content', message.trim()
   ], {
@@ -154,7 +154,7 @@ app.get('/api/poll', (req, res) => {
     const stmt = db.prepare(`
       SELECT id, direction, source, endpoint, content, timestamp
       FROM conversations
-      WHERE source = 'web' AND id > ?
+      WHERE source = 'web-console' AND id > ?
       ORDER BY timestamp ASC
     `);
 
