@@ -16,6 +16,7 @@ const SESSION = 'claude-main';
 const STATUS_FILE = path.join(os.homedir(), '.claude-status');
 const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
 const LOG_FILE = path.join(ZYLOS_DIR, 'activity-log.txt');
+const CLAUDE_BIN = process.env.CLAUDE_BIN || path.join(os.homedir(), '.local', 'bin', 'claude');
 
 // Conversation directory - auto-detect based on working directory
 const ZYLOS_PATH = ZYLOS_DIR.replace(/\//g, '-');
@@ -203,12 +204,12 @@ function startClaude() {
 
   if (tmuxHasSession()) {
     // Session exists, send command to start claude
-    sendToTmux(`cd ${ZYLOS_DIR}; claude --dangerously-skip-permissions`);
+    sendToTmux(`cd ${ZYLOS_DIR}; ${CLAUDE_BIN} --dangerously-skip-permissions`);
     log('Guardian: Started Claude in existing tmux session');
   } else {
     // Create new session
     try {
-      execSync(`tmux new-session -d -s "${SESSION}" "cd ${ZYLOS_DIR} && claude --dangerously-skip-permissions"`);
+      execSync(`tmux new-session -d -s "${SESSION}" "cd ${ZYLOS_DIR} && ${CLAUDE_BIN} --dangerously-skip-permissions"`);
       log('Guardian: Created new tmux session and started Claude');
     } catch (err) {
       log(`Guardian: Failed to create tmux session: ${err.message}`);
