@@ -41,19 +41,14 @@ The scheduler may send you tasks when idle. After completing a task:
 
 Skills are located in `~/.claude/skills/`. **Read the SKILL.md in each directory for detailed usage.**
 
+### check-context/
+Use when the user asks about current context or token usage.
+
 ### self-maintenance/ (C2)
 Health monitoring and maintenance tools:
 - **activity-monitor.js** - Auto-restarts Claude if it crashes (runs via PM2)
-- **check-context.js** - Check accurate context/token usage
 - **restart-claude.js** - Graceful restart with memory save
 - **upgrade-claude.js** - Upgrade Claude Code to latest version
-
-**When to use check-context.js:**
-When you need to know your actual context usage (not guess), run:
-```bash
-nohup node ~/.claude/skills/self-maintenance/check-context.js > /dev/null 2>&1 &
-```
-Wait ~10 seconds, then you'll receive `/context` output showing real token usage.
 
 ### memory/
 Memory system guidance and best practices.
