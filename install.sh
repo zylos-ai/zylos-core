@@ -91,9 +91,8 @@ install_core() {
     cp -r "$TEMP_DIR/zylos-core/skills/"* "$SKILLS_DIR/"
     echo "  ✓ Skills installed to $SKILLS_DIR"
 
-    # Copy templates
+    # Copy templates (no pm2.config.js - services started directly)
     cp "$TEMP_DIR/zylos-core/templates/.env.example" "$ZYLOS_DIR/.env"
-    cp "$TEMP_DIR/zylos-core/templates/pm2.config.js" "$ZYLOS_DIR/"
     cp "$TEMP_DIR/zylos-core/templates/CLAUDE.md" "$ZYLOS_DIR/"
     cp -r "$TEMP_DIR/zylos-core/templates/memory/"* "$ZYLOS_DIR/memory/"
     echo "  ✓ Templates installed"
@@ -138,10 +137,24 @@ configure() {
 start_services() {
     echo -e "\n${BLUE}Starting services...${NC}"
 
-    pm2 start "$ZYLOS_DIR/pm2.config.js"
-    pm2 save
+    # Start core services directly (no pm2.config.js needed)
+    pm2 start "$SKILLS_DIR/self-maintenance/activity-monitor.js" --name activity-monitor
+    pm2 start "$SKILLS_DIR/scheduler/scheduler.js" --name scheduler \
+        --env NODE_ENV=production --env ZYLOS_DIR="$ZYLOS_DIR"
+    pm2 start "$SKILLS_DIR/comm-bridge/c4-dispatcher.js" --name c4-dispatcher
+    pm2 start "$SKILLS_DIR/web-console/server.js" --name web-console \
+        --env WEB_CONSOLE_PORT=3456 --env ZYLOS_DIR="$ZYLOS_DIR"
 
     echo "  ✓ Services started"
+
+    # Configure PM2 to auto-start on system reboot
+    echo -e "\n${BLUE}Configuring auto-start...${NC}"
+    pm2 save
+
+    # Setup PM2 startup (requires sudo)
+    echo -e "${YELLOW}To enable auto-start on reboot, run:${NC}"
+    pm2 startup | tail -1
+    echo ""
 }
 
 # Print completion message
