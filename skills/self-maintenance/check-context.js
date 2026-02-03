@@ -31,8 +31,9 @@ function isClaudeIdle() {
     }
     const content = fs.readFileSync(STATUS_FILE, 'utf8');
     const status = JSON.parse(content);
-    // Require idle state AND at least MIN_IDLE_SECONDS of idle time
-    return status.state === 'idle' && status.idle_seconds >= MIN_IDLE_SECONDS;
+    // idle_seconds = time since entering idle state (0 when busy)
+    // So we only need to check if idle_seconds >= MIN_IDLE_SECONDS
+    return status.idle_seconds >= MIN_IDLE_SECONDS;
   } catch {
     // Error reading file, assume idle
     return true;
