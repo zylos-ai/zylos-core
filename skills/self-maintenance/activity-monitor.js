@@ -16,7 +16,34 @@ const SESSION = 'claude-main';
 const STATUS_FILE = path.join(os.homedir(), '.claude-status');
 const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
 const LOG_FILE = path.join(ZYLOS_DIR, 'activity-log.txt');
-const CLAUDE_BIN = process.env.CLAUDE_BIN || path.join(os.homedir(), '.local', 'bin', 'claude');
+
+// Auto-detect claude binary path
+function findClaudeBin() {
+  // Allow override via environment variable
+  if (process.env.CLAUDE_BIN) {
+    return process.env.CLAUDE_BIN;
+  }
+
+  // Known paths to check (in order of preference)
+  const knownPaths = [
+    path.join(os.homedir(), '.local', 'bin', 'claude'),      // Linux common
+    path.join(os.homedir(), '.claude', 'bin', 'claude'),     // Alternative
+    '/usr/local/bin/claude',                                  // System-wide
+    '/opt/homebrew/bin/claude',                               // macOS Homebrew ARM
+    '/usr/bin/claude',                                        // System binary
+  ];
+
+  for (const p of knownPaths) {
+    if (fs.existsSync(p)) {
+      return p;
+    }
+  }
+
+  // Fallback to bare command (hope it's in PATH)
+  return 'claude';
+}
+
+const CLAUDE_BIN = findClaudeBin();
 
 // Conversation directory - auto-detect based on working directory
 const ZYLOS_PATH = ZYLOS_DIR.replace(/\//g, '-');
