@@ -128,20 +128,21 @@ function sendToTmux(text) {
 
 function getRunningMaintenance() {
   // Check for restart-claude (match .sh or .js)
+  // Use bracket trick [r] to prevent pgrep from matching itself
   try {
-    execSync('pgrep -f "restart-claude" > /dev/null 2>&1');
+    execSync('pgrep -f "[r]estart-claude" > /dev/null 2>&1');
     return 'restart-claude';
   } catch {}
 
   // Check for upgrade-claude
   try {
-    execSync('pgrep -f "upgrade-claude" > /dev/null 2>&1');
+    execSync('pgrep -f "[u]pgrade-claude" > /dev/null 2>&1');
     return 'upgrade-claude';
   } catch {}
 
   // Also check for curl install.sh (upgrade in progress)
   try {
-    execSync('pgrep -f "claude.ai/install.sh" > /dev/null 2>&1');
+    execSync('pgrep -f "[c]laude.ai/install.sh" > /dev/null 2>&1');
     return 'upgrade (curl install.sh)';
   } catch {}
 
