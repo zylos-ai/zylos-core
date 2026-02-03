@@ -12,7 +12,7 @@ Monitors Claude's running state and ensures continuous operation.
 - **activity-monitor.js**: Guardian daemon that monitors Claude and auto-restarts on crash
 - **restart-claude.js**: Graceful restart with memory save
 - **upgrade-claude.js**: Upgrade Claude Code to latest version
-- **check-context.sh**: Accurately check context/token usage via /context command
+- **check-context.js**: Accurately check context/token usage via /context command
 
 ## When to Use
 
@@ -71,7 +71,7 @@ Check current context/token usage accurately using the /context command.
 **IMPORTANT: Must use `nohup ... &` pattern!**
 
 ```bash
-nohup ~/zylos/bin/check-context.sh > /dev/null 2>&1 &
+nohup node ~/.claude/skills/self-maintenance/check-context.js > /dev/null 2>&1 &
 ```
 
 The script:

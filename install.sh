@@ -73,7 +73,7 @@ check_requirements() {
 create_directories() {
     echo -e "\n${BLUE}Creating directories...${NC}"
 
-    mkdir -p "$ZYLOS_DIR"/{memory,public,logs,scheduler,comm-bridge,bin}
+    mkdir -p "$ZYLOS_DIR"/{memory,public,logs,scheduler,comm-bridge}
     mkdir -p "$SKILLS_DIR"
 
     echo "  ✓ $ZYLOS_DIR"
@@ -96,11 +96,6 @@ install_core() {
     cp "$TEMP_DIR/zylos-core/templates/CLAUDE.md" "$ZYLOS_DIR/"
     cp -r "$TEMP_DIR/zylos-core/templates/memory/"* "$ZYLOS_DIR/memory/"
     echo "  ✓ Templates installed"
-
-    # Copy utility scripts to bin
-    cp "$TEMP_DIR/zylos-core/skills/self-maintenance/check-context.sh" "$ZYLOS_DIR/bin/"
-    chmod +x "$ZYLOS_DIR/bin/check-context.sh"
-    echo "  ✓ Utility scripts installed to $ZYLOS_DIR/bin/"
 
     # Install CLI globally
     cd "$TEMP_DIR/zylos-core"
