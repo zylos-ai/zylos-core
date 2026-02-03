@@ -40,6 +40,19 @@ module.exports = {
       max_restarts: 10,
       restart_delay: 1000,  // Fast restart for message delivery
     },
+    {
+      name: 'web-console',
+      script: path.join(SKILLS_DIR, 'web-console', 'server.js'),
+      interpreter: 'node',
+      autorestart: true,
+      watch: false,
+      max_restarts: 10,
+      restart_delay: 3000,
+      env: {
+        WEB_CONSOLE_PORT: 3456,
+        ZYLOS_DIR: path.join(HOME, 'zylos'),
+      },
+    },
     // Optional: Add channel-specific services here
     // {
     //   name: 'telegram-bot',
