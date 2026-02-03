@@ -59,6 +59,7 @@ let lastTruncateDay = '';
 let notRunningCount = 0;
 let lastState = '';
 let startupGrace = 0;
+let idleSince = 0;  // Timestamp when entered idle state
 
 function log(message) {
   const timestamp = new Date().toISOString().replace('T', ' ').substring(0, 19);
@@ -389,11 +390,23 @@ function monitorLoop() {
     source = 'default';
   }
 
-  // Calculate idle time
-  const idleSeconds = currentTime - activity;
+  // Calculate time since last activity
+  const inactiveSeconds = currentTime - activity;
 
   // Determine state
-  const state = idleSeconds < IDLE_THRESHOLD ? 'busy' : 'idle';
+  const state = inactiveSeconds < IDLE_THRESHOLD ? 'busy' : 'idle';
+
+  // Track when we entered idle state
+  if (state === 'idle' && lastState !== 'idle') {
+    // Just transitioned to idle
+    idleSince = currentTime;
+  } else if (state === 'busy') {
+    // Reset idle tracking when busy
+    idleSince = 0;
+  }
+
+  // idle_seconds = time since entering idle state (0 if busy)
+  const idleSeconds = state === 'idle' ? currentTime - idleSince : 0;
 
   // Write JSON status file
   writeStatusFile({
@@ -402,15 +415,16 @@ function monitorLoop() {
     last_check: currentTime,
     last_check_human: currentTimeHuman,
     idle_seconds: idleSeconds,
+    inactive_seconds: inactiveSeconds,  // Keep original metric for reference
     source
   });
 
   // Only log on state change
   if (state !== lastState) {
     if (state === 'busy') {
-      log(`State: BUSY (last activity ${idleSeconds}s ago)`);
+      log(`State: BUSY (last activity ${inactiveSeconds}s ago)`);
     } else {
-      log(`State: IDLE (inactive for ${idleSeconds}s)`);
+      log(`State: IDLE (entering idle state)`);
     }
   }
 
