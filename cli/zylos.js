@@ -123,27 +123,50 @@ function showLogs(args) {
 
 function startServices() {
   console.log('Starting Zylos services...');
-  const configFile = path.join(ZYLOS_DIR, 'pm2.config.js');
 
-  if (!fs.existsSync(configFile)) {
-    console.error(`PM2 config not found: ${configFile}`);
-    console.log('Run zylos install first.');
-    process.exit(1);
+  const services = [
+    { name: 'activity-monitor', script: path.join(SKILLS_DIR, 'self-maintenance', 'activity-monitor.js') },
+    { name: 'scheduler', script: path.join(SKILLS_DIR, 'scheduler', 'scheduler.js'), env: `NODE_ENV=production ZYLOS_DIR=${ZYLOS_DIR}` },
+    { name: 'c4-dispatcher', script: path.join(SKILLS_DIR, 'comm-bridge', 'c4-dispatcher.js') },
+    { name: 'web-console', script: path.join(SKILLS_DIR, 'web-console', 'server.js'), env: `WEB_CONSOLE_PORT=3456 ZYLOS_DIR=${ZYLOS_DIR}` },
+  ];
+
+  let started = 0;
+  for (const svc of services) {
+    if (!fs.existsSync(svc.script)) {
+      console.log(`  Skipping ${svc.name} (not installed)`);
+      continue;
+    }
+    try {
+      const envOpts = svc.env ? svc.env.split(' ').map(e => `--env ${e}`).join(' ') : '';
+      execSync(`pm2 start ${svc.script} --name ${svc.name} ${envOpts} 2>/dev/null`, { stdio: 'pipe' });
+      console.log(`  ✓ ${svc.name}`);
+      started++;
+    } catch (e) {
+      // Already running or other error, try restart
+      try {
+        execSync(`pm2 restart ${svc.name} 2>/dev/null`, { stdio: 'pipe' });
+        console.log(`  ✓ ${svc.name} (restarted)`);
+        started++;
+      } catch (e2) {
+        console.log(`  ✗ ${svc.name} (failed)`);
+      }
+    }
   }
 
-  try {
-    execSync(`pm2 start ${configFile}`, { stdio: 'inherit' });
-    console.log('\nServices started. Run "zylos status" to check.');
-  } catch (e) {
-    console.error('Failed to start services');
-    process.exit(1);
+  if (started > 0) {
+    execSync('pm2 save 2>/dev/null', { stdio: 'pipe' });
+    console.log(`\n${started} services started. Run "zylos status" to check.`);
+  } else {
+    console.log('\nNo services started.');
   }
 }
 
 function stopServices() {
   console.log('Stopping Zylos services...');
+  const services = ['activity-monitor', 'scheduler', 'c4-dispatcher', 'web-console'];
   try {
-    execSync('pm2 stop activity-monitor scheduler 2>/dev/null || true', { stdio: 'inherit' });
+    execSync(`pm2 stop ${services.join(' ')} 2>/dev/null || true`, { stdio: 'inherit' });
     console.log('Services stopped.');
   } catch (e) {
     console.error('Failed to stop services');
@@ -152,8 +175,9 @@ function stopServices() {
 
 function restartServices() {
   console.log('Restarting Zylos services...');
+  const services = ['activity-monitor', 'scheduler', 'c4-dispatcher', 'web-console'];
   try {
-    execSync('pm2 restart activity-monitor scheduler 2>/dev/null || true', { stdio: 'inherit' });
+    execSync(`pm2 restart ${services.join(' ')} 2>/dev/null || true`, { stdio: 'inherit' });
     console.log('Services restarted.');
   } catch (e) {
     console.error('Failed to restart services');

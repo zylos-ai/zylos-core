@@ -68,7 +68,6 @@ zylos-core/
 ├── templates/              # Installation templates
 │   ├── .env.example
 │   ├── memory/
-│   ├── pm2.config.js
 │   └── CLAUDE.md
 └── docs/
 ```
@@ -95,7 +94,6 @@ zylos-core/
 ├── comm-bridge/            # C4 DB
 ├── telegram/               # Telegram config/data
 ├── lark/                   # Lark config/data
-├── pm2.config.js           # Service config
 └── CLAUDE.md               # Claude guidance
 ```
 
