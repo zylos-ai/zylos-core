@@ -15,7 +15,7 @@ const SKILL_DIR = path.join(ZYLOS_DIR, 'restart-claude-code');
 const LOG_FILE = path.join(SKILL_DIR, 'restart.log');
 const STATUS_FILE = path.join(os.homedir(), '.claude-status');
 const CHECK_INTERVAL = 1;
-const MIN_IDLE_SECONDS = 3;
+const MIN_IDLE_SECONDS = 5;
 
 function log(message) {
   const timestamp = new Date().toISOString().replace('T', ' ').substring(0, 19);

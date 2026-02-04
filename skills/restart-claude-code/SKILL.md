@@ -24,7 +24,7 @@ nohup node ~/.claude/skills/restart-claude-code/restart.js > /dev/null 2>&1 &
 
 After running this command:
 1. Script requests you to sync memory (update context.md)
-2. Wait for you to become idle (idle_seconds >= 3)
+2. Wait for you to become idle (idle_seconds >= 5)
 3. Send `/exit` command via C4
 4. activity-monitor daemon detects exit and restarts Claude automatically
 5. New Claude session starts in ~10 seconds
