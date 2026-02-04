@@ -214,7 +214,7 @@ app.get('/api/status', (req, res) => {
 app.get('/api/conversations', (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 50;
-    const source = req.query.source || 'web';
+    const source = req.query.source || 'web-console';
 
     const stmt = db.prepare(`
       SELECT id, direction, source, endpoint_id, content, timestamp
