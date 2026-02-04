@@ -73,6 +73,7 @@ function runMigrations() {
     console.log('[C4-DB] Running migration: adding priority column');
     db.exec(`
       ALTER TABLE conversations ADD COLUMN priority INTEGER DEFAULT 3;
+      UPDATE conversations SET priority = 3 WHERE priority IS NULL;
       CREATE INDEX IF NOT EXISTS idx_conversations_priority ON conversations(priority);
     `);
     console.log('[C4-DB] Migration 2 complete');
@@ -129,7 +130,7 @@ function getNextPending() {
     SELECT id, direction, source, endpoint_id, content, timestamp, priority
     FROM conversations
     WHERE direction = 'in' AND status = 'pending'
-    ORDER BY priority ASC, timestamp ASC
+    ORDER BY COALESCE(priority, 3) ASC, timestamp ASC
     LIMIT 1
   `).get() || null;
 }
