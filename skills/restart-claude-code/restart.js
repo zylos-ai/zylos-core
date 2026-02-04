@@ -8,10 +8,10 @@
  *   nohup node ~/.claude/skills/restart-claude-code/restart.js > /dev/null 2>&1 &
  */
 
-const { execSync, execFileSync } = require('child_process');
-const path = require('path');
-const os = require('os');
-const fs = require('fs');
+import { execSync, execFileSync } from 'child_process';
+import path from 'path';
+import os from 'os';
+import fs from 'fs';
 
 const STATUS_FILE = path.join(os.homedir(), '.claude-status');
 const MAX_WAIT_SECONDS = 600; // Max time to wait for idle (10 minutes)
