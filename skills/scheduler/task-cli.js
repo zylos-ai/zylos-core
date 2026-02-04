@@ -307,20 +307,27 @@ function cmdPause(taskId) {
     return;
   }
 
-  const task = db.prepare(`
+  const tasks = db.prepare(`
     SELECT id FROM tasks WHERE id LIKE ? AND status = 'pending'
-  `).get(taskId + '%');
+  `).all(taskId + '%');
 
-  if (!task) {
+  if (tasks.length === 0) {
     console.error(`Error: Pending task not found: ${taskId}`);
+    return;
+  }
+
+  if (tasks.length > 1) {
+    console.error(`Error: Ambiguous task ID prefix '${taskId}' matches multiple pending tasks:`);
+    tasks.forEach(t => console.error(`  - ${t.id}`));
+    console.error('Please provide a more specific prefix.');
     return;
   }
 
   db.prepare(`
     UPDATE tasks SET status = 'paused', updated_at = ? WHERE id = ?
-  `).run(now(), task.id);
+  `).run(now(), tasks[0].id);
 
-  console.log(`Paused task: ${task.id}`);
+  console.log(`Paused task: ${tasks[0].id}`);
 }
 
 function cmdResume(taskId) {
@@ -329,20 +336,27 @@ function cmdResume(taskId) {
     return;
   }
 
-  const task = db.prepare(`
+  const tasks = db.prepare(`
     SELECT id FROM tasks WHERE id LIKE ? AND status = 'paused'
-  `).get(taskId + '%');
+  `).all(taskId + '%');
 
-  if (!task) {
+  if (tasks.length === 0) {
     console.error(`Error: Paused task not found: ${taskId}`);
+    return;
+  }
+
+  if (tasks.length > 1) {
+    console.error(`Error: Ambiguous task ID prefix '${taskId}' matches multiple paused tasks:`);
+    tasks.forEach(t => console.error(`  - ${t.id}`));
+    console.error('Please provide a more specific prefix.');
     return;
   }
 
   db.prepare(`
     UPDATE tasks SET status = 'pending', updated_at = ? WHERE id = ?
-  `).run(now(), task.id);
+  `).run(now(), tasks[0].id);
 
-  console.log(`Resumed task: ${task.id}`);
+  console.log(`Resumed task: ${tasks[0].id}`);
 }
 
 function cmdStatus() {
@@ -388,6 +402,16 @@ function cmdHistory(taskId) {
   if (history.length === 0) {
     console.log('No execution history.');
     return;
+  }
+
+  // Warn if prefix matches multiple tasks
+  if (taskId) {
+    const uniqueTaskIds = new Set(history.map(h => h.task_id));
+    if (uniqueTaskIds.size > 1) {
+      console.log(`\n  ⚠ Warning: Prefix '${taskId}' matches ${uniqueTaskIds.size} tasks:`);
+      uniqueTaskIds.forEach(id => console.log(`    - ${id}`));
+      console.log();
+    }
   }
 
   console.log('\n  Execution History:\n');

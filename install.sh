@@ -84,26 +84,32 @@ create_directories() {
 install_core() {
     echo -e "\n${BLUE}Installing Zylos Core...${NC}"
 
-    TEMP_DIR=$(mktemp -d)
-    git clone --depth 1 "$REPO_URL" "$TEMP_DIR/zylos-core"
+    # Clone to permanent location for CLI stability
+    CORE_DIR="$ZYLOS_DIR/zylos-core"
+    if [ -d "$CORE_DIR" ]; then
+        echo "  ℹ Updating existing zylos-core..."
+        (cd "$CORE_DIR" && git pull)
+    else
+        git clone --depth 1 "$REPO_URL" "$CORE_DIR"
+    fi
 
     # Copy skills to Claude skills directory
-    cp -r "$TEMP_DIR/zylos-core/skills/"* "$SKILLS_DIR/"
+    cp -r "$CORE_DIR/skills/"* "$SKILLS_DIR/"
     echo "  ✓ Skills installed to $SKILLS_DIR"
 
     # Copy templates (no pm2.config.js - services started directly)
     if [ ! -f "$ZYLOS_DIR/.env" ]; then
-        cp "$TEMP_DIR/zylos-core/templates/.env.example" "$ZYLOS_DIR/.env"
+        cp "$CORE_DIR/templates/.env.example" "$ZYLOS_DIR/.env"
         echo "  ✓ .env created from template"
     else
         echo "  ℹ .env already exists, skipping (template at templates/.env.example)"
     fi
-    cp "$TEMP_DIR/zylos-core/templates/CLAUDE.md" "$ZYLOS_DIR/"
-    cp -r "$TEMP_DIR/zylos-core/templates/memory/"* "$ZYLOS_DIR/memory/"
+    cp "$CORE_DIR/templates/CLAUDE.md" "$ZYLOS_DIR/"
+    cp -r "$CORE_DIR/templates/memory/"* "$ZYLOS_DIR/memory/"
     echo "  ✓ Templates installed"
 
-    # Install CLI globally
-    cd "$TEMP_DIR/zylos-core"
+    # Install CLI globally from permanent location
+    cd "$CORE_DIR"
     npm install
     npm link
     echo "  ✓ CLI installed (zylos command)"
@@ -115,9 +121,6 @@ install_core() {
             (cd "$skill_dir" && npm install --production)
         fi
     done
-
-    # Cleanup
-    rm -rf "$TEMP_DIR"
 }
 
 # Interactive configuration
