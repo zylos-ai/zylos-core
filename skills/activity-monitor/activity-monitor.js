@@ -15,7 +15,8 @@ import os from 'os';
 const SESSION = 'claude-main';
 const STATUS_FILE = path.join(os.homedir(), '.claude-status');
 const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
-const LOG_FILE = path.join(ZYLOS_DIR, 'activity-log.txt');
+const SKILL_DIR = path.join(ZYLOS_DIR, 'activity-monitor');
+const LOG_FILE = path.join(SKILL_DIR, 'activity.log');
 
 // Auto-detect claude binary path
 function findClaudeBin() {
@@ -64,6 +65,10 @@ let idleSince = 0;  // Timestamp when entered idle state
 function log(message) {
   const timestamp = new Date().toISOString().replace('T', ' ').substring(0, 19);
   const line = `[${timestamp}] ${message}\n`;
+  // Ensure skill directory exists
+  if (!fs.existsSync(SKILL_DIR)) {
+    fs.mkdirSync(SKILL_DIR, { recursive: true });
+  }
   fs.appendFileSync(LOG_FILE, line);
 }
 

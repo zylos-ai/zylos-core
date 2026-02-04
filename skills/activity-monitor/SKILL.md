@@ -80,6 +80,6 @@ pm2 list
 
 ## Log File
 
-Activity log: `~/zylos/activity-log.txt`
+Activity log: `~/zylos/activity-monitor/activity.log`
 - Auto-truncates to 500 lines daily
 - Logs state changes and guardian actions
