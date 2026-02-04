@@ -53,7 +53,7 @@ Service Management:
 
 Component Management:
   install <target>    Install a component
-                      target: name | org/repo | github-url
+                      target: name[@ver] | org/repo[@ver] | url
   upgrade <name>      Upgrade a specific component
   upgrade --all       Upgrade all components
   uninstall <name>    Uninstall a component (--purge for data)
@@ -68,6 +68,7 @@ Examples:
   zylos logs activity
 
   zylos install telegram
+  zylos install telegram@0.2.0
   zylos install kevin/whatsapp
   zylos upgrade telegram
   zylos upgrade --all

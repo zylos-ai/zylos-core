@@ -7,10 +7,13 @@ const { REGISTRY_FILE, REGISTRY_URL } = require('./config');
 
 /**
  * Load local registry from registry.json
+ * Returns the components object (unwrapped from version/components structure)
  */
 function loadLocalRegistry() {
   try {
-    return JSON.parse(fs.readFileSync(REGISTRY_FILE, 'utf8'));
+    const data = JSON.parse(fs.readFileSync(REGISTRY_FILE, 'utf8'));
+    // Handle both formats: { components: {...} } or flat { name: {...} }
+    return data.components || data;
   } catch {
     return {};
   }
@@ -18,6 +21,7 @@ function loadLocalRegistry() {
 
 /**
  * Load registry (try remote first, fallback to local file)
+ * Returns the components object (unwrapped)
  */
 async function loadRegistry() {
   const localRegistry = loadLocalRegistry();
@@ -30,7 +34,9 @@ async function loadRegistry() {
         res.on('data', chunk => data += chunk);
         res.on('end', () => {
           try {
-            resolve(JSON.parse(data));
+            const parsed = JSON.parse(data);
+            // Handle both formats
+            resolve(parsed.components || parsed);
           } catch {
             resolve(localRegistry);
           }

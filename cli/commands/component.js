@@ -11,9 +11,10 @@ const { loadComponents, resolveTarget, outputTask } = require('../lib/components
 async function installComponent(args) {
   const target = args[0];
   if (!target) {
-    console.error('Usage: zylos install <name|org/repo|github-url>');
+    console.error('Usage: zylos install <name[@version]|org/repo[@version]|github-url>');
     console.log('\nExamples:');
-    console.log('  zylos install telegram          # Official component');
+    console.log('  zylos install telegram          # Official component (latest)');
+    console.log('  zylos install telegram@0.2.0    # Specific version');
     console.log('  zylos install kevin/whatsapp    # Third-party');
     console.log('  zylos install https://github.com/kevin/zylos-whatsapp');
     process.exit(1);
@@ -40,23 +41,26 @@ async function installComponent(args) {
     console.log('');
   }
 
-  console.log(`Installing ${resolved.name} from ${resolved.repo}...`);
+  const versionInfo = resolved.version ? ` (v${resolved.version})` : '';
+  console.log(`Installing ${resolved.name}${versionInfo} from ${resolved.repo}...`);
 
   outputTask('install', {
     component: resolved.name,
     repo: resolved.repo,
+    version: resolved.version,
     skillsDir: SKILLS_DIR,
     dataDir: path.join(COMPONENTS_DIR, resolved.name),
     isThirdParty: resolved.isThirdParty,
     steps: [
       `Clone https://github.com/${resolved.repo} to ${SKILLS_DIR}/${resolved.name}`,
+      resolved.version ? `Checkout version ${resolved.version}: git checkout v${resolved.version}` : null,
       `Create data directory ${COMPONENTS_DIR}/${resolved.name}`,
       `Read SKILL.md for lifecycle configuration`,
       `Run npm install if package.json exists`,
       `Execute post-install hook if defined`,
       `Register PM2 service if service defined in SKILL.md`,
       `Record installation in ${ZYLOS_DIR}/components.json`,
-    ],
+    ].filter(Boolean),
   });
 }
 

@@ -32,35 +32,46 @@ function saveComponents(components) {
 
 /**
  * Resolve component target from name or URL
- * @returns {object} { name, repo, isThirdParty }
+ * Supports: name, name@version, org/repo, org/repo@version, github-url
+ * @returns {object} { name, repo, version, isThirdParty }
  */
 async function resolveTarget(nameOrUrl) {
+  // Extract version if present (name@version or org/repo@version)
+  let version = null;
+  let target = nameOrUrl;
+  if (nameOrUrl.includes('@') && !nameOrUrl.startsWith('http')) {
+    const atIndex = nameOrUrl.lastIndexOf('@');
+    target = nameOrUrl.substring(0, atIndex);
+    version = nameOrUrl.substring(atIndex + 1);
+  }
+
   // Check if it's a GitHub URL
-  const githubMatch = nameOrUrl.match(/github\.com\/([^\/]+\/[^\/]+)/);
+  const githubMatch = target.match(/github\.com\/([^\/]+\/[^\/]+)/);
   if (githubMatch) {
     const repo = githubMatch[1].replace(/\.git$/, '');
     const name = repo.split('/')[1].replace(/^zylos-/, '');
-    return { name, repo, isThirdParty: !repo.startsWith('zylos-ai/') };
+    return { name, repo, version, isThirdParty: !repo.startsWith('zylos-ai/') };
   }
 
   // Check if it's in format org/repo
-  if (nameOrUrl.includes('/')) {
-    const name = nameOrUrl.split('/')[1].replace(/^zylos-/, '');
-    return { name, repo: nameOrUrl, isThirdParty: !nameOrUrl.startsWith('zylos-ai/') };
+  if (target.includes('/')) {
+    const name = target.split('/')[1].replace(/^zylos-/, '');
+    return { name, repo: target, version, isThirdParty: !target.startsWith('zylos-ai/') };
   }
 
   // Look up in registry
   const registry = await loadRegistry();
-  if (registry[nameOrUrl]) {
+  if (registry[target]) {
     return {
-      name: nameOrUrl,
-      repo: registry[nameOrUrl].repo,
+      name: target,
+      repo: registry[target].repo,
+      version: version || registry[target].latest,
       isThirdParty: false,
     };
   }
 
   // Unknown - treat as third party
-  return { name: nameOrUrl, repo: null, isThirdParty: true };
+  return { name: target, repo: null, version, isThirdParty: true };
 }
 
 /**
