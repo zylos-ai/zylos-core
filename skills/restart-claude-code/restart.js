@@ -11,8 +11,8 @@ const path = require('path');
 const os = require('os');
 
 const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
-const LOG_DIR = path.join(ZYLOS_DIR, 'logs');
-const LOG_FILE = path.join(LOG_DIR, 'restart.log');
+const SKILL_DIR = path.join(ZYLOS_DIR, 'restart-claude-code');
+const LOG_FILE = path.join(SKILL_DIR, 'restart.log');
 const STATUS_FILE = path.join(os.homedir(), '.claude-status');
 const CHECK_INTERVAL = 1;
 const MIN_IDLE_SECONDS = 3;
@@ -21,9 +21,9 @@ function log(message) {
   const timestamp = new Date().toISOString().replace('T', ' ').substring(0, 19);
   const line = `[${timestamp}] ${message}`;
   console.log(line);
-  // Ensure log directory exists
-  if (!fs.existsSync(LOG_DIR)) {
-    fs.mkdirSync(LOG_DIR, { recursive: true });
+  // Ensure skill directory exists
+  if (!fs.existsSync(SKILL_DIR)) {
+    fs.mkdirSync(SKILL_DIR, { recursive: true });
   }
   fs.appendFileSync(LOG_FILE, line + '\n');
 }

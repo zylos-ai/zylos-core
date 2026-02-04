@@ -15,8 +15,8 @@ const os = require('os');
 
 // Auto-detect zylos directory
 const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
-const LOG_DIR = path.join(ZYLOS_DIR, 'logs');
-const LOG_FILE = path.join(LOG_DIR, 'upgrade.log');
+const SKILL_DIR = path.join(ZYLOS_DIR, 'upgrade-claude-code');
+const LOG_FILE = path.join(SKILL_DIR, 'upgrade.log');
 const TMUX_SESSION = 'claude-main';
 const NOTIFY_CHANNEL = process.argv[2] || null;
 
@@ -49,9 +49,9 @@ function log(message) {
   const timestamp = new Date().toISOString().replace('T', ' ').substring(0, 19);
   const line = `[${timestamp}] ${message}`;
   console.log(line);
-  // Ensure log directory exists
-  if (!fs.existsSync(LOG_DIR)) {
-    fs.mkdirSync(LOG_DIR, { recursive: true });
+  // Ensure skill directory exists
+  if (!fs.existsSync(SKILL_DIR)) {
+    fs.mkdirSync(SKILL_DIR, { recursive: true });
   }
   fs.appendFileSync(LOG_FILE, line + '\n');
 }
