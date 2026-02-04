@@ -99,7 +99,8 @@ function outputTask(action, data) {
   try {
     const taskMessage = `[COMPONENT_TASK] ${JSON.stringify(task)}`;
     // Use spawnSync with args array to avoid shell escaping issues
-    const result = spawnSync('node', [c4ReceivePath, '--source', 'zylos-cli', '--content', taskMessage], {
+    // Use --no-reply since CLI tasks don't need a reply channel (zylos-cli has no send.js)
+    const result = spawnSync('node', [c4ReceivePath, '--source', 'zylos-cli', '--no-reply', '--content', taskMessage], {
       stdio: 'pipe',
       encoding: 'utf8'
     });
