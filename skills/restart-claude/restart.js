@@ -5,7 +5,7 @@
  * Usage: node restart.js
  *
  * IMPORTANT: Run with nohup to allow Claude to return to idle:
- *   nohup node ~/.claude/skills/restart-claude-code/restart.js > /dev/null 2>&1 &
+ *   nohup node ~/.claude/skills/restart-claude/restart.js > /dev/null 2>&1 &
  */
 
 import { execSync, execFileSync } from 'child_process';

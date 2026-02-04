@@ -1,5 +1,5 @@
 ---
-name: upgrade-claude-code
+name: upgrade-claude
 description: Use when the user asks to upgrade Claude Code to the latest version.
 ---
 
@@ -20,7 +20,7 @@ Upgrade Claude Code to the latest version - sends /exit, waits for exit, upgrade
 **IMPORTANT: Must use `nohup ... &` pattern!**
 
 ```bash
-nohup node ~/.claude/skills/upgrade-claude-code/upgrade.js > /dev/null 2>&1 &
+nohup node ~/.claude/skills/upgrade-claude/upgrade.js > /dev/null 2>&1 &
 ```
 
 ## How It Works

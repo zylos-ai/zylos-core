@@ -1,5 +1,5 @@
 ---
-name: restart-claude-code
+name: restart-claude
 description: Use when the user asks to restart Claude Code, or after changing settings/hooks/keybindings.
 ---
 
@@ -21,7 +21,7 @@ Restart Claude Code session - sends /exit and lets activity-monitor daemon handl
 **IMPORTANT: Must use `nohup ... &` pattern!**
 
 ```bash
-nohup node ~/.claude/skills/restart-claude-code/restart.js > /dev/null 2>&1 &
+nohup node ~/.claude/skills/restart-claude/restart.js > /dev/null 2>&1 &
 ```
 
 ## How It Works

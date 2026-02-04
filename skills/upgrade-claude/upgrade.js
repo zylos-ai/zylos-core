@@ -5,7 +5,7 @@
  * Usage: node upgrade.js
  *
  * IMPORTANT: Run with nohup to allow Claude to exit cleanly:
- *   nohup node ~/.claude/skills/upgrade-claude-code/upgrade.js > /dev/null 2>&1 &
+ *   nohup node ~/.claude/skills/upgrade-claude/upgrade.js > /dev/null 2>&1 &
  */
 
 import { execSync, execFileSync } from 'child_process';
@@ -121,7 +121,7 @@ function upgradeClaudeCode() {
 }
 
 function main() {
-  console.log('[upgrade-claude-code] Starting upgrade process');
+  console.log('[upgrade-claude] Starting upgrade process');
 
   // Step 1: Wait for Claude to be idle
   waitForIdle();
@@ -137,7 +137,7 @@ function main() {
   upgradeClaudeCode();
 
   // Done - activity-monitor will restart Claude automatically
-  console.log('[upgrade-claude-code] Upgrade complete, activity-monitor will restart Claude');
+  console.log('[upgrade-claude] Upgrade complete, activity-monitor will restart Claude');
 }
 
 main();
