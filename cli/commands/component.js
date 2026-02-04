@@ -7,6 +7,7 @@ const path = require('path');
 const { ZYLOS_DIR, SKILLS_DIR, COMPONENTS_DIR } = require('../lib/config');
 const { loadRegistry } = require('../lib/registry');
 const { loadComponents, resolveTarget, outputTask } = require('../lib/components');
+const { checkForUpdates, runUpgrade } = require('../lib/upgrade');
 
 async function installComponent(args) {
   const target = args[0];
@@ -65,76 +66,305 @@ async function installComponent(args) {
 }
 
 async function upgradeComponent(args) {
-  const upgradeSelf = args[0] === '--self';
-  const upgradeAll = args[0] === '--all';
-  const target = (upgradeSelf || upgradeAll) ? null : args[0];
+  // Parse flags
+  const checkOnly = args.includes('--check');
+  const jsonOutput = args.includes('--json');
+  const skipConfirm = args.includes('--yes') || args.includes('-y');
+  const explicitConfirm = args.includes('confirm');
+  const upgradeSelf = args.includes('--self');
+  const upgradeAll = args.includes('--all');
 
-  // Handle --self: upgrade zylos-core itself
+  // Get target component (filter out flags)
+  const target = args.find(a => !a.startsWith('-') && a !== 'confirm');
+
+  // Handle --self: upgrade zylos-core itself (legacy mode)
   if (upgradeSelf) {
     return upgradeSelfCore();
   }
 
-  const components = loadComponents();
-  const componentNames = Object.keys(components);
-
-  if (componentNames.length === 0 && !upgradeAll) {
-    console.log('No components installed.');
-    process.exit(0);
+  // Handle --all: upgrade all components
+  if (upgradeAll) {
+    return upgradeAllComponents({ checkOnly, jsonOutput, skipConfirm });
   }
 
-  let toUpgrade = [];
-
-  if (upgradeAll) {
-    toUpgrade = componentNames;
-  } else if (target) {
-    if (!components[target]) {
-      console.error(`Component "${target}" is not installed.`);
-      process.exit(1);
-    }
-    toUpgrade = [target];
-  } else {
-    console.error('Usage: zylos upgrade <name>');
+  // Validate target
+  if (!target) {
+    console.error('Usage: zylos upgrade <name> [options]');
+    console.error('       zylos upgrade <name> confirm');
     console.error('       zylos upgrade --all');
     console.error('       zylos upgrade --self');
+    console.log('\nOptions:');
+    console.log('  --check    Check for updates only');
+    console.log('  --json     Output in JSON format');
+    console.log('  --yes, -y  Skip confirmation');
+    console.log('  confirm    Execute upgrade (for async confirmation)');
     console.log('\nExamples:');
-    console.log('  zylos upgrade telegram    # Upgrade specific component');
-    console.log('  zylos upgrade --all       # Upgrade all components');
-    console.log('  zylos upgrade --self      # Upgrade zylos-core itself');
+    console.log('  zylos upgrade telegram --check --json');
+    console.log('  zylos upgrade telegram --yes');
+    console.log('  zylos upgrade telegram confirm');
     process.exit(1);
   }
 
-  if (toUpgrade.length === 0) {
-    console.log('No components to upgrade.');
+  // Verify component is installed (both in components.json and skill directory)
+  const components = loadComponents();
+  const skillDir = path.join(SKILLS_DIR, target);
+
+  if (!components[target]) {
+    const result = {
+      action: 'check',
+      component: target,
+      error: 'component_not_registered',
+      message: `组件 '${target}' 未在 components.json 中注册`,
+    };
+    if (jsonOutput) {
+      console.log(JSON.stringify(result, null, 2));
+    } else {
+      console.error(`Error: ${result.message}`);
+    }
+    process.exit(1);
+  }
+
+  if (!fs.existsSync(skillDir)) {
+    const result = {
+      action: 'check',
+      component: target,
+      error: 'skill_dir_not_found',
+      message: `组件目录不存在: ${skillDir}`,
+    };
+    if (jsonOutput) {
+      console.log(JSON.stringify(result, null, 2));
+    } else {
+      console.error(`Error: ${result.message}`);
+    }
+    process.exit(1);
+  }
+
+  // Mode 1: Check only (--check)
+  if (checkOnly) {
+    return handleCheckOnly(target, { jsonOutput });
+  }
+
+  // Mode 2: Execute upgrade (--yes or confirm)
+  if (skipConfirm || explicitConfirm) {
+    return handleExecuteUpgrade(target, { jsonOutput });
+  }
+
+  // Mode 3: Interactive (default) - show info and prompt
+  return handleInteractive(target, { jsonOutput });
+}
+
+/**
+ * Handle --check flag: check for updates only
+ */
+async function handleCheckOnly(component, { jsonOutput }) {
+  const result = checkForUpdates(component);
+
+  if (jsonOutput) {
+    const output = {
+      action: 'check',
+      component,
+      ...result,
+    };
+    console.log(JSON.stringify(output, null, 2));
+    if (!result.success) {
+      process.exit(1);
+    }
+  } else {
+    if (!result.success) {
+      console.error(`Error: ${result.message}`);
+      process.exit(1);
+    }
+
+    if (!result.hasUpdate) {
+      console.log(`✓ ${component} is up to date (v${result.current})`);
+    } else {
+      console.log(`${component}: ${result.current} → ${result.latest}`);
+      if (result.localChanges) {
+        console.log(`\n⚠️  Local modifications detected:`);
+        result.localChanges.forEach(c => console.log(`  ${c}`));
+      }
+      if (result.changelog) {
+        console.log(`\nChangelog:\n${result.changelog}`);
+      }
+      console.log(`\nRun "zylos upgrade ${component} --yes" to upgrade.`);
+    }
+  }
+}
+
+/**
+ * Handle --yes or confirm: execute upgrade
+ */
+async function handleExecuteUpgrade(component, { jsonOutput }) {
+  if (!jsonOutput) {
+    console.log(`Upgrading ${component}...`);
+  }
+
+  const result = runUpgrade(component);
+
+  if (jsonOutput) {
+    console.log(JSON.stringify(result, null, 2));
+    if (!result.success) {
+      process.exit(1);
+    }
+  } else {
+    if (result.success) {
+      // Print step progress
+      for (const step of result.steps) {
+        const icon = step.status === 'done' ? '✓' :
+                     step.status === 'skipped' ? '○' : '✗';
+        const msg = step.message ? ` (${step.message})` : '';
+        console.log(`  [${step.step}/9] ${step.name}${msg} ${icon}`);
+      }
+
+      console.log(`\n✓ ${component} 升级完成: ${result.from} → ${result.to}`);
+
+      if (result.stashExists) {
+        console.log(`\n注意: 您的本地修改已保存到 git stash`);
+        console.log(`  查看: cd ~/.claude/skills/${component} && git stash show`);
+        console.log(`  恢复: cd ~/.claude/skills/${component} && git stash pop`);
+      }
+    } else {
+      // Print failed steps
+      for (const step of result.steps) {
+        const icon = step.status === 'done' ? '✓' :
+                     step.status === 'skipped' ? '○' : '✗';
+        console.log(`  [${step.step}/9] ${step.name} ${icon}`);
+        if (step.status === 'failed' && step.error) {
+          console.log(`       ${step.error}`);
+        }
+      }
+
+      console.log(`\n✗ 升级失败 (步骤 ${result.failedStep}): ${result.error}`);
+
+      if (result.rollback?.performed) {
+        console.log(`\n⚠️  已自动回滚:`);
+        for (const r of result.rollback.steps) {
+          const icon = r.success ? '✓' : '✗';
+          console.log(`  ${icon} ${r.action}`);
+        }
+      }
+
+      process.exit(1);
+    }
+  }
+}
+
+/**
+ * Handle interactive mode (default)
+ */
+async function handleInteractive(component, { jsonOutput }) {
+  // Check for updates first
+  const check = checkForUpdates(component);
+
+  if (!check.success) {
+    if (jsonOutput) {
+      console.log(JSON.stringify({ action: 'check', component, ...check }, null, 2));
+    } else {
+      console.error(`Error: ${check.message}`);
+    }
+    process.exit(1);
+  }
+
+  if (!check.hasUpdate) {
+    if (jsonOutput) {
+      console.log(JSON.stringify({ action: 'check', component, ...check }, null, 2));
+    } else {
+      console.log(`✓ ${component} is up to date (v${check.current})`);
+    }
     return;
   }
 
-  console.log(`Checking upgrades for: ${toUpgrade.join(', ')}...`);
+  // Show update info
+  console.log(`\n${component}: ${check.current} → ${check.latest}`);
 
-  outputTask('upgrade', {
-    components: toUpgrade.map(name => ({
-      name,
-      repo: components[name].repo,
-      currentVersion: components[name].version,
-      skillDir: path.join(SKILLS_DIR, name),
-      dataDir: path.join(COMPONENTS_DIR, name),
-    })),
-    steps: [
-      'For each component:',
-      '1. Check git status for local modifications',
-      '2. Fetch remote changes and compare versions',
-      '3. Show CHANGELOG.md diff for user confirmation',
-      '4. If user confirms:',
-      '   a. Create backup (git stash + record rollback point)',
-      '   b. Execute pre-upgrade hook if defined',
-      '   c. Stop service if running',
-      '   d. Pull changes + npm install',
-      '   e. Execute post-upgrade hook if defined',
-      '   f. Restart service',
-      '   g. Verify service status',
-      '   h. If failed, rollback automatically',
-      '5. Update version in components.json',
-    ],
-  });
+  if (check.localChanges) {
+    console.log(`\n⚠️  LOCAL MODIFICATIONS DETECTED:`);
+    check.localChanges.forEach(c => console.log(`  ${c}`));
+  }
+
+  if (check.changelog) {
+    console.log(`\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+    console.log('CHANGELOG');
+    console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+    console.log(check.changelog);
+    console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`);
+  }
+
+  console.log('To proceed with upgrade, run:');
+  console.log(`  zylos upgrade ${component} --yes`);
+  console.log(`  zylos upgrade ${component} confirm`);
+}
+
+/**
+ * Handle --all: upgrade all components
+ */
+async function upgradeAllComponents({ checkOnly, jsonOutput, skipConfirm }) {
+  const components = loadComponents();
+  const names = Object.keys(components);
+
+  if (names.length === 0) {
+    if (jsonOutput) {
+      console.log(JSON.stringify({ action: 'check_all', components: [], message: 'No components installed' }));
+    } else {
+      console.log('No components installed.');
+    }
+    return;
+  }
+
+  const results = [];
+
+  for (const name of names) {
+    if (!jsonOutput) {
+      console.log(`\nChecking ${name}...`);
+    }
+
+    const check = checkForUpdates(name);
+    results.push({ component: name, ...check });
+
+    if (!jsonOutput && check.success && check.hasUpdate) {
+      console.log(`  ${check.current} → ${check.latest}`);
+    }
+  }
+
+  const updatable = results.filter(r => r.success && r.hasUpdate);
+
+  if (jsonOutput) {
+    console.log(JSON.stringify({
+      action: checkOnly ? 'check_all' : 'upgrade_all',
+      total: names.length,
+      updatable: updatable.length,
+      components: results,
+    }, null, 2));
+    return;
+  }
+
+  if (updatable.length === 0) {
+    console.log('\n✓ All components are up to date.');
+    return;
+  }
+
+  console.log(`\n${updatable.length} component(s) have updates available.`);
+
+  if (checkOnly) {
+    console.log('Run "zylos upgrade --all --yes" to upgrade all.');
+    return;
+  }
+
+  if (!skipConfirm) {
+    console.log('Run "zylos upgrade --all --yes" to upgrade all.');
+    return;
+  }
+
+  // Execute upgrades
+  for (const comp of updatable) {
+    console.log(`\nUpgrading ${comp.component}...`);
+    const result = runUpgrade(comp.component);
+    if (result.success) {
+      console.log(`  ✓ ${result.from} → ${result.to}`);
+    } else {
+      console.log(`  ✗ Failed: ${result.error}`);
+    }
+  }
 }
 
 /**
