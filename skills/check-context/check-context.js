@@ -26,9 +26,10 @@ function sendViaC4(message) {
 
   try {
     // Use execFileSync to avoid shell injection - passes arguments directly
+    // Use --no-reply since system messages don't need a reply path
     execFileSync(
       'node',
-      [c4ReceivePath, '--source', 'system', '--priority', '1', '--content', message],
+      [c4ReceivePath, '--source', 'system', '--priority', '1', '--no-reply', '--content', message],
       { stdio: 'inherit' }
     );
   } catch (err) {
