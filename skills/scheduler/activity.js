@@ -83,15 +83,16 @@ function sessionExists() {
  * Send a message to Claude via C4 Communication Bridge
  * @param {string} message - Message to send
  * @param {string} source - Source identifier (default: 'scheduler')
+ * @param {number} priority - Message priority 1-3 (default: 3)
  * @returns {boolean} True if successful
  */
-function sendViaC4(message, source = 'scheduler') {
+function sendViaC4(message, source = 'scheduler', priority = 3) {
   try {
     const c4ReceivePath = join(homedir(), '.claude/skills/comm-bridge/c4-receive.js');
     const escapedMessage = message.replace(/"/g, '\\"').replace(/\$/g, '\\$');
 
     execSync(
-      `node "${c4ReceivePath}" --source ${source} --content "${escapedMessage}"`,
+      `node "${c4ReceivePath}" --source ${source} --priority ${priority} --content "${escapedMessage}"`,
       { stdio: 'pipe', timeout: 10000 }
     );
     return true;

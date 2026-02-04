@@ -31,7 +31,7 @@ function sendViaC4(message, source = 'system') {
 
   try {
     execSync(
-      `node "${c4ReceivePath}" --source ${source} --content "${message.replace(/"/g, '\\"')}"`,
+      `node "${c4ReceivePath}" --source ${source} --priority 1 --content "${message.replace(/"/g, '\\"')}"`,
       { stdio: 'inherit' }
     );
     return true;

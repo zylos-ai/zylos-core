@@ -2,16 +2,21 @@
 /**
  * C4 Communication Bridge - Message Dispatcher
  * Polls for pending messages and delivers them serially to Claude via tmux
+ * Supports priority-based queue with idle-state checking for system messages
  *
  * Run with PM2: pm2 start c4-dispatcher.js --name c4-dispatcher
  */
 
 const { execSync } = require('child_process');
+const { readFileSync, existsSync } = require('fs');
+const { join } = require('path');
+const { homedir } = require('os');
 const { getNextPending, markDelivered, getPendingCount, close } = require('./c4-db');
 
 const TMUX_SESSION = process.env.TMUX_SESSION || 'claude-main';
 const POLL_INTERVAL = 500;  // Check every 500ms for new messages
 const DELIVERY_DELAY = 200; // 200ms delay between paste and Enter
+const STATUS_FILE = join(homedir(), '.claude-status');
 
 let isShuttingDown = false;
 
@@ -32,6 +37,35 @@ function tmuxHasSession() {
     execSync(`tmux has-session -t "${TMUX_SESSION}" 2>/dev/null`, { encoding: 'utf8' });
     return true;
   } catch {
+    return false;
+  }
+}
+
+/**
+ * Check if Claude is idle (for priority-1 messages)
+ * @returns {boolean} - true if idle, false otherwise
+ */
+function isClaudeIdle() {
+  try {
+    if (!existsSync(STATUS_FILE)) {
+      return false;
+    }
+    const content = readFileSync(STATUS_FILE, 'utf8');
+    const status = JSON.parse(content);
+
+    // Check idle_seconds field (preferred)
+    if (typeof status.idle_seconds === 'number') {
+      return status.idle_seconds >= 5;
+    }
+
+    // Fallback: check state field
+    if (status.state === 'idle') {
+      return true;
+    }
+
+    return false;
+  } catch (err) {
+    log(`Error checking idle state: ${err.message}`);
     return false;
   }
 }
@@ -87,13 +121,21 @@ async function processNextMessage() {
     return false;
   }
 
-  // Get next pending message
+  // Get next pending message (priority-sorted)
   const msg = getNextPending();
   if (!msg) {
     return false;
   }
 
-  log(`Delivering message id=${msg.id} from ${msg.source}`);
+  // Priority 1 (system/idle-required): Check if Claude is idle
+  if (msg.priority === 1) {
+    if (!isClaudeIdle()) {
+      // Not idle yet, skip delivery (will retry on next poll)
+      return false;
+    }
+  }
+
+  log(`Delivering message id=${msg.id} priority=${msg.priority} from ${msg.source}`);
 
   // Send to Claude
   const success = await sendToTmux(msg.content);
