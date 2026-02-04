@@ -69,10 +69,10 @@ function parseDuration(durationStr) {
 /**
  * Format a Unix timestamp for display
  * @param {number} timestamp - Unix timestamp
- * @param {string} timezone - Timezone (default: Asia/Shanghai)
+ * @param {string} timezone - Timezone (default: from TZ env var or UTC)
  * @returns {string} Formatted date string
  */
-function formatTime(timestamp, timezone = 'Asia/Shanghai') {
+function formatTime(timestamp, timezone = process.env.TZ || 'UTC') {
   const date = new Date(timestamp * 1000);
   return date.toLocaleString('en-US', {
     timeZone: timezone,

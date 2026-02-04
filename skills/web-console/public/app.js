@@ -129,6 +129,11 @@ class ZylosConsole {
           // Message was sent successfully, it will appear via 'messages' event
         } else {
           console.error('Failed to send message:', msg.error);
+          // Mark the last sent message as error
+          if (this.lastSentTempId) {
+            this.markMessageError(this.lastSentTempId);
+            this.lastSentTempId = null;
+          }
         }
         break;
     }
@@ -234,6 +239,7 @@ class ZylosConsole {
         // Send via WebSocket
         // Note: Don't mark as sent immediately - wait for server confirmation
         // or for message to appear via polling
+        this.lastSentTempId = tempId; // Track for error handling
         this.ws.send(JSON.stringify({ type: 'send', content: message }));
       } else {
         // Fallback to HTTP

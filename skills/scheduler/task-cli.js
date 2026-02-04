@@ -9,6 +9,9 @@ const { getNextRun, isValidCron, describeCron } = require('./cron');
 const { parseTime, parseDuration, formatTime, getRelativeTime } = require('./time-parser');
 const { getStatus } = require('./activity');
 
+// Get default timezone from cron module
+const DEFAULT_TIMEZONE = process.env.TZ || 'UTC';
+
 const db = getDb();
 
 const HELP = `
@@ -295,7 +298,7 @@ function cmdDone(taskId) {
       currentTime,  // run immediately when idle
       currentTime,
       currentTime,
-      'Asia/Shanghai'
+      DEFAULT_TIMEZONE
     );
     console.log(`Created auto-compact task: ${compactTaskId}`);
   }

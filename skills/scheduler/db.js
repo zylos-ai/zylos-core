@@ -44,7 +44,7 @@ function initSchema() {
       cron_expression TEXT,
       run_at INTEGER,
       interval_seconds INTEGER,
-      timezone TEXT DEFAULT 'Asia/Shanghai',
+      timezone TEXT DEFAULT 'UTC',
 
       -- Timing
       next_run_at INTEGER NOT NULL,

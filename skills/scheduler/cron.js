@@ -5,12 +5,13 @@
 
 const parser = require('cron-parser');
 
-const DEFAULT_TIMEZONE = 'Asia/Shanghai';
+// Use TZ environment variable or fall back to UTC
+const DEFAULT_TIMEZONE = process.env.TZ || 'UTC';
 
 /**
  * Calculate the next run time for a cron expression
  * @param {string} cronExpression - Standard cron expression
- * @param {string} timezone - Timezone (default: Asia/Shanghai)
+ * @param {string} timezone - Timezone (default: from TZ env var or UTC)
  * @param {Date} fromDate - Calculate next run from this date (default: now)
  * @returns {number} Unix timestamp of next run
  */

@@ -228,10 +228,16 @@ function handleMissedTasks() {
       });
     } else {
       // Recent miss (5-60 min): try to dispatch if idle
-      const idleSeconds = getIdleSeconds();
+      let idleSeconds = getIdleSeconds();
       const threshold = getIdleThreshold(task.priority);
 
-      if (idleSeconds !== null && idleSeconds >= threshold) {
+      // Treat null as idle to avoid stall (status file missing)
+      if (idleSeconds === null) {
+        console.log(`[${new Date().toISOString()}] Warning: idle status unavailable for missed task ${task.id}, assuming idle`);
+        idleSeconds = 999;
+      }
+
+      if (idleSeconds >= threshold) {
         console.log(`[${new Date().toISOString()}] Late-dispatching missed task ${task.id} (${task.name}), ${Math.round(overdueSeconds/60)}min overdue`);
         dispatchTask(task);
       }
