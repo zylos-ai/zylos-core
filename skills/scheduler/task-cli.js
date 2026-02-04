@@ -172,8 +172,8 @@ function cmdAdd(args, options) {
       id, name, prompt, type,
       cron_expression, interval_seconds,
       next_run_at, priority, status,
-      created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+      created_at, updated_at, timezone
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)
   `).run(
     taskId,
     options.name || prompt.substring(0, 40),  // Default name to truncated prompt
@@ -184,7 +184,8 @@ function cmdAdd(args, options) {
     nextRunAt,
     priority,
     currentTime,
-    currentTime
+    currentTime,
+    DEFAULT_TIMEZONE
   );
 
   console.log(`\nTask created: ${taskId}`);

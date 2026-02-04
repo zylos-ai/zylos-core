@@ -145,12 +145,19 @@ configure() {
 start_services() {
     echo -e "\n${BLUE}Starting services...${NC}"
 
+    # Load timezone from .env if available
+    if [ -f "$ZYLOS_DIR/.env" ]; then
+        source "$ZYLOS_DIR/.env"
+    fi
+
     # Start core services directly (no pm2.config.js needed)
-    pm2 start "$SKILLS_DIR/self-maintenance/activity-monitor.js" --name activity-monitor
-    env NODE_ENV=production ZYLOS_DIR="$ZYLOS_DIR" \
+    env TZ="${TZ:-UTC}" \
+        pm2 start "$SKILLS_DIR/self-maintenance/activity-monitor.js" --name activity-monitor
+    env NODE_ENV=production ZYLOS_DIR="$ZYLOS_DIR" TZ="${TZ:-UTC}" \
         pm2 start "$SKILLS_DIR/scheduler/scheduler.js" --name scheduler
-    pm2 start "$SKILLS_DIR/comm-bridge/c4-dispatcher.js" --name c4-dispatcher
-    env WEB_CONSOLE_PORT=3456 ZYLOS_DIR="$ZYLOS_DIR" \
+    env TZ="${TZ:-UTC}" \
+        pm2 start "$SKILLS_DIR/comm-bridge/c4-dispatcher.js" --name c4-dispatcher
+    env WEB_CONSOLE_PORT=3456 ZYLOS_DIR="$ZYLOS_DIR" TZ="${TZ:-UTC}" \
         pm2 start "$SKILLS_DIR/web-console/server.js" --name web-console
 
     echo "  ✓ Services started"

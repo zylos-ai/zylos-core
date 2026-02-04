@@ -26,7 +26,7 @@ class ZylosConsole {
   detectBasePath() {
     const path = window.location.pathname;
     if (path.startsWith('/console')) {
-      return '/console';
+      return '/console/';
     }
     return '';
   }
