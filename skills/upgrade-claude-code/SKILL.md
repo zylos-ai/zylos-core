@@ -23,13 +23,6 @@ Upgrade Claude Code to the latest version - sends /exit, waits for exit, upgrade
 nohup node ~/.claude/skills/upgrade-claude-code/upgrade.js > /dev/null 2>&1 &
 ```
 
-After running this command:
-1. Wait for you to become idle (idle_seconds >= 3)
-2. Send `/exit` command via C4
-3. Wait for Claude process to exit
-4. Upgrade Claude Code to latest version
-5. activity-monitor daemon detects exit and restarts Claude with new version
-
 ## How It Works
 
 1. **Idle detection**: Waits for idle state (idle_seconds >= 3)

@@ -24,11 +24,6 @@ Restart Claude Code session - sends /exit and lets activity-monitor daemon handl
 nohup node ~/.claude/skills/restart-claude-code/restart.js > /dev/null 2>&1 &
 ```
 
-After running this command:
-1. Wait for you to become idle (idle_seconds >= 3)
-2. Send `/exit` command via C4
-3. activity-monitor daemon detects exit and restarts Claude automatically
-
 ## How It Works
 
 1. **Idle detection**: Waits for idle state (idle_seconds >= 3)
