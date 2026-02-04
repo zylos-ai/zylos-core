@@ -232,8 +232,9 @@ class ZylosConsole {
     try {
       if (this.ws && this.ws.readyState === WebSocket.OPEN) {
         // Send via WebSocket
+        // Note: Don't mark as sent immediately - wait for server confirmation
+        // or for message to appear via polling
         this.ws.send(JSON.stringify({ type: 'send', content: message }));
-        this.markMessageSent(tempId);
       } else {
         // Fallback to HTTP
         const response = await fetch(`${this.basePath}/api/send`, {

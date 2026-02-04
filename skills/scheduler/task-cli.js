@@ -155,8 +155,8 @@ function cmdAdd(args, options) {
     return;
   }
 
-  const priority = parseInt(options.priority) || 3;
-  if (priority < 1 || priority > 4) {
+  const priority = options.priority ? parseInt(options.priority, 10) : 3;
+  if (!Number.isInteger(priority) || priority < 1 || priority > 4) {
     console.error('Error: Priority must be 1-4');
     return;
   }

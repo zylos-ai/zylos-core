@@ -76,7 +76,7 @@ async function main() {
   // 1. Send to Telegram primary_dm
   const tgConfig = readJsonFile(path.join(ZYLOS_DIR, 'telegram', 'config.json'));
   if (tgConfig && tgConfig.primary_dm) {
-    const result = await sendViaChannel('telegram', null, message);
+    const result = await sendViaChannel('telegram', tgConfig.primary_dm, message);
     if (result.success) {
       console.log('[notify] Sent to Telegram');
       sentCount++;
