@@ -1,321 +1,143 @@
 #!/usr/bin/env node
 /**
- * Claude Code Self-Upgrade Script (C4-integrated)
- * This script is triggered by Claude, runs detached, and survives the session exit
- * Usage: node upgrade-claude.js [channel]
- *   channel: Optional notification channel (e.g., "lark:oc_xxx" or "telegram")
- *            If provided, upgrade confirmation will be sent there
- *            If not provided, falls back to notify.sh (sends to primary_dm)
+ * Upgrade Claude Code Script (C4-integrated)
+ * Sends /exit, waits for exit, upgrades Claude Code, activity-monitor restarts it
+ * Usage: node upgrade.js
+ *
+ * IMPORTANT: Run with nohup to allow Claude to exit cleanly:
+ *   nohup node ~/.claude/skills/upgrade-claude-code/upgrade.js > /dev/null 2>&1 &
  */
 
-const { execSync, execFileSync, spawn } = require('child_process');
-const fs = require('fs');
-const path = require('path');
-const os = require('os');
+import { execSync, execFileSync } from 'child_process';
+import path from 'path';
+import os from 'os';
+import fs from 'fs';
 
-// Auto-detect zylos directory
-const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
-const SKILL_DIR = path.join(ZYLOS_DIR, 'upgrade-claude-code');
-const LOG_FILE = path.join(SKILL_DIR, 'upgrade.log');
-const TMUX_SESSION = 'claude-main';
-const NOTIFY_CHANNEL = process.argv[2] || null;
-
-// Auto-detect claude binary path
-function findClaudeBin() {
-  if (process.env.CLAUDE_BIN) {
-    return process.env.CLAUDE_BIN;
-  }
-
-  const knownPaths = [
-    path.join(os.homedir(), '.local', 'bin', 'claude'),
-    path.join(os.homedir(), '.claude', 'bin', 'claude'),
-    '/usr/local/bin/claude',
-    '/opt/homebrew/bin/claude',
-    '/usr/bin/claude',
-  ];
-
-  for (const p of knownPaths) {
-    if (fs.existsSync(p)) {
-      return p;
-    }
-  }
-
-  return 'claude';  // Fallback
-}
-
-const CLAUDE_BIN = findClaudeBin();
-
-function log(message) {
-  const timestamp = new Date().toISOString().replace('T', ' ').substring(0, 19);
-  const line = `[${timestamp}] ${message}`;
-  console.log(line);
-  // Ensure skill directory exists
-  if (!fs.existsSync(SKILL_DIR)) {
-    fs.mkdirSync(SKILL_DIR, { recursive: true });
-  }
-  fs.appendFileSync(LOG_FILE, line + '\n');
-}
-
-function sendViaC4(message, source = 'system') {
-  const c4ReceivePath = path.join(os.homedir(), '.claude/skills/comm-bridge/c4-receive.js');
-
-  try {
-    // Use execFileSync to avoid shell injection - passes arguments directly
-    // Use --no-reply since system messages don't need a reply path
-    execFileSync(
-      'node',
-      [c4ReceivePath, '--source', source, '--priority', '1', '--no-reply', '--content', message],
-      { stdio: 'inherit' }
-    );
-    return true;
-  } catch (err) {
-    log(`Failed to send via C4: ${err.message}`);
-    return false;
-  }
-}
-
-function sendToTmux(text) {
-  const msgId = `${Date.now()}-${process.pid}`;
-  const tempFile = `/tmp/upgrade-msg-${msgId}.txt`;
-  const bufferName = `upgrade-${msgId}`;
-
-  try {
-    fs.writeFileSync(tempFile, text);
-
-    try {
-      execSync(`tmux load-buffer -b "${bufferName}" "${tempFile}" 2>/dev/null`);
-      execSync('sleep 0.1');
-      execSync(`tmux paste-buffer -b "${bufferName}" -t "${TMUX_SESSION}" 2>/dev/null`);
-      execSync('sleep 0.2');
-      execSync(`tmux send-keys -t "${TMUX_SESSION}" Enter 2>/dev/null`);
-      execSync(`tmux delete-buffer -b "${bufferName}" 2>/dev/null`);
-    } catch {}
-
-    fs.unlinkSync(tempFile);
-  } catch {}
-}
-
-function tmuxHasSession() {
-  try {
-    execSync(`tmux has-session -t "${TMUX_SESSION}" 2>/dev/null`);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function getTmuxActivity() {
-  try {
-    const output = execSync(`tmux list-windows -t "${TMUX_SESSION}" -F '#{window_activity}' 2>/dev/null | head -1`, { encoding: 'utf8' });
-    return parseInt(output.trim(), 10);
-  } catch {
-    return null;
-  }
-}
-
-function isAtPrompt() {
-  const activityTs = getTmuxActivity();
-  if (!activityTs) return false;
-
-  const now = Math.floor(Date.now() / 1000);
-  const idleSeconds = now - activityTs;
-  return idleSeconds >= 5;
-}
-
-function isClaudeRunning() {
-  try {
-    const panePid = execSync(`tmux list-panes -t "${TMUX_SESSION}" -F '#{pane_pid}' 2>/dev/null | head -1`, { encoding: 'utf8' }).trim();
-    if (!panePid) return false;
-
-    try {
-      execSync(`pgrep -P ${panePid} -f "claude" > /dev/null 2>&1`);
-      return true;
-    } catch {
-      return false;
-    }
-  } catch {
-    return false;
-  }
-}
+const STATUS_FILE = path.join(os.homedir(), '.claude-status');
+const MAX_WAIT_SECONDS = 600; // Max time to wait for idle (10 minutes)
+const CHECK_INTERVAL = 1; // Seconds between idle checks
+const MIN_IDLE_SECONDS = 3; // Require at least 3 seconds of idle time
 
 function sleep(seconds) {
   execSync(`sleep ${seconds}`);
 }
 
-function getSendCommand(channel) {
-  if (!channel) {
-    return '~/zylos/bin/notify.sh';
+function isClaudeIdle() {
+  try {
+    if (!fs.existsSync(STATUS_FILE)) {
+      // No status file, assume idle
+      return true;
+    }
+    const content = fs.readFileSync(STATUS_FILE, 'utf8');
+    const status = JSON.parse(content);
+    return status.idle_seconds >= MIN_IDLE_SECONDS;
+  } catch {
+    // Error reading file, assume idle
+    return true;
   }
-  if (channel.startsWith('lark:')) {
-    const chatId = channel.substring(5);
-    return `~/zylos/lark-agent/send-reply.sh "${chatId}"`;
-  }
-  if (channel.startsWith('telegram:')) {
-    const chatId = channel.substring(9);
-    return `~/zylos/telegram-bot/send-reply.sh ${chatId}`;
-  }
-  if (channel === 'telegram') {
-    return '~/zylos/telegram-bot/send-reply.sh';
-  }
-  return '~/zylos/bin/notify.sh';
 }
 
-async function main() {
-  log('=== Claude Code Upgrade Started ===');
-
-  if (NOTIFY_CHANNEL) {
-    log(`Notification channel: ${NOTIFY_CHANNEL}`);
-  } else {
-    log('No channel provided, will use notify.sh');
-  }
-
-  // Wait for Claude to be at prompt before sending /exit
-  log('Waiting for Claude to be at prompt...');
-  sleep(2);
-
-  const MAX_PROMPT_WAIT = 120;
-  let promptWaited = 0;
-
-  while (promptWaited < MAX_PROMPT_WAIT) {
-    if (!tmuxHasSession()) {
-      log('Tmux session not found');
-      break;
+function waitForIdle() {
+  let waited = 0;
+  while (waited < MAX_WAIT_SECONDS) {
+    if (isClaudeIdle()) {
+      return true;
     }
-
-    if (isAtPrompt()) {
-      log('Claude is at prompt, sending /exit...');
-      sendToTmux('/exit');
-      log('Sent /exit command');
-      break;
-    }
-
-    log(`Not at prompt yet, waiting... (${promptWaited} sec)`);
-    sleep(5);
-    promptWaited += 5;
+    sleep(CHECK_INTERVAL);
+    waited += CHECK_INTERVAL;
   }
+  // Timeout - proceed anyway
+  console.log(`Warning: Claude still busy after ${MAX_WAIT_SECONDS}s, proceeding anyway`);
+  return false;
+}
 
-  if (promptWaited >= MAX_PROMPT_WAIT) {
-    log('Warning: Timeout waiting for prompt, trying /exit anyway...');
-    sendToTmux('/exit');
+function sendViaC4(message) {
+  const c4ReceivePath = path.join(os.homedir(), '.claude/skills/comm-bridge/c4-receive.js');
+
+  try {
+    execFileSync(
+      'node',
+      [c4ReceivePath, '--source', 'system', '--priority', '1', '--no-reply', '--content', message],
+      { stdio: 'inherit' }
+    );
+  } catch (err) {
+    console.error(`Failed to send via C4: ${err.message}`);
+    process.exit(1);
   }
+}
 
-  log('Waiting for Claude session to exit...');
+function isClaudeRunning() {
+  try {
+    // Check if claude process is running
+    execSync('pgrep -f "claude.*--dangerously-skip-permissions" > /dev/null 2>&1');
+    return true;
+  } catch {
+    return false;
+  }
+}
 
-  // Wait for the Claude process in tmux to exit
-  const MAX_WAIT = 60;
+function waitForClaudeExit() {
+  const MAX_EXIT_WAIT = 60; // Wait up to 60 seconds for Claude to exit
   let waited = 0;
 
-  while (waited < MAX_WAIT) {
-    try {
-      const panePid = execSync(`tmux list-panes -t "${TMUX_SESSION}" -F '#{pane_pid}' 2>/dev/null | head -1`, { encoding: 'utf8' }).trim();
-      if (!panePid) {
-        log('Tmux session not found, proceeding...');
-        break;
-      }
-
-      if (!isClaudeRunning()) {
-        log('Claude process has exited');
-        break;
-      }
-    } catch {
-      break;
+  while (waited < MAX_EXIT_WAIT) {
+    if (!isClaudeRunning()) {
+      console.log('Claude process has exited');
+      return true;
     }
-
     sleep(2);
     waited += 2;
   }
 
-  if (waited >= MAX_WAIT) {
-    log('Warning: Timeout waiting for Claude to exit, proceeding anyway...');
-  }
+  console.log(`Warning: Claude still running after ${MAX_EXIT_WAIT}s, proceeding anyway`);
+  return false;
+}
 
-  // Small delay to ensure clean exit
-  sleep(3);
+function upgradeClaudeCode() {
+  console.log('Starting Claude Code upgrade...');
 
-  log('Starting upgrade...');
-
-  // Run the upgrade
   try {
     process.chdir(os.homedir());
     const output = execSync('curl -fsSL https://claude.ai/install.sh | bash', {
       encoding: 'utf8',
       stdio: 'pipe'
     });
-    log(output);
-    log('Upgrade completed successfully');
+    console.log(output);
+    console.log('Upgrade completed successfully');
   } catch (err) {
-    log(`ERROR: Upgrade failed! ${err.message}`);
+    console.error(`ERROR: Upgrade failed! ${err.message}`);
     process.exit(1);
   }
 
   // Check new version
-  let newVersion = 'unknown';
   try {
-    newVersion = execSync(`${os.homedir()}/.local/bin/claude --version 2>/dev/null`, { encoding: 'utf8' }).trim();
-  } catch {}
-  log(`New version: ${newVersion}`);
-
-  // Reset context monitor cooldowns
-  log('Resetting context monitor cooldowns...');
-  try { fs.unlinkSync('/tmp/context-alert-cooldown'); } catch {}
-  try { fs.unlinkSync('/tmp/context-compact-scheduled'); } catch {}
-  log('Context monitor reset complete');
-
-  // Restart Claude in tmux
-  log(`Restarting Claude in tmux session: ${TMUX_SESSION}`);
-  sleep(2);
-
-  if (tmuxHasSession()) {
-    sendToTmux(`cd ${ZYLOS_DIR}; ${CLAUDE_BIN} --dangerously-skip-permissions`);
-    log('Claude restarted in existing tmux session');
-  } else {
-    try {
-      execSync(`tmux new-session -d -s "${TMUX_SESSION}" "cd ${ZYLOS_DIR} && ${CLAUDE_BIN} --dangerously-skip-permissions"`);
-      log('Created new tmux session and started Claude');
-    } catch (err) {
-      log(`Failed to create tmux session: ${err.message}`);
-    }
+    const newVersion = execSync('~/.local/bin/claude --version 2>/dev/null', {
+      encoding: 'utf8'
+    }).trim();
+    console.log(`New version: ${newVersion}`);
+  } catch {
+    console.log('New version: unknown');
   }
+}
 
-  // Wait for Claude to be ready and send catch-up prompt via C4
-  log('Waiting for Claude to be ready...');
-  sleep(10);
+function main() {
+  console.log('[upgrade-claude-code] Starting upgrade process');
 
-  const SEND_CMD = getSendCommand(NOTIFY_CHANNEL);
+  // Step 1: Wait for Claude to be idle
+  waitForIdle();
 
-  const MAX_CATCHUP_WAIT = 120;
-  let catchupWait = 0;
+  // Step 2: Send /exit command via C4
+  sendViaC4('/exit');
 
-  while (catchupWait < MAX_CATCHUP_WAIT) {
-    if (isAtPrompt()) {
-      log('Claude is ready, sending catch-up prompt via C4...');
-      if (NOTIFY_CHANNEL) {
-        sendViaC4(`[System] Upgrade complete. Read your memory files, check ~/zylos/upgrade-log.txt for the new version. Send confirmation via ${SEND_CMD}`);
-      } else {
-        sendViaC4('[System] Upgrade complete. Read your memory files, check ~/zylos/upgrade-log.txt for the new version. Send confirmation via ~/zylos/bin/notify.sh');
-      }
-      log('Sent catch-up prompt via C4');
-      break;
-    }
+  // Step 3: Wait for Claude to exit
+  sleep(3); // Give it a moment to start exiting
+  waitForClaudeExit();
 
-    log(`Claude not ready yet, waiting... (${catchupWait} sec)`);
-    sleep(5);
-    catchupWait += 5;
-  }
+  // Step 4: Upgrade Claude Code
+  upgradeClaudeCode();
 
-  if (catchupWait >= MAX_CATCHUP_WAIT) {
-    log('Warning: Timeout waiting for Claude to be ready');
-    // Try to notify via notify.sh as fallback
-    const notifyScript = path.join(ZYLOS_DIR, 'bin', 'notify.sh');
-    if (fs.existsSync(notifyScript)) {
-      log('Attempting to notify via notify.sh...');
-      try {
-        execSync(`"${notifyScript}" "Upgrade script completed but Claude may not have started properly. Check tmux session."`);
-      } catch {}
-    }
-  }
-
-  log('=== Upgrade Complete ===');
+  // Done - activity-monitor will restart Claude automatically
+  console.log('[upgrade-claude-code] Upgrade complete, activity-monitor will restart Claude');
 }
 
 main();
