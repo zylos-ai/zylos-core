@@ -11,7 +11,7 @@ const { execSync } = require('child_process');
 const { readFileSync, existsSync } = require('fs');
 const { join } = require('path');
 const { homedir } = require('os');
-const { getNextPending, getNextPendingExcludingPriority, markDelivered, getPendingCount, close } = require('./c4-db');
+const { getNextPending, markDelivered, getPendingCount, close } = require('./c4-db');
 
 const TMUX_SESSION = process.env.TMUX_SESSION || 'claude-main';
 const POLL_INTERVAL = 500;  // Check every 500ms for new messages
@@ -122,21 +122,15 @@ async function processNextMessage() {
   }
 
   // Get next pending message (priority-sorted)
-  let msg = getNextPending();
+  const msg = getNextPending();
   if (!msg) {
     return false;
   }
 
   // Priority 1 (system/idle-required): Check if Claude is idle
-  // If not idle, skip priority-1 and try to deliver lower-priority messages
-  if (msg.priority === 1 && !isClaudeIdle()) {
-    // Try to get next message excluding priority-1
-    const lowerPriorityMsg = getNextPendingExcludingPriority(1);
-    if (lowerPriorityMsg) {
-      // Deliver the lower-priority message instead
-      msg = lowerPriorityMsg;
-    } else {
-      // No other messages to deliver, wait for idle
+  if (msg.priority === 1) {
+    if (!isClaudeIdle()) {
+      // Not idle yet, skip delivery (will retry on next poll)
       return false;
     }
   }

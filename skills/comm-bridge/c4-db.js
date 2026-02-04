@@ -135,23 +135,6 @@ function getNextPending() {
 }
 
 /**
- * Get next pending message excluding a specific priority
- * Used to skip idle-waiting messages and process lower-priority work
- * @param {number} excludePriority - priority level to skip
- * @returns {object|null} - next pending message or null
- */
-function getNextPendingExcludingPriority(excludePriority) {
-  const db = getDb();
-  return db.prepare(`
-    SELECT id, direction, source, endpoint_id, content, timestamp, priority
-    FROM conversations
-    WHERE direction = 'in' AND status = 'pending' AND priority != ?
-    ORDER BY priority ASC, timestamp ASC
-    LIMIT 1
-  `).get(excludePriority) || null;
-}
-
-/**
  * Mark a message as delivered
  * @param {number} id - message id
  */
@@ -351,7 +334,6 @@ module.exports = {
   getCheckpoints,
   formatForRecovery,
   getNextPending,
-  getNextPendingExcludingPriority,
   markDelivered,
   getPendingCount,
   close
