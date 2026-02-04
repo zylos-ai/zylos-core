@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
- * Check Context Usage Script
- * Sends /context command to Claude to get accurate token usage
+ * Check Context Usage Script (C4-integrated)
+ * Sends context check request to Claude via C4 Communication Bridge
  * Usage: node check-context.js
  *
  * IMPORTANT: Run with nohup to allow Claude to return to idle:
@@ -13,7 +13,6 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
-const TMUX_SESSION = 'claude-main';
 const STATUS_FILE = path.join(os.homedir(), '.claude-status');
 const MAX_WAIT_SECONDS = 600; // Max time to wait for idle (10 minutes)
 const CHECK_INTERVAL = 2; // Seconds between idle checks
@@ -54,50 +53,18 @@ function waitForIdle() {
   return false;
 }
 
-function sendToTmux(text) {
-  const msgId = `${Date.now()}-${process.pid}`;
-  const tempFile = `/tmp/ctx-msg-${msgId}.txt`;
-  const bufferName = `ctx-${msgId}`;
+function sendViaC4(message) {
+  const c4ReceivePath = path.join(os.homedir(), '.claude/skills/comm-bridge/c4-receive.js');
 
   try {
-    fs.writeFileSync(tempFile, text);
-
-    try {
-      execSync(`tmux load-buffer -b "${bufferName}" "${tempFile}" 2>/dev/null`);
-      execSync('sleep 0.1');
-      execSync(`tmux paste-buffer -b "${bufferName}" -t "${TMUX_SESSION}" 2>/dev/null`);
-      execSync('sleep 0.2');
-      execSync(`tmux send-keys -t "${TMUX_SESSION}" Enter 2>/dev/null`);
-      execSync(`tmux delete-buffer -b "${bufferName}" 2>/dev/null`);
-    } catch {}
-
-    fs.unlinkSync(tempFile);
-  } catch {}
-}
-
-function sendCommand(command) {
-  // Send command without Enter, then send Enter separately
-  const msgId = `${Date.now()}-${process.pid}`;
-  const tempFile = `/tmp/ctx-cmd-${msgId}.txt`;
-  const bufferName = `ctx-cmd-${msgId}`;
-
-  try {
-    fs.writeFileSync(tempFile, command);
-
-    try {
-      execSync(`tmux load-buffer -b "${bufferName}" "${tempFile}" 2>/dev/null`);
-      execSync(`tmux paste-buffer -b "${bufferName}" -t "${TMUX_SESSION}" 2>/dev/null`);
-      execSync(`tmux delete-buffer -b "${bufferName}" 2>/dev/null`);
-    } catch {}
-
-    fs.unlinkSync(tempFile);
-  } catch {}
-
-  // Wait then press Enter
-  sleep(0.5);
-  try {
-    execSync(`tmux send-keys -t "${TMUX_SESSION}" Enter 2>/dev/null`);
-  } catch {}
+    execSync(
+      `node "${c4ReceivePath}" --source system --content "${message.replace(/"/g, '\\"')}"`,
+      { stdio: 'inherit' }
+    );
+  } catch (err) {
+    console.error(`Failed to send via C4: ${err.message}`);
+    process.exit(1);
+  }
 }
 
 function main() {
@@ -105,14 +72,11 @@ function main() {
   // Requires idle_seconds >= 5 to ensure stable idle state
   waitForIdle();
 
-  // Send /context command
-  sendCommand('/context');
+  // Send context check request via C4
+  const message = '[System] Please run /context command and report your current context usage based on the output.';
+  sendViaC4(message);
 
-  // Wait for output to be displayed
-  sleep(5);
-
-  // Send follow-up to prompt Claude to report
-  sendToTmux('Report your current context usage based on the /context output above.');
+  console.log('[check-context] Context check request sent via C4');
 }
 
 main();
