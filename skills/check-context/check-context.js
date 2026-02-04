@@ -15,7 +15,7 @@ const fs = require('fs');
 
 const STATUS_FILE = path.join(os.homedir(), '.claude-status');
 const MAX_WAIT_SECONDS = 600; // Max time to wait for idle (10 minutes)
-const CHECK_INTERVAL = 2; // Seconds between idle checks
+const CHECK_INTERVAL = 1; // Seconds between idle checks
 const MIN_IDLE_SECONDS = 3; // Require at least 3 seconds of idle time
 
 function sleep(seconds) {
