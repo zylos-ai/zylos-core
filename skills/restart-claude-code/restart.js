@@ -1,32 +1,22 @@
 #!/usr/bin/env node
 /**
- * Claude Code Simple Restart Script (C4-integrated)
- * Sends /exit to Claude via C4, then activity-monitor daemon will restart it automatically
+ * Restart Claude Code Script (C4-integrated)
+ * Sends /exit command to Claude via C4, activity-monitor daemon restarts it
  * Usage: node restart.js
+ *
+ * IMPORTANT: Run with nohup to allow Claude to return to idle:
+ *   nohup node ~/.claude/skills/restart-claude-code/restart.js > /dev/null 2>&1 &
  */
 
 const { execSync, execFileSync } = require('child_process');
-const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const fs = require('fs');
 
-const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
-const SKILL_DIR = path.join(ZYLOS_DIR, 'restart-claude-code');
-const LOG_FILE = path.join(SKILL_DIR, 'restart.log');
 const STATUS_FILE = path.join(os.homedir(), '.claude-status');
-const CHECK_INTERVAL = 1;
-const MIN_IDLE_SECONDS = 5;
-
-function log(message) {
-  const timestamp = new Date().toISOString().replace('T', ' ').substring(0, 19);
-  const line = `[${timestamp}] ${message}`;
-  console.log(line);
-  // Ensure skill directory exists
-  if (!fs.existsSync(SKILL_DIR)) {
-    fs.mkdirSync(SKILL_DIR, { recursive: true });
-  }
-  fs.appendFileSync(LOG_FILE, line + '\n');
-}
+const MAX_WAIT_SECONDS = 600; // Max time to wait for idle (10 minutes)
+const CHECK_INTERVAL = 1; // Seconds between idle checks
+const MIN_IDLE_SECONDS = 5; // Require at least 5 seconds of idle time
 
 function sleep(seconds) {
   execSync(`sleep ${seconds}`);
@@ -35,18 +25,21 @@ function sleep(seconds) {
 function isClaudeIdle() {
   try {
     if (!fs.existsSync(STATUS_FILE)) {
+      // No status file, assume idle
       return true;
     }
     const content = fs.readFileSync(STATUS_FILE, 'utf8');
     const status = JSON.parse(content);
+    // idle_seconds = time since entering idle state (0 when busy)
+    // So we only need to check if idle_seconds >= MIN_IDLE_SECONDS
     return status.idle_seconds >= MIN_IDLE_SECONDS;
   } catch {
+    // Error reading file, assume idle
     return true;
   }
 }
 
 function waitForIdle() {
-  const MAX_WAIT_SECONDS = 600;
   let waited = 0;
   while (waited < MAX_WAIT_SECONDS) {
     if (isClaudeIdle()) {
@@ -55,7 +48,8 @@ function waitForIdle() {
     sleep(CHECK_INTERVAL);
     waited += CHECK_INTERVAL;
   }
-  log(`Warning: Claude still busy after ${MAX_WAIT_SECONDS}s, proceeding anyway`);
+  // Timeout - proceed anyway
+  console.log(`Warning: Claude still busy after ${MAX_WAIT_SECONDS}s, proceeding anyway`);
   return false;
 }
 
@@ -63,34 +57,27 @@ function sendViaC4(message) {
   const c4ReceivePath = path.join(os.homedir(), '.claude/skills/comm-bridge/c4-receive.js');
 
   try {
+    // Use execFileSync to avoid shell injection - passes arguments directly
+    // Use --no-reply since system messages don't need a reply path
     execFileSync(
       'node',
       [c4ReceivePath, '--source', 'system', '--priority', '1', '--no-reply', '--content', message],
       { stdio: 'inherit' }
     );
-    return true;
   } catch (err) {
-    log(`Failed to send via C4: ${err.message}`);
-    return false;
+    console.error(`Failed to send via C4: ${err.message}`);
+    process.exit(1);
   }
 }
 
-async function main() {
-  log('=== Claude Code Restart Started ===');
-
-  // Step 1: Ask Claude to sync memory before restart
-  log('Requesting memory sync before restart...');
-  sendViaC4('[System] Restart requested. Please sync memory (update context.md) before I proceed with restart.');
-
-  // Step 2: Wait for Claude to be idle (after syncing memory)
-  log('Waiting for Claude to be idle...');
+function main() {
+  // Wait for Claude to become idle (check ~/.claude-status)
+  // Requires idle_seconds >= MIN_IDLE_SECONDS to ensure stable idle state
   waitForIdle();
 
-  // Step 3: Send /exit command via C4
-  log('Sending /exit command via C4...');
+  // Send /exit command via C4
+  // activity-monitor daemon will detect exit and restart Claude automatically
   sendViaC4('/exit');
-
-  log('=== Restart command sent (Activity Monitor will restart Claude) ===');
 }
 
 main();

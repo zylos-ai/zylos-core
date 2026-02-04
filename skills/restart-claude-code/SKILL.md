@@ -5,7 +5,7 @@ description: Use when the user asks to restart Claude Code, or after changing se
 
 # Restart Claude Code Skill
 
-Restart Claude Code session without upgrading - sends /exit and lets activity-monitor daemon handle the restart.
+Restart Claude Code session - sends /exit and lets activity-monitor daemon handle the restart.
 
 ## When to Use
 
@@ -23,15 +23,12 @@ nohup node ~/.claude/skills/restart-claude-code/restart.js > /dev/null 2>&1 &
 ```
 
 After running this command:
-1. Script requests you to sync memory (update context.md)
-2. Wait for you to become idle (idle_seconds >= 5)
-3. Send `/exit` command via C4
-4. activity-monitor daemon detects exit and restarts Claude automatically
-5. New Claude session starts in ~10 seconds
+1. Wait for you to become idle (idle_seconds >= 5)
+2. Send `/exit` command via C4
+3. activity-monitor daemon detects exit and restarts Claude automatically
 
 ## How It Works
 
-1. **Memory sync request**: Asks you to update context.md before restart
-2. **Idle detection**: Waits for idle state (ensures memory sync completes)
-3. **Send /exit**: Uses C4 Communication Bridge (priority=1, --no-reply)
-4. **Daemon restart**: activity-monitor detects exit and restarts Claude
+1. **Idle detection**: Waits for idle state (idle_seconds >= 5)
+2. **Send /exit**: Uses C4 Communication Bridge (priority=1, --no-reply)
+3. **Daemon restart**: activity-monitor detects exit and restarts Claude
