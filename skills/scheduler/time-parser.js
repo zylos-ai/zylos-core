@@ -3,7 +3,7 @@
  * Uses chrono-node for natural language parsing
  */
 
-import chrono from 'chrono-node';
+import * as chrono from 'chrono-node';
 
 /**
  * Parse a human-friendly time string into a Unix timestamp

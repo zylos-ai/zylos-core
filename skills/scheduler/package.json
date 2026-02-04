@@ -12,7 +12,7 @@
     "cli": "node task-cli.js"
   },
   "dependencies": {
-    "better-sqlite3": "^11.7.0",
+    "better-sqlite3": "^12.6.2",
     "cron-parser": "^4.9.0",
     "chrono-node": "^2.7.7"
   }
