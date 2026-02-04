@@ -170,9 +170,10 @@ function isAtPrompt() {
 function getStatus() {
   const status = readStatusFile();
   const idleSeconds = getIdleSeconds();
+  const tmuxExists = sessionExists();
 
   if (!status || idleSeconds === null) {
-    return { state: 'unknown', idleSeconds: null, sessionExists: false };
+    return { state: 'unknown', idleSeconds: null, sessionExists: tmuxExists };
   }
 
   const atPrompt = isAtPrompt();
@@ -180,7 +181,7 @@ function getStatus() {
   return {
     state: status.state || (idleSeconds >= 15 ? 'idle' : 'busy'),
     idleSeconds,
-    sessionExists: sessionExists(),
+    sessionExists: tmuxExists,
     atPrompt
   };
 }

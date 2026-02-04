@@ -45,10 +45,10 @@ Enables Claude to work autonomously by dispatching tasks when idle.
 
 | Priority | Type | Idle Buffer |
 |----------|------|-------------|
-| 1 | Urgent | 30 seconds |
-| 2 | High | 45 seconds |
-| 3 | Normal | 60 seconds |
-| 4 | Low | 90 seconds |
+| 1 | Urgent | 15 seconds |
+| 2 | High | 30 seconds |
+| 3 | Normal | 45 seconds |
+| 4 | Low | 60 seconds |
 
 ## Database
 

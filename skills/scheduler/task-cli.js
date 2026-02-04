@@ -14,7 +14,7 @@ const db = getDb();
 const HELP = `
 Task CLI - Scheduler V2
 
-Usage: task-cli <command> [options]
+Usage: ~/.claude/skills/scheduler/task-cli.js <command> [options]
 
 Commands:
   list                    List all tasks
@@ -37,10 +37,10 @@ Add Options:
   --name "<name>"         Task name (optional)
 
 Examples:
-  task-cli add "Say hello" --in "30 minutes"
-  task-cli add "Health check" --cron "0 8 * * *" --name "daily-health"
-  task-cli add "Check updates" --every "1 hour" --priority 4
-  task-cli done task-abc123
+  ~/.claude/skills/scheduler/task-cli.js add "Say hello" --in "30 minutes"
+  ~/.claude/skills/scheduler/task-cli.js add "Health check" --cron "0 8 * * *"
+  ~/.claude/skills/scheduler/task-cli.js add "Check updates" --every "1 hour"
+  ~/.claude/skills/scheduler/task-cli.js done task-abc123
 `;
 
 function parseArgs(args) {
@@ -395,6 +395,19 @@ function cmdHistory(taskId) {
     params.push(taskId + '%');
   }
 
+  // Check for ambiguous task prefix before querying history
+  if (taskId) {
+    const matchingTasks = db.prepare(`
+      SELECT id FROM tasks WHERE id LIKE ?
+    `).all(taskId + '%');
+
+    if (matchingTasks.length > 1) {
+      console.log(`\n  ⚠ Warning: Prefix '${taskId}' matches ${matchingTasks.length} tasks:`);
+      matchingTasks.forEach(t => console.log(`    - ${t.id}`));
+      console.log();
+    }
+  }
+
   query += ' ORDER BY h.executed_at DESC LIMIT 20';
 
   const history = db.prepare(query).all(...params);
@@ -402,16 +415,6 @@ function cmdHistory(taskId) {
   if (history.length === 0) {
     console.log('No execution history.');
     return;
-  }
-
-  // Warn if prefix matches multiple tasks
-  if (taskId) {
-    const uniqueTaskIds = new Set(history.map(h => h.task_id));
-    if (uniqueTaskIds.size > 1) {
-      console.log(`\n  ⚠ Warning: Prefix '${taskId}' matches ${uniqueTaskIds.size} tasks:`);
-      uniqueTaskIds.forEach(id => console.log(`    - ${id}`));
-      console.log();
-    }
   }
 
   console.log('\n  Execution History:\n');

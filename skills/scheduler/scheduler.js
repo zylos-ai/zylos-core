@@ -100,11 +100,20 @@ function dispatchTask(task) {
         WHERE id = ?
       `).run(now(), now(), task.id);
 
-      db.prepare(`
-        UPDATE task_history
-        SET status = 'success', completed_at = ?
+      // Mark task_history as success (latest entry only)
+      const historyEntry = db.prepare(`
+        SELECT id FROM task_history
         WHERE task_id = ? AND status = 'started'
-      `).run(now(), task.id);
+        ORDER BY executed_at DESC LIMIT 1
+      `).get(task.id);
+
+      if (historyEntry) {
+        db.prepare(`
+          UPDATE task_history
+          SET status = 'success', completed_at = ?
+          WHERE id = ?
+        `).run(now(), historyEntry.id);
+      }
     }
   } else {
     // Regular task: build prompt with completion instruction
