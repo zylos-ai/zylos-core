@@ -173,7 +173,7 @@ function cmdAdd(args, options) {
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
   `).run(
     taskId,
-    options.name || null,
+    options.name || prompt.substring(0, 40),  // Default name to truncated prompt
     prompt,
     type,
     cronExpression || null,

@@ -54,7 +54,15 @@ function initSchema() {
  * Run migrations for existing databases
  */
 function runMigrations() {
+  // Check if conversations table exists
   const tableInfo = db.prepare("PRAGMA table_info(conversations)").all();
+
+  // If table doesn't exist, initialize schema
+  if (tableInfo.length === 0) {
+    console.log('[C4-DB] Conversations table missing, initializing schema');
+    initSchema();
+    return;
+  }
 
   // Migration 1: Add status column
   const hasStatus = tableInfo.some(col => col.name === 'status');

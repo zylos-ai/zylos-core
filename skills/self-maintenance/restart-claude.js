@@ -20,6 +20,31 @@ const LOG_FILE = path.join(ZYLOS_DIR, 'upgrade-log.txt');
 const TMUX_SESSION = 'claude-main';
 const NOTIFY_CHANNEL = process.argv[2] || null;
 
+// Auto-detect claude binary path
+function findClaudeBin() {
+  if (process.env.CLAUDE_BIN) {
+    return process.env.CLAUDE_BIN;
+  }
+
+  const knownPaths = [
+    path.join(os.homedir(), '.local', 'bin', 'claude'),
+    path.join(os.homedir(), '.claude', 'bin', 'claude'),
+    '/usr/local/bin/claude',
+    '/opt/homebrew/bin/claude',
+    '/usr/bin/claude',
+  ];
+
+  for (const p of knownPaths) {
+    if (fs.existsSync(p)) {
+      return p;
+    }
+  }
+
+  return 'claude';  // Fallback
+}
+
+const CLAUDE_BIN = findClaudeBin();
+
 function log(message) {
   const timestamp = new Date().toISOString().replace('T', ' ').substring(0, 19);
   const line = `[${timestamp}] ${message}`;
@@ -203,11 +228,11 @@ async function main() {
   sleep(2);
 
   if (tmuxHasSession()) {
-    sendToTmux(`cd ${ZYLOS_DIR}; claude --dangerously-skip-permissions`);
+    sendToTmux(`cd ${ZYLOS_DIR}; ${CLAUDE_BIN} --dangerously-skip-permissions`);
     log('Claude restarted');
   } else {
     try {
-      execSync(`tmux new-session -d -s "${TMUX_SESSION}" "cd ${ZYLOS_DIR} && claude --dangerously-skip-permissions"`);
+      execSync(`tmux new-session -d -s "${TMUX_SESSION}" "cd ${ZYLOS_DIR} && ${CLAUDE_BIN} --dangerously-skip-permissions"`);
       log('Created new tmux session');
     } catch (err) {
       log(`Failed to create tmux session: ${err.message}`);
