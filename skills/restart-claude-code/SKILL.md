@@ -1,6 +1,6 @@
-# Restart Skill
+# Restart Claude Code Skill
 
-Restart Claude Code session without upgrading - useful for reloading hooks/config changes.
+Simple restart of Claude Code session - sends /exit and lets activity-monitor daemon handle the restart.
 
 ## When to Use
 
@@ -9,32 +9,36 @@ Restart Claude Code session without upgrading - useful for reloading hooks/confi
 - To clear temporary state without upgrading
 - User explicitly asks to restart
 
+## How It Works
+
+1. Wait for Claude to be idle (idle_seconds >= 3)
+2. Send `/exit` command via C4 (priority=1, no-reply)
+3. Reset context monitor cooldowns
+4. Done - activity-monitor daemon will restart Claude automatically
+
 ## Usage
 
 ```bash
-nohup node ~/.claude/skills/restart/restart.js > /dev/null 2>&1 &
+nohup node ~/.claude/skills/restart-claude-code/restart.js > /dev/null 2>&1 &
 ```
-
-Optional: Specify notification channel
-```bash
-nohup node ~/.claude/skills/restart/restart.js lark:oc_xxx > /dev/null 2>&1 &
-nohup node ~/.claude/skills/restart/restart.js telegram > /dev/null 2>&1 &
-```
-
-## Process
-
-1. Wait for Claude to be at prompt (idle >= 5s)
-2. Send `/exit` command via tmux
-3. Wait for Claude process to exit
-4. Reset context monitor cooldowns
-5. Restart Claude in tmux with same working directory
-6. Wait for Claude to be ready
-7. Send catch-up message via C4 (priority=1, no-reply)
 
 ## Important Notes
 
-- Runs detached (nohup) to survive the restart
-- Uses C4 Communication Bridge for catch-up message
+- **Simple approach**: Just sends /exit, activity-monitor handles the restart
+- Uses C4 Communication Bridge with --no-reply flag
+- Waits for idle state before sending /exit
 - Resets context monitor cooldowns to avoid stale alerts
 - Logs all steps to ~/zylos/upgrade-log.txt
+- Does NOT manually restart Claude - relies on activity-monitor daemon
 - Does NOT upgrade Claude Code version
+
+## Activity Monitor Integration
+
+The activity-monitor daemon watches for Claude process exit and automatically restarts it. This restart skill leverages that mechanism instead of manually restarting Claude.
+
+## Log File
+
+Check restart progress:
+```bash
+tail -f ~/zylos/upgrade-log.txt
+```
