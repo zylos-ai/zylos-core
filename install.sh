@@ -139,11 +139,11 @@ start_services() {
 
     # Start core services directly (no pm2.config.js needed)
     pm2 start "$SKILLS_DIR/self-maintenance/activity-monitor.js" --name activity-monitor
-    pm2 start "$SKILLS_DIR/scheduler/scheduler.js" --name scheduler \
-        --env NODE_ENV=production --env ZYLOS_DIR="$ZYLOS_DIR"
+    env NODE_ENV=production ZYLOS_DIR="$ZYLOS_DIR" \
+        pm2 start "$SKILLS_DIR/scheduler/scheduler.js" --name scheduler
     pm2 start "$SKILLS_DIR/comm-bridge/c4-dispatcher.js" --name c4-dispatcher
-    pm2 start "$SKILLS_DIR/web-console/server.js" --name web-console \
-        --env WEB_CONSOLE_PORT=3456 --env ZYLOS_DIR="$ZYLOS_DIR"
+    env WEB_CONSOLE_PORT=3456 ZYLOS_DIR="$ZYLOS_DIR" \
+        pm2 start "$SKILLS_DIR/web-console/server.js" --name web-console
 
     echo "  ✓ Services started"
 

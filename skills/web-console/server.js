@@ -325,10 +325,11 @@ app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-// Start server
-server.listen(PORT, () => {
-  console.log(`Web Console server running on http://localhost:${PORT}`);
-  console.log(`WebSocket available at ws://localhost:${PORT}`);
+// Start server (bind to localhost only for security)
+const BIND_HOST = process.env.WEB_CONSOLE_BIND || '127.0.0.1';
+server.listen(PORT, BIND_HOST, () => {
+  console.log(`Web Console server running on http://${BIND_HOST}:${PORT}`);
+  console.log(`WebSocket available at ws://${BIND_HOST}:${PORT}`);
   console.log(`Database: ${DB_PATH}`);
 });
 
