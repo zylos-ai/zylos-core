@@ -6,7 +6,7 @@
 
 const { getDb, cleanupHistory, now } = require('./db');
 const { getNextRun } = require('./cron');
-const { getIdleSeconds, isIdle, isAtPrompt, sendToTmux, sessionExists } = require('./activity');
+const { getIdleSeconds, isIdle, isAtPrompt, sendToTmux, sendViaC4, sessionExists } = require('./activity');
 const { formatTime, getRelativeTime } = require('./time-parser');
 
 const CHECK_INTERVAL = 10000;  // 10 seconds
@@ -75,41 +75,47 @@ function dispatchTask(task) {
   `).run(task.id, now());
 
   let prompt;
+  let success;
 
-  // Special handling for auto-compact tasks: send /compact directly
+  // Special handling for auto-compact tasks: send /compact directly via tmux
   if (task.name === 'auto-compact') {
     prompt = '/compact';
     console.log(`[${new Date().toISOString()}] Sending /compact command for auto-compact task`);
 
-    // Auto-complete this task after sending
-    db.prepare(`
-      UPDATE tasks
-      SET status = 'completed', last_run_at = ?, updated_at = ?
-      WHERE id = ?
-    `).run(now(), now(), task.id);
+    // Use tmux for /compact (slash command)
+    success = sendToTmux(prompt);
 
-    db.prepare(`
-      UPDATE task_history
-      SET status = 'success', completed_at = ?
-      WHERE task_id = ? AND status = 'started'
-    `).run(now(), task.id);
+    if (success) {
+      // Auto-complete this task after sending
+      db.prepare(`
+        UPDATE tasks
+        SET status = 'completed', last_run_at = ?, updated_at = ?
+        WHERE id = ?
+      `).run(now(), now(), task.id);
+
+      db.prepare(`
+        UPDATE task_history
+        SET status = 'success', completed_at = ?
+        WHERE task_id = ? AND status = 'started'
+      `).run(now(), task.id);
+    }
   } else {
     // Regular task: build prompt with completion instruction
     prompt = `[Scheduled Task: ${task.id}] ${task.prompt}
 
 ---- After completing this task, run: ~/zylos/scheduler-v2/task-cli.js done ${task.id}`;
+
+    // Send via C4 Communication Bridge
+    success = sendViaC4(prompt);
   }
 
-  // Send to tmux
-  const success = sendToTmux(prompt);
-
   if (!success) {
-    console.error(`Failed to dispatch task ${task.id} to tmux`);
+    console.error(`Failed to dispatch task ${task.id}`);
 
     // Revert to pending
     db.prepare(`
       UPDATE tasks
-      SET status = 'pending', last_error = 'Failed to send to tmux', updated_at = ?
+      SET status = 'pending', last_error = 'Failed to dispatch message', updated_at = ?
       WHERE id = ?
     `).run(now(), task.id);
   }

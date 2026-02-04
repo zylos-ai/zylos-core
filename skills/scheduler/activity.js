@@ -80,6 +80,28 @@ function sessionExists() {
 }
 
 /**
+ * Send a message to Claude via C4 Communication Bridge
+ * @param {string} message - Message to send
+ * @param {string} source - Source identifier (default: 'scheduler')
+ * @returns {boolean} True if successful
+ */
+function sendViaC4(message, source = 'scheduler') {
+  try {
+    const c4ReceivePath = join(homedir(), '.claude/skills/comm-bridge/c4-receive.js');
+    const escapedMessage = message.replace(/"/g, '\\"').replace(/\$/g, '\\$');
+
+    execSync(
+      `node "${c4ReceivePath}" --source ${source} --content "${escapedMessage}"`,
+      { stdio: 'pipe', timeout: 10000 }
+    );
+    return true;
+  } catch (error) {
+    console.error('Failed to send via C4:', error.message);
+    return false;
+  }
+}
+
+/**
  * Send a prompt to the Claude tmux session using paste-buffer method
  * Uses unique buffer names to prevent race conditions
  * @param {string} text - Text to send
@@ -167,6 +189,7 @@ module.exports = {
   isAtPrompt,
   sessionExists,
   sendToTmux,
+  sendViaC4,
   getStatus,
   IDLE_THRESHOLDS,
   TMUX_SESSION
