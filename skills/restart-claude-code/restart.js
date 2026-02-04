@@ -85,11 +85,6 @@ async function main() {
   log('Sending /exit command via C4...');
   sendViaC4('/exit');
 
-  // Step 4: Reset context monitor cooldowns
-  log('Resetting context monitor cooldowns...');
-  try { fs.unlinkSync('/tmp/context-alert-cooldown'); } catch {}
-  try { fs.unlinkSync('/tmp/context-compact-scheduled'); } catch {}
-
   log('=== Restart command sent (Activity Monitor will restart Claude) ===');
 }
 
