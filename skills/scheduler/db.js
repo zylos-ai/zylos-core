@@ -3,20 +3,20 @@
  * Uses SQLite with better-sqlite3 for robust, synchronous operations
  */
 
-const Database = require('better-sqlite3');
-const path = require('path');
-const fs = require('fs');
-const os = require('os');
+import Database from 'better-sqlite3';
+import path from 'path';
+import fs from 'fs';
+import os from 'os';
 
 // Data goes to ~/zylos/scheduler/, code stays in skills directory
 const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
 const DATA_DIR = path.join(ZYLOS_DIR, 'scheduler');
-const DB_PATH = path.join(DATA_DIR, 'scheduler.db');
-const HISTORY_RETENTION_DAYS = 30;
+export const DB_PATH = path.join(DATA_DIR, 'scheduler.db');
+export const HISTORY_RETENTION_DAYS = 30;
 
 let db = null;
 
-function getDb() {
+export function getDb() {
   if (!db) {
     // Ensure data directory exists
     if (!fs.existsSync(DATA_DIR)) {
@@ -44,7 +44,7 @@ function initSchema() {
       cron_expression TEXT,
       run_at INTEGER,
       interval_seconds INTEGER,
-      timezone TEXT DEFAULT 'Asia/Shanghai',
+      timezone TEXT DEFAULT 'UTC',
 
       -- Timing
       next_run_at INTEGER NOT NULL,
@@ -98,27 +98,18 @@ function initSchema() {
 }
 
 // Clean up old history entries (older than HISTORY_RETENTION_DAYS)
-function cleanupHistory() {
+export function cleanupHistory() {
   const cutoff = Math.floor(Date.now() / 1000) - (HISTORY_RETENTION_DAYS * 24 * 60 * 60);
   const result = db.prepare('DELETE FROM task_history WHERE executed_at < ?').run(cutoff);
   return result.changes;
 }
 
 // Generate a unique task ID
-function generateId() {
+export function generateId() {
   return 'task-' + Date.now().toString(36) + '-' + Math.random().toString(36).substr(2, 6);
 }
 
 // Get current Unix timestamp
-function now() {
+export function now() {
   return Math.floor(Date.now() / 1000);
 }
-
-module.exports = {
-  getDb,
-  cleanupHistory,
-  generateId,
-  now,
-  DB_PATH,
-  HISTORY_RETENTION_DAYS
-};

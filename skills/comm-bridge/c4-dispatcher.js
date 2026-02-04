@@ -2,16 +2,21 @@
 /**
  * C4 Communication Bridge - Message Dispatcher
  * Polls for pending messages and delivers them serially to Claude via tmux
+ * Supports priority-based queue with idle-state checking for system messages
  *
  * Run with PM2: pm2 start c4-dispatcher.js --name c4-dispatcher
  */
 
-const { execSync } = require('child_process');
-const { getNextPending, markDelivered, getPendingCount, close } = require('./c4-db');
+import { execFileSync } from 'child_process';
+import { readFileSync, existsSync } from 'fs';
+import { join } from 'path';
+import { homedir } from 'os';
+import { getDb, getNextPending, markDelivered, getPendingCount, close } from './c4-db.js';
 
 const TMUX_SESSION = process.env.TMUX_SESSION || 'claude-main';
 const POLL_INTERVAL = 500;  // Check every 500ms for new messages
 const DELIVERY_DELAY = 200; // 200ms delay between paste and Enter
+const STATUS_FILE = join(homedir(), '.claude-status');
 
 let isShuttingDown = false;
 
@@ -29,10 +34,48 @@ function sleep(ms) {
  */
 function tmuxHasSession() {
   try {
-    execSync(`tmux has-session -t "${TMUX_SESSION}" 2>/dev/null`, { encoding: 'utf8' });
+    execFileSync('tmux', ['has-session', '-t', TMUX_SESSION], {
+      encoding: 'utf8',
+      stdio: 'pipe'
+    });
     return true;
   } catch {
     return false;
+  }
+}
+
+/**
+ * Check if Claude is idle (for priority-1 messages)
+ * @returns {boolean} - true if idle, false otherwise
+ */
+function isClaudeIdle() {
+  try {
+    if (!existsSync(STATUS_FILE)) {
+      // No status file - assume idle to prevent queue deadlock
+      // (activity-monitor may not be running)
+      // Trade-off: Breaks idle guarantee but prevents permanent deadlock
+      log('Warning: Status file missing, assuming idle (idle guarantee not enforced)');
+      return true;
+    }
+    const content = readFileSync(STATUS_FILE, 'utf8');
+    const status = JSON.parse(content);
+
+    // Check idle_seconds field (preferred)
+    if (typeof status.idle_seconds === 'number') {
+      return status.idle_seconds >= 5;
+    }
+
+    // Fallback: check state field
+    if (status.state === 'idle') {
+      return true;
+    }
+
+    return false;
+  } catch (err) {
+    log(`Warning: Error checking idle state (${err.message}), assuming idle to prevent deadlock`);
+    // Return true on error to prevent queue deadlock
+    // Trade-off: Breaks idle guarantee but prevents permanent deadlock
+    return true;
   }
 }
 
@@ -43,16 +86,13 @@ async function sendToTmux(message) {
   const bufferName = `c4-msg-${process.pid}-${Date.now()}`;
 
   try {
-    // Escape special characters for shell
-    const escapedMessage = message.replace(/"/g, '\\"').replace(/\$/g, '\\$');
-
-    // Set buffer with the message
-    execSync(`tmux set-buffer -b "${bufferName}" "${escapedMessage}"`, {
+    // Set buffer with the message (-- prevents messages starting with - from being parsed as options)
+    execFileSync('tmux', ['set-buffer', '-b', bufferName, '--', message], {
       stdio: 'pipe'
     });
 
     // Paste buffer to session
-    execSync(`tmux paste-buffer -b "${bufferName}" -t "${TMUX_SESSION}"`, {
+    execFileSync('tmux', ['paste-buffer', '-b', bufferName, '-t', TMUX_SESSION], {
       stdio: 'pipe'
     });
 
@@ -60,13 +100,13 @@ async function sendToTmux(message) {
     await sleep(DELIVERY_DELAY);
 
     // Send Enter key
-    execSync(`tmux send-keys -t "${TMUX_SESSION}" Enter`, {
+    execFileSync('tmux', ['send-keys', '-t', TMUX_SESSION, 'Enter'], {
       stdio: 'pipe'
     });
 
     // Delete buffer
     try {
-      execSync(`tmux delete-buffer -b "${bufferName}"`, { stdio: 'pipe' });
+      execFileSync('tmux', ['delete-buffer', '-b', bufferName], { stdio: 'pipe' });
     } catch {
       // Ignore buffer deletion errors
     }
@@ -87,13 +127,37 @@ async function processNextMessage() {
     return false;
   }
 
-  // Get next pending message
-  const msg = getNextPending();
+  // Check if Claude is idle for priority-1 messages
+  const isIdle = isClaudeIdle();
+
+  // Get next pending message (skip priority-1 if not idle to avoid blocking queue)
+  let msg = getNextPending();
   if (!msg) {
     return false;
   }
 
-  log(`Delivering message id=${msg.id} from ${msg.source}`);
+  // If priority-1 message but Claude not idle, try to get next lower-priority message
+  if (msg.priority === 1 && !isIdle) {
+    // Query for next message with priority > 1
+    const db = getDb();
+    const lowerPriorityMsg = db.prepare(`
+      SELECT id, direction, source, endpoint_id, content, timestamp, priority
+      FROM conversations
+      WHERE direction = 'in' AND status = 'pending' AND priority > 1
+      ORDER BY COALESCE(priority, 3) ASC, timestamp ASC
+      LIMIT 1
+    `).get();
+
+    if (lowerPriorityMsg) {
+      // Process lower-priority message instead
+      msg = lowerPriorityMsg;
+    } else {
+      // No lower-priority messages available, skip delivery
+      return false;
+    }
+  }
+
+  log(`Delivering message id=${msg.id} priority=${msg.priority} from ${msg.source}`);
 
   // Send to Claude
   const success = await sendToTmux(msg.content);

@@ -6,16 +6,17 @@
  * Run with PM2: pm2 start activity-monitor.js --name activity-monitor
  */
 
-const { execSync, spawn } = require('child_process');
-const fs = require('fs');
-const path = require('path');
-const os = require('os');
+import { execSync, execFileSync, spawn } from 'child_process';
+import fs from 'fs';
+import path from 'path';
+import os from 'os';
 
 // Configuration
 const SESSION = 'claude-main';
 const STATUS_FILE = path.join(os.homedir(), '.claude-status');
 const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
-const LOG_FILE = path.join(ZYLOS_DIR, 'activity-log.txt');
+const SKILL_DIR = path.join(ZYLOS_DIR, 'activity-monitor');
+const LOG_FILE = path.join(SKILL_DIR, 'activity.log');
 
 // Auto-detect claude binary path
 function findClaudeBin() {
@@ -59,10 +60,15 @@ let lastTruncateDay = '';
 let notRunningCount = 0;
 let lastState = '';
 let startupGrace = 0;
+let idleSince = 0;  // Timestamp when entered idle state
 
 function log(message) {
   const timestamp = new Date().toISOString().replace('T', ' ').substring(0, 19);
   const line = `[${timestamp}] ${message}\n`;
+  // Ensure skill directory exists
+  if (!fs.existsSync(SKILL_DIR)) {
+    fs.mkdirSync(SKILL_DIR, { recursive: true });
+  }
   fs.appendFileSync(LOG_FILE, line);
 }
 
@@ -127,6 +133,61 @@ function isClaudeRunning() {
     execSync(`pgrep -P ${panePid} -f "claude" > /dev/null 2>&1`);
     return true;
   } catch {
+    return false;
+  }
+}
+
+function isClaudeReady() {
+  // Check if Claude has displayed the input prompt by capturing tmux pane content
+  try {
+    const paneContent = execSync(
+      `tmux capture-pane -t "${SESSION}" -p 2>/dev/null`,
+      { encoding: 'utf8' }
+    );
+    // Claude Code shows ">" as input prompt when ready
+    // Also check for common ready indicators
+    return paneContent.includes('>') || paneContent.includes('Claude');
+  } catch {
+    return false;
+  }
+}
+
+function waitForClaudeReady(maxWaitSeconds = 60) {
+  return new Promise((resolve) => {
+    let waited = 0;
+    const checkInterval = setInterval(() => {
+      waited++;
+
+      if (isClaudeReady()) {
+        clearInterval(checkInterval);
+        log(`Guardian: Claude ready after ${waited}s`);
+        resolve(true);
+        return;
+      }
+
+      if (waited >= maxWaitSeconds) {
+        clearInterval(checkInterval);
+        log(`Guardian: Timeout waiting for Claude to be ready (${maxWaitSeconds}s)`);
+        resolve(false);
+        return;
+      }
+    }, 1000);
+  });
+}
+
+function sendViaC4(message, source = 'system') {
+  const c4ReceivePath = path.join(os.homedir(), '.claude/skills/comm-bridge/c4-receive.js');
+
+  try {
+    // Use execFileSync to avoid shell injection - passes arguments directly
+    execFileSync(
+      'node',
+      [c4ReceivePath, '--source', source, '--priority', '1', '--no-reply', '--content', message],
+      { stdio: 'pipe' }
+    );
+    return true;
+  } catch (err) {
+    log(`Failed to send via C4: ${err.message}`);
     return false;
   }
 }
@@ -243,22 +304,22 @@ function startClaude() {
     }
   }
 
-  // Wait a bit then send catch-up prompt
-  setTimeout(() => {
-    if (isClaudeRunning()) {
-      log('Guardian: Claude started successfully, sending catch-up prompt');
+  // Wait for Claude to be ready (show input prompt), then send recovery message
+  waitForClaudeReady(60).then((ready) => {
+    if (ready) {
+      log('Guardian: Claude is ready, waiting 2s before sending recovery prompt...');
       setTimeout(() => {
-        sendToTmux(`Session recovered by activity monitor. Do the following:
+        sendViaC4(`Session recovered by activity monitor. Do the following:
 
-1. Read your memory files (especially ~/zylos/memory/context.md)
-2. Check the conversation transcript at ~/.claude/projects/-home-howard-zylos/*.jsonl (most recent file by date) for messages AFTER the last memory sync timestamp
-3. If there was conversation between last memory sync and crash, briefly summarize what was discussed (both Howard's messages and your replies)
-4. Send recovery status via ~/zylos/bin/notify.sh`);
-      }, 5000);
+1. Read your memory files (especially ${ZYLOS_DIR}/memory/context.md)
+2. Check the conversation transcript at ${CONV_DIR}/*.jsonl (most recent file by date) for messages AFTER the last memory sync timestamp
+3. If there was conversation between last memory sync and crash, briefly summarize what was discussed (both Howard's messages and your replies)`);
+        log('Guardian: Recovery prompt sent via C4');
+      }, 2000);
     } else {
       log('Guardian: Warning - Claude may not have started properly');
     }
-  }, 15000);
+  });
 }
 
 function writeStatusFile(statusObj) {
@@ -389,11 +450,23 @@ function monitorLoop() {
     source = 'default';
   }
 
-  // Calculate idle time
-  const idleSeconds = currentTime - activity;
+  // Calculate time since last activity
+  const inactiveSeconds = currentTime - activity;
 
   // Determine state
-  const state = idleSeconds < IDLE_THRESHOLD ? 'busy' : 'idle';
+  const state = inactiveSeconds < IDLE_THRESHOLD ? 'busy' : 'idle';
+
+  // Track when we entered idle state
+  if (state === 'idle' && lastState !== 'idle') {
+    // Just transitioned to idle
+    idleSince = currentTime;
+  } else if (state === 'busy') {
+    // Reset idle tracking when busy
+    idleSince = 0;
+  }
+
+  // idle_seconds = time since entering idle state (0 if busy)
+  const idleSeconds = state === 'idle' ? currentTime - idleSince : 0;
 
   // Write JSON status file
   writeStatusFile({
@@ -402,15 +475,16 @@ function monitorLoop() {
     last_check: currentTime,
     last_check_human: currentTimeHuman,
     idle_seconds: idleSeconds,
+    inactive_seconds: inactiveSeconds,  // Keep original metric for reference
     source
   });
 
   // Only log on state change
   if (state !== lastState) {
     if (state === 'busy') {
-      log(`State: BUSY (last activity ${idleSeconds}s ago)`);
+      log(`State: BUSY (last activity ${inactiveSeconds}s ago)`);
     } else {
-      log(`State: IDLE (inactive for ${idleSeconds}s)`);
+      log(`State: IDLE (entering idle state)`);
     }
   }
 

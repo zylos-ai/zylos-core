@@ -1,16 +1,16 @@
 #!/usr/bin/env node
 /**
  * C6 HTTP Layer - Caddy Setup Script
- * Sets up Caddy web server for file sharing and optional proxies
+ * Sets up Caddy web server for file sharing and web console proxy
  *
- * Usage: node setup-caddy.js [--with-lark] [--with-browser]
+ * Usage: node setup-caddy.js
  */
 
-const { execSync } = require('child_process');
-const fs = require('fs');
-const path = require('path');
-const os = require('os');
-const readline = require('readline');
+import { execSync } from 'child_process';
+import fs from 'fs';
+import path from 'path';
+import os from 'os';
+import readline from 'readline';
 
 const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
 
@@ -23,27 +23,11 @@ const NC = '\x1b[0m';
 
 // Parse arguments
 const args = process.argv.slice(2);
-let withLark = false;
-let withBrowser = false;
-
-for (const arg of args) {
-  if (arg === '--with-lark') {
-    withLark = true;
-  } else if (arg === '--with-browser') {
-    withBrowser = true;
-  } else if (arg !== '--help' && arg !== '-h') {
-    console.error(`Unknown option: ${arg}`);
-    console.error('Usage: node setup-caddy.js [--with-lark] [--with-browser]');
-    process.exit(1);
-  }
-}
 
 if (args.includes('--help') || args.includes('-h')) {
-  console.log('Usage: node setup-caddy.js [--with-lark] [--with-browser]');
+  console.log('Usage: node setup-caddy.js');
   console.log('');
-  console.log('Options:');
-  console.log('  --with-lark     Add Lark webhook proxy');
-  console.log('  --with-browser  Add VNC/browser proxy');
+  console.log('Sets up Caddy with file serving and web console proxy.');
   process.exit(0);
 }
 
@@ -119,18 +103,18 @@ async function main() {
   console.log('');
 
   // Create required directories
-  fs.mkdirSync(path.join(ZYLOS_DIR, 'public'), { recursive: true });
-  fs.mkdirSync(path.join(ZYLOS_DIR, 'logs'), { recursive: true });
+  fs.mkdirSync(path.join(ZYLOS_DIR, 'http', 'public'), { recursive: true });
 
   // Fix permissions for Caddy to read public files
   try {
     execSync(`chmod o+rx "${os.homedir()}" 2>/dev/null || true`, { stdio: 'pipe' });
     execSync(`chmod o+rx "${ZYLOS_DIR}" 2>/dev/null || true`, { stdio: 'pipe' });
-    execSync(`chmod -R o+r "${ZYLOS_DIR}/public" 2>/dev/null || true`, { stdio: 'pipe' });
+    execSync(`chmod -R o+r "${ZYLOS_DIR}/http/public" 2>/dev/null || true`, { stdio: 'pipe' });
   } catch {}
 
   // Generate Caddyfile
-  const caddyfile = path.join(ZYLOS_DIR, 'Caddyfile');
+  const CADDY_CONFIG = '/etc/caddy/Caddyfile';
+  const tempFile = path.join(os.tmpdir(), `Caddyfile-${Date.now()}`);
   console.log('Generating Caddyfile...');
 
   const timestamp = new Date().toISOString();
@@ -139,7 +123,7 @@ async function main() {
 # Generated: ${timestamp}
 
 ${domain} {
-    root * ${ZYLOS_DIR}/public
+    root * ${ZYLOS_DIR}/http/public
 
     file_server {
         hide .git .env *.db *.json
@@ -155,39 +139,19 @@ ${domain} {
     }
 `;
 
-  // Add Lark proxy if requested
-  if (withLark) {
-    console.log(`  ${GREEN}+${NC} Adding Lark webhook proxy`);
-    config += `
-    # Lark webhook proxy
-    handle /lark/* {
-        uri strip_prefix /lark
-        reverse_proxy localhost:3457
+  // Add web console proxy
+  config += `
+    # Web Console
+    handle /console/* {
+        uri strip_prefix /console
+        reverse_proxy localhost:3456
     }
 `;
-  }
-
-  // Add browser/VNC proxy if requested
-  if (withBrowser) {
-    console.log(`  ${GREEN}+${NC} Adding VNC/browser proxy`);
-    config += `
-    # noVNC remote desktop
-    handle /vnc/* {
-        uri strip_prefix /vnc
-        reverse_proxy localhost:6080
-    }
-
-    # Browser agent WebSocket
-    handle /ws {
-        reverse_proxy localhost:8765
-    }
-`;
-  }
 
   // Add logging and close
   config += `
     log {
-        output file ${ZYLOS_DIR}/logs/caddy-access.log {
+        output file ${ZYLOS_DIR}/http/caddy-access.log {
             roll_size 10mb
             roll_keep 3
         }
@@ -195,7 +159,8 @@ ${domain} {
 }
 `;
 
-  fs.writeFileSync(caddyfile, config);
+  // Write to temp file first
+  fs.writeFileSync(tempFile, config);
 
   console.log('');
   console.log('Generated Caddyfile:');
@@ -210,16 +175,18 @@ ${domain} {
     console.log('Install with: sudo apt install -y caddy');
     console.log('Or see: https://caddyserver.com/docs/install');
     console.log('');
-    console.log(`Caddyfile saved to: ${caddyfile}`);
+    console.log(`Config saved to: ${tempFile}`);
+    console.log(`After installing Caddy, run: sudo cp ${tempFile} ${CADDY_CONFIG}`);
     process.exit(0);
   }
 
   // Ask to apply configuration
-  const apply = await prompt('Apply Caddy configuration now? (Y/n): ');
+  const apply = await prompt(`Write to ${CADDY_CONFIG} and restart Caddy? (Y/n): `);
 
   if (apply.toLowerCase() !== 'n') {
     try {
-      execSync(`sudo cp "${caddyfile}" /etc/caddy/Caddyfile`, { stdio: 'inherit' });
+      execSync(`sudo cp "${tempFile}" "${CADDY_CONFIG}"`, { stdio: 'inherit' });
+      fs.unlinkSync(tempFile); // Clean up temp file
       try {
         execSync('sudo systemctl enable caddy 2>/dev/null || true', { stdio: 'pipe' });
       } catch {}
@@ -228,6 +195,7 @@ ${domain} {
       console.log('');
       console.log(`${GREEN}Caddy configured and started!${NC}`);
       console.log('');
+      console.log(`Config written to: ${CADDY_CONFIG}`);
       console.log(`Your site is live at: https://${domain}/`);
       console.log('');
       console.log('Verify with:');
@@ -239,9 +207,9 @@ ${domain} {
     }
   } else {
     console.log('');
-    console.log(`Caddyfile saved to: ${caddyfile}`);
+    console.log(`Config saved to: ${tempFile}`);
     console.log('Apply manually:');
-    console.log(`  sudo cp ${caddyfile} /etc/caddy/Caddyfile`);
+    console.log(`  sudo cp ${tempFile} ${CADDY_CONFIG}`);
     console.log('  sudo systemctl restart caddy');
   }
 }

@@ -4,17 +4,20 @@
  * Manages tasks: add, list, remove, done, pause, resume
  */
 
-const { getDb, generateId, now } = require('./db');
-const { getNextRun, isValidCron, describeCron } = require('./cron');
-const { parseTime, parseDuration, formatTime, getRelativeTime } = require('./time-parser');
-const { getStatus } = require('./activity');
+import { getDb, generateId, now } from './db.js';
+import { getNextRun, isValidCron, describeCron } from './cron.js';
+import { parseTime, parseDuration, formatTime, getRelativeTime } from './time-parser.js';
+import { getStatus } from './activity.js';
+
+// Get default timezone from cron module
+const DEFAULT_TIMEZONE = process.env.TZ || 'UTC';
 
 const db = getDb();
 
 const HELP = `
 Task CLI - Scheduler V2
 
-Usage: task-cli <command> [options]
+Usage: ~/.claude/skills/scheduler/task-cli.js <command> [options]
 
 Commands:
   list                    List all tasks
@@ -37,10 +40,10 @@ Add Options:
   --name "<name>"         Task name (optional)
 
 Examples:
-  task-cli add "Say hello" --in "30 minutes"
-  task-cli add "Health check" --cron "0 8 * * *" --name "daily-health"
-  task-cli add "Check updates" --every "1 hour" --priority 4
-  task-cli done task-abc123
+  ~/.claude/skills/scheduler/task-cli.js add "Say hello" --in "30 minutes"
+  ~/.claude/skills/scheduler/task-cli.js add "Health check" --cron "0 8 * * *"
+  ~/.claude/skills/scheduler/task-cli.js add "Check updates" --every "1 hour"
+  ~/.claude/skills/scheduler/task-cli.js done task-abc123
 `;
 
 function parseArgs(args) {
@@ -155,8 +158,8 @@ function cmdAdd(args, options) {
     return;
   }
 
-  const priority = parseInt(options.priority) || 3;
-  if (priority < 1 || priority > 4) {
+  const priority = options.priority ? parseInt(options.priority, 10) : 3;
+  if (!Number.isInteger(priority) || priority < 1 || priority > 4) {
     console.error('Error: Priority must be 1-4');
     return;
   }
@@ -169,11 +172,11 @@ function cmdAdd(args, options) {
       id, name, prompt, type,
       cron_expression, interval_seconds,
       next_run_at, priority, status,
-      created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+      created_at, updated_at, timezone
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)
   `).run(
     taskId,
-    options.name || null,
+    options.name || prompt.substring(0, 40),  // Default name to truncated prompt
     prompt,
     type,
     cronExpression || null,
@@ -181,7 +184,8 @@ function cmdAdd(args, options) {
     nextRunAt,
     priority,
     currentTime,
-    currentTime
+    currentTime,
+    DEFAULT_TIMEZONE
   );
 
   console.log(`\nTask created: ${taskId}`);
@@ -202,17 +206,24 @@ function cmdRemove(taskId) {
   }
 
   // Support partial ID match
-  const task = db.prepare(`
+  const tasks = db.prepare(`
     SELECT id FROM tasks WHERE id LIKE ?
-  `).get(taskId + '%');
+  `).all(taskId + '%');
 
-  if (!task) {
+  if (tasks.length === 0) {
     console.error(`Error: Task not found: ${taskId}`);
     return;
   }
 
-  db.prepare('DELETE FROM tasks WHERE id = ?').run(task.id);
-  console.log(`Removed task: ${task.id}`);
+  if (tasks.length > 1) {
+    console.error(`Error: Ambiguous task ID prefix '${taskId}' matches multiple tasks:`);
+    tasks.forEach(t => console.error(`  - ${t.id}`));
+    console.error('Please provide a more specific prefix.');
+    return;
+  }
+
+  db.prepare('DELETE FROM tasks WHERE id = ?').run(tasks[0].id);
+  console.log(`Removed task: ${tasks[0].id}`);
 }
 
 function cmdDone(taskId) {
@@ -222,14 +233,23 @@ function cmdDone(taskId) {
   }
 
   // Support partial ID match
-  const task = db.prepare(`
+  const tasks = db.prepare(`
     SELECT * FROM tasks WHERE id LIKE ?
-  `).get(taskId + '%');
+  `).all(taskId + '%');
 
-  if (!task) {
+  if (tasks.length === 0) {
     console.error(`Error: Task not found: ${taskId}`);
     return;
   }
+
+  if (tasks.length > 1) {
+    console.error(`Error: Ambiguous task ID prefix '${taskId}' matches multiple tasks:`);
+    tasks.forEach(t => console.error(`  - ${t.id}`));
+    console.error('Please provide a more specific prefix.');
+    return;
+  }
+
+  const task = tasks[0];
 
   const currentTime = now();
 
@@ -279,7 +299,7 @@ function cmdDone(taskId) {
       currentTime,  // run immediately when idle
       currentTime,
       currentTime,
-      'Asia/Shanghai'
+      DEFAULT_TIMEZONE
     );
     console.log(`Created auto-compact task: ${compactTaskId}`);
   }
@@ -291,20 +311,27 @@ function cmdPause(taskId) {
     return;
   }
 
-  const task = db.prepare(`
+  const tasks = db.prepare(`
     SELECT id FROM tasks WHERE id LIKE ? AND status = 'pending'
-  `).get(taskId + '%');
+  `).all(taskId + '%');
 
-  if (!task) {
+  if (tasks.length === 0) {
     console.error(`Error: Pending task not found: ${taskId}`);
+    return;
+  }
+
+  if (tasks.length > 1) {
+    console.error(`Error: Ambiguous task ID prefix '${taskId}' matches multiple pending tasks:`);
+    tasks.forEach(t => console.error(`  - ${t.id}`));
+    console.error('Please provide a more specific prefix.');
     return;
   }
 
   db.prepare(`
     UPDATE tasks SET status = 'paused', updated_at = ? WHERE id = ?
-  `).run(now(), task.id);
+  `).run(now(), tasks[0].id);
 
-  console.log(`Paused task: ${task.id}`);
+  console.log(`Paused task: ${tasks[0].id}`);
 }
 
 function cmdResume(taskId) {
@@ -313,20 +340,27 @@ function cmdResume(taskId) {
     return;
   }
 
-  const task = db.prepare(`
+  const tasks = db.prepare(`
     SELECT id FROM tasks WHERE id LIKE ? AND status = 'paused'
-  `).get(taskId + '%');
+  `).all(taskId + '%');
 
-  if (!task) {
+  if (tasks.length === 0) {
     console.error(`Error: Paused task not found: ${taskId}`);
+    return;
+  }
+
+  if (tasks.length > 1) {
+    console.error(`Error: Ambiguous task ID prefix '${taskId}' matches multiple paused tasks:`);
+    tasks.forEach(t => console.error(`  - ${t.id}`));
+    console.error('Please provide a more specific prefix.');
     return;
   }
 
   db.prepare(`
     UPDATE tasks SET status = 'pending', updated_at = ? WHERE id = ?
-  `).run(now(), task.id);
+  `).run(now(), tasks[0].id);
 
-  console.log(`Resumed task: ${task.id}`);
+  console.log(`Resumed task: ${tasks[0].id}`);
 }
 
 function cmdStatus() {
@@ -363,6 +397,19 @@ function cmdHistory(taskId) {
   if (taskId) {
     query += ' WHERE h.task_id LIKE ?';
     params.push(taskId + '%');
+  }
+
+  // Check for ambiguous task prefix before querying history
+  if (taskId) {
+    const matchingTasks = db.prepare(`
+      SELECT id FROM tasks WHERE id LIKE ?
+    `).all(taskId + '%');
+
+    if (matchingTasks.length > 1) {
+      console.log(`\n  ⚠ Warning: Prefix '${taskId}' matches ${matchingTasks.length} tasks:`);
+      matchingTasks.forEach(t => console.log(`    - ${t.id}`));
+      console.log();
+    }
   }
 
   query += ' ORDER BY h.executed_at DESC LIMIT 20';

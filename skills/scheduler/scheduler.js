@@ -4,10 +4,10 @@
  * Production-ready time-based task scheduler for Zylos
  */
 
-const { getDb, cleanupHistory, now } = require('./db');
-const { getNextRun } = require('./cron');
-const { getIdleSeconds, isIdle, isAtPrompt, sendToTmux, sessionExists } = require('./activity');
-const { formatTime, getRelativeTime } = require('./time-parser');
+import { getDb, cleanupHistory, now } from './db.js';
+import { getNextRun } from './cron.js';
+import { getIdleSeconds, isIdle, isAtPrompt, sendToTmux, sendViaC4, sessionExists } from './activity.js';
+import { formatTime, getRelativeTime } from './time-parser.js';
 
 const CHECK_INTERVAL = 10000;  // 10 seconds
 const CLEANUP_INTERVAL = 3600000;  // 1 hour
@@ -43,7 +43,14 @@ function getIdleThreshold(priority) {
  * Check if task should be dispatched
  */
 function shouldDispatch(task, idleSeconds) {
-  if (!task || idleSeconds === null) return false;
+  if (!task) return false;
+
+  // If idleSeconds is null (status file missing), assume idle to avoid wedging
+  // Same fallback as c4-dispatcher to prevent permanent stall
+  if (idleSeconds === null) {
+    console.log(`[${new Date().toISOString()}] Warning: idle status unavailable, assuming idle for dispatch`);
+    idleSeconds = 999;  // Assume very idle
+  }
 
   const threshold = getIdleThreshold(task.priority);
   const currentTime = now();
@@ -75,43 +82,75 @@ function dispatchTask(task) {
   `).run(task.id, now());
 
   let prompt;
+  let success;
 
-  // Special handling for auto-compact tasks: send /compact directly
+  // Special handling for auto-compact tasks: send /compact directly via tmux
   if (task.name === 'auto-compact') {
     prompt = '/compact';
     console.log(`[${new Date().toISOString()}] Sending /compact command for auto-compact task`);
 
-    // Auto-complete this task after sending
-    db.prepare(`
-      UPDATE tasks
-      SET status = 'completed', last_run_at = ?, updated_at = ?
-      WHERE id = ?
-    `).run(now(), now(), task.id);
+    // Use tmux for /compact (slash command)
+    success = sendToTmux(prompt);
 
-    db.prepare(`
-      UPDATE task_history
-      SET status = 'success', completed_at = ?
-      WHERE task_id = ? AND status = 'started'
-    `).run(now(), task.id);
+    if (success) {
+      // Auto-complete this task after sending
+      db.prepare(`
+        UPDATE tasks
+        SET status = 'completed', last_run_at = ?, updated_at = ?
+        WHERE id = ?
+      `).run(now(), now(), task.id);
+
+      // Mark task_history as success (latest entry only)
+      const historyEntry = db.prepare(`
+        SELECT id FROM task_history
+        WHERE task_id = ? AND status = 'started'
+        ORDER BY executed_at DESC LIMIT 1
+      `).get(task.id);
+
+      if (historyEntry) {
+        db.prepare(`
+          UPDATE task_history
+          SET status = 'success', completed_at = ?
+          WHERE id = ?
+        `).run(now(), historyEntry.id);
+      }
+    }
   } else {
     // Regular task: build prompt with completion instruction
     prompt = `[Scheduled Task: ${task.id}] ${task.prompt}
 
----- After completing this task, run: ~/zylos/scheduler-v2/task-cli.js done ${task.id}`;
+---- After completing this task, run: ~/.claude/skills/scheduler/task-cli.js done ${task.id}`;
+
+    // Send via C4 Communication Bridge with task priority
+    // Map scheduler priority (1-4) to C4 priority (1-3)
+    const c4Priority = Math.min(task.priority, 3);
+    success = sendViaC4(prompt, 'scheduler', c4Priority);
   }
 
-  // Send to tmux
-  const success = sendToTmux(prompt);
-
   if (!success) {
-    console.error(`Failed to dispatch task ${task.id} to tmux`);
+    console.error(`Failed to dispatch task ${task.id}`);
 
     // Revert to pending
     db.prepare(`
       UPDATE tasks
-      SET status = 'pending', last_error = 'Failed to send to tmux', updated_at = ?
+      SET status = 'pending', last_error = 'Failed to dispatch message', updated_at = ?
       WHERE id = ?
     `).run(now(), task.id);
+
+    // Mark task_history as failed (latest entry only)
+    const historyEntry = db.prepare(`
+      SELECT id FROM task_history
+      WHERE task_id = ? AND status = 'started'
+      ORDER BY executed_at DESC LIMIT 1
+    `).get(task.id);
+
+    if (historyEntry) {
+      db.prepare(`
+        UPDATE task_history
+        SET status = 'failed', completed_at = ?
+        WHERE id = ?
+      `).run(now(), historyEntry.id);
+    }
   }
 
   return success;
@@ -189,10 +228,16 @@ function handleMissedTasks() {
       });
     } else {
       // Recent miss (5-60 min): try to dispatch if idle
-      const idleSeconds = getIdleSeconds();
+      let idleSeconds = getIdleSeconds();
       const threshold = getIdleThreshold(task.priority);
 
-      if (idleSeconds !== null && idleSeconds >= threshold) {
+      // Treat null as idle to avoid stall (status file missing)
+      if (idleSeconds === null) {
+        console.log(`[${new Date().toISOString()}] Warning: idle status unavailable for missed task ${task.id}, assuming idle`);
+        idleSeconds = 999;
+      }
+
+      if (idleSeconds >= threshold) {
         console.log(`[${new Date().toISOString()}] Late-dispatching missed task ${task.id} (${task.name}), ${Math.round(overdueSeconds/60)}min overdue`);
         dispatchTask(task);
       }

@@ -7,10 +7,10 @@
  * Example: node c4-notify.js "System alert: low disk space"
  */
 
-const path = require('path');
-const fs = require('fs');
-const os = require('os');
-const { spawn } = require('child_process');
+import path from 'path';
+import fs from 'fs';
+import os from 'os';
+import { spawn } from 'child_process';
 
 const SKILLS_DIR = path.join(os.homedir(), '.claude', 'skills');
 const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
@@ -76,7 +76,7 @@ async function main() {
   // 1. Send to Telegram primary_dm
   const tgConfig = readJsonFile(path.join(ZYLOS_DIR, 'telegram', 'config.json'));
   if (tgConfig && tgConfig.primary_dm) {
-    const result = await sendViaChannel('telegram', null, message);
+    const result = await sendViaChannel('telegram', tgConfig.primary_dm, message);
     if (result.success) {
       console.log('[notify] Sent to Telegram');
       sentCount++;

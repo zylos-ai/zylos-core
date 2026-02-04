@@ -105,7 +105,7 @@ Channels are skills that implement the C4 communication interface. Install them 
 - [zylos-lark](https://github.com/zylos-ai/zylos-lark) - Lark/Feishu integration
 - [zylos-discord](https://github.com/zylos-ai/zylos-discord) - Discord integration
 
-Each channel skill provides `send.sh` for outgoing messages and stores config in `~/zylos/<channel>/`.
+Each channel skill provides `send.js` (Node.js) for outgoing messages. Channel integrations store config in `~/zylos/<channel>/`.
 
 ## Requirements
 

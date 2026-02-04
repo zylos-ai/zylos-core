@@ -7,18 +7,22 @@
  * Default port: 3456
  */
 
-const express = require('express');
-const http = require('http');
-const WebSocket = require('ws');
-const path = require('path');
-const os = require('os');
-const fs = require('fs');
-const { spawn } = require('child_process');
-const Database = require('better-sqlite3');
+import express from 'express';
+import http from 'http';
+import { WebSocketServer } from 'ws';
+import path from 'path';
+import os from 'os';
+import fs from 'fs';
+import { spawn } from 'child_process';
+import Database from 'better-sqlite3';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const app = express();
 const server = http.createServer(app);
-const wss = new WebSocket.Server({ server });
+const wss = new WebSocketServer({ server });
 
 const PORT = process.env.WEB_CONSOLE_PORT || 3456;
 
@@ -36,7 +40,22 @@ app.use(express.static(path.join(__dirname, 'public')));
 // Initialize database connection
 let db;
 try {
+  // Verify database file exists
+  if (!fs.existsSync(DB_PATH)) {
+    console.error(`Database not found: ${DB_PATH}`);
+    console.error('Make sure comm-bridge is initialized first (run c4-db.js init)');
+    process.exit(1);
+  }
+
   db = new Database(DB_PATH, { readonly: false });
+
+  // Verify schema exists
+  const tableCheck = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='conversations'").get();
+  if (!tableCheck) {
+    console.error('Database schema not initialized');
+    console.error('Run: node ~/.claude/skills/comm-bridge/c4-db.js init');
+    process.exit(1);
+  }
 } catch (err) {
   console.error(`Failed to open database: ${err.message}`);
   console.error('Make sure comm-bridge is initialized first');
@@ -109,7 +128,7 @@ function getNewMessages(sinceId) {
 function broadcast(type, data) {
   const message = JSON.stringify({ type, data });
   for (const client of clients) {
-    if (client.readyState === WebSocket.OPEN) {
+    if (client.readyState === 1) { // WebSocket.OPEN
       client.send(message);
     }
   }
@@ -165,6 +184,7 @@ wss.on('connection', (ws) => {
       if (msg.type === 'send' && msg.content) {
         // Send message to Claude
         const c4Receive = path.join(SKILLS_DIR, 'comm-bridge', 'c4-receive.js');
+        const tempId = msg.tempId; // Track client's temp ID
 
         const child = spawn('node', [
           c4Receive,
@@ -175,14 +195,14 @@ wss.on('connection', (ws) => {
 
         child.on('close', (code) => {
           if (code === 0) {
-            ws.send(JSON.stringify({ type: 'sent', success: true }));
+            ws.send(JSON.stringify({ type: 'sent', success: true, tempId }));
           } else {
-            ws.send(JSON.stringify({ type: 'sent', success: false, error: 'Failed to send' }));
+            ws.send(JSON.stringify({ type: 'sent', success: false, error: 'Failed to send', tempId }));
           }
         });
 
         child.on('error', (err) => {
-          ws.send(JSON.stringify({ type: 'sent', success: false, error: err.message }));
+          ws.send(JSON.stringify({ type: 'sent', success: false, error: err.message, tempId }));
         });
       }
     } catch (err) {
@@ -214,7 +234,7 @@ app.get('/api/status', (req, res) => {
 app.get('/api/conversations', (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 50;
-    const source = req.query.source || 'web';
+    const source = req.query.source || 'web-console';
 
     const stmt = db.prepare(`
       SELECT id, direction, source, endpoint_id, content, timestamp
@@ -325,10 +345,11 @@ app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-// Start server
-server.listen(PORT, () => {
-  console.log(`Web Console server running on http://localhost:${PORT}`);
-  console.log(`WebSocket available at ws://localhost:${PORT}`);
+// Start server (bind to localhost only for security)
+const BIND_HOST = process.env.WEB_CONSOLE_BIND || '127.0.0.1';
+server.listen(PORT, BIND_HOST, () => {
+  console.log(`Web Console server running on http://${BIND_HOST}:${PORT}`);
+  console.log(`WebSocket available at ws://${BIND_HOST}:${PORT}`);
   console.log(`Database: ${DB_PATH}`);
 });
 

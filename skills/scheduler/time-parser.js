@@ -3,7 +3,7 @@
  * Uses chrono-node for natural language parsing
  */
 
-const chrono = require('chrono-node');
+import * as chrono from 'chrono-node';
 
 /**
  * Parse a human-friendly time string into a Unix timestamp
@@ -17,7 +17,7 @@ const chrono = require('chrono-node');
  * @param {Date} referenceDate - Reference date (default: now)
  * @returns {number|null} Unix timestamp or null if parsing failed
  */
-function parseTime(timeStr, referenceDate = new Date()) {
+export function parseTime(timeStr, referenceDate = new Date()) {
   // Try chrono-node first (for natural language)
   const result = chrono.parseDate(timeStr, referenceDate, { forwardDate: true });
 
@@ -44,7 +44,7 @@ function parseTime(timeStr, referenceDate = new Date()) {
  * @param {string} durationStr - Duration string
  * @returns {number|null} Duration in seconds or null if parsing failed
  */
-function parseDuration(durationStr) {
+export function parseDuration(durationStr) {
   const str = durationStr.toLowerCase().trim();
 
   // Common patterns
@@ -69,10 +69,10 @@ function parseDuration(durationStr) {
 /**
  * Format a Unix timestamp for display
  * @param {number} timestamp - Unix timestamp
- * @param {string} timezone - Timezone (default: Asia/Shanghai)
+ * @param {string} timezone - Timezone (default: from TZ env var or UTC)
  * @returns {string} Formatted date string
  */
-function formatTime(timestamp, timezone = 'Asia/Shanghai') {
+export function formatTime(timestamp, timezone = process.env.TZ || 'UTC') {
   const date = new Date(timestamp * 1000);
   return date.toLocaleString('en-US', {
     timeZone: timezone,
@@ -90,7 +90,7 @@ function formatTime(timestamp, timezone = 'Asia/Shanghai') {
  * @param {number} seconds - Duration in seconds
  * @returns {string} Human-readable duration
  */
-function formatDuration(seconds) {
+export function formatDuration(seconds) {
   if (seconds < 60) return `${seconds}s`;
   if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
   if (seconds < 86400) return `${Math.floor(seconds / 3600)}h`;
@@ -102,7 +102,7 @@ function formatDuration(seconds) {
  * @param {number} timestamp - Unix timestamp
  * @returns {string} Relative time (e.g., "in 5 minutes", "2 hours ago")
  */
-function getRelativeTime(timestamp) {
+export function getRelativeTime(timestamp) {
   const now = Math.floor(Date.now() / 1000);
   const diff = timestamp - now;
   const absDiff = Math.abs(diff);
@@ -115,11 +115,3 @@ function getRelativeTime(timestamp) {
   if (absDiff < 86400) return `${prefix}${Math.floor(absDiff / 3600)}h${suffix}`;
   return `${prefix}${Math.floor(absDiff / 86400)}d${suffix}`;
 }
-
-module.exports = {
-  parseTime,
-  parseDuration,
-  formatTime,
-  formatDuration,
-  getRelativeTime
-};
