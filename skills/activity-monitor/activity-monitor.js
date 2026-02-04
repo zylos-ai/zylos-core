@@ -137,6 +137,44 @@ function isClaudeRunning() {
   }
 }
 
+function isClaudeReady() {
+  // Check if Claude has displayed the input prompt by capturing tmux pane content
+  try {
+    const paneContent = execSync(
+      `tmux capture-pane -t "${SESSION}" -p 2>/dev/null`,
+      { encoding: 'utf8' }
+    );
+    // Claude Code shows ">" as input prompt when ready
+    // Also check for common ready indicators
+    return paneContent.includes('>') || paneContent.includes('Claude');
+  } catch {
+    return false;
+  }
+}
+
+function waitForClaudeReady(maxWaitSeconds = 60) {
+  return new Promise((resolve) => {
+    let waited = 0;
+    const checkInterval = setInterval(() => {
+      waited++;
+
+      if (isClaudeReady()) {
+        clearInterval(checkInterval);
+        log(`Guardian: Claude ready after ${waited}s`);
+        resolve(true);
+        return;
+      }
+
+      if (waited >= maxWaitSeconds) {
+        clearInterval(checkInterval);
+        log(`Guardian: Timeout waiting for Claude to be ready (${maxWaitSeconds}s)`);
+        resolve(false);
+        return;
+      }
+    }, 1000);
+  });
+}
+
 function sendViaC4(message, source = 'system') {
   const c4ReceivePath = path.join(os.homedir(), '.claude/skills/comm-bridge/c4-receive.js');
 
@@ -266,23 +304,22 @@ function startClaude() {
     }
   }
 
-  // Wait a bit then send catch-up prompt via C4
-  setTimeout(() => {
-    if (isClaudeRunning()) {
-      log('Guardian: Claude started successfully, sending catch-up prompt via C4');
+  // Wait for Claude to be ready (show input prompt), then send recovery message
+  waitForClaudeReady(60).then((ready) => {
+    if (ready) {
+      log('Guardian: Claude is ready, waiting 2s before sending recovery prompt...');
       setTimeout(() => {
         sendViaC4(`Session recovered by activity monitor. Do the following:
 
-1. Read your memory files (especially ~/zylos/memory/context.md)
-2. Check the conversation transcript at ~/.claude/projects/-home-howard-zylos/*.jsonl (most recent file by date) for messages AFTER the last memory sync timestamp
-3. If there was conversation between last memory sync and crash, briefly summarize what was discussed (both Howard's messages and your replies)
-4. Send recovery status via ~/zylos/bin/notify.sh`);
+1. Read your memory files (especially ${ZYLOS_DIR}/memory/context.md)
+2. Check the conversation transcript at ${CONV_DIR}/*.jsonl (most recent file by date) for messages AFTER the last memory sync timestamp
+3. If there was conversation between last memory sync and crash, briefly summarize what was discussed (both Howard's messages and your replies)`);
         log('Guardian: Recovery prompt sent via C4');
-      }, 5000);
+      }, 2000);
     } else {
       log('Guardian: Warning - Claude may not have started properly');
     }
-  }, 15000);
+  });
 }
 
 function writeStatusFile(statusObj) {

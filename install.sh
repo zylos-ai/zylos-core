@@ -152,7 +152,7 @@ start_services() {
 
     # Start core services directly (no pm2.config.js needed)
     env TZ="${TZ:-UTC}" \
-        pm2 start "$SKILLS_DIR/self-maintenance/activity-monitor.js" --name activity-monitor
+        pm2 start "$SKILLS_DIR/activity-monitor/activity-monitor.js" --name activity-monitor
     env NODE_ENV=production ZYLOS_DIR="$ZYLOS_DIR" TZ="${TZ:-UTC}" \
         pm2 start "$SKILLS_DIR/scheduler/scheduler.js" --name scheduler
     env TZ="${TZ:-UTC}" \
@@ -161,15 +161,42 @@ start_services() {
         pm2 start "$SKILLS_DIR/web-console/server.js" --name web-console
 
     echo "  ✓ Services started"
+}
 
-    # Configure PM2 to auto-start on system reboot
+# Configure auto-start on system reboot
+configure_autostart() {
     echo -e "\n${BLUE}Configuring auto-start...${NC}"
-    pm2 save
 
-    # Setup PM2 startup (requires sudo)
-    echo -e "${YELLOW}To enable auto-start on reboot, run:${NC}"
-    pm2 startup | tail -1
-    echo ""
+    # Enable loginctl linger to allow tmux to work properly when started by PM2
+    # This prevents "Couldn't move process to requested cgroup" errors
+    echo "  Enabling loginctl linger for user $USER..."
+    if sudo loginctl enable-linger "$USER"; then
+        echo "  ✓ loginctl linger enabled"
+    else
+        echo -e "  ${YELLOW}⚠ Failed to enable linger (tmux may have issues after reboot)${NC}"
+    fi
+
+    # Save current PM2 process list
+    pm2 save
+    echo "  ✓ PM2 process list saved"
+
+    # Setup PM2 startup service
+    echo "  Configuring PM2 startup service..."
+
+    # Get the startup command from pm2
+    PM2_STARTUP_CMD=$(pm2 startup 2>/dev/null | grep -E '^\s*sudo' | head -1 | sed 's/^\s*//')
+
+    if [ -n "$PM2_STARTUP_CMD" ]; then
+        echo "  Running: $PM2_STARTUP_CMD"
+        if eval "$PM2_STARTUP_CMD"; then
+            echo "  ✓ PM2 startup service configured"
+        else
+            echo -e "  ${YELLOW}⚠ Failed to configure PM2 startup service${NC}"
+            echo -e "  ${YELLOW}  Run manually: $PM2_STARTUP_CMD${NC}"
+        fi
+    else
+        echo "  ✓ PM2 startup already configured or not needed"
+    fi
 }
 
 # Print completion message
@@ -179,6 +206,8 @@ complete() {
     echo "║     Zylos Installation Complete!      ║"
     echo "╚═══════════════════════════════════════╝"
     echo -e "${NC}"
+    echo ""
+    echo "Services will auto-start on system reboot."
     echo ""
     echo "Next steps:"
     echo "  1. Edit $ZYLOS_DIR/.env if needed"
@@ -195,6 +224,7 @@ main() {
     install_core
     configure
     start_services
+    configure_autostart
     complete
 }
 
