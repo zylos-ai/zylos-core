@@ -3,10 +3,10 @@
  * Uses cron-parser for evaluation
  */
 
-const parser = require('cron-parser');
+import parser from 'cron-parser';
 
 // Use TZ environment variable or fall back to UTC
-const DEFAULT_TIMEZONE = process.env.TZ || 'UTC';
+export const DEFAULT_TIMEZONE = process.env.TZ || 'UTC';
 
 /**
  * Calculate the next run time for a cron expression
@@ -15,7 +15,7 @@ const DEFAULT_TIMEZONE = process.env.TZ || 'UTC';
  * @param {Date} fromDate - Calculate next run from this date (default: now)
  * @returns {number} Unix timestamp of next run
  */
-function getNextRun(cronExpression, timezone = DEFAULT_TIMEZONE, fromDate = new Date()) {
+export function getNextRun(cronExpression, timezone = DEFAULT_TIMEZONE, fromDate = new Date()) {
   try {
     const options = {
       currentDate: fromDate,
@@ -34,7 +34,7 @@ function getNextRun(cronExpression, timezone = DEFAULT_TIMEZONE, fromDate = new 
  * @param {string} cronExpression - Cron expression to validate
  * @returns {boolean} True if valid
  */
-function isValidCron(cronExpression) {
+export function isValidCron(cronExpression) {
   try {
     parser.parseExpression(cronExpression);
     return true;
@@ -48,7 +48,7 @@ function isValidCron(cronExpression) {
  * @param {string} cronExpression - Cron expression
  * @returns {string} Human-readable description
  */
-function describeCron(cronExpression) {
+export function describeCron(cronExpression) {
   const parts = cronExpression.trim().split(/\s+/);
 
   // Simple descriptions for common patterns
@@ -97,10 +97,3 @@ function describeCron(cronExpression) {
 
   return cronExpression;  // Return as-is if can't describe
 }
-
-module.exports = {
-  getNextRun,
-  isValidCron,
-  describeCron,
-  DEFAULT_TIMEZONE
-};

@@ -7,18 +7,22 @@
  * Default port: 3456
  */
 
-const express = require('express');
-const http = require('http');
-const WebSocket = require('ws');
-const path = require('path');
-const os = require('os');
-const fs = require('fs');
-const { spawn } = require('child_process');
-const Database = require('better-sqlite3');
+import express from 'express';
+import http from 'http';
+import { WebSocketServer } from 'ws';
+import path from 'path';
+import os from 'os';
+import fs from 'fs';
+import { spawn } from 'child_process';
+import Database from 'better-sqlite3';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const app = express();
 const server = http.createServer(app);
-const wss = new WebSocket.Server({ server });
+const wss = new WebSocketServer({ server });
 
 const PORT = process.env.WEB_CONSOLE_PORT || 3456;
 
@@ -124,7 +128,7 @@ function getNewMessages(sinceId) {
 function broadcast(type, data) {
   const message = JSON.stringify({ type, data });
   for (const client of clients) {
-    if (client.readyState === WebSocket.OPEN) {
+    if (client.readyState === 1) { // WebSocket.OPEN
       client.send(message);
     }
   }

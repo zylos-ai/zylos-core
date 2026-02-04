@@ -4,10 +4,10 @@
  * Production-ready time-based task scheduler for Zylos
  */
 
-const { getDb, cleanupHistory, now } = require('./db');
-const { getNextRun } = require('./cron');
-const { getIdleSeconds, isIdle, isAtPrompt, sendToTmux, sendViaC4, sessionExists } = require('./activity');
-const { formatTime, getRelativeTime } = require('./time-parser');
+import { getDb, cleanupHistory, now } from './db.js';
+import { getNextRun } from './cron.js';
+import { getIdleSeconds, isIdle, isAtPrompt, sendToTmux, sendViaC4, sessionExists } from './activity.js';
+import { formatTime, getRelativeTime } from './time-parser.js';
 
 const CHECK_INTERVAL = 10000;  // 10 seconds
 const CLEANUP_INTERVAL = 3600000;  // 1 hour

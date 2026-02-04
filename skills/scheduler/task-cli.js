@@ -4,10 +4,10 @@
  * Manages tasks: add, list, remove, done, pause, resume
  */
 
-const { getDb, generateId, now } = require('./db');
-const { getNextRun, isValidCron, describeCron } = require('./cron');
-const { parseTime, parseDuration, formatTime, getRelativeTime } = require('./time-parser');
-const { getStatus } = require('./activity');
+import { getDb, generateId, now } from './db.js';
+import { getNextRun, isValidCron, describeCron } from './cron.js';
+import { parseTime, parseDuration, formatTime, getRelativeTime } from './time-parser.js';
+import { getStatus } from './activity.js';
 
 // Get default timezone from cron module
 const DEFAULT_TIMEZONE = process.env.TZ || 'UTC';

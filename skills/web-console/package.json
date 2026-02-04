@@ -1,6 +1,7 @@
 {
   "name": "web-console",
   "version": "1.0.0",
+  "type": "module",
   "description": "Web Console for Zylos - browser-based Claude communication",
   "main": "server.js",
   "scripts": {
