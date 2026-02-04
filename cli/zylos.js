@@ -376,8 +376,8 @@ async function installComponent(args) {
  * Upgrade a component
  */
 async function upgradeComponent(args) {
-  const target = args[0];
-  const upgradeAll = args.includes('--all');
+  const upgradeAll = args[0] === '--all';
+  const target = upgradeAll ? null : args[0];
 
   const components = loadComponents();
   const componentNames = Object.keys(components);
@@ -398,7 +398,8 @@ async function upgradeComponent(args) {
     }
     toUpgrade = [target];
   } else {
-    console.error('Usage: zylos upgrade <name> [--all]');
+    console.error('Usage: zylos upgrade <name>');
+    console.error('       zylos upgrade --all');
     console.log('\nExamples:');
     console.log('  zylos upgrade telegram    # Upgrade specific component');
     console.log('  zylos upgrade --all       # Upgrade all components');
@@ -410,6 +411,7 @@ async function upgradeComponent(args) {
   outputTask('upgrade', {
     components: toUpgrade.map(name => ({
       name,
+      repo: components[name].repo,
       currentVersion: components[name].version,
       skillDir: path.join(SKILLS_DIR, name),
       dataDir: path.join(COMPONENTS_DIR, name),
@@ -562,7 +564,8 @@ Service Management:
 Component Management:
   install <target>    Install a component
                       target: name | org/repo | github-url
-  upgrade <name>      Upgrade a component (--all for all)
+  upgrade <name>      Upgrade a specific component
+  upgrade --all       Upgrade all components
   uninstall <name>    Uninstall a component (--purge for data)
   list                List installed components
   search [keyword]    Search available components
