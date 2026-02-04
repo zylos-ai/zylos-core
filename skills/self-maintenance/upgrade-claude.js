@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Claude Code Self-Upgrade Script
+ * Claude Code Self-Upgrade Script (C4-integrated)
  * This script is triggered by Claude, runs detached, and survives the session exit
  * Usage: node upgrade-claude.js [channel]
  *   channel: Optional notification channel (e.g., "lark:oc_xxx" or "telegram")
@@ -24,6 +24,21 @@ function log(message) {
   const line = `[${timestamp}] ${message}`;
   console.log(line);
   fs.appendFileSync(LOG_FILE, line + '\n');
+}
+
+function sendViaC4(message, source = 'system') {
+  const c4ReceivePath = path.join(os.homedir(), '.claude/skills/comm-bridge/c4-receive.js');
+
+  try {
+    execSync(
+      `node "${c4ReceivePath}" --source ${source} --content "${message.replace(/"/g, '\\"')}"`,
+      { stdio: 'inherit' }
+    );
+    return true;
+  } catch (err) {
+    log(`Failed to send via C4: ${err.message}`);
+    return false;
+  }
 }
 
 function sendToTmux(text) {
@@ -229,7 +244,7 @@ async function main() {
     }
   }
 
-  // Wait for Claude to be ready and send catch-up prompt
+  // Wait for Claude to be ready and send catch-up prompt via C4
   log('Waiting for Claude to be ready...');
   sleep(10);
 
@@ -240,13 +255,13 @@ async function main() {
 
   while (catchupWait < MAX_CATCHUP_WAIT) {
     if (isAtPrompt()) {
-      log('Claude is ready, sending catch-up prompt...');
+      log('Claude is ready, sending catch-up prompt via C4...');
       if (NOTIFY_CHANNEL) {
-        sendToTmux(`Upgrade complete. Read your memory files, check ~/zylos/upgrade-log.txt for the new version. Send confirmation via ${SEND_CMD}`);
+        sendViaC4(`[System] Upgrade complete. Read your memory files, check ~/zylos/upgrade-log.txt for the new version. Send confirmation via ${SEND_CMD}`);
       } else {
-        sendToTmux('Upgrade complete. Read your memory files, check ~/zylos/upgrade-log.txt for the new version. Send confirmation via ~/zylos/bin/notify.sh.');
+        sendViaC4('[System] Upgrade complete. Read your memory files, check ~/zylos/upgrade-log.txt for the new version. Send confirmation via ~/zylos/bin/notify.sh');
       }
-      log('Sent catch-up prompt');
+      log('Sent catch-up prompt via C4');
       break;
     }
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Claude Code Simple Restart Script
+ * Claude Code Simple Restart Script (C4-integrated)
  * Restarts Claude without upgrading - useful for reloading hooks/config
  * Usage: node restart-claude.js [channel]
  *   channel: Optional notification channel (e.g., "lark:oc_xxx" or "telegram")
@@ -25,6 +25,21 @@ function log(message) {
   const line = `[${timestamp}] ${message}`;
   console.log(line);
   fs.appendFileSync(LOG_FILE, line + '\n');
+}
+
+function sendViaC4(message, source = 'system') {
+  const c4ReceivePath = path.join(os.homedir(), '.claude/skills/comm-bridge/c4-receive.js');
+
+  try {
+    execSync(
+      `node "${c4ReceivePath}" --source ${source} --content "${message.replace(/"/g, '\\"')}"`,
+      { stdio: 'inherit' }
+    );
+    return true;
+  } catch (err) {
+    log(`Failed to send via C4: ${err.message}`);
+    return false;
+  }
 }
 
 function sendToTmux(text) {
@@ -197,7 +212,7 @@ async function main() {
     }
   }
 
-  // Send catch-up prompt
+  // Send catch-up prompt via C4
   log('Waiting for Claude to be ready...');
   sleep(10);
 
@@ -206,12 +221,13 @@ async function main() {
   waited = 0;
   while (waited < 60) {
     if (isAtPrompt()) {
-      log('Sending catch-up prompt...');
+      log('Sending catch-up prompt via C4...');
       if (NOTIFY_CHANNEL) {
-        sendToTmux(`Restart complete. Read your memory files. Send confirmation via ${SEND_CMD}`);
+        sendViaC4(`[System] Restart complete. Read your memory files. Send confirmation via ${SEND_CMD}`);
       } else {
-        sendToTmux('Restart complete. Read your memory files. Send confirmation via ~/zylos/bin/notify.sh.');
+        sendViaC4('[System] Restart complete. Read your memory files. Send confirmation via ~/zylos/bin/notify.sh');
       }
+      log('Catch-up prompt sent via C4');
       break;
     }
     sleep(5);
