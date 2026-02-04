@@ -16,7 +16,7 @@ const { loadComponents, saveComponents } = require('./components');
  * @param {string} component - Component name
  * @returns {object} Update check result
  */
-async function checkForUpdates(component) {
+function checkForUpdates(component) {
   const skillDir = path.join(SKILLS_DIR, component);
 
   // Verify component exists
@@ -461,13 +461,21 @@ function step9_startAndVerify(ctx) {
     // Restart the service
     execSync(`pm2 restart ${serviceName} 2>/dev/null`, { stdio: 'pipe' });
 
-    // Brief wait for service to initialize
-    execSync('sleep 2');
+    // Poll for service status (max 5 attempts, 500ms apart)
+    let service = null;
+    for (let i = 0; i < 5; i++) {
+      const output = execSync('pm2 jlist 2>/dev/null', { encoding: 'utf8' });
+      const processes = JSON.parse(output);
+      service = processes.find(p => p.name === serviceName);
 
-    // Verify service is running
-    const output = execSync('pm2 jlist 2>/dev/null', { encoding: 'utf8' });
-    const processes = JSON.parse(output);
-    const service = processes.find(p => p.name === serviceName);
+      if (service?.pm2_env?.status === 'online') {
+        break;
+      }
+
+      // Brief sync wait between polls
+      const waitUntil = Date.now() + 500;
+      while (Date.now() < waitUntil) { /* busy wait */ }
+    }
 
     if (!service || service.pm2_env?.status !== 'online') {
       return {

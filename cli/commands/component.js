@@ -157,7 +157,7 @@ async function upgradeComponent(args) {
  * Handle --check flag: check for updates only
  */
 async function handleCheckOnly(component, { jsonOutput }) {
-  const result = await checkForUpdates(component);
+  const result = checkForUpdates(component);
 
   if (jsonOutput) {
     const output = {
@@ -199,7 +199,7 @@ async function handleExecuteUpgrade(component, { jsonOutput }) {
     console.log(`Upgrading ${component}...`);
   }
 
-  const result = await runUpgrade(component);
+  const result = runUpgrade(component);
 
   if (jsonOutput) {
     console.log(JSON.stringify(result, null, 2));
@@ -254,7 +254,7 @@ async function handleExecuteUpgrade(component, { jsonOutput }) {
  */
 async function handleInteractive(component, { jsonOutput }) {
   // Check for updates first
-  const check = await checkForUpdates(component);
+  const check = checkForUpdates(component);
 
   if (!check.success) {
     if (jsonOutput) {
@@ -318,7 +318,7 @@ async function upgradeAllComponents({ checkOnly, jsonOutput, skipConfirm }) {
       console.log(`\nChecking ${name}...`);
     }
 
-    const check = await checkForUpdates(name);
+    const check = checkForUpdates(name);
     results.push({ component: name, ...check });
 
     if (!jsonOutput && check.success && check.hasUpdate) {
@@ -358,7 +358,7 @@ async function upgradeAllComponents({ checkOnly, jsonOutput, skipConfirm }) {
   // Execute upgrades
   for (const comp of updatable) {
     console.log(`\nUpgrading ${comp.component}...`);
-    const result = await runUpgrade(comp.component);
+    const result = runUpgrade(comp.component);
     if (result.success) {
       console.log(`  ✓ ${result.from} → ${result.to}`);
     } else {
