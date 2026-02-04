@@ -105,14 +105,31 @@ async function upgradeComponent(args) {
     process.exit(1);
   }
 
-  // Verify component is installed
+  // Verify component is installed (both in components.json and skill directory)
   const components = loadComponents();
+  const skillDir = path.join(SKILLS_DIR, target);
+
   if (!components[target]) {
     const result = {
       action: 'check',
       component: target,
-      error: 'component_not_found',
-      message: `组件 '${target}' 未安装`,
+      error: 'component_not_registered',
+      message: `组件 '${target}' 未在 components.json 中注册`,
+    };
+    if (jsonOutput) {
+      console.log(JSON.stringify(result, null, 2));
+    } else {
+      console.error(`Error: ${result.message}`);
+    }
+    process.exit(1);
+  }
+
+  if (!fs.existsSync(skillDir)) {
+    const result = {
+      action: 'check',
+      component: target,
+      error: 'skill_dir_not_found',
+      message: `组件目录不存在: ${skillDir}`,
     };
     if (jsonOutput) {
       console.log(JSON.stringify(result, null, 2));
@@ -149,6 +166,9 @@ async function handleCheckOnly(component, { jsonOutput }) {
       ...result,
     };
     console.log(JSON.stringify(output, null, 2));
+    if (!result.success) {
+      process.exit(1);
+    }
   } else {
     if (!result.success) {
       console.error(`Error: ${result.message}`);
@@ -183,6 +203,9 @@ async function handleExecuteUpgrade(component, { jsonOutput }) {
 
   if (jsonOutput) {
     console.log(JSON.stringify(result, null, 2));
+    if (!result.success) {
+      process.exit(1);
+    }
   } else {
     if (result.success) {
       // Print step progress

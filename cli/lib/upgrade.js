@@ -458,8 +458,8 @@ function step9_startAndVerify(ctx) {
   }
 
   try {
-    // Start the service
-    execSync(`pm2 start ${serviceName} 2>/dev/null`, { stdio: 'pipe' });
+    // Restart the service
+    execSync(`pm2 restart ${serviceName} 2>/dev/null`, { stdio: 'pipe' });
 
     // Brief wait for service to initialize
     execSync('sleep 2');
@@ -502,13 +502,6 @@ function step9_startAndVerify(ctx) {
  */
 function rollback(ctx) {
   const results = [];
-
-  // Stop service if we started it during upgrade
-  if (ctx.serviceStopped === false && ctx.serviceWasRunning) {
-    try {
-      execSync(`pm2 stop zylos-${ctx.component} 2>/dev/null || true`, { stdio: 'pipe' });
-    } catch {}
-  }
 
   // Reset to rollback point
   if (ctx.rollbackPoint) {
@@ -581,8 +574,19 @@ function rollback(ctx) {
  * @param {object} options - Options (jsonOutput, etc.)
  * @returns {object} Upgrade result
  */
-async function runUpgrade(component, options = {}) {
+function runUpgrade(component, options = {}) {
   const ctx = createContext(component);
+
+  // Validate skill directory exists
+  if (!fs.existsSync(ctx.skillDir)) {
+    return {
+      action: 'upgrade',
+      component,
+      success: false,
+      error: `组件目录不存在: ${ctx.skillDir}`,
+      steps: [],
+    };
+  }
 
   // Get versions before upgrade
   const localVersion = git.getLocalVersion(ctx.skillDir);
