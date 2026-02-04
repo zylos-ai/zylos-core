@@ -73,7 +73,7 @@ check_requirements() {
 create_directories() {
     echo -e "\n${BLUE}Creating directories...${NC}"
 
-    mkdir -p "$ZYLOS_DIR"/{memory,public,logs,scheduler,comm-bridge}
+    mkdir -p "$ZYLOS_DIR"/{memory,public,logs,scheduler,comm-bridge,pm2}
     mkdir -p "$SKILLS_DIR"
 
     echo "  ✓ $ZYLOS_DIR"
@@ -97,7 +97,7 @@ install_core() {
     cp -r "$CORE_DIR/skills/"* "$SKILLS_DIR/"
     echo "  ✓ Skills installed to $SKILLS_DIR"
 
-    # Copy templates (no pm2.config.js - services started directly)
+    # Copy templates
     if [ ! -f "$ZYLOS_DIR/.env" ]; then
         cp "$CORE_DIR/templates/.env.example" "$ZYLOS_DIR/.env"
         echo "  ✓ .env created from template"
@@ -106,6 +106,11 @@ install_core() {
     fi
     cp "$CORE_DIR/templates/CLAUDE.md" "$ZYLOS_DIR/"
     cp -r "$CORE_DIR/templates/memory/"* "$ZYLOS_DIR/memory/"
+
+    # Copy PM2 ecosystem configuration
+    cp "$CORE_DIR/templates/pm2/ecosystem.config.js" "$ZYLOS_DIR/pm2/"
+    echo "  ✓ PM2 ecosystem configuration installed"
+
     echo "  ✓ Templates installed"
 
     # Install CLI globally from permanent location
@@ -150,17 +155,14 @@ start_services() {
         source "$ZYLOS_DIR/.env"
     fi
 
-    # Start core services directly (no pm2.config.js needed)
-    env TZ="${TZ:-UTC}" \
-        pm2 start "$SKILLS_DIR/activity-monitor/activity-monitor.js" --name activity-monitor
-    env NODE_ENV=production ZYLOS_DIR="$ZYLOS_DIR" TZ="${TZ:-UTC}" \
-        pm2 start "$SKILLS_DIR/scheduler/scheduler.js" --name scheduler
-    env TZ="${TZ:-UTC}" \
-        pm2 start "$SKILLS_DIR/comm-bridge/c4-dispatcher.js" --name c4-dispatcher
-    env WEB_CONSOLE_PORT=3456 ZYLOS_DIR="$ZYLOS_DIR" TZ="${TZ:-UTC}" \
-        pm2 start "$SKILLS_DIR/web-console/server.js" --name web-console
+    # Start all services using ecosystem.config.js
+    # This ensures proper PATH configuration and consistent service management
+    cd "$ZYLOS_DIR/pm2"
+    pm2 start ecosystem.config.js
 
-    echo "  ✓ Services started"
+    echo "  ✓ Services started from ecosystem.config.js"
+    echo "  ℹ Service list:"
+    pm2 list --no-color | grep -E "^\│" | head -6
 }
 
 # Configure auto-start on system reboot

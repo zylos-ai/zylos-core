@@ -71,6 +71,57 @@ Runtime data (logs, databases, config) goes in `~/zylos/<skill-name>/`, NOT in t
 
 This keeps code (in `skills/`) separate from runtime data (in `~/zylos/`).
 
+## PM2 Process Management
+
+### Ecosystem Configuration
+
+**All PM2 services MUST be managed through `~/zylos/pm2/ecosystem.config.js`.**
+
+This file:
+- Defines all PM2-managed services
+- Sets proper PATH including `~/.local/bin` and `~/.claude/bin`
+- Ensures `claude` command is available to all services
+- Persists across reboots when used with `pm2 save`
+
+**Template location:** `templates/pm2/ecosystem.config.js`
+
+### Adding New PM2 Services
+
+When adding a new service:
+
+1. **Update ecosystem.config.js** - Add the new service to the apps array
+2. **Restart all services** - `pm2 delete all && pm2 start ~/zylos/pm2/ecosystem.config.js`
+3. **Save configuration** - `pm2 save` (critical for reboot persistence)
+4. **Update template** - Sync changes back to `templates/pm2/ecosystem.config.js`
+
+**Example service entry:**
+
+```javascript
+{
+  name: 'my-service',
+  script: path.join(SKILLS_DIR, 'my-service', 'server.js'),
+  cwd: HOME,
+  env: {
+    PATH: ENHANCED_PATH,  // Includes ~/.local/bin and ~/.claude/bin
+    NODE_ENV: 'production'
+  },
+  autorestart: true,
+  max_restarts: 10,
+  min_uptime: '10s'
+}
+```
+
+### Boot Auto-Start
+
+Ensure PM2 auto-starts on reboot:
+
+```bash
+pm2 startup  # Follow the returned sudo command
+pm2 save     # Save current process list
+```
+
+On reboot, PM2 will execute `pm2 resurrect` which reads the saved dump and starts all services with their ecosystem configuration.
+
 ### SKILL.md Format
 
 ```markdown
