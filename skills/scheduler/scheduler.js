@@ -118,6 +118,13 @@ function dispatchTask(task) {
       SET status = 'pending', last_error = 'Failed to dispatch message', updated_at = ?
       WHERE id = ?
     `).run(now(), task.id);
+
+    // Mark task_history as failed
+    db.prepare(`
+      UPDATE task_history
+      SET status = 'failed', completed_at = ?
+      WHERE task_id = ? AND status = 'started'
+    `).run(now(), task.id);
   }
 
   return success;

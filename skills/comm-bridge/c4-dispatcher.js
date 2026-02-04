@@ -53,6 +53,8 @@ function isClaudeIdle() {
     if (!existsSync(STATUS_FILE)) {
       // No status file - assume idle to prevent queue deadlock
       // (activity-monitor may not be running)
+      // Trade-off: Breaks idle guarantee but prevents permanent deadlock
+      log('Warning: Status file missing, assuming idle (idle guarantee not enforced)');
       return true;
     }
     const content = readFileSync(STATUS_FILE, 'utf8');
@@ -70,8 +72,9 @@ function isClaudeIdle() {
 
     return false;
   } catch (err) {
-    log(`Error checking idle state: ${err.message}`);
+    log(`Warning: Error checking idle state (${err.message}), assuming idle to prevent deadlock`);
     // Return true on error to prevent queue deadlock
+    // Trade-off: Breaks idle guarantee but prevents permanent deadlock
     return true;
   }
 }
