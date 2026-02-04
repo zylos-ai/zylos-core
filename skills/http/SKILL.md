@@ -73,5 +73,5 @@ sudo systemctl status caddy
 sudo journalctl -u caddy -f
 
 # Access logs
-tail -f ~/zylos/logs/caddy-access.log
+tail -f ~/zylos/http/caddy-access.log
 ```

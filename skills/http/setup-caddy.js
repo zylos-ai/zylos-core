@@ -6,11 +6,11 @@
  * Usage: node setup-caddy.js [--with-lark] [--with-browser]
  */
 
-const { execSync } = require('child_process');
-const fs = require('fs');
-const path = require('path');
-const os = require('os');
-const readline = require('readline');
+import { execSync } from 'child_process';
+import fs from 'fs';
+import path from 'path';
+import os from 'os';
+import readline from 'readline';
 
 const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
 
@@ -120,7 +120,7 @@ async function main() {
 
   // Create required directories
   fs.mkdirSync(path.join(ZYLOS_DIR, 'public'), { recursive: true });
-  fs.mkdirSync(path.join(ZYLOS_DIR, 'logs'), { recursive: true });
+  fs.mkdirSync(path.join(ZYLOS_DIR, 'http'), { recursive: true });
 
   // Fix permissions for Caddy to read public files
   try {
@@ -187,7 +187,7 @@ ${domain} {
   // Add logging and close
   config += `
     log {
-        output file ${ZYLOS_DIR}/logs/caddy-access.log {
+        output file ${ZYLOS_DIR}/http/caddy-access.log {
             roll_size 10mb
             roll_keep 3
         }

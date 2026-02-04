@@ -51,7 +51,25 @@ module.exports = myFunction;
 Each skill is a self-contained module in `skills/<skill-name>/`:
 - `SKILL.md` - Skill documentation (YAML frontmatter + usage guide)
 - `<skill-name>.js` - Main implementation (ESM)
+- `package.json` - Must include `{"type":"module"}` (add dependencies if needed)
 - Other supporting files as needed
+
+### Skill Data Directory
+
+Runtime data (logs, databases, config) goes in `~/zylos/<skill-name>/`, NOT in the skill source directory.
+
+```
+~/zylos/
+├── activity-monitor/    # activity-monitor skill data
+│   └── activity.log
+├── comm-bridge/         # comm-bridge skill data
+│   └── c4.db
+├── http/                # http skill data
+│   └── caddy-access.log
+└── ...
+```
+
+This keeps code (in `skills/`) separate from runtime data (in `~/zylos/`).
 
 ### SKILL.md Format
 
