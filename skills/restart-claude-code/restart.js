@@ -11,7 +11,8 @@ const path = require('path');
 const os = require('os');
 
 const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
-const LOG_FILE = path.join(ZYLOS_DIR, 'upgrade-log.txt');
+const LOG_DIR = path.join(ZYLOS_DIR, 'logs');
+const LOG_FILE = path.join(LOG_DIR, 'restart.log');
 const STATUS_FILE = path.join(os.homedir(), '.claude-status');
 const CHECK_INTERVAL = 1;
 const MIN_IDLE_SECONDS = 3;
@@ -20,6 +21,10 @@ function log(message) {
   const timestamp = new Date().toISOString().replace('T', ' ').substring(0, 19);
   const line = `[${timestamp}] ${message}`;
   console.log(line);
+  // Ensure log directory exists
+  if (!fs.existsSync(LOG_DIR)) {
+    fs.mkdirSync(LOG_DIR, { recursive: true });
+  }
   fs.appendFileSync(LOG_FILE, line + '\n');
 }
 
