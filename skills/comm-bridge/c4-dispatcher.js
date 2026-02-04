@@ -7,7 +7,7 @@
  * Run with PM2: pm2 start c4-dispatcher.js --name c4-dispatcher
  */
 
-const { execSync } = require('child_process');
+const { execFileSync } = require('child_process');
 const { readFileSync, existsSync } = require('fs');
 const { join } = require('path');
 const { homedir } = require('os');
@@ -34,7 +34,10 @@ function sleep(ms) {
  */
 function tmuxHasSession() {
   try {
-    execSync(`tmux has-session -t "${TMUX_SESSION}" 2>/dev/null`, { encoding: 'utf8' });
+    execFileSync('tmux', ['has-session', '-t', TMUX_SESSION], {
+      encoding: 'utf8',
+      stdio: 'pipe'
+    });
     return true;
   } catch {
     return false;
@@ -80,16 +83,13 @@ async function sendToTmux(message) {
   const bufferName = `c4-msg-${process.pid}-${Date.now()}`;
 
   try {
-    // Escape special characters for shell
-    const escapedMessage = message.replace(/"/g, '\\"').replace(/\$/g, '\\$');
-
-    // Set buffer with the message
-    execSync(`tmux set-buffer -b "${bufferName}" "${escapedMessage}"`, {
+    // Set buffer with the message (no escaping needed with execFileSync)
+    execFileSync('tmux', ['set-buffer', '-b', bufferName, message], {
       stdio: 'pipe'
     });
 
     // Paste buffer to session
-    execSync(`tmux paste-buffer -b "${bufferName}" -t "${TMUX_SESSION}"`, {
+    execFileSync('tmux', ['paste-buffer', '-b', bufferName, '-t', TMUX_SESSION], {
       stdio: 'pipe'
     });
 
@@ -97,13 +97,13 @@ async function sendToTmux(message) {
     await sleep(DELIVERY_DELAY);
 
     // Send Enter key
-    execSync(`tmux send-keys -t "${TMUX_SESSION}" Enter`, {
+    execFileSync('tmux', ['send-keys', '-t', TMUX_SESSION, 'Enter'], {
       stdio: 'pipe'
     });
 
     // Delete buffer
     try {
-      execSync(`tmux delete-buffer -b "${bufferName}"`, { stdio: 'pipe' });
+      execFileSync('tmux', ['delete-buffer', '-b', bufferName], { stdio: 'pipe' });
     } catch {
       // Ignore buffer deletion errors
     }
