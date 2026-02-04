@@ -3,12 +3,12 @@
 #
 # Features:
 # - Static file serving from ~/zylos/public/
-# - Markdown rendering (optional, via /docs/ endpoint)
-# - Reverse proxy for optional components (Lark, VNC)
+# - Markdown files served as plain text
+# - Web Console proxy (optional)
 
 {DOMAIN} {
     # Root directory for public files
-    root * {ZYLOS_DIR}/public
+    root * {ZYLOS_DIR}/http/public
 
     # Enable file server with directory browsing disabled
     file_server {
@@ -26,26 +26,15 @@
         respond "OK" 200
     }
 
-    # === Optional: Lark webhook (uncomment if using Lark) ===
-    # handle /lark/* {
-    #     uri strip_prefix /lark
-    #     reverse_proxy localhost:3457
-    # }
-
-    # === Optional: noVNC for browser automation (uncomment if using browser) ===
-    # handle /vnc/* {
-    #     uri strip_prefix /vnc
-    #     reverse_proxy localhost:6080
-    # }
-
-    # === Optional: Browser agent WebSocket ===
-    # handle /ws {
-    #     reverse_proxy localhost:8765
-    # }
+    # Web Console
+    handle /console/* {
+        uri strip_prefix /console
+        reverse_proxy localhost:3456
+    }
 
     # Logging
     log {
-        output file {ZYLOS_DIR}/logs/caddy-access.log {
+        output file {ZYLOS_DIR}/http/caddy-access.log {
             roll_size 10mb
             roll_keep 3
         }

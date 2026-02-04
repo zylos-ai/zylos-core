@@ -7,7 +7,7 @@ description: Web server for console and file sharing. Core C6 component.
 
 Caddy-based web server providing:
 - Web Console hosting
-- File sharing via `~/zylos/public/`
+- File sharing via `~/zylos/http/public/`
 - Health check endpoint
 
 ## Setup
@@ -32,12 +32,12 @@ This will:
 
 ## File Sharing
 
-Place files in `~/zylos/public/` to share:
+Place files in `~/zylos/http/public/` to share:
 
 ```bash
 # Share a document
-cp document.md ~/zylos/public/
-chmod 644 ~/zylos/public/document.md
+cp document.md ~/zylos/http/public/
+chmod 644 ~/zylos/http/public/document.md
 
 # Access at: https://your.domain.com/document.md
 ```
@@ -53,7 +53,31 @@ DOMAIN=your.domain.com
 
 Located at `~/.claude/skills/http/Caddyfile.template`
 
-Generated config goes to `~/zylos/Caddyfile`
+Generated config goes to `/etc/caddy/Caddyfile`
+
+## Adding Custom Routes
+
+To add routes for other services, edit `/etc/caddy/Caddyfile`:
+
+```bash
+sudo nano /etc/caddy/Caddyfile
+```
+
+Add a `handle` block for your service:
+
+```caddy
+    # My Service (port 8080)
+    handle /myservice/* {
+        uri strip_prefix /myservice
+        reverse_proxy localhost:8080
+    }
+```
+
+Then reload Caddy:
+
+```bash
+sudo systemctl reload caddy
+```
 
 ## HTTPS
 
