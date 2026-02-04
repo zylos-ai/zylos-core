@@ -202,17 +202,24 @@ function cmdRemove(taskId) {
   }
 
   // Support partial ID match
-  const task = db.prepare(`
+  const tasks = db.prepare(`
     SELECT id FROM tasks WHERE id LIKE ?
-  `).get(taskId + '%');
+  `).all(taskId + '%');
 
-  if (!task) {
+  if (tasks.length === 0) {
     console.error(`Error: Task not found: ${taskId}`);
     return;
   }
 
-  db.prepare('DELETE FROM tasks WHERE id = ?').run(task.id);
-  console.log(`Removed task: ${task.id}`);
+  if (tasks.length > 1) {
+    console.error(`Error: Ambiguous task ID prefix '${taskId}' matches multiple tasks:`);
+    tasks.forEach(t => console.error(`  - ${t.id}`));
+    console.error('Please provide a more specific prefix.');
+    return;
+  }
+
+  db.prepare('DELETE FROM tasks WHERE id = ?').run(tasks[0].id);
+  console.log(`Removed task: ${tasks[0].id}`);
 }
 
 function cmdDone(taskId) {
@@ -222,14 +229,23 @@ function cmdDone(taskId) {
   }
 
   // Support partial ID match
-  const task = db.prepare(`
+  const tasks = db.prepare(`
     SELECT * FROM tasks WHERE id LIKE ?
-  `).get(taskId + '%');
+  `).all(taskId + '%');
 
-  if (!task) {
+  if (tasks.length === 0) {
     console.error(`Error: Task not found: ${taskId}`);
     return;
   }
+
+  if (tasks.length > 1) {
+    console.error(`Error: Ambiguous task ID prefix '${taskId}' matches multiple tasks:`);
+    tasks.forEach(t => console.error(`  - ${t.id}`));
+    console.error('Please provide a more specific prefix.');
+    return;
+  }
+
+  const task = tasks[0];
 
   const currentTime = now();
 

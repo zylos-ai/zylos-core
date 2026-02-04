@@ -92,7 +92,12 @@ install_core() {
     echo "  ✓ Skills installed to $SKILLS_DIR"
 
     # Copy templates (no pm2.config.js - services started directly)
-    cp "$TEMP_DIR/zylos-core/templates/.env.example" "$ZYLOS_DIR/.env"
+    if [ ! -f "$ZYLOS_DIR/.env" ]; then
+        cp "$TEMP_DIR/zylos-core/templates/.env.example" "$ZYLOS_DIR/.env"
+        echo "  ✓ .env created from template"
+    else
+        echo "  ℹ .env already exists, skipping (template at templates/.env.example)"
+    fi
     cp "$TEMP_DIR/zylos-core/templates/CLAUDE.md" "$ZYLOS_DIR/"
     cp -r "$TEMP_DIR/zylos-core/templates/memory/"* "$ZYLOS_DIR/memory/"
     echo "  ✓ Templates installed"

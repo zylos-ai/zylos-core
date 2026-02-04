@@ -128,12 +128,20 @@ function dispatchTask(task) {
       WHERE id = ?
     `).run(now(), task.id);
 
-    // Mark task_history as failed
-    db.prepare(`
-      UPDATE task_history
-      SET status = 'failed', completed_at = ?
+    // Mark task_history as failed (latest entry only)
+    const historyEntry = db.prepare(`
+      SELECT id FROM task_history
       WHERE task_id = ? AND status = 'started'
-    `).run(now(), task.id);
+      ORDER BY executed_at DESC LIMIT 1
+    `).get(task.id);
+
+    if (historyEntry) {
+      db.prepare(`
+        UPDATE task_history
+        SET status = 'failed', completed_at = ?
+        WHERE id = ?
+      `).run(now(), historyEntry.id);
+    }
   }
 
   return success;
