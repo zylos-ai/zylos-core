@@ -1,6 +1,6 @@
 ---
 name: restart-claude-code
-description: Restart Claude Code session (sends /exit, activity-monitor handles restart).
+description: Use when the user asks to restart Claude Code, or after changing settings/hooks/keybindings.
 ---
 
 # Restart Claude Code Skill
