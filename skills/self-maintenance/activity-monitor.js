@@ -132,6 +132,21 @@ function isClaudeRunning() {
   }
 }
 
+function sendViaC4(message, source = 'system') {
+  const c4ReceivePath = path.join(os.homedir(), '.claude/skills/comm-bridge/c4-receive.js');
+
+  try {
+    execSync(
+      `node "${c4ReceivePath}" --source ${source} --content "${message.replace(/"/g, '\\"')}"`,
+      { stdio: 'pipe' }
+    );
+    return true;
+  } catch (err) {
+    log(`Failed to send via C4: ${err.message}`);
+    return false;
+  }
+}
+
 function sendToTmux(text) {
   const msgId = `${Date.now()}-${process.pid}`;
   const tempFile = `/tmp/monitor-msg-${msgId}.txt`;
@@ -244,17 +259,18 @@ function startClaude() {
     }
   }
 
-  // Wait a bit then send catch-up prompt
+  // Wait a bit then send catch-up prompt via C4
   setTimeout(() => {
     if (isClaudeRunning()) {
-      log('Guardian: Claude started successfully, sending catch-up prompt');
+      log('Guardian: Claude started successfully, sending catch-up prompt via C4');
       setTimeout(() => {
-        sendToTmux(`Session recovered by activity monitor. Do the following:
+        sendViaC4(`Session recovered by activity monitor. Do the following:
 
 1. Read your memory files (especially ~/zylos/memory/context.md)
 2. Check the conversation transcript at ~/.claude/projects/-home-howard-zylos/*.jsonl (most recent file by date) for messages AFTER the last memory sync timestamp
 3. If there was conversation between last memory sync and crash, briefly summarize what was discussed (both Howard's messages and your replies)
 4. Send recovery status via ~/zylos/bin/notify.sh`);
+        log('Guardian: Recovery prompt sent via C4');
       }, 5000);
     } else {
       log('Guardian: Warning - Claude may not have started properly');
