@@ -36,7 +36,22 @@ app.use(express.static(path.join(__dirname, 'public')));
 // Initialize database connection
 let db;
 try {
+  // Verify database file exists
+  if (!fs.existsSync(DB_PATH)) {
+    console.error(`Database not found: ${DB_PATH}`);
+    console.error('Make sure comm-bridge is initialized first (run c4-db.js init)');
+    process.exit(1);
+  }
+
   db = new Database(DB_PATH, { readonly: false });
+
+  // Verify schema exists
+  const tableCheck = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='conversations'").get();
+  if (!tableCheck) {
+    console.error('Database schema not initialized');
+    console.error('Run: node ~/.claude/skills/comm-bridge/c4-db.js init');
+    process.exit(1);
+  }
 } catch (err) {
   console.error(`Failed to open database: ${err.message}`);
   console.error('Make sure comm-bridge is initialized first');

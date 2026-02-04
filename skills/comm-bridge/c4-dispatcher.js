@@ -86,8 +86,8 @@ async function sendToTmux(message) {
   const bufferName = `c4-msg-${process.pid}-${Date.now()}`;
 
   try {
-    // Set buffer with the message (no escaping needed with execFileSync)
-    execFileSync('tmux', ['set-buffer', '-b', bufferName, message], {
+    // Set buffer with the message (-- prevents messages starting with - from being parsed as options)
+    execFileSync('tmux', ['set-buffer', '-b', bufferName, '--', message], {
       stdio: 'pipe'
     });
 
@@ -127,16 +127,32 @@ async function processNextMessage() {
     return false;
   }
 
-  // Get next pending message (priority-sorted)
-  const msg = getNextPending();
+  // Check if Claude is idle for priority-1 messages
+  const isIdle = isClaudeIdle();
+
+  // Get next pending message (skip priority-1 if not idle to avoid blocking queue)
+  let msg = getNextPending();
   if (!msg) {
     return false;
   }
 
-  // Priority 1 (system/idle-required): Check if Claude is idle
-  if (msg.priority === 1) {
-    if (!isClaudeIdle()) {
-      // Not idle yet, skip delivery (will retry on next poll)
+  // If priority-1 message but Claude not idle, try to get next lower-priority message
+  if (msg.priority === 1 && !isIdle) {
+    // Query for next message with priority > 1
+    const db = require('./c4-db').getDb();
+    const lowerPriorityMsg = db.prepare(`
+      SELECT id, direction, source, endpoint_id, content, timestamp, priority
+      FROM conversations
+      WHERE direction = 'in' AND status = 'pending' AND priority > 1
+      ORDER BY COALESCE(priority, 3) ASC, timestamp ASC
+      LIMIT 1
+    `).get();
+
+    if (lowerPriorityMsg) {
+      // Process lower-priority message instead
+      msg = lowerPriorityMsg;
+    } else {
+      // No lower-priority messages available, skip delivery
       return false;
     }
   }
