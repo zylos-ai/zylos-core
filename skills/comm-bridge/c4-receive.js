@@ -72,8 +72,8 @@ function main() {
   }
 
   // Validate priority
-  if (priority < 1 || priority > 3) {
-    console.error('Error: --priority must be 1, 2, or 3');
+  if (!Number.isInteger(priority) || priority < 1 || priority > 3) {
+    console.error('Error: --priority must be an integer 1, 2, or 3');
     printUsage();
   }
 

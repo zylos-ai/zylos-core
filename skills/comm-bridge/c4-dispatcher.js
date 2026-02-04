@@ -48,7 +48,9 @@ function tmuxHasSession() {
 function isClaudeIdle() {
   try {
     if (!existsSync(STATUS_FILE)) {
-      return false;
+      // No status file - assume idle to prevent queue deadlock
+      // (activity-monitor may not be running)
+      return true;
     }
     const content = readFileSync(STATUS_FILE, 'utf8');
     const status = JSON.parse(content);
@@ -66,7 +68,8 @@ function isClaudeIdle() {
     return false;
   } catch (err) {
     log(`Error checking idle state: ${err.message}`);
-    return false;
+    // Return true on error to prevent queue deadlock
+    return true;
   }
 }
 
