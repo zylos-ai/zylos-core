@@ -16,6 +16,8 @@ Restart Claude Code session - sends /exit and lets activity-monitor daemon handl
 
 ## How to Use
 
+**Best Practice:** Before restarting, it's recommended to sync memory (update context.md) to preserve important context.
+
 **IMPORTANT: Must use `nohup ... &` pattern!**
 
 ```bash
