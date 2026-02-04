@@ -26,7 +26,7 @@ class ZylosConsole {
   detectBasePath() {
     const path = window.location.pathname;
     if (path.startsWith('/console')) {
-      return '/console/';
+      return '/console';
     }
     return '';
   }
@@ -34,8 +34,9 @@ class ZylosConsole {
   getWebSocketUrl() {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const host = window.location.host;
-    // WebSocket connects to the same path
-    return `${protocol}//${host}${this.basePath}`;
+    // WebSocket needs trailing slash for proxy path matching
+    const wsPath = this.basePath ? `${this.basePath}/` : '/';
+    return `${protocol}//${host}${wsPath}`;
   }
 
   init() {
@@ -129,10 +130,9 @@ class ZylosConsole {
           // Message was sent successfully, it will appear via 'messages' event
         } else {
           console.error('Failed to send message:', msg.error);
-          // Mark the last sent message as error
-          if (this.lastSentTempId) {
-            this.markMessageError(this.lastSentTempId);
-            this.lastSentTempId = null;
+          // Mark the specific message as error if tempId is provided
+          if (msg.tempId) {
+            this.markMessageError(msg.tempId);
           }
         }
         break;
@@ -239,8 +239,7 @@ class ZylosConsole {
         // Send via WebSocket
         // Note: Don't mark as sent immediately - wait for server confirmation
         // or for message to appear via polling
-        this.lastSentTempId = tempId; // Track for error handling
-        this.ws.send(JSON.stringify({ type: 'send', content: message }));
+        this.ws.send(JSON.stringify({ type: 'send', content: message, tempId }));
       } else {
         // Fallback to HTTP
         const response = await fetch(`${this.basePath}/api/send`, {

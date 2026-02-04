@@ -165,6 +165,7 @@ wss.on('connection', (ws) => {
       if (msg.type === 'send' && msg.content) {
         // Send message to Claude
         const c4Receive = path.join(SKILLS_DIR, 'comm-bridge', 'c4-receive.js');
+        const tempId = msg.tempId; // Track client's temp ID
 
         const child = spawn('node', [
           c4Receive,
@@ -175,14 +176,14 @@ wss.on('connection', (ws) => {
 
         child.on('close', (code) => {
           if (code === 0) {
-            ws.send(JSON.stringify({ type: 'sent', success: true }));
+            ws.send(JSON.stringify({ type: 'sent', success: true, tempId }));
           } else {
-            ws.send(JSON.stringify({ type: 'sent', success: false, error: 'Failed to send' }));
+            ws.send(JSON.stringify({ type: 'sent', success: false, error: 'Failed to send', tempId }));
           }
         });
 
         child.on('error', (err) => {
-          ws.send(JSON.stringify({ type: 'sent', success: false, error: err.message }));
+          ws.send(JSON.stringify({ type: 'sent', success: false, error: err.message, tempId }));
         });
       }
     } catch (err) {
