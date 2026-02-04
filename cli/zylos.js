@@ -56,6 +56,7 @@ Component Management:
                       target: name[@ver] | org/repo[@ver] | url
   upgrade <name>      Upgrade a specific component
   upgrade --all       Upgrade all components
+  upgrade --self      Upgrade zylos-core itself
   uninstall <name>    Uninstall a component (--purge for data)
   list                List installed components
   search [keyword]    Search available components
@@ -72,6 +73,7 @@ Examples:
   zylos install kevin/whatsapp
   zylos upgrade telegram
   zylos upgrade --all
+  zylos upgrade --self
   zylos uninstall telegram --purge
   zylos list
   zylos search bot

@@ -65,13 +65,19 @@ async function installComponent(args) {
 }
 
 async function upgradeComponent(args) {
+  const upgradeSelf = args[0] === '--self';
   const upgradeAll = args[0] === '--all';
-  const target = upgradeAll ? null : args[0];
+  const target = (upgradeSelf || upgradeAll) ? null : args[0];
+
+  // Handle --self: upgrade zylos-core itself
+  if (upgradeSelf) {
+    return upgradeSelfCore();
+  }
 
   const components = loadComponents();
   const componentNames = Object.keys(components);
 
-  if (componentNames.length === 0) {
+  if (componentNames.length === 0 && !upgradeAll) {
     console.log('No components installed.');
     process.exit(0);
   }
@@ -89,10 +95,17 @@ async function upgradeComponent(args) {
   } else {
     console.error('Usage: zylos upgrade <name>');
     console.error('       zylos upgrade --all');
+    console.error('       zylos upgrade --self');
     console.log('\nExamples:');
     console.log('  zylos upgrade telegram    # Upgrade specific component');
     console.log('  zylos upgrade --all       # Upgrade all components');
+    console.log('  zylos upgrade --self      # Upgrade zylos-core itself');
     process.exit(1);
+  }
+
+  if (toUpgrade.length === 0) {
+    console.log('No components to upgrade.');
+    return;
   }
 
   console.log(`Checking upgrades for: ${toUpgrade.join(', ')}...`);
@@ -120,6 +133,38 @@ async function upgradeComponent(args) {
       '   g. Verify service status',
       '   h. If failed, rollback automatically',
       '5. Update version in components.json',
+    ],
+  });
+}
+
+/**
+ * Upgrade zylos-core itself
+ */
+async function upgradeSelfCore() {
+  // zylos-core is installed at ~/.claude/skills (or wherever SKILLS_DIR points)
+  // The CLI and core files are in the parent of skills dir
+  const coreDir = path.join(SKILLS_DIR, '..');  // ~/.claude
+
+  console.log('Checking for zylos-core updates...');
+
+  outputTask('self_upgrade', {
+    target: 'zylos-core',
+    repo: 'zylos-ai/zylos-core',
+    coreDir: coreDir,
+    steps: [
+      '1. Check git status for local modifications in zylos-core',
+      '2. git fetch to check for updates',
+      '3. Show CHANGELOG.md and VERSION diff',
+      '4. Ask user for confirmation',
+      '5. If user confirms:',
+      '   a. Create backup (git stash + record rollback point)',
+      '   b. Stop core services (scheduler, c4-dispatcher, etc.)',
+      '   c. git pull to update code',
+      '   d. npm install if package.json changed',
+      '   e. Restart core services',
+      '   f. Verify services are running',
+      '   g. If failed, rollback and restart',
+      '6. Report new version',
     ],
   });
 }
