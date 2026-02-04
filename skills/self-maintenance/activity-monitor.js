@@ -6,7 +6,7 @@
  * Run with PM2: pm2 start activity-monitor.js --name activity-monitor
  */
 
-const { execSync, spawn } = require('child_process');
+const { execSync, execFileSync, spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -136,8 +136,10 @@ function sendViaC4(message, source = 'system') {
   const c4ReceivePath = path.join(os.homedir(), '.claude/skills/comm-bridge/c4-receive.js');
 
   try {
-    execSync(
-      `node "${c4ReceivePath}" --source ${source} --priority 1 --content "${message.replace(/"/g, '\\"')}"`,
+    // Use execFileSync to avoid shell injection - passes arguments directly
+    execFileSync(
+      'node',
+      [c4ReceivePath, '--source', source, '--priority', '1', '--content', message],
       { stdio: 'pipe' }
     );
     return true;

@@ -8,7 +8,7 @@
  *   nohup node ~/.claude/skills/self-maintenance/check-context.js > /dev/null 2>&1 &
  */
 
-const { execSync } = require('child_process');
+const { execSync, execFileSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -57,8 +57,10 @@ function sendViaC4(message) {
   const c4ReceivePath = path.join(os.homedir(), '.claude/skills/comm-bridge/c4-receive.js');
 
   try {
-    execSync(
-      `node "${c4ReceivePath}" --source system --priority 1 --content "${message.replace(/"/g, '\\"')}"`,
+    // Use execFileSync to avoid shell injection - passes arguments directly
+    execFileSync(
+      'node',
+      [c4ReceivePath, '--source', 'system', '--priority', '1', '--content', message],
       { stdio: 'inherit' }
     );
   } catch (err) {

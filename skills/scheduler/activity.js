@@ -3,7 +3,7 @@
  * Checks Claude's busy/idle state via ~/.claude-status file
  */
 
-const { execSync } = require('child_process');
+const { execSync, execFileSync } = require('child_process');
 const { readFileSync, existsSync } = require('fs');
 const { homedir } = require('os');
 const { join } = require('path');
@@ -89,10 +89,11 @@ function sessionExists() {
 function sendViaC4(message, source = 'scheduler', priority = 3) {
   try {
     const c4ReceivePath = join(homedir(), '.claude/skills/comm-bridge/c4-receive.js');
-    const escapedMessage = message.replace(/"/g, '\\"').replace(/\$/g, '\\$');
 
-    execSync(
-      `node "${c4ReceivePath}" --source ${source} --priority ${priority} --content "${escapedMessage}"`,
+    // Use execFileSync to avoid shell injection - passes arguments directly
+    execFileSync(
+      'node',
+      [c4ReceivePath, '--source', source, '--priority', String(priority), '--content', message],
       { stdio: 'pipe', timeout: 10000 }
     );
     return true;
