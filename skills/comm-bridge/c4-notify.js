@@ -7,10 +7,10 @@
  * Example: node c4-notify.js "System alert: low disk space"
  */
 
-const path = require('path');
-const fs = require('fs');
-const os = require('os');
-const { spawn } = require('child_process');
+import path from 'path';
+import fs from 'fs';
+import os from 'os';
+import { spawn } from 'child_process';
 
 const SKILLS_DIR = path.join(os.homedir(), '.claude', 'skills');
 const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');

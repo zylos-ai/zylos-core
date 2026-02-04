@@ -7,11 +7,11 @@
  * Run with PM2: pm2 start c4-dispatcher.js --name c4-dispatcher
  */
 
-const { execFileSync } = require('child_process');
-const { readFileSync, existsSync } = require('fs');
-const { join } = require('path');
-const { homedir } = require('os');
-const { getNextPending, markDelivered, getPendingCount, close } = require('./c4-db');
+import { execFileSync } from 'child_process';
+import { readFileSync, existsSync } from 'fs';
+import { join } from 'path';
+import { homedir } from 'os';
+import { getDb, getNextPending, markDelivered, getPendingCount, close } from './c4-db.js';
 
 const TMUX_SESSION = process.env.TMUX_SESSION || 'claude-main';
 const POLL_INTERVAL = 500;  // Check every 500ms for new messages
@@ -139,7 +139,7 @@ async function processNextMessage() {
   // If priority-1 message but Claude not idle, try to get next lower-priority message
   if (msg.priority === 1 && !isIdle) {
     // Query for next message with priority > 1
-    const db = require('./c4-db').getDb();
+    const db = getDb();
     const lowerPriorityMsg = db.prepare(`
       SELECT id, direction, source, endpoint_id, content, timestamp, priority
       FROM conversations

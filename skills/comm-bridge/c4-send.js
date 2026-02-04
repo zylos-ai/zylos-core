@@ -7,10 +7,11 @@
  * Example: node c4-send.js telegram 8101553026 "Hello Howard!"
  */
 
-const path = require('path');
-const os = require('os');
-const { spawn } = require('child_process');
-const { insertConversation } = require('./c4-db');
+import path from 'path';
+import os from 'os';
+import fs from 'fs';
+import { spawn } from 'child_process';
+import { insertConversation } from './c4-db.js';
 
 const SKILLS_DIR = path.join(os.homedir(), '.claude', 'skills');
 
@@ -54,7 +55,6 @@ async function main() {
   }
 
   // Find and call channel send script (must be .js - channel standard)
-  const fs = require('fs');
   const channelScript = path.join(SKILLS_DIR, source, 'send.js');
 
   if (!fs.existsSync(channelScript)) {

@@ -1,6 +1,7 @@
 {
   "name": "zylos-core",
   "version": "0.1.0",
+  "type": "module",
   "description": "Zylos0 Core - C4 Communication Bridge",
   "main": "c4-db.js",
   "scripts": {

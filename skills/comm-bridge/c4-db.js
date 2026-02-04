@@ -4,10 +4,14 @@
  * Provides database operations for message logging and checkpoint management
  */
 
-const Database = require('better-sqlite3');
-const path = require('path');
-const fs = require('fs');
-const os = require('os');
+import Database from 'better-sqlite3';
+import path from 'path';
+import fs from 'fs';
+import os from 'os';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // Data goes to ~/zylos/comm-bridge/, code stays in skills directory
 const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
@@ -20,7 +24,7 @@ let db = null;
 /**
  * Get database connection, initializing if needed
  */
-function getDb() {
+export function getDb() {
   if (!db) {
     // Ensure data directory exists
     if (!fs.existsSync(DATA_DIR)) {
@@ -98,7 +102,7 @@ function runMigrations() {
  * @param {number} priority - 1=system/idle-required, 2=urgent-user, 3=normal-user (default: 3)
  * @returns {object} - inserted record with id
  */
-function insertConversation(direction, source, endpointId, content, status = null, priority = 3) {
+export function insertConversation(direction, source, endpointId, content, status = null, priority = 3) {
   const db = getDb();
 
   // Get current checkpoint
@@ -132,7 +136,7 @@ function insertConversation(direction, source, endpointId, content, status = nul
  * Get next pending message from queue (priority-based, then FIFO)
  * @returns {object|null} - highest priority pending message or null
  */
-function getNextPending() {
+export function getNextPending() {
   const db = getDb();
   return db.prepare(`
     SELECT id, direction, source, endpoint_id, content, timestamp, priority
@@ -147,7 +151,7 @@ function getNextPending() {
  * Mark a message as delivered
  * @param {number} id - message id
  */
-function markDelivered(id) {
+export function markDelivered(id) {
   const db = getDb();
   db.prepare('UPDATE conversations SET status = ? WHERE id = ?').run('delivered', id);
 }
@@ -156,7 +160,7 @@ function markDelivered(id) {
  * Get count of pending messages
  * @returns {number}
  */
-function getPendingCount() {
+export function getPendingCount() {
   const db = getDb();
   const result = db.prepare(`
     SELECT COUNT(*) as count FROM conversations
@@ -170,7 +174,7 @@ function getPendingCount() {
  * @param {string} type - 'memory_sync', 'session_start', or 'manual'
  * @returns {object} - checkpoint record with id
  */
-function createCheckpoint(type) {
+export function createCheckpoint(type) {
   const db = getDb();
 
   const stmt = db.prepare('INSERT INTO checkpoints (type) VALUES (?)');
@@ -187,7 +191,7 @@ function createCheckpoint(type) {
  * Get conversations since last checkpoint
  * @returns {array} - array of conversation records
  */
-function getConversationsSinceLastCheckpoint() {
+export function getConversationsSinceLastCheckpoint() {
   const db = getDb();
 
   // Get timestamp of the last checkpoint
@@ -217,7 +221,7 @@ function getConversationsSinceLastCheckpoint() {
  * @param {number} limit - max records to return
  * @returns {array} - array of conversation records
  */
-function getRecentConversations(limit = 20) {
+export function getRecentConversations(limit = 20) {
   const db = getDb();
   return db.prepare(
     'SELECT * FROM conversations ORDER BY timestamp DESC LIMIT ?'
@@ -228,7 +232,7 @@ function getRecentConversations(limit = 20) {
  * Get all checkpoints
  * @returns {array} - array of checkpoint records
  */
-function getCheckpoints() {
+export function getCheckpoints() {
   const db = getDb();
   return db.prepare('SELECT * FROM checkpoints ORDER BY timestamp DESC').all();
 }
@@ -238,7 +242,7 @@ function getCheckpoints() {
  * @param {array} conversations - array of conversation records
  * @returns {string} - formatted text for Claude context injection
  */
-function formatForRecovery(conversations) {
+export function formatForRecovery(conversations) {
   if (!conversations || conversations.length === 0) {
     return '';
   }
@@ -261,7 +265,7 @@ function formatForRecovery(conversations) {
 /**
  * Close database connection
  */
-function close() {
+export function close() {
   if (db) {
     db.close();
     db = null;
@@ -269,7 +273,9 @@ function close() {
 }
 
 // CLI mode
-if (require.main === module) {
+const isMainModule = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
+
+if (isMainModule) {
   const args = process.argv.slice(2);
   const command = args[0];
 
@@ -333,17 +339,3 @@ Commands:
 
   close();
 }
-
-module.exports = {
-  getDb,
-  insertConversation,
-  createCheckpoint,
-  getConversationsSinceLastCheckpoint,
-  getRecentConversations,
-  getCheckpoints,
-  formatForRecovery,
-  getNextPending,
-  markDelivered,
-  getPendingCount,
-  close
-};

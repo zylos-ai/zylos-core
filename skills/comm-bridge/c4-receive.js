@@ -11,8 +11,12 @@
  * Example: node c4-receive.js --source system --priority 1 --no-reply --content "[System] Check context usage"
  */
 
-const path = require('path');
-const { insertConversation } = require('./c4-db');
+import path from 'path';
+import { fileURLToPath } from 'url';
+import { insertConversation } from './c4-db.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 function printUsage() {
   console.log('Usage: node c4-receive.js --source <source> [--endpoint <endpoint_id>] [--priority <1-3>] [--no-reply] --content "<message>"');

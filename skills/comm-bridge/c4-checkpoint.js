@@ -7,7 +7,7 @@
  * Types: memory_sync, session_start, manual (default: manual)
  */
 
-const { createCheckpoint } = require('./c4-db');
+import { createCheckpoint } from './c4-db.js';
 
 const VALID_TYPES = ['memory_sync', 'session_start', 'manual'];
 

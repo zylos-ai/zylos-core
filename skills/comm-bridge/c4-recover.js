@@ -7,7 +7,7 @@
  * Output: Formatted text for Claude context injection
  */
 
-const { getConversationsSinceLastCheckpoint, formatForRecovery } = require('./c4-db');
+import { getConversationsSinceLastCheckpoint, formatForRecovery } from './c4-db.js';
 
 function main() {
   try {
