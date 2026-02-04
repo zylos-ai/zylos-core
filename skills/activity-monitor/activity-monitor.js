@@ -6,10 +6,10 @@
  * Run with PM2: pm2 start activity-monitor.js --name activity-monitor
  */
 
-const { execSync, execFileSync, spawn } = require('child_process');
-const fs = require('fs');
-const path = require('path');
-const os = require('os');
+import { execSync, execFileSync, spawn } from 'child_process';
+import fs from 'fs';
+import path from 'path';
+import os from 'os';
 
 // Configuration
 const SESSION = 'claude-main';
