@@ -1,0 +1,29 @@
+{
+  "version": "1.0.0",
+  "components": {
+    "telegram": {
+      "repo": "zylos-ai/zylos-telegram",
+      "description": "Telegram Bot communication channel",
+      "type": "communication",
+      "latest": "1.0.0"
+    },
+    "lark": {
+      "repo": "zylos-ai/zylos-lark",
+      "description": "Lark/Feishu Bot communication channel",
+      "type": "communication",
+      "latest": "1.0.0"
+    },
+    "scheduler": {
+      "repo": "zylos-ai/zylos-scheduler",
+      "description": "Task scheduling and automation",
+      "type": "capability",
+      "latest": "1.0.0"
+    },
+    "comm-bridge": {
+      "repo": "zylos-ai/zylos-comm-bridge",
+      "description": "C4 Communication Bridge - unified message gateway",
+      "type": "core",
+      "latest": "1.0.0"
+    }
+  }
+}
