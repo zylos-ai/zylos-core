@@ -93,7 +93,7 @@ function outputTask(action, data) {
 
   // Queue task via C4 for Scene B (terminal execution)
   // C4 dispatcher will deliver to Claude via tmux
-  const { execSync, spawnSync } = require('child_process');
+  const { spawnSync } = require('child_process');
   const c4ReceivePath = path.join(__dirname, '..', '..', 'skills', 'comm-bridge', 'c4-receive.js');
 
   try {

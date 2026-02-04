@@ -141,9 +141,9 @@ async function upgradeComponent(args) {
  * Upgrade zylos-core itself
  */
 async function upgradeSelfCore() {
-  // zylos-core is installed at ~/.claude/skills (or wherever SKILLS_DIR points)
-  // The CLI and core files are in the parent of skills dir
-  const coreDir = path.join(SKILLS_DIR, '..');  // ~/.claude
+  // zylos-core root is parent of cli/ directory
+  // __dirname is cli/commands/, so go up twice to get zylos-core root
+  const coreDir = path.join(__dirname, '..', '..');
 
   console.log('Checking for zylos-core updates...');
 
@@ -170,8 +170,9 @@ async function upgradeSelfCore() {
 }
 
 async function uninstallComponent(args) {
-  const target = args[0];
   const purge = args.includes('--purge');
+  // Filter out flags to get the target name
+  const target = args.find(arg => !arg.startsWith('--'));
 
   if (!target) {
     console.error('Usage: zylos uninstall <name> [--purge]');
