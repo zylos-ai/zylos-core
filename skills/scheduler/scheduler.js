@@ -43,7 +43,14 @@ function getIdleThreshold(priority) {
  * Check if task should be dispatched
  */
 function shouldDispatch(task, idleSeconds) {
-  if (!task || idleSeconds === null) return false;
+  if (!task) return false;
+
+  // If idleSeconds is null (status file missing), assume idle to avoid wedging
+  // Same fallback as c4-dispatcher to prevent permanent stall
+  if (idleSeconds === null) {
+    console.log(`[${new Date().toISOString()}] Warning: idle status unavailable, assuming idle for dispatch`);
+    idleSeconds = 999;  // Assume very idle
+  }
 
   const threshold = getIdleThreshold(task.priority);
   const currentTime = now();
@@ -105,8 +112,10 @@ function dispatchTask(task) {
 
 ---- After completing this task, run: ~/.claude/skills/scheduler/task-cli.js done ${task.id}`;
 
-    // Send via C4 Communication Bridge
-    success = sendViaC4(prompt);
+    // Send via C4 Communication Bridge with task priority
+    // Map scheduler priority (1-4) to C4 priority (1-3)
+    const c4Priority = Math.min(task.priority, 3);
+    success = sendViaC4(prompt, 'scheduler', c4Priority);
   }
 
   if (!success) {
