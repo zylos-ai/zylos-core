@@ -73,15 +73,19 @@ function sendViaC4(message) {
 async function main() {
   log('=== Claude Code Restart Started ===');
 
-  // Wait for Claude to be idle
+  // Step 1: Ask Claude to sync memory before restart
+  log('Requesting memory sync before restart...');
+  sendViaC4('[System] Restart requested. Please sync memory (update context.md) before I proceed with restart.');
+
+  // Step 2: Wait for Claude to be idle (after syncing memory)
   log('Waiting for Claude to be idle...');
   waitForIdle();
 
-  // Send /exit command via C4
+  // Step 3: Send /exit command via C4
   log('Sending /exit command via C4...');
   sendViaC4('/exit');
 
-  // Reset context monitor cooldowns
+  // Step 4: Reset context monitor cooldowns
   log('Resetting context monitor cooldowns...');
   try { fs.unlinkSync('/tmp/context-alert-cooldown'); } catch {}
   try { fs.unlinkSync('/tmp/context-compact-scheduled'); } catch {}
