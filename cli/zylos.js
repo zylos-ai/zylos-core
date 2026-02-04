@@ -12,32 +12,19 @@ const path = require('path');
 const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(process.env.HOME, 'zylos');
 const SKILLS_DIR = path.join(process.env.HOME, '.claude', 'skills');
 const COMPONENTS_DIR = path.join(ZYLOS_DIR, 'components');
+const REGISTRY_FILE = path.join(__dirname, 'registry.json');
 const REGISTRY_URL = 'https://raw.githubusercontent.com/zylos-ai/zylos-registry/main/registry.json';
 
-// Built-in registry for official components (fallback)
-const BUILTIN_REGISTRY = {
-  telegram: {
-    name: 'telegram',
-    description: 'Telegram Bot communication channel',
-    repo: 'zylos-ai/zylos-telegram',
-    type: 'communication',
-    version: '1.0.0',
-  },
-  lark: {
-    name: 'lark',
-    description: 'Lark/Feishu Bot communication channel',
-    repo: 'zylos-ai/zylos-lark',
-    type: 'communication',
-    version: '1.0.0',
-  },
-  scheduler: {
-    name: 'scheduler',
-    description: 'Task scheduling and automation',
-    repo: 'zylos-ai/zylos-scheduler',
-    type: 'capability',
-    version: '1.0.0',
-  },
-};
+/**
+ * Load local registry from registry.json
+ */
+function loadLocalRegistry() {
+  try {
+    return JSON.parse(fs.readFileSync(REGISTRY_FILE, 'utf8'));
+  } catch {
+    return {};
+  }
+}
 
 const commands = {
   // Service management
@@ -221,9 +208,11 @@ function restartServices() {
 // ============ Component Management ============
 
 /**
- * Load registry (try remote first, fallback to built-in)
+ * Load registry (try remote first, fallback to local file)
  */
 async function loadRegistry() {
+  const localRegistry = loadLocalRegistry();
+
   try {
     const https = require('https');
     return new Promise((resolve) => {
@@ -234,18 +223,18 @@ async function loadRegistry() {
           try {
             resolve(JSON.parse(data));
           } catch {
-            resolve(BUILTIN_REGISTRY);
+            resolve(localRegistry);
           }
         });
       });
-      req.on('error', () => resolve(BUILTIN_REGISTRY));
+      req.on('error', () => resolve(localRegistry));
       req.on('timeout', () => {
         req.destroy();
-        resolve(BUILTIN_REGISTRY);
+        resolve(localRegistry);
       });
     });
   } catch {
-    return BUILTIN_REGISTRY;
+    return localRegistry;
   }
 }
 
