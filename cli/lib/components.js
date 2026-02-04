@@ -79,7 +79,12 @@ async function resolveTarget(nameOrUrl) {
  * In Scene B (terminal), also queues to C4 for delivery
  */
 function outputTask(action, data) {
-  const task = { type: `component_${action}`, ...data };
+  const task = {
+    type: `component_${action}`,
+    ...data,
+    timestamp: new Date().toISOString(),
+    reply_channel: 'telegram',  // Default reply channel
+  };
 
   // Display task info for user
   console.log('\n[ZYLOS_TASK]');
@@ -88,16 +93,22 @@ function outputTask(action, data) {
 
   // Queue task via C4 for Scene B (terminal execution)
   // C4 dispatcher will deliver to Claude via tmux
-  const { execSync } = require('child_process');
+  const { execSync, spawnSync } = require('child_process');
   const c4ReceivePath = path.join(__dirname, '..', '..', 'skills', 'comm-bridge', 'c4-receive.js');
 
   try {
     const taskMessage = `[COMPONENT_TASK] ${JSON.stringify(task)}`;
-    execSync(`node "${c4ReceivePath}" --source zylos-cli --content "${taskMessage.replace(/"/g, '\\"')}"`, {
-      stdio: 'pipe'
+    // Use spawnSync with args array to avoid shell escaping issues
+    const result = spawnSync('node', [c4ReceivePath, '--source', 'zylos-cli', '--content', taskMessage], {
+      stdio: 'pipe',
+      encoding: 'utf8'
     });
-    console.log('Task queued via C4. Claude will execute when idle.');
-    console.log('You will be notified via Telegram/Lark when complete.');
+    if (result.status === 0) {
+      console.log('Task queued via C4. Claude will execute when idle.');
+      console.log('You will be notified via Telegram/Lark when complete.');
+    } else {
+      throw new Error(result.stderr || 'C4 queue failed');
+    }
   } catch (err) {
     // C4 not available - that's OK, user might be in Claude session
     console.log('Note: C4 not available. If in Claude session, Claude will execute directly.');

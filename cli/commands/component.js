@@ -218,7 +218,7 @@ async function searchComponents(args) {
 
   for (const comp of results) {
     const status = installed[comp.name] ? '[installed]' : '';
-    console.log(`${comp.name} ${status}`);
+    console.log(`${comp.name}@${comp.latest || '?'} ${status}`);
     console.log(`  ${comp.description}`);
     console.log(`  Type: ${comp.type} | Repo: ${comp.repo}`);
     console.log('');

@@ -30,6 +30,12 @@ async function loadRegistry() {
     const https = require('https');
     return new Promise((resolve) => {
       const req = https.get(REGISTRY_URL, { timeout: 5000 }, (res) => {
+        // Check for successful response
+        if (res.statusCode !== 200) {
+          resolve(localRegistry);
+          return;
+        }
+
         let data = '';
         res.on('data', chunk => data += chunk);
         res.on('end', () => {
