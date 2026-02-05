@@ -37,7 +37,8 @@ zylos install <component>
 
 ### Step 3: Check for Required Configuration
 
-Read the installed component's SKILL.md. Look for the `config.required` section in frontmatter:
+Read the installed component's SKILL.md at `~/.claude/skills/<component>/SKILL.md`.
+Look for the `config.required` section in frontmatter:
 
 ```yaml
 config:
@@ -62,8 +63,9 @@ For sensitive values, remind user it will be stored securely.
 ### Step 5: Write Config and Start Service
 
 1. Write collected values to `~/zylos/.env`
-2. Restart the component service: `pm2 restart <service-name>`
-3. Confirm successful startup
+2. Get service name from component's SKILL.md `lifecycle.service.name` field
+3. Restart the service: `pm2 restart <service-name>`
+4. Confirm successful startup
 
 ## Upgrade Workflow
 
