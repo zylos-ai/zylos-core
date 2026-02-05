@@ -13,7 +13,7 @@ Caddy-based web server providing:
 ## Setup
 
 ```bash
-node ~/.claude/skills/http/setup-caddy.js
+node ~/zylos/.claude/skills/http/scripts/setup-caddy.js
 ```
 
 This will:
@@ -51,7 +51,7 @@ DOMAIN=your.domain.com
 
 ## Caddyfile Template
 
-Located at `~/.claude/skills/http/Caddyfile.template`
+Located at `~/zylos/.claude/skills/http/Caddyfile.template`
 
 Generated config goes to `/etc/caddy/Caddyfile`
 
