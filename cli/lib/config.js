@@ -5,7 +5,7 @@
 const path = require('path');
 
 const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(process.env.HOME, 'zylos');
-const SKILLS_DIR = path.join(process.env.HOME, '.claude', 'skills');
+const SKILLS_DIR = path.join(ZYLOS_DIR, '.claude', 'skills');
 const COMPONENTS_DIR = path.join(ZYLOS_DIR, 'components');
 const LOCKS_DIR = path.join(process.env.HOME, '.zylos', '.locks');
 const REGISTRY_FILE = path.join(__dirname, '..', 'registry.json');

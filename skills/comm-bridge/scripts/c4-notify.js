@@ -12,7 +12,7 @@ import fs from 'fs';
 import os from 'os';
 import { spawn } from 'child_process';
 
-const SKILLS_DIR = path.join(os.homedir(), '.claude', 'skills');
+const SKILLS_DIR = path.join(os.homedir(), 'zylos', '.claude', 'skills');
 const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
 
 function printUsage() {

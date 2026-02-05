@@ -13,7 +13,7 @@ import fs from 'fs';
 import { spawn } from 'child_process';
 import { insertConversation } from './c4-db.js';
 
-const SKILLS_DIR = path.join(os.homedir(), '.claude', 'skills');
+const SKILLS_DIR = path.join(os.homedir(), 'zylos', '.claude', 'skills');
 
 function printUsage() {
   console.log('Usage: node c4-send.js <source> [endpoint_id] "<message>"');
