@@ -67,6 +67,46 @@ Built-in web interface for monitoring.
 ### http/
 Web server configuration (Caddy).
 
+## Component Management
+
+Use `zylos` CLI to manage components. **Always follow the confirmation workflow.**
+
+### Upgrade Workflow (IMPORTANT)
+
+When user asks to upgrade a component:
+
+1. **First check what's available:**
+   ```bash
+   zylos upgrade <component> --check
+   ```
+
+2. **Show the user** the version info and changelog
+
+3. **Ask for confirmation:** "确认升级吗？" or similar
+
+4. **Only after user confirms**, execute:
+   ```bash
+   zylos upgrade <component> --yes
+   ```
+
+**NEVER skip the confirmation step.** User must explicitly agree before upgrade executes.
+
+### Other Commands
+
+```bash
+# List installed components
+zylos list
+
+# Search available components
+zylos search <keyword>
+
+# Install new component
+zylos install <name>
+
+# Check all components for updates
+zylos upgrade --all --check
+```
+
 ## Data Directories
 
 User data is in `~/zylos/`:
