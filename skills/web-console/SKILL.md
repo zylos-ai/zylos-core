@@ -16,14 +16,14 @@ This is the baseline, always-available interface.
 
 ```bash
 # Install dependencies
-cd ~/.claude/skills/web-console
+cd ~/zylos/.claude/skills/web-console
 npm install
 
 # Start server (default port 3456)
-node server.js
+node scripts/server.js
 
 # Or with PM2
-pm2 start server.js --name web-console
+pm2 start scripts/server.js --name web-console
 ```
 
 ## Access
@@ -53,10 +53,12 @@ Browser ──► Web Console Server ──► C4 Bridge ──► Claude
 ## Files
 
 ```
-~/.claude/skills/web-console/
+~/zylos/.claude/skills/web-console/
 ├── SKILL.md
 ├── package.json
-├── server.js          # Express API server
+├── scripts/
+│   ├── server.js      # Express API server
+│   └── send.js        # CLI message sender
 └── public/
     ├── index.html     # Chat UI
     ├── styles.css     # Styling

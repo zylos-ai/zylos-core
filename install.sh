@@ -12,7 +12,7 @@ RED='\033[0;31m'
 NC='\033[0m'
 
 ZYLOS_DIR="$HOME/zylos"
-SKILLS_DIR="$HOME/.claude/skills"
+SKILLS_DIR="$HOME/zylos/.claude/skills"
 REPO_URL="https://github.com/zylos-ai/zylos-core.git"
 
 echo -e "${BLUE}"

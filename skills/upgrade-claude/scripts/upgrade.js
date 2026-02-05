@@ -5,7 +5,7 @@
  * Usage: node upgrade.js
  *
  * IMPORTANT: Run with nohup to allow Claude to exit cleanly:
- *   nohup node ~/.claude/skills/upgrade-claude/upgrade.js > /dev/null 2>&1 &
+ *   nohup node ~/zylos/.claude/skills/upgrade-claude/scripts/upgrade.js > /dev/null 2>&1 &
  */
 
 import { execSync, execFileSync } from 'child_process';
@@ -52,7 +52,7 @@ function waitForIdle() {
 }
 
 function sendViaC4(message) {
-  const c4ReceivePath = path.join(os.homedir(), '.claude/skills/comm-bridge/c4-receive.js');
+  const c4ReceivePath = path.join(os.homedir(), 'zylos/.claude/skills/comm-bridge/scripts/c4-receive.js');
 
   try {
     execFileSync(

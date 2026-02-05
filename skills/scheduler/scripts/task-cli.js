@@ -17,7 +17,7 @@ const db = getDb();
 const HELP = `
 Task CLI - Scheduler V2
 
-Usage: ~/.claude/skills/scheduler/task-cli.js <command> [options]
+Usage: ~/zylos/.claude/skills/scheduler/scripts/task-cli.js <command> [options]
 
 Commands:
   list                    List all tasks
@@ -40,10 +40,10 @@ Add Options:
   --name "<name>"         Task name (optional)
 
 Examples:
-  ~/.claude/skills/scheduler/task-cli.js add "Say hello" --in "30 minutes"
-  ~/.claude/skills/scheduler/task-cli.js add "Health check" --cron "0 8 * * *"
-  ~/.claude/skills/scheduler/task-cli.js add "Check updates" --every "1 hour"
-  ~/.claude/skills/scheduler/task-cli.js done task-abc123
+  ~/zylos/.claude/skills/scheduler/scripts/task-cli.js add "Say hello" --in "30 minutes"
+  ~/zylos/.claude/skills/scheduler/scripts/task-cli.js add "Health check" --cron "0 8 * * *"
+  ~/zylos/.claude/skills/scheduler/scripts/task-cli.js add "Check updates" --every "1 hour"
+  ~/zylos/.claude/skills/scheduler/scripts/task-cli.js done task-abc123
 `;
 
 function parseArgs(args) {

@@ -29,16 +29,16 @@ Enables Claude to work autonomously by dispatching tasks when idle.
 
 ```bash
 # List tasks
-~/.claude/skills/scheduler/task-cli.js list
+~/zylos/.claude/skills/scheduler/scripts/task-cli.js list
 
 # Add one-time task
-~/.claude/skills/scheduler/task-cli.js add "Check emails" --priority 2
+~/zylos/.claude/skills/scheduler/scripts/task-cli.js add "Check emails" --priority 2
 
 # Add recurring task
-~/.claude/skills/scheduler/task-cli.js add "Health check" --cron "0 9 * * *"
+~/zylos/.claude/skills/scheduler/scripts/task-cli.js add "Health check" --cron "0 9 * * *"
 
 # Mark task done
-~/.claude/skills/scheduler/task-cli.js done <task-id>
+~/zylos/.claude/skills/scheduler/scripts/task-cli.js done <task-id>
 ```
 
 ## Priority Levels

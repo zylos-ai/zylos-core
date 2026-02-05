@@ -53,7 +53,7 @@ try {
   const tableCheck = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='conversations'").get();
   if (!tableCheck) {
     console.error('Database schema not initialized');
-    console.error('Run: node ~/.claude/skills/comm-bridge/c4-db.js init');
+    console.error('Run: node ~/zylos/.claude/skills/comm-bridge/scripts/c4-db.js init');
     process.exit(1);
   }
 } catch (err) {

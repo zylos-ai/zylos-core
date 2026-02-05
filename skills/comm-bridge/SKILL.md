@@ -29,7 +29,7 @@ Lark        ───┘
 
 **Receiving** (external → Claude):
 ```bash
-node ~/.claude/skills/comm-bridge/c4-receive.js \
+node ~/zylos/.claude/skills/comm-bridge/scripts/c4-receive.js \
     --source telegram \
     --endpoint 12345 \
     --content '[TG] user said: hello'
@@ -37,12 +37,12 @@ node ~/.claude/skills/comm-bridge/c4-receive.js \
 
 **Sending** (Claude → external):
 ```bash
-node ~/.claude/skills/comm-bridge/c4-send.js telegram 12345 "Hello!"
+node ~/zylos/.claude/skills/comm-bridge/scripts/c4-send.js telegram 12345 "Hello!"
 ```
 
 **Notify** (broadcast):
 ```bash
-node ~/.claude/skills/comm-bridge/c4-notify.js "System alert: low disk space"
+node ~/zylos/.claude/skills/comm-bridge/scripts/c4-notify.js "System alert: low disk space"
 ```
 
 ## Database
@@ -53,8 +53,8 @@ SQLite at `~/zylos/comm-bridge/c4.db`:
 
 ## Channel Interface
 
-Channels are skills installed in `~/.claude/skills/`. Each channel must provide:
-- `~/.claude/skills/<channel>/send.js <endpoint_id> <message>` (Node.js standard)
+Channels are skills installed in `~/zylos/.claude/skills/`. Each channel must provide:
+- `~/zylos/.claude/skills/<channel>/scripts/send.js <endpoint_id> <message>` (Node.js standard)
 - Config at `~/zylos/<channel>/config.json` (for data like primary_dm)
 
 Returns exit code 0 on success, non-zero on failure.
@@ -63,7 +63,7 @@ Returns exit code 0 on success, non-zero on failure.
 
 Messages to Claude include routing info:
 ```
-[TG DM] user said: hello ---- reply via: node ~/.claude/skills/comm-bridge/c4-send.js telegram 12345
+[TG DM] user said: hello ---- reply via: node ~/zylos/.claude/skills/comm-bridge/scripts/c4-send.js telegram 12345
 ```
 
 Claude uses the `reply via` path to respond.

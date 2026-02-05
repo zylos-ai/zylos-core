@@ -152,7 +152,7 @@ function waitForClaudeReady(maxWaitSeconds = 60) {
 }
 
 function sendViaC4(message, source = 'system') {
-  const c4ReceivePath = path.join(os.homedir(), '.claude/skills/comm-bridge/c4-receive.js');
+  const c4ReceivePath = path.join(os.homedir(), 'zylos/.claude/skills/comm-bridge/scripts/c4-receive.js');
 
   try {
     // Use execFileSync to avoid shell injection - passes arguments directly

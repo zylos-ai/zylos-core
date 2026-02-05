@@ -11,7 +11,7 @@ const os = require('os');
 
 const HOME = os.homedir();
 const ZYLOS_DIR = path.join(HOME, 'zylos');
-const SKILLS_DIR = path.join(HOME, '.claude', 'skills');
+const SKILLS_DIR = path.join(HOME, 'zylos', '.claude', 'skills');
 
 // Enhanced PATH with Claude Code binary locations
 const ENHANCED_PATH = [
@@ -24,7 +24,7 @@ module.exports = {
   apps: [
     {
       name: 'scheduler',
-      script: path.join(SKILLS_DIR, 'scheduler', 'scheduler.js'),
+      script: path.join(SKILLS_DIR, 'scheduler', 'scripts', 'scheduler.js'),
       cwd: ZYLOS_DIR,
       env: {
         PATH: ENHANCED_PATH,
@@ -36,7 +36,7 @@ module.exports = {
     },
     {
       name: 'web-console',
-      script: path.join(SKILLS_DIR, 'web-console', 'server.js'),
+      script: path.join(SKILLS_DIR, 'web-console', 'scripts', 'server.js'),
       cwd: HOME,
       env: {
         PATH: ENHANCED_PATH,
@@ -48,8 +48,8 @@ module.exports = {
     },
     {
       name: 'c4-dispatcher',
-      script: path.join(SKILLS_DIR, 'comm-bridge', 'c4-dispatcher.js'),
-      cwd: path.join(SKILLS_DIR, 'comm-bridge'),
+      script: path.join(SKILLS_DIR, 'comm-bridge', 'scripts', 'c4-dispatcher.js'),
+      cwd: path.join(SKILLS_DIR, 'comm-bridge', 'scripts'),
       env: {
         PATH: ENHANCED_PATH,
         NODE_ENV: 'production'
@@ -60,7 +60,7 @@ module.exports = {
     },
     {
       name: 'activity-monitor',
-      script: path.join(SKILLS_DIR, 'activity-monitor', 'activity-monitor.js'),
+      script: path.join(SKILLS_DIR, 'activity-monitor', 'scripts', 'activity-monitor.js'),
       cwd: HOME,
       env: {
         PATH: ENHANCED_PATH,
@@ -72,7 +72,7 @@ module.exports = {
     },
     {
       name: 'zylos-telegram',
-      script: path.join(SKILLS_DIR, 'telegram', 'src', 'bot.js'),
+      script: path.join(SKILLS_DIR, 'telegram', 'scripts', 'bot.js'),
       cwd: HOME,
       env: {
         PATH: ENHANCED_PATH,

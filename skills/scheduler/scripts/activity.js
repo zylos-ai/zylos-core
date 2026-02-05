@@ -88,7 +88,7 @@ export function sessionExists() {
  */
 export function sendViaC4(message, source = 'scheduler', priority = 3) {
   try {
-    const c4ReceivePath = join(homedir(), '.claude/skills/comm-bridge/c4-receive.js');
+    const c4ReceivePath = join(homedir(), 'zylos/.claude/skills/comm-bridge/scripts/c4-receive.js');
 
     // Use execFileSync to avoid shell injection - passes arguments directly
     execFileSync(

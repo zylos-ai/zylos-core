@@ -1,6 +1,7 @@
 ---
 name: activity-monitor
 description: Guardian service that monitors Claude's state and automatically restarts it if stopped.
+user-invocable: false
 ---
 
 # Activity Monitor Skill
@@ -40,7 +41,7 @@ This is a **PM2 service** (not directly invoked by Claude). It runs continuously
 
 ```bash
 # Start
-pm2 start ~/.claude/skills/activity-monitor/activity-monitor.js --name activity-monitor
+pm2 start ~/zylos/.claude/skills/activity-monitor/scripts/activity-monitor.js --name activity-monitor
 
 # Restart
 pm2 restart activity-monitor

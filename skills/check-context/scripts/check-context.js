@@ -5,7 +5,7 @@
  * Usage: node check-context.js
  *
  * IMPORTANT: Run with nohup to allow Claude to return to idle:
- *   nohup node ~/.claude/skills/check-context/check-context.js > /dev/null 2>&1 &
+ *   nohup node ~/zylos/.claude/skills/check-context/scripts/check-context.js > /dev/null 2>&1 &
  */
 
 import { execSync, execFileSync } from 'child_process';
@@ -54,7 +54,7 @@ function waitForIdle() {
 }
 
 function sendViaC4(message) {
-  const c4ReceivePath = path.join(os.homedir(), '.claude/skills/comm-bridge/c4-receive.js');
+  const c4ReceivePath = path.join(os.homedir(), 'zylos/.claude/skills/comm-bridge/scripts/c4-receive.js');
 
   try {
     // Use execFileSync to avoid shell injection - passes arguments directly
