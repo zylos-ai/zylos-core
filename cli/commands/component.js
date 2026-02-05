@@ -4,7 +4,28 @@
 
 const fs = require('fs');
 const path = require('path');
+const readline = require('readline');
 const { ZYLOS_DIR, SKILLS_DIR, COMPONENTS_DIR } = require('../lib/config');
+
+/**
+ * Prompt user for confirmation
+ * @param {string} question - The question to ask
+ * @returns {Promise<boolean>} - true if user confirmed, false otherwise
+ */
+function promptConfirm(question) {
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
+
+  return new Promise((resolve) => {
+    rl.question(question, (answer) => {
+      rl.close();
+      const normalized = answer.trim().toLowerCase();
+      resolve(normalized === 'y' || normalized === 'yes');
+    });
+  });
+}
 const { loadRegistry } = require('../lib/registry');
 const { loadComponents, resolveTarget, outputTask } = require('../lib/components');
 const { checkForUpdates, runUpgrade } = require('../lib/upgrade');
@@ -290,9 +311,16 @@ async function handleInteractive(component, { jsonOutput }) {
     console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`);
   }
 
-  console.log('To proceed with upgrade, run:');
-  console.log(`  zylos upgrade ${component} --yes`);
-  console.log(`  zylos upgrade ${component} confirm`);
+  // Interactive confirmation
+  const confirmed = await promptConfirm('Proceed with upgrade? [y/N]: ');
+
+  if (!confirmed) {
+    console.log('Upgrade cancelled.');
+    return;
+  }
+
+  // Execute upgrade
+  return handleExecuteUpgrade(component, { jsonOutput });
 }
 
 /**
