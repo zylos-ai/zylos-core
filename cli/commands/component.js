@@ -4,10 +4,37 @@
 
 const fs = require('fs');
 const path = require('path');
+const readline = require('readline');
 const { ZYLOS_DIR, SKILLS_DIR, COMPONENTS_DIR } = require('../lib/config');
 const { loadRegistry } = require('../lib/registry');
 const { loadComponents, resolveTarget, outputTask } = require('../lib/components');
 const { checkForUpdates, runUpgrade } = require('../lib/upgrade');
+
+/**
+ * Prompt user for confirmation (interactive TTY only)
+ * @param {string} question - The question to ask
+ * @returns {Promise<boolean>} - true if user confirmed, false otherwise
+ */
+function promptConfirm(question) {
+  // If stdin is not a TTY, return false (non-interactive mode)
+  if (!process.stdin.isTTY) {
+    console.log('Non-interactive mode detected. Use --yes to skip confirmation.');
+    return Promise.resolve(false);
+  }
+
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
+
+  return new Promise((resolve) => {
+    rl.question(question, (answer) => {
+      rl.close();
+      const normalized = answer.trim().toLowerCase();
+      resolve(normalized === 'y' || normalized === 'yes');
+    });
+  });
+}
 
 async function installComponent(args) {
   const target = args[0];
@@ -290,9 +317,16 @@ async function handleInteractive(component, { jsonOutput }) {
     console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`);
   }
 
-  console.log('To proceed with upgrade, run:');
-  console.log(`  zylos upgrade ${component} --yes`);
-  console.log(`  zylos upgrade ${component} confirm`);
+  // Interactive confirmation
+  const confirmed = await promptConfirm('Proceed with upgrade? [y/N]: ');
+
+  if (!confirmed) {
+    console.log('Upgrade cancelled.');
+    return;
+  }
+
+  // Execute upgrade
+  return handleExecuteUpgrade(component, { jsonOutput });
 }
 
 /**
@@ -351,8 +385,12 @@ async function upgradeAllComponents({ checkOnly, jsonOutput, skipConfirm }) {
   }
 
   if (!skipConfirm) {
-    console.log('Run "zylos upgrade --all --yes" to upgrade all.');
-    return;
+    // Interactive confirmation
+    const confirmed = await promptConfirm('Upgrade all components? [y/N]: ');
+    if (!confirmed) {
+      console.log('Upgrade cancelled.');
+      return;
+    }
   }
 
   // Execute upgrades
