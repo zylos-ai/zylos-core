@@ -64,6 +64,14 @@ Please provide API_KEY (Your API key):
 
 For sensitive values, remind user it will be stored securely.
 
+For optional config items, show the default value and ask if user wants to change it:
+
+```
+OPTIONAL_VAR (Optional setting) [default: "default-value"]:
+```
+
+User can press Enter to use default, or provide a custom value.
+
 ### Step 5: Write Config and Start Service
 
 1. If config was collected, write values to `~/zylos/.env`
@@ -121,6 +129,8 @@ If the new version added new `config.required` items, collect them interactively
 ## Uninstall Workflow
 
 When user asks to uninstall a component:
+
+**If component is not installed, inform user and stop.**
 
 ### Step 1: Confirm and Ask About Data
 
