@@ -37,7 +37,7 @@ After user confirms, run:
 zylos install <component>
 ```
 
-### Step 3: Check for Required Configuration
+### Step 3: Check for Configuration
 
 Read the installed component's SKILL.md at `~/.claude/skills/<component>/SKILL.md`.
 Look for the `config.required` section in frontmatter.
