@@ -6,13 +6,22 @@ const fs = require('fs');
 const path = require('path');
 const readline = require('readline');
 const { ZYLOS_DIR, SKILLS_DIR, COMPONENTS_DIR } = require('../lib/config');
+const { loadRegistry } = require('../lib/registry');
+const { loadComponents, resolveTarget, outputTask } = require('../lib/components');
+const { checkForUpdates, runUpgrade } = require('../lib/upgrade');
 
 /**
- * Prompt user for confirmation
+ * Prompt user for confirmation (interactive TTY only)
  * @param {string} question - The question to ask
  * @returns {Promise<boolean>} - true if user confirmed, false otherwise
  */
 function promptConfirm(question) {
+  // If stdin is not a TTY, return false (non-interactive mode)
+  if (!process.stdin.isTTY) {
+    console.log('Non-interactive mode detected. Use --yes to skip confirmation.');
+    return Promise.resolve(false);
+  }
+
   const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout,
@@ -26,9 +35,6 @@ function promptConfirm(question) {
     });
   });
 }
-const { loadRegistry } = require('../lib/registry');
-const { loadComponents, resolveTarget, outputTask } = require('../lib/components');
-const { checkForUpdates, runUpgrade } = require('../lib/upgrade');
 
 async function installComponent(args) {
   const target = args[0];
@@ -379,8 +385,12 @@ async function upgradeAllComponents({ checkOnly, jsonOutput, skipConfirm }) {
   }
 
   if (!skipConfirm) {
-    console.log('Run "zylos upgrade --all --yes" to upgrade all.');
-    return;
+    // Interactive confirmation
+    const confirmed = await promptConfirm('Upgrade all components? [y/N]: ');
+    if (!confirmed) {
+      console.log('Upgrade cancelled.');
+      return;
+    }
   }
 
   // Execute upgrades
