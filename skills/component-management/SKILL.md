@@ -42,7 +42,7 @@ zylos install <component>
 Read the installed component's SKILL.md at `~/.claude/skills/<component>/SKILL.md`.
 Look for the `config.required` section in frontmatter.
 
-**If no config.required exists, skip to Step 5.**
+**If no config.required AND no config.optional exists, skip to Step 5.**
 
 ```yaml
 config:
@@ -124,7 +124,7 @@ zylos upgrade <component> --yes
 ### Step 4: Check for New Configuration
 
 After upgrade completes, re-read the component's SKILL.md.
-If the new version added new `config.required` items, collect them interactively (same as Install Step 4-5).
+If the new version added new `config.required` or `config.optional` items, collect them interactively (same as Install Step 4-5).
 
 ## Uninstall Workflow
 
