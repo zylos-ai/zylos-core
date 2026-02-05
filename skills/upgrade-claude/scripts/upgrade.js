@@ -52,7 +52,7 @@ function waitForIdle() {
 }
 
 function sendViaC4(message) {
-  const c4ReceivePath = path.join(os.homedir(), '.claude/skills/comm-bridge/c4-receive.js');
+  const c4ReceivePath = path.join(os.homedir(), 'zylos/.claude/skills/comm-bridge/scripts/c4-receive.js');
 
   try {
     execFileSync(
