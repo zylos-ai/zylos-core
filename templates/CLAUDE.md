@@ -67,44 +67,28 @@ Built-in web interface for monitoring.
 ### http/
 Web server configuration (Caddy).
 
+### component-management/
+Guidelines for installing, upgrading, and managing zylos components.
+**Read this before any component install/upgrade operation.**
+
 ## Component Management
 
-Use `zylos` CLI to manage components. **Always follow the confirmation workflow.**
+Use `zylos` CLI to manage components.
 
-### Upgrade Workflow (IMPORTANT)
+**Read `~/.claude/skills/component-management/SKILL.md` for detailed workflows.**
 
-When user asks to upgrade a component:
+Key principles:
+- Always confirm with user before install/upgrade/uninstall
+- Guide users interactively through configuration (never just say "edit file manually")
+- Check component's SKILL.md for config after installation
 
-1. **First check what's available:**
-   ```bash
-   zylos upgrade <component> --check
-   ```
-
-2. **Show the user** the version info and changelog
-
-3. **Ask for confirmation:** "确认升级吗？" or similar
-
-4. **Only after user confirms**, execute:
-   ```bash
-   zylos upgrade <component> --yes
-   ```
-
-**NEVER skip the confirmation step.** User must explicitly agree before upgrade executes.
-
-### Other Commands
-
+Quick reference:
 ```bash
-# List installed components
-zylos list
-
-# Search available components
-zylos search <keyword>
-
-# Install new component
-zylos install <name>
-
-# Check all components for updates
-zylos upgrade --all --check
+zylos list                          # List installed components
+zylos search <keyword>              # Search available components
+zylos install <name>                # Install component
+zylos upgrade <component> --check   # Check for updates
+zylos upgrade <component> --yes     # Execute upgrade (after user confirms)
 ```
 
 ## Data Directories
