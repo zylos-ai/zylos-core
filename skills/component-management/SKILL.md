@@ -109,6 +109,11 @@ zylos upgrade <component> --yes
 
 **NEVER skip the confirmation step.** User must explicitly agree before upgrade executes.
 
+### Step 4: Check for New Configuration
+
+After upgrade completes, re-read the component's SKILL.md.
+If the new version added new `config.required` items, collect them interactively (same as Install Step 4-5).
+
 ## Uninstall Workflow
 
 When user asks to uninstall a component:
