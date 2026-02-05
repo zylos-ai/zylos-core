@@ -120,22 +120,26 @@ If the new version added new `config.required` items, collect them interactively
 
 When user asks to uninstall a component:
 
-### Step 1: Confirm with Warning
+### Step 1: Confirm and Ask About Data
 
 ```
-This will remove <component> code and stop its service.
-Data in ~/zylos/components/<component>/ will be preserved.
-Are you sure you want to uninstall?
+Uninstall <component>?
+
+Choose an option:
+1. Remove code only (keep data in ~/zylos/components/<component>/)
+2. Remove everything (code + data)
 ```
 
 ### Step 2: Execute Uninstall
 
-After explicit confirmation:
+After user chooses:
 ```bash
+# Option 1: Code only (default)
 zylos uninstall <component>
-```
 
-**Note:** Uninstall removes code and stops service, but preserves user data directory.
+# Option 2: Including data
+zylos uninstall <component> --purge
+```
 
 ## Check for Updates (All Components)
 
