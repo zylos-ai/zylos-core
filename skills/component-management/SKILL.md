@@ -19,6 +19,8 @@ Guidelines for installing, upgrading, and managing zylos components.
 
 When user asks to install a component:
 
+**If component is already installed, inform user and suggest using upgrade instead.**
+
 ### Step 1: Show Component Info and Confirm
 
 ```
@@ -121,7 +123,8 @@ When user asks to uninstall a component:
 ### Step 1: Confirm with Warning
 
 ```
-This will remove <component> and all its data.
+This will remove <component> code and stop its service.
+Data in ~/zylos/components/<component>/ will be preserved.
 Are you sure you want to uninstall?
 ```
 
@@ -131,6 +134,8 @@ After explicit confirmation:
 ```bash
 zylos uninstall <component>
 ```
+
+**Note:** Uninstall removes code and stops service, but preserves user data directory.
 
 ## Check for Updates (All Components)
 
