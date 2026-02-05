@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 /**
- * Scheduler V2 - Main Daemon
- * Production-ready time-based task scheduler for Zylos
+ * Scheduler Daemon
+ * Main orchestrator for autonomous task execution
  */
 
-import { getDb, cleanupHistory, now } from './db.js';
-import { getNextRun } from './cron.js';
-import { getIdleSeconds, isIdle, isAtPrompt, sendToTmux, sendViaC4, sessionExists } from './activity.js';
-import { formatTime, getRelativeTime } from './time-parser.js';
+import { getDb, cleanupHistory, now } from './database.js';
+import { getNextRun } from './cron-utils.js';
+import { sendViaC4, readStatusFile } from './runtime.js';
+import { formatTime } from './time-utils.js';
 
 const CHECK_INTERVAL = 10000;  // 10 seconds
 const CLEANUP_INTERVAL = 3600000;  // 1 hour
@@ -32,48 +32,32 @@ function getNextPendingTask() {
 }
 
 /**
- * Get idle threshold for a priority level
+ * Check if Claude runtime is alive
+ * @returns {boolean} True if runtime is running (busy or idle state)
  */
-function getIdleThreshold(priority) {
-  const thresholds = { 1: 15, 2: 30, 3: 45, 4: 60 };
-  return thresholds[priority] || 45;
+function isRuntimeAlive() {
+  const status = readStatusFile();
+  if (!status) return false;
+  return status.state === 'busy' || status.state === 'idle';
 }
 
 /**
- * Check if task should be dispatched
- */
-function shouldDispatch(task, idleSeconds) {
-  if (!task) return false;
-
-  // If idleSeconds is null (status file missing), assume idle to avoid wedging
-  // Same fallback as c4-dispatcher to prevent permanent stall
-  if (idleSeconds === null) {
-    console.log(`[${new Date().toISOString()}] Warning: idle status unavailable, assuming idle for dispatch`);
-    idleSeconds = 999;  // Assume very idle
-  }
-
-  const threshold = getIdleThreshold(task.priority);
-  const currentTime = now();
-
-  return (
-    task.status === 'pending' &&
-    task.next_run_at <= currentTime &&
-    idleSeconds >= threshold
-  );
-}
-
-/**
- * Dispatch a task to Claude via tmux
+ * Dispatch a task to Claude via C4 comm-bridge
  */
 function dispatchTask(task) {
   console.log(`[${new Date().toISOString()}] Dispatching task: ${task.id} (${task.name})`);
 
-  // Mark as running
-  db.prepare(`
+  // Atomically claim the task (only if still pending)
+  const claim = db.prepare(`
     UPDATE tasks
     SET status = 'running', updated_at = ?
-    WHERE id = ?
+    WHERE id = ? AND status = 'pending'
   `).run(now(), task.id);
+
+  if (claim.changes === 0) {
+    console.log(`[${new Date().toISOString()}] Task ${task.id} already claimed/modified, skipping`);
+    return false;
+  }
 
   // Create history entry
   db.prepare(`
@@ -81,51 +65,18 @@ function dispatchTask(task) {
     VALUES (?, ?, 'started')
   `).run(task.id, now());
 
-  let prompt;
-  let success;
+  // Build prompt with completion instruction
+  const prompt = `[Scheduled Task: ${task.id}] ${task.prompt}
 
-  // Special handling for auto-compact tasks: send /compact directly via tmux
-  if (task.name === 'auto-compact') {
-    prompt = '/compact';
-    console.log(`[${new Date().toISOString()}] Sending /compact command for auto-compact task`);
+---- After completing this task, run: ~/zylos/.claude/skills/scheduler/scripts/cli.js done ${task.id}`;
 
-    // Use tmux for /compact (slash command)
-    success = sendToTmux(prompt);
-
-    if (success) {
-      // Auto-complete this task after sending
-      db.prepare(`
-        UPDATE tasks
-        SET status = 'completed', last_run_at = ?, updated_at = ?
-        WHERE id = ?
-      `).run(now(), now(), task.id);
-
-      // Mark task_history as success (latest entry only)
-      const historyEntry = db.prepare(`
-        SELECT id FROM task_history
-        WHERE task_id = ? AND status = 'started'
-        ORDER BY executed_at DESC LIMIT 1
-      `).get(task.id);
-
-      if (historyEntry) {
-        db.prepare(`
-          UPDATE task_history
-          SET status = 'success', completed_at = ?
-          WHERE id = ?
-        `).run(now(), historyEntry.id);
-      }
-    }
-  } else {
-    // Regular task: build prompt with completion instruction
-    prompt = `[Scheduled Task: ${task.id}] ${task.prompt}
-
----- After completing this task, run: ~/zylos/.claude/skills/scheduler/scripts/task-cli.js done ${task.id}`;
-
-    // Send via C4 Communication Bridge with task priority
-    // Map scheduler priority (1-4) to C4 priority (1-3)
-    const c4Priority = Math.min(task.priority, 3);
-    success = sendViaC4(prompt, 'scheduler', c4Priority);
-  }
+  // Send via C4 Communication Bridge
+  const success = sendViaC4(prompt, {
+    priority: task.priority,
+    requireIdle: task.require_idle === 1,
+    replySource: task.reply_source,
+    replyEndpoint: task.reply_endpoint
+  });
 
   if (!success) {
     console.error(`Failed to dispatch task ${task.id}`);
@@ -194,19 +145,25 @@ function processCompletedTasks() {
     }
 
     // Update recurring/interval tasks with next run time
-    updateNextRunTime(task);
+    try {
+      updateNextRunTime(task);
+    } catch (error) {
+      console.error(`[${new Date().toISOString()}] Failed to reschedule task ${task.id}: ${error.message}`);
+      db.prepare(`
+        UPDATE tasks SET status = 'failed', last_error = ?, updated_at = ? WHERE id = ?
+      `).run(error.message, now(), task.id);
+    }
   }
 }
 
 /**
  * Check for missed tasks (past due but still pending)
- * - Tasks 5-60 min overdue: try to dispatch if Claude is idle
- * - Tasks >60 min overdue: skip to next scheduled time
+ * - Tasks overdue < miss_threshold: try to dispatch if runtime alive
+ * - Tasks overdue > miss_threshold: skip to next scheduled time
  */
 function handleMissedTasks() {
   const currentTime = now();
   const recentMissedThreshold = currentTime - 300;   // 5 minutes
-  const oldMissedThreshold = currentTime - 3600;     // 1 hour
 
   // Find recurring/interval tasks that are past due (>5 min)
   const missedTasks = db.prepare(`
@@ -218,30 +175,22 @@ function handleMissedTasks() {
 
   for (const task of missedTasks) {
     const overdueSeconds = currentTime - task.next_run_at;
+    const threshold = task.miss_threshold || 300;  // Default 5 minutes
 
-    if (task.next_run_at < oldMissedThreshold) {
-      // Very old (>1 hour): skip to next schedule
-      console.log(`[${new Date().toISOString()}] Task ${task.id} (${task.name}) is >1 hour overdue, skipping to next schedule`);
+    if (overdueSeconds > threshold) {
+      // Overdue beyond threshold: skip to next schedule
+      console.log(`[${new Date().toISOString()}] Task ${task.id} (${task.name}) missed by ${overdueSeconds}s (threshold: ${threshold}s), skipping to next schedule`);
       updateNextRunTime({
         ...task,
         status: 'completed'
       });
     } else {
-      // Recent miss (5-60 min): try to dispatch if idle
-      let idleSeconds = getIdleSeconds();
-      const threshold = getIdleThreshold(task.priority);
-
-      // Treat null as idle to avoid stall (status file missing)
-      if (idleSeconds === null) {
-        console.log(`[${new Date().toISOString()}] Warning: idle status unavailable for missed task ${task.id}, assuming idle`);
-        idleSeconds = 999;
-      }
-
-      if (idleSeconds >= threshold) {
+      // Within threshold: try to dispatch if runtime is alive
+      if (isRuntimeAlive()) {
         console.log(`[${new Date().toISOString()}] Late-dispatching missed task ${task.id} (${task.name}), ${Math.round(overdueSeconds/60)}min overdue`);
         dispatchTask(task);
       }
-      // If not idle enough, leave it pending - will try again next check
+      // If runtime not alive, leave it pending - will try again next check
     }
   }
 }
@@ -298,47 +247,50 @@ async function mainLoop() {
   console.log(`[${new Date().toISOString()}] Scheduler V2 started`);
   console.log(`Check interval: ${CHECK_INTERVAL}ms`);
 
+  // Clean up stale running tasks on startup
+  console.log(`[${new Date().toISOString()}] Checking for stale running tasks...`);
+  handleStaleRunningTasks();
+
   let lastCleanup = Date.now();
 
   while (running) {
     try {
-      // Check if tmux session exists
-      if (!sessionExists()) {
-        console.log(`[${new Date().toISOString()}] Waiting for tmux session...`);
+      // Check if runtime is alive
+      if (!isRuntimeAlive()) {
+        console.log(`[${new Date().toISOString()}] Waiting for Claude runtime (offline or stopped)...`);
         await sleep(CHECK_INTERVAL);
         continue;
       }
 
-      // Get Claude's idle time
-      const idleSeconds = getIdleSeconds();
-
       // Get next pending task
       const task = getNextPendingTask();
 
-      // Debug: log when a task is due but not dispatched
-      if (task && !shouldDispatch(task, idleSeconds)) {
-        const threshold = getIdleThreshold(task.priority);
-        if (idleSeconds === null) {
-          console.log(`[${new Date().toISOString()}] Task ${task.name} due but idle=null (status file issue?)`);
-        } else if (idleSeconds < threshold) {
-          // Only log occasionally to avoid spam
-          if (Math.random() < 0.1) {
-            console.log(`[${new Date().toISOString()}] Task ${task.name} due but waiting for idle (${idleSeconds}s < ${threshold}s)`);
-          }
-        }
-      }
+      // Dispatch if task is due and runtime is alive
+      if (task) {
+        const currentTime = now();
+        const overdueSeconds = currentTime - task.next_run_at;
+        const threshold = task.miss_threshold || 300;
 
-      // Dispatch if conditions are met
-      if (task && shouldDispatch(task, idleSeconds)) {
-        // For auto-compact, also verify Claude is at prompt (ready for slash commands)
-        if (task.name === 'auto-compact') {
-          if (!isAtPrompt()) {
-            console.log(`[${new Date().toISOString()}] auto-compact waiting for prompt...`);
-            await sleep(CHECK_INTERVAL);
-            continue;
+        // Check if task is overdue beyond its miss_threshold
+        if (overdueSeconds > threshold) {
+          // Skip this task
+          console.log(`[${new Date().toISOString()}] Task ${task.id} (${task.name}) overdue by ${overdueSeconds}s (threshold: ${threshold}s), skipping`);
+
+          if (task.type === 'one-time') {
+            // One-time tasks: mark as failed
+            db.prepare(`
+              UPDATE tasks
+              SET status = 'failed', last_error = 'Missed execution window', updated_at = ?
+              WHERE id = ?
+            `).run(currentTime, task.id);
+          } else {
+            // Recurring/interval tasks: schedule next run
+            updateNextRunTime(task);
           }
+        } else {
+          // Within threshold: dispatch normally
+          dispatchTask(task);
         }
-        dispatchTask(task);
       }
 
       // Process completed tasks (update recurring schedules)
@@ -386,5 +338,6 @@ process.on('SIGTERM', () => {
 db = getDb();
 mainLoop().then(() => {
   console.log('Scheduler stopped');
+  if (db) db.close();
   process.exit(0);
 });

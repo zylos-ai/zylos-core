@@ -1,6 +1,6 @@
 /**
- * Cron expression handling for Scheduler V2
- * Uses cron-parser for evaluation
+ * Cron Utilities
+ * Parsing and validation of cron schedule expressions
  */
 
 import parser from 'cron-parser';
@@ -49,8 +49,6 @@ export function isValidCron(cronExpression) {
  * @returns {string} Human-readable description
  */
 export function describeCron(cronExpression) {
-  const parts = cronExpression.trim().split(/\s+/);
-
   // Simple descriptions for common patterns
   const patterns = {
     '* * * * *': 'Every minute',
@@ -66,34 +64,5 @@ export function describeCron(cronExpression) {
     '0 0 * * 1': 'Every Monday at midnight'
   };
 
-  if (patterns[cronExpression]) {
-    return patterns[cronExpression];
-  }
-
-  // Generic description based on parts
-  if (parts.length === 5) {
-    const [min, hour, dom, month, dow] = parts;
-    let desc = [];
-
-    if (min !== '*' && hour !== '*') {
-      desc.push(`at ${hour.padStart(2, '0')}:${min.padStart(2, '0')}`);
-    }
-
-    if (dow !== '*') {
-      const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-      if (dow === '1-5') desc.push('on weekdays');
-      else if (dow === '0,6') desc.push('on weekends');
-      else desc.push(`on day ${dow}`);
-    }
-
-    if (dom !== '*') {
-      desc.push(`on day ${dom} of month`);
-    }
-
-    if (desc.length > 0) {
-      return desc.join(' ');
-    }
-  }
-
-  return cronExpression;  // Return as-is if can't describe
+  return patterns[cronExpression] || cronExpression;
 }
