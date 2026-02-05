@@ -37,6 +37,33 @@ The scheduler may send you tasks when idle. After completing a task:
 ~/.claude/skills/scheduler/task-cli.js done <task-id>
 ```
 
+## Skills Specification
+
+Skills follow the [Agent Skills](https://agentskills.io) open standard.
+
+### Directory Structure
+
+```
+skill-name/
+├── SKILL.md           # Main instructions (required)
+├── <skill>.js         # Implementation script
+├── package.json       # {"type":"module"} for ESM
+└── scripts/           # Optional: additional scripts
+```
+
+### SKILL.md Frontmatter
+
+```yaml
+---
+name: skill-name              # Optional, defaults to directory name
+description: What and when    # Recommended, helps Claude decide when to use
+disable-model-invocation: true  # User only (Claude can't auto-invoke)
+user-invocable: false         # Claude only (hidden from /menu)
+allowed-tools: Read, Grep     # Tools without permission prompt
+model: sonnet                 # Model for this skill
+---
+```
+
 ## Available Skills
 
 Skills are located in `~/.claude/skills/`. **Read the SKILL.md in each directory for detailed usage.**

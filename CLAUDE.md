@@ -122,6 +122,55 @@ pm2 save     # Save current process list
 
 On reboot, PM2 will execute `pm2 resurrect` which reads the saved dump and starts all services with their ecosystem configuration.
 
+### Anthropic Skills Specification
+
+Skills follow the [Agent Skills](https://agentskills.io) open standard. Reference: https://code.claude.com/docs/en/skills
+
+#### Directory Structure
+
+```
+my-skill/
+├── SKILL.md           # Main instructions (required)
+├── <skill>.js         # Implementation script
+├── package.json       # {"type":"module"} for ESM
+├── templates/         # Optional: templates for Claude to fill
+├── examples/          # Optional: example outputs
+├── scripts/           # Optional: additional scripts
+└── references/        # Optional: detailed documentation
+```
+
+#### SKILL.md Frontmatter Fields
+
+```yaml
+---
+name: skill-name              # Optional, defaults to directory name
+description: What and when    # Recommended, helps Claude decide when to use
+argument-hint: [args]         # Optional, hint for expected arguments
+disable-model-invocation: true  # Prevents Claude from auto-invoking (user only)
+user-invocable: false         # Hides from /menu (Claude only, background knowledge)
+allowed-tools: Read, Grep     # Tools Claude can use without permission
+model: sonnet                 # Model to use when skill is active
+context: fork                 # Run in subagent (isolated context)
+agent: Explore                # Agent type when context: fork
+hooks: ...                    # Skill lifecycle hooks
+---
+```
+
+#### Invocation Control
+
+| Frontmatter                      | User can invoke | Claude can invoke |
+| :------------------------------- | :-------------- | :---------------- |
+| (default)                        | Yes             | Yes               |
+| `disable-model-invocation: true` | Yes             | No                |
+| `user-invocable: false`          | No              | Yes               |
+
+#### Storage Locations
+
+| Location | Path | Applies to |
+| :------- | :--- | :--------- |
+| Personal | `~/.claude/skills/<skill-name>/SKILL.md` | All user's projects |
+| Project  | `.claude/skills/<skill-name>/SKILL.md` | This project only |
+
 ### SKILL.md Format
 
 ```markdown

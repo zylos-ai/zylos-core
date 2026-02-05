@@ -1,6 +1,7 @@
 ---
 name: activity-monitor
 description: Guardian service that monitors Claude's state and automatically restarts it if stopped.
+user-invocable: false
 ---
 
 # Activity Monitor Skill
