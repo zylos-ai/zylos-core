@@ -6,7 +6,7 @@
  * Queue mode: Messages are written to DB with status='pending'
  * The c4-dispatcher process handles serial delivery to Claude
  *
- * Usage: node c4-receive.js --source <source> [--endpoint <endpoint_id>] [--priority <1-3>] [--no-reply] --content "<message>"
+ * Usage: node c4-receive.js --source <source> [--endpoint <endpoint_id>] [--priority <1-3>] [--no-reply] [--require-idle] --content "<message>"
  * Example: node c4-receive.js --source telegram --endpoint 8101553026 --content "[TG DM] user said: hello"
  * Example: node c4-receive.js --source system --priority 1 --no-reply --content "[System] Check context usage"
  */
@@ -19,15 +19,16 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 function printUsage() {
-  console.log('Usage: node c4-receive.js --source <source> [--endpoint <endpoint_id>] [--priority <1-3>] [--no-reply] --content "<message>"');
+  console.log('Usage: node c4-receive.js --source <source> [--endpoint <endpoint_id>] [--priority <1-3>] [--no-reply] [--require-idle] --content "<message>"');
   console.log('');
   console.log('Options:');
-  console.log('  --no-reply     Do not append "reply via" suffix (use for system messages)');
+  console.log('  --no-reply       Do not append "reply via" suffix (use for system messages)');
+  console.log('  --require-idle   Only deliver when Claude is idle');
   console.log('');
   console.log('Priority levels:');
-  console.log('  1 = System/idle-required (waits for Claude idle state)');
-  console.log('  2 = Urgent user message');
-  console.log('  3 = Normal user message (default)');
+  console.log('  1 = Urgent (system messages)');
+  console.log('  2 = High (important user messages)');
+  console.log('  3 = Normal (default)');
   console.log('');
   console.log('Examples:');
   console.log('  node c4-receive.js --source telegram --endpoint 8101553026 --content "[TG DM] user said: hello"');
@@ -36,7 +37,7 @@ function printUsage() {
 }
 
 function parseArgs(args) {
-  const result = { source: null, endpoint: null, content: null, priority: 3, noReply: false };
+  const result = { source: null, endpoint: null, content: null, priority: 3, noReply: false, requireIdle: false };
 
   for (let i = 0; i < args.length; i++) {
     switch (args[i]) {
@@ -51,6 +52,9 @@ function parseArgs(args) {
         break;
       case '--no-reply':
         result.noReply = true;
+        break;
+      case '--require-idle':
+        result.requireIdle = true;
         break;
       case '--content':
         result.content = args[++i];
@@ -68,7 +72,7 @@ function parseArgs(args) {
 
 function main() {
   const args = process.argv.slice(2);
-  const { source, endpoint, content, priority, noReply } = parseArgs(args);
+  const { source, endpoint, content, priority, noReply, requireIdle } = parseArgs(args);
 
   // Validate required arguments
   if (!source) {
@@ -104,8 +108,8 @@ function main() {
   // Queue message to database (status='pending')
   // The c4-dispatcher will handle delivery to Claude
   try {
-    const record = insertConversation('in', source, endpoint, fullMessage, 'pending', priority);
-    console.log(`[C4] Message queued (id=${record.id}, priority=${priority})`);
+    const record = insertConversation('in', source, endpoint, fullMessage, 'pending', priority, requireIdle);
+    console.log(`[C4] Message queued (id=${record.id}, priority=${priority}${requireIdle ? ', require_idle' : ''})`);
   } catch (err) {
     console.error(`[C4] Failed to queue message: ${err.message}`);
     process.exit(1);

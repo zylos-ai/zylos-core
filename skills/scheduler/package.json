@@ -3,13 +3,13 @@
   "version": "2.0.0",
   "type": "module",
   "description": "Production-ready time-based task scheduler for Zylos",
-  "main": "scheduler.js",
+  "main": "scripts/daemon.js",
   "bin": {
-    "task-cli": "./task-cli.js"
+    "scheduler-cli": "./scripts/cli.js"
   },
   "scripts": {
-    "start": "node scheduler.js",
-    "cli": "node task-cli.js"
+    "start": "node scripts/daemon.js",
+    "cli": "node scripts/cli.js"
   },
   "dependencies": {
     "better-sqlite3": "^12.6.2",

@@ -1,6 +1,6 @@
 /**
- * Database module for Scheduler V2
- * Uses SQLite with better-sqlite3 for robust, synchronous operations
+ * Database Layer
+ * SQLite-based persistence for tasks and execution history
  */
 
 import Database from 'better-sqlite3';
@@ -11,8 +11,8 @@ import os from 'os';
 // Data goes to ~/zylos/scheduler/, code stays in skills directory
 const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
 const DATA_DIR = path.join(ZYLOS_DIR, 'scheduler');
-export const DB_PATH = path.join(DATA_DIR, 'scheduler.db');
-export const HISTORY_RETENTION_DAYS = 30;
+const DB_PATH = path.join(DATA_DIR, 'scheduler.db');
+const HISTORY_RETENTION_DAYS = 30;
 
 let db = null;
 
@@ -31,6 +31,7 @@ export function getDb() {
 }
 
 function initSchema() {
+  // Create table if not exists
   db.exec(`
     -- Main tasks table
     CREATE TABLE IF NOT EXISTS tasks (
@@ -42,7 +43,6 @@ function initSchema() {
       -- Scheduling
       type TEXT NOT NULL CHECK(type IN ('one-time', 'recurring', 'interval')),
       cron_expression TEXT,
-      run_at INTEGER,
       interval_seconds INTEGER,
       timezone TEXT DEFAULT 'UTC',
 
@@ -51,8 +51,16 @@ function initSchema() {
       last_run_at INTEGER,
 
       -- Priority & Status
-      priority INTEGER DEFAULT 3 CHECK(priority BETWEEN 1 AND 4),
+      priority INTEGER DEFAULT 3 CHECK(priority BETWEEN 1 AND 3),
       status TEXT DEFAULT 'pending' CHECK(status IN ('pending', 'running', 'completed', 'failed', 'paused')),
+
+      -- Execution Control
+      require_idle INTEGER DEFAULT 0,           -- 0/1: whether task requires idle state
+      miss_threshold INTEGER DEFAULT 300,       -- seconds: skip if overdue by more than this
+
+      -- Reply Configuration
+      reply_source TEXT DEFAULT NULL,           -- reply channel source (e.g., 'telegram')
+      reply_endpoint TEXT DEFAULT NULL,         -- reply endpoint (e.g., user ID)
 
       -- Retry Logic
       retry_count INTEGER DEFAULT 0,
@@ -95,6 +103,46 @@ function initSchema() {
       updated_at INTEGER
     );
   `);
+
+  // Migration: Add new columns if they don't exist (for existing databases)
+  migrateSchema();
+}
+
+function migrateSchema() {
+  // Helper to check if column exists
+  const VALID_TABLES = new Set(['tasks', 'task_history', 'system_state']);
+  const columnExists = (table, column) => {
+    if (!VALID_TABLES.has(table)) throw new Error(`Invalid table: ${table}`);
+    const result = db.prepare(`PRAGMA table_info(${table})`).all();
+    return result.some(col => col.name === column);
+  };
+
+  // Add require_idle column if not exists
+  if (!columnExists('tasks', 'require_idle')) {
+    console.log('Migrating: Adding require_idle column...');
+    db.exec('ALTER TABLE tasks ADD COLUMN require_idle INTEGER DEFAULT 0');
+  }
+
+  // Add miss_threshold column if not exists
+  if (!columnExists('tasks', 'miss_threshold')) {
+    console.log('Migrating: Adding miss_threshold column...');
+    db.exec('ALTER TABLE tasks ADD COLUMN miss_threshold INTEGER DEFAULT 300');
+  }
+
+  // Add reply_source column if not exists
+  if (!columnExists('tasks', 'reply_source')) {
+    console.log('Migrating: Adding reply_source column...');
+    db.exec('ALTER TABLE tasks ADD COLUMN reply_source TEXT DEFAULT NULL');
+  }
+
+  // Add reply_endpoint column if not exists
+  if (!columnExists('tasks', 'reply_endpoint')) {
+    console.log('Migrating: Adding reply_endpoint column...');
+    db.exec('ALTER TABLE tasks ADD COLUMN reply_endpoint TEXT DEFAULT NULL');
+  }
+
+  // Clamp any existing priority-4 tasks to priority 3
+  db.prepare('UPDATE tasks SET priority = 3 WHERE priority > 3').run();
 }
 
 // Clean up old history entries (older than HISTORY_RETENTION_DAYS)
@@ -106,7 +154,7 @@ export function cleanupHistory() {
 
 // Generate a unique task ID
 export function generateId() {
-  return 'task-' + Date.now().toString(36) + '-' + Math.random().toString(36).substr(2, 6);
+  return 'task-' + Date.now().toString(36) + '-' + Math.random().toString(36).substring(2, 8);
 }
 
 // Get current Unix timestamp
