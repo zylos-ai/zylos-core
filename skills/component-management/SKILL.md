@@ -86,6 +86,8 @@ This shows:
 - Changelog summary
 - Local changes (if any)
 
+**If already at latest version, inform user and stop. No further steps needed.**
+
 ### Step 2: Show User and Confirm
 
 Present the upgrade info to user and ask for confirmation:
