@@ -80,7 +80,7 @@ Use `zylos` CLI to manage components.
 Key principles:
 - Always confirm with user before install/upgrade/uninstall
 - Guide users interactively through configuration (never just say "edit file manually")
-- Check component's SKILL.md for required config after installation
+- Check component's SKILL.md for config after installation
 
 Quick reference:
 ```bash
