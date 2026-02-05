@@ -20,7 +20,7 @@ Upgrade Claude Code to the latest version - sends /exit, waits for exit, upgrade
 **IMPORTANT: Must use `nohup ... &` pattern!**
 
 ```bash
-nohup node ~/.claude/skills/upgrade-claude/upgrade.js > /dev/null 2>&1 &
+nohup node ~/zylos/.claude/skills/upgrade-claude/scripts/upgrade.js > /dev/null 2>&1 &
 ```
 
 ## How It Works

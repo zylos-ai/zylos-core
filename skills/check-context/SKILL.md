@@ -17,7 +17,7 @@ Accurately check your current context/token usage.
 **IMPORTANT: Must use `nohup ... &` pattern!**
 
 ```bash
-nohup node ~/.claude/skills/check-context/check-context.js > /dev/null 2>&1 &
+nohup node ~/zylos/.claude/skills/check-context/scripts/check-context.js > /dev/null 2>&1 &
 ```
 
 The `/context` output will appear in your conversation after the script completes.

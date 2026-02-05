@@ -25,7 +25,7 @@ All external communication goes through C4 Communication Bridge.
 
 When you receive a message like:
 ```
-[TG DM] user said: hello ---- reply via: ~/.claude/skills/comm-bridge/c4-send.sh telegram 12345
+[TG DM] user said: hello ---- reply via: ~/zylos/.claude/skills/comm-bridge/scripts/c4-send.js telegram 12345
 ```
 
 Reply using the exact path specified in `reply via:`.
@@ -34,7 +34,7 @@ Reply using the exact path specified in `reply via:`.
 
 The scheduler may send you tasks when idle. After completing a task:
 ```bash
-~/.claude/skills/scheduler/task-cli.js done <task-id>
+~/zylos/.claude/skills/scheduler/scripts/task-cli.js done <task-id>
 ```
 
 ## Skills Specification
@@ -46,9 +46,9 @@ Skills follow the [Agent Skills](https://agentskills.io) open standard.
 ```
 skill-name/
 ├── SKILL.md           # Main instructions (required)
-├── <skill>.js         # Implementation script
 ├── package.json       # {"type":"module"} for ESM
-└── scripts/           # Optional: additional scripts
+└── scripts/           # Implementation scripts
+    └── <skill>.js
 ```
 
 ### SKILL.md Frontmatter
@@ -66,7 +66,7 @@ model: sonnet                 # Model for this skill
 
 ## Available Skills
 
-Skills are located in `~/.claude/skills/`. **Read the SKILL.md in each directory for detailed usage.**
+Skills are located in `~/zylos/.claude/skills/`. **Read the SKILL.md in each directory for detailed usage.**
 
 ### check-context/
 Use when the user asks about current context or token usage.
@@ -86,7 +86,7 @@ Communication gateway for Telegram, Lark, and other channels.
 ### scheduler/ (C5)
 Task scheduling system:
 - **task-cli.js** - Manage scheduled tasks
-- After completing a task: `~/.claude/skills/scheduler/task-cli.js done <task-id>`
+- After completing a task: `~/zylos/.claude/skills/scheduler/scripts/task-cli.js done <task-id>`
 
 ### web-console/
 Built-in web interface for monitoring.
@@ -102,7 +102,7 @@ Guidelines for installing, upgrading, and managing zylos components.
 
 Use `zylos` CLI to manage components.
 
-**Read `~/.claude/skills/component-management/SKILL.md` for detailed workflows.**
+**Read `~/zylos/.claude/skills/component-management/SKILL.md` for detailed workflows.**
 
 Key principles:
 - Always confirm with user before install/upgrade/uninstall
@@ -136,5 +136,5 @@ zylos status
 zylos logs
 
 # Task management
-~/.claude/skills/scheduler/task-cli.js list
+~/zylos/.claude/skills/scheduler/scripts/task-cli.js list
 ```

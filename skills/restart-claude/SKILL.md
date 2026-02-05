@@ -21,7 +21,7 @@ Restart Claude Code session - sends /exit and lets activity-monitor daemon handl
 **IMPORTANT: Must use `nohup ... &` pattern!**
 
 ```bash
-nohup node ~/.claude/skills/restart-claude/restart.js > /dev/null 2>&1 &
+nohup node ~/zylos/.claude/skills/restart-claude/scripts/restart.js > /dev/null 2>&1 &
 ```
 
 ## How It Works

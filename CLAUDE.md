@@ -131,11 +131,11 @@ Skills follow the [Agent Skills](https://agentskills.io) open standard. Referenc
 ```
 my-skill/
 ├── SKILL.md           # Main instructions (required)
-├── <skill>.js         # Implementation script
 ├── package.json       # {"type":"module"} for ESM
+├── scripts/           # Implementation scripts
+│   └── <skill>.js
 ├── templates/         # Optional: templates for Claude to fill
 ├── examples/          # Optional: example outputs
-├── scripts/           # Optional: additional scripts
 └── references/        # Optional: detailed documentation
 ```
 
