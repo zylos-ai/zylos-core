@@ -53,7 +53,7 @@ Enables Claude to work autonomously by dispatching scheduled tasks via C4 comm-b
 | `--every "<interval>"` | Interval: repeat every X time (e.g., "2 hours", "90 minutes", "2h") |
 | `--priority <1-3>` | Priority level (1=urgent, 2=high, 3=normal, default=3) |
 | `--name "<name>"` | Task name (optional) |
-| `--require-idle` | Wait for Claude to be idle before executing (pending C4 support) |
+| `--require-idle` | Wait for Claude to be idle before executing |
 | `--reply-source "<source>"` | Reply channel (e.g., "telegram", "lark") |
 | `--reply-endpoint "<endpoint>"` | Reply endpoint (e.g., "8101553026", "chat_id topic_id") |
 | `--miss-threshold <seconds>` | Skip if overdue by more than this (default=300) |

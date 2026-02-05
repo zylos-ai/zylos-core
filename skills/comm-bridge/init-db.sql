@@ -19,7 +19,8 @@ CREATE TABLE IF NOT EXISTS conversations (
     endpoint_id TEXT,               -- chat_id, can be NULL (e.g., scheduler)
     content TEXT NOT NULL,          -- message content
     status TEXT DEFAULT 'pending',  -- 'pending' | 'delivered' (for direction='in' queue)
-    priority INTEGER DEFAULT 3,     -- 1=system/idle-required, 2=urgent-user, 3=normal-user
+    priority INTEGER DEFAULT 3,     -- 1=urgent, 2=high, 3=normal
+    require_idle INTEGER DEFAULT 0, -- 1=wait for Claude idle state, 0=deliver immediately
     checkpoint_id INTEGER,          -- associated checkpoint
     FOREIGN KEY (checkpoint_id) REFERENCES checkpoints(id)
 );

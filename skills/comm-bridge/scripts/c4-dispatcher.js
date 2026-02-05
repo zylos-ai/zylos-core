@@ -2,7 +2,7 @@
 /**
  * C4 Communication Bridge - Message Dispatcher
  * Polls for pending messages and delivers them serially to Claude via tmux
- * Supports priority-based queue with idle-state checking for system messages
+ * Supports priority-based queue with idle-state checking for require_idle messages
  *
  * Run with PM2: pm2 start c4-dispatcher.js --name c4-dispatcher
  */
@@ -45,7 +45,7 @@ function tmuxHasSession() {
 }
 
 /**
- * Check if Claude is idle (for priority-1 messages)
+ * Check if Claude is idle (for require_idle messages)
  * @returns {boolean} - true if idle, false otherwise
  */
 function isClaudeIdle() {
@@ -127,32 +127,31 @@ async function processNextMessage() {
     return false;
   }
 
-  // Check if Claude is idle for priority-1 messages
+  // Check if Claude is idle for require_idle messages
   const isIdle = isClaudeIdle();
 
-  // Get next pending message (skip priority-1 if not idle to avoid blocking queue)
+  // Get next pending message (skip require_idle if not idle to avoid blocking queue)
   let msg = getNextPending();
   if (!msg) {
     return false;
   }
 
-  // If priority-1 message but Claude not idle, try to get next lower-priority message
-  if (msg.priority === 1 && !isIdle) {
-    // Query for next message with priority > 1
+  // If message requires idle but Claude not idle, try to get next non-idle-required message
+  if (msg.require_idle === 1 && !isIdle) {
     const db = getDb();
-    const lowerPriorityMsg = db.prepare(`
-      SELECT id, direction, source, endpoint_id, content, timestamp, priority
+    const fallbackMsg = db.prepare(`
+      SELECT id, direction, source, endpoint_id, content, timestamp, priority, require_idle
       FROM conversations
-      WHERE direction = 'in' AND status = 'pending' AND priority > 1
+      WHERE direction = 'in' AND status = 'pending' AND (require_idle IS NULL OR require_idle = 0)
       ORDER BY COALESCE(priority, 3) ASC, timestamp ASC
       LIMIT 1
     `).get();
 
-    if (lowerPriorityMsg) {
-      // Process lower-priority message instead
-      msg = lowerPriorityMsg;
+    if (fallbackMsg) {
+      // Process non-idle-required message instead
+      msg = fallbackMsg;
     } else {
-      // No lower-priority messages available, skip delivery
+      // All pending messages require idle, skip delivery
       return false;
     }
   }

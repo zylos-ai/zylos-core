@@ -85,10 +85,9 @@ export function sendViaC4(message, options = {}) {
       args.push('--no-reply');
     }
 
-    // TODO: Enable once C4 supports --require-idle parameter
-    // if (requireIdle) {
-    //   args.push('--require-idle');
-    // }
+    if (requireIdle) {
+      args.push('--require-idle');
+    }
 
     args.push('--priority', String(priority), '--content', message);
 

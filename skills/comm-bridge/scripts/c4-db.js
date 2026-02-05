@@ -90,6 +90,16 @@ function runMigrations() {
     `);
     console.log('[C4-DB] Migration 2 complete');
   }
+
+  // Migration 3: Add require_idle column
+  const hasRequireIdle = tableInfo.some(col => col.name === 'require_idle');
+  if (!hasRequireIdle) {
+    console.log('[C4-DB] Running migration: adding require_idle column');
+    db.exec(`
+      ALTER TABLE conversations ADD COLUMN require_idle INTEGER DEFAULT 0;
+    `);
+    console.log('[C4-DB] Migration 3 complete');
+  }
 }
 
 /**
@@ -99,10 +109,11 @@ function runMigrations() {
  * @param {string|null} endpointId - chat_id or null
  * @param {string} content - message content
  * @param {string} status - 'pending' or 'delivered' (default: 'pending' for in, 'delivered' for out)
- * @param {number} priority - 1=system/idle-required, 2=urgent-user, 3=normal-user (default: 3)
+ * @param {number} priority - 1=urgent, 2=high, 3=normal (default: 3)
+ * @param {boolean} requireIdle - whether to wait for Claude idle state (default: false)
  * @returns {object} - inserted record with id
  */
-export function insertConversation(direction, source, endpointId, content, status = null, priority = 3) {
+export function insertConversation(direction, source, endpointId, content, status = null, priority = 3, requireIdle = false) {
   const db = getDb();
 
   // Get current checkpoint
@@ -113,12 +124,14 @@ export function insertConversation(direction, source, endpointId, content, statu
   // Default status: 'pending' for incoming, 'delivered' for outgoing
   const finalStatus = status || (direction === 'in' ? 'pending' : 'delivered');
 
+  const requireIdleVal = requireIdle ? 1 : 0;
+
   const stmt = db.prepare(`
-    INSERT INTO conversations (direction, source, endpoint_id, content, status, priority, checkpoint_id)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO conversations (direction, source, endpoint_id, content, status, priority, require_idle, checkpoint_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
-  const result = stmt.run(direction, source, endpointId, content, finalStatus, priority, checkpoint?.id || null);
+  const result = stmt.run(direction, source, endpointId, content, finalStatus, priority, requireIdleVal, checkpoint?.id || null);
 
   return {
     id: result.lastInsertRowid,
@@ -128,6 +141,7 @@ export function insertConversation(direction, source, endpointId, content, statu
     content,
     status: finalStatus,
     priority,
+    require_idle: requireIdleVal,
     checkpoint_id: checkpoint?.id || null
   };
 }
@@ -139,7 +153,7 @@ export function insertConversation(direction, source, endpointId, content, statu
 export function getNextPending() {
   const db = getDb();
   return db.prepare(`
-    SELECT id, direction, source, endpoint_id, content, timestamp, priority
+    SELECT id, direction, source, endpoint_id, content, timestamp, priority, require_idle
     FROM conversations
     WHERE direction = 'in' AND status = 'pending'
     ORDER BY COALESCE(priority, 3) ASC, timestamp ASC
