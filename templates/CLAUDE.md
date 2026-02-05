@@ -69,7 +69,7 @@ Web server configuration (Caddy).
 
 ### component-management/
 Guidelines for installing, upgrading, and managing zylos components.
-**Read this before any component install/upgrade operation.**
+**Read this before any component install/upgrade/uninstall operation.**
 
 ## Component Management
 
