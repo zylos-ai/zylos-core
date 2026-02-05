@@ -91,6 +91,42 @@ When user asks to upgrade a component:
 
 **NEVER skip the confirmation step.** User must explicitly agree before upgrade executes.
 
+### Install Workflow (IMPORTANT)
+
+When user asks to install a component:
+
+1. **Show component info and confirm:**
+   ```
+   找到 <component> 组件
+   - <name>@<version>: <description>
+   确认安装吗？
+   ```
+
+2. **After user confirms**, execute installation
+
+3. **Check SKILL.md for required config:**
+   Read the installed component's SKILL.md. If it has a `config.required` section, guide user through configuration:
+
+   ```yaml
+   # Example SKILL.md config section
+   config:
+     required:
+       - name: LARK_APP_ID
+         description: Your Lark/Feishu App ID
+       - name: LARK_APP_SECRET
+         description: Your Lark/Feishu App Secret
+         sensitive: true
+   ```
+
+4. **For each required config item**, ask user to provide the value:
+   ```
+   请提供 LARK_APP_ID (Your Lark/Feishu App ID):
+   ```
+
+5. **Write config to ~/zylos/.env** and restart service
+
+**NEVER just tell user to manually edit files.** Guide them through providing config interactively.
+
 ### Other Commands
 
 ```bash
