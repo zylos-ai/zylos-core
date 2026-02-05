@@ -119,7 +119,7 @@ function dispatchTask(task) {
     // Regular task: build prompt with completion instruction
     prompt = `[Scheduled Task: ${task.id}] ${task.prompt}
 
----- After completing this task, run: ~/.claude/skills/scheduler/task-cli.js done ${task.id}`;
+---- After completing this task, run: ~/zylos/.claude/skills/scheduler/scripts/task-cli.js done ${task.id}`;
 
     // Send via C4 Communication Bridge with task priority
     // Map scheduler priority (1-4) to C4 priority (1-3)

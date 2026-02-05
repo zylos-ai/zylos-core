@@ -247,8 +247,8 @@ async function handleExecuteUpgrade(component, { jsonOutput }) {
 
       if (result.stashExists) {
         console.log(`\n注意: 您的本地修改已保存到 git stash`);
-        console.log(`  查看: cd ~/.claude/skills/${component} && git stash show`);
-        console.log(`  恢复: cd ~/.claude/skills/${component} && git stash pop`);
+        console.log(`  查看: cd ~/zylos/.claude/skills/${component} && git stash show`);
+        console.log(`  恢复: cd ~/zylos/.claude/skills/${component} && git stash pop`);
       }
     } else {
       // Print failed steps

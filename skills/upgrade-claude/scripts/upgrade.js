@@ -5,7 +5,7 @@
  * Usage: node upgrade.js
  *
  * IMPORTANT: Run with nohup to allow Claude to exit cleanly:
- *   nohup node ~/.claude/skills/upgrade-claude/upgrade.js > /dev/null 2>&1 &
+ *   nohup node ~/zylos/.claude/skills/upgrade-claude/scripts/upgrade.js > /dev/null 2>&1 &
  */
 
 import { execSync, execFileSync } from 'child_process';

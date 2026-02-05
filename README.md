@@ -75,15 +75,22 @@ zylos-core/
 ### After Installation
 
 ```
-~/.claude/skills/           # Skill code (upgradeable)
+~/zylos/.claude/skills/     # Skill code (upgradeable, project-level)
 ├── self-maintenance/       # Core: C2
+│   └── scripts/
 ├── memory/                 # Core: C3
 ├── comm-bridge/            # Core: C4
+│   └── scripts/
 ├── web-console/            # Core: C4+
+│   └── scripts/
 ├── scheduler/              # Core: C5
+│   └── scripts/
 ├── http/                   # Core: C6
+│   └── scripts/
 ├── telegram/               # Optional: Telegram channel
+│   └── scripts/
 └── lark/                   # Optional: Lark channel
+    └── scripts/
 
 ~/zylos/                    # User data (preserved)
 ├── .env                    # Configuration
@@ -99,7 +106,7 @@ zylos-core/
 
 ## Optional Channels
 
-Channels are skills that implement the C4 communication interface. Install them to `~/.claude/skills/`:
+Channels are skills that implement the C4 communication interface. Install them to `~/zylos/.claude/skills/`:
 
 - [zylos-telegram](https://github.com/zylos-ai/zylos-telegram) - Telegram integration
 - [zylos-lark](https://github.com/zylos-ai/zylos-lark) - Lark/Feishu integration

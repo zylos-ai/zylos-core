@@ -39,7 +39,7 @@ zylos install <component>
 
 ### Step 3: Check for Configuration
 
-Read the installed component's SKILL.md at `~/.claude/skills/<component>/SKILL.md`.
+Read the installed component's SKILL.md at `~/zylos/.claude/skills/<component>/SKILL.md`.
 Look for the `config.required` section in frontmatter.
 
 **If no config.required AND no config.optional exists, skip to Step 5.**
