@@ -344,7 +344,13 @@ function startCoreServices() {
   }
 
   try {
-    execSync(`pm2 start "${ecosystemPath}" --update-env`, { stdio: 'pipe', timeout: 30000 });
+    // Delete existing core services first so PM2 fully re-evaluates ecosystem config
+    // (--update-env does NOT re-execute the JS, so env changes like SYSTEM_PATH won't apply)
+    const serviceNames = getCoreServiceNames();
+    for (const name of serviceNames) {
+      try { execSync(`pm2 delete "${name}"`, { stdio: 'pipe' }); } catch {}
+    }
+    execSync(`pm2 start "${ecosystemPath}"`, { stdio: 'pipe', timeout: 30000 });
     execSync('pm2 save', { stdio: 'pipe' });
   } catch (err) {
     console.log(`  ⚠ Failed to start services: ${err.message}`);
