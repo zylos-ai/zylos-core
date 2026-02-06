@@ -185,7 +185,7 @@ export function filterChangelog(changelog, fromVersion) {
   const lines = changelog.split('\n');
   const result = [];
   let capturing = false;
-  let foundAny = false;
+  let foundHeaders = false;
   let done = false;
 
   // Match ## headers containing version numbers: "## [1.0.0]", "## 1.0.0", "## v1.0.0 - date"
@@ -196,15 +196,15 @@ export function filterChangelog(changelog, fromVersion) {
 
     const match = line.match(versionHeaderRe);
     if (match) {
+      foundHeaders = true;
       const headerVersion = match[1].replace(/^v/, '');
-      // Stop when we reach the installed version or older (already known)
+      // Stop when we reach the installed version (already known)
       if (headerVersion === fromVersion) {
         done = true;
         continue;
       }
       // Capture everything from the newest version down to (but not including) fromVersion
       capturing = true;
-      foundAny = true;
     }
 
     if (capturing) {
@@ -212,7 +212,7 @@ export function filterChangelog(changelog, fromVersion) {
     }
   }
 
-  if (!foundAny) return changelog; // Couldn't parse headers, return full text
+  if (!foundHeaders) return changelog; // Couldn't parse headers, return full text
   return result.join('\n').trim() || null;
 }
 
@@ -248,6 +248,7 @@ function createContext(component, { tempDir, newVersion } = {}) {
     // State tracking
     backupDir: null,
     serviceStopped: false,
+    serviceExists: true,
     serviceWasRunning: false,
     // Results
     steps: [],
@@ -296,7 +297,8 @@ function step1_preUpgradeHook(ctx) {
  */
 function step2_stopService(ctx) {
   const startTime = Date.now();
-  const serviceName = `zylos-${ctx.component}`;
+  const parsed = parseSkillMd(ctx.skillDir);
+  const serviceName = parsed?.frontmatter?.lifecycle?.service?.name || `zylos-${ctx.component}`;
 
   try {
     const output = execSync('pm2 jlist 2>/dev/null', { encoding: 'utf8' });
@@ -304,9 +306,11 @@ function step2_stopService(ctx) {
     const service = processes.find(p => p.name === serviceName);
 
     if (!service) {
+      ctx.serviceExists = false;
       return { step: 2, name: 'stop_service', status: 'skipped', message: 'no service', duration: Date.now() - startTime };
     }
 
+    ctx.serviceExists = true;
     ctx.serviceWasRunning = service.pm2_env?.status === 'online';
 
     if (!ctx.serviceWasRunning) {
@@ -437,17 +441,49 @@ function step7_postUpgradeHook(ctx) {
 
 /**
  * Step 8: start service and verify
+ *
+ * Three cases:
+ * - Service was running before upgrade → restart it
+ * - Service exists in PM2 but was stopped → leave it stopped (user intent)
+ * - Service not registered in PM2 but SKILL.md declares one → start it
  */
 function step8_startAndVerify(ctx) {
   const startTime = Date.now();
-  const serviceName = `zylos-${ctx.component}`;
 
-  if (!ctx.serviceWasRunning) {
-    return { step: 8, name: 'start_and_verify', status: 'skipped', message: 'service was not running', duration: Date.now() - startTime };
+  // Read service config from SKILL.md
+  const parsed = parseSkillMd(ctx.skillDir);
+  const serviceConfig = parsed?.frontmatter?.lifecycle?.service;
+  const serviceName = serviceConfig?.name || `zylos-${ctx.component}`;
+
+  // Case: service was stopped but still registered — leave it stopped
+  if (ctx.serviceExists && !ctx.serviceWasRunning) {
+    return { step: 8, name: 'start_and_verify', status: 'skipped', message: 'service was stopped', duration: Date.now() - startTime };
+  }
+
+  // Case: service not registered in PM2 and no service declared in SKILL.md — skip
+  if (!ctx.serviceWasRunning && !serviceConfig) {
+    return { step: 8, name: 'start_and_verify', status: 'skipped', message: 'no service configured', duration: Date.now() - startTime };
   }
 
   try {
-    execSync(`pm2 restart ${serviceName} 2>/dev/null`, { stdio: 'pipe' });
+    if (!ctx.serviceExists && serviceConfig) {
+      // Service not in PM2 but declared in SKILL.md — start fresh
+      const ecosystemPath = path.join(ctx.skillDir, 'ecosystem.config.cjs');
+      if (fs.existsSync(ecosystemPath)) {
+        // Use ecosystem config (custom PM2 options)
+        execSync(`pm2 start "${ecosystemPath}"`, { cwd: ctx.skillDir, stdio: 'pipe' });
+      } else if (serviceConfig.entry) {
+        // Use entry point from SKILL.md
+        const entryPath = path.join(ctx.skillDir, serviceConfig.entry);
+        execSync(`pm2 start "${entryPath}" --name "${serviceName}"`, { stdio: 'pipe' });
+      } else {
+        return { step: 8, name: 'start_and_verify', status: 'skipped', message: 'no entry point', duration: Date.now() - startTime };
+      }
+      execSync('pm2 save 2>/dev/null', { stdio: 'pipe' });
+    } else {
+      // Service was running — restart it
+      execSync(`pm2 restart ${serviceName} 2>/dev/null`, { stdio: 'pipe' });
+    }
 
     // Poll for service status (max 5 attempts, 500ms apart)
     let service = null;
@@ -467,7 +503,7 @@ function step8_startAndVerify(ctx) {
     }
 
     ctx.serviceStopped = false;
-    return { step: 8, name: 'start_and_verify', status: 'done', duration: Date.now() - startTime };
+    return { step: 8, name: 'start_and_verify', status: 'done', message: serviceName, duration: Date.now() - startTime };
   } catch (err) {
     return { step: 8, name: 'start_and_verify', status: 'failed', error: err.message, duration: Date.now() - startTime };
   }
@@ -512,8 +548,10 @@ export function rollback(ctx) {
 
   // Restart service if it was running
   if (ctx.serviceWasRunning) {
+    const parsed = parseSkillMd(ctx.skillDir);
+    const serviceName = parsed?.frontmatter?.lifecycle?.service?.name || `zylos-${ctx.component}`;
     try {
-      execSync(`pm2 restart zylos-${ctx.component} 2>/dev/null || true`, { stdio: 'pipe' });
+      execSync(`pm2 restart ${serviceName} 2>/dev/null || true`, { stdio: 'pipe' });
       results.push({ action: 'restart_service', success: true });
     } catch (err) {
       results.push({ action: 'restart_service', success: false, error: err.message });
