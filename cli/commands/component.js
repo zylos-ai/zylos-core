@@ -202,7 +202,7 @@ async function handleUpgradeFlow(component, { jsonOutput, skipConfirm, skipEval 
     // 4. Show info: version diff, changelog, local changes + Claude eval
     const changes = detectChanges(skillDir);
     const fullChangelog = readChangelog(tempDir);
-    const changelog = filterChangelog(fullChangelog, check.current) || fullChangelog;
+    const changelog = filterChangelog(fullChangelog, check.current);
     let evalResult = null;
 
     if (!jsonOutput) {
@@ -487,7 +487,7 @@ async function upgradeSelfCore() {
       console.log(`\nzylos-core: ${check.current} → ${check.latest}`);
 
       const fullCoreChangelog = readCoreChangelog(tempDir);
-      const coreChangelog = filterChangelog(fullCoreChangelog, check.current) || fullCoreChangelog;
+      const coreChangelog = filterChangelog(fullCoreChangelog, check.current);
       if (coreChangelog) {
         console.log(`\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
         console.log('CHANGELOG');
