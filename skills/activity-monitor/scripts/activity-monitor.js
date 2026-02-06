@@ -21,6 +21,7 @@ const LOG_FILE = path.join(SKILL_DIR, 'activity.log');
 // Claude binary - relies on PATH from PM2 ecosystem.config.js
 // Override via CLAUDE_BIN environment variable if needed
 const CLAUDE_BIN = process.env.CLAUDE_BIN || 'claude';
+const BYPASS_PERMISSIONS = process.env.CLAUDE_BYPASS_PERMISSIONS !== 'false';
 
 // Conversation directory - auto-detect based on working directory
 const ZYLOS_PATH = ZYLOS_DIR.replace(/\//g, '-');
@@ -266,14 +267,16 @@ function startClaude() {
     fs.unlinkSync('/tmp/context-compact-scheduled');
   } catch {}
 
+  const bypassFlag = BYPASS_PERMISSIONS ? ' --dangerously-skip-permissions' : '';
+
   if (tmuxHasSession()) {
     // Session exists, send command to start claude
-    sendToTmux(`cd ${ZYLOS_DIR}; ${CLAUDE_BIN} --dangerously-skip-permissions`);
+    sendToTmux(`cd ${ZYLOS_DIR}; ${CLAUDE_BIN}${bypassFlag}`);
     log('Guardian: Started Claude in existing tmux session');
   } else {
     // Create new session
     try {
-      execSync(`tmux new-session -d -s "${SESSION}" "cd ${ZYLOS_DIR} && ${CLAUDE_BIN} --dangerously-skip-permissions"`);
+      execSync(`tmux new-session -d -s "${SESSION}" "cd ${ZYLOS_DIR} && ${CLAUDE_BIN}${bypassFlag}"`);
       log('Guardian: Created new tmux session and started Claude');
     } catch (err) {
       log(`Guardian: Failed to create tmux session: ${err.message}`);

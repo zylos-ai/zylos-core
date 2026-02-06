@@ -107,6 +107,65 @@ function saveSystemPath(envPath) {
   fs.writeFileSync(envPath, content);
 }
 
+/**
+ * Check if Claude bypass permissions needs first-time acceptance.
+ * Returns true if bypass is enabled and hasn't been accepted yet.
+ */
+function needsBypassAcceptance() {
+  // Check if bypass is enabled in .env
+  const envPath = path.join(ZYLOS_DIR, '.env');
+  try {
+    const content = fs.readFileSync(envPath, 'utf8');
+    const match = content.match(/^CLAUDE_BYPASS_PERMISSIONS=(.+)$/m);
+    if (match && match[1].trim() === 'false') return false;
+  } catch {}
+
+  // Check if already accepted (tmux session with Claude running)
+  try {
+    execSync('tmux has-session -t claude-main 2>/dev/null', { stdio: 'pipe' });
+    // Session exists — check if Claude is actually running (not stuck on prompt)
+    const paneContent = execSync('tmux capture-pane -t claude-main -p 2>/dev/null', { encoding: 'utf8' });
+    if (paneContent.includes('>') || paneContent.includes('Claude')) {
+      return false; // Claude is running, already accepted
+    }
+  } catch {}
+
+  return true;
+}
+
+/**
+ * Guide user through first-time Claude bypass permissions acceptance.
+ */
+async function guideBypassAcceptance() {
+  console.log('\nSetting up Claude Code...');
+
+  // Stop activity-monitor to prevent restart loop
+  try { execSync('pm2 stop activity-monitor', { stdio: 'pipe' }); } catch {}
+
+  // Kill existing session if stuck
+  try { execSync('tmux kill-session -t claude-main 2>/dev/null', { stdio: 'pipe' }); } catch {}
+
+  // Create new tmux session with Claude
+  try {
+    execSync(`tmux new-session -d -s claude-main "cd ${ZYLOS_DIR} && claude --dangerously-skip-permissions"`, { stdio: 'pipe' });
+  } catch (err) {
+    console.log(`  ⚠ Failed to create tmux session: ${err.message}`);
+    try { execSync('pm2 start activity-monitor', { stdio: 'pipe' }); } catch {}
+    return;
+  }
+
+  console.log('  Claude Code requires a one-time confirmation for autonomous mode.');
+  console.log('  Please run the following command in another terminal:\n');
+  console.log('    tmux attach -t claude-main\n');
+  console.log('  Then select "Yes, I accept" and press Ctrl+B D to detach.\n');
+
+  await promptYesNo('Press Enter after you have accepted the prompt: ', true);
+
+  // Restart activity-monitor
+  try { execSync('pm2 start activity-monitor', { stdio: 'pipe' }); } catch {}
+  console.log('  ✓ Claude Code configured');
+}
+
 // ── Installation state detection ────────────────────────────────
 
 /**
@@ -486,7 +545,12 @@ export async function initCommand(args) {
     } else {
       console.log('\nNo services to start.');
     }
-    console.log('Use "zylos add <component>" to add components.');
+
+    if (needsBypassAcceptance()) {
+      await guideBypassAcceptance();
+    }
+
+    console.log('\nUse "zylos add <component>" to add components.');
     return;
   }
 
@@ -537,6 +601,11 @@ export async function initCommand(args) {
   } else {
     console.log('\nStarting services...');
     servicesStarted = startCoreServices();
+  }
+
+  // First-time Claude bypass acceptance
+  if (needsBypassAcceptance()) {
+    await guideBypassAcceptance();
   }
 
   // Done

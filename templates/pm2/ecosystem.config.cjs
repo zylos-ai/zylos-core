@@ -15,23 +15,26 @@ const HOME = os.homedir();
 const ZYLOS_DIR = path.join(HOME, 'zylos');
 const SKILLS_DIR = path.join(HOME, 'zylos', '.claude', 'skills');
 
-// Read SYSTEM_PATH from .env (captured by zylos init from user's shell)
-function getSystemPath() {
+// Read a value from .env file
+function readEnvValue(key, defaultValue = '') {
   try {
     const content = fs.readFileSync(path.join(ZYLOS_DIR, '.env'), 'utf8');
-    const match = content.match(/^SYSTEM_PATH=(.+)$/m);
+    const match = content.match(new RegExp(`^${key}=(.+)$`, 'm'));
     if (match) return match[1];
   } catch {}
-  return '';
+  return defaultValue;
 }
 
 // Build PATH: Claude locations + user's full shell PATH + PM2's own PATH
 const ENHANCED_PATH = [
   path.join(HOME, '.local', 'bin'),
   path.join(HOME, '.claude', 'bin'),
-  getSystemPath(),
+  readEnvValue('SYSTEM_PATH'),
   process.env.PATH
 ].filter(Boolean).join(':');
+
+// Whether Claude should run with --dangerously-skip-permissions
+const CLAUDE_BYPASS_PERMISSIONS = readEnvValue('CLAUDE_BYPASS_PERMISSIONS', 'true');
 
 module.exports = {
   apps: [
@@ -77,7 +80,8 @@ module.exports = {
       cwd: HOME,
       env: {
         PATH: ENHANCED_PATH,
-        NODE_ENV: 'production'
+        NODE_ENV: 'production',
+        CLAUDE_BYPASS_PERMISSIONS
       },
       autorestart: true,
       max_restarts: 10,
