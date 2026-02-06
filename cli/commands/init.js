@@ -354,49 +354,7 @@ export async function initCommand(args) {
 
   console.log('\nWelcome to Zylos! Let\'s set up your AI assistant.\n');
 
-  // Re-init: sync skills, deploy templates, start services
-  const installState = detectInstallState();
-
-  if (installState === 'complete') {
-    console.log(`Zylos is already initialized at ${ZYLOS_DIR}\n`);
-
-    const syncResult = syncCoreSkills();
-    if (syncResult.updated.length > 0) {
-      console.log(`Core Skills updated: ${syncResult.updated.join(', ')}`);
-    }
-    if (syncResult.installed.length > 0) {
-      console.log(`Core Skills installed: ${syncResult.installed.join(', ')}`);
-    }
-
-    console.log('Deploying templates...');
-    deployTemplates();
-
-    console.log('Starting services...');
-    const servicesStarted = startCoreServices();
-    if (servicesStarted > 0) {
-      console.log(`\n${servicesStarted} service(s) started. Run "zylos status" to check.`);
-    } else {
-      console.log('\nNo services to start.');
-    }
-    console.log('Use "zylos add <component>" to add components.');
-    return;
-  }
-
-  if (installState === 'incomplete') {
-    console.log(`Incomplete installation detected at ${ZYLOS_DIR}`);
-    if (!skipConfirm) {
-      const answer = await prompt('Continue previous installation or start fresh? [c/f] (c): ');
-      if (answer.toLowerCase() === 'f') {
-        console.log('Resetting managed state...');
-        resetManagedState();
-        console.log('Starting fresh...\n');
-      } else {
-        console.log('Continuing...\n');
-      }
-    }
-  }
-
-  // Step 1: Check prerequisites
+  // Step 1: Check prerequisites (always, even on re-init)
   console.log('Checking prerequisites...');
 
   const nodeCheck = checkNodeVersion();
@@ -472,6 +430,48 @@ export async function initCommand(args) {
   }
 
   console.log('');
+
+  // Re-init: skip directory creation, just sync + deploy + start
+  const installState = detectInstallState();
+
+  if (installState === 'complete') {
+    console.log(`Zylos is already initialized at ${ZYLOS_DIR}\n`);
+
+    const syncResult = syncCoreSkills();
+    if (syncResult.updated.length > 0) {
+      console.log(`Core Skills updated: ${syncResult.updated.join(', ')}`);
+    }
+    if (syncResult.installed.length > 0) {
+      console.log(`Core Skills installed: ${syncResult.installed.join(', ')}`);
+    }
+
+    console.log('Deploying templates...');
+    deployTemplates();
+
+    console.log('Starting services...');
+    const servicesStarted = startCoreServices();
+    if (servicesStarted > 0) {
+      console.log(`\n${servicesStarted} service(s) started. Run "zylos status" to check.`);
+    } else {
+      console.log('\nNo services to start.');
+    }
+    console.log('Use "zylos add <component>" to add components.');
+    return;
+  }
+
+  if (installState === 'incomplete') {
+    console.log(`Incomplete installation detected at ${ZYLOS_DIR}`);
+    if (!skipConfirm) {
+      const answer = await prompt('Continue previous installation or start fresh? [c/f] (c): ');
+      if (answer.toLowerCase() === 'f') {
+        console.log('Resetting managed state...');
+        resetManagedState();
+        console.log('Starting fresh...\n');
+      } else {
+        console.log('Continuing...\n');
+      }
+    }
+  }
 
   // Step 6: Create directory structure
   console.log(`Install directory: ${ZYLOS_DIR}`);
