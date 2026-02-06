@@ -212,8 +212,22 @@ export async function initCommand(args) {
   const installState = detectInstallState();
 
   if (installState === 'complete') {
-    console.log(`Zylos is already initialized at ${ZYLOS_DIR}`);
-    console.log('\nUse "zylos status" to check services.');
+    console.log(`Zylos is already initialized at ${ZYLOS_DIR}\n`);
+
+    // Sync Core Skills (may have updates)
+    const syncResult = syncCoreSkills();
+    if (syncResult.synced.length > 0) {
+      console.log(`Core Skills updated: ${syncResult.synced.join(', ')}`);
+    }
+
+    // Start/restart services
+    console.log('Starting services...');
+    const servicesStarted = startCoreServices();
+    if (servicesStarted > 0) {
+      console.log(`\n${servicesStarted} service(s) started. Run "zylos status" to check.`);
+    } else {
+      console.log('\nNo services to start.');
+    }
     console.log('Use "zylos add <component>" to add components.');
     return;
   }
