@@ -2,7 +2,7 @@
  * zylos init - Initialize Zylos environment
  *
  * Sets up the directory structure, checks prerequisites,
- * syncs Core Skills, and optionally starts services.
+ * syncs Core Skills, deploys templates, and starts services.
  */
 
 import fs from 'node:fs';
@@ -12,14 +12,19 @@ import { ZYLOS_DIR, SKILLS_DIR, CONFIG_DIR, COMPONENTS_DIR, LOCKS_DIR, COMPONENT
 import { generateManifest, saveManifest } from '../lib/manifest.js';
 import { prompt, promptYesNo } from '../lib/prompts.js';
 
-// Source directory for Core Skills (shipped with zylos package)
-const CORE_SKILLS_SRC = path.join(import.meta.dirname, '..', '..', 'skills');
+// Source directories (shipped with zylos package)
+const PACKAGE_ROOT = path.join(import.meta.dirname, '..', '..');
+const CORE_SKILLS_SRC = path.join(PACKAGE_ROOT, 'skills');
+const TEMPLATES_SRC = path.join(PACKAGE_ROOT, 'templates');
 
 // Minimum Node.js version
 const MIN_NODE_MAJOR = 20;
 const MIN_NODE_MINOR = 20;
 
-// ── Prerequisite checks ─────────────────────────────────────────────
+// Core services managed by ecosystem.config.cjs
+const CORE_SERVICE_NAMES = ['activity-monitor', 'scheduler', 'c4-dispatcher', 'web-console'];
+
+// ── Prerequisite checks ─────────────────────────────────────────
 
 function checkNodeVersion() {
   const version = process.version;
@@ -47,7 +52,7 @@ function installGlobalPackage(pkg) {
   }
 }
 
-// ── Installation state detection ────────────────────────────────────
+// ── Installation state detection ────────────────────────────────
 
 /**
  * Detect the current installation state.
@@ -56,12 +61,7 @@ function installGlobalPackage(pkg) {
 function detectInstallState() {
   if (!fs.existsSync(ZYLOS_DIR)) return 'fresh';
 
-  const markers = [
-    CONFIG_DIR,
-    SKILLS_DIR,
-    COMPONENTS_FILE,
-  ];
-
+  const markers = [CONFIG_DIR, SKILLS_DIR, COMPONENTS_FILE];
   const existing = markers.filter((m) => fs.existsSync(m));
 
   if (existing.length === 0) return 'fresh';
@@ -69,7 +69,7 @@ function detectInstallState() {
   return 'incomplete';
 }
 
-// ── Directory structure ─────────────────────────────────────────────
+// ── Directory structure ─────────────────────────────────────────
 
 function createDirectoryStructure() {
   const dirs = [
@@ -80,24 +80,68 @@ function createDirectoryStructure() {
     LOCKS_DIR,
     path.join(ZYLOS_DIR, 'memory'),
     path.join(ZYLOS_DIR, 'logs'),
+    path.join(ZYLOS_DIR, 'pm2'),
   ];
 
   for (const dir of dirs) {
     fs.mkdirSync(dir, { recursive: true });
   }
 
-  // Initialize components.json if it doesn't exist
   if (!fs.existsSync(COMPONENTS_FILE)) {
     fs.writeFileSync(COMPONENTS_FILE, JSON.stringify({}, null, 2));
   }
 }
 
-// ── Core Skills sync ────────────────────────────────────────────────
+// ── Templates ───────────────────────────────────────────────────
+
+/**
+ * Deploy template files to the zylos directory.
+ * - ecosystem.config.cjs: always updated (managed by zylos-core)
+ * - .env, CLAUDE.md, memory/*: only created if missing (user-managed)
+ */
+function deployTemplates() {
+  if (!fs.existsSync(TEMPLATES_SRC)) return;
+
+  // ecosystem.config.cjs — always update (source of truth for service definitions)
+  const ecosystemSrc = path.join(TEMPLATES_SRC, 'pm2', 'ecosystem.config.cjs');
+  if (fs.existsSync(ecosystemSrc)) {
+    fs.copyFileSync(ecosystemSrc, path.join(ZYLOS_DIR, 'pm2', 'ecosystem.config.cjs'));
+  }
+
+  // .env — only create if missing
+  const envSrc = path.join(TEMPLATES_SRC, '.env.example');
+  const envDest = path.join(ZYLOS_DIR, '.env');
+  if (fs.existsSync(envSrc) && !fs.existsSync(envDest)) {
+    fs.copyFileSync(envSrc, envDest);
+    console.log('  ✓ Created .env from template');
+  }
+
+  // CLAUDE.md — only create if missing
+  const claudeMdSrc = path.join(TEMPLATES_SRC, 'CLAUDE.md');
+  const claudeMdDest = path.join(ZYLOS_DIR, 'CLAUDE.md');
+  if (fs.existsSync(claudeMdSrc) && !fs.existsSync(claudeMdDest)) {
+    fs.copyFileSync(claudeMdSrc, claudeMdDest);
+    console.log('  ✓ Created CLAUDE.md from template');
+  }
+
+  // memory/ templates — only create missing files
+  const memorySrc = path.join(TEMPLATES_SRC, 'memory');
+  const memoryDest = path.join(ZYLOS_DIR, 'memory');
+  if (fs.existsSync(memorySrc)) {
+    for (const file of fs.readdirSync(memorySrc)) {
+      const dest = path.join(memoryDest, file);
+      if (!fs.existsSync(dest)) {
+        fs.copyFileSync(path.join(memorySrc, file), dest);
+      }
+    }
+  }
+}
+
+// ── Core Skills sync ────────────────────────────────────────────
 
 /**
  * Sync Core Skills from the zylos package to SKILLS_DIR.
  * Only copies skills that don't already exist (preserves user modifications).
- * @returns {{ synced: string[], skipped: string[] }}
  */
 function syncCoreSkills() {
   if (!fs.existsSync(CORE_SKILLS_SRC)) {
@@ -119,14 +163,10 @@ function syncCoreSkills() {
       continue;
     }
 
-    // Copy skill directory
     try {
       execSync(`cp -r "${srcDir}" "${destDir}"`, { stdio: 'pipe' });
-
-      // Generate manifest for the newly synced skill
       const manifest = generateManifest(destDir);
       saveManifest(destDir, manifest);
-
       synced.push(entry.name);
     } catch {
       console.log(`  Warning: Failed to sync ${entry.name}`);
@@ -136,12 +176,14 @@ function syncCoreSkills() {
   return { synced, skipped };
 }
 
-// ── Service startup ─────────────────────────────────────────────────
+// ── Skill dependencies ──────────────────────────────────────────
 
-function startCoreServices() {
-  // Step 1: Install dependencies for all skills that need them
-  const skillEntries = fs.readdirSync(SKILLS_DIR, { withFileTypes: true });
-  for (const entry of skillEntries) {
+/**
+ * Install npm dependencies for all skills that need them.
+ */
+function installSkillDependencies() {
+  const entries = fs.readdirSync(SKILLS_DIR, { withFileTypes: true });
+  for (const entry of entries) {
     if (!entry.isDirectory()) continue;
     const skillDir = path.join(SKILLS_DIR, entry.name);
     const pkgPath = path.join(skillDir, 'package.json');
@@ -149,66 +191,74 @@ function startCoreServices() {
 
     try {
       const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
-      if (pkg.dependencies && Object.keys(pkg.dependencies).length > 0) {
-        const nmDir = path.join(skillDir, 'node_modules');
-        if (!fs.existsSync(nmDir)) {
-          console.log(`  Installing ${entry.name} dependencies...`);
-          execSync('npm install --production', {
-            cwd: skillDir,
-            stdio: 'pipe',
-            timeout: 120000,
-          });
-        }
-      }
+      if (!pkg.dependencies || Object.keys(pkg.dependencies).length === 0) continue;
+      if (fs.existsSync(path.join(skillDir, 'node_modules'))) continue;
+
+      console.log(`  Installing ${entry.name} dependencies...`);
+      execSync('npm install --production', {
+        cwd: skillDir,
+        stdio: 'pipe',
+        timeout: 120000,
+      });
     } catch {
       console.log(`  ⚠ Failed to install ${entry.name} dependencies`);
     }
   }
+}
 
-  // Step 2: Initialize databases (comm-bridge)
+// ── Database initialization ─────────────────────────────────────
+
+/**
+ * Initialize databases for skills that require them.
+ */
+function initializeDatabases() {
   const dbInitScript = path.join(SKILLS_DIR, 'comm-bridge', 'scripts', 'c4-db.js');
   const dbInitSql = path.join(SKILLS_DIR, 'comm-bridge', 'init-db.sql');
-  if (fs.existsSync(dbInitSql) && fs.existsSync(dbInitScript)) {
-    try {
-      execSync(`node "${dbInitScript}" init`, {
-        cwd: path.join(SKILLS_DIR, 'comm-bridge'),
-        stdio: 'pipe',
-        timeout: 10000,
-      });
-      console.log('  ✓ Database initialized');
-    } catch {
-      // DB may already be initialized
-    }
+  if (!fs.existsSync(dbInitSql) || !fs.existsSync(dbInitScript)) return;
+
+  try {
+    execSync(`node "${dbInitScript}" init`, {
+      cwd: path.join(SKILLS_DIR, 'comm-bridge'),
+      stdio: 'pipe',
+      timeout: 10000,
+    });
+    console.log('  ✓ Database initialized');
+  } catch {
+    // DB may already be initialized
   }
+}
 
-  // Step 3: Copy ecosystem.config.cjs template and start services via PM2
-  const pm2Dir = path.join(ZYLOS_DIR, 'pm2');
-  const ecosystemSrc = path.join(import.meta.dirname, '..', '..', 'templates', 'pm2', 'ecosystem.config.cjs');
-  const ecosystemDest = path.join(pm2Dir, 'ecosystem.config.cjs');
+// ── Service startup ─────────────────────────────────────────────
 
-  if (!fs.existsSync(ecosystemSrc)) {
-    console.log('  ⚠ ecosystem.config.cjs template not found');
+/**
+ * Prepare and start core services via PM2 ecosystem config.
+ * @returns {number} Number of services successfully started
+ */
+function startCoreServices() {
+  installSkillDependencies();
+  initializeDatabases();
+
+  const ecosystemPath = path.join(ZYLOS_DIR, 'pm2', 'ecosystem.config.cjs');
+  if (!fs.existsSync(ecosystemPath)) {
+    console.log('  ⚠ ecosystem.config.cjs not found');
     return 0;
   }
 
-  fs.mkdirSync(pm2Dir, { recursive: true });
-  fs.copyFileSync(ecosystemSrc, ecosystemDest);
-
   try {
-    // pm2 start will start new processes and restart existing ones by name
-    execSync(`pm2 start "${ecosystemDest}" --update-env`, { stdio: 'pipe', timeout: 30000 });
+    execSync(`pm2 start "${ecosystemPath}" --update-env`, { stdio: 'pipe', timeout: 30000 });
     execSync('pm2 save', { stdio: 'pipe' });
   } catch (err) {
     console.log(`  ⚠ Failed to start services: ${err.message}`);
     return 0;
   }
 
-  // Count started services
+  // Report status of core services only
   try {
     const list = execSync('pm2 jlist', { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] });
     const procs = JSON.parse(list);
     let started = 0;
     for (const proc of procs) {
+      if (!CORE_SERVICE_NAMES.includes(proc.name)) continue;
       if (proc.pm2_env?.status === 'online') {
         console.log(`  ✓ ${proc.name}`);
         started++;
@@ -222,26 +272,27 @@ function startCoreServices() {
   }
 }
 
-// ── Main init command ───────────────────────────────────────────────
+// ── Main init command ───────────────────────────────────────────
 
 export async function initCommand(args) {
   const skipConfirm = args.includes('--yes') || args.includes('-y');
 
   console.log('\nWelcome to Zylos! Let\'s set up your AI assistant.\n');
 
-  // Step 0: Check for existing installation
+  // Re-init: sync skills, deploy templates, start services
   const installState = detectInstallState();
 
   if (installState === 'complete') {
     console.log(`Zylos is already initialized at ${ZYLOS_DIR}\n`);
 
-    // Sync Core Skills (may have updates)
     const syncResult = syncCoreSkills();
     if (syncResult.synced.length > 0) {
       console.log(`Core Skills updated: ${syncResult.synced.join(', ')}`);
     }
 
-    // Start/restart services
+    console.log('Deploying templates...');
+    deployTemplates();
+
     console.log('Starting services...');
     const servicesStarted = startCoreServices();
     if (servicesStarted > 0) {
@@ -327,13 +378,15 @@ export async function initCommand(args) {
 
   console.log('');
 
-  // Step 5: Show install directory
+  // Step 5: Create directory structure
   console.log(`Install directory: ${ZYLOS_DIR}`);
-
-  // Step 6: Create directory structure
   console.log('\nSetting up...');
   createDirectoryStructure();
   console.log('  ✓ Created directory structure');
+
+  // Step 6: Deploy templates
+  deployTemplates();
+  console.log('  ✓ Templates deployed');
 
   // Step 7: Sync Core Skills
   const syncResult = syncCoreSkills();
@@ -348,7 +401,7 @@ export async function initCommand(args) {
     }
   }
 
-  // Step 8: Ask about starting services
+  // Step 8: Start services
   let servicesStarted = 0;
   if (!skipConfirm) {
     const startNow = await promptYesNo('\nStart services now? [Y/n]: ', true);
