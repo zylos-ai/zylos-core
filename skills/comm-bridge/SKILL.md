@@ -23,14 +23,13 @@ Lark        ───┘
 | `c4-send.js` | Claude → External (records + routes) |
 | `c4-checkpoint.js` | Create recovery checkpoint |
 | `c4-recover.js` | Get conversations since last checkpoint |
-| `c4-notify.js` | Broadcast notification to all channels |
 
 ## Message Flow
 
 **Receiving** (external → Claude):
 ```bash
 node ~/zylos/.claude/skills/comm-bridge/scripts/c4-receive.js \
-    --source telegram \
+    --channel telegram \
     --endpoint 12345 \
     --content '[TG] user said: hello'
 ```
@@ -38,11 +37,6 @@ node ~/zylos/.claude/skills/comm-bridge/scripts/c4-receive.js \
 **Sending** (Claude → external):
 ```bash
 node ~/zylos/.claude/skills/comm-bridge/scripts/c4-send.js telegram 12345 "Hello!"
-```
-
-**Notify** (broadcast):
-```bash
-node ~/zylos/.claude/skills/comm-bridge/scripts/c4-notify.js "System alert: low disk space"
 ```
 
 ## Database
@@ -63,7 +57,7 @@ Returns exit code 0 on success, non-zero on failure.
 
 Messages to Claude include routing info:
 ```
-[TG DM] user said: hello ---- reply via: node ~/zylos/.claude/skills/comm-bridge/scripts/c4-send.js telegram 12345
+[TG DM] user said: hello ---- reply via: node ~/zylos/.claude/skills/comm-bridge/scripts/c4-send.js "telegram" "12345"
 ```
 
 Claude uses the `reply via` path to respond.

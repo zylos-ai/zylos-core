@@ -34,6 +34,8 @@ export function getDb() {
     const isNew = !fs.existsSync(DB_PATH);
     db = new Database(DB_PATH);
     db.pragma('journal_mode = WAL');  // Better concurrent access
+    db.pragma('busy_timeout = 5000');
+    db.pragma('foreign_keys = ON');
 
     if (isNew) {
       initSchema();
@@ -58,6 +60,19 @@ function initSchema() {
  * Run migrations for existing databases
  */
 function runMigrations() {
+  function runMigration(name, sql) {
+    console.log(`[C4-DB] Running migration: ${name}`);
+    db.exec('BEGIN');
+    try {
+      db.exec(sql);
+      db.exec('COMMIT');
+      console.log(`[C4-DB] Migration complete: ${name}`);
+    } catch (err) {
+      db.exec('ROLLBACK');
+      throw err;
+    }
+  }
+
   // Check if conversations table exists
   const tableInfo = db.prepare("PRAGMA table_info(conversations)").all();
 
@@ -71,49 +86,83 @@ function runMigrations() {
   // Migration 1: Add status column
   const hasStatus = tableInfo.some(col => col.name === 'status');
   if (!hasStatus) {
-    console.log('[C4-DB] Running migration: adding status column');
-    db.exec(`
+    runMigration('add status column', `
       ALTER TABLE conversations ADD COLUMN status TEXT DEFAULT 'delivered';
       CREATE INDEX IF NOT EXISTS idx_conversations_status ON conversations(status);
     `);
-    console.log('[C4-DB] Migration 1 complete');
   }
 
   // Migration 2: Add priority column
   const hasPriority = tableInfo.some(col => col.name === 'priority');
   if (!hasPriority) {
-    console.log('[C4-DB] Running migration: adding priority column');
-    db.exec(`
+    runMigration('add priority column', `
       ALTER TABLE conversations ADD COLUMN priority INTEGER DEFAULT 3;
       UPDATE conversations SET priority = 3 WHERE priority IS NULL;
       CREATE INDEX IF NOT EXISTS idx_conversations_priority ON conversations(priority);
     `);
-    console.log('[C4-DB] Migration 2 complete');
   }
 
   // Migration 3: Add require_idle column
   const hasRequireIdle = tableInfo.some(col => col.name === 'require_idle');
   if (!hasRequireIdle) {
-    console.log('[C4-DB] Running migration: adding require_idle column');
-    db.exec(`
+    runMigration('add require_idle column', `
       ALTER TABLE conversations ADD COLUMN require_idle INTEGER DEFAULT 0;
     `);
-    console.log('[C4-DB] Migration 3 complete');
+  }
+
+  const hasChannel = tableInfo.some(col => col.name === 'channel');
+  const hasSource = tableInfo.some(col => col.name === 'source');
+  const hasLastCheckpointId = tableInfo.some(col => col.name === 'last_checkpoint_id');
+  const hasCheckpointId = tableInfo.some(col => col.name === 'checkpoint_id');
+  const hasRetryCount = tableInfo.some(col => col.name === 'retry_count');
+  const hasAttachmentPath = tableInfo.some(col => col.name === 'attachment_path');
+
+  const checkpointInfo = db.prepare("PRAGMA table_info(checkpoints)").all();
+  const hasCheckpointSummary = checkpointInfo.some(col => col.name === 'summary');
+
+  if (hasSource || hasCheckpointId || !hasChannel || !hasLastCheckpointId || !hasRetryCount || !hasAttachmentPath || !hasCheckpointSummary) {
+    const indexInfo = db.prepare("PRAGMA index_list(conversations)").all();
+    const hasSourceIndex = indexInfo.some(idx => idx.name === 'idx_conversations_source');
+
+    const parts = [];
+    if (hasSource && !hasChannel) {
+      parts.push('ALTER TABLE conversations RENAME COLUMN source TO channel;');
+    }
+    if (hasCheckpointId && !hasLastCheckpointId) {
+      parts.push('ALTER TABLE conversations RENAME COLUMN checkpoint_id TO last_checkpoint_id;');
+    }
+    if (!hasRetryCount) {
+      parts.push('ALTER TABLE conversations ADD COLUMN retry_count INTEGER DEFAULT 0;');
+    }
+    if (!hasAttachmentPath) {
+      parts.push('ALTER TABLE conversations ADD COLUMN attachment_path TEXT;');
+    }
+    if (hasSourceIndex) {
+      parts.push('DROP INDEX IF EXISTS idx_conversations_source;');
+    }
+    parts.push('CREATE INDEX IF NOT EXISTS idx_conversations_channel ON conversations(channel);');
+    parts.push('CREATE INDEX IF NOT EXISTS idx_conversations_last_checkpoint ON conversations(last_checkpoint_id);');
+    if (!hasCheckpointSummary) {
+      parts.push('ALTER TABLE checkpoints ADD COLUMN summary TEXT;');
+    }
+
+    runMigration('rename channel/last_checkpoint_id and add retry_count/attachment_path/summary', parts.join('\n'));
   }
 }
 
 /**
  * Insert a conversation record
  * @param {string} direction - 'in' or 'out'
- * @param {string} source - 'telegram', 'lark', 'scheduler', 'system', etc.
+ * @param {string} channel - 'telegram', 'lark', 'scheduler', 'system', etc.
  * @param {string|null} endpointId - chat_id or null
  * @param {string} content - message content
  * @param {string} status - 'pending' or 'delivered' (default: 'pending' for in, 'delivered' for out)
  * @param {number} priority - 1=urgent, 2=high, 3=normal (default: 3)
  * @param {boolean} requireIdle - whether to wait for Claude idle state (default: false)
+ * @param {string|null} attachmentPath - path to attachment directory (default: null)
  * @returns {object} - inserted record with id
  */
-export function insertConversation(direction, source, endpointId, content, status = null, priority = 3, requireIdle = false) {
+export function insertConversation(direction, channel, endpointId, content, status = null, priority = 3, requireIdle = false, attachmentPath = null) {
   const db = getDb();
 
   // Get current checkpoint
@@ -127,22 +176,24 @@ export function insertConversation(direction, source, endpointId, content, statu
   const requireIdleVal = requireIdle ? 1 : 0;
 
   const stmt = db.prepare(`
-    INSERT INTO conversations (direction, source, endpoint_id, content, status, priority, require_idle, checkpoint_id)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO conversations (direction, channel, endpoint_id, content, status, priority, require_idle, last_checkpoint_id, attachment_path)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
-  const result = stmt.run(direction, source, endpointId, content, finalStatus, priority, requireIdleVal, checkpoint?.id || null);
+  const result = stmt.run(direction, channel, endpointId, content, finalStatus, priority, requireIdleVal, checkpoint?.id || null, attachmentPath);
 
   return {
     id: result.lastInsertRowid,
     direction,
-    source,
+    channel,
     endpoint_id: endpointId,
     content,
     status: finalStatus,
     priority,
     require_idle: requireIdleVal,
-    checkpoint_id: checkpoint?.id || null
+    last_checkpoint_id: checkpoint?.id || null,
+    attachment_path: attachmentPath,
+    retry_count: 0
   };
 }
 
@@ -153,9 +204,9 @@ export function insertConversation(direction, source, endpointId, content, statu
 export function getNextPending() {
   const db = getDb();
   return db.prepare(`
-    SELECT id, direction, source, endpoint_id, content, timestamp, priority, require_idle
+    SELECT id, direction, channel, endpoint_id, content, timestamp, priority, require_idle, retry_count, attachment_path
     FROM conversations
-    WHERE direction = 'in' AND status = 'pending'
+    WHERE direction = 'in' AND status = 'pending' AND status != 'failed'
     ORDER BY COALESCE(priority, 3) ASC, timestamp ASC
     LIMIT 1
   `).get() || null;
@@ -168,6 +219,27 @@ export function getNextPending() {
 export function markDelivered(id) {
   const db = getDb();
   db.prepare('UPDATE conversations SET status = ? WHERE id = ?').run('delivered', id);
+}
+
+/**
+ * Increment retry count for a message
+ * @param {number} id - message id
+ * @returns {number} - new retry count
+ */
+export function incrementRetryCount(id) {
+  const db = getDb();
+  db.prepare('UPDATE conversations SET retry_count = COALESCE(retry_count, 0) + 1 WHERE id = ?').run(id);
+  const row = db.prepare('SELECT retry_count FROM conversations WHERE id = ?').get(id);
+  return row?.retry_count || 0;
+}
+
+/**
+ * Mark a message as failed
+ * @param {number} id - message id
+ */
+export function markFailed(id) {
+  const db = getDb();
+  db.prepare('UPDATE conversations SET status = ? WHERE id = ?').run('failed', id);
 }
 
 /**
@@ -184,15 +256,27 @@ export function getPendingCount() {
 }
 
 /**
+ * Update attachment metadata for a conversation
+ * @param {number} id - message id
+ * @param {string} attachmentPath - path to attachment directory
+ * @param {string} summary - summary to store in content
+ */
+export function updateAttachment(id, attachmentPath, summary) {
+  const db = getDb();
+  db.prepare('UPDATE conversations SET attachment_path = ?, content = ? WHERE id = ?').run(attachmentPath, summary, id);
+}
+
+/**
  * Create a checkpoint
  * @param {string} type - 'memory_sync', 'session_start', or 'manual'
+ * @param {string|null} summary - checkpoint summary
  * @returns {object} - checkpoint record with id
  */
-export function createCheckpoint(type) {
+export function createCheckpoint(type, summary = null) {
   const db = getDb();
 
-  const stmt = db.prepare('INSERT INTO checkpoints (type) VALUES (?)');
-  const result = stmt.run(type);
+  const stmt = db.prepare('INSERT INTO checkpoints (type, summary) VALUES (?, ?)');
+  const result = stmt.run(type, summary);
 
   return {
     id: result.lastInsertRowid,
@@ -208,24 +292,25 @@ export function createCheckpoint(type) {
 export function getConversationsSinceLastCheckpoint() {
   const db = getDb();
 
-  // Get timestamp of the last checkpoint
+  // Get id of the last checkpoint
   const lastCheckpoint = db.prepare(
-    'SELECT timestamp FROM checkpoints ORDER BY timestamp DESC LIMIT 1'
+    'SELECT id FROM checkpoints ORDER BY id DESC LIMIT 1'
   ).get();
 
   if (!lastCheckpoint) {
-    // No checkpoint, return all conversations
+    // No checkpoint, return last 200 conversations
     return db.prepare(
-      'SELECT * FROM conversations ORDER BY timestamp'
+      'SELECT * FROM conversations ORDER BY id DESC LIMIT 200'
     ).all();
   }
 
-  // Get all conversations after the checkpoint
+  // Get all conversations associated with the last checkpoint
   const conversations = db.prepare(`
     SELECT * FROM conversations
-    WHERE timestamp > ?
-    ORDER BY timestamp
-  `).all(lastCheckpoint.timestamp);
+    WHERE last_checkpoint_id = ?
+    ORDER BY id ASC
+    LIMIT 200
+  `).all(lastCheckpoint.id);
 
   return conversations;
 }
@@ -266,7 +351,7 @@ export function formatForRecovery(conversations) {
   for (const conv of conversations) {
     const dir = conv.direction === 'in' ? 'IN' : 'OUT';
     const endpoint = conv.endpoint_id ? `:${conv.endpoint_id}` : '';
-    lines.push(`[${conv.timestamp}] ${dir} (${conv.source}${endpoint}):`);
+    lines.push(`[${conv.timestamp}] ${dir} (${conv.channel}${endpoint}):`);
     lines.push(conv.content);
     lines.push('');
   }
@@ -300,9 +385,9 @@ if (isMainModule) {
       break;
 
     case 'insert':
-      // insert <direction> <source> <endpoint_id> <content>
+      // insert <direction> <channel> <endpoint_id> <content>
       if (args.length < 5) {
-        console.error('Usage: c4-db.js insert <direction> <source> <endpoint_id> <content>');
+        console.error('Usage: c4-db.js insert <direction> <channel> <endpoint_id> <content>');
         process.exit(1);
       }
       const record = insertConversation(args[1], args[2], args[3] === 'null' ? null : args[3], args[4]);
@@ -343,7 +428,7 @@ Usage: c4-db.js <command> [args]
 
 Commands:
   init                                  Initialize database
-  insert <dir> <source> <endpoint> <content>  Insert conversation
+  insert <dir> <channel> <endpoint> <content>  Insert conversation
   checkpoint [type]                     Create checkpoint (default: manual)
   recover                               Get conversations since last checkpoint
   recent [limit]                        Get recent conversations

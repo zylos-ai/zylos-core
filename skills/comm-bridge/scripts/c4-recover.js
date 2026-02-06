@@ -21,7 +21,7 @@ function main() {
     const formatted = formatForRecovery(conversations);
     console.log(formatted);
   } catch (err) {
-    console.error(`Error recovering conversations: ${err.message}`);
+    console.error(`Error recovering conversations: ${err.stack}`);
     process.exit(1);
   }
 }
