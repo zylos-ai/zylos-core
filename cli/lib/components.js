@@ -7,6 +7,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { COMPONENTS_FILE } from './config.js';
 import { loadRegistry } from './registry.js';
+import { fetchLatestTag } from './github.js';
 
 /**
  * Load installed components from components.json
@@ -64,7 +65,7 @@ export async function resolveTarget(nameOrUrl) {
     return {
       name: target,
       repo: registry[target].repo,
-      version: version || registry[target].latest,
+      version: version || fetchLatestTag(registry[target].repo) || null,
       isThirdParty: false,
     };
   }

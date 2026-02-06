@@ -14,7 +14,7 @@ import { loadLocalRegistry } from './registry.js';
 import { parseSkillMd } from './skill.js';
 import { generateManifest, saveManifest } from './manifest.js';
 import { downloadArchive, downloadBranch } from './download.js';
-import { fetchRawFile, sanitizeError } from './github.js';
+import { fetchLatestTag, fetchRawFile, sanitizeError } from './github.js';
 
 // ---------------------------------------------------------------------------
 // Version helpers
@@ -43,19 +43,19 @@ function getRepo(component) {
 }
 
 /**
- * Get the latest version from the local registry.
- * Falls back to fetching SKILL.md from GitHub raw if not in registry.
+ * Get the latest version from GitHub (latest tag).
+ * Falls back to fetching SKILL.md from GitHub if no tags found.
  */
 function getLatestVersion(component, repo) {
-  // Fast path: local registry
-  const registry = loadLocalRegistry();
-  if (registry[component]?.latest) {
-    return { success: true, version: registry[component].latest };
+  if (!repo) return { success: false, error: 'No repo configured for component' };
+
+  // Primary: fetch latest tag from GitHub
+  const tagVersion = fetchLatestTag(repo);
+  if (tagVersion) {
+    return { success: true, version: tagVersion };
   }
 
   // Fallback: fetch raw SKILL.md from GitHub
-  if (!repo) return { success: false, error: 'No repo configured for component' };
-
   try {
     const content = fetchRawFile(repo, 'SKILL.md');
     const match = content.match(/^---\n([\s\S]*?)\n---/);
@@ -67,7 +67,7 @@ function getLatestVersion(component, repo) {
     }
     return { success: false, error: 'Version not found in remote SKILL.md' };
   } catch (err) {
-    return { success: false, error: `Cannot fetch remote SKILL.md: ${sanitizeError(err.message)}` };
+    return { success: false, error: `Cannot fetch remote: ${sanitizeError(err.message)}` };
   }
 }
 

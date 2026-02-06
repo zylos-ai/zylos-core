@@ -75,6 +75,48 @@ export function fetchRawFile(repo, filePath, branch = 'main') {
 }
 
 /**
+ * Fetch the latest version tag from a GitHub repo.
+ * Looks for tags matching v*.*.* pattern and returns the highest semver.
+ *
+ * @param {string} repo - GitHub repo in "org/name" format
+ * @returns {string|null} Latest version (without 'v' prefix) or null
+ */
+export function fetchLatestTag(repo) {
+  const token = getGitHubToken();
+  const authHeader = token ? `-H "Authorization: Bearer ${token}"` : '';
+
+  try {
+    const url = `https://api.github.com/repos/${repo}/tags?per_page=100`;
+    const response = execSync(
+      `curl -fsSL ${authHeader} "${url}"`,
+      { encoding: 'utf8', timeout: 10000, stdio: ['pipe', 'pipe', 'pipe'] },
+    );
+    const tags = JSON.parse(response);
+    if (!Array.isArray(tags) || tags.length === 0) return null;
+
+    // Filter v*.*.* tags and sort by semver descending
+    const versions = tags
+      .map(t => t.name)
+      .filter(name => /^v?\d+\.\d+\.\d+/.test(name))
+      .map(name => name.replace(/^v/, ''))
+      .sort((a, b) => {
+        const pa = a.split(/[-.]/).map(p => parseInt(p) || 0);
+        const pb = b.split(/[-.]/).map(p => parseInt(p) || 0);
+        for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+          const diff = (pb[i] || 0) - (pa[i] || 0);
+          if (diff !== 0) return diff;
+        }
+        // For pre-release tags like beta.9 vs beta.10, compare string suffix
+        return b.localeCompare(a);
+      });
+
+    return versions[0] || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Sanitize error messages to remove any leaked tokens.
  */
 export function sanitizeError(message) {
