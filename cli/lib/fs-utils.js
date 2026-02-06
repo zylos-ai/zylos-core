@@ -5,6 +5,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 
 /**
  * Check if a relative path should be excluded.
@@ -21,17 +22,10 @@ function isExcluded(relativePath, excludes) {
 }
 
 /**
- * Copy a directory tree, optionally excluding certain top-level entries.
- * Equivalent to: rsync -a --exclude=... src/ dest/
- *
- * @param {string} src - Source directory
- * @param {string} dest - Destination directory
- * @param {object} [opts]
- * @param {string[]} [opts.excludes=[]] - Top-level names to exclude
+ * Copy entries from src to dest using fs.cpSync with exclusion filter.
+ * src and dest must not overlap (fs.cpSync rejects copying into a subdirectory of self).
  */
-export function copyTree(src, dest, { excludes = [] } = {}) {
-  fs.mkdirSync(dest, { recursive: true });
-
+function cpSyncFiltered(src, dest, excludes) {
   fs.cpSync(src, dest, {
     recursive: true,
     force: true,
@@ -41,6 +35,40 @@ export function copyTree(src, dest, { excludes = [] } = {}) {
       return !isExcluded(rel, excludes);
     },
   });
+}
+
+/**
+ * Copy a directory tree, optionally excluding certain top-level entries.
+ * Equivalent to: rsync -a --exclude=... src/ dest/
+ *
+ * Handles the case where dest is inside src (e.g., backing up a skill dir
+ * into skillDir/.backup/timestamp/) by copying via a temp directory.
+ *
+ * @param {string} src - Source directory
+ * @param {string} dest - Destination directory
+ * @param {object} [opts]
+ * @param {string[]} [opts.excludes=[]] - Top-level names to exclude
+ */
+export function copyTree(src, dest, { excludes = [] } = {}) {
+  fs.mkdirSync(dest, { recursive: true });
+
+  const resolvedSrc = path.resolve(src);
+  const resolvedDest = path.resolve(dest);
+
+  // Detect self-copy: dest is inside src (e.g., src/.backup/timestamp)
+  if (resolvedDest.startsWith(resolvedSrc + path.sep)) {
+    const tmpDest = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-copy-'));
+    try {
+      cpSyncFiltered(resolvedSrc, tmpDest, excludes);
+      // Move from temp to real dest
+      fs.cpSync(tmpDest, resolvedDest, { recursive: true, force: true });
+    } finally {
+      fs.rmSync(tmpDest, { recursive: true, force: true });
+    }
+    return;
+  }
+
+  cpSyncFiltered(src, dest, excludes);
 }
 
 /**
