@@ -9,18 +9,29 @@
 const path = require('path');
 const os = require('os');
 
+const fs = require('fs');
+
 const HOME = os.homedir();
 const ZYLOS_DIR = path.join(HOME, 'zylos');
 const SKILLS_DIR = path.join(HOME, 'zylos', '.claude', 'skills');
 
-// Enhanced PATH: include common binary locations that /bin/sh may not have
+// Read SYSTEM_PATH from .env (captured by zylos init from user's shell)
+function getSystemPath() {
+  try {
+    const content = fs.readFileSync(path.join(ZYLOS_DIR, '.env'), 'utf8');
+    const match = content.match(/^SYSTEM_PATH=(.+)$/m);
+    if (match) return match[1];
+  } catch {}
+  return '';
+}
+
+// Build PATH: Claude locations + user's full shell PATH + PM2's own PATH
 const ENHANCED_PATH = [
   path.join(HOME, '.local', 'bin'),
   path.join(HOME, '.claude', 'bin'),
-  '/opt/homebrew/bin',    // macOS Homebrew (Apple Silicon)
-  '/usr/local/bin',       // macOS Homebrew (Intel) / Linux common
+  getSystemPath(),
   process.env.PATH
-].join(':');
+].filter(Boolean).join(':');
 
 module.exports = {
   apps: [

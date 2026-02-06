@@ -85,6 +85,28 @@ function installSystemPackage(pkg) {
   return false;
 }
 
+/**
+ * Save the current shell PATH to .env so PM2 services can use it.
+ * Updates SYSTEM_PATH= line if exists, appends if not.
+ */
+function saveSystemPath(envPath) {
+  const currentPath = process.env.PATH || '';
+  let content = '';
+  try {
+    content = fs.readFileSync(envPath, 'utf8');
+  } catch {
+    return; // .env doesn't exist yet
+  }
+
+  const line = `SYSTEM_PATH=${currentPath}`;
+  if (content.includes('SYSTEM_PATH=')) {
+    content = content.replace(/^SYSTEM_PATH=.*$/m, line);
+  } else {
+    content = content.trimEnd() + '\n\n# System PATH captured by zylos init (used by PM2 services)\n' + line + '\n';
+  }
+  fs.writeFileSync(envPath, content);
+}
+
 // ── Installation state detection ────────────────────────────────
 
 /**
@@ -165,13 +187,16 @@ function deployTemplates() {
     fs.copyFileSync(ecosystemSrc, path.join(pm2Dir, 'ecosystem.config.cjs'));
   }
 
-  // .env — only create if missing
+  // .env — create from template if missing
   const envSrc = path.join(TEMPLATES_SRC, '.env.example');
   const envDest = path.join(ZYLOS_DIR, '.env');
   if (fs.existsSync(envSrc) && !fs.existsSync(envDest)) {
     fs.copyFileSync(envSrc, envDest);
     console.log('  ✓ Created .env from template');
   }
+
+  // Always save current shell PATH to .env (for PM2 services)
+  saveSystemPath(envDest);
 
   // CLAUDE.md — only create if missing
   const claudeMdSrc = path.join(TEMPLATES_SRC, 'CLAUDE.md');
