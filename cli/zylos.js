@@ -5,10 +5,14 @@
  * Usage: zylos <command> [options]
  */
 
-const { showStatus, showLogs, startServices, stopServices, restartServices } = require('./commands/service');
-const { installComponent, upgradeComponent, uninstallComponent, listComponents, searchComponents } = require('./commands/component');
+import { showStatus, showLogs, startServices, stopServices, restartServices } from './commands/service.js';
+import { upgradeComponent, uninstallComponent, infoComponent, listComponents, searchComponents } from './commands/component.js';
+import { addComponent } from './commands/add.js';
+import { initCommand } from './commands/init.js';
 
 const commands = {
+  // Environment setup
+  init: initCommand,
   // Service management
   status: showStatus,
   logs: showLogs,
@@ -16,9 +20,11 @@ const commands = {
   stop: stopServices,
   restart: restartServices,
   // Component management
-  install: installComponent,
+  add: addComponent,
+  info: infoComponent,
   upgrade: upgradeComponent,
   uninstall: uninstallComponent,
+  remove: uninstallComponent,
   list: listComponents,
   search: searchComponents,
   // Help
@@ -44,6 +50,10 @@ Zylos CLI
 
 Usage: zylos <command> [options]
 
+Setup:
+  init                Initialize Zylos environment
+                      --yes/-y  Skip confirmation prompts
+
 Service Management:
   status              Show system status
   logs [type]         Show logs (activity|caddy|pm2)
@@ -52,12 +62,15 @@ Service Management:
   restart             Restart all services
 
 Component Management:
-  install <target>    Install a component
+  add <target>        Add a component
                       target: name[@ver] | org/repo[@ver] | url
-  upgrade <name>      Upgrade a specific component
+                      --yes/-y  Skip confirmation prompts
+  info <name>         Show component details (--json)
+  upgrade <name>      Upgrade a component (8-step pipeline)
   upgrade --all       Upgrade all components
   upgrade --self      Upgrade zylos-core itself
-  uninstall <name>    Uninstall a component (--purge for data)
+  uninstall <name>    Remove a component (--purge, --force)
+  remove <name>       Alias for uninstall
   list                List installed components
   search [keyword]    Search available components
 
@@ -65,19 +78,25 @@ Other:
   help                Show this help
 
 Examples:
+  zylos init
   zylos status
   zylos logs activity
 
-  zylos install telegram
-  zylos install telegram@0.2.0
-  zylos install kevin/whatsapp
+  zylos add telegram
+  zylos add telegram@0.2.0
+  zylos add user/my-component
   zylos upgrade telegram
   zylos upgrade --all
   zylos upgrade --self
+  zylos info telegram
   zylos uninstall telegram --purge
+  zylos remove telegram --purge --yes
   zylos list
   zylos search bot
 `);
 }
 
-main().catch(console.error);
+main().catch((err) => {
+  console.error(err);
+  process.exitCode = 1;
+});

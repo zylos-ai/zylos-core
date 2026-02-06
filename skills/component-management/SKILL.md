@@ -1,8 +1,6 @@
 ---
 name: component-management
-version: 1.0.0
-description: Guidelines for managing zylos components
-type: internal
+description: Guidelines for managing zylos components via CLI and C4 channels.
 ---
 
 # Component Management
@@ -14,6 +12,7 @@ Guidelines for installing, upgrading, and managing zylos components.
 1. **Always confirm before executing** - User must explicitly approve install/upgrade/uninstall
 2. **Guide interactively** - Never just tell user to "manually edit files"
 3. **Read SKILL.md** - Each component declares its requirements in SKILL.md frontmatter
+4. **Detect execution mode** - Handle both Claude session and C4 channels differently
 
 ## Install Workflow
 
@@ -34,7 +33,7 @@ Proceed with installation?
 
 After user confirms, run:
 ```bash
-zylos install <component>
+zylos add <component>
 ```
 
 ### Step 3: Check for Configuration
@@ -82,7 +81,7 @@ User can press Enter to use default, or provide a custom value.
 
 When user asks to upgrade a component:
 
-**If component is not installed, inform user and suggest using install instead.**
+**If component is not installed, inform user and suggest using add instead.**
 
 ### Step 1: Check Available Updates
 
@@ -199,3 +198,75 @@ config:
 ```
 
 When `sensitive: true`, the value should be handled carefully (not logged, stored in .env).
+
+---
+
+## C4 Mode (IM Channels)
+
+When user sends component management requests via C4 comm-bridge (Telegram, Lark, or any connected channel), use a streamlined flow. Replies must be plain text (no markdown).
+
+### Detecting C4 Mode
+
+The request is from C4 when the message arrives via a communication channel
+(e.g., `<user> said: ...` with a `reply via:` instruction).
+
+### C4 Command Mapping
+
+| User says | CLI command |
+|-----------|------------|
+| list / list components | `zylos list` |
+| info \<name\> | `zylos info <name> --json` |
+| check / check updates | `zylos upgrade --all --check --json` |
+| check \<name\> | `zylos upgrade <name> --check --json` |
+| upgrade \<name\> | `zylos upgrade <name> --check --json` (preview only) |
+| upgrade \<name\> confirm | `zylos upgrade <name> --yes --skip-eval` |
+| add \<name\> | `zylos add <name> --yes` |
+| remove / uninstall | Reject — reply: "Remove is not supported via C4. Use CLI directly." |
+
+### C4 Upgrade Confirm Flow
+
+Upgrades use two-step confirmation. No state is stored between messages.
+
+**Step 1 — User requests upgrade:**
+
+User: `upgrade telegram`
+
+Run `zylos upgrade telegram --check --json`, format the JSON, and reply:
+
+```
+telegram: 0.1.0 -> 0.2.0
+
+Changelog:
+- Fixed dotenv path issue
+
+Reply "upgrade telegram confirm" to proceed.
+```
+
+**Step 2 — User confirms:**
+
+User: `upgrade telegram confirm`
+
+Run `zylos upgrade telegram --yes --skip-eval` and reply with the output.
+
+The confirm command is self-contained — the component name is in the command itself,
+so it does not depend on Claude remembering the previous message.
+
+### C4 Output Formatting
+
+When formatting `--json` output for C4 replies:
+
+- Plain text only, no markdown
+- For `info --json`: format as `<name> v<version>\nType: <type>\nRepo: <repo>\nService: <name> (<status>)`
+- For `check --json`: format as `<name>: <current> -> <latest>` or `<name> is up to date (v<current>)`
+- For errors: when JSON has both `error` and `message` fields, display `message` (human-readable)
+- Send reply via the appropriate channel's send script
+
+### C4 Differences from Session Mode
+
+| Aspect | Claude Session | C4 |
+|--------|---------------|-----|
+| Confirmation | Interactive dialog | Two-step: preview + "confirm" command |
+| Output format | Rich (emoji, formatting) | Plain text only |
+| Config collection | Interactive prompts | Skip (use --yes), configure later |
+| Remove/uninstall | Supported | Rejected (too dangerous) |
+| Upgrade eval | Claude evaluation runs | Skipped (--skip-eval) |

@@ -2,29 +2,45 @@
 // This file defines all PM2-managed services with proper environment setup
 //
 // Usage:
-//   pm2 start ~/zylos/pm2/ecosystem.config.js
+//   pm2 start ~/zylos/pm2/ecosystem.config.cjs
 //   pm2 save
 //   pm2 startup  # Configure boot auto-start
 
 const path = require('path');
 const os = require('os');
 
+const fs = require('fs');
+
 const HOME = os.homedir();
 const ZYLOS_DIR = path.join(HOME, 'zylos');
 const SKILLS_DIR = path.join(HOME, 'zylos', '.claude', 'skills');
 
-// Enhanced PATH with Claude Code binary locations
+// Read a value from .env file
+function readEnvValue(key, defaultValue = '') {
+  try {
+    const content = fs.readFileSync(path.join(ZYLOS_DIR, '.env'), 'utf8');
+    const match = content.match(new RegExp(`^${key}=(.+)$`, 'm'));
+    if (match) return match[1];
+  } catch {}
+  return defaultValue;
+}
+
+// Build PATH: Claude locations + user's full shell PATH + PM2's own PATH
 const ENHANCED_PATH = [
   path.join(HOME, '.local', 'bin'),
   path.join(HOME, '.claude', 'bin'),
+  readEnvValue('SYSTEM_PATH'),
   process.env.PATH
-].join(':');
+].filter(Boolean).join(':');
+
+// Whether Claude should run with --dangerously-skip-permissions
+const CLAUDE_BYPASS_PERMISSIONS = readEnvValue('CLAUDE_BYPASS_PERMISSIONS', 'true');
 
 module.exports = {
   apps: [
     {
       name: 'scheduler',
-      script: path.join(SKILLS_DIR, 'scheduler', 'scripts', 'scheduler.js'),
+      script: path.join(SKILLS_DIR, 'scheduler', 'scripts', 'daemon.js'),
       cwd: ZYLOS_DIR,
       env: {
         PATH: ENHANCED_PATH,
@@ -64,23 +80,13 @@ module.exports = {
       cwd: HOME,
       env: {
         PATH: ENHANCED_PATH,
-        NODE_ENV: 'production'
+        NODE_ENV: 'production',
+        CLAUDE_BYPASS_PERMISSIONS
       },
       autorestart: true,
       max_restarts: 10,
       min_uptime: '10s'
     },
-    {
-      name: 'zylos-telegram',
-      script: path.join(SKILLS_DIR, 'telegram', 'scripts', 'bot.js'),
-      cwd: HOME,
-      env: {
-        PATH: ENHANCED_PATH,
-        NODE_ENV: 'production'
-      },
-      autorestart: true,
-      max_restarts: 10,
-      min_uptime: '10s'
-    }
+    // Component services (telegram, lark, etc.) are managed by `zylos add/remove`
   ]
 };

@@ -1,98 +1,241 @@
 /**
- * Core upgrade logic for components
- * Implements the 9-step upgrade flow with automatic rollback
+ * Core upgrade logic for components.
+ * Uses GitHub archive tarballs and filesystem-based backup/rollback.
+ * Zero git dependency.
  */
 
-const fs = require('fs');
-const path = require('path');
-const { execSync } = require('child_process');
-const { SKILLS_DIR, COMPONENTS_DIR } = require('./config');
-const { acquireLock, releaseLock } = require('./lock');
-const git = require('./git');
-const { loadComponents, saveComponents } = require('./components');
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
+import { execSync } from 'node:child_process';
+import { SKILLS_DIR, COMPONENTS_DIR } from './config.js';
+import { loadComponents } from './components.js';
+import { loadLocalRegistry } from './registry.js';
+import { parseSkillMd } from './skill.js';
+import { generateManifest, saveManifest } from './manifest.js';
+import { downloadArchive, downloadBranch } from './download.js';
+import { fetchLatestTag, fetchRawFile, sanitizeError } from './github.js';
+import { copyTree, syncTree } from './fs-utils.js';
+
+// ---------------------------------------------------------------------------
+// Version helpers
+// ---------------------------------------------------------------------------
 
 /**
- * Check if a component has updates available
- * @param {string} component - Component name
- * @returns {object} Update check result
+ * Read the local version from SKILL.md frontmatter.
  */
-function checkForUpdates(component) {
+function getLocalVersion(skillDir) {
+  const parsed = parseSkillMd(skillDir);
+  if (!parsed || !parsed.frontmatter.version) {
+    return { success: false, error: 'Version not found in SKILL.md' };
+  }
+  return { success: true, version: String(parsed.frontmatter.version) };
+}
+
+/**
+ * Get the repo for a component from components.json or registry.
+ */
+function getRepo(component) {
+  const components = loadComponents();
+  if (components[component]?.repo) return components[component].repo;
+  const registry = loadLocalRegistry();
+  if (registry[component]?.repo) return registry[component].repo;
+  return null;
+}
+
+/**
+ * Get the latest version from GitHub (latest tag).
+ * Falls back to fetching SKILL.md from GitHub if no tags found.
+ */
+function getLatestVersion(component, repo) {
+  if (!repo) return { success: false, error: 'No repo configured for component' };
+
+  // Primary: fetch latest tag from GitHub
+  const tagVersion = fetchLatestTag(repo);
+  if (tagVersion) {
+    return { success: true, version: tagVersion };
+  }
+
+  // Fallback: fetch raw SKILL.md from GitHub
+  try {
+    const content = fetchRawFile(repo, 'SKILL.md');
+    const match = content.match(/^---\n([\s\S]*?)\n---/);
+    if (match) {
+      const versionMatch = match[1].match(/^version:\s*(.+)$/m);
+      if (versionMatch) {
+        return { success: true, version: versionMatch[1].trim() };
+      }
+    }
+    return { success: false, error: 'Version not found in remote SKILL.md' };
+  } catch (err) {
+    return { success: false, error: `Cannot fetch remote: ${sanitizeError(err.message)}` };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Public: checkForUpdates
+// ---------------------------------------------------------------------------
+
+/**
+ * Check if a component has updates available.
+ * Uses registry lookup (fast, no HTTP) with fallback to GitHub raw SKILL.md.
+ *
+ * @param {string} component
+ * @returns {object} { success, hasUpdate, current, latest, repo }
+ */
+export function checkForUpdates(component) {
   const skillDir = path.join(SKILLS_DIR, component);
 
-  // Verify component exists
   if (!fs.existsSync(skillDir)) {
     return {
       success: false,
       error: 'component_not_found',
-      message: `组件 '${component}' 未安装`,
+      message: `Component '${component}' is not installed`,
     };
   }
 
-  // Get current version
-  const localVersion = git.getLocalVersion(skillDir);
+  const localVersion = getLocalVersion(skillDir);
   if (!localVersion.success) {
     return {
       success: false,
       error: 'version_not_found',
-      message: `无法读取当前版本: ${localVersion.error}`,
+      message: `Cannot read current version: ${localVersion.error}`,
     };
   }
 
-  // Get upgrade branch
-  const branch = git.getUpgradeBranch(skillDir);
-
-  // Check for remote changes
-  const remoteChanges = git.hasRemoteChanges(skillDir, branch);
-  if (!remoteChanges.success) {
-    return {
-      success: false,
-      error: 'fetch_failed',
-      message: `无法检查更新: ${remoteChanges.error}`,
-    };
-  }
-
-  if (!remoteChanges.hasChanges) {
-    return {
-      success: true,
-      hasUpdate: false,
-      current: localVersion.version,
-      latest: localVersion.version,
-    };
-  }
-
-  // Get remote version
-  const remoteVersion = git.getRemoteVersion(skillDir, branch);
-  if (!remoteVersion.success) {
+  const repo = getRepo(component);
+  const latest = getLatestVersion(component, repo);
+  if (!latest.success) {
     return {
       success: false,
       error: 'remote_version_failed',
-      message: `无法读取远程版本: ${remoteVersion.error}`,
+      message: `Cannot determine latest version: ${latest.error}`,
     };
   }
 
-  // Get changelog
-  const changelog = git.getRemoteChangelog(skillDir, branch);
-
-  // Check for local changes
-  const localChanges = git.hasLocalChanges(skillDir);
+  const hasUpdate = localVersion.version !== latest.version;
 
   return {
     success: true,
-    hasUpdate: true,
+    hasUpdate,
     current: localVersion.version,
-    latest: remoteVersion.version,
-    changelog: changelog.changelog,
-    localCommit: remoteChanges.localCommit,
-    remoteCommit: remoteChanges.remoteCommit,
-    localChanges: localChanges.hasChanges ? localChanges.changes : null,
-    branch,
+    latest: latest.version,
+    repo,
   };
 }
 
+// ---------------------------------------------------------------------------
+// Public: downloadToTemp
+// ---------------------------------------------------------------------------
+
 /**
- * Create upgrade context object
+ * Download a component version to a temp directory.
+ *
+ * @param {string} repo - GitHub repo (org/name)
+ * @param {string} version - Version to download
+ * @returns {{ success: boolean, tempDir?: string, error?: string }}
  */
-function createContext(component) {
+export function downloadToTemp(repo, version) {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-upgrade-'));
+
+  const result = downloadArchive(repo, version, tempDir);
+  if (!result.success) {
+    // Fallback: try downloading main branch
+    const branchResult = downloadBranch(repo, 'main', tempDir);
+    if (!branchResult.success) {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+      return { success: false, error: result.error };
+    }
+  }
+
+  return { success: true, tempDir };
+}
+
+// ---------------------------------------------------------------------------
+// Public: readChangelog
+// ---------------------------------------------------------------------------
+
+/**
+ * Read CHANGELOG.md from a directory.
+ *
+ * @param {string} dir - Directory containing CHANGELOG.md
+ * @returns {string|null}
+ */
+export function readChangelog(dir) {
+  const changelogPath = path.join(dir, 'CHANGELOG.md');
+  if (!fs.existsSync(changelogPath)) return null;
+  try {
+    return fs.readFileSync(changelogPath, 'utf8');
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Filter changelog to only show entries between two versions.
+ * Expects standard format: ## [version] or ## version headers.
+ *
+ * @param {string} changelog - Full changelog text
+ * @param {string} fromVersion - Current installed version (excluded)
+ * @returns {string|null} Filtered changelog or null if parsing fails
+ */
+export function filterChangelog(changelog, fromVersion) {
+  if (!changelog || !fromVersion) return changelog;
+
+  const lines = changelog.split('\n');
+  const result = [];
+  let capturing = false;
+  let foundHeaders = false;
+  let done = false;
+
+  // Match ## headers containing version numbers: "## [1.0.0]", "## 1.0.0", "## v1.0.0 - date"
+  const versionHeaderRe = /^##\s+\[?v?(\d+\.\d+[^\]\s]*)\]?/;
+
+  for (const line of lines) {
+    if (done) break;
+
+    const match = line.match(versionHeaderRe);
+    if (match) {
+      foundHeaders = true;
+      const headerVersion = match[1].replace(/^v/, '');
+      // Stop when we reach the installed version (already known)
+      if (headerVersion === fromVersion) {
+        done = true;
+        continue;
+      }
+      // Capture everything from the newest version down to (but not including) fromVersion
+      capturing = true;
+    }
+
+    if (capturing) {
+      result.push(line);
+    }
+  }
+
+  if (!foundHeaders) return changelog; // Couldn't parse headers, return full text
+  return result.join('\n').trim() || null;
+}
+
+// ---------------------------------------------------------------------------
+// Public: cleanupTemp
+// ---------------------------------------------------------------------------
+
+/**
+ * Remove a temp directory.
+ *
+ * @param {string} tempDir
+ */
+export function cleanupTemp(tempDir) {
+  if (tempDir && fs.existsSync(tempDir)) {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Internal: create upgrade context
+// ---------------------------------------------------------------------------
+
+function createContext(component, { tempDir, newVersion } = {}) {
   const skillDir = path.join(SKILLS_DIR, component);
   const dataDir = path.join(COMPONENTS_DIR, component);
 
@@ -100,14 +243,13 @@ function createContext(component) {
     component,
     skillDir,
     dataDir,
+    tempDir: tempDir || null,
+    newVersion: newVersion || null,
     // State tracking
-    rollbackPoint: null,
-    stashName: null,
-    packageLockBackup: null,
-    lockAcquired: false,
+    backupDir: null,
     serviceStopped: false,
+    serviceExists: true,
     serviceWasRunning: false,
-    hadLocalChanges: false,
     // Results
     steps: [],
     from: null,
@@ -117,129 +259,19 @@ function createContext(component) {
   };
 }
 
-/**
- * Step 1: Acquire upgrade lock
- */
-function step1_acquireLock(ctx) {
-  const startTime = Date.now();
-  const result = acquireLock(ctx.component);
-
-  if (!result.success) {
-    return {
-      step: 1,
-      name: 'acquire_lock',
-      status: 'failed',
-      error: result.error,
-      duration: Date.now() - startTime,
-    };
-  }
-
-  ctx.lockAcquired = true;
-  return {
-    step: 1,
-    name: 'acquire_lock',
-    status: 'done',
-    duration: Date.now() - startTime,
-  };
-}
+// ---------------------------------------------------------------------------
+// 8-step upgrade pipeline
+// ---------------------------------------------------------------------------
 
 /**
- * Step 2: Record rollback point
+ * Step 1: pre-upgrade hook
  */
-function step2_recordRollbackPoint(ctx) {
-  const startTime = Date.now();
-  const result = git.getCurrentCommit(ctx.skillDir);
-
-  if (!result.success) {
-    return {
-      step: 2,
-      name: 'record_commit',
-      status: 'failed',
-      error: `无法获取当前 commit: ${result.error}`,
-      duration: Date.now() - startTime,
-    };
-  }
-
-  ctx.rollbackPoint = result.output;
-
-  // Write rollback point to file
-  const rollbackFile = path.join(ctx.skillDir, '.upgrade-rollback-point');
-  fs.writeFileSync(rollbackFile, ctx.rollbackPoint);
-
-  return {
-    step: 2,
-    name: 'record_commit',
-    status: 'done',
-    message: ctx.rollbackPoint.substring(0, 7),
-    duration: Date.now() - startTime,
-  };
-}
-
-/**
- * Step 3: Create backup (stash + package-lock.json)
- */
-function step3_createBackup(ctx) {
-  const startTime = Date.now();
-
-  // Check for local changes
-  const changes = git.hasLocalChanges(ctx.skillDir);
-  if (!changes.success) {
-    return {
-      step: 3,
-      name: 'backup',
-      status: 'failed',
-      error: `无法检查本地修改: ${changes.error}`,
-      duration: Date.now() - startTime,
-    };
-  }
-
-  // Stash if there are changes
-  if (changes.hasChanges) {
-    const stashResult = git.stashChanges(ctx.skillDir);
-    if (!stashResult.success) {
-      return {
-        step: 3,
-        name: 'backup',
-        status: 'failed',
-        error: `无法 stash 本地修改: ${stashResult.error}`,
-        duration: Date.now() - startTime,
-      };
-    }
-    ctx.stashName = stashResult.stashName;
-    ctx.hadLocalChanges = true;
-  }
-
-  // Backup package-lock.json
-  const lockFile = path.join(ctx.skillDir, 'package-lock.json');
-  if (fs.existsSync(lockFile)) {
-    const backupPath = lockFile + '.backup';
-    fs.copyFileSync(lockFile, backupPath);
-    ctx.packageLockBackup = backupPath;
-  }
-
-  return {
-    step: 3,
-    name: 'backup',
-    status: 'done',
-    message: ctx.hadLocalChanges ? 'stash + lock file' : 'lock file only',
-    duration: Date.now() - startTime,
-  };
-}
-
-/**
- * Step 4: Execute pre-upgrade hook
- */
-function step4_preUpgradeHook(ctx) {
+function step1_preUpgradeHook(ctx) {
   const startTime = Date.now();
   const hookPath = path.join(ctx.skillDir, 'hooks', 'pre-upgrade.js');
 
   if (!fs.existsSync(hookPath)) {
-    return {
-      step: 4,
-      name: 'pre_upgrade_hook',
-      status: 'skipped',
-      duration: Date.now() - startTime,
-    };
+    return { step: 1, name: 'pre_upgrade_hook', status: 'skipped', duration: Date.now() - startTime };
   }
 
   try {
@@ -254,121 +286,101 @@ function step4_preUpgradeHook(ctx) {
         ZYLOS_DATA_DIR: ctx.dataDir,
       },
     });
-    return {
-      step: 4,
-      name: 'pre_upgrade_hook',
-      status: 'done',
-      duration: Date.now() - startTime,
-    };
+    return { step: 1, name: 'pre_upgrade_hook', status: 'done', duration: Date.now() - startTime };
   } catch (err) {
-    return {
-      step: 4,
-      name: 'pre_upgrade_hook',
-      status: 'failed',
-      error: err.stderr?.trim() || err.message,
-      duration: Date.now() - startTime,
-    };
+    return { step: 1, name: 'pre_upgrade_hook', status: 'failed', error: err.stderr?.trim() || err.message, duration: Date.now() - startTime };
   }
 }
 
 /**
- * Step 5: Stop PM2 service
+ * Step 2: stop PM2 service
  */
-function step5_stopService(ctx) {
+function step2_stopService(ctx) {
   const startTime = Date.now();
-  const serviceName = `zylos-${ctx.component}`;
+  const parsed = parseSkillMd(ctx.skillDir);
+  const serviceName = parsed?.frontmatter?.lifecycle?.service?.name || `zylos-${ctx.component}`;
 
-  // Check if service exists and is running
   try {
     const output = execSync('pm2 jlist 2>/dev/null', { encoding: 'utf8' });
     const processes = JSON.parse(output);
     const service = processes.find(p => p.name === serviceName);
 
     if (!service) {
-      return {
-        step: 5,
-        name: 'stop_service',
-        status: 'skipped',
-        message: 'no service',
-        duration: Date.now() - startTime,
-      };
+      ctx.serviceExists = false;
+      return { step: 2, name: 'stop_service', status: 'skipped', message: 'no service', duration: Date.now() - startTime };
     }
 
+    ctx.serviceExists = true;
     ctx.serviceWasRunning = service.pm2_env?.status === 'online';
 
     if (!ctx.serviceWasRunning) {
-      return {
-        step: 5,
-        name: 'stop_service',
-        status: 'skipped',
-        message: 'not running',
-        duration: Date.now() - startTime,
-      };
+      return { step: 2, name: 'stop_service', status: 'skipped', message: 'not running', duration: Date.now() - startTime };
     }
 
-    // Stop the service
     execSync(`pm2 stop ${serviceName} 2>/dev/null`, { stdio: 'pipe' });
     ctx.serviceStopped = true;
 
-    return {
-      step: 5,
-      name: 'stop_service',
-      status: 'done',
-      message: serviceName,
-      duration: Date.now() - startTime,
-    };
-  } catch (err) {
-    // PM2 might not be available
-    return {
-      step: 5,
-      name: 'stop_service',
-      status: 'skipped',
-      message: 'pm2 not available',
-      duration: Date.now() - startTime,
-    };
+    return { step: 2, name: 'stop_service', status: 'done', message: serviceName, duration: Date.now() - startTime };
+  } catch {
+    return { step: 2, name: 'stop_service', status: 'skipped', message: 'pm2 not available', duration: Date.now() - startTime };
   }
 }
 
 /**
- * Step 6: Git pull
+ * Step 3: filesystem backup to .backup/<timestamp>/
  */
-function step6_gitPull(ctx) {
+function step3_backup(ctx) {
   const startTime = Date.now();
-  const result = git.pull(ctx.skillDir);
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const backupDir = path.join(ctx.skillDir, '.backup', timestamp);
 
-  if (!result.success) {
-    return {
-      step: 6,
-      name: 'git_pull',
-      status: 'failed',
-      error: result.error,
-      duration: Date.now() - startTime,
-    };
+  try {
+    copyTree(ctx.skillDir, backupDir, { excludes: ['node_modules', '.backup', '.zylos'] });
+
+    ctx.backupDir = backupDir;
+    return { step: 3, name: 'backup', status: 'done', message: path.basename(backupDir), duration: Date.now() - startTime };
+  } catch (err) {
+    return { step: 3, name: 'backup', status: 'failed', error: `Backup failed: ${err.message}`, duration: Date.now() - startTime };
   }
-
-  return {
-    step: 6,
-    name: 'git_pull',
-    status: 'done',
-    duration: Date.now() - startTime,
-  };
 }
 
 /**
- * Step 7: npm install
+ * Step 4: copy new files from temp dir to skill dir
  */
-function step7_npmInstall(ctx) {
+function step4_copyNewFiles(ctx) {
+  const startTime = Date.now();
+
+  if (!ctx.tempDir || !fs.existsSync(ctx.tempDir)) {
+    return { step: 4, name: 'copy_new_files', status: 'failed', error: 'Temp directory not available', duration: Date.now() - startTime };
+  }
+
+  // Exclude list: always exclude meta dirs, plus lifecycle.preserve entries
+  const excludes = ['node_modules', '.backup', '.zylos'];
+
+  // Read preserve list from the NEW SKILL.md (in tempDir)
+  const newParsed = parseSkillMd(ctx.tempDir);
+  const preserveList = newParsed?.frontmatter?.lifecycle?.preserve || [];
+  for (const entry of preserveList) {
+    excludes.push(entry);
+  }
+
+  try {
+    syncTree(ctx.tempDir, ctx.skillDir, { excludes });
+    return { step: 4, name: 'copy_new_files', status: 'done', duration: Date.now() - startTime };
+  } catch (err) {
+    return { step: 4, name: 'copy_new_files', status: 'failed', error: `Copy failed: ${err.message}`, duration: Date.now() - startTime };
+  }
+}
+
+/**
+ * Step 5: npm install
+ */
+function step5_npmInstall(ctx) {
   const startTime = Date.now();
   const packageJson = path.join(ctx.skillDir, 'package.json');
 
   if (!fs.existsSync(packageJson)) {
-    return {
-      step: 7,
-      name: 'npm_install',
-      status: 'skipped',
-      message: 'no package.json',
-      duration: Date.now() - startTime,
-    };
+    return { step: 5, name: 'npm_install', status: 'skipped', message: 'no package.json', duration: Date.now() - startTime };
   }
 
   try {
@@ -377,37 +389,36 @@ function step7_npmInstall(ctx) {
       encoding: 'utf8',
       stdio: ['pipe', 'pipe', 'pipe'],
     });
-    return {
-      step: 7,
-      name: 'npm_install',
-      status: 'done',
-      duration: Date.now() - startTime,
-    };
+    return { step: 5, name: 'npm_install', status: 'done', duration: Date.now() - startTime };
   } catch (err) {
-    return {
-      step: 7,
-      name: 'npm_install',
-      status: 'failed',
-      error: err.stderr?.trim() || err.message,
-      duration: Date.now() - startTime,
-    };
+    return { step: 5, name: 'npm_install', status: 'failed', error: err.stderr?.trim() || err.message, duration: Date.now() - startTime };
   }
 }
 
 /**
- * Step 8: Execute post-upgrade hook
+ * Step 6: generate manifest
  */
-function step8_postUpgradeHook(ctx) {
+function step6_generateManifest(ctx) {
+  const startTime = Date.now();
+
+  try {
+    const manifest = generateManifest(ctx.skillDir);
+    saveManifest(ctx.skillDir, manifest);
+    return { step: 6, name: 'generate_manifest', status: 'done', duration: Date.now() - startTime };
+  } catch (err) {
+    return { step: 6, name: 'generate_manifest', status: 'failed', error: err.message, duration: Date.now() - startTime };
+  }
+}
+
+/**
+ * Step 7: post-upgrade hook
+ */
+function step7_postUpgradeHook(ctx) {
   const startTime = Date.now();
   const hookPath = path.join(ctx.skillDir, 'hooks', 'post-upgrade.js');
 
   if (!fs.existsSync(hookPath)) {
-    return {
-      step: 8,
-      name: 'post_upgrade_hook',
-      status: 'skipped',
-      duration: Date.now() - startTime,
-    };
+    return { step: 7, name: 'post_upgrade_hook', status: 'skipped', duration: Date.now() - startTime };
   }
 
   try {
@@ -422,44 +433,57 @@ function step8_postUpgradeHook(ctx) {
         ZYLOS_DATA_DIR: ctx.dataDir,
       },
     });
-    return {
-      step: 8,
-      name: 'post_upgrade_hook',
-      status: 'done',
-      duration: Date.now() - startTime,
-    };
+    return { step: 7, name: 'post_upgrade_hook', status: 'done', duration: Date.now() - startTime };
   } catch (err) {
-    return {
-      step: 8,
-      name: 'post_upgrade_hook',
-      status: 'failed',
-      error: err.stderr?.trim() || err.message,
-      duration: Date.now() - startTime,
-    };
+    return { step: 7, name: 'post_upgrade_hook', status: 'failed', error: err.stderr?.trim() || err.message, duration: Date.now() - startTime };
   }
 }
 
 /**
- * Step 9: Start service and verify
+ * Step 8: start service and verify
+ *
+ * Three cases:
+ * - Service was running before upgrade → restart it
+ * - Service exists in PM2 but was stopped → leave it stopped (user intent)
+ * - Service not registered in PM2 but SKILL.md declares one → start it
  */
-function step9_startAndVerify(ctx) {
+function step8_startAndVerify(ctx) {
   const startTime = Date.now();
-  const serviceName = `zylos-${ctx.component}`;
 
-  // Only restart if service was running before
-  if (!ctx.serviceWasRunning) {
-    return {
-      step: 9,
-      name: 'start_and_verify',
-      status: 'skipped',
-      message: 'service was not running',
-      duration: Date.now() - startTime,
-    };
+  // Read service config from SKILL.md
+  const parsed = parseSkillMd(ctx.skillDir);
+  const serviceConfig = parsed?.frontmatter?.lifecycle?.service;
+  const serviceName = serviceConfig?.name || `zylos-${ctx.component}`;
+
+  // Case: service was stopped but still registered — leave it stopped
+  if (ctx.serviceExists && !ctx.serviceWasRunning) {
+    return { step: 8, name: 'start_and_verify', status: 'skipped', message: 'service was stopped', duration: Date.now() - startTime };
+  }
+
+  // Case: service not registered in PM2 and no service declared in SKILL.md — skip
+  if (!ctx.serviceWasRunning && !serviceConfig) {
+    return { step: 8, name: 'start_and_verify', status: 'skipped', message: 'no service configured', duration: Date.now() - startTime };
   }
 
   try {
-    // Restart the service
-    execSync(`pm2 restart ${serviceName} 2>/dev/null`, { stdio: 'pipe' });
+    if (!ctx.serviceExists && serviceConfig) {
+      // Service not in PM2 but declared in SKILL.md — start fresh
+      const ecosystemPath = path.join(ctx.skillDir, 'ecosystem.config.cjs');
+      if (fs.existsSync(ecosystemPath)) {
+        // Use ecosystem config (custom PM2 options)
+        execSync(`pm2 start "${ecosystemPath}"`, { cwd: ctx.skillDir, stdio: 'pipe' });
+      } else if (serviceConfig.entry) {
+        // Use entry point from SKILL.md
+        const entryPath = path.join(ctx.skillDir, serviceConfig.entry);
+        execSync(`pm2 start "${entryPath}" --name "${serviceName}"`, { stdio: 'pipe' });
+      } else {
+        return { step: 8, name: 'start_and_verify', status: 'skipped', message: 'no entry point', duration: Date.now() - startTime };
+      }
+      execSync('pm2 save 2>/dev/null', { stdio: 'pipe' });
+    } else {
+      // Service was running — restart it
+      execSync(`pm2 restart ${serviceName} 2>/dev/null`, { stdio: 'pipe' });
+    }
 
     // Poll for service status (max 5 attempts, 500ms apart)
     let service = null;
@@ -468,150 +492,116 @@ function step9_startAndVerify(ctx) {
       const processes = JSON.parse(output);
       service = processes.find(p => p.name === serviceName);
 
-      if (service?.pm2_env?.status === 'online') {
-        break;
-      }
+      if (service?.pm2_env?.status === 'online') break;
 
-      // Brief sync wait between polls
       const waitUntil = Date.now() + 500;
       while (Date.now() < waitUntil) { /* busy wait */ }
     }
 
     if (!service || service.pm2_env?.status !== 'online') {
-      return {
-        step: 9,
-        name: 'start_and_verify',
-        status: 'failed',
-        error: '服务启动验证失败',
-        duration: Date.now() - startTime,
-      };
+      return { step: 8, name: 'start_and_verify', status: 'failed', error: 'Service startup verification failed', duration: Date.now() - startTime };
     }
 
-    ctx.serviceStopped = false; // Service is now running
-    return {
-      step: 9,
-      name: 'start_and_verify',
-      status: 'done',
-      duration: Date.now() - startTime,
-    };
+    ctx.serviceStopped = false;
+    return { step: 8, name: 'start_and_verify', status: 'done', message: serviceName, duration: Date.now() - startTime };
   } catch (err) {
-    return {
-      step: 9,
-      name: 'start_and_verify',
-      status: 'failed',
-      error: err.message,
-      duration: Date.now() - startTime,
-    };
+    return { step: 8, name: 'start_and_verify', status: 'failed', error: err.message, duration: Date.now() - startTime };
   }
 }
 
+// ---------------------------------------------------------------------------
+// Public: rollback
+// ---------------------------------------------------------------------------
+
 /**
- * Rollback on failure
+ * Rollback from .backup/ directory.
+ *
+ * @param {object} ctx - Upgrade context
+ * @returns {object[]} Array of rollback action results
  */
-function rollback(ctx) {
+export function rollback(ctx) {
   const results = [];
 
-  // Reset to rollback point
-  if (ctx.rollbackPoint) {
-    const resetResult = git.resetHard(ctx.skillDir, ctx.rollbackPoint);
-    results.push({
-      action: 'git_reset',
-      success: resetResult.success,
-      error: resetResult.error,
-    });
-  }
-
-  // Restore package-lock.json
-  if (ctx.packageLockBackup && fs.existsSync(ctx.packageLockBackup)) {
+  // Restore files from backup (--delete removes files added by the failed upgrade)
+  if (ctx.backupDir && fs.existsSync(ctx.backupDir)) {
     try {
-      const lockFile = path.join(ctx.skillDir, 'package-lock.json');
-      fs.copyFileSync(ctx.packageLockBackup, lockFile);
-      fs.unlinkSync(ctx.packageLockBackup);
-
-      // Re-run npm install with restored lock
-      execSync('npm install --omit=dev', {
-        cwd: ctx.skillDir,
-        stdio: ['pipe', 'pipe', 'pipe'],
-      });
-      results.push({ action: 'restore_dependencies', success: true });
+      syncTree(ctx.backupDir, ctx.skillDir, { excludes: ['node_modules', '.backup', '.zylos'] });
+      results.push({ action: 'restore_files', success: true });
     } catch (err) {
-      results.push({ action: 'restore_dependencies', success: false, error: err.message });
+      results.push({ action: 'restore_files', success: false, error: err.message });
     }
-  }
 
-  // Pop stash
-  if (ctx.hadLocalChanges) {
-    const popResult = git.popStash(ctx.skillDir);
-    results.push({
-      action: 'stash_pop',
-      success: popResult.success,
-      error: popResult.error,
-    });
+    // Restore dependencies
+    const packageJson = path.join(ctx.skillDir, 'package.json');
+    if (fs.existsSync(packageJson)) {
+      try {
+        execSync('npm install --omit=dev', {
+          cwd: ctx.skillDir,
+          stdio: ['pipe', 'pipe', 'pipe'],
+        });
+        results.push({ action: 'restore_dependencies', success: true });
+      } catch (err) {
+        results.push({ action: 'restore_dependencies', success: false, error: err.message });
+      }
+    }
   }
 
   // Restart service if it was running
   if (ctx.serviceWasRunning) {
+    const parsed = parseSkillMd(ctx.skillDir);
+    const serviceName = parsed?.frontmatter?.lifecycle?.service?.name || `zylos-${ctx.component}`;
     try {
-      execSync(`pm2 restart zylos-${ctx.component} 2>/dev/null || true`, { stdio: 'pipe' });
+      execSync(`pm2 restart ${serviceName} 2>/dev/null || true`, { stdio: 'pipe' });
       results.push({ action: 'restart_service', success: true });
     } catch (err) {
       results.push({ action: 'restart_service', success: false, error: err.message });
     }
   }
 
-  // Release lock
-  if (ctx.lockAcquired) {
-    releaseLock(ctx.component);
-    results.push({ action: 'release_lock', success: true });
-  }
-
-  // Clean up rollback point file
-  const rollbackFile = path.join(ctx.skillDir, '.upgrade-rollback-point');
-  if (fs.existsSync(rollbackFile)) {
-    try {
-      fs.unlinkSync(rollbackFile);
-    } catch {}
-  }
-
   return results;
 }
 
+// ---------------------------------------------------------------------------
+// Public: runUpgrade
+// ---------------------------------------------------------------------------
+
 /**
- * Run the full 9-step upgrade
- * @param {string} component - Component name
- * @param {object} options - Options (jsonOutput, etc.)
+ * Run the 8-step upgrade pipeline.
+ * Lock must be acquired by caller (component.js).
+ *
+ * @param {string} component
+ * @param {{ tempDir: string, newVersion: string }} opts
  * @returns {object} Upgrade result
  */
-function runUpgrade(component, options = {}) {
-  const ctx = createContext(component);
+export function runUpgrade(component, { tempDir, newVersion } = {}) {
+  const ctx = createContext(component, { tempDir, newVersion });
 
-  // Validate skill directory exists
   if (!fs.existsSync(ctx.skillDir)) {
     return {
       action: 'upgrade',
       component,
       success: false,
-      error: `组件目录不存在: ${ctx.skillDir}`,
+      error: `Component directory not found: ${ctx.skillDir}`,
       steps: [],
     };
   }
 
-  // Get versions before upgrade
-  const localVersion = git.getLocalVersion(ctx.skillDir);
+  // Record current version
+  const localVersion = getLocalVersion(ctx.skillDir);
   if (localVersion.success) {
     ctx.from = localVersion.version;
   }
+  ctx.to = newVersion || null;
 
   const steps = [
-    step1_acquireLock,
-    step2_recordRollbackPoint,
-    step3_createBackup,
-    step4_preUpgradeHook,
-    step5_stopService,
-    step6_gitPull,
-    step7_npmInstall,
-    step8_postUpgradeHook,
-    step9_startAndVerify,
+    step1_preUpgradeHook,
+    step2_stopService,
+    step3_backup,
+    step4_copyNewFiles,
+    step5_npmInstall,
+    step6_generateManifest,
+    step7_postUpgradeHook,
+    step8_startAndVerify,
   ];
 
   let failedStep = null;
@@ -639,43 +629,14 @@ function runUpgrade(component, options = {}) {
       failedStep: failedStep.step,
       error: failedStep.error,
       steps: ctx.steps,
-      rollback: {
-        performed: true,
-        steps: rollbackResults,
-      },
+      rollback: { performed: true, steps: rollbackResults },
     };
   }
 
-  // Success - get new version
-  const newVersion = git.getLocalVersion(ctx.skillDir);
-  if (newVersion.success) {
-    ctx.to = newVersion.version;
-  }
-
-  // Update components.json
-  const components = loadComponents();
-  if (components[component]) {
-    components[component].version = ctx.to || components[component].version;
-    components[component].upgradedAt = new Date().toISOString();
-    saveComponents(components);
-  }
-
-  // Release lock
-  releaseLock(component);
-
-  // Clean up rollback point file
-  const rollbackFile = path.join(ctx.skillDir, '.upgrade-rollback-point');
-  if (fs.existsSync(rollbackFile)) {
-    try {
-      fs.unlinkSync(rollbackFile);
-    } catch {}
-  }
-
-  // Clean up package-lock backup
-  if (ctx.packageLockBackup && fs.existsSync(ctx.packageLockBackup)) {
-    try {
-      fs.unlinkSync(ctx.packageLockBackup);
-    } catch {}
+  // Success — read the new version from the updated SKILL.md
+  const updatedVersion = getLocalVersion(ctx.skillDir);
+  if (updatedVersion.success) {
+    ctx.to = updatedVersion.version;
   }
 
   return {
@@ -685,12 +646,6 @@ function runUpgrade(component, options = {}) {
     from: ctx.from,
     to: ctx.to,
     steps: ctx.steps,
-    stashExists: ctx.hadLocalChanges,
+    backupDir: ctx.backupDir,
   };
 }
-
-module.exports = {
-  checkForUpdates,
-  runUpgrade,
-  rollback,
-};

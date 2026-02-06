@@ -2,20 +2,13 @@
  * Shared configuration constants
  */
 
-const path = require('path');
+import path from 'node:path';
 
-const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(process.env.HOME, 'zylos');
-const SKILLS_DIR = path.join(ZYLOS_DIR, '.claude', 'skills');
-const COMPONENTS_DIR = path.join(ZYLOS_DIR, 'components');
-const LOCKS_DIR = path.join(process.env.HOME, '.zylos', '.locks');
-const REGISTRY_FILE = path.join(__dirname, '..', 'registry.json');
-const REGISTRY_URL = 'https://raw.githubusercontent.com/zylos-ai/zylos-registry/main/registry.json';
-
-module.exports = {
-  ZYLOS_DIR,
-  SKILLS_DIR,
-  COMPONENTS_DIR,
-  LOCKS_DIR,
-  REGISTRY_FILE,
-  REGISTRY_URL,
-};
+export const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(process.env.HOME, 'zylos');
+export const SKILLS_DIR = path.join(ZYLOS_DIR, '.claude', 'skills');
+export const CONFIG_DIR = path.join(ZYLOS_DIR, '.zylos');
+export const COMPONENTS_DIR = path.join(ZYLOS_DIR, 'components');
+export const LOCKS_DIR = path.join(CONFIG_DIR, 'locks');
+export const REGISTRY_FILE = path.join(CONFIG_DIR, 'registry.json');
+export const COMPONENTS_FILE = path.join(CONFIG_DIR, 'components.json');
+export const ENV_FILE = path.join(ZYLOS_DIR, '.env');

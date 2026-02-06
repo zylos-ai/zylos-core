@@ -29,13 +29,13 @@ check_requirements() {
     # Check Node.js
     if ! command -v node &> /dev/null; then
         echo -e "${RED}Error: Node.js is required but not installed.${NC}"
-        echo "Install Node.js 18+ from: https://nodejs.org/"
+        echo "Install Node.js 20+ from: https://nodejs.org/"
         exit 1
     fi
 
     NODE_VERSION=$(node -v | cut -d'v' -f2 | cut -d'.' -f1)
-    if [ "$NODE_VERSION" -lt 18 ]; then
-        echo -e "${RED}Error: Node.js 18+ required. Found: $(node -v)${NC}"
+    if [ "$NODE_VERSION" -lt 20 ]; then
+        echo -e "${RED}Error: Node.js 20+ required. Found: $(node -v)${NC}"
         exit 1
     fi
     echo "  ✓ Node.js $(node -v)"
@@ -108,7 +108,7 @@ install_core() {
     cp -r "$CORE_DIR/templates/memory/"* "$ZYLOS_DIR/memory/"
 
     # Copy PM2 ecosystem configuration
-    cp "$CORE_DIR/templates/pm2/ecosystem.config.js" "$ZYLOS_DIR/pm2/"
+    cp "$CORE_DIR/templates/pm2/ecosystem.config.cjs" "$ZYLOS_DIR/pm2/"
     echo "  ✓ PM2 ecosystem configuration installed"
 
     echo "  ✓ Templates installed"
@@ -155,12 +155,12 @@ start_services() {
         source "$ZYLOS_DIR/.env"
     fi
 
-    # Start all services using ecosystem.config.js
+    # Start all services using ecosystem.config.cjs
     # This ensures proper PATH configuration and consistent service management
     cd "$ZYLOS_DIR/pm2"
-    pm2 start ecosystem.config.js
+    pm2 start ecosystem.config.cjs
 
-    echo "  ✓ Services started from ecosystem.config.js"
+    echo "  ✓ Services started from ecosystem.config.cjs"
     echo "  ℹ Service list:"
     pm2 list --no-color | grep -E "^\│" | head -6
 }

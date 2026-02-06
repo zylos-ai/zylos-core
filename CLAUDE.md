@@ -75,7 +75,7 @@ This keeps code (in `skills/`) separate from runtime data (in `~/zylos/`).
 
 ### Ecosystem Configuration
 
-**All PM2 services MUST be managed through `~/zylos/pm2/ecosystem.config.js`.**
+**All PM2 services MUST be managed through `~/zylos/pm2/ecosystem.config.cjs`.**
 
 This file:
 - Defines all PM2-managed services
@@ -83,16 +83,16 @@ This file:
 - Ensures `claude` command is available to all services
 - Persists across reboots when used with `pm2 save`
 
-**Template location:** `templates/pm2/ecosystem.config.js`
+**Template location:** `templates/pm2/ecosystem.config.cjs`
 
 ### Adding New PM2 Services
 
 When adding a new service:
 
-1. **Update ecosystem.config.js** - Add the new service to the apps array
-2. **Restart all services** - `pm2 delete all && pm2 start ~/zylos/pm2/ecosystem.config.js`
+1. **Update ecosystem.config.cjs** - Add the new service to the apps array
+2. **Restart all services** - `pm2 delete all && pm2 start ~/zylos/pm2/ecosystem.config.cjs`
 3. **Save configuration** - `pm2 save` (critical for reboot persistence)
-4. **Update template** - Sync changes back to `templates/pm2/ecosystem.config.js`
+4. **Update template** - Sync changes back to `templates/pm2/ecosystem.config.cjs`
 
 **Example service entry:**
 

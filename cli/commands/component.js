@@ -2,97 +2,25 @@
  * Component management commands
  */
 
-const fs = require('fs');
-const path = require('path');
-const readline = require('readline');
-const { ZYLOS_DIR, SKILLS_DIR, COMPONENTS_DIR } = require('../lib/config');
-const { loadRegistry } = require('../lib/registry');
-const { loadComponents, resolveTarget, outputTask } = require('../lib/components');
-const { checkForUpdates, runUpgrade } = require('../lib/upgrade');
+import fs from 'node:fs';
+import path from 'node:path';
+import { execFileSync } from 'node:child_process';
+import { SKILLS_DIR, COMPONENTS_DIR } from '../lib/config.js';
+import { loadRegistry } from '../lib/registry.js';
+import { loadComponents, saveComponents } from '../lib/components.js';
+import { checkForUpdates, runUpgrade, downloadToTemp, readChangelog, filterChangelog, cleanupTemp } from '../lib/upgrade.js';
+import {
+  checkForCoreUpdates, runSelfUpgrade,
+  downloadCoreToTemp, readChangelog as readCoreChangelog,
+  cleanupTemp as cleanupCoreTemp, cleanupBackup,
+} from '../lib/self-upgrade.js';
+import { detectChanges } from '../lib/manifest.js';
+import { parseSkillMd } from '../lib/skill.js';
+import { acquireLock, releaseLock } from '../lib/lock.js';
+import { promptYesNo } from '../lib/prompts.js';
+import { evaluateUpgrade } from '../lib/claude-eval.js';
 
-/**
- * Prompt user for confirmation (interactive TTY only)
- * @param {string} question - The question to ask
- * @returns {Promise<boolean>} - true if user confirmed, false otherwise
- */
-function promptConfirm(question) {
-  // If stdin is not a TTY, return false (non-interactive mode)
-  if (!process.stdin.isTTY) {
-    console.log('Non-interactive mode detected. Use --yes to skip confirmation.');
-    return Promise.resolve(false);
-  }
-
-  const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout,
-  });
-
-  return new Promise((resolve) => {
-    rl.question(question, (answer) => {
-      rl.close();
-      const normalized = answer.trim().toLowerCase();
-      resolve(normalized === 'y' || normalized === 'yes');
-    });
-  });
-}
-
-async function installComponent(args) {
-  const target = args[0];
-  if (!target) {
-    console.error('Usage: zylos install <name[@version]|org/repo[@version]|github-url>');
-    console.log('\nExamples:');
-    console.log('  zylos install telegram          # Official component (latest)');
-    console.log('  zylos install telegram@0.2.0    # Specific version');
-    console.log('  zylos install kevin/whatsapp    # Third-party');
-    console.log('  zylos install https://github.com/kevin/zylos-whatsapp');
-    process.exit(1);
-  }
-
-  const resolved = await resolveTarget(target);
-
-  if (!resolved.repo) {
-    console.error(`Unknown component: ${target}`);
-    console.log('Use "zylos search <keyword>" to find available components.');
-    process.exit(1);
-  }
-
-  const components = loadComponents();
-  if (components[resolved.name]) {
-    console.log(`Component "${resolved.name}" is already installed (v${components[resolved.name].version}).`);
-    console.log('Use "zylos upgrade" to update.');
-    process.exit(0);
-  }
-
-  if (resolved.isThirdParty) {
-    console.log('⚠️  Third-party component - not verified by Zylos team.');
-    console.log(`Repository: https://github.com/${resolved.repo}`);
-    console.log('');
-  }
-
-  const versionInfo = resolved.version ? ` (v${resolved.version})` : '';
-  console.log(`Installing ${resolved.name}${versionInfo} from ${resolved.repo}...`);
-
-  outputTask('install', {
-    component: resolved.name,
-    repo: resolved.repo,
-    version: resolved.version,
-    skillsDir: SKILLS_DIR,
-    dataDir: path.join(COMPONENTS_DIR, resolved.name),
-    isThirdParty: resolved.isThirdParty,
-    steps: [
-      `Clone https://github.com/${resolved.repo} to ${SKILLS_DIR}/${resolved.name}`,
-      resolved.version ? `Checkout version ${resolved.version}: git checkout v${resolved.version}` : null,
-      `Create data directory ${COMPONENTS_DIR}/${resolved.name}`,
-      `Read SKILL.md for lifecycle configuration`,
-      `Run npm install if package.json exists`,
-      `Execute post-install hook if defined`,
-      `Register PM2 service if service defined in SKILL.md`,
-      `Record installation in ${ZYLOS_DIR}/components.json`,
-    ].filter(Boolean),
-  });
-}
-
-async function upgradeComponent(args) {
+export async function upgradeComponent(args) {
   // Parse flags
   const checkOnly = args.includes('--check');
   const jsonOutput = args.includes('--json');
@@ -100,35 +28,37 @@ async function upgradeComponent(args) {
   const explicitConfirm = args.includes('confirm');
   const upgradeSelf = args.includes('--self');
   const upgradeAll = args.includes('--all');
+  const skipEval = args.includes('--skip-eval');
 
   // Get target component (filter out flags)
   const target = args.find(a => !a.startsWith('-') && a !== 'confirm');
 
-  // Handle --self: upgrade zylos-core itself (legacy mode)
+  // Handle --self: upgrade zylos-core itself
   if (upgradeSelf) {
-    return upgradeSelfCore();
+    const ok = await upgradeSelfCore();
+    if (!ok) process.exit(1);
+    return;
   }
 
   // Handle --all: upgrade all components
   if (upgradeAll) {
-    return upgradeAllComponents({ checkOnly, jsonOutput, skipConfirm });
+    return upgradeAllComponents({ checkOnly, jsonOutput, skipConfirm, skipEval });
   }
 
   // Validate target
   if (!target) {
     console.error('Usage: zylos upgrade <name> [options]');
-    console.error('       zylos upgrade <name> confirm');
     console.error('       zylos upgrade --all');
     console.error('       zylos upgrade --self');
     console.log('\nOptions:');
-    console.log('  --check    Check for updates only');
-    console.log('  --json     Output in JSON format');
-    console.log('  --yes, -y  Skip confirmation');
-    console.log('  confirm    Execute upgrade (for async confirmation)');
+    console.log('  --check      Check for updates only');
+    console.log('  --json       Output in JSON format');
+    console.log('  --yes, -y    Skip confirmation');
+    console.log('  --skip-eval  Skip upgrade analysis of local changes');
     console.log('\nExamples:');
     console.log('  zylos upgrade telegram --check --json');
     console.log('  zylos upgrade telegram --yes');
-    console.log('  zylos upgrade telegram confirm');
+    console.log('  zylos upgrade telegram');
     process.exit(1);
   }
 
@@ -141,7 +71,7 @@ async function upgradeComponent(args) {
       action: 'check',
       component: target,
       error: 'component_not_registered',
-      message: `组件 '${target}' 未在 components.json 中注册`,
+      message: `Component '${target}' is not registered in components.json`,
     };
     if (jsonOutput) {
       console.log(JSON.stringify(result, null, 2));
@@ -156,7 +86,7 @@ async function upgradeComponent(args) {
       action: 'check',
       component: target,
       error: 'skill_dir_not_found',
-      message: `组件目录不存在: ${skillDir}`,
+      message: `Component directory not found: ${skillDir}`,
     };
     if (jsonOutput) {
       console.log(JSON.stringify(result, null, 2));
@@ -166,36 +96,25 @@ async function upgradeComponent(args) {
     process.exit(1);
   }
 
-  // Mode 1: Check only (--check)
+  // Mode 1: Check only (--check) — no lock, no download needed
   if (checkOnly) {
     return handleCheckOnly(target, { jsonOutput });
   }
 
-  // Mode 2: Execute upgrade (--yes or confirm)
-  if (skipConfirm || explicitConfirm) {
-    return handleExecuteUpgrade(target, { jsonOutput });
-  }
-
-  // Mode 3: Interactive (default) - show info and prompt
-  return handleInteractive(target, { jsonOutput });
+  // Mode 2 & 3: Full upgrade flow (lock-first)
+  const ok = await handleUpgradeFlow(target, { jsonOutput, skipConfirm: skipConfirm || explicitConfirm, skipEval });
+  if (!ok) process.exit(1);
 }
 
 /**
- * Handle --check flag: check for updates only
+ * Handle --check flag: check for updates only (no lock needed)
  */
 async function handleCheckOnly(component, { jsonOutput }) {
   const result = checkForUpdates(component);
 
   if (jsonOutput) {
-    const output = {
-      action: 'check',
-      component,
-      ...result,
-    };
-    console.log(JSON.stringify(output, null, 2));
-    if (!result.success) {
-      process.exit(1);
-    }
+    console.log(JSON.stringify({ action: 'check', component, ...result }, null, 2));
+    if (!result.success) process.exit(1);
   } else {
     if (!result.success) {
       console.error(`Error: ${result.message}`);
@@ -206,133 +125,229 @@ async function handleCheckOnly(component, { jsonOutput }) {
       console.log(`✓ ${component} is up to date (v${result.current})`);
     } else {
       console.log(`${component}: ${result.current} → ${result.latest}`);
-      if (result.localChanges) {
-        console.log(`\n⚠️  Local modifications detected:`);
-        result.localChanges.forEach(c => console.log(`  ${c}`));
-      }
-      if (result.changelog) {
-        console.log(`\nChangelog:\n${result.changelog}`);
-      }
       console.log(`\nRun "zylos upgrade ${component} --yes" to upgrade.`);
     }
   }
 }
 
 /**
- * Handle --yes or confirm: execute upgrade
+ * Full upgrade flow with lock-first pattern.
+ * Lock wraps the entire operation: check → download → confirm → execute → cleanup.
+ *
+ * Returns true on success, false on failure.
+ * Does NOT call process.exit() — caller decides exit behavior.
  */
-async function handleExecuteUpgrade(component, { jsonOutput }) {
-  if (!jsonOutput) {
-    console.log(`Upgrading ${component}...`);
+async function handleUpgradeFlow(component, { jsonOutput, skipConfirm, skipEval }) {
+  const skillDir = path.join(SKILLS_DIR, component);
+  let tempDir = null;
+
+  // 1. Acquire lock
+  const lockResult = acquireLock(component);
+  if (!lockResult.success) {
+    if (jsonOutput) {
+      console.log(JSON.stringify({ action: 'upgrade', component, success: false, error: lockResult.error }, null, 2));
+    } else {
+      console.error(`Error: ${lockResult.error}`);
+    }
+    return false;
   }
 
-  const result = runUpgrade(component);
+  try {
+    // 2. Check for updates
+    const check = checkForUpdates(component);
 
-  if (jsonOutput) {
-    console.log(JSON.stringify(result, null, 2));
-    if (!result.success) {
-      process.exit(1);
+    if (!check.success) {
+      if (jsonOutput) {
+        console.log(JSON.stringify({ action: 'check', component, ...check }, null, 2));
+      } else {
+        console.error(`Error: ${check.message}`);
+      }
+      return false;
     }
-  } else {
+
+    if (!check.hasUpdate) {
+      if (jsonOutput) {
+        console.log(JSON.stringify({ action: 'check', component, ...check }, null, 2));
+      } else {
+        console.log(`✓ ${component} is up to date (v${check.current})`);
+      }
+      return true;
+    }
+
+    // 3. Download new version to temp
+    if (!check.repo) {
+      if (jsonOutput) {
+        console.log(JSON.stringify({ action: 'upgrade', component, success: false, error: 'No repo configured' }, null, 2));
+      } else {
+        console.error('Error: No repo configured for this component');
+      }
+      return false;
+    }
+
+    if (!jsonOutput) {
+      console.log(`\nDownloading ${component}@${check.latest}...`);
+    }
+
+    const dlResult = downloadToTemp(check.repo, check.latest);
+    if (!dlResult.success) {
+      if (jsonOutput) {
+        console.log(JSON.stringify({ action: 'upgrade', component, success: false, error: dlResult.error }, null, 2));
+      } else {
+        console.error(`Error: ${dlResult.error}`);
+      }
+      return false;
+    }
+    tempDir = dlResult.tempDir;
+
+    // 4. Show info: version diff, changelog, local changes + Claude eval
+    const changes = detectChanges(skillDir);
+    const fullChangelog = readChangelog(tempDir);
+    const changelog = filterChangelog(fullChangelog, check.current);
+    let evalResult = null;
+
+    if (!jsonOutput) {
+      console.log(`\n${component}: ${check.current} → ${check.latest}`);
+
+      // Show local modifications (compared to manifest)
+      if (changes && (changes.modified.length > 0 || changes.added.length > 0)) {
+        console.log(`\nWARNING: LOCAL MODIFICATIONS DETECTED:`);
+        for (const f of changes.modified) console.log(`  M ${f}`);
+        for (const f of changes.added) console.log(`  A ${f}`);
+      }
+
+      // Show changelog from downloaded version (filtered to relevant versions only)
+      if (changelog) {
+        console.log(`\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+        console.log('CHANGELOG');
+        console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+        console.log(changelog);
+        console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`);
+      }
+    }
+
+    // Claude evaluation (when local changes exist and not skipped)
+    if (changes && (changes.modified.length > 0 || changes.added.length > 0) && !skipEval) {
+      if (!jsonOutput) {
+        console.log('\n⚠️  Evaluating local modifications...');
+      }
+
+      evalResult = await evaluateUpgrade({
+        component,
+        localChanges: changes,
+        tempDir,
+        skillDir,
+        changelog,
+      });
+
+      if (evalResult) {
+        if (!jsonOutput) {
+          console.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+          console.log('Upgrade analysis:');
+          console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+          for (const f of evalResult.files) {
+            const icon = f.verdict === 'safe' ? '✓' : f.verdict === 'warning' ? '⚠️' : '✗';
+            console.log(`${f.file}:\n  ${icon} ${f.reason}\n`);
+          }
+          console.log(`\nRecommendation: ${evalResult.recommendation}`);
+          console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        }
+      } else if (!jsonOutput) {
+        console.log('  (Upgrade analysis skipped)');
+      }
+    }
+
+    // 5. Confirmation
+    if (!skipConfirm) {
+      const confirmed = await promptYesNo('Proceed with upgrade? [y/N]: ');
+      if (!confirmed) {
+        console.log('Upgrade cancelled.');
+        return true; // Not an error — user chose to cancel
+      }
+    } else if (!jsonOutput) {
+      console.log(`Upgrading ${component}...`);
+    }
+
+    // 6. Execute upgrade (8 steps)
+    const result = runUpgrade(component, { tempDir, newVersion: check.latest });
+
     if (result.success) {
-      // Print step progress
+      // Phase C: Cleanup
+      // Update components.json
+      const components = loadComponents();
+      if (components[component]) {
+        components[component].version = result.to || components[component].version;
+        components[component].upgradedAt = new Date().toISOString();
+        saveComponents(components);
+      }
+
+      // Clean old backups (keep only the latest)
+      cleanOldBackups(skillDir);
+    }
+
+    // Output result
+    if (jsonOutput) {
+      const output = { ...result };
+      if (evalResult) output.evaluation = evalResult;
+      console.log(JSON.stringify(output, null, 2));
+    } else if (result.success) {
       for (const step of result.steps) {
         const icon = step.status === 'done' ? '✓' :
                      step.status === 'skipped' ? '○' : '✗';
         const msg = step.message ? ` (${step.message})` : '';
-        console.log(`  [${step.step}/9] ${step.name}${msg} ${icon}`);
+        console.log(`  [${step.step}/8] ${step.name}${msg} ${icon}`);
       }
-
-      console.log(`\n✓ ${component} 升级完成: ${result.from} → ${result.to}`);
-
-      if (result.stashExists) {
-        console.log(`\n注意: 您的本地修改已保存到 git stash`);
-        console.log(`  查看: cd ~/zylos/.claude/skills/${component} && git stash show`);
-        console.log(`  恢复: cd ~/zylos/.claude/skills/${component} && git stash pop`);
-      }
+      console.log(`\n✓ ${component} upgraded: ${result.from} → ${result.to}`);
     } else {
-      // Print failed steps
       for (const step of result.steps) {
         const icon = step.status === 'done' ? '✓' :
                      step.status === 'skipped' ? '○' : '✗';
-        console.log(`  [${step.step}/9] ${step.name} ${icon}`);
+        console.log(`  [${step.step}/8] ${step.name} ${icon}`);
         if (step.status === 'failed' && step.error) {
           console.log(`       ${step.error}`);
         }
       }
 
-      console.log(`\n✗ 升级失败 (步骤 ${result.failedStep}): ${result.error}`);
+      console.log(`\n✗ Upgrade failed (step ${result.failedStep}): ${result.error}`);
 
       if (result.rollback?.performed) {
-        console.log(`\n⚠️  已自动回滚:`);
+        console.log(`\nAuto-rollback performed:`);
         for (const r of result.rollback.steps) {
           const icon = r.success ? '✓' : '✗';
           console.log(`  ${icon} ${r.action}`);
         }
       }
-
-      process.exit(1);
     }
+
+    return result.success;
+  } finally {
+    // Always: cleanup temp + release lock
+    cleanupTemp(tempDir);
+    releaseLock(component);
   }
 }
 
 /**
- * Handle interactive mode (default)
+ * Clean old .backup/ directories, keeping only the latest.
  */
-async function handleInteractive(component, { jsonOutput }) {
-  // Check for updates first
-  const check = checkForUpdates(component);
+function cleanOldBackups(skillDir) {
+  const backupRoot = path.join(skillDir, '.backup');
+  if (!fs.existsSync(backupRoot)) return;
 
-  if (!check.success) {
-    if (jsonOutput) {
-      console.log(JSON.stringify({ action: 'check', component, ...check }, null, 2));
-    } else {
-      console.error(`Error: ${check.message}`);
+  try {
+    const entries = fs.readdirSync(backupRoot).sort();
+    // Keep the last one, remove the rest
+    for (let i = 0; i < entries.length - 1; i++) {
+      fs.rmSync(path.join(backupRoot, entries[i]), { recursive: true, force: true });
     }
-    process.exit(1);
+  } catch {
+    // Non-critical, ignore
   }
-
-  if (!check.hasUpdate) {
-    if (jsonOutput) {
-      console.log(JSON.stringify({ action: 'check', component, ...check }, null, 2));
-    } else {
-      console.log(`✓ ${component} is up to date (v${check.current})`);
-    }
-    return;
-  }
-
-  // Show update info
-  console.log(`\n${component}: ${check.current} → ${check.latest}`);
-
-  if (check.localChanges) {
-    console.log(`\n⚠️  LOCAL MODIFICATIONS DETECTED:`);
-    check.localChanges.forEach(c => console.log(`  ${c}`));
-  }
-
-  if (check.changelog) {
-    console.log(`\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
-    console.log('CHANGELOG');
-    console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
-    console.log(check.changelog);
-    console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`);
-  }
-
-  // Interactive confirmation
-  const confirmed = await promptConfirm('Proceed with upgrade? [y/N]: ');
-
-  if (!confirmed) {
-    console.log('Upgrade cancelled.');
-    return;
-  }
-
-  // Execute upgrade
-  return handleExecuteUpgrade(component, { jsonOutput });
 }
 
 /**
  * Handle --all: upgrade all components
  */
-async function upgradeAllComponents({ checkOnly, jsonOutput, skipConfirm }) {
+async function upgradeAllComponents({ checkOnly, jsonOutput, skipConfirm, skipEval }) {
   const components = loadComponents();
   const names = Object.keys(components);
 
@@ -345,6 +360,7 @@ async function upgradeAllComponents({ checkOnly, jsonOutput, skipConfirm }) {
     return;
   }
 
+  // Check all components first
   const results = [];
 
   for (const name of names) {
@@ -385,104 +401,429 @@ async function upgradeAllComponents({ checkOnly, jsonOutput, skipConfirm }) {
   }
 
   if (!skipConfirm) {
-    // Interactive confirmation
-    const confirmed = await promptConfirm('Upgrade all components? [y/N]: ');
+    const confirmed = await promptYesNo('Upgrade all components? [y/N]: ');
     if (!confirmed) {
       console.log('Upgrade cancelled.');
       return;
     }
   }
 
-  // Execute upgrades
+  // Execute upgrades (lock per component via handleUpgradeFlow)
+  let anyFailed = false;
   for (const comp of updatable) {
-    console.log(`\nUpgrading ${comp.component}...`);
-    const result = runUpgrade(comp.component);
-    if (result.success) {
-      console.log(`  ✓ ${result.from} → ${result.to}`);
-    } else {
-      console.log(`  ✗ Failed: ${result.error}`);
+    if (!jsonOutput) {
+      console.log(`\n─── ${comp.component} ───`);
     }
+    const ok = await handleUpgradeFlow(comp.component, { jsonOutput, skipConfirm: true, skipEval });
+    if (!ok) anyFailed = true;
   }
+
+  if (anyFailed) process.exit(1);
 }
 
 /**
- * Upgrade zylos-core itself
+ * Upgrade zylos-core itself.
+ * Lock-first pattern, same as component upgrades.
+ *
+ * Returns true on success, false on failure.
+ * Does NOT call process.exit() — caller decides exit behavior.
  */
 async function upgradeSelfCore() {
-  // zylos-core root is parent of cli/ directory
-  // __dirname is cli/commands/, so go up twice to get zylos-core root
-  const coreDir = path.join(__dirname, '..', '..');
+  const jsonOutput = process.argv.includes('--json');
+  const skipConfirm = process.argv.includes('--yes') || process.argv.includes('-y');
+  let tempDir = null;
 
-  console.log('Checking for zylos-core updates...');
+  // 1. Acquire lock (reuse component lock mechanism with special name)
+  const lockResult = acquireLock('_zylos-core');
+  if (!lockResult.success) {
+    if (jsonOutput) {
+      console.log(JSON.stringify({ action: 'self_upgrade', success: false, error: lockResult.error }, null, 2));
+    } else {
+      console.error(`Error: ${lockResult.error}`);
+    }
+    return false;
+  }
 
-  outputTask('self_upgrade', {
-    target: 'zylos-core',
-    repo: 'zylos-ai/zylos-core',
-    coreDir: coreDir,
-    steps: [
-      '1. Check git status for local modifications in zylos-core',
-      '2. git fetch to check for updates',
-      '3. Show CHANGELOG.md and VERSION diff',
-      '4. Ask user for confirmation',
-      '5. If user confirms:',
-      '   a. Create backup (git stash + record rollback point)',
-      '   b. Stop core services (scheduler, c4-dispatcher, etc.)',
-      '   c. git pull to update code',
-      '   d. npm install if package.json changed',
-      '   e. Restart core services',
-      '   f. Verify services are running',
-      '   g. If failed, rollback and restart',
-      '6. Report new version',
-    ],
-  });
+  try {
+    // 2. Check for updates
+    const check = checkForCoreUpdates();
+
+    if (!check.success) {
+      if (jsonOutput) {
+        console.log(JSON.stringify({ action: 'check', target: 'zylos-core', ...check }, null, 2));
+      } else {
+        console.error(`Error: ${check.message}`);
+      }
+      return false;
+    }
+
+    if (!check.hasUpdate) {
+      if (jsonOutput) {
+        console.log(JSON.stringify({ action: 'check', target: 'zylos-core', ...check }, null, 2));
+      } else {
+        console.log(`✓ zylos-core is up to date (v${check.current})`);
+      }
+      return true;
+    }
+
+    // 3. Download new version to temp
+    if (!jsonOutput) {
+      console.log(`\nDownloading zylos-core@${check.latest}...`);
+    }
+
+    const dlResult = downloadCoreToTemp(check.latest);
+    if (!dlResult.success) {
+      if (jsonOutput) {
+        console.log(JSON.stringify({ action: 'self_upgrade', success: false, error: dlResult.error }, null, 2));
+      } else {
+        console.error(`Error: ${dlResult.error}`);
+      }
+      return false;
+    }
+    tempDir = dlResult.tempDir;
+
+    // 4. Show info
+    if (!jsonOutput) {
+      console.log(`\nzylos-core: ${check.current} → ${check.latest}`);
+
+      const fullCoreChangelog = readCoreChangelog(tempDir);
+      const coreChangelog = filterChangelog(fullCoreChangelog, check.current);
+      if (coreChangelog) {
+        console.log(`\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+        console.log('CHANGELOG');
+        console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+        console.log(coreChangelog);
+        console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`);
+      }
+    }
+
+    // 5. Confirmation
+    if (!skipConfirm) {
+      const confirmed = await promptYesNo('Proceed with zylos-core upgrade? [y/N]: ');
+      if (!confirmed) {
+        console.log('Upgrade cancelled.');
+        return true; // Not an error — user chose to cancel
+      }
+    } else if (!jsonOutput) {
+      console.log('Upgrading zylos-core...');
+    }
+
+    // 6. Execute self-upgrade (8 steps)
+    const result = runSelfUpgrade({ tempDir, newVersion: check.latest });
+
+    // Output result
+    if (jsonOutput) {
+      console.log(JSON.stringify(result, null, 2));
+    } else if (result.success) {
+      for (const step of result.steps) {
+        const icon = step.status === 'done' ? '✓' :
+                     step.status === 'skipped' ? '○' : '✗';
+        const msg = step.message ? ` (${step.message})` : '';
+        console.log(`  [${step.step}/8] ${step.name}${msg} ${icon}`);
+      }
+      console.log(`\n✓ zylos-core upgraded: ${result.from} → ${result.to}`);
+
+      // Clean backup after successful upgrade
+      if (result.backupDir) {
+        cleanupBackup(result.backupDir);
+      }
+    } else {
+      for (const step of result.steps) {
+        const icon = step.status === 'done' ? '✓' :
+                     step.status === 'skipped' ? '○' : '✗';
+        console.log(`  [${step.step}/8] ${step.name} ${icon}`);
+        if (step.status === 'failed' && step.error) {
+          console.log(`       ${step.error}`);
+        }
+      }
+
+      console.log(`\n✗ Self-upgrade failed (step ${result.failedStep}): ${result.error}`);
+
+      if (result.rollback?.performed) {
+        console.log(`\nAuto-rollback performed:`);
+        for (const r of result.rollback.steps) {
+          const icon = r.success ? '✓' : '✗';
+          console.log(`  ${icon} ${r.action}`);
+        }
+      }
+    }
+
+    return result.success;
+  } finally {
+    cleanupCoreTemp(tempDir);
+    releaseLock('_zylos-core');
+  }
 }
 
-async function uninstallComponent(args) {
+export async function uninstallComponent(args) {
   const purge = args.includes('--purge');
-  // Filter out flags to get the target name
-  const target = args.find(arg => !arg.startsWith('--'));
+  const skipConfirm = args.includes('--yes') || args.includes('-y');
+  const force = args.includes('--force');
+  const target = args.find(arg => !arg.startsWith('-'));
 
   if (!target) {
-    console.error('Usage: zylos uninstall <name> [--purge]');
+    console.error('Usage: zylos uninstall <name> [options]');
     console.log('\nOptions:');
-    console.log('  --purge    Also remove data directory');
+    console.log('  --purge    Also remove data directory (skips prompt)');
+    console.log('  --force    Remove even if other components depend on it');
+    console.log('  --yes, -y  Skip confirmation (keeps data)');
+    process.exit(1);
+  }
+
+  const ok = await handleRemoveFlow(target, { purge, skipConfirm, force });
+  if (!ok) process.exit(1);
+}
+
+/**
+ * Find components that depend on the given target.
+ */
+function findDependents(target) {
+  const components = loadComponents();
+  const dependents = [];
+  for (const name of Object.keys(components)) {
+    if (name === target) continue;
+    const skillDir = path.join(SKILLS_DIR, name);
+    const skill = parseSkillMd(skillDir);
+    const deps = skill?.frontmatter?.dependencies || [];
+    if (deps.includes(target)) dependents.push(name);
+  }
+  return dependents;
+}
+
+/**
+ * Resolve PM2 service name from SKILL.md or fallback to zylos-<name>.
+ */
+function resolveServiceName(name) {
+  const skillDir = path.join(SKILLS_DIR, name);
+  const skill = parseSkillMd(skillDir);
+  return skill?.frontmatter?.lifecycle?.service?.name || `zylos-${name}`;
+}
+
+/**
+ * Remove flow: dependency check → confirm → stop PM2 → delete dirs → update components.json.
+ * Returns true on success, false on failure.
+ */
+async function handleRemoveFlow(target, { purge, skipConfirm, force }) {
+  const components = loadComponents();
+
+  if (!components[target]) {
+    console.error(`Error: Component "${target}" is not installed.`);
+    return false;
+  }
+
+  const skillDir = path.join(SKILLS_DIR, target);
+  const dataDir = path.join(COMPONENTS_DIR, target);
+
+  // Check dependencies
+  const dependents = findDependents(target);
+  if (dependents.length > 0) {
+    if (!force) {
+      console.error(`Error: Cannot remove "${target}" — the following components depend on it:`);
+      for (const d of dependents) console.error(`  - ${d}`);
+      console.error(`\nUse --force to remove anyway.`);
+      return false;
+    }
+    console.log(`Warning: The following components depend on "${target}":`);
+    for (const d of dependents) console.log(`  - ${d}`);
+    console.log('');
+  }
+
+  // Show what will be removed
+  const serviceName = resolveServiceName(target);
+  console.log(`Will remove "${target}":`);
+  console.log(`  Service:   ${serviceName} (pm2)`);
+  console.log(`  Skill dir: ${skillDir}`);
+  if (purge) {
+    console.log(`  Data dir:  ${dataDir} (--purge)`);
+  } else {
+    console.log(`  Data dir:  ${dataDir} (kept)`);
+  }
+
+  // Confirmation
+  if (!skipConfirm) {
+    const confirmed = await promptYesNo('\nProceed? [y/N]: ');
+    if (!confirmed) {
+      console.log('Cancelled.');
+      return true; // not an error
+    }
+
+    // Ask about data directory if --purge not explicitly set
+    if (!purge && fs.existsSync(dataDir)) {
+      purge = await promptYesNo('Also remove data directory? [y/N]: ');
+    }
+  }
+
+  // 1. Stop + delete PM2 service (use execFileSync to avoid shell injection)
+  try {
+    try { execFileSync('pm2', ['stop', serviceName], { stdio: 'pipe' }); } catch { /* ignore */ }
+    execFileSync('pm2', ['delete', serviceName], { stdio: 'pipe' });
+    console.log(`  ✓ PM2 service "${serviceName}" removed`);
+  } catch {
+    console.log(`  ○ PM2 service "${serviceName}" not found (skipped)`);
+  }
+
+  // 2. Remove skill directory
+  if (fs.existsSync(skillDir)) {
+    fs.rmSync(skillDir, { recursive: true, force: true });
+    console.log(`  ✓ Skill directory removed`);
+  } else {
+    console.log(`  ○ Skill directory not found (skipped)`);
+  }
+
+  // 3. Remove data directory if --purge
+  if (purge) {
+    if (fs.existsSync(dataDir)) {
+      fs.rmSync(dataDir, { recursive: true, force: true });
+      console.log(`  ✓ Data directory removed`);
+    } else {
+      console.log(`  ○ Data directory not found (skipped)`);
+    }
+  }
+
+  // 4. Update components.json
+  delete components[target];
+  saveComponents(components);
+  console.log(`  ✓ Removed from components.json`);
+
+  console.log(`\n✓ ${target} uninstalled.`);
+  return true;
+}
+
+/**
+ * Show detailed information about a component.
+ */
+export async function infoComponent(args) {
+  const jsonOutput = args.includes('--json');
+  const target = args.find(arg => !arg.startsWith('-'));
+
+  if (!target) {
+    console.error('Usage: zylos info <name> [--json]');
     process.exit(1);
   }
 
   const components = loadComponents();
   if (!components[target]) {
-    console.error(`Component "${target}" is not installed.`);
+    console.error(`Error: Component "${target}" is not installed.`);
     process.exit(1);
   }
 
-  console.log(`Uninstalling ${target}...`);
-  if (purge) {
-    console.log('(with --purge: data directory will also be removed)');
+  const comp = components[target];
+  const skillDir = path.join(SKILLS_DIR, target);
+  const dataDir = path.join(COMPONENTS_DIR, target);
+
+  // Parse SKILL.md
+  const skill = parseSkillMd(skillDir);
+  const fm = skill?.frontmatter || {};
+  const description = fm.description || '';
+  const deps = fm.dependencies || [];
+  const serviceName = fm.lifecycle?.service?.name || `zylos-${target}`;
+
+  // PM2 status
+  let pm2Status = null;
+  try {
+    const pm2Json = execFileSync('pm2', ['jlist'], { encoding: 'utf8' });
+    const processes = JSON.parse(pm2Json);
+    const proc = processes.find(p => p.name === serviceName);
+    if (proc) {
+      pm2Status = {
+        status: proc.pm2_env?.status || 'unknown',
+        pid: proc.pid,
+        uptime: proc.pm2_env?.pm_uptime || null,
+      };
+    }
+  } catch {
+    // pm2 not available or no processes
   }
 
-  outputTask('uninstall', {
-    component: target,
-    skillDir: path.join(SKILLS_DIR, target),
-    dataDir: path.join(COMPONENTS_DIR, target),
-    purge,
-    steps: [
-      `Stop PM2 service "zylos-${target}" if running`,
-      `Remove from PM2: pm2 delete zylos-${target}`,
-      `Remove skill directory: ${SKILLS_DIR}/${target}`,
-      purge ? `Remove data directory: ${COMPONENTS_DIR}/${target}` : '(Keep data directory)',
-      `Remove from ${ZYLOS_DIR}/components.json`,
-    ],
-  });
+  // Local changes
+  const changes = detectChanges(skillDir);
+
+  if (jsonOutput) {
+    const info = {
+      name: target,
+      version: comp.version,
+      description,
+      type: comp.type || 'unknown',
+      repo: comp.repo,
+      installedAt: comp.installedAt || null,
+      upgradedAt: comp.upgradedAt || null,
+      service: { name: serviceName, ...pm2Status },
+      skillDir,
+      dataDir,
+      dependencies: deps,
+      changes: changes ? {
+        modified: changes.modified.length,
+        added: changes.added.length,
+        deleted: changes.deleted.length,
+      } : null,
+    };
+    console.log(JSON.stringify(info, null, 2));
+    return;
+  }
+
+  // Human-readable output
+  const skillExists = fs.existsSync(skillDir);
+  const icon = skillExists ? '✓' : '✗';
+  console.log(`\n${target} (v${comp.version}) ${icon}\n`);
+
+  if (description) console.log(`  Description:  ${description}`);
+  console.log(`  Type:         ${comp.type || 'unknown'}`);
+  console.log(`  Repo:         ${comp.repo}`);
+  if (comp.installedAt) console.log(`  Installed:    ${comp.installedAt}`);
+  if (comp.upgradedAt) console.log(`  Upgraded:     ${comp.upgradedAt}`);
+
+  // Service info
+  console.log('');
+  if (pm2Status) {
+    let uptimeStr = '';
+    if (pm2Status.uptime) {
+      const ms = Date.now() - pm2Status.uptime;
+      const days = Math.floor(ms / 86400000);
+      const hours = Math.floor((ms % 86400000) / 3600000);
+      if (days > 0) uptimeStr = `, uptime ${days}d${hours}h`;
+      else if (hours > 0) uptimeStr = `, uptime ${hours}h`;
+    }
+    console.log(`  Service:      ${serviceName} (pm2)`);
+    console.log(`  Status:       ${pm2Status.status} (pid ${pm2Status.pid}${uptimeStr})`);
+  } else {
+    console.log(`  Service:      ${serviceName} (pm2)`);
+    console.log(`  Status:       not running`);
+  }
+
+  // Directories
+  console.log('');
+  console.log(`  Skill Dir:    ${skillDir}`);
+  console.log(`  Data Dir:     ${dataDir}`);
+
+  // Dependencies
+  if (deps.length > 0) {
+    console.log('');
+    console.log(`  Dependencies: ${deps.join(', ')}`);
+  }
+
+  // Local changes
+  if (changes) {
+    const total = changes.modified.length + changes.added.length + changes.deleted.length;
+    if (total > 0) {
+      const parts = [];
+      if (changes.modified.length) parts.push(`${changes.modified.length} modified`);
+      if (changes.added.length) parts.push(`${changes.added.length} added`);
+      if (changes.deleted.length) parts.push(`${changes.deleted.length} deleted`);
+      console.log(`  Local Changes: ${parts.join(', ')}`);
+    }
+  }
+
+  console.log('');
 }
 
-async function listComponents() {
+export async function listComponents() {
   const components = loadComponents();
   const names = Object.keys(components);
 
   if (names.length === 0) {
     console.log('No components installed.');
     console.log('\nUse "zylos search <keyword>" to find available components.');
-    console.log('Use "zylos install <name>" to install a component.');
+    console.log('Use "zylos add <name>" to install a component.');
     return;
   }
 
@@ -501,7 +842,7 @@ async function listComponents() {
   }
 }
 
-async function searchComponents(args) {
+export async function searchComponents(args) {
   const keyword = args[0] || '';
 
   console.log('Searching components...\n');
@@ -521,7 +862,7 @@ async function searchComponents(args) {
     console.log('No components found.');
     if (keyword) {
       console.log(`\nTry searching without keyword or install directly:`);
-      console.log(`  zylos install <github-url>`);
+      console.log(`  zylos add <github-url>`);
     }
     return;
   }
@@ -532,20 +873,12 @@ async function searchComponents(args) {
 
   for (const comp of results) {
     const status = installed[comp.name] ? '[installed]' : '';
-    console.log(`${comp.name}@${comp.latest || '?'} ${status}`);
+    console.log(`${comp.name} ${status}`);
     console.log(`  ${comp.description}`);
     console.log(`  Type: ${comp.type} | Repo: ${comp.repo}`);
     console.log('');
   }
 
   console.log(`Found ${results.length} component(s).`);
-  console.log('\nUse "zylos install <name>" to install a component.');
+  console.log('\nUse "zylos add <name>" to install a component.');
 }
-
-module.exports = {
-  installComponent,
-  upgradeComponent,
-  uninstallComponent,
-  listComponents,
-  searchComponents,
-};
