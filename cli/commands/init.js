@@ -140,16 +140,39 @@ function syncCoreSkills() {
 
 function startCoreServices() {
   const services = [
-    { name: 'activity-monitor', entry: 'self-maintenance/activity-monitor.js' },
-    { name: 'scheduler', entry: 'scheduler/scheduler.js' },
-    { name: 'c4-dispatcher', entry: 'comm-bridge/c4-dispatcher.js' },
-    { name: 'web-console', entry: 'web-console/server.js' },
+    { name: 'activity-monitor', skill: 'activity-monitor', entry: 'scripts/activity-monitor.js' },
+    { name: 'scheduler', skill: 'scheduler', entry: 'scripts/daemon.js' },
+    { name: 'c4-dispatcher', skill: 'comm-bridge', entry: 'scripts/c4-dispatcher.js' },
+    { name: 'web-console', skill: 'web-console', entry: 'scripts/server.js' },
   ];
 
   let started = 0;
   for (const svc of services) {
-    const script = path.join(SKILLS_DIR, svc.entry);
+    const skillDir = path.join(SKILLS_DIR, svc.skill);
+    const script = path.join(skillDir, svc.entry);
     if (!fs.existsSync(script)) continue;
+
+    // Install dependencies if the skill has a package.json with dependencies
+    const pkgPath = path.join(skillDir, 'package.json');
+    if (fs.existsSync(pkgPath)) {
+      try {
+        const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+        if (pkg.dependencies && Object.keys(pkg.dependencies).length > 0) {
+          const nmDir = path.join(skillDir, 'node_modules');
+          if (!fs.existsSync(nmDir)) {
+            console.log(`  Installing ${svc.name} dependencies...`);
+            execSync('npm install --production', {
+              cwd: skillDir,
+              stdio: 'pipe',
+              timeout: 120000,
+            });
+          }
+        }
+      } catch {
+        console.log(`  ⚠ Failed to install ${svc.name} dependencies`);
+        continue;
+      }
+    }
 
     try {
       execSync(`pm2 start "${script}" --name "${svc.name}" 2>/dev/null`, { stdio: 'pipe' });
