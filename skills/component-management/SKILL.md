@@ -1,6 +1,6 @@
 ---
 name: component-management
-version: 1.0.0
+version: 1.1.0
 description: Guidelines for managing zylos components
 type: internal
 ---
@@ -14,6 +14,7 @@ Guidelines for installing, upgrading, and managing zylos components.
 1. **Always confirm before executing** - User must explicitly approve install/upgrade/uninstall
 2. **Guide interactively** - Never just tell user to "manually edit files"
 3. **Read SKILL.md** - Each component declares its requirements in SKILL.md frontmatter
+4. **Detect execution mode** - Handle both Claude session and IM (Telegram/Lark) differently
 
 ## Install Workflow
 
@@ -199,3 +200,76 @@ config:
 ```
 
 When `sensitive: true`, the value should be handled carefully (not logged, stored in .env).
+
+---
+
+## IM Mode (Telegram / Lark)
+
+When user sends component management requests via IM (Telegram/Lark), use a streamlined flow.
+IM messages arrive via send-reply.sh. Replies must be plain text (no markdown).
+
+### Detecting IM Mode
+
+The request is from IM when the message arrives via Telegram bot or Lark agent
+(e.g., `howardzhou said: ...` or `Hongyun said: ...`).
+
+### IM Command Mapping
+
+| User says | CLI command |
+|-----------|------------|
+| list / list components | `zylos list` |
+| info \<name\> | `zylos info <name> --json` |
+| check / check updates | `zylos upgrade --all --check --json` |
+| check \<name\> | `zylos upgrade <name> --check --json` |
+| upgrade \<name\> | `zylos upgrade <name> --check --json` (preview only) |
+| upgrade \<name\> confirm | `zylos upgrade <name> --yes --skip-eval` |
+| add \<name\> | `zylos add <name> --yes` |
+| remove / uninstall | Reject — reply: "Remove is not supported via IM. Use CLI directly." |
+
+### IM Upgrade Confirm Flow
+
+Upgrades use two-step confirmation. No state is stored between messages.
+
+**Step 1 — User requests upgrade:**
+
+User: `upgrade telegram`
+
+Run `zylos upgrade telegram --check --json`, format the JSON, and reply:
+
+```
+telegram: 0.1.0 -> 0.2.0
+
+Changelog:
+- Fixed dotenv path issue
+
+Reply "upgrade telegram confirm" to proceed.
+```
+
+**Step 2 — User confirms:**
+
+User: `upgrade telegram confirm`
+
+Run `zylos upgrade telegram --yes --skip-eval` and reply with the output.
+
+The confirm command is self-contained — the component name is in the command itself,
+so it does not depend on Claude remembering the previous message.
+
+### IM Output Formatting
+
+When formatting `--json` output for IM replies:
+
+- Plain text only, no markdown
+- For `info --json`: format as `<name> v<version>\nType: <type>\nRepo: <repo>\nService: <name> (<status>)`
+- For `check --json`: format as `<name>: <current> -> <latest>` or `<name> is up to date (v<current>)`
+- For errors: when JSON has both `error` and `message` fields, display `message` (human-readable)
+- Send reply via the appropriate channel's send script
+
+### IM Differences from Session Mode
+
+| Aspect | Claude Session | IM |
+|--------|---------------|-----|
+| Confirmation | Interactive dialog | Two-step: preview + "confirm" command |
+| Output format | Rich (emoji, formatting) | Plain text only |
+| Config collection | Interactive prompts | Skip (use --yes), configure later |
+| Remove/uninstall | Supported | Rejected (too dangerous) |
+| Upgrade eval | Claude evaluation runs | Skipped (--skip-eval) |
