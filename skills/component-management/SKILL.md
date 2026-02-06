@@ -35,7 +35,7 @@ Proceed with installation?
 
 After user confirms, run:
 ```bash
-zylos install <component>
+zylos add <component>
 ```
 
 ### Step 3: Check for Configuration
