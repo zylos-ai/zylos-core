@@ -59,6 +59,7 @@ export function promptSecret(question) {
 
     const cleanup = () => {
       process.stdin.setRawMode(false);
+      process.stdin.pause();
       process.stdin.removeListener('data', onData);
       process.stdout.write('\n');
     };
