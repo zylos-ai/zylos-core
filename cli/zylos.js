@@ -6,7 +6,8 @@
  */
 
 import { showStatus, showLogs, startServices, stopServices, restartServices } from './commands/service.js';
-import { installComponent, upgradeComponent, uninstallComponent, listComponents, searchComponents } from './commands/component.js';
+import { upgradeComponent, uninstallComponent, listComponents, searchComponents } from './commands/component.js';
+import { addComponent } from './commands/add.js';
 import { initCommand } from './commands/init.js';
 
 const commands = {
@@ -19,7 +20,7 @@ const commands = {
   stop: stopServices,
   restart: restartServices,
   // Component management
-  install: installComponent,
+  add: addComponent,
   upgrade: upgradeComponent,
   uninstall: uninstallComponent,
   list: listComponents,
@@ -59,8 +60,9 @@ Service Management:
   restart             Restart all services
 
 Component Management:
-  install <target>    Install a component
+  add <target>        Add a component
                       target: name[@ver] | org/repo[@ver] | url
+                      --yes/-y  Skip confirmation prompts
   upgrade <name>      Upgrade a specific component
   upgrade --all       Upgrade all components
   upgrade --self      Upgrade zylos-core itself
@@ -76,9 +78,9 @@ Examples:
   zylos status
   zylos logs activity
 
-  zylos install telegram
-  zylos install telegram@0.2.0
-  zylos install kevin/whatsapp
+  zylos add telegram
+  zylos add telegram@0.2.0
+  zylos add user/my-component
   zylos upgrade telegram
   zylos upgrade --all
   zylos upgrade --self

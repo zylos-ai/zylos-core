@@ -7,10 +7,10 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import readline from 'node:readline';
 import { execSync, spawnSync } from 'node:child_process';
 import { ZYLOS_DIR, SKILLS_DIR, CONFIG_DIR, COMPONENTS_DIR, LOCKS_DIR, COMPONENTS_FILE } from '../lib/config.js';
 import { generateManifest, saveManifest } from '../lib/manifest.js';
+import { prompt, promptYesNo } from '../lib/prompts.js';
 
 // Source directory for Core Skills (shipped with zylos package)
 const CORE_SKILLS_SRC = path.join(import.meta.dirname, '..', '..', 'skills');
@@ -18,27 +18,6 @@ const CORE_SKILLS_SRC = path.join(import.meta.dirname, '..', '..', 'skills');
 // Minimum Node.js version
 const MIN_NODE_MAJOR = 20;
 const MIN_NODE_MINOR = 20;
-
-// ── Prompt utilities ────────────────────────────────────────────────
-
-function prompt(question) {
-  if (!process.stdin.isTTY) return Promise.resolve('');
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-  return new Promise((resolve) => {
-    rl.question(question, (answer) => {
-      rl.close();
-      resolve(answer.trim());
-    });
-  });
-}
-
-function promptYesNo(question, defaultYes = false) {
-  if (!process.stdin.isTTY) return Promise.resolve(defaultYes);
-  return prompt(question).then((answer) => {
-    if (!answer) return defaultYes;
-    return answer.toLowerCase() === 'y' || answer.toLowerCase() === 'yes';
-  });
-}
 
 // ── Prerequisite checks ─────────────────────────────────────────────
 

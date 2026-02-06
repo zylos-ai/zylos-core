@@ -4,93 +4,11 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import readline from 'node:readline';
 import { ZYLOS_DIR, SKILLS_DIR, COMPONENTS_DIR } from '../lib/config.js';
 import { loadRegistry } from '../lib/registry.js';
-import { loadComponents, resolveTarget, outputTask } from '../lib/components.js';
+import { loadComponents, outputTask } from '../lib/components.js';
 import { checkForUpdates, runUpgrade } from '../lib/upgrade.js';
-
-/**
- * Prompt user for confirmation (interactive TTY only)
- * @param {string} question - The question to ask
- * @returns {Promise<boolean>} - true if user confirmed, false otherwise
- */
-function promptConfirm(question) {
-  // If stdin is not a TTY, return false (non-interactive mode)
-  if (!process.stdin.isTTY) {
-    console.log('Non-interactive mode detected. Use --yes to skip confirmation.');
-    return Promise.resolve(false);
-  }
-
-  const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout,
-  });
-
-  return new Promise((resolve) => {
-    rl.question(question, (answer) => {
-      rl.close();
-      const normalized = answer.trim().toLowerCase();
-      resolve(normalized === 'y' || normalized === 'yes');
-    });
-  });
-}
-
-export async function installComponent(args) {
-  const target = args[0];
-  if (!target) {
-    console.error('Usage: zylos install <name[@version]|org/repo[@version]|github-url>');
-    console.log('\nExamples:');
-    console.log('  zylos install telegram          # Official component (latest)');
-    console.log('  zylos install telegram@0.2.0    # Specific version');
-    console.log('  zylos install kevin/whatsapp    # Third-party');
-    console.log('  zylos install https://github.com/kevin/zylos-whatsapp');
-    process.exit(1);
-  }
-
-  const resolved = await resolveTarget(target);
-
-  if (!resolved.repo) {
-    console.error(`Unknown component: ${target}`);
-    console.log('Use "zylos search <keyword>" to find available components.');
-    process.exit(1);
-  }
-
-  const components = loadComponents();
-  if (components[resolved.name]) {
-    console.log(`Component "${resolved.name}" is already installed (v${components[resolved.name].version}).`);
-    console.log('Use "zylos upgrade" to update.');
-    process.exit(0);
-  }
-
-  if (resolved.isThirdParty) {
-    console.log('Warning: Third-party component - not verified by Zylos team.');
-    console.log(`Repository: https://github.com/${resolved.repo}`);
-    console.log('');
-  }
-
-  const versionInfo = resolved.version ? ` (v${resolved.version})` : '';
-  console.log(`Installing ${resolved.name}${versionInfo} from ${resolved.repo}...`);
-
-  outputTask('install', {
-    component: resolved.name,
-    repo: resolved.repo,
-    version: resolved.version,
-    skillsDir: SKILLS_DIR,
-    dataDir: path.join(COMPONENTS_DIR, resolved.name),
-    isThirdParty: resolved.isThirdParty,
-    steps: [
-      `Clone https://github.com/${resolved.repo} to ${SKILLS_DIR}/${resolved.name}`,
-      resolved.version ? `Checkout version ${resolved.version}: git checkout v${resolved.version}` : null,
-      `Create data directory ${COMPONENTS_DIR}/${resolved.name}`,
-      `Read SKILL.md for lifecycle configuration`,
-      `Run npm install if package.json exists`,
-      `Execute post-install hook if defined`,
-      `Register PM2 service if service defined in SKILL.md`,
-      `Record installation in ${ZYLOS_DIR}/components.json`,
-    ].filter(Boolean),
-  });
-}
+import { promptYesNo } from '../lib/prompts.js';
 
 export async function upgradeComponent(args) {
   // Parse flags
@@ -318,7 +236,7 @@ async function handleInteractive(component, { jsonOutput }) {
   }
 
   // Interactive confirmation
-  const confirmed = await promptConfirm('Proceed with upgrade? [y/N]: ');
+  const confirmed = await promptYesNo('Proceed with upgrade? [y/N]: ');
 
   if (!confirmed) {
     console.log('Upgrade cancelled.');
@@ -386,7 +304,7 @@ async function upgradeAllComponents({ checkOnly, jsonOutput, skipConfirm }) {
 
   if (!skipConfirm) {
     // Interactive confirmation
-    const confirmed = await promptConfirm('Upgrade all components? [y/N]: ');
+    const confirmed = await promptYesNo('Upgrade all components? [y/N]: ');
     if (!confirmed) {
       console.log('Upgrade cancelled.');
       return;
@@ -478,7 +396,7 @@ export async function listComponents() {
   if (names.length === 0) {
     console.log('No components installed.');
     console.log('\nUse "zylos search <keyword>" to find available components.');
-    console.log('Use "zylos install <name>" to install a component.');
+    console.log('Use "zylos add <name>" to install a component.');
     return;
   }
 
@@ -517,7 +435,7 @@ export async function searchComponents(args) {
     console.log('No components found.');
     if (keyword) {
       console.log(`\nTry searching without keyword or install directly:`);
-      console.log(`  zylos install <github-url>`);
+      console.log(`  zylos add <github-url>`);
     }
     return;
   }
@@ -535,5 +453,5 @@ export async function searchComponents(args) {
   }
 
   console.log(`Found ${results.length} component(s).`);
-  console.log('\nUse "zylos install <name>" to install a component.');
+  console.log('\nUse "zylos add <name>" to install a component.');
 }

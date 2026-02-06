@@ -83,6 +83,42 @@ export function copyLocal(localPath, destDir) {
 }
 
 /**
+ * Download a GitHub branch archive and extract it.
+ * Used for versionless installs (no tagged release).
+ *
+ * @param {string} repo - GitHub repo in "org/name" format
+ * @param {string} branch - Branch name (e.g. "main")
+ * @param {string} destDir - Destination directory to extract into
+ * @returns {{ success: boolean, extractedDir: string, error?: string }}
+ */
+export function downloadBranch(repo, branch, destDir) {
+  const url = `https://github.com/${repo}/archive/refs/heads/${branch}.tar.gz`;
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-download-'));
+  const tarballPath = path.join(tmpDir, 'archive.tar.gz');
+
+  try {
+    fs.mkdirSync(destDir, { recursive: true });
+
+    execSync(`curl -fsSL -o "${tarballPath}" "${url}"`, {
+      timeout: 60000,
+      stdio: 'pipe',
+    });
+
+    const result = extractTarball(tarballPath, destDir);
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    return result;
+  } catch (err) {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    return {
+      success: false,
+      extractedDir: null,
+      error: `Failed to download ${repo}@${branch}: ${err.message}`,
+    };
+  }
+}
+
+/**
  * Extract a tarball to a destination directory.
  * GitHub archive tarballs contain a top-level directory (e.g. "repo-name-v1.0.0/"),
  * so we strip the first path component.
