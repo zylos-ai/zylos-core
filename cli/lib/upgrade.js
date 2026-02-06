@@ -15,6 +15,7 @@ import { parseSkillMd } from './skill.js';
 import { generateManifest, saveManifest } from './manifest.js';
 import { downloadArchive, downloadBranch } from './download.js';
 import { fetchLatestTag, fetchRawFile, sanitizeError } from './github.js';
+import { copyTree, syncTree } from './fs-utils.js';
 
 // ---------------------------------------------------------------------------
 // Version helpers
@@ -330,13 +331,7 @@ function step3_backup(ctx) {
   const backupDir = path.join(ctx.skillDir, '.backup', timestamp);
 
   try {
-    fs.mkdirSync(backupDir, { recursive: true });
-
-    // rsync current skill dir to backup, excluding transient dirs
-    execSync(
-      `rsync -a --exclude='node_modules' --exclude='.backup' --exclude='.zylos' "${ctx.skillDir}/" "${backupDir}/"`,
-      { timeout: 30000, stdio: 'pipe' },
-    );
+    copyTree(ctx.skillDir, backupDir, { excludes: ['node_modules', '.backup', '.zylos'] });
 
     ctx.backupDir = backupDir;
     return { step: 3, name: 'backup', status: 'done', message: path.basename(backupDir), duration: Date.now() - startTime };
@@ -355,7 +350,7 @@ function step4_copyNewFiles(ctx) {
     return { step: 4, name: 'copy_new_files', status: 'failed', error: 'Temp directory not available', duration: Date.now() - startTime };
   }
 
-  // Build rsync exclude list: always exclude meta dirs, plus lifecycle.preserve entries
+  // Exclude list: always exclude meta dirs, plus lifecycle.preserve entries
   const excludes = ['node_modules', '.backup', '.zylos'];
 
   // Read preserve list from the NEW SKILL.md (in tempDir)
@@ -365,13 +360,8 @@ function step4_copyNewFiles(ctx) {
     excludes.push(entry);
   }
 
-  const excludeArgs = excludes.map(e => `--exclude=${JSON.stringify(e)}`).join(' ');
-
   try {
-    execSync(
-      `rsync -a --delete ${excludeArgs} "${ctx.tempDir}/" "${ctx.skillDir}/"`,
-      { timeout: 30000, stdio: 'pipe' },
-    );
+    syncTree(ctx.tempDir, ctx.skillDir, { excludes });
     return { step: 4, name: 'copy_new_files', status: 'done', duration: Date.now() - startTime };
   } catch (err) {
     return { step: 4, name: 'copy_new_files', status: 'failed', error: `Copy failed: ${err.message}`, duration: Date.now() - startTime };
@@ -499,10 +489,7 @@ export function rollback(ctx) {
   // Restore files from backup (--delete removes files added by the failed upgrade)
   if (ctx.backupDir && fs.existsSync(ctx.backupDir)) {
     try {
-      execSync(
-        `rsync -a --delete --exclude='node_modules' --exclude='.backup' --exclude='.zylos' "${ctx.backupDir}/" "${ctx.skillDir}/"`,
-        { timeout: 30000, stdio: 'pipe' },
-      );
+      syncTree(ctx.backupDir, ctx.skillDir, { excludes: ['node_modules', '.backup', '.zylos'] });
       results.push({ action: 'restore_files', success: true });
     } catch (err) {
       results.push({ action: 'restore_files', success: false, error: err.message });
