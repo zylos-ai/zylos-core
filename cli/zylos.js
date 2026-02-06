@@ -5,10 +5,13 @@
  * Usage: zylos <command> [options]
  */
 
-const { showStatus, showLogs, startServices, stopServices, restartServices } = require('./commands/service');
-const { installComponent, upgradeComponent, uninstallComponent, listComponents, searchComponents } = require('./commands/component');
+import { showStatus, showLogs, startServices, stopServices, restartServices } from './commands/service.js';
+import { installComponent, upgradeComponent, uninstallComponent, listComponents, searchComponents } from './commands/component.js';
+import { initCommand } from './commands/init.js';
 
 const commands = {
+  // Environment setup
+  init: initCommand,
   // Service management
   status: showStatus,
   logs: showLogs,
@@ -44,6 +47,10 @@ Zylos CLI
 
 Usage: zylos <command> [options]
 
+Setup:
+  init                Initialize Zylos environment
+                      --yes/-y  Skip confirmation prompts
+
 Service Management:
   status              Show system status
   logs [type]         Show logs (activity|caddy|pm2)
@@ -65,6 +72,7 @@ Other:
   help                Show this help
 
 Examples:
+  zylos init
   zylos status
   zylos logs activity
 

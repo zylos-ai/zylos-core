@@ -108,7 +108,7 @@ install_core() {
     cp -r "$CORE_DIR/templates/memory/"* "$ZYLOS_DIR/memory/"
 
     # Copy PM2 ecosystem configuration
-    cp "$CORE_DIR/templates/pm2/ecosystem.config.js" "$ZYLOS_DIR/pm2/"
+    cp "$CORE_DIR/templates/pm2/ecosystem.config.cjs" "$ZYLOS_DIR/pm2/"
     echo "  ✓ PM2 ecosystem configuration installed"
 
     echo "  ✓ Templates installed"
@@ -155,12 +155,12 @@ start_services() {
         source "$ZYLOS_DIR/.env"
     fi
 
-    # Start all services using ecosystem.config.js
+    # Start all services using ecosystem.config.cjs
     # This ensures proper PATH configuration and consistent service management
     cd "$ZYLOS_DIR/pm2"
-    pm2 start ecosystem.config.js
+    pm2 start ecosystem.config.cjs
 
-    echo "  ✓ Services started from ecosystem.config.js"
+    echo "  ✓ Services started from ecosystem.config.cjs"
     echo "  ℹ Service list:"
     pm2 list --no-color | grep -E "^\│" | head -6
 }

@@ -2,12 +2,12 @@
  * Service management commands
  */
 
-const { execSync, spawn } = require('child_process');
-const fs = require('fs');
-const path = require('path');
-const { ZYLOS_DIR, SKILLS_DIR } = require('../lib/config');
+import { execSync, spawn } from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
+import { ZYLOS_DIR, SKILLS_DIR } from '../lib/config.js';
 
-function showStatus() {
+export function showStatus() {
   console.log('Zylos Status\n============\n');
 
   // Check Claude status
@@ -61,7 +61,7 @@ function showStatus() {
   }
 }
 
-function showLogs(args) {
+export function showLogs(args) {
   const logType = args[0] || 'activity';
 
   const logFiles = {
@@ -92,7 +92,7 @@ function showLogs(args) {
   tail.on('close', () => process.exit(0));
 }
 
-function startServices() {
+export function startServices() {
   console.log('Starting Zylos services...');
 
   const services = [
@@ -132,7 +132,7 @@ function startServices() {
   }
 }
 
-function stopServices() {
+export function stopServices() {
   console.log('Stopping Zylos services...');
   const services = ['activity-monitor', 'scheduler', 'c4-dispatcher', 'web-console'];
   try {
@@ -143,7 +143,7 @@ function stopServices() {
   }
 }
 
-function restartServices() {
+export function restartServices() {
   console.log('Restarting Zylos services...');
   const services = ['activity-monitor', 'scheduler', 'c4-dispatcher', 'web-console'];
   try {
@@ -153,11 +153,3 @@ function restartServices() {
     console.error('Failed to restart services');
   }
 }
-
-module.exports = {
-  showStatus,
-  showLogs,
-  startServices,
-  stopServices,
-  restartServices,
-};
