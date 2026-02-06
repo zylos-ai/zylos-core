@@ -17,7 +17,7 @@ const __dirname = path.dirname(__filename);
 const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
 const DATA_DIR = path.join(ZYLOS_DIR, 'comm-bridge');
 const DB_PATH = path.join(DATA_DIR, 'c4.db');
-const INIT_SQL_PATH = path.join(__dirname, 'init-db.sql');
+const INIT_SQL_PATH = path.join(__dirname, '..', 'init-db.sql');
 
 let db = null;
 

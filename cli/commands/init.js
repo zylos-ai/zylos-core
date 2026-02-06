@@ -263,8 +263,9 @@ function initializeDatabases() {
       timeout: 10000,
     });
     console.log('  ✓ Database initialized');
-  } catch {
-    // DB may already be initialized
+  } catch (err) {
+    const msg = err.stderr?.toString().trim() || err.stdout?.toString().trim() || err.message;
+    console.log(`  ⚠ Database init failed: ${msg}`);
   }
 }
 
