@@ -8,6 +8,11 @@ import { ZYLOS_DIR, SKILLS_DIR, COMPONENTS_DIR } from '../lib/config.js';
 import { loadRegistry } from '../lib/registry.js';
 import { loadComponents, saveComponents, outputTask } from '../lib/components.js';
 import { checkForUpdates, runUpgrade, downloadToTemp, readChangelog, cleanupTemp } from '../lib/upgrade.js';
+import {
+  checkForCoreUpdates, runSelfUpgrade,
+  downloadCoreToTemp, readChangelog as readCoreChangelog,
+  cleanupTemp as cleanupCoreTemp, cleanupBackup,
+} from '../lib/self-upgrade.js';
 import { detectChanges } from '../lib/manifest.js';
 import { acquireLock, releaseLock } from '../lib/lock.js';
 import { promptYesNo } from '../lib/prompts.js';
@@ -24,9 +29,11 @@ export async function upgradeComponent(args) {
   // Get target component (filter out flags)
   const target = args.find(a => !a.startsWith('-') && a !== 'confirm');
 
-  // Handle --self: upgrade zylos-core itself (legacy mode)
+  // Handle --self: upgrade zylos-core itself
   if (upgradeSelf) {
-    return upgradeSelfCore();
+    const ok = await upgradeSelfCore();
+    if (!ok) process.exit(1);
+    return;
   }
 
   // Handle --all: upgrade all components
@@ -374,31 +381,136 @@ async function upgradeAllComponents({ checkOnly, jsonOutput, skipConfirm }) {
 }
 
 /**
- * Upgrade zylos-core itself
+ * Upgrade zylos-core itself.
+ * Lock-first pattern, same as component upgrades.
+ *
+ * Returns true on success, false on failure.
+ * Does NOT call process.exit() — caller decides exit behavior.
  */
 async function upgradeSelfCore() {
-  console.log('Checking for zylos-core updates...');
+  const jsonOutput = process.argv.includes('--json');
+  const skipConfirm = process.argv.includes('--yes') || process.argv.includes('-y');
+  let tempDir = null;
 
-  outputTask('self_upgrade', {
-    target: 'zylos-core',
-    repo: 'zylos-ai/zylos-core',
-    coreDir: path.join(import.meta.dirname, '..', '..'),
-    steps: [
-      '1. Check git status for local modifications in zylos-core',
-      '2. git fetch to check for updates',
-      '3. Show CHANGELOG.md and VERSION diff',
-      '4. Ask user for confirmation',
-      '5. If user confirms:',
-      '   a. Create backup (git stash + record rollback point)',
-      '   b. Stop core services (scheduler, c4-dispatcher, etc.)',
-      '   c. git pull to update code',
-      '   d. npm install if package.json changed',
-      '   e. Restart core services',
-      '   f. Verify services are running',
-      '   g. If failed, rollback and restart',
-      '6. Report new version',
-    ],
-  });
+  // 1. Acquire lock (reuse component lock mechanism with special name)
+  const lockResult = acquireLock('_zylos-core');
+  if (!lockResult.success) {
+    if (jsonOutput) {
+      console.log(JSON.stringify({ action: 'self_upgrade', success: false, error: lockResult.error }, null, 2));
+    } else {
+      console.error(`Error: ${lockResult.error}`);
+    }
+    return false;
+  }
+
+  try {
+    // 2. Check for updates
+    const check = checkForCoreUpdates();
+
+    if (!check.success) {
+      if (jsonOutput) {
+        console.log(JSON.stringify({ action: 'check', target: 'zylos-core', ...check }, null, 2));
+      } else {
+        console.error(`Error: ${check.message}`);
+      }
+      return false;
+    }
+
+    if (!check.hasUpdate) {
+      if (jsonOutput) {
+        console.log(JSON.stringify({ action: 'check', target: 'zylos-core', ...check }, null, 2));
+      } else {
+        console.log(`✓ zylos-core is up to date (v${check.current})`);
+      }
+      return true;
+    }
+
+    // 3. Download new version to temp
+    if (!jsonOutput) {
+      console.log(`\nDownloading zylos-core@${check.latest}...`);
+    }
+
+    const dlResult = downloadCoreToTemp(check.latest);
+    if (!dlResult.success) {
+      if (jsonOutput) {
+        console.log(JSON.stringify({ action: 'self_upgrade', success: false, error: dlResult.error }, null, 2));
+      } else {
+        console.error(`Error: ${dlResult.error}`);
+      }
+      return false;
+    }
+    tempDir = dlResult.tempDir;
+
+    // 4. Show info
+    if (!jsonOutput) {
+      console.log(`\nzylos-core: ${check.current} → ${check.latest}`);
+
+      const changelog = readCoreChangelog(tempDir);
+      if (changelog) {
+        console.log(`\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+        console.log('CHANGELOG');
+        console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+        console.log(changelog);
+        console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`);
+      }
+    }
+
+    // 5. Confirmation
+    if (!skipConfirm) {
+      const confirmed = await promptYesNo('Proceed with zylos-core upgrade? [y/N]: ');
+      if (!confirmed) {
+        console.log('Upgrade cancelled.');
+        return true; // Not an error — user chose to cancel
+      }
+    } else if (!jsonOutput) {
+      console.log('Upgrading zylos-core...');
+    }
+
+    // 6. Execute self-upgrade (8 steps)
+    const result = runSelfUpgrade({ tempDir, newVersion: check.latest });
+
+    // Output result
+    if (jsonOutput) {
+      console.log(JSON.stringify(result, null, 2));
+    } else if (result.success) {
+      for (const step of result.steps) {
+        const icon = step.status === 'done' ? '✓' :
+                     step.status === 'skipped' ? '○' : '✗';
+        const msg = step.message ? ` (${step.message})` : '';
+        console.log(`  [${step.step}/8] ${step.name}${msg} ${icon}`);
+      }
+      console.log(`\n✓ zylos-core upgraded: ${result.from} → ${result.to}`);
+
+      // Clean backup after successful upgrade
+      if (result.backupDir) {
+        cleanupBackup(result.backupDir);
+      }
+    } else {
+      for (const step of result.steps) {
+        const icon = step.status === 'done' ? '✓' :
+                     step.status === 'skipped' ? '○' : '✗';
+        console.log(`  [${step.step}/8] ${step.name} ${icon}`);
+        if (step.status === 'failed' && step.error) {
+          console.log(`       ${step.error}`);
+        }
+      }
+
+      console.log(`\n✗ Self-upgrade failed (step ${result.failedStep}): ${result.error}`);
+
+      if (result.rollback?.performed) {
+        console.log(`\nAuto-rollback performed:`);
+        for (const r of result.rollback.steps) {
+          const icon = r.success ? '✓' : '✗';
+          console.log(`  ${icon} ${r.action}`);
+        }
+      }
+    }
+
+    return result.success;
+  } finally {
+    cleanupCoreTemp(tempDir);
+    releaseLock('_zylos-core');
+  }
 }
 
 export async function uninstallComponent(args) {
