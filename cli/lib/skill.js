@@ -28,7 +28,7 @@ export function parseSkillMd(dir) {
   }
 
   try {
-    const frontmatter = yaml.load(fmMatch[1]) || {};
+    const frontmatter = yaml.load(fmMatch[1], { schema: yaml.JSON_SCHEMA }) || {};
     const body = content.slice(fmMatch[0].length).trim();
     return { frontmatter, body };
   } catch (err) {

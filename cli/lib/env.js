@@ -59,7 +59,8 @@ export function writeEnvEntries(entries, componentName) {
     }
     // Quote values that contain spaces or special characters
     const needsQuote = /[\s#"'$`\\]/.test(value);
-    lines.push(`${key}=${needsQuote ? `"${value}"` : value}`);
+    const escaped = value.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\$/g, '\\$');
+    lines.push(`${key}=${needsQuote ? `"${escaped}"` : value}`);
     written.push(key);
   }
 

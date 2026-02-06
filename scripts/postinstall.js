@@ -7,11 +7,13 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { execSync } from 'node:child_process';
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(process.env.HOME, 'zylos');
 const SKILLS_DIR = path.join(ZYLOS_DIR, '.claude', 'skills');
-const CORE_SKILLS_SRC = path.join(import.meta.dirname, '..', 'skills');
+const CORE_SKILLS_SRC = path.join(__dirname, '..', 'skills');
 
 function main() {
   // Skip if running in CI or if zylos hasn't been initialized

@@ -3,7 +3,7 @@
  * Detects available credentials and provides authenticated HTTP helpers.
  */
 
-import { execSync } from 'node:child_process';
+import { execSync, execFileSync } from 'node:child_process';
 
 let _cachedToken = undefined;
 
@@ -58,16 +58,16 @@ export function fetchRawFile(repo, filePath, branch = 'main') {
   if (token) {
     // GitHub API — works for public and private repos
     const url = `https://api.github.com/repos/${repo}/contents/${filePath}?ref=${branch}`;
-    const content = execSync(
-      `curl -fsSL -H "Authorization: Bearer ${token}" -H "Accept: application/vnd.github.raw+json" "${url}"`,
-      { encoding: 'utf8', timeout: 10000, stdio: ['pipe', 'pipe', 'pipe'] },
-    );
+    const content = execFileSync('curl', [
+      '-fsSL', '-H', `Authorization: Bearer ${token}`,
+      '-H', 'Accept: application/vnd.github.raw+json', url,
+    ], { encoding: 'utf8', timeout: 10000, stdio: ['pipe', 'pipe', 'pipe'] });
     return content;
   }
 
   // Public endpoint — only works for public repos
   const url = `https://raw.githubusercontent.com/${repo}/${branch}/${filePath}`;
-  return execSync(`curl -fsSL "${url}"`, {
+  return execFileSync('curl', ['-fsSL', url], {
     encoding: 'utf8',
     timeout: 10000,
     stdio: ['pipe', 'pipe', 'pipe'],
@@ -83,14 +83,14 @@ export function fetchRawFile(repo, filePath, branch = 'main') {
  */
 export function fetchLatestTag(repo) {
   const token = getGitHubToken();
-  const authHeader = token ? `-H "Authorization: Bearer ${token}"` : '';
-
   try {
     const url = `https://api.github.com/repos/${repo}/tags?per_page=100`;
-    const response = execSync(
-      `curl -fsSL ${authHeader} "${url}"`,
-      { encoding: 'utf8', timeout: 10000, stdio: ['pipe', 'pipe', 'pipe'] },
-    );
+    const curlArgs = ['-fsSL'];
+    if (token) curlArgs.push('-H', `Authorization: Bearer ${token}`);
+    curlArgs.push(url);
+    const response = execFileSync('curl', curlArgs, {
+      encoding: 'utf8', timeout: 10000, stdio: ['pipe', 'pipe', 'pipe'],
+    });
     const tags = JSON.parse(response);
     if (!Array.isArray(tags) || tags.length === 0) return null;
 

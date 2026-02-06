@@ -29,13 +29,13 @@ check_requirements() {
     # Check Node.js
     if ! command -v node &> /dev/null; then
         echo -e "${RED}Error: Node.js is required but not installed.${NC}"
-        echo "Install Node.js 18+ from: https://nodejs.org/"
+        echo "Install Node.js 20+ from: https://nodejs.org/"
         exit 1
     fi
 
     NODE_VERSION=$(node -v | cut -d'v' -f2 | cut -d'.' -f1)
-    if [ "$NODE_VERSION" -lt 18 ]; then
-        echo -e "${RED}Error: Node.js 18+ required. Found: $(node -v)${NC}"
+    if [ "$NODE_VERSION" -lt 20 ]; then
+        echo -e "${RED}Error: Node.js 20+ required. Found: $(node -v)${NC}"
         exit 1
     fi
     echo "  ✓ Node.js $(node -v)"

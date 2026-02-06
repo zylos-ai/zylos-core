@@ -34,7 +34,7 @@ Reply using the exact path specified in `reply via:`.
 
 The scheduler may send you tasks when idle. After completing a task:
 ```bash
-~/zylos/.claude/skills/scheduler/scripts/task-cli.js done <task-id>
+~/zylos/.claude/skills/scheduler/scripts/cli.js done <task-id>
 ```
 
 ## Anthropic Skills Specification
@@ -119,11 +119,14 @@ Skills are located in `~/zylos/.claude/skills/`. **Read the SKILL.md in each dir
 ### check-context/
 Use when the user asks about current context or token usage.
 
-### self-maintenance/ (C2)
-Health monitoring and maintenance tools:
-- **activity-monitor.js** - Auto-restarts Claude if it crashes (runs via PM2)
-- **restart-claude.js** - Graceful restart with memory save
-- **upgrade-claude.js** - Upgrade Claude Code to latest version
+### activity-monitor/ (C2)
+Auto-restarts Claude if it crashes (runs via PM2).
+
+### restart-claude/
+Graceful restart with memory save.
+
+### upgrade-claude/
+Upgrade Claude Code to latest version.
 
 ### memory/
 Memory system guidance and best practices.
@@ -133,8 +136,8 @@ Communication gateway for Telegram, Lark, and other channels.
 
 ### scheduler/ (C5)
 Task scheduling system:
-- **task-cli.js** - Manage scheduled tasks
-- After completing a task: `~/zylos/.claude/skills/scheduler/scripts/task-cli.js done <task-id>`
+- **cli.js** - Manage scheduled tasks (bin: `scheduler-cli`)
+- After completing a task: `~/zylos/.claude/skills/scheduler/scripts/cli.js done <task-id>`
 
 ### web-console/
 Built-in web interface for monitoring.
@@ -161,7 +164,7 @@ Quick reference:
 ```bash
 zylos list                          # List installed components
 zylos search <keyword>              # Search available components
-zylos install <name>                # Install component
+zylos add <name>                    # Install component
 zylos upgrade <component> --check   # Check for updates
 zylos upgrade <component> --yes     # Execute upgrade (after user confirms)
 ```
@@ -184,5 +187,5 @@ zylos status
 zylos logs
 
 # Task management
-~/zylos/.claude/skills/scheduler/scripts/task-cli.js list
+~/zylos/.claude/skills/scheduler/scripts/cli.js list
 ```

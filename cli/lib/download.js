@@ -5,7 +5,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import os from 'node:os';
 import { getGitHubToken, sanitizeError } from './github.js';
 import { copyTree } from './fs-utils.js';
@@ -26,7 +26,7 @@ function curlDownload(repo, ref, refType, tarballPath) {
   if (token) {
     // GitHub API endpoint — works for public and private repos
     const url = `https://api.github.com/repos/${repo}/tarball/${ref}`;
-    execSync(`curl -fsSL -H "Authorization: Bearer ${token}" -o "${tarballPath}" "${url}"`, {
+    execFileSync('curl', ['-fsSL', '-H', `Authorization: Bearer ${token}`, '-o', tarballPath, url], {
       timeout: 60000,
       stdio: 'pipe',
     });
@@ -35,7 +35,7 @@ function curlDownload(repo, ref, refType, tarballPath) {
     const url = refType === 'tag'
       ? `https://github.com/${repo}/archive/refs/tags/${ref}.tar.gz`
       : `https://github.com/${repo}/archive/refs/heads/${ref}.tar.gz`;
-    execSync(`curl -fsSL -o "${tarballPath}" "${url}"`, {
+    execFileSync('curl', ['-fsSL', '-o', tarballPath, url], {
       timeout: 60000,
       stdio: 'pipe',
     });
@@ -141,7 +141,7 @@ export function extractTarball(tarballPath, destDir) {
     fs.mkdirSync(destDir, { recursive: true });
 
     // Extract with strip-components to remove top-level directory
-    execSync(`tar xzf "${tarballPath}" -C "${destDir}" --strip-components=1`, {
+    execFileSync('tar', ['xzf', tarballPath, '-C', destDir, '--strip-components=1'], {
       timeout: 30000,
       stdio: 'pipe',
     });
