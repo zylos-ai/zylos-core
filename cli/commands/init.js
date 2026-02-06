@@ -85,6 +85,27 @@ function installSystemPackage(pkg) {
   return false;
 }
 
+const CLAUDE_TMUX_SESSION = 'claude-main';
+
+function ensureClaudeTmuxSession() {
+  // Check if session already exists
+  try {
+    execSync(`tmux has-session -t "${CLAUDE_TMUX_SESSION}" 2>/dev/null`, { stdio: 'pipe' });
+    console.log(`  ✓ tmux session "${CLAUDE_TMUX_SESSION}" already running`);
+    return;
+  } catch {
+    // Session doesn't exist, create it
+  }
+
+  try {
+    execSync(`tmux new-session -d -s "${CLAUDE_TMUX_SESSION}" "claude"`, { stdio: 'pipe' });
+    console.log(`  ✓ Started Claude in tmux session "${CLAUDE_TMUX_SESSION}"`);
+  } catch (err) {
+    console.log(`  ⚠ Failed to start Claude tmux session: ${err.message}`);
+    console.log(`    Start manually: tmux new -s ${CLAUDE_TMUX_SESSION} 'claude'`);
+  }
+}
+
 // ── Installation state detection ────────────────────────────────
 
 /**
@@ -455,7 +476,10 @@ export async function initCommand(args) {
     } else {
       console.log('\nNo services to start.');
     }
-    console.log('Use "zylos add <component>" to add components.');
+
+    ensureClaudeTmuxSession();
+
+    console.log('\nUse "zylos add <component>" to add components.');
     return;
   }
 
@@ -507,6 +531,9 @@ export async function initCommand(args) {
     console.log('\nStarting services...');
     servicesStarted = startCoreServices();
   }
+
+  // Start Claude in tmux
+  ensureClaudeTmuxSession();
 
   // Done
   console.log('\n✓ Zylos initialized successfully!\n');
