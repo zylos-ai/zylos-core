@@ -280,10 +280,10 @@ function step1_backupCoreSkills(ctx) {
   try {
     fs.mkdirSync(backupDir, { recursive: true });
 
-    // Backup the skills directory
+    // Backup the skills directory (include .zylos manifests — needed for correct rollback)
     if (fs.existsSync(SKILLS_DIR)) {
       execSync(
-        `rsync -a --exclude='node_modules' --exclude='.zylos' "${SKILLS_DIR}/" "${backupDir}/skills/"`,
+        `rsync -a --exclude='node_modules' "${SKILLS_DIR}/" "${backupDir}/skills/"`,
         { timeout: 30000, stdio: 'pipe' },
       );
     }
@@ -473,11 +473,11 @@ function step8_verifyServices(ctx) {
 function rollbackSelf(ctx) {
   const results = [];
 
-  // Restore Core Skills from backup
+  // Restore Core Skills from backup (include .zylos manifests to keep them in sync with files)
   if (ctx.backupDir && fs.existsSync(path.join(ctx.backupDir, 'skills'))) {
     try {
       execSync(
-        `rsync -a --delete --exclude='.zylos' "${ctx.backupDir}/skills/" "${SKILLS_DIR}/"`,
+        `rsync -a --delete --exclude='node_modules' "${ctx.backupDir}/skills/" "${SKILLS_DIR}/"`,
         { timeout: 30000, stdio: 'pipe' },
       );
       results.push({ action: 'restore_core_skills', success: true });
