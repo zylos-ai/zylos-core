@@ -180,16 +180,36 @@ function deployTemplates() {
 // ── Core Skills sync ────────────────────────────────────────────
 
 /**
+ * Recursively copy source files into dest directory.
+ * Overwrites existing files, adds new files, preserves extra files
+ * in dest (e.g., node_modules, data directories not in source).
+ */
+function copyTree(src, dest) {
+  fs.mkdirSync(dest, { recursive: true });
+  for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
+    const srcPath = path.join(src, entry.name);
+    const destPath = path.join(dest, entry.name);
+    if (entry.isDirectory()) {
+      copyTree(srcPath, destPath);
+    } else {
+      fs.copyFileSync(srcPath, destPath);
+    }
+  }
+}
+
+/**
  * Sync Core Skills from the zylos package to SKILLS_DIR.
- * Only copies skills that don't already exist (preserves user modifications).
+ * Always updates source files from package (core skills are managed
+ * by zylos-core, like ecosystem.config.cjs). Preserves node_modules
+ * and any extra files not in the package source.
  */
 function syncCoreSkills() {
   if (!fs.existsSync(CORE_SKILLS_SRC)) {
-    return { synced: [], skipped: [], error: 'Core Skills source not found' };
+    return { installed: [], updated: [], error: 'Core Skills source not found' };
   }
 
-  const synced = [];
-  const skipped = [];
+  const installed = [];
+  const updated = [];
 
   const entries = fs.readdirSync(CORE_SKILLS_SRC, { withFileTypes: true });
   for (const entry of entries) {
@@ -197,23 +217,23 @@ function syncCoreSkills() {
 
     const srcDir = path.join(CORE_SKILLS_SRC, entry.name);
     const destDir = path.join(SKILLS_DIR, entry.name);
-
-    if (fs.existsSync(destDir)) {
-      skipped.push(entry.name);
-      continue;
-    }
+    const isNew = !fs.existsSync(destDir);
 
     try {
-      execSync(`cp -r "${srcDir}" "${destDir}"`, { stdio: 'pipe' });
+      if (isNew) {
+        execSync(`cp -r "${srcDir}" "${destDir}"`, { stdio: 'pipe' });
+      } else {
+        copyTree(srcDir, destDir);
+      }
       const manifest = generateManifest(destDir);
       saveManifest(destDir, manifest);
-      synced.push(entry.name);
+      (isNew ? installed : updated).push(entry.name);
     } catch {
       console.log(`  Warning: Failed to sync ${entry.name}`);
     }
   }
 
-  return { synced, skipped };
+  return { installed, updated };
 }
 
 // ── Skill dependencies ──────────────────────────────────────────
@@ -328,8 +348,11 @@ export async function initCommand(args) {
     console.log(`Zylos is already initialized at ${ZYLOS_DIR}\n`);
 
     const syncResult = syncCoreSkills();
-    if (syncResult.synced.length > 0) {
-      console.log(`Core Skills updated: ${syncResult.synced.join(', ')}`);
+    if (syncResult.updated.length > 0) {
+      console.log(`Core Skills updated: ${syncResult.updated.join(', ')}`);
+    }
+    if (syncResult.installed.length > 0) {
+      console.log(`Core Skills installed: ${syncResult.installed.join(', ')}`);
     }
 
     console.log('Deploying templates...');
@@ -437,11 +460,10 @@ export async function initCommand(args) {
   if (syncResult.error) {
     console.log(`  ⚠ ${syncResult.error}`);
   } else {
-    console.log(`  ✓ Core Skills synced (${syncResult.synced.length} installed, ${syncResult.skipped.length} already present)`);
-    if (syncResult.synced.length > 0) {
-      for (const name of syncResult.synced) {
-        console.log(`    + ${name}`);
-      }
+    const counts = [`${syncResult.installed.length} installed`, `${syncResult.updated.length} updated`];
+    console.log(`  ✓ Core Skills synced (${counts.join(', ')})`);
+    for (const name of syncResult.installed) {
+      console.log(`    + ${name}`);
     }
   }
 
