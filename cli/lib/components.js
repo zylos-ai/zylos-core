@@ -4,10 +4,8 @@
 
 const fs = require('fs');
 const path = require('path');
-const { ZYLOS_DIR } = require('./config');
+const { COMPONENTS_FILE } = require('./config');
 const { loadRegistry } = require('./registry');
-
-const COMPONENTS_FILE = path.join(ZYLOS_DIR, 'components.json');
 
 /**
  * Load installed components from components.json
