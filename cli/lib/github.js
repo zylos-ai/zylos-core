@@ -16,9 +16,10 @@ let _cachedToken = undefined;
 export function getGitHubToken() {
   if (_cachedToken !== undefined) return _cachedToken;
 
-  // 1. Explicit env var
-  if (process.env.GITHUB_TOKEN) {
-    _cachedToken = process.env.GITHUB_TOKEN;
+  // 1. Explicit env vars (GITHUB_TOKEN is standard, GH_TOKEN is used by gh CLI)
+  const envToken = process.env.GITHUB_TOKEN || process.env.GH_TOKEN;
+  if (envToken) {
+    _cachedToken = envToken;
     return _cachedToken;
   }
 
