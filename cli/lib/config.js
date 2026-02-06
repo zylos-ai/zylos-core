@@ -12,3 +12,4 @@ export const LOCKS_DIR = path.join(CONFIG_DIR, 'locks');
 export const REGISTRY_FILE = path.join(CONFIG_DIR, 'registry.json');
 export const REGISTRY_URL = 'https://raw.githubusercontent.com/zylos-ai/zylos-registry/main/registry.json';
 export const COMPONENTS_FILE = path.join(CONFIG_DIR, 'components.json');
+export const ENV_FILE = path.join(ZYLOS_DIR, '.env');
