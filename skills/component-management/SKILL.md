@@ -1,8 +1,6 @@
 ---
 name: component-management
-version: 1.1.0
-description: Guidelines for managing zylos components
-type: internal
+description: Guidelines for managing zylos components via CLI and IM (Telegram/Lark).
 ---
 
 # Component Management
