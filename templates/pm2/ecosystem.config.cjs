@@ -13,10 +13,12 @@ const HOME = os.homedir();
 const ZYLOS_DIR = path.join(HOME, 'zylos');
 const SKILLS_DIR = path.join(HOME, 'zylos', '.claude', 'skills');
 
-// Enhanced PATH with Claude Code binary locations
+// Enhanced PATH: include common binary locations that /bin/sh may not have
 const ENHANCED_PATH = [
   path.join(HOME, '.local', 'bin'),
   path.join(HOME, '.claude', 'bin'),
+  '/opt/homebrew/bin',    // macOS Homebrew (Apple Silicon)
+  '/usr/local/bin',       // macOS Homebrew (Intel) / Linux common
   process.env.PATH
 ].join(':');
 
