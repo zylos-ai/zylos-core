@@ -7,8 +7,11 @@
 
 const { showStatus, showLogs, startServices, stopServices, restartServices } = require('./commands/service');
 const { installComponent, upgradeComponent, uninstallComponent, listComponents, searchComponents } = require('./commands/component');
+const { initCommand } = require('./commands/init');
 
 const commands = {
+  // Setup
+  init: initCommand,
   // Service management
   status: showStatus,
   logs: showLogs,
@@ -44,6 +47,9 @@ Zylos CLI
 
 Usage: zylos <command> [options]
 
+Setup:
+  init                Initialize Zylos environment
+
 Service Management:
   status              Show system status
   logs [type]         Show logs (activity|caddy|pm2)
@@ -55,7 +61,6 @@ Component Management:
   install <target>    Install a component
                       target: name[@ver] | org/repo[@ver] | url
   upgrade <name>      Upgrade a specific component
-  upgrade --all       Upgrade all components
   upgrade --self      Upgrade zylos-core itself
   uninstall <name>    Uninstall a component (--purge for data)
   list                List installed components
@@ -65,14 +70,13 @@ Other:
   help                Show this help
 
 Examples:
+  zylos init
   zylos status
-  zylos logs activity
 
   zylos install telegram
   zylos install telegram@0.2.0
   zylos install kevin/whatsapp
   zylos upgrade telegram
-  zylos upgrade --all
   zylos upgrade --self
   zylos uninstall telegram --purge
   zylos list
