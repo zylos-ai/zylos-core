@@ -195,14 +195,8 @@ function startCoreServices() {
   fs.copyFileSync(ecosystemSrc, ecosystemDest);
 
   try {
-    // Delete existing PM2 processes to avoid duplicates, then start fresh
-    execSync('pm2 delete all 2>/dev/null', { stdio: 'pipe' });
-  } catch {
-    // No existing processes
-  }
-
-  try {
-    execSync(`pm2 start "${ecosystemDest}"`, { stdio: 'pipe', timeout: 30000 });
+    // pm2 start will start new processes and restart existing ones by name
+    execSync(`pm2 start "${ecosystemDest}" --update-env`, { stdio: 'pipe', timeout: 30000 });
     execSync('pm2 save', { stdio: 'pipe' });
   } catch (err) {
     console.log(`  ⚠ Failed to start services: ${err.message}`);
