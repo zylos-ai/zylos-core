@@ -18,6 +18,7 @@ import { detectChanges } from '../lib/manifest.js';
 import { parseSkillMd } from '../lib/skill.js';
 import { acquireLock, releaseLock } from '../lib/lock.js';
 import { promptYesNo } from '../lib/prompts.js';
+import { evaluateUpgrade } from '../lib/claude-eval.js';
 
 export async function upgradeComponent(args) {
   // Parse flags
@@ -27,6 +28,7 @@ export async function upgradeComponent(args) {
   const explicitConfirm = args.includes('confirm');
   const upgradeSelf = args.includes('--self');
   const upgradeAll = args.includes('--all');
+  const skipEval = args.includes('--skip-eval');
 
   // Get target component (filter out flags)
   const target = args.find(a => !a.startsWith('-') && a !== 'confirm');
@@ -40,7 +42,7 @@ export async function upgradeComponent(args) {
 
   // Handle --all: upgrade all components
   if (upgradeAll) {
-    return upgradeAllComponents({ checkOnly, jsonOutput, skipConfirm });
+    return upgradeAllComponents({ checkOnly, jsonOutput, skipConfirm, skipEval });
   }
 
   // Validate target
@@ -49,9 +51,10 @@ export async function upgradeComponent(args) {
     console.error('       zylos upgrade --all');
     console.error('       zylos upgrade --self');
     console.log('\nOptions:');
-    console.log('  --check    Check for updates only');
-    console.log('  --json     Output in JSON format');
-    console.log('  --yes, -y  Skip confirmation');
+    console.log('  --check      Check for updates only');
+    console.log('  --json       Output in JSON format');
+    console.log('  --yes, -y    Skip confirmation');
+    console.log('  --skip-eval  Skip Claude evaluation of local changes');
     console.log('\nExamples:');
     console.log('  zylos upgrade telegram --check --json');
     console.log('  zylos upgrade telegram --yes');
@@ -99,7 +102,7 @@ export async function upgradeComponent(args) {
   }
 
   // Mode 2 & 3: Full upgrade flow (lock-first)
-  const ok = await handleUpgradeFlow(target, { jsonOutput, skipConfirm: skipConfirm || explicitConfirm });
+  const ok = await handleUpgradeFlow(target, { jsonOutput, skipConfirm: skipConfirm || explicitConfirm, skipEval });
   if (!ok) process.exit(1);
 }
 
@@ -134,7 +137,7 @@ async function handleCheckOnly(component, { jsonOutput }) {
  * Returns true on success, false on failure.
  * Does NOT call process.exit() — caller decides exit behavior.
  */
-async function handleUpgradeFlow(component, { jsonOutput, skipConfirm }) {
+async function handleUpgradeFlow(component, { jsonOutput, skipConfirm, skipEval }) {
   const skillDir = path.join(SKILLS_DIR, component);
   let tempDir = null;
 
@@ -196,12 +199,15 @@ async function handleUpgradeFlow(component, { jsonOutput, skipConfirm }) {
     }
     tempDir = dlResult.tempDir;
 
-    // 4. Show info: version diff, changelog, local changes
+    // 4. Show info: version diff, changelog, local changes + Claude eval
+    const changes = detectChanges(skillDir);
+    const changelog = readChangelog(tempDir);
+    let evalResult = null;
+
     if (!jsonOutput) {
       console.log(`\n${component}: ${check.current} → ${check.latest}`);
 
       // Show local modifications (compared to manifest)
-      const changes = detectChanges(skillDir);
       if (changes && (changes.modified.length > 0 || changes.added.length > 0)) {
         console.log(`\nWARNING: LOCAL MODIFICATIONS DETECTED:`);
         for (const f of changes.modified) console.log(`  M ${f}`);
@@ -209,13 +215,43 @@ async function handleUpgradeFlow(component, { jsonOutput, skipConfirm }) {
       }
 
       // Show changelog from downloaded version
-      const changelog = readChangelog(tempDir);
       if (changelog) {
         console.log(`\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
         console.log('CHANGELOG');
         console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
         console.log(changelog);
         console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`);
+      }
+    }
+
+    // Claude evaluation (when local changes exist and not skipped)
+    if (changes && (changes.modified.length > 0 || changes.added.length > 0) && !skipEval) {
+      if (!jsonOutput) {
+        console.log('\n⚠️  Evaluating local modifications...');
+      }
+
+      evalResult = await evaluateUpgrade({
+        component,
+        localChanges: changes,
+        tempDir,
+        skillDir,
+        changelog,
+      });
+
+      if (evalResult) {
+        if (!jsonOutput) {
+          console.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+          console.log('Claude Code evaluation:');
+          console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+          for (const f of evalResult.files) {
+            const icon = f.verdict === 'safe' ? '✓' : f.verdict === 'warning' ? '⚠️' : '✗';
+            console.log(`${f.file}:\n  ${icon} ${f.reason}\n`);
+          }
+          console.log(`\nRecommendation: ${evalResult.recommendation}`);
+          console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        }
+      } else if (!jsonOutput) {
+        console.log('  (Claude evaluation skipped)');
       }
     }
 
@@ -249,7 +285,9 @@ async function handleUpgradeFlow(component, { jsonOutput, skipConfirm }) {
 
     // Output result
     if (jsonOutput) {
-      console.log(JSON.stringify(result, null, 2));
+      const output = { ...result };
+      if (evalResult) output.evaluation = evalResult;
+      console.log(JSON.stringify(output, null, 2));
     } else if (result.success) {
       for (const step of result.steps) {
         const icon = step.status === 'done' ? '✓' :
@@ -308,7 +346,7 @@ function cleanOldBackups(skillDir) {
 /**
  * Handle --all: upgrade all components
  */
-async function upgradeAllComponents({ checkOnly, jsonOutput, skipConfirm }) {
+async function upgradeAllComponents({ checkOnly, jsonOutput, skipConfirm, skipEval }) {
   const components = loadComponents();
   const names = Object.keys(components);
 
@@ -375,7 +413,7 @@ async function upgradeAllComponents({ checkOnly, jsonOutput, skipConfirm }) {
     if (!jsonOutput) {
       console.log(`\n─── ${comp.component} ───`);
     }
-    const ok = await handleUpgradeFlow(comp.component, { jsonOutput, skipConfirm: true });
+    const ok = await handleUpgradeFlow(comp.component, { jsonOutput, skipConfirm: true, skipEval });
     if (!ok) anyFailed = true;
   }
 
