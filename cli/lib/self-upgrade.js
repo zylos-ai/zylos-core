@@ -11,6 +11,7 @@ import { execSync } from 'node:child_process';
 import { SKILLS_DIR } from './config.js';
 import { downloadArchive } from './download.js';
 import { generateManifest, loadManifest, saveManifest } from './manifest.js';
+import { fetchRawFile, sanitizeError } from './github.js';
 
 const REPO = 'zylos-ai/zylos-core';
 
@@ -36,16 +37,11 @@ export function getCurrentVersion() {
  */
 function getLatestVersion() {
   try {
-    const url = `https://raw.githubusercontent.com/${REPO}/main/package.json`;
-    const content = execSync(`curl -fsSL "${url}"`, {
-      encoding: 'utf8',
-      timeout: 10000,
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
+    const content = fetchRawFile(REPO, 'package.json');
     const pkg = JSON.parse(content);
     return { success: true, version: pkg.version };
   } catch (err) {
-    return { success: false, error: `Cannot fetch latest version: ${err.message}` };
+    return { success: false, error: `Cannot fetch latest version: ${sanitizeError(err.message)}` };
   }
 }
 

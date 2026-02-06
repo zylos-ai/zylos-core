@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "components": {
+    "telegram": {
+      "repo": "zylos-ai/zylos-telegram",
+      "description": "Telegram Bot for user communication",
+      "type": "communication",
+      "latest": "0.1.0-beta.9"
+    },
+    "lark": {
+      "repo": "zylos-ai/zylos-lark",
+      "description": "Lark and Feishu communication channel",
+      "type": "communication",
+      "latest": "0.1.0-beta.1"
+    }
+  }
+}

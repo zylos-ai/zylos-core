@@ -7,6 +7,39 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execSync } from 'node:child_process';
 import os from 'node:os';
+import { getGitHubToken, sanitizeError } from './github.js';
+
+/**
+ * Download a tarball from a URL using curl.
+ * When a GitHub token is available, uses the GitHub API endpoint
+ * (works for both public and private repos).
+ *
+ * @param {string} repo - GitHub repo in "org/name" format
+ * @param {string} ref - Git ref (tag name or branch name)
+ * @param {'tag'|'branch'} refType - Whether the ref is a tag or branch
+ * @param {string} tarballPath - Destination file path for the tarball
+ */
+function curlDownload(repo, ref, refType, tarballPath) {
+  const token = getGitHubToken();
+
+  if (token) {
+    // GitHub API endpoint — works for public and private repos
+    const url = `https://api.github.com/repos/${repo}/tarball/${ref}`;
+    execSync(`curl -fsSL -H "Authorization: Bearer ${token}" -o "${tarballPath}" "${url}"`, {
+      timeout: 60000,
+      stdio: 'pipe',
+    });
+  } else {
+    // Public endpoint — only works for public repos
+    const url = refType === 'tag'
+      ? `https://github.com/${repo}/archive/refs/tags/${ref}.tar.gz`
+      : `https://github.com/${repo}/archive/refs/heads/${ref}.tar.gz`;
+    execSync(`curl -fsSL -o "${tarballPath}" "${url}"`, {
+      timeout: 60000,
+      stdio: 'pipe',
+    });
+  }
+}
 
 /**
  * Download a GitHub archive tarball and extract it.
@@ -18,34 +51,21 @@ import os from 'node:os';
  */
 export function downloadArchive(repo, version, destDir) {
   const tag = version.startsWith('v') ? version : `v${version}`;
-  const url = `https://github.com/${repo}/archive/refs/tags/${tag}.tar.gz`;
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-download-'));
   const tarballPath = path.join(tmpDir, 'archive.tar.gz');
 
   try {
-    // Ensure dest directory exists
     fs.mkdirSync(destDir, { recursive: true });
-
-    // Download tarball
-    execSync(`curl -fsSL -o "${tarballPath}" "${url}"`, {
-      timeout: 60000,
-      stdio: 'pipe',
-    });
-
-    // Extract tarball
+    curlDownload(repo, tag, 'tag', tarballPath);
     const result = extractTarball(tarballPath, destDir);
-
-    // Clean up tarball
     fs.rmSync(tmpDir, { recursive: true, force: true });
-
     return result;
   } catch (err) {
-    // Clean up on failure
     fs.rmSync(tmpDir, { recursive: true, force: true });
     return {
       success: false,
       extractedDir: null,
-      error: `Failed to download ${repo}@${tag}: ${err.message}`,
+      error: `Failed to download ${repo}@${tag}: ${sanitizeError(err.message)}`,
     };
   }
 }
@@ -92,20 +112,13 @@ export function copyLocal(localPath, destDir) {
  * @returns {{ success: boolean, extractedDir: string, error?: string }}
  */
 export function downloadBranch(repo, branch, destDir) {
-  const url = `https://github.com/${repo}/archive/refs/heads/${branch}.tar.gz`;
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-download-'));
   const tarballPath = path.join(tmpDir, 'archive.tar.gz');
 
   try {
     fs.mkdirSync(destDir, { recursive: true });
-
-    execSync(`curl -fsSL -o "${tarballPath}" "${url}"`, {
-      timeout: 60000,
-      stdio: 'pipe',
-    });
-
+    curlDownload(repo, branch, 'branch', tarballPath);
     const result = extractTarball(tarballPath, destDir);
-
     fs.rmSync(tmpDir, { recursive: true, force: true });
     return result;
   } catch (err) {
@@ -113,7 +126,7 @@ export function downloadBranch(repo, branch, destDir) {
     return {
       success: false,
       extractedDir: null,
-      error: `Failed to download ${repo}@${branch}: ${err.message}`,
+      error: `Failed to download ${repo}@${branch}: ${sanitizeError(err.message)}`,
     };
   }
 }
