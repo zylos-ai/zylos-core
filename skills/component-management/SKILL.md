@@ -1,6 +1,6 @@
 ---
 name: component-management
-description: Guidelines for managing zylos components via CLI and IM (Telegram/Lark).
+description: Guidelines for managing zylos components via CLI and C4 channels.
 ---
 
 # Component Management
@@ -12,7 +12,7 @@ Guidelines for installing, upgrading, and managing zylos components.
 1. **Always confirm before executing** - User must explicitly approve install/upgrade/uninstall
 2. **Guide interactively** - Never just tell user to "manually edit files"
 3. **Read SKILL.md** - Each component declares its requirements in SKILL.md frontmatter
-4. **Detect execution mode** - Handle both Claude session and IM (Telegram/Lark) differently
+4. **Detect execution mode** - Handle both Claude session and C4 channels differently
 
 ## Install Workflow
 
@@ -201,17 +201,16 @@ When `sensitive: true`, the value should be handled carefully (not logged, store
 
 ---
 
-## IM Mode (Telegram / Lark)
+## C4 Mode (IM Channels)
 
-When user sends component management requests via IM (Telegram/Lark), use a streamlined flow.
-IM messages arrive via send-reply.sh. Replies must be plain text (no markdown).
+When user sends component management requests via C4 comm-bridge (Telegram, Lark, or any connected channel), use a streamlined flow. Replies must be plain text (no markdown).
 
-### Detecting IM Mode
+### Detecting C4 Mode
 
-The request is from IM when the message arrives via Telegram bot or Lark agent
-(e.g., `howardzhou said: ...` or `Hongyun said: ...`).
+The request is from C4 when the message arrives via a communication channel
+(e.g., `howardzhou said: ...` with a `reply via:` instruction).
 
-### IM Command Mapping
+### C4 Command Mapping
 
 | User says | CLI command |
 |-----------|------------|
@@ -222,9 +221,9 @@ The request is from IM when the message arrives via Telegram bot or Lark agent
 | upgrade \<name\> | `zylos upgrade <name> --check --json` (preview only) |
 | upgrade \<name\> confirm | `zylos upgrade <name> --yes --skip-eval` |
 | add \<name\> | `zylos add <name> --yes` |
-| remove / uninstall | Reject — reply: "Remove is not supported via IM. Use CLI directly." |
+| remove / uninstall | Reject — reply: "Remove is not supported via C4. Use CLI directly." |
 
-### IM Upgrade Confirm Flow
+### C4 Upgrade Confirm Flow
 
 Upgrades use two-step confirmation. No state is stored between messages.
 
@@ -252,9 +251,9 @@ Run `zylos upgrade telegram --yes --skip-eval` and reply with the output.
 The confirm command is self-contained — the component name is in the command itself,
 so it does not depend on Claude remembering the previous message.
 
-### IM Output Formatting
+### C4 Output Formatting
 
-When formatting `--json` output for IM replies:
+When formatting `--json` output for C4 replies:
 
 - Plain text only, no markdown
 - For `info --json`: format as `<name> v<version>\nType: <type>\nRepo: <repo>\nService: <name> (<status>)`
@@ -262,9 +261,9 @@ When formatting `--json` output for IM replies:
 - For errors: when JSON has both `error` and `message` fields, display `message` (human-readable)
 - Send reply via the appropriate channel's send script
 
-### IM Differences from Session Mode
+### C4 Differences from Session Mode
 
-| Aspect | Claude Session | IM |
+| Aspect | Claude Session | C4 |
 |--------|---------------|-----|
 | Confirmation | Interactive dialog | Two-step: preview + "confirm" command |
 | Output format | Rich (emoji, formatting) | Plain text only |
