@@ -14,6 +14,7 @@ import { loadLocalRegistry } from './registry.js';
 import { parseSkillMd } from './skill.js';
 import { generateManifest, saveManifest } from './manifest.js';
 import { downloadArchive, downloadBranch } from './download.js';
+import { fetchRawFile, sanitizeError } from './github.js';
 
 // ---------------------------------------------------------------------------
 // Version helpers
@@ -56,12 +57,7 @@ function getLatestVersion(component, repo) {
   if (!repo) return { success: false, error: 'No repo configured for component' };
 
   try {
-    const url = `https://raw.githubusercontent.com/${repo}/main/SKILL.md`;
-    const content = execSync(`curl -fsSL "${url}"`, {
-      encoding: 'utf8',
-      timeout: 10000,
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
+    const content = fetchRawFile(repo, 'SKILL.md');
     const match = content.match(/^---\n([\s\S]*?)\n---/);
     if (match) {
       const versionMatch = match[1].match(/^version:\s*(.+)$/m);
@@ -71,7 +67,7 @@ function getLatestVersion(component, repo) {
     }
     return { success: false, error: 'Version not found in remote SKILL.md' };
   } catch (err) {
-    return { success: false, error: `Cannot fetch remote SKILL.md: ${err.message}` };
+    return { success: false, error: `Cannot fetch remote SKILL.md: ${sanitizeError(err.message)}` };
   }
 }
 
