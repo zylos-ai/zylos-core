@@ -165,7 +165,7 @@ async function installDeclarative(resolved, skillDir, skipConfirm) {
       console.log('  (--yes mode: skipping prompts, set these manually in .env)');
       const entries = {};
       for (const item of requiredConfig) {
-        const key = typeof item === 'string' ? item : (item.env || item.name);
+        const key = typeof item === 'string' ? item : item.name;
         if (key) {
           entries[key] = '';
         }
@@ -178,9 +178,9 @@ async function installDeclarative(resolved, skillDir, skipConfirm) {
       const entries = {};
       const existing = readEnvFile();
       for (const item of requiredConfig) {
-        const key = typeof item === 'string' ? item : (item.env || item.name);
-        const desc = typeof item === 'string' ? item : (item.description || item.env || item.name);
-        const secret = typeof item === 'object' && (item.secret || item.sensitive);
+        const key = typeof item === 'string' ? item : item.name;
+        const desc = typeof item === 'string' ? item : (item.description || item.name);
+        const secret = typeof item === 'object' && item.sensitive;
 
         if (!key) continue;
 
@@ -213,7 +213,7 @@ async function installDeclarative(resolved, skillDir, skipConfirm) {
 
   // Step 4: Execute post-install hook
   const hooks = lifecycle.hooks || {};
-  const postInstall = hooks['post-install'] || lifecycle['post-install'];
+  const postInstall = hooks['post-install'];
   if (postInstall) {
     console.log('  Running post-install hook...');
     try {
@@ -226,7 +226,7 @@ async function installDeclarative(resolved, skillDir, skipConfirm) {
   }
 
   // Step 5: Register PM2 service
-  const service = lifecycle.service || fm.service;
+  const service = lifecycle.service;
   if (service && service.entry) {
     console.log('  Starting service...');
     const svcResult = registerService({
