@@ -139,77 +139,93 @@ function syncCoreSkills() {
 // ── Service startup ─────────────────────────────────────────────────
 
 function startCoreServices() {
-  const services = [
-    { name: 'activity-monitor', skill: 'activity-monitor', entry: 'scripts/activity-monitor.js' },
-    { name: 'scheduler', skill: 'scheduler', entry: 'scripts/daemon.js' },
-    { name: 'c4-dispatcher', skill: 'comm-bridge', entry: 'scripts/c4-dispatcher.js' },
-    { name: 'web-console', skill: 'web-console', entry: 'scripts/server.js' },
-  ];
-
-  let started = 0;
-  for (const svc of services) {
-    const skillDir = path.join(SKILLS_DIR, svc.skill);
-    const script = path.join(skillDir, svc.entry);
-    if (!fs.existsSync(script)) continue;
-
-    // Install dependencies if the skill has a package.json with dependencies
+  // Step 1: Install dependencies for all skills that need them
+  const skillEntries = fs.readdirSync(SKILLS_DIR, { withFileTypes: true });
+  for (const entry of skillEntries) {
+    if (!entry.isDirectory()) continue;
+    const skillDir = path.join(SKILLS_DIR, entry.name);
     const pkgPath = path.join(skillDir, 'package.json');
-    if (fs.existsSync(pkgPath)) {
-      try {
-        const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
-        if (pkg.dependencies && Object.keys(pkg.dependencies).length > 0) {
-          const nmDir = path.join(skillDir, 'node_modules');
-          if (!fs.existsSync(nmDir)) {
-            console.log(`  Installing ${svc.name} dependencies...`);
-            execSync('npm install --production', {
-              cwd: skillDir,
-              stdio: 'pipe',
-              timeout: 120000,
-            });
-          }
+    if (!fs.existsSync(pkgPath)) continue;
+
+    try {
+      const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+      if (pkg.dependencies && Object.keys(pkg.dependencies).length > 0) {
+        const nmDir = path.join(skillDir, 'node_modules');
+        if (!fs.existsSync(nmDir)) {
+          console.log(`  Installing ${entry.name} dependencies...`);
+          execSync('npm install --production', {
+            cwd: skillDir,
+            stdio: 'pipe',
+            timeout: 120000,
+          });
         }
-      } catch {
-        console.log(`  ⚠ Failed to install ${svc.name} dependencies`);
-        continue;
       }
-    }
-
-    // Initialize database if the skill has an init-db.sql or c4-db.js init
-    const dbInitScript = path.join(skillDir, 'scripts', 'c4-db.js');
-    const dbInitSql = path.join(skillDir, 'init-db.sql');
-    if (fs.existsSync(dbInitSql) && fs.existsSync(dbInitScript)) {
-      try {
-        execSync(`node "${dbInitScript}" init`, { cwd: skillDir, stdio: 'pipe', timeout: 10000 });
-      } catch {
-        // DB may already be initialized
-      }
-    }
-
-    try {
-      execSync(`pm2 start "${script}" --name "${svc.name}" 2>/dev/null`, { stdio: 'pipe' });
-      console.log(`  ✓ ${svc.name}`);
-      started++;
     } catch {
-      // May already be running
-      try {
-        execSync(`pm2 restart "${svc.name}" 2>/dev/null`, { stdio: 'pipe' });
-        console.log(`  ✓ ${svc.name} (restarted)`);
+      console.log(`  ⚠ Failed to install ${entry.name} dependencies`);
+    }
+  }
+
+  // Step 2: Initialize databases (comm-bridge)
+  const dbInitScript = path.join(SKILLS_DIR, 'comm-bridge', 'scripts', 'c4-db.js');
+  const dbInitSql = path.join(SKILLS_DIR, 'comm-bridge', 'init-db.sql');
+  if (fs.existsSync(dbInitSql) && fs.existsSync(dbInitScript)) {
+    try {
+      execSync(`node "${dbInitScript}" init`, {
+        cwd: path.join(SKILLS_DIR, 'comm-bridge'),
+        stdio: 'pipe',
+        timeout: 10000,
+      });
+      console.log('  ✓ Database initialized');
+    } catch {
+      // DB may already be initialized
+    }
+  }
+
+  // Step 3: Copy ecosystem.config.cjs template and start services via PM2
+  const pm2Dir = path.join(ZYLOS_DIR, 'pm2');
+  const ecosystemSrc = path.join(import.meta.dirname, '..', '..', 'templates', 'pm2', 'ecosystem.config.cjs');
+  const ecosystemDest = path.join(pm2Dir, 'ecosystem.config.cjs');
+
+  if (!fs.existsSync(ecosystemSrc)) {
+    console.log('  ⚠ ecosystem.config.cjs template not found');
+    return 0;
+  }
+
+  fs.mkdirSync(pm2Dir, { recursive: true });
+  fs.copyFileSync(ecosystemSrc, ecosystemDest);
+
+  try {
+    // Delete existing PM2 processes to avoid duplicates, then start fresh
+    execSync('pm2 delete all 2>/dev/null', { stdio: 'pipe' });
+  } catch {
+    // No existing processes
+  }
+
+  try {
+    execSync(`pm2 start "${ecosystemDest}"`, { stdio: 'pipe', timeout: 30000 });
+    execSync('pm2 save', { stdio: 'pipe' });
+  } catch (err) {
+    console.log(`  ⚠ Failed to start services: ${err.message}`);
+    return 0;
+  }
+
+  // Count started services
+  try {
+    const list = execSync('pm2 jlist', { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] });
+    const procs = JSON.parse(list);
+    let started = 0;
+    for (const proc of procs) {
+      if (proc.pm2_env?.status === 'online') {
+        console.log(`  ✓ ${proc.name}`);
         started++;
-      } catch {
-        console.log(`  - ${svc.name} (not available)`);
+      } else {
+        console.log(`  ✗ ${proc.name}: ${proc.pm2_env?.status || 'unknown'}`);
       }
     }
+    return started;
+  } catch {
+    return 0;
   }
-
-  if (started > 0) {
-    try {
-      execSync('pm2 save 2>/dev/null', { stdio: 'pipe' });
-    } catch {
-      // pm2 save failure is non-critical
-    }
-  }
-
-  return started;
 }
 
 // ── Main init command ───────────────────────────────────────────────

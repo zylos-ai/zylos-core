@@ -24,7 +24,7 @@ module.exports = {
   apps: [
     {
       name: 'scheduler',
-      script: path.join(SKILLS_DIR, 'scheduler', 'scripts', 'scheduler.js'),
+      script: path.join(SKILLS_DIR, 'scheduler', 'scripts', 'daemon.js'),
       cwd: ZYLOS_DIR,
       env: {
         PATH: ENHANCED_PATH,
@@ -70,17 +70,6 @@ module.exports = {
       max_restarts: 10,
       min_uptime: '10s'
     },
-    {
-      name: 'zylos-telegram',
-      script: path.join(SKILLS_DIR, 'telegram', 'scripts', 'bot.js'),
-      cwd: HOME,
-      env: {
-        PATH: ENHANCED_PATH,
-        NODE_ENV: 'production'
-      },
-      autorestart: true,
-      max_restarts: 10,
-      min_uptime: '10s'
-    }
+    // Component services (telegram, lark, etc.) are managed by `zylos add/remove`
   ]
 };
