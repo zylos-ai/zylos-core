@@ -3,9 +3,9 @@
  * Used to detect local modifications during upgrades.
  */
 
-const fs = require('fs');
-const path = require('path');
-const crypto = require('crypto');
+import fs from 'node:fs';
+import path from 'node:path';
+import crypto from 'node:crypto';
 
 const MANIFEST_DIR = '.zylos';
 const MANIFEST_FILE = 'manifest.json';
@@ -53,7 +53,7 @@ function collectFiles(dir, baseDir, exclude = ['.git', '.zylos', 'node_modules',
  * @param {string} dir - Directory to scan
  * @returns {{ files: Object<string, string>, generated_at: string }}
  */
-function generateManifest(dir) {
+export function generateManifest(dir) {
   const files = collectFiles(dir, dir);
   const manifest = {};
 
@@ -73,7 +73,7 @@ function generateManifest(dir) {
  * @param {string} dir - Component root directory
  * @param {Object} manifest - Manifest object from generateManifest()
  */
-function saveManifest(dir, manifest) {
+export function saveManifest(dir, manifest) {
   const manifestDir = path.join(dir, MANIFEST_DIR);
   fs.mkdirSync(manifestDir, { recursive: true });
   fs.writeFileSync(
@@ -88,7 +88,7 @@ function saveManifest(dir, manifest) {
  * @param {string} dir - Component root directory
  * @returns {Object|null} Manifest object or null if not found
  */
-function loadManifest(dir) {
+export function loadManifest(dir) {
   const manifestPath = path.join(dir, MANIFEST_DIR, MANIFEST_FILE);
   if (!fs.existsSync(manifestPath)) {
     return null;
@@ -107,7 +107,7 @@ function loadManifest(dir) {
  * @returns {{ modified: string[], added: string[], deleted: string[], unchanged: string[] } | null}
  *   null if no manifest found (first install, no comparison possible)
  */
-function detectChanges(dir) {
+export function detectChanges(dir) {
   const saved = loadManifest(dir);
   if (!saved || !saved.files) return null;
 
@@ -137,10 +137,3 @@ function detectChanges(dir) {
 
   return { modified, added, deleted, unchanged };
 }
-
-module.exports = {
-  generateManifest,
-  saveManifest,
-  loadManifest,
-  detectChanges,
-};

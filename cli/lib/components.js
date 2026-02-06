@@ -2,15 +2,16 @@
  * Component management utilities
  */
 
-const fs = require('fs');
-const path = require('path');
-const { COMPONENTS_FILE } = require('./config');
-const { loadRegistry } = require('./registry');
+import fs from 'node:fs';
+import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { COMPONENTS_FILE } from './config.js';
+import { loadRegistry } from './registry.js';
 
 /**
  * Load installed components from components.json
  */
-function loadComponents() {
+export function loadComponents() {
   if (fs.existsSync(COMPONENTS_FILE)) {
     try {
       return JSON.parse(fs.readFileSync(COMPONENTS_FILE, 'utf8'));
@@ -24,7 +25,7 @@ function loadComponents() {
 /**
  * Save installed components to components.json
  */
-function saveComponents(components) {
+export function saveComponents(components) {
   fs.writeFileSync(COMPONENTS_FILE, JSON.stringify(components, null, 2));
 }
 
@@ -33,7 +34,7 @@ function saveComponents(components) {
  * Supports: name, name@version, org/repo, org/repo@version, github-url
  * @returns {object} { name, repo, version, isThirdParty }
  */
-async function resolveTarget(nameOrUrl) {
+export async function resolveTarget(nameOrUrl) {
   // Extract version if present (name@version or org/repo@version)
   let version = null;
   let target = nameOrUrl;
@@ -44,7 +45,7 @@ async function resolveTarget(nameOrUrl) {
   }
 
   // Check if it's a GitHub URL
-  const githubMatch = target.match(/github\.com\/([^\/]+\/[^\/]+)/);
+  const githubMatch = target.match(/github\.com\/([^/]+\/[^/]+)/);
   if (githubMatch) {
     const repo = githubMatch[1].replace(/\.git$/, '');
     const name = repo.split('/')[1].replace(/^zylos-/, '');
@@ -76,7 +77,7 @@ async function resolveTarget(nameOrUrl) {
  * Output task for Claude to execute via C4
  * In Scene B (terminal), also queues to C4 for delivery
  */
-function outputTask(action, data) {
+export function outputTask(action, data) {
   const task = {
     type: `component_${action}`,
     ...data,
@@ -91,8 +92,7 @@ function outputTask(action, data) {
 
   // Queue task via C4 for Scene B (terminal execution)
   // C4 dispatcher will deliver to Claude via tmux
-  const { spawnSync } = require('child_process');
-  const c4ReceivePath = path.join(__dirname, '..', '..', 'skills', 'comm-bridge', 'c4-receive.js');
+  const c4ReceivePath = path.join(import.meta.dirname, '..', '..', 'skills', 'comm-bridge', 'c4-receive.js');
 
   try {
     const taskMessage = `[COMPONENT_TASK] ${JSON.stringify(task)}`;
@@ -113,10 +113,3 @@ function outputTask(action, data) {
     console.log('Note: C4 not available. If in Claude session, Claude will execute directly.');
   }
 }
-
-module.exports = {
-  loadComponents,
-  saveComponents,
-  resolveTarget,
-  outputTask,
-};

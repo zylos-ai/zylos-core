@@ -2,7 +2,7 @@
 // This file defines all PM2-managed services with proper environment setup
 //
 // Usage:
-//   pm2 start ~/zylos/pm2/ecosystem.config.js
+//   pm2 start ~/zylos/pm2/ecosystem.config.cjs
 //   pm2 save
 //   pm2 startup  # Configure boot auto-start
 

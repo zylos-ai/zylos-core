@@ -3,20 +3,20 @@
  * Implements the 9-step upgrade flow with automatic rollback
  */
 
-const fs = require('fs');
-const path = require('path');
-const { execSync } = require('child_process');
-const { SKILLS_DIR, COMPONENTS_DIR } = require('./config');
-const { acquireLock, releaseLock } = require('./lock');
-const git = require('./git');
-const { loadComponents, saveComponents } = require('./components');
+import fs from 'node:fs';
+import path from 'node:path';
+import { execSync } from 'node:child_process';
+import { SKILLS_DIR, COMPONENTS_DIR } from './config.js';
+import { acquireLock, releaseLock } from './lock.js';
+import * as git from './git.js';
+import { loadComponents, saveComponents } from './components.js';
 
 /**
  * Check if a component has updates available
  * @param {string} component - Component name
  * @returns {object} Update check result
  */
-function checkForUpdates(component) {
+export function checkForUpdates(component) {
   const skillDir = path.join(SKILLS_DIR, component);
 
   // Verify component exists
@@ -24,7 +24,7 @@ function checkForUpdates(component) {
     return {
       success: false,
       error: 'component_not_found',
-      message: `组件 '${component}' 未安装`,
+      message: `Component '${component}' is not installed`,
     };
   }
 
@@ -34,7 +34,7 @@ function checkForUpdates(component) {
     return {
       success: false,
       error: 'version_not_found',
-      message: `无法读取当前版本: ${localVersion.error}`,
+      message: `Cannot read current version: ${localVersion.error}`,
     };
   }
 
@@ -47,7 +47,7 @@ function checkForUpdates(component) {
     return {
       success: false,
       error: 'fetch_failed',
-      message: `无法检查更新: ${remoteChanges.error}`,
+      message: `Cannot check for updates: ${remoteChanges.error}`,
     };
   }
 
@@ -66,7 +66,7 @@ function checkForUpdates(component) {
     return {
       success: false,
       error: 'remote_version_failed',
-      message: `无法读取远程版本: ${remoteVersion.error}`,
+      message: `Cannot read remote version: ${remoteVersion.error}`,
     };
   }
 
@@ -155,7 +155,7 @@ function step2_recordRollbackPoint(ctx) {
       step: 2,
       name: 'record_commit',
       status: 'failed',
-      error: `无法获取当前 commit: ${result.error}`,
+      error: `Cannot get current commit: ${result.error}`,
       duration: Date.now() - startTime,
     };
   }
@@ -188,7 +188,7 @@ function step3_createBackup(ctx) {
       step: 3,
       name: 'backup',
       status: 'failed',
-      error: `无法检查本地修改: ${changes.error}`,
+      error: `Cannot check local changes: ${changes.error}`,
       duration: Date.now() - startTime,
     };
   }
@@ -201,7 +201,7 @@ function step3_createBackup(ctx) {
         step: 3,
         name: 'backup',
         status: 'failed',
-        error: `无法 stash 本地修改: ${stashResult.error}`,
+        error: `Cannot stash local changes: ${stashResult.error}`,
         duration: Date.now() - startTime,
       };
     }
@@ -482,7 +482,7 @@ function step9_startAndVerify(ctx) {
         step: 9,
         name: 'start_and_verify',
         status: 'failed',
-        error: '服务启动验证失败',
+        error: 'Service startup verification failed',
         duration: Date.now() - startTime,
       };
     }
@@ -508,7 +508,7 @@ function step9_startAndVerify(ctx) {
 /**
  * Rollback on failure
  */
-function rollback(ctx) {
+export function rollback(ctx) {
   const results = [];
 
   // Reset to rollback point
@@ -582,7 +582,7 @@ function rollback(ctx) {
  * @param {object} options - Options (jsonOutput, etc.)
  * @returns {object} Upgrade result
  */
-function runUpgrade(component, options = {}) {
+export function runUpgrade(component, options = {}) {
   const ctx = createContext(component);
 
   // Validate skill directory exists
@@ -591,7 +591,7 @@ function runUpgrade(component, options = {}) {
       action: 'upgrade',
       component,
       success: false,
-      error: `组件目录不存在: ${ctx.skillDir}`,
+      error: `Component directory not found: ${ctx.skillDir}`,
       steps: [],
     };
   }
@@ -688,9 +688,3 @@ function runUpgrade(component, options = {}) {
     stashExists: ctx.hadLocalChanges,
   };
 }
-
-module.exports = {
-  checkForUpdates,
-  runUpgrade,
-  rollback,
-};

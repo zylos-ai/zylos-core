@@ -3,10 +3,10 @@
  * Supports GitHub archive tarballs and local paths. No git dependency.
  */
 
-const fs = require('fs');
-const path = require('path');
-const { execSync } = require('child_process');
-const os = require('os');
+import fs from 'node:fs';
+import path from 'node:path';
+import { execSync } from 'node:child_process';
+import os from 'node:os';
 
 /**
  * Download a GitHub archive tarball and extract it.
@@ -16,7 +16,7 @@ const os = require('os');
  * @param {string} destDir - Destination directory to extract into
  * @returns {{ success: boolean, extractedDir: string, error?: string }}
  */
-function downloadArchive(repo, version, destDir) {
+export function downloadArchive(repo, version, destDir) {
   const tag = version.startsWith('v') ? version : `v${version}`;
   const url = `https://github.com/${repo}/archive/refs/tags/${tag}.tar.gz`;
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-download-'));
@@ -57,7 +57,7 @@ function downloadArchive(repo, version, destDir) {
  * @param {string} destDir - Destination directory
  * @returns {{ success: boolean, error?: string }}
  */
-function copyLocal(localPath, destDir) {
+export function copyLocal(localPath, destDir) {
   const srcPath = path.resolve(localPath);
 
   if (!fs.existsSync(srcPath)) {
@@ -91,7 +91,7 @@ function copyLocal(localPath, destDir) {
  * @param {string} destDir - Directory to extract into
  * @returns {{ success: boolean, extractedDir: string, error?: string }}
  */
-function extractTarball(tarballPath, destDir) {
+export function extractTarball(tarballPath, destDir) {
   try {
     fs.mkdirSync(destDir, { recursive: true });
 
@@ -110,9 +110,3 @@ function extractTarball(tarballPath, destDir) {
     };
   }
 }
-
-module.exports = {
-  downloadArchive,
-  copyLocal,
-  extractTarball,
-};

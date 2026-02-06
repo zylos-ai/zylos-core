@@ -2,13 +2,13 @@
  * Component management commands
  */
 
-const fs = require('fs');
-const path = require('path');
-const readline = require('readline');
-const { ZYLOS_DIR, SKILLS_DIR, COMPONENTS_DIR } = require('../lib/config');
-const { loadRegistry } = require('../lib/registry');
-const { loadComponents, resolveTarget, outputTask } = require('../lib/components');
-const { checkForUpdates, runUpgrade } = require('../lib/upgrade');
+import fs from 'node:fs';
+import path from 'node:path';
+import readline from 'node:readline';
+import { ZYLOS_DIR, SKILLS_DIR, COMPONENTS_DIR } from '../lib/config.js';
+import { loadRegistry } from '../lib/registry.js';
+import { loadComponents, resolveTarget, outputTask } from '../lib/components.js';
+import { checkForUpdates, runUpgrade } from '../lib/upgrade.js';
 
 /**
  * Prompt user for confirmation (interactive TTY only)
@@ -36,7 +36,7 @@ function promptConfirm(question) {
   });
 }
 
-async function installComponent(args) {
+export async function installComponent(args) {
   const target = args[0];
   if (!target) {
     console.error('Usage: zylos install <name[@version]|org/repo[@version]|github-url>');
@@ -64,7 +64,7 @@ async function installComponent(args) {
   }
 
   if (resolved.isThirdParty) {
-    console.log('⚠️  Third-party component - not verified by Zylos team.');
+    console.log('Warning: Third-party component - not verified by Zylos team.');
     console.log(`Repository: https://github.com/${resolved.repo}`);
     console.log('');
   }
@@ -92,7 +92,7 @@ async function installComponent(args) {
   });
 }
 
-async function upgradeComponent(args) {
+export async function upgradeComponent(args) {
   // Parse flags
   const checkOnly = args.includes('--check');
   const jsonOutput = args.includes('--json');
@@ -141,7 +141,7 @@ async function upgradeComponent(args) {
       action: 'check',
       component: target,
       error: 'component_not_registered',
-      message: `组件 '${target}' 未在 components.json 中注册`,
+      message: `Component '${target}' is not registered in components.json`,
     };
     if (jsonOutput) {
       console.log(JSON.stringify(result, null, 2));
@@ -156,7 +156,7 @@ async function upgradeComponent(args) {
       action: 'check',
       component: target,
       error: 'skill_dir_not_found',
-      message: `组件目录不存在: ${skillDir}`,
+      message: `Component directory not found: ${skillDir}`,
     };
     if (jsonOutput) {
       console.log(JSON.stringify(result, null, 2));
@@ -207,7 +207,7 @@ async function handleCheckOnly(component, { jsonOutput }) {
     } else {
       console.log(`${component}: ${result.current} → ${result.latest}`);
       if (result.localChanges) {
-        console.log(`\n⚠️  Local modifications detected:`);
+        console.log(`\nWarning: Local modifications detected:`);
         result.localChanges.forEach(c => console.log(`  ${c}`));
       }
       if (result.changelog) {
@@ -243,12 +243,12 @@ async function handleExecuteUpgrade(component, { jsonOutput }) {
         console.log(`  [${step.step}/9] ${step.name}${msg} ${icon}`);
       }
 
-      console.log(`\n✓ ${component} 升级完成: ${result.from} → ${result.to}`);
+      console.log(`\n✓ ${component} upgraded: ${result.from} → ${result.to}`);
 
       if (result.stashExists) {
-        console.log(`\n注意: 您的本地修改已保存到 git stash`);
-        console.log(`  查看: cd ~/zylos/.claude/skills/${component} && git stash show`);
-        console.log(`  恢复: cd ~/zylos/.claude/skills/${component} && git stash pop`);
+        console.log(`\nNote: Your local modifications have been saved to git stash`);
+        console.log(`  View: cd ~/zylos/.claude/skills/${component} && git stash show`);
+        console.log(`  Restore: cd ~/zylos/.claude/skills/${component} && git stash pop`);
       }
     } else {
       // Print failed steps
@@ -261,10 +261,10 @@ async function handleExecuteUpgrade(component, { jsonOutput }) {
         }
       }
 
-      console.log(`\n✗ 升级失败 (步骤 ${result.failedStep}): ${result.error}`);
+      console.log(`\n✗ Upgrade failed (step ${result.failedStep}): ${result.error}`);
 
       if (result.rollback?.performed) {
-        console.log(`\n⚠️  已自动回滚:`);
+        console.log(`\nAuto-rollback performed:`);
         for (const r of result.rollback.steps) {
           const icon = r.success ? '✓' : '✗';
           console.log(`  ${icon} ${r.action}`);
@@ -305,7 +305,7 @@ async function handleInteractive(component, { jsonOutput }) {
   console.log(`\n${component}: ${check.current} → ${check.latest}`);
 
   if (check.localChanges) {
-    console.log(`\n⚠️  LOCAL MODIFICATIONS DETECTED:`);
+    console.log(`\nWARNING: LOCAL MODIFICATIONS DETECTED:`);
     check.localChanges.forEach(c => console.log(`  ${c}`));
   }
 
@@ -409,16 +409,12 @@ async function upgradeAllComponents({ checkOnly, jsonOutput, skipConfirm }) {
  * Upgrade zylos-core itself
  */
 async function upgradeSelfCore() {
-  // zylos-core root is parent of cli/ directory
-  // __dirname is cli/commands/, so go up twice to get zylos-core root
-  const coreDir = path.join(__dirname, '..', '..');
-
   console.log('Checking for zylos-core updates...');
 
   outputTask('self_upgrade', {
     target: 'zylos-core',
     repo: 'zylos-ai/zylos-core',
-    coreDir: coreDir,
+    coreDir: path.join(import.meta.dirname, '..', '..'),
     steps: [
       '1. Check git status for local modifications in zylos-core',
       '2. git fetch to check for updates',
@@ -437,7 +433,7 @@ async function upgradeSelfCore() {
   });
 }
 
-async function uninstallComponent(args) {
+export async function uninstallComponent(args) {
   const purge = args.includes('--purge');
   // Filter out flags to get the target name
   const target = args.find(arg => !arg.startsWith('--'));
@@ -475,7 +471,7 @@ async function uninstallComponent(args) {
   });
 }
 
-async function listComponents() {
+export async function listComponents() {
   const components = loadComponents();
   const names = Object.keys(components);
 
@@ -501,7 +497,7 @@ async function listComponents() {
   }
 }
 
-async function searchComponents(args) {
+export async function searchComponents(args) {
   const keyword = args[0] || '';
 
   console.log('Searching components...\n');
@@ -541,11 +537,3 @@ async function searchComponents(args) {
   console.log(`Found ${results.length} component(s).`);
   console.log('\nUse "zylos install <name>" to install a component.');
 }
-
-module.exports = {
-  installComponent,
-  upgradeComponent,
-  uninstallComponent,
-  listComponents,
-  searchComponents,
-};

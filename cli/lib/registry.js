@@ -2,14 +2,15 @@
  * Registry utilities
  */
 
-const fs = require('fs');
-const { REGISTRY_FILE, REGISTRY_URL } = require('./config');
+import fs from 'node:fs';
+import https from 'node:https';
+import { REGISTRY_FILE, REGISTRY_URL } from './config.js';
 
 /**
  * Load local registry from registry.json
  * Returns the components object (unwrapped from version/components structure)
  */
-function loadLocalRegistry() {
+export function loadLocalRegistry() {
   try {
     const data = JSON.parse(fs.readFileSync(REGISTRY_FILE, 'utf8'));
     // Handle both formats: { components: {...} } or flat { name: {...} }
@@ -23,11 +24,10 @@ function loadLocalRegistry() {
  * Load registry (try remote first, fallback to local file)
  * Returns the components object (unwrapped)
  */
-async function loadRegistry() {
+export async function loadRegistry() {
   const localRegistry = loadLocalRegistry();
 
   try {
-    const https = require('https');
     return new Promise((resolve) => {
       const req = https.get(REGISTRY_URL, { timeout: 5000 }, (res) => {
         // Check for successful response
@@ -58,8 +58,3 @@ async function loadRegistry() {
     return localRegistry;
   }
 }
-
-module.exports = {
-  loadLocalRegistry,
-  loadRegistry,
-};

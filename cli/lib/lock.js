@@ -3,11 +3,11 @@
  * Prevents concurrent upgrades of the same component
  */
 
-const fs = require('fs');
-const path = require('path');
-const { LOCKS_DIR } = require('./config');
+import fs from 'node:fs';
+import path from 'node:path';
+import { LOCKS_DIR } from './config.js';
 
-const LOCK_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
+export const LOCK_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
 
 /**
  * Ensure locks directory exists
@@ -42,7 +42,7 @@ function isProcessRunning(pid) {
  * @param {string} component - Component name
  * @returns {{ success: boolean, error?: string, existingPid?: number }}
  */
-function acquireLock(component) {
+export function acquireLock(component) {
   ensureLocksDir();
   const lockPath = getLockPath(component);
 
@@ -101,7 +101,7 @@ function acquireLock(component) {
  * @param {string} component - Component name
  * @returns {{ success: boolean, error?: string }}
  */
-function releaseLock(component) {
+export function releaseLock(component) {
   const lockPath = getLockPath(component);
 
   if (!fs.existsSync(lockPath)) {
@@ -133,7 +133,7 @@ function releaseLock(component) {
  * @param {string} component - Component name
  * @returns {{ locked: boolean, pid?: number, age?: number }}
  */
-function isLocked(component) {
+export function isLocked(component) {
   const lockPath = getLockPath(component);
 
   if (!fs.existsSync(lockPath)) {
@@ -158,10 +158,3 @@ function isLocked(component) {
     return { locked: false }; // Corrupted lock
   }
 }
-
-module.exports = {
-  acquireLock,
-  releaseLock,
-  isLocked,
-  LOCK_TIMEOUT_MS,
-};
