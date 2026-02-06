@@ -174,6 +174,17 @@ function startCoreServices() {
       }
     }
 
+    // Initialize database if the skill has an init-db.sql or c4-db.js init
+    const dbInitScript = path.join(skillDir, 'scripts', 'c4-db.js');
+    const dbInitSql = path.join(skillDir, 'init-db.sql');
+    if (fs.existsSync(dbInitSql) && fs.existsSync(dbInitScript)) {
+      try {
+        execSync(`node "${dbInitScript}" init`, { cwd: skillDir, stdio: 'pipe', timeout: 10000 });
+      } catch {
+        // DB may already be initialized
+      }
+    }
+
     try {
       execSync(`pm2 start "${script}" --name "${svc.name}" 2>/dev/null`, { stdio: 'pipe' });
       console.log(`  ✓ ${svc.name}`);
