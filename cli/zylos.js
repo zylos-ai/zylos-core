@@ -6,7 +6,7 @@
  */
 
 import { showStatus, showLogs, startServices, stopServices, restartServices } from './commands/service.js';
-import { upgradeComponent, uninstallComponent, listComponents, searchComponents } from './commands/component.js';
+import { upgradeComponent, uninstallComponent, infoComponent, listComponents, searchComponents } from './commands/component.js';
 import { addComponent } from './commands/add.js';
 import { initCommand } from './commands/init.js';
 
@@ -21,8 +21,10 @@ const commands = {
   restart: restartServices,
   // Component management
   add: addComponent,
+  info: infoComponent,
   upgrade: upgradeComponent,
   uninstall: uninstallComponent,
+  remove: uninstallComponent,
   list: listComponents,
   search: searchComponents,
   // Help
@@ -63,10 +65,12 @@ Component Management:
   add <target>        Add a component
                       target: name[@ver] | org/repo[@ver] | url
                       --yes/-y  Skip confirmation prompts
+  info <name>         Show component details (--json)
   upgrade <name>      Upgrade a component (8-step pipeline)
   upgrade --all       Upgrade all components
   upgrade --self      Upgrade zylos-core itself
-  uninstall <name>    Uninstall a component (--purge for data)
+  uninstall <name>    Remove a component (--purge, --force)
+  remove <name>       Alias for uninstall
   list                List installed components
   search [keyword]    Search available components
 
@@ -84,7 +88,9 @@ Examples:
   zylos upgrade telegram
   zylos upgrade --all
   zylos upgrade --self
+  zylos info telegram
   zylos uninstall telegram --purge
+  zylos remove telegram --purge --yes
   zylos list
   zylos search bot
 `);
