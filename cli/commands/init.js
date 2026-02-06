@@ -220,11 +220,7 @@ function syncCoreSkills() {
     const isNew = !fs.existsSync(destDir);
 
     try {
-      if (isNew) {
-        execSync(`cp -r "${srcDir}" "${destDir}"`, { stdio: 'pipe' });
-      } else {
-        copyTree(srcDir, destDir);
-      }
+      copyTree(srcDir, destDir);
       const manifest = generateManifest(destDir);
       saveManifest(destDir, manifest);
       (isNew ? installed : updated).push(entry.name);
