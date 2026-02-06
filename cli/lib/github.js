@@ -100,14 +100,37 @@ export function fetchLatestTag(repo) {
       .filter(name => /^v?\d+\.\d+\.\d+/.test(name))
       .map(name => name.replace(/^v/, ''))
       .sort((a, b) => {
-        const pa = a.split(/[-.]/).map(p => parseInt(p) || 0);
-        const pb = b.split(/[-.]/).map(p => parseInt(p) || 0);
-        for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-          const diff = (pb[i] || 0) - (pa[i] || 0);
+        // Split into base version and pre-release: "0.1.0-beta.10" → ["0.1.0", "beta.10"]
+        const [aBase, aPre] = a.split(/-(.+)/);
+        const [bBase, bPre] = b.split(/-(.+)/);
+
+        // Compare base version (major.minor.patch)
+        const aParts = aBase.split('.').map(Number);
+        const bParts = bBase.split('.').map(Number);
+        for (let i = 0; i < 3; i++) {
+          const diff = (bParts[i] || 0) - (aParts[i] || 0);
           if (diff !== 0) return diff;
         }
-        // For pre-release tags like beta.9 vs beta.10, compare string suffix
-        return b.localeCompare(a);
+
+        // Same base: stable (no pre-release) > pre-release
+        if (!aPre && bPre) return -1;
+        if (aPre && !bPre) return 1;
+        if (!aPre && !bPre) return 0;
+
+        // Both pre-release: compare numerically where possible
+        const aPreParts = aPre.split('.').map(p => parseInt(p) || p);
+        const bPreParts = bPre.split('.').map(p => parseInt(p) || p);
+        for (let i = 0; i < Math.max(aPreParts.length, bPreParts.length); i++) {
+          const av = aPreParts[i] ?? 0;
+          const bv = bPreParts[i] ?? 0;
+          if (typeof av === 'number' && typeof bv === 'number') {
+            if (bv !== av) return bv - av;
+          } else {
+            const cmp = String(bv).localeCompare(String(av));
+            if (cmp !== 0) return cmp;
+          }
+        }
+        return 0;
       });
 
     return versions[0] || null;
