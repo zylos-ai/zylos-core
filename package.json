@@ -8,7 +8,7 @@
     "zylos": "./cli/zylos.js"
   },
   "scripts": {
-    "postinstall": "node scripts/postinstall.js"
+    "postinstall": "node scripts/postinstall.js || true"
   },
   "repository": {
     "type": "git",
