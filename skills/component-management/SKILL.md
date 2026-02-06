@@ -208,7 +208,7 @@ When user sends component management requests via C4 comm-bridge (Telegram, Lark
 ### Detecting C4 Mode
 
 The request is from C4 when the message arrives via a communication channel
-(e.g., `howardzhou said: ...` with a `reply via:` instruction).
+(e.g., `<user> said: ...` with a `reply via:` instruction).
 
 ### C4 Command Mapping
 
