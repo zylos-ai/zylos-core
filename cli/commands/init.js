@@ -68,6 +68,23 @@ function installGlobalPackage(pkg) {
   }
 }
 
+function installSystemPackage(pkg) {
+  const platform = process.platform;
+  const cmds = platform === 'darwin'
+    ? [`brew install ${pkg}`]
+    : [`sudo apt-get install -y ${pkg}`, `sudo yum install -y ${pkg}`];
+
+  for (const cmd of cmds) {
+    try {
+      execSync(cmd, { stdio: 'pipe', timeout: 120000 });
+      return true;
+    } catch {
+      // Try next
+    }
+  }
+  return false;
+}
+
 // ── Installation state detection ────────────────────────────────
 
 /**
@@ -390,12 +407,19 @@ export async function initCommand(args) {
   }
   console.log(`  ✓ Node.js ${nodeCheck.version}`);
 
-  // Step 2: Check tmux (required for communication services)
+  // Step 2: Check/install tmux
   if (commandExists('tmux')) {
     console.log('  ✓ tmux installed');
   } else {
-    console.log('  ⚠ tmux not found (required for communication services)');
-    console.log('    Install: brew install tmux (macOS) / apt install tmux (Linux)');
+    console.log('  ✗ tmux not found');
+    console.log('    Installing tmux...');
+    if (installSystemPackage('tmux')) {
+      console.log('  ✓ tmux installed');
+    } else {
+      console.log('  ✗ Failed to install tmux');
+      console.log('    Install manually: brew install tmux (macOS) / apt install tmux (Linux)');
+      process.exit(1);
+    }
   }
 
   // Step 3: Check/install PM2 (auto-installs if missing)
