@@ -562,9 +562,9 @@ export async function uninstallComponent(args) {
   if (!target) {
     console.error('Usage: zylos uninstall <name> [options]');
     console.log('\nOptions:');
-    console.log('  --purge    Also remove data directory');
+    console.log('  --purge    Also remove data directory (skips prompt)');
     console.log('  --force    Remove even if other components depend on it');
-    console.log('  --yes, -y  Skip confirmation');
+    console.log('  --yes, -y  Skip confirmation (keeps data)');
     process.exit(1);
   }
 
@@ -634,7 +634,7 @@ async function handleRemoveFlow(target, { purge, skipConfirm, force }) {
   if (purge) {
     console.log(`  Data dir:  ${dataDir} (--purge)`);
   } else {
-    console.log(`  Data dir:  (kept — use --purge to remove)`);
+    console.log(`  Data dir:  ${dataDir} (kept)`);
   }
 
   // Confirmation
@@ -643,6 +643,11 @@ async function handleRemoveFlow(target, { purge, skipConfirm, force }) {
     if (!confirmed) {
       console.log('Cancelled.');
       return true; // not an error
+    }
+
+    // Ask about data directory if --purge not explicitly set
+    if (!purge && fs.existsSync(dataDir)) {
+      purge = await promptYesNo('Also remove data directory? [y/N]: ');
     }
   }
 
