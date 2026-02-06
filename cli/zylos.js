@@ -63,7 +63,7 @@ Component Management:
   add <target>        Add a component
                       target: name[@ver] | org/repo[@ver] | url
                       --yes/-y  Skip confirmation prompts
-  upgrade <name>      Upgrade a specific component
+  upgrade <name>      Upgrade a component (8-step pipeline)
   upgrade --all       Upgrade all components
   upgrade --self      Upgrade zylos-core itself
   uninstall <name>    Uninstall a component (--purge for data)
