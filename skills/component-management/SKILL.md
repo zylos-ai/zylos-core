@@ -81,7 +81,7 @@ User can press Enter to use default, or provide a custom value.
 
 When user asks to upgrade a component:
 
-**If component is not installed, inform user and suggest using install instead.**
+**If component is not installed, inform user and suggest using add instead.**
 
 ### Step 1: Check Available Updates
 
