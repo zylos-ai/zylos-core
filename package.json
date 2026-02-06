@@ -20,7 +20,7 @@
   "author": "Zylos AI",
   "license": "MIT",
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=20.20.0"
   },
   "dependencies": {
     "better-sqlite3": "^9.0.0"
