@@ -5,7 +5,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { ZYLOS_DIR, SKILLS_DIR, COMPONENTS_DIR } from '../lib/config.js';
+import { SKILLS_DIR, COMPONENTS_DIR } from '../lib/config.js';
 import { loadRegistry } from '../lib/registry.js';
 import { loadComponents, saveComponents } from '../lib/components.js';
 import { checkForUpdates, runUpgrade, downloadToTemp, readChangelog, cleanupTemp } from '../lib/upgrade.js';
