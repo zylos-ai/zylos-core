@@ -12,6 +12,7 @@ import { SKILLS_DIR } from './config.js';
 import { downloadArchive } from './download.js';
 import { generateManifest, loadManifest, saveManifest } from './manifest.js';
 import { fetchRawFile, sanitizeError } from './github.js';
+import { copyTree, syncTree } from './fs-utils.js';
 
 const REPO = 'zylos-ai/zylos-core';
 
@@ -153,7 +154,7 @@ export function syncCoreSkills(newSkillsSrc) {
     if (!fs.existsSync(destDir)) {
       // New skill — copy entirely
       try {
-        execSync(`cp -r "${srcDir}" "${destDir}"`, { stdio: 'pipe' });
+        copyTree(srcDir, destDir);
         // Generate manifest for the newly copied skill
         const manifest = generateManifest(destDir);
         saveManifest(destDir, manifest);
@@ -278,10 +279,7 @@ function step1_backupCoreSkills(ctx) {
 
     // Backup the skills directory (include .zylos manifests — needed for correct rollback)
     if (fs.existsSync(SKILLS_DIR)) {
-      execSync(
-        `rsync -a --exclude='node_modules' "${SKILLS_DIR}/" "${backupDir}/skills/"`,
-        { timeout: 30000, stdio: 'pipe' },
-      );
+      copyTree(SKILLS_DIR, path.join(backupDir, 'skills'), { excludes: ['node_modules'] });
     }
 
     ctx.backupDir = backupDir;
@@ -472,10 +470,7 @@ function rollbackSelf(ctx) {
   // Restore Core Skills from backup (include .zylos manifests to keep them in sync with files)
   if (ctx.backupDir && fs.existsSync(path.join(ctx.backupDir, 'skills'))) {
     try {
-      execSync(
-        `rsync -a --delete --exclude='node_modules' "${ctx.backupDir}/skills/" "${SKILLS_DIR}/"`,
-        { timeout: 30000, stdio: 'pipe' },
-      );
+      syncTree(path.join(ctx.backupDir, 'skills'), SKILLS_DIR, { excludes: ['node_modules'] });
       results.push({ action: 'restore_core_skills', success: true });
     } catch (err) {
       results.push({ action: 'restore_core_skills', success: false, error: err.message });

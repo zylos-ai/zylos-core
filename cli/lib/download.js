@@ -8,6 +8,7 @@ import path from 'node:path';
 import { execSync } from 'node:child_process';
 import os from 'node:os';
 import { getGitHubToken, sanitizeError } from './github.js';
+import { copyTree } from './fs-utils.js';
 
 /**
  * Download a tarball from a URL using curl.
@@ -90,12 +91,7 @@ export function copyLocal(localPath, destDir) {
   }
 
   try {
-    fs.mkdirSync(destDir, { recursive: true });
-    // Copy all files except .git
-    execSync(`rsync -a --exclude='.git' "${srcPath}/" "${destDir}/"`, {
-      timeout: 30000,
-      stdio: 'pipe',
-    });
+    copyTree(srcPath, destDir, { excludes: ['.git'] });
     return { success: true };
   } catch (err) {
     return { success: false, error: `Failed to copy from ${srcPath}: ${err.message}` };
