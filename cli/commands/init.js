@@ -7,6 +7,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { createRequire } from 'node:module';
 import { execSync, spawnSync } from 'node:child_process';
 import { ZYLOS_DIR, SKILLS_DIR, CONFIG_DIR, COMPONENTS_DIR, LOCKS_DIR, COMPONENTS_FILE } from '../lib/config.js';
 import { generateManifest, saveManifest } from '../lib/manifest.js';
@@ -21,8 +22,23 @@ const TEMPLATES_SRC = path.join(PACKAGE_ROOT, 'templates');
 const MIN_NODE_MAJOR = 20;
 const MIN_NODE_MINOR = 20;
 
-// Core services managed by ecosystem.config.cjs
-const CORE_SERVICE_NAMES = ['activity-monitor', 'scheduler', 'c4-dispatcher', 'web-console'];
+/**
+ * Read service names from the deployed ecosystem.config.cjs.
+ * Single source of truth — no hardcoded list needed.
+ */
+function getCoreServiceNames() {
+  const ecosystemPath = path.join(ZYLOS_DIR, 'pm2', 'ecosystem.config.cjs');
+  if (!fs.existsSync(ecosystemPath)) return [];
+  try {
+    const require = createRequire(import.meta.url);
+    // Clear cache so re-reads pick up updates from deployTemplates()
+    delete require.cache[ecosystemPath];
+    const ecosystem = require(ecosystemPath);
+    return ecosystem.apps.map((app) => app.name);
+  } catch {
+    return [];
+  }
+}
 
 // ── Prerequisite checks ─────────────────────────────────────────
 
@@ -67,6 +83,28 @@ function detectInstallState() {
   if (existing.length === 0) return 'fresh';
   if (existing.length === markers.length) return 'complete';
   return 'incomplete';
+}
+
+// ── State reset ─────────────────────────────────────────────────
+
+/**
+ * Reset managed state for a fresh install.
+ * Removes config, skills, and components while preserving user data
+ * (memory/, logs/, .env, CLAUDE.md).
+ */
+function resetManagedState() {
+  // Stop PM2 services managed by zylos
+  const serviceNames = getCoreServiceNames();
+  for (const name of serviceNames) {
+    try { execSync(`pm2 delete "${name}" 2>/dev/null`, { stdio: 'pipe' }); } catch { /* */ }
+  }
+
+  // Remove managed directories
+  for (const dir of [SKILLS_DIR, CONFIG_DIR, COMPONENTS_DIR, LOCKS_DIR, path.join(ZYLOS_DIR, 'pm2')]) {
+    if (fs.existsSync(dir)) {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
 }
 
 // ── Directory structure ─────────────────────────────────────────
@@ -254,11 +292,12 @@ function startCoreServices() {
 
   // Report status of core services only
   try {
+    const serviceNames = getCoreServiceNames();
     const list = execSync('pm2 jlist', { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] });
     const procs = JSON.parse(list);
     let started = 0;
     for (const proc of procs) {
-      if (!CORE_SERVICE_NAMES.includes(proc.name)) continue;
+      if (!serviceNames.includes(proc.name)) continue;
       if (proc.pm2_env?.status === 'online') {
         console.log(`  ✓ ${proc.name}`);
         started++;
@@ -309,6 +348,8 @@ export async function initCommand(args) {
     if (!skipConfirm) {
       const answer = await prompt('Continue previous installation or start fresh? [c/f] (c): ');
       if (answer.toLowerCase() === 'f') {
+        console.log('Resetting managed state...');
+        resetManagedState();
         console.log('Starting fresh...\n');
       } else {
         console.log('Continuing...\n');
