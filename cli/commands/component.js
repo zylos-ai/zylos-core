@@ -8,7 +8,7 @@ import { execFileSync } from 'node:child_process';
 import { SKILLS_DIR, COMPONENTS_DIR } from '../lib/config.js';
 import { loadRegistry } from '../lib/registry.js';
 import { loadComponents, saveComponents } from '../lib/components.js';
-import { checkForUpdates, runUpgrade, downloadToTemp, readChangelog, cleanupTemp } from '../lib/upgrade.js';
+import { checkForUpdates, runUpgrade, downloadToTemp, readChangelog, filterChangelog, cleanupTemp } from '../lib/upgrade.js';
 import {
   checkForCoreUpdates, runSelfUpgrade,
   downloadCoreToTemp, readChangelog as readCoreChangelog,
@@ -54,7 +54,7 @@ export async function upgradeComponent(args) {
     console.log('  --check      Check for updates only');
     console.log('  --json       Output in JSON format');
     console.log('  --yes, -y    Skip confirmation');
-    console.log('  --skip-eval  Skip Claude evaluation of local changes');
+    console.log('  --skip-eval  Skip upgrade analysis of local changes');
     console.log('\nExamples:');
     console.log('  zylos upgrade telegram --check --json');
     console.log('  zylos upgrade telegram --yes');
@@ -201,7 +201,8 @@ async function handleUpgradeFlow(component, { jsonOutput, skipConfirm, skipEval 
 
     // 4. Show info: version diff, changelog, local changes + Claude eval
     const changes = detectChanges(skillDir);
-    const changelog = readChangelog(tempDir);
+    const fullChangelog = readChangelog(tempDir);
+    const changelog = filterChangelog(fullChangelog, check.current) || fullChangelog;
     let evalResult = null;
 
     if (!jsonOutput) {
@@ -214,7 +215,7 @@ async function handleUpgradeFlow(component, { jsonOutput, skipConfirm, skipEval 
         for (const f of changes.added) console.log(`  A ${f}`);
       }
 
-      // Show changelog from downloaded version
+      // Show changelog from downloaded version (filtered to relevant versions only)
       if (changelog) {
         console.log(`\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
         console.log('CHANGELOG');
@@ -241,7 +242,7 @@ async function handleUpgradeFlow(component, { jsonOutput, skipConfirm, skipEval 
       if (evalResult) {
         if (!jsonOutput) {
           console.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-          console.log('Claude Code evaluation:');
+          console.log('Upgrade analysis:');
           console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
           for (const f of evalResult.files) {
             const icon = f.verdict === 'safe' ? '✓' : f.verdict === 'warning' ? '⚠️' : '✗';
@@ -251,7 +252,7 @@ async function handleUpgradeFlow(component, { jsonOutput, skipConfirm, skipEval 
           console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
         }
       } else if (!jsonOutput) {
-        console.log('  (Claude evaluation skipped)');
+        console.log('  (Upgrade analysis skipped)');
       }
     }
 
@@ -485,12 +486,13 @@ async function upgradeSelfCore() {
     if (!jsonOutput) {
       console.log(`\nzylos-core: ${check.current} → ${check.latest}`);
 
-      const changelog = readCoreChangelog(tempDir);
-      if (changelog) {
+      const fullCoreChangelog = readCoreChangelog(tempDir);
+      const coreChangelog = filterChangelog(fullCoreChangelog, check.current) || fullCoreChangelog;
+      if (coreChangelog) {
         console.log(`\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
         console.log('CHANGELOG');
         console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
-        console.log(changelog);
+        console.log(coreChangelog);
         console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`);
       }
     }

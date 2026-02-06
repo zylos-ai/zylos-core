@@ -170,6 +170,51 @@ export function readChangelog(dir) {
   }
 }
 
+/**
+ * Filter changelog to only show entries between two versions.
+ * Expects standard format: ## [version] or ## version headers.
+ *
+ * @param {string} changelog - Full changelog text
+ * @param {string} fromVersion - Current installed version (excluded)
+ * @returns {string|null} Filtered changelog or null if parsing fails
+ */
+export function filterChangelog(changelog, fromVersion) {
+  if (!changelog || !fromVersion) return changelog;
+
+  const lines = changelog.split('\n');
+  const result = [];
+  let capturing = false;
+  let foundAny = false;
+  let done = false;
+
+  // Match ## headers containing version numbers: "## [1.0.0]", "## 1.0.0", "## v1.0.0 - date"
+  const versionHeaderRe = /^##\s+\[?v?(\d+\.\d+[^\]\s]*)\]?/;
+
+  for (const line of lines) {
+    if (done) break;
+
+    const match = line.match(versionHeaderRe);
+    if (match) {
+      const headerVersion = match[1].replace(/^v/, '');
+      // Stop when we reach the installed version or older (already known)
+      if (headerVersion === fromVersion) {
+        done = true;
+        continue;
+      }
+      // Capture everything from the newest version down to (but not including) fromVersion
+      capturing = true;
+      foundAny = true;
+    }
+
+    if (capturing) {
+      result.push(line);
+    }
+  }
+
+  if (!foundAny) return changelog; // Couldn't parse headers, return full text
+  return result.join('\n').trim() || null;
+}
+
 // ---------------------------------------------------------------------------
 // Public: cleanupTemp
 // ---------------------------------------------------------------------------
