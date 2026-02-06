@@ -4,9 +4,10 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { ZYLOS_DIR, SKILLS_DIR, COMPONENTS_DIR } from '../lib/config.js';
 import { loadRegistry } from '../lib/registry.js';
-import { loadComponents, saveComponents, outputTask } from '../lib/components.js';
+import { loadComponents, saveComponents } from '../lib/components.js';
 import { checkForUpdates, runUpgrade, downloadToTemp, readChangelog, cleanupTemp } from '../lib/upgrade.js';
 import {
   checkForCoreUpdates, runSelfUpgrade,
@@ -14,6 +15,7 @@ import {
   cleanupTemp as cleanupCoreTemp, cleanupBackup,
 } from '../lib/self-upgrade.js';
 import { detectChanges } from '../lib/manifest.js';
+import { parseSkillMd } from '../lib/skill.js';
 import { acquireLock, releaseLock } from '../lib/lock.js';
 import { promptYesNo } from '../lib/prompts.js';
 
@@ -515,39 +517,258 @@ async function upgradeSelfCore() {
 
 export async function uninstallComponent(args) {
   const purge = args.includes('--purge');
-  const target = args.find(arg => !arg.startsWith('--'));
+  const skipConfirm = args.includes('--yes') || args.includes('-y');
+  const force = args.includes('--force');
+  const target = args.find(arg => !arg.startsWith('-'));
 
   if (!target) {
-    console.error('Usage: zylos uninstall <name> [--purge]');
+    console.error('Usage: zylos uninstall <name> [options]');
     console.log('\nOptions:');
     console.log('  --purge    Also remove data directory');
+    console.log('  --force    Remove even if other components depend on it');
+    console.log('  --yes, -y  Skip confirmation');
+    process.exit(1);
+  }
+
+  const ok = await handleRemoveFlow(target, { purge, skipConfirm, force });
+  if (!ok) process.exit(1);
+}
+
+/**
+ * Find components that depend on the given target.
+ */
+function findDependents(target) {
+  const components = loadComponents();
+  const dependents = [];
+  for (const name of Object.keys(components)) {
+    if (name === target) continue;
+    const skillDir = path.join(SKILLS_DIR, name);
+    const skill = parseSkillMd(skillDir);
+    const deps = skill?.frontmatter?.dependencies || [];
+    if (deps.includes(target)) dependents.push(name);
+  }
+  return dependents;
+}
+
+/**
+ * Resolve PM2 service name from SKILL.md or fallback to zylos-<name>.
+ */
+function resolveServiceName(name) {
+  const skillDir = path.join(SKILLS_DIR, name);
+  const skill = parseSkillMd(skillDir);
+  return skill?.frontmatter?.lifecycle?.service?.name || `zylos-${name}`;
+}
+
+/**
+ * Remove flow: dependency check → confirm → stop PM2 → delete dirs → update components.json.
+ * Returns true on success, false on failure.
+ */
+async function handleRemoveFlow(target, { purge, skipConfirm, force }) {
+  const components = loadComponents();
+
+  if (!components[target]) {
+    console.error(`Error: Component "${target}" is not installed.`);
+    return false;
+  }
+
+  const skillDir = path.join(SKILLS_DIR, target);
+  const dataDir = path.join(COMPONENTS_DIR, target);
+
+  // Check dependencies
+  const dependents = findDependents(target);
+  if (dependents.length > 0) {
+    if (!force) {
+      console.error(`Error: Cannot remove "${target}" — the following components depend on it:`);
+      for (const d of dependents) console.error(`  - ${d}`);
+      console.error(`\nUse --force to remove anyway.`);
+      return false;
+    }
+    console.log(`Warning: The following components depend on "${target}":`);
+    for (const d of dependents) console.log(`  - ${d}`);
+    console.log('');
+  }
+
+  // Show what will be removed
+  const serviceName = resolveServiceName(target);
+  console.log(`Will remove "${target}":`);
+  console.log(`  Service:   ${serviceName} (pm2)`);
+  console.log(`  Skill dir: ${skillDir}`);
+  if (purge) {
+    console.log(`  Data dir:  ${dataDir} (--purge)`);
+  } else {
+    console.log(`  Data dir:  (kept — use --purge to remove)`);
+  }
+
+  // Confirmation
+  if (!skipConfirm) {
+    const confirmed = await promptYesNo('\nProceed? [y/N]: ');
+    if (!confirmed) {
+      console.log('Cancelled.');
+      return true; // not an error
+    }
+  }
+
+  // 1. Stop + delete PM2 service (use execFileSync to avoid shell injection)
+  try {
+    try { execFileSync('pm2', ['stop', serviceName], { stdio: 'pipe' }); } catch { /* ignore */ }
+    execFileSync('pm2', ['delete', serviceName], { stdio: 'pipe' });
+    console.log(`  ✓ PM2 service "${serviceName}" removed`);
+  } catch {
+    console.log(`  ○ PM2 service "${serviceName}" not found (skipped)`);
+  }
+
+  // 2. Remove skill directory
+  if (fs.existsSync(skillDir)) {
+    fs.rmSync(skillDir, { recursive: true, force: true });
+    console.log(`  ✓ Skill directory removed`);
+  } else {
+    console.log(`  ○ Skill directory not found (skipped)`);
+  }
+
+  // 3. Remove data directory if --purge
+  if (purge) {
+    if (fs.existsSync(dataDir)) {
+      fs.rmSync(dataDir, { recursive: true, force: true });
+      console.log(`  ✓ Data directory removed`);
+    } else {
+      console.log(`  ○ Data directory not found (skipped)`);
+    }
+  }
+
+  // 4. Update components.json
+  delete components[target];
+  saveComponents(components);
+  console.log(`  ✓ Removed from components.json`);
+
+  console.log(`\n✓ ${target} uninstalled.`);
+  return true;
+}
+
+/**
+ * Show detailed information about a component.
+ */
+export async function infoComponent(args) {
+  const jsonOutput = args.includes('--json');
+  const target = args.find(arg => !arg.startsWith('-'));
+
+  if (!target) {
+    console.error('Usage: zylos info <name> [--json]');
     process.exit(1);
   }
 
   const components = loadComponents();
   if (!components[target]) {
-    console.error(`Component "${target}" is not installed.`);
+    console.error(`Error: Component "${target}" is not installed.`);
     process.exit(1);
   }
 
-  console.log(`Uninstalling ${target}...`);
-  if (purge) {
-    console.log('(with --purge: data directory will also be removed)');
+  const comp = components[target];
+  const skillDir = path.join(SKILLS_DIR, target);
+  const dataDir = path.join(COMPONENTS_DIR, target);
+
+  // Parse SKILL.md
+  const skill = parseSkillMd(skillDir);
+  const fm = skill?.frontmatter || {};
+  const description = fm.description || '';
+  const deps = fm.dependencies || [];
+  const serviceName = fm.lifecycle?.service?.name || `zylos-${target}`;
+
+  // PM2 status
+  let pm2Status = null;
+  try {
+    const pm2Json = execFileSync('pm2', ['jlist'], { encoding: 'utf8' });
+    const processes = JSON.parse(pm2Json);
+    const proc = processes.find(p => p.name === serviceName);
+    if (proc) {
+      pm2Status = {
+        status: proc.pm2_env?.status || 'unknown',
+        pid: proc.pid,
+        uptime: proc.pm2_env?.pm_uptime || null,
+      };
+    }
+  } catch {
+    // pm2 not available or no processes
   }
 
-  outputTask('uninstall', {
-    component: target,
-    skillDir: path.join(SKILLS_DIR, target),
-    dataDir: path.join(COMPONENTS_DIR, target),
-    purge,
-    steps: [
-      `Stop PM2 service "zylos-${target}" if running`,
-      `Remove from PM2: pm2 delete zylos-${target}`,
-      `Remove skill directory: ${SKILLS_DIR}/${target}`,
-      purge ? `Remove data directory: ${COMPONENTS_DIR}/${target}` : '(Keep data directory)',
-      `Remove from ${ZYLOS_DIR}/components.json`,
-    ],
-  });
+  // Local changes
+  const changes = detectChanges(skillDir);
+
+  if (jsonOutput) {
+    const info = {
+      name: target,
+      version: comp.version,
+      description,
+      type: comp.type || 'unknown',
+      repo: comp.repo,
+      installedAt: comp.installedAt || null,
+      upgradedAt: comp.upgradedAt || null,
+      service: { name: serviceName, ...pm2Status },
+      skillDir,
+      dataDir,
+      dependencies: deps,
+      changes: changes ? {
+        modified: changes.modified.length,
+        added: changes.added.length,
+        deleted: changes.deleted.length,
+      } : null,
+    };
+    console.log(JSON.stringify(info, null, 2));
+    return;
+  }
+
+  // Human-readable output
+  const skillExists = fs.existsSync(skillDir);
+  const icon = skillExists ? '✓' : '✗';
+  console.log(`\n${target} (v${comp.version}) ${icon}\n`);
+
+  if (description) console.log(`  Description:  ${description}`);
+  console.log(`  Type:         ${comp.type || 'unknown'}`);
+  console.log(`  Repo:         ${comp.repo}`);
+  if (comp.installedAt) console.log(`  Installed:    ${comp.installedAt}`);
+  if (comp.upgradedAt) console.log(`  Upgraded:     ${comp.upgradedAt}`);
+
+  // Service info
+  console.log('');
+  if (pm2Status) {
+    let uptimeStr = '';
+    if (pm2Status.uptime) {
+      const ms = Date.now() - pm2Status.uptime;
+      const days = Math.floor(ms / 86400000);
+      const hours = Math.floor((ms % 86400000) / 3600000);
+      if (days > 0) uptimeStr = `, uptime ${days}d${hours}h`;
+      else if (hours > 0) uptimeStr = `, uptime ${hours}h`;
+    }
+    console.log(`  Service:      ${serviceName} (pm2)`);
+    console.log(`  Status:       ${pm2Status.status} (pid ${pm2Status.pid}${uptimeStr})`);
+  } else {
+    console.log(`  Service:      ${serviceName} (pm2)`);
+    console.log(`  Status:       not running`);
+  }
+
+  // Directories
+  console.log('');
+  console.log(`  Skill Dir:    ${skillDir}`);
+  console.log(`  Data Dir:     ${dataDir}`);
+
+  // Dependencies
+  if (deps.length > 0) {
+    console.log('');
+    console.log(`  Dependencies: ${deps.join(', ')}`);
+  }
+
+  // Local changes
+  if (changes) {
+    const total = changes.modified.length + changes.added.length + changes.deleted.length;
+    if (total > 0) {
+      const parts = [];
+      if (changes.modified.length) parts.push(`${changes.modified.length} modified`);
+      if (changes.added.length) parts.push(`${changes.added.length} added`);
+      if (changes.deleted.length) parts.push(`${changes.deleted.length} deleted`);
+      console.log(`  Local Changes: ${parts.join(', ')}`);
+    }
+  }
+
+  console.log('');
 }
 
 export async function listComponents() {
