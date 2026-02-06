@@ -6,8 +6,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { ZYLOS_DIR, SKILLS_DIR, COMPONENTS_DIR } from '../lib/config.js';
 import { loadRegistry } from '../lib/registry.js';
-import { loadComponents, outputTask } from '../lib/components.js';
-import { checkForUpdates, runUpgrade } from '../lib/upgrade.js';
+import { loadComponents, saveComponents, outputTask } from '../lib/components.js';
+import { checkForUpdates, runUpgrade, downloadToTemp, readChangelog, cleanupTemp } from '../lib/upgrade.js';
+import { detectChanges } from '../lib/manifest.js';
+import { acquireLock, releaseLock } from '../lib/lock.js';
 import { promptYesNo } from '../lib/prompts.js';
 
 export async function upgradeComponent(args) {
@@ -35,18 +37,16 @@ export async function upgradeComponent(args) {
   // Validate target
   if (!target) {
     console.error('Usage: zylos upgrade <name> [options]');
-    console.error('       zylos upgrade <name> confirm');
     console.error('       zylos upgrade --all');
     console.error('       zylos upgrade --self');
     console.log('\nOptions:');
     console.log('  --check    Check for updates only');
     console.log('  --json     Output in JSON format');
     console.log('  --yes, -y  Skip confirmation');
-    console.log('  confirm    Execute upgrade (for async confirmation)');
     console.log('\nExamples:');
     console.log('  zylos upgrade telegram --check --json');
     console.log('  zylos upgrade telegram --yes');
-    console.log('  zylos upgrade telegram confirm');
+    console.log('  zylos upgrade telegram');
     process.exit(1);
   }
 
@@ -84,36 +84,25 @@ export async function upgradeComponent(args) {
     process.exit(1);
   }
 
-  // Mode 1: Check only (--check)
+  // Mode 1: Check only (--check) — no lock, no download needed
   if (checkOnly) {
     return handleCheckOnly(target, { jsonOutput });
   }
 
-  // Mode 2: Execute upgrade (--yes or confirm)
-  if (skipConfirm || explicitConfirm) {
-    return handleExecuteUpgrade(target, { jsonOutput });
-  }
-
-  // Mode 3: Interactive (default) - show info and prompt
-  return handleInteractive(target, { jsonOutput });
+  // Mode 2 & 3: Full upgrade flow (lock-first)
+  const ok = await handleUpgradeFlow(target, { jsonOutput, skipConfirm: skipConfirm || explicitConfirm });
+  if (!ok) process.exit(1);
 }
 
 /**
- * Handle --check flag: check for updates only
+ * Handle --check flag: check for updates only (no lock needed)
  */
 async function handleCheckOnly(component, { jsonOutput }) {
   const result = checkForUpdates(component);
 
   if (jsonOutput) {
-    const output = {
-      action: 'check',
-      component,
-      ...result,
-    };
-    console.log(JSON.stringify(output, null, 2));
-    if (!result.success) {
-      process.exit(1);
-    }
+    console.log(JSON.stringify({ action: 'check', component, ...result }, null, 2));
+    if (!result.success) process.exit(1);
   } else {
     if (!result.success) {
       console.error(`Error: ${result.message}`);
@@ -124,56 +113,147 @@ async function handleCheckOnly(component, { jsonOutput }) {
       console.log(`✓ ${component} is up to date (v${result.current})`);
     } else {
       console.log(`${component}: ${result.current} → ${result.latest}`);
-      if (result.localChanges) {
-        console.log(`\nWarning: Local modifications detected:`);
-        result.localChanges.forEach(c => console.log(`  ${c}`));
-      }
-      if (result.changelog) {
-        console.log(`\nChangelog:\n${result.changelog}`);
-      }
       console.log(`\nRun "zylos upgrade ${component} --yes" to upgrade.`);
     }
   }
 }
 
 /**
- * Handle --yes or confirm: execute upgrade
+ * Full upgrade flow with lock-first pattern.
+ * Lock wraps the entire operation: check → download → confirm → execute → cleanup.
+ *
+ * Returns true on success, false on failure.
+ * Does NOT call process.exit() — caller decides exit behavior.
  */
-async function handleExecuteUpgrade(component, { jsonOutput }) {
-  if (!jsonOutput) {
-    console.log(`Upgrading ${component}...`);
+async function handleUpgradeFlow(component, { jsonOutput, skipConfirm }) {
+  const skillDir = path.join(SKILLS_DIR, component);
+  let tempDir = null;
+
+  // 1. Acquire lock
+  const lockResult = acquireLock(component);
+  if (!lockResult.success) {
+    if (jsonOutput) {
+      console.log(JSON.stringify({ action: 'upgrade', component, success: false, error: lockResult.error }, null, 2));
+    } else {
+      console.error(`Error: ${lockResult.error}`);
+    }
+    return false;
   }
 
-  const result = runUpgrade(component);
+  try {
+    // 2. Check for updates
+    const check = checkForUpdates(component);
 
-  if (jsonOutput) {
-    console.log(JSON.stringify(result, null, 2));
-    if (!result.success) {
-      process.exit(1);
+    if (!check.success) {
+      if (jsonOutput) {
+        console.log(JSON.stringify({ action: 'check', component, ...check }, null, 2));
+      } else {
+        console.error(`Error: ${check.message}`);
+      }
+      return false;
     }
-  } else {
+
+    if (!check.hasUpdate) {
+      if (jsonOutput) {
+        console.log(JSON.stringify({ action: 'check', component, ...check }, null, 2));
+      } else {
+        console.log(`✓ ${component} is up to date (v${check.current})`);
+      }
+      return true;
+    }
+
+    // 3. Download new version to temp
+    if (!check.repo) {
+      if (jsonOutput) {
+        console.log(JSON.stringify({ action: 'upgrade', component, success: false, error: 'No repo configured' }, null, 2));
+      } else {
+        console.error('Error: No repo configured for this component');
+      }
+      return false;
+    }
+
+    if (!jsonOutput) {
+      console.log(`\nDownloading ${component}@${check.latest}...`);
+    }
+
+    const dlResult = downloadToTemp(check.repo, check.latest);
+    if (!dlResult.success) {
+      if (jsonOutput) {
+        console.log(JSON.stringify({ action: 'upgrade', component, success: false, error: dlResult.error }, null, 2));
+      } else {
+        console.error(`Error: ${dlResult.error}`);
+      }
+      return false;
+    }
+    tempDir = dlResult.tempDir;
+
+    // 4. Show info: version diff, changelog, local changes
+    if (!jsonOutput) {
+      console.log(`\n${component}: ${check.current} → ${check.latest}`);
+
+      // Show local modifications (compared to manifest)
+      const changes = detectChanges(skillDir);
+      if (changes && (changes.modified.length > 0 || changes.added.length > 0)) {
+        console.log(`\nWARNING: LOCAL MODIFICATIONS DETECTED:`);
+        for (const f of changes.modified) console.log(`  M ${f}`);
+        for (const f of changes.added) console.log(`  A ${f}`);
+      }
+
+      // Show changelog from downloaded version
+      const changelog = readChangelog(tempDir);
+      if (changelog) {
+        console.log(`\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+        console.log('CHANGELOG');
+        console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+        console.log(changelog);
+        console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`);
+      }
+    }
+
+    // 5. Confirmation
+    if (!skipConfirm) {
+      const confirmed = await promptYesNo('Proceed with upgrade? [y/N]: ');
+      if (!confirmed) {
+        console.log('Upgrade cancelled.');
+        return true; // Not an error — user chose to cancel
+      }
+    } else if (!jsonOutput) {
+      console.log(`Upgrading ${component}...`);
+    }
+
+    // 6. Execute upgrade (8 steps)
+    const result = runUpgrade(component, { tempDir, newVersion: check.latest });
+
     if (result.success) {
-      // Print step progress
+      // Phase C: Cleanup
+      // Update components.json
+      const components = loadComponents();
+      if (components[component]) {
+        components[component].version = result.to || components[component].version;
+        components[component].upgradedAt = new Date().toISOString();
+        saveComponents(components);
+      }
+
+      // Clean old backups (keep only the latest)
+      cleanOldBackups(skillDir);
+    }
+
+    // Output result
+    if (jsonOutput) {
+      console.log(JSON.stringify(result, null, 2));
+    } else if (result.success) {
       for (const step of result.steps) {
         const icon = step.status === 'done' ? '✓' :
                      step.status === 'skipped' ? '○' : '✗';
         const msg = step.message ? ` (${step.message})` : '';
-        console.log(`  [${step.step}/9] ${step.name}${msg} ${icon}`);
+        console.log(`  [${step.step}/8] ${step.name}${msg} ${icon}`);
       }
-
       console.log(`\n✓ ${component} upgraded: ${result.from} → ${result.to}`);
-
-      if (result.stashExists) {
-        console.log(`\nNote: Your local modifications have been saved to git stash`);
-        console.log(`  View: cd ~/zylos/.claude/skills/${component} && git stash show`);
-        console.log(`  Restore: cd ~/zylos/.claude/skills/${component} && git stash pop`);
-      }
     } else {
-      // Print failed steps
       for (const step of result.steps) {
         const icon = step.status === 'done' ? '✓' :
                      step.status === 'skipped' ? '○' : '✗';
-        console.log(`  [${step.step}/9] ${step.name} ${icon}`);
+        console.log(`  [${step.step}/8] ${step.name} ${icon}`);
         if (step.status === 'failed' && step.error) {
           console.log(`       ${step.error}`);
         }
@@ -188,63 +268,32 @@ async function handleExecuteUpgrade(component, { jsonOutput }) {
           console.log(`  ${icon} ${r.action}`);
         }
       }
-
-      process.exit(1);
     }
+
+    return result.success;
+  } finally {
+    // Always: cleanup temp + release lock
+    cleanupTemp(tempDir);
+    releaseLock(component);
   }
 }
 
 /**
- * Handle interactive mode (default)
+ * Clean old .backup/ directories, keeping only the latest.
  */
-async function handleInteractive(component, { jsonOutput }) {
-  // Check for updates first
-  const check = checkForUpdates(component);
+function cleanOldBackups(skillDir) {
+  const backupRoot = path.join(skillDir, '.backup');
+  if (!fs.existsSync(backupRoot)) return;
 
-  if (!check.success) {
-    if (jsonOutput) {
-      console.log(JSON.stringify({ action: 'check', component, ...check }, null, 2));
-    } else {
-      console.error(`Error: ${check.message}`);
+  try {
+    const entries = fs.readdirSync(backupRoot).sort();
+    // Keep the last one, remove the rest
+    for (let i = 0; i < entries.length - 1; i++) {
+      fs.rmSync(path.join(backupRoot, entries[i]), { recursive: true, force: true });
     }
-    process.exit(1);
+  } catch {
+    // Non-critical, ignore
   }
-
-  if (!check.hasUpdate) {
-    if (jsonOutput) {
-      console.log(JSON.stringify({ action: 'check', component, ...check }, null, 2));
-    } else {
-      console.log(`✓ ${component} is up to date (v${check.current})`);
-    }
-    return;
-  }
-
-  // Show update info
-  console.log(`\n${component}: ${check.current} → ${check.latest}`);
-
-  if (check.localChanges) {
-    console.log(`\nWARNING: LOCAL MODIFICATIONS DETECTED:`);
-    check.localChanges.forEach(c => console.log(`  ${c}`));
-  }
-
-  if (check.changelog) {
-    console.log(`\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
-    console.log('CHANGELOG');
-    console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
-    console.log(check.changelog);
-    console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`);
-  }
-
-  // Interactive confirmation
-  const confirmed = await promptYesNo('Proceed with upgrade? [y/N]: ');
-
-  if (!confirmed) {
-    console.log('Upgrade cancelled.');
-    return;
-  }
-
-  // Execute upgrade
-  return handleExecuteUpgrade(component, { jsonOutput });
 }
 
 /**
@@ -263,6 +312,7 @@ async function upgradeAllComponents({ checkOnly, jsonOutput, skipConfirm }) {
     return;
   }
 
+  // Check all components first
   const results = [];
 
   for (const name of names) {
@@ -303,7 +353,6 @@ async function upgradeAllComponents({ checkOnly, jsonOutput, skipConfirm }) {
   }
 
   if (!skipConfirm) {
-    // Interactive confirmation
     const confirmed = await promptYesNo('Upgrade all components? [y/N]: ');
     if (!confirmed) {
       console.log('Upgrade cancelled.');
@@ -311,16 +360,17 @@ async function upgradeAllComponents({ checkOnly, jsonOutput, skipConfirm }) {
     }
   }
 
-  // Execute upgrades
+  // Execute upgrades (lock per component via handleUpgradeFlow)
+  let anyFailed = false;
   for (const comp of updatable) {
-    console.log(`\nUpgrading ${comp.component}...`);
-    const result = runUpgrade(comp.component);
-    if (result.success) {
-      console.log(`  ✓ ${result.from} → ${result.to}`);
-    } else {
-      console.log(`  ✗ Failed: ${result.error}`);
+    if (!jsonOutput) {
+      console.log(`\n─── ${comp.component} ───`);
     }
+    const ok = await handleUpgradeFlow(comp.component, { jsonOutput, skipConfirm: true });
+    if (!ok) anyFailed = true;
   }
+
+  if (anyFailed) process.exit(1);
 }
 
 /**
@@ -353,7 +403,6 @@ async function upgradeSelfCore() {
 
 export async function uninstallComponent(args) {
   const purge = args.includes('--purge');
-  // Filter out flags to get the target name
   const target = args.find(arg => !arg.startsWith('--'));
 
   if (!target) {
