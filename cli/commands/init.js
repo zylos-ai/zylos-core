@@ -390,7 +390,15 @@ export async function initCommand(args) {
   }
   console.log(`  ✓ Node.js ${nodeCheck.version}`);
 
-  // Step 2: Check/install PM2
+  // Step 2: Check tmux (required for communication services)
+  if (commandExists('tmux')) {
+    console.log('  ✓ tmux installed');
+  } else {
+    console.log('  ⚠ tmux not found (required for communication services)');
+    console.log('    Install: brew install tmux (macOS) / apt install tmux (Linux)');
+  }
+
+  // Step 3: Check/install PM2 (auto-installs if missing)
   if (commandExists('pm2')) {
     console.log('  ✓ PM2 installed');
   } else {
@@ -405,7 +413,7 @@ export async function initCommand(args) {
     }
   }
 
-  // Step 3: Check/install Claude Code
+  // Step 4: Check/install Claude Code (auto-installs if missing)
   if (commandExists('claude')) {
     console.log('  ✓ Claude Code installed');
   } else {
@@ -420,7 +428,7 @@ export async function initCommand(args) {
     }
   }
 
-  // Step 4: Claude auth check
+  // Step 5: Claude auth check
   if (commandExists('claude')) {
     try {
       const result = spawnSync('claude', ['auth', 'status'], {
@@ -441,17 +449,17 @@ export async function initCommand(args) {
 
   console.log('');
 
-  // Step 5: Create directory structure
+  // Step 6: Create directory structure
   console.log(`Install directory: ${ZYLOS_DIR}`);
   console.log('\nSetting up...');
   createDirectoryStructure();
   console.log('  ✓ Created directory structure');
 
-  // Step 6: Deploy templates
+  // Step 7: Deploy templates
   deployTemplates();
   console.log('  ✓ Templates deployed');
 
-  // Step 7: Sync Core Skills
+  // Step 8: Sync Core Skills
   const syncResult = syncCoreSkills();
   if (syncResult.error) {
     console.log(`  ⚠ ${syncResult.error}`);
@@ -463,7 +471,7 @@ export async function initCommand(args) {
     }
   }
 
-  // Step 8: Start services
+  // Step 9: Start services
   let servicesStarted = 0;
   if (!skipConfirm) {
     const startNow = await promptYesNo('\nStart services now? [Y/n]: ', true);
