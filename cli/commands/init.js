@@ -141,9 +141,11 @@ function deployTemplates() {
   if (!fs.existsSync(TEMPLATES_SRC)) return;
 
   // ecosystem.config.cjs — always update (source of truth for service definitions)
+  const pm2Dir = path.join(ZYLOS_DIR, 'pm2');
+  fs.mkdirSync(pm2Dir, { recursive: true });
   const ecosystemSrc = path.join(TEMPLATES_SRC, 'pm2', 'ecosystem.config.cjs');
   if (fs.existsSync(ecosystemSrc)) {
-    fs.copyFileSync(ecosystemSrc, path.join(ZYLOS_DIR, 'pm2', 'ecosystem.config.cjs'));
+    fs.copyFileSync(ecosystemSrc, path.join(pm2Dir, 'ecosystem.config.cjs'));
   }
 
   // .env — only create if missing
