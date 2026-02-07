@@ -36,6 +36,9 @@ export async function upgradeComponent(args) {
 
   // Handle --self: upgrade zylos-core itself
   if (upgradeSelf) {
+    if (checkOnly) {
+      return handleSelfCheckOnly({ jsonOutput });
+    }
     const ok = await upgradeSelfCore();
     if (!ok) process.exit(1);
     return;
@@ -491,6 +494,55 @@ async function upgradeAllComponents({ checkOnly, jsonOutput, skipConfirm, skipEv
   }
 
   if (anyFailed) process.exit(1);
+}
+
+/**
+ * Handle --self --check: check for zylos-core updates only (no lock needed).
+ */
+function handleSelfCheckOnly({ jsonOutput }) {
+  const check = checkForCoreUpdates();
+
+  if (!check.success) {
+    if (jsonOutput) {
+      console.log(JSON.stringify({ action: 'check', target: 'zylos-core', ...check }, null, 2));
+    } else {
+      console.error(`Error: ${check.message}`);
+    }
+    process.exit(1);
+  }
+
+  // Fetch changelog when update is available
+  let changelog = null;
+  if (check.hasUpdate) {
+    try {
+      const rawChangelog = fetchRawFile('zylos-ai/zylos-core', 'CHANGELOG.md', `v${check.latest}`);
+      changelog = filterChangelog(rawChangelog, check.current);
+    } catch {
+      // Try main branch as fallback (for pre-release versions without tags)
+      try {
+        const rawChangelog = fetchRawFile('zylos-ai/zylos-core', 'CHANGELOG.md');
+        changelog = filterChangelog(rawChangelog, check.current);
+      } catch {
+        // CHANGELOG.md may not exist
+      }
+    }
+  }
+
+  if (jsonOutput) {
+    const output = { action: 'check', target: 'zylos-core', ...check };
+    if (changelog) output.changelog = changelog;
+    console.log(JSON.stringify(output, null, 2));
+  } else {
+    if (!check.hasUpdate) {
+      console.log(`✓ zylos-core is up to date (v${check.current})`);
+    } else {
+      console.log(`zylos-core: ${check.current} → ${check.latest}`);
+      if (changelog) {
+        console.log(`\nChangelog:\n${changelog}`);
+      }
+      console.log(`\nRun "zylos upgrade --self --yes" to upgrade.`);
+    }
+  }
 }
 
 /**
