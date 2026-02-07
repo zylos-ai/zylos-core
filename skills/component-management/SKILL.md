@@ -239,6 +239,22 @@ telegram: 0.1.0 -> 0.2.0
 Changelog:
 - Fixed dotenv path issue
 
+Local changes: none
+
+Reply "upgrade telegram confirm" to proceed.
+```
+
+If there are local modifications, show them:
+```
+telegram: 0.1.0 -> 0.2.0
+
+Changelog:
+- Fixed dotenv path issue
+
+WARNING: Local modifications detected:
+  M src/bot.js
+  A custom-plugin.js
+
 Reply "upgrade telegram confirm" to proceed.
 ```
 
@@ -257,7 +273,7 @@ When formatting `--json` output for C4 replies:
 
 - Plain text only, no markdown
 - For `info --json`: format as `<name> v<version>\nType: <type>\nRepo: <repo>\nService: <name> (<status>)`
-- For `check --json`: format as `<name>: <current> -> <latest>` or `<name> is up to date (v<current>)`
+- For `check --json`: format as `<name>: <current> -> <latest>`, include `changelog` field if present, warn about `localChanges` if present
 - For errors: when JSON has both `error` and `message` fields, display `message` (human-readable)
 - Send reply via the appropriate channel's send script
 

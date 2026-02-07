@@ -17,6 +17,7 @@ import {
 import { detectChanges } from '../lib/manifest.js';
 import { parseSkillMd } from '../lib/skill.js';
 import { acquireLock, releaseLock } from '../lib/lock.js';
+import { fetchRawFile } from '../lib/github.js';
 import { promptYesNo } from '../lib/prompts.js';
 import { evaluateUpgrade } from '../lib/claude-eval.js';
 
@@ -107,24 +108,63 @@ export async function upgradeComponent(args) {
 }
 
 /**
- * Handle --check flag: check for updates only (no lock needed)
+ * Handle --check flag: check for updates only (no lock needed).
+ * Also fetches changelog and detects local changes for a complete preview.
  */
 async function handleCheckOnly(component, { jsonOutput }) {
   const result = checkForUpdates(component);
 
-  if (jsonOutput) {
-    console.log(JSON.stringify({ action: 'check', component, ...result }, null, 2));
-    if (!result.success) process.exit(1);
-  } else {
-    if (!result.success) {
+  if (!result.success) {
+    if (jsonOutput) {
+      console.log(JSON.stringify({ action: 'check', component, ...result }, null, 2));
+    } else {
       console.error(`Error: ${result.message}`);
-      process.exit(1);
+    }
+    process.exit(1);
+  }
+
+  // Enrich with changelog and local changes when update is available
+  let changelog = null;
+  let localChanges = null;
+
+  if (result.hasUpdate && result.repo) {
+    // Fetch changelog from remote (no full download needed)
+    try {
+      const rawChangelog = fetchRawFile(result.repo, 'CHANGELOG.md', `v${result.latest}`);
+      changelog = filterChangelog(rawChangelog, result.current);
+    } catch {
+      // CHANGELOG.md may not exist — that's fine
     }
 
+    // Detect local modifications against manifest
+    const skillDir = path.join(SKILLS_DIR, component);
+    const changes = detectChanges(skillDir);
+    if (changes && (changes.modified.length > 0 || changes.added.length > 0)) {
+      localChanges = { modified: changes.modified, added: changes.added };
+    }
+  }
+
+  if (jsonOutput) {
+    const output = { action: 'check', component, ...result };
+    if (changelog) output.changelog = changelog;
+    if (localChanges) output.localChanges = localChanges;
+    console.log(JSON.stringify(output, null, 2));
+  } else {
     if (!result.hasUpdate) {
       console.log(`✓ ${component} is up to date (v${result.current})`);
     } else {
       console.log(`${component}: ${result.current} → ${result.latest}`);
+
+      if (localChanges) {
+        console.log(`\nWARNING: LOCAL MODIFICATIONS DETECTED:`);
+        for (const f of localChanges.modified) console.log(`  M ${f}`);
+        for (const f of localChanges.added) console.log(`  A ${f}`);
+      }
+
+      if (changelog) {
+        console.log(`\nChangelog:\n${changelog}`);
+      }
+
       console.log(`\nRun "zylos upgrade ${component} --yes" to upgrade.`);
     }
   }
