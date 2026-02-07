@@ -11,7 +11,6 @@ import { execSync } from 'node:child_process';
 import { SKILLS_DIR } from './config.js';
 import { downloadArchive, downloadBranch } from './download.js';
 import { generateManifest, loadManifest, saveManifest } from './manifest.js';
-import { parseSkillMd } from './skill.js';
 import { fetchRawFile, sanitizeError } from './github.js';
 import { copyTree, syncTree } from './fs-utils.js';
 
@@ -304,25 +303,26 @@ function step2_preUpgradeHook(ctx) {
 }
 
 /**
- * Collect service names from installed components' SKILL.md frontmatter.
+ * Find PM2 services running from SKILLS_DIR by matching exec paths.
+ * This catches ALL zylos-managed services regardless of SKILL.md declarations.
+ *
+ * @returns {{ name: string, status: string }[]} PM2 processes whose scripts are under SKILLS_DIR
  */
-function getInstalledServiceNames() {
-  const names = [];
-  if (!fs.existsSync(SKILLS_DIR)) return names;
+function getSkillsServices() {
+  try {
+    const output = execSync('pm2 jlist 2>/dev/null', { encoding: 'utf8' });
+    const processes = JSON.parse(output);
+    const resolved = path.resolve(SKILLS_DIR);
 
-  for (const entry of fs.readdirSync(SKILLS_DIR, { withFileTypes: true })) {
-    if (!entry.isDirectory()) continue;
-    const skillMdPath = path.join(SKILLS_DIR, entry.name, 'SKILL.md');
-    if (!fs.existsSync(skillMdPath)) continue;
-    try {
-      const parsed = parseSkillMd(skillMdPath);
-      const serviceName = parsed?.frontmatter?.lifecycle?.service?.name;
-      if (serviceName) names.push(serviceName);
-    } catch {
-      // Skip unparseable SKILL.md
-    }
+    return processes
+      .filter(proc => {
+        const execPath = proc.pm2_env?.pm_exec_path || '';
+        return execPath.startsWith(resolved + '/');
+      })
+      .map(proc => ({ name: proc.name, status: proc.pm2_env?.status }));
+  } catch {
+    return [];
   }
-  return names;
 }
 
 /**
@@ -331,33 +331,30 @@ function getInstalledServiceNames() {
 function step3_stopCoreServices(ctx) {
   const startTime = Date.now();
 
-  // Dynamically find service names from installed components
-  const knownServices = getInstalledServiceNames();
-  if (knownServices.length === 0) {
-    return { step: 3, name: 'stop_core_services', status: 'skipped', message: 'no services registered', duration: Date.now() - startTime };
+  // Find all PM2 services running from skills directory
+  const services = getSkillsServices();
+  const onlineServices = services.filter(s => s.status === 'online');
+
+  if (services.length === 0) {
+    return { step: 3, name: 'stop_core_services', status: 'skipped', message: 'no services found', duration: Date.now() - startTime };
   }
 
-  try {
-    const output = execSync('pm2 jlist 2>/dev/null', { encoding: 'utf8' });
-    const processes = JSON.parse(output);
+  if (onlineServices.length === 0) {
+    return { step: 3, name: 'stop_core_services', status: 'done', message: 'none running', duration: Date.now() - startTime };
+  }
 
-    for (const proc of processes) {
-      if (knownServices.includes(proc.name) && proc.pm2_env?.status === 'online') {
-        ctx.servicesWereRunning.push(proc.name);
-        try {
-          execSync(`pm2 stop ${proc.name} 2>/dev/null`, { stdio: 'pipe' });
-          ctx.servicesStopped.push(proc.name);
-        } catch {
-          // Continue even if one service fails to stop
-        }
-      }
+  for (const svc of onlineServices) {
+    ctx.servicesWereRunning.push(svc.name);
+    try {
+      execSync(`pm2 stop ${svc.name} 2>/dev/null`, { stdio: 'pipe' });
+      ctx.servicesStopped.push(svc.name);
+    } catch {
+      // Continue even if one service fails to stop
     }
-
-    const msg = ctx.servicesStopped.length > 0 ? ctx.servicesStopped.join(', ') : 'none running';
-    return { step: 3, name: 'stop_core_services', status: 'done', message: msg, duration: Date.now() - startTime };
-  } catch {
-    return { step: 3, name: 'stop_core_services', status: 'skipped', message: 'pm2 not available', duration: Date.now() - startTime };
   }
+
+  const msg = ctx.servicesStopped.length > 0 ? ctx.servicesStopped.join(', ') : 'none running';
+  return { step: 3, name: 'stop_core_services', status: 'done', message: msg, duration: Date.now() - startTime };
 }
 
 /**
