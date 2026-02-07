@@ -11,6 +11,7 @@ import { execSync } from 'node:child_process';
 import { SKILLS_DIR } from './config.js';
 import { downloadArchive, downloadBranch } from './download.js';
 import { generateManifest, loadManifest, saveManifest } from './manifest.js';
+import { parseSkillMd } from './skill.js';
 import { fetchRawFile, sanitizeError } from './github.js';
 import { copyTree, syncTree } from './fs-utils.js';
 
@@ -303,20 +304,45 @@ function step2_preUpgradeHook(ctx) {
 }
 
 /**
+ * Collect service names from installed components' SKILL.md frontmatter.
+ */
+function getInstalledServiceNames() {
+  const names = [];
+  if (!fs.existsSync(SKILLS_DIR)) return names;
+
+  for (const entry of fs.readdirSync(SKILLS_DIR, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const skillMdPath = path.join(SKILLS_DIR, entry.name, 'SKILL.md');
+    if (!fs.existsSync(skillMdPath)) continue;
+    try {
+      const parsed = parseSkillMd(skillMdPath);
+      const serviceName = parsed?.frontmatter?.lifecycle?.service?.name;
+      if (serviceName) names.push(serviceName);
+    } catch {
+      // Skip unparseable SKILL.md
+    }
+  }
+  return names;
+}
+
+/**
  * Step 3: stop core services
  */
 function step3_stopCoreServices(ctx) {
   const startTime = Date.now();
 
-  // Core services that might be running from zylos skills
-  const coreServicePrefixes = ['zylos-scheduler', 'zylos-comm-bridge', 'zylos-activity-monitor'];
+  // Dynamically find service names from installed components
+  const knownServices = getInstalledServiceNames();
+  if (knownServices.length === 0) {
+    return { step: 3, name: 'stop_core_services', status: 'skipped', message: 'no services registered', duration: Date.now() - startTime };
+  }
 
   try {
     const output = execSync('pm2 jlist 2>/dev/null', { encoding: 'utf8' });
     const processes = JSON.parse(output);
 
     for (const proc of processes) {
-      if (coreServicePrefixes.some(prefix => proc.name === prefix) && proc.pm2_env?.status === 'online') {
+      if (knownServices.includes(proc.name) && proc.pm2_env?.status === 'online') {
         ctx.servicesWereRunning.push(proc.name);
         try {
           execSync(`pm2 stop ${proc.name} 2>/dev/null`, { stdio: 'pipe' });
@@ -335,7 +361,11 @@ function step3_stopCoreServices(ctx) {
 }
 
 /**
- * Step 4: npm install -g from temp dir
+ * Step 4: npm pack + npm install -g tarball
+ *
+ * Using `npm install -g <folder>` creates a symlink to the folder.
+ * Since we install from a temp dir that gets cleaned up, the symlink breaks.
+ * Instead: npm pack (creates a .tgz copy) → npm install -g <tgz> (copies files).
  */
 function step4_npmInstallGlobal(ctx) {
   const startTime = Date.now();
@@ -345,8 +375,17 @@ function step4_npmInstallGlobal(ctx) {
   }
 
   try {
-    // Install from local path — this updates the globally installed zylos package
-    execSync(`npm install -g "${ctx.tempDir}"`, {
+    // Pack first — creates a .tgz tarball (copies, not symlinks)
+    const tarballName = execSync('npm pack --pack-destination .', {
+      cwd: ctx.tempDir,
+      encoding: 'utf8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+    }).trim();
+
+    const tarballPath = path.join(ctx.tempDir, tarballName);
+
+    // Install from tarball — npm copies files into global node_modules
+    execSync(`npm install -g "${tarballPath}"`, {
       encoding: 'utf8',
       stdio: ['pipe', 'pipe', 'pipe'],
       env: { ...process.env, ZYLOS_SKIP_POSTINSTALL: '1' },  // Skip postinstall — we sync skills ourselves
