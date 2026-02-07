@@ -5,6 +5,21 @@ All notable changes to zylos-core will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.0-beta.10] - 2026-02-08
+
+### Added
+- Self-upgrade now syncs managed sections of CLAUDE.md (step 6 of 9)
+- Managed section markers in CLAUDE.md template for targeted updates
+
+### Fixed
+- Removed `upgrade --yes` shortcut from CLAUDE.md template that caused Claude to skip two-step upgrade confirmation flow
+- Step counter in upgrade progress display now matches actual step count
+
+### Changed
+- Self-upgrade pipeline expanded from 8 to 9 steps (added CLAUDE.md sync)
+
+---
+
 ## [0.1.0-beta.7] - 2026-02-07
 
 ### Changed

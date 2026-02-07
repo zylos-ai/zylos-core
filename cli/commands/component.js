@@ -24,14 +24,16 @@ import { evaluateUpgrade } from '../lib/claude-eval.js';
 /**
  * Print a single upgrade step result in real time.
  */
-function printStep(step) {
-  const icon = step.status === 'done' ? '✓' :
-               step.status === 'skipped' ? '○' : '✗';
-  const msg = step.message ? ` (${step.message})` : '';
-  console.log(`  [${step.step}/8] ${step.name}${msg} ${icon}`);
-  if (step.status === 'failed' && step.error) {
-    console.log(`       ${step.error}`);
-  }
+function makePrintStep(totalSteps) {
+  return function printStep(step) {
+    const icon = step.status === 'done' ? '✓' :
+                 step.status === 'skipped' ? '○' : '✗';
+    const msg = step.message ? ` (${step.message})` : '';
+    console.log(`  [${step.step}/${totalSteps}] ${step.name}${msg} ${icon}`);
+    if (step.status === 'failed' && step.error) {
+      console.log(`       ${step.error}`);
+    }
+  };
 }
 
 export async function upgradeComponent(args) {
@@ -359,7 +361,7 @@ async function handleUpgradeFlow(component, { jsonOutput, skipConfirm, skipEval 
     const result = runUpgrade(component, {
       tempDir,
       newVersion: check.latest,
-      onStep: !jsonOutput ? printStep : undefined,
+      onStep: !jsonOutput ? makePrintStep(8) : undefined,
     });
 
     if (result.success) {
@@ -684,11 +686,11 @@ async function upgradeSelfCore() {
       console.log('Upgrading zylos-core...');
     }
 
-    // 6. Execute self-upgrade (8 steps) — show progress in real time
+    // 6. Execute self-upgrade (9 steps) — show progress in real time
     const result = runSelfUpgrade({
       tempDir,
       newVersion: check.latest,
-      onStep: !jsonOutput ? printStep : undefined,
+      onStep: !jsonOutput ? makePrintStep(9) : undefined,
     });
 
     // Output result

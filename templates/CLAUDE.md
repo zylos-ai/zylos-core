@@ -149,15 +149,18 @@ Web server configuration (Caddy).
 Guidelines for installing, upgrading, and managing zylos components.
 **Read this before any component install/upgrade/uninstall operation.**
 
+<!-- zylos-managed:component-management:begin -->
 ## Component Management
 
 Use `zylos` CLI to manage components.
 
-**Read `~/zylos/.claude/skills/component-management/SKILL.md` for detailed workflows.**
+**IMPORTANT: Before ANY component operation, read `~/zylos/.claude/skills/component-management/SKILL.md`.**
+It contains the full workflow for each operation mode (Claude session and C4/IM channels).
 
 Key principles:
 - Always confirm with user before install/upgrade/uninstall
-- Guide users interactively through configuration (never just say "edit file manually")
+- Guide users interactively through configuration
+- For C4/IM messages: upgrades ALWAYS require two-step confirmation (check first, then confirm)
 - Check component's SKILL.md for config after installation
 
 Quick reference:
@@ -165,9 +168,12 @@ Quick reference:
 zylos list                          # List installed components
 zylos search <keyword>              # Search available components
 zylos add <name>                    # Install component
-zylos upgrade <component> --check   # Check for updates
-zylos upgrade <component> --yes     # Execute upgrade (after user confirms)
+zylos info <name>                   # Show component details
+zylos upgrade <component> --check   # Check for updates (ALWAYS do this first)
 ```
+
+**Never run upgrade --yes without reading the component-management SKILL.md workflow first.**
+<!-- zylos-managed:component-management:end -->
 
 ## Data Directories
 

@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { execSync } from 'node:child_process';
-import { SKILLS_DIR } from './config.js';
+import { SKILLS_DIR, ZYLOS_DIR } from './config.js';
 import { downloadArchive, downloadBranch } from './download.js';
 import { generateManifest, loadManifest, saveManifest } from './manifest.js';
 import { fetchRawFile, sanitizeError } from './github.js';
@@ -244,7 +244,111 @@ function syncSkillFiles(srcDir, destDir, skillName, result) {
 }
 
 // ---------------------------------------------------------------------------
-// 8-step self-upgrade pipeline
+// CLAUDE.md managed sections sync
+// ---------------------------------------------------------------------------
+
+const MANAGED_MARKER_RE = /<!-- zylos-managed:(\S+):begin -->([\s\S]*?)<!-- zylos-managed:\1:end -->/g;
+
+/**
+ * Update managed sections in ~/zylos/CLAUDE.md from the new template.
+ *
+ * Strategy:
+ * - Template uses markers: <!-- zylos-managed:<name>:begin --> ... <!-- zylos-managed:<name>:end -->
+ * - If user's CLAUDE.md has the same markers, replace content between them
+ * - If markers not found, try to locate the section by heading and inject with markers
+ * - User content outside managed markers is preserved
+ *
+ * @param {string} templateDir - Path to templates/ in downloaded temp dir
+ * @returns {{ updated: string[], added: string[], skipped: boolean, error?: string }}
+ */
+export function syncClaudeMd(templateDir) {
+  const result = { updated: [], added: [], skipped: false };
+  const templatePath = path.join(templateDir, 'CLAUDE.md');
+  const userPath = path.join(ZYLOS_DIR, 'CLAUDE.md');
+
+  if (!fs.existsSync(templatePath)) {
+    result.skipped = true;
+    return result;
+  }
+
+  if (!fs.existsSync(userPath)) {
+    // No user CLAUDE.md — copy the template (same as init)
+    fs.copyFileSync(templatePath, userPath);
+    result.added.push('CLAUDE.md (new)');
+    return result;
+  }
+
+  const templateContent = fs.readFileSync(templatePath, 'utf8');
+  let userContent = fs.readFileSync(userPath, 'utf8');
+
+  // Extract managed sections from template
+  const managedSections = new Map();
+  let match;
+  const re = new RegExp(MANAGED_MARKER_RE.source, MANAGED_MARKER_RE.flags);
+  while ((match = re.exec(templateContent)) !== null) {
+    managedSections.set(match[1], match[0]); // full block including markers
+  }
+
+  if (managedSections.size === 0) {
+    result.skipped = true;
+    return result;
+  }
+
+  for (const [name, block] of managedSections) {
+    const beginMarker = `<!-- zylos-managed:${name}:begin -->`;
+    const endMarker = `<!-- zylos-managed:${name}:end -->`;
+
+    if (userContent.includes(beginMarker) && userContent.includes(endMarker)) {
+      // Replace existing managed section
+      const userRe = new RegExp(
+        `<!-- zylos-managed:${escapeRegExp(name)}:begin -->[\\s\\S]*?<!-- zylos-managed:${escapeRegExp(name)}:end -->`
+      );
+      userContent = userContent.replace(userRe, block);
+      result.updated.push(name);
+    } else {
+      // Markers not found — try to find the section by heading
+      // The managed block starts with a ## heading after the begin marker
+      const headingMatch = block.match(/## (.+)/);
+      if (headingMatch) {
+        const heading = headingMatch[1].trim();
+        const headingRe = new RegExp(`^## ${escapeRegExp(heading)}$`, 'm');
+        const headingIdx = userContent.search(headingRe);
+
+        if (headingIdx !== -1) {
+          // Find the end of this section (next ## heading or end of file)
+          const afterHeading = userContent.slice(headingIdx);
+          const nextHeadingMatch = afterHeading.match(/\n## (?!$)/m);
+          const sectionEnd = nextHeadingMatch
+            ? headingIdx + nextHeadingMatch.index
+            : userContent.length;
+
+          // Replace the section with the managed block
+          userContent = userContent.slice(0, headingIdx) + block + '\n\n' + userContent.slice(sectionEnd);
+          result.updated.push(name);
+        } else {
+          // Heading not found — append before ## Data Directories or at end
+          const insertPoint = userContent.search(/^## Data Directories$/m);
+          if (insertPoint !== -1) {
+            userContent = userContent.slice(0, insertPoint) + block + '\n\n' + userContent.slice(insertPoint);
+          } else {
+            userContent = userContent.trimEnd() + '\n\n' + block + '\n';
+          }
+          result.added.push(name);
+        }
+      }
+    }
+  }
+
+  fs.writeFileSync(userPath, userContent);
+  return result;
+}
+
+function escapeRegExp(str) {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// ---------------------------------------------------------------------------
+// 9-step self-upgrade pipeline
 // ---------------------------------------------------------------------------
 
 /**
@@ -424,22 +528,51 @@ function step5_syncCoreSkills(ctx) {
 }
 
 /**
- * Step 6: post-upgrade hook (placeholder for future use)
+ * Step 6: sync CLAUDE.md managed sections
  */
-function step6_postUpgradeHook(ctx) {
+function step6_syncClaudeMd(ctx) {
   const startTime = Date.now();
-  // No core post-upgrade hook yet — reserved for future
-  return { step: 6, name: 'post_upgrade_hook', status: 'skipped', duration: Date.now() - startTime };
+
+  const templateDir = path.join(ctx.tempDir, 'templates');
+  if (!fs.existsSync(templateDir)) {
+    return { step: 6, name: 'sync_claude_md', status: 'skipped', message: 'no templates in new version', duration: Date.now() - startTime };
+  }
+
+  try {
+    const syncResult = syncClaudeMd(templateDir);
+    if (syncResult.skipped) {
+      return { step: 6, name: 'sync_claude_md', status: 'skipped', message: 'no managed sections', duration: Date.now() - startTime };
+    }
+
+    const parts = [];
+    if (syncResult.updated.length) parts.push(`${syncResult.updated.length} updated`);
+    if (syncResult.added.length) parts.push(`${syncResult.added.length} added`);
+    const msg = parts.join(', ') || 'no changes';
+
+    return { step: 6, name: 'sync_claude_md', status: 'done', message: msg, duration: Date.now() - startTime };
+  } catch (err) {
+    // Non-fatal — CLAUDE.md update failure shouldn't block the upgrade
+    return { step: 6, name: 'sync_claude_md', status: 'done', message: `warning: ${err.message}`, duration: Date.now() - startTime };
+  }
 }
 
 /**
- * Step 7: start core services
+ * Step 7: post-upgrade hook (placeholder for future use)
  */
-function step7_startCoreServices(ctx) {
+function step7_postUpgradeHook(ctx) {
+  const startTime = Date.now();
+  // No core post-upgrade hook yet — reserved for future
+  return { step: 7, name: 'post_upgrade_hook', status: 'skipped', duration: Date.now() - startTime };
+}
+
+/**
+ * Step 8: start core services
+ */
+function step8_startCoreServices(ctx) {
   const startTime = Date.now();
 
   if (ctx.servicesWereRunning.length === 0) {
-    return { step: 7, name: 'start_core_services', status: 'skipped', message: 'no services to restart', duration: Date.now() - startTime };
+    return { step: 8, name: 'start_core_services', status: 'skipped', message: 'no services to restart', duration: Date.now() - startTime };
   }
 
   const started = [];
@@ -455,20 +588,20 @@ function step7_startCoreServices(ctx) {
   }
 
   if (failed.length > 0) {
-    return { step: 7, name: 'start_core_services', status: 'failed', error: `Failed to restart: ${failed.join(', ')}`, duration: Date.now() - startTime };
+    return { step: 8, name: 'start_core_services', status: 'failed', error: `Failed to restart: ${failed.join(', ')}`, duration: Date.now() - startTime };
   }
 
-  return { step: 7, name: 'start_core_services', status: 'done', message: started.join(', '), duration: Date.now() - startTime };
+  return { step: 8, name: 'start_core_services', status: 'done', message: started.join(', '), duration: Date.now() - startTime };
 }
 
 /**
- * Step 8: verify services
+ * Step 9: verify services
  */
-function step8_verifyServices(ctx) {
+function step9_verifyServices(ctx) {
   const startTime = Date.now();
 
   if (ctx.servicesWereRunning.length === 0) {
-    return { step: 8, name: 'verify_services', status: 'skipped', message: 'no services to verify', duration: Date.now() - startTime };
+    return { step: 9, name: 'verify_services', status: 'skipped', message: 'no services to verify', duration: Date.now() - startTime };
   }
 
   // Brief wait for services to start
@@ -488,12 +621,12 @@ function step8_verifyServices(ctx) {
     }
 
     if (notOnline.length > 0) {
-      return { step: 8, name: 'verify_services', status: 'failed', error: `Not online: ${notOnline.join(', ')}`, duration: Date.now() - startTime };
+      return { step: 9, name: 'verify_services', status: 'failed', error: `Not online: ${notOnline.join(', ')}`, duration: Date.now() - startTime };
     }
 
-    return { step: 8, name: 'verify_services', status: 'done', duration: Date.now() - startTime };
+    return { step: 9, name: 'verify_services', status: 'done', duration: Date.now() - startTime };
   } catch (err) {
-    return { step: 8, name: 'verify_services', status: 'failed', error: err.message, duration: Date.now() - startTime };
+    return { step: 9, name: 'verify_services', status: 'failed', error: err.message, duration: Date.now() - startTime };
   }
 }
 
@@ -535,7 +668,7 @@ function rollbackSelf(ctx) {
 // ---------------------------------------------------------------------------
 
 /**
- * Run the 8-step self-upgrade pipeline.
+ * Run the 9-step self-upgrade pipeline.
  * Lock must be acquired by caller.
  *
  * @param {{ tempDir: string, newVersion: string, onStep?: function }} opts
@@ -556,9 +689,10 @@ export function runSelfUpgrade({ tempDir, newVersion, onStep } = {}) {
     step3_stopCoreServices,
     step4_npmInstallGlobal,
     step5_syncCoreSkills,
-    step6_postUpgradeHook,
-    step7_startCoreServices,
-    step8_verifyServices,
+    step6_syncClaudeMd,
+    step7_postUpgradeHook,
+    step8_startCoreServices,
+    step9_verifyServices,
   ];
 
   let failedStep = null;
