@@ -22,14 +22,25 @@ import { copyTree, syncTree } from './fs-utils.js';
 // ---------------------------------------------------------------------------
 
 /**
- * Read the local version from SKILL.md frontmatter.
+ * Read the local version from SKILL.md frontmatter, falling back to package.json.
  */
 function getLocalVersion(skillDir) {
+  // Primary: SKILL.md frontmatter
   const parsed = parseSkillMd(skillDir);
-  if (!parsed || !parsed.frontmatter.version) {
-    return { success: false, error: 'Version not found in SKILL.md' };
+  if (parsed?.frontmatter?.version) {
+    return { success: true, version: String(parsed.frontmatter.version) };
   }
-  return { success: true, version: String(parsed.frontmatter.version) };
+  // Fallback: package.json
+  const pkgPath = path.join(skillDir, 'package.json');
+  try {
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+    if (pkg.version) {
+      return { success: true, version: String(pkg.version) };
+    }
+  } catch {
+    // package.json doesn't exist or is invalid
+  }
+  return { success: false, error: 'Version not found in SKILL.md or package.json' };
 }
 
 /**
