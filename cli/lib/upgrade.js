@@ -573,7 +573,7 @@ export function rollback(ctx) {
  * @param {{ tempDir: string, newVersion: string }} opts
  * @returns {object} Upgrade result
  */
-export function runUpgrade(component, { tempDir, newVersion } = {}) {
+export function runUpgrade(component, { tempDir, newVersion, onStep } = {}) {
   const ctx = createContext(component, { tempDir, newVersion });
 
   if (!fs.existsSync(ctx.skillDir)) {
@@ -609,6 +609,7 @@ export function runUpgrade(component, { tempDir, newVersion } = {}) {
   for (const stepFn of steps) {
     const result = stepFn(ctx);
     ctx.steps.push(result);
+    if (onStep) onStep(result);
 
     if (result.status === 'failed') {
       failedStep = result;

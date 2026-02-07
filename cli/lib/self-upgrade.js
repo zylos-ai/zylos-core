@@ -538,10 +538,10 @@ function rollbackSelf(ctx) {
  * Run the 8-step self-upgrade pipeline.
  * Lock must be acquired by caller.
  *
- * @param {{ tempDir: string, newVersion: string }} opts
+ * @param {{ tempDir: string, newVersion: string, onStep?: function }} opts
  * @returns {object} Upgrade result
  */
-export function runSelfUpgrade({ tempDir, newVersion } = {}) {
+export function runSelfUpgrade({ tempDir, newVersion, onStep } = {}) {
   const ctx = createContext({ tempDir, newVersion });
 
   const current = getCurrentVersion();
@@ -566,6 +566,7 @@ export function runSelfUpgrade({ tempDir, newVersion } = {}) {
   for (const stepFn of steps) {
     const result = stepFn(ctx);
     ctx.steps.push(result);
+    if (onStep) onStep(result);
 
     if (result.status === 'failed') {
       failedStep = result;

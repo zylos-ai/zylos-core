@@ -21,6 +21,19 @@ import { fetchRawFile } from '../lib/github.js';
 import { promptYesNo } from '../lib/prompts.js';
 import { evaluateUpgrade } from '../lib/claude-eval.js';
 
+/**
+ * Print a single upgrade step result in real time.
+ */
+function printStep(step) {
+  const icon = step.status === 'done' ? '✓' :
+               step.status === 'skipped' ? '○' : '✗';
+  const msg = step.message ? ` (${step.message})` : '';
+  console.log(`  [${step.step}/8] ${step.name}${msg} ${icon}`);
+  if (step.status === 'failed' && step.error) {
+    console.log(`       ${step.error}`);
+  }
+}
+
 export async function upgradeComponent(args) {
   // Parse flags
   const checkOnly = args.includes('--check');
@@ -342,8 +355,12 @@ async function handleUpgradeFlow(component, { jsonOutput, skipConfirm, skipEval 
       console.log(`Upgrading ${component}...`);
     }
 
-    // 6. Execute upgrade (8 steps)
-    const result = runUpgrade(component, { tempDir, newVersion: check.latest });
+    // 6. Execute upgrade (8 steps) — show progress in real time
+    const result = runUpgrade(component, {
+      tempDir,
+      newVersion: check.latest,
+      onStep: !jsonOutput ? printStep : undefined,
+    });
 
     if (result.success) {
       // Phase C: Cleanup
@@ -365,23 +382,8 @@ async function handleUpgradeFlow(component, { jsonOutput, skipConfirm, skipEval 
       if (evalResult) output.evaluation = evalResult;
       console.log(JSON.stringify(output, null, 2));
     } else if (result.success) {
-      for (const step of result.steps) {
-        const icon = step.status === 'done' ? '✓' :
-                     step.status === 'skipped' ? '○' : '✗';
-        const msg = step.message ? ` (${step.message})` : '';
-        console.log(`  [${step.step}/8] ${step.name}${msg} ${icon}`);
-      }
       console.log(`\n✓ ${component} upgraded: ${result.from} → ${result.to}`);
     } else {
-      for (const step of result.steps) {
-        const icon = step.status === 'done' ? '✓' :
-                     step.status === 'skipped' ? '○' : '✗';
-        console.log(`  [${step.step}/8] ${step.name} ${icon}`);
-        if (step.status === 'failed' && step.error) {
-          console.log(`       ${step.error}`);
-        }
-      }
-
       console.log(`\n✗ Upgrade failed (step ${result.failedStep}): ${result.error}`);
 
       if (result.rollback?.performed) {
@@ -682,8 +684,12 @@ async function upgradeSelfCore() {
       console.log('Upgrading zylos-core...');
     }
 
-    // 6. Execute self-upgrade (8 steps)
-    const result = runSelfUpgrade({ tempDir, newVersion: check.latest });
+    // 6. Execute self-upgrade (8 steps) — show progress in real time
+    const result = runSelfUpgrade({
+      tempDir,
+      newVersion: check.latest,
+      onStep: !jsonOutput ? printStep : undefined,
+    });
 
     // Output result
     if (jsonOutput) {
@@ -698,12 +704,6 @@ async function upgradeSelfCore() {
       }
       console.log(JSON.stringify(output, null, 2));
     } else if (result.success) {
-      for (const step of result.steps) {
-        const icon = step.status === 'done' ? '✓' :
-                     step.status === 'skipped' ? '○' : '✗';
-        const msg = step.message ? ` (${step.message})` : '';
-        console.log(`  [${step.step}/8] ${step.name}${msg} ${icon}`);
-      }
       console.log(`\n✓ zylos-core upgraded: ${result.from} → ${result.to}`);
 
       // Clean backup after successful upgrade
@@ -711,15 +711,6 @@ async function upgradeSelfCore() {
         cleanupBackup(result.backupDir);
       }
     } else {
-      for (const step of result.steps) {
-        const icon = step.status === 'done' ? '✓' :
-                     step.status === 'skipped' ? '○' : '✗';
-        console.log(`  [${step.step}/8] ${step.name} ${icon}`);
-        if (step.status === 'failed' && step.error) {
-          console.log(`       ${step.error}`);
-        }
-      }
-
       console.log(`\n✗ Self-upgrade failed (step ${result.failedStep}): ${result.error}`);
 
       if (result.rollback?.performed) {
