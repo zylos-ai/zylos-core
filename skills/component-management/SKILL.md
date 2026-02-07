@@ -221,6 +221,8 @@ The request is from C4 when the message arrives via a communication channel
 | upgrade \<name\> | `zylos upgrade <name> --check --json` (preview only) |
 | upgrade \<name\> confirm | `zylos upgrade <name> --yes --skip-eval` |
 | add \<name\> | `zylos add <name> --yes` |
+| upgrade zylos | `zylos upgrade --self --check --json` (preview only) |
+| upgrade zylos confirm | `zylos upgrade --self --yes --json` |
 | remove / uninstall | Reject — reply: "Remove is not supported via C4. Use CLI directly." |
 
 ### C4 Upgrade Confirm Flow
@@ -275,6 +277,34 @@ Run `zylos upgrade telegram --yes --skip-eval` and reply with the output.
 The confirm command is self-contained — the component name is in the command itself,
 so it does not depend on Claude remembering the previous message.
 
+### C4 Self-Upgrade Flow (zylos-core)
+
+Same two-step pattern for upgrading zylos itself.
+
+**Step 1 — User requests:**
+
+User: `upgrade zylos`
+
+Run `zylos upgrade --self --check --json`, format the JSON, and reply:
+
+```
+zylos-core: 0.1.0-beta.1 -> 0.1.0-beta.2
+
+Changelog:
+- Added self-upgrade support for IM channels
+- Fixed version detection
+
+Reply "upgrade zylos confirm" to proceed.
+```
+
+If already up to date, reply: `zylos-core is up to date (v0.1.0-beta.1)`
+
+**Step 2 — User confirms:**
+
+User: `upgrade zylos confirm`
+
+Run `zylos upgrade --self --yes --json` and reply with the result.
+
 ### C4 Output Formatting
 
 When formatting `--json` output for C4 replies:
@@ -282,6 +312,7 @@ When formatting `--json` output for C4 replies:
 - Plain text only, no markdown
 - For `info --json`: format as `<name> v<version>\nType: <type>\nRepo: <repo>\nService: <name> (<status>)`
 - For `check --json`: format as `<name>: <current> -> <latest>`, include `changelog` field if present, warn about `localChanges` if present, show `evaluation` analysis if present
+- For `--self --check --json`: same as component check, but target is `zylos-core` instead of component name
 - For errors: when JSON has both `error` and `message` fields, display `message` (human-readable)
 - Send reply via the appropriate channel's send script
 
