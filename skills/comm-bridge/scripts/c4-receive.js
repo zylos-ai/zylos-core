@@ -14,9 +14,9 @@
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
-import { insertConversation } from './c4-db.js';
+import { insertConversation, close } from './c4-db.js';
 import { validateChannel, validateEndpoint } from './c4-validate.js';
-import { FILE_SIZE_THRESHOLD, ATTACHMENTS_DIR } from './c4-config.js';
+import { FILE_SIZE_THRESHOLD, ATTACHMENTS_DIR, CONTENT_PREVIEW_CHARS } from './c4-config.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -114,35 +114,42 @@ function main() {
     }
   }
 
-  let fullMessage = content;
-
+  // Build reply-via suffix
+  let replyViaSuffix = '';
   if (!noReply) {
     const scriptDir = __dirname;
     const replyViaBase = `reply via: node ${path.join(scriptDir, 'c4-send.js')} "${channel}"`;
-    const replyVia = endpoint ? `${replyViaBase} "${endpoint}"` : replyViaBase;
-    fullMessage = `${content} ---- ${replyVia}`;
+    replyViaSuffix = endpoint ? ` ---- ${replyViaBase} "${endpoint}"` : ` ---- ${replyViaBase}`;
   }
 
-  // Check if message exceeds size threshold — store as attachment file
-  let attachmentPath = null;
+  let fullMessage = content + replyViaSuffix;
+
+  // Check if message exceeds size threshold — store as file, deliver preview
   let dbContent = fullMessage;
+  let isLarge = false;
   const byteLength = Buffer.byteLength(fullMessage, 'utf8');
   if (byteLength > FILE_SIZE_THRESHOLD) {
+    isLarge = true;
     const msgId = `${Date.now()}-${process.pid}`;
     const messageDir = path.join(ATTACHMENTS_DIR, msgId);
     fs.mkdirSync(messageDir, { recursive: true });
     const filePath = path.join(messageDir, 'message.txt');
     fs.writeFileSync(filePath, fullMessage, 'utf8');
-    attachmentPath = messageDir;
-    dbContent = `[C4 Attachment] Message stored at: ${filePath}. Please read the file contents.`;
+
+    const preview = content.substring(0, CONTENT_PREVIEW_CHARS);
+    const ellipsis = preview.length < content.length ? '...' : '';
+    const sizeKB = (byteLength / 1024).toFixed(1);
+    dbContent = `${preview}${ellipsis}\n\n[C4] Full message (${sizeKB}KB) at: ${filePath}${replyViaSuffix}`;
   }
 
   try {
-    const record = insertConversation('in', channel, endpoint, dbContent, 'pending', priority, requireIdle, attachmentPath);
-    console.log(`[C4] Message queued (id=${record.id}, priority=${priority}${requireIdle ? ', require_idle' : ''}${attachmentPath ? ', attachment' : ''})`);
+    const record = insertConversation('in', channel, endpoint, dbContent, 'pending', priority, requireIdle);
+    console.log(`[C4] Message queued (id=${record.id}, priority=${priority}${requireIdle ? ', require_idle' : ''}${isLarge ? ', file' : ''})`);
   } catch (err) {
     console.error(`[C4] Failed to queue message: ${err.stack}`);
     process.exit(1);
+  } finally {
+    close();
   }
 }
 

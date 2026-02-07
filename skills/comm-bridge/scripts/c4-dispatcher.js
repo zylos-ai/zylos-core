@@ -8,16 +8,14 @@
  */
 
 import { execFileSync } from 'child_process';
-import { readFileSync, existsSync, statSync, mkdirSync, writeFileSync } from 'fs';
-import path from 'path';
+import { readFileSync, existsSync, statSync } from 'fs';
 import {
   getNextPending,
   markDelivered,
   getPendingCount,
   close,
   incrementRetryCount,
-  markFailed,
-  updateAttachment
+  markFailed
 } from './c4-db.js';
 import {
   POLL_INTERVAL_BASE,
@@ -29,14 +27,11 @@ import {
   RETRY_BASE_MS,
   ENTER_VERIFY_MAX_RETRIES,
   ENTER_VERIFY_WAIT_MS,
-  FILE_SIZE_THRESHOLD,
   TMUX_SESSION,
   CLAUDE_STATUS_FILE,
-  ATTACHMENTS_DIR,
   STALE_STATUS_THRESHOLD,
   TMUX_MISSING_WARN_THRESHOLD
 } from './c4-config.js';
-import { validateChannel } from './c4-validate.js';
 
 let isShuttingDown = false;
 let pollInterval = POLL_INTERVAL_BASE;
@@ -193,29 +188,6 @@ async function sendToTmux(message) {
   }
 }
 
-function ensureAttachment(msg) {
-  const byteLength = Buffer.byteLength(msg.content || '', 'utf8');
-  if (byteLength <= FILE_SIZE_THRESHOLD) {
-    return { content: msg.content, attachmentPath: msg.attachment_path };
-  }
-
-  if (msg.attachment_path) {
-    return { content: msg.content, attachmentPath: msg.attachment_path };
-  }
-
-  mkdirSync(ATTACHMENTS_DIR, { recursive: true });
-  const messageDir = path.join(ATTACHMENTS_DIR, String(msg.id));
-  mkdirSync(messageDir, { recursive: true });
-  const filePath = path.join(messageDir, 'message.txt');
-
-  writeFileSync(filePath, msg.content || '', 'utf8');
-
-  const summary = `[C4 Attachment] Message stored at: ${filePath}. Please read the file contents.`;
-  updateAttachment(msg.id, messageDir, summary);
-
-  return { content: summary, attachmentPath: messageDir };
-}
-
 async function handleDeliveryFailure(msg) {
   const channelHealthy = isStatusFresh();
 
@@ -259,16 +231,16 @@ async function processNextMessage() {
     return { delivered: false, state: claudeState.state };
   }
 
-  validateChannel(msg.channel, false);
-
-  // If message requires idle but Claude not idle, wait
+  // If message requires idle but Claude not idle, block the entire queue.
+  // This is intentional: prevents require_idle messages from being starved
+  // by a continuous stream of lower-priority non-idle messages.
   if (msg.require_idle === 1 && claudeState.state !== 'idle') {
     return { delivered: false, state: claudeState.state };
   }
 
   log(`Delivering message id=${msg.id} priority=${msg.priority} from ${msg.channel}`);
 
-  const { content: deliveryContent } = ensureAttachment(msg);
+  const deliveryContent = msg.content || '';
 
   const success = await sendToTmux(deliveryContent);
 

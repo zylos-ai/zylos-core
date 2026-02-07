@@ -10,7 +10,7 @@
 import path from 'path';
 import fs from 'fs';
 import { spawn } from 'child_process';
-import { insertConversation } from './c4-db.js';
+import { insertConversation, close } from './c4-db.js';
 import { SKILLS_DIR } from './c4-config.js';
 import { validateChannel, validateEndpoint } from './c4-validate.js';
 
@@ -63,6 +63,8 @@ async function main() {
     insertConversation('out', channel, endpoint, message);
   } catch (err) {
     console.error(`[C4] Warning: DB audit write failed: ${err.stack}`);
+  } finally {
+    close();
   }
 
   const channelScript = path.join(SKILLS_DIR, channel, 'scripts', 'send.js');
