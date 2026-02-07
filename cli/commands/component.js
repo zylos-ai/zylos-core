@@ -497,6 +497,25 @@ async function upgradeAllComponents({ checkOnly, jsonOutput, skipConfirm, skipEv
 }
 
 /**
+ * Detect local modifications across all core skills.
+ * Returns array of { skill, changes } for skills with modifications.
+ */
+function detectCoreSkillChanges() {
+  const results = [];
+  if (!fs.existsSync(SKILLS_DIR)) return results;
+
+  for (const entry of fs.readdirSync(SKILLS_DIR, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const skillDir = path.join(SKILLS_DIR, entry.name);
+    const changes = detectChanges(skillDir);
+    if (changes && (changes.modified.length > 0 || changes.added.length > 0)) {
+      results.push({ skill: entry.name, changes });
+    }
+  }
+  return results;
+}
+
+/**
  * Handle --self --check: check for zylos-core updates only (no lock needed).
  */
 function handleSelfCheckOnly({ jsonOutput }) {
@@ -528,15 +547,34 @@ function handleSelfCheckOnly({ jsonOutput }) {
     }
   }
 
+  // Detect local modifications to core skills
+  const allLocalChanges = check.hasUpdate ? detectCoreSkillChanges() : [];
+
   if (jsonOutput) {
     const output = { action: 'check', target: 'zylos-core', ...check };
     if (changelog) output.changelog = changelog;
+    if (allLocalChanges.length > 0) {
+      output.localChanges = allLocalChanges.map(({ skill, changes }) => ({
+        skill,
+        modified: changes.modified,
+        added: changes.added,
+      }));
+    }
     console.log(JSON.stringify(output, null, 2));
   } else {
     if (!check.hasUpdate) {
       console.log(`✓ zylos-core is up to date (v${check.current})`);
     } else {
       console.log(`zylos-core: ${check.current} → ${check.latest}`);
+
+      if (allLocalChanges.length > 0) {
+        console.log(`\nLocal modifications:`);
+        for (const { skill, changes } of allLocalChanges) {
+          for (const f of changes.modified) console.log(`  M ${skill}/${f}`);
+          for (const f of changes.added) console.log(`  A ${skill}/${f}`);
+        }
+      }
+
       if (changelog) {
         console.log(`\nChangelog:\n${changelog}`);
       }
@@ -606,12 +644,24 @@ async function upgradeSelfCore() {
     }
     tempDir = dlResult.tempDir;
 
-    // 4. Show info
+    // 4. Show info: version diff, changelog, local modifications to core skills
+    const fullCoreChangelog = readCoreChangelog(tempDir);
+    const coreChangelog = filterChangelog(fullCoreChangelog, check.current);
+
+    // Detect local modifications across all core skills
+    const allLocalChanges = detectCoreSkillChanges();
+
     if (!jsonOutput) {
       console.log(`\nzylos-core: ${check.current} → ${check.latest}`);
 
-      const fullCoreChangelog = readCoreChangelog(tempDir);
-      const coreChangelog = filterChangelog(fullCoreChangelog, check.current);
+      if (allLocalChanges.length > 0) {
+        console.log(`\nLOCAL MODIFICATIONS DETECTED:`);
+        for (const { skill, changes } of allLocalChanges) {
+          for (const f of changes.modified) console.log(`  M ${skill}/${f}`);
+          for (const f of changes.added) console.log(`  A ${skill}/${f}`);
+        }
+      }
+
       if (coreChangelog) {
         console.log(`\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
         console.log('CHANGELOG');
@@ -637,7 +687,16 @@ async function upgradeSelfCore() {
 
     // Output result
     if (jsonOutput) {
-      console.log(JSON.stringify(result, null, 2));
+      const output = { ...result };
+      if (coreChangelog) output.changelog = coreChangelog;
+      if (allLocalChanges.length > 0) {
+        output.localChanges = allLocalChanges.map(({ skill, changes }) => ({
+          skill,
+          modified: changes.modified,
+          added: changes.added,
+        }));
+      }
+      console.log(JSON.stringify(output, null, 2));
     } else if (result.success) {
       for (const step of result.steps) {
         const icon = step.status === 'done' ? '✓' :
