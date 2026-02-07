@@ -74,7 +74,7 @@ function dispatchTask(task) {
   const success = sendViaC4(prompt, {
     priority: task.priority,
     requireIdle: task.require_idle === 1,
-    replySource: task.reply_source,
+    replyChannel: task.reply_channel,
     replyEndpoint: task.reply_endpoint
   });
 

@@ -27,6 +27,9 @@ import {
   RETRY_BASE_MS,
   ENTER_VERIFY_MAX_RETRIES,
   ENTER_VERIFY_WAIT_MS,
+  REQUIRE_IDLE_POST_SEND_HOLD_MS,
+  REQUIRE_IDLE_EXECUTION_MAX_WAIT_MS,
+  REQUIRE_IDLE_EXECUTION_POLL_MS,
   TMUX_SESSION,
   CLAUDE_STATUS_FILE,
   STALE_STATUS_THRESHOLD,
@@ -212,6 +215,38 @@ async function handleDeliveryFailure(msg) {
   await sleep(RETRY_BASE_MS);
 }
 
+async function waitForRequireIdleSettlement(msgId) {
+  log(`require_idle message id=${msgId}: hold ${REQUIRE_IDLE_POST_SEND_HOLD_MS}ms before next dispatch`);
+  await sleep(REQUIRE_IDLE_POST_SEND_HOLD_MS);
+
+  let state = getClaudeState().state;
+  if (state === 'offline' || state === 'stopped') {
+    log(`require_idle message id=${msgId}: Claude state=${state}, continuing`);
+    return;
+  }
+
+  // If still idle after hold, avoid waiting unnecessarily.
+  if (state === 'idle') {
+    log(`require_idle message id=${msgId}: Claude remained idle after hold, continuing`);
+    return;
+  }
+
+  const deadline = Date.now() + REQUIRE_IDLE_EXECUTION_MAX_WAIT_MS;
+  while (Date.now() < deadline) {
+    await sleep(REQUIRE_IDLE_EXECUTION_POLL_MS);
+    state = getClaudeState().state;
+
+    if (state === 'idle' || state === 'offline' || state === 'stopped') {
+      log(`require_idle message id=${msgId}: settled with Claude state=${state}`);
+      return;
+    }
+  }
+
+  log(
+    `require_idle message id=${msgId}: timeout after ${REQUIRE_IDLE_EXECUTION_MAX_WAIT_MS}ms, continuing`
+  );
+}
+
 async function processNextMessage() {
   const claudeState = getClaudeState();
 
@@ -247,6 +282,9 @@ async function processNextMessage() {
   if (success) {
     markDelivered(msg.id);
     log(`Message id=${msg.id} delivered`);
+    if (msg.require_idle === 1) {
+      await waitForRequireIdleSettlement(msg.id);
+    }
     return { delivered: true, state: claudeState.state };
   }
 

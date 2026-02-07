@@ -159,7 +159,7 @@ function sendViaC4(message, source = 'system') {
     // Use execFileSync to avoid shell injection - passes arguments directly
     execFileSync(
       'node',
-      [c4ReceivePath, '--source', source, '--priority', '1', '--no-reply', '--content', message],
+      [c4ReceivePath, '--priority', '1', '--no-reply', '--content', message],
       { stdio: 'pipe' }
     );
     return true;

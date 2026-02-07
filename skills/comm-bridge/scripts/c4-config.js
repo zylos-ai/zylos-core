@@ -14,6 +14,11 @@ export const RETRY_BASE_MS = 500;
 export const ENTER_VERIFY_MAX_RETRIES = 3;
 export const ENTER_VERIFY_WAIT_MS = 500;
 
+// For require_idle messages: allow execution time before dispatching the next message.
+export const REQUIRE_IDLE_POST_SEND_HOLD_MS = 5000;
+export const REQUIRE_IDLE_EXECUTION_MAX_WAIT_MS = 120000;
+export const REQUIRE_IDLE_EXECUTION_POLL_MS = 1000;
+
 export const FILE_SIZE_THRESHOLD = 1500; // bytes
 export const CONTENT_PREVIEW_CHARS = 100;
 

@@ -16,7 +16,7 @@ Messages are written to DB with `status='pending'`. The c4-dispatcher daemon han
 | Option | Description |
 |--------|-------------|
 | `--channel <name>` | Channel name (required unless `--no-reply`) |
-| `--endpoint <id>` | Endpoint identifier (e.g., chat_id) |
+| `--endpoint <id>` | Endpoint identifier. Can contain multiple space-separated parts (e.g., `"chat_id topic_id"` for Lark topics) |
 | `--content <text>` | Message content (required) |
 | `--priority <1-3>` | Priority level (default: 3) |
 | `--no-reply` | Omit `reply via` suffix; defaults channel to `system` |
@@ -47,6 +47,11 @@ Messages are written to DB with `status='pending'`. The c4-dispatcher daemon han
 ~/zylos/.claude/skills/comm-bridge/scripts/c4-receive.js \
     --channel scheduler --require-idle \
     --content 'Run daily report'
+
+# Lark topic (endpoint with multiple parts)
+~/zylos/.claude/skills/comm-bridge/scripts/c4-receive.js \
+    --channel lark --endpoint "chat_xxx topic_yyy" \
+    --content '[Lark] user said: hello'
 ```
 
 ## Large Message Handling

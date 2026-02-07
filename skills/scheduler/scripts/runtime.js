@@ -57,7 +57,7 @@ function findC4ReceivePath() {
  * @param {object} options - Dispatch options
  * @param {number} options.priority - Message priority 1-3 (default: 3)
  * @param {boolean} options.requireIdle - Whether to wait for idle state (default: false)
- * @param {string} options.replySource - Reply channel source (e.g., 'telegram')
+ * @param {string} options.replyChannel - Reply channel (e.g., 'telegram')
  * @param {string} options.replyEndpoint - Reply endpoint (e.g., user ID)
  * @returns {boolean} True if successful
  */
@@ -65,7 +65,7 @@ export function sendViaC4(message, options = {}) {
   const {
     priority = 3,
     requireIdle = false,
-    replySource = null,
+    replyChannel = null,
     replyEndpoint = null
   } = options;
 
@@ -76,8 +76,8 @@ export function sendViaC4(message, options = {}) {
     const args = [c4ReceivePath];
 
     // Source and reply configuration from task's reply settings
-    if (replySource) {
-      args.push('--source', replySource);
+    if (replyChannel) {
+      args.push('--channel', replyChannel);
       if (replyEndpoint) {
         args.push('--endpoint', replyEndpoint);
       }

@@ -57,7 +57,7 @@ function sendViaC4(message) {
   try {
     execFileSync(
       'node',
-      [c4ReceivePath, '--source', 'system', '--priority', '1', '--no-reply', '--content', message],
+      [c4ReceivePath, '--priority', '1', '--no-reply', '--require-idle', '--content', message],
       { stdio: 'inherit' }
     );
   } catch (err) {

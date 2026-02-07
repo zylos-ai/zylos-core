@@ -183,12 +183,12 @@ wss.on('connection', (ws) => {
 
       if (msg.type === 'send' && msg.content) {
         // Send message to Claude
-        const c4Receive = path.join(SKILLS_DIR, 'comm-bridge', 'c4-receive.js');
+        const c4Receive = path.join(SKILLS_DIR, 'comm-bridge', 'scripts', 'c4-receive.js');
         const tempId = msg.tempId; // Track client's temp ID
 
         const child = spawn('node', [
           c4Receive,
-          '--source', 'web-console',
+          '--channel', 'web-console',
           '--endpoint', 'console',
           '--content', msg.content.trim()
         ], { stdio: 'pipe' });
@@ -283,11 +283,11 @@ app.post('/api/send', (req, res) => {
     return res.status(400).json({ error: 'Message is required' });
   }
 
-  const c4Receive = path.join(SKILLS_DIR, 'comm-bridge', 'c4-receive.js');
+  const c4Receive = path.join(SKILLS_DIR, 'comm-bridge', 'scripts', 'c4-receive.js');
 
   const child = spawn('node', [
     c4Receive,
-    '--source', 'web-console',
+    '--channel', 'web-console',
     '--endpoint', 'console',
     '--content', message.trim()
   ], {

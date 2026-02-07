@@ -16,7 +16,7 @@ function escapeLike(str) {
 }
 
 const ALLOWED_UPDATE_COLUMNS = new Set([
-  'name', 'prompt', 'priority', 'require_idle', 'reply_source', 'reply_endpoint',
+  'name', 'prompt', 'priority', 'require_idle', 'reply_channel', 'reply_endpoint',
   'miss_threshold', 'type', 'cron_expression', 'interval_seconds', 'next_run_at', 'updated_at'
 ]);
 
@@ -45,7 +45,7 @@ Add Options:
   --priority <1-3>        Priority level (1=urgent, 2=high, 3=normal, default=3)
   --name "<name>"         Task name (optional)
   --require-idle          Wait for Claude to be idle before executing
-  --reply-source "<source>"      Reply channel (e.g., "telegram", "lark")
+  --reply-channel "<source>"      Reply channel (e.g., "telegram", "lark")
   --reply-endpoint "<endpoint>"  Reply endpoint (e.g., "8101553026", "chat_id topic_id")
   --miss-threshold <seconds>  Skip if overdue by more than this (default=300)
 
@@ -200,8 +200,8 @@ function cmdAdd(args, options) {
   // Parse require-idle flag
   const requireIdle = options['require-idle'] ? 1 : 0;
 
-  // Parse reply-source and reply-endpoint
-  const replySource = options['reply-source'] || null;
+  // Parse reply-channel and reply-endpoint
+  const replyChannel = options['reply-channel'] || null;
   const replyEndpoint = options['reply-endpoint'] || null;
 
   // Parse miss-threshold
@@ -222,7 +222,7 @@ function cmdAdd(args, options) {
       cron_expression, interval_seconds,
       next_run_at, priority, status,
       require_idle, miss_threshold,
-      reply_source, reply_endpoint,
+      reply_channel, reply_endpoint,
       created_at, updated_at, timezone
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?)
   `).run(
@@ -236,7 +236,7 @@ function cmdAdd(args, options) {
     priority,
     requireIdle,
     missThreshold,
-    replySource,
+    replyChannel,
     replyEndpoint,
     currentTime,
     currentTime,
@@ -556,13 +556,13 @@ function cmdUpdate(taskId, options) {
 
   // Update reply configuration
   if (options['clear-reply']) {
-    updates.reply_source = null;
+    updates.reply_channel = null;
     updates.reply_endpoint = null;
-    updatedFields.push('reply_source', 'reply_endpoint');
+    updatedFields.push('reply_channel', 'reply_endpoint');
   } else {
-    if (options['reply-source']) {
-      updates.reply_source = options['reply-source'];
-      updatedFields.push('reply_source');
+    if (options['reply-channel']) {
+      updates.reply_channel = options['reply-channel'];
+      updatedFields.push('reply_channel');
     }
     if (options['reply-endpoint']) {
       updates.reply_endpoint = options['reply-endpoint'];

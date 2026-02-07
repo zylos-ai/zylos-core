@@ -59,7 +59,7 @@ function initSchema() {
       miss_threshold INTEGER DEFAULT 300,       -- seconds: skip if overdue by more than this
 
       -- Reply Configuration
-      reply_source TEXT DEFAULT NULL,           -- reply channel source (e.g., 'telegram')
+      reply_channel TEXT DEFAULT NULL,          -- reply channel (e.g., 'telegram')
       reply_endpoint TEXT DEFAULT NULL,         -- reply endpoint (e.g., user ID)
 
       -- Retry Logic
@@ -104,45 +104,6 @@ function initSchema() {
     );
   `);
 
-  // Migration: Add new columns if they don't exist (for existing databases)
-  migrateSchema();
-}
-
-function migrateSchema() {
-  // Helper to check if column exists
-  const VALID_TABLES = new Set(['tasks', 'task_history', 'system_state']);
-  const columnExists = (table, column) => {
-    if (!VALID_TABLES.has(table)) throw new Error(`Invalid table: ${table}`);
-    const result = db.prepare(`PRAGMA table_info(${table})`).all();
-    return result.some(col => col.name === column);
-  };
-
-  // Add require_idle column if not exists
-  if (!columnExists('tasks', 'require_idle')) {
-    console.log('Migrating: Adding require_idle column...');
-    db.exec('ALTER TABLE tasks ADD COLUMN require_idle INTEGER DEFAULT 0');
-  }
-
-  // Add miss_threshold column if not exists
-  if (!columnExists('tasks', 'miss_threshold')) {
-    console.log('Migrating: Adding miss_threshold column...');
-    db.exec('ALTER TABLE tasks ADD COLUMN miss_threshold INTEGER DEFAULT 300');
-  }
-
-  // Add reply_source column if not exists
-  if (!columnExists('tasks', 'reply_source')) {
-    console.log('Migrating: Adding reply_source column...');
-    db.exec('ALTER TABLE tasks ADD COLUMN reply_source TEXT DEFAULT NULL');
-  }
-
-  // Add reply_endpoint column if not exists
-  if (!columnExists('tasks', 'reply_endpoint')) {
-    console.log('Migrating: Adding reply_endpoint column...');
-    db.exec('ALTER TABLE tasks ADD COLUMN reply_endpoint TEXT DEFAULT NULL');
-  }
-
-  // Clamp any existing priority-4 tasks to priority 3
-  db.prepare('UPDATE tasks SET priority = 3 WHERE priority > 3').run();
 }
 
 // Clean up old history entries (older than HISTORY_RETENTION_DAYS)

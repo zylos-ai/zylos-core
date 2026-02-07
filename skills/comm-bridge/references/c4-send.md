@@ -15,9 +15,17 @@ Sends messages from Claude to external channels. Records the outgoing message in
 ## Examples
 
 ```bash
+# Telegram (single-part endpoint)
 ~/zylos/.claude/skills/comm-bridge/scripts/c4-send.js telegram 8101553026 "Hello!"
-~/zylos/.claude/skills/comm-bridge/scripts/c4-send.js lark "chat_id topic_id" "Report ready"
+
+# Lark topic (multi-part endpoint, quote as one argument)
+~/zylos/.claude/skills/comm-bridge/scripts/c4-send.js lark "chat_xxx topic_yyy" "Report ready"
+
+# Broadcast (no endpoint)
+~/zylos/.claude/skills/comm-bridge/scripts/c4-send.js telegram "Hello everyone!"
 ```
+
+**Note**: Endpoint structure depends on the channel implementation. Some channels use multi-part endpoints with space-separated values (e.g., Lark's `"chat_id topic_id"`). Always quote multi-part endpoints as a single argument.
 
 ## Channel Interface Contract
 

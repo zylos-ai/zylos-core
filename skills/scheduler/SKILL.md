@@ -54,7 +54,7 @@ Enables Claude to work autonomously by dispatching scheduled tasks via C4 comm-b
 | `--priority <1-3>` | Priority level (1=urgent, 2=high, 3=normal, default=3) |
 | `--name "<name>"` | Task name (optional) |
 | `--require-idle` | Wait for Claude to be idle before executing |
-| `--reply-source "<source>"` | Reply channel (e.g., "telegram", "lark") |
+| `--reply-channel "<source>"` | Reply channel (e.g., "telegram", "lark") |
 | `--reply-endpoint "<endpoint>"` | Reply endpoint (e.g., "8101553026", "chat_id topic_id") |
 | `--miss-threshold <seconds>` | Skip if overdue by more than this (default=300) |
 
@@ -116,11 +116,11 @@ All Add options, plus:
 
 # Task with reply (notify via Telegram)
 ~/zylos/.claude/skills/scheduler/scripts/cli.js add "Daily report" \
-  --at "9am" --reply-source "telegram" --reply-endpoint "8101553026"
+  --at "9am" --reply-channel "telegram" --reply-endpoint "8101553026"
 
 # Task with reply (notify to Lark topic)
 ~/zylos/.claude/skills/scheduler/scripts/cli.js add "Weekly report" \
-  --cron "0 9 * * 1" --reply-source "lark" --reply-endpoint "chat_id topic_id"
+  --cron "0 9 * * 1" --reply-channel "lark" --reply-endpoint "chat_id topic_id"
 
 # Task with custom miss threshold (backup: must execute even if delayed)
 ~/zylos/.claude/skills/scheduler/scripts/cli.js add "Backup data" \
@@ -137,7 +137,7 @@ All Add options, plus:
 
 # Update reply configuration
 ~/zylos/.claude/skills/scheduler/scripts/cli.js update task-abc \
-  --reply-source "telegram" --reply-endpoint "new_id"
+  --reply-channel "telegram" --reply-endpoint "new_id"
 
 # Clear reply configuration
 ~/zylos/.claude/skills/scheduler/scripts/cli.js update task-abc --clear-reply
@@ -183,18 +183,18 @@ All Add options, plus:
 
 ### Reply Configuration
 
-Use `--reply-source` and `--reply-endpoint` together to specify where task results should be sent.
+Use `--reply-channel` and `--reply-endpoint` together to specify where task results should be sent.
 
 **Examples**:
 ```bash
 # Telegram user
---reply-source "telegram" --reply-endpoint "8101553026"
+--reply-channel "telegram" --reply-endpoint "8101553026"
 
 # Lark topic (multiple parts separated by space)
---reply-source "lark" --reply-endpoint "chat_xxx topic_yyy"
+--reply-channel "lark" --reply-endpoint "chat_xxx topic_yyy"
 
 # Broadcast (no endpoint)
---reply-source "telegram"
+--reply-channel "telegram"
 ```
 
 **Note**: Endpoint structure depends on the channel implementation. Endpoints can contain multiple space-separated values.

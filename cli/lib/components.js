@@ -93,13 +93,13 @@ export function outputTask(action, data) {
 
   // Queue task via C4 for Scene B (terminal execution)
   // C4 dispatcher will deliver to Claude via tmux
-  const c4ReceivePath = path.join(import.meta.dirname, '..', '..', 'skills', 'comm-bridge', 'c4-receive.js');
+  const c4ReceivePath = path.join(import.meta.dirname, '..', '..', 'skills', 'comm-bridge', 'scripts', 'c4-receive.js');
 
   try {
     const taskMessage = `[COMPONENT_TASK] ${JSON.stringify(task)}`;
     // Use spawnSync with args array to avoid shell escaping issues
     // Use --no-reply since CLI tasks don't need a reply channel (zylos-cli has no send.js)
-    const result = spawnSync('node', [c4ReceivePath, '--source', 'zylos-cli', '--no-reply', '--content', taskMessage], {
+    const result = spawnSync('node', [c4ReceivePath, '--no-reply', '--content', taskMessage], {
       stdio: 'pipe',
       encoding: 'utf8'
     });
