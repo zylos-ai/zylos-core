@@ -217,22 +217,25 @@ The request is from C4 when the message arrives via a communication channel
 
 ### C4 Command Mapping
 
+**CRITICAL: "upgrade \<name\>" MUST ONLY run --check. NEVER execute the actual upgrade without the word "confirm" in the user's message.**
+
 | User says | CLI command |
 |-----------|------------|
 | list / list components | `zylos list` |
 | info \<name\> | `zylos info <name> --json` |
 | check / check updates | `zylos upgrade --all --check --json` |
 | check \<name\> | `zylos upgrade <name> --check --json` |
-| upgrade \<name\> | `zylos upgrade <name> --check --json` (preview only) |
-| upgrade \<name\> confirm | `zylos upgrade <name> --yes --skip-eval` |
+| upgrade \<name\> | `zylos upgrade <name> --check --json` **(CHECK ONLY — do NOT execute upgrade)** |
+| upgrade \<name\> confirm | `zylos upgrade <name> --yes --skip-eval` **(only this executes the upgrade)** |
 | add \<name\> | `zylos add <name> --yes` |
-| upgrade zylos | `zylos upgrade --self --check --json` (preview only) |
-| upgrade zylos confirm | `zylos upgrade --self --yes --json` |
+| upgrade zylos | `zylos upgrade --self --check --json` **(CHECK ONLY)** |
+| upgrade zylos confirm | `zylos upgrade --self --yes --json` **(only this executes)** |
 | remove / uninstall | Reject — reply: "Remove is not supported via C4. Use CLI directly." |
 
 ### C4 Upgrade Confirm Flow
 
-Upgrades use two-step confirmation. No state is stored between messages.
+**Upgrades ALWAYS use two-step confirmation. NEVER skip step 1 and go directly to step 2.**
+**Even if the user says "帮我升级", "please upgrade", or any variation — always do step 1 first.**
 
 **Step 1 — User requests upgrade:**
 
