@@ -335,7 +335,11 @@ function step3_stopCoreServices(ctx) {
 }
 
 /**
- * Step 4: npm install -g from temp dir
+ * Step 4: npm pack + npm install -g tarball
+ *
+ * Using `npm install -g <folder>` creates a symlink to the folder.
+ * Since we install from a temp dir that gets cleaned up, the symlink breaks.
+ * Instead: npm pack (creates a .tgz copy) → npm install -g <tgz> (copies files).
  */
 function step4_npmInstallGlobal(ctx) {
   const startTime = Date.now();
@@ -345,8 +349,17 @@ function step4_npmInstallGlobal(ctx) {
   }
 
   try {
-    // Install from local path — this updates the globally installed zylos package
-    execSync(`npm install -g "${ctx.tempDir}"`, {
+    // Pack first — creates a .tgz tarball (copies, not symlinks)
+    const tarballName = execSync('npm pack --pack-destination .', {
+      cwd: ctx.tempDir,
+      encoding: 'utf8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+    }).trim();
+
+    const tarballPath = path.join(ctx.tempDir, tarballName);
+
+    // Install from tarball — npm copies files into global node_modules
+    execSync(`npm install -g "${tarballPath}"`, {
       encoding: 'utf8',
       stdio: ['pipe', 'pipe', 'pipe'],
       env: { ...process.env, ZYLOS_SKIP_POSTINSTALL: '1' },  // Skip postinstall — we sync skills ourselves
