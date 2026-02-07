@@ -3,20 +3,19 @@
  * C4 Communication Bridge - Send Interface
  * Sends messages from Claude to external channels
  *
- * Usage: node c4-send.js <source> [endpoint_id] "<message>"
+ * Usage: node c4-send.js <channel> [endpoint_id] "<message>"
  * Example: node c4-send.js telegram 8101553026 "Hello Howard!"
  */
 
 import path from 'path';
-import os from 'os';
 import fs from 'fs';
 import { spawn } from 'child_process';
-import { insertConversation } from './c4-db.js';
-
-const SKILLS_DIR = path.join(os.homedir(), 'zylos', '.claude', 'skills');
+import { insertConversation, close } from './c4-db.js';
+import { SKILLS_DIR } from './c4-config.js';
+import { validateChannel, validateEndpoint } from './c4-validate.js';
 
 function printUsage() {
-  console.log('Usage: node c4-send.js <source> [endpoint_id] "<message>"');
+  console.log('Usage: node c4-send.js <channel> [endpoint_id] "<message>"');
   console.log('Example: node c4-send.js telegram 8101553026 "Hello!"');
   process.exit(1);
 }
@@ -28,16 +27,13 @@ async function main() {
     printUsage();
   }
 
-  const source = args[0];
+  const channel = args[0];
   let endpoint = null;
   let message = null;
 
-  // Check if we have endpoint_id or just message
   if (args.length === 2) {
-    // Only source and message
     message = args[1];
   } else {
-    // source, endpoint, message
     endpoint = args[1];
     message = args[2];
   }
@@ -47,23 +43,38 @@ async function main() {
     process.exit(1);
   }
 
-  // Record to database (direction=out)
   try {
-    insertConversation('out', source, endpoint, message);
+    validateChannel(channel, true);
   } catch (err) {
-    // Silently ignore DB errors
-  }
-
-  // Find and call channel send script (must be .js - channel standard)
-  const channelScript = path.join(SKILLS_DIR, source, 'send.js');
-
-  if (!fs.existsSync(channelScript)) {
-    console.error(`Error: Channel script not found: ${channelScript}`);
-    console.error('Channels must provide send.js (Node.js standard)');
+    console.error(`[C4] Invalid channel: ${err.stack}`);
     process.exit(1);
   }
 
-  // Call channel script
+  if (endpoint) {
+    try {
+      validateEndpoint(endpoint);
+    } catch (err) {
+      console.error(`[C4] Invalid endpoint: ${err.stack}`);
+      process.exit(1);
+    }
+  }
+
+  try {
+    insertConversation('out', channel, endpoint, message);
+  } catch (err) {
+    console.error(`[C4] Warning: DB audit write failed: ${err.stack}`);
+  } finally {
+    close();
+  }
+
+  const channelScript = path.join(SKILLS_DIR, channel, 'scripts', 'send.js');
+
+  if (!fs.existsSync(channelScript)) {
+    console.error(`Error: Channel script not found: ${channelScript}`);
+    console.error('Channels must provide scripts/send.js (Node.js standard)');
+    process.exit(1);
+  }
+
   const scriptArgs = endpoint ? [endpoint, message] : [message];
 
   const child = spawn('node', [channelScript, ...scriptArgs], {
@@ -72,15 +83,15 @@ async function main() {
 
   child.on('close', (code) => {
     if (code === 0) {
-      console.log(`[C4] Message sent via ${source}`);
+      console.log(`[C4] Message sent via ${channel}`);
     } else {
-      console.log(`[C4] Failed to send message via ${source} (exit code: ${code})`);
+      console.log(`[C4] Failed to send message via ${channel} (exit code: ${code})`);
     }
     process.exit(code);
   });
 
   child.on('error', (err) => {
-    console.error(`[C4] Error executing channel script: ${err.message}`);
+    console.error(`[C4] Error executing channel script: ${err.stack}`);
     process.exit(1);
   });
 }

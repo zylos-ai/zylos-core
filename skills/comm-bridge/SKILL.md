@@ -1,6 +1,11 @@
 ---
 name: comm-bridge
-description: Central message gateway for all communication channels. Core C4 component.
+description: >-
+  C4 communication bridge — central gateway for ALL external communication (Telegram, Lark, etc.).
+  Use when replying to users via the "reply via" path, sending proactive messages to external channels,
+  fetching conversation history for Memory Sync, or creating checkpoints after sync.
+  Incoming messages are queued by channel bots and delivered to Claude via a PM2 dispatcher daemon.
+  Session-start and user-message hooks automatically provide conversation context and trigger Memory Sync when unsummarized conversations exceed the configured threshold.
 ---
 
 # Communication Bridge (C4)
@@ -15,55 +20,28 @@ Telegram    ───┼──► C4 Bridge ◄──► Claude
 Lark        ───┘
 ```
 
-## Core Functions
+## Components
 
-| Script | Purpose |
-|--------|---------|
-| `c4-receive.js` | External → Claude (records + forwards) |
-| `c4-send.js` | Claude → External (records + routes) |
-| `c4-checkpoint.js` | Create recovery checkpoint |
-| `c4-recover.js` | Get conversations since last checkpoint |
-| `c4-notify.js` | Broadcast notification to all channels |
-
-## Message Flow
-
-**Receiving** (external → Claude):
-```bash
-node ~/zylos/.claude/skills/comm-bridge/scripts/c4-receive.js \
-    --source telegram \
-    --endpoint 12345 \
-    --content '[TG] user said: hello'
-```
-
-**Sending** (Claude → external):
-```bash
-node ~/zylos/.claude/skills/comm-bridge/scripts/c4-send.js telegram 12345 "Hello!"
-```
-
-**Notify** (broadcast):
-```bash
-node ~/zylos/.claude/skills/comm-bridge/scripts/c4-notify.js "System alert: low disk space"
-```
+| Script | Purpose | Reference |
+|--------|---------|-----------|
+| `c4-receive.js` | External → Claude (queue incoming messages) | [c4-receive](references/c4-receive.md) |
+| `c4-send.js` | Claude → External (route outgoing messages) | [c4-send](references/c4-send.md) |
+| `c4-dispatcher.js` | PM2 daemon: polls pending queue, delivers to tmux | — |
+| `c4-session-init.js` | Hook (session start): context + Memory Sync trigger | [hooks](references/hooks.md) |
+| `c4-threshold-check.js` | Hook (user message): Memory Sync trigger | [hooks](references/hooks.md) |
+| `c4-fetch.js` | Fetch conversations by id range | [c4-fetch](references/c4-fetch.md) |
+| `c4-checkpoint.js` | Create checkpoint after Memory Sync | [c4-checkpoint](references/c4-checkpoint.md) |
 
 ## Database
 
 SQLite at `~/zylos/comm-bridge/c4.db`:
-- `conversations`: All messages (in/out)
-- `checkpoints`: Recovery points
+- `conversations`: All messages (in/out) with priority, status, retry tracking
+- `checkpoints`: Recovery points with conversation id ranges
 
-## Channel Interface
+## Service Management
 
-Channels are skills installed in `~/zylos/.claude/skills/`. Each channel must provide:
-- `~/zylos/.claude/skills/<channel>/scripts/send.js <endpoint_id> <message>` (Node.js standard)
-- Config at `~/zylos/<channel>/config.json` (for data like primary_dm)
-
-Returns exit code 0 on success, non-zero on failure.
-
-## Reply Protocol
-
-Messages to Claude include routing info:
+```bash
+pm2 status c4-dispatcher
+pm2 logs c4-dispatcher
+pm2 restart c4-dispatcher
 ```
-[TG DM] user said: hello ---- reply via: node ~/zylos/.claude/skills/comm-bridge/scripts/c4-send.js telegram 12345
-```
-
-Claude uses the `reply via` path to respond.
