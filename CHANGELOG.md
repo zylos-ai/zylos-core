@@ -24,9 +24,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Self-upgrade: use npm pack to avoid broken symlinks after temp dir cleanup
 - Self-upgrade: dynamic service detection from installed SKILL.md frontmatter
 
-### Added
-- CLI `--version` / `-v` flag
-
 ---
 
 ## [0.1.0-beta.2] - 2026-02-07
