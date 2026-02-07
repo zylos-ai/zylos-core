@@ -9,7 +9,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { execSync } from 'node:child_process';
 import { SKILLS_DIR } from './config.js';
-import { downloadArchive } from './download.js';
+import { downloadArchive, downloadBranch } from './download.js';
 import { generateManifest, loadManifest, saveManifest } from './manifest.js';
 import { fetchRawFile, sanitizeError } from './github.js';
 import { copyTree, syncTree } from './fs-utils.js';
@@ -89,8 +89,12 @@ export function downloadCoreToTemp(version) {
 
   const result = downloadArchive(REPO, version, tempDir);
   if (!result.success) {
-    fs.rmSync(tempDir, { recursive: true, force: true });
-    return { success: false, error: result.error };
+    // Fallback: try downloading main branch (for pre-release versions without tags)
+    const branchResult = downloadBranch(REPO, 'main', tempDir);
+    if (!branchResult.success) {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+      return { success: false, error: result.error };
+    }
   }
 
   return { success: true, tempDir };
