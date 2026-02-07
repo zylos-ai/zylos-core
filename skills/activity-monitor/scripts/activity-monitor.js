@@ -290,7 +290,7 @@ function startClaude() {
       setTimeout(() => {
         sendViaC4(`Session recovered by activity monitor. Do the following:
 
-1. Read your memory files (especially ${ZYLOS_DIR}/memory/context.md)
+1. Read your memory files (identity.md, state.md, references.md in ${ZYLOS_DIR}/memory/)
 2. Check the conversation transcript at ${CONV_DIR}/*.jsonl (most recent file by date) for messages AFTER the last memory sync timestamp
 3. If there was conversation between last memory sync and crash, briefly summarize what was discussed (both Howard's messages and your replies)`);
         log('Guardian: Recovery prompt sent via C4');

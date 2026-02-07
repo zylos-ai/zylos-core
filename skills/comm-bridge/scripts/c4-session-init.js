@@ -48,7 +48,7 @@ function main() {
 
     // If over threshold, append Memory Sync instruction
     if (needsSync) {
-      lines.push(`[Action Required] There are ${range.count} unsummarized conversations (conversation id ${range.begin_id} ~ ${range.end_id}). Please invoke Memory Sync skill to process them: /memory-sync --begin ${range.begin_id} --end ${range.end_id}`);
+      lines.push(`[Action Required] There are ${range.count} unsummarized conversations (conversation id ${range.begin_id} ~ ${range.end_id}). Please invoke /zylos-memory to process them.`);
     }
 
     console.log(lines.join('\n'));

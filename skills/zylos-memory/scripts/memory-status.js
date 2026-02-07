@@ -1,0 +1,98 @@
+#!/usr/bin/env node
+/**
+ * Quick memory status summary.
+ */
+
+import fs from 'fs';
+import path from 'path';
+import os from 'os';
+
+const MEMORY_DIR = path.join(process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos'), 'memory');
+
+const BUDGETS = {
+  'identity.md': 1536,
+  'state.md': 2048,
+  'references.md': 1024
+};
+
+function formatBytes(bytes) {
+  if (bytes < 1024) {
+    return `${bytes}B`;
+  }
+  return `${(bytes / 1024).toFixed(1)}KB`;
+}
+
+function fileInfo(filePath) {
+  if (!fs.existsSync(filePath)) {
+    return null;
+  }
+  const stat = fs.statSync(filePath);
+  return {
+    sizeBytes: stat.size,
+    modifiedAt: stat.mtime
+  };
+}
+
+function countAllFiles(dir) {
+  if (!fs.existsSync(dir)) {
+    return [];
+  }
+
+  const out = [];
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (entry.name.startsWith('.')) {
+      continue;
+    }
+    const fullPath = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      out.push(...countAllFiles(fullPath));
+    } else {
+      const stat = fs.statSync(fullPath);
+      out.push({ sizeBytes: stat.size });
+    }
+  }
+  return out;
+}
+
+function main() {
+  const lines = [];
+  lines.push('Memory Status');
+  lines.push('============');
+
+  let overBudgetCount = 0;
+
+  for (const [name, budget] of Object.entries(BUDGETS)) {
+    const info = fileInfo(path.join(MEMORY_DIR, name));
+    if (!info) {
+      lines.push(`${name}: missing`);
+      overBudgetCount += 1;
+      continue;
+    }
+
+    const pct = Math.round((info.sizeBytes / budget) * 100);
+    const status = info.sizeBytes > budget ? 'OVER' : 'OK';
+    if (status === 'OVER') {
+      overBudgetCount += 1;
+    }
+
+    const modified = info.modifiedAt.toISOString().slice(0, 16).replace('T', ' ');
+    lines.push(`${name}: ${formatBytes(info.sizeBytes)} / ${formatBytes(budget)} (${pct}%) [${status}] updated ${modified}`);
+  }
+
+  const allFiles = countAllFiles(MEMORY_DIR);
+  const totalBytes = allFiles.reduce((sum, item) => sum + item.sizeBytes, 0);
+
+  lines.push('');
+  lines.push(`Total files: ${allFiles.length}`);
+  lines.push(`Total size: ${formatBytes(totalBytes)}`);
+
+  if (overBudgetCount === 0) {
+    lines.push('Health: good');
+  } else {
+    lines.push(`Health: attention needed (${overBudgetCount} core file issue(s))`);
+  }
+
+  process.stdout.write(`${lines.join('\n')}\n`);
+}
+
+main();
