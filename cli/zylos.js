@@ -35,6 +35,14 @@ async function main() {
   const args = process.argv.slice(2);
   const command = args[0] || 'help';
 
+  // Handle --version / -v
+  if (command === '--version' || command === '-v') {
+    const { getCurrentVersion } = await import('./lib/self-upgrade.js');
+    const result = getCurrentVersion();
+    console.log(result.success ? result.version : 'unknown');
+    return;
+  }
+
   if (commands[command]) {
     await commands[command](args.slice(1));
   } else {
