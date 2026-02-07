@@ -244,7 +244,7 @@ Local changes: none
 Reply "upgrade telegram confirm" to proceed.
 ```
 
-If there are local modifications, show them:
+If there are local modifications, show them with Claude's analysis:
 ```
 telegram: 0.1.0 -> 0.2.0
 
@@ -255,8 +255,16 @@ WARNING: Local modifications detected:
   M src/bot.js
   A custom-plugin.js
 
+Upgrade analysis:
+  src/bot.js: safe - changes are in config section, upgrade won't overwrite
+  custom-plugin.js: safe - new file, preserved by lifecycle.preserve
+
+Recommendation: Safe to upgrade.
+
 Reply "upgrade telegram confirm" to proceed.
 ```
+
+The `evaluation` field in JSON contains `files` (array of `{file, verdict, reason}`) and `recommendation`.
 
 **Step 2 — User confirms:**
 
@@ -273,7 +281,7 @@ When formatting `--json` output for C4 replies:
 
 - Plain text only, no markdown
 - For `info --json`: format as `<name> v<version>\nType: <type>\nRepo: <repo>\nService: <name> (<status>)`
-- For `check --json`: format as `<name>: <current> -> <latest>`, include `changelog` field if present, warn about `localChanges` if present
+- For `check --json`: format as `<name>: <current> -> <latest>`, include `changelog` field if present, warn about `localChanges` if present, show `evaluation` analysis if present
 - For errors: when JSON has both `error` and `message` fields, display `message` (human-readable)
 - Send reply via the appropriate channel's send script
 

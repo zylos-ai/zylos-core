@@ -109,7 +109,7 @@ export async function upgradeComponent(args) {
 
 /**
  * Handle --check flag: check for updates only (no lock needed).
- * Also fetches changelog and detects local changes for a complete preview.
+ * Also fetches changelog, detects local changes, and runs Claude eval for a complete preview.
  */
 async function handleCheckOnly(component, { jsonOutput }) {
   const result = checkForUpdates(component);
@@ -123,9 +123,11 @@ async function handleCheckOnly(component, { jsonOutput }) {
     process.exit(1);
   }
 
-  // Enrich with changelog and local changes when update is available
+  // Enrich with changelog, local changes, and Claude eval when update is available
   let changelog = null;
   let localChanges = null;
+  let evalResult = null;
+  let tempDir = null;
 
   if (result.hasUpdate && result.repo) {
     // Fetch changelog from remote (no full download needed)
@@ -141,6 +143,23 @@ async function handleCheckOnly(component, { jsonOutput }) {
     const changes = detectChanges(skillDir);
     if (changes && (changes.modified.length > 0 || changes.added.length > 0)) {
       localChanges = { modified: changes.modified, added: changes.added };
+
+      // Download new version for Claude eval (needs file diffs)
+      const dlResult = downloadToTemp(result.repo, result.latest);
+      if (dlResult.success) {
+        tempDir = dlResult.tempDir;
+        try {
+          evalResult = await evaluateUpgrade({
+            component,
+            localChanges: changes,
+            tempDir,
+            skillDir,
+            changelog,
+          });
+        } catch {
+          // Eval failure is non-fatal
+        }
+      }
     }
   }
 
@@ -148,6 +167,7 @@ async function handleCheckOnly(component, { jsonOutput }) {
     const output = { action: 'check', component, ...result };
     if (changelog) output.changelog = changelog;
     if (localChanges) output.localChanges = localChanges;
+    if (evalResult) output.evaluation = evalResult;
     console.log(JSON.stringify(output, null, 2));
   } else {
     if (!result.hasUpdate) {
@@ -161,6 +181,15 @@ async function handleCheckOnly(component, { jsonOutput }) {
         for (const f of localChanges.added) console.log(`  A ${f}`);
       }
 
+      if (evalResult) {
+        console.log(`\nUpgrade analysis:`);
+        for (const f of evalResult.files) {
+          const icon = f.verdict === 'safe' ? '✓' : f.verdict === 'warning' ? '⚠' : '✗';
+          console.log(`  ${icon} ${f.file}: ${f.reason}`);
+        }
+        console.log(`\nRecommendation: ${evalResult.recommendation}`);
+      }
+
       if (changelog) {
         console.log(`\nChangelog:\n${changelog}`);
       }
@@ -168,6 +197,9 @@ async function handleCheckOnly(component, { jsonOutput }) {
       console.log(`\nRun "zylos upgrade ${component} --yes" to upgrade.`);
     }
   }
+
+  // Cleanup temp dir if downloaded
+  cleanupTemp(tempDir);
 }
 
 /**
