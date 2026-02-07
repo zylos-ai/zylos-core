@@ -11,6 +11,7 @@ import { execSync } from 'node:child_process';
 import { SKILLS_DIR } from './config.js';
 import { downloadArchive, downloadBranch } from './download.js';
 import { generateManifest, loadManifest, saveManifest } from './manifest.js';
+import { parseSkillMd } from './skill.js';
 import { fetchRawFile, sanitizeError } from './github.js';
 import { copyTree, syncTree } from './fs-utils.js';
 
@@ -303,20 +304,45 @@ function step2_preUpgradeHook(ctx) {
 }
 
 /**
+ * Collect service names from installed components' SKILL.md frontmatter.
+ */
+function getInstalledServiceNames() {
+  const names = [];
+  if (!fs.existsSync(SKILLS_DIR)) return names;
+
+  for (const entry of fs.readdirSync(SKILLS_DIR, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const skillMdPath = path.join(SKILLS_DIR, entry.name, 'SKILL.md');
+    if (!fs.existsSync(skillMdPath)) continue;
+    try {
+      const parsed = parseSkillMd(skillMdPath);
+      const serviceName = parsed?.frontmatter?.lifecycle?.service?.name;
+      if (serviceName) names.push(serviceName);
+    } catch {
+      // Skip unparseable SKILL.md
+    }
+  }
+  return names;
+}
+
+/**
  * Step 3: stop core services
  */
 function step3_stopCoreServices(ctx) {
   const startTime = Date.now();
 
-  // Core services that might be running from zylos skills
-  const coreServicePrefixes = ['zylos-scheduler', 'zylos-comm-bridge', 'zylos-activity-monitor'];
+  // Dynamically find service names from installed components
+  const knownServices = getInstalledServiceNames();
+  if (knownServices.length === 0) {
+    return { step: 3, name: 'stop_core_services', status: 'skipped', message: 'no services registered', duration: Date.now() - startTime };
+  }
 
   try {
     const output = execSync('pm2 jlist 2>/dev/null', { encoding: 'utf8' });
     const processes = JSON.parse(output);
 
     for (const proc of processes) {
-      if (coreServicePrefixes.some(prefix => proc.name === prefix) && proc.pm2_env?.status === 'online') {
+      if (knownServices.includes(proc.name) && proc.pm2_env?.status === 'online') {
         ctx.servicesWereRunning.push(proc.name);
         try {
           execSync(`pm2 stop ${proc.name} 2>/dev/null`, { stdio: 'pipe' });
