@@ -7,6 +7,11 @@ description: Guidelines for managing zylos components via CLI and C4 channels.
 
 Guidelines for installing, upgrading, and managing zylos components.
 
+## CLI
+
+`zylos` is a **global npm command** (installed via `npm install -g zylos`).
+Run it directly as `zylos`, NOT as `~/zylos/zylos` or `./zylos`.
+
 ## General Principles
 
 1. **Always confirm before executing** - User must explicitly approve install/upgrade/uninstall
@@ -233,13 +238,22 @@ Upgrades use two-step confirmation. No state is stored between messages.
 
 User: `upgrade telegram`
 
-Run `zylos upgrade telegram --check --json`, format the JSON, and reply:
+Run `zylos upgrade telegram --check --json`, parse the JSON output, and reply with ALL of the following:
 
+1. Version change: `<name>: <current> -> <latest>`
+2. Changelog: MUST include the full changelog from the JSON output
+3. Local changes: show if any, or "none"
+4. Confirm instruction
+
+**You MUST show the changelog. Do NOT just show version numbers and ask to confirm.**
+
+Example reply:
 ```
 telegram: 0.1.0 -> 0.2.0
 
 Changelog:
 - Fixed dotenv path issue
+- Added admin CLI
 
 Local changes: none
 
