@@ -1,1 +1,1 @@
-{"name": "zylos-memory", "type": "module", "version": "5.0.0"}
+{"name":"zylos-memory","type":"module","version":"5.0.0","dependencies":{"dotenv":"^16.6.1"}}

@@ -5,8 +5,9 @@
  */
 
 import { getDb, generateId, now } from './database.js';
-import { getNextRun, isValidCron, describeCron, DEFAULT_TIMEZONE } from './cron-utils.js';
+import { getNextRun, isValidCron, describeCron, getDefaultTimezone } from './cron-utils.js';
 import { parseTime, parseDuration, formatTime, getRelativeTime } from './time-utils.js';
+import { loadTimezone } from './tz.js';
 
 const db = getDb();
 
@@ -17,7 +18,7 @@ function escapeLike(str) {
 
 const ALLOWED_UPDATE_COLUMNS = new Set([
   'name', 'prompt', 'priority', 'require_idle', 'reply_channel', 'reply_endpoint',
-  'miss_threshold', 'type', 'cron_expression', 'interval_seconds', 'next_run_at', 'updated_at'
+  'miss_threshold', 'type', 'cron_expression', 'interval_seconds', 'next_run_at', 'timezone', 'updated_at'
 ]);
 
 const HELP = `
@@ -120,7 +121,7 @@ function cmdList() {
     return;
   }
 
-  console.log('\n  Tasks:\n');
+  console.log(`\n  Tasks (TZ: ${getDefaultTimezone()}):\n`);
   console.log('  ID              | Pri | Type      | Status  | Next Run           | Name');
   console.log('  ' + '-'.repeat(85));
 
@@ -240,7 +241,7 @@ function cmdAdd(args, options) {
     replyEndpoint,
     currentTime,
     currentTime,
-    DEFAULT_TIMEZONE
+    getDefaultTimezone()
   );
 
   console.log(`\nTask created: ${taskId}`);
@@ -630,6 +631,7 @@ function cmdUpdate(taskId, options) {
   }
 
   if (scheduleUpdated) {
+    updates.timezone = getDefaultTimezone();
     updatedFields.push('type', 'schedule');
   }
 
@@ -668,6 +670,14 @@ function cmdUpdate(taskId, options) {
 // ===== Main =====
 
 function main() {
+  try {
+    process.env.TZ = loadTimezone();
+  } catch (error) {
+    const code = error.code || 'UNKNOWN_TZ_ERROR';
+    console.error(`Error [${code}]: ${error.message}`);
+    process.exit(1);
+  }
+
   const { command, args, options } = parseArgs(process.argv.slice(2));
 
   switch (command) {

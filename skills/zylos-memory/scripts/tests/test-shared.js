@@ -1,72 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseEnvValue, dateInTimeZone, BUDGETS, ZYLOS_DIR, MEMORY_DIR, SESSIONS_DIR } from '../shared.js';
+import { dateInTimeZone, BUDGETS, ZYLOS_DIR, MEMORY_DIR, SESSIONS_DIR } from '../shared.js';
 import path from 'path';
-
-// ---------------------------------------------------------------------------
-// parseEnvValue
-// ---------------------------------------------------------------------------
-describe('parseEnvValue', () => {
-  it('strips double quotes', () => {
-    assert.equal(parseEnvValue('"hello"'), 'hello');
-  });
-
-  it('strips single quotes', () => {
-    assert.equal(parseEnvValue("'hello'"), 'hello');
-  });
-
-  it('returns unquoted string trimmed', () => {
-    assert.equal(parseEnvValue('  hello  '), 'hello');
-  });
-
-  it('handles empty double-quoted string', () => {
-    assert.equal(parseEnvValue('""'), '');
-  });
-
-  it('handles empty single-quoted string', () => {
-    assert.equal(parseEnvValue("''"), '');
-  });
-
-  it('returns empty string when input is whitespace only', () => {
-    assert.equal(parseEnvValue('   '), '');
-  });
-
-  it('does not strip mismatched quotes', () => {
-    assert.equal(parseEnvValue('"hello\''), '"hello\'');
-  });
-
-  it('preserves inner quotes', () => {
-    assert.equal(parseEnvValue('"say \\"hi\\""'), 'say \\"hi\\"');
-  });
-
-  it('handles value with spaces inside quotes', () => {
-    assert.equal(parseEnvValue('"America/New York"'), 'America/New York');
-  });
-
-  it('handles value with leading/trailing whitespace around quotes', () => {
-    assert.equal(parseEnvValue('  "trimmed"  '), 'trimmed');
-  });
-
-  it('strips inline comment from unquoted value', () => {
-    assert.equal(parseEnvValue('Asia/Shanghai # timezone'), 'Asia/Shanghai');
-  });
-
-  it('preserves # inside double-quoted value', () => {
-    assert.equal(parseEnvValue('"pass#word"'), 'pass#word');
-  });
-
-  it('preserves # inside single-quoted value', () => {
-    assert.equal(parseEnvValue("'pass#word'"), 'pass#word');
-  });
-
-  it('strips inline comment with multiple spaces', () => {
-    assert.equal(parseEnvValue('value   # comment'), 'value');
-  });
-
-  it('does not strip when # is at position 0 (bare hash)', () => {
-    assert.equal(parseEnvValue('#comment'), '#comment');
-  });
-});
 
 // ---------------------------------------------------------------------------
 // dateInTimeZone

@@ -11,6 +11,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import readline from 'readline';
+import { parse } from 'dotenv';
 
 const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
 
@@ -45,20 +46,10 @@ function prompt(question) {
 }
 
 function readEnvFile(filePath) {
-  const env = {};
   if (fs.existsSync(filePath)) {
-    const content = fs.readFileSync(filePath, 'utf8');
-    for (const line of content.split('\n')) {
-      const match = line.match(/^([^=]+)=(.*)$/);
-      if (match) {
-        let value = match[2].trim();
-        // Remove quotes
-        value = value.replace(/^["']|["']$/g, '');
-        env[match[1].trim()] = value;
-      }
-    }
+    return parse(fs.readFileSync(filePath, 'utf8'));
   }
-  return env;
+  return {};
 }
 
 function commandExists(cmd) {

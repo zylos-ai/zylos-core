@@ -8,6 +8,7 @@ import { getDb, cleanupHistory, now } from './database.js';
 import { getNextRun } from './cron-utils.js';
 import { sendViaC4, readStatusFile } from './runtime.js';
 import { formatTime } from './time-utils.js';
+import { loadTimezone } from './tz.js';
 
 const CHECK_INTERVAL = 10000;  // 10 seconds
 const CLEANUP_INTERVAL = 3600000;  // 1 hour
@@ -15,6 +16,14 @@ const TASK_TIMEOUT = 3600;  // 1 hour - max time a task can be 'running'
 
 let db;
 let running = true;
+
+try {
+  process.env.TZ = loadTimezone();
+} catch (error) {
+  const code = error.code || 'UNKNOWN_TZ_ERROR';
+  console.error(`[${new Date().toISOString()}] Fatal timezone config error [${code}]: ${error.message}`);
+  process.exit(1);
+}
 
 /**
  * Get the next pending task that's due
@@ -244,7 +253,7 @@ function handleStaleRunningTasks() {
  * Main scheduler loop
  */
 async function mainLoop() {
-  console.log(`[${new Date().toISOString()}] Scheduler V2 started`);
+  console.log(`[${new Date().toISOString()}] Scheduler V2 started (TZ: ${process.env.TZ})`);
   console.log(`Check interval: ${CHECK_INTERVAL}ms`);
 
   // Clean up stale running tasks on startup

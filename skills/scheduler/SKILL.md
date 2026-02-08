@@ -17,6 +17,7 @@ Enables Claude to work autonomously by dispatching scheduled tasks via C4 comm-b
 | `database.js` | SQLite persistence layer |
 | `cron-utils.js` | Cron expression utilities |
 | `time-utils.js` | Time parsing utilities |
+| `tz.js` | Timezone loading and validation |
 
 ## How It Works
 
@@ -202,6 +203,31 @@ Use `--reply-channel` and `--reply-endpoint` together to specify where task resu
 ## Database
 
 SQLite at `~/zylos/scheduler/scheduler.db`
+
+## Timezone
+
+Scheduler resolves `TZ` with this order:
+1. `~/zylos/.env` (`TZ=...`)
+2. External `process.env.TZ` (for example PM2 env block)
+3. `UTC` only when both are unset
+
+Example `.env`:
+
+```bash
+TZ=Asia/Shanghai
+```
+
+- Natural language times (`--at "tomorrow 9am"`) are parsed in configured timezone
+- Cron expressions are evaluated in configured timezone
+- CLI display uses configured timezone
+- Database timestamps remain UTC Unix seconds
+- If `TZ` is present but invalid, CLI/daemon exits with a clear error (fail-fast)
+
+After changing timezone config, restart scheduler:
+
+```bash
+pm2 restart scheduler
+```
 
 ## Service Management
 
