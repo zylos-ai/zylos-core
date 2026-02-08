@@ -380,6 +380,7 @@ async function handleUpgradeFlow(component, { jsonOutput, skipConfirm, skipEval 
     // Output result
     if (jsonOutput) {
       const output = { ...result };
+      if (changelog) output.changelog = changelog;
       if (evalResult) output.evaluation = evalResult;
       console.log(JSON.stringify(output, null, 2));
     } else if (result.success) {
