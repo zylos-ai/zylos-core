@@ -98,6 +98,52 @@ describe('scheduler timezone behavior', () => {
     }
   });
 
+  it('loadTimezone parses dotenv quoted values with inline comments', async () => {
+    const originalTz = process.env.TZ;
+    const originalZylosDir = process.env.ZYLOS_DIR;
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'scheduler-tz-dotenv-'));
+    const envPath = path.join(tmpDir, '.env');
+    try {
+      process.env.ZYLOS_DIR = tmpDir;
+      const { loadTimezone } = await importTimezoneModule();
+
+      fs.writeFileSync(envPath, 'TZ="Asia/Shanghai" # local timezone\n', 'utf8');
+      assert.equal(loadTimezone(), 'Asia/Shanghai');
+
+      fs.writeFileSync(envPath, "TZ='America/New_York' # east coast\n", 'utf8');
+      assert.equal(loadTimezone(), 'America/New_York');
+
+      fs.writeFileSync(envPath, 'TZ="Asia/Shanghai"\n', 'utf8');
+      assert.equal(loadTimezone(), 'Asia/Shanghai');
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+      if (originalTz === undefined) { delete process.env.TZ; } else { process.env.TZ = originalTz; }
+      if (originalZylosDir === undefined) { delete process.env.ZYLOS_DIR; } else { process.env.ZYLOS_DIR = originalZylosDir; }
+    }
+  });
+
+  it('loadTimezone falls back when .env has no TZ key', async () => {
+    const originalTz = process.env.TZ;
+    const originalZylosDir = process.env.ZYLOS_DIR;
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'scheduler-tz-nokey-'));
+    const envPath = path.join(tmpDir, '.env');
+    try {
+      process.env.ZYLOS_DIR = tmpDir;
+      const { loadTimezone } = await importTimezoneModule();
+
+      fs.writeFileSync(envPath, 'DOMAIN=example.com\nOTHER=value\n', 'utf8');
+      process.env.TZ = 'Europe/London';
+      assert.equal(loadTimezone(), 'Europe/London');
+
+      delete process.env.TZ;
+      assert.equal(loadTimezone(), 'UTC');
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+      if (originalTz === undefined) { delete process.env.TZ; } else { process.env.TZ = originalTz; }
+      if (originalZylosDir === undefined) { delete process.env.ZYLOS_DIR; } else { process.env.ZYLOS_DIR = originalZylosDir; }
+    }
+  });
+
   it('cmdUpdate syncs timezone column when schedule changes', () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'scheduler-cli-tz-'));
     const dbPath = path.join(tmpDir, 'scheduler', 'scheduler.db');

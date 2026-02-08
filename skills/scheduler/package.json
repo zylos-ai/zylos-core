@@ -10,7 +10,7 @@
   "scripts": {
     "start": "node scripts/daemon.js",
     "cli": "node scripts/cli.js",
-    "test": "node --test scripts/__tests__/timezone.test.js"
+    "test": "node --test scripts/__tests__/*.test.js"
   },
   "dependencies": {
     "better-sqlite3": "^12.6.2",
