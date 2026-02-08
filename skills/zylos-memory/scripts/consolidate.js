@@ -10,10 +10,12 @@ import fs from 'fs';
 import path from 'path';
 import { MEMORY_DIR, SESSIONS_DIR, BUDGETS, loadTimezoneFromEnv, dateInTimeZone } from './shared.js';
 
-function walkFiles(rootDir, prefix = '') {
+const MAX_WALK_DEPTH = 10;
+
+function walkFiles(rootDir, prefix = '', depth = 0) {
   const out = [];
 
-  if (!fs.existsSync(rootDir)) {
+  if (!fs.existsSync(rootDir) || depth > MAX_WALK_DEPTH) {
     return out;
   }
 
@@ -26,7 +28,7 @@ function walkFiles(rootDir, prefix = '') {
     const relPath = prefix ? `${prefix}/${entry.name}` : entry.name;
 
     if (entry.isDirectory()) {
-      out.push(...walkFiles(fullPath, relPath));
+      out.push(...walkFiles(fullPath, relPath, depth + 1));
       continue;
     }
 

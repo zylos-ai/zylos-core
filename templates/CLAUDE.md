@@ -180,8 +180,8 @@ Graceful restart with memory save.
 ### upgrade-claude/
 Upgrade Claude Code to latest version.
 
-### memory/
-Memory system guidance and best practices.
+### zylos-memory/ (C3)
+Persistent memory system with Inside Out architecture. Runs as a forked subagent via `/zylos-memory`.
 
 ### comm-bridge/ (C4)
 Communication gateway for Telegram, Lark, and other channels.

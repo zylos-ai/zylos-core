@@ -955,581 +955,75 @@ Reports: file sizes, entry counts, last-modified dates, size budgets.
 }
 ```
 
-### 9.5 scripts/session-start-inject.js
+### 9.5 scripts/shared.js
 
-Reads identity.md, state.md, references.md, and the primary user's profile.md, outputting them as `additionalContext` in JSON format for Claude Code's SessionStart hook.
+Shared utilities module extracted to eliminate duplication across scripts:
 
-```javascript
-#!/usr/bin/env node
-/**
- * Memory Session Start Injection
- *
- * Reads core memory files and outputs them as additionalContext for
- * Claude Code's SessionStart hook.
- *
- * Files injected:
- *   - identity.md (bot soul + digital assets)
- *   - state.md (active working state)
- *   - references.md (pointers to config files)
- *   - users/<primary>/profile.md (primary user profile, if configured)
- *
- * Reads TZ and PRIMARY_USER from ~/zylos/.env
- */
+- **Constants:** `ZYLOS_DIR`, `MEMORY_DIR`, `SESSIONS_DIR`, `BUDGETS`
+- **`parseEnvValue(raw)`** — Strips quotes from `.env` values
+- **`loadTimezoneFromEnv()`** — Reads `TZ` from `~/zylos/.env` and sets `process.env.TZ` (side effect)
+- **`dateInTimeZone(date, tz)`** — Formats a `Date` as `YYYY-MM-DD` in the given timezone using `Intl.DateTimeFormat('en-CA')`
 
-import fs from 'fs';
-import path from 'path';
+All scripts import from `shared.js` instead of duplicating these utilities.
 
-const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(process.env.HOME, 'zylos');
-const MEMORY_DIR = path.join(ZYLOS_DIR, 'memory');
+> **Source:** [`skills/zylos-memory/scripts/shared.js`](../skills/zylos-memory/scripts/shared.js)
 
-function readEnvFile() {
-  const envPath = path.join(ZYLOS_DIR, '.env');
-  const env = {};
-  if (fs.existsSync(envPath)) {
-    const content = fs.readFileSync(envPath, 'utf8');
-    for (const line of content.split('\n')) {
-      const trimmed = line.trim();
-      if (trimmed && !trimmed.startsWith('#')) {
-        const eqIdx = trimmed.indexOf('=');
-        if (eqIdx > 0) {
-          env[trimmed.slice(0, eqIdx).trim()] = trimmed.slice(eqIdx + 1).trim();
-        }
-      }
-    }
-  }
-  return env;
-}
+### 9.6 scripts/session-start-inject.js
 
-function readFileIfExists(filePath) {
-  if (fs.existsSync(filePath)) {
-    return fs.readFileSync(filePath, 'utf8');
-  }
-  return null;
-}
+Reads identity.md, state.md, and references.md, outputting them as plain text sections for Claude Code's SessionStart hook.
 
-function main() {
-  const env = readEnvFile();
-  const parts = [];
+> **Source:** [`skills/zylos-memory/scripts/session-start-inject.js`](../skills/zylos-memory/scripts/session-start-inject.js)
 
-  // Identity (SOUL + ASSETS)
-  const identity = readFileIfExists(path.join(MEMORY_DIR, 'identity.md'));
-  if (identity) {
-    parts.push('=== BOT IDENTITY ===');
-    parts.push(identity);
-  }
+Output format: plain text sections delimited by `=== LABEL ===` headers. Each memory file's content is printed directly. Missing files are reported as `(missing)`.
 
-  // Active State
-  const state = readFileIfExists(path.join(MEMORY_DIR, 'state.md'));
-  if (state) {
-    parts.push('=== ACTIVE STATE ===');
-    parts.push(state);
-  }
+### 9.7 scripts/rotate-session.js
 
-  // References (pointers to config)
-  const refs = readFileIfExists(path.join(MEMORY_DIR, 'references.md'));
-  if (refs) {
-    parts.push('=== REFERENCES ===');
-    parts.push(refs);
-  }
+Rotates `sessions/current.md` to a dated archive file (`YYYY-MM-DD.md`) at day boundary. Uses `loadTimezoneFromEnv()` from `shared.js` to determine the current date in the configured timezone.
 
-  // Primary user profile
-  const primaryUser = env.PRIMARY_USER;
-  if (primaryUser) {
-    const profilePath = path.join(MEMORY_DIR, 'users', primaryUser, 'profile.md');
-    const profile = readFileIfExists(profilePath);
-    if (profile) {
-      parts.push(`=== PRIMARY USER: ${primaryUser} ===`);
-      parts.push(profile);
-    }
-  }
+Key behaviors:
+- Compares `current.md` header date to today; skips rotation if same day
+- Handles filename collisions with numbered suffixes (capped at 100)
+- Creates a fresh `current.md` with today's date header after rotation
 
-  if (parts.length === 0) {
-    const output = {
-      additionalContext: '=== CORE MEMORY ===\n\nNo memory files found. This may be a fresh install.'
-    };
-    console.log(JSON.stringify(output));
-    return;
-  }
+> **Source:** [`skills/zylos-memory/scripts/rotate-session.js`](../skills/zylos-memory/scripts/rotate-session.js)
 
-  const output = {
-    additionalContext: parts.join('\n\n')
-  };
-  console.log(JSON.stringify(output));
-}
+### 9.8 scripts/memory-sync.js
 
-try {
-  main();
-} catch (err) {
-  // Hook scripts must not crash
-  console.error(`session-start-inject error: ${err.message}`);
-  console.log(JSON.stringify({ additionalContext: '' }));
-}
-```
+Helper for the Memory Sync flow. Self-contained: internally queries C4 for the unsummarized range via direct ESM import from `comm-bridge/scripts/c4-db.js`. No external arguments needed for the fetch operation.
 
-### 9.6 scripts/rotate-session.js
+Subcommands:
+- `fetch` — Calls `getUnsummarizedRange()`, saves the range to `last-fetch-range.json`, and prints conversations
+- `checkpoint --summary "text"` — Creates a checkpoint at the saved range's end_id, then cleans up the state file
+- `status` — Prints current unsummarized range and saved fetch range as JSON
 
-Rotates `sessions/current.md` to a dated archive file at day boundary. Reads timezone from `.env`.
+> **Source:** [`skills/zylos-memory/scripts/memory-sync.js`](../skills/zylos-memory/scripts/memory-sync.js)
 
-```javascript
-#!/usr/bin/env node
-/**
- * Session Log Rotation
- *
- * Checks if sessions/current.md has a date header from a previous day.
- * If so, renames it to sessions/YYYY-MM-DD.md and creates a fresh current.md.
- *
- * Uses timezone from ~/zylos/.env (TZ variable), falls back to system default.
- */
+### 9.9 scripts/daily-commit.js
 
-import fs from 'fs';
-import path from 'path';
+Daily local git commit for the `memory/` directory. Provides a safety net for memory recovery. Detects git user configuration errors and provides a helpful fix command.
 
-const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(process.env.HOME, 'zylos');
-const MEMORY_DIR = path.join(ZYLOS_DIR, 'memory');
-const SESSIONS_DIR = path.join(MEMORY_DIR, 'sessions');
-const CURRENT_FILE = path.join(SESSIONS_DIR, 'current.md');
+> **Source:** [`skills/zylos-memory/scripts/daily-commit.js`](../skills/zylos-memory/scripts/daily-commit.js)
 
-function loadTZ() {
-  if (!process.env.TZ) {
-    const envPath = path.join(ZYLOS_DIR, '.env');
-    if (fs.existsSync(envPath)) {
-      const content = fs.readFileSync(envPath, 'utf8');
-      for (const line of content.split('\n')) {
-        const trimmed = line.trim();
-        if (trimmed.startsWith('TZ=')) {
-          process.env.TZ = trimmed.slice(3).trim();
-          break;
-        }
-      }
-    }
-  }
-}
+### 9.10 scripts/consolidate.js
 
-function getLocalDateString() {
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = String(now.getMonth() + 1).padStart(2, '0');
-  const day = String(now.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-}
+Produces a JSON consolidation report including: file sizes, budget compliance checks, session archive candidates (older than 30 days), oldest/largest files, and actionable recommendations. Uses TZ-aware date comparison for session age calculation.
 
-function main() {
-  loadTZ();
+> **Source:** [`skills/zylos-memory/scripts/consolidate.js`](../skills/zylos-memory/scripts/consolidate.js)
 
-  if (!fs.existsSync(SESSIONS_DIR)) {
-    fs.mkdirSync(SESSIONS_DIR, { recursive: true });
-  }
+### 9.11 scripts/memory-status.js
 
-  const todayStr = getLocalDateString();
+Quick health check. Reports each core file's size vs budget, total file count and size, and overall health status. Distinguishes between "over budget" and "missing" file issues.
 
-  if (fs.existsSync(CURRENT_FILE)) {
-    const content = fs.readFileSync(CURRENT_FILE, 'utf8');
-    const dateMatch = content.match(/^# Session Log: (\d{4}-\d{2}-\d{2})/m);
+> **Source:** [`skills/zylos-memory/scripts/memory-status.js`](../skills/zylos-memory/scripts/memory-status.js)
 
-    if (dateMatch && dateMatch[1] !== todayStr) {
-      const archivePath = path.join(SESSIONS_DIR, `${dateMatch[1]}.md`);
-      fs.renameSync(CURRENT_FILE, archivePath);
-      console.log(`Rotated: current.md -> ${dateMatch[1]}.md`);
-    } else if (dateMatch && dateMatch[1] === todayStr) {
-      console.log('No rotation needed (same day).');
-      return;
-    }
-  }
+### 9.12 Implementation Notes
 
-  const header = `# Session Log: ${todayStr}\n\n`;
-  fs.writeFileSync(CURRENT_FILE, header);
-  console.log(`Created fresh current.md for ${todayStr}`);
-}
-
-main();
-```
-
-### 9.7 scripts/memory-sync.js
-
-Helper for the Memory Sync flow. Self-contained: internally queries C4 for the unsummarized range. No external arguments needed for the fetch operation.
-
-```javascript
-#!/usr/bin/env node
-/**
- * Memory Sync Helper
- *
- * Self-contained interface for memory sync operations.
- * Internally determines what needs processing by querying C4.
- *
- * Subcommands:
- *   fetch                              Fetch unsummarized conversations from C4
- *                                      (internally calls getUnsummarizedRange())
- *   checkpoint --summary "text"        Create C4 checkpoint using the end_id
- *                                      from the last fetch operation
- *   status                             Show unsummarized conversation count
- */
-
-import { execFileSync } from 'child_process';
-import path from 'path';
-import os from 'os';
-import fs from 'fs';
-
-const SKILLS_DIR = path.join(os.homedir(), 'zylos', '.claude', 'skills');
-const C4_SCRIPTS = path.join(SKILLS_DIR, 'comm-bridge', 'scripts');
-const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
-const STATE_FILE = path.join(ZYLOS_DIR, 'zylos-memory', 'last-fetch-range.json');
-
-const args = process.argv.slice(2);
-const command = args[0];
-
-function run(script, scriptArgs = []) {
-  return execFileSync('node', [path.join(C4_SCRIPTS, script), ...scriptArgs], {
-    encoding: 'utf8',
-    timeout: 30000
-  });
-}
-
-function ensureStateDir() {
-  const dir = path.dirname(STATE_FILE);
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
-  }
-}
-
-switch (command) {
-  case 'fetch': {
-    // Internally determine the unsummarized range from C4
-    const rangeOutput = run('c4-db.js', ['unsummarized-range']);
-    const range = JSON.parse(rangeOutput);
-
-    if (range.count === 0) {
-      console.log(JSON.stringify({ count: 0, message: 'No unsummarized conversations.' }));
-      break;
-    }
-
-    // Save the range for checkpoint to use later
-    ensureStateDir();
-    fs.writeFileSync(STATE_FILE, JSON.stringify(range));
-
-    // Fetch the conversations
-    console.log(run('c4-fetch.js', ['--begin', String(range.begin_id), '--end', String(range.end_id)]));
-    break;
-  }
-  case 'checkpoint': {
-    // Read the saved range from the last fetch
-    if (!fs.existsSync(STATE_FILE)) {
-      console.error('No fetch range saved. Run fetch first.');
-      process.exit(1);
-    }
-    const savedRange = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
-    const summaryIdx = args.indexOf('--summary');
-    const summary = summaryIdx >= 0 ? args[summaryIdx + 1] : 'Memory sync checkpoint';
-
-    console.log(run('c4-checkpoint.js', [String(savedRange.end_id), '--summary', summary]));
-
-    // Clean up state file after successful checkpoint
-    fs.unlinkSync(STATE_FILE);
-    break;
-  }
-  case 'status': {
-    console.log(run('c4-db.js', ['unsummarized']));
-    break;
-  }
-  default:
-    console.log(`Memory Sync Helper
-
-Usage:
-  memory-sync.js fetch                          Fetch unsummarized conversations (auto-detects range)
-  memory-sync.js checkpoint --summary "text"    Create checkpoint (uses range from last fetch)
-  memory-sync.js status                         Show unsummarized count
-`);
-}
-```
-
-### 9.8 scripts/daily-commit.js
-
-Daily local git commit for the memory/ directory. Provides a safety net for memory recovery.
-
-```javascript
-#!/usr/bin/env node
-/**
- * Daily Memory Git Commit
- *
- * Creates a local git commit of the memory/ directory if there are changes.
- * Local only -- does not push to remote.
- *
- * Usage: node daily-commit.js
- *
- * Scheduled to run daily (e.g., during evening reflection).
- * Also called by the unified sync flow after state save.
- */
-
-import { execSync } from 'child_process';
-import fs from 'fs';
-import path from 'path';
-import os from 'os';
-
-const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
-const MEMORY_DIR = path.join(ZYLOS_DIR, 'memory');
-
-function loadTZ() {
-  const envPath = path.join(ZYLOS_DIR, '.env');
-  try {
-    const content = fs.readFileSync(envPath, 'utf8');
-    for (const line of content.split('\n')) {
-      const trimmed = line.trim();
-      if (trimmed.startsWith('TZ=') && !process.env.TZ) {
-        process.env.TZ = trimmed.slice(3).trim();
-        break;
-      }
-    }
-  } catch { /* .env may not exist */ }
-}
-
-function getLocalDateString() {
-  const now = new Date();
-  return now.toISOString().slice(0, 10);
-}
-
-function main() {
-  loadTZ();
-
-  // Check if memory/ has any changes (staged or unstaged)
-  try {
-    execSync('git diff --quiet -- memory/', { cwd: ZYLOS_DIR, stdio: 'pipe' });
-    execSync('git diff --cached --quiet -- memory/', { cwd: ZYLOS_DIR, stdio: 'pipe' });
-    // No changes
-    console.log('No memory changes to commit.');
-    return;
-  } catch {
-    // Changes exist -- proceed with commit
-  }
-
-  const dateStr = getLocalDateString();
-  const commitMsg = `memory: daily snapshot ${dateStr}`;
-
-  try {
-    execSync('git add memory/', { cwd: ZYLOS_DIR, stdio: 'pipe' });
-    execSync(`git commit -m "${commitMsg}"`, { cwd: ZYLOS_DIR, stdio: 'pipe' });
-    console.log(`Committed: ${commitMsg}`);
-  } catch (err) {
-    console.error(`Git commit failed: ${err.message}`);
-    // Non-fatal -- the memory files are still on disk
-  }
-}
-
-main();
-```
-
-### 9.9 scripts/consolidate.js
-
-Produces a consolidation report for Claude to act on.
-
-```javascript
-#!/usr/bin/env node
-/**
- * Memory Consolidation Report
- *
- * Scans memory files and reports:
- * - Session logs older than 30 days (archive candidates)
- * - File sizes vs budgets
- * - Stale reference entries (freshness tracking)
- *
- * Output: JSON report for Claude to process
- */
-
-import fs from 'fs';
-import path from 'path';
-
-const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(process.env.HOME, 'zylos');
-const MEMORY_DIR = path.join(ZYLOS_DIR, 'memory');
-const SESSIONS_DIR = path.join(MEMORY_DIR, 'sessions');
-const ARCHIVE_DIR = path.join(MEMORY_DIR, 'archive');
-
-const SIZE_BUDGETS = {
-  'identity.md': 1536,    // ~1.5KB
-  'state.md': 2048,       // ~2KB
-  'references.md': 1024   // ~1KB
-};
-
-function main() {
-  const report = {
-    timestamp: new Date().toISOString(),
-    coreFiles: [],
-    sessions: { archiveCandidates: [] },
-    reference: [],
-    users: [],
-    recommendations: []
-  };
-
-  // Check core files
-  for (const [file, budget] of Object.entries(SIZE_BUDGETS)) {
-    const filePath = path.join(MEMORY_DIR, file);
-    if (fs.existsSync(filePath)) {
-      const stat = fs.statSync(filePath);
-      report.coreFiles.push({
-        file,
-        sizeBytes: stat.size,
-        budget,
-        overBudget: stat.size > budget,
-        lastModified: stat.mtime.toISOString()
-      });
-      if (stat.size > budget) {
-        report.recommendations.push(
-          `${file} is ${stat.size} bytes (budget: ${budget}). Trim content.`
-        );
-      }
-    }
-  }
-
-  // Find old session logs
-  const thirtyDaysAgo = new Date();
-  thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-
-  if (fs.existsSync(SESSIONS_DIR)) {
-    for (const file of fs.readdirSync(SESSIONS_DIR)) {
-      if (file === 'current.md' || file === '.gitkeep') continue;
-      const dateMatch = file.match(/^(\d{4}-\d{2}-\d{2})\.md$/);
-      if (dateMatch && new Date(dateMatch[1]) < thirtyDaysAgo) {
-        report.sessions.archiveCandidates.push(file);
-      }
-    }
-    if (report.sessions.archiveCandidates.length > 0) {
-      report.recommendations.push(
-        `${report.sessions.archiveCandidates.length} session log(s) older than 30 days. Consider moving to archive/.`
-      );
-    }
-  }
-
-  // Check reference file sizes and freshness
-  const refDir = path.join(MEMORY_DIR, 'reference');
-  if (fs.existsSync(refDir)) {
-    const now = new Date();
-    for (const file of fs.readdirSync(refDir)) {
-      const filePath = path.join(refDir, file);
-      const stat = fs.statSync(filePath);
-      const daysSinceModified = Math.floor((now - stat.mtime) / (1000 * 60 * 60 * 24));
-      let freshness = 'active';
-      if (daysSinceModified > 90) freshness = 'fading';
-      else if (daysSinceModified > 30) freshness = 'aging';
-      else if (daysSinceModified > 7) freshness = 'aging';
-
-      report.reference.push({
-        file: `reference/${file}`,
-        sizeBytes: stat.size,
-        lastModified: stat.mtime.toISOString(),
-        daysSinceModified,
-        freshness
-      });
-      if (stat.size > 10240) {
-        report.recommendations.push(
-          `reference/${file} is ${stat.size} bytes. Consider archiving old entries.`
-        );
-      }
-      if (freshness === 'fading') {
-        report.recommendations.push(
-          `reference/${file} last modified ${daysSinceModified} days ago (fading). Review for archival or update.`
-        );
-      }
-    }
-  }
-
-  // Check user profiles
-  const usersDir = path.join(MEMORY_DIR, 'users');
-  if (fs.existsSync(usersDir)) {
-    for (const userId of fs.readdirSync(usersDir)) {
-      const profilePath = path.join(usersDir, userId, 'profile.md');
-      if (fs.existsSync(profilePath)) {
-        const stat = fs.statSync(profilePath);
-        report.users.push({
-          userId,
-          sizeBytes: stat.size,
-          lastModified: stat.mtime.toISOString()
-        });
-      }
-    }
-  }
-
-  // Ensure archive directory exists
-  if (!fs.existsSync(ARCHIVE_DIR)) {
-    fs.mkdirSync(ARCHIVE_DIR, { recursive: true });
-  }
-
-  console.log(JSON.stringify(report, null, 2));
-}
-
-main();
-```
-
-### 9.10 scripts/memory-status.js
-
-Quick health check of the memory system.
-
-```javascript
-#!/usr/bin/env node
-/**
- * Memory Status Report
- *
- * Quick health check: file sizes, last modified, budget usage.
- */
-
-import fs from 'fs';
-import path from 'path';
-
-const MEMORY_DIR = path.join(process.env.HOME, 'zylos', 'memory');
-
-function formatSize(bytes) {
-  if (bytes < 1024) return `${bytes}B`;
-  return `${(bytes / 1024).toFixed(1)}KB`;
-}
-
-function scanDir(dir, prefix = '') {
-  const results = [];
-  if (!fs.existsSync(dir)) return results;
-  const entries = fs.readdirSync(dir, { withFileTypes: true });
-  for (const entry of entries) {
-    if (entry.name.startsWith('.')) continue;
-    const fullPath = path.join(dir, entry.name);
-    const displayPath = prefix ? `${prefix}/${entry.name}` : entry.name;
-    if (entry.isDirectory()) {
-      results.push(...scanDir(fullPath, displayPath));
-    } else {
-      const stat = fs.statSync(fullPath);
-      results.push({ path: displayPath, size: stat.size, modified: stat.mtime });
-    }
-  }
-  return results;
-}
-
-function main() {
-  const files = scanDir(MEMORY_DIR);
-  const lines = ['Memory Status Report', '====================', ''];
-
-  const budgets = { 'identity.md': 1536, 'state.md': 2048, 'references.md': 1024 };
-  let totalSize = 0;
-
-  for (const f of files) {
-    const sizeStr = formatSize(f.size).padStart(8);
-    const modStr = f.modified.toISOString().slice(0, 16).replace('T', ' ');
-    const budget = budgets[f.path];
-    const marker = budget && f.size > budget ? ' [OVER BUDGET]' : '';
-    lines.push(`${sizeStr}  ${modStr}  ${f.path}${marker}`);
-    totalSize += f.size;
-  }
-
-  lines.push('');
-  lines.push(`Total: ${formatSize(totalSize)} across ${files.length} files`);
-
-  for (const [file, budget] of Object.entries(budgets)) {
-    const found = files.find(f => f.path === file);
-    if (found) {
-      const pct = Math.round((found.size / budget) * 100);
-      lines.push(`${file} budget: ${formatSize(found.size)} / ${formatSize(budget)} (${pct}%)`);
-    }
-  }
-
-  console.log(lines.join('\n'));
-}
-
-main();
-```
+> The source code in sections 9.5-9.11 above is described by purpose and behavior. For the actual implementation, refer to the source files linked above. The scripts share common utilities via `shared.js` (Section 9.5) to eliminate duplication of timezone handling, path constants, and budget definitions.
+>
+> **Phase 1 simplification:** The freshness lifecycle described in Section 6.2 is currently computed at the file level (mtime) rather than per-entry importance metadata. Importance-based immunity is deferred to Phase 2.
 
 ---
+
 
 ## 10. templates/CLAUDE.md Memory Section
 

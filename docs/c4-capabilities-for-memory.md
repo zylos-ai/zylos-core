@@ -1,5 +1,7 @@
 # C4 Capabilities Analysis for Memory Optimization
 
+> **Note:** This document was written during pre-v5 design. The memory system is now implemented as `skills/zylos-memory/` with the Inside Out architecture. Some details below (e.g., invocation syntax, threshold-check hook) are superseded by v5. See `docs/memory-architecture-v5.md` for the current design.
+
 Analysis of the C4 Communication Bridge modules and their relevance to building a memory system.
 
 ---

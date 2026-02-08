@@ -38,7 +38,9 @@ function ensureStateDir() {
 
 function writeRange(range) {
   ensureStateDir();
-  fs.writeFileSync(STATE_FILE, `${JSON.stringify(range, null, 2)}\n`, 'utf8');
+  const tmpFile = `${STATE_FILE}.tmp`;
+  fs.writeFileSync(tmpFile, `${JSON.stringify(range, null, 2)}\n`, 'utf8');
+  fs.renameSync(tmpFile, STATE_FILE);
 }
 
 function readSavedRange() {

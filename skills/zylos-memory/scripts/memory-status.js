@@ -25,8 +25,10 @@ function fileInfo(filePath) {
   };
 }
 
-function countAllFiles(dir) {
-  if (!fs.existsSync(dir)) {
+const MAX_WALK_DEPTH = 10;
+
+function countAllFiles(dir, depth = 0) {
+  if (!fs.existsSync(dir) || depth > MAX_WALK_DEPTH) {
     return [];
   }
 
@@ -37,7 +39,7 @@ function countAllFiles(dir) {
     }
     const fullPath = path.join(dir, entry.name);
     if (entry.isDirectory()) {
-      out.push(...countAllFiles(fullPath));
+      out.push(...countAllFiles(fullPath, depth + 1));
     } else {
       const stat = fs.statSync(fullPath);
       out.push({ sizeBytes: stat.size });
