@@ -44,7 +44,7 @@ function walkFiles(rootDir, prefix = '', depth = 0) {
   return out;
 }
 
-function parseSessionDate(fileName) {
+export function parseSessionDate(fileName) {
   const match = fileName.match(/^(\d{4}-\d{2}-\d{2})(?:-\d+)?\.md$/);
   return match ? match[1] : null;
 }
@@ -151,4 +151,5 @@ function main() {
   process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
 }
 
-main();
+import { fileURLToPath } from 'url';
+if (process.argv[1] === fileURLToPath(import.meta.url)) main();

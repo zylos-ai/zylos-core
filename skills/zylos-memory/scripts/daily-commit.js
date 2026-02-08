@@ -55,4 +55,5 @@ function main() {
   }
 }
 
-main();
+import { fileURLToPath } from 'url';
+if (process.argv[1] === fileURLToPath(import.meta.url)) main();

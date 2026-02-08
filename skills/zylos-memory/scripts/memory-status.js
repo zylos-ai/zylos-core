@@ -7,7 +7,7 @@ import fs from 'fs';
 import path from 'path';
 import { MEMORY_DIR, BUDGETS } from './shared.js';
 
-function formatBytes(bytes) {
+export function formatBytes(bytes) {
   if (bytes < 1024) {
     return `${bytes}B`;
   }
@@ -98,4 +98,5 @@ function main() {
   process.stdout.write(`${lines.join('\n')}\n`);
 }
 
-main();
+import { fileURLToPath } from 'url';
+if (process.argv[1] === fileURLToPath(import.meta.url)) main();

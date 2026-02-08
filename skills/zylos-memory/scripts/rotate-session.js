@@ -13,7 +13,7 @@ import { SESSIONS_DIR, loadTimezoneFromEnv, dateInTimeZone } from './shared.js';
 const CURRENT_FILE = path.join(SESSIONS_DIR, 'current.md');
 const MAX_ARCHIVE_SUFFIX = 100;
 
-function findHeaderDate(text) {
+export function findHeaderDate(text) {
   const match = text.match(/^# Session Log:\s*(\d{4}-\d{2}-\d{2})\s*$/m);
   return match ? match[1] : null;
 }
@@ -68,4 +68,5 @@ function main() {
   console.log(`Created fresh current.md for ${today}`);
 }
 
-main();
+import { fileURLToPath } from 'url';
+if (process.argv[1] === fileURLToPath(import.meta.url)) main();

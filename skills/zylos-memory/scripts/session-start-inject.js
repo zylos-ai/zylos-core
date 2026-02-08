@@ -45,4 +45,5 @@ function main() {
   process.stdout.write(`${parts.join('\n\n')}\n`);
 }
 
-main();
+import { fileURLToPath } from 'url';
+if (process.argv[1] === fileURLToPath(import.meta.url)) main();

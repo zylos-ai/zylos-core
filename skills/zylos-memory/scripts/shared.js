@@ -11,9 +11,9 @@ export const MEMORY_DIR = path.join(ZYLOS_DIR, 'memory');
 export const SESSIONS_DIR = path.join(MEMORY_DIR, 'sessions');
 
 export const BUDGETS = {
-  'identity.md': 1536,
-  'state.md': 2048,
-  'references.md': 1024
+  'identity.md': 4096,
+  'state.md': 4096,
+  'references.md': 2048
 };
 
 export function parseEnvValue(raw) {
@@ -24,6 +24,11 @@ export function parseEnvValue(raw) {
   return trimmed;
 }
 
+/**
+ * Load TZ from ~/zylos/.env and return it.
+ * Side effect: sets process.env.TZ, which changes Date behavior process-wide.
+ * @returns {string|null} timezone string or null
+ */
 export function loadTimezoneFromEnv() {
   const envPath = path.join(ZYLOS_DIR, '.env');
   try {
