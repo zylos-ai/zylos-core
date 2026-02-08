@@ -11,7 +11,6 @@
 
 import fs from 'fs';
 import path from 'path';
-import os from 'os';
 import {
   getUnsummarizedRange,
   getConversationsByRange,
@@ -19,8 +18,8 @@ import {
   formatConversations,
   close
 } from '../../comm-bridge/scripts/c4-db.js';
+import { ZYLOS_DIR } from './shared.js';
 
-const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
 const STATE_FILE = path.join(ZYLOS_DIR, 'zylos-memory', 'last-fetch-range.json');
 
 function usage() {
@@ -97,7 +96,12 @@ function handleCheckpoint(args) {
   const summary = getArgValue(args, '--summary') || 'Memory sync checkpoint';
   const checkpoint = createCheckpoint(savedRange.end_id, summary);
 
-  fs.unlinkSync(STATE_FILE);
+  try {
+    fs.unlinkSync(STATE_FILE);
+  } catch (err) {
+    console.warn(`Warning: checkpoint created but failed to remove state file: ${err.message}`);
+  }
+
   console.log(`Checkpoint created: ${JSON.stringify(checkpoint)}`);
 }
 

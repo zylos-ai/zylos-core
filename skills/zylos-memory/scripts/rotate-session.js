@@ -8,78 +8,10 @@
 
 import fs from 'fs';
 import path from 'path';
-import os from 'os';
+import { SESSIONS_DIR, loadTimezoneFromEnv, dateInTimeZone } from './shared.js';
 
-const ZYLOS_DIR = path.join(os.homedir(), 'zylos');
-const ENV_PATH = path.join(ZYLOS_DIR, '.env');
-const MEMORY_DIR = path.join(ZYLOS_DIR, 'memory');
-const SESSIONS_DIR = path.join(MEMORY_DIR, 'sessions');
 const CURRENT_FILE = path.join(SESSIONS_DIR, 'current.md');
-
-function parseEnvValue(raw) {
-  const trimmed = raw.trim();
-  if ((trimmed.startsWith('"') && trimmed.endsWith('"')) || (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
-    return trimmed.slice(1, -1);
-  }
-  return trimmed;
-}
-
-function loadTimezoneFromEnv() {
-  try {
-    const envText = fs.readFileSync(ENV_PATH, 'utf8');
-    for (const line of envText.split('\n')) {
-      const trimmed = line.trim();
-      if (!trimmed || trimmed.startsWith('#')) {
-        continue;
-      }
-      const idx = trimmed.indexOf('=');
-      if (idx < 0) {
-        continue;
-      }
-      const key = trimmed.slice(0, idx).trim();
-      if (key !== 'TZ') {
-        continue;
-      }
-      const value = parseEnvValue(trimmed.slice(idx + 1));
-      if (value) {
-        process.env.TZ = value;
-        return value;
-      }
-    }
-  } catch {
-    // .env may not exist on fresh setups
-  }
-
-  return process.env.TZ || null;
-}
-
-function dateInTimeZone(date, tz) {
-  if (tz) {
-    try {
-      const parts = new Intl.DateTimeFormat('en-CA', {
-        timeZone: tz,
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit'
-      }).formatToParts(date);
-
-      const year = parts.find((p) => p.type === 'year')?.value;
-      const month = parts.find((p) => p.type === 'month')?.value;
-      const day = parts.find((p) => p.type === 'day')?.value;
-
-      if (year && month && day) {
-        return `${year}-${month}-${day}`;
-      }
-    } catch {
-      // Invalid TZ value falls back to local date below
-    }
-  }
-
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-}
+const MAX_ARCHIVE_SUFFIX = 100;
 
 function findHeaderDate(text) {
   const match = text.match(/^# Session Log:\s*(\d{4}-\d{2}-\d{2})\s*$/m);
@@ -94,14 +26,14 @@ function resolveArchivePath(baseDate) {
     return candidate;
   }
 
-  let counter = 1;
-  while (true) {
+  for (let counter = 1; counter <= MAX_ARCHIVE_SUFFIX; counter++) {
     candidate = path.join(SESSIONS_DIR, `${safeDate}-${counter}.md`);
     if (!fs.existsSync(candidate)) {
       return candidate;
     }
-    counter += 1;
   }
+
+  throw new Error(`Too many archive files for ${safeDate} (exceeded ${MAX_ARCHIVE_SUFFIX})`);
 }
 
 function writeFreshCurrent(today) {

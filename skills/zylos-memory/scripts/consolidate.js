@@ -8,17 +8,7 @@
 
 import fs from 'fs';
 import path from 'path';
-import os from 'os';
-
-const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
-const MEMORY_DIR = path.join(ZYLOS_DIR, 'memory');
-const SESSIONS_DIR = path.join(MEMORY_DIR, 'sessions');
-
-const BUDGETS = {
-  'identity.md': 1536,
-  'state.md': 2048,
-  'references.md': 1024
-};
+import { MEMORY_DIR, SESSIONS_DIR, BUDGETS, loadTimezoneFromEnv, dateInTimeZone } from './shared.js';
 
 function walkFiles(rootDir, prefix = '') {
   const out = [];
@@ -57,15 +47,16 @@ function parseSessionDate(fileName) {
   return match ? match[1] : null;
 }
 
-function sessionArchiveCandidates() {
+function sessionArchiveCandidates(tz) {
   const candidates = [];
 
   if (!fs.existsSync(SESSIONS_DIR)) {
     return candidates;
   }
 
-  const cutoff = new Date();
-  cutoff.setDate(cutoff.getDate() - 30);
+  const cutoffDate = new Date();
+  cutoffDate.setDate(cutoffDate.getDate() - 30);
+  const cutoffStr = dateInTimeZone(cutoffDate, tz);
 
   for (const fileName of fs.readdirSync(SESSIONS_DIR)) {
     if (fileName === 'current.md' || fileName.startsWith('.')) {
@@ -77,8 +68,7 @@ function sessionArchiveCandidates() {
       continue;
     }
 
-    const date = new Date(`${sessionDate}T00:00:00`);
-    if (!Number.isNaN(date.valueOf()) && date < cutoff) {
+    if (sessionDate < cutoffStr) {
       candidates.push(fileName);
     }
   }
@@ -119,6 +109,7 @@ function topLargest(files, count = 10) {
 }
 
 function main() {
+  const tz = loadTimezoneFromEnv();
   const files = walkFiles(MEMORY_DIR);
   const budgetChecks = coreBudgetChecks();
   const overBudget = budgetChecks.filter((item) => item.overBudget).map((item) => item.file);
@@ -136,7 +127,7 @@ function main() {
       overBudget
     },
     sessions: {
-      archiveCandidatesOlderThan30Days: sessionArchiveCandidates()
+      archiveCandidatesOlderThan30Days: sessionArchiveCandidates(tz)
     },
     oldestFiles: [...files].sort((a, b) => b.ageDays - a.ageDays).slice(0, 10),
     largestFiles: topLargest(files),

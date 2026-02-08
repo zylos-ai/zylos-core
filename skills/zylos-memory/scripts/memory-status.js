@@ -5,15 +5,7 @@
 
 import fs from 'fs';
 import path from 'path';
-import os from 'os';
-
-const MEMORY_DIR = path.join(process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos'), 'memory');
-
-const BUDGETS = {
-  'identity.md': 1536,
-  'state.md': 2048,
-  'references.md': 1024
-};
+import { MEMORY_DIR, BUDGETS } from './shared.js';
 
 function formatBytes(bytes) {
   if (bytes < 1024) {
@@ -60,12 +52,13 @@ function main() {
   lines.push('============');
 
   let overBudgetCount = 0;
+  let missingCount = 0;
 
   for (const [name, budget] of Object.entries(BUDGETS)) {
     const info = fileInfo(path.join(MEMORY_DIR, name));
     if (!info) {
-      lines.push(`${name}: missing`);
-      overBudgetCount += 1;
+      lines.push(`${name}: MISSING`);
+      missingCount += 1;
       continue;
     }
 
@@ -86,10 +79,18 @@ function main() {
   lines.push(`Total files: ${allFiles.length}`);
   lines.push(`Total size: ${formatBytes(totalBytes)}`);
 
-  if (overBudgetCount === 0) {
+  const issues = [];
+  if (overBudgetCount > 0) {
+    issues.push(`${overBudgetCount} over budget`);
+  }
+  if (missingCount > 0) {
+    issues.push(`${missingCount} missing`);
+  }
+
+  if (issues.length === 0) {
     lines.push('Health: good');
   } else {
-    lines.push(`Health: attention needed (${overBudgetCount} core file issue(s))`);
+    lines.push(`Health: attention needed (${issues.join(', ')})`);
   }
 
   process.stdout.write(`${lines.join('\n')}\n`);

@@ -7,10 +7,7 @@
 
 import fs from 'fs';
 import path from 'path';
-import os from 'os';
-
-const ZYLOS_DIR = path.join(os.homedir(), 'zylos');
-const MEMORY_DIR = path.join(ZYLOS_DIR, 'memory');
+import { MEMORY_DIR } from './shared.js';
 
 function readFileSafe(filePath) {
   try {
