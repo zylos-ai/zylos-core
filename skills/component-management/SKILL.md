@@ -215,6 +215,12 @@ When user sends component management requests via C4 comm-bridge (Telegram, Lark
 The request is from C4 when the message arrives via a communication channel
 (e.g., `<user> said: ...` with a `reply via:` instruction).
 
+### C4 Reply Formatting
+
+**All `--json` outputs include a `reply` field with a pre-formatted plain text reply.**
+**When the JSON output has a `reply` field, use it directly as the C4 reply.**
+This ensures the reply format is always correct regardless of SKILL.md version.
+
 ### C4 Command Mapping
 
 **CRITICAL: "upgrade \<name\>" MUST ONLY run --check. NEVER execute the actual upgrade without the word "confirm" in the user's message.**
@@ -334,7 +340,7 @@ Run `zylos upgrade --self --yes --json`, parse the JSON output, and reply with t
 
 ### C4 Output Formatting
 
-When formatting `--json` output for C4 replies:
+**NOTE: As of v0.1.0-beta.13, use the `reply` field from JSON output directly (see "C4 Reply Formatting" above). The rules below are kept as fallback reference only.**
 
 - Plain text only, no markdown
 - For `info --json`: format as `<name> v<version>\nType: <type>\nRepo: <repo>\nService: <name> (<status>)`
