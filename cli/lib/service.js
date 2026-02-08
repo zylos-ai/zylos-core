@@ -36,11 +36,19 @@ export function registerService({ name, entry, skillDir, type }) {
       // Not running — fine
     }
 
-    // Start service
-    execSync(`pm2 start "${scriptPath}" --name "${serviceName}"`, {
-      stdio: 'pipe',
-      timeout: 30000,
-    });
+    // Start service — prefer ecosystem.config.cjs if available
+    const ecosystemPath = path.join(skillDir, 'ecosystem.config.cjs');
+    if (fs.existsSync(ecosystemPath)) {
+      execSync(`pm2 start "${ecosystemPath}"`, {
+        stdio: 'pipe',
+        timeout: 30000,
+      });
+    } else {
+      execSync(`pm2 start "${scriptPath}" --name "${serviceName}"`, {
+        stdio: 'pipe',
+        timeout: 30000,
+      });
+    }
 
     // Save PM2 process list
     execSync('pm2 save 2>/dev/null', { stdio: 'pipe' });
