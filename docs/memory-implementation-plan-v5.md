@@ -49,23 +49,12 @@ Outputs:
 - Creates fresh `current.md` header for current local day.  
 Logic: Parse header date, compare with local date in configured TZ, rotate idempotently.
 
-5. `skills/zylos-memory/scripts/memory-sync.js`  
-Purpose: Self-contained C4 sync helper (fetch/checkpoint/status).  
-Inputs:  
-- C4 scripts in `~/zylos/.claude/skills/comm-bridge/scripts/`  
-- `c4-db.js unsummarized` (current existing command)  
-- `c4-fetch.js --begin --end`  
-- `c4-checkpoint.js <endId> --summary`  
-- Local state file `~/zylos/zylos-memory/last-fetch-range.json`  
-Outputs:  
-- Fetch output text (checkpoint summary + conversations)  
-- Checkpoint command result text  
-- Status JSON text  
-Logic:  
-- `fetch`: query unsummarized range internally, store range state, fetch conversations by range.  
-- `checkpoint`: read saved range, write checkpoint using `end_id`, clear state file on success.  
-- `status`: print unsummarized count/range.  
-Note: Use existing C4 command `unsummarized`; do not depend on nonexistent `unsummarized-range`.
+5. C4 integration (via comm-bridge CLI, no dedicated memory-sync script)
+Purpose: Fetch conversations and create checkpoints during sync flow.
+The SKILL.md workflow instructs Claude to call comm-bridge CLI directly:
+- `c4-fetch.js --unsummarized` — fetches unsummarized range + conversations
+- `c4-checkpoint.js <end_id> --summary "..."` — creates checkpoint
+No cross-skill import dependencies. No state file needed (range is in Claude's context).
 
 6. `skills/zylos-memory/scripts/daily-commit.js`  
 Purpose: Local safety snapshot of `memory/` via git.  

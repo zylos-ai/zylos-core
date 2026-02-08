@@ -53,16 +53,16 @@ Both use `/zylos-memory` with no arguments.
 
 1. Rotate session log if needed:
    `node ~/zylos/.claude/skills/zylos-memory/scripts/rotate-session.js`
-2. Fetch unsummarized conversations:
-   `node ~/zylos/.claude/skills/zylos-memory/scripts/memory-sync.js fetch`
+2. Fetch unsummarized conversations from C4:
+   `node ~/zylos/.claude/skills/comm-bridge/scripts/c4-fetch.js --unsummarized`
+   If output says "No unsummarized conversations.", sync is done.
+   Otherwise, note the `end_id` from the `[Unsummarized Range]` line.
 3. Read memory files (`identity.md`, `state.md`, `references.md`, user profiles, `reference/*`, `sessions/current.md`).
 4. Extract and classify updates into the correct files.
-5. Write memory updates (flush always runs, even if no new conversations).
-6. Create checkpoint when a batch was processed:
-   `node ~/zylos/.claude/skills/zylos-memory/scripts/memory-sync.js checkpoint --summary "SUMMARY"`
-7. Run daily commit helper:
-   `node ~/zylos/.claude/skills/zylos-memory/scripts/daily-commit.js`
-8. Confirm completion.
+5. Write memory updates.
+6. Create checkpoint (use the end_id from step 2):
+   `node ~/zylos/.claude/skills/comm-bridge/scripts/c4-checkpoint.js <end_id> --summary "SUMMARY"`
+7. Confirm completion.
 
 ## Classification Rules
 
@@ -83,10 +83,13 @@ See `examples/session-log.md` for a full example.
 
 - `session-start-inject.js`: prints core memory context blocks for hooks.
 - `rotate-session.js`: rotates `sessions/current.md` at day boundary.
-- `memory-sync.js`: fetch/checkpoint/status helper over C4 DB state.
 - `daily-commit.js`: local git snapshot for `memory/` if changed.
 - `consolidate.js`: JSON consolidation report (sizes, age, budget checks).
 - `memory-status.js`: quick health summary.
+
+C4 scripts used by sync flow (provided by comm-bridge skill):
+- `c4-fetch.js --unsummarized`: fetch unsummarized conversations and range.
+- `c4-checkpoint.js <end_id> --summary "..."`: create sync checkpoint.
 
 ## Best Practices
 

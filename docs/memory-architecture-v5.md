@@ -44,8 +44,8 @@
 
 | # | Correction | How v5 Responds |
 |---|-----------|-----------------|
-| 1 | **Skill invocation clarification** | `/zylos-memory` is Claude Code's skill invocation syntax. The skill runs as a **forked background subagent** (`context: fork`) with its own isolated context window. It does NOT block the main agent. Individual scripts (rotate-session.js, memory-sync.js, etc.) are helper scripts called BY the skill, not invoked directly. See Section 9. |
-| 2 | **Remove --begin/--end external arguments** | The skill takes NO arguments. When invoked, `memory-sync.js` internally calls C4's `getUnsummarizedRange()` to determine what needs processing. The skill is fully self-contained. See Section 9 and 13. |
+| 1 | **Skill invocation clarification** | `/zylos-memory` is Claude Code's skill invocation syntax. The skill runs as a **forked background subagent** (`context: fork`) with its own isolated context window. It does NOT block the main agent. Individual scripts (rotate-session.js, daily-commit.js, etc.) are helper scripts called BY the skill. C4 interactions use comm-bridge CLI scripts directly. See Section 9. |
+| 2 | **Remove --begin/--end external arguments** | The skill takes NO arguments. The sync flow calls `c4-fetch.js --unsummarized` to determine what needs processing. The skill is fully self-contained. See Section 9 and 13. |
 | 3 | **Remove c4-threshold-check hook** | `c4-threshold-check.js` is removed entirely. No more per-message threshold checking. Only two trigger paths remain: (A) session-init detects >30 unsummarized, (B) scheduled context check detects >=70% usage. Both instruct Claude to invoke `/zylos-memory`. See Section 11 and 14. |
 
 ### 1.2 v4 Corrections Carried Forward
@@ -742,7 +742,7 @@ When you type `/zylos-memory` in Claude Code, it invokes the skill defined in `s
 - The main agent is never blocked waiting for memory sync to complete
 - The subagent has full access to tools (Read, Edit, Write, Bash, Grep, Glob) within its own context
 
-**Individual scripts** (rotate-session.js, memory-sync.js, daily-commit.js, etc.) are helper scripts called BY the skill's workflow inside the forked subagent. They are not intended to be invoked directly by the main agent.
+**Individual scripts** (rotate-session.js, daily-commit.js, etc.) are helper scripts called BY the skill's workflow inside the forked subagent. C4 interactions use comm-bridge CLI scripts directly (c4-fetch.js, c4-checkpoint.js), eliminating cross-skill import dependencies.
 
 ### 9.2 File Structure
 
@@ -752,7 +752,6 @@ skills/zylos-memory/
 ├── package.json                # {"type":"module"}
 └── scripts/
     ├── session-start-inject.js # SessionStart hook: injects identity + state + refs
-    ├── memory-sync.js          # Fetch conversations + helpers for sync flow
     ├── rotate-session.js       # Rotate current.md -> YYYY-MM-DD.md at day boundary
     ├── consolidate.js          # Archive old entries, prune stale data
     ├── memory-status.js        # Report memory file sizes and health
@@ -829,14 +828,14 @@ Both result in this skill being invoked via `/zylos-memory` with NO arguments.
 node ~/zylos/.claude/skills/zylos-memory/scripts/rotate-session.js
 ```
 
-**Step 2: Check for unsummarized conversations and fetch if needed**
+**Step 2: Fetch unsummarized conversations from C4**
 
 ```bash
-node ~/zylos/.claude/skills/zylos-memory/scripts/memory-sync.js fetch
+node ~/zylos/.claude/skills/comm-bridge/scripts/c4-fetch.js --unsummarized
 ```
 
-This internally calls C4's `getUnsummarizedRange()` to determine the begin/end IDs.
-If there are no unsummarized conversations, skip to Step 5 (state save).
+If output says "No unsummarized conversations.", sync is done.
+Otherwise, note the `end_id` from the `[Unsummarized Range]` line for Step 6.
 
 **Step 3: Read current memory state**
 
@@ -876,7 +875,7 @@ the decision tree:
 - preferences.md: Must be a standing instruction. One-time requests are session events, not preferences.
 - ideas.md: Must be uncommitted. Once work begins, it becomes a project. Once committed, a decision.
 
-**Step 5: Write updates to memory files (always runs -- this is the "flush")**
+**Step 5: Write updates to memory files**
 
 Rules:
 1. Be selective, not exhaustive. Not every conversation is a memory.
@@ -890,21 +889,14 @@ Rules:
 **Step 6: Create C4 checkpoint (if unsummarized conversations were processed)**
 
 ```bash
-node ~/zylos/.claude/skills/zylos-memory/scripts/memory-sync.js checkpoint --summary "SUMMARY"
+node ~/zylos/.claude/skills/comm-bridge/scripts/c4-checkpoint.js <end_id> --summary "SUMMARY"
 ```
 
-The script internally uses the end_id from the range it fetched in Step 2.
+Use the `end_id` from the `[Unsummarized Range]` output in Step 2.
 
-**Step 7: Daily git commit if needed**
-
-```bash
-node ~/zylos/.claude/skills/zylos-memory/scripts/daily-commit.js
-```
-
-**Step 8: Confirm completion**
+**Step 7: Confirm completion**
 
 Output: `Memory sync complete. Processed N conversations (id X-Y).`
-Or if no conversations to process: `Memory flush complete. State saved.`
 
 ## Session Rotation
 
@@ -987,16 +979,14 @@ Key behaviors:
 
 > **Source:** [`skills/zylos-memory/scripts/rotate-session.js`](../skills/zylos-memory/scripts/rotate-session.js)
 
-### 9.8 scripts/memory-sync.js
+### 9.8 C4 Integration (via comm-bridge CLI)
 
-Helper for the Memory Sync flow. Self-contained: internally queries C4 for the unsummarized range via direct ESM import from `comm-bridge/scripts/c4-db.js`. No external arguments needed for the fetch operation.
+The sync flow uses comm-bridge CLI scripts directly, avoiding cross-skill import dependencies:
 
-Subcommands:
-- `fetch` — Calls `getUnsummarizedRange()`, saves the range to `last-fetch-range.json`, and prints conversations
-- `checkpoint --summary "text"` — Creates a checkpoint at the saved range's end_id, then cleans up the state file
-- `status` — Prints current unsummarized range and saved fetch range as JSON
+- `c4-fetch.js --unsummarized` — Queries the unsummarized conversation range and fetches all conversations. Outputs range metadata (including `end_id`) and formatted conversations.
+- `c4-checkpoint.js <end_id> --summary "text"` — Creates a checkpoint marking conversations up to `end_id` as processed.
 
-> **Source:** [`skills/zylos-memory/scripts/memory-sync.js`](../skills/zylos-memory/scripts/memory-sync.js)
+> **Source:** [`skills/comm-bridge/scripts/c4-fetch.js`](../skills/comm-bridge/scripts/c4-fetch.js), [`skills/comm-bridge/scripts/c4-checkpoint.js`](../skills/comm-bridge/scripts/c4-checkpoint.js)
 
 ### 9.9 scripts/daily-commit.js
 
@@ -1257,11 +1247,10 @@ Since the skill runs as a forked subagent (`context: fork`), it has its OWN cont
 ├── 1. Rotate session log if needed
 │   └── node rotate-session.js
 │
-├── 2. Check for unsummarized conversations
-│   └── node memory-sync.js fetch
-│       (internally calls getUnsummarizedRange())
-│       ├── If count > 0: fetches conversations, saves range
-│       └── If count = 0: skips to step 5
+├── 2. Fetch unsummarized conversations from C4
+│   └── node ~/zylos/.claude/skills/comm-bridge/scripts/c4-fetch.js --unsummarized
+│       ├── If conversations exist: note end_id from [Unsummarized Range] line
+│       └── If "No unsummarized conversations.": skip to step 5
 │
 ├── 3. Read current memory files
 │   └── Read identity.md, state.md, references.md, users/, reference/, sessions/
@@ -1270,19 +1259,15 @@ Since the skill runs as a forked subagent (`context: fork`), it has its OWN cont
 │   └── Claude (in subagent) analyzes conversations using decision tree
 │       Routes information to appropriate memory files
 │
-├── 5. Write updates to memory files (ALWAYS runs)
+├── 5. Write updates to memory files
 │   └── Update state.md, sessions/current.md, reference/ files as needed
 │
-├── 6. Create C4 checkpoint (if conversations were processed)
-│   └── node memory-sync.js checkpoint --summary "..."
-│       (uses end_id saved from step 2)
+├── 6. Create C4 checkpoint
+│   └── node ~/zylos/.claude/skills/comm-bridge/scripts/c4-checkpoint.js <end_id> --summary "..."
+│       (end_id from step 2)
 │
-├── 7. Daily git commit if changes exist
-│   └── node daily-commit.js
-│
-└── 8. Confirm completion
+└── 7. Confirm completion
     └── "Memory sync complete. Processed N conversations (id X-Y)."
-        or "Memory flush complete. State saved."
 ```
 
 **Key insight:** Because this runs in a forked subagent, it can process large batches of conversations without worrying about consuming the main agent's context. The main agent continues working normally throughout.
@@ -1311,9 +1296,9 @@ Context health check. Steps:
 | Script | Purpose | Called By |
 |--------|---------|-----------|
 | `c4-session-init.js` | Session start: check unsummarized count, output sync trigger | SessionStart hook |
-| `c4-fetch.js` | Fetch conversation range for sync | Memory sync flow (via memory-sync.js) |
-| `c4-checkpoint.js` | Create checkpoint after sync | Memory sync flow (via memory-sync.js) |
-| `c4-db.js` | Database utilities (getUnsummarizedRange, etc.) | memory-sync.js (internally) |
+| `c4-fetch.js --unsummarized` | Fetch unsummarized range + conversations for sync | Memory sync flow (Claude calls directly) |
+| `c4-fetch.js --begin X --end Y` | Fetch conversations in a specific range | Ad-hoc queries |
+| `c4-checkpoint.js` | Create checkpoint after sync | Memory sync flow (Claude calls directly) |
 
 **Removed in v5:**
 | Script | Reason |
@@ -1330,10 +1315,10 @@ C4 Session Init (SessionStart hook)
   |-- NO --begin/--end args (skill determines range internally)
 
 /zylos-memory Skill (forked subagent)
-  |-- Calls memory-sync.js fetch (which calls getUnsummarizedRange() internally)
-  |-- Fetches conversations using c4-fetch.js
-  |-- Creates checkpoint using c4-checkpoint.js
-  |-- Checkpoint uses end_id saved from the fetch step
+  |-- Calls c4-fetch.js --unsummarized (gets range + conversations)
+  |-- Claude processes conversations, updates memory files
+  |-- Calls c4-checkpoint.js <end_id> --summary "..."
+  |-- No cross-skill import dependencies; all C4 access via CLI
 ```
 
 ### 14.3 c4-session-init.js Output Format (v5)
@@ -1524,8 +1509,8 @@ Claude knows what it is working on (state.md is always in context), knows the us
 6. MEMORY SYNC EXECUTES (forked subagent)
    │
    ├── 6a. Rotate session log (if day changed)
-   ├── 6b. Fetch conversations via memory-sync.js fetch
-   │       (internally calls getUnsummarizedRange())
+   ├── 6b. Fetch conversations via c4-fetch.js --unsummarized
+   │       (note end_id from output for checkpoint)
    ├── 6c. Read current memory files
    ├── 6d. Claude (subagent) extracts and classifies using decision tree:
    │       -> identity changes -> identity.md
@@ -1565,8 +1550,7 @@ Claude knows what it is working on (state.md is always in context), knows the us
    ├── Updates state.md (current focus, pending tasks)
    ├── Appends to sessions/current.md (recent events)
    ├── Updates reference/ files if needed
-   ├── Creates C4 checkpoint if conversations were processed
-   └── Runs daily-commit.js (git snapshot)
+   └── Creates C4 checkpoint if conversations were processed
    │
    v
 4. RESTART (if >= 85%)
@@ -1647,7 +1631,7 @@ ALTER TABLE entries ADD COLUMN related_entries TEXT;    -- comma-separated entry
 |---|------|-------|-------|
 | 1 | Create memory directory layout in `templates/memory/` | identity.md, state.md, references.md, users/default/profile.md, reference/decisions.md, reference/projects.md, reference/preferences.md, reference/ideas.md, sessions/.gitkeep, archive/.gitkeep | Same as v4 |
 | 2 | Create zylos-memory skill SKILL.md | `skills/zylos-memory/SKILL.md` | Full content from Section 9.3 (with `context: fork`, no `argument-hint`) |
-| 3 | Create zylos-memory scripts | session-start-inject.js, rotate-session.js, memory-sync.js, consolidate.js, memory-status.js, daily-commit.js | memory-sync.js now self-contained (no external args) |
+| 3 | Create zylos-memory scripts | session-start-inject.js, rotate-session.js, consolidate.js, memory-status.js, daily-commit.js | C4 interactions use comm-bridge CLI (c4-fetch.js, c4-checkpoint.js) |
 | 4 | Create `skills/zylos-memory/package.json` | `{"type":"module","name":"zylos-memory","version":"5.0.0"}` | |
 | 5 | Update `templates/CLAUDE.md` memory section | Replace memory section with Section 10 content | |
 | 6 | Update `templates/.env.example` | Add TZ | |
@@ -1667,7 +1651,6 @@ ALTER TABLE entries ADD COLUMN related_entries TEXT;    -- comma-separated entry
 | `skills/zylos-memory/package.json` | ESM module declaration |
 | `skills/zylos-memory/scripts/session-start-inject.js` | SessionStart hook |
 | `skills/zylos-memory/scripts/rotate-session.js` | Session log rotation |
-| `skills/zylos-memory/scripts/memory-sync.js` | Self-contained memory sync helper |
 | `skills/zylos-memory/scripts/consolidate.js` | Consolidation report |
 | `skills/zylos-memory/scripts/memory-status.js` | Health check |
 | `skills/zylos-memory/scripts/daily-commit.js` | Daily git commit |
