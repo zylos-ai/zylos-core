@@ -35,6 +35,102 @@ function printStep(step) {
   }
 }
 
+/**
+ * Generate a pre-formatted C4 (IM channel) reply from command output.
+ * Claude can use this reply directly, independent of SKILL.md version.
+ */
+function formatC4Reply(type, data) {
+  switch (type) {
+    case 'check': {
+      const { component, hasUpdate, current, latest, changelog, localChanges, evaluation } = data;
+      if (!hasUpdate) return `${component} is up to date (v${current})`;
+      let r = `${component}: ${current} -> ${latest}`;
+      if (changelog) r += `\n\nChangelog:\n${changelog}`;
+      if (localChanges) {
+        r += '\n\nLocal changes:';
+        if (localChanges.modified) for (const f of localChanges.modified) r += `\n  M ${f}`;
+        if (localChanges.added) for (const f of localChanges.added) r += `\n  A ${f}`;
+      }
+      if (evaluation) {
+        r += '\n\nUpgrade analysis:';
+        for (const f of evaluation.files || []) {
+          r += `\n  ${f.file}: ${f.verdict} - ${f.reason}`;
+        }
+        r += `\nRecommendation: ${evaluation.recommendation}`;
+      }
+      r += `\n\nReply "upgrade ${component} confirm" to proceed.`;
+      return r;
+    }
+    case 'self-check': {
+      const { hasUpdate, current, latest, changelog, localChanges } = data;
+      if (!hasUpdate) return `zylos-core is up to date (v${current})`;
+      let r = `zylos-core: ${current} -> ${latest}`;
+      if (changelog) r += `\n\nChangelog:\n${changelog}`;
+      if (localChanges && localChanges.length > 0) {
+        r += '\n\nLocal skill modifications:';
+        for (const { skill, modified, added } of localChanges) {
+          for (const f of modified) r += `\n  M ${skill}/${f}`;
+          for (const f of added) r += `\n  A ${skill}/${f}`;
+        }
+      }
+      r += '\n\nReply "upgrade zylos confirm" to proceed.';
+      return r;
+    }
+    case 'upgrade': {
+      const { component, success, from, to, changelog, failedStep, error, rollback } = data;
+      if (!success) {
+        let r = `${component} upgrade failed (step ${failedStep}): ${error}`;
+        if (rollback?.performed) {
+          r += '\nRollback: ' + rollback.steps.map(s => `${s.success ? 'OK' : 'FAIL'}: ${s.action}`).join(', ');
+        }
+        return r;
+      }
+      let r = `${component} upgraded: ${from} -> ${to}`;
+      if (changelog) r += `\n\nChangelog:\n${changelog}`;
+      return r;
+    }
+    case 'self-upgrade': {
+      const { success, from, to, changelog, failedStep, error, rollback } = data;
+      if (!success) {
+        let r = `zylos-core upgrade failed (step ${failedStep}): ${error}`;
+        if (rollback?.performed) {
+          r += '\nRollback: ' + rollback.steps.map(s => `${s.success ? 'OK' : 'FAIL'}: ${s.action}`).join(', ');
+        }
+        return r;
+      }
+      let r = `zylos-core upgraded: ${from} -> ${to}`;
+      if (changelog) r += `\n\nChangelog:\n${changelog}`;
+      return r;
+    }
+    case 'check-all': {
+      const { total, updatable, components } = data;
+      if (updatable === 0) return 'All components are up to date.';
+      let r = `${updatable} of ${total} component(s) have updates:`;
+      for (const c of components) {
+        if (c.hasUpdate) r += `\n  ${c.component}: ${c.current} -> ${c.latest}`;
+      }
+      r += '\n\nUse "check <name>" to see details, or "upgrade <name>" to preview.';
+      return r;
+    }
+    case 'info': {
+      const { name, version, description, type: compType, repo, service } = data;
+      let r = `${name} v${version}`;
+      if (description) r += `\n${description}`;
+      r += `\nType: ${compType || 'unknown'}`;
+      r += `\nRepo: ${repo}`;
+      if (service) {
+        const status = service.status || 'not running';
+        r += `\nService: ${service.name} (${status})`;
+      }
+      return r;
+    }
+    case 'error':
+      return data.message || data.error || 'Unknown error';
+    default:
+      return null;
+  }
+}
+
 export async function upgradeComponent(args) {
   // Parse flags
   const checkOnly = args.includes('--check');
@@ -90,6 +186,7 @@ export async function upgradeComponent(args) {
       component: target,
       error: 'component_not_registered',
       message: `Component '${target}' is not registered in components.json`,
+      reply: `Component '${target}' is not installed.`,
     };
     if (jsonOutput) {
       console.log(JSON.stringify(result, null, 2));
@@ -105,6 +202,7 @@ export async function upgradeComponent(args) {
       component: target,
       error: 'skill_dir_not_found',
       message: `Component directory not found: ${skillDir}`,
+      reply: `Component '${target}' directory not found.`,
     };
     if (jsonOutput) {
       console.log(JSON.stringify(result, null, 2));
@@ -133,7 +231,9 @@ async function handleCheckOnly(component, { jsonOutput }) {
 
   if (!result.success) {
     if (jsonOutput) {
-      console.log(JSON.stringify({ action: 'check', component, ...result }, null, 2));
+      const errOutput = { action: 'check', component, ...result };
+      errOutput.reply = formatC4Reply('error', result);
+      console.log(JSON.stringify(errOutput, null, 2));
     } else {
       console.error(`Error: ${result.message}`);
     }
@@ -185,6 +285,7 @@ async function handleCheckOnly(component, { jsonOutput }) {
     if (changelog) output.changelog = changelog;
     if (localChanges) output.localChanges = localChanges;
     if (evalResult) output.evaluation = evalResult;
+    output.reply = formatC4Reply('check', { component, ...result, changelog, localChanges, evaluation: evalResult });
     console.log(JSON.stringify(output, null, 2));
   } else {
     if (!result.hasUpdate) {
@@ -234,7 +335,9 @@ async function handleUpgradeFlow(component, { jsonOutput, skipConfirm, skipEval 
   const lockResult = acquireLock(component);
   if (!lockResult.success) {
     if (jsonOutput) {
-      console.log(JSON.stringify({ action: 'upgrade', component, success: false, error: lockResult.error }, null, 2));
+      const errOutput = { action: 'upgrade', component, success: false, error: lockResult.error };
+      errOutput.reply = formatC4Reply('error', { message: lockResult.error });
+      console.log(JSON.stringify(errOutput, null, 2));
     } else {
       console.error(`Error: ${lockResult.error}`);
     }
@@ -247,7 +350,9 @@ async function handleUpgradeFlow(component, { jsonOutput, skipConfirm, skipEval 
 
     if (!check.success) {
       if (jsonOutput) {
-        console.log(JSON.stringify({ action: 'check', component, ...check }, null, 2));
+        const errOutput = { action: 'check', component, ...check };
+        errOutput.reply = formatC4Reply('error', check);
+        console.log(JSON.stringify(errOutput, null, 2));
       } else {
         console.error(`Error: ${check.message}`);
       }
@@ -256,7 +361,9 @@ async function handleUpgradeFlow(component, { jsonOutput, skipConfirm, skipEval 
 
     if (!check.hasUpdate) {
       if (jsonOutput) {
-        console.log(JSON.stringify({ action: 'check', component, ...check }, null, 2));
+        const output = { action: 'check', component, ...check };
+        output.reply = formatC4Reply('check', { component, ...check });
+        console.log(JSON.stringify(output, null, 2));
       } else {
         console.log(`✓ ${component} is up to date (v${check.current})`);
       }
@@ -266,7 +373,9 @@ async function handleUpgradeFlow(component, { jsonOutput, skipConfirm, skipEval 
     // 3. Download new version to temp
     if (!check.repo) {
       if (jsonOutput) {
-        console.log(JSON.stringify({ action: 'upgrade', component, success: false, error: 'No repo configured' }, null, 2));
+        const errOutput = { action: 'upgrade', component, success: false, error: 'No repo configured' };
+        errOutput.reply = formatC4Reply('error', { message: 'No repo configured' });
+        console.log(JSON.stringify(errOutput, null, 2));
       } else {
         console.error('Error: No repo configured for this component');
       }
@@ -280,7 +389,9 @@ async function handleUpgradeFlow(component, { jsonOutput, skipConfirm, skipEval 
     const dlResult = downloadToTemp(check.repo, check.latest);
     if (!dlResult.success) {
       if (jsonOutput) {
-        console.log(JSON.stringify({ action: 'upgrade', component, success: false, error: dlResult.error }, null, 2));
+        const errOutput = { action: 'upgrade', component, success: false, error: dlResult.error };
+        errOutput.reply = formatC4Reply('error', { message: dlResult.error });
+        console.log(JSON.stringify(errOutput, null, 2));
       } else {
         console.error(`Error: ${dlResult.error}`);
       }
@@ -382,9 +493,13 @@ async function handleUpgradeFlow(component, { jsonOutput, skipConfirm, skipEval 
       const output = { ...result };
       if (changelog) output.changelog = changelog;
       if (evalResult) output.evaluation = evalResult;
+      output.reply = formatC4Reply('upgrade', { component, ...result, changelog });
       console.log(JSON.stringify(output, null, 2));
     } else if (result.success) {
       console.log(`\n✓ ${component} upgraded: ${result.from} → ${result.to}`);
+      if (changelog) {
+        console.log(`\nChangelog:\n${changelog}`);
+      }
     } else {
       console.log(`\n✗ Upgrade failed (step ${result.failedStep}): ${result.error}`);
 
@@ -432,7 +547,9 @@ async function upgradeAllComponents({ checkOnly, jsonOutput, skipConfirm, skipEv
 
   if (names.length === 0) {
     if (jsonOutput) {
-      console.log(JSON.stringify({ action: 'check_all', components: [], message: 'No components installed' }));
+      const output = { action: 'check_all', components: [], message: 'No components installed' };
+      output.reply = 'No components installed.';
+      console.log(JSON.stringify(output, null, 2));
     } else {
       console.log('No components installed.');
     }
@@ -458,12 +575,14 @@ async function upgradeAllComponents({ checkOnly, jsonOutput, skipConfirm, skipEv
   const updatable = results.filter(r => r.success && r.hasUpdate);
 
   if (jsonOutput) {
-    console.log(JSON.stringify({
+    const output = {
       action: checkOnly ? 'check_all' : 'upgrade_all',
       total: names.length,
       updatable: updatable.length,
       components: results,
-    }, null, 2));
+    };
+    output.reply = formatC4Reply('check-all', { total: names.length, updatable: updatable.length, components: results });
+    console.log(JSON.stringify(output, null, 2));
     return;
   }
 
@@ -527,7 +646,9 @@ function handleSelfCheckOnly({ jsonOutput }) {
 
   if (!check.success) {
     if (jsonOutput) {
-      console.log(JSON.stringify({ action: 'check', target: 'zylos-core', ...check }, null, 2));
+      const errOutput = { action: 'check', target: 'zylos-core', ...check };
+      errOutput.reply = formatC4Reply('error', check);
+      console.log(JSON.stringify(errOutput, null, 2));
     } else {
       console.error(`Error: ${check.message}`);
     }
@@ -557,13 +678,11 @@ function handleSelfCheckOnly({ jsonOutput }) {
   if (jsonOutput) {
     const output = { action: 'check', target: 'zylos-core', ...check };
     if (changelog) output.changelog = changelog;
-    if (allLocalChanges.length > 0) {
-      output.localChanges = allLocalChanges.map(({ skill, changes }) => ({
-        skill,
-        modified: changes.modified,
-        added: changes.added,
-      }));
-    }
+    const mappedChanges = allLocalChanges.length > 0
+      ? allLocalChanges.map(({ skill, changes }) => ({ skill, modified: changes.modified, added: changes.added }))
+      : null;
+    if (mappedChanges) output.localChanges = mappedChanges;
+    output.reply = formatC4Reply('self-check', { ...check, changelog, localChanges: mappedChanges });
     console.log(JSON.stringify(output, null, 2));
   } else {
     if (!check.hasUpdate) {
@@ -603,7 +722,9 @@ async function upgradeSelfCore() {
   const lockResult = acquireLock('_zylos-core');
   if (!lockResult.success) {
     if (jsonOutput) {
-      console.log(JSON.stringify({ action: 'self_upgrade', success: false, error: lockResult.error }, null, 2));
+      const errOutput = { action: 'self_upgrade', success: false, error: lockResult.error };
+      errOutput.reply = formatC4Reply('error', { message: lockResult.error });
+      console.log(JSON.stringify(errOutput, null, 2));
     } else {
       console.error(`Error: ${lockResult.error}`);
     }
@@ -616,7 +737,9 @@ async function upgradeSelfCore() {
 
     if (!check.success) {
       if (jsonOutput) {
-        console.log(JSON.stringify({ action: 'check', target: 'zylos-core', ...check }, null, 2));
+        const errOutput = { action: 'check', target: 'zylos-core', ...check };
+        errOutput.reply = formatC4Reply('error', check);
+        console.log(JSON.stringify(errOutput, null, 2));
       } else {
         console.error(`Error: ${check.message}`);
       }
@@ -625,7 +748,9 @@ async function upgradeSelfCore() {
 
     if (!check.hasUpdate) {
       if (jsonOutput) {
-        console.log(JSON.stringify({ action: 'check', target: 'zylos-core', ...check }, null, 2));
+        const output = { action: 'check', target: 'zylos-core', ...check };
+        output.reply = formatC4Reply('self-check', check);
+        console.log(JSON.stringify(output, null, 2));
       } else {
         console.log(`✓ zylos-core is up to date (v${check.current})`);
       }
@@ -640,7 +765,9 @@ async function upgradeSelfCore() {
     const dlResult = downloadCoreToTemp(check.latest);
     if (!dlResult.success) {
       if (jsonOutput) {
-        console.log(JSON.stringify({ action: 'self_upgrade', success: false, error: dlResult.error }, null, 2));
+        const errOutput = { action: 'self_upgrade', success: false, error: dlResult.error };
+        errOutput.reply = formatC4Reply('error', { message: dlResult.error });
+        console.log(JSON.stringify(errOutput, null, 2));
       } else {
         console.error(`Error: ${dlResult.error}`);
       }
@@ -704,9 +831,13 @@ async function upgradeSelfCore() {
           added: changes.added,
         }));
       }
+      output.reply = formatC4Reply('self-upgrade', { ...result, changelog: coreChangelog });
       console.log(JSON.stringify(output, null, 2));
     } else if (result.success) {
       console.log(`\n✓ zylos-core upgraded: ${result.from} → ${result.to}`);
+      if (coreChangelog) {
+        console.log(`\nChangelog:\n${coreChangelog}`);
+      }
 
       // Clean backup after successful upgrade
       if (result.backupDir) {
@@ -933,6 +1064,7 @@ export async function infoComponent(args) {
         deleted: changes.deleted.length,
       } : null,
     };
+    info.reply = formatC4Reply('info', { name: target, version: comp.version, description, type: comp.type, repo: comp.repo, service: { name: serviceName, ...pm2Status } });
     console.log(JSON.stringify(info, null, 2));
     return;
   }

@@ -5,6 +5,19 @@ All notable changes to zylos-core will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.0-beta.13] - 2026-02-08
+
+### Added
+- `reply` field in all `--json` outputs: pre-formatted C4 reply that Claude can use directly
+- `formatC4Reply()` function centralizes C4 reply formatting in CLI (decouples from SKILL.md)
+- Changelog now included in plain text upgrade success output (backward compatibility)
+
+### Changed
+- C4 reply formatting moved from SKILL.md instructions to CLI-generated `reply` field
+- SKILL.md: added "C4 Reply Formatting" section documenting `reply` field usage
+
+---
+
 ## [0.1.0-beta.12] - 2026-02-08
 
 ### Fixed
