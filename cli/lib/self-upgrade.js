@@ -247,21 +247,41 @@ function syncSkillFiles(srcDir, destDir, skillName, result) {
 // CLAUDE.md managed sections sync
 // ---------------------------------------------------------------------------
 
-const MANAGED_MARKER_RE = /<!-- zylos-managed:(\S+):begin -->([\s\S]*?)<!-- zylos-managed:\1:end -->/g;
+function escapeRegExp(str) {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/** Blank out fenced code blocks while preserving character positions. */
+function blankCodeBlocks(text) {
+  return text.replace(/```[\s\S]*?```/g, m => m.replace(/[^\n]/g, ' '));
+}
+
+/**
+ * Find the byte range of a ## section in markdown, skipping code blocks.
+ * @returns {{ start: number, end: number } | null}
+ */
+function findSection(text, heading) {
+  const blanked = blankCodeBlocks(text);
+  const start = blanked.search(new RegExp(`^## ${escapeRegExp(heading)}$`, 'm'));
+  if (start === -1) return null;
+
+  const nextMatch = blanked.slice(start).match(/\n## \S/m);
+  const end = nextMatch ? start + nextMatch.index : text.length;
+  return { start, end };
+}
+
+const MANAGED_RE = /<!-- zylos-managed:(\S+):begin -->([\s\S]*?)<!-- zylos-managed:\1:end -->/g;
 
 /**
  * Update managed sections in ~/zylos/CLAUDE.md from the new template.
  *
- * Strategy:
- * - Template uses markers: <!-- zylos-managed:<name>:begin --> ... <!-- zylos-managed:<name>:end -->
- * - If user's CLAUDE.md has the same markers, replace content between them
- * - If markers not found, try to locate the section by heading and inject with markers
- * - User content outside managed markers is preserved
- *
- * @param {string} templateDir - Path to templates/ in downloaded temp dir
- * @returns {{ updated: string[], added: string[], skipped: boolean, error?: string }}
+ * Template uses markers: <!-- zylos-managed:<name>:begin/end -->
+ * - Markers exist in user file → replace between them
+ * - No markers → locate by ## heading, replace, and inject markers
+ * - No heading → append at end
+ * User content outside managed sections is always preserved.
  */
-export function syncClaudeMd(templateDir) {
+function syncClaudeMd(templateDir) {
   const result = { updated: [], added: [], skipped: false };
   const templatePath = path.join(templateDir, 'CLAUDE.md');
   const userPath = path.join(ZYLOS_DIR, 'CLAUDE.md');
@@ -270,9 +290,7 @@ export function syncClaudeMd(templateDir) {
     result.skipped = true;
     return result;
   }
-
   if (!fs.existsSync(userPath)) {
-    // No user CLAUDE.md — copy the template (same as init)
     fs.copyFileSync(templatePath, userPath);
     result.added.push('CLAUDE.md (new)');
     return result;
@@ -282,72 +300,45 @@ export function syncClaudeMd(templateDir) {
   let userContent = fs.readFileSync(userPath, 'utf8');
 
   // Extract managed sections from template
-  const managedSections = new Map();
-  let match;
-  const re = new RegExp(MANAGED_MARKER_RE.source, MANAGED_MARKER_RE.flags);
-  while ((match = re.exec(templateContent)) !== null) {
-    managedSections.set(match[1], match[0]); // full block including markers
-  }
+  const sections = [...templateContent.matchAll(MANAGED_RE)]
+    .map(m => ({ name: m[1], block: m[0] }));
 
-  if (managedSections.size === 0) {
+  if (sections.length === 0) {
     result.skipped = true;
     return result;
   }
 
-  for (const [name, block] of managedSections) {
+  for (const { name, block } of sections) {
     const beginMarker = `<!-- zylos-managed:${name}:begin -->`;
     const endMarker = `<!-- zylos-managed:${name}:end -->`;
 
     if (userContent.includes(beginMarker) && userContent.includes(endMarker)) {
-      // Replace existing managed section
-      const userRe = new RegExp(
-        `<!-- zylos-managed:${escapeRegExp(name)}:begin -->[\\s\\S]*?<!-- zylos-managed:${escapeRegExp(name)}:end -->`
+      // Replace existing managed section by markers
+      const re = new RegExp(
+        `${escapeRegExp(beginMarker)}[\\s\\S]*?${escapeRegExp(endMarker)}`,
       );
-      userContent = userContent.replace(userRe, block);
+      userContent = userContent.replace(re, block);
+      result.updated.push(name);
+      continue;
+    }
+
+    // No markers — fall back to heading-based detection
+    const headingMatch = block.match(/^## (.+)/m);
+    if (!headingMatch) continue;
+
+    const section = findSection(userContent, headingMatch[1].trim());
+    if (section) {
+      const tail = userContent.slice(section.end).replace(/^\n+/, '');
+      userContent = userContent.slice(0, section.start) + block + '\n\n' + tail;
       result.updated.push(name);
     } else {
-      // Markers not found — try to find the section by heading
-      // The managed block starts with a ## heading after the begin marker
-      const headingMatch = block.match(/## (.+)/);
-      if (headingMatch) {
-        const heading = headingMatch[1].trim();
-        const headingRe = new RegExp(`^## ${escapeRegExp(heading)}$`, 'm');
-        const headingIdx = userContent.search(headingRe);
-
-        if (headingIdx !== -1) {
-          // Find the end of this section (next ## heading or end of file)
-          const afterHeading = userContent.slice(headingIdx);
-          const nextHeadingMatch = afterHeading.match(/\n## (?!$)/m);
-          const sectionEnd = nextHeadingMatch
-            ? headingIdx + nextHeadingMatch.index
-            : userContent.length;
-
-          // Replace the section with the managed block
-          // sectionEnd points to \n before next ##, so slice(sectionEnd) starts with \n## ...
-          // Use single \n to get standard blank-line separation
-          const tail = userContent.slice(sectionEnd).replace(/^\n+/, '');
-          userContent = userContent.slice(0, headingIdx) + block + '\n\n' + tail;
-          result.updated.push(name);
-        } else {
-          // Heading not found — append before ## Data Directories or at end
-          const insertPoint = userContent.search(/^## Data Directories$/m);
-          if (insertPoint !== -1) {
-            userContent = userContent.slice(0, insertPoint) + block + '\n\n' + userContent.slice(insertPoint);
-          } else {
-            userContent = userContent.trimEnd() + '\n\n' + block + '\n';
-          }
-          result.added.push(name);
-        }
-      }
+      userContent = userContent.trimEnd() + '\n\n' + block + '\n';
+      result.added.push(name);
     }
   }
 
   fs.writeFileSync(userPath, userContent);
   return result;
-}
-
-function escapeRegExp(str) {
-  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 // ---------------------------------------------------------------------------
@@ -561,7 +552,7 @@ function step6_syncClaudeMd(ctx) {
     return { step: 6, name: 'sync_claude_md', status: 'done', message: msg, duration: Date.now() - startTime };
   } catch (err) {
     // Non-fatal — CLAUDE.md update failure shouldn't block the upgrade
-    return { step: 6, name: 'sync_claude_md', status: 'done', message: `warning: ${err.message}`, duration: Date.now() - startTime };
+    return { step: 6, name: 'sync_claude_md', status: 'skipped', message: err.message, duration: Date.now() - startTime };
   }
 }
 
@@ -717,10 +708,12 @@ export function runSelfUpgrade({ tempDir, newVersion, onStep } = {}) {
     step9_verifyServices,
   ];
 
+  const total = steps.length;
   let failedStep = null;
 
   for (const stepFn of steps) {
     const result = stepFn(ctx);
+    result.total = total;
     ctx.steps.push(result);
     if (onStep) onStep(result);
 

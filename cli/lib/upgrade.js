@@ -615,10 +615,12 @@ export function runUpgrade(component, { tempDir, newVersion, onStep } = {}) {
     step8_startAndVerify,
   ];
 
+  const total = steps.length;
   let failedStep = null;
 
   for (const stepFn of steps) {
     const result = stepFn(ctx);
+    result.total = total;
     ctx.steps.push(result);
     if (onStep) onStep(result);
 

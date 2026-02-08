@@ -20,6 +20,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.1.0-beta.9] - 2026-02-08
+
+### Fixed
+- `zylos info` now falls back to package.json when SKILL.md version is missing
+- Stronger two-step confirmation warnings in component-management SKILL.md for C4 mode
+
+---
+
+## [0.1.0-beta.8] - 2026-02-08
+
+### Fixed
+- Added `zylos` CLI path note to component-management SKILL.md (use global command, not relative path)
+
+---
+
 ## [0.1.0-beta.7] - 2026-02-07
 
 ### Changed
