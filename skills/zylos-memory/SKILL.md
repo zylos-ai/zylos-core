@@ -74,6 +74,11 @@ Both use `/zylos-memory` with no arguments.
 - `state.md`: active focus and pending tasks.
 - `references.md`: pointers only; do not duplicate `.env` values.
 
+## Session Log Format
+
+See `references/session-log-format.md` for format definition and rules.
+See `examples/session-log.md` for a full example.
+
 ## Supporting Scripts
 
 - `session-start-inject.js`: prints core memory context blocks for hooks.

@@ -19,8 +19,8 @@ export function findHeaderDate(text) {
   return match ? match[1] : null;
 }
 
-function resolveArchivePath(baseDate) {
-  const safeDate = /^\d{4}-\d{2}-\d{2}$/.test(baseDate) ? baseDate : dateInTimeZone(new Date(), process.env.TZ || null);
+export function resolveArchivePath(baseDate, tz) {
+  const safeDate = /^\d{4}-\d{2}-\d{2}$/.test(baseDate) ? baseDate : dateInTimeZone(new Date(), tz);
   let candidate = path.join(SESSIONS_DIR, `${safeDate}.md`);
 
   if (!fs.existsSync(candidate)) {
@@ -60,7 +60,7 @@ function main() {
     const stat = fs.statSync(CURRENT_FILE);
     const fallbackDate = dateInTimeZone(stat.mtime, tz);
     const archiveDate = headerDate || fallbackDate;
-    const archivePath = resolveArchivePath(archiveDate);
+    const archivePath = resolveArchivePath(archiveDate, tz);
     fs.renameSync(CURRENT_FILE, archivePath);
     console.log(`Rotated current.md -> ${path.basename(archivePath)}`);
   }
