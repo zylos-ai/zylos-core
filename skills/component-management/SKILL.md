@@ -217,9 +217,13 @@ The request is from C4 when the message arrives via a communication channel
 
 ### C4 Reply Formatting
 
-**All `--json` outputs include a `reply` field with a pre-formatted plain text reply.**
-**When the JSON output has a `reply` field, use it directly as the C4 reply.**
-This ensures the reply format is always correct regardless of SKILL.md version.
+All `--json` outputs include structured data and a `reply` field (pre-formatted fallback).
+
+**Preferred**: Use the JSON data fields to craft a clear, user-friendly plain text reply.
+**Fallback**: If you're unsure how to format the reply, use the `reply` field directly.
+
+The `reply` field ensures correctness even if this SKILL.md is outdated, but you can always
+improve on it by writing a more natural reply based on the JSON data.
 
 ### C4 Command Mapping
 
@@ -237,7 +241,8 @@ This ensures the reply format is always correct regardless of SKILL.md version.
 | upgrade zylos | `zylos upgrade --self --check --json` **(CHECK ONLY)** |
 | upgrade zylos confirm | `zylos upgrade --self --yes --json` **(only this executes)** |
 | uninstall \<name\> / remove \<name\> | `zylos uninstall <name> --check --json` **(CHECK ONLY — preview what will be removed)** |
-| uninstall \<name\> confirm | `zylos uninstall <name> --yes --json` **(only this executes the uninstall)** |
+| uninstall \<name\> confirm | `zylos uninstall <name> confirm --json` **(uninstall, keep data)** |
+| uninstall \<name\> purge | `zylos uninstall <name> purge --json` **(uninstall and delete all data)** |
 
 ### C4 Upgrade Confirm Flow
 
@@ -341,25 +346,25 @@ Run `zylos upgrade --self --yes --json`, parse the JSON output, and reply with t
 
 ### C4 Uninstall Confirm Flow
 
-Same two-step pattern as upgrades.
+Same two-step pattern as upgrades. User chooses whether to keep or delete data.
 
 **Step 1 — User requests uninstall:**
 
 User: `uninstall lark` or `remove lark`
 
-Run `zylos uninstall lark --check --json`, parse the JSON output, and use the `reply` field.
+Run `zylos uninstall lark --check --json`. The JSON output includes component info, service name, data directory path, and dependents. Present the preview and offer two options:
+- `uninstall <name> confirm` — uninstall but keep data
+- `uninstall <name> purge` — uninstall and delete all data
 
-**Step 2 — User confirms:**
+**Step 2 — User chooses:**
 
-User: `uninstall lark confirm`
+User: `uninstall lark confirm` (keep data) or `uninstall lark purge` (delete all)
 
-Run `zylos uninstall lark --yes --json`, parse the JSON output, and use the `reply` field.
-
-C4 uninstall always keeps the data directory (no `--purge`). User can purge via CLI if needed.
+Run `zylos uninstall lark confirm --json` or `zylos uninstall lark purge --json` accordingly.
 
 ### C4 Output Formatting
 
-**NOTE: As of v0.1.0-beta.13, use the `reply` field from JSON output directly (see "C4 Reply Formatting" above). The rules below are kept as fallback reference only.**
+**NOTE: Prefer crafting replies from JSON data (see "C4 Reply Formatting" above). The `reply` field and rules below serve as reference.**
 
 - Plain text only, no markdown
 - For `info --json`: format as `<name> v<version>\nType: <type>\nRepo: <repo>\nService: <name> (<status>)`
@@ -376,5 +381,5 @@ C4 uninstall always keeps the data directory (no `--purge`). User can purge via 
 | Confirmation | Interactive dialog | Two-step: preview + "confirm" command |
 | Output format | Rich (emoji, formatting) | Plain text only |
 | Config collection | Interactive prompts | Skip (use --yes), configure later |
-| Remove/uninstall | Supported (with data options) | Two-step confirm, keeps data |
+| Remove/uninstall | Supported (with data options) | Two-step: preview + "confirm" or "purge" |
 | Upgrade eval | Claude evaluation runs | Skipped (--skip-eval) |
