@@ -16,7 +16,7 @@ curl -fsSL https://raw.githubusercontent.com/zylos-ai/zylos-core/main/install.sh
 |-----------|---------|-----------|
 | C1 | Claude Runtime | (via Claude Code) |
 | C2 | Self-Maintenance | `skills/self-maintenance/` |
-| C3 | Memory System | `skills/memory/` |
+| C3 | Memory System | `skills/zylos-memory/` |
 | C4 | Communication Bridge | `skills/comm-bridge/` |
 | C4+ | Web Console | `skills/web-console/` |
 | C5 | Task Scheduler | `skills/scheduler/` |
@@ -60,7 +60,7 @@ zylos-core/
 │   └── zylos.js
 ├── skills/                 # Skill implementations
 │   ├── self-maintenance/   # C2
-│   ├── memory/             # C3
+│   ├── zylos-memory/       # C3
 │   ├── comm-bridge/        # C4
 │   ├── web-console/        # C4 built-in channel
 │   ├── scheduler/          # C5

@@ -1,0 +1,21 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ~/zylos/.claude/skills/zylos-memory/scripts/session-start-inject.js",
+            "timeout": 10000
+          },
+          {
+            "type": "command",
+            "command": "node ~/zylos/.claude/skills/comm-bridge/scripts/c4-session-init.js",
+            "timeout": 10000
+          }
+        ]
+      }
+    ]
+  }
+}

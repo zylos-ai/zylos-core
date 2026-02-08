@@ -8,16 +8,68 @@ This is a Zylos-managed workspace for an autonomous AI agent.
 
 ## Memory System
 
-Persistent memory stored in `~/zylos/memory/`:
-- `context.md` - Current work focus
-- `decisions.md` - Key decisions made
-- `projects.md` - Active/planned projects
-- `preferences.md` - User preferences
+Persistent memory stored in `~/zylos/memory/` with an Inside Out-inspired architecture.
 
-**Important Practices:**
-1. **Start each session** by reading memory files
-2. **Update memory frequently** - don't wait until context is full
-3. **Before context compaction** - always update memory first
+### Memory Tiers
+
+| Tier | Path | Purpose | Loading |
+|------|------|---------|---------|
+| **Identity** | `memory/identity.md` | Bot soul: personality, principles, digital assets | Always (session start) |
+| **State** | `memory/state.md` | Active work, pending tasks | Always (session start) |
+| **References** | `memory/references.md` | Pointers to config files, key paths | Always (session start) |
+| **User Profiles** | `memory/users/<id>/profile.md` | Per-user preferences | On demand |
+| **Reference** | `memory/reference/*.md` | Decisions, projects, shared prefs, ideas | On demand |
+| **Sessions** | `memory/sessions/current.md` | Today's event log | On demand |
+| **Archive** | `memory/archive/` | Cold storage for old data | Rarely |
+
+### CRITICAL: Memory Sync Priority
+
+**Memory Sync has the HIGHEST priority.**
+
+When you receive a `[Action Required] ... invoke /zylos-memory` instruction:
+1. **Invoke `/zylos-memory` immediately** -- do not defer or queue it
+2. **Continue working** -- the skill runs as a forked background subagent
+   with its own context window, so it does NOT block your main work
+
+### How Memory Sync Works
+
+The `/zylos-memory` skill:
+- Takes NO arguments -- it is fully self-contained
+- Internally queries C4 to find unsummarized conversations
+- Processes conversations and saves state to memory files
+- Creates C4 checkpoints
+- Runs as a forked subagent (does NOT consume main context)
+
+### Multi-User
+
+The bot serves a team. Each user has their own profile at `memory/users/<id>/profile.md`.
+Route user-specific preferences to the correct profile file. Bot identity stays in `identity.md`.
+
+### Memory Update Practices
+
+1. **At session start:** identity + state + references are auto-injected.
+2. **During work:** Update appropriate memory files immediately when you learn something important.
+3. **Memory Sync:** When triggered by hooks, invoke `/zylos-memory`. It runs in the background -- you can continue working.
+4. **Before context gets full:** The scheduled context check (every 30 min) handles this automatically by invoking `/zylos-memory` when needed.
+5. **references.md is a pointer file.** Never duplicate .env values in it -- point to the source config file instead.
+
+### Classification Rules for reference/ Files
+
+- **decisions.md:** Deliberate choices that close off alternatives
+- **projects.md:** Work efforts with defined scope and lifecycle
+- **preferences.md:** Standing instructions for how things should be done (shared across users)
+- **ideas.md:** Uncommitted plans, explorations, hypotheses
+
+When in doubt, write to sessions/current.md.
+
+### File Size Guidelines
+
+- **identity.md:** ~4KB. Includes digital assets. Rarely changes.
+- **state.md:** ~4KB max. In every session's context. Keep lean.
+- **references.md:** ~2KB. Pointer/index, not prose.
+- **users/<id>/profile.md:** ~1KB per user.
+- **reference/*.md:** No hard cap, but archive old entries.
+- **sessions/current.md:** No cap within a day. Rotated daily.
 
 ## Communication
 
@@ -128,8 +180,8 @@ Graceful restart with memory save.
 ### upgrade-claude/
 Upgrade Claude Code to latest version.
 
-### memory/
-Memory system guidance and best practices.
+### zylos-memory/ (C3)
+Persistent memory system with Inside Out architecture. Runs as a forked subagent via `/zylos-memory`.
 
 ### comm-bridge/ (C4)
 Communication gateway for Telegram, Lark, and other channels.
@@ -180,7 +232,7 @@ zylos upgrade <component> --check   # Check for updates (ALWAYS do this first)
 User data is in `~/zylos/`:
 - `memory/` - Memory files
 - `public/` - Shared files (served via HTTP)
-- `logs/` - Log files
+- `<skill-name>/` - Per-skill runtime data (logs, databases, etc.)
 - `.env` - Configuration
 
 ## Quick Reference

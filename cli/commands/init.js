@@ -231,6 +231,23 @@ function createDirectoryStructure() {
 // ── Templates ───────────────────────────────────────────────────
 
 /**
+ * Recursively copy source files into dest directory, but only when missing.
+ * Preserves user-managed files while ensuring nested template dirs exist.
+ */
+function copyMissingTree(src, dest) {
+  fs.mkdirSync(dest, { recursive: true });
+  for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
+    const srcPath = path.join(src, entry.name);
+    const destPath = path.join(dest, entry.name);
+    if (entry.isDirectory()) {
+      copyMissingTree(srcPath, destPath);
+    } else if (!fs.existsSync(destPath)) {
+      fs.copyFileSync(srcPath, destPath);
+    }
+  }
+}
+
+/**
  * Deploy template files to the zylos directory.
  * - ecosystem.config.cjs: always updated (managed by zylos-core)
  * - .env, CLAUDE.md, memory/*: only created if missing (user-managed)
@@ -269,12 +286,14 @@ function deployTemplates() {
   const memorySrc = path.join(TEMPLATES_SRC, 'memory');
   const memoryDest = path.join(ZYLOS_DIR, 'memory');
   if (fs.existsSync(memorySrc)) {
-    for (const file of fs.readdirSync(memorySrc)) {
-      const dest = path.join(memoryDest, file);
-      if (!fs.existsSync(dest)) {
-        fs.copyFileSync(path.join(memorySrc, file), dest);
-      }
-    }
+    copyMissingTree(memorySrc, memoryDest);
+  }
+
+  // .claude/ project settings (hooks, etc.) — only create missing files
+  const claudeSrc = path.join(TEMPLATES_SRC, '.claude');
+  const claudeDest = path.join(ZYLOS_DIR, '.claude');
+  if (fs.existsSync(claudeSrc)) {
+    copyMissingTree(claudeSrc, claudeDest);
   }
 }
 
@@ -470,7 +489,22 @@ export async function initCommand(args) {
     }
   }
 
-  // Step 3: Check/install PM2 (auto-installs if missing)
+  // Step 3: Check/install git
+  if (commandExists('git')) {
+    console.log('  ✓ git installed');
+  } else {
+    console.log('  ✗ git not found');
+    console.log('    Installing git...');
+    if (installSystemPackage('git')) {
+      console.log('  ✓ git installed');
+    } else {
+      console.log('  ✗ Failed to install git');
+      console.log('    Install manually: brew install git (macOS) / apt install git (Linux)');
+      process.exit(1);
+    }
+  }
+
+  // Step 4: Check/install PM2
   if (commandExists('pm2')) {
     console.log('  ✓ PM2 installed');
   } else {
@@ -485,7 +519,7 @@ export async function initCommand(args) {
     }
   }
 
-  // Step 4: Check/install Claude Code (auto-installs if missing)
+  // Step 5: Check/install Claude Code
   if (commandExists('claude')) {
     console.log('  ✓ Claude Code installed');
   } else {
@@ -500,7 +534,7 @@ export async function initCommand(args) {
     }
   }
 
-  // Step 5: Claude auth check
+  // Step 6: Claude auth check
   if (commandExists('claude')) {
     try {
       const result = spawnSync('claude', ['auth', 'status'], {
