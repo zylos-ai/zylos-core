@@ -124,6 +124,34 @@ function formatC4Reply(type, data) {
       }
       return r;
     }
+    case 'uninstall-check': {
+      const { component, version, service, dependents, dataDir } = data;
+      let r = `Uninstall ${component} (v${version})?`;
+      r += `\n\nWill remove:`;
+      r += `\n  Service: ${service} (pm2)`;
+      r += `\n  Skill directory: removed`;
+      r += `\n  Data directory: kept (${dataDir})`;
+      if (dependents && dependents.length > 0) {
+        r += `\n\nCannot uninstall: these components depend on ${component}:`;
+        for (const d of dependents) r += `\n  - ${d}`;
+        r += `\nRemove them first, or use CLI with --force.`;
+        return r;
+      }
+      r += `\n\nReply "uninstall ${component} confirm" to proceed.`;
+      return r;
+    }
+    case 'uninstall': {
+      const { component, success, steps, error } = data;
+      if (!success) return `${component} uninstall failed: ${error}`;
+      let r = `${component} uninstalled.`;
+      if (steps) {
+        for (const s of steps) {
+          const icon = s.success ? 'OK' : 'skipped';
+          r += `\n  ${s.action}: ${icon}`;
+        }
+      }
+      return r;
+    }
     case 'error':
       return data.message || data.error || 'Unknown error';
     default:
@@ -863,21 +891,30 @@ async function upgradeSelfCore() {
 }
 
 export async function uninstallComponent(args) {
+  const checkOnly = args.includes('--check');
+  const jsonOutput = args.includes('--json');
   const purge = args.includes('--purge');
   const skipConfirm = args.includes('--yes') || args.includes('-y');
+  const explicitConfirm = args.includes('confirm');
   const force = args.includes('--force');
-  const target = args.find(arg => !arg.startsWith('-'));
+  const target = args.find(arg => !arg.startsWith('-') && arg !== 'confirm');
 
   if (!target) {
     console.error('Usage: zylos uninstall <name> [options]');
     console.log('\nOptions:');
-    console.log('  --purge    Also remove data directory (skips prompt)');
+    console.log('  --check    Preview what will be removed');
+    console.log('  --json     Output in JSON format');
+    console.log('  --purge    Also remove data directory');
     console.log('  --force    Remove even if other components depend on it');
     console.log('  --yes, -y  Skip confirmation (keeps data)');
     process.exit(1);
   }
 
-  const ok = await handleRemoveFlow(target, { purge, skipConfirm, force });
+  if (checkOnly) {
+    return handleUninstallCheck(target, { jsonOutput });
+  }
+
+  const ok = await handleRemoveFlow(target, { purge, skipConfirm: skipConfirm || explicitConfirm, force, jsonOutput });
   if (!ok) process.exit(1);
 }
 
@@ -907,14 +944,79 @@ function resolveServiceName(name) {
 }
 
 /**
- * Remove flow: dependency check → confirm → stop PM2 → delete dirs → update components.json.
- * Returns true on success, false on failure.
+ * Handle --check for uninstall: preview what will be removed.
  */
-async function handleRemoveFlow(target, { purge, skipConfirm, force }) {
+function handleUninstallCheck(target, { jsonOutput }) {
   const components = loadComponents();
 
   if (!components[target]) {
-    console.error(`Error: Component "${target}" is not installed.`);
+    const errMsg = `Component "${target}" is not installed.`;
+    if (jsonOutput) {
+      const output = { action: 'uninstall_check', component: target, error: 'not_installed', message: errMsg };
+      output.reply = formatC4Reply('error', { message: errMsg });
+      console.log(JSON.stringify(output, null, 2));
+    } else {
+      console.error(`Error: ${errMsg}`);
+    }
+    process.exit(1);
+  }
+
+  const comp = components[target];
+  const skillDir = path.join(SKILLS_DIR, target);
+  const dataDir = path.join(COMPONENTS_DIR, target);
+  const serviceName = resolveServiceName(target);
+  const dependents = findDependents(target);
+
+  if (jsonOutput) {
+    const output = {
+      action: 'uninstall_check',
+      component: target,
+      version: comp.version,
+      service: serviceName,
+      skillDir,
+      dataDir,
+      dependents,
+    };
+    output.reply = formatC4Reply('uninstall-check', {
+      component: target,
+      version: comp.version,
+      service: serviceName,
+      dependents,
+      dataDir,
+    });
+    console.log(JSON.stringify(output, null, 2));
+  } else {
+    console.log(`\nUninstall "${target}" (v${comp.version})?`);
+    console.log(`\nWill remove:`);
+    console.log(`  Service:   ${serviceName} (pm2)`);
+    console.log(`  Skill dir: ${skillDir}`);
+    console.log(`  Data dir:  ${dataDir} (kept)`);
+
+    if (dependents.length > 0) {
+      console.log(`\nWARNING: These components depend on "${target}":`);
+      for (const d of dependents) console.log(`  - ${d}`);
+    }
+
+    console.log(`\nRun "zylos uninstall ${target} --yes" to proceed.`);
+  }
+}
+
+/**
+ * Remove flow: dependency check → confirm → stop PM2 → delete dirs → update components.json.
+ * Returns true on success, false on failure.
+ */
+async function handleRemoveFlow(target, { purge, skipConfirm, force, jsonOutput }) {
+  const components = loadComponents();
+
+  if (!components[target]) {
+    const errMsg = `Component "${target}" is not installed.`;
+    if (jsonOutput) {
+      const output = { action: 'uninstall', component: target, success: false, error: errMsg };
+      output.reply = formatC4Reply('error', { message: errMsg });
+      console.log(JSON.stringify(output, null, 2));
+    } else {
+      console.error(`Error: ${errMsg}`);
+    }
     return false;
   }
 
@@ -923,13 +1025,21 @@ async function handleRemoveFlow(target, { purge, skipConfirm, force }) {
 
   // Check dependencies
   const dependents = findDependents(target);
-  if (dependents.length > 0) {
-    if (!force) {
+  if (dependents.length > 0 && !force) {
+    const errMsg = `Cannot remove "${target}" — depends: ${dependents.join(', ')}. Use --force.`;
+    if (jsonOutput) {
+      const output = { action: 'uninstall', component: target, success: false, error: errMsg, dependents };
+      output.reply = formatC4Reply('error', { message: errMsg });
+      console.log(JSON.stringify(output, null, 2));
+    } else {
       console.error(`Error: Cannot remove "${target}" — the following components depend on it:`);
       for (const d of dependents) console.error(`  - ${d}`);
       console.error(`\nUse --force to remove anyway.`);
-      return false;
     }
+    return false;
+  }
+
+  if (dependents.length > 0 && !jsonOutput) {
     console.log(`Warning: The following components depend on "${target}":`);
     for (const d of dependents) console.log(`  - ${d}`);
     console.log('');
@@ -937,13 +1047,15 @@ async function handleRemoveFlow(target, { purge, skipConfirm, force }) {
 
   // Show what will be removed
   const serviceName = resolveServiceName(target);
-  console.log(`Will remove "${target}":`);
-  console.log(`  Service:   ${serviceName} (pm2)`);
-  console.log(`  Skill dir: ${skillDir}`);
-  if (purge) {
-    console.log(`  Data dir:  ${dataDir} (--purge)`);
-  } else {
-    console.log(`  Data dir:  ${dataDir} (kept)`);
+  if (!jsonOutput) {
+    console.log(`Will remove "${target}":`);
+    console.log(`  Service:   ${serviceName} (pm2)`);
+    console.log(`  Skill dir: ${skillDir}`);
+    if (purge) {
+      console.log(`  Data dir:  ${dataDir} (--purge)`);
+    } else {
+      console.log(`  Data dir:  ${dataDir} (kept)`);
+    }
   }
 
   // Confirmation
@@ -960,39 +1072,58 @@ async function handleRemoveFlow(target, { purge, skipConfirm, force }) {
     }
   }
 
+  // Execute removal, collect step results
+  const steps = [];
+
   // 1. Stop + delete PM2 service (use execFileSync to avoid shell injection)
   try {
     try { execFileSync('pm2', ['stop', serviceName], { stdio: 'pipe' }); } catch { /* ignore */ }
     execFileSync('pm2', ['delete', serviceName], { stdio: 'pipe' });
-    console.log(`  ✓ PM2 service "${serviceName}" removed`);
+    steps.push({ action: 'PM2 service removed', success: true });
+    if (!jsonOutput) console.log(`  ✓ PM2 service "${serviceName}" removed`);
   } catch {
-    console.log(`  ○ PM2 service "${serviceName}" not found (skipped)`);
+    steps.push({ action: 'PM2 service not found', success: false });
+    if (!jsonOutput) console.log(`  ○ PM2 service "${serviceName}" not found (skipped)`);
   }
 
   // 2. Remove skill directory
   if (fs.existsSync(skillDir)) {
     fs.rmSync(skillDir, { recursive: true, force: true });
-    console.log(`  ✓ Skill directory removed`);
+    steps.push({ action: 'Skill directory removed', success: true });
+    if (!jsonOutput) console.log(`  ✓ Skill directory removed`);
   } else {
-    console.log(`  ○ Skill directory not found (skipped)`);
+    steps.push({ action: 'Skill directory not found', success: false });
+    if (!jsonOutput) console.log(`  ○ Skill directory not found (skipped)`);
   }
 
   // 3. Remove data directory if --purge
   if (purge) {
     if (fs.existsSync(dataDir)) {
       fs.rmSync(dataDir, { recursive: true, force: true });
-      console.log(`  ✓ Data directory removed`);
+      steps.push({ action: 'Data directory removed', success: true });
+      if (!jsonOutput) console.log(`  ✓ Data directory removed`);
     } else {
-      console.log(`  ○ Data directory not found (skipped)`);
+      steps.push({ action: 'Data directory not found', success: false });
+      if (!jsonOutput) console.log(`  ○ Data directory not found (skipped)`);
     }
+  } else {
+    steps.push({ action: 'Data directory kept', success: true });
   }
 
   // 4. Update components.json
   delete components[target];
   saveComponents(components);
-  console.log(`  ✓ Removed from components.json`);
+  steps.push({ action: 'Removed from components.json', success: true });
+  if (!jsonOutput) console.log(`  ✓ Removed from components.json`);
 
-  console.log(`\n✓ ${target} uninstalled.`);
+  if (jsonOutput) {
+    const output = { action: 'uninstall', component: target, success: true, steps };
+    output.reply = formatC4Reply('uninstall', { component: target, success: true, steps });
+    console.log(JSON.stringify(output, null, 2));
+  } else {
+    console.log(`\n✓ ${target} uninstalled.`);
+  }
+
   return true;
 }
 
