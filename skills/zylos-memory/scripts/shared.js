@@ -5,6 +5,7 @@
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import { parse } from 'dotenv';
 
 export const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
 export const MEMORY_DIR = path.join(ZYLOS_DIR, 'memory');
@@ -23,19 +24,6 @@ export const REFERENCE_FILES = [
   'reference/ideas.md'
 ];
 
-export function parseEnvValue(raw) {
-  const trimmed = raw.trim();
-  if ((trimmed.startsWith('"') && trimmed.endsWith('"')) || (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
-    return trimmed.slice(1, -1);
-  }
-  // Strip inline comments for unquoted values (dotenv convention)
-  const hashIdx = trimmed.indexOf('#');
-  if (hashIdx > 0) {
-    return trimmed.slice(0, hashIdx).trimEnd();
-  }
-  return trimmed;
-}
-
 /**
  * Load TZ from ~/zylos/.env and return it.
  * Side effect: sets process.env.TZ, which changes Date behavior process-wide.
@@ -45,24 +33,10 @@ export function loadTimezoneFromEnv() {
   const envPath = path.join(ZYLOS_DIR, '.env');
   try {
     const envText = fs.readFileSync(envPath, 'utf8');
-    for (const line of envText.split('\n')) {
-      const trimmed = line.trim();
-      if (!trimmed || trimmed.startsWith('#')) {
-        continue;
-      }
-      const idx = trimmed.indexOf('=');
-      if (idx < 0) {
-        continue;
-      }
-      const key = trimmed.slice(0, idx).trim();
-      if (key !== 'TZ') {
-        continue;
-      }
-      const value = parseEnvValue(trimmed.slice(idx + 1));
-      if (value) {
-        process.env.TZ = value;
-        return value;
-      }
+    const env = parse(envText);
+    if (env.TZ) {
+      process.env.TZ = env.TZ;
+      return env.TZ;
     }
   } catch {
     // .env may not exist on fresh setups

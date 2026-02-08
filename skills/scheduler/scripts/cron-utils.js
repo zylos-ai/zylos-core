@@ -5,8 +5,9 @@
 
 import parser from 'cron-parser';
 
-// Use TZ environment variable or fall back to UTC
-export const DEFAULT_TIMEZONE = process.env.TZ || 'UTC';
+export function getDefaultTimezone() {
+  return process.env.TZ || 'UTC';
+}
 
 /**
  * Calculate the next run time for a cron expression
@@ -15,11 +16,12 @@ export const DEFAULT_TIMEZONE = process.env.TZ || 'UTC';
  * @param {Date} fromDate - Calculate next run from this date (default: now)
  * @returns {number} Unix timestamp of next run
  */
-export function getNextRun(cronExpression, timezone = DEFAULT_TIMEZONE, fromDate = new Date()) {
+export function getNextRun(cronExpression, timezone, fromDate = new Date()) {
   try {
+    const tz = timezone || getDefaultTimezone();
     const options = {
       currentDate: fromDate,
-      tz: timezone
+      tz
     };
 
     const interval = parser.parseExpression(cronExpression, options);

@@ -62,7 +62,10 @@ function initSchema() {
       reply_channel TEXT DEFAULT NULL,          -- reply channel (e.g., 'telegram')
       reply_endpoint TEXT DEFAULT NULL,         -- reply endpoint (e.g., user ID)
 
-      -- Retry Logic
+      -- Retry Logic (reserved, not currently used)
+      -- Implicit retry is handled via miss_threshold: tasks stay pending
+      -- until dispatched or overdue beyond miss_threshold window (default 300s).
+      -- See daemon.js mainLoop + handleMissedTasks for details.
       retry_count INTEGER DEFAULT 0,
       max_retries INTEGER DEFAULT 3,
 

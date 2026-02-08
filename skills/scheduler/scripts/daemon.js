@@ -8,13 +8,23 @@ import { getDb, cleanupHistory, now } from './database.js';
 import { getNextRun } from './cron-utils.js';
 import { sendViaC4, readStatusFile } from './runtime.js';
 import { formatTime } from './time-utils.js';
+import { loadTimezone } from './tz.js';
+import { updateNextRunTime as _updateNextRunTime, processCompletedTasks as _processCompletedTasks, handleStaleRunningTasks as _handleStaleRunningTasks, TASK_TIMEOUT } from './daemon-tasks.js';
 
-const CHECK_INTERVAL = 10000;  // 10 seconds
+const CHECK_INTERVAL = 5000;  // 5 seconds
 const CLEANUP_INTERVAL = 3600000;  // 1 hour
-const TASK_TIMEOUT = 3600;  // 1 hour - max time a task can be 'running'
+const OFFLINE_LOG_INTERVAL = 30000;  // 30 seconds
 
 let db;
 let running = true;
+
+try {
+  process.env.TZ = loadTimezone();
+} catch (error) {
+  const code = error.code || 'UNKNOWN_TZ_ERROR';
+  console.error(`[${new Date().toISOString()}] Fatal timezone config error [${code}]: ${error.message}`);
+  process.exit(1);
+}
 
 /**
  * Get the next pending task that's due
@@ -107,53 +117,12 @@ function dispatchTask(task) {
   return success;
 }
 
-/**
- * Update next_run_at for recurring/interval tasks after completion
- */
 function updateNextRunTime(task) {
-  let nextRun;
-
-  if (task.type === 'recurring' && task.cron_expression) {
-    nextRun = getNextRun(task.cron_expression, task.timezone);
-  } else if (task.type === 'interval' && task.interval_seconds) {
-    nextRun = now() + task.interval_seconds;
-  } else {
-    return; // One-time task, no update needed
-  }
-
-  db.prepare(`
-    UPDATE tasks
-    SET next_run_at = ?, status = 'pending', last_run_at = ?, updated_at = ?
-    WHERE id = ?
-  `).run(nextRun, now(), now(), task.id);
-
-  console.log(`[${new Date().toISOString()}] Updated next run for ${task.id}: ${formatTime(nextRun)}`);
+  _updateNextRunTime(db, task);
 }
 
-/**
- * Handle completed tasks - update recurring ones, finalize one-time
- */
 function processCompletedTasks() {
-  const completedTasks = db.prepare(`
-    SELECT * FROM tasks WHERE status = 'completed'
-  `).all();
-
-  for (const task of completedTasks) {
-    if (task.type === 'one-time') {
-      // One-time tasks stay completed
-      continue;
-    }
-
-    // Update recurring/interval tasks with next run time
-    try {
-      updateNextRunTime(task);
-    } catch (error) {
-      console.error(`[${new Date().toISOString()}] Failed to reschedule task ${task.id}: ${error.message}`);
-      db.prepare(`
-        UPDATE tasks SET status = 'failed', last_error = ?, updated_at = ? WHERE id = ?
-      `).run(error.message, now(), task.id);
-    }
-  }
+  _processCompletedTasks(db);
 }
 
 /**
@@ -195,56 +164,15 @@ function handleMissedTasks() {
   }
 }
 
-/**
- * Handle stale running tasks (orphaned due to compaction/crash)
- * Tasks running for more than TASK_TIMEOUT seconds are considered stale
- */
 function handleStaleRunningTasks() {
-  const currentTime = now();
-  const staleThreshold = currentTime - TASK_TIMEOUT;
-
-  // Find tasks that have been 'running' for too long
-  const staleTasks = db.prepare(`
-    SELECT * FROM tasks
-    WHERE status = 'running'
-    AND updated_at < ?
-  `).all(staleThreshold);
-
-  for (const task of staleTasks) {
-    console.log(`[${new Date().toISOString()}] Task ${task.id} (${task.name}) timed out after ${TASK_TIMEOUT}s`);
-
-    // Update history to show timeout
-    db.prepare(`
-      UPDATE task_history
-      SET status = 'timeout', completed_at = ?
-      WHERE task_id = ? AND status = 'started'
-    `).run(now(), task.id);
-
-    if (task.type === 'one-time') {
-      // One-time tasks: mark as failed
-      db.prepare(`
-        UPDATE tasks
-        SET status = 'failed', last_error = 'Task timed out', updated_at = ?
-        WHERE id = ?
-      `).run(now(), task.id);
-    } else {
-      // Recurring/interval tasks: schedule next run
-      db.prepare(`
-        UPDATE tasks
-        SET status = 'completed', last_error = 'Task timed out', updated_at = ?
-        WHERE id = ?
-      `).run(now(), task.id);
-
-      // This will be picked up by processCompletedTasks and rescheduled
-    }
-  }
+  _handleStaleRunningTasks(db);
 }
 
 /**
  * Main scheduler loop
  */
 async function mainLoop() {
-  console.log(`[${new Date().toISOString()}] Scheduler V2 started`);
+  console.log(`[${new Date().toISOString()}] Scheduler V2 started (TZ: ${process.env.TZ})`);
   console.log(`Check interval: ${CHECK_INTERVAL}ms`);
 
   // Clean up stale running tasks on startup
@@ -252,12 +180,17 @@ async function mainLoop() {
   handleStaleRunningTasks();
 
   let lastCleanup = Date.now();
+  let lastOfflineLog = 0;
 
   while (running) {
     try {
       // Check if runtime is alive
       if (!isRuntimeAlive()) {
-        console.log(`[${new Date().toISOString()}] Waiting for Claude runtime (offline or stopped)...`);
+        const msNow = Date.now();
+        if (msNow - lastOfflineLog >= OFFLINE_LOG_INTERVAL) {
+          console.log(`[${new Date().toISOString()}] Waiting for Claude runtime (offline or stopped)...`);
+          lastOfflineLog = msNow;
+        }
         await sleep(CHECK_INTERVAL);
         continue;
       }

@@ -9,11 +9,13 @@
   },
   "scripts": {
     "start": "node scripts/daemon.js",
-    "cli": "node scripts/cli.js"
+    "cli": "node scripts/cli.js",
+    "test": "node --test scripts/__tests__/*.test.js"
   },
   "dependencies": {
     "better-sqlite3": "^12.6.2",
+    "chrono-node": "^2.7.7",
     "cron-parser": "^4.9.0",
-    "chrono-node": "^2.7.7"
+    "dotenv": "^16.6.1"
   }
 }
