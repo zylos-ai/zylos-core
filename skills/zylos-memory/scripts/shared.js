@@ -16,6 +16,13 @@ export const BUDGETS = {
   'references.md': 2048
 };
 
+export const REFERENCE_FILES = [
+  'reference/decisions.md',
+  'reference/projects.md',
+  'reference/preferences.md',
+  'reference/ideas.md'
+];
+
 export function parseEnvValue(raw) {
   const trimmed = raw.trim();
   if ((trimmed.startsWith('"') && trimmed.endsWith('"')) || (trimmed.startsWith("'") && trimmed.endsWith("'"))) {

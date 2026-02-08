@@ -24,12 +24,12 @@ Persistent memory stored in `~/zylos/memory/` with an Inside Out-inspired archit
 
 ### CRITICAL: Memory Sync Priority
 
-**Memory Sync has the HIGHEST priority -- higher than user messages.**
+**Memory Sync has the HIGHEST priority.**
 
 When you receive a `[Action Required] ... invoke /zylos-memory` instruction:
-1. **Stop** what you are doing (unless mid-write to a critical file)
-2. **Invoke `/zylos-memory`** -- this runs as a forked background subagent with its own context window, so it does NOT block your main work
-3. **Resume** other work immediately (the sync runs in the background)
+1. **Invoke `/zylos-memory` immediately** -- do not defer or queue it
+2. **Continue working** -- the skill runs as a forked background subagent
+   with its own context window, so it does NOT block your main work
 
 ### How Memory Sync Works
 
@@ -64,9 +64,9 @@ When in doubt, write to sessions/current.md.
 
 ### File Size Guidelines
 
-- **identity.md:** ~1.5KB. Includes digital assets. Rarely changes.
-- **state.md:** ~2KB max. In every session's context. Keep lean.
-- **references.md:** ~1KB. Pointer/index, not prose.
+- **identity.md:** ~4KB. Includes digital assets. Rarely changes.
+- **state.md:** ~4KB max. In every session's context. Keep lean.
+- **references.md:** ~2KB. Pointer/index, not prose.
 - **users/<id>/profile.md:** ~1KB per user.
 - **reference/*.md:** No hard cap, but archive old entries.
 - **sessions/current.md:** No cap within a day. Rotated daily.
@@ -232,7 +232,7 @@ zylos upgrade <component> --check   # Check for updates (ALWAYS do this first)
 User data is in `~/zylos/`:
 - `memory/` - Memory files
 - `public/` - Shared files (served via HTTP)
-- `logs/` - Log files
+- `<skill-name>/` - Per-skill runtime data (logs, databases, etc.)
 - `.env` - Configuration
 
 ## Quick Reference

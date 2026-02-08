@@ -14,7 +14,8 @@
 - HTTP proxy: see .env PROXY
 
 ## Active IDs
-None yet.
+- Telegram chat with Howard: 12345678
+- Lark group "Dev Team": og_abcdef123
 
 ## Notes
 - For TZ, domain, proxy: see .env

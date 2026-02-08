@@ -9,7 +9,7 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { MEMORY_DIR, SESSIONS_DIR, BUDGETS, loadTimezoneFromEnv, dateInTimeZone } from './shared.js';
+import { MEMORY_DIR, SESSIONS_DIR, BUDGETS, REFERENCE_FILES, loadTimezoneFromEnv, dateInTimeZone } from './shared.js';
 
 const MAX_WALK_DEPTH = 10;
 
@@ -105,6 +105,38 @@ function coreBudgetChecks() {
   return checks;
 }
 
+export function freshnessState(ageDays) {
+  if (ageDays < 7) return 'active';
+  if (ageDays < 30) return 'aging';
+  if (ageDays <= 90) return 'fading';
+  return 'stale';
+}
+
+function referenceFileFreshness() {
+  const results = [];
+
+  for (const relPath of REFERENCE_FILES) {
+    const filePath = path.join(MEMORY_DIR, relPath);
+    if (!fs.existsSync(filePath)) {
+      results.push({ file: relPath, exists: false });
+      continue;
+    }
+
+    const stat = fs.statSync(filePath);
+    const ageDays = Math.floor((Date.now() - stat.mtimeMs) / (1000 * 60 * 60 * 24));
+    results.push({
+      file: relPath,
+      exists: true,
+      sizeBytes: stat.size,
+      modifiedAt: stat.mtime.toISOString(),
+      ageDays,
+      freshness: freshnessState(ageDays)
+    });
+  }
+
+  return results;
+}
+
 function topLargest(files, count = 10) {
   return [...files]
     .sort((a, b) => b.sizeBytes - a.sizeBytes)
@@ -129,25 +161,13 @@ function main() {
       checks: budgetChecks,
       overBudget
     },
+    referenceFiles: referenceFileFreshness(),
     sessions: {
       archiveCandidatesOlderThan30Days: sessionArchiveCandidates(tz)
     },
     oldestFiles: [...files].sort((a, b) => b.ageDays - a.ageDays).slice(0, 10),
-    largestFiles: topLargest(files),
-    recommendations: []
+    largestFiles: topLargest(files)
   };
-
-  if (overBudget.length > 0) {
-    report.recommendations.push(`Trim over-budget core files: ${overBudget.join(', ')}`);
-  }
-
-  if (report.sessions.archiveCandidatesOlderThan30Days.length > 0) {
-    report.recommendations.push('Move old session logs from sessions/ into archive/.');
-  }
-
-  if (report.recommendations.length === 0) {
-    report.recommendations.push('No immediate consolidation action required.');
-  }
 
   process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
 }

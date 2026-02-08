@@ -93,12 +93,12 @@ v3 split the original `core.md` into four focused files. v5 retains this split:
 
 | File | Inside Out Analogy | Purpose | Loading | Size Guideline |
 |------|-------------------|---------|---------|---------------|
-| `identity.md` | Core Memory Tray | Who the bot is: name, personality, principles, digital assets | Always (session start) | ~1.5KB |
+| `identity.md` | Core Memory Tray | Who the bot is: name, personality, principles, digital assets | Always (session start) | ~4KB |
 | `users/<id>/profile.md` | Personality Islands (per-person) | Per-user preferences, communication style, history | When addressing that user | ~1KB per user |
-| `state.md` | Day's Memory Orbs on HQ floor | Active working state, current tasks, pending items | Always (session start) | ~2KB |
-| `references.md` | Map on the wall | Pointers to config files, key paths, service discovery | Always (session start) | ~1KB |
+| `state.md` | Day's Memory Orbs on HQ floor | Active working state, current tasks, pending items | Always (session start) | ~4KB |
+| `references.md` | Map on the wall | Pointers to config files, key paths, service discovery | Always (session start) | ~2KB |
 
-**Total always-loaded budget: ~4.5KB** (identity + state + references). Each file can be updated independently.
+**Total always-loaded budget: ~10KB** (identity + state + references). Each file can be updated independently.
 
 ### 2.2 Inside Out Mapping
 
@@ -200,7 +200,7 @@ Last updated: YYYY-MM-DD HH:MM
 - [x] Completed item (YYYY-MM-DD)
 ```
 
-**Size guideline:** ~2KB max. This file is in every session's context. Every line must earn its place.
+**Size guideline:** ~4KB max. This file is in every session's context. Every line must earn its place.
 
 **Update frequency:** Every memory sync. Also updated proactively when work focus changes.
 
@@ -215,14 +215,13 @@ Last updated: YYYY-MM-DD HH:MM
 
 ## Configuration Sources
 - Environment: ~/zylos/.env (TZ, DOMAIN, PROXY, API keys)
-- Component registry: ~/.zylos/registry.json
-- Component list: ~/.zylos/components.json
+- Installed components: ~/zylos/.zylos/components.json
 - Config constants: cli/lib/config.js
 
 ## Key Paths
 - Memory: ~/zylos/memory/
 - Skills: ~/zylos/.claude/skills/
-- Logs: ~/zylos/logs/
+- Skill data: ~/zylos/<skill-name>/ (logs, databases, etc.)
 
 ## Services
 - [Service 1]: [endpoint/port] (see .env for credentials)
@@ -233,7 +232,7 @@ Last updated: YYYY-MM-DD HH:MM
 
 ## Notes
 - For TZ, domain, proxy: see .env
-- For component versions: see ~/.zylos/registry.json
+- For installed components: see ~/zylos/.zylos/components.json
 - This file is a pointer/index. Do NOT duplicate config values here.
 ```
 
@@ -631,7 +630,7 @@ None yet.
 
 ## Configuration Sources
 - Environment: ~/zylos/.env (TZ, DOMAIN, PROXY, API keys)
-- Component registry: ~/.zylos/registry.json
+- Installed components: ~/zylos/.zylos/components.json
 - Config constants: cli/lib/config.js
 
 ## Key Paths
@@ -804,10 +803,11 @@ This skill runs as a **forked subagent** with its own isolated context window.
 
 ## Memory Sync
 
-### PRIORITY: Memory Sync is the HIGHEST priority task.
+### PRIORITY: Memory Sync has the HIGHEST priority.
 
-When hooks or the scheduler trigger a Memory Sync, you MUST process it
-before responding to any pending user messages.
+When hooks or the scheduler trigger a Memory Sync, invoke `/zylos-memory`
+immediately. It runs as a forked background subagent and does NOT block
+your main work.
 
 ### When Triggered
 
@@ -834,8 +834,9 @@ node ~/zylos/.claude/skills/zylos-memory/scripts/rotate-session.js
 node ~/zylos/.claude/skills/comm-bridge/scripts/c4-fetch.js --unsummarized
 ```
 
-If output says "No unsummarized conversations.", sync is done.
-Otherwise, note the `end_id` from the `[Unsummarized Range]` line for Step 6.
+If output says "No unsummarized conversations.", skip to step 5
+(still save current state). Otherwise, note the `end_id` from the
+`[Unsummarized Range]` line for Step 6.
 
 **Step 3: Read current memory state**
 
@@ -877,10 +878,13 @@ the decision tree:
 
 **Step 5: Write updates to memory files**
 
+Always write — even without new conversations, update `state.md` and
+`sessions/current.md` with current context.
+
 Rules:
 1. Be selective, not exhaustive. Not every conversation is a memory.
 2. Prefer updates over additions. Keep files lean.
-3. state.md is the tightest budget. Must stay under 2KB.
+3. state.md is the tightest budget. Must stay under 4KB.
 4. sessions/current.md is append-only within a day.
 5. When in doubt, write to sessions/current.md.
 6. Route user-specific data to their profile.
@@ -996,7 +1000,7 @@ Daily local git commit for the `memory/` directory. Provides a safety net for me
 
 ### 9.10 scripts/consolidate.js
 
-Produces a JSON consolidation report including: file sizes, budget compliance checks, session archive candidates (older than 30 days), oldest/largest files, and actionable recommendations. Uses TZ-aware date comparison for session age calculation.
+Produces a JSON consolidation report including: file sizes, budget compliance checks, reference file freshness classification (active/aging/fading/stale based on mtime), session archive candidates (older than 30 days), and oldest/largest files. Uses TZ-aware date comparison for session age calculation. Claude reviews the JSON output and applies the consolidation review rules defined in SKILL.md.
 
 > **Source:** [`skills/zylos-memory/scripts/consolidate.js`](../skills/zylos-memory/scripts/consolidate.js)
 
@@ -1038,13 +1042,12 @@ Persistent memory stored in `~/zylos/memory/` with an Inside Out-inspired archit
 
 ### CRITICAL: Memory Sync Priority
 
-**Memory Sync has the HIGHEST priority -- higher than user messages.**
+**Memory Sync has the HIGHEST priority.**
 
 When you receive a `[Action Required] ... invoke /zylos-memory` instruction:
-1. **Stop** what you are doing (unless mid-write to a critical file)
-2. **Invoke `/zylos-memory`** -- this runs as a forked background subagent
+1. **Invoke `/zylos-memory` immediately** -- do not defer or queue it
+2. **Continue working** -- the skill runs as a forked background subagent
    with its own context window, so it does NOT block your main work
-3. **Resume** other work immediately (the sync runs in the background)
 
 ### How Memory Sync Works
 
@@ -1084,9 +1087,9 @@ When in doubt, write to sessions/current.md.
 
 ### File Size Guidelines
 
-- **identity.md:** ~1.5KB. Includes digital assets. Rarely changes.
-- **state.md:** ~2KB max. In every session's context. Keep lean.
-- **references.md:** ~1KB. Pointer/index, not prose.
+- **identity.md:** ~4KB. Includes digital assets. Rarely changes.
+- **state.md:** ~4KB max. In every session's context. Keep lean.
+- **references.md:** ~2KB. Pointer/index, not prose.
 - **users/<id>/profile.md:** ~1KB per user.
 - **reference/*.md:** No hard cap, but archive old entries.
 - **sessions/current.md:** No cap within a day. Rotated daily.
@@ -1259,10 +1262,11 @@ Since the skill runs as a forked subagent (`context: fork`), it has its OWN cont
 │   └── Claude (in subagent) analyzes conversations using decision tree
 │       Routes information to appropriate memory files
 │
-├── 5. Write updates to memory files
+├── 5. Write updates to memory files (always -- even without new conversations,
+│   │   update state.md and sessions/current.md with current context)
 │   └── Update state.md, sessions/current.md, reference/ files as needed
 │
-├── 6. Create C4 checkpoint
+├── 6. Create C4 checkpoint (only if conversations were fetched in step 2)
 │   └── node ~/zylos/.claude/skills/comm-bridge/scripts/c4-checkpoint.js <end_id> --summary "..."
 │       (end_id from step 2)
 │
@@ -1426,7 +1430,7 @@ For critical files (identity.md, state.md), scripts use standard `fs.writeFileSy
 
 ```bash
 ~/zylos/.claude/skills/scheduler/scripts/cli.js add \
-  "Run memory consolidation: node ~/zylos/.claude/skills/zylos-memory/scripts/consolidate.js -- Review the output and archive old entries as recommended." \
+  "Run memory consolidation: node ~/zylos/.claude/skills/zylos-memory/scripts/consolidate.js -- Review the JSON output and apply the consolidation review rules from the zylos-memory skill." \
   --cron "0 2 * * 0" \
   --priority 2 \
   --name "memory-consolidation-weekly" \

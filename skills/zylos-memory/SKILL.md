@@ -55,12 +55,14 @@ Both use `/zylos-memory` with no arguments.
    `node ~/zylos/.claude/skills/zylos-memory/scripts/rotate-session.js`
 2. Fetch unsummarized conversations from C4:
    `node ~/zylos/.claude/skills/comm-bridge/scripts/c4-fetch.js --unsummarized`
-   If output says "No unsummarized conversations.", sync is done.
-   Otherwise, note the `end_id` from the `[Unsummarized Range]` line.
+   If output says "No unsummarized conversations.", skip to step 5
+   (still save current state). Otherwise, note the `end_id` from the
+   `[Unsummarized Range]` line.
 3. Read memory files (`identity.md`, `state.md`, `references.md`, user profiles, `reference/*`, `sessions/current.md`).
-4. Extract and classify updates into the correct files.
-5. Write memory updates.
-6. Create checkpoint (use the end_id from step 2):
+4. Extract and classify updates from conversations into the correct files.
+5. Write memory updates (always — even without new conversations,
+   update `state.md` and `sessions/current.md` with current context).
+6. Create checkpoint (only if conversations were fetched in step 2):
    `node ~/zylos/.claude/skills/comm-bridge/scripts/c4-checkpoint.js <end_id> --summary "SUMMARY"`
 7. Confirm completion.
 
@@ -74,10 +76,22 @@ Both use `/zylos-memory` with no arguments.
 - `state.md`: active focus and pending tasks.
 - `references.md`: pointers only; do not duplicate `.env` values.
 
-## Session Log Format
+## File Formats and Examples
 
-See `references/session-log-format.md` for format definition and rules.
-See `examples/session-log.md` for a full example.
+Each memory file type has a format definition in `references/` and a
+worked example in `examples/`:
+
+| File | Format | Example |
+|------|--------|---------|
+| `identity.md` | `references/identity-format.md` | `examples/identity.md` |
+| `state.md` | `references/state-format.md` | `examples/state.md` |
+| `references.md` | `references/references-file-format.md` | `examples/references.md` |
+| `users/<id>/profile.md` | `references/user-profile-format.md` | `examples/user-profile.md` |
+| `reference/decisions.md` | `references/decisions-format.md` | `examples/decisions.md` |
+| `reference/projects.md` | `references/projects-format.md` | `examples/projects.md` |
+| `reference/preferences.md` | `references/preferences-format.md` | `examples/preferences.md` |
+| `reference/ideas.md` | `references/ideas-format.md` | `examples/ideas.md` |
+| `sessions/current.md` | `references/session-log-format.md` | `examples/session-log.md` |
 
 ## Supporting Scripts
 
@@ -90,6 +104,38 @@ See `examples/session-log.md` for a full example.
 C4 scripts used by sync flow (provided by comm-bridge skill):
 - `c4-fetch.js --unsummarized`: fetch unsummarized conversations and range.
 - `c4-checkpoint.js <end_id> --summary "..."`: create sync checkpoint.
+
+## Consolidation Review
+
+The weekly consolidation task runs `consolidate.js` and outputs a JSON report.
+Review the report and apply these rules:
+
+### Core File Budgets
+- Files over 100% budget: summarize and trim older entries.
+  Move historical content to `reference/` or `archive/`.
+- `state.md` is the strictest — must stay under 4KB.
+
+### Session Logs
+- Logs in `archiveCandidatesOlderThan30Days`: move from `sessions/` to `archive/`.
+
+### Reference Files (`reference/*.md`)
+These files have no size cap. Maintenance is at the entry level.
+Freshness is reported by file mtime (Phase 1 limitation):
+- **active** (< 7 days): no action.
+- **aging** (7–30 days): no action.
+- **fading** (30–90 days): open the file. Review entries by their dates
+  and status fields. Update or confirm still-relevant entries; move
+  obsolete entries (superseded/completed/abandoned/dropped) to `archive/`.
+- **stale** (> 90 days): same as fading, but prioritize review.
+  Entries that are clearly still critical may remain.
+
+### User Profiles
+- Profiles over ~1KB: summarize older notes.
+
+### General Rules
+1. Never delete — always move to `archive/`. Content is recoverable
+   from `archive/` or git history.
+2. Log consolidation actions in `sessions/current.md`.
 
 ## Best Practices
 
