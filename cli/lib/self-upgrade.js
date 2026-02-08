@@ -323,7 +323,10 @@ export function syncClaudeMd(templateDir) {
             : userContent.length;
 
           // Replace the section with the managed block
-          userContent = userContent.slice(0, headingIdx) + block + '\n\n' + userContent.slice(sectionEnd);
+          // sectionEnd points to \n before next ##, so slice(sectionEnd) starts with \n## ...
+          // Use single \n to get standard blank-line separation
+          const tail = userContent.slice(sectionEnd).replace(/^\n+/, '');
+          userContent = userContent.slice(0, headingIdx) + block + '\n\n' + tail;
           result.updated.push(name);
         } else {
           // Heading not found — append before ## Data Directories or at end
@@ -388,6 +391,12 @@ function step1_backupCoreSkills(ctx) {
     // Backup the skills directory (include .zylos manifests — needed for correct rollback)
     if (fs.existsSync(SKILLS_DIR)) {
       copyTree(SKILLS_DIR, path.join(backupDir, 'skills'), { excludes: ['node_modules'] });
+    }
+
+    // Backup CLAUDE.md (will be modified in step 6)
+    const claudeMdPath = path.join(ZYLOS_DIR, 'CLAUDE.md');
+    if (fs.existsSync(claudeMdPath)) {
+      fs.copyFileSync(claudeMdPath, path.join(backupDir, 'CLAUDE.md'));
     }
 
     ctx.backupDir = backupDir;
@@ -647,6 +656,19 @@ function rollbackSelf(ctx) {
       results.push({ action: 'restore_core_skills', success: true });
     } catch (err) {
       results.push({ action: 'restore_core_skills', success: false, error: err.message });
+    }
+  }
+
+  // Restore CLAUDE.md from backup
+  if (ctx.backupDir) {
+    const backupClaudeMd = path.join(ctx.backupDir, 'CLAUDE.md');
+    if (fs.existsSync(backupClaudeMd)) {
+      try {
+        fs.copyFileSync(backupClaudeMd, path.join(ZYLOS_DIR, 'CLAUDE.md'));
+        results.push({ action: 'restore_claude_md', success: true });
+      } catch (err) {
+        results.push({ action: 'restore_claude_md', success: false, error: err.message });
+      }
     }
   }
 

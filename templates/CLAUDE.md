@@ -172,7 +172,7 @@ zylos info <name>                   # Show component details
 zylos upgrade <component> --check   # Check for updates (ALWAYS do this first)
 ```
 
-**Never run upgrade --yes without reading the component-management SKILL.md workflow first.**
+**For upgrade workflow details, always read the component-management SKILL.md first.**
 <!-- zylos-managed:component-management:end -->
 
 ## Data Directories
