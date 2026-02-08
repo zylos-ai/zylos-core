@@ -236,7 +236,8 @@ This ensures the reply format is always correct regardless of SKILL.md version.
 | add \<name\> | `zylos add <name> --yes` |
 | upgrade zylos | `zylos upgrade --self --check --json` **(CHECK ONLY)** |
 | upgrade zylos confirm | `zylos upgrade --self --yes --json` **(only this executes)** |
-| remove / uninstall | Reject — reply: "Remove is not supported via C4. Use CLI directly." |
+| uninstall \<name\> / remove \<name\> | `zylos uninstall <name> --check --json` **(CHECK ONLY — preview what will be removed)** |
+| uninstall \<name\> confirm | `zylos uninstall <name> --yes --json` **(only this executes the uninstall)** |
 
 ### C4 Upgrade Confirm Flow
 
@@ -338,6 +339,24 @@ User: `upgrade zylos confirm`
 
 Run `zylos upgrade --self --yes --json`, parse the JSON output, and reply with the version change and changelog (same format as component upgrade completion).
 
+### C4 Uninstall Confirm Flow
+
+Same two-step pattern as upgrades.
+
+**Step 1 — User requests uninstall:**
+
+User: `uninstall lark` or `remove lark`
+
+Run `zylos uninstall lark --check --json`, parse the JSON output, and use the `reply` field.
+
+**Step 2 — User confirms:**
+
+User: `uninstall lark confirm`
+
+Run `zylos uninstall lark --yes --json`, parse the JSON output, and use the `reply` field.
+
+C4 uninstall always keeps the data directory (no `--purge`). User can purge via CLI if needed.
+
 ### C4 Output Formatting
 
 **NOTE: As of v0.1.0-beta.13, use the `reply` field from JSON output directly (see "C4 Reply Formatting" above). The rules below are kept as fallback reference only.**
@@ -357,5 +376,5 @@ Run `zylos upgrade --self --yes --json`, parse the JSON output, and reply with t
 | Confirmation | Interactive dialog | Two-step: preview + "confirm" command |
 | Output format | Rich (emoji, formatting) | Plain text only |
 | Config collection | Interactive prompts | Skip (use --yes), configure later |
-| Remove/uninstall | Supported | Rejected (too dangerous) |
+| Remove/uninstall | Supported (with data options) | Two-step confirm, keeps data |
 | Upgrade eval | Claude evaluation runs | Skipped (--skip-eval) |
