@@ -127,17 +127,17 @@ function formatC4Reply(type, data) {
     case 'uninstall-check': {
       const { component, version, service, dependents, dataDir } = data;
       let r = `Uninstall ${component} (v${version})?`;
-      r += `\n\nWill remove:`;
-      r += `\n  Service: ${service} (pm2)`;
-      r += `\n  Skill directory: removed`;
-      r += `\n  Data directory: kept (${dataDir})`;
+      r += `\n\nThe ${component} service will be stopped and removed.`;
+      r += `\nYour data (config, logs) in ${dataDir} can be preserved.`;
       if (dependents && dependents.length > 0) {
         r += `\n\nCannot uninstall: these components depend on ${component}:`;
         for (const d of dependents) r += `\n  - ${d}`;
         r += `\nRemove them first, or use CLI with --force.`;
         return r;
       }
-      r += `\n\nReply "uninstall ${component} confirm" to proceed.`;
+      r += `\n\nReply:`;
+      r += `\n  "uninstall ${component} confirm" - uninstall, keep your data`;
+      r += `\n  "uninstall ${component} purge" - uninstall and delete all data`;
       return r;
     }
     case 'uninstall': {
@@ -893,11 +893,11 @@ async function upgradeSelfCore() {
 export async function uninstallComponent(args) {
   const checkOnly = args.includes('--check');
   const jsonOutput = args.includes('--json');
-  const purge = args.includes('--purge');
+  const explicitPurge = args.includes('--purge') || args.includes('purge');
   const skipConfirm = args.includes('--yes') || args.includes('-y');
-  const explicitConfirm = args.includes('confirm');
+  const explicitConfirm = args.includes('confirm') || args.includes('purge');
   const force = args.includes('--force');
-  const target = args.find(arg => !arg.startsWith('-') && arg !== 'confirm');
+  const target = args.find(arg => !arg.startsWith('-') && arg !== 'confirm' && arg !== 'purge');
 
   if (!target) {
     console.error('Usage: zylos uninstall <name> [options]');
@@ -914,7 +914,7 @@ export async function uninstallComponent(args) {
     return handleUninstallCheck(target, { jsonOutput });
   }
 
-  const ok = await handleRemoveFlow(target, { purge, skipConfirm: skipConfirm || explicitConfirm, force, jsonOutput });
+  const ok = await handleRemoveFlow(target, { purge: explicitPurge, skipConfirm: skipConfirm || explicitConfirm, force, jsonOutput });
   if (!ok) process.exit(1);
 }
 
