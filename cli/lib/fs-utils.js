@@ -18,7 +18,7 @@ import os from 'node:os';
 function isExcluded(relativePath, excludes) {
   if (!relativePath || !excludes.length) return false;
   const topLevel = relativePath.split(path.sep)[0];
-  return excludes.includes(topLevel);
+  return excludes.some(e => e.replace(/\/+$/, '') === topLevel);
 }
 
 /**
@@ -88,8 +88,9 @@ export function syncTree(src, dest, { excludes = [] } = {}) {
   fs.mkdirSync(dest, { recursive: true });
 
   // Remove non-excluded entries in dest (equivalent to rsync --delete)
+  const normalized = excludes.map(e => e.replace(/\/+$/, ''));
   for (const entry of fs.readdirSync(dest)) {
-    if (excludes.includes(entry)) continue;
+    if (normalized.includes(entry)) continue;
     fs.rmSync(path.join(dest, entry), { recursive: true, force: true });
   }
 
