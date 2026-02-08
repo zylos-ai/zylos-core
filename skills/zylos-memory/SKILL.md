@@ -7,7 +7,7 @@ description: >-
   context-aware state saving. Runs as a forked subagent and does not block the
   main agent. Invoke with /zylos-memory (no arguments).
 context: fork
-allowed-tools: Read, Edit, Write, Bash, Grep, Glob
+model: sonnet
 ---
 
 # Memory System
