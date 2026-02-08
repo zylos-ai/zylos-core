@@ -23,12 +23,13 @@ import { evaluateUpgrade } from '../lib/claude-eval.js';
 
 /**
  * Print a single upgrade step result in real time.
+ * Each step result includes { step, total, name, status, message?, error? }.
  */
 function printStep(step) {
   const icon = step.status === 'done' ? '✓' :
                step.status === 'skipped' ? '○' : '✗';
   const msg = step.message ? ` (${step.message})` : '';
-  console.log(`  [${step.step}/8] ${step.name}${msg} ${icon}`);
+  console.log(`  [${step.step}/${step.total}] ${step.name}${msg} ${icon}`);
   if (step.status === 'failed' && step.error) {
     console.log(`       ${step.error}`);
   }
@@ -684,7 +685,7 @@ async function upgradeSelfCore() {
       console.log('Upgrading zylos-core...');
     }
 
-    // 6. Execute self-upgrade (8 steps) — show progress in real time
+    // 6. Execute self-upgrade — show progress in real time
     const result = runSelfUpgrade({
       tempDir,
       newVersion: check.latest,
