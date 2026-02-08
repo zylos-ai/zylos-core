@@ -5,6 +5,26 @@ All notable changes to zylos-core will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.0-beta.17] - 2026-02-08
+
+### Added
+- **Memory v5 (Inside Out architecture)**: tiered persistence with identity, state, references (always loaded) + user profiles, reference files, session logs (on demand)
+- Memory Sync as forked subagent (`/zylos-memory`) — runs in background without blocking main agent
+- SessionStart hooks: `session-start-inject.js` (loads identity/state/references) + `c4-session-init.js`
+- Supporting scripts: session rotation, daily git commit, consolidation report, memory status
+- 69 tests passing across shared utils, session rotation, and utility functions
+- Self-upgrade Step 7: sync `templates/.claude/` project settings (SessionStart hooks) during upgrades
+- Self-upgrade Step 11: auto-restart Claude after upgrade to load new skills/hooks
+- `copyMissingTree` helper: only adds missing files, never overwrites user modifications
+- Backup + rollback support for `.claude/` project settings
+
+### Changed
+- Self-upgrade pipeline expanded from 9 to 11 steps
+- New API endpoint for unsummarized conversation ID range
+- Removed `threshold-check.js` hook (replaced by Memory v5 session management)
+
+---
+
 ## [0.1.0-beta.16] - 2026-02-08
 
 ### Fixed
