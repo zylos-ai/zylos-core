@@ -226,7 +226,7 @@ The request is from C4 when the message arrives via a communication channel
 | check / check updates | `zylos upgrade --all --check --json` |
 | check \<name\> | `zylos upgrade <name> --check --json` |
 | upgrade \<name\> | `zylos upgrade <name> --check --json` **(CHECK ONLY — do NOT execute upgrade)** |
-| upgrade \<name\> confirm | `zylos upgrade <name> --yes --skip-eval` **(only this executes the upgrade)** |
+| upgrade \<name\> confirm | `zylos upgrade <name> --yes --skip-eval --json` **(only this executes the upgrade)** |
 | add \<name\> | `zylos add <name> --yes` |
 | upgrade zylos | `zylos upgrade --self --check --json` **(CHECK ONLY)** |
 | upgrade zylos confirm | `zylos upgrade --self --yes --json` **(only this executes)** |
@@ -289,7 +289,17 @@ The `evaluation` field in JSON contains `files` (array of `{file, verdict, reaso
 
 User: `upgrade telegram confirm`
 
-Run `zylos upgrade telegram --yes --skip-eval` and reply with the output.
+Run `zylos upgrade telegram --yes --skip-eval --json`, parse the JSON output, and reply:
+
+```
+<name> upgraded: <from> → <to>
+
+Changelog:
+<changelog from JSON output>
+```
+
+Include the `changelog` field from JSON in the completion message so the user knows what changed.
+If the upgrade failed, report the error and rollback status from JSON.
 
 The confirm command is self-contained — the component name is in the command itself,
 so it does not depend on Claude remembering the previous message.
@@ -320,7 +330,7 @@ If already up to date, reply: `zylos-core is up to date (v0.1.0-beta.1)`
 
 User: `upgrade zylos confirm`
 
-Run `zylos upgrade --self --yes --json` and reply with the result.
+Run `zylos upgrade --self --yes --json`, parse the JSON output, and reply with the version change and changelog (same format as component upgrade completion).
 
 ### C4 Output Formatting
 
@@ -330,6 +340,7 @@ When formatting `--json` output for C4 replies:
 - For `info --json`: format as `<name> v<version>\nType: <type>\nRepo: <repo>\nService: <name> (<status>)`
 - For `check --json`: format as `<name>: <current> -> <latest>`, include `changelog` field if present, warn about `localChanges` if present, show `evaluation` analysis if present
 - For `--self --check --json`: same as component check, but target is `zylos-core` instead of component name
+- For upgrade result (`--yes --json`): format as `<name> upgraded: <from> → <to>`, include `changelog` field if present
 - For errors: when JSON has both `error` and `message` fields, display `message` (human-readable)
 - Send reply via the appropriate channel's send script
 
