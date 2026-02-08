@@ -298,7 +298,7 @@ Each user has a profile file:
 Last updated: YYYY-MM-DD
 ```
 
-**Loaded:** When the bot receives a message from this user. The primary user's profile is loaded at session start (configurable via `.env PRIMARY_USER`).
+**Loaded:** On demand, when the bot receives a message from this user or needs their preferences.
 
 ### 3.3 Bot Identity vs User Data
 
@@ -540,7 +540,7 @@ The weekly consolidation task reports on freshness states. Claude reviews the re
 | `identity.md` | Every session start, every post-compaction | SessionStart hook injects content |
 | `state.md` | Every session start, every post-compaction | SessionStart hook injects content |
 | `references.md` | Every session start, every post-compaction | SessionStart hook injects content |
-| `users/<id>/profile.md` | Primary user at session start; others when addressing that user | SessionStart hook (primary), Read tool (others) |
+| `users/<id>/profile.md` | On demand, when addressing that user | Read tool |
 | `reference/*.md` | During memory sync, when Claude needs context | Claude reads via Read tool |
 | `sessions/current.md` | During memory sync | Claude reads via Read tool |
 | `sessions/YYYY-MM-DD.md` | Rarely, for historical lookup | Claude reads via Read tool |
@@ -1041,7 +1041,7 @@ Persistent memory stored in `~/zylos/memory/` with an Inside Out-inspired archit
 | **Identity** | `memory/identity.md` | Bot soul: personality, principles, digital assets | Always (session start) |
 | **State** | `memory/state.md` | Active work, pending tasks | Always (session start) |
 | **References** | `memory/references.md` | Pointers to config files, key paths | Always (session start) |
-| **User Profiles** | `memory/users/<id>/profile.md` | Per-user preferences | Primary user at start; others on demand |
+| **User Profiles** | `memory/users/<id>/profile.md` | Per-user preferences | On demand |
 | **Reference** | `memory/reference/*.md` | Decisions, projects, shared prefs, ideas | On demand |
 | **Sessions** | `memory/sessions/current.md` | Today's event log | On demand |
 | **Archive** | `memory/archive/` | Cold storage for old data | Rarely |
@@ -1145,9 +1145,8 @@ SessionStart event
 │   ├── Reads ~/zylos/memory/identity.md (soul + digital assets)
 │   ├── Reads ~/zylos/memory/state.md
 │   ├── Reads ~/zylos/memory/references.md (pointers to config)
-│   ├── Reads ~/zylos/memory/users/<primary>/profile.md
-│   └── Outputs: additionalContext with all four files
-│       Claude now has: identity, active state, references, primary user profile
+│   └── Outputs: plain text with all three files
+│       Claude now has: identity, active state, references
 │
 └── 2. c4-session-init.js (comm-bridge skill)
     ├── Reads last checkpoint summary
@@ -1161,7 +1160,6 @@ After both hooks fire, Claude has:
 - **Who it is** (identity from identity.md, including digital assets)
 - **What it was doing** (state from state.md)
 - **How to find config** (references from references.md, pointing to .env etc.)
-- **Who its primary user is** (profile from users/<primary>/profile.md)
 - **What happened since last sync** (checkpoint summary from C4)
 - **What needs attention** (pending tasks, Memory Sync trigger if needed)
 
@@ -1481,7 +1479,7 @@ Memory retrieval fires at specific architectural moments, not on every user mess
 
 | Trigger | What is Retrieved | How |
 |---------|------------------|-----|
-| **Session start** | identity.md, state.md, references.md, primary user profile | SessionStart hook (automatic) |
+| **Session start** | identity.md, state.md, references.md | SessionStart hook (automatic) |
 | **Memory sync** | All memory files + C4 conversations | Sync flow reads everything needed (in forked subagent) |
 | **Explicit request** | Whatever Claude judges is needed | Claude reads specific files via Read tool |
 | **User question about past** | Relevant reference files | Claude searches using Grep on memory/ |
@@ -1652,7 +1650,7 @@ ALTER TABLE entries ADD COLUMN related_entries TEXT;    -- comma-separated entry
 | 3 | Create zylos-memory scripts | session-start-inject.js, rotate-session.js, memory-sync.js, consolidate.js, memory-status.js, daily-commit.js | memory-sync.js now self-contained (no external args) |
 | 4 | Create `skills/zylos-memory/package.json` | `{"type":"module","name":"zylos-memory","version":"5.0.0"}` | |
 | 5 | Update `templates/CLAUDE.md` memory section | Replace memory section with Section 10 content | |
-| 6 | Update `templates/.env.example` | Add TZ and PRIMARY_USER | |
+| 6 | Update `templates/.env.example` | Add TZ | |
 | 7 | Configure hook system | Document settings.local.json (Section 11.1) -- SessionStart only, NO UserPromptSubmit | |
 | 8 | Register scheduler tasks | context-check, session-rotation, daily-commit, consolidation (Section 16) | |
 | 9 | Update c4-session-init.js output | Remove --begin/--end from output message | |
@@ -1792,9 +1790,6 @@ The `.env.example` template should include:
 ```bash
 # Timezone (used by rotate-session.js, daily-commit.js, and scheduler)
 TZ=UTC
-
-# Primary user ID (profile loaded at session start)
-PRIMARY_USER=default
 
 # Domain (used by HTTP sharing and other services)
 # DOMAIN=zylos.example.com

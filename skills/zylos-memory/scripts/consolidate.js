@@ -8,6 +8,7 @@
 
 import fs from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'url';
 import { MEMORY_DIR, SESSIONS_DIR, BUDGETS, loadTimezoneFromEnv, dateInTimeZone } from './shared.js';
 
 const MAX_WALK_DEPTH = 10;
@@ -151,5 +152,4 @@ function main() {
   process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
 }
 
-import { fileURLToPath } from 'url';
 if (process.argv[1] === fileURLToPath(import.meta.url)) main();

@@ -7,6 +7,7 @@
 
 import fs from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'url';
 import { MEMORY_DIR } from './shared.js';
 
 function readFileSafe(filePath) {
@@ -45,5 +46,10 @@ function main() {
   process.stdout.write(`${parts.join('\n\n')}\n`);
 }
 
-import { fileURLToPath } from 'url';
-if (process.argv[1] === fileURLToPath(import.meta.url)) main();
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  try {
+    main();
+  } catch (err) {
+    console.error(`session-start-inject error: ${err.message}`);
+  }
+}

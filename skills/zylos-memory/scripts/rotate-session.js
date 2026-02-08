@@ -8,6 +8,7 @@
 
 import fs from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'url';
 import { SESSIONS_DIR, loadTimezoneFromEnv, dateInTimeZone } from './shared.js';
 
 const CURRENT_FILE = path.join(SESSIONS_DIR, 'current.md');
@@ -68,5 +69,4 @@ function main() {
   console.log(`Created fresh current.md for ${today}`);
 }
 
-import { fileURLToPath } from 'url';
 if (process.argv[1] === fileURLToPath(import.meta.url)) main();

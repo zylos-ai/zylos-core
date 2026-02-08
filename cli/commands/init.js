@@ -288,6 +288,13 @@ function deployTemplates() {
   if (fs.existsSync(memorySrc)) {
     copyMissingTree(memorySrc, memoryDest);
   }
+
+  // .claude/ project settings (hooks, etc.) — only create missing files
+  const claudeSrc = path.join(TEMPLATES_SRC, '.claude');
+  const claudeDest = path.join(ZYLOS_DIR, '.claude');
+  if (fs.existsSync(claudeSrc)) {
+    copyMissingTree(claudeSrc, claudeDest);
+  }
 }
 
 // ── Core Skills sync ────────────────────────────────────────────

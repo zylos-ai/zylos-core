@@ -18,6 +18,7 @@ import {
   formatConversations,
   close
 } from '../../comm-bridge/scripts/c4-db.js';
+import { fileURLToPath } from 'url';
 import { ZYLOS_DIR } from './shared.js';
 
 const STATE_FILE = path.join(ZYLOS_DIR, 'zylos-memory', 'last-fetch-range.json');
@@ -151,5 +152,4 @@ function main() {
   }
 }
 
-import { fileURLToPath } from 'url';
 if (process.argv[1] === fileURLToPath(import.meta.url)) main();

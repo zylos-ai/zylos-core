@@ -6,6 +6,7 @@
  */
 
 import { execFileSync } from 'child_process';
+import { fileURLToPath } from 'url';
 import { ZYLOS_DIR, loadTimezoneFromEnv, dateInTimeZone } from './shared.js';
 
 function hasMemoryChanges() {
@@ -55,5 +56,4 @@ function main() {
   }
 }
 
-import { fileURLToPath } from 'url';
 if (process.argv[1] === fileURLToPath(import.meta.url)) main();

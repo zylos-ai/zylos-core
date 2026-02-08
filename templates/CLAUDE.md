@@ -17,7 +17,7 @@ Persistent memory stored in `~/zylos/memory/` with an Inside Out-inspired archit
 | **Identity** | `memory/identity.md` | Bot soul: personality, principles, digital assets | Always (session start) |
 | **State** | `memory/state.md` | Active work, pending tasks | Always (session start) |
 | **References** | `memory/references.md` | Pointers to config files, key paths | Always (session start) |
-| **User Profiles** | `memory/users/<id>/profile.md` | Per-user preferences | Primary user at start; others on demand |
+| **User Profiles** | `memory/users/<id>/profile.md` | Per-user preferences | On demand |
 | **Reference** | `memory/reference/*.md` | Decisions, projects, shared prefs, ideas | On demand |
 | **Sessions** | `memory/sessions/current.md` | Today's event log | On demand |
 | **Archive** | `memory/archive/` | Cold storage for old data | Rarely |

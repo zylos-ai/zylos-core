@@ -35,13 +35,11 @@ Logic: Minimal package metadata with `"type": "module"`.
 3. `skills/zylos-memory/scripts/session-start-inject.js`  
 Purpose: SessionStart hook injector.  
 Inputs:  
-- `~/zylos/memory/identity.md`  
-- `~/zylos/memory/state.md`  
-- `~/zylos/memory/references.md`  
-- `~/zylos/memory/users/<PRIMARY_USER>/profile.md` (if configured)  
-- `~/zylos/.env` for `PRIMARY_USER`  
-Outputs: JSON to stdout: `{"additionalContext":"..."}`.  
-Logic: Read existing files defensively, concatenate labeled sections, output empty-safe JSON on errors.
+- `~/zylos/memory/identity.md`
+- `~/zylos/memory/state.md`
+- `~/zylos/memory/references.md`
+Outputs: Plain text to stdout (labeled sections).
+Logic: Read existing files defensively, concatenate labeled sections, output gracefully on errors.
 
 4. `skills/zylos-memory/scripts/rotate-session.js`  
 Purpose: Daily session file rotation based on local TZ.  
@@ -141,7 +139,7 @@ Change: Update from two-hook model to SessionStart-only C4 hook usage for memory
 Change: Replace old memory section (`context.md`, flat files) with v5 tiered model (`identity.md`, `state.md`, `references.md`, `users/`, `reference/`, `sessions/`, `archive/`) and `/zylos-memory` priority behavior.
 
 5. `templates/.env.example`  
-Change: Add `PRIMARY_USER=default` and clarify TZ usage for memory scripts/scheduler.
+Change: Clarify TZ usage for memory scripts/scheduler.
 
 6. `cli/commands/init.js`  
 Changes required:  
@@ -199,7 +197,7 @@ Dependencies: Phase A complete so trigger message points to existing skill.
 ### Phase C: Templates and Init Path
 7. Replace `templates/memory/` with new v5 tree and files.
 8. Update `templates/CLAUDE.md` memory section.
-9. Update `templates/.env.example` (`PRIMARY_USER`, TZ context notes).
+9. Update `templates/.env.example` (TZ context notes).
 10. Modify `cli/commands/init.js` to recursively deploy `templates/memory/` and register scheduler tasks.  
 Dependencies: template tree must exist before init logic is updated/tested.
 
