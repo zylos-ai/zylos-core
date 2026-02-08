@@ -6,7 +6,7 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { MEMORY_DIR, BUDGETS } from './shared.js';
+import { MEMORY_DIR, BUDGETS, walkFiles } from './shared.js';
 
 export function formatBytes(bytes) {
   if (bytes < 1024) {
@@ -26,28 +26,6 @@ function fileInfo(filePath) {
   };
 }
 
-const MAX_WALK_DEPTH = 10;
-
-function countAllFiles(dir, depth = 0) {
-  if (!fs.existsSync(dir) || depth > MAX_WALK_DEPTH) {
-    return [];
-  }
-
-  const out = [];
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    if (entry.name.startsWith('.')) {
-      continue;
-    }
-    const fullPath = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      out.push(...countAllFiles(fullPath, depth + 1));
-    } else {
-      const stat = fs.statSync(fullPath);
-      out.push({ sizeBytes: stat.size });
-    }
-  }
-  return out;
-}
 
 function main() {
   const lines = [];
@@ -75,7 +53,7 @@ function main() {
     lines.push(`${name}: ${formatBytes(info.sizeBytes)} / ${formatBytes(budget)} (${pct}%) [${status}] updated ${modified}`);
   }
 
-  const allFiles = countAllFiles(MEMORY_DIR);
+  const allFiles = walkFiles(MEMORY_DIR);
   const totalBytes = allFiles.reduce((sum, item) => sum + item.sizeBytes, 0);
 
   lines.push('');

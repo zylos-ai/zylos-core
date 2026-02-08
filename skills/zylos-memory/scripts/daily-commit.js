@@ -5,9 +5,30 @@
  * Creates a local commit for memory/ in ~/zylos if changes exist.
  */
 
+import fs from 'fs';
+import path from 'path';
 import { execFileSync } from 'child_process';
 import { fileURLToPath } from 'url';
 import { ZYLOS_DIR, loadTimezoneFromEnv, dateInTimeZone } from './shared.js';
+
+function ensureGitRepo() {
+  if (fs.existsSync(path.join(ZYLOS_DIR, '.git'))) {
+    return;
+  }
+  console.log(`Initializing git repo in ${ZYLOS_DIR}`);
+  execFileSync('git', ['init'], {
+    cwd: ZYLOS_DIR,
+    stdio: ['ignore', 'pipe', 'pipe']
+  });
+  execFileSync('git', ['config', 'user.name', 'Zylos'], {
+    cwd: ZYLOS_DIR,
+    stdio: ['ignore', 'pipe', 'pipe']
+  });
+  execFileSync('git', ['config', 'user.email', 'zylos@local'], {
+    cwd: ZYLOS_DIR,
+    stdio: ['ignore', 'pipe', 'pipe']
+  });
+}
 
 function hasMemoryChanges() {
   const output = execFileSync('git', ['status', '--porcelain', '--', 'memory/'], {
@@ -21,6 +42,8 @@ function hasMemoryChanges() {
 
 function main() {
   try {
+    ensureGitRepo();
+
     if (!hasMemoryChanges()) {
       console.log('No memory changes to commit.');
       return;

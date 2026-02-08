@@ -46,6 +46,26 @@ describe('parseEnvValue', () => {
   it('handles value with leading/trailing whitespace around quotes', () => {
     assert.equal(parseEnvValue('  "trimmed"  '), 'trimmed');
   });
+
+  it('strips inline comment from unquoted value', () => {
+    assert.equal(parseEnvValue('Asia/Shanghai # timezone'), 'Asia/Shanghai');
+  });
+
+  it('preserves # inside double-quoted value', () => {
+    assert.equal(parseEnvValue('"pass#word"'), 'pass#word');
+  });
+
+  it('preserves # inside single-quoted value', () => {
+    assert.equal(parseEnvValue("'pass#word'"), 'pass#word');
+  });
+
+  it('strips inline comment with multiple spaces', () => {
+    assert.equal(parseEnvValue('value   # comment'), 'value');
+  });
+
+  it('does not strip when # is at position 0 (bare hash)', () => {
+    assert.equal(parseEnvValue('#comment'), '#comment');
+  });
 });
 
 // ---------------------------------------------------------------------------

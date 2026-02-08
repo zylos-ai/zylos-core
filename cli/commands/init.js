@@ -489,7 +489,22 @@ export async function initCommand(args) {
     }
   }
 
-  // Step 3: Check/install PM2 (auto-installs if missing)
+  // Step 3: Check/install git
+  if (commandExists('git')) {
+    console.log('  ✓ git installed');
+  } else {
+    console.log('  ✗ git not found');
+    console.log('    Installing git...');
+    if (installSystemPackage('git')) {
+      console.log('  ✓ git installed');
+    } else {
+      console.log('  ✗ Failed to install git');
+      console.log('    Install manually: brew install git (macOS) / apt install git (Linux)');
+      process.exit(1);
+    }
+  }
+
+  // Step 4: Check/install PM2
   if (commandExists('pm2')) {
     console.log('  ✓ PM2 installed');
   } else {
@@ -504,7 +519,7 @@ export async function initCommand(args) {
     }
   }
 
-  // Step 4: Check/install Claude Code (auto-installs if missing)
+  // Step 5: Check/install Claude Code
   if (commandExists('claude')) {
     console.log('  ✓ Claude Code installed');
   } else {
@@ -519,7 +534,7 @@ export async function initCommand(args) {
     }
   }
 
-  // Step 5: Claude auth check
+  // Step 6: Claude auth check
   if (commandExists('claude')) {
     try {
       const result = spawnSync('claude', ['auth', 'status'], {

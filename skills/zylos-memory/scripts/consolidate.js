@@ -9,41 +9,7 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { MEMORY_DIR, SESSIONS_DIR, BUDGETS, REFERENCE_FILES, loadTimezoneFromEnv, dateInTimeZone } from './shared.js';
-
-const MAX_WALK_DEPTH = 10;
-
-function walkFiles(rootDir, prefix = '', depth = 0) {
-  const out = [];
-
-  if (!fs.existsSync(rootDir) || depth > MAX_WALK_DEPTH) {
-    return out;
-  }
-
-  for (const entry of fs.readdirSync(rootDir, { withFileTypes: true })) {
-    if (entry.name.startsWith('.')) {
-      continue;
-    }
-
-    const fullPath = path.join(rootDir, entry.name);
-    const relPath = prefix ? `${prefix}/${entry.name}` : entry.name;
-
-    if (entry.isDirectory()) {
-      out.push(...walkFiles(fullPath, relPath, depth + 1));
-      continue;
-    }
-
-    const stat = fs.statSync(fullPath);
-    out.push({
-      path: relPath,
-      sizeBytes: stat.size,
-      modifiedAt: stat.mtime.toISOString(),
-      ageDays: Math.floor((Date.now() - stat.mtimeMs) / (1000 * 60 * 60 * 24))
-    });
-  }
-
-  return out;
-}
+import { MEMORY_DIR, SESSIONS_DIR, BUDGETS, REFERENCE_FILES, walkFiles, loadTimezoneFromEnv, dateInTimeZone } from './shared.js';
 
 export function parseSessionDate(fileName) {
   const match = fileName.match(/^(\d{4}-\d{2}-\d{2})(?:-\d+)?\.md$/);

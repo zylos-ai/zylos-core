@@ -129,6 +129,10 @@ Freshness is reported by file mtime (Phase 1 limitation):
 - **stale** (> 90 days): same as fading, but prioritize review.
   Entries that are clearly still critical may remain.
 
+**Immunity:** Entries with importance 1-2 (defined in entry metadata) are
+immune to automatic fading suggestions. They may still be reviewed but
+should not be archived based on age alone.
+
 ### User Profiles
 - Profiles over ~1KB: summarize older notes.
 

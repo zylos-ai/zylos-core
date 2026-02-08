@@ -7,7 +7,7 @@ Session logs live in `~/zylos/memory/sessions/`. The active file is `current.md`
 Every session log starts with a date header (written by `rotate-session.js`):
 
 ```markdown
-# Session Log: 2025-02-08
+# Session Log: 2026-02-08
 ```
 
 ## Entry Format

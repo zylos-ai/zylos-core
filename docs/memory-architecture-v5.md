@@ -1215,7 +1215,6 @@ v4 had a unified sync workflow with two modes (`--begin X --end Y` for regular s
 2. If yes, fetches and processes them
 3. Always saves current context state to memory files (the "flush" part)
 4. Creates a C4 checkpoint with the end_id (if conversations were processed)
-5. Runs daily git commit if there are changes
 
 This is a single, self-contained workflow. There is no distinction between "regular sync" and "pre-compaction flush" from the invocation perspective -- the skill always does both.
 
@@ -1362,7 +1361,7 @@ A daily local git commit for the memory/ directory provides:
   2. If changes exist: `git add memory/ && git commit -m "memory: daily snapshot YYYY-MM-DD"`
   3. If no changes: silently exits
 - **Local only** -- does not push to remote
-- Also called by the memory sync skill at the end of every sync
+- Runs as an independent scheduled task only (not part of the sync flow)
 
 **Commit message format:** `memory: daily snapshot YYYY-MM-DD`
 
@@ -1528,8 +1527,7 @@ Claude knows what it is working on (state.md is always in context), knows the us
    │       -> config values -> .env (NOT references.md)
    │       -> events -> sessions/current.md
    ├── 6e. Claude (subagent) writes updates to memory files
-   ├── 6f. Create C4 checkpoint (end_id from fetch)
-   └── 6g. Daily git commit if changes exist
+   └── 6f. Create C4 checkpoint (end_id from fetch)
 ```
 
 ### 19.2 Context-Triggered Sync

@@ -28,6 +28,11 @@ export function parseEnvValue(raw) {
   if ((trimmed.startsWith('"') && trimmed.endsWith('"')) || (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
     return trimmed.slice(1, -1);
   }
+  // Strip inline comments for unquoted values (dotenv convention)
+  const hashIdx = trimmed.indexOf('#');
+  if (hashIdx > 0) {
+    return trimmed.slice(0, hashIdx).trimEnd();
+  }
   return trimmed;
 }
 
@@ -64,6 +69,48 @@ export function loadTimezoneFromEnv() {
   }
 
   return process.env.TZ || null;
+}
+
+const MAX_WALK_DEPTH = 10;
+
+/**
+ * Recursively walk a directory and return file metadata.
+ * Skips dot-files and limits recursion depth.
+ * @param {string} rootDir - Directory to walk
+ * @param {string} [prefix=''] - Relative path prefix for output
+ * @param {number} [depth=0] - Current recursion depth
+ * @returns {Array<{path: string, sizeBytes: number, modifiedAt: string, ageDays: number}>}
+ */
+export function walkFiles(rootDir, prefix = '', depth = 0) {
+  const out = [];
+
+  if (!fs.existsSync(rootDir) || depth > MAX_WALK_DEPTH) {
+    return out;
+  }
+
+  for (const entry of fs.readdirSync(rootDir, { withFileTypes: true })) {
+    if (entry.name.startsWith('.')) {
+      continue;
+    }
+
+    const fullPath = path.join(rootDir, entry.name);
+    const relPath = prefix ? `${prefix}/${entry.name}` : entry.name;
+
+    if (entry.isDirectory()) {
+      out.push(...walkFiles(fullPath, relPath, depth + 1));
+      continue;
+    }
+
+    const stat = fs.statSync(fullPath);
+    out.push({
+      path: relPath,
+      sizeBytes: stat.size,
+      modifiedAt: stat.mtime.toISOString(),
+      ageDays: Math.floor((Date.now() - stat.mtimeMs) / (1000 * 60 * 60 * 24))
+    });
+  }
+
+  return out;
 }
 
 export function dateInTimeZone(date, tz) {
