@@ -6,7 +6,7 @@
   "main": "scripts/c4-db.js",
   "scripts": {
     "init": "node scripts/c4-db.js init",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "node --test scripts/__tests__/*.test.js"
   },
   "keywords": ["zylos", "ai-agent", "communication"],
   "author": "Zylos AI",

@@ -1,25 +1,35 @@
 #!/usr/bin/env node
 /**
- * Activity Monitor v5 - Guardian Mode with Maintenance Awareness
- * Monitors Claude's activity state AND ensures Claude Code is always running
- * Waits for restart/upgrade scripts to complete before starting Claude
+ * Activity Monitor v9 - Guardian + Heartbeat + Health Check + Daily Tasks
  * Run with PM2: pm2 start activity-monitor.js --name activity-monitor
  */
 
-import { execSync, execFileSync, spawn } from 'child_process';
+import { execSync, execFileSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import { fileURLToPath } from 'url';
+import { HeartbeatEngine } from './heartbeat-engine.js';
+import { DailySchedule } from './daily-schedule.js';
 
-// Configuration
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// Core runtime config
 const SESSION = 'claude-main';
-const STATUS_FILE = path.join(os.homedir(), '.claude-status');
 const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
-const SKILL_DIR = path.join(ZYLOS_DIR, 'activity-monitor');
-const LOG_FILE = path.join(SKILL_DIR, 'activity.log');
+const COMM_BRIDGE_DIR = path.join(ZYLOS_DIR, 'comm-bridge');
+const STATUS_FILE = path.join(COMM_BRIDGE_DIR, 'claude-status.json');
+const MONITOR_DIR = path.join(ZYLOS_DIR, 'activity-monitor');
+const LOG_FILE = path.join(MONITOR_DIR, 'activity.log');
+const HEARTBEAT_PENDING_FILE = path.join(MONITOR_DIR, 'heartbeat-pending.json');
+const HEALTH_CHECK_STATE_FILE = path.join(MONITOR_DIR, 'health-check-state.json');
+const DAILY_UPGRADE_STATE_FILE = path.join(MONITOR_DIR, 'daily-upgrade-state.json');
+const DAILY_MEMORY_COMMIT_STATE_FILE = path.join(MONITOR_DIR, 'daily-memory-commit-state.json');
+const CONTEXT_CHECK_STATE_FILE = path.join(MONITOR_DIR, 'context-check-state.json');
+const PENDING_CHANNELS_FILE = path.join(COMM_BRIDGE_DIR, 'pending-channels.jsonl');
 
 // Claude binary - relies on PATH from PM2 ecosystem.config.js
-// Override via CLAUDE_BIN environment variable if needed
 const CLAUDE_BIN = process.env.CLAUDE_BIN || 'claude';
 const BYPASS_PERMISSIONS = process.env.CLAUDE_BYPASS_PERMISSIONS !== 'false';
 
@@ -27,38 +37,70 @@ const BYPASS_PERMISSIONS = process.env.CLAUDE_BYPASS_PERMISSIONS !== 'false';
 const ZYLOS_PATH = ZYLOS_DIR.replace(/\//g, '-');
 const CONV_DIR = path.join(os.homedir(), '.claude', 'projects', ZYLOS_PATH);
 
-const INTERVAL = 1000;        // Check every 1 second (ms)
-const IDLE_THRESHOLD = 3;     // seconds without activity = idle
-const LOG_MAX_LINES = 500;    // Auto-truncate log to this many lines
-const RESTART_DELAY = 5;      // seconds of continuous "not running" before restarting
+// Activity monitor cadence
+const INTERVAL = 1000;
+const IDLE_THRESHOLD = 3;
+const LOG_MAX_LINES = 500;
+const RESTART_DELAY = 5;
+
+// Heartbeat liveness config
+const HEARTBEAT_INTERVAL = 1800;     // 30 min
+const ACK_DEADLINE = 300;            // 5 min
+const MAX_RESTART_FAILURES = 3;
+
+// Health check config
+const HEALTH_CHECK_INTERVAL = 21600; // 6 hours
+
+// Context check config
+const CONTEXT_CHECK_INTERVAL = 3600; // 1 hour
+
+// Daily tasks config
+const DAILY_UPGRADE_HOUR = 5;        // 5:00 AM local time
+const DAILY_MEMORY_COMMIT_HOUR = 3;  // 3:00 AM local time
+const DAILY_COMMIT_SCRIPT = path.join(__dirname, '..', '..', 'zylos-memory', 'scripts', 'daily-commit.js');
 
 // State
 let lastTruncateDay = '';
 let notRunningCount = 0;
 let lastState = '';
 let startupGrace = 0;
-let idleSince = 0;  // Timestamp when entered idle state
+let idleSince = 0;
+
+let engine; // initialized in init()
+
+// Timezone: reuse scheduler's tz.js (.env TZ → process.env.TZ → UTC)
+import { loadTimezone } from '../../scheduler/scripts/tz.js';
+
+const timezone = loadTimezone();
+
+function getLocalHour() {
+  return parseInt(
+    new Intl.DateTimeFormat('en-US', { timeZone: timezone, hour: 'numeric', hour12: false })
+      .format(new Date()),
+    10
+  );
+}
+
+function getLocalDate() {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: timezone }).format(new Date());
+}
 
 function log(message) {
   const timestamp = new Date().toISOString().replace('T', ' ').substring(0, 19);
   const line = `[${timestamp}] ${message}\n`;
-  // Ensure skill directory exists
-  if (!fs.existsSync(SKILL_DIR)) {
-    fs.mkdirSync(SKILL_DIR, { recursive: true });
+  if (!fs.existsSync(MONITOR_DIR)) {
+    fs.mkdirSync(MONITOR_DIR, { recursive: true });
   }
   fs.appendFileSync(LOG_FILE, line);
 }
 
 function truncateLog() {
   if (!fs.existsSync(LOG_FILE)) return;
-
   const content = fs.readFileSync(LOG_FILE, 'utf8');
   const lines = content.split('\n');
-
   if (lines.length > LOG_MAX_LINES) {
-    const truncated = lines.slice(-LOG_MAX_LINES).join('\n');
-    fs.writeFileSync(LOG_FILE, truncated);
-    log('Log truncated to ' + LOG_MAX_LINES + ' lines');
+    fs.writeFileSync(LOG_FILE, lines.slice(-LOG_MAX_LINES).join('\n'));
+    log(`Log truncated to ${LOG_MAX_LINES} lines`);
   }
 }
 
@@ -73,10 +115,27 @@ function checkDailyTruncate() {
 function runCommand(cmd, silent = false) {
   try {
     return execSync(cmd, { encoding: 'utf8', stdio: silent ? 'pipe' : 'inherit' }).trim();
-  } catch (err) {
+  } catch {
     return null;
   }
 }
+
+function resolveCommBridgeScript(fileName) {
+  const prodPath = path.join(ZYLOS_DIR, '.claude', 'skills', 'comm-bridge', 'scripts', fileName);
+  if (fs.existsSync(prodPath)) {
+    return prodPath;
+  }
+
+  const devPath = path.join(__dirname, '..', '..', 'comm-bridge', 'scripts', fileName);
+  if (fs.existsSync(devPath)) {
+    return devPath;
+  }
+
+  return prodPath;
+}
+
+const C4_CONTROL_PATH = resolveCommBridgeScript('c4-control.js');
+const C4_SEND_PATH = resolveCommBridgeScript('c4-send.js');
 
 function tmuxHasSession() {
   try {
@@ -84,6 +143,15 @@ function tmuxHasSession() {
     return true;
   } catch {
     return false;
+  }
+}
+
+function killTmuxSession() {
+  try {
+    execSync(`tmux kill-session -t "${SESSION}" 2>/dev/null`);
+    log('Heartbeat recovery: killed tmux session');
+  } catch {
+    log('Heartbeat recovery: tmux session kill skipped (already missing)');
   }
 }
 
@@ -99,72 +167,15 @@ function isClaudeRunning() {
   const panePid = getTmuxPanePid();
   if (!panePid) return false;
 
-  // Check if the pane process itself is claude
   try {
     const procName = execSync(`ps -p ${panePid} -o comm= 2>/dev/null`, { encoding: 'utf8' }).trim();
     if (procName === 'claude') return true;
   } catch {}
 
-  // Fallback: check if claude is a child process
   try {
     execSync(`pgrep -P ${panePid} -f "claude" > /dev/null 2>&1`);
     return true;
   } catch {
-    return false;
-  }
-}
-
-function isClaudeReady() {
-  // Check if Claude has displayed the input prompt by capturing tmux pane content
-  try {
-    const paneContent = execSync(
-      `tmux capture-pane -t "${SESSION}" -p 2>/dev/null`,
-      { encoding: 'utf8' }
-    );
-    // Claude Code shows ">" as input prompt when ready
-    // Also check for common ready indicators
-    return paneContent.includes('>') || paneContent.includes('Claude');
-  } catch {
-    return false;
-  }
-}
-
-function waitForClaudeReady(maxWaitSeconds = 60) {
-  return new Promise((resolve) => {
-    let waited = 0;
-    const checkInterval = setInterval(() => {
-      waited++;
-
-      if (isClaudeReady()) {
-        clearInterval(checkInterval);
-        log(`Guardian: Claude ready after ${waited}s`);
-        resolve(true);
-        return;
-      }
-
-      if (waited >= maxWaitSeconds) {
-        clearInterval(checkInterval);
-        log(`Guardian: Timeout waiting for Claude to be ready (${maxWaitSeconds}s)`);
-        resolve(false);
-        return;
-      }
-    }, 1000);
-  });
-}
-
-function sendViaC4(message, source = 'system') {
-  const c4ReceivePath = path.join(os.homedir(), 'zylos/.claude/skills/comm-bridge/scripts/c4-receive.js');
-
-  try {
-    // Use execFileSync to avoid shell injection - passes arguments directly
-    execFileSync(
-      'node',
-      [c4ReceivePath, '--priority', '1', '--no-reply', '--content', message],
-      { stdio: 'pipe' }
-    );
-    return true;
-  } catch (err) {
-    log(`Failed to send via C4: ${err.message}`);
     return false;
   }
 }
@@ -176,37 +187,29 @@ function sendToTmux(text) {
 
   try {
     fs.writeFileSync(tempFile, text);
-
-    try {
-      execSync(`tmux load-buffer -b "${bufferName}" "${tempFile}" 2>/dev/null`);
-      execSync('sleep 0.1');
-      execSync(`tmux paste-buffer -b "${bufferName}" -t "${SESSION}" 2>/dev/null`);
-      execSync('sleep 0.2');
-      execSync(`tmux send-keys -t "${SESSION}" Enter 2>/dev/null`);
-      execSync(`tmux delete-buffer -b "${bufferName}" 2>/dev/null`);
-    } catch {}
-
+    execSync(`tmux load-buffer -b "${bufferName}" "${tempFile}" 2>/dev/null`);
+    execSync('sleep 0.1');
+    execSync(`tmux paste-buffer -b "${bufferName}" -t "${SESSION}" 2>/dev/null`);
+    execSync('sleep 0.2');
+    execSync(`tmux send-keys -t "${SESSION}" Enter 2>/dev/null`);
+    execSync(`tmux delete-buffer -b "${bufferName}" 2>/dev/null`);
     fs.unlinkSync(tempFile);
-  } catch (err) {
-    // Silently ignore
+  } catch {
+    // Best-effort.
   }
 }
 
 function getRunningMaintenance() {
-  // Check for restart-claude (match .sh or .js)
-  // Use bracket trick [r] to prevent pgrep from matching itself
   try {
     execSync('pgrep -f "[r]estart-claude" > /dev/null 2>&1');
     return 'restart-claude';
   } catch {}
 
-  // Check for upgrade-claude
   try {
     execSync('pgrep -f "[u]pgrade-claude" > /dev/null 2>&1');
     return 'upgrade-claude';
   } catch {}
 
-  // Also check for curl install.sh (upgrade in progress)
   try {
     execSync('pgrep -f "[c]laude.ai/install.sh" > /dev/null 2>&1');
     return 'upgrade (curl install.sh)';
@@ -220,14 +223,12 @@ function isMaintenanceRunning() {
 }
 
 function waitForMaintenance() {
-  const maxWait = 300;  // 5 minutes max
+  const maxWait = 300;
   let waited = 0;
-
   let scriptName = getRunningMaintenance();
   if (!scriptName) return;
 
   log(`Guardian: Detected ${scriptName} running, waiting for completion...`);
-
   while (true) {
     scriptName = getRunningMaintenance();
     if (!scriptName) break;
@@ -242,16 +243,15 @@ function waitForMaintenance() {
     }
 
     execSync('sleep 1');
-    waited++;
+    waited += 1;
   }
 
   if (waited > 0 && waited < maxWait) {
-    log(`Guardian: ${scriptName} completed after ${waited}s`);
+    log(`Guardian: maintenance completed after ${waited}s`);
   }
 }
 
 function startClaude() {
-  // First check if maintenance scripts are running
   if (isMaintenanceRunning()) {
     log('Guardian: Maintenance script detected, waiting for completion...');
     waitForMaintenance();
@@ -259,7 +259,6 @@ function startClaude() {
 
   log('Guardian: Starting Claude Code...');
 
-  // Reset context monitor cooldowns
   try {
     fs.unlinkSync('/tmp/context-alert-cooldown');
   } catch {}
@@ -270,11 +269,9 @@ function startClaude() {
   const bypassFlag = BYPASS_PERMISSIONS ? ' --dangerously-skip-permissions' : '';
 
   if (tmuxHasSession()) {
-    // Session exists, send command to start claude
     sendToTmux(`cd ${ZYLOS_DIR}; ${CLAUDE_BIN}${bypassFlag}`);
     log('Guardian: Started Claude in existing tmux session');
   } else {
-    // Create new session
     try {
       execSync(`tmux new-session -d -s "${SESSION}" "cd ${ZYLOS_DIR} && ${CLAUDE_BIN}${bypassFlag}"`);
       log('Guardian: Created new tmux session and started Claude');
@@ -283,29 +280,31 @@ function startClaude() {
     }
   }
 
-  // Wait for Claude to be ready (show input prompt), then send recovery message
-  waitForClaudeReady(60).then((ready) => {
-    if (ready) {
-      log('Guardian: Claude is ready, waiting 2s before sending recovery prompt...');
-      setTimeout(() => {
-        sendViaC4(`Session recovered by activity monitor. Do the following:
+}
 
-1. Read your memory files (identity.md, state.md, references.md in ${ZYLOS_DIR}/memory/)
-2. Check the conversation transcript at ${CONV_DIR}/*.jsonl (most recent file by date) for messages AFTER the last memory sync timestamp
-3. If there was conversation between last memory sync and crash, briefly summarize what was discussed (both Howard's messages and your replies)`);
-        log('Guardian: Recovery prompt sent via C4');
-      }, 2000);
-    } else {
-      log('Guardian: Warning - Claude may not have started properly');
+function ensureStatusDir() {
+  if (!fs.existsSync(COMM_BRIDGE_DIR)) {
+    fs.mkdirSync(COMM_BRIDGE_DIR, { recursive: true });
+  }
+}
+
+function loadInitialHealth() {
+  try {
+    if (!fs.existsSync(STATUS_FILE)) return 'ok';
+    const status = JSON.parse(fs.readFileSync(STATUS_FILE, 'utf8'));
+    if (status && typeof status.health === 'string') {
+      return status.health;
     }
-  });
+  } catch {}
+  return 'ok';
 }
 
 function writeStatusFile(statusObj) {
   try {
-    fs.writeFileSync(STATUS_FILE, JSON.stringify(statusObj, null, 2));
-  } catch (err) {
-    // Silently ignore
+    ensureStatusDir();
+    fs.writeFileSync(STATUS_FILE, JSON.stringify({ ...statusObj, health: engine.health }, null, 2));
+  } catch {
+    // Best-effort.
   }
 }
 
@@ -313,10 +312,7 @@ function getConversationFileModTime() {
   try {
     const files = fs.readdirSync(CONV_DIR)
       .filter(f => f.endsWith('.jsonl') && !f.includes('agent-'))
-      .map(f => ({
-        name: f,
-        mtime: fs.statSync(path.join(CONV_DIR, f)).mtimeMs
-      }))
+      .map(f => ({ name: f, mtime: fs.statSync(path.join(CONV_DIR, f)).mtimeMs }))
       .sort((a, b) => b.mtime - a.mtime);
 
     if (files.length > 0) {
@@ -335,17 +331,387 @@ function getTmuxActivity() {
   }
 }
 
+function readHeartbeatPending() {
+  try {
+    if (!fs.existsSync(HEARTBEAT_PENDING_FILE)) return null;
+    const parsed = JSON.parse(fs.readFileSync(HEARTBEAT_PENDING_FILE, 'utf8'));
+    if (parsed && Number.isInteger(parsed.control_id)) {
+      return parsed;
+    }
+  } catch (err) {
+    log(`Heartbeat: failed to read pending file (${err.message})`);
+  }
+  return null;
+}
+
+function writeHeartbeatPending(record) {
+  if (!fs.existsSync(MONITOR_DIR)) {
+    fs.mkdirSync(MONITOR_DIR, { recursive: true });
+  }
+  fs.writeFileSync(HEARTBEAT_PENDING_FILE, JSON.stringify(record, null, 2));
+}
+
+function clearHeartbeatPending() {
+  try {
+    fs.unlinkSync(HEARTBEAT_PENDING_FILE);
+  } catch {}
+}
+
+function runC4Control(args) {
+  try {
+    const output = execFileSync('node', [C4_CONTROL_PATH, ...args], { encoding: 'utf8', stdio: 'pipe' }).trim();
+    return { ok: true, output };
+  } catch (err) {
+    const stdout = err.stdout ? String(err.stdout).trim() : '';
+    const stderr = err.stderr ? String(err.stderr).trim() : '';
+    return { ok: false, output: stdout || stderr || err.message };
+  }
+}
+
+function enqueueHeartbeat(phase) {
+  const content = 'Heartbeat check.';
+  const result = runC4Control([
+    'enqueue',
+    '--content', content,
+    '--priority', '0',
+    '--bypass-state',
+    '--ack-deadline', String(ACK_DEADLINE)
+  ]);
+
+  if (!result.ok) {
+    log(`Heartbeat enqueue failed (${phase}): ${result.output}`);
+    return false;
+  }
+
+  const match = result.output.match(/control\s+(\d+)/i);
+  if (!match) {
+    log(`Heartbeat enqueue parse failed (${phase}): ${result.output}`);
+    return false;
+  }
+
+  const controlId = parseInt(match[1], 10);
+  writeHeartbeatPending({
+    control_id: controlId,
+    phase,
+    created_at: Math.floor(Date.now() / 1000)
+  });
+  log(`Heartbeat enqueued id=${controlId} phase=${phase}`);
+  return true;
+}
+
+function getHeartbeatStatus(controlId) {
+  const result = runC4Control(['get', '--id', String(controlId)]);
+  if (!result.ok) {
+    if (result.output.toLowerCase().includes('not found')) {
+      return 'not_found';
+    }
+    log(`Heartbeat status query failed for ${controlId}: ${result.output}`);
+    return 'error';
+  }
+
+  const match = result.output.match(/status=([a-z_]+)/i);
+  if (!match) {
+    log(`Heartbeat status parse failed for ${controlId}: ${result.output}`);
+    return 'error';
+  }
+  return match[1].toLowerCase();
+}
+
+function sendRecoveryNotice(channel, endpoint) {
+  try {
+    execFileSync('node', [C4_SEND_PATH, channel, endpoint, 'Hey! I was temporarily unavailable but I\'m back online now. If you sent me something while I was away, could you send it again? Thanks!'], { stdio: 'pipe' });
+    return true;
+  } catch (err) {
+    log(`Recovery notice failed for ${channel}:${endpoint} (${err.message})`);
+    return false;
+  }
+}
+
+function notifyPendingChannels() {
+  if (!fs.existsSync(PENDING_CHANNELS_FILE)) {
+    return;
+  }
+
+  const dedup = new Map();
+  try {
+    const lines = fs.readFileSync(PENDING_CHANNELS_FILE, 'utf8').split('\n');
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      try {
+        const record = JSON.parse(line);
+        if (!record.channel || !record.endpoint) continue;
+        dedup.set(`${record.channel}::${record.endpoint}`, record);
+      } catch {
+        // Ignore malformed line.
+      }
+    }
+  } catch (err) {
+    log(`Pending channel load failed: ${err.message}`);
+    return;
+  }
+
+  for (const record of dedup.values()) {
+    sendRecoveryNotice(record.channel, record.endpoint);
+  }
+
+  try {
+    fs.writeFileSync(PENDING_CHANNELS_FILE, '');
+  } catch (err) {
+    log(`Pending channel cleanup failed: ${err.message}`);
+  }
+
+  log(`Recovery notification completed for ${dedup.size} channel(s)`);
+}
+
+// --- Health Check ---
+
+function loadHealthCheckState() {
+  try {
+    if (!fs.existsSync(HEALTH_CHECK_STATE_FILE)) return null;
+    const parsed = JSON.parse(fs.readFileSync(HEALTH_CHECK_STATE_FILE, 'utf8'));
+    if (parsed && typeof parsed.last_check_at === 'number') {
+      return parsed;
+    }
+  } catch {}
+  return null;
+}
+
+function writeHealthCheckState(lastCheckAt) {
+  try {
+    if (!fs.existsSync(MONITOR_DIR)) {
+      fs.mkdirSync(MONITOR_DIR, { recursive: true });
+    }
+    fs.writeFileSync(HEALTH_CHECK_STATE_FILE, JSON.stringify({
+      last_check_at: lastCheckAt,
+      last_check_human: new Date(lastCheckAt * 1000).toISOString().replace('T', ' ').substring(0, 19)
+    }, null, 2));
+  } catch (err) {
+    log(`Health check: failed to write state (${err.message})`);
+  }
+}
+
+function enqueueHealthCheck() {
+  const content = [
+    'System health check. Check PM2 services (pm2 jlist), disk space (df -h), and memory (free -m).',
+    'If any issues found, use your judgment to notify whoever is most likely to help — check your memory for a designated owner or ops person, otherwise pick the person you normally work with.',
+    'Log results to ~/zylos/logs/health.log.'
+  ].join(' ');
+
+  const result = runC4Control([
+    'enqueue',
+    '--content', content,
+    '--priority', '3',
+    '--ack-deadline', '600'
+  ]);
+
+  if (!result.ok) {
+    log(`Health check enqueue failed: ${result.output}`);
+    return false;
+  }
+
+  const match = result.output.match(/control\s+(\d+)/i);
+  if (!match) {
+    log(`Health check enqueue parse failed: ${result.output}`);
+    return false;
+  }
+
+  const now = Math.floor(Date.now() / 1000);
+  writeHealthCheckState(now);
+  log(`Health check enqueued id=${match[1]}`);
+  return true;
+}
+
+function maybeEnqueueHealthCheck(claudeRunning, currentTime) {
+  if (!claudeRunning) return;
+  if (engine.health !== 'ok') return;
+
+  const state = loadHealthCheckState();
+  const lastCheckAt = state?.last_check_at ?? 0;
+
+  if ((currentTime - lastCheckAt) >= HEALTH_CHECK_INTERVAL) {
+    enqueueHealthCheck();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Context Check (hourly)
+// ---------------------------------------------------------------------------
+
+function loadContextCheckState() {
+  try {
+    if (!fs.existsSync(CONTEXT_CHECK_STATE_FILE)) return null;
+    const parsed = JSON.parse(fs.readFileSync(CONTEXT_CHECK_STATE_FILE, 'utf8'));
+    if (parsed && typeof parsed.last_check_at === 'number') {
+      return parsed;
+    }
+  } catch {}
+  return null;
+}
+
+function writeContextCheckState(timestamp) {
+  try {
+    if (!fs.existsSync(MONITOR_DIR)) {
+      fs.mkdirSync(MONITOR_DIR, { recursive: true });
+    }
+    fs.writeFileSync(CONTEXT_CHECK_STATE_FILE, JSON.stringify({
+      last_check_at: timestamp,
+      last_check_human: new Date(timestamp * 1000).toISOString().replace('T', ' ').substring(0, 19)
+    }, null, 2));
+  } catch (err) {
+    log(`Context check: failed to write state (${err.message})`);
+  }
+}
+
+function enqueueContextCheck() {
+  const content = [
+    'Context usage check.',
+    'Use the check-context skill to get current context usage.',
+    'If context usage exceeds 70%, use the restart-claude skill to restart.'
+  ].join(' ');
+
+  const result = runC4Control([
+    'enqueue',
+    '--content', content,
+    '--priority', '3',
+    '--require-idle',
+    '--ack-deadline', '600'
+  ]);
+
+  if (!result.ok) {
+    log(`Context check enqueue failed: ${result.output}`);
+    return false;
+  }
+
+  const match = result.output.match(/control\s+(\d+)/i);
+  if (!match) {
+    log(`Context check enqueue parse failed: ${result.output}`);
+    return false;
+  }
+
+  const now = Math.floor(Date.now() / 1000);
+  writeContextCheckState(now);
+  log(`Context check enqueued id=${match[1]}`);
+  return true;
+}
+
+function maybeEnqueueContextCheck(claudeRunning, currentTime) {
+  if (!claudeRunning) return;
+  if (engine.health !== 'ok') return;
+
+  const state = loadContextCheckState();
+  const lastCheckAt = state?.last_check_at ?? 0;
+
+  if ((currentTime - lastCheckAt) >= CONTEXT_CHECK_INTERVAL) {
+    enqueueContextCheck();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Daily Upgrade
+// ---------------------------------------------------------------------------
+
+function loadDailyUpgradeState() {
+  try {
+    if (!fs.existsSync(DAILY_UPGRADE_STATE_FILE)) return null;
+    return JSON.parse(fs.readFileSync(DAILY_UPGRADE_STATE_FILE, 'utf8'));
+  } catch {}
+  return null;
+}
+
+function writeDailyUpgradeState(date) {
+  try {
+    if (!fs.existsSync(MONITOR_DIR)) {
+      fs.mkdirSync(MONITOR_DIR, { recursive: true });
+    }
+    fs.writeFileSync(DAILY_UPGRADE_STATE_FILE, JSON.stringify({
+      last_date: date,
+      updated_at: new Date().toISOString()
+    }, null, 2));
+  } catch (err) {
+    log(`Daily upgrade: failed to write state (${err.message})`);
+  }
+}
+
+function enqueueDailyUpgradeControl() {
+  const content = 'Daily upgrade. Use the upgrade-claude skill to upgrade Claude Code to the latest version.';
+  const result = runC4Control([
+    'enqueue',
+    '--content', content,
+    '--priority', '3',
+    '--ack-deadline', '600'
+  ]);
+
+  if (!result.ok) {
+    log(`Daily upgrade enqueue failed: ${result.output}`);
+    return false;
+  }
+
+  const match = result.output.match(/control\s+(\d+)/i);
+  if (!match) {
+    log(`Daily upgrade enqueue parse failed: ${result.output}`);
+    return false;
+  }
+
+  log(`Daily upgrade enqueued id=${match[1]} (tz=${timezone})`);
+  return true;
+}
+
+let upgradeScheduler;      // initialized in init()
+let memoryCommitScheduler; // initialized in init()
+
+// ---------------------------------------------------------------------------
+// Daily Memory Commit
+// ---------------------------------------------------------------------------
+
+function loadMemoryCommitState() {
+  try {
+    if (!fs.existsSync(DAILY_MEMORY_COMMIT_STATE_FILE)) return null;
+    return JSON.parse(fs.readFileSync(DAILY_MEMORY_COMMIT_STATE_FILE, 'utf8'));
+  } catch {}
+  return null;
+}
+
+function writeMemoryCommitState(date) {
+  try {
+    if (!fs.existsSync(MONITOR_DIR)) {
+      fs.mkdirSync(MONITOR_DIR, { recursive: true });
+    }
+    fs.writeFileSync(DAILY_MEMORY_COMMIT_STATE_FILE, JSON.stringify({
+      last_date: date,
+      updated_at: new Date().toISOString()
+    }, null, 2));
+  } catch (err) {
+    log(`Daily memory commit: failed to write state (${err.message})`);
+  }
+}
+
+function executeDailyMemoryCommit() {
+  try {
+    const output = execFileSync('node', [DAILY_COMMIT_SCRIPT], {
+      encoding: 'utf8',
+      timeout: 30000,
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+    if (output.trim()) {
+      log(`Daily memory commit: ${output.trim()}`);
+    }
+    return true;
+  } catch (err) {
+    const detail = err?.stderr?.toString?.().trim() || err.message;
+    log(`Daily memory commit failed: ${detail}`);
+    return false;
+  }
+}
+
 function monitorLoop() {
   const currentTime = Math.floor(Date.now() / 1000);
   const currentTimeHuman = new Date().toISOString().replace('T', ' ').substring(0, 19);
 
-  // Daily log truncation
   checkDailyTruncate();
 
-  // Check if tmux session exists
   if (!tmuxHasSession()) {
     const state = 'offline';
-    notRunningCount++;
+    notRunningCount += 1;
 
     writeStatusFile({
       state,
@@ -361,7 +727,6 @@ function monitorLoop() {
       log('State: OFFLINE (tmux session not found)');
     }
 
-    // Guardian: Start Claude after RESTART_DELAY seconds
     if (notRunningCount >= RESTART_DELAY) {
       log(`Guardian: Session not found for ${notRunningCount}s, starting Claude...`);
       startClaude();
@@ -369,20 +734,23 @@ function monitorLoop() {
       notRunningCount = 0;
     }
 
+    engine.processHeartbeat(false, currentTime);
+    maybeEnqueueHealthCheck(false, currentTime);
+    maybeEnqueueContextCheck(false, currentTime);
+    memoryCommitScheduler.maybeTrigger();
     lastState = state;
     return;
   }
 
-  // Session exists, check if claude is running
   if (!isClaudeRunning()) {
-    // Grace period after startup
     if (startupGrace > 0) {
-      startupGrace--;
+      startupGrace -= 1;
+      engine.processHeartbeat(false, currentTime);
       return;
     }
 
     const state = 'stopped';
-    notRunningCount++;
+    notRunningCount += 1;
 
     writeStatusFile({
       state,
@@ -398,7 +766,6 @@ function monitorLoop() {
       log('State: STOPPED (claude not running in tmux session)');
     }
 
-    // Guardian: Start Claude after RESTART_DELAY seconds
     if (notRunningCount >= RESTART_DELAY) {
       log(`Guardian: Claude not running for ${notRunningCount}s, starting Claude...`);
       startClaude();
@@ -406,20 +773,21 @@ function monitorLoop() {
       notRunningCount = 0;
     }
 
+    engine.processHeartbeat(false, currentTime);
+    maybeEnqueueHealthCheck(false, currentTime);
+    maybeEnqueueContextCheck(false, currentTime);
+    memoryCommitScheduler.maybeTrigger();
     lastState = state;
     return;
   }
 
-  // Reset counters when claude is confirmed running
   startupGrace = 0;
   notRunningCount = 0;
 
-  // Get conversation file modification time (more reliable than tmux activity)
   let activity = getConversationFileModTime();
   let source = 'conv_file';
 
   if (!activity) {
-    // Fallback to tmux activity
     activity = getTmuxActivity();
     source = 'tmux_activity';
   }
@@ -429,51 +797,99 @@ function monitorLoop() {
     source = 'default';
   }
 
-  // Calculate time since last activity
   const inactiveSeconds = currentTime - activity;
-
-  // Determine state
   const state = inactiveSeconds < IDLE_THRESHOLD ? 'busy' : 'idle';
 
-  // Track when we entered idle state
   if (state === 'idle' && lastState !== 'idle') {
-    // Just transitioned to idle
     idleSince = currentTime;
   } else if (state === 'busy') {
-    // Reset idle tracking when busy
     idleSince = 0;
   }
 
-  // idle_seconds = time since entering idle state (0 if busy)
   const idleSeconds = state === 'idle' ? currentTime - idleSince : 0;
 
-  // Write JSON status file
   writeStatusFile({
     state,
     last_activity: activity,
     last_check: currentTime,
     last_check_human: currentTimeHuman,
     idle_seconds: idleSeconds,
-    inactive_seconds: inactiveSeconds,  // Keep original metric for reference
+    inactive_seconds: inactiveSeconds,
     source
   });
 
-  // Only log on state change
   if (state !== lastState) {
     if (state === 'busy') {
       log(`State: BUSY (last activity ${inactiveSeconds}s ago)`);
     } else {
-      log(`State: IDLE (entering idle state)`);
+      log('State: IDLE (entering idle state)');
     }
   }
 
+  engine.processHeartbeat(true, currentTime);
+  maybeEnqueueHealthCheck(true, currentTime);
+  maybeEnqueueContextCheck(true, currentTime);
+  if (engine.health === 'ok') {
+    upgradeScheduler.maybeTrigger();
+  }
+  memoryCommitScheduler.maybeTrigger();
   lastState = state;
 }
 
-// Main
-log(`=== Activity Monitor Started (v5 - Guardian Mode): ${new Date().toISOString()} ===`);
+function init() {
+  if (!fs.existsSync(MONITOR_DIR)) {
+    fs.mkdirSync(MONITOR_DIR, { recursive: true });
+  }
+  if (!fs.existsSync(COMM_BRIDGE_DIR)) {
+    fs.mkdirSync(COMM_BRIDGE_DIR, { recursive: true });
+  }
+
+  const initialHealth = loadInitialHealth();
+  engine = new HeartbeatEngine({
+    enqueueHeartbeat,
+    getHeartbeatStatus,
+    readHeartbeatPending,
+    clearHeartbeatPending,
+    killTmuxSession,
+    notifyPendingChannels,
+    log
+  }, {
+    initialHealth,
+    heartbeatInterval: HEARTBEAT_INTERVAL,
+    maxRestartFailures: MAX_RESTART_FAILURES
+  });
+
+  upgradeScheduler = new DailySchedule({
+    getLocalHour,
+    getLocalDate,
+    loadState: loadDailyUpgradeState,
+    writeState: writeDailyUpgradeState,
+    execute: enqueueDailyUpgradeControl,
+    log
+  }, {
+    hour: DAILY_UPGRADE_HOUR,
+    name: 'daily-upgrade'
+  });
+
+  memoryCommitScheduler = new DailySchedule({
+    getLocalHour,
+    getLocalDate,
+    loadState: loadMemoryCommitState,
+    writeState: writeMemoryCommitState,
+    execute: executeDailyMemoryCommit,
+    log
+  }, {
+    hour: DAILY_MEMORY_COMMIT_HOUR,
+    name: 'daily-memory-commit'
+  });
+
+  if (initialHealth !== 'ok') {
+    log(`Startup with health=${initialHealth}; will verify immediately when Claude is running`);
+  }
+}
+
+init();
+log(`=== Activity Monitor Started (v9 - Guardian + Heartbeat + HealthCheck + DailyTasks): ${new Date().toISOString()} tz=${timezone} ===`);
 
 setInterval(monitorLoop, INTERVAL);
-
-// Run immediately
 monitorLoop();

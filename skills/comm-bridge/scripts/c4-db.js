@@ -8,7 +8,7 @@ import Database from 'better-sqlite3';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
-import { DATA_DIR, DB_PATH } from './c4-config.js';
+import { DATA_DIR, DB_PATH, CONTROL_MAX_RETRIES } from './c4-config.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -47,6 +47,10 @@ function initSchema() {
   const initSql = fs.readFileSync(INIT_SQL_PATH, 'utf8');
   db.exec(initSql);
   console.log('[C4-DB] Database initialized');
+}
+
+function nowSeconds() {
+  return Math.floor(Date.now() / 1000);
 }
 
 /**
@@ -104,6 +108,34 @@ export function getNextPending() {
 }
 
 /**
+ * Atomically claim a pending conversation message to running
+ * @param {number} id - conversation id
+ * @returns {boolean}
+ */
+export function claimConversation(id) {
+  const db = getDb();
+  const result = db.prepare(`
+    UPDATE conversations
+    SET status = 'running'
+    WHERE id = ? AND direction = 'in' AND status = 'pending'
+  `).run(id);
+  return result.changes > 0;
+}
+
+/**
+ * Return a running message back to pending state
+ * @param {number} id - conversation id
+ */
+export function requeueConversation(id) {
+  const db = getDb();
+  db.prepare(`
+    UPDATE conversations
+    SET status = 'pending'
+    WHERE id = ? AND direction = 'in' AND status = 'running'
+  `).run(id);
+}
+
+/**
  * Mark a message as delivered
  * @param {number} id - message id
  */
@@ -144,6 +176,268 @@ export function getPendingCount() {
     WHERE direction = 'in' AND status = 'pending'
   `).get();
   return result?.count || 0;
+}
+
+/**
+ * Get count of pending control items
+ * @returns {number}
+ */
+export function getPendingControlCount() {
+  const db = getDb();
+  const result = db.prepare(`
+    SELECT COUNT(*) as count FROM control_queue
+    WHERE status = 'pending'
+  `).get();
+  return result?.count || 0;
+}
+
+/**
+ * Insert a control queue record
+ * @param {string} content - instruction content
+ * @param {object} options - queue options
+ * @returns {object} inserted control record
+ */
+export function insertControl(content, options = {}) {
+  const database = getDb();
+  const {
+    priority = 3,
+    requireIdle = false,
+    bypassState = false,
+    ackDeadlineAt = null,
+    availableAt = null
+  } = options;
+
+  const tx = database.transaction(() => {
+    const current = nowSeconds();
+    const insertStmt = database.prepare(`
+      INSERT INTO control_queue (
+        content, priority, require_idle, bypass_state, ack_deadline_at,
+        status, retry_count, available_at, last_error, created_at, updated_at
+      )
+      VALUES (?, ?, ?, ?, ?, 'pending', 0, ?, NULL, ?, ?)
+    `);
+
+    const result = insertStmt.run(
+      content,
+      priority,
+      requireIdle ? 1 : 0,
+      bypassState ? 1 : 0,
+      ackDeadlineAt,
+      availableAt,
+      current,
+      current
+    );
+
+    const id = Number(result.lastInsertRowid);
+
+    // Auto-append ack suffix (like c4-receive appends "reply via")
+    const controlScriptPath = path.join(__dirname, 'c4-control.js');
+    const ackSuffix = ` ---- ack via: node ${controlScriptPath} ack --id ${id}`;
+    const finalContent = content + ackSuffix;
+
+    database.prepare(`
+      UPDATE control_queue
+      SET content = ?, updated_at = ?
+      WHERE id = ?
+    `).run(finalContent, current, id);
+
+    return {
+      id,
+      content: finalContent,
+      priority,
+      require_idle: requireIdle ? 1 : 0,
+      bypass_state: bypassState ? 1 : 0,
+      ack_deadline_at: ackDeadlineAt,
+      status: 'pending',
+      retry_count: 0,
+      available_at: availableAt,
+      created_at: current,
+      updated_at: current
+    };
+  });
+
+  return tx();
+}
+
+/**
+ * Get one control record by id
+ * @param {number} id - control id
+ * @returns {object|null}
+ */
+export function getControlById(id) {
+  const database = getDb();
+  return database.prepare(`
+    SELECT id, content, priority, require_idle, bypass_state, ack_deadline_at,
+           status, retry_count, available_at, last_error, created_at, updated_at
+    FROM control_queue
+    WHERE id = ?
+  `).get(id) || null;
+}
+
+/**
+ * Get next pending control item by priority/FIFO order
+ * @param {number} current - unix seconds
+ * @returns {object|null}
+ */
+export function getNextPendingControl(current = nowSeconds()) {
+  const database = getDb();
+  return database.prepare(`
+    SELECT id, content, priority, require_idle, bypass_state, ack_deadline_at,
+           status, retry_count, available_at, last_error, created_at, updated_at
+    FROM control_queue
+    WHERE status = 'pending'
+      AND (available_at IS NULL OR available_at <= ?)
+    ORDER BY COALESCE(priority, 3) ASC, created_at ASC
+    LIMIT 1
+  `).get(current) || null;
+}
+
+/**
+ * Atomically claim a pending control item to running
+ * @param {number} id - control id
+ * @returns {boolean}
+ */
+export function claimControl(id) {
+  const database = getDb();
+  const result = database.prepare(`
+    UPDATE control_queue
+    SET status = 'running', updated_at = ?, last_error = NULL
+    WHERE id = ? AND status = 'pending'
+  `).run(nowSeconds(), id);
+  return result.changes > 0;
+}
+
+/**
+ * Return a running control record back to pending
+ * @param {number} id - control id
+ * @param {string|null} lastError - optional reason
+ */
+export function requeueControl(id, lastError = null) {
+  const database = getDb();
+  database.prepare(`
+    UPDATE control_queue
+    SET status = 'pending', updated_at = ?, last_error = COALESCE(?, last_error)
+    WHERE id = ? AND status = 'running'
+  `).run(nowSeconds(), lastError, id);
+}
+
+/**
+ * Mark control as done via ack (idempotent for final states)
+ * @param {number} id - control id
+ * @returns {object} result
+ */
+export function ackControl(id) {
+  const database = getDb();
+  const tx = database.transaction((controlId) => {
+    const row = database.prepare('SELECT status, ack_deadline_at FROM control_queue WHERE id = ?').get(controlId);
+    if (!row) {
+      return { found: false };
+    }
+
+    const current = nowSeconds();
+    if (
+      (row.status === 'pending' || row.status === 'running') &&
+      row.ack_deadline_at !== null &&
+      row.ack_deadline_at < current
+    ) {
+      database.prepare(`
+        UPDATE control_queue
+        SET status = 'timeout', updated_at = ?, last_error = COALESCE(last_error, 'ACK_DEADLINE_EXCEEDED')
+        WHERE id = ?
+      `).run(current, controlId);
+      return { found: true, alreadyFinal: true, status: 'timeout' };
+    }
+
+    if (row.status === 'done' || row.status === 'failed' || row.status === 'timeout') {
+      return { found: true, alreadyFinal: true, status: row.status };
+    }
+
+    database.prepare(`
+      UPDATE control_queue
+      SET status = 'done', updated_at = ?, last_error = NULL
+      WHERE id = ? AND status IN ('pending', 'running')
+    `).run(current, controlId);
+
+    return { found: true, alreadyFinal: false, status: 'done' };
+  });
+
+  return tx(id);
+}
+
+/**
+ * Retry control delivery, or mark as failed when retries exceed max
+ * @param {number} id - control id
+ * @param {string} lastError - failure reason
+ * @param {number} maxRetries - max retries before failure
+ * @returns {object|null} transition info
+ */
+export function retryOrFailControl(id, lastError, maxRetries = CONTROL_MAX_RETRIES) {
+  const database = getDb();
+  const tx = database.transaction((controlId, errorMsg, retries) => {
+    const row = database.prepare(`
+      SELECT retry_count, status
+      FROM control_queue
+      WHERE id = ?
+    `).get(controlId);
+
+    if (!row) {
+      return null;
+    }
+
+    const nextRetryCount = (row.retry_count || 0) + 1;
+    const current = nowSeconds();
+
+    if (nextRetryCount >= retries) {
+      database.prepare(`
+        UPDATE control_queue
+        SET status = 'failed', retry_count = ?, last_error = ?, updated_at = ?
+        WHERE id = ?
+      `).run(nextRetryCount, errorMsg, current, controlId);
+      return { status: 'failed', retry_count: nextRetryCount };
+    }
+
+    database.prepare(`
+      UPDATE control_queue
+      SET status = 'pending', retry_count = ?, last_error = ?, updated_at = ?
+      WHERE id = ?
+    `).run(nextRetryCount, errorMsg, current, controlId);
+
+    return { status: 'pending', retry_count: nextRetryCount };
+  });
+
+  return tx(id, lastError, maxRetries);
+}
+
+/**
+ * Mark matching control records timeout based on ack deadline
+ * @param {number} current - unix seconds
+ * @returns {number} updated rows
+ */
+export function expireTimedOutControls(current = nowSeconds()) {
+  const database = getDb();
+  const result = database.prepare(`
+    UPDATE control_queue
+    SET status = 'timeout', updated_at = ?, last_error = COALESCE(last_error, 'ACK_DEADLINE_EXCEEDED')
+    WHERE status IN ('pending', 'running')
+      AND ack_deadline_at IS NOT NULL
+      AND ack_deadline_at < ?
+  `).run(current, current);
+  return result.changes || 0;
+}
+
+/**
+ * Cleanup final control records older than cutoff
+ * @param {number} cutoff - unix seconds
+ * @returns {number} deleted rows
+ */
+export function cleanupControlQueue(cutoff) {
+  const database = getDb();
+  const result = database.prepare(`
+    DELETE FROM control_queue
+    WHERE status IN ('done', 'failed', 'timeout')
+      AND updated_at < ?
+  `).run(cutoff);
+  return result.changes || 0;
 }
 
 /**

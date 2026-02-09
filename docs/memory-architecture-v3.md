@@ -940,7 +940,7 @@ import os from 'os';
 
 const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
 const SKILLS_DIR = path.join(ZYLOS_DIR, '.claude', 'skills');
-const STATUS_FILE = path.join(os.homedir(), '.claude-status');
+const STATUS_FILE = path.join(ZYLOS_DIR, 'comm-bridge', 'claude-status.json');
 const CHECK_CONTEXT_SCRIPT = path.join(SKILLS_DIR, 'check-context', 'scripts', 'check-context.js');
 const C4_RECEIVE = path.join(SKILLS_DIR, 'comm-bridge', 'scripts', 'c4-receive.js');
 const RESTART_SCRIPT = path.join(SKILLS_DIR, 'restart-claude', 'scripts', 'restart.js');

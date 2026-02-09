@@ -1,21 +1,28 @@
 #!/usr/bin/env node
 /**
- * C4 Communication Bridge - Message Dispatcher
- * Polls for pending messages and delivers them serially to Claude via tmux
- * Supports priority-based queue with idle-state checking for require_idle messages
- *
- * Run with PM2: pm2 start c4-dispatcher.js --name c4-dispatcher
+ * C4 Communication Bridge - Dispatcher
+ * Control queue has higher priority than conversations.
  */
 
 import { execFileSync } from 'child_process';
-import { readFileSync, existsSync, statSync } from 'fs';
+import { readFileSync, existsSync, statSync, realpathSync } from 'fs';
+import { fileURLToPath } from 'url';
 import {
   getNextPending,
+  claimConversation,
+  requeueConversation,
   markDelivered,
   getPendingCount,
+  getPendingControlCount,
   close,
   incrementRetryCount,
-  markFailed
+  markFailed,
+  getNextPendingControl,
+  claimControl,
+  requeueControl,
+  retryOrFailControl,
+  expireTimedOutControls,
+  cleanupControlQueue
 } from './c4-db.js';
 import {
   POLL_INTERVAL_BASE,
@@ -25,6 +32,9 @@ import {
   DELIVERY_DELAY_MAX,
   MAX_RETRIES,
   RETRY_BASE_MS,
+  CONTROL_MAX_RETRIES,
+  CONTROL_RETENTION_DAYS,
+  CONTROL_CLEANUP_INTERVAL_MS,
   ENTER_VERIFY_MAX_RETRIES,
   ENTER_VERIFY_WAIT_MS,
   REQUIRE_IDLE_POST_SEND_HOLD_MS,
@@ -39,6 +49,7 @@ import {
 let isShuttingDown = false;
 let pollInterval = POLL_INTERVAL_BASE;
 let tmuxMissingChecks = 0;
+let lastControlCleanupMs = 0;
 
 function log(message) {
   const timestamp = new Date().toISOString().replace('T', ' ').substring(0, 19);
@@ -49,22 +60,25 @@ function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+function nowSeconds() {
+  return Math.floor(Date.now() / 1000);
+}
+
 function getClaudeState() {
   try {
     if (!existsSync(CLAUDE_STATUS_FILE)) {
-      return { state: 'offline', healthy: false, reason: 'missing' };
+      return { state: 'offline', health: 'ok', healthy: false, reason: 'missing' };
     }
 
     const stats = statSync(CLAUDE_STATUS_FILE);
     const ageMs = Date.now() - stats.mtimeMs;
     if (ageMs > STALE_STATUS_THRESHOLD) {
-      return { state: 'offline', healthy: false, reason: 'stale' };
+      return { state: 'offline', health: 'ok', healthy: false, reason: 'stale' };
     }
 
-    const content = readFileSync(CLAUDE_STATUS_FILE, 'utf8');
-    const status = JSON.parse(content);
-
+    const status = JSON.parse(readFileSync(CLAUDE_STATUS_FILE, 'utf8'));
     let state = status.state;
+
     if (!state && typeof status.idle_seconds === 'number') {
       state = status.idle_seconds >= 5 ? 'idle' : 'busy';
     }
@@ -72,10 +86,12 @@ function getClaudeState() {
       state = 'busy';
     }
 
-    return { state, healthy: true };
+    const health = typeof status.health === 'string' ? status.health : 'ok';
+    return { state, health, healthy: true };
   } catch (err) {
-    log(`Warning: Error reading Claude status (${err.stack})`);
-    return { state: 'offline', healthy: false, reason: 'error' };
+    log(`Warning: Error reading Claude status (${err.message})`);
+    // health is fail-open by design; state still degrades to offline on read failure.
+    return { state: 'offline', health: 'ok', healthy: false, reason: 'error' };
   }
 }
 
@@ -85,29 +101,27 @@ function isStatusFresh() {
       return false;
     }
     const stats = statSync(CLAUDE_STATUS_FILE);
-    const ageMs = Date.now() - stats.mtimeMs;
-    return ageMs <= STALE_STATUS_THRESHOLD;
+    return (Date.now() - stats.mtimeMs) <= STALE_STATUS_THRESHOLD;
   } catch {
     return false;
   }
 }
 
-function sanitizeMessage(message) {
+export function sanitizeMessage(message) {
   return message.replace(/[\x00-\x08\x0B-\x1F]/g, '');
 }
 
-function getDeliveryDelay(byteLength) {
+export function getDeliveryDelay(byteLength) {
   const extra = Math.floor(byteLength / 1024) * DELIVERY_DELAY_PER_KB;
   return Math.min(DELIVERY_DELAY_BASE + extra, DELIVERY_DELAY_MAX);
 }
 
-function getInputBoxText(capture) {
+export function getInputBoxText(capture) {
   const lines = capture.split('\n');
   const separatorIndexes = [];
 
   for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    if (/^\u2500+$/.test(line) && line.length > 10) {
+    if (/^\u2500+$/.test(lines[i]) && lines[i].length > 10) {
       separatorIndexes.push(i);
     }
   }
@@ -121,23 +135,12 @@ function getInputBoxText(capture) {
   return lines.slice(start, end).join('\n');
 }
 
-/**
- * Check the state of Claude Code's input box.
- * @param {string} capture - tmux capture-pane output
- * @returns {'empty'|'has_content'|'indeterminate'}
- *   'empty':         Input box is empty (message was accepted)
- *   'has_content':   Input box has text (message not yet submitted, retry Enter)
- *   'indeterminate': Separators not visible — cannot determine input box state
- */
-function checkInputBox(capture) {
+export function checkInputBox(capture) {
   const text = getInputBoxText(capture);
   if (text === null) {
     return 'indeterminate';
   }
 
-  // Strip prompt character (❯), whitespace, and invisible characters
-  // \p{C} = control, format, surrogate, private-use, unassigned (covers zero-width spaces, BOM, etc.)
-  // \p{Z} = all Unicode separator characters (spaces, line/paragraph separators)
   const stripped = text
     .replace(/\u276F/g, '')
     .replace(/[\p{C}\p{Z}]+/gu, '');
@@ -149,28 +152,8 @@ function checkInputBox(capture) {
   return 'has_content';
 }
 
-/**
- * Dismiss Claude Code UI ghost text and capture the input box state.
- *
- * When Claude is busy processing a message, the input box may show dynamic
- * UI hint text (e.g., "Press up to edit queued messages"). These hints are
- * ghost text that disappears when the user types anything.
- *
- * Strategy:
- *   1. Type a space — dismisses ghost text
- *   2. Capture pane — while ghost text is gone (space still present)
- *   3. Backspace — remove the space we typed
- *
- * The space is captured but checkInputBox() strips whitespace, so the extra
- * space doesn't affect the empty/has_content result. Capturing BEFORE
- * backspace ensures ghost text doesn't reappear between check and cleanup.
- *
- * @returns {string} tmux capture-pane output (with ghost text dismissed)
- */
 async function dismissGhostTextAndCapture() {
-  execFileSync('tmux', ['send-keys', '-t', TMUX_SESSION, 'Space'], {
-    stdio: 'pipe'
-  });
+  execFileSync('tmux', ['send-keys', '-t', TMUX_SESSION, 'Space'], { stdio: 'pipe' });
   await sleep(100);
 
   const capture = execFileSync('tmux', ['capture-pane', '-p', '-t', TMUX_SESSION], {
@@ -178,33 +161,16 @@ async function dismissGhostTextAndCapture() {
     stdio: 'pipe'
   });
 
-  execFileSync('tmux', ['send-keys', '-t', TMUX_SESSION, 'BSpace'], {
-    stdio: 'pipe'
-  });
+  execFileSync('tmux', ['send-keys', '-t', TMUX_SESSION, 'BSpace'], { stdio: 'pipe' });
   await sleep(100);
-
   return capture;
 }
 
-/**
- * Best-effort: send Enter to tmux and verify the input box is empty.
- * Only sends Enter — does NOT paste any content.
- *
- * Uses dismissGhostTextAndCapture() before each check to clear Claude Code
- * UI hints that would otherwise cause false has_content results.
- *
- * This is best-effort — the caller (sendToTmux) considers the message
- * delivered once paste succeeds, regardless of Enter verification result.
- */
 async function submitAndVerify() {
-  execFileSync('tmux', ['send-keys', '-t', TMUX_SESSION, 'Enter'], {
-    stdio: 'pipe'
-  });
+  execFileSync('tmux', ['send-keys', '-t', TMUX_SESSION, 'Enter'], { stdio: 'pipe' });
 
   for (let attempt = 0; attempt < ENTER_VERIFY_MAX_RETRIES; attempt++) {
     await sleep(ENTER_VERIFY_WAIT_MS);
-
-    // Dismiss ghost text, capture while it's gone, then clean up
     const capture = await dismissGhostTextAndCapture();
     const state = checkInputBox(capture);
 
@@ -213,61 +179,36 @@ async function submitAndVerify() {
     }
 
     if (state === 'indeterminate') {
-      // Transient capture glitch — retry without sending Enter
       log(`Enter verify attempt ${attempt + 1}: separator detection failed, retrying capture`);
       continue;
     }
 
-    // state === 'has_content': input box still has text, retry Enter
     log(`Enter verify attempt ${attempt + 1}: input box has content, retrying Enter`);
-    execFileSync('tmux', ['send-keys', '-t', TMUX_SESSION, 'Enter'], {
-      stdio: 'pipe'
-    });
+    execFileSync('tmux', ['send-keys', '-t', TMUX_SESSION, 'Enter'], { stdio: 'pipe' });
   }
 }
 
-/**
- * Paste a message into Claude's input box via tmux, then submit with Enter.
- *
- * Two-phase delivery:
- *   Phase 1 (paste):  set-buffer + paste-buffer → message appears in input box
- *   Phase 2 (submit): Best-effort Enter + verify via submitAndVerify()
- *
- * Once the message is pasted into tmux, it is considered delivered.
- * Enter verification is best-effort to ensure submission to Claude Code.
- *
- * Returns:
- *   'submitted':    Paste succeeded (message is in tmux)
- *   'paste_error':  tmux paste command itself failed
- */
 async function sendToTmux(message) {
   const bufferName = `c4-msg-${process.pid}-${Date.now()}`;
   const sanitized = sanitizeMessage(message);
   const delayMs = getDeliveryDelay(Buffer.byteLength(sanitized, 'utf8'));
 
   try {
-    // Phase 1: Paste message into input box (only done ONCE)
-    execFileSync('tmux', ['set-buffer', '-b', bufferName, '--', sanitized], {
-      stdio: 'pipe'
-    });
-
-    execFileSync('tmux', ['paste-buffer', '-b', bufferName, '-t', TMUX_SESSION], {
-      stdio: 'pipe'
-    });
+    execFileSync('tmux', ['set-buffer', '-b', bufferName, '--', sanitized], { stdio: 'pipe' });
+    execFileSync('tmux', ['paste-buffer', '-b', bufferName, '-t', TMUX_SESSION], { stdio: 'pipe' });
   } catch (err) {
-    log(`Error pasting to tmux: ${err.stack}`);
+    log(`Error pasting to tmux: ${err.message}`);
     return 'paste_error';
   } finally {
     try {
       execFileSync('tmux', ['delete-buffer', '-b', bufferName], { stdio: 'pipe' });
     } catch {
-      // Ignore buffer deletion errors
+      // Ignore buffer deletion errors.
     }
   }
 
   await sleep(delayMs);
 
-  // Phase 2: Best-effort submit with Enter
   try {
     await submitAndVerify();
   } catch (err) {
@@ -277,43 +218,68 @@ async function sendToTmux(message) {
   return 'submitted';
 }
 
-async function handleDeliveryFailure(msg) {
+export function isBypassState(item) {
+  return item.type === 'control' && item.bypass_state === 1;
+}
+
+function releaseItem(item, reason = null) {
+  if (item.type === 'control') {
+    requeueControl(item.id, reason);
+    return;
+  }
+  requeueConversation(item.id);
+}
+
+async function handleConversationDeliveryFailure(msg) {
   const channelHealthy = isStatusFresh();
 
   if (channelHealthy) {
     const currentCount = msg.retry_count || 0;
     const nextCount = currentCount + 1;
-
     incrementRetryCount(msg.id);
 
     if (nextCount >= MAX_RETRIES) {
       markFailed(msg.id);
-      log(`FAILED: Message id=${msg.id} channel=${msg.channel} marked as failed after ${nextCount} retries`);
+      log(`FAILED: conversation id=${msg.id} channel=${msg.channel} marked as failed after ${nextCount} retries`);
       return;
     }
+
+    requeueConversation(msg.id);
     const backoff = RETRY_BASE_MS * 2 ** (nextCount - 1);
-    log(`Retry ${nextCount} for message id=${msg.id} after ${backoff}ms`);
+    log(`Retry ${nextCount} for conversation id=${msg.id} after ${backoff}ms`);
     await sleep(backoff);
     return;
   }
 
+  requeueConversation(msg.id);
   log(`Channel unhealthy; backing off for ${RETRY_BASE_MS}ms`);
   await sleep(RETRY_BASE_MS);
 }
 
+async function handleControlDeliveryFailure(control, reason) {
+  const transition = retryOrFailControl(control.id, reason, CONTROL_MAX_RETRIES);
+  if (!transition) return;
+
+  if (transition.status === 'failed') {
+    log(`FAILED: control id=${control.id} marked as failed after ${transition.retry_count} retries (${reason})`);
+    return;
+  }
+
+  log(`Retry ${transition.retry_count} for control id=${control.id}`);
+}
+
 async function waitForRequireIdleSettlement(msgId) {
-  log(`require_idle message id=${msgId}: hold ${REQUIRE_IDLE_POST_SEND_HOLD_MS}ms before next dispatch`);
+  log(`require_idle item id=${msgId}: hold ${REQUIRE_IDLE_POST_SEND_HOLD_MS}ms before next dispatch`);
   await sleep(REQUIRE_IDLE_POST_SEND_HOLD_MS);
 
   let state = getClaudeState().state;
   if (state === 'offline' || state === 'stopped') {
-    log(`require_idle message id=${msgId}: Claude state=${state}, continuing`);
+    log(`require_idle item id=${msgId}: Claude state=${state}, continuing`);
     return;
   }
 
-  // If still idle after hold, avoid waiting unnecessarily.
   if (state === 'idle') {
-    log(`require_idle message id=${msgId}: Claude remained idle after hold, continuing`);
+    log(`require_idle item id=${msgId}: Claude remained idle after hold, continuing`);
     return;
   }
 
@@ -321,62 +287,113 @@ async function waitForRequireIdleSettlement(msgId) {
   while (Date.now() < deadline) {
     await sleep(REQUIRE_IDLE_EXECUTION_POLL_MS);
     state = getClaudeState().state;
-
     if (state === 'idle' || state === 'offline' || state === 'stopped') {
-      log(`require_idle message id=${msgId}: settled with Claude state=${state}`);
+      log(`require_idle item id=${msgId}: settled with Claude state=${state}`);
       return;
     }
   }
 
-  log(
-    `require_idle message id=${msgId}: timeout after ${REQUIRE_IDLE_EXECUTION_MAX_WAIT_MS}ms, continuing`
-  );
+  log(`require_idle item id=${msgId}: timeout after ${REQUIRE_IDLE_EXECUTION_MAX_WAIT_MS}ms, continuing`);
+}
+
+function claimNextItem() {
+  const current = nowSeconds();
+  const control = getNextPendingControl(current);
+  if (control) {
+    if (claimControl(control.id)) {
+      return { ...control, type: 'control' };
+    }
+
+    // Keep strict control priority: if a control row was observed but claim lost,
+    // do not fall through to conversation in the same loop iteration.
+    return null;
+  }
+
+  const msg = getNextPending();
+  if (msg && claimConversation(msg.id)) {
+    return { ...msg, type: 'conversation' };
+  }
+
+  return null;
+}
+
+function maybeCleanupControlQueue() {
+  const nowMs = Date.now();
+  if (lastControlCleanupMs !== 0 && (nowMs - lastControlCleanupMs) < CONTROL_CLEANUP_INTERVAL_MS) {
+    return;
+  }
+
+  const cutoff = nowSeconds() - (CONTROL_RETENTION_DAYS * 24 * 60 * 60);
+  const deleted = cleanupControlQueue(cutoff);
+  if (deleted > 0) {
+    log(`Control cleanup deleted ${deleted} final record(s)`);
+  }
+  lastControlCleanupMs = nowMs;
 }
 
 async function processNextMessage() {
-  const claudeState = getClaudeState();
+  maybeCleanupControlQueue();
+  const timedOut = expireTimedOutControls();
+  if (timedOut > 0) {
+    log(`Control timeout sweep marked ${timedOut} record(s) as timeout`);
+  }
 
+  const claudeState = getClaudeState();
   if (claudeState.state === 'offline' || claudeState.state === 'stopped') {
     tmuxMissingChecks += 1;
     if (tmuxMissingChecks === TMUX_MISSING_WARN_THRESHOLD) {
       log(`WARNING: Claude tmux session missing for ${TMUX_MISSING_WARN_THRESHOLD} consecutive checks`);
     }
+  } else {
+    tmuxMissingChecks = 0;
+  }
+
+  const item = claimNextItem();
+  if (!item) {
     return { delivered: false, state: claudeState.state };
   }
 
-  tmuxMissingChecks = 0;
+  const bypass = isBypassState(item);
 
-  // Get next pending message
-  let msg = getNextPending();
-  if (!msg) {
+  if ((claudeState.state === 'offline' || claudeState.state === 'stopped') && !bypass) {
+    releaseItem(item);
     return { delivered: false, state: claudeState.state };
   }
 
-  // If message requires idle but Claude not idle, block the entire queue.
-  // This is intentional: prevents require_idle messages from being starved
-  // by a continuous stream of lower-priority non-idle messages.
-  if (msg.require_idle === 1 && claudeState.state !== 'idle') {
+  if (claudeState.health !== 'ok' && !bypass) {
+    releaseItem(item);
     return { delivered: false, state: claudeState.state };
   }
 
-  log(`Delivering message id=${msg.id} priority=${msg.priority} from ${msg.channel}`);
+  if (item.require_idle === 1 && claudeState.state !== 'idle') {
+    releaseItem(item);
+    return { delivered: false, state: claudeState.state };
+  }
 
-  const deliveryContent = msg.content || '';
-
+  log(`Delivering ${item.type} id=${item.id}${item.type === 'control' ? ` priority=${item.priority}` : ` from ${item.channel}`}`);
+  const deliveryContent = item.content || '';
   const result = await sendToTmux(deliveryContent);
 
   if (result === 'submitted') {
-    markDelivered(msg.id);
-    log(`Message id=${msg.id} delivered`);
-    if (msg.require_idle === 1) {
-      await waitForRequireIdleSettlement(msg.id);
+    if (item.type === 'conversation') {
+      markDelivered(item.id);
+      log(`Conversation id=${item.id} delivered`);
+    } else {
+      log(`Control id=${item.id} submitted, waiting ack`);
+    }
+
+    if (item.require_idle === 1) {
+      await waitForRequireIdleSettlement(item.id);
     }
     return { delivered: true, state: claudeState.state };
   }
 
-  // result === 'paste_error': tmux paste command failed, retry
-  log(`Failed to paste message id=${msg.id} to tmux, will retry`);
-  await handleDeliveryFailure(msg);
+  log(`Failed to paste ${item.type} id=${item.id} to tmux`);
+  if (item.type === 'control') {
+    await handleControlDeliveryFailure(item, 'TMUX_PASTE_FAILED');
+  } else {
+    await handleConversationDeliveryFailure(item);
+  }
   return { delivered: false, state: claudeState.state };
 }
 
@@ -419,9 +436,13 @@ async function main() {
   log(`Tmux session: ${TMUX_SESSION}`);
   log(`Poll interval: ${POLL_INTERVAL_BASE}ms (adaptive up to ${POLL_INTERVAL_MAX}ms)`);
 
-  const pending = getPendingCount();
-  if (pending > 0) {
-    log(`Found ${pending} pending message(s) in queue`);
+  const pendingControl = getPendingControlCount();
+  const pendingConversation = getPendingCount();
+  if (pendingControl > 0) {
+    log(`Found ${pendingControl} pending control item(s)`);
+  }
+  if (pendingConversation > 0) {
+    log(`Found ${pendingConversation} pending conversation message(s)`);
   }
 
   await dispatcherLoop();
@@ -429,4 +450,7 @@ async function main() {
   process.exit(0);
 }
 
-main();
+const isMainModule = process.argv[1] && realpathSync(fileURLToPath(import.meta.url)) === realpathSync(process.argv[1]);
+if (isMainModule) {
+  main();
+}

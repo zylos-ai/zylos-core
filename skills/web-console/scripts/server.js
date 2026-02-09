@@ -31,7 +31,7 @@ const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
 const SKILLS_DIR = path.join(os.homedir(), 'zylos', '.claude', 'skills');
 const DB_DIR = path.join(ZYLOS_DIR, 'comm-bridge');
 const DB_PATH = path.join(DB_DIR, 'c4.db');
-const STATUS_FILE = path.join(os.homedir(), '.claude-status');
+const STATUS_FILE = path.join(DB_DIR, 'claude-status.json');
 
 // Middleware
 app.use(express.json());

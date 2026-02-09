@@ -15,7 +15,7 @@
 - **File:** `c4-dispatcher.js`
 - **Implementation:**
   1. `retry_count INTEGER DEFAULT 0` column in conversations table
-  2. On delivery failure, `isStatusFresh()` checks `~/.claude-status` mtime to distinguish channel vs message issues
+  2. On delivery failure, `isStatusFresh()` checks `claude-status.json` mtime to distinguish channel vs message issues
   3. Channel healthy → `incrementRetryCount()` + exponential backoff `sleep(500ms * 2^n)`
   4. `retry_count >= 5` → `markFailed()`, logged prominently
   5. `getNextPending()` filters by `status = 'pending'` (implicitly excludes `failed`, no redundant `AND status != 'failed'` needed)
@@ -138,7 +138,7 @@
 
 ### 22. [P4] 500ms Polling Loop — Wasteful When Idle
 - **Status:** [x] implemented
-- **Implementation:** Adaptive backoff 1s → 3s when idle, reset on delivery. `getClaudeState()` reads `~/.claude-status` file instead of spawning `tmux has-session`. `isStatusFresh()` checks mtime for stale detection (>5s → offline).
+- **Implementation:** Adaptive backoff 1s → 3s when idle, reset on delivery. `getClaudeState()` reads `claude-status.json` file instead of spawning `tmux has-session`. `isStatusFresh()` checks mtime for stale detection (>5s → offline).
 
 ### 23. [P7] Checkpoint Queried on Every Insert
 - **Status:** [x] resolved

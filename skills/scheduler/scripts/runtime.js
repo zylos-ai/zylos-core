@@ -9,10 +9,11 @@ import { homedir } from 'os';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
-const STATUS_FILE = join(homedir(), '.claude-status');
+const ZYLOS_DIR = process.env.ZYLOS_DIR || join(homedir(), 'zylos');
+const STATUS_FILE = join(ZYLOS_DIR, 'comm-bridge', 'claude-status.json');
 
 /**
- * Read Claude status from ~/.claude-status file
+ * Read Claude status from ~/zylos/comm-bridge/claude-status.json
  * @returns {object|null} Status object or null if unavailable
  */
 export function readStatusFile() {
@@ -99,4 +100,3 @@ export function sendViaC4(message, options = {}) {
     return false;
   }
 }
-

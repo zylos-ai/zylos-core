@@ -1,0 +1,340 @@
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
+import { HeartbeatEngine } from '../heartbeat-engine.js';
+
+function createMockDeps() {
+  const calls = {
+    enqueueHeartbeat: [],
+    getHeartbeatStatus: [],
+    readHeartbeatPending: [],
+    clearHeartbeatPending: 0,
+    killTmuxSession: 0,
+    notifyPendingChannels: 0,
+    log: []
+  };
+
+  const deps = {
+    enqueueHeartbeat: (phase) => { calls.enqueueHeartbeat.push(phase); return true; },
+    getHeartbeatStatus: (id) => { calls.getHeartbeatStatus.push(id); return deps._heartbeatStatus || 'pending'; },
+    readHeartbeatPending: () => { calls.readHeartbeatPending.push(true); return deps._pending || null; },
+    clearHeartbeatPending: () => { calls.clearHeartbeatPending++; },
+    killTmuxSession: () => { calls.killTmuxSession++; },
+    notifyPendingChannels: () => { calls.notifyPendingChannels++; },
+    log: (msg) => { calls.log.push(msg); },
+    // Test helpers
+    _pending: null,
+    _heartbeatStatus: 'pending'
+  };
+
+  return { deps, calls };
+}
+
+describe('HeartbeatEngine', () => {
+  describe('primary heartbeat', () => {
+    it('enqueues after HEARTBEAT_INTERVAL elapsed', () => {
+      const { deps, calls } = createMockDeps();
+      const engine = new HeartbeatEngine(deps, { heartbeatInterval: 1800 });
+      const currentTime = Math.floor(Date.now() / 1000);
+      engine.lastHeartbeatAt = currentTime - 1801;
+
+      engine.processHeartbeat(true, currentTime);
+
+      assert.deepStrictEqual(calls.enqueueHeartbeat, ['primary']);
+    });
+
+    it('does not enqueue before interval', () => {
+      const { deps, calls } = createMockDeps();
+      const engine = new HeartbeatEngine(deps, { heartbeatInterval: 1800 });
+      const currentTime = Math.floor(Date.now() / 1000);
+      engine.lastHeartbeatAt = currentTime - 100;
+
+      engine.processHeartbeat(true, currentTime);
+
+      assert.deepStrictEqual(calls.enqueueHeartbeat, []);
+    });
+
+    it('does not enqueue when claude is not running', () => {
+      const { deps, calls } = createMockDeps();
+      const engine = new HeartbeatEngine(deps, { heartbeatInterval: 1800 });
+      const currentTime = Math.floor(Date.now() / 1000);
+      engine.lastHeartbeatAt = currentTime - 1801;
+
+      engine.processHeartbeat(false, currentTime);
+
+      assert.deepStrictEqual(calls.enqueueHeartbeat, []);
+    });
+
+    it('updates lastHeartbeatAt on primary enqueue', () => {
+      const { deps } = createMockDeps();
+      const engine = new HeartbeatEngine(deps, { heartbeatInterval: 1800 });
+      const currentTime = Math.floor(Date.now() / 1000);
+      engine.lastHeartbeatAt = currentTime - 1801;
+
+      engine.processHeartbeat(true, currentTime);
+
+      // lastHeartbeatAt should be updated to ~now
+      const diff = Math.abs(engine.lastHeartbeatAt - Math.floor(Date.now() / 1000));
+      assert.ok(diff <= 1, `lastHeartbeatAt should be updated to current time, diff=${diff}`);
+    });
+  });
+
+  describe('heartbeat success', () => {
+    it('clears pending and resets failure count on done', () => {
+      const { deps, calls } = createMockDeps();
+      deps._pending = { control_id: 1, phase: 'primary' };
+      deps._heartbeatStatus = 'done';
+      const engine = new HeartbeatEngine(deps);
+      engine.restartFailureCount = 2;
+
+      engine.processHeartbeat(true, Math.floor(Date.now() / 1000));
+
+      assert.equal(calls.clearHeartbeatPending, 1);
+      assert.equal(engine.restartFailureCount, 0);
+    });
+
+    it('transitions recovering to ok and notifies channels', () => {
+      const { deps, calls } = createMockDeps();
+      deps._pending = { control_id: 1, phase: 'recovery' };
+      deps._heartbeatStatus = 'done';
+      const engine = new HeartbeatEngine(deps, { initialHealth: 'recovering' });
+
+      engine.processHeartbeat(true, Math.floor(Date.now() / 1000));
+
+      assert.equal(engine.health, 'ok');
+      assert.equal(calls.notifyPendingChannels, 1);
+    });
+
+    it('does not notify channels when already ok', () => {
+      const { deps, calls } = createMockDeps();
+      deps._pending = { control_id: 1, phase: 'primary' };
+      deps._heartbeatStatus = 'done';
+      const engine = new HeartbeatEngine(deps);
+
+      engine.processHeartbeat(true, Math.floor(Date.now() / 1000));
+
+      assert.equal(engine.health, 'ok');
+      assert.equal(calls.notifyPendingChannels, 0);
+    });
+
+    it('updates lastHeartbeatAt for non-primary success', () => {
+      const { deps } = createMockDeps();
+      deps._pending = { control_id: 1, phase: 'recovery' };
+      deps._heartbeatStatus = 'done';
+      const engine = new HeartbeatEngine(deps, { initialHealth: 'recovering' });
+      engine.lastHeartbeatAt = 0;
+
+      engine.processHeartbeat(true, Math.floor(Date.now() / 1000));
+
+      assert.ok(engine.lastHeartbeatAt > 0);
+    });
+  });
+
+  describe('primary failure triggers verify', () => {
+    it('enqueues verify when primary fails in ok state', () => {
+      const { deps, calls } = createMockDeps();
+      deps._pending = { control_id: 1, phase: 'primary' };
+      deps._heartbeatStatus = 'timeout';
+      const engine = new HeartbeatEngine(deps);
+
+      engine.processHeartbeat(true, Math.floor(Date.now() / 1000));
+
+      assert.equal(calls.clearHeartbeatPending, 1);
+      assert.deepStrictEqual(calls.enqueueHeartbeat, ['verify']);
+      assert.equal(engine.health, 'ok');
+    });
+  });
+
+  describe('verify failure triggers recovery', () => {
+    it('kills tmux and transitions to recovering', () => {
+      const { deps, calls } = createMockDeps();
+      deps._pending = { control_id: 1, phase: 'verify' };
+      deps._heartbeatStatus = 'timeout';
+      const engine = new HeartbeatEngine(deps);
+
+      engine.processHeartbeat(true, Math.floor(Date.now() / 1000));
+
+      assert.equal(calls.killTmuxSession, 1);
+      assert.equal(engine.health, 'recovering');
+    });
+  });
+
+  describe('recovery failure leads to down', () => {
+    it('transitions to down after max restart failures', () => {
+      const { deps, calls } = createMockDeps();
+      const engine = new HeartbeatEngine(deps, {
+        initialHealth: 'recovering',
+        maxRestartFailures: 3
+      });
+
+      engine.triggerRecovery('fail_1');
+      assert.equal(engine.health, 'recovering');
+      assert.equal(calls.killTmuxSession, 1);
+
+      engine.triggerRecovery('fail_2');
+      assert.equal(engine.health, 'recovering');
+      assert.equal(calls.killTmuxSession, 2);
+
+      engine.triggerRecovery('fail_3');
+      assert.equal(engine.health, 'down');
+      assert.equal(calls.killTmuxSession, 3);
+      assert.equal(engine.restartFailureCount, 3);
+    });
+  });
+
+  describe('down state behavior', () => {
+    it('enqueues down-check when claude is running', () => {
+      const { deps, calls } = createMockDeps();
+      const engine = new HeartbeatEngine(deps, { initialHealth: 'down' });
+
+      engine.processHeartbeat(true, Math.floor(Date.now() / 1000));
+
+      assert.deepStrictEqual(calls.enqueueHeartbeat, ['down-check']);
+    });
+
+    it('recovers to ok when pending heartbeat succeeds', () => {
+      const { deps, calls } = createMockDeps();
+      deps._pending = { control_id: 1, phase: 'down-check' };
+      deps._heartbeatStatus = 'done';
+      const engine = new HeartbeatEngine(deps, { initialHealth: 'down' });
+
+      engine.processHeartbeat(true, Math.floor(Date.now() / 1000));
+
+      assert.equal(engine.health, 'ok');
+      assert.equal(calls.notifyPendingChannels, 1);
+    });
+
+    it('stays down when pending heartbeat fails (no kill)', () => {
+      const { deps, calls } = createMockDeps();
+      deps._pending = { control_id: 1, phase: 'down-check' };
+      deps._heartbeatStatus = 'failed';
+      const engine = new HeartbeatEngine(deps, { initialHealth: 'down' });
+
+      engine.processHeartbeat(true, Math.floor(Date.now() / 1000));
+
+      assert.equal(engine.health, 'down');
+      assert.equal(calls.killTmuxSession, 0);
+    });
+  });
+
+  describe('triggerRecovery', () => {
+    it('calls killTmuxSession', () => {
+      const { deps, calls } = createMockDeps();
+      const engine = new HeartbeatEngine(deps);
+
+      engine.triggerRecovery('test_reason');
+
+      assert.equal(calls.killTmuxSession, 1);
+    });
+
+    it('increments restartFailureCount', () => {
+      const { deps } = createMockDeps();
+      const engine = new HeartbeatEngine(deps);
+
+      engine.triggerRecovery('test');
+      assert.equal(engine.restartFailureCount, 1);
+
+      engine.triggerRecovery('test');
+      assert.equal(engine.restartFailureCount, 2);
+    });
+
+    it('transitions ok to recovering', () => {
+      const { deps } = createMockDeps();
+      const engine = new HeartbeatEngine(deps);
+      assert.equal(engine.health, 'ok');
+
+      engine.triggerRecovery('test_reason');
+
+      assert.equal(engine.health, 'recovering');
+    });
+
+    it('does nothing in down state', () => {
+      const { deps, calls } = createMockDeps();
+      const engine = new HeartbeatEngine(deps, { initialHealth: 'down' });
+
+      engine.triggerRecovery('should_skip');
+
+      assert.equal(calls.killTmuxSession, 0);
+      assert.equal(engine.restartFailureCount, 0);
+      assert.equal(engine.health, 'down');
+    });
+
+    it('logs skip message in down state', () => {
+      const { deps, calls } = createMockDeps();
+      const engine = new HeartbeatEngine(deps, { initialHealth: 'down' });
+
+      engine.triggerRecovery('my_reason');
+
+      assert.ok(calls.log.some(m => m.includes('DOWN') && m.includes('my_reason')));
+    });
+  });
+
+  describe('in-flight heartbeat handling', () => {
+    it('does nothing when status is pending', () => {
+      const { deps, calls } = createMockDeps();
+      deps._pending = { control_id: 1, phase: 'primary' };
+      deps._heartbeatStatus = 'pending';
+      const engine = new HeartbeatEngine(deps);
+
+      engine.processHeartbeat(true, Math.floor(Date.now() / 1000));
+
+      assert.equal(calls.clearHeartbeatPending, 0);
+      assert.deepStrictEqual(calls.enqueueHeartbeat, []);
+      assert.equal(calls.killTmuxSession, 0);
+    });
+
+    it('does nothing when status is running', () => {
+      const { deps, calls } = createMockDeps();
+      deps._pending = { control_id: 1, phase: 'primary' };
+      deps._heartbeatStatus = 'running';
+      const engine = new HeartbeatEngine(deps);
+
+      engine.processHeartbeat(true, Math.floor(Date.now() / 1000));
+
+      assert.equal(calls.clearHeartbeatPending, 0);
+    });
+
+    it('logs unexpected status', () => {
+      const { deps, calls } = createMockDeps();
+      deps._pending = { control_id: 1, phase: 'primary' };
+      deps._heartbeatStatus = 'bizarre';
+      const engine = new HeartbeatEngine(deps);
+
+      engine.processHeartbeat(true, Math.floor(Date.now() / 1000));
+
+      assert.ok(calls.log.some(m => m.includes('unexpected status') && m.includes('bizarre')));
+    });
+  });
+
+  describe('recovering state', () => {
+    it('enqueues recovery heartbeat when claude is running', () => {
+      const { deps, calls } = createMockDeps();
+      const engine = new HeartbeatEngine(deps, { initialHealth: 'recovering' });
+
+      engine.processHeartbeat(true, Math.floor(Date.now() / 1000));
+
+      assert.deepStrictEqual(calls.enqueueHeartbeat, ['recovery']);
+    });
+  });
+
+  describe('setHealth', () => {
+    it('does nothing when state is unchanged', () => {
+      const { deps, calls } = createMockDeps();
+      const engine = new HeartbeatEngine(deps);
+      assert.equal(engine.health, 'ok');
+
+      engine.setHealth('ok', 'no change');
+
+      assert.deepStrictEqual(calls.log, []);
+    });
+
+    it('logs transition with reason', () => {
+      const { deps, calls } = createMockDeps();
+      const engine = new HeartbeatEngine(deps);
+
+      engine.setHealth('recovering', 'verify_timeout');
+
+      assert.ok(calls.log.some(m => m.includes('OK') && m.includes('RECOVERING') && m.includes('verify_timeout')));
+      assert.equal(engine.health, 'recovering');
+    });
+  });
+});

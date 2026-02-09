@@ -1,1 +1,9 @@
-{"type":"module"}
+{
+  "type": "module",
+  "scripts": {
+    "test": "node --test scripts/__tests__/*.test.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.6.1"
+  }
+}

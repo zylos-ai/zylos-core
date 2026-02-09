@@ -2,6 +2,14 @@
 
 This file provides guidance to Claude Code when working in this directory.
 
+## Behavioral Rules
+
+**These rules are mandatory and override any default behavior.**
+
+1. **NEVER use `EnterPlanMode`.** Do not enter plan mode under any circumstances. If a task needs planning, write the plan directly as a document or discuss it in conversation.
+
+2. **NEVER use interactive prompts.** Do not use `AskUserQuestion` or any tool that presents menus, choices, or interactive selections to the user. The input box must always remain in its default state, ready to receive messages. Rationale: interactive prompts block the input pipeline and prevent heartbeat commands from being delivered, which would cause a false liveness timeout.
+
 ## Environment Overview
 
 This is a Zylos-managed workspace for an autonomous AI agent.
