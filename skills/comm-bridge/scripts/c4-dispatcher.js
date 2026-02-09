@@ -135,10 +135,12 @@ function checkInputBox(capture) {
     return 'indeterminate';
   }
 
-  // Strip prompt character (❯) and whitespace
+  // Strip prompt character (❯), whitespace, and invisible characters
+  // \p{C} = control, format, surrogate, private-use, unassigned (covers zero-width spaces, BOM, etc.)
+  // \p{Z} = all Unicode separator characters (spaces, line/paragraph separators)
   const stripped = text
     .replace(/\u276F/g, '')
-    .replace(/[\s\u00a0]+/g, '');
+    .replace(/[\p{C}\p{Z}]+/gu, '');
 
   if (stripped.length === 0) {
     return 'empty';
