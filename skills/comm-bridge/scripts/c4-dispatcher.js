@@ -121,26 +121,132 @@ function getInputBoxText(capture) {
   return lines.slice(start, end).join('\n');
 }
 
-function isInputBoxEmpty(capture) {
+/**
+ * Check the state of Claude Code's input box.
+ * @param {string} capture - tmux capture-pane output
+ * @returns {'empty'|'has_content'|'indeterminate'}
+ *   'empty':         Input box is empty (message was accepted)
+ *   'has_content':   Input box has text (message not yet submitted, retry Enter)
+ *   'indeterminate': Separators not visible — cannot determine input box state
+ */
+function checkInputBox(capture) {
   const text = getInputBoxText(capture);
   if (text === null) {
-    log('Warning: Unable to locate input box separators in capture-pane output');
-    return false;
+    return 'indeterminate';
   }
 
+  // Strip prompt character (❯), whitespace, and invisible characters
+  // \p{C} = control, format, surrogate, private-use, unassigned (covers zero-width spaces, BOM, etc.)
+  // \p{Z} = all Unicode separator characters (spaces, line/paragraph separators)
   const stripped = text
     .replace(/\u276F/g, '')
-    .replace(/[\s\u00a0]+/g, '');
+    .replace(/[\p{C}\p{Z}]+/gu, '');
 
-  return stripped.length === 0;
+  if (stripped.length === 0) {
+    return 'empty';
+  }
+
+  return 'has_content';
 }
 
+/**
+ * Dismiss Claude Code UI ghost text and capture the input box state.
+ *
+ * When Claude is busy processing a message, the input box may show dynamic
+ * UI hint text (e.g., "Press up to edit queued messages"). These hints are
+ * ghost text that disappears when the user types anything.
+ *
+ * Strategy:
+ *   1. Type a space — dismisses ghost text
+ *   2. Capture pane — while ghost text is gone (space still present)
+ *   3. Backspace — remove the space we typed
+ *
+ * The space is captured but checkInputBox() strips whitespace, so the extra
+ * space doesn't affect the empty/has_content result. Capturing BEFORE
+ * backspace ensures ghost text doesn't reappear between check and cleanup.
+ *
+ * @returns {string} tmux capture-pane output (with ghost text dismissed)
+ */
+async function dismissGhostTextAndCapture() {
+  execFileSync('tmux', ['send-keys', '-t', TMUX_SESSION, 'Space'], {
+    stdio: 'pipe'
+  });
+  await sleep(100);
+
+  const capture = execFileSync('tmux', ['capture-pane', '-p', '-t', TMUX_SESSION], {
+    encoding: 'utf8',
+    stdio: 'pipe'
+  });
+
+  execFileSync('tmux', ['send-keys', '-t', TMUX_SESSION, 'BSpace'], {
+    stdio: 'pipe'
+  });
+  await sleep(100);
+
+  return capture;
+}
+
+/**
+ * Best-effort: send Enter to tmux and verify the input box is empty.
+ * Only sends Enter — does NOT paste any content.
+ *
+ * Uses dismissGhostTextAndCapture() before each check to clear Claude Code
+ * UI hints that would otherwise cause false has_content results.
+ *
+ * This is best-effort — the caller (sendToTmux) considers the message
+ * delivered once paste succeeds, regardless of Enter verification result.
+ */
+async function submitAndVerify() {
+  execFileSync('tmux', ['send-keys', '-t', TMUX_SESSION, 'Enter'], {
+    stdio: 'pipe'
+  });
+
+  for (let attempt = 0; attempt < ENTER_VERIFY_MAX_RETRIES; attempt++) {
+    await sleep(ENTER_VERIFY_WAIT_MS);
+
+    // Dismiss ghost text, capture while it's gone, then clean up
+    const capture = await dismissGhostTextAndCapture();
+    const state = checkInputBox(capture);
+
+    if (state === 'empty') {
+      return;
+    }
+
+    if (state === 'indeterminate') {
+      // Transient capture glitch — retry without sending Enter
+      log(`Enter verify attempt ${attempt + 1}: separator detection failed, retrying capture`);
+      continue;
+    }
+
+    // state === 'has_content': input box still has text, retry Enter
+    log(`Enter verify attempt ${attempt + 1}: input box has content, retrying Enter`);
+    execFileSync('tmux', ['send-keys', '-t', TMUX_SESSION, 'Enter'], {
+      stdio: 'pipe'
+    });
+  }
+}
+
+/**
+ * Paste a message into Claude's input box via tmux, then submit with Enter.
+ *
+ * Two-phase delivery:
+ *   Phase 1 (paste):  set-buffer + paste-buffer → message appears in input box
+ *   Phase 2 (submit): Best-effort Enter + verify via submitAndVerify()
+ *
+ * Once the message is pasted into tmux, it is considered delivered.
+ * Enter verification is best-effort to ensure submission to Claude Code.
+ *
+ * Returns:
+ *   'submitted':    Paste succeeded (message is in tmux)
+ *   'paste_error':  tmux paste command itself failed
+ */
 async function sendToTmux(message) {
   const bufferName = `c4-msg-${process.pid}-${Date.now()}`;
   const sanitized = sanitizeMessage(message);
   const delayMs = getDeliveryDelay(Buffer.byteLength(sanitized, 'utf8'));
 
   try {
+    // Phase 1: Paste message into input box (only done ONCE)
     execFileSync('tmux', ['set-buffer', '-b', bufferName, '--', sanitized], {
       stdio: 'pipe'
     });
@@ -148,40 +254,9 @@ async function sendToTmux(message) {
     execFileSync('tmux', ['paste-buffer', '-b', bufferName, '-t', TMUX_SESSION], {
       stdio: 'pipe'
     });
-
-    await sleep(delayMs);
-
-    execFileSync('tmux', ['send-keys', '-t', TMUX_SESSION, 'Enter'], {
-      stdio: 'pipe'
-    });
-
-    for (let attempt = 0; attempt < ENTER_VERIFY_MAX_RETRIES; attempt++) {
-      await sleep(ENTER_VERIFY_WAIT_MS);
-
-      const capture = execFileSync('tmux', ['capture-pane', '-p', '-t', TMUX_SESSION], {
-        encoding: 'utf8',
-        stdio: 'pipe'
-      });
-
-      if (isInputBoxEmpty(capture)) {
-        return true;
-      }
-
-      execFileSync('tmux', ['send-keys', '-t', TMUX_SESSION, 'Enter'], {
-        stdio: 'pipe'
-      });
-    }
-
-    await sleep(ENTER_VERIFY_WAIT_MS);
-    const finalCapture = execFileSync('tmux', ['capture-pane', '-p', '-t', TMUX_SESSION], {
-      encoding: 'utf8',
-      stdio: 'pipe'
-    });
-
-    return isInputBoxEmpty(finalCapture);
   } catch (err) {
-    log(`Error sending to tmux: ${err.stack}`);
-    return false;
+    log(`Error pasting to tmux: ${err.stack}`);
+    return 'paste_error';
   } finally {
     try {
       execFileSync('tmux', ['delete-buffer', '-b', bufferName], { stdio: 'pipe' });
@@ -189,6 +264,17 @@ async function sendToTmux(message) {
       // Ignore buffer deletion errors
     }
   }
+
+  await sleep(delayMs);
+
+  // Phase 2: Best-effort submit with Enter
+  try {
+    await submitAndVerify();
+  } catch (err) {
+    log(`Warning: Enter verification error (paste already succeeded): ${err.message}`);
+  }
+
+  return 'submitted';
 }
 
 async function handleDeliveryFailure(msg) {
@@ -277,9 +363,9 @@ async function processNextMessage() {
 
   const deliveryContent = msg.content || '';
 
-  const success = await sendToTmux(deliveryContent);
+  const result = await sendToTmux(deliveryContent);
 
-  if (success) {
+  if (result === 'submitted') {
     markDelivered(msg.id);
     log(`Message id=${msg.id} delivered`);
     if (msg.require_idle === 1) {
@@ -288,7 +374,8 @@ async function processNextMessage() {
     return { delivered: true, state: claudeState.state };
   }
 
-  log(`Failed to deliver message id=${msg.id}, will retry`);
+  // result === 'paste_error': tmux paste command failed, retry
+  log(`Failed to paste message id=${msg.id} to tmux, will retry`);
   await handleDeliveryFailure(msg);
   return { delivered: false, state: claudeState.state };
 }
