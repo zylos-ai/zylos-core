@@ -3,7 +3,7 @@
  * C4 Communication Bridge - Control Queue Interface
  *
  * Commands:
- *   enqueue --content "<text>" [--priority 0] [--require-idle] [--bypass-state] [--ack-deadline <seconds>] [--available-in <seconds>]
+ *   enqueue --content "<text>" [--priority 3] [--require-idle] [--bypass-state] [--ack-deadline <seconds>] [--available-in <seconds>]
  *   get --id <control_id>
  *   ack --id <control_id>
  */
@@ -18,7 +18,7 @@ import {
 
 function usage() {
   console.error('Usage: c4-control.js <enqueue|get|ack> [options]');
-  console.error('  enqueue --content "<text>" [--priority 0] [--require-idle] [--bypass-state] [--ack-deadline <seconds>] [--available-in <seconds>]');
+  console.error('  enqueue --content "<text>" [--priority 3] [--require-idle] [--bypass-state] [--ack-deadline <seconds>] [--available-in <seconds>]');
   console.error('  get --id <control_id>');
   console.error('  ack --id <control_id>');
 }

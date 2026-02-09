@@ -17,13 +17,13 @@ Control messages are stored in the `control_queue` table in `~/zylos/comm-bridge
 Insert a new control message into the queue.
 
 ```bash
-c4-control.js enqueue --content "<text>" [--priority 0] [--require-idle] [--bypass-state] [--ack-deadline <seconds>] [--available-in <seconds>]
+c4-control.js enqueue --content "<text>" [--priority 3] [--require-idle] [--bypass-state] [--ack-deadline <seconds>] [--available-in <seconds>]
 ```
 
 | Option | Description |
 |--------|-------------|
 | `--content <text>` | Instruction content (required) |
-| `--priority <n>` | Priority level (see Priority Levels below, default: 0) |
+| `--priority <n>` | Priority level (see Priority Levels below, default: 3 = normal) |
 | `--require-idle` | Only deliver when Claude is idle |
 | `--bypass-state` | Deliver regardless of current state |
 | `--ack-deadline <seconds>` | Seconds from now until the control times out if unacknowledged |

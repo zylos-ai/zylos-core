@@ -231,7 +231,7 @@ export function getPendingControlCount() {
 export function insertControl(content, options = {}) {
   const database = getDb();
   const {
-    priority = 0,
+    priority = 3,
     requireIdle = false,
     bypassState = false,
     ackDeadlineAt = null,
@@ -317,7 +317,7 @@ export function getNextPendingControl(current = nowSeconds()) {
     FROM control_queue
     WHERE status = 'pending'
       AND (available_at IS NULL OR available_at <= ?)
-    ORDER BY COALESCE(priority, 0) ASC, created_at ASC
+    ORDER BY COALESCE(priority, 3) ASC, created_at ASC
     LIMIT 1
   `).get(current) || null;
 }
