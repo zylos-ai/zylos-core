@@ -49,7 +49,7 @@ The JSON output includes `skill` field with hooks, config schema, and service in
 
 Read the `skill.config` from the JSON output (or the installed SKILL.md).
 
-**If no config.required AND no config.optional exists, skip to Step 5.**
+**If no config.required AND no config.optional exists, skip to Step 4.**
 
 For each required config item, ask user to provide the value:
 
