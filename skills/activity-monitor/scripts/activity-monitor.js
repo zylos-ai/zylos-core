@@ -102,7 +102,6 @@ function resolveCommBridgeScript(fileName) {
 }
 
 const C4_CONTROL_PATH = resolveCommBridgeScript('c4-control.js');
-const C4_RECEIVE_PATH = resolveCommBridgeScript('c4-receive.js');
 const C4_SEND_PATH = resolveCommBridgeScript('c4-send.js');
 
 function tmuxHasSession() {
@@ -144,47 +143,6 @@ function isClaudeRunning() {
     execSync(`pgrep -P ${panePid} -f "claude" > /dev/null 2>&1`);
     return true;
   } catch {
-    return false;
-  }
-}
-
-function isClaudeReady() {
-  try {
-    const paneContent = execSync(`tmux capture-pane -t "${SESSION}" -p 2>/dev/null`, { encoding: 'utf8' });
-    return paneContent.includes('>') || paneContent.includes('Claude');
-  } catch {
-    return false;
-  }
-}
-
-function waitForClaudeReady(maxWaitSeconds = 60) {
-  return new Promise((resolve) => {
-    let waited = 0;
-    const checkInterval = setInterval(() => {
-      waited += 1;
-
-      if (isClaudeReady()) {
-        clearInterval(checkInterval);
-        log(`Guardian: Claude ready after ${waited}s`);
-        resolve(true);
-        return;
-      }
-
-      if (waited >= maxWaitSeconds) {
-        clearInterval(checkInterval);
-        log(`Guardian: Timeout waiting for Claude to be ready (${maxWaitSeconds}s)`);
-        resolve(false);
-      }
-    }, 1000);
-  });
-}
-
-function sendViaC4(message) {
-  try {
-    execFileSync('node', [C4_RECEIVE_PATH, '--priority', '1', '--no-reply', '--content', message], { stdio: 'pipe' });
-    return true;
-  } catch (err) {
-    log(`Failed to send via C4: ${err.message}`);
     return false;
   }
 }
@@ -289,22 +247,6 @@ function startClaude() {
     }
   }
 
-  waitForClaudeReady(60).then((ready) => {
-    if (!ready) {
-      log('Guardian: Warning - Claude may not have started properly');
-      return;
-    }
-
-    log('Guardian: Claude is ready, waiting 2s before sending recovery prompt...');
-    setTimeout(() => {
-      sendViaC4(`Session recovered by activity monitor. Do the following:
-
-1. Read your memory files (identity.md, state.md, references.md in ${ZYLOS_DIR}/memory/)
-2. Check the conversation transcript at ${CONV_DIR}/*.jsonl (most recent file by date) for messages AFTER the last memory sync timestamp
-3. If there was conversation between last memory sync and crash, briefly summarize what was discussed (both Howard's messages and your replies)`);
-      log('Guardian: Recovery prompt sent via C4');
-    }, 2000);
-  });
 }
 
 function ensureStatusDir() {
@@ -444,7 +386,7 @@ function getHeartbeatStatus(controlId) {
 
 function sendRecoveryNotice(channel, endpoint) {
   try {
-    execFileSync('node', [C4_SEND_PATH, channel, endpoint, 'System has recovered. Please resend your request.'], { stdio: 'pipe' });
+    execFileSync('node', [C4_SEND_PATH, channel, endpoint, 'Hey! I was temporarily unavailable but I\'m back online now. If you sent me something while I was away, could you send it again? Thanks!'], { stdio: 'pipe' });
     return true;
   } catch (err) {
     log(`Recovery notice failed for ${channel}:${endpoint} (${err.message})`);

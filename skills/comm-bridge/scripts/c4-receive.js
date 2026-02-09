@@ -200,9 +200,9 @@ function main() {
   if (health !== 'ok') {
     recordPendingChannel(channel, endpoint);
     if (health === 'down') {
-      emitError(json, 'HEALTH_DOWN', 'System is currently unable to recover automatically. Please contact the administrator.');
+      emitError(json, 'HEALTH_DOWN', "I'm currently offline and unable to recover on my own. Please let the admin know so they can take a look!");
     }
-    emitError(json, 'HEALTH_RECOVERING', 'System is recovering, please wait.');
+    emitError(json, 'HEALTH_RECOVERING', "I'm temporarily unavailable but should be back shortly. I'll reach out once I'm ready!");
   }
 
   let replyViaSuffix = '';
