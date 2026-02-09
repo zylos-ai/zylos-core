@@ -148,25 +148,40 @@ function checkInputBox(capture) {
 }
 
 /**
- * Dismiss Claude Code UI ghost text (autocomplete hints) from the input box.
+ * Dismiss Claude Code UI ghost text and capture the input box state.
  *
  * When Claude is busy processing a message, the input box may show dynamic
  * UI hint text (e.g., "Press up to edit queued messages"). These hints are
  * ghost text that disappears when the user types anything.
  *
- * Strategy: type a space character (dismisses any ghost text), then
- * immediately backspace to remove it. This leaves real content untouched
- * but clears ghost text, allowing a clean empty/has_content check.
+ * Strategy:
+ *   1. Type a space — dismisses ghost text
+ *   2. Capture pane — while ghost text is gone (space still present)
+ *   3. Backspace — remove the space we typed
+ *
+ * The space is captured but checkInputBox() strips whitespace, so the extra
+ * space doesn't affect the empty/has_content result. Capturing BEFORE
+ * backspace ensures ghost text doesn't reappear between check and cleanup.
+ *
+ * @returns {string} tmux capture-pane output (with ghost text dismissed)
  */
-async function dismissGhostText() {
+async function dismissGhostTextAndCapture() {
   execFileSync('tmux', ['send-keys', '-t', TMUX_SESSION, 'Space'], {
     stdio: 'pipe'
   });
   await sleep(100);
+
+  const capture = execFileSync('tmux', ['capture-pane', '-p', '-t', TMUX_SESSION], {
+    encoding: 'utf8',
+    stdio: 'pipe'
+  });
+
   execFileSync('tmux', ['send-keys', '-t', TMUX_SESSION, 'BSpace'], {
     stdio: 'pipe'
   });
   await sleep(100);
+
+  return capture;
 }
 
 /**
@@ -189,14 +204,8 @@ async function submitAndVerify() {
   for (let attempt = 0; attempt < ENTER_VERIFY_MAX_RETRIES; attempt++) {
     await sleep(ENTER_VERIFY_WAIT_MS);
 
-    // Dismiss any ghost text before checking input box state
-    await dismissGhostText();
-
-    const capture = execFileSync('tmux', ['capture-pane', '-p', '-t', TMUX_SESSION], {
-      encoding: 'utf8',
-      stdio: 'pipe'
-    });
-
+    // Dismiss ghost text, capture while it's gone, then clean up
+    const capture = await dismissGhostTextAndCapture();
     const state = checkInputBox(capture);
 
     if (state === 'empty') {
@@ -217,12 +226,7 @@ async function submitAndVerify() {
 
   // Final check
   await sleep(ENTER_VERIFY_WAIT_MS);
-  await dismissGhostText();
-
-  const finalCapture = execFileSync('tmux', ['capture-pane', '-p', '-t', TMUX_SESSION], {
-    encoding: 'utf8',
-    stdio: 'pipe'
-  });
+  const finalCapture = await dismissGhostTextAndCapture();
 
   return checkInputBox(finalCapture) === 'has_content' ? 'has_content' : 'submitted';
 }
