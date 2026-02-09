@@ -122,23 +122,11 @@ function getInputBoxText(capture) {
 }
 
 /**
- * Claude Code UI hint patterns that appear in the input box but do NOT
- * represent user content. When these are detected, the input box should
- * be considered "empty" (message was accepted).
- *
- * Known patterns:
- * - "Press up to edit queued messages" — shown when a message is queued
- *   while Claude is busy processing another message.
- */
-const INPUT_BOX_HINT_PATTERNS = [
-  /press\s*up\s*to\s*edit\s*queued\s*messages/i,
-];
-
-/**
  * Check the state of Claude Code's input box.
+ * @param {string} capture - tmux capture-pane output
  * @returns {'empty'|'has_content'|'indeterminate'}
- *   'empty':         Input box is empty or shows only UI hints (message was accepted)
- *   'has_content':   Input box has user text (message not yet submitted, retry Enter)
+ *   'empty':         Input box is empty (message was accepted)
+ *   'has_content':   Input box has text (message not yet submitted, retry Enter)
  *   'indeterminate': Separators not visible — cannot determine input box state
  */
 function checkInputBox(capture) {
@@ -156,19 +144,37 @@ function checkInputBox(capture) {
     return 'empty';
   }
 
-  // Check if the remaining text is a known Claude Code UI hint
-  for (const pattern of INPUT_BOX_HINT_PATTERNS) {
-    if (pattern.test(stripped)) {
-      return 'empty';
-    }
-  }
-
   return 'has_content';
+}
+
+/**
+ * Dismiss Claude Code UI ghost text (autocomplete hints) from the input box.
+ *
+ * When Claude is busy processing a message, the input box may show dynamic
+ * UI hint text (e.g., "Press up to edit queued messages"). These hints are
+ * ghost text that disappears when the user types anything.
+ *
+ * Strategy: type a space character (dismisses any ghost text), then
+ * immediately backspace to remove it. This leaves real content untouched
+ * but clears ghost text, allowing a clean empty/has_content check.
+ */
+async function dismissGhostText() {
+  execFileSync('tmux', ['send-keys', '-t', TMUX_SESSION, 'Space'], {
+    stdio: 'pipe'
+  });
+  await sleep(100);
+  execFileSync('tmux', ['send-keys', '-t', TMUX_SESSION, 'BSpace'], {
+    stdio: 'pipe'
+  });
+  await sleep(100);
 }
 
 /**
  * Send Enter to tmux and verify the input box is empty (message was submitted).
  * Only sends Enter — does NOT paste any content.
+ *
+ * Uses dismissGhostText() before each check to clear Claude Code UI hints
+ * that would otherwise cause false has_content results.
  *
  * @returns {'submitted'|'has_content'|'indeterminate'}
  *   'submitted':     Input box confirmed empty after Enter
@@ -182,6 +188,9 @@ async function submitAndVerify() {
 
   for (let attempt = 0; attempt < ENTER_VERIFY_MAX_RETRIES; attempt++) {
     await sleep(ENTER_VERIFY_WAIT_MS);
+
+    // Dismiss any ghost text before checking input box state
+    await dismissGhostText();
 
     const capture = execFileSync('tmux', ['capture-pane', '-p', '-t', TMUX_SESSION], {
       encoding: 'utf8',
@@ -208,6 +217,8 @@ async function submitAndVerify() {
 
   // Final check
   await sleep(ENTER_VERIFY_WAIT_MS);
+  await dismissGhostText();
+
   const finalCapture = execFileSync('tmux', ['capture-pane', '-p', '-t', TMUX_SESSION], {
     encoding: 'utf8',
     stdio: 'pipe'
