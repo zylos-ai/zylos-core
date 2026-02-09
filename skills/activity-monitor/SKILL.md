@@ -21,6 +21,7 @@ This is a **PM2 service** (not directly invoked by Claude). It runs continuously
 5. **Heartbeat Liveness Detection**: Periodically sends heartbeat probes via the C4 control queue to verify Claude is responsive, triggering recovery when probes fail
 6. **Health Check**: Periodically enqueues system health checks (PM2, disk, memory) via the C4 control queue
 7. **Daily Upgrade**: Enqueues a Claude Code upgrade via the C4 control queue at 5:00 AM local time daily
+8. **Context Check**: Hourly context usage check via C4 control queue; triggers restart if usage exceeds 70%
 
 ## Status File Format
 
@@ -157,6 +158,21 @@ The activity monitor enqueues a daily Claude Code upgrade via the C4 control que
 - **Once per day**: Checks local date to avoid duplicate enqueues
 
 The control message instructs Claude to use the `upgrade-claude` skill, which handles idle detection, `/exit`, upgrade, and automatic restart.
+
+## Context Check
+
+Hourly context usage check via the C4 control queue.
+
+- **Interval**: Every 1 hour (3600 seconds)
+- **Persisted state**: `~/zylos/activity-monitor/context-check-state.json` (survives restarts)
+- **Priority**: 3 (normal)
+- **Require idle**: Yes — only delivered when Claude is idle
+- **Gated by health**: Only enqueued when `health === 'ok'`
+- **Gated by Claude**: Only enqueued when Claude process is running
+
+The control message instructs Claude to:
+1. Use the `check-context` skill to get current context usage
+2. If usage exceeds 70%, use the `restart-claude` skill to restart
 
 ## Daily Memory Commit
 

@@ -26,6 +26,7 @@ const HEARTBEAT_PENDING_FILE = path.join(MONITOR_DIR, 'heartbeat-pending.json');
 const HEALTH_CHECK_STATE_FILE = path.join(MONITOR_DIR, 'health-check-state.json');
 const DAILY_UPGRADE_STATE_FILE = path.join(MONITOR_DIR, 'daily-upgrade-state.json');
 const DAILY_MEMORY_COMMIT_STATE_FILE = path.join(MONITOR_DIR, 'daily-memory-commit-state.json');
+const CONTEXT_CHECK_STATE_FILE = path.join(MONITOR_DIR, 'context-check-state.json');
 const PENDING_CHANNELS_FILE = path.join(COMM_BRIDGE_DIR, 'pending-channels.jsonl');
 
 // Claude binary - relies on PATH from PM2 ecosystem.config.js
@@ -49,6 +50,9 @@ const MAX_RESTART_FAILURES = 3;
 
 // Health check config
 const HEALTH_CHECK_INTERVAL = 21600; // 6 hours
+
+// Context check config
+const CONTEXT_CHECK_INTERVAL = 3600; // 1 hour
 
 // Daily tasks config
 const DAILY_UPGRADE_HOUR = 5;        // 5:00 AM local time
@@ -530,6 +534,79 @@ function maybeEnqueueHealthCheck(claudeRunning, currentTime) {
 }
 
 // ---------------------------------------------------------------------------
+// Context Check (hourly)
+// ---------------------------------------------------------------------------
+
+function loadContextCheckState() {
+  try {
+    if (!fs.existsSync(CONTEXT_CHECK_STATE_FILE)) return null;
+    const parsed = JSON.parse(fs.readFileSync(CONTEXT_CHECK_STATE_FILE, 'utf8'));
+    if (parsed && typeof parsed.last_check_at === 'number') {
+      return parsed;
+    }
+  } catch {}
+  return null;
+}
+
+function writeContextCheckState(timestamp) {
+  try {
+    if (!fs.existsSync(MONITOR_DIR)) {
+      fs.mkdirSync(MONITOR_DIR, { recursive: true });
+    }
+    fs.writeFileSync(CONTEXT_CHECK_STATE_FILE, JSON.stringify({
+      last_check_at: timestamp,
+      last_check_human: new Date(timestamp * 1000).toISOString().replace('T', ' ').substring(0, 19)
+    }, null, 2));
+  } catch (err) {
+    log(`Context check: failed to write state (${err.message})`);
+  }
+}
+
+function enqueueContextCheck() {
+  const content = [
+    'Context usage check.',
+    'Use the check-context skill to get current context usage.',
+    'If context usage exceeds 70%, use the restart-claude skill to restart.'
+  ].join(' ');
+
+  const result = runC4Control([
+    'enqueue',
+    '--content', content,
+    '--priority', '3',
+    '--require-idle',
+    '--ack-deadline', '600'
+  ]);
+
+  if (!result.ok) {
+    log(`Context check enqueue failed: ${result.output}`);
+    return false;
+  }
+
+  const match = result.output.match(/control\s+(\d+)/i);
+  if (!match) {
+    log(`Context check enqueue parse failed: ${result.output}`);
+    return false;
+  }
+
+  const now = Math.floor(Date.now() / 1000);
+  writeContextCheckState(now);
+  log(`Context check enqueued id=${match[1]}`);
+  return true;
+}
+
+function maybeEnqueueContextCheck(claudeRunning, currentTime) {
+  if (!claudeRunning) return;
+  if (engine.health !== 'ok') return;
+
+  const state = loadContextCheckState();
+  const lastCheckAt = state?.last_check_at ?? 0;
+
+  if ((currentTime - lastCheckAt) >= CONTEXT_CHECK_INTERVAL) {
+    enqueueContextCheck();
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Daily Upgrade
 // ---------------------------------------------------------------------------
 
@@ -659,6 +736,7 @@ function monitorLoop() {
 
     engine.processHeartbeat(false, currentTime);
     maybeEnqueueHealthCheck(false, currentTime);
+    maybeEnqueueContextCheck(false, currentTime);
     memoryCommitScheduler.maybeTrigger();
     lastState = state;
     return;
@@ -697,6 +775,7 @@ function monitorLoop() {
 
     engine.processHeartbeat(false, currentTime);
     maybeEnqueueHealthCheck(false, currentTime);
+    maybeEnqueueContextCheck(false, currentTime);
     memoryCommitScheduler.maybeTrigger();
     lastState = state;
     return;
@@ -749,6 +828,7 @@ function monitorLoop() {
 
   engine.processHeartbeat(true, currentTime);
   maybeEnqueueHealthCheck(true, currentTime);
+  maybeEnqueueContextCheck(true, currentTime);
   if (engine.health === 'ok') {
     upgradeScheduler.maybeTrigger();
   }
