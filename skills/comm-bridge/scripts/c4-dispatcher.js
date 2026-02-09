@@ -229,8 +229,13 @@ async function submitAndVerify() {
   // Final check
   await sleep(ENTER_VERIFY_WAIT_MS);
   const finalCapture = await dismissGhostTextAndCapture();
+  const finalState = checkInputBox(finalCapture);
 
-  return checkInputBox(finalCapture) === 'has_content' ? 'has_content' : 'submitted';
+  if (finalState === 'indeterminate') {
+    log('Warning: input box separator detection failed on final check — needs investigation');
+  }
+
+  return finalState === 'empty' ? 'submitted' : finalState;
 }
 
 /**
@@ -241,9 +246,10 @@ async function submitAndVerify() {
  *   Phase 2 (submit): Enter + verify via submitAndVerify()
  *
  * Returns:
- *   'submitted':     Message was submitted to Claude (input box empty or indeterminate)
- *   'submit_failed': Paste succeeded but Enter verification failed (content still in input box)
- *   'paste_error':   tmux paste command itself failed
+ *   'submitted':      Message was submitted to Claude (input box confirmed empty)
+ *   'submit_failed':  Paste succeeded but Enter verification failed (content still in input box)
+ *   'indeterminate':  Paste succeeded but cannot verify (separator detection failed)
+ *   'paste_error':    tmux paste command itself failed
  */
 async function sendToTmux(message) {
   const bufferName = `c4-msg-${process.pid}-${Date.now()}`;
@@ -268,7 +274,9 @@ async function sendToTmux(message) {
     if (result === 'has_content') {
       return 'submit_failed';
     }
-    // 'submitted' or 'indeterminate' — message was accepted
+    if (result === 'indeterminate') {
+      return 'indeterminate';
+    }
     return 'submitted';
   } catch (err) {
     log(`Error sending to tmux: ${err.stack}`);
@@ -379,6 +387,14 @@ async function processNextMessage() {
     return { delivered: true, state: claudeState.state };
   }
 
+  if (result === 'indeterminate') {
+    // Paste succeeded but verification inconclusive (separator detection failed).
+    // Don't mark delivered — leave as pending for next poll cycle to retry.
+    log(`Message id=${msg.id} paste succeeded but verification indeterminate, will retry`);
+    await handleDeliveryFailure(msg);
+    return { delivered: false, state: claudeState.state };
+  }
+
   if (result === 'submit_failed') {
     // Message is already in the input box (paste succeeded).
     // Only retry Enter — do NOT re-paste the entire message.
@@ -391,13 +407,17 @@ async function processNextMessage() {
 
       try {
         const retryResult = await submitAndVerify();
-        if (retryResult !== 'has_content') {
+        if (retryResult === 'submitted') {
           markDelivered(msg.id);
           log(`Message id=${msg.id} delivered after Enter retry ${retry + 1}`);
           if (msg.require_idle === 1) {
             await waitForRequireIdleSettlement(msg.id);
           }
           return { delivered: true, state: claudeState.state };
+        }
+        if (retryResult === 'indeterminate') {
+          log(`Message id=${msg.id} Enter retry ${retry + 1}: verification indeterminate`);
+          // Continue retrying — next attempt may get a clear result
         }
       } catch (err) {
         log(`Enter retry error: ${err.message}`);
