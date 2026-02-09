@@ -21,7 +21,7 @@ const CONTROL_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS control_queue (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   content TEXT NOT NULL,
-  priority INTEGER DEFAULT 0,
+  priority INTEGER DEFAULT 3,
   require_idle INTEGER DEFAULT 0,
   bypass_state INTEGER DEFAULT 0,
   ack_deadline_at INTEGER,

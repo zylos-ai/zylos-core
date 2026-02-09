@@ -340,7 +340,7 @@ function runC4Control(args) {
 }
 
 function enqueueHeartbeat(phase) {
-  const content = `Heartbeat check. Run: ${C4_CONTROL_PATH} ack --id __CONTROL_ID__`;
+  const content = `Heartbeat check. Run: node ${C4_CONTROL_PATH} ack --id __CONTROL_ID__`;
   const result = runC4Control([
     'enqueue',
     '--content', content,

@@ -90,7 +90,7 @@ function handleEnqueue(args) {
   const availableAt = availableInSeconds !== null ? now + availableInSeconds : null;
 
   const record = insertControl(content, {
-    priority: priority ?? 0,
+    priority: priority ?? 3,
     requireIdle: hasFlag(args, '--require-idle'),
     bypassState: hasFlag(args, '--bypass-state'),
     ackDeadlineAt,
