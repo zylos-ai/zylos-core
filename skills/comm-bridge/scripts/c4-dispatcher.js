@@ -5,7 +5,8 @@
  */
 
 import { execFileSync } from 'child_process';
-import { readFileSync, existsSync, statSync } from 'fs';
+import { readFileSync, existsSync, statSync, realpathSync } from 'fs';
+import { fileURLToPath } from 'url';
 import {
   getNextPending,
   claimConversation,
@@ -106,16 +107,16 @@ function isStatusFresh() {
   }
 }
 
-function sanitizeMessage(message) {
+export function sanitizeMessage(message) {
   return message.replace(/[\x00-\x08\x0B-\x1F]/g, '');
 }
 
-function getDeliveryDelay(byteLength) {
+export function getDeliveryDelay(byteLength) {
   const extra = Math.floor(byteLength / 1024) * DELIVERY_DELAY_PER_KB;
   return Math.min(DELIVERY_DELAY_BASE + extra, DELIVERY_DELAY_MAX);
 }
 
-function getInputBoxText(capture) {
+export function getInputBoxText(capture) {
   const lines = capture.split('\n');
   const separatorIndexes = [];
 
@@ -134,7 +135,7 @@ function getInputBoxText(capture) {
   return lines.slice(start, end).join('\n');
 }
 
-function checkInputBox(capture) {
+export function checkInputBox(capture) {
   const text = getInputBoxText(capture);
   if (text === null) {
     return 'indeterminate';
@@ -217,7 +218,7 @@ async function sendToTmux(message) {
   return 'submitted';
 }
 
-function isBypassState(item) {
+export function isBypassState(item) {
   return item.type === 'control' && item.bypass_state === 1;
 }
 
@@ -449,4 +450,7 @@ async function main() {
   process.exit(0);
 }
 
-main();
+const isMainModule = process.argv[1] && realpathSync(fileURLToPath(import.meta.url)) === realpathSync(process.argv[1]);
+if (isMainModule) {
+  main();
+}

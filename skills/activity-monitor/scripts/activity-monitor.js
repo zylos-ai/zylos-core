@@ -9,6 +9,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { fileURLToPath } from 'url';
+import { HeartbeatEngine } from './heartbeat-engine.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -49,9 +50,7 @@ let lastState = '';
 let startupGrace = 0;
 let idleSince = 0;
 
-let healthState = 'ok';
-let restartFailureCount = 0;
-let lastHeartbeatAt = Math.floor(Date.now() / 1000);
+let engine; // initialized in init()
 
 function log(message) {
   const timestamp = new Date().toISOString().replace('T', ' ').substring(0, 19);
@@ -325,17 +324,10 @@ function loadInitialHealth() {
   return 'ok';
 }
 
-function setHealth(nextHealth, reason = '') {
-  if (healthState === nextHealth) return;
-  const suffix = reason ? ` (${reason})` : '';
-  log(`Health: ${healthState.toUpperCase()} -> ${nextHealth.toUpperCase()}${suffix}`);
-  healthState = nextHealth;
-}
-
 function writeStatusFile(statusObj) {
   try {
     ensureStatusDir();
-    fs.writeFileSync(STATUS_FILE, JSON.stringify({ ...statusObj, health: healthState }, null, 2));
+    fs.writeFileSync(STATUS_FILE, JSON.stringify({ ...statusObj, health: engine.health }, null, 2));
   } catch {
     // Best-effort.
   }
@@ -429,9 +421,6 @@ function enqueueHeartbeat(phase) {
     created_at: Math.floor(Date.now() / 1000)
   });
   log(`Heartbeat enqueued id=${controlId} phase=${phase}`);
-  if (phase === 'primary') {
-    lastHeartbeatAt = Math.floor(Date.now() / 1000);
-  }
   return true;
 }
 
@@ -499,105 +488,6 @@ function notifyPendingChannels() {
   log(`Recovery notification completed for ${dedup.size} channel(s)`);
 }
 
-function onHeartbeatSuccess(phase) {
-  clearHeartbeatPending();
-  restartFailureCount = 0;
-  if (healthState !== 'ok') {
-    setHealth('ok', `heartbeat_ack phase=${phase}`);
-    notifyPendingChannels();
-  }
-  if (phase !== 'primary') {
-    lastHeartbeatAt = Math.floor(Date.now() / 1000);
-  }
-}
-
-function triggerRecovery(reason) {
-  if (healthState === 'down') {
-    log(`Heartbeat recovery skipped in DOWN state (${reason})`);
-    return;
-  }
-
-  if (healthState === 'ok') {
-    setHealth('recovering', reason);
-  }
-
-  restartFailureCount += 1;
-  log(`Heartbeat recovery attempt ${restartFailureCount}/${MAX_RESTART_FAILURES} (${reason})`);
-  killTmuxSession();
-
-  if (restartFailureCount >= MAX_RESTART_FAILURES) {
-    setHealth('down', 'max_restart_failures_reached');
-  }
-}
-
-function onHeartbeatFailure(pending, status) {
-  const phase = pending.phase || 'primary';
-  clearHeartbeatPending();
-
-  if (phase === 'primary' && healthState === 'ok') {
-    log('Heartbeat primary failed; entering verify phase');
-    enqueueHeartbeat('verify');
-    return;
-  }
-
-  if (phase === 'verify' && healthState === 'ok') {
-    triggerRecovery(`verify_${status}`);
-    return;
-  }
-
-  if (healthState === 'recovering') {
-    triggerRecovery(`recovery_${status}`);
-    return;
-  }
-
-  if (healthState === 'down') {
-    log(`Heartbeat failed in DOWN state (${status}); waiting for manual fix`);
-    return;
-  }
-
-  triggerRecovery(`heartbeat_${status}`);
-}
-
-function processHeartbeat(claudeRunning, currentTime) {
-  const pending = readHeartbeatPending();
-  if (pending) {
-    const status = getHeartbeatStatus(pending.control_id);
-    if (status === 'pending' || status === 'running' || status === 'error') {
-      return;
-    }
-
-    if (status === 'done') {
-      onHeartbeatSuccess(pending.phase || 'unknown');
-      return;
-    }
-
-    if (status === 'failed' || status === 'timeout' || status === 'not_found') {
-      onHeartbeatFailure(pending, status);
-      return;
-    }
-
-    log(`Heartbeat unexpected status: ${status}`);
-    return;
-  }
-
-  if (!claudeRunning) {
-    return;
-  }
-
-  if (healthState === 'recovering') {
-    enqueueHeartbeat('recovery');
-    return;
-  }
-
-  if (healthState === 'down') {
-    enqueueHeartbeat('down-check');
-    return;
-  }
-
-  if ((currentTime - lastHeartbeatAt) >= HEARTBEAT_INTERVAL) {
-    enqueueHeartbeat('primary');
-  }
-}
 
 function monitorLoop() {
   const currentTime = Math.floor(Date.now() / 1000);
@@ -630,7 +520,7 @@ function monitorLoop() {
       notRunningCount = 0;
     }
 
-    processHeartbeat(false, currentTime);
+    engine.processHeartbeat(false, currentTime);
     lastState = state;
     return;
   }
@@ -638,7 +528,7 @@ function monitorLoop() {
   if (!isClaudeRunning()) {
     if (startupGrace > 0) {
       startupGrace -= 1;
-      processHeartbeat(false, currentTime);
+      engine.processHeartbeat(false, currentTime);
       return;
     }
 
@@ -666,7 +556,7 @@ function monitorLoop() {
       notRunningCount = 0;
     }
 
-    processHeartbeat(false, currentTime);
+    engine.processHeartbeat(false, currentTime);
     lastState = state;
     return;
   }
@@ -716,7 +606,7 @@ function monitorLoop() {
     }
   }
 
-  processHeartbeat(true, currentTime);
+  engine.processHeartbeat(true, currentTime);
   lastState = state;
 }
 
@@ -728,9 +618,23 @@ function init() {
     fs.mkdirSync(COMM_BRIDGE_DIR, { recursive: true });
   }
 
-  healthState = loadInitialHealth();
-  if (healthState !== 'ok') {
-    log(`Startup with health=${healthState}; will verify immediately when Claude is running`);
+  const initialHealth = loadInitialHealth();
+  engine = new HeartbeatEngine({
+    enqueueHeartbeat,
+    getHeartbeatStatus,
+    readHeartbeatPending,
+    clearHeartbeatPending,
+    killTmuxSession,
+    notifyPendingChannels,
+    log
+  }, {
+    initialHealth,
+    heartbeatInterval: HEARTBEAT_INTERVAL,
+    maxRestartFailures: MAX_RESTART_FAILURES
+  });
+
+  if (initialHealth !== 'ok') {
+    log(`Startup with health=${initialHealth}; will verify immediately when Claude is running`);
   }
 }
 
