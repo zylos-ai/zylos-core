@@ -472,7 +472,7 @@ function enqueueHealthCheck() {
   const result = runC4Control([
     'enqueue',
     '--content', content,
-    '--priority', '1',
+    '--priority', '3',
     '--ack-deadline', '600'
   ]);
 
