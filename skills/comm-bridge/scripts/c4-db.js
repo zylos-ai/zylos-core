@@ -21,7 +21,7 @@ const CONTROL_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS control_queue (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   content TEXT NOT NULL,
-  priority INTEGER DEFAULT 0,
+  priority INTEGER DEFAULT 3,
   require_idle INTEGER DEFAULT 0,
   bypass_state INTEGER DEFAULT 0,
   ack_deadline_at INTEGER,
@@ -231,7 +231,7 @@ export function getPendingControlCount() {
 export function insertControl(content, options = {}) {
   const database = getDb();
   const {
-    priority = 0,
+    priority = 3,
     requireIdle = false,
     bypassState = false,
     ackDeadlineAt = null,
@@ -260,16 +260,17 @@ export function insertControl(content, options = {}) {
     );
 
     const id = Number(result.lastInsertRowid);
-    let finalContent = content;
 
-    if (content.includes('__CONTROL_ID__')) {
-      finalContent = content.replaceAll('__CONTROL_ID__', String(id));
-      database.prepare(`
-        UPDATE control_queue
-        SET content = ?, updated_at = ?
-        WHERE id = ?
-      `).run(finalContent, current, id);
-    }
+    // Auto-append ack suffix (like c4-receive appends "reply via")
+    const controlScriptPath = path.join(__dirname, 'c4-control.js');
+    const ackSuffix = ` ---- ack via: node ${controlScriptPath} ack --id ${id}`;
+    const finalContent = content + ackSuffix;
+
+    database.prepare(`
+      UPDATE control_queue
+      SET content = ?, updated_at = ?
+      WHERE id = ?
+    `).run(finalContent, current, id);
 
     return {
       id,
@@ -317,7 +318,7 @@ export function getNextPendingControl(current = nowSeconds()) {
     FROM control_queue
     WHERE status = 'pending'
       AND (available_at IS NULL OR available_at <= ?)
-    ORDER BY COALESCE(priority, 0) ASC, created_at ASC
+    ORDER BY COALESCE(priority, 3) ASC, created_at ASC
     LIMIT 1
   `).get(current) || null;
 }

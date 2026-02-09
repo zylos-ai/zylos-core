@@ -19,6 +19,7 @@ This is a **PM2 service** (not directly invoked by Claude). It runs continuously
 3. **Guardian Mode**: Automatically restarts Claude if it stops or crashes
 4. **Maintenance Awareness**: Waits for restart/upgrade scripts to complete before starting Claude
 5. **Heartbeat Liveness Detection**: Periodically sends heartbeat probes via the C4 control queue to verify Claude is responsive, triggering recovery when probes fail
+6. **Health Check**: Periodically enqueues system health checks (PM2, disk, memory) via the C4 control queue
 
 ## Status File Format
 
@@ -123,6 +124,24 @@ Each heartbeat probe is enqueued with an ack deadline. If Claude does not acknow
 ### Recovery Behavior
 
 When health transitions back to `ok`, the engine reads `~/zylos/comm-bridge/pending-channels.jsonl` and sends a recovery notification to each recorded channel/endpoint via C4, then clears the file.
+
+## Health Check
+
+The activity monitor periodically enqueues system health checks via the C4 control queue.
+
+- **Interval**: Every 6 hours (21600 seconds)
+- **Persisted state**: `~/zylos/activity-monitor/health-check-state.json` (survives restarts)
+- **Priority**: 1 (higher than conversation messages, lower than heartbeat)
+- **Gated by health**: Only enqueued when `health === 'ok'`
+- **Gated by Claude**: Only enqueued when Claude process is running
+
+The health check control message instructs Claude to:
+1. Check PM2 services via `pm2 jlist`
+2. Check disk space via `df -h`
+3. Check memory via `free -m`
+4. If issues found, notify the most recent communication channel
+5. Log results to `~/zylos/logs/health.log`
+6. Acknowledge the control message
 
 ## Log File
 

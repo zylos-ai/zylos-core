@@ -44,8 +44,9 @@ describe('insertControl', () => {
   it('inserts a basic control record with defaults', () => {
     const rec = mod.insertControl('do something');
     assert.ok(typeof rec.id === 'number' && rec.id > 0);
-    assert.equal(rec.content, 'do something');
-    assert.equal(rec.priority, 0);
+    assert.ok(rec.content.startsWith('do something'));
+    assert.ok(rec.content.includes('---- ack via:'));
+    assert.equal(rec.priority, 3);
     assert.equal(rec.require_idle, 0);
     assert.equal(rec.bypass_state, 0);
     assert.equal(rec.ack_deadline_at, null);
@@ -56,12 +57,13 @@ describe('insertControl', () => {
     assert.ok(typeof rec.updated_at === 'number');
   });
 
-  it('replaces __CONTROL_ID__ placeholder with the actual id', () => {
-    const rec = mod.insertControl('ack __CONTROL_ID__ please');
-    assert.equal(rec.content, `ack ${rec.id} please`);
+  it('auto-appends ack suffix with the actual id', () => {
+    const rec = mod.insertControl('Do something.');
+    assert.ok(rec.content.includes('---- ack via:'));
+    assert.ok(rec.content.includes(`ack --id ${rec.id}`));
     // verify persisted value matches
     const row = mod.getControlById(rec.id);
-    assert.equal(row.content, `ack ${rec.id} please`);
+    assert.ok(row.content.includes(`ack --id ${rec.id}`));
   });
 
   it('populates all options when provided', () => {
@@ -97,7 +99,7 @@ describe('getControlById', () => {
     const row = mod.getControlById(rec.id);
     assert.ok(row);
     assert.equal(row.id, rec.id);
-    assert.equal(row.content, 'findme');
+    assert.ok(row.content.startsWith('findme'));
   });
 
   it('returns null when not found', () => {
