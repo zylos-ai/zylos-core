@@ -58,9 +58,10 @@ If all checks pass, log to `~/zylos/logs/health.log`:
 [YYYY-MM-DD HH:MM:SS] Health Check: PM2 X/X online, Disk XX%, Memory XX% - ALL OK
 ```
 
-If any issues found, attempt to notify the most recent communication channel
-using `c4-send.js`. Check recent conversations in the C4 database to find
-the last active channel and endpoint.
+If any issues found, notify whoever is most likely to help:
+1. Check your memory files for a designated owner or ops person
+2. If none designated, notify the person you normally work with most
+3. Use `c4-send.js` with the appropriate channel and endpoint to send the alert
 
 ### 5. Acknowledge Control
 
