@@ -20,6 +20,7 @@ This is a **PM2 service** (not directly invoked by Claude). It runs continuously
 4. **Maintenance Awareness**: Waits for restart/upgrade scripts to complete before starting Claude
 5. **Heartbeat Liveness Detection**: Periodically sends heartbeat probes via the C4 control queue to verify Claude is responsive, triggering recovery when probes fail
 6. **Health Check**: Periodically enqueues system health checks (PM2, disk, memory) via the C4 control queue
+7. **Daily Upgrade**: Enqueues a Claude Code upgrade via the C4 control queue at 5:00 AM local time daily
 
 ## Status File Format
 
@@ -131,7 +132,7 @@ The activity monitor periodically enqueues system health checks via the C4 contr
 
 - **Interval**: Every 6 hours (21600 seconds)
 - **Persisted state**: `~/zylos/activity-monitor/health-check-state.json` (survives restarts)
-- **Priority**: 1 (higher than conversation messages, lower than heartbeat)
+- **Priority**: 3 (normal)
 - **Gated by health**: Only enqueued when `health === 'ok'`
 - **Gated by Claude**: Only enqueued when Claude process is running
 
@@ -142,6 +143,20 @@ The health check control message instructs Claude to:
 4. If issues found, notify the most recent communication channel
 5. Log results to `~/zylos/logs/health.log`
 6. Acknowledge the control message
+
+## Daily Upgrade
+
+The activity monitor enqueues a daily Claude Code upgrade via the C4 control queue.
+
+- **Schedule**: 5:00 AM local time (configured by `DAILY_UPGRADE_HOUR`)
+- **Timezone**: Loaded from `~/zylos/.env` `TZ` field, falls back to `process.env.TZ`, then `UTC`
+- **Persisted state**: `~/zylos/activity-monitor/daily-upgrade-state.json` (tracks last upgrade date)
+- **Priority**: 3 (normal)
+- **Gated by health**: Only enqueued when `health === 'ok'`
+- **Gated by Claude**: Only enqueued when Claude process is running
+- **Once per day**: Checks local date to avoid duplicate enqueues
+
+The control message instructs Claude to use the `upgrade-claude` skill, which handles idle detection, `/exit`, upgrade, and automatic restart.
 
 ## Log File
 

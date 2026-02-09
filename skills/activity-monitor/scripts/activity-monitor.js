@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Activity Monitor v7 - Guardian + Heartbeat Liveness + Health Check
+ * Activity Monitor v8 - Guardian + Heartbeat + Health Check + Daily Upgrade
  * Run with PM2: pm2 start activity-monitor.js --name activity-monitor
  */
 
@@ -23,6 +23,7 @@ const MONITOR_DIR = path.join(ZYLOS_DIR, 'activity-monitor');
 const LOG_FILE = path.join(MONITOR_DIR, 'activity.log');
 const HEARTBEAT_PENDING_FILE = path.join(MONITOR_DIR, 'heartbeat-pending.json');
 const HEALTH_CHECK_STATE_FILE = path.join(MONITOR_DIR, 'health-check-state.json');
+const DAILY_UPGRADE_STATE_FILE = path.join(MONITOR_DIR, 'daily-upgrade-state.json');
 const PENDING_CHANNELS_FILE = path.join(COMM_BRIDGE_DIR, 'pending-channels.jsonl');
 
 // Claude binary - relies on PATH from PM2 ecosystem.config.js
@@ -47,6 +48,9 @@ const MAX_RESTART_FAILURES = 3;
 // Health check config
 const HEALTH_CHECK_INTERVAL = 21600; // 6 hours
 
+// Daily upgrade config
+const DAILY_UPGRADE_HOUR = 5; // 5:00 AM local time
+
 // State
 let lastTruncateDay = '';
 let notRunningCount = 0;
@@ -55,6 +59,47 @@ let startupGrace = 0;
 let idleSince = 0;
 
 let engine; // initialized in init()
+
+// Timezone: .env TZ → process.env.TZ → UTC (same resolution as scheduler tz.js)
+function loadTimezone() {
+  const envPath = path.join(ZYLOS_DIR, '.env');
+  try {
+    const text = fs.readFileSync(envPath, 'utf8');
+    const match = text.match(/^TZ\s*=\s*(.+)$/m);
+    if (match) {
+      const tz = match[1].trim().replace(/^["']|["']$/g, '');
+      if (tz) {
+        Intl.DateTimeFormat(undefined, { timeZone: tz });
+        return tz;
+      }
+    }
+  } catch (err) {
+    if (err.code !== 'ENOENT' && !(err instanceof RangeError)) {
+      // Silently ignore missing .env; RangeError = invalid TZ
+    }
+  }
+  if (process.env.TZ) {
+    try {
+      Intl.DateTimeFormat(undefined, { timeZone: process.env.TZ });
+      return process.env.TZ;
+    } catch {}
+  }
+  return 'UTC';
+}
+
+const timezone = loadTimezone();
+
+function getLocalHour() {
+  return parseInt(
+    new Intl.DateTimeFormat('en-US', { timeZone: timezone, hour: 'numeric', hour12: false })
+      .format(new Date()),
+    10
+  );
+}
+
+function getLocalDate() {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: timezone }).format(new Date());
+}
 
 function log(message) {
   const timestamp = new Date().toISOString().replace('T', ' ').substring(0, 19);
@@ -504,6 +549,72 @@ function maybeEnqueueHealthCheck(claudeRunning, currentTime) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Daily Upgrade
+// ---------------------------------------------------------------------------
+
+function loadDailyUpgradeState() {
+  try {
+    if (!fs.existsSync(DAILY_UPGRADE_STATE_FILE)) return null;
+    return JSON.parse(fs.readFileSync(DAILY_UPGRADE_STATE_FILE, 'utf8'));
+  } catch {}
+  return null;
+}
+
+function writeDailyUpgradeState(date) {
+  try {
+    if (!fs.existsSync(MONITOR_DIR)) {
+      fs.mkdirSync(MONITOR_DIR, { recursive: true });
+    }
+    fs.writeFileSync(DAILY_UPGRADE_STATE_FILE, JSON.stringify({
+      last_upgrade_date: date,
+      updated_at: new Date().toISOString()
+    }, null, 2));
+  } catch (err) {
+    log(`Daily upgrade: failed to write state (${err.message})`);
+  }
+}
+
+function enqueueDailyUpgrade() {
+  const content = 'Daily upgrade. Use the upgrade-claude skill to upgrade Claude Code to the latest version.';
+  const result = runC4Control([
+    'enqueue',
+    '--content', content,
+    '--priority', '3',
+    '--ack-deadline', '600'
+  ]);
+
+  if (!result.ok) {
+    log(`Daily upgrade enqueue failed: ${result.output}`);
+    return false;
+  }
+
+  const match = result.output.match(/control\s+(\d+)/i);
+  if (!match) {
+    log(`Daily upgrade enqueue parse failed: ${result.output}`);
+    return false;
+  }
+
+  const today = getLocalDate();
+  writeDailyUpgradeState(today);
+  log(`Daily upgrade enqueued id=${match[1]} (tz=${timezone})`);
+  return true;
+}
+
+function maybeEnqueueDailyUpgrade(claudeRunning) {
+  if (!claudeRunning) return;
+  if (engine.health !== 'ok') return;
+
+  const hour = getLocalHour();
+  if (hour !== DAILY_UPGRADE_HOUR) return;
+
+  const state = loadDailyUpgradeState();
+  const today = getLocalDate();
+  if (state?.last_upgrade_date === today) return;
+
+  enqueueDailyUpgrade();
+}
+
 function monitorLoop() {
   const currentTime = Math.floor(Date.now() / 1000);
   const currentTimeHuman = new Date().toISOString().replace('T', ' ').substring(0, 19);
@@ -537,6 +648,7 @@ function monitorLoop() {
 
     engine.processHeartbeat(false, currentTime);
     maybeEnqueueHealthCheck(false, currentTime);
+    maybeEnqueueDailyUpgrade(false);
     lastState = state;
     return;
   }
@@ -574,6 +686,7 @@ function monitorLoop() {
 
     engine.processHeartbeat(false, currentTime);
     maybeEnqueueHealthCheck(false, currentTime);
+    maybeEnqueueDailyUpgrade(false);
     lastState = state;
     return;
   }
@@ -625,6 +738,7 @@ function monitorLoop() {
 
   engine.processHeartbeat(true, currentTime);
   maybeEnqueueHealthCheck(true, currentTime);
+  maybeEnqueueDailyUpgrade(true);
   lastState = state;
 }
 
@@ -657,7 +771,7 @@ function init() {
 }
 
 init();
-log(`=== Activity Monitor Started (v7 - Guardian + Heartbeat + HealthCheck): ${new Date().toISOString()} ===`);
+log(`=== Activity Monitor Started (v8 - Guardian + Heartbeat + HealthCheck + DailyUpgrade): ${new Date().toISOString()} tz=${timezone} ===`);
 
 setInterval(monitorLoop, INTERVAL);
 monitorLoop();
