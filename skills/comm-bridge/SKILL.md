@@ -30,7 +30,7 @@ Lark        ───┘
 | `c4-dispatcher.js` | PM2 daemon: polls pending queue, delivers to tmux | — |
 | `c4-session-init.js` | Hook (session start): context + Memory Sync trigger | [hooks](references/hooks.md) |
 | `c4-fetch.js` | Fetch conversations by id range | [c4-fetch](references/c4-fetch.md) |
-| `c4-checkpoint.js` | Create checkpoint after Memory Sync | [c4-checkpoint](references/c4-checkpoint.md) |
+| `c4-checkpoint.js` | Create/query checkpoints (sync boundaries) | [c4-checkpoint](references/c4-checkpoint.md) |
 
 ## Database
 
