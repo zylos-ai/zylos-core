@@ -169,15 +169,24 @@ export async function upgradeComponent(args) {
   const upgradeAll = args.includes('--all');
   const skipEval = args.includes('--skip-eval');
 
-  // Get target component (filter out flags)
-  const target = args.find(a => !a.startsWith('-') && a !== 'confirm');
+  // Get target component (filter out flags and flag values)
+  const target = args.find((a, i) => {
+    if (a.startsWith('-')) return false;
+    if (a === 'confirm') return false;
+    // Skip values that follow flags with arguments
+    if (i > 0 && args[i - 1] === '--temp-dir') return false;
+    return true;
+  });
 
   // Handle --self: upgrade zylos-core itself
   if (upgradeSelf) {
     if (checkOnly) {
       return handleSelfCheckOnly({ jsonOutput });
     }
-    const ok = await upgradeSelfCore();
+    // Parse --temp-dir flag (reuse previously downloaded package from --check)
+    const selfTempDirIdx = args.indexOf('--temp-dir');
+    const selfProvidedTempDir = selfTempDirIdx !== -1 ? args[selfTempDirIdx + 1] : null;
+    const ok = await upgradeSelfCore({ providedTempDir: selfProvidedTempDir });
     if (!ok) process.exit(1);
     return;
   }
@@ -193,13 +202,14 @@ export async function upgradeComponent(args) {
     console.error('       zylos upgrade --all');
     console.error('       zylos upgrade --self');
     console.log('\nOptions:');
-    console.log('  --check      Check for updates only');
-    console.log('  --json       Output in JSON format');
-    console.log('  --yes, -y    Skip confirmation');
-    console.log('  --skip-eval  Skip upgrade analysis of local changes');
+    console.log('  --check        Check for updates only (downloads to temp for comparison)');
+    console.log('  --json         Output in JSON format');
+    console.log('  --yes, -y      Skip confirmation');
+    console.log('  --skip-eval    Skip upgrade analysis of local changes');
+    console.log('  --temp-dir <d> Reuse previously downloaded package from --check');
     console.log('\nExamples:');
     console.log('  zylos upgrade telegram --check --json');
-    console.log('  zylos upgrade telegram --yes');
+    console.log('  zylos upgrade telegram --yes --temp-dir /tmp/zylos-xxx');
     console.log('  zylos upgrade telegram');
     process.exit(1);
   }
@@ -240,13 +250,17 @@ export async function upgradeComponent(args) {
     process.exit(1);
   }
 
-  // Mode 1: Check only (--check) — no lock, no download needed
+  // Parse --temp-dir flag (reuse previously downloaded package)
+  const tempDirIdx = args.indexOf('--temp-dir');
+  const providedTempDir = tempDirIdx !== -1 ? args[tempDirIdx + 1] : null;
+
+  // Mode 1: Check only (--check) — no lock, downloads to temp for file comparison
   if (checkOnly) {
     return handleCheckOnly(target, { jsonOutput });
   }
 
   // Mode 2 & 3: Full upgrade flow (lock-first)
-  const ok = await handleUpgradeFlow(target, { jsonOutput, skipConfirm: skipConfirm || explicitConfirm, skipEval });
+  const ok = await handleUpgradeFlow(target, { jsonOutput, skipConfirm: skipConfirm || explicitConfirm, skipEval, providedTempDir });
   if (!ok) process.exit(1);
 }
 
@@ -275,12 +289,22 @@ async function handleCheckOnly(component, { jsonOutput }) {
   let tempDir = null;
 
   if (result.hasUpdate && result.repo) {
-    // Fetch changelog from remote (no full download needed)
-    try {
-      const rawChangelog = fetchRawFile(result.repo, 'CHANGELOG.md', `v${result.latest}`);
-      changelog = filterChangelog(rawChangelog, result.current);
-    } catch {
-      // CHANGELOG.md may not exist — that's fine
+    // Download new version to temp dir (for file comparison by Claude)
+    const dlResult = downloadToTemp(result.repo, result.latest);
+    if (dlResult.success) {
+      tempDir = dlResult.tempDir;
+
+      // Read changelog from downloaded package (more reliable than remote fetch)
+      const fullChangelog = readChangelog(tempDir);
+      changelog = filterChangelog(fullChangelog, result.current);
+    } else {
+      // Fallback: fetch changelog from remote
+      try {
+        const rawChangelog = fetchRawFile(result.repo, 'CHANGELOG.md', `v${result.latest}`);
+        changelog = filterChangelog(rawChangelog, result.current);
+      } catch {
+        // CHANGELOG.md may not exist — that's fine
+      }
     }
 
     // Detect local modifications against manifest
@@ -289,10 +313,8 @@ async function handleCheckOnly(component, { jsonOutput }) {
     if (changes && (changes.modified.length > 0 || changes.added.length > 0)) {
       localChanges = { modified: changes.modified, added: changes.added };
 
-      // Download new version for Claude eval (needs file diffs)
-      const dlResult = downloadToTemp(result.repo, result.latest);
-      if (dlResult.success) {
-        tempDir = dlResult.tempDir;
+      // Claude eval for local changes (only when tempDir is available)
+      if (tempDir) {
         try {
           evalResult = await evaluateUpgrade({
             component,
@@ -313,6 +335,7 @@ async function handleCheckOnly(component, { jsonOutput }) {
     if (changelog) output.changelog = changelog;
     if (localChanges) output.localChanges = localChanges;
     if (evalResult) output.evaluation = evalResult;
+    if (tempDir) output.tempDir = tempDir;
     output.reply = formatC4Reply('check', { component, ...result, changelog, localChanges, evaluation: evalResult });
     console.log(JSON.stringify(output, null, 2));
   } else {
@@ -340,12 +363,15 @@ async function handleCheckOnly(component, { jsonOutput }) {
         console.log(`\nChangelog:\n${changelog}`);
       }
 
+      if (tempDir) {
+        console.log(`\nDownloaded to: ${tempDir}`);
+      }
       console.log(`\nRun "zylos upgrade ${component} --yes" to upgrade.`);
     }
   }
 
-  // Cleanup temp dir if downloaded
-  cleanupTemp(tempDir);
+  // NOTE: tempDir is NOT cleaned up here — it's kept for reuse by --yes --temp-dir
+  // Claude or the user is responsible for cleanup if upgrade is not performed
 }
 
 /**
@@ -355,9 +381,10 @@ async function handleCheckOnly(component, { jsonOutput }) {
  * Returns true on success, false on failure.
  * Does NOT call process.exit() — caller decides exit behavior.
  */
-async function handleUpgradeFlow(component, { jsonOutput, skipConfirm, skipEval }) {
+async function handleUpgradeFlow(component, { jsonOutput, skipConfirm, skipEval, providedTempDir }) {
   const skillDir = path.join(SKILLS_DIR, component);
-  let tempDir = null;
+  let tempDir = providedTempDir || null;
+  const tempDirWasProvided = !!providedTempDir;
 
   // 1. Acquire lock
   const lockResult = acquireLock(component);
@@ -398,34 +425,52 @@ async function handleUpgradeFlow(component, { jsonOutput, skipConfirm, skipEval 
       return true;
     }
 
-    // 3. Download new version to temp
-    if (!check.repo) {
-      if (jsonOutput) {
-        const errOutput = { action: 'upgrade', component, success: false, error: 'No repo configured' };
-        errOutput.reply = formatC4Reply('error', { message: 'No repo configured' });
-        console.log(JSON.stringify(errOutput, null, 2));
-      } else {
-        console.error('Error: No repo configured for this component');
+    // 3. Download new version to temp (skip if reusing from --check)
+    if (tempDirWasProvided) {
+      // Validate provided temp dir exists
+      if (!fs.existsSync(tempDir)) {
+        const msg = `Provided temp dir does not exist: ${tempDir}`;
+        if (jsonOutput) {
+          const errOutput = { action: 'upgrade', component, success: false, error: msg };
+          errOutput.reply = formatC4Reply('error', { message: msg });
+          console.log(JSON.stringify(errOutput, null, 2));
+        } else {
+          console.error(`Error: ${msg}`);
+        }
+        return false;
       }
-      return false;
-    }
-
-    if (!jsonOutput) {
-      console.log(`\nDownloading ${component}@${check.latest}...`);
-    }
-
-    const dlResult = downloadToTemp(check.repo, check.latest);
-    if (!dlResult.success) {
-      if (jsonOutput) {
-        const errOutput = { action: 'upgrade', component, success: false, error: dlResult.error };
-        errOutput.reply = formatC4Reply('error', { message: dlResult.error });
-        console.log(JSON.stringify(errOutput, null, 2));
-      } else {
-        console.error(`Error: ${dlResult.error}`);
+      if (!jsonOutput) {
+        console.log(`\nReusing previously downloaded package from ${tempDir}`);
       }
-      return false;
+    } else {
+      if (!check.repo) {
+        if (jsonOutput) {
+          const errOutput = { action: 'upgrade', component, success: false, error: 'No repo configured' };
+          errOutput.reply = formatC4Reply('error', { message: 'No repo configured' });
+          console.log(JSON.stringify(errOutput, null, 2));
+        } else {
+          console.error('Error: No repo configured for this component');
+        }
+        return false;
+      }
+
+      if (!jsonOutput) {
+        console.log(`\nDownloading ${component}@${check.latest}...`);
+      }
+
+      const dlResult = downloadToTemp(check.repo, check.latest);
+      if (!dlResult.success) {
+        if (jsonOutput) {
+          const errOutput = { action: 'upgrade', component, success: false, error: dlResult.error };
+          errOutput.reply = formatC4Reply('error', { message: dlResult.error });
+          console.log(JSON.stringify(errOutput, null, 2));
+        } else {
+          console.error(`Error: ${dlResult.error}`);
+        }
+        return false;
+      }
+      tempDir = dlResult.tempDir;
     }
-    tempDir = dlResult.tempDir;
 
     // 4. Show info: version diff, changelog, local changes + Claude eval
     const changes = detectChanges(skillDir);
@@ -668,6 +713,7 @@ function detectCoreSkillChanges() {
 
 /**
  * Handle --self --check: check for zylos-core updates only (no lock needed).
+ * Downloads new version to temp dir for file comparison by Claude.
  */
 function handleSelfCheckOnly({ jsonOutput }) {
   const check = checkForCoreUpdates();
@@ -683,19 +729,31 @@ function handleSelfCheckOnly({ jsonOutput }) {
     process.exit(1);
   }
 
-  // Fetch changelog when update is available
+  // When update is available: download to temp, read changelog, detect local changes
   let changelog = null;
+  let tempDir = null;
+
   if (check.hasUpdate) {
-    try {
-      const rawChangelog = fetchRawFile('zylos-ai/zylos-core', 'CHANGELOG.md', `v${check.latest}`);
-      changelog = filterChangelog(rawChangelog, check.current);
-    } catch {
-      // Try main branch as fallback (for pre-release versions without tags)
+    // Download new version to temp dir (for template/file comparison by Claude)
+    const dlResult = downloadCoreToTemp(check.latest);
+    if (dlResult.success) {
+      tempDir = dlResult.tempDir;
+
+      // Read changelog from downloaded package (more reliable than remote fetch)
+      const fullChangelog = readCoreChangelog(tempDir);
+      changelog = filterChangelog(fullChangelog, check.current);
+    } else {
+      // Fallback: fetch changelog from remote
       try {
-        const rawChangelog = fetchRawFile('zylos-ai/zylos-core', 'CHANGELOG.md');
+        const rawChangelog = fetchRawFile('zylos-ai/zylos-core', 'CHANGELOG.md', `v${check.latest}`);
         changelog = filterChangelog(rawChangelog, check.current);
       } catch {
-        // CHANGELOG.md may not exist
+        try {
+          const rawChangelog = fetchRawFile('zylos-ai/zylos-core', 'CHANGELOG.md');
+          changelog = filterChangelog(rawChangelog, check.current);
+        } catch {
+          // CHANGELOG.md may not exist
+        }
       }
     }
   }
@@ -710,6 +768,7 @@ function handleSelfCheckOnly({ jsonOutput }) {
       ? allLocalChanges.map(({ skill, changes }) => ({ skill, modified: changes.modified, added: changes.added }))
       : null;
     if (mappedChanges) output.localChanges = mappedChanges;
+    if (tempDir) output.tempDir = tempDir;
     output.reply = formatC4Reply('self-check', { ...check, changelog, localChanges: mappedChanges });
     console.log(JSON.stringify(output, null, 2));
   } else {
@@ -729,9 +788,15 @@ function handleSelfCheckOnly({ jsonOutput }) {
       if (changelog) {
         console.log(`\nChangelog:\n${changelog}`);
       }
+
+      if (tempDir) {
+        console.log(`\nDownloaded to: ${tempDir}`);
+      }
       console.log(`\nRun "zylos upgrade --self --yes" to upgrade.`);
     }
   }
+
+  // NOTE: tempDir is NOT cleaned up here — it's kept for reuse by --yes --temp-dir
 }
 
 /**
@@ -741,10 +806,11 @@ function handleSelfCheckOnly({ jsonOutput }) {
  * Returns true on success, false on failure.
  * Does NOT call process.exit() — caller decides exit behavior.
  */
-async function upgradeSelfCore() {
+async function upgradeSelfCore({ providedTempDir } = {}) {
   const jsonOutput = process.argv.includes('--json');
   const skipConfirm = process.argv.includes('--yes') || process.argv.includes('-y');
-  let tempDir = null;
+  let tempDir = providedTempDir || null;
+  const tempDirWasProvided = !!providedTempDir;
 
   // 1. Acquire lock (reuse component lock mechanism with special name)
   const lockResult = acquireLock('_zylos-core');
@@ -785,23 +851,41 @@ async function upgradeSelfCore() {
       return true;
     }
 
-    // 3. Download new version to temp
-    if (!jsonOutput) {
-      console.log(`\nDownloading zylos-core@${check.latest}...`);
-    }
-
-    const dlResult = downloadCoreToTemp(check.latest);
-    if (!dlResult.success) {
-      if (jsonOutput) {
-        const errOutput = { action: 'self_upgrade', success: false, error: dlResult.error };
-        errOutput.reply = formatC4Reply('error', { message: dlResult.error });
-        console.log(JSON.stringify(errOutput, null, 2));
-      } else {
-        console.error(`Error: ${dlResult.error}`);
+    // 3. Download new version to temp (skip if reusing from --check)
+    if (tempDirWasProvided) {
+      // Validate provided temp dir exists
+      if (!fs.existsSync(tempDir)) {
+        const msg = `Provided temp dir does not exist: ${tempDir}`;
+        if (jsonOutput) {
+          const errOutput = { action: 'self_upgrade', success: false, error: msg };
+          errOutput.reply = formatC4Reply('error', { message: msg });
+          console.log(JSON.stringify(errOutput, null, 2));
+        } else {
+          console.error(`Error: ${msg}`);
+        }
+        return false;
       }
-      return false;
+      if (!jsonOutput) {
+        console.log(`\nReusing previously downloaded package: ${tempDir}`);
+      }
+    } else {
+      if (!jsonOutput) {
+        console.log(`\nDownloading zylos-core@${check.latest}...`);
+      }
+
+      const dlResult = downloadCoreToTemp(check.latest);
+      if (!dlResult.success) {
+        if (jsonOutput) {
+          const errOutput = { action: 'self_upgrade', success: false, error: dlResult.error };
+          errOutput.reply = formatC4Reply('error', { message: dlResult.error });
+          console.log(JSON.stringify(errOutput, null, 2));
+        } else {
+          console.error(`Error: ${dlResult.error}`);
+        }
+        return false;
+      }
+      tempDir = dlResult.tempDir;
     }
-    tempDir = dlResult.tempDir;
 
     // 4. Show info: version diff, changelog, local modifications to core skills
     const fullCoreChangelog = readCoreChangelog(tempDir);

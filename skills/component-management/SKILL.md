@@ -83,24 +83,31 @@ When user asks to upgrade a component:
 
 **If component is not installed, inform user and suggest using add instead.**
 
-### Step 1: Check Available Updates
+### Step 1: Check + Download to Temp
 
 ```bash
 zylos upgrade <component> --check --json
 ```
 
-This shows: current version, available version, changelog, local changes.
+The CLI checks for updates **and downloads the new version to a temporary directory** when an update is available. JSON output includes:
+- `current`, `latest`, `hasUpdate` — version info
+- `changelog` — filtered changelog text
+- `localChanges` — local modifications detected against manifest
+- `tempDir` — path to downloaded package (for file comparison)
 
 **If already at latest version, inform user and stop.**
 
-### Step 2: Analyze Changes and Confirm
+### Step 2: Analyze Changes, Compare Files, and Confirm
 
-**Always actively analyze what changed between versions.** Don't just relay changelog text.
+**All information must be presented BEFORE asking for confirmation.** No surprises after execution.
 
-1. Read the `changelog` from JSON output (if present)
-2. Fetch commit history between current and latest versions via `gh api` or the component's git log
-3. Synthesize a clear summary of what changed and why — changelog is one input, not the sole source
-4. Present the analysis and ask for confirmation
+1. **Analyze changes**: Read `changelog` from JSON + fetch commit history via `gh api`. Synthesize a clear summary — don't just relay changelog text.
+2. **Compare files**: Read files from `tempDir`, compare with installed files in the skill directory:
+   - **preserve list files** (config.json, .env, data/): inform user these won't be touched
+   - **New files**: list them
+   - **Changed files**: show differences for user awareness
+   - **Unchanged files**: skip
+3. **Present everything** to user and ask for confirmation
 
 ### Step 3: Execute Pre-Upgrade Hook
 
@@ -115,13 +122,13 @@ If the hook fails (exit code 1), **abort the upgrade** and inform user.
 
 ### Step 4: Execute CLI Upgrade
 
-Only after pre-upgrade hook succeeds (or doesn't exist):
+Only after pre-upgrade hook succeeds (or doesn't exist). **Reuse the temp dir from Step 1**:
 
 ```bash
-zylos upgrade <component> --yes --skip-eval --json
+zylos upgrade <component> --yes --skip-eval --json --temp-dir <tempDir>
 ```
 
-The CLI handles: stop service, backup, file sync, npm install, manifest.
+The CLI handles: stop service, backup, file sync from tempDir, npm install, manifest, **cleanup tempDir**.
 The JSON output includes `skill` field with updated hooks, config, and service info.
 
 ### Step 5: Execute Post-Upgrade Hook
@@ -142,29 +149,52 @@ This typically handles config migration. If it fails, investigate.
 
 ## Self-Upgrade Workflow (zylos-core)
 
-### Step 1: Check and Confirm
+### Step 1: Check + Download to Temp
 
 ```bash
 zylos upgrade --self --check --json
 ```
 
-Actively analyze what changed (changelog + commits), show version change + change summary. Get user confirmation.
+The CLI checks for updates **and downloads the new version to a temporary directory**. JSON output includes:
+- `current`, `latest`, `hasUpdate` — version info
+- `changelog` — filtered changelog text
+- `localChanges` — local modifications to core skills
+- `tempDir` — path to downloaded package (for template comparison)
 
-### Step 2: Execute CLI Self-Upgrade
+**If already at latest version, inform user and stop.**
+
+### Step 2: Analyze Changes, Compare Templates, and Confirm
+
+**All information must be presented BEFORE asking for confirmation.** No surprises after execution.
+
+1. **Analyze changes**: Read changelog from JSON + fetch commit history via `gh api`, synthesize change summary
+2. **Analyze templates**: Read template files from `tempDir`, compare each with local files:
+   - **New files** (not in local): list them, explain what they add
+   - **Changed files** (local exists but differs from new template): show differences, let user decide (use new version / keep current)
+   - **Unchanged files** (local matches new template): skip
+3. **Present everything** to user: version change, change summary, template changes, user decisions needed
+4. Get user confirmation (including their choices for changed files)
+
+> **Note:** Because templates are seed files (deployed once at install), differences between local and new template could be from user edits or from old template version. Currently we show diffs and let user decide. Future: template-manifest with base hashes enables three-way comparison.
+
+### Step 3: Execute Self-Upgrade
+
+After user confirms (with full knowledge of all changes). **Reuse the temp dir from Step 1**:
 
 ```bash
-zylos upgrade --self --yes --json
+zylos upgrade --self --yes --json --temp-dir <tempDir>
 ```
 
-The CLI handles: backup, npm install -g, sync Core Skills, sync CLAUDE.md, restart PM2 services, verify.
-The JSON output includes a `templates` field listing template files.
+The CLI handles: backup, npm install -g from tempDir, sync Core Skills, sync CLAUDE.md, restart PM2 services, verify, **cleanup tempDir**.
 
-### Step 3: Compare Templates and Migrate
+### Step 4: Deploy Templates
 
-Read the `templates` array from JSON output. Compare each template path with the local file structure.
-If templates include new files (e.g., `.claude/hooks/`, `memory/` structure), deploy or migrate them.
+Deploy templates according to the decisions made in Step 2:
+- New files: copy from the newly installed package's template directory
+- Changed files: follow user's choice (overwrite or keep)
+- Unchanged files: skip
 
-### Step 4: Restart Claude (If Needed)
+### Step 5: Restart Claude (If Needed)
 
 If the upgrade changed hooks or skills, execute `restart-claude` to load new configuration.
 
@@ -283,10 +313,10 @@ improve on it by writing a more natural reply based on the JSON data.
 | check / check updates | `zylos upgrade --all --check --json` |
 | check \<name\> | `zylos upgrade <name> --check --json` |
 | upgrade \<name\> | `zylos upgrade <name> --check --json` **(CHECK ONLY — do NOT execute upgrade)** |
-| upgrade \<name\> confirm | `zylos upgrade <name> --yes --skip-eval --json` **(only this executes the upgrade)** |
+| upgrade \<name\> confirm | `zylos upgrade <name> --yes --skip-eval --json --temp-dir <tempDir>` **(only this executes the upgrade, reuse tempDir from check)** |
 | add \<name\> | `zylos add <name> --yes --json` |
 | upgrade zylos | `zylos upgrade --self --check --json` **(CHECK ONLY)** |
-| upgrade zylos confirm | `zylos upgrade --self --yes --json` **(only this executes)** |
+| upgrade zylos confirm | `zylos upgrade --self --yes --json --temp-dir <tempDir>` **(only this executes, reuse tempDir from check)** |
 | uninstall \<name\> / remove \<name\> | `zylos uninstall <name> --check --json` **(CHECK ONLY — preview what will be removed)** |
 | uninstall \<name\> confirm | `zylos uninstall <name> confirm --json` **(uninstall, keep data)** |
 | uninstall \<name\> purge | `zylos uninstall <name> purge --json` **(uninstall and delete all data)** |
@@ -301,7 +331,7 @@ After `zylos add <name> --yes --json` succeeds, the JSON `skill` field tells you
 
 ### C4 Post-Upgrade Actions
 
-After `zylos upgrade <name> --yes --skip-eval --json` succeeds:
+After `zylos upgrade <name> --yes --skip-eval --json --temp-dir <tempDir>` succeeds:
 
 1. **Hooks**: If `skill.hooks.post-upgrade` exists, run it.
 2. **Service**: If `skill.service` exists, restart and verify.
@@ -318,17 +348,19 @@ Reply with version change, change summary, and any action results.
 
 User: `upgrade telegram`
 
-Run `zylos upgrade telegram --check --json`, parse the JSON output, then **actively analyze what changed**:
+Run `zylos upgrade telegram --check --json`, parse the JSON output. **Save the `tempDir` from output** for use in confirm step. Then **actively analyze what changed**:
 
 1. Read the `changelog` field from JSON output (if present)
 2. Fetch commit history: `gh api repos/zylos-ai/zylos-<component>/compare/v<current>...v<latest> --jq '.commits[].commit.message'` (with proxy)
 3. Synthesize a clear change summary from both sources — explain what changed and why, don't just copy changelog text
+4. Compare files from `tempDir` with installed skill directory — note new, changed, and preserved files
 
 Reply with ALL of the following:
 1. Version change: `<name>: <current> -> <latest>`
 2. Change summary: your synthesized analysis of what changed (using changelog + commits)
-3. Local changes: show if any, or "none"
-4. Confirm instruction
+3. File changes: new files, changed files, preserved files
+4. Local changes: show if any, or "none"
+5. Confirm instruction
 
 **You MUST analyze and explain what changed. Do NOT just show version numbers and ask to confirm.**
 
@@ -339,6 +371,11 @@ telegram: 0.1.0 -> 0.2.0
 Changes:
 - Fixed dotenv path resolution that caused config loading failures
 - Added admin CLI for managing groups and whitelist directly
+
+File changes:
+- New: hooks/pre-upgrade.js
+- Updated: hooks/post-install.js, SKILL.md
+- Preserved: config.json, .env, data/
 
 Local changes: none
 
@@ -372,7 +409,7 @@ The `evaluation` field in JSON contains `files` (array of `{file, verdict, reaso
 User: `upgrade telegram confirm`
 
 1. Run pre-upgrade hook if it exists (check SKILL.md hooks)
-2. Run `zylos upgrade telegram --yes --skip-eval --json`
+2. Run `zylos upgrade telegram --yes --skip-eval --json --temp-dir <tempDir>` (reuse tempDir saved from Step 1)
 3. Run post-upgrade hook if `skill.hooks.post-upgrade` exists in result
 4. Restart service if `skill.service` exists in result
 5. Reply with version change and change summary
@@ -381,19 +418,17 @@ If the upgrade failed, report the error and rollback status from JSON.
 
 ### C4 Self-Upgrade Flow (zylos-core)
 
-Same two-step pattern for upgrading zylos itself.
+Same two-step pattern for upgrading zylos itself. **All information shown before confirmation.**
 
 **Step 1 — User requests:**
 
 User: `upgrade zylos`
 
-Run `zylos upgrade --self --check --json`, then **actively analyze what changed**:
+Run `zylos upgrade --self --check --json`. **Save the `tempDir` from output.** Then:
 
-1. Read the `changelog` field from JSON output (if present)
-2. Fetch commit history: `gh api repos/zylos-ai/zylos-core/compare/v<current>...v<latest> --jq '.commits[].commit.message'` (with proxy)
-3. Synthesize a clear change summary from both sources
-
-Reply with version change and your analysis:
+1. **Analyze changes**: Read changelog + fetch commit history via `gh api repos/zylos-ai/zylos-core/compare/v<current>...v<latest> --jq '.commits[].commit.message'` (with proxy). Synthesize change summary.
+2. **Analyze templates**: Read template files from `tempDir`, compare with local files. Categorize as new / changed / unchanged.
+3. **Reply with ALL information**:
 
 ```
 zylos-core: 0.1.0-beta.1 -> 0.1.0-beta.2
@@ -402,8 +437,16 @@ Changes:
 - Added self-upgrade support for IM channels (Telegram, Lark)
 - Fixed version detection that failed on pre-release tags
 
+Template changes:
+- New: memory/identity.md, memory/state.md (Inside Out memory structure)
+- Updated: CLAUDE.md, .claude/settings.json
+- Conflict: pm2/ecosystem.config.cjs (you modified this locally)
+  -> overwrite with new version, or keep yours?
+
 Reply "upgrade zylos confirm" to proceed.
 ```
+
+If user has conflicting files, wait for their decision before accepting "confirm".
 
 If already up to date, reply: `zylos-core is up to date (v0.1.0-beta.1)`
 
@@ -411,8 +454,8 @@ If already up to date, reply: `zylos-core is up to date (v0.1.0-beta.1)`
 
 User: `upgrade zylos confirm`
 
-1. Run `zylos upgrade --self --yes --json`
-2. Compare `templates` list from JSON with local structure, migrate if needed
+1. Run `zylos upgrade --self --yes --json --temp-dir <tempDir>` (reuse tempDir saved from Step 1)
+2. Deploy templates per user's decisions from Step 1 (new files: copy, changed: follow user choice, unchanged: skip)
 3. If hooks/skills changed, execute restart-claude
 4. Reply with version change and change summary
 
@@ -443,8 +486,8 @@ User: `uninstall lark confirm` (keep data) or `uninstall lark purge` (delete all
 
 - Plain text only, no markdown
 - For `info --json`: format as `<name> v<version>\nType: <type>\nRepo: <repo>\nService: <name> (<status>)`
-- For `check --json`: format as `<name>: <current> -> <latest>`, **actively analyze changes** (changelog + commit history), warn about `localChanges` if present, show `evaluation` analysis if present
-- For `--self --check --json`: same as component check, but target is `zylos-core` instead of component name
+- For `check --json`: format as `<name>: <current> -> <latest>`, **actively analyze changes** (changelog + commit history), compare files from `tempDir`, warn about `localChanges` if present, show `evaluation` analysis if present
+- For `--self --check --json`: same as component check, but target is `zylos-core`; also compare templates from `tempDir` with local files
 - For upgrade result (`--yes --json`): format as `<name> upgraded: <from> → <to>`, include change summary
 - For errors: when JSON has both `error` and `message` fields, display `message` (human-readable)
 - Send reply via the appropriate channel's send script
