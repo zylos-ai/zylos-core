@@ -187,16 +187,14 @@ async function dismissGhostTextAndCapture() {
 }
 
 /**
- * Send Enter to tmux and verify the input box is empty (message was submitted).
+ * Best-effort: send Enter to tmux and verify the input box is empty.
  * Only sends Enter — does NOT paste any content.
  *
  * Uses dismissGhostTextAndCapture() before each check to clear Claude Code
  * UI hints that would otherwise cause false has_content results.
  *
- * @returns {'submitted'|'has_content'|'indeterminate'}
- *   'submitted':     Input box confirmed empty after Enter
- *   'has_content':   Input box still has text after all Enter retries
- *   'indeterminate': Cannot determine — separator detection failed (needs investigation)
+ * This is best-effort — the caller (sendToTmux) considers the message
+ * delivered once paste succeeds, regardless of Enter verification result.
  */
 async function submitAndVerify() {
   execFileSync('tmux', ['send-keys', '-t', TMUX_SESSION, 'Enter'], {
@@ -211,12 +209,11 @@ async function submitAndVerify() {
     const state = checkInputBox(capture);
 
     if (state === 'empty') {
-      return 'submitted';
+      return;
     }
 
     if (state === 'indeterminate') {
-      // Transient capture glitch — retry check without sending Enter.
-      // Don't return immediately; next capture may succeed.
+      // Transient capture glitch — retry without sending Enter
       log(`Enter verify attempt ${attempt + 1}: separator detection failed, retrying capture`);
       continue;
     }
@@ -227,17 +224,6 @@ async function submitAndVerify() {
       stdio: 'pipe'
     });
   }
-
-  // Final check
-  await sleep(ENTER_VERIFY_WAIT_MS);
-  const finalCapture = await dismissGhostTextAndCapture();
-  const finalState = checkInputBox(finalCapture);
-
-  if (finalState === 'indeterminate') {
-    log('Warning: input box separator detection failed on final check — needs investigation');
-  }
-
-  return finalState === 'empty' ? 'submitted' : finalState;
 }
 
 /**
@@ -245,13 +231,14 @@ async function submitAndVerify() {
  *
  * Two-phase delivery:
  *   Phase 1 (paste):  set-buffer + paste-buffer → message appears in input box
- *   Phase 2 (submit): Enter + verify via submitAndVerify()
+ *   Phase 2 (submit): Best-effort Enter + verify via submitAndVerify()
+ *
+ * Once the message is pasted into tmux, it is considered delivered.
+ * Enter verification is best-effort to ensure submission to Claude Code.
  *
  * Returns:
- *   'submitted':      Message was submitted to Claude (input box confirmed empty)
- *   'submit_failed':  Paste succeeded but Enter verification failed (content still in input box)
- *   'indeterminate':  Paste succeeded but cannot verify (separator detection failed)
- *   'paste_error':    tmux paste command itself failed
+ *   'submitted':    Paste succeeded (message is in tmux)
+ *   'paste_error':  tmux paste command itself failed
  */
 async function sendToTmux(message) {
   const bufferName = `c4-msg-${process.pid}-${Date.now()}`;
@@ -267,21 +254,8 @@ async function sendToTmux(message) {
     execFileSync('tmux', ['paste-buffer', '-b', bufferName, '-t', TMUX_SESSION], {
       stdio: 'pipe'
     });
-
-    await sleep(delayMs);
-
-    // Phase 2: Submit with Enter and verify
-    const result = await submitAndVerify();
-
-    if (result === 'has_content') {
-      return 'submit_failed';
-    }
-    if (result === 'indeterminate') {
-      return 'indeterminate';
-    }
-    return 'submitted';
   } catch (err) {
-    log(`Error sending to tmux: ${err.stack}`);
+    log(`Error pasting to tmux: ${err.stack}`);
     return 'paste_error';
   } finally {
     try {
@@ -290,6 +264,17 @@ async function sendToTmux(message) {
       // Ignore buffer deletion errors
     }
   }
+
+  await sleep(delayMs);
+
+  // Phase 2: Best-effort submit with Enter
+  try {
+    await submitAndVerify();
+  } catch (err) {
+    log(`Warning: Enter verification error (paste already succeeded): ${err.message}`);
+  }
+
+  return 'submitted';
 }
 
 async function handleDeliveryFailure(msg) {
@@ -389,61 +374,7 @@ async function processNextMessage() {
     return { delivered: true, state: claudeState.state };
   }
 
-  if (result === 'indeterminate') {
-    // Paste succeeded but verification inconclusive (separator detection failed).
-    // Don't mark delivered — leave as pending for next poll cycle to retry.
-    log(`Message id=${msg.id} paste succeeded but verification indeterminate, will retry`);
-    await handleDeliveryFailure(msg);
-    return { delivered: false, state: claudeState.state };
-  }
-
-  if (result === 'submit_failed') {
-    // Message is already in the input box (paste succeeded).
-    // Only retry Enter — do NOT re-paste the entire message.
-    log(`Message id=${msg.id} pasted but Enter failed, retrying Enter only`);
-
-    let hadErrors = false;
-
-    for (let retry = 0; retry < MAX_RETRIES; retry++) {
-      const backoff = RETRY_BASE_MS * 2 ** retry;
-      log(`Enter-only retry ${retry + 1} for message id=${msg.id} after ${backoff}ms`);
-      await sleep(backoff);
-
-      try {
-        const retryResult = await submitAndVerify();
-        hadErrors = false;
-        if (retryResult === 'submitted') {
-          markDelivered(msg.id);
-          log(`Message id=${msg.id} delivered after Enter retry ${retry + 1}`);
-          if (msg.require_idle === 1) {
-            await waitForRequireIdleSettlement(msg.id);
-          }
-          return { delivered: true, state: claudeState.state };
-        }
-        if (retryResult === 'indeterminate') {
-          log(`Message id=${msg.id} Enter retry ${retry + 1}: verification indeterminate`);
-        }
-      } catch (err) {
-        hadErrors = true;
-        log(`Enter retry error: ${err.message}`);
-      }
-    }
-
-    if (hadErrors) {
-      // Errors during retries (likely tmux outage) — don't permanently drop
-      // the message. Leave as pending for next poll cycle.
-      log(`Message id=${msg.id} Enter retries had errors, will retry later`);
-      await handleDeliveryFailure(msg);
-      return { delivered: false, state: claudeState.state };
-    }
-
-    // All retries exhausted with confirmed has_content — content stuck in input box
-    markFailed(msg.id);
-    log(`FAILED: Message id=${msg.id} stuck in input box after ${MAX_RETRIES} Enter retries`);
-    return { delivered: false, state: claudeState.state };
-  }
-
-  // result === 'paste_error': tmux command failed, full retry is appropriate
+  // result === 'paste_error': tmux paste command failed, retry
   log(`Failed to paste message id=${msg.id} to tmux, will retry`);
   await handleDeliveryFailure(msg);
   return { delivered: false, state: claudeState.state };
