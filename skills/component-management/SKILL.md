@@ -93,9 +93,14 @@ This shows: current version, available version, changelog, local changes.
 
 **If already at latest version, inform user and stop.**
 
-### Step 2: Show User and Confirm
+### Step 2: Analyze Changes and Confirm
 
-Present the upgrade info and ask for confirmation.
+**Always actively analyze what changed between versions.** Don't just relay changelog text.
+
+1. Read the `changelog` from JSON output (if present)
+2. Fetch commit history between current and latest versions via `gh api` or the component's git log
+3. Synthesize a clear summary of what changed and why — changelog is one input, not the sole source
+4. Present the analysis and ask for confirmation
 
 ### Step 3: Execute Pre-Upgrade Hook
 
@@ -143,7 +148,7 @@ This typically handles config migration. If it fails, investigate.
 zylos upgrade --self --check --json
 ```
 
-Show version change + changelog. Get user confirmation.
+Actively analyze what changed (changelog + commits), show version change + change summary. Get user confirmation.
 
 ### Step 2: Execute CLI Self-Upgrade
 
@@ -302,7 +307,7 @@ After `zylos upgrade <name> --yes --skip-eval --json` succeeds:
 2. **Service**: If `skill.service` exists, restart and verify.
 3. **Config**: If new config items added, inform user.
 
-Reply with version change, changelog, and any action results.
+Reply with version change, change summary, and any action results.
 
 ### C4 Upgrade Confirm Flow
 
@@ -313,22 +318,27 @@ Reply with version change, changelog, and any action results.
 
 User: `upgrade telegram`
 
-Run `zylos upgrade telegram --check --json`, parse the JSON output, and reply with ALL of the following:
+Run `zylos upgrade telegram --check --json`, parse the JSON output, then **actively analyze what changed**:
 
+1. Read the `changelog` field from JSON output (if present)
+2. Fetch commit history: `gh api repos/zylos-ai/zylos-<component>/compare/v<current>...v<latest> --jq '.commits[].commit.message'` (with proxy)
+3. Synthesize a clear change summary from both sources — explain what changed and why, don't just copy changelog text
+
+Reply with ALL of the following:
 1. Version change: `<name>: <current> -> <latest>`
-2. Changelog: MUST include the full changelog from the JSON output
+2. Change summary: your synthesized analysis of what changed (using changelog + commits)
 3. Local changes: show if any, or "none"
 4. Confirm instruction
 
-**You MUST show the changelog. Do NOT just show version numbers and ask to confirm.**
+**You MUST analyze and explain what changed. Do NOT just show version numbers and ask to confirm.**
 
 Example reply:
 ```
 telegram: 0.1.0 -> 0.2.0
 
-Changelog:
-- Fixed dotenv path issue
-- Added admin CLI
+Changes:
+- Fixed dotenv path resolution that caused config loading failures
+- Added admin CLI for managing groups and whitelist directly
 
 Local changes: none
 
@@ -365,7 +375,7 @@ User: `upgrade telegram confirm`
 2. Run `zylos upgrade telegram --yes --skip-eval --json`
 3. Run post-upgrade hook if `skill.hooks.post-upgrade` exists in result
 4. Restart service if `skill.service` exists in result
-5. Reply with version change and changelog
+5. Reply with version change and change summary
 
 If the upgrade failed, report the error and rollback status from JSON.
 
@@ -377,14 +387,20 @@ Same two-step pattern for upgrading zylos itself.
 
 User: `upgrade zylos`
 
-Run `zylos upgrade --self --check --json`, format the JSON, and reply:
+Run `zylos upgrade --self --check --json`, then **actively analyze what changed**:
+
+1. Read the `changelog` field from JSON output (if present)
+2. Fetch commit history: `gh api repos/zylos-ai/zylos-core/compare/v<current>...v<latest> --jq '.commits[].commit.message'` (with proxy)
+3. Synthesize a clear change summary from both sources
+
+Reply with version change and your analysis:
 
 ```
 zylos-core: 0.1.0-beta.1 -> 0.1.0-beta.2
 
-Changelog:
-- Added self-upgrade support for IM channels
-- Fixed version detection
+Changes:
+- Added self-upgrade support for IM channels (Telegram, Lark)
+- Fixed version detection that failed on pre-release tags
 
 Reply "upgrade zylos confirm" to proceed.
 ```
@@ -398,7 +414,7 @@ User: `upgrade zylos confirm`
 1. Run `zylos upgrade --self --yes --json`
 2. Compare `templates` list from JSON with local structure, migrate if needed
 3. If hooks/skills changed, execute restart-claude
-4. Reply with version change and changelog
+4. Reply with version change and change summary
 
 ### C4 Uninstall Confirm Flow
 
@@ -427,9 +443,9 @@ User: `uninstall lark confirm` (keep data) or `uninstall lark purge` (delete all
 
 - Plain text only, no markdown
 - For `info --json`: format as `<name> v<version>\nType: <type>\nRepo: <repo>\nService: <name> (<status>)`
-- For `check --json`: format as `<name>: <current> -> <latest>`, include `changelog` field if present, warn about `localChanges` if present, show `evaluation` analysis if present
+- For `check --json`: format as `<name>: <current> -> <latest>`, **actively analyze changes** (changelog + commit history), warn about `localChanges` if present, show `evaluation` analysis if present
 - For `--self --check --json`: same as component check, but target is `zylos-core` instead of component name
-- For upgrade result (`--yes --json`): format as `<name> upgraded: <from> → <to>`, include `changelog` field if present
+- For upgrade result (`--yes --json`): format as `<name> upgraded: <from> → <to>`, include change summary
 - For errors: when JSON has both `error` and `message` fields, display `message` (human-readable)
 - Send reply via the appropriate channel's send script
 
