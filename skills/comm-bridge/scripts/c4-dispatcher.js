@@ -215,8 +215,10 @@ async function submitAndVerify() {
     }
 
     if (state === 'indeterminate') {
-      log('Warning: input box separator detection failed — needs investigation');
-      return 'indeterminate';
+      // Transient capture glitch — retry check without sending Enter.
+      // Don't return immediately; next capture may succeed.
+      log(`Enter verify attempt ${attempt + 1}: separator detection failed, retrying capture`);
+      continue;
     }
 
     // state === 'has_content': input box still has text, retry Enter
@@ -400,6 +402,8 @@ async function processNextMessage() {
     // Only retry Enter — do NOT re-paste the entire message.
     log(`Message id=${msg.id} pasted but Enter failed, retrying Enter only`);
 
+    let hadErrors = false;
+
     for (let retry = 0; retry < MAX_RETRIES; retry++) {
       const backoff = RETRY_BASE_MS * 2 ** retry;
       log(`Enter-only retry ${retry + 1} for message id=${msg.id} after ${backoff}ms`);
@@ -407,6 +411,7 @@ async function processNextMessage() {
 
       try {
         const retryResult = await submitAndVerify();
+        hadErrors = false;
         if (retryResult === 'submitted') {
           markDelivered(msg.id);
           log(`Message id=${msg.id} delivered after Enter retry ${retry + 1}`);
@@ -417,14 +422,22 @@ async function processNextMessage() {
         }
         if (retryResult === 'indeterminate') {
           log(`Message id=${msg.id} Enter retry ${retry + 1}: verification indeterminate`);
-          // Continue retrying — next attempt may get a clear result
         }
       } catch (err) {
+        hadErrors = true;
         log(`Enter retry error: ${err.message}`);
       }
     }
 
-    // All Enter retries exhausted — content stuck in input box
+    if (hadErrors) {
+      // Errors during retries (likely tmux outage) — don't permanently drop
+      // the message. Leave as pending for next poll cycle.
+      log(`Message id=${msg.id} Enter retries had errors, will retry later`);
+      await handleDeliveryFailure(msg);
+      return { delivered: false, state: claudeState.state };
+    }
+
+    // All retries exhausted with confirmed has_content — content stuck in input box
     markFailed(msg.id);
     log(`FAILED: Message id=${msg.id} stuck in input box after ${MAX_RETRIES} Enter retries`);
     return { delivered: false, state: claudeState.state };
