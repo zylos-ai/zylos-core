@@ -5,6 +5,16 @@ All notable changes to zylos-core will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.0-beta.20] - 2026-02-09
+
+### Changed
+- **Download at check time**: `upgrade --check` now downloads new version to temp dir, enabling Claude to compare files before user confirms
+- **`--temp-dir` flag**: `upgrade --yes --temp-dir <dir>` reuses previously downloaded package, avoiding duplicate downloads
+- **SKILL.md upgrade flow redesign**: All info (changes + file diffs) presented before confirmation; pure execution after
+- Applies to both component upgrades and zylos-core self-upgrades
+
+---
+
 ## [0.1.0-beta.19] - 2026-02-09
 
 ### Changed
