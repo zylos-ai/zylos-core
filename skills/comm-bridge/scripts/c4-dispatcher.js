@@ -188,8 +188,8 @@ async function dismissGhostTextAndCapture() {
  * Send Enter to tmux and verify the input box is empty (message was submitted).
  * Only sends Enter — does NOT paste any content.
  *
- * Uses dismissGhostText() before each check to clear Claude Code UI hints
- * that would otherwise cause false has_content results.
+ * Uses dismissGhostTextAndCapture() before each check to clear Claude Code
+ * UI hints that would otherwise cause false has_content results.
  *
  * @returns {'submitted'|'has_content'|'indeterminate'}
  *   'submitted':     Input box confirmed empty after Enter
