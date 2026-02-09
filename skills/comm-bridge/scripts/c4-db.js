@@ -260,16 +260,17 @@ export function insertControl(content, options = {}) {
     );
 
     const id = Number(result.lastInsertRowid);
-    let finalContent = content;
 
-    if (content.includes('__CONTROL_ID__')) {
-      finalContent = content.replaceAll('__CONTROL_ID__', String(id));
-      database.prepare(`
-        UPDATE control_queue
-        SET content = ?, updated_at = ?
-        WHERE id = ?
-      `).run(finalContent, current, id);
-    }
+    // Auto-append ack suffix (like c4-receive appends "reply via")
+    const controlScriptPath = path.join(__dirname, 'c4-control.js');
+    const ackSuffix = ` ---- ack via: node ${controlScriptPath} ack --id ${id}`;
+    const finalContent = content + ackSuffix;
+
+    database.prepare(`
+      UPDATE control_queue
+      SET content = ?, updated_at = ?
+      WHERE id = ?
+    `).run(finalContent, current, id);
 
     return {
       id,

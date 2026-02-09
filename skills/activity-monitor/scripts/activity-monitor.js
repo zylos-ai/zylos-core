@@ -340,7 +340,7 @@ function runC4Control(args) {
 }
 
 function enqueueHeartbeat(phase) {
-  const content = `Heartbeat check. Run: node ${C4_CONTROL_PATH} ack --id __CONTROL_ID__`;
+  const content = 'Heartbeat check.';
   const result = runC4Control([
     'enqueue',
     '--content', content,
@@ -465,8 +465,7 @@ function enqueueHealthCheck() {
   const content = [
     'System health check. Check PM2 services (pm2 jlist), disk space (df -h), and memory (free -m).',
     'If any issues found, use your judgment to notify whoever is most likely to help — check your memory for a designated owner or ops person, otherwise pick the person you normally work with.',
-    'Log results to ~/zylos/logs/health.log.',
-    `Then acknowledge: node ${C4_CONTROL_PATH} ack --id __CONTROL_ID__`
+    'Log results to ~/zylos/logs/health.log.'
   ].join(' ');
 
   const result = runC4Control([

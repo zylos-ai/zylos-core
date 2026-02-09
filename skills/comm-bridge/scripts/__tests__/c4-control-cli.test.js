@@ -100,14 +100,14 @@ describe('c4-control enqueue', () => {
     });
   });
 
-  it('enqueue with __CONTROL_ID__ placeholder in content gets replaced', () => {
+  it('enqueue auto-appends ack suffix to content', () => {
     withTmpDir(({ env }) => {
       const { stdout, status } = cliRaw(
-        ['enqueue', '--content', 'ack __CONTROL_ID__ when done'], env
+        ['enqueue', '--content', 'Do something.'], env
       );
       assert.equal(status, 0);
       const id = parseControlId(stdout);
-      // The placeholder should have been replaced with the actual id in the DB.
+      // The ack suffix is auto-appended by insertControl in the DB.
       // We can't verify content via CLI get (it only prints status), but we verify
       // the enqueue itself succeeded and returned a valid id.
       assert.ok(Number(id) > 0);

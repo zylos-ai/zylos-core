@@ -65,13 +65,7 @@ If any issues found, notify whoever is most likely to help:
 
 ### 5. Acknowledge Control
 
-After completing the check, acknowledge the control message:
-
-```bash
-node <path-to-c4-control.js> ack --id <CONTROL_ID>
-```
-
-The control ID is provided in the message content.
+After completing the check, acknowledge the control message using the `---- ack via:` command appended to the message content. Simply run the command shown in the suffix.
 
 ## Issue Resolution
 

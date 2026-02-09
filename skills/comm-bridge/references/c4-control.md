@@ -86,15 +86,17 @@ Lower number = higher priority. The dispatcher consumes control messages in `ORD
 
 **Note:** Conversation queue uses priorities 1–3 (urgent/high/normal). Control priority 0 has no conversation equivalent — it exists specifically for heartbeat probes that must bypass even urgent conversations.
 
-## `__CONTROL_ID__` Placeholder
+## Auto-Appended Ack Suffix
 
-If the `--content` value contains the literal string `__CONTROL_ID__`, it is replaced with the actual control id after insertion. This allows self-referencing messages:
+When a control message is enqueued, the C4 layer automatically appends an ack instruction to the content, similar to how `c4-receive` appends `---- reply via:` to conversation messages.
 
-```bash
-c4-control.js enqueue --content "Heartbeat check. Ack with: c4-control.js ack --id __CONTROL_ID__" --ack-deadline 120
+The stored content will include a suffix like:
+
+```
+---- ack via: node /path/to/c4-control.js ack --id 42
 ```
 
-The stored content will read `... ack --id 42` (where 42 is the assigned id).
+Callers do **not** need to include ack instructions in `--content`. The recipient uses the appended suffix to acknowledge the control after processing.
 
 ## Status Lifecycle
 
@@ -113,9 +115,9 @@ pending ──► timeout  (ack deadline exceeded)
 ## Examples
 
 ```bash
-# Heartbeat probe with 2-minute ack deadline
+# Heartbeat probe with 2-minute ack deadline (ack suffix auto-appended)
 ~/zylos/.claude/skills/comm-bridge/scripts/c4-control.js \
-    enqueue --content "Heartbeat. Ack: c4-control.js ack --id __CONTROL_ID__" \
+    enqueue --content "Heartbeat check." \
     --ack-deadline 120
 
 # Check status of control 5
