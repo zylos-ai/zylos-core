@@ -17,32 +17,6 @@ const INIT_SQL_PATH = path.join(__dirname, '..', 'init-db.sql');
 
 let db = null;
 
-const CONTROL_SCHEMA_SQL = `
-CREATE TABLE IF NOT EXISTS control_queue (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  content TEXT NOT NULL,
-  priority INTEGER DEFAULT 3,
-  require_idle INTEGER DEFAULT 0,
-  bypass_state INTEGER DEFAULT 0,
-  ack_deadline_at INTEGER,
-  status TEXT DEFAULT 'pending',
-  retry_count INTEGER DEFAULT 0,
-  available_at INTEGER,
-  last_error TEXT,
-  created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_control_queue_status_priority_time
-  ON control_queue(status, priority, created_at);
-CREATE INDEX IF NOT EXISTS idx_control_queue_available_at
-  ON control_queue(available_at);
-CREATE INDEX IF NOT EXISTS idx_control_queue_ack_deadline
-  ON control_queue(ack_deadline_at);
-CREATE INDEX IF NOT EXISTS idx_control_queue_updated_at
-  ON control_queue(updated_at);
-`;
-
 /**
  * Get database connection, initializing if needed
  */
@@ -62,7 +36,6 @@ export function getDb() {
     if (isNew) {
       initSchema();
     }
-    ensureSchemaMigrations();
   }
   return db;
 }
@@ -74,10 +47,6 @@ function initSchema() {
   const initSql = fs.readFileSync(INIT_SQL_PATH, 'utf8');
   db.exec(initSql);
   console.log('[C4-DB] Database initialized');
-}
-
-function ensureSchemaMigrations() {
-  db.exec(CONTROL_SCHEMA_SQL);
 }
 
 function nowSeconds() {
