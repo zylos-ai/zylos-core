@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Activity Monitor v6 - Guardian + Heartbeat Liveness
+ * Activity Monitor v7 - Guardian + Heartbeat Liveness + Health Check
  * Run with PM2: pm2 start activity-monitor.js --name activity-monitor
  */
 
@@ -22,6 +22,7 @@ const STATUS_FILE = path.join(COMM_BRIDGE_DIR, 'claude-status.json');
 const MONITOR_DIR = path.join(ZYLOS_DIR, 'activity-monitor');
 const LOG_FILE = path.join(MONITOR_DIR, 'activity.log');
 const HEARTBEAT_PENDING_FILE = path.join(MONITOR_DIR, 'heartbeat-pending.json');
+const HEALTH_CHECK_STATE_FILE = path.join(MONITOR_DIR, 'health-check-state.json');
 const PENDING_CHANNELS_FILE = path.join(COMM_BRIDGE_DIR, 'pending-channels.jsonl');
 
 // Claude binary - relies on PATH from PM2 ecosystem.config.js
@@ -42,6 +43,9 @@ const RESTART_DELAY = 5;
 const HEARTBEAT_INTERVAL = 1800;     // 30 min
 const ACK_DEADLINE = 300;            // 5 min
 const MAX_RESTART_FAILURES = 3;
+
+// Health check config
+const HEALTH_CHECK_INTERVAL = 21600; // 6 hours
 
 // State
 let lastTruncateDay = '';
@@ -430,6 +434,76 @@ function notifyPendingChannels() {
   log(`Recovery notification completed for ${dedup.size} channel(s)`);
 }
 
+// --- Health Check ---
+
+function loadHealthCheckState() {
+  try {
+    if (!fs.existsSync(HEALTH_CHECK_STATE_FILE)) return null;
+    const parsed = JSON.parse(fs.readFileSync(HEALTH_CHECK_STATE_FILE, 'utf8'));
+    if (parsed && typeof parsed.last_check_at === 'number') {
+      return parsed;
+    }
+  } catch {}
+  return null;
+}
+
+function writeHealthCheckState(lastCheckAt) {
+  try {
+    if (!fs.existsSync(MONITOR_DIR)) {
+      fs.mkdirSync(MONITOR_DIR, { recursive: true });
+    }
+    fs.writeFileSync(HEALTH_CHECK_STATE_FILE, JSON.stringify({
+      last_check_at: lastCheckAt,
+      last_check_human: new Date(lastCheckAt * 1000).toISOString().replace('T', ' ').substring(0, 19)
+    }, null, 2));
+  } catch (err) {
+    log(`Health check: failed to write state (${err.message})`);
+  }
+}
+
+function enqueueHealthCheck() {
+  const content = [
+    'System health check. Check PM2 services (pm2 jlist), disk space (df -h), and memory (free -m).',
+    'If any issues found, notify the most recent communication channel.',
+    'Log results to ~/zylos/logs/health.log.',
+    `Then acknowledge: node ${C4_CONTROL_PATH} ack --id __CONTROL_ID__`
+  ].join(' ');
+
+  const result = runC4Control([
+    'enqueue',
+    '--content', content,
+    '--priority', '1',
+    '--ack-deadline', '600'
+  ]);
+
+  if (!result.ok) {
+    log(`Health check enqueue failed: ${result.output}`);
+    return false;
+  }
+
+  const match = result.output.match(/control\s+(\d+)/i);
+  if (!match) {
+    log(`Health check enqueue parse failed: ${result.output}`);
+    return false;
+  }
+
+  const now = Math.floor(Date.now() / 1000);
+  writeHealthCheckState(now);
+  log(`Health check enqueued id=${match[1]}`);
+  return true;
+}
+
+function maybeEnqueueHealthCheck(claudeRunning, currentTime) {
+  if (!claudeRunning) return;
+  if (engine.health !== 'ok') return;
+
+  const state = loadHealthCheckState();
+  const lastCheckAt = state?.last_check_at ?? 0;
+
+  if ((currentTime - lastCheckAt) >= HEALTH_CHECK_INTERVAL) {
+    enqueueHealthCheck();
+  }
+}
 
 function monitorLoop() {
   const currentTime = Math.floor(Date.now() / 1000);
@@ -463,6 +537,7 @@ function monitorLoop() {
     }
 
     engine.processHeartbeat(false, currentTime);
+    maybeEnqueueHealthCheck(false, currentTime);
     lastState = state;
     return;
   }
@@ -499,6 +574,7 @@ function monitorLoop() {
     }
 
     engine.processHeartbeat(false, currentTime);
+    maybeEnqueueHealthCheck(false, currentTime);
     lastState = state;
     return;
   }
@@ -549,6 +625,7 @@ function monitorLoop() {
   }
 
   engine.processHeartbeat(true, currentTime);
+  maybeEnqueueHealthCheck(true, currentTime);
   lastState = state;
 }
 
@@ -581,7 +658,7 @@ function init() {
 }
 
 init();
-log(`=== Activity Monitor Started (v6 - Guardian + Heartbeat): ${new Date().toISOString()} ===`);
+log(`=== Activity Monitor Started (v7 - Guardian + Heartbeat + HealthCheck): ${new Date().toISOString()} ===`);
 
 setInterval(monitorLoop, INTERVAL);
 monitorLoop();
