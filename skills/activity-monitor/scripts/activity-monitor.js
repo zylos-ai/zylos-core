@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Activity Monitor v8 - Guardian + Heartbeat + Health Check + Daily Upgrade
+ * Activity Monitor v9 - Guardian + Heartbeat + Health Check + Daily Tasks
  * Run with PM2: pm2 start activity-monitor.js --name activity-monitor
  */
 
@@ -10,7 +10,7 @@ import path from 'path';
 import os from 'os';
 import { fileURLToPath } from 'url';
 import { HeartbeatEngine } from './heartbeat-engine.js';
-import { DailyUpgradeScheduler } from './daily-upgrade.js';
+import { DailySchedule } from './daily-schedule.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -25,6 +25,7 @@ const LOG_FILE = path.join(MONITOR_DIR, 'activity.log');
 const HEARTBEAT_PENDING_FILE = path.join(MONITOR_DIR, 'heartbeat-pending.json');
 const HEALTH_CHECK_STATE_FILE = path.join(MONITOR_DIR, 'health-check-state.json');
 const DAILY_UPGRADE_STATE_FILE = path.join(MONITOR_DIR, 'daily-upgrade-state.json');
+const DAILY_MEMORY_COMMIT_STATE_FILE = path.join(MONITOR_DIR, 'daily-memory-commit-state.json');
 const PENDING_CHANNELS_FILE = path.join(COMM_BRIDGE_DIR, 'pending-channels.jsonl');
 
 // Claude binary - relies on PATH from PM2 ecosystem.config.js
@@ -49,8 +50,10 @@ const MAX_RESTART_FAILURES = 3;
 // Health check config
 const HEALTH_CHECK_INTERVAL = 21600; // 6 hours
 
-// Daily upgrade config
-const DAILY_UPGRADE_HOUR = 5; // 5:00 AM local time
+// Daily tasks config
+const DAILY_UPGRADE_HOUR = 5;        // 5:00 AM local time
+const DAILY_MEMORY_COMMIT_HOUR = 3;  // 3:00 AM local time
+const DAILY_COMMIT_SCRIPT = path.join(__dirname, '..', '..', 'zylos-memory', 'scripts', 'daily-commit.js');
 
 // State
 let lastTruncateDay = '';
@@ -544,7 +547,7 @@ function writeDailyUpgradeState(date) {
       fs.mkdirSync(MONITOR_DIR, { recursive: true });
     }
     fs.writeFileSync(DAILY_UPGRADE_STATE_FILE, JSON.stringify({
-      last_upgrade_date: date,
+      last_date: date,
       updated_at: new Date().toISOString()
     }, null, 2));
   } catch (err) {
@@ -576,7 +579,52 @@ function enqueueDailyUpgradeControl() {
   return true;
 }
 
-let upgradeScheduler; // initialized in init()
+let upgradeScheduler;      // initialized in init()
+let memoryCommitScheduler; // initialized in init()
+
+// ---------------------------------------------------------------------------
+// Daily Memory Commit
+// ---------------------------------------------------------------------------
+
+function loadMemoryCommitState() {
+  try {
+    if (!fs.existsSync(DAILY_MEMORY_COMMIT_STATE_FILE)) return null;
+    return JSON.parse(fs.readFileSync(DAILY_MEMORY_COMMIT_STATE_FILE, 'utf8'));
+  } catch {}
+  return null;
+}
+
+function writeMemoryCommitState(date) {
+  try {
+    if (!fs.existsSync(MONITOR_DIR)) {
+      fs.mkdirSync(MONITOR_DIR, { recursive: true });
+    }
+    fs.writeFileSync(DAILY_MEMORY_COMMIT_STATE_FILE, JSON.stringify({
+      last_date: date,
+      updated_at: new Date().toISOString()
+    }, null, 2));
+  } catch (err) {
+    log(`Daily memory commit: failed to write state (${err.message})`);
+  }
+}
+
+function executeDailyMemoryCommit() {
+  try {
+    const output = execFileSync('node', [DAILY_COMMIT_SCRIPT], {
+      encoding: 'utf8',
+      timeout: 30000,
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+    if (output.trim()) {
+      log(`Daily memory commit: ${output.trim()}`);
+    }
+    return true;
+  } catch (err) {
+    const detail = err?.stderr?.toString?.().trim() || err.message;
+    log(`Daily memory commit failed: ${detail}`);
+    return false;
+  }
+}
 
 function monitorLoop() {
   const currentTime = Math.floor(Date.now() / 1000);
@@ -611,7 +659,7 @@ function monitorLoop() {
 
     engine.processHeartbeat(false, currentTime);
     maybeEnqueueHealthCheck(false, currentTime);
-    upgradeScheduler.maybeEnqueue(false, engine.health);
+    memoryCommitScheduler.maybeTrigger();
     lastState = state;
     return;
   }
@@ -649,7 +697,7 @@ function monitorLoop() {
 
     engine.processHeartbeat(false, currentTime);
     maybeEnqueueHealthCheck(false, currentTime);
-    upgradeScheduler.maybeEnqueue(false, engine.health);
+    memoryCommitScheduler.maybeTrigger();
     lastState = state;
     return;
   }
@@ -701,7 +749,10 @@ function monitorLoop() {
 
   engine.processHeartbeat(true, currentTime);
   maybeEnqueueHealthCheck(true, currentTime);
-  upgradeScheduler.maybeEnqueue(true, engine.health);
+  if (engine.health === 'ok') {
+    upgradeScheduler.maybeTrigger();
+  }
+  memoryCommitScheduler.maybeTrigger();
   lastState = state;
 }
 
@@ -728,15 +779,28 @@ function init() {
     maxRestartFailures: MAX_RESTART_FAILURES
   });
 
-  upgradeScheduler = new DailyUpgradeScheduler({
+  upgradeScheduler = new DailySchedule({
     getLocalHour,
     getLocalDate,
     loadState: loadDailyUpgradeState,
     writeState: writeDailyUpgradeState,
-    enqueue: enqueueDailyUpgradeControl,
+    execute: enqueueDailyUpgradeControl,
     log
   }, {
-    upgradeHour: DAILY_UPGRADE_HOUR
+    hour: DAILY_UPGRADE_HOUR,
+    name: 'daily-upgrade'
+  });
+
+  memoryCommitScheduler = new DailySchedule({
+    getLocalHour,
+    getLocalDate,
+    loadState: loadMemoryCommitState,
+    writeState: writeMemoryCommitState,
+    execute: executeDailyMemoryCommit,
+    log
+  }, {
+    hour: DAILY_MEMORY_COMMIT_HOUR,
+    name: 'daily-memory-commit'
   });
 
   if (initialHealth !== 'ok') {
@@ -745,7 +809,7 @@ function init() {
 }
 
 init();
-log(`=== Activity Monitor Started (v8 - Guardian + Heartbeat + HealthCheck + DailyUpgrade): ${new Date().toISOString()} tz=${timezone} ===`);
+log(`=== Activity Monitor Started (v9 - Guardian + Heartbeat + HealthCheck + DailyTasks): ${new Date().toISOString()} tz=${timezone} ===`);
 
 setInterval(monitorLoop, INTERVAL);
 monitorLoop();

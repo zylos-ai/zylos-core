@@ -158,6 +158,24 @@ The activity monitor enqueues a daily Claude Code upgrade via the C4 control que
 
 The control message instructs Claude to use the `upgrade-claude` skill, which handles idle detection, `/exit`, upgrade, and automatic restart.
 
+## Daily Memory Commit
+
+The activity monitor runs a daily git commit of the `memory/` directory.
+
+- **Schedule**: 3:00 AM local time
+- **Timezone**: Same as daily upgrade (from `~/zylos/.env` TZ)
+- **Persisted state**: `~/zylos/activity-monitor/daily-memory-commit-state.json`
+- **Script**: Calls `zylos-memory/scripts/daily-commit.js` directly (no C4, no Claude needed)
+- **Once per day**: Date-based deduplication
+- **Idempotent**: If no memory changes exist, the script skips the commit
+
+## Timing Guarantees
+
+Both daily tasks (upgrade, memory commit) use the same `DailySchedule` class:
+- **Window**: Each target hour provides a ~3600s window; with ~1s loop interval it is virtually impossible to miss entirely
+- **Dedup**: Date-based (`last_date === today`) ensures exactly-once per day, even with imprecise timing
+- **Persistence**: State files survive activity monitor restarts
+
 ## Log File
 
 Activity log: `~/zylos/activity-monitor/activity.log`
