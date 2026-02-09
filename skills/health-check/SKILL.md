@@ -63,10 +63,6 @@ If any issues found, notify whoever is most likely to help:
 2. If none designated, notify the person you normally work with most
 3. Use `c4-send.js` with the appropriate channel and endpoint to send the alert
 
-### 5. Acknowledge Control
-
-After completing the check, acknowledge the control message using the `---- ack via:` command appended to the message content. Simply run the command shown in the suffix.
-
 ## Issue Resolution
 
 | Issue | Action |
