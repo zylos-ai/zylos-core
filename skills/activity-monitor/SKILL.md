@@ -15,9 +15,10 @@ This is a **PM2 service** (not directly invoked by Claude). It runs continuously
 ## What It Does
 
 1. **Activity Monitoring**: Tracks Claude's busy/idle state every second
-2. **Status File**: Writes `~/.claude-status` with current state (busy/idle, idle_seconds)
+2. **Status File**: Writes `~/zylos/comm-bridge/claude-status.json` with current state (busy/idle, idle_seconds, health)
 3. **Guardian Mode**: Automatically restarts Claude if it stops or crashes
 4. **Maintenance Awareness**: Waits for restart/upgrade scripts to complete before starting Claude
+5. **Heartbeat Liveness Detection**: Periodically sends heartbeat probes via the C4 control queue to verify Claude is responsive, triggering recovery when probes fail
 
 ## Status File Format
 
@@ -29,13 +30,15 @@ This is a **PM2 service** (not directly invoked by Claude). It runs continuously
   "last_check_human": "2026-02-04 20:30:10",
   "idle_seconds": 5,
   "inactive_seconds": 10,
-  "source": "conv_file"
+  "source": "conv_file",
+  "health": "ok"
 }
 ```
 
 - `state`: "busy" | "idle" | "stopped" | "offline"
 - `idle_seconds`: Time since entering idle state (0 when busy)
 - `source`: "conv_file" (reliable) | "tmux_activity" (fallback)
+- `health`: "ok" | "recovering" | "down" — liveness health from the heartbeat engine
 
 ## PM2 Management
 
@@ -67,7 +70,7 @@ pm2 list
    - Check if Claude process is running
    - Detect activity from conversation file modification time
    - Calculate idle/busy state
-   - Write status to ~/.claude-status
+   - Write status to ~/zylos/comm-bridge/claude-status.json
 
 2. **Guardian Logic**:
    - If Claude not running for 5+ seconds → restart
@@ -78,6 +81,48 @@ pm2 list
    - Primary: Conversation file modification time (reliable)
    - Fallback: tmux window activity
    - Threshold: 3 seconds without activity = idle
+
+## Heartbeat Liveness Detection
+
+The heartbeat engine runs inside the activity monitor and uses the C4 control queue to verify Claude is actually responsive (not just process-alive).
+
+### State Machine
+
+```
+          heartbeat interval elapsed
+  ┌─────────────────────────────────────┐
+  │                                     ▼
+  │  ok ──[primary fails]──► ok (verify phase)
+  │  ▲                              │
+  │  │                     [verify fails]
+  │  │                              ▼
+  │  │                         recovering ──[recovery fails]──► recovering
+  │  │                              │                               │
+  │  │                    [ack received]              [max failures reached]
+  │  │                              │                               │
+  │  └──────────────────────────────┘                               ▼
+  │                                                               down
+  │                                                                 │
+  │                                          [ack received after manual fix]
+  └─────────────────────────────────────────────────────────────────┘
+```
+
+### Phases
+
+| Phase | Trigger | On Success | On Failure |
+|-------|---------|------------|------------|
+| **Primary** | Heartbeat interval elapsed (default 30min) | Reset timer, stay `ok` | Enter verify phase |
+| **Verify** | Primary probe failed | Return to `ok` | Kill tmux, enter `recovering` |
+| **Recovery** | In `recovering` state, Claude restarted | Return to `ok`, notify pending channels | Kill tmux, retry (up to max) |
+| **Down** | Max restart failures reached (default 3) | Return to `ok`, notify pending channels | Stay `down`, wait for manual fix |
+
+### Ack Deadline
+
+Each heartbeat probe is enqueued with an ack deadline. If Claude does not acknowledge the probe before the deadline expires, the control record transitions to `timeout` status and the engine treats it as a failure.
+
+### Recovery Behavior
+
+When health transitions back to `ok`, the engine reads `~/zylos/comm-bridge/pending-channels.jsonl` and sends a recovery notification to each recorded channel/endpoint via C4, then clears the file.
 
 ## Log File
 
