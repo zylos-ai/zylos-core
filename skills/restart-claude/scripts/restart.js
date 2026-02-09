@@ -13,7 +13,8 @@ import path from 'path';
 import os from 'os';
 import fs from 'fs';
 
-const STATUS_FILE = path.join(os.homedir(), '.claude-status');
+const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
+const STATUS_FILE = path.join(ZYLOS_DIR, 'comm-bridge', 'claude-status.json');
 const MAX_WAIT_SECONDS = 600; // Max time to wait for idle (10 minutes)
 const CHECK_INTERVAL = 1; // Seconds between idle checks
 const MIN_IDLE_SECONDS = 3; // Require at least 3 seconds of idle time
@@ -71,7 +72,7 @@ function sendViaC4(message) {
 }
 
 function main() {
-  // Wait for Claude to become idle (check ~/.claude-status)
+  // Wait for Claude to become idle (check claude-status.json)
   // Requires idle_seconds >= MIN_IDLE_SECONDS to ensure stable idle state
   waitForIdle();
 

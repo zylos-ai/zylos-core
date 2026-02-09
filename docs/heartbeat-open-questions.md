@@ -401,6 +401,7 @@ C4 投递规则：
 - 间隔由 dispatcher poll cycle 自然决定（当前 ~5s）
 - 3 次投递失败 → 标记 `failed`
 - Activity-monitor 的 5min deadline 是最终兜底：投递失败 → 没 ack → 超时 → 走恢复流程
+- 补充（2026-02-09）：`bypass_state=1` 的 control 不做“离线时预先 hold”。即使 tmux 不可用，也让 dispatcher 尝试投递并快速失败（约 3 次 / 15s），这样 activity-monitor 能更快拿到 `failed` 结果并发起下一轮探测。若改为 hold，`ack_deadline_at` 可能先到，出现“未投递先 timeout”的噪声并拖慢判定。
 
 ---
 
@@ -449,6 +450,7 @@ C4 投递规则：
 - `HEALTH_RECOVERING` — 系统恢复中
 - `HEALTH_DOWN` — 系统不可用，需人工介入
 - `INVALID_ARGS` — 参数错误
+- `INTERNAL_ERROR` — 系统内部错误（如 DB 入队失败）
 - Bot 实际只用 `ok` + `error.message` 转发用户，code 仅供日志/分支判断
 
 **c4-control.js**（消费者：Claude AI + activity-monitor 代码）：
@@ -498,5 +500,5 @@ C4 投递规则：
 | Q16 | control 重试与退避参数 | **max_retries=3，无退避，poll cycle 自然间隔** |
 | Q17 | pending channels 去重与上限 | **去重(channel+endpoint) + 无上限，JSONL 文件** |
 | Q18 | `down` 的人工恢复入口 | **无需专门入口，activity-monitor 自动探测恢复** |
-| Q19 | `--json` 错误码全集 | **c4-receive: 3 codes (HEALTH_RECOVERING/DOWN, INVALID_ARGS)；c4-control: 纯文本，无 error code** |
+| Q19 | `--json` 错误码全集 | **c4-receive: 4 codes (HEALTH_RECOVERING/DOWN, INVALID_ARGS, INTERNAL_ERROR)；c4-control: 纯文本，无 error code** |
 | Q20 | control 数据清理策略 | **统一保留 7 天，dispatcher 每 24h 清理终态记录** |

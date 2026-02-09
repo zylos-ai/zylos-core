@@ -10,6 +10,9 @@ export const DELIVERY_DELAY_MAX = 1000;
 
 export const MAX_RETRIES = 5;
 export const RETRY_BASE_MS = 500;
+export const CONTROL_MAX_RETRIES = 3;
+export const CONTROL_RETENTION_DAYS = 7;
+export const CONTROL_CLEANUP_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
 export const ENTER_VERIFY_MAX_RETRIES = 3;
 export const ENTER_VERIFY_WAIT_MS = 500;
@@ -23,10 +26,11 @@ export const FILE_SIZE_THRESHOLD = 1500; // bytes
 export const CONTENT_PREVIEW_CHARS = 100;
 
 export const TMUX_SESSION = 'claude-main';
-export const CLAUDE_STATUS_FILE = path.join(os.homedir(), '.claude-status');
 const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
 export const DATA_DIR = path.join(ZYLOS_DIR, 'comm-bridge');
 export const DB_PATH = path.join(DATA_DIR, 'c4.db');
+export const CLAUDE_STATUS_FILE = path.join(DATA_DIR, 'claude-status.json');
+export const PENDING_CHANNELS_FILE = path.join(DATA_DIR, 'pending-channels.jsonl');
 export const ATTACHMENTS_DIR = path.join(DATA_DIR, 'attachments');
 export const SKILLS_DIR = path.join(ZYLOS_DIR, '.claude', 'skills');
 

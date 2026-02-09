@@ -275,6 +275,7 @@ c4-control.js ack --id 42
 {"ok": false, "error": {"code": "HEALTH_RECOVERING", "message": "System is recovering, please wait."}}
 {"ok": false, "error": {"code": "HEALTH_DOWN", "message": "System is currently unable to recover automatically. Please contact the administrator."}}
 {"ok": false, "error": {"code": "INVALID_ARGS", "message": "..."}}
+{"ok": false, "error": {"code": "INTERNAL_ERROR", "message": "..."}}
 ```
 
 **Error codes**（仅 c4-receive.js `--json`）：
@@ -284,6 +285,7 @@ c4-control.js ack --id 42
 | `HEALTH_RECOVERING` | 系统恢复中 | 转发 error.message 给用户 |
 | `HEALTH_DOWN` | 系统不可用 | 转发 error.message 给用户 |
 | `INVALID_ARGS` | 参数错误 | Bot 自身 bug，记日志排查 |
+| `INTERNAL_ERROR` | 系统内部错误（如 DB 入队失败） | 回复通用失败文案并记录日志 |
 
 ## 8. Dispatcher Behavior
 

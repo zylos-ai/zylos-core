@@ -11,7 +11,7 @@ export function showStatus() {
   console.log('Zylos Status\n============\n');
 
   // Check Claude status
-  const statusFile = path.join(process.env.HOME, '.claude-status');
+  const statusFile = path.join(ZYLOS_DIR, 'comm-bridge', 'claude-status.json');
   if (fs.existsSync(statusFile)) {
     try {
       const status = JSON.parse(fs.readFileSync(statusFile, 'utf8'));
