@@ -60,32 +60,8 @@ let idleSince = 0;
 
 let engine; // initialized in init()
 
-// Timezone: .env TZ → process.env.TZ → UTC (same resolution as scheduler tz.js)
-function loadTimezone() {
-  const envPath = path.join(ZYLOS_DIR, '.env');
-  try {
-    const text = fs.readFileSync(envPath, 'utf8');
-    const match = text.match(/^TZ\s*=\s*(.+)$/m);
-    if (match) {
-      const tz = match[1].trim().replace(/^["']|["']$/g, '');
-      if (tz) {
-        Intl.DateTimeFormat(undefined, { timeZone: tz });
-        return tz;
-      }
-    }
-  } catch (err) {
-    if (err.code !== 'ENOENT' && !(err instanceof RangeError)) {
-      // Silently ignore missing .env; RangeError = invalid TZ
-    }
-  }
-  if (process.env.TZ) {
-    try {
-      Intl.DateTimeFormat(undefined, { timeZone: process.env.TZ });
-      return process.env.TZ;
-    } catch {}
-  }
-  return 'UTC';
-}
+// Timezone: reuse scheduler's tz.js (.env TZ → process.env.TZ → UTC)
+import { loadTimezone } from '../../scheduler/scripts/tz.js';
 
 const timezone = loadTimezone();
 
