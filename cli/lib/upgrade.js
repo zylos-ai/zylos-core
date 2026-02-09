@@ -271,42 +271,13 @@ function createContext(component, { tempDir, newVersion } = {}) {
 }
 
 // ---------------------------------------------------------------------------
-// 8-step upgrade pipeline
+// 5-step upgrade pipeline
 // ---------------------------------------------------------------------------
 
 /**
- * Step 1: pre-upgrade hook
+ * Step 1: stop PM2 service
  */
-function step1_preUpgradeHook(ctx) {
-  const startTime = Date.now();
-  const hookPath = path.join(ctx.skillDir, 'hooks', 'pre-upgrade.js');
-
-  if (!fs.existsSync(hookPath)) {
-    return { step: 1, name: 'pre_upgrade_hook', status: 'skipped', duration: Date.now() - startTime };
-  }
-
-  try {
-    execSync(`node "${hookPath}"`, {
-      cwd: ctx.skillDir,
-      encoding: 'utf8',
-      stdio: ['pipe', 'pipe', 'pipe'],
-      env: {
-        ...process.env,
-        ZYLOS_COMPONENT: ctx.component,
-        ZYLOS_SKILL_DIR: ctx.skillDir,
-        ZYLOS_DATA_DIR: ctx.dataDir,
-      },
-    });
-    return { step: 1, name: 'pre_upgrade_hook', status: 'done', duration: Date.now() - startTime };
-  } catch (err) {
-    return { step: 1, name: 'pre_upgrade_hook', status: 'failed', error: err.stderr?.trim() || err.message, duration: Date.now() - startTime };
-  }
-}
-
-/**
- * Step 2: stop PM2 service
- */
-function step2_stopService(ctx) {
+function step1_stopService(ctx) {
   const startTime = Date.now();
   const parsed = parseSkillMd(ctx.skillDir);
   const serviceName = parsed?.frontmatter?.lifecycle?.service?.name || `zylos-${ctx.component}`;
@@ -318,29 +289,29 @@ function step2_stopService(ctx) {
 
     if (!service) {
       ctx.serviceExists = false;
-      return { step: 2, name: 'stop_service', status: 'skipped', message: 'no service', duration: Date.now() - startTime };
+      return { step: 1, name: 'stop_service', status: 'skipped', message: 'no service', duration: Date.now() - startTime };
     }
 
     ctx.serviceExists = true;
     ctx.serviceWasRunning = service.pm2_env?.status === 'online';
 
     if (!ctx.serviceWasRunning) {
-      return { step: 2, name: 'stop_service', status: 'skipped', message: 'not running', duration: Date.now() - startTime };
+      return { step: 1, name: 'stop_service', status: 'skipped', message: 'not running', duration: Date.now() - startTime };
     }
 
     execSync(`pm2 stop ${serviceName} 2>/dev/null`, { stdio: 'pipe' });
     ctx.serviceStopped = true;
 
-    return { step: 2, name: 'stop_service', status: 'done', message: serviceName, duration: Date.now() - startTime };
+    return { step: 1, name: 'stop_service', status: 'done', message: serviceName, duration: Date.now() - startTime };
   } catch {
-    return { step: 2, name: 'stop_service', status: 'skipped', message: 'pm2 not available', duration: Date.now() - startTime };
+    return { step: 1, name: 'stop_service', status: 'skipped', message: 'pm2 not available', duration: Date.now() - startTime };
   }
 }
 
 /**
- * Step 3: filesystem backup to .backup/<timestamp>/
+ * Step 2: filesystem backup to .backup/<timestamp>/
  */
-function step3_backup(ctx) {
+function step2_backup(ctx) {
   const startTime = Date.now();
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
   const backupDir = path.join(ctx.skillDir, '.backup', timestamp);
@@ -349,20 +320,20 @@ function step3_backup(ctx) {
     copyTree(ctx.skillDir, backupDir, { excludes: ['node_modules', '.backup', '.zylos'] });
 
     ctx.backupDir = backupDir;
-    return { step: 3, name: 'backup', status: 'done', message: path.basename(backupDir), duration: Date.now() - startTime };
+    return { step: 2, name: 'backup', status: 'done', message: path.basename(backupDir), duration: Date.now() - startTime };
   } catch (err) {
-    return { step: 3, name: 'backup', status: 'failed', error: `Backup failed: ${err.message}`, duration: Date.now() - startTime };
+    return { step: 2, name: 'backup', status: 'failed', error: `Backup failed: ${err.message}`, duration: Date.now() - startTime };
   }
 }
 
 /**
- * Step 4: copy new files from temp dir to skill dir
+ * Step 3: copy new files from temp dir to skill dir
  */
-function step4_copyNewFiles(ctx) {
+function step3_copyNewFiles(ctx) {
   const startTime = Date.now();
 
   if (!ctx.tempDir || !fs.existsSync(ctx.tempDir)) {
-    return { step: 4, name: 'copy_new_files', status: 'failed', error: 'Temp directory not available', duration: Date.now() - startTime };
+    return { step: 3, name: 'copy_new_files', status: 'failed', error: 'Temp directory not available', duration: Date.now() - startTime };
   }
 
   // Exclude list: always exclude meta dirs, plus lifecycle.preserve entries
@@ -377,21 +348,21 @@ function step4_copyNewFiles(ctx) {
 
   try {
     syncTree(ctx.tempDir, ctx.skillDir, { excludes });
-    return { step: 4, name: 'copy_new_files', status: 'done', duration: Date.now() - startTime };
+    return { step: 3, name: 'copy_new_files', status: 'done', duration: Date.now() - startTime };
   } catch (err) {
-    return { step: 4, name: 'copy_new_files', status: 'failed', error: `Copy failed: ${err.message}`, duration: Date.now() - startTime };
+    return { step: 3, name: 'copy_new_files', status: 'failed', error: `Copy failed: ${err.message}`, duration: Date.now() - startTime };
   }
 }
 
 /**
- * Step 5: npm install
+ * Step 4: npm install
  */
-function step5_npmInstall(ctx) {
+function step4_npmInstall(ctx) {
   const startTime = Date.now();
   const packageJson = path.join(ctx.skillDir, 'package.json');
 
   if (!fs.existsSync(packageJson)) {
-    return { step: 5, name: 'npm_install', status: 'skipped', message: 'no package.json', duration: Date.now() - startTime };
+    return { step: 4, name: 'npm_install', status: 'skipped', message: 'no package.json', duration: Date.now() - startTime };
   }
 
   try {
@@ -400,123 +371,24 @@ function step5_npmInstall(ctx) {
       encoding: 'utf8',
       stdio: ['pipe', 'pipe', 'pipe'],
     });
-    return { step: 5, name: 'npm_install', status: 'done', duration: Date.now() - startTime };
+    return { step: 4, name: 'npm_install', status: 'done', duration: Date.now() - startTime };
   } catch (err) {
-    return { step: 5, name: 'npm_install', status: 'failed', error: err.stderr?.trim() || err.message, duration: Date.now() - startTime };
+    return { step: 4, name: 'npm_install', status: 'failed', error: err.stderr?.trim() || err.message, duration: Date.now() - startTime };
   }
 }
 
 /**
- * Step 6: generate manifest
+ * Step 5: generate manifest
  */
-function step6_generateManifest(ctx) {
+function step5_generateManifest(ctx) {
   const startTime = Date.now();
 
   try {
     const manifest = generateManifest(ctx.skillDir);
     saveManifest(ctx.skillDir, manifest);
-    return { step: 6, name: 'generate_manifest', status: 'done', duration: Date.now() - startTime };
+    return { step: 5, name: 'generate_manifest', status: 'done', duration: Date.now() - startTime };
   } catch (err) {
-    return { step: 6, name: 'generate_manifest', status: 'failed', error: err.message, duration: Date.now() - startTime };
-  }
-}
-
-/**
- * Step 7: post-upgrade hook
- */
-function step7_postUpgradeHook(ctx) {
-  const startTime = Date.now();
-  const hookPath = path.join(ctx.skillDir, 'hooks', 'post-upgrade.js');
-
-  if (!fs.existsSync(hookPath)) {
-    return { step: 7, name: 'post_upgrade_hook', status: 'skipped', duration: Date.now() - startTime };
-  }
-
-  try {
-    execSync(`node "${hookPath}"`, {
-      cwd: ctx.skillDir,
-      encoding: 'utf8',
-      stdio: ['pipe', 'pipe', 'pipe'],
-      env: {
-        ...process.env,
-        ZYLOS_COMPONENT: ctx.component,
-        ZYLOS_SKILL_DIR: ctx.skillDir,
-        ZYLOS_DATA_DIR: ctx.dataDir,
-      },
-    });
-    return { step: 7, name: 'post_upgrade_hook', status: 'done', duration: Date.now() - startTime };
-  } catch (err) {
-    return { step: 7, name: 'post_upgrade_hook', status: 'failed', error: err.stderr?.trim() || err.message, duration: Date.now() - startTime };
-  }
-}
-
-/**
- * Step 8: start service and verify
- *
- * Three cases:
- * - Service was running before upgrade → restart it
- * - Service exists in PM2 but was stopped → leave it stopped (user intent)
- * - Service not registered in PM2 but SKILL.md declares one → start it
- */
-function step8_startAndVerify(ctx) {
-  const startTime = Date.now();
-
-  // Read service config from SKILL.md
-  const parsed = parseSkillMd(ctx.skillDir);
-  const serviceConfig = parsed?.frontmatter?.lifecycle?.service;
-  const serviceName = serviceConfig?.name || `zylos-${ctx.component}`;
-
-  // Case: service was stopped but still registered — leave it stopped
-  if (ctx.serviceExists && !ctx.serviceWasRunning) {
-    return { step: 8, name: 'start_and_verify', status: 'skipped', message: 'service was stopped', duration: Date.now() - startTime };
-  }
-
-  // Case: service not registered in PM2 and no service declared in SKILL.md — skip
-  if (!ctx.serviceWasRunning && !serviceConfig) {
-    return { step: 8, name: 'start_and_verify', status: 'skipped', message: 'no service configured', duration: Date.now() - startTime };
-  }
-
-  try {
-    if (!ctx.serviceExists && serviceConfig) {
-      // Service not in PM2 but declared in SKILL.md — start fresh
-      const ecosystemPath = path.join(ctx.skillDir, 'ecosystem.config.cjs');
-      if (fs.existsSync(ecosystemPath)) {
-        // Use ecosystem config (custom PM2 options)
-        execSync(`pm2 start "${ecosystemPath}"`, { cwd: ctx.skillDir, stdio: 'pipe' });
-      } else if (serviceConfig.entry) {
-        // Use entry point from SKILL.md
-        const entryPath = path.join(ctx.skillDir, serviceConfig.entry);
-        execSync(`pm2 start "${entryPath}" --name "${serviceName}"`, { stdio: 'pipe' });
-      } else {
-        return { step: 8, name: 'start_and_verify', status: 'skipped', message: 'no entry point', duration: Date.now() - startTime };
-      }
-      execSync('pm2 save 2>/dev/null', { stdio: 'pipe' });
-    } else {
-      // Service was running — restart it
-      execSync(`pm2 restart ${serviceName} 2>/dev/null`, { stdio: 'pipe' });
-    }
-
-    // Poll for service status (max 5 attempts, 500ms apart)
-    let service = null;
-    for (let i = 0; i < 5; i++) {
-      const output = execSync('pm2 jlist 2>/dev/null', { encoding: 'utf8' });
-      const processes = JSON.parse(output);
-      service = processes.find(p => p.name === serviceName);
-
-      if (service?.pm2_env?.status === 'online') break;
-
-      const waitUntil = Date.now() + 500;
-      while (Date.now() < waitUntil) { /* busy wait */ }
-    }
-
-    if (!service || service.pm2_env?.status !== 'online') {
-      return { step: 8, name: 'start_and_verify', status: 'failed', error: 'Service startup verification failed', duration: Date.now() - startTime };
-    }
-
-    ctx.serviceStopped = false;
-    return { step: 8, name: 'start_and_verify', status: 'done', message: serviceName, duration: Date.now() - startTime };
-  } catch (err) {
-    return { step: 8, name: 'start_and_verify', status: 'failed', error: err.message, duration: Date.now() - startTime };
+    return { step: 5, name: 'generate_manifest', status: 'failed', error: err.message, duration: Date.now() - startTime };
   }
 }
 
@@ -577,7 +449,8 @@ export function rollback(ctx) {
 // ---------------------------------------------------------------------------
 
 /**
- * Run the 8-step upgrade pipeline.
+ * Run the 5-step upgrade pipeline (mechanical operations only).
+ * Hooks and service management are handled by Claude after this completes.
  * Lock must be acquired by caller (component.js).
  *
  * @param {string} component
@@ -605,14 +478,11 @@ export function runUpgrade(component, { tempDir, newVersion, onStep } = {}) {
   ctx.to = newVersion || null;
 
   const steps = [
-    step1_preUpgradeHook,
-    step2_stopService,
-    step3_backup,
-    step4_copyNewFiles,
-    step5_npmInstall,
-    step6_generateManifest,
-    step7_postUpgradeHook,
-    step8_startAndVerify,
+    step1_stopService,
+    step2_backup,
+    step3_copyNewFiles,
+    step4_npmInstall,
+    step5_generateManifest,
   ];
 
   const total = steps.length;
@@ -647,11 +517,18 @@ export function runUpgrade(component, { tempDir, newVersion, onStep } = {}) {
     };
   }
 
-  // Success — read the new version from the updated SKILL.md
+  // Success — read the new version and SKILL.md metadata
   const updatedVersion = getLocalVersion(ctx.skillDir);
   if (updatedVersion.success) {
     ctx.to = updatedVersion.version;
   }
+
+  // Include SKILL.md metadata for Claude (hooks, config, service info)
+  const skillMeta = parseSkillMd(ctx.skillDir);
+  const fm = skillMeta?.frontmatter || {};
+  const lifecycle = fm.lifecycle || {};
+  const hooks = lifecycle.hooks || {};
+  const config = fm.config || {};
 
   return {
     action: 'upgrade',
@@ -661,5 +538,10 @@ export function runUpgrade(component, { tempDir, newVersion, onStep } = {}) {
     to: ctx.to,
     steps: ctx.steps,
     backupDir: ctx.backupDir,
+    skill: {
+      hooks: Object.keys(hooks).length > 0 ? hooks : null,
+      config: Object.keys(config).length > 0 ? config : null,
+      service: lifecycle.service || null,
+    },
   };
 }

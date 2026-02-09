@@ -495,7 +495,7 @@ async function handleUpgradeFlow(component, { jsonOutput, skipConfirm, skipEval 
       console.log(`Upgrading ${component}...`);
     }
 
-    // 6. Execute upgrade (8 steps) — show progress in real time
+    // 6. Execute upgrade (5 steps) — show progress in real time
     const result = runUpgrade(component, {
       tempDir,
       newVersion: check.latest,

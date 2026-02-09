@@ -18,6 +18,7 @@ Run it directly as `zylos`, NOT as `~/zylos/zylos` or `./zylos`.
 2. **Guide interactively** - Never just tell user to "manually edit files"
 3. **Read SKILL.md** - Each component declares its requirements in SKILL.md frontmatter
 4. **Detect execution mode** - Handle both Claude session and C4 channels differently
+5. **CLI = mechanical, Claude = intelligent** - CLI handles downloads, backups, file sync. Claude handles config, hooks, service management, user interaction.
 
 ## Install Workflow
 
@@ -34,31 +35,21 @@ Found <component> component:
 Proceed with installation?
 ```
 
-### Step 2: Execute Installation
+### Step 2: Execute CLI Installation
 
 After user confirms, run:
 ```bash
-zylos add <component>
+zylos add <component> --yes --json
 ```
 
-### Step 3: Check for Configuration
+The CLI handles: download, npm install, manifest generation, component registration.
+The JSON output includes `skill` field with hooks, config schema, and service info.
 
-Read the installed component's SKILL.md at `~/zylos/.claude/skills/<component>/SKILL.md`.
-Look for the `config.required` section in frontmatter.
+### Step 3: Collect Configuration
+
+Read the `skill.config` from the JSON output (or the installed SKILL.md).
 
 **If no config.required AND no config.optional exists, skip to Step 5.**
-
-```yaml
-config:
-  required:
-    - name: API_KEY
-      description: Your API key
-    - name: API_SECRET
-      description: Your API secret
-      sensitive: true
-```
-
-### Step 4: Collect Configuration Interactively
 
 For each required config item, ask user to provide the value:
 
@@ -67,20 +58,24 @@ Please provide API_KEY (Your API key):
 ```
 
 For sensitive values, remind user it will be stored securely.
+Write collected values to `~/zylos/.env`.
 
-For optional config items, show the default value and ask if user wants to change it:
+### Step 4: Execute Post-Install Hook
 
+If `skill.hooks.post-install` exists in the JSON output, run it:
+
+```bash
+node ~/zylos/.claude/skills/<component>/hooks/post-install.js
 ```
-OPTIONAL_VAR (Optional setting) [default: "default-value"]:
-```
 
-User can press Enter to use default, or provide a custom value.
+Set environment variables: `ZYLOS_COMPONENT`, `ZYLOS_SKILL_DIR`, `ZYLOS_DATA_DIR`.
+If the hook fails, investigate and fix the issue.
 
-### Step 5: Write Config and Start Service
+### Step 5: Start Service and Guide User
 
-1. If config was collected, write values to `~/zylos/.env`
-2. If component has `lifecycle.service.name`, restart the service: `pm2 restart <service-name>`
-3. Confirm successful startup (or installation complete if no service)
+1. If component has `skill.service`, start it: `pm2 start ecosystem.config.cjs` (or entry point) and verify health
+2. Show the `skill.nextSteps` from JSON output to guide user on what to do next
+3. Confirm successful installation
 
 ## Upgrade Workflow
 
@@ -91,46 +86,82 @@ When user asks to upgrade a component:
 ### Step 1: Check Available Updates
 
 ```bash
-zylos upgrade <component> --check
+zylos upgrade <component> --check --json
 ```
 
-This shows:
-- Current version
-- Available version
-- Changelog summary
-- Local changes (if any)
+This shows: current version, available version, changelog, local changes.
 
-**If already at latest version, inform user and stop. No further steps needed.**
+**If already at latest version, inform user and stop.**
 
 ### Step 2: Show User and Confirm
 
-Present the upgrade info to user and ask for confirmation:
+Present the upgrade info and ask for confirmation.
 
-```
-Upgrade available for <component>:
-- Current: 0.1.0
-- Latest: 0.2.0
+### Step 3: Execute Pre-Upgrade Hook
 
-Changelog:
-- Added feature X
-- Fixed bug Y
+**Before calling CLI**, check if the component has a `hooks/pre-upgrade.js`:
 
-Proceed with upgrade?
-```
-
-### Step 3: Execute Upgrade
-
-Only after user explicitly confirms:
 ```bash
-zylos upgrade <component> --yes
+node ~/zylos/.claude/skills/<component>/hooks/pre-upgrade.js
 ```
 
-**NEVER skip the confirmation step.** User must explicitly agree before upgrade executes.
+Set environment variables: `ZYLOS_COMPONENT`, `ZYLOS_SKILL_DIR`, `ZYLOS_DATA_DIR`.
+If the hook fails (exit code 1), **abort the upgrade** and inform user.
 
-### Step 4: Check for New Configuration
+### Step 4: Execute CLI Upgrade
 
-After upgrade completes, re-read the component's SKILL.md.
-If the new version added new `config.required` or `config.optional` items, collect them interactively (same as Install Step 4-5).
+Only after pre-upgrade hook succeeds (or doesn't exist):
+
+```bash
+zylos upgrade <component> --yes --skip-eval --json
+```
+
+The CLI handles: stop service, backup, file sync, npm install, manifest.
+The JSON output includes `skill` field with updated hooks, config, and service info.
+
+### Step 5: Execute Post-Upgrade Hook
+
+If `skill.hooks.post-upgrade` exists in the JSON output, run it:
+
+```bash
+node ~/zylos/.claude/skills/<component>/hooks/post-upgrade.js
+```
+
+This typically handles config migration. If it fails, investigate.
+
+### Step 6: Start Service and Check Config
+
+1. Restart the service: `pm2 restart <service-name>` (or start fresh if not registered)
+2. Verify the service is healthy
+3. Compare old and new SKILL.md config — if new required config items were added, collect them interactively
+
+## Self-Upgrade Workflow (zylos-core)
+
+### Step 1: Check and Confirm
+
+```bash
+zylos upgrade --self --check --json
+```
+
+Show version change + changelog. Get user confirmation.
+
+### Step 2: Execute CLI Self-Upgrade
+
+```bash
+zylos upgrade --self --yes --json
+```
+
+The CLI handles: backup, npm install -g, sync Core Skills, sync CLAUDE.md, restart PM2 services, verify.
+The JSON output includes a `templates` field listing template files.
+
+### Step 3: Compare Templates and Migrate
+
+Read the `templates` array from JSON output. Compare each template path with the local file structure.
+If templates include new files (e.g., `.claude/hooks/`, `memory/` structure), deploy or migrate them.
+
+### Step 4: Restart Claude (If Needed)
+
+If the upgrade changed hooks or skills, execute `restart-claude` to load new configuration.
 
 ## Uninstall Workflow
 
@@ -148,16 +179,27 @@ Choose an option:
 2. Remove everything (code + data)
 ```
 
-### Step 2: Execute Uninstall
+### Step 2: Pre-Uninstall Cleanup
+
+Before executing CLI uninstall, check the component's SKILL.md for external resources that need cleanup:
+- Webhook registrations (deregister)
+- Active connections (close gracefully)
+- External service integrations (notify/cleanup)
+
+### Step 3: Execute Uninstall
 
 After user chooses:
 ```bash
 # Option 1: Code only (default)
-zylos uninstall <component>
+zylos uninstall <component> --yes --json
 
 # Option 2: Including data
-zylos uninstall <component> --purge
+zylos uninstall <component> --purge --yes --json
 ```
+
+### Step 4: Clean Environment Variables
+
+Remove the component's declared environment variables from `~/zylos/.env` to avoid stale credentials.
 
 ## Check for Updates (All Components)
 
@@ -237,12 +279,30 @@ improve on it by writing a more natural reply based on the JSON data.
 | check \<name\> | `zylos upgrade <name> --check --json` |
 | upgrade \<name\> | `zylos upgrade <name> --check --json` **(CHECK ONLY — do NOT execute upgrade)** |
 | upgrade \<name\> confirm | `zylos upgrade <name> --yes --skip-eval --json` **(only this executes the upgrade)** |
-| add \<name\> | `zylos add <name> --yes` |
+| add \<name\> | `zylos add <name> --yes --json` |
 | upgrade zylos | `zylos upgrade --self --check --json` **(CHECK ONLY)** |
 | upgrade zylos confirm | `zylos upgrade --self --yes --json` **(only this executes)** |
 | uninstall \<name\> / remove \<name\> | `zylos uninstall <name> --check --json` **(CHECK ONLY — preview what will be removed)** |
 | uninstall \<name\> confirm | `zylos uninstall <name> confirm --json` **(uninstall, keep data)** |
 | uninstall \<name\> purge | `zylos uninstall <name> purge --json` **(uninstall and delete all data)** |
+
+### C4 Post-Install Actions
+
+After `zylos add <name> --yes --json` succeeds, the JSON `skill` field tells you what to do:
+
+1. **Config**: If `skill.config.required` exists, inform user which config values are needed. In C4 mode, user provides values via follow-up messages.
+2. **Hooks**: If `skill.hooks.post-install` exists, run it.
+3. **Service**: If `skill.service` exists, start it and verify.
+
+### C4 Post-Upgrade Actions
+
+After `zylos upgrade <name> --yes --skip-eval --json` succeeds:
+
+1. **Hooks**: If `skill.hooks.post-upgrade` exists, run it.
+2. **Service**: If `skill.service` exists, restart and verify.
+3. **Config**: If new config items added, inform user.
+
+Reply with version change, changelog, and any action results.
 
 ### C4 Upgrade Confirm Flow
 
@@ -301,20 +361,13 @@ The `evaluation` field in JSON contains `files` (array of `{file, verdict, reaso
 
 User: `upgrade telegram confirm`
 
-Run `zylos upgrade telegram --yes --skip-eval --json`, parse the JSON output, and reply:
+1. Run pre-upgrade hook if it exists (check SKILL.md hooks)
+2. Run `zylos upgrade telegram --yes --skip-eval --json`
+3. Run post-upgrade hook if `skill.hooks.post-upgrade` exists in result
+4. Restart service if `skill.service` exists in result
+5. Reply with version change and changelog
 
-```
-<name> upgraded: <from> → <to>
-
-Changelog:
-<changelog from JSON output>
-```
-
-Include the `changelog` field from JSON in the completion message so the user knows what changed.
 If the upgrade failed, report the error and rollback status from JSON.
-
-The confirm command is self-contained — the component name is in the command itself,
-so it does not depend on Claude remembering the previous message.
 
 ### C4 Self-Upgrade Flow (zylos-core)
 
@@ -342,7 +395,10 @@ If already up to date, reply: `zylos-core is up to date (v0.1.0-beta.1)`
 
 User: `upgrade zylos confirm`
 
-Run `zylos upgrade --self --yes --json`, parse the JSON output, and reply with the version change and changelog (same format as component upgrade completion).
+1. Run `zylos upgrade --self --yes --json`
+2. Compare `templates` list from JSON with local structure, migrate if needed
+3. If hooks/skills changed, execute restart-claude
+4. Reply with version change and changelog
 
 ### C4 Uninstall Confirm Flow
 
@@ -360,7 +416,10 @@ Run `zylos uninstall lark --check --json`. The JSON output includes component in
 
 User: `uninstall lark confirm` (keep data) or `uninstall lark purge` (delete all)
 
-Run `zylos uninstall lark confirm --json` or `zylos uninstall lark purge --json` accordingly.
+1. Check SKILL.md for external cleanup needs (webhooks, connections)
+2. Run `zylos uninstall lark confirm --json` or `zylos uninstall lark purge --json`
+3. Clean component's environment variables from .env
+4. Reply with result
 
 ### C4 Output Formatting
 
@@ -380,6 +439,6 @@ Run `zylos uninstall lark confirm --json` or `zylos uninstall lark purge --json`
 |--------|---------------|-----|
 | Confirmation | Interactive dialog | Two-step: preview + "confirm" command |
 | Output format | Rich (emoji, formatting) | Plain text only |
-| Config collection | Interactive prompts | Skip (use --yes), configure later |
+| Config collection | Interactive prompts | User provides via follow-up messages |
 | Remove/uninstall | Supported (with data options) | Two-step: preview + "confirm" or "purge" |
 | Upgrade eval | Claude evaluation runs | Skipped (--skip-eval) |

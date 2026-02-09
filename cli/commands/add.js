@@ -1,30 +1,29 @@
 /**
  * zylos add - Install a component
  *
- * Full self-contained installation flow:
- *   1. Resolve target → download → detect type
- *   2. Declarative (SKILL.md): npm install, config, hook, PM2, done
- *   3. AI (no SKILL.md): record in components.json, output task for Claude
+ * Mechanical installation only:
+ *   1. Resolve target → download → npm install → manifest → register
+ *   2. Output SKILL.md metadata (config schema, hooks, service info)
+ *   3. Claude handles: config collection, hook execution, service start, user guidance
  */
 
 import fs from 'node:fs';
 import path from 'node:path';
 import { execSync } from 'node:child_process';
-import { ZYLOS_DIR, SKILLS_DIR, COMPONENTS_DIR } from '../lib/config.js';
+import { SKILLS_DIR, COMPONENTS_DIR } from '../lib/config.js';
 import { loadRegistry } from '../lib/registry.js';
 import { loadComponents, saveComponents, resolveTarget, outputTask } from '../lib/components.js';
 import { downloadArchive, downloadBranch } from '../lib/download.js';
 import { generateManifest, saveManifest } from '../lib/manifest.js';
 import { parseSkillMd, detectComponentType } from '../lib/skill.js';
-import { readEnvFile, writeEnvEntries } from '../lib/env.js';
-import { registerService } from '../lib/service.js';
-import { prompt, promptYesNo, promptSecret } from '../lib/prompts.js';
+import { promptYesNo } from '../lib/prompts.js';
 
 /**
  * Main entry: zylos add <target> [--yes]
  */
 export async function addComponent(args) {
   const skipConfirm = args.includes('--yes') || args.includes('-y');
+  const jsonOutput = args.includes('--json');
   const target = args.find(a => !a.startsWith('-'));
 
   if (!target) {
@@ -113,7 +112,7 @@ export async function addComponent(args) {
   const componentType = detectComponentType(skillDir);
 
   if (componentType === 'declarative') {
-    await installDeclarative(resolved, skillDir, skipConfirm);
+    await installDeclarative(resolved, skillDir, skipConfirm, jsonOutput);
   } else {
     installAI(resolved, skillDir);
   }
@@ -121,29 +120,35 @@ export async function addComponent(args) {
 
 /**
  * Install a declarative component (has SKILL.md).
+ * Only handles mechanical operations. Claude handles config, hooks, service start.
  */
-async function installDeclarative(resolved, skillDir, skipConfirm) {
-  console.log('\nInstalling (declarative)...');
+async function installDeclarative(resolved, skillDir, skipConfirm, jsonOutput) {
+  if (!jsonOutput) console.log('\nInstalling (declarative)...');
 
   const skill = parseSkillMd(skillDir);
   const fm = skill?.frontmatter || {};
   const lifecycle = fm.lifecycle || {};
   const config = fm.config || {};
+  const hooks = lifecycle.hooks || {};
 
   // Step 1: npm install
   if (lifecycle.npm) {
     const pkgJson = path.join(skillDir, 'package.json');
     if (fs.existsSync(pkgJson)) {
-      console.log('  Installing npm dependencies...');
+      if (!jsonOutput) console.log('  Installing npm dependencies...');
       try {
         execSync('npm install --omit=dev', {
           cwd: skillDir,
           stdio: 'pipe',
           timeout: 120000,
         });
-        console.log('  npm install complete.');
+        if (!jsonOutput) console.log('  npm install complete.');
       } catch (err) {
-        console.error(`  npm install failed: ${err.message}`);
+        if (jsonOutput) {
+          console.log(JSON.stringify({ action: 'add', component: resolved.name, success: false, error: `npm install failed: ${err.message}` }));
+        } else {
+          console.error(`  npm install failed: ${err.message}`);
+        }
         cleanup(skillDir);
         process.exit(1);
       }
@@ -153,97 +158,9 @@ async function installDeclarative(resolved, skillDir, skipConfirm) {
   // Step 2: Create data directory
   const dataDir = path.join(COMPONENTS_DIR, resolved.name);
   fs.mkdirSync(dataDir, { recursive: true });
-  console.log(`  Data directory: ${dataDir}`);
+  if (!jsonOutput) console.log(`  Data directory: ${dataDir}`);
 
-  // Step 3: Collect config interactively
-  const requiredConfig = config.required || [];
-  if (requiredConfig.length > 0) {
-    console.log('\n  Configuration required:');
-
-    if (skipConfirm) {
-      // In non-interactive mode, write placeholders
-      console.log('  (--yes mode: skipping prompts, set these manually in .env)');
-      const entries = {};
-      for (const item of requiredConfig) {
-        const key = typeof item === 'string' ? item : item.name;
-        if (key) {
-          entries[key] = '';
-        }
-      }
-      const result = writeEnvEntries(entries, resolved.name);
-      if (result.written.length > 0) {
-        console.log(`  Keys to configure: ${result.written.join(', ')}`);
-      }
-    } else {
-      const entries = {};
-      const existing = readEnvFile();
-      for (const item of requiredConfig) {
-        const key = typeof item === 'string' ? item : item.name;
-        const desc = typeof item === 'string' ? item : (item.description || item.name);
-        const secret = typeof item === 'object' && item.sensitive;
-
-        if (!key) continue;
-
-        // Check if already set
-        if (existing.has(key)) {
-          console.log(`  ${key}: already set (skipping)`);
-          continue;
-        }
-
-        let value;
-        if (secret) {
-          value = await promptSecret(`  ${desc}: `);
-        } else {
-          value = await prompt(`  ${desc}: `);
-        }
-
-        if (value) {
-          entries[key] = value;
-        }
-      }
-
-      if (Object.keys(entries).length > 0) {
-        const result = writeEnvEntries(entries, resolved.name);
-        if (result.written.length > 0) {
-          console.log(`\n  Saved ${result.written.length} config value(s) to .env`);
-        }
-      }
-    }
-  }
-
-  // Step 4: Execute post-install hook
-  const hooks = lifecycle.hooks || {};
-  const postInstall = hooks['post-install'];
-  if (postInstall) {
-    console.log('  Running post-install hook...');
-    try {
-      executeHook(postInstall, skillDir);
-      console.log('  Post-install hook complete.');
-    } catch (err) {
-      console.log(`  Warning: Post-install hook failed: ${err.message}`);
-      // Don't abort — warn only
-    }
-  }
-
-  // Step 5: Register PM2 service
-  const service = lifecycle.service;
-  if (service && service.entry) {
-    console.log('  Starting service...');
-    const svcResult = registerService({
-      name: resolved.name,
-      entry: service.entry,
-      skillDir,
-      type: service.type || 'pm2',
-    });
-
-    if (svcResult.success) {
-      console.log(`  Service "zylos-${resolved.name}" started.`);
-    } else {
-      console.log(`  Warning: Service start failed: ${svcResult.error}`);
-    }
-  }
-
-  // Step 6: Update components.json
+  // Step 3: Update components.json
   const components = loadComponents();
   components[resolved.name] = {
     version: resolved.version || '0.0.0',
@@ -256,19 +173,27 @@ async function installDeclarative(resolved, skillDir, skipConfirm) {
   };
   saveComponents(components);
 
-  // Done
-  console.log(`\n✓ ${resolved.name} installed successfully!`);
-
-  // Display next steps from SKILL.md
-  const nextSteps = fm['next-steps'] || fm.nextSteps;
-  if (nextSteps && Array.isArray(nextSteps)) {
-    console.log('\nNext steps:');
-    for (const step of nextSteps) {
-      console.log(`  - ${step}`);
-    }
+  // Output result
+  if (jsonOutput) {
+    const output = {
+      action: 'add',
+      component: resolved.name,
+      success: true,
+      version: resolved.version || '0.0.0',
+      skillDir,
+      dataDir,
+      skill: {
+        hooks: Object.keys(hooks).length > 0 ? hooks : null,
+        config: Object.keys(config).length > 0 ? config : null,
+        service: lifecycle.service || null,
+        nextSteps: fm['next-steps'] || fm.nextSteps || null,
+      },
+    };
+    console.log(JSON.stringify(output, null, 2));
+  } else {
+    console.log(`\n✓ ${resolved.name} code installed successfully!`);
+    console.log('  Claude will now collect configuration and start the service.');
   }
-
-  console.log('');
 }
 
 /**
@@ -310,34 +235,6 @@ function installAI(resolved, skillDir) {
 }
 
 /**
- * Execute a post-install hook script.
- * Detects .js vs .sh by extension.
- */
-function executeHook(hookPath, cwd) {
-  const resolved = path.resolve(cwd, hookPath);
-  if (!fs.existsSync(resolved)) {
-    throw new Error(`Hook script not found: ${resolved}`);
-  }
-
-  const ext = path.extname(resolved);
-  let cmd;
-  if (ext === '.js' || ext === '.mjs') {
-    cmd = `node "${resolved}"`;
-  } else if (ext === '.sh') {
-    cmd = `bash "${resolved}"`;
-  } else {
-    cmd = `"${resolved}"`;
-  }
-
-  execSync(cmd, {
-    cwd,
-    stdio: 'inherit',
-    timeout: 60000,
-    env: { ...process.env, ZYLOS_DIR, SKILLS_DIR, COMPONENTS_DIR },
-  });
-}
-
-/**
  * Clean up a failed installation.
  */
 function cleanup(dir) {
@@ -358,6 +255,7 @@ Arguments:
 
 Options:
   --yes, -y  Skip confirmation prompts
+  --json     Output in JSON format (for programmatic use)
 
 Examples:
   zylos add telegram              Official component (latest)

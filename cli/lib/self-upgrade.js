@@ -7,7 +7,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { execSync, spawn } from 'node:child_process';
+import { execSync } from 'node:child_process';
 import { SKILLS_DIR, ZYLOS_DIR } from './config.js';
 import { downloadArchive, downloadBranch } from './download.js';
 import { generateManifest, loadManifest, saveManifest } from './manifest.js';
@@ -346,28 +346,30 @@ function syncClaudeMd(templateDir) {
 // ---------------------------------------------------------------------------
 
 /**
- * Recursively copy files from src to dest, only creating files that don't exist.
- * Never overwrites existing files (preserves user modifications).
- * @returns {number} Number of files added
+ * List all files in templates/ directory recursively.
+ * Returns relative paths for Claude to compare with local structure.
  */
-function copyMissingTree(src, dest) {
-  let added = 0;
-  fs.mkdirSync(dest, { recursive: true });
-  for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
-    const srcPath = path.join(src, entry.name);
-    const destPath = path.join(dest, entry.name);
-    if (entry.isDirectory()) {
-      added += copyMissingTree(srcPath, destPath);
-    } else if (!fs.existsSync(destPath)) {
-      fs.copyFileSync(srcPath, destPath);
-      added++;
+function listTemplateFiles(templatesDir) {
+  const files = [];
+  if (!fs.existsSync(templatesDir)) return files;
+
+  function walk(dir, prefix = '') {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) {
+        walk(path.join(dir, entry.name), rel);
+      } else {
+        files.push(rel);
+      }
     }
   }
-  return added;
+
+  walk(templatesDir);
+  return files;
 }
 
 // ---------------------------------------------------------------------------
-// 11-step self-upgrade pipeline
+// 9-step self-upgrade pipeline
 // ---------------------------------------------------------------------------
 
 /**
@@ -413,12 +415,6 @@ function step1_backupCoreSkills(ctx) {
     const claudeMdPath = path.join(ZYLOS_DIR, 'CLAUDE.md');
     if (fs.existsSync(claudeMdPath)) {
       fs.copyFileSync(claudeMdPath, path.join(backupDir, 'CLAUDE.md'));
-    }
-
-    // Backup .claude/ project settings (will be modified in step 7)
-    const claudeSettingsDir = path.join(ZYLOS_DIR, '.claude');
-    if (fs.existsSync(claudeSettingsDir)) {
-      copyTree(claudeSettingsDir, path.join(backupDir, '.claude'));
     }
 
     ctx.backupDir = backupDir;
@@ -588,45 +584,22 @@ function step6_syncClaudeMd(ctx) {
 }
 
 /**
- * Step 7: sync project settings (templates/.claude/ → ~/zylos/.claude/)
- * Copies missing files only — never overwrites user modifications.
+ * Step 7: post-upgrade hook (placeholder for future use)
  */
-function step7_syncProjectSettings(ctx) {
-  const startTime = Date.now();
-
-  const settingsSrc = path.join(ctx.tempDir, 'templates', '.claude');
-  if (!fs.existsSync(settingsSrc)) {
-    return { step: 7, name: 'sync_project_settings', status: 'skipped', message: 'no .claude/ in templates', duration: Date.now() - startTime };
-  }
-
-  try {
-    const settingsDest = path.join(ZYLOS_DIR, '.claude');
-    const added = copyMissingTree(settingsSrc, settingsDest);
-    const msg = added > 0 ? `${added} file(s) added` : 'no changes';
-    return { step: 7, name: 'sync_project_settings', status: 'done', message: msg, duration: Date.now() - startTime };
-  } catch (err) {
-    // Non-fatal — settings sync failure shouldn't block the upgrade
-    return { step: 7, name: 'sync_project_settings', status: 'skipped', message: err.message, duration: Date.now() - startTime };
-  }
-}
-
-/**
- * Step 8: post-upgrade hook (placeholder for future use)
- */
-function step8_postUpgradeHook(ctx) {
+function step7_postUpgradeHook(ctx) {
   const startTime = Date.now();
   // No core post-upgrade hook yet — reserved for future
-  return { step: 8, name: 'post_upgrade_hook', status: 'skipped', duration: Date.now() - startTime };
+  return { step: 7, name: 'post_upgrade_hook', status: 'skipped', duration: Date.now() - startTime };
 }
 
 /**
- * Step 9: start core services
+ * Step 8: start core services
  */
-function step9_startCoreServices(ctx) {
+function step8_startCoreServices(ctx) {
   const startTime = Date.now();
 
   if (ctx.servicesWereRunning.length === 0) {
-    return { step: 9, name: 'start_core_services', status: 'skipped', message: 'no services to restart', duration: Date.now() - startTime };
+    return { step: 8, name: 'start_core_services', status: 'skipped', message: 'no services to restart', duration: Date.now() - startTime };
   }
 
   const started = [];
@@ -642,20 +615,20 @@ function step9_startCoreServices(ctx) {
   }
 
   if (failed.length > 0) {
-    return { step: 9, name: 'start_core_services', status: 'failed', error: `Failed to restart: ${failed.join(', ')}`, duration: Date.now() - startTime };
+    return { step: 8, name: 'start_core_services', status: 'failed', error: `Failed to restart: ${failed.join(', ')}`, duration: Date.now() - startTime };
   }
 
-  return { step: 9, name: 'start_core_services', status: 'done', message: started.join(', '), duration: Date.now() - startTime };
+  return { step: 8, name: 'start_core_services', status: 'done', message: started.join(', '), duration: Date.now() - startTime };
 }
 
 /**
- * Step 10: verify services
+ * Step 9: verify services
  */
-function step10_verifyServices(ctx) {
+function step9_verifyServices(ctx) {
   const startTime = Date.now();
 
   if (ctx.servicesWereRunning.length === 0) {
-    return { step: 10, name: 'verify_services', status: 'skipped', message: 'no services to verify', duration: Date.now() - startTime };
+    return { step: 9, name: 'verify_services', status: 'skipped', message: 'no services to verify', duration: Date.now() - startTime };
   }
 
   // Brief wait for services to start
@@ -675,39 +648,12 @@ function step10_verifyServices(ctx) {
     }
 
     if (notOnline.length > 0) {
-      return { step: 10, name: 'verify_services', status: 'failed', error: `Not online: ${notOnline.join(', ')}`, duration: Date.now() - startTime };
+      return { step: 9, name: 'verify_services', status: 'failed', error: `Not online: ${notOnline.join(', ')}`, duration: Date.now() - startTime };
     }
 
-    return { step: 10, name: 'verify_services', status: 'done', duration: Date.now() - startTime };
+    return { step: 9, name: 'verify_services', status: 'done', duration: Date.now() - startTime };
   } catch (err) {
-    return { step: 10, name: 'verify_services', status: 'failed', error: err.message, duration: Date.now() - startTime };
-  }
-}
-
-/**
- * Step 11: schedule Claude restart to load new skills/hooks
- * Spawns restart-claude in background (detached).
- * It waits for Claude to be idle, then sends /exit.
- * activity-monitor restarts Claude, which triggers SessionStart hooks.
- */
-function step11_scheduleRestart(ctx) {
-  const startTime = Date.now();
-
-  const restartScript = path.join(SKILLS_DIR, 'restart-claude', 'scripts', 'restart.js');
-  if (!fs.existsSync(restartScript)) {
-    return { step: 11, name: 'schedule_restart', status: 'skipped', message: 'restart-claude skill not found', duration: Date.now() - startTime };
-  }
-
-  try {
-    const child = spawn('node', [restartScript], {
-      detached: true,
-      stdio: 'ignore',
-    });
-    child.unref();
-    return { step: 11, name: 'schedule_restart', status: 'done', message: 'restart scheduled (background)', duration: Date.now() - startTime };
-  } catch (err) {
-    // Non-fatal — manual restart is always an option
-    return { step: 11, name: 'schedule_restart', status: 'skipped', message: err.message, duration: Date.now() - startTime };
+    return { step: 9, name: 'verify_services', status: 'failed', error: err.message, duration: Date.now() - startTime };
   }
 }
 
@@ -744,16 +690,6 @@ function rollbackSelf(ctx) {
     }
   }
 
-  // Restore .claude/ project settings from backup
-  if (ctx.backupDir && fs.existsSync(path.join(ctx.backupDir, '.claude'))) {
-    try {
-      syncTree(path.join(ctx.backupDir, '.claude'), path.join(ZYLOS_DIR, '.claude'));
-      results.push({ action: 'restore_project_settings', success: true });
-    } catch (err) {
-      results.push({ action: 'restore_project_settings', success: false, error: err.message });
-    }
-  }
-
   // Restart services if they were running
   for (const name of ctx.servicesWereRunning) {
     try {
@@ -772,7 +708,8 @@ function rollbackSelf(ctx) {
 // ---------------------------------------------------------------------------
 
 /**
- * Run the 11-step self-upgrade pipeline.
+ * Run the 9-step self-upgrade pipeline.
+ * Template migration and Claude restart are handled by Claude after this completes.
  * Lock must be acquired by caller.
  *
  * @param {{ tempDir: string, newVersion: string, onStep?: function }} opts
@@ -794,11 +731,9 @@ export function runSelfUpgrade({ tempDir, newVersion, onStep } = {}) {
     step4_npmInstallGlobal,
     step5_syncCoreSkills,
     step6_syncClaudeMd,
-    step7_syncProjectSettings,
-    step8_postUpgradeHook,
-    step9_startCoreServices,
-    step10_verifyServices,
-    step11_scheduleRestart,
+    step7_postUpgradeHook,
+    step8_startCoreServices,
+    step9_verifyServices,
   ];
 
   const total = steps.length;
@@ -832,6 +767,10 @@ export function runSelfUpgrade({ tempDir, newVersion, onStep } = {}) {
     };
   }
 
+  // List template files for Claude to compare with local structure
+  const templatesDir = path.join(ctx.tempDir, 'templates');
+  const templates = listTemplateFiles(templatesDir);
+
   return {
     action: 'self_upgrade',
     success: true,
@@ -839,6 +778,7 @@ export function runSelfUpgrade({ tempDir, newVersion, onStep } = {}) {
     to: ctx.to,
     steps: ctx.steps,
     backupDir: ctx.backupDir,
+    templates,
   };
 }
 
