@@ -5,6 +5,17 @@ All notable changes to zylos-core will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.0-beta.18] - 2026-02-09
+
+### Changed
+- **Lifecycle refactor**: CLI now handles only mechanical operations, Claude handles intelligent operations
+- upgrade.js: 8→5 step pipeline, removed pre/post hooks and service start from CLI
+- add.js: removed config collection, hook execution, PM2 registration; added `--json` output with skill metadata
+- self-upgrade.js: 11→9 step pipeline, removed syncProjectSettings and scheduleRestart; added `templates` output
+- component-management SKILL.md: full rewrite documenting Claude responsibilities for all lifecycle operations
+
+---
+
 ## [0.1.0-beta.17] - 2026-02-08
 
 ### Added
