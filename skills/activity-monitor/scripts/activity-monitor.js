@@ -10,6 +10,7 @@ import path from 'path';
 import os from 'os';
 import { fileURLToPath } from 'url';
 import { HeartbeatEngine } from './heartbeat-engine.js';
+import { DailyUpgradeScheduler } from './daily-upgrade.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -551,7 +552,7 @@ function writeDailyUpgradeState(date) {
   }
 }
 
-function enqueueDailyUpgrade() {
+function enqueueDailyUpgradeControl() {
   const content = 'Daily upgrade. Use the upgrade-claude skill to upgrade Claude Code to the latest version.';
   const result = runC4Control([
     'enqueue',
@@ -571,25 +572,11 @@ function enqueueDailyUpgrade() {
     return false;
   }
 
-  const today = getLocalDate();
-  writeDailyUpgradeState(today);
   log(`Daily upgrade enqueued id=${match[1]} (tz=${timezone})`);
   return true;
 }
 
-function maybeEnqueueDailyUpgrade(claudeRunning) {
-  if (!claudeRunning) return;
-  if (engine.health !== 'ok') return;
-
-  const hour = getLocalHour();
-  if (hour !== DAILY_UPGRADE_HOUR) return;
-
-  const state = loadDailyUpgradeState();
-  const today = getLocalDate();
-  if (state?.last_upgrade_date === today) return;
-
-  enqueueDailyUpgrade();
-}
+let upgradeScheduler; // initialized in init()
 
 function monitorLoop() {
   const currentTime = Math.floor(Date.now() / 1000);
@@ -624,7 +611,7 @@ function monitorLoop() {
 
     engine.processHeartbeat(false, currentTime);
     maybeEnqueueHealthCheck(false, currentTime);
-    maybeEnqueueDailyUpgrade(false);
+    upgradeScheduler.maybeEnqueue(false, engine.health);
     lastState = state;
     return;
   }
@@ -662,7 +649,7 @@ function monitorLoop() {
 
     engine.processHeartbeat(false, currentTime);
     maybeEnqueueHealthCheck(false, currentTime);
-    maybeEnqueueDailyUpgrade(false);
+    upgradeScheduler.maybeEnqueue(false, engine.health);
     lastState = state;
     return;
   }
@@ -714,7 +701,7 @@ function monitorLoop() {
 
   engine.processHeartbeat(true, currentTime);
   maybeEnqueueHealthCheck(true, currentTime);
-  maybeEnqueueDailyUpgrade(true);
+  upgradeScheduler.maybeEnqueue(true, engine.health);
   lastState = state;
 }
 
@@ -739,6 +726,17 @@ function init() {
     initialHealth,
     heartbeatInterval: HEARTBEAT_INTERVAL,
     maxRestartFailures: MAX_RESTART_FAILURES
+  });
+
+  upgradeScheduler = new DailyUpgradeScheduler({
+    getLocalHour,
+    getLocalDate,
+    loadState: loadDailyUpgradeState,
+    writeState: writeDailyUpgradeState,
+    enqueue: enqueueDailyUpgradeControl,
+    log
+  }, {
+    upgradeHour: DAILY_UPGRADE_HOUR
   });
 
   if (initialHealth !== 'ok') {
