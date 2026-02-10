@@ -17,6 +17,7 @@ import { downloadArchive, downloadBranch } from '../lib/download.js';
 import { generateManifest, saveManifest } from '../lib/manifest.js';
 import { parseSkillMd, detectComponentType } from '../lib/skill.js';
 import { linkBins } from '../lib/bin.js';
+import { applyCaddyRoutes } from '../lib/caddy.js';
 import { promptYesNo } from '../lib/prompts.js';
 
 /**
@@ -186,6 +187,20 @@ async function installDeclarative(resolved, skillDir, skipConfirm, jsonOutput) {
     }
   }
 
+  // Step 5: Apply Caddy routes (if declared)
+  const httpRoutes = fm.http_routes || fm['http_routes'];
+  let caddyResult = null;
+  if (httpRoutes && Array.isArray(httpRoutes) && httpRoutes.length > 0) {
+    caddyResult = applyCaddyRoutes(resolved.name, httpRoutes);
+    if (!jsonOutput) {
+      if (caddyResult.success) {
+        console.log(`  Caddy routes: ${caddyResult.action}`);
+      } else {
+        console.log(`  Caddy routes: failed (${caddyResult.error})`);
+      }
+    }
+  }
+
   // Output result
   if (jsonOutput) {
     const output = {
@@ -200,6 +215,7 @@ async function installDeclarative(resolved, skillDir, skipConfirm, jsonOutput) {
         config: Object.keys(config).length > 0 ? config : null,
         service: lifecycle.service || null,
         bin: binResult || null,
+        caddy: caddyResult,
         nextSteps: fm['next-steps'] || fm.nextSteps || null,
       },
     };

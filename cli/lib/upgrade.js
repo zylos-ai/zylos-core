@@ -16,6 +16,7 @@ import { generateManifest, saveManifest } from './manifest.js';
 import { downloadArchive, downloadBranch } from './download.js';
 import { fetchLatestTag, fetchRawFile, sanitizeError } from './github.js';
 import { copyTree, syncTree } from './fs-utils.js';
+import { applyCaddyRoutes } from './caddy.js';
 
 // ---------------------------------------------------------------------------
 // Version helpers
@@ -392,6 +393,26 @@ function step5_generateManifest(ctx) {
   }
 }
 
+/**
+ * Step 6: update Caddy routes (if http_routes declared in SKILL.md)
+ */
+function step6_updateCaddyRoutes(ctx) {
+  const startTime = Date.now();
+  const parsed = parseSkillMd(ctx.skillDir);
+  const httpRoutes = parsed?.frontmatter?.http_routes;
+
+  if (!httpRoutes || !Array.isArray(httpRoutes) || httpRoutes.length === 0) {
+    return { step: 6, name: 'caddy_routes', status: 'skipped', message: 'no http_routes', duration: Date.now() - startTime };
+  }
+
+  const result = applyCaddyRoutes(ctx.component, httpRoutes);
+  if (result.success) {
+    return { step: 6, name: 'caddy_routes', status: 'done', message: result.action, duration: Date.now() - startTime };
+  }
+  // Caddy failures are non-fatal for upgrades
+  return { step: 6, name: 'caddy_routes', status: 'skipped', message: result.error, duration: Date.now() - startTime };
+}
+
 // ---------------------------------------------------------------------------
 // Public: rollback
 // ---------------------------------------------------------------------------
@@ -449,7 +470,7 @@ export function rollback(ctx) {
 // ---------------------------------------------------------------------------
 
 /**
- * Run the 5-step upgrade pipeline (mechanical operations only).
+ * Run the 6-step upgrade pipeline (mechanical operations only).
  * Hooks and service management are handled by Claude after this completes.
  * Lock must be acquired by caller (component.js).
  *
@@ -483,6 +504,7 @@ export function runUpgrade(component, { tempDir, newVersion, onStep } = {}) {
     step3_copyNewFiles,
     step4_npmInstall,
     step5_generateManifest,
+    step6_updateCaddyRoutes,
   ];
 
   const total = steps.length;
@@ -530,6 +552,10 @@ export function runUpgrade(component, { tempDir, newVersion, onStep } = {}) {
   const hooks = lifecycle.hooks || {};
   const config = fm.config || {};
 
+  // Extract Caddy result from steps
+  const caddyStep = ctx.steps.find(s => s.name === 'caddy_routes');
+  const caddyResult = caddyStep ? { action: caddyStep.message, status: caddyStep.status } : null;
+
   return {
     action: 'upgrade',
     component,
@@ -542,6 +568,7 @@ export function runUpgrade(component, { tempDir, newVersion, onStep } = {}) {
       hooks: Object.keys(hooks).length > 0 ? hooks : null,
       config: Object.keys(config).length > 0 ? config : null,
       service: lifecycle.service || null,
+      caddy: caddyResult,
     },
   };
 }

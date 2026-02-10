@@ -17,6 +17,7 @@ import {
 import { detectChanges } from '../lib/manifest.js';
 import { parseSkillMd } from '../lib/skill.js';
 import { linkBins, unlinkBins } from '../lib/bin.js';
+import { removeCaddyRoutes } from '../lib/caddy.js';
 import { acquireLock, releaseLock } from '../lib/lock.js';
 import { fetchRawFile } from '../lib/github.js';
 import { promptYesNo } from '../lib/prompts.js';
@@ -1193,6 +1194,18 @@ async function handleRemoveFlow(target, { purge, skipConfirm, force, jsonOutput 
     unlinkBins(comp.bin);
     steps.push({ action: 'Bin symlinks removed', success: true });
     if (!jsonOutput) console.log(`  ✓ Bin symlinks removed`);
+  }
+
+  // 2.5. Remove Caddy routes
+  const caddyResult = removeCaddyRoutes(target);
+  if (caddyResult.success && caddyResult.action === 'removed') {
+    steps.push({ action: 'Caddy routes removed', success: true });
+    if (!jsonOutput) console.log(`  ✓ Caddy routes removed`);
+  } else if (caddyResult.action === 'not_found') {
+    // No routes to remove — skip silently
+  } else if (!caddyResult.success) {
+    steps.push({ action: 'Caddy route removal failed', success: false, error: caddyResult.error });
+    if (!jsonOutput) console.log(`  ✗ Caddy route removal failed: ${caddyResult.error}`);
   }
 
   // 3. Remove skill directory

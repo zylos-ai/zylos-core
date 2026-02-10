@@ -5,6 +5,15 @@ All notable changes to zylos-core will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.0-beta.24] - 2026-02-10
+
+### Added
+- **Caddy auto-configuration**: Components declaring `http_routes` in SKILL.md get Caddy reverse proxy routes auto-configured during install, upgrade, and removed during uninstall
+- New `cli/lib/caddy.js` module: marker-based Caddyfile management with `caddy validate` before reload and auto-rollback on failure
+- Upgrade pipeline expanded from 5 to 6 steps (added step 6: update Caddy routes)
+
+---
+
 ## [0.1.0-beta.23] - 2026-02-10
 
 ### Fixed
