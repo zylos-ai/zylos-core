@@ -16,6 +16,7 @@ import { loadComponents, saveComponents, resolveTarget, outputTask } from '../li
 import { downloadArchive, downloadBranch } from '../lib/download.js';
 import { generateManifest, saveManifest } from '../lib/manifest.js';
 import { parseSkillMd, detectComponentType } from '../lib/skill.js';
+import { linkBins } from '../lib/bin.js';
 import { promptYesNo } from '../lib/prompts.js';
 
 /**
@@ -173,6 +174,18 @@ async function installDeclarative(resolved, skillDir, skipConfirm, jsonOutput) {
   };
   saveComponents(components);
 
+  // Step 4: Create bin symlinks
+  const binResult = linkBins(skillDir, fm.bin);
+  if (binResult) {
+    components[resolved.name].bin = binResult;
+    saveComponents(components);
+    if (!jsonOutput) {
+      for (const cmd of Object.keys(binResult)) {
+        console.log(`  CLI command: ${cmd}`);
+      }
+    }
+  }
+
   // Output result
   if (jsonOutput) {
     const output = {
@@ -186,6 +199,7 @@ async function installDeclarative(resolved, skillDir, skipConfirm, jsonOutput) {
         hooks: Object.keys(hooks).length > 0 ? hooks : null,
         config: Object.keys(config).length > 0 ? config : null,
         service: lifecycle.service || null,
+        bin: binResult || null,
         nextSteps: fm['next-steps'] || fm.nextSteps || null,
       },
     };

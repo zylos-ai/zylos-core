@@ -11,4 +11,5 @@ export const COMPONENTS_DIR = path.join(ZYLOS_DIR, 'components');
 export const LOCKS_DIR = path.join(CONFIG_DIR, 'locks');
 export const REGISTRY_FILE = path.join(CONFIG_DIR, 'registry.json');
 export const COMPONENTS_FILE = path.join(CONFIG_DIR, 'components.json');
+export const BIN_DIR = path.join(ZYLOS_DIR, 'bin');
 export const ENV_FILE = path.join(ZYLOS_DIR, '.env');
