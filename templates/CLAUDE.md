@@ -97,81 +97,6 @@ The scheduler may send you tasks when idle. After completing a task:
 ~/zylos/.claude/skills/scheduler/scripts/cli.js done <task-id>
 ```
 
-## Anthropic Skills Specification
-
-Skills follow the [Agent Skills](https://agentskills.io) open standard. Reference: https://code.claude.com/docs/en/skills
-
-### Directory Structure
-
-```
-my-skill/
-├── SKILL.md           # Main instructions (required)
-├── package.json       # {"type":"module"} for ESM
-├── scripts/           # Implementation scripts
-│   └── <skill>.js
-├── templates/         # Optional: templates for Claude to fill
-├── examples/          # Optional: example outputs
-└── references/        # Optional: detailed documentation
-```
-
-### SKILL.md Frontmatter Fields
-
-```yaml
----
-name: skill-name              # Optional, defaults to directory name
-description: What and when    # Recommended, helps Claude decide when to use
-argument-hint: [args]         # Optional, hint for expected arguments
-disable-model-invocation: true  # Prevents Claude from auto-invoking (user only)
-user-invocable: false         # Hides from /menu (Claude only, background knowledge)
-allowed-tools: Read, Grep     # Tools Claude can use without permission
-model: sonnet                 # Model to use when skill is active
-context: fork                 # Run in subagent (isolated context)
-agent: Explore                # Agent type when context: fork
-hooks: ...                    # Skill lifecycle hooks
----
-```
-
-### Invocation Control
-
-| Frontmatter                      | User can invoke | Claude can invoke |
-| :------------------------------- | :-------------- | :---------------- |
-| (default)                        | Yes             | Yes               |
-| `disable-model-invocation: true` | Yes             | No                |
-| `user-invocable: false`          | No              | Yes               |
-
-### Storage Locations
-
-| Location | Path | Applies to |
-| :------- | :--- | :--------- |
-| Personal | `~/.claude/skills/<skill-name>/SKILL.md` | All user's projects |
-| Project  | `.claude/skills/<skill-name>/SKILL.md` | This project only |
-
-### SKILL.md Format
-
-```markdown
----
-name: skill-name
-description: Use when [trigger condition].
----
-
-# Skill Name
-
-[Brief description]
-
-## When to Use
-
-- [Trigger condition 1]
-- [Trigger condition 2]
-
-## How to Use
-
-[Usage instructions with code examples]
-
-## How It Works
-
-[Technical explanation]
-```
-
 ## Available Skills
 
 Skills are located in `~/zylos/.claude/skills/`. **Read the SKILL.md in each directory for detailed usage.**
@@ -187,6 +112,9 @@ Graceful restart with memory save.
 
 ### upgrade-claude/
 Upgrade Claude Code to latest version.
+
+### create-skill/
+Create new skills following the Agent Skills specification. Use `/create-skill <name>` to scaffold a new skill.
 
 ### zylos-memory/ (C3)
 Persistent memory system with Inside Out architecture. Runs as a forked subagent via `/zylos-memory`.
