@@ -5,97 +5,79 @@ description: Web server for console and file sharing. Core C6 component.
 
 # HTTP Layer (C6)
 
-Caddy-based web server providing:
-- Web Console hosting
+User-space Caddy web server providing:
+- HTTPS with automatic Let's Encrypt certificates
 - File sharing via `~/zylos/http/public/`
 - Health check endpoint
+- Component reverse proxy routes (auto-configured by `zylos add`)
+
+## Architecture
+
+| Component | Path |
+|-----------|------|
+| Binary | `~/zylos/bin/caddy` |
+| Caddyfile | `~/zylos/http/Caddyfile` |
+| Public files | `~/zylos/http/public/` |
+| Access log | `~/zylos/http/caddy-access.log` |
+| Domain config | `~/zylos/.zylos/config.json` |
+
+Caddy runs as a PM2 service (user-space, no sudo needed for daily operations).
 
 ## Setup
 
-```bash
-node ~/zylos/.claude/skills/http/scripts/setup-caddy.js
-```
+Caddy is set up automatically during `zylos init`:
+1. Downloads Caddy binary to `~/zylos/bin/caddy`
+2. Prompts for domain, stores in `config.json`
+3. Generates Caddyfile
+4. Sets port binding capability (`setcap`, one-time sudo)
+5. Starts via PM2
 
-This will:
-1. Read domain from `~/zylos/.env`
-2. Generate Caddyfile
-3. Configure and start Caddy
+To re-run setup: `zylos init`
 
 ## Endpoints
 
 | Path | Description |
 |------|-------------|
 | `/` | File listing or index.html |
-| `/console/` | Web Console interface |
-| `/*.md` | Markdown documents |
+| `/*.md` | Markdown documents (served as plain text) |
 | `/health` | Health check (returns "OK") |
+| `/console/*` | Web Console interface (if web-console component active) |
 
 ## File Sharing
 
 Place files in `~/zylos/http/public/` to share:
 
 ```bash
-# Share a document
 cp document.md ~/zylos/http/public/
-chmod 644 ~/zylos/http/public/document.md
-
 # Access at: https://your.domain.com/document.md
 ```
 
-## Configuration
+## Component Routes
 
-Domain is read from `~/zylos/.env`:
-```
-DOMAIN=your.domain.com
-```
-
-## Caddyfile Template
-
-Located at `~/zylos/.claude/skills/http/Caddyfile.template`
-
-Generated config goes to `/etc/caddy/Caddyfile`
-
-## Adding Custom Routes
-
-To add routes for other services, edit `/etc/caddy/Caddyfile`:
-
-```bash
-sudo nano /etc/caddy/Caddyfile
-```
-
-Add a `handle` block for your service:
-
-```caddy
-    # My Service (port 8080)
-    handle /myservice/* {
-        uri strip_prefix /myservice
-        reverse_proxy localhost:8080
-    }
-```
-
-Then reload Caddy:
-
-```bash
-sudo systemctl reload caddy
-```
-
-## HTTPS
-
-Caddy handles HTTPS automatically via Let's Encrypt.
-
-Requirements:
-- Domain DNS pointing to server
-- Ports 80 and 443 open
+Components declare `http_routes` in SKILL.md frontmatter. Routes are auto-managed via marker blocks in the Caddyfile by `zylos add/upgrade/remove`.
 
 ## Troubleshooting
 
 ```bash
 # Check Caddy status
-sudo systemctl status caddy
+pm2 logs caddy
 
-# View logs
-sudo journalctl -u caddy -f
+# Validate Caddyfile
+~/zylos/bin/caddy validate --config ~/zylos/http/Caddyfile --adapter caddyfile
+
+# Reload after manual Caddyfile edits
+pm2 reload caddy
 
 # Access logs
 tail -f ~/zylos/http/caddy-access.log
 ```
+
+## Port Binding
+
+On Linux, Caddy needs `CAP_NET_BIND_SERVICE` to bind ports 80/443:
+
+```bash
+sudo setcap cap_net_bind_service=+ep ~/zylos/bin/caddy
+```
+
+This is set automatically during `zylos init`. If the binary is replaced (e.g., after an update), re-run the command above.

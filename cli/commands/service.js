@@ -67,7 +67,7 @@ export function showLogs(args) {
   const logFiles = {
     activity: path.join(ZYLOS_DIR, 'activity-log.txt'),
     scheduler: path.join(ZYLOS_DIR, 'scheduler-log.txt'),
-    caddy: path.join(ZYLOS_DIR, 'logs', 'caddy-access.log'),
+    caddy: path.join(ZYLOS_DIR, 'http', 'caddy-access.log'),
   };
 
   if (logType === 'pm2') {

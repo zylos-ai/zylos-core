@@ -1,38 +1,26 @@
-# Zylos C6 HTTP Layer - Caddyfile Template
-# Replace {DOMAIN} with your actual domain before deploying
-#
-# Features:
-# - Static file serving from ~/zylos/public/
-# - Markdown files served as plain text
-# - Web Console proxy (optional)
+# Zylos Caddyfile Template
+# Used by `zylos init` to generate ~/zylos/http/Caddyfile
+# Replace {DOMAIN} and {ZYLOS_DIR} with actual values
 
 {DOMAIN} {
-    # Root directory for public files
     root * {ZYLOS_DIR}/http/public
 
-    # Enable file server with directory browsing disabled
     file_server {
         hide .git .env *.db *.json
     }
 
-    # Serve raw markdown files
     @markdown path *.md
     handle @markdown {
         header Content-Type "text/plain; charset=utf-8"
     }
 
-    # Health check endpoint
     handle /health {
         respond "OK" 200
     }
 
-    # Web Console
-    handle /console/* {
-        uri strip_prefix /console
-        reverse_proxy localhost:3456
-    }
+    # Component routes are auto-inserted here by `zylos add`
+    # using marker comments: # BEGIN/END zylos-component:<name>
 
-    # Logging
     log {
         output file {ZYLOS_DIR}/http/caddy-access.log {
             roll_size 10mb
