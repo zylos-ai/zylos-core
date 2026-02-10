@@ -28,7 +28,7 @@ Zylos gives it a life. Memory that survives restarts. A scheduler that works whi
 
 ## Quick Start
 
-**Prerequisites:** Node.js >= 20, a Linux server (or Mac), and a [Claude](https://claude.ai) subscription.
+**Prerequisites:** Git, Node.js >= 20, a Linux server (or Mac), and a [Claude](https://claude.ai) subscription.
 
 ```bash
 # Install (--install-links required for GitHub install; will be published to npm soon)
