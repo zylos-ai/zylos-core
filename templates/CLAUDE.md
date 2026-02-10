@@ -115,32 +115,6 @@ Skills are located in `~/zylos/.claude/skills/`. Claude auto-discovers skill des
 | http | C6 | |
 | component-management | | **Read SKILL.md before any install/upgrade/uninstall** |
 
-<!-- zylos-managed:component-management:begin -->
-## Component Management
-
-Use `zylos` CLI to manage components.
-
-**IMPORTANT: Before ANY component operation, read `~/zylos/.claude/skills/component-management/SKILL.md`.**
-It contains the full workflow for each operation mode (Claude session and C4/IM channels).
-
-Key principles:
-- Always confirm with user before install/upgrade/uninstall
-- Guide users interactively through configuration
-- For C4/IM messages: upgrades ALWAYS require two-step confirmation (check first, then confirm)
-- Check component's SKILL.md for config after installation
-
-Quick reference:
-```bash
-zylos list                          # List installed components
-zylos search <keyword>              # Search available components
-zylos add <name>                    # Install component
-zylos info <name>                   # Show component details
-zylos upgrade <component> --check   # Check for updates (ALWAYS do this first)
-```
-
-**For upgrade workflow details, always read the component-management SKILL.md first.**
-<!-- zylos-managed:component-management:end -->
-
 ## Data Directories
 
 User data is in `~/zylos/`:
