@@ -1,0 +1,13 @@
+# Development files
+.git/
+.github/
+.DS_Store
+
+# Logs and databases
+*.log
+*.db
+*.db-shm
+*.db-wal
+
+# Environment
+.env

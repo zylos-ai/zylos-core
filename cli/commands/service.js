@@ -66,30 +66,43 @@ export function showLogs(args) {
 
   const logFiles = {
     activity: path.join(ZYLOS_DIR, 'activity-log.txt'),
-    scheduler: path.join(ZYLOS_DIR, 'scheduler-log.txt'),
     caddy: path.join(ZYLOS_DIR, 'http', 'caddy-access.log'),
   };
 
+  // pm2 logs (all services)
   if (logType === 'pm2') {
     const pm2 = spawn('pm2', ['logs', '--lines', '50'], { stdio: 'inherit' });
     pm2.on('close', () => process.exit(0));
     return;
   }
 
+  // Known log files
   const logFile = logFiles[logType];
-  if (!logFile) {
-    console.error(`Unknown log type: ${logType}`);
-    console.log('Available: activity, scheduler, caddy, pm2');
-    process.exit(1);
+  if (logFile) {
+    if (!fs.existsSync(logFile)) {
+      console.log(`Log file not found: ${logFile}`);
+      process.exit(1);
+    }
+    const tail = spawn('tail', ['-f', '-n', '50', logFile], { stdio: 'inherit' });
+    tail.on('close', () => process.exit(0));
+    return;
   }
 
-  if (!fs.existsSync(logFile)) {
-    console.log(`Log file not found: ${logFile}`);
-    process.exit(1);
-  }
+  // Try as PM2 service name
+  try {
+    const pm2Output = execSync('pm2 jlist 2>/dev/null', { encoding: 'utf8' });
+    const processes = JSON.parse(pm2Output);
+    const match = processes.find(p => p.name === logType);
+    if (match) {
+      const pm2 = spawn('pm2', ['logs', logType, '--lines', '50'], { stdio: 'inherit' });
+      pm2.on('close', () => process.exit(0));
+      return;
+    }
+  } catch { /* pm2 not available */ }
 
-  const tail = spawn('tail', ['-f', '-n', '50', logFile], { stdio: 'inherit' });
-  tail.on('close', () => process.exit(0));
+  console.error(`Unknown log type: ${logType}`);
+  console.log('Available: activity, caddy, pm2, or any PM2 service name');
+  process.exit(1);
 }
 
 export function startServices() {
