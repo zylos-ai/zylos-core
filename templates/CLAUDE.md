@@ -99,43 +99,21 @@ The scheduler may send you tasks when idle. After completing a task:
 
 ## Available Skills
 
-Skills are located in `~/zylos/.claude/skills/`. **Read the SKILL.md in each directory for detailed usage.**
+Skills are located in `~/zylos/.claude/skills/`. Claude auto-discovers skill descriptions; below are only supplementary notes.
 
-### check-context/
-Use when the user asks about current context or token usage.
-
-### activity-monitor/ (C2)
-Auto-restarts Claude if it crashes (runs via PM2).
-
-### restart-claude/
-Graceful restart with memory save.
-
-### upgrade-claude/
-Upgrade Claude Code to latest version.
-
-### create-skill/
-Create new skills following the Agent Skills specification. Use `/create-skill <name>` to scaffold a new skill.
-
-### zylos-memory/ (C3)
-Persistent memory system with Inside Out architecture. Runs as a forked subagent via `/zylos-memory`.
-
-### comm-bridge/ (C4)
-Communication gateway for Telegram, Lark, and other channels.
-
-### scheduler/ (C5)
-Task scheduling system:
-- **cli.js** - Manage scheduled tasks (bin: `scheduler-cli`)
-- After completing a task: `~/zylos/.claude/skills/scheduler/scripts/cli.js done <task-id>`
-
-### web-console/
-Built-in web interface for monitoring.
-
-### http/
-Web server configuration (Caddy).
-
-### component-management/
-Guidelines for installing, upgrading, and managing zylos components.
-**Read this before any component install/upgrade/uninstall operation.**
+| Skill | Component | Notes |
+|-------|-----------|-------|
+| activity-monitor | C2 | PM2 service, not directly invoked |
+| check-context | | |
+| restart-claude | | |
+| upgrade-claude | | |
+| create-skill | | `/create-skill <name>` to scaffold |
+| zylos-memory | C3 | Runs as forked subagent via `/zylos-memory` |
+| comm-bridge | C4 | |
+| scheduler | C5 | CLI: `scheduler-cli list\|add\|done` |
+| web-console | C4 channel | |
+| http | C6 | |
+| component-management | | **Read SKILL.md before any install/upgrade/uninstall** |
 
 <!-- zylos-managed:component-management:begin -->
 ## Component Management
