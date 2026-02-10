@@ -1,136 +1,137 @@
-# Zylos Core
+<div align="center">
 
-Autonomous AI Agent Infrastructure - the minimal viable system for running a self-maintaining Claude agent.
+# Zylos
 
-## Quick Install
+### Give your AI a life.
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/zylos-ai/zylos-core/main/install.sh | bash
-```
+*Powered by Claude Code*
 
-## What's Included
+[![Stars](https://img.shields.io/github/stars/zylos-ai/zylos-core?style=flat)](https://github.com/zylos-ai/zylos-core)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Discord](https://img.shields.io/discord/PLACEHOLDER)](https://discord.gg/zylos)
+[![Website](https://img.shields.io/badge/website-zylos.ai-blue)](https://zylos.ai)
+[![Built by Coco](https://img.shields.io/badge/Built%20by-Coco-orange)](https://coco.xyz)
 
-### Core Components (C1-C6)
+</div>
 
-| Component | Purpose | Directory |
-|-----------|---------|-----------|
-| C1 | Claude Runtime | (via Claude Code) |
-| C2 | Self-Maintenance | `skills/self-maintenance/` |
-| C3 | Memory System | `skills/zylos-memory/` |
-| C4 | Communication Bridge | `skills/comm-bridge/` |
-| C4+ | Web Console | `skills/web-console/` |
-| C5 | Task Scheduler | `skills/scheduler/` |
-| C6 | HTTP Layer | `skills/http/` |
+---
 
-### Architecture
+Claude Code is a genius — but it wakes up with amnesia every session. No memory of yesterday, no way to reach you, no ability to act on its own.
 
-```
-┌─────────────────────────────────────────────────────┐
-│                    CORE LAYER                        │
-│  ┌──────────┐ ┌──────────┐ ┌──────────┐            │
-│  │ Memory   │ │   C4     │ │Scheduler │            │
-│  │   C3     │ │CommBridge│ │   C5     │            │
-│  └──────────┘ └──────────┘ └──────────┘            │
-│                     │                               │
-│              ┌──────────┐                          │
-│              │ Activity │ ← Guardian               │
-│              │ Monitor  │                          │
-│              └──────────┘                          │
-└─────────────────────────────────────────────────────┘
-```
+Zylos gives it a life. Memory that survives restarts. A scheduler that works while you sleep. Communication through Telegram, Lark, or a web console. Self-maintenance that keeps everything running. And because Claude Code can program, it can evolve — building new skills, integrating new services, growing alongside you.
 
-### CLI Commands
+---
+
+## Quick Start
 
 ```bash
-zylos status    # Show system status
-zylos logs      # View logs (activity|scheduler|caddy|pm2)
-zylos start     # Start services
-zylos stop      # Stop services
-zylos restart   # Restart services
+npm install -g zylos
+zylos init
 ```
 
-## Directory Structure
+> TODO: Hongyun to complete this section with full setup guide.
 
-### Repository Structure
+---
 
+## Features
+
+### One AI, One Consciousness
+
+Most agent frameworks isolate sessions per channel — your AI on Telegram doesn't know what you said on Slack. Zylos is agent-centric: your AI is one person across every channel. The C4 communication bridge routes all messages through a single gateway — one conversation, one memory, one personality. Every message persisted to SQLite and fully queryable.
+
+### Your Context, Guaranteed
+
+Other frameworks lose your AI's memory during context compaction — silently, without warning. Zylos prevents this with a two-step safeguard: when context reaches 75%, the system automatically saves all memory before compaction runs. Five-layer Inside Out memory (identity → state → references → sessions → archive) ensures the AI always knows what to keep and what to compress. Your AI never wakes up with amnesia.
+
+### Self-Healing by Default
+
+No third-party monitoring tools needed. Zylos includes native crash recovery, heartbeat liveness probes, health monitoring, context window management, and automatic upgrades — all built in. Your AI detects its own problems and fixes them. It stays alive while you sleep.
+
+### $20/month, Not $3,600
+
+Other frameworks charge per API token. Community reports show monthly bills of $500–$3,600 for always-on agents. Zylos runs on your Claude subscription — flat rate, no per-token billing. Same AI capabilities, a fraction of the cost.
+
+### Powered by Claude Code
+
+Zylos builds on Claude Code — Anthropic's official AI agent runtime. When Anthropic ships new capabilities like agent teams, your AI gets them automatically. And because Claude Code can program, your AI writes new skills, integrates services, and evolves with your needs.
+
+---
+
+## Architecture
+
+```mermaid
+graph TB
+    subgraph Channels["📡 Communication Channels"]
+        TG["Telegram"]
+        LK["Lark"]
+        WC["Web Console"]
+    end
+
+    subgraph Zylos["🧬 Zylos — The Life System"]
+        C4["C4 Comm Bridge<br/>(unified gateway · SQLite audit)"]
+        MEM["Memory<br/>(Inside Out architecture)"]
+        SCH["Scheduler<br/>(autonomous task dispatch)"]
+        AM["Activity Monitor<br/>(guardian · heartbeat · auto-recovery)"]
+        HTTP["HTTP Layer<br/>(Caddy · file sharing · HTTPS)"]
+    end
+
+    subgraph Brain["🧠 Claude Code — The Brain"]
+        CC["Claude Code<br/>(in tmux session)"]
+    end
+
+    TG & LK & WC --> C4
+    C4 <--> CC
+    MEM <--> CC
+    SCH --> CC
+    AM --> CC
+    HTTP <--> CC
 ```
-zylos-core/
-├── install.sh              # One-line install entry point
-├── cli/                    # CLI commands
-│   └── zylos.js
-├── skills/                 # Skill implementations
-│   ├── self-maintenance/   # C2
-│   ├── zylos-memory/       # C3
-│   ├── comm-bridge/        # C4
-│   ├── web-console/        # C4 built-in channel
-│   ├── scheduler/          # C5
-│   └── http/               # C6
-├── templates/              # Installation templates
-│   ├── .env.example
-│   ├── memory/
-│   └── CLAUDE.md
-└── docs/
+
+| Component | Role | Key Tech |
+|-----------|------|----------|
+| C4 Comm Bridge | Unified message gateway with audit trail | SQLite, priority queue |
+| Memory | Persistent identity and context across restarts | Inside Out tiered architecture |
+| Scheduler | Autonomous task dispatch while you are away | Cron, NL input, idle-gating |
+| Activity Monitor | Crash recovery, heartbeat, health checks | PM2, multi-layer protection |
+| HTTP Layer | Web access, file sharing, component routes | Caddy, auto-HTTPS |
+
+---
+
+## Communication Channels
+
+### Built-in
+- **Web Console** — Browser-based chat interface. No external accounts needed. Included with `zylos init`.
+
+### Official Channels
+Install with one command:
+```bash
+zylos add telegram
+zylos add lark
 ```
 
-### After Installation
+### Build Your Own
+All channels connect through the C4 communication bridge. To add a new channel (Slack, Discord, WhatsApp, etc.), implement the C4 protocol — a simple HTTP interface that pushes messages into the unified gateway. Your custom channel gets the same unified session, audit trail, and memory as every other channel.
 
-```
-~/zylos/.claude/skills/     # Skill code (upgradeable, project-level)
-├── self-maintenance/       # Core: C2
-│   └── scripts/
-├── memory/                 # Core: C3
-├── comm-bridge/            # Core: C4
-│   └── scripts/
-├── web-console/            # Core: C4+
-│   └── scripts/
-├── scheduler/              # Core: C5
-│   └── scripts/
-├── http/                   # Core: C6
-│   └── scripts/
-├── telegram/               # Optional: Telegram channel
-│   └── scripts/
-└── lark/                   # Optional: Lark channel
-    └── scripts/
+---
 
-~/zylos/                    # User data (preserved)
-├── .env                    # Configuration
-├── memory/                 # Memory files
-├── public/                 # Shared files
-├── logs/                   # Log files
-├── scheduler/              # Scheduler DB
-├── comm-bridge/            # C4 DB
-├── telegram/               # Telegram config/data
-├── lark/                   # Lark config/data
-└── CLAUDE.md               # Claude guidance
+## CLI
+
+```bash
+zylos init                    # Set up Zylos environment
+zylos status                  # Check running services
+zylos logs [service]          # View service logs
+zylos add <component>         # Install a channel or capability
+zylos upgrade <component>     # Upgrade a component
+zylos list                    # List installed components
+zylos search [keyword]        # Search component registry
 ```
 
-## Optional Channels
+---
 
-Channels are skills that implement the C4 communication interface. Install them to `~/zylos/.claude/skills/`:
+## <img src="https://coco.xyz/logo.png" width="28" /> Built by Coco
 
-- [zylos-telegram](https://github.com/zylos-ai/zylos-telegram) - Telegram integration
-- [zylos-lark](https://github.com/zylos-ai/zylos-lark) - Lark/Feishu integration
-- [zylos-discord](https://github.com/zylos-ai/zylos-discord) - Discord integration
+Zylos is the open-source core of [Coco](https://coco.xyz) — the AI employee platform.
 
-Each channel skill provides `send.js` (Node.js) for outgoing messages. Channel integrations store config in `~/zylos/<channel>/`.
+We built Zylos because we needed it ourselves: a reliable infrastructure to keep AI running 24/7 for real work. Everything in Zylos is battle-tested in production at Coco, serving teams that depend on AI employees every day.
 
-## Requirements
-
-- Node.js 18+
-- PM2 (auto-installed)
-- Claude Code (auto-installed)
-
-## Key Design Principles
-
-1. **Local-first Security** - No exposed network ports
-2. **Auditability** - All conversations logged to SQLite
-3. **Crash Recovery** - Checkpoint mechanism for session continuity
-4. **Simplicity** - Minimal code, easy to understand and maintain
-
-## Documentation
-
-See [docs/](./docs/) for detailed documentation.
-
-## License
-
-MIT License - see [LICENSE](./LICENSE)
+Want a managed experience? [Coco](https://coco.xyz) gives you a ready-to-work AI employee — with persistent memory, multi-channel communication, and skill packages — deployed in 5 minutes.
