@@ -5,6 +5,14 @@ All notable changes to zylos-core will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.0-beta.26] - 2026-02-10
+
+### Fixed
+- **PATH for non-interactive shells**: `ensureBinInPath()` now writes to `~/.profile` in addition to shell rc file, fixing `command not found` for component CLIs (e.g. `zylos-browser`) when run from Claude Code or other non-interactive bash processes (Ubuntu's `.bashrc` has an early-exit guard that skips PATH setup for non-interactive shells)
+- **Component version detection**: `zylos add` no longer falls back to `0.0.0` when installing from a branch without a tag — reads version from SKILL.md frontmatter or package.json
+
+---
+
 ## [0.1.0-beta.25] - 2026-02-10
 
 ### Added

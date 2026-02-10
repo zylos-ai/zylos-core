@@ -121,31 +121,46 @@ function ensureBinInPath() {
     return false;
   }
 
-  // Detect shell rc file
-  const shell = process.env.SHELL || '/bin/bash';
   const home = process.env.HOME;
+  const marker = '# zylos-managed: bin PATH';
+  const snippet = `\n${marker}\nexport PATH="${BIN_DIR}:$PATH"\n`;
+
+  // Write to ~/.profile (sourced by login shells AND non-interactive shells
+  // via .profile → .bashrc chain). On Ubuntu, .bashrc has an early-exit guard
+  // for non-interactive shells, so appending to .bashrc alone won't work for
+  // tools like Claude Code that spawn non-interactive bash processes.
+  const profileFile = path.join(home, '.profile');
+  let profileUpdated = false;
+  try {
+    const content = fs.readFileSync(profileFile, 'utf8');
+    if (!content.includes(marker)) {
+      fs.appendFileSync(profileFile, snippet);
+      profileUpdated = true;
+    }
+  } catch {
+    fs.appendFileSync(profileFile, snippet);
+    profileUpdated = true;
+  }
+
+  // Also write to shell rc file for interactive shells (zsh uses .zshrc,
+  // bash interactive shells source .bashrc after the guard)
+  const shell = process.env.SHELL || '/bin/bash';
   let rcFile;
   if (shell.endsWith('/zsh')) {
     rcFile = path.join(home, '.zshrc');
   } else if (shell.endsWith('/fish')) {
-    // fish uses a different syntax; skip auto-config
-    return false;
+    return profileUpdated;
   } else {
-    // bash or unknown — use .bashrc
     rcFile = path.join(home, '.bashrc');
   }
 
-  // Check if already configured (marker comment)
-  const marker = '# zylos-managed: bin PATH';
   try {
     const content = fs.readFileSync(rcFile, 'utf8');
-    if (content.includes(marker)) return false;
+    if (content.includes(marker)) return profileUpdated;
   } catch {
     // rc file doesn't exist — we'll create/append
   }
 
-  // Append PATH export
-  const snippet = `\n${marker}\nexport PATH="${BIN_DIR}:$PATH"\n`;
   fs.appendFileSync(rcFile, snippet);
   return true;
 }
