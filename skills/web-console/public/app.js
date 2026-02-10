@@ -374,8 +374,9 @@ class ZylosConsole {
     const empty = document.createElement('div');
     empty.className = 'empty-state';
     empty.innerHTML = `
-      <h2>Welcome to Zylos Console</h2>
-      <p>Start a conversation with Claude</p>
+      <div class="empty-avatar"><img src="logo.png" alt="Zylos"></div>
+      <h2>Welcome to Zylos</h2>
+      <p>Start a conversation</p>
     `;
     this.messagesContainer.appendChild(empty);
   }
@@ -395,6 +396,16 @@ class ZylosConsole {
   }
 }
 
+function showLogoutButton(basePath) {
+  const btn = document.getElementById('logout-btn');
+  if (!btn) return;
+  btn.style.display = '';
+  btn.addEventListener('click', async () => {
+    await fetch(`${basePath}/api/logout`, { method: 'POST' });
+    window.location.reload();
+  });
+}
+
 /**
  * Auth guard - check if login is required before showing chat
  */
@@ -412,6 +423,7 @@ async function checkAuth() {
     if (!auth.required || auth.authenticated) {
       // No password set, or already authenticated
       chatScreen.style.display = '';
+      if (auth.required) showLogoutButton(basePath);
       new ZylosConsole();
       return;
     }
@@ -435,6 +447,7 @@ async function checkAuth() {
       if (result.success) {
         loginScreen.style.display = 'none';
         chatScreen.style.display = '';
+        showLogoutButton(basePath);
         new ZylosConsole();
       } else {
         loginError.textContent = result.error || 'Login failed';

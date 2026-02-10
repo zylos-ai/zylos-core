@@ -60,7 +60,7 @@ function isAuthenticated(req) {
 
 function authMiddleware(req, res, next) {
   // Auth endpoints are always accessible
-  if (req.path === '/api/auth') return next();
+  if (req.path === '/auth') return next();
   if (!isAuthenticated(req)) {
     return res.status(401).json({ error: 'Authentication required' });
   }
@@ -399,6 +399,16 @@ app.post('/api/auth', (req, res) => {
   const token = crypto.randomBytes(32).toString('hex');
   sessions.add(token);
   res.setHeader('Set-Cookie', `wc_session=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=86400`);
+  res.json({ success: true });
+});
+
+/**
+ * Logout
+ */
+app.post('/api/logout', (req, res) => {
+  const cookies = parseCookies(req.headers.cookie);
+  if (cookies.wc_session) sessions.delete(cookies.wc_session);
+  res.setHeader('Set-Cookie', 'wc_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0');
   res.json({ success: true });
 });
 

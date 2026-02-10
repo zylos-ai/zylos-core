@@ -5,19 +5,21 @@
 }
 
 :root {
-  --bg-primary: #1a1a2e;
-  --bg-secondary: #16213e;
-  --bg-tertiary: #0f3460;
-  --text-primary: #eaeaea;
-  --text-secondary: #a0a0a0;
-  --accent: #e94560;
-  --accent-hover: #ff6b6b;
-  --user-msg-bg: #0f3460;
-  --claude-msg-bg: #16213e;
-  --border-color: #2a2a4a;
-  --success: #4ade80;
-  --warning: #fbbf24;
-  --error: #ef4444;
+  --bg-primary: #0f1923;
+  --bg-secondary: #152231;
+  --bg-tertiary: #1a2d40;
+  --text-primary: #e8edf2;
+  --text-secondary: #7a8fa3;
+  --accent: #4dd9d0;
+  --accent-hover: #6fe8e0;
+  --accent-glow: rgba(77, 217, 208, 0.15);
+  --user-msg-bg: #1a3a4a;
+  --claude-msg-bg: #18283a;
+  --border-color: #243447;
+  --success: #4dd9d0;
+  --warning: #f0c050;
+  --error: #ef5f5f;
+  --leaf-green: #7cc98e;
 }
 
 body {
@@ -40,15 +42,34 @@ header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 1rem 1.5rem;
-  background-color: var(--bg-secondary);
+  padding: 0.875rem 1.5rem;
+  background: linear-gradient(135deg, var(--bg-secondary) 0%, #142a3a 100%);
   border-bottom: 1px solid var(--border-color);
+}
+
+.header-brand {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+}
+
+.header-logo {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
 }
 
 header h1 {
   font-size: 1.25rem;
   font-weight: 600;
-  color: var(--text-primary);
+  color: var(--accent);
+  letter-spacing: 0.02em;
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
 }
 
 .status {
@@ -57,6 +78,24 @@ header h1 {
   gap: 0.5rem;
   font-size: 0.875rem;
   color: var(--text-secondary);
+}
+
+.logout-btn {
+  background: none;
+  border: 1px solid var(--border-color);
+  border-radius: 0.5rem;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 0.375rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.2s, border-color 0.2s;
+}
+
+.logout-btn:hover {
+  color: var(--accent);
+  border-color: var(--accent);
 }
 
 .status-dot {
@@ -77,7 +116,7 @@ header h1 {
 }
 
 .status-dot.busy {
-  background-color: var(--accent);
+  background-color: var(--warning);
 }
 
 @keyframes pulse {
@@ -112,8 +151,9 @@ header h1 {
 
 .message.user {
   align-self: flex-end;
-  background-color: var(--user-msg-bg);
+  background: linear-gradient(135deg, var(--user-msg-bg) 0%, #1a4555 100%);
   border-bottom-right-radius: 0.25rem;
+  border: 1px solid rgba(77, 217, 208, 0.1);
 }
 
 .message.claude {
@@ -121,6 +161,24 @@ header h1 {
   background-color: var(--claude-msg-bg);
   border-bottom-left-radius: 0.25rem;
   border: 1px solid var(--border-color);
+}
+
+.message.claude::before {
+  content: '';
+  display: inline-block;
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background-color: var(--accent);
+  box-shadow: 0 0 6px var(--accent);
+  margin-right: 0;
+  position: absolute;
+  top: 0.875rem;
+  left: -8px;
+}
+
+.message.claude {
+  position: relative;
 }
 
 .message .meta {
@@ -162,6 +220,7 @@ header h1 {
 
 #message-input:focus {
   border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-glow);
 }
 
 #message-input::placeholder {
@@ -184,6 +243,7 @@ header h1 {
 
 #send-button:hover {
   background-color: var(--accent-hover);
+  box-shadow: 0 0 12px var(--accent-glow);
 }
 
 #send-button:active {
@@ -206,10 +266,32 @@ header h1 {
   padding: 2rem;
 }
 
+.empty-avatar {
+  width: 96px;
+  height: 96px;
+  border-radius: 50%;
+  background: radial-gradient(circle, #1a3a4a 0%, var(--bg-primary) 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 3rem;
+  color: var(--accent);
+  margin-bottom: 1.25rem;
+  border: 2px solid var(--border-color);
+  box-shadow: 0 0 30px var(--accent-glow);
+  overflow: hidden;
+}
+
+.empty-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
 .empty-state h2 {
   font-size: 1.5rem;
   margin-bottom: 0.5rem;
-  color: var(--text-primary);
+  color: var(--accent);
 }
 
 .empty-state p {
@@ -240,21 +322,44 @@ header h1 {
   align-items: center;
   justify-content: center;
   height: 100vh;
-  background-color: var(--bg-primary);
+  background: radial-gradient(ellipse at 50% 40%, #142a3a 0%, var(--bg-primary) 70%);
 }
 
 .login-box {
   text-align: center;
-  padding: 2rem;
-  background-color: var(--bg-secondary);
+  padding: 2.5rem 2rem 2rem;
+  background: linear-gradient(160deg, var(--bg-secondary) 0%, #142a3a 100%);
   border: 1px solid var(--border-color);
-  border-radius: 1rem;
-  width: 320px;
+  border-radius: 1.25rem;
+  width: 340px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3), 0 0 60px var(--accent-glow);
+}
+
+.login-avatar {
+  width: 80px;
+  height: 80px;
+  margin: 0 auto 1rem;
+  border-radius: 50%;
+  background: radial-gradient(circle, #1a3a4a 0%, var(--bg-primary) 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 2.5rem;
+  border: 2px solid var(--border-color);
+  box-shadow: 0 0 20px var(--accent-glow);
+  overflow: hidden;
+}
+
+.login-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 .login-box h1 {
   font-size: 1.5rem;
-  margin-bottom: 0.5rem;
+  margin-bottom: 0.25rem;
+  color: var(--accent);
 }
 
 .login-box p {
@@ -267,32 +372,36 @@ header h1 {
   width: 100%;
   padding: 0.75rem 1rem;
   border: 1px solid var(--border-color);
-  border-radius: 0.5rem;
+  border-radius: 0.75rem;
   background-color: var(--bg-tertiary);
   color: var(--text-primary);
   font-size: 1rem;
   outline: none;
   margin-bottom: 1rem;
+  transition: border-color 0.2s, box-shadow 0.2s;
 }
 
 .login-box input:focus {
   border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-glow);
 }
 
 .login-box button {
   width: 100%;
   padding: 0.75rem;
   border: none;
-  border-radius: 0.5rem;
+  border-radius: 0.75rem;
   background-color: var(--accent);
-  color: white;
+  color: #0f1923;
   font-size: 1rem;
+  font-weight: 600;
   cursor: pointer;
-  transition: background-color 0.2s;
+  transition: background-color 0.2s, box-shadow 0.2s;
 }
 
 .login-box button:hover {
   background-color: var(--accent-hover);
+  box-shadow: 0 0 16px var(--accent-glow);
 }
 
 .login-error {
