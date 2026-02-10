@@ -166,6 +166,23 @@ function ensureBinInPath() {
 }
 
 /**
+ * Check if Claude Code is authenticated.
+ * @returns {boolean}
+ */
+function isClaudeAuthenticated() {
+  try {
+    const result = spawnSync('claude', ['auth', 'status'], {
+      stdio: 'pipe',
+      encoding: 'utf8',
+      timeout: 10000,
+    });
+    return result.status === 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Check if Claude bypass permissions needs first-time acceptance.
  * Returns true if bypass is enabled and hasn't been accepted yet.
  */
@@ -805,22 +822,38 @@ export async function initCommand(args) {
     }
   }
 
-  // Step 6: Claude auth check
+  // Step 6: Claude auth check + guided login
+  let claudeAuthenticated = false;
   if (commandExists('claude')) {
-    try {
-      const result = spawnSync('claude', ['auth', 'status'], {
-        stdio: 'pipe',
-        encoding: 'utf8',
-        timeout: 10000,
-      });
-      if (result.status === 0) {
-        console.log('  ✓ Claude Code authenticated');
+    claudeAuthenticated = isClaudeAuthenticated();
+    if (claudeAuthenticated) {
+      console.log('  ✓ Claude Code authenticated');
+    } else {
+      console.log('  ⚠ Claude Code not authenticated');
+      if (!skipConfirm) {
+        const doAuth = await promptYesNo('  Authenticate now? [Y/n]: ', true);
+        if (doAuth) {
+          console.log('  Running claude auth...\n');
+          try {
+            spawnSync('claude', ['auth'], {
+              stdio: 'inherit',
+              timeout: 300000, // 5 min for auth flow
+            });
+          } catch { /* user may Ctrl+C */ }
+          // Re-check after auth attempt
+          claudeAuthenticated = isClaudeAuthenticated();
+          if (claudeAuthenticated) {
+            console.log('\n  ✓ Claude Code authenticated');
+          } else {
+            console.log('\n  ⚠ Authentication not completed.');
+            console.log('    Run "claude auth" then "zylos init" again to finish setup.');
+          }
+        } else {
+          console.log('  Skipped. Run "claude auth" then "zylos init" again to finish setup.');
+        }
       } else {
-        console.log('  ⚠ Claude Code not authenticated');
-        console.log('    Run "claude auth" to authenticate after init.');
+        console.log('    Run "claude auth" then "zylos init" again to finish setup.');
       }
-    } catch {
-      console.log('  ⚠ Could not check Claude Code auth status');
     }
   }
 
@@ -861,10 +894,14 @@ export async function initCommand(args) {
       console.log('\nNo services to start.');
     }
 
-    if (needsBypassAcceptance()) {
+    if (claudeAuthenticated && needsBypassAcceptance()) {
       await guideBypassAcceptance();
     }
 
+    if (!claudeAuthenticated) {
+      console.log('\n⚠ Claude Code is not authenticated.');
+      console.log('  Run "claude auth" then "zylos init" again to finish setup.');
+    }
     console.log('\nUse "zylos add <component>" to add components.');
     return;
   }
@@ -927,8 +964,8 @@ export async function initCommand(args) {
     servicesStarted = startCoreServices();
   }
 
-  // First-time Claude bypass acceptance
-  if (needsBypassAcceptance()) {
+  // First-time Claude bypass acceptance (only if authenticated)
+  if (claudeAuthenticated && needsBypassAcceptance()) {
     await guideBypassAcceptance();
   }
 
@@ -940,6 +977,9 @@ export async function initCommand(args) {
   }
 
   console.log('Next steps:');
+  if (!claudeAuthenticated) {
+    console.log('  claude auth && zylos init  # ⚠ Authenticate then finish setup');
+  }
   console.log('  zylos add telegram    # Add Telegram bot');
   console.log('  zylos add lark        # Add Lark bot');
   console.log('  zylos status          # Check service status');
