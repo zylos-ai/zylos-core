@@ -103,17 +103,5 @@ User data is in `~/zylos/`:
 - `memory/` - Memory files
 - `public/` - Shared files (served via HTTP)
 - `<skill-name>/` - Per-skill runtime data (logs, databases, etc.)
+- `workspace/` - General working area: cloned repos, experiments, temp documents, and any persistent user data that doesn't belong to a specific skill
 - `.env` - Configuration
-
-## Quick Reference
-
-```bash
-# Check status
-zylos status
-
-# View logs
-zylos logs
-
-# Task management
-~/zylos/.claude/skills/scheduler/scripts/cli.js list
-```
