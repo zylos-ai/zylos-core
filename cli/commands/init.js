@@ -845,13 +845,14 @@ export async function initCommand(args) {
           if (claudeAuthenticated) {
             console.log('\n  ✓ Claude Code authenticated');
           } else {
-            console.log('\n  ⚠ Authentication not completed. You can run "claude auth" later.');
+            console.log('\n  ⚠ Authentication not completed.');
+            console.log('    Run "claude auth" then "zylos init" again to finish setup.');
           }
         } else {
-          console.log('  Skipped. Run "claude auth" after init to authenticate.');
+          console.log('  Skipped. Run "claude auth" then "zylos init" again to finish setup.');
         }
       } else {
-        console.log('    Run "claude auth" to authenticate after init.');
+        console.log('    Run "claude auth" then "zylos init" again to finish setup.');
       }
     }
   }
@@ -898,7 +899,8 @@ export async function initCommand(args) {
     }
 
     if (!claudeAuthenticated) {
-      console.log('\n⚠ Claude Code is not authenticated. Run "claude auth" to authenticate.');
+      console.log('\n⚠ Claude Code is not authenticated.');
+      console.log('  Run "claude auth" then "zylos init" again to finish setup.');
     }
     console.log('\nUse "zylos add <component>" to add components.');
     return;
@@ -976,7 +978,7 @@ export async function initCommand(args) {
 
   console.log('Next steps:');
   if (!claudeAuthenticated) {
-    console.log('  claude auth             # ⚠ Authenticate Claude Code (required!)');
+    console.log('  claude auth && zylos init  # ⚠ Authenticate then finish setup');
   }
   console.log('  zylos add telegram    # Add Telegram bot');
   console.log('  zylos add lark        # Add Lark bot');
