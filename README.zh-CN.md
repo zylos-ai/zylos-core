@@ -152,7 +152,7 @@ zylos search [keyword]        # 搜索组件注册表
 
 ---
 
-## <img src="assets/coco-logo.png" width="28" /> 由 Coco 构建
+## <img src="assets/coco-logo.png" width="28" style="vertical-align: middle;" /> 由 Coco 构建
 
 Zylos 是 [Coco](https://coco.xyz)（AI 员工平台）的开源核心基础设施。
 
