@@ -893,10 +893,13 @@ export async function initCommand(args) {
       console.log('\nNo services to start.');
     }
 
-    if (needsBypassAcceptance()) {
+    if (claudeAuthenticated && needsBypassAcceptance()) {
       await guideBypassAcceptance();
     }
 
+    if (!claudeAuthenticated) {
+      console.log('\n⚠ Claude Code is not authenticated. Run "claude auth" to authenticate.');
+    }
     console.log('\nUse "zylos add <component>" to add components.');
     return;
   }
@@ -959,8 +962,8 @@ export async function initCommand(args) {
     servicesStarted = startCoreServices();
   }
 
-  // First-time Claude bypass acceptance
-  if (needsBypassAcceptance()) {
+  // First-time Claude bypass acceptance (only if authenticated)
+  if (claudeAuthenticated && needsBypassAcceptance()) {
     await guideBypassAcceptance();
   }
 
