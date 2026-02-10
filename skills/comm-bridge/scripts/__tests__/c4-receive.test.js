@@ -19,6 +19,7 @@ function cliRaw(args, env = {}) {
 
 function withTmpDir(fn) {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'c4-receive-'));
+  fs.mkdirSync(path.join(tmpDir, 'activity-monitor'), { recursive: true });
   const env = { ZYLOS_DIR: tmpDir };
   try {
     return fn({ tmpDir, env });
@@ -188,7 +189,7 @@ describe('c4-receive health gating', () => {
     withTmpDir(({ tmpDir, env }) => {
       const dataDir = path.join(tmpDir, 'comm-bridge');
       fs.mkdirSync(dataDir, { recursive: true });
-      fs.writeFileSync(path.join(dataDir, 'claude-status.json'), JSON.stringify({ health: 'ok' }));
+      fs.writeFileSync(path.join(tmpDir, 'activity-monitor', 'claude-status.json'), JSON.stringify({ health: 'ok' }));
 
       const r = cliRaw(['--no-reply', '--json', '--content', 'healthy msg'], env);
       assert.equal(r.status, 0);
@@ -201,7 +202,7 @@ describe('c4-receive health gating', () => {
     withTmpDir(({ tmpDir, env }) => {
       const dataDir = path.join(tmpDir, 'comm-bridge');
       fs.mkdirSync(dataDir, { recursive: true });
-      fs.writeFileSync(path.join(dataDir, 'claude-status.json'), JSON.stringify({ health: 'recovering' }));
+      fs.writeFileSync(path.join(tmpDir, 'activity-monitor', 'claude-status.json'), JSON.stringify({ health: 'recovering' }));
 
       const r = cliRaw(['--no-reply', '--json', '--content', 'recovering msg'], env);
       assert.equal(r.status, 1);
@@ -215,7 +216,7 @@ describe('c4-receive health gating', () => {
     withTmpDir(({ tmpDir, env }) => {
       const dataDir = path.join(tmpDir, 'comm-bridge');
       fs.mkdirSync(dataDir, { recursive: true });
-      fs.writeFileSync(path.join(dataDir, 'claude-status.json'), JSON.stringify({ health: 'down' }));
+      fs.writeFileSync(path.join(tmpDir, 'activity-monitor', 'claude-status.json'), JSON.stringify({ health: 'down' }));
 
       const r = cliRaw(['--no-reply', '--json', '--content', 'down msg'], env);
       assert.equal(r.status, 1);
@@ -229,7 +230,7 @@ describe('c4-receive health gating', () => {
     withTmpDir(({ tmpDir, env }) => {
       const dataDir = path.join(tmpDir, 'comm-bridge');
       fs.mkdirSync(dataDir, { recursive: true });
-      fs.writeFileSync(path.join(dataDir, 'claude-status.json'), JSON.stringify({ health: 'recovering' }));
+      fs.writeFileSync(path.join(tmpDir, 'activity-monitor', 'claude-status.json'), JSON.stringify({ health: 'recovering' }));
       fs.mkdirSync(path.join(tmpDir, '.claude', 'skills', 'test-chan'), { recursive: true });
 
       cliRaw(['--channel', 'test-chan', '--endpoint', 'ep1', '--json', '--content', 'x'], env);
@@ -248,7 +249,7 @@ describe('c4-receive health gating', () => {
     withTmpDir(({ tmpDir, env }) => {
       const dataDir = path.join(tmpDir, 'comm-bridge');
       fs.mkdirSync(dataDir, { recursive: true });
-      fs.writeFileSync(path.join(dataDir, 'claude-status.json'), JSON.stringify({ health: 'down' }));
+      fs.writeFileSync(path.join(tmpDir, 'activity-monitor', 'claude-status.json'), JSON.stringify({ health: 'down' }));
       fs.mkdirSync(path.join(tmpDir, '.claude', 'skills', 'test-chan'), { recursive: true });
 
       cliRaw(['--channel', 'test-chan', '--endpoint', 'ep1', '--json', '--content', 'x'], env);
@@ -276,7 +277,7 @@ describe('c4-receive fail-open', () => {
     withTmpDir(({ tmpDir, env }) => {
       const dataDir = path.join(tmpDir, 'comm-bridge');
       fs.mkdirSync(dataDir, { recursive: true });
-      fs.writeFileSync(path.join(dataDir, 'claude-status.json'), '{broken');
+      fs.writeFileSync(path.join(tmpDir, 'activity-monitor', 'claude-status.json'), '{broken');
 
       const r = cliRaw(['--no-reply', '--json', '--content', 'bad json'], env);
       assert.equal(r.status, 0);
@@ -294,7 +295,7 @@ describe('c4-receive pending channels', () => {
     withTmpDir(({ tmpDir, env }) => {
       const dataDir = path.join(tmpDir, 'comm-bridge');
       fs.mkdirSync(dataDir, { recursive: true });
-      fs.writeFileSync(path.join(dataDir, 'claude-status.json'), JSON.stringify({ health: 'recovering' }));
+      fs.writeFileSync(path.join(tmpDir, 'activity-monitor', 'claude-status.json'), JSON.stringify({ health: 'recovering' }));
       fs.mkdirSync(path.join(tmpDir, '.claude', 'skills', 'my-chan'), { recursive: true });
 
       cliRaw(['--channel', 'my-chan', '--endpoint', 'e1', '--json', '--content', 'x'], env);
@@ -312,7 +313,7 @@ describe('c4-receive pending channels', () => {
     withTmpDir(({ tmpDir, env }) => {
       const dataDir = path.join(tmpDir, 'comm-bridge');
       fs.mkdirSync(dataDir, { recursive: true });
-      fs.writeFileSync(path.join(dataDir, 'claude-status.json'), JSON.stringify({ health: 'recovering' }));
+      fs.writeFileSync(path.join(tmpDir, 'activity-monitor', 'claude-status.json'), JSON.stringify({ health: 'recovering' }));
       fs.mkdirSync(path.join(tmpDir, '.claude', 'skills', 'dup-chan'), { recursive: true });
 
       cliRaw(['--channel', 'dup-chan', '--endpoint', 'e1', '--json', '--content', 'first'], env);
@@ -328,7 +329,7 @@ describe('c4-receive pending channels', () => {
     withTmpDir(({ tmpDir, env }) => {
       const dataDir = path.join(tmpDir, 'comm-bridge');
       fs.mkdirSync(dataDir, { recursive: true });
-      fs.writeFileSync(path.join(dataDir, 'claude-status.json'), JSON.stringify({ health: 'recovering' }));
+      fs.writeFileSync(path.join(tmpDir, 'activity-monitor', 'claude-status.json'), JSON.stringify({ health: 'recovering' }));
       fs.mkdirSync(path.join(tmpDir, '.claude', 'skills', 'chan-a'), { recursive: true });
       fs.mkdirSync(path.join(tmpDir, '.claude', 'skills', 'chan-b'), { recursive: true });
 

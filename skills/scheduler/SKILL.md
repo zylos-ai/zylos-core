@@ -9,7 +9,7 @@ Enables Claude to work autonomously by dispatching scheduled tasks via C4 comm-b
 
 ## How It Works
 
-1. Activity Monitor writes state to `~/zylos/comm-bridge/claude-status.json`
+1. Activity Monitor writes state to `~/zylos/activity-monitor/claude-status.json`
 2. Scheduler checks for pending tasks that are due
 3. If runtime is alive, dispatches task to C4 comm-bridge
 4. C4 handles execution control (idle waiting, priority queueing)

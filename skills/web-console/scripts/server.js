@@ -32,7 +32,7 @@ const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
 const SKILLS_DIR = path.join(os.homedir(), 'zylos', '.claude', 'skills');
 const DB_DIR = path.join(ZYLOS_DIR, 'comm-bridge');
 const DB_PATH = path.join(DB_DIR, 'c4.db');
-const STATUS_FILE = path.join(DB_DIR, 'claude-status.json');
+const STATUS_FILE = path.join(ZYLOS_DIR, 'activity-monitor', 'claude-status.json');
 
 // Paths - __dirname is scripts/, public/ is one level up
 const SKILL_ROOT = path.join(__dirname, '..');

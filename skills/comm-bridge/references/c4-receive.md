@@ -61,7 +61,7 @@ Messages exceeding the configured size threshold are stored as files under `~/zy
 
 ## Health Gating
 
-Before queuing a message, `c4-receive.js` reads the `health` field from `~/zylos/comm-bridge/claude-status.json`. If health is not `ok`:
+Before queuing a message, `c4-receive.js` reads the `health` field from `~/zylos/activity-monitor/claude-status.json`. If health is not `ok`:
 
 1. The channel/endpoint is recorded in `~/zylos/comm-bridge/pending-channels.jsonl` for recovery notification
 2. The message is rejected with a structured error:

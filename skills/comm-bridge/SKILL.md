@@ -41,7 +41,7 @@ SQLite at `~/zylos/comm-bridge/c4.db`:
 
 ## Health & Status
 
-The activity monitor writes `~/zylos/comm-bridge/claude-status.json` which includes a `health` field:
+The activity monitor writes `~/zylos/activity-monitor/claude-status.json` which includes a `health` field:
 
 | Value | Meaning |
 |-------|---------|
