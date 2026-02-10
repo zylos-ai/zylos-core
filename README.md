@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="./assets/logo.png" alt="Zylos" height="120">
+
 # Zylos
 
 ### Give your AI a life.
@@ -11,6 +13,8 @@
 [![X](https://img.shields.io/badge/X-follow-000000?logo=x&logoColor=white)](https://x.com/ZylosAI)
 [![Website](https://img.shields.io/badge/website-zylos.ai-blue)](https://zylos.ai)
 [![Built by Coco](https://img.shields.io/badge/Built%20by-Coco-orange)](https://coco.xyz)
+
+[中文](./README.zh-CN.md)
 
 </div>
 
@@ -24,12 +28,33 @@ Zylos gives it a life. Memory that survives restarts. A scheduler that works whi
 
 ## Quick Start
 
+**Prerequisites:** Node.js >= 20, a Linux server (or Mac), and a [Claude](https://claude.ai) subscription.
+
 ```bash
-npm install -g zylos
+# Install
+npm install -g --install-links https://github.com/zylos-ai/zylos-core
+
+# Initialize — sets up tmux, PM2, memory, scheduler, and more
 zylos init
 ```
 
-> TODO: Hongyun to complete this section with full setup guide.
+`zylos init` is interactive and idempotent. It will:
+1. Install missing tools (tmux, git, PM2, Claude Code)
+2. Guide you through Claude authentication
+3. Create the `~/zylos/` directory with memory, skills, and services
+4. Set up HTTPS with Caddy (optional)
+5. Start all background services and launch Claude in a tmux session
+
+**Talk to your agent:**
+
+```bash
+# Attach to the Claude session
+tmux attach -t claude-main
+
+# Or add a messaging channel
+zylos add telegram
+zylos add lark
+```
 
 ---
 
@@ -135,3 +160,7 @@ Zylos is the open-source core of [Coco](https://coco.xyz) — the AI employee pl
 We built Zylos because we needed it ourselves: a reliable infrastructure to keep AI running 24/7 for real work. Everything in Zylos is battle-tested in production at Coco, serving teams that depend on AI employees every day.
 
 Want a managed experience? [Coco](https://coco.xyz) gives you a ready-to-work AI employee — with persistent memory, multi-channel communication, and skill packages — deployed in 5 minutes.
+
+## License
+
+[MIT](./LICENSE)
