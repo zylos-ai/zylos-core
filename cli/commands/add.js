@@ -14,7 +14,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execSync } from 'node:child_process';
-import { SKILLS_DIR, COMPONENTS_DIR } from '../lib/config.js';
+import { SKILLS_DIR, COMPONENTS_DIR, BIN_DIR } from '../lib/config.js';
 import { loadRegistry } from '../lib/registry.js';
 import { loadComponents, saveComponents, resolveTarget, outputTask } from '../lib/components.js';
 import { downloadArchive, downloadBranch } from '../lib/download.js';
@@ -202,6 +202,11 @@ async function installDeclarative(resolved, skillDir, skipConfirm, jsonOutput) {
       for (const cmd of Object.keys(binResult)) {
         console.log(`  CLI command: ${cmd}`);
       }
+    }
+    // Ensure BIN_DIR is in current process PATH so post-install hooks
+    // and services can find newly created bin commands
+    if (!(process.env.PATH || '').split(':').includes(BIN_DIR)) {
+      process.env.PATH = `${BIN_DIR}:${process.env.PATH}`;
     }
   }
 
