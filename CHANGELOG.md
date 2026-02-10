@@ -5,6 +5,15 @@ All notable changes to zylos-core will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.0-beta.21] - 2026-02-10
+
+### Added
+- **SKILL.md `bin` field support**: Components can declare CLI commands in `bin` field; `zylos add` creates symlinks in `~/zylos/bin/`, `zylos component` shows them
+- **C4 control queue**: Reliable message delivery with heartbeat liveness checks and periodic task dispatch
+- **Fix C4 dispatcher**: Resolve duplicate message delivery issue
+
+---
+
 ## [0.1.0-beta.20] - 2026-02-09
 
 ### Changed
