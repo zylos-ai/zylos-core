@@ -31,7 +31,7 @@ Zylos gives it a life. Memory that survives restarts. A scheduler that works whi
 **Prerequisites:** Node.js >= 20, a Linux server (or Mac), and a [Claude](https://claude.ai) subscription.
 
 ```bash
-# Install
+# Install (--install-links required for GitHub install; will be published to npm soon)
 npm install -g --install-links https://github.com/zylos-ai/zylos-core
 
 # Initialize — sets up tmux, PM2, memory, scheduler, and more
@@ -42,8 +42,7 @@ zylos init
 1. Install missing tools (tmux, git, PM2, Claude Code)
 2. Guide you through Claude authentication
 3. Create the `~/zylos/` directory with memory, skills, and services
-4. Set up HTTPS with Caddy (optional)
-5. Start all background services and launch Claude in a tmux session
+4. Start all background services and launch Claude in a tmux session
 
 **Talk to your agent:**
 
