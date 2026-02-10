@@ -22,6 +22,7 @@ Before executing CLI uninstall, check the component's SKILL.md for external reso
 - Webhook registrations (deregister)
 - Active connections (close gracefully)
 - External service integrations (notify/cleanup)
+- **Shared PM2 services**: If the component manages PM2 services (e.g. zylos-xvfb, zylos-vnc), check whether any other installed component also uses them before stopping. Scan other components' SKILL.md files in `~/.claude/skills/` — only stop a service if no other component references it.
 
 ### Step 3: Execute Uninstall
 
@@ -54,7 +55,7 @@ Run `zylos uninstall lark --check --json`. The JSON output includes component in
 
 User: `uninstall lark confirm` (keep data) or `uninstall lark purge` (delete all)
 
-1. Check SKILL.md for external cleanup needs (webhooks, connections)
+1. Check SKILL.md for external cleanup needs (webhooks, connections, shared PM2 services)
 2. Run `zylos uninstall lark confirm --json` or `zylos uninstall lark purge --json`
 3. Clean component's environment variables from .env
 4. Reply with result
