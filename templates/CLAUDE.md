@@ -110,7 +110,7 @@ Skills are located in `~/zylos/.claude/skills/`. Claude auto-discovers skill des
 | create-skill | | `/create-skill <name>` to scaffold |
 | zylos-memory | C3 | Forks a background subagent — does not block main agent. Invoke via `/zylos-memory` |
 | comm-bridge | C4 | |
-| scheduler | C5 | CLI: `cli.js list\|add\|done\|update\|pause\|resume\|remove` |
+| scheduler | C5 | CLI: `cli.js add\|update\|done\|pause\|resume\|remove\|list\|next\|running\|history` |
 | web-console | C4 channel | |
 | http | C6 | |
 | component-management | | **Read SKILL.md before any install/upgrade/uninstall** |
