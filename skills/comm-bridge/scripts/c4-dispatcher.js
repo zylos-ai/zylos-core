@@ -5,8 +5,7 @@
  */
 
 import { execFileSync } from 'child_process';
-import { readFileSync, existsSync, statSync, realpathSync } from 'fs';
-import { fileURLToPath } from 'url';
+import { readFileSync, existsSync, statSync } from 'fs';
 import {
   getNextPending,
   claimConversation,
@@ -450,7 +449,6 @@ async function main() {
   process.exit(0);
 }
 
-const isMainModule = process.argv[1] && realpathSync(fileURLToPath(import.meta.url)) === realpathSync(process.argv[1]);
-if (isMainModule) {
-  main();
-}
+// Always call main() — PM2 sets argv[1] to its own ProcessContainerFork.js,
+// breaking realpathSync-based isMainModule checks for ESM scripts.
+main();
