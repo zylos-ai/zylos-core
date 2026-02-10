@@ -26,6 +26,7 @@
     "node": ">=20.20.0"
   },
   "dependencies": {
+    "dotenv": "^16.4.7",
     "js-yaml": "^4.1.1"
   }
 }
