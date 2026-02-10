@@ -9,23 +9,22 @@
  *
  * Routes are inserted inside the existing domain { ... } block.
  * Uses `caddy validate` before reload; auto-rollback on failure.
+ *
+ * User-space Caddy:
+ *   Binary:    ~/zylos/bin/caddy
+ *   Caddyfile: ~/zylos/http/Caddyfile
+ *   Managed by PM2 (no sudo needed for validate/reload)
  */
 
 import fs from 'node:fs';
 import { execSync } from 'node:child_process';
-
-const CADDYFILE = '/etc/caddy/Caddyfile';
+import { CADDYFILE, CADDY_BIN } from './config.js';
 
 /**
  * Check if Caddy is available (binary + Caddyfile exist).
  */
 export function isCaddyAvailable() {
-  try {
-    execSync('which caddy', { stdio: 'pipe' });
-    return fs.existsSync(CADDYFILE);
-  } catch {
-    return false;
-  }
+  return fs.existsSync(CADDY_BIN) && fs.existsSync(CADDYFILE);
 }
 
 /**
@@ -180,9 +179,9 @@ export function removeCaddyRoutes(componentName) {
 }
 
 /**
- * Write new Caddyfile to temp, validate with `caddy validate`,
- * then deploy with `sudo cp` and `sudo caddy reload`.
- * On validation failure, restores original.
+ * Validate new Caddyfile content, then write directly to the Caddyfile
+ * and reload Caddy via PM2. No sudo needed (user-space Caddy).
+ * On validation failure, does not modify the Caddyfile.
  *
  * @param {string} newContent - New Caddyfile content
  * @param {string} originalContent - Original content for rollback
@@ -194,9 +193,9 @@ function validateAndDeploy(newContent, originalContent) {
   try {
     fs.writeFileSync(tmpFile, newContent);
 
-    // Validate
+    // Validate using our own caddy binary
     try {
-      execSync(`caddy validate --config ${tmpFile} --adapter caddyfile`, {
+      execSync(`"${CADDY_BIN}" validate --config "${tmpFile}" --adapter caddyfile`, {
         stdio: 'pipe',
         timeout: 10000,
       });
@@ -207,31 +206,25 @@ function validateAndDeploy(newContent, originalContent) {
       return { success: false, error: `Caddy validation failed: ${stderr}` };
     }
 
-    // Deploy: sudo cp to /etc/caddy/Caddyfile
+    // Deploy: write directly (user-space, no sudo)
     try {
-      execSync(`sudo cp ${tmpFile} ${CADDYFILE}`, { stdio: 'pipe', timeout: 5000 });
+      fs.writeFileSync(CADDYFILE, newContent);
     } catch (err) {
       try { fs.unlinkSync(tmpFile); } catch { /* ignore */ }
-      return { success: false, error: `Failed to deploy Caddyfile: ${err.message}` };
+      return { success: false, error: `Failed to write Caddyfile: ${err.message}` };
     }
 
-    // Reload Caddy
+    // Reload Caddy via PM2
     try {
-      execSync('sudo caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile', {
+      execSync('pm2 reload caddy', {
         stdio: 'pipe',
         timeout: 10000,
       });
     } catch (err) {
       // Reload failed — rollback
-      const rollbackTmp = `/tmp/Caddyfile.rollback-${Date.now()}`;
       try {
-        fs.writeFileSync(rollbackTmp, originalContent);
-        execSync(`sudo cp ${rollbackTmp} ${CADDYFILE}`, { stdio: 'pipe', timeout: 5000 });
-        execSync('sudo caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile', {
-          stdio: 'pipe',
-          timeout: 10000,
-        });
-        fs.unlinkSync(rollbackTmp);
+        fs.writeFileSync(CADDYFILE, originalContent);
+        execSync('pm2 reload caddy', { stdio: 'pipe', timeout: 10000 });
       } catch { /* rollback best-effort */ }
       try { fs.unlinkSync(tmpFile); } catch { /* ignore */ }
       return { success: false, error: `Caddy reload failed (rolled back): ${err.message}` };

@@ -6,10 +6,11 @@
  */
 
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { execSync, spawnSync } from 'node:child_process';
-import { ZYLOS_DIR, SKILLS_DIR, CONFIG_DIR, COMPONENTS_DIR, LOCKS_DIR, COMPONENTS_FILE, BIN_DIR } from '../lib/config.js';
+import { ZYLOS_DIR, SKILLS_DIR, CONFIG_DIR, COMPONENTS_DIR, LOCKS_DIR, COMPONENTS_FILE, BIN_DIR, HTTP_DIR, CADDYFILE, CADDY_BIN, getZylosConfig, updateZylosConfig } from '../lib/config.js';
 import { generateManifest, saveManifest } from '../lib/manifest.js';
 import { prompt, promptYesNo } from '../lib/prompts.js';
 
@@ -257,6 +258,8 @@ function createDirectoryStructure() {
     COMPONENTS_DIR,
     LOCKS_DIR,
     BIN_DIR,
+    HTTP_DIR,
+    path.join(HTTP_DIR, 'public'),
     path.join(ZYLOS_DIR, 'memory'),
     path.join(ZYLOS_DIR, 'logs'),
     path.join(ZYLOS_DIR, 'pm2'),
@@ -498,6 +501,216 @@ function startCoreServices() {
   }
 }
 
+// ── Caddy web server setup ───────────────────────────────────────
+
+/**
+ * Detect system architecture for Caddy binary download.
+ * @returns {{ os: string, arch: string }}
+ */
+function detectPlatform() {
+  const platform = process.platform === 'darwin' ? 'darwin' : 'linux';
+  const archMap = { x64: 'amd64', arm64: 'arm64', arm: 'armv7' };
+  const arch = archMap[process.arch] || 'amd64';
+  return { os: platform, arch };
+}
+
+/**
+ * Get the latest Caddy version from GitHub API.
+ * Falls back to a known stable version on failure.
+ * @returns {string} Version string without 'v' prefix (e.g. "2.10.2")
+ */
+function getLatestCaddyVersion() {
+  const FALLBACK_VERSION = '2.10.2';
+  try {
+    const output = execSync(
+      'curl -fsSL https://api.github.com/repos/caddyserver/caddy/releases/latest',
+      { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 15000 }
+    );
+    const data = JSON.parse(output);
+    return (data.tag_name || '').replace(/^v/, '') || FALLBACK_VERSION;
+  } catch {
+    return FALLBACK_VERSION;
+  }
+}
+
+/**
+ * Download Caddy binary to ~/zylos/bin/caddy.
+ * @returns {boolean} true if download succeeded
+ */
+function downloadCaddy() {
+  if (fs.existsSync(CADDY_BIN)) {
+    console.log('  ✓ Caddy binary already installed');
+    return true;
+  }
+
+  const { os: platform, arch } = detectPlatform();
+  console.log(`  Detecting platform: ${platform}/${arch}`);
+
+  const version = getLatestCaddyVersion();
+  console.log(`  Latest Caddy version: v${version}`);
+
+  const filename = `caddy_${version}_${platform}_${arch}.tar.gz`;
+  const url = `https://github.com/caddyserver/caddy/releases/download/v${version}/${filename}`;
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-caddy-'));
+  const tarballPath = path.join(tmpDir, filename);
+
+  try {
+    console.log('  Downloading Caddy...');
+    execSync(`curl -fsSL -o "${tarballPath}" "${url}"`, {
+      stdio: 'pipe',
+      timeout: 120000,
+    });
+
+    // Extract just the caddy binary
+    execSync(`tar xzf "${tarballPath}" -C "${tmpDir}" caddy`, {
+      stdio: 'pipe',
+      timeout: 30000,
+    });
+
+    // Move to bin directory
+    fs.mkdirSync(BIN_DIR, { recursive: true });
+    fs.copyFileSync(path.join(tmpDir, 'caddy'), CADDY_BIN);
+    fs.chmodSync(CADDY_BIN, 0o755);
+
+    console.log(`  ✓ Caddy v${version} installed to ~/zylos/bin/caddy`);
+    return true;
+  } catch (err) {
+    console.log(`  ⚠ Failed to download Caddy: ${err.message}`);
+    return false;
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Set CAP_NET_BIND_SERVICE on Caddy binary so it can bind to ports 80/443
+ * without running as root. Requires one-time sudo.
+ * @returns {boolean} true if setcap succeeded
+ */
+function setCaddyCapabilities() {
+  if (process.platform === 'darwin') return true; // macOS doesn't need this
+
+  try {
+    // Check if capability is already set
+    const caps = execSync(`getcap "${CADDY_BIN}" 2>/dev/null`, {
+      encoding: 'utf8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    if (caps.includes('cap_net_bind_service')) {
+      return true;
+    }
+  } catch { /* continue */ }
+
+  try {
+    execSync(`sudo setcap cap_net_bind_service=+ep "${CADDY_BIN}"`, {
+      stdio: 'pipe',
+      timeout: 10000,
+    });
+    console.log('  ✓ Port binding capability set (ports 80/443)');
+    return true;
+  } catch {
+    console.log('  ⚠ Could not set port binding capability (sudo required)');
+    console.log('    Caddy may not be able to bind to ports 80/443.');
+    console.log(`    Fix manually: sudo setcap cap_net_bind_service=+ep "${CADDY_BIN}"`);
+    return false;
+  }
+}
+
+/**
+ * Generate a Caddyfile for the given domain.
+ * @param {string} domain - The domain name
+ */
+function generateCaddyfile(domain) {
+  const publicDir = path.join(HTTP_DIR, 'public');
+  fs.mkdirSync(publicDir, { recursive: true });
+
+  const content = `# Zylos Caddyfile — managed by zylos-core
+# Domain: ${domain}
+
+${domain} {
+    root * ${publicDir}
+
+    file_server {
+        hide .git .env *.db *.json
+    }
+
+    @markdown path *.md
+    handle @markdown {
+        header Content-Type "text/plain; charset=utf-8"
+    }
+
+    handle /health {
+        respond "OK" 200
+    }
+
+    log {
+        output file ${HTTP_DIR}/caddy-access.log {
+            roll_size 10mb
+            roll_keep 3
+        }
+    }
+}
+`;
+
+  fs.writeFileSync(CADDYFILE, content);
+}
+
+/**
+ * Run the Caddy setup flow: download binary, prompt for domain,
+ * generate Caddyfile, set capabilities.
+ * @param {boolean} skipConfirm - Skip interactive prompts
+ * @returns {Promise<boolean>} true if Caddy was set up
+ */
+async function setupCaddy(skipConfirm) {
+  // Check if already fully set up
+  if (fs.existsSync(CADDY_BIN) && fs.existsSync(CADDYFILE)) {
+    const config = getZylosConfig();
+    if (config.domain) {
+      console.log(`  ✓ Caddy already configured (${config.domain})`);
+      return true;
+    }
+  }
+
+  // Ask user if they want HTTPS
+  if (!skipConfirm) {
+    const wantCaddy = await promptYesNo('Set up HTTPS with Caddy? [Y/n]: ', true);
+    if (!wantCaddy) {
+      console.log('  Skipping Caddy setup. Run "zylos init" later to set up.');
+      return false;
+    }
+  }
+
+  // Prompt for domain
+  const config = getZylosConfig();
+  let domain = config.domain || '';
+  if (!domain || domain === 'your.domain.com') {
+    if (!skipConfirm) {
+      domain = await prompt('Enter your domain (e.g., zylos.example.com): ');
+    }
+    if (!domain) {
+      console.log('  ⚠ No domain provided. Skipping Caddy setup.');
+      return false;
+    }
+  }
+
+  // Save domain to config.json
+  updateZylosConfig({ domain });
+  console.log(`  Domain: ${domain}`);
+
+  // Download Caddy binary
+  if (!downloadCaddy()) return false;
+
+  // Set capabilities for port binding
+  setCaddyCapabilities();
+
+  // Generate Caddyfile
+  fs.mkdirSync(HTTP_DIR, { recursive: true });
+  generateCaddyfile(domain);
+  console.log('  ✓ Caddyfile generated at ~/zylos/http/Caddyfile');
+
+  return true;
+}
+
 // ── Main init command ───────────────────────────────────────────
 
 export async function initCommand(args) {
@@ -620,6 +833,10 @@ export async function initCommand(args) {
     console.log('Deploying templates...');
     deployTemplates();
 
+    // Caddy setup (idempotent — skips if already configured)
+    console.log('Checking Caddy...');
+    await setupCaddy(skipConfirm);
+
     console.log('Starting services...');
     const servicesStarted = startCoreServices();
     if (servicesStarted > 0) {
@@ -677,7 +894,11 @@ export async function initCommand(args) {
     }
   }
 
-  // Step 9: Start services
+  // Step 9: Caddy web server setup
+  console.log('\nHTTPS setup...');
+  await setupCaddy(skipConfirm);
+
+  // Step 10: Start services
   let servicesStarted = 0;
   if (!skipConfirm) {
     const startNow = await promptYesNo('\nStart services now? [Y/n]: ', true);

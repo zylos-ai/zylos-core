@@ -1,7 +1,14 @@
 #!/usr/bin/env node
 /**
- * C6 HTTP Layer - Caddy Setup Script
- * Sets up Caddy web server for file sharing and web console proxy
+ * HTTP Layer - Caddy Setup Script (standalone)
+ *
+ * This script is kept for backward compatibility. The preferred way to
+ * set up Caddy is via `zylos init`, which handles download, domain
+ * configuration, and PM2 integration automatically.
+ *
+ * This script reads domain from config.json (falling back to .env),
+ * generates the Caddyfile at ~/zylos/http/Caddyfile, and starts
+ * Caddy via PM2.
  *
  * Usage: node setup-caddy.js
  */
@@ -11,24 +18,20 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import readline from 'readline';
-import { parse } from 'dotenv';
 
 const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
+const CONFIG_DIR = path.join(ZYLOS_DIR, '.zylos');
+const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
+const HTTP_DIR = path.join(ZYLOS_DIR, 'http');
+const CADDYFILE = path.join(HTTP_DIR, 'Caddyfile');
+const CADDY_BIN = path.join(ZYLOS_DIR, 'bin', 'caddy');
 
-// ANSI colors
-const GREEN = '\x1b[32m';
-const BLUE = '\x1b[34m';
-const YELLOW = '\x1b[33m';
-const RED = '\x1b[31m';
-const NC = '\x1b[0m';
-
-// Parse arguments
 const args = process.argv.slice(2);
 
 if (args.includes('--help') || args.includes('-h')) {
   console.log('Usage: node setup-caddy.js');
   console.log('');
-  console.log('Sets up Caddy with file serving and web console proxy.');
+  console.log('Sets up Caddy with file serving. Use `zylos init` instead for full setup.');
   process.exit(0);
 }
 
@@ -45,76 +48,57 @@ function prompt(question) {
   });
 }
 
-function readEnvFile(filePath) {
-  if (fs.existsSync(filePath)) {
-    return parse(fs.readFileSync(filePath, 'utf8'));
+function readConfig() {
+  try {
+    return JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
+  } catch {
+    return {};
   }
-  return {};
 }
 
-function commandExists(cmd) {
-  try {
-    execSync(`command -v ${cmd}`, { stdio: 'pipe' });
-    return true;
-  } catch {
-    return false;
-  }
+function saveConfig(updates) {
+  const config = readConfig();
+  Object.assign(config, updates);
+  fs.mkdirSync(CONFIG_DIR, { recursive: true });
+  fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2) + '\n');
 }
 
 async function main() {
-  console.log(`${BLUE}C6 HTTP Layer - Caddy Setup${NC}`);
-  console.log('============================');
-  console.log('');
+  console.log('Caddy Setup');
+  console.log('===========\n');
 
-  // Check for .env file
-  const envFile = path.join(ZYLOS_DIR, '.env');
-  if (!fs.existsSync(envFile)) {
-    console.error(`${RED}Error: ${envFile} not found${NC}`);
-    console.error('Create .env file with DOMAIN=your.domain.com');
+  // Check Caddy binary
+  if (!fs.existsSync(CADDY_BIN)) {
+    console.error(`Error: Caddy binary not found at ${CADDY_BIN}`);
+    console.error('Run `zylos init` to download and configure Caddy.');
     process.exit(1);
   }
 
-  // Read domain from .env
-  const env = readEnvFile(envFile);
-  let domain = env.DOMAIN || '';
+  // Read domain from config.json
+  const config = readConfig();
+  let domain = config.domain || '';
 
-  if (!domain) {
-    console.log(`${YELLOW}No domain configured in .env${NC}`);
+  if (!domain || domain === 'your.domain.com') {
     domain = await prompt('Enter your domain (e.g., zylos.example.com): ');
-    if (domain) {
-      fs.appendFileSync(envFile, `DOMAIN=${domain}\n`);
-    } else {
-      console.error(`${RED}Domain is required. Exiting.${NC}`);
+    if (!domain) {
+      console.error('Domain is required. Exiting.');
       process.exit(1);
     }
+    saveConfig({ domain });
   }
 
   console.log(`Domain: ${domain}`);
-  console.log(`Zylos directory: ${ZYLOS_DIR}`);
-  console.log('');
 
-  // Create required directories
-  fs.mkdirSync(path.join(ZYLOS_DIR, 'http', 'public'), { recursive: true });
-
-  // Fix permissions for Caddy to read public files
-  try {
-    execSync(`chmod o+rx "${os.homedir()}" 2>/dev/null || true`, { stdio: 'pipe' });
-    execSync(`chmod o+rx "${ZYLOS_DIR}" 2>/dev/null || true`, { stdio: 'pipe' });
-    execSync(`chmod -R o+r "${ZYLOS_DIR}/http/public" 2>/dev/null || true`, { stdio: 'pipe' });
-  } catch {}
+  // Create directories
+  const publicDir = path.join(HTTP_DIR, 'public');
+  fs.mkdirSync(publicDir, { recursive: true });
 
   // Generate Caddyfile
-  const CADDY_CONFIG = '/etc/caddy/Caddyfile';
-  const tempFile = path.join(os.tmpdir(), `Caddyfile-${Date.now()}`);
-  console.log('Generating Caddyfile...');
-
-  const timestamp = new Date().toISOString();
-  let config = `# Zylos C6 HTTP Layer - Generated Caddyfile
+  const content = `# Zylos Caddyfile — managed by zylos-core
 # Domain: ${domain}
-# Generated: ${timestamp}
 
 ${domain} {
-    root * ${ZYLOS_DIR}/http/public
+    root * ${publicDir}
 
     file_server {
         hide .git .env *.db *.json
@@ -128,21 +112,9 @@ ${domain} {
     handle /health {
         respond "OK" 200
     }
-`;
 
-  // Add web console proxy
-  config += `
-    # Web Console
-    handle /console/* {
-        uri strip_prefix /console
-        reverse_proxy localhost:3456
-    }
-`;
-
-  // Add logging and close
-  config += `
     log {
-        output file ${ZYLOS_DIR}/http/caddy-access.log {
+        output file ${HTTP_DIR}/caddy-access.log {
             roll_size 10mb
             roll_keep 3
         }
@@ -150,62 +122,22 @@ ${domain} {
 }
 `;
 
-  // Write to temp file first
-  fs.writeFileSync(tempFile, config);
+  fs.writeFileSync(CADDYFILE, content);
+  console.log(`Caddyfile written to ${CADDYFILE}`);
 
-  console.log('');
-  console.log('Generated Caddyfile:');
-  console.log('---');
-  console.log(config);
-  console.log('---');
-  console.log('');
-
-  // Check if Caddy is installed
-  if (!commandExists('caddy')) {
-    console.log(`${YELLOW}Caddy is not installed.${NC}`);
-    console.log('Install with: sudo apt install -y caddy');
-    console.log('Or see: https://caddyserver.com/docs/install');
-    console.log('');
-    console.log(`Config saved to: ${tempFile}`);
-    console.log(`After installing Caddy, run: sudo cp ${tempFile} ${CADDY_CONFIG}`);
-    process.exit(0);
+  // Reload or start Caddy via PM2
+  try {
+    execSync('pm2 reload caddy', { stdio: 'pipe', timeout: 10000 });
+    console.log('Caddy reloaded via PM2');
+  } catch {
+    console.log('Caddy not running in PM2. Start it with: pm2 start ~/zylos/pm2/ecosystem.config.cjs');
   }
 
-  // Ask to apply configuration
-  const apply = await prompt(`Write to ${CADDY_CONFIG} and restart Caddy? (Y/n): `);
-
-  if (apply.toLowerCase() !== 'n') {
-    try {
-      execSync(`sudo cp "${tempFile}" "${CADDY_CONFIG}"`, { stdio: 'inherit' });
-      fs.unlinkSync(tempFile); // Clean up temp file
-      try {
-        execSync('sudo systemctl enable caddy 2>/dev/null || true', { stdio: 'pipe' });
-      } catch {}
-      execSync('sudo systemctl restart caddy', { stdio: 'inherit' });
-
-      console.log('');
-      console.log(`${GREEN}Caddy configured and started!${NC}`);
-      console.log('');
-      console.log(`Config written to: ${CADDY_CONFIG}`);
-      console.log(`Your site is live at: https://${domain}/`);
-      console.log('');
-      console.log('Verify with:');
-      console.log('  sudo systemctl status caddy');
-      console.log(`  curl -I https://${domain}/health`);
-    } catch (err) {
-      console.error(`${RED}Failed to apply configuration: ${err.message}${NC}`);
-      process.exit(1);
-    }
-  } else {
-    console.log('');
-    console.log(`Config saved to: ${tempFile}`);
-    console.log('Apply manually:');
-    console.log(`  sudo cp ${tempFile} ${CADDY_CONFIG}`);
-    console.log('  sudo systemctl restart caddy');
-  }
+  console.log(`\nYour site is live at: https://${domain}/`);
+  console.log(`Verify: curl -I https://${domain}/health`);
 }
 
 main().catch(err => {
-  console.error(`${RED}Error: ${err.message}${NC}`);
+  console.error(`Error: ${err.message}`);
   process.exit(1);
 });

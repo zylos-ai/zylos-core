@@ -14,6 +14,8 @@ const fs = require('fs');
 const HOME = os.homedir();
 const ZYLOS_DIR = path.join(HOME, 'zylos');
 const SKILLS_DIR = path.join(HOME, 'zylos', '.claude', 'skills');
+const BIN_DIR = path.join(ZYLOS_DIR, 'bin');
+const HTTP_DIR = path.join(ZYLOS_DIR, 'http');
 
 // Read a value from .env file
 function readEnvValue(key, defaultValue = '') {
@@ -87,6 +89,23 @@ module.exports = {
       max_restarts: 10,
       min_uptime: '10s'
     },
+    // Caddy web server (only if set up via `zylos init`)
+    ...(fs.existsSync(path.join(BIN_DIR, 'caddy')) && fs.existsSync(path.join(HTTP_DIR, 'Caddyfile'))
+      ? [{
+          name: 'caddy',
+          script: path.join(BIN_DIR, 'caddy'),
+          args: `run --config ${path.join(HTTP_DIR, 'Caddyfile')} --adapter caddyfile`,
+          cwd: ZYLOS_DIR,
+          env: {
+            PATH: ENHANCED_PATH,
+            HOME: HOME,
+          },
+          autorestart: true,
+          max_restarts: 10,
+          min_uptime: '10s',
+          kill_timeout: 5000,
+        }]
+      : []),
     // Component services (telegram, lark, etc.) are managed by `zylos add/remove`
   ]
 };

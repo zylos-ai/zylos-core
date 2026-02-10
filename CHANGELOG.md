@@ -5,6 +5,21 @@ All notable changes to zylos-core will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.0-beta.25] - 2026-02-10
+
+### Added
+- **User-space Caddy**: `zylos init` now downloads Caddy binary to `~/zylos/bin/caddy`, prompts for domain, generates Caddyfile at `~/zylos/http/Caddyfile`, and runs Caddy via PM2 — no sudo needed for daily operations
+- Domain configuration stored in `config.json` instead of `.env` (runtime config, not secrets)
+- `getZylosConfig()` / `updateZylosConfig()` helpers in `cli/lib/config.js`
+- PM2 ecosystem config conditionally includes Caddy service when binary and Caddyfile exist
+
+### Changed
+- `caddy.js`: uses `~/zylos/bin/caddy` binary and `~/zylos/http/Caddyfile` instead of system paths; validate/reload via PM2 without sudo
+- `setup-caddy.js` (http skill): updated to use user-space paths and config.json
+- Removed DOMAIN from `.env.example` (moved to config.json)
+
+---
+
 ## [0.1.0-beta.24] - 2026-02-10
 
 ### Added
