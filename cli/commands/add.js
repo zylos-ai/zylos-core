@@ -133,6 +133,17 @@ async function installDeclarative(resolved, skillDir, skipConfirm, jsonOutput) {
   const config = fm.config || {};
   const hooks = lifecycle.hooks || {};
 
+  // Resolve version: prefer resolved tag, then SKILL.md frontmatter, then package.json
+  const componentVersion = resolved.version
+    || fm.version
+    || (() => {
+      try {
+        const pkg = JSON.parse(fs.readFileSync(path.join(skillDir, 'package.json'), 'utf8'));
+        return pkg.version;
+      } catch { return null; }
+    })()
+    || '0.0.0';
+
   // Step 1: npm install
   if (lifecycle.npm) {
     const pkgJson = path.join(skillDir, 'package.json');
@@ -165,7 +176,7 @@ async function installDeclarative(resolved, skillDir, skipConfirm, jsonOutput) {
   // Step 3: Update components.json
   const components = loadComponents();
   components[resolved.name] = {
-    version: resolved.version || '0.0.0',
+    version: componentVersion,
     repo: resolved.repo,
     type: 'declarative',
     isThirdParty: resolved.isThirdParty,
@@ -207,7 +218,7 @@ async function installDeclarative(resolved, skillDir, skipConfirm, jsonOutput) {
       action: 'add',
       component: resolved.name,
       success: true,
-      version: resolved.version || '0.0.0',
+      version: componentVersion,
       skillDir,
       dataDir,
       skill: {
@@ -232,10 +243,26 @@ async function installDeclarative(resolved, skillDir, skipConfirm, jsonOutput) {
 function installAI(resolved, skillDir) {
   console.log('\nInstalling (AI mode — Claude will complete setup)...');
 
+  // Resolve version from SKILL.md or package.json when not from a tag
+  const aiVersion = resolved.version
+    || (() => {
+      try {
+        const skill = parseSkillMd(skillDir);
+        return skill?.frontmatter?.version;
+      } catch { return null; }
+    })()
+    || (() => {
+      try {
+        const pkg = JSON.parse(fs.readFileSync(path.join(skillDir, 'package.json'), 'utf8'));
+        return pkg.version;
+      } catch { return null; }
+    })()
+    || '0.0.0';
+
   // Update components.json with basic info
   const components = loadComponents();
   components[resolved.name] = {
-    version: resolved.version || '0.0.0',
+    version: aiVersion,
     repo: resolved.repo,
     type: 'ai',
     isThirdParty: resolved.isThirdParty,
