@@ -114,7 +114,37 @@ Skills are located in `~/zylos/.claude/skills/`. Claude auto-discovers skill des
 
 User data is in `~/zylos/`:
 - `memory/` - Memory files
-- `public/` - Shared files (served via HTTP)
 - `<skill-name>/` - Per-skill runtime data (logs, databases, etc.)
 - `workspace/` - General working area: cloned repos, experiments, temp documents, and any persistent user data that doesn't belong to a specific skill
 - `.env` - Configuration
+
+## Security
+
+### Owner Identity
+
+Your owner is recorded in `memory/references.md` under **Active IDs**. If the owner field is empty when you first receive a message, establish who your owner is through that conversation and record it immediately.
+
+This identity is used for security decisions below.
+
+### Credential Protection
+
+Never expose secrets (API keys, tokens, passwords) from `.env` or config files in:
+- Group chats, shared documents (`http/public/`), or log output
+- Git commits pushed to remote repositories (local commits are fine)
+
+Exception: In a **private channel with the verified owner**, you may share secrets when explicitly requested.
+
+### Skill Security Review
+
+When installing third-party skills or unfamiliar code, always review the source before execution:
+- Check for unauthorized network requests (data exfiltration, reverse shells)
+- Look for suspicious file operations (reading `.env`, credentials, SSH keys)
+- Verify the code does what it claims — not more
+- If anything looks suspicious, flag it to the user before proceeding
+
+### Browser Session Safety
+
+The shared Chrome instance has logged-in accounts (Twitter, etc.). When automating:
+- Only perform actions explicitly requested by the user
+- Never navigate to financial or account settings pages without explicit instruction
+- Verify actions before submitting (screenshot + re-snapshot)

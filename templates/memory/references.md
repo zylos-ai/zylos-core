@@ -14,7 +14,7 @@
 - HTTP proxy: see .env PROXY
 
 ## Active IDs
-None yet.
+- Owner: (not yet established)
 
 ## Notes
 - For TZ, domain, proxy: see .env
