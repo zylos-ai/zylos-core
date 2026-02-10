@@ -16,6 +16,7 @@ import {
 } from '../lib/self-upgrade.js';
 import { detectChanges } from '../lib/manifest.js';
 import { parseSkillMd } from '../lib/skill.js';
+import { linkBins, unlinkBins } from '../lib/bin.js';
 import { acquireLock, releaseLock } from '../lib/lock.js';
 import { fetchRawFile } from '../lib/github.js';
 import { promptYesNo } from '../lib/prompts.js';
@@ -554,6 +555,18 @@ async function handleUpgradeFlow(component, { jsonOutput, skipConfirm, skipEval,
       if (components[component]) {
         components[component].version = result.to || components[component].version;
         components[component].upgradedAt = new Date().toISOString();
+
+        // Update bin symlinks (remove old, create new)
+        const oldBin = components[component].bin;
+        if (oldBin) unlinkBins(oldBin);
+        const updatedSkill = parseSkillMd(skillDir);
+        const newBin = linkBins(skillDir, updatedSkill?.frontmatter?.bin);
+        if (newBin) {
+          components[component].bin = newBin;
+        } else {
+          delete components[component].bin;
+        }
+
         saveComponents(components);
       }
 
@@ -1059,6 +1072,7 @@ function handleUninstallCheck(target, { jsonOutput }) {
       service: serviceName,
       skillDir,
       dataDir,
+      bin: comp.bin || null,
       dependents,
     };
     output.reply = formatC4Reply('uninstall-check', {
@@ -1075,6 +1089,9 @@ function handleUninstallCheck(target, { jsonOutput }) {
     console.log(`  Service:   ${serviceName} (pm2)`);
     console.log(`  Skill dir: ${skillDir}`);
     console.log(`  Data dir:  ${dataDir} (kept)`);
+    if (comp.bin) {
+      console.log(`  Bin links: ${Object.keys(comp.bin).join(', ')}`);
+    }
 
     if (dependents.length > 0) {
       console.log(`\nWARNING: These components depend on "${target}":`);
@@ -1170,7 +1187,15 @@ async function handleRemoveFlow(target, { purge, skipConfirm, force, jsonOutput 
     if (!jsonOutput) console.log(`  ○ PM2 service "${serviceName}" not found (skipped)`);
   }
 
-  // 2. Remove skill directory
+  // 2. Remove bin symlinks
+  const comp = components[target];
+  if (comp.bin) {
+    unlinkBins(comp.bin);
+    steps.push({ action: 'Bin symlinks removed', success: true });
+    if (!jsonOutput) console.log(`  ✓ Bin symlinks removed`);
+  }
+
+  // 3. Remove skill directory
   if (fs.existsSync(skillDir)) {
     fs.rmSync(skillDir, { recursive: true, force: true });
     steps.push({ action: 'Skill directory removed', success: true });
@@ -1180,7 +1205,7 @@ async function handleRemoveFlow(target, { purge, skipConfirm, force, jsonOutput 
     if (!jsonOutput) console.log(`  ○ Skill directory not found (skipped)`);
   }
 
-  // 3. Remove data directory if --purge
+  // 4. Remove data directory if --purge
   if (purge) {
     if (fs.existsSync(dataDir)) {
       fs.rmSync(dataDir, { recursive: true, force: true });
@@ -1194,7 +1219,7 @@ async function handleRemoveFlow(target, { purge, skipConfirm, force, jsonOutput 
     steps.push({ action: 'Data directory kept', success: true });
   }
 
-  // 4. Update components.json
+  // 5. Update components.json
   delete components[target];
   saveComponents(components);
   steps.push({ action: 'Removed from components.json', success: true });

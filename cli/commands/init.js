@@ -9,7 +9,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { execSync, spawnSync } from 'node:child_process';
-import { ZYLOS_DIR, SKILLS_DIR, CONFIG_DIR, COMPONENTS_DIR, LOCKS_DIR, COMPONENTS_FILE } from '../lib/config.js';
+import { ZYLOS_DIR, SKILLS_DIR, CONFIG_DIR, COMPONENTS_DIR, LOCKS_DIR, COMPONENTS_FILE, BIN_DIR } from '../lib/config.js';
 import { generateManifest, saveManifest } from '../lib/manifest.js';
 import { prompt, promptYesNo } from '../lib/prompts.js';
 
@@ -105,6 +105,48 @@ function saveSystemPath(envPath) {
     content = content.trimEnd() + '\n\n# System PATH captured by zylos init (used by PM2 services)\n' + line + '\n';
   }
   fs.writeFileSync(envPath, content);
+}
+
+/**
+ * Ensure ~/zylos/bin is in the user's shell PATH.
+ * Detects the user's shell and appends to the appropriate rc file.
+ * Idempotent: uses a marker comment to avoid duplicates.
+ *
+ * @returns {boolean} true if PATH was updated, false if already configured
+ */
+function ensureBinInPath() {
+  // Already in PATH — nothing to do
+  if ((process.env.PATH || '').split(':').includes(BIN_DIR)) {
+    return false;
+  }
+
+  // Detect shell rc file
+  const shell = process.env.SHELL || '/bin/bash';
+  const home = process.env.HOME;
+  let rcFile;
+  if (shell.endsWith('/zsh')) {
+    rcFile = path.join(home, '.zshrc');
+  } else if (shell.endsWith('/fish')) {
+    // fish uses a different syntax; skip auto-config
+    return false;
+  } else {
+    // bash or unknown — use .bashrc
+    rcFile = path.join(home, '.bashrc');
+  }
+
+  // Check if already configured (marker comment)
+  const marker = '# zylos-managed: bin PATH';
+  try {
+    const content = fs.readFileSync(rcFile, 'utf8');
+    if (content.includes(marker)) return false;
+  } catch {
+    // rc file doesn't exist — we'll create/append
+  }
+
+  // Append PATH export
+  const snippet = `\n${marker}\nexport PATH="${BIN_DIR}:$PATH"\n`;
+  fs.appendFileSync(rcFile, snippet);
+  return true;
 }
 
 /**
@@ -214,6 +256,7 @@ function createDirectoryStructure() {
     CONFIG_DIR,
     COMPONENTS_DIR,
     LOCKS_DIR,
+    BIN_DIR,
     path.join(ZYLOS_DIR, 'memory'),
     path.join(ZYLOS_DIR, 'logs'),
     path.join(ZYLOS_DIR, 'pm2'),
@@ -561,6 +604,12 @@ export async function initCommand(args) {
   if (installState === 'complete') {
     console.log(`Zylos is already initialized at ${ZYLOS_DIR}\n`);
 
+    // Ensure bin directory and PATH are configured (idempotent)
+    fs.mkdirSync(BIN_DIR, { recursive: true });
+    if (ensureBinInPath()) {
+      console.log('Added ~/zylos/bin to PATH');
+    }
+
     const syncResult = syncCoreSkills();
     if (syncResult.updated.length > 0) {
       console.log(`Core Skills updated: ${syncResult.updated.join(', ')}`);
@@ -607,6 +656,11 @@ export async function initCommand(args) {
   console.log('\nSetting up...');
   createDirectoryStructure();
   console.log('  ✓ Created directory structure');
+
+  // Configure PATH for ~/zylos/bin
+  if (ensureBinInPath()) {
+    console.log('  ✓ Added ~/zylos/bin to PATH');
+  }
 
   // Step 7: Deploy templates
   deployTemplates();
