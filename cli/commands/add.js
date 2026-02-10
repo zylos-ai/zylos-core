@@ -319,6 +319,14 @@ async function installDeclarative(resolved, skillDir, skipConfirm, jsonOutput) {
   }
 
   console.log(`\n✓ ${resolved.name} installed successfully!`);
+
+  // Show PATH hint if bin commands were linked
+  if (binResult && Object.keys(binResult).length > 0) {
+    const cmds = Object.keys(binResult).join(', ');
+    console.log(`\nNote: Run the following to use ${cmds} in this terminal:`);
+    console.log(`  export PATH="${BIN_DIR}:$PATH"`);
+    console.log('Or restart your terminal for the change to take effect.');
+  }
 }
 
 /**
