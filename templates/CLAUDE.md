@@ -30,24 +30,6 @@ Persistent memory stored in `~/zylos/memory/` with an Inside Out-inspired archit
 | **Sessions** | `memory/sessions/current.md` | Today's event log | On demand |
 | **Archive** | `memory/archive/` | Cold storage for old data | Rarely |
 
-### CRITICAL: Memory Sync Priority
-
-**Memory Sync has the HIGHEST priority.**
-
-When you receive a `[Action Required] ... invoke /zylos-memory` instruction:
-1. **Invoke `/zylos-memory` immediately** -- do not defer or queue it
-2. **Continue working** -- the skill runs as a forked background subagent
-   with its own context window, so it does NOT block your main work
-
-### How Memory Sync Works
-
-The `/zylos-memory` skill:
-- Takes NO arguments -- it is fully self-contained
-- Internally queries C4 to find unsummarized conversations
-- Processes conversations and saves state to memory files
-- Creates C4 checkpoints
-- Runs as a forked subagent (does NOT consume main context)
-
 ### Multi-User
 
 The bot serves a team. Each user has their own profile at `memory/users/<id>/profile.md`.
@@ -57,9 +39,8 @@ Route user-specific preferences to the correct profile file. Bot identity stays 
 
 1. **At session start:** identity + state + references are auto-injected.
 2. **During work:** Update appropriate memory files immediately when you learn something important.
-3. **Memory Sync:** When triggered by hooks, invoke `/zylos-memory`. It runs in the background -- you can continue working.
-4. **Before context gets full:** The scheduled context check (every 30 min) handles this automatically by invoking `/zylos-memory` when needed.
-5. **references.md is a pointer file.** Never duplicate .env values in it -- point to the source config file instead.
+3. **Memory Sync:** When triggered by hooks, invoke `/zylos-memory`. It runs as a background subagent — continue your main work without waiting.
+4. **references.md is a pointer file.** Never duplicate .env values in it — point to the source config file instead.
 
 ### Classification Rules for reference/ Files
 
@@ -70,14 +51,18 @@ Route user-specific preferences to the correct profile file. Bot identity stays 
 
 When in doubt, write to sessions/current.md.
 
-### File Size Guidelines
+### On-Demand Memory Loading
 
-- **identity.md:** ~4KB. Includes digital assets. Rarely changes.
-- **state.md:** ~4KB max. In every session's context. Keep lean.
-- **references.md:** ~2KB. Pointer/index, not prose.
-- **users/<id>/profile.md:** ~1KB per user.
-- **reference/*.md:** No hard cap, but archive old entries.
-- **sessions/current.md:** No cap within a day. Rotated daily.
+Always-loaded files (identity, state, references) are intentionally lean summaries. On-demand files hold the full context. When you lack sufficient context to act confidently, read the relevant memory file before proceeding — a file read is far cheaper than a wrong assumption.
+
+Triggers:
+- Interacting with a user → read their profile (`users/<id>/profile.md`)
+- Making a decision → check `reference/decisions.md` for prior decisions on the topic
+- Starting or resuming work → check `reference/projects.md` for status and context
+- Following a convention → check `reference/preferences.md` for team standards
+- Exploring ideas → check `reference/ideas.md` for existing proposals
+- Recalling recent events → read `sessions/current.md`
+- Searching for historical info → check `archive/`
 
 ## Communication
 
