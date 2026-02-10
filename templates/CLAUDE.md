@@ -86,9 +86,18 @@ Key principles:
 
 ## Task Scheduler
 
-The scheduler may send you tasks when idle. After completing a task:
+The scheduler (C5) enables autonomous operation beyond the request-response pattern. Standard LLM interactions are reactive — the model only acts when prompted. The scheduler breaks this limitation by allowing tasks to be dispatched to Claude when idle, enabling self-directed work.
+
+This means you can schedule tasks for yourself — follow-ups, periodic checks, deferred work — effectively "waking yourself up" at the right time without waiting for user input.
+
+When a scheduled task arrives, process it and mark completion:
 ```bash
 ~/zylos/.claude/skills/scheduler/scripts/cli.js done <task-id>
+```
+
+To schedule a new task for yourself:
+```bash
+~/zylos/.claude/skills/scheduler/scripts/cli.js add "<prompt>" [--at <time>] [--cron <expr>] [--every <interval>]
 ```
 
 ## Available Skills
