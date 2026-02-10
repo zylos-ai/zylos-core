@@ -40,18 +40,26 @@ Please provide API_KEY (Your API key):
 For sensitive values, remind user it will be stored securely.
 Write collected values to `~/zylos/.env`.
 
-### Step 4: Execute Post-Install Hook
+### Step 4: Set Up PATH for Bin Commands
 
-If `skill.hooks.post-install` exists in the JSON output, run it:
+If the JSON output includes `skill.bin` entries (component provides CLI commands), `~/zylos/bin` must be in PATH. Since each shell command runs in a separate process, **prefix all subsequent commands** that use component CLIs with the PATH export:
 
 ```bash
-node ~/zylos/.claude/skills/<component>/hooks/post-install.js
+export PATH="$HOME/zylos/bin:$PATH" && <command>
+```
+
+### Step 5: Execute Post-Install Hook
+
+If `skill.hooks.post-install` exists in the JSON output, run it. If Step 4 applied (component has bin), include the PATH prefix:
+
+```bash
+export PATH="$HOME/zylos/bin:$PATH" && node ~/zylos/.claude/skills/<component>/hooks/post-install.js
 ```
 
 Set environment variables: `ZYLOS_COMPONENT`, `ZYLOS_SKILL_DIR`, `ZYLOS_DATA_DIR`.
 If the hook fails, investigate and fix the issue.
 
-### Step 5: Start Service and Guide User
+### Step 6: Start Service and Guide User
 
 1. If component has `skill.service`, start it: `pm2 start ecosystem.config.cjs` (or entry point) and verify health
 2. Show the `skill.nextSteps` from JSON output to guide user on what to do next
@@ -65,6 +73,7 @@ C4 install uses `zylos add <name> --yes --json` directly (no pre-confirmation ne
 
 After `zylos add <name> --yes --json` succeeds, the JSON `skill` field tells you what to do:
 
-1. **Config**: If `skill.config.required` exists, inform user which config values are needed. In C4 mode, user provides values via follow-up messages.
-2. **Hooks**: If `skill.hooks.post-install` exists, run it.
-3. **Service**: If `skill.service` exists, start it and verify.
+1. **Bin PATH**: If `skill.bin` exists, prefix all subsequent commands with `export PATH="$HOME/zylos/bin:$PATH" && `.
+2. **Config**: If `skill.config.required` exists, inform user which config values are needed. In C4 mode, user provides values via follow-up messages.
+3. **Hooks**: If `skill.hooks.post-install` exists, run it (with PATH prefix if step 1 applied).
+4. **Service**: If `skill.service` exists, start it and verify.
