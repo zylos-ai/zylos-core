@@ -15,6 +15,8 @@
 
 ## Active IDs
 - Owner: (not yet established)
+- Platform Identities:
+  - (Record your display name on each platform here, so you can recognize when someone mentions or @s you)
 
 ## Notes
 - For TZ, domain, proxy: see .env
