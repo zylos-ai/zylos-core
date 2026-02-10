@@ -8,6 +8,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Discord](https://img.shields.io/badge/Discord-join-5865F2?logo=discord&logoColor=white)](https://discord.gg/vbcR7MWe)
+[![X](https://img.shields.io/badge/X-follow-000000?logo=x&logoColor=white)](https://x.com/ZylosAI)
 [![Website](https://img.shields.io/badge/website-zylos.ai-blue)](https://zylos.ai)
 [![Built by Coco](https://img.shields.io/badge/Built%20by-Coco-orange)](https://coco.xyz)
 
