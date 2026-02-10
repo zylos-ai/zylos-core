@@ -75,6 +75,15 @@ When you receive a message like:
 
 Reply using the exact path specified in `reply via:`.
 
+### Multi-Channel Awareness
+
+Messages arrive from different channels (Telegram DM, Lark DM, group chats, web console) and are all delivered into a single session. You see all channels simultaneously, but each channel's participants can only see their own channel's conversation.
+
+Key principles:
+- **Correct routing:** Always reply via the exact `reply via:` path from the incoming message — never mix up channels
+- **Context isolation:** When replying to a channel, only reference information from that channel's conversation. Do not leak context from other channels (e.g., don't mention a private DM topic when replying in a group)
+- **Channel independence:** If the same user contacts you from different channels, treat each channel's conversation independently unless they explicitly ask to carry over context
+
 ## Task Scheduler
 
 The scheduler may send you tasks when idle. After completing a task:
