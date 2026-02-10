@@ -234,6 +234,74 @@ header h1 {
   background: var(--text-secondary);
 }
 
+/* Login screen */
+.login-screen {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+  background-color: var(--bg-primary);
+}
+
+.login-box {
+  text-align: center;
+  padding: 2rem;
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 1rem;
+  width: 320px;
+}
+
+.login-box h1 {
+  font-size: 1.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.login-box p {
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+  margin-bottom: 1.5rem;
+}
+
+.login-box input {
+  width: 100%;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--border-color);
+  border-radius: 0.5rem;
+  background-color: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-size: 1rem;
+  outline: none;
+  margin-bottom: 1rem;
+}
+
+.login-box input:focus {
+  border-color: var(--accent);
+}
+
+.login-box button {
+  width: 100%;
+  padding: 0.75rem;
+  border: none;
+  border-radius: 0.5rem;
+  background-color: var(--accent);
+  color: white;
+  font-size: 1rem;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.login-box button:hover {
+  background-color: var(--accent-hover);
+}
+
+.login-error {
+  color: var(--error);
+  font-size: 0.875rem;
+  margin-top: 0.75rem;
+  min-height: 1.25rem;
+}
+
 /* Mobile responsiveness */
 @media (max-width: 600px) {
   .message {

@@ -7,7 +7,21 @@
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-  <div class="container">
+  <!-- Login Screen -->
+  <div class="login-screen" id="login-screen" style="display: none;">
+    <div class="login-box">
+      <h1>Zylos Console</h1>
+      <p>Enter password to continue</p>
+      <form id="login-form">
+        <input type="password" id="login-password" placeholder="Password" autofocus>
+        <button type="submit">Login</button>
+        <div class="login-error" id="login-error"></div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Chat Screen -->
+  <div class="container" id="chat-screen">
     <header>
       <h1>Zylos Console</h1>
       <div class="status" id="status">
