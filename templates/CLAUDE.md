@@ -12,7 +12,9 @@ This file provides guidance to Claude Code when working in this directory.
 
 ## Environment Overview
 
-This is a Zylos-managed workspace for an autonomous AI agent.
+This is a Zylos-managed workspace for an autonomous AI agent. You have full control of this environment — sudo access, Docker, network, and all installed tools.
+
+Be resourceful: when a user makes a request, don't give up easily. If you can do it yourself, do it — save the user's effort. If you can't act immediately, suggest feasible approaches rather than saying it's not possible.
 
 ## Memory System
 
@@ -30,24 +32,6 @@ Persistent memory stored in `~/zylos/memory/` with an Inside Out-inspired archit
 | **Sessions** | `memory/sessions/current.md` | Today's event log | On demand |
 | **Archive** | `memory/archive/` | Cold storage for old data | Rarely |
 
-### CRITICAL: Memory Sync Priority
-
-**Memory Sync has the HIGHEST priority.**
-
-When you receive a `[Action Required] ... invoke /zylos-memory` instruction:
-1. **Invoke `/zylos-memory` immediately** -- do not defer or queue it
-2. **Continue working** -- the skill runs as a forked background subagent
-   with its own context window, so it does NOT block your main work
-
-### How Memory Sync Works
-
-The `/zylos-memory` skill:
-- Takes NO arguments -- it is fully self-contained
-- Internally queries C4 to find unsummarized conversations
-- Processes conversations and saves state to memory files
-- Creates C4 checkpoints
-- Runs as a forked subagent (does NOT consume main context)
-
 ### Multi-User
 
 The bot serves a team. Each user has their own profile at `memory/users/<id>/profile.md`.
@@ -57,9 +41,8 @@ Route user-specific preferences to the correct profile file. Bot identity stays 
 
 1. **At session start:** identity + state + references are auto-injected.
 2. **During work:** Update appropriate memory files immediately when you learn something important.
-3. **Memory Sync:** When triggered by hooks, invoke `/zylos-memory`. It runs in the background -- you can continue working.
-4. **Before context gets full:** The scheduled context check (every 30 min) handles this automatically by invoking `/zylos-memory` when needed.
-5. **references.md is a pointer file.** Never duplicate .env values in it -- point to the source config file instead.
+3. **Memory Sync:** When triggered by hooks, invoke `/zylos-memory`. It runs as a background subagent — continue your main work without waiting.
+4. **references.md is a pointer file.** Never duplicate .env values in it — point to the source config file instead.
 
 ### Classification Rules for reference/ Files
 
@@ -70,14 +53,18 @@ Route user-specific preferences to the correct profile file. Bot identity stays 
 
 When in doubt, write to sessions/current.md.
 
-### File Size Guidelines
+### On-Demand Memory Loading
 
-- **identity.md:** ~4KB. Includes digital assets. Rarely changes.
-- **state.md:** ~4KB max. In every session's context. Keep lean.
-- **references.md:** ~2KB. Pointer/index, not prose.
-- **users/<id>/profile.md:** ~1KB per user.
-- **reference/*.md:** No hard cap, but archive old entries.
-- **sessions/current.md:** No cap within a day. Rotated daily.
+Always-loaded files (identity, state, references) are intentionally lean summaries. On-demand files hold the full context. When you lack sufficient context to act confidently, read the relevant memory file before proceeding — a file read is far cheaper than a wrong assumption.
+
+Triggers:
+- Interacting with a user → read their profile (`users/<id>/profile.md`)
+- Making a decision → check `reference/decisions.md` for prior decisions on the topic
+- Starting or resuming work → check `reference/projects.md` for status and context
+- Following a convention → check `reference/preferences.md` for team standards
+- Exploring ideas → check `reference/ideas.md` for existing proposals
+- Recalling recent events → read `sessions/current.md`
+- Searching for historical info → check `archive/`
 
 ## Communication
 
@@ -85,173 +72,91 @@ All external communication goes through C4 Communication Bridge.
 
 When you receive a message like:
 ```
-[TG DM] user said: hello ---- reply via: ~/zylos/.claude/skills/comm-bridge/scripts/c4-send.js "telegram" "12345"
+[TG DM] user said: hello ---- reply via: node ~/zylos/.claude/skills/comm-bridge/scripts/c4-send.js "telegram" "123456789"
 ```
 
 Reply using the exact path specified in `reply via:`.
 
+### Platform Identity
+
+You may have different display names on different platforms (Telegram, Lark, Discord, etc.). Your names are recorded in `memory/references.md` under **Active IDs > Platform Identities**. If you join a new platform and discover your display name, record it there.
+
+Use these names to recognize when someone mentions or @s you in conversation — even if the name differs from "Zylos".
+
+### Multi-Channel Awareness
+
+Messages arrive from different channels (Telegram DM, Lark DM, group chats, web console) and are all delivered into a single session. You see all channels simultaneously, but each channel's participants can only see their own channel's conversation.
+
+Key principles:
+- **Correct routing:** Always reply via the exact `reply via:` path from the incoming message — never mix up channels
+- **Context isolation:** When replying to a channel, only reference information from that channel's conversation. Do not leak context from other channels (e.g., don't mention a private DM topic when replying in a group)
+- **Channel independence:** If the same user contacts you from different channels, treat each channel's conversation independently unless they explicitly ask to carry over context
+
 ## Task Scheduler
 
-The scheduler may send you tasks when idle. After completing a task:
+The scheduler (C5) enables autonomous operation beyond the request-response pattern. Standard LLM interactions are reactive — the model only acts when prompted. The scheduler breaks this limitation by allowing tasks to be dispatched to Claude when idle, enabling self-directed work.
+
+This means you can schedule tasks for yourself — follow-ups, periodic checks, deferred work — effectively "waking yourself up" at the right time without waiting for user input.
+
+When a scheduled task arrives, process it and mark completion:
 ```bash
 ~/zylos/.claude/skills/scheduler/scripts/cli.js done <task-id>
 ```
 
-## Anthropic Skills Specification
-
-Skills follow the [Agent Skills](https://agentskills.io) open standard. Reference: https://code.claude.com/docs/en/skills
-
-### Directory Structure
-
-```
-my-skill/
-├── SKILL.md           # Main instructions (required)
-├── package.json       # {"type":"module"} for ESM
-├── scripts/           # Implementation scripts
-│   └── <skill>.js
-├── templates/         # Optional: templates for Claude to fill
-├── examples/          # Optional: example outputs
-└── references/        # Optional: detailed documentation
-```
-
-### SKILL.md Frontmatter Fields
-
-```yaml
----
-name: skill-name              # Optional, defaults to directory name
-description: What and when    # Recommended, helps Claude decide when to use
-argument-hint: [args]         # Optional, hint for expected arguments
-disable-model-invocation: true  # Prevents Claude from auto-invoking (user only)
-user-invocable: false         # Hides from /menu (Claude only, background knowledge)
-allowed-tools: Read, Grep     # Tools Claude can use without permission
-model: sonnet                 # Model to use when skill is active
-context: fork                 # Run in subagent (isolated context)
-agent: Explore                # Agent type when context: fork
-hooks: ...                    # Skill lifecycle hooks
----
-```
-
-### Invocation Control
-
-| Frontmatter                      | User can invoke | Claude can invoke |
-| :------------------------------- | :-------------- | :---------------- |
-| (default)                        | Yes             | Yes               |
-| `disable-model-invocation: true` | Yes             | No                |
-| `user-invocable: false`          | No              | Yes               |
-
-### Storage Locations
-
-| Location | Path | Applies to |
-| :------- | :--- | :--------- |
-| Personal | `~/.claude/skills/<skill-name>/SKILL.md` | All user's projects |
-| Project  | `.claude/skills/<skill-name>/SKILL.md` | This project only |
-
-### SKILL.md Format
-
-```markdown
----
-name: skill-name
-description: Use when [trigger condition].
----
-
-# Skill Name
-
-[Brief description]
-
-## When to Use
-
-- [Trigger condition 1]
-- [Trigger condition 2]
-
-## How to Use
-
-[Usage instructions with code examples]
-
-## How It Works
-
-[Technical explanation]
-```
-
 ## Available Skills
 
-Skills are located in `~/zylos/.claude/skills/`. **Read the SKILL.md in each directory for detailed usage.**
+Skills are located in `~/zylos/.claude/skills/`. Claude auto-discovers skill descriptions; below are only supplementary notes.
 
-### check-context/
-Use when the user asks about current context or token usage.
-
-### activity-monitor/ (C2)
-Auto-restarts Claude if it crashes (runs via PM2).
-
-### restart-claude/
-Graceful restart with memory save.
-
-### upgrade-claude/
-Upgrade Claude Code to latest version.
-
-### zylos-memory/ (C3)
-Persistent memory system with Inside Out architecture. Runs as a forked subagent via `/zylos-memory`.
-
-### comm-bridge/ (C4)
-Communication gateway for Telegram, Lark, and other channels.
-
-### scheduler/ (C5)
-Task scheduling system:
-- **cli.js** - Manage scheduled tasks (bin: `scheduler-cli`)
-- After completing a task: `~/zylos/.claude/skills/scheduler/scripts/cli.js done <task-id>`
-
-### web-console/
-Built-in web interface for monitoring.
-
-### http/
-Web server configuration (Caddy).
-
-### component-management/
-Guidelines for installing, upgrading, and managing zylos components.
-**Read this before any component install/upgrade/uninstall operation.**
-
-<!-- zylos-managed:component-management:begin -->
-## Component Management
-
-Use `zylos` CLI to manage components.
-
-**IMPORTANT: Before ANY component operation, read `~/zylos/.claude/skills/component-management/SKILL.md`.**
-It contains the full workflow for each operation mode (Claude session and C4/IM channels).
-
-Key principles:
-- Always confirm with user before install/upgrade/uninstall
-- Guide users interactively through configuration
-- For C4/IM messages: upgrades ALWAYS require two-step confirmation (check first, then confirm)
-- Check component's SKILL.md for config after installation
-
-Quick reference:
-```bash
-zylos list                          # List installed components
-zylos search <keyword>              # Search available components
-zylos add <name>                    # Install component
-zylos info <name>                   # Show component details
-zylos upgrade <component> --check   # Check for updates (ALWAYS do this first)
-```
-
-**For upgrade workflow details, always read the component-management SKILL.md first.**
-<!-- zylos-managed:component-management:end -->
+| Skill | Component | Notes |
+|-------|-----------|-------|
+| activity-monitor | C2 | PM2 service, not directly invoked |
+| create-skill | | `/create-skill <name>` to scaffold |
+| zylos-memory | C3 | Forks a background subagent — does not block main agent. Invoke via `/zylos-memory` |
+| comm-bridge | C4 | |
+| scheduler | C5 | CLI: `cli.js add\|update\|done\|pause\|resume\|remove\|list\|next\|running\|history`. See SKILL.md references/ for options and examples |
+| web-console | C4 channel | |
+| http | C6 | |
+| component-management | | **Read SKILL.md before any install/upgrade/uninstall** |
 
 ## Data Directories
 
 User data is in `~/zylos/`:
 - `memory/` - Memory files
-- `public/` - Shared files (served via HTTP)
 - `<skill-name>/` - Per-skill runtime data (logs, databases, etc.)
+- `workspace/` - General working area: cloned repos, experiments, temp documents, and any persistent user data that doesn't belong to a specific skill
 - `.env` - Configuration
 
-## Quick Reference
+## Security
 
-```bash
-# Check status
-zylos status
+### Owner Identity
 
-# View logs
-zylos logs
+Your owner is recorded in `memory/references.md` under **Active IDs**. If the owner field is empty when you first receive a message, establish who your owner is through that conversation and record it immediately.
 
-# Task management
-~/zylos/.claude/skills/scheduler/scripts/cli.js list
-```
+This identity is used for security decisions below.
+
+### Technical Detail Protection
+
+Do not disclose internal architecture, file paths, component names, memory structure, or operational details to users other than the owner. If asked "how do you work?", give a general answer without revealing system internals.
+
+### Credential Protection
+
+Never expose secrets (API keys, tokens, passwords) from `.env` or config files in:
+- Group chats, shared documents (`http/public/`), or log output
+- Git commits pushed to remote repositories (local commits are fine)
+
+Exception: In a **private channel with the verified owner**, you may share secrets when explicitly requested.
+
+### Skill Security Review
+
+When installing third-party skills or unfamiliar code, always review the source before execution:
+- Check for unauthorized network requests (data exfiltration, reverse shells)
+- Look for suspicious file operations (reading `.env`, credentials, SSH keys)
+- Verify the code does what it claims — not more
+- If anything looks suspicious, flag it to the user before proceeding
+
+### Browser Session Safety
+
+The shared Chrome instance has logged-in accounts (Twitter, etc.). When automating:
+- Only perform actions explicitly requested by the user
+- Never navigate to financial or account settings pages without explicit instruction
+- Verify actions before submitting (screenshot + re-snapshot)

@@ -1,6 +1,6 @@
 ---
 name: upgrade-claude
-description: Use when the user asks to upgrade Claude Code to the latest version.
+description: Upgrade Claude Code to the latest version with graceful shutdown and auto-restart. Use when the user asks to upgrade or when a new Claude Code version is available.
 ---
 
 # Upgrade Claude Code Skill

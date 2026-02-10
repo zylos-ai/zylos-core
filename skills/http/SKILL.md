@@ -1,6 +1,6 @@
 ---
 name: http
-description: Web server for console and file sharing. Core C6 component.
+description: Caddy-based web server providing web console hosting, file sharing, and health check endpoints. Use when configuring HTTP access, setting up file sharing, or troubleshooting web connectivity.
 ---
 
 # HTTP Layer (C6)

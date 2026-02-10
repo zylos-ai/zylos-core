@@ -276,6 +276,7 @@ function createDirectoryStructure() {
     HTTP_DIR,
     path.join(HTTP_DIR, 'public'),
     path.join(ZYLOS_DIR, 'memory'),
+    path.join(ZYLOS_DIR, 'workspace'),
     path.join(ZYLOS_DIR, 'logs'),
     path.join(ZYLOS_DIR, 'pm2'),
   ];
