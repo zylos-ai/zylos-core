@@ -1,6 +1,6 @@
 ---
 name: check-context
-description: Use when the user asks about current context or token usage.
+description: Accurately check current context window and token usage. Use when the user asks about context usage, token consumption, or when monitoring context levels.
 ---
 
 # Check Context Skill

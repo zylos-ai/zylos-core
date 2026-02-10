@@ -1,6 +1,6 @@
 ---
 name: component-management
-description: Guidelines for managing zylos components via CLI and C4 channels.
+description: Guidelines for managing zylos components via CLI and C4 channels. Use when installing, upgrading, or uninstalling components, or when user asks about available components.
 ---
 
 # Component Management

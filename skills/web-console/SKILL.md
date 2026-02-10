@@ -1,6 +1,6 @@
 ---
 name: web-console
-description: Built-in web interface for communicating with Claude. Core C4 channel.
+description: Built-in web interface for communicating with Claude without external services. Use when setting up or configuring the web console channel, or troubleshooting browser-based access.
 ---
 
 # Web Console (C4 Built-in Channel)
