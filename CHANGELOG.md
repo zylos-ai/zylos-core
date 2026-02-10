@@ -5,6 +5,16 @@ All notable changes to zylos-core will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.0-beta.27] - 2026-02-10
+
+### Added
+- **Interactive component setup**: `zylos add` in terminal mode now completes the full installation — prompts for required config (e.g. bot tokens), writes to `.env`, runs post-install hooks, and starts the PM2 service. Previously it stopped after code install and expected Claude to handle the rest, which didn't work in terminal mode.
+
+### Unchanged
+- JSON mode (`--json`) for IM/C4 installations is not affected — still outputs metadata for Claude to handle config/hooks/service conversationally.
+
+---
+
 ## [0.1.0-beta.26] - 2026-02-10
 
 ### Fixed
