@@ -128,7 +128,7 @@ zylos search [keyword]        # Search component registry
 
 ---
 
-## <img src="https://coco.xyz/logo.png" width="28" /> Built by Coco
+## <img src="assets/coco-logo.png" width="28" /> Built by Coco
 
 Zylos is the open-source core of [Coco](https://coco.xyz) — the AI employee platform.
 
