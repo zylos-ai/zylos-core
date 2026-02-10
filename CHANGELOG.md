@@ -5,6 +5,13 @@ All notable changes to zylos-core will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.0-beta.28] - 2026-02-10
+
+### Improved
+- **`zylos init` Claude auth flow**: When Claude Code is not authenticated, now offers to run `claude auth` interactively and waits for completion. If user skips, a reminder is shown in the "Next steps" output. Previously just printed a warning and continued silently.
+
+---
+
 ## [0.1.0-beta.27] - 2026-02-10
 
 ### Added

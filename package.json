@@ -1,6 +1,6 @@
 {
   "name": "zylos",
-  "version": "0.1.0-beta.27",
+  "version": "0.1.0-beta.28",
   "type": "module",
   "description": "Autonomous AI Agent Infrastructure",
   "main": "cli/zylos.js",
