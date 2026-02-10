@@ -1,10 +1,14 @@
 /**
  * zylos add - Install a component
  *
- * Mechanical installation only:
+ * Terminal mode (default): Full interactive setup
  *   1. Resolve target → download → npm install → manifest → register
- *   2. Output SKILL.md metadata (config schema, hooks, service info)
- *   3. Claude handles: config collection, hook execution, service start, user guidance
+ *   2. Collect required config (prompt user) → write to .env
+ *   3. Run post-install hook → start PM2 service
+ *
+ * JSON mode (--json): Mechanical installation only
+ *   1. Resolve target → download → npm install → manifest → register
+ *   2. Output SKILL.md metadata for Claude to handle config/hooks/service
  */
 
 import fs from 'node:fs';
@@ -18,7 +22,9 @@ import { generateManifest, saveManifest } from '../lib/manifest.js';
 import { parseSkillMd, detectComponentType } from '../lib/skill.js';
 import { linkBins } from '../lib/bin.js';
 import { applyCaddyRoutes } from '../lib/caddy.js';
-import { promptYesNo } from '../lib/prompts.js';
+import { promptYesNo, prompt, promptSecret } from '../lib/prompts.js';
+import { writeEnvEntries } from '../lib/env.js';
+import { registerService } from '../lib/service.js';
 
 /**
  * Main entry: zylos add <target> [--yes]
@@ -122,7 +128,8 @@ export async function addComponent(args) {
 
 /**
  * Install a declarative component (has SKILL.md).
- * Only handles mechanical operations. Claude handles config, hooks, service start.
+ * Terminal mode: full interactive setup (config → hooks → service start).
+ * JSON mode: mechanical install only, outputs metadata for Claude.
  */
 async function installDeclarative(resolved, skillDir, skipConfirm, jsonOutput) {
   if (!jsonOutput) console.log('\nInstalling (declarative)...');
@@ -212,7 +219,7 @@ async function installDeclarative(resolved, skillDir, skipConfirm, jsonOutput) {
     }
   }
 
-  // Output result
+  // JSON mode: output metadata for Claude to handle
   if (jsonOutput) {
     const output = {
       action: 'add',
@@ -231,10 +238,82 @@ async function installDeclarative(resolved, skillDir, skipConfirm, jsonOutput) {
       },
     };
     console.log(JSON.stringify(output, null, 2));
-  } else {
-    console.log(`\n✓ ${resolved.name} code installed successfully!`);
-    console.log('  Claude will now collect configuration and start the service.');
+    return;
   }
+
+  // Terminal mode: interactive setup
+
+  // Step 6: Collect required configuration
+  const requiredConfig = config.required;
+  if (Array.isArray(requiredConfig) && requiredConfig.length > 0) {
+    console.log('\nConfiguration:');
+    const envEntries = {};
+
+    for (const item of requiredConfig) {
+      const name = typeof item === 'string' ? item : item.name;
+      const desc = typeof item === 'string' ? '' : item.description || '';
+      const sensitive = typeof item === 'string' ? false : item.sensitive === true;
+
+      const hint = desc ? ` (${desc})` : '';
+      let value;
+      if (sensitive) {
+        value = await promptSecret(`  ${name}${hint}: `);
+      } else {
+        value = await prompt(`  ${name}${hint}: `);
+      }
+      if (value) {
+        envEntries[name] = value;
+      }
+    }
+
+    if (Object.keys(envEntries).length > 0) {
+      const envResult = writeEnvEntries(envEntries, resolved.name);
+      if (envResult.written.length > 0) {
+        console.log(`  ✓ Saved ${envResult.written.length} variable(s) to .env`);
+      }
+      if (envResult.skipped.length > 0) {
+        console.log(`  Skipped existing: ${envResult.skipped.join(', ')}`);
+      }
+    }
+  }
+
+  // Step 7: Run post-install hook
+  if (hooks['post-install']) {
+    const hookPath = path.resolve(skillDir, hooks['post-install']);
+    if (fs.existsSync(hookPath)) {
+      console.log('  Running post-install hook...');
+      try {
+        execSync(`node "${hookPath}"`, {
+          cwd: skillDir,
+          stdio: 'inherit',
+          timeout: 120000,
+        });
+        console.log('  ✓ Post-install hook complete.');
+      } catch {
+        console.log('  ⚠ Post-install hook had issues (non-fatal).');
+      }
+    }
+  }
+
+  // Step 8: Start service
+  const service = lifecycle.service;
+  if (service && service.entry) {
+    console.log('\nStarting service...');
+    const svcResult = registerService({
+      name: resolved.name,
+      entry: service.entry,
+      skillDir,
+      type: service.type || 'pm2',
+    });
+    if (svcResult.success) {
+      console.log(`  ✓ ${service.name || ('zylos-' + resolved.name)} started`);
+    } else {
+      console.log(`  ✗ Failed to start service: ${svcResult.error}`);
+      console.log('  You can start it manually later.');
+    }
+  }
+
+  console.log(`\n✓ ${resolved.name} installed successfully!`);
 }
 
 /**
