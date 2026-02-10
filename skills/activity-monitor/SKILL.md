@@ -125,7 +125,7 @@ Each heartbeat probe is enqueued with an ack deadline. If Claude does not acknow
 
 ### Recovery Behavior
 
-When health transitions back to `ok`, the engine reads `~/zylos/comm-bridge/pending-channels.jsonl` and sends a recovery notification to each recorded channel/endpoint via C4, then clears the file.
+When health transitions back to `ok`, the engine reads `~/zylos/activity-monitor/pending-channels.jsonl` and sends a recovery notification to each recorded channel/endpoint via C4, then clears the file.
 
 ## Health Check
 

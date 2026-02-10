@@ -31,7 +31,7 @@ export const DATA_DIR = path.join(ZYLOS_DIR, 'comm-bridge');
 export const DB_PATH = path.join(DATA_DIR, 'c4.db');
 export const ACTIVITY_MONITOR_DIR = path.join(ZYLOS_DIR, 'activity-monitor');
 export const CLAUDE_STATUS_FILE = path.join(ACTIVITY_MONITOR_DIR, 'claude-status.json');
-export const PENDING_CHANNELS_FILE = path.join(DATA_DIR, 'pending-channels.jsonl');
+export const PENDING_CHANNELS_FILE = path.join(ACTIVITY_MONITOR_DIR, 'pending-channels.jsonl');
 export const ATTACHMENTS_DIR = path.join(DATA_DIR, 'attachments');
 export const SKILLS_DIR = path.join(ZYLOS_DIR, '.claude', 'skills');
 

@@ -235,7 +235,7 @@ describe('c4-receive health gating', () => {
 
       cliRaw(['--channel', 'test-chan', '--endpoint', 'ep1', '--json', '--content', 'x'], env);
 
-      const pendingPath = path.join(dataDir, 'pending-channels.jsonl');
+      const pendingPath = path.join(tmpDir, 'activity-monitor', 'pending-channels.jsonl');
       assert.ok(fs.existsSync(pendingPath), 'pending-channels.jsonl should exist');
       const lines = fs.readFileSync(pendingPath, 'utf8').trim().split('\n');
       assert.equal(lines.length, 1);
@@ -254,7 +254,7 @@ describe('c4-receive health gating', () => {
 
       cliRaw(['--channel', 'test-chan', '--endpoint', 'ep1', '--json', '--content', 'x'], env);
 
-      const pendingPath = path.join(dataDir, 'pending-channels.jsonl');
+      const pendingPath = path.join(tmpDir, 'activity-monitor', 'pending-channels.jsonl');
       assert.ok(fs.existsSync(pendingPath), 'pending-channels.jsonl should exist');
     });
   });
@@ -300,7 +300,7 @@ describe('c4-receive pending channels', () => {
 
       cliRaw(['--channel', 'my-chan', '--endpoint', 'e1', '--json', '--content', 'x'], env);
 
-      const pendingPath = path.join(dataDir, 'pending-channels.jsonl');
+      const pendingPath = path.join(tmpDir, 'activity-monitor', 'pending-channels.jsonl');
       const lines = fs.readFileSync(pendingPath, 'utf8').trim().split('\n');
       assert.equal(lines.length, 1);
       const record = JSON.parse(lines[0]);
@@ -319,7 +319,7 @@ describe('c4-receive pending channels', () => {
       cliRaw(['--channel', 'dup-chan', '--endpoint', 'e1', '--json', '--content', 'first'], env);
       cliRaw(['--channel', 'dup-chan', '--endpoint', 'e1', '--json', '--content', 'second'], env);
 
-      const pendingPath = path.join(dataDir, 'pending-channels.jsonl');
+      const pendingPath = path.join(tmpDir, 'activity-monitor', 'pending-channels.jsonl');
       const lines = fs.readFileSync(pendingPath, 'utf8').trim().split('\n');
       assert.equal(lines.length, 1, 'should have exactly 1 line after dedup');
     });
@@ -336,7 +336,7 @@ describe('c4-receive pending channels', () => {
       cliRaw(['--channel', 'chan-a', '--endpoint', 'e1', '--json', '--content', 'a'], env);
       cliRaw(['--channel', 'chan-b', '--endpoint', 'e2', '--json', '--content', 'b'], env);
 
-      const pendingPath = path.join(dataDir, 'pending-channels.jsonl');
+      const pendingPath = path.join(tmpDir, 'activity-monitor', 'pending-channels.jsonl');
       const lines = fs.readFileSync(pendingPath, 'utf8').trim().split('\n');
       assert.equal(lines.length, 2, 'should have 2 distinct entries');
     });

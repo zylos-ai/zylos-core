@@ -63,7 +63,7 @@ Messages exceeding the configured size threshold are stored as files under `~/zy
 
 Before queuing a message, `c4-receive.js` reads the `health` field from `~/zylos/activity-monitor/claude-status.json`. If health is not `ok`:
 
-1. The channel/endpoint is recorded in `~/zylos/comm-bridge/pending-channels.jsonl` for recovery notification
+1. The channel/endpoint is recorded in `~/zylos/activity-monitor/pending-channels.jsonl` for recovery notification
 2. The message is rejected with a structured error:
    - `HEALTH_RECOVERING` — automatic recovery in progress
    - `HEALTH_DOWN` — manual intervention required

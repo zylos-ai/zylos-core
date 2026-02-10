@@ -51,7 +51,7 @@ The activity monitor writes `~/zylos/activity-monitor/claude-status.json` which 
 
 **Fail-open semantics**: If the status file is missing or malformed, health is assumed `ok` — intake is never blocked by a read failure.
 
-When health is not `ok`, `c4-receive.js` rejects incoming messages and records the channel/endpoint in `~/zylos/comm-bridge/pending-channels.jsonl`. Once health returns to `ok`, the activity monitor sends recovery notifications to all pending channels.
+When health is not `ok`, `c4-receive.js` rejects incoming messages and records the channel/endpoint in `~/zylos/activity-monitor/pending-channels.jsonl`. Once health returns to `ok`, the activity monitor sends recovery notifications to all pending channels.
 
 ## Service Management
 

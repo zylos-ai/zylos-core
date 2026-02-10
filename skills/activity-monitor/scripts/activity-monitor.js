@@ -18,7 +18,6 @@ const __dirname = path.dirname(__filename);
 // Core runtime config
 const SESSION = 'claude-main';
 const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
-const COMM_BRIDGE_DIR = path.join(ZYLOS_DIR, 'comm-bridge');
 const MONITOR_DIR = path.join(ZYLOS_DIR, 'activity-monitor');
 const STATUS_FILE = path.join(MONITOR_DIR, 'claude-status.json');
 const LOG_FILE = path.join(MONITOR_DIR, 'activity.log');
@@ -27,7 +26,7 @@ const HEALTH_CHECK_STATE_FILE = path.join(MONITOR_DIR, 'health-check-state.json'
 const DAILY_UPGRADE_STATE_FILE = path.join(MONITOR_DIR, 'daily-upgrade-state.json');
 const DAILY_MEMORY_COMMIT_STATE_FILE = path.join(MONITOR_DIR, 'daily-memory-commit-state.json');
 const CONTEXT_CHECK_STATE_FILE = path.join(MONITOR_DIR, 'context-check-state.json');
-const PENDING_CHANNELS_FILE = path.join(COMM_BRIDGE_DIR, 'pending-channels.jsonl');
+const PENDING_CHANNELS_FILE = path.join(MONITOR_DIR, 'pending-channels.jsonl');
 
 // Claude binary - relies on PATH from PM2 ecosystem.config.js
 const CLAUDE_BIN = process.env.CLAUDE_BIN || 'claude';
@@ -840,10 +839,6 @@ function init() {
   if (!fs.existsSync(MONITOR_DIR)) {
     fs.mkdirSync(MONITOR_DIR, { recursive: true });
   }
-  if (!fs.existsSync(COMM_BRIDGE_DIR)) {
-    fs.mkdirSync(COMM_BRIDGE_DIR, { recursive: true });
-  }
-
   const initialHealth = loadInitialHealth();
   engine = new HeartbeatEngine({
     enqueueHeartbeat,
