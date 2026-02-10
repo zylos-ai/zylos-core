@@ -369,7 +369,7 @@ function listTemplateFiles(templatesDir) {
 }
 
 // ---------------------------------------------------------------------------
-// 9-step self-upgrade pipeline
+// 10-step self-upgrade pipeline
 // ---------------------------------------------------------------------------
 
 /**
@@ -555,20 +555,57 @@ function step5_syncCoreSkills(ctx) {
 }
 
 /**
- * Step 6: sync CLAUDE.md managed sections
+ * Step 6: install/update skill dependencies
  */
-function step6_syncClaudeMd(ctx) {
+function step6_installSkillDeps(ctx) {
+  const startTime = Date.now();
+  const entries = fs.readdirSync(SKILLS_DIR, { withFileTypes: true });
+  let installed = 0;
+  const failed = [];
+
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const skillDir = path.join(SKILLS_DIR, entry.name);
+    const pkgPath = path.join(skillDir, 'package.json');
+    if (!fs.existsSync(pkgPath)) continue;
+
+    try {
+      const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+      if (!pkg.dependencies || Object.keys(pkg.dependencies).length === 0) continue;
+
+      execSync('npm install --production', {
+        cwd: skillDir,
+        stdio: 'pipe',
+        timeout: 120000,
+      });
+      installed++;
+    } catch {
+      failed.push(entry.name);
+    }
+  }
+
+  const msg = `${installed} installed${failed.length ? `, ${failed.length} failed: ${failed.join(', ')}` : ''}`;
+  if (failed.length > 0) {
+    return { step: 6, name: 'install_skill_deps', status: 'failed', error: msg, duration: Date.now() - startTime };
+  }
+  return { step: 6, name: 'install_skill_deps', status: 'done', message: msg, duration: Date.now() - startTime };
+}
+
+/**
+ * Step 7: sync CLAUDE.md managed sections
+ */
+function step7_syncClaudeMd(ctx) {
   const startTime = Date.now();
 
   const templateDir = path.join(ctx.tempDir, 'templates');
   if (!fs.existsSync(templateDir)) {
-    return { step: 6, name: 'sync_claude_md', status: 'skipped', message: 'no templates in new version', duration: Date.now() - startTime };
+    return { step: 7, name: 'sync_claude_md', status: 'skipped', message: 'no templates in new version', duration: Date.now() - startTime };
   }
 
   try {
     const syncResult = syncClaudeMd(templateDir);
     if (syncResult.skipped) {
-      return { step: 6, name: 'sync_claude_md', status: 'skipped', message: 'no managed sections', duration: Date.now() - startTime };
+      return { step: 7, name: 'sync_claude_md', status: 'skipped', message: 'no managed sections', duration: Date.now() - startTime };
     }
 
     const parts = [];
@@ -576,30 +613,30 @@ function step6_syncClaudeMd(ctx) {
     if (syncResult.added.length) parts.push(`${syncResult.added.length} added`);
     const msg = parts.join(', ') || 'no changes';
 
-    return { step: 6, name: 'sync_claude_md', status: 'done', message: msg, duration: Date.now() - startTime };
+    return { step: 7, name: 'sync_claude_md', status: 'done', message: msg, duration: Date.now() - startTime };
   } catch (err) {
     // Non-fatal — CLAUDE.md update failure shouldn't block the upgrade
-    return { step: 6, name: 'sync_claude_md', status: 'skipped', message: err.message, duration: Date.now() - startTime };
+    return { step: 7, name: 'sync_claude_md', status: 'skipped', message: err.message, duration: Date.now() - startTime };
   }
 }
 
 /**
- * Step 7: post-upgrade hook (placeholder for future use)
+ * Step 8: post-upgrade hook (placeholder for future use)
  */
-function step7_postUpgradeHook(ctx) {
+function step8_postUpgradeHook(ctx) {
   const startTime = Date.now();
   // No core post-upgrade hook yet — reserved for future
-  return { step: 7, name: 'post_upgrade_hook', status: 'skipped', duration: Date.now() - startTime };
+  return { step: 8, name: 'post_upgrade_hook', status: 'skipped', duration: Date.now() - startTime };
 }
 
 /**
- * Step 8: start core services
+ * Step 9: start core services
  */
-function step8_startCoreServices(ctx) {
+function step9_startCoreServices(ctx) {
   const startTime = Date.now();
 
   if (ctx.servicesWereRunning.length === 0) {
-    return { step: 8, name: 'start_core_services', status: 'skipped', message: 'no services to restart', duration: Date.now() - startTime };
+    return { step: 9, name: 'start_core_services', status: 'skipped', message: 'no services to restart', duration: Date.now() - startTime };
   }
 
   const started = [];
@@ -615,20 +652,20 @@ function step8_startCoreServices(ctx) {
   }
 
   if (failed.length > 0) {
-    return { step: 8, name: 'start_core_services', status: 'failed', error: `Failed to restart: ${failed.join(', ')}`, duration: Date.now() - startTime };
+    return { step: 9, name: 'start_core_services', status: 'failed', error: `Failed to restart: ${failed.join(', ')}`, duration: Date.now() - startTime };
   }
 
-  return { step: 8, name: 'start_core_services', status: 'done', message: started.join(', '), duration: Date.now() - startTime };
+  return { step: 9, name: 'start_core_services', status: 'done', message: started.join(', '), duration: Date.now() - startTime };
 }
 
 /**
- * Step 9: verify services
+ * Step 10: verify services
  */
-function step9_verifyServices(ctx) {
+function step10_verifyServices(ctx) {
   const startTime = Date.now();
 
   if (ctx.servicesWereRunning.length === 0) {
-    return { step: 9, name: 'verify_services', status: 'skipped', message: 'no services to verify', duration: Date.now() - startTime };
+    return { step: 10, name: 'verify_services', status: 'skipped', message: 'no services to verify', duration: Date.now() - startTime };
   }
 
   // Brief wait for services to start
@@ -648,12 +685,12 @@ function step9_verifyServices(ctx) {
     }
 
     if (notOnline.length > 0) {
-      return { step: 9, name: 'verify_services', status: 'failed', error: `Not online: ${notOnline.join(', ')}`, duration: Date.now() - startTime };
+      return { step: 10, name: 'verify_services', status: 'failed', error: `Not online: ${notOnline.join(', ')}`, duration: Date.now() - startTime };
     }
 
-    return { step: 9, name: 'verify_services', status: 'done', duration: Date.now() - startTime };
+    return { step: 10, name: 'verify_services', status: 'done', duration: Date.now() - startTime };
   } catch (err) {
-    return { step: 9, name: 'verify_services', status: 'failed', error: err.message, duration: Date.now() - startTime };
+    return { step: 10, name: 'verify_services', status: 'failed', error: err.message, duration: Date.now() - startTime };
   }
 }
 
@@ -708,7 +745,7 @@ function rollbackSelf(ctx) {
 // ---------------------------------------------------------------------------
 
 /**
- * Run the 9-step self-upgrade pipeline.
+ * Run the 10-step self-upgrade pipeline.
  * Template migration and Claude restart are handled by Claude after this completes.
  * Lock must be acquired by caller.
  *
@@ -730,10 +767,11 @@ export function runSelfUpgrade({ tempDir, newVersion, onStep } = {}) {
     step3_stopCoreServices,
     step4_npmInstallGlobal,
     step5_syncCoreSkills,
-    step6_syncClaudeMd,
-    step7_postUpgradeHook,
-    step8_startCoreServices,
-    step9_verifyServices,
+    step6_installSkillDeps,
+    step7_syncClaudeMd,
+    step8_postUpgradeHook,
+    step9_startCoreServices,
+    step10_verifyServices,
   ];
 
   const total = steps.length;
