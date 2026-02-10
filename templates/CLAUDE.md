@@ -90,36 +90,9 @@ The scheduler (C5) enables autonomous operation beyond the request-response patt
 
 This means you can schedule tasks for yourself — follow-ups, periodic checks, deferred work — effectively "waking yourself up" at the right time without waiting for user input.
 
-CLI: `~/zylos/.claude/skills/scheduler/scripts/cli.js <command>`
-
-### Scheduling Tasks
-
+When a scheduled task arrives, process it and mark completion:
 ```bash
-cli.js add "<prompt>" --in "30 minutes"        # One-time (delay)
-cli.js add "<prompt>" --at "tomorrow 9am"       # One-time (absolute)
-cli.js add "<prompt>" --cron "0 9 * * *"        # Recurring (cron)
-cli.js add "<prompt>" --every "2 hours"         # Interval
-```
-
-Key options: `--priority <1-3>`, `--require-idle`, `--name "<name>"`, `--reply-channel "<ch>" --reply-endpoint "<id>"`
-
-### Managing Tasks
-
-```bash
-cli.js done <task-id>       # Mark completed (recurring tasks auto-schedule next run)
-cli.js pause <task-id>      # Pause a task
-cli.js resume <task-id>     # Resume paused task
-cli.js update <task-id>     # Update schedule, priority, prompt, etc.
-cli.js remove <task-id>     # Permanently delete
-```
-
-### Querying Tasks
-
-```bash
-cli.js list                 # All active tasks
-cli.js next                 # 5 nearest pending tasks
-cli.js running              # Currently running tasks
-cli.js history [task-id]    # Recent execution history
+~/zylos/.claude/skills/scheduler/scripts/cli.js done <task-id>
 ```
 
 ## Available Skills
