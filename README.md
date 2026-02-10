@@ -6,9 +6,8 @@
 
 *Powered by Claude Code*
 
-[![Stars](https://img.shields.io/github/stars/zylos-ai/zylos-core?style=flat)](https://github.com/zylos-ai/zylos-core)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Discord](https://img.shields.io/discord/PLACEHOLDER)](https://discord.gg/zylos)
+[![Discord](https://img.shields.io/badge/Discord-join-5865F2?logo=discord&logoColor=white)](https://discord.gg/vbcR7MWe)
 [![Website](https://img.shields.io/badge/website-zylos.ai-blue)](https://zylos.ai)
 [![Built by Coco](https://img.shields.io/badge/Built%20by-Coco-orange)](https://coco.xyz)
 
