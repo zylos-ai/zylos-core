@@ -5,6 +5,14 @@ All notable changes to zylos-core will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.0-beta.23] - 2026-02-10
+
+### Fixed
+- **Skill dependency installation**: `zylos init` now always runs `npm install --production` for skills instead of skipping when `node_modules/` exists, ensuring new dependencies are installed after upgrades
+- **Self-upgrade skill deps**: Added step 6 (install skill dependencies) to self-upgrade pipeline (9→10 steps), so skill dependencies are updated after syncing skill files
+
+---
+
 ## [0.1.0-beta.22] - 2026-02-10
 
 ### Added

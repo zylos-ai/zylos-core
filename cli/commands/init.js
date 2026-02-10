@@ -411,7 +411,6 @@ function installSkillDependencies() {
     try {
       const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
       if (!pkg.dependencies || Object.keys(pkg.dependencies).length === 0) continue;
-      if (fs.existsSync(path.join(skillDir, 'node_modules'))) continue;
 
       console.log(`  Installing ${entry.name} dependencies...`);
       execSync('npm install --production', {
