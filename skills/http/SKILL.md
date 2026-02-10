@@ -40,8 +40,6 @@ To re-run setup: `zylos init`
 |------|-------------|
 | `/` | File listing or index.html |
 | `/*.md` | Markdown documents (served as plain text) |
-| `/health` | Health check (returns "OK") |
-| `/console/*` | Web Console interface (if web-console component active) |
 
 ## File Sharing
 

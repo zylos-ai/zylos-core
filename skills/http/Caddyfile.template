@@ -14,10 +14,6 @@
         header Content-Type "text/plain; charset=utf-8"
     }
 
-    handle /health {
-        respond "OK" 200
-    }
-
     # Component routes are auto-inserted here by `zylos add`
     # using marker comments: # BEGIN/END zylos-component:<name>
 

@@ -28,8 +28,9 @@ pm2 start scripts/server.js --name web-console
 
 ## Access
 
-Direct: `http://localhost:3456`
-Via Caddy: `https://<your-domain>/console/`
+Local only: `http://127.0.0.1:3456`
+
+Server binds to `127.0.0.1` by default for security.
 
 ## Architecture
 
@@ -48,7 +49,7 @@ Browser ──► Web Console Server ──► C4 Bridge ──► Claude
 | `/api/conversations/recent` | GET | Get recent conversation history |
 | `/api/send` | POST | Send message to Claude |
 | `/api/poll?since_id=N` | GET | Poll for new messages |
-| `/api/health` | GET | Health check |
+| `/api/health` | GET | Server health check |
 
 ## Files
 
@@ -63,17 +64,6 @@ Browser ──► Web Console Server ──► C4 Bridge ──► Claude
     ├── index.html     # Chat UI
     ├── styles.css     # Styling
     └── app.js         # Frontend logic
-```
-
-## Caddy Integration
-
-Add to Caddyfile for HTTPS access:
-
-```
-handle /console/* {
-    uri strip_prefix /console
-    reverse_proxy localhost:3456
-}
 ```
 
 ## Environment Variables

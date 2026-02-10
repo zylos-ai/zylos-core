@@ -33,9 +33,12 @@ const DB_DIR = path.join(ZYLOS_DIR, 'comm-bridge');
 const DB_PATH = path.join(DB_DIR, 'c4.db');
 const STATUS_FILE = path.join(DB_DIR, 'claude-status.json');
 
+// Paths - __dirname is scripts/, public/ is one level up
+const SKILL_ROOT = path.join(__dirname, '..');
+
 // Middleware
 app.use(express.json());
-app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.static(path.join(SKILL_ROOT, 'public')));
 
 // Initialize database connection
 let db;
@@ -111,9 +114,9 @@ function cleanMessageForDisplay(msg) {
 function getNewMessages(sinceId) {
   try {
     const stmt = db.prepare(`
-      SELECT id, direction, source, endpoint_id, content, timestamp
+      SELECT id, direction, channel, endpoint_id, content, timestamp
       FROM conversations
-      WHERE source = 'web-console' AND id > ?
+      WHERE channel = 'web-console' AND id > ?
       ORDER BY timestamp ASC
     `);
     return stmt.all(sinceId).map(cleanMessageForDisplay);
@@ -158,7 +161,7 @@ setInterval(checkUpdates, 500);
 
 // Initialize lastMessageId
 try {
-  const stmt = db.prepare(`SELECT MAX(id) as maxId FROM conversations WHERE source = 'web-console'`);
+  const stmt = db.prepare(`SELECT MAX(id) as maxId FROM conversations WHERE channel = 'web-console'`);
   const result = stmt.get();
   lastMessageId = result?.maxId || 0;
 } catch (err) {
@@ -234,17 +237,17 @@ app.get('/api/status', (req, res) => {
 app.get('/api/conversations', (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 50;
-    const source = req.query.source || 'web-console';
+    const channel = req.query.channel || 'web-console';
 
     const stmt = db.prepare(`
-      SELECT id, direction, source, endpoint_id, content, timestamp
+      SELECT id, direction, channel, endpoint_id, content, timestamp
       FROM conversations
-      WHERE source = ?
+      WHERE channel = ?
       ORDER BY timestamp DESC
       LIMIT ?
     `);
 
-    const conversations = stmt.all(source, limit);
+    const conversations = stmt.all(channel, limit);
     res.json(conversations.reverse());
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -259,9 +262,9 @@ app.get('/api/conversations/recent', (req, res) => {
     const limit = parseInt(req.query.limit) || 100;
 
     const stmt = db.prepare(`
-      SELECT id, direction, source, endpoint_id, content, timestamp
+      SELECT id, direction, channel, endpoint_id, content, timestamp
       FROM conversations
-      WHERE source = 'web-console'
+      WHERE channel = 'web-console'
       ORDER BY timestamp DESC
       LIMIT ?
     `);
@@ -342,7 +345,7 @@ app.get('/api/health', (req, res) => {
 
 // Serve index.html for root
 app.get('/', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+  res.sendFile(path.join(SKILL_ROOT, 'public', 'index.html'));
 });
 
 // Start server (bind to localhost only for security)
