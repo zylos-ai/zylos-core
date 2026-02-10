@@ -270,6 +270,10 @@ function ensureBinInPath() {
     return false;
   }
 
+  // Update current process PATH immediately so child processes (hooks,
+  // services) can find binaries without needing a new shell session
+  process.env.PATH = `${BIN_DIR}:${process.env.PATH}`;
+
   const home = process.env.HOME;
   const marker = '# zylos-managed: bin PATH';
   const snippet = `\n${marker}\nexport PATH="${BIN_DIR}:$PATH"\n`;

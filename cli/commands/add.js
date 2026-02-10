@@ -14,7 +14,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execSync } from 'node:child_process';
-import { SKILLS_DIR, COMPONENTS_DIR } from '../lib/config.js';
+import { SKILLS_DIR, COMPONENTS_DIR, BIN_DIR } from '../lib/config.js';
 import { loadRegistry } from '../lib/registry.js';
 import { loadComponents, saveComponents, resolveTarget, outputTask } from '../lib/components.js';
 import { downloadArchive, downloadBranch } from '../lib/download.js';
@@ -203,6 +203,11 @@ async function installDeclarative(resolved, skillDir, skipConfirm, jsonOutput) {
         console.log(`  CLI command: ${cmd}`);
       }
     }
+    // Ensure BIN_DIR is in current process PATH so post-install hooks
+    // and services can find newly created bin commands
+    if (!(process.env.PATH || '').split(':').includes(BIN_DIR)) {
+      process.env.PATH = `${BIN_DIR}:${process.env.PATH}`;
+    }
   }
 
   // Step 5: Apply Caddy routes (if declared)
@@ -314,6 +319,14 @@ async function installDeclarative(resolved, skillDir, skipConfirm, jsonOutput) {
   }
 
   console.log(`\n✓ ${resolved.name} installed successfully!`);
+
+  // Show PATH hint if bin commands were linked
+  if (binResult && Object.keys(binResult).length > 0) {
+    const cmds = Object.keys(binResult).join(', ');
+    console.log(`\nNote: Run the following to use ${cmds} in this terminal:`);
+    console.log('  export PATH="$HOME/zylos/bin:$PATH"');
+    console.log('Or restart your terminal for the change to take effect.');
+  }
 }
 
 /**
