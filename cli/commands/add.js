@@ -208,8 +208,6 @@ async function installDeclarative(resolved, skillDir, skipConfirm, jsonOutput) {
     if (!(process.env.PATH || '').split(':').includes(BIN_DIR)) {
       process.env.PATH = `${BIN_DIR}:${process.env.PATH}`;
     }
-    // Inject PATH setup note into SKILL.md so Claude knows to set PATH
-    injectBinPathNote(skillDir, BIN_DIR);
   }
 
   // Step 5: Apply Caddy routes (if declared)
@@ -375,26 +373,6 @@ function installAI(resolved, skillDir) {
       `Update components.json setupComplete to true when done`,
     ],
   });
-}
-
-/**
- * Inject a PATH setup note into SKILL.md for components with bin entries.
- * This ensures Claude knows to set PATH before using component CLI commands.
- */
-function injectBinPathNote(skillDir, binDir) {
-  const skillPath = path.join(skillDir, 'SKILL.md');
-  try {
-    let content = fs.readFileSync(skillPath, 'utf8');
-    const marker = '<!-- zylos:bin-path -->';
-    if (content.includes(marker)) return; // already injected
-
-    const homePath = binDir.replace(process.env.HOME, '~');
-    const note = `\n${marker}\n## Environment\n\nThis component installs CLI commands to \`${homePath}/\`. Before first use in a session, ensure PATH is set:\n\n\`\`\`bash\nexport PATH="${binDir}:$PATH"\n\`\`\`\n`;
-    content += note;
-    fs.writeFileSync(skillPath, content);
-  } catch {
-    // Non-fatal — SKILL.md may not exist for some components
-  }
 }
 
 /**
