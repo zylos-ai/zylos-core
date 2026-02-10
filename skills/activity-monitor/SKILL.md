@@ -15,7 +15,7 @@ This is a **PM2 service** (not directly invoked by Claude). It runs continuously
 ## What It Does
 
 1. **Activity Monitoring**: Tracks Claude's busy/idle state every second
-2. **Status File**: Writes `~/zylos/comm-bridge/claude-status.json` with current state (busy/idle, idle_seconds, health)
+2. **Status File**: Writes `~/zylos/activity-monitor/claude-status.json` with current state (busy/idle, idle_seconds, health)
 3. **Guardian Mode**: Automatically restarts Claude if it stops or crashes
 4. **Maintenance Awareness**: Waits for restart/upgrade scripts to complete before starting Claude
 5. **Heartbeat Liveness Detection**: Periodically sends heartbeat probes via the C4 control queue to verify Claude is responsive, triggering recovery when probes fail
@@ -73,7 +73,7 @@ pm2 list
    - Check if Claude process is running
    - Detect activity from conversation file modification time
    - Calculate idle/busy state
-   - Write status to ~/zylos/comm-bridge/claude-status.json
+   - Write status to ~/zylos/activity-monitor/claude-status.json
 
 2. **Guardian Logic**:
    - If Claude not running for 5+ seconds → restart

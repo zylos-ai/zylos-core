@@ -19,8 +19,8 @@ const __dirname = path.dirname(__filename);
 const SESSION = 'claude-main';
 const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
 const COMM_BRIDGE_DIR = path.join(ZYLOS_DIR, 'comm-bridge');
-const STATUS_FILE = path.join(COMM_BRIDGE_DIR, 'claude-status.json');
 const MONITOR_DIR = path.join(ZYLOS_DIR, 'activity-monitor');
+const STATUS_FILE = path.join(MONITOR_DIR, 'claude-status.json');
 const LOG_FILE = path.join(MONITOR_DIR, 'activity.log');
 const HEARTBEAT_PENDING_FILE = path.join(MONITOR_DIR, 'heartbeat-pending.json');
 const HEALTH_CHECK_STATE_FILE = path.join(MONITOR_DIR, 'health-check-state.json');
@@ -170,7 +170,7 @@ function isClaudeRunning() {
   try {
     const procName = execSync(`ps -p ${panePid} -o comm= 2>/dev/null`, { encoding: 'utf8' }).trim();
     if (procName === 'claude') return true;
-  } catch {}
+  } catch { }
 
   try {
     execSync(`pgrep -P ${panePid} -f "claude" > /dev/null 2>&1`);
@@ -203,17 +203,17 @@ function getRunningMaintenance() {
   try {
     execSync('pgrep -f "[r]estart-claude" > /dev/null 2>&1');
     return 'restart-claude';
-  } catch {}
+  } catch { }
 
   try {
     execSync('pgrep -f "[u]pgrade-claude" > /dev/null 2>&1');
     return 'upgrade-claude';
-  } catch {}
+  } catch { }
 
   try {
     execSync('pgrep -f "[c]laude.ai/install.sh" > /dev/null 2>&1');
     return 'upgrade (curl install.sh)';
-  } catch {}
+  } catch { }
 
   return null;
 }
@@ -261,10 +261,10 @@ function startClaude() {
 
   try {
     fs.unlinkSync('/tmp/context-alert-cooldown');
-  } catch {}
+  } catch { }
   try {
     fs.unlinkSync('/tmp/context-compact-scheduled');
-  } catch {}
+  } catch { }
 
   const bypassFlag = BYPASS_PERMISSIONS ? ' --dangerously-skip-permissions' : '';
 
@@ -283,8 +283,8 @@ function startClaude() {
 }
 
 function ensureStatusDir() {
-  if (!fs.existsSync(COMM_BRIDGE_DIR)) {
-    fs.mkdirSync(COMM_BRIDGE_DIR, { recursive: true });
+  if (!fs.existsSync(MONITOR_DIR)) {
+    fs.mkdirSync(MONITOR_DIR, { recursive: true });
   }
 }
 
@@ -295,7 +295,7 @@ function loadInitialHealth() {
     if (status && typeof status.health === 'string') {
       return status.health;
     }
-  } catch {}
+  } catch { }
   return 'ok';
 }
 
@@ -318,7 +318,7 @@ function getConversationFileModTime() {
     if (files.length > 0) {
       return Math.floor(files[0].mtime / 1000);
     }
-  } catch {}
+  } catch { }
   return null;
 }
 
@@ -354,7 +354,7 @@ function writeHeartbeatPending(record) {
 function clearHeartbeatPending() {
   try {
     fs.unlinkSync(HEARTBEAT_PENDING_FILE);
-  } catch {}
+  } catch { }
 }
 
 function runC4Control(args) {
@@ -472,7 +472,7 @@ function loadHealthCheckState() {
     if (parsed && typeof parsed.last_check_at === 'number') {
       return parsed;
     }
-  } catch {}
+  } catch { }
   return null;
 }
 
@@ -544,7 +544,7 @@ function loadContextCheckState() {
     if (parsed && typeof parsed.last_check_at === 'number') {
       return parsed;
     }
-  } catch {}
+  } catch { }
   return null;
 }
 
@@ -614,7 +614,7 @@ function loadDailyUpgradeState() {
   try {
     if (!fs.existsSync(DAILY_UPGRADE_STATE_FILE)) return null;
     return JSON.parse(fs.readFileSync(DAILY_UPGRADE_STATE_FILE, 'utf8'));
-  } catch {}
+  } catch { }
   return null;
 }
 
@@ -667,7 +667,7 @@ function loadMemoryCommitState() {
   try {
     if (!fs.existsSync(DAILY_MEMORY_COMMIT_STATE_FILE)) return null;
     return JSON.parse(fs.readFileSync(DAILY_MEMORY_COMMIT_STATE_FILE, 'utf8'));
-  } catch {}
+  } catch { }
   return null;
 }
 
