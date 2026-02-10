@@ -324,7 +324,7 @@ async function installDeclarative(resolved, skillDir, skipConfirm, jsonOutput) {
   if (binResult && Object.keys(binResult).length > 0) {
     const cmds = Object.keys(binResult).join(', ');
     console.log(`\nNote: Run the following to use ${cmds} in this terminal:`);
-    console.log(`  export PATH="${BIN_DIR}:$PATH"`);
+    console.log('  export PATH="$HOME/zylos/bin:$PATH"');
     console.log('Or restart your terminal for the change to take effect.');
   }
 }
