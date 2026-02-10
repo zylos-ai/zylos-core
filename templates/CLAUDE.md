@@ -70,7 +70,7 @@ All external communication goes through C4 Communication Bridge.
 
 When you receive a message like:
 ```
-[TG DM] user said: hello ---- reply via: ~/zylos/.claude/skills/comm-bridge/scripts/c4-send.js "telegram" "12345"
+[TG DM] user said: hello ---- reply via: node ~/zylos/.claude/skills/comm-bridge/scripts/c4-send.js "telegram" "8101553026"
 ```
 
 Reply using the exact path specified in `reply via:`.
