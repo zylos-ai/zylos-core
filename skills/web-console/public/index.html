@@ -7,12 +7,41 @@
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-  <div class="container">
-    <header>
+  <!-- Login Screen -->
+  <div class="login-screen" id="login-screen" style="display: none;">
+    <div class="login-box">
+      <div class="login-avatar">
+        <img src="logo.png" alt="Zylos">
+      </div>
       <h1>Zylos Console</h1>
-      <div class="status" id="status">
-        <span class="status-dot"></span>
-        <span class="status-text">Connecting...</span>
+      <p>Enter password to continue</p>
+      <form id="login-form">
+        <input type="password" id="login-password" placeholder="Password" autofocus>
+        <button type="submit">Login</button>
+        <div class="login-error" id="login-error"></div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Chat Screen -->
+  <div class="container" id="chat-screen">
+    <header>
+      <div class="header-brand">
+        <img src="logo.png" alt="Zylos" class="header-logo">
+        <h1>Zylos Console</h1>
+      </div>
+      <div class="header-right">
+        <div class="status" id="status">
+          <span class="status-dot"></span>
+          <span class="status-text">Connecting...</span>
+        </div>
+        <button class="logout-btn" id="logout-btn" style="display:none" title="Logout">
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
+            <polyline points="16 17 21 12 16 7"></polyline>
+            <line x1="21" y1="12" x2="9" y2="12"></line>
+          </svg>
+        </button>
       </div>
     </header>
 

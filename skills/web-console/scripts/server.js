@@ -10,6 +10,7 @@
 import express from 'express';
 import http from 'http';
 import { WebSocketServer } from 'ws';
+import crypto from 'crypto';
 import path from 'path';
 import os from 'os';
 import fs from 'fs';
@@ -33,9 +34,43 @@ const DB_DIR = path.join(ZYLOS_DIR, 'comm-bridge');
 const DB_PATH = path.join(DB_DIR, 'c4.db');
 const STATUS_FILE = path.join(DB_DIR, 'claude-status.json');
 
+// Paths - __dirname is scripts/, public/ is one level up
+const SKILL_ROOT = path.join(__dirname, '..');
+
+// --- Authentication ---
+const AUTH_PASSWORD = process.env.WEB_CONSOLE_PASSWORD || '';
+const AUTH_ENABLED = AUTH_PASSWORD.length > 0;
+const sessions = new Set(); // Active session tokens
+
+function parseCookies(cookieHeader) {
+  const cookies = {};
+  if (!cookieHeader) return cookies;
+  for (const pair of cookieHeader.split(';')) {
+    const [name, ...rest] = pair.trim().split('=');
+    if (name) cookies[name] = rest.join('=');
+  }
+  return cookies;
+}
+
+function isAuthenticated(req) {
+  if (!AUTH_ENABLED) return true;
+  const cookies = parseCookies(req.headers.cookie);
+  return cookies.wc_session && sessions.has(cookies.wc_session);
+}
+
+function authMiddleware(req, res, next) {
+  // Auth endpoints are always accessible
+  if (req.path === '/auth') return next();
+  if (!isAuthenticated(req)) {
+    return res.status(401).json({ error: 'Authentication required' });
+  }
+  next();
+}
+
 // Middleware
 app.use(express.json());
-app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.static(path.join(SKILL_ROOT, 'public')));
+app.use('/api', authMiddleware);
 
 // Initialize database connection
 let db;
@@ -111,9 +146,9 @@ function cleanMessageForDisplay(msg) {
 function getNewMessages(sinceId) {
   try {
     const stmt = db.prepare(`
-      SELECT id, direction, source, endpoint_id, content, timestamp
+      SELECT id, direction, channel, endpoint_id, content, timestamp
       FROM conversations
-      WHERE source = 'web-console' AND id > ?
+      WHERE channel = 'web-console' AND id > ?
       ORDER BY timestamp ASC
     `);
     return stmt.all(sinceId).map(cleanMessageForDisplay);
@@ -158,7 +193,7 @@ setInterval(checkUpdates, 500);
 
 // Initialize lastMessageId
 try {
-  const stmt = db.prepare(`SELECT MAX(id) as maxId FROM conversations WHERE source = 'web-console'`);
+  const stmt = db.prepare(`SELECT MAX(id) as maxId FROM conversations WHERE channel = 'web-console'`);
   const result = stmt.get();
   lastMessageId = result?.maxId || 0;
 } catch (err) {
@@ -168,7 +203,16 @@ try {
 /**
  * WebSocket connection handler
  */
-wss.on('connection', (ws) => {
+wss.on('connection', (ws, req) => {
+  // Check auth for WebSocket connections
+  if (AUTH_ENABLED) {
+    const cookies = parseCookies(req.headers.cookie);
+    if (!cookies.wc_session || !sessions.has(cookies.wc_session)) {
+      ws.close(4001, 'Authentication required');
+      return;
+    }
+  }
+
   clients.add(ws);
   console.log(`WebSocket client connected (${clients.size} total)`);
 
@@ -234,17 +278,17 @@ app.get('/api/status', (req, res) => {
 app.get('/api/conversations', (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 50;
-    const source = req.query.source || 'web-console';
+    const channel = req.query.channel || 'web-console';
 
     const stmt = db.prepare(`
-      SELECT id, direction, source, endpoint_id, content, timestamp
+      SELECT id, direction, channel, endpoint_id, content, timestamp
       FROM conversations
-      WHERE source = ?
+      WHERE channel = ?
       ORDER BY timestamp DESC
       LIMIT ?
     `);
 
-    const conversations = stmt.all(source, limit);
+    const conversations = stmt.all(channel, limit);
     res.json(conversations.reverse());
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -259,9 +303,9 @@ app.get('/api/conversations/recent', (req, res) => {
     const limit = parseInt(req.query.limit) || 100;
 
     const stmt = db.prepare(`
-      SELECT id, direction, source, endpoint_id, content, timestamp
+      SELECT id, direction, channel, endpoint_id, content, timestamp
       FROM conversations
-      WHERE source = 'web-console'
+      WHERE channel = 'web-console'
       ORDER BY timestamp DESC
       LIMIT ?
     `);
@@ -330,6 +374,45 @@ app.get('/api/poll', (req, res) => {
 });
 
 /**
+ * Check auth status
+ */
+app.get('/api/auth', (req, res) => {
+  res.json({
+    required: AUTH_ENABLED,
+    authenticated: isAuthenticated(req)
+  });
+});
+
+/**
+ * Login
+ */
+app.post('/api/auth', (req, res) => {
+  if (!AUTH_ENABLED) {
+    return res.json({ success: true });
+  }
+
+  const { password } = req.body;
+  if (password !== AUTH_PASSWORD) {
+    return res.status(401).json({ success: false, error: 'Wrong password' });
+  }
+
+  const token = crypto.randomBytes(32).toString('hex');
+  sessions.add(token);
+  res.setHeader('Set-Cookie', `wc_session=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=86400`);
+  res.json({ success: true });
+});
+
+/**
+ * Logout
+ */
+app.post('/api/logout', (req, res) => {
+  const cookies = parseCookies(req.headers.cookie);
+  if (cookies.wc_session) sessions.delete(cookies.wc_session);
+  res.setHeader('Set-Cookie', 'wc_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0');
+  res.json({ success: true });
+});
+
+/**
  * Health check
  */
 app.get('/api/health', (req, res) => {
@@ -342,7 +425,7 @@ app.get('/api/health', (req, res) => {
 
 // Serve index.html for root
 app.get('/', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+  res.sendFile(path.join(SKILL_ROOT, 'public', 'index.html'));
 });
 
 // Start server (bind to localhost only for security)
@@ -350,6 +433,7 @@ const BIND_HOST = process.env.WEB_CONSOLE_BIND || '127.0.0.1';
 server.listen(PORT, BIND_HOST, () => {
   console.log(`Web Console server running on http://${BIND_HOST}:${PORT}`);
   console.log(`WebSocket available at ws://${BIND_HOST}:${PORT}`);
+  console.log(`Authentication: ${AUTH_ENABLED ? 'enabled' : 'disabled (no password set)'}`);
   console.log(`Database: ${DB_PATH}`);
 });
 

@@ -374,8 +374,9 @@ class ZylosConsole {
     const empty = document.createElement('div');
     empty.className = 'empty-state';
     empty.innerHTML = `
-      <h2>Welcome to Zylos Console</h2>
-      <p>Start a conversation with Claude</p>
+      <div class="empty-avatar"><img src="logo.png" alt="Zylos"></div>
+      <h2>Welcome to Zylos</h2>
+      <p>Start a conversation</p>
     `;
     this.messagesContainer.appendChild(empty);
   }
@@ -395,7 +396,69 @@ class ZylosConsole {
   }
 }
 
+function showLogoutButton(basePath) {
+  const btn = document.getElementById('logout-btn');
+  if (!btn) return;
+  btn.style.display = '';
+  btn.addEventListener('click', async () => {
+    await fetch(`${basePath}/api/logout`, { method: 'POST' });
+    window.location.reload();
+  });
+}
+
+/**
+ * Auth guard - check if login is required before showing chat
+ */
+async function checkAuth() {
+  const loginScreen = document.getElementById('login-screen');
+  const chatScreen = document.getElementById('chat-screen');
+  const loginForm = document.getElementById('login-form');
+  const loginError = document.getElementById('login-error');
+  const basePath = window.location.pathname.startsWith('/console') ? '/console' : '';
+
+  try {
+    const res = await fetch(`${basePath}/api/auth`);
+    const auth = await res.json();
+
+    if (!auth.required || auth.authenticated) {
+      // No password set, or already authenticated
+      chatScreen.style.display = '';
+      if (auth.required) showLogoutButton(basePath);
+      new ZylosConsole();
+      return;
+    }
+
+    // Show login screen
+    loginScreen.style.display = '';
+    chatScreen.style.display = 'none';
+
+    loginForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      loginError.textContent = '';
+      const password = document.getElementById('login-password').value;
+
+      const loginRes = await fetch(`${basePath}/api/auth`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password }),
+      });
+      const result = await loginRes.json();
+
+      if (result.success) {
+        loginScreen.style.display = 'none';
+        chatScreen.style.display = '';
+        showLogoutButton(basePath);
+        new ZylosConsole();
+      } else {
+        loginError.textContent = result.error || 'Login failed';
+      }
+    });
+  } catch (err) {
+    // Can't reach server, just show chat (will show connection error)
+    chatScreen.style.display = '';
+    new ZylosConsole();
+  }
+}
+
 // Initialize when DOM is ready
-document.addEventListener('DOMContentLoaded', () => {
-  new ZylosConsole();
-});
+document.addEventListener('DOMContentLoaded', checkAuth);
