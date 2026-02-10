@@ -89,9 +89,6 @@ Skills are located in `~/zylos/.claude/skills/`. Claude auto-discovers skill des
 | Skill | Component | Notes |
 |-------|-----------|-------|
 | activity-monitor | C2 | PM2 service, not directly invoked |
-| check-context | | |
-| restart-claude | | |
-| upgrade-claude | | |
 | create-skill | | `/create-skill <name>` to scaffold |
 | zylos-memory | C3 | Forks a background subagent — does not block main agent. Invoke via `/zylos-memory` |
 | comm-bridge | C4 | |
