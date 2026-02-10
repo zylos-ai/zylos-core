@@ -108,6 +108,155 @@ function saveSystemPath(envPath) {
   fs.writeFileSync(envPath, content);
 }
 
+// ── Timezone configuration ───────────────────────────────────
+
+// Common timezones grouped for selection
+const COMMON_TIMEZONES = [
+  { label: 'Asia/Shanghai (UTC+8)', value: 'Asia/Shanghai' },
+  { label: 'Asia/Tokyo (UTC+9)', value: 'Asia/Tokyo' },
+  { label: 'Asia/Singapore (UTC+8)', value: 'Asia/Singapore' },
+  { label: 'Asia/Kolkata (UTC+5:30)', value: 'Asia/Kolkata' },
+  { label: 'America/New_York (UTC-5)', value: 'America/New_York' },
+  { label: 'America/Chicago (UTC-6)', value: 'America/Chicago' },
+  { label: 'America/Los_Angeles (UTC-8)', value: 'America/Los_Angeles' },
+  { label: 'Europe/London (UTC+0)', value: 'Europe/London' },
+  { label: 'Europe/Berlin (UTC+1)', value: 'Europe/Berlin' },
+  { label: 'Australia/Sydney (UTC+11)', value: 'Australia/Sydney' },
+  { label: 'Pacific/Auckland (UTC+13)', value: 'Pacific/Auckland' },
+  { label: 'UTC', value: 'UTC' },
+];
+
+/**
+ * Detect the system timezone.
+ * @returns {string} IANA timezone name
+ */
+function detectSystemTimezone() {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+  } catch {
+    return 'UTC';
+  }
+}
+
+/**
+ * Validate an IANA timezone string.
+ * @param {string} tz
+ * @returns {boolean}
+ */
+function isValidTimezone(tz) {
+  try {
+    Intl.DateTimeFormat(undefined, { timeZone: tz });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Read the current TZ value from .env.
+ * @returns {string|null} TZ value or null if not set
+ */
+function readEnvTimezone() {
+  const envPath = path.join(ZYLOS_DIR, '.env');
+  try {
+    const content = fs.readFileSync(envPath, 'utf8');
+    const match = content.match(/^TZ=(.+)$/m);
+    return match ? match[1].trim() : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Write timezone to .env file. Updates existing TZ= line or adds one.
+ * @param {string} tz - IANA timezone name
+ */
+function writeEnvTimezone(tz) {
+  const envPath = path.join(ZYLOS_DIR, '.env');
+  let content = '';
+  try {
+    content = fs.readFileSync(envPath, 'utf8');
+  } catch {
+    return;
+  }
+
+  if (content.match(/^TZ=.*$/m)) {
+    content = content.replace(/^TZ=.*$/m, `TZ=${tz}`);
+  } else {
+    content = content.trimEnd() + `\nTZ=${tz}\n`;
+  }
+  fs.writeFileSync(envPath, content);
+}
+
+/**
+ * Interactive timezone configuration.
+ * Auto-detects system timezone and asks user to confirm or select another.
+ * On re-init, shows current value and skips prompt.
+ *
+ * @param {boolean} skipConfirm - Skip interactive prompts (--yes flag)
+ * @param {boolean} isReinit - Whether this is a re-init of an existing installation
+ */
+async function configureTimezone(skipConfirm, isReinit) {
+  const currentTz = readEnvTimezone();
+
+  // Re-init with valid non-default timezone: just display it
+  if (isReinit && currentTz && isValidTimezone(currentTz)) {
+    console.log(`  ✓ Timezone: ${currentTz}`);
+    return;
+  }
+
+  // Non-interactive mode: use detected timezone
+  if (skipConfirm) {
+    const detected = detectSystemTimezone();
+    writeEnvTimezone(detected);
+    console.log(`  ✓ Timezone: ${detected}`);
+    return;
+  }
+
+  const detected = detectSystemTimezone();
+  const useDetected = await promptYesNo(`  Detected timezone: ${detected}. Is this correct? [Y/n]: `, true);
+
+  if (useDetected) {
+    writeEnvTimezone(detected);
+    console.log(`  ✓ Timezone: ${detected}`);
+    return;
+  }
+
+  // Show common timezone list
+  console.log('\n  Select timezone:');
+  for (let i = 0; i < COMMON_TIMEZONES.length; i++) {
+    console.log(`    ${i + 1}) ${COMMON_TIMEZONES[i].label}`);
+  }
+  console.log(`    ${COMMON_TIMEZONES.length + 1}) Other (enter manually)`);
+
+  while (true) {
+    const choice = await prompt(`\n  Enter number [1-${COMMON_TIMEZONES.length + 1}]: `);
+    const num = parseInt(choice, 10);
+
+    if (num >= 1 && num <= COMMON_TIMEZONES.length) {
+      const tz = COMMON_TIMEZONES[num - 1].value;
+      writeEnvTimezone(tz);
+      console.log(`  ✓ Timezone: ${tz}`);
+      return;
+    }
+
+    if (num === COMMON_TIMEZONES.length + 1) {
+      while (true) {
+        const manual = await prompt('  Enter IANA timezone (e.g., America/Denver): ');
+        if (!manual) continue;
+        if (isValidTimezone(manual)) {
+          writeEnvTimezone(manual);
+          console.log(`  ✓ Timezone: ${manual}`);
+          return;
+        }
+        console.log(`  ✗ Invalid timezone: "${manual}". Try again.`);
+      }
+    }
+
+    console.log(`  Please enter a number between 1 and ${COMMON_TIMEZONES.length + 1}.`);
+  }
+}
+
 /**
  * Ensure ~/zylos/bin is in the user's shell PATH.
  * Detects the user's shell and appends to the appropriate rc file.
@@ -882,6 +1031,10 @@ export async function initCommand(args) {
     console.log('Deploying templates...');
     deployTemplates();
 
+    // Timezone (show current, don't re-prompt)
+    console.log('Checking timezone...');
+    await configureTimezone(skipConfirm, true);
+
     // Caddy setup (idempotent — skips if already configured)
     console.log('Checking Caddy...');
     await setupCaddy(skipConfirm);
@@ -935,7 +1088,11 @@ export async function initCommand(args) {
   deployTemplates();
   console.log('  ✓ Templates deployed');
 
-  // Step 8: Sync Core Skills
+  // Step 8: Configure timezone
+  console.log('\nTimezone configuration...');
+  await configureTimezone(skipConfirm, false);
+
+  // Step 9: Sync Core Skills
   const syncResult = syncCoreSkills();
   if (syncResult.error) {
     console.log(`  ⚠ ${syncResult.error}`);
@@ -947,11 +1104,11 @@ export async function initCommand(args) {
     }
   }
 
-  // Step 9: Caddy web server setup
+  // Step 10: Caddy web server setup
   console.log('\nHTTPS setup...');
   await setupCaddy(skipConfirm);
 
-  // Step 10: Start services
+  // Step 11: Start services
   let servicesStarted = 0;
   if (!skipConfirm) {
     const startNow = await promptYesNo('\nStart services now? [Y/n]: ', true);
