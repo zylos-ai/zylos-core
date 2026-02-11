@@ -28,7 +28,9 @@ Zylos gives it a life. Memory that survives restarts. A scheduler that works whi
 
 ## Quick Start
 
-**Prerequisites:** Git, Node.js >= 20, a Linux server (or Mac), and a [Claude](https://claude.ai) subscription.
+**Prerequisites:** Git, Node.js >= 20 (via [nvm](https://github.com/nvm-sh/nvm) recommended), a Linux server (or Mac), and a [Claude](https://claude.ai) subscription.
+
+> **Why nvm?** Installing Node.js via nvm avoids permission issues with `npm install -g`. System-level Node.js (from apt/yum) requires `sudo` for global installs, which can cause problems.
 
 ```bash
 # Install (--install-links required for GitHub install; will be published to npm soon)
