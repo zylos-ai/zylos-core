@@ -90,7 +90,8 @@ export async function addComponent(args) {
         isThirdParty: resolved.isThirdParty || false,
       };
       let reply = `${resolved.name}`;
-      if (output.version) reply += ` (v${output.version})`;
+      if (output.version && output.version !== 'latest') reply += ` (v${output.version})`;
+      else if (output.version === 'latest') reply += ` (latest)`;
       if (regInfo.description) reply += `\n${regInfo.description}`;
       reply += `\nType: ${regInfo.type || 'unknown'}`;
       reply += `\nRepo: ${resolved.repo}`;
