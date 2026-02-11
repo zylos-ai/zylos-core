@@ -88,7 +88,7 @@ All `--json` outputs include structured data and a `reply` field (pre-formatted 
 
 ### C4 Command Mapping
 
-**CRITICAL: "upgrade \<name\>" MUST ONLY run --check. NEVER execute the actual upgrade without the word "confirm" in the user's message.**
+**CRITICAL: "add \<name\>" and "upgrade \<name\>" MUST ONLY run --check. NEVER execute install/upgrade without the word "confirm" in the user's message.**
 
 | User says | CLI command |
 |-----------|------------|

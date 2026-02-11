@@ -27,7 +27,7 @@ import { writeEnvEntries } from '../lib/env.js';
 import { registerService } from '../lib/service.js';
 
 /**
- * Main entry: zylos add <target> [--yes]
+ * Main entry: zylos add <target> [--check] [--yes] [--json]
  */
 export async function addComponent(args) {
   const skipConfirm = args.includes('--yes') || args.includes('-y');
@@ -134,7 +134,7 @@ export async function addComponent(args) {
     }
   }
 
-  // 5. Download
+  // 7. Download
   const skillDir = path.join(SKILLS_DIR, resolved.name);
 
   if (fs.existsSync(skillDir)) {
@@ -160,7 +160,7 @@ export async function addComponent(args) {
 
   console.log('  Download complete.');
 
-  // 6. Generate manifest
+  // 8. Generate manifest
   try {
     const manifest = generateManifest(skillDir);
     saveManifest(skillDir, manifest);
@@ -168,7 +168,7 @@ export async function addComponent(args) {
     console.log(`  Warning: Could not generate manifest: ${err.message}`);
   }
 
-  // 7. Detect component type and install accordingly
+  // 9. Detect component type and install accordingly
   const componentType = detectComponentType(skillDir);
 
   if (componentType === 'declarative') {
