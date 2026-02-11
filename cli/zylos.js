@@ -78,6 +78,7 @@ Service Management:
 Component Management:
   add <target>        Add a component
                       target: name[@ver] | org/repo[@ver] | url
+                      --check   Show component info without installing
                       --yes/-y  Skip confirmation prompts
   info <name>         Show component details (--json)
   upgrade <name>      Upgrade a component (8-step pipeline)
