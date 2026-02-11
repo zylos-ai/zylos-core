@@ -28,5 +28,5 @@ nohup node ~/zylos/.claude/skills/upgrade-claude/scripts/upgrade.js > /dev/null 
 1. **Idle detection**: Waits for idle state (idle_seconds >= 3)
 2. **Send /exit**: Uses C4 Communication Bridge (priority=1, --no-reply)
 3. **Wait for exit**: Monitors Claude process until it exits
-4. **Upgrade**: Runs `npm install -g @anthropic-ai/claude-code`
+4. **Upgrade**: Runs native installer (`curl -fsSL https://claude.ai/install.sh | bash`)
 5. **Daemon restart**: activity-monitor detects exit and restarts Claude automatically

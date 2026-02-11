@@ -960,17 +960,33 @@ export async function initCommand(args) {
     }
   }
 
-  // Step 5: Check/install Claude Code
+  // Step 5: Check/install Claude Code (native installer)
   if (commandExists('claude')) {
     console.log('  ✓ Claude Code installed');
   } else {
     console.log('  ✗ Claude Code not found');
-    console.log('    Installing @anthropic-ai/claude-code...');
-    if (installGlobalPackage('@anthropic-ai/claude-code')) {
-      console.log('  ✓ Claude Code installed');
-    } else {
+    console.log('    Installing Claude Code (native installer)...');
+    try {
+      execSync('curl -fsSL https://claude.ai/install.sh | bash', {
+        stdio: 'inherit',
+        timeout: 300000, // 5 min — downloads ~213MB native binary
+      });
+      // Native installer puts binary at ~/.local/bin/claude
+      // Add to PATH for this process and subsequent commands
+      const localBin = path.join(os.homedir(), '.local', 'bin');
+      if (!process.env.PATH.split(':').includes(localBin)) {
+        process.env.PATH = `${localBin}:${process.env.PATH}`;
+      }
+      if (commandExists('claude')) {
+        console.log('  ✓ Claude Code installed');
+      } else {
+        console.log('  ✗ Claude Code installed but not found in PATH');
+        console.log('    Add ~/.local/bin to your PATH, then run zylos init again.');
+        process.exit(1);
+      }
+    } catch {
       console.log('  ✗ Failed to install Claude Code');
-      console.log('    Install manually: npm install -g @anthropic-ai/claude-code');
+      console.log('    Install manually: curl -fsSL https://claude.ai/install.sh | bash');
       process.exit(1);
     }
   }
