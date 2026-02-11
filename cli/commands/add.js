@@ -113,17 +113,19 @@ export async function addComponent(args) {
     return;
   }
 
-  // 5. Display component info
-  const versionInfo = resolved.version ? `@${resolved.version}` : ' (latest)';
-  console.log(`\nComponent: ${resolved.name}${versionInfo}`);
-  console.log(`Repository: https://github.com/${resolved.repo}`);
+  // 5. Display component info (terminal only)
+  if (!jsonOutput) {
+    const versionInfo = resolved.version ? `@${resolved.version}` : ' (latest)';
+    console.log(`\nComponent: ${resolved.name}${versionInfo}`);
+    console.log(`Repository: https://github.com/${resolved.repo}`);
 
-  if (resolved.isThirdParty) {
-    console.log('Warning: Third-party component — not verified by Zylos team.');
+    if (resolved.isThirdParty) {
+      console.log('Warning: Third-party component — not verified by Zylos team.');
+    }
+
+    if (regInfo.description) console.log(`Description: ${regInfo.description}`);
+    if (regInfo.type) console.log(`Type: ${regInfo.type}`);
   }
-
-  if (regInfo.description) console.log(`Description: ${regInfo.description}`);
-  if (regInfo.type) console.log(`Type: ${regInfo.type}`);
 
   // 6. User confirmation (skip in JSON mode — confirmation handled at application layer)
   if (!skipConfirm && !jsonOutput) {
@@ -144,7 +146,7 @@ export async function addComponent(args) {
     process.exit(1);
   }
 
-  console.log(`\nDownloading ${resolved.name}...`);
+  if (!jsonOutput) console.log(`\nDownloading ${resolved.name}...`);
 
   let downloadResult;
   if (resolved.version) {
@@ -159,14 +161,14 @@ export async function addComponent(args) {
     process.exit(1);
   }
 
-  console.log('  Download complete.');
+  if (!jsonOutput) console.log('  Download complete.');
 
   // 8. Generate manifest
   try {
     const manifest = generateManifest(skillDir);
     saveManifest(skillDir, manifest);
   } catch (err) {
-    console.log(`  Warning: Could not generate manifest: ${err.message}`);
+    if (!jsonOutput) console.log(`  Warning: Could not generate manifest: ${err.message}`);
   }
 
   // 9. Detect component type and install accordingly
