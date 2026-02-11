@@ -1,6 +1,9 @@
 /**
  * zylos add - Install a component
  *
+ * Check mode (--check): Preview only, no installation
+ *   1. Resolve target → show component info (version, type, repo)
+ *
  * Terminal mode (default): Full interactive setup
  *   1. Resolve target → download → npm install → manifest → register
  *   2. Collect required config (prompt user) → write to .env
