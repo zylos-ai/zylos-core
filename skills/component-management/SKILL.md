@@ -110,6 +110,8 @@ All `--json` outputs include structured data and a `reply` field (pre-formatted 
 
 - Plain text only, no markdown
 - For `info --json`: format as `<name> v<version>\nType: <type>\nRepo: <repo>\nService: <name> (<status>)`
+- For `add --check --json`: format as `<name> (v<version>)\n<description>\nType: <type>\nRepo: <repo>`, ask user to confirm
+- For `add --json` (install result): format as `<name> installed (v<version>)`, mention required config if any
 - For `check --json`: format as `<name>: <current> -> <latest>`, actively analyze changes
 - For upgrade result: format as `<name> upgraded: <from> -> <to>`, include change summary
 - For errors: when JSON has both `error` and `message` fields, display `message` (human-readable)
