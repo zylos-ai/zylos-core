@@ -195,6 +195,12 @@ async function mainLoop() {
         continue;
       }
 
+      // Log transition from offline to online
+      if (lastOfflineLog > 0) {
+        console.log(`[${new Date().toISOString()}] Claude runtime detected, scheduler active`);
+        lastOfflineLog = 0;
+      }
+
       // Get next pending task
       const task = getNextPendingTask();
 

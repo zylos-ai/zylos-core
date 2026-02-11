@@ -43,6 +43,12 @@ async function main() {
     return;
   }
 
+  // Handle --help / -h
+  if (command === '--help' || command === '-h') {
+    showHelp();
+    return;
+  }
+
   if (commands[command]) {
     await commands[command](args.slice(1));
   } else {
@@ -64,7 +70,7 @@ Setup:
 
 Service Management:
   status              Show system status
-  logs [type]         Show logs (activity|caddy|pm2)
+  logs [type]         Show logs (activity|scheduler|caddy|pm2)
   start               Start all services
   stop                Stop all services
   restart             Restart all services
