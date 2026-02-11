@@ -99,7 +99,7 @@ function upgradeClaudeCode() {
 
   try {
     process.chdir(os.homedir());
-    const output = execSync('curl -fsSL https://claude.ai/install.sh | bash', {
+    const output = execSync('npm install -g @anthropic-ai/claude-code', {
       encoding: 'utf8',
       stdio: 'pipe'
     });
@@ -112,7 +112,7 @@ function upgradeClaudeCode() {
 
   // Check new version
   try {
-    const newVersion = execSync('~/.local/bin/claude --version 2>/dev/null', {
+    const newVersion = execSync('claude --version 2>/dev/null', {
       encoding: 'utf8'
     }).trim();
     console.log(`New version: ${newVersion}`);
