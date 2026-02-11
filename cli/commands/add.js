@@ -32,6 +32,7 @@ import { registerService } from '../lib/service.js';
 export async function addComponent(args) {
   const skipConfirm = args.includes('--yes') || args.includes('-y');
   const jsonOutput = args.includes('--json');
+  const checkOnly = args.includes('--check');
   const target = args.find(a => !a.startsWith('-'));
 
   if (!target) {
@@ -43,20 +44,75 @@ export async function addComponent(args) {
   const resolved = await resolveTarget(target);
 
   if (!resolved.repo) {
-    console.error(`Unknown component: ${target}`);
-    console.log('Use "zylos search <keyword>" to find available components.');
+    if (jsonOutput) {
+      console.log(JSON.stringify({
+        action: 'add_check', component: target, success: false,
+        error: 'not_found', message: `Unknown component: ${target}`,
+        reply: `Component "${target}" not found. Use "search <keyword>" to find available components.`,
+      }, null, 2));
+    } else {
+      console.error(`Unknown component: ${target}`);
+      console.log('Use "zylos search <keyword>" to find available components.');
+    }
     process.exit(1);
   }
 
   // 2. Check if already installed
   const components = loadComponents();
   if (components[resolved.name]) {
-    console.log(`Component "${resolved.name}" is already installed (v${components[resolved.name].version}).`);
-    console.log('Use "zylos upgrade" to update.');
+    if (jsonOutput) {
+      console.log(JSON.stringify({
+        action: 'add_check', component: resolved.name, success: true,
+        alreadyInstalled: true, version: components[resolved.name].version,
+        reply: `${resolved.name} is already installed (v${components[resolved.name].version}). Use "upgrade ${resolved.name}" to update.`,
+      }, null, 2));
+    } else {
+      console.log(`Component "${resolved.name}" is already installed (v${components[resolved.name].version}).`);
+      console.log('Use "zylos upgrade" to update.');
+    }
     process.exit(0);
   }
 
-  // 3. Display component info
+  // 3. Gather component info from registry
+  const registry = await loadRegistry();
+  const regInfo = registry[resolved.name] || {};
+
+  // 4. Check-only mode: show component info without installing
+  if (checkOnly) {
+    if (jsonOutput) {
+      const output = {
+        action: 'add_check', component: resolved.name, success: true,
+        alreadyInstalled: false,
+        version: resolved.version || regInfo.version || 'latest',
+        description: regInfo.description || null,
+        type: regInfo.type || null,
+        repo: resolved.repo,
+        isThirdParty: resolved.isThirdParty || false,
+      };
+      let reply = `${resolved.name}`;
+      if (output.version) reply += ` (v${output.version})`;
+      if (regInfo.description) reply += `\n${regInfo.description}`;
+      reply += `\nType: ${regInfo.type || 'unknown'}`;
+      reply += `\nRepo: ${resolved.repo}`;
+      if (resolved.isThirdParty) reply += '\nWarning: Third-party component';
+      reply += `\n\nReply "add ${resolved.name} confirm" to install.`;
+      output.reply = reply;
+      console.log(JSON.stringify(output, null, 2));
+    } else {
+      const versionInfo = resolved.version ? `@${resolved.version}` : ' (latest)';
+      console.log(`\nComponent: ${resolved.name}${versionInfo}`);
+      console.log(`Repository: https://github.com/${resolved.repo}`);
+      if (resolved.isThirdParty) {
+        console.log('Warning: Third-party component — not verified by Zylos team.');
+      }
+      if (regInfo.description) console.log(`Description: ${regInfo.description}`);
+      if (regInfo.type) console.log(`Type: ${regInfo.type}`);
+      console.log(`\nRun "zylos add ${resolved.name} --yes" to install.`);
+    }
+    return;
+  }
+
+  // 5. Display component info
   const versionInfo = resolved.version ? `@${resolved.version}` : ' (latest)';
   console.log(`\nComponent: ${resolved.name}${versionInfo}`);
   console.log(`Repository: https://github.com/${resolved.repo}`);
@@ -65,15 +121,11 @@ export async function addComponent(args) {
     console.log('Warning: Third-party component — not verified by Zylos team.');
   }
 
-  // Try to get description from registry
-  const registry = await loadRegistry();
-  if (registry[resolved.name]) {
-    console.log(`Description: ${registry[resolved.name].description}`);
-    console.log(`Type: ${registry[resolved.name].type}`);
-  }
+  if (regInfo.description) console.log(`Description: ${regInfo.description}`);
+  if (regInfo.type) console.log(`Type: ${regInfo.type}`);
 
-  // 4. User confirmation
-  if (!skipConfirm) {
+  // 6. User confirmation (skip in JSON mode — confirmation handled at application layer)
+  if (!skipConfirm && !jsonOutput) {
     console.log('');
     const confirmed = await promptYesNo('Proceed with installation? [Y/n]: ', true);
     if (!confirmed) {
@@ -403,6 +455,7 @@ Arguments:
   target    Component name, org/repo, or GitHub URL
 
 Options:
+  --check    Show component info without installing
   --yes, -y  Skip confirmation prompts
   --json     Output in JSON format (for programmatic use)
 

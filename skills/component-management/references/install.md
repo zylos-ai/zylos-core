@@ -67,11 +67,27 @@ If the hook fails, investigate and fix the issue.
 
 ## C4 Mode
 
-C4 install uses `zylos add <name> --yes --json` directly (no pre-confirmation needed for install).
+C4 install uses a two-step confirmation flow (same as upgrade/uninstall).
+
+### Step 1: Preview Component Info
+
+When user says "add \<name\>", run:
+```bash
+zylos add <name> --check --json
+```
+
+This resolves the target and outputs component info (name, version, description, type, repo) without installing. Show the info to the user and ask for confirmation.
+
+### Step 2: Install After Confirmation
+
+When user says "add \<name\> confirm", run:
+```bash
+zylos add <name> --json
+```
 
 ### Post-Install Actions
 
-After `zylos add <name> --yes --json` succeeds, the JSON `skill` field tells you what to do:
+After `zylos add <name> --json` succeeds, the JSON `skill` field tells you what to do:
 
 1. **Bin PATH**: If `skill.bin` exists, prefix all subsequent commands with `export PATH="$HOME/zylos/bin:$PATH" && `.
 2. **Config**: If `skill.config.required` exists, inform user which config values are needed. In C4 mode, user provides values via follow-up messages.
