@@ -66,10 +66,10 @@ export function showLogs(args) {
 
   const logFiles = {
     activity: path.join(ZYLOS_DIR, 'activity-log.txt'),
+    scheduler: path.join(ZYLOS_DIR, 'scheduler-log.txt'),
     caddy: path.join(ZYLOS_DIR, 'http', 'caddy-access.log'),
   };
 
-  // pm2 logs (all services)
   if (logType === 'pm2') {
     const pm2 = spawn('pm2', ['logs', '--lines', '50'], { stdio: 'inherit' });
     pm2.on('close', () => process.exit(0));
@@ -79,7 +79,7 @@ export function showLogs(args) {
   const logFile = logFiles[logType];
   if (!logFile) {
     console.error(`Unknown log type: ${logType}`);
-    console.log('Available: activity, caddy, pm2');
+    console.log('Available: activity, scheduler, caddy, pm2');
     process.exit(1);
   }
 
