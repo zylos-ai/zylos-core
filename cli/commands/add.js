@@ -96,7 +96,8 @@ export async function addComponent(args) {
       reply += `\nType: ${regInfo.type || 'unknown'}`;
       reply += `\nRepo: ${resolved.repo}`;
       if (resolved.isThirdParty) reply += '\nWarning: Third-party component';
-      reply += `\n\nReply "add ${resolved.name} confirm" to install.`;
+      const confirmTarget = resolved.version ? `${resolved.name}@${resolved.version}` : resolved.name;
+      reply += `\n\nReply "add ${confirmTarget} confirm" to install.`;
       output.reply = reply;
       console.log(JSON.stringify(output, null, 2));
     } else {
@@ -108,7 +109,8 @@ export async function addComponent(args) {
       }
       if (regInfo.description) console.log(`Description: ${regInfo.description}`);
       if (regInfo.type) console.log(`Type: ${regInfo.type}`);
-      console.log(`\nRun "zylos add ${resolved.name} --yes" to install.`);
+      const installTarget = resolved.version ? `${resolved.name}@${resolved.version}` : resolved.name;
+      console.log(`\nRun "zylos add ${installTarget} --yes" to install.`);
     }
     return;
   }
@@ -141,8 +143,16 @@ export async function addComponent(args) {
   const skillDir = path.join(SKILLS_DIR, resolved.name);
 
   if (fs.existsSync(skillDir)) {
-    console.error(`\nSkill directory already exists: ${skillDir}`);
-    console.error('Remove it first or use "zylos upgrade".');
+    if (jsonOutput) {
+      console.log(JSON.stringify({
+        action: 'add', component: resolved.name, success: false,
+        error: 'skill_dir_exists', message: `Skill directory already exists: ${skillDir}. Remove it first or use "zylos upgrade".`,
+        reply: `Cannot install ${resolved.name}: skill directory already exists. Use "upgrade ${resolved.name}" instead.`,
+      }, null, 2));
+    } else {
+      console.error(`\nSkill directory already exists: ${skillDir}`);
+      console.error('Remove it first or use "zylos upgrade".');
+    }
     process.exit(1);
   }
 
@@ -156,7 +166,15 @@ export async function addComponent(args) {
   }
 
   if (!downloadResult.success) {
-    console.error(`Download failed: ${downloadResult.error}`);
+    if (jsonOutput) {
+      console.log(JSON.stringify({
+        action: 'add', component: resolved.name, success: false,
+        error: 'download_failed', message: `Download failed: ${downloadResult.error}`,
+        reply: `Failed to download ${resolved.name}: ${downloadResult.error}`,
+      }, null, 2));
+    } else {
+      console.error(`Download failed: ${downloadResult.error}`);
+    }
     cleanup(skillDir);
     process.exit(1);
   }
