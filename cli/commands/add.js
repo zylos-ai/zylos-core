@@ -238,7 +238,11 @@ async function installDeclarative(resolved, skillDir, skipConfirm, jsonOutput) {
         if (!jsonOutput) console.log('  npm install complete.');
       } catch (err) {
         if (jsonOutput) {
-          console.log(JSON.stringify({ action: 'add', component: resolved.name, success: false, error: `npm install failed: ${err.message}` }));
+          console.log(JSON.stringify({
+            action: 'add', component: resolved.name, success: false,
+            error: 'npm_install_failed', message: `npm install failed: ${err.message}`,
+            reply: `Failed to install ${resolved.name}: npm install failed.`,
+          }, null, 2));
         } else {
           console.error(`  npm install failed: ${err.message}`);
         }
@@ -299,6 +303,15 @@ async function installDeclarative(resolved, skillDir, skipConfirm, jsonOutput) {
 
   // JSON mode: output metadata for Claude to handle
   if (jsonOutput) {
+    const requiredConfig = config.required;
+    let reply = `${resolved.name} installed (v${componentVersion})`;
+    if (Array.isArray(requiredConfig) && requiredConfig.length > 0) {
+      const names = requiredConfig.map(c => typeof c === 'string' ? c : c.name);
+      reply += `\nRequired config: ${names.join(', ')}`;
+    }
+    if (fm['next-steps'] || fm.nextSteps) {
+      reply += `\nNext: ${fm['next-steps'] || fm.nextSteps}`;
+    }
     const output = {
       action: 'add',
       component: resolved.name,
@@ -314,6 +327,7 @@ async function installDeclarative(resolved, skillDir, skipConfirm, jsonOutput) {
         caddy: caddyResult,
         nextSteps: fm['next-steps'] || fm.nextSteps || null,
       },
+      reply,
     };
     console.log(JSON.stringify(output, null, 2));
     return;
