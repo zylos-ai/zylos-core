@@ -1,6 +1,9 @@
 /**
  * zylos add - Install a component
  *
+ * Check mode (--check): Preview only, no installation
+ *   1. Resolve target → show component info (version, type, repo)
+ *
  * Terminal mode (default): Full interactive setup
  *   1. Resolve target → download → npm install → manifest → register
  *   2. Collect required config (prompt user) → write to .env
@@ -27,11 +30,12 @@ import { writeEnvEntries } from '../lib/env.js';
 import { registerService } from '../lib/service.js';
 
 /**
- * Main entry: zylos add <target> [--yes]
+ * Main entry: zylos add <target> [--check] [--yes] [--json]
  */
 export async function addComponent(args) {
   const skipConfirm = args.includes('--yes') || args.includes('-y');
   const jsonOutput = args.includes('--json');
+  const checkOnly = args.includes('--check');
   const target = args.find(a => !a.startsWith('-'));
 
   if (!target) {
@@ -43,37 +47,93 @@ export async function addComponent(args) {
   const resolved = await resolveTarget(target);
 
   if (!resolved.repo) {
-    console.error(`Unknown component: ${target}`);
-    console.log('Use "zylos search <keyword>" to find available components.');
+    if (jsonOutput) {
+      console.log(JSON.stringify({
+        action: 'add_check', component: target, success: false,
+        error: 'not_found', message: `Unknown component: ${target}`,
+        reply: `Component "${target}" not found. Use "search <keyword>" to find available components.`,
+      }, null, 2));
+    } else {
+      console.error(`Unknown component: ${target}`);
+      console.log('Use "zylos search <keyword>" to find available components.');
+    }
     process.exit(1);
   }
 
   // 2. Check if already installed
   const components = loadComponents();
   if (components[resolved.name]) {
-    console.log(`Component "${resolved.name}" is already installed (v${components[resolved.name].version}).`);
-    console.log('Use "zylos upgrade" to update.');
+    if (jsonOutput) {
+      console.log(JSON.stringify({
+        action: 'add_check', component: resolved.name, success: true,
+        alreadyInstalled: true, version: components[resolved.name].version,
+        reply: `${resolved.name} is already installed (v${components[resolved.name].version}). Use "upgrade ${resolved.name}" to update.`,
+      }, null, 2));
+    } else {
+      console.log(`Component "${resolved.name}" is already installed (v${components[resolved.name].version}).`);
+      console.log('Use "zylos upgrade" to update.');
+    }
     process.exit(0);
   }
 
-  // 3. Display component info
-  const versionInfo = resolved.version ? `@${resolved.version}` : ' (latest)';
-  console.log(`\nComponent: ${resolved.name}${versionInfo}`);
-  console.log(`Repository: https://github.com/${resolved.repo}`);
-
-  if (resolved.isThirdParty) {
-    console.log('Warning: Third-party component — not verified by Zylos team.');
-  }
-
-  // Try to get description from registry
+  // 3. Gather component info from registry
   const registry = await loadRegistry();
-  if (registry[resolved.name]) {
-    console.log(`Description: ${registry[resolved.name].description}`);
-    console.log(`Type: ${registry[resolved.name].type}`);
+  const regInfo = registry[resolved.name] || {};
+
+  // 4. Check-only mode: show component info without installing
+  if (checkOnly) {
+    if (jsonOutput) {
+      const output = {
+        action: 'add_check', component: resolved.name, success: true,
+        alreadyInstalled: false,
+        version: resolved.version || regInfo.version || 'latest',
+        description: regInfo.description || null,
+        type: regInfo.type || null,
+        repo: resolved.repo,
+        isThirdParty: resolved.isThirdParty || false,
+      };
+      let reply = `${resolved.name}`;
+      if (output.version && output.version !== 'latest') reply += ` (v${output.version})`;
+      else if (output.version === 'latest') reply += ` (latest)`;
+      if (regInfo.description) reply += `\n${regInfo.description}`;
+      reply += `\nType: ${regInfo.type || 'unknown'}`;
+      reply += `\nRepo: ${resolved.repo}`;
+      if (resolved.isThirdParty) reply += '\nWarning: Third-party component';
+      const confirmTarget = resolved.version ? `${resolved.name}@${resolved.version}` : resolved.name;
+      reply += `\n\nReply "add ${confirmTarget} confirm" to install.`;
+      output.reply = reply;
+      console.log(JSON.stringify(output, null, 2));
+    } else {
+      const versionInfo = resolved.version ? `@${resolved.version}` : ' (latest)';
+      console.log(`\nComponent: ${resolved.name}${versionInfo}`);
+      console.log(`Repository: https://github.com/${resolved.repo}`);
+      if (resolved.isThirdParty) {
+        console.log('Warning: Third-party component — not verified by Zylos team.');
+      }
+      if (regInfo.description) console.log(`Description: ${regInfo.description}`);
+      if (regInfo.type) console.log(`Type: ${regInfo.type}`);
+      const installTarget = resolved.version ? `${resolved.name}@${resolved.version}` : resolved.name;
+      console.log(`\nRun "zylos add ${installTarget} --yes" to install.`);
+    }
+    return;
   }
 
-  // 4. User confirmation
-  if (!skipConfirm) {
+  // 5. Display component info (terminal only)
+  if (!jsonOutput) {
+    const versionInfo = resolved.version ? `@${resolved.version}` : ' (latest)';
+    console.log(`\nComponent: ${resolved.name}${versionInfo}`);
+    console.log(`Repository: https://github.com/${resolved.repo}`);
+
+    if (resolved.isThirdParty) {
+      console.log('Warning: Third-party component — not verified by Zylos team.');
+    }
+
+    if (regInfo.description) console.log(`Description: ${regInfo.description}`);
+    if (regInfo.type) console.log(`Type: ${regInfo.type}`);
+  }
+
+  // 6. User confirmation (skip in JSON mode — confirmation handled at application layer)
+  if (!skipConfirm && !jsonOutput) {
     console.log('');
     const confirmed = await promptYesNo('Proceed with installation? [Y/n]: ', true);
     if (!confirmed) {
@@ -82,16 +142,24 @@ export async function addComponent(args) {
     }
   }
 
-  // 5. Download
+  // 7. Download
   const skillDir = path.join(SKILLS_DIR, resolved.name);
 
   if (fs.existsSync(skillDir)) {
-    console.error(`\nSkill directory already exists: ${skillDir}`);
-    console.error('Remove it first or use "zylos upgrade".');
+    if (jsonOutput) {
+      console.log(JSON.stringify({
+        action: 'add', component: resolved.name, success: false,
+        error: 'skill_dir_exists', message: `Skill directory already exists: ${skillDir}. Remove it first or use "zylos upgrade".`,
+        reply: `Cannot install ${resolved.name}: skill directory already exists. Use "upgrade ${resolved.name}" instead.`,
+      }, null, 2));
+    } else {
+      console.error(`\nSkill directory already exists: ${skillDir}`);
+      console.error('Remove it first or use "zylos upgrade".');
+    }
     process.exit(1);
   }
 
-  console.log(`\nDownloading ${resolved.name}...`);
+  if (!jsonOutput) console.log(`\nDownloading ${resolved.name}...`);
 
   let downloadResult;
   if (resolved.version) {
@@ -101,22 +169,30 @@ export async function addComponent(args) {
   }
 
   if (!downloadResult.success) {
-    console.error(`Download failed: ${downloadResult.error}`);
+    if (jsonOutput) {
+      console.log(JSON.stringify({
+        action: 'add', component: resolved.name, success: false,
+        error: 'download_failed', message: `Download failed: ${downloadResult.error}`,
+        reply: `Failed to download ${resolved.name}: ${downloadResult.error}`,
+      }, null, 2));
+    } else {
+      console.error(`Download failed: ${downloadResult.error}`);
+    }
     cleanup(skillDir);
     process.exit(1);
   }
 
-  console.log('  Download complete.');
+  if (!jsonOutput) console.log('  Download complete.');
 
-  // 6. Generate manifest
+  // 8. Generate manifest
   try {
     const manifest = generateManifest(skillDir);
     saveManifest(skillDir, manifest);
   } catch (err) {
-    console.log(`  Warning: Could not generate manifest: ${err.message}`);
+    if (!jsonOutput) console.log(`  Warning: Could not generate manifest: ${err.message}`);
   }
 
-  // 7. Detect component type and install accordingly
+  // 9. Detect component type and install accordingly
   const componentType = detectComponentType(skillDir);
 
   if (componentType === 'declarative') {
@@ -165,7 +241,11 @@ async function installDeclarative(resolved, skillDir, skipConfirm, jsonOutput) {
         if (!jsonOutput) console.log('  npm install complete.');
       } catch (err) {
         if (jsonOutput) {
-          console.log(JSON.stringify({ action: 'add', component: resolved.name, success: false, error: `npm install failed: ${err.message}` }));
+          console.log(JSON.stringify({
+            action: 'add', component: resolved.name, success: false,
+            error: 'npm_install_failed', message: `npm install failed: ${err.message}`,
+            reply: `Failed to install ${resolved.name}: npm install failed.`,
+          }, null, 2));
         } else {
           console.error(`  npm install failed: ${err.message}`);
         }
@@ -226,6 +306,15 @@ async function installDeclarative(resolved, skillDir, skipConfirm, jsonOutput) {
 
   // JSON mode: output metadata for Claude to handle
   if (jsonOutput) {
+    const requiredConfig = config.required;
+    let reply = `${resolved.name} installed (v${componentVersion})`;
+    if (Array.isArray(requiredConfig) && requiredConfig.length > 0) {
+      const names = requiredConfig.map(c => typeof c === 'string' ? c : c.name);
+      reply += `\nRequired config: ${names.join(', ')}`;
+    }
+    if (fm['next-steps'] || fm.nextSteps) {
+      reply += `\nNext: ${fm['next-steps'] || fm.nextSteps}`;
+    }
     const output = {
       action: 'add',
       component: resolved.name,
@@ -241,6 +330,7 @@ async function installDeclarative(resolved, skillDir, skipConfirm, jsonOutput) {
         caddy: caddyResult,
         nextSteps: fm['next-steps'] || fm.nextSteps || null,
       },
+      reply,
     };
     console.log(JSON.stringify(output, null, 2));
     return;
@@ -403,6 +493,7 @@ Arguments:
   target    Component name, org/repo, or GitHub URL
 
 Options:
+  --check    Show component info without installing
   --yes, -y  Skip confirmation prompts
   --json     Output in JSON format (for programmatic use)
 

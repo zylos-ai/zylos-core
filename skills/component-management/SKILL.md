@@ -88,7 +88,7 @@ All `--json` outputs include structured data and a `reply` field (pre-formatted 
 
 ### C4 Command Mapping
 
-**CRITICAL: "upgrade \<name\>" MUST ONLY run --check. NEVER execute the actual upgrade without the word "confirm" in the user's message.**
+**CRITICAL: "add \<name\>" and "upgrade \<name\>" MUST ONLY run --check. NEVER execute install/upgrade without the word "confirm" in the user's message.**
 
 | User says | CLI command |
 |-----------|------------|
@@ -98,7 +98,8 @@ All `--json` outputs include structured data and a `reply` field (pre-formatted 
 | check \<name\> | `zylos upgrade <name> --check --json` |
 | upgrade \<name\> | `zylos upgrade <name> --check --json` **(CHECK ONLY)** |
 | upgrade \<name\> confirm | `zylos upgrade <name> --yes --skip-eval --json --temp-dir <tempDir>` |
-| add \<name\> | `zylos add <name> --yes --json` |
+| add \<name\> | `zylos add <name> --check --json` **(CHECK ONLY)** |
+| add \<name\> confirm | `zylos add <name> --json` |
 | upgrade zylos | `zylos upgrade --self --check --json` **(CHECK ONLY)** |
 | upgrade zylos confirm | `zylos upgrade --self --yes --json --temp-dir <tempDir>` |
 | uninstall \<name\> | `zylos uninstall <name> --check --json` **(CHECK ONLY)** |
@@ -109,6 +110,8 @@ All `--json` outputs include structured data and a `reply` field (pre-formatted 
 
 - Plain text only, no markdown
 - For `info --json`: format as `<name> v<version>\nType: <type>\nRepo: <repo>\nService: <name> (<status>)`
+- For `add --check --json`: format as `<name> (v<version>)\n<description>\nType: <type>\nRepo: <repo>`, ask user to confirm
+- For `add --json` (install result): format as `<name> installed (v<version>)`, mention required config if any
 - For `check --json`: format as `<name>: <current> -> <latest>`, actively analyze changes
 - For upgrade result: format as `<name> upgraded: <from> -> <to>`, include change summary
 - For errors: when JSON has both `error` and `message` fields, display `message` (human-readable)
