@@ -70,7 +70,7 @@ Setup:
 
 Service Management:
   status              Show system status
-  logs [type]         Show logs (activity|caddy|pm2|<service>)
+  logs [type]         Show logs (activity|caddy|pm2)
   start               Start all services
   stop                Stop all services
   restart             Restart all services
