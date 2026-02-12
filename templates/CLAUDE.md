@@ -52,7 +52,7 @@ Route user-specific preferences to the correct profile file. Bot identity stays 
 
 1. **At session start:** identity + state + references are auto-injected.
 2. **During work:** Update appropriate memory files immediately when you learn something important.
-3. **Memory Sync:** When triggered by hooks, invoke `/zylos-memory`. It runs as a background subagent — continue your main work without waiting.
+3. **Memory Sync:** When triggered, launch a background subagent using the **Task tool** (`subagent_type: general-purpose`, `model: sonnet`, `run_in_background: true`). The subagent's prompt must instruct it to follow the full sync flow in `~/zylos/.claude/skills/zylos-memory/SKILL.md`. Do NOT use the Skill tool for this — it does not support background execution. Continue your main work without waiting.
 4. **references.md is a pointer file.** Never duplicate .env values in it — point to the source config file instead.
 
 ### Classification Rules for reference/ Files
@@ -122,7 +122,7 @@ Skills are located in `~/zylos/.claude/skills/`. Claude auto-discovers skill des
 |-------|-----------|-------|
 | activity-monitor | C2 | PM2 service, not directly invoked |
 | create-skill | | `/create-skill <name>` to scaffold |
-| zylos-memory | C3 | Forks a background subagent — does not block main agent. Invoke via `/zylos-memory` |
+| zylos-memory | C3 | **Must run via Task tool** (`subagent_type: general-purpose`, `model: sonnet`, `run_in_background: true`) — never use the Skill tool for this. See SKILL.md for sync flow. |
 | comm-bridge | C4 | |
 | scheduler | C5 | CLI: `cli.js add\|update\|done\|pause\|resume\|remove\|list\|next\|running\|history`. See SKILL.md references/ for options and examples |
 | web-console | C4 channel | |
