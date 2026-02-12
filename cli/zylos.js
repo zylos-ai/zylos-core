@@ -9,10 +9,12 @@ import { showStatus, showLogs, startServices, stopServices, restartServices } fr
 import { upgradeComponent, uninstallComponent, infoComponent, listComponents, searchComponents } from './commands/component.js';
 import { addComponent } from './commands/add.js';
 import { initCommand } from './commands/init.js';
+import { configCommand } from './commands/config.js';
 
 const commands = {
   // Environment setup
   init: initCommand,
+  config: configCommand,
   // Service management
   status: showStatus,
   logs: showLogs,
@@ -67,6 +69,9 @@ Usage: zylos <command> [options]
 Setup:
   init                Initialize Zylos environment
                       --yes/-y  Skip confirmation prompts
+  config              Show all configuration
+  config get <key>    Get a config value
+  config set <key> <value>  Set a config value
 
 Service Management:
   status              Show system status
@@ -94,6 +99,7 @@ Other:
 
 Examples:
   zylos init
+  zylos config set protocol http
   zylos status
   zylos logs activity
 
