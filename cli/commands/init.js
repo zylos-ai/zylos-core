@@ -803,17 +803,22 @@ function setCaddyCapabilities() {
 }
 
 /**
- * Generate a Caddyfile for the given domain.
+ * Generate a Caddyfile for the given domain and protocol.
  * @param {string} domain - The domain name
+ * @param {string} [protocol='https'] - 'https' (bare domain, auto-cert) or 'http'
  */
-function generateCaddyfile(domain) {
+function generateCaddyfile(domain, protocol = 'https') {
   const publicDir = path.join(HTTP_DIR, 'public');
   fs.mkdirSync(publicDir, { recursive: true });
 
+  // Caddy syntax: bare domain = HTTPS + auto-cert, http:// prefix = HTTP only
+  const siteAddress = protocol === 'http' ? `http://${domain}` : domain;
+
   const content = `# Zylos Caddyfile — managed by zylos-core
 # Domain: ${domain}
+# Protocol: ${protocol}
 
-${domain} {
+${siteAddress} {
     root * ${publicDir}
 
     file_server {
@@ -852,14 +857,15 @@ async function setupCaddy(skipConfirm) {
   if (fs.existsSync(CADDY_BIN) && fs.existsSync(CADDYFILE)) {
     const config = getZylosConfig();
     if (config.domain) {
-      console.log(`  ✓ Caddy already configured (${config.domain})`);
+      const proto = config.protocol || 'https';
+      console.log(`  ✓ Caddy already configured (${proto}://${config.domain})`);
       return true;
     }
   }
 
-  // Ask user if they want HTTPS
+  // Ask user if they want Caddy
   if (!skipConfirm) {
-    const wantCaddy = await promptYesNo('Set up HTTPS with Caddy? [Y/n]: ', true);
+    const wantCaddy = await promptYesNo('Set up Caddy web server? [Y/n]: ', true);
     if (!wantCaddy) {
       console.log('  Skipping Caddy setup. Run "zylos init" later to set up.');
       return false;
@@ -879,9 +885,18 @@ async function setupCaddy(skipConfirm) {
     }
   }
 
-  // Save domain to config.json
-  updateZylosConfig({ domain });
+  // Prompt for protocol
+  let protocol = config.protocol || '';
+  if (!protocol && !skipConfirm) {
+    const useHttps = await promptYesNo('Use HTTPS with auto-certificate? [Y/n]: ', true);
+    protocol = useHttps ? 'https' : 'http';
+  }
+  if (!protocol) protocol = 'https';
+
+  // Save domain and protocol to config.json
+  updateZylosConfig({ domain, protocol });
   console.log(`  Domain: ${domain}`);
+  console.log(`  Protocol: ${protocol}`);
 
   // Download Caddy binary
   if (!downloadCaddy()) return false;
@@ -891,7 +906,7 @@ async function setupCaddy(skipConfirm) {
 
   // Generate Caddyfile
   fs.mkdirSync(HTTP_DIR, { recursive: true });
-  generateCaddyfile(domain);
+  generateCaddyfile(domain, protocol);
   console.log('  ✓ Caddyfile generated at ~/zylos/http/Caddyfile');
 
   return true;

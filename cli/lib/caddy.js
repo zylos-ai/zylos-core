@@ -79,6 +79,61 @@ function stripMarkerBlock(content, beginMarker, endMarker) {
 }
 
 /**
+ * Switch the protocol in an existing Caddyfile (http ↔ https).
+ * Preserves all component routes. Validates and reloads.
+ *
+ * @param {string} domain - The domain name
+ * @param {string} protocol - 'https' or 'http'
+ * @returns {{ success: boolean, error?: string }}
+ */
+export function switchProtocol(domain, protocol) {
+  if (!isCaddyAvailable()) {
+    return { success: false, error: 'caddy_not_available' };
+  }
+
+  let original;
+  try {
+    original = fs.readFileSync(CADDYFILE, 'utf8');
+  } catch (err) {
+    return { success: false, error: `Cannot read Caddyfile: ${err.message}` };
+  }
+
+  const newAddress = protocol === 'http' ? `http://${domain}` : domain;
+
+  // Replace the site address line: matches bare domain or http://domain
+  // The site address is the first non-comment, non-empty line ending with {
+  const lines = original.split('\n');
+  let replaced = false;
+  for (let i = 0; i < lines.length; i++) {
+    const trimmed = lines[i].trim();
+    if (trimmed.startsWith('#') || trimmed === '') continue;
+    if (trimmed.endsWith('{')) {
+      lines[i] = `${newAddress} {`;
+      replaced = true;
+      break;
+    }
+  }
+
+  if (!replaced) {
+    return { success: false, error: 'Cannot find site address in Caddyfile' };
+  }
+
+  // Update or add the protocol comment
+  let newContent = lines.join('\n');
+  if (/^# Protocol: .+$/m.test(newContent)) {
+    newContent = newContent.replace(/^# Protocol: .+$/m, `# Protocol: ${protocol}`);
+  } else {
+    // Insert after the Domain comment for old Caddyfiles
+    newContent = newContent.replace(/^(# Domain: .+)$/m, `$1\n# Protocol: ${protocol}`);
+  }
+
+  const result = validateAndDeploy(newContent, original);
+  if (!result.success) return result;
+
+  return { success: true };
+}
+
+/**
  * Apply Caddy routes for a component.
  * Reads Caddyfile, removes existing markers for this component (if any),
  * generates new route blocks, inserts before closing `}` of the domain block,
