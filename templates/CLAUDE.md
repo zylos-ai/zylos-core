@@ -10,6 +10,17 @@ This file provides guidance to Claude Code when working in this directory.
 
 2. **NEVER use interactive prompts.** Do not use `AskUserQuestion` or any tool that presents menus, choices, or interactive selections to the user. The input box must always remain in its default state, ready to receive messages. Rationale: interactive prompts block the input pipeline and prevent heartbeat commands from being delivered, which would cause a false liveness timeout.
 
+3. **Isolate web operations to prevent main loop blocking.** `WebSearch` and `WebFetch` have no timeout mechanism and can hang indefinitely, blocking heartbeat delivery. Rules:
+   - **Single web call:** OK to use `WebSearch` or `WebFetch` directly in the main loop.
+   - **Multiple web calls (2+):** MUST delegate to a background agent (`Task` tool with `run_in_background: true`). This keeps the main loop responsive even if a web call hangs.
+
+4. **Proactively report progress on complex tasks.** When a task will take multiple steps, don't make the user wait in silence until completion. Rules:
+   - **On receipt:** Immediately acknowledge and outline your plan in 2-3 bullet points (plain language, not technical details).
+   - **At milestones:** Report completion of each major step ("Config done, now setting up the service" — not "Edited line 45 of config.json").
+   - **On completion:** Summarize the result.
+   - **Tone:** Use the user's language. Say "database updated" not "executed INSERT INTO...". Report outcomes, not individual file edits or commands.
+   - **When to skip:** Tasks completable within a few seconds need no intermediate updates — just deliver the result.
+
 ## Environment Overview
 
 This is a Zylos-managed workspace for an autonomous AI agent. You have full control of this environment — sudo access, Docker, network, and all installed tools.
@@ -41,7 +52,7 @@ Route user-specific preferences to the correct profile file. Bot identity stays 
 
 1. **At session start:** identity + state + references are auto-injected.
 2. **During work:** Update appropriate memory files immediately when you learn something important.
-3. **Memory Sync:** When triggered by hooks, invoke `/zylos-memory`. It runs as a background subagent — continue your main work without waiting.
+3. **Memory Sync:** When triggered, launch a background subagent using the **Task tool** (`subagent_type: general-purpose`, `model: sonnet`, `run_in_background: true`). The subagent's prompt must instruct it to follow the full sync flow in `~/zylos/.claude/skills/zylos-memory/SKILL.md`. Do NOT use the Skill tool for this — it does not support background execution. Continue your main work without waiting.
 4. **references.md is a pointer file.** Never duplicate .env values in it — point to the source config file instead.
 
 ### Classification Rules for reference/ Files
@@ -111,7 +122,7 @@ Skills are located in `~/zylos/.claude/skills/`. Claude auto-discovers skill des
 |-------|-----------|-------|
 | activity-monitor | C2 | PM2 service, not directly invoked |
 | create-skill | | `/create-skill <name>` to scaffold |
-| zylos-memory | C3 | Forks a background subagent — does not block main agent. Invoke via `/zylos-memory` |
+| zylos-memory | C3 | **Must run via Task tool** (`subagent_type: general-purpose`, `model: sonnet`, `run_in_background: true`) — never use the Skill tool for this. See SKILL.md for sync flow. |
 | comm-bridge | C4 | |
 | scheduler | C5 | CLI: `cli.js add\|update\|done\|pause\|resume\|remove\|list\|next\|running\|history`. See SKILL.md references/ for options and examples |
 | web-console | C4 channel | |
