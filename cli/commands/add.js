@@ -70,8 +70,10 @@ export async function addComponent(args) {
   // 1. Resolve target
   const resolved = await resolveTarget(target);
 
-  // Validate: --branch conflicts with @version
-  if (branch && resolved.version) {
+  // Validate: --branch conflicts with explicit @version in target
+  // (resolved.version may be auto-populated by fetchLatestTag for registry components)
+  const hasExplicitVersion = target.includes('@') && !target.startsWith('http');
+  if (branch && hasExplicitVersion) {
     if (jsonOutput) {
       console.log(JSON.stringify({
         action: 'add', component: target, success: false,
