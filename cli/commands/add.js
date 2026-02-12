@@ -141,7 +141,7 @@ export async function addComponent(args) {
       reply += `\nType: ${regInfo.type || 'unknown'}`;
       reply += `\nRepo: ${resolved.repo}`;
       if (resolved.isThirdParty) reply += '\nWarning: Third-party component';
-      let confirmTarget = resolved.version ? `${resolved.name}@${resolved.version}` : resolved.name;
+      let confirmTarget = (!branch && resolved.version) ? `${resolved.name}@${resolved.version}` : resolved.name;
       if (branch) confirmTarget += ` --branch ${branch}`;
       reply += `\n\nReply "add ${confirmTarget} confirm" to install.`;
       output.reply = reply;
@@ -155,7 +155,7 @@ export async function addComponent(args) {
       }
       if (regInfo.description) console.log(`Description: ${regInfo.description}`);
       if (regInfo.type) console.log(`Type: ${regInfo.type}`);
-      let installTarget = resolved.version ? `${resolved.name}@${resolved.version}` : resolved.name;
+      let installTarget = (!branch && resolved.version) ? `${resolved.name}@${resolved.version}` : resolved.name;
       if (branch) installTarget += ` --branch ${branch}`;
       console.log(`\nRun "zylos add ${installTarget} --yes" to install.`);
     }
@@ -264,7 +264,9 @@ async function installDeclarative(resolved, skillDir, skipConfirm, jsonOutput, b
   const hooks = lifecycle.hooks || {};
 
   // Resolve version: prefer resolved tag, then SKILL.md frontmatter, then package.json
-  const componentVersion = resolved.version
+  // When installing from branch, skip resolved.version (it may be auto-populated
+  // by fetchLatestTag and doesn't reflect the actual branch code)
+  const componentVersion = (branch ? null : resolved.version)
     || fm.version
     || (() => {
       try {
@@ -478,7 +480,8 @@ function installAI(resolved, skillDir, branch) {
   console.log('\nInstalling (AI mode — Claude will complete setup)...');
 
   // Resolve version from SKILL.md or package.json when not from a tag
-  const aiVersion = resolved.version
+  // When installing from branch, skip resolved.version (may be auto-populated by fetchLatestTag)
+  const aiVersion = (branch ? null : resolved.version)
     || (() => {
       try {
         const skill = parseSkillMd(skillDir);
@@ -512,7 +515,8 @@ function installAI(resolved, skillDir, branch) {
   outputTask('install', {
     component: resolved.name,
     repo: resolved.repo,
-    version: resolved.version,
+    version: aiVersion,
+    branch: branch || null,
     skillDir,
     dataDir: path.join(COMPONENTS_DIR, resolved.name),
     isThirdParty: resolved.isThirdParty,
