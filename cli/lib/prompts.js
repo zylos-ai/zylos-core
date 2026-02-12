@@ -17,7 +17,7 @@ export function prompt(question) {
   return new Promise((resolve) => {
     rl.question(question, (answer) => {
       rl.close();
-      resolve(answer.trim());
+      resolve(answer.replace(/[\r\n]/g, '').trim());
     });
   });
 }
@@ -75,7 +75,7 @@ export function promptSecret(question) {
       // Enter
       if (ch === '\r' || ch === '\n') {
         cleanup();
-        resolve(input);
+        resolve(input.replace(/[\r\n]/g, '').trim());
         return;
       }
       // Backspace
