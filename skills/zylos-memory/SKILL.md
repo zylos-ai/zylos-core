@@ -4,16 +4,16 @@ description: >-
   Core memory system. Maintains persistent memory across sessions via tiered
   markdown files following the Inside Out model. Handles Memory Sync (processing
   conversations into structured memory), session rotation, consolidation, and
-  context-aware state saving. Runs as a forked subagent and does not block the
-  main agent. Invoke with /zylos-memory (no arguments).
-context: fork
-model: sonnet
+  context-aware state saving. Must be launched via the Task tool as a background
+  subagent — do not invoke with the Skill tool.
+disable-model-invocation: true
+user-invocable: false
 ---
 
 # Memory System
 
 Maintains persistent memory across sessions via tiered markdown files.
-This skill runs as a forked subagent with its own isolated context window.
+This skill must be run via the Task tool (`subagent_type: general-purpose`, `model: sonnet`, `run_in_background: true`). The subagent reads this file for the sync flow.
 
 ## Architecture
 
@@ -44,10 +44,10 @@ When triggered, run it before handling queued user messages.
 
 ### Trigger Paths
 
-1. Session init: if C4 unsummarized count is over threshold, invoke `/zylos-memory`.
-2. Scheduled context check: if context usage is high, invoke `/zylos-memory`.
+1. Session init: if C4 unsummarized count is over threshold, launch memory sync.
+2. Scheduled context check: if context usage is high, launch memory sync.
 
-Both use `/zylos-memory` with no arguments.
+Both launch a background subagent via the Task tool with this file's Sync Flow as the prompt.
 
 ### Sync Flow
 
