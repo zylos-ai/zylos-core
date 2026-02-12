@@ -83,6 +83,7 @@ Service Management:
 Component Management:
   add <target>        Add a component
                       target: name[@ver] | org/repo[@ver] | url
+                      --branch <name>  Install from a git branch
                       --check   Show component info without installing
                       --yes/-y  Skip confirmation prompts
   info <name>         Show component details (--json)
@@ -105,6 +106,7 @@ Examples:
 
   zylos add telegram
   zylos add telegram@0.2.0
+  zylos add lark --branch feature/new-thing
   zylos add user/my-component
   zylos upgrade telegram
   zylos upgrade --all

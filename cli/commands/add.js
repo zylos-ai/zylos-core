@@ -30,13 +30,37 @@ import { writeEnvEntries } from '../lib/env.js';
 import { registerService } from '../lib/service.js';
 
 /**
- * Main entry: zylos add <target> [--check] [--yes] [--json]
+ * Main entry: zylos add <target> [--check] [--yes] [--json] [--branch <name>]
  */
 export async function addComponent(args) {
   const skipConfirm = args.includes('--yes') || args.includes('-y');
   const jsonOutput = args.includes('--json');
   const checkOnly = args.includes('--check');
-  const target = args.find(a => !a.startsWith('-'));
+
+  // Parse --branch <name> flag
+  const branchIndex = args.indexOf('--branch');
+  const branch = branchIndex !== -1 ? args[branchIndex + 1] : null;
+  if (branchIndex !== -1 && !branch) {
+    if (jsonOutput) {
+      console.log(JSON.stringify({
+        action: 'add', success: false,
+        error: 'missing_branch', message: '--branch requires a branch name',
+        reply: 'Error: --branch requires a branch name. Example: zylos add lark --branch feature/xxx',
+      }, null, 2));
+    } else {
+      console.error('Error: --branch requires a branch name.');
+    }
+    process.exit(1);
+  }
+
+  // Find target (skip flags and their values)
+  const flagsWithValues = new Set(['--branch']);
+  const skipNext = new Set();
+  const target = args.find((a, i) => {
+    if (skipNext.has(i)) return false;
+    if (flagsWithValues.has(a)) { skipNext.add(i + 1); return false; }
+    return !a.startsWith('-');
+  });
 
   if (!target) {
     printUsage();
@@ -45,6 +69,20 @@ export async function addComponent(args) {
 
   // 1. Resolve target
   const resolved = await resolveTarget(target);
+
+  // Validate: --branch conflicts with @version
+  if (branch && resolved.version) {
+    if (jsonOutput) {
+      console.log(JSON.stringify({
+        action: 'add', component: target, success: false,
+        error: 'conflict', message: 'Cannot specify both @version and --branch',
+        reply: 'Error: cannot use both @version and --branch. Use one or the other.',
+      }, null, 2));
+    } else {
+      console.error('Error: cannot specify both @version and --branch. Use one or the other.');
+    }
+    process.exit(1);
+  }
 
   if (!resolved.repo) {
     if (jsonOutput) {
@@ -86,25 +124,28 @@ export async function addComponent(args) {
       const output = {
         action: 'add_check', component: resolved.name, success: true,
         alreadyInstalled: false,
-        version: resolved.version || regInfo.version || 'latest',
+        version: branch ? null : (resolved.version || regInfo.version || 'latest'),
+        branch: branch || null,
         description: regInfo.description || null,
         type: regInfo.type || null,
         repo: resolved.repo,
         isThirdParty: resolved.isThirdParty || false,
       };
       let reply = `${resolved.name}`;
-      if (output.version && output.version !== 'latest') reply += ` (v${output.version})`;
+      if (branch) reply += ` (branch: ${branch})`;
+      else if (output.version && output.version !== 'latest') reply += ` (v${output.version})`;
       else if (output.version === 'latest') reply += ` (latest)`;
       if (regInfo.description) reply += `\n${regInfo.description}`;
       reply += `\nType: ${regInfo.type || 'unknown'}`;
       reply += `\nRepo: ${resolved.repo}`;
       if (resolved.isThirdParty) reply += '\nWarning: Third-party component';
-      const confirmTarget = resolved.version ? `${resolved.name}@${resolved.version}` : resolved.name;
+      let confirmTarget = resolved.version ? `${resolved.name}@${resolved.version}` : resolved.name;
+      if (branch) confirmTarget += ` --branch ${branch}`;
       reply += `\n\nReply "add ${confirmTarget} confirm" to install.`;
       output.reply = reply;
       console.log(JSON.stringify(output, null, 2));
     } else {
-      const versionInfo = resolved.version ? `@${resolved.version}` : ' (latest)';
+      const versionInfo = branch ? ` (branch: ${branch})` : (resolved.version ? `@${resolved.version}` : ' (latest)');
       console.log(`\nComponent: ${resolved.name}${versionInfo}`);
       console.log(`Repository: https://github.com/${resolved.repo}`);
       if (resolved.isThirdParty) {
@@ -112,7 +153,8 @@ export async function addComponent(args) {
       }
       if (regInfo.description) console.log(`Description: ${regInfo.description}`);
       if (regInfo.type) console.log(`Type: ${regInfo.type}`);
-      const installTarget = resolved.version ? `${resolved.name}@${resolved.version}` : resolved.name;
+      let installTarget = resolved.version ? `${resolved.name}@${resolved.version}` : resolved.name;
+      if (branch) installTarget += ` --branch ${branch}`;
       console.log(`\nRun "zylos add ${installTarget} --yes" to install.`);
     }
     return;
@@ -120,7 +162,7 @@ export async function addComponent(args) {
 
   // 5. Display component info (terminal only)
   if (!jsonOutput) {
-    const versionInfo = resolved.version ? `@${resolved.version}` : ' (latest)';
+    const versionInfo = branch ? ` (branch: ${branch})` : (resolved.version ? `@${resolved.version}` : ' (latest)');
     console.log(`\nComponent: ${resolved.name}${versionInfo}`);
     console.log(`Repository: https://github.com/${resolved.repo}`);
 
@@ -159,10 +201,13 @@ export async function addComponent(args) {
     process.exit(1);
   }
 
-  if (!jsonOutput) console.log(`\nDownloading ${resolved.name}...`);
+  const downloadLabel = branch ? `${resolved.name} (branch: ${branch})` : resolved.name;
+  if (!jsonOutput) console.log(`\nDownloading ${downloadLabel}...`);
 
   let downloadResult;
-  if (resolved.version) {
+  if (branch) {
+    downloadResult = downloadBranch(resolved.repo, branch, skillDir);
+  } else if (resolved.version) {
     downloadResult = downloadArchive(resolved.repo, resolved.version, skillDir);
   } else {
     downloadResult = downloadBranch(resolved.repo, 'main', skillDir);
@@ -196,9 +241,9 @@ export async function addComponent(args) {
   const componentType = detectComponentType(skillDir);
 
   if (componentType === 'declarative') {
-    await installDeclarative(resolved, skillDir, skipConfirm, jsonOutput);
+    await installDeclarative(resolved, skillDir, skipConfirm, jsonOutput, branch);
   } else {
-    installAI(resolved, skillDir);
+    installAI(resolved, skillDir, branch);
   }
 }
 
@@ -207,7 +252,7 @@ export async function addComponent(args) {
  * Terminal mode: full interactive setup (config → hooks → service start).
  * JSON mode: mechanical install only, outputs metadata for Claude.
  */
-async function installDeclarative(resolved, skillDir, skipConfirm, jsonOutput) {
+async function installDeclarative(resolved, skillDir, skipConfirm, jsonOutput, branch) {
   if (!jsonOutput) console.log('\nInstalling (declarative)...');
 
   const skill = parseSkillMd(skillDir);
@@ -262,7 +307,7 @@ async function installDeclarative(resolved, skillDir, skipConfirm, jsonOutput) {
 
   // Step 3: Update components.json
   const components = loadComponents();
-  components[resolved.name] = {
+  const componentEntry = {
     version: componentVersion,
     repo: resolved.repo,
     type: 'declarative',
@@ -271,6 +316,8 @@ async function installDeclarative(resolved, skillDir, skipConfirm, jsonOutput) {
     skillDir,
     dataDir,
   };
+  if (branch) componentEntry.branch = branch;
+  components[resolved.name] = componentEntry;
   saveComponents(components);
 
   // Step 4: Create bin symlinks
@@ -307,7 +354,9 @@ async function installDeclarative(resolved, skillDir, skipConfirm, jsonOutput) {
   // JSON mode: output metadata for Claude to handle
   if (jsonOutput) {
     const requiredConfig = config.required;
-    let reply = `${resolved.name} installed (v${componentVersion})`;
+    let reply = branch
+      ? `${resolved.name} installed (branch: ${branch})`
+      : `${resolved.name} installed (v${componentVersion})`;
     if (Array.isArray(requiredConfig) && requiredConfig.length > 0) {
       const names = requiredConfig.map(c => typeof c === 'string' ? c : c.name);
       reply += `\nRequired config: ${names.join(', ')}`;
@@ -320,6 +369,7 @@ async function installDeclarative(resolved, skillDir, skipConfirm, jsonOutput) {
       component: resolved.name,
       success: true,
       version: componentVersion,
+      branch: branch || null,
       skillDir,
       dataDir,
       skill: {
@@ -422,7 +472,7 @@ async function installDeclarative(resolved, skillDir, skipConfirm, jsonOutput) {
 /**
  * Install an AI component (no SKILL.md — needs Claude to finish setup).
  */
-function installAI(resolved, skillDir) {
+function installAI(resolved, skillDir, branch) {
   console.log('\nInstalling (AI mode — Claude will complete setup)...');
 
   // Resolve version from SKILL.md or package.json when not from a tag
@@ -443,7 +493,7 @@ function installAI(resolved, skillDir) {
 
   // Update components.json with basic info
   const components = loadComponents();
-  components[resolved.name] = {
+  const aiEntry = {
     version: aiVersion,
     repo: resolved.repo,
     type: 'ai',
@@ -452,6 +502,8 @@ function installAI(resolved, skillDir) {
     skillDir,
     setupComplete: false,
   };
+  if (branch) aiEntry.branch = branch;
+  components[resolved.name] = aiEntry;
   saveComponents(components);
 
   // Output task for Claude to read README and finish setup
@@ -493,13 +545,15 @@ Arguments:
   target    Component name, org/repo, or GitHub URL
 
 Options:
-  --check    Show component info without installing
-  --yes, -y  Skip confirmation prompts
-  --json     Output in JSON format (for programmatic use)
+  --branch <name>  Install from a specific git branch (for testing)
+  --check          Show component info without installing
+  --yes, -y        Skip confirmation prompts
+  --json           Output in JSON format (for programmatic use)
 
 Examples:
-  zylos add telegram              Official component (latest)
-  zylos add telegram@0.2.0        Specific version
-  zylos add user/my-component     Third-party
+  zylos add telegram                            Official component (latest)
+  zylos add telegram@0.2.0                      Specific version
+  zylos add lark --branch feature/new-thing     Install from branch
+  zylos add user/my-component                   Third-party
   zylos add https://github.com/user/zylos-my-component`);
 }
