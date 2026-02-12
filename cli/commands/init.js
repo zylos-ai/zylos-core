@@ -9,7 +9,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
-import { execSync, spawnSync, spawn } from 'node:child_process';
+import { execSync, spawnSync } from 'node:child_process';
 import { ZYLOS_DIR, SKILLS_DIR, CONFIG_DIR, COMPONENTS_DIR, LOCKS_DIR, COMPONENTS_FILE, BIN_DIR, HTTP_DIR, CADDYFILE, CADDY_BIN, getZylosConfig, updateZylosConfig } from '../lib/config.js';
 import { generateManifest, saveManifest } from '../lib/manifest.js';
 import { prompt, promptYesNo } from '../lib/prompts.js';
@@ -1014,34 +1014,20 @@ export async function initCommand(args) {
       console.log('  ✓ Claude Code authenticated');
     } else {
       console.log('  ⚠ Claude Code not authenticated');
+      console.log('    To authenticate, open another terminal and run:');
+      console.log('      claude');
+      console.log('    Then type /login inside the Claude REPL.');
       if (!skipConfirm) {
-        const doAuth = await promptYesNo('  Authenticate now? [Y/n]: ', true);
-        if (doAuth) {
-          console.log('  Running claude auth...\n');
-          // Use async spawn + SIGINT trap so Ctrl+C kills claude auth
-          // without also killing zylos init (they share a process group).
-          const sigintListeners = process.rawListeners('SIGINT');
-          process.removeAllListeners('SIGINT');
-          process.on('SIGINT', () => {}); // ignore during auth
-          try {
-            const authChild = spawn('claude', ['auth'], { stdio: 'inherit' });
-            await new Promise((resolve) => authChild.on('close', resolve));
-          } catch { /* user may Ctrl+C */ }
-          process.removeAllListeners('SIGINT');
-          for (const l of sigintListeners) process.on('SIGINT', l);
-          // Re-check after auth attempt
-          claudeAuthenticated = isClaudeAuthenticated();
-          if (claudeAuthenticated) {
-            console.log('\n  ✓ Claude Code authenticated');
-          } else {
-            console.log('\n  ⚠ Authentication not completed.');
-            console.log('    Run "claude auth" then "zylos init" again to finish setup.');
-          }
+        await promptYesNo('  Press Enter after you have logged in: ', true);
+        claudeAuthenticated = isClaudeAuthenticated();
+        if (claudeAuthenticated) {
+          console.log('  ✓ Claude Code authenticated');
         } else {
-          console.log('  Skipped. Run "claude auth" then "zylos init" again to finish setup.');
+          console.log('  ⚠ Authentication not detected.');
+          console.log('    Run "zylos init" again after logging in.');
         }
       } else {
-        console.log('    Run "claude auth" then "zylos init" again to finish setup.');
+        console.log('    Then run "zylos init" again to finish setup.');
       }
     }
   }
@@ -1093,7 +1079,7 @@ export async function initCommand(args) {
 
     if (!claudeAuthenticated) {
       console.log('\n⚠ Claude Code is not authenticated.');
-      console.log('  Run "claude auth" then "zylos init" again to finish setup.');
+      console.log('  Run "claude", type /login, then "zylos init" again to finish setup.');
     }
     console.log('\nUse "zylos add <component>" to add components.');
     return;
@@ -1175,7 +1161,7 @@ export async function initCommand(args) {
 
   console.log('Next steps:');
   if (!claudeAuthenticated) {
-    console.log('  claude auth && zylos init  # ⚠ Authenticate then finish setup');
+    console.log('  claude  # ⚠ Run, type /login, then zylos init again');
   }
   console.log('  zylos add telegram    # Add Telegram bot');
   console.log('  zylos add lark        # Add Lark bot');
