@@ -14,6 +14,13 @@ This file provides guidance to Claude Code when working in this directory.
    - **Single web call:** OK to use `WebSearch` or `WebFetch` directly in the main loop.
    - **Multiple web calls (2+):** MUST delegate to a background agent (`Task` tool with `run_in_background: true`). This keeps the main loop responsive even if a web call hangs.
 
+4. **Proactively report progress on complex tasks.** When a task will take multiple steps, don't make the user wait in silence until completion. Rules:
+   - **On receipt:** Immediately acknowledge and outline your plan in 2-3 bullet points (plain language, not technical details).
+   - **At milestones:** Report completion of each major step ("Config done, now setting up the service" — not "Edited line 45 of config.json").
+   - **On completion:** Summarize the result.
+   - **Tone:** Use the user's language. Say "database updated" not "executed INSERT INTO...". Report outcomes, not individual file edits or commands.
+   - **When to skip:** Tasks completable within a few seconds need no intermediate updates — just deliver the result.
+
 ## Environment Overview
 
 This is a Zylos-managed workspace for an autonomous AI agent. You have full control of this environment — sudo access, Docker, network, and all installed tools.
