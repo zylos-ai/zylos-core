@@ -5,6 +5,18 @@ All notable changes to zylos-core will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1] - 2026-02-12
+
+### Added
+- Configurable HTTP/HTTPS protocol for Caddy (`zylos config set protocol http/https`) (#90)
+- `zylos add --branch` flag for installing components from specific git branches (#92)
+- Behavioral rule: isolate web operations from main loop (#89)
+- Recommend nvm for Node.js installation in docs (#88)
+
+### Fixed
+- Strip `\r\n` from user input during interactive config collection (#91)
+- Prevent Ctrl+C during `claude auth` from killing `zylos init` process (#93)
+
 ## [0.1.0] - 2026-02-11
 
 Initial public release.
