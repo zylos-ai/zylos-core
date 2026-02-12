@@ -57,10 +57,12 @@ export function writeEnvEntries(entries, componentName) {
       skipped.push(key);
       continue;
     }
+    // Strip any embedded \r\n characters from value
+    const cleanValue = value.replace(/[\r\n]/g, '').trim();
     // Quote values that contain spaces or special characters
-    const needsQuote = /[\s#"'$`\\]/.test(value);
-    const escaped = value.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\$/g, '\\$');
-    lines.push(`${key}=${needsQuote ? `"${escaped}"` : value}`);
+    const needsQuote = /[\s#"'$`\\]/.test(cleanValue);
+    const escaped = cleanValue.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\$/g, '\\$');
+    lines.push(`${key}=${needsQuote ? `"${escaped}"` : cleanValue}`);
     written.push(key);
   }
 
