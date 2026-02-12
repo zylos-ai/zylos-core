@@ -10,6 +10,10 @@ This file provides guidance to Claude Code when working in this directory.
 
 2. **NEVER use interactive prompts.** Do not use `AskUserQuestion` or any tool that presents menus, choices, or interactive selections to the user. The input box must always remain in its default state, ready to receive messages. Rationale: interactive prompts block the input pipeline and prevent heartbeat commands from being delivered, which would cause a false liveness timeout.
 
+3. **Isolate web operations to prevent main loop blocking.** `WebSearch` and `WebFetch` have no timeout mechanism and can hang indefinitely, blocking heartbeat delivery. Rules:
+   - **Single web call:** OK to use `WebSearch` or `WebFetch` directly in the main loop.
+   - **Multiple web calls (2+):** MUST delegate to a background agent (`Task` tool with `run_in_background: true`). This keeps the main loop responsive even if a web call hangs.
+
 ## Environment Overview
 
 This is a Zylos-managed workspace for an autonomous AI agent. You have full control of this environment — sudo access, Docker, network, and all installed tools.
