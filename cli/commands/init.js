@@ -9,7 +9,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
-import { execSync, spawnSync } from 'node:child_process';
+import { execSync, spawnSync, spawn } from 'node:child_process';
 import { ZYLOS_DIR, SKILLS_DIR, CONFIG_DIR, COMPONENTS_DIR, LOCKS_DIR, COMPONENTS_FILE, BIN_DIR, HTTP_DIR, CADDYFILE, CADDY_BIN, getZylosConfig, updateZylosConfig } from '../lib/config.js';
 import { generateManifest, saveManifest } from '../lib/manifest.js';
 import { prompt, promptYesNo } from '../lib/prompts.js';
@@ -1018,12 +1018,17 @@ export async function initCommand(args) {
         const doAuth = await promptYesNo('  Authenticate now? [Y/n]: ', true);
         if (doAuth) {
           console.log('  Running claude auth...\n');
+          // Use async spawn + SIGINT trap so Ctrl+C kills claude auth
+          // without also killing zylos init (they share a process group).
+          const sigintListeners = process.rawListeners('SIGINT');
+          process.removeAllListeners('SIGINT');
+          process.on('SIGINT', () => {}); // ignore during auth
           try {
-            spawnSync('claude', ['auth'], {
-              stdio: 'inherit',
-              timeout: 300000, // 5 min for auth flow
-            });
+            const authChild = spawn('claude', ['auth'], { stdio: 'inherit' });
+            await new Promise((resolve) => authChild.on('close', resolve));
           } catch { /* user may Ctrl+C */ }
+          process.removeAllListeners('SIGINT');
+          for (const l of sigintListeners) process.on('SIGINT', l);
           // Re-check after auth attempt
           claudeAuthenticated = isClaudeAuthenticated();
           if (claudeAuthenticated) {
