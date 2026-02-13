@@ -258,6 +258,7 @@ function enqueueStartupControl() {
     '--content', content,
     '--priority', '3',
     '--require-idle',
+    '--available-in', '3',
     '--ack-deadline', '600'
   ]);
 
