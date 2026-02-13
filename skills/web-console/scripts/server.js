@@ -38,7 +38,19 @@ const STATUS_FILE = path.join(ZYLOS_DIR, 'activity-monitor', 'claude-status.json
 const SKILL_ROOT = path.join(__dirname, '..');
 
 // --- Authentication ---
-const AUTH_PASSWORD = process.env.WEB_CONSOLE_PASSWORD || '';
+import { parse as parseDotenv } from 'dotenv';
+
+function readEnvPassword() {
+  const envPath = path.join(ZYLOS_DIR, '.env');
+  try {
+    const env = parseDotenv(fs.readFileSync(envPath, 'utf8'));
+    return env.WEB_CONSOLE_PASSWORD || '';
+  } catch {
+    return '';
+  }
+}
+
+const AUTH_PASSWORD = readEnvPassword();
 const AUTH_ENABLED = AUTH_PASSWORD.length > 0;
 const sessions = new Set(); // Active session tokens
 
