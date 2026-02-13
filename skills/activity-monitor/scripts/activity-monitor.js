@@ -250,6 +250,29 @@ function waitForMaintenance() {
   }
 }
 
+function enqueueStartupControl() {
+  const content = 'reply to your human partner if they are waiting your reply, or continue your work if you have ongoing task according to the previous conversations.';
+
+  const result = runC4Control([
+    'enqueue',
+    '--content', content,
+    '--priority', '3',
+    '--require-idle',
+    '--ack-deadline', '600'
+  ]);
+
+  if (!result.ok) {
+    log(`Startup control enqueue failed: ${result.output}`);
+    return false;
+  }
+
+  const match = result.output.match(/control\s+(\d+)/i);
+  if (match) {
+    log(`Startup control enqueued id=${match[1]}`);
+  }
+  return true;
+}
+
 function startClaude() {
   if (isMaintenanceRunning()) {
     log('Guardian: Maintenance script detected, waiting for completion...');
@@ -279,6 +302,7 @@ function startClaude() {
     }
   }
 
+  enqueueStartupControl();
 }
 
 function ensureStatusDir() {
