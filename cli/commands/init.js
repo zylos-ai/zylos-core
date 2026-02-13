@@ -695,23 +695,37 @@ function startCoreServices() {
  * then executes it. Idempotent — safe to run multiple times.
  */
 function setupPm2Startup() {
-  try {
-    // pm2 startup outputs a sudo command to create the systemd service.
-    const output = execSync('pm2 startup 2>&1', {
-      encoding: 'utf8',
-      stdio: ['pipe', 'pipe', 'pipe'],
-      timeout: 15000,
-    });
+  // pm2 startup exits non-zero when it needs a sudo command to be run,
+  // so we use spawnSync to always capture output regardless of exit code.
+  const result = spawnSync('pm2', ['startup'], {
+    encoding: 'utf8',
+    stdio: 'pipe',
+    timeout: 15000,
+  });
 
-    // Extract the sudo command from output
-    // Typical: "sudo env PATH=$PATH:/usr/bin pm2 startup systemd -u howard --hp /home/howard"
-    const sudoMatch = output.match(/^(sudo .+)$/m);
-    if (sudoMatch) {
+  const output = [result.stdout, result.stderr].filter(Boolean).join('\n');
+
+  // Extract the sudo command from output
+  // Typical: "sudo env PATH=$PATH:/usr/bin pm2 startup systemd -u howard --hp /home/howard"
+  const sudoMatch = output.match(/^(sudo .+)$/m);
+  if (sudoMatch) {
+    try {
       execSync(sudoMatch[1], { stdio: 'pipe', timeout: 30000 });
+      console.log('  ✓ PM2 boot auto-start configured');
+      return;
+    } catch (err) {
+      const msg = (err.stderr || '').toString().trim().split('\n')[0] || err.message;
+      console.log(`  ⚠ PM2 boot auto-start: sudo command failed: ${msg}`);
+      console.log(`    Fix manually: ${sudoMatch[1]}`);
+      return;
     }
+  }
+
+  // No sudo command found — may already be configured or failed
+  if (result.status === 0) {
     console.log('  ✓ PM2 boot auto-start configured');
-  } catch (err) {
-    const msg = (err.stderr || err.stdout || '').toString().trim().split('\n')[0] || err.message;
+  } else {
+    const msg = output.trim().split('\n')[0] || 'unknown error';
     console.log(`  ⚠ PM2 boot auto-start setup failed: ${msg}`);
     console.log('    Fix manually: pm2 startup (then run the sudo command it outputs)');
   }
