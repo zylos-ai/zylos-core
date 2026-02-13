@@ -5,6 +5,16 @@ All notable changes to zylos-core will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.2] - 2026-02-13
+
+### Added
+- Activity monitor: enqueue startup control after launching Claude (#94)
+- Web console: read password from .env file directly (#97)
+
+### Fixed
+- Add nextSteps and SKILL.md guidance to C4 install flow (#95)
+- Make nextSteps handling explicit and actionable in install workflow (#96)
+
 ## [0.1.1] - 2026-02-12
 
 ### Added
