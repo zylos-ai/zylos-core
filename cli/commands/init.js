@@ -687,6 +687,36 @@ function startCoreServices() {
   }
 }
 
+// ── PM2 boot auto-start ──────────────────────────────────────────
+
+/**
+ * Configure PM2 to auto-start on system boot.
+ * Runs `pm2 startup` which generates a systemd service command,
+ * then executes it. Idempotent — safe to run multiple times.
+ */
+function setupPm2Startup() {
+  try {
+    // pm2 startup outputs a sudo command to create the systemd service.
+    const output = execSync('pm2 startup 2>&1', {
+      encoding: 'utf8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+      timeout: 15000,
+    });
+
+    // Extract the sudo command from output
+    // Typical: "sudo env PATH=$PATH:/usr/bin pm2 startup systemd -u howard --hp /home/howard"
+    const sudoMatch = output.match(/^(sudo .+)$/m);
+    if (sudoMatch) {
+      execSync(sudoMatch[1], { stdio: 'pipe', timeout: 30000 });
+    }
+    console.log('  ✓ PM2 boot auto-start configured');
+  } catch (err) {
+    const msg = (err.stderr || err.stdout || '').toString().trim().split('\n')[0] || err.message;
+    console.log(`  ⚠ PM2 boot auto-start setup failed: ${msg}`);
+    console.log('    Fix manually: pm2 startup (then run the sudo command it outputs)');
+  }
+}
+
 // ── Caddy web server setup ───────────────────────────────────────
 
 /**
@@ -1082,6 +1112,7 @@ export async function initCommand(args) {
     console.log('Starting services...');
     const servicesStarted = startCoreServices();
     if (servicesStarted > 0) {
+      setupPm2Startup();
       console.log(`\n${servicesStarted} service(s) started. Run "zylos status" to check.`);
     } else {
       console.log('\nNo services to start.');
@@ -1159,6 +1190,10 @@ export async function initCommand(args) {
   } else {
     console.log('\nStarting services...');
     servicesStarted = startCoreServices();
+  }
+
+  if (servicesStarted > 0) {
+    setupPm2Startup();
   }
 
   // First-time Claude bypass acceptance (only if authenticated)
