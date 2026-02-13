@@ -62,7 +62,7 @@ If the hook fails, investigate and fix the issue.
 ### Step 6: Start Service and Guide User
 
 1. If component has `skill.service`, start it: `pm2 start ecosystem.config.cjs` (or entry point) and verify health
-2. Show the `skill.nextSteps` from JSON output to guide user on what to do next
+2. If `skill.nextSteps` exists, execute it — see [Next Steps Handling](#next-steps-handling) below
 3. Confirm successful installation
 
 ## C4 Mode
@@ -93,5 +93,17 @@ After `zylos add <name> --json` succeeds, the JSON `skill` field tells you what 
 2. **Config**: If `skill.config.required` exists, inform user which config values are needed. In C4 mode, user provides values via follow-up messages.
 3. **Hooks**: If `skill.hooks.post-install` exists, run it (with PATH prefix if step 1 applied).
 4. **Service**: If `skill.service` exists, start it and verify.
-5. **Next Steps**: If `skill.nextSteps` exists, follow the instructions — this typically includes post-service-start guidance (e.g., configuring webhook URLs, optional security settings). Always show these to the user.
+5. **Next Steps**: If `skill.nextSteps` exists, execute it — see [Next Steps Handling](#next-steps-handling) below.
 6. **SKILL.md**: If the component's SKILL.md has additional setup documentation beyond the frontmatter, read and follow it for any remaining configuration steps.
+
+## Next Steps Handling
+
+If `skill.nextSteps` is absent or empty, skip this section.
+
+`skill.nextSteps` contains **actionable post-install instructions** that are part of the install flow. Do NOT collapse them into a single summary message. Read and execute each instruction in order:
+
+- Instructions that provide information → present clearly to the user
+- Instructions that require user input or decisions → ask the user and wait for their response before proceeding
+- Instructions that direct config changes or service restarts → execute them
+
+**Do NOT report installation as complete until all next-steps instructions have been addressed.**
