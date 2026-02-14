@@ -204,7 +204,6 @@ async function configureTimezone(skipConfirm, isReinit) {
   // Re-init with valid non-default timezone: just display it
   if (isReinit && currentTz && isValidTimezone(currentTz)) {
     console.log(`  ${success(`Timezone: ${bold(currentTz)}`)}`);
-
     return;
   }
 
@@ -240,7 +239,6 @@ async function configureTimezone(skipConfirm, isReinit) {
       const tz = COMMON_TIMEZONES[num - 1].value;
       writeEnvTimezone(tz);
       console.log(`  ${success(`Timezone: ${bold(tz)}`)}`);
-
       return;
     }
 
@@ -251,7 +249,6 @@ async function configureTimezone(skipConfirm, isReinit) {
         if (isValidTimezone(manual)) {
           writeEnvTimezone(manual);
           console.log(`  ${success(`Timezone: ${bold(manual)}`)}`);
-
           return;
         }
         console.log(`  ${error(`Invalid timezone: "${manual}". Try again.`)}`);
@@ -583,7 +580,6 @@ function syncCoreSkills() {
       (isNew ? installed : updated).push(entry.name);
     } catch {
       console.log(`  ${warn(`Failed to sync ${bold(entry.name)}`)}`);
-
     }
   }
 
@@ -898,7 +894,6 @@ function setCaddyCapabilities() {
     console.log(`  ${warn('Could not set port binding capability (sudo required)')}`);
     console.log(`    ${dim('Caddy may not be able to bind to ports 80/443.')}`);
     console.log(`    ${dim(`Fix manually: sudo setcap cap_net_bind_service=+ep "${CADDY_BIN}"`)}`);
-
     return false;
   }
 }
