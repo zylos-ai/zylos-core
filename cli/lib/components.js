@@ -50,13 +50,13 @@ export async function resolveTarget(nameOrUrl) {
   if (githubMatch) {
     const repo = githubMatch[1].replace(/\.git$/, '');
     const name = repo.split('/')[1].replace(/^zylos-/, '');
-    return { name, repo, version, isThirdParty: !repo.startsWith('zylos-ai/') };
+    return { name, repo, version: version || fetchLatestTag(repo) || null, isThirdParty: !repo.startsWith('zylos-ai/') };
   }
 
   // Check if it's in format org/repo
   if (target.includes('/')) {
     const name = target.split('/')[1].replace(/^zylos-/, '');
-    return { name, repo: target, version, isThirdParty: !target.startsWith('zylos-ai/') };
+    return { name, repo: target, version: version || fetchLatestTag(target) || null, isThirdParty: !target.startsWith('zylos-ai/') };
   }
 
   // Look up in registry
