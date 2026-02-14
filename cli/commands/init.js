@@ -618,29 +618,49 @@ function installSkillDependencies() {
  * Ensure a web-console password exists in .env.
  * Generates a random 16-char password if not already set.
  * Idempotent — safe to run on repeated init.
+ *
+ * @returns {string} The password (existing or newly generated)
  */
 function ensureWebConsolePassword() {
   const envPath = path.join(ZYLOS_DIR, '.env');
   const key = 'WEB_CONSOLE_PASSWORD';
 
   let content = '';
-  try { content = fs.readFileSync(envPath, 'utf8'); } catch { return; }
+  try { content = fs.readFileSync(envPath, 'utf8'); } catch { return ''; }
 
-  // Already set — skip
-  if (new RegExp(`^${key}=.+`, 'm').test(content)) return;
+  // Already set — return existing
+  const match = content.match(new RegExp(`^${key}=(.+)`, 'm'));
+  if (match) return match[1].trim();
 
+  // Generate new password
   const password = crypto.randomBytes(12).toString('base64url').slice(0, 16);
   const entry = `\n# Web Console password (auto-generated)\n${key}=${password}\n`;
   fs.writeFileSync(envPath, content.trimEnd() + entry);
-  console.log(`  ✓ Web Console password generated`);
+  return password;
+}
 
-  // Show access URL if domain is configured
+/**
+ * Print web console access info (URL + password).
+ * Called at the end of init to show the user how to access.
+ */
+function printWebConsoleInfo() {
   const config = getZylosConfig();
-  if (config.domain) {
-    const proto = config.protocol || 'https';
-    console.log(`    URL: ${proto}://${config.domain}/console/`);
-    console.log(`    Password: ${password}`);
-  }
+  if (!config.domain) return;
+
+  const envPath = path.join(ZYLOS_DIR, '.env');
+  let password = '';
+  try {
+    const content = fs.readFileSync(envPath, 'utf8');
+    const match = content.match(/^WEB_CONSOLE_PASSWORD=(.+)/m);
+    if (match) password = match[1].trim();
+  } catch { /* */ }
+
+  if (!password) return;
+
+  const proto = config.protocol || 'https';
+  console.log(`\nWeb Console:`);
+  console.log(`  URL:      ${proto}://${config.domain}/console/`);
+  console.log(`  Password: ${password}`);
 }
 
 // ── Database initialization ─────────────────────────────────────
@@ -1178,6 +1198,7 @@ export async function initCommand(args) {
       console.log('\n⚠ Claude Code is not authenticated.');
       console.log('  Run "claude" to authenticate (or set ANTHROPIC_API_KEY) then "zylos init" again.');
     }
+    printWebConsoleInfo();
     console.log('\nUse "zylos add <component>" to add components.');
     return;
   }
@@ -1260,7 +1281,9 @@ export async function initCommand(args) {
     console.log(`${servicesStarted} service(s) started. Run "zylos status" to check.\n`);
   }
 
-  console.log('Next steps:');
+  printWebConsoleInfo();
+
+  console.log('\nNext steps:');
   if (!claudeAuthenticated) {
     console.log('  claude                           # ⚠ Authenticate first (or set ANTHROPIC_API_KEY)');
   }
