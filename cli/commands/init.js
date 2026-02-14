@@ -14,6 +14,7 @@ import { ZYLOS_DIR, SKILLS_DIR, CONFIG_DIR, COMPONENTS_DIR, LOCKS_DIR, COMPONENT
 import { generateManifest, saveManifest } from '../lib/manifest.js';
 import { prompt, promptYesNo } from '../lib/prompts.js';
 import { parseSkillMd } from '../lib/skill.js';
+import { applyCaddyRoutes, isCaddyAvailable } from '../lib/caddy.js';
 
 // Source directories (shipped with zylos package)
 const PACKAGE_ROOT = path.join(import.meta.dirname, '..', '..');
@@ -651,6 +652,40 @@ function runSkillHooks() {
   }
 }
 
+// ── Core skill Caddy routes ─────────────────────────────────────
+
+/**
+ * Apply http_routes from core skills to the Caddyfile.
+ * Reads each core skill's SKILL.md for http_routes declarations
+ * and injects them as marker blocks (zylos-core:<name>).
+ * Idempotent — safe to run on repeated init.
+ */
+function applyCoreSkillRoutes() {
+  if (!isCaddyAvailable()) return;
+
+  const coreSkills = new Set(
+    fs.readdirSync(CORE_SKILLS_SRC, { withFileTypes: true })
+      .filter(e => e.isDirectory())
+      .map(e => e.name)
+  );
+
+  const entries = fs.readdirSync(SKILLS_DIR, { withFileTypes: true });
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    if (!coreSkills.has(entry.name)) continue;
+
+    const skillDir = path.join(SKILLS_DIR, entry.name);
+    const skill = parseSkillMd(skillDir);
+    const httpRoutes = skill?.frontmatter?.http_routes;
+    if (!httpRoutes || !Array.isArray(httpRoutes) || httpRoutes.length === 0) continue;
+
+    const result = applyCaddyRoutes(entry.name, httpRoutes, { markerPrefix: 'zylos-core' });
+    if (result.success && result.action !== 'skipped') {
+      console.log(`  ✓ Caddy route: /${entry.name}`);
+    }
+  }
+}
+
 // ── Database initialization ─────────────────────────────────────
 
 /**
@@ -683,6 +718,7 @@ function initializeDatabases() {
 function startCoreServices() {
   installSkillDependencies();
   runSkillHooks();
+  applyCoreSkillRoutes();
   initializeDatabases();
 
   const ecosystemPath = path.join(ZYLOS_DIR, 'pm2', 'ecosystem.config.cjs');
