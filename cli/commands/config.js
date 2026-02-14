@@ -9,6 +9,7 @@
 
 import { getZylosConfig, updateZylosConfig } from '../lib/config.js';
 import { switchProtocol, isCaddyAvailable } from '../lib/caddy.js';
+import { bold, dim, green, red, yellow, cyan, success, error, warn, heading } from '../lib/colors.js';
 
 /** Keys that trigger side effects when changed */
 const SIDE_EFFECTS = {
@@ -57,11 +58,11 @@ export async function configCommand(args) {
 function showConfig() {
   const config = getZylosConfig();
   if (Object.keys(config).length === 0) {
-    console.log('No configuration found. Run "zylos init" first.');
+    console.log(dim('No configuration found. Run "zylos init" first.'));
     return;
   }
   for (const [key, value] of Object.entries(config)) {
-    console.log(`${key} = ${value}`);
+    console.log(`${bold(key)} = ${cyan(value)}`);
   }
 }
 
@@ -70,7 +71,7 @@ function getConfig(key) {
   if (key in config) {
     console.log(config[key]);
   } else {
-    console.error(`Key not found: ${key}`);
+    console.error(red(`Key not found: ${bold(key)}`));
     process.exit(1);
   }
 }
@@ -78,8 +79,8 @@ function getConfig(key) {
 async function setConfig(key, value) {
   // Validate allowed values
   if (ALLOWED_VALUES[key] && !ALLOWED_VALUES[key].includes(value)) {
-    console.error(`Invalid value for "${key}": ${value}`);
-    console.error(`Allowed values: ${ALLOWED_VALUES[key].join(', ')}`);
+    console.error(red(`Invalid value for "${bold(key)}": ${value}`));
+    console.error(dim(`Allowed values: ${ALLOWED_VALUES[key].join(', ')}`));
     process.exit(1);
   }
 
@@ -87,7 +88,7 @@ async function setConfig(key, value) {
   const oldValue = config[key];
 
   updateZylosConfig({ [key]: value });
-  console.log(`${key} = ${value}${oldValue !== undefined ? ` (was: ${oldValue})` : ''}`);
+  console.log(`${bold(key)} = ${cyan(value)}${oldValue !== undefined ? ` ${dim(`(was: ${oldValue})`)}` : ''}`);
 
   // Apply side effects
   if (SIDE_EFFECTS[key]) {
@@ -103,25 +104,25 @@ async function applyProtocolChange(newProtocol, oldProtocol) {
 
   const config = getZylosConfig();
   if (!config.domain) {
-    console.log('  ⚠ No domain configured. Run "zylos init" to set up Caddy.');
+    console.log(`  ${warn('No domain configured. Run "zylos init" to set up Caddy.')}`);
     return;
   }
 
   if (!isCaddyAvailable()) {
-    console.log('  ⚠ Caddy not available. Protocol saved but Caddyfile not updated.');
+    console.log(`  ${warn('Caddy not available. Protocol saved but Caddyfile not updated.')}`);
     return;
   }
 
-  console.log(`  Updating Caddyfile (${oldProtocol || 'https'} → ${newProtocol})...`);
+  console.log(`  ${dim(`Updating Caddyfile (${oldProtocol || 'https'} → ${newProtocol})...`)}`);
   const result = switchProtocol(config.domain, newProtocol);
 
   if (result.success) {
-    console.log('  ✓ Caddyfile updated and Caddy reloaded');
+    console.log(`  ${success('Caddyfile updated and Caddy reloaded')}`);
   } else {
-    console.error(`  ✗ Failed to update Caddyfile: ${result.error}`);
+    console.error(`  ${error(`Failed to update Caddyfile: ${result.error}`)}`);
     // Revert config
     updateZylosConfig({ protocol: oldProtocol || 'https' });
-    console.error('  Config reverted.');
+    console.error(`  ${dim('Config reverted.')}`);
     process.exit(1);
   }
 }

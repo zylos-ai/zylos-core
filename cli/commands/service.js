@@ -6,58 +6,65 @@ import { execSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { ZYLOS_DIR, SKILLS_DIR } from '../lib/config.js';
+import { bold, dim, green, red, yellow, cyan, success, error, warn, heading } from '../lib/colors.js';
 
 export function showStatus() {
-  console.log('Zylos Status\n============\n');
+  console.log(heading('Zylos Status') + '\n' + dim('============') + '\n');
 
   // Check Claude status
   const statusFile = path.join(ZYLOS_DIR, 'activity-monitor', 'claude-status.json');
   if (fs.existsSync(statusFile)) {
     try {
       const status = JSON.parse(fs.readFileSync(statusFile, 'utf8'));
-      console.log(`Claude: ${status.state.toUpperCase()}`);
+      const stateStr = status.state.toUpperCase();
+      const coloredState = stateStr === 'IDLE' ? green(stateStr) : stateStr === 'BUSY' ? yellow(stateStr) : stateStr;
+      console.log(`${bold('Claude')}: ${coloredState}`);
       if (status.idle_seconds !== undefined) {
-        console.log(`  Idle: ${status.idle_seconds}s`);
+        console.log(`  ${dim('Idle:')} ${status.idle_seconds}s`);
       }
       if (status.last_check_human) {
-        console.log(`  Last check: ${status.last_check_human}`);
+        console.log(`  ${dim('Last check:')} ${status.last_check_human}`);
       }
     } catch (e) {
-      console.log('Claude: UNKNOWN (status file unreadable)');
+      console.log(`${bold('Claude')}: ${yellow('UNKNOWN')} ${dim('(status file unreadable)')}`);
     }
   } else {
-    console.log('Claude: UNKNOWN (no status file)');
+    console.log(`${bold('Claude')}: ${yellow('UNKNOWN')} ${dim('(no status file)')}`);
   }
 
   console.log('');
 
   // Check PM2 services
-  console.log('Services (PM2):');
+  console.log(heading('Services (PM2):'));
   try {
     const pm2Output = execSync('pm2 jlist 2>/dev/null', { encoding: 'utf8' });
     const processes = JSON.parse(pm2Output);
     if (processes.length === 0) {
-      console.log('  No services running');
+      console.log(`  ${dim('No services running')}`);
     } else {
       processes.forEach(p => {
-        const status = p.pm2_env.status === 'online' ? '✓' : '✗';
-        console.log(`  ${status} ${p.name}: ${p.pm2_env.status}`);
+        const st = p.pm2_env.status;
+        if (st === 'online' || st === 'running') {
+          console.log(`  ${success(`${bold(p.name)}: ${st}`)}`);
+        } else {
+          console.log(`  ${error(`${bold(p.name)}: ${st}`)}`);
+        }
       });
     }
   } catch (e) {
-    console.log('  PM2 not available or no services');
+    console.log(`  ${dim('PM2 not available or no services')}`);
   }
 
   console.log('');
 
   // Check disk space
-  console.log('Disk:');
+  console.log(heading('Disk:'));
   try {
     const df = execSync(`df -h ${ZYLOS_DIR} | tail -1`, { encoding: 'utf8' });
     const parts = df.trim().split(/\s+/);
-    console.log(`  Used: ${parts[2]} / ${parts[1]} (${parts[4]})`);
+    console.log(`  Used: ${bold(parts[2])} / ${parts[1]} (${parts[4]})`);
   } catch (e) {
-    console.log('  Unable to check');
+    console.log(`  ${dim('Unable to check')}`);
   }
 }
 
@@ -78,13 +85,13 @@ export function showLogs(args) {
 
   const logFile = logFiles[logType];
   if (!logFile) {
-    console.error(`Unknown log type: ${logType}`);
-    console.log('Available: activity, scheduler, caddy, pm2');
+    console.error(error(`Unknown log type: ${logType}`));
+    console.log(dim('Available: activity, scheduler, caddy, pm2'));
     process.exit(1);
   }
 
   if (!fs.existsSync(logFile)) {
-    console.log(`Log file not found: ${logFile}`);
+    console.log(error(`Log file not found: ${dim(logFile)}`));
     process.exit(1);
   }
 
@@ -93,7 +100,7 @@ export function showLogs(args) {
 }
 
 export function startServices() {
-  console.log('Starting Zylos services...');
+  console.log(heading('Starting Zylos services...'));
 
   const services = [
     { name: 'activity-monitor', script: path.join(SKILLS_DIR, 'self-maintenance', 'activity-monitor.js') },
@@ -105,51 +112,51 @@ export function startServices() {
   let started = 0;
   for (const svc of services) {
     if (!fs.existsSync(svc.script)) {
-      console.log(`  Skipping ${svc.name} (not installed)`);
+      console.log(`  ${warn(`${bold(svc.name)} ${dim('(not installed)')}`)}`);
       continue;
     }
     try {
       const envOpts = svc.env ? svc.env.split(' ').map(e => `--env ${e}`).join(' ') : '';
       execSync(`pm2 start ${svc.script} --name ${svc.name} ${envOpts} 2>/dev/null`, { stdio: 'pipe' });
-      console.log(`  ✓ ${svc.name}`);
+      console.log(`  ${success(bold(svc.name))}`);
       started++;
     } catch (e) {
       try {
         execSync(`pm2 restart ${svc.name} 2>/dev/null`, { stdio: 'pipe' });
-        console.log(`  ✓ ${svc.name} (restarted)`);
+        console.log(`  ${success(`${bold(svc.name)} ${dim('(restarted)')}`)}`);
         started++;
       } catch (e2) {
-        console.log(`  ✗ ${svc.name} (failed)`);
+        console.log(`  ${error(`${bold(svc.name)} ${dim('(failed)')}`)}`);
       }
     }
   }
 
   if (started > 0) {
     execSync('pm2 save 2>/dev/null', { stdio: 'pipe' });
-    console.log(`\n${started} services started. Run "zylos status" to check.`);
+    console.log(`\n${green(started + ' services started.')} Run ${dim('"zylos status"')} to check.`);
   } else {
-    console.log('\nNo services started.');
+    console.log('\n' + warn('No services started.'));
   }
 }
 
 export function stopServices() {
-  console.log('Stopping Zylos services...');
+  console.log(heading('Stopping Zylos services...'));
   const services = ['activity-monitor', 'scheduler', 'c4-dispatcher', 'web-console'];
   try {
     execSync(`pm2 stop ${services.join(' ')} 2>/dev/null || true`, { stdio: 'inherit' });
-    console.log('Services stopped.');
+    console.log(success('Services stopped.'));
   } catch (e) {
-    console.error('Failed to stop services');
+    console.error(error('Failed to stop services'));
   }
 }
 
 export function restartServices() {
-  console.log('Restarting Zylos services...');
+  console.log(heading('Restarting Zylos services...'));
   const services = ['activity-monitor', 'scheduler', 'c4-dispatcher', 'web-console'];
   try {
     execSync(`pm2 restart ${services.join(' ')} 2>/dev/null || true`, { stdio: 'inherit' });
-    console.log('Services restarted.');
+    console.log(success('Services restarted.'));
   } catch (e) {
-    console.error('Failed to restart services');
+    console.error(error('Failed to restart services'));
   }
 }

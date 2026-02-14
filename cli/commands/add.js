@@ -28,6 +28,7 @@ import { applyCaddyRoutes } from '../lib/caddy.js';
 import { promptYesNo, prompt, promptSecret } from '../lib/prompts.js';
 import { writeEnvEntries } from '../lib/env.js';
 import { registerService } from '../lib/service.js';
+import { bold, dim, green, red, yellow, cyan, success, error, warn, heading } from '../lib/colors.js';
 
 /**
  * Main entry: zylos add <target> [--check] [--yes] [--json] [--branch <name>]
@@ -48,7 +49,7 @@ export async function addComponent(args) {
         reply: 'Error: --branch requires a branch name. Example: zylos add lark --branch feature/xxx',
       }, null, 2));
     } else {
-      console.error('Error: --branch requires a branch name.');
+      console.error(error('--branch requires a branch name.'));
     }
     process.exit(1);
   }
@@ -81,7 +82,7 @@ export async function addComponent(args) {
         reply: 'Error: cannot use both @version and --branch. Use one or the other.',
       }, null, 2));
     } else {
-      console.error('Error: cannot specify both @version and --branch. Use one or the other.');
+      console.error(error('Cannot specify both @version and --branch. Use one or the other.'));
     }
     process.exit(1);
   }
@@ -94,8 +95,8 @@ export async function addComponent(args) {
         reply: `Component "${target}" not found. Use "search <keyword>" to find available components.`,
       }, null, 2));
     } else {
-      console.error(`Unknown component: ${target}`);
-      console.log('Use "zylos search <keyword>" to find available components.');
+      console.error(error(`Unknown component: ${bold(target)}`));
+      console.log(dim('Use "zylos search <keyword>" to find available components.'));
     }
     process.exit(1);
   }
@@ -110,8 +111,8 @@ export async function addComponent(args) {
         reply: `${resolved.name} is already installed (v${components[resolved.name].version}). Use "upgrade ${resolved.name}" to update.`,
       }, null, 2));
     } else {
-      console.log(`Component "${resolved.name}" is already installed (v${components[resolved.name].version}).`);
-      console.log('Use "zylos upgrade" to update.');
+      console.log(warn(`${bold(resolved.name)} is already installed (${bold('v' + components[resolved.name].version)}).`));
+      console.log(dim('Use "zylos upgrade" to update.'));
     }
     process.exit(0);
   }
@@ -147,33 +148,33 @@ export async function addComponent(args) {
       output.reply = reply;
       console.log(JSON.stringify(output, null, 2));
     } else {
-      const versionInfo = branch ? ` (branch: ${branch})` : (resolved.version ? `@${resolved.version}` : ' (latest)');
-      console.log(`\nComponent: ${resolved.name}${versionInfo}`);
-      console.log(`Repository: https://github.com/${resolved.repo}`);
+      const versionInfo = branch ? ` (branch: ${bold(branch)})` : (resolved.version ? `@${bold(resolved.version)}` : dim(' (latest)'));
+      console.log(`\n${heading('Component:')} ${bold(resolved.name)}${versionInfo}`);
+      console.log(`${heading('Repository:')} ${dim('https://github.com/' + resolved.repo)}`);
       if (resolved.isThirdParty) {
-        console.log('Warning: Third-party component — not verified by Zylos team.');
+        console.log(warn('Third-party component — not verified by Zylos team.'));
       }
-      if (regInfo.description) console.log(`Description: ${regInfo.description}`);
-      if (regInfo.type) console.log(`Type: ${regInfo.type}`);
+      if (regInfo.description) console.log(`${heading('Description:')} ${regInfo.description}`);
+      if (regInfo.type) console.log(`${heading('Type:')} ${regInfo.type}`);
       let installTarget = (!branch && resolved.version) ? `${resolved.name}@${resolved.version}` : resolved.name;
       if (branch) installTarget += ` --branch ${branch}`;
-      console.log(`\nRun "zylos add ${installTarget} --yes" to install.`);
+      console.log(`\n${dim(`Run "zylos add ${installTarget} --yes" to install.`)}`);
     }
     return;
   }
 
   // 5. Display component info (terminal only)
   if (!jsonOutput) {
-    const versionInfo = branch ? ` (branch: ${branch})` : (resolved.version ? `@${resolved.version}` : ' (latest)');
-    console.log(`\nComponent: ${resolved.name}${versionInfo}`);
-    console.log(`Repository: https://github.com/${resolved.repo}`);
+    const versionInfo = branch ? ` (branch: ${bold(branch)})` : (resolved.version ? `@${bold(resolved.version)}` : dim(' (latest)'));
+    console.log(`\n${heading('Component:')} ${bold(resolved.name)}${versionInfo}`);
+    console.log(`${heading('Repository:')} ${dim('https://github.com/' + resolved.repo)}`);
 
     if (resolved.isThirdParty) {
-      console.log('Warning: Third-party component — not verified by Zylos team.');
+      console.log(warn('Third-party component — not verified by Zylos team.'));
     }
 
-    if (regInfo.description) console.log(`Description: ${regInfo.description}`);
-    if (regInfo.type) console.log(`Type: ${regInfo.type}`);
+    if (regInfo.description) console.log(`${heading('Description:')} ${regInfo.description}`);
+    if (regInfo.type) console.log(`${heading('Type:')} ${regInfo.type}`);
   }
 
   // 6. User confirmation (skip in JSON mode — confirmation handled at application layer)
@@ -181,7 +182,7 @@ export async function addComponent(args) {
     console.log('');
     const confirmed = await promptYesNo('Proceed with installation? [Y/n]: ', true);
     if (!confirmed) {
-      console.log('Installation cancelled.');
+      console.log(dim('Installation cancelled.'));
       return;
     }
   }
@@ -197,14 +198,14 @@ export async function addComponent(args) {
         reply: `Cannot install ${resolved.name}: skill directory already exists. Use "upgrade ${resolved.name}" instead.`,
       }, null, 2));
     } else {
-      console.error(`\nSkill directory already exists: ${skillDir}`);
-      console.error('Remove it first or use "zylos upgrade".');
+      console.error(`\n${error(`Skill directory already exists: ${dim(skillDir)}`)}`);
+      console.error(dim('Remove it first or use "zylos upgrade".'));
     }
     process.exit(1);
   }
 
   const downloadLabel = branch ? `${resolved.name} (branch: ${branch})` : resolved.name;
-  if (!jsonOutput) console.log(`\nDownloading ${downloadLabel}...`);
+  if (!jsonOutput) console.log(`\n${cyan('Downloading')} ${bold(downloadLabel)}...`);
 
   let downloadResult;
   if (branch) {
@@ -223,20 +224,20 @@ export async function addComponent(args) {
         reply: `Failed to download ${resolved.name}: ${downloadResult.error}`,
       }, null, 2));
     } else {
-      console.error(`Download failed: ${downloadResult.error}`);
+      console.error(error(`Download failed: ${downloadResult.error}`));
     }
     cleanup(skillDir);
     process.exit(1);
   }
 
-  if (!jsonOutput) console.log('  Download complete.');
+  if (!jsonOutput) console.log(`  ${success('Download complete.')}`);
 
   // 8. Generate manifest
   try {
     const manifest = generateManifest(skillDir);
     saveManifest(skillDir, manifest);
   } catch (err) {
-    if (!jsonOutput) console.log(`  Warning: Could not generate manifest: ${err.message}`);
+    if (!jsonOutput) console.log(`  ${warn(`Could not generate manifest: ${err.message}`)}`);
   }
 
   // 9. Detect component type and install accordingly
@@ -255,7 +256,7 @@ export async function addComponent(args) {
  * JSON mode: mechanical install only, outputs metadata for Claude.
  */
 async function installDeclarative(resolved, skillDir, skipConfirm, jsonOutput, branch) {
-  if (!jsonOutput) console.log('\nInstalling (declarative)...');
+  if (!jsonOutput) console.log(`\n${heading('Installing (declarative)...')}`);
 
   const skill = parseSkillMd(skillDir);
   const fm = skill?.frontmatter || {};
@@ -280,14 +281,14 @@ async function installDeclarative(resolved, skillDir, skipConfirm, jsonOutput, b
   if (lifecycle.npm) {
     const pkgJson = path.join(skillDir, 'package.json');
     if (fs.existsSync(pkgJson)) {
-      if (!jsonOutput) console.log('  Installing npm dependencies...');
+      if (!jsonOutput) console.log(`  ${cyan('Installing npm dependencies...')}`);
       try {
         execSync('npm install --omit=dev', {
           cwd: skillDir,
           stdio: 'pipe',
           timeout: 120000,
         });
-        if (!jsonOutput) console.log('  npm install complete.');
+        if (!jsonOutput) console.log(`  ${success('npm install complete.')}`);
       } catch (err) {
         if (jsonOutput) {
           console.log(JSON.stringify({
@@ -296,7 +297,7 @@ async function installDeclarative(resolved, skillDir, skipConfirm, jsonOutput, b
             reply: `Failed to install ${resolved.name}: npm install failed.`,
           }, null, 2));
         } else {
-          console.error(`  npm install failed: ${err.message}`);
+          console.error(`  ${error(`npm install failed: ${err.message}`)}`);
         }
         cleanup(skillDir);
         process.exit(1);
@@ -307,7 +308,7 @@ async function installDeclarative(resolved, skillDir, skipConfirm, jsonOutput, b
   // Step 2: Create data directory
   const dataDir = path.join(COMPONENTS_DIR, resolved.name);
   fs.mkdirSync(dataDir, { recursive: true });
-  if (!jsonOutput) console.log(`  Data directory: ${dataDir}`);
+  if (!jsonOutput) console.log(`  ${dim('Data directory:')} ${dim(dataDir)}`);
 
   // Step 3: Update components.json
   const components = loadComponents();
@@ -331,7 +332,7 @@ async function installDeclarative(resolved, skillDir, skipConfirm, jsonOutput, b
     saveComponents(components);
     if (!jsonOutput) {
       for (const cmd of Object.keys(binResult)) {
-        console.log(`  CLI command: ${cmd}`);
+        console.log(`  ${success(`CLI command: ${bold(cmd)}`)}`);
       }
     }
     // Ensure BIN_DIR is in current process PATH so post-install hooks
@@ -348,9 +349,9 @@ async function installDeclarative(resolved, skillDir, skipConfirm, jsonOutput, b
     caddyResult = applyCaddyRoutes(resolved.name, httpRoutes);
     if (!jsonOutput) {
       if (caddyResult.success) {
-        console.log(`  Caddy routes: ${caddyResult.action}`);
+        console.log(`  ${success(`Caddy routes: ${caddyResult.action}`)}`);
       } else {
-        console.log(`  Caddy routes: failed (${caddyResult.error})`);
+        console.log(`  ${error(`Caddy routes: failed (${caddyResult.error})`)}`);
       }
     }
   }
@@ -395,7 +396,7 @@ async function installDeclarative(resolved, skillDir, skipConfirm, jsonOutput, b
   // Step 6: Collect required configuration
   const requiredConfig = config.required;
   if (Array.isArray(requiredConfig) && requiredConfig.length > 0) {
-    console.log('\nConfiguration:');
+    console.log(`\n${heading('Configuration:')}`);
     const envEntries = {};
 
     for (const item of requiredConfig) {
@@ -418,10 +419,10 @@ async function installDeclarative(resolved, skillDir, skipConfirm, jsonOutput, b
     if (Object.keys(envEntries).length > 0) {
       const envResult = writeEnvEntries(envEntries, resolved.name);
       if (envResult.written.length > 0) {
-        console.log(`  ✓ Saved ${envResult.written.length} variable(s) to .env`);
+        console.log(`  ${success(`Saved ${envResult.written.length} variable(s) to .env`)}`);
       }
       if (envResult.skipped.length > 0) {
-        console.log(`  Skipped existing: ${envResult.skipped.join(', ')}`);
+        console.log(`  ${dim(`Skipped existing: ${envResult.skipped.join(', ')}`)}`);
       }
     }
   }
@@ -430,16 +431,16 @@ async function installDeclarative(resolved, skillDir, skipConfirm, jsonOutput, b
   if (hooks['post-install']) {
     const hookPath = path.resolve(skillDir, hooks['post-install']);
     if (fs.existsSync(hookPath)) {
-      console.log('  Running post-install hook...');
+      console.log(`  ${cyan('Running post-install hook...')}`);
       try {
         execSync(`node "${hookPath}"`, {
           cwd: skillDir,
           stdio: 'inherit',
           timeout: 120000,
         });
-        console.log('  ✓ Post-install hook complete.');
+        console.log(`  ${success('Post-install hook complete.')}`);
       } catch {
-        console.log('  ⚠ Post-install hook had issues (non-fatal).');
+        console.log(`  ${warn('Post-install hook had issues (non-fatal).')}`);
       }
     }
   }
@@ -447,7 +448,7 @@ async function installDeclarative(resolved, skillDir, skipConfirm, jsonOutput, b
   // Step 8: Start service
   const service = lifecycle.service;
   if (service && service.entry) {
-    console.log('\nStarting service...');
+    console.log(`\n${heading('Starting service...')}`);
     const svcResult = registerService({
       name: resolved.name,
       entry: service.entry,
@@ -455,21 +456,21 @@ async function installDeclarative(resolved, skillDir, skipConfirm, jsonOutput, b
       type: service.type || 'pm2',
     });
     if (svcResult.success) {
-      console.log(`  ✓ ${service.name || ('zylos-' + resolved.name)} started`);
+      console.log(`  ${success(`${bold(service.name || ('zylos-' + resolved.name))} started`)}`);
     } else {
-      console.log(`  ✗ Failed to start service: ${svcResult.error}`);
-      console.log('  You can start it manually later.');
+      console.log(`  ${error(`Failed to start service: ${svcResult.error}`)}`);
+      console.log(`  ${dim('You can start it manually later.')}`);
     }
   }
 
-  console.log(`\n✓ ${resolved.name} installed successfully!`);
+  console.log(`\n${success(`${bold(resolved.name)} installed successfully!`)}`);
 
   // Show PATH hint if bin commands were linked
   if (binResult && Object.keys(binResult).length > 0) {
     const cmds = Object.keys(binResult).join(', ');
-    console.log(`\nNote: Run the following to use ${cmds} in this terminal:`);
-    console.log('  export PATH="$HOME/zylos/bin:$PATH"');
-    console.log('Or restart your terminal for the change to take effect.');
+    console.log(`\n${dim(`Note: Run the following to use ${bold(cmds)} in this terminal:`)}`);
+    console.log(dim('  export PATH="$HOME/zylos/bin:$PATH"'));
+    console.log(dim('Or restart your terminal for the change to take effect.'));
   }
 }
 
@@ -477,7 +478,7 @@ async function installDeclarative(resolved, skillDir, skipConfirm, jsonOutput, b
  * Install an AI component (no SKILL.md — needs Claude to finish setup).
  */
 function installAI(resolved, skillDir, branch) {
-  console.log('\nInstalling (AI mode — Claude will complete setup)...');
+  console.log(`\n${heading('Installing (AI mode — Claude will complete setup)...')}`);
 
   // Resolve version from SKILL.md or package.json when not from a tag
   // When installing from branch, skip resolved.version (may be auto-populated by fetchLatestTag)
