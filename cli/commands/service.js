@@ -44,11 +44,10 @@ export function showStatus() {
     } else {
       processes.forEach(p => {
         const st = p.pm2_env.status;
-        const coloredStatus = (st === 'online' || st === 'running') ? green(st) : (st === 'stopped' || st === 'errored' || st === 'offline') ? red(st) : st;
         if (st === 'online' || st === 'running') {
-          console.log(`  ${success(`${bold(p.name)}: ${coloredStatus}`)}`);
+          console.log(`  ${success(`${bold(p.name)}: ${st}`)}`);
         } else {
-          console.log(`  ${error(`${bold(p.name)}: ${coloredStatus}`)}`);
+          console.log(`  ${error(`${bold(p.name)}: ${st}`)}`);
         }
       });
     }
