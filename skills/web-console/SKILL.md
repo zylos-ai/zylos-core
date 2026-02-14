@@ -1,6 +1,21 @@
 ---
 name: web-console
 description: Built-in web interface for communicating with Claude without external services. Use when setting up or configuring the web console channel, or troubleshooting browser-based access.
+
+lifecycle:
+  npm: true
+  service:
+    type: pm2
+    name: web-console
+    entry: scripts/server.js
+  hooks:
+    post-install: hooks/post-install.js
+
+http_routes:
+  - path: "/console/*"
+    type: reverse_proxy
+    target: localhost:3456
+    strip_prefix: /console
 ---
 
 # Web Console (C4 Built-in Channel)
