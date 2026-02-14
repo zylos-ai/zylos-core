@@ -5,6 +5,17 @@ All notable changes to zylos-core will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.4] - 2026-02-14
+
+### Added
+- Terminal color highlighting for all CLI commands — zero-dependency ANSI colors (#102)
+- Web console: auto-configure Caddy route, password generation, and URL display (#101)
+
+### Fixed
+- Fix PM2 startup: use spawnSync to capture output on non-zero exit (#99)
+- Adapt auth flow to new Claude Code CLI commands (#100)
+- Redirect bare `/console` to `/console/` for Caddy wildcard routes (#103)
+
 ## [0.1.3] - 2026-02-13
 
 ### Added
