@@ -1061,14 +1061,15 @@ export async function initCommand(args) {
       if (!skipConfirm) {
         const doAuth = await promptYesNo('  Authenticate now? [Y/n]: ', true);
         if (doAuth) {
-          console.log('  Running claude auth...\n');
-          // Use async spawn + SIGINT trap so Ctrl+C kills claude auth
+          console.log('  Starting Claude Code for authentication...');
+          console.log('  After login, type /exit to return to zylos init.\n');
+          // Use async spawn + SIGINT trap so Ctrl+C kills claude
           // without also killing zylos init (they share a process group).
           const sigintListeners = process.rawListeners('SIGINT');
           process.removeAllListeners('SIGINT');
           process.on('SIGINT', () => {}); // ignore during auth
           try {
-            const authChild = spawn('claude', ['auth'], { stdio: 'inherit' });
+            const authChild = spawn('claude', [], { stdio: 'inherit' });
             await new Promise((resolve) => authChild.on('close', resolve));
           } catch { /* user may Ctrl+C */ }
           process.removeAllListeners('SIGINT');
@@ -1079,13 +1080,13 @@ export async function initCommand(args) {
             console.log('\n  ✓ Claude Code authenticated');
           } else {
             console.log('\n  ⚠ Authentication not completed.');
-            console.log('    Run "claude auth" then "zylos init" again to finish setup.');
+            console.log('    Run "claude" to authenticate (or set ANTHROPIC_API_KEY) then "zylos init" again.');
           }
         } else {
-          console.log('  Skipped. Run "claude auth" then "zylos init" again to finish setup.');
+          console.log('  Skipped. Run "claude" to authenticate (or set ANTHROPIC_API_KEY) then "zylos init" again.');
         }
       } else {
-        console.log('    Run "claude auth" then "zylos init" again to finish setup.');
+        console.log('    Run "claude" to authenticate (or set ANTHROPIC_API_KEY) then "zylos init" again.');
       }
     }
   }
@@ -1138,7 +1139,7 @@ export async function initCommand(args) {
 
     if (!claudeAuthenticated) {
       console.log('\n⚠ Claude Code is not authenticated.');
-      console.log('  Run "claude auth" then "zylos init" again to finish setup.');
+      console.log('  Run "claude" to authenticate (or set ANTHROPIC_API_KEY) then "zylos init" again.');
     }
     console.log('\nUse "zylos add <component>" to add components.');
     return;
@@ -1224,7 +1225,7 @@ export async function initCommand(args) {
 
   console.log('Next steps:');
   if (!claudeAuthenticated) {
-    console.log('  claude auth && zylos init  # ⚠ Authenticate then finish setup');
+    console.log('  claude                           # ⚠ Authenticate first (or set ANTHROPIC_API_KEY)');
   }
   console.log('  zylos add telegram    # Add Telegram bot');
   console.log('  zylos add lark        # Add Lark bot');
