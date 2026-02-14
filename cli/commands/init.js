@@ -931,6 +931,7 @@ ${siteAddress} {
     }
 
     # Web Console (core built-in)
+    redir /console /console/ permanent
     handle /console/* {
         uri strip_prefix /console
         reverse_proxy localhost:3456

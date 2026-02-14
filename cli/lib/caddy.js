@@ -40,6 +40,11 @@ function generateRouteBlocks(httpRoutes) {
   const lines = [];
   for (const route of httpRoutes) {
     if (route.type === 'reverse_proxy') {
+      // For wildcard paths like /foo/*, redirect bare /foo to /foo/
+      if (route.path.endsWith('/*')) {
+        const basePath = route.path.slice(0, -2);
+        lines.push(`    redir ${basePath} ${basePath}/ permanent`);
+      }
       lines.push(`    handle ${route.path} {`);
       if (route.strip_prefix) {
         lines.push(`        uri strip_prefix ${route.strip_prefix}`);
