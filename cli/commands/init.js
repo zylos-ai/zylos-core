@@ -5,6 +5,7 @@
  * syncs Core Skills, deploys templates, and starts services.
  */
 
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -13,7 +14,6 @@ import { execSync, spawnSync, spawn } from 'node:child_process';
 import { ZYLOS_DIR, SKILLS_DIR, CONFIG_DIR, COMPONENTS_DIR, LOCKS_DIR, COMPONENTS_FILE, BIN_DIR, HTTP_DIR, CADDYFILE, CADDY_BIN, getZylosConfig, updateZylosConfig } from '../lib/config.js';
 import { generateManifest, saveManifest } from '../lib/manifest.js';
 import { prompt, promptYesNo } from '../lib/prompts.js';
-import { parseSkillMd } from '../lib/skill.js';
 
 // Source directories (shipped with zylos package)
 const PACKAGE_ROOT = path.join(import.meta.dirname, '..', '..');
@@ -615,39 +615,31 @@ function installSkillDependencies() {
 }
 
 /**
- * Run post-install hooks for core skills that declare them in SKILL.md.
- * Only runs hooks for skills shipped with the zylos package (not external components).
- * Hooks are expected to be idempotent (safe to run on repeated init).
+ * Ensure a web-console password exists in .env.
+ * Generates a random 16-char password if not already set.
+ * Idempotent — safe to run on repeated init.
  */
-function runSkillHooks() {
-  // Only process core skills (those shipped in the package)
-  const coreSkills = new Set(
-    fs.readdirSync(CORE_SKILLS_SRC, { withFileTypes: true })
-      .filter(e => e.isDirectory())
-      .map(e => e.name)
-  );
+function ensureWebConsolePassword() {
+  const envPath = path.join(ZYLOS_DIR, '.env');
+  const key = 'WEB_CONSOLE_PASSWORD';
 
-  const entries = fs.readdirSync(SKILLS_DIR, { withFileTypes: true });
-  for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
-    if (!coreSkills.has(entry.name)) continue;
-    const skillDir = path.join(SKILLS_DIR, entry.name);
-    const skill = parseSkillMd(skillDir);
-    const hookPath = skill?.frontmatter?.lifecycle?.hooks?.['post-install'];
-    if (!hookPath) continue;
+  let content = '';
+  try { content = fs.readFileSync(envPath, 'utf8'); } catch { return; }
 
-    const fullPath = path.resolve(skillDir, hookPath);
-    if (!fs.existsSync(fullPath)) continue;
+  // Already set — skip
+  if (new RegExp(`^${key}=.+`, 'm').test(content)) return;
 
-    try {
-      execSync(`node "${fullPath}"`, {
-        cwd: skillDir,
-        stdio: 'inherit',
-        timeout: 120000,
-      });
-    } catch {
-      console.log(`  ⚠ ${entry.name} post-install hook had issues (non-fatal)`);
-    }
+  const password = crypto.randomBytes(12).toString('base64url').slice(0, 16);
+  const entry = `\n# Web Console password (auto-generated)\n${key}=${password}\n`;
+  fs.writeFileSync(envPath, content.trimEnd() + entry);
+  console.log(`  ✓ Web Console password generated`);
+
+  // Show access URL if domain is configured
+  const config = getZylosConfig();
+  if (config.domain) {
+    const proto = config.protocol || 'https';
+    console.log(`    URL: ${proto}://${config.domain}/console/`);
+    console.log(`    Password: ${password}`);
   }
 }
 
@@ -682,7 +674,7 @@ function initializeDatabases() {
  */
 function startCoreServices() {
   installSkillDependencies();
-  runSkillHooks();
+  ensureWebConsolePassword();
   initializeDatabases();
 
   const ecosystemPath = path.join(ZYLOS_DIR, 'pm2', 'ecosystem.config.cjs');
