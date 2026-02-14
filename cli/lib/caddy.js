@@ -143,7 +143,7 @@ export function switchProtocol(domain, protocol) {
  * @param {Array} httpRoutes - Array of { path, type, target, strip_prefix? }
  * @returns {{ success: boolean, action: string, error?: string }}
  */
-export function applyCaddyRoutes(componentName, httpRoutes, { markerPrefix = 'zylos-component' } = {}) {
+export function applyCaddyRoutes(componentName, httpRoutes) {
   if (!isCaddyAvailable()) {
     return { success: false, action: 'skipped', error: 'caddy_not_available' };
   }
@@ -152,8 +152,8 @@ export function applyCaddyRoutes(componentName, httpRoutes, { markerPrefix = 'zy
     return { success: true, action: 'skipped' };
   }
 
-  const beginMarker = `# BEGIN ${markerPrefix}:${componentName}`;
-  const endMarker = `# END ${markerPrefix}:${componentName}`;
+  const beginMarker = `# BEGIN zylos-component:${componentName}`;
+  const endMarker = `# END zylos-component:${componentName}`;
 
   let original;
   try {
@@ -203,13 +203,13 @@ export function applyCaddyRoutes(componentName, httpRoutes, { markerPrefix = 'zy
  * @param {string} componentName
  * @returns {{ success: boolean, action: string, error?: string }}
  */
-export function removeCaddyRoutes(componentName, { markerPrefix = 'zylos-component' } = {}) {
+export function removeCaddyRoutes(componentName) {
   if (!isCaddyAvailable()) {
     return { success: true, action: 'not_found' };
   }
 
-  const beginMarker = `# BEGIN ${markerPrefix}:${componentName}`;
-  const endMarker = `# END ${markerPrefix}:${componentName}`;
+  const beginMarker = `# BEGIN zylos-component:${componentName}`;
+  const endMarker = `# END zylos-component:${componentName}`;
 
   let original;
   try {
