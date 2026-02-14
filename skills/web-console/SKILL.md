@@ -1,6 +1,13 @@
 ---
 name: web-console
 description: Built-in web interface for communicating with Claude without external services. Use when setting up or configuring the web console channel, or troubleshooting browser-based access.
+
+lifecycle:
+  npm: true
+  service:
+    type: pm2
+    name: web-console
+    entry: scripts/server.js
 ---
 
 # Web Console (C4 Built-in Channel)
