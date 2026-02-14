@@ -917,6 +917,12 @@ ${siteAddress} {
         respond "OK" 200
     }
 
+    # Web Console (core built-in)
+    handle /console/* {
+        uri strip_prefix /console
+        reverse_proxy localhost:3456
+    }
+
     log {
         output file ${HTTP_DIR}/caddy-access.log {
             roll_size 10mb
