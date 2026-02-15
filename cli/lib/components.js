@@ -84,7 +84,7 @@ export async function resolveTarget(nameOrUrl) {
   }
 
   // Unknown - treat as third party
-  return { name: target, repo: null, version, isThirdParty: true };
+  return { name: target, repo: null, version, fetchError: null, isThirdParty: true };
 }
 
 /**
