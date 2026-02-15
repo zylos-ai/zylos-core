@@ -436,7 +436,6 @@ async function installDeclarative(resolved, skillDir, skipConfirm, jsonOutput, b
         execSync(`node "${hookPath}"`, {
           cwd: skillDir,
           stdio: 'inherit',
-          timeout: 120000,
         });
         console.log(`  ${success('Post-install hook complete.')}`);
       } catch {
