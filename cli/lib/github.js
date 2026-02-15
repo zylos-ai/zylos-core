@@ -134,8 +134,10 @@ export function fetchLatestTag(repo) {
       });
 
     return versions[0] || null;
-  } catch {
-    return null;
+  } catch (err) {
+    // Distinguish network/API errors from "no tags" — let callers handle appropriately
+    const msg = err.stderr?.toString().trim() || err.message || 'unknown error';
+    throw new Error(`Failed to fetch tags for ${repo}: ${sanitizeError(msg)}`);
   }
 }
 

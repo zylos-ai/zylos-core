@@ -124,6 +124,7 @@ export async function addComponent(args) {
   // 4. Check-only mode: show component info without installing
   if (checkOnly) {
     const noRelease = !branch && !resolved.version;
+    const fetchFailed = !branch && !resolved.version && resolved.fetchError;
     if (jsonOutput) {
       const output = {
         action: 'add_check', component: resolved.name, success: !noRelease,
@@ -142,7 +143,11 @@ export async function addComponent(args) {
       reply += `\nType: ${regInfo.type || 'unknown'}`;
       reply += `\nRepo: ${resolved.repo}`;
       if (resolved.isThirdParty) reply += '\nWarning: Third-party component';
-      if (noRelease) {
+      if (fetchFailed) {
+        output.error = 'fetch_failed';
+        output.message = resolved.fetchError;
+        reply += `\n\nCould not check for releases: ${resolved.fetchError}\nUse "add ${resolved.name} --branch main" to install from branch.`;
+      } else if (noRelease) {
         output.error = 'no_release';
         reply += `\n\nNo release found. Use "add ${resolved.name} --branch main" to install from branch.`;
       } else {
@@ -161,7 +166,10 @@ export async function addComponent(args) {
       }
       if (regInfo.description) console.log(`${heading('Description:')} ${regInfo.description}`);
       if (regInfo.type) console.log(`${heading('Type:')} ${regInfo.type}`);
-      if (noRelease) {
+      if (fetchFailed) {
+        console.log(`\n${error(`Could not check for releases: ${resolved.fetchError}`)}`);
+        console.log(dim(`Use "zylos add ${resolved.name} --branch main" to install from a branch.`));
+      } else if (noRelease) {
         console.log(`\n${warn('No release found for this component.')}`);
         console.log(dim(`Use "zylos add ${resolved.name} --branch main" to install from a branch.`));
       } else {
@@ -224,14 +232,18 @@ export async function addComponent(args) {
     downloadResult = downloadArchive(resolved.repo, resolved.version, skillDir);
   } else {
     // No release tag found and no --branch specified
+    const errType = resolved.fetchError ? 'fetch_failed' : 'no_release';
+    const errMsg = resolved.fetchError
+      ? `Could not check for releases: ${resolved.fetchError}`
+      : `No release found for ${resolved.name}.`;
     if (jsonOutput) {
       console.log(JSON.stringify({
         action: 'add', component: resolved.name, success: false,
-        error: 'no_release', message: `No release found for ${resolved.name}. Use --branch to install from a branch.`,
-        reply: `No release found for ${resolved.name}. Use "add ${resolved.name} --branch main" to install from the main branch.`,
+        error: errType, message: `${errMsg} Use --branch to install from a branch.`,
+        reply: `${errMsg} Use "add ${resolved.name} --branch main" to install from the main branch.`,
       }, null, 2));
     } else {
-      console.error(error(`No release found for ${bold(resolved.name)}.`));
+      console.error(error(errMsg));
       console.log(dim(`Use "zylos add ${resolved.name} --branch main" to install from the main branch.`));
     }
     process.exit(1);
