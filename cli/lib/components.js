@@ -33,7 +33,7 @@ export function saveComponents(components) {
 /**
  * Resolve component target from name or URL
  * Supports: name, name@version, org/repo, org/repo@version, github-url
- * @returns {object} { name, repo, version, isThirdParty }
+ * @returns {object} { name, repo, version, fetchError, isThirdParty }
  */
 export async function resolveTarget(nameOrUrl) {
   // Extract version if present (name@version or org/repo@version)
