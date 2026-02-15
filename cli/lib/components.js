@@ -33,7 +33,7 @@ export function saveComponents(components) {
 /**
  * Resolve component target from name or URL
  * Supports: name, name@version, org/repo, org/repo@version, github-url
- * @returns {object} { name, repo, version, isThirdParty }
+ * @returns {object} { name, repo, version, fetchError, isThirdParty }
  */
 export async function resolveTarget(nameOrUrl) {
   // Extract version if present (name@version or org/repo@version)
@@ -45,33 +45,46 @@ export async function resolveTarget(nameOrUrl) {
     version = nameOrUrl.substring(atIndex + 1);
   }
 
+  // Helper: try fetchLatestTag, capture network errors separately
+  function tryFetchLatestTag(repo) {
+    try {
+      return { version: fetchLatestTag(repo) || null, fetchError: null };
+    } catch (err) {
+      return { version: null, fetchError: err.message };
+    }
+  }
+
   // Check if it's a GitHub URL
   const githubMatch = target.match(/github\.com\/([^/]+\/[^/]+)/);
   if (githubMatch) {
     const repo = githubMatch[1].replace(/\.git$/, '');
     const name = repo.split('/')[1].replace(/^zylos-/, '');
-    return { name, repo, version, isThirdParty: !repo.startsWith('zylos-ai/') };
+    const tag = version ? { version, fetchError: null } : tryFetchLatestTag(repo);
+    return { name, repo, version: tag.version, fetchError: tag.fetchError, isThirdParty: !repo.startsWith('zylos-ai/') };
   }
 
   // Check if it's in format org/repo
   if (target.includes('/')) {
     const name = target.split('/')[1].replace(/^zylos-/, '');
-    return { name, repo: target, version, isThirdParty: !target.startsWith('zylos-ai/') };
+    const tag = version ? { version, fetchError: null } : tryFetchLatestTag(target);
+    return { name, repo: target, version: tag.version, fetchError: tag.fetchError, isThirdParty: !target.startsWith('zylos-ai/') };
   }
 
   // Look up in registry
   const registry = await loadRegistry();
   if (registry[target]) {
+    const tag = version ? { version, fetchError: null } : tryFetchLatestTag(registry[target].repo);
     return {
       name: target,
       repo: registry[target].repo,
-      version: version || fetchLatestTag(registry[target].repo) || null,
+      version: tag.version,
+      fetchError: tag.fetchError,
       isThirdParty: false,
     };
   }
 
   // Unknown - treat as third party
-  return { name: target, repo: null, version, isThirdParty: true };
+  return { name: target, repo: null, version, fetchError: null, isThirdParty: true };
 }
 
 /**

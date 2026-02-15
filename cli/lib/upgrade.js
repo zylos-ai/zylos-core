@@ -63,9 +63,13 @@ function getLatestVersion(component, repo) {
   if (!repo) return { success: false, error: 'No repo configured for component' };
 
   // Primary: fetch latest tag from GitHub
-  const tagVersion = fetchLatestTag(repo);
-  if (tagVersion) {
-    return { success: true, version: tagVersion };
+  try {
+    const tagVersion = fetchLatestTag(repo);
+    if (tagVersion) {
+      return { success: true, version: tagVersion };
+    }
+  } catch {
+    // Network/API error — fall through to SKILL.md fallback
   }
 
   // Fallback: fetch raw SKILL.md from GitHub

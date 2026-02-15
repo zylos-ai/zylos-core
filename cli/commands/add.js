@@ -123,11 +123,13 @@ export async function addComponent(args) {
 
   // 4. Check-only mode: show component info without installing
   if (checkOnly) {
+    const noRelease = !branch && !resolved.version;
+    const fetchFailed = !branch && !resolved.version && resolved.fetchError;
     if (jsonOutput) {
       const output = {
-        action: 'add_check', component: resolved.name, success: true,
+        action: 'add_check', component: resolved.name, success: !noRelease,
         alreadyInstalled: false,
-        version: branch ? null : (resolved.version || regInfo.version || 'latest'),
+        version: branch ? null : (resolved.version || null),
         branch: branch || null,
         description: regInfo.description || null,
         type: regInfo.type || null,
@@ -136,19 +138,28 @@ export async function addComponent(args) {
       };
       let reply = `${resolved.name}`;
       if (branch) reply += ` (branch: ${branch})`;
-      else if (output.version && output.version !== 'latest') reply += ` (v${output.version})`;
-      else if (output.version === 'latest') reply += ` (latest)`;
+      else if (resolved.version) reply += ` (v${resolved.version})`;
       if (regInfo.description) reply += `\n${regInfo.description}`;
       reply += `\nType: ${regInfo.type || 'unknown'}`;
       reply += `\nRepo: ${resolved.repo}`;
       if (resolved.isThirdParty) reply += '\nWarning: Third-party component';
-      let confirmTarget = (!branch && resolved.version) ? `${resolved.name}@${resolved.version}` : resolved.name;
-      if (branch) confirmTarget += ` --branch ${branch}`;
-      reply += `\n\nReply "add ${confirmTarget} confirm" to install.`;
+      if (fetchFailed) {
+        output.error = 'fetch_failed';
+        output.message = resolved.fetchError;
+        reply += `\n\nCould not check for releases: ${resolved.fetchError}\nUse "add ${resolved.name} --branch main" to install from branch.`;
+      } else if (noRelease) {
+        output.error = 'no_release';
+        output.message = `No release found for ${resolved.name}`;
+        reply += `\n\nNo release found. Use "add ${resolved.name} --branch main" to install from branch.`;
+      } else {
+        let confirmTarget = (!branch && resolved.version) ? `${resolved.name}@${resolved.version}` : resolved.name;
+        if (branch) confirmTarget += ` --branch ${branch}`;
+        reply += `\n\nReply "add ${confirmTarget} confirm" to install.`;
+      }
       output.reply = reply;
       console.log(JSON.stringify(output, null, 2));
     } else {
-      const versionInfo = branch ? ` (branch: ${bold(branch)})` : (resolved.version ? `@${bold(resolved.version)}` : dim(' (latest)'));
+      const versionInfo = branch ? ` (branch: ${bold(branch)})` : (resolved.version ? `@${bold(resolved.version)}` : '');
       console.log(`\n${heading('Component:')} ${bold(resolved.name)}${versionInfo}`);
       console.log(`${heading('Repository:')} ${dim('https://github.com/' + resolved.repo)}`);
       if (resolved.isThirdParty) {
@@ -156,16 +167,24 @@ export async function addComponent(args) {
       }
       if (regInfo.description) console.log(`${heading('Description:')} ${regInfo.description}`);
       if (regInfo.type) console.log(`${heading('Type:')} ${regInfo.type}`);
-      let installTarget = (!branch && resolved.version) ? `${resolved.name}@${resolved.version}` : resolved.name;
-      if (branch) installTarget += ` --branch ${branch}`;
-      console.log(`\n${dim(`Run "zylos add ${installTarget} --yes" to install.`)}`);
+      if (fetchFailed) {
+        console.log(`\n${error(`Could not check for releases: ${resolved.fetchError}`)}`);
+        console.log(dim(`Use "zylos add ${resolved.name} --branch main" to install from a branch.`));
+      } else if (noRelease) {
+        console.log(`\n${warn('No release found for this component.')}`);
+        console.log(dim(`Use "zylos add ${resolved.name} --branch main" to install from a branch.`));
+      } else {
+        let installTarget = (!branch && resolved.version) ? `${resolved.name}@${resolved.version}` : resolved.name;
+        if (branch) installTarget += ` --branch ${branch}`;
+        console.log(`\n${dim(`Run "zylos add ${installTarget} --yes" to install.`)}`);
+      }
     }
     return;
   }
 
   // 5. Display component info (terminal only)
   if (!jsonOutput) {
-    const versionInfo = branch ? ` (branch: ${bold(branch)})` : (resolved.version ? `@${bold(resolved.version)}` : dim(' (latest)'));
+    const versionInfo = branch ? ` (branch: ${bold(branch)})` : (resolved.version ? `@${bold(resolved.version)}` : '');
     console.log(`\n${heading('Component:')} ${bold(resolved.name)}${versionInfo}`);
     console.log(`${heading('Repository:')} ${dim('https://github.com/' + resolved.repo)}`);
 
@@ -213,7 +232,22 @@ export async function addComponent(args) {
   } else if (resolved.version) {
     downloadResult = downloadArchive(resolved.repo, resolved.version, skillDir);
   } else {
-    downloadResult = downloadBranch(resolved.repo, 'main', skillDir);
+    // No release tag found and no --branch specified
+    const errType = resolved.fetchError ? 'fetch_failed' : 'no_release';
+    const errMsg = resolved.fetchError
+      ? `Could not check for releases: ${resolved.fetchError}`
+      : `No release found for ${resolved.name}.`;
+    if (jsonOutput) {
+      console.log(JSON.stringify({
+        action: 'add', component: resolved.name, success: false,
+        error: errType, message: `${errMsg} Use --branch to install from a branch.`,
+        reply: `${errMsg} Use "add ${resolved.name} --branch main" to install from the main branch.`,
+      }, null, 2));
+    } else {
+      console.error(error(errMsg));
+      console.log(dim(`Use "zylos add ${resolved.name} --branch main" to install from the main branch.`));
+    }
+    process.exit(1);
   }
 
   if (!downloadResult.success) {
@@ -558,9 +592,10 @@ Options:
   --json           Output in JSON format (for programmatic use)
 
 Examples:
-  zylos add telegram                            Official component (latest)
+  zylos add telegram                            Latest release tag
   zylos add telegram@0.2.0                      Specific version
-  zylos add lark --branch feature/new-thing     Install from branch
+  zylos add lark --branch main                  Install from branch
+  zylos add lark --branch feature/new-thing     Install from PR branch
   zylos add user/my-component                   Third-party
   zylos add https://github.com/user/zylos-my-component`);
 }

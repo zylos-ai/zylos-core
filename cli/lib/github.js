@@ -79,7 +79,8 @@ export function fetchRawFile(repo, filePath, branch = 'main') {
  * Looks for tags matching v*.*.* pattern and returns the highest semver.
  *
  * @param {string} repo - GitHub repo in "org/name" format
- * @returns {string|null} Latest version (without 'v' prefix) or null
+ * @returns {string|null} Latest version (without 'v' prefix) or null if no matching tags
+ * @throws {Error} On network/API failures (callers should catch and handle)
  */
 export function fetchLatestTag(repo) {
   const token = getGitHubToken();
@@ -134,8 +135,10 @@ export function fetchLatestTag(repo) {
       });
 
     return versions[0] || null;
-  } catch {
-    return null;
+  } catch (err) {
+    // Distinguish network/API errors from "no tags" — let callers handle appropriately
+    const msg = err.stderr?.toString().trim() || err.message || 'unknown error';
+    throw new Error(`Failed to fetch tags for ${repo}: ${sanitizeError(msg)}`);
   }
 }
 
