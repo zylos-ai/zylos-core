@@ -5,6 +5,16 @@ All notable changes to zylos-core will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.5] - 2026-02-15
+
+### Added
+- Default to latest release tag instead of main branch when installing components (#105)
+
+### Fixed
+- Distinguish network errors from missing releases in `zylos add` (#105)
+- Run daily memory commit in `~/zylos/memory/` instead of `~/zylos/` (#106)
+- Remove timeout on post-install hook execution to support interactive hooks (#107)
+
 ## [0.1.4] - 2026-02-14
 
 ### Added
