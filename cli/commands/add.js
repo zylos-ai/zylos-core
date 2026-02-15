@@ -149,6 +149,7 @@ export async function addComponent(args) {
         reply += `\n\nCould not check for releases: ${resolved.fetchError}\nUse "add ${resolved.name} --branch main" to install from branch.`;
       } else if (noRelease) {
         output.error = 'no_release';
+        output.message = `No release found for ${resolved.name}`;
         reply += `\n\nNo release found. Use "add ${resolved.name} --branch main" to install from branch.`;
       } else {
         let confirmTarget = (!branch && resolved.version) ? `${resolved.name}@${resolved.version}` : resolved.name;
