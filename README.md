@@ -23,6 +23,8 @@ LLMs are geniuses — but they wake up with amnesia every session. No memory of 
 
 Zylos gives it a life. Memory that survives restarts. A scheduler that works while you sleep. Communication through Telegram, Lark, or a web console. Self-maintenance that keeps everything running. And because it can program, it can evolve — building new skills, integrating new services, growing alongside you.
 
+More LLMs support are on the way.
+
 ---
 
 ## Quick Start
