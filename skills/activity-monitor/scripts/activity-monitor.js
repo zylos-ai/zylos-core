@@ -250,8 +250,34 @@ function waitForMaintenance() {
   }
 }
 
-// Startup prompt moved to session start hook (session-start-prompt.js).
-// No longer enqueued as a C4 control — injected directly into session context.
+// Startup prompt: prefer session start hook (session-start-prompt.js) which
+// injects directly into session context. Fall back to C4 control for existing
+// installations that haven't received the new hook via `zylos init`.
+function hasStartupHook() {
+  try {
+    const settingsPath = path.join(ZYLOS_DIR, '.claude', 'settings.json');
+    const content = fs.readFileSync(settingsPath, 'utf8');
+    return content.includes('session-start-prompt.js');
+  } catch {
+    return false;
+  }
+}
+
+function enqueueStartupControl() {
+  const content = 'reply to your human partner if they are waiting your reply, or continue your work if you have ongoing task according to the previous conversations.';
+  const result = runC4Control([
+    'enqueue',
+    '--content', content,
+    '--priority', '3',
+    '--require-idle',
+    '--available-in', '3',
+    '--ack-deadline', '600'
+  ]);
+  if (result.ok) {
+    const match = result.output.match(/control\s+(\d+)/i);
+    log(`Startup control enqueued (fallback) id=${match?.[1] ?? '?'}`);
+  }
+}
 
 function startClaude() {
   if (isMaintenanceRunning()) {
@@ -282,7 +308,10 @@ function startClaude() {
     }
   }
 
-  // Startup prompt now handled by session start hook (session-start-prompt.js)
+  // Use session start hook if available, otherwise fall back to C4 control
+  if (!hasStartupHook()) {
+    enqueueStartupControl();
+  }
 }
 
 function ensureStatusDir() {
