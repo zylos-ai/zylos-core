@@ -6,7 +6,6 @@
 
 ### Give your AI a life.
 
-*Powered by Claude Code*
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Discord](https://img.shields.io/badge/Discord-join-5865F2?logo=discord&logoColor=white)](https://discord.gg/GS2J39EGff)
@@ -20,9 +19,9 @@
 
 ---
 
-Claude Code is a genius — but it wakes up with amnesia every session. No memory of yesterday, no way to reach you, no ability to act on its own.
+LLMs are geniuses — but they wake up with amnesia every session. No memory of yesterday, no way to reach you, no ability to act on their own.
 
-Zylos gives it a life. Memory that survives restarts. A scheduler that works while you sleep. Communication through Telegram, Lark, or a web console. Self-maintenance that keeps everything running. And because Claude Code can program, it can evolve — building new skills, integrating new services, growing alongside you.
+Zylos gives it a life. Memory that survives restarts. A scheduler that works while you sleep. Communication through Telegram, Lark, or a web console. Self-maintenance that keeps everything running. And because it can program, it can evolve — building new skills, integrating new services, growing alongside you.
 
 ---
 
