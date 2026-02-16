@@ -276,6 +276,8 @@ function enqueueStartupControl() {
   if (result.ok) {
     const match = result.output.match(/control\s+(\d+)/i);
     log(`Startup control enqueued (fallback) id=${match?.[1] ?? '?'}`);
+  } else {
+    log(`Startup control enqueue failed (fallback): ${result.output}`);
   }
 }
 
