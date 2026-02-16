@@ -590,7 +590,8 @@ function enqueueContextCheck() {
 
   log(`Context check enqueued id=${checkMatch[1]}`);
 
-  // Step 2: Enqueue a follow-up control for conditional restart (delayed to run after check completes)
+  // Step 2: Enqueue a follow-up control for conditional restart
+  // C4 control queue is sequential — this won't execute until the check above completes
   const restartContent = 'If context usage exceeds 70%, use the restart-claude skill to restart.';
 
   const restartResult = runC4Control([
@@ -598,14 +599,13 @@ function enqueueContextCheck() {
     '--content', restartContent,
     '--priority', '3',
     '--require-idle',
-    '--available-in', '30',
     '--ack-deadline', '600'
   ]);
 
   if (restartResult.ok) {
     const restartMatch = restartResult.output.match(/control\s+(\d+)/i);
     if (restartMatch) {
-      log(`Context restart check enqueued id=${restartMatch[1]} (available in 30s)`);
+      log(`Context restart check enqueued id=${restartMatch[1]}`);
     }
   }
 
