@@ -250,29 +250,8 @@ function waitForMaintenance() {
   }
 }
 
-function enqueueStartupControl() {
-  const content = 'reply to your human partner if they are waiting your reply, or continue your work if you have ongoing task according to the previous conversations.';
-
-  const result = runC4Control([
-    'enqueue',
-    '--content', content,
-    '--priority', '3',
-    '--require-idle',
-    '--available-in', '3',
-    '--ack-deadline', '600'
-  ]);
-
-  if (!result.ok) {
-    log(`Startup control enqueue failed: ${result.output}`);
-    return false;
-  }
-
-  const match = result.output.match(/control\s+(\d+)/i);
-  if (match) {
-    log(`Startup control enqueued id=${match[1]}`);
-  }
-  return true;
-}
+// Startup prompt moved to session start hook (session-start-prompt.js).
+// No longer enqueued as a C4 control — injected directly into session context.
 
 function startClaude() {
   if (isMaintenanceRunning()) {
@@ -303,7 +282,7 @@ function startClaude() {
     }
   }
 
-  enqueueStartupControl();
+  // Startup prompt now handled by session start hook (session-start-prompt.js)
 }
 
 function ensureStatusDir() {
@@ -587,34 +566,51 @@ function writeContextCheckState(timestamp) {
 }
 
 function enqueueContextCheck() {
-  const content = [
-    'Context usage check.',
-    'Use the check-context skill to get current context usage.',
-    'If context usage exceeds 70%, use the restart-claude skill to restart.'
-  ].join(' ');
+  // Step 1: Enqueue the check-context action
+  const checkContent = 'Context usage check. Use the check-context skill to get current context usage.';
 
-  const result = runC4Control([
+  const checkResult = runC4Control([
     'enqueue',
-    '--content', content,
+    '--content', checkContent,
     '--priority', '3',
     '--require-idle',
     '--ack-deadline', '600'
   ]);
 
-  if (!result.ok) {
-    log(`Context check enqueue failed: ${result.output}`);
+  if (!checkResult.ok) {
+    log(`Context check enqueue failed: ${checkResult.output}`);
     return false;
   }
 
-  const match = result.output.match(/control\s+(\d+)/i);
-  if (!match) {
-    log(`Context check enqueue parse failed: ${result.output}`);
+  const checkMatch = checkResult.output.match(/control\s+(\d+)/i);
+  if (!checkMatch) {
+    log(`Context check enqueue parse failed: ${checkResult.output}`);
     return false;
+  }
+
+  log(`Context check enqueued id=${checkMatch[1]}`);
+
+  // Step 2: Enqueue a follow-up control for conditional restart (delayed to run after check completes)
+  const restartContent = 'If context usage exceeds 70%, use the restart-claude skill to restart.';
+
+  const restartResult = runC4Control([
+    'enqueue',
+    '--content', restartContent,
+    '--priority', '3',
+    '--require-idle',
+    '--available-in', '30',
+    '--ack-deadline', '600'
+  ]);
+
+  if (restartResult.ok) {
+    const restartMatch = restartResult.output.match(/control\s+(\d+)/i);
+    if (restartMatch) {
+      log(`Context restart check enqueued id=${restartMatch[1]} (available in 30s)`);
+    }
   }
 
   const now = Math.floor(Date.now() / 1000);
   writeContextCheckState(now);
-  log(`Context check enqueued id=${match[1]}`);
   return true;
 }
 
