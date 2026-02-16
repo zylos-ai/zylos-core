@@ -603,14 +603,14 @@ function enqueueContextCheck() {
   ]);
 
   if (!restartResult.ok) {
-    log(`Context restart enqueue failed: ${restartResult.output}`);
-    // Don't advance state — retry both steps next interval
-    return false;
-  }
-
-  const restartMatch = restartResult.output.match(/control\s+(\d+)/i);
-  if (restartMatch) {
-    log(`Context restart check enqueued id=${restartMatch[1]}`);
+    log(`Context restart enqueue failed (check-context already queued): ${restartResult.output}`);
+    // Still advance state — step 1 succeeded and is queued. Not advancing would
+    // cause a re-enqueue storm (retry every tick, flooding queue with duplicates).
+  } else {
+    const restartMatch = restartResult.output.match(/control\s+(\d+)/i);
+    if (restartMatch) {
+      log(`Context restart check enqueued id=${restartMatch[1]}`);
+    }
   }
 
   const now = Math.floor(Date.now() / 1000);
