@@ -6,7 +6,7 @@
 
 ### 给你的 AI 一个生命。
 
-*基于 Claude Code*
+*为团队协作*
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Discord](https://img.shields.io/badge/Discord-join-5865F2?logo=discord&logoColor=white)](https://discord.gg/GS2J39EGff)
@@ -20,9 +20,11 @@
 
 ---
 
-Claude Code 是个天才 — 但它每次醒来都失忆。不记得昨天做了什么，联系不到你，也无法自主行动。
+LLMs 是天才 — 但他们每次醒来都失忆。不记得昨天做了什么，联系不到你，也无法自主行动。
 
-Zylos 给它一个生命。跨重启的持久记忆。你睡觉时自动工作的调度器。通过 Telegram、飞书或 Web 控制台与你沟通。自我维护让一切持续运行。而且因为 Claude Code 会编程，它可以进化 — 构建新技能、集成新服务，与你一起成长。
+Zylos 给它一个生命。跨重启的持久记忆。你睡觉时自动工作的调度器。通过 Telegram、飞书或 Web 控制台与你沟通。自我维护让一切持续运行。而且因为它会编程，它可以进化 — 构建新技能、集成新服务，与你一起成长。
+
+更多模型支持在路上...
 
 ---
 
