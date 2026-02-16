@@ -602,11 +602,15 @@ function enqueueContextCheck() {
     '--ack-deadline', '600'
   ]);
 
-  if (restartResult.ok) {
-    const restartMatch = restartResult.output.match(/control\s+(\d+)/i);
-    if (restartMatch) {
-      log(`Context restart check enqueued id=${restartMatch[1]}`);
-    }
+  if (!restartResult.ok) {
+    log(`Context restart enqueue failed: ${restartResult.output}`);
+    // Don't advance state — retry both steps next interval
+    return false;
+  }
+
+  const restartMatch = restartResult.output.match(/control\s+(\d+)/i);
+  if (restartMatch) {
+    log(`Context restart check enqueued id=${restartMatch[1]}`);
   }
 
   const now = Math.floor(Date.now() / 1000);
