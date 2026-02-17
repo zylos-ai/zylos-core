@@ -1,89 +1,56 @@
 #!/usr/bin/env node
 /**
  * Check Context Usage Script (C4-integrated)
- * Sends /context command to Claude via C4
- * Usage: node check-context.js
+ * Enqueues /context command via control queue. With --with-restart-check,
+ * also enqueues a follow-up decision to restart if usage exceeds 70%.
  *
- * IMPORTANT: Run with nohup to allow Claude to return to idle:
- *   nohup node ~/zylos/.claude/skills/check-context/scripts/check-context.js > /dev/null 2>&1 &
+ * Usage:
+ *   node check-context.js                      # Just check context
+ *   node check-context.js --with-restart-check  # Check + auto-restart decision
  */
 
-import { execSync, execFileSync } from 'child_process';
+import { execFileSync } from 'child_process';
 import path from 'path';
 import os from 'os';
-import fs from 'fs';
 
-const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
-const STATUS_FILE = path.join(ZYLOS_DIR, 'activity-monitor', 'claude-status.json');
-const MAX_WAIT_SECONDS = 600; // Max time to wait for idle (10 minutes)
-const CHECK_INTERVAL = 1; // Seconds between idle checks
-const MIN_IDLE_SECONDS = 3; // Require at least 3 seconds of idle time
+const C4_CONTROL = path.join(os.homedir(), 'zylos/.claude/skills/comm-bridge/scripts/c4-control.js');
 
-function sleep(seconds) {
-  execSync(`sleep ${seconds}`);
-}
-
-function isClaudeIdle() {
+function enqueue(args) {
   try {
-    if (!fs.existsSync(STATUS_FILE)) {
-      // No status file, assume idle
-      return true;
-    }
-    const content = fs.readFileSync(STATUS_FILE, 'utf8');
-    const status = JSON.parse(content);
-    // idle_seconds = time since entering idle state (0 when busy)
-    // So we only need to check if idle_seconds >= MIN_IDLE_SECONDS
-    return status.idle_seconds >= MIN_IDLE_SECONDS;
-  } catch {
-    // Error reading file, assume idle
-    return true;
-  }
-}
-
-function waitForIdle() {
-  let waited = 0;
-  while (waited < MAX_WAIT_SECONDS) {
-    if (isClaudeIdle()) {
-      return true;
-    }
-    sleep(CHECK_INTERVAL);
-    waited += CHECK_INTERVAL;
-  }
-  // Timeout - proceed anyway
-  console.log(`Warning: Claude still busy after ${MAX_WAIT_SECONDS}s, proceeding anyway`);
-  return false;
-}
-
-function sendViaC4(message) {
-  const c4ReceivePath = path.join(os.homedir(), 'zylos/.claude/skills/comm-bridge/scripts/c4-receive.js');
-
-  try {
-    // Use execFileSync to avoid shell injection - passes arguments directly
-    // Use --no-reply since system messages don't need a reply path
-    execFileSync(
-      'node',
-      [c4ReceivePath, '--priority', '1', '--no-reply', '--require-idle', '--content', message],
-      { stdio: 'inherit' }
-    );
+    const result = execFileSync('node', [C4_CONTROL, 'enqueue', ...args], {
+      encoding: 'utf8',
+      stdio: 'pipe'
+    });
+    return result.trim();
   } catch (err) {
-    console.error(`Failed to send via C4: ${err.message}`);
+    console.error(`[check-context] Failed to enqueue: ${err.message}`);
     process.exit(1);
   }
 }
 
 function main() {
-  // Wait for Claude to become idle (check claude-status.json)
-  // Requires idle_seconds >= MIN_IDLE_SECONDS to ensure stable idle state
-  waitForIdle();
+  const withRestart = process.argv.includes('--with-restart-check');
 
-  // Send /context command via C4
-  // The command itself returns context usage information, no follow-up needed
-  sendViaC4('/context');
+  // Step 1: Enqueue /context command (delivered to tmux as slash command)
+  const step1 = enqueue([
+    '--content', '/context',
+    '--priority', '3',
+    '--require-idle',
+    '--ack-deadline', '600'
+  ]);
+  console.log(`[check-context] /context enqueued: ${step1}`);
 
-  // Sleep 3 seconds to ensure the result is returned before allowing other messages
-  sleep(3);
-
-  console.log('[check-context] Context check command sent via C4');
+  // Step 2: Enqueue restart decision (only for automated checks)
+  if (withRestart) {
+    const step2 = enqueue([
+      '--content', 'If context usage exceeds 70%, use the restart-claude skill to restart. If context is under 70%, just acknowledge.',
+      '--priority', '3',
+      '--require-idle',
+      '--available-in', '30',
+      '--ack-deadline', '630'
+    ]);
+    console.log(`[check-context] Restart check enqueued: ${step2}`);
+  }
 }
 
 main();
