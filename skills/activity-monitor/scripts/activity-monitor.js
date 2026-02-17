@@ -597,8 +597,8 @@ function writeContextCheckState(timestamp) {
 }
 
 function enqueueContextCheck() {
-  // Step 1: Check context usage
-  const checkContent = 'Context usage check. Use the check-context skill to get current context usage. If context usage exceeds 70%, use the restart-claude skill to restart.';
+  // Step 1: Check context usage (report only, do not restart)
+  const checkContent = 'Context usage check. Use the check-context skill to get current context usage.';
   const checkResult = runC4Control([
     'enqueue',
     '--content', checkContent,
