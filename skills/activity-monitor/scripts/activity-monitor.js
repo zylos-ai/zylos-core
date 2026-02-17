@@ -640,14 +640,13 @@ function enqueueContextCheck() {
 
   log(`Context check step 1 enqueued id=${checkMatch[1]}`);
 
-  // Step 2: Act on result (delayed 30s, deadline 630s)
+  // Step 2: Act on result (deadline 630s, 30s after step 1's 600s)
   const actContent = 'If context usage exceeds 70%, use the restart-claude skill to restart. If context is under 70%, just acknowledge.';
   const actResult = runC4Control([
     'enqueue',
     '--content', actContent,
     '--priority', '3',
     '--require-idle',
-    '--available-in', '30',
     '--ack-deadline', '630'
   ]);
 
