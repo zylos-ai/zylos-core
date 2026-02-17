@@ -109,11 +109,17 @@ function formatC4Reply(type, data) {
       let r = `zylos-core upgraded: ${from} -> ${to}`;
       if (changelog) r += `\n\nChangelog:\n${changelog}`;
       if (migrationHints?.length > 0) {
-        r += '\n\nACTION REQUIRED - New hooks to add to ~/zylos/.claude/settings.json:';
+        r += '\n\nACTION REQUIRED - Hook changes in ~/zylos/.claude/settings.json:';
         for (const hint of migrationHints) {
-          r += `\n  [${hint.event}] ${hint.command} (timeout: ${hint.timeout}ms)`;
+          if (hint.type === 'missing_hook') {
+            r += `\n  [${hint.event}] ADD: ${hint.command} (timeout: ${hint.timeout}ms)`;
+          } else if (hint.type === 'modified_hook') {
+            r += `\n  [${hint.event}] UPDATE: ${hint.command} (timeout: ${hint.timeout}ms)`;
+          } else if (hint.type === 'removed_hook') {
+            r += `\n  [${hint.event}] REMOVE: ${hint.command}`;
+          }
         }
-        r += '\nPlease add these hooks to ~/zylos/.claude/settings.json and restart Claude to apply.';
+        r += '\nPlease update hooks in ~/zylos/.claude/settings.json and restart Claude to apply.';
       }
       return r;
     }
@@ -993,11 +999,17 @@ async function upgradeSelfCore({ providedTempDir } = {}) {
 
       // Show migration hints if any
       if (result.migrationHints?.length > 0) {
-        console.log(`\n${warn('ACTION REQUIRED')} — New hooks to add to ${bold('.claude/settings.json')}:`);
+        console.log(`\n${warn('ACTION REQUIRED')} — Hook changes for ${bold('.claude/settings.json')}:`);
         for (const hint of result.migrationHints) {
-          console.log(`  ${yellow(`[${hint.event}]`)} ${hint.command} ${dim(`(timeout: ${hint.timeout}ms)`)}`);
+          if (hint.type === 'missing_hook') {
+            console.log(`  ${yellow(`[${hint.event}]`)} ${green('ADD')}    ${hint.command} ${dim(`(timeout: ${hint.timeout}ms)`)}`);
+          } else if (hint.type === 'modified_hook') {
+            console.log(`  ${yellow(`[${hint.event}]`)} ${yellow('UPDATE')} ${hint.command} ${dim(`(timeout: ${hint.timeout}ms)`)}`);
+          } else if (hint.type === 'removed_hook') {
+            console.log(`  ${yellow(`[${hint.event}]`)} ${dim('REMOVE')} ${hint.command}`);
+          }
         }
-        console.log(`\nAdd these hooks to ${bold('~/zylos/.claude/settings.json')} and restart Claude to apply.`);
+        console.log(`\nUpdate hooks in ${bold('~/zylos/.claude/settings.json')} and restart Claude to apply.`);
       }
 
       // Clean backup after successful upgrade

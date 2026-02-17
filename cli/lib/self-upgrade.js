@@ -369,9 +369,36 @@ function listTemplateFiles(templatesDir) {
 }
 
 /**
+ * Extract the script file path from a hook command.
+ * e.g. "node ~/zylos/.claude/skills/foo/scripts/bar.js --flag"
+ *   -> "~/zylos/.claude/skills/foo/scripts/bar.js"
+ * Falls back to the full command if no path-like token is found.
+ */
+function extractScriptPath(command) {
+  const tokens = command.split(/\s+/);
+  for (const token of tokens) {
+    if (token.includes('/') && /\.\w+$/.test(token)) return token;
+  }
+  return command;
+}
+
+/**
+ * Extract the skill name from a hook command's script path.
+ * e.g. "node ~/zylos/.claude/skills/comm-bridge/scripts/c4-session-init.js"
+ *   -> "comm-bridge"
+ * Returns null if the pattern doesn't match.
+ */
+function extractSkillName(command) {
+  const match = command.match(/skills\/([^/]+)\//);
+  return match ? match[1] : null;
+}
+
+/**
  * Compare template settings.json hooks with installed settings.json.
- * Returns an array of migration hint objects for hooks that exist in
- * the template but are missing from the installed settings.
+ * Matches hooks by script path (not full command string) to detect:
+ *  - missing_hook:  in template, not installed
+ *  - modified_hook: same script path, different command or timeout
+ *  - removed_hook:  in installed, not in template (core skills only)
  */
 function generateMigrationHints(templatesDir) {
   const hints = [];
@@ -395,10 +422,24 @@ function generateMigrationHints(templatesDir) {
     installedSettings = {};
   }
 
-  // Compare hooks: find commands in template that are missing from installed
   const templateHooks = templateSettings.hooks || {};
   const installedHooks = installedSettings.hooks || {};
 
+  // Collect core skill names from template hooks (for removed_hook scoping)
+  const coreSkillNames = new Set();
+  for (const matchers of Object.values(templateHooks)) {
+    if (!Array.isArray(matchers)) continue;
+    for (const m of matchers) {
+      for (const h of (m.hooks || [])) {
+        if (h.type === 'command') {
+          const name = extractSkillName(h.command);
+          if (name) coreSkillNames.add(name);
+        }
+      }
+    }
+  }
+
+  // --- Forward pass: detect missing and modified hooks ---
   for (const [event, matchers] of Object.entries(templateHooks)) {
     if (!Array.isArray(matchers)) continue;
     const installedMatchers = installedHooks[event] || [];
@@ -406,16 +447,64 @@ function generateMigrationHints(templatesDir) {
     for (const matcher of matchers) {
       const templateCmds = (matcher.hooks || []).filter(h => h.type === 'command');
       for (const templateCmd of templateCmds) {
-        // Check if this command exists in any installed matcher for this event
-        const found = installedMatchers.some(im =>
-          (im.hooks || []).some(h => h.type === 'command' && h.command === templateCmd.command)
-        );
-        if (!found) {
+        const templateKey = extractScriptPath(templateCmd.command);
+
+        // Find installed hook with the same script path
+        let matched = null;
+        for (const im of installedMatchers) {
+          matched = (im.hooks || []).find(
+            h => h.type === 'command' && extractScriptPath(h.command) === templateKey
+          );
+          if (matched) break;
+        }
+
+        if (!matched) {
           hints.push({
             type: 'missing_hook',
             event,
             command: templateCmd.command,
             timeout: templateCmd.timeout,
+          });
+        } else if (matched.command !== templateCmd.command || matched.timeout !== templateCmd.timeout) {
+          hints.push({
+            type: 'modified_hook',
+            event,
+            command: templateCmd.command,
+            timeout: templateCmd.timeout,
+            oldCommand: matched.command,
+            oldTimeout: matched.timeout,
+          });
+        }
+      }
+    }
+  }
+
+  // --- Reverse pass: detect removed hooks (core skills only) ---
+  for (const [event, matchers] of Object.entries(installedHooks)) {
+    if (!Array.isArray(matchers)) continue;
+    const templateMatchers = templateHooks[event] || [];
+
+    for (const matcher of matchers) {
+      const installedCmds = (matcher.hooks || []).filter(h => h.type === 'command');
+      for (const installedCmd of installedCmds) {
+        // Only flag hooks from core skills to avoid false positives
+        // for optional component hooks
+        const skillName = extractSkillName(installedCmd.command);
+        if (!skillName || !coreSkillNames.has(skillName)) continue;
+
+        const installedKey = extractScriptPath(installedCmd.command);
+        const foundInTemplate = templateMatchers.some(tm =>
+          (tm.hooks || []).some(
+            h => h.type === 'command' && extractScriptPath(h.command) === installedKey
+          )
+        );
+
+        if (!foundInTemplate) {
+          hints.push({
+            type: 'removed_hook',
+            event,
+            command: installedCmd.command,
+            timeout: installedCmd.timeout,
           });
         }
       }
