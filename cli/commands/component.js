@@ -9,7 +9,7 @@ import { SKILLS_DIR, COMPONENTS_DIR } from '../lib/config.js';
 import { bold, dim, green, red, yellow, cyan, success, error, warn, heading } from '../lib/colors.js';
 import { loadRegistry } from '../lib/registry.js';
 import { loadComponents, saveComponents } from '../lib/components.js';
-import { checkForUpdates, runUpgrade, downloadToTemp, readChangelog, filterChangelog, cleanupTemp } from '../lib/upgrade.js';
+import { checkForUpdates, getRepo, runUpgrade, downloadToTemp, readChangelog, filterChangelog, cleanupTemp } from '../lib/upgrade.js';
 import {
   checkForCoreUpdates, runSelfUpgrade,
   downloadCoreToTemp, readChangelog as readCoreChangelog,
@@ -98,7 +98,7 @@ function formatC4Reply(type, data) {
       return r;
     }
     case 'self-upgrade': {
-      const { success, from, to, changelog, failedStep, error, rollback } = data;
+      const { success, from, to, changelog, failedStep, error, rollback, migrationHints } = data;
       if (!success) {
         let r = `zylos-core upgrade failed (step ${failedStep}): ${error}`;
         if (rollback?.performed) {
@@ -108,6 +108,19 @@ function formatC4Reply(type, data) {
       }
       let r = `zylos-core upgraded: ${from} -> ${to}`;
       if (changelog) r += `\n\nChangelog:\n${changelog}`;
+      if (migrationHints?.length > 0) {
+        r += '\n\nACTION REQUIRED - Hook changes in ~/zylos/.claude/settings.json:';
+        for (const hint of migrationHints) {
+          if (hint.type === 'missing_hook') {
+            r += `\n  [${hint.event}] ADD: ${hint.command} (timeout: ${hint.timeout}ms)`;
+          } else if (hint.type === 'modified_hook') {
+            r += `\n  [${hint.event}] UPDATE: ${hint.command} (timeout: ${hint.timeout}ms)`;
+          } else if (hint.type === 'removed_hook') {
+            r += `\n  [${hint.event}] REMOVE: ${hint.command}`;
+          }
+        }
+        r += '\nPlease update hooks in ~/zylos/.claude/settings.json and restart Claude to apply.';
+      }
       return r;
     }
     case 'check-all': {
@@ -177,12 +190,21 @@ export async function upgradeComponent(args) {
   const upgradeAll = args.includes('--all');
   const skipEval = args.includes('--skip-eval');
 
+  // Parse --branch <name> flag
+  const branchIndex = args.indexOf('--branch');
+  const branch = branchIndex !== -1 ? args[branchIndex + 1] : null;
+  if (branchIndex !== -1 && (!branch || branch.startsWith('-'))) {
+    console.error('Error: --branch requires a branch name.');
+    process.exit(1);
+  }
+
   // Get target component (filter out flags and flag values)
+  const flagsWithValues = new Set(['--temp-dir', '--branch']);
   const target = args.find((a, i) => {
     if (a.startsWith('-')) return false;
     if (a === 'confirm') return false;
     // Skip values that follow flags with arguments
-    if (i > 0 && args[i - 1] === '--temp-dir') return false;
+    if (i > 0 && flagsWithValues.has(args[i - 1])) return false;
     return true;
   });
 
@@ -194,7 +216,7 @@ export async function upgradeComponent(args) {
     // Parse --temp-dir flag (reuse previously downloaded package from --check)
     const selfTempDirIdx = args.indexOf('--temp-dir');
     const selfProvidedTempDir = selfTempDirIdx !== -1 ? args[selfTempDirIdx + 1] : null;
-    const ok = await upgradeSelfCore({ providedTempDir: selfProvidedTempDir });
+    const ok = await upgradeSelfCore({ providedTempDir: selfProvidedTempDir, branch });
     if (!ok) process.exit(1);
     return;
   }
@@ -214,6 +236,7 @@ export async function upgradeComponent(args) {
     console.log('  --json         Output in JSON format');
     console.log('  --yes, -y      Skip confirmation');
     console.log('  --skip-eval    Skip upgrade analysis of local changes');
+    console.log('  --branch <b>   Upgrade from a specific branch (e.g. feat/xxx)');
     console.log('  --temp-dir <d> Reuse previously downloaded package from --check');
     console.log('\nExamples:');
     console.log('  zylos upgrade telegram --check --json');
@@ -268,7 +291,7 @@ export async function upgradeComponent(args) {
   }
 
   // Mode 2 & 3: Full upgrade flow (lock-first)
-  const ok = await handleUpgradeFlow(target, { jsonOutput, skipConfirm: skipConfirm || explicitConfirm, skipEval, providedTempDir });
+  const ok = await handleUpgradeFlow(target, { jsonOutput, skipConfirm: skipConfirm || explicitConfirm, skipEval, providedTempDir, branch });
   if (!ok) process.exit(1);
 }
 
@@ -394,7 +417,7 @@ async function handleCheckOnly(component, { jsonOutput }) {
  * Returns true on success, false on failure.
  * Does NOT call process.exit() — caller decides exit behavior.
  */
-async function handleUpgradeFlow(component, { jsonOutput, skipConfirm, skipEval, providedTempDir }) {
+async function handleUpgradeFlow(component, { jsonOutput, skipConfirm, skipEval, providedTempDir, branch }) {
   const skillDir = path.join(SKILLS_DIR, component);
   let tempDir = providedTempDir || null;
   const tempDirWasProvided = !!providedTempDir;
@@ -413,21 +436,24 @@ async function handleUpgradeFlow(component, { jsonOutput, skipConfirm, skipEval,
   }
 
   try {
-    // 2. Check for updates
+    // 2. Check for updates (skip version comparison when --branch is specified)
     const check = checkForUpdates(component);
 
     if (!check.success) {
-      if (jsonOutput) {
-        const errOutput = { action: 'check', component, ...check };
-        errOutput.reply = formatC4Reply('error', check);
-        console.log(JSON.stringify(errOutput, null, 2));
-      } else {
-        console.error(`Error: ${check.message}`);
+      if (!branch) {
+        if (jsonOutput) {
+          const errOutput = { action: 'check', component, ...check };
+          errOutput.reply = formatC4Reply('error', check);
+          console.log(JSON.stringify(errOutput, null, 2));
+        } else {
+          console.error(`Error: ${check.message}`);
+        }
+        return false;
       }
-      return false;
+      // When --branch is specified, version check failure is non-fatal
     }
 
-    if (!check.hasUpdate) {
+    if (!branch && check.success && !check.hasUpdate) {
       if (jsonOutput) {
         const output = { action: 'check', component, ...check };
         output.reply = formatC4Reply('check', { component, ...check });
@@ -456,7 +482,8 @@ async function handleUpgradeFlow(component, { jsonOutput, skipConfirm, skipEval,
         console.log(`\n${dim(`Reusing previously downloaded package from ${tempDir}`)}`);
       }
     } else {
-      if (!check.repo) {
+      const repo = check.repo || (branch ? getRepo(component) : null);
+      if (!repo) {
         if (jsonOutput) {
           const errOutput = { action: 'upgrade', component, success: false, error: 'No repo configured' };
           errOutput.reply = formatC4Reply('error', { message: 'No repo configured' });
@@ -467,11 +494,12 @@ async function handleUpgradeFlow(component, { jsonOutput, skipConfirm, skipEval,
         return false;
       }
 
+      const downloadLabel = branch ? `${component} (branch: ${branch})` : `${component}@${check.latest}`;
       if (!jsonOutput) {
-        console.log(`\nDownloading ${bold(component)}@${bold(check.latest)}...`);
+        console.log(`\nDownloading ${bold(downloadLabel)}...`);
       }
 
-      const dlResult = downloadToTemp(check.repo, check.latest);
+      const dlResult = downloadToTemp(repo, check.latest, branch);
       if (!dlResult.success) {
         if (jsonOutput) {
           const errOutput = { action: 'upgrade', component, success: false, error: dlResult.error };
@@ -839,7 +867,7 @@ function handleSelfCheckOnly({ jsonOutput }) {
  * Returns true on success, false on failure.
  * Does NOT call process.exit() — caller decides exit behavior.
  */
-async function upgradeSelfCore({ providedTempDir } = {}) {
+async function upgradeSelfCore({ providedTempDir, branch } = {}) {
   const jsonOutput = process.argv.includes('--json');
   const skipConfirm = process.argv.includes('--yes') || process.argv.includes('-y');
   let tempDir = providedTempDir || null;
@@ -859,10 +887,10 @@ async function upgradeSelfCore({ providedTempDir } = {}) {
   }
 
   try {
-    // 2. Check for updates
+    // 2. Check for updates (skip version comparison when --branch is specified)
     const check = checkForCoreUpdates();
 
-    if (!check.success) {
+    if (!check.success && !branch) {
       if (jsonOutput) {
         const errOutput = { action: 'check', target: 'zylos-core', ...check };
         errOutput.reply = formatC4Reply('error', check);
@@ -873,7 +901,7 @@ async function upgradeSelfCore({ providedTempDir } = {}) {
       return false;
     }
 
-    if (!check.hasUpdate) {
+    if (!branch && check.success && !check.hasUpdate) {
       if (jsonOutput) {
         const output = { action: 'check', target: 'zylos-core', ...check };
         output.reply = formatC4Reply('self-check', check);
@@ -902,11 +930,12 @@ async function upgradeSelfCore({ providedTempDir } = {}) {
         console.log(`\n${dim(`Reusing previously downloaded package: ${tempDir}`)}`);
       }
     } else {
+      const downloadLabel = branch ? `zylos-core (branch: ${branch})` : `zylos-core@${check.latest}`;
       if (!jsonOutput) {
-        console.log(`\nDownloading ${bold('zylos-core')}@${bold(check.latest)}...`);
+        console.log(`\nDownloading ${bold(downloadLabel)}...`);
       }
 
-      const dlResult = downloadCoreToTemp(check.latest);
+      const dlResult = downloadCoreToTemp(check.latest, branch);
       if (!dlResult.success) {
         if (jsonOutput) {
           const errOutput = { action: 'self_upgrade', success: false, error: dlResult.error };
@@ -982,6 +1011,21 @@ async function upgradeSelfCore({ providedTempDir } = {}) {
       console.log(`\n${success(`${bold('zylos-core')} upgraded: ${dim(result.from)} → ${bold(result.to)}`)}`);
       if (coreChangelog) {
         console.log(`\n${heading('Changelog:')}\n${coreChangelog}`);
+      }
+
+      // Show migration hints if any
+      if (result.migrationHints?.length > 0) {
+        console.log(`\n${warn('ACTION REQUIRED')} — Hook changes for ${bold('.claude/settings.json')}:`);
+        for (const hint of result.migrationHints) {
+          if (hint.type === 'missing_hook') {
+            console.log(`  ${yellow(`[${hint.event}]`)} ${green('ADD')}    ${hint.command} ${dim(`(timeout: ${hint.timeout}ms)`)}`);
+          } else if (hint.type === 'modified_hook') {
+            console.log(`  ${yellow(`[${hint.event}]`)} ${yellow('UPDATE')} ${hint.command} ${dim(`(timeout: ${hint.timeout}ms)`)}`);
+          } else if (hint.type === 'removed_hook') {
+            console.log(`  ${yellow(`[${hint.event}]`)} ${dim('REMOVE')} ${hint.command}`);
+          }
+        }
+        console.log(`\nUpdate hooks in ${bold('~/zylos/.claude/settings.json')} and restart Claude to apply.`);
       }
 
       // Clean backup after successful upgrade

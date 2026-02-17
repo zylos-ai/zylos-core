@@ -287,7 +287,7 @@ export function getNextPendingControl(current = nowSeconds()) {
     FROM control_queue
     WHERE status = 'pending'
       AND (available_at IS NULL OR available_at <= ?)
-    ORDER BY COALESCE(priority, 3) ASC, created_at ASC
+    ORDER BY COALESCE(priority, 3) ASC, id ASC
     LIMIT 1
   `).get(current) || null;
 }

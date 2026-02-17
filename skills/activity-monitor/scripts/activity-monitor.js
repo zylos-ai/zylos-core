@@ -250,9 +250,28 @@ function waitForMaintenance() {
   }
 }
 
-function enqueueStartupControl() {
-  const content = 'reply to your human partner if they are waiting your reply, or continue your work if you have ongoing task according to the previous conversations.';
+// Startup prompt: prefer session start hook (session-start-prompt.js) which
+// injects directly into session context. Fall back to C4 control for existing
+// installations that haven't received the new hook via `zylos init`.
+function hasStartupHook() {
+  try {
+    const settingsPath = path.join(ZYLOS_DIR, '.claude', 'settings.json');
+    const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+    const matchers = settings?.hooks?.SessionStart;
+    if (!Array.isArray(matchers)) return false;
+    return matchers.some(m =>
+      Array.isArray(m?.hooks) && m.hooks.some(
+        h => h?.type === 'command' && typeof h.command === 'string'
+          && /(?:^|[\\/])session-start-prompt\.js(?:["'\s]|$)/.test(h.command)
+      )
+    );
+  } catch {
+    return false;
+  }
+}
 
+function enqueueStartupControl() {
+  const content = 'reply to your human partner if they are waiting your reply, and continue your work if you have ongoing task according to the previous conversations.';
   const result = runC4Control([
     'enqueue',
     '--content', content,
@@ -261,17 +280,12 @@ function enqueueStartupControl() {
     '--available-in', '3',
     '--ack-deadline', '600'
   ]);
-
-  if (!result.ok) {
-    log(`Startup control enqueue failed: ${result.output}`);
-    return false;
+  if (result.ok) {
+    const match = result.output.match(/control\s+(\d+)/i);
+    log(`Startup control enqueued (fallback) id=${match?.[1] ?? '?'}`);
+  } else {
+    log(`Startup control enqueue failed (fallback): ${result.output}`);
   }
-
-  const match = result.output.match(/control\s+(\d+)/i);
-  if (match) {
-    log(`Startup control enqueued id=${match[1]}`);
-  }
-  return true;
 }
 
 function startClaude() {
@@ -303,7 +317,10 @@ function startClaude() {
     }
   }
 
-  enqueueStartupControl();
+  // Use session start hook if available, otherwise fall back to C4 control
+  if (!hasStartupHook()) {
+    enqueueStartupControl();
+  }
 }
 
 function ensureStatusDir() {
@@ -587,34 +604,59 @@ function writeContextCheckState(timestamp) {
 }
 
 function enqueueContextCheck() {
-  const content = [
-    'Context usage check.',
-    'Use the check-context skill to get current context usage.',
-    'If context usage exceeds 70%, use the restart-claude skill to restart.'
-  ].join(' ');
+  // Write state FIRST to prevent retry flooding.
+  // If state write fails, skip enqueue entirely (no side effects).
+  // If enqueue fails after state write, we just wait for next interval.
+  const now = Math.floor(Date.now() / 1000);
+  writeContextCheckState(now);
 
-  const result = runC4Control([
+  // Verify state was actually written (writeContextCheckState catches its own errors)
+  const state = loadContextCheckState();
+  if (!state || state.last_check_at !== now) {
+    log('Context check: state write failed, skipping enqueue');
+    return false;
+  }
+
+  // Step 1: Check context usage (report only, do not restart)
+  const checkContent = 'Context usage check. Use the check-context skill to get current context usage.';
+  const checkResult = runC4Control([
     'enqueue',
-    '--content', content,
+    '--content', checkContent,
     '--priority', '3',
     '--require-idle',
     '--ack-deadline', '600'
   ]);
 
-  if (!result.ok) {
-    log(`Context check enqueue failed: ${result.output}`);
+  if (!checkResult.ok) {
+    log(`Context check enqueue failed: ${checkResult.output}`);
     return false;
   }
 
-  const match = result.output.match(/control\s+(\d+)/i);
-  if (!match) {
-    log(`Context check enqueue parse failed: ${result.output}`);
+  const checkMatch = checkResult.output.match(/control\s+(\d+)/i);
+  if (!checkMatch) {
+    log(`Context check enqueue parse failed: ${checkResult.output}`);
     return false;
   }
 
-  const now = Math.floor(Date.now() / 1000);
-  writeContextCheckState(now);
-  log(`Context check enqueued id=${match[1]}`);
+  log(`Context check step 1 enqueued id=${checkMatch[1]}`);
+
+  // Step 2: Act on result (deadline 630s, 30s after step 1's 600s)
+  const actContent = 'If context usage exceeds 70%, use the restart-claude skill to restart. If context is under 70%, just acknowledge.';
+  const actResult = runC4Control([
+    'enqueue',
+    '--content', actContent,
+    '--priority', '3',
+    '--require-idle',
+    '--ack-deadline', '630'
+  ]);
+
+  if (!actResult.ok) {
+    log(`Context act enqueue failed: ${actResult.output}`);
+    return false;
+  }
+
+  const actMatch = actResult.output.match(/control\s+(\d+)/i);
+  log(`Context check step 2 enqueued id=${actMatch?.[1] ?? '?'}`);
   return true;
 }
 

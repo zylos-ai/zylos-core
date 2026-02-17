@@ -13,6 +13,11 @@
             "type": "command",
             "command": "node ~/zylos/.claude/skills/comm-bridge/scripts/c4-session-init.js",
             "timeout": 10000
+          },
+          {
+            "type": "command",
+            "command": "node ~/zylos/.claude/skills/activity-monitor/scripts/session-start-prompt.js",
+            "timeout": 5000
           }
         ]
       }

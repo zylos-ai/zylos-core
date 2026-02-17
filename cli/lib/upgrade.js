@@ -47,7 +47,7 @@ function getLocalVersion(skillDir) {
 /**
  * Get the repo for a component from components.json or registry.
  */
-function getRepo(component) {
+export function getRepo(component) {
   const components = loadComponents();
   if (components[component]?.repo) return components[component].repo;
   const registry = loadLocalRegistry();
@@ -149,10 +149,20 @@ export function checkForUpdates(component) {
  *
  * @param {string} repo - GitHub repo (org/name)
  * @param {string} version - Version to download
+ * @param {string} [branch] - Optional branch to download from (skips version tag)
  * @returns {{ success: boolean, tempDir?: string, error?: string }}
  */
-export function downloadToTemp(repo, version) {
+export function downloadToTemp(repo, version, branch) {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-upgrade-'));
+
+  if (branch) {
+    const branchResult = downloadBranch(repo, branch, tempDir);
+    if (!branchResult.success) {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+      return { success: false, error: branchResult.error };
+    }
+    return { success: true, tempDir };
+  }
 
   const result = downloadArchive(repo, version, tempDir);
   if (!result.success) {
