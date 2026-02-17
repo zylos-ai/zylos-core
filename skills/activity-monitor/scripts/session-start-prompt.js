@@ -11,7 +11,7 @@
 const prompt = [
   'SessionStart:compact hook success:',
   'reply to your human partner if they are waiting your reply,',
-  'or continue your work if you have ongoing task according to the previous conversations.'
+  'and continue your work if you have ongoing task according to the previous conversations.'
 ].join(' ');
 
 process.stdout.write(prompt);

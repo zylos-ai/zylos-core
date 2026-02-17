@@ -264,7 +264,7 @@ function hasStartupHook() {
 }
 
 function enqueueStartupControl() {
-  const content = 'reply to your human partner if they are waiting your reply, or continue your work if you have ongoing task according to the previous conversations.';
+  const content = 'reply to your human partner if they are waiting your reply, and continue your work if you have ongoing task according to the previous conversations.';
   const result = runC4Control([
     'enqueue',
     '--content', content,
