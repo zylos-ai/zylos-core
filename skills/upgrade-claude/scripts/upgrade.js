@@ -4,8 +4,8 @@
  * Enqueues /exit via control queue, waits for exit, upgrades, activity-monitor restarts
  * Usage: node upgrade.js
  *
- * IMPORTANT: Run with nohup to allow Claude to exit cleanly:
- *   nohup node ~/zylos/.claude/skills/upgrade-claude/scripts/upgrade.js > /dev/null 2>&1 &
+ * IMPORTANT: Run with nohup and redirect output to log file:
+ *   nohup node ~/zylos/.claude/skills/upgrade-claude/scripts/upgrade.js >> ~/zylos/logs/upgrade.log 2>&1 &
  */
 
 import { execSync, execFileSync } from 'child_process';
@@ -54,7 +54,7 @@ function waitForClaudeExit() {
     waited += 2;
   }
 
-  console.log(`[upgrade-claude] Warning: Claude still running after ${MAX_EXIT_WAIT}s, proceeding anyway`);
+  console.error(`[upgrade-claude] ABORT: Claude still running after ${MAX_EXIT_WAIT}s, upgrade cancelled`);
   return false;
 }
 
@@ -91,7 +91,9 @@ function main() {
   enqueueExit();
 
   // Step 2: Wait for Claude to exit
-  waitForClaudeExit();
+  if (!waitForClaudeExit()) {
+    process.exit(1);
+  }
 
   // Step 3: Upgrade Claude Code
   upgradeClaudeCode();

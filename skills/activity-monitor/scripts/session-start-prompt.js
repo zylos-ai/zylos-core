@@ -22,8 +22,7 @@ try {
   execFileSync('node', [
     C4_CONTROL, 'enqueue',
     '--content', prompt,
-    '--priority', '0',
-    '--require-idle'
+    '--priority', '2'
   ], { stdio: 'pipe' });
 } catch {
   // Silently fail — session still starts even if enqueue fails
