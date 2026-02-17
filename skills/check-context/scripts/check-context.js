@@ -46,7 +46,6 @@ function main() {
       '--content', 'If context usage exceeds 70%, use the restart-claude skill to restart. If context is under 70%, just acknowledge.',
       '--priority', '3',
       '--require-idle',
-      '--available-in', '30',
       '--ack-deadline', '630'
     ]);
     console.log(`[check-context] Restart check enqueued: ${step2}`);
