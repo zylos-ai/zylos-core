@@ -30,11 +30,3 @@ node ~/zylos/.claude/skills/comm-bridge/scripts/c4-control.js enqueue --content 
 2. **Block subsequent messages**: require_idle prevents other messages from being dispatched
 3. **Deliver when idle**: Dispatcher delivers `/exit` to tmux when Claude is idle
 4. **Daemon restart**: activity-monitor detects exit and restarts Claude
-
-## Legacy Script
-
-For scenarios that need direct invocation (e.g., upgrade-claude):
-
-```bash
-nohup node ~/zylos/.claude/skills/restart-claude/scripts/restart.js > /dev/null 2>&1 &
-```
