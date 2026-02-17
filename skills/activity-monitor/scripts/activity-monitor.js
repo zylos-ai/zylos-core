@@ -633,10 +633,11 @@ function enqueueContextCheck() {
 
   if (!actResult.ok) {
     log(`Context act enqueue failed: ${actResult.output}`);
-  } else {
-    const actMatch = actResult.output.match(/control\s+(\d+)/i);
-    log(`Context check step 2 enqueued id=${actMatch?.[1] ?? '?'}`);
+    return false;
   }
+
+  const actMatch = actResult.output.match(/control\s+(\d+)/i);
+  log(`Context check step 2 enqueued id=${actMatch?.[1] ?? '?'}`);
 
   const now = Math.floor(Date.now() / 1000);
   writeContextCheckState(now);

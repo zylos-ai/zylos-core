@@ -109,7 +109,7 @@ function formatC4Reply(type, data) {
       let r = `zylos-core upgraded: ${from} -> ${to}`;
       if (changelog) r += `\n\nChangelog:\n${changelog}`;
       if (migrationHints?.length > 0) {
-        r += '\n\nACTION REQUIRED - New hooks to add to .claude/settings.json:';
+        r += '\n\nACTION REQUIRED - New hooks to add to ~/zylos/.claude/settings.json:';
         for (const hint of migrationHints) {
           r += `\n  [${hint.event}] ${hint.command} (timeout: ${hint.timeout}ms)`;
         }
