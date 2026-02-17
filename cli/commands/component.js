@@ -98,7 +98,7 @@ function formatC4Reply(type, data) {
       return r;
     }
     case 'self-upgrade': {
-      const { success, from, to, changelog, failedStep, error, rollback } = data;
+      const { success, from, to, changelog, failedStep, error, rollback, migrationHints } = data;
       if (!success) {
         let r = `zylos-core upgrade failed (step ${failedStep}): ${error}`;
         if (rollback?.performed) {
@@ -108,6 +108,13 @@ function formatC4Reply(type, data) {
       }
       let r = `zylos-core upgraded: ${from} -> ${to}`;
       if (changelog) r += `\n\nChangelog:\n${changelog}`;
+      if (migrationHints?.length > 0) {
+        r += '\n\nACTION REQUIRED - New hooks to add to .claude/settings.json:';
+        for (const hint of migrationHints) {
+          r += `\n  [${hint.event}] ${hint.command} (timeout: ${hint.timeout}ms)`;
+        }
+        r += '\nPlease add these hooks to ~/zylos/.claude/settings.json and restart Claude to apply.';
+      }
       return r;
     }
     case 'check-all': {
@@ -982,6 +989,15 @@ async function upgradeSelfCore({ providedTempDir } = {}) {
       console.log(`\n${success(`${bold('zylos-core')} upgraded: ${dim(result.from)} → ${bold(result.to)}`)}`);
       if (coreChangelog) {
         console.log(`\n${heading('Changelog:')}\n${coreChangelog}`);
+      }
+
+      // Show migration hints if any
+      if (result.migrationHints?.length > 0) {
+        console.log(`\n${warn('ACTION REQUIRED')} — New hooks to add to ${bold('.claude/settings.json')}:`);
+        for (const hint of result.migrationHints) {
+          console.log(`  ${yellow(`[${hint.event}]`)} ${hint.command} ${dim(`(timeout: ${hint.timeout}ms)`)}`);
+        }
+        console.log(`\nAdd these hooks to ${bold('~/zylos/.claude/settings.json')} and restart Claude to apply.`);
       }
 
       // Clean backup after successful upgrade

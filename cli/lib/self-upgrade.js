@@ -368,6 +368,63 @@ function listTemplateFiles(templatesDir) {
   return files;
 }
 
+/**
+ * Compare template settings.json hooks with installed settings.json.
+ * Returns an array of migration hint objects for hooks that exist in
+ * the template but are missing from the installed settings.
+ */
+function generateMigrationHints(templatesDir) {
+  const hints = [];
+
+  const templateSettingsPath = path.join(templatesDir, '.claude', 'settings.json');
+  if (!fs.existsSync(templateSettingsPath)) return hints;
+
+  const installedSettingsPath = path.join(ZYLOS_DIR, '.claude', 'settings.json');
+
+  let templateSettings, installedSettings;
+  try {
+    templateSettings = JSON.parse(fs.readFileSync(templateSettingsPath, 'utf8'));
+  } catch {
+    return hints;
+  }
+  try {
+    installedSettings = fs.existsSync(installedSettingsPath)
+      ? JSON.parse(fs.readFileSync(installedSettingsPath, 'utf8'))
+      : {};
+  } catch {
+    installedSettings = {};
+  }
+
+  // Compare hooks: find commands in template that are missing from installed
+  const templateHooks = templateSettings.hooks || {};
+  const installedHooks = installedSettings.hooks || {};
+
+  for (const [event, matchers] of Object.entries(templateHooks)) {
+    if (!Array.isArray(matchers)) continue;
+    const installedMatchers = installedHooks[event] || [];
+
+    for (const matcher of matchers) {
+      const templateCmds = (matcher.hooks || []).filter(h => h.type === 'command');
+      for (const templateCmd of templateCmds) {
+        // Check if this command exists in any installed matcher for this event
+        const found = installedMatchers.some(im =>
+          (im.hooks || []).some(h => h.type === 'command' && h.command === templateCmd.command)
+        );
+        if (!found) {
+          hints.push({
+            type: 'missing_hook',
+            event,
+            command: templateCmd.command,
+            timeout: templateCmd.timeout,
+          });
+        }
+      }
+    }
+  }
+
+  return hints;
+}
+
 // ---------------------------------------------------------------------------
 // 10-step self-upgrade pipeline
 // ---------------------------------------------------------------------------
@@ -809,6 +866,9 @@ export function runSelfUpgrade({ tempDir, newVersion, onStep } = {}) {
   const templatesDir = path.join(ctx.tempDir, 'templates');
   const templates = listTemplateFiles(templatesDir);
 
+  // Generate migration hints for settings that need manual updates
+  const migrationHints = generateMigrationHints(templatesDir);
+
   return {
     action: 'self_upgrade',
     success: true,
@@ -817,6 +877,7 @@ export function runSelfUpgrade({ tempDir, newVersion, onStep } = {}) {
     steps: ctx.steps,
     backupDir: ctx.backupDir,
     templates,
+    migrationHints,
   };
 }
 
