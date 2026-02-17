@@ -18,7 +18,7 @@ export const ENTER_VERIFY_MAX_RETRIES = 3;
 export const ENTER_VERIFY_WAIT_MS = 500;
 
 // For require_idle messages: minimum sustained idle seconds before delivery.
-export const REQUIRE_IDLE_MIN_SECONDS = 5;
+export const REQUIRE_IDLE_MIN_SECONDS = 3;
 // For require_idle messages: allow execution time before dispatching the next message.
 export const REQUIRE_IDLE_POST_SEND_HOLD_MS = 5000;
 export const REQUIRE_IDLE_EXECUTION_MAX_WAIT_MS = 120000;
