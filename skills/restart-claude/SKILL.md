@@ -18,14 +18,23 @@ Restart Claude Code session - sends /exit and lets activity-monitor daemon handl
 
 **Best Practice:** Before restarting, it's recommended to sync memory (update memory files) to preserve important context.
 
-**IMPORTANT: Must use `nohup ... &` pattern!**
+Enqueue `/exit` as a high-priority control message:
 
 ```bash
-nohup node ~/zylos/.claude/skills/restart-claude/scripts/restart.js > /dev/null 2>&1 &
+node ~/zylos/.claude/skills/comm-bridge/scripts/c4-control.js enqueue --content "/exit" --priority 1 --require-idle
 ```
 
 ## How It Works
 
-1. **Idle detection**: Waits for idle state (idle_seconds >= 3)
-2. **Send /exit**: Uses C4 Communication Bridge (priority=1, --no-reply)
-3. **Daemon restart**: activity-monitor detects exit and restarts Claude
+1. **Enqueue /exit**: Puts `/exit` into the control queue (priority=1, require_idle)
+2. **Block subsequent messages**: require_idle prevents other messages from being dispatched
+3. **Deliver when idle**: Dispatcher delivers `/exit` to tmux when Claude is idle
+4. **Daemon restart**: activity-monitor detects exit and restarts Claude
+
+## Legacy Script
+
+For scenarios that need direct invocation (e.g., upgrade-claude):
+
+```bash
+nohup node ~/zylos/.claude/skills/restart-claude/scripts/restart.js > /dev/null 2>&1 &
+```
