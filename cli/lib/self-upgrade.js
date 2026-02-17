@@ -377,7 +377,8 @@ function listTemplateFiles(templatesDir) {
 function extractScriptPath(command) {
   if (typeof command !== 'string') return '';
   const tokens = command.split(/\s+/);
-  for (const token of tokens) {
+  for (const raw of tokens) {
+    const token = raw.replace(/^["']|["']$/g, '');
     if (token.includes('/') && /\.\w+$/.test(token)) return token;
   }
   return command;
@@ -427,16 +428,19 @@ function generateMigrationHints(templatesDir) {
   const templateHooks = templateSettings.hooks || {};
   const installedHooks = installedSettings.hooks || {};
 
+  // Helper: safely get command hooks from a matcher entry
+  const getCmds = (m) =>
+    (m && typeof m === 'object' && Array.isArray(m.hooks) ? m.hooks : [])
+      .filter(h => h && h.type === 'command');
+
   // Collect core skill names from template hooks (for removed_hook scoping)
   const coreSkillNames = new Set();
   for (const matchers of Object.values(templateHooks)) {
     if (!Array.isArray(matchers)) continue;
     for (const m of matchers) {
-      for (const h of (m.hooks || [])) {
-        if (h.type === 'command') {
-          const name = extractSkillName(h.command);
-          if (name) coreSkillNames.add(name);
-        }
+      for (const h of getCmds(m)) {
+        const name = extractSkillName(h.command);
+        if (name) coreSkillNames.add(name);
       }
     }
   }
@@ -444,18 +448,17 @@ function generateMigrationHints(templatesDir) {
   // --- Forward pass: detect missing and modified hooks ---
   for (const [event, matchers] of Object.entries(templateHooks)) {
     if (!Array.isArray(matchers)) continue;
-    const installedMatchers = installedHooks[event] || [];
+    const installedMatchers = Array.isArray(installedHooks[event]) ? installedHooks[event] : [];
 
     for (const matcher of matchers) {
-      const templateCmds = (matcher.hooks || []).filter(h => h.type === 'command');
-      for (const templateCmd of templateCmds) {
+      for (const templateCmd of getCmds(matcher)) {
         const templateKey = extractScriptPath(templateCmd.command);
 
         // Find installed hook with the same script path
         let matched = null;
         for (const im of installedMatchers) {
-          matched = (im.hooks || []).find(
-            h => h.type === 'command' && extractScriptPath(h.command) === templateKey
+          matched = getCmds(im).find(
+            h => extractScriptPath(h.command) === templateKey
           );
           if (matched) break;
         }
@@ -484,11 +487,10 @@ function generateMigrationHints(templatesDir) {
   // --- Reverse pass: detect removed hooks (core skills only) ---
   for (const [event, matchers] of Object.entries(installedHooks)) {
     if (!Array.isArray(matchers)) continue;
-    const templateMatchers = templateHooks[event] || [];
+    const templateMatchers = Array.isArray(templateHooks[event]) ? templateHooks[event] : [];
 
     for (const matcher of matchers) {
-      const installedCmds = (matcher.hooks || []).filter(h => h.type === 'command');
-      for (const installedCmd of installedCmds) {
+      for (const installedCmd of getCmds(matcher)) {
         // Only flag hooks from core skills to avoid false positives
         // for optional component hooks
         const skillName = extractSkillName(installedCmd.command);
@@ -496,8 +498,8 @@ function generateMigrationHints(templatesDir) {
 
         const installedKey = extractScriptPath(installedCmd.command);
         const foundInTemplate = templateMatchers.some(tm =>
-          (tm.hooks || []).some(
-            h => h.type === 'command' && extractScriptPath(h.command) === installedKey
+          getCmds(tm).some(
+            h => extractScriptPath(h.command) === installedKey
           )
         );
 

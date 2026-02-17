@@ -256,8 +256,15 @@ function waitForMaintenance() {
 function hasStartupHook() {
   try {
     const settingsPath = path.join(ZYLOS_DIR, '.claude', 'settings.json');
-    const content = fs.readFileSync(settingsPath, 'utf8');
-    return content.includes('session-start-prompt.js');
+    const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+    const matchers = settings?.hooks?.SessionStart;
+    if (!Array.isArray(matchers)) return false;
+    return matchers.some(m =>
+      Array.isArray(m?.hooks) && m.hooks.some(
+        h => h?.type === 'command' && typeof h.command === 'string'
+          && h.command.includes('session-start-prompt.js')
+      )
+    );
   } catch {
     return false;
   }
