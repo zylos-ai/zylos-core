@@ -11,7 +11,8 @@ import { execFileSync } from 'child_process';
 import path from 'path';
 import os from 'os';
 
-const C4_CONTROL = path.join(os.homedir(), 'zylos/.claude/skills/comm-bridge/scripts/c4-control.js');
+const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
+const C4_CONTROL = path.join(ZYLOS_DIR, '.claude/skills/comm-bridge/scripts/c4-control.js');
 
 const prompt = [
   'reply to your human partner if they are waiting your reply,',
@@ -22,7 +23,8 @@ try {
   execFileSync('node', [
     C4_CONTROL, 'enqueue',
     '--content', prompt,
-    '--priority', '2'
+    '--priority', '2',
+    '--ack-deadline', '120'
   ], { stdio: 'pipe' });
 } catch {
   // Silently fail — session still starts even if enqueue fails

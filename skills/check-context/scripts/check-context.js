@@ -13,7 +13,8 @@ import { execFileSync } from 'child_process';
 import path from 'path';
 import os from 'os';
 
-const C4_CONTROL = path.join(os.homedir(), 'zylos/.claude/skills/comm-bridge/scripts/c4-control.js');
+const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
+const C4_CONTROL = path.join(ZYLOS_DIR, '.claude/skills/comm-bridge/scripts/c4-control.js');
 
 function enqueue(args) {
   try {
