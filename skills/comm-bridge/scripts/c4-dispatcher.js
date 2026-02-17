@@ -36,6 +36,7 @@ import {
   CONTROL_CLEANUP_INTERVAL_MS,
   ENTER_VERIFY_MAX_RETRIES,
   ENTER_VERIFY_WAIT_MS,
+  REQUIRE_IDLE_MIN_SECONDS,
   REQUIRE_IDLE_POST_SEND_HOLD_MS,
   REQUIRE_IDLE_EXECUTION_MAX_WAIT_MS,
   REQUIRE_IDLE_EXECUTION_POLL_MS,
@@ -86,7 +87,8 @@ function getClaudeState() {
     }
 
     const health = typeof status.health === 'string' ? status.health : 'ok';
-    return { state, health, healthy: true };
+    const idleSeconds = typeof status.idle_seconds === 'number' ? status.idle_seconds : 0;
+    return { state, health, healthy: true, idleSeconds };
   } catch (err) {
     log(`Warning: Error reading Claude status (${err.message})`);
     // health is fail-open by design; state still degrades to offline on read failure.
@@ -364,7 +366,7 @@ async function processNextMessage() {
     return { delivered: false, state: claudeState.state };
   }
 
-  if (item.require_idle === 1 && claudeState.state !== 'idle') {
+  if (item.require_idle === 1 && (claudeState.state !== 'idle' || claudeState.idleSeconds < REQUIRE_IDLE_MIN_SECONDS)) {
     releaseItem(item);
     return { delivered: false, state: claudeState.state };
   }

@@ -57,6 +57,7 @@ const CONTEXT_CHECK_INTERVAL = 3600; // 1 hour
 const DAILY_UPGRADE_HOUR = 5;        // 5:00 AM local time
 const DAILY_MEMORY_COMMIT_HOUR = 3;  // 3:00 AM local time
 const DAILY_COMMIT_SCRIPT = path.join(__dirname, '..', '..', 'zylos-memory', 'scripts', 'daily-commit.js');
+const CHECK_CONTEXT_SCRIPT = path.join(__dirname, '..', '..', 'check-context', 'scripts', 'check-context.js');
 
 // State
 let lastTruncateDay = '';
@@ -605,8 +606,6 @@ function writeContextCheckState(timestamp) {
 
 function enqueueContextCheck() {
   // Write state FIRST to prevent retry flooding.
-  // If state write fails, skip enqueue entirely (no side effects).
-  // If enqueue fails after state write, we just wait for next interval.
   const now = Math.floor(Date.now() / 1000);
   writeContextCheckState(now);
 
@@ -617,47 +616,19 @@ function enqueueContextCheck() {
     return false;
   }
 
-  // Step 1: Check context usage (report only, do not restart)
-  const checkContent = 'Context usage check. Use the check-context skill to get current context usage.';
-  const checkResult = runC4Control([
-    'enqueue',
-    '--content', checkContent,
-    '--priority', '3',
-    '--require-idle',
-    '--ack-deadline', '600'
-  ]);
-
-  if (!checkResult.ok) {
-    log(`Context check enqueue failed: ${checkResult.output}`);
+  // Delegate to check-context script (enqueues /context + restart decision)
+  try {
+    const output = execFileSync('node', [CHECK_CONTEXT_SCRIPT, '--with-restart-check'], {
+      encoding: 'utf8',
+      stdio: 'pipe'
+    }).trim();
+    log(`Context check: ${output}`);
+    return true;
+  } catch (err) {
+    const stderr = err.stderr ? String(err.stderr).trim() : '';
+    log(`Context check script failed: ${stderr || err.message}`);
     return false;
   }
-
-  const checkMatch = checkResult.output.match(/control\s+(\d+)/i);
-  if (!checkMatch) {
-    log(`Context check enqueue parse failed: ${checkResult.output}`);
-    return false;
-  }
-
-  log(`Context check step 1 enqueued id=${checkMatch[1]}`);
-
-  // Step 2: Act on result (deadline 630s, 30s after step 1's 600s)
-  const actContent = 'If context usage exceeds 70%, use the restart-claude skill to restart. If context is under 70%, just acknowledge.';
-  const actResult = runC4Control([
-    'enqueue',
-    '--content', actContent,
-    '--priority', '3',
-    '--require-idle',
-    '--ack-deadline', '630'
-  ]);
-
-  if (!actResult.ok) {
-    log(`Context act enqueue failed: ${actResult.output}`);
-    return false;
-  }
-
-  const actMatch = actResult.output.match(/control\s+(\d+)/i);
-  log(`Context check step 2 enqueued id=${actMatch?.[1] ?? '?'}`);
-  return true;
 }
 
 function maybeEnqueueContextCheck(claudeRunning, currentTime) {

@@ -25,8 +25,8 @@ export function validateChannel(channel, requirePath) {
 }
 
 export function validateEndpoint(endpoint) {
-  if (!/^[a-zA-Z0-9_-]+$/.test(endpoint)) {
-    throw new Error(`Invalid endpoint: ${endpoint}`);
+  if (!endpoint || typeof endpoint !== 'string') {
+    throw new Error('Invalid endpoint: must be a non-empty string');
   }
 
   return endpoint;

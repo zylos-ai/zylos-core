@@ -1,75 +1,54 @@
 #!/usr/bin/env node
 /**
  * Upgrade Claude Code Script (C4-integrated)
- * Sends /exit, waits for exit, upgrades Claude Code, activity-monitor restarts it
+ * Enqueues /exit via control queue, waits for exit, upgrades, activity-monitor restarts
  * Usage: node upgrade.js
  *
- * IMPORTANT: Run with nohup to allow Claude to exit cleanly:
- *   nohup node ~/zylos/.claude/skills/upgrade-claude/scripts/upgrade.js > /dev/null 2>&1 &
+ * IMPORTANT: Run with nohup and redirect output to log file:
+ *   nohup node ~/zylos/.claude/skills/upgrade-claude/scripts/upgrade.js >> ~/zylos/logs/upgrade.log 2>&1 &
  */
 
 import { execSync, execFileSync } from 'child_process';
 import path from 'path';
 import os from 'os';
-import fs from 'fs';
 
 const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
-const STATUS_FILE = path.join(ZYLOS_DIR, 'activity-monitor', 'claude-status.json');
-const MAX_WAIT_SECONDS = 600; // Max time to wait for idle (10 minutes)
-const CHECK_INTERVAL = 1; // Seconds between idle checks
-const MIN_IDLE_SECONDS = 3; // Require at least 3 seconds of idle time
+const C4_CONTROL = path.join(ZYLOS_DIR, '.claude/skills/comm-bridge/scripts/c4-control.js');
+const MAX_EXIT_WAIT = 120; // Wait up to 120 seconds for Claude to exit
 
 function sleep(seconds) {
   execSync(`sleep ${seconds}`);
 }
 
-function isClaudeIdle() {
+function enqueueExit() {
   try {
-    if (!fs.existsSync(STATUS_FILE)) {
-      // No status file, assume idle
-      return true;
-    }
-    const content = fs.readFileSync(STATUS_FILE, 'utf8');
-    const status = JSON.parse(content);
-    return status.idle_seconds >= MIN_IDLE_SECONDS;
-  } catch {
-    // Error reading file, assume idle
-    return true;
-  }
-}
-
-function waitForIdle() {
-  let waited = 0;
-  while (waited < MAX_WAIT_SECONDS) {
-    if (isClaudeIdle()) {
-      return true;
-    }
-    sleep(CHECK_INTERVAL);
-    waited += CHECK_INTERVAL;
-  }
-  // Timeout - proceed anyway
-  console.log(`Warning: Claude still busy after ${MAX_WAIT_SECONDS}s, proceeding anyway`);
-  return false;
-}
-
-function sendViaC4(message) {
-  const c4ReceivePath = path.join(os.homedir(), 'zylos/.claude/skills/comm-bridge/scripts/c4-receive.js');
-
-  try {
-    execFileSync(
+    const output = execFileSync(
       'node',
-      [c4ReceivePath, '--priority', '1', '--no-reply', '--require-idle', '--content', message],
-      { stdio: 'inherit' }
+      [C4_CONTROL, 'enqueue', '--content', '/exit', '--priority', '1', '--require-idle', '--ack-deadline', '300'],
+      { encoding: 'utf8', stdio: 'pipe' }
     );
+    const match = output.match(/control\s+(\d+)/);
+    const controlId = match ? match[1] : null;
+    console.log(`[upgrade-claude] /exit enqueued via control queue (id=${controlId})`);
+    return controlId;
   } catch (err) {
-    console.error(`Failed to send via C4: ${err.message}`);
+    console.error(`Failed to enqueue /exit: ${err.message}`);
     process.exit(1);
+  }
+}
+
+function cancelExit(controlId) {
+  if (!controlId) return;
+  try {
+    execFileSync('node', [C4_CONTROL, 'ack', '--id', controlId], { stdio: 'pipe' });
+    console.log(`[upgrade-claude] Cancelled queued /exit (id=${controlId})`);
+  } catch {
+    console.error(`[upgrade-claude] WARNING: Failed to cancel queued /exit (id=${controlId})`);
   }
 }
 
 function isClaudeRunning() {
   try {
-    // Check if claude process is running
     execSync('pgrep -f "claude.*--dangerously-skip-permissions" > /dev/null 2>&1');
     return true;
   } catch {
@@ -78,24 +57,23 @@ function isClaudeRunning() {
 }
 
 function waitForClaudeExit() {
-  const MAX_EXIT_WAIT = 60; // Wait up to 60 seconds for Claude to exit
   let waited = 0;
 
   while (waited < MAX_EXIT_WAIT) {
     if (!isClaudeRunning()) {
-      console.log('Claude process has exited');
+      console.log('[upgrade-claude] Claude process has exited');
       return true;
     }
     sleep(2);
     waited += 2;
   }
 
-  console.log(`Warning: Claude still running after ${MAX_EXIT_WAIT}s, proceeding anyway`);
+  console.error(`[upgrade-claude] ABORT: Claude still running after ${MAX_EXIT_WAIT}s, upgrade cancelled`);
   return false;
 }
 
 function upgradeClaudeCode() {
-  console.log('Starting Claude Code upgrade...');
+  console.log('[upgrade-claude] Starting Claude Code upgrade...');
 
   try {
     process.chdir(os.homedir());
@@ -104,37 +82,35 @@ function upgradeClaudeCode() {
       stdio: 'pipe'
     });
     console.log(output);
-    console.log('Upgrade completed successfully');
+    console.log('[upgrade-claude] Upgrade completed successfully');
   } catch (err) {
-    console.error(`ERROR: Upgrade failed! ${err.message}`);
+    console.error(`[upgrade-claude] ERROR: Upgrade failed! ${err.message}`);
     process.exit(1);
   }
 
-  // Check new version
   try {
     const newVersion = execSync('~/.local/bin/claude --version 2>/dev/null', {
       encoding: 'utf8'
     }).trim();
-    console.log(`New version: ${newVersion}`);
+    console.log(`[upgrade-claude] New version: ${newVersion}`);
   } catch {
-    console.log('New version: unknown');
+    console.log('[upgrade-claude] New version: unknown');
   }
 }
 
 function main() {
   console.log('[upgrade-claude] Starting upgrade process');
 
-  // Step 1: Wait for Claude to be idle
-  waitForIdle();
+  // Step 1: Enqueue /exit via control queue (dispatcher handles idle detection)
+  const controlId = enqueueExit();
 
-  // Step 2: Send /exit command via C4
-  sendViaC4('/exit');
+  // Step 2: Wait for Claude to exit
+  if (!waitForClaudeExit()) {
+    cancelExit(controlId);
+    process.exit(1);
+  }
 
-  // Step 3: Wait for Claude to exit
-  sleep(3); // Give it a moment to start exiting
-  waitForClaudeExit();
-
-  // Step 4: Upgrade Claude Code
+  // Step 3: Upgrade Claude Code
   upgradeClaudeCode();
 
   // Done - activity-monitor will restart Claude automatically

@@ -20,13 +20,12 @@ Upgrade Claude Code to the latest version - sends /exit, waits for exit, upgrade
 **IMPORTANT: Must use `nohup ... &` pattern!**
 
 ```bash
-nohup node ~/zylos/.claude/skills/upgrade-claude/scripts/upgrade.js > /dev/null 2>&1 &
+nohup node ~/zylos/.claude/skills/upgrade-claude/scripts/upgrade.js >> ~/zylos/logs/upgrade.log 2>&1 &
 ```
 
 ## How It Works
 
-1. **Idle detection**: Waits for idle state (idle_seconds >= 3)
-2. **Send /exit**: Uses C4 Communication Bridge (priority=1, --no-reply)
-3. **Wait for exit**: Monitors Claude process until it exits
-4. **Upgrade**: Runs native installer (`curl -fsSL https://claude.ai/install.sh | bash`)
-5. **Daemon restart**: activity-monitor detects exit and restarts Claude automatically
+1. **Enqueue /exit**: Puts `/exit` into the control queue (priority=1, require_idle) — dispatcher handles idle detection and message blocking
+2. **Wait for exit**: Monitors Claude process until it exits (up to 120s); aborts if timeout
+3. **Upgrade**: Runs native installer (`curl -fsSL https://claude.ai/install.sh | bash`)
+4. **Daemon restart**: activity-monitor detects exit and restarts Claude automatically
