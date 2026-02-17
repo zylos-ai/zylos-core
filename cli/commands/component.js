@@ -190,12 +190,21 @@ export async function upgradeComponent(args) {
   const upgradeAll = args.includes('--all');
   const skipEval = args.includes('--skip-eval');
 
+  // Parse --branch <name> flag
+  const branchIndex = args.indexOf('--branch');
+  const branch = branchIndex !== -1 ? args[branchIndex + 1] : null;
+  if (branchIndex !== -1 && !branch) {
+    console.error('Error: --branch requires a branch name.');
+    process.exit(1);
+  }
+
   // Get target component (filter out flags and flag values)
+  const flagsWithValues = new Set(['--temp-dir', '--branch']);
   const target = args.find((a, i) => {
     if (a.startsWith('-')) return false;
     if (a === 'confirm') return false;
     // Skip values that follow flags with arguments
-    if (i > 0 && args[i - 1] === '--temp-dir') return false;
+    if (i > 0 && flagsWithValues.has(args[i - 1])) return false;
     return true;
   });
 
@@ -207,7 +216,7 @@ export async function upgradeComponent(args) {
     // Parse --temp-dir flag (reuse previously downloaded package from --check)
     const selfTempDirIdx = args.indexOf('--temp-dir');
     const selfProvidedTempDir = selfTempDirIdx !== -1 ? args[selfTempDirIdx + 1] : null;
-    const ok = await upgradeSelfCore({ providedTempDir: selfProvidedTempDir });
+    const ok = await upgradeSelfCore({ providedTempDir: selfProvidedTempDir, branch });
     if (!ok) process.exit(1);
     return;
   }
@@ -227,6 +236,7 @@ export async function upgradeComponent(args) {
     console.log('  --json         Output in JSON format');
     console.log('  --yes, -y      Skip confirmation');
     console.log('  --skip-eval    Skip upgrade analysis of local changes');
+    console.log('  --branch <b>   Upgrade from a specific branch (e.g. feat/xxx)');
     console.log('  --temp-dir <d> Reuse previously downloaded package from --check');
     console.log('\nExamples:');
     console.log('  zylos upgrade telegram --check --json');
@@ -281,7 +291,7 @@ export async function upgradeComponent(args) {
   }
 
   // Mode 2 & 3: Full upgrade flow (lock-first)
-  const ok = await handleUpgradeFlow(target, { jsonOutput, skipConfirm: skipConfirm || explicitConfirm, skipEval, providedTempDir });
+  const ok = await handleUpgradeFlow(target, { jsonOutput, skipConfirm: skipConfirm || explicitConfirm, skipEval, providedTempDir, branch });
   if (!ok) process.exit(1);
 }
 
@@ -407,7 +417,7 @@ async function handleCheckOnly(component, { jsonOutput }) {
  * Returns true on success, false on failure.
  * Does NOT call process.exit() — caller decides exit behavior.
  */
-async function handleUpgradeFlow(component, { jsonOutput, skipConfirm, skipEval, providedTempDir }) {
+async function handleUpgradeFlow(component, { jsonOutput, skipConfirm, skipEval, providedTempDir, branch }) {
   const skillDir = path.join(SKILLS_DIR, component);
   let tempDir = providedTempDir || null;
   const tempDirWasProvided = !!providedTempDir;
@@ -426,21 +436,24 @@ async function handleUpgradeFlow(component, { jsonOutput, skipConfirm, skipEval,
   }
 
   try {
-    // 2. Check for updates
+    // 2. Check for updates (skip version comparison when --branch is specified)
     const check = checkForUpdates(component);
 
     if (!check.success) {
-      if (jsonOutput) {
-        const errOutput = { action: 'check', component, ...check };
-        errOutput.reply = formatC4Reply('error', check);
-        console.log(JSON.stringify(errOutput, null, 2));
-      } else {
-        console.error(`Error: ${check.message}`);
+      if (!branch) {
+        if (jsonOutput) {
+          const errOutput = { action: 'check', component, ...check };
+          errOutput.reply = formatC4Reply('error', check);
+          console.log(JSON.stringify(errOutput, null, 2));
+        } else {
+          console.error(`Error: ${check.message}`);
+        }
+        return false;
       }
-      return false;
+      // When --branch is specified, version check failure is non-fatal
     }
 
-    if (!check.hasUpdate) {
+    if (!branch && check.success && !check.hasUpdate) {
       if (jsonOutput) {
         const output = { action: 'check', component, ...check };
         output.reply = formatC4Reply('check', { component, ...check });
@@ -480,11 +493,12 @@ async function handleUpgradeFlow(component, { jsonOutput, skipConfirm, skipEval,
         return false;
       }
 
+      const downloadLabel = branch ? `${component} (branch: ${branch})` : `${component}@${check.latest}`;
       if (!jsonOutput) {
-        console.log(`\nDownloading ${bold(component)}@${bold(check.latest)}...`);
+        console.log(`\nDownloading ${bold(downloadLabel)}...`);
       }
 
-      const dlResult = downloadToTemp(check.repo, check.latest);
+      const dlResult = downloadToTemp(check.repo, check.latest, branch);
       if (!dlResult.success) {
         if (jsonOutput) {
           const errOutput = { action: 'upgrade', component, success: false, error: dlResult.error };
@@ -852,7 +866,7 @@ function handleSelfCheckOnly({ jsonOutput }) {
  * Returns true on success, false on failure.
  * Does NOT call process.exit() — caller decides exit behavior.
  */
-async function upgradeSelfCore({ providedTempDir } = {}) {
+async function upgradeSelfCore({ providedTempDir, branch } = {}) {
   const jsonOutput = process.argv.includes('--json');
   const skipConfirm = process.argv.includes('--yes') || process.argv.includes('-y');
   let tempDir = providedTempDir || null;
@@ -872,10 +886,10 @@ async function upgradeSelfCore({ providedTempDir } = {}) {
   }
 
   try {
-    // 2. Check for updates
+    // 2. Check for updates (skip version comparison when --branch is specified)
     const check = checkForCoreUpdates();
 
-    if (!check.success) {
+    if (!check.success && !branch) {
       if (jsonOutput) {
         const errOutput = { action: 'check', target: 'zylos-core', ...check };
         errOutput.reply = formatC4Reply('error', check);
@@ -886,7 +900,7 @@ async function upgradeSelfCore({ providedTempDir } = {}) {
       return false;
     }
 
-    if (!check.hasUpdate) {
+    if (!branch && check.success && !check.hasUpdate) {
       if (jsonOutput) {
         const output = { action: 'check', target: 'zylos-core', ...check };
         output.reply = formatC4Reply('self-check', check);
@@ -915,11 +929,12 @@ async function upgradeSelfCore({ providedTempDir } = {}) {
         console.log(`\n${dim(`Reusing previously downloaded package: ${tempDir}`)}`);
       }
     } else {
+      const downloadLabel = branch ? `zylos-core (branch: ${branch})` : `zylos-core@${check.latest}`;
       if (!jsonOutput) {
-        console.log(`\nDownloading ${bold('zylos-core')}@${bold(check.latest)}...`);
+        console.log(`\nDownloading ${bold(downloadLabel)}...`);
       }
 
-      const dlResult = downloadCoreToTemp(check.latest);
+      const dlResult = downloadCoreToTemp(check.latest, branch);
       if (!dlResult.success) {
         if (jsonOutput) {
           const errOutput = { action: 'self_upgrade', success: false, error: dlResult.error };

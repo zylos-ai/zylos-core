@@ -84,8 +84,17 @@ export function checkForCoreUpdates() {
  * @param {string} version
  * @returns {{ success: boolean, tempDir?: string, error?: string }}
  */
-export function downloadCoreToTemp(version) {
+export function downloadCoreToTemp(version, branch) {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-self-upgrade-'));
+
+  if (branch) {
+    const branchResult = downloadBranch(REPO, branch, tempDir);
+    if (!branchResult.success) {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+      return { success: false, error: branchResult.error };
+    }
+    return { success: true, tempDir };
+  }
 
   const result = downloadArchive(REPO, version, tempDir);
   if (!result.success) {
