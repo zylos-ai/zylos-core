@@ -5,6 +5,25 @@ All notable changes to zylos-core will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.6] - 2026-02-17
+
+### Added
+- `zylos upgrade --branch <name>` flag for testing PR branches before merge (#111)
+- Session startup hook (`session-start-prompt.js`) for injecting context at session start (#111)
+- Upgrade migration hints: detect new, modified, and removed hooks by script path matching (#111)
+- `hasStartupHook()` with fallback to C4 control enqueue when hook is not configured (#111)
+
+### Changed
+- Context check split into two-step flow with deadline spacing (600s/630s) (#111)
+- Write context check state before enqueue to prevent retry flooding (#111)
+- Control queue dispatch uses ORDER BY id for deterministic FIFO ordering (#111)
+
+### Fixed
+- Resolve repo fallback for `--branch` upgrade when version check fails (#111)
+- Reject flag-like values (e.g. `--self`) as branch names (#111)
+- Anchor `hasStartupHook()` regex to path separator to prevent false matches (#111)
+- Extract last path-like token in hook commands to skip shell prefixes (#111)
+
 ## [0.1.5] - 2026-02-15
 
 ### Added
