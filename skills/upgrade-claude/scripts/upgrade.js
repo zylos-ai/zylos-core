@@ -24,7 +24,7 @@ function enqueueExit() {
   try {
     const output = execFileSync(
       'node',
-      [C4_CONTROL, 'enqueue', '--content', '/exit', '--priority', '1', '--require-idle'],
+      [C4_CONTROL, 'enqueue', '--content', '/exit', '--priority', '1', '--require-idle', '--ack-deadline', '300'],
       { encoding: 'utf8', stdio: 'pipe' }
     );
     const match = output.match(/control\s+(\d+)/);
