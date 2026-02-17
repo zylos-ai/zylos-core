@@ -5,6 +5,26 @@ All notable changes to zylos-core will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.7] - 2026-02-17
+
+### Added
+- Dispatcher `REQUIRE_IDLE_MIN_SECONDS` config: sustained idle check before delivering require_idle messages (#113)
+
+### Fixed
+- Remove endpoint format restriction from C4 validation — endpoint format is now channel-specific (#113)
+- restart-claude: use c4-control enqueue instead of nohup script to prevent race condition (#113)
+- upgrade-claude: use c4-control enqueue instead of script-level idle detection (#113)
+- upgrade-claude: cancel queued /exit on timeout abort to prevent orphaned restarts (#113)
+- upgrade-claude: add ack-deadline to /exit enqueue to prevent stale running records (#113)
+- check-context: use c4-control enqueue with `--with-restart-check` flag (#113)
+- Dispatcher: require `idle_seconds >= 3` (sustained idle) before delivering require_idle messages (#113)
+
+### Changed
+- Increase file attachment threshold from 1KB to 2KB (#113)
+- Simplify activity-monitor `enqueueContextCheck()` to delegate to check-context.js (#113)
+- Delete legacy `restart.js` script (no remaining callers) (#113)
+- Session-start-prompt: enqueue via c4-control instead of direct c4-receive (#113)
+
 ## [0.1.6] - 2026-02-17
 
 ### Added
