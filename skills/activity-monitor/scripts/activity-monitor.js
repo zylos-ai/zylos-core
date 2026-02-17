@@ -604,6 +604,19 @@ function writeContextCheckState(timestamp) {
 }
 
 function enqueueContextCheck() {
+  // Write state FIRST to prevent retry flooding.
+  // If state write fails, skip enqueue entirely (no side effects).
+  // If enqueue fails after state write, we just wait for next interval.
+  const now = Math.floor(Date.now() / 1000);
+  writeContextCheckState(now);
+
+  // Verify state was actually written (writeContextCheckState catches its own errors)
+  const state = loadContextCheckState();
+  if (!state || state.last_check_at !== now) {
+    log('Context check: state write failed, skipping enqueue');
+    return false;
+  }
+
   // Step 1: Check context usage (report only, do not restart)
   const checkContent = 'Context usage check. Use the check-context skill to get current context usage.';
   const checkResult = runC4Control([
@@ -640,17 +653,11 @@ function enqueueContextCheck() {
 
   if (!actResult.ok) {
     log(`Context act enqueue failed: ${actResult.output}`);
-    // Still mark as checked to prevent retry flooding — step 1 already enqueued
-    const now = Math.floor(Date.now() / 1000);
-    writeContextCheckState(now);
     return false;
   }
 
   const actMatch = actResult.output.match(/control\s+(\d+)/i);
   log(`Context check step 2 enqueued id=${actMatch?.[1] ?? '?'}`);
-
-  const now = Math.floor(Date.now() / 1000);
-  writeContextCheckState(now);
   return true;
 }
 
