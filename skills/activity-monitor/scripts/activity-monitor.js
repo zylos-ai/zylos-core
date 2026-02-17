@@ -597,33 +597,49 @@ function writeContextCheckState(timestamp) {
 }
 
 function enqueueContextCheck() {
-  const content = [
-    'Context usage check. Use the check-context skill to get current context usage.',
-    'If context usage exceeds 70%, use the restart-claude skill to restart.'
-  ].join(' ');
-
-  const result = runC4Control([
+  // Step 1: Check context usage
+  const checkContent = 'Context usage check. Use the check-context skill to get current context usage. If context usage exceeds 70%, use the restart-claude skill to restart.';
+  const checkResult = runC4Control([
     'enqueue',
-    '--content', content,
+    '--content', checkContent,
     '--priority', '3',
     '--require-idle',
     '--ack-deadline', '600'
   ]);
 
-  if (!result.ok) {
-    log(`Context check enqueue failed: ${result.output}`);
+  if (!checkResult.ok) {
+    log(`Context check enqueue failed: ${checkResult.output}`);
     return false;
   }
 
-  const match = result.output.match(/control\s+(\d+)/i);
-  if (!match) {
-    log(`Context check enqueue parse failed: ${result.output}`);
+  const checkMatch = checkResult.output.match(/control\s+(\d+)/i);
+  if (!checkMatch) {
+    log(`Context check enqueue parse failed: ${checkResult.output}`);
     return false;
+  }
+
+  log(`Context check step 1 enqueued id=${checkMatch[1]}`);
+
+  // Step 2: Act on result (delayed 30s, deadline 630s)
+  const actContent = 'If context usage exceeds 70%, use the restart-claude skill to restart. If context is under 70%, just acknowledge.';
+  const actResult = runC4Control([
+    'enqueue',
+    '--content', actContent,
+    '--priority', '3',
+    '--require-idle',
+    '--available-in', '30',
+    '--ack-deadline', '630'
+  ]);
+
+  if (!actResult.ok) {
+    log(`Context act enqueue failed: ${actResult.output}`);
+  } else {
+    const actMatch = actResult.output.match(/control\s+(\d+)/i);
+    log(`Context check step 2 enqueued id=${actMatch?.[1] ?? '?'}`);
   }
 
   const now = Math.floor(Date.now() / 1000);
   writeContextCheckState(now);
-  log(`Context check enqueued id=${match[1]}`);
   return true;
 }
 
