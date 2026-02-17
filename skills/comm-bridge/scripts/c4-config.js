@@ -22,7 +22,7 @@ export const REQUIRE_IDLE_POST_SEND_HOLD_MS = 5000;
 export const REQUIRE_IDLE_EXECUTION_MAX_WAIT_MS = 120000;
 export const REQUIRE_IDLE_EXECUTION_POLL_MS = 1000;
 
-export const FILE_SIZE_THRESHOLD = 1500; // bytes
+export const FILE_SIZE_THRESHOLD = 2048; // bytes
 export const CONTENT_PREVIEW_CHARS = 100;
 
 export const TMUX_SESSION = 'claude-main';
