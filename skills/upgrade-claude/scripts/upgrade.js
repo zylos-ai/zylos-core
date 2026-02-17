@@ -22,15 +22,28 @@ function sleep(seconds) {
 
 function enqueueExit() {
   try {
-    execFileSync(
+    const output = execFileSync(
       'node',
       [C4_CONTROL, 'enqueue', '--content', '/exit', '--priority', '1', '--require-idle'],
-      { stdio: 'inherit' }
+      { encoding: 'utf8', stdio: 'pipe' }
     );
-    console.log('[upgrade-claude] /exit enqueued via control queue');
+    const match = output.match(/control\s+(\d+)/);
+    const controlId = match ? match[1] : null;
+    console.log(`[upgrade-claude] /exit enqueued via control queue (id=${controlId})`);
+    return controlId;
   } catch (err) {
     console.error(`Failed to enqueue /exit: ${err.message}`);
     process.exit(1);
+  }
+}
+
+function cancelExit(controlId) {
+  if (!controlId) return;
+  try {
+    execFileSync('node', [C4_CONTROL, 'ack', '--id', controlId], { stdio: 'pipe' });
+    console.log(`[upgrade-claude] Cancelled queued /exit (id=${controlId})`);
+  } catch {
+    console.error(`[upgrade-claude] WARNING: Failed to cancel queued /exit (id=${controlId})`);
   }
 }
 
@@ -89,10 +102,11 @@ function main() {
   console.log('[upgrade-claude] Starting upgrade process');
 
   // Step 1: Enqueue /exit via control queue (dispatcher handles idle detection)
-  enqueueExit();
+  const controlId = enqueueExit();
 
   // Step 2: Wait for Claude to exit
   if (!waitForClaudeExit()) {
+    cancelExit(controlId);
     process.exit(1);
   }
 
