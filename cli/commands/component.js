@@ -9,7 +9,7 @@ import { SKILLS_DIR, COMPONENTS_DIR } from '../lib/config.js';
 import { bold, dim, green, red, yellow, cyan, success, error, warn, heading } from '../lib/colors.js';
 import { loadRegistry } from '../lib/registry.js';
 import { loadComponents, saveComponents } from '../lib/components.js';
-import { checkForUpdates, runUpgrade, downloadToTemp, readChangelog, filterChangelog, cleanupTemp } from '../lib/upgrade.js';
+import { checkForUpdates, getRepo, runUpgrade, downloadToTemp, readChangelog, filterChangelog, cleanupTemp } from '../lib/upgrade.js';
 import {
   checkForCoreUpdates, runSelfUpgrade,
   downloadCoreToTemp, readChangelog as readCoreChangelog,
@@ -193,7 +193,7 @@ export async function upgradeComponent(args) {
   // Parse --branch <name> flag
   const branchIndex = args.indexOf('--branch');
   const branch = branchIndex !== -1 ? args[branchIndex + 1] : null;
-  if (branchIndex !== -1 && !branch) {
+  if (branchIndex !== -1 && (!branch || branch.startsWith('-'))) {
     console.error('Error: --branch requires a branch name.');
     process.exit(1);
   }
@@ -482,7 +482,8 @@ async function handleUpgradeFlow(component, { jsonOutput, skipConfirm, skipEval,
         console.log(`\n${dim(`Reusing previously downloaded package from ${tempDir}`)}`);
       }
     } else {
-      if (!check.repo) {
+      const repo = check.repo || (branch ? getRepo(component) : null);
+      if (!repo) {
         if (jsonOutput) {
           const errOutput = { action: 'upgrade', component, success: false, error: 'No repo configured' };
           errOutput.reply = formatC4Reply('error', { message: 'No repo configured' });
@@ -498,7 +499,7 @@ async function handleUpgradeFlow(component, { jsonOutput, skipConfirm, skipEval,
         console.log(`\nDownloading ${bold(downloadLabel)}...`);
       }
 
-      const dlResult = downloadToTemp(check.repo, check.latest, branch);
+      const dlResult = downloadToTemp(repo, check.latest, branch);
       if (!dlResult.success) {
         if (jsonOutput) {
           const errOutput = { action: 'upgrade', component, success: false, error: dlResult.error };

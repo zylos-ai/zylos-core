@@ -47,7 +47,7 @@ function getLocalVersion(skillDir) {
 /**
  * Get the repo for a component from components.json or registry.
  */
-function getRepo(component) {
+export function getRepo(component) {
   const components = loadComponents();
   if (components[component]?.repo) return components[component].repo;
   const registry = loadLocalRegistry();
