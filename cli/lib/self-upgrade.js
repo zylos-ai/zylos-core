@@ -376,15 +376,18 @@ function listTemplateFiles(templatesDir) {
  */
 function extractScriptPath(command) {
   if (typeof command !== 'string') return '';
-  const tokens = command.split(/\s+/);
-  for (const raw of tokens) {
+  // Use the LAST path-like token so that shell prefixes
+  // (e.g. "source ~/.nvm/nvm.sh && node ~/path/script.js") are skipped
+  let result = null;
+  for (const raw of command.split(/\s+/)) {
     const token = raw.replace(/^["']|["']$/g, '');
     if (token.includes('/') && /\.\w+$/.test(token)) {
-      // Normalize ~ to absolute path for consistent comparison
-      return token.startsWith('~/') ? path.join(os.homedir(), token.slice(2)) : token;
+      result = token;
     }
   }
-  return command;
+  if (!result) return command;
+  // Normalize ~ to absolute path for consistent comparison
+  return result.startsWith('~/') ? path.join(os.homedir(), result.slice(2)) : result;
 }
 
 /**
