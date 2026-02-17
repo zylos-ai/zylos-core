@@ -262,7 +262,7 @@ function hasStartupHook() {
     return matchers.some(m =>
       Array.isArray(m?.hooks) && m.hooks.some(
         h => h?.type === 'command' && typeof h.command === 'string'
-          && h.command.includes('session-start-prompt.js')
+          && /session-start-prompt\.js(?:\s|$)/.test(h.command)
       )
     );
   } catch {

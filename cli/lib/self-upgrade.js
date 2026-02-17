@@ -379,7 +379,10 @@ function extractScriptPath(command) {
   const tokens = command.split(/\s+/);
   for (const raw of tokens) {
     const token = raw.replace(/^["']|["']$/g, '');
-    if (token.includes('/') && /\.\w+$/.test(token)) return token;
+    if (token.includes('/') && /\.\w+$/.test(token)) {
+      // Normalize ~ to absolute path for consistent comparison
+      return token.startsWith('~/') ? path.join(os.homedir(), token.slice(2)) : token;
+    }
   }
   return command;
 }
