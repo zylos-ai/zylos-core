@@ -633,6 +633,9 @@ function enqueueContextCheck() {
 
   if (!actResult.ok) {
     log(`Context act enqueue failed: ${actResult.output}`);
+    // Still mark as checked to prevent retry flooding — step 1 already enqueued
+    const now = Math.floor(Date.now() / 1000);
+    writeContextCheckState(now);
     return false;
   }
 

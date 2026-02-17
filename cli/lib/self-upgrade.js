@@ -375,6 +375,7 @@ function listTemplateFiles(templatesDir) {
  * Falls back to the full command if no path-like token is found.
  */
 function extractScriptPath(command) {
+  if (typeof command !== 'string') return '';
   const tokens = command.split(/\s+/);
   for (const token of tokens) {
     if (token.includes('/') && /\.\w+$/.test(token)) return token;
@@ -389,6 +390,7 @@ function extractScriptPath(command) {
  * Returns null if the pattern doesn't match.
  */
 function extractSkillName(command) {
+  if (typeof command !== 'string') return null;
   const match = command.match(/skills\/([^/]+)\//);
   return match ? match[1] : null;
 }
