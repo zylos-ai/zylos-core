@@ -5,6 +5,18 @@ All notable changes to zylos-core will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.8] - 2026-02-18
+
+### Added
+- restart-claude: structured 5-step pre-restart session handoff checklist — stop background tasks, sync memory, write handoff summary, send to user/console, enqueue /exit (#117)
+- upgrade-claude: same 5-step pre-upgrade session handoff checklist (#117)
+- CLAUDE.md: context overflow protection rule — research tasks with many searches must use background subagents (#116)
+- upgrade-claude: ISO timestamps on all log output for post-mortem analysis (#118)
+
+### Fixed
+- `zylos add`: try public URL first before authenticated GitHub API — fixes 403 on public repos when token lacks org access (#115)
+- `fetchRawFile` and `fetchLatestTag`: same public-first fallback pattern (#115)
+
 ## [0.1.7] - 2026-02-17
 
 ### Added
