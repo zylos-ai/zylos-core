@@ -12,8 +12,9 @@ import { copyTree } from './fs-utils.js';
 
 /**
  * Download a tarball from a URL using curl.
- * When a GitHub token is available, uses the GitHub API endpoint
- * (works for both public and private repos).
+ * Tries the public endpoint first (works for public repos without auth),
+ * then falls back to the authenticated GitHub API if a token is available.
+ * This avoids 403 errors when a token lacks org access for public repos.
  *
  * @param {string} repo - GitHub repo in "org/name" format
  * @param {string} ref - Git ref (tag name or branch name)
@@ -21,25 +22,37 @@ import { copyTree } from './fs-utils.js';
  * @param {string} tarballPath - Destination file path for the tarball
  */
 function curlDownload(repo, ref, refType, tarballPath) {
-  const token = getGitHubToken();
-
-  if (token) {
-    // GitHub API endpoint — works for public and private repos
-    const url = `https://api.github.com/repos/${repo}/tarball/${ref}`;
-    execFileSync('curl', ['-fsSL', '-H', `Authorization: Bearer ${token}`, '-o', tarballPath, url], {
+  // 1. Try public endpoint first (no auth needed for public repos)
+  const publicUrl = refType === 'tag'
+    ? `https://github.com/${repo}/archive/refs/tags/${ref}.tar.gz`
+    : `https://github.com/${repo}/archive/refs/heads/${ref}.tar.gz`;
+  try {
+    execFileSync('curl', ['-fsSL', '-o', tarballPath, publicUrl], {
       timeout: 60000,
       stdio: 'pipe',
     });
-  } else {
-    // Public endpoint — only works for public repos
-    const url = refType === 'tag'
-      ? `https://github.com/${repo}/archive/refs/tags/${ref}.tar.gz`
-      : `https://github.com/${repo}/archive/refs/heads/${ref}.tar.gz`;
-    execFileSync('curl', ['-fsSL', '-o', tarballPath, url], {
-      timeout: 60000,
-      stdio: 'pipe',
-    });
+    return;
+  } catch {
+    // Public download failed — repo may be private, try with auth
   }
+
+  // 2. Fall back to authenticated GitHub API (for private repos)
+  const token = getGitHubToken();
+  if (!token) {
+    // No token available — re-throw by attempting public download again
+    // (this gives the caller the original error message)
+    execFileSync('curl', ['-fsSL', '-o', tarballPath, publicUrl], {
+      timeout: 60000,
+      stdio: 'pipe',
+    });
+    return;
+  }
+
+  const apiUrl = `https://api.github.com/repos/${repo}/tarball/${ref}`;
+  execFileSync('curl', ['-fsSL', '-H', `Authorization: Bearer ${token}`, '-o', tarballPath, apiUrl], {
+    timeout: 60000,
+    stdio: 'pipe',
+  });
 }
 
 /**
