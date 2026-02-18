@@ -44,7 +44,8 @@ export function getGitHubToken() {
 
 /**
  * Fetch raw file content from a GitHub repo.
- * Uses GitHub API with auth for private repos, falls back to raw.githubusercontent.com.
+ * Tries public endpoint first, falls back to authenticated GitHub API
+ * for private repos.
  *
  * @param {string} repo - GitHub repo in "org/name" format
  * @param {string} filePath - Path to file in the repo (e.g. "SKILL.md")
@@ -53,25 +54,34 @@ export function getGitHubToken() {
  * @throws {Error} If fetch fails
  */
 export function fetchRawFile(repo, filePath, branch = 'main') {
-  const token = getGitHubToken();
-
-  if (token) {
-    // GitHub API — works for public and private repos
-    const url = `https://api.github.com/repos/${repo}/contents/${filePath}?ref=${branch}`;
-    const content = execFileSync('curl', [
-      '-fsSL', '-H', `Authorization: Bearer ${token}`,
-      '-H', 'Accept: application/vnd.github.raw+json', url,
-    ], { encoding: 'utf8', timeout: 10000, stdio: ['pipe', 'pipe', 'pipe'] });
-    return content;
+  // 1. Try public endpoint first
+  const publicUrl = `https://raw.githubusercontent.com/${repo}/${branch}/${filePath}`;
+  try {
+    return execFileSync('curl', ['-fsSL', publicUrl], {
+      encoding: 'utf8',
+      timeout: 10000,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+  } catch {
+    // Public fetch failed — repo may be private
   }
 
-  // Public endpoint — only works for public repos
-  const url = `https://raw.githubusercontent.com/${repo}/${branch}/${filePath}`;
-  return execFileSync('curl', ['-fsSL', url], {
-    encoding: 'utf8',
-    timeout: 10000,
-    stdio: ['pipe', 'pipe', 'pipe'],
-  });
+  // 2. Fall back to authenticated GitHub API
+  const token = getGitHubToken();
+  if (!token) {
+    // No token — re-attempt public to get the original error
+    return execFileSync('curl', ['-fsSL', publicUrl], {
+      encoding: 'utf8',
+      timeout: 10000,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+  }
+
+  const apiUrl = `https://api.github.com/repos/${repo}/contents/${filePath}?ref=${branch}`;
+  return execFileSync('curl', [
+    '-fsSL', '-H', `Authorization: Bearer ${token}`,
+    '-H', 'Accept: application/vnd.github.raw+json', apiUrl,
+  ], { encoding: 'utf8', timeout: 10000, stdio: ['pipe', 'pipe', 'pipe'] });
 }
 
 /**
@@ -83,15 +93,28 @@ export function fetchRawFile(repo, filePath, branch = 'main') {
  * @throws {Error} On network/API failures (callers should catch and handle)
  */
 export function fetchLatestTag(repo) {
-  const token = getGitHubToken();
   try {
+    // 1. Try unauthenticated first (avoids token permission issues on public repos)
     const url = `https://api.github.com/repos/${repo}/tags?per_page=100`;
-    const curlArgs = ['-fsSL'];
-    if (token) curlArgs.push('-H', `Authorization: Bearer ${token}`);
-    curlArgs.push(url);
-    const response = execFileSync('curl', curlArgs, {
-      encoding: 'utf8', timeout: 10000, stdio: ['pipe', 'pipe', 'pipe'],
-    });
+    let response;
+    try {
+      response = execFileSync('curl', ['-fsSL', url], {
+        encoding: 'utf8', timeout: 10000, stdio: ['pipe', 'pipe', 'pipe'],
+      });
+    } catch {
+      // Public request failed — try with auth for private repos
+      const token = getGitHubToken();
+      if (!token) {
+        // No token — re-attempt to get the original error
+        response = execFileSync('curl', ['-fsSL', url], {
+          encoding: 'utf8', timeout: 10000, stdio: ['pipe', 'pipe', 'pipe'],
+        });
+      } else {
+        response = execFileSync('curl', ['-fsSL', '-H', `Authorization: Bearer ${token}`, url], {
+          encoding: 'utf8', timeout: 10000, stdio: ['pipe', 'pipe', 'pipe'],
+        });
+      }
+    }
     const tags = JSON.parse(response);
     if (!Array.isArray(tags) || tags.length === 0) return null;
 
