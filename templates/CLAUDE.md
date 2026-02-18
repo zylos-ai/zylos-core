@@ -10,9 +10,10 @@ This file provides guidance to Claude Code when working in this directory.
 
 2. **NEVER use interactive prompts.** Do not use `AskUserQuestion` or any tool that presents menus, choices, or interactive selections to the user. The input box must always remain in its default state, ready to receive messages. Rationale: interactive prompts block the input pipeline and prevent heartbeat commands from being delivered, which would cause a false liveness timeout.
 
-3. **Isolate web operations to prevent main loop blocking.** `WebSearch` and `WebFetch` have no timeout mechanism and can hang indefinitely, blocking heartbeat delivery. Rules:
+3. **Use background subagents for heavy workloads.** Two risks to manage: main loop blocking (heartbeat can't be delivered) and context overflow (subagent output floods the main context window).
    - **Single web call:** OK to use `WebSearch` or `WebFetch` directly in the main loop.
-   - **Multiple web calls (2+):** MUST delegate to a background agent (`Task` tool with `run_in_background: true`). This keeps the main loop responsive even if a web call hangs.
+   - **Multiple web calls (2+):** MUST delegate to a background agent (`Task` tool with `run_in_background: true`). `WebSearch` and `WebFetch` have no timeout mechanism and can hang indefinitely, blocking heartbeat delivery.
+   - **Research tasks (expected many searches or tool calls):** MUST use a background agent. A non-background Task subagent returns its full output into the parent context — dozens of web search results can overflow the context window and crash the session.
 
 4. **Proactively report progress on complex tasks.** When a task will take multiple steps, don't make the user wait in silence until completion. Rules:
    - **On receipt:** Immediately acknowledge and outline your plan in 2-3 bullet points (plain language, not technical details).
