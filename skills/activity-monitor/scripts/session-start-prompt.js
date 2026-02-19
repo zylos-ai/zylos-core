@@ -10,7 +10,9 @@
 import { execFileSync } from 'child_process';
 import path from 'path';
 import os from 'os';
+import { logHookTiming } from '../../comm-bridge/scripts/c4-diagnostic.js';
 
+const startMs = Date.now();
 const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
 const C4_CONTROL = path.join(ZYLOS_DIR, '.claude/skills/comm-bridge/scripts/c4-control.js');
 
@@ -28,4 +30,6 @@ try {
   ], { stdio: 'pipe' });
 } catch {
   // Silently fail — session still starts even if enqueue fails
+} finally {
+  logHookTiming('session-start-prompt', Date.now() - startMs);
 }

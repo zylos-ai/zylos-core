@@ -9,6 +9,9 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { MEMORY_DIR } from './shared.js';
+import { logHookTiming } from '../../comm-bridge/scripts/c4-diagnostic.js';
+
+const startMs = Date.now();
 
 function readFileSafe(filePath) {
   try {
@@ -51,5 +54,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     main();
   } catch (err) {
     console.error(`session-start-inject error: ${err.message}`);
+  } finally {
+    logHookTiming('session-start-inject', Date.now() - startMs);
   }
 }
