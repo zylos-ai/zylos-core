@@ -1,6 +1,13 @@
 #!/usr/bin/env node
 /**
- * Activity Monitor v9 - Guardian + Heartbeat + Health Check + Daily Tasks
+ * Activity Monitor v10 - Guardian + Heartbeat v2 + Health Check + Daily Tasks
+ *
+ * v10 changes (Heartbeat v2):
+ *   - fetch() preload tracks API call activity in real time
+ *   - Stuck detection: triggers immediate probe when no activity for STUCK_THRESHOLD
+ *   - Removed verify phase: single heartbeat failure → recovery
+ *   - Safety-net heartbeat interval relaxed to 2 hours
+ *
  * Run with PM2: pm2 start activity-monitor.js --name activity-monitor
  */
 
@@ -32,6 +39,10 @@ const PENDING_CHANNELS_FILE = path.join(MONITOR_DIR, 'pending-channels.jsonl');
 const CLAUDE_BIN = process.env.CLAUDE_BIN || 'claude';
 const BYPASS_PERMISSIONS = process.env.CLAUDE_BYPASS_PERMISSIONS !== 'false';
 
+// Fetch preload — injected via NODE_OPTIONS to track API call activity
+const FETCH_PRELOAD_PATH = path.join(__dirname, 'fetch-preload.cjs');
+const API_ACTIVITY_FILE = path.join(MONITOR_DIR, 'api-activity.json');
+
 // Conversation directory - auto-detect based on working directory
 const ZYLOS_PATH = ZYLOS_DIR.replace(/\//g, '-');
 const CONV_DIR = path.join(os.homedir(), '.claude', 'projects', ZYLOS_PATH);
@@ -42,10 +53,15 @@ const IDLE_THRESHOLD = 3;
 const LOG_MAX_LINES = 500;
 const RESTART_DELAY = 5;
 
-// Heartbeat liveness config
-const HEARTBEAT_INTERVAL = 1800;     // 30 min
-const ACK_DEADLINE = 300;            // 5 min
+// Heartbeat liveness config (v2)
+const HEARTBEAT_INTERVAL = 7200;     // 2 hours (safety-net; stuck detection is the primary mechanism)
+const ACK_DEADLINE = 300;            // 5 min (regular heartbeat timeout)
+const STUCK_ACK_DEADLINE = 120;      // 2 min (stuck probe timeout — shorter because staleness already confirms)
 const MAX_RESTART_FAILURES = 3;
+
+// Stuck detection config
+const STUCK_THRESHOLD = 300;         // 5 min of no activity → trigger immediate probe
+const STUCK_PROBE_COOLDOWN = 600;    // 10 min between stuck probes (prevents spam during legit idle)
 
 // Health check config
 const HEALTH_CHECK_INTERVAL = 21600; // 6 hours
@@ -65,6 +81,7 @@ let notRunningCount = 0;
 let lastState = '';
 let startupGrace = 0;
 let idleSince = 0;
+let lastStuckProbeAt = 0;
 
 let engine; // initialized in init()
 
@@ -305,14 +322,15 @@ function startClaude() {
   } catch { }
 
   const bypassFlag = BYPASS_PERMISSIONS ? ' --dangerously-skip-permissions' : '';
+  const nodeOpts = `NODE_OPTIONS='--require ${FETCH_PRELOAD_PATH}'`;
 
   if (tmuxHasSession()) {
-    sendToTmux(`cd ${ZYLOS_DIR}; ${CLAUDE_BIN}${bypassFlag}`);
-    log('Guardian: Started Claude in existing tmux session');
+    sendToTmux(`cd ${ZYLOS_DIR}; ${nodeOpts} ${CLAUDE_BIN}${bypassFlag}`);
+    log('Guardian: Started Claude in existing tmux session (with fetch preload)');
   } else {
     try {
-      execSync(`tmux new-session -d -s "${SESSION}" "cd ${ZYLOS_DIR} && ${CLAUDE_BIN}${bypassFlag}"`);
-      log('Guardian: Created new tmux session and started Claude');
+      execSync(`tmux new-session -d -s "${SESSION}" "cd ${ZYLOS_DIR} && ${nodeOpts} ${CLAUDE_BIN}${bypassFlag}"`);
+      log('Guardian: Created new tmux session and started Claude (with fetch preload)');
     } catch (err) {
       log(`Guardian: Failed to create tmux session: ${err.message}`);
     }
@@ -410,14 +428,24 @@ function runC4Control(args) {
   }
 }
 
+function readApiActivity() {
+  try {
+    if (!fs.existsSync(API_ACTIVITY_FILE)) return null;
+    return JSON.parse(fs.readFileSync(API_ACTIVITY_FILE, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
 function enqueueHeartbeat(phase) {
   const content = 'Heartbeat check.';
+  const deadline = phase === 'stuck' ? STUCK_ACK_DEADLINE : ACK_DEADLINE;
   const result = runC4Control([
     'enqueue',
     '--content', content,
     '--priority', '0',
     '--bypass-state',
-    '--ack-deadline', String(ACK_DEADLINE)
+    '--ack-deadline', String(deadline)
   ]);
 
   if (!result.ok) {
@@ -834,6 +862,11 @@ function monitorLoop() {
     source = 'default';
   }
 
+  // Read API activity from fetch preload (may be null if preload not active yet)
+  const apiActivity = readApiActivity();
+  const apiUpdatedSec = apiActivity?.updated_at ? Math.floor(apiActivity.updated_at / 1000) : 0;
+  const thinking = apiActivity?.active_fetches > 0;
+
   const inactiveSeconds = currentTime - activity;
   const state = inactiveSeconds < IDLE_THRESHOLD ? 'busy' : 'idle';
 
@@ -847,7 +880,10 @@ function monitorLoop() {
 
   writeStatusFile({
     state,
+    thinking,
     last_activity: activity,
+    last_api_activity: apiUpdatedSec || undefined,
+    active_fetches: apiActivity?.active_fetches ?? 0,
     last_check: currentTime,
     last_check_human: currentTimeHuman,
     idle_seconds: idleSeconds,
@@ -860,6 +896,18 @@ function monitorLoop() {
       log(`State: BUSY (last activity ${inactiveSeconds}s ago)`);
     } else {
       log('State: IDLE (entering idle state)');
+    }
+  }
+
+  // Stuck detection: if no observable activity from any source for STUCK_THRESHOLD,
+  // trigger an immediate heartbeat probe with a shorter timeout.
+  if (engine.health === 'ok') {
+    const lastAnyActivity = Math.max(activity, apiUpdatedSec);
+    const stuckSeconds = currentTime - lastAnyActivity;
+
+    if (stuckSeconds >= STUCK_THRESHOLD && (currentTime - lastStuckProbeAt) >= STUCK_PROBE_COOLDOWN) {
+      const probed = engine.requestImmediateProbe(`no_activity_for_${stuckSeconds}s`);
+      if (probed) lastStuckProbeAt = currentTime;
     }
   }
 
@@ -922,7 +970,7 @@ function init() {
 }
 
 init();
-log(`=== Activity Monitor Started (v9 - Guardian + Heartbeat + HealthCheck + DailyTasks): ${new Date().toISOString()} tz=${timezone} ===`);
+log(`=== Activity Monitor Started (v10 - Guardian + Heartbeat v2 + HealthCheck + DailyTasks): ${new Date().toISOString()} tz=${timezone} ===`);
 
 setInterval(monitorLoop, INTERVAL);
 monitorLoop();

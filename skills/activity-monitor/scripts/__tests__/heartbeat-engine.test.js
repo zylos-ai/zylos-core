@@ -33,9 +33,9 @@ describe('HeartbeatEngine', () => {
   describe('primary heartbeat', () => {
     it('enqueues after HEARTBEAT_INTERVAL elapsed', () => {
       const { deps, calls } = createMockDeps();
-      const engine = new HeartbeatEngine(deps, { heartbeatInterval: 1800 });
+      const engine = new HeartbeatEngine(deps, { heartbeatInterval: 7200 });
       const currentTime = Math.floor(Date.now() / 1000);
-      engine.lastHeartbeatAt = currentTime - 1801;
+      engine.lastHeartbeatAt = currentTime - 7201;
 
       engine.processHeartbeat(true, currentTime);
 
@@ -44,7 +44,7 @@ describe('HeartbeatEngine', () => {
 
     it('does not enqueue before interval', () => {
       const { deps, calls } = createMockDeps();
-      const engine = new HeartbeatEngine(deps, { heartbeatInterval: 1800 });
+      const engine = new HeartbeatEngine(deps, { heartbeatInterval: 7200 });
       const currentTime = Math.floor(Date.now() / 1000);
       engine.lastHeartbeatAt = currentTime - 100;
 
@@ -55,9 +55,9 @@ describe('HeartbeatEngine', () => {
 
     it('does not enqueue when claude is not running', () => {
       const { deps, calls } = createMockDeps();
-      const engine = new HeartbeatEngine(deps, { heartbeatInterval: 1800 });
+      const engine = new HeartbeatEngine(deps, { heartbeatInterval: 7200 });
       const currentTime = Math.floor(Date.now() / 1000);
-      engine.lastHeartbeatAt = currentTime - 1801;
+      engine.lastHeartbeatAt = currentTime - 7201;
 
       engine.processHeartbeat(false, currentTime);
 
@@ -66,9 +66,9 @@ describe('HeartbeatEngine', () => {
 
     it('updates lastHeartbeatAt on primary enqueue', () => {
       const { deps } = createMockDeps();
-      const engine = new HeartbeatEngine(deps, { heartbeatInterval: 1800 });
+      const engine = new HeartbeatEngine(deps, { heartbeatInterval: 7200 });
       const currentTime = Math.floor(Date.now() / 1000);
-      engine.lastHeartbeatAt = currentTime - 1801;
+      engine.lastHeartbeatAt = currentTime - 7201;
 
       engine.processHeartbeat(true, currentTime);
 
@@ -129,8 +129,8 @@ describe('HeartbeatEngine', () => {
     });
   });
 
-  describe('primary failure triggers verify', () => {
-    it('enqueues verify when primary fails in ok state', () => {
+  describe('primary failure triggers direct recovery (no verify)', () => {
+    it('triggers recovery when primary fails in ok state', () => {
       const { deps, calls } = createMockDeps();
       deps._pending = { control_id: 1, phase: 'primary' };
       deps._heartbeatStatus = 'timeout';
@@ -139,20 +139,33 @@ describe('HeartbeatEngine', () => {
       engine.processHeartbeat(true, Math.floor(Date.now() / 1000));
 
       assert.equal(calls.clearHeartbeatPending, 1);
-      assert.deepStrictEqual(calls.enqueueHeartbeat, ['verify']);
-      assert.equal(engine.health, 'ok');
+      assert.equal(calls.killTmuxSession, 1);
+      assert.equal(engine.health, 'recovering');
     });
-  });
 
-  describe('verify failure triggers recovery', () => {
-    it('kills tmux and transitions to recovering', () => {
+    it('does not enqueue verify phase', () => {
       const { deps, calls } = createMockDeps();
-      deps._pending = { control_id: 1, phase: 'verify' };
+      deps._pending = { control_id: 1, phase: 'primary' };
       deps._heartbeatStatus = 'timeout';
       const engine = new HeartbeatEngine(deps);
 
       engine.processHeartbeat(true, Math.floor(Date.now() / 1000));
 
+      // Should NOT have 'verify' in the enqueue calls
+      assert.ok(!calls.enqueueHeartbeat.includes('verify'));
+    });
+  });
+
+  describe('stuck probe failure triggers recovery', () => {
+    it('triggers recovery when stuck probe fails in ok state', () => {
+      const { deps, calls } = createMockDeps();
+      deps._pending = { control_id: 1, phase: 'stuck' };
+      deps._heartbeatStatus = 'timeout';
+      const engine = new HeartbeatEngine(deps);
+
+      engine.processHeartbeat(true, Math.floor(Date.now() / 1000));
+
+      assert.equal(calls.clearHeartbeatPending, 1);
       assert.equal(calls.killTmuxSession, 1);
       assert.equal(engine.health, 'recovering');
     });
@@ -268,6 +281,58 @@ describe('HeartbeatEngine', () => {
     });
   });
 
+  describe('requestImmediateProbe', () => {
+    it('enqueues stuck phase when health is ok and no pending', () => {
+      const { deps, calls } = createMockDeps();
+      const engine = new HeartbeatEngine(deps);
+
+      const result = engine.requestImmediateProbe('no_activity_for_300s');
+
+      assert.equal(result, true);
+      assert.deepStrictEqual(calls.enqueueHeartbeat, ['stuck']);
+    });
+
+    it('returns false when health is not ok', () => {
+      const { deps, calls } = createMockDeps();
+      const engine = new HeartbeatEngine(deps, { initialHealth: 'recovering' });
+
+      const result = engine.requestImmediateProbe('test');
+
+      assert.equal(result, false);
+      assert.deepStrictEqual(calls.enqueueHeartbeat, []);
+    });
+
+    it('returns false when another heartbeat is pending', () => {
+      const { deps, calls } = createMockDeps();
+      deps._pending = { control_id: 1, phase: 'primary' };
+      const engine = new HeartbeatEngine(deps);
+
+      const result = engine.requestImmediateProbe('test');
+
+      assert.equal(result, false);
+      assert.deepStrictEqual(calls.enqueueHeartbeat, []);
+    });
+
+    it('updates lastHeartbeatAt on successful stuck enqueue', () => {
+      const { deps } = createMockDeps();
+      const engine = new HeartbeatEngine(deps);
+      engine.lastHeartbeatAt = 0;
+
+      engine.requestImmediateProbe('test');
+
+      assert.ok(engine.lastHeartbeatAt > 0);
+    });
+
+    it('logs stuck detection reason', () => {
+      const { deps, calls } = createMockDeps();
+      const engine = new HeartbeatEngine(deps);
+
+      engine.requestImmediateProbe('no_activity_for_600s');
+
+      assert.ok(calls.log.some(m => m.includes('Stuck detection') && m.includes('no_activity_for_600s')));
+    });
+  });
+
   describe('in-flight heartbeat handling', () => {
     it('does nothing when status is pending', () => {
       const { deps, calls } = createMockDeps();
@@ -331,9 +396,9 @@ describe('HeartbeatEngine', () => {
       const { deps, calls } = createMockDeps();
       const engine = new HeartbeatEngine(deps);
 
-      engine.setHealth('recovering', 'verify_timeout');
+      engine.setHealth('recovering', 'primary_timeout');
 
-      assert.ok(calls.log.some(m => m.includes('OK') && m.includes('RECOVERING') && m.includes('verify_timeout')));
+      assert.ok(calls.log.some(m => m.includes('OK') && m.includes('RECOVERING') && m.includes('primary_timeout')));
       assert.equal(engine.health, 'recovering');
     });
   });

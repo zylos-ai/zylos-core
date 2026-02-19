@@ -118,14 +118,11 @@ export class HeartbeatEngine {
     const phase = pending.phase || 'primary';
     this.deps.clearHeartbeatPending();
 
-    if (phase === 'primary' && this.healthState === 'ok') {
-      this.deps.log('Heartbeat primary failed; entering verify phase');
-      this.enqueueHeartbeat('verify');
-      return;
-    }
-
-    if (phase === 'verify' && this.healthState === 'ok') {
-      this.triggerRecovery(`verify_${status}`);
+    // In ok state, any failure triggers recovery directly (no verify phase).
+    // The verify phase was removed in v2 — stuck detection provides the
+    // corroborating signal that verify used to offer.
+    if (this.healthState === 'ok') {
+      this.triggerRecovery(`${phase}_${status}`);
       return;
     }
 
@@ -142,10 +139,23 @@ export class HeartbeatEngine {
     this.triggerRecovery(`heartbeat_${status}`);
   }
 
-  /** Wrapper that updates lastHeartbeatAt on successful primary enqueue. */
+  /**
+   * Request an immediate heartbeat probe (used by stuck detection).
+   * Returns false if a probe cannot be sent (wrong health state or
+   * another heartbeat is already in flight).
+   */
+  requestImmediateProbe(reason) {
+    if (this.healthState !== 'ok') return false;
+    const pending = this.deps.readHeartbeatPending();
+    if (pending) return false;
+    this.deps.log(`Stuck detection triggered: ${reason}`);
+    return this.enqueueHeartbeat('stuck');
+  }
+
+  /** Wrapper that updates lastHeartbeatAt on successful primary/stuck enqueue. */
   enqueueHeartbeat(phase) {
     const ok = this.deps.enqueueHeartbeat(phase);
-    if (ok && phase === 'primary') {
+    if (ok && (phase === 'primary' || phase === 'stuck')) {
       this.lastHeartbeatAt = Math.floor(Date.now() / 1000);
     }
     return ok;
