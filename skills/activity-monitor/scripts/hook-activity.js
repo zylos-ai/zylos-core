@@ -21,6 +21,55 @@ const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
 const MONITOR_DIR = path.join(ZYLOS_DIR, 'activity-monitor');
 const ACTIVITY_FILE = path.join(MONITOR_DIR, 'api-activity.json');
 const STATE_FILE = path.join(MONITOR_DIR, 'hook-state.json');
+const STATE_LOCK_FILE = `${STATE_FILE}.lock`;
+const LOCK_RETRIES = 5;
+const LOCK_RETRY_MS = 10;
+const LOCK_STALE_MS = 5000;
+
+function sleepMs(ms) {
+  const end = Date.now() + ms;
+  while (Date.now() < end) {
+    // Best-effort short spin wait.
+  }
+}
+
+function acquireStateLock() {
+  for (let attempt = 0; attempt < LOCK_RETRIES; attempt++) {
+    try {
+      const fd = fs.openSync(STATE_LOCK_FILE, 'wx');
+      fs.closeSync(fd);
+      return true;
+    } catch (err) {
+      if (err?.code !== 'EEXIST') {
+        return false;
+      }
+
+      try {
+        const stat = fs.statSync(STATE_LOCK_FILE);
+        if ((Date.now() - stat.mtimeMs) > LOCK_STALE_MS) {
+          fs.unlinkSync(STATE_LOCK_FILE);
+          continue;
+        }
+      } catch {
+        // Lock disappeared or stat failed; retry.
+      }
+
+      if (attempt < LOCK_RETRIES - 1) {
+        sleepMs(LOCK_RETRY_MS);
+      }
+    }
+  }
+
+  return false;
+}
+
+function releaseStateLock() {
+  try {
+    fs.unlinkSync(STATE_LOCK_FILE);
+  } catch {
+    // Best-effort.
+  }
+}
 
 function readState() {
   try {
@@ -52,58 +101,66 @@ process.stdin.on('end', () => {
   try {
     const hookData = JSON.parse(input);
     const event = hookData.hook_event_name;
-    const state = readState();
-
-    let eventType, active, tool = null;
-
-    switch (event) {
-      case 'UserPromptSubmit':
-        eventType = 'prompt';
-        active = true;
-        state.active_tools = 0;
-        break;
-      case 'PreToolUse':
-        eventType = 'pre_tool';
-        tool = hookData.tool_name || null;
-        state.active_tools = Math.max(0, state.active_tools) + 1;
-        active = true;
-        break;
-      case 'PostToolUse':
-        eventType = 'post_tool';
-        tool = hookData.tool_name || null;
-        state.active_tools = Math.max(0, state.active_tools - 1);
-        active = state.active_tools > 0;
-        break;
-      case 'Stop':
-        eventType = 'stop';
-        state.active_tools = 0;
-        active = false;
-        break;
-      case 'Notification':
-        eventType = 'idle';
-        state.active_tools = 0;
-        active = false;
-        break;
-      default:
-        process.exit(0);
-    }
 
     if (!fs.existsSync(MONITOR_DIR)) {
       fs.mkdirSync(MONITOR_DIR, { recursive: true });
     }
 
-    atomicWrite(ACTIVITY_FILE, {
-      version: 2,
-      pid: process.ppid,
-      sessionId: process.env.CLAUDE_SESSION_ID || String(process.ppid),
-      event: eventType,
-      tool,
-      active,
-      active_tools: state.active_tools,
-      updated_at: Date.now()
-    });
+    const hasLock = acquireStateLock();
 
-    atomicWrite(STATE_FILE, state);
+    try {
+      const state = readState();
+      let eventType, active, tool = null;
+
+      switch (event) {
+        case 'UserPromptSubmit':
+          eventType = 'prompt';
+          active = true;
+          state.active_tools = 0;
+          break;
+        case 'PreToolUse':
+          eventType = 'pre_tool';
+          tool = hookData.tool_name || null;
+          state.active_tools = Math.max(0, state.active_tools) + 1;
+          active = true;
+          break;
+        case 'PostToolUse':
+          eventType = 'post_tool';
+          tool = hookData.tool_name || null;
+          state.active_tools = Math.max(0, state.active_tools - 1);
+          active = state.active_tools > 0;
+          break;
+        case 'Stop':
+          eventType = 'stop';
+          state.active_tools = 0;
+          active = false;
+          break;
+        case 'Notification':
+          eventType = 'idle';
+          state.active_tools = 0;
+          active = false;
+          break;
+        default:
+          return;
+      }
+
+      atomicWrite(ACTIVITY_FILE, {
+        version: 2,
+        pid: process.ppid,
+        sessionId: process.env.CLAUDE_SESSION_ID || String(process.ppid),
+        event: eventType,
+        tool,
+        active,
+        active_tools: state.active_tools,
+        updated_at: Date.now()
+      });
+
+      atomicWrite(STATE_FILE, state);
+    } finally {
+      if (hasLock) {
+        releaseStateLock();
+      }
+    }
   } catch {
     // Best-effort — never interfere with Claude.
   }

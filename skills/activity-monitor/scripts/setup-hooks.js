@@ -63,12 +63,29 @@ function hasOurHook(matcherGroups) {
 
 function removeOurHook(matcherGroups) {
   if (!Array.isArray(matcherGroups)) return matcherGroups;
-  return matcherGroups.filter(group => {
-    if (!Array.isArray(group?.hooks)) return true;
-    return !group.hooks.some(
-      h => typeof h?.command === 'string' && h.command.includes(HOOK_IDENTIFIER)
-    );
-  });
+  return matcherGroups
+    .map(group => {
+      if (!Array.isArray(group?.hooks)) return group;
+      const remainingHooks = group.hooks.filter(
+        h => !(typeof h?.command === 'string' && h.command.includes(HOOK_IDENTIFIER))
+      );
+      return { ...group, hooks: remainingHooks };
+    })
+    .filter(group => !Array.isArray(group?.hooks) || group.hooks.length > 0);
+}
+
+function countOurHooks(matcherGroups) {
+  if (!Array.isArray(matcherGroups)) return 0;
+  let count = 0;
+  for (const group of matcherGroups) {
+    if (!Array.isArray(group?.hooks)) continue;
+    for (const hook of group.hooks) {
+      if (typeof hook?.command === 'string' && hook.command.includes(HOOK_IDENTIFIER)) {
+        count += 1;
+      }
+    }
+  }
+  return count;
 }
 
 function install() {
@@ -143,11 +160,11 @@ function remove() {
   for (const event of Object.keys(HOOK_EVENTS)) {
     if (!Array.isArray(settings.hooks[event])) continue;
 
-    const before = settings.hooks[event].length;
+    const before = countOurHooks(settings.hooks[event]);
     settings.hooks[event] = removeOurHook(settings.hooks[event]);
-    const after = settings.hooks[event].length;
+    const after = countOurHooks(settings.hooks[event]);
 
-    if (after < before) removed++;
+    if (after < before) removed += (before - after);
 
     // Clean up empty arrays
     if (settings.hooks[event].length === 0) {

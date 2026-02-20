@@ -9,9 +9,29 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { MEMORY_DIR } from './shared.js';
-import { logHookTiming } from '../../comm-bridge/scripts/c4-diagnostic.js';
 
 const startMs = Date.now();
+let diagnosticModule;
+let diagnosticLoadAttempted = false;
+
+async function getDiagnosticModule() {
+  if (!diagnosticLoadAttempted) {
+    diagnosticLoadAttempted = true;
+    try {
+      diagnosticModule = await import('../../comm-bridge/scripts/c4-diagnostic.js');
+    } catch {
+      diagnosticModule = null;
+    }
+  }
+  return diagnosticModule;
+}
+
+async function logHookTimingSafe(name, durationMs) {
+  const module = await getDiagnosticModule();
+  if (module?.logHookTiming) {
+    module.logHookTiming(name, durationMs);
+  }
+}
 
 function readFileSafe(filePath) {
   try {
@@ -49,12 +69,18 @@ function main() {
   process.stdout.write(`${parts.join('\n\n')}\n`);
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+async function runCli() {
   try {
     main();
   } catch (err) {
     console.error(`session-start-inject error: ${err.message}`);
   } finally {
-    logHookTiming('session-start-inject', Date.now() - startMs);
+    await logHookTimingSafe('session-start-inject', Date.now() - startMs);
   }
+}
+
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  runCli().catch(() => {
+    // Best-effort.
+  });
 }

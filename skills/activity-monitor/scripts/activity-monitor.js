@@ -949,8 +949,8 @@ function monitorLoop() {
     const stuckSeconds = currentTime - lastAnyActivity;
 
     if (stuckSeconds >= STUCK_THRESHOLD && (currentTime - lastStuckProbeAt) >= STUCK_PROBE_COOLDOWN) {
-      const probed = engine.requestImmediateProbe(`no_activity_for_${stuckSeconds}s`);
-      if (probed) lastStuckProbeAt = currentTime;
+      lastStuckProbeAt = currentTime;
+      engine.requestImmediateProbe(`no_activity_for_${stuckSeconds}s`);
     }
   }
 
