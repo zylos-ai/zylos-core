@@ -195,13 +195,26 @@ describe('HeartbeatEngine', () => {
   });
 
   describe('down state behavior', () => {
-    it('enqueues down-check when claude is running', () => {
+    it('enqueues down-check after retry interval', () => {
       const { deps, calls } = createMockDeps();
-      const engine = new HeartbeatEngine(deps, { initialHealth: 'down' });
+      const engine = new HeartbeatEngine(deps, { initialHealth: 'down', downRetryInterval: 1800 });
+      const now = Math.floor(Date.now() / 1000);
+      engine.lastDownCheckAt = now - 1801;
 
-      engine.processHeartbeat(true, Math.floor(Date.now() / 1000));
+      engine.processHeartbeat(true, now);
 
       assert.deepStrictEqual(calls.enqueueHeartbeat, ['down-check']);
+    });
+
+    it('skips down-check during retry cooldown', () => {
+      const { deps, calls } = createMockDeps();
+      const engine = new HeartbeatEngine(deps, { initialHealth: 'down', downRetryInterval: 1800 });
+      const now = Math.floor(Date.now() / 1000);
+      engine.lastDownCheckAt = now - 60; // only 60s ago
+
+      engine.processHeartbeat(true, now);
+
+      assert.deepStrictEqual(calls.enqueueHeartbeat, []);
     });
 
     it('recovers to ok when pending heartbeat succeeds', () => {
@@ -258,6 +271,27 @@ describe('HeartbeatEngine', () => {
       engine.triggerRecovery('test_reason');
 
       assert.equal(engine.health, 'recovering');
+    });
+
+    it('sets lastRecoveryAt on recovery', () => {
+      const { deps } = createMockDeps();
+      const engine = new HeartbeatEngine(deps);
+      assert.equal(engine.lastRecoveryAt, 0);
+
+      engine.triggerRecovery('test');
+
+      assert.ok(engine.lastRecoveryAt > 0);
+    });
+
+    it('sets lastDownCheckAt when entering down state', () => {
+      const { deps } = createMockDeps();
+      const engine = new HeartbeatEngine(deps, { maxRestartFailures: 1 });
+      assert.equal(engine.lastDownCheckAt, 0);
+
+      engine.triggerRecovery('test');
+
+      assert.equal(engine.health, 'down');
+      assert.ok(engine.lastDownCheckAt > 0);
     });
 
     it('does nothing in down state', () => {
@@ -371,11 +405,47 @@ describe('HeartbeatEngine', () => {
   });
 
   describe('recovering state', () => {
-    it('enqueues recovery heartbeat when claude is running', () => {
+    it('enqueues recovery heartbeat when claude is running (no prior failures)', () => {
       const { deps, calls } = createMockDeps();
       const engine = new HeartbeatEngine(deps, { initialHealth: 'recovering' });
 
       engine.processHeartbeat(true, Math.floor(Date.now() / 1000));
+
+      assert.deepStrictEqual(calls.enqueueHeartbeat, ['recovery']);
+    });
+
+    it('delays recovery heartbeat during backoff period', () => {
+      const { deps, calls } = createMockDeps();
+      const engine = new HeartbeatEngine(deps, { initialHealth: 'recovering' });
+      const now = Math.floor(Date.now() / 1000);
+      engine.restartFailureCount = 2; // backoff = min(2*60, 300) = 120s
+      engine.lastRecoveryAt = now - 60; // only 60s ago
+
+      engine.processHeartbeat(true, now);
+
+      assert.deepStrictEqual(calls.enqueueHeartbeat, []);
+    });
+
+    it('allows recovery heartbeat after backoff period', () => {
+      const { deps, calls } = createMockDeps();
+      const engine = new HeartbeatEngine(deps, { initialHealth: 'recovering' });
+      const now = Math.floor(Date.now() / 1000);
+      engine.restartFailureCount = 2; // backoff = 120s
+      engine.lastRecoveryAt = now - 121; // 121s ago > 120s
+
+      engine.processHeartbeat(true, now);
+
+      assert.deepStrictEqual(calls.enqueueHeartbeat, ['recovery']);
+    });
+
+    it('caps backoff at 300 seconds', () => {
+      const { deps, calls } = createMockDeps();
+      const engine = new HeartbeatEngine(deps, { initialHealth: 'recovering' });
+      const now = Math.floor(Date.now() / 1000);
+      engine.restartFailureCount = 10; // backoff = min(10*60, 300) = 300s
+      engine.lastRecoveryAt = now - 301;
+
+      engine.processHeartbeat(true, now);
 
       assert.deepStrictEqual(calls.enqueueHeartbeat, ['recovery']);
     });

@@ -59,6 +59,7 @@ const HEARTBEAT_INTERVAL = 7200;     // 2 hours (safety-net; stuck detection is 
 const ACK_DEADLINE = 300;            // 5 min (regular heartbeat timeout)
 const STUCK_ACK_DEADLINE = 120;      // 2 min (stuck probe timeout — shorter because staleness already confirms)
 const MAX_RESTART_FAILURES = 3;
+const DOWN_RETRY_INTERVAL = 1800;   // 30 min periodic retry in DOWN state
 
 // Stuck detection config
 const STUCK_THRESHOLD = 300;         // 5 min of no activity → trigger immediate probe
@@ -981,7 +982,8 @@ function init() {
   }, {
     initialHealth,
     heartbeatInterval: HEARTBEAT_INTERVAL,
-    maxRestartFailures: MAX_RESTART_FAILURES
+    maxRestartFailures: MAX_RESTART_FAILURES,
+    downRetryInterval: DOWN_RETRY_INTERVAL
   });
 
   upgradeScheduler = new DailySchedule({

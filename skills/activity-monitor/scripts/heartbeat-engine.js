@@ -29,6 +29,9 @@ export class HeartbeatEngine {
     this.healthState = options.initialHealth ?? 'ok';
     this.restartFailureCount = 0;
     this.lastHeartbeatAt = Math.floor(Date.now() / 1000);
+    this.lastRecoveryAt = 0;
+    this.lastDownCheckAt = 0;
+    this.downRetryInterval = options.downRetryInterval ?? 1800; // 30 min
   }
 
   get health() {
@@ -69,11 +72,21 @@ export class HeartbeatEngine {
     }
 
     if (this.healthState === 'recovering') {
+      // Backoff: wait progressively longer between recovery attempts
+      const backoffDelay = Math.min(this.restartFailureCount * 60, 300);
+      if (backoffDelay > 0 && (currentTime - this.lastRecoveryAt) < backoffDelay) {
+        return;
+      }
       this.enqueueHeartbeat('recovery');
       return;
     }
 
     if (this.healthState === 'down') {
+      // Periodic retry: check every downRetryInterval instead of every tick
+      if ((currentTime - this.lastDownCheckAt) < this.downRetryInterval) {
+        return;
+      }
+      this.lastDownCheckAt = currentTime;
       this.enqueueHeartbeat('down-check');
       return;
     }
@@ -106,10 +119,12 @@ export class HeartbeatEngine {
     }
 
     this.restartFailureCount += 1;
+    this.lastRecoveryAt = Math.floor(Date.now() / 1000);
     this.deps.log(`Heartbeat recovery attempt ${this.restartFailureCount}/${this.maxRestartFailures} (${reason})`);
     this.deps.killTmuxSession();
 
     if (this.restartFailureCount >= this.maxRestartFailures) {
+      this.lastDownCheckAt = Math.floor(Date.now() / 1000);
       this.setHealth('down', 'max_restart_failures_reached');
     }
   }
