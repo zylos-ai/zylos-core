@@ -61,6 +61,19 @@ function main() {
   if (synced > 0 || skipped > 0) {
     console.log(`Core Skills: ${synced} synced, ${skipped} already present.`);
   }
+
+  // Configure activity tracking hooks in Claude Code settings.json
+  const setupHooks = path.join(SKILLS_DIR, 'activity-monitor', 'scripts', 'setup-hooks.js');
+  if (fs.existsSync(setupHooks)) {
+    try {
+      execSync(`node "${setupHooks}"`, {
+        stdio: 'inherit',
+        env: { ...process.env, ZYLOS_DIR }
+      });
+    } catch {
+      console.log('  Warning: Failed to configure activity hooks');
+    }
+  }
 }
 
 main();

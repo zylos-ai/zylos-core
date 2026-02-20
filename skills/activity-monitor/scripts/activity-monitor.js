@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 /**
- * Activity Monitor v10 - Guardian + Heartbeat v2 + Health Check + Daily Tasks
+ * Activity Monitor v11 - Guardian + Heartbeat v2 + Health Check + Daily Tasks
  *
- * v10 changes (Heartbeat v2):
- *   - fetch() preload tracks API call activity in real time
+ * v11 changes (Hook-based activity tracking):
+ *   - Replaced non-functional fetch-preload with Claude Code hooks
+ *   - hook-activity.js writes api-activity.json on tool/stop/idle events
  *   - Stuck detection: triggers immediate probe when no activity for STUCK_THRESHOLD
  *   - Removed verify phase: single heartbeat failure → recovery
  *   - Safety-net heartbeat interval relaxed to 2 hours
@@ -39,8 +40,7 @@ const PENDING_CHANNELS_FILE = path.join(MONITOR_DIR, 'pending-channels.jsonl');
 const CLAUDE_BIN = process.env.CLAUDE_BIN || 'claude';
 const BYPASS_PERMISSIONS = process.env.CLAUDE_BYPASS_PERMISSIONS !== 'false';
 
-// Fetch preload — injected via NODE_OPTIONS to track API call activity
-const FETCH_PRELOAD_PATH = path.join(__dirname, 'fetch-preload.cjs');
+// API activity file — written by hook-activity.js (Claude Code hooks)
 const API_ACTIVITY_FILE = path.join(MONITOR_DIR, 'api-activity.json');
 
 // Conversation directory - auto-detect based on working directory
@@ -322,15 +322,14 @@ function startClaude() {
   } catch { }
 
   const bypassFlag = BYPASS_PERMISSIONS ? ' --dangerously-skip-permissions' : '';
-  const nodeOpts = `NODE_OPTIONS='--require ${FETCH_PRELOAD_PATH}'`;
 
   if (tmuxHasSession()) {
-    sendToTmux(`cd ${ZYLOS_DIR}; ${nodeOpts} ${CLAUDE_BIN}${bypassFlag}`);
-    log('Guardian: Started Claude in existing tmux session (with fetch preload)');
+    sendToTmux(`cd ${ZYLOS_DIR}; ${CLAUDE_BIN}${bypassFlag}`);
+    log('Guardian: Started Claude in existing tmux session');
   } else {
     try {
-      execSync(`tmux new-session -d -s "${SESSION}" "cd ${ZYLOS_DIR} && ${nodeOpts} ${CLAUDE_BIN}${bypassFlag}"`);
-      log('Guardian: Created new tmux session and started Claude (with fetch preload)');
+      execSync(`tmux new-session -d -s "${SESSION}" "cd ${ZYLOS_DIR} && ${CLAUDE_BIN}${bypassFlag}"`);
+      log('Guardian: Created new tmux session and started Claude');
     } catch (err) {
       log(`Guardian: Failed to create tmux session: ${err.message}`);
     }
@@ -862,10 +861,10 @@ function monitorLoop() {
     source = 'default';
   }
 
-  // Read API activity from fetch preload (may be null if preload not active yet)
+  // Read API activity from hook-activity.js (may be null if no hooks fired yet)
   const apiActivity = readApiActivity();
   const apiUpdatedSec = apiActivity?.updated_at ? Math.floor(apiActivity.updated_at / 1000) : 0;
-  const thinking = apiActivity?.active_fetches > 0;
+  const thinking = apiActivity?.active === true || (apiActivity?.active_tools ?? 0) > 0;
 
   const inactiveSeconds = currentTime - activity;
   const state = inactiveSeconds < IDLE_THRESHOLD ? 'busy' : 'idle';
@@ -883,7 +882,7 @@ function monitorLoop() {
     thinking,
     last_activity: activity,
     last_api_activity: apiUpdatedSec || undefined,
-    active_fetches: apiActivity?.active_fetches ?? 0,
+    active_tools: apiActivity?.active_tools ?? 0,
     last_check: currentTime,
     last_check_human: currentTimeHuman,
     idle_seconds: idleSeconds,
@@ -970,7 +969,7 @@ function init() {
 }
 
 init();
-log(`=== Activity Monitor Started (v10 - Guardian + Heartbeat v2 + HealthCheck + DailyTasks): ${new Date().toISOString()} tz=${timezone} ===`);
+log(`=== Activity Monitor Started (v11 - Guardian + Heartbeat v2 + Hook Activity + DailyTasks): ${new Date().toISOString()} tz=${timezone} ===`);
 
 setInterval(monitorLoop, INTERVAL);
 monitorLoop();
