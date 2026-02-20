@@ -83,6 +83,7 @@ let lastState = '';
 let startupGrace = 0;
 let idleSince = 0;
 let lastStuckProbeAt = 0;
+let lastDeadApiPid = null;
 
 let engine; // initialized in init()
 
@@ -438,7 +439,28 @@ function runC4Control(args) {
 function readApiActivity() {
   try {
     if (!fs.existsSync(API_ACTIVITY_FILE)) return null;
-    return JSON.parse(fs.readFileSync(API_ACTIVITY_FILE, 'utf8'));
+    const activity = JSON.parse(fs.readFileSync(API_ACTIVITY_FILE, 'utf8'));
+    const pid = Number(activity?.pid);
+
+    if (Number.isInteger(pid) && pid > 0) {
+      try {
+        process.kill(pid, 0);
+      } catch (err) {
+        if (err?.code !== 'EPERM') {
+          if (lastDeadApiPid !== pid) {
+            log(`Hook activity ignored: stale pid ${pid} not running (${API_ACTIVITY_FILE})`);
+          }
+          lastDeadApiPid = pid;
+          return null;
+        }
+      }
+
+      if (lastDeadApiPid === pid) {
+        lastDeadApiPid = null;
+      }
+    }
+
+    return activity;
   } catch {
     return null;
   }

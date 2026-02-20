@@ -32,9 +32,18 @@ function readState() {
 }
 
 function atomicWrite(filePath, data) {
-  const tmp = filePath + '.tmp';
-  fs.writeFileSync(tmp, JSON.stringify(data));
-  fs.renameSync(tmp, filePath);
+  const tmp = `${filePath}.tmp.${process.pid}.${Date.now()}`;
+  try {
+    fs.writeFileSync(tmp, JSON.stringify(data));
+    fs.renameSync(tmp, filePath);
+  } catch (err) {
+    try {
+      if (fs.existsSync(tmp)) {
+        fs.unlinkSync(tmp);
+      }
+    } catch { /* best-effort */ }
+    throw err;
+  }
 }
 
 let input = '';
@@ -86,6 +95,7 @@ process.stdin.on('end', () => {
     atomicWrite(ACTIVITY_FILE, {
       version: 2,
       pid: process.ppid,
+      sessionId: process.env.CLAUDE_SESSION_ID || String(process.ppid),
       event: eventType,
       tool,
       active,

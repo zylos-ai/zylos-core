@@ -17,11 +17,22 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 
-const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
+function expandHomeDir(p) {
+  if (p === '~') {
+    return os.homedir();
+  }
+  if (typeof p === 'string' && p.startsWith('~/')) {
+    return path.join(os.homedir(), p.slice(2));
+  }
+  return p;
+}
+
+const ZYLOS_DIR = path.resolve(expandHomeDir(process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos')));
 const SETTINGS_PATH = path.join(ZYLOS_DIR, '.claude', 'settings.json');
 
 // The hook command — used both for adding and for identifying our hooks
-const HOOK_SCRIPT = 'node ~/zylos/.claude/skills/activity-monitor/scripts/hook-activity.js';
+const HOOK_SCRIPT_PATH = path.join(ZYLOS_DIR, '.claude', 'skills', 'activity-monitor', 'scripts', 'hook-activity.js');
+const HOOK_SCRIPT = `node "${HOOK_SCRIPT_PATH}"`;
 const HOOK_IDENTIFIER = 'hook-activity.js';
 
 // Hook definitions: event → matcher (empty string = match all, null = no matcher support)
@@ -62,12 +73,14 @@ function removeOurHook(matcherGroups) {
 
 function install() {
   let settings = {};
-  try {
-    if (fs.existsSync(SETTINGS_PATH)) {
+  if (fs.existsSync(SETTINGS_PATH)) {
+    try {
       settings = JSON.parse(fs.readFileSync(SETTINGS_PATH, 'utf8'));
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`Activity hooks: failed to parse ${SETTINGS_PATH}: ${message}`);
+      process.exit(1);
     }
-  } catch {
-    settings = {};
   }
 
   if (!settings.hooks) {
