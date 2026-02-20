@@ -17,6 +17,9 @@ import {
   close
 } from './c4-db.js';
 import { CHECKPOINT_THRESHOLD, SESSION_INIT_RECENT_COUNT } from './c4-config.js';
+import { logHookTiming } from './c4-diagnostic.js';
+
+const startMs = Date.now();
 
 function main() {
   try {
@@ -57,6 +60,7 @@ function main() {
     process.exit(1);
   } finally {
     close();
+    logHookTiming('c4-session-init', Date.now() - startMs);
   }
 }
 

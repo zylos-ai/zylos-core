@@ -5,6 +5,34 @@ All notable changes to zylos-core will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.9] - 2026-02-21
+
+### Added
+- Heartbeat v2: replace verify phase with stuck detection — no activity for 5 min triggers immediate probe with 2 min timeout
+- Hook-based activity tracking: Claude Code hooks (PreToolUse, PostToolUse, Stop, UserPromptSubmit) replace non-functional fetch-preload
+- Recovery backoff: failed recovery attempts wait progressively longer (1 min, 2 min, ... up to 5 min cap)
+- DOWN state periodic retry: after exhausting recovery budget, check back every 30 min
+- Daily upgrade check: queries GitHub at 6 AM for newer versions of core and all installed components, notifies via C4
+- Diagnostic logging: hook timing, delivery failures, and tmux captures logged to activity-monitor directory
+- Recovery notices: notify pending channels when Claude comes back online after downtime
+
+### Fixed
+- Stuck probe cooldown: short retry (60s) on probe failure, full cooldown on success
+- Heartbeat state machine: prevent deadlock when enqueue fails during recovery
+- Reset hook activity state on Claude restart to prevent false busy detection
+- Deduplicate recovery notices for same chat with different message IDs
+- Preserve failed notifications in pending-channels file instead of discarding
+- postinstall.js: use execFileSync instead of execSync to prevent shell injection
+- Tmux capture truncation: keep last 8KB (most recent content) instead of first 8KB
+- Upgrade check: normalize v-prefix on both sides of version comparison
+- Upgrade check: return false on C4 enqueue failure to allow DailySchedule retry
+- DOWN state retry: only advance lastDownCheckAt after successful enqueue
+
+### Changed
+- Upgrade check runs as detached child process to avoid blocking monitor loop
+- Safety-net heartbeat interval relaxed to 2 hours (stuck detection is primary mechanism)
+- Activity monitor bumped to v12
+
 ## [0.1.8] - 2026-02-18
 
 ### Added

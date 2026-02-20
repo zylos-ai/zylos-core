@@ -123,10 +123,13 @@ function recordPendingChannel(channel, endpoint) {
     if (!fs.existsSync(DATA_DIR)) {
       fs.mkdirSync(DATA_DIR, { recursive: true });
     }
-    const key = `${channel}::${endpoint}`;
+    // Strip |msg:xxx from endpoint so same chat deduplicates correctly.
+    // Recovery notices should go to the chat, not reply to a specific message.
+    const normalizedEndpoint = endpoint.replace(/\|msg:[^|]+/, '');
+    const key = `${channel}::${normalizedEndpoint}`;
     const keys = loadPendingChannelKeys();
     if (keys.has(key)) return;
-    const line = `${JSON.stringify({ channel, endpoint })}\n`;
+    const line = `${JSON.stringify({ channel, endpoint: normalizedEndpoint })}\n`;
     fs.appendFileSync(PENDING_CHANNELS_FILE, line, 'utf8');
   } catch (err) {
     console.error(`[C4] Warning: failed to record pending channel (${err.message})`);

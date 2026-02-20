@@ -6,6 +6,7 @@
 
 import { execFileSync } from 'child_process';
 import { readFileSync, existsSync, statSync } from 'fs';
+import { logDeliveryFailure, saveTmuxCapture } from './c4-diagnostic.js';
 import {
   getNextPending,
   claimConversation,
@@ -181,6 +182,7 @@ async function submitAndVerify() {
 
     if (state === 'indeterminate') {
       log(`Enter verify attempt ${attempt + 1}: separator detection failed, retrying capture`);
+      saveTmuxCapture(capture, `separator-fail-attempt-${attempt + 1}`);
       continue;
     }
 
@@ -199,6 +201,7 @@ async function sendToTmux(message) {
     execFileSync('tmux', ['paste-buffer', '-b', bufferName, '-t', TMUX_SESSION], { stdio: 'pipe' });
   } catch (err) {
     log(`Error pasting to tmux: ${err.message}`);
+    logDeliveryFailure('tmux_paste', 0, 'PASTE_ERROR', { error: err.message });
     return 'paste_error';
   } finally {
     try {
@@ -242,6 +245,7 @@ async function handleConversationDeliveryFailure(msg) {
     if (nextCount >= MAX_RETRIES) {
       markFailed(msg.id);
       log(`FAILED: conversation id=${msg.id} channel=${msg.channel} marked as failed after ${nextCount} retries`);
+      logDeliveryFailure('conversation', msg.id, 'MAX_RETRIES', { channel: msg.channel, retries: nextCount });
       return;
     }
 
@@ -263,6 +267,7 @@ async function handleControlDeliveryFailure(control, reason) {
 
   if (transition.status === 'failed') {
     log(`FAILED: control id=${control.id} marked as failed after ${transition.retry_count} retries (${reason})`);
+    logDeliveryFailure('control', control.id, reason, { retries: transition.retry_count });
     return;
   }
 
@@ -390,6 +395,7 @@ async function processNextMessage() {
   }
 
   log(`Failed to paste ${item.type} id=${item.id} to tmux`);
+  logDeliveryFailure(item.type, item.id, 'TMUX_PASTE_FAILED');
   if (item.type === 'control') {
     await handleControlDeliveryFailure(item, 'TMUX_PASTE_FAILED');
   } else {

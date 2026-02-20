@@ -29,6 +29,9 @@ export class HeartbeatEngine {
     this.healthState = options.initialHealth ?? 'ok';
     this.restartFailureCount = 0;
     this.lastHeartbeatAt = Math.floor(Date.now() / 1000);
+    this.lastRecoveryAt = 0;
+    this.lastDownCheckAt = 0;
+    this.downRetryInterval = options.downRetryInterval ?? 1800; // 30 min
   }
 
   get health() {
@@ -46,7 +49,16 @@ export class HeartbeatEngine {
     const pending = this.deps.readHeartbeatPending();
     if (pending) {
       const status = this.deps.getHeartbeatStatus(pending.control_id);
-      if (status === 'pending' || status === 'running' || status === 'error') {
+
+      // Guard against stuck pending: if created_at is too old, treat as timeout
+      const pendingAge = currentTime - (pending.created_at || 0);
+      const maxPendingAge = 600; // 10 min absolute ceiling
+      if ((status === 'pending' || status === 'running' || status === 'error') && pendingAge < maxPendingAge) {
+        return;
+      }
+      if (pendingAge >= maxPendingAge && status !== 'done') {
+        this.deps.log(`Heartbeat pending too long (${pendingAge}s, status=${status}), treating as timeout`);
+        this.onHeartbeatFailure(pending, 'stale_pending');
         return;
       }
 
@@ -61,6 +73,7 @@ export class HeartbeatEngine {
       }
 
       this.deps.log(`Heartbeat unexpected status: ${status}`);
+      this.onHeartbeatFailure(pending, `unexpected_${status}`);
       return;
     }
 
@@ -69,12 +82,28 @@ export class HeartbeatEngine {
     }
 
     if (this.healthState === 'recovering') {
-      this.enqueueHeartbeat('recovery');
+      // Backoff: wait progressively longer between recovery attempts
+      const backoffDelay = Math.min(this.restartFailureCount * 60, 300);
+      if (backoffDelay > 0 && (currentTime - this.lastRecoveryAt) < backoffDelay) {
+        return;
+      }
+      const ok = this.enqueueHeartbeat('recovery');
+      if (!ok) {
+        // Prevent retry storm: treat failed enqueue as if we just tried
+        this.lastRecoveryAt = Math.floor(Date.now() / 1000);
+      }
       return;
     }
 
     if (this.healthState === 'down') {
-      this.enqueueHeartbeat('down-check');
+      // Periodic retry: check every downRetryInterval instead of every tick
+      if ((currentTime - this.lastDownCheckAt) < this.downRetryInterval) {
+        return;
+      }
+      const ok = this.enqueueHeartbeat('down-check');
+      if (ok) {
+        this.lastDownCheckAt = currentTime;
+      }
       return;
     }
 
@@ -106,10 +135,12 @@ export class HeartbeatEngine {
     }
 
     this.restartFailureCount += 1;
+    this.lastRecoveryAt = Math.floor(Date.now() / 1000);
     this.deps.log(`Heartbeat recovery attempt ${this.restartFailureCount}/${this.maxRestartFailures} (${reason})`);
     this.deps.killTmuxSession();
 
     if (this.restartFailureCount >= this.maxRestartFailures) {
+      this.lastDownCheckAt = Math.floor(Date.now() / 1000);
       this.setHealth('down', 'max_restart_failures_reached');
     }
   }
@@ -118,14 +149,11 @@ export class HeartbeatEngine {
     const phase = pending.phase || 'primary';
     this.deps.clearHeartbeatPending();
 
-    if (phase === 'primary' && this.healthState === 'ok') {
-      this.deps.log('Heartbeat primary failed; entering verify phase');
-      this.enqueueHeartbeat('verify');
-      return;
-    }
-
-    if (phase === 'verify' && this.healthState === 'ok') {
-      this.triggerRecovery(`verify_${status}`);
+    // In ok state, any failure triggers recovery directly (no verify phase).
+    // The verify phase was removed in v2 — stuck detection provides the
+    // corroborating signal that verify used to offer.
+    if (this.healthState === 'ok') {
+      this.triggerRecovery(`${phase}_${status}`);
       return;
     }
 
@@ -142,10 +170,23 @@ export class HeartbeatEngine {
     this.triggerRecovery(`heartbeat_${status}`);
   }
 
-  /** Wrapper that updates lastHeartbeatAt on successful primary enqueue. */
+  /**
+   * Request an immediate heartbeat probe (used by stuck detection).
+   * Returns false if a probe cannot be sent (wrong health state or
+   * another heartbeat is already in flight).
+   */
+  requestImmediateProbe(reason) {
+    if (this.healthState !== 'ok') return false;
+    const pending = this.deps.readHeartbeatPending();
+    if (pending) return false;
+    this.deps.log(`Stuck detection triggered: ${reason}`);
+    return this.enqueueHeartbeat('stuck');
+  }
+
+  /** Wrapper that updates lastHeartbeatAt on successful primary/stuck enqueue. */
   enqueueHeartbeat(phase) {
     const ok = this.deps.enqueueHeartbeat(phase);
-    if (ok && phase === 'primary') {
+    if (ok && (phase === 'primary' || phase === 'stuck')) {
       this.lastHeartbeatAt = Math.floor(Date.now() / 1000);
     }
     return ok;

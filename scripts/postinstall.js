@@ -8,7 +8,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(process.env.HOME, 'zylos');
@@ -50,7 +50,7 @@ function main() {
     }
 
     try {
-      execSync(`cp -r "${srcDir}" "${destDir}"`, { stdio: 'pipe' });
+      execFileSync('cp', ['-r', srcDir, destDir], { stdio: 'pipe' });
       console.log(`  + ${entry.name}`);
       synced++;
     } catch {
@@ -60,6 +60,19 @@ function main() {
 
   if (synced > 0 || skipped > 0) {
     console.log(`Core Skills: ${synced} synced, ${skipped} already present.`);
+  }
+
+  // Configure activity tracking hooks in Claude Code settings.json
+  const setupHooks = path.join(SKILLS_DIR, 'activity-monitor', 'scripts', 'setup-hooks.js');
+  if (fs.existsSync(setupHooks)) {
+    try {
+      execFileSync('node', [setupHooks], {
+        stdio: 'inherit',
+        env: { ...process.env, ZYLOS_DIR }
+      });
+    } catch {
+      console.log('  Warning: Failed to configure activity hooks');
+    }
   }
 }
 

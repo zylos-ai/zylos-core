@@ -1,10 +1,18 @@
 #!/usr/bin/env node
 /**
- * Activity Monitor v9 - Guardian + Heartbeat + Health Check + Daily Tasks
+ * Activity Monitor v12 - Guardian + Heartbeat v2 + Health Check + Daily Tasks + Upgrade Check
+ *
+ * v11 changes (Hook-based activity tracking):
+ *   - Replaced non-functional fetch-preload with Claude Code hooks
+ *   - hook-activity.js writes api-activity.json on tool/stop/idle events
+ *   - Stuck detection: triggers immediate probe when no activity for STUCK_THRESHOLD
+ *   - Removed verify phase: single heartbeat failure → recovery
+ *   - Safety-net heartbeat interval relaxed to 2 hours
+ *
  * Run with PM2: pm2 start activity-monitor.js --name activity-monitor
  */
 
-import { execSync, execFileSync } from 'child_process';
+import { execSync, execFileSync, spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
@@ -26,11 +34,16 @@ const HEALTH_CHECK_STATE_FILE = path.join(MONITOR_DIR, 'health-check-state.json'
 const DAILY_UPGRADE_STATE_FILE = path.join(MONITOR_DIR, 'daily-upgrade-state.json');
 const DAILY_MEMORY_COMMIT_STATE_FILE = path.join(MONITOR_DIR, 'daily-memory-commit-state.json');
 const CONTEXT_CHECK_STATE_FILE = path.join(MONITOR_DIR, 'context-check-state.json');
+const UPGRADE_CHECK_STATE_FILE = path.join(MONITOR_DIR, 'upgrade-check-state.json');
 const PENDING_CHANNELS_FILE = path.join(MONITOR_DIR, 'pending-channels.jsonl');
 
 // Claude binary - relies on PATH from PM2 ecosystem.config.js
 const CLAUDE_BIN = process.env.CLAUDE_BIN || 'claude';
 const BYPASS_PERMISSIONS = process.env.CLAUDE_BYPASS_PERMISSIONS !== 'false';
+
+// API activity file — written by hook-activity.js (Claude Code hooks)
+const API_ACTIVITY_FILE = path.join(MONITOR_DIR, 'api-activity.json');
+const HOOK_STATE_FILE = path.join(MONITOR_DIR, 'hook-state.json');
 
 // Conversation directory - auto-detect based on working directory
 const ZYLOS_PATH = ZYLOS_DIR.replace(/\//g, '-');
@@ -42,10 +55,16 @@ const IDLE_THRESHOLD = 3;
 const LOG_MAX_LINES = 500;
 const RESTART_DELAY = 5;
 
-// Heartbeat liveness config
-const HEARTBEAT_INTERVAL = 1800;     // 30 min
-const ACK_DEADLINE = 300;            // 5 min
+// Heartbeat liveness config (v2)
+const HEARTBEAT_INTERVAL = 7200;     // 2 hours (safety-net; stuck detection is the primary mechanism)
+const ACK_DEADLINE = 300;            // 5 min (regular heartbeat timeout)
+const STUCK_ACK_DEADLINE = 120;      // 2 min (stuck probe timeout)
 const MAX_RESTART_FAILURES = 3;
+const DOWN_RETRY_INTERVAL = 1800;   // 30 min periodic retry in DOWN state
+
+// Stuck detection config
+const STUCK_THRESHOLD = 300;         // 5 min of no activity → trigger immediate probe
+const STUCK_PROBE_COOLDOWN = 600;    // 10 min between stuck probes
 
 // Health check config
 const HEALTH_CHECK_INTERVAL = 21600; // 6 hours
@@ -56,6 +75,7 @@ const CONTEXT_CHECK_INTERVAL = 3600; // 1 hour
 // Daily tasks config
 const DAILY_UPGRADE_HOUR = 5;        // 5:00 AM local time
 const DAILY_MEMORY_COMMIT_HOUR = 3;  // 3:00 AM local time
+const DAILY_UPGRADE_CHECK_HOUR = 6;  // 6:00 AM local time
 const DAILY_COMMIT_SCRIPT = path.join(__dirname, '..', '..', 'zylos-memory', 'scripts', 'daily-commit.js');
 const CHECK_CONTEXT_SCRIPT = path.join(__dirname, '..', '..', 'check-context', 'scripts', 'check-context.js');
 
@@ -65,6 +85,8 @@ let notRunningCount = 0;
 let lastState = '';
 let startupGrace = 0;
 let idleSince = 0;
+let lastStuckProbeAt = 0;
+let lastDeadApiPid = null;
 
 let engine; // initialized in init()
 
@@ -304,6 +326,13 @@ function startClaude() {
     fs.unlinkSync('/tmp/context-compact-scheduled');
   } catch { }
 
+  // Reset hook activity state — prevents stale data from a crashed session
+  // causing false busy detection after restart.
+  try {
+    fs.writeFileSync(API_ACTIVITY_FILE, JSON.stringify({ version: 2, active: false, active_tools: 0, updated_at: Date.now() }));
+    fs.writeFileSync(HOOK_STATE_FILE, JSON.stringify({ active_tools: 0 }));
+  } catch { }
+
   const bypassFlag = BYPASS_PERMISSIONS ? ' --dangerously-skip-permissions' : '';
 
   if (tmuxHasSession()) {
@@ -387,10 +416,16 @@ function readHeartbeatPending() {
 }
 
 function writeHeartbeatPending(record) {
-  if (!fs.existsSync(MONITOR_DIR)) {
-    fs.mkdirSync(MONITOR_DIR, { recursive: true });
+  try {
+    if (!fs.existsSync(MONITOR_DIR)) {
+      fs.mkdirSync(MONITOR_DIR, { recursive: true });
+    }
+    fs.writeFileSync(HEARTBEAT_PENDING_FILE, JSON.stringify(record, null, 2));
+    return true;
+  } catch (err) {
+    log(`Failed to write heartbeat pending: ${err.message}`);
+    return false;
   }
-  fs.writeFileSync(HEARTBEAT_PENDING_FILE, JSON.stringify(record, null, 2));
 }
 
 function clearHeartbeatPending() {
@@ -410,14 +445,45 @@ function runC4Control(args) {
   }
 }
 
+function readApiActivity() {
+  try {
+    if (!fs.existsSync(API_ACTIVITY_FILE)) return null;
+    const activity = JSON.parse(fs.readFileSync(API_ACTIVITY_FILE, 'utf8'));
+    const pid = Number(activity?.pid);
+
+    if (Number.isInteger(pid) && pid > 0) {
+      try {
+        process.kill(pid, 0);
+      } catch (err) {
+        if (err?.code !== 'EPERM') {
+          if (lastDeadApiPid !== pid) {
+            log(`Hook activity ignored: stale pid ${pid} not running (${API_ACTIVITY_FILE})`);
+          }
+          lastDeadApiPid = pid;
+          return null;
+        }
+      }
+
+      if (lastDeadApiPid === pid) {
+        lastDeadApiPid = null;
+      }
+    }
+
+    return activity;
+  } catch {
+    return null;
+  }
+}
+
 function enqueueHeartbeat(phase) {
   const content = 'Heartbeat check.';
+  const deadline = phase === 'stuck' ? STUCK_ACK_DEADLINE : ACK_DEADLINE;
   const result = runC4Control([
     'enqueue',
     '--content', content,
     '--priority', '0',
     '--bypass-state',
-    '--ack-deadline', String(ACK_DEADLINE)
+    '--ack-deadline', String(deadline)
   ]);
 
   if (!result.ok) {
@@ -432,11 +498,15 @@ function enqueueHeartbeat(phase) {
   }
 
   const controlId = parseInt(match[1], 10);
-  writeHeartbeatPending({
+  const written = writeHeartbeatPending({
     control_id: controlId,
     phase,
     created_at: Math.floor(Date.now() / 1000)
   });
+  if (!written) {
+    log(`Heartbeat enqueue succeeded but pending file write failed (${phase})`);
+    return false;
+  }
   log(`Heartbeat enqueued id=${controlId} phase=${phase}`);
   return true;
 }
@@ -492,17 +562,25 @@ function notifyPendingChannels() {
     return;
   }
 
+  const failed = [];
   for (const record of dedup.values()) {
-    sendRecoveryNotice(record.channel, record.endpoint);
+    const ok = sendRecoveryNotice(record.channel, record.endpoint);
+    if (!ok) failed.push(record);
   }
 
+  // Only clear successfully sent notifications; re-queue failed ones
   try {
-    fs.writeFileSync(PENDING_CHANNELS_FILE, '');
+    if (failed.length > 0) {
+      const remaining = failed.map(r => JSON.stringify(r)).join('\n') + '\n';
+      fs.writeFileSync(PENDING_CHANNELS_FILE, remaining);
+    } else {
+      fs.writeFileSync(PENDING_CHANNELS_FILE, '');
+    }
   } catch (err) {
     log(`Pending channel cleanup failed: ${err.message}`);
   }
 
-  log(`Recovery notification completed for ${dedup.size} channel(s)`);
+  log(`Recovery notification: ${dedup.size - failed.length} sent, ${failed.length} failed`);
 }
 
 // --- Health Check ---
@@ -695,6 +773,7 @@ function enqueueDailyUpgradeControl() {
 
 let upgradeScheduler;      // initialized in init()
 let memoryCommitScheduler; // initialized in init()
+let upgradeCheckScheduler; // initialized in init()
 
 // ---------------------------------------------------------------------------
 // Daily Memory Commit
@@ -736,6 +815,51 @@ function executeDailyMemoryCommit() {
   } catch (err) {
     const detail = err?.stderr?.toString?.().trim() || err.message;
     log(`Daily memory commit failed: ${detail}`);
+    return false;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Daily Upgrade Check
+// ---------------------------------------------------------------------------
+
+function loadUpgradeCheckState() {
+  try {
+    if (!fs.existsSync(UPGRADE_CHECK_STATE_FILE)) return null;
+    return JSON.parse(fs.readFileSync(UPGRADE_CHECK_STATE_FILE, 'utf8'));
+  } catch { }
+  return null;
+}
+
+function writeUpgradeCheckState(date) {
+  try {
+    if (!fs.existsSync(MONITOR_DIR)) {
+      fs.mkdirSync(MONITOR_DIR, { recursive: true });
+    }
+    fs.writeFileSync(UPGRADE_CHECK_STATE_FILE, JSON.stringify({
+      last_date: date,
+      updated_at: new Date().toISOString()
+    }, null, 2));
+  } catch (err) {
+    log(`Upgrade check: failed to write state (${err.message})`);
+  }
+}
+
+const UPGRADE_CHECK_SCRIPT = path.join(__dirname, 'upgrade-check.js');
+
+function executeUpgradeCheck() {
+  // Spawn in a detached child process to avoid blocking the monitor loop.
+  // The child handles GitHub API calls, version comparison, and C4 notification.
+  try {
+    const child = spawn('node', [UPGRADE_CHECK_SCRIPT], {
+      stdio: 'ignore',
+      detached: true
+    });
+    child.unref();
+    log('Upgrade check: spawned background process');
+    return true;
+  } catch (err) {
+    log(`Upgrade check: failed to spawn (${err.message})`);
     return false;
   }
 }
@@ -834,8 +958,27 @@ function monitorLoop() {
     source = 'default';
   }
 
+  // Read API activity from hook-activity.js (may be null if no hooks fired yet)
+  const apiActivity = readApiActivity();
+  const apiUpdatedSec = apiActivity?.updated_at ? Math.floor(apiActivity.updated_at / 1000) : 0;
+  const activeTools = apiActivity?.active_tools ?? 0;
+  const thinking = apiActivity?.active === true || activeTools > 0;
+
+  // Merge activity sources: use API timestamp when it indicates active work
+  // (PreToolUse/UserPromptSubmit set active=true). Don't extend activity on
+  // Stop/Notification events (active=false) — those signal idle, not work.
+  if (apiActivity?.active && apiUpdatedSec > activity) {
+    activity = apiUpdatedSec;
+    source = 'api_hook';
+  }
+
   const inactiveSeconds = currentTime - activity;
-  const state = inactiveSeconds < IDLE_THRESHOLD ? 'busy' : 'idle';
+
+  // State determination uses all available signals:
+  // 1. active_tools > 0 → tools in flight, definitely busy
+  // 2. recent activity (< IDLE_THRESHOLD) → busy
+  // 3. otherwise → idle
+  const state = (activeTools > 0 || inactiveSeconds < IDLE_THRESHOLD) ? 'busy' : 'idle';
 
   if (state === 'idle' && lastState !== 'idle') {
     idleSince = currentTime;
@@ -847,7 +990,10 @@ function monitorLoop() {
 
   writeStatusFile({
     state,
+    thinking,
     last_activity: activity,
+    last_api_activity: apiUpdatedSec || undefined,
+    active_tools: activeTools,
     last_check: currentTime,
     last_check_human: currentTimeHuman,
     idle_seconds: idleSeconds,
@@ -863,11 +1009,25 @@ function monitorLoop() {
     }
   }
 
+  // Stuck detection: if no observable activity from any source for STUCK_THRESHOLD,
+  // trigger an immediate heartbeat probe with a shorter timeout.
+  if (engine.health === 'ok') {
+    const lastAnyActivity = Math.max(activity, apiUpdatedSec);
+    const stuckSeconds = currentTime - lastAnyActivity;
+
+    if (stuckSeconds >= STUCK_THRESHOLD && (currentTime - lastStuckProbeAt) >= STUCK_PROBE_COOLDOWN) {
+      const ok = engine.requestImmediateProbe(`no_activity_for_${stuckSeconds}s`);
+      // Approach C: full cooldown on success, short retry (60s) on failure
+      lastStuckProbeAt = ok ? currentTime : currentTime - STUCK_PROBE_COOLDOWN + 60;
+    }
+  }
+
   engine.processHeartbeat(true, currentTime);
   maybeEnqueueHealthCheck(true, currentTime);
   maybeEnqueueContextCheck(true, currentTime);
   if (engine.health === 'ok') {
     upgradeScheduler.maybeTrigger();
+    upgradeCheckScheduler.maybeTrigger();
   }
   memoryCommitScheduler.maybeTrigger();
   lastState = state;
@@ -889,7 +1049,8 @@ function init() {
   }, {
     initialHealth,
     heartbeatInterval: HEARTBEAT_INTERVAL,
-    maxRestartFailures: MAX_RESTART_FAILURES
+    maxRestartFailures: MAX_RESTART_FAILURES,
+    downRetryInterval: DOWN_RETRY_INTERVAL
   });
 
   upgradeScheduler = new DailySchedule({
@@ -916,13 +1077,25 @@ function init() {
     name: 'daily-memory-commit'
   });
 
+  upgradeCheckScheduler = new DailySchedule({
+    getLocalHour,
+    getLocalDate,
+    loadState: loadUpgradeCheckState,
+    writeState: writeUpgradeCheckState,
+    execute: executeUpgradeCheck,
+    log
+  }, {
+    hour: DAILY_UPGRADE_CHECK_HOUR,
+    name: 'daily-upgrade-check'
+  });
+
   if (initialHealth !== 'ok') {
     log(`Startup with health=${initialHealth}; will verify immediately when Claude is running`);
   }
 }
 
 init();
-log(`=== Activity Monitor Started (v9 - Guardian + Heartbeat + HealthCheck + DailyTasks): ${new Date().toISOString()} tz=${timezone} ===`);
+log(`=== Activity Monitor Started (v12 - Guardian + Heartbeat v2 + Hook Activity + DailyTasks + UpgradeCheck): ${new Date().toISOString()} tz=${timezone} ===`);
 
 setInterval(monitorLoop, INTERVAL);
 monitorLoop();
