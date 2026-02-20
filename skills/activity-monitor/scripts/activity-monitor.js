@@ -496,11 +496,15 @@ function enqueueHeartbeat(phase) {
   }
 
   const controlId = parseInt(match[1], 10);
-  writeHeartbeatPending({
+  const written = writeHeartbeatPending({
     control_id: controlId,
     phase,
     created_at: Math.floor(Date.now() / 1000)
   });
+  if (!written) {
+    log(`Heartbeat enqueue succeeded but pending file write failed (${phase})`);
+    return false;
+  }
   log(`Heartbeat enqueued id=${controlId} phase=${phase}`);
   return true;
 }
@@ -556,17 +560,25 @@ function notifyPendingChannels() {
     return;
   }
 
+  const failed = [];
   for (const record of dedup.values()) {
-    sendRecoveryNotice(record.channel, record.endpoint);
+    const ok = sendRecoveryNotice(record.channel, record.endpoint);
+    if (!ok) failed.push(record);
   }
 
+  // Only clear successfully sent notifications; re-queue failed ones
   try {
-    fs.writeFileSync(PENDING_CHANNELS_FILE, '');
+    if (failed.length > 0) {
+      const remaining = failed.map(r => JSON.stringify(r)).join('\n') + '\n';
+      fs.writeFileSync(PENDING_CHANNELS_FILE, remaining);
+    } else {
+      fs.writeFileSync(PENDING_CHANNELS_FILE, '');
+    }
   } catch (err) {
     log(`Pending channel cleanup failed: ${err.message}`);
   }
 
-  log(`Recovery notification completed for ${dedup.size} channel(s)`);
+  log(`Recovery notification: ${dedup.size - failed.length} sent, ${failed.length} failed`);
 }
 
 // --- Health Check ---
