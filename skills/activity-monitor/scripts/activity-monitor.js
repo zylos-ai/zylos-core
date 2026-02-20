@@ -864,10 +864,24 @@ function monitorLoop() {
   // Read API activity from hook-activity.js (may be null if no hooks fired yet)
   const apiActivity = readApiActivity();
   const apiUpdatedSec = apiActivity?.updated_at ? Math.floor(apiActivity.updated_at / 1000) : 0;
-  const thinking = apiActivity?.active === true || (apiActivity?.active_tools ?? 0) > 0;
+  const activeTools = apiActivity?.active_tools ?? 0;
+  const thinking = apiActivity?.active === true || activeTools > 0;
+
+  // Merge activity sources: use API timestamp when it indicates active work
+  // (PreToolUse/UserPromptSubmit set active=true). Don't extend activity on
+  // Stop/Notification events (active=false) — those signal idle, not work.
+  if (apiActivity?.active && apiUpdatedSec > activity) {
+    activity = apiUpdatedSec;
+    source = 'api_hook';
+  }
 
   const inactiveSeconds = currentTime - activity;
-  const state = inactiveSeconds < IDLE_THRESHOLD ? 'busy' : 'idle';
+
+  // State determination uses all available signals:
+  // 1. active_tools > 0 → tools in flight, definitely busy
+  // 2. recent activity (< IDLE_THRESHOLD) → busy
+  // 3. otherwise → idle
+  const state = (activeTools > 0 || inactiveSeconds < IDLE_THRESHOLD) ? 'busy' : 'idle';
 
   if (state === 'idle' && lastState !== 'idle') {
     idleSince = currentTime;
@@ -882,7 +896,7 @@ function monitorLoop() {
     thinking,
     last_activity: activity,
     last_api_activity: apiUpdatedSec || undefined,
-    active_tools: apiActivity?.active_tools ?? 0,
+    active_tools: activeTools,
     last_check: currentTime,
     last_check_human: currentTimeHuman,
     idle_seconds: idleSeconds,
