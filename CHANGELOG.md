@@ -5,6 +5,21 @@ All notable changes to zylos-core will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-02-21
+
+### Added
+- Auto-sync settings.json hooks on upgrade: template is now the single source of truth for all hook configurations
+- `applyMigrationHints()` in self-upgrade pipeline (step 8): automatically adds missing hooks, updates modified hooks, removes obsolete core hooks
+- `sync-settings-hooks.js` standalone script for postinstall path (same logic)
+- `hook-utils.js` shared module for hook matching utilities
+
+### Changed
+- `postinstall.js` uses template-based hook sync instead of `setup-hooks.js`
+- `templates/.claude/settings.json` now includes all hooks (SessionStart + activity-monitor)
+
+### Removed
+- `setup-hooks.js`: replaced by `sync-settings-hooks.js` which handles all hooks from the template
+
 ## [0.1.9] - 2026-02-21
 
 ### Added
