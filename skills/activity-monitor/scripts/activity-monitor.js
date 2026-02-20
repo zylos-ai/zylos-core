@@ -58,13 +58,13 @@ const RESTART_DELAY = 5;
 // Heartbeat liveness config (v2)
 const HEARTBEAT_INTERVAL = 7200;     // 2 hours (safety-net; stuck detection is the primary mechanism)
 const ACK_DEADLINE = 300;            // 5 min (regular heartbeat timeout)
-const STUCK_ACK_DEADLINE = 120;      // 2 min (stuck probe timeout — shorter because staleness already confirms)
+const STUCK_ACK_DEADLINE = 120;      // 2 min (stuck probe timeout)
 const MAX_RESTART_FAILURES = 3;
 const DOWN_RETRY_INTERVAL = 1800;   // 30 min periodic retry in DOWN state
 
 // Stuck detection config
 const STUCK_THRESHOLD = 300;         // 5 min of no activity → trigger immediate probe
-const STUCK_PROBE_COOLDOWN = 600;    // 10 min between stuck probes (prevents spam during legit idle)
+const STUCK_PROBE_COOLDOWN = 600;    // 10 min between stuck probes
 
 // Health check config
 const HEALTH_CHECK_INTERVAL = 21600; // 6 hours
