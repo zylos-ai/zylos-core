@@ -42,6 +42,7 @@ const BYPASS_PERMISSIONS = process.env.CLAUDE_BYPASS_PERMISSIONS !== 'false';
 
 // API activity file — written by hook-activity.js (Claude Code hooks)
 const API_ACTIVITY_FILE = path.join(MONITOR_DIR, 'api-activity.json');
+const HOOK_STATE_FILE = path.join(MONITOR_DIR, 'hook-state.json');
 
 // Conversation directory - auto-detect based on working directory
 const ZYLOS_PATH = ZYLOS_DIR.replace(/\//g, '-');
@@ -319,6 +320,13 @@ function startClaude() {
   } catch { }
   try {
     fs.unlinkSync('/tmp/context-compact-scheduled');
+  } catch { }
+
+  // Reset hook activity state — prevents stale data from a crashed session
+  // causing false busy detection after restart.
+  try {
+    fs.writeFileSync(API_ACTIVITY_FILE, JSON.stringify({ version: 2, active: false, active_tools: 0, updated_at: Date.now() }));
+    fs.writeFileSync(HOOK_STATE_FILE, JSON.stringify({ active_tools: 0 }));
   } catch { }
 
   const bypassFlag = BYPASS_PERMISSIONS ? ' --dangerously-skip-permissions' : '';
