@@ -20,44 +20,12 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { fileURLToPath } from 'url';
+import { extractScriptPath, extractSkillName, getCommandHooks } from './hook-utils.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ZYLOS_DIR = path.resolve(process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos'));
 const TEMPLATE_SETTINGS = path.join(__dirname, '..', '..', 'templates', '.claude', 'settings.json');
 const INSTALLED_SETTINGS = path.join(ZYLOS_DIR, '.claude', 'settings.json');
-
-/**
- * Extract the script file path from a hook command.
- */
-function extractScriptPath(command) {
-  if (typeof command !== 'string') return '';
-  let result = null;
-  for (const raw of command.split(/\s+/)) {
-    const token = raw.replace(/^["']|["']$/g, '');
-    if (token.includes('/') && /\.\w+$/.test(token)) {
-      result = token;
-    }
-  }
-  if (!result) return command;
-  return result.startsWith('~/') ? path.join(os.homedir(), result.slice(2)) : result;
-}
-
-/**
- * Extract skill name from hook command.
- */
-function extractSkillName(command) {
-  if (typeof command !== 'string') return null;
-  const match = command.match(/skills\/([^/]+)\//);
-  return match ? match[1] : null;
-}
-
-/**
- * Get command hooks from a matcher entry.
- */
-function getCmds(m) {
-  return (m && typeof m === 'object' && Array.isArray(m.hooks) ? m.hooks : [])
-    .filter(h => h && h.type === 'command');
-}
 
 function main() {
   const dryRun = process.argv.includes('--dry-run');
@@ -90,7 +58,7 @@ function main() {
   for (const matchers of Object.values(templateHooks)) {
     if (!Array.isArray(matchers)) continue;
     for (const m of matchers) {
-      for (const h of getCmds(m)) {
+      for (const h of getCommandHooks(m)) {
         const name = extractSkillName(h.command);
         if (name) coreSkillNames.add(name);
       }
@@ -113,14 +81,14 @@ function main() {
     const installedMatchers = installedSettings.hooks[event];
 
     for (const matcher of matchers) {
-      for (const templateCmd of getCmds(matcher)) {
+      for (const templateCmd of getCommandHooks(matcher)) {
         const templateKey = extractScriptPath(templateCmd.command);
 
         // Find installed hook with the same script path
         let matched = null;
         let matchedGroup = null;
         for (const im of installedMatchers) {
-          const found = getCmds(im).find(
+          const found = getCommandHooks(im).find(
             h => extractScriptPath(h.command) === templateKey
           );
           if (found) {
@@ -179,7 +147,7 @@ function main() {
 
         const installedKey = extractScriptPath(h.command);
         const foundInTemplate = templateMatchers.some(tm =>
-          getCmds(tm).some(th => extractScriptPath(th.command) === installedKey)
+          getCommandHooks(tm).some(th => extractScriptPath(th.command) === installedKey)
         );
 
         if (!foundInTemplate) {

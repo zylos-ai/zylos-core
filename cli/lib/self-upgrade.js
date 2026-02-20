@@ -13,6 +13,7 @@ import { downloadArchive, downloadBranch } from './download.js';
 import { generateManifest, loadManifest, saveManifest } from './manifest.js';
 import { fetchRawFile, sanitizeError } from './github.js';
 import { copyTree, syncTree } from './fs-utils.js';
+import { extractScriptPath, extractSkillName, getCommandHooks } from './hook-utils.js';
 
 const REPO = 'zylos-ai/zylos-core';
 
@@ -378,40 +379,6 @@ function listTemplateFiles(templatesDir) {
 }
 
 /**
- * Extract the script file path from a hook command.
- * e.g. "node ~/zylos/.claude/skills/foo/scripts/bar.js --flag"
- *   -> "~/zylos/.claude/skills/foo/scripts/bar.js"
- * Falls back to the full command if no path-like token is found.
- */
-function extractScriptPath(command) {
-  if (typeof command !== 'string') return '';
-  // Use the LAST path-like token so that shell prefixes
-  // (e.g. "source ~/.nvm/nvm.sh && node ~/path/script.js") are skipped
-  let result = null;
-  for (const raw of command.split(/\s+/)) {
-    const token = raw.replace(/^["']|["']$/g, '');
-    if (token.includes('/') && /\.\w+$/.test(token)) {
-      result = token;
-    }
-  }
-  if (!result) return command;
-  // Normalize ~ to absolute path for consistent comparison
-  return result.startsWith('~/') ? path.join(os.homedir(), result.slice(2)) : result;
-}
-
-/**
- * Extract the skill name from a hook command's script path.
- * e.g. "node ~/zylos/.claude/skills/comm-bridge/scripts/c4-session-init.js"
- *   -> "comm-bridge"
- * Returns null if the pattern doesn't match.
- */
-function extractSkillName(command) {
-  if (typeof command !== 'string') return null;
-  const match = command.match(/skills\/([^/]+)\//);
-  return match ? match[1] : null;
-}
-
-/**
  * Compare template settings.json hooks with installed settings.json.
  * Matches hooks by script path (not full command string) to detect:
  *  - missing_hook:  in template, not installed
@@ -443,17 +410,12 @@ function generateMigrationHints(templatesDir) {
   const templateHooks = templateSettings.hooks || {};
   const installedHooks = installedSettings.hooks || {};
 
-  // Helper: safely get command hooks from a matcher entry
-  const getCmds = (m) =>
-    (m && typeof m === 'object' && Array.isArray(m.hooks) ? m.hooks : [])
-      .filter(h => h && h.type === 'command');
-
   // Collect core skill names from template hooks (for removed_hook scoping)
   const coreSkillNames = new Set();
   for (const matchers of Object.values(templateHooks)) {
     if (!Array.isArray(matchers)) continue;
     for (const m of matchers) {
-      for (const h of getCmds(m)) {
+      for (const h of getCommandHooks(m)) {
         const name = extractSkillName(h.command);
         if (name) coreSkillNames.add(name);
       }
@@ -466,13 +428,13 @@ function generateMigrationHints(templatesDir) {
     const installedMatchers = Array.isArray(installedHooks[event]) ? installedHooks[event] : [];
 
     for (const matcher of matchers) {
-      for (const templateCmd of getCmds(matcher)) {
+      for (const templateCmd of getCommandHooks(matcher)) {
         const templateKey = extractScriptPath(templateCmd.command);
 
         // Find installed hook with the same script path
         let matched = null;
         for (const im of installedMatchers) {
-          matched = getCmds(im).find(
+          matched = getCommandHooks(im).find(
             h => extractScriptPath(h.command) === templateKey
           );
           if (matched) break;
@@ -509,7 +471,7 @@ function generateMigrationHints(templatesDir) {
     const templateMatchers = Array.isArray(templateHooks[event]) ? templateHooks[event] : [];
 
     for (const matcher of matchers) {
-      for (const installedCmd of getCmds(matcher)) {
+      for (const installedCmd of getCommandHooks(matcher)) {
         // Only flag hooks from core skills to avoid false positives
         // for optional component hooks
         const skillName = extractSkillName(installedCmd.command);
@@ -517,7 +479,7 @@ function generateMigrationHints(templatesDir) {
 
         const installedKey = extractScriptPath(installedCmd.command);
         const foundInTemplate = templateMatchers.some(tm =>
-          getCmds(tm).some(
+          getCommandHooks(tm).some(
             h => extractScriptPath(h.command) === installedKey
           )
         );
