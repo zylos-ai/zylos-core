@@ -949,8 +949,9 @@ function monitorLoop() {
     const stuckSeconds = currentTime - lastAnyActivity;
 
     if (stuckSeconds >= STUCK_THRESHOLD && (currentTime - lastStuckProbeAt) >= STUCK_PROBE_COOLDOWN) {
-      lastStuckProbeAt = currentTime;
-      engine.requestImmediateProbe(`no_activity_for_${stuckSeconds}s`);
+      const ok = engine.requestImmediateProbe(`no_activity_for_${stuckSeconds}s`);
+      // Approach C: full cooldown on success, short retry (60s) on failure
+      lastStuckProbeAt = ok ? currentTime : currentTime - STUCK_PROBE_COOLDOWN + 60;
     }
   }
 
