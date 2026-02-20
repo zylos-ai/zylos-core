@@ -95,7 +95,7 @@ export function saveTmuxCapture(capture, context) {
     const ts = new Date().toISOString().replace('T', ' ').substring(0, 19);
     const separator = '\u2500'.repeat(60);
     const truncated = capture.length > MAX_CAPTURE_LENGTH
-      ? capture.slice(0, MAX_CAPTURE_LENGTH) + `\n[...truncated ${capture.length - MAX_CAPTURE_LENGTH} bytes]`
+      ? `[...truncated ${capture.length - MAX_CAPTURE_LENGTH} bytes]\n` + capture.slice(-MAX_CAPTURE_LENGTH)
       : capture;
     fs.appendFileSync(filePath, `\n[${ts}] context=${context}\n${separator}\n${truncated}\n${separator}\n`);
     rotateIfNeeded(filePath);
