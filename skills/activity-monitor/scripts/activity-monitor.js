@@ -414,10 +414,16 @@ function readHeartbeatPending() {
 }
 
 function writeHeartbeatPending(record) {
-  if (!fs.existsSync(MONITOR_DIR)) {
-    fs.mkdirSync(MONITOR_DIR, { recursive: true });
+  try {
+    if (!fs.existsSync(MONITOR_DIR)) {
+      fs.mkdirSync(MONITOR_DIR, { recursive: true });
+    }
+    fs.writeFileSync(HEARTBEAT_PENDING_FILE, JSON.stringify(record, null, 2));
+    return true;
+  } catch (err) {
+    log(`Failed to write heartbeat pending: ${err.message}`);
+    return false;
   }
-  fs.writeFileSync(HEARTBEAT_PENDING_FILE, JSON.stringify(record, null, 2));
 }
 
 function clearHeartbeatPending() {

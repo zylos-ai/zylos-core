@@ -368,39 +368,56 @@ describe('HeartbeatEngine', () => {
   });
 
   describe('in-flight heartbeat handling', () => {
-    it('does nothing when status is pending', () => {
+    it('does nothing when status is pending (fresh)', () => {
       const { deps, calls } = createMockDeps();
-      deps._pending = { control_id: 1, phase: 'primary' };
+      const now = Math.floor(Date.now() / 1000);
+      deps._pending = { control_id: 1, phase: 'primary', created_at: now - 10 };
       deps._heartbeatStatus = 'pending';
       const engine = new HeartbeatEngine(deps);
 
-      engine.processHeartbeat(true, Math.floor(Date.now() / 1000));
+      engine.processHeartbeat(true, now);
 
       assert.equal(calls.clearHeartbeatPending, 0);
       assert.deepStrictEqual(calls.enqueueHeartbeat, []);
       assert.equal(calls.killTmuxSession, 0);
     });
 
-    it('does nothing when status is running', () => {
+    it('does nothing when status is running (fresh)', () => {
       const { deps, calls } = createMockDeps();
-      deps._pending = { control_id: 1, phase: 'primary' };
+      const now = Math.floor(Date.now() / 1000);
+      deps._pending = { control_id: 1, phase: 'primary', created_at: now - 10 };
       deps._heartbeatStatus = 'running';
       const engine = new HeartbeatEngine(deps);
 
-      engine.processHeartbeat(true, Math.floor(Date.now() / 1000));
+      engine.processHeartbeat(true, now);
 
       assert.equal(calls.clearHeartbeatPending, 0);
     });
 
-    it('logs unexpected status', () => {
+    it('treats stale pending as timeout', () => {
       const { deps, calls } = createMockDeps();
-      deps._pending = { control_id: 1, phase: 'primary' };
+      const now = Math.floor(Date.now() / 1000);
+      deps._pending = { control_id: 1, phase: 'primary', created_at: now - 700 };
+      deps._heartbeatStatus = 'pending';
+      const engine = new HeartbeatEngine(deps);
+
+      engine.processHeartbeat(true, now);
+
+      assert.equal(calls.clearHeartbeatPending, 1);
+      assert.ok(calls.log.some(m => m.includes('pending too long')));
+    });
+
+    it('treats unexpected status as failure', () => {
+      const { deps, calls } = createMockDeps();
+      const now = Math.floor(Date.now() / 1000);
+      deps._pending = { control_id: 1, phase: 'primary', created_at: now - 700 };
       deps._heartbeatStatus = 'bizarre';
       const engine = new HeartbeatEngine(deps);
 
-      engine.processHeartbeat(true, Math.floor(Date.now() / 1000));
+      engine.processHeartbeat(true, now);
 
-      assert.ok(calls.log.some(m => m.includes('unexpected status') && m.includes('bizarre')));
+      assert.equal(calls.clearHeartbeatPending, 1);
+      assert.ok(calls.log.some(m => m.includes('unexpected_bizarre') || m.includes('pending too long')));
     });
   });
 

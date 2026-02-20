@@ -49,7 +49,16 @@ export class HeartbeatEngine {
     const pending = this.deps.readHeartbeatPending();
     if (pending) {
       const status = this.deps.getHeartbeatStatus(pending.control_id);
-      if (status === 'pending' || status === 'running' || status === 'error') {
+
+      // Guard against stuck pending: if created_at is too old, treat as timeout
+      const pendingAge = currentTime - (pending.created_at || 0);
+      const maxPendingAge = 600; // 10 min absolute ceiling
+      if ((status === 'pending' || status === 'running' || status === 'error') && pendingAge < maxPendingAge) {
+        return;
+      }
+      if (pendingAge >= maxPendingAge && status !== 'done') {
+        this.deps.log(`Heartbeat pending too long (${pendingAge}s, status=${status}), treating as timeout`);
+        this.onHeartbeatFailure(pending, 'stale_pending');
         return;
       }
 
@@ -64,6 +73,7 @@ export class HeartbeatEngine {
       }
 
       this.deps.log(`Heartbeat unexpected status: ${status}`);
+      this.onHeartbeatFailure(pending, `unexpected_${status}`);
       return;
     }
 
@@ -77,7 +87,11 @@ export class HeartbeatEngine {
       if (backoffDelay > 0 && (currentTime - this.lastRecoveryAt) < backoffDelay) {
         return;
       }
-      this.enqueueHeartbeat('recovery');
+      const ok = this.enqueueHeartbeat('recovery');
+      if (!ok) {
+        // Prevent retry storm: treat failed enqueue as if we just tried
+        this.lastRecoveryAt = Math.floor(Date.now() / 1000);
+      }
       return;
     }
 
