@@ -100,8 +100,10 @@ export class HeartbeatEngine {
       if ((currentTime - this.lastDownCheckAt) < this.downRetryInterval) {
         return;
       }
-      this.lastDownCheckAt = currentTime;
-      this.enqueueHeartbeat('down-check');
+      const ok = this.enqueueHeartbeat('down-check');
+      if (ok) {
+        this.lastDownCheckAt = currentTime;
+      }
       return;
     }
 

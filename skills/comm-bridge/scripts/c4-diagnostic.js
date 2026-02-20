@@ -86,13 +86,18 @@ export function logDeliveryFailure(itemType, itemId, reason, extra = {}) {
  * @param {string} capture - raw tmux pane content
  * @param {string} context - e.g. 'separator-fail-attempt-1'
  */
+const MAX_CAPTURE_LENGTH = 8192; // Truncate large captures to prevent disk bloat
+
 export function saveTmuxCapture(capture, context) {
   try {
     ensureDir();
     const filePath = path.join(DIAG_DIR, 'tmux-captures.log');
     const ts = new Date().toISOString().replace('T', ' ').substring(0, 19);
     const separator = '\u2500'.repeat(60);
-    fs.appendFileSync(filePath, `\n[${ts}] context=${context}\n${separator}\n${capture}\n${separator}\n`);
+    const truncated = capture.length > MAX_CAPTURE_LENGTH
+      ? capture.slice(0, MAX_CAPTURE_LENGTH) + `\n[...truncated ${capture.length - MAX_CAPTURE_LENGTH} bytes]`
+      : capture;
+    fs.appendFileSync(filePath, `\n[${ts}] context=${context}\n${separator}\n${truncated}\n${separator}\n`);
     rotateIfNeeded(filePath);
   } catch {
     // Best effort

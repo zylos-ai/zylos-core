@@ -12,7 +12,7 @@
  * Run with PM2: pm2 start activity-monitor.js --name activity-monitor
  */
 
-import { execSync, execFileSync } from 'child_process';
+import { execSync, execFileSync, spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
@@ -78,7 +78,6 @@ const DAILY_MEMORY_COMMIT_HOUR = 3;  // 3:00 AM local time
 const DAILY_UPGRADE_CHECK_HOUR = 6;  // 6:00 AM local time
 const DAILY_COMMIT_SCRIPT = path.join(__dirname, '..', '..', 'zylos-memory', 'scripts', 'daily-commit.js');
 const CHECK_CONTEXT_SCRIPT = path.join(__dirname, '..', '..', 'check-context', 'scripts', 'check-context.js');
-const COMPONENTS_JSON = path.join(ZYLOS_DIR, '.zylos', 'components.json');
 
 // State
 let lastTruncateDay = '';
@@ -846,129 +845,23 @@ function writeUpgradeCheckState(date) {
   }
 }
 
-function sanitizeVersion(v) {
-  return String(v || '').replace(/[^a-zA-Z0-9._\-]/g, '').slice(0, 32);
-}
-
-function compareSemver(a, b) {
-  const [aBase, aPre] = a.split(/-(.+)/);
-  const [bBase, bPre] = b.split(/-(.+)/);
-  const aParts = aBase.split('.').map(Number);
-  const bParts = bBase.split('.').map(Number);
-  for (let i = 0; i < 3; i++) {
-    const diff = (bParts[i] || 0) - (aParts[i] || 0);
-    if (diff !== 0) return diff;
-  }
-  // Stable (no pre-release) > pre-release
-  if (!aPre && bPre) return -1;
-  if (aPre && !bPre) return 1;
-  return 0;
-}
-
-/**
- * Fetch the latest semver tag from a GitHub repo.
- * Returns { version, error } — version is null on failure, error describes why.
- */
-function getLatestTag(repo) {
-  let output;
-  try {
-    output = execFileSync('gh', [
-      'api', `repos/${repo}/tags`, '--paginate', '--jq', '.[].name'
-    ], {
-      encoding: 'utf8',
-      stdio: 'pipe',
-      timeout: 15000
-    }).trim();
-  } catch (err) {
-    const msg = err.stderr ? String(err.stderr).trim() : err.message;
-    return { version: null, error: msg };
-  }
-
-  if (!output) {
-    return { version: null, error: 'no tags' };
-  }
-
-  // Filter semver tags and sort descending
-  const versions = output.split('\n')
-    .map(t => t.trim())
-    .filter(name => /^v?\d+\.\d+\.\d+/.test(name))
-    .map(name => name.replace(/^v/, ''))
-    .sort(compareSemver);
-
-  if (versions.length === 0) {
-    return { version: null, error: 'no semver tags' };
-  }
-
-  return { version: versions[0], error: null };
-}
+const UPGRADE_CHECK_SCRIPT = path.join(__dirname, 'upgrade-check.js');
 
 function executeUpgradeCheck() {
-  const upgrades = [];
-  let failures = 0;
-
-  // Check zylos-core
+  // Spawn in a detached child process to avoid blocking the monitor loop.
+  // The child handles GitHub API calls, version comparison, and C4 notification.
   try {
-    const coreVersion = execFileSync('zylos', ['--version'], {
-      encoding: 'utf8',
-      stdio: 'pipe',
-      timeout: 5000
-    }).trim();
-    const result = getLatestTag('zylos-ai/zylos-core');
-    if (result.error) {
-      log(`Upgrade check: failed to fetch zylos-core tag (${result.error})`);
-      failures++;
-    } else if (result.version && result.version !== coreVersion) {
-      upgrades.push(`zylos-core ${sanitizeVersion(coreVersion)} → ${sanitizeVersion(result.version)}`);
-    }
-  } catch (err) {
-    log(`Upgrade check: failed to check core version (${err.message})`);
-    failures++;
-  }
-
-  // Check installed components
-  try {
-    if (fs.existsSync(COMPONENTS_JSON)) {
-      const components = JSON.parse(fs.readFileSync(COMPONENTS_JSON, 'utf8'));
-      for (const [name, info] of Object.entries(components)) {
-        if (!info.repo || !info.version) continue;
-        const result = getLatestTag(info.repo);
-        if (result.error) {
-          log(`Upgrade check: failed to fetch ${name} tag (${result.error})`);
-          failures++;
-          continue;
-        }
-        if (result.version && result.version !== info.version) {
-          upgrades.push(`${sanitizeVersion(name)} ${sanitizeVersion(info.version)} → ${sanitizeVersion(result.version)}`);
-        }
-      }
-    }
-  } catch (err) {
-    log(`Upgrade check: failed to read components (${err.message})`);
-    failures++;
-  }
-
-  if (upgrades.length === 0) {
-    log(`Upgrade check: all components up to date${failures > 0 ? ` (${failures} check(s) failed)` : ''}`);
+    const child = spawn('node', [UPGRADE_CHECK_SCRIPT], {
+      stdio: 'ignore',
+      detached: true
+    });
+    child.unref();
+    log('Upgrade check: spawned background process');
     return true;
+  } catch (err) {
+    log(`Upgrade check: failed to spawn (${err.message})`);
+    return false;
   }
-
-  // Enqueue notification via C4 control
-  const content = `Component upgrades available: ${upgrades.join(', ')}. When the user next sends a message, mention these available upgrades and ask if they would like to upgrade.`;
-  const result = runC4Control([
-    'enqueue',
-    '--content', content,
-    '--priority', '3',
-    '--ack-deadline', '600'
-  ]);
-
-  if (result.ok) {
-    const match = result.output.match(/control\s+(\d+)/i);
-    log(`Upgrade check: ${upgrades.length} upgrade(s) found, notified via control id=${match?.[1] ?? '?'} — ${upgrades.join(', ')}`);
-  } else {
-    log(`Upgrade check: notification enqueue failed: ${result.output}`);
-  }
-
-  return true;
 }
 
 function monitorLoop() {
