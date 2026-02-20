@@ -325,6 +325,24 @@ describe('c4-receive pending channels', () => {
     });
   });
 
+  it('deduplicates endpoints that differ only in |msg:xxx suffix', () => {
+    withTmpDir(({ tmpDir, env }) => {
+      const dataDir = path.join(tmpDir, 'comm-bridge');
+      fs.mkdirSync(dataDir, { recursive: true });
+      fs.writeFileSync(path.join(tmpDir, 'activity-monitor', 'claude-status.json'), JSON.stringify({ health: 'recovering' }));
+      fs.mkdirSync(path.join(tmpDir, '.claude', 'skills', 'lark'), { recursive: true });
+
+      cliRaw(['--channel', 'lark', '--endpoint', 'oc_123|type:p2p|msg:om_aaa', '--json', '--content', 'first'], env);
+      cliRaw(['--channel', 'lark', '--endpoint', 'oc_123|type:p2p|msg:om_bbb', '--json', '--content', 'second'], env);
+
+      const pendingPath = path.join(tmpDir, 'activity-monitor', 'pending-channels.jsonl');
+      const lines = fs.readFileSync(pendingPath, 'utf8').trim().split('\n');
+      assert.equal(lines.length, 1, 'same chat with different msg IDs should dedup to 1');
+      const record = JSON.parse(lines[0]);
+      assert.equal(record.endpoint, 'oc_123|type:p2p', 'stored endpoint should have msg stripped');
+    });
+  });
+
   it('records different channel+endpoint pairs separately', () => {
     withTmpDir(({ tmpDir, env }) => {
       const dataDir = path.join(tmpDir, 'comm-bridge');
