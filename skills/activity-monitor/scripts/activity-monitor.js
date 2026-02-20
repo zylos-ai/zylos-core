@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Activity Monitor v11 - Guardian + Heartbeat v2 + Health Check + Daily Tasks
+ * Activity Monitor v12 - Guardian + Heartbeat v2 + Health Check + Daily Tasks + Upgrade Check
  *
  * v11 changes (Hook-based activity tracking):
  *   - Replaced non-functional fetch-preload with Claude Code hooks
@@ -34,6 +34,7 @@ const HEALTH_CHECK_STATE_FILE = path.join(MONITOR_DIR, 'health-check-state.json'
 const DAILY_UPGRADE_STATE_FILE = path.join(MONITOR_DIR, 'daily-upgrade-state.json');
 const DAILY_MEMORY_COMMIT_STATE_FILE = path.join(MONITOR_DIR, 'daily-memory-commit-state.json');
 const CONTEXT_CHECK_STATE_FILE = path.join(MONITOR_DIR, 'context-check-state.json');
+const UPGRADE_CHECK_STATE_FILE = path.join(MONITOR_DIR, 'upgrade-check-state.json');
 const PENDING_CHANNELS_FILE = path.join(MONITOR_DIR, 'pending-channels.jsonl');
 
 // Claude binary - relies on PATH from PM2 ecosystem.config.js
@@ -74,8 +75,10 @@ const CONTEXT_CHECK_INTERVAL = 3600; // 1 hour
 // Daily tasks config
 const DAILY_UPGRADE_HOUR = 5;        // 5:00 AM local time
 const DAILY_MEMORY_COMMIT_HOUR = 3;  // 3:00 AM local time
+const DAILY_UPGRADE_CHECK_HOUR = 6;  // 6:00 AM local time
 const DAILY_COMMIT_SCRIPT = path.join(__dirname, '..', '..', 'zylos-memory', 'scripts', 'daily-commit.js');
 const CHECK_CONTEXT_SCRIPT = path.join(__dirname, '..', '..', 'check-context', 'scripts', 'check-context.js');
+const COMPONENTS_JSON = path.join(ZYLOS_DIR, '.zylos', 'components.json');
 
 // State
 let lastTruncateDay = '';
@@ -771,6 +774,7 @@ function enqueueDailyUpgradeControl() {
 
 let upgradeScheduler;      // initialized in init()
 let memoryCommitScheduler; // initialized in init()
+let upgradeCheckScheduler; // initialized in init()
 
 // ---------------------------------------------------------------------------
 // Daily Memory Commit
@@ -814,6 +818,104 @@ function executeDailyMemoryCommit() {
     log(`Daily memory commit failed: ${detail}`);
     return false;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Daily Upgrade Check
+// ---------------------------------------------------------------------------
+
+function loadUpgradeCheckState() {
+  try {
+    if (!fs.existsSync(UPGRADE_CHECK_STATE_FILE)) return null;
+    return JSON.parse(fs.readFileSync(UPGRADE_CHECK_STATE_FILE, 'utf8'));
+  } catch { }
+  return null;
+}
+
+function writeUpgradeCheckState(date) {
+  try {
+    if (!fs.existsSync(MONITOR_DIR)) {
+      fs.mkdirSync(MONITOR_DIR, { recursive: true });
+    }
+    fs.writeFileSync(UPGRADE_CHECK_STATE_FILE, JSON.stringify({
+      last_date: date,
+      updated_at: new Date().toISOString()
+    }, null, 2));
+  } catch (err) {
+    log(`Upgrade check: failed to write state (${err.message})`);
+  }
+}
+
+function getLatestTag(repo) {
+  try {
+    const output = execFileSync('gh', ['api', `repos/${repo}/tags`, '--jq', '.[0].name'], {
+      encoding: 'utf8',
+      stdio: 'pipe',
+      timeout: 15000
+    }).trim();
+    // Strip leading 'v' if present
+    return output.replace(/^v/, '');
+  } catch {
+    return null;
+  }
+}
+
+function executeUpgradeCheck() {
+  const upgrades = [];
+
+  // Check zylos-core
+  try {
+    const coreVersion = execFileSync('zylos', ['--version'], {
+      encoding: 'utf8',
+      stdio: 'pipe',
+      timeout: 5000
+    }).trim();
+    const coreLatest = getLatestTag('zylos-ai/zylos-core');
+    if (coreLatest && coreVersion && coreLatest !== coreVersion) {
+      upgrades.push(`zylos-core ${coreVersion} → ${coreLatest}`);
+    }
+  } catch (err) {
+    log(`Upgrade check: failed to check core version (${err.message})`);
+  }
+
+  // Check installed components
+  try {
+    if (fs.existsSync(COMPONENTS_JSON)) {
+      const components = JSON.parse(fs.readFileSync(COMPONENTS_JSON, 'utf8'));
+      for (const [name, info] of Object.entries(components)) {
+        if (!info.repo || !info.version) continue;
+        const latest = getLatestTag(info.repo);
+        if (latest && latest !== info.version) {
+          upgrades.push(`${name} ${info.version} → ${latest}`);
+        }
+      }
+    }
+  } catch (err) {
+    log(`Upgrade check: failed to read components (${err.message})`);
+  }
+
+  if (upgrades.length === 0) {
+    log('Upgrade check: all components up to date');
+    return true;
+  }
+
+  // Enqueue notification via C4 control
+  const content = `Component upgrades available: ${upgrades.join(', ')}. When the user next sends a message, mention these available upgrades and ask if they would like to upgrade.`;
+  const result = runC4Control([
+    'enqueue',
+    '--content', content,
+    '--priority', '3',
+    '--ack-deadline', '600'
+  ]);
+
+  if (result.ok) {
+    const match = result.output.match(/control\s+(\d+)/i);
+    log(`Upgrade check: ${upgrades.length} upgrade(s) found, notified via control id=${match?.[1] ?? '?'} — ${upgrades.join(', ')}`);
+  } else {
+    log(`Upgrade check: notification enqueue failed: ${result.output}`);
+  }
+
+  return true;
 }
 
 function monitorLoop() {
@@ -979,6 +1081,7 @@ function monitorLoop() {
   maybeEnqueueContextCheck(true, currentTime);
   if (engine.health === 'ok') {
     upgradeScheduler.maybeTrigger();
+    upgradeCheckScheduler.maybeTrigger();
   }
   memoryCommitScheduler.maybeTrigger();
   lastState = state;
@@ -1028,13 +1131,25 @@ function init() {
     name: 'daily-memory-commit'
   });
 
+  upgradeCheckScheduler = new DailySchedule({
+    getLocalHour,
+    getLocalDate,
+    loadState: loadUpgradeCheckState,
+    writeState: writeUpgradeCheckState,
+    execute: executeUpgradeCheck,
+    log
+  }, {
+    hour: DAILY_UPGRADE_CHECK_HOUR,
+    name: 'daily-upgrade-check'
+  });
+
   if (initialHealth !== 'ok') {
     log(`Startup with health=${initialHealth}; will verify immediately when Claude is running`);
   }
 }
 
 init();
-log(`=== Activity Monitor Started (v11 - Guardian + Heartbeat v2 + Hook Activity + DailyTasks): ${new Date().toISOString()} tz=${timezone} ===`);
+log(`=== Activity Monitor Started (v12 - Guardian + Heartbeat v2 + Hook Activity + DailyTasks + UpgradeCheck): ${new Date().toISOString()} tz=${timezone} ===`);
 
 setInterval(monitorLoop, INTERVAL);
 monitorLoop();
