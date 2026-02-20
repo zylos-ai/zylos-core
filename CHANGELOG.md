@@ -8,21 +8,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.2.0] - 2026-02-21
 
 ### Added
-- Auto-sync settings.json hooks on upgrade: template is now the single source of truth for all hook configurations
-- `applyMigrationHints()` in self-upgrade pipeline (step 8): automatically adds missing hooks, updates modified hooks, removes obsolete core hooks
-- `sync-settings-hooks.js` standalone script for postinstall path (same logic)
-- `hook-utils.js` shared module for hook matching utilities
-
-### Changed
-- `postinstall.js` uses template-based hook sync instead of `setup-hooks.js`
-- `templates/.claude/settings.json` now includes all hooks (SessionStart + activity-monitor)
-
-### Removed
-- `setup-hooks.js`: replaced by `sync-settings-hooks.js` which handles all hooks from the template
-
-## [0.1.9] - 2026-02-21
-
-### Added
 - Heartbeat v2: replace verify phase with stuck detection — no activity for 5 min triggers immediate probe with 2 min timeout
 - Hook-based activity tracking: Claude Code hooks (PreToolUse, PostToolUse, Stop, UserPromptSubmit) replace non-functional fetch-preload
 - Recovery backoff: failed recovery attempts wait progressively longer (1 min, 2 min, ... up to 5 min cap)
@@ -30,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Daily upgrade check: queries GitHub at 6 AM for newer versions of core and all installed components, notifies via C4
 - Diagnostic logging: hook timing, delivery failures, and tmux captures logged to activity-monitor directory
 - Recovery notices: notify pending channels when Claude comes back online after downtime
+- Auto-sync settings.json hooks on upgrade: template is now the single source of truth for all hook configurations
+- `applyMigrationHints()` in self-upgrade pipeline (step 8): automatically adds missing hooks, updates modified hooks, removes obsolete core hooks
+- `sync-settings-hooks.js` standalone script for postinstall path
+- `hook-utils.js` shared module for hook matching utilities
 
 ### Fixed
 - Stuck probe cooldown: short retry (60s) on probe failure, full cooldown on success
@@ -42,11 +31,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Upgrade check: normalize v-prefix on both sides of version comparison
 - Upgrade check: return false on C4 enqueue failure to allow DailySchedule retry
 - DOWN state retry: only advance lastDownCheckAt after successful enqueue
+- Settings.json hooks not updated during `zylos upgrade core`
 
 ### Changed
+- `postinstall.js` uses template-based hook sync instead of `setup-hooks.js`
+- `templates/.claude/settings.json` now includes all hooks (SessionStart + activity-monitor)
 - Upgrade check runs as detached child process to avoid blocking monitor loop
 - Safety-net heartbeat interval relaxed to 2 hours (stuck detection is primary mechanism)
 - Activity monitor bumped to v12
+
+### Removed
+- `setup-hooks.js`: replaced by `sync-settings-hooks.js` which handles all hooks from the template
+
+## [0.1.9] - 2026-02-21 _(superseded by 0.2.0 — settings.json hooks were not synced on upgrade)_
 
 ## [0.1.8] - 2026-02-18
 
