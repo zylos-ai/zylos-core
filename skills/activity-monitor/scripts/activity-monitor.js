@@ -846,22 +846,65 @@ function writeUpgradeCheckState(date) {
   }
 }
 
+function sanitizeVersion(v) {
+  return String(v || '').replace(/[^a-zA-Z0-9._\-]/g, '').slice(0, 32);
+}
+
+function compareSemver(a, b) {
+  const [aBase, aPre] = a.split(/-(.+)/);
+  const [bBase, bPre] = b.split(/-(.+)/);
+  const aParts = aBase.split('.').map(Number);
+  const bParts = bBase.split('.').map(Number);
+  for (let i = 0; i < 3; i++) {
+    const diff = (bParts[i] || 0) - (aParts[i] || 0);
+    if (diff !== 0) return diff;
+  }
+  // Stable (no pre-release) > pre-release
+  if (!aPre && bPre) return -1;
+  if (aPre && !bPre) return 1;
+  return 0;
+}
+
+/**
+ * Fetch the latest semver tag from a GitHub repo.
+ * Returns { version, error } — version is null on failure, error describes why.
+ */
 function getLatestTag(repo) {
+  let output;
   try {
-    const output = execFileSync('gh', ['api', `repos/${repo}/tags`, '--jq', '.[0].name'], {
+    output = execFileSync('gh', [
+      'api', `repos/${repo}/tags`, '--paginate', '--jq', '.[].name'
+    ], {
       encoding: 'utf8',
       stdio: 'pipe',
       timeout: 15000
     }).trim();
-    // Strip leading 'v' if present
-    return output.replace(/^v/, '');
-  } catch {
-    return null;
+  } catch (err) {
+    const msg = err.stderr ? String(err.stderr).trim() : err.message;
+    return { version: null, error: msg };
   }
+
+  if (!output) {
+    return { version: null, error: 'no tags' };
+  }
+
+  // Filter semver tags and sort descending
+  const versions = output.split('\n')
+    .map(t => t.trim())
+    .filter(name => /^v?\d+\.\d+\.\d+/.test(name))
+    .map(name => name.replace(/^v/, ''))
+    .sort(compareSemver);
+
+  if (versions.length === 0) {
+    return { version: null, error: 'no semver tags' };
+  }
+
+  return { version: versions[0], error: null };
 }
 
 function executeUpgradeCheck() {
   const upgrades = [];
+  let failures = 0;
 
   // Check zylos-core
   try {
@@ -870,12 +913,16 @@ function executeUpgradeCheck() {
       stdio: 'pipe',
       timeout: 5000
     }).trim();
-    const coreLatest = getLatestTag('zylos-ai/zylos-core');
-    if (coreLatest && coreVersion && coreLatest !== coreVersion) {
-      upgrades.push(`zylos-core ${coreVersion} → ${coreLatest}`);
+    const result = getLatestTag('zylos-ai/zylos-core');
+    if (result.error) {
+      log(`Upgrade check: failed to fetch zylos-core tag (${result.error})`);
+      failures++;
+    } else if (result.version && result.version !== coreVersion) {
+      upgrades.push(`zylos-core ${sanitizeVersion(coreVersion)} → ${sanitizeVersion(result.version)}`);
     }
   } catch (err) {
     log(`Upgrade check: failed to check core version (${err.message})`);
+    failures++;
   }
 
   // Check installed components
@@ -884,18 +931,24 @@ function executeUpgradeCheck() {
       const components = JSON.parse(fs.readFileSync(COMPONENTS_JSON, 'utf8'));
       for (const [name, info] of Object.entries(components)) {
         if (!info.repo || !info.version) continue;
-        const latest = getLatestTag(info.repo);
-        if (latest && latest !== info.version) {
-          upgrades.push(`${name} ${info.version} → ${latest}`);
+        const result = getLatestTag(info.repo);
+        if (result.error) {
+          log(`Upgrade check: failed to fetch ${name} tag (${result.error})`);
+          failures++;
+          continue;
+        }
+        if (result.version && result.version !== info.version) {
+          upgrades.push(`${sanitizeVersion(name)} ${sanitizeVersion(info.version)} → ${sanitizeVersion(result.version)}`);
         }
       }
     }
   } catch (err) {
     log(`Upgrade check: failed to read components (${err.message})`);
+    failures++;
   }
 
   if (upgrades.length === 0) {
-    log('Upgrade check: all components up to date');
+    log(`Upgrade check: all components up to date${failures > 0 ? ` (${failures} check(s) failed)` : ''}`);
     return true;
   }
 
