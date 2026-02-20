@@ -62,16 +62,19 @@ function main() {
     console.log(`Core Skills: ${synced} synced, ${skipped} already present.`);
   }
 
-  // Configure activity tracking hooks in Claude Code settings.json
-  const setupHooks = path.join(SKILLS_DIR, 'activity-monitor', 'scripts', 'setup-hooks.js');
-  if (fs.existsSync(setupHooks)) {
+  // Sync settings.json hooks from template
+  const templateSettings = path.join(__dirname, '..', 'templates', '.claude', 'settings.json');
+  if (fs.existsSync(templateSettings)) {
     try {
-      execFileSync('node', [setupHooks], {
-        stdio: 'inherit',
-        env: { ...process.env, ZYLOS_DIR }
-      });
+      const syncHooks = path.join(__dirname, '..', 'cli', 'lib', 'sync-settings-hooks.js');
+      if (fs.existsSync(syncHooks)) {
+        execFileSync('node', [syncHooks], {
+          stdio: 'inherit',
+          env: { ...process.env, ZYLOS_DIR }
+        });
+      }
     } catch {
-      console.log('  Warning: Failed to configure activity hooks');
+      console.log('  Warning: Failed to sync settings hooks');
     }
   }
 }

@@ -21,6 +21,69 @@
           }
         ]
       }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ~/zylos/.claude/skills/activity-monitor/scripts/hook-activity.js",
+            "async": true,
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ~/zylos/.claude/skills/activity-monitor/scripts/hook-activity.js",
+            "async": true,
+            "timeout": 5
+          }
+        ],
+        "matcher": ""
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ~/zylos/.claude/skills/activity-monitor/scripts/hook-activity.js",
+            "async": true,
+            "timeout": 5
+          }
+        ],
+        "matcher": ""
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ~/zylos/.claude/skills/activity-monitor/scripts/hook-activity.js",
+            "async": true,
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ~/zylos/.claude/skills/activity-monitor/scripts/hook-activity.js",
+            "async": true,
+            "timeout": 5
+          }
+        ],
+        "matcher": "idle_prompt"
+      }
     ]
   }
 }

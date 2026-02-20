@@ -482,6 +482,9 @@ function generateMigrationHints(templatesDir) {
           hints.push({
             type: 'missing_hook',
             event,
+            hook: { ...templateCmd },
+            matcher: matcher.matcher !== undefined ? matcher.matcher : null,
+            // Keep flat fields for backward compatibility
             command: templateCmd.command,
             timeout: templateCmd.timeout,
           });
@@ -489,6 +492,7 @@ function generateMigrationHints(templatesDir) {
           hints.push({
             type: 'modified_hook',
             event,
+            hook: { ...templateCmd },
             command: templateCmd.command,
             timeout: templateCmd.timeout,
             oldCommand: matched.command,
@@ -786,12 +790,161 @@ function step7_syncClaudeMd(ctx) {
 }
 
 /**
- * Step 8: post-upgrade hook (placeholder for future use)
+ * Apply migration hints to installed settings.json.
+ * Adds missing hooks, updates modified hooks, removes obsolete hooks.
+ * Preserves user-added hooks (hooks not from core skills).
+ *
+ * @param {object[]} hints - Output from generateMigrationHints()
+ * @returns {{ applied: number, errors: string[] }}
  */
-function step8_postUpgradeHook(ctx) {
+function applyMigrationHints(hints) {
+  const result = { applied: 0, errors: [] };
+  if (!hints || hints.length === 0) return result;
+
+  const settingsPath = path.join(ZYLOS_DIR, '.claude', 'settings.json');
+  let settings;
+  try {
+    settings = fs.existsSync(settingsPath)
+      ? JSON.parse(fs.readFileSync(settingsPath, 'utf8'))
+      : {};
+  } catch {
+    settings = {};
+  }
+
+  if (!settings.hooks) settings.hooks = {};
+
+  for (const hint of hints) {
+    try {
+      if (hint.type === 'missing_hook') {
+        // Add the hook to the appropriate event
+        if (!Array.isArray(settings.hooks[hint.event])) {
+          settings.hooks[hint.event] = [];
+        }
+
+        // Use the full hook object from the hint (includes async, timeout, etc.)
+        const hookObj = hint.hook
+          ? { ...hint.hook }
+          : { type: 'command', command: hint.command };
+        if (!hint.hook && hint.timeout !== undefined) hookObj.timeout = hint.timeout;
+
+        // Find or create a matcher group
+        const matcherValue = hint.matcher !== undefined ? hint.matcher : null;
+        let targetGroup = null;
+
+        if (matcherValue !== null) {
+          // Look for an existing group with this matcher
+          targetGroup = settings.hooks[hint.event].find(
+            g => g.matcher === matcherValue
+          );
+        }
+
+        if (!targetGroup) {
+          targetGroup = { hooks: [] };
+          if (matcherValue !== null) targetGroup.matcher = matcherValue;
+          settings.hooks[hint.event].push(targetGroup);
+        }
+
+        targetGroup.hooks.push(hookObj);
+        result.applied++;
+
+      } else if (hint.type === 'modified_hook') {
+        // Find and update the hook by script path
+        const matchers = settings.hooks[hint.event];
+        if (!Array.isArray(matchers)) continue;
+
+        const oldScriptPath = extractScriptPath(hint.oldCommand);
+        let updated = false;
+
+        for (const group of matchers) {
+          if (!Array.isArray(group.hooks)) continue;
+          for (let i = 0; i < group.hooks.length; i++) {
+            const h = group.hooks[i];
+            if (h.type === 'command' && extractScriptPath(h.command) === oldScriptPath) {
+              // Update command and timeout
+              group.hooks[i].command = hint.command;
+              if (hint.timeout !== undefined) {
+                group.hooks[i].timeout = hint.timeout;
+              }
+              updated = true;
+              break;
+            }
+          }
+          if (updated) break;
+        }
+
+        if (updated) result.applied++;
+
+      } else if (hint.type === 'removed_hook') {
+        // Remove the hook by script path
+        const matchers = settings.hooks[hint.event];
+        if (!Array.isArray(matchers)) continue;
+
+        const scriptPath = extractScriptPath(hint.command);
+        let removed = false;
+
+        for (let gi = matchers.length - 1; gi >= 0; gi--) {
+          const group = matchers[gi];
+          if (!Array.isArray(group.hooks)) continue;
+
+          group.hooks = group.hooks.filter(h => {
+            if (h.type === 'command' && extractScriptPath(h.command) === scriptPath) {
+              removed = true;
+              return false;
+            }
+            return true;
+          });
+
+          // Remove empty groups
+          if (group.hooks.length === 0) {
+            matchers.splice(gi, 1);
+          }
+        }
+
+        // Clean up empty event arrays
+        if (matchers.length === 0) {
+          delete settings.hooks[hint.event];
+        }
+
+        if (removed) result.applied++;
+      }
+    } catch (err) {
+      result.errors.push(`${hint.type}/${hint.event}: ${err.message}`);
+    }
+  }
+
+  // Clean up empty hooks object
+  if (Object.keys(settings.hooks).length === 0) {
+    delete settings.hooks;
+  }
+
+  // Write back
+  const dir = path.dirname(settingsPath);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n');
+
+  return result;
+}
+
+/**
+ * Step 8: sync settings.json hooks from template
+ */
+function step8_syncSettingsHooks(ctx) {
   const startTime = Date.now();
-  // No core post-upgrade hook yet — reserved for future
-  return { step: 8, name: 'post_upgrade_hook', status: 'skipped', duration: Date.now() - startTime };
+
+  const templatesDir = path.join(ctx.tempDir, 'templates');
+  const hints = generateMigrationHints(templatesDir);
+
+  if (hints.length === 0) {
+    return { step: 8, name: 'sync_settings_hooks', status: 'done', message: 'no changes needed', duration: Date.now() - startTime };
+  }
+
+  const result = applyMigrationHints(hints);
+
+  if (result.errors.length > 0) {
+    return { step: 8, name: 'sync_settings_hooks', status: 'failed', error: result.errors.join('; '), duration: Date.now() - startTime };
+  }
+
+  return { step: 8, name: 'sync_settings_hooks', status: 'done', message: `${result.applied} hooks updated`, duration: Date.now() - startTime };
 }
 
 /**
@@ -934,7 +1087,7 @@ export function runSelfUpgrade({ tempDir, newVersion, onStep } = {}) {
     step5_syncCoreSkills,
     step6_installSkillDeps,
     step7_syncClaudeMd,
-    step8_postUpgradeHook,
+    step8_syncSettingsHooks,
     step9_startCoreServices,
     step10_verifyServices,
   ];
