@@ -18,6 +18,21 @@ import path from 'path';
 import os from 'os';
 
 const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
+
+/**
+ * Get Claude's actual PID by reading the grandparent PID.
+ * Claude Code runs hooks via: claude -> bash -c '...' -> node hook.js
+ * So process.ppid is bash (short-lived), and bash's ppid is claude.
+ * Falls back to process.ppid if /proc is unavailable.
+ */
+function getClaudePid() {
+  try {
+    const status = fs.readFileSync(`/proc/${process.ppid}/status`, 'utf8');
+    const match = status.match(/^PPid:\s*(\d+)/m);
+    if (match) return parseInt(match[1], 10);
+  } catch { /* best-effort */ }
+  return process.ppid;
+}
 const MONITOR_DIR = path.join(ZYLOS_DIR, 'activity-monitor');
 const ACTIVITY_FILE = path.join(MONITOR_DIR, 'api-activity.json');
 const STATE_FILE = path.join(MONITOR_DIR, 'hook-state.json');
@@ -144,10 +159,11 @@ process.stdin.on('end', () => {
           return;
       }
 
+      const claudePid = getClaudePid();
       atomicWrite(ACTIVITY_FILE, {
         version: 2,
-        pid: process.ppid,
-        sessionId: process.env.CLAUDE_SESSION_ID || String(process.ppid),
+        pid: claudePid,
+        sessionId: process.env.CLAUDE_SESSION_ID || String(claudePid),
         event: eventType,
         tool,
         active,
