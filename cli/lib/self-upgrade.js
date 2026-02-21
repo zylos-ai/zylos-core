@@ -207,6 +207,32 @@ export function syncCoreSkills(newSkillsSrc, backupBase) {
       if (mergeResult.errors.length) {
         result.errors.push(...mergeResult.errors.map(e => `${skillName}: ${e}`));
       }
+
+      // Delete files that were in the old version but removed in the new version.
+      // Only delete files tracked in the old manifest — user-added files are preserved.
+      const oldManifest = mergeResult._oldManifest;
+      if (oldManifest) {
+        const newManifestObj = generateManifest(srcDir);
+        const newFiles = new Set(Object.keys(newManifestObj.files));
+        for (const file of Object.keys(oldManifest)) {
+          if (!newFiles.has(file)) {
+            const destFile = path.join(destDir, file);
+            try {
+              fs.unlinkSync(destFile);
+              // Clean up empty parent directories
+              let dir = path.dirname(destFile);
+              while (dir !== destDir) {
+                const entries = fs.readdirSync(dir);
+                if (entries.length > 0) break;
+                fs.rmdirSync(dir);
+                dir = path.dirname(dir);
+              }
+            } catch {
+              // Ignore deletion errors
+            }
+          }
+        }
+      }
     } catch (err) {
       result.errors.push(`${skillName}: ${err.message}`);
     }
