@@ -14,6 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `statusLine` config in `templates/.claude/settings.json` — pipes context data to `context-monitor.js` after every turn
 - statusLine sync support: `sync-settings-hooks.js` and `self-upgrade.js` now add, update, and remove `statusLine` config from template
 
+### Fixed
+- `zylos upgrade --self --check --branch <name>`: version check always read from main instead of the specified branch
+
 ### Changed
 - `check-context` skill simplified: reads `statusline.json` directly instead of enqueuing `/context` command
 - Activity monitor bumped to v13: removed all polling-based context check code (`maybeEnqueueContextCheck`, `enqueueContextCheck`, related state files)
