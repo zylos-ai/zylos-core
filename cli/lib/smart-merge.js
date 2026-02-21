@@ -31,6 +31,7 @@ import { isDiff3Available, merge3 } from './diff3.js';
  * @property {string[]} merged       - Files auto-merged via diff3
  * @property {ConflictFile[]} conflicts - Files where local was backed up, new version written
  * @property {string[]} added        - New files added
+ * @property {string[]} deleted      - Files deleted (removed in new version)
  * @property {string[]} errors       - Error descriptions
  */
 
@@ -60,19 +61,14 @@ export function smartSync(srcDir, destDir, opts = {}) {
     merged: [],
     conflicts: [],
     added: [],
+    deleted: [],
     errors: [],
-    _oldManifest: null, // Exposed for callers that need deletion logic
   };
 
   const savedManifest = loadManifest(destDir);
   const newManifest = generateManifest(srcDir);
   const diff3Available = isDiff3Available();
   const originalsExist = hasOriginals(destDir);
-
-  // Expose old manifest files for callers that need file deletion logic
-  if (savedManifest) {
-    result._oldManifest = savedManifest.files;
-  }
 
   // Generate current manifest for comparison (if we have a saved one)
   let currentManifest;
@@ -110,14 +106,21 @@ export function smartSync(srcDir, destDir, opts = {}) {
     const savedHash = savedManifest.files[relPath];
     const currentHash = currentManifest.files[relPath];
 
-    // File didn't exist in previous manifest — user may have added it
+    // File didn't exist in previous manifest — user may have added it.
+    // Treat as conflict: backup the user's local version, write new version.
     if (!savedHash) {
-      // New version also has it — overwrite (new version takes precedence for new files)
       try {
+        if (backupDir) {
+          const backupPath = path.join(backupDir, relPath);
+          fs.mkdirSync(path.dirname(backupPath), { recursive: true });
+          fs.copyFileSync(destFile, backupPath);
+          result.conflicts.push({ file: relPath, backupPath });
+        } else {
+          result.conflicts.push({ file: relPath, backupPath: null });
+        }
         fs.copyFileSync(srcFile, destFile);
-        result.overwritten.push(relPath);
       } catch (err) {
-        result.errors.push(`${relPath}: overwrite failed: ${err.message}`);
+        result.errors.push(`${relPath}: conflict handling failed: ${err.message}`);
       }
       continue;
     }
@@ -184,6 +187,33 @@ export function smartSync(srcDir, destDir, opts = {}) {
     }
   }
 
+  // Delete files that were in the old version but removed in the new version.
+  // Only delete files tracked in the old manifest — user-added files are preserved.
+  if (savedManifest) {
+    const newFiles = new Set(Object.keys(newManifest.files));
+    for (const file of Object.keys(savedManifest.files)) {
+      if (!newFiles.has(file)) {
+        const destFile = path.join(destDir, file);
+        try {
+          fs.unlinkSync(destFile);
+          result.deleted.push(file);
+          // Clean up empty parent directories
+          let dir = path.dirname(destFile);
+          while (dir !== destDir) {
+            const entries = fs.readdirSync(dir);
+            if (entries.length > 0) break;
+            fs.rmdirSync(dir);
+            dir = path.dirname(dir);
+          }
+        } catch (err) {
+          if (err.code !== 'ENOENT') {
+            result.errors.push(`${file}: delete failed: ${err.message}`);
+          }
+        }
+      }
+    }
+  }
+
   // Save originals from the new version (for next upgrade's three-way merge)
   try {
     saveOriginals(destDir, srcDir);
@@ -215,6 +245,7 @@ export function formatMergeResult(result) {
   if (result.merged.length) parts.push(`${result.merged.length} merged`);
   if (result.conflicts.length) parts.push(`${result.conflicts.length} conflicts`);
   if (result.added.length) parts.push(`${result.added.length} added`);
+  if (result.deleted.length) parts.push(`${result.deleted.length} deleted`);
   if (result.errors.length) parts.push(`${result.errors.length} errors`);
   return parts.join(', ') || 'no changes';
 }

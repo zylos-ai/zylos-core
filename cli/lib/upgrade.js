@@ -376,31 +376,6 @@ function step3_smartMerge(ctx) {
       return { step: 3, name: 'smart_merge', status: 'failed', error: mergeResult.errors.join('; '), duration: Date.now() - startTime };
     }
 
-    // Delete files that were in the old version but removed in the new version.
-    // Only delete files tracked in the old manifest — user-added files are preserved.
-    const oldManifest = mergeResult._oldManifest;
-    if (oldManifest) {
-      const newFiles = new Set(Object.keys(generateManifest(ctx.tempDir).files));
-      for (const file of Object.keys(oldManifest)) {
-        if (!newFiles.has(file)) {
-          const destFile = path.join(ctx.skillDir, file);
-          try {
-            fs.unlinkSync(destFile);
-            // Clean up empty parent directories
-            let dir = path.dirname(destFile);
-            while (dir !== ctx.skillDir) {
-              const entries = fs.readdirSync(dir);
-              if (entries.length > 0) break;
-              fs.rmdirSync(dir);
-              dir = path.dirname(dir);
-            }
-          } catch {
-            // Ignore deletion errors
-          }
-        }
-      }
-    }
-
     return { step: 3, name: 'smart_merge', status: 'done', message: msg, duration: Date.now() - startTime };
   } catch (err) {
     return { step: 3, name: 'smart_merge', status: 'failed', error: `Merge failed: ${err.message}`, duration: Date.now() - startTime };

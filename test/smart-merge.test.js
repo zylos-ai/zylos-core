@@ -176,30 +176,92 @@ describe('smartSync', () => {
     expect(readFile(dest, 'sub/dir/file.js')).toBe('content');
   });
 
-  test('_oldManifest is exposed when manifest exists', () => {
+  test('deletes files removed in new version', () => {
     const src = mkTmp();
     const dest = mkTmp();
 
-    writeFile(dest, 'a.js', 'content');
+    // Simulate previous install with two files
+    writeFile(dest, 'a.js', 'keep');
+    writeFile(dest, 'removed.js', 'to be removed');
     const manifest = generateManifest(dest);
     saveManifest(dest, manifest);
 
-    writeFile(src, 'a.js', 'content');
+    // New version only has a.js (removed.js is gone)
+    writeFile(src, 'a.js', 'keep');
 
     const result = smartSync(src, dest);
-    expect(result._oldManifest).toBeTruthy();
-    expect(result._oldManifest['a.js']).toBeTruthy();
+    expect(result.deleted).toContain('removed.js');
+    expect(fileExists(dest, 'removed.js')).toBe(false);
+    expect(fileExists(dest, 'a.js')).toBe(true);
   });
 
-  test('_oldManifest is null when no manifest exists', () => {
+  test('deletes files in subdirectories and cleans up empty dirs', () => {
     const src = mkTmp();
     const dest = mkTmp();
 
-    writeFile(src, 'a.js', 'content');
-    writeFile(dest, 'a.js', 'old');
+    // Simulate previous install with file in subdir
+    writeFile(dest, 'a.js', 'keep');
+    writeFile(dest, 'sub/removed.js', 'to be removed');
+    const manifest = generateManifest(dest);
+    saveManifest(dest, manifest);
+
+    // New version only has a.js
+    writeFile(src, 'a.js', 'keep');
 
     const result = smartSync(src, dest);
-    expect(result._oldManifest).toBeNull();
+    expect(result.deleted).toContain('sub/removed.js');
+    expect(fileExists(dest, 'sub/removed.js')).toBe(false);
+    // Empty parent directory should be cleaned up
+    expect(fs.existsSync(path.join(dest, 'sub'))).toBe(false);
+  });
+
+  test('preserves user-added files not in old manifest', () => {
+    const src = mkTmp();
+    const dest = mkTmp();
+
+    // Simulate previous install with only a.js
+    writeFile(dest, 'a.js', 'original');
+    const manifest = generateManifest(dest);
+    saveManifest(dest, manifest);
+
+    // User adds custom.js (not in old manifest)
+    writeFile(dest, 'custom.js', 'user file');
+
+    // New version still only has a.js
+    writeFile(src, 'a.js', 'original');
+
+    const result = smartSync(src, dest);
+    // User-added file should be preserved (not deleted)
+    expect(result.deleted).not.toContain('custom.js');
+    expect(fileExists(dest, 'custom.js')).toBe(true);
+  });
+
+  test('user-added file collision: conflict + backup', () => {
+    const src = mkTmp();
+    const dest = mkTmp();
+    const backupDir = mkTmp();
+
+    // Simulate previous install with only a.js
+    writeFile(dest, 'a.js', 'original');
+    const manifest = generateManifest(dest);
+    saveManifest(dest, manifest);
+
+    // User adds b.js (not in old manifest)
+    writeFile(dest, 'b.js', 'user version');
+
+    // New version also has b.js
+    writeFile(src, 'a.js', 'original');
+    writeFile(src, 'b.js', 'upstream version');
+
+    const result = smartSync(src, dest, { backupDir });
+    expect(result.conflicts.length).toBe(1);
+    expect(result.conflicts[0].file).toBe('b.js');
+
+    // New version should win
+    expect(readFile(dest, 'b.js')).toBe('upstream version');
+
+    // User's version should be backed up
+    expect(readFile(backupDir, 'b.js')).toBe('user version');
   });
 
   test('updates manifest after sync', () => {
@@ -241,6 +303,7 @@ describe('formatMergeResult', () => {
       merged: ['d.js'],
       conflicts: [{ file: 'e.js', backupPath: '/tmp/e.js' }],
       added: ['f.js'],
+      deleted: ['g.js'],
       errors: ['something failed'],
     };
     const formatted = formatMergeResult(result);
@@ -249,6 +312,7 @@ describe('formatMergeResult', () => {
     expect(formatted).toContain('1 merged');
     expect(formatted).toContain('1 conflicts');
     expect(formatted).toContain('1 added');
+    expect(formatted).toContain('1 deleted');
     expect(formatted).toContain('1 errors');
   });
 
@@ -259,6 +323,7 @@ describe('formatMergeResult', () => {
       merged: [],
       conflicts: [],
       added: [],
+      deleted: [],
       errors: [],
     };
     expect(formatMergeResult(result)).toBe('no changes');
