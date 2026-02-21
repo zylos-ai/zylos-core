@@ -35,11 +35,12 @@ export function getCurrentVersion() {
 }
 
 /**
- * Get latest zylos-core version from GitHub (package.json on main branch).
+ * Get latest zylos-core version from GitHub.
+ * @param {string} [branch] - Branch to read from (defaults to 'main')
  */
-function getLatestVersion() {
+function getLatestVersion(branch) {
   try {
-    const content = fetchRawFile(REPO, 'package.json');
+    const content = fetchRawFile(REPO, 'package.json', branch || 'main');
     const pkg = JSON.parse(content);
     return { success: true, version: pkg.version };
   } catch (err) {
@@ -54,15 +55,16 @@ function getLatestVersion() {
 /**
  * Check if zylos-core has updates available.
  *
+ * @param {string} [branch] - Branch to compare against (defaults to 'main')
  * @returns {object} { success, hasUpdate, current, latest }
  */
-export function checkForCoreUpdates() {
+export function checkForCoreUpdates(branch) {
   const current = getCurrentVersion();
   if (!current.success) {
     return { success: false, error: 'version_not_found', message: current.error };
   }
 
-  const latest = getLatestVersion();
+  const latest = getLatestVersion(branch);
   if (!latest.success) {
     return { success: false, error: 'remote_version_failed', message: latest.error };
   }
@@ -465,6 +467,23 @@ function generateMigrationHints(templatesDir) {
     }
   }
 
+  // --- statusLine sync ---
+  if (templateSettings.statusLine) {
+    const tsl = JSON.stringify(templateSettings.statusLine);
+    const isl = JSON.stringify(installedSettings.statusLine || null);
+    if (tsl !== isl) {
+      hints.push({
+        type: 'statusLine',
+        value: templateSettings.statusLine,
+      });
+    }
+  } else if (installedSettings.statusLine) {
+    // Template removed statusLine — generate removal hint
+    hints.push({
+      type: 'statusLine_remove',
+    });
+  }
+
   // --- Reverse pass: detect removed hooks (core skills only) ---
   for (const [event, matchers] of Object.entries(installedHooks)) {
     if (!Array.isArray(matchers)) continue;
@@ -835,6 +854,16 @@ function applyMigrationHints(hints) {
         }
 
         if (updated) result.applied++;
+
+      } else if (hint.type === 'statusLine') {
+        settings.statusLine = hint.value;
+        result.applied++;
+
+      } else if (hint.type === 'statusLine_remove') {
+        if (settings.statusLine) {
+          delete settings.statusLine;
+          result.applied++;
+        }
 
       } else if (hint.type === 'removed_hook') {
         // Remove the hook by script path

@@ -211,7 +211,7 @@ export async function upgradeComponent(args) {
   // Handle --self: upgrade zylos-core itself
   if (upgradeSelf) {
     if (checkOnly) {
-      return handleSelfCheckOnly({ jsonOutput });
+      return handleSelfCheckOnly({ jsonOutput, branch });
     }
     // Parse --temp-dir flag (reuse previously downloaded package from --check)
     const selfTempDirIdx = args.indexOf('--temp-dir');
@@ -776,8 +776,8 @@ function detectCoreSkillChanges() {
  * Handle --self --check: check for zylos-core updates only (no lock needed).
  * Downloads new version to temp dir for file comparison by Claude.
  */
-function handleSelfCheckOnly({ jsonOutput }) {
-  const check = checkForCoreUpdates();
+function handleSelfCheckOnly({ jsonOutput, branch }) {
+  const check = checkForCoreUpdates(branch);
 
   if (!check.success) {
     if (jsonOutput) {
@@ -796,7 +796,7 @@ function handleSelfCheckOnly({ jsonOutput }) {
 
   if (check.hasUpdate) {
     // Download new version to temp dir (for template/file comparison by Claude)
-    const dlResult = downloadCoreToTemp(check.latest);
+    const dlResult = downloadCoreToTemp(check.latest, branch);
     if (dlResult.success) {
       tempDir = dlResult.tempDir;
 
@@ -887,8 +887,8 @@ async function upgradeSelfCore({ providedTempDir, branch } = {}) {
   }
 
   try {
-    // 2. Check for updates (skip version comparison when --branch is specified)
-    const check = checkForCoreUpdates();
+    // 2. Check for updates (compare against branch when --branch is specified)
+    const check = checkForCoreUpdates(branch);
 
     if (!check.success && !branch) {
       if (jsonOutput) {

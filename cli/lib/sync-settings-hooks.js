@@ -171,13 +171,35 @@ function main() {
     }
   }
 
-  if (added === 0 && updated === 0 && removed === 0) {
+  // --- Sync top-level statusLine from template ---
+  let statusLineChanged = false;
+  if (templateSettings.statusLine) {
+    const tsl = JSON.stringify(templateSettings.statusLine);
+    const isl = JSON.stringify(installedSettings.statusLine || null);
+    if (tsl !== isl) {
+      const symbol = installedSettings.statusLine ? '~' : '+';
+      if (!dryRun) {
+        installedSettings.statusLine = templateSettings.statusLine;
+      }
+      statusLineChanged = true;
+      console.log(`  ${symbol} statusLine: ${templateSettings.statusLine.command || '(set)'}`);
+    }
+  } else if (installedSettings.statusLine) {
+    // Template removed statusLine — clean up installed copy
+    if (!dryRun) {
+      delete installedSettings.statusLine;
+    }
+    statusLineChanged = true;
+    console.log(`  - statusLine: (removed)`);
+  }
+
+  if (added === 0 && updated === 0 && removed === 0 && !statusLineChanged) {
     console.log('Settings hooks: all up to date (no changes).');
     return;
   }
 
   if (dryRun) {
-    console.log(`Settings hooks (dry run): ${added} to add, ${updated} to update, ${removed} to remove.`);
+    console.log(`Settings hooks (dry run): ${added} to add, ${updated} to update, ${removed} to remove${statusLineChanged ? ', statusLine to update' : ''}.`);
     return;
   }
 
@@ -185,7 +207,7 @@ function main() {
   const dir = path.dirname(INSTALLED_SETTINGS);
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(INSTALLED_SETTINGS, JSON.stringify(installedSettings, null, 2) + '\n');
-  console.log(`Settings hooks: ${added} added, ${updated} updated, ${removed} removed.`);
+  console.log(`Settings hooks: ${added} added, ${updated} updated, ${removed} removed${statusLineChanged ? ', statusLine updated' : ''}.`);
 }
 
 main();

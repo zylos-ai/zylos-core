@@ -85,5 +85,9 @@
         "matcher": "idle_prompt"
       }
     ]
+  },
+  "statusLine": {
+    "type": "command",
+    "command": "node ~/zylos/.claude/skills/activity-monitor/scripts/context-monitor.js"
   }
 }
