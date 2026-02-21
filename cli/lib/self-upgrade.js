@@ -465,6 +465,18 @@ function generateMigrationHints(templatesDir) {
     }
   }
 
+  // --- statusLine sync ---
+  if (templateSettings.statusLine) {
+    const tsl = JSON.stringify(templateSettings.statusLine);
+    const isl = JSON.stringify(installedSettings.statusLine || null);
+    if (tsl !== isl) {
+      hints.push({
+        type: 'statusLine',
+        value: templateSettings.statusLine,
+      });
+    }
+  }
+
   // --- Reverse pass: detect removed hooks (core skills only) ---
   for (const [event, matchers] of Object.entries(installedHooks)) {
     if (!Array.isArray(matchers)) continue;
@@ -835,6 +847,10 @@ function applyMigrationHints(hints) {
         }
 
         if (updated) result.applied++;
+
+      } else if (hint.type === 'statusLine') {
+        settings.statusLine = hint.value;
+        result.applied++;
 
       } else if (hint.type === 'removed_hook') {
         // Remove the hook by script path
