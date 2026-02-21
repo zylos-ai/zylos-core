@@ -170,7 +170,7 @@ Event-driven context monitoring via Claude Code's `statusLine` hook. Replaces th
 - **Persisted state**: `~/zylos/activity-monitor/context-monitor-state.json`
 - **Log**: `~/zylos/activity-monitor/context-monitor.log`
 
-When context usage exceeds the threshold, the script enqueues a restart command via C4 control queue (priority 3, require-idle, 10-minute ack deadline).
+When context usage exceeds the threshold, the script enqueues a restart command via C4 control queue (priority 1, non require-idle, 10-minute ack deadline). The high priority and non-idle delivery ensures the trigger reaches Claude even during long tasks. The actual `/clear` is gated by require-idle in the new-session skill's final step.
 
 The `check-context` skill remains available for manual on-demand context checks.
 

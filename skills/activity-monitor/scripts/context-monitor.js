@@ -19,12 +19,13 @@ process.stdin.on('end', () => {
   try { main(input); } catch (err) {
     try {
       fs.appendFileSync(path.join(ZYLOS_DIR, 'activity-monitor', 'context-monitor.log'),
-        `${new Date().toISOString()} ERROR: ${err.message}\n`);
+        `${new Date().toISOString()} ERROR: ${err.message} (input length: ${input.length})\n`);
     } catch {}
   }
 });
 
 function main(raw) {
+  if (!raw || !raw.trim()) return;
   const status = JSON.parse(raw);
   fs.writeFileSync(STATUS_FILE, JSON.stringify(status, null, 2));
   const usedPct = status.context_window?.used_percentage;

@@ -177,12 +177,20 @@ function main() {
     const tsl = JSON.stringify(templateSettings.statusLine);
     const isl = JSON.stringify(installedSettings.statusLine || null);
     if (tsl !== isl) {
+      const symbol = installedSettings.statusLine ? '~' : '+';
       if (!dryRun) {
         installedSettings.statusLine = templateSettings.statusLine;
       }
       statusLineChanged = true;
-      console.log(`  ${installedSettings.statusLine ? '~' : '+'} statusLine: ${templateSettings.statusLine.command || '(set)'}`);
+      console.log(`  ${symbol} statusLine: ${templateSettings.statusLine.command || '(set)'}`);
     }
+  } else if (installedSettings.statusLine) {
+    // Template removed statusLine — clean up installed copy
+    if (!dryRun) {
+      delete installedSettings.statusLine;
+    }
+    statusLineChanged = true;
+    console.log(`  - statusLine: (removed)`);
   }
 
   if (added === 0 && updated === 0 && removed === 0 && !statusLineChanged) {

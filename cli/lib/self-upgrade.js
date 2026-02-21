@@ -475,6 +475,11 @@ function generateMigrationHints(templatesDir) {
         value: templateSettings.statusLine,
       });
     }
+  } else if (installedSettings.statusLine) {
+    // Template removed statusLine — generate removal hint
+    hints.push({
+      type: 'statusLine_remove',
+    });
   }
 
   // --- Reverse pass: detect removed hooks (core skills only) ---
@@ -851,6 +856,12 @@ function applyMigrationHints(hints) {
       } else if (hint.type === 'statusLine') {
         settings.statusLine = hint.value;
         result.applied++;
+
+      } else if (hint.type === 'statusLine_remove') {
+        if (settings.statusLine) {
+          delete settings.statusLine;
+          result.applied++;
+        }
 
       } else if (hint.type === 'removed_hook') {
         // Remove the hook by script path
