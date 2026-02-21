@@ -43,14 +43,12 @@ The goal is twofold: (a) the user knows what's happening, and (b) the handoff su
 ### 5. Enqueue /clear
 
 ```bash
-nohup node ~/zylos/.claude/skills/new-session/scripts/new-session.js > /dev/null 2>&1 &
+node ~/zylos/.claude/skills/comm-bridge/scripts/c4-control.js enqueue --content "/clear" --priority 1 --require-idle
 ```
-
-**IMPORTANT:** Must use `nohup ... &` so Claude returns to idle, allowing the dispatcher to deliver /clear.
 
 ## How It Works
 
-1. **Enqueue /clear**: The script puts `/clear` into the control queue (priority=1, require_idle)
+1. **Enqueue /clear**: Puts `/clear` into the control queue (priority=1, require_idle)
 2. **Deliver when idle**: Dispatcher delivers `/clear` to Claude when idle
 3. **Session resets**: Claude Code clears conversation context, session-start hooks fire
 4. **New session**: The new session picks up handoff context from C4 conversation history via session-start hooks
