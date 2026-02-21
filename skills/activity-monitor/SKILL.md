@@ -21,7 +21,7 @@ This is a **PM2 service** (not directly invoked by Claude). It runs continuously
 5. **Heartbeat Liveness Detection**: Periodically sends heartbeat probes via the C4 control queue to verify Claude is responsive, triggering recovery when probes fail
 6. **Health Check**: Periodically enqueues system health checks (PM2, disk, memory) via the C4 control queue
 7. **Daily Upgrade**: Enqueues a Claude Code upgrade via the C4 control queue at 5:00 AM local time daily
-8. **Context Monitoring**: Event-driven context monitoring via Claude Code's `statusLine` hook; triggers restart if usage exceeds 70% (zero turn cost)
+8. **Context Monitoring**: Receives context usage data from Claude's statusLine after every turn; triggers new-session handoff when usage exceeds 70%
 
 ## Status File Format
 
@@ -159,18 +159,17 @@ The activity monitor enqueues a daily Claude Code upgrade via the C4 control que
 
 The control message instructs Claude to use the `upgrade-claude` skill, which handles idle detection, `/exit`, upgrade, and automatic restart.
 
-## Context Monitoring (statusLine)
+## Context Monitoring
 
-Event-driven context monitoring via Claude Code's `statusLine` hook. Replaces the previous hourly polling approach with zero turn cost.
+Event-driven context monitoring via Claude Code's statusLine feature, replacing the old hourly polling.
 
-- **Mechanism**: Claude Code pipes status JSON to `context-monitor.js` via `statusLine` after every turn
-- **Script**: `scripts/context-monitor.js` — reads JSON from stdin, writes `~/zylos/activity-monitor/statusline.json`
-- **Restart threshold**: 70% context usage
-- **Cooldown**: 10 minutes between restart triggers
-- **Persisted state**: `~/zylos/activity-monitor/context-monitor-state.json`
+- **Mechanism**: `context-monitor.js` runs as a statusLine command — Claude Code pipes context data to it via stdin after every turn (zero turn cost)
+- **Status file**: Writes `~/zylos/activity-monitor/statusline.json` with full context data (used_percentage, remaining_percentage, cost, session_id)
+- **Threshold**: Triggers new-session handoff when `used_percentage >= 70%`
+- **Cooldown**: 10 minutes between triggers (state in `~/zylos/activity-monitor/context-monitor-state.json`)
+- **Delivery**: Enqueues via C4 control queue with priority 1, no require-idle — ensures the trigger reaches Claude even during long tasks
+- **Two-stage design**: The trigger message instructs Claude to start the new-session handoff flow; the actual `/clear` is gated by require-idle in the new-session skill's final step
 - **Log**: `~/zylos/activity-monitor/context-monitor.log`
-
-When context usage exceeds the threshold, the script enqueues a restart command via C4 control queue (priority 1, non require-idle, 10-minute ack deadline). The high priority and non-idle delivery ensures the trigger reaches Claude even during long tasks. The actual `/clear` is gated by require-idle in the new-session skill's final step.
 
 The `check-context` skill remains available for manual on-demand context checks.
 
