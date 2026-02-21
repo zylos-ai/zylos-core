@@ -151,7 +151,7 @@ export function readChangelog(dir) {
  * @returns {{ synced: string[], added: string[], merged: string[], conflicts: { skill: string, file: string, backupPath: string }[], errors: string[] }}
  */
 export function syncCoreSkills(newSkillsSrc, backupBase) {
-  const result = { synced: [], added: [], merged: [], conflicts: [], errors: [] };
+  const result = { synced: [], added: [], merged: [], deleted: [], conflicts: [], errors: [] };
 
   if (!fs.existsSync(newSkillsSrc)) {
     return result;
@@ -193,11 +193,14 @@ export function syncCoreSkills(newSkillsSrc, backupBase) {
       });
 
       // Aggregate results
-      if (mergeResult.overwritten.length || mergeResult.added.length) {
+      if (mergeResult.overwritten.length || mergeResult.added.length || mergeResult.deleted.length) {
         result.synced.push(skillName);
       }
       if (mergeResult.merged.length) {
         result.merged.push(...mergeResult.merged.map(f => `${skillName}/${f}`));
+      }
+      if (mergeResult.deleted.length) {
+        result.deleted.push(...mergeResult.deleted.map(f => `${skillName}/${f}`));
       }
       if (mergeResult.conflicts.length) {
         for (const c of mergeResult.conflicts) {
@@ -657,6 +660,7 @@ function step5_syncCoreSkills(ctx) {
     if (syncResult.synced.length) parts.push(`${syncResult.synced.length} synced`);
     if (syncResult.added.length) parts.push(`${syncResult.added.length} added`);
     if (syncResult.merged.length) parts.push(`${syncResult.merged.length} merged`);
+    if (syncResult.deleted.length) parts.push(`${syncResult.deleted.length} deleted`);
     if (syncResult.conflicts.length) parts.push(`${syncResult.conflicts.length} conflicts`);
     if (syncResult.errors.length) parts.push(`${syncResult.errors.length} errors`);
     const msg = parts.join(', ') || 'no changes';
