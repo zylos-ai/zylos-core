@@ -1,0 +1,56 @@
+---
+name: new-session
+description: Start a new session by clearing context via /clear. Faster than restart — no process kill/restart cycle. Use when context is high or when a fresh session is needed without restarting Claude Code.
+---
+
+# New Session Skill
+
+Start a fresh Claude Code session using /clear instead of /exit + restart. The process stays alive — only the conversation context resets. This is faster than restart-claude because it skips the process kill/restart/PM2 detection cycle.
+
+## When to Use
+
+- Context usage exceeds 70% (triggered automatically by context-monitor.js)
+- User explicitly asks for a new session or context reset
+- When you need a clean context but don't need to reload settings/hooks (use restart-claude for that)
+
+## Pre-Clear Checklist
+
+Before sending `/clear`, complete these steps **in order**:
+
+### 1. Stop background tasks
+
+Check for running background agents (Task tool). If any are active, stop them to avoid orphaned work.
+
+### 2. Sync memory
+
+Launch a background subagent for memory sync using the **Task tool** (`subagent_type: general-purpose`, `model: sonnet`, `run_in_background: true`). The subagent's prompt must instruct it to follow the full sync flow in `~/zylos/.claude/skills/zylos-memory/SKILL.md`. Wait for it to complete before proceeding.
+
+### 3. Write a session handoff summary
+
+Write a brief message covering:
+- **What was being worked on** (active tasks, user requests in progress)
+- **Current state** (what's done, what's pending, any blockers)
+- **What the next session should pick up** (if anything)
+
+### 4. Send the handoff summary
+
+Determine who to notify:
+- **If actively collaborating with a user:** Send the summary to that user's channel via C4 (their `reply via` path).
+- **If no active user conversation:** Send the summary to the web console channel.
+
+The goal is twofold: (a) the user knows what's happening, and (b) the handoff summary appears in C4 conversation history, so the new session can seamlessly continue the work.
+
+### 5. Enqueue /clear
+
+```bash
+nohup node ~/zylos/.claude/skills/new-session/scripts/new-session.js > /dev/null 2>&1 &
+```
+
+**IMPORTANT:** Must use `nohup ... &` so Claude returns to idle, allowing the dispatcher to deliver /clear.
+
+## How It Works
+
+1. **Enqueue /clear**: The script puts `/clear` into the control queue (priority=1, require_idle)
+2. **Deliver when idle**: Dispatcher delivers `/clear` to Claude when idle
+3. **Session resets**: Claude Code clears conversation context, session-start hooks fire
+4. **New session**: The new session picks up handoff context from C4 conversation history via session-start hooks

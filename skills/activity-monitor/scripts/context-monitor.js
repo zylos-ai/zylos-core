@@ -35,11 +35,15 @@ function main(raw) {
   saveState({ last_trigger_at: now, used_percentage: usedPct, session_id: status.session_id });
   try {
     execFileSync('node', [C4_CONTROL, 'enqueue',
-      '--content', `Context usage at ${usedPct}%, exceeding 70% threshold. Run memory sync if there are unsummarized conversations, then use the restart-claude skill to restart.`,
-      '--priority', '3', '--require-idle', '--ack-deadline', '600'
+      '--content', `Context usage at ${usedPct}%, exceeding 70% threshold. Use the new-session skill to start a fresh session.`,
+      '--priority', '1',
+      '--ack-deadline', '600'
     ], { encoding: 'utf8', stdio: 'pipe' });
-    log(`Triggered restart: context at ${usedPct}%`);
-  } catch (err) { log(`Failed to enqueue restart: ${err.message}`); }
+
+    log(`Triggered new-session: context at ${usedPct}%`);
+  } catch (err) {
+    log(`Failed to enqueue new-session: ${err.message}`);
+  }
 }
 
 function loadState() { try { return JSON.parse(fs.readFileSync(STATE_FILE, 'utf8')); } catch { return null; } }
