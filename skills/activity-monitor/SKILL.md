@@ -164,7 +164,7 @@ The control message instructs Claude to use the `upgrade-claude` skill, which ha
 Event-driven context monitoring via Claude Code's `statusLine` hook. Replaces the previous hourly polling approach with zero turn cost.
 
 - **Mechanism**: Claude Code pipes status JSON to `context-monitor.js` via `statusLine` after every turn
-- **Script**: `scripts/context-monitor.js` — reads JSON from stdin, writes `/tmp/claude-status.json`
+- **Script**: `scripts/context-monitor.js` — reads JSON from stdin, writes `~/zylos/activity-monitor/statusline.json`
 - **Restart threshold**: 70% context usage
 - **Cooldown**: 10 minutes between restart triggers
 - **Persisted state**: `~/zylos/activity-monitor/context-monitor-state.json`
