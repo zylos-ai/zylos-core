@@ -9,6 +9,7 @@ import crypto from 'node:crypto';
 
 const MANIFEST_DIR = '.zylos';
 const MANIFEST_FILE = 'manifest.json';
+const ORIGINALS_DIR = 'originals';
 
 /**
  * Compute SHA-256 hash of a file.
@@ -99,6 +100,64 @@ export function loadManifest(dir) {
     return null;
   }
 }
+
+// ---------------------------------------------------------------------------
+// Originals: store installed file copies for three-way merge
+// ---------------------------------------------------------------------------
+
+/**
+ * Save copies of source files as "originals" for future three-way merge.
+ * Stored in componentDir/.zylos/originals/ mirroring the source structure.
+ *
+ * @param {string} componentDir - Installed component root directory
+ * @param {string} sourceDir    - Source directory (e.g., temp dir with new version)
+ */
+export function saveOriginals(componentDir, sourceDir) {
+  const originalsDir = path.join(componentDir, MANIFEST_DIR, ORIGINALS_DIR);
+
+  // Clean previous originals
+  if (fs.existsSync(originalsDir)) {
+    fs.rmSync(originalsDir, { recursive: true, force: true });
+  }
+  fs.mkdirSync(originalsDir, { recursive: true });
+
+  const files = collectFiles(sourceDir, sourceDir);
+  for (const file of files) {
+    const destPath = path.join(originalsDir, file);
+    fs.mkdirSync(path.dirname(destPath), { recursive: true });
+    fs.copyFileSync(path.join(sourceDir, file), destPath);
+  }
+}
+
+/**
+ * Read an original file's content (from a previous install).
+ *
+ * @param {string} componentDir - Installed component root directory
+ * @param {string} relPath      - Relative path to the file
+ * @returns {string|null} File content or null if not found
+ */
+export function getOriginalContent(componentDir, relPath) {
+  const filePath = path.join(componentDir, MANIFEST_DIR, ORIGINALS_DIR, relPath);
+  try {
+    return fs.readFileSync(filePath, 'utf8');
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Check if originals are stored for a component.
+ *
+ * @param {string} componentDir - Installed component root directory
+ * @returns {boolean}
+ */
+export function hasOriginals(componentDir) {
+  return fs.existsSync(path.join(componentDir, MANIFEST_DIR, ORIGINALS_DIR));
+}
+
+// ---------------------------------------------------------------------------
+// Change detection
+// ---------------------------------------------------------------------------
 
 /**
  * Detect local modifications by comparing current files against saved manifest.

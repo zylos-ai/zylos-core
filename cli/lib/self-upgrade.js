@@ -10,10 +10,11 @@ import os from 'node:os';
 import { execSync } from 'node:child_process';
 import { SKILLS_DIR, ZYLOS_DIR } from './config.js';
 import { downloadArchive, downloadBranch } from './download.js';
-import { generateManifest, loadManifest, saveManifest } from './manifest.js';
+import { generateManifest, saveManifest, saveOriginals } from './manifest.js';
 import { fetchRawFile, sanitizeError } from './github.js';
 import { copyTree, syncTree } from './fs-utils.js';
 import { extractScriptPath, extractSkillName, getCommandHooks } from './hook-utils.js';
+import { smartSync, formatMergeResult } from './smart-merge.js';
 
 const REPO = 'zylos-ai/zylos-core';
 
@@ -134,21 +135,23 @@ export function readChangelog(dir) {
 // ---------------------------------------------------------------------------
 
 /**
- * Sync Core Skills from new version to SKILLS_DIR.
- * Uses manifest to detect user modifications and preserve them.
+ * Sync Core Skills from new version to SKILLS_DIR using smart merge.
  *
- * Strategy:
- * - Unmodified files → overwrite with new version
- * - Modified files → keep user version
+ * Strategy (per file):
+ * - Local unmodified → overwrite with new version
+ * - Local modified, new unchanged → keep local
+ * - Both changed → try diff3 three-way merge; if conflict → overwrite + backup local
  * - New skill (not installed) → copy fresh
- * - New files in existing skill → add
- * - Deleted files in new version → keep user files
+ *
+ * No "preserve" — every file gets a definitive outcome.
+ * Backup serves as safety net for conflict files.
  *
  * @param {string} newSkillsSrc - Path to skills/ in downloaded temp dir
- * @returns {{ synced: string[], preserved: string[], added: string[], errors: string[] }}
+ * @param {string} [backupBase] - Base directory for conflict backups
+ * @returns {{ synced: string[], added: string[], merged: string[], conflicts: { skill: string, file: string, backupPath: string }[], errors: string[] }}
  */
-export function syncCoreSkills(newSkillsSrc) {
-  const result = { synced: [], preserved: [], added: [], errors: [] };
+export function syncCoreSkills(newSkillsSrc, backupBase) {
+  const result = { synced: [], added: [], merged: [], conflicts: [], errors: [] };
 
   if (!fs.existsSync(newSkillsSrc)) {
     return result;
@@ -168,12 +171,12 @@ export function syncCoreSkills(newSkillsSrc) {
     const destDir = path.join(SKILLS_DIR, skillName);
 
     if (!fs.existsSync(destDir)) {
-      // New skill — copy entirely
+      // New skill — copy entirely + save originals and manifest
       try {
         copyTree(srcDir, destDir);
-        // Generate manifest for the newly copied skill
         const manifest = generateManifest(destDir);
         saveManifest(destDir, manifest);
+        saveOriginals(destDir, srcDir);
         result.added.push(skillName);
       } catch (err) {
         result.errors.push(`${skillName}: ${err.message}`);
@@ -181,78 +184,35 @@ export function syncCoreSkills(newSkillsSrc) {
       continue;
     }
 
-    // Existing skill — sync file by file using manifest
+    // Existing skill — smart merge
     try {
-      syncSkillFiles(srcDir, destDir, skillName, result);
+      const skillBackupDir = backupBase ? path.join(backupBase, skillName) : null;
+      const mergeResult = smartSync(srcDir, destDir, {
+        label: skillName,
+        backupDir: skillBackupDir,
+      });
+
+      // Aggregate results
+      if (mergeResult.overwritten.length || mergeResult.added.length) {
+        result.synced.push(skillName);
+      }
+      if (mergeResult.merged.length) {
+        result.merged.push(...mergeResult.merged.map(f => `${skillName}/${f}`));
+      }
+      if (mergeResult.conflicts.length) {
+        for (const c of mergeResult.conflicts) {
+          result.conflicts.push({ skill: skillName, file: c.file, backupPath: c.backupPath });
+        }
+      }
+      if (mergeResult.errors.length) {
+        result.errors.push(...mergeResult.errors.map(e => `${skillName}: ${e}`));
+      }
     } catch (err) {
       result.errors.push(`${skillName}: ${err.message}`);
     }
   }
 
   return result;
-}
-
-/**
- * Sync individual files within a skill directory.
- * Compares against saved manifest to detect user modifications.
- */
-function syncSkillFiles(srcDir, destDir, skillName, result) {
-  const savedManifest = loadManifest(destDir);
-  const newManifest = generateManifest(srcDir);
-  let currentManifest;
-  if (savedManifest) {
-    currentManifest = generateManifest(destDir);
-  }
-
-  let anyUpdated = false;
-
-  for (const [relPath, newHash] of Object.entries(newManifest.files)) {
-    const srcFile = path.join(srcDir, relPath);
-    const destFile = path.join(destDir, relPath);
-
-    if (!fs.existsSync(destFile)) {
-      // New file — add it
-      const destFileDir = path.dirname(destFile);
-      fs.mkdirSync(destFileDir, { recursive: true });
-      fs.copyFileSync(srcFile, destFile);
-      anyUpdated = true;
-      continue;
-    }
-
-    if (!savedManifest) {
-      // No manifest — can't tell if user modified, skip (preserve)
-      continue;
-    }
-
-    const savedHash = savedManifest.files[relPath];
-    const currentHash = currentManifest.files[relPath];
-
-    if (!savedHash) {
-      // File didn't exist in previous manifest — user might have added it, skip
-      continue;
-    }
-
-    if (currentHash === savedHash) {
-      // User hasn't modified this file — safe to overwrite
-      if (newHash !== currentHash) {
-        fs.copyFileSync(srcFile, destFile);
-        anyUpdated = true;
-      }
-    } else {
-      // User modified this file — preserve their version
-      if (!result.preserved.includes(skillName)) {
-        result.preserved.push(skillName);
-      }
-    }
-  }
-
-  if (anyUpdated) {
-    result.synced.push(skillName);
-  }
-
-  // Update manifest to reflect current state after sync
-  const updatedManifest = generateManifest(destDir);
-  saveManifest(destDir, updatedManifest);
 }
 
 // ---------------------------------------------------------------------------
@@ -536,6 +496,8 @@ function createContext({ tempDir, newVersion } = {}) {
     backupDir: null,
     servicesStopped: [],
     servicesWereRunning: [],
+    mergeConflicts: [],
+    mergedFiles: [],
     // Results
     steps: [],
     from: null,
@@ -675,7 +637,7 @@ function step4_npmInstallGlobal(ctx) {
 }
 
 /**
- * Step 5: sync Core Skills (preserve user modifications)
+ * Step 5: sync Core Skills (smart merge — no preserve)
  */
 function step5_syncCoreSkills(ctx) {
   const startTime = Date.now();
@@ -686,13 +648,21 @@ function step5_syncCoreSkills(ctx) {
   }
 
   try {
-    const syncResult = syncCoreSkills(newSkillsSrc);
+    // Use backup dir from step 1 as base for conflict backups
+    const conflictBackupDir = ctx.backupDir ? path.join(ctx.backupDir, 'conflicts') : null;
+    const syncResult = syncCoreSkills(newSkillsSrc, conflictBackupDir);
+
     const parts = [];
     if (syncResult.synced.length) parts.push(`${syncResult.synced.length} synced`);
     if (syncResult.added.length) parts.push(`${syncResult.added.length} added`);
-    if (syncResult.preserved.length) parts.push(`${syncResult.preserved.length} preserved`);
+    if (syncResult.merged.length) parts.push(`${syncResult.merged.length} merged`);
+    if (syncResult.conflicts.length) parts.push(`${syncResult.conflicts.length} conflicts`);
     if (syncResult.errors.length) parts.push(`${syncResult.errors.length} errors`);
     const msg = parts.join(', ') || 'no changes';
+
+    // Store conflicts on ctx for the final result
+    ctx.mergeConflicts = syncResult.conflicts;
+    ctx.mergedFiles = syncResult.merged;
 
     if (syncResult.errors.length > 0) {
       return { step: 5, name: 'sync_core_skills', status: 'failed', error: syncResult.errors.join('; '), duration: Date.now() - startTime };
@@ -1130,6 +1100,8 @@ export function runSelfUpgrade({ tempDir, newVersion, onStep } = {}) {
     backupDir: ctx.backupDir,
     templates,
     migrationHints,
+    mergeConflicts: ctx.mergeConflicts.length > 0 ? ctx.mergeConflicts : null,
+    mergedFiles: ctx.mergedFiles.length > 0 ? ctx.mergedFiles : null,
   };
 }
 

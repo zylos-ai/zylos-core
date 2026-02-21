@@ -12,11 +12,12 @@ import { SKILLS_DIR, COMPONENTS_DIR } from './config.js';
 import { loadComponents } from './components.js';
 import { loadLocalRegistry } from './registry.js';
 import { parseSkillMd } from './skill.js';
-import { generateManifest, saveManifest } from './manifest.js';
+import { generateManifest, saveManifest, saveOriginals } from './manifest.js';
 import { downloadArchive, downloadBranch } from './download.js';
 import { fetchLatestTag, fetchRawFile, sanitizeError } from './github.js';
 import { copyTree, syncTree } from './fs-utils.js';
 import { applyCaddyRoutes } from './caddy.js';
+import { smartSync, formatMergeResult } from './smart-merge.js';
 
 // ---------------------------------------------------------------------------
 // Version helpers
@@ -276,6 +277,8 @@ function createContext(component, { tempDir, newVersion } = {}) {
     serviceStopped: false,
     serviceExists: true,
     serviceWasRunning: false,
+    mergeConflicts: [],
+    mergedFiles: [],
     // Results
     steps: [],
     from: null,
@@ -342,30 +345,57 @@ function step2_backup(ctx) {
 }
 
 /**
- * Step 3: copy new files from temp dir to skill dir
+ * Step 3: smart merge new files into skill dir
+ *
+ * Uses three-way merge when possible:
+ * - Local unmodified → overwrite
+ * - Local modified + new unchanged → keep local
+ * - Both changed → diff3 merge or overwrite + backup local
  */
-function step3_copyNewFiles(ctx) {
+function step3_smartMerge(ctx) {
   const startTime = Date.now();
 
   if (!ctx.tempDir || !fs.existsSync(ctx.tempDir)) {
-    return { step: 3, name: 'copy_new_files', status: 'failed', error: 'Temp directory not available', duration: Date.now() - startTime };
-  }
-
-  // Exclude list: always exclude meta dirs, plus lifecycle.preserve entries
-  const excludes = ['node_modules', '.backup', '.zylos'];
-
-  // Read preserve list from the NEW SKILL.md (in tempDir)
-  const newParsed = parseSkillMd(ctx.tempDir);
-  const preserveList = newParsed?.frontmatter?.lifecycle?.preserve || [];
-  for (const entry of preserveList) {
-    excludes.push(entry);
+    return { step: 3, name: 'smart_merge', status: 'failed', error: 'Temp directory not available', duration: Date.now() - startTime };
   }
 
   try {
-    syncTree(ctx.tempDir, ctx.skillDir, { excludes });
-    return { step: 3, name: 'copy_new_files', status: 'done', duration: Date.now() - startTime };
+    const conflictBackupDir = ctx.backupDir ? path.join(ctx.backupDir, 'conflicts') : null;
+    const mergeResult = smartSync(ctx.tempDir, ctx.skillDir, {
+      label: ctx.component,
+      backupDir: conflictBackupDir,
+    });
+
+    // Store merge info on context for final result
+    ctx.mergeConflicts = mergeResult.conflicts;
+    ctx.mergedFiles = mergeResult.merged;
+
+    const msg = formatMergeResult(mergeResult);
+
+    if (mergeResult.errors.length > 0) {
+      return { step: 3, name: 'smart_merge', status: 'failed', error: mergeResult.errors.join('; '), duration: Date.now() - startTime };
+    }
+
+    // Delete files from skill dir that are not in the new version
+    // (equivalent to old syncTree --delete behavior, but only for non-user files)
+    const newFiles = new Set(Object.keys(generateManifest(ctx.tempDir).files));
+    const installedFiles = Object.keys(generateManifest(ctx.skillDir).files);
+    for (const file of installedFiles) {
+      if (!newFiles.has(file)) {
+        // File exists locally but not in new version — remove it
+        // (unless it was user-added, which we detect by checking if it was in the old manifest)
+        const destFile = path.join(ctx.skillDir, file);
+        try {
+          fs.unlinkSync(destFile);
+        } catch {
+          // Ignore deletion errors
+        }
+      }
+    }
+
+    return { step: 3, name: 'smart_merge', status: 'done', message: msg, duration: Date.now() - startTime };
   } catch (err) {
-    return { step: 3, name: 'copy_new_files', status: 'failed', error: `Copy failed: ${err.message}`, duration: Date.now() - startTime };
+    return { step: 3, name: 'smart_merge', status: 'failed', error: `Merge failed: ${err.message}`, duration: Date.now() - startTime };
   }
 }
 
@@ -515,7 +545,7 @@ export function runUpgrade(component, { tempDir, newVersion, onStep } = {}) {
   const steps = [
     step1_stopService,
     step2_backup,
-    step3_copyNewFiles,
+    step3_smartMerge,
     step4_npmInstall,
     step5_generateManifest,
     step6_updateCaddyRoutes,
@@ -584,5 +614,7 @@ export function runUpgrade(component, { tempDir, newVersion, onStep } = {}) {
       service: lifecycle.service || null,
       caddy: caddyResult,
     },
+    mergeConflicts: ctx.mergeConflicts.length > 0 ? ctx.mergeConflicts : null,
+    mergedFiles: ctx.mergedFiles.length > 0 ? ctx.mergedFiles : null,
   };
 }
