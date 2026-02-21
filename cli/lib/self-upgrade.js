@@ -35,11 +35,12 @@ export function getCurrentVersion() {
 }
 
 /**
- * Get latest zylos-core version from GitHub (package.json on main branch).
+ * Get latest zylos-core version from GitHub.
+ * @param {string} [branch] - Branch to read from (defaults to 'main')
  */
-function getLatestVersion() {
+function getLatestVersion(branch) {
   try {
-    const content = fetchRawFile(REPO, 'package.json');
+    const content = fetchRawFile(REPO, 'package.json', branch || 'main');
     const pkg = JSON.parse(content);
     return { success: true, version: pkg.version };
   } catch (err) {
@@ -54,15 +55,16 @@ function getLatestVersion() {
 /**
  * Check if zylos-core has updates available.
  *
+ * @param {string} [branch] - Branch to compare against (defaults to 'main')
  * @returns {object} { success, hasUpdate, current, latest }
  */
-export function checkForCoreUpdates() {
+export function checkForCoreUpdates(branch) {
   const current = getCurrentVersion();
   if (!current.success) {
     return { success: false, error: 'version_not_found', message: current.error };
   }
 
-  const latest = getLatestVersion();
+  const latest = getLatestVersion(branch);
   if (!latest.success) {
     return { success: false, error: 'remote_version_failed', message: latest.error };
   }
