@@ -85,7 +85,7 @@ function formatC4Reply(type, data) {
       return r;
     }
     case 'upgrade': {
-      const { component, success, from, to, changelog, failedStep, error, rollback } = data;
+      const { component, success, from, to, changelog, failedStep, error, rollback, mergeConflicts, mergedFiles } = data;
       if (!success) {
         let r = `${component} upgrade failed (step ${failedStep}): ${error}`;
         if (rollback?.performed) {
@@ -95,10 +95,18 @@ function formatC4Reply(type, data) {
       }
       let r = `${component} upgraded: ${from} -> ${to}`;
       if (changelog) r += `\n\nChangelog:\n${changelog}`;
+      if (mergedFiles?.length > 0) {
+        r += `\n\nAuto-merged files: ${mergedFiles.join(', ')}`;
+      }
+      if (mergeConflicts?.length > 0) {
+        r += '\n\nConflict files (local backed up, new version applied):';
+        for (const c of mergeConflicts) r += `\n  ${c.file} → backup: ${c.backupPath}`;
+        r += '\n\nUse Claude to review and re-merge backed-up local changes.';
+      }
       return r;
     }
     case 'self-upgrade': {
-      const { success, from, to, changelog, failedStep, error, rollback, migrationHints } = data;
+      const { success, from, to, changelog, failedStep, error, rollback, migrationHints, mergeConflicts, mergedFiles } = data;
       if (!success) {
         let r = `zylos-core upgrade failed (step ${failedStep}): ${error}`;
         if (rollback?.performed) {
@@ -108,6 +116,14 @@ function formatC4Reply(type, data) {
       }
       let r = `zylos-core upgraded: ${from} -> ${to}`;
       if (changelog) r += `\n\nChangelog:\n${changelog}`;
+      if (mergedFiles?.length > 0) {
+        r += `\n\nAuto-merged files: ${mergedFiles.join(', ')}`;
+      }
+      if (mergeConflicts?.length > 0) {
+        r += '\n\nConflict files (local backed up, new version applied):';
+        for (const c of mergeConflicts) r += `\n  ${c.skill}/${c.file} → backup: ${c.backupPath}`;
+        r += '\n\nUse Claude to review and re-merge backed-up local changes.';
+      }
       if (migrationHints?.length > 0) {
         r += '\n\nACTION REQUIRED - Hook changes in ~/zylos/.claude/settings.json:';
         for (const hint of migrationHints) {
@@ -211,7 +227,7 @@ export async function upgradeComponent(args) {
   // Handle --self: upgrade zylos-core itself
   if (upgradeSelf) {
     if (checkOnly) {
-      return handleSelfCheckOnly({ jsonOutput });
+      return handleSelfCheckOnly({ jsonOutput, branch });
     }
     // Parse --temp-dir flag (reuse previously downloaded package from --check)
     const selfTempDirIdx = args.indexOf('--temp-dir');
@@ -776,8 +792,8 @@ function detectCoreSkillChanges() {
  * Handle --self --check: check for zylos-core updates only (no lock needed).
  * Downloads new version to temp dir for file comparison by Claude.
  */
-function handleSelfCheckOnly({ jsonOutput }) {
-  const check = checkForCoreUpdates();
+function handleSelfCheckOnly({ jsonOutput, branch }) {
+  const check = checkForCoreUpdates(branch);
 
   if (!check.success) {
     if (jsonOutput) {
@@ -796,7 +812,7 @@ function handleSelfCheckOnly({ jsonOutput }) {
 
   if (check.hasUpdate) {
     // Download new version to temp dir (for template/file comparison by Claude)
-    const dlResult = downloadCoreToTemp(check.latest);
+    const dlResult = downloadCoreToTemp(check.latest, branch);
     if (dlResult.success) {
       tempDir = dlResult.tempDir;
 
@@ -887,8 +903,8 @@ async function upgradeSelfCore({ providedTempDir, branch } = {}) {
   }
 
   try {
-    // 2. Check for updates (skip version comparison when --branch is specified)
-    const check = checkForCoreUpdates();
+    // 2. Check for updates (compare against branch when --branch is specified)
+    const check = checkForCoreUpdates(branch);
 
     if (!check.success && !branch) {
       if (jsonOutput) {
