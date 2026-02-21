@@ -5,7 +5,7 @@ import path from 'path';
 import os from 'os';
 
 const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
-const STATUS_FILE = '/tmp/claude-status.json';
+const STATUS_FILE = path.join(ZYLOS_DIR, 'activity-monitor', 'statusline.json');
 const STATE_FILE = path.join(ZYLOS_DIR, 'activity-monitor', 'context-monitor-state.json');
 const C4_CONTROL = path.join(ZYLOS_DIR, '.claude/skills/comm-bridge/scripts/c4-control.js');
 
@@ -35,7 +35,7 @@ function main(raw) {
   saveState({ last_trigger_at: now, used_percentage: usedPct, session_id: status.session_id });
   try {
     execFileSync('node', [C4_CONTROL, 'enqueue',
-      '--content', `Context at ${usedPct}%. Run memory sync (if needed) then use the restart-claude skill to restart.`,
+      '--content', `Context usage at ${usedPct}%, exceeding 70% threshold. Run memory sync if there are unsummarized conversations, then use the restart-claude skill to restart.`,
       '--priority', '3', '--require-idle', '--ack-deadline', '600'
     ], { encoding: 'utf8', stdio: 'pipe' });
     log(`Triggered restart: context at ${usedPct}%`);
