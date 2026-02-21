@@ -1,5 +1,41 @@
 # Upgrade Workflow
 
+## Smart Merge
+
+Upgrades use **smart merge** — a three-way merge strategy that replaces the old preserve-or-overwrite approach. Every file gets a definitive outcome:
+
+| Outcome | Condition | Action |
+|---------|-----------|--------|
+| **overwrite** | Local unmodified | New version applied directly |
+| **keep** | Only local modified, new version unchanged | Local version preserved |
+| **merged** | Both changed different sections | diff3 produces clean merge |
+| **conflict** | Both changed same section, or no merge base | New version wins, local backed up |
+| **added** | File is new in this version | Copied to installed dir |
+| **deleted** | File removed in new version | Deleted from installed dir (user-added files preserved) |
+
+### Conflict Handling
+
+When a conflict occurs:
+1. The **new version** is written to the installed location (ensures upgrade completeness)
+2. The **local version** is backed up to `.backup/<timestamp>/conflicts/<path>`
+3. The upgrade result includes `mergeConflicts` listing each conflict with its backup path
+
+### Merge Review (Conversation Mode)
+
+After upgrade, if `mergeConflicts` is non-empty, Claude should:
+
+1. Read each conflict's backup file and the newly installed version
+2. Understand what the local modification was trying to achieve
+3. Re-apply the local changes intelligently using Edit tool
+4. Verify the result (syntax check, import check if applicable)
+
+This is where AI merge adds real value — Claude has full context, tools, and can verify.
+
+### Merge Review (CLI Mode)
+
+In CLI mode (`zylos upgrade`), conflicts are reported with backup paths. The user is prompted:
+> "X files had local modifications that conflicted with the upgrade. Backups saved to /path/to/backup. Start a Claude session and run merge-review to re-apply your changes."
+
 ## Session Mode — Component Upgrade
 
 When user asks to upgrade a component:
@@ -26,7 +62,6 @@ The CLI checks for updates **and downloads the new version to a temporary direct
 
 1. **Analyze changes**: Read `changelog` from JSON + fetch commit history via `gh api`. Synthesize a clear summary — don't just relay changelog text.
 2. **Compare files**: Read files from `tempDir`, compare with installed files in the skill directory:
-   - **preserve list files** (config.json, .env, data/): inform user these won't be touched
    - **New files**: list them
    - **Changed files**: show differences for user awareness
    - **Unchanged files**: skip
@@ -51,8 +86,11 @@ Only after pre-upgrade hook succeeds (or doesn't exist). **Reuse the temp dir fr
 zylos upgrade <component> --yes --skip-eval --json --temp-dir <tempDir>
 ```
 
-The CLI handles: stop service, backup, file sync from tempDir, npm install, manifest, **cleanup tempDir**.
-The JSON output includes `skill` field with updated hooks, config, and service info.
+The CLI handles: stop service, backup, smart merge from tempDir, npm install, manifest, **cleanup tempDir**.
+The JSON output includes:
+- `skill` field with updated hooks, config, and service info
+- `mergeConflicts` — files where local was backed up (may be null)
+- `mergedFiles` — files auto-merged via diff3 (may be null)
 
 ### Step 5: Execute Post-Upgrade Hook
 
@@ -64,11 +102,12 @@ node ~/zylos/.claude/skills/<component>/hooks/post-upgrade.js
 
 This typically handles config migration. If it fails, investigate.
 
-### Step 6: Start Service and Check Config
+### Step 6: Start Service, Check Config, Review Conflicts
 
 1. Restart the service: `pm2 restart <service-name>` (or start fresh if not registered)
 2. Verify the service is healthy
 3. Compare old and new SKILL.md config — if new required config items were added, collect them interactively
+4. **If `mergeConflicts` exists**: Review each conflict file. Read the backup (local version) and installed (new version), then re-apply local changes using Edit tool.
 
 ## Session Mode — Self-Upgrade (zylos-core)
 
@@ -98,8 +137,6 @@ The CLI checks for updates **and downloads the new version to a temporary direct
 3. **Present everything** to user: version change, change summary, template changes, user decisions needed
 4. Get user confirmation (including their choices for changed files)
 
-> **Note:** Because templates are seed files (deployed once at install), differences between local and new template could be from user edits or from old template version. Currently we show diffs and let user decide. Future: template-manifest with base hashes enables three-way comparison.
-
 ### Step 3: Execute Self-Upgrade
 
 After user confirms (with full knowledge of all changes). **Reuse the temp dir from Step 1**:
@@ -108,7 +145,12 @@ After user confirms (with full knowledge of all changes). **Reuse the temp dir f
 zylos upgrade --self --yes --json --temp-dir <tempDir>
 ```
 
-The CLI handles: backup, npm install -g from tempDir, sync Core Skills, sync CLAUDE.md, restart PM2 services, verify, **cleanup tempDir**.
+The CLI handles: backup, npm install -g from tempDir, smart merge Core Skills, sync CLAUDE.md, sync settings hooks, restart PM2 services, verify, **cleanup tempDir**.
+
+JSON output includes:
+- `mergeConflicts` — core skill files where local was backed up
+- `mergedFiles` — core skill files auto-merged via diff3
+- `migrationHints` — hook changes auto-applied to settings.json
 
 ### Step 4: Deploy Templates
 
@@ -117,9 +159,10 @@ Deploy templates according to the decisions made in Step 2:
 - Changed files: follow user's choice (overwrite or keep)
 - Unchanged files: skip
 
-### Step 5: Restart Claude (If Needed)
+### Step 5: Review Conflicts + Restart
 
-If the upgrade changed hooks or skills, execute `restart-claude` to load new configuration.
+1. **If `mergeConflicts` exists**: Review each conflict. Read backup and installed versions, re-apply local changes.
+2. If the upgrade changed hooks or skills, execute `restart-claude` to load new configuration.
 
 ## C4 Mode — Component Upgrade
 
@@ -135,12 +178,12 @@ Run `zylos upgrade telegram --check --json`, parse the JSON output. **Save the `
 1. Read the `changelog` field from JSON output (if present)
 2. Fetch commit history: `gh api repos/zylos-ai/zylos-<component>/compare/v<current>...v<latest> --jq '.commits[].commit.message'` (with proxy)
 3. Synthesize a clear change summary from both sources — explain what changed and why, don't just copy changelog text
-4. Compare files from `tempDir` with installed skill directory — note new, changed, and preserved files
+4. Compare files from `tempDir` with installed skill directory — note new, changed files
 
 Reply with ALL of the following:
 1. Version change: `<name>: <current> -> <latest>`
 2. Change summary: your synthesized analysis of what changed (using changelog + commits)
-3. File changes: new files, changed files, preserved files
+3. File changes: new files, changed files
 4. Local changes: show if any, or "none"
 5. Confirm instruction
 
@@ -157,7 +200,6 @@ Changes:
 File changes:
 - New: hooks/pre-upgrade.js
 - Updated: hooks/post-install.js, SKILL.md
-- Preserved: config.json, .env, data/
 
 Local changes: none
 
@@ -175,16 +217,12 @@ WARNING: Local modifications detected:
   M src/bot.js
   A custom-plugin.js
 
-Upgrade analysis:
-  src/bot.js: safe - changes are in config section, upgrade won't overwrite
-  custom-plugin.js: safe - new file, preserved by lifecycle.preserve
-
-Recommendation: Safe to upgrade.
+Smart merge will handle these automatically:
+  src/bot.js: both sides changed — will attempt diff3 merge, backup if conflict
+  custom-plugin.js: user-added file — will be preserved
 
 Reply "upgrade telegram confirm" to proceed.
 ```
-
-The `evaluation` field in JSON contains `files` (array of `{file, verdict, reason}`) and `recommendation`.
 
 ### Step 2 — User confirms
 
@@ -194,7 +232,8 @@ User: `upgrade telegram confirm`
 2. Run `zylos upgrade telegram --yes --skip-eval --json --temp-dir <tempDir>` (reuse tempDir saved from Step 1)
 3. Run post-upgrade hook if `skill.hooks.post-upgrade` exists in result
 4. Restart service if `skill.service` exists in result
-5. Reply with version change and change summary
+5. **If `mergeConflicts` in result**: Review and re-merge backed-up local changes
+6. Reply with version change, merge summary, and any action results
 
 If the upgrade failed, report the error and rollback status from JSON.
 
@@ -205,6 +244,7 @@ After upgrade succeeds:
 1. **Hooks**: If `skill.hooks.post-upgrade` exists, run it.
 2. **Service**: If `skill.service` exists, restart and verify.
 3. **Config**: If new config items added, inform user.
+4. **Conflicts**: If `mergeConflicts` exists, review and re-merge.
 
 Reply with version change, change summary, and any action results.
 
@@ -223,24 +263,25 @@ Run `zylos upgrade --self --check --json`. **Save the `tempDir` from output.** T
 3. **Reply with ALL information**:
 
 ```
-zylos-core: 0.1.0-beta.1 -> 0.1.0-beta.2
+zylos-core: 0.1.0 -> 0.2.0
 
 Changes:
-- Added self-upgrade support for IM channels (Telegram, Lark)
-- Fixed version detection that failed on pre-release tags
+- Smart merge replaces preserve strategy for upgrades
+- Three-way merge with diff3, automatic conflict backup
 
 Template changes:
-- New: memory/identity.md, memory/state.md (Inside Out memory structure)
+- New: memory/identity.md, memory/state.md
 - Updated: CLAUDE.md, .claude/settings.json
-- Conflict: pm2/ecosystem.config.cjs (you modified this locally)
-  -> overwrite with new version, or keep yours?
+
+Local skill modifications:
+  M activity-monitor/scripts/heartbeat.js
+
+Smart merge will handle modifications automatically.
 
 Reply "upgrade zylos confirm" to proceed.
 ```
 
-If user has conflicting files, wait for their decision before accepting "confirm".
-
-If already up to date, reply: `zylos-core is up to date (v0.1.0-beta.1)`
+If already up to date, reply: `zylos-core is up to date (v0.1.0)`
 
 ### Step 2 — User confirms
 
@@ -248,5 +289,6 @@ User: `upgrade zylos confirm`
 
 1. Run `zylos upgrade --self --yes --json --temp-dir <tempDir>` (reuse tempDir saved from Step 1)
 2. Deploy templates per user's decisions from Step 1 (new files: copy, changed: follow user choice, unchanged: skip)
-3. If hooks/skills changed, execute restart-claude
-4. Reply with version change and change summary
+3. **If `mergeConflicts` in result**: Review and re-merge backed-up local changes
+4. If hooks/skills changed, execute restart-claude
+5. Reply with version change and change summary

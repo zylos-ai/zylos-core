@@ -376,19 +376,27 @@ function step3_smartMerge(ctx) {
       return { step: 3, name: 'smart_merge', status: 'failed', error: mergeResult.errors.join('; '), duration: Date.now() - startTime };
     }
 
-    // Delete files from skill dir that are not in the new version
-    // (equivalent to old syncTree --delete behavior, but only for non-user files)
-    const newFiles = new Set(Object.keys(generateManifest(ctx.tempDir).files));
-    const installedFiles = Object.keys(generateManifest(ctx.skillDir).files);
-    for (const file of installedFiles) {
-      if (!newFiles.has(file)) {
-        // File exists locally but not in new version — remove it
-        // (unless it was user-added, which we detect by checking if it was in the old manifest)
-        const destFile = path.join(ctx.skillDir, file);
-        try {
-          fs.unlinkSync(destFile);
-        } catch {
-          // Ignore deletion errors
+    // Delete files that were in the old version but removed in the new version.
+    // Only delete files tracked in the old manifest — user-added files are preserved.
+    const oldManifest = mergeResult._oldManifest;
+    if (oldManifest) {
+      const newFiles = new Set(Object.keys(generateManifest(ctx.tempDir).files));
+      for (const file of Object.keys(oldManifest)) {
+        if (!newFiles.has(file)) {
+          const destFile = path.join(ctx.skillDir, file);
+          try {
+            fs.unlinkSync(destFile);
+            // Clean up empty parent directories
+            let dir = path.dirname(destFile);
+            while (dir !== ctx.skillDir) {
+              const entries = fs.readdirSync(dir);
+              if (entries.length > 0) break;
+              fs.rmdirSync(dir);
+              dir = path.dirname(dir);
+            }
+          } catch {
+            // Ignore deletion errors
+          }
         }
       }
     }

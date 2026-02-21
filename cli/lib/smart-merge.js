@@ -61,12 +61,18 @@ export function smartSync(srcDir, destDir, opts = {}) {
     conflicts: [],
     added: [],
     errors: [],
+    _oldManifest: null, // Exposed for callers that need deletion logic
   };
 
   const savedManifest = loadManifest(destDir);
   const newManifest = generateManifest(srcDir);
   const diff3Available = isDiff3Available();
   const originalsExist = hasOriginals(destDir);
+
+  // Expose old manifest files for callers that need file deletion logic
+  if (savedManifest) {
+    result._oldManifest = savedManifest.files;
+  }
 
   // Generate current manifest for comparison (if we have a saved one)
   let currentManifest;

@@ -1,6 +1,6 @@
 {
   "name": "zylos",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "type": "module",
   "description": "Autonomous AI Agent Infrastructure",
   "main": "cli/zylos.js",
@@ -8,7 +8,8 @@
     "zylos": "./cli/zylos.js"
   },
   "scripts": {
-    "postinstall": "node scripts/postinstall.js || true"
+    "postinstall": "node scripts/postinstall.js || true",
+    "test": "node --experimental-vm-modules node_modules/.bin/jest"
   },
   "repository": {
     "type": "git",
