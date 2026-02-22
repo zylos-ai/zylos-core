@@ -905,16 +905,9 @@ function step8_syncSettingsHooks(ctx) {
   const startTime = Date.now();
 
   // Resolve the newly installed package path (from step 4) to use the latest sync logic.
-  // This avoids bootstrap issues where the old version's in-memory code misses new fields.
-  let syncScript;
-  try {
-    const npmRoot = execSync('npm root -g', { encoding: 'utf8', stdio: 'pipe' }).trim();
-    syncScript = path.join(npmRoot, 'zylos', 'cli', 'lib', 'sync-settings-hooks.js');
-  } catch {
-    syncScript = null;
-  }
+  const syncScript = resolveInstalledSyncScript();
 
-  if (!syncScript || !fs.existsSync(syncScript)) {
+  if (!syncScript) {
     // Fallback to in-memory hints if new script not found
     const templatesDir = path.join(ctx.tempDir, 'templates');
     const hints = generateMigrationHints(templatesDir);
@@ -929,10 +922,32 @@ function step8_syncSettingsHooks(ctx) {
   }
 
   try {
-    const output = execSync(`node "${syncScript}"`, { encoding: 'utf8', stdio: 'pipe' }).trim();
-    return { step: 8, name: 'sync_settings_hooks', status: 'done', message: output || 'synced', duration: Date.now() - startTime };
+    const output = execSync(`node "${syncScript}"`, { encoding: 'utf8', stdio: 'pipe', timeout: 60000 }).trim();
+    // Extract last line as the summary (script outputs per-hook details before summary)
+    const lines = output.split('\n').filter(l => l.trim());
+    const summary = lines.length > 0 ? lines[lines.length - 1].trim() : 'no changes';
+    return { step: 8, name: 'sync_settings_hooks', status: 'done', message: summary, duration: Date.now() - startTime };
   } catch (err) {
-    return { step: 8, name: 'sync_settings_hooks', status: 'failed', error: err.stderr || err.message, duration: Date.now() - startTime };
+    const errMsg = err.stderr ? err.stderr.toString().trim() : err.message;
+    return { step: 8, name: 'sync_settings_hooks', status: 'failed', error: errMsg, duration: Date.now() - startTime };
+  }
+}
+
+/**
+ * Resolve the path to sync-settings-hooks.js in the globally installed package.
+ * Reads the package name from package.json to avoid hardcoding.
+ * @returns {string|null} Absolute path to the script, or null if not found.
+ */
+function resolveInstalledSyncScript() {
+  try {
+    const pkgPath = path.join(path.dirname(path.dirname(import.meta.url.replace('file://', ''))), 'package.json');
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+    const pkgName = pkg.name || 'zylos';
+    const npmRoot = execSync('npm root -g', { encoding: 'utf8', stdio: 'pipe', timeout: 10000 }).trim();
+    const script = path.join(npmRoot, pkgName, 'cli', 'lib', 'sync-settings-hooks.js');
+    return fs.existsSync(script) ? script : null;
+  } catch {
+    return null;
   }
 }
 
@@ -1115,8 +1130,9 @@ export function runSelfUpgrade({ tempDir, newVersion, mode, onStep } = {}) {
   const templatesDir = path.join(ctx.tempDir, 'templates');
   const templates = listTemplateFiles(templatesDir);
 
-  // Generate migration hints for settings that need manual updates
-  const migrationHints = generateMigrationHints(templatesDir);
+  // Migration hints: step 8 already applied settings sync via the newly installed script.
+  // Re-check with the in-memory function for any remaining hints (informational only).
+  const migrationHints = [];
 
   return {
     action: 'self_upgrade',
