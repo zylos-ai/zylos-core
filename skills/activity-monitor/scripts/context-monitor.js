@@ -29,7 +29,15 @@ const C4_CONTROL = path.join(ZYLOS_DIR, '.claude/skills/comm-bridge/scripts/c4-c
 
 // Thresholds
 const RESTART_THRESHOLD = 70;   // Trigger restart at this percentage
-const COOLDOWN_SECONDS = 600;   // Don't re-trigger within 10 minutes
+const COOLDOWN_SECONDS = 300;   // Re-trigger after 5 minutes if still above threshold
+
+// Ensure data directory exists once at startup
+let dirReady = false;
+function ensureDirOnce() {
+  if (dirReady) return;
+  if (!fs.existsSync(AM_DIR)) fs.mkdirSync(AM_DIR, { recursive: true });
+  dirReady = true;
+}
 
 // Read JSON from stdin
 let input = '';
@@ -56,11 +64,13 @@ function main(raw) {
   // Parse status JSON
   const status = JSON.parse(raw);
 
-  // Always write status file for external queries
-  ensureDir(AM_DIR);
-  fs.writeFileSync(STATUS_FILE, JSON.stringify(status, null, 2));
+  // Ensure data directory exists
+  ensureDirOnce();
 
-  // Track session cost
+  // Always write status file for external queries
+  atomicWrite(STATUS_FILE, JSON.stringify(status, null, 2));
+
+  // Track session cost and context percentage
   trackSessionCost(status);
 
   // Check context threshold
@@ -79,12 +89,12 @@ function main(raw) {
     used_percentage: usedPct,
   });
 
-  // Enqueue new-session control message (non require-idle, priority 1)
+  // Enqueue new-session control message
   try {
     execFileSync('node', [C4_CONTROL, 'enqueue',
       '--content', `Context usage at ${usedPct}%, exceeding 70% threshold. Use the new-session skill to start a fresh session.`,
       '--priority', '1',
-      '--ack-deadline', '600'
+      '--ack-deadline', '300'
     ], { encoding: 'utf8', stdio: 'pipe' });
 
     log(`Triggered new-session: context at ${usedPct}%`);
@@ -101,32 +111,45 @@ function main(raw) {
 function trackSessionCost(status) {
   const sessionId = status.session_id;
   const costUsd = status.cost?.total_cost_usd;
+  const usedPct = status.context_window?.used_percentage;
   if (!sessionId) return;
 
   const state = loadState();
 
   // Session changed — log previous session's final cost
-  if (state && state.session_id && state.session_id !== sessionId && state.last_cost != null) {
-    const entry = {
-      session_id: state.session_id,
-      cost_usd: state.last_cost,
-      ended_at: new Date().toISOString(),
-      context_used_pct: state.used_percentage || null,
-    };
-    try {
-      ensureDir(AM_DIR);
-      fs.appendFileSync(COST_LOG_FILE, JSON.stringify(entry) + '\n');
-      log(`Session cost logged: ${state.session_id} = $${state.last_cost}`);
-    } catch (err) {
-      log(`Failed to write cost log: ${err.message}`);
+  if (state && state.session_id && state.session_id !== sessionId) {
+    if (state.last_cost != null) {
+      const entry = {
+        session_id: state.session_id,
+        cost_usd: state.last_cost,
+        ended_at: new Date().toISOString(),
+        context_used_pct: state.used_percentage ?? null,
+      };
+      try {
+        fs.appendFileSync(COST_LOG_FILE, JSON.stringify(entry) + '\n');
+        log(`Session cost logged: ${state.session_id} = $${state.last_cost}`);
+      } catch (err) {
+        log(`Failed to write cost log: ${err.message}`);
+      }
     }
+
+    // Reset cost for new session — don't carry over previous session's cost
+    saveState({
+      ...state,
+      session_id: sessionId,
+      last_cost: costUsd ?? null,
+      used_percentage: usedPct ?? null,
+      last_logged_session_id: state.session_id,
+    });
+    return;
   }
 
-  // Update state with current session data
+  // Same session — update cost and context percentage
   saveState({
     ...state,
     session_id: sessionId,
     last_cost: costUsd ?? state?.last_cost,
+    used_percentage: usedPct ?? state?.used_percentage,
   });
 }
 
@@ -139,18 +162,24 @@ function loadState() {
 }
 
 function saveState(state) {
-  ensureDir(path.dirname(STATE_FILE));
-  fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
+  ensureDirOnce();
+  atomicWrite(STATE_FILE, JSON.stringify(state, null, 2));
 }
 
-function ensureDir(dir) {
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+/**
+ * Atomic write: write to temp file then rename.
+ * Prevents corruption from concurrent reads or interrupted writes.
+ */
+function atomicWrite(filePath, data) {
+  const tmp = filePath + '.tmp';
+  fs.writeFileSync(tmp, data);
+  fs.renameSync(tmp, filePath);
 }
 
 function log(msg) {
   try {
+    ensureDirOnce();
     const logFile = path.join(AM_DIR, 'context-monitor.log');
-    ensureDir(path.dirname(logFile));
     fs.appendFileSync(logFile, `${new Date().toISOString()} ${msg}\n`);
   } catch {}
 }
