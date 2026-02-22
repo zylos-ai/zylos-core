@@ -3,7 +3,7 @@
  * Activity Monitor v14 - Guardian + Heartbeat v2 + Health Check + Daily Tasks + Upgrade Check
  *
  * v14 changes (env cleanup + backoff + exit logging + PATH fix):
- *   - Resolve claude to absolute path at startup (tmux server may not inherit PATH)
+ *   - Pass PATH to tmux session via -e flag (tmux server may not inherit caller's PATH)
  *   - Strip CLAUDECODE/CLAUDE_CODE_ENTRYPOINT env vars before starting Claude in tmux
  *     (prevents "already running" detection when PM2 inherits Claude's env)
  *   - Fix startupGrace bypass: grace period now checked in offline branch too
@@ -50,18 +50,10 @@ const DAILY_MEMORY_COMMIT_STATE_FILE = path.join(MONITOR_DIR, 'daily-memory-comm
 const UPGRADE_CHECK_STATE_FILE = path.join(MONITOR_DIR, 'upgrade-check-state.json');
 const PENDING_CHANNELS_FILE = path.join(MONITOR_DIR, 'pending-channels.jsonl');
 
-// Claude binary — resolve to absolute path at startup so tmux sessions don't
-// depend on PATH inheritance (tmux server may have a different env than the
-// activity-monitor PM2 process).
-function resolveClaudeBin() {
-  if (process.env.CLAUDE_BIN) return process.env.CLAUDE_BIN;
-  try {
-    const resolved = execSync('which claude 2>/dev/null', { encoding: 'utf8' }).trim();
-    if (resolved) return resolved;
-  } catch { }
-  return 'claude'; // fallback
-}
-const CLAUDE_BIN = resolveClaudeBin();
+// Claude binary - uses bare command name (absolute path triggers Claude Code warning).
+// PATH is passed explicitly to tmux sessions via -e flag to avoid tmux server
+// env inheritance issues (tmux client-server architecture).
+const CLAUDE_BIN = process.env.CLAUDE_BIN || 'claude';
 const BYPASS_PERMISSIONS = process.env.CLAUDE_BYPASS_PERMISSIONS !== 'false';
 
 // API activity file — written by hook-activity.js (Claude Code hooks)
@@ -380,9 +372,10 @@ function startClaude() {
     log('Guardian: Started Claude in existing tmux session');
   } else {
     try {
-      // Single quotes prevent the outer shell (execSync) from expanding $() and $?.
-      // Tmux's inner shell receives the literal command and expands them at exit time.
-      execSync(`tmux new-session -d -s "${SESSION}" 'cd ${ZYLOS_DIR} && ${claudeCmd}; ${exitLogSnippet}'`);
+      // -e PATH=... ensures tmux session inherits activity-monitor's PATH even if
+      // the tmux server was started in a different env context.
+      // Single quotes prevent the outer shell from expanding $() and $?.
+      execSync(`tmux new-session -d -s "${SESSION}" -e "PATH=${process.env.PATH}" 'cd ${ZYLOS_DIR} && ${claudeCmd}; ${exitLogSnippet}'`);
       log('Guardian: Created new tmux session and started Claude');
     } catch (err) {
       log(`Guardian: Failed to create tmux session: ${err.message}`);
