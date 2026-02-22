@@ -262,7 +262,7 @@ export function cleanupTemp(tempDir) {
 // Internal: create upgrade context
 // ---------------------------------------------------------------------------
 
-function createContext(component, { tempDir, newVersion } = {}) {
+function createContext(component, { tempDir, newVersion, mode } = {}) {
   const skillDir = path.join(SKILLS_DIR, component);
   const dataDir = path.join(COMPONENTS_DIR, component);
 
@@ -272,6 +272,7 @@ function createContext(component, { tempDir, newVersion } = {}) {
     dataDir,
     tempDir: tempDir || null,
     newVersion: newVersion || null,
+    mode: mode || 'merge',
     // State tracking
     backupDir: null,
     serviceStopped: false,
@@ -364,6 +365,7 @@ function step3_smartMerge(ctx) {
     const mergeResult = smartSync(ctx.tempDir, ctx.skillDir, {
       label: ctx.component,
       backupDir: conflictBackupDir,
+      mode: ctx.mode,
     });
 
     // Store merge info on context for final result
@@ -505,8 +507,8 @@ export function rollback(ctx) {
  * @param {{ tempDir: string, newVersion: string }} opts
  * @returns {object} Upgrade result
  */
-export function runUpgrade(component, { tempDir, newVersion, onStep } = {}) {
-  const ctx = createContext(component, { tempDir, newVersion });
+export function runUpgrade(component, { tempDir, newVersion, mode, onStep } = {}) {
+  const ctx = createContext(component, { tempDir, newVersion, mode });
 
   if (!fs.existsSync(ctx.skillDir)) {
     return {

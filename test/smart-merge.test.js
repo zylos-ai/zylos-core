@@ -295,6 +295,77 @@ describe('smartSync', () => {
   });
 });
 
+describe('smartSync mode: overwrite', () => {
+  test('overwrite mode: overwrites locally modified files', () => {
+    const src = mkTmp();
+    const dest = mkTmp();
+
+    // Simulate previous install
+    writeFile(dest, 'a.js', 'original');
+    const manifest = generateManifest(dest);
+    saveManifest(dest, manifest);
+
+    // User modified locally
+    writeFile(dest, 'a.js', 'user modified');
+
+    // New version has changes
+    writeFile(src, 'a.js', 'upstream version');
+
+    const result = smartSync(src, dest, { mode: 'overwrite' });
+    expect(result.overwritten).toContain('a.js');
+    expect(result.kept.length).toBe(0);
+    expect(readFile(dest, 'a.js')).toBe('upstream version');
+  });
+
+  test('overwrite mode: still adds new files', () => {
+    const src = mkTmp();
+    const dest = mkTmp();
+
+    writeFile(src, 'new.js', 'new content');
+
+    const result = smartSync(src, dest, { mode: 'overwrite' });
+    expect(result.added).toContain('new.js');
+    expect(readFile(dest, 'new.js')).toBe('new content');
+  });
+
+  test('overwrite mode: still deletes removed files', () => {
+    const src = mkTmp();
+    const dest = mkTmp();
+
+    writeFile(dest, 'a.js', 'keep');
+    writeFile(dest, 'removed.js', 'to be removed');
+    const manifest = generateManifest(dest);
+    saveManifest(dest, manifest);
+
+    writeFile(src, 'a.js', 'keep');
+
+    const result = smartSync(src, dest, { mode: 'overwrite' });
+    expect(result.deleted).toContain('removed.js');
+    expect(fileExists(dest, 'removed.js')).toBe(false);
+  });
+
+  test('overwrite mode: no conflicts or merges', () => {
+    const src = mkTmp();
+    const dest = mkTmp();
+
+    // Both sides changed — in merge mode this would be a conflict
+    writeFile(dest, 'a.js', 'original');
+    const manifest = generateManifest(dest);
+    saveManifest(dest, manifest);
+    saveOriginals(dest, dest);
+
+    writeFile(dest, 'a.js', 'user version');
+    writeFile(src, 'a.js', 'upstream version');
+
+    const result = smartSync(src, dest, { mode: 'overwrite' });
+    expect(result.overwritten).toContain('a.js');
+    expect(result.conflicts.length).toBe(0);
+    expect(result.merged.length).toBe(0);
+    expect(result.kept.length).toBe(0);
+    expect(readFile(dest, 'a.js')).toBe('upstream version');
+  });
+});
+
 describe('formatMergeResult', () => {
   test('formats all categories', () => {
     const result = {

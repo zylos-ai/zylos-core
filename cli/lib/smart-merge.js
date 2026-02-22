@@ -49,10 +49,11 @@ import { isDiff3Available, merge3 } from './diff3.js';
  * @param {object} [opts]
  * @param {string} [opts.label]    - Label for this component/skill (for logging)
  * @param {string} [opts.backupDir] - Directory to store backed-up conflict files
+ * @param {string} [opts.mode]     - 'merge' (default) or 'overwrite' (skip merge, overwrite all)
  * @returns {MergeResult}
  */
 export function smartSync(srcDir, destDir, opts = {}) {
-  const { label = '', backupDir } = opts;
+  const { label = '', backupDir, mode = 'merge' } = opts;
 
   /** @type {MergeResult} */
   const result = {
@@ -88,6 +89,17 @@ export function smartSync(srcDir, destDir, opts = {}) {
         result.added.push(relPath);
       } catch (err) {
         result.errors.push(`${relPath}: add failed: ${err.message}`);
+      }
+      continue;
+    }
+
+    // Overwrite mode — skip merge logic, always overwrite
+    if (mode === 'overwrite') {
+      try {
+        fs.copyFileSync(srcFile, destFile);
+        result.overwritten.push(relPath);
+      } catch (err) {
+        result.errors.push(`${relPath}: overwrite failed: ${err.message}`);
       }
       continue;
     }

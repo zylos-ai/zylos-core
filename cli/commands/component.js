@@ -214,8 +214,20 @@ export async function upgradeComponent(args) {
     process.exit(1);
   }
 
+  // Parse --mode <value> flag (merge or overwrite)
+  const modeIndex = args.indexOf('--mode');
+  const mode = modeIndex !== -1 ? args[modeIndex + 1] : 'merge';
+  if (modeIndex !== -1 && (!mode || mode.startsWith('-'))) {
+    console.error('Error: --mode requires a value (merge or overwrite).');
+    process.exit(1);
+  }
+  if (mode !== 'merge' && mode !== 'overwrite') {
+    console.error(`Error: --mode must be "merge" or "overwrite", got "${mode}".`);
+    process.exit(1);
+  }
+
   // Get target component (filter out flags and flag values)
-  const flagsWithValues = new Set(['--temp-dir', '--branch']);
+  const flagsWithValues = new Set(['--temp-dir', '--branch', '--mode']);
   const target = args.find((a, i) => {
     if (a.startsWith('-')) return false;
     if (a === 'confirm') return false;
@@ -232,7 +244,7 @@ export async function upgradeComponent(args) {
     // Parse --temp-dir flag (reuse previously downloaded package from --check)
     const selfTempDirIdx = args.indexOf('--temp-dir');
     const selfProvidedTempDir = selfTempDirIdx !== -1 ? args[selfTempDirIdx + 1] : null;
-    const ok = await upgradeSelfCore({ providedTempDir: selfProvidedTempDir, branch });
+    const ok = await upgradeSelfCore({ providedTempDir: selfProvidedTempDir, branch, mode });
     if (!ok) process.exit(1);
     return;
   }
@@ -253,11 +265,12 @@ export async function upgradeComponent(args) {
     console.log('  --yes, -y      Skip confirmation');
     console.log('  --skip-eval    Skip upgrade analysis of local changes');
     console.log('  --branch <b>   Upgrade from a specific branch (e.g. feat/xxx)');
+    console.log('  --mode <m>     Merge mode: "merge" (default, smart three-way) or "overwrite"');
     console.log('  --temp-dir <d> Reuse previously downloaded package from --check');
     console.log('\nExamples:');
     console.log('  zylos upgrade telegram --check --json');
     console.log('  zylos upgrade telegram --yes --temp-dir /tmp/zylos-xxx');
-    console.log('  zylos upgrade telegram');
+    console.log('  zylos upgrade telegram --mode overwrite');
     process.exit(1);
   }
 
@@ -307,7 +320,7 @@ export async function upgradeComponent(args) {
   }
 
   // Mode 2 & 3: Full upgrade flow (lock-first)
-  const ok = await handleUpgradeFlow(target, { jsonOutput, skipConfirm: skipConfirm || explicitConfirm, skipEval, providedTempDir, branch });
+  const ok = await handleUpgradeFlow(target, { jsonOutput, skipConfirm: skipConfirm || explicitConfirm, skipEval, providedTempDir, branch, mode });
   if (!ok) process.exit(1);
 }
 
@@ -433,7 +446,7 @@ async function handleCheckOnly(component, { jsonOutput }) {
  * Returns true on success, false on failure.
  * Does NOT call process.exit() — caller decides exit behavior.
  */
-async function handleUpgradeFlow(component, { jsonOutput, skipConfirm, skipEval, providedTempDir, branch }) {
+async function handleUpgradeFlow(component, { jsonOutput, skipConfirm, skipEval, providedTempDir, branch, mode = 'merge' }) {
   const skillDir = path.join(SKILLS_DIR, component);
   let tempDir = providedTempDir || null;
   const tempDirWasProvided = !!providedTempDir;
@@ -606,6 +619,7 @@ async function handleUpgradeFlow(component, { jsonOutput, skipConfirm, skipEval,
     const result = runUpgrade(component, {
       tempDir,
       newVersion: check.latest,
+      mode,
       onStep: !jsonOutput ? printStep : undefined,
     });
 
@@ -883,7 +897,7 @@ function handleSelfCheckOnly({ jsonOutput, branch }) {
  * Returns true on success, false on failure.
  * Does NOT call process.exit() — caller decides exit behavior.
  */
-async function upgradeSelfCore({ providedTempDir, branch } = {}) {
+async function upgradeSelfCore({ providedTempDir, branch, mode = 'merge' } = {}) {
   const jsonOutput = process.argv.includes('--json');
   const skipConfirm = process.argv.includes('--yes') || process.argv.includes('-y');
   let tempDir = providedTempDir || null;
@@ -1007,6 +1021,7 @@ async function upgradeSelfCore({ providedTempDir, branch } = {}) {
     const result = runSelfUpgrade({
       tempDir,
       newVersion: check.latest,
+      mode,
       onStep: !jsonOutput ? printStep : undefined,
     });
 

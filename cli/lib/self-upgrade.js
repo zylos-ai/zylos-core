@@ -148,9 +148,11 @@ export function readChangelog(dir) {
  *
  * @param {string} newSkillsSrc - Path to skills/ in downloaded temp dir
  * @param {string} [backupBase] - Base directory for conflict backups
+ * @param {object} [opts]
+ * @param {string} [opts.mode] - 'merge' (default) or 'overwrite'
  * @returns {{ synced: string[], added: string[], merged: string[], conflicts: { skill: string, file: string, backupPath: string }[], errors: string[] }}
  */
-export function syncCoreSkills(newSkillsSrc, backupBase) {
+export function syncCoreSkills(newSkillsSrc, backupBase, opts = {}) {
   const result = { synced: [], added: [], merged: [], deleted: [], conflicts: [], errors: [] };
 
   if (!fs.existsSync(newSkillsSrc)) {
@@ -190,6 +192,7 @@ export function syncCoreSkills(newSkillsSrc, backupBase) {
       const mergeResult = smartSync(srcDir, destDir, {
         label: skillName,
         backupDir: skillBackupDir,
+        mode: opts.mode,
       });
 
       // Aggregate results
@@ -489,13 +492,14 @@ function generateMigrationHints(templatesDir) {
 /**
  * Create self-upgrade context.
  */
-function createContext({ tempDir, newVersion } = {}) {
+function createContext({ tempDir, newVersion, mode } = {}) {
   const coreDir = path.join(import.meta.dirname, '..', '..');
 
   return {
     coreDir,
     tempDir: tempDir || null,
     newVersion: newVersion || null,
+    mode: mode || 'merge',
     // State tracking
     backupDir: null,
     servicesStopped: [],
@@ -654,7 +658,7 @@ function step5_syncCoreSkills(ctx) {
   try {
     // Use backup dir from step 1 as base for conflict backups
     const conflictBackupDir = ctx.backupDir ? path.join(ctx.backupDir, 'conflicts') : null;
-    const syncResult = syncCoreSkills(newSkillsSrc, conflictBackupDir);
+    const syncResult = syncCoreSkills(newSkillsSrc, conflictBackupDir, { mode: ctx.mode });
 
     const parts = [];
     if (syncResult.synced.length) parts.push(`${syncResult.synced.length} synced`);
@@ -1036,8 +1040,8 @@ function rollbackSelf(ctx) {
  * @param {{ tempDir: string, newVersion: string, onStep?: function }} opts
  * @returns {object} Upgrade result
  */
-export function runSelfUpgrade({ tempDir, newVersion, onStep } = {}) {
-  const ctx = createContext({ tempDir, newVersion });
+export function runSelfUpgrade({ tempDir, newVersion, mode, onStep } = {}) {
+  const ctx = createContext({ tempDir, newVersion, mode });
 
   const current = getCurrentVersion();
   if (current.success) {

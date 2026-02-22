@@ -1,6 +1,6 @@
 {
   "name": "zylos",
-  "version": "0.2.2",
+  "version": "0.2.1",
   "type": "module",
   "description": "Autonomous AI Agent Infrastructure",
   "main": "cli/zylos.js",
