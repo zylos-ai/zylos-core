@@ -940,7 +940,8 @@ function step8_syncSettingsHooks(ctx) {
  */
 function resolveInstalledSyncScript() {
   try {
-    const pkgPath = path.join(path.dirname(path.dirname(import.meta.url.replace('file://', ''))), 'package.json');
+    // import.meta.dirname points to cli/lib/, go up two levels to package root
+    const pkgPath = path.join(import.meta.dirname, '..', '..', 'package.json');
     const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
     const pkgName = pkg.name || 'zylos';
     const npmRoot = execSync('npm root -g', { encoding: 'utf8', stdio: 'pipe', timeout: 10000 }).trim();
@@ -1131,7 +1132,6 @@ export function runSelfUpgrade({ tempDir, newVersion, mode, onStep } = {}) {
   const templates = listTemplateFiles(templatesDir);
 
   // Migration hints: step 8 already applied settings sync via the newly installed script.
-  // Re-check with the in-memory function for any remaining hints (informational only).
   const migrationHints = [];
 
   return {

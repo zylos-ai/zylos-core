@@ -27,7 +27,7 @@ const STATE_FILE = path.join(AM_DIR, 'context-monitor-state.json');
 const COST_LOG_FILE = path.join(AM_DIR, 'cost-log.jsonl');
 const C4_CONTROL = path.join(ZYLOS_DIR, '.claude/skills/comm-bridge/scripts/c4-control.js');
 
-// Thresholds
+// Thresholds — keep COOLDOWN_SECONDS and ack-deadline (in enqueue call) in sync
 const RESTART_THRESHOLD = 70;   // Trigger restart at this percentage
 const COOLDOWN_SECONDS = 300;   // Re-trigger after 5 minutes if still above threshold
 
@@ -50,10 +50,7 @@ process.stdin.on('end', () => {
     // Silent failure — statusLine errors must not break Claude
     try {
       const preview = input.substring(0, 200).replace(/\n/g, '\\n');
-      fs.appendFileSync(
-        path.join(AM_DIR, 'context-monitor.log'),
-        `${new Date().toISOString()} ERROR: ${err.message} (input length: ${input.length}, preview: ${preview})\n`
-      );
+      log(`ERROR: ${err.message} (input length: ${input.length}, preview: ${preview})`);
     } catch {}
   }
 });
@@ -171,7 +168,7 @@ function saveState(state) {
  * Prevents corruption from concurrent reads or interrupted writes.
  */
 function atomicWrite(filePath, data) {
-  const tmp = filePath + '.tmp';
+  const tmp = filePath + `.tmp.${process.pid}`;
   fs.writeFileSync(tmp, data);
   fs.renameSync(tmp, filePath);
 }
