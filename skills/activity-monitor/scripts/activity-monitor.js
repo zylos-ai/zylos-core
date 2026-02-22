@@ -365,7 +365,7 @@ function startClaude() {
 
   const bypassFlag = BYPASS_PERMISSIONS ? ' --dangerously-skip-permissions' : '';
   const claudeCmd = `${ENV_CLEAN_PREFIX} ${CLAUDE_BIN}${bypassFlag}`;
-  const exitLogSnippet = `echo "[$(date -Iseconds)] exit_code=$?" >> ${EXIT_LOG_FILE}`;
+  const exitLogSnippet = `_ec=$?; echo "[$(date -Iseconds)] exit_code=$_ec" >> ${EXIT_LOG_FILE}`;
 
   if (tmuxHasSession()) {
     sendToTmux(`cd ${ZYLOS_DIR}; ${claudeCmd}; ${exitLogSnippet}`);
