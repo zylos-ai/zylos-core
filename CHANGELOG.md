@@ -5,6 +5,11 @@ All notable changes to zylos-core will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.4] - 2026-02-22
+
+### Fixed
+- **Activity monitor Intl.DateTimeFormat memory leak**: `getLocalHour()` and `getLocalDate()` created new `Intl.DateTimeFormat` instances on every call (~3/sec from DailySchedule). V8/ICU allocates native memory per instance that GC never reclaims, causing unbounded RSS growth (~18 MB per 1 000 instantiations). Hoisted formatters to module-level constants. Activity monitor bumped to v15.
+
 ## [0.2.3] - 2026-02-22
 
 ### Added
