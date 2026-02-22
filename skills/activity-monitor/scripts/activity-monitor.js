@@ -77,6 +77,7 @@ const IDLE_THRESHOLD = 3;
 const LOG_MAX_LINES = 500;
 const BASE_RESTART_DELAY = 5;
 const MAX_RESTART_DELAY = 60;
+const BACKOFF_RESET_THRESHOLD = 60; // Claude must stay running this long before backoff resets
 
 // Heartbeat liveness config (v2)
 const HEARTBEAT_INTERVAL = 7200;     // 2 hours (safety-net; stuck detection is the primary mechanism)
@@ -102,6 +103,7 @@ const DAILY_COMMIT_SCRIPT = path.join(__dirname, '..', '..', 'zylos-memory', 'sc
 let lastTruncateDay = '';
 let notRunningCount = 0;
 let consecutiveRestarts = 0;
+let stableRunningSince = 0;
 let lastState = '';
 let startupGrace = 0;
 let idleSince = 0;
@@ -841,6 +843,7 @@ function monitorLoop() {
 
     const state = 'offline';
     notRunningCount += 1;
+    stableRunningSince = 0;
 
     writeStatusFile({
       state,
@@ -882,6 +885,7 @@ function monitorLoop() {
 
     const state = 'stopped';
     notRunningCount += 1;
+    stableRunningSince = 0;
 
     writeStatusFile({
       state,
@@ -916,7 +920,17 @@ function monitorLoop() {
 
   startupGrace = 0;
   notRunningCount = 0;
-  consecutiveRestarts = 0;
+
+  // Only reset backoff after Claude stays running for BACKOFF_RESET_THRESHOLD seconds.
+  // Prevents flapping (brief start → immediate crash) from clearing the counter.
+  if (consecutiveRestarts > 0) {
+    if (stableRunningSince === 0) {
+      stableRunningSince = currentTime;
+    } else if (currentTime - stableRunningSince >= BACKOFF_RESET_THRESHOLD) {
+      consecutiveRestarts = 0;
+      stableRunningSince = 0;
+    }
+  }
 
   let activity = getConversationFileModTime();
   let source = 'conv_file';
