@@ -26,6 +26,10 @@ Zylos 给它一个生命。跨重启的持久记忆。你睡觉时自动工作�
 
 更多模型支持在路上...
 
+<div align="center">
+<img src="./docs/poster.png" alt="Zylos v0.2.0" width="480">
+</div>
+
 ---
 
 ## 快速开始

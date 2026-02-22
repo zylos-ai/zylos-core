@@ -25,6 +25,10 @@ Zylos gives it a life. Memory that survives restarts. A scheduler that works whi
 
 More LLMs support are on the way.
 
+<div align="center">
+<img src="./docs/poster.png" alt="Zylos v0.2.0" width="480">
+</div>
+
 ---
 
 ## Quick Start
