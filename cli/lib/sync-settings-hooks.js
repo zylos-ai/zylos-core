@@ -8,8 +8,8 @@
  * - Removed hooks (core skills only) → remove
  * - User hooks (non-core skills) → preserve
  *
- * Called from postinstall.js. For self-upgrade, the equivalent logic
- * runs inline via generateMigrationHints + applyMigrationHints.
+ * Called from postinstall.js and from self-upgrade step 8 (which shells
+ * out to the newly installed copy of this script).
  *
  * Usage:
  *   node sync-settings-hooks.js           # Sync hooks

@@ -895,25 +895,61 @@ function applyMigrationHints(hints) {
 }
 
 /**
- * Step 8: sync settings.json hooks from template
+ * Step 8: sync settings.json hooks from template.
+ *
+ * Shells out to the NEWLY INSTALLED sync-settings-hooks.js instead of using
+ * the in-memory generateMigrationHints(). This avoids bootstrap problems where
+ * the old version's sync logic misses new config fields (e.g. statusLine).
  */
 function step8_syncSettingsHooks(ctx) {
   const startTime = Date.now();
 
-  const templatesDir = path.join(ctx.tempDir, 'templates');
-  const hints = generateMigrationHints(templatesDir);
+  // Resolve the newly installed package path (from step 4) to use the latest sync logic.
+  const syncScript = resolveInstalledSyncScript();
 
-  if (hints.length === 0) {
-    return { step: 8, name: 'sync_settings_hooks', status: 'done', message: 'no changes needed', duration: Date.now() - startTime };
+  if (!syncScript) {
+    // Fallback to in-memory hints if new script not found
+    const templatesDir = path.join(ctx.tempDir, 'templates');
+    const hints = generateMigrationHints(templatesDir);
+    if (hints.length === 0) {
+      return { step: 8, name: 'sync_settings_hooks', status: 'done', message: 'no changes needed', duration: Date.now() - startTime };
+    }
+    const result = applyMigrationHints(hints);
+    if (result.errors.length > 0) {
+      return { step: 8, name: 'sync_settings_hooks', status: 'failed', error: result.errors.join('; '), duration: Date.now() - startTime };
+    }
+    return { step: 8, name: 'sync_settings_hooks', status: 'done', message: `${result.applied} hooks updated`, duration: Date.now() - startTime };
   }
 
-  const result = applyMigrationHints(hints);
-
-  if (result.errors.length > 0) {
-    return { step: 8, name: 'sync_settings_hooks', status: 'failed', error: result.errors.join('; '), duration: Date.now() - startTime };
+  try {
+    const output = execSync(`node "${syncScript}"`, { encoding: 'utf8', stdio: 'pipe', timeout: 60000 }).trim();
+    // Extract last line as the summary (script outputs per-hook details before summary)
+    const lines = output.split('\n').filter(l => l.trim());
+    const summary = lines.length > 0 ? lines[lines.length - 1].trim() : 'no changes';
+    return { step: 8, name: 'sync_settings_hooks', status: 'done', message: summary, duration: Date.now() - startTime };
+  } catch (err) {
+    const errMsg = err.stderr ? err.stderr.toString().trim() : err.message;
+    return { step: 8, name: 'sync_settings_hooks', status: 'failed', error: errMsg, duration: Date.now() - startTime };
   }
+}
 
-  return { step: 8, name: 'sync_settings_hooks', status: 'done', message: `${result.applied} hooks updated`, duration: Date.now() - startTime };
+/**
+ * Resolve the path to sync-settings-hooks.js in the globally installed package.
+ * Reads the package name from package.json to avoid hardcoding.
+ * @returns {string|null} Absolute path to the script, or null if not found.
+ */
+function resolveInstalledSyncScript() {
+  try {
+    // import.meta.dirname points to cli/lib/, go up two levels to package root
+    const pkgPath = path.join(import.meta.dirname, '..', '..', 'package.json');
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+    const pkgName = pkg.name || 'zylos';
+    const npmRoot = execSync('npm root -g', { encoding: 'utf8', stdio: 'pipe', timeout: 10000 }).trim();
+    const script = path.join(npmRoot, pkgName, 'cli', 'lib', 'sync-settings-hooks.js');
+    return fs.existsSync(script) ? script : null;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -1095,8 +1131,8 @@ export function runSelfUpgrade({ tempDir, newVersion, mode, onStep } = {}) {
   const templatesDir = path.join(ctx.tempDir, 'templates');
   const templates = listTemplateFiles(templatesDir);
 
-  // Generate migration hints for settings that need manual updates
-  const migrationHints = generateMigrationHints(templatesDir);
+  // Migration hints: step 8 already applied settings sync via the newly installed script.
+  const migrationHints = [];
 
   return {
     action: 'self_upgrade',
