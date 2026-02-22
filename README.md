@@ -64,13 +64,26 @@ zylos add lark
 
 ### One AI, One Consciousness
 
+<div align="center">
+<img src="./assets/posters/unified-context.png" alt="Unified Context" width="360">
+</div>
+
 Most agent frameworks isolate sessions per channel — your AI on Telegram doesn't know what you said on Slack. Zylos is agent-centric: your AI is one person across every channel. The C4 communication bridge routes all messages through a single gateway — one conversation, one memory, one personality. Every message persisted to SQLite and fully queryable.
 
 ### Your Context, Guaranteed
 
+<div align="center">
+<img src="./assets/posters/memory.png" alt="Inside Out Memory" width="360">
+<img src="./assets/posters/infinite-context.png" alt="Infinite Context" width="360">
+</div>
+
 Other frameworks lose your AI's memory during context compaction — silently, without warning. Zylos prevents this with a two-step safeguard: when context reaches 75%, the system automatically saves all memory before compaction runs. Five-layer Inside Out memory (identity → state → references → sessions → archive) ensures the AI always knows what to keep and what to compress. Your AI never wakes up with amnesia.
 
 ### Self-Healing by Default
+
+<div align="center">
+<img src="./assets/posters/lifecycle.png" alt="Lifecycle Management" width="360">
+</div>
 
 No third-party monitoring tools needed. Zylos includes native crash recovery, heartbeat liveness probes, health monitoring, context window management, and automatic upgrades — all built in. Your AI detects its own problems and fixes them. It stays alive while you sleep.
 
@@ -85,6 +98,10 @@ Zylos builds on Claude Code — Anthropic's official AI agent runtime. When Anth
 ---
 
 ## Architecture
+
+<div align="center">
+<img src="./assets/posters/architecture.png" alt="Zylos Architecture" width="480">
+</div>
 
 ```mermaid
 graph TB
