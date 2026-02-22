@@ -204,7 +204,8 @@ function isClaudeRunning() {
 
 function sendToTmux(text) {
   const msgId = `${Date.now()}-${process.pid}`;
-  const tempFile = `/tmp/monitor-msg-${msgId}.txt`;
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'monitor-'));
+  const tempFile = path.join(tempDir, 'msg.txt');
   const bufferName = `monitor-${msgId}`;
 
   try {
@@ -215,7 +216,7 @@ function sendToTmux(text) {
     execSync('sleep 0.2');
     execSync(`tmux send-keys -t "${SESSION}" Enter 2>/dev/null`);
     execSync(`tmux delete-buffer -b "${bufferName}" 2>/dev/null`);
-    fs.unlinkSync(tempFile);
+    fs.rmSync(tempDir, { recursive: true, force: true });
   } catch {
     // Best-effort.
   }

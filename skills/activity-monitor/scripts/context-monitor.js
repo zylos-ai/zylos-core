@@ -41,9 +41,10 @@ process.stdin.on('end', () => {
   } catch (err) {
     // Silent failure — statusLine errors must not break Claude
     try {
+      const preview = input.substring(0, 200).replace(/\n/g, '\\n');
       fs.appendFileSync(
         path.join(AM_DIR, 'context-monitor.log'),
-        `${new Date().toISOString()} ERROR: ${err.message} (input length: ${input.length})\n`
+        `${new Date().toISOString()} ERROR: ${err.message} (input length: ${input.length}, preview: ${preview})\n`
       );
     } catch {}
   }

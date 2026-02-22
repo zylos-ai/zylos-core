@@ -701,7 +701,7 @@ function step6_installSkillDeps(ctx) {
       const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
       if (!pkg.dependencies || Object.keys(pkg.dependencies).length === 0) continue;
 
-      execSync('npm install --production', {
+      execSync('npm install --omit=dev', {
         cwd: skillDir,
         stdio: 'pipe',
         timeout: 120000,
@@ -956,8 +956,7 @@ function step10_verifyServices(ctx) {
   }
 
   // Brief wait for services to start
-  const waitUntil = Date.now() + 2000;
-  while (Date.now() < waitUntil) { /* busy wait */ }
+  try { execSync('sleep 2', { stdio: 'pipe' }); } catch {}
 
   try {
     const output = execSync('pm2 jlist 2>/dev/null', { encoding: 'utf8' });

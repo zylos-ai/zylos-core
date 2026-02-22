@@ -19,7 +19,7 @@ Before sending `/clear`, complete these steps **in order**:
 
 ### 1. Inventory running background tasks
 
-Check for running background agents using `TaskList` or scan `/tmp/claude-1002/-home-op-zylos/tasks/` for active output files. **Do NOT stop them** — background subagents survive /clear and will continue running to completion in the new session.
+Check for running background agents using `TaskList`. **Do NOT stop them** — background subagents survive /clear and will continue running to completion in the new session.
 
 For each running task, note:
 - **Agent ID** (e.g., `a42c1aabc5b984e69`)

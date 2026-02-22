@@ -99,9 +99,16 @@ function formatC4Reply(type, data) {
         r += `\n\nAuto-merged files: ${mergedFiles.join(', ')}`;
       }
       if (mergeConflicts?.length > 0) {
-        r += '\n\nConflict files (local backed up, new version applied):';
-        for (const c of mergeConflicts) r += `\n  ${c.file} → backup: ${c.backupPath}`;
-        r += '\n\nUse Claude to review and re-merge backed-up local changes.';
+        const withBackup = mergeConflicts.filter(c => c.backupPath);
+        const withoutBackup = mergeConflicts.filter(c => !c.backupPath);
+        if (withBackup.length > 0) {
+          r += '\n\nConflict files (local backed up, new version applied):';
+          for (const c of withBackup) r += `\n  ${c.file} → backup: ${c.backupPath}`;
+          r += '\n\nUse Claude to review and re-merge backed-up local changes.';
+        }
+        if (withoutBackup.length > 0) {
+          r += `\n\nOverwritten without backup (${withoutBackup.length}): ${withoutBackup.map(c => c.file).join(', ')}`;
+        }
       }
       return r;
     }
@@ -120,9 +127,16 @@ function formatC4Reply(type, data) {
         r += `\n\nAuto-merged files: ${mergedFiles.join(', ')}`;
       }
       if (mergeConflicts?.length > 0) {
-        r += '\n\nConflict files (local backed up, new version applied):';
-        for (const c of mergeConflicts) r += `\n  ${c.skill}/${c.file} → backup: ${c.backupPath}`;
-        r += '\n\nUse Claude to review and re-merge backed-up local changes.';
+        const withBackup = mergeConflicts.filter(c => c.backupPath);
+        const withoutBackup = mergeConflicts.filter(c => !c.backupPath);
+        if (withBackup.length > 0) {
+          r += '\n\nConflict files (local backed up, new version applied):';
+          for (const c of withBackup) r += `\n  ${c.skill}/${c.file} → backup: ${c.backupPath}`;
+          r += '\n\nUse Claude to review and re-merge backed-up local changes.';
+        }
+        if (withoutBackup.length > 0) {
+          r += `\n\nOverwritten without backup (${withoutBackup.length}): ${withoutBackup.map(c => `${c.skill}/${c.file}`).join(', ')}`;
+        }
       }
       if (migrationHints?.length > 0) {
         r += '\n\nACTION REQUIRED - Hook changes in ~/zylos/.claude/settings.json:';
