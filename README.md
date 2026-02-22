@@ -60,43 +60,6 @@ zylos add lark
 
 ---
 
-## Features
-
-### One AI, One Consciousness
-
-<div align="center">
-<img src="./assets/posters/unified-context-en.png" alt="Unified Context" width="360">
-</div>
-
-Most agent frameworks isolate sessions per channel — your AI on Telegram doesn't know what you said on Slack. Zylos is agent-centric: your AI is one person across every channel. The C4 communication bridge routes all messages through a single gateway — one conversation, one memory, one personality. Every message persisted to SQLite and fully queryable.
-
-### Your Context, Guaranteed
-
-<div align="center">
-<img src="./assets/posters/memory-en.png" alt="Inside Out Memory" width="360">
-<img src="./assets/posters/infinite-context-en.png" alt="Infinite Context" width="360">
-</div>
-
-Other frameworks lose your AI's memory during context compaction — silently, without warning. Zylos prevents this with a two-step safeguard: when context reaches 75%, the system automatically saves all memory before compaction runs. Five-layer Inside Out memory (identity → state → references → sessions → archive) ensures the AI always knows what to keep and what to compress. Your AI never wakes up with amnesia.
-
-### Self-Healing by Default
-
-<div align="center">
-<img src="./assets/posters/lifecycle-en.png" alt="Lifecycle Management" width="360">
-</div>
-
-No third-party monitoring tools needed. Zylos includes native crash recovery, heartbeat liveness probes, health monitoring, context window management, and automatic upgrades — all built in. Your AI detects its own problems and fixes them. It stays alive while you sleep.
-
-### $20/month, Not $3,600
-
-Other frameworks charge per API token. Community reports show monthly bills of $500–$3,600 for always-on agents. Zylos runs on your Claude subscription — flat rate, no per-token billing. Same AI capabilities, a fraction of the cost.
-
-### Powered by Claude Code
-
-Zylos builds on Claude Code — Anthropic's official AI agent runtime. When Anthropic ships new capabilities like agent teams, your AI gets them automatically. And because Claude Code can program, your AI writes new skills, integrates services, and evolves with your needs.
-
----
-
 ## Architecture
 
 <div align="center">
@@ -138,6 +101,43 @@ graph TB
 | Scheduler | Autonomous task dispatch while you are away | Cron, NL input, idle-gating |
 | Activity Monitor | Crash recovery, heartbeat, health checks | PM2, multi-layer protection |
 | HTTP Layer | Web access, file sharing, component routes | Caddy, auto-HTTPS |
+
+---
+
+## Features
+
+### One AI, One Consciousness
+
+<div align="center">
+<img src="./assets/posters/unified-context-en.png" alt="Unified Context" width="360">
+</div>
+
+Most agent frameworks isolate sessions per channel — your AI on Telegram doesn't know what you said on Slack. Zylos is agent-centric: your AI is one person across every channel. The C4 communication bridge routes all messages through a single gateway — one conversation, one memory, one personality. Every message persisted to SQLite and fully queryable.
+
+### Your Context, Guaranteed
+
+<div align="center">
+<img src="./assets/posters/memory-en.png" alt="Inside Out Memory" width="360">
+<img src="./assets/posters/infinite-context-en.png" alt="Infinite Context" width="360">
+</div>
+
+Other frameworks lose your AI's memory during context compaction — silently, without warning. Zylos prevents this with a two-step safeguard: when context reaches 75%, the system automatically saves all memory before compaction runs. Five-layer Inside Out memory (identity → state → references → sessions → archive) ensures the AI always knows what to keep and what to compress. Your AI never wakes up with amnesia.
+
+### Self-Healing by Default
+
+<div align="center">
+<img src="./assets/posters/lifecycle-en.png" alt="Lifecycle Management" width="360">
+</div>
+
+No third-party monitoring tools needed. Zylos includes native crash recovery, heartbeat liveness probes, health monitoring, context window management, and automatic upgrades — all built in. Your AI detects its own problems and fixes them. It stays alive while you sleep.
+
+### $20/month, Not $3,600
+
+Other frameworks charge per API token. Community reports show monthly bills of $500–$3,600 for always-on agents. Zylos runs on your Claude subscription — flat rate, no per-token billing. Same AI capabilities, a fraction of the cost.
+
+### Powered by Claude Code
+
+Zylos builds on Claude Code — Anthropic's official AI agent runtime. When Anthropic ships new capabilities like agent teams, your AI gets them automatically. And because Claude Code can program, your AI writes new skills, integrates services, and evolves with your needs.
 
 ---
 
