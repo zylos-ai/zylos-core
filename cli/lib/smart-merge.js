@@ -25,6 +25,20 @@ import {
 import { isDiff3Available, merge3 } from './diff3.js';
 
 /**
+ * Check if a file appears to be binary by looking for null bytes in the first 8KB.
+ */
+function isBinaryFile(filePath) {
+  const fd = fs.openSync(filePath, 'r');
+  try {
+    const buf = Buffer.alloc(8192);
+    const bytesRead = fs.readSync(fd, buf, 0, 8192, 0);
+    return buf.subarray(0, bytesRead).includes(0x00);
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+/**
  * @typedef {Object} MergeResult
  * @property {string[]} overwritten  - Files overwritten (local unmodified)
  * @property {string[]} kept         - Files kept (only local modified, new unchanged)
@@ -160,6 +174,24 @@ export function smartSync(srcDir, destDir, opts = {}) {
     }
 
     // Both sides changed — attempt three-way merge
+    // Skip text merge for binary files to avoid corruption
+    if (isBinaryFile(destFile) || isBinaryFile(srcFile)) {
+      try {
+        if (backupDir) {
+          const backupPath = path.join(backupDir, relPath);
+          fs.mkdirSync(path.dirname(backupPath), { recursive: true });
+          fs.copyFileSync(destFile, backupPath);
+          result.conflicts.push({ file: relPath, backupPath });
+        } else {
+          result.conflicts.push({ file: relPath, backupPath: null });
+        }
+        fs.copyFileSync(srcFile, destFile);
+      } catch (err) {
+        result.errors.push(`${relPath}: binary conflict handling failed: ${err.message}`);
+      }
+      continue;
+    }
+
     const localContent = fs.readFileSync(destFile, 'utf8');
     const newContent = fs.readFileSync(srcFile, 'utf8');
     let baseContent = null;

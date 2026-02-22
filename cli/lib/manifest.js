@@ -12,6 +12,18 @@ const MANIFEST_FILE = 'manifest.json';
 const ORIGINALS_DIR = 'originals';
 
 /**
+ * Validate that a resolved path stays within the expected base directory.
+ * Prevents path traversal via ../ sequences in relative paths.
+ */
+function assertWithinDir(resolved, baseDir, relPath) {
+  const normalBase = path.resolve(baseDir) + path.sep;
+  const normalResolved = path.resolve(resolved);
+  if (!normalResolved.startsWith(normalBase) && normalResolved !== path.resolve(baseDir)) {
+    throw new Error(`Path traversal detected: ${relPath}`);
+  }
+}
+
+/**
  * Compute SHA-256 hash of a file.
  *
  * @param {string} filePath - Absolute path to file
@@ -124,6 +136,7 @@ export function saveOriginals(componentDir, sourceDir) {
   const files = collectFiles(sourceDir, sourceDir);
   for (const file of files) {
     const destPath = path.join(originalsDir, file);
+    assertWithinDir(destPath, originalsDir, file);
     fs.mkdirSync(path.dirname(destPath), { recursive: true });
     fs.copyFileSync(path.join(sourceDir, file), destPath);
   }
@@ -138,6 +151,7 @@ export function saveOriginals(componentDir, sourceDir) {
  */
 export function getOriginalContent(componentDir, relPath) {
   const filePath = path.join(componentDir, MANIFEST_DIR, ORIGINALS_DIR, relPath);
+  assertWithinDir(filePath, path.join(componentDir, MANIFEST_DIR, ORIGINALS_DIR), relPath);
   try {
     return fs.readFileSync(filePath, 'utf8');
   } catch {
