@@ -23,6 +23,7 @@ const CORE_SKILLS_SRC = path.join(__dirname, '..', 'skills');
 
 function syncSkills() {
   if (!fs.existsSync(CORE_SKILLS_SRC)) {
+    // No skills bundled — shouldn't happen in a normal install
     return;
   }
 
@@ -47,8 +48,8 @@ function syncSkills() {
       execFileSync('cp', ['-r', srcDir, destDir], { stdio: 'pipe' });
       console.log(`  + ${entry.name}`);
       synced++;
-    } catch {
-      console.log(`  Warning: Failed to sync ${entry.name}`);
+    } catch (err) {
+      console.log(`  Warning: Failed to sync ${entry.name}: ${err.message}`);
     }
   }
 
@@ -70,8 +71,8 @@ function syncSettings() {
       stdio: 'inherit',
       env: { ...process.env, ZYLOS_DIR }
     });
-  } catch {
-    console.log('  Warning: Failed to sync settings hooks');
+  } catch (err) {
+    console.log(`  Warning: Failed to sync settings hooks: ${err.message}`);
   }
 }
 
@@ -79,8 +80,9 @@ function main() {
   // CI: skip everything
   if (process.env.CI) return;
 
-  // Zylos must be initialized (SKILLS_DIR exists after `zylos init`)
-  if (!fs.existsSync(SKILLS_DIR)) {
+  // Zylos must be initialized — .claude/ directory exists after `zylos init`
+  const claudeDir = path.join(ZYLOS_DIR, '.claude');
+  if (!fs.existsSync(claudeDir)) {
     console.log('Zylos not initialized. Run "zylos init" to set up.');
     return;
   }
