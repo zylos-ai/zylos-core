@@ -367,7 +367,10 @@ function startClaude() {
     log('Guardian: Started Claude in existing tmux session');
   } else {
     try {
-      execSync(`tmux new-session -d -s "${SESSION}" "cd ${ZYLOS_DIR} && ${claudeCmd}; ${exitLogCmd}"`);
+      // Escape $ in exitLogCmd — execSync runs through a shell, and $ must survive
+      // to tmux's inner shell for correct expansion at Claude exit time.
+      const exitLogCmdEsc = exitLogCmd.replace(/\$/g, '\\$');
+      execSync(`tmux new-session -d -s "${SESSION}" "cd ${ZYLOS_DIR} && ${claudeCmd}; ${exitLogCmdEsc}"`);
       log('Guardian: Created new tmux session and started Claude');
     } catch (err) {
       log(`Guardian: Failed to create tmux session: ${err.message}`);
