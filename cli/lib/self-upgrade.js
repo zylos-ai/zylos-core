@@ -190,7 +190,6 @@ export function syncCoreSkills(newSkillsSrc, backupBase, opts = {}) {
     try {
       const skillBackupDir = backupBase ? path.join(backupBase, skillName) : null;
       const mergeResult = smartSync(srcDir, destDir, {
-        label: skillName,
         backupDir: skillBackupDir,
         mode: opts.mode,
       });

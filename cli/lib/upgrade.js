@@ -12,7 +12,7 @@ import { SKILLS_DIR, COMPONENTS_DIR } from './config.js';
 import { loadComponents } from './components.js';
 import { loadLocalRegistry } from './registry.js';
 import { parseSkillMd } from './skill.js';
-import { generateManifest, saveManifest, saveOriginals } from './manifest.js';
+import { generateManifest, saveManifest } from './manifest.js';
 import { downloadArchive, downloadBranch } from './download.js';
 import { fetchLatestTag, fetchRawFile, sanitizeError } from './github.js';
 import { copyTree, syncTree } from './fs-utils.js';
@@ -363,7 +363,6 @@ function step3_smartMerge(ctx) {
   try {
     const conflictBackupDir = ctx.backupDir ? path.join(ctx.backupDir, 'conflicts') : null;
     const mergeResult = smartSync(ctx.tempDir, ctx.skillDir, {
-      label: ctx.component,
       backupDir: conflictBackupDir,
       mode: ctx.mode,
     });

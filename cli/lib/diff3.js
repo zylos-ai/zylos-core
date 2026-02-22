@@ -10,18 +10,23 @@ import path from 'node:path';
 import os from 'node:os';
 import { execFileSync } from 'node:child_process';
 
+let _diff3Available = null;
+
 /**
  * Check if the diff3 command is available on this system.
+ * Result is cached after first check.
  *
  * @returns {boolean}
  */
 export function isDiff3Available() {
+  if (_diff3Available !== null) return _diff3Available;
   try {
     execFileSync('diff3', ['--version'], { stdio: 'pipe' });
-    return true;
+    _diff3Available = true;
   } catch {
-    return false;
+    _diff3Available = false;
   }
+  return _diff3Available;
 }
 
 /**

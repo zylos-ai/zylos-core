@@ -251,7 +251,7 @@ export async function upgradeComponent(args) {
 
   // Handle --all: upgrade all components
   if (upgradeAll) {
-    return upgradeAllComponents({ checkOnly, jsonOutput, skipConfirm, skipEval });
+    return upgradeAllComponents({ checkOnly, jsonOutput, skipConfirm, skipEval, mode });
   }
 
   // Validate target
@@ -705,7 +705,7 @@ function cleanOldBackups(skillDir) {
 /**
  * Handle --all: upgrade all components
  */
-async function upgradeAllComponents({ checkOnly, jsonOutput, skipConfirm, skipEval }) {
+async function upgradeAllComponents({ checkOnly, jsonOutput, skipConfirm, skipEval, mode = 'merge' }) {
   const components = loadComponents();
   const names = Object.keys(components);
 
@@ -776,7 +776,7 @@ async function upgradeAllComponents({ checkOnly, jsonOutput, skipConfirm, skipEv
     if (!jsonOutput) {
       console.log(`\n${heading(`─── ${comp.component} ───`)}`);
     }
-    const ok = await handleUpgradeFlow(comp.component, { jsonOutput, skipConfirm: true, skipEval });
+    const ok = await handleUpgradeFlow(comp.component, { jsonOutput, skipConfirm: true, skipEval, mode });
     if (!ok) anyFailed = true;
   }
 
@@ -820,11 +820,12 @@ function handleSelfCheckOnly({ jsonOutput, branch }) {
     process.exit(1);
   }
 
-  // When update is available: download to temp, read changelog, detect local changes
+  // When update is available (or --branch forces re-check): download to temp, read changelog, detect local changes
   let changelog = null;
   let tempDir = null;
 
-  if (check.hasUpdate) {
+  // With --branch, always proceed even if versions match (user wants to install specific branch)
+  if (check.hasUpdate || branch) {
     // Download new version to temp dir (for template/file comparison by Claude)
     const dlResult = downloadCoreToTemp(check.latest, branch);
     if (dlResult.success) {
@@ -850,10 +851,11 @@ function handleSelfCheckOnly({ jsonOutput, branch }) {
   }
 
   // Detect local modifications to core skills
-  const allLocalChanges = check.hasUpdate ? detectCoreSkillChanges() : [];
+  const allLocalChanges = (check.hasUpdate || branch) ? detectCoreSkillChanges() : [];
 
   if (jsonOutput) {
     const output = { action: 'check', target: 'zylos-core', ...check };
+    if (branch) output.branch = branch;
     if (changelog) output.changelog = changelog;
     const mappedChanges = allLocalChanges.length > 0
       ? allLocalChanges.map(({ skill, changes }) => ({ skill, modified: changes.modified, added: changes.added }))
@@ -863,7 +865,7 @@ function handleSelfCheckOnly({ jsonOutput, branch }) {
     output.reply = formatC4Reply('self-check', { ...check, changelog, localChanges: mappedChanges });
     console.log(JSON.stringify(output, null, 2));
   } else {
-    if (!check.hasUpdate) {
+    if (!check.hasUpdate && !branch) {
       console.log(success(`${bold('zylos-core')} is up to date (v${check.current})`));
     } else {
       console.log(`${bold('zylos-core')}: ${dim(check.current)} → ${bold(check.latest)}`);
