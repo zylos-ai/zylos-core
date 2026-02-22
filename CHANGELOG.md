@@ -5,6 +5,27 @@ All notable changes to zylos-core will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2026-02-21
+
+### Added
+- Event-driven context monitoring via Claude Code's `statusLine` hook — replaces hourly polling with zero turn cost (`context-monitor.js`)
+- Session cost tracking: `context-monitor.js` logs final session cost to `cost-log.jsonl` when session changes
+- `new-session` skill: pre-clear handoff checklist that preserves background tasks and hands off task IDs to new session
+- `statusLine` config in `templates/.claude/settings.json` — pipes context data to `context-monitor.js` after every turn
+- statusLine sync support: `sync-settings-hooks.js` and `self-upgrade.js` now add, update, and remove `statusLine` config from template
+
+### Fixed
+- `zylos upgrade --self --check --branch <name>`: version check always read from main instead of the specified branch
+
+### Changed
+- `check-context` skill simplified: reads `statusline.json` directly instead of enqueuing `/context` command
+- Activity monitor bumped to v13: removed all polling-based context check code (`maybeEnqueueContextCheck`, `enqueueContextCheck`, related state files)
+- Activity monitor SKILL.md: rewritten Context Monitoring section to document statusLine mechanism and two-stage design
+
+### Removed
+- `check-context/scripts/check-context.js`: no longer needed (statusline.json is always current)
+- Activity monitor polling functions: `loadContextCheckState`, `writeContextCheckState`, `enqueueContextCheck`, `maybeEnqueueContextCheck`
+
 ## [0.2.0] - 2026-02-21
 
 ### Added

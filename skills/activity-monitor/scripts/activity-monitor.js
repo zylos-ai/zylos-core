@@ -1,6 +1,11 @@
 #!/usr/bin/env node
 /**
- * Activity Monitor v12 - Guardian + Heartbeat v2 + Health Check + Daily Tasks + Upgrade Check
+ * Activity Monitor v13 - Guardian + Heartbeat v2 + Health Check + Daily Tasks + Upgrade Check
+ *
+ * v13 changes (statusLine-based context monitoring):
+ *   - Removed periodic context polling (enqueueContextCheck)
+ *   - Context monitoring now handled by statusLine hook + context-monitor.js
+ *   - Event-driven: zero turn cost, triggers only when threshold hit
  *
  * v11 changes (Hook-based activity tracking):
  *   - Replaced non-functional fetch-preload with Claude Code hooks
@@ -33,7 +38,6 @@ const HEARTBEAT_PENDING_FILE = path.join(MONITOR_DIR, 'heartbeat-pending.json');
 const HEALTH_CHECK_STATE_FILE = path.join(MONITOR_DIR, 'health-check-state.json');
 const DAILY_UPGRADE_STATE_FILE = path.join(MONITOR_DIR, 'daily-upgrade-state.json');
 const DAILY_MEMORY_COMMIT_STATE_FILE = path.join(MONITOR_DIR, 'daily-memory-commit-state.json');
-const CONTEXT_CHECK_STATE_FILE = path.join(MONITOR_DIR, 'context-check-state.json');
 const UPGRADE_CHECK_STATE_FILE = path.join(MONITOR_DIR, 'upgrade-check-state.json');
 const PENDING_CHANNELS_FILE = path.join(MONITOR_DIR, 'pending-channels.jsonl');
 
@@ -69,15 +73,11 @@ const STUCK_PROBE_COOLDOWN = 600;    // 10 min between stuck probes
 // Health check config
 const HEALTH_CHECK_INTERVAL = 21600; // 6 hours
 
-// Context check config
-const CONTEXT_CHECK_INTERVAL = 3600; // 1 hour
-
 // Daily tasks config
 const DAILY_UPGRADE_HOUR = 5;        // 5:00 AM local time
 const DAILY_MEMORY_COMMIT_HOUR = 3;  // 3:00 AM local time
 const DAILY_UPGRADE_CHECK_HOUR = 6;  // 6:00 AM local time
 const DAILY_COMMIT_SCRIPT = path.join(__dirname, '..', '..', 'zylos-memory', 'scripts', 'daily-commit.js');
-const CHECK_CONTEXT_SCRIPT = path.join(__dirname, '..', '..', 'check-context', 'scripts', 'check-context.js');
 
 // State
 let lastTruncateDay = '';
@@ -654,74 +654,6 @@ function maybeEnqueueHealthCheck(claudeRunning, currentTime) {
 }
 
 // ---------------------------------------------------------------------------
-// Context Check (hourly)
-// ---------------------------------------------------------------------------
-
-function loadContextCheckState() {
-  try {
-    if (!fs.existsSync(CONTEXT_CHECK_STATE_FILE)) return null;
-    const parsed = JSON.parse(fs.readFileSync(CONTEXT_CHECK_STATE_FILE, 'utf8'));
-    if (parsed && typeof parsed.last_check_at === 'number') {
-      return parsed;
-    }
-  } catch { }
-  return null;
-}
-
-function writeContextCheckState(timestamp) {
-  try {
-    if (!fs.existsSync(MONITOR_DIR)) {
-      fs.mkdirSync(MONITOR_DIR, { recursive: true });
-    }
-    fs.writeFileSync(CONTEXT_CHECK_STATE_FILE, JSON.stringify({
-      last_check_at: timestamp,
-      last_check_human: new Date(timestamp * 1000).toISOString().replace('T', ' ').substring(0, 19)
-    }, null, 2));
-  } catch (err) {
-    log(`Context check: failed to write state (${err.message})`);
-  }
-}
-
-function enqueueContextCheck() {
-  // Write state FIRST to prevent retry flooding.
-  const now = Math.floor(Date.now() / 1000);
-  writeContextCheckState(now);
-
-  // Verify state was actually written (writeContextCheckState catches its own errors)
-  const state = loadContextCheckState();
-  if (!state || state.last_check_at !== now) {
-    log('Context check: state write failed, skipping enqueue');
-    return false;
-  }
-
-  // Delegate to check-context script (enqueues /context + restart decision)
-  try {
-    const output = execFileSync('node', [CHECK_CONTEXT_SCRIPT, '--with-restart-check'], {
-      encoding: 'utf8',
-      stdio: 'pipe'
-    }).trim();
-    log(`Context check: ${output}`);
-    return true;
-  } catch (err) {
-    const stderr = err.stderr ? String(err.stderr).trim() : '';
-    log(`Context check script failed: ${stderr || err.message}`);
-    return false;
-  }
-}
-
-function maybeEnqueueContextCheck(claudeRunning, currentTime) {
-  if (!claudeRunning) return;
-  if (engine.health !== 'ok') return;
-
-  const state = loadContextCheckState();
-  const lastCheckAt = state?.last_check_at ?? 0;
-
-  if ((currentTime - lastCheckAt) >= CONTEXT_CHECK_INTERVAL) {
-    enqueueContextCheck();
-  }
-}
-
-// ---------------------------------------------------------------------------
 // Daily Upgrade
 // ---------------------------------------------------------------------------
 
@@ -897,7 +829,7 @@ function monitorLoop() {
 
     engine.processHeartbeat(false, currentTime);
     maybeEnqueueHealthCheck(false, currentTime);
-    maybeEnqueueContextCheck(false, currentTime);
+
     memoryCommitScheduler.maybeTrigger();
     lastState = state;
     return;
@@ -936,7 +868,7 @@ function monitorLoop() {
 
     engine.processHeartbeat(false, currentTime);
     maybeEnqueueHealthCheck(false, currentTime);
-    maybeEnqueueContextCheck(false, currentTime);
+
     memoryCommitScheduler.maybeTrigger();
     lastState = state;
     return;
@@ -1024,7 +956,6 @@ function monitorLoop() {
 
   engine.processHeartbeat(true, currentTime);
   maybeEnqueueHealthCheck(true, currentTime);
-  maybeEnqueueContextCheck(true, currentTime);
   if (engine.health === 'ok') {
     upgradeScheduler.maybeTrigger();
     upgradeCheckScheduler.maybeTrigger();
@@ -1095,7 +1026,7 @@ function init() {
 }
 
 init();
-log(`=== Activity Monitor Started (v12 - Guardian + Heartbeat v2 + Hook Activity + DailyTasks + UpgradeCheck): ${new Date().toISOString()} tz=${timezone} ===`);
+log(`=== Activity Monitor Started (v13 - Guardian + Heartbeat v2 + Hook Activity + DailyTasks + UpgradeCheck): ${new Date().toISOString()} tz=${timezone} ===`);
 
 setInterval(monitorLoop, INTERVAL);
 monitorLoop();

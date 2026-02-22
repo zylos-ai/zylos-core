@@ -5,7 +5,7 @@ description: Accurately check current context window and token usage. Use when t
 
 # Check Context Skill
 
-Accurately check your current context/token usage.
+Check current context/token usage by reading the statusLine data file.
 
 ## When to Use
 
@@ -14,15 +14,18 @@ Accurately check your current context/token usage.
 
 ## How to Use
 
-**IMPORTANT: Must use `nohup ... &` pattern!**
+Read the statusLine data file:
 
 ```bash
-nohup node ~/zylos/.claude/skills/check-context/scripts/check-context.js > /dev/null 2>&1 &
+cat ~/zylos/activity-monitor/statusline.json
 ```
 
-The `/context` output will appear in your conversation after the script completes.
+This file is updated by `context-monitor.js` after every turn via Claude Code's statusLine feature — it's always current.
 
-## How It Works
+## What to Report
 
-1. **Enqueue /context**: Puts `/context` into the control queue (priority=3, require_idle) — dispatcher delivers it to tmux as a slash command when idle
-2. **Automated mode**: When called with `--with-restart-check`, also enqueues a follow-up decision (delayed 30s) to restart if context exceeds 70%
+From the JSON, report:
+- **Context usage**: `context_window.used_percentage`% used, `context_window.remaining_percentage`% remaining
+- **Tokens**: `context_window.total_input_tokens` input, `context_window.total_output_tokens` output (window size: `context_window.context_window_size`)
+- **Session cost**: `cost.total_cost_usd`
+- **Model**: `model.display_name`
