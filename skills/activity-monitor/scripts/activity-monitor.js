@@ -1,6 +1,15 @@
 #!/usr/bin/env node
 /**
- * Activity Monitor v13 - Guardian + Heartbeat v2 + Health Check + Daily Tasks + Upgrade Check
+ * Activity Monitor v14 - Guardian + Heartbeat v2 + Health Check + Daily Tasks + Upgrade Check
+ *
+ * v14 changes (env cleanup + backoff + exit logging + PATH fix):
+ *   - Pass PATH to tmux session via -e flag (tmux server may not inherit caller's PATH)
+ *   - Strip CLAUDECODE/CLAUDE_CODE_ENTRYPOINT env vars before starting Claude in tmux
+ *     (prevents "already running" detection when PM2 inherits Claude's env)
+ *   - Fix startupGrace bypass: grace period now checked in offline branch too
+ *   - Add exponential backoff for restart retries (5s → 10s → 20s → 40s → 60s cap)
+ *   - Log Claude exit codes to claude-exit.log for post-mortem debugging
+ *   - Critical guardian events now also written to stdout (visible in PM2 logs)
  *
  * v13 changes (statusLine-based context monitoring):
  *   - Removed periodic context polling (enqueueContextCheck)
@@ -41,7 +50,9 @@ const DAILY_MEMORY_COMMIT_STATE_FILE = path.join(MONITOR_DIR, 'daily-memory-comm
 const UPGRADE_CHECK_STATE_FILE = path.join(MONITOR_DIR, 'upgrade-check-state.json');
 const PENDING_CHANNELS_FILE = path.join(MONITOR_DIR, 'pending-channels.jsonl');
 
-// Claude binary - relies on PATH from PM2 ecosystem.config.js
+// Claude binary - uses bare command name (absolute path triggers Claude Code warning).
+// PATH is passed explicitly to tmux sessions via -e flag to avoid tmux server
+// env inheritance issues (tmux client-server architecture).
 const CLAUDE_BIN = process.env.CLAUDE_BIN || 'claude';
 const BYPASS_PERMISSIONS = process.env.CLAUDE_BYPASS_PERMISSIONS !== 'false';
 
@@ -53,11 +64,23 @@ const HOOK_STATE_FILE = path.join(MONITOR_DIR, 'hook-state.json');
 const ZYLOS_PATH = ZYLOS_DIR.replace(/\//g, '-');
 const CONV_DIR = path.join(os.homedir(), '.claude', 'projects', ZYLOS_PATH);
 
+// Environment variables to strip before starting Claude in tmux.
+// Claude Code sets these at runtime to mark "I'm running" — if PM2 captures them
+// (e.g., pm2 restart inside a Claude session), child processes inherit them and
+// Claude refuses to start, thinking it's already running.
+const CLAUDE_ENV_VARS_TO_STRIP = ['CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT'];
+const ENV_CLEAN_PREFIX = 'env ' + CLAUDE_ENV_VARS_TO_STRIP.map(v => `-u ${v}`).join(' ');
+
+// Exit log — records Claude exit codes for post-mortem debugging
+const EXIT_LOG_FILE = path.join(MONITOR_DIR, 'claude-exit.log');
+
 // Activity monitor cadence
 const INTERVAL = 1000;
 const IDLE_THRESHOLD = 3;
 const LOG_MAX_LINES = 500;
-const RESTART_DELAY = 5;
+const BASE_RESTART_DELAY = 5;
+const MAX_RESTART_DELAY = 60;
+const BACKOFF_RESET_THRESHOLD = 60; // Claude must stay running this long before backoff resets
 
 // Heartbeat liveness config (v2)
 const HEARTBEAT_INTERVAL = 7200;     // 2 hours (safety-net; stuck detection is the primary mechanism)
@@ -82,6 +105,8 @@ const DAILY_COMMIT_SCRIPT = path.join(__dirname, '..', '..', 'zylos-memory', 'sc
 // State
 let lastTruncateDay = '';
 let notRunningCount = 0;
+let consecutiveRestarts = 0;
+let stableRunningSince = 0;
 let lastState = '';
 let startupGrace = 0;
 let idleSince = 0;
@@ -109,11 +134,15 @@ function getLocalDate() {
 
 function log(message) {
   const timestamp = new Date().toISOString().replace('T', ' ').substring(0, 19);
-  const line = `[${timestamp}] ${message}\n`;
+  const line = `[${timestamp}] ${message}`;
   if (!fs.existsSync(MONITOR_DIR)) {
     fs.mkdirSync(MONITOR_DIR, { recursive: true });
   }
-  fs.appendFileSync(LOG_FILE, line);
+  fs.appendFileSync(LOG_FILE, line + '\n');
+  // Critical events also to stdout (visible in PM2 logs)
+  if (/^(Guardian|Heartbeat|State:|=== Activity)/.test(message)) {
+    console.log(line);
+  }
 }
 
 function truncateLog() {
@@ -335,13 +364,18 @@ function startClaude() {
   } catch { }
 
   const bypassFlag = BYPASS_PERMISSIONS ? ' --dangerously-skip-permissions' : '';
+  const claudeCmd = `${ENV_CLEAN_PREFIX} ${CLAUDE_BIN}${bypassFlag}`;
+  const exitLogSnippet = `_ec=$?; echo "[$(date -Iseconds)] exit_code=$_ec" >> ${EXIT_LOG_FILE}`;
 
   if (tmuxHasSession()) {
-    sendToTmux(`cd ${ZYLOS_DIR}; ${CLAUDE_BIN}${bypassFlag}`);
+    sendToTmux(`cd ${ZYLOS_DIR}; ${claudeCmd}; ${exitLogSnippet}`);
     log('Guardian: Started Claude in existing tmux session');
   } else {
     try {
-      execSync(`tmux new-session -d -s "${SESSION}" "cd ${ZYLOS_DIR} && ${CLAUDE_BIN}${bypassFlag}"`);
+      // -e PATH=... ensures tmux session inherits activity-monitor's PATH even if
+      // the tmux server was started in a different env context.
+      // Single quotes prevent the outer shell from expanding $() and $?.
+      execSync(`tmux new-session -d -s "${SESSION}" -e "PATH=${process.env.PATH}" 'cd ${ZYLOS_DIR} && ${claudeCmd}; ${exitLogSnippet}'`);
       log('Guardian: Created new tmux session and started Claude');
     } catch (err) {
       log(`Guardian: Failed to create tmux session: ${err.message}`);
@@ -804,8 +838,16 @@ function monitorLoop() {
   checkDailyTruncate();
 
   if (!tmuxHasSession()) {
+    // Grace period: after starting Claude, wait for tmux session to appear
+    if (startupGrace > 0) {
+      startupGrace -= 1;
+      engine.processHeartbeat(false, currentTime);
+      return;
+    }
+
     const state = 'offline';
     notRunningCount += 1;
+    stableRunningSince = 0;
 
     writeStatusFile({
       state,
@@ -821,8 +863,10 @@ function monitorLoop() {
       log('State: OFFLINE (tmux session not found)');
     }
 
-    if (notRunningCount >= RESTART_DELAY) {
-      log(`Guardian: Session not found for ${notRunningCount}s, starting Claude...`);
+    const restartDelay = Math.min(BASE_RESTART_DELAY * Math.pow(2, consecutiveRestarts), MAX_RESTART_DELAY);
+    if (notRunningCount >= restartDelay) {
+      consecutiveRestarts += 1;
+      log(`Guardian: Session not found for ${notRunningCount}s, starting Claude... (attempt ${consecutiveRestarts}, next delay ${Math.min(BASE_RESTART_DELAY * Math.pow(2, consecutiveRestarts), MAX_RESTART_DELAY)}s)`);
       startClaude();
       startupGrace = 30;
       notRunningCount = 0;
@@ -845,6 +889,7 @@ function monitorLoop() {
 
     const state = 'stopped';
     notRunningCount += 1;
+    stableRunningSince = 0;
 
     writeStatusFile({
       state,
@@ -860,8 +905,10 @@ function monitorLoop() {
       log('State: STOPPED (claude not running in tmux session)');
     }
 
-    if (notRunningCount >= RESTART_DELAY) {
-      log(`Guardian: Claude not running for ${notRunningCount}s, starting Claude...`);
+    const restartDelay = Math.min(BASE_RESTART_DELAY * Math.pow(2, consecutiveRestarts), MAX_RESTART_DELAY);
+    if (notRunningCount >= restartDelay) {
+      consecutiveRestarts += 1;
+      log(`Guardian: Claude not running for ${notRunningCount}s, starting Claude... (attempt ${consecutiveRestarts}, next delay ${Math.min(BASE_RESTART_DELAY * Math.pow(2, consecutiveRestarts), MAX_RESTART_DELAY)}s)`);
       startClaude();
       startupGrace = 30;
       notRunningCount = 0;
@@ -877,6 +924,17 @@ function monitorLoop() {
 
   startupGrace = 0;
   notRunningCount = 0;
+
+  // Only reset backoff after Claude stays running for BACKOFF_RESET_THRESHOLD seconds.
+  // Prevents flapping (brief start → immediate crash) from clearing the counter.
+  if (consecutiveRestarts > 0) {
+    if (stableRunningSince === 0) {
+      stableRunningSince = currentTime;
+    } else if (currentTime - stableRunningSince >= BACKOFF_RESET_THRESHOLD) {
+      consecutiveRestarts = 0;
+      stableRunningSince = 0;
+    }
+  }
 
   let activity = getConversationFileModTime();
   let source = 'conv_file';
@@ -1027,7 +1085,7 @@ function init() {
 }
 
 init();
-log(`=== Activity Monitor Started (v13 - Guardian + Heartbeat v2 + Hook Activity + DailyTasks + UpgradeCheck): ${new Date().toISOString()} tz=${timezone} ===`);
+log(`=== Activity Monitor Started (v14 - Guardian + Heartbeat v2 + Hook Activity + DailyTasks + UpgradeCheck): ${new Date().toISOString()} tz=${timezone} ===`);
 
 setInterval(monitorLoop, INTERVAL);
 monitorLoop();

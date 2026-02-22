@@ -5,7 +5,7 @@ All notable changes to zylos-core will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.2.2] - 2026-02-22
+## [0.2.3] - 2026-02-22
 
 ### Added
 - Three-way smart merge for upgrades: non-conflicting changes auto-merge via diff3, conflicts backed up with timestamps for manual review
@@ -16,6 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `new-session` skill: graceful context handoff via `/clear` — preserves background tasks and hands off state to new session
 - Session cost tracking: logs per-session cost to `cost-log.jsonl` on session change
 - Unit tests for smart merge pipeline (43 tests via Jest)
+- Activity monitor exit code logging: each Claude exit logged to `claude-exit.log` with timestamp and exit code
+- Activity monitor critical events now output to stdout (visible in `pm2 logs`)
 
 ### Fixed
 - `zylos upgrade --self --check --branch`: version check now reads from specified branch instead of always main
@@ -29,17 +31,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Context monitor: fix cost carry-over bug on session change, track `used_percentage` every turn
 - Self-upgrade: step 8 shells out to newly installed `sync-settings-hooks.js` to avoid bootstrap problem
 - **Postinstall bootstrap fix**: settings sync now runs even during self-upgrade, ensuring new config fields (e.g. statusLine) are synced when upgrading from any old version
+- **Activity monitor PATH fix**: pass PATH to tmux session via `-e` flag — tmux server may not inherit activity-monitor's PATH, causing "command not found"
+- **Activity monitor CLAUDECODE env fix**: strip `CLAUDECODE` and `CLAUDE_CODE_ENTRYPOINT` env vars before starting Claude in tmux — fixes infinite restart loop when PM2 inherits Claude's runtime environment
+- **Activity monitor startupGrace bypass**: grace period now checked in offline branch (tmux not found), preventing 5s retry loop when Claude crashes immediately
+- **Activity monitor exponential backoff**: restart delay escalates 5s → 10s → 20s → 40s → 60s cap; requires 60s stable running before reset
 
 ### Changed
 - Upgrade pipeline uses smart merge instead of brute-force overwrite for both components and core skills
 - C4 upgrade reply includes auto-merged files and conflict details
 - `check-context` skill simplified: reads `statusline.json` directly (always current)
-- Activity monitor bumped to v13: removed all polling-based context check code
+- Activity monitor bumped to v14: env cleanup, exponential backoff, exit logging, stdout output
 - statusLine config added to settings template with auto-sync on upgrade
 - `postinstall.js` restructured: skill sync and settings sync separated; settings sync always runs when zylos is initialized
 
 ### Removed
 - Polling-based context check (check-context script + activity monitor hourly poll)
+
+## [0.2.2] - 2026-02-22 _(superseded by 0.2.3 — activity monitor env pollution bug caused infinite restart loop on affected instances)_
 
 ## [0.2.1] - 2026-02-22 _(superseded by 0.2.2 — postinstall did not sync settings during self-upgrade from older versions)_
 
