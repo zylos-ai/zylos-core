@@ -67,7 +67,7 @@ function syncSettings() {
   }
 
   try {
-    execFileSync('node', [syncHooks], {
+    execFileSync(process.execPath, [syncHooks], {
       stdio: 'inherit',
       env: { ...process.env, ZYLOS_DIR }
     });
