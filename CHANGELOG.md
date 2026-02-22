@@ -5,38 +5,31 @@ All notable changes to zylos-core will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.2.1] - 2026-02-21
+## [0.2.1] - 2026-02-22
 
 ### Added
-- Smart merge: three-way merge strategy replaces preserve-or-overwrite for upgrades
-- `diff3.js`: three-way merge utility using GNU diff3 — clean merges for non-conflicting changes
-- `smart-merge.js`: per-file merge strategy (overwrite/keep/merged/conflict/added) with backup for conflicts
-- Manifest originals storage: saves installed file copies in `.zylos/originals/` for future three-way merge base
-- File deletion during upgrades: files removed in new version are deleted from installed dir (user-added files preserved)
+- Three-way smart merge for upgrades: non-conflicting changes auto-merge via diff3, conflicts backed up with timestamps for manual review
+- Manifest originals storage: saves installed file copies in `.zylos/originals/` as merge base for future upgrades
+- File deletion during upgrades: files removed in new version are cleaned up (user-added files preserved)
 - `--mode overwrite` flag for `zylos upgrade`: skip smart merge, force-overwrite all files
-- Unit tests for diff3, smart-merge, and manifest modules (39 tests via Jest)
-- Event-driven context monitoring via Claude Code's `statusLine` hook — replaces hourly polling with zero turn cost (`context-monitor.js`)
-- Session cost tracking: `context-monitor.js` logs final session cost to `cost-log.jsonl` when session changes
-- `new-session` skill: pre-clear handoff checklist that preserves background tasks and hands off task IDs to new session
-- `statusLine` config in `templates/.claude/settings.json` — pipes context data to `context-monitor.js` after every turn
-- statusLine sync support: `sync-settings-hooks.js` and `self-upgrade.js` now add, update, and remove `statusLine` config from template
+- Event-driven context monitoring via statusLine hook: replaces hourly polling with instant, zero-turn-cost detection
+- `new-session` skill: graceful context handoff via `/clear` — preserves background tasks and hands off state to new session
+- Session cost tracking: logs per-session cost to `cost-log.jsonl` on session change
+- Unit tests for smart merge pipeline (43 tests via Jest)
 
 ### Fixed
-- `zylos upgrade --self --check --branch <name>`: version check always read from main instead of the specified branch
-- File deletion in `upgrade.js` no longer deletes user-added files — only files tracked in old manifest are removed
+- `zylos upgrade --self --check --branch`: version check now reads from specified branch instead of always main
+- File deletion no longer removes user-added files — only files tracked in the old manifest
 
 ### Changed
-- `self-upgrade.js`: `syncCoreSkills()` uses `smartSync()` instead of preserve-or-overwrite branch
-- `upgrade.js`: step 3 uses `smartSync()` instead of brute-force `syncTree()`
-- `component.js`: C4 reply format includes merge/conflict info for both component and self-upgrade
-- `component-management` SKILL.md: upgrade workflow documentation updated for smart merge
-- `check-context` skill simplified: reads `statusline.json` directly instead of enqueuing `/context` command
-- Activity monitor bumped to v13: removed all polling-based context check code (`maybeEnqueueContextCheck`, `enqueueContextCheck`, related state files)
-- Activity monitor SKILL.md: rewritten Context Monitoring section to document statusLine mechanism and two-stage design
+- Upgrade pipeline uses smart merge instead of brute-force overwrite for both components and core skills
+- C4 upgrade reply includes auto-merged files and conflict details
+- `check-context` skill simplified: reads `statusline.json` directly (always current)
+- Activity monitor bumped to v13: removed all polling-based context check code
+- statusLine config added to settings template with auto-sync on upgrade
 
 ### Removed
-- `check-context/scripts/check-context.js`: no longer needed (statusline.json is always current)
-- Activity monitor polling functions: `loadContextCheckState`, `writeContextCheckState`, `enqueueContextCheck`, `maybeEnqueueContextCheck`
+- Polling-based context check (check-context script + activity monitor hourly poll)
 
 ## [0.2.0] - 2026-02-21
 
