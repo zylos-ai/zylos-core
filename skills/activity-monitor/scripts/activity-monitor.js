@@ -360,17 +360,16 @@ function startClaude() {
 
   const bypassFlag = BYPASS_PERMISSIONS ? ' --dangerously-skip-permissions' : '';
   const claudeCmd = `${ENV_CLEAN_PREFIX} ${CLAUDE_BIN}${bypassFlag}`;
-  const exitLogCmd = `echo "[$(date -Iseconds)] exit_code=$?" >> ${EXIT_LOG_FILE}`;
+  const exitLogSnippet = `echo "[$(date -Iseconds)] exit_code=$?" >> ${EXIT_LOG_FILE}`;
 
   if (tmuxHasSession()) {
-    sendToTmux(`cd ${ZYLOS_DIR}; ${claudeCmd}; ${exitLogCmd}`);
+    sendToTmux(`cd ${ZYLOS_DIR}; ${claudeCmd}; ${exitLogSnippet}`);
     log('Guardian: Started Claude in existing tmux session');
   } else {
     try {
-      // Escape $ in exitLogCmd — execSync runs through a shell, and $ must survive
-      // to tmux's inner shell for correct expansion at Claude exit time.
-      const exitLogCmdEsc = exitLogCmd.replace(/\$/g, '\\$');
-      execSync(`tmux new-session -d -s "${SESSION}" "cd ${ZYLOS_DIR} && ${claudeCmd}; ${exitLogCmdEsc}"`);
+      // Single quotes prevent the outer shell (execSync) from expanding $() and $?.
+      // Tmux's inner shell receives the literal command and expands them at exit time.
+      execSync(`tmux new-session -d -s "${SESSION}" 'cd ${ZYLOS_DIR} && ${claudeCmd}; ${exitLogSnippet}'`);
       log('Guardian: Created new tmux session and started Claude');
     } catch (err) {
       log(`Guardian: Failed to create tmux session: ${err.message}`);
