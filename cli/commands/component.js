@@ -85,7 +85,7 @@ function formatC4Reply(type, data) {
       return r;
     }
     case 'upgrade': {
-      const { component, success, from, to, changelog, failedStep, error, rollback } = data;
+      const { component, success, from, to, changelog, failedStep, error, rollback, mergeConflicts, mergedFiles } = data;
       if (!success) {
         let r = `${component} upgrade failed (step ${failedStep}): ${error}`;
         if (rollback?.performed) {
@@ -95,10 +95,18 @@ function formatC4Reply(type, data) {
       }
       let r = `${component} upgraded: ${from} -> ${to}`;
       if (changelog) r += `\n\nChangelog:\n${changelog}`;
+      if (mergedFiles?.length > 0) {
+        r += `\n\nAuto-merged files: ${mergedFiles.join(', ')}`;
+      }
+      if (mergeConflicts?.length > 0) {
+        r += '\n\nConflict files (local backed up, new version applied):';
+        for (const c of mergeConflicts) r += `\n  ${c.file} → backup: ${c.backupPath}`;
+        r += '\n\nUse Claude to review and re-merge backed-up local changes.';
+      }
       return r;
     }
     case 'self-upgrade': {
-      const { success, from, to, changelog, failedStep, error, rollback, migrationHints } = data;
+      const { success, from, to, changelog, failedStep, error, rollback, migrationHints, mergeConflicts, mergedFiles } = data;
       if (!success) {
         let r = `zylos-core upgrade failed (step ${failedStep}): ${error}`;
         if (rollback?.performed) {
@@ -108,6 +116,14 @@ function formatC4Reply(type, data) {
       }
       let r = `zylos-core upgraded: ${from} -> ${to}`;
       if (changelog) r += `\n\nChangelog:\n${changelog}`;
+      if (mergedFiles?.length > 0) {
+        r += `\n\nAuto-merged files: ${mergedFiles.join(', ')}`;
+      }
+      if (mergeConflicts?.length > 0) {
+        r += '\n\nConflict files (local backed up, new version applied):';
+        for (const c of mergeConflicts) r += `\n  ${c.skill}/${c.file} → backup: ${c.backupPath}`;
+        r += '\n\nUse Claude to review and re-merge backed-up local changes.';
+      }
       if (migrationHints?.length > 0) {
         r += '\n\nACTION REQUIRED - Hook changes in ~/zylos/.claude/settings.json:';
         for (const hint of migrationHints) {
@@ -198,8 +214,20 @@ export async function upgradeComponent(args) {
     process.exit(1);
   }
 
+  // Parse --mode <value> flag (merge or overwrite)
+  const modeIndex = args.indexOf('--mode');
+  const mode = modeIndex !== -1 ? args[modeIndex + 1] : 'merge';
+  if (modeIndex !== -1 && (!mode || mode.startsWith('-'))) {
+    console.error('Error: --mode requires a value (merge or overwrite).');
+    process.exit(1);
+  }
+  if (mode !== 'merge' && mode !== 'overwrite') {
+    console.error(`Error: --mode must be "merge" or "overwrite", got "${mode}".`);
+    process.exit(1);
+  }
+
   // Get target component (filter out flags and flag values)
-  const flagsWithValues = new Set(['--temp-dir', '--branch']);
+  const flagsWithValues = new Set(['--temp-dir', '--branch', '--mode']);
   const target = args.find((a, i) => {
     if (a.startsWith('-')) return false;
     if (a === 'confirm') return false;
@@ -216,14 +244,14 @@ export async function upgradeComponent(args) {
     // Parse --temp-dir flag (reuse previously downloaded package from --check)
     const selfTempDirIdx = args.indexOf('--temp-dir');
     const selfProvidedTempDir = selfTempDirIdx !== -1 ? args[selfTempDirIdx + 1] : null;
-    const ok = await upgradeSelfCore({ providedTempDir: selfProvidedTempDir, branch });
+    const ok = await upgradeSelfCore({ providedTempDir: selfProvidedTempDir, branch, mode });
     if (!ok) process.exit(1);
     return;
   }
 
   // Handle --all: upgrade all components
   if (upgradeAll) {
-    return upgradeAllComponents({ checkOnly, jsonOutput, skipConfirm, skipEval });
+    return upgradeAllComponents({ checkOnly, jsonOutput, skipConfirm, skipEval, mode });
   }
 
   // Validate target
@@ -237,11 +265,12 @@ export async function upgradeComponent(args) {
     console.log('  --yes, -y      Skip confirmation');
     console.log('  --skip-eval    Skip upgrade analysis of local changes');
     console.log('  --branch <b>   Upgrade from a specific branch (e.g. feat/xxx)');
+    console.log('  --mode <m>     Merge mode: "merge" (default, smart three-way) or "overwrite"');
     console.log('  --temp-dir <d> Reuse previously downloaded package from --check');
     console.log('\nExamples:');
     console.log('  zylos upgrade telegram --check --json');
     console.log('  zylos upgrade telegram --yes --temp-dir /tmp/zylos-xxx');
-    console.log('  zylos upgrade telegram');
+    console.log('  zylos upgrade telegram --mode overwrite');
     process.exit(1);
   }
 
@@ -291,7 +320,7 @@ export async function upgradeComponent(args) {
   }
 
   // Mode 2 & 3: Full upgrade flow (lock-first)
-  const ok = await handleUpgradeFlow(target, { jsonOutput, skipConfirm: skipConfirm || explicitConfirm, skipEval, providedTempDir, branch });
+  const ok = await handleUpgradeFlow(target, { jsonOutput, skipConfirm: skipConfirm || explicitConfirm, skipEval, providedTempDir, branch, mode });
   if (!ok) process.exit(1);
 }
 
@@ -417,7 +446,7 @@ async function handleCheckOnly(component, { jsonOutput }) {
  * Returns true on success, false on failure.
  * Does NOT call process.exit() — caller decides exit behavior.
  */
-async function handleUpgradeFlow(component, { jsonOutput, skipConfirm, skipEval, providedTempDir, branch }) {
+async function handleUpgradeFlow(component, { jsonOutput, skipConfirm, skipEval, providedTempDir, branch, mode = 'merge' }) {
   const skillDir = path.join(SKILLS_DIR, component);
   let tempDir = providedTempDir || null;
   const tempDirWasProvided = !!providedTempDir;
@@ -590,6 +619,7 @@ async function handleUpgradeFlow(component, { jsonOutput, skipConfirm, skipEval,
     const result = runUpgrade(component, {
       tempDir,
       newVersion: check.latest,
+      mode,
       onStep: !jsonOutput ? printStep : undefined,
     });
 
@@ -675,7 +705,7 @@ function cleanOldBackups(skillDir) {
 /**
  * Handle --all: upgrade all components
  */
-async function upgradeAllComponents({ checkOnly, jsonOutput, skipConfirm, skipEval }) {
+async function upgradeAllComponents({ checkOnly, jsonOutput, skipConfirm, skipEval, mode = 'merge' }) {
   const components = loadComponents();
   const names = Object.keys(components);
 
@@ -746,7 +776,7 @@ async function upgradeAllComponents({ checkOnly, jsonOutput, skipConfirm, skipEv
     if (!jsonOutput) {
       console.log(`\n${heading(`─── ${comp.component} ───`)}`);
     }
-    const ok = await handleUpgradeFlow(comp.component, { jsonOutput, skipConfirm: true, skipEval });
+    const ok = await handleUpgradeFlow(comp.component, { jsonOutput, skipConfirm: true, skipEval, mode });
     if (!ok) anyFailed = true;
   }
 
@@ -790,11 +820,12 @@ function handleSelfCheckOnly({ jsonOutput, branch }) {
     process.exit(1);
   }
 
-  // When update is available: download to temp, read changelog, detect local changes
+  // When update is available (or --branch forces re-check): download to temp, read changelog, detect local changes
   let changelog = null;
   let tempDir = null;
 
-  if (check.hasUpdate) {
+  // With --branch, always proceed even if versions match (user wants to install specific branch)
+  if (check.hasUpdate || branch) {
     // Download new version to temp dir (for template/file comparison by Claude)
     const dlResult = downloadCoreToTemp(check.latest, branch);
     if (dlResult.success) {
@@ -820,10 +851,11 @@ function handleSelfCheckOnly({ jsonOutput, branch }) {
   }
 
   // Detect local modifications to core skills
-  const allLocalChanges = check.hasUpdate ? detectCoreSkillChanges() : [];
+  const allLocalChanges = (check.hasUpdate || branch) ? detectCoreSkillChanges() : [];
 
   if (jsonOutput) {
     const output = { action: 'check', target: 'zylos-core', ...check };
+    if (branch) output.branch = branch;
     if (changelog) output.changelog = changelog;
     const mappedChanges = allLocalChanges.length > 0
       ? allLocalChanges.map(({ skill, changes }) => ({ skill, modified: changes.modified, added: changes.added }))
@@ -833,7 +865,7 @@ function handleSelfCheckOnly({ jsonOutput, branch }) {
     output.reply = formatC4Reply('self-check', { ...check, changelog, localChanges: mappedChanges });
     console.log(JSON.stringify(output, null, 2));
   } else {
-    if (!check.hasUpdate) {
+    if (!check.hasUpdate && !branch) {
       console.log(success(`${bold('zylos-core')} is up to date (v${check.current})`));
     } else {
       console.log(`${bold('zylos-core')}: ${dim(check.current)} → ${bold(check.latest)}`);
@@ -867,7 +899,7 @@ function handleSelfCheckOnly({ jsonOutput, branch }) {
  * Returns true on success, false on failure.
  * Does NOT call process.exit() — caller decides exit behavior.
  */
-async function upgradeSelfCore({ providedTempDir, branch } = {}) {
+async function upgradeSelfCore({ providedTempDir, branch, mode = 'merge' } = {}) {
   const jsonOutput = process.argv.includes('--json');
   const skipConfirm = process.argv.includes('--yes') || process.argv.includes('-y');
   let tempDir = providedTempDir || null;
@@ -991,6 +1023,7 @@ async function upgradeSelfCore({ providedTempDir, branch } = {}) {
     const result = runSelfUpgrade({
       tempDir,
       newVersion: check.latest,
+      mode,
       onStep: !jsonOutput ? printStep : undefined,
     });
 
