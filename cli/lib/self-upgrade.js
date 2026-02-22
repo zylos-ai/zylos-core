@@ -895,25 +895,45 @@ function applyMigrationHints(hints) {
 }
 
 /**
- * Step 8: sync settings.json hooks from template
+ * Step 8: sync settings.json hooks from template.
+ *
+ * Shells out to the NEWLY INSTALLED sync-settings-hooks.js instead of using
+ * the in-memory generateMigrationHints(). This avoids bootstrap problems where
+ * the old version's sync logic misses new config fields (e.g. statusLine).
  */
 function step8_syncSettingsHooks(ctx) {
   const startTime = Date.now();
 
-  const templatesDir = path.join(ctx.tempDir, 'templates');
-  const hints = generateMigrationHints(templatesDir);
-
-  if (hints.length === 0) {
-    return { step: 8, name: 'sync_settings_hooks', status: 'done', message: 'no changes needed', duration: Date.now() - startTime };
+  // Resolve the newly installed package path (from step 4) to use the latest sync logic.
+  // This avoids bootstrap issues where the old version's in-memory code misses new fields.
+  let syncScript;
+  try {
+    const npmRoot = execSync('npm root -g', { encoding: 'utf8', stdio: 'pipe' }).trim();
+    syncScript = path.join(npmRoot, 'zylos', 'cli', 'lib', 'sync-settings-hooks.js');
+  } catch {
+    syncScript = null;
   }
 
-  const result = applyMigrationHints(hints);
-
-  if (result.errors.length > 0) {
-    return { step: 8, name: 'sync_settings_hooks', status: 'failed', error: result.errors.join('; '), duration: Date.now() - startTime };
+  if (!syncScript || !fs.existsSync(syncScript)) {
+    // Fallback to in-memory hints if new script not found
+    const templatesDir = path.join(ctx.tempDir, 'templates');
+    const hints = generateMigrationHints(templatesDir);
+    if (hints.length === 0) {
+      return { step: 8, name: 'sync_settings_hooks', status: 'done', message: 'no changes needed', duration: Date.now() - startTime };
+    }
+    const result = applyMigrationHints(hints);
+    if (result.errors.length > 0) {
+      return { step: 8, name: 'sync_settings_hooks', status: 'failed', error: result.errors.join('; '), duration: Date.now() - startTime };
+    }
+    return { step: 8, name: 'sync_settings_hooks', status: 'done', message: `${result.applied} hooks updated`, duration: Date.now() - startTime };
   }
 
-  return { step: 8, name: 'sync_settings_hooks', status: 'done', message: `${result.applied} hooks updated`, duration: Date.now() - startTime };
+  try {
+    const output = execSync(`node "${syncScript}"`, { encoding: 'utf8', stdio: 'pipe' }).trim();
+    return { step: 8, name: 'sync_settings_hooks', status: 'done', message: output || 'synced', duration: Date.now() - startTime };
+  } catch (err) {
+    return { step: 8, name: 'sync_settings_hooks', status: 'failed', error: err.stderr || err.message, duration: Date.now() - startTime };
+  }
 }
 
 /**
