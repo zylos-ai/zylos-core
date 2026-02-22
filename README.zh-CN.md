@@ -63,13 +63,26 @@ zylos add lark
 
 ### 一个 AI，一个意识
 
+<div align="center">
+<img src="./assets/posters/unified-context-zh.png" alt="统一上下文" width="360">
+</div>
+
 大多数智能体框架按通道隔离会话 — 你在 Telegram 上的 AI 不知道你在 Slack 上说了什么。Zylos 以智能体为中心：你的 AI 在所有通道上是同一个人。C4 通信桥将所有消息路由到统一网关 — 一个对话、一份记忆、一个人格。每条消息都持久化到 SQLite，完全可查询。
 
 ### 你的上下文，有保障
 
+<div align="center">
+<img src="./assets/posters/memory-zh.png" alt="Inside Out 记忆架构" width="360">
+<img src="./assets/posters/infinite-context-zh.png" alt="无限上下文" width="360">
+</div>
+
 其他框架在上下文压缩时会丢失 AI 的记忆 — 悄无声息，没有预警。Zylos 用两步保障机制防止这种情况：当上下文达到 75% 时，系统自动保存所有记忆，然后才执行压缩。五层 Inside Out 记忆架构（身份 → 状态 → 参考 → 会话 → 归档）确保 AI 始终知道该保留什么、压缩什么。你的 AI 不会再失忆醒来。
 
 ### 默认自愈
+
+<div align="center">
+<img src="./assets/posters/lifecycle-zh.png" alt="生命周期管理" width="360">
+</div>
 
 不需要第三方监控工具。Zylos 内置了崩溃恢复、心跳探活、健康监控、上下文窗口管理和自动升级。你的 AI 自己发现问题并修复。你睡觉时它依然活着。
 
@@ -84,6 +97,10 @@ Zylos 构建在 Claude Code 之上 — Anthropic 官方的 AI 智能体运行时
 ---
 
 ## 架构
+
+<div align="center">
+<img src="./assets/posters/architecture-zh.png" alt="Zylos 架构" width="480">
+</div>
 
 ```mermaid
 graph TB
