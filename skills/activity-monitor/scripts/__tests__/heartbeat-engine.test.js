@@ -489,4 +489,233 @@ describe('HeartbeatEngine', () => {
       assert.equal(engine.health, 'recovering');
     });
   });
+
+  describe('rate_limited state', () => {
+    describe('enterRateLimited', () => {
+      it('transitions from ok to rate_limited', () => {
+        const { deps, calls } = createMockDeps();
+        const engine = new HeartbeatEngine(deps);
+
+        engine.enterRateLimited();
+
+        assert.equal(engine.health, 'rate_limited');
+        assert.ok(calls.log.some(m => m.includes('RATE_LIMITED') && m.includes('api_rate_limit')));
+      });
+
+      it('sets rateLimitResetAt when resetSeconds provided', () => {
+        const { deps } = createMockDeps();
+        const engine = new HeartbeatEngine(deps);
+        const before = Math.floor(Date.now() / 1000);
+
+        engine.enterRateLimited(120);
+
+        assert.equal(engine.health, 'rate_limited');
+        assert.ok(engine.rateLimitResetAt >= before + 120);
+        assert.ok(engine.rateLimitResetAt <= before + 121);
+      });
+
+      it('resets restartFailureCount', () => {
+        const { deps } = createMockDeps();
+        const engine = new HeartbeatEngine(deps, { initialHealth: 'recovering' });
+        engine.restartFailureCount = 2;
+
+        engine.enterRateLimited();
+
+        assert.equal(engine.restartFailureCount, 0);
+      });
+
+      it('is idempotent when already rate_limited', () => {
+        const { deps, calls } = createMockDeps();
+        const engine = new HeartbeatEngine(deps);
+
+        engine.enterRateLimited(60);
+        const firstResetAt = engine.rateLimitResetAt;
+        calls.log.length = 0; // Clear logs
+
+        engine.enterRateLimited(); // No new reset time
+
+        assert.equal(engine.health, 'rate_limited');
+        assert.equal(engine.rateLimitResetAt, firstResetAt); // Unchanged
+        assert.deepStrictEqual(calls.log, []); // No transition logged
+      });
+
+      it('updates resetAt when called again with new value', () => {
+        const { deps } = createMockDeps();
+        const engine = new HeartbeatEngine(deps);
+
+        engine.enterRateLimited(60);
+        const firstResetAt = engine.rateLimitResetAt;
+
+        engine.enterRateLimited(300);
+
+        assert.ok(engine.rateLimitResetAt > firstResetAt);
+      });
+
+      it('transitions from recovering to rate_limited', () => {
+        const { deps } = createMockDeps();
+        const engine = new HeartbeatEngine(deps, { initialHealth: 'recovering' });
+
+        engine.enterRateLimited();
+
+        assert.equal(engine.health, 'rate_limited');
+      });
+
+      it('transitions from down to rate_limited', () => {
+        const { deps } = createMockDeps();
+        const engine = new HeartbeatEngine(deps, { initialHealth: 'down' });
+
+        engine.enterRateLimited();
+
+        assert.equal(engine.health, 'rate_limited');
+      });
+    });
+
+    describe('processHeartbeat in rate_limited', () => {
+      it('probes after rateLimitedProbeInterval', () => {
+        const { deps, calls } = createMockDeps();
+        const engine = new HeartbeatEngine(deps, {
+          initialHealth: 'rate_limited',
+          rateLimitedProbeInterval: 300
+        });
+        const now = Math.floor(Date.now() / 1000);
+        engine.lastRateLimitedCheckAt = now - 301;
+
+        engine.processHeartbeat(true, now);
+
+        assert.deepStrictEqual(calls.enqueueHeartbeat, ['rate-limit-check']);
+      });
+
+      it('skips probe during cooldown', () => {
+        const { deps, calls } = createMockDeps();
+        const engine = new HeartbeatEngine(deps, {
+          initialHealth: 'rate_limited',
+          rateLimitedProbeInterval: 300
+        });
+        const now = Math.floor(Date.now() / 1000);
+        engine.lastRateLimitedCheckAt = now - 60;
+
+        engine.processHeartbeat(true, now);
+
+        assert.deepStrictEqual(calls.enqueueHeartbeat, []);
+      });
+
+      it('does not probe when claude is not running', () => {
+        const { deps, calls } = createMockDeps();
+        const engine = new HeartbeatEngine(deps, {
+          initialHealth: 'rate_limited',
+          rateLimitedProbeInterval: 300
+        });
+        const now = Math.floor(Date.now() / 1000);
+        engine.lastRateLimitedCheckAt = now - 301;
+
+        engine.processHeartbeat(false, now);
+
+        assert.deepStrictEqual(calls.enqueueHeartbeat, []);
+      });
+    });
+
+    describe('heartbeat success recovers from rate_limited', () => {
+      it('transitions to ok and notifies channels', () => {
+        const { deps, calls } = createMockDeps();
+        deps._pending = { control_id: 1, phase: 'rate-limit-check' };
+        deps._heartbeatStatus = 'done';
+        const engine = new HeartbeatEngine(deps, { initialHealth: 'rate_limited' });
+
+        engine.processHeartbeat(true, Math.floor(Date.now() / 1000));
+
+        assert.equal(engine.health, 'ok');
+        assert.equal(calls.notifyPendingChannels, 1);
+      });
+    });
+
+    describe('heartbeat failure stays rate_limited (no escalation)', () => {
+      it('stays rate_limited on timeout (no kill)', () => {
+        const { deps, calls } = createMockDeps();
+        deps._pending = { control_id: 1, phase: 'rate-limit-check' };
+        deps._heartbeatStatus = 'timeout';
+        const engine = new HeartbeatEngine(deps, { initialHealth: 'rate_limited' });
+
+        engine.processHeartbeat(true, Math.floor(Date.now() / 1000));
+
+        assert.equal(engine.health, 'rate_limited');
+        assert.equal(calls.killTmuxSession, 0);
+      });
+
+      it('stays rate_limited on failed (no kill)', () => {
+        const { deps, calls } = createMockDeps();
+        deps._pending = { control_id: 1, phase: 'rate-limit-check' };
+        deps._heartbeatStatus = 'failed';
+        const engine = new HeartbeatEngine(deps, { initialHealth: 'rate_limited' });
+
+        engine.processHeartbeat(true, Math.floor(Date.now() / 1000));
+
+        assert.equal(engine.health, 'rate_limited');
+        assert.equal(calls.killTmuxSession, 0);
+      });
+
+      it('logs waiting message on failure', () => {
+        const { deps, calls } = createMockDeps();
+        deps._pending = { control_id: 1, phase: 'rate-limit-check' };
+        deps._heartbeatStatus = 'timeout';
+        const engine = new HeartbeatEngine(deps, { initialHealth: 'rate_limited' });
+
+        engine.processHeartbeat(true, Math.floor(Date.now() / 1000));
+
+        assert.ok(calls.log.some(m => m.includes('RATE_LIMITED') && m.includes('waiting for rate limit to clear')));
+      });
+    });
+
+    describe('triggerRecovery skipped in rate_limited', () => {
+      it('does not kill tmux or increment failure count', () => {
+        const { deps, calls } = createMockDeps();
+        const engine = new HeartbeatEngine(deps, { initialHealth: 'rate_limited' });
+
+        engine.triggerRecovery('should_skip');
+
+        assert.equal(calls.killTmuxSession, 0);
+        assert.equal(engine.restartFailureCount, 0);
+        assert.equal(engine.health, 'rate_limited');
+      });
+
+      it('logs skip message', () => {
+        const { deps, calls } = createMockDeps();
+        const engine = new HeartbeatEngine(deps, { initialHealth: 'rate_limited' });
+
+        engine.triggerRecovery('my_reason');
+
+        assert.ok(calls.log.some(m => m.includes('RATE_LIMITED') && m.includes('my_reason')));
+      });
+    });
+
+    describe('requestImmediateProbe rejected in rate_limited', () => {
+      it('returns false', () => {
+        const { deps, calls } = createMockDeps();
+        const engine = new HeartbeatEngine(deps, { initialHealth: 'rate_limited' });
+
+        const result = engine.requestImmediateProbe('test');
+
+        assert.equal(result, false);
+        assert.deepStrictEqual(calls.enqueueHeartbeat, []);
+      });
+    });
+
+    describe('initial health rate_limited', () => {
+      it('sets lastRateLimitedCheckAt to now on construction', () => {
+        const { deps } = createMockDeps();
+        const before = Math.floor(Date.now() / 1000);
+        const engine = new HeartbeatEngine(deps, { initialHealth: 'rate_limited' });
+        const after = Math.floor(Date.now() / 1000);
+
+        assert.ok(engine.lastRateLimitedCheckAt >= before);
+        assert.ok(engine.lastRateLimitedCheckAt <= after);
+      });
+
+      it('does not set lastRateLimitedCheckAt for non-rate_limited health', () => {
+        const { deps } = createMockDeps();
+        const engine = new HeartbeatEngine(deps, { initialHealth: 'ok' });
+
+        assert.equal(engine.lastRateLimitedCheckAt, 0);
+      });
+    });
+  });
 });

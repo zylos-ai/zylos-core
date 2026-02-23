@@ -205,6 +205,21 @@ function main() {
     if (health === 'down') {
       emitError(json, 'HEALTH_DOWN', "I'm currently offline and unable to recover on my own. Please let the admin know so they can take a look!");
     }
+    if (health === 'rate_limited') {
+      let msg = "I'm currently rate-limited by the API and can't process messages right now.";
+      try {
+        const status = JSON.parse(fs.readFileSync(CLAUDE_STATUS_FILE, 'utf8'));
+        if (status.rate_limit_reset_at) {
+          const secsLeft = status.rate_limit_reset_at - Math.floor(Date.now() / 1000);
+          if (secsLeft > 0) {
+            const minsLeft = Math.ceil(secsLeft / 60);
+            msg += ` Expected to be back in about ${minsLeft} minute${minsLeft !== 1 ? 's' : ''}.`;
+          }
+        }
+      } catch { }
+      msg += " I'll auto-recover once the limit resets — no need to restart me!";
+      emitError(json, 'HEALTH_RATE_LIMITED', msg);
+    }
     emitError(json, 'HEALTH_RECOVERING', "I'm temporarily unavailable but should be back shortly. I'll reach out once I'm ready!");
   }
 
