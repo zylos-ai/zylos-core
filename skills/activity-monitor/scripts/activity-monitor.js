@@ -341,7 +341,28 @@ function enqueueStartupControl() {
   }
 }
 
+function isClaudeLoggedIn() {
+  try {
+    const output = execFileSync(CLAUDE_BIN, ['auth', 'status'], {
+      encoding: 'utf8',
+      timeout: 10000,
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+    const status = JSON.parse(output);
+    return status?.loggedIn === true;
+  } catch {
+    // If auth check fails (timeout, parse error, etc.), assume not logged in
+    // to avoid starting Claude in a broken state.
+    return false;
+  }
+}
+
 function startClaude() {
+  if (!isClaudeLoggedIn()) {
+    log('Guardian: Claude is not logged in, skipping startup');
+    return;
+  }
+
   if (isMaintenanceRunning()) {
     log('Guardian: Maintenance script detected, waiting for completion...');
     waitForMaintenance();
