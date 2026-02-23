@@ -1,6 +1,10 @@
 #!/usr/bin/env node
 /**
- * Activity Monitor v14 - Guardian + Heartbeat v2 + Health Check + Daily Tasks + Upgrade Check
+ * Activity Monitor v15 - Guardian + Heartbeat v2 + Health Check + Daily Tasks + Upgrade Check
+ *
+ * v15 changes (Intl.DateTimeFormat memory leak fix):
+ *   - Hoist Intl.DateTimeFormat instances to module level (reuse instead of per-call new)
+ *   - Fixes unbounded native memory growth (~18 MB / 1000 calls) from V8/ICU leak
  *
  * v14 changes (env cleanup + backoff + exit logging + PATH fix):
  *   - Pass PATH to tmux session via -e flag (tmux server may not inherit caller's PATH)
@@ -120,16 +124,18 @@ import { loadTimezone } from '../../scheduler/scripts/tz.js';
 
 const timezone = loadTimezone();
 
+// Reuse Intl.DateTimeFormat instances — creating new ones per call leaks native
+// ICU memory that V8's GC never reclaims, causing unbounded RSS growth (~18 MB
+// per 1 000 instantiations).
+const hourFormatter = new Intl.DateTimeFormat('en-US', { timeZone: timezone, hour: 'numeric', hour12: false });
+const dateFormatter = new Intl.DateTimeFormat('en-CA', { timeZone: timezone });
+
 function getLocalHour() {
-  return parseInt(
-    new Intl.DateTimeFormat('en-US', { timeZone: timezone, hour: 'numeric', hour12: false })
-      .format(new Date()),
-    10
-  );
+  return parseInt(hourFormatter.format(new Date()), 10);
 }
 
 function getLocalDate() {
-  return new Intl.DateTimeFormat('en-CA', { timeZone: timezone }).format(new Date());
+  return dateFormatter.format(new Date());
 }
 
 function log(message) {
@@ -1085,7 +1091,7 @@ function init() {
 }
 
 init();
-log(`=== Activity Monitor Started (v14 - Guardian + Heartbeat v2 + Hook Activity + DailyTasks + UpgradeCheck): ${new Date().toISOString()} tz=${timezone} ===`);
+log(`=== Activity Monitor Started (v15 - Guardian + Heartbeat v2 + Hook Activity + DailyTasks + UpgradeCheck): ${new Date().toISOString()} tz=${timezone} ===`);
 
 setInterval(monitorLoop, INTERVAL);
 monitorLoop();
