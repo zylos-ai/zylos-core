@@ -3,7 +3,7 @@ name: comm-bridge
 description: >-
   C4 communication bridge — central gateway for ALL external communication (Telegram, Lark, etc.).
   Use when replying to users via the "reply via" path, sending proactive messages to external channels,
-  querying recent conversations or pending message status (prefer c4-db.js CLI; sqlite3 OK for unsupported queries),
+  querying recent conversations or checkpoint status (prefer c4-db.js CLI; sqlite3 OK for unsupported queries),
   fetching conversation history for Memory Sync, or creating checkpoints after sync.
   Incoming messages are queued by channel bots and delivered to Claude via a PM2 dispatcher daemon.
   Session-start hooks automatically provide conversation context and can trigger Memory Sync when unsummarized conversations exceed the configured threshold.
