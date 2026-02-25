@@ -27,10 +27,11 @@ if [ -t 1 ]; then
   GREEN='\033[0;32m'
   YELLOW='\033[1;33m'
   CYAN='\033[0;36m'
+  BCYAN='\033[1;36m'
   BOLD='\033[1m'
   NC='\033[0m'
 else
-  RED='' GREEN='' YELLOW='' CYAN='' BOLD='' NC=''
+  RED='' GREEN='' YELLOW='' CYAN='' BCYAN='' BOLD='' NC=''
 fi
 
 info()  { printf "${CYAN}[zylos]${NC} %s\n" "$*"; }
@@ -190,14 +191,18 @@ install_zylos() {
 
 # ── Entry Point ───────────────────────────────────────────────
 echo ""
-printf '%b' "${BOLD}${CYAN}"
-echo "  ╔═══════════════════════════════════════╗"
-echo "  ║                                       ║"
-echo "  ║            Zylos Installer            ║"
-echo "  ║         Give your AI a life.          ║"
-echo "  ║                                       ║"
-echo "  ╚═══════════════════════════════════════╝"
+printf '%b' "${BCYAN}"
+echo "  ███████╗██╗   ██╗██╗      ██████╗ ███████╗"
+echo "  ╚══███╔╝╚██╗ ██╔╝██║     ██╔═══██╗██╔════╝"
+echo "    ███╔╝  ╚████╔╝ ██║     ██║   ██║███████╗"
+printf '%b' "${CYAN}"
+echo "   ███╔╝    ╚██╔╝  ██║     ██║   ██║╚════██║"
+echo "  ███████╗   ██║   ███████╗╚██████╔╝███████║"
+echo "  ╚══════╝   ╚═╝   ╚══════╝ ╚═════╝ ╚══════╝"
 printf '%b' "${NC}"
+echo ""
+printf '%b' "  ${BOLD}Give your AI a life.${NC}"
+echo ""
 echo ""
 
 # Warn if running as root (nvm and zylos should run as a normal user)
