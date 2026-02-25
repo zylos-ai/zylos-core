@@ -9,6 +9,11 @@
 # ──────────────────────────────────────────────────────────────
 set -euo pipefail
 
+# Wrap entire script in a block so bash must read all of it
+# before executing anything — protects against partial downloads
+# when piped via curl | bash.
+_main() {
+
 # ── Configuration ─────────────────────────────────────────────
 ZYLOS_REPO="https://github.com/zylos-ai/zylos-core"
 NODE_VERSION="24"               # LTS-track major version
@@ -157,61 +162,72 @@ install_zylos() {
   fi
 
   info "Installing zylos from GitHub (this may take a minute)..."
-  npm install -g --install-links "$ZYLOS_REPO"
+
+  # If npm global prefix is not user-writable (system-installed node),
+  # use sudo for npm install -g
+  local npm_prefix
+  npm_prefix="$(npm config get prefix 2>/dev/null)"
+  if [ -w "$npm_prefix" ]; then
+    npm install -g --install-links "$ZYLOS_REPO"
+  else
+    warn "npm global directory ($npm_prefix) is not writable, using sudo..."
+    sudo npm install -g --install-links "$ZYLOS_REPO"
+  fi
+
   ok "zylos: $(zylos --version 2>/dev/null || echo 'installed')"
 }
 
-# ── Main ──────────────────────────────────────────────────────
-main() {
-  echo ""
-  printf "${BOLD}${CYAN}"
-  echo "  ╔═══════════════════════════════════════╗"
-  echo "  ║         Zylos Installer               ║"
-  echo "  ║   Give your AI a life.                ║"
-  echo "  ╚═══════════════════════════════════════╝"
-  printf "${NC}"
-  echo ""
+# ── Entry Point ───────────────────────────────────────────────
+echo ""
+printf "${BOLD}${CYAN}"
+echo "  ╔═══════════════════════════════════════╗"
+echo "  ║         Zylos Installer               ║"
+echo "  ║   Give your AI a life.                ║"
+echo "  ╚═══════════════════════════════════════╝"
+printf "${NC}"
+echo ""
 
-  # Warn if running as root (nvm and zylos should run as a normal user)
-  if [ "$(id -u)" -eq 0 ]; then
-    warn "Running as root is not recommended. Zylos and nvm work best under a regular user account."
-    warn "Press Ctrl+C to abort, or wait 5 seconds to continue..."
-    sleep 5
-  fi
+# Warn if running as root (nvm and zylos should run as a normal user)
+if [ "$(id -u)" -eq 0 ]; then
+  warn "Running as root is not recommended. Zylos and nvm work best under a regular user account."
+  warn "Press Ctrl+C to abort, or wait 5 seconds to continue..."
+  sleep 5
+fi
 
-  detect_os
+detect_os
 
-  echo ""
-  info "Checking prerequisites..."
-  echo ""
+echo ""
+info "Checking prerequisites..."
+echo ""
 
-  ensure_curl
-  ensure_git
-  ensure_tmux
-  ensure_node
+ensure_curl
+ensure_git
+ensure_tmux
+ensure_node
 
-  echo ""
-  install_zylos
+echo ""
+install_zylos
 
-  echo ""
-  ok "Installation complete!"
-  echo ""
+echo ""
+ok "Installation complete!"
+echo ""
 
-  # If nvm was installed in this session, the user needs to reload their shell
-  # so that nvm (and therefore node/npm/zylos) is available in new terminals
-  if [ "$NVM_INSTALLED_NOW" = true ]; then
-    info "nvm was installed in this session. To use zylos, first reload your shell:"
-    echo ""
-    echo "    source ~/.bashrc    # or: source ~/.zshrc"
-    echo ""
-    info "Then run:"
-  else
-    info "Next step — run:"
-  fi
+# If nvm was installed in this session, the user needs to reload their shell
+# so that nvm (and therefore node/npm/zylos) is available in new terminals
+if [ "$NVM_INSTALLED_NOW" = true ]; then
+  info "nvm was installed in this session. To use zylos, first reload your shell:"
   echo ""
-  echo "    zylos init"
+  echo "    source ~/.bashrc    # or: source ~/.zshrc"
   echo ""
-  info "This will set up your agent environment interactively."
-}
+  info "Then run:"
+else
+  info "Next step — run:"
+fi
+echo ""
+echo "    zylos init"
+echo ""
+info "This will set up your agent environment interactively."
 
-main "$@"
+} # end of _main — do not remove (partial download guard)
+
+_main "$@"
