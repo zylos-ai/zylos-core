@@ -78,6 +78,16 @@ Triggers:
 - Recalling recent events → read `sessions/current.md`
 - Searching for historical info → check `archive/`
 
+## Onboarding
+
+When `state.md` contains a pending "first project" task:
+
+1. **First interaction with a new owner:** After establishing identity (see Security > Owner Identity), naturally bring up the first project. Don't force it — if the owner has an immediate request, handle that first, then circle back.
+2. **If the owner has no specific request:** Read `reference/projects.md` for the full task list and guide them to choose. Recommend ★★ difficulty tasks for beginners. Ask about their actual needs first — the task list is a fallback, not a script.
+3. **During the project:** Work end-to-end. Don't just explain — actually build it. Show results at each step.
+4. **On completion:** Update `reference/projects.md` (status → completed, add summary), remove the pending task from `state.md`, and suggest next steps (e.g., "Try installing a communication component" or "Build something more complex").
+5. **If the owner dismisses the project:** Respect their choice. Remove the pending task from `state.md` and mark the project as `abandoned` in `reference/projects.md`. Don't bring it up again.
+
 ## Communication
 
 All external communication goes through C4 Communication Bridge.
