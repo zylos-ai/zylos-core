@@ -71,19 +71,24 @@ install_system_package() {
     fi
     brew install "$pkg"
   elif [ "$OS" = "linux" ]; then
-    if ! command -v sudo &>/dev/null; then
-      fail "sudo not found. Please install $pkg manually as root, then re-run this script."
+    # Use sudo if not root; skip if already root (e.g., Docker containers)
+    local SUDO=""
+    if [ "$(id -u)" -ne 0 ]; then
+      if ! command -v sudo &>/dev/null; then
+        fail "sudo not found and not running as root. Please install $pkg manually as root, then re-run this script."
+      fi
+      SUDO="sudo"
     fi
     if command -v apt-get &>/dev/null; then
       if [ "$APT_UPDATED" = false ]; then
-        sudo apt-get update -qq
+        $SUDO apt-get update -qq
         APT_UPDATED=true
       fi
-      sudo apt-get install -y -qq "$pkg"
+      $SUDO apt-get install -y -qq "$pkg"
     elif command -v dnf &>/dev/null; then
-      sudo dnf install -y "$pkg"
+      $SUDO dnf install -y "$pkg"
     elif command -v yum &>/dev/null; then
-      sudo yum install -y "$pkg"
+      $SUDO yum install -y "$pkg"
     else
       fail "No supported package manager found (apt-get, dnf, yum). Please install $pkg manually."
     fi
@@ -173,7 +178,11 @@ install_zylos() {
     npm install -g --install-links "$ZYLOS_REPO"
   else
     warn "npm global directory (${npm_prefix:-unknown}) requires elevated permissions, using sudo..."
-    sudo npm install -g --install-links "$ZYLOS_REPO"
+    if [ "$(id -u)" -eq 0 ]; then
+      npm install -g --install-links "$ZYLOS_REPO"
+    else
+      sudo npm install -g --install-links "$ZYLOS_REPO"
+    fi
   fi
 
   ok "zylos: $(zylos --version 2>/dev/null || echo 'installed')"
