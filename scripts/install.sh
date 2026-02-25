@@ -5,7 +5,7 @@
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/zylos-ai/zylos-core/main/scripts/install.sh | bash
 #
-# Supported platforms: Linux (Debian/Ubuntu), macOS
+# Supported platforms: Linux (Debian/Ubuntu/RHEL), macOS
 # ──────────────────────────────────────────────────────────────
 set -euo pipefail
 
@@ -15,13 +15,17 @@ NODE_VERSION="24"               # LTS-track major version
 MIN_NODE_MAJOR=20
 NVM_INSTALL_URL="https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh"
 
-# ── Colors ────────────────────────────────────────────────────
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-CYAN='\033[0;36m'
-BOLD='\033[1m'
-NC='\033[0m' # No Color
+# ── Colors (disabled if not a terminal) ───────────────────────
+if [ -t 1 ]; then
+  RED='\033[0;31m'
+  GREEN='\033[0;32m'
+  YELLOW='\033[1;33m'
+  CYAN='\033[0;36m'
+  BOLD='\033[1m'
+  NC='\033[0m'
+else
+  RED='' GREEN='' YELLOW='' CYAN='' BOLD='' NC=''
+fi
 
 info()  { printf "${CYAN}[zylos]${NC} %s\n" "$*"; }
 ok()    { printf "${GREEN}[zylos]${NC} %s\n" "$*"; }
@@ -49,6 +53,8 @@ detect_os() {
 }
 
 # ── Package Manager ───────────────────────────────────────────
+APT_UPDATED=false
+
 install_system_package() {
   local pkg="$1"
   info "Installing $pkg..."
@@ -59,16 +65,32 @@ install_system_package() {
     fi
     brew install "$pkg"
   elif [ "$OS" = "linux" ]; then
+    if ! command -v sudo &>/dev/null; then
+      fail "sudo not found. Please install $pkg manually as root, then re-run this script."
+    fi
     if command -v apt-get &>/dev/null; then
-      sudo apt-get update -qq && sudo apt-get install -y -qq "$pkg"
-    elif command -v yum &>/dev/null; then
-      sudo yum install -y "$pkg"
+      if [ "$APT_UPDATED" = false ]; then
+        sudo apt-get update -qq
+        APT_UPDATED=true
+      fi
+      sudo apt-get install -y -qq "$pkg"
     elif command -v dnf &>/dev/null; then
       sudo dnf install -y "$pkg"
+    elif command -v yum &>/dev/null; then
+      sudo yum install -y "$pkg"
     else
-      fail "No supported package manager found (apt-get, yum, dnf). Please install $pkg manually."
+      fail "No supported package manager found (apt-get, dnf, yum). Please install $pkg manually."
     fi
   fi
+}
+
+# ── Prerequisite: curl ────────────────────────────────────────
+ensure_curl() {
+  if command -v curl &>/dev/null; then
+    return
+  fi
+  install_system_package curl
+  ok "curl: installed"
 }
 
 # ── Prerequisite: git ─────────────────────────────────────────
@@ -109,7 +131,7 @@ ensure_node() {
 
   if [ ! -s "$NVM_DIR/nvm.sh" ]; then
     info "Installing nvm..."
-    curl -fsSL "$NVM_INSTALL_URL" | bash
+    curl -fsSL "$NVM_INSTALL_URL" | PROFILE=/dev/null bash
   fi
 
   # Load nvm into current shell
@@ -132,16 +154,9 @@ install_zylos() {
     warn "zylos is already installed (${current_version}). Upgrading..."
   fi
 
-  info "Installing zylos from GitHub..."
+  info "Installing zylos from GitHub (this may take a minute)..."
   npm install -g --install-links "$ZYLOS_REPO"
   ok "zylos: $(zylos --version 2>/dev/null || echo 'installed')"
-}
-
-# ── Initialize ────────────────────────────────────────────────
-init_zylos() {
-  info "Running zylos init..."
-  echo ""
-  zylos init
 }
 
 # ── Main ──────────────────────────────────────────────────────
@@ -161,6 +176,7 @@ main() {
   info "Checking prerequisites..."
   echo ""
 
+  ensure_curl
   ensure_git
   ensure_tmux
   ensure_node
@@ -169,7 +185,19 @@ main() {
   install_zylos
 
   echo ""
-  init_zylos
+  ok "Installation complete!"
+  echo ""
+  info "Next step — run:"
+  echo ""
+  echo "    zylos init"
+  echo ""
+  info "This will set up your agent environment interactively."
+
+  # If nvm was installed in this session, the user's shell may not have it loaded yet
+  if [ ! -f "$HOME/.nvm/nvm.sh" ] || ! command -v zylos &>/dev/null; then
+    echo ""
+    warn "You may need to restart your shell first (or run: source ~/.bashrc)"
+  fi
 }
 
 main "$@"
