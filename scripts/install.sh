@@ -121,8 +121,8 @@ ensure_tmux() {
 
 # ── Prerequisite: Node.js (via nvm) ──────────────────────────
 ensure_node() {
-  # Check if Node.js exists and meets minimum version
-  if command -v node &>/dev/null; then
+  # Check if Node.js + npm exist and meet minimum version
+  if command -v node &>/dev/null && command -v npm &>/dev/null; then
     local current_major
     current_major="$(node -v | sed 's/v//' | cut -d. -f1)"
     if [ "$current_major" -ge "$MIN_NODE_MAJOR" ]; then
@@ -130,6 +130,8 @@ ensure_node() {
       return
     fi
     warn "node: $(node -v) is below minimum v${MIN_NODE_MAJOR}, upgrading..."
+  elif command -v node &>/dev/null; then
+    warn "node found but npm is missing, installing via nvm..."
   fi
 
   # Install or load nvm
@@ -166,11 +168,11 @@ install_zylos() {
   # If npm global prefix is not user-writable (system-installed node),
   # use sudo for npm install -g
   local npm_prefix
-  npm_prefix="$(npm config get prefix 2>/dev/null)"
-  if [ -w "$npm_prefix" ]; then
+  npm_prefix="$(npm config get prefix 2>/dev/null || echo "")"
+  if [ -n "$npm_prefix" ] && [ -w "$npm_prefix" ]; then
     npm install -g --install-links "$ZYLOS_REPO"
   else
-    warn "npm global directory ($npm_prefix) is not writable, using sudo..."
+    warn "npm global directory (${npm_prefix:-unknown}) requires elevated permissions, using sudo..."
     sudo npm install -g --install-links "$ZYLOS_REPO"
   fi
 
@@ -179,12 +181,12 @@ install_zylos() {
 
 # ── Entry Point ───────────────────────────────────────────────
 echo ""
-printf "${BOLD}${CYAN}"
+printf '%s' "${BOLD}${CYAN}"
 echo "  ╔═══════════════════════════════════════╗"
 echo "  ║         Zylos Installer               ║"
 echo "  ║   Give your AI a life.                ║"
 echo "  ╚═══════════════════════════════════════╝"
-printf "${NC}"
+printf '%s' "${NC}"
 echo ""
 
 # Warn if running as root (nvm and zylos should run as a normal user)
