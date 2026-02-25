@@ -190,12 +190,12 @@ install_zylos() {
 
 # ── Entry Point ───────────────────────────────────────────────
 echo ""
-printf '%s' "${BOLD}${CYAN}"
+printf '%b' "${BOLD}${CYAN}"
 echo "  ╔═══════════════════════════════════════╗"
 echo "  ║         Zylos Installer               ║"
 echo "  ║   Give your AI a life.                ║"
 echo "  ╚═══════════════════════════════════════╝"
-printf '%s' "${NC}"
+printf '%b' "${NC}"
 echo ""
 
 # Warn if running as root (nvm and zylos should run as a normal user)
