@@ -30,15 +30,27 @@ Zylos 给它一个生命。跨重启的持久记忆。你睡觉时自动工作�
 
 ## 快速开始
 
-**前置条件：** Git、Node.js >= 20、一台 Linux 服务器（或 Mac）、以及 [Claude](https://claude.ai) 订阅。
+**前置条件：** 一台 Linux 服务器（或 Mac）、[Claude](https://claude.ai) 订阅。
 
 ```bash
-# 安装（--install-links 是 GitHub 安装所需参数，后续会发布到 npm）
-npm install -g --install-links https://github.com/zylos-ai/zylos-core
+curl -fsSL https://raw.githubusercontent.com/zylos-ai/zylos-core/main/scripts/install.sh | bash
+```
 
-# 初始化 — 设置 tmux、PM2、记忆系统、调度器等
+一键安装所有依赖（git、tmux、Node.js、zylos CLI）。完成后运行：
+
+```bash
 zylos init
 ```
+
+<details>
+<summary>手动安装（如果你已有 Node.js >= 20）</summary>
+
+```bash
+npm install -g --install-links https://github.com/zylos-ai/zylos-core
+zylos init
+```
+
+</details>
 
 `zylos init` 是交互式的，可重复运行。它会：
 1. 安装缺失的工具（tmux、git、PM2、Claude Code）
