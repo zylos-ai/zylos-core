@@ -342,7 +342,7 @@ function isClaudeAuthenticated() {
  * Returns true if bypass is enabled and hasn't been accepted yet.
  */
 function needsBypassAcceptance() {
-  // Check if bypass is enabled in .env
+  // Check if bypass is disabled in .env
   const envPath = path.join(ZYLOS_DIR, '.env');
   try {
     const content = fs.readFileSync(envPath, 'utf8');
@@ -350,17 +350,60 @@ function needsBypassAcceptance() {
     if (match && match[1].trim() === 'false') return false;
   } catch {}
 
+  // Check if already pre-accepted via settings.json
+  const settingsPath = path.join(os.homedir(), '.claude', 'settings.json');
+  try {
+    const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+    if (settings.skipDangerousModePermissionPrompt) return false;
+  } catch {}
+
   // Check if already accepted (tmux session with Claude running)
   try {
     execSync('tmux has-session -t claude-main 2>/dev/null', { stdio: 'pipe' });
-    // Session exists — check if Claude is actually running (not stuck on prompt)
     const paneContent = execSync('tmux capture-pane -t claude-main -p 2>/dev/null', { encoding: 'utf8' });
     if (paneContent.includes('>') || paneContent.includes('Claude')) {
-      return false; // Claude is running, already accepted
+      return false;
     }
   } catch {}
 
   return true;
+}
+
+/**
+ * Pre-accept Claude Code terms and bypass permissions prompt.
+ * Writes acceptance state to config files so Claude starts without manual confirmation.
+ */
+function preAcceptClaudeTerms() {
+  const homedir = os.homedir();
+  let changed = false;
+
+  // 1. Set hasCompletedOnboarding in ~/.claude.json
+  const claudeJsonPath = path.join(homedir, '.claude.json');
+  let claudeJson = {};
+  try {
+    claudeJson = JSON.parse(fs.readFileSync(claudeJsonPath, 'utf8'));
+  } catch {}
+  if (!claudeJson.hasCompletedOnboarding) {
+    claudeJson.hasCompletedOnboarding = true;
+    fs.writeFileSync(claudeJsonPath, JSON.stringify(claudeJson, null, 2) + '\n');
+    changed = true;
+  }
+
+  // 2. Set skipDangerousModePermissionPrompt in ~/.claude/settings.json
+  const claudeDir = path.join(homedir, '.claude');
+  fs.mkdirSync(claudeDir, { recursive: true });
+  const settingsPath = path.join(claudeDir, 'settings.json');
+  let settings = {};
+  try {
+    settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+  } catch {}
+  if (!settings.skipDangerousModePermissionPrompt) {
+    settings.skipDangerousModePermissionPrompt = true;
+    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n');
+    changed = true;
+  }
+
+  return changed;
 }
 
 /**
@@ -643,6 +686,7 @@ function ensureWebConsolePassword() {
 /**
  * Print web console access info (URL + password).
  * Called at the end of init to show the user how to access.
+ * Displayed prominently so the user doesn't miss the password.
  */
 function printWebConsoleInfo() {
   const config = getZylosConfig();
@@ -659,9 +703,18 @@ function printWebConsoleInfo() {
   if (!password) return;
 
   const proto = config.protocol || 'https';
-  console.log(`\n${heading('Web Console:')}`);
-  console.log(`  ${dim('URL:')}      ${bold(`${proto}://${config.domain}/console/`)}`);
-  console.log(`  ${dim('Password:')} ${bold(password)}`);
+  const url = `${proto}://${config.domain}/console/`;
+  const separator = cyan('  ══════════════════════════════════════════════');
+
+  console.log('');
+  console.log(separator);
+  console.log(bold('   Web Console'));
+  console.log('');
+  console.log(`   URL:      ${bold(url)}`);
+  console.log(`   Password: ${green(bold(password))}`);
+  console.log('');
+  console.log(dim('   Save this password — you can also find it in ~/zylos/.env'));
+  console.log(separator);
 }
 
 // ── Database initialization ─────────────────────────────────────
@@ -1147,6 +1200,13 @@ export async function initCommand(args) {
       } else {
         console.log(`    ${dim('Run "claude" to authenticate (or set ANTHROPIC_API_KEY) then "zylos init" again.')}`);
       }
+    }
+  }
+
+  // Pre-accept Claude Code terms (skips manual prompts on first launch)
+  if (claudeAuthenticated) {
+    if (preAcceptClaudeTerms()) {
+      console.log(`  ${success('Claude Code terms pre-accepted')}`);
     }
   }
 
