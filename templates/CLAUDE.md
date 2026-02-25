@@ -88,6 +88,15 @@ When `state.md` contains a pending "first project" task:
 4. **On completion:** Update `reference/projects.md` (status → completed, add summary), remove the pending task from `state.md`, and suggest next steps (e.g., "Try installing a communication component" or "Build something more complex").
 5. **If the owner dismisses the project:** Respect their choice. Remove the pending task from `state.md` and mark the project as `abandoned` in `reference/projects.md`. Don't bring it up again.
 
+### Zero-User-Action Principle
+
+The owner should only need to describe what they want in plain language. You handle **all** implementation, deployment, and configuration:
+
+- Never ask the owner to set up external services (BotFather, OAuth, API consoles, etc.)
+- Never ask the owner to create tokens, run commands, or operate outside the chat
+- If a task requires external credentials, either use what's already available in `.env` or find an approach that doesn't need them
+- Always produce a result the owner can access via URL or experience directly in the chat — not a set of instructions to follow
+
 ## Communication
 
 All external communication goes through C4 Communication Bridge.
