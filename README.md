@@ -29,17 +29,27 @@ More LLMs support are on the way.
 
 ## Quick Start
 
-**Prerequisites:** Git, Node.js >= 20 (via [nvm](https://github.com/nvm-sh/nvm) recommended), a Linux server (or Mac), and a [Claude](https://claude.ai) subscription.
-
-> **Why nvm?** Installing Node.js via nvm avoids permission issues with `npm install -g`. System-level Node.js (from apt/yum) requires `sudo` for global installs, which can cause problems.
+**Prerequisites:** A Linux server (or Mac), a [Claude](https://claude.ai) subscription.
 
 ```bash
-# Install (--install-links required for GitHub install; will be published to npm soon)
-npm install -g --install-links https://github.com/zylos-ai/zylos-core
+curl -fsSL https://raw.githubusercontent.com/zylos-ai/zylos-core/main/scripts/install.sh | bash
+```
 
-# Initialize — sets up tmux, PM2, memory, scheduler, and more
+This installs everything you need (git, tmux, Node.js, zylos CLI). Once done, run:
+
+```bash
 zylos init
 ```
+
+<details>
+<summary>Manual install (if you already have Node.js >= 20)</summary>
+
+```bash
+npm install -g --install-links https://github.com/zylos-ai/zylos-core
+zylos init
+```
+
+</details>
 
 `zylos init` is interactive and idempotent. It will:
 1. Install missing tools (tmux, git, PM2, Claude Code)
