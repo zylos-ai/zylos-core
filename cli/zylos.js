@@ -5,7 +5,15 @@
  * Usage: zylos <command> [options]
  */
 
+import os from 'node:os';
+import path from 'node:path';
 import { showStatus, showLogs, startServices, stopServices, restartServices } from './commands/service.js';
+
+// Ensure ~/.local/bin is in PATH (Claude Code installs there)
+const localBin = path.join(os.homedir(), '.local', 'bin');
+if (!process.env.PATH.split(':').includes(localBin)) {
+  process.env.PATH = `${localBin}:${process.env.PATH}`;
+}
 import { upgradeComponent, uninstallComponent, infoComponent, listComponents, searchComponents } from './commands/component.js';
 import { addComponent } from './commands/add.js';
 import { initCommand } from './commands/init.js';

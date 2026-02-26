@@ -1123,12 +1123,6 @@ async function setupCaddy(skipConfirm) {
 export async function initCommand(args) {
   const skipConfirm = args.includes('--yes') || args.includes('-y');
 
-  // Ensure ~/.local/bin is in PATH (Claude Code installs there)
-  const localBin = path.join(os.homedir(), '.local', 'bin');
-  if (!process.env.PATH.split(':').includes(localBin)) {
-    process.env.PATH = `${localBin}:${process.env.PATH}`;
-  }
-
   // Root sandbox — Claude Code refuses --dangerously-skip-permissions as root
   // unless IS_SANDBOX=1 is set. Auto-set it so root users (e.g. Docker) just work.
   if (process.getuid?.() === 0 && !process.env.IS_SANDBOX) {
