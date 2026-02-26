@@ -3,7 +3,7 @@
  */
 
 import { execSync, execFileSync } from 'node:child_process';
-import { bold, dim, yellow } from '../lib/colors.js';
+import { bold } from '../lib/colors.js';
 
 const SESSION = 'claude-main';
 
@@ -31,9 +31,12 @@ export function attachCommand() {
     process.exit(1);
   }
 
-  console.log(`${yellow('Tip:')} Press ${bold('Ctrl+B')} then ${bold('d')} to detach from this session.\n`);
+  // Show detach hint inside tmux for 3 seconds on attach
+  try {
+    execSync(`tmux set-hook -t "${SESSION}" client-attached 'display-message -d 3000 " Tip: Ctrl+B d to detach "'`, { stdio: 'pipe' });
+  } catch {}
 
-  // Attach using execFileSync to hand over the terminal
+  // Attach — hands over terminal to tmux
   try {
     execFileSync('tmux', ['attach', '-t', SESSION], { stdio: 'inherit' });
   } catch {
