@@ -3,7 +3,7 @@
  */
 
 import { execSync, execFileSync } from 'node:child_process';
-import { bold, dim, yellow } from '../lib/colors.js';
+import { bold, yellow } from '../lib/colors.js';
 
 const SESSION = 'claude-main';
 
