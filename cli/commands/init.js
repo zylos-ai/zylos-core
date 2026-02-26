@@ -712,21 +712,19 @@ function printWebConsoleInfo() {
   const proto = config.protocol || 'https';
   const url = `${proto}://${config.domain}/console/`;
 
-  const top = cyan('  ╔══════════════════════════════════════════════════╗');
-  const bot = cyan('  ╚══════════════════════════════════════════════════╝');
-  const bar = cyan('║');
+  const line = cyan('  ════════════════════════════════════════════════════');
 
   console.log('');
-  console.log(top);
-  console.log(`  ${bar}                                                  ${bar}`);
-  console.log(`  ${bar}   ${bold('Web Console')}                                     ${bar}`);
-  console.log(`  ${bar}                                                  ${bar}`);
-  console.log(`  ${bar}   URL:      ${bold(url)}`);
-  console.log(`  ${bar}   Password: ${bgGreen(bold(` ${password} `))}`);
-  console.log(`  ${bar}                                                  ${bar}`);
-  console.log(`  ${bar}   ${dim(`Save this password — also in ${ZYLOS_DIR}/.env`)}`);
-  console.log(`  ${bar}                                                  ${bar}`);
-  console.log(bot);
+  console.log(line);
+  console.log('');
+  console.log(`  ${bold('  Web Console')}`);
+  console.log('');
+  console.log(`    URL:      ${bold(url)}`);
+  console.log(`    Password: ${bgGreen(bold(` ${password} `))}`);
+  console.log('');
+  console.log(`    ${dim(`Save this password — also in ${ZYLOS_DIR}/.env`)}`);
+  console.log('');
+  console.log(line);
 }
 
 // ── Database initialization ─────────────────────────────────────
@@ -1150,6 +1148,7 @@ export async function initCommand(args) {
   }
 
   // Step 5: Check/install Claude Code (native installer)
+  let claudeJustInstalled = false;
   if (commandExists('claude')) {
     console.log(`  ${success('Claude Code installed')}`);
   } else {
@@ -1162,6 +1161,7 @@ export async function initCommand(args) {
       });
       if (commandExists('claude')) {
         console.log(`  ${success('Claude Code installed')}`);
+        claudeJustInstalled = true;
       } else {
         console.log(`  ${error('Claude Code installed but not found in PATH')}`);
         console.log(`    ${dim('Add ~/.local/bin to your PATH, then run zylos init again.')}`);
@@ -1356,6 +1356,11 @@ export async function initCommand(args) {
   }
 
   printWebConsoleInfo();
+
+  if (claudeJustInstalled) {
+    console.log(`\n${warn('Claude Code was just installed. Reload your shell to use it:')}`);
+    console.log(`  ${bold('source ~/.bashrc')}  ${dim('# or: export PATH="$HOME/.local/bin:$PATH"')}`);
+  }
 
   console.log(`\n${heading('Next steps:')}`);
   if (!claudeAuthenticated) {
