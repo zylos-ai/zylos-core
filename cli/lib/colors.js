@@ -21,6 +21,8 @@ export const red = wrap('31', '39');
 export const yellow = wrap('33', '39');
 export const cyan = wrap('36', '39');
 
+export const bgGreen = wrap('42', '49');
+
 // Composed styles
 export const success = (s) => green(`✓ ${s}`);
 export const error = (s) => red(`✗ ${s}`);

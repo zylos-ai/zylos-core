@@ -14,7 +14,7 @@ import { execSync, spawnSync, spawn } from 'node:child_process';
 import { ZYLOS_DIR, SKILLS_DIR, CONFIG_DIR, COMPONENTS_DIR, LOCKS_DIR, COMPONENTS_FILE, BIN_DIR, HTTP_DIR, CADDYFILE, CADDY_BIN, getZylosConfig, updateZylosConfig } from '../lib/config.js';
 import { generateManifest, saveManifest } from '../lib/manifest.js';
 import { prompt, promptYesNo } from '../lib/prompts.js';
-import { bold, dim, green, red, yellow, cyan, success, error, warn, heading } from '../lib/colors.js';
+import { bold, dim, green, red, yellow, cyan, bgGreen, success, error, warn, heading } from '../lib/colors.js';
 import { commandExists } from '../lib/shell-utils.js';
 
 // Source directories (shipped with zylos package)
@@ -711,17 +711,22 @@ function printWebConsoleInfo() {
 
   const proto = config.protocol || 'https';
   const url = `${proto}://${config.domain}/console/`;
-  const separator = cyan('  ══════════════════════════════════════════════');
+
+  const top = cyan('  ╔══════════════════════════════════════════════════╗');
+  const bot = cyan('  ╚══════════════════════════════════════════════════╝');
+  const bar = cyan('║');
 
   console.log('');
-  console.log(separator);
-  console.log(bold('   Web Console'));
-  console.log('');
-  console.log(`   URL:      ${bold(url)}`);
-  console.log(`   Password: ${green(bold(password))}`);
-  console.log('');
-  console.log(dim(`   Save this password — you can also find it in ${ZYLOS_DIR}/.env`));
-  console.log(separator);
+  console.log(top);
+  console.log(`  ${bar}                                                  ${bar}`);
+  console.log(`  ${bar}   ${bold('Web Console')}                                     ${bar}`);
+  console.log(`  ${bar}                                                  ${bar}`);
+  console.log(`  ${bar}   URL:      ${bold(url)}`);
+  console.log(`  ${bar}   Password: ${bgGreen(bold(` ${password} `))}`);
+  console.log(`  ${bar}                                                  ${bar}`);
+  console.log(`  ${bar}   ${dim(`Save this password — also in ${ZYLOS_DIR}/.env`)}`);
+  console.log(`  ${bar}                                                  ${bar}`);
+  console.log(bot);
 }
 
 // ── Database initialization ─────────────────────────────────────
