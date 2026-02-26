@@ -39,13 +39,6 @@ export function promptYesNo(question, defaultYes = false) {
 }
 
 /**
- * Prompt for sensitive input (masks with *).
- * Returns empty string if stdin is not a TTY.
- *
- * @param {string} question - The question to display
- * @returns {Promise<string>}
- */
-/**
  * Ask a numbered choice question.
  * Returns the 1-based index of the selected option, or defaultChoice on empty input.
  * Returns defaultChoice if stdin is not a TTY.
@@ -69,6 +62,13 @@ export async function promptChoice(question, options, defaultChoice = 1) {
   return defaultChoice;
 }
 
+/**
+ * Prompt for sensitive input (masks with *).
+ * Returns empty string if stdin is not a TTY.
+ *
+ * @param {string} question - The question to display
+ * @returns {Promise<string>}
+ */
 export function promptSecret(question) {
   if (!process.stdin.isTTY) return Promise.resolve('');
 
