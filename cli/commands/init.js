@@ -1398,15 +1398,8 @@ export async function initCommand(args) {
   printWebConsoleInfo();
 
   if (claudeJustInstalled) {
-    // Auto-add ~/.local/bin to shell profile
-    const profileAdded = ensureLocalBinInProfile();
-    if (profileAdded) {
-      console.log(`\n${warn('Claude Code was just installed. Restart your shell or run:')}`);
-      console.log(`  ${bold(`source ${profileAdded}`)}`);
-    } else {
-      console.log(`\n${warn('Claude Code was just installed. Add to PATH:')}`);
-      console.log(`  ${bold('export PATH="$HOME/.local/bin:$PATH"')}`);
-    }
+    // Auto-add ~/.local/bin to shell profile so future shell sessions find claude
+    ensureLocalBinInProfile();
   }
 
   console.log(`\n${heading('Next steps:')}`);
