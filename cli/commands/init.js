@@ -1085,6 +1085,12 @@ async function setupCaddy(skipConfirm) {
 export async function initCommand(args) {
   const skipConfirm = args.includes('--yes') || args.includes('-y');
 
+  // Ensure ~/.local/bin is in PATH (Claude Code installs there)
+  const localBin = path.join(os.homedir(), '.local', 'bin');
+  if (!process.env.PATH.split(':').includes(localBin)) {
+    process.env.PATH = `${localBin}:${process.env.PATH}`;
+  }
+
   console.log(`\n${heading('Welcome to Zylos!')} Let's set up your AI assistant.\n`);
 
   // Step 1: Check prerequisites (always, even on re-init)
@@ -1151,15 +1157,9 @@ export async function initCommand(args) {
     console.log(`    ${cyan('Installing Claude Code (native installer)...')}`);
     try {
       execSync('curl -fsSL https://claude.ai/install.sh | bash', {
-        stdio: 'inherit',
+        stdio: 'pipe',
         timeout: 300000, // 5 min — downloads ~213MB native binary
       });
-      // Native installer puts binary at ~/.local/bin/claude
-      // Add to PATH for this process and subsequent commands
-      const localBin = path.join(os.homedir(), '.local', 'bin');
-      if (!process.env.PATH.split(':').includes(localBin)) {
-        process.env.PATH = `${localBin}:${process.env.PATH}`;
-      }
       if (commandExists('claude')) {
         console.log(`  ${success('Claude Code installed')}`);
       } else {
