@@ -1128,6 +1128,22 @@ export async function initCommand(args) {
     process.env.PATH = `${localBin}:${process.env.PATH}`;
   }
 
+  // Root detection — Claude Code refuses --dangerously-skip-permissions as root
+  const isRoot = process.getuid?.() === 0;
+  if (isRoot) {
+    console.log(`\n${warn('Running as root')}`);
+    console.log(`  Claude Code does not support autonomous mode (--dangerously-skip-permissions) as root.`);
+    console.log(`  Zylos init will continue, but Claude will not start automatically.\n`);
+    console.log(`  ${bold('Recommended:')} Create a non-root user instead:`);
+    console.log(`    ${cyan('useradd -m -s /bin/bash zylos && su - zylos')}\n`);
+    if (!skipConfirm) {
+      const cont = await promptYesNo('Continue as root anyway? [y/N]: ', false);
+      if (!cont) {
+        process.exit(0);
+      }
+    }
+  }
+
   console.log(`\n${heading('Welcome to Zylos!')} Let's set up your AI assistant.\n`);
 
   // Step 1: Check prerequisites (always, even on re-init)
@@ -1303,13 +1319,17 @@ export async function initCommand(args) {
       console.log(`\n${dim('No services to start.')}`);
     }
 
-    if (claudeAuthenticated && needsBypassAcceptance()) {
+    if (!isRoot && claudeAuthenticated && needsBypassAcceptance()) {
       await guideBypassAcceptance();
     }
 
     if (!claudeAuthenticated) {
       console.log(`\n${warn('Claude Code is not authenticated.')}`);
       console.log(`  ${dim('Run "claude" to authenticate (or set ANTHROPIC_API_KEY) then "zylos init" again.')}`);
+    }
+    if (isRoot) {
+      console.log(`\n${warn('Running as root — Claude will not start automatically.')}`);
+      console.log(`  ${dim('Create a non-root user for autonomous mode: useradd -m -s /bin/bash zylos && su - zylos')}`);
     }
     printWebConsoleInfo();
     console.log(`\n${dim('Use "zylos add <component>" to add components.')}`);
@@ -1382,8 +1402,8 @@ export async function initCommand(args) {
     setupPm2Startup();
   }
 
-  // First-time Claude bypass acceptance (only if authenticated)
-  if (claudeAuthenticated && needsBypassAcceptance()) {
+  // First-time Claude bypass acceptance (only if authenticated, skip for root)
+  if (!isRoot && claudeAuthenticated && needsBypassAcceptance()) {
     await guideBypassAcceptance();
   }
 
@@ -1406,6 +1426,11 @@ export async function initCommand(args) {
       console.log(`\n${warn('Claude Code was just installed. Add to PATH:')}`);
       console.log(`  ${bold('export PATH="$HOME/.local/bin:$PATH"')}`);
     }
+  }
+
+  if (isRoot) {
+    console.log(`\n${warn('Running as root — Claude will not start automatically.')}`);
+    console.log(`  ${dim('Create a non-root user for autonomous mode: useradd -m -s /bin/bash zylos && su - zylos')}`);
   }
 
   console.log(`\n${heading('Next steps:')}`);

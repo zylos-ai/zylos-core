@@ -364,6 +364,12 @@ function isClaudeLoggedIn() {
 }
 
 function startClaude() {
+  // Claude Code refuses --dangerously-skip-permissions as root
+  if (BYPASS_PERMISSIONS && process.getuid?.() === 0) {
+    log('Guardian: Running as root — Claude does not support --dangerously-skip-permissions as root, skipping startup');
+    return;
+  }
+
   if (!isClaudeLoggedIn()) {
     log('Guardian: Claude is not logged in, skipping startup');
     return;
