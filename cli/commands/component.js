@@ -471,6 +471,9 @@ async function handleCheckOnly(component, { jsonOutput, branch }) {
         console.log(`\n${dim(`Downloaded to: ${tempDir}`)}`);
       }
       console.log(`\n${dim(`Run "zylos upgrade ${component} --yes" to upgrade.`)}`);
+    } else {
+      // --branch specified but branch version matches installed version
+      console.log(success(`${bold(component)} is up to date with branch ${bold(branch)} (v${result.current})`));
     }
   }
 
