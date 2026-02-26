@@ -65,13 +65,28 @@ function installGlobalPackage(pkg) {
 
 function installSystemPackage(pkg) {
   const platform = process.platform;
-  const cmds = platform === 'darwin'
-    ? [`brew install ${pkg}`]
-    : [`sudo apt-get install -y ${pkg}`, `sudo yum install -y ${pkg}`];
+  const sudo = process.getuid?.() === 0 ? '' : 'sudo ';
 
-  for (const cmd of cmds) {
+  if (platform === 'darwin') {
     try {
-      execSync(cmd, { stdio: 'pipe', timeout: 120000 });
+      execSync(`brew install ${pkg}`, { stdio: 'pipe', timeout: 120000 });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  // Linux: try apt-get first, then yum
+  const cmds = [
+    [`${sudo}apt-get update`, `${sudo}apt-get install -y ${pkg}`],
+    [`${sudo}yum install -y ${pkg}`],
+  ];
+
+  for (const sequence of cmds) {
+    try {
+      for (const cmd of sequence) {
+        execSync(cmd, { stdio: 'pipe', timeout: 120000 });
+      }
       return true;
     } catch {
       // Try next
