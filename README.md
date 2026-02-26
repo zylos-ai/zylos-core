@@ -193,3 +193,22 @@ Want a managed experience? [Coco](https://coco.xyz) gives you a ready-to-work AI
 ## License
 
 [MIT](./LICENSE)
+
+
+## Installation
+
+```bash
+# Installation instructions
+```
+
+
+## Usage
+
+```python
+# Usage examples
+```
+
+
+## Contributing
+
+Contributions are welcome!
