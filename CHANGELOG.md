@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - **One-click install script**: `curl -fsSL ... | bash` for quick setup (#150)
-- **API key authentication**: support `ANTHROPIC_API_KEY` as alternative to Claude login for headless/Docker environments (#165)
+- **API key authentication**: support `ANTHROPIC_API_KEY` as alternative to Claude login (#165)
   - Auto-approve API key in `~/.claude.json` (`customApiKeyResponses.approved` with `key.slice(-20)`)
   - Pre-set `hasCompletedOnboarding`, `hasTrustDialogAccepted`, `hasCompletedProjectOnboarding` for fresh installs
   - Key validation via real API call (401=invalid, 400=valid)
