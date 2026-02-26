@@ -1109,6 +1109,7 @@ function downloadCaddy() {
  */
 function setCaddyCapabilities() {
   if (process.platform === 'darwin') return true; // macOS doesn't need this
+  if (process.getuid?.() === 0) return true; // root already has all capabilities
 
   try {
     // Check if capability is already set
