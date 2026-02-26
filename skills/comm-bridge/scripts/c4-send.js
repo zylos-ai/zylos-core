@@ -52,14 +52,14 @@ async function main() {
     printUsage();
   }
 
-  const channel = args[0];
-  let endpoint = null;
-  let message = null;
-
   // Remove --stdin flag if present (backward compat)
   const cleanArgs = args.filter(a => a !== '--stdin');
   const hasStdinFlag = cleanArgs.length !== args.length;
   const stdinAvailable = !process.stdin.isTTY;
+
+  const channel = cleanArgs[0];
+  let endpoint = null;
+  let message = null;
 
   if (cleanArgs.length === 2 && (stdinAvailable || hasStdinFlag)) {
     // 2 args (channel + endpoint) with piped stdin or --stdin flag: read from stdin
