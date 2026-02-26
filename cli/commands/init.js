@@ -55,9 +55,8 @@ function checkNodeVersion() {
 }
 
 function installGlobalPackage(pkg) {
-  const sudo = process.getuid?.() === 0 ? '' : 'sudo ';
   try {
-    execSync(`${sudo}npm install -g ${pkg}`, { stdio: 'pipe', timeout: 120000 });
+    execSync(`npm install -g ${pkg}`, { stdio: 'pipe', timeout: 120000 });
     return true;
   } catch {
     return false;
@@ -467,7 +466,8 @@ async function guideBypassAcceptance() {
 
   // Create new tmux session with Claude
   try {
-    execSync(`tmux new-session -d -s claude-main "cd ${ZYLOS_DIR} && claude --dangerously-skip-permissions"`, { stdio: 'pipe' });
+    const sandboxEnv = process.env.IS_SANDBOX ? '-e "IS_SANDBOX=1" ' : '';
+    execSync(`tmux new-session -d -s claude-main ${sandboxEnv}"cd ${ZYLOS_DIR} && claude --dangerously-skip-permissions"`, { stdio: 'pipe' });
   } catch (err) {
     console.log(`  ${warn(`Failed to create tmux session: ${err.message}`)}`);
     try { execSync('pm2 start activity-monitor', { stdio: 'pipe' }); } catch {}
@@ -1129,17 +1129,10 @@ export async function initCommand(args) {
     process.env.PATH = `${localBin}:${process.env.PATH}`;
   }
 
-  // Root detection — Claude Code refuses --dangerously-skip-permissions as root
-  const isRoot = process.getuid?.() === 0;
-  if (isRoot) {
-    console.log(`\n${error('Running as root is not supported.')}`);
-    console.log(`  Claude Code requires a non-root user for autonomous mode.\n`);
-    console.log(`  Run these commands as root, then ${bold('zylos init')} as the new user:\n`);
-    console.log(`    ${cyan('apt-get update && apt-get install -y sudo')}`);
-    console.log(`    ${cyan("useradd -m -s /bin/bash zylos && echo 'zylos ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/zylos")}`);
-    console.log(`    ${cyan('su - zylos')}`);
-    console.log('');
-    process.exit(1);
+  // Root sandbox — Claude Code refuses --dangerously-skip-permissions as root
+  // unless IS_SANDBOX=1 is set. Auto-set it so root users (e.g. Docker) just work.
+  if (process.getuid?.() === 0 && !process.env.IS_SANDBOX) {
+    process.env.IS_SANDBOX = '1';
   }
 
   console.log(`\n${heading('Welcome to Zylos!')} Let's set up your AI assistant.\n`);
