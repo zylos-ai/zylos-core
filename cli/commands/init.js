@@ -384,29 +384,16 @@ function isClaudeAuthenticated() {
 }
 
 /**
- * Save an Anthropic API key to ~/zylos/.env and ~/.claude/settings.json.
+ * Save an Anthropic API key to ~/.claude/settings.json and process.env.
+ * Does NOT write to ~/zylos/.env here — that happens after template
+ * deployment via saveApiKeyToEnv() to avoid creating a partial .env
+ * that blocks template deployment on fresh installs.
+ *
  * @param {string} apiKey - The API key (sk-ant-xxx)
  * @returns {boolean} true if saved successfully
  */
 function saveApiKey(apiKey) {
-  // 1. Write to ~/zylos/.env (ensure directory exists for fresh installs)
-  const envPath = path.join(ZYLOS_DIR, '.env');
-  try {
-    fs.mkdirSync(ZYLOS_DIR, { recursive: true });
-    let content = '';
-    try { content = fs.readFileSync(envPath, 'utf8'); } catch {}
-    if (content.match(/^ANTHROPIC_API_KEY=.*$/m)) {
-      content = content.replace(/^ANTHROPIC_API_KEY=.*$/m, `ANTHROPIC_API_KEY=${apiKey}`);
-    } else {
-      content = content.trimEnd() + `\n\n# Anthropic API key (set by zylos init)\nANTHROPIC_API_KEY=${apiKey}\n`;
-    }
-    fs.writeFileSync(envPath, content);
-  } catch (err) {
-    console.log(`  ${error(`Failed to write .env: ${err.message}`)}`);
-    return false;
-  }
-
-  // 2. Write to ~/.claude/settings.json so Claude Code picks it up
+  // 1. Write to ~/.claude/settings.json so Claude Code picks it up
   const settingsDir = path.join(os.homedir(), '.claude');
   const settingsPath = path.join(settingsDir, 'settings.json');
   try {
@@ -421,10 +408,30 @@ function saveApiKey(apiKey) {
     return false;
   }
 
-  // 3. Set in current process so subsequent checks pass
+  // 2. Set in current process so subsequent checks pass
   process.env.ANTHROPIC_API_KEY = apiKey;
 
   return true;
+}
+
+/**
+ * Write ANTHROPIC_API_KEY to ~/zylos/.env.
+ * Called after template deployment to ensure .env has the full template content.
+ *
+ * @param {string} apiKey - The API key
+ */
+function saveApiKeyToEnv(apiKey) {
+  const envPath = path.join(ZYLOS_DIR, '.env');
+  try {
+    let content = '';
+    try { content = fs.readFileSync(envPath, 'utf8'); } catch {}
+    if (content.match(/^ANTHROPIC_API_KEY=.*$/m)) {
+      content = content.replace(/^ANTHROPIC_API_KEY=.*$/m, `ANTHROPIC_API_KEY=${apiKey}`);
+    } else {
+      content = content.trimEnd() + `\n\n# Anthropic API key (set by zylos init)\nANTHROPIC_API_KEY=${apiKey}\n`;
+    }
+    fs.writeFileSync(envPath, content);
+  } catch {}
 }
 
 /**
@@ -1351,6 +1358,11 @@ export async function initCommand(args) {
     console.log(heading('Deploying templates...'));
     deployTemplates();
 
+    // Write API key to .env if set during this run
+    if (process.env.ANTHROPIC_API_KEY) {
+      saveApiKeyToEnv(process.env.ANTHROPIC_API_KEY);
+    }
+
     // Timezone (show current, don't re-prompt)
     console.log(heading('Checking timezone...'));
     await configureTimezone(skipConfirm, true);
@@ -1409,6 +1421,11 @@ export async function initCommand(args) {
   // Step 7: Deploy templates
   deployTemplates();
   console.log(`  ${success('Templates deployed')}`);
+
+  // Write API key to .env now that templates have been deployed
+  if (process.env.ANTHROPIC_API_KEY) {
+    saveApiKeyToEnv(process.env.ANTHROPIC_API_KEY);
+  }
 
   // Step 8: Configure timezone
   console.log(`\n${heading('Timezone configuration...')}`);
