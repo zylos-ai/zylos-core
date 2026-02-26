@@ -383,8 +383,10 @@ function approveApiKey(apiKey) {
     if (!config.customApiKeyResponses) config.customApiKeyResponses = { approved: [], rejected: [] };
     if (!config.customApiKeyResponses.approved) config.customApiKeyResponses.approved = [];
     let changed = false;
-    if (!config.customApiKeyResponses.approved.includes(apiKey)) {
-      config.customApiKeyResponses.approved.push(apiKey);
+    // Claude Code stores last 20 chars of the key for matching
+    const keySuffix = apiKey.slice(-20);
+    if (!config.customApiKeyResponses.approved.includes(keySuffix)) {
+      config.customApiKeyResponses.approved.push(keySuffix);
       changed = true;
     }
     if (!config.hasCompletedOnboarding) {

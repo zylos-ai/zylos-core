@@ -465,8 +465,10 @@ function approveApiKey(apiKey) {
     try { config = JSON.parse(fs.readFileSync(claudeJsonPath, 'utf8')); } catch {}
     if (!config.customApiKeyResponses) config.customApiKeyResponses = { approved: [], rejected: [] };
     if (!config.customApiKeyResponses.approved) config.customApiKeyResponses.approved = [];
-    if (!config.customApiKeyResponses.approved.includes(apiKey)) {
-      config.customApiKeyResponses.approved.push(apiKey);
+    // Claude Code stores last 20 chars of the key for matching
+    const keySuffix = apiKey.slice(-20);
+    if (!config.customApiKeyResponses.approved.includes(keySuffix)) {
+      config.customApiKeyResponses.approved.push(keySuffix);
     }
     // Mark onboarding complete so Claude doesn't show login screen
     if (!config.hasCompletedOnboarding) {
