@@ -1130,19 +1130,6 @@ export async function initCommand(args) {
 
   // Root detection — Claude Code refuses --dangerously-skip-permissions as root
   const isRoot = process.getuid?.() === 0;
-  if (isRoot) {
-    console.log(`\n${warn('Running as root')}`);
-    console.log(`  Claude Code does not support autonomous mode (--dangerously-skip-permissions) as root.`);
-    console.log(`  Zylos init will continue, but Claude will not start automatically.\n`);
-    console.log(`  ${bold('Recommended:')} Create a non-root user instead:`);
-    console.log(`    ${cyan('useradd -m -s /bin/bash zylos && su - zylos')}\n`);
-    if (!skipConfirm) {
-      const cont = await promptYesNo('Continue as root anyway? [y/N]: ', false);
-      if (!cont) {
-        process.exit(0);
-      }
-    }
-  }
 
   console.log(`\n${heading('Welcome to Zylos!')} Let's set up your AI assistant.\n`);
 
