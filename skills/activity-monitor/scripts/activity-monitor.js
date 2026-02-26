@@ -369,6 +369,27 @@ function isClaudeLoggedIn() {
   }
 }
 
+/**
+ * Pre-approve an API key in ~/.claude.json so Claude Code skips
+ * the interactive "Detected a custom API key" confirmation prompt.
+ */
+function approveApiKey(apiKey) {
+  const claudeJsonPath = path.join(os.homedir(), '.claude.json');
+  try {
+    let config = {};
+    try { config = JSON.parse(fs.readFileSync(claudeJsonPath, 'utf8')); } catch {}
+    if (!config.customApiKeyResponses) config.customApiKeyResponses = { approved: [], rejected: [] };
+    if (!config.customApiKeyResponses.approved) config.customApiKeyResponses.approved = [];
+    if (!config.customApiKeyResponses.approved.includes(apiKey)) {
+      config.customApiKeyResponses.approved.push(apiKey);
+      fs.writeFileSync(claudeJsonPath, JSON.stringify(config, null, 2) + '\n');
+      log(`Guardian: Pre-approved API key in ~/.claude.json`);
+    }
+  } catch (err) {
+    log(`Guardian: Failed to approve API key: ${err.message}`);
+  }
+}
+
 function startClaude() {
   if (!isClaudeLoggedIn()) {
     log('Guardian: Claude is not logged in, skipping startup');
@@ -400,6 +421,16 @@ function startClaude() {
   const claudeCmd = `${ENV_CLEAN_PREFIX} ${CLAUDE_BIN}${bypassFlag}`;
   const exitLogSnippet = `_ec=$?; echo "[$(date -Iseconds)] exit_code=$_ec" >> ${EXIT_LOG_FILE}`;
 
+  // Pre-approve API key in ~/.claude.json so Claude skips the interactive
+  // "Detected a custom API key" confirmation prompt on startup
+  let apiKeyValue = '';
+  try {
+    const envContent = fs.readFileSync(path.join(ZYLOS_DIR, '.env'), 'utf8');
+    const match = envContent.match(/^ANTHROPIC_API_KEY=(.+)$/m);
+    if (match) apiKeyValue = match[1].trim();
+  } catch {}
+  if (apiKeyValue) approveApiKey(apiKeyValue);
+
   if (tmuxHasSession()) {
     sendToTmux(`cd ${ZYLOS_DIR}; ${claudeCmd}; ${exitLogSnippet}`);
     log('Guardian: Started Claude in existing tmux session');
@@ -410,12 +441,7 @@ function startClaude() {
       // - IS_SANDBOX=1: allows --dangerously-skip-permissions as root (Docker)
       // - ANTHROPIC_API_KEY: for API key auth (read from .env)
       const sandboxEnv = process.getuid?.() === 0 ? ' -e "IS_SANDBOX=1"' : '';
-      let apiKeyEnv = '';
-      try {
-        const envContent = fs.readFileSync(path.join(ZYLOS_DIR, '.env'), 'utf8');
-        const match = envContent.match(/^ANTHROPIC_API_KEY=(.+)$/m);
-        if (match) apiKeyEnv = ` -e "ANTHROPIC_API_KEY=${match[1].trim()}"`;
-      } catch {}
+      const apiKeyEnv = apiKeyValue ? ` -e "ANTHROPIC_API_KEY=${apiKeyValue}"` : '';
       execSync(`tmux new-session -d -s "${SESSION}" -e "PATH=${process.env.PATH}"${sandboxEnv}${apiKeyEnv} 'cd ${ZYLOS_DIR} && ${claudeCmd}; ${exitLogSnippet}'`);
       log('Guardian: Created new tmux session and started Claude');
     } catch (err) {

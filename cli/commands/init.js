@@ -441,10 +441,33 @@ function saveApiKey(apiKey) {
     return false;
   }
 
-  // 2. Set in current process so subsequent checks pass
+  // 2. Pre-approve key in ~/.claude.json so Claude skips the interactive
+  //    "Detected a custom API key" confirmation prompt on startup
+  approveApiKey(apiKey);
+
+  // 3. Set in current process so subsequent checks pass
   process.env.ANTHROPIC_API_KEY = apiKey;
 
   return true;
+}
+
+/**
+ * Pre-approve an API key in ~/.claude.json so Claude Code skips
+ * the interactive "Detected a custom API key" confirmation prompt.
+ * @param {string} apiKey - The API key to approve
+ */
+function approveApiKey(apiKey) {
+  const claudeJsonPath = path.join(os.homedir(), '.claude.json');
+  try {
+    let config = {};
+    try { config = JSON.parse(fs.readFileSync(claudeJsonPath, 'utf8')); } catch {}
+    if (!config.customApiKeyResponses) config.customApiKeyResponses = { approved: [], rejected: [] };
+    if (!config.customApiKeyResponses.approved) config.customApiKeyResponses.approved = [];
+    if (!config.customApiKeyResponses.approved.includes(apiKey)) {
+      config.customApiKeyResponses.approved.push(apiKey);
+    }
+    fs.writeFileSync(claudeJsonPath, JSON.stringify(config, null, 2) + '\n');
+  } catch {}
 }
 
 /**
