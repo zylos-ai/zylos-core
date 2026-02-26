@@ -399,9 +399,18 @@ function approveApiKey(apiKey) {
       }
       changed = true;
     }
+    // Pre-accept workspace trust dialog for the zylos project directory
+    if (!config.projects) config.projects = {};
+    const projectPath = path.resolve(ZYLOS_DIR);
+    if (!config.projects[projectPath]) config.projects[projectPath] = {};
+    if (!config.projects[projectPath].hasTrustDialogAccepted) {
+      config.projects[projectPath].hasTrustDialogAccepted = true;
+      config.projects[projectPath].hasCompletedProjectOnboarding = true;
+      changed = true;
+    }
     if (changed) {
       fs.writeFileSync(claudeJsonPath, JSON.stringify(config, null, 2) + '\n');
-      log(`Guardian: Updated ~/.claude.json (API key approval + onboarding)`);
+      log(`Guardian: Updated ~/.claude.json (API key approval + onboarding + trust)`);
     }
   } catch (err) {
     log(`Guardian: Failed to update ~/.claude.json: ${err.message}`);

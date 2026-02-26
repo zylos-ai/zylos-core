@@ -473,13 +473,20 @@ function approveApiKey(apiKey) {
     // Mark onboarding complete so Claude doesn't show login screen
     if (!config.hasCompletedOnboarding) {
       config.hasCompletedOnboarding = true;
-      // Get Claude version for onboarding version stamp
       try {
         const ver = execSync('claude --version 2>/dev/null', { encoding: 'utf8' }).trim();
         config.lastOnboardingVersion = ver;
       } catch {
         config.lastOnboardingVersion = '2.1.59';
       }
+    }
+    // Pre-accept workspace trust dialog for the zylos project directory
+    if (!config.projects) config.projects = {};
+    const projectPath = path.resolve(ZYLOS_DIR);
+    if (!config.projects[projectPath]) config.projects[projectPath] = {};
+    if (!config.projects[projectPath].hasTrustDialogAccepted) {
+      config.projects[projectPath].hasTrustDialogAccepted = true;
+      config.projects[projectPath].hasCompletedProjectOnboarding = true;
     }
     fs.writeFileSync(claudeJsonPath, JSON.stringify(config, null, 2) + '\n');
   } catch {}
