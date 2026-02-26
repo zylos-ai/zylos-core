@@ -18,11 +18,13 @@ import { upgradeComponent, uninstallComponent, infoComponent, listComponents, se
 import { addComponent } from './commands/add.js';
 import { initCommand } from './commands/init.js';
 import { configCommand } from './commands/config.js';
+import { attachCommand } from './commands/attach.js';
 
 const commands = {
   // Environment setup
   init: initCommand,
   config: configCommand,
+  attach: attachCommand,
   // Service management
   status: showStatus,
   logs: showLogs,
@@ -80,6 +82,7 @@ Setup:
   config              Show all configuration
   config get <key>    Get a config value
   config set <key> <value>  Set a config value
+  attach              Attach to the Claude tmux session
 
 Service Management:
   status              Show system status

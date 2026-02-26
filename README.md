@@ -60,8 +60,8 @@ zylos init
 **Talk to your agent:**
 
 ```bash
-# Attach to the Claude session
-tmux attach -t claude-main
+# Attach to the Claude session (Ctrl+B d to detach)
+zylos attach
 
 # Or add a messaging channel
 zylos add telegram

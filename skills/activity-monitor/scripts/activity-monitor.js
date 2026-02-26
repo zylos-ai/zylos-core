@@ -470,6 +470,11 @@ function startClaude() {
       const sandboxEnv = process.getuid?.() === 0 ? ' -e "IS_SANDBOX=1"' : '';
       const apiKeyEnv = apiKeyValue ? ` -e "ANTHROPIC_API_KEY=${apiKeyValue}"` : '';
       execSync(`tmux new-session -d -s "${SESSION}" -e "PATH=${process.env.PATH}"${sandboxEnv}${apiKeyEnv} 'cd ${ZYLOS_DIR} && ${claudeCmd}; ${exitLogSnippet}'`);
+      // Configure status bar with detach hint
+      try {
+        execSync(`tmux set-option -t "${SESSION}" status-right " Ctrl+B d = detach " 2>/dev/null`);
+        execSync(`tmux set-option -t "${SESSION}" status-right-style "fg=black,bg=yellow" 2>/dev/null`);
+      } catch {}
       log('Guardian: Created new tmux session and started Claude');
     } catch (err) {
       log(`Guardian: Failed to create tmux session: ${err.message}`);
