@@ -1,6 +1,12 @@
 #!/usr/bin/env node
 /**
- * Activity Monitor v15 - Guardian + Heartbeat v2 + Health Check + Daily Tasks + Upgrade Check
+ * Activity Monitor v16 - Guardian + Heartbeat v2 + Rate Limit Detection + Health Check + Daily Tasks + Upgrade Check
+ *
+ * v16 changes (rate_limited health state):
+ *   - Add rate limit detection via tmux pane capture
+ *   - New rate_limited health state: no restart escalation, 5-min probes
+ *   - Dismiss rate-limit interactive menu via Escape key
+ *   - User-facing messages with estimated reset time (via c4-receive)
  *
  * v15 changes (Intl.DateTimeFormat memory leak fix):
  *   - Hoist Intl.DateTimeFormat instances to module level (reuse instead of per-call new)
@@ -97,6 +103,11 @@ const DOWN_RETRY_INTERVAL = 1800;   // 30 min periodic retry in DOWN state
 const STUCK_THRESHOLD = 300;         // 5 min of no activity → trigger immediate probe
 const STUCK_PROBE_COOLDOWN = 600;    // 10 min between stuck probes
 
+// Rate limit detection config
+const RATE_LIMIT_DETECT_THRESHOLD = 60;  // seconds of inactivity before checking tmux for rate limit
+const RATE_LIMIT_CHECK_COOLDOWN = 30;    // minimum seconds between tmux captures for rate limit detection
+const RATE_LIMIT_PROBE_INTERVAL = 300;   // 5 min heartbeat probe interval when rate limited
+
 // Health check config
 const HEALTH_CHECK_INTERVAL = 21600; // 6 hours
 
@@ -115,6 +126,7 @@ let lastState = '';
 let startupGrace = 0;
 let idleSince = 0;
 let lastStuckProbeAt = 0;
+let lastRateLimitCheckAt = 0;
 let lastDeadApiPid = null;
 
 let engine; // initialized in init()
@@ -435,7 +447,11 @@ function loadInitialHealth() {
 function writeStatusFile(statusObj) {
   try {
     ensureStatusDir();
-    fs.writeFileSync(STATUS_FILE, JSON.stringify({ ...statusObj, health: engine.health }, null, 2));
+    const extra = {};
+    if (engine.health === 'rate_limited' && engine.rateLimitResetAt) {
+      extra.rate_limit_reset_at = engine.rateLimitResetAt;
+    }
+    fs.writeFileSync(STATUS_FILE, JSON.stringify({ ...statusObj, ...extra, health: engine.health }, null, 2));
   } catch {
     // Best-effort.
   }
@@ -534,6 +550,49 @@ function readApiActivity() {
     return activity;
   } catch {
     return null;
+  }
+}
+
+// --- Rate Limit Detection ---
+
+const RATE_LIMIT_PATTERNS = [
+  /rate.?limit/i,
+  /overloaded/i
+];
+
+function captureTmuxPane() {
+  try {
+    return execSync(`tmux capture-pane -p -t "${SESSION}" 2>/dev/null`, { encoding: 'utf8' });
+  } catch {
+    return null;
+  }
+}
+
+function detectRateLimitScreen() {
+  const capture = captureTmuxPane();
+  if (!capture) return null;
+
+  for (const pattern of RATE_LIMIT_PATTERNS) {
+    if (pattern.test(capture)) {
+      const timeMatch = capture.match(/(?:retry|wait|reset|available|in)\s+(\d+)\s*(second|minute|sec|min)/i);
+      let resetSeconds = null;
+      if (timeMatch) {
+        resetSeconds = parseInt(timeMatch[1], 10);
+        if (/min/i.test(timeMatch[2])) resetSeconds *= 60;
+      }
+      return { resetSeconds };
+    }
+  }
+
+  return null;
+}
+
+function dismissRateLimitMenu() {
+  try {
+    execSync(`tmux send-keys -t "${SESSION}" Escape 2>/dev/null`);
+    log('Rate limit: dismissed menu via Escape');
+  } catch {
+    log('Rate limit: failed to send Escape to tmux');
   }
 }
 
@@ -1027,14 +1086,29 @@ function monitorLoop() {
     }
   }
 
-  // Stuck detection: if no observable activity from any source for STUCK_THRESHOLD,
-  // trigger an immediate heartbeat probe with a shorter timeout.
-  if (engine.health === 'ok') {
-    const lastAnyActivity = Math.max(activity, apiUpdatedSec);
-    const stuckSeconds = currentTime - lastAnyActivity;
+  // Inactivity tracking for rate limit detection and stuck detection
+  const lastAnyActivity = Math.max(activity, apiUpdatedSec);
+  const inactiveDuration = currentTime - lastAnyActivity;
 
-    if (stuckSeconds >= STUCK_THRESHOLD && (currentTime - lastStuckProbeAt) >= STUCK_PROBE_COOLDOWN) {
-      const ok = engine.requestImmediateProbe(`no_activity_for_${stuckSeconds}s`);
+  // Rate limit detection: check tmux screen when inactive long enough.
+  // Detects rate-limit menus before stuck detection fires, preventing
+  // the cascading restart cycle described in issue #126.
+  if (inactiveDuration >= RATE_LIMIT_DETECT_THRESHOLD &&
+      (currentTime - lastRateLimitCheckAt) >= RATE_LIMIT_CHECK_COOLDOWN) {
+    lastRateLimitCheckAt = currentTime;
+    const rlResult = detectRateLimitScreen();
+    if (rlResult) {
+      if (engine.health !== 'rate_limited') {
+        engine.enterRateLimited(rlResult.resetSeconds);
+        dismissRateLimitMenu();
+      }
+    }
+  }
+
+  // Stuck detection: only when health is ok (rate_limited and other states suppress this)
+  if (engine.health === 'ok') {
+    if (inactiveDuration >= STUCK_THRESHOLD && (currentTime - lastStuckProbeAt) >= STUCK_PROBE_COOLDOWN) {
+      const ok = engine.requestImmediateProbe(`no_activity_for_${inactiveDuration}s`);
       // Approach C: full cooldown on success, short retry (60s) on failure
       lastStuckProbeAt = ok ? currentTime : currentTime - STUCK_PROBE_COOLDOWN + 60;
     }
@@ -1067,7 +1141,8 @@ function init() {
     initialHealth,
     heartbeatInterval: HEARTBEAT_INTERVAL,
     maxRestartFailures: MAX_RESTART_FAILURES,
-    downRetryInterval: DOWN_RETRY_INTERVAL
+    downRetryInterval: DOWN_RETRY_INTERVAL,
+    rateLimitedProbeInterval: RATE_LIMIT_PROBE_INTERVAL
   });
 
   upgradeScheduler = new DailySchedule({
@@ -1112,7 +1187,7 @@ function init() {
 }
 
 init();
-log(`=== Activity Monitor Started (v15 - Guardian + Heartbeat v2 + Hook Activity + DailyTasks + UpgradeCheck): ${new Date().toISOString()} tz=${timezone} ===`);
+log(`=== Activity Monitor Started (v16 - Guardian + Heartbeat v2 + RateLimitDetect + Hook Activity + DailyTasks + UpgradeCheck): ${new Date().toISOString()} tz=${timezone} ===`);
 
 setInterval(monitorLoop, INTERVAL);
 monitorLoop();

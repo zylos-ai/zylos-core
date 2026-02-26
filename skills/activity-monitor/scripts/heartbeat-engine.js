@@ -18,6 +18,7 @@ export class HeartbeatEngine {
    * @param {object} [options]
    * @param {number} [options.heartbeatInterval=1800]
    * @param {number} [options.maxRestartFailures=3]
+   * @param {number} [options.rateLimitedProbeInterval=300]
    * @param {string} [options.initialHealth='ok']
    */
   constructor(deps, options = {}) {
@@ -31,7 +32,10 @@ export class HeartbeatEngine {
     this.lastHeartbeatAt = Math.floor(Date.now() / 1000);
     this.lastRecoveryAt = 0;
     this.lastDownCheckAt = 0;
+    this.lastRateLimitedCheckAt = this.healthState === 'rate_limited' ? Math.floor(Date.now() / 1000) : 0;
     this.downRetryInterval = options.downRetryInterval ?? 1800; // 30 min
+    this.rateLimitedProbeInterval = options.rateLimitedProbeInterval ?? 300; // 5 min
+    this.rateLimitResetAt = null;
   }
 
   get health() {
@@ -95,6 +99,17 @@ export class HeartbeatEngine {
       return;
     }
 
+    if (this.healthState === 'rate_limited') {
+      if ((currentTime - this.lastRateLimitedCheckAt) < this.rateLimitedProbeInterval) {
+        return;
+      }
+      const ok = this.enqueueHeartbeat('rate-limit-check');
+      if (ok) {
+        this.lastRateLimitedCheckAt = currentTime;
+      }
+      return;
+    }
+
     if (this.healthState === 'down') {
       // Periodic retry: check every downRetryInterval instead of every tick
       if ((currentTime - this.lastDownCheckAt) < this.downRetryInterval) {
@@ -130,6 +145,11 @@ export class HeartbeatEngine {
       return;
     }
 
+    if (this.healthState === 'rate_limited') {
+      this.deps.log(`Heartbeat recovery skipped in RATE_LIMITED state (${reason})`);
+      return;
+    }
+
     if (this.healthState === 'ok') {
       this.setHealth('recovering', reason);
     }
@@ -143,6 +163,29 @@ export class HeartbeatEngine {
       this.lastDownCheckAt = Math.floor(Date.now() / 1000);
       this.setHealth('down', 'max_restart_failures_reached');
     }
+  }
+
+  /**
+   * Enter rate_limited state. Called by the activity monitor when a rate-limit
+   * screen is detected in the tmux pane. This state suppresses restart
+   * escalation and probes more frequently than "down".
+   * @param {number|null} resetSeconds - estimated seconds until rate limit clears
+   */
+  enterRateLimited(resetSeconds = null) {
+    if (this.healthState === 'rate_limited') {
+      // Update reset estimate if a new value is available
+      if (resetSeconds != null) {
+        this.rateLimitResetAt = Math.floor(Date.now() / 1000) + resetSeconds;
+      }
+      return;
+    }
+    const reason = resetSeconds != null ? `api_rate_limit_reset_in_${resetSeconds}s` : 'api_rate_limit';
+    this.setHealth('rate_limited', reason);
+    this.rateLimitResetAt = resetSeconds != null
+      ? Math.floor(Date.now() / 1000) + resetSeconds
+      : null;
+    this.lastRateLimitedCheckAt = Math.floor(Date.now() / 1000);
+    this.restartFailureCount = 0;
   }
 
   onHeartbeatFailure(pending, status) {
@@ -164,6 +207,11 @@ export class HeartbeatEngine {
 
     if (this.healthState === 'down') {
       this.deps.log(`Heartbeat failed in DOWN state (${status}); waiting for manual fix`);
+      return;
+    }
+
+    if (this.healthState === 'rate_limited') {
+      this.deps.log(`Heartbeat failed in RATE_LIMITED state (${status}); waiting for rate limit to clear`);
       return;
     }
 

@@ -5,6 +5,11 @@ All notable changes to zylos-core will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.5] - 2026-02-23
+
+### Added
+- **Rate-limited health state** (issue #126): New `rate_limited` health state prevents the cascading restart cycle when Claude Code hits API rate limits. Detects rate-limit screens via tmux pane capture, dismisses the interactive menu with Escape, probes every 5 minutes (vs 30 min for "down"), never escalates to restart, and auto-recovers when the limit clears. User-facing messages include estimated reset time. Activity monitor bumped to v16.
+
 ## [0.2.4] - 2026-02-22
 
 ### Fixed
