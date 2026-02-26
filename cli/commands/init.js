@@ -551,7 +551,8 @@ async function guideBypassAcceptance() {
   // Create new tmux session with Claude
   try {
     const sandboxEnv = process.env.IS_SANDBOX ? '-e "IS_SANDBOX=1" ' : '';
-    execSync(`tmux new-session -d -s claude-main ${sandboxEnv}"cd ${ZYLOS_DIR} && claude --dangerously-skip-permissions"`, { stdio: 'pipe' });
+    const apiKeyEnv = process.env.ANTHROPIC_API_KEY ? `-e "ANTHROPIC_API_KEY=${process.env.ANTHROPIC_API_KEY}" ` : '';
+    execSync(`tmux new-session -d -s claude-main ${sandboxEnv}${apiKeyEnv}"cd ${ZYLOS_DIR} && claude --dangerously-skip-permissions"`, { stdio: 'pipe' });
   } catch (err) {
     console.log(`  ${warn(`Failed to create tmux session: ${err.message}`)}`);
     try { execSync('pm2 start activity-monitor', { stdio: 'pipe' }); } catch {}

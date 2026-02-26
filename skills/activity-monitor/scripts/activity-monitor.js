@@ -348,6 +348,14 @@ function enqueueStartupControl() {
 }
 
 function isClaudeLoggedIn() {
+  // Check for API key auth first (set in .env by zylos init)
+  try {
+    const envContent = fs.readFileSync(path.join(ZYLOS_DIR, '.env'), 'utf8');
+    const match = envContent.match(/^ANTHROPIC_API_KEY=(.+)$/m);
+    if (match && match[1].trim().startsWith('sk-ant-')) return true;
+  } catch {}
+
+  // Fall back to OAuth login check
   try {
     const output = execFileSync(CLAUDE_BIN, ['auth', 'status'], {
       encoding: 'utf8',
@@ -357,8 +365,6 @@ function isClaudeLoggedIn() {
     const status = JSON.parse(output);
     return status?.loggedIn === true;
   } catch {
-    // If auth check fails (timeout, parse error, etc.), assume not logged in
-    // to avoid starting Claude in a broken state.
     return false;
   }
 }
@@ -399,12 +405,18 @@ function startClaude() {
     log('Guardian: Started Claude in existing tmux session');
   } else {
     try {
-      // -e PATH=... ensures tmux session inherits activity-monitor's PATH even if
-      // the tmux server was started in a different env context.
-      // -e IS_SANDBOX=1 allows --dangerously-skip-permissions as root (e.g. Docker).
-      // Single quotes prevent the outer shell from expanding $() and $?.
+      // -e flags pass env vars to tmux session:
+      // - PATH: ensures Claude is found even if tmux server has different env
+      // - IS_SANDBOX=1: allows --dangerously-skip-permissions as root (Docker)
+      // - ANTHROPIC_API_KEY: for API key auth (read from .env)
       const sandboxEnv = process.getuid?.() === 0 ? ' -e "IS_SANDBOX=1"' : '';
-      execSync(`tmux new-session -d -s "${SESSION}" -e "PATH=${process.env.PATH}"${sandboxEnv} 'cd ${ZYLOS_DIR} && ${claudeCmd}; ${exitLogSnippet}'`);
+      let apiKeyEnv = '';
+      try {
+        const envContent = fs.readFileSync(path.join(ZYLOS_DIR, '.env'), 'utf8');
+        const match = envContent.match(/^ANTHROPIC_API_KEY=(.+)$/m);
+        if (match) apiKeyEnv = ` -e "ANTHROPIC_API_KEY=${match[1].trim()}"`;
+      } catch {}
+      execSync(`tmux new-session -d -s "${SESSION}" -e "PATH=${process.env.PATH}"${sandboxEnv}${apiKeyEnv} 'cd ${ZYLOS_DIR} && ${claudeCmd}; ${exitLogSnippet}'`);
       log('Guardian: Created new tmux session and started Claude');
     } catch (err) {
       log(`Guardian: Failed to create tmux session: ${err.message}`);
