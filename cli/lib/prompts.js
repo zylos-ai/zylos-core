@@ -110,9 +110,9 @@ export function promptSecret(question) {
         }
         return;
       }
-      // Printable character
+      // Printable characters (may be multiple when pasting)
       input += ch;
-      process.stdout.write('*');
+      process.stdout.write('*'.repeat(ch.length));
     };
 
     process.stdin.on('data', onData);

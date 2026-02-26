@@ -29,7 +29,7 @@ export function showStatus() {
 
     if (!authenticated) {
       console.log(`${bold('Claude')}: ${red('NOT AUTHENTICATED')}`);
-      console.log(`  ${dim('→ Run: claude to authenticate (or set ANTHROPIC_API_KEY)')}`);
+      console.log(`  ${dim('→ Run: zylos init to authenticate')}`);
     } else {
       // Check terms/bypass acceptance
       let termsAccepted = false;
