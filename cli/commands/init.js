@@ -389,9 +389,10 @@ function isClaudeAuthenticated() {
  * @returns {boolean} true if saved successfully
  */
 function saveApiKey(apiKey) {
-  // 1. Write to ~/zylos/.env
+  // 1. Write to ~/zylos/.env (ensure directory exists for fresh installs)
   const envPath = path.join(ZYLOS_DIR, '.env');
   try {
+    fs.mkdirSync(ZYLOS_DIR, { recursive: true });
     let content = '';
     try { content = fs.readFileSync(envPath, 'utf8'); } catch {}
     if (content.match(/^ANTHROPIC_API_KEY=.*$/m)) {
