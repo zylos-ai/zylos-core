@@ -55,8 +55,9 @@ function checkNodeVersion() {
 }
 
 function installGlobalPackage(pkg) {
+  const sudo = process.getuid?.() === 0 ? '' : 'sudo ';
   try {
-    execSync(`npm install -g ${pkg}`, { stdio: 'pipe', timeout: 120000 });
+    execSync(`${sudo}npm install -g ${pkg}`, { stdio: 'pipe', timeout: 120000 });
     return true;
   } catch {
     return false;
