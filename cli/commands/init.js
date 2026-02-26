@@ -15,6 +15,7 @@ import { ZYLOS_DIR, SKILLS_DIR, CONFIG_DIR, COMPONENTS_DIR, LOCKS_DIR, COMPONENT
 import { generateManifest, saveManifest } from '../lib/manifest.js';
 import { prompt, promptYesNo } from '../lib/prompts.js';
 import { bold, dim, green, red, yellow, cyan, success, error, warn, heading } from '../lib/colors.js';
+import { commandExists } from '../lib/shell.js';
 
 // Source directories (shipped with zylos package)
 const PACKAGE_ROOT = path.join(import.meta.dirname, '..', '..');
@@ -51,15 +52,6 @@ function checkNodeVersion() {
   const ok = parts[0] > MIN_NODE_MAJOR ||
     (parts[0] === MIN_NODE_MAJOR && parts[1] >= MIN_NODE_MINOR);
   return { version, ok, required: `>=${MIN_NODE_MAJOR}.${MIN_NODE_MINOR}.0` };
-}
-
-function commandExists(cmd) {
-  try {
-    execSync(`which ${cmd} 2>/dev/null`, { stdio: 'pipe' });
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 function installGlobalPackage(pkg) {
