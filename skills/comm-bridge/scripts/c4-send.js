@@ -3,8 +3,17 @@
  * C4 Communication Bridge - Send Interface
  * Sends messages from Claude to external channels
  *
- * Usage: node c4-send.js <channel> [endpoint_id] "<message>"
- * Example: node c4-send.js telegram 8101553026 "Hello Howard!"
+ * Usage:
+ *   Recommended (stdin — safe for any content):
+ *     node c4-send.js <channel> <endpoint_id> <<'EOF'
+ *     message with "quotes", $vars, and special chars
+ *     EOF
+ *
+ *   Simple messages (CLI arg — backward compatible):
+ *     node c4-send.js <channel> [endpoint_id] "short message"
+ *
+ * When no message argument is provided, the message is read from stdin.
+ * This avoids shell escaping issues with quotes and special characters.
  */
 
 import path from 'path';
@@ -15,9 +24,25 @@ import { SKILLS_DIR } from './c4-config.js';
 import { validateChannel, validateEndpoint } from './c4-validate.js';
 
 function printUsage() {
-  console.log('Usage: node c4-send.js <channel> [endpoint_id] "<message>"');
+  console.log('Usage: node c4-send.js <channel> <endpoint_id> <<\'EOF\'');
+  console.log('       message content');
+  console.log('       EOF');
+  console.log('       node c4-send.js <channel> [endpoint_id] "message"');
   console.log('Example: node c4-send.js telegram 8101553026 "Hello!"');
   process.exit(1);
+}
+
+/**
+ * Read all data from stdin.
+ */
+function readStdin() {
+  return new Promise((resolve, reject) => {
+    let data = '';
+    process.stdin.setEncoding('utf8');
+    process.stdin.on('data', chunk => { data += chunk; });
+    process.stdin.on('end', () => resolve(data));
+    process.stdin.on('error', reject);
+  });
 }
 
 async function main() {
@@ -31,11 +56,25 @@ async function main() {
   let endpoint = null;
   let message = null;
 
-  if (args.length === 2) {
-    message = args[1];
+  // Remove --stdin flag if present (backward compat)
+  const cleanArgs = args.filter(a => a !== '--stdin');
+  const hasStdinFlag = cleanArgs.length !== args.length;
+  const stdinAvailable = !process.stdin.isTTY;
+
+  if (cleanArgs.length === 2 && (stdinAvailable || hasStdinFlag)) {
+    // 2 args (channel + endpoint) with piped stdin or --stdin flag: read from stdin
+    endpoint = cleanArgs[1];
+    message = (await readStdin()).trimEnd();
+  } else if (cleanArgs.length === 1 && (stdinAvailable || hasStdinFlag)) {
+    // 1 arg (channel only) with piped stdin: read from stdin
+    message = (await readStdin()).trimEnd();
+  } else if (cleanArgs.length === 2) {
+    // 2 args, no stdin: channel + message (no endpoint)
+    message = cleanArgs[1];
   } else {
-    endpoint = args[1];
-    message = args[2];
+    // 3+ args: channel + endpoint + message
+    endpoint = cleanArgs[1];
+    message = cleanArgs[2];
   }
 
   if (!message) {
