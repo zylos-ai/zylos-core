@@ -372,6 +372,8 @@ function isClaudeLoggedIn() {
 /**
  * Pre-approve an API key in ~/.claude.json so Claude Code skips
  * the interactive "Detected a custom API key" confirmation prompt.
+ * Also marks onboarding as complete to prevent the login screen
+ * from blocking prompt processing on fresh installs.
  */
 function approveApiKey(apiKey) {
   const claudeJsonPath = path.join(os.homedir(), '.claude.json');
@@ -380,13 +382,27 @@ function approveApiKey(apiKey) {
     try { config = JSON.parse(fs.readFileSync(claudeJsonPath, 'utf8')); } catch {}
     if (!config.customApiKeyResponses) config.customApiKeyResponses = { approved: [], rejected: [] };
     if (!config.customApiKeyResponses.approved) config.customApiKeyResponses.approved = [];
+    let changed = false;
     if (!config.customApiKeyResponses.approved.includes(apiKey)) {
       config.customApiKeyResponses.approved.push(apiKey);
+      changed = true;
+    }
+    if (!config.hasCompletedOnboarding) {
+      config.hasCompletedOnboarding = true;
+      try {
+        const ver = execFileSync(CLAUDE_BIN, ['--version'], { encoding: 'utf8', timeout: 5000 }).trim();
+        config.lastOnboardingVersion = ver;
+      } catch {
+        config.lastOnboardingVersion = '2.1.59';
+      }
+      changed = true;
+    }
+    if (changed) {
       fs.writeFileSync(claudeJsonPath, JSON.stringify(config, null, 2) + '\n');
-      log(`Guardian: Pre-approved API key in ~/.claude.json`);
+      log(`Guardian: Updated ~/.claude.json (API key approval + onboarding)`);
     }
   } catch (err) {
-    log(`Guardian: Failed to approve API key: ${err.message}`);
+    log(`Guardian: Failed to update ~/.claude.json: ${err.message}`);
   }
 }
 

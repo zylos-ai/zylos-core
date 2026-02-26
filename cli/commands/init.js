@@ -454,6 +454,8 @@ function saveApiKey(apiKey) {
 /**
  * Pre-approve an API key in ~/.claude.json so Claude Code skips
  * the interactive "Detected a custom API key" confirmation prompt.
+ * Also marks onboarding as complete to prevent the login screen
+ * from blocking prompt processing on fresh installs.
  * @param {string} apiKey - The API key to approve
  */
 function approveApiKey(apiKey) {
@@ -465,6 +467,17 @@ function approveApiKey(apiKey) {
     if (!config.customApiKeyResponses.approved) config.customApiKeyResponses.approved = [];
     if (!config.customApiKeyResponses.approved.includes(apiKey)) {
       config.customApiKeyResponses.approved.push(apiKey);
+    }
+    // Mark onboarding complete so Claude doesn't show login screen
+    if (!config.hasCompletedOnboarding) {
+      config.hasCompletedOnboarding = true;
+      // Get Claude version for onboarding version stamp
+      try {
+        const ver = execSync('claude --version 2>/dev/null', { encoding: 'utf8' }).trim();
+        config.lastOnboardingVersion = ver;
+      } catch {
+        config.lastOnboardingVersion = '2.1.59';
+      }
     }
     fs.writeFileSync(claudeJsonPath, JSON.stringify(config, null, 2) + '\n');
   } catch {}
