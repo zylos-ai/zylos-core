@@ -8,23 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.2.5] - 2026-02-26
 
 ### Added
-- **One-click install script**: `curl -fsSL ... | bash` for quick setup (#150)
-- **API key authentication**: support `ANTHROPIC_API_KEY` as alternative to Claude login (#165)
-  - Auto-approve API key in `~/.claude.json` (`customApiKeyResponses.approved` with `key.slice(-20)`)
-  - Pre-set `hasCompletedOnboarding`, `hasTrustDialogAccepted`, `hasCompletedProjectOnboarding` for fresh installs
-  - Key validation via real API call (401=invalid, 400=valid)
-- **`zylos attach` command**: attach to Claude tmux session with detach hint (#168)
-  - Tmux status bar shows persistent yellow "Ctrl+B d = detach" hint
-  - `tmux display-message` shows 3-second overlay on attach
-  - Smart error messages: checks PM2 status to suggest `zylos init` vs `zylos start`
-- Pre-accept bypass permissions terms and prominent web console password display during init (#158)
-- `zylos status` diagnostics: detect un-accepted Claude Code terms state (#158)
+- **One-click install**: single `curl | bash` command to get Zylos up and running (#150)
+- **API key authentication**: use your own `ANTHROPIC_API_KEY` as an alternative to `claude login` — key is validated on entry and all startup dialogs are auto-resolved (#165)
+- **`zylos attach` command**: connect to the Claude session with a friendly UX — persistent status bar hint and 3-second overlay remind new users how to detach, with context-aware error messages when no session is running (#168)
+- **Smoother first-run experience**: autonomous mode terms are pre-accepted during init, and the web console password is now prominently highlighted so it won't get lost in output (#158)
+- **Smarter `zylos status`**: detects and clearly reports when Claude Code is stuck on an unaccepted prompt, instead of just showing "OFFLINE" (#158)
 
 ### Fixed
-- `zylos upgrade --check` now honors `--branch` flag — reads version from branch `package.json` (#166)
-- Silent output when `--check --branch` version matches installed version (#166)
-- C4 `c4-send.js` stdin support to prevent message truncation (#162)
-- Skip `setcap` on Caddy when running as root in Docker (#171)
+- `zylos upgrade --check --branch` now correctly compares against the branch version instead of the latest release tag (#166)
+- Long messages sent via communication bridge no longer get truncated (#162)
+- Caddy setup no longer warns about missing `sudo` when running as root in Docker (#171)
 
 ## [0.2.4] - 2026-02-22
 
