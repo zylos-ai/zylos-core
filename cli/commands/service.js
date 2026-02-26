@@ -8,7 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { ZYLOS_DIR, SKILLS_DIR } from '../lib/config.js';
 import { bold, dim, green, red, yellow, cyan, success, error, warn, heading } from '../lib/colors.js';
-import { commandExists } from '../lib/shell.js';
+import { commandExists } from '../lib/shell-utils.js';
 
 export function showStatus() {
   console.log(heading('Zylos Status') + '\n' + dim('============') + '\n');
