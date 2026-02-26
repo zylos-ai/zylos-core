@@ -705,7 +705,7 @@ function printWebConsoleInfo() {
   console.log(`   URL:      ${bold(url)}`);
   console.log(`   Password: ${green(bold(password))}`);
   console.log('');
-  console.log(dim('   Save this password — you can also find it in ~/zylos/.env'));
+  console.log(dim(`   Save this password — you can also find it in ${ZYLOS_DIR}/.env`));
   console.log(separator);
 }
 
