@@ -45,6 +45,30 @@ export function promptYesNo(question, defaultYes = false) {
  * @param {string} question - The question to display
  * @returns {Promise<string>}
  */
+/**
+ * Ask a numbered choice question.
+ * Returns the 1-based index of the selected option, or defaultChoice on empty input.
+ * Returns defaultChoice if stdin is not a TTY.
+ *
+ * @param {string} question - The question header to display
+ * @param {string[]} options - Array of option labels
+ * @param {number} [defaultChoice=1] - Default 1-based choice
+ * @returns {Promise<number>}
+ */
+export async function promptChoice(question, options, defaultChoice = 1) {
+  if (!process.stdin.isTTY) return defaultChoice;
+  console.log(question);
+  for (let i = 0; i < options.length; i++) {
+    const marker = (i + 1 === defaultChoice) ? '>' : ' ';
+    console.log(`  ${marker} ${i + 1}) ${options[i]}`);
+  }
+  const answer = await prompt(`  Choice [${defaultChoice}]: `);
+  if (!answer) return defaultChoice;
+  const num = parseInt(answer, 10);
+  if (num >= 1 && num <= options.length) return num;
+  return defaultChoice;
+}
+
 export function promptSecret(question) {
   if (!process.stdin.isTTY) return Promise.resolve('');
 

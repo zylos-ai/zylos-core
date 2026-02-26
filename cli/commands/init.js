@@ -13,7 +13,7 @@ import { createRequire } from 'node:module';
 import { execSync, spawnSync, spawn } from 'node:child_process';
 import { ZYLOS_DIR, SKILLS_DIR, CONFIG_DIR, COMPONENTS_DIR, LOCKS_DIR, COMPONENTS_FILE, BIN_DIR, HTTP_DIR, CADDYFILE, CADDY_BIN, getZylosConfig, updateZylosConfig } from '../lib/config.js';
 import { generateManifest, saveManifest } from '../lib/manifest.js';
-import { prompt, promptYesNo } from '../lib/prompts.js';
+import { prompt, promptYesNo, promptChoice, promptSecret } from '../lib/prompts.js';
 import { bold, dim, green, red, yellow, cyan, bgGreen, success, error, warn, heading } from '../lib/colors.js';
 import { commandExists } from '../lib/shell-utils.js';
 
@@ -381,6 +381,49 @@ function isClaudeAuthenticated() {
   } catch {
     return false;
   }
+}
+
+/**
+ * Save an Anthropic API key to ~/zylos/.env and ~/.claude/settings.json.
+ * @param {string} apiKey - The API key (sk-ant-xxx)
+ * @returns {boolean} true if saved successfully
+ */
+function saveApiKey(apiKey) {
+  // 1. Write to ~/zylos/.env
+  const envPath = path.join(ZYLOS_DIR, '.env');
+  try {
+    let content = '';
+    try { content = fs.readFileSync(envPath, 'utf8'); } catch {}
+    if (content.match(/^ANTHROPIC_API_KEY=.*$/m)) {
+      content = content.replace(/^ANTHROPIC_API_KEY=.*$/m, `ANTHROPIC_API_KEY=${apiKey}`);
+    } else {
+      content = content.trimEnd() + `\n\n# Anthropic API key (set by zylos init)\nANTHROPIC_API_KEY=${apiKey}\n`;
+    }
+    fs.writeFileSync(envPath, content);
+  } catch (err) {
+    console.log(`  ${error(`Failed to write .env: ${err.message}`)}`);
+    return false;
+  }
+
+  // 2. Write to ~/.claude/settings.json so Claude Code picks it up
+  const settingsDir = path.join(os.homedir(), '.claude');
+  const settingsPath = path.join(settingsDir, 'settings.json');
+  try {
+    fs.mkdirSync(settingsDir, { recursive: true });
+    let settings = {};
+    try { settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8')); } catch {}
+    if (!settings.env) settings.env = {};
+    settings.env.ANTHROPIC_API_KEY = apiKey;
+    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n');
+  } catch (err) {
+    console.log(`  ${error(`Failed to write settings.json: ${err.message}`)}`);
+    return false;
+  }
+
+  // 3. Set in current process so subsequent checks pass
+  process.env.ANTHROPIC_API_KEY = apiKey;
+
+  return true;
 }
 
 /**
@@ -1223,34 +1266,54 @@ export async function initCommand(args) {
     } else {
       console.log(`  ${warn('Claude Code not authenticated')}`);
       if (!skipConfirm) {
-        const doAuth = await promptYesNo('  Authenticate now? [Y/n]: ', true);
-        if (doAuth) {
-          console.log(`  ${cyan('Starting Claude Code for authentication...')}`);
+        const authChoice = await promptChoice(
+          '\n  How would you like to authenticate?',
+          ['Claude subscription (opens browser login)', 'Anthropic API key'],
+        );
+
+        if (authChoice === 1) {
+          // Option 1: Subscription login (existing flow)
+          console.log(`\n  ${cyan('Starting Claude Code for authentication...')}`);
           console.log(`  ${dim('After login, type /exit to return to zylos init.')}\n`);
-          // Use async spawn + SIGINT trap so Ctrl+C kills claude
-          // without also killing zylos init (they share a process group).
           const sigintListeners = process.rawListeners('SIGINT');
           process.removeAllListeners('SIGINT');
-          process.on('SIGINT', () => {}); // ignore during auth
+          process.on('SIGINT', () => {});
           try {
             const authChild = spawn('claude', [], { stdio: 'inherit' });
             await new Promise((resolve) => authChild.on('close', resolve));
           } catch { /* user may Ctrl+C */ }
           process.removeAllListeners('SIGINT');
           for (const l of sigintListeners) process.on('SIGINT', l);
-          // Re-check after auth attempt
           claudeAuthenticated = isClaudeAuthenticated();
           if (claudeAuthenticated) {
             console.log(`\n  ${success('Claude Code authenticated')}`);
           } else {
             console.log(`\n  ${warn('Authentication not completed.')}`);
-            console.log(`    ${dim('Run "claude" to authenticate (or set ANTHROPIC_API_KEY) then "zylos init" again.')}`);
+            console.log(`    ${dim('Run "claude" to authenticate then "zylos init" again.')}`);
           }
-        } else {
-          console.log(`  ${dim('Skipped. Run "claude" to authenticate (or set ANTHROPIC_API_KEY) then "zylos init" again.')}`);
+        } else if (authChoice === 2) {
+          // Option 2: API key
+          console.log(`\n  ${dim('Paste your Anthropic API key (starts with sk-ant-):')}`);
+          const apiKey = await promptSecret('  API key: ');
+          if (!apiKey) {
+            console.log(`  ${warn('No key entered. Skipped.')}`);
+          } else if (!apiKey.startsWith('sk-ant-')) {
+            console.log(`  ${error('Invalid format. API key should start with sk-ant-')}`);
+            console.log(`    ${dim('You can set it later: export ANTHROPIC_API_KEY=sk-ant-xxx')}`);
+          } else {
+            if (saveApiKey(apiKey)) {
+              console.log(`  ${success('API key saved')}`);
+              claudeAuthenticated = isClaudeAuthenticated();
+              if (!claudeAuthenticated) {
+                // API key was saved but claude auth status failed — key may be invalid
+                console.log(`  ${warn('API key saved but verification failed. The key may be invalid.')}`);
+                console.log(`    ${dim('Check your key at console.anthropic.com and update ~/zylos/.env if needed.')}`);
+              }
+            }
+          }
         }
       } else {
-        console.log(`    ${dim('Run "claude" to authenticate (or set ANTHROPIC_API_KEY) then "zylos init" again.')}`);
+        console.log(`    ${dim('Run "zylos init" again to authenticate.')}`);
       }
     }
   }
@@ -1310,7 +1373,7 @@ export async function initCommand(args) {
 
     if (!claudeAuthenticated) {
       console.log(`\n${warn('Claude Code is not authenticated.')}`);
-      console.log(`  ${dim('Run "claude" to authenticate (or set ANTHROPIC_API_KEY) then "zylos init" again.')}`);
+      console.log(`  ${dim('Run "zylos init" again to authenticate.')}`);
     }
     printWebConsoleInfo();
     console.log(`\n${dim('Use "zylos add <component>" to add components.')}`);
@@ -1404,7 +1467,7 @@ export async function initCommand(args) {
 
   console.log(`\n${heading('Next steps:')}`);
   if (!claudeAuthenticated) {
-    console.log(`  ${bold('claude')}                           ${dim('# ⚠ Authenticate first (or set ANTHROPIC_API_KEY)')}`);
+    console.log(`  ${bold('zylos init')}                        ${dim('# ⚠ Authenticate first')}`);
   }
   console.log(`  ${bold('zylos add telegram')}    ${dim('# Add Telegram bot')}`);
   console.log(`  ${bold('zylos add lark')}        ${dim('# Add Lark bot')}`);
