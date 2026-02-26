@@ -401,8 +401,10 @@ function startClaude() {
     try {
       // -e PATH=... ensures tmux session inherits activity-monitor's PATH even if
       // the tmux server was started in a different env context.
+      // -e IS_SANDBOX=1 allows --dangerously-skip-permissions as root (e.g. Docker).
       // Single quotes prevent the outer shell from expanding $() and $?.
-      execSync(`tmux new-session -d -s "${SESSION}" -e "PATH=${process.env.PATH}" 'cd ${ZYLOS_DIR} && ${claudeCmd}; ${exitLogSnippet}'`);
+      const sandboxEnv = process.getuid?.() === 0 ? ' -e "IS_SANDBOX=1"' : '';
+      execSync(`tmux new-session -d -s "${SESSION}" -e "PATH=${process.env.PATH}"${sandboxEnv} 'cd ${ZYLOS_DIR} && ${claudeCmd}; ${exitLogSnippet}'`);
       log('Guardian: Created new tmux session and started Claude');
     } catch (err) {
       log(`Guardian: Failed to create tmux session: ${err.message}`);

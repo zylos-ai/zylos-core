@@ -2,34 +2,69 @@
  * Service management commands
  */
 
-import { execSync, spawn } from 'node:child_process';
+import { execSync, spawnSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { ZYLOS_DIR, SKILLS_DIR } from '../lib/config.js';
 import { bold, dim, green, red, yellow, cyan, success, error, warn, heading } from '../lib/colors.js';
+import { commandExists } from '../lib/shell-utils.js';
 
 export function showStatus() {
   console.log(heading('Zylos Status') + '\n' + dim('============') + '\n');
 
-  // Check Claude status
-  const statusFile = path.join(ZYLOS_DIR, 'activity-monitor', 'claude-status.json');
-  if (fs.existsSync(statusFile)) {
-    try {
-      const status = JSON.parse(fs.readFileSync(statusFile, 'utf8'));
-      const stateStr = status.state.toUpperCase();
-      const coloredState = stateStr === 'IDLE' ? green(stateStr) : stateStr === 'BUSY' ? yellow(stateStr) : stateStr;
-      console.log(`${bold('Claude')}: ${coloredState}`);
-      if (status.idle_seconds !== undefined) {
-        console.log(`  ${dim('Idle:')} ${status.idle_seconds}s`);
-      }
-      if (status.last_check_human) {
-        console.log(`  ${dim('Last check:')} ${status.last_check_human}`);
-      }
-    } catch (e) {
-      console.log(`${bold('Claude')}: ${yellow('UNKNOWN')} ${dim('(status file unreadable)')}`);
-    }
+  // Check Claude Code readiness
+  if (!commandExists('claude')) {
+    console.log(`${bold('Claude')}: ${red('NOT INSTALLED')}`);
+    console.log(`  ${dim('→ Run: zylos init')}`);
   } else {
-    console.log(`${bold('Claude')}: ${yellow('UNKNOWN')} ${dim('(no status file)')}`);
+    // Check authentication
+    let authenticated = false;
+    try {
+      const result = spawnSync('claude', ['auth', 'status'], {
+        stdio: 'pipe', encoding: 'utf8', timeout: 10000,
+      });
+      authenticated = result.status === 0;
+    } catch {}
+
+    if (!authenticated) {
+      console.log(`${bold('Claude')}: ${red('NOT AUTHENTICATED')}`);
+      console.log(`  ${dim('→ Run: claude to authenticate (or set ANTHROPIC_API_KEY)')}`);
+    } else {
+      // Check terms/bypass acceptance
+      let termsAccepted = false;
+      try {
+        const settingsPath = path.join(os.homedir(), '.claude', 'settings.json');
+        const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+        termsAccepted = !!settings.skipDangerousModePermissionPrompt;
+      } catch {}
+
+      if (!termsAccepted) {
+        console.log(`${bold('Claude')}: ${yellow('NOT READY')} ${dim('— autonomous mode not yet accepted')}`);
+        console.log(`  ${dim('→ Run: zylos init to complete setup')}`);
+      } else {
+        // Check runtime status from activity monitor
+        const statusFile = path.join(ZYLOS_DIR, 'activity-monitor', 'claude-status.json');
+        if (fs.existsSync(statusFile)) {
+          try {
+            const status = JSON.parse(fs.readFileSync(statusFile, 'utf8'));
+            const stateStr = status.state.toUpperCase();
+            const coloredState = stateStr === 'IDLE' ? green(stateStr) : stateStr === 'BUSY' ? yellow(stateStr) : stateStr;
+            console.log(`${bold('Claude')}: ${coloredState}`);
+            if (status.idle_seconds !== undefined) {
+              console.log(`  ${dim('Idle:')} ${status.idle_seconds}s`);
+            }
+            if (status.last_check_human) {
+              console.log(`  ${dim('Last check:')} ${status.last_check_human}`);
+            }
+          } catch {
+            console.log(`${bold('Claude')}: ${yellow('UNKNOWN')} ${dim('(status file unreadable)')}`);
+          }
+        } else {
+          console.log(`${bold('Claude')}: ${yellow('UNKNOWN')} ${dim('(no status file)')}`);
+        }
+      }
+    }
   }
 
   console.log('');

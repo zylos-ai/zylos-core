@@ -14,7 +14,8 @@ import { execSync, spawnSync, spawn } from 'node:child_process';
 import { ZYLOS_DIR, SKILLS_DIR, CONFIG_DIR, COMPONENTS_DIR, LOCKS_DIR, COMPONENTS_FILE, BIN_DIR, HTTP_DIR, CADDYFILE, CADDY_BIN, getZylosConfig, updateZylosConfig } from '../lib/config.js';
 import { generateManifest, saveManifest } from '../lib/manifest.js';
 import { prompt, promptYesNo } from '../lib/prompts.js';
-import { bold, dim, green, red, yellow, cyan, success, error, warn, heading } from '../lib/colors.js';
+import { bold, dim, green, red, yellow, cyan, bgGreen, success, error, warn, heading } from '../lib/colors.js';
+import { commandExists } from '../lib/shell-utils.js';
 
 // Source directories (shipped with zylos package)
 const PACKAGE_ROOT = path.join(import.meta.dirname, '..', '..');
@@ -53,15 +54,6 @@ function checkNodeVersion() {
   return { version, ok, required: `>=${MIN_NODE_MAJOR}.${MIN_NODE_MINOR}.0` };
 }
 
-function commandExists(cmd) {
-  try {
-    execSync(`which ${cmd} 2>/dev/null`, { stdio: 'pipe' });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 function installGlobalPackage(pkg) {
   try {
     execSync(`npm install -g ${pkg}`, { stdio: 'pipe', timeout: 120000 });
@@ -73,19 +65,73 @@ function installGlobalPackage(pkg) {
 
 function installSystemPackage(pkg) {
   const platform = process.platform;
-  const cmds = platform === 'darwin'
-    ? [`brew install ${pkg}`]
-    : [`sudo apt-get install -y ${pkg}`, `sudo yum install -y ${pkg}`];
+  const sudo = process.getuid?.() === 0 ? '' : 'sudo ';
 
-  for (const cmd of cmds) {
+  if (platform === 'darwin') {
     try {
-      execSync(cmd, { stdio: 'pipe', timeout: 120000 });
+      execSync(`brew install ${pkg}`, { stdio: 'pipe', timeout: 120000 });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  // Linux: try apt-get first, then yum
+  const cmds = [
+    [`${sudo}apt-get update`, `${sudo}apt-get install -y ${pkg}`],
+    [`${sudo}yum install -y ${pkg}`],
+  ];
+
+  for (const sequence of cmds) {
+    try {
+      for (const cmd of sequence) {
+        execSync(cmd, { stdio: 'pipe', timeout: 120000 });
+      }
       return true;
     } catch {
       // Try next
     }
   }
   return false;
+}
+
+/**
+ * Ensure ~/.local/bin is in the user's shell profile.
+ * Detects shell from $SHELL and writes to the appropriate rc file.
+ * Returns the profile path if modified, null otherwise.
+ */
+function ensureLocalBinInProfile() {
+  const homedir = os.homedir();
+  const shell = (process.env.SHELL || '').split('/').pop();
+  const pathLine = 'export PATH="$HOME/.local/bin:$PATH"';
+
+  // Map shell to profile file
+  const profileMap = {
+    zsh: '.zshrc',
+    bash: '.bashrc',
+    fish: null, // fish uses different syntax
+    sh: '.profile',
+  };
+
+  const profileName = profileMap[shell] || '.profile';
+  if (!profileName) return null; // unsupported shell (fish)
+
+  const profilePath = path.join(homedir, profileName);
+
+  // Check if already present
+  try {
+    const content = fs.readFileSync(profilePath, 'utf8');
+    if (content.includes('.local/bin')) return null; // already there
+  } catch {
+    // File doesn't exist — we'll create it
+  }
+
+  try {
+    fs.appendFileSync(profilePath, `\n# Added by zylos init\n${pathLine}\n`);
+    return `~/${profileName}`;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -342,7 +388,7 @@ function isClaudeAuthenticated() {
  * Returns true if bypass is enabled and hasn't been accepted yet.
  */
 function needsBypassAcceptance() {
-  // Check if bypass is enabled in .env
+  // Check if bypass is disabled in .env
   const envPath = path.join(ZYLOS_DIR, '.env');
   try {
     const content = fs.readFileSync(envPath, 'utf8');
@@ -350,17 +396,60 @@ function needsBypassAcceptance() {
     if (match && match[1].trim() === 'false') return false;
   } catch {}
 
+  // Check if already pre-accepted via settings.json
+  const settingsPath = path.join(os.homedir(), '.claude', 'settings.json');
+  try {
+    const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+    if (settings.skipDangerousModePermissionPrompt) return false;
+  } catch {}
+
   // Check if already accepted (tmux session with Claude running)
   try {
     execSync('tmux has-session -t claude-main 2>/dev/null', { stdio: 'pipe' });
-    // Session exists — check if Claude is actually running (not stuck on prompt)
     const paneContent = execSync('tmux capture-pane -t claude-main -p 2>/dev/null', { encoding: 'utf8' });
     if (paneContent.includes('>') || paneContent.includes('Claude')) {
-      return false; // Claude is running, already accepted
+      return false;
     }
   } catch {}
 
   return true;
+}
+
+/**
+ * Pre-accept Claude Code terms and bypass permissions prompt.
+ * Writes acceptance state to config files so Claude starts without manual confirmation.
+ */
+function preAcceptClaudeTerms() {
+  const homedir = os.homedir();
+  let changed = false;
+
+  // 1. Set hasCompletedOnboarding in ~/.claude.json
+  const claudeJsonPath = path.join(homedir, '.claude.json');
+  let claudeJson = {};
+  try {
+    claudeJson = JSON.parse(fs.readFileSync(claudeJsonPath, 'utf8'));
+  } catch {}
+  if (!claudeJson.hasCompletedOnboarding) {
+    claudeJson.hasCompletedOnboarding = true;
+    fs.writeFileSync(claudeJsonPath, JSON.stringify(claudeJson, null, 2) + '\n');
+    changed = true;
+  }
+
+  // 2. Set skipDangerousModePermissionPrompt in ~/.claude/settings.json
+  const claudeDir = path.join(homedir, '.claude');
+  fs.mkdirSync(claudeDir, { recursive: true });
+  const settingsPath = path.join(claudeDir, 'settings.json');
+  let settings = {};
+  try {
+    settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+  } catch {}
+  if (!settings.skipDangerousModePermissionPrompt) {
+    settings.skipDangerousModePermissionPrompt = true;
+    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n');
+    changed = true;
+  }
+
+  return changed;
 }
 
 /**
@@ -377,7 +466,8 @@ async function guideBypassAcceptance() {
 
   // Create new tmux session with Claude
   try {
-    execSync(`tmux new-session -d -s claude-main "cd ${ZYLOS_DIR} && claude --dangerously-skip-permissions"`, { stdio: 'pipe' });
+    const sandboxEnv = process.env.IS_SANDBOX ? '-e "IS_SANDBOX=1" ' : '';
+    execSync(`tmux new-session -d -s claude-main ${sandboxEnv}"cd ${ZYLOS_DIR} && claude --dangerously-skip-permissions"`, { stdio: 'pipe' });
   } catch (err) {
     console.log(`  ${warn(`Failed to create tmux session: ${err.message}`)}`);
     try { execSync('pm2 start activity-monitor', { stdio: 'pipe' }); } catch {}
@@ -643,6 +733,7 @@ function ensureWebConsolePassword() {
 /**
  * Print web console access info (URL + password).
  * Called at the end of init to show the user how to access.
+ * Displayed prominently so the user doesn't miss the password.
  */
 function printWebConsoleInfo() {
   const config = getZylosConfig();
@@ -659,9 +750,21 @@ function printWebConsoleInfo() {
   if (!password) return;
 
   const proto = config.protocol || 'https';
-  console.log(`\n${heading('Web Console:')}`);
-  console.log(`  ${dim('URL:')}      ${bold(`${proto}://${config.domain}/console/`)}`);
-  console.log(`  ${dim('Password:')} ${bold(password)}`);
+  const url = `${proto}://${config.domain}/console/`;
+
+  const line = cyan('  ════════════════════════════════════════════════════');
+
+  console.log('');
+  console.log(line);
+  console.log('');
+  console.log(`  ${bold('  Web Console')}`);
+  console.log('');
+  console.log(`    URL:      ${bold(url)}`);
+  console.log(`    Password: ${bgGreen(bold(` ${password} `))}`);
+  console.log('');
+  console.log(`    ${dim(`Save this password — also in ${ZYLOS_DIR}/.env`)}`);
+  console.log('');
+  console.log(line);
 }
 
 // ── Database initialization ─────────────────────────────────────
@@ -1020,6 +1123,12 @@ async function setupCaddy(skipConfirm) {
 export async function initCommand(args) {
   const skipConfirm = args.includes('--yes') || args.includes('-y');
 
+  // Root sandbox — Claude Code refuses --dangerously-skip-permissions as root
+  // unless IS_SANDBOX=1 is set. Auto-set it so root users (e.g. Docker) just work.
+  if (process.getuid?.() === 0 && !process.env.IS_SANDBOX) {
+    process.env.IS_SANDBOX = '1';
+  }
+
   console.log(`\n${heading('Welcome to Zylos!')} Let's set up your AI assistant.\n`);
 
   // Step 1: Check prerequisites (always, even on re-init)
@@ -1079,6 +1188,7 @@ export async function initCommand(args) {
   }
 
   // Step 5: Check/install Claude Code (native installer)
+  let claudeJustInstalled = false;
   if (commandExists('claude')) {
     console.log(`  ${success('Claude Code installed')}`);
   } else {
@@ -1086,17 +1196,12 @@ export async function initCommand(args) {
     console.log(`    ${cyan('Installing Claude Code (native installer)...')}`);
     try {
       execSync('curl -fsSL https://claude.ai/install.sh | bash', {
-        stdio: 'inherit',
+        stdio: 'pipe',
         timeout: 300000, // 5 min — downloads ~213MB native binary
       });
-      // Native installer puts binary at ~/.local/bin/claude
-      // Add to PATH for this process and subsequent commands
-      const localBin = path.join(os.homedir(), '.local', 'bin');
-      if (!process.env.PATH.split(':').includes(localBin)) {
-        process.env.PATH = `${localBin}:${process.env.PATH}`;
-      }
       if (commandExists('claude')) {
         console.log(`  ${success('Claude Code installed')}`);
+        claudeJustInstalled = true;
       } else {
         console.log(`  ${error('Claude Code installed but not found in PATH')}`);
         console.log(`    ${dim('Add ~/.local/bin to your PATH, then run zylos init again.')}`);
@@ -1147,6 +1252,13 @@ export async function initCommand(args) {
       } else {
         console.log(`    ${dim('Run "claude" to authenticate (or set ANTHROPIC_API_KEY) then "zylos init" again.')}`);
       }
+    }
+  }
+
+  // Pre-accept Claude Code terms (skips manual prompts on first launch)
+  if (claudeAuthenticated) {
+    if (preAcceptClaudeTerms()) {
+      console.log(`  ${success('Claude Code terms pre-accepted')}`);
     }
   }
 
@@ -1284,6 +1396,11 @@ export async function initCommand(args) {
   }
 
   printWebConsoleInfo();
+
+  if (claudeJustInstalled) {
+    // Auto-add ~/.local/bin to shell profile so future shell sessions find claude
+    ensureLocalBinInProfile();
+  }
 
   console.log(`\n${heading('Next steps:')}`);
   if (!claudeAuthenticated) {
