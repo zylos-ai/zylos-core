@@ -1133,9 +1133,9 @@ export async function initCommand(args) {
   if (isRoot) {
     console.log(`\n${error('Running as root is not supported.')}`);
     console.log(`  Claude Code requires a non-root user for autonomous mode.\n`);
-    console.log(`  Create a user with sudo access, then run ${bold('zylos init')} again:\n`);
-    console.log(`    ${cyan('adduser zylos')}`);
-    console.log(`    ${cyan('usermod -aG sudo zylos')}`);
+    console.log(`  Run these commands as root, then ${bold('zylos init')} as the new user:\n`);
+    console.log(`    ${cyan('apt-get update && apt-get install -y sudo')}`);
+    console.log(`    ${cyan("useradd -m -s /bin/bash zylos && echo 'zylos ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/zylos")}`);
     console.log(`    ${cyan('su - zylos')}`);
     console.log('');
     process.exit(1);
