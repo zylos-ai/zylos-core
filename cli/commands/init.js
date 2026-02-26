@@ -1267,6 +1267,7 @@ export async function initCommand(args) {
 
   // Step 6: Claude auth check + guided login
   let claudeAuthenticated = false;
+  let pendingApiKey = null; // set if user enters API key, written to .env after templates
   if (commandExists('claude')) {
     claudeAuthenticated = isClaudeAuthenticated();
     if (claudeAuthenticated) {
@@ -1310,12 +1311,12 @@ export async function initCommand(args) {
             console.log(`    ${dim('You can set it later: export ANTHROPIC_API_KEY=sk-ant-xxx')}`);
           } else {
             if (saveApiKey(apiKey)) {
+              pendingApiKey = apiKey;
               console.log(`  ${success('API key saved')}`);
               claudeAuthenticated = isClaudeAuthenticated();
               if (!claudeAuthenticated) {
-                // API key was saved but claude auth status failed — key may be invalid
                 console.log(`  ${warn('API key saved but verification failed. The key may be invalid.')}`);
-                console.log(`    ${dim('Check your key at console.anthropic.com and update ~/zylos/.env if needed.')}`);
+                console.log(`    ${dim('Check your key at console.anthropic.com')}`);
               }
             }
           }
@@ -1358,9 +1359,9 @@ export async function initCommand(args) {
     console.log(heading('Deploying templates...'));
     deployTemplates();
 
-    // Write API key to .env if set during this run
-    if (process.env.ANTHROPIC_API_KEY) {
-      saveApiKeyToEnv(process.env.ANTHROPIC_API_KEY);
+    // Write API key to .env if entered during this run
+    if (pendingApiKey) {
+      saveApiKeyToEnv(pendingApiKey);
     }
 
     // Timezone (show current, don't re-prompt)
@@ -1423,8 +1424,8 @@ export async function initCommand(args) {
   console.log(`  ${success('Templates deployed')}`);
 
   // Write API key to .env now that templates have been deployed
-  if (process.env.ANTHROPIC_API_KEY) {
-    saveApiKeyToEnv(process.env.ANTHROPIC_API_KEY);
+  if (pendingApiKey) {
+    saveApiKeyToEnv(pendingApiKey);
   }
 
   // Step 8: Configure timezone
