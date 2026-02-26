@@ -96,6 +96,45 @@ function installSystemPackage(pkg) {
 }
 
 /**
+ * Ensure ~/.local/bin is in the user's shell profile.
+ * Detects shell from $SHELL and writes to the appropriate rc file.
+ * Returns the profile path if modified, null otherwise.
+ */
+function ensureLocalBinInProfile() {
+  const homedir = os.homedir();
+  const shell = (process.env.SHELL || '').split('/').pop();
+  const pathLine = 'export PATH="$HOME/.local/bin:$PATH"';
+
+  // Map shell to profile file
+  const profileMap = {
+    zsh: '.zshrc',
+    bash: '.bashrc',
+    fish: null, // fish uses different syntax
+    sh: '.profile',
+  };
+
+  const profileName = profileMap[shell] || '.profile';
+  if (!profileName) return null; // unsupported shell (fish)
+
+  const profilePath = path.join(homedir, profileName);
+
+  // Check if already present
+  try {
+    const content = fs.readFileSync(profilePath, 'utf8');
+    if (content.includes('.local/bin')) return null; // already there
+  } catch {
+    // File doesn't exist — we'll create it
+  }
+
+  try {
+    fs.appendFileSync(profilePath, `\n# Added by zylos init\n${pathLine}\n`);
+    return `~/${profileName}`;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Save the current shell PATH to .env so PM2 services can use it.
  * Updates SYSTEM_PATH= line if exists, appends if not.
  */
@@ -1358,8 +1397,15 @@ export async function initCommand(args) {
   printWebConsoleInfo();
 
   if (claudeJustInstalled) {
-    console.log(`\n${warn('Claude Code was just installed. Reload your shell to use it:')}`);
-    console.log(`  ${bold('source ~/.bashrc')}  ${dim('# or: export PATH="$HOME/.local/bin:$PATH"')}`);
+    // Auto-add ~/.local/bin to shell profile
+    const profileAdded = ensureLocalBinInProfile();
+    if (profileAdded) {
+      console.log(`\n${warn('Claude Code was just installed. Restart your shell or run:')}`);
+      console.log(`  ${bold(`source ${profileAdded}`)}`);
+    } else {
+      console.log(`\n${warn('Claude Code was just installed. Add to PATH:')}`);
+      console.log(`  ${bold('export PATH="$HOME/.local/bin:$PATH"')}`);
+    }
   }
 
   console.log(`\n${heading('Next steps:')}`);
