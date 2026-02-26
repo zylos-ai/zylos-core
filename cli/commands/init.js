@@ -1130,6 +1130,16 @@ export async function initCommand(args) {
 
   // Root detection — Claude Code refuses --dangerously-skip-permissions as root
   const isRoot = process.getuid?.() === 0;
+  if (isRoot) {
+    console.log(`\n${error('Running as root is not supported.')}`);
+    console.log(`  Claude Code requires a non-root user for autonomous mode.\n`);
+    console.log(`  Create a user with sudo access, then run ${bold('zylos init')} again:\n`);
+    console.log(`    ${cyan('adduser zylos')}`);
+    console.log(`    ${cyan('usermod -aG sudo zylos')}`);
+    console.log(`    ${cyan('su - zylos')}`);
+    console.log('');
+    process.exit(1);
+  }
 
   console.log(`\n${heading('Welcome to Zylos!')} Let's set up your AI assistant.\n`);
 
@@ -1306,17 +1316,13 @@ export async function initCommand(args) {
       console.log(`\n${dim('No services to start.')}`);
     }
 
-    if (!isRoot && claudeAuthenticated && needsBypassAcceptance()) {
+    if (claudeAuthenticated && needsBypassAcceptance()) {
       await guideBypassAcceptance();
     }
 
     if (!claudeAuthenticated) {
       console.log(`\n${warn('Claude Code is not authenticated.')}`);
       console.log(`  ${dim('Run "claude" to authenticate (or set ANTHROPIC_API_KEY) then "zylos init" again.')}`);
-    }
-    if (isRoot) {
-      console.log(`\n${warn('Running as root — Claude will not start automatically.')}`);
-      console.log(`  ${dim('Create a non-root user for autonomous mode: useradd -m -s /bin/bash zylos && su - zylos')}`);
     }
     printWebConsoleInfo();
     console.log(`\n${dim('Use "zylos add <component>" to add components.')}`);
@@ -1389,8 +1395,8 @@ export async function initCommand(args) {
     setupPm2Startup();
   }
 
-  // First-time Claude bypass acceptance (only if authenticated, skip for root)
-  if (!isRoot && claudeAuthenticated && needsBypassAcceptance()) {
+  // First-time Claude bypass acceptance (only if authenticated)
+  if (claudeAuthenticated && needsBypassAcceptance()) {
     await guideBypassAcceptance();
   }
 
@@ -1413,11 +1419,6 @@ export async function initCommand(args) {
       console.log(`\n${warn('Claude Code was just installed. Add to PATH:')}`);
       console.log(`  ${bold('export PATH="$HOME/.local/bin:$PATH"')}`);
     }
-  }
-
-  if (isRoot) {
-    console.log(`\n${warn('Running as root — Claude will not start automatically.')}`);
-    console.log(`  ${dim('Create a non-root user for autonomous mode: useradd -m -s /bin/bash zylos && su - zylos')}`);
   }
 
   console.log(`\n${heading('Next steps:')}`);
