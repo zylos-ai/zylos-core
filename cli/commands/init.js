@@ -7,13 +7,14 @@
 
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import https from 'node:https';
 import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { execSync, spawnSync, spawn } from 'node:child_process';
 import { ZYLOS_DIR, SKILLS_DIR, CONFIG_DIR, COMPONENTS_DIR, LOCKS_DIR, COMPONENTS_FILE, BIN_DIR, HTTP_DIR, CADDYFILE, CADDY_BIN, getZylosConfig, updateZylosConfig } from '../lib/config.js';
 import { generateManifest, saveManifest } from '../lib/manifest.js';
-import { prompt, promptYesNo } from '../lib/prompts.js';
+import { prompt, promptYesNo, promptChoice, promptSecret } from '../lib/prompts.js';
 import { bold, dim, green, red, yellow, cyan, bgGreen, success, error, warn, heading } from '../lib/colors.js';
 import { commandExists } from '../lib/shell-utils.js';
 
@@ -384,6 +385,134 @@ function isClaudeAuthenticated() {
 }
 
 /**
+ * Save an Anthropic API key to ~/.claude/settings.json and process.env.
+ * Does NOT write to ~/zylos/.env here — that happens after template
+ * deployment via saveApiKeyToEnv() to avoid creating a partial .env
+ * that blocks template deployment on fresh installs.
+ *
+ * @param {string} apiKey - The API key (sk-ant-xxx)
+ * @returns {boolean} true if saved successfully
+ */
+/**
+ * Verify an Anthropic API key by making a lightweight API call.
+ * Sends an intentionally empty request — a valid key returns 400 (bad request),
+ * an invalid key returns 401 (unauthorized).
+ *
+ * @param {string} apiKey - The API key to verify
+ * @returns {Promise<boolean>} true if key is valid
+ */
+function verifyApiKey(apiKey) {
+  return new Promise((resolve) => {
+    const req = https.request({
+      hostname: 'api.anthropic.com',
+      path: '/v1/messages',
+      method: 'POST',
+      headers: {
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+        'content-type': 'application/json',
+      },
+      timeout: 10000,
+    }, (res) => {
+      res.resume(); // drain response
+      // 401 = invalid key, anything else (400, 200, etc.) = key is valid
+      resolve(res.statusCode !== 401);
+    });
+    req.on('error', () => resolve(false));
+    req.on('timeout', () => { req.destroy(); resolve(false); });
+    req.write('{}');
+    req.end();
+  });
+}
+
+function saveApiKey(apiKey) {
+  // 1. Write to ~/.claude/settings.json so Claude Code picks it up
+  const settingsDir = path.join(os.homedir(), '.claude');
+  const settingsPath = path.join(settingsDir, 'settings.json');
+  try {
+    fs.mkdirSync(settingsDir, { recursive: true });
+    let settings = {};
+    try { settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8')); } catch {}
+    if (!settings.env) settings.env = {};
+    settings.env.ANTHROPIC_API_KEY = apiKey;
+    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n');
+  } catch (err) {
+    console.log(`  ${error(`Failed to write settings.json: ${err.message}`)}`);
+    return false;
+  }
+
+  // 2. Pre-approve key in ~/.claude.json so Claude skips the interactive
+  //    "Detected a custom API key" confirmation prompt on startup
+  approveApiKey(apiKey);
+
+  // 3. Set in current process so subsequent checks pass
+  process.env.ANTHROPIC_API_KEY = apiKey;
+
+  return true;
+}
+
+/**
+ * Pre-approve an API key in ~/.claude.json so Claude Code skips
+ * the interactive "Detected a custom API key" confirmation prompt.
+ * Also marks onboarding as complete to prevent the login screen
+ * from blocking prompt processing on fresh installs.
+ * @param {string} apiKey - The API key to approve
+ */
+function approveApiKey(apiKey) {
+  const claudeJsonPath = path.join(os.homedir(), '.claude.json');
+  try {
+    let config = {};
+    try { config = JSON.parse(fs.readFileSync(claudeJsonPath, 'utf8')); } catch {}
+    if (!config.customApiKeyResponses) config.customApiKeyResponses = { approved: [], rejected: [] };
+    if (!config.customApiKeyResponses.approved) config.customApiKeyResponses.approved = [];
+    // Claude Code stores last 20 chars of the key for matching
+    const keySuffix = apiKey.slice(-20);
+    if (!config.customApiKeyResponses.approved.includes(keySuffix)) {
+      config.customApiKeyResponses.approved.push(keySuffix);
+    }
+    // Mark onboarding complete so Claude doesn't show login screen
+    if (!config.hasCompletedOnboarding) {
+      config.hasCompletedOnboarding = true;
+      try {
+        const ver = execSync('claude --version 2>/dev/null', { encoding: 'utf8' }).trim();
+        config.lastOnboardingVersion = ver;
+      } catch {
+        config.lastOnboardingVersion = '2.1.59';
+      }
+    }
+    // Pre-accept workspace trust dialog for the zylos project directory
+    if (!config.projects) config.projects = {};
+    const projectPath = path.resolve(ZYLOS_DIR);
+    if (!config.projects[projectPath]) config.projects[projectPath] = {};
+    if (!config.projects[projectPath].hasTrustDialogAccepted) {
+      config.projects[projectPath].hasTrustDialogAccepted = true;
+      config.projects[projectPath].hasCompletedProjectOnboarding = true;
+    }
+    fs.writeFileSync(claudeJsonPath, JSON.stringify(config, null, 2) + '\n');
+  } catch {}
+}
+
+/**
+ * Write ANTHROPIC_API_KEY to ~/zylos/.env.
+ * Called after template deployment to ensure .env has the full template content.
+ *
+ * @param {string} apiKey - The API key
+ */
+function saveApiKeyToEnv(apiKey) {
+  const envPath = path.join(ZYLOS_DIR, '.env');
+  try {
+    let content = '';
+    try { content = fs.readFileSync(envPath, 'utf8'); } catch {}
+    if (content.match(/^ANTHROPIC_API_KEY=.*$/m)) {
+      content = content.replace(/^ANTHROPIC_API_KEY=.*$/m, `ANTHROPIC_API_KEY=${apiKey}`);
+    } else {
+      content = content.trimEnd() + `\n\n# Anthropic API key (set by zylos init)\nANTHROPIC_API_KEY=${apiKey}\n`;
+    }
+    fs.writeFileSync(envPath, content);
+  } catch {}
+}
+
+/**
  * Check if Claude bypass permissions needs first-time acceptance.
  * Returns true if bypass is enabled and hasn't been accepted yet.
  */
@@ -467,7 +596,8 @@ async function guideBypassAcceptance() {
   // Create new tmux session with Claude
   try {
     const sandboxEnv = process.env.IS_SANDBOX ? '-e "IS_SANDBOX=1" ' : '';
-    execSync(`tmux new-session -d -s claude-main ${sandboxEnv}"cd ${ZYLOS_DIR} && claude --dangerously-skip-permissions"`, { stdio: 'pipe' });
+    const apiKeyEnv = process.env.ANTHROPIC_API_KEY ? `-e "ANTHROPIC_API_KEY=${process.env.ANTHROPIC_API_KEY}" ` : '';
+    execSync(`tmux new-session -d -s claude-main ${sandboxEnv}${apiKeyEnv}"cd ${ZYLOS_DIR} && claude --dangerously-skip-permissions"`, { stdio: 'pipe' });
   } catch (err) {
     console.log(`  ${warn(`Failed to create tmux session: ${err.message}`)}`);
     try { execSync('pm2 start activity-monitor', { stdio: 'pipe' }); } catch {}
@@ -1216,6 +1346,7 @@ export async function initCommand(args) {
 
   // Step 6: Claude auth check + guided login
   let claudeAuthenticated = false;
+  let pendingApiKey = null; // set if user enters API key, written to .env after templates
   if (commandExists('claude')) {
     claudeAuthenticated = isClaudeAuthenticated();
     if (claudeAuthenticated) {
@@ -1223,34 +1354,55 @@ export async function initCommand(args) {
     } else {
       console.log(`  ${warn('Claude Code not authenticated')}`);
       if (!skipConfirm) {
-        const doAuth = await promptYesNo('  Authenticate now? [Y/n]: ', true);
-        if (doAuth) {
-          console.log(`  ${cyan('Starting Claude Code for authentication...')}`);
+        const authChoice = await promptChoice(
+          '\n  How would you like to authenticate?',
+          ['Claude subscription (opens browser login)', 'Anthropic API key'],
+        );
+
+        if (authChoice === 1) {
+          // Option 1: Subscription login (existing flow)
+          console.log(`\n  ${cyan('Starting Claude Code for authentication...')}`);
           console.log(`  ${dim('After login, type /exit to return to zylos init.')}\n`);
-          // Use async spawn + SIGINT trap so Ctrl+C kills claude
-          // without also killing zylos init (they share a process group).
           const sigintListeners = process.rawListeners('SIGINT');
           process.removeAllListeners('SIGINT');
-          process.on('SIGINT', () => {}); // ignore during auth
+          process.on('SIGINT', () => {});
           try {
             const authChild = spawn('claude', [], { stdio: 'inherit' });
             await new Promise((resolve) => authChild.on('close', resolve));
           } catch { /* user may Ctrl+C */ }
           process.removeAllListeners('SIGINT');
           for (const l of sigintListeners) process.on('SIGINT', l);
-          // Re-check after auth attempt
           claudeAuthenticated = isClaudeAuthenticated();
           if (claudeAuthenticated) {
             console.log(`\n  ${success('Claude Code authenticated')}`);
           } else {
             console.log(`\n  ${warn('Authentication not completed.')}`);
-            console.log(`    ${dim('Run "claude" to authenticate (or set ANTHROPIC_API_KEY) then "zylos init" again.')}`);
+            console.log(`    ${dim('Run "claude" to authenticate then "zylos init" again.')}`);
           }
-        } else {
-          console.log(`  ${dim('Skipped. Run "claude" to authenticate (or set ANTHROPIC_API_KEY) then "zylos init" again.')}`);
+        } else if (authChoice === 2) {
+          // Option 2: API key
+          console.log(`\n  ${dim('Paste your Anthropic API key (starts with sk-ant-):')}`);
+          const apiKey = await promptSecret('  API key: ');
+          if (!apiKey) {
+            console.log(`  ${warn('No key entered. Skipped.')}`);
+          } else if (!apiKey.startsWith('sk-ant-')) {
+            console.log(`  ${error('Invalid format. API key should start with sk-ant-')}`);
+            console.log(`    ${dim('You can set it later: export ANTHROPIC_API_KEY=sk-ant-xxx')}`);
+          } else {
+            console.log(`  ${dim('Verifying API key...')}`);
+            const keyValid = await verifyApiKey(apiKey);
+            if (!keyValid) {
+              console.log(`  ${error('API key is invalid or could not be verified.')}`);
+              console.log(`    ${dim('Check your key at console.anthropic.com')}`);
+            } else if (saveApiKey(apiKey)) {
+              pendingApiKey = apiKey;
+              claudeAuthenticated = true;
+              console.log(`  ${success('API key verified and saved')}`);
+            }
+          }
         }
       } else {
-        console.log(`    ${dim('Run "claude" to authenticate (or set ANTHROPIC_API_KEY) then "zylos init" again.')}`);
+        console.log(`    ${dim('Run "zylos init" again to authenticate.')}`);
       }
     }
   }
@@ -1287,6 +1439,11 @@ export async function initCommand(args) {
     console.log(heading('Deploying templates...'));
     deployTemplates();
 
+    // Write API key to .env if entered during this run
+    if (pendingApiKey) {
+      saveApiKeyToEnv(pendingApiKey);
+    }
+
     // Timezone (show current, don't re-prompt)
     console.log(heading('Checking timezone...'));
     await configureTimezone(skipConfirm, true);
@@ -1310,7 +1467,7 @@ export async function initCommand(args) {
 
     if (!claudeAuthenticated) {
       console.log(`\n${warn('Claude Code is not authenticated.')}`);
-      console.log(`  ${dim('Run "claude" to authenticate (or set ANTHROPIC_API_KEY) then "zylos init" again.')}`);
+      console.log(`  ${dim('Run "zylos init" again to authenticate.')}`);
     }
     printWebConsoleInfo();
     console.log(`\n${dim('Use "zylos add <component>" to add components.')}`);
@@ -1345,6 +1502,11 @@ export async function initCommand(args) {
   // Step 7: Deploy templates
   deployTemplates();
   console.log(`  ${success('Templates deployed')}`);
+
+  // Write API key to .env now that templates have been deployed
+  if (pendingApiKey) {
+    saveApiKeyToEnv(pendingApiKey);
+  }
 
   // Step 8: Configure timezone
   console.log(`\n${heading('Timezone configuration...')}`);
@@ -1404,7 +1566,7 @@ export async function initCommand(args) {
 
   console.log(`\n${heading('Next steps:')}`);
   if (!claudeAuthenticated) {
-    console.log(`  ${bold('claude')}                           ${dim('# ⚠ Authenticate first (or set ANTHROPIC_API_KEY)')}`);
+    console.log(`  ${bold('zylos init')}                        ${dim('# ⚠ Authenticate first')}`);
   }
   console.log(`  ${bold('zylos add telegram')}    ${dim('# Add Telegram bot')}`);
   console.log(`  ${bold('zylos add lark')}        ${dim('# Add Lark bot')}`);
