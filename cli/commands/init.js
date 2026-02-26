@@ -598,6 +598,11 @@ async function guideBypassAcceptance() {
     const sandboxEnv = process.env.IS_SANDBOX ? '-e "IS_SANDBOX=1" ' : '';
     const apiKeyEnv = process.env.ANTHROPIC_API_KEY ? `-e "ANTHROPIC_API_KEY=${process.env.ANTHROPIC_API_KEY}" ` : '';
     execSync(`tmux new-session -d -s claude-main ${sandboxEnv}${apiKeyEnv}"cd ${ZYLOS_DIR} && claude --dangerously-skip-permissions"`, { stdio: 'pipe' });
+    // Configure status bar with detach hint
+    try {
+      execSync('tmux set-option -t claude-main status-right " Ctrl+B d = detach " 2>/dev/null', { stdio: 'pipe' });
+      execSync('tmux set-option -t claude-main status-right-style "fg=black,bg=yellow" 2>/dev/null', { stdio: 'pipe' });
+    } catch {}
   } catch (err) {
     console.log(`  ${warn(`Failed to create tmux session: ${err.message}`)}`);
     try { execSync('pm2 start activity-monitor', { stdio: 'pipe' }); } catch {}
@@ -606,8 +611,8 @@ async function guideBypassAcceptance() {
 
   console.log('  Claude Code requires a one-time confirmation for autonomous mode.');
   console.log('  Please run the following command in another terminal:\n');
-  console.log(`    ${bold('tmux attach -t claude-main')}\n`);
-  console.log('  Then select "Yes, I accept" and press Ctrl+B D to detach.\n');
+  console.log(`    ${bold('zylos attach')}\n`);
+  console.log('  Then select "Yes, I accept" and press Ctrl+B d to detach.\n');
 
   await promptYesNo('Press Enter after you have accepted the prompt: ', true);
 
