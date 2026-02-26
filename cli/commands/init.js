@@ -7,6 +7,7 @@
 
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import https from 'node:https';
 import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
@@ -392,6 +393,38 @@ function isClaudeAuthenticated() {
  * @param {string} apiKey - The API key (sk-ant-xxx)
  * @returns {boolean} true if saved successfully
  */
+/**
+ * Verify an Anthropic API key by making a lightweight API call.
+ * Sends an intentionally empty request — a valid key returns 400 (bad request),
+ * an invalid key returns 401 (unauthorized).
+ *
+ * @param {string} apiKey - The API key to verify
+ * @returns {Promise<boolean>} true if key is valid
+ */
+function verifyApiKey(apiKey) {
+  return new Promise((resolve) => {
+    const req = https.request({
+      hostname: 'api.anthropic.com',
+      path: '/v1/messages',
+      method: 'POST',
+      headers: {
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+        'content-type': 'application/json',
+      },
+      timeout: 10000,
+    }, (res) => {
+      res.resume(); // drain response
+      // 401 = invalid key, anything else (400, 200, etc.) = key is valid
+      resolve(res.statusCode !== 401);
+    });
+    req.on('error', () => resolve(false));
+    req.on('timeout', () => { req.destroy(); resolve(false); });
+    req.write('{}');
+    req.end();
+  });
+}
+
 function saveApiKey(apiKey) {
   // 1. Write to ~/.claude/settings.json so Claude Code picks it up
   const settingsDir = path.join(os.homedir(), '.claude');
@@ -1310,14 +1343,15 @@ export async function initCommand(args) {
             console.log(`  ${error('Invalid format. API key should start with sk-ant-')}`);
             console.log(`    ${dim('You can set it later: export ANTHROPIC_API_KEY=sk-ant-xxx')}`);
           } else {
-            if (saveApiKey(apiKey)) {
+            console.log(`  ${dim('Verifying API key...')}`);
+            const keyValid = await verifyApiKey(apiKey);
+            if (!keyValid) {
+              console.log(`  ${error('API key is invalid or could not be verified.')}`);
+              console.log(`    ${dim('Check your key at console.anthropic.com')}`);
+            } else if (saveApiKey(apiKey)) {
               pendingApiKey = apiKey;
-              console.log(`  ${success('API key saved')}`);
-              claudeAuthenticated = isClaudeAuthenticated();
-              if (!claudeAuthenticated) {
-                console.log(`  ${warn('API key saved but verification failed. The key may be invalid.')}`);
-                console.log(`    ${dim('Check your key at console.anthropic.com')}`);
-              }
+              claudeAuthenticated = true;
+              console.log(`  ${success('API key verified and saved')}`);
             }
           }
         }
