@@ -330,7 +330,7 @@ export async function upgradeComponent(args) {
 
   // Mode 1: Check only (--check) — no lock, downloads to temp for file comparison
   if (checkOnly) {
-    return handleCheckOnly(target, { jsonOutput });
+    return handleCheckOnly(target, { jsonOutput, branch });
   }
 
   // Mode 2 & 3: Full upgrade flow (lock-first)
@@ -341,19 +341,23 @@ export async function upgradeComponent(args) {
 /**
  * Handle --check flag: check for updates only (no lock needed).
  * Also fetches changelog, detects local changes, and runs Claude eval for a complete preview.
+ * When --branch is specified, downloads from branch and reads version from its package.json.
  */
-async function handleCheckOnly(component, { jsonOutput }) {
+async function handleCheckOnly(component, { jsonOutput, branch }) {
   const result = checkForUpdates(component);
 
   if (!result.success) {
-    if (jsonOutput) {
-      const errOutput = { action: 'check', component, ...result };
-      errOutput.reply = formatC4Reply('error', result);
-      console.log(JSON.stringify(errOutput, null, 2));
-    } else {
-      console.error(`Error: ${result.message}`);
+    if (!branch) {
+      if (jsonOutput) {
+        const errOutput = { action: 'check', component, ...result };
+        errOutput.reply = formatC4Reply('error', result);
+        console.log(JSON.stringify(errOutput, null, 2));
+      } else {
+        console.error(`Error: ${result.message}`);
+      }
+      process.exit(1);
     }
-    process.exit(1);
+    // When --branch is specified, version check failure is non-fatal
   }
 
   // Enrich with changelog, local changes, and Claude eval when update is available
@@ -362,22 +366,41 @@ async function handleCheckOnly(component, { jsonOutput }) {
   let evalResult = null;
   let tempDir = null;
 
-  if (result.hasUpdate && result.repo) {
-    // Download new version to temp dir (for file comparison by Claude)
-    const dlResult = downloadToTemp(result.repo, result.latest);
-    if (dlResult.success) {
-      tempDir = dlResult.tempDir;
+  // With --branch: always download from branch and read version from its package.json
+  const shouldDownload = branch || (result.hasUpdate && result.repo);
 
-      // Read changelog from downloaded package (more reliable than remote fetch)
-      const fullChangelog = readChangelog(tempDir);
-      changelog = filterChangelog(fullChangelog, result.current);
-    } else {
-      // Fallback: fetch changelog from remote
-      try {
-        const rawChangelog = fetchRawFile(result.repo, 'CHANGELOG.md', `v${result.latest}`);
-        changelog = filterChangelog(rawChangelog, result.current);
-      } catch {
-        // CHANGELOG.md may not exist — that's fine
+  if (shouldDownload) {
+    const repo = result.repo || (branch ? getRepo(component) : null);
+    if (repo) {
+      const dlResult = downloadToTemp(repo, result.latest, branch);
+      if (dlResult.success) {
+        tempDir = dlResult.tempDir;
+
+        // When using --branch, read version from the downloaded package.json
+        if (branch) {
+          try {
+            const branchPkg = JSON.parse(fs.readFileSync(path.join(tempDir, 'package.json'), 'utf8'));
+            result.latest = branchPkg.version || result.latest;
+            result.hasUpdate = result.current !== result.latest;
+            result.success = true;
+            result.repo = repo;
+            result.branch = branch;
+          } catch {
+            // If package.json read fails, keep existing result
+          }
+        }
+
+        // Read changelog from downloaded package (more reliable than remote fetch)
+        const fullChangelog = readChangelog(tempDir);
+        changelog = filterChangelog(fullChangelog, result.current);
+      } else if (!branch) {
+        // Fallback: fetch changelog from remote (only for non-branch)
+        try {
+          const rawChangelog = fetchRawFile(result.repo, 'CHANGELOG.md', `v${result.latest}`);
+          changelog = filterChangelog(rawChangelog, result.current);
+        } catch {
+          // CHANGELOG.md may not exist — that's fine
+        }
       }
     }
 
@@ -406,6 +429,7 @@ async function handleCheckOnly(component, { jsonOutput }) {
 
   if (jsonOutput) {
     const output = { action: 'check', component, ...result };
+    if (branch) output.branch = branch;
     if (changelog) output.changelog = changelog;
     if (localChanges) output.localChanges = localChanges;
     if (evalResult) output.evaluation = evalResult;
@@ -413,10 +437,11 @@ async function handleCheckOnly(component, { jsonOutput }) {
     output.reply = formatC4Reply('check', { component, ...result, changelog, localChanges, evaluation: evalResult });
     console.log(JSON.stringify(output, null, 2));
   } else {
-    if (!result.hasUpdate) {
+    if (!result.hasUpdate && !branch) {
       console.log(success(`${bold(component)} is up to date (v${result.current})`));
-    } else {
-      console.log(`${bold(component)}: ${dim(result.current)} → ${bold(result.latest)}`);
+    } else if (result.hasUpdate) {
+      const label = branch ? `${dim(result.current)} → ${bold(result.latest)} (branch: ${branch})` : `${dim(result.current)} → ${bold(result.latest)}`;
+      console.log(`${bold(component)}: ${label}`);
 
       if (localChanges) {
         console.log(`\n${warn('LOCAL MODIFICATIONS DETECTED:')}`);
@@ -446,6 +471,9 @@ async function handleCheckOnly(component, { jsonOutput }) {
         console.log(`\n${dim(`Downloaded to: ${tempDir}`)}`);
       }
       console.log(`\n${dim(`Run "zylos upgrade ${component} --yes" to upgrade.`)}`);
+    } else {
+      // --branch specified but branch version matches installed version
+      console.log(success(`${bold(component)} is up to date with branch ${bold(branch)} (v${result.current})`));
     }
   }
 
