@@ -5,6 +5,27 @@ All notable changes to zylos-core will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.5] - 2026-02-26
+
+### Added
+- **One-click install script**: `curl -fsSL ... | bash` for quick setup (#150)
+- **API key authentication**: support `ANTHROPIC_API_KEY` as alternative to Claude login for headless/Docker environments (#165)
+  - Auto-approve API key in `~/.claude.json` (`customApiKeyResponses.approved` with `key.slice(-20)`)
+  - Pre-set `hasCompletedOnboarding`, `hasTrustDialogAccepted`, `hasCompletedProjectOnboarding` for fresh installs
+  - Key validation via real API call (401=invalid, 400=valid)
+- **`zylos attach` command**: attach to Claude tmux session with detach hint (#168)
+  - Tmux status bar shows persistent yellow "Ctrl+B d = detach" hint
+  - `tmux display-message` shows 3-second overlay on attach
+  - Smart error messages: checks PM2 status to suggest `zylos init` vs `zylos start`
+- Pre-accept bypass permissions terms and prominent web console password display during init (#158)
+- `zylos status` diagnostics: detect un-accepted Claude Code terms state (#158)
+
+### Fixed
+- `zylos upgrade --check` now honors `--branch` flag — reads version from branch `package.json` (#166)
+- Silent output when `--check --branch` version matches installed version (#166)
+- C4 `c4-send.js` stdin support to prevent message truncation (#162)
+- Skip `setcap` on Caddy when running as root in Docker (#171)
+
 ## [0.2.4] - 2026-02-22
 
 ### Fixed
