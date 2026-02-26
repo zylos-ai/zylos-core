@@ -5,6 +5,20 @@ All notable changes to zylos-core will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.5] - 2026-02-26
+
+### Added
+- **One-click install**: single `curl | bash` command to get Zylos up and running (#150)
+- **API key authentication**: use your own `ANTHROPIC_API_KEY` as an alternative to `claude login` — key is validated on entry and all startup dialogs are auto-resolved (#165)
+- **`zylos attach` command**: connect to the Claude session with a friendly UX — persistent status bar hint and 3-second overlay remind new users how to detach, with context-aware error messages when no session is running (#168)
+- **Smoother first-run experience**: autonomous mode terms are pre-accepted during init, and the web console password is now prominently highlighted so it won't get lost in output (#158)
+- **Smarter `zylos status`**: detects and clearly reports when Claude Code is stuck on an unaccepted prompt, instead of just showing "OFFLINE" (#158)
+
+### Fixed
+- `zylos upgrade --check --branch` now correctly compares against the branch version instead of the latest release tag (#166)
+- Long messages sent via communication bridge no longer get truncated (#162)
+- Caddy setup no longer warns about missing `sudo` when running as root in Docker (#171)
+
 ## [0.2.4] - 2026-02-22
 
 ### Fixed
