@@ -36,11 +36,9 @@ Zylos 给它一个生命。跨重启的持久记忆。你睡觉时自动工作�
 curl -fsSL https://raw.githubusercontent.com/zylos-ai/zylos-core/main/scripts/install.sh | bash
 ```
 
-一键安装所有依赖（git、tmux、Node.js、zylos CLI）。完成后运行：
+一键安装所有依赖（git、tmux、Node.js、zylos CLI），并自动运行 `zylos init` 完成初始化。
 
-```bash
-zylos init
-```
+> 如果你已有 Node.js，安装脚本会提示下一步 — 手动运行 `zylos init` 即可。
 
 <details>
 <summary>手动安装（如果你已有 Node.js >= 20）</summary>
@@ -54,7 +52,7 @@ zylos init
 
 `zylos init` 是交互式的，可重复运行。它会：
 1. 安装缺失的工具（tmux、git、PM2、Claude Code）
-2. 引导你完成 Claude 认证
+2. 引导你完成 Claude 认证（浏览器登录、API key 或 [setup token](https://code.claude.com/docs/en/authentication)，适用于无浏览器的服务器）
 3. 创建 `~/zylos/` 目录，包含记忆、技能和服务
 4. 启动所有后台服务，并在 tmux 会话中启动 Claude
 
