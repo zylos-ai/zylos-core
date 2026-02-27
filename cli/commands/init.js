@@ -513,37 +513,6 @@ function saveApiKeyToEnv(apiKey) {
 }
 
 /**
- * Verify a setup token (CLAUDE_CODE_OAUTH_TOKEN) by making a lightweight API call.
- * Uses the same approach as verifyApiKey but with OAuth Bearer auth.
- *
- * @param {string} token - The setup token to verify
- * @returns {Promise<boolean>} true if token is valid
- */
-function verifySetupToken(token) {
-  return new Promise((resolve) => {
-    const req = https.request({
-      hostname: 'api.anthropic.com',
-      path: '/v1/messages',
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'anthropic-version': '2023-06-01',
-        'content-type': 'application/json',
-      },
-      timeout: 10000,
-    }, (res) => {
-      res.resume();
-      // 401/403 = invalid token, anything else (400, 200, etc.) = token is valid
-      resolve(res.statusCode !== 401 && res.statusCode !== 403);
-    });
-    req.on('error', () => resolve(false));
-    req.on('timeout', () => { req.destroy(); resolve(false); });
-    req.write('{}');
-    req.end();
-  });
-}
-
-/**
  * Save a setup token to ~/.claude/settings.json and process.env.
  * Does NOT write to ~/zylos/.env here — that happens after template
  * deployment via saveSetupTokenToEnv().
@@ -1504,17 +1473,10 @@ export async function initCommand(args) {
           } else if (!token.startsWith('sk-ant-oat')) {
             console.log(`  ${error('Invalid format. Setup token should start with sk-ant-oat')}`);
             console.log(`    ${dim('Run "claude setup-token" to generate a valid token.')}`);
-          } else {
-            console.log(`  ${dim('Verifying setup token...')}`);
-            const tokenValid = await verifySetupToken(token);
-            if (!tokenValid) {
-              console.log(`  ${error('Setup token is invalid or could not be verified.')}`);
-              console.log(`    ${dim('Try generating a new token with "claude setup-token".')}`);
-            } else if (saveSetupToken(token)) {
-              pendingSetupToken = token;
-              claudeAuthenticated = true;
-              console.log(`  ${success('Setup token verified and saved')}`);
-            }
+          } else if (saveSetupToken(token)) {
+            pendingSetupToken = token;
+            claudeAuthenticated = true;
+            console.log(`  ${success('Setup token saved. It will be verified when Claude starts.')}`);
           }
         }
       } else {
