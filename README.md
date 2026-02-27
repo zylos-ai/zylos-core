@@ -40,6 +40,15 @@ This installs everything you need (git, tmux, Node.js, zylos CLI) and automatica
 > If you already have Node.js installed, the script will print a "next step" prompt — just run `zylos init` manually.
 
 <details>
+<summary>Install from a specific branch (for testing)</summary>
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/zylos-ai/zylos-core/main/scripts/install.sh | bash -s -- --branch <branch-name>
+```
+
+</details>
+
+<details>
 <summary>Manual install (if you already have Node.js >= 20)</summary>
 
 ```bash
