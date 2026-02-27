@@ -35,11 +35,9 @@ More LLMs support are on the way.
 curl -fsSL https://raw.githubusercontent.com/zylos-ai/zylos-core/main/scripts/install.sh | bash
 ```
 
-This installs everything you need (git, tmux, Node.js, zylos CLI). Once done, run:
+This installs everything you need (git, tmux, Node.js, zylos CLI) and automatically runs `zylos init` to set up your agent.
 
-```bash
-zylos init
-```
+> If you already have Node.js installed, the script will print a "next step" prompt — just run `zylos init` manually.
 
 <details>
 <summary>Manual install (if you already have Node.js >= 20)</summary>
@@ -53,7 +51,7 @@ zylos init
 
 `zylos init` is interactive and idempotent. It will:
 1. Install missing tools (tmux, git, PM2, Claude Code)
-2. Guide you through Claude authentication
+2. Guide you through Claude authentication (browser login, API key, or [setup token](https://docs.anthropic.com/en/docs/claude-code/cli-usage#setup-token) for headless servers)
 3. Create the `~/zylos/` directory with memory, skills, and services
 4. Start all background services and launch Claude in a tmux session
 
