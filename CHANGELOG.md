@@ -8,14 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.2.6] - 2026-02-27
 
 ### Added
-- **Setup token authentication**: headless servers can now authenticate with a Claude setup token (`sk-ant-oat-...`) — no browser required. Configured during `zylos init` or by setting `CLAUDE_SETUP_TOKEN` in `.env` (#174)
-- **Branch install**: `install.sh` accepts `--branch <name>` so you can install directly from a feature branch for testing (#182)
-- **Auto-init on fresh install**: when nvm is freshly installed, `zylos init` runs automatically after install — no extra step needed (#176)
+- **Setup token authentication**: authenticate on headless servers without a browser — pass a Claude setup token during `zylos init` or set `CLAUDE_SETUP_TOKEN` in `.env`, and the agent handles the rest (#174)
+- **Branch install**: test unreleased changes before they land on main — `curl ... | bash -s -- --branch <name>` installs directly from any Git branch (#182)
+- **Zero-step first run**: fresh installs now auto-run `zylos init` immediately after setup, so new users go from `curl | bash` to a running agent with no extra commands (#176)
 
 ### Fixed
-- Interactive prompts now work correctly when installing via `curl | bash` pipe (#179)
-- Web console shows Local + Network URL when no domain is configured, instead of showing nothing (#181)
-- Post-install reminder box copy improved for clarity (#180)
+- `curl | bash` install no longer swallows interactive prompts — stdin is properly redirected from `/dev/tty` so `zylos init` questions work inside a pipe (#179)
+- Web console now shows Local + Network URL (vite-style) when no domain is configured, instead of a blank info section (#181)
+- Post-install reminder box wording clarified to better guide users on next steps (#180)
 
 ## [0.2.5] - 2026-02-26
 
