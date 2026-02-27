@@ -5,6 +5,18 @@ All notable changes to zylos-core will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.6] - 2026-02-27
+
+### Added
+- **Setup token authentication**: headless servers can now authenticate with a Claude setup token (`sk-ant-oat-...`) — no browser required. Configured during `zylos init` or by setting `CLAUDE_SETUP_TOKEN` in `.env` (#174)
+- **Branch install**: `install.sh` accepts `--branch <name>` so you can install directly from a feature branch for testing (#182)
+- **Auto-init on fresh install**: when nvm is freshly installed, `zylos init` runs automatically after install — no extra step needed (#176)
+
+### Fixed
+- Interactive prompts now work correctly when installing via `curl | bash` pipe (#179)
+- Web console shows Local + Network URL when no domain is configured, instead of showing nothing (#181)
+- Post-install reminder box copy improved for clarity (#180)
+
 ## [0.2.5] - 2026-02-26
 
 ### Added
