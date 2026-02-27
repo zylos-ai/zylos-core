@@ -5,6 +5,18 @@ All notable changes to zylos-core will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.6] - 2026-02-27
+
+### Added
+- **Setup token authentication**: authenticate on headless servers without a browser — pass a Claude setup token during `zylos init` or set `CLAUDE_SETUP_TOKEN` in `.env`, and the agent handles the rest (#174)
+- **Branch install**: test unreleased changes before they land on main — `curl ... | bash -s -- --branch <name>` installs directly from any Git branch (#182)
+- **Zero-step first run**: fresh installs now auto-run `zylos init` immediately after setup, so new users go from `curl | bash` to a running agent with no extra commands (#176)
+
+### Fixed
+- `curl | bash` install no longer swallows interactive prompts — stdin is properly redirected from `/dev/tty` so `zylos init` questions work inside a pipe (#179)
+- Web console now shows Local + Network URL (vite-style) when no domain is configured, instead of a blank info section (#181)
+- Post-install reminder box wording clarified to better guide users on next steps (#180)
+
 ## [0.2.5] - 2026-02-26
 
 ### Added
