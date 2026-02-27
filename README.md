@@ -51,7 +51,7 @@ zylos init
 
 `zylos init` is interactive and idempotent. It will:
 1. Install missing tools (tmux, git, PM2, Claude Code)
-2. Guide you through Claude authentication (browser login, API key, or [setup token](https://docs.anthropic.com/en/docs/claude-code/cli-usage#setup-token) for headless servers)
+2. Guide you through Claude authentication (browser login, API key, or [setup token](https://code.claude.com/docs/en/authentication) for headless servers)
 3. Create the `~/zylos/` directory with memory, skills, and services
 4. Start all background services and launch Claude in a tmux session
 
