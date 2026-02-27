@@ -866,13 +866,26 @@ function ensureWebConsolePassword() {
 }
 
 /**
+ * Get the first non-loopback IPv4 address (for display purposes).
+ * @returns {string} IP address or empty string if none found
+ */
+function getNetworkIP() {
+  const interfaces = os.networkInterfaces();
+  for (const addrs of Object.values(interfaces)) {
+    for (const addr of addrs) {
+      if (addr.family === 'IPv4' && !addr.internal) return addr.address;
+    }
+  }
+  return '';
+}
+
+/**
  * Print web console access info (URL + password).
  * Called at the end of init to show the user how to access.
  * Displayed prominently so the user doesn't miss the password.
  */
 function printWebConsoleInfo() {
   const config = getZylosConfig();
-  if (!config.domain) return;
 
   const envPath = path.join(ZYLOS_DIR, '.env');
   let password = '';
@@ -884,9 +897,6 @@ function printWebConsoleInfo() {
 
   if (!password) return;
 
-  const proto = config.protocol || 'https';
-  const url = `${proto}://${config.domain}/console/`;
-
   const line = cyan('  ════════════════════════════════════════════════════');
 
   console.log('');
@@ -894,7 +904,20 @@ function printWebConsoleInfo() {
   console.log('');
   console.log(`  ${bold('  Web Console')}`);
   console.log('');
-  console.log(`    URL:      ${bold(url)}`);
+
+  if (config.domain) {
+    const proto = config.protocol || 'https';
+    const url = `${proto}://${config.domain}/console/`;
+    console.log(`    URL:      ${bold(url)}`);
+  } else {
+    const port = process.env.WEB_CONSOLE_PORT || '3456';
+    console.log(`    Local:    ${bold(`http://localhost:${port}/console/`)}`);
+    const ip = getNetworkIP();
+    if (ip) {
+      console.log(`    Network:  ${bold(`http://${ip}:${port}/console/`)}`);
+    }
+  }
+
   console.log(`    Password: ${bgGreen(bold(` ${password} `))}`);
   console.log('');
   console.log(`    ${dim(`Save this password — also in ${ZYLOS_DIR}/.env`)}`);
