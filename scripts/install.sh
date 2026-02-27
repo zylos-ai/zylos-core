@@ -5,6 +5,9 @@
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/zylos-ai/zylos-core/main/scripts/install.sh | bash
 #
+# Install from a specific branch:
+#   curl -fsSL https://raw.githubusercontent.com/zylos-ai/zylos-core/main/scripts/install.sh | bash -s -- --branch <branch-name>
+#
 # Supported platforms: Linux (Debian/Ubuntu/RHEL), macOS
 # ──────────────────────────────────────────────────────────────
 set -euo pipefail
@@ -13,6 +16,24 @@ set -euo pipefail
 # before executing anything — protects against partial downloads
 # when piped via curl | bash.
 _main() {
+
+# ── Parse Arguments ───────────────────────────────────────────
+BRANCH="main"
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --branch|-b)
+      if [ -z "${2:-}" ]; then
+        echo "[zylos] Error: --branch requires a value" >&2
+        exit 1
+      fi
+      BRANCH="$2"
+      shift 2
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
 
 # ── Configuration ─────────────────────────────────────────────
 ZYLOS_REPO="https://github.com/zylos-ai/zylos-core"
@@ -169,20 +190,25 @@ install_zylos() {
     warn "zylos is already installed (${current_version}). Upgrading..."
   fi
 
-  info "Installing zylos from GitHub (this may take a minute)..."
+  local install_url="${ZYLOS_REPO}#${BRANCH}"
+  if [ "$BRANCH" = "main" ]; then
+    info "Installing zylos from GitHub (this may take a minute)..."
+  else
+    info "Installing zylos from GitHub (branch: ${BRANCH})..."
+  fi
 
   # If npm global prefix is not user-writable (system-installed node),
   # use sudo for npm install -g
   local npm_prefix
   npm_prefix="$(npm config get prefix 2>/dev/null || echo "")"
   if [ -n "$npm_prefix" ] && [ -w "$npm_prefix" ]; then
-    npm install -g --install-links "$ZYLOS_REPO"
+    npm install -g --install-links "$install_url"
   else
     warn "npm global directory (${npm_prefix:-unknown}) requires elevated permissions, using sudo..."
     if [ "$(id -u)" -eq 0 ]; then
-      npm install -g --install-links "$ZYLOS_REPO"
+      npm install -g --install-links "$install_url"
     else
-      sudo npm install -g --install-links "$ZYLOS_REPO"
+      sudo npm install -g --install-links "$install_url"
     fi
   fi
 
@@ -213,6 +239,10 @@ if [ "$(id -u)" -eq 0 ]; then
 fi
 
 detect_os
+
+if [ "$BRANCH" != "main" ]; then
+  info "Branch: ${BRANCH}"
+fi
 
 echo ""
 info "Checking prerequisites..."
