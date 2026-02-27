@@ -230,21 +230,46 @@ echo ""
 ok "Installation complete!"
 echo ""
 
-# If nvm was installed in this session, the user needs to reload their shell
-# so that nvm (and therefore node/npm/zylos) is available in new terminals
+# Detect the user's shell rc file for hints
+_detect_shell_rc() {
+  case "${SHELL:-}" in
+    */zsh)  echo "~/.zshrc" ;;
+    */bash) echo "~/.bashrc" ;;
+    *)      echo "~/.bashrc or ~/.zshrc" ;;
+  esac
+}
+
 if [ "$NVM_INSTALLED_NOW" = true ]; then
-  info "nvm was installed in this session. To use zylos, first reload your shell:"
+  # nvm was freshly installed — PATH only works inside this subshell.
+  # Auto-run zylos init so the user doesn't need to source manually first.
+  info "Running zylos init automatically..."
   echo ""
-  echo "    source ~/.bashrc    # or: source ~/.zshrc"
+  zylos init
+
+  # After init completes, show a prominent reminder as the very last output.
+  # Nothing prints after this, so it won't get scrolled away.
+  local shell_rc
+  shell_rc="$(_detect_shell_rc)"
   echo ""
-  info "Then run:"
+  printf '%b' "${YELLOW}"
+  echo "  ┌─────────────────────────────────────────────────────────┐"
+  echo "  │                                                         │"
+  echo "  │  To use the zylos command in new terminal windows, run: │"
+  echo "  │                                                         │"
+  printf "  │    source %-46s │\n" "$shell_rc"
+  echo "  │                                                         │"
+  echo "  │  Or simply open a new terminal window.                  │"
+  echo "  │                                                         │"
+  echo "  └─────────────────────────────────────────────────────────┘"
+  printf '%b' "${NC}"
+  echo ""
 else
   info "Next step — run:"
+  echo ""
+  echo "    zylos init"
+  echo ""
+  info "This will set up your agent environment interactively."
 fi
-echo ""
-echo "    zylos init"
-echo ""
-info "This will set up your agent environment interactively."
 
 } # end of _main — do not remove (partial download guard)
 
