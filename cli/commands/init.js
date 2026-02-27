@@ -509,7 +509,9 @@ function saveApiKeyToEnv(apiKey) {
       content = content.trimEnd() + `\n\n# Anthropic API key (set by zylos init)\nANTHROPIC_API_KEY=${apiKey}\n`;
     }
     fs.writeFileSync(envPath, content);
-  } catch {}
+  } catch (err) {
+    console.log(`  ${warn(`Could not write API key to .env: ${err.message}`)}`);
+  }
 }
 
 /**
@@ -565,7 +567,9 @@ function saveSetupTokenToEnv(token) {
     content = content.replace(/^# Anthropic API key \(set by zylos init\)\n/m, '');
     content = content.replace(/^ANTHROPIC_API_KEY=.*\n?/m, '');
     fs.writeFileSync(envPath, content);
-  } catch {}
+  } catch (err) {
+    console.log(`  ${warn(`Could not write setup token to .env: ${err.message}`)}`);
+  }
 }
 
 /**
