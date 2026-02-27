@@ -41,6 +41,15 @@ curl -fsSL https://raw.githubusercontent.com/zylos-ai/zylos-core/main/scripts/in
 > 如果你已有 Node.js，安装脚本会提示下一步 — 手动运行 `zylos init` 即可。
 
 <details>
+<summary>从指定分支安装（用于测试）</summary>
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/zylos-ai/zylos-core/main/scripts/install.sh | bash -s -- --branch <branch-name>
+```
+
+</details>
+
+<details>
 <summary>手动安装（如果你已有 Node.js >= 20）</summary>
 
 ```bash
