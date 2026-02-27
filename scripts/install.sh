@@ -244,7 +244,7 @@ if [ "$NVM_INSTALLED_NOW" = true ]; then
   # Auto-run zylos init so the user doesn't need to source manually first.
   info "Running zylos init automatically..."
   echo ""
-  zylos init
+  zylos init < /dev/tty
 
   # After init completes, show a prominent reminder as the very last output.
   # Nothing prints after this, so it won't get scrolled away.
