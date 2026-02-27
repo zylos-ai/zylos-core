@@ -348,18 +348,13 @@ function enqueueStartupControl() {
 }
 
 function isClaudeLoggedIn() {
-  // Check for setup token first (highest priority in Claude Code)
+  // Check for setup token or API key in .env (single read)
   try {
     const envContent = fs.readFileSync(path.join(ZYLOS_DIR, '.env'), 'utf8');
-    const match = envContent.match(/^CLAUDE_CODE_OAUTH_TOKEN=(.+)$/m);
-    if (match && match[1].trim().startsWith('sk-ant-oat')) return true;
-  } catch {}
-
-  // Check for API key auth (set in .env by zylos init)
-  try {
-    const envContent = fs.readFileSync(path.join(ZYLOS_DIR, '.env'), 'utf8');
-    const match = envContent.match(/^ANTHROPIC_API_KEY=(.+)$/m);
-    if (match && match[1].trim().startsWith('sk-ant-')) return true;
+    const oauthMatch = envContent.match(/^CLAUDE_CODE_OAUTH_TOKEN=(.+)$/m);
+    if (oauthMatch && oauthMatch[1].trim().startsWith('sk-ant-oat')) return true;
+    const apiMatch = envContent.match(/^ANTHROPIC_API_KEY=(.+)$/m);
+    if (apiMatch && apiMatch[1].trim().startsWith('sk-ant-')) return true;
   } catch {}
 
   // Fall back to OAuth login check
