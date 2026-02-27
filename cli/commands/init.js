@@ -513,6 +513,93 @@ function saveApiKeyToEnv(apiKey) {
 }
 
 /**
+ * Verify a setup token (CLAUDE_CODE_OAUTH_TOKEN) by making a lightweight API call.
+ * Uses the same approach as verifyApiKey but with OAuth Bearer auth.
+ *
+ * @param {string} token - The setup token to verify
+ * @returns {Promise<boolean>} true if token is valid
+ */
+function verifySetupToken(token) {
+  return new Promise((resolve) => {
+    const req = https.request({
+      hostname: 'api.anthropic.com',
+      path: '/v1/messages',
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'anthropic-version': '2023-06-01',
+        'content-type': 'application/json',
+      },
+      timeout: 10000,
+    }, (res) => {
+      res.resume();
+      // 401/403 = invalid token, anything else (400, 200, etc.) = token is valid
+      resolve(res.statusCode !== 401 && res.statusCode !== 403);
+    });
+    req.on('error', () => resolve(false));
+    req.on('timeout', () => { req.destroy(); resolve(false); });
+    req.write('{}');
+    req.end();
+  });
+}
+
+/**
+ * Save a setup token to ~/.claude/settings.json and process.env.
+ * Does NOT write to ~/zylos/.env here — that happens after template
+ * deployment via saveSetupTokenToEnv().
+ *
+ * @param {string} token - The setup token (sk-ant-oat...)
+ * @returns {boolean} true if saved successfully
+ */
+function saveSetupToken(token) {
+  const settingsDir = path.join(os.homedir(), '.claude');
+  const settingsPath = path.join(settingsDir, 'settings.json');
+  try {
+    fs.mkdirSync(settingsDir, { recursive: true });
+    let settings = {};
+    try { settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8')); } catch {}
+    if (!settings.env) settings.env = {};
+    settings.env.CLAUDE_CODE_OAUTH_TOKEN = token;
+    // Remove API key if set — avoid having both
+    delete settings.env.ANTHROPIC_API_KEY;
+    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n');
+  } catch (err) {
+    console.log(`  ${error(`Failed to write settings.json: ${err.message}`)}`);
+    return false;
+  }
+
+  // Pre-approve in ~/.claude.json (onboarding + trust)
+  approveApiKey(token);
+
+  process.env.CLAUDE_CODE_OAUTH_TOKEN = token;
+
+  return true;
+}
+
+/**
+ * Write CLAUDE_CODE_OAUTH_TOKEN to ~/zylos/.env.
+ * Called after template deployment to ensure .env has the full template content.
+ *
+ * @param {string} token - The setup token
+ */
+function saveSetupTokenToEnv(token) {
+  const envPath = path.join(ZYLOS_DIR, '.env');
+  try {
+    let content = '';
+    try { content = fs.readFileSync(envPath, 'utf8'); } catch {}
+    if (content.match(/^CLAUDE_CODE_OAUTH_TOKEN=.*$/m)) {
+      content = content.replace(/^CLAUDE_CODE_OAUTH_TOKEN=.*$/m, `CLAUDE_CODE_OAUTH_TOKEN=${token}`);
+    } else {
+      content = content.trimEnd() + `\n\n# Claude Code setup token (set by zylos init)\nCLAUDE_CODE_OAUTH_TOKEN=${token}\n`;
+    }
+    // Remove ANTHROPIC_API_KEY if present — avoid having both
+    content = content.replace(/^# Anthropic API key \(set by zylos init\)\n/m, '');
+    content = content.replace(/^ANTHROPIC_API_KEY=.*\n?/m, '');
+    fs.writeFileSync(envPath, content);
+  } catch {}
+}
+
+/**
  * Check if Claude bypass permissions needs first-time acceptance.
  * Returns true if bypass is enabled and hasn't been accepted yet.
  */
@@ -1353,6 +1440,7 @@ export async function initCommand(args) {
   // Step 6: Claude auth check + guided login
   let claudeAuthenticated = false;
   let pendingApiKey = null; // set if user enters API key, written to .env after templates
+  let pendingSetupToken = null; // set if user enters setup-token, written to .env after templates
   if (commandExists('claude')) {
     claudeAuthenticated = isClaudeAuthenticated();
     if (claudeAuthenticated) {
@@ -1362,7 +1450,7 @@ export async function initCommand(args) {
       if (!skipConfirm) {
         const authChoice = await promptChoice(
           '\n  How would you like to authenticate?',
-          ['Claude subscription (opens browser login)', 'Anthropic API key'],
+          ['Claude subscription (opens browser login)', 'Anthropic API key', 'Setup token (from claude setup-token)'],
         );
 
         if (authChoice === 1) {
@@ -1406,6 +1494,28 @@ export async function initCommand(args) {
               console.log(`  ${success('API key verified and saved')}`);
             }
           }
+        } else if (authChoice === 3) {
+          // Option 3: Setup token (OAuth token from claude setup-token)
+          console.log(`\n  ${dim('Paste your setup token (starts with sk-ant-oat):')}`);
+          console.log(`  ${dim('Generate one by running "claude setup-token" on a machine with a browser.')}`);
+          const token = await promptSecret('  Setup token: ');
+          if (!token) {
+            console.log(`  ${warn('No token entered. Skipped.')}`);
+          } else if (!token.startsWith('sk-ant-oat')) {
+            console.log(`  ${error('Invalid format. Setup token should start with sk-ant-oat')}`);
+            console.log(`    ${dim('Run "claude setup-token" to generate a valid token.')}`);
+          } else {
+            console.log(`  ${dim('Verifying setup token...')}`);
+            const tokenValid = await verifySetupToken(token);
+            if (!tokenValid) {
+              console.log(`  ${error('Setup token is invalid or could not be verified.')}`);
+              console.log(`    ${dim('Try generating a new token with "claude setup-token".')}`);
+            } else if (saveSetupToken(token)) {
+              pendingSetupToken = token;
+              claudeAuthenticated = true;
+              console.log(`  ${success('Setup token verified and saved')}`);
+            }
+          }
         }
       } else {
         console.log(`    ${dim('Run "zylos init" again to authenticate.')}`);
@@ -1445,9 +1555,12 @@ export async function initCommand(args) {
     console.log(heading('Deploying templates...'));
     deployTemplates();
 
-    // Write API key to .env if entered during this run
+    // Write auth credentials to .env if entered during this run
     if (pendingApiKey) {
       saveApiKeyToEnv(pendingApiKey);
+    }
+    if (pendingSetupToken) {
+      saveSetupTokenToEnv(pendingSetupToken);
     }
 
     // Timezone (show current, don't re-prompt)
@@ -1509,9 +1622,12 @@ export async function initCommand(args) {
   deployTemplates();
   console.log(`  ${success('Templates deployed')}`);
 
-  // Write API key to .env now that templates have been deployed
+  // Write auth credentials to .env now that templates have been deployed
   if (pendingApiKey) {
     saveApiKeyToEnv(pendingApiKey);
+  }
+  if (pendingSetupToken) {
+    saveSetupTokenToEnv(pendingSetupToken);
   }
 
   // Step 8: Configure timezone
