@@ -348,11 +348,13 @@ function enqueueStartupControl() {
 }
 
 function isClaudeLoggedIn() {
-  // Check for API key auth first (set in .env by zylos init)
+  // Check for setup token or API key in .env (single read)
   try {
     const envContent = fs.readFileSync(path.join(ZYLOS_DIR, '.env'), 'utf8');
-    const match = envContent.match(/^ANTHROPIC_API_KEY=(.+)$/m);
-    if (match && match[1].trim().startsWith('sk-ant-')) return true;
+    const oauthMatch = envContent.match(/^CLAUDE_CODE_OAUTH_TOKEN=(.+)$/m);
+    if (oauthMatch && oauthMatch[1].trim().startsWith('sk-ant-oat')) return true;
+    const apiMatch = envContent.match(/^ANTHROPIC_API_KEY=(.+)$/m);
+    if (apiMatch && apiMatch[1].trim().startsWith('sk-ant-')) return true;
   } catch {}
 
   // Fall back to OAuth login check
@@ -448,15 +450,20 @@ function startClaude() {
   const claudeCmd = `${ENV_CLEAN_PREFIX} ${CLAUDE_BIN}${bypassFlag}`;
   const exitLogSnippet = `_ec=$?; echo "[$(date -Iseconds)] exit_code=$_ec" >> ${EXIT_LOG_FILE}`;
 
-  // Pre-approve API key in ~/.claude.json so Claude skips the interactive
-  // "Detected a custom API key" confirmation prompt on startup
+  // Read auth credentials from .env
   let apiKeyValue = '';
+  let oauthTokenValue = '';
   try {
     const envContent = fs.readFileSync(path.join(ZYLOS_DIR, '.env'), 'utf8');
-    const match = envContent.match(/^ANTHROPIC_API_KEY=(.+)$/m);
-    if (match) apiKeyValue = match[1].trim();
+    const apiMatch = envContent.match(/^ANTHROPIC_API_KEY=(.+)$/m);
+    if (apiMatch) apiKeyValue = apiMatch[1].trim();
+    const oauthMatch = envContent.match(/^CLAUDE_CODE_OAUTH_TOKEN=(.+)$/m);
+    if (oauthMatch) oauthTokenValue = oauthMatch[1].trim();
   } catch {}
+
+  // Pre-approve credentials in ~/.claude.json so Claude skips interactive prompts
   if (apiKeyValue) approveApiKey(apiKeyValue);
+  if (oauthTokenValue) approveApiKey(oauthTokenValue);
 
   if (tmuxHasSession()) {
     sendToTmux(`cd ${ZYLOS_DIR}; ${claudeCmd}; ${exitLogSnippet}`);
@@ -467,9 +474,11 @@ function startClaude() {
       // - PATH: ensures Claude is found even if tmux server has different env
       // - IS_SANDBOX=1: allows --dangerously-skip-permissions as root (Docker)
       // - ANTHROPIC_API_KEY: for API key auth (read from .env)
+      // - CLAUDE_CODE_OAUTH_TOKEN: for setup-token auth (read from .env)
       const sandboxEnv = process.getuid?.() === 0 ? ' -e "IS_SANDBOX=1"' : '';
       const apiKeyEnv = apiKeyValue ? ` -e "ANTHROPIC_API_KEY=${apiKeyValue}"` : '';
-      execSync(`tmux new-session -d -s "${SESSION}" -e "PATH=${process.env.PATH}"${sandboxEnv}${apiKeyEnv} 'cd ${ZYLOS_DIR} && ${claudeCmd}; ${exitLogSnippet}'`);
+      const oauthTokenEnv = oauthTokenValue ? ` -e "CLAUDE_CODE_OAUTH_TOKEN=${oauthTokenValue}"` : '';
+      execSync(`tmux new-session -d -s "${SESSION}" -e "PATH=${process.env.PATH}"${sandboxEnv}${apiKeyEnv}${oauthTokenEnv} 'cd ${ZYLOS_DIR} && ${claudeCmd}; ${exitLogSnippet}'`);
       // Configure status bar with detach hint
       try {
         execSync(`tmux set-option -t "${SESSION}" status-right " Ctrl+B d = detach " 2>/dev/null`);
