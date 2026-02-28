@@ -2,7 +2,7 @@
 
 <img src="./assets/logo.png" alt="Zylos" height="120">
 
-# 🐙 Zylos
+# Zylos
 
 > **Zylos** (/ˈzaɪ.lɒs/ 赛洛丝) — Give your AI a life
 
