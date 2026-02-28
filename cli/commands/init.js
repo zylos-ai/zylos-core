@@ -1082,16 +1082,19 @@ function setupPm2Startup() {
   // Typical: "sudo env PATH=$PATH:/usr/bin pm2 startup systemd -u howard --hp /home/howard"
   const sudoMatch = output.match(/^(sudo .+)$/m);
   if (sudoMatch) {
-    try {
-      execSync(sudoMatch[1], { stdio: 'pipe', timeout: 30000 });
+    // Use stdio: 'inherit' so sudo can prompt interactively
+    // (sudo retries up to 3 times by default)
+    const sudoResult = spawnSync('sh', ['-c', sudoMatch[1]], {
+      stdio: 'inherit',
+      timeout: 60000,
+    });
+    if (sudoResult.status === 0) {
       console.log(`  ${success('PM2 boot auto-start configured')}`);
-      return;
-    } catch (err) {
-      const msg = (err.stderr || '').toString().trim().split('\n')[0] || err.message;
-      console.log(`  ${warn(`PM2 boot auto-start: sudo command failed: ${msg}`)}`);
+    } else {
+      console.log(`  ${warn('PM2 boot auto-start: sudo command failed')}`);
       console.log(`    ${dim(`Fix manually: ${sudoMatch[1]}`)}`);
-      return;
     }
+    return;
   }
 
   // No sudo command found — may already be configured or failed
