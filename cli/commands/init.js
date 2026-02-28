@@ -1498,29 +1498,29 @@ function resolveFromEnv(opts) {
 function validateInitOptions(opts) {
   // Mutual exclusion: setup-token and api-key
   if (opts.setupToken && opts.apiKey) {
-    return '--setup-token and --api-key are mutually exclusive. Pick one:\n  zylos init --setup-token <token>\n  zylos init --api-key <key>';
+    return '--setup-token and --api-key are mutually exclusive.\n  Run zylos init and choose one during setup.';
   }
 
   // Setup token format
   if (opts.setupToken && !opts.setupToken.startsWith('sk-ant-oat')) {
-    return `Invalid setup token. It should start with "sk-ant-oat".\n  To generate one, run on a machine with a browser: claude setup-token`;
+    return 'Invalid setup token. It should start with "sk-ant-oat".\n  Generate one with: claude setup-token\n  Then run: zylos init --setup-token <token>';
   }
 
   // API key format
   if (opts.apiKey && !opts.apiKey.startsWith('sk-ant-')) {
-    return `Invalid API key. It should start with "sk-ant-".\n  Get your key at: https://console.anthropic.com/settings/keys`;
+    return 'Invalid API key. It should start with "sk-ant-".\n  Get your key at: https://console.anthropic.com/settings/keys\n  Then run: zylos init --api-key <key>';
   }
 
   // Timezone validation
   if (opts.timezone && !isValidTimezone(opts.timezone)) {
-    return `Invalid timezone: "${opts.timezone}".\n  Example: --timezone Asia/Shanghai\n  Full list: https://en.wikipedia.org/wiki/List_of_tz_database_time_zones`;
+    return `Invalid timezone: "${opts.timezone}".\n  Run: zylos init --timezone Asia/Shanghai`;
   }
 
   // Domain validation (basic hostname check)
   if (opts.domain) {
     const domainPattern = /^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*$/;
     if (!domainPattern.test(opts.domain)) {
-      return `Invalid domain: "${opts.domain}".\n  Example: --domain agent.example.com`;
+      return `Invalid domain: "${opts.domain}".\n  Run: zylos init --domain agent.example.com`;
     }
   }
 
@@ -1577,7 +1577,6 @@ export async function initCommand(args) {
   const validationErr = validateInitOptions(opts);
   if (validationErr) {
     console.error(`${error(`Error: ${validationErr}`)}`);
-    console.error(`\n  ${dim('Fix the issue above, then run:')} zylos init`);
     process.exit(1);
   }
 
