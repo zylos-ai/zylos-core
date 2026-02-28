@@ -59,13 +59,6 @@ curl -fsSL https://raw.githubusercontent.com/zylos-ai/zylos-core/main/scripts/in
   --web-password MySecurePass123
 ```
 
-**Minimal example** (only authentication, everything else uses defaults):
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/zylos-ai/zylos-core/main/scripts/install.sh | bash -s -- \
-  --setup-token sk-ant-oat01-xxx
-```
-
 **When is non-interactive mode active?**
 
 Automatically when stdin is not a TTY (Docker, `curl | bash` piped execution, CI runners). Also when `CI=true` or `NONINTERACTIVE=1` is set. Use `-y` to force non-interactive in a terminal session.

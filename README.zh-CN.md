@@ -58,13 +58,6 @@ curl -fsSL https://raw.githubusercontent.com/zylos-ai/zylos-core/main/scripts/in
   --web-password MySecurePass123
 ```
 
-**最小示例**（只提供认证，其他使用默认值）：
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/zylos-ai/zylos-core/main/scripts/install.sh | bash -s -- \
-  --setup-token sk-ant-oat01-xxx
-```
-
 **何时自动进入非交互模式？**
 
 stdin 不是 TTY 时自动启用（Docker、管道执行的 `curl | bash`、CI 环境）。设置 `CI=true` 或 `NONINTERACTIVE=1` 也会启用。在终端中用 `-y` 可强制跳过所有提示。
