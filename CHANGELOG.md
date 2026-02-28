@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.2.7] - 2026-02-28
 
 ### Added
-- **Non-interactive init**: deploy Zylos in Docker, CI/CD, or any headless environment with a single command — pass flags like `--setup-token`, `--timezone`, `--domain` directly through `curl | bash`, and the installer does everything unattended. See `zylos init --help` for the full flag and environment variable list (#196, closes #195)
+- **Non-interactive init**: deploy Zylos in Docker, CI/CD, or any headless environment with a single command — designed for batch provisioning where you need to spin up dozens of agents from the same script. Pass flags like `--setup-token`, `--timezone`, `--domain` directly through `curl | bash`, and the installer does everything unattended. See `zylos init --help` for the full flag and environment variable list (#196, closes #195)
 - **Auto-detect headless mode**: non-interactive mode activates automatically when there's no TTY (Docker, CI runners), or when `CI=true` / `NONINTERACTIVE=1` is set — no need to pass `-y` explicitly in truly headless environments (#196)
 - **Setup token verification**: setup tokens are validated via an actual API call before being accepted — invalid or expired tokens are caught immediately, rolled back, and reported with a clear error instead of silently failing later (#196)
 - **`install.sh --no-init`**: install dependencies and the zylos CLI without running `zylos init`, for cases where initialization needs to happen separately (#196)
