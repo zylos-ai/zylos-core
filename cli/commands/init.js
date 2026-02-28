@@ -380,20 +380,17 @@ function ensureBinInPath() {
  * Check if Claude Code is authenticated.
  * @returns {boolean}
  */
-let _authCache = null;
 function isClaudeAuthenticated() {
-  if (_authCache !== null) return _authCache;
   try {
     const result = spawnSync('claude', ['auth', 'status'], {
       stdio: 'pipe',
       encoding: 'utf8',
       timeout: 10000,
     });
-    _authCache = result.status === 0;
+    return result.status === 0;
   } catch {
-    _authCache = false;
+    return false;
   }
-  return _authCache;
 }
 
 /**
