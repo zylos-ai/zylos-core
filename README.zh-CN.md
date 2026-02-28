@@ -41,6 +41,35 @@ curl -fsSL https://raw.githubusercontent.com/zylos-ai/zylos-core/main/scripts/in
 > 如果你已有 Node.js，安装脚本会提示下一步 — 手动运行 `zylos init` 即可。
 
 <details>
+<summary>非交互式安装（Docker、CI/CD、无界面服务器）</summary>
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/zylos-ai/zylos-core/main/scripts/install.sh | bash -s -- \
+  -y \
+  --setup-token <token> \
+  --timezone Asia/Shanghai \
+  --domain agent.example.com \
+  --https \
+  --web-password MySecurePass123
+```
+
+非交互模式在以下情况自动启用：stdin 不是 TTY（如 Docker、不带 `-it` 的 `curl | bash`），或设置了 `CI=true` / `NONINTERACTIVE=1`。在终端中使用 `-y` 可强制非交互模式。
+
+所有参数也可通过环境变量设置：
+
+| 参数 | 环境变量 |
+|------|---------|
+| `--setup-token` | `CLAUDE_CODE_OAUTH_TOKEN` |
+| `--api-key` | `ANTHROPIC_API_KEY` |
+| `--domain` | `ZYLOS_DOMAIN` |
+| `--https` / `--no-https` | `ZYLOS_PROTOCOL`（`https` 或 `http`） |
+| `--web-password` | `ZYLOS_WEB_PASSWORD` |
+
+优先级：CLI 参数 > 环境变量 > 已有 `.env` > 交互式提示。
+
+</details>
+
+<details>
 <summary>从指定分支安装（用于测试）</summary>
 
 ```bash

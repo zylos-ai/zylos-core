@@ -42,6 +42,35 @@ This installs everything you need (git, tmux, Node.js, zylos CLI) and automatica
 > If you already have Node.js installed, the script will print a "next step" prompt — just run `zylos init` manually.
 
 <details>
+<summary>Non-interactive install (Docker, CI/CD, headless servers)</summary>
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/zylos-ai/zylos-core/main/scripts/install.sh | bash -s -- \
+  -y \
+  --setup-token <token> \
+  --timezone Asia/Shanghai \
+  --domain agent.example.com \
+  --https \
+  --web-password MySecurePass123
+```
+
+Non-interactive mode is auto-detected when stdin is not a TTY (e.g., Docker, `curl | bash` without `-it`), or when `CI=true` / `NONINTERACTIVE=1` is set. Use `-y` to force non-interactive in a terminal.
+
+All flags can also be set via environment variables:
+
+| Flag | Environment Variable |
+|------|---------------------|
+| `--setup-token` | `CLAUDE_CODE_OAUTH_TOKEN` |
+| `--api-key` | `ANTHROPIC_API_KEY` |
+| `--domain` | `ZYLOS_DOMAIN` |
+| `--https` / `--no-https` | `ZYLOS_PROTOCOL` (`https` or `http`) |
+| `--web-password` | `ZYLOS_WEB_PASSWORD` |
+
+Resolution order: CLI flag > environment variable > existing `.env` > interactive prompt.
+
+</details>
+
+<details>
 <summary>Install from a specific branch (for testing)</summary>
 
 ```bash
