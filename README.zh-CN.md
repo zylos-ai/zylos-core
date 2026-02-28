@@ -63,6 +63,7 @@ curl -fsSL https://raw.githubusercontent.com/zylos-ai/zylos-core/main/scripts/in
 | `--api-key` | `ANTHROPIC_API_KEY` |
 | `--domain` | `ZYLOS_DOMAIN` |
 | `--https` / `--no-https` | `ZYLOS_PROTOCOL`（`https` 或 `http`） |
+| `--caddy` / `--no-caddy` | —（仅 CLI） |
 | `--web-password` | `ZYLOS_WEB_PASSWORD` |
 
 优先级：CLI 参数 > 环境变量 > 已有 `.env` > 交互式提示。

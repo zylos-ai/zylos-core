@@ -64,6 +64,7 @@ All flags can also be set via environment variables:
 | `--api-key` | `ANTHROPIC_API_KEY` |
 | `--domain` | `ZYLOS_DOMAIN` |
 | `--https` / `--no-https` | `ZYLOS_PROTOCOL` (`https` or `http`) |
+| `--caddy` / `--no-caddy` | — (CLI only) |
 | `--web-password` | `ZYLOS_WEB_PASSWORD` |
 
 Resolution order: CLI flag > environment variable > existing `.env` > interactive prompt.
