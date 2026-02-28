@@ -380,17 +380,20 @@ function ensureBinInPath() {
  * Check if Claude Code is authenticated.
  * @returns {boolean}
  */
+let _authCache = null;
 function isClaudeAuthenticated() {
+  if (_authCache !== null) return _authCache;
   try {
     const result = spawnSync('claude', ['auth', 'status'], {
       stdio: 'pipe',
       encoding: 'utf8',
       timeout: 10000,
     });
-    return result.status === 0;
+    _authCache = result.status === 0;
   } catch {
-    return false;
+    _authCache = false;
   }
+  return _authCache;
 }
 
 /**
@@ -1496,11 +1499,23 @@ function parseInitFlags(args) {
       case '--yes': case '-y': opts.yes = true; break;
       case '--quiet': case '-q': opts.quiet = true; break;
       case '--help': case '-h': opts.help = true; break;
-      case '--timezone': opts.timezone = args[++i] || null; break;
-      case '--setup-token': opts.setupToken = args[++i] || null; break;
-      case '--api-key': opts.apiKey = args[++i] || null; break;
-      case '--domain': opts.domain = args[++i] || null; break;
-      case '--web-password': opts.webPassword = args[++i] || null; break;
+      case '--timezone':
+      case '--setup-token':
+      case '--api-key':
+      case '--domain':
+      case '--web-password': {
+        const val = args[++i];
+        if (!val || val.startsWith('-')) {
+          console.error(`${error(`Error: ${arg} requires a value`)}`);
+          process.exit(1);
+        }
+        if (arg === '--timezone') opts.timezone = val;
+        else if (arg === '--setup-token') opts.setupToken = val;
+        else if (arg === '--api-key') opts.apiKey = val;
+        else if (arg === '--domain') opts.domain = val;
+        else if (arg === '--web-password') opts.webPassword = val;
+        break;
+      }
       case '--https': opts.https = true; break;
       case '--no-https': opts.https = false; break;
       case '--caddy': opts.caddy = true; break;
@@ -1518,15 +1533,17 @@ function parseInitFlags(args) {
  * @param {object} opts - Parsed CLI options (mutated in place)
  */
 function resolveFromEnv(opts) {
-  // Only promote auth tokens from env when not already authenticated.
-  // Avoids mutual-exclusion errors when both vars happen to be set in
-  // the ambient environment (common on machines with prior setup).
+  // Only promote auth tokens from env when:
+  // 1. Not already authenticated (avoids redundant re-verification)
+  // 2. No auth token was provided via CLI flag (avoids false mutual-exclusion
+  //    errors when e.g. --setup-token is on CLI but ANTHROPIC_API_KEY is in env)
   const alreadyAuthed = commandExists('claude') && isClaudeAuthenticated();
-  if (!alreadyAuthed) {
-    if (opts.setupToken === null && process.env.CLAUDE_CODE_OAUTH_TOKEN) {
+  const hasCliAuth = opts.setupToken !== null || opts.apiKey !== null;
+  if (!alreadyAuthed && !hasCliAuth) {
+    if (process.env.CLAUDE_CODE_OAUTH_TOKEN) {
       opts.setupToken = process.env.CLAUDE_CODE_OAUTH_TOKEN;
     }
-    if (opts.apiKey === null && process.env.ANTHROPIC_API_KEY) {
+    if (process.env.ANTHROPIC_API_KEY) {
       opts.apiKey = process.env.ANTHROPIC_API_KEY;
     }
   }
@@ -1611,7 +1628,7 @@ Options:
   --web-password <password>  Set web console password (default: auto-generate)
 
 Environment variables:
-  TZ, CLAUDE_CODE_OAUTH_TOKEN, ANTHROPIC_API_KEY, ZYLOS_DOMAIN,
+  CLAUDE_CODE_OAUTH_TOKEN, ANTHROPIC_API_KEY, ZYLOS_DOMAIN,
   ZYLOS_PROTOCOL, ZYLOS_WEB_PASSWORD
 
   Resolution: CLI flag > env var > .env/config.json > interactive prompt
@@ -1933,7 +1950,7 @@ export async function initCommand(args) {
       if (!quiet) console.log(`\n${dim('No services to start.')}`);
     }
 
-    if (claudeAuthenticated && needsBypassAcceptance()) {
+    if (claudeAuthenticated && !skipConfirm && needsBypassAcceptance()) {
       await guideBypassAcceptance();
     }
 
