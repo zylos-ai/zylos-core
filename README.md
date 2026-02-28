@@ -4,7 +4,7 @@
 
 # 🐙 Zylos
 
-> **Zylos** (/ˈzaɪ.lɒs/) — Give your AI a life
+> **Zylos** (/ˈzaɪ.lɒs/ 赛洛丝) — Give your AI a life
 
 ### Give your AI a life.
 
