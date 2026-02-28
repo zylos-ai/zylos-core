@@ -242,7 +242,7 @@ function writeEnvTimezone(tz) {
  * Auto-detects system timezone and asks user to confirm or select another.
  * On re-init, shows current value and skips prompt.
  *
- * @param {boolean} skipConfirm - Skip interactive prompts (--yes flag)
+ * @param {boolean} skipConfirm - Skip interactive prompts (non-interactive mode)
  * @param {boolean} isReinit - Whether this is a re-init of an existing installation
  * @param {string|null} resolvedTz - Timezone from CLI flag or env var (already validated)
  * @param {boolean} quiet - Suppress output (--quiet flag)
