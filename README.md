@@ -4,6 +4,8 @@
 
 # 🐙 Zylos
 
+> **Zylos** (/ˈzaɪ.lɒs/) — Give your AI a life
+
 ### Give your AI a life.
 
 
