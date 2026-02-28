@@ -5,6 +5,31 @@ All notable changes to zylos-core will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.7] - 2026-02-28
+
+### Added
+- **Non-interactive init**: full headless deployment support for Docker, CI/CD, and fleet provisioning — 9 CLI flags (`-y`, `-q`, `--setup-token`, `--api-key`, `--timezone`, `--domain`, `--https`/`--no-https`, `--caddy`/`--no-caddy`, `--web-password`) and 5 environment variables (`CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY`, `ZYLOS_DOMAIN`, `ZYLOS_PROTOCOL`, `ZYLOS_WEB_PASSWORD`), with resolution order: CLI flag > env var > .env > interactive prompt (#196, closes #195)
+- **Auto-detect non-interactive mode**: automatically skips prompts when stdin is not a TTY, or `CI=true` / `NONINTERACTIVE=1` is set; `-y` remains as explicit override for terminal sessions (#196)
+- **Setup token verification**: tokens are now verified via an actual API call (`claude -p "hi" --max-turns 1`) before being accepted — invalid or expired tokens are rejected with a clear error and automatic rollback (#196)
+- **`--no-init` flag for install.sh**: install dependencies and zylos CLI without running `zylos init` — useful when init needs to run separately (#196)
+- **Auth failure warning**: prominent yellow box displayed at the end of init output when Claude authentication fails, with the exact fix command (#196)
+- **Exit code 2**: partial success exit code when optional steps fail (e.g. Caddy download) but core setup succeeds (#196)
+
+### Fixed
+- Caddy download on macOS: correct URL mapping from `darwin` to `mac` (#188, closes #185)
+- PM2 startup: `sudo` now prompts interactively with retry support instead of failing silently on wrong password (#190, closes #186)
+- PM2 startup: clearer error message when `sudo` fails — explains auto-start is optional and shows the manual command (#190)
+- Validation errors now include actionable recovery commands (e.g. "Generate one with: `claude setup-token`") (#196)
+- install.sh: value-taking flags (`--setup-token`, `--domain`, etc.) validated before consuming the next argument (#196)
+- Environment variable `TZ` no longer picked up by `zylos init` — prevents Docker's default `TZ=UTC` from silently overwriting user-configured timezones on re-init (#196)
+- Setup tokens passed via `--api-key` are detected and rejected with a helpful redirect to `--setup-token` (#196)
+
+### Changed
+- `WEB_CONSOLE_PASSWORD` env var renamed to `ZYLOS_WEB_PASSWORD` (old name still works as fallback) (#196)
+- Logo replaced with official Zylos brand logo (#184)
+- README: added pronunciation guide with Chinese transliteration (#192, #193)
+- README: added non-interactive install documentation with complete flag reference (#197)
+
 ## [0.2.6] - 2026-02-27
 
 ### Added
