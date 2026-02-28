@@ -581,6 +581,53 @@ function saveSetupTokenToEnv(token) {
 }
 
 /**
+ * Verify a setup token by running `claude -p "hi" --max-turns 1`.
+ * The token must already be saved (via saveSetupToken) so claude picks it up.
+ *
+ * @returns {{ valid: boolean, authError?: boolean, message?: string }}
+ */
+function verifySetupToken() {
+  try {
+    const result = spawnSync('claude', ['-p', 'hi', '--max-turns', '1'], {
+      timeout: 30000,
+      env: { ...process.env },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+
+    if (result.status === 0) {
+      return { valid: true };
+    }
+
+    const output = ((result.stdout?.toString() || '') + (result.stderr?.toString() || '')).trim();
+    const lower = output.toLowerCase();
+    const isAuthError = lower.includes('401') || lower.includes('unauthorized') ||
+      lower.includes('authentication') || lower.includes('invalid') ||
+      lower.includes('expired');
+
+    return { valid: false, authError: isAuthError, message: output };
+  } catch (err) {
+    return { valid: false, authError: false, message: err.message };
+  }
+}
+
+/**
+ * Undo saveSetupToken(): remove CLAUDE_CODE_OAUTH_TOKEN from
+ * ~/.claude/settings.json and the current process environment.
+ */
+function rollbackSetupToken() {
+  const settingsPath = path.join(os.homedir(), '.claude', 'settings.json');
+  try {
+    const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+    if (settings.env) {
+      delete settings.env.CLAUDE_CODE_OAUTH_TOKEN;
+    }
+    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n');
+  } catch {}
+
+  delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
+}
+
+/**
  * Check if Claude bypass permissions needs first-time acceptance.
  * Returns true if bypass is enabled and hasn't been accepted yet.
  */
@@ -1688,11 +1735,24 @@ export async function initCommand(args) {
     if (claudeAuthenticated) {
       if (!quiet) console.log(`  ${success('Claude Code authenticated')}`);
     } else if (opts.setupToken) {
-      // Setup token provided via flag/env — use directly (already validated)
+      // Setup token provided via flag/env — save, verify via actual API call, rollback on failure
       if (saveSetupToken(opts.setupToken)) {
-        pendingSetupToken = opts.setupToken;
-        claudeAuthenticated = true;
-        if (!quiet) console.log(`  ${success('Setup token saved')}`);
+        if (!quiet) console.log(`  ${dim('Verifying setup token...')}`);
+        const tokenResult = verifySetupToken();
+        if (tokenResult.valid) {
+          pendingSetupToken = opts.setupToken;
+          claudeAuthenticated = true;
+          if (!quiet) console.log(`  ${success('Setup token verified and saved')}`);
+        } else {
+          rollbackSetupToken();
+          if (tokenResult.authError) {
+            console.error(`  ${error('Setup token is invalid or expired.')}`);
+            console.error(`    ${dim('Generate a new one: claude setup-token')}`);
+          } else {
+            console.error(`  ${error('Could not verify setup token. Check network and try again.')}`);
+            if (tokenResult.message) console.error(`    ${dim(tokenResult.message.split('\n')[0])}`);
+          }
+        }
       }
     } else if (opts.apiKey) {
       // API key provided via flag/env — verify and use directly (already validated format)
@@ -1766,9 +1826,22 @@ export async function initCommand(args) {
             console.log(`  ${error('Invalid format. Setup token should start with sk-ant-oat')}`);
             console.log(`    ${dim('Run "claude setup-token" to generate a valid token.')}`);
           } else if (saveSetupToken(token)) {
-            pendingSetupToken = token;
-            claudeAuthenticated = true;
-            console.log(`  ${success('Setup token saved. It will be verified when Claude starts.')}`);
+            console.log(`  ${dim('Verifying setup token...')}`);
+            const tokenResult = verifySetupToken();
+            if (tokenResult.valid) {
+              pendingSetupToken = token;
+              claudeAuthenticated = true;
+              console.log(`  ${success('Setup token verified and saved')}`);
+            } else {
+              rollbackSetupToken();
+              if (tokenResult.authError) {
+                console.log(`  ${error('Setup token is invalid or expired.')}`);
+                console.log(`    ${dim('Generate a new one: claude setup-token')}`);
+              } else {
+                console.log(`  ${error('Could not verify setup token. Check network and try again.')}`);
+                if (tokenResult.message) console.log(`    ${dim(tokenResult.message.split('\n')[0])}`);
+              }
+            }
           }
         }
       } else {
