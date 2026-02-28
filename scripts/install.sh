@@ -43,7 +43,11 @@ while [ $# -gt 0 ]; do
       ;;
     # Flags that take a value — forward both flag and value to zylos init
     --timezone|--setup-token|--api-key|--domain|--web-password)
-      INIT_ARGS+=("$1" "${2:-}")
+      if [ -z "${2:-}" ]; then
+        echo "[zylos] Error: $1 requires a value" >&2
+        exit 1
+      fi
+      INIT_ARGS+=("$1" "$2")
       shift 2
       ;;
     # Boolean flags — forward as-is to zylos init
@@ -51,8 +55,8 @@ while [ $# -gt 0 ]; do
       INIT_ARGS+=("$1")
       shift
       ;;
-    # Combined short flags (e.g., -yq)
-    -[yqh]*)
+    # Combined short flags (e.g., -yq) — only allow [yqh] characters
+    -[yqh][yqh]|-[yqh][yqh][yqh])
       INIT_ARGS+=("$1")
       shift
       ;;
@@ -313,7 +317,11 @@ else
   # Always run zylos init after installation (environment is ready at this point).
   info "Running zylos init..."
   echo ""
-  zylos init ${INIT_ARGS[@]+"${INIT_ARGS[@]}"} < /dev/tty
+  if [ -e /dev/tty ]; then
+    zylos init ${INIT_ARGS[@]+"${INIT_ARGS[@]}"} < /dev/tty
+  else
+    zylos init ${INIT_ARGS[@]+"${INIT_ARGS[@]}"}
+  fi
 
   # If nvm was freshly installed, PATH only works inside this subshell.
   # Show a reminder so the user knows to source their rc file.

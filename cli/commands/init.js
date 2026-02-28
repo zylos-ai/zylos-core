@@ -245,12 +245,13 @@ function writeEnvTimezone(tz) {
  * @param {boolean} skipConfirm - Skip interactive prompts (--yes flag)
  * @param {boolean} isReinit - Whether this is a re-init of an existing installation
  * @param {string|null} resolvedTz - Timezone from CLI flag or env var (already validated)
+ * @param {boolean} quiet - Suppress output (--quiet flag)
  */
-async function configureTimezone(skipConfirm, isReinit, resolvedTz = null) {
+async function configureTimezone(skipConfirm, isReinit, resolvedTz = null, quiet = false) {
   // CLI flag or env var provided — use directly
   if (resolvedTz) {
     writeEnvTimezone(resolvedTz);
-    console.log(`  ${success(`Timezone: ${bold(resolvedTz)}`)}`);
+    if (!quiet) console.log(`  ${success(`Timezone: ${bold(resolvedTz)}`)}`);
     return;
   }
 
@@ -258,7 +259,7 @@ async function configureTimezone(skipConfirm, isReinit, resolvedTz = null) {
 
   // Re-init with valid non-default timezone: just display it
   if (isReinit && currentTz && isValidTimezone(currentTz)) {
-    console.log(`  ${success(`Timezone: ${bold(currentTz)}`)}`);
+    if (!quiet) console.log(`  ${success(`Timezone: ${bold(currentTz)}`)}`);
     return;
   }
 
@@ -266,7 +267,7 @@ async function configureTimezone(skipConfirm, isReinit, resolvedTz = null) {
   if (skipConfirm) {
     const detected = detectSystemTimezone();
     writeEnvTimezone(detected);
-    console.log(`  ${success(`Timezone: ${bold(detected)}`)}`);
+    if (!quiet) console.log(`  ${success(`Timezone: ${bold(detected)}`)}`);
     return;
   }
 
@@ -622,7 +623,9 @@ function rollbackSetupToken() {
       delete settings.env.CLAUDE_CODE_OAUTH_TOKEN;
     }
     fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n');
-  } catch {}
+  } catch (err) {
+    console.error(`  ${warn(`Could not rollback setup token from settings.json: ${err.message}`)}`);
+  }
 
   delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
 }
@@ -1515,11 +1518,17 @@ function parseInitFlags(args) {
  * @param {object} opts - Parsed CLI options (mutated in place)
  */
 function resolveFromEnv(opts) {
-  if (opts.setupToken === null && process.env.CLAUDE_CODE_OAUTH_TOKEN) {
-    opts.setupToken = process.env.CLAUDE_CODE_OAUTH_TOKEN;
-  }
-  if (opts.apiKey === null && process.env.ANTHROPIC_API_KEY) {
-    opts.apiKey = process.env.ANTHROPIC_API_KEY;
+  // Only promote auth tokens from env when not already authenticated.
+  // Avoids mutual-exclusion errors when both vars happen to be set in
+  // the ambient environment (common on machines with prior setup).
+  const alreadyAuthed = commandExists('claude') && isClaudeAuthenticated();
+  if (!alreadyAuthed) {
+    if (opts.setupToken === null && process.env.CLAUDE_CODE_OAUTH_TOKEN) {
+      opts.setupToken = process.env.CLAUDE_CODE_OAUTH_TOKEN;
+    }
+    if (opts.apiKey === null && process.env.ANTHROPIC_API_KEY) {
+      opts.apiKey = process.env.ANTHROPIC_API_KEY;
+    }
   }
   if (opts.domain === null && process.env.ZYLOS_DOMAIN) {
     opts.domain = process.env.ZYLOS_DOMAIN;
@@ -1530,10 +1539,10 @@ function resolveFromEnv(opts) {
   if (opts.webPassword === null) {
     opts.webPassword = process.env.ZYLOS_WEB_PASSWORD || process.env.WEB_CONSOLE_PASSWORD || null;
   }
-  // TZ: only use env var if --timezone not provided and TZ is explicitly in env
-  if (opts.timezone === null && process.env.TZ) {
-    opts.timezone = process.env.TZ;
-  }
+  // TZ: do NOT pick up ambient TZ from the environment.
+  // Docker containers often have TZ=UTC set by default, which would silently
+  // overwrite user-configured timezones on re-init. Only --timezone flag applies.
+  // The auto-detect in configureTimezone() will handle the default case.
 }
 
 /**
@@ -1553,9 +1562,12 @@ function validateInitOptions(opts) {
     return 'Invalid setup token. It should start with "sk-ant-oat".\n  Generate one with: claude setup-token\n  Then run: zylos init --setup-token <token>';
   }
 
-  // API key format
+  // API key format (reject setup tokens — they start with sk-ant-oat)
   if (opts.apiKey && !opts.apiKey.startsWith('sk-ant-')) {
     return 'Invalid API key. It should start with "sk-ant-".\n  Get your key at: https://console.anthropic.com/settings/keys\n  Then run: zylos init --api-key <key>';
+  }
+  if (opts.apiKey && opts.apiKey.startsWith('sk-ant-oat')) {
+    return 'That looks like a setup token, not an API key.\n  Use --setup-token instead: zylos init --setup-token <token>';
   }
 
   // Timezone validation
@@ -1603,6 +1615,10 @@ Environment variables:
   ZYLOS_PROTOCOL, ZYLOS_WEB_PASSWORD
 
   Resolution: CLI flag > env var > .env/config.json > interactive prompt
+
+Note: --setup-token and --api-key values are visible in process listings.
+  On shared systems, prefer environment variables instead:
+    CLAUDE_CODE_OAUTH_TOKEN=... zylos init -y
 `);
 }
 
@@ -1752,6 +1768,7 @@ export async function initCommand(args) {
             console.error(`  ${error('Could not verify setup token. Check network and try again.')}`);
             if (tokenResult.message) console.error(`    ${dim(tokenResult.message.split('\n')[0])}`);
           }
+          if (skipConfirm) exitCode = 1;
         }
       }
     } else if (opts.apiKey) {
@@ -1761,6 +1778,7 @@ export async function initCommand(args) {
       if (!keyValid) {
         console.error(`  ${error('API key is invalid or could not be verified.')}`);
         console.error(`    ${dim('Check your key at console.anthropic.com')}`);
+        if (skipConfirm) exitCode = 1;
       } else if (saveApiKey(opts.apiKey)) {
         pendingApiKey = opts.apiKey;
         claudeAuthenticated = true;
@@ -1897,7 +1915,7 @@ export async function initCommand(args) {
 
     // Timezone: use resolved value or show current
     if (!quiet) console.log(heading('Checking timezone...'));
-    await configureTimezone(skipConfirm, true, opts.timezone);
+    await configureTimezone(skipConfirm, true, opts.timezone, quiet);
 
     // Caddy setup (idempotent — skips if already configured)
     if (!quiet) console.log(heading('Checking Caddy...'));
@@ -1975,7 +1993,7 @@ export async function initCommand(args) {
 
   // Step 8: Configure timezone
   if (!quiet) console.log(`\n${heading('Timezone configuration...')}`);
-  await configureTimezone(skipConfirm, false, opts.timezone);
+  await configureTimezone(skipConfirm, false, opts.timezone, quiet);
 
   // Step 9: Sync Core Skills
   const syncResult = syncCoreSkills();
@@ -2015,8 +2033,8 @@ export async function initCommand(args) {
     setupPm2Startup();
   }
 
-  // First-time Claude bypass acceptance (only if authenticated)
-  if (claudeAuthenticated && needsBypassAcceptance()) {
+  // First-time Claude bypass acceptance (only if authenticated, skip in non-interactive mode)
+  if (claudeAuthenticated && !skipConfirm && needsBypassAcceptance()) {
     await guideBypassAcceptance();
   }
 
@@ -2025,7 +2043,7 @@ export async function initCommand(args) {
     console.log(`\n${success(bold('Zylos initialized successfully!'))}\n`);
   }
 
-  if (servicesStarted > 0) {
+  if (servicesStarted > 0 && !quiet) {
     console.log(`${green(`${servicesStarted} service(s) started.`)} ${dim('Run "zylos status" to check.')}\n`);
   }
 
