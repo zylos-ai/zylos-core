@@ -603,7 +603,9 @@ function verifySetupToken() {
     const lower = output.toLowerCase();
     const isAuthError = lower.includes('401') || lower.includes('unauthorized') ||
       lower.includes('authentication') || lower.includes('invalid token') ||
-      lower.includes('invalid key') || lower.includes('expired');
+      lower.includes('invalid key') || lower.includes('expired') ||
+      lower.includes('does not have access') || lower.includes('login again') ||
+      lower.includes('permission denied');
 
     return { valid: false, authError: isAuthError, message: output };
   } catch (err) {
