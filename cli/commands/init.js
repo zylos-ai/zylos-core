@@ -1498,29 +1498,29 @@ function resolveFromEnv(opts) {
 function validateInitOptions(opts) {
   // Mutual exclusion: setup-token and api-key
   if (opts.setupToken && opts.apiKey) {
-    return '--setup-token and --api-key are mutually exclusive. Choose one authentication method.\n  Use --setup-token for OAuth tokens or --api-key for API keys, not both.';
+    return '--setup-token and --api-key are mutually exclusive. Pick one:\n  zylos init --setup-token <token>\n  zylos init --api-key <key>';
   }
 
   // Setup token format
   if (opts.setupToken && !opts.setupToken.startsWith('sk-ant-oat')) {
-    return `Invalid setup token format. Must start with "sk-ant-oat" (got "${opts.setupToken.slice(0, 12)}...").\n  Generate a token with: claude setup-token`;
+    return `Invalid setup token. It should start with "sk-ant-oat".\n  To generate one, run on a machine with a browser: claude setup-token`;
   }
 
   // API key format
   if (opts.apiKey && !opts.apiKey.startsWith('sk-ant-')) {
-    return `Invalid API key format. Must start with "sk-ant-" (got "${opts.apiKey.slice(0, 10)}...").\n  Get your API key at: https://console.anthropic.com/settings/keys`;
+    return `Invalid API key. It should start with "sk-ant-".\n  Get your key at: https://console.anthropic.com/settings/keys`;
   }
 
   // Timezone validation
   if (opts.timezone && !isValidTimezone(opts.timezone)) {
-    return `Invalid timezone: "${opts.timezone}". Must be a valid IANA timezone (e.g., Asia/Shanghai).\n  See: https://en.wikipedia.org/wiki/List_of_tz_database_time_zones`;
+    return `Invalid timezone: "${opts.timezone}".\n  Example: --timezone Asia/Shanghai\n  Full list: https://en.wikipedia.org/wiki/List_of_tz_database_time_zones`;
   }
 
   // Domain validation (basic hostname check)
   if (opts.domain) {
     const domainPattern = /^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*$/;
     if (!domainPattern.test(opts.domain)) {
-      return `Invalid domain: "${opts.domain}". Must be a valid hostname (e.g., agent.example.com).`;
+      return `Invalid domain: "${opts.domain}".\n  Example: --domain agent.example.com`;
     }
   }
 
@@ -1577,8 +1577,7 @@ export async function initCommand(args) {
   const validationErr = validateInitOptions(opts);
   if (validationErr) {
     console.error(`${error(`Error: ${validationErr}`)}`);
-    console.error(`\n  ${dim('Fix the issue and run again:')} zylos init [options]`);
-    console.error(`  ${dim('See all options:')} zylos init --help`);
+    console.error(`\n  ${dim('Run')} zylos init --help ${dim('to see all available options.')}`);
     process.exit(1);
   }
 
