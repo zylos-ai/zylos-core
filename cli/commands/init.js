@@ -2082,19 +2082,19 @@ export async function initCommand(args) {
   }
 
   if (!quiet) {
-    if (!claudeAuthenticated && (opts.setupToken || opts.apiKey)) {
-      // Auth was explicitly attempted but failed — yellow box (matches install.sh style)
-      // Skip Next steps entirely: adding components is pointless without auth.
-      const fixCmd = opts.setupToken
-        ? 'zylos init --setup-token <valid-token>'
-        : 'zylos init --api-key <valid-key>';
+    if (!claudeAuthenticated) {
+      // Yellow warning box — same treatment regardless of whether a credential
+      // was attempted or not. Auth is required; Next steps without it is misleading.
+      const fixCmd = (opts.setupToken || opts.apiKey)
+        ? (opts.setupToken ? 'zylos init --setup-token <valid-token>' : 'zylos init --api-key <valid-key>')
+        : 'zylos init';
       console.log('');
       console.log(yellow('  ┌────────────────────────────────────────────────────────┐'));
       console.log(yellow('  │                                                        │'));
-      console.log(yellow('  │  ⚠  Authentication FAILED                             │'));
+      console.log(yellow('  │  ⚠  Claude is not authenticated                       │'));
       console.log(yellow('  │                                                        │'));
-      console.log(yellow('  │  Zylos is installed, but Claude is not authenticated.  │'));
-      console.log(yellow('  │  Claude will not work until a valid credential is set. │'));
+      console.log(yellow('  │  Zylos is installed, but Claude will not work until    │'));
+      console.log(yellow('  │  a valid credential is provided.                       │'));
       console.log(yellow('  │                                                        │'));
       console.log(yellow('  │  To fix:                                               │'));
       console.log(yellow(`  │    ${fixCmd}${' '.repeat(Math.max(0, 52 - fixCmd.length))}│`));
@@ -2103,9 +2103,6 @@ export async function initCommand(args) {
       console.log('');
     } else {
       console.log(`\n${heading('Next steps:')}`);
-      if (!claudeAuthenticated) {
-        console.log(`  ${bold('zylos init')}              ${dim('# Authenticate first')}`);
-      }
       console.log(`  ${bold('zylos add telegram')}    ${dim('# Add Telegram bot')}`);
       console.log(`  ${bold('zylos add lark')}        ${dim('# Add Lark bot')}`);
       console.log(`  ${bold('zylos status')}          ${dim('# Check service status')}`);
