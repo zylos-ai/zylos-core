@@ -1616,8 +1616,8 @@ function printInitHelp() {
 Usage: zylos init [options]
 
 Options:
-  -y, --yes                  Non-interactive mode (skip all prompts, use defaults)
-  -q, --quiet                Minimal output (for CI/CD)
+  -y, --yes                  Force non-interactive mode (even with a TTY)
+  -q, --quiet                Minimal output
   --timezone <tz>            Set timezone (IANA format, e.g., Asia/Shanghai)
   --setup-token <token>      Authenticate with Claude setup token
   --api-key <key>            Authenticate with Anthropic API key
@@ -1625,6 +1625,11 @@ Options:
   --https / --no-https       Enable/disable HTTPS (default: https when domain set)
   --caddy / --no-caddy       Install/skip Caddy web server (default: install)
   --web-password <password>  Set web console password (default: auto-generate)
+
+Non-interactive mode:
+  Automatically enabled when stdin is not a TTY, or CI=true / NONINTERACTIVE=1
+  is set. Use -y to force non-interactive in a terminal. Flags and env vars
+  provide values; unfilled fields use sensible defaults.
 
 Environment variables:
   CLAUDE_CODE_OAUTH_TOKEN, ANTHROPIC_API_KEY, ZYLOS_DOMAIN,
@@ -1634,7 +1639,7 @@ Environment variables:
 
 Note: --setup-token and --api-key values are visible in process listings.
   On shared systems, prefer environment variables instead:
-    CLAUDE_CODE_OAUTH_TOKEN=... zylos init -y
+    CLAUDE_CODE_OAUTH_TOKEN=... zylos init
 `);
 }
 
@@ -1659,7 +1664,11 @@ export async function initCommand(args) {
     process.exit(1);
   }
 
-  const skipConfirm = opts.yes;
+  // Non-interactive mode: explicit -y, no TTY on stdin, or CI environment
+  const skipConfirm = opts.yes ||
+    !process.stdin.isTTY ||
+    process.env.CI === 'true' ||
+    process.env.NONINTERACTIVE === '1';
   const quiet = opts.quiet;
 
   // Track exit code: 0 = success, 1 = fatal, 2 = partial success
