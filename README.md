@@ -59,7 +59,7 @@ curl -fsSL https://raw.githubusercontent.com/zylos-ai/zylos-core/main/scripts/in
 
 **When is non-interactive mode active?**
 
-Automatically when stdin is not a TTY (Docker, `curl | bash` piped execution, CI runners). Also when `CI=true` or `NONINTERACTIVE=1` is set. Use `-y` to force non-interactive in a terminal session.
+Automatically when no TTY is available — e.g. Docker containers (without `-it`), CI runners, or cron jobs. Also when `CI=true` or `NONINTERACTIVE=1` is set. Note: `curl | bash` in a terminal is still interactive (the install script redirects from `/dev/tty`). Use `-y` to force non-interactive in a terminal.
 
 **Flags:**
 

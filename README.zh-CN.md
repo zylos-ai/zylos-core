@@ -58,7 +58,7 @@ curl -fsSL https://raw.githubusercontent.com/zylos-ai/zylos-core/main/scripts/in
 
 **何时自动进入非交互模式？**
 
-stdin 不是 TTY 时自动启用（Docker、管道执行的 `curl | bash`、CI 环境）。设置 `CI=true` 或 `NONINTERACTIVE=1` 也会启用。在终端中用 `-y` 可强制跳过所有提示。
+没有 TTY 时自动启用 — 如 Docker 容器（未加 `-it`）、CI 环境、cron 任务等。设置 `CI=true` 或 `NONINTERACTIVE=1` 也会启用。注意：在终端中执行 `curl | bash` 仍然是交互模式（安装脚本会从 `/dev/tty` 重定向输入）。在终端中用 `-y` 可强制非交互模式。
 
 **参数说明：**
 
