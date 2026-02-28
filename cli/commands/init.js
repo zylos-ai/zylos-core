@@ -991,10 +991,8 @@ function getNetworkIP() {
  * Called at the end of init to show the user how to access.
  * Displayed prominently so the user doesn't miss the password.
  * Always shown even in quiet mode (essential output).
- *
- * @param {boolean} quietMode - If true, use compact output
  */
-function printWebConsoleInfo(quietMode = false) {
+function printWebConsoleInfo() {
   const config = getZylosConfig();
 
   const envPath = path.join(ZYLOS_DIR, '.env');
@@ -1854,7 +1852,7 @@ export async function initCommand(args) {
         console.log(`  ${dim('Run "zylos init" again to authenticate.')}`);
       }
     }
-    printWebConsoleInfo(quiet);
+    printWebConsoleInfo();
     if (!quiet) console.log(`\n${dim('Use "zylos add <component>" to add components.')}`);
     if (exitCode) process.exit(exitCode);
     return;
@@ -1958,7 +1956,7 @@ export async function initCommand(args) {
     console.log(`${green(`${servicesStarted} service(s) started.`)} ${dim('Run "zylos status" to check.')}\n`);
   }
 
-  printWebConsoleInfo(quiet);
+  printWebConsoleInfo();
 
   if (claudeJustInstalled) {
     // Auto-add ~/.local/bin to shell profile so future shell sessions find claude
