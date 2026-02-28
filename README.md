@@ -56,18 +56,34 @@ curl -fsSL https://raw.githubusercontent.com/zylos-ai/zylos-core/main/scripts/in
 
 Non-interactive mode is auto-detected when stdin is not a TTY (e.g., Docker, `curl | bash` without `-it`), or when `CI=true` / `NONINTERACTIVE=1` is set. Use `-y` to force non-interactive in a terminal.
 
-All flags can also be set via environment variables:
+Available flags:
 
 | Flag | Environment Variable |
 |------|---------------------|
-| `--setup-token` | `CLAUDE_CODE_OAUTH_TOKEN` |
-| `--api-key` | `ANTHROPIC_API_KEY` |
-| `--domain` | `ZYLOS_DOMAIN` |
+| `-y`, `--yes` | Auto-detected (see above) |
+| `-q`, `--quiet` | — |
+| `--timezone <tz>` | — |
+| `--setup-token <token>` | `CLAUDE_CODE_OAUTH_TOKEN` |
+| `--api-key <key>` | `ANTHROPIC_API_KEY` |
+| `--domain <domain>` | `ZYLOS_DOMAIN` |
 | `--https` / `--no-https` | `ZYLOS_PROTOCOL` (`https` or `http`) |
-| `--caddy` / `--no-caddy` | — (CLI only) |
-| `--web-password` | `ZYLOS_WEB_PASSWORD` |
+| `--caddy` / `--no-caddy` | — |
+| `--web-password <pass>` | `ZYLOS_WEB_PASSWORD` |
 
 Resolution order: CLI flag > environment variable > existing `.env` > interactive prompt.
+
+> **Security note:** `--setup-token` and `--api-key` values are visible in process listings. On shared systems, prefer environment variables: `CLAUDE_CODE_OAUTH_TOKEN=... zylos init`
+
+</details>
+
+<details>
+<summary>Install without running init (environment only)</summary>
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/zylos-ai/zylos-core/main/scripts/install.sh | bash -s -- --no-init
+```
+
+Installs dependencies and the zylos CLI, but skips `zylos init`. Useful when you want to run init separately.
 
 </details>
 
@@ -90,7 +106,7 @@ zylos init
 
 </details>
 
-`zylos init` is interactive and idempotent. It will:
+`zylos init` is idempotent and supports both interactive and non-interactive modes. It will:
 1. Install missing tools (tmux, git, PM2, Claude Code)
 2. Guide you through Claude authentication (browser login, API key, or [setup token](https://code.claude.com/docs/en/authentication) for headless servers)
 3. Create the `~/zylos/` directory with memory, skills, and services

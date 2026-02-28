@@ -55,18 +55,34 @@ curl -fsSL https://raw.githubusercontent.com/zylos-ai/zylos-core/main/scripts/in
 
 非交互模式在以下情况自动启用：stdin 不是 TTY（如 Docker、不带 `-it` 的 `curl | bash`），或设置了 `CI=true` / `NONINTERACTIVE=1`。在终端中使用 `-y` 可强制非交互模式。
 
-所有参数也可通过环境变量设置：
+可用参数：
 
 | 参数 | 环境变量 |
 |------|---------|
-| `--setup-token` | `CLAUDE_CODE_OAUTH_TOKEN` |
-| `--api-key` | `ANTHROPIC_API_KEY` |
-| `--domain` | `ZYLOS_DOMAIN` |
+| `-y`, `--yes` | 自动检测（见上文） |
+| `-q`, `--quiet` | — |
+| `--timezone <tz>` | — |
+| `--setup-token <token>` | `CLAUDE_CODE_OAUTH_TOKEN` |
+| `--api-key <key>` | `ANTHROPIC_API_KEY` |
+| `--domain <domain>` | `ZYLOS_DOMAIN` |
 | `--https` / `--no-https` | `ZYLOS_PROTOCOL`（`https` 或 `http`） |
-| `--caddy` / `--no-caddy` | —（仅 CLI） |
-| `--web-password` | `ZYLOS_WEB_PASSWORD` |
+| `--caddy` / `--no-caddy` | — |
+| `--web-password <pass>` | `ZYLOS_WEB_PASSWORD` |
 
 优先级：CLI 参数 > 环境变量 > 已有 `.env` > 交互式提示。
+
+> **安全提示：** `--setup-token` 和 `--api-key` 的值在进程列表中可见。在共享服务器上，建议使用环境变量：`CLAUDE_CODE_OAUTH_TOKEN=... zylos init`
+
+</details>
+
+<details>
+<summary>仅安装环境，不运行 init</summary>
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/zylos-ai/zylos-core/main/scripts/install.sh | bash -s -- --no-init
+```
+
+安装依赖和 zylos CLI，但跳过 `zylos init`。适用于需要单独运行 init 的场景。
 
 </details>
 
@@ -89,7 +105,7 @@ zylos init
 
 </details>
 
-`zylos init` 是交互式的，可重复运行。它会：
+`zylos init` 可重复运行，支持交互式和非交互式两种模式。它会：
 1. 安装缺失的工具（tmux、git、PM2、Claude Code）
 2. 引导你完成 Claude 认证（浏览器登录、API key 或 [setup token](https://code.claude.com/docs/en/authentication)，适用于无浏览器的服务器）
 3. 创建 `~/zylos/` 目录，包含记忆、技能和服务
