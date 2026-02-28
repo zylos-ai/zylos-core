@@ -2103,7 +2103,10 @@ export async function initCommand(args) {
     }
 
     console.log(`\n${heading('Next steps:')}`);
-    if (!claudeAuthenticated) {
+    if (!claudeAuthenticated && !(opts.setupToken || opts.apiKey)) {
+      // Only show generic auth hint when no credential was attempted.
+      // When a credential was provided but failed, the yellow box above
+      // already tells the user exactly how to fix it.
       console.log(`  ${bold('zylos init')}              ${dim('# Authenticate first')}`);
     }
     console.log(`  ${bold('zylos add telegram')}    ${dim('# Add Telegram bot')}`);
