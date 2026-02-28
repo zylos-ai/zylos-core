@@ -242,15 +242,24 @@ function writeEnvTimezone(tz) {
  * Auto-detects system timezone and asks user to confirm or select another.
  * On re-init, shows current value and skips prompt.
  *
- * @param {boolean} skipConfirm - Skip interactive prompts (--yes flag)
+ * @param {boolean} skipConfirm - Skip interactive prompts (non-interactive mode)
  * @param {boolean} isReinit - Whether this is a re-init of an existing installation
+ * @param {string|null} resolvedTz - Timezone from CLI flag or env var (already validated)
+ * @param {boolean} quiet - Suppress output (--quiet flag)
  */
-async function configureTimezone(skipConfirm, isReinit) {
+async function configureTimezone(skipConfirm, isReinit, resolvedTz = null, quiet = false) {
+  // CLI flag or env var provided — use directly
+  if (resolvedTz) {
+    writeEnvTimezone(resolvedTz);
+    if (!quiet) console.log(`  ${success(`Timezone: ${bold(resolvedTz)}`)}`);
+    return;
+  }
+
   const currentTz = readEnvTimezone();
 
   // Re-init with valid non-default timezone: just display it
   if (isReinit && currentTz && isValidTimezone(currentTz)) {
-    console.log(`  ${success(`Timezone: ${bold(currentTz)}`)}`);
+    if (!quiet) console.log(`  ${success(`Timezone: ${bold(currentTz)}`)}`);
     return;
   }
 
@@ -258,7 +267,7 @@ async function configureTimezone(skipConfirm, isReinit) {
   if (skipConfirm) {
     const detected = detectSystemTimezone();
     writeEnvTimezone(detected);
-    console.log(`  ${success(`Timezone: ${bold(detected)}`)}`);
+    if (!quiet) console.log(`  ${success(`Timezone: ${bold(detected)}`)}`);
     return;
   }
 
@@ -570,6 +579,57 @@ function saveSetupTokenToEnv(token) {
   } catch (err) {
     console.log(`  ${warn(`Could not write setup token to .env: ${err.message}`)}`);
   }
+}
+
+/**
+ * Verify a setup token by running `claude -p "hi" --max-turns 1`.
+ * The token must already be saved (via saveSetupToken) so claude picks it up.
+ *
+ * @returns {{ valid: boolean, authError?: boolean, message?: string }}
+ */
+function verifySetupToken() {
+  try {
+    const result = spawnSync('claude', ['-p', 'hi', '--max-turns', '1'], {
+      timeout: 30000,
+      env: { ...process.env },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+
+    if (result.status === 0) {
+      return { valid: true };
+    }
+
+    const output = ((result.stdout?.toString() || '') + (result.stderr?.toString() || '')).trim();
+    const lower = output.toLowerCase();
+    const isAuthError = lower.includes('401') || lower.includes('unauthorized') ||
+      lower.includes('authentication') || lower.includes('invalid token') ||
+      lower.includes('invalid key') || lower.includes('expired') ||
+      lower.includes('does not have access') || lower.includes('login again') ||
+      lower.includes('permission denied');
+
+    return { valid: false, authError: isAuthError, message: output };
+  } catch (err) {
+    return { valid: false, authError: false, message: err.message };
+  }
+}
+
+/**
+ * Undo saveSetupToken(): remove CLAUDE_CODE_OAUTH_TOKEN from
+ * ~/.claude/settings.json and the current process environment.
+ */
+function rollbackSetupToken() {
+  const settingsPath = path.join(os.homedir(), '.claude', 'settings.json');
+  try {
+    const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+    if (settings.env) {
+      delete settings.env.CLAUDE_CODE_OAUTH_TOKEN;
+    }
+    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n');
+  } catch (err) {
+    console.error(`  ${warn(`Could not rollback setup token from settings.json: ${err.message}`)}`);
+  }
+
+  delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
 }
 
 /**
@@ -902,27 +962,66 @@ function installSkillDependencies() {
 
 /**
  * Ensure a web-console password exists in .env.
+ * Reads from ZYLOS_WEB_PASSWORD (new name), falls back to WEB_CONSOLE_PASSWORD (legacy).
  * Generates a random 16-char password if not already set.
  * Idempotent — safe to run on repeated init.
  *
+ * @param {string|null} explicitPassword - Password from --web-password flag or env var
  * @returns {string} The password (existing or newly generated)
  */
-function ensureWebConsolePassword() {
+function ensureWebConsolePassword(explicitPassword = null) {
   const envPath = path.join(ZYLOS_DIR, '.env');
-  const key = 'WEB_CONSOLE_PASSWORD';
+  const newKey = 'ZYLOS_WEB_PASSWORD';
+  const oldKey = 'WEB_CONSOLE_PASSWORD';
 
   let content = '';
   try { content = fs.readFileSync(envPath, 'utf8'); } catch { return ''; }
 
-  // Already set — return existing
-  const match = content.match(new RegExp(`^${key}=(.+)`, 'm'));
-  if (match) return match[1].trim();
+  // Explicit password from flag/env: write it
+  if (explicitPassword) {
+    if (content.match(new RegExp(`^${newKey}=.*$`, 'm'))) {
+      content = content.replace(new RegExp(`^${newKey}=.*$`, 'm'), `${newKey}=${explicitPassword}`);
+    } else if (content.match(new RegExp(`^${oldKey}=.*$`, 'm'))) {
+      content = content.replace(new RegExp(`^${oldKey}=.*$`, 'm'), `${newKey}=${explicitPassword}`);
+    } else {
+      content = content.trimEnd() + `\n# Web Console password\n${newKey}=${explicitPassword}\n`;
+    }
+    fs.writeFileSync(envPath, content);
+    return explicitPassword;
+  }
+
+  // Check new name first, then legacy
+  const matchNew = content.match(new RegExp(`^${newKey}=(.+)`, 'm'));
+  if (matchNew) return matchNew[1].trim();
+
+  const matchOld = content.match(new RegExp(`^${oldKey}=(.+)`, 'm'));
+  if (matchOld) return matchOld[1].trim();
 
   // Generate new password
   const password = crypto.randomBytes(12).toString('base64url').slice(0, 16);
-  const entry = `\n# Web Console password (auto-generated)\n${key}=${password}\n`;
+  const entry = `\n# Web Console password\n${newKey}=${password}\n`;
   fs.writeFileSync(envPath, content.trimEnd() + entry);
   return password;
+}
+
+/**
+ * Migrate WEB_CONSOLE_PASSWORD → ZYLOS_WEB_PASSWORD in .env.
+ * If old name found and new name not present, rename in-place.
+ */
+function migrateWebConsolePassword() {
+  const envPath = path.join(ZYLOS_DIR, '.env');
+  let content = '';
+  try { content = fs.readFileSync(envPath, 'utf8'); } catch { return; }
+
+  const hasOld = /^WEB_CONSOLE_PASSWORD=(.+)$/m.test(content);
+  const hasNew = /^ZYLOS_WEB_PASSWORD=/m.test(content);
+
+  if (hasOld && !hasNew) {
+    content = content.replace(/^WEB_CONSOLE_PASSWORD=/m, 'ZYLOS_WEB_PASSWORD=');
+    // Update comment if present
+    content = content.replace(/^# Web Console password \(auto-generated\)$/m, '# Web Console password');
+    fs.writeFileSync(envPath, content);
+  }
 }
 
 /**
@@ -943,6 +1042,7 @@ function getNetworkIP() {
  * Print web console access info (URL + password).
  * Called at the end of init to show the user how to access.
  * Displayed prominently so the user doesn't miss the password.
+ * Always shown even in quiet mode (essential output).
  */
 function printWebConsoleInfo() {
   const config = getZylosConfig();
@@ -951,8 +1051,11 @@ function printWebConsoleInfo() {
   let password = '';
   try {
     const content = fs.readFileSync(envPath, 'utf8');
-    const match = content.match(/^WEB_CONSOLE_PASSWORD=(.+)/m);
-    if (match) password = match[1].trim();
+    // Read new name first, fall back to legacy
+    const matchNew = content.match(/^ZYLOS_WEB_PASSWORD=(.+)/m);
+    const matchOld = content.match(/^WEB_CONSOLE_PASSWORD=(.+)/m);
+    if (matchNew) password = matchNew[1].trim();
+    else if (matchOld) password = matchOld[1].trim();
   } catch { /* */ }
 
   if (!password) return;
@@ -1014,9 +1117,9 @@ function initializeDatabases() {
  * Prepare and start core services via PM2 ecosystem config.
  * @returns {number} Number of services successfully started
  */
-function startCoreServices() {
+function startCoreServices(webPassword = null) {
   installSkillDependencies();
-  ensureWebConsolePassword();
+  ensureWebConsolePassword(webPassword);
   initializeDatabases();
 
   const ecosystemPath = path.join(ZYLOS_DIR, 'pm2', 'ecosystem.config.cjs');
@@ -1280,43 +1383,63 @@ ${siteAddress} {
  * Run the Caddy setup flow: download binary, prompt for domain,
  * generate Caddyfile, set capabilities.
  * @param {boolean} skipConfirm - Skip interactive prompts
+ * @param {object} opts - Resolved CLI options
  * @returns {Promise<boolean>} true if Caddy was set up
  */
-async function setupCaddy(skipConfirm) {
-  // Check if already fully set up
-  if (fs.existsSync(CADDY_BIN) && fs.existsSync(CADDYFILE)) {
+async function setupCaddy(skipConfirm, opts = {}) {
+  const quiet = opts.quiet;
+
+  // --no-caddy: skip entirely
+  if (opts.caddy === false) {
+    if (!quiet) console.log(`  ${dim('Caddy setup skipped (--no-caddy).')}`);
+    return true; // not a failure, just skipped
+  }
+
+  // Check if already fully set up (and no override flags)
+  if (fs.existsSync(CADDY_BIN) && fs.existsSync(CADDYFILE) && !opts.domain) {
     const config = getZylosConfig();
     if (config.domain) {
       const proto = config.protocol || 'https';
-      console.log(`  ${success(`Caddy already configured (${bold(`${proto}://${config.domain}`)})`)}`);
+      if (!quiet) console.log(`  ${success(`Caddy already configured (${bold(`${proto}://${config.domain}`)})`)}`);
       return true;
     }
   }
 
-  // Ask user if they want Caddy
-  if (!skipConfirm) {
+  // Ask user if they want Caddy (skip prompt if --caddy, domain, or -y)
+  if (!skipConfirm && opts.caddy !== true && !opts.domain) {
     const wantCaddy = await promptYesNo('Set up Caddy web server? [Y/n]: ', true);
     if (!wantCaddy) {
-      console.log(`  ${dim('Skipping Caddy setup. Run "zylos init" later to set up.')}`);
+      if (!quiet) console.log(`  ${dim('Skipping Caddy setup. Run "zylos init" later to set up.')}`);
       return false;
     }
   }
 
-  // Prompt for domain
+  // Resolve domain: CLI/env > existing config > interactive prompt
   const config = getZylosConfig();
-  let domain = config.domain || '';
+  let domain = opts.domain || config.domain || '';
   if (!domain || domain === 'your.domain.com') {
     if (!skipConfirm) {
       domain = await prompt('Enter your domain (e.g., zylos.example.com): ');
     }
     if (!domain) {
-      console.log(`  ${warn('No domain provided. Skipping Caddy setup.')}`);
+      if (opts.caddy === true) {
+        // --caddy without domain: install binary but skip Caddyfile
+        if (!quiet) console.log(`  ${dim('No domain provided. Installing Caddy binary only.')}`);
+        if (!downloadCaddy()) return false;
+        setCaddyCapabilities();
+        return true;
+      }
+      if (!quiet) console.log(`  ${warn('No domain provided. Skipping Caddy setup.')}`);
       return false;
     }
   }
 
-  // Prompt for protocol
-  let protocol = config.protocol || '';
+  // Resolve protocol: CLI/env > existing config > prompt > default
+  let protocol;
+  if (opts.https === true) protocol = 'https';
+  else if (opts.https === false) protocol = 'http';
+  else protocol = config.protocol || '';
+
   if (!protocol && !skipConfirm) {
     const useHttps = await promptYesNo('Use HTTPS with auto-certificate? [Y/n]: ', true);
     protocol = useHttps ? 'https' : 'http';
@@ -1325,8 +1448,8 @@ async function setupCaddy(skipConfirm) {
 
   // Save domain and protocol to config.json
   updateZylosConfig({ domain, protocol });
-  console.log(`  ${dim('Domain:')} ${bold(domain)}`);
-  console.log(`  ${dim('Protocol:')} ${bold(protocol)}`);
+  if (!quiet) console.log(`  ${dim('Domain:')} ${bold(domain)}`);
+  if (!quiet) console.log(`  ${dim('Protocol:')} ${bold(protocol)}`);
 
   // Download Caddy binary
   if (!downloadCaddy()) return false;
@@ -1337,15 +1460,226 @@ async function setupCaddy(skipConfirm) {
   // Generate Caddyfile
   fs.mkdirSync(HTTP_DIR, { recursive: true });
   generateCaddyfile(domain, protocol);
-  console.log(`  ${success('Caddyfile generated at ~/zylos/http/Caddyfile')}`);
+  if (!quiet) console.log(`  ${success('Caddyfile generated at ~/zylos/http/Caddyfile')}`);
 
   return true;
+}
+
+// ── CLI flag parsing & validation ────────────────────────────────
+
+/**
+ * Parse CLI flags for `zylos init`.
+ * Supports long flags, short flags, and combined short flags (e.g., -yq).
+ *
+ * @param {string[]} args - CLI arguments (after command name)
+ * @returns {object} Parsed options
+ */
+function parseInitFlags(args) {
+  const opts = {
+    yes: false,
+    quiet: false,
+    help: false,
+    timezone: null,
+    setupToken: null,
+    apiKey: null,
+    domain: null,
+    https: null,   // null = not specified, true = --https, false = --no-https
+    caddy: null,   // null = not specified, true = --caddy, false = --no-caddy
+    webPassword: null,
+  };
+
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+
+    // Combined short flags (e.g., -yq → -y + -q)
+    if (arg.startsWith('-') && !arg.startsWith('--') && arg.length > 2) {
+      for (const ch of arg.slice(1)) {
+        if (ch === 'y') opts.yes = true;
+        else if (ch === 'q') opts.quiet = true;
+        else if (ch === 'h') opts.help = true;
+      }
+      continue;
+    }
+
+    switch (arg) {
+      case '--yes': case '-y': opts.yes = true; break;
+      case '--quiet': case '-q': opts.quiet = true; break;
+      case '--help': case '-h': opts.help = true; break;
+      case '--timezone':
+      case '--setup-token':
+      case '--api-key':
+      case '--domain':
+      case '--web-password': {
+        const val = args[++i];
+        if (!val || val.startsWith('-')) {
+          console.error(`${error(`Error: ${arg} requires a value`)}`);
+          process.exit(1);
+        }
+        if (arg === '--timezone') opts.timezone = val;
+        else if (arg === '--setup-token') opts.setupToken = val;
+        else if (arg === '--api-key') opts.apiKey = val;
+        else if (arg === '--domain') opts.domain = val;
+        else if (arg === '--web-password') opts.webPassword = val;
+        break;
+      }
+      case '--https': opts.https = true; break;
+      case '--no-https': opts.https = false; break;
+      case '--caddy': opts.caddy = true; break;
+      case '--no-caddy': opts.caddy = false; break;
+    }
+  }
+
+  return opts;
+}
+
+/**
+ * Fill in options from environment variables where CLI flags were not provided.
+ * Resolution: CLI flag > env var > existing config > interactive prompt.
+ *
+ * @param {object} opts - Parsed CLI options (mutated in place)
+ */
+function resolveFromEnv(opts) {
+  // Only promote auth tokens from env when:
+  // 1. Not already authenticated (avoids redundant re-verification)
+  // 2. No auth token was provided via CLI flag (avoids false mutual-exclusion
+  //    errors when e.g. --setup-token is on CLI but ANTHROPIC_API_KEY is in env)
+  const alreadyAuthed = commandExists('claude') && isClaudeAuthenticated();
+  const hasCliAuth = opts.setupToken !== null || opts.apiKey !== null;
+  if (!alreadyAuthed && !hasCliAuth) {
+    // Setup token takes priority over API key when both are in environment
+    if (process.env.CLAUDE_CODE_OAUTH_TOKEN) {
+      opts.setupToken = process.env.CLAUDE_CODE_OAUTH_TOKEN;
+    } else if (process.env.ANTHROPIC_API_KEY) {
+      opts.apiKey = process.env.ANTHROPIC_API_KEY;
+    }
+  }
+  if (opts.domain === null && process.env.ZYLOS_DOMAIN) {
+    opts.domain = process.env.ZYLOS_DOMAIN;
+  }
+  if (opts.https === null && process.env.ZYLOS_PROTOCOL) {
+    opts.https = process.env.ZYLOS_PROTOCOL === 'https';
+  }
+  if (opts.webPassword === null) {
+    opts.webPassword = process.env.ZYLOS_WEB_PASSWORD || process.env.WEB_CONSOLE_PASSWORD || null;
+  }
+  // TZ: do NOT pick up ambient TZ from the environment.
+  // Docker containers often have TZ=UTC set by default, which would silently
+  // overwrite user-configured timezones on re-init. Only --timezone flag applies.
+  // The auto-detect in configureTimezone() will handle the default case.
+}
+
+/**
+ * Validate resolved options. Returns error message or null if valid.
+ *
+ * @param {object} opts - Resolved options
+ * @returns {string|null} Error message or null
+ */
+function validateInitOptions(opts) {
+  // Mutual exclusion: setup-token and api-key
+  if (opts.setupToken && opts.apiKey) {
+    return '--setup-token and --api-key are mutually exclusive.\n  Run zylos init and choose one during setup.';
+  }
+
+  // Setup token format
+  if (opts.setupToken && !opts.setupToken.startsWith('sk-ant-oat')) {
+    return 'Invalid setup token. It should start with "sk-ant-oat".\n  Generate one with: claude setup-token\n  Then run: zylos init --setup-token <token>';
+  }
+
+  // API key format (reject setup tokens — they start with sk-ant-oat)
+  if (opts.apiKey && !opts.apiKey.startsWith('sk-ant-')) {
+    return 'Invalid API key. It should start with "sk-ant-".\n  Get your key at: https://console.anthropic.com/settings/keys\n  Then run: zylos init --api-key <key>';
+  }
+  if (opts.apiKey && opts.apiKey.startsWith('sk-ant-oat')) {
+    return 'That looks like a setup token, not an API key.\n  Use --setup-token instead: zylos init --setup-token <token>';
+  }
+
+  // Timezone validation
+  if (opts.timezone && !isValidTimezone(opts.timezone)) {
+    return `Invalid timezone: "${opts.timezone}".\n  Run: zylos init --timezone Asia/Shanghai`;
+  }
+
+  // Domain validation (basic hostname check)
+  if (opts.domain) {
+    const domainPattern = /^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*$/;
+    if (!domainPattern.test(opts.domain)) {
+      return `Invalid domain: "${opts.domain}".\n  Run: zylos init --domain agent.example.com`;
+    }
+  }
+
+  // Protocol validation (via ZYLOS_PROTOCOL env var — already resolved to boolean,
+  // but validate the raw env var if it was the source)
+  if (process.env.ZYLOS_PROTOCOL && !['https', 'http'].includes(process.env.ZYLOS_PROTOCOL)) {
+    return `Invalid ZYLOS_PROTOCOL: "${process.env.ZYLOS_PROTOCOL}". Must be "https" or "http".`;
+  }
+
+  return null;
+}
+
+/**
+ * Print help text for `zylos init`.
+ */
+function printInitHelp() {
+  console.log(`
+Usage: zylos init [options]
+
+Options:
+  -y, --yes                  Force non-interactive mode (even with a TTY)
+  -q, --quiet                Minimal output
+  --timezone <tz>            Set timezone (IANA format, e.g., Asia/Shanghai)
+  --setup-token <token>      Authenticate with Claude setup token
+  --api-key <key>            Authenticate with Anthropic API key
+  --domain <domain>          Configure Caddy with this domain
+  --https / --no-https       Enable/disable HTTPS (default: https when domain set)
+  --caddy / --no-caddy       Install/skip Caddy web server (default: install)
+  --web-password <password>  Set web console password (default: auto-generate)
+
+Non-interactive mode:
+  Automatically enabled when stdin is not a TTY, or CI=true / NONINTERACTIVE=1
+  is set. Use -y to force non-interactive in a terminal. Flags and env vars
+  provide values; unfilled fields use sensible defaults.
+
+Environment variables:
+  CLAUDE_CODE_OAUTH_TOKEN, ANTHROPIC_API_KEY, ZYLOS_DOMAIN,
+  ZYLOS_PROTOCOL, ZYLOS_WEB_PASSWORD
+
+  Resolution: CLI flag > env var > .env/config.json > interactive prompt
+
+Note: --setup-token and --api-key values are visible in process listings.
+  On shared systems, prefer environment variables instead:
+    CLAUDE_CODE_OAUTH_TOKEN=... zylos init
+`);
 }
 
 // ── Main init command ───────────────────────────────────────────
 
 export async function initCommand(args) {
-  const skipConfirm = args.includes('--yes') || args.includes('-y');
+  const opts = parseInitFlags(args);
+
+  // --help: print usage and exit
+  if (opts.help) {
+    printInitHelp();
+    return;
+  }
+
+  // Resolve from environment variables
+  resolveFromEnv(opts);
+
+  // Validate options
+  const validationErr = validateInitOptions(opts);
+  if (validationErr) {
+    console.error(`${error(`Error: ${validationErr}`)}`);
+    process.exit(1);
+  }
+
+  // Non-interactive mode: explicit -y, no TTY on stdin, or CI environment
+  const skipConfirm = opts.yes ||
+    !process.stdin.isTTY ||
+    process.env.CI === 'true' ||
+    process.env.NONINTERACTIVE === '1';
+  const quiet = opts.quiet;
+
+  // Track exit code: 0 = success, 1 = fatal, 2 = partial success
+  let exitCode = 0;
 
   // Root sandbox — Claude Code refuses --dangerously-skip-permissions as root
   // unless IS_SANDBOX=1 is set. Auto-set it so root users (e.g. Docker) just work.
@@ -1353,60 +1687,62 @@ export async function initCommand(args) {
     process.env.IS_SANDBOX = '1';
   }
 
-  console.log(`\n${heading('Welcome to Zylos!')} Let's set up your AI assistant.\n`);
+  if (!quiet) {
+    console.log(`\n${heading('Welcome to Zylos!')} Let's set up your AI assistant.\n`);
+  }
 
   // Step 1: Check prerequisites (always, even on re-init)
-  console.log(heading('Checking prerequisites...'));
+  if (!quiet) console.log(heading('Checking prerequisites...'));
 
   const nodeCheck = checkNodeVersion();
   if (!nodeCheck.ok) {
-    console.log(`  ${error(`Node.js ${nodeCheck.version} (requires ${nodeCheck.required})`)}`);
-    console.log(`    ${dim('Please upgrade Node.js and try again.')}`);
+    console.error(`  ${error(`Node.js ${nodeCheck.version} (requires ${nodeCheck.required})`)}`);
+    console.error(`    ${dim('Please upgrade Node.js and try again.')}`);
     process.exit(1);
   }
-  console.log(`  ${success(`Node.js ${nodeCheck.version}`)}`);
+  if (!quiet) console.log(`  ${success(`Node.js ${nodeCheck.version}`)}`);
 
   // Step 2: Check/install tmux
   if (commandExists('tmux')) {
-    console.log(`  ${success('tmux installed')}`);
+    if (!quiet) console.log(`  ${success('tmux installed')}`);
   } else {
-    console.log(`  ${error('tmux not found')}`);
-    console.log(`    ${cyan('Installing tmux...')}`);
+    if (!quiet) console.log(`  ${error('tmux not found')}`);
+    if (!quiet) console.log(`    ${cyan('Installing tmux...')}`);
     if (installSystemPackage('tmux')) {
-      console.log(`  ${success('tmux installed')}`);
+      if (!quiet) console.log(`  ${success('tmux installed')}`);
     } else {
-      console.log(`  ${error('Failed to install tmux')}`);
-      console.log(`    ${dim('Install manually: brew install tmux (macOS) / apt install tmux (Linux)')}`);
+      console.error(`  ${error('Failed to install tmux')}`);
+      console.error(`    ${dim('Install manually: brew install tmux (macOS) / apt install tmux (Linux)')}`);
       process.exit(1);
     }
   }
 
   // Step 3: Check/install git
   if (commandExists('git')) {
-    console.log(`  ${success('git installed')}`);
+    if (!quiet) console.log(`  ${success('git installed')}`);
   } else {
-    console.log(`  ${error('git not found')}`);
-    console.log(`    ${cyan('Installing git...')}`);
+    if (!quiet) console.log(`  ${error('git not found')}`);
+    if (!quiet) console.log(`    ${cyan('Installing git...')}`);
     if (installSystemPackage('git')) {
-      console.log(`  ${success('git installed')}`);
+      if (!quiet) console.log(`  ${success('git installed')}`);
     } else {
-      console.log(`  ${error('Failed to install git')}`);
-      console.log(`    ${dim('Install manually: brew install git (macOS) / apt install git (Linux)')}`);
+      console.error(`  ${error('Failed to install git')}`);
+      console.error(`    ${dim('Install manually: brew install git (macOS) / apt install git (Linux)')}`);
       process.exit(1);
     }
   }
 
   // Step 4: Check/install PM2
   if (commandExists('pm2')) {
-    console.log(`  ${success('PM2 installed')}`);
+    if (!quiet) console.log(`  ${success('PM2 installed')}`);
   } else {
-    console.log(`  ${error('PM2 not found')}`);
-    console.log(`    ${cyan('Installing pm2...')}`);
+    if (!quiet) console.log(`  ${error('PM2 not found')}`);
+    if (!quiet) console.log(`    ${cyan('Installing pm2...')}`);
     if (installGlobalPackage('pm2')) {
-      console.log(`  ${success('PM2 installed')}`);
+      if (!quiet) console.log(`  ${success('PM2 installed')}`);
     } else {
-      console.log(`  ${error('Failed to install PM2')}`);
-      console.log(`    ${dim('Install manually: npm install -g pm2')}`);
+      console.error(`  ${error('Failed to install PM2')}`);
+      console.error(`    ${dim('Install manually: npm install -g pm2')}`);
       process.exit(1);
     }
   }
@@ -1414,26 +1750,26 @@ export async function initCommand(args) {
   // Step 5: Check/install Claude Code (native installer)
   let claudeJustInstalled = false;
   if (commandExists('claude')) {
-    console.log(`  ${success('Claude Code installed')}`);
+    if (!quiet) console.log(`  ${success('Claude Code installed')}`);
   } else {
-    console.log(`  ${error('Claude Code not found')}`);
-    console.log(`    ${cyan('Installing Claude Code (native installer)...')}`);
+    if (!quiet) console.log(`  ${error('Claude Code not found')}`);
+    if (!quiet) console.log(`    ${cyan('Installing Claude Code (native installer)...')}`);
     try {
       execSync('curl -fsSL https://claude.ai/install.sh | bash', {
         stdio: 'pipe',
         timeout: 300000, // 5 min — downloads ~213MB native binary
       });
       if (commandExists('claude')) {
-        console.log(`  ${success('Claude Code installed')}`);
+        if (!quiet) console.log(`  ${success('Claude Code installed')}`);
         claudeJustInstalled = true;
       } else {
-        console.log(`  ${error('Claude Code installed but not found in PATH')}`);
-        console.log(`    ${dim('Add ~/.local/bin to your PATH, then run zylos init again.')}`);
+        console.error(`  ${error('Claude Code installed but not found in PATH')}`);
+        console.error(`    ${dim('Add ~/.local/bin to your PATH, then run zylos init again.')}`);
         process.exit(1);
       }
     } catch {
-      console.log(`  ${error('Failed to install Claude Code')}`);
-      console.log(`    ${dim('Install manually: curl -fsSL https://claude.ai/install.sh | bash')}`);
+      console.error(`  ${error('Failed to install Claude Code')}`);
+      console.error(`    ${dim('Install manually: curl -fsSL https://claude.ai/install.sh | bash')}`);
       process.exit(1);
     }
   }
@@ -1445,9 +1781,43 @@ export async function initCommand(args) {
   if (commandExists('claude')) {
     claudeAuthenticated = isClaudeAuthenticated();
     if (claudeAuthenticated) {
-      console.log(`  ${success('Claude Code authenticated')}`);
+      if (!quiet) console.log(`  ${success('Claude Code authenticated')}`);
+    } else if (opts.setupToken) {
+      // Setup token provided via flag/env — save, verify via actual API call, rollback on failure
+      if (saveSetupToken(opts.setupToken)) {
+        if (!quiet) console.log(`  ${dim('Verifying setup token...')}`);
+        const tokenResult = verifySetupToken();
+        if (tokenResult.valid) {
+          pendingSetupToken = opts.setupToken;
+          claudeAuthenticated = true;
+          if (!quiet) console.log(`  ${success('Setup token verified and saved')}`);
+        } else {
+          rollbackSetupToken();
+          if (tokenResult.authError) {
+            console.error(`  ${error('Setup token is invalid or expired.')}`);
+            console.error(`    ${dim('Generate a new one: claude setup-token')}`);
+          } else {
+            console.error(`  ${error('Could not verify setup token. Check network and try again.')}`);
+            if (tokenResult.message) console.error(`    ${dim(tokenResult.message.split('\n')[0])}`);
+          }
+          if (skipConfirm) exitCode = 1;
+        }
+      }
+    } else if (opts.apiKey) {
+      // API key provided via flag/env — verify and use directly (already validated format)
+      if (!quiet) console.log(`  ${dim('Verifying API key...')}`);
+      const keyValid = await verifyApiKey(opts.apiKey);
+      if (!keyValid) {
+        console.error(`  ${error('API key is invalid or could not be verified.')}`);
+        console.error(`    ${dim('Check your key at console.anthropic.com')}`);
+        if (skipConfirm) exitCode = 1;
+      } else if (saveApiKey(opts.apiKey)) {
+        pendingApiKey = opts.apiKey;
+        claudeAuthenticated = true;
+        if (!quiet) console.log(`  ${success('API key verified and saved')}`);
+      }
     } else {
-      console.log(`  ${warn('Claude Code not authenticated')}`);
+      if (!quiet) console.log(`  ${warn('Claude Code not authenticated')}`);
       if (!skipConfirm) {
         const authChoice = await promptChoice(
           '\n  How would you like to authenticate?',
@@ -1506,13 +1876,26 @@ export async function initCommand(args) {
             console.log(`  ${error('Invalid format. Setup token should start with sk-ant-oat')}`);
             console.log(`    ${dim('Run "claude setup-token" to generate a valid token.')}`);
           } else if (saveSetupToken(token)) {
-            pendingSetupToken = token;
-            claudeAuthenticated = true;
-            console.log(`  ${success('Setup token saved. It will be verified when Claude starts.')}`);
+            console.log(`  ${dim('Verifying setup token...')}`);
+            const tokenResult = verifySetupToken();
+            if (tokenResult.valid) {
+              pendingSetupToken = token;
+              claudeAuthenticated = true;
+              console.log(`  ${success('Setup token verified and saved')}`);
+            } else {
+              rollbackSetupToken();
+              if (tokenResult.authError) {
+                console.log(`  ${error('Setup token is invalid or expired.')}`);
+                console.log(`    ${dim('Generate a new one: claude setup-token')}`);
+              } else {
+                console.log(`  ${error('Could not verify setup token. Check network and try again.')}`);
+                if (tokenResult.message) console.log(`    ${dim(tokenResult.message.split('\n')[0])}`);
+              }
+            }
           }
         }
       } else {
-        console.log(`    ${dim('Run "zylos init" again to authenticate.')}`);
+        if (!quiet) console.log(`    ${dim('Run "zylos init" again to authenticate.')}`);
       }
     }
   }
@@ -1520,34 +1903,39 @@ export async function initCommand(args) {
   // Pre-accept Claude Code terms (skips manual prompts on first launch)
   if (claudeAuthenticated) {
     if (preAcceptClaudeTerms()) {
-      console.log(`  ${success('Claude Code terms pre-accepted')}`);
+      if (!quiet) console.log(`  ${success('Claude Code terms pre-accepted')}`);
     }
   }
 
-  console.log('');
+  if (!quiet) console.log('');
 
   // Re-init: skip directory creation, just sync + deploy + start
   const installState = detectInstallState();
 
   if (installState === 'complete') {
-    console.log(`${dim('Zylos is already initialized at')} ${bold(ZYLOS_DIR)}\n`);
+    if (!quiet) console.log(`${dim('Zylos is already initialized at')} ${bold(ZYLOS_DIR)}\n`);
 
     // Ensure bin directory and PATH are configured (idempotent)
     fs.mkdirSync(BIN_DIR, { recursive: true });
     if (ensureBinInPath()) {
-      console.log(success('Added ~/zylos/bin to PATH'));
+      if (!quiet) console.log(success('Added ~/zylos/bin to PATH'));
     }
 
     const syncResult = syncCoreSkills();
-    if (syncResult.updated.length > 0) {
-      console.log(`${success('Core Skills updated:')} ${syncResult.updated.join(', ')}`);
-    }
-    if (syncResult.installed.length > 0) {
-      console.log(`${success('Core Skills installed:')} ${syncResult.installed.join(', ')}`);
+    if (!quiet) {
+      if (syncResult.updated.length > 0) {
+        console.log(`${success('Core Skills updated:')} ${syncResult.updated.join(', ')}`);
+      }
+      if (syncResult.installed.length > 0) {
+        console.log(`${success('Core Skills installed:')} ${syncResult.installed.join(', ')}`);
+      }
     }
 
-    console.log(heading('Deploying templates...'));
+    if (!quiet) console.log(heading('Deploying templates...'));
     deployTemplates();
+
+    // Migrate WEB_CONSOLE_PASSWORD → ZYLOS_WEB_PASSWORD
+    migrateWebConsolePassword();
 
     // Write auth credentials to .env if entered during this run
     if (pendingApiKey) {
@@ -1557,64 +1945,75 @@ export async function initCommand(args) {
       saveSetupTokenToEnv(pendingSetupToken);
     }
 
-    // Timezone (show current, don't re-prompt)
-    console.log(heading('Checking timezone...'));
-    await configureTimezone(skipConfirm, true);
+    // Timezone: use resolved value or show current
+    if (!quiet) console.log(heading('Checking timezone...'));
+    await configureTimezone(skipConfirm, true, opts.timezone, quiet);
 
     // Caddy setup (idempotent — skips if already configured)
-    console.log(heading('Checking Caddy...'));
-    await setupCaddy(skipConfirm);
-
-    console.log(heading('Starting services...'));
-    const servicesStarted = startCoreServices();
-    if (servicesStarted > 0) {
-      setupPm2Startup();
-      console.log(`\n${green(`${servicesStarted} service(s) started.`)} ${dim('Run "zylos status" to check.')}`);
-    } else {
-      console.log(`\n${dim('No services to start.')}`);
+    if (!quiet) console.log(heading('Checking Caddy...'));
+    const caddyOk = await setupCaddy(skipConfirm, opts);
+    if (!caddyOk && opts.caddy !== false && opts.domain) {
+      exitCode = exitCode || 2; // optional step failed — don't downgrade a fatal (1)
     }
 
-    if (claudeAuthenticated && needsBypassAcceptance()) {
+    if (!quiet) console.log(heading('Starting services...'));
+    const servicesStarted = startCoreServices(opts.webPassword);
+    if (servicesStarted > 0) {
+      setupPm2Startup();
+      if (!quiet) console.log(`\n${green(`${servicesStarted} service(s) started.`)} ${dim('Run "zylos status" to check.')}`);
+    } else {
+      if (!quiet) console.log(`\n${dim('No services to start.')}`);
+    }
+
+    if (claudeAuthenticated && !skipConfirm && needsBypassAcceptance()) {
       await guideBypassAcceptance();
     }
 
     if (!claudeAuthenticated) {
-      console.log(`\n${warn('Claude Code is not authenticated.')}`);
-      console.log(`  ${dim('Run "zylos init" again to authenticate.')}`);
+      if (!quiet) {
+        console.log(`\n${warn('Claude Code is not authenticated.')}`);
+        console.log(`  ${dim('Run "zylos init" again to authenticate.')}`);
+      }
     }
     printWebConsoleInfo();
-    console.log(`\n${dim('Use "zylos add <component>" to add components.')}`);
+    if (!quiet) console.log(`\n${dim('Use "zylos add <component>" to add components.')}`);
+    if (exitCode) process.exit(exitCode);
     return;
   }
 
   if (installState === 'incomplete') {
-    console.log(`${warn('Incomplete installation detected at')} ${bold(ZYLOS_DIR)}`);
+    if (!quiet) console.log(`${warn('Incomplete installation detected at')} ${bold(ZYLOS_DIR)}`);
     if (!skipConfirm) {
       const answer = await prompt('Continue previous installation or start fresh? [c/f] (c): ');
       if (answer.toLowerCase() === 'f') {
-        console.log('Resetting managed state...');
+        if (!quiet) console.log('Resetting managed state...');
         resetManagedState();
-        console.log('Starting fresh...\n');
+        if (!quiet) console.log('Starting fresh...\n');
       } else {
-        console.log('Continuing...\n');
+        if (!quiet) console.log('Continuing...\n');
       }
     }
   }
 
   // Step 6: Create directory structure
-  console.log(`${dim('Install directory:')} ${bold(ZYLOS_DIR)}`);
-  console.log(`\n${heading('Setting up...')}`);
+  if (!quiet) {
+    console.log(`${dim('Install directory:')} ${bold(ZYLOS_DIR)}`);
+    console.log(`\n${heading('Setting up...')}`);
+  }
   createDirectoryStructure();
-  console.log(`  ${success('Created directory structure')}`);
+  if (!quiet) console.log(`  ${success('Created directory structure')}`);
 
   // Configure PATH for ~/zylos/bin
   if (ensureBinInPath()) {
-    console.log(`  ${success('Added ~/zylos/bin to PATH')}`);
+    if (!quiet) console.log(`  ${success('Added ~/zylos/bin to PATH')}`);
   }
 
   // Step 7: Deploy templates
   deployTemplates();
-  console.log(`  ${success('Templates deployed')}`);
+  if (!quiet) console.log(`  ${success('Templates deployed')}`);
+
+  // Migrate WEB_CONSOLE_PASSWORD → ZYLOS_WEB_PASSWORD
+  migrateWebConsolePassword();
 
   // Write auth credentials to .env now that templates have been deployed
   if (pendingApiKey) {
@@ -1625,51 +2024,58 @@ export async function initCommand(args) {
   }
 
   // Step 8: Configure timezone
-  console.log(`\n${heading('Timezone configuration...')}`);
-  await configureTimezone(skipConfirm, false);
+  if (!quiet) console.log(`\n${heading('Timezone configuration...')}`);
+  await configureTimezone(skipConfirm, false, opts.timezone, quiet);
 
   // Step 9: Sync Core Skills
   const syncResult = syncCoreSkills();
-  if (syncResult.error) {
-    console.log(`  ${warn(syncResult.error)}`);
-  } else {
-    const counts = [`${syncResult.installed.length} installed`, `${syncResult.updated.length} updated`];
-    console.log(`  ${success(`Core Skills synced (${counts.join(', ')})`)}`);
-    for (const name of syncResult.installed) {
-      console.log(`    ${green('+')} ${bold(name)}`);
+  if (!quiet) {
+    if (syncResult.error) {
+      console.log(`  ${warn(syncResult.error)}`);
+    } else {
+      const counts = [`${syncResult.installed.length} installed`, `${syncResult.updated.length} updated`];
+      console.log(`  ${success(`Core Skills synced (${counts.join(', ')})`)}`);
+      for (const name of syncResult.installed) {
+        console.log(`    ${green('+')} ${bold(name)}`);
+      }
     }
   }
 
   // Step 10: Caddy web server setup
-  console.log(`\n${heading('HTTPS setup...')}`);
-  await setupCaddy(skipConfirm);
+  if (!quiet) console.log(`\n${heading('HTTPS setup...')}`);
+  const caddyOk = await setupCaddy(skipConfirm, opts);
+  if (!caddyOk && opts.caddy !== false && opts.domain) {
+    exitCode = exitCode || 2; // optional step failed — don't downgrade a fatal (1)
+  }
 
   // Step 11: Start services
   let servicesStarted = 0;
   if (!skipConfirm) {
     const startNow = await promptYesNo('\nStart services now? [Y/n]: ', true);
     if (startNow) {
-      console.log(`\n${heading('Starting services...')}`);
-      servicesStarted = startCoreServices();
+      if (!quiet) console.log(`\n${heading('Starting services...')}`);
+      servicesStarted = startCoreServices(opts.webPassword);
     }
   } else {
-    console.log(`\n${heading('Starting services...')}`);
-    servicesStarted = startCoreServices();
+    if (!quiet) console.log(`\n${heading('Starting services...')}`);
+    servicesStarted = startCoreServices(opts.webPassword);
   }
 
   if (servicesStarted > 0) {
     setupPm2Startup();
   }
 
-  // First-time Claude bypass acceptance (only if authenticated)
-  if (claudeAuthenticated && needsBypassAcceptance()) {
+  // First-time Claude bypass acceptance (only if authenticated, skip in non-interactive mode)
+  if (claudeAuthenticated && !skipConfirm && needsBypassAcceptance()) {
     await guideBypassAcceptance();
   }
 
   // Done
-  console.log(`\n${success(bold('Zylos initialized successfully!'))}\n`);
+  if (!quiet) {
+    console.log(`\n${success(bold('Zylos initialized successfully!'))}\n`);
+  }
 
-  if (servicesStarted > 0) {
+  if (servicesStarted > 0 && !quiet) {
     console.log(`${green(`${servicesStarted} service(s) started.`)} ${dim('Run "zylos status" to check.')}\n`);
   }
 
@@ -1680,12 +2086,34 @@ export async function initCommand(args) {
     ensureLocalBinInProfile();
   }
 
-  console.log(`\n${heading('Next steps:')}`);
-  if (!claudeAuthenticated) {
-    console.log(`  ${bold('zylos init')}                        ${dim('# ⚠ Authenticate first')}`);
+  if (!quiet) {
+    if (!claudeAuthenticated) {
+      // Yellow warning box — same treatment regardless of whether a credential
+      // was attempted or not. Auth is required; Next steps without it is misleading.
+      const fixCmd = (opts.setupToken || opts.apiKey)
+        ? (opts.setupToken ? 'zylos init --setup-token <valid-token>' : 'zylos init --api-key <valid-key>')
+        : 'zylos init';
+      console.log('');
+      console.log(yellow('  ┌────────────────────────────────────────────────────────┐'));
+      console.log(yellow('  │                                                        │'));
+      console.log(yellow('  │  ⚠  Claude is not authenticated                       │'));
+      console.log(yellow('  │                                                        │'));
+      console.log(yellow('  │  Zylos is installed, but Claude will not work until    │'));
+      console.log(yellow('  │  a valid credential is provided.                       │'));
+      console.log(yellow('  │                                                        │'));
+      console.log(yellow('  │  To fix:                                               │'));
+      console.log(yellow(`  │    ${fixCmd}${' '.repeat(Math.max(0, 52 - fixCmd.length))}│`));
+      console.log(yellow('  │                                                        │'));
+      console.log(yellow('  └────────────────────────────────────────────────────────┘'));
+      console.log('');
+    } else {
+      console.log(`\n${heading('Next steps:')}`);
+      console.log(`  ${bold('zylos add telegram')}    ${dim('# Add Telegram bot')}`);
+      console.log(`  ${bold('zylos add lark')}        ${dim('# Add Lark bot')}`);
+      console.log(`  ${bold('zylos status')}          ${dim('# Check service status')}`);
+      console.log('');
+    }
   }
-  console.log(`  ${bold('zylos add telegram')}    ${dim('# Add Telegram bot')}`);
-  console.log(`  ${bold('zylos add lark')}        ${dim('# Add Lark bot')}`);
-  console.log(`  ${bold('zylos status')}          ${dim('# Check service status')}`);
-  console.log('');
+
+  if (exitCode) process.exit(exitCode);
 }

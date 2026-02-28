@@ -78,7 +78,9 @@ Usage: zylos <command> [options]
 
 Setup:
   init                Initialize Zylos environment
-                      --yes/-y  Skip confirmation prompts
+                      --yes/-y  Non-interactive mode
+                      --quiet/-q  Minimal output
+                      Run "zylos init --help" for all options
   config              Show all configuration
   config get <key>    Get a config value
   config set <key> <value>  Set a config value
