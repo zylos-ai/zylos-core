@@ -38,7 +38,68 @@ curl -fsSL https://raw.githubusercontent.com/zylos-ai/zylos-core/main/scripts/in
 
 一键安装所有依赖（git、tmux、Node.js、zylos CLI），并自动运行 `zylos init` 完成初始化。
 
-> 如果你已有 Node.js，安装脚本会提示下一步 — 手动运行 `zylos init` 即可。
+<details>
+<summary>非交互式安装（Docker、CI/CD、无界面服务器）</summary>
+
+所有 `zylos init` 参数都可以直接传给安装脚本。脚本会先安装依赖，然后带着你的参数运行 `zylos init`。
+
+**完整示例：**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/zylos-ai/zylos-core/main/scripts/install.sh | bash -s -- \
+  -y \
+  --setup-token sk-ant-oat01-xxx \
+  --timezone Asia/Shanghai \
+  --domain agent.example.com \
+  --https \
+  --caddy \
+  --web-password MySecurePass123
+```
+
+**何时自动进入非交互模式？**
+
+没有 TTY 时自动启用 — 如 Docker 容器（未加 `-it`）、CI 环境、cron 任务等。设置 `CI=true` 或 `NONINTERACTIVE=1` 也会启用。注意：在终端中执行 `curl | bash` 仍然是交互模式（安装脚本会从 `/dev/tty` 重定向输入）。在终端中用 `-y` 可强制非交互模式。
+
+**参数说明：**
+
+| 参数 | 说明 | 默认值 |
+|------|------|--------|
+| `-y`, `--yes` | 强制非交互模式（跳过所有提示） | 自动检测 |
+| `-q`, `--quiet` | 精简输出 | 关闭 |
+| `--setup-token <token>` | Claude [setup token](https://code.claude.com/docs/en/authentication)（以 `sk-ant-oat` 开头） | — |
+| `--api-key <key>` | Anthropic API key（以 `sk-ant-` 开头） | — |
+| `--timezone <tz>` | [IANA 时区](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones)，如 `Asia/Shanghai`、`America/New_York`、`Europe/London` | 系统默认 |
+| `--domain <domain>` | Caddy 反向代理域名，如 `agent.example.com` | 无 |
+| `--https` / `--no-https` | 启用或禁用 HTTPS | 设置域名时默认 `--https` |
+| `--caddy` / `--no-caddy` | 安装或跳过 Caddy Web 服务器 | 安装 |
+| `--web-password <pass>` | Web 控制台密码 | 自动生成 |
+
+**环境变量：**
+
+参数也可通过环境变量设置。优先级：CLI 参数 > 环境变量 > 已有 `.env` > 交互式提示。
+
+| 环境变量 | 对应参数 |
+|---------|---------|
+| `CLAUDE_CODE_OAUTH_TOKEN` | `--setup-token` |
+| `ANTHROPIC_API_KEY` | `--api-key` |
+| `ZYLOS_DOMAIN` | `--domain` |
+| `ZYLOS_PROTOCOL`（`https` 或 `http`） | `--https` / `--no-https` |
+| `ZYLOS_WEB_PASSWORD` | `--web-password` |
+
+**退出码：** `0` = 成功，`1` = 致命错误（如无效 token），`2` = 部分成功（如 Caddy 下载失败但其他步骤正常）。
+
+</details>
+
+<details>
+<summary>仅安装环境，不运行 init</summary>
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/zylos-ai/zylos-core/main/scripts/install.sh | bash -s -- --no-init
+```
+
+安装依赖和 zylos CLI，但跳过 `zylos init`。之后手动运行 `zylos init` 即可。
+
+</details>
 
 <details>
 <summary>从指定分支安装（用于测试）</summary>
@@ -59,9 +120,9 @@ zylos init
 
 </details>
 
-`zylos init` 是交互式的，可重复运行。它会：
+`zylos init` 可重复运行，支持交互式和非交互式两种模式。它会：
 1. 安装缺失的工具（tmux、git、PM2、Claude Code）
-2. 引导你完成 Claude 认证（浏览器登录、API key 或 [setup token](https://code.claude.com/docs/en/authentication)，适用于无浏览器的服务器）
+2. 配置 Claude 认证（浏览器登录、API key 或 [setup token](https://code.claude.com/docs/en/authentication)，适用于无浏览器的服务器）
 3. 创建 `~/zylos/` 目录，包含记忆、技能和服务
 4. 启动所有后台服务，并在 tmux 会话中启动 Claude
 

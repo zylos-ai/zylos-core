@@ -39,7 +39,68 @@ curl -fsSL https://raw.githubusercontent.com/zylos-ai/zylos-core/main/scripts/in
 
 This installs everything you need (git, tmux, Node.js, zylos CLI) and automatically runs `zylos init` to set up your agent.
 
-> If you already have Node.js installed, the script will print a "next step" prompt — just run `zylos init` manually.
+<details>
+<summary>Non-interactive install (Docker, CI/CD, headless servers)</summary>
+
+All `zylos init` flags can be passed directly through the install script. The script installs dependencies, then runs `zylos init` with the flags you provide.
+
+**Full example:**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/zylos-ai/zylos-core/main/scripts/install.sh | bash -s -- \
+  -y \
+  --setup-token sk-ant-oat01-xxx \
+  --timezone Asia/Shanghai \
+  --domain agent.example.com \
+  --https \
+  --caddy \
+  --web-password MySecurePass123
+```
+
+**When is non-interactive mode active?**
+
+Automatically when no TTY is available — e.g. Docker containers (without `-it`), CI runners, or cron jobs. Also when `CI=true` or `NONINTERACTIVE=1` is set. Note: `curl | bash` in a terminal is still interactive (the install script redirects from `/dev/tty`). Use `-y` to force non-interactive in a terminal.
+
+**Flags:**
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `-y`, `--yes` | Force non-interactive mode (skip all prompts) | Auto-detected |
+| `-q`, `--quiet` | Minimal output | Off |
+| `--setup-token <token>` | Claude [setup token](https://code.claude.com/docs/en/authentication) (starts with `sk-ant-oat`) | — |
+| `--api-key <key>` | Anthropic API key (starts with `sk-ant-`) | — |
+| `--timezone <tz>` | [IANA timezone](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones), e.g. `Asia/Shanghai`, `America/New_York`, `Europe/London` | System default |
+| `--domain <domain>` | Domain for Caddy reverse proxy, e.g. `agent.example.com` | None |
+| `--https` / `--no-https` | Enable or disable HTTPS | `--https` when domain is set |
+| `--caddy` / `--no-caddy` | Install or skip Caddy web server | Install |
+| `--web-password <pass>` | Web console password | Auto-generated |
+
+**Environment variables:**
+
+Flags can also be set via environment variables. Resolution order: CLI flag > env var > existing `.env` > interactive prompt.
+
+| Environment Variable | Equivalent Flag |
+|---------------------|-----------------|
+| `CLAUDE_CODE_OAUTH_TOKEN` | `--setup-token` |
+| `ANTHROPIC_API_KEY` | `--api-key` |
+| `ZYLOS_DOMAIN` | `--domain` |
+| `ZYLOS_PROTOCOL` (`https` or `http`) | `--https` / `--no-https` |
+| `ZYLOS_WEB_PASSWORD` | `--web-password` |
+
+**Exit codes:** `0` = success, `1` = fatal error (e.g. invalid token), `2` = partial success (e.g. Caddy download failed but everything else succeeded).
+
+</details>
+
+<details>
+<summary>Install without running init</summary>
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/zylos-ai/zylos-core/main/scripts/install.sh | bash -s -- --no-init
+```
+
+Installs dependencies and the zylos CLI, but skips `zylos init`. Run `zylos init` separately when ready.
+
+</details>
 
 <details>
 <summary>Install from a specific branch (for testing)</summary>
@@ -60,9 +121,9 @@ zylos init
 
 </details>
 
-`zylos init` is interactive and idempotent. It will:
+`zylos init` is idempotent and supports both interactive and non-interactive modes. It will:
 1. Install missing tools (tmux, git, PM2, Claude Code)
-2. Guide you through Claude authentication (browser login, API key, or [setup token](https://code.claude.com/docs/en/authentication) for headless servers)
+2. Set up Claude authentication (browser login, API key, or [setup token](https://code.claude.com/docs/en/authentication) for headless servers)
 3. Create the `~/zylos/` directory with memory, skills, and services
 4. Start all background services and launch Claude in a tmux session
 
