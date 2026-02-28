@@ -2082,9 +2082,24 @@ export async function initCommand(args) {
   }
 
   if (!quiet) {
+    if (!claudeAuthenticated && (opts.setupToken || opts.apiKey)) {
+      // Auth was explicitly attempted but failed — show a prominent warning
+      const fixCmd = opts.setupToken
+        ? 'zylos init --setup-token <valid-token>'
+        : 'zylos init --api-key <valid-key>';
+      console.log('');
+      console.log(red(bold('  ⚠  Authentication FAILED')));
+      console.log('');
+      console.log(`  Zylos is installed, but Claude is ${red(bold('not authenticated'))}.`);
+      console.log(`  Claude will not work until a valid credential is provided.`);
+      console.log('');
+      console.log(`  To fix:  ${bold(fixCmd)}`);
+      console.log('');
+    }
+
     console.log(`\n${heading('Next steps:')}`);
     if (!claudeAuthenticated) {
-      console.log(`  ${bold('zylos init')}                        ${dim('# ⚠ Authenticate first')}`);
+      console.log(`  ${bold('zylos init')}              ${dim('# Authenticate first')}`);
     }
     console.log(`  ${bold('zylos add telegram')}    ${dim('# Add Telegram bot')}`);
     console.log(`  ${bold('zylos add lark')}        ${dim('# Add Lark bot')}`);
