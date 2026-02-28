@@ -8,6 +8,12 @@
 # Install from a specific branch:
 #   curl -fsSL https://raw.githubusercontent.com/zylos-ai/zylos-core/main/scripts/install.sh | bash -s -- --branch <branch-name>
 #
+# Full non-interactive deployment:
+#   curl -fsSL .../install.sh | bash -s -- -y --setup-token sk-ant-oat01-xxx --domain example.com --https
+#
+# Install environment only (no init):
+#   curl -fsSL .../install.sh | bash -s -- --no-init
+#
 # Supported platforms: Linux (Debian/Ubuntu/RHEL), macOS
 # ──────────────────────────────────────────────────────────────
 set -euo pipefail
@@ -19,6 +25,8 @@ _main() {
 
 # ── Parse Arguments ───────────────────────────────────────────
 BRANCH="main"
+NO_INIT=false
+INIT_ARGS=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --branch|-b)
@@ -28,6 +36,25 @@ while [ $# -gt 0 ]; do
       fi
       BRANCH="$2"
       shift 2
+      ;;
+    --no-init)
+      NO_INIT=true
+      shift
+      ;;
+    # Flags that take a value — forward both flag and value to zylos init
+    --timezone|--setup-token|--api-key|--domain|--web-password)
+      INIT_ARGS+=("$1" "${2:-}")
+      shift 2
+      ;;
+    # Boolean flags — forward as-is to zylos init
+    -y|--yes|-q|--quiet|--https|--no-https|--caddy|--no-caddy|-h|--help)
+      INIT_ARGS+=("$1")
+      shift
+      ;;
+    # Combined short flags (e.g., -yq)
+    -[yqh]*)
+      INIT_ARGS+=("$1")
+      shift
       ;;
     *)
       shift
@@ -269,12 +296,25 @@ _detect_shell_rc() {
   esac
 }
 
-if [ "$NVM_INSTALLED_NOW" = true ]; then
+if [ "$NO_INIT" = true ]; then
+  local shell_rc
+  shell_rc="$(_detect_shell_rc)"
+  info "Skipping zylos init (--no-init)."
+  echo ""
+  info "To initialize later, run:"
+  echo ""
+  if [ "$NVM_INSTALLED_NOW" = true ]; then
+    echo "    source $shell_rc && zylos init"
+  else
+    echo "    zylos init"
+  fi
+  echo ""
+elif [ "$NVM_INSTALLED_NOW" = true ]; then
   # nvm was freshly installed — PATH only works inside this subshell.
   # Auto-run zylos init so the user doesn't need to source manually first.
-  info "Running zylos init automatically..."
+  info "Running zylos init..."
   echo ""
-  zylos init < /dev/tty
+  zylos init ${INIT_ARGS[@]+"${INIT_ARGS[@]}"} < /dev/tty
 
   # After init completes, show a prominent reminder as the very last output.
   # Nothing prints after this, so it won't get scrolled away.
