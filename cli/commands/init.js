@@ -1111,7 +1111,7 @@ function setupPm2Startup() {
  * @returns {{ os: string, arch: string }}
  */
 function detectPlatform() {
-  const platform = process.platform === 'darwin' ? 'darwin' : 'linux';
+  const platform = process.platform === 'darwin' ? 'mac' : 'linux';
   const archMap = { x64: 'amd64', arm64: 'arm64', arm: 'armv7' };
   const arch = archMap[process.arch] || 'amd64';
   return { os: platform, arch };
