@@ -2084,6 +2084,7 @@ export async function initCommand(args) {
   if (!quiet) {
     if (!claudeAuthenticated && (opts.setupToken || opts.apiKey)) {
       // Auth was explicitly attempted but failed — yellow box (matches install.sh style)
+      // Skip Next steps entirely: adding components is pointless without auth.
       const fixCmd = opts.setupToken
         ? 'zylos init --setup-token <valid-token>'
         : 'zylos init --api-key <valid-key>';
@@ -2100,19 +2101,16 @@ export async function initCommand(args) {
       console.log(yellow('  │                                                        │'));
       console.log(yellow('  └────────────────────────────────────────────────────────┘'));
       console.log('');
+    } else {
+      console.log(`\n${heading('Next steps:')}`);
+      if (!claudeAuthenticated) {
+        console.log(`  ${bold('zylos init')}              ${dim('# Authenticate first')}`);
+      }
+      console.log(`  ${bold('zylos add telegram')}    ${dim('# Add Telegram bot')}`);
+      console.log(`  ${bold('zylos add lark')}        ${dim('# Add Lark bot')}`);
+      console.log(`  ${bold('zylos status')}          ${dim('# Check service status')}`);
+      console.log('');
     }
-
-    console.log(`\n${heading('Next steps:')}`);
-    if (!claudeAuthenticated && !(opts.setupToken || opts.apiKey)) {
-      // Only show generic auth hint when no credential was attempted.
-      // When a credential was provided but failed, the yellow box above
-      // already tells the user exactly how to fix it.
-      console.log(`  ${bold('zylos init')}              ${dim('# Authenticate first')}`);
-    }
-    console.log(`  ${bold('zylos add telegram')}    ${dim('# Add Telegram bot')}`);
-    console.log(`  ${bold('zylos add lark')}        ${dim('# Add Lark bot')}`);
-    console.log(`  ${bold('zylos status')}          ${dim('# Check service status')}`);
-    console.log('');
   }
 
   if (exitCode) process.exit(exitCode);
