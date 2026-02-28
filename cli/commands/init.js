@@ -2083,17 +2083,22 @@ export async function initCommand(args) {
 
   if (!quiet) {
     if (!claudeAuthenticated && (opts.setupToken || opts.apiKey)) {
-      // Auth was explicitly attempted but failed — show a prominent warning
+      // Auth was explicitly attempted but failed — yellow box (matches install.sh style)
       const fixCmd = opts.setupToken
         ? 'zylos init --setup-token <valid-token>'
         : 'zylos init --api-key <valid-key>';
       console.log('');
-      console.log(red(bold('  ⚠  Authentication FAILED')));
-      console.log('');
-      console.log(`  Zylos is installed, but Claude is ${red(bold('not authenticated'))}.`);
-      console.log(`  Claude will not work until a valid credential is provided.`);
-      console.log('');
-      console.log(`  To fix:  ${bold(fixCmd)}`);
+      console.log(yellow('  ┌────────────────────────────────────────────────────────┐'));
+      console.log(yellow('  │                                                        │'));
+      console.log(yellow('  │  ⚠  Authentication FAILED                             │'));
+      console.log(yellow('  │                                                        │'));
+      console.log(yellow('  │  Zylos is installed, but Claude is not authenticated.  │'));
+      console.log(yellow('  │  Claude will not work until a valid credential is set. │'));
+      console.log(yellow('  │                                                        │'));
+      console.log(yellow('  │  To fix:                                               │'));
+      console.log(yellow(`  │    ${fixCmd}${' '.repeat(Math.max(0, 52 - fixCmd.length))}│`));
+      console.log(yellow('  │                                                        │'));
+      console.log(yellow('  └────────────────────────────────────────────────────────┘'));
       console.log('');
     }
 
