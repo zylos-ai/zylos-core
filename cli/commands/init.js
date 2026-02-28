@@ -1577,7 +1577,7 @@ export async function initCommand(args) {
   const validationErr = validateInitOptions(opts);
   if (validationErr) {
     console.error(`${error(`Error: ${validationErr}`)}`);
-    console.error(`\n  ${dim('Run')} zylos init --help ${dim('to see all available options.')}`);
+    console.error(`\n  ${dim('Fix the issue above, then run:')} zylos init`);
     process.exit(1);
   }
 
