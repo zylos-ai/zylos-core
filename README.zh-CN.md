@@ -95,11 +95,6 @@ stdin 不是 TTY 时自动启用（Docker、管道执行的 `curl | bash`、CI �
 | `ZYLOS_PROTOCOL`（`https` 或 `http`） | `--https` / `--no-https` |
 | `ZYLOS_WEB_PASSWORD` | `--web-password` |
 
-> **安全提示：** `--setup-token` 和 `--api-key` 的值在进程列表（`ps`）中可见。在共享服务器上建议使用环境变量：
-> ```bash
-> CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-xxx zylos init -y
-> ```
-
 **退出码：** `0` = 成功，`1` = 致命错误（如无效 token），`2` = 部分成功（如 Caddy 下载失败但其他步骤正常）。
 
 </details>

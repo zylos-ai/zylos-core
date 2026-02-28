@@ -96,11 +96,6 @@ Flags can also be set via environment variables. Resolution order: CLI flag > en
 | `ZYLOS_PROTOCOL` (`https` or `http`) | `--https` / `--no-https` |
 | `ZYLOS_WEB_PASSWORD` | `--web-password` |
 
-> **Security note:** `--setup-token` and `--api-key` values are visible in process listings (`ps`). On shared systems, prefer environment variables instead:
-> ```bash
-> CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-xxx zylos init -y
-> ```
-
 **Exit codes:** `0` = success, `1` = fatal error (e.g. invalid token), `2` = partial success (e.g. Caddy download failed but everything else succeeded).
 
 </details>
