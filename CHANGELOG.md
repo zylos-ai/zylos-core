@@ -5,6 +5,27 @@ All notable changes to zylos-core will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.7] - 2026-02-28
+
+### Added
+- **Non-interactive init**: deploy Zylos without manual intervention — pass flags like `--setup-token`, `--timezone`, `--domain` directly through `curl | bash`, and the installer handles everything unattended. Designed for Docker images, CI/CD pipelines, and batch provisioning across multiple servers. See `zylos init --help` for the full flag and environment variable list (#196, closes #195)
+- **Auto-detect headless mode**: non-interactive mode activates automatically when there's no TTY (Docker, CI runners), or when `CI=true` / `NONINTERACTIVE=1` is set — no need to pass `-y` explicitly in truly headless environments (#196)
+- **Setup token verification**: setup tokens are validated via an actual API call before being accepted — invalid or expired tokens are caught immediately, rolled back, and reported with a clear error instead of silently failing later (#196)
+- **`install.sh --no-init`**: install dependencies and the zylos CLI without running `zylos init`, for cases where initialization needs to happen separately (#196)
+- **Structured exit codes**: exit code 1 for fatal errors (invalid token, bad config), exit code 2 for partial success (e.g. Caddy download failed but core setup succeeded) — useful for scripted deployments that need to distinguish between failure modes (#196)
+
+### Fixed
+- Caddy download failed on macOS due to incorrect platform name in the URL — `darwin` now correctly maps to `mac` (#188, closes #185)
+- PM2 startup `sudo` failed silently on wrong password — now prompts interactively with retry, and shows a clear message explaining auto-start is optional if it still fails (#190, closes #186)
+- Authentication failure was easy to miss in init output — now shows a prominent yellow warning box at the end with the exact fix command (#196)
+- Validation errors now include actionable recovery commands — each error tells you exactly what to run to fix it (e.g. "Generate one with: `claude setup-token`") (#196)
+- Docker's default `TZ=UTC` could silently overwrite a user-configured timezone on re-init — `zylos init` no longer reads `TZ` from the environment, only from the `--timezone` flag (#196)
+
+### Changed
+- `WEB_CONSOLE_PASSWORD` renamed to `ZYLOS_WEB_PASSWORD` for naming consistency (old name still works as fallback) (#196)
+- Logo updated to official Zylos brand logo (#184)
+- README: added pronunciation guide (/ˈzaɪ.lɒs/ 赛洛丝) and non-interactive install documentation (#192, #193, #197)
+
 ## [0.2.6] - 2026-02-27
 
 ### Added
