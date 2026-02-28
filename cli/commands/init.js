@@ -1091,8 +1091,10 @@ function setupPm2Startup() {
     if (sudoResult.status === 0) {
       console.log(`  ${success('PM2 boot auto-start configured')}`);
     } else {
-      console.log(`  ${warn('PM2 boot auto-start: sudo command failed')}`);
-      console.log(`    ${dim(`Fix manually: ${sudoMatch[1]}`)}`);
+      console.log(`  ${warn('PM2 boot auto-start: sudo password incorrect or command failed')}`);
+      console.log(`    ${dim('This is optional — Zylos works fine without it.')}`);
+      console.log(`    ${dim('To enable auto-start later, run:')}`);
+      console.log(`    ${dim(sudoMatch[1])}`);
     }
     return;
   }
