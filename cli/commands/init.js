@@ -602,8 +602,8 @@ function verifySetupToken() {
     const output = ((result.stdout?.toString() || '') + (result.stderr?.toString() || '')).trim();
     const lower = output.toLowerCase();
     const isAuthError = lower.includes('401') || lower.includes('unauthorized') ||
-      lower.includes('authentication') || lower.includes('invalid') ||
-      lower.includes('expired');
+      lower.includes('authentication') || lower.includes('invalid token') ||
+      lower.includes('invalid key') || lower.includes('expired');
 
     return { valid: false, authError: isAuthError, message: output };
   } catch (err) {
@@ -1380,9 +1380,11 @@ ${siteAddress} {
  * @returns {Promise<boolean>} true if Caddy was set up
  */
 async function setupCaddy(skipConfirm, opts = {}) {
+  const quiet = opts.quiet;
+
   // --no-caddy: skip entirely
   if (opts.caddy === false) {
-    console.log(`  ${dim('Caddy setup skipped (--no-caddy).')}`);
+    if (!quiet) console.log(`  ${dim('Caddy setup skipped (--no-caddy).')}`);
     return true; // not a failure, just skipped
   }
 
@@ -1391,7 +1393,7 @@ async function setupCaddy(skipConfirm, opts = {}) {
     const config = getZylosConfig();
     if (config.domain) {
       const proto = config.protocol || 'https';
-      console.log(`  ${success(`Caddy already configured (${bold(`${proto}://${config.domain}`)})`)}`);
+      if (!quiet) console.log(`  ${success(`Caddy already configured (${bold(`${proto}://${config.domain}`)})`)}`);
       return true;
     }
   }
@@ -1400,7 +1402,7 @@ async function setupCaddy(skipConfirm, opts = {}) {
   if (!skipConfirm && opts.caddy !== true && !opts.domain) {
     const wantCaddy = await promptYesNo('Set up Caddy web server? [Y/n]: ', true);
     if (!wantCaddy) {
-      console.log(`  ${dim('Skipping Caddy setup. Run "zylos init" later to set up.')}`);
+      if (!quiet) console.log(`  ${dim('Skipping Caddy setup. Run "zylos init" later to set up.')}`);
       return false;
     }
   }
@@ -1415,12 +1417,12 @@ async function setupCaddy(skipConfirm, opts = {}) {
     if (!domain) {
       if (opts.caddy === true) {
         // --caddy without domain: install binary but skip Caddyfile
-        console.log(`  ${dim('No domain provided. Installing Caddy binary only.')}`);
+        if (!quiet) console.log(`  ${dim('No domain provided. Installing Caddy binary only.')}`);
         if (!downloadCaddy()) return false;
         setCaddyCapabilities();
         return true;
       }
-      console.log(`  ${warn('No domain provided. Skipping Caddy setup.')}`);
+      if (!quiet) console.log(`  ${warn('No domain provided. Skipping Caddy setup.')}`);
       return false;
     }
   }
@@ -1439,8 +1441,8 @@ async function setupCaddy(skipConfirm, opts = {}) {
 
   // Save domain and protocol to config.json
   updateZylosConfig({ domain, protocol });
-  console.log(`  ${dim('Domain:')} ${bold(domain)}`);
-  console.log(`  ${dim('Protocol:')} ${bold(protocol)}`);
+  if (!quiet) console.log(`  ${dim('Domain:')} ${bold(domain)}`);
+  if (!quiet) console.log(`  ${dim('Protocol:')} ${bold(protocol)}`);
 
   // Download Caddy binary
   if (!downloadCaddy()) return false;
@@ -1451,7 +1453,7 @@ async function setupCaddy(skipConfirm, opts = {}) {
   // Generate Caddyfile
   fs.mkdirSync(HTTP_DIR, { recursive: true });
   generateCaddyfile(domain, protocol);
-  console.log(`  ${success('Caddyfile generated at ~/zylos/http/Caddyfile')}`);
+  if (!quiet) console.log(`  ${success('Caddyfile generated at ~/zylos/http/Caddyfile')}`);
 
   return true;
 }
@@ -1537,10 +1539,10 @@ function resolveFromEnv(opts) {
   const alreadyAuthed = commandExists('claude') && isClaudeAuthenticated();
   const hasCliAuth = opts.setupToken !== null || opts.apiKey !== null;
   if (!alreadyAuthed && !hasCliAuth) {
+    // Setup token takes priority over API key when both are in environment
     if (process.env.CLAUDE_CODE_OAUTH_TOKEN) {
       opts.setupToken = process.env.CLAUDE_CODE_OAUTH_TOKEN;
-    }
-    if (process.env.ANTHROPIC_API_KEY) {
+    } else if (process.env.ANTHROPIC_API_KEY) {
       opts.apiKey = process.env.ANTHROPIC_API_KEY;
     }
   }
@@ -1935,7 +1937,7 @@ export async function initCommand(args) {
     if (!quiet) console.log(heading('Checking Caddy...'));
     const caddyOk = await setupCaddy(skipConfirm, opts);
     if (!caddyOk && opts.caddy !== false && opts.domain) {
-      exitCode = 2; // optional step failed
+      exitCode = exitCode || 2; // optional step failed — don't downgrade a fatal (1)
     }
 
     if (!quiet) console.log(heading('Starting services...'));
@@ -2027,7 +2029,7 @@ export async function initCommand(args) {
   if (!quiet) console.log(`\n${heading('HTTPS setup...')}`);
   const caddyOk = await setupCaddy(skipConfirm, opts);
   if (!caddyOk && opts.caddy !== false && opts.domain) {
-    exitCode = 2; // optional step failed
+    exitCode = exitCode || 2; // optional step failed — don't downgrade a fatal (1)
   }
 
   // Step 11: Start services
