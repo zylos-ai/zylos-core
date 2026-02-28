@@ -2,7 +2,7 @@
 
 <img src="./assets/logo.png" alt="Zylos" height="120">
 
-# Zylos
+# 🐙 Zylos
 
 ### Give your AI a life.
 
