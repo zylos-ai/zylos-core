@@ -38,8 +38,6 @@ curl -fsSL https://raw.githubusercontent.com/zylos-ai/zylos-core/main/scripts/in
 
 一键安装所有依赖（git、tmux、Node.js、zylos CLI），并自动运行 `zylos init` 完成初始化。
 
-> 如果你已有 Node.js，安装脚本会提示下一步 — 手动运行 `zylos init` 即可。
-
 <details>
 <summary>非交互式安装（Docker、CI/CD、无界面服务器）</summary>
 

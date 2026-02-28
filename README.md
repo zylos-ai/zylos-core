@@ -39,8 +39,6 @@ curl -fsSL https://raw.githubusercontent.com/zylos-ai/zylos-core/main/scripts/in
 
 This installs everything you need (git, tmux, Node.js, zylos CLI) and automatically runs `zylos init` to set up your agent.
 
-> If you already have Node.js installed, the script will print a "next step" prompt — just run `zylos init` manually.
-
 <details>
 <summary>Non-interactive install (Docker, CI/CD, headless servers)</summary>
 
