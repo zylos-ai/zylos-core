@@ -3,8 +3,10 @@
  * Detects available credentials and provides authenticated HTTP helpers.
  */
 
-import { execSync, execFileSync } from 'node:child_process';
+import { execSync, execFileSync, execFile as execFileCb } from 'node:child_process';
+import { promisify } from 'node:util';
 
+const execFileAsync = promisify(execFileCb);
 let _cachedToken = undefined;
 
 /**
@@ -84,8 +86,96 @@ export function fetchRawFile(repo, filePath, branch = 'main') {
   ], { encoding: 'utf8', timeout: 10000, stdio: ['pipe', 'pipe', 'pipe'] });
 }
 
+// ── Shared tag parsing ───────────────────────────────────────────
+
+function compareSemverDesc(a, b) {
+  const [aBase, aPre] = a.split(/-(.+)/);
+  const [bBase, bPre] = b.split(/-(.+)/);
+
+  const aParts = aBase.split('.').map(Number);
+  const bParts = bBase.split('.').map(Number);
+  for (let i = 0; i < 3; i++) {
+    const diff = (bParts[i] || 0) - (aParts[i] || 0);
+    if (diff !== 0) return diff;
+  }
+
+  if (!aPre && bPre) return -1;
+  if (aPre && !bPre) return 1;
+  if (!aPre && !bPre) return 0;
+
+  const aPreParts = aPre.split('.').map(p => parseInt(p) || p);
+  const bPreParts = bPre.split('.').map(p => parseInt(p) || p);
+  for (let i = 0; i < Math.max(aPreParts.length, bPreParts.length); i++) {
+    const av = aPreParts[i] ?? 0;
+    const bv = bPreParts[i] ?? 0;
+    if (typeof av === 'number' && typeof bv === 'number') {
+      if (bv !== av) return bv - av;
+    } else {
+      const cmp = String(bv).localeCompare(String(av));
+      if (cmp !== 0) return cmp;
+    }
+  }
+  return 0;
+}
+
+function parseTagsResponse(jsonStr) {
+  const tags = JSON.parse(jsonStr);
+  if (!Array.isArray(tags) || tags.length === 0) return null;
+
+  const versions = tags
+    .map(t => t.name)
+    .filter(name => /^v?\d+\.\d+\.\d+/.test(name))
+    .map(name => name.replace(/^v/, ''))
+    .sort(compareSemverDesc);
+
+  return versions[0] || null;
+}
+
+function fetchTagsJsonSync(repo) {
+  const url = `https://api.github.com/repos/${repo}/tags?per_page=100`;
+  try {
+    return execFileSync('curl', ['-fsSL', url], {
+      encoding: 'utf8', timeout: 10000, stdio: ['pipe', 'pipe', 'pipe'],
+    });
+  } catch {
+    const token = getGitHubToken();
+    if (!token) {
+      return execFileSync('curl', ['-fsSL', url], {
+        encoding: 'utf8', timeout: 10000, stdio: ['pipe', 'pipe', 'pipe'],
+      });
+    }
+    return execFileSync('curl', ['-fsSL', '-H', `Authorization: Bearer ${token}`, url], {
+      encoding: 'utf8', timeout: 10000, stdio: ['pipe', 'pipe', 'pipe'],
+    });
+  }
+}
+
+async function fetchTagsJsonAsync(repo) {
+  const url = `https://api.github.com/repos/${repo}/tags?per_page=100`;
+  try {
+    const { stdout } = await execFileAsync('curl', ['-fsSL', url], {
+      encoding: 'utf8', timeout: 10000,
+    });
+    return stdout;
+  } catch {
+    const token = getGitHubToken();
+    if (!token) {
+      const { stdout } = await execFileAsync('curl', ['-fsSL', url], {
+        encoding: 'utf8', timeout: 10000,
+      });
+      return stdout;
+    }
+    const { stdout } = await execFileAsync('curl', ['-fsSL', '-H', `Authorization: Bearer ${token}`, url], {
+      encoding: 'utf8', timeout: 10000,
+    });
+    return stdout;
+  }
+}
+
+// ── Public API ───────────────────────────────────────────────────
+
 /**
- * Fetch the latest version tag from a GitHub repo.
+ * Fetch the latest version tag from a GitHub repo (synchronous).
  * Looks for tags matching v*.*.* pattern and returns the highest semver.
  *
  * @param {string} repo - GitHub repo in "org/name" format
@@ -94,72 +184,26 @@ export function fetchRawFile(repo, filePath, branch = 'main') {
  */
 export function fetchLatestTag(repo) {
   try {
-    // 1. Try unauthenticated first (avoids token permission issues on public repos)
-    const url = `https://api.github.com/repos/${repo}/tags?per_page=100`;
-    let response;
-    try {
-      response = execFileSync('curl', ['-fsSL', url], {
-        encoding: 'utf8', timeout: 10000, stdio: ['pipe', 'pipe', 'pipe'],
-      });
-    } catch {
-      // Public request failed — try with auth for private repos
-      const token = getGitHubToken();
-      if (!token) {
-        // No token — re-attempt to get the original error
-        response = execFileSync('curl', ['-fsSL', url], {
-          encoding: 'utf8', timeout: 10000, stdio: ['pipe', 'pipe', 'pipe'],
-        });
-      } else {
-        response = execFileSync('curl', ['-fsSL', '-H', `Authorization: Bearer ${token}`, url], {
-          encoding: 'utf8', timeout: 10000, stdio: ['pipe', 'pipe', 'pipe'],
-        });
-      }
-    }
-    const tags = JSON.parse(response);
-    if (!Array.isArray(tags) || tags.length === 0) return null;
-
-    // Filter v*.*.* tags and sort by semver descending
-    const versions = tags
-      .map(t => t.name)
-      .filter(name => /^v?\d+\.\d+\.\d+/.test(name))
-      .map(name => name.replace(/^v/, ''))
-      .sort((a, b) => {
-        // Split into base version and pre-release: "0.1.0-beta.10" → ["0.1.0", "beta.10"]
-        const [aBase, aPre] = a.split(/-(.+)/);
-        const [bBase, bPre] = b.split(/-(.+)/);
-
-        // Compare base version (major.minor.patch)
-        const aParts = aBase.split('.').map(Number);
-        const bParts = bBase.split('.').map(Number);
-        for (let i = 0; i < 3; i++) {
-          const diff = (bParts[i] || 0) - (aParts[i] || 0);
-          if (diff !== 0) return diff;
-        }
-
-        // Same base: stable (no pre-release) > pre-release
-        if (!aPre && bPre) return -1;
-        if (aPre && !bPre) return 1;
-        if (!aPre && !bPre) return 0;
-
-        // Both pre-release: compare numerically where possible
-        const aPreParts = aPre.split('.').map(p => parseInt(p) || p);
-        const bPreParts = bPre.split('.').map(p => parseInt(p) || p);
-        for (let i = 0; i < Math.max(aPreParts.length, bPreParts.length); i++) {
-          const av = aPreParts[i] ?? 0;
-          const bv = bPreParts[i] ?? 0;
-          if (typeof av === 'number' && typeof bv === 'number') {
-            if (bv !== av) return bv - av;
-          } else {
-            const cmp = String(bv).localeCompare(String(av));
-            if (cmp !== 0) return cmp;
-          }
-        }
-        return 0;
-      });
-
-    return versions[0] || null;
+    return parseTagsResponse(fetchTagsJsonSync(repo));
   } catch (err) {
-    // Distinguish network/API errors from "no tags" — let callers handle appropriately
+    const msg = err.stderr?.toString().trim() || err.message || 'unknown error';
+    throw new Error(`Failed to fetch tags for ${repo}: ${sanitizeError(msg)}`);
+  }
+}
+
+/**
+ * Fetch the latest version tag from a GitHub repo (async, non-blocking).
+ * Same behavior as fetchLatestTag but uses async child processes,
+ * suitable for concurrent version checks.
+ *
+ * @param {string} repo - GitHub repo in "org/name" format
+ * @returns {Promise<string|null>} Latest version (without 'v' prefix) or null
+ * @throws {Error} On network/API failures
+ */
+export async function fetchLatestTagAsync(repo) {
+  try {
+    return parseTagsResponse(await fetchTagsJsonAsync(repo));
+  } catch (err) {
     const msg = err.stderr?.toString().trim() || err.message || 'unknown error';
     throw new Error(`Failed to fetch tags for ${repo}: ${sanitizeError(msg)}`);
   }

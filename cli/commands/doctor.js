@@ -13,7 +13,7 @@ import dns from 'node:dns/promises';
 import { ZYLOS_DIR, ENV_FILE } from '../lib/config.js';
 import { readEnvFile } from '../lib/env.js';
 import { loadComponents } from '../lib/components.js';
-import { fetchLatestTag } from '../lib/github.js';
+import { fetchLatestTagAsync } from '../lib/github.js';
 import { getCurrentVersion } from '../lib/self-upgrade.js';
 import { commandExists } from '../lib/shell-utils.js';
 import { promptYesNo } from '../lib/prompts.js';
@@ -24,12 +24,18 @@ const SESSION = 'claude-main';
 const LOG_DIR = path.join(ZYLOS_DIR, 'logs');
 const LOG_FILE = path.join(LOG_DIR, 'doctor.log');
 const API_HOST = 'api.anthropic.com';
+const VERSION_CHECK_CONCURRENCY = 3;
 
 // ── Logging ──────────────────────────────────────────────────────
 
+let _logDirReady = false;
+
 function logToFile(message) {
   try {
-    fs.mkdirSync(LOG_DIR, { recursive: true });
+    if (!_logDirReady) {
+      fs.mkdirSync(LOG_DIR, { recursive: true });
+      _logDirReady = true;
+    }
     const ts = new Date().toISOString().replace('T', ' ').replace(/\.\d+Z$/, '');
     fs.appendFileSync(LOG_FILE, `[${ts}] ${message}\n`);
   } catch {}
@@ -54,6 +60,32 @@ function groupHeader(name, status) {
 function separator(title) {
   const line = '─'.repeat(40);
   return `\n${dim(line)}\n  ${bold(title)}\n${dim(line)}`;
+}
+
+function displayCheckGroup(name, status, checks) {
+  console.log(groupHeader(name, status));
+  for (let i = 0; i < checks.length; i++) {
+    console.log(i < checks.length - 1 ? SUB(checks[i]) : SUB_LAST(checks[i]));
+  }
+}
+
+// ── Concurrency helper ───────────────────────────────────────────
+
+async function concurrentMap(items, fn, limit = 3) {
+  const results = new Array(items.length);
+  let index = 0;
+
+  async function worker() {
+    while (index < items.length) {
+      const i = index++;
+      results[i] = await fn(items[i], i);
+    }
+  }
+
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, () => worker()),
+  );
+  return results;
 }
 
 // ── Check implementations ────────────────────────────────────────
@@ -184,6 +216,101 @@ function checkTmuxSession() {
   }
 }
 
+// ── Grouped check runners ────────────────────────────────────────
+
+function runAiChecks() {
+  const checks = [];
+  const failed = [];
+  const issues = [];
+
+  const cli = checkClaudeCli();
+  if (cli.installed) {
+    checks.push(`Claude CLI ${dim(cli.version)}`);
+  } else {
+    failed.push('CLI not installed');
+    checks.push(red('Claude CLI not installed'));
+    issues.push({
+      label: 'Claude CLI is not installed',
+      detail: 'The Claude CLI is required for Zylos to function.',
+      fixLabel: 'install Claude CLI',
+      fix: fixClaudeCli,
+    });
+  }
+
+  if (cli.installed) {
+    const authOk = checkClaudeAuth();
+    if (authOk) {
+      checks.push('authorized');
+    } else {
+      failed.push('not authorized');
+      checks.push(red('not authorized'));
+      issues.push({
+        label: 'Claude is not authorized',
+        detail: 'Claude needs API authorization to work.',
+        fixLabel: 'opens the Claude login flow (interactive)',
+        fix: fixClaudeAuth,
+      });
+    }
+    if (authOk) {
+      const autoMode = checkAutonomousMode();
+      if (autoMode) {
+        checks.push('autonomous mode accepted');
+      } else {
+        failed.push('autonomous mode');
+        checks.push(red('autonomous mode not accepted'));
+        issues.push({
+          label: 'Autonomous mode not accepted',
+          detail: 'Claude needs autonomous mode enabled to run unattended.',
+          fixLabel: 'enable autonomous mode in Claude settings',
+          fix: fixAutonomousMode,
+        });
+      }
+    }
+  } else {
+    checks.push(dim('auth check skipped (requires CLI)'));
+  }
+
+  return { checks, failed, passed: failed.length === 0, issues };
+}
+
+function runServiceChecks() {
+  const checks = [];
+  const failed = [];
+  const issues = [];
+
+  const pm2Result = checkPm2Services();
+  if (pm2Result.running && pm2Result.activityMonitor) {
+    checks.push(`activity-monitor: ${green('online')}`);
+  } else if (pm2Result.running) {
+    failed.push('activity-monitor not running');
+    checks.push(red('activity-monitor: not running'));
+  } else {
+    failed.push('PM2 services not started');
+    checks.push(red('PM2 services not started'));
+  }
+
+  if (!pm2Result.running || !pm2Result.activityMonitor) {
+    issues.push({
+      label: 'Zylos services are not running',
+      detail: 'The activity monitor keeps Claude alive.',
+      fixLabel: 'start all services',
+      fix: fixServices,
+    });
+  }
+
+  const sessionOk = checkTmuxSession();
+  if (sessionOk) {
+    checks.push(`Claude session: ${green('active')}`);
+  } else if (pm2Result.activityMonitor) {
+    checks.push(yellow('Claude session: starting...'));
+  } else {
+    failed.push('session not running');
+    checks.push(dim('Claude session: waiting'));
+  }
+
+  return { checks, failed, passed: failed.length === 0, issues, pm2Result };
+}
+
 // ── Fix implementations ──────────────────────────────────────────
 // Each fix returns { ok: boolean, error?: string }
 
@@ -275,7 +402,7 @@ function fixServices() {
 
 // ── Channel discovery ────────────────────────────────────────────
 
-function discoverChannels(pm2Procs, env, tmuxSession) {
+function discoverChannels(pm2Procs, env, tmuxSession, components) {
   const channels = [];
 
   // tmux is always a channel if session exists
@@ -303,8 +430,6 @@ function discoverChannels(pm2Procs, env, tmuxSession) {
   }
 
   // Dynamic channels from components.json — use SKILL.md frontmatter type
-  const components = loadComponents();
-
   for (const [name, info] of Object.entries(components)) {
     const pm2Name = `zylos-${name}`;
     const proc = pm2Procs.find(p => p.name === pm2Name);
@@ -338,6 +463,76 @@ function discoverChannels(pm2Procs, env, tmuxSession) {
   return channels;
 }
 
+// ── Re-check after fixes ─────────────────────────────────────────
+
+async function recheckSkippedGroups(net, fixed, failed) {
+  if (fixed.length === 0 || !net.reachable) return { pm2Result: null };
+
+  console.log(`\n${dim('Continuing checks...')}`);
+
+  // Re-check AI Service
+  let ai = runAiChecks();
+
+  // If autonomous mode is the only remaining blocker, offer inline fix
+  if (!ai.passed) {
+    const autoIssue = ai.issues.find(i => i.label === 'Autonomous mode not accepted');
+    if (autoIssue && ai.failed.length === 1) {
+      const enableOk = await promptYesNo('Autonomous mode not accepted. Enable it? [y/N] ');
+      if (enableOk) {
+        logToFile('fix: autonomous mode — user confirmed (re-check)');
+        const autoResult = fixAutonomousMode();
+        if (autoResult.ok) {
+          ai = runAiChecks();
+        } else {
+          failed.push('Enable autonomous mode');
+          logToFile(`fix: autonomous mode — failed (re-check)${autoResult.error ? ` (${autoResult.error})` : ''}`);
+        }
+      } else {
+        failed.push('Autonomous mode (user declined)');
+        logToFile('fix: autonomous mode — user declined (re-check)');
+      }
+    }
+  }
+
+  displayCheckGroup('AI Service', ai.passed ? 'pass' : 'fail', ai.checks);
+  logToFile(`re-check: ai_service — ${ai.passed ? 'passed' : 'failed'}`);
+
+  if (!ai.passed) {
+    failed.push('AI Service still not working after fixes');
+    return { pm2Result: null };
+  }
+
+  // Re-check Services
+  let svc = runServiceChecks();
+
+  if (!svc.pm2Result.activityMonitor) {
+    const startOk = await promptYesNo('Services are not running. Start them? [y/N] ');
+    if (startOk) {
+      logToFile('fix: services — user confirmed (re-check)');
+      const svcResult = fixServices();
+      if (svcResult.ok) {
+        await new Promise(r => setTimeout(r, 3000));
+        svc = runServiceChecks();
+      } else {
+        failed.push('Start services');
+        logToFile(`fix: services — failed (re-check)${svcResult.error ? ` (${svcResult.error})` : ''}`);
+      }
+    } else {
+      failed.push('Start services (user declined)');
+      logToFile('fix: services — user declined (re-check)');
+    }
+  }
+
+  displayCheckGroup('Services', svc.passed ? 'pass' : 'fail', svc.checks);
+  logToFile(`re-check: services — ${svc.passed ? 'passed' : 'failed'}`);
+
+  if (!svc.pm2Result.activityMonitor) {
+    failed.push('Services still not running after re-check');
+  }
+
+  return { pm2Result: svc.pm2Result };
+}
+
 // ── Main doctor flow ─────────────────────────────────────────────
 
 export async function doctorCommand(args) {
@@ -347,10 +542,14 @@ export async function doctorCommand(args) {
   logToFile('doctor started' + (checkOnly ? ' (--check)' : ''));
 
   const env = readEnvFile();
+  const components = loadComponents();
   const issues = [];
   let skipRemaining = false;
 
   // ── Group 1: System ──────────────────────────────────────────
+
+  // Fire async network check early — overlaps with sync checks below
+  const networkPromise = checkNetwork(env);
 
   const systemChecks = [];
   const systemFailed = [];
@@ -386,8 +585,8 @@ export async function doctorCommand(args) {
     });
   }
 
-  // 1c. Network
-  const net = await checkNetwork(env);
+  // 1c. Network — await the already-in-flight promise
+  const net = await networkPromise;
   if (net.reachable) {
     let netLabel = `network: ${API_HOST} reachable`;
     if (net.proxy) netLabel += dim(` (via proxy)`);
@@ -421,10 +620,7 @@ export async function doctorCommand(args) {
   }
 
   // Display Group 1
-  console.log(groupHeader('System', systemPassed ? 'pass' : 'fail'));
-  for (let i = 0; i < systemChecks.length; i++) {
-    console.log(i < systemChecks.length - 1 ? SUB(systemChecks[i]) : SUB_LAST(systemChecks[i]));
-  }
+  displayCheckGroup('System', systemPassed ? 'pass' : 'fail', systemChecks);
   logToFile(`check: system — ${systemPassed ? 'passed' : `failed (${systemFailed.join(', ')})`}`);
 
   // If network failed, skip remaining groups
@@ -434,80 +630,20 @@ export async function doctorCommand(args) {
 
   // ── Group 2: AI Service ──────────────────────────────────────
 
-  const aiChecks = [];
-  const aiFailed = [];
-  let aiPassed = true;
-
   if (skipRemaining) {
     console.log(groupHeader('AI Service', 'skip'));
     console.log(SKIP('skipped (requires network)'));
     logToFile('check: ai_service — skipped');
   } else {
-    const cli = checkClaudeCli();
-    if (cli.installed) {
-      aiChecks.push(`Claude CLI ${dim(cli.version)}`);
-    } else {
-      aiPassed = false;
-      aiFailed.push('CLI not installed');
-      aiChecks.push(red('Claude CLI not installed'));
-      issues.push({
-        label: 'Claude CLI is not installed',
-        detail: 'The Claude CLI is required for Zylos to function.',
-        fixLabel: 'install Claude CLI',
-        fix: fixClaudeCli,
-      });
-    }
-
-    if (cli.installed) {
-      const authOk = checkClaudeAuth();
-      if (authOk) {
-        aiChecks.push('authorized');
-      } else {
-        aiPassed = false;
-        aiFailed.push('not authorized');
-        aiChecks.push(red('not authorized'));
-        issues.push({
-          label: 'Claude is not authorized',
-          detail: 'Claude needs API authorization to work.',
-          fixLabel: 'opens the Claude login flow (interactive)',
-          fix: fixClaudeAuth,
-        });
-      }
-      // Check autonomous mode (terms acceptance)
-      if (authOk) {
-        const autoMode = checkAutonomousMode();
-        if (autoMode) {
-          aiChecks.push('autonomous mode accepted');
-        } else {
-          aiPassed = false;
-          aiFailed.push('autonomous mode');
-          aiChecks.push(red('autonomous mode not accepted'));
-          issues.push({
-            label: 'Autonomous mode not accepted',
-            detail: 'Claude needs autonomous mode enabled to run unattended.',
-            fixLabel: 'enable autonomous mode in Claude settings',
-            fix: fixAutonomousMode,
-          });
-        }
-      }
-    } else {
-      aiChecks.push(dim('auth check skipped (requires CLI)'));
-    }
-
-    console.log(groupHeader('AI Service', aiPassed ? 'pass' : 'fail'));
-    for (let i = 0; i < aiChecks.length; i++) {
-      console.log(i < aiChecks.length - 1 ? SUB(aiChecks[i]) : SUB_LAST(aiChecks[i]));
-    }
-    logToFile(`check: ai_service — ${aiPassed ? 'passed' : `failed (${aiFailed.join(', ')})`}`);
-
-    if (!aiPassed) skipRemaining = true;
+    const ai = runAiChecks();
+    issues.push(...ai.issues);
+    displayCheckGroup('AI Service', ai.passed ? 'pass' : 'fail', ai.checks);
+    logToFile(`check: ai_service — ${ai.passed ? 'passed' : `failed (${ai.failed.join(', ')})`}`);
+    if (!ai.passed) skipRemaining = true;
   }
 
   // ── Group 3: Services ────────────────────────────────────────
 
-  const svcChecks = [];
-  const svcFailed = [];
-  let svcPassed = true;
   let pm2Result = null;
 
   if (skipRemaining) {
@@ -515,45 +651,11 @@ export async function doctorCommand(args) {
     console.log(SKIP('skipped (requires AI Service)'));
     logToFile('check: services — skipped');
   } else {
-    pm2Result = checkPm2Services();
-    if (pm2Result.running && pm2Result.activityMonitor) {
-      svcChecks.push(`activity-monitor: ${green('online')}`);
-    } else if (pm2Result.running) {
-      svcPassed = false;
-      svcFailed.push('activity-monitor not running');
-      svcChecks.push(red('activity-monitor: not running'));
-    } else {
-      svcPassed = false;
-      svcFailed.push('PM2 services not started');
-      svcChecks.push(red('PM2 services not started'));
-    }
-
-    if (!pm2Result.running || !pm2Result.activityMonitor) {
-      issues.push({
-        label: 'Zylos services are not running',
-        detail: 'The activity monitor keeps Claude alive.',
-        fixLabel: 'start all services',
-        fix: fixServices,
-      });
-    }
-
-    const sessionOk = checkTmuxSession();
-    if (sessionOk) {
-      svcChecks.push(`Claude session: ${green('active')}`);
-    } else if (pm2Result.activityMonitor) {
-      // activity-monitor is running but session isn't up yet — might be starting
-      svcChecks.push(yellow('Claude session: starting...'));
-    } else {
-      svcPassed = false;
-      svcFailed.push('session not running');
-      svcChecks.push(dim('Claude session: waiting'));
-    }
-
-    console.log(groupHeader('Services', svcPassed ? 'pass' : 'fail'));
-    for (let i = 0; i < svcChecks.length; i++) {
-      console.log(i < svcChecks.length - 1 ? SUB(svcChecks[i]) : SUB_LAST(svcChecks[i]));
-    }
-    logToFile(`check: services — ${svcPassed ? 'passed' : `failed (${svcFailed.join(', ')})`}`);
+    const svc = runServiceChecks();
+    issues.push(...svc.issues);
+    pm2Result = svc.pm2Result;
+    displayCheckGroup('Services', svc.passed ? 'pass' : 'fail', svc.checks);
+    logToFile(`check: services — ${svc.passed ? 'passed' : `failed (${svc.failed.join(', ')})`}`);
   }
 
   // ── Handle issues ────────────────────────────────────────────
@@ -632,91 +734,12 @@ export async function doctorCommand(args) {
     }
 
     // Re-check skipped groups after fixes
-    if (fixed.length > 0 && skipRemaining) {
-      console.log(`\n${dim('Continuing checks...')}`);
-
-      // Re-check what was skipped (network issues are manual-only, so
-      // skipRemaining here means AI Service was the blocker)
-      if (net.reachable) {
-        const cli2 = checkClaudeCli();
-        const auth2 = cli2.installed ? checkClaudeAuth() : false;
-
-        if (cli2.installed && auth2) {
-          // Check autonomous mode too
-          let autoMode2 = checkAutonomousMode();
-          if (!autoMode2) {
-            const enableOk = await promptYesNo('Autonomous mode not accepted. Enable it? [y/N] ');
-            if (enableOk) {
-              logToFile('fix: autonomous mode — user confirmed (re-check)');
-              const autoResult = fixAutonomousMode();
-              if (autoResult.ok) {
-                autoMode2 = true;
-              } else {
-                failed.push('Enable autonomous mode');
-                logToFile(`fix: autonomous mode — failed (re-check)${autoResult.error ? ` (${autoResult.error})` : ''}`);
-              }
-            } else {
-              failed.push('Autonomous mode (user declined)');
-              logToFile('fix: autonomous mode — user declined (re-check)');
-            }
-          }
-
-          const aiPass2 = autoMode2;
-          console.log(groupHeader('AI Service', aiPass2 ? 'pass' : 'fail'));
-          console.log(SUB(`Claude CLI ${dim(cli2.version)}`));
-          console.log(SUB('authorized'));
-          console.log(SUB_LAST(autoMode2 ? 'autonomous mode accepted' : red('autonomous mode not accepted')));
-          logToFile(`re-check: ai_service — ${aiPass2 ? 'passed' : 'failed'}`);
-
-          // Now check services
-          const svc2 = checkPm2Services();
-
-          if (!svc2.activityMonitor) {
-            const startOk = await promptYesNo('Services are not running. Start them? [y/N] ');
-            if (startOk) {
-              logToFile('fix: services — user confirmed (re-check)');
-              const svcResult = fixServices();
-              if (svcResult.ok) {
-                // Wait a moment for activity-monitor to create session
-                await new Promise(r => setTimeout(r, 3000));
-              } else {
-                failed.push('Start services');
-                logToFile(`fix: services — failed (re-check)${svcResult.error ? ` (${svcResult.error})` : ''}`);
-              }
-            } else {
-              failed.push('Start services (user declined)');
-              logToFile('fix: services — user declined (re-check)');
-            }
-          }
-
-          const svc3 = checkPm2Services();
-          const session3 = checkTmuxSession();
-
-          console.log(groupHeader('Services', svc3.activityMonitor ? 'pass' : 'fail'));
-          console.log(SUB(`activity-monitor: ${svc3.activityMonitor ? green('online') : red('offline')}`));
-          console.log(SUB_LAST(`Claude session: ${session3 ? green('active') : yellow('starting...')}`));
-          logToFile(`re-check: services — ${svc3.activityMonitor ? 'passed' : 'failed'}`);
-
-          if (!svc3.activityMonitor) {
-            failed.push('Services still not running after re-check');
-          }
-
-          pm2Result = svc3;
-        } else {
-          // AI Service re-check failed
-          console.log(groupHeader('AI Service', 'fail'));
-          if (cli2.installed) {
-            console.log(SUB(`Claude CLI ${dim(cli2.version)}`));
-            console.log(SUB_LAST(red('not authorized')));
-          } else {
-            console.log(SUB_LAST(red('Claude CLI not installed')));
-          }
-          logToFile('re-check: ai_service — failed');
-          failed.push('AI Service still not working after fixes');
-        }
+    if (skipRemaining) {
+      const recheck = await recheckSkippedGroups(net, fixed, failed);
+      if (recheck.pm2Result) {
+        pm2Result = recheck.pm2Result;
       }
     }
-
   }
 
   // ── Group 4: Channels ────────────────────────────────────────
@@ -725,7 +748,7 @@ export async function doctorCommand(args) {
   const procs = pm2Result?.procs || [];
   const tmuxSession = checkTmuxSession();
   if (procs.length > 0 || tmuxSession) {
-    const channels = discoverChannels(procs, env, tmuxSession);
+    const channels = discoverChannels(procs, env, tmuxSession, components);
     const onlineChannels = channels.filter(c => c.online);
     offlineChannels = channels.filter(c => !c.online);
 
@@ -747,34 +770,34 @@ export async function doctorCommand(args) {
 
   if (!skipRemaining) {
     try {
-      const updates = [];
+      const targets = [];
 
       // Check zylos-core itself
       const coreVersion = getCurrentVersion();
       if (coreVersion.success) {
-        try {
-          const latest = fetchLatestTag('zylos-ai/zylos-core');
-          if (latest && latest !== coreVersion.version) {
-            updates.push({ name: 'zylos-core', current: coreVersion.version, latest });
-          }
-        } catch (err) {
-          logToFile(`warn: version check failed for zylos-core: ${err.message}`);
-        }
+        targets.push({ name: 'zylos-core', repo: 'zylos-ai/zylos-core', current: coreVersion.version });
       }
 
       // Check installed components
-      const components = loadComponents();
       for (const [name, info] of Object.entries(components)) {
         if (!info.repo || !info.version) continue;
+        targets.push({ name, repo: info.repo, current: info.version });
+      }
+
+      // Fetch all versions concurrently with limit
+      const results = await concurrentMap(targets, async (target) => {
         try {
-          const latest = fetchLatestTag(info.repo);
-          if (latest && latest !== info.version) {
-            updates.push({ name, current: info.version, latest });
+          const latest = await fetchLatestTagAsync(target.repo);
+          if (latest && latest !== target.current) {
+            return { ...target, latest };
           }
         } catch (err) {
-          logToFile(`warn: version check failed for ${name}: ${err.message}`);
+          logToFile(`warn: version check failed for ${target.name}: ${err.message}`);
         }
-      }
+        return null;
+      }, VERSION_CHECK_CONCURRENCY);
+
+      const updates = results.filter(Boolean);
 
       if (updates.length > 0) {
         console.log(`\n${bold('Updates available')}`);
