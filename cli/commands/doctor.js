@@ -7,13 +7,14 @@
 
 import { execFileSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
+import https from 'node:https';
 import os from 'node:os';
 import path from 'node:path';
 import dns from 'node:dns/promises';
 import { ZYLOS_DIR, ENV_FILE, CONFIG_DIR, SKILLS_DIR, COMPONENTS_FILE } from '../lib/config.js';
 import { readEnvFile } from '../lib/env.js';
 import { loadComponents } from '../lib/components.js';
-import { fetchLatestTagAsync } from '../lib/github.js';
+import { fetchLatestTagAsync, compareSemverDesc } from '../lib/github.js';
 import { getCurrentVersion } from '../lib/self-upgrade.js';
 import { commandExists } from '../lib/shell-utils.js';
 import { promptYesNo } from '../lib/prompts.js';
@@ -123,30 +124,54 @@ async function checkNetwork(env) {
     return results;
   }
 
-  // Reachability check — try a lightweight HTTPS request
-  try {
-    const curlArgs = ['-s', '--connect-timeout', '5', '--max-time', '10',
-      '-o', '/dev/null', '-w', '%{http_code}'];
-    if (proxy) curlArgs.push('--proxy', proxy);
-    curlArgs.push(`https://${API_HOST}/`);
-    const code = execFileSync('curl', curlArgs, {
-      encoding: 'utf8', timeout: 15000, stdio: ['pipe', 'pipe', 'pipe'],
-    }).trim();
-    // Any HTTP response (even 4xx) means network works
-    results.reachable = true;
-    results.details.httpCode = code;
-  } catch (err) {
-    // If curl itself fails, check if proxy is the issue
-    if (proxy) {
-      try {
-        const directArgs = ['-s', '--connect-timeout', '5', '--max-time', '10',
-          '-o', '/dev/null', '-w', '%{http_code}', `https://${API_HOST}/`];
-        execFileSync('curl', directArgs, {
-          encoding: 'utf8', timeout: 15000, stdio: ['pipe', 'pipe', 'pipe'],
+  // Reachability check
+  if (commandExists('curl')) {
+    try {
+      const curlArgs = ['-s', '--connect-timeout', '5', '--max-time', '10',
+        '-o', '/dev/null', '-w', '%{http_code}'];
+      if (proxy) curlArgs.push('--proxy', proxy);
+      curlArgs.push(`https://${API_HOST}/`);
+      const code = execFileSync('curl', curlArgs, {
+        encoding: 'utf8', timeout: 15000, stdio: ['pipe', 'pipe', 'pipe'],
+      }).trim();
+      // Any HTTP response (even 4xx) means network works
+      results.reachable = true;
+      results.details.httpCode = code;
+    } catch {
+      // If curl itself fails, check if proxy is the issue
+      if (proxy) {
+        try {
+          const directArgs = ['-s', '--connect-timeout', '5', '--max-time', '10',
+            '-o', '/dev/null', '-w', '%{http_code}', `https://${API_HOST}/`];
+          execFileSync('curl', directArgs, {
+            encoding: 'utf8', timeout: 15000, stdio: ['pipe', 'pipe', 'pipe'],
+          });
+          results.details.proxyIssue = true;
+        } catch {
+          results.details.proxyIssue = false;
+        }
+      }
+    }
+  } else {
+    // Fallback: node https (no proxy support)
+    try {
+      await new Promise((resolve, reject) => {
+        const req = https.request({
+          hostname: API_HOST, port: 443, path: '/', method: 'HEAD', timeout: 10000,
+        }, (res) => {
+          results.reachable = true;
+          results.details.httpCode = String(res.statusCode);
+          res.resume();
+          resolve();
         });
-        results.details.proxyIssue = true;
-      } catch {
-        results.details.proxyIssue = false;
+        req.on('error', reject);
+        req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
+        req.end();
+      });
+    } catch {
+      // Cannot reach — note proxy can't be tested without curl
+      if (proxy) {
+        results.details.noCurl = true;
       }
     }
   }
@@ -314,21 +339,47 @@ function runServiceChecks() {
 // ── Fix implementations ──────────────────────────────────────────
 // Each fix returns { ok: boolean, error?: string }
 
-function fixTmux() {
+function installSystemPackage(pkg) {
   const platform = os.platform();
-  try {
-    if (platform === 'darwin') {
-      execFileSync('brew', ['install', 'tmux'], { stdio: 'inherit', timeout: 600000 });
-    } else {
-      execFileSync('sudo', ['apt-get', 'install', '-y', 'tmux'], { stdio: 'inherit', timeout: 600000 });
+  const isRoot = process.getuid?.() === 0;
+
+  if (platform === 'darwin') {
+    try {
+      execFileSync('brew', ['install', pkg], { stdio: 'inherit', timeout: 600000 });
+      return { ok: true };
+    } catch {
+      return { ok: false, error: 'brew install failed — is Homebrew installed?' };
     }
-    return { ok: commandExists('tmux') };
-  } catch (err) {
-    const hint = platform === 'darwin'
-      ? 'brew install failed — is Homebrew installed?'
-      : 'apt-get install failed';
-    return { ok: false, error: hint };
   }
+
+  // Linux: try apt-get first, then yum
+  const sequences = [
+    { cmds: [['apt-get', 'update'], ['apt-get', 'install', '-y', pkg]], name: 'apt-get' },
+    { cmds: [['yum', 'install', '-y', pkg]], name: 'yum' },
+  ];
+
+  for (const { cmds, name } of sequences) {
+    try {
+      for (const args of cmds) {
+        if (isRoot) {
+          execFileSync(args[0], args.slice(1), { stdio: 'inherit', timeout: 600000 });
+        } else {
+          execFileSync('sudo', args, { stdio: 'inherit', timeout: 600000 });
+        }
+      }
+      return { ok: true };
+    } catch {
+      // Try next package manager
+    }
+  }
+
+  return { ok: false, error: 'package install failed (tried apt-get, yum)' };
+}
+
+function fixTmux() {
+  const result = installSystemPackage('tmux');
+  if (result.ok) return { ok: commandExists('tmux') };
+  return { ok: false, error: result.error };
 }
 
 function fixPm2() {
@@ -465,69 +516,77 @@ function discoverChannels(pm2Procs, env, tmuxSession, components) {
 
 // ── Re-check after fixes ─────────────────────────────────────────
 
-async function recheckSkippedGroups(net, fixed, failed) {
-  if (fixed.length === 0 || !net.reachable) return { pm2Result: null };
+async function recheckAfterFixes(networkOk, attempted, fixed, failed, checkOnly) {
+  if (fixed.length === 0) return { pm2Result: null };
 
-  console.log(`\n${dim('Continuing checks...')}`);
+  console.log(`\n${dim('Re-checking...')}`);
 
-  // Re-check AI Service
-  let ai = runAiChecks();
+  const newIssues = [];
 
-  // If autonomous mode is the only remaining blocker, offer inline fix
-  if (!ai.passed) {
-    const autoIssue = ai.issues.find(i => i.label === 'Autonomous mode not accepted');
-    if (autoIssue && ai.failed.length === 1) {
-      const enableOk = await promptYesNo('Autonomous mode not accepted. Enable it? [y/N] ');
-      if (enableOk) {
-        logToFile('fix: autonomous mode — user confirmed (re-check)');
-        const autoResult = fixAutonomousMode();
-        if (autoResult.ok) {
-          ai = runAiChecks();
-        } else {
-          failed.push('Enable autonomous mode');
-          logToFile(`fix: autonomous mode — failed (re-check)${autoResult.error ? ` (${autoResult.error})` : ''}`);
-        }
-      } else {
-        failed.push('Autonomous mode (user declined)');
-        logToFile('fix: autonomous mode — user declined (re-check)');
-      }
-    }
-  }
-
-  displayCheckGroup('AI Service', ai.passed ? 'pass' : 'fail', ai.checks);
-  logToFile(`re-check: ai_service — ${ai.passed ? 'passed' : 'failed'}`);
-
-  if (!ai.passed) {
-    failed.push('AI Service still not working after fixes');
-    return { pm2Result: null };
+  // Re-check AI Service (may reveal auth/autonomous issues after CLI install)
+  if (networkOk) {
+    const ai = runAiChecks();
+    displayCheckGroup('AI Service', ai.passed ? 'pass' : 'fail', ai.checks);
+    logToFile(`re-check: ai_service — ${ai.passed ? 'passed' : 'failed'}`);
+    // Only collect issues not already attempted
+    newIssues.push(...ai.issues.filter(i => !attempted.has(i.label)));
   }
 
   // Re-check Services
-  let svc = runServiceChecks();
-
-  if (!svc.pm2Result.activityMonitor) {
-    const startOk = await promptYesNo('Services are not running. Start them? [y/N] ');
-    if (startOk) {
-      logToFile('fix: services — user confirmed (re-check)');
-      const svcResult = fixServices();
-      if (svcResult.ok) {
-        await new Promise(r => setTimeout(r, 3000));
-        svc = runServiceChecks();
-      } else {
-        failed.push('Start services');
-        logToFile(`fix: services — failed (re-check)${svcResult.error ? ` (${svcResult.error})` : ''}`);
-      }
-    } else {
-      failed.push('Start services (user declined)');
-      logToFile('fix: services — user declined (re-check)');
-    }
-  }
-
+  const svc = runServiceChecks();
   displayCheckGroup('Services', svc.passed ? 'pass' : 'fail', svc.checks);
   logToFile(`re-check: services — ${svc.passed ? 'passed' : 'failed'}`);
+  newIssues.push(...svc.issues.filter(i => !attempted.has(i.label)));
 
-  if (!svc.pm2Result.activityMonitor) {
-    failed.push('Services still not running after re-check');
+  // Offer to fix new issues (batch, same UX as initial)
+  const fixable = newIssues.filter(i => i.fix);
+  if (fixable.length > 0 && !checkOnly) {
+    console.log(separator('Additional Issues'));
+    for (let i = 0; i < newIssues.length; i++) {
+      const issue = newIssues[i];
+      console.log(`\n  ${bold(`[${i + 1}]`)} ${issue.label}`);
+      if (issue.detail) console.log(`      ${dim(issue.detail)}`);
+      if (issue.fixLabel) console.log(`      Fix: ${issue.fixLabel}`);
+      if (issue.hint) console.log(`\n      ${issue.hint}`);
+    }
+
+    console.log('');
+    const fixPrompt = fixable.length === 1
+      ? `Fix this issue? [y/N] `
+      : `Fix all ${fixable.length} issues? [y/N] `;
+    const shouldFix = await promptYesNo(fixPrompt);
+
+    if (shouldFix) {
+      for (let i = 0; i < fixable.length; i++) {
+        const issue = fixable[i];
+        const progress = fixable.length > 1 ? `[${i + 1}/${fixable.length}] ` : '';
+        process.stdout.write(`\n  ${progress}${issue.fixLabel}... `);
+        logToFile(`fix: ${issue.label} — user confirmed (re-check)`);
+
+        const result = await issue.fix();
+        if (result.ok) {
+          console.log(green('✓'));
+          logToFile(`fix: ${issue.label} — success (re-check)`);
+          fixed.push(issue.label);
+        } else {
+          console.log(red('✗'));
+          if (result.error) console.log(`      ${dim(result.error)}`);
+          logToFile(`fix: ${issue.label} — failed (re-check)`);
+          failed.push(issue.label);
+        }
+      }
+
+      // Final re-check Services after additional fixes
+      const finalSvc = runServiceChecks();
+      return { pm2Result: finalSvc.pm2Result };
+    } else {
+      for (const issue of fixable) {
+        failed.push(`${issue.label} (user declined)`);
+      }
+      logToFile('re-check: user declined fixes');
+    }
+  } else if (fixable.length > 0 && checkOnly) {
+    console.log(`\n  ${dim(`${fixable.length} additional fixable issue(s).`)}`);
   }
 
   return { pm2Result: svc.pm2Result };
@@ -538,8 +597,10 @@ async function recheckSkippedGroups(net, fixed, failed) {
 export async function doctorCommand(args) {
   const checkOnly = args.includes('--check');
 
-  console.log(`\n${heading('Checking your Zylos setup...')}\n`);
-  logToFile('doctor started' + (checkOnly ? ' (--check)' : ''));
+  const coreVersion = getCurrentVersion();
+  const versionLabel = coreVersion.success ? ` ${dim(`(v${coreVersion.version})`)}` : '';
+  console.log(`\n${heading('Checking your Zylos setup...')}${versionLabel}\n`);
+  logToFile('doctor started' + (checkOnly ? ' (--check)' : '') + (coreVersion.success ? ` v${coreVersion.version}` : ''));
 
   // ── Pre-check: has init been run? ─────────────────────────────
   const initMarkers = [CONFIG_DIR, SKILLS_DIR, COMPONENTS_FILE];
@@ -564,7 +625,7 @@ export async function doctorCommand(args) {
   const env = readEnvFile();
   const components = loadComponents();
   const issues = [];
-  let skipRemaining = false;
+  let networkOk = true;
 
   // ── Group 1: System ──────────────────────────────────────────
 
@@ -582,10 +643,12 @@ export async function doctorCommand(args) {
     systemPassed = false;
     systemFailed.push('tmux missing');
     const isMac = os.platform() === 'darwin';
+    const isRoot = process.getuid?.() === 0;
+    const tmuxHint = isMac ? 'brew install tmux' : isRoot ? 'apt install tmux' : 'sudo apt install tmux';
     issues.push({
       label: 'tmux is not installed',
       detail: 'tmux is required for the Claude session.',
-      fixLabel: isMac ? 'install tmux (brew install tmux)' : 'install tmux (sudo apt install tmux)',
+      fixLabel: `install tmux (${tmuxHint})`,
       fix: fixTmux,
     });
   }
@@ -628,14 +691,21 @@ export async function doctorCommand(args) {
         netDetail.push(`Proxy reachable: ${red('✗')} (direct connection works — proxy may be down)`);
       }
     }
+    let netHint;
+    if (net.proxy) {
+      netHint = `Check HTTPS_PROXY in ${ENV_FILE}\n      Current value: ${net.proxy}`;
+      if (net.details.noCurl) {
+        netHint += `\n      ${dim('Note: curl not found — proxy diagnostics limited')}`;
+      }
+    } else {
+      netHint = 'Check your internet connection and firewall settings.';
+    }
     issues.push({
       label: `Cannot reach AI service (${API_HOST})`,
       detail: netDetail.join('\n      '),
       fixLabel: null, // Cannot auto-fix
       fix: null,
-      hint: net.proxy
-        ? `Check HTTPS_PROXY in ${ENV_FILE}\n      Current value: ${net.proxy}`
-        : 'Check your internet connection and firewall settings.',
+      hint: netHint,
     });
   }
 
@@ -643,14 +713,14 @@ export async function doctorCommand(args) {
   displayCheckGroup('System', systemPassed ? 'pass' : 'fail', systemChecks);
   logToFile(`check: system — ${systemPassed ? 'passed' : `failed (${systemFailed.join(', ')})`}`);
 
-  // If network failed, skip remaining groups
+  // If network failed, skip network-dependent groups
   if (!net.reachable) {
-    skipRemaining = true;
+    networkOk = false;
   }
 
   // ── Group 2: AI Service ──────────────────────────────────────
 
-  if (skipRemaining) {
+  if (!networkOk) {
     console.log(groupHeader('AI Service', 'skip'));
     console.log(SKIP('skipped (requires network)'));
     logToFile('check: ai_service — skipped');
@@ -659,18 +729,13 @@ export async function doctorCommand(args) {
     issues.push(...ai.issues);
     displayCheckGroup('AI Service', ai.passed ? 'pass' : 'fail', ai.checks);
     logToFile(`check: ai_service — ${ai.passed ? 'passed' : `failed (${ai.failed.join(', ')})`}`);
-    if (!ai.passed) skipRemaining = true;
   }
 
   // ── Group 3: Services ────────────────────────────────────────
 
   let pm2Result = null;
 
-  if (skipRemaining) {
-    console.log(groupHeader('Services', 'skip'));
-    console.log(SKIP('skipped (requires AI Service)'));
-    logToFile('check: services — skipped');
-  } else {
+  {
     const svc = runServiceChecks();
     issues.push(...svc.issues);
     pm2Result = svc.pm2Result;
@@ -753,12 +818,11 @@ export async function doctorCommand(args) {
       }
     }
 
-    // Re-check skipped groups after fixes
-    if (skipRemaining) {
-      const recheck = await recheckSkippedGroups(net, fixed, failed);
-      if (recheck.pm2Result) {
-        pm2Result = recheck.pm2Result;
-      }
+    // Re-check after fixes (may reveal new issues, e.g. auth after CLI install)
+    const attempted = new Set([...fixed, ...failed]);
+    const recheck = await recheckAfterFixes(networkOk, attempted, fixed, failed, checkOnly);
+    if (recheck.pm2Result) {
+      pm2Result = recheck.pm2Result;
     }
   }
 
@@ -788,12 +852,11 @@ export async function doctorCommand(args) {
 
   // ── Group 5: Updates ────────────────────────────────────────
 
-  if (!skipRemaining) {
+  if (networkOk) {
     try {
       const targets = [];
 
       // Check zylos-core itself
-      const coreVersion = getCurrentVersion();
       if (coreVersion.success) {
         targets.push({ name: 'zylos-core', repo: 'zylos-ai/zylos-core', current: coreVersion.version });
       }
@@ -808,7 +871,8 @@ export async function doctorCommand(args) {
       const results = await concurrentMap(targets, async (target) => {
         try {
           const latest = await fetchLatestTagAsync(target.repo);
-          if (latest && latest !== target.current) {
+          // Only show update when latest is strictly newer (semver comparison)
+          if (latest && compareSemverDesc(target.current, latest) > 0) {
             return { ...target, latest };
           }
         } catch (err) {

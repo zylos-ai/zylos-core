@@ -88,7 +88,7 @@ export function fetchRawFile(repo, filePath, branch = 'main') {
 
 // ── Shared tag parsing ───────────────────────────────────────────
 
-function compareSemverDesc(a, b) {
+export function compareSemverDesc(a, b) {
   const [aBase, aPre] = a.split(/-(.+)/);
   const [bBase, bPre] = b.split(/-(.+)/);
 
