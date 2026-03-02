@@ -10,7 +10,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import dns from 'node:dns/promises';
-import { ZYLOS_DIR, ENV_FILE } from '../lib/config.js';
+import { ZYLOS_DIR, ENV_FILE, CONFIG_DIR, SKILLS_DIR, COMPONENTS_FILE } from '../lib/config.js';
 import { readEnvFile } from '../lib/env.js';
 import { loadComponents } from '../lib/components.js';
 import { fetchLatestTagAsync } from '../lib/github.js';
@@ -540,6 +540,26 @@ export async function doctorCommand(args) {
 
   console.log(`\n${heading('Checking your Zylos setup...')}\n`);
   logToFile('doctor started' + (checkOnly ? ' (--check)' : ''));
+
+  // ── Pre-check: has init been run? ─────────────────────────────
+  const initMarkers = [CONFIG_DIR, SKILLS_DIR, COMPONENTS_FILE];
+  const initMarkersFound = initMarkers.filter(m => fs.existsSync(m)).length;
+
+  if (initMarkersFound === 0) {
+    console.log(`${yellow('Zylos has not been initialized yet.')}\n`);
+    console.log(`  Run ${bold('zylos init')} to set up your environment.`);
+    console.log(`  ${dim('This will install dependencies (tmux, PM2, Claude CLI),')}`);
+    console.log(`  ${dim('configure services, and get everything running.')}\n`);
+    logToFile('result: not initialized — suggested zylos init');
+    process.exit(1);
+  }
+
+  if (initMarkersFound < initMarkers.length) {
+    console.log(`${yellow('Zylos initialization appears incomplete.')}\n`);
+    console.log(`  Run ${bold('zylos init')} to complete the setup.\n`);
+    logToFile('result: incomplete init — suggested zylos init');
+    process.exit(1);
+  }
 
   const env = readEnvFile();
   const components = loadComponents();
