@@ -63,7 +63,14 @@ function checkTmuxInstalled() {
 }
 
 function checkPm2Installed() {
-  return commandExists('pm2');
+  if (!commandExists('pm2')) return { installed: false };
+  let version = 'unknown';
+  try {
+    version = execFileSync('pm2', ['--version'], {
+      encoding: 'utf8', timeout: 30000, stdio: ['pipe', 'pipe', 'pipe'],
+    }).trim();
+  } catch {}
+  return { installed: true, version };
 }
 
 async function checkNetwork(env) {
@@ -365,8 +372,9 @@ export async function doctorCommand(args) {
   }
 
   // 1b. PM2
-  const pm2Ok = checkPm2Installed();
-  systemChecks.push(pm2Ok ? 'PM2 installed' : red('PM2 not installed'));
+  const pm2Check = checkPm2Installed();
+  const pm2Ok = pm2Check.installed;
+  systemChecks.push(pm2Ok ? `PM2 ${dim(`v${pm2Check.version}`)}` : red('PM2 not installed'));
   if (!pm2Ok) {
     systemPassed = false;
     systemFailed.push('PM2 missing');
@@ -551,6 +559,7 @@ export async function doctorCommand(args) {
   // ── Handle issues ────────────────────────────────────────────
 
   const failed = [];
+  const fixed = [];
   let manual = [];
 
   if (issues.length > 0) {
@@ -601,8 +610,6 @@ export async function doctorCommand(args) {
     }
 
     // Apply fixes
-    const fixed = [];
-
     for (let i = 0; i < fixable.length; i++) {
       const issue = fixable[i];
       const progress = fixable.length > 1 ? `[${i + 1}/${fixable.length}] ` : '';
@@ -710,38 +717,17 @@ export async function doctorCommand(args) {
       }
     }
 
-    // Summary
-    if (fixed.length > 0 || failed.length > 0 || manual.length > 0) {
-      console.log(separator('Summary'));
-
-      if (fixed.length > 0) {
-        console.log(`\n  ${green('Fixed:')}`);
-        fixed.forEach(f => console.log(`    ${green('✓')} ${f}`));
-      }
-      if (failed.length > 0) {
-        console.log(`\n  ${red('Failed:')}`);
-        failed.forEach(f => console.log(`    ${red('✗')} ${f}`));
-      }
-      if (manual.length > 0) {
-        console.log(`\n  ${yellow('Needs attention:')}`);
-        manual.forEach(m => console.log(`    ${yellow('○')} ${m.label}`));
-      }
-    }
-
-    if (failed.length > 0 || manual.length > 0) {
-      logToFile('result: partially fixed');
-      // Don't exit yet — still show channels if services are up
-    }
   }
 
   // ── Group 4: Channels ────────────────────────────────────────
 
+  let offlineChannels = [];
   const procs = pm2Result?.procs || [];
   const tmuxSession = checkTmuxSession();
   if (procs.length > 0 || tmuxSession) {
     const channels = discoverChannels(procs, env, tmuxSession);
     const onlineChannels = channels.filter(c => c.online);
-    const offlineChannels = channels.filter(c => !c.online);
+    offlineChannels = channels.filter(c => !c.online);
 
     console.log(`\n${bold('Channels')}`);
     for (const ch of onlineChannels) {
@@ -798,6 +784,28 @@ export async function doctorCommand(args) {
         console.log(`\n  ${dim("Run")} ${bold('zylos upgrade --all')} ${dim('to update.')}`);
       }
     } catch {}
+  }
+
+  // ── Summary ─────────────────────────────────────────────────
+
+  const hasFixActivity = fixed.length > 0 || failed.length > 0 || manual.length > 0;
+
+  if (hasFixActivity) {
+    console.log(separator('Summary'));
+
+    if (fixed.length > 0) {
+      console.log(`\n  ${green('Fixed:')}`);
+      fixed.forEach(f => console.log(`    ${green('✓')} ${f}`));
+    }
+    if (failed.length > 0) {
+      console.log(`\n  ${red('Failed:')}`);
+      failed.forEach(f => console.log(`    ${red('✗')} ${f}`));
+    }
+    if (manual.length > 0 || offlineChannels.length > 0) {
+      console.log(`\n  ${yellow('Needs attention:')}`);
+      manual.forEach(m => console.log(`    ${yellow('○')} ${m.label}`));
+      offlineChannels.forEach(ch => console.log(`    ${yellow('○')} ${ch.name} offline — connect via any working channel, ask Claude to fix`));
+    }
   }
 
   // ── Final status ─────────────────────────────────────────────
