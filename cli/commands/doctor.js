@@ -239,10 +239,10 @@ function fixServices() {
   try {
     const ecosystemFile = path.join(ZYLOS_DIR, 'pm2', 'ecosystem.config.cjs');
     if (fs.existsSync(ecosystemFile)) {
-      execSync(`pm2 start "${ecosystemFile}"`, { stdio: 'pipe' });
-      execSync('pm2 save', { stdio: 'pipe' });
+      execFileSync('pm2', ['start', ecosystemFile], { stdio: 'pipe' });
+      execFileSync('pm2', ['save'], { stdio: 'pipe' });
     } else {
-      execSync('zylos start', { stdio: 'pipe' });
+      execFileSync('zylos', ['start'], { stdio: 'pipe' });
     }
     return { ok: true };
   } catch (err) {
@@ -348,7 +348,6 @@ export async function doctorCommand(args) {
       detail: 'tmux is required for the Claude session.',
       fixLabel: isMac ? 'install tmux (brew install tmux)' : 'install tmux (sudo apt install tmux)',
       fix: fixTmux,
-      type: 'auto',
     });
   }
 
@@ -362,7 +361,6 @@ export async function doctorCommand(args) {
       detail: 'PM2 manages Zylos background services.',
       fixLabel: 'install PM2 (npm install -g pm2)',
       fix: fixPm2,
-      type: 'auto',
     });
   }
 
@@ -393,7 +391,6 @@ export async function doctorCommand(args) {
       detail: netDetail.join('\n      '),
       fixLabel: null, // Cannot auto-fix
       fix: null,
-      type: 'manual',
       hint: net.proxy
         ? `Check HTTPS_PROXY in ${ENV_FILE}\n      Current value: ${net.proxy}`
         : 'Check your internet connection and firewall settings.',
@@ -433,7 +430,6 @@ export async function doctorCommand(args) {
         detail: 'The Claude CLI is required for Zylos to function.',
         fixLabel: 'install Claude CLI',
         fix: fixClaudeCli,
-        type: 'auto',
       });
     }
 
@@ -449,7 +445,6 @@ export async function doctorCommand(args) {
           detail: 'Claude needs API authorization to work.',
           fixLabel: 'opens the Claude login flow (interactive)',
           fix: fixClaudeAuth,
-          type: 'interactive',
         });
       }
       // Check autonomous mode (terms acceptance)
@@ -465,7 +460,6 @@ export async function doctorCommand(args) {
             detail: 'Claude needs autonomous mode enabled to run unattended.',
             fixLabel: 'enable autonomous mode in Claude settings',
             fix: fixAutonomousMode,
-            type: 'auto',
           });
         }
       }
@@ -510,7 +504,6 @@ export async function doctorCommand(args) {
         detail: 'The activity monitor keeps Claude alive.',
         fixLabel: 'start all services',
         fix: fixServices,
-        type: 'auto',
       });
     }
 
@@ -619,10 +612,35 @@ export async function doctorCommand(args) {
         const auth2 = cli2.installed ? checkClaudeAuth() : false;
 
         if (cli2.installed && auth2) {
-          console.log(groupHeader('AI Service', 'pass'));
+          // Check autonomous mode too
+          let autoMode2 = checkAutonomousMode();
+          if (!autoMode2) {
+            const enableOk = await promptYesNo('Autonomous mode not accepted. Enable it? [y/N] ');
+            if (enableOk) {
+              logToFile('fix: autonomous mode — user confirmed (re-check)');
+              const autoResult = fixAutonomousMode();
+              if (autoResult.ok) {
+                autoMode2 = true;
+              } else {
+                failed.push('Enable autonomous mode');
+                logToFile(`fix: autonomous mode — failed (re-check)${autoResult.error ? ` (${autoResult.error})` : ''}`);
+              }
+            } else {
+              failed.push('Autonomous mode (user declined)');
+              logToFile('fix: autonomous mode — user declined (re-check)');
+            }
+          }
+
+          const aiPass2 = autoMode2;
+          console.log(groupHeader('AI Service', aiPass2 ? 'pass' : 'fail'));
           console.log(SUB(`Claude CLI ${dim(cli2.version)}`));
-          console.log(SUB_LAST('authorized'));
-          logToFile('re-check: ai_service — passed');
+          console.log(SUB('authorized'));
+          console.log(SUB_LAST(autoMode2 ? 'autonomous mode accepted' : red('autonomous mode not accepted')));
+          logToFile(`re-check: ai_service — ${aiPass2 ? 'passed' : 'failed'}`);
+
+          if (!aiPass2) {
+            failed.push('Autonomous mode not accepted');
+          }
 
           // Now check services
           const svc2 = checkPm2Services();
