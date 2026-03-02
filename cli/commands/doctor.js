@@ -550,7 +550,7 @@ export async function doctorCommand(args) {
 
   // ── Handle issues ────────────────────────────────────────────
 
-  let failed = [];
+  const failed = [];
   let manual = [];
 
   if (issues.length > 0) {
