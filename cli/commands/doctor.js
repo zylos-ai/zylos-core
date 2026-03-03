@@ -92,7 +92,17 @@ async function concurrentMap(items, fn, limit = 3) {
 // ── Check implementations ────────────────────────────────────────
 
 function checkTmuxInstalled() {
-  return commandExists('tmux');
+  if (!commandExists('tmux')) return { installed: false };
+  let version = '';
+  try {
+    const output = execFileSync('tmux', ['-V'], {
+      encoding: 'utf8', timeout: 10000, stdio: ['pipe', 'pipe', 'pipe'],
+    }).trim();
+    // "tmux 3.4" → "3.4"
+    const match = output.match(/(\d+\.\d+\w*)/);
+    if (match) version = match[1];
+  } catch {}
+  return { installed: true, version };
 }
 
 function checkPm2Installed() {
@@ -306,20 +316,30 @@ function runServiceChecks() {
   const issues = [];
 
   const pm2Result = checkPm2Services();
-  if (pm2Result.running && pm2Result.activityMonitor) {
-    checks.push(`activity-monitor: ${green('online')}`);
-  } else if (pm2Result.running) {
-    failed.push('activity-monitor not running');
-    checks.push(red('activity-monitor: not running'));
-  } else {
+
+  if (!pm2Result.running || pm2Result.total === 0) {
     failed.push('PM2 services not started');
-    checks.push(red('PM2 services not started'));
+    checks.push(red('no services running'));
+  } else {
+    const offlineNames = [];
+    for (const proc of pm2Result.procs) {
+      const status = proc.pm2_env?.status;
+      if (status === 'online') {
+        checks.push(`${proc.name}: ${green('online')}`);
+      } else {
+        checks.push(red(`${proc.name}: ${status || 'stopped'}`));
+        offlineNames.push(proc.name);
+      }
+    }
+    if (offlineNames.length > 0) {
+      failed.push(`${offlineNames.join(', ')} offline`);
+    }
   }
 
-  if (!pm2Result.running || !pm2Result.activityMonitor) {
+  if (failed.length > 0) {
     issues.push({
       label: 'Zylos services are not running',
-      detail: 'The activity monitor keeps Claude alive.',
+      detail: 'Background services keep Zylos connected and operational.',
       fixLabel: 'start all services',
       fix: fixServices,
     });
@@ -433,10 +453,15 @@ function fixServices() {
     } else {
       execFileSync('zylos', ['start'], { stdio: 'pipe', timeout: 60000 });
     }
-    // Verify activity-monitor actually came online
+    // Verify services came online
     const verify = checkPm2Services();
-    if (!verify.activityMonitor) {
-      return { ok: false, error: 'services started but activity-monitor is not online' };
+    if (verify.total === 0) {
+      return { ok: false, error: 'no services registered — check pm2/ecosystem.config.cjs' };
+    }
+    const offline = verify.procs.filter(p => p.pm2_env?.status !== 'online');
+    if (offline.length > 0) {
+      const names = offline.map(p => p.name).join(', ');
+      return { ok: false, error: `${names} failed to start — run: pm2 logs <name>` };
     }
     return { ok: true };
   } catch (err) {
@@ -661,8 +686,11 @@ export async function doctorCommand(args) {
   let systemPassed = true;
 
   // 1a. tmux
-  const tmuxOk = checkTmuxInstalled();
-  systemChecks.push(tmuxOk ? 'tmux installed' : red('tmux not installed'));
+  const tmuxCheck = checkTmuxInstalled();
+  const tmuxOk = tmuxCheck.installed;
+  systemChecks.push(tmuxOk
+    ? (tmuxCheck.version ? `tmux ${dim(tmuxCheck.version)}` : 'tmux installed')
+    : red('tmux not installed'));
   if (!tmuxOk) {
     systemPassed = false;
     systemFailed.push('tmux missing');
