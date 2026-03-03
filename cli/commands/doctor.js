@@ -99,9 +99,12 @@ function checkPm2Installed() {
   if (!commandExists('pm2')) return { installed: false };
   let version = 'unknown';
   try {
-    version = execFileSync('pm2', ['--version'], {
+    const output = execFileSync('pm2', ['--version'], {
       encoding: 'utf8', timeout: 30000, stdio: ['pipe', 'pipe', 'pipe'],
     }).trim();
+    // PM2 prints ASCII banner on first daemon spawn; extract the semver line
+    const match = output.match(/(\d+\.\d+\.\d+)/);
+    if (match) version = match[1];
   } catch {}
   return { installed: true, version };
 }
@@ -806,9 +809,9 @@ export async function doctorCommand(args) {
 
     // Ask to fix
     console.log('');
-    const fixPrompt = fixable.length === 1
-      ? `Fix this issue? [y/N] `
-      : `Fix all ${fixable.length} issues? [y/N] `;
+    const fixPrompt = fixable.length === issues.length
+      ? (fixable.length === 1 ? `Fix this issue? [y/N] ` : `Fix all ${fixable.length} issues? [y/N] `)
+      : `${fixable.length} of ${issues.length} issue(s) can be fixed automatically. Fix? [y/N] `;
     const shouldFix = await promptYesNo(fixPrompt);
 
     if (!shouldFix) {
@@ -942,6 +945,11 @@ export async function doctorCommand(args) {
       console.log(`\n  ${yellow('Needs attention:')}`);
       manual.forEach(m => console.log(`    ${yellow('○')} ${m.label}`));
       offlineChannels.forEach(ch => console.log(`    ${yellow('○')} ${ch.name} offline`));
+      // Actionable guidance — most issues resolve after zylos init
+      const needsInit = manual.some(m => m.hint) || offlineChannels.length > 0;
+      if (needsInit) {
+        console.log(`\n  Run ${bold('zylos init')} to resolve these issues.`);
+      }
     }
   }
 
