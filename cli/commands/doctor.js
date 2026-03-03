@@ -603,9 +603,8 @@ function runClaudeFix(diagnosticJson) {
   logToFile(`claude-fix: starting (${diagnosticJson.issues.length} issues)`);
 
   try {
-    const result = spawnSync('claude', ['-p', '-', '--dangerously-skip-permissions'], {
+    const result = spawnSync('claude', ['-p', prompt, '--dangerously-skip-permissions'], {
       cwd: ZYLOS_DIR,
-      input: prompt,
       encoding: 'utf8',
       timeout: CLAUDE_FIX_TIMEOUT,
       stdio: ['pipe', 'pipe', 'pipe'],
