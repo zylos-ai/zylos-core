@@ -29,7 +29,6 @@ const LOG_FILE = path.join(LOG_DIR, 'doctor.log');
 const API_HOST = 'api.anthropic.com';
 const VERSION_CHECK_CONCURRENCY = 3;
 const CLAUDE_FIX_TIMEOUT = 300000; // 5 minutes
-const CLAUDE_OUTPUT_MAX_LINES = 10;
 
 // ── Logging ──────────────────────────────────────────────────────
 
@@ -605,16 +604,16 @@ function runClaudeFix(diagnosticJson) {
     '',
     'Rules:',
     '- For missing packages (tmux, PM2): install via apt-get or brew',
-    '- For Claude CLI missing: curl -fsSL https://claude.ai/install.sh | sh',
+    '- For Claude CLI missing: curl -fsSL https://claude.ai/install.sh | bash',
     '- For services offline: pm2 start ~/zylos/pm2/ecosystem.config.cjs && pm2 save',
     '- For autonomous mode: set skipDangerousModePermissionPrompt:true in ~/.claude/settings.json',
     '- For auth issues: you cannot fix these — just note it',
     '',
-    'Output only a brief summary of what you fixed.',
+    'Output a brief summary of each step as you go.',
   ].join('\n');
 
   logToFile(`claude-fix: starting (${diagnosticJson.issues.length} issues)`);
-  const stopSpinner = createSpinner('Claude is fixing issues...');
+  console.log(`  ${dim('Claude is fixing issues...')}\n`);
 
   return new Promise((resolve) => {
     const proc = spawn('claude', ['-p', prompt, '--dangerously-skip-permissions'], {
@@ -624,37 +623,51 @@ function runClaudeFix(diagnosticJson) {
 
     let stdout = '';
     let stderr = '';
+    let lineBuffer = '';
 
-    proc.stdout.on('data', (d) => { stdout += d; });
+    proc.stdout.on('data', (d) => {
+      const chunk = String(d);
+      stdout += chunk;
+      // Stream output line by line
+      lineBuffer += chunk;
+      const lines = lineBuffer.split('\n');
+      lineBuffer = lines.pop(); // keep incomplete last line in buffer
+      for (const line of lines) {
+        console.log(`  ${dim(line)}`);
+      }
+    });
     proc.stderr.on('data', (d) => { stderr += d; });
 
     const timer = setTimeout(() => { proc.kill('SIGTERM'); }, CLAUDE_FIX_TIMEOUT);
 
     proc.on('close', (code, signal) => {
       clearTimeout(timer);
-      stopSpinner();
+      // Flush remaining buffer
+      if (lineBuffer.trim()) {
+        console.log(`  ${dim(lineBuffer)}`);
+      }
 
       const output = stdout.trim();
       const error = stderr.trim();
 
+      if (output) logToFile(`claude-fix output: ${output.slice(0, 1000)}`);
+
       if (signal) {
         logToFile(`claude-fix: killed by ${signal}`);
-        resolve({ ok: false, error: `Timed out (${CLAUDE_FIX_TIMEOUT / 1000}s)`, output });
+        resolve({ ok: false, error: `Timed out (${CLAUDE_FIX_TIMEOUT / 1000}s)` });
         return;
       }
       if (code === 0) {
         logToFile('claude-fix: completed');
-        if (output) logToFile(`claude-fix output: ${output.slice(0, 500)}`);
-        resolve({ ok: true, output });
+        resolve({ ok: true });
       } else {
         logToFile(`claude-fix: failed (exit ${code}): ${error.slice(0, 200)}`);
-        resolve({ ok: false, error: error || 'claude -p exited with error', output });
+        resolve({ ok: false, error: error || `claude -p exited with code ${code}` });
       }
     });
 
     proc.on('error', (err) => {
       clearTimeout(timer);
-      stopSpinner();
       logToFile(`claude-fix: exception: ${err.message}`);
       resolve({ ok: false, error: err.message });
     });
@@ -821,16 +834,6 @@ export async function doctorCommand(args) {
     logToFile('layer2: starting claude auto-fix');
 
     const fixResult = await runClaudeFix(diagnostic);
-
-    // Show Claude's output (truncated)
-    if (fixResult.output) {
-      const lines = fixResult.output.split('\n');
-      const shown = lines.slice(0, CLAUDE_OUTPUT_MAX_LINES);
-      console.log(`\n  ${dim(shown.join('\n  '))}`);
-      if (lines.length > CLAUDE_OUTPUT_MAX_LINES) {
-        console.log(`  ${dim(`... ${lines.length - CLAUDE_OUTPUT_MAX_LINES} more lines — see ${LOG_FILE}`)}`);
-      }
-    }
 
     // Show error if fix failed
     if (!fixResult.ok && fixResult.error) {
