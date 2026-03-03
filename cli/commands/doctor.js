@@ -272,10 +272,7 @@ function runAiChecks() {
       issues.push({
         label: 'Claude is not authorized',
         detail: 'Claude needs authorization to work with Zylos.',
-        hint: `${dim('Authenticate using one of these methods:')}\n`
-            + `      ${bold('1.')} ${dim('Claude subscription:')} zylos init  ${dim('(opens browser login)')}\n`
-            + `      ${bold('2.')} ${dim('API key:')} zylos init --api-key sk-ant-xxx\n`
-            + `      ${bold('3.')} ${dim('Setup token:')} zylos init --setup-token sk-ant-oat-xxx`,
+        hint: `Run ${bold('zylos init')} to authenticate.`,
       });
     }
     if (authOk) {
