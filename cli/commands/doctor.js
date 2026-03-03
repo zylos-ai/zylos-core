@@ -343,7 +343,7 @@ function buildDiagnosticJson(diag, coreVersion) {
         },
       },
       ai_service: {
-        passed: diag.ai.cli.installed && diag.ai.auth && diag.ai.autonomous,
+        passed: diag.ai.networkSkipped ? null : (diag.ai.cli.installed && diag.ai.auth && diag.ai.autonomous),
         skipped: diag.ai.networkSkipped,
         checks: {
           cli: { ok: diag.ai.cli.installed, version: diag.ai.cli.version || null },
@@ -603,8 +603,9 @@ function runClaudeFix(diagnosticJson) {
   logToFile(`claude-fix: starting (${diagnosticJson.issues.length} issues)`);
 
   try {
-    const result = spawnSync('claude', ['-p', prompt, '--dangerously-skip-permissions'], {
+    const result = spawnSync('claude', ['-p', '-', '--dangerously-skip-permissions'], {
       cwd: ZYLOS_DIR,
+      input: prompt,
       encoding: 'utf8',
       timeout: CLAUDE_FIX_TIMEOUT,
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -796,7 +797,7 @@ export async function doctorCommand(args) {
 
     // Re-verify
     console.log(`\n  ${dim('Verifying...')}`);
-    const rediag = await collectDiagnostics(env);
+    const rediag = await collectDiagnostics(readEnvFile());
     const reverify = buildDiagnosticJson(rediag, coreVersion);
 
     if (reverify.passed) {
