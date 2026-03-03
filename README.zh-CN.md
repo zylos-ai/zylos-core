@@ -241,13 +241,30 @@ zylos add lark
 
 ```bash
 zylos init                    # 初始化 Zylos 环境
+zylos attach                  # 连接到 Claude tmux 会话
+zylos doctor                  # 诊断并自动修复安装问题
 zylos status                  # 查看运行中的服务
 zylos logs [service]          # 查看服务日志
 zylos add <component>         # 安装通道或能力组件
 zylos upgrade <component>     # 升级组件
+zylos uninstall --self        # 完全卸载 zylos
 zylos list                    # 列出已安装组件
 zylos search [keyword]        # 搜索组件注册表
 ```
+
+---
+
+## 卸载
+
+```bash
+zylos uninstall --self
+```
+
+停止所有服务、卸载 `zylos` npm 包、删除 `~/zylos/`、清理 shell PATH 配置。可选择是否同时卸载 PM2 和 Claude CLI。
+
+使用 `--force` 跳过所有提示（仅执行核心卸载，不进行可选清理）。
+
+不会影响 Node.js 和 nvm。
 
 ---
 

@@ -242,13 +242,30 @@ All channels connect through the C4 communication bridge. To add a new channel (
 
 ```bash
 zylos init                    # Set up Zylos environment
+zylos attach                  # Attach to the Claude tmux session
+zylos doctor                  # Diagnose and auto-repair installation
 zylos status                  # Check running services
 zylos logs [service]          # View service logs
 zylos add <component>         # Install a channel or capability
 zylos upgrade <component>     # Upgrade a component
+zylos uninstall --self        # Uninstall zylos entirely
 zylos list                    # List installed components
 zylos search [keyword]        # Search component registry
 ```
+
+---
+
+## Uninstall
+
+```bash
+zylos uninstall --self
+```
+
+This will stop all services, remove the `zylos` npm package, delete `~/zylos/`, and clean shell PATH entries. You'll be prompted to optionally remove PM2 and Claude CLI.
+
+Use `--force` to skip all prompts (only performs core removal, no optional cleanup).
+
+Node.js and nvm are not touched.
 
 ---
 
