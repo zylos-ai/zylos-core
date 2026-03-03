@@ -71,7 +71,6 @@ ZYLOS_REPO="https://github.com/zylos-ai/zylos-core"
 NODE_VERSION="24"               # LTS-track major version
 MIN_NODE_MAJOR=20
 NVM_INSTALL_URL="https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh"
-NVM_INSTALLED_NOW=false
 
 # ── Colors (disabled if not a terminal) ───────────────────────
 if [ -t 1 ]; then
@@ -197,7 +196,6 @@ ensure_node() {
 
   if [ ! -s "$NVM_DIR/nvm.sh" ]; then
     info "Installing nvm..."
-    NVM_INSTALLED_NOW=true
     curl -fsSL "$NVM_INSTALL_URL" | bash
   fi
 
