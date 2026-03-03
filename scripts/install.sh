@@ -305,13 +305,9 @@ if [ "$NO_INIT" = true ]; then
   shell_rc="$(_detect_shell_rc)"
   info "Skipping zylos init (--no-init)."
   echo ""
-  info "To initialize later, run:"
+  info "To initialize later, open a new terminal or run:"
   echo ""
-  if [ "$NVM_INSTALLED_NOW" = true ]; then
-    echo "    source $shell_rc && zylos init"
-  else
-    echo "    zylos init"
-  fi
+  echo "    source $shell_rc && zylos init"
   echo ""
 else
   # Always run zylos init after installation (environment is ready at this point).
@@ -323,27 +319,26 @@ else
     zylos init ${INIT_ARGS[@]+"${INIT_ARGS[@]}"}
   fi
 
-  # If nvm was freshly installed, PATH only works inside this subshell.
-  # Show a reminder so the user knows to source their rc file.
-  if [ "$NVM_INSTALLED_NOW" = true ]; then
-    local shell_rc
-    shell_rc="$(_detect_shell_rc)"
-    echo ""
-    printf '%b' "${YELLOW}"
-    echo "  ┌────────────────────────────────────────────────────────┐"
-    echo "  │                                                        │"
-    echo "  │  Setup complete! Your agent is running.                │"
-    echo "  │                                                        │"
-    echo "  │  To use zylos commands in this terminal, run:          │"
-    echo "  │                                                        │"
-    printf "  │    source %-44s │\n" "$shell_rc"
-    echo "  │                                                        │"
-    echo "  │  New terminal sessions will work automatically.        │"
-    echo "  │                                                        │"
-    echo "  └────────────────────────────────────────────────────────┘"
-    printf '%b' "${NC}"
-    echo ""
-  fi
+  # The install script runs in a subshell (curl | bash), so PATH changes
+  # made during install/init only apply here. Always remind the user to
+  # source their rc file or open a new terminal.
+  local shell_rc
+  shell_rc="$(_detect_shell_rc)"
+  echo ""
+  printf '%b' "${YELLOW}"
+  echo "  ┌────────────────────────────────────────────────────────┐"
+  echo "  │                                                        │"
+  echo "  │  Setup complete! Your agent is running.                │"
+  echo "  │                                                        │"
+  echo "  │  To use zylos commands in this terminal, run:          │"
+  echo "  │                                                        │"
+  printf "  │    source %-44s │\n" "$shell_rc"
+  echo "  │                                                        │"
+  echo "  │  New terminal sessions will work automatically.        │"
+  echo "  │                                                        │"
+  echo "  └────────────────────────────────────────────────────────┘"
+  printf '%b' "${NC}"
+  echo ""
 fi
 
 } # end of _main — do not remove (partial download guard)
