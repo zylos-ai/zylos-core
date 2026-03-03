@@ -187,9 +187,10 @@ function stopZylosPm2Services() {
     }
   }
 
-  // Save so pm2 resurrect won't restore them
+  // Save so pm2 resurrect won't restore them.
+  // --force is needed because pm2 refuses to save an empty process list by default.
   try {
-    execFileSync('pm2', ['save'], { stdio: 'pipe' });
+    execFileSync('pm2', ['save', '--force'], { stdio: 'pipe' });
   } catch {
     // non-fatal
   }
