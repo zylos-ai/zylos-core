@@ -363,29 +363,32 @@ _detect_shell_rc() {
 }
 
 # Show the post-install hint for activating PATH in the current terminal.
-# For bash/zsh: source the rc file. For fish/unknown: open a new terminal.
+# Styled as a separator + prominent command, not a box (avoids clashing with
+# zylos init's own boxed output).
 _show_source_hint() {
   local shell_rc
   shell_rc="$(_detect_shell_rc)"
 
   echo ""
-  printf '%b' "${YELLOW}"
-  echo "  ┌────────────────────────────────────────────────────────┐"
-  echo "  │                                                        │"
-  echo "  │  Setup complete! Your agent is running.                │"
-  echo "  │                                                        │"
-  if [ -n "$shell_rc" ]; then
-    echo "  │  To use zylos commands in this terminal, run:          │"
-    echo "  │                                                        │"
-    printf "  │    source %-44s │\n" "$shell_rc"
-  else
-    echo "  │  To use zylos commands, open a new terminal.           │"
-  fi
-  echo "  │                                                        │"
-  echo "  │  New terminal sessions will work automatically.        │"
-  echo "  │                                                        │"
-  echo "  └────────────────────────────────────────────────────────┘"
+  printf '%b' "${CYAN}"
+  echo "  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
   printf '%b' "${NC}"
+  echo ""
+  if [ -n "$shell_rc" ]; then
+    printf '%b' "${BOLD}"
+    echo "  To activate zylos commands in this terminal:"
+    printf '%b' "${NC}"
+    echo ""
+    printf '%b' "${GREEN}${BOLD}"
+    echo "    source $shell_rc"
+    printf '%b' "${NC}"
+  else
+    printf '%b' "${BOLD}"
+    echo "  To activate zylos commands, open a new terminal."
+    printf '%b' "${NC}"
+  fi
+  echo ""
+  info "New terminal sessions will work automatically."
   echo ""
 }
 
