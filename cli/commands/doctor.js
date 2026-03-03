@@ -861,7 +861,9 @@ export async function doctorCommand(args) {
   }
 
   // Claude not available — bottom message based on why
-  if (!diag.system.network.reachable) {
+  if (process.getuid?.() === 0) {
+    console.log(`\n  ${dim('Auto-fix is not available as root. See hints above to resolve manually.')}\n`);
+  } else if (!diag.system.network.reachable) {
     console.log(`\n  ${yellow('Check your network connection and run')} ${bold('zylos doctor')} ${yellow('again.')}\n`);
   } else {
     console.log(`\n  ${yellow('Run')} ${bold('zylos init')} ${yellow('to set up your environment.')}\n`);
