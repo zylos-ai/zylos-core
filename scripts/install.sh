@@ -211,6 +211,48 @@ ensure_node() {
   ok "node: $(node -v)"
 }
 
+# ── Ensure PATH in shell profile ─────────────────────────────
+# Auto-add necessary bin directories to the user's shell profile so
+# zylos, pm2, and claude are available in new terminal sessions.
+# Called independently of zylos init — acts as a safety net.
+_ensure_path_in_profile() {
+  # Determine shell rc file
+  local shell_rc
+  case "${SHELL:-}" in
+    */zsh)  shell_rc="$HOME/.zshrc" ;;
+    */bash) shell_rc="$HOME/.bashrc" ;;
+    *)      shell_rc="$HOME/.bashrc" ;;
+  esac
+
+  # 1. ~/.local/bin — claude installs here
+  #    Idempotency: grep for ".local/bin" (matches init.js pattern)
+  mkdir -p "$HOME/.local/bin"
+  # shellcheck disable=SC2016
+  local local_bin_export='export PATH="$HOME/.local/bin:$PATH"'
+  if ! grep -q '\.local/bin' "$shell_rc" 2>/dev/null; then
+    printf '\n# Added by zylos installer\n%s\n' "$local_bin_export" >> "$shell_rc"
+  fi
+  export PATH="$HOME/.local/bin:$PATH"
+
+  # 2. ~/zylos/bin — component CLIs (caddy, etc.)
+  #    Idempotency: grep for "zylos-managed: bin PATH" marker (matches init.js pattern)
+  mkdir -p "$HOME/zylos/bin"
+  local zylos_marker='# zylos-managed: bin PATH'
+  local zylos_bin_export="export PATH=\"\$HOME/zylos/bin:\$PATH\""
+
+  # Write to ~/.profile (login shells + non-interactive shells)
+  if ! grep -q 'zylos-managed: bin PATH' "$HOME/.profile" 2>/dev/null; then
+    printf '\n%s\n%s\n' "$zylos_marker" "$zylos_bin_export" >> "$HOME/.profile"
+  fi
+  # Write to shell rc file (interactive shells)
+  if ! grep -q 'zylos-managed: bin PATH' "$shell_rc" 2>/dev/null; then
+    printf '\n%s\n%s\n' "$zylos_marker" "$zylos_bin_export" >> "$shell_rc"
+  fi
+  export PATH="$HOME/zylos/bin:$PATH"
+
+  ok "PATH configured in $(basename "$shell_rc")"
+}
+
 # ── Install Zylos ─────────────────────────────────────────────
 install_zylos() {
   if command -v zylos &>/dev/null; then
@@ -285,6 +327,8 @@ ensure_node
 echo ""
 install_zylos
 
+echo ""
+_ensure_path_in_profile
 echo ""
 ok "Installation complete!"
 echo ""
