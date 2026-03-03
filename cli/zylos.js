@@ -108,6 +108,7 @@ Component Management:
   upgrade --all       Upgrade all components
   upgrade --self      Upgrade zylos-core itself
   uninstall <name>    Remove a component (--purge, --force)
+  uninstall --self    Uninstall zylos entirely (--force to skip prompts)
   remove <name>       Alias for uninstall
   list                List installed components
   search [keyword]    Search available components
@@ -130,6 +131,7 @@ Examples:
   zylos upgrade --self
   zylos info telegram
   zylos uninstall telegram --purge
+  zylos uninstall --self
   zylos remove telegram --purge --yes
   zylos list
   zylos search bot
