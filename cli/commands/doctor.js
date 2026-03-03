@@ -585,6 +585,7 @@ function discoverChannels(pm2Procs, env, tmuxSession, components) {
 // ── Claude auto-fix (Layer 2) ────────────────────────────────────
 
 function isClaudeReady(diag) {
+  if (process.getuid?.() === 0) return false; // Claude CLI refuses --dangerously-skip-permissions as root
   return diag.ai.cli.installed && diag.ai.auth && diag.system.network.reachable;
 }
 
