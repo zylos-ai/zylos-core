@@ -487,6 +487,7 @@ function discoverChannels(pm2Procs, env, tmuxSession, components) {
       action = `http://localhost:${port}/console/`;
       const ip = getNetworkIP();
       if (ip) secondaryAction = `http://${ip}:${port}/console/`;
+      hint = `Tip: ${bold('zylos init')} can add a custom domain with HTTP or HTTPS.`;
     }
 
     channels.push({
