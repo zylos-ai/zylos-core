@@ -618,7 +618,7 @@ function runClaudeFix(diagnosticJson) {
   return new Promise((resolve) => {
     const proc = spawn('claude', ['-p', prompt, '--dangerously-skip-permissions'], {
       cwd: ZYLOS_DIR,
-      stdio: ['pipe', 'pipe', 'pipe'],
+      stdio: ['ignore', 'pipe', 'pipe'],
     });
 
     let stdout = '';
