@@ -73,22 +73,6 @@ function displayCheckGroup(name, status, checks) {
   }
 }
 
-// ── Spinner ──────────────────────────────────────────────────────
-
-function createSpinner(text) {
-  const frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
-  let i = 0;
-  process.stdout.write(`  ${dim(frames[0])} ${dim(text)}`);
-  const id = setInterval(() => {
-    i = (i + 1) % frames.length;
-    process.stdout.write(`\r  ${dim(frames[i])} ${dim(text)}`);
-  }, 80);
-  return () => {
-    clearInterval(id);
-    process.stdout.write('\r' + ' '.repeat(text.length + 6) + '\r');
-  };
-}
-
 // ── Concurrency helper ───────────────────────────────────────────
 
 async function concurrentMap(items, fn, limit = 3) {
@@ -586,7 +570,7 @@ function discoverChannels(pm2Procs, env, tmuxSession, components) {
 // ── Claude auto-fix (Layer 2) ────────────────────────────────────
 
 function isClaudeReady(diag) {
-  return diag.ai.cli.installed && diag.ai.auth && diag.system.network.reachable;
+  return diag.ai.cli.installed && diag.ai.auth && diag.ai.autonomous && diag.system.network.reachable;
 }
 
 function runClaudeFix(diagnosticJson) {
