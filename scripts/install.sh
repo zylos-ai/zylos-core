@@ -242,10 +242,10 @@ FISH_EOF
     fi
   else
     # 1. ~/.local/bin — claude installs here
-    #    Idempotency: grep for ".local/bin" (matches init.js pattern)
+    #    Idempotency: grep for uncommented ".local/bin" (skip commented-out lines)
     # shellcheck disable=SC2016
     local local_bin_export='export PATH="$HOME/.local/bin:$PATH"'
-    if ! grep -q '\.local/bin' "$shell_rc" 2>/dev/null; then
+    if ! grep -q '^[^#]*\.local/bin' "$shell_rc" 2>/dev/null; then
       printf '\n# Added by zylos installer\n%s\n' "$local_bin_export" >> "$shell_rc"
     fi
 
