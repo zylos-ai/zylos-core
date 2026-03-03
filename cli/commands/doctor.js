@@ -570,8 +570,6 @@ function discoverChannels(pm2Procs, env, tmuxSession, components) {
 // ── Claude auto-fix (Layer 2) ────────────────────────────────────
 
 function isClaudeReady(diag) {
-  // claude --dangerously-skip-permissions refuses to run as root
-  if (process.getuid?.() === 0) return false;
   return diag.ai.cli.installed && diag.ai.auth && diag.ai.autonomous && diag.system.network.reachable;
 }
 
@@ -603,7 +601,11 @@ function runClaudeFix(diagnosticJson) {
   console.log(`  ${dim('Claude is fixing issues...')}\n`);
 
   return new Promise((resolve) => {
-    const proc = spawn('claude', ['-p', prompt, '--dangerously-skip-permissions'], {
+    const isRoot = process.getuid?.() === 0;
+    const permArgs = isRoot
+      ? ['--allowedTools', 'Bash(*)', 'Read', 'Write', 'Edit']
+      : ['--dangerously-skip-permissions'];
+    const proc = spawn('claude', ['-p', prompt, ...permArgs], {
       cwd: ZYLOS_DIR,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -861,9 +863,7 @@ export async function doctorCommand(args) {
   }
 
   // Claude not available — bottom message based on why
-  if (process.getuid?.() === 0) {
-    console.log(`\n  ${dim('Auto-fix is not available as root. See hints above to resolve manually.')}\n`);
-  } else if (!diag.system.network.reachable) {
+  if (!diag.system.network.reachable) {
     console.log(`\n  ${yellow('Check your network connection and run')} ${bold('zylos doctor')} ${yellow('again.')}\n`);
   } else {
     console.log(`\n  ${yellow('Run')} ${bold('zylos init')} ${yellow('to set up your environment.')}\n`);
