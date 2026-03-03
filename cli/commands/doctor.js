@@ -8,7 +8,7 @@
  *          If not, show manual hints.
  */
 
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import https from 'node:https';
 import os from 'node:os';
@@ -29,6 +29,7 @@ const LOG_FILE = path.join(LOG_DIR, 'doctor.log');
 const API_HOST = 'api.anthropic.com';
 const VERSION_CHECK_CONCURRENCY = 3;
 const CLAUDE_FIX_TIMEOUT = 300000; // 5 minutes
+const CLAUDE_OUTPUT_MAX_LINES = 10;
 
 // ── Logging ──────────────────────────────────────────────────────
 
@@ -71,6 +72,22 @@ function displayCheckGroup(name, status, checks) {
   for (let i = 0; i < checks.length; i++) {
     console.log(i < checks.length - 1 ? SUB(checks[i]) : SUB_LAST(checks[i]));
   }
+}
+
+// ── Spinner ──────────────────────────────────────────────────────
+
+function createSpinner(text) {
+  const frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+  let i = 0;
+  process.stdout.write(`  ${dim(frames[0])} ${dim(text)}`);
+  const id = setInterval(() => {
+    i = (i + 1) % frames.length;
+    process.stdout.write(`\r  ${dim(frames[i])} ${dim(text)}`);
+  }, 80);
+  return () => {
+    clearInterval(id);
+    process.stdout.write('\r' + ' '.repeat(text.length + 6) + '\r');
+  };
 }
 
 // ── Concurrency helper ───────────────────────────────────────────
@@ -364,23 +381,19 @@ function buildDiagnosticJson(diag, coreVersion) {
 
 // ── Display builders ─────────────────────────────────────────────
 
-function displaySystemGroup(diag) {
+function displaySystemGroup(diag, jsonGroup) {
   const checks = [];
-  let passed = true;
-
   const { tmux, pm2: pm2Info, network: net } = diag.system;
 
   if (tmux.installed) {
     checks.push(tmux.version ? `tmux ${dim(tmux.version)}` : 'tmux installed');
   } else {
-    passed = false;
     checks.push(red('tmux not installed'));
   }
 
   if (pm2Info.installed) {
     checks.push(`PM2 ${dim(`v${pm2Info.version}`)}`);
   } else {
-    passed = false;
     checks.push(red('PM2 not installed'));
   }
 
@@ -389,7 +402,6 @@ function displaySystemGroup(diag) {
     if (net.proxy) label += dim(' (via proxy)');
     checks.push(label);
   } else {
-    passed = false;
     if (!net.dns) {
       checks.push(red(`network: DNS failed for ${API_HOST}`));
     } else {
@@ -397,12 +409,12 @@ function displaySystemGroup(diag) {
     }
   }
 
-  displayCheckGroup('System', passed ? 'pass' : 'fail', checks);
-  logToFile(`check: system — ${passed ? 'passed' : 'failed'}`);
+  displayCheckGroup('System', jsonGroup.passed ? 'pass' : 'fail', checks);
+  logToFile(`check: system — ${jsonGroup.passed ? 'passed' : 'failed'}`);
 }
 
-function displayAiGroup(diag) {
-  if (diag.ai.networkSkipped) {
+function displayAiGroup(diag, jsonGroup) {
+  if (jsonGroup.skipped) {
     console.log(groupHeader('AI Service', 'skip'));
     console.log(SKIP('skipped (requires network)'));
     logToFile('check: ai_service — skipped');
@@ -410,13 +422,11 @@ function displayAiGroup(diag) {
   }
 
   const checks = [];
-  let passed = true;
   const { cli, auth, autonomous } = diag.ai;
 
   if (cli.installed) {
     checks.push(`Claude CLI ${dim(cli.version)}`);
   } else {
-    passed = false;
     checks.push(red('Claude CLI not installed'));
   }
 
@@ -424,14 +434,12 @@ function displayAiGroup(diag) {
     if (auth) {
       checks.push('authorized');
     } else {
-      passed = false;
       checks.push(red('not authorized'));
     }
     if (auth) {
       if (autonomous) {
         checks.push('autonomous mode accepted');
       } else {
-        passed = false;
         checks.push(red('autonomous mode not accepted'));
       }
     }
@@ -439,17 +447,23 @@ function displayAiGroup(diag) {
     checks.push(dim('auth check skipped (requires CLI)'));
   }
 
-  displayCheckGroup('AI Service', passed ? 'pass' : 'fail', checks);
-  logToFile(`check: ai_service — ${passed ? 'passed' : 'failed'}`);
+  const status = jsonGroup.passed ? 'pass' : 'fail';
+  displayCheckGroup('AI Service', status, checks);
+  logToFile(`check: ai_service — ${jsonGroup.passed ? 'passed' : 'failed'}`);
 }
 
-function displayServiceGroup(diag) {
+function displayServiceGroup(diag, jsonGroup) {
+  if (!diag.system.pm2.installed) {
+    console.log(groupHeader('Services', 'skip'));
+    console.log(SKIP('skipped (requires PM2)'));
+    logToFile('check: services — skipped');
+    return;
+  }
+
   const checks = [];
-  let passed = true;
   const { running, total, procs, activityMonitor, session } = diag.services;
 
   if (!running || total === 0) {
-    passed = false;
     checks.push(red('no services running'));
   } else {
     for (const proc of procs) {
@@ -457,7 +471,6 @@ function displayServiceGroup(diag) {
       if (status === 'online') {
         checks.push(`${proc.name}: ${green('online')}`);
       } else {
-        passed = false;
         checks.push(red(`${proc.name}: ${status || 'stopped'}`));
       }
     }
@@ -468,12 +481,11 @@ function displayServiceGroup(diag) {
   } else if (activityMonitor) {
     checks.push(yellow('Claude session: starting...'));
   } else {
-    passed = false;
     checks.push(dim('Claude session: waiting'));
   }
 
-  displayCheckGroup('Services', passed ? 'pass' : 'fail', checks);
-  logToFile(`check: services — ${passed ? 'passed' : 'failed'}`);
+  displayCheckGroup('Services', jsonGroup.passed ? 'pass' : 'fail', checks);
+  logToFile(`check: services — ${jsonGroup.passed ? 'passed' : 'failed'}`);
 }
 
 // ── Channel discovery ────────────────────────────────────────────
@@ -601,34 +613,51 @@ function runClaudeFix(diagnosticJson) {
   ].join('\n');
 
   logToFile(`claude-fix: starting (${diagnosticJson.issues.length} issues)`);
+  const stopSpinner = createSpinner('Claude is fixing issues...');
 
-  try {
-    const result = spawnSync('claude', ['-p', prompt, '--dangerously-skip-permissions'], {
+  return new Promise((resolve) => {
+    const proc = spawn('claude', ['-p', prompt, '--dangerously-skip-permissions'], {
       cwd: ZYLOS_DIR,
-      encoding: 'utf8',
-      timeout: CLAUDE_FIX_TIMEOUT,
       stdio: ['pipe', 'pipe', 'pipe'],
     });
 
-    const output = (result.stdout || '').trim();
-    const error = (result.stderr || '').trim();
+    let stdout = '';
+    let stderr = '';
 
-    if (result.signal) {
-      logToFile(`claude-fix: killed by ${result.signal}`);
-      return { ok: false, error: `claude -p timed out (${CLAUDE_FIX_TIMEOUT / 1000}s)`, output };
-    }
-    if (result.status === 0) {
-      logToFile('claude-fix: completed');
-      if (output) logToFile(`claude-fix output: ${output.slice(0, 500)}`);
-      return { ok: true, output };
-    } else {
-      logToFile(`claude-fix: failed (exit ${result.status}): ${error.slice(0, 200)}`);
-      return { ok: false, error: error || 'claude -p exited with error', output };
-    }
-  } catch (err) {
-    logToFile(`claude-fix: exception: ${err.message}`);
-    return { ok: false, error: err.message };
-  }
+    proc.stdout.on('data', (d) => { stdout += d; });
+    proc.stderr.on('data', (d) => { stderr += d; });
+
+    const timer = setTimeout(() => { proc.kill('SIGTERM'); }, CLAUDE_FIX_TIMEOUT);
+
+    proc.on('close', (code, signal) => {
+      clearTimeout(timer);
+      stopSpinner();
+
+      const output = stdout.trim();
+      const error = stderr.trim();
+
+      if (signal) {
+        logToFile(`claude-fix: killed by ${signal}`);
+        resolve({ ok: false, error: `Timed out (${CLAUDE_FIX_TIMEOUT / 1000}s)`, output });
+        return;
+      }
+      if (code === 0) {
+        logToFile('claude-fix: completed');
+        if (output) logToFile(`claude-fix output: ${output.slice(0, 500)}`);
+        resolve({ ok: true, output });
+      } else {
+        logToFile(`claude-fix: failed (exit ${code}): ${error.slice(0, 200)}`);
+        resolve({ ok: false, error: error || 'claude -p exited with error', output });
+      }
+    });
+
+    proc.on('error', (err) => {
+      clearTimeout(timer);
+      stopSpinner();
+      logToFile(`claude-fix: exception: ${err.message}`);
+      resolve({ ok: false, error: err.message });
+    });
+  });
 }
 
 // ── Main doctor flow ─────────────────────────────────────────────
@@ -689,11 +718,13 @@ export async function doctorCommand(args) {
     process.exit(json.passed ? 0 : 1);
   }
 
-  // ── Phase 3: Display diagnostic groups ────────────────────────
+  // ── Phase 3: Build diagnostic JSON + display groups ───────────
 
-  displaySystemGroup(diag);
-  displayAiGroup(diag);
-  displayServiceGroup(diag);
+  const diagnostic = buildDiagnosticJson(diag, coreVersion);
+
+  displaySystemGroup(diag, diagnostic.groups.system);
+  displayAiGroup(diag, diagnostic.groups.ai_service);
+  displayServiceGroup(diag, diagnostic.groups.services);
 
   // ── Phase 4: Channels ─────────────────────────────────────────
 
@@ -767,31 +798,42 @@ export async function doctorCommand(args) {
 
   // ── Phase 6: Handle issues ────────────────────────────────────
 
-  const diagnostic = buildDiagnosticJson(diag, coreVersion);
-
   if (diagnostic.passed) {
     console.log(`\n${green('✓ Everything is working.')}\n`);
     logToFile('result: all checks passed');
     process.exit(0);
   }
 
-  // Show issues
+  const claudeReady = isClaudeReady(diag);
+
+  // Show issues — hide hints when Claude will auto-fix
   console.log(separator('Issues'));
   for (let i = 0; i < diagnostic.issues.length; i++) {
     const issue = diagnostic.issues[i];
     console.log(`\n  ${bold(`[${i + 1}]`)} ${issue.label}`);
-    if (issue.hint) console.log(`      ${dim(issue.hint)}`);
+    if (!claudeReady && issue.hint) console.log(`      ${dim(issue.hint)}`);
   }
 
   // Layer 2: attempt auto-fix via Claude
-  if (isClaudeReady(diag)) {
-    console.log(`\n  ${dim('Attempting auto-fix via Claude...')}`);
+  if (claudeReady) {
+    console.log('');
     logToFile('layer2: starting claude auto-fix');
 
-    const fixResult = runClaudeFix(diagnostic);
+    const fixResult = await runClaudeFix(diagnostic);
 
+    // Show Claude's output (truncated)
     if (fixResult.output) {
-      console.log(`\n  ${fixResult.output.split('\n').join('\n  ')}`);
+      const lines = fixResult.output.split('\n');
+      const shown = lines.slice(0, CLAUDE_OUTPUT_MAX_LINES);
+      console.log(`\n  ${dim(shown.join('\n  '))}`);
+      if (lines.length > CLAUDE_OUTPUT_MAX_LINES) {
+        console.log(`  ${dim(`... ${lines.length - CLAUDE_OUTPUT_MAX_LINES} more lines — see ${LOG_FILE}`)}`);
+      }
+    }
+
+    // Show error if fix failed
+    if (!fixResult.ok && fixResult.error) {
+      console.log(`\n  ${red(fixResult.error)}`);
     }
 
     // Re-verify
