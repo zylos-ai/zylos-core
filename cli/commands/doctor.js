@@ -502,13 +502,15 @@ function getNetworkIP() {
 function discoverChannels(pm2Procs, env, tmuxSession, components) {
   const channels = [];
 
-  // tmux is always a channel if session exists
-  channels.push({
-    name: 'tmux',
-    action: 'zylos attach',
-    type: 'terminal',
-    online: tmuxSession,
-  });
+  // tmux channel — only show when session is active
+  if (tmuxSession) {
+    channels.push({
+      name: 'tmux',
+      action: 'zylos attach',
+      type: 'terminal',
+      online: true,
+    });
+  }
 
   // Web console — built-in, check PM2
   const webConsole = pm2Procs.find(p => p.name === 'web-console');
@@ -628,12 +630,13 @@ function runClaudeFix(diagnosticJson) {
     proc.stdout.on('data', (d) => {
       const chunk = String(d);
       stdout += chunk;
-      // Stream output line by line
+      // Stream output line by line, strip markdown formatting
       lineBuffer += chunk;
       const lines = lineBuffer.split('\n');
       lineBuffer = lines.pop(); // keep incomplete last line in buffer
       for (const line of lines) {
-        console.log(`  ${dim(line)}`);
+        const clean = line.replace(/\*\*/g, '').replace(/`/g, '');
+        console.log(`  ${dim(clean)}`);
       }
     });
     proc.stderr.on('data', (d) => { stderr += d; });
@@ -813,7 +816,12 @@ export async function doctorCommand(args) {
   // ── Phase 6: Handle issues ────────────────────────────────────
 
   if (diagnostic.passed) {
-    console.log(`\n${green('✓ Everything is working.')}\n`);
+    const sessionStarting = diag.services.activityMonitor && !diag.services.session;
+    console.log(`\n${green('✓ Everything is working.')}`);
+    if (sessionStarting) {
+      console.log(`\n  ${dim('Claude session is starting — run')} ${bold('zylos attach')} ${dim('in a moment to connect.')}`);
+    }
+    console.log('');
     logToFile('result: all checks passed');
     process.exit(0);
   }
@@ -841,12 +849,17 @@ export async function doctorCommand(args) {
     }
 
     // Re-verify
-    console.log(`\n  ${dim('Verifying...')}`);
+    console.log(`\n  ${dim('Re-checking...')}`);
     const rediag = await collectDiagnostics(readEnvFile());
     const reverify = buildDiagnosticJson(rediag, coreVersion);
 
     if (reverify.passed) {
-      console.log(`\n${green('✓ All issues fixed.')}\n`);
+      const sessionStarting = rediag.services.activityMonitor && !rediag.services.session;
+      console.log(`\n${green('✓ All issues fixed — everything is working. Enjoy your Zylos!')}`);
+      if (sessionStarting) {
+        console.log(`\n  ${dim('Claude session is starting — run')} ${bold('zylos attach')} ${dim('in a moment to connect.')}`);
+      }
+      console.log('');
       logToFile('result: all issues fixed by claude');
       process.exit(0);
     }
