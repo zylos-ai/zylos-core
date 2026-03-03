@@ -443,6 +443,16 @@ function fixServices() {
 
 // ── Channel discovery ────────────────────────────────────────────
 
+function getNetworkIP() {
+  const interfaces = os.networkInterfaces();
+  for (const addrs of Object.values(interfaces)) {
+    for (const addr of addrs) {
+      if (addr.family === 'IPv4' && !addr.internal) return addr.address;
+    }
+  }
+  return '';
+}
+
 function discoverChannels(pm2Procs, env, tmuxSession, components) {
   const channels = [];
 
@@ -462,25 +472,32 @@ function discoverChannels(pm2Procs, env, tmuxSession, components) {
     const wcOnline = webConsole.pm2_env?.status === 'online';
     const hasPassword = !!(env.get('ZYLOS_WEB_PASSWORD') || env.get('WEB_CONSOLE_PASSWORD'));
 
-    // Use domain URL if Caddy is running, otherwise localhost direct access
-    let action;
-    let warning = null;
+    // Use domain URL if Caddy is running, otherwise localhost + network IP
+    const port = process.env.WEB_CONSOLE_PORT || '3456';
+    let action, secondaryAction, warning, hint;
+    warning = null;
+    hint = null;
+    secondaryAction = null;
     if (caddyOnline) {
       const domain = env.get('DOMAIN') || 'localhost';
       const protocol = env.get('PROTOCOL') || 'https';
       action = `${protocol}://${domain}/console/`;
       if (!hasPassword) warning = 'no password set';
     } else {
-      action = 'http://localhost:3456/console/';
-      warning = 'local only — Caddy not configured';
+      action = `http://localhost:${port}/console/`;
+      const ip = getNetworkIP();
+      if (ip) secondaryAction = `http://${ip}:${port}/console/`;
+      hint = `Run ${bold('zylos init')} to set up a domain with HTTPS.`;
     }
 
     channels.push({
       name: 'Web Console',
       action,
+      secondaryAction,
       type: 'web',
       online: wcOnline,
       warning,
+      hint,
     });
   }
 
@@ -844,6 +861,8 @@ export async function doctorCommand(args) {
     for (const ch of onlineChannels) {
       const warn = ch.warning ? ` ${yellow(`(${ch.warning})`)}` : '';
       console.log(BULLET_ON(`${ch.name.padEnd(16)} ${dim(ch.action)}${warn}`));
+      if (ch.secondaryAction) console.log(`  ${''.padEnd(18)} ${dim(ch.secondaryAction)}`);
+      if (ch.hint) console.log(`  ${''.padEnd(18)} ${dim(ch.hint)}`);
     }
     for (const ch of offlineChannels) {
       console.log(BULLET_OFF(`${ch.name.padEnd(16)} ${dim('offline')}`));
