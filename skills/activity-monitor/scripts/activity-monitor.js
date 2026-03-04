@@ -1,6 +1,12 @@
 #!/usr/bin/env node
 /**
- * Activity Monitor v15 - Guardian + Heartbeat v2 + Health Check + Daily Tasks + Upgrade Check
+ * Activity Monitor v16 - Guardian + Heartbeat v2 + Health Check + Daily Tasks + Upgrade Check
+ *
+ * v16 changes (prefer credentials.json over .env OAUTH_TOKEN — fixes #211):
+ *   - Add hasCredentialsFile(): checks ~/.claude/.credentials.json for OAuth refresh token
+ *   - startClaude(): skip .env OAUTH_TOKEN injection when credentials.json is available
+ *   - isClaudeLoggedIn(): check credentials.json first, before falling back to .env
+ *   - Prevents 401 errors caused by expired static tokens overriding auto-refreshable ones
  *
  * v15 changes (Intl.DateTimeFormat memory leak fix):
  *   - Hoist Intl.DateTimeFormat instances to module level (reuse instead of per-call new)
@@ -74,6 +80,23 @@ const CONV_DIR = path.join(os.homedir(), '.claude', 'projects', ZYLOS_PATH);
 // Claude refuses to start, thinking it's already running.
 const CLAUDE_ENV_VARS_TO_STRIP = ['CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT'];
 const ENV_CLEAN_PREFIX = 'env ' + CLAUDE_ENV_VARS_TO_STRIP.map(v => `-u ${v}`).join(' ');
+
+// OAuth credentials file — supports automatic token refresh (unlike static .env tokens).
+const CREDENTIALS_FILE = path.join(os.homedir(), '.claude', '.credentials.json');
+
+/**
+ * Check if ~/.claude/.credentials.json contains a valid OAuth refresh token.
+ * When present, this file provides auto-refreshable credentials that should
+ * take precedence over static CLAUDE_CODE_OAUTH_TOKEN from .env.
+ */
+function hasCredentialsFile() {
+  try {
+    const data = JSON.parse(fs.readFileSync(CREDENTIALS_FILE, 'utf8'));
+    return !!(data.claudeAiOauth && data.claudeAiOauth.refreshToken);
+  } catch {
+    return false;
+  }
+}
 
 // Exit log — records Claude exit codes for post-mortem debugging
 const EXIT_LOG_FILE = path.join(MONITOR_DIR, 'claude-exit.log');
@@ -348,6 +371,9 @@ function enqueueStartupControl() {
 }
 
 function isClaudeLoggedIn() {
+  // Prefer credentials.json — supports automatic token refresh
+  if (hasCredentialsFile()) return true;
+
   // Check for setup token or API key in .env (single read)
   try {
     const envContent = fs.readFileSync(path.join(ZYLOS_DIR, '.env'), 'utf8');
@@ -446,8 +472,13 @@ function startClaude() {
     fs.writeFileSync(HOOK_STATE_FILE, JSON.stringify({ active_tools: 0 }));
   } catch { }
 
+  const useCredentialsFile = hasCredentialsFile();
   const bypassFlag = BYPASS_PERMISSIONS ? ' --dangerously-skip-permissions' : '';
-  const claudeCmd = `${ENV_CLEAN_PREFIX} ${CLAUDE_BIN}${bypassFlag}`;
+  // When credentials.json is available, also strip CLAUDE_CODE_OAUTH_TOKEN from the
+  // environment. This covers the sendToTmux path where the existing tmux session may
+  // have the static token from a previous new-session -e injection.
+  const oauthStripFlag = useCredentialsFile ? ' -u CLAUDE_CODE_OAUTH_TOKEN' : '';
+  const claudeCmd = `${ENV_CLEAN_PREFIX}${oauthStripFlag} ${CLAUDE_BIN}${bypassFlag}`;
   const exitLogSnippet = `_ec=$?; echo "[$(date -Iseconds)] exit_code=$_ec" >> ${EXIT_LOG_FILE}`;
 
   // Read auth credentials from .env
@@ -457,9 +488,17 @@ function startClaude() {
     const envContent = fs.readFileSync(path.join(ZYLOS_DIR, '.env'), 'utf8');
     const apiMatch = envContent.match(/^ANTHROPIC_API_KEY=(.+)$/m);
     if (apiMatch) apiKeyValue = apiMatch[1].trim();
-    const oauthMatch = envContent.match(/^CLAUDE_CODE_OAUTH_TOKEN=(.+)$/m);
-    if (oauthMatch) oauthTokenValue = oauthMatch[1].trim();
+    // Skip .env OAUTH_TOKEN when credentials.json is available — credentials.json
+    // supports automatic token refresh, while .env tokens are static and expire.
+    if (!useCredentialsFile) {
+      const oauthMatch = envContent.match(/^CLAUDE_CODE_OAUTH_TOKEN=(.+)$/m);
+      if (oauthMatch) oauthTokenValue = oauthMatch[1].trim();
+    }
   } catch {}
+
+  if (useCredentialsFile) {
+    log('Guardian: Using ~/.claude/.credentials.json (auto-refresh) — skipping .env OAUTH_TOKEN');
+  }
 
   // Pre-approve credentials in ~/.claude.json so Claude skips interactive prompts
   if (apiKeyValue) approveApiKey(apiKeyValue);
@@ -474,7 +513,7 @@ function startClaude() {
       // - PATH: ensures Claude is found even if tmux server has different env
       // - IS_SANDBOX=1: allows --dangerously-skip-permissions as root (Docker)
       // - ANTHROPIC_API_KEY: for API key auth (read from .env)
-      // - CLAUDE_CODE_OAUTH_TOKEN: for setup-token auth (read from .env)
+      // - CLAUDE_CODE_OAUTH_TOKEN: for setup-token auth (read from .env, skipped when credentials.json exists)
       const sandboxEnv = process.getuid?.() === 0 ? ' -e "IS_SANDBOX=1"' : '';
       const apiKeyEnv = apiKeyValue ? ` -e "ANTHROPIC_API_KEY=${apiKeyValue}"` : '';
       const oauthTokenEnv = oauthTokenValue ? ` -e "CLAUDE_CODE_OAUTH_TOKEN=${oauthTokenValue}"` : '';
