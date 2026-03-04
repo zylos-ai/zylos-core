@@ -1566,11 +1566,12 @@ function init() {
     name: 'daily-upgrade-check'
   });
 
-  // Restore usage check timestamp from persisted state
+  // Restore usage check timestamp from persisted state.
+  // On fresh installs (no usage.json), default to current time so the first
+  // check waits a full interval — prevents /usage from firing immediately
+  // after Claude's first startup.
   const usageState = loadUsageState();
-  if (usageState?.lastCheckEpoch) {
-    lastUsageCheckAt = usageState.lastCheckEpoch;
-  }
+  lastUsageCheckAt = usageState?.lastCheckEpoch || Math.floor(Date.now() / 1000);
 
   if (initialHealth !== 'ok') {
     log(`Startup with health=${initialHealth}; will verify immediately when Claude is running`);
