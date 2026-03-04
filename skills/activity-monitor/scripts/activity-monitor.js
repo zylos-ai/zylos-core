@@ -1166,7 +1166,17 @@ function sendUsageNotification(message) {
  * Only progresses when Claude is idle with no pending work.
  */
 function maybeCheckUsage(claudeState, idleSeconds, currentTime) {
-  // Phase: sent/waiting/capture — continue the state machine regardless
+  // Abort in-progress check if Claude becomes busy (e.g., message arrived
+  // during the wait window). The /usage UI may be overlaid or dismissed —
+  // send Escape defensively to clean up, then reset.
+  if (usageCheckPhase !== 'idle' && claudeState !== 'idle') {
+    log('Usage monitor: aborting check — Claude became busy');
+    sendTmuxKeys('Escape');
+    usageCheckPhase = 'idle';
+    return;
+  }
+
+  // Phase: sent/waiting/capture — continue the state machine
   if (usageCheckPhase === 'sent') {
     usageCheckPhase = 'waiting';
     usageCheckWaitCount = 0;
