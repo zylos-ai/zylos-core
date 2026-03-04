@@ -452,17 +452,23 @@ function startClaude() {
   // and ANTHROPIC_API_KEY / CLAUDE_CODE_OAUTH_TOKEN in the environment.
   const useCredentialsFile = hasCredentialsFile();
   let hasNativeAuth = useCredentialsFile;
+  let authStatusLoggedIn = false;
   if (!hasNativeAuth) {
     try {
       const output = execFileSync(CLAUDE_BIN, ['auth', 'status'], {
         encoding: 'utf8', timeout: 10000, stdio: ['ignore', 'pipe', 'pipe']
       });
       const status = JSON.parse(output);
-      hasNativeAuth = status?.loggedIn === true && status?.authMethod === 'claude.ai';
-    } catch {}
+      authStatusLoggedIn = status?.loggedIn === true;
+      hasNativeAuth = authStatusLoggedIn && status?.authMethod === 'claude.ai';
+    } catch (e) {
+      log(`Guardian: claude auth status check failed: ${e.message}`);
+    }
   }
 
-  if (!hasNativeAuth && !isClaudeLoggedIn()) {
+  // Use cached auth status to avoid a redundant `claude auth status` subprocess
+  // inside isClaudeLoggedIn() — the same command was already run above.
+  if (!hasNativeAuth && !authStatusLoggedIn && !isClaudeLoggedIn()) {
     log('Guardian: Claude is not logged in, skipping startup');
     return;
   }
