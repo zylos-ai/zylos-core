@@ -1,6 +1,15 @@
 #!/usr/bin/env node
 /**
- * Activity Monitor v16 - Guardian + Heartbeat v2 + Health Check + Daily Tasks + Upgrade Check
+ * Activity Monitor v17 - Guardian + Heartbeat v2 + Health Check + Daily Tasks + Upgrade Check + Usage Monitor
+ *
+ * v17 changes (plan usage monitoring — #206):
+ *   - Add usage monitoring: periodically checks /usage via tmux capture during idle
+ *   - State machine: idle → sent → waiting → capture → idle
+ *   - Parses session, weekly (all models), weekly (Sonnet) percentages
+ *   - Threshold notifications: 70% warning, 85% high, 95% critical
+ *   - Only checks during active hours (8–23) when Claude is idle ≥30s and C4 queue empty
+ *   - Persists usage data to ~/zylos/activity-monitor/usage.json
+ *   - 2-hour notification cooldown per tier, escalation bypasses cooldown
  *
  * v16 changes (prefer credentials.json over .env OAUTH_TOKEN — fixes #211):
  *   - Add hasCredentialsFile(): checks ~/.claude/.credentials.json for OAuth refresh token
@@ -59,6 +68,7 @@ const DAILY_UPGRADE_STATE_FILE = path.join(MONITOR_DIR, 'daily-upgrade-state.jso
 const DAILY_MEMORY_COMMIT_STATE_FILE = path.join(MONITOR_DIR, 'daily-memory-commit-state.json');
 const UPGRADE_CHECK_STATE_FILE = path.join(MONITOR_DIR, 'upgrade-check-state.json');
 const PENDING_CHANNELS_FILE = path.join(MONITOR_DIR, 'pending-channels.jsonl');
+const USAGE_STATE_FILE = path.join(MONITOR_DIR, 'usage.json');
 
 // Claude binary - uses bare command name (absolute path triggers Claude Code warning).
 // PATH is passed explicitly to tmux sessions via -e flag to avoid tmux server
@@ -123,6 +133,17 @@ const STUCK_PROBE_COOLDOWN = 600;    // 10 min between stuck probes
 // Health check config
 const HEALTH_CHECK_INTERVAL = 21600; // 6 hours
 
+// Usage monitoring config
+const USAGE_CHECK_INTERVAL = 1800;      // 30 min between checks
+const USAGE_IDLE_GATE = 30;             // Must be idle ≥30s before checking
+const USAGE_CAPTURE_WAIT = 3;           // Seconds to wait for /usage UI render
+const USAGE_WARN_THRESHOLD = 70;        // Weekly % → warning
+const USAGE_HIGH_THRESHOLD = 85;        // Weekly % → high alert
+const USAGE_CRITICAL_THRESHOLD = 95;    // Weekly % → critical alert
+const USAGE_NOTIFY_COOLDOWN = 7200;     // 2 hours between same-tier notifications
+const USAGE_ACTIVE_HOURS_START = 8;     // Check only during 8:00–23:00
+const USAGE_ACTIVE_HOURS_END = 23;
+
 // Daily tasks config
 const DAILY_UPGRADE_HOUR = 5;        // 5:00 AM local time
 const DAILY_MEMORY_COMMIT_HOUR = 3;  // 3:00 AM local time
@@ -141,6 +162,11 @@ let lastStuckProbeAt = 0;
 let lastDeadApiPid = null;
 
 let engine; // initialized in init()
+
+// Usage monitoring state machine: 'idle' → 'sent' → 'waiting' → 'capture' → 'idle'
+let usageCheckPhase = 'idle';
+let usageCheckWaitCount = 0;
+let lastUsageCheckAt = 0;
 
 // Timezone: reuse scheduler's tz.js (.env TZ → process.env.TZ → UTC)
 import { loadTimezone } from '../../scheduler/scripts/tz.js';
@@ -1016,6 +1042,233 @@ function executeUpgradeCheck() {
   }
 }
 
+// --- Usage Monitoring ---
+
+function loadUsageState() {
+  try {
+    if (!fs.existsSync(USAGE_STATE_FILE)) return null;
+    return JSON.parse(fs.readFileSync(USAGE_STATE_FILE, 'utf8'));
+  } catch { }
+  return null;
+}
+
+function writeUsageState(data) {
+  try {
+    fs.writeFileSync(USAGE_STATE_FILE, JSON.stringify(data, null, 2));
+  } catch (err) {
+    log(`Usage monitor: failed to write state (${err.message})`);
+  }
+}
+
+function captureTmuxPane() {
+  try {
+    return execSync(`tmux capture-pane -t "${SESSION}" -p 2>/dev/null`, { encoding: 'utf8' });
+  } catch {
+    return null;
+  }
+}
+
+function sendTmuxKeys(keys) {
+  try {
+    execSync(`tmux send-keys -t "${SESSION}" ${keys} 2>/dev/null`);
+  } catch { /* best-effort */ }
+}
+
+function parseUsageFromPane(paneContent) {
+  if (!paneContent) return null;
+
+  // Match patterns like "5% used" near category labels
+  const result = {};
+
+  // Current session
+  const sessionMatch = paneContent.match(/Current session[\s\S]*?(\d+)%\s*used/i);
+  if (sessionMatch) result.session = parseInt(sessionMatch[1], 10);
+
+  // Current week (all models)
+  const weekAllMatch = paneContent.match(/Current week \(all models\)[\s\S]*?(\d+)%\s*used/i);
+  if (weekAllMatch) result.weeklyAll = parseInt(weekAllMatch[1], 10);
+
+  // Current week (Sonnet only)
+  const weekSonnetMatch = paneContent.match(/Current week \(Sonnet[^)]*\)[\s\S]*?(\d+)%\s*used/i);
+  if (weekSonnetMatch) result.weeklySonnet = parseInt(weekSonnetMatch[1], 10);
+
+  // Reset times
+  const resetMatches = [...paneContent.matchAll(/Resets\s+(.+?)(?:\n|$)/gi)];
+  if (resetMatches.length >= 1) result.sessionResets = resetMatches[0][1].trim();
+  if (resetMatches.length >= 2) result.weeklyAllResets = resetMatches[1][1].trim();
+  if (resetMatches.length >= 3) result.weeklySonnetResets = resetMatches[2][1].trim();
+
+  // Must have at least one valid reading
+  if (result.session === undefined && result.weeklyAll === undefined) return null;
+  return result;
+}
+
+function getUsageTier(weeklyPercent) {
+  if (weeklyPercent >= USAGE_CRITICAL_THRESHOLD) return 'critical';
+  if (weeklyPercent >= USAGE_HIGH_THRESHOLD) return 'high';
+  if (weeklyPercent >= USAGE_WARN_THRESHOLD) return 'warning';
+  return 'ok';
+}
+
+function formatUsageNotification(usage, tier) {
+  const weekly = usage.weeklyAll ?? 0;
+  const session = usage.session ?? 0;
+  const resets = usage.weeklyAllResets || 'unknown';
+
+  const tierLabels = {
+    warning: '⚠️ Usage Warning',
+    high: '🔶 Usage High',
+    critical: '🔴 Usage Critical'
+  };
+
+  const lines = [
+    tierLabels[tier] || 'Usage Alert',
+    '',
+    `Weekly (all models): ${weekly}% used`,
+    `Session: ${session}% used`
+  ];
+
+  if (usage.weeklySonnet !== undefined) {
+    lines.push(`Weekly (Sonnet): ${usage.weeklySonnet}% used`);
+  }
+
+  lines.push(`Resets: ${resets}`);
+
+  if (tier === 'critical') {
+    lines.push('', 'Approaching plan limit. Consider reducing activity to avoid interruption.');
+  } else if (tier === 'high') {
+    lines.push('', 'Usage is elevated. Monitor closely.');
+  }
+
+  return lines.join('\n');
+}
+
+function sendUsageNotification(message) {
+  // Enqueue as a control message — Claude will relay to the owner via C4.
+  // This avoids hardcoding owner channel/endpoint in the monitor.
+  const content = `Usage alert received from activity monitor. Please forward this to the owner via their preferred DM channel:\n\n${message}`;
+  const result = runC4Control([
+    'enqueue',
+    '--content', content,
+    '--priority', '1',
+    '--require-idle',
+    '--available-in', '5'
+  ]);
+  if (result.ok) {
+    log(`Usage monitor: notification enqueued (${result.output})`);
+  } else {
+    log(`Usage monitor: notification enqueue failed (${result.output})`);
+  }
+}
+
+/**
+ * Usage check state machine — called from monitorLoop every second.
+ * Only progresses when Claude is idle with no pending work.
+ */
+function maybeCheckUsage(claudeState, idleSeconds, currentTime) {
+  // Phase: sent/waiting/capture — continue the state machine regardless
+  if (usageCheckPhase === 'sent') {
+    usageCheckPhase = 'waiting';
+    usageCheckWaitCount = 0;
+    return;
+  }
+
+  if (usageCheckPhase === 'waiting') {
+    usageCheckWaitCount += 1;
+    if (usageCheckWaitCount >= USAGE_CAPTURE_WAIT) {
+      usageCheckPhase = 'capture';
+    }
+    return;
+  }
+
+  if (usageCheckPhase === 'capture') {
+    const paneContent = captureTmuxPane();
+    usageCheckPhase = 'idle';
+
+    // Only dismiss UI if it actually rendered (contains usage data)
+    const hasUsageUI = paneContent && /\d+%\s*used/i.test(paneContent);
+    if (hasUsageUI) {
+      sendTmuxKeys('Escape');
+    }
+
+    const usage = parseUsageFromPane(paneContent);
+    if (!usage) {
+      log('Usage monitor: failed to parse /usage output (feature may not be available)');
+      // Prevent retrying too quickly if /usage is not supported
+      lastUsageCheckAt = Math.floor(Date.now() / 1000);
+      return;
+    }
+
+    const prevState = loadUsageState();
+    const now = new Date().toISOString();
+    const weeklyPercent = usage.weeklyAll ?? 0;
+    const tier = getUsageTier(weeklyPercent);
+
+    const usageData = {
+      lastCheck: now,
+      lastCheckEpoch: currentTime,
+      session: { percent: usage.session, resets: usage.sessionResets },
+      weeklyAll: { percent: usage.weeklyAll, resets: usage.weeklyAllResets },
+      weeklySonnet: { percent: usage.weeklySonnet, resets: usage.weeklySonnetResets },
+      tier,
+      lastNotifiedTier: prevState?.lastNotifiedTier || null,
+      lastNotifiedAt: prevState?.lastNotifiedAt || null
+    };
+
+    log(`Usage monitor: session=${usage.session}% weekly=${usage.weeklyAll}% sonnet=${usage.weeklySonnet}% tier=${tier}`);
+
+    // Check if we should notify
+    if (tier !== 'ok') {
+      const prevTier = prevState?.lastNotifiedTier;
+      const prevNotifiedAt = prevState?.lastNotifiedAt ? Math.floor(new Date(prevState.lastNotifiedAt).getTime() / 1000) : 0;
+      const tierEscalated = prevTier !== tier && tierRank(tier) > tierRank(prevTier);
+      const cooldownExpired = (currentTime - prevNotifiedAt) >= USAGE_NOTIFY_COOLDOWN;
+
+      if (tierEscalated || cooldownExpired) {
+        const message = formatUsageNotification(usage, tier);
+        sendUsageNotification(message);
+        usageData.lastNotifiedTier = tier;
+        usageData.lastNotifiedAt = now;
+      }
+    }
+
+    writeUsageState(usageData);
+    lastUsageCheckAt = currentTime;
+    return;
+  }
+
+  // Phase: idle — check if we should start a new usage check
+  if (claudeState !== 'idle') return;
+  if (idleSeconds < USAGE_IDLE_GATE) return;
+  if ((currentTime - lastUsageCheckAt) < USAGE_CHECK_INTERVAL) return;
+
+  // Only check during active hours
+  const hour = getLocalHour();
+  if (hour < USAGE_ACTIVE_HOURS_START || hour >= USAGE_ACTIVE_HOURS_END) return;
+
+  // Check if C4 queue has pending messages (don't interrupt if work is about to arrive)
+  try {
+    const dbPath = path.join(ZYLOS_DIR, 'comm-bridge', 'c4.db');
+    if (fs.existsSync(dbPath)) {
+      const count = execSync(
+        `sqlite3 "${dbPath}" "SELECT COUNT(*) FROM control_queue WHERE status='pending'" 2>/dev/null`,
+        { encoding: 'utf8' }
+      ).trim();
+      if (parseInt(count, 10) > 0) return; // Messages pending, skip check
+    }
+  } catch { /* proceed anyway */ }
+
+  // Start the check: send /usage to Claude
+  log('Usage monitor: initiating /usage check');
+  sendTmuxKeys('"/usage" Enter');
+  usageCheckPhase = 'sent';
+}
+
+function tierRank(tier) {
+  const ranks = { ok: 0, warning: 1, high: 2, critical: 3 };
+  return ranks[tier] ?? 0;
+}
+
 function monitorLoop() {
   const currentTime = Math.floor(Date.now() / 1000);
   const currentTimeHuman = new Date().toISOString().replace('T', ' ').substring(0, 19);
@@ -1205,6 +1458,9 @@ function monitorLoop() {
     upgradeCheckScheduler.maybeTrigger();
   }
   memoryCommitScheduler.maybeTrigger();
+  if (engine.health === 'ok') {
+    maybeCheckUsage(state, idleSeconds, currentTime);
+  }
   lastState = state;
 }
 
@@ -1264,13 +1520,19 @@ function init() {
     name: 'daily-upgrade-check'
   });
 
+  // Restore usage check timestamp from persisted state
+  const usageState = loadUsageState();
+  if (usageState?.lastCheckEpoch) {
+    lastUsageCheckAt = usageState.lastCheckEpoch;
+  }
+
   if (initialHealth !== 'ok') {
     log(`Startup with health=${initialHealth}; will verify immediately when Claude is running`);
   }
 }
 
 init();
-log(`=== Activity Monitor Started (v16 - Guardian + Heartbeat v2 + Hook Activity + DailyTasks + UpgradeCheck): ${new Date().toISOString()} tz=${timezone} ===`);
+log(`=== Activity Monitor Started (v17 - Guardian + Heartbeat v2 + Hook Activity + DailyTasks + UpgradeCheck + UsageMonitor): ${new Date().toISOString()} tz=${timezone} ===`);
 
 setInterval(monitorLoop, INTERVAL);
 monitorLoop();
