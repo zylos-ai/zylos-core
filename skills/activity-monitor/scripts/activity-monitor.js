@@ -133,16 +133,25 @@ const STUCK_PROBE_COOLDOWN = 600;    // 10 min between stuck probes
 // Health check config
 const HEALTH_CHECK_INTERVAL = 21600; // 6 hours
 
-// Usage monitoring config
-const USAGE_CHECK_INTERVAL = 1800;      // 30 min between checks
-const USAGE_IDLE_GATE = 30;             // Must be idle ≥30s before checking
-const USAGE_CAPTURE_WAIT = 3;           // Seconds to wait for /usage UI render
-const USAGE_WARN_THRESHOLD = 70;        // Weekly % → warning
-const USAGE_HIGH_THRESHOLD = 85;        // Weekly % → high alert
-const USAGE_CRITICAL_THRESHOLD = 95;    // Weekly % → critical alert
-const USAGE_NOTIFY_COOLDOWN = 7200;     // 2 hours between same-tier notifications
-const USAGE_ACTIVE_HOURS_START = 8;     // Check only during 8:00–23:00
-const USAGE_ACTIVE_HOURS_END = 23;
+// Usage monitoring config — configurable via .env, with sensible defaults
+function readEnvInt(key, fallback) {
+  try {
+    const envContent = fs.readFileSync(path.join(ZYLOS_DIR, '.env'), 'utf8');
+    const match = envContent.match(new RegExp(`^${key}=(\\d+)`, 'm'));
+    if (match) return parseInt(match[1], 10);
+  } catch { }
+  return fallback;
+}
+
+const USAGE_CHECK_INTERVAL = readEnvInt('USAGE_CHECK_INTERVAL', 1800);     // seconds between checks (default 30 min)
+const USAGE_IDLE_GATE = readEnvInt('USAGE_IDLE_GATE', 30);                 // idle seconds required (default 30)
+const USAGE_CAPTURE_WAIT = readEnvInt('USAGE_CAPTURE_WAIT', 3);            // seconds to wait for UI render
+const USAGE_WARN_THRESHOLD = readEnvInt('USAGE_WARN_THRESHOLD', 70);       // weekly % → warning
+const USAGE_HIGH_THRESHOLD = readEnvInt('USAGE_HIGH_THRESHOLD', 85);       // weekly % → high alert
+const USAGE_CRITICAL_THRESHOLD = readEnvInt('USAGE_CRITICAL_THRESHOLD', 95); // weekly % → critical alert
+const USAGE_NOTIFY_COOLDOWN = readEnvInt('USAGE_NOTIFY_COOLDOWN', 7200);   // seconds between same-tier notifications
+const USAGE_ACTIVE_HOURS_START = readEnvInt('USAGE_ACTIVE_HOURS_START', 8); // check only during 8:00–23:00
+const USAGE_ACTIVE_HOURS_END = readEnvInt('USAGE_ACTIVE_HOURS_END', 23);
 
 // Daily tasks config
 const DAILY_UPGRADE_HOUR = 5;        // 5:00 AM local time
