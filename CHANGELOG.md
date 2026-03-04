@@ -5,6 +5,15 @@ All notable changes to zylos-core will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.3] - 2026-03-04
+
+### Added
+- **Plan usage monitoring**: activity monitor periodically checks `/usage` via tmux capture during idle periods, parses session/weekly usage percentages, and sends owner notifications when thresholds are exceeded (80% warning, 90% high, 95% critical). Only checks during active hours when Claude is idle with no pending work. Configurable via `zylos config` (#225, closes #206)
+
+### Fixed
+- **Startup prompt blocking**: `ensureOnboardingComplete()` now also sets `effortCalloutDismissed` in `~/.claude.json` and `skipDangerousModePermissionPrompt` in `~/.claude/settings.json` — prevents new Claude Code interactive prompts from blocking automated startup on VMs (#227, closes #226)
+- **Usage monitor fires immediately on fresh install**: `lastUsageCheckAt` defaulted to 0, causing `/usage` to trigger 30 seconds after first startup instead of waiting the full check interval. Now defaults to current time when no persisted state exists (#229)
+
 ## [0.3.2] - 2026-03-04
 
 ### Fixed
