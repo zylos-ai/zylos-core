@@ -446,7 +446,11 @@ function approveApiKey(apiKey) {
 }
 
 function startClaude() {
-  if (!isClaudeLoggedIn()) {
+  // Check credentials.json once and reuse throughout — avoids redundant file I/O
+  // since isClaudeLoggedIn() also calls hasCredentialsFile() internally.
+  const useCredentialsFile = hasCredentialsFile();
+
+  if (!useCredentialsFile && !isClaudeLoggedIn()) {
     log('Guardian: Claude is not logged in, skipping startup');
     return;
   }
@@ -472,7 +476,6 @@ function startClaude() {
     fs.writeFileSync(HOOK_STATE_FILE, JSON.stringify({ active_tools: 0 }));
   } catch { }
 
-  const useCredentialsFile = hasCredentialsFile();
   const bypassFlag = BYPASS_PERMISSIONS ? ' --dangerously-skip-permissions' : '';
   // When credentials.json is available, also strip CLAUDE_CODE_OAUTH_TOKEN from the
   // environment. This covers the sendToTmux path where the existing tmux session may
@@ -1232,7 +1235,7 @@ function init() {
 }
 
 init();
-log(`=== Activity Monitor Started (v15 - Guardian + Heartbeat v2 + Hook Activity + DailyTasks + UpgradeCheck): ${new Date().toISOString()} tz=${timezone} ===`);
+log(`=== Activity Monitor Started (v16 - Guardian + Heartbeat v2 + Hook Activity + DailyTasks + UpgradeCheck): ${new Date().toISOString()} tz=${timezone} ===`);
 
 setInterval(monitorLoop, INTERVAL);
 monitorLoop();
