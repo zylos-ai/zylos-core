@@ -139,6 +139,30 @@ export function switchProtocol(domain, protocol) {
 }
 
 /**
+ * Find the closing `}` of the first (primary) server block in a Caddyfile.
+ * Tracks brace depth starting from the first `{` to find its matching `}`.
+ * Returns the character index of the closing brace, or -1 if not found.
+ */
+function findPrimaryBlockEnd(content) {
+  let depth = 0;
+  let inBlock = false;
+
+  for (let i = 0; i < content.length; i++) {
+    if (content[i] === '{') {
+      depth++;
+      inBlock = true;
+    } else if (content[i] === '}') {
+      depth--;
+      if (inBlock && depth === 0) {
+        return i;
+      }
+    }
+  }
+
+  return -1;
+}
+
+/**
  * Apply Caddy routes for a component.
  * Reads Caddyfile, removes existing markers for this component (if any),
  * generates new route blocks, inserts before closing `}` of the domain block,
@@ -182,15 +206,18 @@ export function applyCaddyRoutes(componentName, httpRoutes) {
     `    ${endMarker}`,
   ].join('\n');
 
-  // Find the last closing `}` in the file (end of domain block)
-  const lastBrace = content.lastIndexOf('}');
-  if (lastBrace === -1) {
+  // Find the closing `}` of the primary (first) server block.
+  // The Caddyfile may contain multiple server blocks (e.g. user-added
+  // reverse proxies for other services). Component routes must be
+  // inserted into the first block, which is always the zylos-managed one.
+  const primaryBrace = findPrimaryBlockEnd(content);
+  if (primaryBrace === -1) {
     return { success: false, action: 'skipped', error: 'Cannot find domain block in Caddyfile' };
   }
 
   // Insert marked block before the closing brace, with proper spacing
-  const before = content.slice(0, lastBrace).trimEnd();
-  const after = content.slice(lastBrace);
+  const before = content.slice(0, primaryBrace).trimEnd();
+  const after = content.slice(primaryBrace);
   const newContent = `${before}\n\n${markedBlock}\n${after}`;
 
   // Write to temp file, validate, then deploy
