@@ -446,6 +446,7 @@ function isClaudeLoggedIn() {
  */
 function ensureOnboardingComplete() {
   const claudeJsonPath = path.join(os.homedir(), '.claude.json');
+  const settingsPath = path.join(os.homedir(), '.claude', 'settings.json');
   try {
     let config = {};
     try { config = JSON.parse(fs.readFileSync(claudeJsonPath, 'utf8')); } catch {}
@@ -469,12 +470,29 @@ function ensureOnboardingComplete() {
       config.projects[projectPath].hasCompletedProjectOnboarding = true;
       changed = true;
     }
+    // Dismiss effort callout popup on first use
+    if (!config.effortCalloutDismissed) {
+      config.effortCalloutDismissed = true;
+      changed = true;
+    }
     if (changed) {
       fs.writeFileSync(claudeJsonPath, JSON.stringify(config, null, 2) + '\n');
-      log(`Guardian: Updated ~/.claude.json (onboarding + trust)`);
+      log(`Guardian: Updated ~/.claude.json (onboarding + trust + effort)`);
     }
   } catch (err) {
     log(`Guardian: Failed to update ~/.claude.json: ${err.message}`);
+  }
+  // Also set skipDangerousModePermissionPrompt in settings.json
+  try {
+    let settings = {};
+    try { settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8')); } catch {}
+    if (!settings.skipDangerousModePermissionPrompt) {
+      settings.skipDangerousModePermissionPrompt = true;
+      fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n');
+      log(`Guardian: Updated ~/.claude/settings.json (skipDangerousModePermissionPrompt)`);
+    }
+  } catch (err) {
+    log(`Guardian: Failed to update ~/.claude/settings.json: ${err.message}`);
   }
 }
 
