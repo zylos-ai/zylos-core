@@ -1210,16 +1210,14 @@ function maybeCheckUsage(claudeState, idleSeconds, currentTime) {
     const paneContent = captureTmuxPane();
     usageCheckPhase = 'idle';
 
-    // Only dismiss UI if it actually rendered (contains usage data)
-    const hasUsageUI = paneContent && /\d+%\s*used/i.test(paneContent);
-    if (hasUsageUI) {
-      sendTmuxKeys('Escape');
-    }
+    // Always dismiss the /usage dialog — it may show usage data, a rate-limit
+    // error, or any other overlay. Escape is safe to send regardless.
+    sendTmuxKeys('Escape');
 
     const usage = parseUsageFromPane(paneContent);
     if (!usage) {
-      log('Usage monitor: failed to parse /usage output (feature may not be available)');
-      // Prevent retrying too quickly if /usage is not supported
+      log('Usage monitor: failed to parse /usage output (rate-limited or unavailable)');
+      // Prevent retrying too quickly
       lastUsageCheckAt = Math.floor(Date.now() / 1000);
       return;
     }
