@@ -460,29 +460,17 @@ function approveApiKey(apiKey) {
 }
 
 function startClaude() {
-  // Detect native `claude login` auth (credentials.json on Linux, system Keychain
-  // on macOS).  When native auth is active, .env tokens MUST NOT be injected into
-  // tmux — Claude CLI errors with "Auth conflict" if it sees both a native login
-  // and ANTHROPIC_API_KEY / CLAUDE_CODE_OAUTH_TOKEN in the environment.
-  const useCredentialsFile = hasCredentialsFile();
-  let hasNativeAuth = useCredentialsFile;
-  let authStatusLoggedIn = false;
-  if (!hasNativeAuth) {
-    try {
-      const output = execFileSync(CLAUDE_BIN, ['auth', 'status'], {
-        encoding: 'utf8', timeout: 10000, stdio: ['ignore', 'pipe', 'pipe']
-      });
-      const status = JSON.parse(output);
-      authStatusLoggedIn = status?.loggedIn === true;
-      hasNativeAuth = authStatusLoggedIn && status?.authMethod === 'claude.ai';
-    } catch (e) {
-      log(`Guardian: claude auth status check failed: ${e.message}`);
-    }
-  }
+  // Detect native `claude login` auth via credentials.json.  When present, .env
+  // tokens MUST NOT be injected into tmux — Claude CLI errors with "Auth conflict"
+  // if it sees both a native login and ANTHROPIC_API_KEY / CLAUDE_CODE_OAUTH_TOKEN.
+  //
+  // Important: only credentials.json counts as native auth, NOT `claude auth status`.
+  // On macOS, `claude auth status` may report loggedIn via system Keychain, but
+  // Keychain is inaccessible from PM2-spawned tmux sessions.  If we trusted that
+  // signal and skipped .env injection, the tmux session would have no auth at all.
+  const hasNativeAuth = hasCredentialsFile();
 
-  // Use cached auth status to avoid a redundant `claude auth status` subprocess
-  // inside isClaudeLoggedIn() — the same command was already run above.
-  if (!hasNativeAuth && !authStatusLoggedIn && !isClaudeLoggedIn()) {
+  if (!hasNativeAuth && !isClaudeLoggedIn()) {
     log('Guardian: Claude is not logged in, skipping startup');
     return;
   }
@@ -533,7 +521,7 @@ function startClaude() {
   }
 
   if (hasNativeAuth) {
-    log(`Guardian: Using native claude login auth${useCredentialsFile ? ' (credentials.json)' : ' (system keychain)'} — skipping .env tokens`);
+    log('Guardian: Using native claude login auth (credentials.json) — skipping .env tokens');
   }
 
   // Pre-accept onboarding + trust dialogs for ALL auth methods — without this,
