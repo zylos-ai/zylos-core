@@ -8,8 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.3.2] - 2026-03-04
 
 ### Fixed
-- **Auth conflict when `claude login` coexists with `.env` API key**: Guardian injected `ANTHROPIC_API_KEY` from `.env` into the tmux environment even when the user had an active `claude login` session, causing Claude to error with "Auth conflict: Both a token (claude.ai) and an API key (ANTHROPIC_API_KEY) are set." Guardian now detects native auth (credentials.json on Linux, system Keychain on macOS via `claude auth status`) and skips all `.env` token injection when present. Also strips stale tokens from existing tmux sessions (#219, closes #218)
-- **Onboarding/trust dialogs not pre-accepted for native auth**: The onboarding and workspace trust pre-acceptance logic was embedded inside `approveApiKey()`, so users with native `claude login` auth (no `.env` tokens) would see interactive prompts blocking tmux startup. Extracted `ensureOnboardingComplete()` as a standalone function called unconditionally for all auth methods (#219, supersedes #217)
+- **Auth conflict with `claude login` + `.env` API key**: Guardian now detects native `claude login` auth (credentials.json on Linux, system Keychain on macOS) and skips `.env` token injection when present — prevents "Auth conflict: Both a token and an API key are set" error. Stale tokens are also stripped from existing tmux sessions (#219, closes #218)
+- **Onboarding prompts block native auth startup**: onboarding and workspace trust pre-acceptance was embedded inside `approveApiKey()`, so native auth users without `.env` tokens saw interactive prompts in tmux. Extracted `ensureOnboardingComplete()` as a standalone function called for all auth methods (#219, supersedes #217)
 
 ## [0.3.1] - 2026-03-04 _(superseded by 0.3.2 — auth conflict fix was incomplete)_
 
