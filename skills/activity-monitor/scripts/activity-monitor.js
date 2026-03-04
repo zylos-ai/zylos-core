@@ -133,25 +133,31 @@ const STUCK_PROBE_COOLDOWN = 600;    // 10 min between stuck probes
 // Health check config
 const HEALTH_CHECK_INTERVAL = 21600; // 6 hours
 
-// Usage monitoring config — configurable via .env, with sensible defaults
-function readEnvInt(key, fallback) {
+// Usage monitoring config — configurable via zylos config (config.json), with sensible defaults.
+// Example: zylos config set usage_warn_threshold 60
+const CONFIG_DIR = path.join(ZYLOS_DIR, '.zylos');
+
+function readConfigInt(key, fallback) {
   try {
-    const envContent = fs.readFileSync(path.join(ZYLOS_DIR, '.env'), 'utf8');
-    const match = envContent.match(new RegExp(`^${key}=(\\d+)`, 'm'));
-    if (match) return parseInt(match[1], 10);
+    const config = JSON.parse(fs.readFileSync(path.join(CONFIG_DIR, 'config.json'), 'utf8'));
+    const val = config[key];
+    if (val !== undefined && val !== null) {
+      const n = parseInt(String(val), 10);
+      if (!Number.isNaN(n)) return n;
+    }
   } catch { }
   return fallback;
 }
 
-const USAGE_CHECK_INTERVAL = readEnvInt('USAGE_CHECK_INTERVAL', 1800);     // seconds between checks (default 30 min)
-const USAGE_IDLE_GATE = readEnvInt('USAGE_IDLE_GATE', 30);                 // idle seconds required (default 30)
-const USAGE_CAPTURE_WAIT = readEnvInt('USAGE_CAPTURE_WAIT', 3);            // seconds to wait for UI render
-const USAGE_WARN_THRESHOLD = readEnvInt('USAGE_WARN_THRESHOLD', 70);       // weekly % → warning
-const USAGE_HIGH_THRESHOLD = readEnvInt('USAGE_HIGH_THRESHOLD', 85);       // weekly % → high alert
-const USAGE_CRITICAL_THRESHOLD = readEnvInt('USAGE_CRITICAL_THRESHOLD', 95); // weekly % → critical alert
-const USAGE_NOTIFY_COOLDOWN = readEnvInt('USAGE_NOTIFY_COOLDOWN', 7200);   // seconds between same-tier notifications
-const USAGE_ACTIVE_HOURS_START = readEnvInt('USAGE_ACTIVE_HOURS_START', 8); // check only during 8:00–23:00
-const USAGE_ACTIVE_HOURS_END = readEnvInt('USAGE_ACTIVE_HOURS_END', 23);
+const USAGE_CHECK_INTERVAL = readConfigInt('usage_check_interval', 1800);     // seconds between checks (default 30 min)
+const USAGE_IDLE_GATE = readConfigInt('usage_idle_gate', 30);                 // idle seconds required (default 30)
+const USAGE_CAPTURE_WAIT = readConfigInt('usage_capture_wait', 3);            // seconds to wait for UI render
+const USAGE_WARN_THRESHOLD = readConfigInt('usage_warn_threshold', 70);       // weekly % → warning
+const USAGE_HIGH_THRESHOLD = readConfigInt('usage_high_threshold', 85);       // weekly % → high alert
+const USAGE_CRITICAL_THRESHOLD = readConfigInt('usage_critical_threshold', 95); // weekly % → critical alert
+const USAGE_NOTIFY_COOLDOWN = readConfigInt('usage_notify_cooldown', 7200);   // seconds between same-tier notifications
+const USAGE_ACTIVE_HOURS_START = readConfigInt('usage_active_hours_start', 8); // check only during 8:00–23:00
+const USAGE_ACTIVE_HOURS_END = readConfigInt('usage_active_hours_end', 23);
 
 // Daily tasks config
 const DAILY_UPGRADE_HOUR = 5;        // 5:00 AM local time
