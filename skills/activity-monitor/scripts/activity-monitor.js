@@ -445,6 +445,7 @@ function isClaudeLoggedIn() {
  * Must be called for ALL auth methods, not just API key.
  */
 function ensureOnboardingComplete() {
+  // 1. ~/.claude.json — onboarding, trust, effort callout
   const claudeJsonPath = path.join(os.homedir(), '.claude.json');
   try {
     let config = {};
@@ -460,6 +461,10 @@ function ensureOnboardingComplete() {
       }
       changed = true;
     }
+    if (!config.effortCalloutDismissed) {
+      config.effortCalloutDismissed = true;
+      changed = true;
+    }
     // Pre-accept workspace trust dialog for the zylos project directory
     if (!config.projects) config.projects = {};
     const projectPath = path.resolve(ZYLOS_DIR);
@@ -471,10 +476,26 @@ function ensureOnboardingComplete() {
     }
     if (changed) {
       fs.writeFileSync(claudeJsonPath, JSON.stringify(config, null, 2) + '\n');
-      log(`Guardian: Updated ~/.claude.json (onboarding + trust)`);
+      log(`Guardian: Updated ~/.claude.json (onboarding + trust + effort)`);
     }
   } catch (err) {
     log(`Guardian: Failed to update ~/.claude.json: ${err.message}`);
+  }
+
+  // 2. ~/.claude/settings.json — bypass permissions prompt
+  const settingsDir = path.join(os.homedir(), '.claude');
+  const settingsPath = path.join(settingsDir, 'settings.json');
+  try {
+    let settings = {};
+    try { settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8')); } catch {}
+    if (!settings.skipDangerousModePermissionPrompt) {
+      fs.mkdirSync(settingsDir, { recursive: true });
+      settings.skipDangerousModePermissionPrompt = true;
+      fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n');
+      log(`Guardian: Updated ~/.claude/settings.json (skipDangerousModePermissionPrompt)`);
+    }
+  } catch (err) {
+    log(`Guardian: Failed to update ~/.claude/settings.json: ${err.message}`);
   }
 }
 
