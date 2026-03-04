@@ -5,7 +5,13 @@ All notable changes to zylos-core will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.3.1] - 2026-03-04
+## [0.3.2] - 2026-03-04
+
+### Fixed
+- **Auth conflict when `claude login` coexists with `.env` API key**: Guardian injected `ANTHROPIC_API_KEY` from `.env` into the tmux environment even when the user had an active `claude login` session, causing Claude to error with "Auth conflict: Both a token (claude.ai) and an API key (ANTHROPIC_API_KEY) are set." Guardian now detects native auth (credentials.json on Linux, system Keychain on macOS via `claude auth status`) and skips all `.env` token injection when present. Also strips stale tokens from existing tmux sessions (#219, closes #218)
+- **Onboarding/trust dialogs not pre-accepted for native auth**: The onboarding and workspace trust pre-acceptance logic was embedded inside `approveApiKey()`, so users with native `claude login` auth (no `.env` tokens) would see interactive prompts blocking tmux startup. Extracted `ensureOnboardingComplete()` as a standalone function called unconditionally for all auth methods (#219, supersedes #217)
+
+## [0.3.1] - 2026-03-04 _(superseded by 0.3.2 — auth conflict fix was incomplete)_
 
 ### Fixed
 - **Guardian token override causes 401**: `startClaude()` always injected the static `CLAUDE_CODE_OAUTH_TOKEN` from `.env` into tmux, overriding `~/.claude/.credentials.json` which supports automatic token refresh. Once the static token expired, Claude got stuck on 401 errors despite having valid auto-refreshable credentials. Guardian now checks for `credentials.json` first and skips `.env` token injection when present. All three auth methods (claude login, setup token, API key) remain fully supported (#215, closes #211)
