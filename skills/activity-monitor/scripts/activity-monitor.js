@@ -1,6 +1,14 @@
 #!/usr/bin/env node
 /**
- * Activity Monitor v18 - Guardian + Heartbeat v3 + Health Check + Daily Tasks + Upgrade Check + Usage Monitor
+ * Activity Monitor v19 - Guardian + Heartbeat v4 + Health Check + Daily Tasks + Upgrade Check + Usage Monitor
+ *
+ * v19 changes (RATE_LIMITED state + user message triggered recovery — #233):
+ *   - Rate-limit detection: scan tmux pane content for rate-limit keywords
+ *   - New RATE_LIMITED health state: no kill+restart, waits for cooldown
+ *   - Parse reset time from rate-limit prompt (e.g., "resets 7am")
+ *   - User message triggered recovery: incoming message during rate_limited
+ *     clears cooldown timer (5min cooldown between triggers)
+ *   - Channel bot messaging: shows "I've hit my usage limit" with reset time
  *
  * v18 changes (exponential backoff + process signal acceleration — #177):
  *   - Exponential backoff: min(3600, 60 × 5^(n-1)) → 1m, 5m, 25m, 60m cap
@@ -75,6 +83,7 @@ const DAILY_UPGRADE_STATE_FILE = path.join(MONITOR_DIR, 'daily-upgrade-state.jso
 const DAILY_MEMORY_COMMIT_STATE_FILE = path.join(MONITOR_DIR, 'daily-memory-commit-state.json');
 const UPGRADE_CHECK_STATE_FILE = path.join(MONITOR_DIR, 'upgrade-check-state.json');
 const PENDING_CHANNELS_FILE = path.join(MONITOR_DIR, 'pending-channels.jsonl');
+const USER_MESSAGE_SIGNAL_FILE = path.join(MONITOR_DIR, 'user-message-signal.json');
 const USAGE_STATE_FILE = path.join(MONITOR_DIR, 'usage.json');
 
 // Claude binary - uses bare command name (absolute path triggers Claude Code warning).
@@ -126,13 +135,15 @@ const BASE_RESTART_DELAY = 5;
 const MAX_RESTART_DELAY = 60;
 const BACKOFF_RESET_THRESHOLD = 60; // Claude must stay running this long before backoff resets
 
-// Heartbeat liveness config (v2)
+// Heartbeat liveness config (v3)
 const HEARTBEAT_INTERVAL = 7200;     // 2 hours (safety-net; stuck detection is the primary mechanism)
 const ACK_DEADLINE = 300;            // 5 min (regular heartbeat timeout)
 const STUCK_ACK_DEADLINE = 120;      // 2 min (stuck probe timeout)
 const DOWN_DEGRADE_THRESHOLD = 3600; // 1 hour of continuous failure → enter DOWN
 const DOWN_RETRY_INTERVAL = 3600;    // 60 min periodic retry in DOWN state
 const SIGNAL_GRACE_PERIOD = 30;      // Wait 30s after claudeRunning transitions before probing
+const RATE_LIMIT_DEFAULT_COOLDOWN = 3600;  // 1 hour default when reset time can't be parsed
+const USER_MESSAGE_RECOVERY_COOLDOWN = 300; // 5 min between user-message-triggered recoveries
 
 // Stuck detection config
 const STUCK_THRESHOLD = 300;         // 5 min of no activity → trigger immediate probe
@@ -651,19 +662,24 @@ function ensureStatusDir() {
 
 function loadInitialHealth() {
   try {
-    if (!fs.existsSync(STATUS_FILE)) return 'ok';
+    if (!fs.existsSync(STATUS_FILE)) return { health: 'ok' };
     const status = JSON.parse(fs.readFileSync(STATUS_FILE, 'utf8'));
     if (status && typeof status.health === 'string') {
-      return status.health;
+      return status;
     }
   } catch { }
-  return 'ok';
+  return { health: 'ok' };
 }
 
 function writeStatusFile(statusObj) {
   try {
     ensureStatusDir();
-    fs.writeFileSync(STATUS_FILE, JSON.stringify({ ...statusObj, health: engine.health }, null, 2));
+    const extra = {};
+    if (engine.health === 'rate_limited') {
+      extra.rate_limit_reset = engine.rateLimitResetTime || null;
+      extra.cooldown_until = engine.cooldownUntil || null;
+    }
+    fs.writeFileSync(STATUS_FILE, JSON.stringify({ ...statusObj, ...extra, health: engine.health }, null, 2));
   } catch {
     // Best-effort.
   }
@@ -1112,6 +1128,88 @@ function captureTmuxPane() {
   }
 }
 
+/**
+ * Check tmux pane content for rate-limit signals.
+ * Returns { detected: true, cooldownUntil, resetTime } or { detected: false }.
+ */
+function detectRateLimit() {
+  const pane = captureTmuxPane();
+  if (!pane) return { detected: false };
+
+  // Match known rate-limit patterns from Claude Code
+  const rateLimitPatterns = [
+    /out of extra usage/i,
+    /you['']re out of .* usage/i,
+    /rate limit/i,
+    /usage limit reached/i,
+    /you['']ve hit your limit/i,
+    /resets?\s+(?:at\s+)?(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)/i
+  ];
+
+  let detected = false;
+  let resetTime = '';
+
+  for (const pattern of rateLimitPatterns) {
+    const match = pane.match(pattern);
+    if (match) {
+      detected = true;
+      // Try to extract reset time from the matching pattern
+      if (match[1]) {
+        resetTime = match[1].trim();
+      }
+      break;
+    }
+  }
+
+  if (!detected) return { detected: false };
+
+  // Also try to find a reset time mentioned elsewhere in the pane
+  if (!resetTime) {
+    const timeMatch = pane.match(/resets?\s+(?:at\s+)?(\d{1,2}(?::\d{2})?\s*(?:am|pm))/i);
+    if (timeMatch) resetTime = timeMatch[1].trim();
+  }
+
+  // Calculate cooldownUntil from parsed reset time or use default
+  const now = Math.floor(Date.now() / 1000);
+  let cooldownUntil = now + RATE_LIMIT_DEFAULT_COOLDOWN;
+
+  if (resetTime) {
+    const parsed = parseResetTime(resetTime);
+    if (parsed > now) {
+      cooldownUntil = parsed;
+    }
+  }
+
+  return { detected: true, cooldownUntil, resetTime };
+}
+
+/**
+ * Parse a time string like "7am", "7:30am", "3pm" into epoch seconds.
+ * Assumes the reset time is in the local timezone and within the next 24 hours.
+ */
+function parseResetTime(timeStr) {
+  const match = timeStr.match(/^(\d{1,2})(?::(\d{2}))?\s*(am|pm)$/i);
+  if (!match) return 0;
+
+  let hours = parseInt(match[1], 10);
+  const minutes = parseInt(match[2] || '0', 10);
+  const ampm = match[3].toLowerCase();
+
+  if (ampm === 'pm' && hours !== 12) hours += 12;
+  if (ampm === 'am' && hours === 12) hours = 0;
+
+  const now = new Date();
+  const target = new Date(now);
+  target.setHours(hours, minutes, 0, 0);
+
+  // If the target time is in the past, assume it's tomorrow
+  if (target <= now) {
+    target.setDate(target.getDate() + 1);
+  }
+
+  return Math.floor(target.getTime() / 1000);
+}
+
 function sendTmuxKeys(keys) {
   try {
     execSync(`tmux send-keys -t "${SESSION}" ${keys} 2>/dev/null`);
@@ -1355,8 +1453,10 @@ function monitorLoop() {
       log('State: OFFLINE (tmux session not found)');
     }
 
+    // Don't restart while rate-limited — restarting can't fix rate limits.
+    // The engine will handle recovery via cooldown timer.
     const restartDelay = Math.min(BASE_RESTART_DELAY * Math.pow(2, consecutiveRestarts), MAX_RESTART_DELAY);
-    if (notRunningCount >= restartDelay) {
+    if (engine.health !== 'rate_limited' && notRunningCount >= restartDelay) {
       consecutiveRestarts += 1;
       log(`Guardian: Session not found for ${notRunningCount}s, starting Claude... (attempt ${consecutiveRestarts}, next delay ${Math.min(BASE_RESTART_DELAY * Math.pow(2, consecutiveRestarts), MAX_RESTART_DELAY)}s)`);
       startClaude();
@@ -1397,8 +1497,9 @@ function monitorLoop() {
       log('State: STOPPED (claude not running in tmux session)');
     }
 
+    // Don't restart while rate-limited — restarting can't fix rate limits.
     const restartDelay = Math.min(BASE_RESTART_DELAY * Math.pow(2, consecutiveRestarts), MAX_RESTART_DELAY);
-    if (notRunningCount >= restartDelay) {
+    if (engine.health !== 'rate_limited' && notRunningCount >= restartDelay) {
       consecutiveRestarts += 1;
       log(`Guardian: Claude not running for ${notRunningCount}s, starting Claude... (attempt ${consecutiveRestarts}, next delay ${Math.min(BASE_RESTART_DELAY * Math.pow(2, consecutiveRestarts), MAX_RESTART_DELAY)}s)`);
       startClaude();
@@ -1492,6 +1593,29 @@ function monitorLoop() {
     }
   }
 
+  // Rate-limit detection: check tmux pane for rate-limit signals before
+  // stuck detection triggers a futile recovery cycle.
+  if (engine.health === 'ok' || engine.health === 'recovering') {
+    const rateLimit = detectRateLimit();
+    if (rateLimit.detected) {
+      engine.enterRateLimited(rateLimit.cooldownUntil, rateLimit.resetTime);
+    }
+  }
+
+  // User message triggered recovery: when a user sends a message during rate_limited,
+  // c4-receive writes a signal file. Read and consume it to trigger early recovery.
+  if (engine.health === 'rate_limited') {
+    try {
+      if (fs.existsSync(USER_MESSAGE_SIGNAL_FILE)) {
+        const signal = JSON.parse(fs.readFileSync(USER_MESSAGE_SIGNAL_FILE, 'utf8'));
+        fs.unlinkSync(USER_MESSAGE_SIGNAL_FILE);
+        if (signal.timestamp && (currentTime - signal.timestamp) < 60) {
+          engine.notifyUserMessage(currentTime);
+        }
+      }
+    } catch { /* best-effort */ }
+  }
+
   // Stuck detection: if no observable activity from any source for STUCK_THRESHOLD,
   // trigger an immediate heartbeat probe with a shorter timeout.
   if (engine.health === 'ok') {
@@ -1522,7 +1646,8 @@ function init() {
   if (!fs.existsSync(MONITOR_DIR)) {
     fs.mkdirSync(MONITOR_DIR, { recursive: true });
   }
-  const initialHealth = loadInitialHealth();
+  const initialStatus = loadInitialHealth();
+  const initialHealth = initialStatus.health;
   engine = new HeartbeatEngine({
     enqueueHeartbeat,
     getHeartbeatStatus,
@@ -1536,8 +1661,16 @@ function init() {
     heartbeatInterval: HEARTBEAT_INTERVAL,
     downDegradeThreshold: DOWN_DEGRADE_THRESHOLD,
     downRetryInterval: DOWN_RETRY_INTERVAL,
-    signalGracePeriod: SIGNAL_GRACE_PERIOD
+    signalGracePeriod: SIGNAL_GRACE_PERIOD,
+    rateLimitDefaultCooldown: RATE_LIMIT_DEFAULT_COOLDOWN,
+    userMessageRecoveryCooldown: USER_MESSAGE_RECOVERY_COOLDOWN
   });
+
+  // Rehydrate rate-limit state from persisted status file on PM2 restart
+  if (initialHealth === 'rate_limited' && initialStatus.cooldown_until) {
+    engine.cooldownUntil = initialStatus.cooldown_until;
+    engine.rateLimitResetTime = initialStatus.rate_limit_reset || '';
+  }
 
   upgradeScheduler = new DailySchedule({
     getLocalHour,
@@ -1588,7 +1721,7 @@ function init() {
 }
 
 init();
-log(`=== Activity Monitor Started (v18 - Guardian + Heartbeat v3 + Hook Activity + DailyTasks + UpgradeCheck + UsageMonitor): ${new Date().toISOString()} tz=${timezone} ===`);
+log(`=== Activity Monitor Started (v19 - Guardian + Heartbeat v4 + Hook Activity + DailyTasks + UpgradeCheck + UsageMonitor): ${new Date().toISOString()} tz=${timezone} ===`);
 
 setInterval(monitorLoop, INTERVAL);
 monitorLoop();

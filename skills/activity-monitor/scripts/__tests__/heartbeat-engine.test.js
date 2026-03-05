@@ -647,4 +647,214 @@ describe('HeartbeatEngine', () => {
       assert.equal(engine.health, 'recovering');
     });
   });
+
+  describe('rate_limited state', () => {
+    it('enterRateLimited transitions from ok to rate_limited', () => {
+      const { deps, calls } = createMockDeps();
+      const engine = new HeartbeatEngine(deps);
+
+      engine.enterRateLimited(2000, '7am');
+
+      assert.equal(engine.health, 'rate_limited');
+      assert.equal(engine.cooldownUntil, 2000);
+      assert.equal(engine.rateLimitResetTime, '7am');
+      assert.ok(calls.log.some(m => m.includes('RATE_LIMITED') && m.includes('7am')));
+    });
+
+    it('enterRateLimited transitions from recovering to rate_limited', () => {
+      const { deps } = createMockDeps();
+      const engine = new HeartbeatEngine(deps, { initialHealth: 'recovering' });
+
+      engine.enterRateLimited(2000, '8am');
+
+      assert.equal(engine.health, 'rate_limited');
+      assert.equal(engine.restartFailureCount, 0);
+      assert.equal(engine.recoveringStartedAt, 0);
+    });
+
+    it('enterRateLimited extends cooldown if already rate_limited with later time', () => {
+      const { deps, calls } = createMockDeps();
+      const engine = new HeartbeatEngine(deps);
+
+      engine.enterRateLimited(2000, '7am');
+      engine.enterRateLimited(3000, '8am');
+
+      assert.equal(engine.cooldownUntil, 3000);
+      assert.equal(engine.rateLimitResetTime, '8am');
+      assert.ok(calls.log.some(m => m.includes('extended')));
+    });
+
+    it('enterRateLimited does not shorten cooldown', () => {
+      const { deps } = createMockDeps();
+      const engine = new HeartbeatEngine(deps);
+
+      engine.enterRateLimited(3000, '8am');
+      engine.enterRateLimited(2000, '7am');
+
+      assert.equal(engine.cooldownUntil, 3000);
+      assert.equal(engine.rateLimitResetTime, '8am');
+    });
+
+    it('waits during cooldown period', () => {
+      const { deps, calls } = createMockDeps();
+      const engine = new HeartbeatEngine(deps);
+
+      engine.enterRateLimited(2000, '7am');
+      engine.processHeartbeat(true, 1500);
+
+      assert.equal(calls.enqueueHeartbeat.length, 0);
+      assert.equal(calls.killTmuxSession, 0);
+    });
+
+    it('restarts Claude and sends heartbeat when cooldown expires', () => {
+      const { deps, calls } = createMockDeps();
+      const engine = new HeartbeatEngine(deps);
+
+      engine.enterRateLimited(2000, '7am');
+      engine.processHeartbeat(true, 2001);
+
+      assert.equal(calls.killTmuxSession, 1);
+      assert.deepEqual(calls.enqueueHeartbeat, ['rate-limit-recovery']);
+    });
+
+    it('pushes cooldown forward if heartbeat enqueue fails on cooldown expiry', () => {
+      const { deps } = createMockDeps();
+      deps.enqueueHeartbeat = () => false;
+      const engine = new HeartbeatEngine(deps);
+
+      engine.enterRateLimited(2000, '7am');
+      engine.processHeartbeat(true, 2001);
+
+      assert.equal(engine.cooldownUntil, 2001 + 60);
+    });
+
+    it('recovers to ok on heartbeat success after rate limit', () => {
+      const { deps, calls } = createMockDeps();
+      const engine = new HeartbeatEngine(deps);
+
+      engine.enterRateLimited(2000, '7am');
+      deps._pending = { control_id: 1, phase: 'rate-limit-recovery', created_at: 2000 };
+      deps._heartbeatStatus = 'done';
+      engine.processHeartbeat(true, 2005);
+
+      assert.equal(engine.health, 'ok');
+      assert.equal(engine.cooldownUntil, 0);
+      assert.equal(engine.rateLimitResetTime, '');
+      assert.equal(calls.notifyPendingChannels, 1);
+    });
+
+    it('retries in 60s on heartbeat failure while rate_limited', () => {
+      const { deps, calls } = createMockDeps();
+      const engine = new HeartbeatEngine(deps);
+
+      engine.enterRateLimited(2000, '7am');
+      deps._pending = { control_id: 1, phase: 'rate-limit-recovery', created_at: 2000 };
+      deps._heartbeatStatus = 'failed';
+      const beforeNow = Math.floor(Date.now() / 1000);
+      engine.processHeartbeat(true, 2005);
+
+      assert.equal(engine.health, 'rate_limited');
+      // cooldownUntil should be ~now + 60 (uses Date.now() internally)
+      assert.ok(engine.cooldownUntil >= beforeNow + 60);
+      assert.ok(engine.cooldownUntil <= beforeNow + 62);
+      assert.ok(calls.log.some(m => m.includes('Rate-limit recovery heartbeat failed')));
+    });
+
+    it('triggerRecovery is skipped in rate_limited state', () => {
+      const { deps, calls } = createMockDeps();
+      const engine = new HeartbeatEngine(deps);
+
+      engine.enterRateLimited(2000, '7am');
+      engine.triggerRecovery('test_reason');
+
+      assert.equal(engine.health, 'rate_limited');
+      assert.equal(calls.killTmuxSession, 0);
+      assert.ok(calls.log.some(m => m.includes('skipped in RATE_LIMITED')));
+    });
+
+    it('does not enqueue heartbeat when claudeRunning is false and rate_limited', () => {
+      const { deps, calls } = createMockDeps();
+      const engine = new HeartbeatEngine(deps);
+
+      engine.enterRateLimited(2000, '7am');
+      engine.processHeartbeat(false, 2001);
+
+      assert.equal(calls.enqueueHeartbeat.length, 0);
+    });
+  });
+
+  describe('notifyUserMessage', () => {
+    it('triggers recovery when rate_limited and cooldown elapsed', () => {
+      const { deps, calls } = createMockDeps();
+      const engine = new HeartbeatEngine(deps, { userMessageRecoveryCooldown: 300 });
+
+      engine.enterRateLimited(5000, '7am');
+      const result = engine.notifyUserMessage(3000);
+
+      assert.equal(result, true);
+      assert.equal(engine.cooldownUntil, 0);
+      assert.ok(calls.log.some(m => m.includes('User message triggered')));
+    });
+
+    it('respects cooldown between user message triggers', () => {
+      const { deps, calls } = createMockDeps();
+      const engine = new HeartbeatEngine(deps, { userMessageRecoveryCooldown: 300 });
+
+      engine.enterRateLimited(5000, '7am');
+      engine.notifyUserMessage(3000);
+
+      // Re-enter rate limited (simulate recovery failed)
+      engine.enterRateLimited(6000, '8am');
+      const result = engine.notifyUserMessage(3100);
+
+      assert.equal(result, false);
+      assert.ok(calls.log.some(m => m.includes('cooldown')));
+    });
+
+    it('allows trigger after cooldown period elapsed', () => {
+      const { deps } = createMockDeps();
+      const engine = new HeartbeatEngine(deps, { userMessageRecoveryCooldown: 300 });
+
+      engine.enterRateLimited(5000, '7am');
+      engine.notifyUserMessage(3000);
+
+      engine.enterRateLimited(6000, '8am');
+      const result = engine.notifyUserMessage(3301);
+
+      assert.equal(result, true);
+    });
+
+    it('returns false when not rate_limited', () => {
+      const { deps } = createMockDeps();
+      const engine = new HeartbeatEngine(deps);
+
+      const result = engine.notifyUserMessage(1000);
+
+      assert.equal(result, false);
+    });
+
+    it('clears user message recovery state on heartbeat success', () => {
+      const { deps } = createMockDeps();
+      const engine = new HeartbeatEngine(deps, { userMessageRecoveryCooldown: 300 });
+
+      engine.enterRateLimited(5000, '7am');
+      engine.notifyUserMessage(3000);
+
+      // Simulate heartbeat success
+      deps._pending = { control_id: 1, phase: 'rate-limit-recovery', created_at: 3000 };
+      deps._heartbeatStatus = 'done';
+      engine.processHeartbeat(true, 3005);
+
+      assert.equal(engine.lastUserMessageRecoveryAt, 0);
+    });
+  });
+
+  describe('rate_limited initialHealth', () => {
+    it('starts in rate_limited state when initialHealth is rate_limited', () => {
+      const { deps } = createMockDeps();
+      const engine = new HeartbeatEngine(deps, { initialHealth: 'rate_limited' });
+
+      assert.equal(engine.health, 'rate_limited');
+    });
+  });
 });

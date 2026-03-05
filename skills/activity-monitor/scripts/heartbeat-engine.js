@@ -1,6 +1,15 @@
 /**
  * HeartbeatEngine - Heartbeat liveness state machine.
  *
+ * v3 changes (#233 — RATE_LIMITED state + user message triggered recovery):
+ *   - New RATE_LIMITED health state: no kill+restart, waits for cooldown
+ *   - enterRateLimited(cooldownUntil, resetTime): called by activity-monitor
+ *     when rate-limit signals detected in tmux pane content
+ *   - After cooldownUntil expires: restart Claude + heartbeat verification
+ *   - User message triggered recovery: notifyUserMessage() resets cooldown
+ *     timer (5 min cooldown between triggers)
+ *   - State transitions: ok/recovering → rate_limited → ok
+ *
  * v2 changes (#177 — exponential backoff + process signal acceleration):
  *   - Exponential backoff: min(3600, 60 × 5^(n-1)) → 1m, 5m, 25m, 60m cap
  *   - Infinite retries in recovering state (no maxRestartFailures limit)
@@ -28,6 +37,8 @@ export class HeartbeatEngine {
    * @param {number} [options.downDegradeThreshold=3600] - Seconds of continuous failure before entering DOWN
    * @param {number} [options.downRetryInterval=3600] - Seconds between DOWN-state probes
    * @param {number} [options.signalGracePeriod=30] - Seconds to wait after claudeRunning transitions before probing
+   * @param {number} [options.rateLimitDefaultCooldown=3600] - Default cooldown when reset time can't be parsed
+   * @param {number} [options.userMessageRecoveryCooldown=300] - Min seconds between user-message-triggered recoveries
    * @param {string} [options.initialHealth='ok']
    */
   constructor(deps, options = {}) {
@@ -36,6 +47,8 @@ export class HeartbeatEngine {
     this.downDegradeThreshold = options.downDegradeThreshold ?? 3600; // 1 hour
     this.downRetryInterval = options.downRetryInterval ?? 3600; // 1 hour
     this.signalGracePeriod = options.signalGracePeriod ?? 30;
+    this.rateLimitDefaultCooldown = options.rateLimitDefaultCooldown ?? 3600; // 1 hour
+    this.userMessageRecoveryCooldown = options.userMessageRecoveryCooldown ?? 300; // 5 min
 
     // Internal state
     this.healthState = options.initialHealth ?? 'ok';
@@ -50,6 +63,11 @@ export class HeartbeatEngine {
     // Process signal acceleration state
     this.lastClaudeRunning = null; // null = unknown (first tick)
     this.signalDetectedAt = 0; // When claudeRunning transitioned false→true
+
+    // Rate-limited state
+    this.cooldownUntil = 0; // Epoch seconds when rate limit cooldown expires
+    this.rateLimitResetTime = ''; // Human-readable reset time for display
+    this.lastUserMessageRecoveryAt = 0; // Last time user message triggered early recovery
   }
 
   get health() {
@@ -71,6 +89,54 @@ export class HeartbeatEngine {
   getBackoffDelay() {
     if (this.restartFailureCount <= 0) return 0;
     return Math.min(3600, 60 * Math.pow(5, this.restartFailureCount - 1));
+  }
+
+  /**
+   * Enter RATE_LIMITED state. Called by activity-monitor when rate-limit
+   * signals are detected in tmux pane content.
+   *
+   * @param {number} cooldownUntil - Epoch seconds when cooldown expires
+   * @param {string} [resetTime] - Human-readable reset time for display
+   */
+  enterRateLimited(cooldownUntil, resetTime = '') {
+    if (this.healthState === 'rate_limited') {
+      // Already rate-limited; update cooldown if the new one is later
+      if (cooldownUntil > this.cooldownUntil) {
+        this.cooldownUntil = cooldownUntil;
+        this.rateLimitResetTime = resetTime || this.rateLimitResetTime;
+        this.deps.log(`Rate limit cooldown extended to ${cooldownUntil} (${resetTime || 'unknown'})`);
+      }
+      return;
+    }
+
+    this.cooldownUntil = cooldownUntil;
+    this.rateLimitResetTime = resetTime;
+    this.restartFailureCount = 0;
+    this.recoveringStartedAt = 0;
+    this.signalDetectedAt = 0;
+    this.setHealth('rate_limited', resetTime ? `resets at ${resetTime}` : `cooldown ${cooldownUntil - Math.floor(Date.now() / 1000)}s`);
+  }
+
+  /**
+   * Notify that a user message was received while rate-limited.
+   * Triggers early recovery attempt (restart + heartbeat) if cooldown
+   * between user-message-triggered recoveries has elapsed.
+   *
+   * Returns true if recovery was triggered, false if on cooldown.
+   */
+  notifyUserMessage(currentTime) {
+    if (this.healthState !== 'rate_limited') return false;
+
+    if ((currentTime - this.lastUserMessageRecoveryAt) < this.userMessageRecoveryCooldown) {
+      const remaining = this.userMessageRecoveryCooldown - (currentTime - this.lastUserMessageRecoveryAt);
+      this.deps.log(`User message recovery on cooldown (${remaining}s remaining)`);
+      return false;
+    }
+
+    this.lastUserMessageRecoveryAt = currentTime;
+    this.deps.log('User message triggered rate-limit recovery attempt');
+    this.cooldownUntil = 0; // Clear cooldown to allow immediate recovery check
+    return true;
   }
 
   processHeartbeat(claudeRunning, currentTime) {
@@ -114,7 +180,7 @@ export class HeartbeatEngine {
 
     // Process signal acceleration: claudeRunning just transitioned false→true,
     // grace period elapsed — send immediate heartbeat to verify recovery.
-    // Works in both recovering and down states.
+    // Works in recovering and down states.
     if ((this.healthState === 'recovering' || this.healthState === 'down') && this._shouldAccelerate(currentTime)) {
       this.deps.log(`Process signal acceleration: Claude restarted (health=${this.healthState}), verifying immediately`);
       this.signalDetectedAt = 0; // Consume the signal
@@ -155,6 +221,22 @@ export class HeartbeatEngine {
       return;
     }
 
+    if (this.healthState === 'rate_limited') {
+      // No kill+restart — restarting can't fix rate limits.
+      // Wait for cooldown to expire, then restart Claude and verify.
+      if (currentTime < this.cooldownUntil) {
+        return;
+      }
+      this.deps.log('Rate limit cooldown expired, restarting Claude for verification');
+      this.deps.killTmuxSession();
+      const ok = this.enqueueHeartbeat('rate-limit-recovery');
+      if (!ok) {
+        // Push cooldown forward to avoid retry storm
+        this.cooldownUntil = currentTime + 60;
+      }
+      return;
+    }
+
     if ((currentTime - this.lastHeartbeatAt) >= this.heartbeatInterval) {
       this.enqueueHeartbeat('primary');
     }
@@ -165,6 +247,9 @@ export class HeartbeatEngine {
     this.restartFailureCount = 0;
     this.recoveringStartedAt = 0;
     this.signalDetectedAt = 0;
+    this.cooldownUntil = 0;
+    this.rateLimitResetTime = '';
+    this.lastUserMessageRecoveryAt = 0;
     if (this.healthState !== 'ok') {
       this.setHealth('ok', `heartbeat_ack phase=${phase}`);
       this.deps.notifyPendingChannels();
@@ -177,6 +262,12 @@ export class HeartbeatEngine {
   triggerRecovery(reason) {
     if (this.healthState === 'down') {
       this.deps.log(`Heartbeat recovery skipped in DOWN state (${reason})`);
+      return;
+    }
+
+    // Don't kill+restart in rate_limited state — restarting can't fix rate limits
+    if (this.healthState === 'rate_limited') {
+      this.deps.log(`Heartbeat recovery skipped in RATE_LIMITED state (${reason})`);
       return;
     }
 
@@ -202,7 +293,16 @@ export class HeartbeatEngine {
 
   onHeartbeatFailure(pending, status) {
     const phase = pending.phase || 'primary';
+    const now = Math.floor(Date.now() / 1000);
     this.deps.clearHeartbeatPending();
+
+    // Rate-limit recovery heartbeat failed — rate limit likely still active.
+    // Re-enter rate_limited with a shorter retry (60s).
+    if (this.healthState === 'rate_limited') {
+      this.cooldownUntil = now + 60;
+      this.deps.log(`Rate-limit recovery heartbeat failed (${status}), retrying in 60s`);
+      return;
+    }
 
     // In ok state, any failure triggers recovery directly (no verify phase).
     // The verify phase was removed in v2 — stuck detection provides the

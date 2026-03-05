@@ -15,6 +15,7 @@ import {
   CONTENT_PREVIEW_CHARS,
   CLAUDE_STATUS_FILE,
   PENDING_CHANNELS_FILE,
+  USER_MESSAGE_SIGNAL_FILE,
   DATA_DIR
 } from './c4-config.js';
 
@@ -83,16 +84,16 @@ function parseArgs(args) {
 function readHealthStatus() {
   try {
     if (!fs.existsSync(CLAUDE_STATUS_FILE)) {
-      return 'ok';
+      return { health: 'ok' };
     }
     const status = JSON.parse(fs.readFileSync(CLAUDE_STATUS_FILE, 'utf8'));
     if (status && typeof status.health === 'string') {
-      return status.health;
+      return status;
     }
-    return 'ok';
+    return { health: 'ok' };
   } catch {
     // Fail-open by design: status read failures do not block intake.
-    return 'ok';
+    return { health: 'ok' };
   }
 }
 
@@ -199,13 +200,21 @@ function main() {
     }
   }
 
-  const health = readHealthStatus();
-  if (health !== 'ok') {
+  const status = readHealthStatus();
+  if (status.health !== 'ok') {
     recordPendingChannel(channel, endpoint);
-    if (health === 'down') {
+    if (status.health === 'down') {
       emitError(json, 'HEALTH_DOWN', "I'm currently offline and unable to recover on my own. Please let the admin know so they can take a look!");
+    } else if (status.health === 'rate_limited') {
+      // Signal activity-monitor that a user message arrived — may trigger early recovery
+      try {
+        fs.writeFileSync(USER_MESSAGE_SIGNAL_FILE, JSON.stringify({ timestamp: Math.floor(Date.now() / 1000), channel, endpoint }));
+      } catch { /* best-effort */ }
+      const resetInfo = status.rate_limit_reset ? ` I should be back around ${status.rate_limit_reset}.` : ' I should be back within an hour.';
+      emitError(json, 'HEALTH_RATE_LIMITED', `I've hit my usage limit.${resetInfo} Your message is saved — I'll follow up once I'm back!`);
+    } else {
+      emitError(json, 'HEALTH_RECOVERING', "I'm temporarily unavailable but should be back shortly. I'll reach out once I'm ready!");
     }
-    emitError(json, 'HEALTH_RECOVERING', "I'm temporarily unavailable but should be back shortly. I'll reach out once I'm ready!");
   }
 
   let replyViaSuffix = '';
