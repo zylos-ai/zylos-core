@@ -66,22 +66,8 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-# ── Resolve install ref ───────────────────────────────────────
-ZYLOS_REPO="https://github.com/zylos-ai/zylos-core"
-
-if [ -z "$BRANCH" ]; then
-  # No --branch specified: resolve latest release tag (stable version).
-  # Uses GitHub API (curl is available; git may not be installed yet).
-  LATEST_TAG="$(curl -fsSL "https://api.github.com/repos/zylos-ai/zylos-core/releases/latest" 2>/dev/null \
-    | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p')"
-  if [ -n "$LATEST_TAG" ]; then
-    BRANCH="$LATEST_TAG"
-  else
-    BRANCH="main"
-  fi
-fi
-
 # ── Configuration ─────────────────────────────────────────────
+ZYLOS_REPO="https://github.com/zylos-ai/zylos-core"
 NODE_VERSION="24"               # LTS-track major version
 MIN_NODE_MAJOR=20
 NVM_INSTALL_URL="https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh"
@@ -103,6 +89,20 @@ info()  { printf "${CYAN}[zylos]${NC} %s\n" "$*"; }
 ok()    { printf "${GREEN}[zylos]${NC} %s\n" "$*"; }
 warn()  { printf "${YELLOW}[zylos]${NC} %s\n" "$*"; }
 fail()  { printf "${RED}[zylos]${NC} %s\n" "$*" >&2; exit 1; }
+
+# ── Resolve install ref ───────────────────────────────────────
+if [ -z "$BRANCH" ]; then
+  # No --branch specified: resolve latest release tag (stable version).
+  # Uses GitHub API (curl is available; git may not be installed yet).
+  LATEST_TAG="$(curl -fsSL "https://api.github.com/repos/zylos-ai/zylos-core/releases/latest" 2>/dev/null \
+    | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p')"
+  if [ -n "$LATEST_TAG" ]; then
+    BRANCH="$LATEST_TAG"
+  else
+    warn "Could not resolve latest release (GitHub API may be rate-limited). Falling back to main branch."
+    BRANCH="main"
+  fi
+fi
 
 # ── OS Detection ──────────────────────────────────────────────
 detect_os() {
