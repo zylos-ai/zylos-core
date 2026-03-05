@@ -43,7 +43,9 @@ export class HeartbeatEngine {
     this.lastHeartbeatAt = Math.floor(Date.now() / 1000);
     this.lastRecoveryAt = 0;
     this.lastDownCheckAt = 0;
-    this.recoveringStartedAt = 0; // Tracks when recovering state began (for DOWN degradation)
+    // If resuming in recovering state (e.g., PM2 restart mid-recovery),
+    // initialize recoveringStartedAt so DOWN degradation timer works correctly.
+    this.recoveringStartedAt = this.healthState === 'recovering' ? Math.floor(Date.now() / 1000) : 0;
 
     // Process signal acceleration state
     this.lastClaudeRunning = null; // null = unknown (first tick)
@@ -111,13 +113,18 @@ export class HeartbeatEngine {
     }
 
     // Process signal acceleration: claudeRunning just transitioned false→true,
-    // grace period elapsed — send immediate heartbeat to verify recovery
-    if (this.healthState === 'recovering' && this._shouldAccelerate(currentTime)) {
-      this.deps.log(`Process signal acceleration: Claude restarted, verifying immediately`);
+    // grace period elapsed — send immediate heartbeat to verify recovery.
+    // Works in both recovering and down states.
+    if ((this.healthState === 'recovering' || this.healthState === 'down') && this._shouldAccelerate(currentTime)) {
+      this.deps.log(`Process signal acceleration: Claude restarted (health=${this.healthState}), verifying immediately`);
       this.signalDetectedAt = 0; // Consume the signal
-      const ok = this.enqueueHeartbeat('signal-recovery');
+      const phase = this.healthState === 'down' ? 'signal-down-check' : 'signal-recovery';
+      const ok = this.enqueueHeartbeat(phase);
       if (!ok) {
         this.lastRecoveryAt = Math.floor(Date.now() / 1000);
+      }
+      if (ok && this.healthState === 'down') {
+        this.lastDownCheckAt = currentTime;
       }
       return;
     }
@@ -173,21 +180,23 @@ export class HeartbeatEngine {
       return;
     }
 
+    const now = Math.floor(Date.now() / 1000);
+
     if (this.healthState === 'ok') {
       this.setHealth('recovering', reason);
-      this.recoveringStartedAt = Math.floor(Date.now() / 1000);
+      this.recoveringStartedAt = now;
     }
 
     this.restartFailureCount += 1;
-    this.lastRecoveryAt = Math.floor(Date.now() / 1000);
+    this.lastRecoveryAt = now;
     this.deps.log(`Heartbeat recovery attempt ${this.restartFailureCount} (${reason}), next backoff ${this.getBackoffDelay()}s`);
     this.deps.killTmuxSession();
 
     // Degrade to DOWN after continuous failure exceeds threshold
-    if (this.recoveringStartedAt > 0 &&
-        (Math.floor(Date.now() / 1000) - this.recoveringStartedAt) >= this.downDegradeThreshold) {
-      this.lastDownCheckAt = Math.floor(Date.now() / 1000);
-      this.setHealth('down', `continuous_failure_for_${Math.floor(Date.now() / 1000) - this.recoveringStartedAt}s`);
+    const failureDuration = now - this.recoveringStartedAt;
+    if (this.recoveringStartedAt > 0 && failureDuration >= this.downDegradeThreshold) {
+      this.lastDownCheckAt = now;
+      this.setHealth('down', `continuous_failure_for_${failureDuration}s`);
     }
   }
 
@@ -248,7 +257,7 @@ export class HeartbeatEngine {
     this.lastClaudeRunning = claudeRunning;
 
     // Detect false→true transition (skip null→true on first tick)
-    if (prev === false && claudeRunning === true && this.healthState === 'recovering') {
+    if (prev === false && claudeRunning === true && (this.healthState === 'recovering' || this.healthState === 'down')) {
       this.signalDetectedAt = currentTime;
       this.deps.log(`Process signal: claudeRunning false→true, grace period ${this.signalGracePeriod}s`);
     }

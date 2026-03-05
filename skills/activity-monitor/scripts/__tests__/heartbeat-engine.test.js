@@ -273,6 +273,16 @@ describe('HeartbeatEngine', () => {
       assert.equal(engine.health, 'down');
     });
 
+    it('initializes recoveringStartedAt when resuming in recovering state', () => {
+      const { deps } = createMockDeps();
+      const engine = new HeartbeatEngine(deps, { initialHealth: 'recovering', downDegradeThreshold: 100 });
+
+      // recoveringStartedAt should be set to ~now, not 0
+      assert.ok(engine.recoveringStartedAt > 0);
+      const diff = Math.abs(engine.recoveringStartedAt - Math.floor(Date.now() / 1000));
+      assert.ok(diff <= 1);
+    });
+
     it('stays recovering when within downDegradeThreshold', () => {
       const { deps } = createMockDeps();
       const engine = new HeartbeatEngine(deps, { downDegradeThreshold: 3600 });
@@ -458,6 +468,20 @@ describe('HeartbeatEngine', () => {
 
       // Health is ok, signal should not be recorded
       assert.equal(engine.signalDetectedAt, 0);
+    });
+
+    it('works in DOWN state too', () => {
+      const { deps, calls } = createMockDeps();
+      const engine = new HeartbeatEngine(deps, { initialHealth: 'down', signalGracePeriod: 10 });
+      const now = Math.floor(Date.now() / 1000);
+      engine.lastDownCheckAt = now; // prevent regular down-check from firing
+
+      engine.processHeartbeat(false, now);
+      engine.processHeartbeat(true, now + 1);
+      assert.ok(engine.signalDetectedAt > 0);
+
+      engine.processHeartbeat(true, now + 15); // grace elapsed
+      assert.ok(calls.enqueueHeartbeat.includes('signal-down-check'));
     });
 
     it('consumes signal after acceleration fires', () => {
