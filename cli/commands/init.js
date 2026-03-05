@@ -1832,8 +1832,15 @@ export async function initCommand(args) {
           process.removeAllListeners('SIGINT');
           process.on('SIGINT', () => {});
           try {
-            const authChild = spawn('claude', [], { stdio: 'inherit' });
-            await new Promise((resolve) => authChild.on('close', resolve));
+            // On macOS, spawning Claude from a curl|bash pipeline leaves stdin
+            // in a state where ink's TUI can't receive keyboard input — even with
+            // /dev/tty redirects. Use `script` to allocate a fresh pseudo-terminal
+            // that gives Claude full terminal control.
+            if (process.platform === 'darwin') {
+              spawnSync('script', ['-q', '/dev/null', 'claude'], { stdio: 'inherit' });
+            } else {
+              spawnSync('claude', [], { stdio: 'inherit' });
+            }
           } catch { /* user may Ctrl+C */ }
           process.removeAllListeners('SIGINT');
           for (const l of sigintListeners) process.on('SIGINT', l);
