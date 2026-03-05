@@ -78,7 +78,7 @@ Browser ──► Web Console Server ──► C4 Bridge ──► Claude
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `WEB_CONSOLE_PORT` | 3456 | Server port |
-| `WEB_CONSOLE_PASSWORD` | (empty) | Set to enable password protection |
+| `ZYLOS_WEB_PASSWORD` | (empty) | Set to enable password protection (also reads `WEB_CONSOLE_PASSWORD` as fallback) |
 | `WEB_CONSOLE_BIND` | 127.0.0.1 | Bind address |
 | `ZYLOS_DIR` | ~/zylos | Data directory |
 
@@ -87,7 +87,7 @@ Browser ──► Web Console Server ──► C4 Bridge ──► Claude
 By default, no password is required (suitable for local access).
 
 To enable password protection (recommended when exposing externally):
-1. Set `WEB_CONSOLE_PASSWORD` in `~/zylos/.env`
+1. Set `ZYLOS_WEB_PASSWORD` in `~/zylos/.env`
 2. Restart the web-console service
 
 ## Features

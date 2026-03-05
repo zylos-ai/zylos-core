@@ -44,7 +44,7 @@ function readEnvPassword() {
   const envPath = path.join(ZYLOS_DIR, '.env');
   try {
     const env = parseDotenv(fs.readFileSync(envPath, 'utf8'));
-    return env.WEB_CONSOLE_PASSWORD || '';
+    return env.ZYLOS_WEB_PASSWORD || env.WEB_CONSOLE_PASSWORD || '';
   } catch {
     return '';
   }
