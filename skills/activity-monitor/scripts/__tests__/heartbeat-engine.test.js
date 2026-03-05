@@ -72,7 +72,6 @@ describe('HeartbeatEngine', () => {
 
       engine.processHeartbeat(true, currentTime);
 
-      // lastHeartbeatAt should be updated to ~now
       const diff = Math.abs(engine.lastHeartbeatAt - Math.floor(Date.now() / 1000));
       assert.ok(diff <= 1, `lastHeartbeatAt should be updated to current time, diff=${diff}`);
     });
@@ -127,6 +126,18 @@ describe('HeartbeatEngine', () => {
 
       assert.ok(engine.lastHeartbeatAt > 0);
     });
+
+    it('resets recoveringStartedAt on success', () => {
+      const { deps } = createMockDeps();
+      deps._pending = { control_id: 1, phase: 'recovery' };
+      deps._heartbeatStatus = 'done';
+      const engine = new HeartbeatEngine(deps, { initialHealth: 'recovering' });
+      engine.recoveringStartedAt = 1000;
+
+      engine.processHeartbeat(true, Math.floor(Date.now() / 1000));
+
+      assert.equal(engine.recoveringStartedAt, 0);
+    });
   });
 
   describe('primary failure triggers direct recovery (no verify)', () => {
@@ -151,7 +162,6 @@ describe('HeartbeatEngine', () => {
 
       engine.processHeartbeat(true, Math.floor(Date.now() / 1000));
 
-      // Should NOT have 'verify' in the enqueue calls
       assert.ok(!calls.enqueueHeartbeat.includes('verify'));
     });
   });
@@ -171,35 +181,118 @@ describe('HeartbeatEngine', () => {
     });
   });
 
-  describe('recovery failure leads to down', () => {
-    it('transitions to down after max restart failures', () => {
-      const { deps, calls } = createMockDeps();
-      const engine = new HeartbeatEngine(deps, {
-        initialHealth: 'recovering',
-        maxRestartFailures: 3
-      });
+  describe('exponential backoff', () => {
+    it('calculates correct backoff delays', () => {
+      const { deps } = createMockDeps();
+      const engine = new HeartbeatEngine(deps);
 
+      engine.restartFailureCount = 0;
+      assert.equal(engine.getBackoffDelay(), 0);
+
+      engine.restartFailureCount = 1;
+      assert.equal(engine.getBackoffDelay(), 60); // 60 * 5^0 = 60
+
+      engine.restartFailureCount = 2;
+      assert.equal(engine.getBackoffDelay(), 300); // 60 * 5^1 = 300
+
+      engine.restartFailureCount = 3;
+      assert.equal(engine.getBackoffDelay(), 1500); // 60 * 5^2 = 1500
+
+      engine.restartFailureCount = 4;
+      assert.equal(engine.getBackoffDelay(), 3600); // min(3600, 60 * 5^3) = 3600
+
+      engine.restartFailureCount = 10;
+      assert.equal(engine.getBackoffDelay(), 3600); // capped
+    });
+
+    it('delays recovery heartbeat during exponential backoff period', () => {
+      const { deps, calls } = createMockDeps();
+      const engine = new HeartbeatEngine(deps, { initialHealth: 'recovering' });
+      const now = Math.floor(Date.now() / 1000);
+      engine.restartFailureCount = 2; // backoff = 300s
+      engine.lastRecoveryAt = now - 60; // only 60s ago
+
+      engine.processHeartbeat(true, now);
+
+      assert.deepStrictEqual(calls.enqueueHeartbeat, []);
+    });
+
+    it('allows recovery heartbeat after backoff period', () => {
+      const { deps, calls } = createMockDeps();
+      const engine = new HeartbeatEngine(deps, { initialHealth: 'recovering' });
+      const now = Math.floor(Date.now() / 1000);
+      engine.restartFailureCount = 2; // backoff = 300s
+      engine.lastRecoveryAt = now - 301;
+
+      engine.processHeartbeat(true, now);
+
+      assert.deepStrictEqual(calls.enqueueHeartbeat, ['recovery']);
+    });
+
+    it('caps backoff at 3600 seconds', () => {
+      const { deps, calls } = createMockDeps();
+      const engine = new HeartbeatEngine(deps, { initialHealth: 'recovering' });
+      const now = Math.floor(Date.now() / 1000);
+      engine.restartFailureCount = 10;
+      engine.lastRecoveryAt = now - 3601;
+
+      engine.processHeartbeat(true, now);
+
+      assert.deepStrictEqual(calls.enqueueHeartbeat, ['recovery']);
+    });
+
+    it('retries indefinitely in recovering state (no max failures)', () => {
+      const { deps, calls } = createMockDeps();
+      const engine = new HeartbeatEngine(deps, { initialHealth: 'recovering', downDegradeThreshold: 999999 });
+
+      // Simulate 20 failures — should stay in recovering (not down)
+      for (let i = 0; i < 20; i++) {
+        engine.triggerRecovery(`fail_${i}`);
+      }
+
+      assert.equal(engine.health, 'recovering');
+      assert.equal(engine.restartFailureCount, 20);
+      assert.equal(calls.killTmuxSession, 20);
+    });
+  });
+
+  describe('DOWN degradation after continuous failure', () => {
+    it('transitions to down after downDegradeThreshold exceeded', () => {
+      const { deps } = createMockDeps();
+      const engine = new HeartbeatEngine(deps, { downDegradeThreshold: 100 });
+
+      // First failure: sets recoveringStartedAt
       engine.triggerRecovery('fail_1');
       assert.equal(engine.health, 'recovering');
-      assert.equal(calls.killTmuxSession, 1);
+      assert.ok(engine.recoveringStartedAt > 0);
 
-      engine.triggerRecovery('fail_2');
-      assert.equal(engine.health, 'recovering');
-      assert.equal(calls.killTmuxSession, 2);
+      // Simulate time passing beyond threshold by backdating recoveringStartedAt
+      engine.recoveringStartedAt = Math.floor(Date.now() / 1000) - 101;
 
-      engine.triggerRecovery('fail_3');
+      engine.triggerRecovery('fail_late');
       assert.equal(engine.health, 'down');
-      assert.equal(calls.killTmuxSession, 3);
-      assert.equal(engine.restartFailureCount, 3);
+    });
+
+    it('stays recovering when within downDegradeThreshold', () => {
+      const { deps } = createMockDeps();
+      const engine = new HeartbeatEngine(deps, { downDegradeThreshold: 3600 });
+
+      engine.triggerRecovery('fail_1');
+      engine.triggerRecovery('fail_2');
+      engine.triggerRecovery('fail_3');
+      engine.triggerRecovery('fail_4');
+
+      // All within same second, well under 3600s threshold
+      assert.equal(engine.health, 'recovering');
     });
   });
 
   describe('down state behavior', () => {
     it('enqueues down-check after retry interval', () => {
       const { deps, calls } = createMockDeps();
-      const engine = new HeartbeatEngine(deps, { initialHealth: 'down', downRetryInterval: 1800 });
+      const engine = new HeartbeatEngine(deps, { initialHealth: 'down', downRetryInterval: 3600 });
       const now = Math.floor(Date.now() / 1000);
-      engine.lastDownCheckAt = now - 1801;
+      engine.lastDownCheckAt = now - 3601;
 
       engine.processHeartbeat(true, now);
 
@@ -208,9 +301,9 @@ describe('HeartbeatEngine', () => {
 
     it('skips down-check during retry cooldown', () => {
       const { deps, calls } = createMockDeps();
-      const engine = new HeartbeatEngine(deps, { initialHealth: 'down', downRetryInterval: 1800 });
+      const engine = new HeartbeatEngine(deps, { initialHealth: 'down', downRetryInterval: 3600 });
       const now = Math.floor(Date.now() / 1000);
-      engine.lastDownCheckAt = now - 60; // only 60s ago
+      engine.lastDownCheckAt = now - 60;
 
       engine.processHeartbeat(true, now);
 
@@ -273,6 +366,16 @@ describe('HeartbeatEngine', () => {
       assert.equal(engine.health, 'recovering');
     });
 
+    it('sets recoveringStartedAt on first recovery', () => {
+      const { deps } = createMockDeps();
+      const engine = new HeartbeatEngine(deps);
+      assert.equal(engine.recoveringStartedAt, 0);
+
+      engine.triggerRecovery('test');
+
+      assert.ok(engine.recoveringStartedAt > 0);
+    });
+
     it('sets lastRecoveryAt on recovery', () => {
       const { deps } = createMockDeps();
       const engine = new HeartbeatEngine(deps);
@@ -281,17 +384,6 @@ describe('HeartbeatEngine', () => {
       engine.triggerRecovery('test');
 
       assert.ok(engine.lastRecoveryAt > 0);
-    });
-
-    it('sets lastDownCheckAt when entering down state', () => {
-      const { deps } = createMockDeps();
-      const engine = new HeartbeatEngine(deps, { maxRestartFailures: 1 });
-      assert.equal(engine.lastDownCheckAt, 0);
-
-      engine.triggerRecovery('test');
-
-      assert.equal(engine.health, 'down');
-      assert.ok(engine.lastDownCheckAt > 0);
     });
 
     it('does nothing in down state', () => {
@@ -312,6 +404,84 @@ describe('HeartbeatEngine', () => {
       engine.triggerRecovery('my_reason');
 
       assert.ok(calls.log.some(m => m.includes('DOWN') && m.includes('my_reason')));
+    });
+
+    it('logs backoff delay in recovery message', () => {
+      const { deps, calls } = createMockDeps();
+      const engine = new HeartbeatEngine(deps);
+
+      engine.triggerRecovery('test');
+
+      assert.ok(calls.log.some(m => m.includes('next backoff')));
+    });
+  });
+
+  describe('process signal acceleration', () => {
+    it('sends immediate probe after grace period when claudeRunning transitions false→true', () => {
+      const { deps, calls } = createMockDeps();
+      const engine = new HeartbeatEngine(deps, { initialHealth: 'recovering', signalGracePeriod: 30 });
+      const now = Math.floor(Date.now() / 1000);
+      engine.restartFailureCount = 3;
+      engine.lastRecoveryAt = now; // just recovered, backoff would be 1500s
+
+      // First tick: claudeRunning = false (establishes baseline)
+      engine.processHeartbeat(false, now);
+
+      // Second tick: claudeRunning = true (transition detected)
+      engine.processHeartbeat(true, now + 1);
+      assert.ok(engine.signalDetectedAt > 0);
+      // Should NOT have sent probe yet (grace period not elapsed)
+      assert.ok(!calls.enqueueHeartbeat.includes('signal-recovery'));
+
+      // Third tick: grace period elapsed
+      engine.processHeartbeat(true, now + 31);
+      assert.ok(calls.enqueueHeartbeat.includes('signal-recovery'));
+    });
+
+    it('does not trigger on null→true (first tick)', () => {
+      const { deps, calls } = createMockDeps();
+      const engine = new HeartbeatEngine(deps, { initialHealth: 'recovering', signalGracePeriod: 5 });
+      const now = Math.floor(Date.now() / 1000);
+
+      // First tick ever: null→true should NOT trigger
+      engine.processHeartbeat(true, now);
+      assert.equal(engine.signalDetectedAt, 0);
+    });
+
+    it('does not trigger when health is ok', () => {
+      const { deps } = createMockDeps();
+      const engine = new HeartbeatEngine(deps, { signalGracePeriod: 5 });
+      const now = Math.floor(Date.now() / 1000);
+
+      engine.processHeartbeat(false, now);
+      engine.processHeartbeat(true, now + 1);
+
+      // Health is ok, signal should not be recorded
+      assert.equal(engine.signalDetectedAt, 0);
+    });
+
+    it('consumes signal after acceleration fires', () => {
+      const { deps } = createMockDeps();
+      const engine = new HeartbeatEngine(deps, { initialHealth: 'recovering', signalGracePeriod: 5 });
+      const now = Math.floor(Date.now() / 1000);
+
+      engine.processHeartbeat(false, now);
+      engine.processHeartbeat(true, now + 1);
+      engine.processHeartbeat(true, now + 10); // grace elapsed, fires
+
+      assert.equal(engine.signalDetectedAt, 0); // consumed
+    });
+
+    it('resets signalDetectedAt on heartbeat success', () => {
+      const { deps } = createMockDeps();
+      deps._pending = { control_id: 1, phase: 'signal-recovery' };
+      deps._heartbeatStatus = 'done';
+      const engine = new HeartbeatEngine(deps, { initialHealth: 'recovering' });
+      engine.signalDetectedAt = 1000;
+
+      engine.processHeartbeat(true, Math.floor(Date.now() / 1000));
+
+      assert.equal(engine.signalDetectedAt, 0);
     });
   });
 
@@ -427,42 +597,6 @@ describe('HeartbeatEngine', () => {
       const engine = new HeartbeatEngine(deps, { initialHealth: 'recovering' });
 
       engine.processHeartbeat(true, Math.floor(Date.now() / 1000));
-
-      assert.deepStrictEqual(calls.enqueueHeartbeat, ['recovery']);
-    });
-
-    it('delays recovery heartbeat during backoff period', () => {
-      const { deps, calls } = createMockDeps();
-      const engine = new HeartbeatEngine(deps, { initialHealth: 'recovering' });
-      const now = Math.floor(Date.now() / 1000);
-      engine.restartFailureCount = 2; // backoff = min(2*60, 300) = 120s
-      engine.lastRecoveryAt = now - 60; // only 60s ago
-
-      engine.processHeartbeat(true, now);
-
-      assert.deepStrictEqual(calls.enqueueHeartbeat, []);
-    });
-
-    it('allows recovery heartbeat after backoff period', () => {
-      const { deps, calls } = createMockDeps();
-      const engine = new HeartbeatEngine(deps, { initialHealth: 'recovering' });
-      const now = Math.floor(Date.now() / 1000);
-      engine.restartFailureCount = 2; // backoff = 120s
-      engine.lastRecoveryAt = now - 121; // 121s ago > 120s
-
-      engine.processHeartbeat(true, now);
-
-      assert.deepStrictEqual(calls.enqueueHeartbeat, ['recovery']);
-    });
-
-    it('caps backoff at 300 seconds', () => {
-      const { deps, calls } = createMockDeps();
-      const engine = new HeartbeatEngine(deps, { initialHealth: 'recovering' });
-      const now = Math.floor(Date.now() / 1000);
-      engine.restartFailureCount = 10; // backoff = min(10*60, 300) = 300s
-      engine.lastRecoveryAt = now - 301;
-
-      engine.processHeartbeat(true, now);
 
       assert.deepStrictEqual(calls.enqueueHeartbeat, ['recovery']);
     });

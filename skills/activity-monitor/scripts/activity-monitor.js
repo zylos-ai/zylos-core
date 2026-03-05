@@ -1,6 +1,13 @@
 #!/usr/bin/env node
 /**
- * Activity Monitor v17 - Guardian + Heartbeat v2 + Health Check + Daily Tasks + Upgrade Check + Usage Monitor
+ * Activity Monitor v18 - Guardian + Heartbeat v3 + Health Check + Daily Tasks + Upgrade Check + Usage Monitor
+ *
+ * v18 changes (exponential backoff + process signal acceleration — #177):
+ *   - Exponential backoff: min(3600, 60 × 5^(n-1)) → 1m, 5m, 25m, 60m cap
+ *   - Infinite retries in recovering state (no max restart failures limit)
+ *   - DOWN degradation: after 1 hour of continuous failure (configurable)
+ *   - DOWN retry interval: 60 min (up from 30 min)
+ *   - Process signal acceleration: claudeRunning false→true + 30s grace → immediate probe
  *
  * v17 changes (plan usage monitoring — #206):
  *   - Add usage monitoring: periodically checks /usage via tmux capture during idle
@@ -123,8 +130,9 @@ const BACKOFF_RESET_THRESHOLD = 60; // Claude must stay running this long before
 const HEARTBEAT_INTERVAL = 7200;     // 2 hours (safety-net; stuck detection is the primary mechanism)
 const ACK_DEADLINE = 300;            // 5 min (regular heartbeat timeout)
 const STUCK_ACK_DEADLINE = 120;      // 2 min (stuck probe timeout)
-const MAX_RESTART_FAILURES = 3;
-const DOWN_RETRY_INTERVAL = 1800;   // 30 min periodic retry in DOWN state
+const DOWN_DEGRADE_THRESHOLD = 3600; // 1 hour of continuous failure → enter DOWN
+const DOWN_RETRY_INTERVAL = 3600;    // 60 min periodic retry in DOWN state
+const SIGNAL_GRACE_PERIOD = 30;      // Wait 30s after claudeRunning transitions before probing
 
 // Stuck detection config
 const STUCK_THRESHOLD = 300;         // 5 min of no activity → trigger immediate probe
@@ -1526,8 +1534,9 @@ function init() {
   }, {
     initialHealth,
     heartbeatInterval: HEARTBEAT_INTERVAL,
-    maxRestartFailures: MAX_RESTART_FAILURES,
-    downRetryInterval: DOWN_RETRY_INTERVAL
+    downDegradeThreshold: DOWN_DEGRADE_THRESHOLD,
+    downRetryInterval: DOWN_RETRY_INTERVAL,
+    signalGracePeriod: SIGNAL_GRACE_PERIOD
   });
 
   upgradeScheduler = new DailySchedule({
@@ -1579,7 +1588,7 @@ function init() {
 }
 
 init();
-log(`=== Activity Monitor Started (v17 - Guardian + Heartbeat v2 + Hook Activity + DailyTasks + UpgradeCheck + UsageMonitor): ${new Date().toISOString()} tz=${timezone} ===`);
+log(`=== Activity Monitor Started (v18 - Guardian + Heartbeat v3 + Hook Activity + DailyTasks + UpgradeCheck + UsageMonitor): ${new Date().toISOString()} tz=${timezone} ===`);
 
 setInterval(monitorLoop, INTERVAL);
 monitorLoop();
