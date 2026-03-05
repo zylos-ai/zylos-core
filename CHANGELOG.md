@@ -5,6 +5,19 @@ All notable changes to zylos-core will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.4] - 2026-03-05
+
+### Added
+- **Exponential backoff for activity monitor**: replaces fixed 30-second retry with exponential backoff (30s → 60s → 120s → 240s, max 5 min) when Claude crashes or exits unexpectedly. Backoff resets after 60 seconds of stable runtime. Process signals (SIGTERM → SIGKILL escalation) ensure clean restarts. Includes 50 tests (#241, closes #177)
+- **RATE_LIMITED health state**: activity monitor now detects Anthropic rate-limit responses (429/529), enters a dedicated `RATE_LIMITED` state with parsed reset time, and automatically recovers — either when the reset time expires or when a user message arrives (whichever comes first). Channel bots show human-readable wait times. Includes 67 tests (#242, closes #233)
+
+### Fixed
+- **Install script defaults to latest release tag**: `install.sh` without `--branch` now installs the latest GitHub release tag instead of `main`, preventing accidental installation of unreleased code (#239)
+- **macOS curl|bash install PTY issue**: `zylos init` failed to authenticate on macOS when run via `curl | bash` because stdin was a pipe, not a TTY. Now allocates a fresh PTY for the Claude auth step (#231)
+- **Component routes inserted into wrong Caddy block**: `zylos install` placed reverse_proxy routes outside the primary server block, causing Caddy to reject the config. Now correctly inserts into the main HTTPS block (#236)
+- **Built-in registry lark description**: clarified "Lark/Feishu" → "Lark (international)" to prevent confusion with the separate `feishu` component (#244)
+- **Web console password env var mismatch**: `zylos init` wrote `ZYLOS_WEB_PASSWORD` but `server.js` only read `WEB_CONSOLE_PASSWORD`. Now reads `ZYLOS_WEB_PASSWORD` with fallback to legacy name for backward compatibility (#248)
+
 ## [0.3.3] - 2026-03-04
 
 ### Added
