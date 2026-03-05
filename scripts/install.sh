@@ -24,7 +24,7 @@ set -euo pipefail
 _main() {
 
 # ── Parse Arguments ───────────────────────────────────────────
-BRANCH="main"
+BRANCH=""
 NO_INIT=false
 INIT_ARGS=()
 while [ $# -gt 0 ]; do
@@ -66,8 +66,22 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-# ── Configuration ─────────────────────────────────────────────
+# ── Resolve install ref ───────────────────────────────────────
 ZYLOS_REPO="https://github.com/zylos-ai/zylos-core"
+
+if [ -z "$BRANCH" ]; then
+  # No --branch specified: resolve latest release tag (stable version).
+  # Uses GitHub API (curl is available; git may not be installed yet).
+  LATEST_TAG="$(curl -fsSL "https://api.github.com/repos/zylos-ai/zylos-core/releases/latest" 2>/dev/null \
+    | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p')"
+  if [ -n "$LATEST_TAG" ]; then
+    BRANCH="$LATEST_TAG"
+  else
+    BRANCH="main"
+  fi
+fi
+
+# ── Configuration ─────────────────────────────────────────────
 NODE_VERSION="24"               # LTS-track major version
 MIN_NODE_MAJOR=20
 NVM_INSTALL_URL="https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh"
@@ -281,11 +295,7 @@ install_zylos() {
   fi
 
   local install_url="${ZYLOS_REPO}#${BRANCH}"
-  if [ "$BRANCH" = "main" ]; then
-    info "Installing zylos from GitHub (this may take a minute)..."
-  else
-    info "Installing zylos from GitHub (branch: ${BRANCH})..."
-  fi
+  info "Installing zylos from GitHub (${BRANCH})..."
 
   # If npm global prefix is not user-writable (system-installed node),
   # use sudo for npm install -g
