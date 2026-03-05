@@ -1142,32 +1142,16 @@ function detectRateLimit() {
     /you['']re out of .* usage/i,
     /rate limit/i,
     /usage limit reached/i,
-    /you['']ve hit your limit/i,
-    /resets?\s+(?:at\s+)?(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)/i
+    /you['']ve hit your limit/i
   ];
 
-  let detected = false;
-  let resetTime = '';
-
-  for (const pattern of rateLimitPatterns) {
-    const match = pane.match(pattern);
-    if (match) {
-      detected = true;
-      // Try to extract reset time from the matching pattern
-      if (match[1]) {
-        resetTime = match[1].trim();
-      }
-      break;
-    }
-  }
-
+  const detected = rateLimitPatterns.some(p => p.test(pane));
   if (!detected) return { detected: false };
 
-  // Also try to find a reset time mentioned elsewhere in the pane
-  if (!resetTime) {
-    const timeMatch = pane.match(/resets?\s+(?:at\s+)?(\d{1,2}(?::\d{2})?\s*(?:am|pm))/i);
-    if (timeMatch) resetTime = timeMatch[1].trim();
-  }
+  // Extract reset time if mentioned anywhere in the pane
+  let resetTime = '';
+  const timeMatch = pane.match(/resets?\s+(?:at\s+)?(\d{1,2}(?::\d{2})?\s*(?:am|pm))/i);
+  if (timeMatch) resetTime = timeMatch[1].trim();
 
   // Calculate cooldownUntil from parsed reset time or use default
   const now = Math.floor(Date.now() / 1000);
