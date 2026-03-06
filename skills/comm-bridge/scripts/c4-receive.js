@@ -212,9 +212,9 @@ function main() {
       emitError(json, 'HEALTH_DOWN', "I'm currently offline and unable to recover on my own. Please let the admin know so they can take a look!");
     } else if (status.health === 'rate_limited') {
       const resetInfo = status.rate_limit_reset ? ` I should be back around ${status.rate_limit_reset}.` : ' I should be back within an hour.';
-      emitError(json, 'HEALTH_RATE_LIMITED', `I've hit my usage limit.${resetInfo} Your message is saved — I'll follow up once I'm back!`);
+      emitError(json, 'HEALTH_RATE_LIMITED', `I've hit my usage limit.${resetInfo} Please send your message again after I'm back!`);
     } else {
-      emitError(json, 'HEALTH_RECOVERING', "I'm temporarily unavailable but should be back shortly. I'll reach out once I'm ready!");
+      emitError(json, 'HEALTH_RECOVERING', "I'm temporarily unavailable but should be back shortly. Please try again in a moment!");
     }
   }
 
