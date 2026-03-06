@@ -38,7 +38,7 @@ export class HeartbeatEngine {
    * @param {number} [options.downRetryInterval=3600] - Seconds between DOWN-state probes
    * @param {number} [options.signalGracePeriod=30] - Seconds to wait after claudeRunning transitions before probing
    * @param {number} [options.rateLimitDefaultCooldown=3600] - Default cooldown when reset time can't be parsed
-   * @param {number} [options.userMessageRecoveryCooldown=300] - Min seconds between user-message-triggered recoveries
+   * @param {number} [options.userMessageRecoveryCooldown=60] - Min seconds between user-message-triggered recoveries
    * @param {string} [options.initialHealth='ok']
    */
   constructor(deps, options = {}) {
@@ -48,7 +48,7 @@ export class HeartbeatEngine {
     this.downRetryInterval = options.downRetryInterval ?? 3600; // 1 hour
     this.signalGracePeriod = options.signalGracePeriod ?? 30;
     this.rateLimitDefaultCooldown = options.rateLimitDefaultCooldown ?? 3600; // 1 hour
-    this.userMessageRecoveryCooldown = options.userMessageRecoveryCooldown ?? 300; // 5 min
+    this.userMessageRecoveryCooldown = options.userMessageRecoveryCooldown ?? 60; // 1 min
 
     // Internal state
     this.healthState = options.initialHealth ?? 'ok';
