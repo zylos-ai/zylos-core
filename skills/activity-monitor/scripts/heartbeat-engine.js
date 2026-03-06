@@ -174,6 +174,21 @@ export class HeartbeatEngine {
       return;
     }
 
+    // Rate-limited recovery: must be checked BEFORE the !claudeRunning early
+    // return. After cooldown expires Claude is not running (tmux was killed),
+    // so the early return would skip this block and cause a deadlock (#252).
+    if (this.healthState === 'rate_limited') {
+      if (currentTime < this.cooldownUntil) {
+        return;
+      }
+      this.deps.log('Rate limit cooldown expired, transitioning to recovering');
+      this.deps.killTmuxSession();
+      this.cooldownUntil = 0;
+      this.setHealth('recovering', 'rate_limit_cooldown_expired');
+      // Guardian will now restart Claude since health !== 'rate_limited'
+      return;
+    }
+
     if (!claudeRunning) {
       return;
     }
@@ -221,22 +236,6 @@ export class HeartbeatEngine {
       return;
     }
 
-    if (this.healthState === 'rate_limited') {
-      // No kill+restart — restarting can't fix rate limits.
-      // Wait for cooldown to expire, then restart Claude and verify.
-      if (currentTime < this.cooldownUntil) {
-        return;
-      }
-      this.deps.log('Rate limit cooldown expired, restarting Claude for verification');
-      this.deps.killTmuxSession();
-      const ok = this.enqueueHeartbeat('rate-limit-recovery');
-      if (!ok) {
-        // Push cooldown forward to avoid retry storm
-        this.cooldownUntil = currentTime + 60;
-      }
-      return;
-    }
-
     if ((currentTime - this.lastHeartbeatAt) >= this.heartbeatInterval) {
       this.enqueueHeartbeat('primary');
     }
@@ -265,12 +264,6 @@ export class HeartbeatEngine {
       return;
     }
 
-    // Don't kill+restart in rate_limited state — restarting can't fix rate limits
-    if (this.healthState === 'rate_limited') {
-      this.deps.log(`Heartbeat recovery skipped in RATE_LIMITED state (${reason})`);
-      return;
-    }
-
     const now = Math.floor(Date.now() / 1000);
 
     if (this.healthState === 'ok') {
@@ -295,14 +288,6 @@ export class HeartbeatEngine {
     const phase = pending.phase || 'primary';
     const now = Math.floor(Date.now() / 1000);
     this.deps.clearHeartbeatPending();
-
-    // Rate-limit recovery heartbeat failed — rate limit likely still active.
-    // Re-enter rate_limited with a shorter retry (60s).
-    if (this.healthState === 'rate_limited') {
-      this.cooldownUntil = now + 60;
-      this.deps.log(`Rate-limit recovery heartbeat failed (${status}), retrying in 60s`);
-      return;
-    }
 
     // In ok state, any failure triggers recovery directly (no verify phase).
     // The verify phase was removed in v2 — stuck detection provides the
