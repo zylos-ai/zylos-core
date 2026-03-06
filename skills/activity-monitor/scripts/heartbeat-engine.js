@@ -174,6 +174,21 @@ export class HeartbeatEngine {
       return;
     }
 
+    // Rate-limited recovery: must be checked BEFORE the !claudeRunning early
+    // return. After cooldown expires Claude is not running (tmux was killed),
+    // so the early return would skip this block and cause a deadlock (#252).
+    if (this.healthState === 'rate_limited') {
+      if (currentTime < this.cooldownUntil) {
+        return;
+      }
+      this.deps.log('Rate limit cooldown expired, transitioning to recovering');
+      this.deps.killTmuxSession();
+      this.cooldownUntil = 0;
+      this.setHealth('recovering', 'rate_limit_cooldown_expired');
+      // Guardian will now restart Claude since health !== 'rate_limited'
+      return;
+    }
+
     if (!claudeRunning) {
       return;
     }
@@ -217,22 +232,6 @@ export class HeartbeatEngine {
       const ok = this.enqueueHeartbeat('down-check');
       if (ok) {
         this.lastDownCheckAt = currentTime;
-      }
-      return;
-    }
-
-    if (this.healthState === 'rate_limited') {
-      // No kill+restart — restarting can't fix rate limits.
-      // Wait for cooldown to expire, then restart Claude and verify.
-      if (currentTime < this.cooldownUntil) {
-        return;
-      }
-      this.deps.log('Rate limit cooldown expired, restarting Claude for verification');
-      this.deps.killTmuxSession();
-      const ok = this.enqueueHeartbeat('rate-limit-recovery');
-      if (!ok) {
-        // Push cooldown forward to avoid retry storm
-        this.cooldownUntil = currentTime + 60;
       }
       return;
     }
