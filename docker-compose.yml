@@ -1,0 +1,87 @@
+version: "3.9"
+
+# ────────────────────────────────────────────────────────────────────────────
+# Zylos — Docker Compose
+#
+# Quick start:
+#   1. cp .env.example .env && edit .env
+#   2. docker compose up -d
+#   3. docker compose logs -f
+#
+# Upgrading:
+#   docker compose pull && docker compose up -d
+# ────────────────────────────────────────────────────────────────────────────
+
+services:
+  zylos:
+    image: ghcr.io/zylos-ai/zylos-core:latest
+    # Or build locally:
+    # build: .
+    container_name: zylos
+    restart: unless-stopped
+
+    # ── Authentication (required — choose ONE) ──────────────────────────────
+    environment:
+      # Option A: Anthropic API key (usage-based billing)
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      # Option B: Claude Code OAuth token (Pro/Max subscription)
+      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
+
+      # ── Core config ───────────────────────────────────────────────────────
+      TZ: ${TZ:-UTC}
+      CLAUDE_BYPASS_PERMISSIONS: ${CLAUDE_BYPASS_PERMISSIONS:-true}
+
+      # ── Channel tokens (optional) ─────────────────────────────────────────
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      LARK_APP_ID: ${LARK_APP_ID:-}
+      LARK_APP_SECRET: ${LARK_APP_SECRET:-}
+      ZYLOS_WEB_PASSWORD: ${ZYLOS_WEB_PASSWORD:-}
+
+    # ── Ports ────────────────────────────────────────────────────────────────
+    ports:
+      # Web console (default: 3456)
+      - "${WEB_CONSOLE_PORT:-3456}:3456"
+      # Caddy / reverse proxy (optional, set CADDY_ENABLED=true in .env)
+      - "${HTTP_PORT:-8080}:8080"
+
+    # ── Volumes ───────────────────────────────────────────────────────────────
+    volumes:
+      # Persistent agent memory — MUST survive container restarts
+      - zylos-memory:/home/zylos/zylos/memory
+
+      # Agent workspace (files the AI creates/edits)
+      - zylos-workspace:/home/zylos/zylos/workspace
+
+      # PM2 logs
+      - zylos-logs:/home/zylos/zylos/logs
+
+      # Optional: mount your own .env instead of relying on environment block
+      # - ./zylos.env:/home/zylos/zylos/.env:ro
+
+      # Optional: pre-baked Claude settings (bypass prompts on first run)
+      # - ./.claude/settings.json:/home/zylos/.claude/settings.json:ro
+
+    # ── Health ────────────────────────────────────────────────────────────────
+    healthcheck:
+      test: ["CMD", "pm2", "list"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+    # ── Resources (optional, tune for your host) ──────────────────────────────
+    # deploy:
+    #   resources:
+    #     limits:
+    #       memory: 2g
+    #     reservations:
+    #       memory: 512m
+
+# ── Named volumes ─────────────────────────────────────────────────────────────
+volumes:
+  zylos-memory:
+    driver: local
+  zylos-workspace:
+    driver: local
+  zylos-logs:
+    driver: local
