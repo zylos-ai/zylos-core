@@ -1,0 +1,20 @@
+version: "3.8"
+services:
+  zylos:
+    build: .
+    container_name: zylos
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN}
+      # Or use API key instead:
+      # - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+    volumes:
+      - zylos-data:/root/zylos
+      - claude-data:/root/.claude
+      - local-data:/root/.local
+
+volumes:
+  zylos-data:
+  claude-data:
+  local-data:
