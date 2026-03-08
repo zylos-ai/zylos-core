@@ -120,6 +120,32 @@ zylos init
 
 </details>
 
+<details>
+<summary>不支持的平台（Windows、NAS 等）— 通过 SSH 安装</summary>
+
+在没有原生支持的平台上，可以用 Claude Code 的 SSH 功能远程安装 Zylos 到 Linux/macOS 服务器：
+
+```bash
+# 在本地机器上（任何能运行 Claude Code 的系统）
+claude --ssh user@your-linux-server
+```
+
+连接后，Claude 在远程机器上运行。让它安装 Zylos：
+
+```
+> 在这台机器上安装 Zylos
+```
+
+或者在 SSH 会话中直接运行安装脚本：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/zylos-ai/zylos-core/main/scripts/install.sh | bash
+```
+
+这适用于 Windows、ChromeOS 或任何能本地运行 Claude Code 的平台。AI 会在远程服务器上完成安装 — 无需原生平台支持。
+
+</details>
+
 `zylos init` 可重复运行，支持交互式和非交互式两种模式。它会：
 1. 安装缺失的工具（tmux、git、PM2、Claude Code）
 2. 配置 Claude 认证（浏览器登录、API key 或 [setup token](https://code.claude.com/docs/en/authentication)，适用于无浏览器的服务器）
