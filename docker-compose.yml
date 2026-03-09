@@ -13,8 +13,7 @@
 services:
   zylos:
     image: ghcr.io/zylos-ai/zylos-core:latest
-    # Or build locally:
-    # build: .
+    build: .
     container_name: zylos
     restart: unless-stopped
 

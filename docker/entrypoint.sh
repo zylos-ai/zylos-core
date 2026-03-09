@@ -37,14 +37,26 @@ fi
 # Runs every startup (no marker) so template files stay in sync after image upgrades.
 info "Running zylos init..."
 
+# Resolve auth token — auto-detect type regardless of which env var it's in
+AUTH_TOKEN="${CLAUDE_CODE_OAUTH_TOKEN:-${ANTHROPIC_API_KEY:-}}"
+AUTH_FLAG=""
+if [ -n "${AUTH_TOKEN}" ]; then
+  if [[ "${AUTH_TOKEN}" == sk-ant-oat* ]]; then
+    AUTH_FLAG="--setup-token ${AUTH_TOKEN}"
+  else
+    AUTH_FLAG="--api-key ${AUTH_TOKEN}"
+  fi
+fi
+
 # Build init flags
 INIT_ARGS="--yes --quiet"
 [ -n "${TZ:-}" ] && INIT_ARGS="${INIT_ARGS} --timezone ${TZ}"
-[ -n "${ANTHROPIC_API_KEY:-}" ] && INIT_ARGS="${INIT_ARGS} --api-key ${ANTHROPIC_API_KEY}"
-[ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] && INIT_ARGS="${INIT_ARGS} --setup-token ${CLAUDE_CODE_OAUTH_TOKEN}"
+[ -n "${AUTH_FLAG}" ] && INIT_ARGS="${INIT_ARGS} ${AUTH_FLAG}"
 
 # shellcheck disable=SC2086
-zylos init ${INIT_ARGS} || true   # best-effort — partial init is OK
+if ! zylos init ${INIT_ARGS}; then
+  warn "zylos init exited with errors (may be partial). Check logs."
+fi
 
 info "Workspace ready."
 

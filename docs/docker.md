@@ -18,22 +18,14 @@ cd zylos-core
 export ANTHROPIC_API_KEY=sk-ant-xxx
 # or: export CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-xxx
 
-# 3. Start (pulls pre-built image)
-docker compose up -d
+# 3. Start (pulls image if available, or builds locally)
+docker compose up -d --build
 
 # 4. Follow logs
 docker compose logs -f
 ```
 
 That's it. Zylos will initialise its workspace on first boot (`zylos init --yes`) and start the PM2 service stack automatically. No need to copy `.env` files — the entrypoint handles everything.
-
-### Building locally
-
-If no pre-built image is available, or you want to build from source:
-
-```bash
-docker compose up -d --build
-```
 
 ## How It Works
 
