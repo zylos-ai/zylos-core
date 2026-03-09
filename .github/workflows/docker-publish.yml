@@ -50,11 +50,12 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            # Tag event: v1.2.3 → 1.2.3, latest
+            # Tag event: v1.2.3 → :1.2.3, :1.2, :latest
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            # Push to main: latest
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/') }}
+            # Push to main → :main (dev/testing)
+            type=raw,value=main,enable={{is_default_branch}}
 
       - name: Build and push
         uses: docker/build-push-action@v6
