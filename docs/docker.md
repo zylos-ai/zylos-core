@@ -81,7 +81,7 @@ Two named volumes are created automatically:
 | Volume | Mounted at | Contents |
 |---|---|---|
 | `zylos-data` | `~/zylos/` | Everything: .env, memory, workspace, logs, components, PM2 config |
-| `claude-config` | `~/.claude/` | Claude Code settings and auth tokens |
+| `claude-config` | `~/.claude/` | Claude Code settings and auth tokens. Persists login state so Claude doesn't need to re-authenticate on container restart. Auth is also re-configured by the entrypoint on each boot, so this volume is optional but recommended. |
 
 > **Back up `zylos-data`**. It contains the agent's configuration, memory, and workspace. Loss = amnesia + reconfiguration.
 
