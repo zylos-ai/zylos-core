@@ -13,16 +13,16 @@
 services:
   zylos:
     image: ghcr.io/zylos-ai/zylos-core:latest
-    build: .
+    # build: .   # Uncomment to build from source instead of pulling the image
     container_name: zylos
     restart: unless-stopped
 
     # ── Authentication (required — choose ONE) ──────────────────────────────
     environment:
-      # Option A: Anthropic API key (usage-based billing)
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      # Option B: Claude Code OAuth token (Pro/Max subscription)
+      # Option A: Claude Code OAuth token (Pro/Max subscription)
       CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
+      # Option B: Anthropic API key (usage-based billing)
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
 
       # ── Core config ───────────────────────────────────────────────────────
       TZ: ${TZ:-UTC}

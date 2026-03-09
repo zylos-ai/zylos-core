@@ -125,13 +125,15 @@ zylos init
 <summary>Docker deployment</summary>
 
 ```bash
-git clone https://github.com/zylos-ai/zylos-core.git
-cd zylos-core
-export CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-xxx   # or ANTHROPIC_API_KEY
-docker compose up -d --build
+docker run -d --name zylos \
+  -e CLAUDE_CODE_OAUTH_TOKEN=YOUR_TOKEN_HERE \
+  -p 3456:3456 \
+  -v zylos-data:/home/zylos/zylos \
+  -v claude-config:/home/zylos/.claude \
+  ghcr.io/zylos-ai/zylos-core:latest
 ```
 
-See [Docker Deployment Guide](docs/docker.md) for volumes, environment variables, Synology NAS instructions, and troubleshooting.
+Open `http://localhost:3456` to access the web console. See the [Docker Deployment Guide](docs/docker.md) for Docker Compose setup, environment variables, Synology NAS instructions, and more.
 
 </details>
 

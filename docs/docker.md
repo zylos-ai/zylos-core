@@ -4,28 +4,51 @@ Zylos can be run inside a Docker container — useful for platforms like Synolog
 
 ## Prerequisites
 
-- Docker 24+ and Docker Compose v2
-- An Anthropic API key **or** Claude Code OAuth token
+- Docker 24+
+- A Claude Code OAuth token **or** Anthropic API key
 
 ## Quick Start
 
+### Option A: Docker Run (simplest)
+
 ```bash
-# 1. Clone
-git clone https://github.com/zylos-ai/zylos-core.git
-cd zylos-core
-
-# 2. Set your auth token (choose one)
-export CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-xxx
-# or: export ANTHROPIC_API_KEY=sk-ant-xxx
-
-# 3. Start (pulls image if available, or builds locally)
-docker compose up -d --build
-
-# 4. Follow logs
-docker compose logs -f
+docker run -d --name zylos \
+  -e CLAUDE_CODE_OAUTH_TOKEN=YOUR_TOKEN_HERE \
+  -p 3456:3456 \
+  -v zylos-data:/home/zylos/zylos \
+  -v claude-config:/home/zylos/.claude \
+  ghcr.io/zylos-ai/zylos-core:latest
 ```
 
-That's it. Zylos will initialise its workspace on first boot (`zylos init --yes`) and start the PM2 service stack automatically. No need to copy `.env` files — the entrypoint handles everything.
+Open `http://localhost:3456` to access the web console.
+
+### Option B: Docker Compose (more config options)
+
+```bash
+mkdir zylos && cd zylos
+curl -fsSLO https://raw.githubusercontent.com/zylos-ai/zylos-core/main/docker-compose.yml
+```
+
+Set your token and start:
+
+```bash
+export CLAUDE_CODE_OAUTH_TOKEN=YOUR_TOKEN_HERE
+docker compose up -d
+```
+
+The compose file supports timezone, channel tokens (Telegram, Lark), web console password, and more — edit it or pass via environment variables.
+
+### Verify
+
+```bash
+# Check services
+docker exec zylos pm2 status
+
+# Follow logs
+docker logs -f zylos
+```
+
+That's it. Zylos initialises its workspace on first boot and starts all services automatically.
 
 ## How It Works
 
@@ -111,6 +134,19 @@ docker compose up -d
 
 ## Updating
 
+**Docker Run:**
+```bash
+docker pull ghcr.io/zylos-ai/zylos-core:latest
+docker stop zylos && docker rm zylos
+docker run -d --name zylos \
+  -e CLAUDE_CODE_OAUTH_TOKEN=YOUR_TOKEN_HERE \
+  -p 3456:3456 \
+  -v zylos-data:/home/zylos/zylos \
+  -v claude-config:/home/zylos/.claude \
+  ghcr.io/zylos-ai/zylos-core:latest
+```
+
+**Docker Compose:**
 ```bash
 docker compose pull
 docker compose up -d
