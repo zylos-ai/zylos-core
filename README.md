@@ -121,6 +121,32 @@ zylos init
 
 </details>
 
+<details>
+<summary>Unsupported platforms (Windows, NAS, etc.) — install via SSH</summary>
+
+On platforms without native support, use Claude Code's SSH feature to install Zylos on a remote Linux/macOS machine:
+
+```bash
+# From your local machine (any OS that runs Claude Code)
+claude --ssh user@your-linux-server
+```
+
+Once connected, Claude is running on the remote machine. Ask it to install Zylos:
+
+```
+> Install Zylos on this machine
+```
+
+Or run the installer directly in the SSH session:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/zylos-ai/zylos-core/main/scripts/install.sh | bash
+```
+
+This works from Windows, ChromeOS, or any platform that can run Claude Code locally. The AI handles the setup on the remote server — no need for native platform support.
+
+</details>
+
 `zylos init` is idempotent and supports both interactive and non-interactive modes. It will:
 1. Install missing tools (tmux, git, PM2, Claude Code)
 2. Set up Claude authentication (browser login, API key, or [setup token](https://code.claude.com/docs/en/authentication) for headless servers)

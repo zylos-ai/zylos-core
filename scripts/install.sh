@@ -111,7 +111,7 @@ detect_os() {
   case "$OS" in
     Linux)  OS="linux" ;;
     Darwin) OS="macos" ;;
-    *)      fail "Unsupported operating system: $OS" ;;
+    *)      fail "Unsupported operating system: $OS. Try installing via SSH: claude --ssh user@linux-server" ;;
   esac
 
   case "$ARCH" in
