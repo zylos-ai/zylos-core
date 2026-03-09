@@ -34,24 +34,19 @@ fi
 # zylos init handles: directory structure, .env creation from template,
 # auth credential storage, timezone config, PM2 ecosystem, web console password.
 # It uses upsert semantics — safe to re-run (won't overwrite existing values).
-INIT_MARKER="${ZYLOS_DIR}/.docker-init-done"
-if [ ! -f "${INIT_MARKER}" ]; then
-  info "First run — initialising zylos workspace..."
+# Runs every startup (no marker) so template files stay in sync after image upgrades.
+info "Running zylos init..."
 
-  # Build init flags
-  INIT_ARGS="--yes --quiet"
-  [ -n "${TZ:-}" ] && INIT_ARGS="${INIT_ARGS} --timezone ${TZ}"
-  [ -n "${ANTHROPIC_API_KEY:-}" ] && INIT_ARGS="${INIT_ARGS} --api-key ${ANTHROPIC_API_KEY}"
-  [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] && INIT_ARGS="${INIT_ARGS} --setup-token ${CLAUDE_CODE_OAUTH_TOKEN}"
+# Build init flags
+INIT_ARGS="--yes --quiet"
+[ -n "${TZ:-}" ] && INIT_ARGS="${INIT_ARGS} --timezone ${TZ}"
+[ -n "${ANTHROPIC_API_KEY:-}" ] && INIT_ARGS="${INIT_ARGS} --api-key ${ANTHROPIC_API_KEY}"
+[ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] && INIT_ARGS="${INIT_ARGS} --setup-token ${CLAUDE_CODE_OAUTH_TOKEN}"
 
-  # shellcheck disable=SC2086
-  zylos init ${INIT_ARGS} || true   # best-effort — partial init is OK
+# shellcheck disable=SC2086
+zylos init ${INIT_ARGS} || true   # best-effort — partial init is OK
 
-  touch "${INIT_MARKER}"
-  info "Workspace initialised."
-else
-  info "Workspace already initialised (re-run: rm ${INIT_MARKER})."
-fi
+info "Workspace ready."
 
 # ── Pass through channel env vars to .env ─────────────────────────────────────
 # zylos init doesn't write channel tokens — those come from component installs.

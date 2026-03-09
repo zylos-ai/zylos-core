@@ -29,17 +29,13 @@ That's it. Zylos will initialise its workspace on first boot (`zylos init --yes`
 
 ## How It Works
 
-On first start, the entrypoint:
+On every start, the entrypoint:
 1. Validates that an auth token is set
-2. Runs `zylos init --yes` to create the workspace, `.env`, and configure auth
+2. Runs `zylos init --yes` to create/update the workspace, `.env`, and configure auth
 3. Passes through any channel tokens (Telegram, Lark) to `.env`
 4. Starts PM2 services and Claude Code in a tmux session
 
-On subsequent starts, `zylos init` is skipped (controlled by an init marker file). To force re-init, run:
-```bash
-docker exec zylos rm ~/zylos/.docker-init-done
-docker compose restart
-```
+Running `zylos init` on every startup ensures that template files (skills, PM2 config) stay in sync when the Docker image is updated. The init command is idempotent — it only creates missing files and syncs templates, never overwrites user data.
 
 ## Architecture
 
@@ -145,9 +141,3 @@ docker exec -it zylos pm2 logs --lines 50
 docker volume inspect zylos-core_zylos-data
 ```
 
-### Force re-initialisation
-
-```bash
-docker exec zylos rm ~/zylos/.docker-init-done
-docker compose restart
-```
