@@ -3,7 +3,7 @@
 # Zylos Docker Entrypoint
 #
 # 1. Validates required auth environment variables
-# 2. Runs zylos init (creates .env, sets up workspace — first-run only)
+# 2. Runs zylos init (creates/updates .env and workspace — every startup)
 # 3. Passes through channel env vars to .env
 # 4. Starts PM2 services
 # 5. Starts Claude Code inside a persistent tmux session
