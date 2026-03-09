@@ -40,9 +40,13 @@ ENV HOME=/home/zylos
 ENV NPM_CONFIG_PREFIX=/home/zylos/.npm-global
 ENV PATH="/home/zylos/.npm-global/bin:/home/zylos/.local/bin:/usr/local/bin:${PATH}"
 
-# ── Install zylos-core ────────────────────────────────────────────────────────
+# ── Install zylos-core from local source ─────────────────────────────────────
+# COPY the repo (filtered by .dockerignore) and install from it, so the image
+# always matches the exact commit/tag being built.
 WORKDIR /home/zylos
-RUN npm install -g --install-links https://github.com/zylos-ai/zylos-core \
+COPY --chown=zylos:zylos . /tmp/zylos-core
+RUN npm install -g --install-links /tmp/zylos-core \
+    && rm -rf /tmp/zylos-core \
     && zylos --version
 
 # ── Workspace directories ─────────────────────────────────────────────────────
