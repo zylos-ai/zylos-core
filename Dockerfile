@@ -65,8 +65,7 @@ EXPOSE 3456
 # Caddy / reverse proxy (optional, enabled via .env)
 EXPOSE 8080
 
-# ── Healthcheck ───────────────────────────────────────────────────────────────
-HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-  CMD pm2 list 2>/dev/null | grep -q "online" || exit 1
+# Healthcheck is defined in docker-compose.yml (start_period=600s for slow init).
+# No HEALTHCHECK here to avoid a conflicting override.
 
 ENTRYPOINT ["/entrypoint.sh"]

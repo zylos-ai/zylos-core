@@ -67,9 +67,11 @@ upsert_env() {
   local key="$1" value="$2"
   [ -z "${value}" ] && return
   if grep -q "^${key}=" "${ENV_FILE}" 2>/dev/null; then
-    return  # already exists — don't overwrite
+    # Update existing value — env vars from docker-compose take precedence
+    sed -i "s|^${key}=.*|${key}=${value}|" "${ENV_FILE}" 2>/dev/null || true
+  else
+    echo "${key}=${value}" >> "${ENV_FILE}" 2>/dev/null || true
   fi
-  echo "${key}=${value}" >> "${ENV_FILE}" 2>/dev/null || true
 }
 
 upsert_env "TELEGRAM_BOT_TOKEN" "${TELEGRAM_BOT_TOKEN:-}"
@@ -81,12 +83,21 @@ upsert_env "CLAUDE_BYPASS_PERMISSIONS" "${CLAUDE_BYPASS_PERMISSIONS:-true}"
 # Save current PATH so PM2 services can find claude and node
 upsert_env "SYSTEM_PATH" "${PATH}"
 
+# ── Graceful shutdown ─────────────────────────────────────────────────────────
+# docker stop sends SIGTERM to PID 1 (this script). Clean up tmux + PM2.
+cleanup() {
+  info "Shutting down..."
+  tmux kill-session -t claude-main 2>/dev/null || true
+  pm2 kill 2>/dev/null || true
+}
+trap cleanup SIGTERM SIGINT
+
 # ── Start PM2 services ────────────────────────────────────────────────────────
 info "Starting PM2 services..."
 pm2 start "${ZYLOS_DIR}/pm2/ecosystem.config.cjs" --no-daemon &
 PM2_PID=$!
 
-# Give PM2 a moment to spin up core services
+# Give PM2 a moment to spin up core services before starting Claude
 sleep 3
 
 # ── Start Claude Code in tmux ─────────────────────────────────────────────────
@@ -108,4 +119,5 @@ info "Claude Code session started."
 
 # ── Keep container alive ──────────────────────────────────────────────────────
 info "All services started. Monitoring PM2..."
-wait "${PM2_PID}"
+wait "${PM2_PID}" || true
+cleanup
