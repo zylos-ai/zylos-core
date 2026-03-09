@@ -121,6 +121,20 @@ zylos init
 
 </details>
 
+<details>
+<summary>Docker deployment</summary>
+
+```bash
+git clone https://github.com/zylos-ai/zylos-core.git
+cd zylos-core
+export CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-xxx   # or ANTHROPIC_API_KEY
+docker compose up -d --build
+```
+
+See [Docker Deployment Guide](docs/docker.md) for volumes, environment variables, Synology NAS instructions, and troubleshooting.
+
+</details>
+
 `zylos init` is idempotent and supports both interactive and non-interactive modes. It will:
 1. Install missing tools (tmux, git, PM2, Claude Code)
 2. Set up Claude authentication (browser login, API key, or [setup token](https://code.claude.com/docs/en/authentication) for headless servers)
