@@ -85,10 +85,16 @@ upsert_env "SYSTEM_PATH" "${PATH}"
 
 # ── Graceful shutdown ─────────────────────────────────────────────────────────
 # docker stop sends SIGTERM to PID 1 (this script). Clean up tmux + PM2.
+SHUTTING_DOWN=false
 cleanup() {
+  [ "${SHUTTING_DOWN}" = true ] && return
+  SHUTTING_DOWN=true
   info "Shutting down..."
   tmux kill-session -t claude-main 2>/dev/null || true
   pm2 kill 2>/dev/null || true
+  # Kill the PM2 --no-daemon process directly in case pm2 kill didn't stop it
+  [ -n "${PM2_PID:-}" ] && kill "${PM2_PID}" 2>/dev/null || true
+  exit 0
 }
 trap cleanup SIGTERM SIGINT
 
@@ -118,6 +124,12 @@ tmux new-session -d -s claude-main -x 220 -y 50 \
 info "Claude Code session started."
 
 # ── Keep container alive ──────────────────────────────────────────────────────
+# Use a sleep loop instead of waiting on PM2 directly.
+# Bash interrupts sleep (not wait on a child) reliably on SIGTERM,
+# allowing the trap handler to fire and exit cleanly.
 info "All services started. Monitoring PM2..."
-wait "${PM2_PID}" || true
+while kill -0 "${PM2_PID}" 2>/dev/null; do
+  sleep 1
+done
+info "PM2 exited unexpectedly."
 cleanup
