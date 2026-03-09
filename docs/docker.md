@@ -38,6 +38,21 @@ docker compose up -d
 
 The compose file supports timezone, channel tokens (Telegram, Lark), web console password, and more — edit it or pass via environment variables.
 
+### Web Console Password
+
+A random password is generated on first boot. Two ways to find it:
+
+**From startup logs:**
+```bash
+docker logs zylos | grep -A2 "Web Console"
+```
+
+**Via the Claude shell (after startup completes):**
+```bash
+docker exec -it zylos zylos shell
+# Then ask: "What's my web console password?"
+```
+
 ### Verify
 
 ```bash

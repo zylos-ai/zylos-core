@@ -133,7 +133,7 @@ docker run -d --name zylos \
   ghcr.io/zylos-ai/zylos-core:latest
 ```
 
-Open `http://localhost:3456` to access the web console. See the [Docker Deployment Guide](docs/docker.md) for Docker Compose setup, environment variables, Synology NAS instructions, and more.
+Open `http://localhost:3456` to access the web console. Find your password with `docker logs zylos | grep -A2 "Web Console"`. See the [Docker Deployment Guide](docs/docker.md) for Docker Compose setup, environment variables, Synology NAS instructions, and more.
 
 </details>
 
