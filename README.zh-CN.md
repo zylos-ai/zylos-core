@@ -121,6 +121,22 @@ zylos init
 </details>
 
 <details>
+<summary>Docker 部署</summary>
+
+```bash
+docker run -d --name zylos \
+  -e CLAUDE_CODE_OAUTH_TOKEN=YOUR_TOKEN_HERE \
+  -p 3456:3456 \
+  -v zylos-data:/home/zylos/zylos \
+  -v claude-config:/home/zylos/.claude \
+  ghcr.io/zylos-ai/zylos-core:latest
+```
+
+打开 `http://localhost:3456` 访问 Web 控制台。通过 `docker logs zylos | grep -A2 "Web Console"` 查看密码。更多配置（Docker Compose、环境变量、群晖 NAS 等）请参阅 [Docker 部署指南](docs/docker.md)。
+
+</details>
+
+<details>
 <summary>不支持的平台（Windows、NAS 等）— 通过 SSH 安装</summary>
 
 在没有原生支持的平台上，可以用 Claude Code 的 SSH 功能远程安装 Zylos 到 Linux/macOS 服务器：
