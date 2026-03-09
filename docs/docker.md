@@ -53,6 +53,15 @@ docker exec -it zylos zylos shell
 # Then ask: "What's my web console password?"
 ```
 
+### Talk to Your Agent
+
+```bash
+# Interactive CLI — the simplest way to chat
+docker exec -it zylos zylos shell
+```
+
+Or open `http://localhost:3456` to use the web console.
+
 ### Verify
 
 ```bash

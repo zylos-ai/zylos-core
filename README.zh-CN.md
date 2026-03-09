@@ -171,7 +171,10 @@ curl -fsSL https://raw.githubusercontent.com/zylos-ai/zylos-core/main/scripts/in
 **与你的智能体对话：**
 
 ```bash
-# 连接到 Claude 会话（Ctrl+B d 退出）
+# 交互式命令行 — 最简单的对话方式
+zylos shell
+
+# 或连接到 Claude tmux 会话（Ctrl+B d 退出）
 zylos attach
 
 # 或添加消息通道

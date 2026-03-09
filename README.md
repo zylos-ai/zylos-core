@@ -172,7 +172,10 @@ This works from Windows, ChromeOS, or any platform that can run Claude Code loca
 **Talk to your agent:**
 
 ```bash
-# Attach to the Claude session (Ctrl+B d to detach)
+# Interactive CLI — the simplest way to chat
+zylos shell
+
+# Or attach to the Claude tmux session (Ctrl+B d to detach)
 zylos attach
 
 # Or add a messaging channel
