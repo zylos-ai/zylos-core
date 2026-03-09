@@ -13,7 +13,6 @@
 services:
   zylos:
     image: ghcr.io/zylos-ai/zylos-core:latest
-    # build: .   # Uncomment to build from source instead of pulling the image
     container_name: zylos
     restart: unless-stopped
 
