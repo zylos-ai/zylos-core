@@ -2,7 +2,7 @@
 # Zylos — Docker Compose
 #
 # Quick start:
-#   1. cp .env.example .env && edit .env
+#   1. Set environment variables below (or use a .env file in this directory)
 #   2. docker compose up -d
 #   3. docker compose logs -f
 #
@@ -48,16 +48,10 @@ services:
 
     # ── Volumes ───────────────────────────────────────────────────────────────
     volumes:
-      # Persistent agent memory — MUST survive container restarts
-      - zylos-memory:/home/zylos/zylos/memory
+      # Entire zylos workspace — persists .env, memory, components, logs, etc.
+      - zylos-data:/home/zylos/zylos
 
-      # Agent workspace (files the AI creates/edits)
-      - zylos-workspace:/home/zylos/zylos/workspace
-
-      # PM2 logs
-      - zylos-logs:/home/zylos/zylos/logs
-
-      # Claude Code settings and auth
+      # Claude Code settings and auth tokens
       - claude-config:/home/zylos/.claude
 
       # Optional: mount your own .env instead of relying on environment block
@@ -81,11 +75,7 @@ services:
 
 # ── Named volumes ─────────────────────────────────────────────────────────────
 volumes:
-  zylos-memory:
-    driver: local
-  zylos-workspace:
-    driver: local
-  zylos-logs:
+  zylos-data:
     driver: local
   claude-config:
     driver: local

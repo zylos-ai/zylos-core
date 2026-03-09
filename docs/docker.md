@@ -14,9 +14,9 @@ Zylos can be run inside a Docker container — useful for platforms like Synolog
 git clone https://github.com/zylos-ai/zylos-core.git
 cd zylos-core
 
-# 2. Configure
-cp .env.example zylos.env
-# Edit zylos.env — set ANTHROPIC_API_KEY (or CLAUDE_CODE_OAUTH_TOKEN)
+# 2. Set your auth token (choose one)
+export ANTHROPIC_API_KEY=sk-ant-xxx
+# or: export CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-xxx
 
 # 3. Start
 docker compose up -d
@@ -25,7 +25,21 @@ docker compose up -d
 docker compose logs -f
 ```
 
-That's it. Zylos will initialise its workspace on first boot and start the PM2 service stack automatically.
+That's it. Zylos will initialise its workspace on first boot (`zylos init --yes`) and start the PM2 service stack automatically. No need to copy `.env` files — the entrypoint handles everything.
+
+## How It Works
+
+On first start, the entrypoint:
+1. Validates that an auth token is set
+2. Runs `zylos init --yes` to create the workspace, `.env`, and configure auth
+3. Passes through any channel tokens (Telegram, Lark) to `.env`
+4. Starts PM2 services and Claude Code in a tmux session
+
+On subsequent starts, `zylos init` is skipped (controlled by an init marker file). To force re-init, run:
+```bash
+docker exec zylos rm ~/zylos/.docker-init-done
+docker compose restart
+```
 
 ## Architecture
 
@@ -43,20 +57,18 @@ docker container: zylos
 
 ## Persistent Data
 
-Four named volumes are created automatically:
+Two named volumes are created automatically:
 
 | Volume | Mounted at | Contents |
 |---|---|---|
-| `zylos-memory` | `~/zylos/memory/` | Agent memory files (identity, state, sessions) |
-| `zylos-workspace` | `~/zylos/workspace/` | Files created/edited by the AI |
-| `zylos-logs` | `~/zylos/logs/` | PM2 service logs |
+| `zylos-data` | `~/zylos/` | Everything: .env, memory, workspace, logs, components, PM2 config |
 | `claude-config` | `~/.claude/` | Claude Code settings and auth tokens |
 
-> **Back up `zylos-memory`**. It contains the agent's long-term memory. Loss = amnesia.
+> **Back up `zylos-data`**. It contains the agent's configuration, memory, and workspace. Loss = amnesia + reconfiguration.
 
 ## Environment Variables
 
-All variables can be set in `docker-compose.yml` or via an `.env` file in the project directory.
+Set variables in `docker-compose.yml`, a `.env` file alongside `docker-compose.yml`, or via `export` before running `docker compose up`.
 
 ### Required (choose one auth method)
 
@@ -73,8 +85,7 @@ All variables can be set in `docker-compose.yml` or via an `.env` file in the pr
 | `CLAUDE_BYPASS_PERMISSIONS` | `true` | Run Claude with `--dangerously-skip-permissions` |
 | `TELEGRAM_BOT_TOKEN` | — | Telegram channel token |
 | `LARK_APP_ID` / `LARK_APP_SECRET` | — | Lark/Feishu app credentials |
-| `ZYLOS_WEB_PASSWORD` | — | Web console password |
-| `WEB_CONSOLE_BIND` | `0.0.0.0` | Web console bind address (set automatically in Docker) |
+| `ZYLOS_WEB_PASSWORD` | — | Web console password (auto-generated if not set) |
 | `WEB_CONSOLE_PORT` | `3456` | Host port for web console |
 | `HTTP_PORT` | `8080` | Host port for Caddy proxy |
 
@@ -86,6 +97,8 @@ Instead of the `environment:` block in `docker-compose.yml`, you can mount a fil
 volumes:
   - ./zylos.env:/home/zylos/zylos/.env:ro
 ```
+
+When a mounted `.env` is detected, the entrypoint skips `.env` generation and uses it directly.
 
 ## Synology NAS (DSM)
 
@@ -126,8 +139,15 @@ docker exec -it zylos pm2 status
 docker exec -it zylos pm2 logs --lines 50
 ```
 
-### Memory volume location on host
+### Volume location on host
 
 ```bash
-docker volume inspect zylos-core_zylos-memory
+docker volume inspect zylos-core_zylos-data
+```
+
+### Force re-initialisation
+
+```bash
+docker exec zylos rm ~/zylos/.docker-init-done
+docker compose restart
 ```

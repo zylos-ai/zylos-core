@@ -42,7 +42,7 @@ RUN useradd -m -s /bin/bash zylos \
 USER zylos
 ENV HOME=/home/zylos
 ENV NPM_CONFIG_PREFIX=/home/zylos/.npm-global
-ENV PATH="/home/zylos/.npm-global/bin:/home/zylos/.local/bin:${PATH}"
+ENV PATH="/home/zylos/.npm-global/bin:/home/zylos/.local/bin:/usr/local/bin:${PATH}"
 
 # ── Install zylos-core ────────────────────────────────────────────────────────
 WORKDIR /home/zylos
@@ -50,15 +50,10 @@ RUN npm install -g --install-links https://github.com/zylos-ai/zylos-core \
     && zylos --version
 
 # ── Workspace directories ─────────────────────────────────────────────────────
-# These directories will be mounted as volumes in docker-compose.yml.
-# Creating them here ensures correct ownership in the image.
+# ~/zylos is mounted as a single volume in docker-compose.yml.
+# Creating subdirectories here ensures correct ownership in the image.
 RUN mkdir -p \
-      /home/zylos/zylos/memory \
-      /home/zylos/zylos/workspace \
-      /home/zylos/zylos/logs \
       /home/zylos/zylos/pm2 \
-      /home/zylos/zylos/http \
-      /home/zylos/zylos/bin \
       /home/zylos/.claude
 
 # ── Copy PM2 ecosystem config ─────────────────────────────────────────────────
