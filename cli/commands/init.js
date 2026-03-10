@@ -1484,7 +1484,7 @@ async function setupCaddy(skipConfirm, opts = {}) {
     // Local addresses: force HTTP on a high port, skip HTTPS prompt
     protocol = 'http';
     localPort = LOCAL_HTTP_PORT;
-    if (!quiet) console.log(`  ${dim('Local address detected — using HTTP on port 3800 (no HTTPS certificate needed).')}`);
+    if (!quiet) console.log(`  ${dim(`Local address detected — using HTTP on port ${LOCAL_HTTP_PORT} (no HTTPS certificate needed).`)}`);
   } else {
     if (opts.https === true) protocol = 'https';
     else if (opts.https === false) protocol = 'http';
@@ -1498,7 +1498,7 @@ async function setupCaddy(skipConfirm, opts = {}) {
   }
 
   // Save domain and protocol to config.json
-  updateZylosConfig({ domain, protocol, ...(localPort ? { port: localPort } : {}) });
+  updateZylosConfig({ domain, protocol, ...(localPort != null ? { port: localPort } : {}) });
   if (!quiet) {
     if (localPort) {
       console.log(`  ${dim('Address:')} ${bold(`http://${domain}:${localPort}`)}`);
