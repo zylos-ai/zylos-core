@@ -1329,21 +1329,32 @@ function setCaddyCapabilities() {
 }
 
 /**
+ * Default HTTP port for local address mode (high port, no setcap needed).
+ */
+const LOCAL_HTTP_PORT = 3800;
+
+/**
  * Check if a domain/address is a local or private address.
  * @param {string} addr - Domain or IP address
  * @returns {boolean}
  */
-function isLocalAddress(addr) {
-  const lower = addr.toLowerCase();
-  if (lower === 'localhost') return true;
+export function isLocalAddress(addr) {
+  const a = addr.trim().toLowerCase();
+  if (a === 'localhost' || a === 'localhost.') return true;
+  // 0.0.0.0 (bind-all, not routable)
+  if (a === '0.0.0.0') return true;
   // 127.x.x.x loopback
-  if (/^127\./.test(addr)) return true;
+  if (/^127\./.test(a)) return true;
   // Private IPv4 ranges
-  if (/^10\./.test(addr)) return true;
-  if (/^172\.(1[6-9]|2\d|3[01])\./.test(addr)) return true;
-  if (/^192\.168\./.test(addr)) return true;
+  if (/^10\./.test(a)) return true;
+  if (/^172\.(1[6-9]|2\d|3[01])\./.test(a)) return true;
+  if (/^192\.168\./.test(a)) return true;
   // IPv6 loopback
-  if (addr === '::1') return true;
+  if (a === '::1') return true;
+  // IPv4-mapped IPv6 loopback
+  if (a === '::ffff:127.0.0.1') return true;
+  // IPv6 link-local (fe80::) and unique local (fc00::/7 → fc00:: and fd00::)
+  if (/^fe80:/i.test(a) || /^f[cd][0-9a-f]{2}:/i.test(a)) return true;
   return false;
 }
 
@@ -1360,7 +1371,7 @@ function generateCaddyfile(domain, protocol = 'https', port) {
   // Caddy syntax: bare domain = HTTPS + auto-cert, http:// prefix = HTTP only
   // For local addresses, bind to a specific port to avoid occupying 80/443
   let siteAddress;
-  if (port) {
+  if (port != null) {
     siteAddress = `http://${domain}:${port}`;
   } else {
     siteAddress = protocol === 'http' ? `http://${domain}` : domain;
@@ -1472,7 +1483,7 @@ async function setupCaddy(skipConfirm, opts = {}) {
   if (isLocal) {
     // Local addresses: force HTTP on a high port, skip HTTPS prompt
     protocol = 'http';
-    localPort = 3800;
+    localPort = LOCAL_HTTP_PORT;
     if (!quiet) console.log(`  ${dim('Local address detected — using HTTP on port 3800 (no HTTPS certificate needed).')}`);
   } else {
     if (opts.https === true) protocol = 'https';

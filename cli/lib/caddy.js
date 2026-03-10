@@ -17,10 +17,8 @@
  */
 
 import fs from 'node:fs';
-import path from 'node:path';
-import os from 'node:os';
 import { execSync } from 'node:child_process';
-import { CADDYFILE, CADDY_BIN } from './config.js';
+import { CADDYFILE, CADDY_BIN, getZylosConfig } from './config.js';
 
 /**
  * Check if Caddy is available (binary + Caddyfile exist).
@@ -106,15 +104,12 @@ export function switchProtocol(domain, protocol) {
   }
 
   // Read port from config if set (local address mode)
-  const zylosConfigPath = path.join(os.homedir(), 'zylos', '.zylos', 'config.json');
-  let configPort;
-  try {
-    const cfg = JSON.parse(fs.readFileSync(zylosConfigPath, 'utf8'));
-    configPort = cfg.port;
-  } catch { /* ignore */ }
+  const cfg = getZylosConfig();
+  const configPort = cfg.port;
 
   let newAddress;
-  if (configPort) {
+  if (configPort != null) {
+    // Local address mode: port overrides protocol (always HTTP on explicit port)
     newAddress = `http://${domain}:${configPort}`;
   } else {
     newAddress = protocol === 'http' ? `http://${domain}` : domain;
