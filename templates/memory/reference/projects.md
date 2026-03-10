@@ -20,7 +20,6 @@ When the owner hasn't decided what to build, suggest from this list (ordered by 
 | Task | Difficulty | What They'll Learn |
 |------|-----------|-------------------|
 | Scheduled reminder / info push | ★☆☆☆☆ | Scheduler, communication channels |
-| Set up a Telegram/Lark bot | ★★☆☆☆ | Component install, channel config |
 | Build a personal web page | ★★☆☆☆ | File creation, HTTP serving |
 | Daily info aggregator (news/weather) | ★★★☆☆ | Scheduler, web fetch, data processing |
 | Simple web app / dashboard | ★★★☆☆ | HTTP skill, frontend, data display |
