@@ -343,6 +343,25 @@ describe('c4-receive pending channels', () => {
     });
   });
 
+  it('deduplicates endpoints that differ only in |msg:xxx and |req:xxx suffixes', () => {
+    withTmpDir(({ tmpDir, env }) => {
+      const dataDir = path.join(tmpDir, 'comm-bridge');
+      fs.mkdirSync(dataDir, { recursive: true });
+      fs.writeFileSync(path.join(tmpDir, 'activity-monitor', 'claude-status.json'), JSON.stringify({ health: 'recovering' }));
+      fs.mkdirSync(path.join(tmpDir, '.claude', 'skills', 'telegram'), { recursive: true });
+
+      cliRaw(['--channel', 'telegram', '--endpoint', '7446046953|msg:100|req:7446046953:100', '--json', '--content', 'first'], env);
+      cliRaw(['--channel', 'telegram', '--endpoint', '7446046953|msg:101|req:7446046953:101', '--json', '--content', 'second'], env);
+      cliRaw(['--channel', 'telegram', '--endpoint', '7446046953|msg:102|req:7446046953:102', '--json', '--content', 'third'], env);
+
+      const pendingPath = path.join(tmpDir, 'activity-monitor', 'pending-channels.jsonl');
+      const lines = fs.readFileSync(pendingPath, 'utf8').trim().split('\n');
+      assert.equal(lines.length, 1, 'same chat with different msg+req IDs should dedup to 1');
+      const record = JSON.parse(lines[0]);
+      assert.equal(record.endpoint, '7446046953', 'stored endpoint should have msg and req stripped');
+    });
+  });
+
   it('records different channel+endpoint pairs separately', () => {
     withTmpDir(({ tmpDir, env }) => {
       const dataDir = path.join(tmpDir, 'comm-bridge');

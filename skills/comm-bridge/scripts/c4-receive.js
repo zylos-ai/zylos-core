@@ -124,9 +124,9 @@ function recordPendingChannel(channel, endpoint) {
     if (!fs.existsSync(DATA_DIR)) {
       fs.mkdirSync(DATA_DIR, { recursive: true });
     }
-    // Strip |msg:xxx from endpoint so same chat deduplicates correctly.
+    // Strip |msg:xxx and |req:xxx from endpoint so same chat deduplicates correctly.
     // Recovery notices should go to the chat, not reply to a specific message.
-    const normalizedEndpoint = endpoint.replace(/\|msg:[^|]+/, '');
+    const normalizedEndpoint = endpoint.replace(/\|(msg|req):[^|]+/g, '');
     const key = `${channel}::${normalizedEndpoint}`;
     const keys = loadPendingChannelKeys();
     if (keys.has(key)) return;
