@@ -720,15 +720,21 @@ async function guideBypassAcceptance() {
 
     // Write API key to temp file to avoid exposing it in process command line
     let shellCmd;
+    let tmpEnv = null;
     if (process.env.ANTHROPIC_API_KEY) {
-      const tmpEnv = path.join(os.tmpdir(), `.zylos-env-${process.pid}`);
+      tmpEnv = path.join(os.tmpdir(), `.zylos-env-${process.pid}-${Date.now()}`);
       fs.writeFileSync(tmpEnv, `ANTHROPIC_API_KEY=${process.env.ANTHROPIC_API_KEY}\n`, { mode: 0o600 });
       shellCmd = `set -a; . ${tmpEnv}; set +a; rm -f ${tmpEnv}; cd ${ZYLOS_DIR} && claude --dangerously-skip-permissions`;
     } else {
       shellCmd = `cd ${ZYLOS_DIR} && claude --dangerously-skip-permissions`;
     }
     tmuxArgs.push('--', shellCmd);
-    execFileSync('tmux', tmuxArgs, { stdio: 'pipe' });
+    try {
+      execFileSync('tmux', tmuxArgs, { stdio: 'pipe' });
+    } catch (e) {
+      if (tmpEnv) try { fs.unlinkSync(tmpEnv); } catch {}
+      throw e;
+    }
     // Configure status bar with detach hint
     try {
       execSync('tmux set-option -t claude-main status-right " Ctrl+B d = detach " 2>/dev/null', { stdio: 'pipe' });

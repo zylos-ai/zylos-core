@@ -645,15 +645,21 @@ function startClaude() {
       if (oauthTokenValue) envParts.push(`CLAUDE_CODE_OAUTH_TOKEN=${oauthTokenValue}`);
 
       let shellCmd;
+      let tmpEnv = null;
       if (envParts.length > 0) {
-        const tmpEnv = path.join(os.tmpdir(), `.zylos-env-${process.pid}`);
+        tmpEnv = path.join(os.tmpdir(), `.zylos-env-${process.pid}-${Date.now()}`);
         fs.writeFileSync(tmpEnv, envParts.join('\n') + '\n', { mode: 0o600 });
         shellCmd = `set -a; . ${tmpEnv}; set +a; rm -f ${tmpEnv}; cd ${ZYLOS_DIR} && ${claudeCmd}; ${exitLogSnippet}`;
       } else {
         shellCmd = `cd ${ZYLOS_DIR} && ${claudeCmd}; ${exitLogSnippet}`;
       }
       tmuxArgs.push('--', shellCmd);
-      execFileSync('tmux', tmuxArgs);
+      try {
+        execFileSync('tmux', tmuxArgs);
+      } catch (e) {
+        if (tmpEnv) try { fs.unlinkSync(tmpEnv); } catch {}
+        throw e;
+      }
       // Configure status bar with detach hint
       try {
         execSync(`tmux set-option -t "${SESSION}" status-right " Ctrl+B d = detach " 2>/dev/null`);
