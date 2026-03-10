@@ -485,7 +485,7 @@ function generateMigrationHints(templatesDir) {
 }
 
 // ---------------------------------------------------------------------------
-// 10-step self-upgrade pipeline
+// 11-step self-upgrade pipeline
 // ---------------------------------------------------------------------------
 
 /**
@@ -895,13 +895,47 @@ function applyMigrationHints(hints) {
 }
 
 /**
- * Step 8: sync settings.json hooks from template.
+ * Step 8: migrate state.md for existing users.
+ *
+ * If state.md exists but has no Onboarding section, this is an existing user
+ * upgrading. Add `onboarding: skipped` so the onboarding flow is not triggered.
+ * New installs already have `Status: pending` from the template.
+ */
+function step8_migrateStateMd() {
+  const startTime = Date.now();
+  const statePath = path.join(ZYLOS_DIR, 'memory', 'state.md');
+
+  if (!fs.existsSync(statePath)) {
+    return { step: 8, name: 'migrate_state_md', status: 'skipped', message: 'state.md not found', duration: Date.now() - startTime };
+  }
+
+  try {
+    const content = fs.readFileSync(statePath, 'utf8');
+
+    // Already has onboarding section — nothing to do
+    if (/## Onboarding/i.test(content)) {
+      return { step: 8, name: 'migrate_state_md', status: 'skipped', message: 'onboarding section exists', duration: Date.now() - startTime };
+    }
+
+    // Existing user without onboarding — add skipped status
+    const section = '\n\n## Onboarding\n- Status: skipped\n';
+    fs.writeFileSync(statePath, content.trimEnd() + section);
+
+    return { step: 8, name: 'migrate_state_md', status: 'done', message: 'added onboarding: skipped', duration: Date.now() - startTime };
+  } catch (err) {
+    // Non-fatal
+    return { step: 8, name: 'migrate_state_md', status: 'skipped', message: err.message, duration: Date.now() - startTime };
+  }
+}
+
+/**
+ * Step 9: sync settings.json hooks from template.
  *
  * Shells out to the NEWLY INSTALLED sync-settings-hooks.js instead of using
  * the in-memory generateMigrationHints(). This avoids bootstrap problems where
  * the old version's sync logic misses new config fields (e.g. statusLine).
  */
-function step8_syncSettingsHooks(ctx) {
+function step9_syncSettingsHooks(ctx) {
   const startTime = Date.now();
 
   // Resolve the newly installed package path (from step 4) to use the latest sync logic.
@@ -912,13 +946,13 @@ function step8_syncSettingsHooks(ctx) {
     const templatesDir = path.join(ctx.tempDir, 'templates');
     const hints = generateMigrationHints(templatesDir);
     if (hints.length === 0) {
-      return { step: 8, name: 'sync_settings_hooks', status: 'done', message: 'no changes needed', duration: Date.now() - startTime };
+      return { step: 9, name: 'sync_settings_hooks', status: 'done', message: 'no changes needed', duration: Date.now() - startTime };
     }
     const result = applyMigrationHints(hints);
     if (result.errors.length > 0) {
-      return { step: 8, name: 'sync_settings_hooks', status: 'failed', error: result.errors.join('; '), duration: Date.now() - startTime };
+      return { step: 9, name: 'sync_settings_hooks', status: 'failed', error: result.errors.join('; '), duration: Date.now() - startTime };
     }
-    return { step: 8, name: 'sync_settings_hooks', status: 'done', message: `${result.applied} hooks updated`, duration: Date.now() - startTime };
+    return { step: 9, name: 'sync_settings_hooks', status: 'done', message: `${result.applied} hooks updated`, duration: Date.now() - startTime };
   }
 
   try {
@@ -926,10 +960,10 @@ function step8_syncSettingsHooks(ctx) {
     // Extract last line as the summary (script outputs per-hook details before summary)
     const lines = output.split('\n').filter(l => l.trim());
     const summary = lines.length > 0 ? lines[lines.length - 1].trim() : 'no changes';
-    return { step: 8, name: 'sync_settings_hooks', status: 'done', message: summary, duration: Date.now() - startTime };
+    return { step: 9, name: 'sync_settings_hooks', status: 'done', message: summary, duration: Date.now() - startTime };
   } catch (err) {
     const errMsg = err.stderr ? err.stderr.toString().trim() : err.message;
-    return { step: 8, name: 'sync_settings_hooks', status: 'failed', error: errMsg, duration: Date.now() - startTime };
+    return { step: 9, name: 'sync_settings_hooks', status: 'failed', error: errMsg, duration: Date.now() - startTime };
   }
 }
 
@@ -953,13 +987,13 @@ function resolveInstalledSyncScript() {
 }
 
 /**
- * Step 9: start core services
+ * Step 10: start core services
  */
-function step9_startCoreServices(ctx) {
+function step10_startCoreServices(ctx) {
   const startTime = Date.now();
 
   if (ctx.servicesWereRunning.length === 0) {
-    return { step: 9, name: 'start_core_services', status: 'skipped', message: 'no services to restart', duration: Date.now() - startTime };
+    return { step: 10, name: 'start_core_services', status: 'skipped', message: 'no services to restart', duration: Date.now() - startTime };
   }
 
   const started = [];
@@ -975,20 +1009,20 @@ function step9_startCoreServices(ctx) {
   }
 
   if (failed.length > 0) {
-    return { step: 9, name: 'start_core_services', status: 'failed', error: `Failed to restart: ${failed.join(', ')}`, duration: Date.now() - startTime };
+    return { step: 10, name: 'start_core_services', status: 'failed', error: `Failed to restart: ${failed.join(', ')}`, duration: Date.now() - startTime };
   }
 
-  return { step: 9, name: 'start_core_services', status: 'done', message: started.join(', '), duration: Date.now() - startTime };
+  return { step: 10, name: 'start_core_services', status: 'done', message: started.join(', '), duration: Date.now() - startTime };
 }
 
 /**
- * Step 10: verify services
+ * Step 11: verify services
  */
-function step10_verifyServices(ctx) {
+function step11_verifyServices(ctx) {
   const startTime = Date.now();
 
   if (ctx.servicesWereRunning.length === 0) {
-    return { step: 10, name: 'verify_services', status: 'skipped', message: 'no services to verify', duration: Date.now() - startTime };
+    return { step: 11, name: 'verify_services', status: 'skipped', message: 'no services to verify', duration: Date.now() - startTime };
   }
 
   // Brief wait for services to start
@@ -1007,12 +1041,12 @@ function step10_verifyServices(ctx) {
     }
 
     if (notOnline.length > 0) {
-      return { step: 10, name: 'verify_services', status: 'failed', error: `Not online: ${notOnline.join(', ')}`, duration: Date.now() - startTime };
+      return { step: 11, name: 'verify_services', status: 'failed', error: `Not online: ${notOnline.join(', ')}`, duration: Date.now() - startTime };
     }
 
-    return { step: 10, name: 'verify_services', status: 'done', duration: Date.now() - startTime };
+    return { step: 11, name: 'verify_services', status: 'done', duration: Date.now() - startTime };
   } catch (err) {
-    return { step: 10, name: 'verify_services', status: 'failed', error: err.message, duration: Date.now() - startTime };
+    return { step: 11, name: 'verify_services', status: 'failed', error: err.message, duration: Date.now() - startTime };
   }
 }
 
@@ -1067,7 +1101,7 @@ function rollbackSelf(ctx) {
 // ---------------------------------------------------------------------------
 
 /**
- * Run the 10-step self-upgrade pipeline.
+ * Run the 11-step self-upgrade pipeline.
  * Template migration and Claude restart are handled by Claude after this completes.
  * Lock must be acquired by caller.
  *
@@ -1091,9 +1125,10 @@ export function runSelfUpgrade({ tempDir, newVersion, mode, onStep } = {}) {
     step5_syncCoreSkills,
     step6_installSkillDeps,
     step7_syncClaudeMd,
-    step8_syncSettingsHooks,
-    step9_startCoreServices,
-    step10_verifyServices,
+    step8_migrateStateMd,
+    step9_syncSettingsHooks,
+    step10_startCoreServices,
+    step11_verifyServices,
   ];
 
   const total = steps.length;
