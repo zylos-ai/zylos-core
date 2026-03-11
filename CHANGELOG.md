@@ -5,6 +5,21 @@ All notable changes to zylos-core will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.7] - 2026-03-11
+
+### Added
+- **Comprehensive onboarding flow**: guided first-run experience with step-by-step setup wizard covering auth, channels, and Caddy configuration (#291)
+- **Interactive security consent**: users must explicitly accept autonomous mode permissions during installation, replacing silent opt-in (#306)
+
+### Fixed
+- **API key exposed in process command line**: replaced `execSync` string interpolation with `execFileSync` + temp env file pattern — secrets no longer visible in `ps aux` or `/proc/cmdline` (#289)
+- **Web console URL shows /console/ without Caddy**: `zylos init` and `zylos doctor` now show direct `ip:port` URL when Caddy is not configured, instead of the Caddy-only `/console/` path (#307)
+- **Context rotation delivery deadlock**: fixed deadlock where context rotation and message delivery could block each other, causing session restart failures (#274)
+- **PM2 daemon foreign cgroup warning**: detect and warn when PM2 daemon runs in a different cgroup (e.g., after system upgrade), which can cause silent service failures (#302)
+- **Local address detection for Caddy**: automatically detect localhost/private IPs and configure HTTP on a high port instead of requesting HTTPS certificates (#298)
+- **Recovery notification dedup failure**: fix dedup key parsing when message contains `|req:xxx` suffix, preventing duplicate recovery notifications (#270)
+- **Docker entrypoint working directory**: fix Claude starting in wrong directory inside Docker container (#292)
+
 ## [0.3.6] - 2026-03-09
 
 ### Added
