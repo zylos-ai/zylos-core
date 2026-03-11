@@ -79,10 +79,11 @@ if [ -t 1 ]; then
   YELLOW='\033[1;33m'
   CYAN='\033[0;36m'
   BCYAN='\033[1;36m'
+  DIM='\033[2m'
   BOLD='\033[1m'
   NC='\033[0m'
 else
-  RED='' GREEN='' YELLOW='' CYAN='' BCYAN='' BOLD='' NC=''
+  RED='' GREEN='' YELLOW='' CYAN='' BCYAN='' DIM='' BOLD='' NC=''
 fi
 
 info()  { printf "${CYAN}[zylos]${NC} %s\n" "$*"; }
@@ -343,6 +344,65 @@ if [ "$BRANCH" != "main" ]; then
   info "Branch: ${BRANCH}"
 fi
 
+# ── Security Consent ─────────────────────────────────────────
+# Show security notice before installing anything. Skip in non-interactive
+# mode (-y) or when stdin is not a terminal (piped without /dev/tty).
+_has_yes_flag() {
+  for arg in "${INIT_ARGS[@]+"${INIT_ARGS[@]}"}"; do
+    case "$arg" in -y|--yes|-yq|-qy|-yqh|-qyh|-hyq|-hqy|-yhq|-qhy) return 0 ;; esac
+  done
+  return 1
+}
+
+if ! _has_yes_flag && [ -t 0 -o -e /dev/tty ]; then
+  echo ""
+  printf '%b' "${YELLOW}${BOLD}"
+  echo "  ◆ Security Notice"
+  printf '%b' "${NC}"
+  printf '%b' "${DIM}"
+  echo "  ┌────────────────────────────────────────────────────────┐"
+  echo "  │                                                        │"
+  printf '%b' "${NC}"
+  printf "  ${DIM}│${NC}  ${DIM}Zylos currently assumes a trusted environment.${NC}     ${DIM}│${NC}\n"
+  printf "  ${DIM}│${NC}  ${DIM}It runs with full system access as the current${NC}     ${DIM}│${NC}\n"
+  printf "  ${DIM}│${NC}  ${DIM}user — it can execute commands, read/write${NC}          ${DIM}│${NC}\n"
+  printf "  ${DIM}│${NC}  ${DIM}files, and access the network on your behalf.${NC}      ${DIM}│${NC}\n"
+  printf '%b' "${DIM}"
+  echo "  │                                                        │"
+  printf '%b' "${NC}"
+  printf "  ${DIM}│${NC}  ${YELLOW}⚠ Dangerous: If untrusted people can reach${NC}         ${DIM}│${NC}\n"
+  printf "  ${DIM}│${NC}  ${YELLOW}this machine or talk to the bot, they can${NC}          ${DIM}│${NC}\n"
+  printf "  ${DIM}│${NC}  ${YELLOW}execute anything as your user.${NC}                     ${DIM}│${NC}\n"
+  printf '%b' "${DIM}"
+  echo "  │                                                        │"
+  echo "  └────────────────────────────────────────────────────────┘"
+  printf '%b' "${NC}"
+  echo ""
+  echo "  Only continue if you understand the risks and trust"
+  echo "  the environment you are installing on."
+  echo ""
+  printf '%b' "${BOLD}"
+  printf "  I understand and want to continue [Y/n]: "
+  printf '%b' "${NC}"
+  if [ -e /dev/tty ]; then
+    read -r answer < /dev/tty
+  else
+    read -r answer
+  fi
+  case "${answer:-Y}" in
+    [Yy]*|"")
+      # User accepted — tell zylos init to skip its own consent prompt
+      INIT_ARGS+=("--skip-consent")
+      ;;
+    *)
+      echo ""
+      info "Installation cancelled. No changes were made."
+      echo ""
+      exit 0
+      ;;
+  esac
+fi
+
 echo ""
 info "Checking prerequisites..."
 echo ""
@@ -420,13 +480,18 @@ else
   # Always run zylos init after installation (environment is ready at this point).
   info "Running zylos init..."
   echo ""
+  local init_exit=0
   if [ -e /dev/tty ]; then
-    zylos init ${INIT_ARGS[@]+"${INIT_ARGS[@]}"} < /dev/tty
+    zylos init ${INIT_ARGS[@]+"${INIT_ARGS[@]}"} < /dev/tty || init_exit=$?
   else
-    zylos init ${INIT_ARGS[@]+"${INIT_ARGS[@]}"}
+    zylos init ${INIT_ARGS[@]+"${INIT_ARGS[@]}"} || init_exit=$?
   fi
 
-  _show_source_hint
+  if [ "$init_exit" -eq 0 ]; then
+    _show_source_hint
+  else
+    echo ""
+  fi
 fi
 
 } # end of _main — do not remove (partial download guard)

@@ -1593,6 +1593,7 @@ function parseInitFlags(args) {
     yes: false,
     quiet: false,
     help: false,
+    skipConsent: false,
     timezone: null,
     setupToken: null,
     apiKey: null,
@@ -1640,6 +1641,7 @@ function parseInitFlags(args) {
       case '--no-https': opts.https = false; break;
       case '--caddy': opts.caddy = true; break;
       case '--no-caddy': opts.caddy = false; break;
+      case '--skip-consent': opts.skipConsent = true; break;
     }
   }
 
@@ -1803,6 +1805,36 @@ export async function initCommand(args) {
 
   if (!quiet) {
     console.log(`\n${heading('Welcome to Zylos!')} Let's set up your AI assistant.\n`);
+  }
+
+  // Security consent — first-time install only, skip on re-init, silent mode,
+  // or when already accepted in install.sh (--skip-consent)
+  if (!skipConfirm && !opts.skipConsent && detectInstallState() !== 'complete') {
+    if (!quiet) {
+      console.log(yellow(bold('  ◆ Security Notice')));
+      console.log(dim('  ┌────────────────────────────────────────────────────────┐'));
+      console.log(dim('  │                                                        │'));
+      console.log(`  ${dim('│')}  ${dim('Zylos currently assumes a trusted environment.')}     ${dim('│')}`);
+      console.log(`  ${dim('│')}  ${dim('It runs with full system access as the current')}     ${dim('│')}`);
+      console.log(`  ${dim('│')}  ${dim('user — it can execute commands, read/write')}          ${dim('│')}`);
+      console.log(`  ${dim('│')}  ${dim('files, and access the network on your behalf.')}      ${dim('│')}`);
+      console.log(dim('  │                                                        │'));
+      console.log(`  ${dim('│')}  ${yellow('⚠ Dangerous: If untrusted people can reach')}         ${dim('│')}`);
+      console.log(`  ${dim('│')}  ${yellow('this machine or talk to the bot, they can')}          ${dim('│')}`);
+      console.log(`  ${dim('│')}  ${yellow('execute anything as your user.')}                     ${dim('│')}`);
+      console.log(dim('  │                                                        │'));
+      console.log(dim('  └────────────────────────────────────────────────────────┘'));
+      console.log('');
+      console.log('  Only continue if you understand the risks and trust');
+      console.log('  the environment you are installing on.');
+      console.log('');
+    }
+    const accepted = await promptYesNo('  I understand and want to continue [Y/n]: ', true);
+    if (!accepted) {
+      console.log(`\n${dim('Installation cancelled. No changes were made.')}`);
+      process.exit(130); // 130 = user cancellation (same as Ctrl+C convention)
+    }
+    if (!quiet) console.log('');
   }
 
   // Step 1: Check prerequisites (always, even on re-init)
