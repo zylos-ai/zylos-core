@@ -1074,10 +1074,10 @@ function printWebConsoleInfo() {
     console.log(`    URL:      ${bold(url)}`);
   } else {
     const port = process.env.WEB_CONSOLE_PORT || '3456';
-    console.log(`    Local:    ${bold(`http://localhost:${port}/console/`)}`);
+    console.log(`    Local:    ${bold(`http://localhost:${port}/`)}`);
     const ip = getNetworkIP();
     if (ip) {
-      console.log(`    Network:  ${bold(`http://${ip}:${port}/console/`)}`);
+      console.log(`    Network:  ${bold(`http://${ip}:${port}/`)}`);
     }
   }
 
