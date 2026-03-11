@@ -641,15 +641,15 @@ function startClaude() {
 
       // Write secrets to a temp file, source it in the shell command, then delete it
       const envParts = [];
-      if (apiKeyValue) envParts.push(`ANTHROPIC_API_KEY=${apiKeyValue}`);
-      if (oauthTokenValue) envParts.push(`CLAUDE_CODE_OAUTH_TOKEN=${oauthTokenValue}`);
+      if (apiKeyValue) envParts.push(`ANTHROPIC_API_KEY='${apiKeyValue}'`);
+      if (oauthTokenValue) envParts.push(`CLAUDE_CODE_OAUTH_TOKEN='${oauthTokenValue}'`);
 
       let shellCmd;
       let tmpEnv = null;
       if (envParts.length > 0) {
         tmpEnv = path.join(os.tmpdir(), `.zylos-env-${process.pid}-${Date.now()}`);
         fs.writeFileSync(tmpEnv, envParts.join('\n') + '\n', { mode: 0o600 });
-        shellCmd = `set -a; . ${tmpEnv}; set +a; rm -f ${tmpEnv}; cd ${ZYLOS_DIR} && ${claudeCmd}; ${exitLogSnippet}`;
+        shellCmd = `set -a; . "${tmpEnv}"; set +a; rm -f "${tmpEnv}"; cd ${ZYLOS_DIR} && ${claudeCmd}; ${exitLogSnippet}`;
       } else {
         shellCmd = `cd ${ZYLOS_DIR} && ${claudeCmd}; ${exitLogSnippet}`;
       }
