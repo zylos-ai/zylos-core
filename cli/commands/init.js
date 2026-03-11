@@ -1812,20 +1812,21 @@ export async function initCommand(args) {
   if (!skipConfirm && !opts.skipConsent && detectInstallState() !== 'complete') {
     if (!quiet) {
       console.log(yellow(bold('  ◆ Security Notice')));
-      console.log(dim('  ──────────────────────────────────────────────────────────'));
-      console.log('');
-      console.log('  Zylos currently assumes a trusted environment. It runs');
-      console.log('  with full system access as the current user — it can');
-      console.log('  execute commands, read/write files, and access the network');
-      console.log('  on your behalf.');
-      console.log('');
-      console.log(yellow('  ⚠ It is dangerous if untrusted people can reach this'));
-      console.log(yellow('  machine or talk to the bot — they can execute anything.'));
+      console.log(dim('  ┌────────────────────────────────────────────────────────┐'));
+      console.log(dim('  │                                                        │'));
+      console.log(`  ${dim('│')}  ${dim('Zylos currently assumes a trusted environment.')}     ${dim('│')}`);
+      console.log(`  ${dim('│')}  ${dim('It runs with full system access as the current')}     ${dim('│')}`);
+      console.log(`  ${dim('│')}  ${dim('user — it can execute commands, read/write')}          ${dim('│')}`);
+      console.log(`  ${dim('│')}  ${dim('files, and access the network on your behalf.')}      ${dim('│')}`);
+      console.log(dim('  │                                                        │'));
+      console.log(`  ${dim('│')}  ${yellow('⚠ It is dangerous if untrusted people can')}          ${dim('│')}`);
+      console.log(`  ${dim('│')}  ${yellow('reach this machine or talk to the bot —')}             ${dim('│')}`);
+      console.log(`  ${dim('│')}  ${yellow('they can execute anything.')}                          ${dim('│')}`);
+      console.log(dim('  │                                                        │'));
+      console.log(dim('  └────────────────────────────────────────────────────────┘'));
       console.log('');
       console.log('  Only continue if you understand the risks and trust');
       console.log('  the environment you are installing on.');
-      console.log('');
-      console.log(dim('  ──────────────────────────────────────────────────────────'));
       console.log('');
     }
     const accepted = await promptYesNo('  I understand and want to continue [Y/n]: ', true);
