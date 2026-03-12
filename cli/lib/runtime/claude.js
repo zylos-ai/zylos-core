@@ -18,6 +18,7 @@ import path from 'node:path';
 import { execSync, execFileSync } from 'node:child_process';
 import { RuntimeAdapter } from './base.js';
 import { buildInstructionFile } from './instruction-builder.js';
+import { ClaudeContextMonitor } from './claude-context-monitor.js';
 import { ZYLOS_DIR } from '../config.js';
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -254,11 +255,11 @@ export class ClaudeAdapter extends RuntimeAdapter {
   }
 
   /**
-   * ContextMonitor — implemented in Phase 5.
-   * @returns {null}
+   * Returns a ClaudeContextMonitor instance for this runtime.
+   * @returns {ClaudeContextMonitor}
    */
   getContextMonitor() {
-    return null;
+    return new ClaudeContextMonitor();
   }
 }
 

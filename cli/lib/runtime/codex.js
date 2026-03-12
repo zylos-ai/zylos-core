@@ -18,6 +18,7 @@ import path from 'node:path';
 import { execSync, execFileSync, spawnSync } from 'node:child_process';
 import { RuntimeAdapter } from './base.js';
 import { buildInstructionFile } from './instruction-builder.js';
+import { CodexContextMonitor } from './codex-context-monitor.js';
 import { ZYLOS_DIR } from '../config.js';
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -185,11 +186,11 @@ export class CodexAdapter extends RuntimeAdapter {
   }
 
   /**
-   * ContextMonitor — implemented in Phase 5.
-   * @returns {null}
+   * Returns a CodexContextMonitor instance for this runtime.
+   * @returns {CodexContextMonitor}
    */
   getContextMonitor() {
-    return null;
+    return new CodexContextMonitor();
   }
 }
 
