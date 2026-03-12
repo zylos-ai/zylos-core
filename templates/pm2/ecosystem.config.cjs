@@ -13,6 +13,7 @@ const fs = require('fs');
 
 const HOME = os.homedir();
 const ZYLOS_DIR = path.join(HOME, 'zylos');
+const ZYLOS_META_DIR = path.join(ZYLOS_DIR, '.zylos');
 const SKILLS_DIR = path.join(HOME, 'zylos', '.claude', 'skills');
 const BIN_DIR = path.join(ZYLOS_DIR, 'bin');
 const HTTP_DIR = path.join(ZYLOS_DIR, 'http');
@@ -37,6 +38,71 @@ const ENHANCED_PATH = [
 
 // Whether Claude should run with --dangerously-skip-permissions
 const CLAUDE_BYPASS_PERMISSIONS = readEnvValue('CLAUDE_BYPASS_PERMISSIONS', 'true');
+
+// Load PM2 configs for installed components that declare a service.
+// Each component can provide its own ecosystem.config.cjs in its skill directory.
+// Falls back to generating a config from SKILL.md frontmatter if no ecosystem file exists.
+function loadComponentServices() {
+  const componentsFile = path.join(ZYLOS_META_DIR, 'components.json');
+  try {
+    const components = JSON.parse(fs.readFileSync(componentsFile, 'utf8'));
+    const apps = [];
+    for (const [name, meta] of Object.entries(components)) {
+      const skillDir = meta.skillDir || path.join(SKILLS_DIR, name);
+
+      // Try loading the component's own ecosystem.config.cjs
+      const ecoPath = path.join(skillDir, 'ecosystem.config.cjs');
+      if (fs.existsSync(ecoPath)) {
+        try {
+          const componentConfig = require(ecoPath);
+          const componentApps = componentConfig.apps || [];
+          for (const app of componentApps) {
+            // Inject ENHANCED_PATH so component services can find claude, node, etc.
+            app.env = { ...app.env, PATH: ENHANCED_PATH };
+            apps.push(app);
+          }
+          continue;
+        } catch {}
+      }
+
+      // Fallback: parse SKILL.md frontmatter for service declaration
+      const skillMd = path.join(skillDir, 'SKILL.md');
+      if (!fs.existsSync(skillMd)) continue;
+      try {
+        const content = fs.readFileSync(skillMd, 'utf8');
+        const fmMatch = content.match(/^---\n([\s\S]*?)\n---/);
+        if (!fmMatch) continue;
+        const fm = fmMatch[1];
+        // Extract service.name and service.entry from YAML (simple parsing)
+        const nameMatch = fm.match(/service:\s*\n\s+(?:type:\s*\w+\s*\n\s+)?name:\s*(.+)/);
+        const entryMatch = fm.match(/service:\s*\n(?:\s+\w+:.*\n)*?\s+entry:\s*(.+)/);
+        if (!nameMatch || !entryMatch) continue;
+        const serviceName = nameMatch[1].trim();
+        const entry = entryMatch[1].trim();
+        const dataDir = meta.dataDir || path.join(ZYLOS_DIR, 'components', name);
+        apps.push({
+          name: serviceName,
+          script: entry,
+          cwd: skillDir,
+          env: {
+            PATH: ENHANCED_PATH,
+            NODE_ENV: 'production',
+          },
+          autorestart: true,
+          max_restarts: 10,
+          min_uptime: '10s',
+          error_file: path.join(dataDir, 'logs', 'error.log'),
+          out_file: path.join(dataDir, 'logs', 'out.log'),
+          log_date_format: 'YYYY-MM-DD HH:mm:ss',
+        });
+      } catch {}
+    }
+    return apps;
+  } catch {
+    // components.json missing or malformed — return empty, core services still start
+    return [];
+  }
+}
 
 module.exports = {
   apps: [
@@ -106,6 +172,7 @@ module.exports = {
           kill_timeout: 5000,
         }]
       : []),
-    // Component services (telegram, lark, etc.) are managed by `zylos add/remove`
+    // Component services — dynamically loaded from components.json
+    ...loadComponentServices(),
   ]
 };
