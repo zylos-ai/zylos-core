@@ -11,7 +11,7 @@ import https from 'node:https';
 import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
-import { execSync, spawnSync, spawn } from 'node:child_process';
+import { execSync, execFileSync, spawnSync, spawn } from 'node:child_process';
 import { ZYLOS_DIR, SKILLS_DIR, CONFIG_DIR, COMPONENTS_DIR, LOCKS_DIR, COMPONENTS_FILE, BIN_DIR, HTTP_DIR, CADDYFILE, CADDY_BIN, getZylosConfig, updateZylosConfig } from '../lib/config.js';
 import { generateManifest, saveManifest } from '../lib/manifest.js';
 import { prompt, promptYesNo, promptChoice, promptSecret } from '../lib/prompts.js';
@@ -715,9 +715,26 @@ async function guideBypassAcceptance() {
 
   // Create new tmux session with Claude
   try {
-    const sandboxEnv = process.env.IS_SANDBOX ? '-e "IS_SANDBOX=1" ' : '';
-    const apiKeyEnv = process.env.ANTHROPIC_API_KEY ? `-e "ANTHROPIC_API_KEY=${process.env.ANTHROPIC_API_KEY}" ` : '';
-    execSync(`tmux new-session -d -s claude-main ${sandboxEnv}${apiKeyEnv}"cd ${ZYLOS_DIR} && claude --dangerously-skip-permissions"`, { stdio: 'pipe' });
+    const tmuxArgs = ['new-session', '-d', '-s', 'claude-main'];
+    if (process.env.IS_SANDBOX) tmuxArgs.push('-e', 'IS_SANDBOX=1');
+
+    // Write API key to temp file to avoid exposing it in process command line
+    let shellCmd;
+    let tmpEnv = null;
+    if (process.env.ANTHROPIC_API_KEY) {
+      tmpEnv = path.join(os.tmpdir(), `.zylos-env-${process.pid}-${Date.now()}`);
+      fs.writeFileSync(tmpEnv, `ANTHROPIC_API_KEY='${process.env.ANTHROPIC_API_KEY}'\n`, { mode: 0o600 });
+      shellCmd = `set -a; . "${tmpEnv}"; set +a; rm -f "${tmpEnv}"; cd ${ZYLOS_DIR} && claude --dangerously-skip-permissions`;
+    } else {
+      shellCmd = `cd ${ZYLOS_DIR} && claude --dangerously-skip-permissions`;
+    }
+    tmuxArgs.push('--', shellCmd);
+    try {
+      execFileSync('tmux', tmuxArgs, { stdio: 'pipe' });
+    } catch (e) {
+      if (tmpEnv) try { fs.unlinkSync(tmpEnv); } catch {}
+      throw e;
+    }
     // Configure status bar with detach hint
     try {
       execSync('tmux set-option -t claude-main status-right " Ctrl+B d = detach " 2>/dev/null', { stdio: 'pipe' });
@@ -1074,10 +1091,10 @@ function printWebConsoleInfo() {
     console.log(`    URL:      ${bold(url)}`);
   } else {
     const port = process.env.WEB_CONSOLE_PORT || '3456';
-    console.log(`    Local:    ${bold(`http://localhost:${port}/console/`)}`);
+    console.log(`    Local:    ${bold(`http://localhost:${port}/`)}`);
     const ip = getNetworkIP();
     if (ip) {
-      console.log(`    Network:  ${bold(`http://${ip}:${port}/console/`)}`);
+      console.log(`    Network:  ${bold(`http://${ip}:${port}/`)}`);
     }
   }
 

@@ -516,9 +516,9 @@ function discoverChannels(pm2Procs, env, tmuxSession, components) {
       action = `${protocol}://${domain}/console/`;
       if (!hasPassword) warning = 'no password set';
     } else {
-      action = `http://localhost:${port}/console/`;
+      action = `http://localhost:${port}/`;
       const ip = getNetworkIP();
-      if (ip) secondaryAction = `http://${ip}:${port}/console/`;
+      if (ip) secondaryAction = `http://${ip}:${port}/`;
       hint = `Tip: ${bold('zylos init')} can set up a custom domain for remote access.`;
     }
 

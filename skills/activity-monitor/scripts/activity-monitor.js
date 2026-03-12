@@ -633,15 +633,33 @@ function startClaude() {
     log('Guardian: Started Claude in existing tmux session');
   } else {
     try {
-      // -e flags pass env vars to tmux session:
-      // - PATH: ensures Claude is found even if tmux server has different env
-      // - IS_SANDBOX=1: allows --dangerously-skip-permissions as root (Docker)
-      // - ANTHROPIC_API_KEY: for API key auth (only when no native login)
-      // - CLAUDE_CODE_OAUTH_TOKEN: for setup-token auth (only when no native login)
-      const sandboxEnv = process.getuid?.() === 0 ? ' -e "IS_SANDBOX=1"' : '';
-      const apiKeyEnv = apiKeyValue ? ` -e "ANTHROPIC_API_KEY=${apiKeyValue}"` : '';
-      const oauthTokenEnv = oauthTokenValue ? ` -e "CLAUDE_CODE_OAUTH_TOKEN=${oauthTokenValue}"` : '';
-      execSync(`tmux new-session -d -s "${SESSION}" -e "PATH=${process.env.PATH}"${sandboxEnv}${apiKeyEnv}${oauthTokenEnv} 'cd ${ZYLOS_DIR} && ${claudeCmd}; ${exitLogSnippet}'`);
+      // Create tmux session without secrets in the command line.
+      // Uses execFileSync (no shell) to prevent shell injection, and injects
+      // secrets via a temp env file to avoid exposure in ps/proc/cmdline.
+      const tmuxArgs = ['new-session', '-d', '-s', SESSION, '-e', `PATH=${process.env.PATH}`];
+      if (process.getuid?.() === 0) tmuxArgs.push('-e', 'IS_SANDBOX=1');
+
+      // Write secrets to a temp file, source it in the shell command, then delete it
+      const envParts = [];
+      if (apiKeyValue) envParts.push(`ANTHROPIC_API_KEY='${apiKeyValue}'`);
+      if (oauthTokenValue) envParts.push(`CLAUDE_CODE_OAUTH_TOKEN='${oauthTokenValue}'`);
+
+      let shellCmd;
+      let tmpEnv = null;
+      if (envParts.length > 0) {
+        tmpEnv = path.join(os.tmpdir(), `.zylos-env-${process.pid}-${Date.now()}`);
+        fs.writeFileSync(tmpEnv, envParts.join('\n') + '\n', { mode: 0o600 });
+        shellCmd = `set -a; . "${tmpEnv}"; set +a; rm -f "${tmpEnv}"; cd ${ZYLOS_DIR} && ${claudeCmd}; ${exitLogSnippet}`;
+      } else {
+        shellCmd = `cd ${ZYLOS_DIR} && ${claudeCmd}; ${exitLogSnippet}`;
+      }
+      tmuxArgs.push('--', shellCmd);
+      try {
+        execFileSync('tmux', tmuxArgs);
+      } catch (e) {
+        if (tmpEnv) try { fs.unlinkSync(tmpEnv); } catch {}
+        throw e;
+      }
       // Configure status bar with detach hint
       try {
         execSync(`tmux set-option -t "${SESSION}" status-right " Ctrl+B d = detach " 2>/dev/null`);
