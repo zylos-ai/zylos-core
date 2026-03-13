@@ -4,8 +4,15 @@
 
 import { execSync, execFileSync } from 'node:child_process';
 import { bold } from '../lib/colors.js';
+import { getActiveAdapter } from '../lib/runtime/index.js';
 
-const SESSION = 'claude-main';
+let SESSION = 'claude-main';
+let RUNTIME_LABEL = 'Claude';
+try {
+  const adapter = getActiveAdapter();
+  SESSION = adapter.sessionName;
+  RUNTIME_LABEL = adapter.displayName;
+} catch { /* config absent — use Claude defaults */ }
 
 export function attachCommand() {
   // Check if tmux session exists
@@ -21,10 +28,10 @@ export function attachCommand() {
     } catch {}
 
     if (pm2Running) {
-      console.error(`No active Claude session yet. Activity monitor is running — Claude should start shortly.`);
+      console.error(`No active ${RUNTIME_LABEL} session yet. Activity monitor is running — ${RUNTIME_LABEL} should start shortly.`);
       console.error(`  Check status: ${bold('zylos status')}`);
     } else {
-      console.error(`No active Claude session found.`);
+      console.error(`No active ${RUNTIME_LABEL} session found.`);
       console.error(`  First time? Run ${bold('zylos init')}`);
       console.error(`  Otherwise:  Run ${bold('zylos start')}`);
     }

@@ -3,7 +3,7 @@
  *
  * Design: https://github.com/zylos-ai/zylos-core/issues/212
  *
- * Phase 1: Stop services (tmux claude-main + PM2 zylos services)
+ * Phase 1: Stop services (tmux sessions + PM2 zylos services)
  * Phase 2: Uninstall the zylos npm package
  * Phase 3: Remove ~/zylos/ directory and clean shell profile PATH entries
  * Phase 4: Optional cleanup (PM2, Claude CLI) — interactive, skipped with --force
@@ -14,11 +14,13 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { ZYLOS_DIR } from '../lib/config.js';
+import { getActiveAdapter } from '../lib/runtime/index.js';
 import { bold, dim, green, red, cyan, success, warn, heading } from '../lib/colors.js';
 import { promptYesNo } from '../lib/prompts.js';
 import { commandExists } from '../lib/shell-utils.js';
 
-const TMUX_SESSION = 'claude-main';
+// Kill both known runtime sessions on uninstall regardless of which is active
+const TMUX_SESSIONS = ['claude-main', 'codex-main'];
 
 export async function selfUninstall(args) {
   const force = args.includes('--force') || args.includes('-f');
@@ -133,14 +135,16 @@ export async function selfUninstall(args) {
 // ── Phase 1 helpers ──────────────────────────────────────
 
 /**
- * Kill the claude-main tmux session if it exists.
+ * Kill all known runtime tmux sessions (claude-main, codex-main).
  */
 function killTmuxSession() {
-  try {
-    execFileSync('tmux', ['kill-session', '-t', TMUX_SESSION], { stdio: 'pipe' });
-    console.log(`  Killed tmux session ${dim(TMUX_SESSION)}`);
-  } catch {
-    console.log(`  ${dim(`No tmux session "${TMUX_SESSION}" found`)}`);
+  for (const session of TMUX_SESSIONS) {
+    try {
+      execFileSync('tmux', ['kill-session', '-t', session], { stdio: 'pipe' });
+      console.log(`  Killed tmux session ${dim(session)}`);
+    } catch {
+      // Session not found — normal
+    }
   }
 }
 
