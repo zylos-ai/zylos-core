@@ -618,6 +618,19 @@ function saveCodexApiKeyToEnv(apiKey) {
     }
     fs.writeFileSync(envPath, content);
     process.env.OPENAI_API_KEY = apiKey;
+
+    // Also write to ~/.codex/auth.json so Codex reads the key natively at startup,
+    // without requiring env var injection into the tmux session.
+    try {
+      const codexDir = path.join(os.homedir(), '.codex');
+      const authPath = path.join(codexDir, 'auth.json');
+      fs.mkdirSync(codexDir, { recursive: true });
+      let authContent = {};
+      try { authContent = JSON.parse(fs.readFileSync(authPath, 'utf8')); } catch {}
+      authContent.OPENAI_API_KEY = apiKey;
+      fs.writeFileSync(authPath, JSON.stringify(authContent, null, 2) + '\n', { mode: 0o600 });
+    } catch { /* non-fatal — env var injection is the fallback */ }
+
     return true;
   } catch (err) {
     console.log(`  ${warn(`Could not write API key to .env: ${err.message}`)}`);
