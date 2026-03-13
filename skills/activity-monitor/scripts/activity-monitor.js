@@ -264,6 +264,9 @@ function tmuxHasSession() {
   }
 }
 
+// TODO: Add Codex-specific maintenance process detection when Codex maintenance
+// scripts exist (e.g. restart-codex, upgrade-codex). Currently only Claude
+// maintenance scripts are detected; Codex maintenance runs would not be guarded.
 function getRunningMaintenance() {
   try {
     execSync('pgrep -f "[r]estart-claude" > /dev/null 2>&1');
@@ -319,7 +322,9 @@ function waitForMaintenance() {
 // Startup prompt: prefer session start hook (session-start-prompt.js) which
 // injects directly into session context. Fall back to C4 control for existing
 // installations that haven't received the new hook via `zylos init`.
+// Non-Claude runtimes don't use Claude settings.json hooks — always fall back to C4.
 function hasStartupHook() {
+  if (adapter.displayName !== 'Claude Code') return false;
   try {
     const settingsPath = path.join(ZYLOS_DIR, '.claude', 'settings.json');
     const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
@@ -377,13 +382,18 @@ function startAgent() {
     fs.writeFileSync(HOOK_STATE_FILE, JSON.stringify({ active_tools: 0 }));
   } catch { }
 
-  adapter.launch().then(() => {
-    if (!hasStartupHook()) {
-      enqueueStartupControl();
-    }
-  }).catch(err => {
+  // Fire-and-forget: launch() is intentionally not awaited. The monitor loop
+  // must not block for the full startup duration (several seconds for the agent
+  // to become interactive). startupGrace prevents re-entry for the next 30 ticks.
+  adapter.launch().catch(err => {
     log(`Guardian: Failed to start ${adapter.displayName}: ${err.message}`);
   });
+
+  // Enqueue startup prompt (fires with --available-in 3 delay — no need to
+  // wait for launch to complete before enqueueing).
+  if (!hasStartupHook()) {
+    enqueueStartupControl();
+  }
 }
 
 function ensureStatusDir() {
@@ -632,6 +642,8 @@ function writeDailyUpgradeState(date) {
 }
 
 function enqueueDailyUpgradeControl() {
+  // Only applicable for Claude Code runtime — no equivalent upgrade skill for other runtimes.
+  if (adapter.displayName !== 'Claude Code') return false;
   const content = 'Daily upgrade. Use the upgrade-claude skill to upgrade Claude Code to the latest version.';
   const result = runC4Control([
     'enqueue',

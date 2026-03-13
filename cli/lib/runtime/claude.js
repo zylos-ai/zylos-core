@@ -109,9 +109,10 @@ export class ClaudeAdapter extends RuntimeAdapter {
   }
 
   /**
-   * @returns {Promise<void>}
+   * Kill the tmux session for this runtime.
+   * Synchronous — HeartbeatEngine calls this without await.
    */
-  async stop() {
+  stop() {
     try {
       execSync(`tmux kill-session -t "${SESSION}" 2>/dev/null`);
     } catch { /* session may not exist */ }

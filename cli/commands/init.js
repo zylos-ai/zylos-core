@@ -2282,7 +2282,7 @@ export async function initCommand(args) {
       if (!quiet) console.log(`\n${dim('No services to start.')}`);
     }
 
-    if (claudeAuthenticated && !skipConfirm && needsBypassAcceptance()) {
+    if (selectedRuntime === 'claude' && claudeAuthenticated && !skipConfirm && needsBypassAcceptance()) {
       await guideBypassAcceptance();
     }
 
@@ -2374,8 +2374,8 @@ export async function initCommand(args) {
     setupPm2Startup();
   }
 
-  // First-time Claude bypass acceptance (only if authenticated, skip in non-interactive mode)
-  if (claudeAuthenticated && !skipConfirm && needsBypassAcceptance()) {
+  // First-time Claude bypass acceptance (only if Claude runtime and authenticated)
+  if (selectedRuntime === 'claude' && claudeAuthenticated && !skipConfirm && needsBypassAcceptance()) {
     await guideBypassAcceptance();
   }
 

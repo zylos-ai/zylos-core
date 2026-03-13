@@ -42,10 +42,9 @@ export class RuntimeAdapter {
 
   /**
    * Stop the runtime (kill the tmux session).
-   *
-   * @returns {Promise<void>}
+   * Implementations MUST be synchronous — HeartbeatEngine calls this without await.
    */
-  async stop() {
+  stop() {
     _abstract('stop');
   }
 
@@ -105,6 +104,16 @@ export class RuntimeAdapter {
    */
   get displayName() {
     return this.constructor.name;
+  }
+
+  /**
+   * Name of the tmux session used by this runtime (e.g. 'claude-main', 'codex-main').
+   * Used by activity-monitor.js for tmux helpers. Subclasses MUST override this.
+   *
+   * @returns {string}
+   */
+  get sessionName() {
+    _abstract('sessionName');
   }
 }
 

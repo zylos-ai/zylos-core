@@ -66,16 +66,17 @@ export function createCodexProbe({
       const probeId = Date.now();
       const deadline = phase === 'stuck' ? stuckAckDeadline : ackDeadline;
 
-      // Capture pane baseline before injecting
-      const paneContent = _captureTmuxPane(tmuxSession) || '';
-      const paneLineCount = paneContent.split('\n').filter(l => l.trim()).length;
-
-      // Capture rollout baseline
+      // Capture rollout baseline before injecting (mtime changes only when agent writes)
       const rolloutPath = _getActiveRolloutPath(sqliteFile);
       const rolloutMtime = rolloutPath ? _getMtime(rolloutPath) : 0;
 
       // Inject heartbeat message
       if (!_sendTmuxMessage(tmuxSession, 'Heartbeat check.')) return false;
+
+      // Capture pane baseline AFTER injection so the injected line is already
+      // included in the count — only subsequent output from the agent triggers 'done'.
+      const paneContent = _captureTmuxPane(tmuxSession) || '';
+      const paneLineCount = paneContent.split('\n').filter(l => l.trim()).length;
 
       return _writePending(pendingFile, {
         control_id: probeId,
