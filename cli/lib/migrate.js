@@ -101,10 +101,6 @@ function migrateClaudeMdToZylosMd() {
     newClaudeContent = userContent;
   }
 
-  // Write new CLAUDE.md content to temp file
-  const claudeMdNew = CLAUDE_MD + `.new.${process.pid}`;
-  fs.writeFileSync(claudeMdNew, newClaudeContent, 'utf8');
-
   // Prepend a migration notice to ZYLOS.md so users know to review it before
   // switching runtimes. The old CLAUDE.md may contain Claude-specific rules
   // (e.g. EnterPlanMode, Task agents) that should be removed from the
@@ -113,12 +109,22 @@ function migrateClaudeMdToZylosMd() {
      CLAUDE.md. It may contain Claude-specific instructions. If you plan to
      use Codex, review this file and remove any Claude-only rules before
      switching runtimes via "zylos init --runtime codex". -->\n\n`;
-  fs.writeFileSync(CLAUDE_MD, migrationNotice + userContent, 'utf8');
+
+  // Write both outputs to temp files first, then perform two atomic renames.
+  // This avoids a crash window where CLAUDE.md has been overwritten but not
+  // yet renamed to ZYLOS.md — which would leave the user's content corrupted
+  // and cause the migration notice to be prepended again on the next run.
+  const claudeMdNew = CLAUDE_MD + `.new.${process.pid}`;
+  const zylosMdTmp = ZYLOS_MD + `.tmp.${process.pid}`;
+  fs.writeFileSync(claudeMdNew, newClaudeContent, 'utf8');
+  fs.writeFileSync(zylosMdTmp, migrationNotice + userContent, 'utf8');
 
   // Atomic sequence:
-  //   rename CLAUDE.md → ZYLOS.md  (user's existing content is now ZYLOS.md)
-  //   rename CLAUDE.md.new → CLAUDE.md  (generated content is now CLAUDE.md)
-  fs.renameSync(CLAUDE_MD, ZYLOS_MD);
+  //   rename CLAUDE.md.tmp → ZYLOS.md  (user's existing content is now ZYLOS.md)
+  //   rename CLAUDE.md.new → CLAUDE.md  (new generated content in place)
+  // CLAUDE.md is overwritten atomically on the final rename — no window
+  // where the file is missing or contains the wrong content.
+  fs.renameSync(zylosMdTmp, ZYLOS_MD);
   fs.renameSync(claudeMdNew, CLAUDE_MD);
 
   return true;

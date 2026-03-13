@@ -107,6 +107,11 @@ upsert_env "LARK_APP_SECRET" "${LARK_APP_SECRET:-}"
 upsert_env "WEB_CONSOLE_BIND" "${WEB_CONSOLE_BIND:-0.0.0.0}"
 upsert_env "CLAUDE_BYPASS_PERMISSIONS" "${CLAUDE_BYPASS_PERMISSIONS:-true}"
 upsert_env "CODEX_BYPASS_PERMISSIONS" "${CODEX_BYPASS_PERMISSIONS:-true}"
+# Codex API credentials — persist to .env so the tmux session (which sources
+# .env) and PM2 services (which read .env via ecosystem config) can find them
+# on subsequent restarts without relying on Docker's environment re-injection.
+upsert_env "OPENAI_API_KEY" "${OPENAI_API_KEY:-}"
+upsert_env "CODEX_API_KEY" "${CODEX_API_KEY:-}"
 
 # Save current PATH so PM2 services can find claude and node
 upsert_env "SYSTEM_PATH" "${PATH}"
