@@ -2,16 +2,6 @@
 
 The following rules apply when running on the **OpenAI Codex** runtime.
 
-### Session Startup
-
-At the start of every session, **before responding to any user message**, read the recent conversation history to restore context:
-
-```bash
-node ~/zylos/.claude/skills/comm-bridge/scripts/c4-db.js recent --limit 10
-```
-
-This is necessary because Codex does not have a session hook mechanism — memory files contain only summary state, not recent conversation details. Reading C4 history prevents "amnesia" when resuming mid-conversation.
-
 ### Runtime Switching
 
 When the user asks to switch to the Claude runtime:

@@ -177,7 +177,21 @@ export class CodexAdapter extends RuntimeAdapter {
     // 1. Build AGENTS.md before launching (pass memorySnapshot for session rotation)
     await this.buildInstructionFile({ memorySnapshot: opts.memorySnapshot });
 
-    // 2. Build the codex command
+    // 2. Gather recent C4 conversation context to inject as the initial user prompt.
+    //    This mirrors Claude's c4-session-init.js SessionStart hook — Codex has no
+    //    hook mechanism, so we inject context at launch time instead.
+    let tmpPrompt = null;
+    try {
+      const sessionInitScript = path.join(ZYLOS_DIR, '.claude', 'skills', 'comm-bridge', 'scripts', 'c4-session-init.js');
+      const result = spawnSync('node', [sessionInitScript], { encoding: 'utf8', timeout: 10_000 });
+      const context = result.stdout?.trim();
+      if (result.status === 0 && context) {
+        tmpPrompt = path.join(os.tmpdir(), `.zylos-prompt-${process.pid}-${Date.now()}`);
+        fs.writeFileSync(tmpPrompt, context, { mode: 0o600 });
+      }
+    } catch { /* c4 context unavailable — launch without initial prompt */ }
+
+    // 3. Build the codex command
     const bypassFlag = bypassPermissions ? ' --dangerously-bypass-approvals-and-sandbox' : '';
     const codexCmd = `${CODEX_BIN}${bypassFlag}`;
 
@@ -187,7 +201,9 @@ export class CodexAdapter extends RuntimeAdapter {
 
     if (_tmuxHasSession()) {
       // Existing session — send command via tmux
-      const cmd = `cd "${ZYLOS_DIR}"; ${codexCmd}; ${exitLogSnippet}`;
+      const cmd = tmpPrompt
+        ? `cd "${ZYLOS_DIR}"; _p=$(cat "${tmpPrompt}"); rm -f "${tmpPrompt}"; ${codexCmd} "$_p"; ${exitLogSnippet}`
+        : `cd "${ZYLOS_DIR}"; ${codexCmd}; ${exitLogSnippet}`;
       await this.sendMessage(cmd);
     } else {
       // New tmux session — inject API keys from ~/zylos/.env so Codex can
@@ -209,15 +225,19 @@ export class CodexAdapter extends RuntimeAdapter {
       const tmuxArgs = ['new-session', '-d', '-s', SESSION, '-e', `PATH=${process.env.PATH}`];
       if (process.getuid?.() === 0) tmuxArgs.push('-e', 'IS_SANDBOX=1');
 
+      const promptSnippet = tmpPrompt
+        ? `_p=$(cat "${tmpPrompt}"); rm -f "${tmpPrompt}"; ${codexCmd} "$_p"`
+        : codexCmd;
       const shellCmd = tmpEnv
-        ? `set -a; . "${tmpEnv}"; set +a; rm -f "${tmpEnv}"; cd "${ZYLOS_DIR}" && ${codexCmd}; ${exitLogSnippet}`
-        : `cd "${ZYLOS_DIR}" && ${codexCmd}; ${exitLogSnippet}`;
+        ? `set -a; . "${tmpEnv}"; set +a; rm -f "${tmpEnv}"; cd "${ZYLOS_DIR}" && ${promptSnippet}; ${exitLogSnippet}`
+        : `cd "${ZYLOS_DIR}" && ${promptSnippet}; ${exitLogSnippet}`;
       tmuxArgs.push('--', shellCmd);
 
       try {
         execFileSync('tmux', tmuxArgs);
       } catch (e) {
         if (tmpEnv) try { fs.unlinkSync(tmpEnv); } catch { }
+        if (tmpPrompt) try { fs.unlinkSync(tmpPrompt); } catch { }
         throw new Error(`Failed to create tmux session: ${e.message}`);
       }
     }

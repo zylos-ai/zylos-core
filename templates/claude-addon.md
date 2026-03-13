@@ -13,6 +13,16 @@ The following rules apply when running on the **Claude Code** runtime.
    - **Multiple web calls (2+):** MUST delegate to a background agent (`Task` tool with `run_in_background: true`). `WebSearch` and `WebFetch` have no timeout mechanism and can hang indefinitely, blocking heartbeat delivery.
    - **Research tasks (expected many searches or tool calls):** MUST use a background agent. A non-background Task subagent returns its full output into the parent context — dozens of web search results can overflow the context window and crash the session.
 
+### Runtime Switching
+
+When the user asks to switch to the Codex runtime:
+
+```bash
+zylos init --runtime codex
+```
+
+This reconfigures the system, rebuilds instruction files, and restarts PM2 services — your Claude Code session will be terminated and Codex will start.
+
 ### Heartbeat
 
 When you receive a control message with content `Heartbeat check`, acknowledge it immediately:
