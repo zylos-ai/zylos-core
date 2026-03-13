@@ -172,8 +172,9 @@ let idleSince = 0;
 let lastStuckProbeAt = 0;
 let lastDeadApiPid = null;
 
-let adapter; // initialized in init() via getActiveAdapter()
-let engine;  // initialized in init()
+let adapter;         // initialized in init() via getActiveAdapter()
+let engine;          // initialized in init()
+let contextMonitor;  // initialized in init() if adapter provides one (Codex only)
 
 // Usage monitoring state machine: 'idle' → 'sent' → 'waiting' → 'capture' → 'idle'
 let usageCheckPhase = 'idle';
@@ -1306,6 +1307,27 @@ function init() {
   // after Claude's first startup.
   const usageState = loadUsageState();
   lastUsageCheckAt = usageState?.lastCheckEpoch || Math.floor(Date.now() / 1000);
+
+  // Start context monitor if the adapter provides one (Codex polling-based monitor).
+  // Claude uses the statusLine hook instead — no adapter-provided monitor.
+  contextMonitor = adapter.getContextMonitor?.() ?? null;
+  if (contextMonitor) {
+    contextMonitor.startPolling({
+      intervalMs: 30_000,
+      onExceed: async ({ used, ceiling, ratio }) => {
+        const pct = Math.round(ratio * 100);
+        log(`Context at ${pct}% (${used}/${ceiling}), triggering new-session handoff`);
+        runC4Control([
+          'enqueue',
+          '--content', `Context usage at ${pct}%, exceeding 75% threshold. Use the new-session skill to start a fresh session.`,
+          '--priority', '1',
+          '--bypass-state',
+          '--ack-deadline', '300'
+        ]);
+      }
+    });
+    log(`Context monitor started (${adapter.displayName})`);
+  }
 
   if (initialHealth !== 'ok') {
     log(`Startup with health=${initialHealth}; will verify immediately when Claude is running`);

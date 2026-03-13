@@ -445,10 +445,22 @@ function writeCodexConfig(projectDir) {
       const nextTableIdx = afterHeader.search(/\n\[/);
       const sectionBody = nextTableIdx >= 0 ? afterHeader.slice(0, nextTableIdx) : afterHeader;
       if (sectionBody.includes('trust_level = "trusted"')) return true;
-      // trust_level missing or wrong — inject it right after the section header
-      const patched = existing.slice(0, sectionIdx + sectionHeader.length)
-        + '\ntrust_level = "trusted"'
-        + existing.slice(sectionIdx + sectionHeader.length);
+      // trust_level missing or has wrong value — patch it
+      let patched;
+      if (sectionBody.includes('trust_level =')) {
+        // Replace existing wrong value within this section only
+        const sectionEnd = nextTableIdx >= 0
+          ? sectionIdx + sectionHeader.length + nextTableIdx
+          : existing.length;
+        const sectionFull = existing.slice(sectionIdx, sectionEnd);
+        const patchedSection = sectionFull.replace(/trust_level\s*=\s*"[^"]*"/, 'trust_level = "trusted"');
+        patched = existing.slice(0, sectionIdx) + patchedSection + existing.slice(sectionEnd);
+      } else {
+        // Inject trust_level right after the section header
+        patched = existing.slice(0, sectionIdx + sectionHeader.length)
+          + '\ntrust_level = "trusted"'
+          + existing.slice(sectionIdx + sectionHeader.length);
+      }
       fs.mkdirSync(codexDir, { recursive: true });
       fs.writeFileSync(configPath, patched, 'utf8');
       return true;
