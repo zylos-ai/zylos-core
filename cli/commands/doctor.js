@@ -29,11 +29,12 @@ import { getActiveAdapter } from '../lib/runtime/index.js';
 let SESSION = 'claude-main';
 let AGENT_DISPLAY = 'Claude';
 let ACTIVE_RUNTIME = 'claude';
+let _activeAdapter = null;
 try {
-  const _adapter = getActiveAdapter();
-  SESSION = _adapter.sessionName;
-  AGENT_DISPLAY = _adapter.displayName;
-  ACTIVE_RUNTIME = _adapter.config?.runtime ?? 'claude';
+  _activeAdapter = getActiveAdapter();
+  SESSION = _activeAdapter.sessionName;
+  AGENT_DISPLAY = _activeAdapter.displayName;
+  ACTIVE_RUNTIME = _activeAdapter.config?.runtime ?? 'claude';
 } catch { /* config.json absent or unknown runtime — use Claude defaults */ }
 const LOG_DIR = path.join(ZYLOS_DIR, 'logs');
 const LOG_FILE = path.join(LOG_DIR, 'doctor.log');
@@ -228,6 +229,17 @@ function checkClaudeAuth() {
   }
 }
 
+function checkCodexCli() {
+  if (!commandExists('codex')) return { installed: false };
+  let version = 'unknown';
+  try {
+    version = execFileSync('codex', ['--version'], {
+      encoding: 'utf8', timeout: 10000, stdio: ['pipe', 'pipe', 'pipe'],
+    }).trim().split('\n')[0];
+  } catch {}
+  return { installed: true, version };
+}
+
 function checkAutonomousMode() {
   try {
     const settingsPath = path.join(os.homedir(), '.claude', 'settings.json');
@@ -277,17 +289,17 @@ async function collectDiagnostics(env) {
   const pm2 = checkPm2Installed();
   const net = await networkPromise;
 
-  // Claude CLI/auth checks are only applicable when the active runtime is Claude.
-  // For other runtimes (e.g. Codex), skip these checks to avoid false positives.
+  // Runtime-specific CLI/auth checks.
   let cli, auth, autonomous;
   if (ACTIVE_RUNTIME !== 'codex') {
     cli = checkClaudeCli();
     auth = cli.installed && net.reachable ? checkClaudeAuth() : false;
     autonomous = cli.installed ? checkAutonomousMode() : false;
   } else {
-    cli = { installed: true, version: null };
-    auth = true;
-    autonomous = true;
+    // Codex runtime — check Codex CLI and auth status.
+    cli = checkCodexCli();
+    auth = cli.installed ? (await _activeAdapter.checkAuth()).ok : false;
+    autonomous = true; // not applicable for Codex
   }
 
   const services = pm2.installed
@@ -327,13 +339,15 @@ function buildDiagnosticJson(diag, coreVersion) {
     }
     issues.push({ id: 'network_unreachable', label: `Cannot reach ${API_HOST}`, hint });
   }
+  const runtimeLabel = ACTIVE_RUNTIME === 'codex' ? 'Codex' : 'Claude';
   if (!diag.ai.cli.installed) {
-    issues.push({ id: 'cli_missing', label: 'Claude CLI not installed', hint: 'Run zylos init' });
+    issues.push({ id: 'cli_missing', label: `${runtimeLabel} CLI not installed`, hint: 'Run zylos init' });
   }
   if (diag.ai.cli.installed && !diag.ai.networkSkipped && !diag.ai.auth) {
-    issues.push({ id: 'cli_not_authed', label: 'Claude not authorized', hint: 'Run zylos init to authenticate' });
+    const hint = ACTIVE_RUNTIME === 'codex' ? 'Run: codex login' : 'Run zylos init to authenticate';
+    issues.push({ id: 'cli_not_authed', label: `${runtimeLabel} not authorized`, hint });
   }
-  if (diag.ai.cli.installed && diag.ai.auth && !diag.ai.autonomous) {
+  if (ACTIVE_RUNTIME !== 'codex' && diag.ai.cli.installed && diag.ai.auth && !diag.ai.autonomous) {
     issues.push({ id: 'autonomous_off', label: 'Autonomous mode not accepted', hint: 'Set skipDangerousModePermissionPrompt in ~/.claude/settings.json' });
   }
   if (diag.system.pm2.installed) {
@@ -426,12 +440,11 @@ function displayAiGroup(diag, jsonGroup) {
   const checks = [];
   const { cli, auth, autonomous } = diag.ai;
 
-  if (ACTIVE_RUNTIME === 'codex') {
-    checks.push(dim('Claude CLI (not applicable — runtime: Codex)'));
-  } else if (cli.installed) {
-    checks.push(`Claude CLI ${dim(cli.version ?? '')}`);
+  const cliLabel = ACTIVE_RUNTIME === 'codex' ? 'Codex CLI' : 'Claude CLI';
+  if (cli.installed) {
+    checks.push(`${cliLabel} ${dim(cli.version ?? '')}`);
   } else {
-    checks.push(red('Claude CLI not installed'));
+    checks.push(red(`${cliLabel} not installed`));
   }
 
   if (cli.installed) {
