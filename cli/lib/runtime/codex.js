@@ -19,6 +19,7 @@ import { execSync, execFileSync, spawnSync } from 'node:child_process';
 import { RuntimeAdapter } from './base.js';
 import { buildInstructionFile } from './instruction-builder.js';
 import { CodexContextMonitor } from './codex-context-monitor.js';
+import { createCodexProbe } from '../heartbeat/codex-probe.js';
 import { ZYLOS_DIR } from '../config.js';
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -178,11 +179,20 @@ export class CodexAdapter extends RuntimeAdapter {
   // ── Heartbeat / context (Phase 5) ─────────────────────────────────────────
 
   /**
-   * HeartbeatEngine deps — implemented in Phase 5.
-   * @returns {null}
+   * Returns runtime-specific HeartbeatEngine deps for Codex CLI.
+   * Dual-signal probe: rollout JSONL mtime + tmux pane line count.
+   *
+   * Includes: enqueueHeartbeat, getHeartbeatStatus, detectRateLimit,
+   *           readHeartbeatPending, clearHeartbeatPending.
+   *
+   * Phase 7 will merge these with the remaining deps (killTmuxSession, etc.)
+   * when migrating activity-monitor.js to use RuntimeAdapter.
+   *
+   * @returns {object}
    */
   getHeartbeatDeps() {
-    return null;
+    const pendingFile = path.join(ZYLOS_DIR, 'activity-monitor', 'codex-heartbeat-pending.json');
+    return createCodexProbe({ pendingFile, tmuxSession: SESSION });
   }
 
   /**

@@ -19,6 +19,7 @@ import { execSync, execFileSync } from 'node:child_process';
 import { RuntimeAdapter } from './base.js';
 import { buildInstructionFile } from './instruction-builder.js';
 import { ClaudeContextMonitor } from './claude-context-monitor.js';
+import { createClaudeProbe } from '../heartbeat/claude-probe.js';
 import { ZYLOS_DIR } from '../config.js';
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -247,11 +248,18 @@ export class ClaudeAdapter extends RuntimeAdapter {
   // ── Heartbeat / context (Phase 5) ─────────────────────────────────────────
 
   /**
-   * HeartbeatEngine deps — implemented in Phase 5.
-   * @returns {null}
+   * Returns runtime-specific HeartbeatEngine deps for Claude Code.
+   * Includes: enqueueHeartbeat, getHeartbeatStatus, detectRateLimit,
+   *           readHeartbeatPending, clearHeartbeatPending.
+   *
+   * Phase 7 will merge these with the remaining deps (killTmuxSession, etc.)
+   * when migrating activity-monitor.js to use RuntimeAdapter.
+   *
+   * @returns {object}
    */
   getHeartbeatDeps() {
-    return null;
+    const pendingFile = path.join(ZYLOS_DIR, 'activity-monitor', 'heartbeat-pending.json');
+    return createClaudeProbe({ pendingFile, tmuxSession: SESSION });
   }
 
   /**
