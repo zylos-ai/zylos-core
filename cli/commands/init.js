@@ -437,7 +437,22 @@ function writeCodexConfig(projectDir) {
     if (fs.existsSync(configPath)) {
       existing = fs.readFileSync(configPath, 'utf8');
     }
-    if (existing.includes(`[projects."${absProject}"]`)) return true; // already configured for this project
+    const sectionHeader = `[projects."${absProject}"]`;
+    const sectionIdx = existing.indexOf(sectionHeader);
+    if (sectionIdx >= 0) {
+      // Section exists — verify trust_level = "trusted" is actually set within it
+      const afterHeader = existing.slice(sectionIdx + sectionHeader.length);
+      const nextTableIdx = afterHeader.search(/\n\[/);
+      const sectionBody = nextTableIdx >= 0 ? afterHeader.slice(0, nextTableIdx) : afterHeader;
+      if (sectionBody.includes('trust_level = "trusted"')) return true;
+      // trust_level missing or wrong — inject it right after the section header
+      const patched = existing.slice(0, sectionIdx + sectionHeader.length)
+        + '\ntrust_level = "trusted"'
+        + existing.slice(sectionIdx + sectionHeader.length);
+      fs.mkdirSync(codexDir, { recursive: true });
+      fs.writeFileSync(configPath, patched, 'utf8');
+      return true;
+    }
     const migrationSection = existing.includes('[notice.model_migrations]') ? '' : `\n[notice.model_migrations]\n"gpt-5.3-codex" = "gpt-5.4"\n`;
     const addition =
       `[projects."${absProject}"]\ntrust_level = "trusted"\n` + migrationSection;
