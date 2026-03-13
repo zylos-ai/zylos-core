@@ -35,12 +35,12 @@ describe('HeartbeatEngine — rate_limited recovery', () => {
     engine.enterRateLimited(1000, '10:00 AM');
     expect(engine.health).toBe('rate_limited');
 
-    // T=999: still in cooldown, claudeRunning=false
+    // T=999: still in cooldown, agentRunning=false
     engine.processHeartbeat(false, 999);
     expect(engine.health).toBe('rate_limited');
 
-    // T=1000: cooldown expired, claudeRunning=false
-    // Before fix: !claudeRunning early return caused deadlock
+    // T=1000: cooldown expired, agentRunning=false
+    // Before fix: !agentRunning early return caused deadlock
     // After fix: transitions to recovering
     engine.processHeartbeat(false, 1000);
     expect(engine.health).toBe('recovering');
@@ -152,7 +152,7 @@ describe('HeartbeatEngine — user message recovery across all states', () => {
     expect(engine.restartFailureCount).toBe(0);
     expect(engine.lastRecoveryAt).toBe(0);
 
-    // Next processHeartbeat with claudeRunning should immediately send recovery heartbeat
+    // Next processHeartbeat with agentRunning should immediately send recovery heartbeat
     phases.length = 0;
     engine.processHeartbeat(true, 5001);
     expect(phases).toContain('recovery');

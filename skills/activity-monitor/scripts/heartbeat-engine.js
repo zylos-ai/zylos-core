@@ -21,7 +21,7 @@
  *   - Infinite retries in recovering state (no maxRestartFailures limit)
  *   - DOWN degradation: after downDegradeThreshold seconds of continuous failure
  *   - DOWN retry interval: 60 min (periodic heartbeat probe)
- *   - Process signal acceleration: when claudeRunning transitions false→true,
+ *   - Process signal acceleration: when agentRunning transitions false→true,
  *     wait a grace period then immediately verify via heartbeat (skip backoff)
  *
  * All external side-effects (C4 control, file I/O, tmux) are injected via
@@ -43,7 +43,7 @@ export class HeartbeatEngine {
    * @param {number} [options.heartbeatInterval=1800]
    * @param {number} [options.downDegradeThreshold=3600] - Seconds of continuous failure before entering DOWN
    * @param {number} [options.downRetryInterval=3600] - Seconds between DOWN-state probes
-   * @param {number} [options.signalGracePeriod=30] - Seconds to wait after claudeRunning transitions before probing
+   * @param {number} [options.signalGracePeriod=30] - Seconds to wait after agentRunning transitions before probing
    * @param {number} [options.rateLimitDefaultCooldown=3600] - Default cooldown when reset time can't be parsed
    * @param {number} [options.userMessageRecoveryCooldown=60] - Min seconds between user-message-triggered recoveries
    * @param {string} [options.initialHealth='ok']
@@ -68,8 +68,8 @@ export class HeartbeatEngine {
     this.recoveringStartedAt = this.healthState === 'recovering' ? Math.floor(Date.now() / 1000) : 0;
 
     // Process signal acceleration state
-    this.lastClaudeRunning = null; // null = unknown (first tick)
-    this.signalDetectedAt = 0; // When claudeRunning transitioned false→true
+    this.lastAgentRunning = null; // null = unknown (first tick)
+    this.signalDetectedAt = 0; // When agentRunning transitioned false→true
 
     // Rate-limited state
     this.cooldownUntil = 0; // Epoch seconds when rate limit cooldown expires
@@ -167,9 +167,9 @@ export class HeartbeatEngine {
     return false;
   }
 
-  processHeartbeat(claudeRunning, currentTime) {
-    // Track claudeRunning transitions for process signal acceleration
-    this._trackClaudeRunning(claudeRunning, currentTime);
+  processHeartbeat(agentRunning, currentTime) {
+    // Track agentRunning transitions for process signal acceleration
+    this._trackAgentRunning(agentRunning, currentTime);
 
     const pending = this.deps.readHeartbeatPending();
     if (pending) {
@@ -202,7 +202,7 @@ export class HeartbeatEngine {
       return;
     }
 
-    // Rate-limited recovery: must be checked BEFORE the !claudeRunning early
+    // Rate-limited recovery: must be checked BEFORE the !agentRunning early
     // return. After cooldown expires Claude is not running (tmux was killed),
     // so the early return would skip this block and cause a deadlock (#252).
     if (this.healthState === 'rate_limited') {
@@ -217,15 +217,15 @@ export class HeartbeatEngine {
       return;
     }
 
-    if (!claudeRunning) {
+    if (!agentRunning) {
       return;
     }
 
-    // Process signal acceleration: claudeRunning just transitioned false→true,
+    // Process signal acceleration: agentRunning just transitioned false→true,
     // grace period elapsed — send immediate heartbeat to verify recovery.
     // Works in recovering and down states.
     if ((this.healthState === 'recovering' || this.healthState === 'down') && this._shouldAccelerate(currentTime)) {
-      this.deps.log(`Process signal acceleration: Claude restarted (health=${this.healthState}), verifying immediately`);
+      this.deps.log(`Process signal acceleration: Agent restarted (health=${this.healthState}), verifying immediately`);
       this.signalDetectedAt = 0; // Consume the signal
       const phase = this.healthState === 'down' ? 'signal-down-check' : 'signal-recovery';
       const ok = this.enqueueHeartbeat(phase);
@@ -378,18 +378,18 @@ export class HeartbeatEngine {
   }
 
   /**
-   * Track claudeRunning state transitions for process signal acceleration.
-   * When claudeRunning goes false→true while recovering, record the timestamp
+   * Track agentRunning state transitions for process signal acceleration.
+   * When agentRunning goes false→true while recovering, record the timestamp
    * so we can send an accelerated probe after the grace period.
    */
-  _trackClaudeRunning(claudeRunning, currentTime) {
-    const prev = this.lastClaudeRunning;
-    this.lastClaudeRunning = claudeRunning;
+  _trackAgentRunning(agentRunning, currentTime) {
+    const prev = this.lastAgentRunning;
+    this.lastAgentRunning = agentRunning;
 
     // Detect false→true transition (skip null→true on first tick)
-    if (prev === false && claudeRunning === true && (this.healthState === 'recovering' || this.healthState === 'down')) {
+    if (prev === false && agentRunning === true && (this.healthState === 'recovering' || this.healthState === 'down')) {
       this.signalDetectedAt = currentTime;
-      this.deps.log(`Process signal: claudeRunning false→true, grace period ${this.signalGracePeriod}s`);
+      this.deps.log(`Process signal: agentRunning false→true, grace period ${this.signalGracePeriod}s`);
     }
   }
 
