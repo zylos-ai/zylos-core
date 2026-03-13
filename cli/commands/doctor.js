@@ -22,8 +22,19 @@ import { getCurrentVersion } from '../lib/self-upgrade.js';
 import { commandExists } from '../lib/shell-utils.js';
 import { parseSkillMd } from '../lib/skill.js';
 import { bold, dim, green, red, yellow, heading } from '../lib/colors.js';
+import { getActiveAdapter } from '../lib/runtime/index.js';
 
-const SESSION = 'claude-main';
+// Resolve active runtime session name and display name at startup.
+// Falls back to 'claude-main' / 'Claude' if config is missing or unknown runtime.
+let SESSION = 'claude-main';
+let AGENT_DISPLAY = 'Claude';
+let ACTIVE_RUNTIME = 'claude';
+try {
+  const _adapter = getActiveAdapter();
+  SESSION = _adapter.sessionName;
+  AGENT_DISPLAY = _adapter.displayName;
+  ACTIVE_RUNTIME = _adapter.config?.runtime ?? 'claude';
+} catch { /* config.json absent or unknown runtime — use Claude defaults */ }
 const LOG_DIR = path.join(ZYLOS_DIR, 'logs');
 const LOG_FILE = path.join(LOG_DIR, 'doctor.log');
 const API_HOST = 'api.anthropic.com';
@@ -266,10 +277,18 @@ async function collectDiagnostics(env) {
   const pm2 = checkPm2Installed();
   const net = await networkPromise;
 
-  const cli = checkClaudeCli();
-  // auth check may contact the API — skip when network is down
-  const auth = cli.installed && net.reachable ? checkClaudeAuth() : false;
-  const autonomous = cli.installed ? checkAutonomousMode() : false;
+  // Claude CLI/auth checks are only applicable when the active runtime is Claude.
+  // For other runtimes (e.g. Codex), skip these checks to avoid false positives.
+  let cli, auth, autonomous;
+  if (ACTIVE_RUNTIME !== 'codex') {
+    cli = checkClaudeCli();
+    auth = cli.installed && net.reachable ? checkClaudeAuth() : false;
+    autonomous = cli.installed ? checkAutonomousMode() : false;
+  } else {
+    cli = { installed: true, version: null };
+    auth = true;
+    autonomous = true;
+  }
 
   const services = pm2.installed
     ? checkPm2Services()
@@ -460,11 +479,11 @@ function displayServiceGroup(diag, jsonGroup) {
   }
 
   if (session) {
-    checks.push(`Claude session: ${green('active')}`);
+    checks.push(`${AGENT_DISPLAY} session: ${green('active')}`);
   } else if (activityMonitor) {
-    checks.push(yellow('Claude session: starting...'));
+    checks.push(yellow(`${AGENT_DISPLAY} session: starting...`));
   } else {
-    checks.push(dim('Claude session: waiting'));
+    checks.push(dim(`${AGENT_DISPLAY} session: waiting`));
   }
 
   displayCheckGroup('Services', jsonGroup.passed ? 'pass' : 'fail', checks);

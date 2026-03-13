@@ -60,6 +60,9 @@ export class CodexAdapter extends RuntimeAdapter {
       const result = spawnSync(CODEX_BIN, ['login', '--status'], {
         stdio: 'pipe', encoding: 'utf8', timeout: 10_000,
       });
+      // spawnSync sets result.error (status=null) when the binary is missing —
+      // it does NOT throw, so we must check explicitly.
+      if (result.error) throw result.error;
       if (result.status === 0) {
         return { ok: true, reason: 'codex login --status: authenticated' };
       }

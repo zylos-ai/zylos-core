@@ -33,7 +33,7 @@ const C4_CONTROL = path.join(ZYLOS_DIR, '.claude/skills/comm-bridge/scripts/c4-c
  * @param {number}  [opts.maxRetries=3]  Maximum enqueue attempts
  * @returns {boolean} true if enqueued successfully
  */
-export function enqueueNewSession({ ratio, used, ceiling, maxRetries = 3 } = {}) {
+export function enqueueNewSession({ ratio = 0, used = 0, ceiling = 0, maxRetries = 3 } = {}) {
   const pct = Math.round(ratio * 100);
   const content =
     `Context usage at ${pct}% ` +

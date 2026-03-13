@@ -59,7 +59,9 @@ export function buildInstructionFile(runtime, opts = {}) {
 
   let content = core.trimEnd() + '\n\n' + addon.trimEnd() + '\n';
 
-  if (opts.memorySnapshot) {
+  // memorySnapshot is codex-only: injected into AGENTS.md before launch so the
+  // agent has memory context from the previous session.
+  if (runtime === 'codex' && opts.memorySnapshot) {
     content += '\n' + opts.memorySnapshot.trimEnd() + '\n';
   }
 

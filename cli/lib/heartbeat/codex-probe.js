@@ -115,10 +115,12 @@ export function createCodexProbe({
         if (currentMtime > pending.rollout_mtime_baseline) return 'done';
       }
 
-      // Signal 2: tmux pane has new lines (any new output = agent responded)
+      // Signal 2: tmux pane output changed since baseline.
+      // Use !== (not >) because on a busy terminal the visible line count can
+      // decrease as lines scroll off-screen — a decrease still means new output.
       const currentPane = _captureTmuxPane(tmuxSession) || '';
       const currentLineCount = currentPane.split('\n').filter(l => l.trim()).length;
-      if (currentLineCount > pending.pane_line_count_baseline) return 'done';
+      if (currentLineCount !== pending.pane_line_count_baseline) return 'done';
 
       // Check deadline
       if (age > (pending.deadline ?? ackDeadline)) return 'timeout';

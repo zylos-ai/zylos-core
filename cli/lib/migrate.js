@@ -59,11 +59,9 @@ function migrateClaudeMdToZylosMd() {
   // Already migrated
   if (fs.existsSync(ZYLOS_MD)) {
     // Crash recovery: regenerate CLAUDE.md if it went missing.
-    // Use ~/zylos/ZYLOS.md (user's file) not the package template.
+    // ZYLOS_MD is guaranteed to exist here (we're inside the existsSync check above).
     if (!fs.existsSync(CLAUDE_MD) && fs.existsSync(claudeAddonTemplate)) {
-      const coreSrc = fs.existsSync(ZYLOS_MD) ? ZYLOS_MD : zylosMdTemplate;
-      if (!fs.existsSync(coreSrc)) return false;
-      const content = fs.readFileSync(coreSrc, 'utf8').trimEnd()
+      const content = fs.readFileSync(ZYLOS_MD, 'utf8').trimEnd()
         + '\n\n'
         + fs.readFileSync(claudeAddonTemplate, 'utf8').trimEnd()
         + '\n';
@@ -73,9 +71,7 @@ function migrateClaudeMdToZylosMd() {
     }
     // Crash recovery: regenerate AGENTS.md if it went missing.
     if (!fs.existsSync(AGENTS_MD) && fs.existsSync(codexAddonTemplate)) {
-      const coreSrc = fs.existsSync(ZYLOS_MD) ? ZYLOS_MD : zylosMdTemplate;
-      if (!fs.existsSync(coreSrc)) return false;
-      const content = fs.readFileSync(coreSrc, 'utf8').trimEnd()
+      const content = fs.readFileSync(ZYLOS_MD, 'utf8').trimEnd()
         + '\n\n'
         + fs.readFileSync(codexAddonTemplate, 'utf8').trimEnd()
         + '\n';
