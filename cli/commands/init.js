@@ -444,7 +444,17 @@ function writeCodexConfig(projectDir) {
       const afterHeader = existing.slice(sectionIdx + sectionHeader.length);
       const nextTableIdx = afterHeader.search(/\n\[/);
       const sectionBody = nextTableIdx >= 0 ? afterHeader.slice(0, nextTableIdx) : afterHeader;
-      if (sectionBody.includes('trust_level = "trusted"')) return true;
+      // Determine if migration notice section is missing from the whole file
+      const needsMigration = !existing.includes('[notice.model_migrations]');
+      const migrationAppend = needsMigration ? `\n[notice.model_migrations]\n"gpt-5.3-codex" = "gpt-5.4"\n` : '';
+
+      if (sectionBody.includes('trust_level = "trusted"')) {
+        // trust_level already correct — only patch migration section if needed
+        if (!needsMigration) return true;
+        fs.mkdirSync(codexDir, { recursive: true });
+        fs.writeFileSync(configPath, existing.trimEnd() + '\n' + migrationAppend, 'utf8');
+        return true;
+      }
       // trust_level missing or has wrong value — patch it
       let patched;
       if (sectionBody.includes('trust_level =')) {
@@ -461,6 +471,7 @@ function writeCodexConfig(projectDir) {
           + '\ntrust_level = "trusted"'
           + existing.slice(sectionIdx + sectionHeader.length);
       }
+      patched = patched.trimEnd() + '\n' + migrationAppend;
       fs.mkdirSync(codexDir, { recursive: true });
       fs.writeFileSync(configPath, patched, 'utf8');
       return true;

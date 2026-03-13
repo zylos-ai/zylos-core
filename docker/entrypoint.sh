@@ -135,7 +135,7 @@ if [ "${ZYLOS_RUNTIME}" = "codex" ]; then
   tmux kill-session -t codex-main 2>/dev/null || true
 
   CODEX_ARGS=""
-  if [ "${CLAUDE_BYPASS_PERMISSIONS:-true}" = "true" ]; then
+  if [ "${CODEX_BYPASS_PERMISSIONS:-true}" = "true" ]; then
     CODEX_ARGS="--dangerously-bypass-approvals-and-sandbox"
   fi
 

@@ -37,6 +37,8 @@ const ENHANCED_PATH = [
 
 // Whether Claude should run with --dangerously-skip-permissions
 const CLAUDE_BYPASS_PERMISSIONS = readEnvValue('CLAUDE_BYPASS_PERMISSIONS', 'true');
+// Whether Codex should run with --dangerously-bypass-approvals-and-sandbox
+const CODEX_BYPASS_PERMISSIONS = readEnvValue('CODEX_BYPASS_PERMISSIONS', 'true');
 
 // Resolve the zylos package root so deployed skills can import CLI modules.
 // activity-monitor.js imports from cli/lib/runtime/, which is part of the
@@ -105,6 +107,7 @@ module.exports = {
         PATH: ENHANCED_PATH,
         NODE_ENV: 'production',
         CLAUDE_BYPASS_PERMISSIONS,
+        CODEX_BYPASS_PERMISSIONS,
         ...(ZYLOS_PACKAGE_ROOT ? { ZYLOS_PACKAGE_ROOT } : {}),
       },
       autorestart: true,
