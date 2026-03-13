@@ -2280,6 +2280,12 @@ export async function initCommand(args) {
       exitCode = exitCode || 2; // optional step failed — don't downgrade a fatal (1)
     }
 
+    // On runtime switch: kill old session and clear stale health state before restart
+    if (existingRuntime && existingRuntime !== selectedRuntime) {
+      const oldSession = existingRuntime === 'claude' ? 'claude-main' : 'codex-main';
+      try { execSync(`tmux kill-session -t ${oldSession} 2>/dev/null`, { stdio: 'pipe' }); } catch {}
+      try { fs.unlinkSync(path.join(ZYLOS_DIR, 'activity-monitor', 'claude-status.json')); } catch {}
+    }
     if (!quiet) console.log(heading('Starting services...'));
     const servicesStarted = startCoreServices(opts.webPassword);
     if (servicesStarted > 0) {
@@ -2377,6 +2383,13 @@ export async function initCommand(args) {
   const caddyOk = await setupCaddy(skipConfirm, opts);
   if (!caddyOk && opts.caddy !== false && opts.domain) {
     exitCode = exitCode || 2; // optional step failed — don't downgrade a fatal (1)
+  }
+
+  // On runtime switch: kill old session and clear stale health state before restart
+  if (existingRuntime && existingRuntime !== selectedRuntime) {
+    const oldSession = existingRuntime === 'claude' ? 'claude-main' : 'codex-main';
+    try { execSync(`tmux kill-session -t ${oldSession} 2>/dev/null`, { stdio: 'pipe' }); } catch {}
+    try { fs.unlinkSync(path.join(ZYLOS_DIR, 'activity-monitor', 'claude-status.json')); } catch {}
   }
 
   // Step 11: Start services
