@@ -43,9 +43,19 @@ export function buildInstructionFile(runtime, opts = {}) {
   // Prefer user's ~/zylos/ZYLOS.md (may contain customizations) over the package template.
   // The package template is used as fallback on first install before deployTemplates() copies it.
   const userZylosMd = path.join(ZYLOS_DIR, 'ZYLOS.md');
-  const coreSrc = fs.existsSync(userZylosMd) ? userZylosMd : TEMPLATE_FILES.core;
   const addonSrc = runtime === 'codex' ? TEMPLATE_FILES.codexAddon : TEMPLATE_FILES.claudeAddon;
   const destPath = OUTPUT_FILES[runtime];
+
+  // Guard: if ZYLOS.md doesn't exist, this is a pre-v0.4 install that hasn't been
+  // migrated yet (migration runs during `zylos init` and creates ZYLOS.md). Preserve
+  // the existing instruction file to avoid overwriting user customizations with the
+  // package template. Once the user runs `zylos init`, ZYLOS.md is created and this
+  // guard no longer applies.
+  if (!fs.existsSync(userZylosMd) && fs.existsSync(destPath)) {
+    return destPath;
+  }
+
+  const coreSrc = fs.existsSync(userZylosMd) ? userZylosMd : TEMPLATE_FILES.core;
 
   if (!fs.existsSync(coreSrc)) {
     throw new Error(`Core template not found: ${coreSrc}`);

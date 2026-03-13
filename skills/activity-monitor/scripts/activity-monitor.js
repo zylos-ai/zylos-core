@@ -1316,14 +1316,17 @@ function init() {
       intervalMs: 30_000,
       onExceed: async ({ used, ceiling, ratio }) => {
         const pct = Math.round(ratio * 100);
-        log(`Context at ${pct}% (${used}/${ceiling}), triggering new-session handoff`);
-        runC4Control([
-          'enqueue',
-          '--content', `Context usage at ${pct}%, exceeding 75% threshold. Use the new-session skill to start a fresh session.`,
-          '--priority', '1',
-          '--bypass-state',
-          '--ack-deadline', '300'
-        ]);
+        log(`Context at ${pct}% (${used}/${ceiling}), triggering session rotation`);
+        // Codex has no skill-invocation mechanism (no /clear equivalent).
+        // The activity monitor directly stops and relaunches to start a fresh session.
+        try {
+          adapter.stop();
+          await new Promise(r => setTimeout(r, 2000));
+          await adapter.launch();
+          log(`Codex session rotated (context ${pct}% exceeded threshold)`);
+        } catch (err) {
+          log(`Codex session rotation failed: ${err.message}`);
+        }
       }
     });
     log(`Context monitor started (${adapter.displayName})`);
