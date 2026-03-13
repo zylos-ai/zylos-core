@@ -81,14 +81,24 @@ import { fileURLToPath } from 'url';
 import { HeartbeatEngine } from './heartbeat-engine.js';
 import { DailySchedule } from './daily-schedule.js';
 // activity-monitor runs as a deployed skill at ~/zylos/.claude/skills/activity-monitor/scripts/.
-// A relative import to cli/lib/runtime/ resolves correctly in the repo (dev) but not
-// from the deployed path — the CLI lives in the globally installed zylos npm package.
-// ZYLOS_PACKAGE_ROOT is set by the PM2 ecosystem config; fall back to relative path for dev.
-const _pkgRoot = process.env.ZYLOS_PACKAGE_ROOT ||
-  path.resolve(path.dirname(new URL(import.meta.url).pathname), '../../..');
-const { getActiveAdapter } = await import(
-  path.join(_pkgRoot, 'cli', 'lib', 'runtime', 'index.js')
-);
+// A relative import to cli/lib/runtime/ resolves correctly in the repo (dev) but NOT from
+// the deployed path — the CLI lives in the globally installed zylos npm package.
+// ZYLOS_PACKAGE_ROOT is set by the PM2 ecosystem config to the installed package root.
+// Dev fallback: 3 levels up from skills/activity-monitor/scripts/ = repo root (checked explicitly).
+const _runtimeIndexPath = (() => {
+  if (process.env.ZYLOS_PACKAGE_ROOT) {
+    return path.join(process.env.ZYLOS_PACKAGE_ROOT, 'cli', 'lib', 'runtime', 'index.js');
+  }
+  const devPath = path.resolve(
+    path.dirname(new URL(import.meta.url).pathname), '../../../cli/lib/runtime/index.js'
+  );
+  if (fs.existsSync(devPath)) return devPath;
+  throw new Error(
+    '[activity-monitor] Cannot locate cli/lib/runtime/index.js. ' +
+    'Ensure ZYLOS_PACKAGE_ROOT is set in the PM2 ecosystem config.'
+  );
+})();
+const { getActiveAdapter } = await import(_runtimeIndexPath);
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);

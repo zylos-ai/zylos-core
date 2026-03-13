@@ -15,6 +15,7 @@ import { fetchRawFile, sanitizeError } from './github.js';
 import { copyTree, syncTree } from './fs-utils.js';
 import { extractScriptPath, extractSkillName, getCommandHooks } from './hook-utils.js';
 import { smartSync, formatMergeResult } from './smart-merge.js';
+import { runMigrations } from './migrate.js';
 
 const REPO = 'zylos-ai/zylos-core';
 
@@ -739,8 +740,16 @@ function step7_syncClaudeMd(ctx) {
     return { step: 7, name: 'sync_claude_md', status: 'skipped', message: 'no templates in new version', duration: Date.now() - startTime };
   }
 
-  // v0.4.0+ path: rebuild instruction files from ZYLOS.md + new addon templates
+  // For legacy installs (ZYLOS.md absent, CLAUDE.md present): run v0.4.0 migration
+  // first so the rebuild block below has a ZYLOS.md to work with.
   const zylosMd = path.join(ZYLOS_DIR, 'ZYLOS.md');
+  if (!fs.existsSync(zylosMd)) {
+    try {
+      runMigrations();
+    } catch { /* non-fatal — migration failure falls through to legacy sync */ }
+  }
+
+  // v0.4.0+ path: rebuild instruction files from ZYLOS.md + new addon templates
   if (fs.existsSync(zylosMd)) {
     try {
       const core = fs.readFileSync(zylosMd, 'utf8');
