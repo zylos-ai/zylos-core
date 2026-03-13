@@ -438,9 +438,9 @@ function writeCodexConfig(projectDir) {
       existing = fs.readFileSync(configPath, 'utf8');
     }
     if (existing.includes(`[projects."${absProject}"]`)) return true; // already configured for this project
+    const migrationSection = existing.includes('[notice.model_migrations]') ? '' : `\n[notice.model_migrations]\n"gpt-5.3-codex" = "gpt-5.4"\n`;
     const addition =
-      `[projects."${absProject}"]\ntrust_level = "trusted"\n` +
-      `\n[notice.model_migrations]\n"gpt-5.3-codex" = "gpt-5.4"\n`;
+      `[projects."${absProject}"]\ntrust_level = "trusted"\n` + migrationSection;
     const content = existing.trimEnd() ? existing.trimEnd() + '\n\n' + addition : addition;
     fs.mkdirSync(codexDir, { recursive: true });
     fs.writeFileSync(configPath, content, 'utf8');
@@ -2006,9 +2006,6 @@ export async function initCommand(args) {
       selectedRuntime = 'claude'; // backward-compatible default for non-interactive mode
     }
   }
-  if (!existingRuntime || existingRuntime !== selectedRuntime) {
-    updateZylosConfig({ runtime: selectedRuntime });
-  }
   if (!quiet && !existingRuntime) {
     const runtimeLabel = selectedRuntime === 'codex' ? 'Codex (OpenAI)' : 'Claude Code';
     console.log(`  ${success(`Runtime: ${runtimeLabel}`)}`);
@@ -2328,6 +2325,11 @@ export async function initCommand(args) {
   // Configure PATH for ~/zylos/bin
   if (ensureBinInPath()) {
     if (!quiet) console.log(`  ${success('Added ~/zylos/bin to PATH')}`);
+  }
+
+  // Persist runtime selection after successful install (guard: only on change)
+  if (!existingRuntime || existingRuntime !== selectedRuntime) {
+    updateZylosConfig({ runtime: selectedRuntime });
   }
 
   // Step 7: Run data migrations then deploy templates (both idempotent)
