@@ -2246,6 +2246,12 @@ export async function initCommand(args) {
       }
     }
 
+    // Persist runtime selection before deploying templates so deployTemplates()
+    // generates the correct instruction file for the new runtime.
+    if (!existingRuntime || existingRuntime !== selectedRuntime) {
+      updateZylosConfig({ runtime: selectedRuntime });
+    }
+
     // Run data migrations before deploying templates (idempotent)
     runMigrations();
 
@@ -2293,10 +2299,6 @@ export async function initCommand(args) {
         console.log(`\n${warn(`${runtimeName} is not authenticated.`)}`);
         console.log(`  ${dim('Run "zylos init" again to authenticate.')}`);
       }
-    }
-    // Persist runtime selection change (e.g. zylos init --runtime codex on existing install)
-    if (existingRuntime && existingRuntime !== selectedRuntime) {
-      updateZylosConfig({ runtime: selectedRuntime });
     }
     printWebConsoleInfo();
     if (!quiet) console.log(`\n${dim('Use "zylos add <component>" to add components.')}`);
