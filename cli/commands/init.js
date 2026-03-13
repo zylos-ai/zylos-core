@@ -2286,9 +2286,10 @@ export async function initCommand(args) {
       await guideBypassAcceptance();
     }
 
-    if (!claudeAuthenticated) {
+    if (selectedRuntime === 'codex' ? !codexAuthenticated : !claudeAuthenticated) {
       if (!quiet) {
-        console.log(`\n${warn('Claude Code is not authenticated.')}`);
+        const runtimeName = selectedRuntime === 'codex' ? 'Codex' : 'Claude Code';
+        console.log(`\n${warn(`${runtimeName} is not authenticated.`)}`);
         console.log(`  ${dim('Run "zylos init" again to authenticate.')}`);
       }
     }
@@ -2395,22 +2396,33 @@ export async function initCommand(args) {
   }
 
   if (!quiet) {
-    if (!claudeAuthenticated) {
+    const runtimeAuthOk = selectedRuntime === 'codex' ? codexAuthenticated : claudeAuthenticated;
+    if (!runtimeAuthOk) {
       // Yellow warning box — same treatment regardless of whether a credential
       // was attempted or not. Auth is required; Next steps without it is misleading.
-      const fixCmd = (opts.setupToken || opts.apiKey)
-        ? (opts.setupToken ? 'zylos init --setup-token <valid-token>' : 'zylos init --api-key <valid-key>')
-        : 'zylos init';
       console.log('');
       console.log(yellow('  ┌────────────────────────────────────────────────────────┐'));
       console.log(yellow('  │                                                        │'));
-      console.log(yellow('  │  ⚠  Claude is not authenticated                       │'));
-      console.log(yellow('  │                                                        │'));
-      console.log(yellow('  │  Zylos is installed, but Claude will not work until    │'));
-      console.log(yellow('  │  a valid credential is provided.                       │'));
-      console.log(yellow('  │                                                        │'));
-      console.log(yellow('  │  To fix:                                               │'));
-      console.log(yellow(`  │    ${fixCmd}${' '.repeat(Math.max(0, 52 - fixCmd.length))}│`));
+      if (selectedRuntime === 'codex') {
+        console.log(yellow('  │  ⚠  Codex is not authenticated                         │'));
+        console.log(yellow('  │                                                        │'));
+        console.log(yellow('  │  Zylos is installed, but Codex will not work until     │'));
+        console.log(yellow('  │  you authenticate by running "codex login".            │'));
+        console.log(yellow('  │                                                        │'));
+        console.log(yellow('  │  To fix:                                               │'));
+        console.log(yellow('  │    codex login                                         │'));
+      } else {
+        const fixCmd = (opts.setupToken || opts.apiKey)
+          ? (opts.setupToken ? 'zylos init --setup-token <valid-token>' : 'zylos init --api-key <valid-key>')
+          : 'zylos init';
+        console.log(yellow('  │  ⚠  Claude is not authenticated                       │'));
+        console.log(yellow('  │                                                        │'));
+        console.log(yellow('  │  Zylos is installed, but Claude will not work until    │'));
+        console.log(yellow('  │  a valid credential is provided.                       │'));
+        console.log(yellow('  │                                                        │'));
+        console.log(yellow('  │  To fix:                                               │'));
+        console.log(yellow(`  │    ${fixCmd}${' '.repeat(Math.max(0, 52 - fixCmd.length))}│`));
+      }
       console.log(yellow('  │                                                        │'));
       console.log(yellow('  └────────────────────────────────────────────────────────┘'));
       console.log('');
