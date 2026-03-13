@@ -1038,12 +1038,39 @@ function step10_startCoreServices(ctx) {
     return { step: 10, name: 'start_core_services', status: 'skipped', message: 'no services to restart', duration: Date.now() - startTime };
   }
 
+  // Deploy the new ecosystem.config.cjs from the upgraded package so PM2
+  // re-evaluates env vars (e.g. ZYLOS_PACKAGE_ROOT) when services restart.
+  // `pm2 restart <name>` reuses PM2's cached config and never picks up new env.
+  let ecosystemPath = null;
+  const ecosystemTemplateSrc = ctx.tempDir
+    ? path.join(ctx.tempDir, 'templates', 'pm2', 'ecosystem.config.cjs')
+    : null;
+  const pm2Dir = path.join(ZYLOS_DIR, 'pm2');
+  const ecosystemDest = path.join(pm2Dir, 'ecosystem.config.cjs');
+  if (ecosystemTemplateSrc && fs.existsSync(ecosystemTemplateSrc)) {
+    try {
+      fs.mkdirSync(pm2Dir, { recursive: true });
+      fs.copyFileSync(ecosystemTemplateSrc, ecosystemDest);
+      ecosystemPath = ecosystemDest;
+    } catch {
+      // Non-fatal — fall back to pm2 restart below
+    }
+  } else if (fs.existsSync(ecosystemDest)) {
+    // No new template available; use the existing ecosystem file
+    ecosystemPath = ecosystemDest;
+  }
+
   const started = [];
   const failed = [];
 
   for (const name of ctx.servicesWereRunning) {
     try {
-      execSync(`pm2 restart ${name} 2>/dev/null`, { stdio: 'pipe' });
+      if (ecosystemPath) {
+        // Re-read the ecosystem file so PM2 picks up updated env vars
+        execSync(`pm2 start "${ecosystemPath}" --only ${name} 2>/dev/null`, { stdio: 'pipe' });
+      } else {
+        execSync(`pm2 restart ${name} 2>/dev/null`, { stdio: 'pipe' });
+      }
       started.push(name);
     } catch {
       failed.push(name);
