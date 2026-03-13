@@ -38,6 +38,27 @@ const ENHANCED_PATH = [
 // Whether Claude should run with --dangerously-skip-permissions
 const CLAUDE_BYPASS_PERMISSIONS = readEnvValue('CLAUDE_BYPASS_PERMISSIONS', 'true');
 
+// Resolve the zylos package root so deployed skills can import CLI modules.
+// activity-monitor.js imports from cli/lib/runtime/, which is part of the
+// zylos npm package — not the skill's deployed directory.
+let ZYLOS_PACKAGE_ROOT = '';
+try {
+  const { execSync } = require('child_process');
+  const zylosBin = execSync(
+    'command -v zylos 2>/dev/null || true',
+    { encoding: 'utf8', env: { ...process.env, PATH: ENHANCED_PATH }, stdio: ['pipe', 'pipe', 'pipe'] }
+  ).trim();
+  if (zylosBin) {
+    // Follow symlinks: npm installs a wrapper in .bin/ pointing to the package main file
+    const realPath = fs.realpathSync(zylosBin);
+    // Installed path: <prefix>/lib/node_modules/zylos/cli/zylos.js → package root 2 dirs up
+    const candidate = path.dirname(path.dirname(realPath));
+    if (fs.existsSync(path.join(candidate, 'cli', 'lib', 'runtime', 'index.js'))) {
+      ZYLOS_PACKAGE_ROOT = candidate;
+    }
+  }
+} catch { /* ZYLOS_PACKAGE_ROOT stays empty — activity-monitor uses relative path fallback */ }
+
 module.exports = {
   apps: [
     {
@@ -83,7 +104,8 @@ module.exports = {
       env: {
         PATH: ENHANCED_PATH,
         NODE_ENV: 'production',
-        CLAUDE_BYPASS_PERMISSIONS
+        CLAUDE_BYPASS_PERMISSIONS,
+        ...(ZYLOS_PACKAGE_ROOT ? { ZYLOS_PACKAGE_ROOT } : {}),
       },
       autorestart: true,
       max_restarts: 10,

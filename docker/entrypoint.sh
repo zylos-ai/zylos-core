@@ -102,6 +102,7 @@ cleanup() {
   SHUTTING_DOWN=true
   info "Shutting down..."
   tmux kill-session -t claude-main 2>/dev/null || true
+  tmux kill-session -t codex-main 2>/dev/null || true
   pm2 kill 2>/dev/null || true
   # Kill the PM2 --no-daemon process directly in case pm2 kill didn't stop it
   [ -n "${PM2_PID:-}" ] && kill "${PM2_PID}" 2>/dev/null || true
@@ -118,22 +119,44 @@ PM2_PID=$!
 sleep 3
 ok "Services started"
 
-# ── Step 4: Start Claude Code in tmux ─────────────────────────────────────────
-step 4 "Starting Claude Code..."
+# ── Step 4: Start the configured agent runtime in tmux ───────────────────────
+# Read configured runtime from config.json (defaults to 'claude' if absent).
+ZYLOS_RUNTIME=$(node -e "
+  try {
+    const c = JSON.parse(require('fs').readFileSync('${ZYLOS_DIR}/.zylos/config.json','utf8'));
+    process.stdout.write(c.runtime || 'claude');
+  } catch { process.stdout.write('claude'); }
+" 2>/dev/null || echo "claude")
 
-# Kill any stale session
-tmux kill-session -t claude-main 2>/dev/null || true
+step 4 "Starting ${ZYLOS_RUNTIME} agent..."
 
-# Build claude command
-CLAUDE_ARGS=""
-if [ "${CLAUDE_BYPASS_PERMISSIONS:-true}" = "true" ]; then
-  CLAUDE_ARGS="--dangerously-skip-permissions"
+if [ "${ZYLOS_RUNTIME}" = "codex" ]; then
+  # Kill any stale Codex session
+  tmux kill-session -t codex-main 2>/dev/null || true
+
+  CODEX_ARGS=""
+  if [ "${CLAUDE_BYPASS_PERMISSIONS:-true}" = "true" ]; then
+    CODEX_ARGS="--dangerously-bypass-approvals-and-sandbox"
+  fi
+
+  tmux new-session -d -s codex-main -x 220 -y 50 \
+    "cd ${ZYLOS_DIR} && source ${ENV_FILE} 2>/dev/null; exec codex ${CODEX_ARGS}"
+
+  ok "Codex session started"
+else
+  # Kill any stale Claude session
+  tmux kill-session -t claude-main 2>/dev/null || true
+
+  CLAUDE_ARGS=""
+  if [ "${CLAUDE_BYPASS_PERMISSIONS:-true}" = "true" ]; then
+    CLAUDE_ARGS="--dangerously-skip-permissions"
+  fi
+
+  tmux new-session -d -s claude-main -x 220 -y 50 \
+    "cd ${ZYLOS_DIR} && source ${ENV_FILE} 2>/dev/null; exec claude ${CLAUDE_ARGS}"
+
+  ok "Claude Code session started"
 fi
-
-tmux new-session -d -s claude-main -x 220 -y 50 \
-  "cd ${ZYLOS_DIR} && source ${ENV_FILE} 2>/dev/null; exec claude ${CLAUDE_ARGS}"
-
-ok "Claude Code session started"
 
 # ── All done ──────────────────────────────────────────────────────────────────
 echo ""
