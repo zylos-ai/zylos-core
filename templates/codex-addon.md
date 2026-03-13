@@ -2,6 +2,26 @@
 
 The following rules apply when running on the **OpenAI Codex** runtime.
 
+### Session Startup
+
+At the start of every session, **before responding to any user message**, read the recent conversation history to restore context:
+
+```bash
+node ~/zylos/.claude/skills/comm-bridge/scripts/c4-db.js recent --limit 10
+```
+
+This is necessary because Codex does not have a session hook mechanism — memory files contain only summary state, not recent conversation details. Reading C4 history prevents "amnesia" when resuming mid-conversation.
+
+### Runtime Switching
+
+When the user asks to switch to the Claude runtime:
+
+```bash
+zylos init --runtime claude
+```
+
+You can execute this yourself. It will reconfigure the system, rebuild instruction files, and restart PM2 services — your Codex session will be terminated and Claude will start. Confirm to the user before running (it's irreversible within the current session).
+
 ### Tool Usage Rules
 
 1. **Do not propose plans that require user confirmation before starting.** When given a task, act on it directly. Do not present numbered step lists and ask "shall I proceed?" — that blocks the input pipeline. If a task is genuinely ambiguous, ask one clarifying question and wait; do not present menus or choices.
