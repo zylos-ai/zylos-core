@@ -32,10 +32,12 @@ echo ""
 
 # ── Step 1: Validate auth ─────────────────────────────────────────────────────
 step 1 "Checking authentication..."
-if [ -z "${ANTHROPIC_API_KEY:-}" ] && [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
+# Accept Anthropic credentials (Claude runtime) OR OpenAI/Codex credentials (Codex runtime).
+if [ -z "${ANTHROPIC_API_KEY:-}" ] && [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] && \
+   [ -z "${OPENAI_API_KEY:-}" ] && [ -z "${CODEX_API_KEY:-}" ]; then
   # Check mounted .env as fallback
-  if ! grep -qE '^(ANTHROPIC_API_KEY|CLAUDE_CODE_OAUTH_TOKEN)=' "${ENV_FILE}" 2>/dev/null; then
-    error "No auth configured. Set ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN."
+  if ! grep -qE '^(ANTHROPIC_API_KEY|CLAUDE_CODE_OAUTH_TOKEN|OPENAI_API_KEY|CODEX_API_KEY)=' "${ENV_FILE}" 2>/dev/null; then
+    error "No auth configured. Set ANTHROPIC_API_KEY / CLAUDE_CODE_OAUTH_TOKEN (Claude) or OPENAI_API_KEY / CODEX_API_KEY (Codex)."
     exit 1
   fi
 fi
@@ -90,6 +92,7 @@ upsert_env "LARK_APP_ID" "${LARK_APP_ID:-}"
 upsert_env "LARK_APP_SECRET" "${LARK_APP_SECRET:-}"
 upsert_env "WEB_CONSOLE_BIND" "${WEB_CONSOLE_BIND:-0.0.0.0}"
 upsert_env "CLAUDE_BYPASS_PERMISSIONS" "${CLAUDE_BYPASS_PERMISSIONS:-true}"
+upsert_env "CODEX_BYPASS_PERMISSIONS" "${CODEX_BYPASS_PERMISSIONS:-true}"
 
 # Save current PATH so PM2 services can find claude and node
 upsert_env "SYSTEM_PATH" "${PATH}"
