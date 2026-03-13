@@ -92,8 +92,13 @@ async function switchRuntime(target) {
 
   // Step 3: Rebuild instruction file for the new runtime.
   console.log(`Rebuilding instruction file for ${bold(target)}...`);
-  buildInstructionFile(target);
-  console.log(`  ${green('✓')} done`);
+  try {
+    buildInstructionFile(target);
+    console.log(`  ${green('✓')} done`);
+  } catch (e) {
+    console.error(`  ${yellow(`Warning: failed to rebuild instruction file — ${e.message}`)}`);
+    console.error(`  ${dim('Check that ~/zylos/ZYLOS.md exists (run: zylos init --repair)')}`);
+  }
 
   // Step 4: Clear stale health state from old runtime.
   try { fs.unlinkSync(path.join(monitorDir, 'agent-status.json')); } catch {}

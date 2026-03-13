@@ -784,7 +784,8 @@ function needsBypassAcceptance() {
     if (settings.skipDangerousModePermissionPrompt) return false;
   } catch {}
 
-  // Check if already accepted (tmux session with Claude running)
+  // Check if already accepted (claude-main session with Claude running).
+  // 'claude-main' is intentional: this check is Claude-specific (bypass prompt is Claude-only).
   try {
     execSync('tmux has-session -t claude-main 2>/dev/null', { stdio: 'pipe' });
     const paneContent = execSync('tmux capture-pane -t claude-main -p 2>/dev/null', { encoding: 'utf8' });
@@ -837,17 +838,21 @@ function preAcceptClaudeTerms() {
  * Guide user through first-time Claude bypass permissions acceptance.
  */
 async function guideBypassAcceptance() {
+  // This function is Claude-specific: the bypass-permissions prompt only exists in Claude Code.
+  // Hardcoded 'claude-main' is intentional — this always creates a Claude session for acceptance.
+  const CLAUDE_SESSION = 'claude-main';
+
   console.log(`\n${heading('Setting up Claude Code...')}`);
 
   // Stop activity-monitor to prevent restart loop
   try { execSync('pm2 stop activity-monitor', { stdio: 'pipe' }); } catch {}
 
   // Kill existing session if stuck
-  try { execSync('tmux kill-session -t claude-main 2>/dev/null', { stdio: 'pipe' }); } catch {}
+  try { execSync(`tmux kill-session -t ${CLAUDE_SESSION} 2>/dev/null`, { stdio: 'pipe' }); } catch {}
 
   // Create new tmux session with Claude
   try {
-    const tmuxArgs = ['new-session', '-d', '-s', 'claude-main'];
+    const tmuxArgs = ['new-session', '-d', '-s', CLAUDE_SESSION];
     if (process.env.IS_SANDBOX) tmuxArgs.push('-e', 'IS_SANDBOX=1');
 
     // Write API key to temp file to avoid exposing it in process command line
@@ -869,8 +874,8 @@ async function guideBypassAcceptance() {
     }
     // Configure status bar with detach hint
     try {
-      execSync('tmux set-option -t claude-main status-right " Ctrl+B d = detach " 2>/dev/null', { stdio: 'pipe' });
-      execSync('tmux set-option -t claude-main status-right-style "fg=black,bg=yellow" 2>/dev/null', { stdio: 'pipe' });
+      execSync(`tmux set-option -t ${CLAUDE_SESSION} status-right " Ctrl+B d = detach " 2>/dev/null`, { stdio: 'pipe' });
+      execSync(`tmux set-option -t ${CLAUDE_SESSION} status-right-style "fg=black,bg=yellow" 2>/dev/null`, { stdio: 'pipe' });
     } catch {}
   } catch (err) {
     console.log(`  ${warn(`Failed to create tmux session: ${err.message}`)}`);

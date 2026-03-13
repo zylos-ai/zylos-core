@@ -28,7 +28,7 @@
  *   - Infinite retries in recovering state (no max restart failures limit)
  *   - DOWN degradation: after 1 hour of continuous failure (configurable)
  *   - DOWN retry interval: 60 min (up from 30 min)
- *   - Process signal acceleration: claudeRunning false→true + 30s grace → immediate probe
+ *   - Process signal acceleration: agentRunning false→true + 30s grace → immediate probe
  *
  * v17 changes (plan usage monitoring — #206):
  *   - Add usage monitoring: periodically checks /usage via tmux capture during idle
@@ -136,7 +136,7 @@ const BACKOFF_RESET_THRESHOLD = 60; // Claude must stay running this long before
 const HEARTBEAT_INTERVAL = 7200;     // 2 hours (safety-net; stuck detection is the primary mechanism)
 const DOWN_DEGRADE_THRESHOLD = 3600; // 1 hour of continuous failure → enter DOWN
 const DOWN_RETRY_INTERVAL = 3600;    // 60 min periodic retry in DOWN state
-const SIGNAL_GRACE_PERIOD = 30;      // Wait 30s after claudeRunning transitions before probing
+const SIGNAL_GRACE_PERIOD = 30;      // Wait 30s after agentRunning transitions before probing
 const RATE_LIMIT_DEFAULT_COOLDOWN = 3600;  // 1 hour default when reset time can't be parsed
 const USER_MESSAGE_RECOVERY_COOLDOWN = 60; // 1 min between user-message-triggered recoveries
 
@@ -629,8 +629,8 @@ function enqueueHealthCheck() {
   return true;
 }
 
-function maybeEnqueueHealthCheck(claudeRunning, currentTime) {
-  if (!claudeRunning) return;
+function maybeEnqueueHealthCheck(agentRunning, currentTime) {
+  if (!agentRunning) return;
   if (engine.health !== 'ok') return;
 
   const state = loadHealthCheckState();

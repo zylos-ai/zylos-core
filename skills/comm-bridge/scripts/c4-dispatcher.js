@@ -42,7 +42,7 @@ import {
   REQUIRE_IDLE_EXECUTION_MAX_WAIT_MS,
   REQUIRE_IDLE_EXECUTION_POLL_MS,
   TMUX_SESSION,
-  CLAUDE_STATUS_FILE,
+  AGENT_STATUS_FILE,
   STALE_STATUS_THRESHOLD,
   TMUX_MISSING_WARN_THRESHOLD
 } from './c4-config.js';
@@ -67,17 +67,17 @@ function nowSeconds() {
 
 function getClaudeState() {
   try {
-    if (!existsSync(CLAUDE_STATUS_FILE)) {
+    if (!existsSync(AGENT_STATUS_FILE)) {
       return { state: 'offline', health: 'ok', healthy: false, reason: 'missing' };
     }
 
-    const stats = statSync(CLAUDE_STATUS_FILE);
+    const stats = statSync(AGENT_STATUS_FILE);
     const ageMs = Date.now() - stats.mtimeMs;
     if (ageMs > STALE_STATUS_THRESHOLD) {
       return { state: 'offline', health: 'ok', healthy: false, reason: 'stale' };
     }
 
-    const status = JSON.parse(readFileSync(CLAUDE_STATUS_FILE, 'utf8'));
+    const status = JSON.parse(readFileSync(AGENT_STATUS_FILE, 'utf8'));
     let state = status.state;
 
     if (!state && typeof status.idle_seconds === 'number') {
@@ -99,10 +99,10 @@ function getClaudeState() {
 
 function isStatusFresh() {
   try {
-    if (!existsSync(CLAUDE_STATUS_FILE)) {
+    if (!existsSync(AGENT_STATUS_FILE)) {
       return false;
     }
-    const stats = statSync(CLAUDE_STATUS_FILE);
+    const stats = statSync(AGENT_STATUS_FILE);
     return (Date.now() - stats.mtimeMs) <= STALE_STATUS_THRESHOLD;
   } catch {
     return false;
