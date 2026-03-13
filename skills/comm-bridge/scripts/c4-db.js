@@ -18,6 +18,28 @@ const INIT_SQL_PATH = path.join(__dirname, '..', 'init-db.sql');
 let db = null;
 
 /**
+ * Schema version — bump this when adding new migrations.
+ * Each version maps to a migration function in MIGRATIONS below.
+ */
+const SCHEMA_VERSION = 1;
+
+/**
+ * Incremental migrations keyed by target version.
+ * Each migration receives the db instance and should be idempotent where possible.
+ * Migrations run inside a transaction managed by migrateSchema().
+ */
+const MIGRATIONS = {
+  // v0 → v1: add 'running' status support + attachments column (issue #42 + #125 prep)
+  1: (database) => {
+    // Add attachments column if it doesn't exist yet
+    const cols = database.prepare("PRAGMA table_info(conversations)").all();
+    if (!cols.some(c => c.name === 'attachments')) {
+      database.exec("ALTER TABLE conversations ADD COLUMN attachments TEXT DEFAULT NULL");
+    }
+  }
+};
+
+/**
  * Get database connection, initializing if needed
  */
 export function getDb() {
@@ -36,6 +58,7 @@ export function getDb() {
     if (isNew) {
       initSchema();
     }
+    migrateSchema();
   }
   return db;
 }
@@ -46,7 +69,30 @@ export function getDb() {
 function initSchema() {
   const initSql = fs.readFileSync(INIT_SQL_PATH, 'utf8');
   db.exec(initSql);
+  db.pragma(`user_version = ${SCHEMA_VERSION}`);
   console.log('[C4-DB] Database initialized');
+}
+
+/**
+ * Run incremental schema migrations from current user_version to SCHEMA_VERSION.
+ * Each migration runs in a transaction; user_version is updated after each step.
+ */
+function migrateSchema() {
+  const current = db.pragma('user_version', { simple: true });
+  if (current >= SCHEMA_VERSION) return;
+
+  for (let v = current + 1; v <= SCHEMA_VERSION; v++) {
+    const migrate = MIGRATIONS[v];
+    if (!migrate) {
+      console.error(`[C4-DB] Missing migration for version ${v}`);
+      break;
+    }
+    db.transaction(() => {
+      migrate(db);
+      db.pragma(`user_version = ${v}`);
+    })();
+    console.log(`[C4-DB] Migrated to schema version ${v}`);
+  }
 }
 
 function nowSeconds() {

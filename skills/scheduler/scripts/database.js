@@ -16,6 +16,22 @@ const HISTORY_RETENTION_DAYS = 30;
 
 let db = null;
 
+/**
+ * Schema version — bump this when adding new migrations.
+ */
+const SCHEMA_VERSION = 1;
+
+/**
+ * Incremental migrations keyed by target version.
+ * Each migration receives the db instance.
+ */
+const MIGRATIONS = {
+  // v0 → v1: baseline — no changes needed, just marks existing schema as versioned
+  1: (_database) => {
+    // No-op: establishes version tracking for future migrations
+  }
+};
+
 export function getDb() {
   if (!db) {
     // Ensure data directory exists
@@ -26,6 +42,7 @@ export function getDb() {
     db = new Database(DB_PATH);
     db.pragma('journal_mode = WAL');  // Better concurrent access
     initSchema();
+    migrateSchema();
   }
   return db;
 }
@@ -106,7 +123,27 @@ function initSchema() {
       updated_at INTEGER
     );
   `);
+}
 
+/**
+ * Run incremental schema migrations from current user_version to SCHEMA_VERSION.
+ */
+function migrateSchema() {
+  const current = db.pragma('user_version', { simple: true });
+  if (current >= SCHEMA_VERSION) return;
+
+  for (let v = current + 1; v <= SCHEMA_VERSION; v++) {
+    const migrate = MIGRATIONS[v];
+    if (!migrate) {
+      console.error(`[Scheduler-DB] Missing migration for version ${v}`);
+      break;
+    }
+    db.transaction(() => {
+      migrate(db);
+      db.pragma(`user_version = ${v}`);
+    })();
+    console.log(`[Scheduler-DB] Migrated to schema version ${v}`);
+  }
 }
 
 // Clean up old history entries (older than HISTORY_RETENTION_DAYS)
