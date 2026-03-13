@@ -75,11 +75,21 @@ export class ClaudeAdapter extends RuntimeAdapter {
       if (status?.loggedIn === true) {
         return { ok: true, reason: `authenticated via ${status.authMethod || 'unknown'}` };
       }
-      return { ok: false, reason: 'not logged in' };
-    } catch (e) {
-      // claude binary missing or timed out
-      return { ok: false, reason: e.message };
-    }
+    } catch { /* binary missing or non-JSON output — fall through to .env check */ }
+
+    // Fallback: check for API key tokens in ~/zylos/.env.
+    // launch() supports these token-based setups; checkAuth must recognize them too.
+    try {
+      const envContent = fs.readFileSync(path.join(ZYLOS_DIR, '.env'), 'utf8');
+      if (/^ANTHROPIC_API_KEY=\S+/m.test(envContent)) {
+        return { ok: true, reason: 'ANTHROPIC_API_KEY in .env' };
+      }
+      if (/^CLAUDE_CODE_OAUTH_TOKEN=\S+/m.test(envContent)) {
+        return { ok: true, reason: 'CLAUDE_CODE_OAUTH_TOKEN in .env' };
+      }
+    } catch { /* .env absent — not an auth path */ }
+
+    return { ok: false, reason: 'not logged in' };
   }
 
   // ── Process / tmux ────────────────────────────────────────────────────────
@@ -262,11 +272,15 @@ export class ClaudeAdapter extends RuntimeAdapter {
   }
 
   /**
-   * Returns a ClaudeContextMonitor instance for this runtime.
-   * @returns {ClaudeContextMonitor}
+   * Claude uses the statusLine hook (context-monitor.js) for context monitoring,
+   * which enqueues a new-session control message for a graceful handoff.
+   * Return null here so the activity-monitor does not activate the generic
+   * polling + stop/launch rotation path, which would kill the session abruptly.
+   *
+   * @returns {null}
    */
   getContextMonitor() {
-    return new ClaudeContextMonitor();
+    return null;
   }
 }
 
