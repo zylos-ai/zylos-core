@@ -426,8 +426,10 @@ function displayAiGroup(diag, jsonGroup) {
   const checks = [];
   const { cli, auth, autonomous } = diag.ai;
 
-  if (cli.installed) {
-    checks.push(`Claude CLI ${dim(cli.version)}`);
+  if (ACTIVE_RUNTIME === 'codex') {
+    checks.push(dim('Claude CLI (not applicable — runtime: Codex)'));
+  } else if (cli.installed) {
+    checks.push(`Claude CLI ${dim(cli.version ?? '')}`);
   } else {
     checks.push(red('Claude CLI not installed'));
   }
@@ -589,6 +591,8 @@ function discoverChannels(pm2Procs, env, tmuxSession, components) {
 // ── Claude auto-fix (Layer 2) ────────────────────────────────────
 
 function isClaudeReady(diag) {
+  // Auto-fix via `claude -p` is only available when Claude is the active runtime.
+  if (ACTIVE_RUNTIME !== 'claude') return false;
   return diag.ai.cli.installed && diag.ai.auth && diag.ai.autonomous && diag.system.network.reachable;
 }
 
