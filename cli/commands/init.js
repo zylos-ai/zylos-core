@@ -2294,6 +2294,10 @@ export async function initCommand(args) {
         console.log(`  ${dim('Run "zylos init" again to authenticate.')}`);
       }
     }
+    // Persist runtime selection change (e.g. zylos init --runtime codex on existing install)
+    if (existingRuntime && existingRuntime !== selectedRuntime) {
+      updateZylosConfig({ runtime: selectedRuntime });
+    }
     printWebConsoleInfo();
     if (!quiet) console.log(`\n${dim('Use "zylos add <component>" to add components.')}`);
     if (exitCode) process.exit(exitCode);

@@ -38,7 +38,7 @@ try {
 } catch { /* config.json absent or unknown runtime — use Claude defaults */ }
 const LOG_DIR = path.join(ZYLOS_DIR, 'logs');
 const LOG_FILE = path.join(LOG_DIR, 'doctor.log');
-const API_HOST = 'api.anthropic.com';
+const API_HOST = ACTIVE_RUNTIME === 'codex' ? 'api.openai.com' : 'api.anthropic.com';
 const VERSION_CHECK_CONCURRENCY = 3;
 const CLAUDE_FIX_TIMEOUT = 300000; // 5 minutes
 
