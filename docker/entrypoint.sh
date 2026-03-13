@@ -61,10 +61,24 @@ if [ -n "${AUTH_TOKEN}" ]; then
   fi
 fi
 
+# Detect runtime — if only Codex credentials are present (no Claude creds), default to codex.
+# ZYLOS_RUNTIME env var always wins when explicitly set.
+RUNTIME_FLAG=""
+if [ -z "${ZYLOS_RUNTIME:-}" ]; then
+  HAS_CLAUDE_AUTH=false
+  HAS_CODEX_AUTH=false
+  [ -n "${ANTHROPIC_API_KEY:-}" ] || [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] && HAS_CLAUDE_AUTH=true
+  [ -n "${OPENAI_API_KEY:-}" ] || [ -n "${CODEX_API_KEY:-}" ] && HAS_CODEX_AUTH=true
+  if [ "${HAS_CODEX_AUTH}" = true ] && [ "${HAS_CLAUDE_AUTH}" = false ]; then
+    RUNTIME_FLAG="--runtime codex"
+  fi
+fi
+
 # Build init flags
 INIT_ARGS="--yes --quiet"
 [ -n "${TZ:-}" ] && INIT_ARGS="${INIT_ARGS} --timezone ${TZ}"
 [ -n "${AUTH_FLAG}" ] && INIT_ARGS="${INIT_ARGS} ${AUTH_FLAG}"
+[ -n "${RUNTIME_FLAG}" ] && INIT_ARGS="${INIT_ARGS} ${RUNTIME_FLAG}"
 
 # shellcheck disable=SC2086
 if ! zylos init ${INIT_ARGS}; then

@@ -54,11 +54,22 @@ export class CodexAdapter extends RuntimeAdapter {
 
   /**
    * Check if Codex CLI is authenticated.
-   * `codex login --status` exits 0 when authenticated, non-zero otherwise.
+   *
+   * Auth is accepted via two paths (checked in order):
+   *   1. Environment variables: OPENAI_API_KEY or CODEX_API_KEY present — Codex
+   *      reads these directly, so no persistent login is needed. This covers
+   *      Docker / server deployments where credentials are injected via env.
+   *   2. `codex login --status` exits 0 — interactive / OAuth login path.
    *
    * @returns {Promise<{ok: boolean, reason: string}>}
    */
   async checkAuth() {
+    // Path 1: env-var credentials (Docker / server deployments).
+    if (process.env.OPENAI_API_KEY || process.env.CODEX_API_KEY) {
+      return { ok: true, reason: 'env-var auth (OPENAI_API_KEY / CODEX_API_KEY)' };
+    }
+
+    // Path 2: persistent login via `codex login`.
     try {
       const result = spawnSync(CODEX_BIN, ['login', '--status'], {
         stdio: 'pipe', encoding: 'utf8', timeout: 10_000,
@@ -69,7 +80,7 @@ export class CodexAdapter extends RuntimeAdapter {
       if (result.status === 0) {
         return { ok: true, reason: 'codex login --status: authenticated' };
       }
-      return { ok: false, reason: 'not logged in (run: codex login)' };
+      return { ok: false, reason: 'not logged in (run: codex login or set OPENAI_API_KEY)' };
     } catch (e) {
       return { ok: false, reason: e.message };
     }
