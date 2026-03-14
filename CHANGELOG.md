@@ -5,6 +5,29 @@ All notable changes to zylos-core will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-03-15
+
+### Added
+- **OpenAI Codex runtime support**: run Zylos on Codex CLI instead of Claude Code. Switch anytime with `zylos runtime codex` — memory, skills, and channels are fully preserved across the switch (#311)
+- **`zylos runtime <name>` command**: switch AI runtime at any time without reinstalling. Handles install, auth, and tmux session management automatically
+- **`--runtime` and `--codex-api-key` install flags**: non-interactive Codex install support — `curl | bash -s -- --runtime codex --codex-api-key sk-xxx`. `ZYLOS_RUNTIME` and `OPENAI_API_KEY` env vars also supported
+- **Codex API key verification**: validates the OpenAI API key against the real API before saving, with clear error messages on failure
+- **RuntimeAdapter abstraction**: `ClaudeAdapter` and `CodexAdapter` implement a shared interface — all core systems (heartbeat, context monitoring, guardian) are now runtime-agnostic
+- **Per-runtime instruction files**: `ZYLOS.md` (shared core) + `claude-addon.md` / `codex-addon.md` runtime addons, assembled into `CLAUDE.md` (Claude) or `AGENTS.md` (Codex) at setup time
+- **Codex skill discovery**: `.agents/skills/` symlink created at Codex launch so Codex discovers all installed skills natively via the Agent Skills spec
+- **Context rotation notifications**: when context is near full, the activity monitor sends a user notification before rotating to a new session — works across all communication channels
+- **Per-runtime heartbeat probes**: `ClaudeProbe` and `CodexProbe` handle liveness detection for each runtime's specific behavior
+
+### Fixed
+- **Auth check consistency**: `zylos status` and `zylos doctor` now call `adapter.checkAuth()` directly instead of ad-hoc file checks — consistent auth detection across all commands
+- **`--codex-api-key` non-interactive exit code**: exits with code 1 (not 0) when key verification fails in non-interactive mode
+- **`install.sh` `--runtime` flag forwarding**: install script was silently dropping `--runtime` before passing flags to `zylos init`
+- **Codex API key sync on launch**: API key in `~/zylos/.env` is synced to `~/.codex/auth.json` before every Codex start — supports key rotation and manual `.env` edits
+- **`zylos upgrade` in Codex runtime**: self-upgrade now regenerates `AGENTS.md` and restarts Codex session
+
+### Changed
+- **Layered instruction files**: `CLAUDE.md` is now assembled from `ZYLOS.md` + `claude-addon.md` on each install/upgrade. Existing `CLAUDE.md` is migrated to `ZYLOS.md` on first upgrade to v0.4.0
+
 ## [0.3.7] - 2026-03-11
 
 ### Added
