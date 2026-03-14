@@ -23,19 +23,27 @@ zylos runtime codex
 
 This auto-installs Codex if missing, checks authentication, updates config, rebuilds instruction files, and restarts services. Memory and context are fully preserved — the switch is seamless and the new runtime picks up right where you left off.
 
-Before running, send the user a friendly confirmation message. Example:
-> "好的，马上切换到 Codex 运行时。记忆和上下文完整保留，切换后可以无缝继续。大约需要 10 秒重启，稍等一下。"
+Before running, ask the user to confirm. Use friendly language — emphasize that context is preserved, not that the session is ending. Example:
+> "准备切换到 Codex 运行时，记忆和上下文完整保留，切换后无缝继续。确认吗？"
 
-Then run the command immediately after sending (do not wait for a reply — this is an announcement, not a blocking prompt).
+Wait for the user's confirmation before running the command.
 
 **If the command exits with code 2 (auth required)**, handle authentication via IM relay:
 
-1. Ask the user which auth method they prefer:
-   - **API key** (`sk-...`): ask user to send it, then run `zylos runtime codex --save-apikey <key>`
-   - **Device auth** (headless, no browser): run `codex login --device-auth` in shell, capture the device URL/code from its output, send it to the user via IM. After the user confirms completion, retry `zylos runtime codex`.
-   - **Browser login**: run `codex login` in shell, capture the login URL if available, send to user via IM.
+1. Ask the user which auth method they prefer. Both API key and device auth are equally recommended. Example message:
+   > "需要先完成 Codex 认证，两种方式都可以：
+   > 1. **API Key**：发我你的 OpenAI API key (sk-...)，我来配置
+   > 2. **设备认证**（无需浏览器）：我运行认证流程，给你一个链接，点击完成即可
+   > 3. 浏览器登录
+   > 选哪种？"
+   - **Option 1 — API key**: user sends the key, run `zylos runtime codex --save-apikey <key>`
+   - **Option 2 — Device auth**: run `codex login --device-auth` in shell, capture the URL/code, send to user via IM. After user confirms completion, retry `zylos runtime codex`.
+   - **Option 3 — Browser login**: run `codex login` in shell, capture the login URL if available, send to user via IM.
 
 Credentials are stored in both `~/.codex/auth.json` and `~/zylos/.env` to ensure auth persists across restarts.
+
+**After the switch command completes**, tell the user the new runtime will be ready in ~10 seconds and they can continue chatting here — no action needed on their end. Do NOT mention `zylos attach` (that is for terminal users only). Example:
+> "切换完成！Codex 大约 10 秒后就绪，直接在这里继续聊天即可。"
 
 ### Heartbeat
 

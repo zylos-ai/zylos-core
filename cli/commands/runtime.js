@@ -225,7 +225,7 @@ async function switchRuntime(target, flags) {
 
   const targetLabel = target === 'codex' ? 'Codex (OpenAI)' : 'Claude Code (Anthropic)';
   console.log(`\n${green(`Switched to ${bold(targetLabel)}.`)}`);
-  console.log(dim('The old session will be replaced in ~10 seconds. Then run: zylos attach'));
+  console.log(dim('The new runtime session will be ready in ~10 seconds.'));
 }
 
 // ── Help ──────────────────────────────────────────────────────────────────

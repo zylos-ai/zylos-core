@@ -12,19 +12,27 @@ zylos runtime claude
 
 This auto-installs Claude if missing, checks authentication, updates config, rebuilds instruction files, and restarts services. Memory and context are fully preserved — the switch is seamless and the new runtime picks up right where you left off.
 
-Before running, send the user a friendly confirmation message via C4. Example:
-> "好的，马上切换到 Claude 运行时。记忆和上下文完整保留，切换后可以无缝继续。大约需要 10 秒重启，稍等一下。"
+Before running, ask the user to confirm via C4. Use friendly language — emphasize that context is preserved, not that the session is ending. Example:
+> "准备切换到 Claude 运行时，记忆和上下文完整保留，切换后无缝继续。确认吗？"
 
-Then run the command immediately after sending (do not wait for a reply — this is an announcement, not a blocking prompt).
+Wait for the user's confirmation before running the command.
 
 **If the command exits with code 2 (auth required)**, handle authentication via IM relay:
 
-1. Ask the user which auth method they prefer:
-   - **API key** (`sk-ant-api...`): ask user to send it, then run `zylos runtime claude --save-apikey <key>`
-   - **Setup token** (`sk-ant-oat...`): ask user to send it, then run `zylos runtime claude --save-setup-token <token>`
-   - **Browser OAuth**: run `claude auth login` in shell, capture the login URL from its output, send it to the user via IM. After the user confirms login, retry `zylos runtime claude`.
+1. Ask the user which auth method they prefer. Both API key and setup token are equally recommended. Example message:
+   > "需要先完成 Claude 认证，两种方式都可以：
+   > 1. **API Key**：发我你的 Anthropic API key (sk-ant-api...)，我来配置
+   > 2. **Setup Token**：发我你的 setup token (sk-ant-oat...)，我来配置
+   > 3. 浏览器 OAuth 登录
+   > 选哪种？"
+   - **Option 1 — API key**: user sends the key, run `zylos runtime claude --save-apikey <key>`
+   - **Option 2 — Setup token**: user sends the token, run `zylos runtime claude --save-setup-token <token>`
+   - **Option 3 — Browser OAuth**: run `claude auth login` in shell, capture the login URL, send to user via IM. After user confirms, retry `zylos runtime claude`.
 
 Credentials are stored in both `~/.claude/settings.json` and `~/zylos/.env` to ensure auth persists across restarts.
+
+**After the switch command completes**, tell the user the new runtime will be ready in ~10 seconds and they can continue chatting here — no action needed on their end. Do NOT mention `zylos attach` (that is for terminal users only). Example:
+> "切换完成！Claude Code 大约 10 秒后就绪，直接在这里继续聊天即可。"
 
 ### User Confirmation for Destructive Operations
 
