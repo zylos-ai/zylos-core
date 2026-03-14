@@ -23,7 +23,7 @@ zylos runtime codex
 
 This auto-installs Codex if missing, checks authentication, updates config, rebuilds instruction files, and restarts services. Memory and context are fully preserved — the switch is seamless and the new runtime picks up right where you left off.
 
-Before running, ask the user to confirm. Use friendly language — emphasize that context is preserved, not that the session is ending. Example:
+Before running, ask the user to confirm via C4. Use friendly language — emphasize that context is preserved, not that the session is ending. Example:
 > "准备切换到 Codex 运行时，记忆和上下文完整保留，切换后无缝继续。确认吗？"
 
 Wait for the user's confirmation before running the command.
