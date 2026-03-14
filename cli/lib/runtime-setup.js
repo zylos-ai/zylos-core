@@ -216,6 +216,78 @@ export function saveSetupTokenToEnv(token) {
 // ── Codex credential helpers ───────────────────────────────────────────────
 
 /**
+ * Write ~/.codex/config.toml with a comprehensive headless configuration that
+ * suppresses all known interactive prompts (trust dialogs, model upgrade notices,
+ * update checks, telemetry prompts, etc.).
+ *
+ * Called by both `zylos init` (Codex runtime) and `zylos runtime codex` so the
+ * config is always present when switching to Codex.
+ *
+ * Existing [projects.*] trust entries in the file are preserved; top-level settings
+ * and [notice] section are always written/overwritten for freshness.
+ *
+ * @param {string} projectDir - The zylos working directory to pre-trust
+ * @returns {boolean} true on success
+ */
+export function writeCodexConfig(projectDir) {
+  const codexDir = path.join(os.homedir(), '.codex');
+  const configPath = path.join(codexDir, 'config.toml');
+  const absProject = path.resolve(projectDir);
+  try {
+    // Preserve existing [projects.*] sections (other directories may already be trusted).
+    let preservedProjects = '';
+    try {
+      const existing = fs.readFileSync(configPath, 'utf8');
+      const projectMatches = existing.match(/^\[projects\.[^\]]+\][^\[]+/gm);
+      if (projectMatches) {
+        // Keep sections that are NOT the one we're about to write.
+        const toKeep = projectMatches.filter(
+          (s) => !s.includes(`"${absProject}"`) && !s.includes(`'${absProject}'`)
+        );
+        if (toKeep.length) preservedProjects = '\n' + toKeep.join('\n').trimEnd() + '\n';
+      }
+    } catch { /* new file — nothing to preserve */ }
+
+    // Build the complete headless config.
+    // All fields are verified against the installed Codex binary (v0.114.0).
+    const config = [
+      '# Codex headless config — written by zylos, do not edit manually.',
+      '# Re-generated on each `zylos init` / `zylos runtime codex`.',
+      '',
+      '# Disable startup checks and telemetry',
+      'check_for_update_on_startup = false',
+      'analytics = false',
+      '',
+      '# Acknowledge the latest model NUX so the "Introducing GPT-X" dialog',
+      '# is not shown on startup.  Update this when Codex ships a new default model.',
+      'model_availability_nux = "gpt-5.4"',
+      '',
+      '# Suppress all known interactive notice dialogs',
+      '[notice]',
+      'hide_full_access_warning = true',
+      'hide_world_writable_warning = true',
+      'hide_rate_limit_model_nudge = true',
+      'hide_gpt5_1_migration_prompt = true',
+      '"hide_gpt-5.1-codex-max_migration_prompt" = true',
+      '',
+      '# Acknowledge known model migrations so no migration prompt appears',
+      '[notice.model_migrations]',
+      '"gpt-5.3-codex" = "gpt-5.4"',
+      '',
+      `# Trust the zylos project directory`,
+      `[projects."${absProject}"]`,
+      'trust_level = "trusted"',
+    ].join('\n') + '\n';
+
+    fs.mkdirSync(codexDir, { recursive: true });
+    fs.writeFileSync(configPath, config + preservedProjects, 'utf8');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Write OPENAI_API_KEY to ~/zylos/.env and ~/.codex/auth.json (native store).
  * @param {string} apiKey - The OpenAI API key (sk-...)
  * @returns {boolean}

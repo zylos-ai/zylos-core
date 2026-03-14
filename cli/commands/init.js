@@ -31,6 +31,7 @@ import {
   saveSetupToken,
   saveSetupTokenToEnv,
   saveCodexApiKeyToEnv,
+  writeCodexConfig,
 } from '../lib/runtime-setup.js';
 
 // Source directories (shipped with zylos package)
@@ -385,72 +386,6 @@ function ensureBinInPath() {
 // ── Codex helpers ─────────────────────────────────────────────────────────
 
 /**
- * Write ~/.codex/config.toml to bypass interactive prompts on first launch.
- * Sets trust_level = "trusted" for the project dir and suppresses migration notices.
- *
- * @param {string} projectDir - The zylos working directory to pre-trust
- * @returns {boolean} true if the file was written or already contained trust config
- */
-function writeCodexConfig(projectDir) {
-  const codexDir = path.join(os.homedir(), '.codex');
-  const configPath = path.join(codexDir, 'config.toml');
-  const absProject = path.resolve(projectDir);
-  try {
-    let existing = '';
-    if (fs.existsSync(configPath)) {
-      existing = fs.readFileSync(configPath, 'utf8');
-    }
-    const sectionHeader = `[projects."${absProject}"]`;
-    const sectionIdx = existing.indexOf(sectionHeader);
-    if (sectionIdx >= 0) {
-      // Section exists — verify trust_level = "trusted" is actually set within it
-      const afterHeader = existing.slice(sectionIdx + sectionHeader.length);
-      const nextTableIdx = afterHeader.search(/\n\[/);
-      const sectionBody = nextTableIdx >= 0 ? afterHeader.slice(0, nextTableIdx) : afterHeader;
-      // Determine if migration notice section is missing from the whole file
-      const needsMigration = !existing.includes('[notice.model_migrations]');
-      const migrationAppend = needsMigration ? `\n[notice.model_migrations]\n"gpt-5.3-codex" = "gpt-5.4"\n` : '';
-
-      if (sectionBody.includes('trust_level = "trusted"')) {
-        // trust_level already correct — only patch migration section if needed
-        if (!needsMigration) return true;
-        fs.mkdirSync(codexDir, { recursive: true });
-        fs.writeFileSync(configPath, existing.trimEnd() + '\n' + migrationAppend, 'utf8');
-        return true;
-      }
-      // trust_level missing or has wrong value — patch it
-      let patched;
-      if (sectionBody.includes('trust_level =')) {
-        // Replace existing wrong value within this section only
-        const sectionEnd = nextTableIdx >= 0
-          ? sectionIdx + sectionHeader.length + nextTableIdx
-          : existing.length;
-        const sectionFull = existing.slice(sectionIdx, sectionEnd);
-        const patchedSection = sectionFull.replace(/trust_level\s*=\s*"[^"]*"/, 'trust_level = "trusted"');
-        patched = existing.slice(0, sectionIdx) + patchedSection + existing.slice(sectionEnd);
-      } else {
-        // Inject trust_level right after the section header
-        patched = existing.slice(0, sectionIdx + sectionHeader.length)
-          + '\ntrust_level = "trusted"'
-          + existing.slice(sectionIdx + sectionHeader.length);
-      }
-      patched = patched.trimEnd() + '\n' + migrationAppend;
-      fs.mkdirSync(codexDir, { recursive: true });
-      fs.writeFileSync(configPath, patched, 'utf8');
-      return true;
-    }
-    const migrationSection = existing.includes('[notice.model_migrations]') ? '' : `\n[notice.model_migrations]\n"gpt-5.3-codex" = "gpt-5.4"\n`;
-    const addition =
-      `[projects."${absProject}"]\ntrust_level = "trusted"\n` + migrationSection;
-    const content = existing.trimEnd() ? existing.trimEnd() + '\n\n' + addition : addition;
-    fs.mkdirSync(codexDir, { recursive: true });
-    fs.writeFileSync(configPath, content, 'utf8');
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 // ── End Codex helpers ──────────────────────────────────────────────────────
 
 /**

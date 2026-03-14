@@ -23,6 +23,7 @@ import {
   saveSetupToken,
   saveSetupTokenToEnv,
   saveCodexApiKeyToEnv,
+  writeCodexConfig,
 } from '../lib/runtime-setup.js';
 
 // ── Helpers ───────────────────────────────────────────────────────────────
@@ -143,6 +144,12 @@ async function switchRuntime(target, flags) {
       process.exit(1);
     }
     console.log(`  ${green('✓')} credentials saved`);
+  }
+
+  // Step 2b: Write Codex headless config (trust dir, suppress all interactive prompts).
+  // Done before auth check so config is present when checkAuth spawns `codex login status`.
+  if (target === 'codex') {
+    writeCodexConfig(ZYLOS_DIR);
   }
 
   // Step 3: Check auth for target runtime.
