@@ -9,8 +9,9 @@ import path from 'node:path';
 import { ZYLOS_DIR, SKILLS_DIR, getZylosConfig } from '../lib/config.js';
 import { bold, dim, green, red, yellow, cyan, success, error, warn, heading } from '../lib/colors.js';
 import { commandExists } from '../lib/shell-utils.js';
+import { getActiveAdapter } from '../lib/runtime/index.js';
 
-export function showStatus() {
+export async function showStatus() {
   console.log(heading('Zylos Status') + '\n' + dim('============') + '\n');
 
   const activeRuntime = getZylosConfig().runtime ?? 'claude';
@@ -23,35 +24,12 @@ export function showStatus() {
     console.log(`${bold(runtimeLabel)}: ${red('NOT INSTALLED')}`);
     console.log(`  ${dim('→ Run: zylos init')}`);
   } else {
-    // Check authentication
+    // Check authentication via adapter (same logic as the running process uses)
     let authenticated = false;
     try {
-      if (isCodex) {
-        // Path 1: env-var credentials (already exported in this process)
-        if (process.env.OPENAI_API_KEY || process.env.CODEX_API_KEY) {
-          authenticated = true;
-        } else {
-          // Path 2: API key stored in ~/zylos/.env (not exported to this process)
-          try {
-            const envContent = fs.readFileSync(path.join(ZYLOS_DIR, '.env'), 'utf8');
-            if (/^OPENAI_API_KEY=\S+/m.test(envContent) || /^CODEX_API_KEY=\S+/m.test(envContent)) {
-              authenticated = true;
-            }
-          } catch { /* .env absent */ }
-        }
-        // Path 3: native login (device-auth / browser)
-        if (!authenticated) {
-          const result = spawnSync('codex', ['login', 'status'], {
-            stdio: 'pipe', encoding: 'utf8', timeout: 10000,
-          });
-          authenticated = result.status === 0;
-        }
-      } else {
-        const result = spawnSync('claude', ['auth', 'status'], {
-          stdio: 'pipe', encoding: 'utf8', timeout: 10000,
-        });
-        authenticated = result.status === 0;
-      }
+      const adapter = getActiveAdapter();
+      const authResult = await adapter.checkAuth();
+      authenticated = authResult.ok;
     } catch {}
 
     if (!authenticated) {

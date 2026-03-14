@@ -62,24 +62,8 @@ export class ClaudeAdapter extends RuntimeAdapter {
    * @returns {Promise<{ok: boolean, reason: string}>}
    */
   async checkAuth() {
-    // First check credentials.json (OAuth refresh token — auto-renewable)
-    if (_hasCredentialsFile()) {
-      return { ok: true, reason: 'credentials.json present' };
-    }
-
-    // Then try `claude auth status` (JSON output)
-    try {
-      const out = execFileSync(CLAUDE_BIN, ['auth', 'status'], {
-        encoding: 'utf8', timeout: 10_000, stdio: ['ignore', 'pipe', 'pipe'],
-      });
-      const status = JSON.parse(out);
-      if (status?.loggedIn === true) {
-        return { ok: true, reason: `authenticated via ${status.authMethod || 'unknown'}` };
-      }
-    } catch { /* binary missing or non-JSON output — fall through to .env check */ }
-
-    // Fallback: check for API key tokens in ~/zylos/.env.
-    // launch() supports these token-based setups; checkAuth must recognize them too.
+    // Path 1: API key tokens in ~/zylos/.env — checked first (fast, no subprocess).
+    // launch() injects these into the Claude process env; if present, Claude IS authenticated.
     try {
       const envContent = fs.readFileSync(path.join(ZYLOS_DIR, '.env'), 'utf8');
       if (/^ANTHROPIC_API_KEY=\S+/m.test(envContent)) {
@@ -89,6 +73,18 @@ export class ClaudeAdapter extends RuntimeAdapter {
         return { ok: true, reason: 'CLAUDE_CODE_OAUTH_TOKEN in .env' };
       }
     } catch { /* .env absent — not an auth path */ }
+
+    // Path 2: `claude auth status` — authoritative check for native auth (OAuth, credentials.json).
+    // More reliable than inspecting credentials.json directly (handles expiry, revocation, format changes).
+    try {
+      const out = execFileSync(CLAUDE_BIN, ['auth', 'status'], {
+        encoding: 'utf8', timeout: 10_000, stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      const status = JSON.parse(out);
+      if (status?.loggedIn === true) {
+        return { ok: true, reason: `authenticated via ${status.authMethod || 'unknown'}` };
+      }
+    } catch { /* binary missing or non-JSON output */ }
 
     return { ok: false, reason: 'not logged in' };
   }

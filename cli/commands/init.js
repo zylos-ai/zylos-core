@@ -1843,22 +1843,19 @@ export async function initCommand(args) {
 
     // ── Step 6 (Codex): auth + startup config ────────────────────────────
     if (commandExists('codex')) {
-      codexAuthenticated = isCodexAuthenticated();
-      if (codexAuthenticated) {
-        if (!quiet) console.log(`  ${success('Codex authenticated')}`);
-      } else if (opts.codexApiKey) {
-        // API key provided via flag/env — stage for post-template write, set env for immediate auth check
+      // Stage API key immediately if provided — ensures it's always written to .env/auth.json
+      // regardless of whether isCodexAuthenticated() returns true for another reason.
+      if (opts.codexApiKey) {
         process.env.OPENAI_API_KEY = opts.codexApiKey;
         pendingCodexApiKey = opts.codexApiKey;
-        codexAuthenticated = isCodexAuthenticated();
-        if (codexAuthenticated) {
-          if (!quiet) console.log(`  ${success('Codex API key accepted')}`);
-        } else {
-          if (!quiet) console.log(`  ${warn('Codex API key provided but auth check failed. Continuing...')}`);
-        }
+      }
+
+      codexAuthenticated = isCodexAuthenticated();
+      if (codexAuthenticated) {
+        if (!quiet) console.log(`  ${success(opts.codexApiKey ? 'Codex API key accepted' : 'Codex authenticated')}`);
       } else {
         if (!quiet) console.log(`  ${warn('Codex not authenticated')}`);
-        if (!skipConfirm) {
+        if (!skipConfirm && !opts.codexApiKey) {
           const codexAuthChoice = await promptChoice(
             '\n  How would you like to authenticate Codex?',
             ['OpenAI API key', 'Device auth (headless/server — no browser needed)', 'Browser login'],
@@ -1906,6 +1903,8 @@ export async function initCommand(args) {
               console.log(`    ${dim('Run "codex login" to try again.')}`);
             }
           }
+        } else if (opts.codexApiKey) {
+          if (!quiet) console.log(`    ${dim('API key staged but auth check failed. Continuing...')}`);
         } else {
           if (!quiet) console.log(`    ${dim('Run "codex login" or set OPENAI_API_KEY to authenticate.')}`);
         }

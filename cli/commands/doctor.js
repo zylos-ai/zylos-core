@@ -290,10 +290,11 @@ async function collectDiagnostics(env) {
   const net = await networkPromise;
 
   // Runtime-specific CLI/auth checks.
+  // Both runtimes use adapter.checkAuth() for consistency with the running process.
   let cli, auth, autonomous;
   if (ACTIVE_RUNTIME !== 'codex') {
     cli = checkClaudeCli();
-    auth = cli.installed && net.reachable ? checkClaudeAuth() : false;
+    auth = cli.installed ? (await _activeAdapter.checkAuth()).ok : false;
     autonomous = cli.installed ? checkAutonomousMode() : false;
   } else {
     // Codex runtime — check Codex CLI and auth status.

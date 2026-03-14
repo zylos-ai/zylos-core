@@ -79,18 +79,9 @@ export class CodexAdapter extends RuntimeAdapter {
       }
     } catch { /* .env absent — not an auth path */ }
 
-    // Path 3: API key stored in ~/.codex/auth.json by Codex's own auth flow or
-    // by zylos init. This is Codex's native credential store — if present, Codex
-    // will authenticate at startup without needing any env var injection.
-    try {
-      const authPath = path.join(os.homedir(), '.codex', 'auth.json');
-      const auth = JSON.parse(fs.readFileSync(authPath, 'utf8'));
-      if (auth.OPENAI_API_KEY || auth.CODEX_API_KEY) {
-        return { ok: true, reason: 'OPENAI_API_KEY in ~/.codex/auth.json' };
-      }
-    } catch { /* auth.json absent or no key */ }
-
-    // Path 4: persistent login via `codex login status` (subcommand, not flag).
+    // Path 3: `codex login status` — authoritative check covering all native auth methods
+    // (API key via auth.json, device auth, OAuth). More reliable than inspecting auth.json
+    // directly, which can't distinguish auth_mode or detect revoked/expired keys.
     try {
       const result = spawnSync(CODEX_BIN, ['login', 'status'], {
         stdio: 'pipe', encoding: 'utf8', timeout: 10_000,

@@ -89,12 +89,8 @@ export function isCodexAuthenticated() {
     if (/^OPENAI_API_KEY=\S+/m.test(envContent) || /^CODEX_API_KEY=\S+/m.test(envContent)) return true;
   } catch { /* .env absent */ }
 
-  try {
-    const authPath = path.join(os.homedir(), '.codex', 'auth.json');
-    const auth = JSON.parse(fs.readFileSync(authPath, 'utf8'));
-    if (auth.OPENAI_API_KEY || auth.CODEX_API_KEY) return true;
-  } catch { /* auth.json absent or no key */ }
-
+  // Use `codex login status` as the authoritative native-auth check (covers auth.json,
+  // device auth, OAuth) rather than inspecting auth.json directly.
   try {
     const result = spawnSync('codex', ['login', 'status'], {
       stdio: 'pipe', encoding: 'utf8', timeout: 10000,
