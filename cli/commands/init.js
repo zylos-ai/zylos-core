@@ -431,6 +431,30 @@ function verifyApiKey(apiKey) {
 }
 
 /**
+ * Verify an OpenAI API key by making a lightweight GET request to /v1/models.
+ * @param {string} apiKey - The OpenAI API key (sk-...)
+ * @returns {Promise<true|false|null>} true=valid (200), false=invalid (401), null=network error
+ */
+function verifyCodexApiKey(apiKey) {
+  return new Promise((resolve) => {
+    const req = https.request({
+      hostname: 'api.openai.com',
+      path: '/v1/models',
+      method: 'GET',
+      headers: { 'Authorization': `Bearer ${apiKey}` },
+      timeout: 10000,
+    }, (res) => {
+      res.resume(); // drain response
+      if (res.statusCode === 401) resolve(false);
+      else resolve(true);
+    });
+    req.on('error', () => resolve(null));
+    req.on('timeout', () => { req.destroy(); resolve(null); });
+    req.end();
+  });
+}
+
+/**
  * Verify a setup token by running `claude -p "hi" --max-turns 1`.
  * The token must already be saved (via saveSetupToken) so claude picks it up.
  *
@@ -1845,72 +1869,84 @@ export async function initCommand(args) {
 
     // ── Step 6 (Codex): auth + startup config ────────────────────────────
     if (commandExists('codex')) {
-      // Stage API key immediately if provided — persists to auth.json before any template
-      // operations (mirrors Claude's saveApiKey → settings.json at auth time), and ensures
-      // the key is written regardless of whether isCodexAuthenticated() returns true.
       if (opts.codexApiKey) {
+        // Stage API key immediately — persists to auth.json before any template operations,
+        // mirrors Claude's saveApiKey → settings.json pattern.
         saveCodexApiKey(opts.codexApiKey); // auth.json + process.env (immediate persistence)
         pendingCodexApiKey = opts.codexApiKey; // .env written after deployTemplates()
-      }
 
-      codexAuthenticated = isCodexAuthenticated();
-      if (codexAuthenticated) {
-        if (!quiet) console.log(`  ${success(opts.codexApiKey ? 'Codex API key accepted' : 'Codex authenticated')}`);
-      } else {
-        if (!quiet) console.log(`  ${warn('Codex not authenticated')}`);
-        if (!skipConfirm && !opts.codexApiKey) {
-          const codexAuthChoice = await promptChoice(
-            '\n  How would you like to authenticate Codex?',
-            ['OpenAI API key', 'Device auth (headless/server — no browser needed)', 'Browser login'],
-          );
-          if (codexAuthChoice === 1) {
-            // Option 1: API key
-            console.log(`\n  ${dim('Paste your OpenAI API key (starts with sk-):')}`);
-            const apiKey = await promptSecret('  API key: ');
-            if (!apiKey) {
-              console.log(`  ${warn('No key entered. Skipped.')}`);
-            } else if (saveCodexApiKeyToEnv(apiKey)) {
-              codexAuthenticated = isCodexAuthenticated();
-              if (codexAuthenticated) {
-                console.log(`  ${success('Codex API key saved and verified')}`);
-              } else {
-                console.log(`  ${warn('Key saved but auth check failed. Continuing...')}`);
-              }
-            }
-          } else if (codexAuthChoice === 2) {
-            // Option 2: device-auth (headless)
-            console.log(`\n  ${cyan('Starting Codex device auth...')}`);
-            console.log(`  ${dim('Follow the instructions to authenticate. Press Ctrl+C when done.')}\n`);
-            try {
-              spawnSync('codex', ['login', '--device-auth'], { stdio: 'inherit' });
-            } catch { /* user may Ctrl+C */ }
-            codexAuthenticated = isCodexAuthenticated();
-            if (codexAuthenticated) {
-              console.log(`\n  ${success('Codex authenticated')}`);
-            } else {
-              console.log(`\n  ${warn('Authentication not completed.')}`);
-              console.log(`    ${dim('Run "codex login --device-auth" to try again.')}`);
-            }
-          } else {
-            // Option 3: browser login
-            console.log(`\n  ${cyan('Starting Codex browser login...')}`);
-            console.log(`  ${dim('After login completes, press Ctrl+C to return.')}\n`);
-            try {
-              spawnSync('codex', ['login'], { stdio: 'inherit' });
-            } catch { /* user may Ctrl+C */ }
-            codexAuthenticated = isCodexAuthenticated();
-            if (codexAuthenticated) {
-              console.log(`\n  ${success('Codex authenticated')}`);
-            } else {
-              console.log(`\n  ${warn('Authentication not completed.')}`);
-              console.log(`    ${dim('Run "codex login" to try again.')}`);
-            }
-          }
-        } else if (opts.codexApiKey) {
-          if (!quiet) console.log(`    ${dim('API key staged but auth check failed. Continuing...')}`);
+        // Verify key against OpenAI API: 200=valid, 401=invalid, null=network unreachable
+        if (!quiet) console.log(`  ${dim('Verifying Codex API key...')}`);
+        const verifyResult = await verifyCodexApiKey(opts.codexApiKey);
+        if (verifyResult === true) {
+          codexAuthenticated = true;
+          if (!quiet) console.log(`  ${success('Codex API key verified')}`);
+        } else if (verifyResult === false) {
+          console.error(`  ${error('Codex API key is invalid or could not be verified.')}`);
+          console.error(`    ${dim('Check your key at platform.openai.com')}`);
           if (skipConfirm) exitCode = 1;
         } else {
-          if (!quiet) console.log(`    ${dim('Run "codex login" or set OPENAI_API_KEY to authenticate.')}`);
+          // null = network unreachable — cannot verify, proceed and let Codex fail at runtime
+          if (!quiet) console.log(`  ${warn('Could not verify Codex API key (network unreachable). Proceeding...')}`);
+          codexAuthenticated = true;
+        }
+      } else {
+        codexAuthenticated = isCodexAuthenticated();
+        if (codexAuthenticated) {
+          if (!quiet) console.log(`  ${success('Codex authenticated')}`);
+        } else {
+          if (!quiet) console.log(`  ${warn('Codex not authenticated')}`);
+          if (!skipConfirm) {
+            const codexAuthChoice = await promptChoice(
+              '\n  How would you like to authenticate Codex?',
+              ['OpenAI API key', 'Device auth (headless/server — no browser needed)', 'Browser login'],
+            );
+            if (codexAuthChoice === 1) {
+              // Option 1: API key
+              console.log(`\n  ${dim('Paste your OpenAI API key (starts with sk-):')}`);
+              const apiKey = await promptSecret('  API key: ');
+              if (!apiKey) {
+                console.log(`  ${warn('No key entered. Skipped.')}`);
+              } else if (saveCodexApiKeyToEnv(apiKey)) {
+                codexAuthenticated = isCodexAuthenticated();
+                if (codexAuthenticated) {
+                  console.log(`  ${success('Codex API key saved and verified')}`);
+                } else {
+                  console.log(`  ${warn('Key saved but auth check failed. Continuing...')}`);
+                }
+              }
+            } else if (codexAuthChoice === 2) {
+              // Option 2: device-auth (headless)
+              console.log(`\n  ${cyan('Starting Codex device auth...')}`);
+              console.log(`  ${dim('Follow the instructions to authenticate. Press Ctrl+C when done.')}\n`);
+              try {
+                spawnSync('codex', ['login', '--device-auth'], { stdio: 'inherit' });
+              } catch { /* user may Ctrl+C */ }
+              codexAuthenticated = isCodexAuthenticated();
+              if (codexAuthenticated) {
+                console.log(`\n  ${success('Codex authenticated')}`);
+              } else {
+                console.log(`\n  ${warn('Authentication not completed.')}`);
+                console.log(`    ${dim('Run "codex login --device-auth" to try again.')}`);
+              }
+            } else {
+              // Option 3: browser login
+              console.log(`\n  ${cyan('Starting Codex browser login...')}`);
+              console.log(`  ${dim('After login completes, press Ctrl+C to return.')}\n`);
+              try {
+                spawnSync('codex', ['login'], { stdio: 'inherit' });
+              } catch { /* user may Ctrl+C */ }
+              codexAuthenticated = isCodexAuthenticated();
+              if (codexAuthenticated) {
+                console.log(`\n  ${success('Codex authenticated')}`);
+              } else {
+                console.log(`\n  ${warn('Authentication not completed.')}`);
+                console.log(`    ${dim('Run "codex login" to try again.')}`);
+              }
+            }
+          } else {
+            if (!quiet) console.log(`    ${dim('Run "codex login" or set OPENAI_API_KEY to authenticate.')}`);
+          }
         }
       }
 
