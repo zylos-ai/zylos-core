@@ -185,19 +185,23 @@ async function switchRuntime(target, flags) {
   try { fs.unlinkSync(path.join(monitorDir, 'heartbeat-pending.json')); } catch {}
   try { fs.unlinkSync(path.join(monitorDir, 'codex-heartbeat-pending.json')); } catch {}
 
-  // Step 7: Restart activity-monitor — it will start the new runtime on its next cycle.
+  // Step 7: Restart activity-monitor and c4-dispatcher.
+  // activity-monitor starts the new runtime session on its next cycle and cleans up the old one.
+  // c4-dispatcher caches TMUX_SESSION at startup from config.json — must restart so it picks up
+  // the new session name; otherwise it keeps delivering messages to the old runtime's pane.
   // NOTE: Do NOT kill the old tmux session here. This command may run from inside the old
   // session (e.g. via "zylos attach"), and killing its own parent session would terminate
   // this process before the PM2 restart completes. The activity-monitor handles cleanup:
   // on startup it kills the other runtime's session (OTHER_SESSION in init()) after a
   // short delay, then starts the correct new session.
-  console.log('\nRestarting activity-monitor...');
-  try {
-    execSync('pm2 restart activity-monitor', { stdio: 'pipe' });
-    console.log(`  ${green('✓')} done`);
-  } catch (e) {
-    console.error(`  ${yellow(`Warning: pm2 restart failed — ${e.message}`)}`);
-    console.error(`  ${dim('Try: pm2 restart activity-monitor')}`);
+  console.log('\nRestarting services...');
+  for (const svc of ['activity-monitor', 'c4-dispatcher']) {
+    try {
+      execSync(`pm2 restart ${svc}`, { stdio: 'pipe' });
+      console.log(`  ${green('✓')} ${svc}`);
+    } catch (e) {
+      console.error(`  ${yellow(`Warning: pm2 restart ${svc} failed — ${e.message}`)}`);
+    }
   }
 
   const targetLabel = target === 'codex' ? 'Codex (OpenAI)' : 'Claude Code (Anthropic)';
