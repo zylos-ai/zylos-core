@@ -10,7 +10,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { execSync, spawnSync } from 'node:child_process';
+import { execSync } from 'node:child_process';
 import { getZylosConfig, updateZylosConfig, ZYLOS_DIR } from '../lib/config.js';
 import { getAdapter, SUPPORTED_RUNTIMES } from '../lib/runtime/index.js';
 import { buildInstructionFile } from '../lib/runtime/instruction-builder.js';
@@ -18,8 +18,6 @@ import { commandExists } from '../lib/shell-utils.js';
 import {
   installClaude,
   installCodex,
-  isClaudeAuthenticated,
-  isCodexAuthenticated,
   saveApiKey,
   saveApiKeyToEnv,
   saveSetupToken,
