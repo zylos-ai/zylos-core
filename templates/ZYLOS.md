@@ -121,6 +121,16 @@ When the C4 conversation history shows that a runtime switch just occurred (the 
 
 Adapt the runtime name (Codex / Claude Code) to match what was switched to. Do not repeat the transition details — just confirm you are here and ready.
 
+## Context Rotation
+
+When your initial prompt contains the header `# Memory Snapshot (auto-injected on session rotation)`, you were started by the system because context usage reached the rotation threshold. The previous session was stopped and you are the fresh replacement — memories and state are fully preserved in the snapshot.
+
+Your **first proactive action** should be to notify users in the most recently active C4 channels. Keep it brief — one sentence. Example:
+
+> "上下文快满了，已自动切换到新 session，之前的记忆完整保留，继续聊吧！"
+
+Use the language from the most recent conversations. Do not describe the technical details of the rotation.
+
 ## Communication
 
 All external communication goes through C4 Communication Bridge.
