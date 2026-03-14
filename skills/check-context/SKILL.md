@@ -36,18 +36,22 @@ Report from the JSON:
 
 ### If Codex runtime
 
-Read token usage from Codex's SQLite state:
+Read token usage from the most recently modified Codex JSONL session file:
 
 ```bash
-# Tokens used (most recent active thread)
-sqlite3 ~/.codex/state_5.sqlite "SELECT tokens_used FROM threads WHERE archived=0 ORDER BY updated_at DESC LIMIT 1;"
-
-# Context window ceiling from models cache
-node -e "try { const c=JSON.parse(require('fs').readFileSync(require('path').join(process.env.HOME,'.codex/models_cache.json'),'utf8')); const m=c.models[0]; console.log(Math.round(m.context_window*(m.effective_context_window_percent||100)/100)); } catch { console.log(128000); }"
+node -e "
+const fs=require('fs'),path=require('path');
+const base=path.join(process.env.HOME,'.codex/sessions');
+let best=null,bestMtime=0;
+function walk(d,depth){if(depth>3)return;try{fs.readdirSync(d).forEach(f=>{const p=path.join(d,f);try{const s=fs.statSync(p);if(s.isDirectory())walk(p,depth+1);else if(f.startsWith('rollout-')&&f.endsWith('.jsonl')&&s.mtimeMs>bestMtime){bestMtime=s.mtimeMs;best=p;}}catch{}});}catch{}}
+walk(base,0);
+if(!best){console.log('No session found');process.exit(0);}
+const lines=fs.readFileSync(best,'utf8').split('\n').filter(Boolean);
+for(let i=lines.length-1;i>=0;i--){try{const j=JSON.parse(lines[i]);if(j.type==='event_msg'&&j.payload?.type==='token_count'){const u=j.payload.info.total_token_usage;const c=j.payload.info.model_context_window||128000;console.log('used:'+u.input_tokens+' ceiling:'+c+' pct:'+Math.round(u.input_tokens/c*100)+'%');process.exit(0);}}catch{}}
+console.log('No token_count event found');
+"
 ```
 
-Calculate usage percentage: `(tokens_used / ceiling) * 100`.
-
 Report:
-- **Context usage**: X% used (tokens_used / ceiling tokens)
-- **Model**: first entry in `~/.codex/models_cache.json`
+- **Context usage**: pct% used (used / ceiling tokens)
+- Report the pct value clearly so the user knows if rotation is needed (threshold: 75%)

@@ -114,12 +114,13 @@ export class CodexContextMonitor extends ContextMonitorBase {
    * Read the active rollout path from SQLite threads table.
    * Returns the most recently updated non-archived thread's rollout path.
    *
+   * Falls back to filesystem scan when sqlite3 CLI is unavailable (e.g. Docker).
+   *
    * @returns {string | null}
    */
   _getActiveRolloutPath() {
+    // Primary: SQLite query (most accurate — respects archived flag)
     try {
-      // Filter to threads updated after this monitor instance started, so we
-      // never pick up a stale thread from a previous session after a restart.
       const sql = `SELECT rollout_path FROM threads
                    WHERE archived = 0
                      AND updated_at >= ${this._startTime}
@@ -128,7 +129,48 @@ export class CodexContextMonitor extends ContextMonitorBase {
       const out = execFileSync('sqlite3', [SQLITE_FILE, sql], {
         encoding: 'utf8', stdio: 'pipe', timeout: 5_000,
       }).trim();
-      return out || null;
+      if (out) return out;
+    } catch { /* sqlite3 CLI unavailable — fall through to filesystem scan */ }
+
+    // Fallback: scan ~/.codex/sessions/ for the most recently modified JSONL
+    // file that was updated after this monitor started. Used when sqlite3 is
+    // not installed (e.g. minimal Docker images).
+    return this._getActiveRolloutPathFromFilesystem();
+  }
+
+  /**
+   * Filesystem fallback: walk ~/.codex/sessions/YYYY/MM/DD/ and return the
+   * most recently modified rollout-*.jsonl file updated after _startTime.
+   *
+   * @returns {string | null}
+   */
+  _getActiveRolloutPathFromFilesystem() {
+    try {
+      const sessionsDir = path.join(CODEX_DIR, 'sessions');
+      let best = null;
+      let bestMtime = 0;
+
+      // Walk up to 3 directory levels: YYYY/MM/DD
+      for (const year of _readdirSafe(sessionsDir)) {
+        for (const month of _readdirSafe(path.join(sessionsDir, year))) {
+          for (const day of _readdirSafe(path.join(sessionsDir, year, month))) {
+            const dayDir = path.join(sessionsDir, year, month, day);
+            for (const file of _readdirSafe(dayDir)) {
+              if (!file.startsWith('rollout-') || !file.endsWith('.jsonl')) continue;
+              const fpath = path.join(dayDir, file);
+              try {
+                const { mtimeMs } = fs.statSync(fpath);
+                const mtimeSec = mtimeMs / 1000;
+                if (mtimeSec >= this._startTime && mtimeSec > bestMtime) {
+                  bestMtime = mtimeSec;
+                  best = fpath;
+                }
+              } catch { /* stat failed — skip */ }
+            }
+          }
+        }
+      }
+      return best;
     } catch {
       return null;
     }
@@ -183,5 +225,20 @@ export class CodexContextMonitor extends ContextMonitorBase {
     } catch { /* models_cache.json missing or malformed */ }
 
     return DEFAULT_CEILING;
+  }
+}
+
+// ── Private helpers ────────────────────────────────────────────────────────
+
+/**
+ * Safe readdir — returns empty array instead of throwing on missing/unreadable dirs.
+ * @param {string} dir
+ * @returns {string[]}
+ */
+function _readdirSafe(dir) {
+  try {
+    return fs.readdirSync(dir);
+  } catch {
+    return [];
   }
 }
