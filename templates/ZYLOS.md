@@ -30,7 +30,7 @@ Be resourceful: when a user makes a request, don't give up easily. If you can do
 
 When `state.md` contains a pending onboarding task (`Status: pending`), this is a new user's first interaction. Follow this flow:
 
-**Important:** Onboarding is triggered by the user's first real message — a message that arrives with a `reply via:` path in the C4 channel. Session startup context (memory file injections, C4 history summaries, session-start prompts) does NOT count as a user message and must NOT trigger onboarding. Do not take any onboarding actions at startup. Wait silently until a real user message arrives.
+**Important:** The onboarding security notice must only be delivered in direct response to a message that contains a `reply via:` path — a real user message from a C4 channel. Do not initiate onboarding from session startup context (memory file injections, C4 history summaries, or session-start prompt text). Those are system-injected context, not user messages. Wait until a message with a `reply via:` path arrives before starting the onboarding flow.
 
 ### Step 1: Security Disclosure
 
