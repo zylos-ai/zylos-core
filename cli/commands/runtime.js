@@ -120,6 +120,18 @@ async function switchRuntime(target, flags) {
   const apiKey = apiKeyIdx >= 0 ? flags[apiKeyIdx + 1] : null;
   const setupToken = setupTokenIdx >= 0 ? flags[setupTokenIdx + 1] : null;
 
+  // Validate that flag values were actually provided (not undefined / another flag).
+  if (apiKeyIdx >= 0 && (!apiKey || apiKey.startsWith('--'))) {
+    console.error(red(`\nMissing value for --save-apikey.`));
+    console.error(dim('  Example: zylos runtime codex --save-apikey sk-proj-xxx'));
+    process.exit(1);
+  }
+  if (setupTokenIdx >= 0 && (!setupToken || setupToken.startsWith('--'))) {
+    console.error(red(`\nMissing value for --save-setup-token.`));
+    console.error(dim('  Example: zylos runtime claude --save-setup-token sk-ant-oat-xxx'));
+    process.exit(1);
+  }
+
   // Step 1: Ensure target runtime CLI is installed.
   if (!commandExists(target)) {
     console.log(`${bold(target)} CLI not found — installing...`);

@@ -65,7 +65,7 @@ function nowSeconds() {
   return Math.floor(Date.now() / 1000);
 }
 
-function getClaudeState() {
+function getAgentState() {
   try {
     if (!existsSync(AGENT_STATUS_FILE)) {
       return { state: 'offline', health: 'ok', healthy: false, reason: 'missing' };
@@ -91,13 +91,13 @@ function getClaudeState() {
     const idleSeconds = typeof status.idle_seconds === 'number' ? status.idle_seconds : 0;
     return { state, health, healthy: true, idleSeconds };
   } catch (err) {
-    log(`Warning: Error reading Claude status (${err.message})`);
+    log(`Warning: Error reading agent status (${err.message})`);
     // health is fail-open by design; state still degrades to offline on read failure.
     return { state: 'offline', health: 'ok', healthy: false, reason: 'error' };
   }
 }
 
-function isStatusFresh() {
+function isAgentStatusFresh() {
   try {
     if (!existsSync(AGENT_STATUS_FILE)) {
       return false;
@@ -235,7 +235,7 @@ function releaseItem(item, reason = null) {
 }
 
 async function handleConversationDeliveryFailure(msg) {
-  const channelHealthy = isStatusFresh();
+  const channelHealthy = isAgentStatusFresh();
 
   if (channelHealthy) {
     const currentCount = msg.retry_count || 0;
@@ -278,23 +278,23 @@ async function waitForRequireIdleSettlement(msgId) {
   log(`require_idle item id=${msgId}: hold ${REQUIRE_IDLE_POST_SEND_HOLD_MS}ms before next dispatch`);
   await sleep(REQUIRE_IDLE_POST_SEND_HOLD_MS);
 
-  let state = getClaudeState().state;
+  let state = getAgentState().state;
   if (state === 'offline' || state === 'stopped') {
-    log(`require_idle item id=${msgId}: Claude state=${state}, continuing`);
+    log(`require_idle item id=${msgId}: agent state=${state}, continuing`);
     return;
   }
 
   if (state === 'idle') {
-    log(`require_idle item id=${msgId}: Claude remained idle after hold, continuing`);
+    log(`require_idle item id=${msgId}: agent remained idle after hold, continuing`);
     return;
   }
 
   const deadline = Date.now() + REQUIRE_IDLE_EXECUTION_MAX_WAIT_MS;
   while (Date.now() < deadline) {
     await sleep(REQUIRE_IDLE_EXECUTION_POLL_MS);
-    state = getClaudeState().state;
+    state = getAgentState().state;
     if (state === 'idle' || state === 'offline' || state === 'stopped') {
-      log(`require_idle item id=${msgId}: settled with Claude state=${state}`);
+      log(`require_idle item id=${msgId}: settled with agent state=${state}`);
       return;
     }
   }
@@ -344,11 +344,11 @@ async function processNextMessage() {
     log(`Control timeout sweep marked ${timedOut} record(s) as timeout`);
   }
 
-  const claudeState = getClaudeState();
-  if (claudeState.state === 'offline' || claudeState.state === 'stopped') {
+  const agentState = getAgentState();
+  if (agentState.state === 'offline' || agentState.state === 'stopped') {
     tmuxMissingChecks += 1;
     if (tmuxMissingChecks === TMUX_MISSING_WARN_THRESHOLD) {
-      log(`WARNING: Claude tmux session missing for ${TMUX_MISSING_WARN_THRESHOLD} consecutive checks`);
+      log(`WARNING: Agent status stale/missing for ${TMUX_MISSING_WARN_THRESHOLD} consecutive checks`);
     }
   } else {
     tmuxMissingChecks = 0;
@@ -356,24 +356,24 @@ async function processNextMessage() {
 
   const item = claimNextItem();
   if (!item) {
-    return { delivered: false, state: claudeState.state };
+    return { delivered: false, state: agentState.state };
   }
 
   const bypass = isBypassState(item);
 
-  if ((claudeState.state === 'offline' || claudeState.state === 'stopped') && !bypass) {
+  if ((agentState.state === 'offline' || agentState.state === 'stopped') && !bypass) {
     releaseItem(item);
-    return { delivered: false, state: claudeState.state };
+    return { delivered: false, state: agentState.state };
   }
 
-  if (claudeState.health !== 'ok' && !bypass) {
+  if (agentState.health !== 'ok' && !bypass) {
     releaseItem(item);
-    return { delivered: false, state: claudeState.state };
+    return { delivered: false, state: agentState.state };
   }
 
-  if (item.require_idle === 1 && (claudeState.state !== 'idle' || claudeState.idleSeconds < REQUIRE_IDLE_MIN_SECONDS)) {
+  if (item.require_idle === 1 && (agentState.state !== 'idle' || agentState.idleSeconds < REQUIRE_IDLE_MIN_SECONDS)) {
     releaseItem(item);
-    return { delivered: false, state: claudeState.state };
+    return { delivered: false, state: agentState.state };
   }
 
   log(`Delivering ${item.type} id=${item.id}${item.type === 'control' ? ` priority=${item.priority}` : ` from ${item.channel}`}`);
@@ -391,7 +391,7 @@ async function processNextMessage() {
     if (item.require_idle === 1) {
       await waitForRequireIdleSettlement(item.id);
     }
-    return { delivered: true, state: claudeState.state };
+    return { delivered: true, state: agentState.state };
   }
 
   log(`Failed to paste ${item.type} id=${item.id} to tmux`);
@@ -401,7 +401,7 @@ async function processNextMessage() {
   } else {
     await handleConversationDeliveryFailure(item);
   }
-  return { delivered: false, state: claudeState.state };
+  return { delivered: false, state: agentState.state };
 }
 
 async function dispatcherLoop() {

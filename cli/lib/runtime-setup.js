@@ -74,11 +74,27 @@ export function isClaudeAuthenticated() {
 
 /**
  * Check if Codex CLI is authenticated.
- * Accepts env-var auth (OPENAI_API_KEY or CODEX_API_KEY) as well as native login.
+ * Checks four paths in order (mirrors CodexAdapter.checkAuth()):
+ *   1. Process env vars (OPENAI_API_KEY / CODEX_API_KEY)
+ *   2. ~/zylos/.env file (covers re-init when key is in .env but not process.env)
+ *   3. ~/.codex/auth.json (Codex native credential store)
+ *   4. `codex login status` (interactive / OAuth login)
  * @returns {boolean}
  */
 export function isCodexAuthenticated() {
   if (process.env.OPENAI_API_KEY || process.env.CODEX_API_KEY) return true;
+
+  try {
+    const envContent = fs.readFileSync(path.join(ZYLOS_DIR, '.env'), 'utf8');
+    if (/^OPENAI_API_KEY=\S+/m.test(envContent) || /^CODEX_API_KEY=\S+/m.test(envContent)) return true;
+  } catch { /* .env absent */ }
+
+  try {
+    const authPath = path.join(os.homedir(), '.codex', 'auth.json');
+    const auth = JSON.parse(fs.readFileSync(authPath, 'utf8'));
+    if (auth.OPENAI_API_KEY || auth.CODEX_API_KEY) return true;
+  } catch { /* auth.json absent or no key */ }
+
   try {
     const result = spawnSync('codex', ['login', 'status'], {
       stdio: 'pipe', encoding: 'utf8', timeout: 10000,
