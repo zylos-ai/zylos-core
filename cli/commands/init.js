@@ -30,6 +30,7 @@ import {
   saveApiKeyToEnv,
   saveSetupToken,
   saveSetupTokenToEnv,
+  saveCodexApiKey,
   saveCodexApiKeyToEnv,
   writeCodexConfig,
 } from '../lib/runtime-setup.js';
@@ -1843,11 +1844,12 @@ export async function initCommand(args) {
 
     // ── Step 6 (Codex): auth + startup config ────────────────────────────
     if (commandExists('codex')) {
-      // Stage API key immediately if provided — ensures it's always written to .env/auth.json
-      // regardless of whether isCodexAuthenticated() returns true for another reason.
+      // Stage API key immediately if provided — persists to auth.json before any template
+      // operations (mirrors Claude's saveApiKey → settings.json at auth time), and ensures
+      // the key is written regardless of whether isCodexAuthenticated() returns true.
       if (opts.codexApiKey) {
-        process.env.OPENAI_API_KEY = opts.codexApiKey;
-        pendingCodexApiKey = opts.codexApiKey;
+        saveCodexApiKey(opts.codexApiKey); // auth.json + process.env (immediate persistence)
+        pendingCodexApiKey = opts.codexApiKey; // .env written after deployTemplates()
       }
 
       codexAuthenticated = isCodexAuthenticated();

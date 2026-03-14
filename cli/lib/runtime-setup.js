@@ -301,6 +301,31 @@ export function writeCodexConfig(projectDir) {
 }
 
 /**
+ * Persist OPENAI_API_KEY to ~/.codex/auth.json (Codex native credential store)
+ * and set process.env. Mirrors saveApiKey() for Claude (which writes to settings.json).
+ * Call at auth time so the key survives partial installs; call saveCodexApiKeyToEnv()
+ * separately after templates are deployed to also persist to ~/zylos/.env.
+ * @param {string} apiKey - The OpenAI API key (sk-...)
+ * @returns {boolean}
+ */
+export function saveCodexApiKey(apiKey) {
+  try {
+    const codexDir = path.join(os.homedir(), '.codex');
+    const authPath = path.join(codexDir, 'auth.json');
+    fs.mkdirSync(codexDir, { recursive: true });
+    let authContent = {};
+    try { authContent = JSON.parse(fs.readFileSync(authPath, 'utf8')); } catch {}
+    authContent.auth_mode = 'apikey';
+    authContent.OPENAI_API_KEY = apiKey;
+    fs.writeFileSync(authPath, JSON.stringify(authContent, null, 2) + '\n', { mode: 0o600 });
+    process.env.OPENAI_API_KEY = apiKey;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Write OPENAI_API_KEY to ~/zylos/.env and ~/.codex/auth.json (native store).
  * @param {string} apiKey - The OpenAI API key (sk-...)
  * @returns {boolean}
