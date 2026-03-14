@@ -20,7 +20,7 @@ import { RuntimeAdapter } from './base.js';
 import { buildInstructionFile } from './instruction-builder.js';
 import { CodexContextMonitor } from './codex-context-monitor.js';
 import { createCodexProbe } from '../heartbeat/codex-probe.js';
-import { ZYLOS_DIR } from '../config.js';
+import { ZYLOS_DIR, SKILLS_DIR } from '../config.js';
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -187,6 +187,18 @@ export class CodexAdapter extends RuntimeAdapter {
 
     // 1. Build AGENTS.md before launching (pass memorySnapshot for session rotation)
     await this.buildInstructionFile({ memorySnapshot: opts.memorySnapshot });
+
+    // 1.5. Ensure .agents/skills → .claude/skills symlink for Codex skill discovery.
+    // Codex follows the Agent Skills spec and looks for skills in <workdir>/.agents/skills/.
+    // We point it to the canonical skills directory via symlink — no files need to move.
+    const agentsDir = path.join(ZYLOS_DIR, '.agents');
+    const agentsSkillsPath = path.join(agentsDir, 'skills');
+    if (!fs.existsSync(agentsSkillsPath)) {
+      try {
+        fs.mkdirSync(agentsDir, { recursive: true });
+        fs.symlinkSync(SKILLS_DIR, agentsSkillsPath);
+      } catch { /* non-fatal: Codex starts without skill discovery if symlink fails */ }
+    }
 
     // 2. Build the initial user prompt by mirroring Claude's three SessionStart hooks:
     //    a) session-start-inject.js  → identity.md + state.md + references.md
