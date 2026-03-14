@@ -193,7 +193,11 @@ export class CodexAdapter extends RuntimeAdapter {
     // We point it to the canonical skills directory via symlink — no files need to move.
     const agentsDir = path.join(ZYLOS_DIR, '.agents');
     const agentsSkillsPath = path.join(agentsDir, 'skills');
-    if (!fs.existsSync(agentsSkillsPath)) {
+    // Use lstatSync (not existsSync) so that a dangling symlink is detected and skipped
+    // rather than triggering a redundant symlinkSync that would throw EEXIST silently.
+    let agentsSkillsExists = false;
+    try { fs.lstatSync(agentsSkillsPath); agentsSkillsExists = true; } catch { /* not present */ }
+    if (!agentsSkillsExists) {
       try {
         fs.mkdirSync(agentsDir, { recursive: true });
         fs.symlinkSync(SKILLS_DIR, agentsSkillsPath);

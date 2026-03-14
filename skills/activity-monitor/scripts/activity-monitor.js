@@ -546,8 +546,9 @@ function getLastActiveChannel() {
     const tabIdx = result.indexOf('\t');
     if (tabIdx === -1) return null;
     const channel = result.slice(0, tabIdx);
-    // Strip msg:... so we send a new standalone message, not a thread reply.
-    const endpoint = result.slice(tabIdx + 1).replace(/\|msg:[^|]*/g, '');
+    // Strip msg:... and req:... so we send a new standalone message, not a thread reply.
+    // Matches c4-receive.js normalisation: /\|(msg|req):[^|]+/g
+    const endpoint = result.slice(tabIdx + 1).replace(/\|(msg|req):[^|]+/g, '');
     return channel && endpoint ? { channel, endpoint } : null;
   } catch {
     return null;
