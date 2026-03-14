@@ -20,6 +20,18 @@ import { commandExists } from '../lib/shell-utils.js';
 import { getActiveAdapter } from '../lib/runtime/index.js';
 import { buildInstructionFile } from '../lib/runtime/instruction-builder.js';
 import { runMigrations } from '../lib/migrate.js';
+import {
+  installGlobalPackage,
+  installCodex,
+  isClaudeAuthenticated,
+  isCodexAuthenticated,
+  approveApiKey,
+  saveApiKey,
+  saveApiKeyToEnv,
+  saveSetupToken,
+  saveSetupTokenToEnv,
+  saveCodexApiKeyToEnv,
+} from '../lib/runtime-setup.js';
 
 // Source directories (shipped with zylos package)
 const PACKAGE_ROOT = path.join(import.meta.dirname, '..', '..');
@@ -56,15 +68,6 @@ function checkNodeVersion() {
   const ok = parts[0] > MIN_NODE_MAJOR ||
     (parts[0] === MIN_NODE_MAJOR && parts[1] >= MIN_NODE_MINOR);
   return { version, ok, required: `>=${MIN_NODE_MAJOR}.${MIN_NODE_MINOR}.0` };
-}
-
-function installGlobalPackage(pkg) {
-  try {
-    execSync(`npm install -g ${pkg}`, { stdio: 'pipe', timeout: 120000 });
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 function installSystemPackage(pkg) {
@@ -379,49 +382,7 @@ function ensureBinInPath() {
   return true;
 }
 
-/**
- * Check if Claude Code is authenticated.
- * @returns {boolean}
- */
-function isClaudeAuthenticated() {
-  try {
-    const result = spawnSync('claude', ['auth', 'status'], {
-      stdio: 'pipe',
-      encoding: 'utf8',
-      timeout: 10000,
-    });
-    return result.status === 0;
-  } catch {
-    return false;
-  }
-}
-
 // ── Codex helpers ─────────────────────────────────────────────────────────
-
-/**
- * Check if Codex CLI is authenticated.
- * `codex login status` exits 0 when authenticated, non-zero otherwise.
- */
-function isCodexAuthenticated() {
-  // Accept env-var auth (OPENAI_API_KEY or CODEX_API_KEY) as well as native login
-  if (process.env.OPENAI_API_KEY || process.env.CODEX_API_KEY) return true;
-  try {
-    const result = spawnSync('codex', ['login', 'status'], {
-      stdio: 'pipe', encoding: 'utf8', timeout: 10000,
-    });
-    return result.status === 0;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Install @openai/codex globally via npm.
- * @returns {boolean} true on success
- */
-function installCodex() {
-  return installGlobalPackage('@openai/codex');
-}
 
 /**
  * Write ~/.codex/config.toml to bypass interactive prompts on first launch.
@@ -531,186 +492,6 @@ function verifyApiKey(apiKey) {
     req.write('{}');
     req.end();
   });
-}
-
-function saveApiKey(apiKey) {
-  // 1. Write to ~/.claude/settings.json so Claude Code picks it up
-  const settingsDir = path.join(os.homedir(), '.claude');
-  const settingsPath = path.join(settingsDir, 'settings.json');
-  try {
-    fs.mkdirSync(settingsDir, { recursive: true });
-    let settings = {};
-    try { settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8')); } catch {}
-    if (!settings.env) settings.env = {};
-    settings.env.ANTHROPIC_API_KEY = apiKey;
-    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n');
-  } catch (err) {
-    console.log(`  ${error(`Failed to write settings.json: ${err.message}`)}`);
-    return false;
-  }
-
-  // 2. Pre-approve key in ~/.claude.json so Claude skips the interactive
-  //    "Detected a custom API key" confirmation prompt on startup
-  approveApiKey(apiKey);
-
-  // 3. Set in current process so subsequent checks pass
-  process.env.ANTHROPIC_API_KEY = apiKey;
-
-  return true;
-}
-
-/**
- * Pre-approve an API key in ~/.claude.json so Claude Code skips
- * the interactive "Detected a custom API key" confirmation prompt.
- * Also marks onboarding as complete to prevent the login screen
- * from blocking prompt processing on fresh installs.
- * @param {string} apiKey - The API key to approve
- */
-function approveApiKey(apiKey) {
-  const claudeJsonPath = path.join(os.homedir(), '.claude.json');
-  try {
-    let config = {};
-    try { config = JSON.parse(fs.readFileSync(claudeJsonPath, 'utf8')); } catch {}
-    if (!config.customApiKeyResponses) config.customApiKeyResponses = { approved: [], rejected: [] };
-    if (!config.customApiKeyResponses.approved) config.customApiKeyResponses.approved = [];
-    // Claude Code stores last 20 chars of the key for matching
-    const keySuffix = apiKey.slice(-20);
-    if (!config.customApiKeyResponses.approved.includes(keySuffix)) {
-      config.customApiKeyResponses.approved.push(keySuffix);
-    }
-    // Mark onboarding complete so Claude doesn't show login screen
-    if (!config.hasCompletedOnboarding) {
-      config.hasCompletedOnboarding = true;
-      try {
-        const ver = execSync('claude --version 2>/dev/null', { encoding: 'utf8' }).trim();
-        config.lastOnboardingVersion = ver;
-      } catch {
-        config.lastOnboardingVersion = '2.1.59';
-      }
-    }
-    // Pre-accept workspace trust dialog for the zylos project directory
-    if (!config.projects) config.projects = {};
-    const projectPath = path.resolve(ZYLOS_DIR);
-    if (!config.projects[projectPath]) config.projects[projectPath] = {};
-    if (!config.projects[projectPath].hasTrustDialogAccepted) {
-      config.projects[projectPath].hasTrustDialogAccepted = true;
-      config.projects[projectPath].hasCompletedProjectOnboarding = true;
-    }
-    fs.writeFileSync(claudeJsonPath, JSON.stringify(config, null, 2) + '\n');
-  } catch {}
-}
-
-/**
- * Write ANTHROPIC_API_KEY to ~/zylos/.env.
- * Called after template deployment to ensure .env has the full template content.
- *
- * @param {string} apiKey - The API key
- */
-function saveCodexApiKeyToEnv(apiKey) {
-  const envPath = path.join(ZYLOS_DIR, '.env');
-  try {
-    let content = '';
-    try { content = fs.readFileSync(envPath, 'utf8'); } catch {}
-    if (content.match(/^OPENAI_API_KEY=.*$/m)) {
-      content = content.replace(/^OPENAI_API_KEY=.*$/m, `OPENAI_API_KEY=${apiKey}`);
-    } else {
-      content = content.trimEnd() + `\n\n# OpenAI API key for Codex (set by zylos init)\nOPENAI_API_KEY=${apiKey}\n`;
-    }
-    fs.writeFileSync(envPath, content);
-    process.env.OPENAI_API_KEY = apiKey;
-
-    // Also write to ~/.codex/auth.json so Codex reads the key natively at startup,
-    // without requiring env var injection into the tmux session.
-    try {
-      const codexDir = path.join(os.homedir(), '.codex');
-      const authPath = path.join(codexDir, 'auth.json');
-      fs.mkdirSync(codexDir, { recursive: true });
-      let authContent = {};
-      try { authContent = JSON.parse(fs.readFileSync(authPath, 'utf8')); } catch {}
-      authContent.auth_mode = 'apikey';
-      authContent.OPENAI_API_KEY = apiKey;
-      fs.writeFileSync(authPath, JSON.stringify(authContent, null, 2) + '\n', { mode: 0o600 });
-    } catch { /* non-fatal — env var injection is the fallback */ }
-
-    return true;
-  } catch (err) {
-    console.log(`  ${warn(`Could not write API key to .env: ${err.message}`)}`);
-    return false;
-  }
-}
-
-function saveApiKeyToEnv(apiKey) {
-  const envPath = path.join(ZYLOS_DIR, '.env');
-  try {
-    let content = '';
-    try { content = fs.readFileSync(envPath, 'utf8'); } catch {}
-    if (content.match(/^ANTHROPIC_API_KEY=.*$/m)) {
-      content = content.replace(/^ANTHROPIC_API_KEY=.*$/m, `ANTHROPIC_API_KEY=${apiKey}`);
-    } else {
-      content = content.trimEnd() + `\n\n# Anthropic API key (set by zylos init)\nANTHROPIC_API_KEY=${apiKey}\n`;
-    }
-    fs.writeFileSync(envPath, content);
-  } catch (err) {
-    console.log(`  ${warn(`Could not write API key to .env: ${err.message}`)}`);
-  }
-}
-
-/**
- * Save a setup token to ~/.claude/settings.json and process.env.
- * Does NOT write to ~/zylos/.env here — that happens after template
- * deployment via saveSetupTokenToEnv().
- *
- * @param {string} token - The setup token (sk-ant-oat...)
- * @returns {boolean} true if saved successfully
- */
-function saveSetupToken(token) {
-  const settingsDir = path.join(os.homedir(), '.claude');
-  const settingsPath = path.join(settingsDir, 'settings.json');
-  try {
-    fs.mkdirSync(settingsDir, { recursive: true });
-    let settings = {};
-    try { settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8')); } catch {}
-    if (!settings.env) settings.env = {};
-    settings.env.CLAUDE_CODE_OAUTH_TOKEN = token;
-    // Remove API key if set — avoid having both
-    delete settings.env.ANTHROPIC_API_KEY;
-    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n');
-  } catch (err) {
-    console.log(`  ${error(`Failed to write settings.json: ${err.message}`)}`);
-    return false;
-  }
-
-  // Pre-approve in ~/.claude.json (onboarding + trust)
-  approveApiKey(token);
-
-  process.env.CLAUDE_CODE_OAUTH_TOKEN = token;
-
-  return true;
-}
-
-/**
- * Write CLAUDE_CODE_OAUTH_TOKEN to ~/zylos/.env.
- * Called after template deployment to ensure .env has the full template content.
- *
- * @param {string} token - The setup token
- */
-function saveSetupTokenToEnv(token) {
-  const envPath = path.join(ZYLOS_DIR, '.env');
-  try {
-    let content = '';
-    try { content = fs.readFileSync(envPath, 'utf8'); } catch {}
-    if (content.match(/^CLAUDE_CODE_OAUTH_TOKEN=.*$/m)) {
-      content = content.replace(/^CLAUDE_CODE_OAUTH_TOKEN=.*$/m, `CLAUDE_CODE_OAUTH_TOKEN=${token}`);
-    } else {
-      content = content.trimEnd() + `\n\n# Claude Code setup token (set by zylos init)\nCLAUDE_CODE_OAUTH_TOKEN=${token}\n`;
-    }
-    // Remove ANTHROPIC_API_KEY if present — avoid having both
-    content = content.replace(/^# Anthropic API key \(set by zylos init\)\n/m, '');
-    content = content.replace(/^ANTHROPIC_API_KEY=.*\n?/m, '');
-    fs.writeFileSync(envPath, content);
-  } catch (err) {
-    console.log(`  ${warn(`Could not write setup token to .env: ${err.message}`)}`);
-  }
 }
 
 /**

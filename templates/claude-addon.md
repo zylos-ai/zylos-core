@@ -15,13 +15,22 @@ The following rules apply when running on the **Claude Code** runtime.
 
 ### Runtime Switching
 
-When the user asks to switch to the Codex runtime:
+When the user asks to switch to the Codex runtime, run:
 
 ```bash
 zylos runtime codex
 ```
 
-This command checks Codex authentication first and aborts if not authenticated (switching to an unauthenticated runtime leaves the system unreachable via IM). If authenticated, it updates config, rebuilds instruction files, and restarts services — your Claude Code session will be terminated and Codex will start.
+This auto-installs Codex if missing, checks authentication, updates config, rebuilds instruction files, and restarts services. Your Claude Code session will be terminated and Codex will start.
+
+**If the command exits with code 2 (auth required)**, handle authentication via IM relay:
+
+1. Ask the user which auth method they prefer:
+   - **API key** (`sk-...`): ask user to send it, then run `zylos runtime codex --save-apikey <key>`
+   - **Device auth** (headless, no browser): run `codex login --device-auth` in shell, capture the device URL/code from its output, send it to the user via IM. After the user confirms completion, retry `zylos runtime codex`.
+   - **Browser login**: run `codex login` in shell, capture the login URL if available, send to user via IM.
+
+Credentials are stored in both `~/.codex/auth.json` and `~/zylos/.env` to ensure auth persists across restarts.
 
 ### Heartbeat
 

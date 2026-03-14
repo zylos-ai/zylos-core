@@ -4,13 +4,22 @@ The following rules apply when running on the **OpenAI Codex** runtime.
 
 ### Runtime Switching
 
-When the user asks to switch to the Claude runtime:
+When the user asks to switch to the Claude runtime, run:
 
 ```bash
 zylos runtime claude
 ```
 
-You can execute this yourself. It checks Claude authentication, updates config, rebuilds instruction files, and restarts services — your Codex session will be terminated and Claude will start. Confirm to the user before running (it's irreversible within the current session).
+This auto-installs Claude if missing, checks authentication, updates config, rebuilds instruction files, and restarts services. Your Codex session will be terminated and Claude will start. Confirm to the user before running.
+
+**If the command exits with code 2 (auth required)**, handle authentication via IM relay:
+
+1. Ask the user which auth method they prefer:
+   - **API key** (`sk-ant-api...`): ask user to send it, then run `zylos runtime claude --save-apikey <key>`
+   - **Setup token** (`sk-ant-oat...`): ask user to send it, then run `zylos runtime claude --save-setup-token <token>`
+   - **Browser OAuth**: run `claude auth login` in shell, capture the login URL from its output, send it to the user via IM. After the user confirms login, retry `zylos runtime claude`.
+
+Credentials are stored in both `~/.claude/settings.json` and `~/zylos/.env` to ensure auth persists across restarts.
 
 ### User Confirmation for Destructive Operations
 
