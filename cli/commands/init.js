@@ -1871,14 +1871,13 @@ export async function initCommand(args) {
     if (commandExists('codex')) {
       if (opts.codexApiKey) {
         // Verify first, then save — mirrors Claude's verifyApiKey → saveApiKey pattern.
-        // Do NOT save before verifying: a bad key written to auth.json causes isCodexAuthenticated()
-        // to report "authenticated" on subsequent zylos init runs (codex login status only checks
-        // key presence, not validity).
+        // Do NOT save before verifying: a bad key in process.env causes isCodexAuthenticated()
+        // to report "authenticated" even when the key is invalid (path 1 check is existence-only).
         if (!quiet) console.log(`  ${dim('Verifying Codex API key...')}`);
         const verifyResult = await verifyCodexApiKey(opts.codexApiKey);
         if (verifyResult === true) {
-          saveCodexApiKey(opts.codexApiKey); // auth.json + process.env
-          pendingCodexApiKey = opts.codexApiKey; // .env written after deployTemplates()
+          saveCodexApiKey(opts.codexApiKey); // process.env only; .env written after deployTemplates()
+          pendingCodexApiKey = opts.codexApiKey; // auth.json synced by CodexAdapter.launch()
           codexAuthenticated = true;
           if (!quiet) console.log(`  ${success('Codex API key verified')}`);
         } else if (verifyResult === false) {
@@ -1887,8 +1886,8 @@ export async function initCommand(args) {
           if (skipConfirm) exitCode = 1;
         } else {
           // null = network unreachable — save and proceed, let Codex fail at runtime if key is bad
-          saveCodexApiKey(opts.codexApiKey); // auth.json + process.env
-          pendingCodexApiKey = opts.codexApiKey; // .env written after deployTemplates()
+          saveCodexApiKey(opts.codexApiKey); // process.env only; .env written after deployTemplates()
+          pendingCodexApiKey = opts.codexApiKey; // auth.json synced by CodexAdapter.launch()
           if (!quiet) console.log(`  ${warn('Could not verify Codex API key (network unreachable). Proceeding...')}`);
           codexAuthenticated = true;
         }
