@@ -19,10 +19,10 @@ Wait for the user's confirmation before running the command.
 
 **If the command exits with code 2 (auth required)**, handle authentication via IM relay:
 
-1. Ask the user which auth method they prefer. Both API key and setup token are equally recommended. Example message:
-   > "需要先完成 Claude 认证，两种方式都可以：
-   > 1. **API Key**：发我你的 Anthropic API key (sk-ant-api...)，我来配置
-   > 2. **Setup Token**：发我你的 setup token (sk-ant-oat...)，我来配置
+1. Ask the user which auth method they prefer. API key is fastest; setup token is a good fallback for automated setups. Example message:
+   > "需要先完成 Claude 认证：
+   > 1. **API Key**（推荐，最快）：发我你的 Anthropic API key (sk-ant-api...)，我来配置
+   > 2. **Setup Token**（自动化配置时）：发我你的 setup token (sk-ant-oat...)，我来配置
    > 3. 浏览器 OAuth 登录
    > 选哪种？"
    - **Option 1 — API key**: user sends the key, run `zylos runtime claude --save-apikey <key>`

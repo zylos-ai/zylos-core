@@ -30,10 +30,10 @@ Wait for the user's confirmation before running the command.
 
 **If the command exits with code 2 (auth required)**, handle authentication via IM relay:
 
-1. Ask the user which auth method they prefer. Both API key and device auth are equally recommended. Example message:
-   > "需要先完成 Codex 认证，两种方式都可以：
-   > 1. **API Key**：发我你的 OpenAI API key (sk-...)，我来配置
-   > 2. **设备认证**（无需浏览器）：我运行认证流程，给你一个链接，点击完成即可
+1. Ask the user which auth method they prefer. API key is fastest; device auth is a good fallback if the user has no API key. Example message:
+   > "需要先完成 Codex 认证：
+   > 1. **API Key**（推荐，最快）：发我你的 OpenAI API key (sk-...)，我来配置
+   > 2. **设备认证**（没有 API Key 时）：我运行认证流程，给你一个链接，点击完成即可
    > 3. 浏览器登录
    > 选哪种？"
    - **Option 1 — API key**: user sends the key, run `zylos runtime codex --save-apikey <key>`

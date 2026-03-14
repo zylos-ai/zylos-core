@@ -188,19 +188,40 @@ export class CodexAdapter extends RuntimeAdapter {
     // 1. Build AGENTS.md before launching (pass memorySnapshot for session rotation)
     await this.buildInstructionFile({ memorySnapshot: opts.memorySnapshot });
 
-    // 2. Gather recent C4 conversation context to inject as the initial user prompt.
-    //    This mirrors Claude's c4-session-init.js SessionStart hook — Codex has no
-    //    hook mechanism, so we inject context at launch time instead.
+    // 2. Build the initial user prompt by mirroring Claude's three SessionStart hooks:
+    //    a) session-start-inject.js  → identity.md + state.md + references.md
+    //    b) c4-session-init.js       → C4 conversation history + checkpoint summary
+    //    c) session-start-prompt     → "reply to waiting partners / continue ongoing work"
+    //
+    //    Codex has no hook mechanism, so we inject all context at launch time instead.
+    //    Memory files come first so the agent knows its state before reading conversations.
     let tmpPrompt = null;
     try {
+      const parts = [];
+
+      // a) Memory: identity + state + references (mirrors session-start-inject.js)
+      const memInjectScript = path.join(ZYLOS_DIR, '.claude', 'skills', 'zylos-memory', 'scripts', 'session-start-inject.js');
+      try {
+        const memResult = spawnSync('node', [memInjectScript], { encoding: 'utf8', timeout: 10_000 });
+        const memContext = memResult.stdout?.trim();
+        if (memResult.status === 0 && memContext) parts.push(memContext);
+      } catch { /* memory files unavailable — continue without them */ }
+
+      // b) C4 conversation history (mirrors c4-session-init.js)
       const sessionInitScript = path.join(ZYLOS_DIR, '.claude', 'skills', 'comm-bridge', 'scripts', 'c4-session-init.js');
-      const result = spawnSync('node', [sessionInitScript], { encoding: 'utf8', timeout: 10_000 });
-      const context = result.stdout?.trim();
-      if (result.status === 0 && context) {
-        tmpPrompt = path.join(os.tmpdir(), `.zylos-prompt-${process.pid}-${Date.now()}`);
-        fs.writeFileSync(tmpPrompt, context, { mode: 0o600 });
-      }
-    } catch { /* c4 context unavailable — launch without initial prompt */ }
+      try {
+        const c4Result = spawnSync('node', [sessionInitScript], { encoding: 'utf8', timeout: 10_000 });
+        const c4Context = c4Result.stdout?.trim();
+        if (c4Result.status === 0 && c4Context) parts.push(c4Context);
+      } catch { /* c4 context unavailable — continue without it */ }
+
+      // c) Active trigger (mirrors session-start-prompt.js)
+      parts.push('reply to your human partner if they are waiting your reply, and continue your work if you have ongoing task according to the previous conversations.');
+
+      const combined = parts.join('\n\n');
+      tmpPrompt = path.join(os.tmpdir(), `.zylos-prompt-${process.pid}-${Date.now()}`);
+      fs.writeFileSync(tmpPrompt, combined, { mode: 0o600 });
+    } catch { /* prompt build failed — launch without initial prompt */ }
 
     // 3. Build the codex command
     const bypassFlag = bypassPermissions ? ' --dangerously-bypass-approvals-and-sandbox' : '';
