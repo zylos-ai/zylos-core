@@ -70,11 +70,18 @@ async function main() {
     message = (await readStdin()).trimEnd();
   } else if (cleanArgs.length === 2) {
     // 2 args, no stdin: channel + message (no endpoint)
+    process.stderr.write('[c4-send] Deprecated: passing message as CLI argument. Use stdin/heredoc mode instead.\n');
     message = cleanArgs[1];
+    // Unescape literal \n sequences that shell may have preserved when passing
+    // multi-line content as a CLI argument (defense-in-depth; prefer stdin mode)
+    message = message.replace(/\\n/g, '\n');
   } else {
     // 3+ args: channel + endpoint + message
+    process.stderr.write('[c4-send] Deprecated: passing message as CLI argument. Use stdin/heredoc mode instead.\n');
     endpoint = cleanArgs[1];
     message = cleanArgs[2];
+    // Same defense for the 3-arg form
+    message = message.replace(/\\n/g, '\n');
   }
 
   if (!message) {

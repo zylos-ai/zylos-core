@@ -1,3 +1,4 @@
+import fs from 'fs';
 import path from 'path';
 import os from 'os';
 
@@ -27,12 +28,23 @@ export const REQUIRE_IDLE_EXECUTION_POLL_MS = 1000;
 export const FILE_SIZE_THRESHOLD = 2048; // bytes
 export const CONTENT_PREVIEW_CHARS = 100;
 
-export const TMUX_SESSION = 'claude-main';
 const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
+
+// Read active runtime from config.json to dispatch to the correct tmux session.
+// Defaults to 'claude-main' when config is absent or runtime is unset.
+function _getActiveSessionName() {
+  try {
+    const cfg = JSON.parse(fs.readFileSync(path.join(ZYLOS_DIR, '.zylos', 'config.json'), 'utf8'));
+    return cfg.runtime === 'codex' ? 'codex-main' : 'claude-main';
+  } catch {
+    return 'claude-main';
+  }
+}
+export const TMUX_SESSION = _getActiveSessionName();
 export const DATA_DIR = path.join(ZYLOS_DIR, 'comm-bridge');
 export const DB_PATH = path.join(DATA_DIR, 'c4.db');
 export const ACTIVITY_MONITOR_DIR = path.join(ZYLOS_DIR, 'activity-monitor');
-export const CLAUDE_STATUS_FILE = path.join(ACTIVITY_MONITOR_DIR, 'claude-status.json');
+export const AGENT_STATUS_FILE = path.join(ACTIVITY_MONITOR_DIR, 'agent-status.json');
 export const PENDING_CHANNELS_FILE = path.join(ACTIVITY_MONITOR_DIR, 'pending-channels.jsonl');
 export const USER_MESSAGE_SIGNAL_FILE = path.join(ACTIVITY_MONITOR_DIR, 'user-message-signal.json');
 export const ATTACHMENTS_DIR = path.join(DATA_DIR, 'attachments');

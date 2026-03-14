@@ -44,8 +44,11 @@ export async function shellCommand() {
         pendingResolve(data);
         pendingResolve = null;
       } else if (data) {
-        // Response arrived without a pending prompt — print immediately
-        process.stdout.write(`\n${formatResponse(data)}\n`);
+        // Response arrived without a pending prompt (e.g. proactive agent message,
+        // or a late reply after the 120s timeout cleared pendingResolve).
+        // Print immediately and restore the prompt so the user can keep typing.
+        process.stdout.write(`\n${formatResponse(data)}\n\n`);
+        rl.prompt();
       }
     });
   });

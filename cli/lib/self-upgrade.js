@@ -15,6 +15,7 @@ import { fetchRawFile, sanitizeError } from './github.js';
 import { copyTree, syncTree } from './fs-utils.js';
 import { extractScriptPath, extractSkillName, getCommandHooks } from './hook-utils.js';
 import { smartSync, formatMergeResult } from './smart-merge.js';
+import { runMigrations } from './migrate.js';
 
 const REPO = 'zylos-ai/zylos-core';
 
@@ -530,10 +531,12 @@ function step1_backupCoreSkills(ctx) {
       copyTree(SKILLS_DIR, path.join(backupDir, 'skills'), { excludes: ['node_modules'] });
     }
 
-    // Backup CLAUDE.md (will be modified in step 6)
-    const claudeMdPath = path.join(ZYLOS_DIR, 'CLAUDE.md');
-    if (fs.existsSync(claudeMdPath)) {
-      fs.copyFileSync(claudeMdPath, path.join(backupDir, 'CLAUDE.md'));
+    // Backup instruction files (will be modified in step 7)
+    for (const name of ['CLAUDE.md', 'ZYLOS.md', 'AGENTS.md']) {
+      const src = path.join(ZYLOS_DIR, name);
+      if (fs.existsSync(src)) {
+        fs.copyFileSync(src, path.join(backupDir, name));
+      }
     }
 
     ctx.backupDir = backupDir;
@@ -720,7 +723,14 @@ function step6_installSkillDeps(ctx) {
 }
 
 /**
- * Step 7: sync CLAUDE.md managed sections
+ * Step 7: update instruction files from new templates.
+ *
+ * v0.4.0+ installs (ZYLOS.md present): rebuild CLAUDE.md and AGENTS.md from
+ * ZYLOS.md + new addon templates (from ctx.tempDir). This keeps both files
+ * current after upgrade without touching user customizations in ZYLOS.md.
+ *
+ * Pre-v0.4.0 installs (ZYLOS.md absent): fall through to the managed-section
+ * sync on CLAUDE.md (legacy path).
  */
 function step7_syncClaudeMd(ctx) {
   const startTime = Date.now();
@@ -730,6 +740,38 @@ function step7_syncClaudeMd(ctx) {
     return { step: 7, name: 'sync_claude_md', status: 'skipped', message: 'no templates in new version', duration: Date.now() - startTime };
   }
 
+  // For legacy installs (ZYLOS.md absent, CLAUDE.md present): run v0.4.0 migration
+  // first so the rebuild block below has a ZYLOS.md to work with.
+  const zylosMd = path.join(ZYLOS_DIR, 'ZYLOS.md');
+  if (!fs.existsSync(zylosMd)) {
+    try {
+      runMigrations();
+    } catch { /* non-fatal — migration failure falls through to legacy sync */ }
+  }
+
+  // v0.4.0+ path: rebuild instruction files from ZYLOS.md + new addon templates
+  if (fs.existsSync(zylosMd)) {
+    try {
+      const core = fs.readFileSync(zylosMd, 'utf8');
+      const rebuilt = [];
+      for (const [addonFile, destFile] of [
+        ['claude-addon.md', 'CLAUDE.md'],
+        ['codex-addon.md', 'AGENTS.md'],
+      ]) {
+        const addonPath = path.join(templateDir, addonFile);
+        if (!fs.existsSync(addonPath)) continue;
+        const content = core.trimEnd() + '\n\n' + fs.readFileSync(addonPath, 'utf8').trimEnd() + '\n';
+        fs.writeFileSync(path.join(ZYLOS_DIR, destFile), content, 'utf8');
+        rebuilt.push(destFile);
+      }
+      const msg = rebuilt.length ? `rebuilt ${rebuilt.join(', ')} from ZYLOS.md` : 'no addon templates found';
+      return { step: 7, name: 'sync_claude_md', status: 'done', message: msg, duration: Date.now() - startTime };
+    } catch (err) {
+      return { step: 7, name: 'sync_claude_md', status: 'skipped', message: err.message, duration: Date.now() - startTime };
+    }
+  }
+
+  // Pre-v0.4.0 path: sync managed sections in CLAUDE.md
   try {
     const syncResult = syncClaudeMd(templateDir);
     if (syncResult.skipped) {
@@ -996,12 +1038,39 @@ function step10_startCoreServices(ctx) {
     return { step: 10, name: 'start_core_services', status: 'skipped', message: 'no services to restart', duration: Date.now() - startTime };
   }
 
+  // Deploy the new ecosystem.config.cjs from the upgraded package so PM2
+  // re-evaluates env vars (e.g. ZYLOS_PACKAGE_ROOT) when services restart.
+  // `pm2 restart <name>` reuses PM2's cached config and never picks up new env.
+  let ecosystemPath = null;
+  const ecosystemTemplateSrc = ctx.tempDir
+    ? path.join(ctx.tempDir, 'templates', 'pm2', 'ecosystem.config.cjs')
+    : null;
+  const pm2Dir = path.join(ZYLOS_DIR, 'pm2');
+  const ecosystemDest = path.join(pm2Dir, 'ecosystem.config.cjs');
+  if (ecosystemTemplateSrc && fs.existsSync(ecosystemTemplateSrc)) {
+    try {
+      fs.mkdirSync(pm2Dir, { recursive: true });
+      fs.copyFileSync(ecosystemTemplateSrc, ecosystemDest);
+      ecosystemPath = ecosystemDest;
+    } catch {
+      // Non-fatal — fall back to pm2 restart below
+    }
+  } else if (fs.existsSync(ecosystemDest)) {
+    // No new template available; use the existing ecosystem file
+    ecosystemPath = ecosystemDest;
+  }
+
   const started = [];
   const failed = [];
 
   for (const name of ctx.servicesWereRunning) {
     try {
-      execSync(`pm2 restart ${name} 2>/dev/null`, { stdio: 'pipe' });
+      if (ecosystemPath) {
+        // Re-read the ecosystem file so PM2 picks up updated env vars
+        execSync(`pm2 start "${ecosystemPath}" --only ${name} 2>/dev/null`, { stdio: 'pipe' });
+      } else {
+        execSync(`pm2 restart ${name} 2>/dev/null`, { stdio: 'pipe' });
+      }
       started.push(name);
     } catch {
       failed.push(name);
@@ -1070,15 +1139,17 @@ function rollbackSelf(ctx) {
     }
   }
 
-  // Restore CLAUDE.md from backup
+  // Restore instruction files from backup
   if (ctx.backupDir) {
-    const backupClaudeMd = path.join(ctx.backupDir, 'CLAUDE.md');
-    if (fs.existsSync(backupClaudeMd)) {
-      try {
-        fs.copyFileSync(backupClaudeMd, path.join(ZYLOS_DIR, 'CLAUDE.md'));
-        results.push({ action: 'restore_claude_md', success: true });
-      } catch (err) {
-        results.push({ action: 'restore_claude_md', success: false, error: err.message });
+    for (const name of ['CLAUDE.md', 'ZYLOS.md', 'AGENTS.md']) {
+      const backup = path.join(ctx.backupDir, name);
+      if (fs.existsSync(backup)) {
+        try {
+          fs.copyFileSync(backup, path.join(ZYLOS_DIR, name));
+          results.push({ action: `restore_${name.toLowerCase().replace('.', '_')}`, success: true });
+        } catch (err) {
+          results.push({ action: `restore_${name.toLowerCase().replace('.', '_')}`, success: false, error: err.message });
+        }
       }
     }
   }
@@ -1169,6 +1240,12 @@ export function runSelfUpgrade({ tempDir, newVersion, mode, onStep } = {}) {
   // Migration hints: step 8 already applied settings sync via the newly installed script.
   const migrationHints = [];
 
+  // Check if instruction files were rebuilt (CLAUDE.md / AGENTS.md) — used by
+  // component.js to auto-enqueue a Claude restart after the reply is sent, so
+  // Claude does not prompt the user about restarting.
+  const step7 = ctx.steps.find(s => s.step === 7);
+  const instructionFilesRebuilt = step7?.status === 'done' && Boolean(step7?.message?.includes('rebuilt'));
+
   return {
     action: 'self_upgrade',
     success: true,
@@ -1178,6 +1255,7 @@ export function runSelfUpgrade({ tempDir, newVersion, mode, onStep } = {}) {
     backupDir: ctx.backupDir,
     templates,
     migrationHints,
+    instructionFilesRebuilt,
     mergeConflicts: ctx.mergeConflicts.length > 0 ? ctx.mergeConflicts : null,
     mergedFiles: ctx.mergedFiles.length > 0 ? ctx.mergedFiles : null,
   };

@@ -17,6 +17,23 @@ import { generateManifest, saveManifest } from '../lib/manifest.js';
 import { prompt, promptYesNo, promptChoice, promptSecret } from '../lib/prompts.js';
 import { bold, dim, green, red, yellow, cyan, bgGreen, success, error, warn, heading } from '../lib/colors.js';
 import { commandExists } from '../lib/shell-utils.js';
+import { getActiveAdapter } from '../lib/runtime/index.js';
+import { buildInstructionFile } from '../lib/runtime/instruction-builder.js';
+import { runMigrations } from '../lib/migrate.js';
+import {
+  installGlobalPackage,
+  installCodex,
+  isClaudeAuthenticated,
+  isCodexAuthenticated,
+  approveApiKey,
+  saveApiKey,
+  saveApiKeyToEnv,
+  saveSetupToken,
+  saveSetupTokenToEnv,
+  saveCodexApiKey,
+  saveCodexApiKeyToEnv,
+  writeCodexConfig,
+} from '../lib/runtime-setup.js';
 
 // Source directories (shipped with zylos package)
 const PACKAGE_ROOT = path.join(import.meta.dirname, '..', '..');
@@ -53,15 +70,6 @@ function checkNodeVersion() {
   const ok = parts[0] > MIN_NODE_MAJOR ||
     (parts[0] === MIN_NODE_MAJOR && parts[1] >= MIN_NODE_MINOR);
   return { version, ok, required: `>=${MIN_NODE_MAJOR}.${MIN_NODE_MINOR}.0` };
-}
-
-function installGlobalPackage(pkg) {
-  try {
-    execSync(`npm install -g ${pkg}`, { stdio: 'pipe', timeout: 120000 });
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 function installSystemPackage(pkg) {
@@ -376,22 +384,10 @@ function ensureBinInPath() {
   return true;
 }
 
+// ── Codex helpers ─────────────────────────────────────────────────────────
+
 /**
- * Check if Claude Code is authenticated.
- * @returns {boolean}
- */
-function isClaudeAuthenticated() {
-  try {
-    const result = spawnSync('claude', ['auth', 'status'], {
-      stdio: 'pipe',
-      encoding: 'utf8',
-      timeout: 10000,
-    });
-    return result.status === 0;
-  } catch {
-    return false;
-  }
-}
+// ── End Codex helpers ──────────────────────────────────────────────────────
 
 /**
  * Save an Anthropic API key to ~/.claude/settings.json and process.env.
@@ -434,151 +430,28 @@ function verifyApiKey(apiKey) {
   });
 }
 
-function saveApiKey(apiKey) {
-  // 1. Write to ~/.claude/settings.json so Claude Code picks it up
-  const settingsDir = path.join(os.homedir(), '.claude');
-  const settingsPath = path.join(settingsDir, 'settings.json');
-  try {
-    fs.mkdirSync(settingsDir, { recursive: true });
-    let settings = {};
-    try { settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8')); } catch {}
-    if (!settings.env) settings.env = {};
-    settings.env.ANTHROPIC_API_KEY = apiKey;
-    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n');
-  } catch (err) {
-    console.log(`  ${error(`Failed to write settings.json: ${err.message}`)}`);
-    return false;
-  }
-
-  // 2. Pre-approve key in ~/.claude.json so Claude skips the interactive
-  //    "Detected a custom API key" confirmation prompt on startup
-  approveApiKey(apiKey);
-
-  // 3. Set in current process so subsequent checks pass
-  process.env.ANTHROPIC_API_KEY = apiKey;
-
-  return true;
-}
-
 /**
- * Pre-approve an API key in ~/.claude.json so Claude Code skips
- * the interactive "Detected a custom API key" confirmation prompt.
- * Also marks onboarding as complete to prevent the login screen
- * from blocking prompt processing on fresh installs.
- * @param {string} apiKey - The API key to approve
+ * Verify an OpenAI API key by making a lightweight GET request to /v1/models.
+ * @param {string} apiKey - The OpenAI API key (sk-...)
+ * @returns {Promise<true|false|null>} true=valid (200), false=invalid (401), null=network error
  */
-function approveApiKey(apiKey) {
-  const claudeJsonPath = path.join(os.homedir(), '.claude.json');
-  try {
-    let config = {};
-    try { config = JSON.parse(fs.readFileSync(claudeJsonPath, 'utf8')); } catch {}
-    if (!config.customApiKeyResponses) config.customApiKeyResponses = { approved: [], rejected: [] };
-    if (!config.customApiKeyResponses.approved) config.customApiKeyResponses.approved = [];
-    // Claude Code stores last 20 chars of the key for matching
-    const keySuffix = apiKey.slice(-20);
-    if (!config.customApiKeyResponses.approved.includes(keySuffix)) {
-      config.customApiKeyResponses.approved.push(keySuffix);
-    }
-    // Mark onboarding complete so Claude doesn't show login screen
-    if (!config.hasCompletedOnboarding) {
-      config.hasCompletedOnboarding = true;
-      try {
-        const ver = execSync('claude --version 2>/dev/null', { encoding: 'utf8' }).trim();
-        config.lastOnboardingVersion = ver;
-      } catch {
-        config.lastOnboardingVersion = '2.1.59';
-      }
-    }
-    // Pre-accept workspace trust dialog for the zylos project directory
-    if (!config.projects) config.projects = {};
-    const projectPath = path.resolve(ZYLOS_DIR);
-    if (!config.projects[projectPath]) config.projects[projectPath] = {};
-    if (!config.projects[projectPath].hasTrustDialogAccepted) {
-      config.projects[projectPath].hasTrustDialogAccepted = true;
-      config.projects[projectPath].hasCompletedProjectOnboarding = true;
-    }
-    fs.writeFileSync(claudeJsonPath, JSON.stringify(config, null, 2) + '\n');
-  } catch {}
-}
-
-/**
- * Write ANTHROPIC_API_KEY to ~/zylos/.env.
- * Called after template deployment to ensure .env has the full template content.
- *
- * @param {string} apiKey - The API key
- */
-function saveApiKeyToEnv(apiKey) {
-  const envPath = path.join(ZYLOS_DIR, '.env');
-  try {
-    let content = '';
-    try { content = fs.readFileSync(envPath, 'utf8'); } catch {}
-    if (content.match(/^ANTHROPIC_API_KEY=.*$/m)) {
-      content = content.replace(/^ANTHROPIC_API_KEY=.*$/m, `ANTHROPIC_API_KEY=${apiKey}`);
-    } else {
-      content = content.trimEnd() + `\n\n# Anthropic API key (set by zylos init)\nANTHROPIC_API_KEY=${apiKey}\n`;
-    }
-    fs.writeFileSync(envPath, content);
-  } catch (err) {
-    console.log(`  ${warn(`Could not write API key to .env: ${err.message}`)}`);
-  }
-}
-
-/**
- * Save a setup token to ~/.claude/settings.json and process.env.
- * Does NOT write to ~/zylos/.env here — that happens after template
- * deployment via saveSetupTokenToEnv().
- *
- * @param {string} token - The setup token (sk-ant-oat...)
- * @returns {boolean} true if saved successfully
- */
-function saveSetupToken(token) {
-  const settingsDir = path.join(os.homedir(), '.claude');
-  const settingsPath = path.join(settingsDir, 'settings.json');
-  try {
-    fs.mkdirSync(settingsDir, { recursive: true });
-    let settings = {};
-    try { settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8')); } catch {}
-    if (!settings.env) settings.env = {};
-    settings.env.CLAUDE_CODE_OAUTH_TOKEN = token;
-    // Remove API key if set — avoid having both
-    delete settings.env.ANTHROPIC_API_KEY;
-    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n');
-  } catch (err) {
-    console.log(`  ${error(`Failed to write settings.json: ${err.message}`)}`);
-    return false;
-  }
-
-  // Pre-approve in ~/.claude.json (onboarding + trust)
-  approveApiKey(token);
-
-  process.env.CLAUDE_CODE_OAUTH_TOKEN = token;
-
-  return true;
-}
-
-/**
- * Write CLAUDE_CODE_OAUTH_TOKEN to ~/zylos/.env.
- * Called after template deployment to ensure .env has the full template content.
- *
- * @param {string} token - The setup token
- */
-function saveSetupTokenToEnv(token) {
-  const envPath = path.join(ZYLOS_DIR, '.env');
-  try {
-    let content = '';
-    try { content = fs.readFileSync(envPath, 'utf8'); } catch {}
-    if (content.match(/^CLAUDE_CODE_OAUTH_TOKEN=.*$/m)) {
-      content = content.replace(/^CLAUDE_CODE_OAUTH_TOKEN=.*$/m, `CLAUDE_CODE_OAUTH_TOKEN=${token}`);
-    } else {
-      content = content.trimEnd() + `\n\n# Claude Code setup token (set by zylos init)\nCLAUDE_CODE_OAUTH_TOKEN=${token}\n`;
-    }
-    // Remove ANTHROPIC_API_KEY if present — avoid having both
-    content = content.replace(/^# Anthropic API key \(set by zylos init\)\n/m, '');
-    content = content.replace(/^ANTHROPIC_API_KEY=.*\n?/m, '');
-    fs.writeFileSync(envPath, content);
-  } catch (err) {
-    console.log(`  ${warn(`Could not write setup token to .env: ${err.message}`)}`);
-  }
+function verifyCodexApiKey(apiKey) {
+  return new Promise((resolve) => {
+    const req = https.request({
+      hostname: 'api.openai.com',
+      path: '/v1/models',
+      method: 'GET',
+      headers: { 'Authorization': `Bearer ${apiKey}` },
+      timeout: 10000,
+    }, (res) => {
+      res.resume(); // drain response
+      if (res.statusCode === 401) resolve(false);
+      else resolve(true);
+    });
+    req.on('error', () => resolve(null));
+    req.on('timeout', () => { req.destroy(); resolve(null); });
+    req.end();
+  });
 }
 
 /**
@@ -652,7 +525,8 @@ function needsBypassAcceptance() {
     if (settings.skipDangerousModePermissionPrompt) return false;
   } catch {}
 
-  // Check if already accepted (tmux session with Claude running)
+  // Check if already accepted (claude-main session with Claude running).
+  // 'claude-main' is intentional: this check is Claude-specific (bypass prompt is Claude-only).
   try {
     execSync('tmux has-session -t claude-main 2>/dev/null', { stdio: 'pipe' });
     const paneContent = execSync('tmux capture-pane -t claude-main -p 2>/dev/null', { encoding: 'utf8' });
@@ -705,17 +579,21 @@ function preAcceptClaudeTerms() {
  * Guide user through first-time Claude bypass permissions acceptance.
  */
 async function guideBypassAcceptance() {
+  // This function is Claude-specific: the bypass-permissions prompt only exists in Claude Code.
+  // Hardcoded 'claude-main' is intentional — this always creates a Claude session for acceptance.
+  const CLAUDE_SESSION = 'claude-main';
+
   console.log(`\n${heading('Setting up Claude Code...')}`);
 
   // Stop activity-monitor to prevent restart loop
   try { execSync('pm2 stop activity-monitor', { stdio: 'pipe' }); } catch {}
 
   // Kill existing session if stuck
-  try { execSync('tmux kill-session -t claude-main 2>/dev/null', { stdio: 'pipe' }); } catch {}
+  try { execSync(`tmux kill-session -t ${CLAUDE_SESSION} 2>/dev/null`, { stdio: 'pipe' }); } catch {}
 
   // Create new tmux session with Claude
   try {
-    const tmuxArgs = ['new-session', '-d', '-s', 'claude-main'];
+    const tmuxArgs = ['new-session', '-d', '-s', CLAUDE_SESSION];
     if (process.env.IS_SANDBOX) tmuxArgs.push('-e', 'IS_SANDBOX=1');
 
     // Write API key to temp file to avoid exposing it in process command line
@@ -724,9 +602,9 @@ async function guideBypassAcceptance() {
     if (process.env.ANTHROPIC_API_KEY) {
       tmpEnv = path.join(os.tmpdir(), `.zylos-env-${process.pid}-${Date.now()}`);
       fs.writeFileSync(tmpEnv, `ANTHROPIC_API_KEY='${process.env.ANTHROPIC_API_KEY}'\n`, { mode: 0o600 });
-      shellCmd = `set -a; . "${tmpEnv}"; set +a; rm -f "${tmpEnv}"; cd ${ZYLOS_DIR} && claude --dangerously-skip-permissions`;
+      shellCmd = `set -a; . "${tmpEnv}"; set +a; rm -f "${tmpEnv}"; cd "${ZYLOS_DIR}" && claude --dangerously-skip-permissions`;
     } else {
-      shellCmd = `cd ${ZYLOS_DIR} && claude --dangerously-skip-permissions`;
+      shellCmd = `cd "${ZYLOS_DIR}" && claude --dangerously-skip-permissions`;
     }
     tmuxArgs.push('--', shellCmd);
     try {
@@ -737,8 +615,8 @@ async function guideBypassAcceptance() {
     }
     // Configure status bar with detach hint
     try {
-      execSync('tmux set-option -t claude-main status-right " Ctrl+B d = detach " 2>/dev/null', { stdio: 'pipe' });
-      execSync('tmux set-option -t claude-main status-right-style "fg=black,bg=yellow" 2>/dev/null', { stdio: 'pipe' });
+      execSync(`tmux set-option -t ${CLAUDE_SESSION} status-right " Ctrl+B d = detach " 2>/dev/null`, { stdio: 'pipe' });
+      execSync(`tmux set-option -t ${CLAUDE_SESSION} status-right-style "fg=black,bg=yellow" 2>/dev/null`, { stdio: 'pipe' });
     } catch {}
   } catch (err) {
     console.log(`  ${warn(`Failed to create tmux session: ${err.message}`)}`);
@@ -870,12 +748,21 @@ function deployTemplates() {
   // Always save current shell PATH to .env (for PM2 services)
   saveSystemPath(envDest);
 
-  // CLAUDE.md — only create if missing
-  const claudeMdSrc = path.join(TEMPLATES_SRC, 'CLAUDE.md');
-  const claudeMdDest = path.join(ZYLOS_DIR, 'CLAUDE.md');
-  if (fs.existsSync(claudeMdSrc) && !fs.existsSync(claudeMdDest)) {
-    fs.copyFileSync(claudeMdSrc, claudeMdDest);
-    console.log(`  ${success('Created CLAUDE.md from template')}`);
+  // ZYLOS.md — user-editable runtime-agnostic core; only create if missing
+  const zylosMdSrc = path.join(TEMPLATES_SRC, 'ZYLOS.md');
+  const zylosMdDest = path.join(ZYLOS_DIR, 'ZYLOS.md');
+  if (fs.existsSync(zylosMdSrc) && !fs.existsSync(zylosMdDest)) {
+    fs.copyFileSync(zylosMdSrc, zylosMdDest);
+    console.log(`  ${success('Created ZYLOS.md from template')}`);
+  }
+
+  // Instruction file — CLAUDE.md (claude) or AGENTS.md (codex); build if missing
+  const activeRuntime = getZylosConfig().runtime ?? 'claude';
+  const instrFileName = activeRuntime === 'codex' ? 'AGENTS.md' : 'CLAUDE.md';
+  const instrDest = path.join(ZYLOS_DIR, instrFileName);
+  if (!fs.existsSync(instrDest) && fs.existsSync(zylosMdSrc)) {
+    buildInstructionFile(activeRuntime);
+    console.log(`  ${success(`Generated ${instrFileName} from template layers`)}`);
   }
 
   // memory/ templates — only create missing files
@@ -1612,8 +1499,10 @@ function parseInitFlags(args) {
     help: false,
     skipConsent: false,
     timezone: null,
+    runtime: null,  // 'claude' | 'codex' — set via --runtime flag
     setupToken: null,
     apiKey: null,
+    codexApiKey: null,
     domain: null,
     https: null,   // null = not specified, true = --https, false = --no-https
     caddy: null,   // null = not specified, true = --caddy, false = --no-caddy
@@ -1638,8 +1527,10 @@ function parseInitFlags(args) {
       case '--quiet': case '-q': opts.quiet = true; break;
       case '--help': case '-h': opts.help = true; break;
       case '--timezone':
+      case '--runtime':
       case '--setup-token':
       case '--api-key':
+      case '--codex-api-key':
       case '--domain':
       case '--web-password': {
         const val = args[++i];
@@ -1648,8 +1539,10 @@ function parseInitFlags(args) {
           process.exit(1);
         }
         if (arg === '--timezone') opts.timezone = val;
+        else if (arg === '--runtime') opts.runtime = val;
         else if (arg === '--setup-token') opts.setupToken = val;
         else if (arg === '--api-key') opts.apiKey = val;
+        else if (arg === '--codex-api-key') opts.codexApiKey = val;
         else if (arg === '--domain') opts.domain = val;
         else if (arg === '--web-password') opts.webPassword = val;
         break;
@@ -1686,6 +1579,9 @@ function resolveFromEnv(opts) {
       opts.apiKey = process.env.ANTHROPIC_API_KEY;
     }
   }
+  if (opts.runtime === null && process.env.ZYLOS_RUNTIME) {
+    opts.runtime = process.env.ZYLOS_RUNTIME;
+  }
   if (opts.domain === null && process.env.ZYLOS_DOMAIN) {
     opts.domain = process.env.ZYLOS_DOMAIN;
   }
@@ -1694,6 +1590,9 @@ function resolveFromEnv(opts) {
   }
   if (opts.webPassword === null) {
     opts.webPassword = process.env.ZYLOS_WEB_PASSWORD || process.env.WEB_CONSOLE_PASSWORD || null;
+  }
+  if (opts.codexApiKey === null && (process.env.OPENAI_API_KEY || process.env.CODEX_API_KEY)) {
+    opts.codexApiKey = process.env.OPENAI_API_KEY || process.env.CODEX_API_KEY;
   }
   // TZ: do NOT pick up ambient TZ from the environment.
   // Docker containers often have TZ=UTC set by default, which would silently
@@ -1724,6 +1623,11 @@ function validateInitOptions(opts) {
   }
   if (opts.apiKey && opts.apiKey.startsWith('sk-ant-oat')) {
     return 'That looks like a setup token, not an API key.\n  Use --setup-token instead: zylos init --setup-token <token>';
+  }
+
+  // Runtime validation
+  if (opts.runtime && !['claude', 'codex'].includes(opts.runtime)) {
+    return `Invalid runtime: "${opts.runtime}".\n  Supported: claude, codex\n  Example: zylos init --runtime codex`;
   }
 
   // Timezone validation
@@ -1758,9 +1662,11 @@ Usage: zylos init [options]
 Options:
   -y, --yes                  Force non-interactive mode (even with a TTY)
   -q, --quiet                Minimal output
+  --runtime <name>           Agent runtime: claude (default) or codex
   --timezone <tz>            Set timezone (IANA format, e.g., Asia/Shanghai)
   --setup-token <token>      Authenticate with Claude setup token
   --api-key <key>            Authenticate with Anthropic API key
+  --codex-api-key <key>      Authenticate Codex with OpenAI API key (sk-...)
   --domain <domain>          Configure Caddy with this domain
   --https / --no-https       Enable/disable HTTPS (default: https when domain set)
   --caddy / --no-caddy       Install/skip Caddy web server (default: install)
@@ -1772,8 +1678,8 @@ Non-interactive mode:
   provide values; unfilled fields use sensible defaults.
 
 Environment variables:
-  CLAUDE_CODE_OAUTH_TOKEN, ANTHROPIC_API_KEY, ZYLOS_DOMAIN,
-  ZYLOS_PROTOCOL, ZYLOS_WEB_PASSWORD
+  CLAUDE_CODE_OAUTH_TOKEN, ANTHROPIC_API_KEY, ZYLOS_RUNTIME,
+  OPENAI_API_KEY (or CODEX_API_KEY), ZYLOS_DOMAIN, ZYLOS_PROTOCOL, ZYLOS_WEB_PASSWORD
 
   Resolution: CLI flag > env var > .env/config.json > interactive prompt
 
@@ -1910,42 +1816,180 @@ export async function initCommand(args) {
     }
   }
 
-  // Step 5: Check/install Claude Code (native installer)
-  let claudeJustInstalled = false;
-  if (commandExists('claude')) {
-    if (!quiet) console.log(`  ${success('Claude Code installed')}`);
-  } else {
-    if (!quiet) console.log(`  ${error('Claude Code not found')}`);
-    if (!quiet) console.log(`    ${cyan('Installing Claude Code (native installer)...')}`);
-    try {
-      execSync('curl -fsSL https://claude.ai/install.sh | bash', {
-        stdio: 'pipe',
-        timeout: 300000, // 5 min — downloads ~213MB native binary
-      });
-      if (commandExists('claude')) {
-        if (!quiet) console.log(`  ${success('Claude Code installed')}`);
-        claudeJustInstalled = true;
-      } else {
-        console.error(`  ${error('Claude Code installed but not found in PATH')}`);
-        console.error(`    ${dim('Add ~/.local/bin to your PATH, then run zylos init again.')}`);
-        process.exit(1);
-      }
-    } catch {
-      console.error(`  ${error('Failed to install Claude Code')}`);
-      console.error(`    ${dim('Install manually: curl -fsSL https://claude.ai/install.sh | bash')}`);
-      process.exit(1);
+  // Step 4.5: Select agent runtime
+  // Resolution: --runtime flag > ZYLOS_RUNTIME env > existing config > interactive prompt
+  const existingRuntime = getZylosConfig().runtime;
+  let selectedRuntime = opts.runtime || existingRuntime || null;
+  if (!selectedRuntime) {
+    if (!skipConfirm) {
+      if (!quiet) console.log('');
+      const runtimeIdx = await promptChoice(
+        '  Which agent runtime would you like to use?',
+        ['Claude Code (Anthropic)', 'Codex (OpenAI)'],
+      );
+      selectedRuntime = runtimeIdx === 2 ? 'codex' : 'claude';
+    } else {
+      selectedRuntime = 'claude'; // backward-compatible default for non-interactive mode
     }
   }
+  if (!quiet && !existingRuntime) {
+    const runtimeLabel = selectedRuntime === 'codex' ? 'Codex (OpenAI)' : 'Claude Code';
+    console.log(`  ${success(`Runtime: ${runtimeLabel}`)}`);
+  }
 
-  // Step 6: Claude auth check + guided login
+  // Steps 5–6: Install and authenticate the selected runtime
+  let claudeJustInstalled = false;
   let claudeAuthenticated = false;
+  let codexAuthenticated = false;
   let pendingApiKey = null; // set if user enters API key, written to .env after templates
   let pendingSetupToken = null; // set if user enters setup-token, written to .env after templates
-  if (commandExists('claude')) {
-    claudeAuthenticated = isClaudeAuthenticated();
-    if (claudeAuthenticated) {
-      if (!quiet) console.log(`  ${success('Claude Code authenticated')}`);
-    } else if (opts.setupToken) {
+  let pendingCodexApiKey = null; // set if codex api key provided, written to .env after templates
+
+  if (selectedRuntime === 'codex') {
+    // ── Step 5 (Codex): install ───────────────────────────────────────────
+    if (commandExists('codex')) {
+      if (!quiet) console.log(`  ${success('Codex installed')}`);
+    } else {
+      if (!quiet) console.log(`  ${error('Codex not found')}`);
+      if (!quiet) console.log(`    ${cyan('Installing @openai/codex...')}`);
+      if (installCodex()) {
+        if (commandExists('codex')) {
+          if (!quiet) console.log(`  ${success('Codex installed')}`);
+        } else {
+          console.error(`  ${error('Codex installed but not found in PATH')}`);
+          console.error(`    ${dim('Ensure npm global bin is in PATH, then run zylos init again.')}`);
+          process.exit(1);
+        }
+      } else {
+        console.error(`  ${error('Failed to install Codex')}`);
+        console.error(`    ${dim('Install manually: npm install -g @openai/codex')}`);
+        process.exit(1);
+      }
+    }
+
+    // ── Step 6 (Codex): auth + startup config ────────────────────────────
+    if (commandExists('codex')) {
+      if (opts.codexApiKey) {
+        // Verify first, then save — mirrors Claude's verifyApiKey → saveApiKey pattern.
+        // Do NOT save before verifying: a bad key in process.env causes isCodexAuthenticated()
+        // to report "authenticated" even when the key is invalid (path 1 check is existence-only).
+        if (!quiet) console.log(`  ${dim('Verifying Codex API key...')}`);
+        const verifyResult = await verifyCodexApiKey(opts.codexApiKey);
+        if (verifyResult === true) {
+          saveCodexApiKey(opts.codexApiKey); // process.env only; .env written after deployTemplates()
+          pendingCodexApiKey = opts.codexApiKey; // auth.json synced by CodexAdapter.launch()
+          codexAuthenticated = true;
+          if (!quiet) console.log(`  ${success('Codex API key verified')}`);
+        } else if (verifyResult === false) {
+          console.error(`  ${error('Codex API key is invalid or could not be verified.')}`);
+          console.error(`    ${dim('Check your key at platform.openai.com')}`);
+          if (skipConfirm) exitCode = 1;
+        } else {
+          // null = network unreachable — save and proceed, let Codex fail at runtime if key is bad
+          saveCodexApiKey(opts.codexApiKey); // process.env only; .env written after deployTemplates()
+          pendingCodexApiKey = opts.codexApiKey; // auth.json synced by CodexAdapter.launch()
+          if (!quiet) console.log(`  ${warn('Could not verify Codex API key (network unreachable). Proceeding...')}`);
+          codexAuthenticated = true;
+        }
+      } else {
+        codexAuthenticated = isCodexAuthenticated();
+        if (codexAuthenticated) {
+          if (!quiet) console.log(`  ${success('Codex authenticated')}`);
+        } else {
+          if (!quiet) console.log(`  ${warn('Codex not authenticated')}`);
+          if (!skipConfirm) {
+            const codexAuthChoice = await promptChoice(
+              '\n  How would you like to authenticate Codex?',
+              ['OpenAI API key', 'Device auth (headless/server — no browser needed)', 'Browser login'],
+            );
+            if (codexAuthChoice === 1) {
+              // Option 1: API key
+              console.log(`\n  ${dim('Paste your OpenAI API key (starts with sk-):')}`);
+              const apiKey = await promptSecret('  API key: ');
+              if (!apiKey) {
+                console.log(`  ${warn('No key entered. Skipped.')}`);
+              } else if (saveCodexApiKeyToEnv(apiKey)) {
+                codexAuthenticated = isCodexAuthenticated();
+                if (codexAuthenticated) {
+                  console.log(`  ${success('Codex API key saved and verified')}`);
+                } else {
+                  console.log(`  ${warn('Key saved but auth check failed. Continuing...')}`);
+                }
+              }
+            } else if (codexAuthChoice === 2) {
+              // Option 2: device-auth (headless)
+              console.log(`\n  ${cyan('Starting Codex device auth...')}`);
+              console.log(`  ${dim('Follow the instructions to authenticate. Press Ctrl+C when done.')}\n`);
+              try {
+                spawnSync('codex', ['login', '--device-auth'], { stdio: 'inherit' });
+              } catch { /* user may Ctrl+C */ }
+              codexAuthenticated = isCodexAuthenticated();
+              if (codexAuthenticated) {
+                console.log(`\n  ${success('Codex authenticated')}`);
+              } else {
+                console.log(`\n  ${warn('Authentication not completed.')}`);
+                console.log(`    ${dim('Run "codex login --device-auth" to try again.')}`);
+              }
+            } else {
+              // Option 3: browser login
+              console.log(`\n  ${cyan('Starting Codex browser login...')}`);
+              console.log(`  ${dim('After login completes, press Ctrl+C to return.')}\n`);
+              try {
+                spawnSync('codex', ['login'], { stdio: 'inherit' });
+              } catch { /* user may Ctrl+C */ }
+              codexAuthenticated = isCodexAuthenticated();
+              if (codexAuthenticated) {
+                console.log(`\n  ${success('Codex authenticated')}`);
+              } else {
+                console.log(`\n  ${warn('Authentication not completed.')}`);
+                console.log(`    ${dim('Run "codex login" to try again.')}`);
+              }
+            }
+          } else {
+            if (!quiet) console.log(`    ${dim('Run "codex login" or set OPENAI_API_KEY to authenticate.')}`);
+          }
+        }
+      }
+
+      // Write ~/.codex/config.toml to suppress interactive prompts on first launch
+      if (writeCodexConfig(ZYLOS_DIR)) {
+        if (!quiet) console.log(`  ${success('Codex startup config written')}`);
+      }
+    }
+
+  } else {
+    // ── Step 5 (Claude): install ──────────────────────────────────────────
+    if (commandExists('claude')) {
+      if (!quiet) console.log(`  ${success('Claude Code installed')}`);
+    } else {
+      if (!quiet) console.log(`  ${error('Claude Code not found')}`);
+      if (!quiet) console.log(`    ${cyan('Installing Claude Code (native installer)...')}`);
+      try {
+        execSync('curl -fsSL https://claude.ai/install.sh | bash', {
+          stdio: 'pipe',
+          timeout: 300000, // 5 min — downloads ~213MB native binary
+        });
+        if (commandExists('claude')) {
+          if (!quiet) console.log(`  ${success('Claude Code installed')}`);
+          claudeJustInstalled = true;
+        } else {
+          console.error(`  ${error('Claude Code installed but not found in PATH')}`);
+          console.error(`    ${dim('Add ~/.local/bin to your PATH, then run zylos init again.')}`);
+          process.exit(1);
+        }
+      } catch {
+        console.error(`  ${error('Failed to install Claude Code')}`);
+        console.error(`    ${dim('Install manually: curl -fsSL https://claude.ai/install.sh | bash')}`);
+        process.exit(1);
+      }
+    }
+
+    // ── Step 6 (Claude): auth check + guided login ────────────────────────
+    if (commandExists('claude')) {
+      claudeAuthenticated = isClaudeAuthenticated();
+      if (claudeAuthenticated) {
+        if (!quiet) console.log(`  ${success('Claude Code authenticated')}`);
+      } else if (opts.setupToken) {
       // Setup token provided via flag/env — save, verify via actual API call, rollback on failure
       if (saveSetupToken(opts.setupToken)) {
         if (!quiet) console.log(`  ${dim('Verifying setup token...')}`);
@@ -2068,7 +2112,8 @@ export async function initCommand(args) {
         if (!quiet) console.log(`    ${dim('Run "zylos init" again to authenticate.')}`);
       }
     }
-  }
+    } // end if (commandExists('claude')) — Step 6
+  } // end else (Claude runtime branch)
 
   // Pre-accept Claude Code terms (skips manual prompts on first launch)
   if (claudeAuthenticated) {
@@ -2101,6 +2146,15 @@ export async function initCommand(args) {
       }
     }
 
+    // Persist runtime selection before deploying templates so deployTemplates()
+    // generates the correct instruction file for the new runtime.
+    if (!existingRuntime || existingRuntime !== selectedRuntime) {
+      updateZylosConfig({ runtime: selectedRuntime });
+    }
+
+    // Run data migrations before deploying templates (idempotent)
+    runMigrations();
+
     if (!quiet) console.log(heading('Deploying templates...'));
     deployTemplates();
 
@@ -2114,6 +2168,9 @@ export async function initCommand(args) {
     if (pendingSetupToken) {
       saveSetupTokenToEnv(pendingSetupToken);
     }
+    if (pendingCodexApiKey) {
+      saveCodexApiKeyToEnv(pendingCodexApiKey);
+    }
 
     // Timezone: use resolved value or show current
     if (!quiet) console.log(heading('Checking timezone...'));
@@ -2126,6 +2183,16 @@ export async function initCommand(args) {
       exitCode = exitCode || 2; // optional step failed — don't downgrade a fatal (1)
     }
 
+    // On runtime switch: clear stale health state before restart.
+    // NOTE: do NOT kill the old session here — init.js may itself be running
+    // inside that session (as a subprocess of the current runtime), so
+    // tmux kill-session would silently fail or kill the parent process mid-run.
+    // The new activity-monitor kills the stale session on startup instead.
+    if (existingRuntime && existingRuntime !== selectedRuntime) {
+      try { fs.unlinkSync(path.join(ZYLOS_DIR, 'activity-monitor', 'agent-status.json')); } catch {}
+      try { fs.unlinkSync(path.join(ZYLOS_DIR, 'activity-monitor', 'heartbeat-pending.json')); } catch {}
+      try { fs.unlinkSync(path.join(ZYLOS_DIR, 'activity-monitor', 'codex-heartbeat-pending.json')); } catch {}
+    }
     if (!quiet) console.log(heading('Starting services...'));
     const servicesStarted = startCoreServices(opts.webPassword);
     if (servicesStarted > 0) {
@@ -2135,13 +2202,14 @@ export async function initCommand(args) {
       if (!quiet) console.log(`\n${dim('No services to start.')}`);
     }
 
-    if (claudeAuthenticated && !skipConfirm && needsBypassAcceptance()) {
+    if (selectedRuntime === 'claude' && claudeAuthenticated && !skipConfirm && needsBypassAcceptance()) {
       await guideBypassAcceptance();
     }
 
-    if (!claudeAuthenticated) {
+    if (selectedRuntime === 'codex' ? !codexAuthenticated : !claudeAuthenticated) {
       if (!quiet) {
-        console.log(`\n${warn('Claude Code is not authenticated.')}`);
+        const runtimeName = selectedRuntime === 'codex' ? 'Codex' : 'Claude Code';
+        console.log(`\n${warn(`${runtimeName} is not authenticated.`)}`);
         console.log(`  ${dim('Run "zylos init" again to authenticate.')}`);
       }
     }
@@ -2178,7 +2246,13 @@ export async function initCommand(args) {
     if (!quiet) console.log(`  ${success('Added ~/zylos/bin to PATH')}`);
   }
 
-  // Step 7: Deploy templates
+  // Persist runtime selection after successful install (guard: only on change)
+  if (!existingRuntime || existingRuntime !== selectedRuntime) {
+    updateZylosConfig({ runtime: selectedRuntime });
+  }
+
+  // Step 7: Run data migrations then deploy templates (both idempotent)
+  runMigrations();
   deployTemplates();
   if (!quiet) console.log(`  ${success('Templates deployed')}`);
 
@@ -2191,6 +2265,9 @@ export async function initCommand(args) {
   }
   if (pendingSetupToken) {
     saveSetupTokenToEnv(pendingSetupToken);
+  }
+  if (pendingCodexApiKey) {
+    saveCodexApiKeyToEnv(pendingCodexApiKey);
   }
 
   // Step 8: Configure timezone
@@ -2218,6 +2295,16 @@ export async function initCommand(args) {
     exitCode = exitCode || 2; // optional step failed — don't downgrade a fatal (1)
   }
 
+  // On runtime switch: clear stale health state before restart.
+  // NOTE: do NOT kill the old session here — init.js may run from inside the
+  // old session, and killing it would terminate this process before services start.
+  // The activity-monitor kills the stale session on startup instead.
+  if (existingRuntime && existingRuntime !== selectedRuntime) {
+    try { fs.unlinkSync(path.join(ZYLOS_DIR, 'activity-monitor', 'agent-status.json')); } catch {}
+    try { fs.unlinkSync(path.join(ZYLOS_DIR, 'activity-monitor', 'heartbeat-pending.json')); } catch {}
+    try { fs.unlinkSync(path.join(ZYLOS_DIR, 'activity-monitor', 'codex-heartbeat-pending.json')); } catch {}
+  }
+
   // Step 11: Start services
   if (!quiet) console.log(`\n${heading('Starting services...')}`);
   const servicesStarted = startCoreServices(opts.webPassword);
@@ -2226,8 +2313,8 @@ export async function initCommand(args) {
     setupPm2Startup();
   }
 
-  // First-time Claude bypass acceptance (only if authenticated, skip in non-interactive mode)
-  if (claudeAuthenticated && !skipConfirm && needsBypassAcceptance()) {
+  // First-time Claude bypass acceptance (only if Claude runtime and authenticated)
+  if (selectedRuntime === 'claude' && claudeAuthenticated && !skipConfirm && needsBypassAcceptance()) {
     await guideBypassAcceptance();
   }
 
@@ -2248,22 +2335,33 @@ export async function initCommand(args) {
   }
 
   if (!quiet) {
-    if (!claudeAuthenticated) {
+    const runtimeAuthOk = selectedRuntime === 'codex' ? codexAuthenticated : claudeAuthenticated;
+    if (!runtimeAuthOk) {
       // Yellow warning box — same treatment regardless of whether a credential
       // was attempted or not. Auth is required; Next steps without it is misleading.
-      const fixCmd = (opts.setupToken || opts.apiKey)
-        ? (opts.setupToken ? 'zylos init --setup-token <valid-token>' : 'zylos init --api-key <valid-key>')
-        : 'zylos init';
       console.log('');
       console.log(yellow('  ┌────────────────────────────────────────────────────────┐'));
       console.log(yellow('  │                                                        │'));
-      console.log(yellow('  │  ⚠  Claude is not authenticated                       │'));
-      console.log(yellow('  │                                                        │'));
-      console.log(yellow('  │  Zylos is installed, but Claude will not work until    │'));
-      console.log(yellow('  │  a valid credential is provided.                       │'));
-      console.log(yellow('  │                                                        │'));
-      console.log(yellow('  │  To fix:                                               │'));
-      console.log(yellow(`  │    ${fixCmd}${' '.repeat(Math.max(0, 52 - fixCmd.length))}│`));
+      if (selectedRuntime === 'codex') {
+        console.log(yellow('  │  ⚠  Codex is not authenticated                         │'));
+        console.log(yellow('  │                                                        │'));
+        console.log(yellow('  │  Zylos is installed, but Codex will not work until     │'));
+        console.log(yellow('  │  you authenticate by running "codex login".            │'));
+        console.log(yellow('  │                                                        │'));
+        console.log(yellow('  │  To fix:                                               │'));
+        console.log(yellow('  │    codex login                                         │'));
+      } else {
+        const fixCmd = (opts.setupToken || opts.apiKey)
+          ? (opts.setupToken ? 'zylos init --setup-token <valid-token>' : 'zylos init --api-key <valid-key>')
+          : 'zylos init';
+        console.log(yellow('  │  ⚠  Claude is not authenticated                       │'));
+        console.log(yellow('  │                                                        │'));
+        console.log(yellow('  │  Zylos is installed, but Claude will not work until    │'));
+        console.log(yellow('  │  a valid credential is provided.                       │'));
+        console.log(yellow('  │                                                        │'));
+        console.log(yellow('  │  To fix:                                               │'));
+        console.log(yellow(`  │    ${fixCmd}${' '.repeat(Math.max(0, 52 - fixCmd.length))}│`));
+      }
       console.log(yellow('  │                                                        │'));
       console.log(yellow('  └────────────────────────────────────────────────────────┘'));
       console.log('');

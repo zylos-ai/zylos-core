@@ -5,7 +5,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { SKILLS_DIR, COMPONENTS_DIR } from '../lib/config.js';
+import { ZYLOS_DIR, SKILLS_DIR, COMPONENTS_DIR, getZylosConfig } from '../lib/config.js';
 import { bold, dim, green, red, yellow, cyan, success, error, warn, heading } from '../lib/colors.js';
 import { loadRegistry } from '../lib/registry.js';
 import { loadComponents, saveComponents } from '../lib/components.js';
@@ -113,7 +113,7 @@ function formatC4Reply(type, data) {
       return r;
     }
     case 'self-upgrade': {
-      const { success, from, to, changelog, failedStep, error, rollback, migrationHints, mergeConflicts, mergedFiles } = data;
+      const { success, from, to, changelog, failedStep, error, rollback, migrationHints, mergeConflicts, mergedFiles, instructionFilesRebuilt } = data;
       if (!success) {
         let r = `zylos-core upgrade failed (step ${failedStep}): ${error}`;
         if (rollback?.performed) {
@@ -150,6 +150,9 @@ function formatC4Reply(type, data) {
           }
         }
         r += '\nPlease update hooks in ~/zylos/.claude/settings.json and restart Claude to apply.';
+      }
+      if (instructionFilesRebuilt) {
+        r += '\n\nInstruction files updated — Claude will restart automatically to load the new instructions. No action needed.';
       }
       return r;
     }
@@ -1082,6 +1085,20 @@ async function upgradeSelfCore({ providedTempDir, branch, mode = 'merge' } = {})
       }
       output.reply = formatC4Reply('self-upgrade', { ...result, changelog: coreChangelog });
       console.log(JSON.stringify(output, null, 2));
+      // Auto-restart when instruction files were rebuilt so the runtime reloads
+      // the new CLAUDE.md / AGENTS.md without prompting the user.
+      // /exit is a Claude Code slash command — only enqueue it for Claude runtime.
+      // For Codex, the guardian picks up the new AGENTS.md on next launch cycle.
+      if (result.success && result.instructionFilesRebuilt) {
+        try {
+          const activeRuntime = getZylosConfig().runtime ?? 'claude';
+          if (activeRuntime === 'claude') {
+            const c4ControlPath = path.join(ZYLOS_DIR, '.claude', 'skills', 'comm-bridge', 'scripts', 'c4-control.js');
+            const { spawnSync } = await import('child_process');
+            spawnSync('node', [c4ControlPath, 'enqueue', '--content', '/exit', '--priority', '1', '--require-idle'], { stdio: 'pipe' });
+          }
+        } catch { /* non-fatal */ }
+      }
     } else if (result.success) {
       console.log(`\n${success(`${bold('zylos-core')} upgraded: ${dim(result.from)} → ${bold(result.to)}`)}`);
       if (coreChangelog) {

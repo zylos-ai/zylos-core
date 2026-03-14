@@ -1,6 +1,14 @@
 #!/usr/bin/env node
 /**
- * Activity Monitor v20 - Guardian + Heartbeat v4 + Health Check + Daily Tasks + Upgrade Check + Usage Monitor
+ * Activity Monitor v21 - RuntimeAdapter (multi-runtime) + Guardian + Heartbeat v4 + Health Check + Daily Tasks + Upgrade Check + Usage Monitor
+ *
+ * v21 changes (multi-runtime support — #311):
+ *   - RuntimeAdapter abstraction: getActiveAdapter() reads runtime from config.json
+ *   - Replaced startClaude/killTmuxSession/isClaudeRunning/sendToTmux/isClaudeLoggedIn
+ *     with adapter.launch/stop/isRunning/sendMessage/checkAuth
+ *   - HeartbeatEngine deps now merged from adapter.getHeartbeatDeps() (probe) + fixed deps
+ *   - SESSION, CLAUDE_BIN, and all Claude-specific inline logic removed from this file
+ *   - monitorLoop is now async (await adapter.isRunning() each tick)
  *
  * v20 changes (behavioral rate limit detection — #256):
  *   - Rate-limit detection moved from proactive tmux scan to heartbeat failure callback
@@ -20,7 +28,7 @@
  *   - Infinite retries in recovering state (no max restart failures limit)
  *   - DOWN degradation: after 1 hour of continuous failure (configurable)
  *   - DOWN retry interval: 60 min (up from 30 min)
- *   - Process signal acceleration: claudeRunning false→true + 30s grace → immediate probe
+ *   - Process signal acceleration: agentRunning false→true + 30s grace → immediate probe
  *
  * v17 changes (plan usage monitoring — #206):
  *   - Add usage monitoring: periodically checks /usage via tmux capture during idle
@@ -72,17 +80,34 @@ import os from 'os';
 import { fileURLToPath } from 'url';
 import { HeartbeatEngine } from './heartbeat-engine.js';
 import { DailySchedule } from './daily-schedule.js';
+// activity-monitor runs as a deployed skill at ~/zylos/.claude/skills/activity-monitor/scripts/.
+// A relative import to cli/lib/runtime/ resolves correctly in the repo (dev) but NOT from
+// the deployed path — the CLI lives in the globally installed zylos npm package.
+// ZYLOS_PACKAGE_ROOT is set by the PM2 ecosystem config to the installed package root.
+// Dev fallback: 3 levels up from skills/activity-monitor/scripts/ = repo root (checked explicitly).
+const _runtimeIndexPath = (() => {
+  if (process.env.ZYLOS_PACKAGE_ROOT) {
+    return path.join(process.env.ZYLOS_PACKAGE_ROOT, 'cli', 'lib', 'runtime', 'index.js');
+  }
+  const devPath = path.resolve(
+    path.dirname(new URL(import.meta.url).pathname), '../../../cli/lib/runtime/index.js'
+  );
+  if (fs.existsSync(devPath)) return devPath;
+  throw new Error(
+    '[activity-monitor] Cannot locate cli/lib/runtime/index.js. ' +
+    'Ensure ZYLOS_PACKAGE_ROOT is set in the PM2 ecosystem config.'
+  );
+})();
+const { getActiveAdapter } = await import(_runtimeIndexPath);
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // Core runtime config
-const SESSION = 'claude-main';
 const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
 const MONITOR_DIR = path.join(ZYLOS_DIR, 'activity-monitor');
-const STATUS_FILE = path.join(MONITOR_DIR, 'claude-status.json');
+const STATUS_FILE = path.join(MONITOR_DIR, 'agent-status.json');
 const LOG_FILE = path.join(MONITOR_DIR, 'activity.log');
-const HEARTBEAT_PENDING_FILE = path.join(MONITOR_DIR, 'heartbeat-pending.json');
 const HEALTH_CHECK_STATE_FILE = path.join(MONITOR_DIR, 'health-check-state.json');
 const DAILY_UPGRADE_STATE_FILE = path.join(MONITOR_DIR, 'daily-upgrade-state.json');
 const DAILY_MEMORY_COMMIT_STATE_FILE = path.join(MONITOR_DIR, 'daily-memory-commit-state.json');
@@ -91,12 +116,6 @@ const PENDING_CHANNELS_FILE = path.join(MONITOR_DIR, 'pending-channels.jsonl');
 const USER_MESSAGE_SIGNAL_FILE = path.join(MONITOR_DIR, 'user-message-signal.json');
 const USAGE_STATE_FILE = path.join(MONITOR_DIR, 'usage.json');
 
-// Claude binary - uses bare command name (absolute path triggers Claude Code warning).
-// PATH is passed explicitly to tmux sessions via -e flag to avoid tmux server
-// env inheritance issues (tmux client-server architecture).
-const CLAUDE_BIN = process.env.CLAUDE_BIN || 'claude';
-const BYPASS_PERMISSIONS = process.env.CLAUDE_BYPASS_PERMISSIONS !== 'false';
-
 // API activity file — written by hook-activity.js (Claude Code hooks)
 const API_ACTIVITY_FILE = path.join(MONITOR_DIR, 'api-activity.json');
 const HOOK_STATE_FILE = path.join(MONITOR_DIR, 'hook-state.json');
@@ -104,33 +123,6 @@ const HOOK_STATE_FILE = path.join(MONITOR_DIR, 'hook-state.json');
 // Conversation directory - auto-detect based on working directory
 const ZYLOS_PATH = ZYLOS_DIR.replace(/\//g, '-');
 const CONV_DIR = path.join(os.homedir(), '.claude', 'projects', ZYLOS_PATH);
-
-// Environment variables to strip before starting Claude in tmux.
-// Claude Code sets these at runtime to mark "I'm running" — if PM2 captures them
-// (e.g., pm2 restart inside a Claude session), child processes inherit them and
-// Claude refuses to start, thinking it's already running.
-const CLAUDE_ENV_VARS_TO_STRIP = ['CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT'];
-const ENV_CLEAN_PREFIX = 'env ' + CLAUDE_ENV_VARS_TO_STRIP.map(v => `-u ${v}`).join(' ');
-
-// OAuth credentials file — supports automatic token refresh (unlike static .env tokens).
-const CREDENTIALS_FILE = path.join(os.homedir(), '.claude', '.credentials.json');
-
-/**
- * Check if ~/.claude/.credentials.json contains a valid OAuth refresh token.
- * When present, this file provides auto-refreshable credentials that should
- * take precedence over static CLAUDE_CODE_OAUTH_TOKEN from .env.
- */
-function hasCredentialsFile() {
-  try {
-    const data = JSON.parse(fs.readFileSync(CREDENTIALS_FILE, 'utf8'));
-    return !!(data.claudeAiOauth && data.claudeAiOauth.refreshToken);
-  } catch {
-    return false;
-  }
-}
-
-// Exit log — records Claude exit codes for post-mortem debugging
-const EXIT_LOG_FILE = path.join(MONITOR_DIR, 'claude-exit.log');
 
 // Activity monitor cadence
 const INTERVAL = 1000;
@@ -142,11 +134,9 @@ const BACKOFF_RESET_THRESHOLD = 60; // Claude must stay running this long before
 
 // Heartbeat liveness config (v3)
 const HEARTBEAT_INTERVAL = 7200;     // 2 hours (safety-net; stuck detection is the primary mechanism)
-const ACK_DEADLINE = 300;            // 5 min (regular heartbeat timeout)
-const STUCK_ACK_DEADLINE = 120;      // 2 min (stuck probe timeout)
 const DOWN_DEGRADE_THRESHOLD = 3600; // 1 hour of continuous failure → enter DOWN
 const DOWN_RETRY_INTERVAL = 3600;    // 60 min periodic retry in DOWN state
-const SIGNAL_GRACE_PERIOD = 30;      // Wait 30s after claudeRunning transitions before probing
+const SIGNAL_GRACE_PERIOD = 30;      // Wait 30s after agentRunning transitions before probing
 const RATE_LIMIT_DEFAULT_COOLDOWN = 3600;  // 1 hour default when reset time can't be parsed
 const USER_MESSAGE_RECOVERY_COOLDOWN = 60; // 1 min between user-message-triggered recoveries
 
@@ -200,7 +190,9 @@ let idleSince = 0;
 let lastStuckProbeAt = 0;
 let lastDeadApiPid = null;
 
-let engine; // initialized in init()
+let adapter;         // initialized in init() via getActiveAdapter()
+let engine;          // initialized in init()
+let contextMonitor;  // initialized in init() if adapter provides one (Codex only)
 
 // Usage monitoring state machine: 'idle' → 'sent' → 'waiting' → 'capture' → 'idle'
 let usageCheckPhase = 'idle';
@@ -284,67 +276,16 @@ const C4_SEND_PATH = resolveCommBridgeScript('c4-send.js');
 
 function tmuxHasSession() {
   try {
-    execSync(`tmux has-session -t "${SESSION}" 2>/dev/null`, { encoding: 'utf8' });
+    execSync(`tmux has-session -t "${adapter.sessionName}" 2>/dev/null`, { encoding: 'utf8' });
     return true;
   } catch {
     return false;
   }
 }
 
-function killTmuxSession() {
-  try {
-    execSync(`tmux kill-session -t "${SESSION}" 2>/dev/null`);
-    log('Heartbeat recovery: killed tmux session');
-  } catch {
-    log('Heartbeat recovery: tmux session kill skipped (already missing)');
-  }
-}
-
-function getTmuxPanePid() {
-  try {
-    return execSync(`tmux list-panes -t "${SESSION}" -F '#{pane_pid}' 2>/dev/null | head -1`, { encoding: 'utf8' }).trim();
-  } catch {
-    return null;
-  }
-}
-
-function isClaudeRunning() {
-  const panePid = getTmuxPanePid();
-  if (!panePid) return false;
-
-  try {
-    const procName = execSync(`ps -p ${panePid} -o comm= 2>/dev/null`, { encoding: 'utf8' }).trim();
-    if (procName === 'claude') return true;
-  } catch { }
-
-  try {
-    execSync(`pgrep -P ${panePid} -f "claude" > /dev/null 2>&1`);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function sendToTmux(text) {
-  const msgId = `${Date.now()}-${process.pid}`;
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'monitor-'));
-  const tempFile = path.join(tempDir, 'msg.txt');
-  const bufferName = `monitor-${msgId}`;
-
-  try {
-    fs.writeFileSync(tempFile, text);
-    execSync(`tmux load-buffer -b "${bufferName}" "${tempFile}" 2>/dev/null`);
-    execSync('sleep 0.1');
-    execSync(`tmux paste-buffer -b "${bufferName}" -t "${SESSION}" 2>/dev/null`);
-    execSync('sleep 0.2');
-    execSync(`tmux send-keys -t "${SESSION}" Enter 2>/dev/null`);
-    execSync(`tmux delete-buffer -b "${bufferName}" 2>/dev/null`);
-    fs.rmSync(tempDir, { recursive: true, force: true });
-  } catch {
-    // Best-effort.
-  }
-}
-
+// TODO: Add Codex-specific maintenance process detection when Codex maintenance
+// scripts exist (e.g. restart-codex, upgrade-codex). Currently only Claude
+// maintenance scripts are detected; Codex maintenance runs would not be guarded.
 function getRunningMaintenance() {
   try {
     execSync('pgrep -f "[r]estart-claude" > /dev/null 2>&1');
@@ -400,7 +341,9 @@ function waitForMaintenance() {
 // Startup prompt: prefer session start hook (session-start-prompt.js) which
 // injects directly into session context. Fall back to C4 control for existing
 // installations that haven't received the new hook via `zylos init`.
+// Non-Claude runtimes don't use Claude settings.json hooks — always fall back to C4.
 function hasStartupHook() {
+  if (adapter.runtimeId !== 'claude') return false;
   try {
     const settingsPath = path.join(ZYLOS_DIR, '.claude', 'settings.json');
     const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
@@ -435,243 +378,45 @@ function enqueueStartupControl() {
   }
 }
 
-function isClaudeLoggedIn() {
-  // Prefer credentials.json — supports automatic token refresh
-  if (hasCredentialsFile()) return true;
-
-  // Check for setup token or API key in .env (single read)
-  try {
-    const envContent = fs.readFileSync(path.join(ZYLOS_DIR, '.env'), 'utf8');
-    const oauthMatch = envContent.match(/^CLAUDE_CODE_OAUTH_TOKEN=(.+)$/m);
-    if (oauthMatch && oauthMatch[1].trim().startsWith('sk-ant-oat')) return true;
-    const apiMatch = envContent.match(/^ANTHROPIC_API_KEY=(.+)$/m);
-    if (apiMatch && apiMatch[1].trim().startsWith('sk-ant-')) return true;
-  } catch {}
-
-  // Fall back to OAuth login check
-  try {
-    const output = execFileSync(CLAUDE_BIN, ['auth', 'status'], {
-      encoding: 'utf8',
-      timeout: 10000,
-      stdio: ['ignore', 'pipe', 'pipe']
-    });
-    const status = JSON.parse(output);
-    return status?.loggedIn === true;
-  } catch {
-    return false;
-  }
-}
-
 /**
- * Ensure ~/.claude.json has onboarding and workspace trust pre-accepted.
- * Without this, Claude shows interactive onboarding/login/trust prompts
- * in the tmux session, blocking automated startup.
- * Must be called for ALL auth methods, not just API key.
+ * Start the active runtime agent.
+ * Clears stale state files, delegates launch to the RuntimeAdapter,
+ * then enqueues the startup control prompt if no session-start hook is installed.
  */
-function ensureOnboardingComplete() {
-  // 1. ~/.claude.json — onboarding, trust, effort callout
-  const claudeJsonPath = path.join(os.homedir(), '.claude.json');
-  try {
-    let config = {};
-    try { config = JSON.parse(fs.readFileSync(claudeJsonPath, 'utf8')); } catch {}
-    let changed = false;
-    if (!config.hasCompletedOnboarding) {
-      config.hasCompletedOnboarding = true;
-      try {
-        const ver = execFileSync(CLAUDE_BIN, ['--version'], { encoding: 'utf8', timeout: 5000 }).trim();
-        config.lastOnboardingVersion = ver;
-      } catch {
-        config.lastOnboardingVersion = '2.1.59';
-      }
-      changed = true;
-    }
-    if (!config.effortCalloutDismissed) {
-      config.effortCalloutDismissed = true;
-      changed = true;
-    }
-    // Pre-accept workspace trust dialog for the zylos project directory
-    if (!config.projects) config.projects = {};
-    const projectPath = path.resolve(ZYLOS_DIR);
-    if (!config.projects[projectPath]) config.projects[projectPath] = {};
-    if (!config.projects[projectPath].hasTrustDialogAccepted) {
-      config.projects[projectPath].hasTrustDialogAccepted = true;
-      config.projects[projectPath].hasCompletedProjectOnboarding = true;
-      changed = true;
-    }
-    if (changed) {
-      fs.writeFileSync(claudeJsonPath, JSON.stringify(config, null, 2) + '\n');
-      log(`Guardian: Updated ~/.claude.json (onboarding + trust + effort)`);
-    }
-  } catch (err) {
-    log(`Guardian: Failed to update ~/.claude.json: ${err.message}`);
-  }
-
-  // 2. ~/.claude/settings.json — bypass permissions prompt
-  const settingsDir = path.join(os.homedir(), '.claude');
-  const settingsPath = path.join(settingsDir, 'settings.json');
-  try {
-    let settings = {};
-    try { settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8')); } catch {}
-    if (!settings.skipDangerousModePermissionPrompt) {
-      fs.mkdirSync(settingsDir, { recursive: true });
-      settings.skipDangerousModePermissionPrompt = true;
-      fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n');
-      log(`Guardian: Updated ~/.claude/settings.json (skipDangerousModePermissionPrompt)`);
-    }
-  } catch (err) {
-    log(`Guardian: Failed to update ~/.claude/settings.json: ${err.message}`);
-  }
-}
-
-/**
- * Pre-approve an API key in ~/.claude.json so Claude Code skips
- * the interactive "Detected a custom API key" confirmation prompt.
- */
-function approveApiKey(apiKey) {
-  const claudeJsonPath = path.join(os.homedir(), '.claude.json');
-  try {
-    let config = {};
-    try { config = JSON.parse(fs.readFileSync(claudeJsonPath, 'utf8')); } catch {}
-    if (!config.customApiKeyResponses) config.customApiKeyResponses = { approved: [], rejected: [] };
-    if (!config.customApiKeyResponses.approved) config.customApiKeyResponses.approved = [];
-    const keySuffix = apiKey.slice(-20);
-    if (!config.customApiKeyResponses.approved.includes(keySuffix)) {
-      config.customApiKeyResponses.approved.push(keySuffix);
-      fs.writeFileSync(claudeJsonPath, JSON.stringify(config, null, 2) + '\n');
-      log(`Guardian: Pre-approved API key in ~/.claude.json`);
-    }
-  } catch (err) {
-    log(`Guardian: Failed to update ~/.claude.json: ${err.message}`);
-  }
-}
-
-function startClaude() {
-  // Detect native `claude login` auth (credentials.json on Linux, system Keychain
-  // on macOS).  When native auth is active, .env tokens MUST NOT be injected into
-  // tmux — Claude CLI errors with "Auth conflict" if it sees both a native login
-  // and ANTHROPIC_API_KEY / CLAUDE_CODE_OAUTH_TOKEN in the environment.
-  const useCredentialsFile = hasCredentialsFile();
-  let hasNativeAuth = useCredentialsFile;
-  let authStatusLoggedIn = false;
-  if (!hasNativeAuth) {
-    try {
-      const output = execFileSync(CLAUDE_BIN, ['auth', 'status'], {
-        encoding: 'utf8', timeout: 10000, stdio: ['ignore', 'pipe', 'pipe']
-      });
-      const status = JSON.parse(output);
-      authStatusLoggedIn = status?.loggedIn === true;
-      hasNativeAuth = authStatusLoggedIn && status?.authMethod === 'claude.ai';
-    } catch (e) {
-      log(`Guardian: claude auth status check failed: ${e.message}`);
-    }
-  }
-
-  // Use cached auth status to avoid a redundant `claude auth status` subprocess
-  // inside isClaudeLoggedIn() — the same command was already run above.
-  if (!hasNativeAuth && !authStatusLoggedIn && !isClaudeLoggedIn()) {
-    log('Guardian: Claude is not logged in, skipping startup');
-    return;
-  }
-
+async function startAgent() {
   if (isMaintenanceRunning()) {
     log('Guardian: Maintenance script detected, waiting for completion...');
     waitForMaintenance();
   }
 
-  log('Guardian: Starting Claude Code...');
+  // Skip startup if not authenticated — avoids interactive login prompts in tmux
+  const authResult = adapter.checkAuth ? await adapter.checkAuth() : { ok: true };
+  if (!authResult.ok) {
+    log(`Guardian: ${adapter.displayName} not authenticated (${authResult.reason ?? 'unknown'}), skipping startup`);
+    return;
+  }
 
-  try {
-    fs.unlinkSync('/tmp/context-alert-cooldown');
-  } catch { }
-  try {
-    fs.unlinkSync('/tmp/context-compact-scheduled');
-  } catch { }
+  log(`Guardian: Starting ${adapter.displayName}...`);
 
-  // Reset hook activity state — prevents stale data from a crashed session
-  // causing false busy detection after restart.
+  // Clear stale context temp files from a previous session
+  try { fs.unlinkSync('/tmp/context-alert-cooldown'); } catch { }
+  try { fs.unlinkSync('/tmp/context-compact-scheduled'); } catch { }
+
+  // Reset hook activity state — prevents stale data causing false busy detection
   try {
     fs.writeFileSync(API_ACTIVITY_FILE, JSON.stringify({ version: 2, active: false, active_tools: 0, updated_at: Date.now() }));
     fs.writeFileSync(HOOK_STATE_FILE, JSON.stringify({ active_tools: 0 }));
   } catch { }
 
-  const bypassFlag = BYPASS_PERMISSIONS ? ' --dangerously-skip-permissions' : '';
-  // When native auth is active, strip .env tokens from the environment to prevent
-  // "Auth conflict" errors. This covers the sendToTmux path where the existing tmux
-  // session may have tokens from a previous new-session -e injection.
-  const envStripFlags = hasNativeAuth
-    ? ' -u CLAUDE_CODE_OAUTH_TOKEN -u ANTHROPIC_API_KEY'
-    : '';
-  const claudeCmd = `${ENV_CLEAN_PREFIX}${envStripFlags} ${CLAUDE_BIN}${bypassFlag}`;
-  const exitLogSnippet = `_ec=$?; echo "[$(date -Iseconds)] exit_code=$_ec" >> ${EXIT_LOG_FILE}`;
+  // Fire-and-forget: launch() is intentionally not awaited. The monitor loop
+  // must not block for the full startup duration (several seconds for the agent
+  // to become interactive). startupGrace prevents re-entry for the next 30 ticks.
+  adapter.launch().catch(err => {
+    log(`Guardian: Failed to start ${adapter.displayName}: ${err.message}`);
+  });
 
-  // Read auth credentials from .env — only when there is no native `claude login`.
-  // Native auth takes priority; injecting .env tokens alongside it causes conflicts.
-  let apiKeyValue = '';
-  let oauthTokenValue = '';
-  if (!hasNativeAuth) {
-    try {
-      const envContent = fs.readFileSync(path.join(ZYLOS_DIR, '.env'), 'utf8');
-      const apiMatch = envContent.match(/^ANTHROPIC_API_KEY=(.+)$/m);
-      if (apiMatch) apiKeyValue = apiMatch[1].trim();
-      const oauthMatch = envContent.match(/^CLAUDE_CODE_OAUTH_TOKEN=(.+)$/m);
-      if (oauthMatch) oauthTokenValue = oauthMatch[1].trim();
-    } catch {}
-  }
-
-  if (hasNativeAuth) {
-    log(`Guardian: Using native claude login auth${useCredentialsFile ? ' (credentials.json)' : ' (system keychain)'} — skipping .env tokens`);
-  }
-
-  // Pre-accept onboarding + trust dialogs for ALL auth methods — without this,
-  // Claude shows interactive prompts in tmux and blocks automated startup.
-  ensureOnboardingComplete();
-  if (apiKeyValue) approveApiKey(apiKeyValue);
-  if (oauthTokenValue) approveApiKey(oauthTokenValue);
-
-  if (tmuxHasSession()) {
-    sendToTmux(`cd ${ZYLOS_DIR}; ${claudeCmd}; ${exitLogSnippet}`);
-    log('Guardian: Started Claude in existing tmux session');
-  } else {
-    try {
-      // Create tmux session without secrets in the command line.
-      // Uses execFileSync (no shell) to prevent shell injection, and injects
-      // secrets via a temp env file to avoid exposure in ps/proc/cmdline.
-      const tmuxArgs = ['new-session', '-d', '-s', SESSION, '-e', `PATH=${process.env.PATH}`];
-      if (process.getuid?.() === 0) tmuxArgs.push('-e', 'IS_SANDBOX=1');
-
-      // Write secrets to a temp file, source it in the shell command, then delete it
-      const envParts = [];
-      if (apiKeyValue) envParts.push(`ANTHROPIC_API_KEY='${apiKeyValue}'`);
-      if (oauthTokenValue) envParts.push(`CLAUDE_CODE_OAUTH_TOKEN='${oauthTokenValue}'`);
-
-      let shellCmd;
-      let tmpEnv = null;
-      if (envParts.length > 0) {
-        tmpEnv = path.join(os.tmpdir(), `.zylos-env-${process.pid}-${Date.now()}`);
-        fs.writeFileSync(tmpEnv, envParts.join('\n') + '\n', { mode: 0o600 });
-        shellCmd = `set -a; . "${tmpEnv}"; set +a; rm -f "${tmpEnv}"; cd ${ZYLOS_DIR} && ${claudeCmd}; ${exitLogSnippet}`;
-      } else {
-        shellCmd = `cd ${ZYLOS_DIR} && ${claudeCmd}; ${exitLogSnippet}`;
-      }
-      tmuxArgs.push('--', shellCmd);
-      try {
-        execFileSync('tmux', tmuxArgs);
-      } catch (e) {
-        if (tmpEnv) try { fs.unlinkSync(tmpEnv); } catch {}
-        throw e;
-      }
-      // Configure status bar with detach hint
-      try {
-        execSync(`tmux set-option -t "${SESSION}" status-right " Ctrl+B d = detach " 2>/dev/null`);
-        execSync(`tmux set-option -t "${SESSION}" status-right-style "fg=black,bg=yellow" 2>/dev/null`);
-      } catch {}
-      log('Guardian: Created new tmux session and started Claude');
-    } catch (err) {
-      log(`Guardian: Failed to create tmux session: ${err.message}`);
-    }
-  }
-
-  // Use session start hook if available, otherwise fall back to C4 control
+  // Enqueue startup prompt (fires with --available-in 3 delay — no need to
+  // wait for launch to complete before enqueueing).
   if (!hasStartupHook()) {
     enqueueStartupControl();
   }
@@ -724,43 +469,11 @@ function getConversationFileModTime() {
 
 function getTmuxActivity() {
   try {
-    const output = execSync(`tmux list-windows -t "${SESSION}" -F '#{window_activity}' 2>/dev/null`, { encoding: 'utf8' });
+    const output = execSync(`tmux list-windows -t "${adapter.sessionName}" -F '#{window_activity}' 2>/dev/null`, { encoding: 'utf8' });
     return parseInt(output.trim(), 10);
   } catch {
     return null;
   }
-}
-
-function readHeartbeatPending() {
-  try {
-    if (!fs.existsSync(HEARTBEAT_PENDING_FILE)) return null;
-    const parsed = JSON.parse(fs.readFileSync(HEARTBEAT_PENDING_FILE, 'utf8'));
-    if (parsed && Number.isInteger(parsed.control_id)) {
-      return parsed;
-    }
-  } catch (err) {
-    log(`Heartbeat: failed to read pending file (${err.message})`);
-  }
-  return null;
-}
-
-function writeHeartbeatPending(record) {
-  try {
-    if (!fs.existsSync(MONITOR_DIR)) {
-      fs.mkdirSync(MONITOR_DIR, { recursive: true });
-    }
-    fs.writeFileSync(HEARTBEAT_PENDING_FILE, JSON.stringify(record, null, 2));
-    return true;
-  } catch (err) {
-    log(`Failed to write heartbeat pending: ${err.message}`);
-    return false;
-  }
-}
-
-function clearHeartbeatPending() {
-  try {
-    fs.unlinkSync(HEARTBEAT_PENDING_FILE);
-  } catch { }
 }
 
 function runC4Control(args) {
@@ -804,60 +517,6 @@ function readApiActivity() {
   }
 }
 
-function enqueueHeartbeat(phase) {
-  const content = 'Heartbeat check.';
-  const deadline = phase === 'stuck' ? STUCK_ACK_DEADLINE : ACK_DEADLINE;
-  const result = runC4Control([
-    'enqueue',
-    '--content', content,
-    '--priority', '0',
-    '--bypass-state',
-    '--ack-deadline', String(deadline)
-  ]);
-
-  if (!result.ok) {
-    log(`Heartbeat enqueue failed (${phase}): ${result.output}`);
-    return false;
-  }
-
-  const match = result.output.match(/control\s+(\d+)/i);
-  if (!match) {
-    log(`Heartbeat enqueue parse failed (${phase}): ${result.output}`);
-    return false;
-  }
-
-  const controlId = parseInt(match[1], 10);
-  const written = writeHeartbeatPending({
-    control_id: controlId,
-    phase,
-    created_at: Math.floor(Date.now() / 1000)
-  });
-  if (!written) {
-    log(`Heartbeat enqueue succeeded but pending file write failed (${phase})`);
-    return false;
-  }
-  log(`Heartbeat enqueued id=${controlId} phase=${phase}`);
-  return true;
-}
-
-function getHeartbeatStatus(controlId) {
-  const result = runC4Control(['get', '--id', String(controlId)]);
-  if (!result.ok) {
-    if (result.output.toLowerCase().includes('not found')) {
-      return 'not_found';
-    }
-    log(`Heartbeat status query failed for ${controlId}: ${result.output}`);
-    return 'error';
-  }
-
-  const match = result.output.match(/status=([a-z_]+)/i);
-  if (!match) {
-    log(`Heartbeat status parse failed for ${controlId}: ${result.output}`);
-    return 'error';
-  }
-  return match[1].toLowerCase();
-}
-
 function sendRecoveryNotice(channel, endpoint) {
   try {
     execFileSync('node', [C4_SEND_PATH, channel, endpoint, 'Hey! I was temporarily unavailable but I\'m back online now. If you sent me something while I was away, could you send it again? Thanks!'], { stdio: 'pipe' });
@@ -865,6 +524,37 @@ function sendRecoveryNotice(channel, endpoint) {
   } catch (err) {
     log(`Recovery notice failed for ${channel}:${endpoint} (${err.message})`);
     return false;
+  }
+}
+
+/**
+ * Query the C4 database for the most recently active user channel.
+ * Returns { channel, endpoint } with the msg: component stripped so the
+ * result can be used for proactive (non-reply) sends.
+ *
+ * @returns {{ channel: string, endpoint: string } | null}
+ */
+async function getLastActiveChannel() {
+  try {
+    const dbPath = path.join(ZYLOS_DIR, 'comm-bridge', 'c4.db');
+    // Use better-sqlite3 (JS layer) — avoids dependency on the sqlite3 system CLI,
+    // which may be absent in some Docker environments.
+    const Database = (await import('better-sqlite3')).default;
+    const db = new Database(dbPath, { readonly: true });
+    try {
+      const row = db.prepare(
+        "SELECT channel, endpoint_id FROM conversations WHERE direction='in' ORDER BY id DESC LIMIT 1"
+      ).get();
+      if (!row) return null;
+      // Strip msg:... and req:... so we send a new standalone message, not a thread reply.
+      // Matches c4-receive.js normalisation: /\|(msg|req):[^|]+/g
+      const endpoint = row.endpoint_id.replace(/\|(msg|req):[^|]+/g, '');
+      return row.channel && endpoint ? { channel: row.channel, endpoint } : null;
+    } finally {
+      db.close();
+    }
+  } catch {
+    return null;
   }
 }
 
@@ -970,8 +660,8 @@ function enqueueHealthCheck() {
   return true;
 }
 
-function maybeEnqueueHealthCheck(claudeRunning, currentTime) {
-  if (!claudeRunning) return;
+function maybeEnqueueHealthCheck(agentRunning, currentTime) {
+  if (!agentRunning) return;
   if (engine.health !== 'ok') return;
 
   const state = loadHealthCheckState();
@@ -1009,6 +699,8 @@ function writeDailyUpgradeState(date) {
 }
 
 function enqueueDailyUpgradeControl() {
+  // Only applicable for Claude Code runtime — no equivalent upgrade skill for other runtimes.
+  if (adapter.runtimeId !== 'claude') return false;
   const content = 'Daily upgrade. Use the upgrade-claude skill to upgrade Claude Code to the latest version.';
   const result = runC4Control([
     'enqueue',
@@ -1145,82 +837,15 @@ function writeUsageState(data) {
 
 function captureTmuxPane() {
   try {
-    return execSync(`tmux capture-pane -t "${SESSION}" -p 2>/dev/null`, { encoding: 'utf8' });
+    return execSync(`tmux capture-pane -t "${adapter.sessionName}" -p 2>/dev/null`, { encoding: 'utf8' });
   } catch {
     return null;
   }
 }
 
-/**
- * Check tmux pane content for rate-limit signals.
- * Returns { detected: true, cooldownUntil, resetTime } or { detected: false }.
- */
-function detectRateLimit() {
-  const pane = captureTmuxPane();
-  if (!pane) return { detected: false };
-
-  // Match known rate-limit patterns from Claude Code's UI.
-  // These are specific UI prompts — generic "/rate limit/i" was removed because
-  // it false-positives when Claude discusses rate limiting in conversation.
-  const rateLimitPatterns = [
-    /out of extra usage/i,
-    /you['']re out of .* usage/i,
-    /usage limit reached/i,
-    /you['']ve hit your limit/i
-  ];
-
-  const detected = rateLimitPatterns.some(p => p.test(pane));
-  if (!detected) return { detected: false };
-
-  // Extract reset time if mentioned anywhere in the pane
-  let resetTime = '';
-  const timeMatch = pane.match(/resets?\s+(?:at\s+)?(\d{1,2}(?::\d{2})?\s*(?:am|pm))/i);
-  if (timeMatch) resetTime = timeMatch[1].trim();
-
-  // Calculate cooldownUntil from parsed reset time or use default
-  const now = Math.floor(Date.now() / 1000);
-  let cooldownUntil = now + RATE_LIMIT_DEFAULT_COOLDOWN;
-
-  if (resetTime) {
-    const parsed = parseResetTime(resetTime);
-    if (parsed > now) {
-      cooldownUntil = parsed;
-    }
-  }
-
-  return { detected: true, cooldownUntil, resetTime };
-}
-
-/**
- * Parse a time string like "7am", "7:30am", "3pm" into epoch seconds.
- * Assumes the reset time is in the local timezone and within the next 24 hours.
- */
-function parseResetTime(timeStr) {
-  const match = timeStr.match(/^(\d{1,2})(?::(\d{2}))?\s*(am|pm)$/i);
-  if (!match) return 0;
-
-  let hours = parseInt(match[1], 10);
-  const minutes = parseInt(match[2] || '0', 10);
-  const ampm = match[3].toLowerCase();
-
-  if (ampm === 'pm' && hours !== 12) hours += 12;
-  if (ampm === 'am' && hours === 12) hours = 0;
-
-  const now = new Date();
-  const target = new Date(now);
-  target.setHours(hours, minutes, 0, 0);
-
-  // If the target time is in the past, assume it's tomorrow
-  if (target <= now) {
-    target.setDate(target.getDate() + 1);
-  }
-
-  return Math.floor(target.getTime() / 1000);
-}
-
 function sendTmuxKeys(keys) {
   try {
-    execSync(`tmux send-keys -t "${SESSION}" ${keys} 2>/dev/null`);
+    execSync(`tmux send-keys -t "${adapter.sessionName}" ${keys} 2>/dev/null`);
   } catch { /* best-effort */ }
 }
 
@@ -1316,6 +941,9 @@ function sendUsageNotification(message) {
  * Only progresses when Claude is idle with no pending work.
  */
 function maybeCheckUsage(claudeState, idleSeconds, currentTime) {
+  // /usage is a Claude Code-only slash command — skip for other runtimes
+  if (adapter.runtimeId !== 'claude') return;
+
   // Abort in-progress check if Claude becomes busy (e.g., message arrived
   // during the wait window). The /usage UI may be overlaid or dismissed —
   // send Escape defensively to clean up, then reset.
@@ -1429,7 +1057,7 @@ function tierRank(tier) {
   return ranks[tier] ?? 0;
 }
 
-function monitorLoop() {
+async function monitorLoop() {
   const currentTime = Math.floor(Date.now() / 1000);
   const currentTimeHuman = new Date().toISOString().replace('T', ' ').substring(0, 19);
 
@@ -1466,8 +1094,8 @@ function monitorLoop() {
     const restartDelay = Math.min(BASE_RESTART_DELAY * Math.pow(2, consecutiveRestarts), MAX_RESTART_DELAY);
     if (engine.health !== 'rate_limited' && notRunningCount >= restartDelay) {
       consecutiveRestarts += 1;
-      log(`Guardian: Session not found for ${notRunningCount}s, starting Claude... (attempt ${consecutiveRestarts}, next delay ${Math.min(BASE_RESTART_DELAY * Math.pow(2, consecutiveRestarts), MAX_RESTART_DELAY)}s)`);
-      startClaude();
+      log(`Guardian: Session not found for ${notRunningCount}s, starting ${adapter.displayName}... (attempt ${consecutiveRestarts}, next delay ${Math.min(BASE_RESTART_DELAY * Math.pow(2, consecutiveRestarts), MAX_RESTART_DELAY)}s)`);
+      startAgent();
       startupGrace = 30;
       notRunningCount = 0;
     }
@@ -1480,7 +1108,13 @@ function monitorLoop() {
     return;
   }
 
-  if (!isClaudeRunning()) {
+  let agentRunning = false;
+  try {
+    agentRunning = await adapter.isRunning();
+  } catch (err) {
+    log(`Guardian: adapter.isRunning() threw: ${err.message}`);
+  }
+  if (!agentRunning) {
     if (startupGrace > 0) {
       startupGrace -= 1;
       engine.processHeartbeat(false, currentTime);
@@ -1498,19 +1132,19 @@ function monitorLoop() {
       last_check_human: currentTimeHuman,
       idle_seconds: 0,
       not_running_seconds: notRunningCount,
-      message: 'claude not running in tmux'
+      message: `${adapter.displayName} not running in tmux`
     });
 
     if (state !== lastState) {
-      log('State: STOPPED (claude not running in tmux session)');
+      log(`State: STOPPED (${adapter.displayName} not running in tmux session)`);
     }
 
     // Don't restart while rate-limited — restarting can't fix rate limits.
     const restartDelay = Math.min(BASE_RESTART_DELAY * Math.pow(2, consecutiveRestarts), MAX_RESTART_DELAY);
     if (engine.health !== 'rate_limited' && notRunningCount >= restartDelay) {
       consecutiveRestarts += 1;
-      log(`Guardian: Claude not running for ${notRunningCount}s, starting Claude... (attempt ${consecutiveRestarts}, next delay ${Math.min(BASE_RESTART_DELAY * Math.pow(2, consecutiveRestarts), MAX_RESTART_DELAY)}s)`);
-      startClaude();
+      log(`Guardian: Agent not running for ${notRunningCount}s, starting ${adapter.displayName}... (attempt ${consecutiveRestarts}, next delay ${Math.min(BASE_RESTART_DELAY * Math.pow(2, consecutiveRestarts), MAX_RESTART_DELAY)}s)`);
+      startAgent();
       startupGrace = 30;
       notRunningCount = 0;
     }
@@ -1537,7 +1171,7 @@ function monitorLoop() {
     }
   }
 
-  let activity = getConversationFileModTime();
+  let activity = adapter.runtimeId === 'claude' ? getConversationFileModTime() : null;
   let source = 'conv_file';
 
   if (!activity) {
@@ -1645,21 +1279,47 @@ function monitorLoop() {
   lastState = state;
 }
 
+/**
+ * Read core memory files and return a condensed snapshot string for injection
+ * into AGENTS.md on Codex session rotation. Gives the new session context from
+ * the previous session so autonomous work is not silently interrupted.
+ *
+ * @returns {string} Snapshot content, or empty string if memory dir is absent.
+ */
+function _readMemorySnapshot() {
+  const memDir = path.join(ZYLOS_DIR, 'memory');
+  const files = ['identity.md', 'state.md', 'references.md'];
+  const parts = [];
+  for (const file of files) {
+    try {
+      const content = fs.readFileSync(path.join(memDir, file), 'utf8').trim();
+      if (content) parts.push(`## ${file}\n\n${content}`);
+    } catch { /* file absent — skip */ }
+  }
+  return parts.length
+    ? `# Memory Snapshot (auto-injected on session rotation)\n\n${parts.join('\n\n')}`
+    : '';
+}
+
 function init() {
   if (!fs.existsSync(MONITOR_DIR)) {
     fs.mkdirSync(MONITOR_DIR, { recursive: true });
   }
+
+  // Load the active runtime adapter (claude or codex, from config.json)
+  adapter = getActiveAdapter();
+
   const initialStatus = loadInitialHealth();
   const initialHealth = initialStatus.health;
+
+  // Merge runtime-specific heartbeat deps (enqueueHeartbeat, getHeartbeatStatus,
+  // detectRateLimit, readHeartbeatPending, clearHeartbeatPending) from the adapter,
+  // with the remaining non-runtime deps (killTmuxSession, notifyPendingChannels, log).
   engine = new HeartbeatEngine({
-    enqueueHeartbeat,
-    getHeartbeatStatus,
-    readHeartbeatPending,
-    clearHeartbeatPending,
-    killTmuxSession,
+    ...(adapter.getHeartbeatDeps() ?? {}),
+    killTmuxSession: () => adapter.stop(),
     notifyPendingChannels,
     log,
-    detectRateLimit
   }, {
     initialHealth,
     heartbeatInterval: HEARTBEAT_INTERVAL,
@@ -1719,13 +1379,84 @@ function init() {
   const usageState = loadUsageState();
   lastUsageCheckAt = usageState?.lastCheckEpoch || Math.floor(Date.now() / 1000);
 
-  if (initialHealth !== 'ok') {
-    log(`Startup with health=${initialHealth}; will verify immediately when Claude is running`);
+  // Start context monitor if the adapter provides one (Codex polling-based monitor).
+  // Claude uses the statusLine hook instead — no adapter-provided monitor.
+  contextMonitor = adapter.getContextMonitor?.() ?? null;
+  if (contextMonitor) {
+    contextMonitor.startPolling({
+      intervalMs: 30_000,
+      onExceed: async ({ used, ceiling, ratio }) => {
+        const pct = Math.round(ratio * 100);
+        log(`Context at ${pct}% (${used}/${ceiling}), triggering session rotation`);
+        // Codex has no skill-invocation mechanism (no /clear equivalent).
+        // The activity monitor directly stops and relaunches to start a fresh session.
+        // Read core memory files first so the new session has continuity.
+        try {
+          const memorySnapshot = _readMemorySnapshot();
+
+          // Notify the last active channel before stopping — mirrors Claude's behaviour
+          // where the agent notifies users before initiating a context rotation.
+          // Done here (infrastructure level) rather than relying on the new session to
+          // self-report, which was unreliable in practice.
+          const lastChannel = await getLastActiveChannel();
+          if (lastChannel) {
+            try {
+              execFileSync('node', [C4_SEND_PATH, lastChannel.channel, lastChannel.endpoint,
+                '上下文快满了，正在切换新 session，记忆完整保留，稍等片刻…'], { stdio: 'pipe' });
+              log(`Rotation notice sent to ${lastChannel.channel}:${lastChannel.endpoint}`);
+            } catch (notifyErr) {
+              log(`Rotation notice failed (non-fatal): ${notifyErr.message}`);
+            }
+          }
+
+          // Reset guardian counters before stopping so the guardian does not
+          // treat the intentional stop as a crash and launch a second session
+          // while adapter.launch() is still starting the new one.
+          startupGrace = 30;
+          notRunningCount = 0;
+          adapter.stop();
+          await new Promise(r => setTimeout(r, 2000));
+          await adapter.launch({ memorySnapshot });
+          log(`Codex session rotated (context ${pct}% exceeded threshold)`);
+        } catch (err) {
+          log(`Codex session rotation failed: ${err.message}`);
+        }
+      }
+    });
+    log(`Context monitor started (${adapter.displayName})`);
   }
+
+  if (initialHealth !== 'ok') {
+    log(`Startup with health=${initialHealth}; will verify immediately when ${adapter.displayName} is running`);
+  }
+
+  // Startup cleanup: kill the other runtime's tmux session if it exists.
+  // Runs on every startup (not just runtime switches) — if the other session is
+  // absent (normal case) the kill fails silently. The 10 s delay gives a running
+  // agent time to finish its current response before being terminated.
+  const OTHER_SESSION = adapter.runtimeId === 'codex' ? 'claude-main' : 'codex-main';
+  setTimeout(() => {
+    try {
+      execSync(`tmux kill-session -t "${OTHER_SESSION}" 2>/dev/null`, { stdio: 'pipe' });
+      log(`Startup cleanup: killed stale ${OTHER_SESSION} session from previous runtime`);
+    } catch { /* session didn't exist — normal startup, no-op */ }
+  }, 10_000);
 }
 
-init();
-log(`=== Activity Monitor Started (v19 - Guardian + Heartbeat v4 + Hook Activity + DailyTasks + UpgradeCheck + UsageMonitor): ${new Date().toISOString()} tz=${timezone} ===`);
+try {
+  init();
+} catch (err) {
+  // init() failure (e.g. unknown runtime in config.json) must not crash the PM2 process
+  // into a tight restart loop. Log and exit cleanly so PM2 backs off via its restart policy.
+  console.error(`[activity-monitor] Fatal: init() failed: ${err.message}`);
+  process.exit(1);
+}
+log(`=== Activity Monitor Started (v21 - RuntimeAdapter: ${adapter.displayName} | Guardian + Heartbeat v4 + Hook Activity + DailyTasks + UpgradeCheck + UsageMonitor): ${new Date().toISOString()} tz=${timezone} ===`);
 
-setInterval(monitorLoop, INTERVAL);
-monitorLoop();
+// Use self-scheduling loop instead of setInterval to prevent concurrent
+// invocations: async monitorLoop + setInterval can overlap if isRunning()
+// takes >INTERVAL ms (e.g., under high system load), causing state variable races.
+(async function scheduleLoop() {
+  await monitorLoop().catch(err => log(`Monitor loop error: ${err.message}`));
+  setTimeout(scheduleLoop, INTERVAL);
+})();

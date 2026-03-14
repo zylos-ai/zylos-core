@@ -13,7 +13,7 @@ import {
   FILE_SIZE_THRESHOLD,
   ATTACHMENTS_DIR,
   CONTENT_PREVIEW_CHARS,
-  CLAUDE_STATUS_FILE,
+  AGENT_STATUS_FILE,
   PENDING_CHANNELS_FILE,
   USER_MESSAGE_SIGNAL_FILE,
   DATA_DIR
@@ -83,10 +83,10 @@ function parseArgs(args) {
 
 function readHealthStatus() {
   try {
-    if (!fs.existsSync(CLAUDE_STATUS_FILE)) {
+    if (!fs.existsSync(AGENT_STATUS_FILE)) {
       return { health: 'ok' };
     }
-    const status = JSON.parse(fs.readFileSync(CLAUDE_STATUS_FILE, 'utf8'));
+    const status = JSON.parse(fs.readFileSync(AGENT_STATUS_FILE, 'utf8'));
     if (status && typeof status.health === 'string') {
       return status;
     }

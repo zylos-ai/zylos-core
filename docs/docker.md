@@ -88,7 +88,7 @@ Running `zylos init` on every startup ensures that template files (skills, PM2 c
 
 ```
 docker container: zylos
-├── tmux session: claude-main       ← Claude Code AI loop
+├── tmux session: claude-main (or codex-main)  ← AI agent loop (runtime-dependent)
 └── PM2 services
     ├── scheduler                   ← cron / heartbeat
     ├── web-console                 ← browser UI (port 3456)
@@ -182,7 +182,7 @@ docker compose up -d
 
 ```bash
 # Check tmux session
-docker exec -it zylos tmux attach -t claude-main
+docker exec -it zylos tmux attach -t claude-main   # or codex-main for Codex runtime
 
 # Check Claude auth
 docker exec -it zylos claude auth status

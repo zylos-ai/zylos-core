@@ -53,7 +53,7 @@ describe('HeartbeatEngine', () => {
       assert.deepStrictEqual(calls.enqueueHeartbeat, []);
     });
 
-    it('does not enqueue when claude is not running', () => {
+    it('does not enqueue when agent is not running', () => {
       const { deps, calls } = createMockDeps();
       const engine = new HeartbeatEngine(deps, { heartbeatInterval: 7200 });
       const currentTime = Math.floor(Date.now() / 1000);
@@ -427,17 +427,17 @@ describe('HeartbeatEngine', () => {
   });
 
   describe('process signal acceleration', () => {
-    it('sends immediate probe after grace period when claudeRunning transitions false→true', () => {
+    it('sends immediate probe after grace period when agentRunning transitions false→true', () => {
       const { deps, calls } = createMockDeps();
       const engine = new HeartbeatEngine(deps, { initialHealth: 'recovering', signalGracePeriod: 30 });
       const now = Math.floor(Date.now() / 1000);
       engine.restartFailureCount = 3;
       engine.lastRecoveryAt = now; // just recovered, backoff would be 1500s
 
-      // First tick: claudeRunning = false (establishes baseline)
+      // First tick: agentRunning = false (establishes baseline)
       engine.processHeartbeat(false, now);
 
-      // Second tick: claudeRunning = true (transition detected)
+      // Second tick: agentRunning = true (transition detected)
       engine.processHeartbeat(true, now + 1);
       assert.ok(engine.signalDetectedAt > 0);
       // Should NOT have sent probe yet (grace period not elapsed)
@@ -616,7 +616,7 @@ describe('HeartbeatEngine', () => {
   });
 
   describe('recovering state', () => {
-    it('enqueues recovery heartbeat when claude is running (no prior failures)', () => {
+    it('enqueues recovery heartbeat when agent is running (no prior failures)', () => {
       const { deps, calls } = createMockDeps();
       const engine = new HeartbeatEngine(deps, { initialHealth: 'recovering' });
 
@@ -759,7 +759,7 @@ describe('HeartbeatEngine', () => {
       assert.ok(calls.log.some(m => m.includes('skipped in RATE_LIMITED')));
     });
 
-    it('does not enqueue heartbeat when claudeRunning is false and rate_limited', () => {
+    it('does not enqueue heartbeat when agentRunning is false and rate_limited', () => {
       const { deps, calls } = createMockDeps();
       const engine = new HeartbeatEngine(deps);
 

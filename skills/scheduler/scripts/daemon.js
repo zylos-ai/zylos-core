@@ -42,7 +42,7 @@ function getNextPendingTask() {
 }
 
 /**
- * Check if Claude runtime is alive
+ * Check if the active agent runtime is alive.
  * @returns {boolean} True if runtime is running (busy or idle state)
  */
 function isRuntimeAlive() {
@@ -188,7 +188,7 @@ async function mainLoop() {
       if (!isRuntimeAlive()) {
         const msNow = Date.now();
         if (msNow - lastOfflineLog >= OFFLINE_LOG_INTERVAL) {
-          console.log(`[${new Date().toISOString()}] Waiting for Claude runtime (offline or stopped)...`);
+          console.log(`[${new Date().toISOString()}] Waiting for agent runtime (offline or stopped)...`);
           lastOfflineLog = msNow;
         }
         await sleep(CHECK_INTERVAL);
@@ -197,7 +197,7 @@ async function mainLoop() {
 
       // Log transition from offline to online
       if (lastOfflineLog > 0) {
-        console.log(`[${new Date().toISOString()}] Claude runtime detected, scheduler active`);
+        console.log(`[${new Date().toISOString()}] Agent runtime detected, scheduler active`);
         lastOfflineLog = 0;
       }
 

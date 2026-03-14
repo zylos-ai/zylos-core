@@ -1,12 +1,12 @@
 ---
 name: activity-monitor
-description: Guardian service that monitors Claude's state and automatically restarts it if stopped. Use when checking Claude's liveness state or understanding the auto-restart mechanism.
+description: Guardian service that monitors the active runtime agent's state and automatically restarts it if stopped. Use when checking agent liveness state or understanding the auto-restart mechanism.
 user-invocable: false
 ---
 
 # Activity Monitor Skill
 
-PM2 guardian service that monitors Claude Code's activity state and ensures it's always running.
+PM2 guardian service that monitors the active runtime agent's (Claude or Codex) activity state and ensures it's always running.
 
 ## When to Use
 
@@ -14,14 +14,14 @@ This is a **PM2 service** (not directly invoked by Claude). It runs continuously
 
 ## What It Does
 
-1. **Activity Monitoring**: Tracks Claude's busy/idle state every second
-2. **Status File**: Writes `~/zylos/activity-monitor/claude-status.json` with current state (busy/idle, idle_seconds, health)
-3. **Guardian Mode**: Automatically restarts Claude if it stops or crashes
-4. **Maintenance Awareness**: Waits for restart/upgrade scripts to complete before starting Claude
-5. **Heartbeat Liveness Detection**: Periodically sends heartbeat probes via the C4 control queue to verify Claude is responsive, triggering recovery when probes fail
+1. **Activity Monitoring**: Tracks the agent's busy/idle state every second
+2. **Status File**: Writes `~/zylos/activity-monitor/agent-status.json` with current state (busy/idle, idle_seconds, health)
+3. **Guardian Mode**: Automatically restarts the agent if it stops or crashes
+4. **Maintenance Awareness**: Waits for restart/upgrade scripts to complete before starting the agent
+5. **Heartbeat Liveness Detection**: Periodically sends heartbeat probes via the C4 control queue to verify the agent is responsive, triggering recovery when probes fail
 6. **Health Check**: Periodically enqueues system health checks (PM2, disk, memory) via the C4 control queue
-7. **Daily Upgrade**: Enqueues a Claude Code upgrade via the C4 control queue at 5:00 AM local time daily
-8. **Context Monitoring**: Receives context usage data from Claude's statusLine after every turn; triggers new-session handoff when usage exceeds 70%
+7. **Daily Upgrade**: Enqueues a Claude Code upgrade via the C4 control queue at 5:00 AM local time daily (Claude runtime only)
+8. **Context Monitoring**: Receives context usage data after every turn; triggers new-session handoff when usage exceeds 70%
 
 ## Status File Format
 
@@ -61,7 +61,7 @@ pm2 list
 
 ## Guardian Behavior
 
-- **Detection**: Checks if Claude is running every second
+- **Detection**: Checks if the agent is running every second
 - **Restart Delay**: Waits 5 seconds of continuous "not running" before restarting
 - **Maintenance Wait**: Detects restart/upgrade scripts and waits for completion
 - **Recovery Prompt**: Sends catch-up message via C4 after restart
@@ -70,19 +70,19 @@ pm2 list
 
 1. **Monitor Loop** (every 1s):
    - Check if tmux session exists
-   - Check if Claude process is running
-   - Detect activity from conversation file modification time
+   - Check if agent process is running
+   - Detect activity (conversation file mtime for Claude; tmux activity for Codex)
    - Calculate idle/busy state
-   - Write status to ~/zylos/activity-monitor/claude-status.json
+   - Write status to ~/zylos/activity-monitor/agent-status.json
 
 2. **Guardian Logic**:
-   - If Claude not running for 5+ seconds → restart
+   - If agent not running for 5+ seconds → restart
    - Wait for maintenance scripts to complete
    - Send recovery prompt via C4 after successful restart
 
 3. **Activity Detection**:
-   - Primary: Conversation file modification time (reliable)
-   - Fallback: tmux window activity
+   - Claude primary: Conversation file modification time (reliable)
+   - Codex / fallback: tmux window activity
    - Threshold: 3 seconds without activity = idle
 
 ## Heartbeat Liveness Detection
@@ -135,7 +135,7 @@ The activity monitor periodically enqueues system health checks via the C4 contr
 - **Persisted state**: `~/zylos/activity-monitor/health-check-state.json` (survives restarts)
 - **Priority**: 3 (normal)
 - **Gated by health**: Only enqueued when `health === 'ok'`
-- **Gated by Claude**: Only enqueued when Claude process is running
+- **Gated by agent**: Only enqueued when the agent process is running
 
 The health check control message instructs Claude to:
 1. Check PM2 services via `pm2 jlist`
@@ -154,7 +154,7 @@ The activity monitor enqueues a daily Claude Code upgrade via the C4 control que
 - **Persisted state**: `~/zylos/activity-monitor/daily-upgrade-state.json` (tracks last upgrade date)
 - **Priority**: 3 (normal)
 - **Gated by health**: Only enqueued when `health === 'ok'`
-- **Gated by Claude**: Only enqueued when Claude process is running
+- **Gated by agent**: Only enqueued when the agent process is running (Claude runtime only)
 - **Once per day**: Checks local date to avoid duplicate enqueues
 
 The control message instructs Claude to use the `upgrade-claude` skill, which handles idle detection, `/exit`, upgrade, and automatic restart.

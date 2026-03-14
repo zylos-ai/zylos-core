@@ -35,12 +35,12 @@ describe('HeartbeatEngine — rate_limited recovery', () => {
     engine.enterRateLimited(1000, '10:00 AM');
     expect(engine.health).toBe('rate_limited');
 
-    // T=999: still in cooldown, claudeRunning=false
+    // T=999: still in cooldown, agentRunning=false
     engine.processHeartbeat(false, 999);
     expect(engine.health).toBe('rate_limited');
 
-    // T=1000: cooldown expired, claudeRunning=false
-    // Before fix: !claudeRunning early return caused deadlock
+    // T=1000: cooldown expired, agentRunning=false
+    // Before fix: !agentRunning early return caused deadlock
     // After fix: transitions to recovering
     engine.processHeartbeat(false, 1000);
     expect(engine.health).toBe('recovering');
@@ -152,7 +152,7 @@ describe('HeartbeatEngine — user message recovery across all states', () => {
     expect(engine.restartFailureCount).toBe(0);
     expect(engine.lastRecoveryAt).toBe(0);
 
-    // Next processHeartbeat with claudeRunning should immediately send recovery heartbeat
+    // Next processHeartbeat with agentRunning should immediately send recovery heartbeat
     phases.length = 0;
     engine.processHeartbeat(true, 5001);
     expect(phases).toContain('recovery');
@@ -258,16 +258,16 @@ describe('HeartbeatEngine — basic health transitions', () => {
     expect(engine.health).toBe('down');
   });
 
-  it('triggerRecovery from rate_limited increments failure count but does not change health', () => {
-    // triggerRecovery is not the recovery path for rate_limited — processHeartbeat
-    // handles the transition. triggerRecovery only sets health when called from 'ok'.
+  it('triggerRecovery from rate_limited is a no-op (health and failure count unchanged)', () => {
+    // triggerRecovery returns early in rate_limited state — the recovery path for
+    // rate_limited is processHeartbeat() once the cooldown expires, not triggerRecovery.
+    // So neither health nor restartFailureCount should change.
     const engine = new HeartbeatEngine(makeDeps());
     engine.enterRateLimited(9999);
 
     engine.triggerRecovery('external_trigger');
-    // Health stays rate_limited (setHealth only transitions from 'ok')
-    // but failure count increments — no crash, no deadlock
+    // Health stays rate_limited, failure count stays 0 (early return before increment)
     expect(engine.health).toBe('rate_limited');
-    expect(engine.restartFailureCount).toBe(1);
+    expect(engine.restartFailureCount).toBe(0);
   });
 });

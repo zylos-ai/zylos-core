@@ -10,10 +10,10 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
 const ZYLOS_DIR = process.env.ZYLOS_DIR || join(homedir(), 'zylos');
-const STATUS_FILE = join(ZYLOS_DIR, 'activity-monitor', 'claude-status.json');
+const STATUS_FILE = join(ZYLOS_DIR, 'activity-monitor', 'agent-status.json');
 
 /**
- * Read Claude status from ~/zylos/activity-monitor/claude-status.json
+ * Read agent status from ~/zylos/activity-monitor/agent-status.json
  * @returns {object|null} Status object or null if unavailable
  */
 export function readStatusFile() {

@@ -32,10 +32,12 @@ echo ""
 
 # ── Step 1: Validate auth ─────────────────────────────────────────────────────
 step 1 "Checking authentication..."
-if [ -z "${ANTHROPIC_API_KEY:-}" ] && [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
+# Accept Anthropic credentials (Claude runtime) OR OpenAI/Codex credentials (Codex runtime).
+if [ -z "${ANTHROPIC_API_KEY:-}" ] && [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] && \
+   [ -z "${OPENAI_API_KEY:-}" ] && [ -z "${CODEX_API_KEY:-}" ]; then
   # Check mounted .env as fallback
-  if ! grep -qE '^(ANTHROPIC_API_KEY|CLAUDE_CODE_OAUTH_TOKEN)=' "${ENV_FILE}" 2>/dev/null; then
-    error "No auth configured. Set ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN."
+  if ! grep -qE '^(ANTHROPIC_API_KEY|CLAUDE_CODE_OAUTH_TOKEN|OPENAI_API_KEY|CODEX_API_KEY)=' "${ENV_FILE}" 2>/dev/null; then
+    error "No auth configured. Set ANTHROPIC_API_KEY / CLAUDE_CODE_OAUTH_TOKEN (Claude) or OPENAI_API_KEY / CODEX_API_KEY (Codex)."
     exit 1
   fi
 fi
@@ -59,10 +61,24 @@ if [ -n "${AUTH_TOKEN}" ]; then
   fi
 fi
 
+# Detect runtime — if only Codex credentials are present (no Claude creds), default to codex.
+# ZYLOS_RUNTIME env var always wins when explicitly set.
+RUNTIME_FLAG=""
+if [ -z "${ZYLOS_RUNTIME:-}" ]; then
+  HAS_CLAUDE_AUTH=false
+  HAS_CODEX_AUTH=false
+  [ -n "${ANTHROPIC_API_KEY:-}" ] || [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] && HAS_CLAUDE_AUTH=true
+  [ -n "${OPENAI_API_KEY:-}" ] || [ -n "${CODEX_API_KEY:-}" ] && HAS_CODEX_AUTH=true
+  if [ "${HAS_CODEX_AUTH}" = true ] && [ "${HAS_CLAUDE_AUTH}" = false ]; then
+    RUNTIME_FLAG="--runtime codex"
+  fi
+fi
+
 # Build init flags
 INIT_ARGS="--yes --quiet"
 [ -n "${TZ:-}" ] && INIT_ARGS="${INIT_ARGS} --timezone ${TZ}"
 [ -n "${AUTH_FLAG}" ] && INIT_ARGS="${INIT_ARGS} ${AUTH_FLAG}"
+[ -n "${RUNTIME_FLAG}" ] && INIT_ARGS="${INIT_ARGS} ${RUNTIME_FLAG}"
 
 # shellcheck disable=SC2086
 if ! zylos init ${INIT_ARGS}; then
@@ -90,6 +106,12 @@ upsert_env "LARK_APP_ID" "${LARK_APP_ID:-}"
 upsert_env "LARK_APP_SECRET" "${LARK_APP_SECRET:-}"
 upsert_env "WEB_CONSOLE_BIND" "${WEB_CONSOLE_BIND:-0.0.0.0}"
 upsert_env "CLAUDE_BYPASS_PERMISSIONS" "${CLAUDE_BYPASS_PERMISSIONS:-true}"
+upsert_env "CODEX_BYPASS_PERMISSIONS" "${CODEX_BYPASS_PERMISSIONS:-true}"
+# Codex API credentials — persist to .env so the tmux session (which sources
+# .env) and PM2 services (which read .env via ecosystem config) can find them
+# on subsequent restarts without relying on Docker's environment re-injection.
+upsert_env "OPENAI_API_KEY" "${OPENAI_API_KEY:-}"
+upsert_env "CODEX_API_KEY" "${CODEX_API_KEY:-}"
 
 # Save current PATH so PM2 services can find claude and node
 upsert_env "SYSTEM_PATH" "${PATH}"
@@ -102,6 +124,7 @@ cleanup() {
   SHUTTING_DOWN=true
   info "Shutting down..."
   tmux kill-session -t claude-main 2>/dev/null || true
+  tmux kill-session -t codex-main 2>/dev/null || true
   pm2 kill 2>/dev/null || true
   # Kill the PM2 --no-daemon process directly in case pm2 kill didn't stop it
   [ -n "${PM2_PID:-}" ] && kill "${PM2_PID}" 2>/dev/null || true
@@ -118,22 +141,46 @@ PM2_PID=$!
 sleep 3
 ok "Services started"
 
-# ── Step 4: Start Claude Code in tmux ─────────────────────────────────────────
-step 4 "Starting Claude Code..."
-
-# Kill any stale session
-tmux kill-session -t claude-main 2>/dev/null || true
-
-# Build claude command
-CLAUDE_ARGS=""
-if [ "${CLAUDE_BYPASS_PERMISSIONS:-true}" = "true" ]; then
-  CLAUDE_ARGS="--dangerously-skip-permissions"
+# ── Step 4: Start the configured agent runtime in tmux ───────────────────────
+# Determine runtime: ZYLOS_RUNTIME env var always wins; fall back to config.json.
+if [ -z "${ZYLOS_RUNTIME:-}" ]; then
+  ZYLOS_RUNTIME=$(node -e "
+    try {
+      const c = JSON.parse(require('fs').readFileSync('${ZYLOS_DIR}/.zylos/config.json','utf8'));
+      process.stdout.write(c.runtime || 'claude');
+    } catch { process.stdout.write('claude'); }
+  " 2>/dev/null || echo "claude")
 fi
 
-tmux new-session -d -s claude-main -x 220 -y 50 \
-  "cd ${ZYLOS_DIR} && source ${ENV_FILE} 2>/dev/null; exec claude ${CLAUDE_ARGS}"
+step 4 "Starting ${ZYLOS_RUNTIME} agent..."
 
-ok "Claude Code session started"
+if [ "${ZYLOS_RUNTIME}" = "codex" ]; then
+  # Kill any stale Codex session
+  tmux kill-session -t codex-main 2>/dev/null || true
+
+  CODEX_ARGS=""
+  if [ "${CODEX_BYPASS_PERMISSIONS:-true}" = "true" ]; then
+    CODEX_ARGS="--dangerously-bypass-approvals-and-sandbox"
+  fi
+
+  tmux new-session -d -s codex-main -x 220 -y 50 \
+    "cd ${ZYLOS_DIR} && source ${ENV_FILE} 2>/dev/null; exec codex ${CODEX_ARGS}"
+
+  ok "Codex session started"
+else
+  # Kill any stale Claude session
+  tmux kill-session -t claude-main 2>/dev/null || true
+
+  CLAUDE_ARGS=""
+  if [ "${CLAUDE_BYPASS_PERMISSIONS:-true}" = "true" ]; then
+    CLAUDE_ARGS="--dangerously-skip-permissions"
+  fi
+
+  tmux new-session -d -s claude-main -x 220 -y 50 \
+    "cd ${ZYLOS_DIR} && source ${ENV_FILE} 2>/dev/null; exec claude ${CLAUDE_ARGS}"
+
+  ok "Claude Code session started"
+fi
 
 # ── All done ──────────────────────────────────────────────────────────────────
 echo ""

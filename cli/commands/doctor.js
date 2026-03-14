@@ -22,11 +22,23 @@ import { getCurrentVersion } from '../lib/self-upgrade.js';
 import { commandExists } from '../lib/shell-utils.js';
 import { parseSkillMd } from '../lib/skill.js';
 import { bold, dim, green, red, yellow, heading } from '../lib/colors.js';
+import { getActiveAdapter } from '../lib/runtime/index.js';
 
-const SESSION = 'claude-main';
+// Resolve active runtime session name and display name at startup.
+// Falls back to 'claude-main' / 'Claude' if config is missing or unknown runtime.
+let SESSION = 'claude-main';
+let AGENT_DISPLAY = 'Claude';
+let ACTIVE_RUNTIME = 'claude';
+let _activeAdapter = null;
+try {
+  _activeAdapter = getActiveAdapter();
+  SESSION = _activeAdapter.sessionName;
+  AGENT_DISPLAY = _activeAdapter.displayName;
+  ACTIVE_RUNTIME = _activeAdapter.config?.runtime ?? 'claude';
+} catch { /* config.json absent or unknown runtime — use Claude defaults */ }
 const LOG_DIR = path.join(ZYLOS_DIR, 'logs');
 const LOG_FILE = path.join(LOG_DIR, 'doctor.log');
-const API_HOST = 'api.anthropic.com';
+const API_HOST = ACTIVE_RUNTIME === 'codex' ? 'api.openai.com' : 'api.anthropic.com';
 const VERSION_CHECK_CONCURRENCY = 3;
 const CLAUDE_FIX_TIMEOUT = 300000; // 5 minutes
 
@@ -217,6 +229,17 @@ function checkClaudeAuth() {
   }
 }
 
+function checkCodexCli() {
+  if (!commandExists('codex')) return { installed: false };
+  let version = 'unknown';
+  try {
+    version = execFileSync('codex', ['--version'], {
+      encoding: 'utf8', timeout: 10000, stdio: ['pipe', 'pipe', 'pipe'],
+    }).trim().split('\n')[0];
+  } catch {}
+  return { installed: true, version };
+}
+
 function checkAutonomousMode() {
   try {
     const settingsPath = path.join(os.homedir(), '.claude', 'settings.json');
@@ -266,10 +289,19 @@ async function collectDiagnostics(env) {
   const pm2 = checkPm2Installed();
   const net = await networkPromise;
 
-  const cli = checkClaudeCli();
-  // auth check may contact the API — skip when network is down
-  const auth = cli.installed && net.reachable ? checkClaudeAuth() : false;
-  const autonomous = cli.installed ? checkAutonomousMode() : false;
+  // Runtime-specific CLI/auth checks.
+  // Both runtimes use adapter.checkAuth() for consistency with the running process.
+  let cli, auth, autonomous;
+  if (ACTIVE_RUNTIME !== 'codex') {
+    cli = checkClaudeCli();
+    auth = cli.installed ? (await _activeAdapter.checkAuth()).ok : false;
+    autonomous = cli.installed ? checkAutonomousMode() : false;
+  } else {
+    // Codex runtime — check Codex CLI and auth status.
+    cli = checkCodexCli();
+    auth = cli.installed ? (await _activeAdapter.checkAuth()).ok : false;
+    autonomous = true; // not applicable for Codex
+  }
 
   const services = pm2.installed
     ? checkPm2Services()
@@ -308,13 +340,15 @@ function buildDiagnosticJson(diag, coreVersion) {
     }
     issues.push({ id: 'network_unreachable', label: `Cannot reach ${API_HOST}`, hint });
   }
+  const runtimeLabel = ACTIVE_RUNTIME === 'codex' ? 'Codex' : 'Claude';
   if (!diag.ai.cli.installed) {
-    issues.push({ id: 'cli_missing', label: 'Claude CLI not installed', hint: 'Run zylos init' });
+    issues.push({ id: 'cli_missing', label: `${runtimeLabel} CLI not installed`, hint: 'Run zylos init' });
   }
   if (diag.ai.cli.installed && !diag.ai.networkSkipped && !diag.ai.auth) {
-    issues.push({ id: 'cli_not_authed', label: 'Claude not authorized', hint: 'Run zylos init to authenticate' });
+    const hint = ACTIVE_RUNTIME === 'codex' ? 'Run: codex login' : 'Run zylos init to authenticate';
+    issues.push({ id: 'cli_not_authed', label: `${runtimeLabel} not authorized`, hint });
   }
-  if (diag.ai.cli.installed && diag.ai.auth && !diag.ai.autonomous) {
+  if (ACTIVE_RUNTIME !== 'codex' && diag.ai.cli.installed && diag.ai.auth && !diag.ai.autonomous) {
     issues.push({ id: 'autonomous_off', label: 'Autonomous mode not accepted', hint: 'Set skipDangerousModePermissionPrompt in ~/.claude/settings.json' });
   }
   if (diag.system.pm2.installed) {
@@ -407,10 +441,11 @@ function displayAiGroup(diag, jsonGroup) {
   const checks = [];
   const { cli, auth, autonomous } = diag.ai;
 
+  const cliLabel = ACTIVE_RUNTIME === 'codex' ? 'Codex CLI' : 'Claude CLI';
   if (cli.installed) {
-    checks.push(`Claude CLI ${dim(cli.version)}`);
+    checks.push(`${cliLabel} ${dim(cli.version ?? '')}`);
   } else {
-    checks.push(red('Claude CLI not installed'));
+    checks.push(red(`${cliLabel} not installed`));
   }
 
   if (cli.installed) {
@@ -460,11 +495,11 @@ function displayServiceGroup(diag, jsonGroup) {
   }
 
   if (session) {
-    checks.push(`Claude session: ${green('active')}`);
+    checks.push(`${AGENT_DISPLAY} session: ${green('active')}`);
   } else if (activityMonitor) {
-    checks.push(yellow('Claude session: starting...'));
+    checks.push(yellow(`${AGENT_DISPLAY} session: starting...`));
   } else {
-    checks.push(dim('Claude session: waiting'));
+    checks.push(dim(`${AGENT_DISPLAY} session: waiting`));
   }
 
   displayCheckGroup('Services', jsonGroup.passed ? 'pass' : 'fail', checks);
@@ -570,6 +605,8 @@ function discoverChannels(pm2Procs, env, tmuxSession, components) {
 // ── Claude auto-fix (Layer 2) ────────────────────────────────────
 
 function isClaudeReady(diag) {
+  // Auto-fix via `claude -p` is only available when Claude is the active runtime.
+  if (ACTIVE_RUNTIME !== 'claude') return false;
   return diag.ai.cli.installed && diag.ai.auth && diag.ai.autonomous && diag.system.network.reachable;
 }
 

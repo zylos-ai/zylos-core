@@ -37,6 +37,36 @@ const ENHANCED_PATH = [
 
 // Whether Claude should run with --dangerously-skip-permissions
 const CLAUDE_BYPASS_PERMISSIONS = readEnvValue('CLAUDE_BYPASS_PERMISSIONS', 'true');
+// Whether Codex should run with --dangerously-bypass-approvals-and-sandbox
+const CODEX_BYPASS_PERMISSIONS = readEnvValue('CODEX_BYPASS_PERMISSIONS', 'true');
+
+// Codex API credentials — read from .env so CodexAdapter.checkAuth() (which
+// checks process.env) receives them when PM2 manages the activity-monitor.
+// Without this, checkAuth() always returns false for .env-only key deployments,
+// causing the guardian to skip Codex startup indefinitely.
+const OPENAI_API_KEY = readEnvValue('OPENAI_API_KEY', '');
+const CODEX_API_KEY = readEnvValue('CODEX_API_KEY', '');
+
+// Resolve the zylos package root so deployed skills can import CLI modules.
+// activity-monitor.js imports from cli/lib/runtime/, which is part of the
+// zylos npm package — not the skill's deployed directory.
+let ZYLOS_PACKAGE_ROOT = '';
+try {
+  const { execSync } = require('child_process');
+  const zylosBin = execSync(
+    'command -v zylos 2>/dev/null || true',
+    { encoding: 'utf8', env: { ...process.env, PATH: ENHANCED_PATH }, stdio: ['pipe', 'pipe', 'pipe'] }
+  ).trim();
+  if (zylosBin) {
+    // Follow symlinks: npm installs a wrapper in .bin/ pointing to the package main file
+    const realPath = fs.realpathSync(zylosBin);
+    // Installed path: <prefix>/lib/node_modules/zylos/cli/zylos.js → package root 2 dirs up
+    const candidate = path.dirname(path.dirname(realPath));
+    if (fs.existsSync(path.join(candidate, 'cli', 'lib', 'runtime', 'index.js'))) {
+      ZYLOS_PACKAGE_ROOT = candidate;
+    }
+  }
+} catch { /* ZYLOS_PACKAGE_ROOT stays empty — activity-monitor uses relative path fallback */ }
 
 module.exports = {
   apps: [
@@ -83,7 +113,11 @@ module.exports = {
       env: {
         PATH: ENHANCED_PATH,
         NODE_ENV: 'production',
-        CLAUDE_BYPASS_PERMISSIONS
+        CLAUDE_BYPASS_PERMISSIONS,
+        CODEX_BYPASS_PERMISSIONS,
+        ...(OPENAI_API_KEY ? { OPENAI_API_KEY } : {}),
+        ...(CODEX_API_KEY ? { CODEX_API_KEY } : {}),
+        ...(ZYLOS_PACKAGE_ROOT ? { ZYLOS_PACKAGE_ROOT } : {}),
       },
       autorestart: true,
       max_restarts: 10,

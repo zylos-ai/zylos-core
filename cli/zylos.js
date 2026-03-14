@@ -21,6 +21,7 @@ import { configCommand } from './commands/config.js';
 import { attachCommand } from './commands/attach.js';
 import { doctorCommand } from './commands/doctor.js';
 import { shellCommand } from './commands/shell.js';
+import { runtimeCommand } from './commands/runtime.js';
 
 const commands = {
   // Environment setup
@@ -29,6 +30,7 @@ const commands = {
   attach: attachCommand,
   doctor: doctorCommand,
   shell: shellCommand,
+  runtime: runtimeCommand,
   // Service management
   status: showStatus,
   logs: showLogs,
@@ -92,6 +94,8 @@ Setup:
   doctor              Diagnose and repair Zylos installation
                       --check   Diagnose only, no repairs
   shell               Interactive CLI mode (REPL)
+  runtime <name>      Switch agent runtime (claude|codex)
+  runtime status      Show currently configured runtime
 
 Service Management:
   status              Show system status
