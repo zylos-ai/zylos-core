@@ -216,7 +216,20 @@ export class CodexAdapter extends RuntimeAdapter {
       } catch { /* c4 context unavailable — continue without it */ }
 
       // c) Active trigger (mirrors session-start-prompt.js)
-      parts.push('reply to your human partner if they are waiting your reply, and continue your work if you have ongoing task according to the previous conversations.');
+      //    For fresh installs (onboarding pending), wait for user's first message —
+      //    do NOT run any "continue your work" tasks first, as that skips onboarding.
+      let activeTrigger;
+      try {
+        const statePath = path.join(ZYLOS_DIR, 'memory', 'state.md');
+        const stateContent = fs.readFileSync(statePath, 'utf8');
+        const onboardingPending = /^-\s+Status:\s+pending\b/m.test(stateContent);
+        activeTrigger = onboardingPending
+          ? 'Wait for the user\'s first message via C4 — onboarding is pending and must be completed first before any other work.'
+          : 'reply to your human partner if they are waiting your reply, and continue your work if you have ongoing task according to the previous conversations.';
+      } catch {
+        activeTrigger = 'reply to your human partner if they are waiting your reply, and continue your work if you have ongoing task according to the previous conversations.';
+      }
+      parts.push(activeTrigger);
 
       const combined = parts.join('\n\n');
       tmpPrompt = path.join(os.tmpdir(), `.zylos-prompt-${process.pid}-${Date.now()}`);
