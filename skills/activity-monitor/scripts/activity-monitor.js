@@ -118,7 +118,7 @@ const _runtimeIndexPath = (() => {
   // Handles the post-upgrade case where PM2 has a stale env (no ZYLOS_PACKAGE_ROOT)
   // because the old upgrade code restarted services before deploying the new ecosystem config.
   try {
-    const npmRoot = execSync('npm root -g', { encoding: 'utf8', stdio: 'pipe' }).trim();
+    const npmRoot = execSync('npm root -g', { encoding: 'utf8', stdio: 'pipe', timeout: 5000 }).trim();
     const fallbackPath = path.join(npmRoot, 'zylos', 'cli', 'lib', 'runtime', 'index.js');
     if (fs.existsSync(fallbackPath)) return fallbackPath;
   } catch { /* ignore — throw below */ }
@@ -359,7 +359,7 @@ function waitForMaintenance() {
       log(`Guardian: Still waiting for ${scriptName}... (${waited}s)`);
     }
 
-    execSync('sleep 1');
+    execSync('sleep 1', { timeout: 1500 });
     waited += 1;
   }
 
