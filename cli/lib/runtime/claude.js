@@ -105,9 +105,18 @@ export class ClaudeAdapter extends RuntimeAdapter {
       // JSON error body — regardless of whether it's an API key or OAuth token. This is
       // a structured field from the API, not free-form text, so it's stable across CLI versions.
       // Rate limits produce "rate_limit_error", server errors produce "api_error" — no overlap.
+      //
+      // "Not logged in" — Claude CLI has no credentials at all (no API key, no OAuth token).
+      // Observed output: "Not logged in · Please run /login". This is not a transient error
+      // and must not be treated as "uncertain" — returning ok:true here causes zylos status
+      // and zylos doctor to falsely report "authorized" on a fresh install where the user
+      // skipped authentication.
       const output = (err.stdout ?? '') + (err.stderr ?? '');
       if (output.includes('authentication_error')) {
         return { ok: false, reason: 'cli_probe_authentication_error' };
+      }
+      if (output.includes('Not logged in')) {
+        return { ok: false, reason: 'not_logged_in' };
       }
       // Uncertain outcome — proceed with restart rather than blocking on a transient error.
       return { ok: true, reason: `cli_probe_uncertain` };
