@@ -105,12 +105,30 @@ export class ClaudeAdapter extends RuntimeAdapter {
       // JSON error body — regardless of whether it's an API key or OAuth token. This is
       // a structured field from the API, not free-form text, so it's stable across CLI versions.
       // Rate limits produce "rate_limit_error", server errors produce "api_error" — no overlap.
+      //
+      // Any other non-zero exit (e.g. "Not logged in · Please run /login" when the user has
+      // no credentials) must not be treated as "uncertain" — returning ok:true would cause
+      // zylos status/doctor to falsely report "authorized" on a fresh install.
       const output = (err.stdout ?? '') + (err.stderr ?? '');
       if (output.includes('authentication_error')) {
         return { ok: false, reason: 'cli_probe_authentication_error' };
       }
-      // Uncertain outcome — proceed with restart rather than blocking on a transient error.
-      return { ok: true, reason: `cli_probe_uncertain` };
+      // Whitelist the known transient failures (network issues, rate limits, server errors,
+      // or process killed by the 20s timeout). Everything else — including any "not logged in"
+      // message regardless of exact wording — is treated as an auth failure.
+      // Using a whitelist instead of a blacklist makes this robust to future CLI version changes:
+      // any new auth error message will correctly fall through to ok:false.
+      const isTransient =
+        output.includes('rate_limit_error') ||
+        output.includes('api_error') ||
+        err.code === 'ETIMEDOUT' ||
+        err.code === 'ECONNREFUSED' ||
+        err.code === 'ENOTFOUND' ||
+        err.killed; // process killed by timeout
+      if (isTransient) {
+        return { ok: true, reason: 'cli_probe_uncertain' };
+      }
+      return { ok: false, reason: 'cli_probe_not_authenticated' };
     }
   }
 
