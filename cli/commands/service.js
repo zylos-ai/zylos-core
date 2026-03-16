@@ -163,6 +163,21 @@ export function showLogs(args) {
 export function startServices() {
   console.log(heading('Starting Zylos services...'));
 
+  // Prefer ecosystem.config.cjs — it has proper PATH, env vars, and component services.
+  const ecosystemPath = path.join(ZYLOS_DIR, 'pm2', 'ecosystem.config.cjs');
+  if (fs.existsSync(ecosystemPath)) {
+    try {
+      execSync(`pm2 start "${ecosystemPath}"`, { stdio: 'pipe' });
+      execSync('pm2 save 2>/dev/null', { stdio: 'pipe' });
+      console.log(`  ${success('Started services from ecosystem.config.cjs')}`);
+      console.log(`\n${green('Services started.')} Run ${dim('"zylos status"')} to check.`);
+      return;
+    } catch (e) {
+      console.log(`  ${warn('Ecosystem start failed, falling back to individual starts.')}`);
+    }
+  }
+
+  // Fallback: start core services individually (no ecosystem.config.cjs available)
   const services = [
     { name: 'activity-monitor', script: path.join(SKILLS_DIR, 'self-maintenance', 'activity-monitor.js') },
     { name: 'scheduler', script: path.join(SKILLS_DIR, 'scheduler', 'scheduler.js'), env: `NODE_ENV=production ZYLOS_DIR=${ZYLOS_DIR}` },
