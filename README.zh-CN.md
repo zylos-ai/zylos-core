@@ -85,7 +85,7 @@ curl -fsSL https://raw.githubusercontent.com/zylos-ai/zylos-core/main/scripts/in
 | `ZYLOS_RUNTIME` | `--runtime` |
 | `CLAUDE_CODE_OAUTH_TOKEN` | `--setup-token` |
 | `ANTHROPIC_API_KEY` | `--api-key` |
-| `OPENAI_API_KEY` | `--codex-api-key` |
+| `OPENAI_API_KEY` | `--codex-api-key`（存储在 `~/.codex/auth.json`，不在 `.env`） |
 | `ZYLOS_DOMAIN` | `--domain` |
 | `ZYLOS_PROTOCOL`（`https` 或 `http`） | `--https` / `--no-https` |
 | `ZYLOS_WEB_PASSWORD` | `--web-password` |

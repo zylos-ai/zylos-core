@@ -100,6 +100,8 @@ export class CodexAdapter extends RuntimeAdapter {
     }
 
     // auth_mode = "apikey" — live HTTP probe to OpenAI API.
+    // Guard against corrupted auth.json (mode set to "apikey" but key missing).
+    if (!apiKey) return { ok: false, reason: 'apikey_mode_but_no_key' };
     try {
       const res = await fetch('https://api.openai.com/v1/models', {
         headers: { Authorization: `Bearer ${apiKey}` },

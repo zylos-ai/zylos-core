@@ -37,7 +37,7 @@ Bot-owned accounts and identifiers. Sensitive values stored in .env.
 - GitHub: zylos-bot
 
 ### API Key References
-- OpenAI: key stored in .env as OPENAI_API_KEY
+- OpenAI: key stored in ~/.codex/auth.json (managed by Codex CLI, not .env)
 - Telegram Bot: token stored in .env as TELEGRAM_BOT_TOKEN
 
 ### Platform IDs

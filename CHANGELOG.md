@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - **OpenAI Codex runtime support**: run Zylos on Codex CLI instead of Claude Code. Switch anytime with `zylos runtime codex` — memory, skills, and channels are fully preserved across the switch (#311)
 - **`zylos runtime <name>` command**: switch AI runtime at any time without reinstalling. Handles install, auth, and tmux session management automatically
-- **`--runtime` and `--codex-api-key` install flags**: non-interactive Codex install support — `curl | bash -s -- --runtime codex --codex-api-key sk-xxx`. `ZYLOS_RUNTIME` and `OPENAI_API_KEY` env vars also supported
+- **`--runtime` and `--codex-api-key` install flags**: non-interactive Codex install support — `curl | bash -s -- --runtime codex --codex-api-key sk-xxx`. `ZYLOS_RUNTIME` and `OPENAI_API_KEY` env vars also supported (key is stored in `~/.codex/auth.json`, not `.env`)
 - **RuntimeAdapter abstraction**: `ClaudeAdapter` and `CodexAdapter` implement a shared interface — all core systems (heartbeat, context monitoring, guardian) are now runtime-agnostic
 - **Per-runtime instruction files**: `ZYLOS.md` (shared core) + `claude-addon.md` / `codex-addon.md` runtime addons, assembled into `CLAUDE.md` (Claude) or `AGENTS.md` (Codex) at setup time
 - **Codex skill discovery**: `.agents/skills/` symlink created at Codex launch so Codex discovers all installed skills natively via the Agent Skills spec

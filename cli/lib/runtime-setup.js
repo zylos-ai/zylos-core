@@ -74,10 +74,12 @@ export function isClaudeAuthenticated() {
 
 /**
  * Check if Codex CLI is authenticated.
- * Checks two paths in order:
+ * Checks three paths in order:
  *   1. Process env vars (OPENAI_API_KEY / CODEX_API_KEY) — set in-process by saveCodexApiKey()
  *      during the current init run
- *   2. `codex login status` — authoritative CLI check (covers auth.json apikey and chatgpt/OAuth)
+ *   2. ~/.codex/auth.json — direct read for auth_mode=apikey (avoids relying on `codex login status`
+ *      which may return non-zero for API-key-only auth on some Codex CLI versions)
+ *   3. `codex login status` — authoritative CLI check for OAuth/device auth (chatgpt auth_mode)
  * Note: does NOT read ~/zylos/.env — Codex CLI deliberately ignores env vars, so an API key
  * in .env has no meaning for Codex. Keys are stored in ~/.codex/auth.json (see saveCodexApiKey).
  * @returns {boolean}
@@ -85,7 +87,17 @@ export function isClaudeAuthenticated() {
 export function isCodexAuthenticated() {
   if (process.env.OPENAI_API_KEY || process.env.CODEX_API_KEY) return true;
 
-  // Use `codex login status` as the authoritative check (reads auth.json internally).
+  // Direct auth.json check — handles auth_mode=apikey without relying on CLI behavior.
+  try {
+    const authJson = JSON.parse(fs.readFileSync(
+      path.join(os.homedir(), '.codex', 'auth.json'), 'utf8'
+    ));
+    if (authJson?.auth_mode === 'apikey' && (authJson?.OPENAI_API_KEY || authJson?.apiKey)) {
+      return true;
+    }
+  } catch { /* auth.json absent or malformed — fall through */ }
+
+  // Use `codex login status` as the authoritative check for OAuth/device auth.
   try {
     const result = spawnSync('codex', ['login', 'status'], {
       stdio: 'pipe', encoding: 'utf8', timeout: 10000,

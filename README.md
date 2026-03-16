@@ -86,7 +86,7 @@ Flags can also be set via environment variables. Resolution order: CLI flag > en
 | `ZYLOS_RUNTIME` | `--runtime` |
 | `CLAUDE_CODE_OAUTH_TOKEN` | `--setup-token` |
 | `ANTHROPIC_API_KEY` | `--api-key` |
-| `OPENAI_API_KEY` | `--codex-api-key` |
+| `OPENAI_API_KEY` | `--codex-api-key` (stored in `~/.codex/auth.json`, not `.env`) |
 | `ZYLOS_DOMAIN` | `--domain` |
 | `ZYLOS_PROTOCOL` (`https` or `http`) | `--https` / `--no-https` |
 | `ZYLOS_WEB_PASSWORD` | `--web-password` |
