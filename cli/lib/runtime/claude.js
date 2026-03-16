@@ -62,15 +62,17 @@ export class ClaudeAdapter extends RuntimeAdapter {
   // ── Auth ──────────────────────────────────────────────────────────────────
 
   /**
-   * Live auth check: runs `claude -p ping --max-turns 1` with .env keys injected,
-   * mirroring the exact environment that launch() uses. Detects revoked/expired tokens
-   * that local file checks cannot catch.
+   * Live auth check. Two-stage:
+   *   1. `claude auth status` (fast, local, structured JSON) — detects missing/no credentials
+   *      without a network round-trip. Guards against `claude -p ping` exiting 0 with
+   *      "Not logged in" message (observed in Claude Code v2.1.76+).
+   *   2. `claude -p ping --max-turns 1` (live API probe) — detects revoked/expired tokens
+   *      that local file checks cannot catch.
    *
    * Return values:
    *   { ok: true }  — probe succeeded (exit 0) or outcome is uncertain (network error,
    *                   timeout, rate limit) — don't block restart in uncertain cases
-   *   { ok: false } — Anthropic API returned authentication_error (401 auth failure,
-   *                   covers both API key and OAuth token expiry)
+   *   { ok: false } — no credentials found, or Anthropic API returned authentication_error
    *
    * @returns {Promise<{ok: boolean, reason: string}>}
    */
@@ -88,14 +90,32 @@ export class ClaudeAdapter extends RuntimeAdapter {
     // Strip vars that would make Claude refuse to start ("already running" guard).
     for (const v of ENV_VARS_TO_STRIP) delete injectedEnv[v];
 
-    // Use async execFile — spawnSync would block the event loop for up to 20s,
+    // Stage 1: `claude auth status` — fast local check.
+    // Returns JSON { loggedIn: bool, authMethod, apiProvider }. Available since Claude Code v2+.
+    // If loggedIn is explicitly false, bail early — no point probing the API.
+    try {
+      const authOutput = execFileSync(CLAUDE_BIN, ['auth', 'status'], {
+        env: injectedEnv, stdio: 'pipe', encoding: 'utf8', timeout: 5000,
+      });
+      const authStatus = JSON.parse(authOutput);
+      if (authStatus?.loggedIn === false) {
+        return { ok: false, reason: 'auth_status_not_logged_in' };
+      }
+    } catch { /* auth status unavailable or failed — fall through to probe */ }
+
+    // Stage 2: Live probe — `claude -p ping --max-turns 1`.
+    // Use async execFile — spawnSync would block the event loop for up to 30s,
     // freezing the monitor's heartbeat state machine.
     try {
-      await execFileAsync(CLAUDE_BIN, ['-p', 'ping', '--max-turns', '1'], {
+      const { stdout } = await execFileAsync(CLAUDE_BIN, ['-p', 'ping', '--max-turns', '1'], {
         env: injectedEnv,
-        timeout: 20_000,
+        timeout: 30_000,
         encoding: 'utf8',
       });
+      // Safety net: some Claude versions exit 0 with "Not logged in" on stdout.
+      if (stdout.includes('Not logged in')) {
+        return { ok: false, reason: 'cli_probe_not_logged_in' };
+      }
       return { ok: true, reason: 'cli_probe' };
     } catch (err) {
       // execFile throws on non-zero exit; inspect output to distinguish auth failure
@@ -105,16 +125,12 @@ export class ClaudeAdapter extends RuntimeAdapter {
       // JSON error body — regardless of whether it's an API key or OAuth token. This is
       // a structured field from the API, not free-form text, so it's stable across CLI versions.
       // Rate limits produce "rate_limit_error", server errors produce "api_error" — no overlap.
-      //
-      // Any other non-zero exit (e.g. "Not logged in · Please run /login" when the user has
-      // no credentials) must not be treated as "uncertain" — returning ok:true would cause
-      // zylos status/doctor to falsely report "authorized" on a fresh install.
       const output = (err.stdout ?? '') + (err.stderr ?? '');
       if (output.includes('authentication_error')) {
         return { ok: false, reason: 'cli_probe_authentication_error' };
       }
       // Whitelist the known transient failures (network issues, rate limits, server errors,
-      // or process killed by the 20s timeout). Everything else — including any "not logged in"
+      // or process killed by the 30s timeout). Everything else — including any "not logged in"
       // message regardless of exact wording — is treated as an auth failure.
       // Using a whitelist instead of a blacklist makes this robust to future CLI version changes:
       // any new auth error message will correctly fall through to ok:false.
