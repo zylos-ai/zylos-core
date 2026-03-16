@@ -155,21 +155,22 @@ export function checkInputBox(capture) {
 }
 
 async function dismissGhostTextAndCapture() {
-  execFileSync('tmux', ['send-keys', '-t', TMUX_SESSION, 'Space'], { stdio: 'pipe' });
+  execFileSync('tmux', ['send-keys', '-t', TMUX_SESSION, 'Space'], { stdio: 'pipe', timeout: 5000 });
   await sleep(100);
 
   const capture = execFileSync('tmux', ['capture-pane', '-p', '-t', TMUX_SESSION], {
     encoding: 'utf8',
-    stdio: 'pipe'
+    stdio: 'pipe',
+    timeout: 5000
   });
 
-  execFileSync('tmux', ['send-keys', '-t', TMUX_SESSION, 'BSpace'], { stdio: 'pipe' });
+  execFileSync('tmux', ['send-keys', '-t', TMUX_SESSION, 'BSpace'], { stdio: 'pipe', timeout: 5000 });
   await sleep(100);
   return capture;
 }
 
 async function submitAndVerify() {
-  execFileSync('tmux', ['send-keys', '-t', TMUX_SESSION, 'Enter'], { stdio: 'pipe' });
+  execFileSync('tmux', ['send-keys', '-t', TMUX_SESSION, 'Enter'], { stdio: 'pipe', timeout: 5000 });
 
   for (let attempt = 0; attempt < ENTER_VERIFY_MAX_RETRIES; attempt++) {
     await sleep(ENTER_VERIFY_WAIT_MS);
@@ -187,7 +188,7 @@ async function submitAndVerify() {
     }
 
     log(`Enter verify attempt ${attempt + 1}: input box has content, retrying Enter`);
-    execFileSync('tmux', ['send-keys', '-t', TMUX_SESSION, 'Enter'], { stdio: 'pipe' });
+    execFileSync('tmux', ['send-keys', '-t', TMUX_SESSION, 'Enter'], { stdio: 'pipe', timeout: 5000 });
   }
 }
 
@@ -197,15 +198,15 @@ async function sendToTmux(message) {
   const delayMs = getDeliveryDelay(Buffer.byteLength(sanitized, 'utf8'));
 
   try {
-    execFileSync('tmux', ['set-buffer', '-b', bufferName, '--', sanitized], { stdio: 'pipe' });
-    execFileSync('tmux', ['paste-buffer', '-b', bufferName, '-t', TMUX_SESSION], { stdio: 'pipe' });
+    execFileSync('tmux', ['set-buffer', '-b', bufferName, '--', sanitized], { stdio: 'pipe', timeout: 5000 });
+    execFileSync('tmux', ['paste-buffer', '-b', bufferName, '-t', TMUX_SESSION], { stdio: 'pipe', timeout: 5000 });
   } catch (err) {
     log(`Error pasting to tmux: ${err.message}`);
     logDeliveryFailure('tmux_paste', 0, 'PASTE_ERROR', { error: err.message });
     return 'paste_error';
   } finally {
     try {
-      execFileSync('tmux', ['delete-buffer', '-b', bufferName], { stdio: 'pipe' });
+      execFileSync('tmux', ['delete-buffer', '-b', bufferName], { stdio: 'pipe', timeout: 5000 });
     } catch {
       // Ignore buffer deletion errors.
     }

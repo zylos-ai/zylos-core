@@ -1,6 +1,17 @@
 #!/usr/bin/env node
 /**
- * Activity Monitor v22 - RuntimeAdapter (multi-runtime) + Guardian + Heartbeat v4 + Health Check + Daily Tasks + Upgrade Check + Usage Monitor
+ * Activity Monitor v23 - RuntimeAdapter (multi-runtime) + Guardian + Heartbeat v4 + Health Check + Daily Tasks + Upgrade Check + Usage Monitor
+ *
+ * v23 changes (service recovery — execSync timeout hardening — #319):
+ *   - All execSync/execFileSync calls now have explicit timeouts to prevent
+ *     indefinite blocking of the monitor loop if a subprocess hangs
+ *   - tmux helpers (has-session, list-windows, capture-pane, send-keys, kill-session): 3000ms
+ *   - pgrep calls in getRunningMaintenance(): 500ms
+ *   - runC4Control() (node c4-control.js): 10000ms
+ *   - sendRecoveryNotice() and context rotation notify (node c4-send.js): 15000ms
+ *   - SQLite COUNT query in maybeCheckUsage(): 3000ms
+ *   - Replaced execSync('sleep 0.3') in /usage check with a state machine tick
+ *     (new 'pre_enter' phase) to eliminate synchronous blocking of the event loop
  *
  * v22 changes (service recovery — auth + periodic probe):
  *   - checkAuth() in ClaudeAdapter/CodexAdapter is now a live probe (CLI subprocess / HTTP)
@@ -107,7 +118,7 @@ const _runtimeIndexPath = (() => {
   // Handles the post-upgrade case where PM2 has a stale env (no ZYLOS_PACKAGE_ROOT)
   // because the old upgrade code restarted services before deploying the new ecosystem config.
   try {
-    const npmRoot = execSync('npm root -g', { encoding: 'utf8', stdio: 'pipe' }).trim();
+    const npmRoot = execSync('npm root -g', { encoding: 'utf8', stdio: 'pipe', timeout: 5000 }).trim();
     const fallbackPath = path.join(npmRoot, 'zylos', 'cli', 'lib', 'runtime', 'index.js');
     if (fs.existsSync(fallbackPath)) return fallbackPath;
   } catch { /* ignore — throw below */ }
@@ -268,14 +279,6 @@ function checkDailyTruncate() {
   }
 }
 
-function runCommand(cmd, silent = false) {
-  try {
-    return execSync(cmd, { encoding: 'utf8', stdio: silent ? 'pipe' : 'inherit' }).trim();
-  } catch {
-    return null;
-  }
-}
-
 function resolveCommBridgeScript(fileName) {
   const prodPath = path.join(ZYLOS_DIR, '.claude', 'skills', 'comm-bridge', 'scripts', fileName);
   if (fs.existsSync(prodPath)) {
@@ -295,7 +298,7 @@ const C4_SEND_PATH = resolveCommBridgeScript('c4-send.js');
 
 function tmuxHasSession() {
   try {
-    execSync(`tmux has-session -t "${adapter.sessionName}" 2>/dev/null`, { encoding: 'utf8' });
+    execSync(`tmux has-session -t "${adapter.sessionName}" 2>/dev/null`, { encoding: 'utf8', timeout: 3000 });
     return true;
   } catch {
     return false;
@@ -307,17 +310,17 @@ function tmuxHasSession() {
 // maintenance scripts are detected; Codex maintenance runs would not be guarded.
 function getRunningMaintenance() {
   try {
-    execSync('pgrep -f "[r]estart-claude" > /dev/null 2>&1');
+    execSync('pgrep -f "[r]estart-claude" > /dev/null 2>&1', { timeout: 500 });
     return 'restart-claude';
   } catch { }
 
   try {
-    execSync('pgrep -f "[u]pgrade-claude" > /dev/null 2>&1');
+    execSync('pgrep -f "[u]pgrade-claude" > /dev/null 2>&1', { timeout: 500 });
     return 'upgrade-claude';
   } catch { }
 
   try {
-    execSync('pgrep -f "[c]laude.ai/install.sh" > /dev/null 2>&1');
+    execSync('pgrep -f "[c]laude.ai/install.sh" > /dev/null 2>&1', { timeout: 500 });
     return 'upgrade (curl install.sh)';
   } catch { }
 
@@ -348,7 +351,7 @@ function waitForMaintenance() {
       log(`Guardian: Still waiting for ${scriptName}... (${waited}s)`);
     }
 
-    execSync('sleep 1');
+    execSync('sleep 1', { timeout: 1500 });
     waited += 1;
   }
 
@@ -512,7 +515,7 @@ function getConversationFileModTime() {
 
 function getTmuxActivity() {
   try {
-    const output = execSync(`tmux list-windows -t "${adapter.sessionName}" -F '#{window_activity}' 2>/dev/null`, { encoding: 'utf8' });
+    const output = execSync(`tmux list-windows -t "${adapter.sessionName}" -F '#{window_activity}' 2>/dev/null`, { encoding: 'utf8', timeout: 3000 });
     return parseInt(output.trim(), 10);
   } catch {
     return null;
@@ -521,7 +524,7 @@ function getTmuxActivity() {
 
 function runC4Control(args) {
   try {
-    const output = execFileSync('node', [C4_CONTROL_PATH, ...args], { encoding: 'utf8', stdio: 'pipe' }).trim();
+    const output = execFileSync('node', [C4_CONTROL_PATH, ...args], { encoding: 'utf8', stdio: 'pipe', timeout: 10000 }).trim();
     return { ok: true, output };
   } catch (err) {
     const stdout = err.stdout ? String(err.stdout).trim() : '';
@@ -562,7 +565,7 @@ function readApiActivity() {
 
 function sendRecoveryNotice(channel, endpoint) {
   try {
-    execFileSync('node', [C4_SEND_PATH, channel, endpoint, 'Hey! I was temporarily unavailable but I\'m back online now. If you sent me something while I was away, could you send it again? Thanks!'], { stdio: 'pipe' });
+    execFileSync('node', [C4_SEND_PATH, channel, endpoint, 'Hey! I was temporarily unavailable but I\'m back online now. If you sent me something while I was away, could you send it again? Thanks!'], { stdio: 'pipe', timeout: 15000 });
     return true;
   } catch (err) {
     log(`Recovery notice failed for ${channel}:${endpoint} (${err.message})`);
@@ -880,7 +883,7 @@ function writeUsageState(data) {
 
 function captureTmuxPane() {
   try {
-    return execSync(`tmux capture-pane -t "${adapter.sessionName}" -p 2>/dev/null`, { encoding: 'utf8' });
+    return execSync(`tmux capture-pane -t "${adapter.sessionName}" -p 2>/dev/null`, { encoding: 'utf8', timeout: 3000 });
   } catch {
     return null;
   }
@@ -888,7 +891,7 @@ function captureTmuxPane() {
 
 function sendTmuxKeys(keys) {
   try {
-    execSync(`tmux send-keys -t "${adapter.sessionName}" ${keys} 2>/dev/null`);
+    execSync(`tmux send-keys -t "${adapter.sessionName}" ${keys} 2>/dev/null`, { timeout: 3000 });
   } catch { /* best-effort */ }
 }
 
@@ -997,6 +1000,13 @@ function maybeCheckUsage(claudeState, idleSeconds, currentTime) {
     return;
   }
 
+  // Phase: pre_enter — one tick after /usage was sent, now send Enter
+  if (usageCheckPhase === 'pre_enter') {
+    sendTmuxKeys('Enter');
+    usageCheckPhase = 'sent';
+    return;
+  }
+
   // Phase: sent/waiting/capture — continue the state machine
   if (usageCheckPhase === 'sent') {
     usageCheckPhase = 'waiting';
@@ -1081,18 +1091,18 @@ function maybeCheckUsage(claudeState, idleSeconds, currentTime) {
     if (fs.existsSync(dbPath)) {
       const count = execSync(
         `sqlite3 "${dbPath}" "SELECT COUNT(*) FROM control_queue WHERE status='pending'" 2>/dev/null`,
-        { encoding: 'utf8' }
+        { encoding: 'utf8', timeout: 3000 }
       ).trim();
       if (parseInt(count, 10) > 0) return; // Messages pending, skip check
     }
   } catch { /* proceed anyway */ }
 
-  // Start the check: send /usage to Claude
+  // Start the check: send /usage to Claude.
+  // Enter is sent on the next tick (pre_enter phase) to avoid blocking the
+  // monitor loop with execSync('sleep 0.3').
   log('Usage monitor: initiating /usage check');
   sendTmuxKeys('"/usage"');
-  execSync('sleep 0.3');
-  sendTmuxKeys('Enter');
-  usageCheckPhase = 'sent';
+  usageCheckPhase = 'pre_enter';
 }
 
 function tierRank(tier) {
@@ -1439,7 +1449,7 @@ function init() {
           if (lastChannel) {
             try {
               execFileSync('node', [C4_SEND_PATH, lastChannel.channel, lastChannel.endpoint,
-                '上下文快满了，正在切换新 session，记忆完整保留，稍等片刻…'], { stdio: 'pipe' });
+                '上下文快满了，正在切换新 session，记忆完整保留，稍等片刻…'], { stdio: 'pipe', timeout: 15000 });
               log(`Rotation notice sent to ${lastChannel.channel}:${lastChannel.endpoint}`);
             } catch (notifyErr) {
               log(`Rotation notice failed (non-fatal): ${notifyErr.message}`);
@@ -1474,7 +1484,7 @@ function init() {
   const OTHER_SESSION = adapter.runtimeId === 'codex' ? 'claude-main' : 'codex-main';
   setTimeout(() => {
     try {
-      execSync(`tmux kill-session -t "${OTHER_SESSION}" 2>/dev/null`, { stdio: 'pipe' });
+      execSync(`tmux kill-session -t "${OTHER_SESSION}" 2>/dev/null`, { stdio: 'pipe', timeout: 3000 });
       log(`Startup cleanup: killed stale ${OTHER_SESSION} session from previous runtime`);
     } catch { /* session didn't exist — normal startup, no-op */ }
   }, 10_000);
@@ -1488,7 +1498,7 @@ try {
   console.error(`[activity-monitor] Fatal: init() failed: ${err.message}`);
   process.exit(1);
 }
-log(`=== Activity Monitor Started (v22 - RuntimeAdapter: ${adapter.displayName} | Guardian + Heartbeat v4 + PeriodicProbe + LiveAuth + DailyTasks + UpgradeCheck + UsageMonitor): ${new Date().toISOString()} tz=${timezone} ===`);
+log(`=== Activity Monitor Started (v23 - RuntimeAdapter: ${adapter.displayName} | Guardian + Heartbeat v4 + PeriodicProbe + LiveAuth + DailyTasks + UpgradeCheck + UsageMonitor): ${new Date().toISOString()} tz=${timezone} ===`);
 
 // Use self-scheduling loop instead of setInterval to prevent concurrent
 // invocations: async monitorLoop + setInterval can overlap if isRunning()
