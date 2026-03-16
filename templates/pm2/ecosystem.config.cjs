@@ -98,6 +98,9 @@ function loadComponentServices() {
 
     for (const [name, meta] of Object.entries(components)) {
       try {
+        // Skip components that haven't finished setup (AI-mode install in progress)
+        if (meta && meta.setupComplete === false) continue;
+
         const skillDir = (meta && meta.skillDir) || path.join(SKILLS_DIR, name);
 
         // Try loading the component's own ecosystem.config.cjs
