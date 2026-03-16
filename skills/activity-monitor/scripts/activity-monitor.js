@@ -279,14 +279,6 @@ function checkDailyTruncate() {
   }
 }
 
-function runCommand(cmd, silent = false) {
-  try {
-    return execSync(cmd, { encoding: 'utf8', stdio: silent ? 'pipe' : 'inherit' }).trim();
-  } catch {
-    return null;
-  }
-}
-
 function resolveCommBridgeScript(fileName) {
   const prodPath = path.join(ZYLOS_DIR, '.claude', 'skills', 'comm-bridge', 'scripts', fileName);
   if (fs.existsSync(prodPath)) {
