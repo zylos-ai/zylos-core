@@ -172,6 +172,10 @@ curl -fsSL https://raw.githubusercontent.com/zylos-ai/zylos-core/main/scripts/in
 3. 创建 `~/zylos/` 目录，包含记忆、技能和服务
 4. 启动所有后台服务，并在 tmux 会话中启动 AI 智能体
 
+说明：
+- 默认会安装更稳定的 PM2 开机自启 systemd 单元（`pm2-<user>.service`，`Type=simple`，`pm2 resurrect --no-daemon`）。
+- Web 控制台的规范端口键为 `WEB_CONSOLE_PORT`。历史键 `ZYLOS_WEB_PORT` 仍可识别，并会被自动归一化。
+
 **与你的智能体对话：**
 
 ```bash

@@ -10,7 +10,8 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { ZYLOS_DIR } from './config.js';
+import { COMPONENTS_DIR, ENV_FILE, SKILLS_DIR, ZYLOS_DIR } from './config.js';
+import { parsePortNumber } from './service-runtime.js';
 
 const CLAUDE_MD = path.join(ZYLOS_DIR, 'CLAUDE.md');
 const AGENTS_MD = path.join(ZYLOS_DIR, 'AGENTS.md');
@@ -29,7 +30,132 @@ export function runMigrations() {
     migrated.push('v0.4.0/claude-md-to-zylos-md');
   }
 
+  if (migrateLegacyPortKeys()) {
+    migrated.push('v0.4.0/legacy-port-keys');
+  }
+
   return { migrated };
+}
+
+function migrateLegacyPortKeys() {
+  let changed = false;
+
+  if (migrateWebConsoleEnvKey()) {
+    changed = true;
+  }
+
+  if (migrateComponentPortConfig('telegram')) {
+    changed = true;
+  }
+
+  if (migrateComponentPortConfig('hxa')) {
+    changed = true;
+  }
+
+  return changed;
+}
+
+function migrateWebConsoleEnvKey() {
+  if (!fs.existsSync(ENV_FILE)) return false;
+
+  const content = fs.readFileSync(ENV_FILE, 'utf8');
+  if (/^WEB_CONSOLE_PORT=/m.test(content)) return false;
+
+  const legacyMatch = content.match(/^ZYLOS_WEB_PORT=(.+)$/m);
+  const legacyPort = parsePortNumber(legacyMatch?.[1] ?? null);
+  if (!legacyPort) return false;
+
+  const nextContent = content.trimEnd()
+    + '\n\n# Canonicalized by zylos init\n'
+    + `WEB_CONSOLE_PORT=${legacyPort}\n`;
+  fs.writeFileSync(ENV_FILE, nextContent, 'utf8');
+  return true;
+}
+
+function migrateComponentPortConfig(componentName) {
+  const roots = [
+    path.join(COMPONENTS_DIR, componentName),
+    path.join(SKILLS_DIR, componentName),
+  ];
+
+  let changed = false;
+  for (const root of roots) {
+    if (!fs.existsSync(root)) continue;
+    for (const file of walkJsonFiles(root)) {
+      if (normalizePortJsonFile(file)) {
+        changed = true;
+      }
+    }
+  }
+  return changed;
+}
+
+function *walkJsonFiles(root) {
+  const entries = fs.readdirSync(root, { withFileTypes: true });
+  for (const entry of entries) {
+    if (entry.name === 'node_modules' || entry.name === '.git') continue;
+    const fullPath = path.join(root, entry.name);
+    if (entry.isDirectory()) {
+      yield *walkJsonFiles(fullPath);
+      continue;
+    }
+    if (entry.isFile() && entry.name.endsWith('.json')) {
+      yield fullPath;
+    }
+  }
+}
+
+function normalizePortJsonFile(filePath) {
+  let parsed;
+  try {
+    parsed = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  } catch {
+    return false;
+  }
+
+  if (!parsed || typeof parsed !== 'object') return false;
+  if (!normalizePortKeysInObject(parsed)) return false;
+
+  fs.writeFileSync(filePath, JSON.stringify(parsed, null, 2) + '\n', 'utf8');
+  return true;
+}
+
+function normalizePortKeysInObject(value) {
+  let changed = false;
+
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      if (item && typeof item === 'object' && normalizePortKeysInObject(item)) {
+        changed = true;
+      }
+    }
+    return changed;
+  }
+
+  if (!value || typeof value !== 'object') return false;
+
+  if (Object.hasOwn(value, 'internalPort') || Object.hasOwn(value, 'internal_port')) {
+    const camelPort = parsePortNumber(value.internalPort);
+    const snakePort = parsePortNumber(value.internal_port);
+    const canonical = camelPort || snakePort;
+
+    if (canonical && value.internalPort !== canonical) {
+      value.internalPort = canonical;
+      changed = true;
+    }
+    if (Object.hasOwn(value, 'internal_port')) {
+      delete value.internal_port;
+      changed = true;
+    }
+  }
+
+  for (const nested of Object.values(value)) {
+    if (nested && typeof nested === 'object' && normalizePortKeysInObject(nested)) {
+      changed = true;
+    }
+  }
+
+  return changed;
 }
 
 /**

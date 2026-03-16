@@ -37,6 +37,70 @@ export function readEnvFile() {
 }
 
 /**
+ * Upsert environment entries in .env.
+ * Unlike writeEnvEntries(), this updates existing keys in place.
+ *
+ * @param {Map<string, string> | Record<string, string>} entries
+ * @param {{ comment?: string }} [opts]
+ * @returns {{ written: string[], updated: string[] }}
+ */
+export function upsertEnvEntries(entries, opts = {}) {
+  const pairs = entries instanceof Map ? entries : new Map(Object.entries(entries));
+  const existingContent = fs.existsSync(ENV_FILE) ? fs.readFileSync(ENV_FILE, 'utf8') : '';
+  let content = existingContent;
+  const written = [];
+  const updated = [];
+
+  for (const [key, rawValue] of pairs) {
+    const cleanValue = String(rawValue).replace(/[\r\n]/g, '').trim();
+    const needsQuote = /[\s#"'$`\\]/.test(cleanValue);
+    const escaped = cleanValue.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\$/g, '\\$');
+    const line = `${key}=${needsQuote ? `"${escaped}"` : cleanValue}`;
+    const rx = new RegExp(`^${key}=.*$`, 'm');
+    if (rx.test(content)) {
+      content = content.replace(rx, line);
+      updated.push(key);
+    } else {
+      if (!content.endsWith('\n') && content.length) content += '\n';
+      if (opts.comment && !content.includes(`# ${opts.comment}`)) {
+        content += `\n# ${opts.comment}\n`;
+      }
+      content += `${line}\n`;
+      written.push(key);
+    }
+  }
+
+  fs.mkdirSync(path.dirname(ENV_FILE), { recursive: true });
+  fs.writeFileSync(ENV_FILE, content);
+  return { written, updated };
+}
+
+/**
+ * Normalize legacy env aliases to canonical keys.
+ * Returns true if any change was applied.
+ */
+export function normalizeLegacyEnvAliases() {
+  const env = readEnvFile();
+  let changed = false;
+
+  const aliases = [
+    ['ZYLOS_WEB_PORT', 'WEB_CONSOLE_PORT'],
+    ['WEB_CONSOLE_PASSWORD', 'ZYLOS_WEB_PASSWORD'],
+  ];
+
+  for (const [legacyKey, canonicalKey] of aliases) {
+    if (env.has(legacyKey) && !env.has(canonicalKey)) {
+      env.set(canonicalKey, env.get(legacyKey));
+      changed = true;
+    }
+  }
+
+  if (!changed) return false;
+  upsertEnvEntries(Object.fromEntries(env), { comment: 'Normalized by zylos' });
+  return true;
+}
+
+/**
  * Append environment entries to .env file.
  * Skips keys that already exist (append-only, never overwrites).
  *

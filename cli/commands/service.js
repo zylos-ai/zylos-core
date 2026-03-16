@@ -163,11 +163,24 @@ export function showLogs(args) {
 export function startServices() {
   console.log(heading('Starting Zylos services...'));
 
+  const ecosystemPath = path.join(ZYLOS_DIR, 'pm2', 'ecosystem.config.cjs');
+  if (fs.existsSync(ecosystemPath)) {
+    try {
+      execSync(`pm2 start "${ecosystemPath}"`, { stdio: 'pipe' });
+      execSync('pm2 save 2>/dev/null', { stdio: 'pipe' });
+      console.log(`  ${success('Started core services from ecosystem.config.cjs')}`);
+      console.log(`\n${green('Core services started.')} Run ${dim('"zylos status"')} to check.`);
+      return;
+    } catch (e) {
+      console.log(`  ${warn(`Ecosystem start failed, falling back to direct PM2 starts: ${e.message}`)}`);
+    }
+  }
+
   const services = [
     { name: 'activity-monitor', script: path.join(SKILLS_DIR, 'self-maintenance', 'activity-monitor.js') },
     { name: 'scheduler', script: path.join(SKILLS_DIR, 'scheduler', 'scheduler.js'), env: `NODE_ENV=production ZYLOS_DIR=${ZYLOS_DIR}` },
     { name: 'c4-dispatcher', script: path.join(SKILLS_DIR, 'comm-bridge', 'scripts', 'c4-dispatcher.js') },
-    { name: 'web-console', script: path.join(SKILLS_DIR, 'web-console', 'server.js'), env: `WEB_CONSOLE_PORT=3456 ZYLOS_DIR=${ZYLOS_DIR}` },
+    { name: 'web-console', script: path.join(SKILLS_DIR, 'web-console', 'server.js'), env: `ZYLOS_DIR=${ZYLOS_DIR}` },
   ];
 
   let started = 0;

@@ -173,6 +173,10 @@ This works from Windows, ChromeOS, or any platform that can run Claude Code loca
 3. Create the `~/zylos/` directory with memory, skills, and services
 4. Start all background services and launch your AI agent in a tmux session
 
+Notes:
+- PM2 boot auto-start is installed with a stable systemd unit by default (`pm2-<user>.service`, `Type=simple`, `pm2 resurrect --no-daemon`).
+- Canonical web console port key is `WEB_CONSOLE_PORT`. Legacy `ZYLOS_WEB_PORT` is still recognized and normalized automatically.
+
 **Talk to your agent:**
 
 ```bash

@@ -13,6 +13,7 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import { execSync, execFileSync, spawnSync, spawn } from 'node:child_process';
 import { ZYLOS_DIR, SKILLS_DIR, CONFIG_DIR, COMPONENTS_DIR, LOCKS_DIR, COMPONENTS_FILE, BIN_DIR, HTTP_DIR, CADDYFILE, CADDY_BIN, getZylosConfig, updateZylosConfig } from '../lib/config.js';
+import { normalizeLegacyEnvAliases, upsertEnvEntries } from '../lib/env.js';
 import { generateManifest, saveManifest } from '../lib/manifest.js';
 import { prompt, promptYesNo, promptChoice, promptSecret } from '../lib/prompts.js';
 import { bold, dim, green, red, yellow, cyan, bgGreen, success, error, warn, heading } from '../lib/colors.js';
@@ -20,6 +21,13 @@ import { commandExists } from '../lib/shell-utils.js';
 import { getActiveAdapter } from '../lib/runtime/index.js';
 import { buildInstructionFile } from '../lib/runtime/instruction-builder.js';
 import { runMigrations } from '../lib/migrate.js';
+import {
+  buildManagedPath,
+  buildStablePm2SystemdUnit,
+  findPm2Binary,
+  getPm2Home,
+  getWebConsolePort,
+} from '../lib/service-runtime.js';
 import {
   installGlobalPackage,
   installCodex,
@@ -148,21 +156,15 @@ function ensureLocalBinInProfile() {
  * Updates SYSTEM_PATH= line if exists, appends if not.
  */
 function saveSystemPath(envPath) {
-  const currentPath = process.env.PATH || '';
-  let content = '';
   try {
-    content = fs.readFileSync(envPath, 'utf8');
+    if (!fs.existsSync(envPath)) return;
+    process.env.PATH = buildManagedPath();
+    upsertEnvEntries({
+      SYSTEM_PATH: process.env.PATH,
+    }, { comment: 'System PATH captured by zylos init (used by PM2 services)' });
   } catch {
-    return; // .env doesn't exist yet
+    // Best effort only
   }
-
-  const line = `SYSTEM_PATH=${currentPath}`;
-  if (content.includes('SYSTEM_PATH=')) {
-    content = content.replace(/^SYSTEM_PATH=.*$/m, line);
-  } else {
-    content = content.trimEnd() + '\n\n# System PATH captured by zylos init (used by PM2 services)\n' + line + '\n';
-  }
-  fs.writeFileSync(envPath, content);
 }
 
 // ── Timezone configuration ───────────────────────────────────
@@ -747,6 +749,7 @@ function deployTemplates() {
 
   // Always save current shell PATH to .env (for PM2 services)
   saveSystemPath(envDest);
+  normalizeLegacyEnvAliases();
 
   // ZYLOS.md — user-editable runtime-agnostic core; only create if missing
   const zylosMdSrc = path.join(TEMPLATES_SRC, 'ZYLOS.md');
@@ -977,7 +980,7 @@ function printWebConsoleInfo() {
     const url = `${proto}://${config.domain}/console/`;
     console.log(`    URL:      ${bold(url)}`);
   } else {
-    const port = process.env.WEB_CONSOLE_PORT || '3456';
+    const port = getWebConsolePort();
     console.log(`    Local:    ${bold(`http://localhost:${port}/`)}`);
     const ip = getNetworkIP();
     if (ip) {
@@ -1025,6 +1028,7 @@ function startCoreServices(webPassword = null) {
   installSkillDependencies();
   ensureWebConsolePassword(webPassword);
   initializeDatabases();
+  process.env.PATH = buildManagedPath();
 
   const ecosystemPath = path.join(ZYLOS_DIR, 'pm2', 'ecosystem.config.cjs');
   if (!fs.existsSync(ecosystemPath)) {
@@ -1070,58 +1074,58 @@ function startCoreServices(webPassword = null) {
 // ── PM2 boot auto-start ──────────────────────────────────────────
 
 /**
- * Configure PM2 to auto-start on system boot.
- * Runs `pm2 startup` which generates a systemd service command,
- * then executes it. Idempotent — safe to run multiple times.
+ * Configure a stable PM2 systemd unit for reboot persistence.
  */
 function setupPm2Startup() {
-  // pm2 startup exits non-zero when it needs a sudo command to be run,
-  // so we use spawnSync to always capture output regardless of exit code.
-  const result = spawnSync('pm2', ['startup'], {
-    encoding: 'utf8',
-    stdio: 'pipe',
-    timeout: 15000,
-  });
+  if (process.platform !== 'linux') {
+    console.log(`  ${dim('PM2 boot auto-start is only configured automatically on Linux/systemd hosts.')}`);
+    return;
+  }
+  if (!commandExists('systemctl')) {
+    console.log(`  ${dim('systemd not detected; skipping PM2 boot auto-start setup.')}`);
+    return;
+  }
 
-  const output = [result.stdout, result.stderr].filter(Boolean).join('\n');
-
-  // Extract the sudo command from output
-  // Typical: "sudo env PATH=$PATH:/usr/bin pm2 startup systemd -u howard --hp /home/howard"
-  const sudoMatch = output.match(/^(sudo .+)$/m);
-  if (sudoMatch) {
-    // Use stdio: 'inherit' so sudo can prompt interactively
-    // (sudo retries up to 3 times by default)
-    const sudoResult = spawnSync('sh', ['-c', sudoMatch[1]], {
-      stdio: 'inherit',
-      timeout: 60000,
+  const user = os.userInfo().username;
+  const home = os.homedir();
+  const unitName = `pm2-${user}.service`;
+  const unitPath = `/etc/systemd/system/${unitName}`;
+  const tempUnitPath = path.join(ZYLOS_DIR, `${unitName}.tmp`);
+  try {
+    process.env.PATH = buildManagedPath();
+    const unitContent = buildStablePm2SystemdUnit({
+      user,
+      home,
+      pm2Path: findPm2Binary(),
+      pathValue: process.env.PATH,
+      pm2Home: getPm2Home(home),
     });
-    if (sudoResult.status === 0) {
-      console.log(`  ${success('PM2 boot auto-start configured')}`);
-      warnIfForeignCgroup();
-    } else {
-      console.log(`  ${warn('PM2 boot auto-start: sudo password incorrect')}`);
-      console.log(`    This is optional — Zylos works fine without it.`);
-      console.log(`    ${cyan('To enable auto-start later, run:')}`);
-      console.log(`      ${bold(sudoMatch[1])}`);
+    fs.writeFileSync(tempUnitPath, unitContent, 'utf8');
+
+    for (const args of [
+      ['install', '-m', '0644', tempUnitPath, unitPath],
+      ['systemctl', 'daemon-reload'],
+      ['systemctl', 'enable', unitName],
+    ]) {
+      const result = spawnSync('sudo', args, {
+        stdio: 'inherit',
+        timeout: 60000,
+      });
+      if (result.status !== 0) {
+        console.log(`  ${warn('PM2 boot auto-start setup skipped (sudo did not complete).')}`);
+        console.log(`    ${dim(`Stable unit left at ${tempUnitPath}`)}`);
+        return;
+      }
     }
-    return;
+
+    console.log(`  ${success(`PM2 boot auto-start configured via ${unitName}`)}`);
+    console.log(`    ${dim(`Unit: ${unitPath}`)}`);
+  } catch (err) {
+    console.log(`  ${warn(`PM2 boot auto-start setup failed: ${err.message}`)}`);
+  } finally {
+    try { fs.unlinkSync(tempUnitPath); } catch { /* ignore */ }
   }
 
-  // No sudo command found — may already be configured or failed
-  if (result.status === 0) {
-    console.log(`  ${success('PM2 boot auto-start configured')}`);
-  } else {
-    const msg = output.trim().split('\n')[0] || 'unknown error';
-    console.log(`  ${warn(`PM2 boot auto-start setup failed: ${msg}`)}`);
-    console.log(`    ${dim('Fix manually: pm2 startup (then run the sudo command it outputs)')}`);
-    return;
-  }
-
-  // Check if PM2 daemon is running in a foreign cgroup (Linux only).
-  // When zylos init runs inside a systemd service (e.g., a bootstrap service),
-  // the PM2 daemon inherits that service's cgroup. If that service is later
-  // restarted, systemd kills all processes in its cgroup — including PM2.
-  // The pm2 startup unit only takes effect on the next boot, so warn the user.
   warnIfForeignCgroup();
 }
 

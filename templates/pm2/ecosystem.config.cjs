@@ -17,12 +17,14 @@ const SKILLS_DIR = path.join(HOME, 'zylos', '.claude', 'skills');
 const BIN_DIR = path.join(ZYLOS_DIR, 'bin');
 const HTTP_DIR = path.join(ZYLOS_DIR, 'http');
 
-// Read a value from .env file
-function readEnvValue(key, defaultValue = '') {
+// Read a value from .env file, with optional legacy aliases
+function readEnvValue(key, defaultValue = '', aliases = []) {
   try {
     const content = fs.readFileSync(path.join(ZYLOS_DIR, '.env'), 'utf8');
-    const match = content.match(new RegExp(`^${key}=(.+)$`, 'm'));
-    if (match) return match[1];
+    for (const candidate of [key, ...aliases]) {
+      const match = content.match(new RegExp(`^${candidate}=(.+)$`, 'm'));
+      if (match) return match[1];
+    }
   } catch {}
   return defaultValue;
 }
@@ -88,7 +90,8 @@ module.exports = {
       cwd: HOME,
       env: {
         PATH: ENHANCED_PATH,
-        NODE_ENV: 'production'
+        NODE_ENV: 'production',
+        WEB_CONSOLE_PORT: readEnvValue('WEB_CONSOLE_PORT', '3456', ['ZYLOS_WEB_PORT'])
       },
       autorestart: true,
       max_restarts: 10,
