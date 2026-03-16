@@ -81,6 +81,15 @@ export class HeartbeatEngine {
     return this.healthState;
   }
 
+  /**
+   * Returns true if Guardian is allowed to restart the agent.
+   * Encapsulates health-state restart policy so Guardian does not read
+   * internal state directly (separation of concerns).
+   */
+  canRestart() {
+    return this.healthState !== 'rate_limited';
+  }
+
   setHealth(nextHealth, reason = '') {
     if (this.healthState === nextHealth) return;
     const suffix = reason ? ` (${reason})` : '';

@@ -15,7 +15,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { execSync, execFileSync } from 'node:child_process';
+import { execSync, execFileSync, spawnSync } from 'node:child_process';
 import { RuntimeAdapter } from './base.js';
 import { buildInstructionFile } from './instruction-builder.js';
 import { ClaudeContextMonitor } from './claude-context-monitor.js';
@@ -59,34 +59,48 @@ export class ClaudeAdapter extends RuntimeAdapter {
   // ── Auth ──────────────────────────────────────────────────────────────────
 
   /**
+   * Live auth check: runs `claude -p ping --max-turns 1` with .env keys injected,
+   * mirroring the exact environment that launch() uses. Detects revoked/expired tokens
+   * that local file checks cannot catch.
+   *
+   * Return values:
+   *   { ok: true }  — probe succeeded (exit 0) or outcome is uncertain (network error,
+   *                   timeout, rate limit) — don't block restart in uncertain cases
+   *   { ok: false } — explicit auth rejection (401 / invalid key in stderr/stdout)
+   *
    * @returns {Promise<{ok: boolean, reason: string}>}
    */
   async checkAuth() {
-    // Path 1: API key tokens in ~/zylos/.env — checked first (fast, no subprocess).
-    // launch() injects these into the Claude process env; if present, Claude IS authenticated.
+    // Build subprocess env: inherit current env, inject .env API keys (same as launch()).
+    const injectedEnv = { ...process.env };
     try {
       const envContent = fs.readFileSync(path.join(ZYLOS_DIR, '.env'), 'utf8');
-      if (/^ANTHROPIC_API_KEY=\S+/m.test(envContent)) {
-        return { ok: true, reason: 'ANTHROPIC_API_KEY in .env' };
-      }
-      if (/^CLAUDE_CODE_OAUTH_TOKEN=\S+/m.test(envContent)) {
-        return { ok: true, reason: 'CLAUDE_CODE_OAUTH_TOKEN in .env' };
-      }
-    } catch { /* .env absent — not an auth path */ }
+      const apiMatch = envContent.match(/^ANTHROPIC_API_KEY=(.+)$/m);
+      const oauthMatch = envContent.match(/^CLAUDE_CODE_OAUTH_TOKEN=(.+)$/m);
+      if (apiMatch) injectedEnv.ANTHROPIC_API_KEY = apiMatch[1].trim();
+      if (oauthMatch) injectedEnv.CLAUDE_CODE_OAUTH_TOKEN = oauthMatch[1].trim();
+    } catch { /* .env absent — no keys to inject */ }
 
-    // Path 2: `claude auth status` — authoritative check for native auth (OAuth, credentials.json).
-    // More reliable than inspecting credentials.json directly (handles expiry, revocation, format changes).
-    try {
-      const out = execFileSync(CLAUDE_BIN, ['auth', 'status'], {
-        encoding: 'utf8', timeout: 10_000, stdio: ['ignore', 'pipe', 'pipe'],
-      });
-      const status = JSON.parse(out);
-      if (status?.loggedIn === true) {
-        return { ok: true, reason: `authenticated via ${status.authMethod || 'unknown'}` };
-      }
-    } catch { /* binary missing or non-JSON output */ }
+    // Strip vars that would make Claude refuse to start ("already running" guard).
+    for (const v of ENV_VARS_TO_STRIP) delete injectedEnv[v];
 
-    return { ok: false, reason: 'not logged in' };
+    const result = spawnSync(CLAUDE_BIN, ['-p', 'ping', '--max-turns', '1'], {
+      env: injectedEnv,
+      timeout: 20_000,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    if (result.status === 0) return { ok: true, reason: 'cli_probe' };
+
+    // Only assert failure on explicit auth rejection — don't block restart for
+    // network errors, timeouts, rate limits, or other transient failures.
+    const output = (result.stdout?.toString() ?? '') + (result.stderr?.toString() ?? '');
+    if (/401|unauthorized|invalid.{0,20}(api.?key|token)|authentication.{0,20}fail/i.test(output)) {
+      return { ok: false, reason: 'cli_probe_401' };
+    }
+
+    // Uncertain outcome (timeout, network error, rate limit, etc.) — proceed with restart.
+    return { ok: true, reason: `cli_probe_uncertain_exit_${result.status ?? 'null'}` };
   }
 
   // ── Process / tmux ────────────────────────────────────────────────────────
