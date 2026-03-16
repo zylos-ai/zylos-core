@@ -207,6 +207,7 @@ let idleSince = 0;
 let lastPeriodicProbeAt = 0;
 let lastDeadApiPid = null;
 let authFailedNotifiedAt = 0;
+let startAgentInProgress = false;
 
 let adapter;         // initialized in init() via getActiveAdapter()
 let engine;          // initialized in init()
@@ -402,26 +403,38 @@ function enqueueStartupControl() {
  * then enqueues the startup control prompt if no session-start hook is installed.
  */
 async function startAgent() {
-  if (isMaintenanceRunning()) {
-    log('Guardian: Maintenance script detected, waiting for completion...');
-    waitForMaintenance();
-  }
+  // Prevent concurrent calls: auth check is async (up to 20s), so two ticks could
+  // overlap. Guard ensures only one startAgent() runs at a time.
+  if (startAgentInProgress) return;
+  startAgentInProgress = true;
 
-  // Live auth check before restarting — avoids infinite restart loop on revoked/expired tokens.
-  const authResult = adapter.checkAuth ? await adapter.checkAuth() : { ok: true };
-  if (!authResult.ok) {
-    log(`Guardian: auth failed (${authResult.reason ?? 'unknown'}), skipping restart`);
-    const now = Math.floor(Date.now() / 1000);
-    if ((now - authFailedNotifiedAt) > 3600) {
-      authFailedNotifiedAt = now;
-      runC4Control([
-        'enqueue',
-        '--content', `Authentication failed for ${adapter.displayName} (${authResult.reason ?? 'unknown'}). Agent cannot restart. Please check your API key or login credentials.`,
-        '--priority', '1',
-      ]);
+  try {
+    if (isMaintenanceRunning()) {
+      log('Guardian: Maintenance script detected, waiting for completion...');
+      waitForMaintenance();
     }
-    return;
-  }
+
+    // Live auth check before restarting — avoids infinite restart loop on revoked/expired tokens.
+    const authResult = adapter.checkAuth ? await adapter.checkAuth() : { ok: true };
+    if (!authResult.ok) {
+      log(`Guardian: auth failed (${authResult.reason ?? 'unknown'}), skipping restart`);
+      const now = Math.floor(Date.now() / 1000);
+      if ((now - authFailedNotifiedAt) > 3600) {
+        authFailedNotifiedAt = now;
+        runC4Control([
+          'enqueue',
+          '--content', `Authentication failed for ${adapter.displayName} (${authResult.reason ?? 'unknown'}). Agent cannot restart. Please check your API key or login credentials.`,
+          '--priority', '1',
+        ]);
+      }
+      return;
+    }
+
+    // Auth passed — consume the restart budget and mark startup in progress.
+    // Done here (after auth check) so auth failures don't consume backoff budget.
+    consecutiveRestarts += 1;
+    startupGrace = 30;
+    notRunningCount = 0;
 
   log(`Guardian: Starting ${adapter.displayName}...`);
 
@@ -446,6 +459,9 @@ async function startAgent() {
   // wait for launch to complete before enqueueing).
   if (!hasStartupHook()) {
     enqueueStartupControl();
+  }
+  } finally {
+    startAgentInProgress = false;
   }
 }
 
@@ -1117,13 +1133,12 @@ async function monitorLoop() {
     }
 
     // Delegate restart permission to HeartbeatEngine (e.g. won't restart during rate_limited).
+    // Counter mutations (consecutiveRestarts, startupGrace, notRunningCount) are handled
+    // inside startAgent() after auth check passes — not here.
     const restartDelay = Math.min(BASE_RESTART_DELAY * Math.pow(2, consecutiveRestarts), MAX_RESTART_DELAY);
     if (engine.canRestart() && notRunningCount >= restartDelay) {
-      consecutiveRestarts += 1;
-      log(`Guardian: Session not found for ${notRunningCount}s, starting ${adapter.displayName}... (attempt ${consecutiveRestarts}, next delay ${Math.min(BASE_RESTART_DELAY * Math.pow(2, consecutiveRestarts), MAX_RESTART_DELAY)}s)`);
+      log(`Guardian: Session not found for ${notRunningCount}s, attempting to start ${adapter.displayName}...`);
       startAgent();
-      startupGrace = 30;
-      notRunningCount = 0;
     }
 
     engine.processHeartbeat(false, currentTime);
@@ -1166,13 +1181,12 @@ async function monitorLoop() {
     }
 
     // Delegate restart permission to HeartbeatEngine (e.g. won't restart during rate_limited).
+    // Counter mutations (consecutiveRestarts, startupGrace, notRunningCount) are handled
+    // inside startAgent() after auth check passes — not here.
     const restartDelay = Math.min(BASE_RESTART_DELAY * Math.pow(2, consecutiveRestarts), MAX_RESTART_DELAY);
     if (engine.canRestart() && notRunningCount >= restartDelay) {
-      consecutiveRestarts += 1;
-      log(`Guardian: Agent not running for ${notRunningCount}s, starting ${adapter.displayName}... (attempt ${consecutiveRestarts}, next delay ${Math.min(BASE_RESTART_DELAY * Math.pow(2, consecutiveRestarts), MAX_RESTART_DELAY)}s)`);
+      log(`Guardian: Agent not running for ${notRunningCount}s, attempting to start ${adapter.displayName}...`);
       startAgent();
-      startupGrace = 30;
-      notRunningCount = 0;
     }
 
     engine.processHeartbeat(false, currentTime);
@@ -1283,7 +1297,6 @@ async function monitorLoop() {
   // Replaces indirect-signal stuck detection. Catches auth failures and frozen-but-alive
   // agents regardless of whether activity signals are being refreshed.
   if (engine.health === 'ok') {
-    const activeTools = apiActivity?.active_tools ?? 0;
     if (activeTools === 0 && (currentTime - lastPeriodicProbeAt) >= PERIODIC_PROBE_INTERVAL) {
       const ok = engine.requestImmediateProbe('periodic_5min');
       if (ok) lastPeriodicProbeAt = currentTime;

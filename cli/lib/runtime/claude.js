@@ -15,7 +15,10 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { execSync, execFileSync, spawnSync } from 'node:child_process';
+import { execSync, execFileSync, execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+
+const execFileAsync = promisify(execFile);
 import { RuntimeAdapter } from './base.js';
 import { buildInstructionFile } from './instruction-builder.js';
 import { ClaudeContextMonitor } from './claude-context-monitor.js';
@@ -84,23 +87,26 @@ export class ClaudeAdapter extends RuntimeAdapter {
     // Strip vars that would make Claude refuse to start ("already running" guard).
     for (const v of ENV_VARS_TO_STRIP) delete injectedEnv[v];
 
-    const result = spawnSync(CLAUDE_BIN, ['-p', 'ping', '--max-turns', '1'], {
-      env: injectedEnv,
-      timeout: 20_000,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-
-    if (result.status === 0) return { ok: true, reason: 'cli_probe' };
-
-    // Only assert failure on explicit auth rejection — don't block restart for
-    // network errors, timeouts, rate limits, or other transient failures.
-    const output = (result.stdout?.toString() ?? '') + (result.stderr?.toString() ?? '');
-    if (/401|unauthorized|invalid.{0,20}(api.?key|token)|authentication.{0,20}fail/i.test(output)) {
-      return { ok: false, reason: 'cli_probe_401' };
+    // Use async execFile — spawnSync would block the event loop for up to 20s,
+    // freezing the monitor's heartbeat state machine.
+    try {
+      await execFileAsync(CLAUDE_BIN, ['-p', 'ping', '--max-turns', '1'], {
+        env: injectedEnv,
+        timeout: 20_000,
+        encoding: 'utf8',
+      });
+      return { ok: true, reason: 'cli_probe' };
+    } catch (err) {
+      // execFile throws on non-zero exit; inspect output to distinguish auth failure
+      // from transient failures (timeout, network error, rate limit, etc.).
+      const output = (err.stdout ?? '') + (err.stderr ?? '');
+      const isAuthFailure = /401|unauthorized|invalid.{0,20}(api.?key|token)|(api.?key|token).{0,20}invalid|authentication.?error/i.test(output);
+      if (isAuthFailure) {
+        return { ok: false, reason: 'cli_probe_401' };
+      }
+      // Uncertain outcome — proceed with restart rather than blocking on a transient error.
+      return { ok: true, reason: `cli_probe_uncertain` };
     }
-
-    // Uncertain outcome (timeout, network error, rate limit, etc.) — proceed with restart.
-    return { ok: true, reason: `cli_probe_uncertain_exit_${result.status ?? 'null'}` };
   }
 
   // ── Process / tmux ────────────────────────────────────────────────────────

@@ -72,8 +72,12 @@ export class CodexAdapter extends RuntimeAdapter {
     if (!apiKey) {
       try {
         const envContent = fs.readFileSync(path.join(ZYLOS_DIR, '.env'), 'utf8');
-        const m = envContent.match(/^(?:OPENAI_API_KEY|CODEX_API_KEY)=(.+)$/m);
-        if (m) apiKey = m[1].trim();
+        // Check both keys independently (same as launch()) — a single alternation regex
+        // only captures the first match and silently ignores the second key.
+        const openaiMatch = envContent.match(/^OPENAI_API_KEY=(.+)$/m);
+        const codexMatch = envContent.match(/^CODEX_API_KEY=(.+)$/m);
+        if (openaiMatch) apiKey = openaiMatch[1].trim();
+        if (!apiKey && codexMatch) apiKey = codexMatch[1].trim();
       } catch { /* .env absent */ }
     }
 
