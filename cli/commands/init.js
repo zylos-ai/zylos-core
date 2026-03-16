@@ -1118,17 +1118,51 @@ WantedBy=multi-user.target
 }
 
 /**
- * Configure a stable PM2 systemd unit for reboot persistence.
- * Generates its own unit instead of relying on `pm2 startup` output parsing.
- * Only runs on Linux with systemd.
+ * Fallback: use `pm2 startup` for platforms without systemd (macOS, etc.).
+ * On macOS this generates a launchd plist which is reliable.
  */
-function setupPm2Startup() {
-  if (process.platform !== 'linux') {
-    console.log(`  ${dim('PM2 boot auto-start is only configured automatically on Linux.')}`);
+function setupPm2StartupViaCommand() {
+  const result = spawnSync('pm2', ['startup'], {
+    encoding: 'utf8',
+    stdio: 'pipe',
+    timeout: 15000,
+  });
+
+  const output = [result.stdout, result.stderr].filter(Boolean).join('\n');
+
+  const sudoMatch = output.match(/^(sudo .+)$/m);
+  if (sudoMatch) {
+    const sudoResult = spawnSync('sh', ['-c', sudoMatch[1]], {
+      stdio: 'inherit',
+      timeout: 60000,
+    });
+    if (sudoResult.status === 0) {
+      console.log(`  ${success('PM2 boot auto-start configured')}`);
+    } else {
+      console.log(`  ${warn('PM2 boot auto-start: sudo did not complete.')}`);
+      console.log(`    This is optional — Zylos works fine without it.`);
+      console.log(`    ${cyan('To enable later, run:')} ${bold(sudoMatch[1])}`);
+    }
     return;
   }
-  if (!commandExists('systemctl')) {
-    console.log(`  ${dim('systemd not detected; skipping PM2 boot auto-start.')}`);
+
+  if (result.status === 0) {
+    console.log(`  ${success('PM2 boot auto-start configured')}`);
+  } else {
+    const msg = output.trim().split('\n')[0] || 'unknown error';
+    console.log(`  ${warn(`PM2 boot auto-start setup failed: ${msg}`)}`);
+    console.log(`    ${dim('Fix manually: pm2 startup (then run the sudo command it outputs)')}`);
+  }
+}
+
+/**
+ * Configure PM2 to auto-start on system boot.
+ * - Linux with systemd: generates a stable unit directly (avoids PIDFile issues)
+ * - Other platforms (macOS, etc.): falls back to `pm2 startup`
+ */
+function setupPm2Startup() {
+  if (process.platform !== 'linux' || !commandExists('systemctl')) {
+    setupPm2StartupViaCommand();
     return;
   }
 
