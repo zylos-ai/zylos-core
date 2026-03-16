@@ -79,7 +79,7 @@ function parseSkillService(skillMdPath) {
 
     // Parse key: value within service block
     const kv = line.match(/^\s+(\w+):\s*(.+)$/);
-    if (kv) serviceProps[kv[1].trim()] = kv[2].trim();
+    if (kv) serviceProps[kv[1].trim()] = kv[2].trim().replace(/^["']|["']$/g, '');
   }
 
   if (!serviceProps.name || !serviceProps.entry) return null;
