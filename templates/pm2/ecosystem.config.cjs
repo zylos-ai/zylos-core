@@ -97,41 +97,41 @@ function loadComponentServices() {
     const usedNames = new Set(CORE_SERVICE_NAMES);
 
     for (const [name, meta] of Object.entries(components)) {
-      const skillDir = meta.skillDir || path.join(SKILLS_DIR, name);
-
-      // Try loading the component's own ecosystem.config.cjs
-      const ecoPath = path.join(skillDir, 'ecosystem.config.cjs');
-      if (fs.existsSync(ecoPath)) {
-        try {
-          const componentConfig = require(ecoPath);
-          const componentApps = componentConfig.apps || [];
-          for (const app of componentApps) {
-            if (usedNames.has(app.name)) {
-              console.warn(`[ecosystem] Skipping component "${name}" service "${app.name}": conflicts with existing service`);
-              continue;
-            }
-            // Inject ENHANCED_PATH so component services can find claude, node, etc.
-            app.env = { ...app.env, PATH: ENHANCED_PATH };
-            usedNames.add(app.name);
-            apps.push(app);
-          }
-          continue;
-        } catch (err) {
-          console.warn(`[ecosystem] Failed to load ${ecoPath}: ${err.message}, trying SKILL.md fallback`);
-        }
-      }
-
-      // Fallback: parse SKILL.md frontmatter for service declaration
-      const skillMd = path.join(skillDir, 'SKILL.md');
-      if (!fs.existsSync(skillMd)) continue;
       try {
+        const skillDir = (meta && meta.skillDir) || path.join(SKILLS_DIR, name);
+
+        // Try loading the component's own ecosystem.config.cjs
+        const ecoPath = path.join(skillDir, 'ecosystem.config.cjs');
+        if (fs.existsSync(ecoPath)) {
+          try {
+            const componentConfig = require(ecoPath);
+            const componentApps = componentConfig.apps || [];
+            for (const app of componentApps) {
+              if (usedNames.has(app.name)) {
+                console.warn(`[ecosystem] Skipping component "${name}" service "${app.name}": conflicts with existing service`);
+                continue;
+              }
+              // Copy app to avoid mutating the require() cached object
+              const safeApp = { ...app, env: { ...app.env, PATH: ENHANCED_PATH } };
+              usedNames.add(safeApp.name);
+              apps.push(safeApp);
+            }
+            continue;
+          } catch (err) {
+            console.warn(`[ecosystem] Failed to load ${ecoPath}: ${err.message}, trying SKILL.md fallback`);
+          }
+        }
+
+        // Fallback: parse SKILL.md frontmatter for service declaration
+        const skillMd = path.join(skillDir, 'SKILL.md');
+        if (!fs.existsSync(skillMd)) continue;
         const service = parseSkillService(skillMd);
         if (!service) continue;
         if (usedNames.has(service.name)) {
           console.warn(`[ecosystem] Skipping component "${name}" service "${service.name}": conflicts with existing service`);
           continue;
         }
-        const dataDir = meta.dataDir || path.join(ZYLOS_DIR, 'components', name);
+        const dataDir = (meta && meta.dataDir) || path.join(ZYLOS_DIR, 'components', name);
         usedNames.add(service.name);
         apps.push({
           name: service.name,
@@ -149,7 +149,7 @@ function loadComponentServices() {
           log_date_format: 'YYYY-MM-DD HH:mm:ss',
         });
       } catch (err) {
-        console.warn(`[ecosystem] Failed to parse ${skillMd}: ${err.message}`);
+        console.warn(`[ecosystem] Skipping component "${name}": ${err.message}`);
       }
     }
     return apps;
