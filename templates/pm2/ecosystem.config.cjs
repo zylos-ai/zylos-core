@@ -13,6 +13,7 @@ const fs = require('fs');
 
 const HOME = os.homedir();
 const ZYLOS_DIR = path.join(HOME, 'zylos');
+const ZYLOS_META_DIR = path.join(ZYLOS_DIR, '.zylos');
 const SKILLS_DIR = path.join(HOME, 'zylos', '.claude', 'skills');
 const BIN_DIR = path.join(ZYLOS_DIR, 'bin');
 const HTTP_DIR = path.join(ZYLOS_DIR, 'http');
@@ -67,6 +68,129 @@ try {
     }
   }
 } catch { /* ZYLOS_PACKAGE_ROOT stays empty — activity-monitor uses relative path fallback */ }
+
+// Core service names — components must not collide with these
+const CORE_SERVICE_NAMES = new Set([
+  'scheduler', 'web-console', 'c4-dispatcher', 'activity-monitor', 'caddy',
+]);
+
+// Parse SKILL.md YAML frontmatter service block.
+// Returns { name, entry } or null if no service declared.
+function parseSkillService(skillMdPath) {
+  const content = fs.readFileSync(skillMdPath, 'utf8');
+  const fmMatch = content.match(/^---\n([\s\S]*?)\n---/);
+  if (!fmMatch) return null;
+
+  const lines = fmMatch[1].split('\n');
+  let inService = false;
+  let serviceIndent = 0;
+  const serviceProps = {};
+
+  for (const line of lines) {
+    // Detect "service:" block start
+    const serviceStart = line.match(/^(\s*)service:\s*(.*)$/);
+    if (serviceStart) {
+      const value = serviceStart[2].trim();
+      // "service: null" or "service: ~" means no service
+      if (value === 'null' || value === '~' || value === 'false') return null;
+      // Inline value (not a block) — skip
+      if (value && value !== '') return null;
+      inService = true;
+      serviceIndent = serviceStart[1].length;
+      continue;
+    }
+
+    if (!inService) continue;
+
+    // Check if we've exited the service block (dedented or new top-level key)
+    const lineIndent = line.match(/^(\s*)/)[1].length;
+    if (line.trim() === '' || line.trim().startsWith('#')) continue;
+    if (lineIndent <= serviceIndent) break;
+
+    // Parse key: value within service block
+    const kv = line.match(/^\s+(\w+):\s*(.+)$/);
+    if (kv) serviceProps[kv[1].trim()] = kv[2].trim().replace(/^["']|["']$/g, '');
+  }
+
+  if (!serviceProps.name || !serviceProps.entry) return null;
+  return { name: serviceProps.name, entry: serviceProps.entry };
+}
+
+// Load PM2 configs for installed components that declare a service.
+// Each component can provide its own ecosystem.config.cjs in its skill directory.
+// Falls back to generating a config from SKILL.md frontmatter if no ecosystem file exists.
+function loadComponentServices() {
+  const componentsFile = path.join(ZYLOS_META_DIR, 'components.json');
+  try {
+    const components = JSON.parse(fs.readFileSync(componentsFile, 'utf8'));
+    const apps = [];
+    const usedNames = new Set(CORE_SERVICE_NAMES);
+
+    for (const [name, meta] of Object.entries(components)) {
+      try {
+        // Skip components that haven't finished setup (AI-mode install in progress)
+        if (meta && meta.setupComplete === false) continue;
+
+        const skillDir = (meta && meta.skillDir) || path.join(SKILLS_DIR, name);
+
+        // Try loading the component's own ecosystem.config.cjs
+        const ecoPath = path.join(skillDir, 'ecosystem.config.cjs');
+        if (fs.existsSync(ecoPath)) {
+          try {
+            const componentConfig = require(ecoPath);
+            const componentApps = componentConfig.apps || [];
+            for (const app of componentApps) {
+              if (usedNames.has(app.name)) {
+                console.warn(`[ecosystem] Skipping component "${name}" service "${app.name}": conflicts with existing service`);
+                continue;
+              }
+              // Copy app to avoid mutating the require() cached object
+              const safeApp = { ...app, env: { ...app.env, PATH: ENHANCED_PATH } };
+              usedNames.add(safeApp.name);
+              apps.push(safeApp);
+            }
+            continue;
+          } catch (err) {
+            console.warn(`[ecosystem] Failed to load ${ecoPath}: ${err.message}, trying SKILL.md fallback`);
+          }
+        }
+
+        // Fallback: parse SKILL.md frontmatter for service declaration
+        const skillMd = path.join(skillDir, 'SKILL.md');
+        if (!fs.existsSync(skillMd)) continue;
+        const service = parseSkillService(skillMd);
+        if (!service) continue;
+        if (usedNames.has(service.name)) {
+          console.warn(`[ecosystem] Skipping component "${name}" service "${service.name}": conflicts with existing service`);
+          continue;
+        }
+        const dataDir = (meta && meta.dataDir) || path.join(ZYLOS_DIR, 'components', name);
+        usedNames.add(service.name);
+        apps.push({
+          name: service.name,
+          script: service.entry,
+          cwd: skillDir,
+          env: {
+            PATH: ENHANCED_PATH,
+            NODE_ENV: 'production',
+          },
+          autorestart: true,
+          max_restarts: 10,
+          min_uptime: '10s',
+          error_file: path.join(dataDir, 'logs', 'error.log'),
+          out_file: path.join(dataDir, 'logs', 'out.log'),
+          log_date_format: 'YYYY-MM-DD HH:mm:ss',
+        });
+      } catch (err) {
+        console.warn(`[ecosystem] Skipping component "${name}": ${err.message}`);
+      }
+    }
+    return apps;
+  } catch {
+    // components.json missing or malformed — return empty, core services still start
+    return [];
+  }
+}
 
 module.exports = {
   apps: [
@@ -140,6 +264,7 @@ module.exports = {
           kill_timeout: 5000,
         }]
       : []),
-    // Component services (telegram, lark, etc.) are managed by `zylos add/remove`
+    // Component services — dynamically loaded from components.json
+    ...loadComponentServices(),
   ]
 };
