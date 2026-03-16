@@ -159,7 +159,7 @@ const RATE_LIMIT_DEFAULT_COOLDOWN = 3600;  // 1 hour default when reset time can
 const USER_MESSAGE_RECOVERY_COOLDOWN = 60; // 1 min between user-message-triggered recoveries
 
 // Periodic probe config (replaces stuck detection)
-const PERIODIC_PROBE_INTERVAL = 300; // 5 min fixed-interval probe when agent is idle
+const PERIODIC_PROBE_INTERVAL = 180; // 3 min fixed-interval probe when agent is idle
 
 // Health check config
 const HEALTH_CHECK_INTERVAL = 21600; // 6 hours
