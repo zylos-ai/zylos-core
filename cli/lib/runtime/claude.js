@@ -104,12 +104,12 @@ export class ClaudeAdapter extends RuntimeAdapter {
     } catch { /* auth status unavailable or failed — fall through to probe */ }
 
     // Stage 2: Live probe — `claude -p ping --max-turns 1`.
-    // Use async execFile — spawnSync would block the event loop for up to 20s,
+    // Use async execFile — spawnSync would block the event loop for up to 30s,
     // freezing the monitor's heartbeat state machine.
     try {
       const { stdout } = await execFileAsync(CLAUDE_BIN, ['-p', 'ping', '--max-turns', '1'], {
         env: injectedEnv,
-        timeout: 20_000,
+        timeout: 30_000,
         encoding: 'utf8',
       });
       // Safety net: some Claude versions exit 0 with "Not logged in" on stdout.
@@ -130,7 +130,7 @@ export class ClaudeAdapter extends RuntimeAdapter {
         return { ok: false, reason: 'cli_probe_authentication_error' };
       }
       // Whitelist the known transient failures (network issues, rate limits, server errors,
-      // or process killed by the 20s timeout). Everything else — including any "not logged in"
+      // or process killed by the 30s timeout). Everything else — including any "not logged in"
       // message regardless of exact wording — is treated as an auth failure.
       // Using a whitelist instead of a blacklist makes this robust to future CLI version changes:
       // any new auth error message will correctly fall through to ok:false.
