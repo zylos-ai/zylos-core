@@ -74,23 +74,18 @@ export function isClaudeAuthenticated() {
 
 /**
  * Check if Codex CLI is authenticated.
- * Checks four paths in order (mirrors CodexAdapter.checkAuth()):
- *   1. Process env vars (OPENAI_API_KEY / CODEX_API_KEY)
- *   2. ~/zylos/.env file (covers re-init when key is in .env but not process.env)
- *   3. ~/.codex/auth.json (Codex native credential store)
- *   4. `codex login status` (interactive / OAuth login)
+ * Checks two paths in order:
+ *   1. Process env vars (OPENAI_API_KEY / CODEX_API_KEY) — set in-process by saveCodexApiKey()
+ *      during the current init run
+ *   2. `codex login status` — authoritative CLI check (covers auth.json apikey and chatgpt/OAuth)
+ * Note: does NOT read ~/zylos/.env — Codex CLI deliberately ignores env vars, so an API key
+ * in .env has no meaning for Codex. Keys are stored in ~/.codex/auth.json (see saveCodexApiKey).
  * @returns {boolean}
  */
 export function isCodexAuthenticated() {
   if (process.env.OPENAI_API_KEY || process.env.CODEX_API_KEY) return true;
 
-  try {
-    const envContent = fs.readFileSync(path.join(ZYLOS_DIR, '.env'), 'utf8');
-    if (/^OPENAI_API_KEY=\S+/m.test(envContent) || /^CODEX_API_KEY=\S+/m.test(envContent)) return true;
-  } catch { /* .env absent */ }
-
-  // Use `codex login status` as the authoritative native-auth check (covers auth.json,
-  // device auth, OAuth) rather than inspecting auth.json directly.
+  // Use `codex login status` as the authoritative check (reads auth.json internally).
   try {
     const result = spawnSync('codex', ['login', 'status'], {
       stdio: 'pipe', encoding: 'utf8', timeout: 10000,
@@ -301,40 +296,27 @@ export function writeCodexConfig(projectDir) {
 }
 
 /**
- * Set OPENAI_API_KEY in process.env for the current process.
- * auth.json is managed exclusively by CodexAdapter.launch() which syncs .env → auth.json
- * before every Codex start — no need to write auth.json here.
- * Call saveCodexApiKeyToEnv() separately after templates are deployed to persist to ~/zylos/.env.
+ * Persist an OpenAI API key to ~/.codex/auth.json (Codex's native credential store).
+ * Also sets OPENAI_API_KEY in process.env for the current init process so that
+ * isCodexAuthenticated() can detect it immediately without re-reading disk.
+ *
+ * We do NOT write to ~/zylos/.env — Codex CLI deliberately does not read OPENAI_API_KEY
+ * from environment variables, so a key in .env has no effect on Codex. The canonical
+ * credential store is auth.json.
+ *
  * @param {string} apiKey - The OpenAI API key (sk-...)
  * @returns {boolean}
  */
 export function saveCodexApiKey(apiKey) {
   try {
-    process.env.OPENAI_API_KEY = apiKey;
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Write OPENAI_API_KEY to ~/zylos/.env.
- * auth.json is managed exclusively by CodexAdapter.launch() which syncs .env → auth.json
- * before every Codex start.
- * @param {string} apiKey - The OpenAI API key (sk-...)
- * @returns {boolean}
- */
-export function saveCodexApiKeyToEnv(apiKey) {
-  const envPath = path.join(ZYLOS_DIR, '.env');
-  try {
-    let content = '';
-    try { content = fs.readFileSync(envPath, 'utf8'); } catch {}
-    if (content.match(/^OPENAI_API_KEY=.*$/m)) {
-      content = content.replace(/^OPENAI_API_KEY=.*$/m, `OPENAI_API_KEY=${apiKey}`);
-    } else {
-      content = content.trimEnd() + `\n\n# OpenAI API key for Codex (set by zylos init)\nOPENAI_API_KEY=${apiKey}\n`;
-    }
-    fs.writeFileSync(envPath, content);
+    const codexDir = path.join(os.homedir(), '.codex');
+    const authPath = path.join(codexDir, 'auth.json');
+    fs.mkdirSync(codexDir, { recursive: true });
+    let authContent = {};
+    try { authContent = JSON.parse(fs.readFileSync(authPath, 'utf8')); } catch { }
+    authContent.auth_mode = 'apikey';
+    authContent.OPENAI_API_KEY = apiKey;
+    fs.writeFileSync(authPath, JSON.stringify(authContent, null, 2) + '\n', { mode: 0o600 });
     process.env.OPENAI_API_KEY = apiKey;
     return true;
   } catch {

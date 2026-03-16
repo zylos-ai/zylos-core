@@ -57,55 +57,49 @@ export class CodexAdapter extends RuntimeAdapter {
   // ── Auth ──────────────────────────────────────────────────────────────────
 
   /**
-   * Live auth check: resolves the API key (from env vars, .env, or auth.json) then
-   * issues a real HTTP probe to the OpenAI API. Detects revoked/expired keys that
-   * local file checks cannot catch.
+   * Live auth check. Branches on auth_mode in ~/.codex/auth.json:
+   *
+   *   auth_mode = "apikey"  → live HTTP probe to OpenAI /v1/models with the stored key.
+   *                           Detects revoked/expired keys that local file checks cannot catch.
+   *   auth_mode = "chatgpt" → skip HTTP probe entirely; use `codex login status` (OAuth/device auth).
+   *   auth.json absent      → fall through to `codex login status`.
+   *
+   * We do NOT read ~/zylos/.env — Codex CLI deliberately ignores OPENAI_API_KEY env vars,
+   * so a stale key in .env must never override a later OAuth login in auth.json.
    *
    * Return values:
-   *   { ok: true }  — 200 OK, or uncertain outcome (network error, timeout, non-401
-   *                   HTTP error) — don't block restart in uncertain cases
-   *   { ok: false } — explicit 401 Unauthorized from OpenAI API
+   *   { ok: true }  — authorized, or uncertain outcome (network error, timeout, non-401 HTTP error)
+   *   { ok: false } — explicit 401 from OpenAI API, or not logged in
    *
    * @returns {Promise<{ok: boolean, reason: string}>}
    */
   async checkAuth() {
-    // Resolve API key: env vars take precedence, then .env file, then auth.json.
-    let apiKey = process.env.OPENAI_API_KEY || process.env.CODEX_API_KEY || '';
+    // Read auth.json to determine the auth mode.
+    let authMode = null;
+    let apiKey = '';
+    try {
+      const authJson = JSON.parse(fs.readFileSync(
+        path.join(os.homedir(), '.codex', 'auth.json'), 'utf8'
+      ));
+      authMode = authJson?.auth_mode || null;
+      // Only extract the API key when the mode is explicitly "apikey".
+      if (authMode === 'apikey') {
+        apiKey = authJson?.OPENAI_API_KEY || authJson?.apiKey || '';
+      }
+    } catch { /* auth.json absent or malformed — fall through to codex login status */ }
 
-    if (!apiKey) {
-      try {
-        const envContent = fs.readFileSync(path.join(ZYLOS_DIR, '.env'), 'utf8');
-        // Check both keys independently (same as launch()) — a single alternation regex
-        // only captures the first match and silently ignores the second key.
-        const openaiMatch = envContent.match(/^OPENAI_API_KEY=(.+)$/m);
-        const codexMatch = envContent.match(/^CODEX_API_KEY=(.+)$/m);
-        if (openaiMatch) apiKey = openaiMatch[1].trim();
-        if (!apiKey && codexMatch) apiKey = codexMatch[1].trim();
-      } catch { /* .env absent */ }
-    }
-
-    if (!apiKey) {
-      try {
-        const authJson = JSON.parse(fs.readFileSync(
-          path.join(os.homedir(), '.codex', 'auth.json'), 'utf8'
-        ));
-        apiKey = authJson?.apiKey || authJson?.token || '';
-      } catch { /* auth.json absent or malformed */ }
-    }
-
-    if (!apiKey) {
-      // No key found anywhere — check `codex login status` for OAuth/device auth.
-      // Use async execFile — spawnSync would block the event loop during the call.
+    if (authMode === 'chatgpt' || (authMode !== 'apikey' && !apiKey)) {
+      // OAuth/device auth, or no auth.json — defer to the CLI which reads auth.json natively.
       try {
         await execFileAsync(CODEX_BIN, ['login', 'status'], {
           stdio: 'pipe', encoding: 'utf8', timeout: 10_000,
         });
         return { ok: true, reason: 'codex_login_status' };
       } catch { /* binary missing, not logged in, or other error */ }
-      return { ok: false, reason: 'no_api_key_and_not_logged_in' };
+      return { ok: false, reason: 'not_logged_in' };
     }
 
-    // Have API key — live HTTP probe to OpenAI API.
+    // auth_mode = "apikey" — live HTTP probe to OpenAI API.
     try {
       const res = await fetch('https://api.openai.com/v1/models', {
         headers: { Authorization: `Bearer ${apiKey}` },
@@ -273,31 +267,6 @@ export class CodexAdapter extends RuntimeAdapter {
     const monitorDir = path.join(ZYLOS_DIR, 'activity-monitor');
     const exitLogFile = path.join(monitorDir, 'codex-exit.log');
     const exitLogSnippet = `_ec=$?; echo "[$(date -Iseconds)] exit_code=$_ec" >> "${exitLogFile}"`;
-
-    // 3.5. Sync API key from ~/zylos/.env → ~/.codex/auth.json before launch.
-    // Codex only reads auth.json for credentials — it does NOT check OPENAI_API_KEY
-    // env vars (support was deliberately removed in Codex CLI). If the key was added
-    // to .env after init (e.g. user fixed a bad key manually), this ensures auth.json
-    // is up-to-date before Codex starts.
-    try {
-      const envContent = fs.readFileSync(path.join(ZYLOS_DIR, '.env'), 'utf8');
-      const openaiMatch = envContent.match(/^OPENAI_API_KEY=(.+)$/m);
-      const codexApiMatch = envContent.match(/^CODEX_API_KEY=(.+)$/m);
-      const apiKey = (openaiMatch || codexApiMatch)?.[1]?.trim();
-      if (apiKey) {
-        const codexDir = path.join(os.homedir(), '.codex');
-        const authPath = path.join(codexDir, 'auth.json');
-        let authContent = {};
-        try { authContent = JSON.parse(fs.readFileSync(authPath, 'utf8')); } catch { }
-        // Sync if key has changed or is missing; skip only for native chatgpt/OAuth login
-        if (authContent.OPENAI_API_KEY !== apiKey && authContent.auth_mode !== 'chatgpt') {
-          fs.mkdirSync(codexDir, { recursive: true });
-          authContent.auth_mode = 'apikey';
-          authContent.OPENAI_API_KEY = apiKey;
-          fs.writeFileSync(authPath, JSON.stringify(authContent, null, 2) + '\n', { mode: 0o600 });
-        }
-      }
-    } catch { /* non-fatal — Codex will handle auth at startup */ }
 
     if (_tmuxHasSession()) {
       const cmd = tmpPrompt

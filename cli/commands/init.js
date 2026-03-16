@@ -31,7 +31,6 @@ import {
   saveSetupToken,
   saveSetupTokenToEnv,
   saveCodexApiKey,
-  saveCodexApiKeyToEnv,
   writeCodexConfig,
 } from '../lib/runtime-setup.js';
 
@@ -1923,7 +1922,6 @@ export async function initCommand(args) {
   let codexAuthenticated = false;
   let pendingApiKey = null; // set if user enters API key, written to .env after templates
   let pendingSetupToken = null; // set if user enters setup-token, written to .env after templates
-  let pendingCodexApiKey = null; // set if codex api key provided, written to .env after templates
 
   if (selectedRuntime === 'codex') {
     // ── Step 5 (Codex): install ───────────────────────────────────────────
@@ -1957,7 +1955,7 @@ export async function initCommand(args) {
         const verifyResult = await verifyCodexApiKey(opts.codexApiKey);
         if (verifyResult === true) {
           saveCodexApiKey(opts.codexApiKey); // process.env only; .env written after deployTemplates()
-          pendingCodexApiKey = opts.codexApiKey; // auth.json synced by CodexAdapter.launch()
+
           codexAuthenticated = true;
           if (!quiet) console.log(`  ${success('Codex API key verified')}`);
         } else if (verifyResult === false) {
@@ -1967,7 +1965,7 @@ export async function initCommand(args) {
         } else {
           // null = network unreachable — save and proceed, let Codex fail at runtime if key is bad
           saveCodexApiKey(opts.codexApiKey); // process.env only; .env written after deployTemplates()
-          pendingCodexApiKey = opts.codexApiKey; // auth.json synced by CodexAdapter.launch()
+
           if (!quiet) console.log(`  ${warn('Could not verify Codex API key (network unreachable). Proceeding...')}`);
           codexAuthenticated = true;
         }
@@ -1988,7 +1986,7 @@ export async function initCommand(args) {
               const apiKey = await promptSecret('  API key: ');
               if (!apiKey) {
                 console.log(`  ${warn('No key entered. Skipped.')}`);
-              } else if (saveCodexApiKeyToEnv(apiKey)) {
+              } else if (saveCodexApiKey(apiKey)) {
                 codexAuthenticated = isCodexAuthenticated();
                 if (codexAuthenticated) {
                   console.log(`  ${success('Codex API key saved and verified')}`);
@@ -2248,9 +2246,6 @@ export async function initCommand(args) {
     if (pendingSetupToken) {
       saveSetupTokenToEnv(pendingSetupToken);
     }
-    if (pendingCodexApiKey) {
-      saveCodexApiKeyToEnv(pendingCodexApiKey);
-    }
 
     // Timezone: use resolved value or show current
     if (!quiet) console.log(heading('Checking timezone...'));
@@ -2346,10 +2341,6 @@ export async function initCommand(args) {
   if (pendingSetupToken) {
     saveSetupTokenToEnv(pendingSetupToken);
   }
-  if (pendingCodexApiKey) {
-    saveCodexApiKeyToEnv(pendingCodexApiKey);
-  }
-
   // Step 8: Configure timezone
   if (!quiet) console.log(`\n${heading('Timezone configuration...')}`);
   await configureTimezone(skipConfirm, false, opts.timezone, quiet);

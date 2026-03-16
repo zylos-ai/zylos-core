@@ -41,13 +41,6 @@ const CLAUDE_BYPASS_PERMISSIONS = readEnvValue('CLAUDE_BYPASS_PERMISSIONS', 'tru
 // Whether Codex should run with --dangerously-bypass-approvals-and-sandbox
 const CODEX_BYPASS_PERMISSIONS = readEnvValue('CODEX_BYPASS_PERMISSIONS', 'true');
 
-// Codex API credentials — read from .env so CodexAdapter.checkAuth() (which
-// checks process.env) receives them when PM2 manages the activity-monitor.
-// Without this, checkAuth() always returns false for .env-only key deployments,
-// causing the guardian to skip Codex startup indefinitely.
-const OPENAI_API_KEY = readEnvValue('OPENAI_API_KEY', '');
-const CODEX_API_KEY = readEnvValue('CODEX_API_KEY', '');
-
 // Resolve the zylos package root so deployed skills can import CLI modules.
 // activity-monitor.js imports from cli/lib/runtime/, which is part of the
 // zylos npm package — not the skill's deployed directory.
@@ -239,8 +232,6 @@ module.exports = {
         NODE_ENV: 'production',
         CLAUDE_BYPASS_PERMISSIONS,
         CODEX_BYPASS_PERMISSIONS,
-        ...(OPENAI_API_KEY ? { OPENAI_API_KEY } : {}),
-        ...(CODEX_API_KEY ? { CODEX_API_KEY } : {}),
         ...(ZYLOS_PACKAGE_ROOT ? { ZYLOS_PACKAGE_ROOT } : {}),
       },
       autorestart: true,
