@@ -92,16 +92,24 @@ export class ClaudeAdapter extends RuntimeAdapter {
 
     // Stage 1: `claude auth status` — fast local check.
     // Returns JSON { loggedIn: bool, authMethod, apiProvider }. Available since Claude Code v2+.
-    // If loggedIn is explicitly false, bail early — no point probing the API.
+    // Exits non-zero when not logged in. Two separate try/catch blocks:
+    //   - execFileSync throw (non-zero exit) → definitively not authenticated
+    //   - JSON.parse throw (exit 0, bad output) → fall through to Stage 2, don't false-negative
+    let authOutput;
     try {
-      const authOutput = execFileSync(CLAUDE_BIN, ['auth', 'status'], {
+      authOutput = execFileSync(CLAUDE_BIN, ['auth', 'status'], {
         env: injectedEnv, stdio: 'pipe', encoding: 'utf8', timeout: 5000,
       });
+    } catch {
+      // Non-zero exit means not logged in.
+      return { ok: false, reason: 'auth_status_not_logged_in' };
+    }
+    try {
       const authStatus = JSON.parse(authOutput);
       if (authStatus?.loggedIn === false) {
         return { ok: false, reason: 'auth_status_not_logged_in' };
       }
-    } catch { /* auth status unavailable or failed — fall through to probe */ }
+    } catch { /* JSON parse failed — fall through to Stage 2 probe */ }
 
     // Stage 2: Live probe — `claude -p ping --max-turns 1`.
     // Use async execFile — spawnSync would block the event loop for up to 30s,
