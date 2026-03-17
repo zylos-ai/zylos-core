@@ -986,7 +986,7 @@ function sendUsageNotification(message) {
  * Usage check state machine — called from monitorLoop every second.
  * Only progresses when Claude is idle with no pending work.
  */
-function maybeCheckUsage(claudeState, idleSeconds, currentTime) {
+function maybeCheckUsage(claudeState, idleSeconds, currentTime, apiActivity) {
   // /usage is a Claude Code-only slash command — skip for other runtimes
   if (adapter.runtimeId !== 'claude') return;
 
@@ -1080,6 +1080,15 @@ function maybeCheckUsage(claudeState, idleSeconds, currentTime) {
   if (claudeState !== 'idle') return;
   if (idleSeconds < USAGE_IDLE_GATE) return;
   if ((currentTime - lastUsageCheckAt) < USAGE_CHECK_INTERVAL) return;
+
+  // Don't interrupt an active prompt (text generation between tool calls).
+  // Guard against stale in_prompt after a hard crash: ignore if the hook
+  // activity file hasn't been updated in 10 minutes (600s).
+  if (apiActivity?.in_prompt) {
+    const updatedAt = apiActivity?.updated_at
+      ? Math.floor(apiActivity.updated_at / 1000) : 0;
+    if ((currentTime - updatedAt) < 600) return;
+  }
 
   // Only check during active hours
   const hour = getLocalHour();
@@ -1321,7 +1330,7 @@ async function monitorLoop() {
   }
   memoryCommitScheduler.maybeTrigger();
   if (engine.health === 'ok') {
-    maybeCheckUsage(state, idleSeconds, currentTime);
+    maybeCheckUsage(state, idleSeconds, currentTime, apiActivity);
   }
   lastState = state;
 }

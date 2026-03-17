@@ -132,6 +132,7 @@ process.stdin.on('end', () => {
           eventType = 'prompt';
           active = true;
           state.active_tools = 0;
+          state.in_prompt = true;
           break;
         case 'PreToolUse':
           eventType = 'pre_tool';
@@ -148,11 +149,13 @@ process.stdin.on('end', () => {
         case 'Stop':
           eventType = 'stop';
           state.active_tools = 0;
+          state.in_prompt = false;
           active = false;
           break;
         case 'Notification':
           eventType = 'idle';
           state.active_tools = 0;
+          state.in_prompt = false;
           active = false;
           break;
         default:
@@ -168,6 +171,7 @@ process.stdin.on('end', () => {
         tool,
         active,
         active_tools: state.active_tools,
+        in_prompt: state.in_prompt ?? false,
         updated_at: Date.now()
       });
 
