@@ -43,6 +43,7 @@ import {
   REQUIRE_IDLE_EXECUTION_POLL_MS,
   TMUX_SESSION,
   AGENT_STATUS_FILE,
+  API_ACTIVITY_FILE,
   STALE_STATUS_THRESHOLD,
   TMUX_MISSING_WARN_THRESHOLD
 } from './c4-config.js';
@@ -104,6 +105,16 @@ function isAgentStatusFresh() {
     }
     const stats = statSync(AGENT_STATUS_FILE);
     return (Date.now() - stats.mtimeMs) <= STALE_STATUS_THRESHOLD;
+  } catch {
+    return false;
+  }
+}
+
+function isAgentBusy() {
+  try {
+    if (!existsSync(API_ACTIVITY_FILE)) return false;
+    const data = JSON.parse(readFileSync(API_ACTIVITY_FILE, 'utf8'));
+    return (data.active_tools ?? 0) > 0;
   } catch {
     return false;
   }
@@ -178,7 +189,7 @@ async function submitAndVerify() {
     const state = checkInputBox(capture);
 
     if (state === 'empty') {
-      return;
+      return true;
     }
 
     if (state === 'indeterminate') {
@@ -190,6 +201,8 @@ async function submitAndVerify() {
     log(`Enter verify attempt ${attempt + 1}: input box has content, retrying Enter`);
     execFileSync('tmux', ['send-keys', '-t', TMUX_SESSION, 'Enter'], { stdio: 'pipe', timeout: 5000 });
   }
+
+  return false;
 }
 
 async function sendToTmux(message) {
@@ -214,10 +227,22 @@ async function sendToTmux(message) {
 
   await sleep(delayMs);
 
+  let verified = false;
   try {
-    await submitAndVerify();
+    verified = await submitAndVerify();
   } catch (err) {
-    log(`Warning: Enter verification error (paste already succeeded): ${err.message}`);
+    log(`Warning: Enter verification error: ${err.message}`);
+  }
+
+  // D2: If verification failed, check agent state. If agent is offline/stopped,
+  // the message was genuinely lost (pasted into a dead pane). If agent is still
+  // online/busy, the paste likely succeeded but verification timing was off.
+  if (!verified) {
+    const postState = getAgentState();
+    if (postState.state === 'offline' || postState.state === 'stopped') {
+      log('Verification failed and agent is offline — marking as verify_failed');
+      return 'verify_failed';
+    }
   }
 
   return 'submitted';
@@ -377,6 +402,15 @@ async function processNextMessage() {
     return { delivered: false, state: agentState.state };
   }
 
+  // D1: bypass_state messages (heartbeat) must not interrupt active generation.
+  // Requeue if agent has active tools — the heartbeat will naturally time out and
+  // HeartbeatEngine will retry on the next probe cycle.
+  if (bypass && isAgentBusy()) {
+    log(`Deferring bypass control id=${item.id}: agent has active tools`);
+    releaseItem(item);
+    return { delivered: false, state: agentState.state };
+  }
+
   log(`Delivering ${item.type} id=${item.id}${item.type === 'control' ? ` priority=${item.priority}` : ` from ${item.channel}`}`);
   const deliveryContent = item.content || '';
   const result = await sendToTmux(deliveryContent);
@@ -395,10 +429,11 @@ async function processNextMessage() {
     return { delivered: true, state: agentState.state };
   }
 
-  log(`Failed to paste ${item.type} id=${item.id} to tmux`);
-  logDeliveryFailure(item.type, item.id, 'TMUX_PASTE_FAILED');
+  const reason = result === 'verify_failed' ? 'VERIFY_FAILED' : 'TMUX_PASTE_FAILED';
+  log(`Failed to deliver ${item.type} id=${item.id} to tmux (${reason})`);
+  logDeliveryFailure(item.type, item.id, reason);
   if (item.type === 'control') {
-    await handleControlDeliveryFailure(item, 'TMUX_PASTE_FAILED');
+    await handleControlDeliveryFailure(item, reason);
   } else {
     await handleConversationDeliveryFailure(item);
   }
