@@ -540,9 +540,20 @@ async function handleUpgradeFlow(component, { jsonOutput, skipConfirm, skipEval,
 
     // 3. Download new version to temp (skip if reusing from --check)
     if (tempDirWasProvided) {
-      // Validate provided temp dir exists
+      // Validate provided temp dir exists and has valid package contents
       if (!fs.existsSync(tempDir)) {
         const msg = `Provided temp dir does not exist: ${tempDir}`;
+        if (jsonOutput) {
+          const errOutput = { action: 'upgrade', component, success: false, error: msg };
+          errOutput.reply = formatC4Reply('error', { message: msg });
+          console.log(JSON.stringify(errOutput, null, 2));
+        } else {
+          console.error(`Error: ${msg}`);
+        }
+        return false;
+      }
+      if (!fs.existsSync(path.join(tempDir, 'package.json'))) {
+        const msg = `Provided temp dir is missing package.json (empty or invalid): ${tempDir}`;
         if (jsonOutput) {
           const errOutput = { action: 'upgrade', component, success: false, error: msg };
           errOutput.reply = formatC4Reply('error', { message: msg });
@@ -991,9 +1002,20 @@ async function upgradeSelfCore({ providedTempDir, branch, mode = 'merge' } = {})
 
     // 3. Download new version to temp (skip if reusing from --check)
     if (tempDirWasProvided) {
-      // Validate provided temp dir exists
+      // Validate provided temp dir exists and has valid package contents
       if (!fs.existsSync(tempDir)) {
         const msg = `Provided temp dir does not exist: ${tempDir}`;
+        if (jsonOutput) {
+          const errOutput = { action: 'self_upgrade', success: false, error: msg };
+          errOutput.reply = formatC4Reply('error', { message: msg });
+          console.log(JSON.stringify(errOutput, null, 2));
+        } else {
+          console.error(`Error: ${msg}`);
+        }
+        return false;
+      }
+      if (!fs.existsSync(path.join(tempDir, 'package.json'))) {
+        const msg = `Provided temp dir is missing package.json (empty or invalid): ${tempDir}`;
         if (jsonOutput) {
           const errOutput = { action: 'self_upgrade', success: false, error: msg };
           errOutput.reply = formatC4Reply('error', { message: msg });
