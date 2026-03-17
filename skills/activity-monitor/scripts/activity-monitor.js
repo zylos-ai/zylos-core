@@ -408,6 +408,26 @@ function enqueueStartupControl() {
 }
 
 /**
+ * Check for a user-message signal file and clear auth suppression if found.
+ * Called from offline/stopped branches (which return early before the main
+ * signal-check code) so that user messages can trigger immediate auth retry.
+ */
+function maybeConsumeUserMessageSignal(currentTime) {
+  try {
+    if (!fs.existsSync(USER_MESSAGE_SIGNAL_FILE)) return;
+    const signal = JSON.parse(fs.readFileSync(USER_MESSAGE_SIGNAL_FILE, 'utf8'));
+    fs.unlinkSync(USER_MESSAGE_SIGNAL_FILE);
+    if (signal.timestamp && (currentTime - signal.timestamp) < 60) {
+      if (authRetrySuppressedUntil > 0) {
+        log('Guardian: user message received, clearing auth retry suppression');
+        authRetrySuppressedUntil = 0;
+      }
+      engine.notifyUserMessage(currentTime);
+    }
+  } catch { /* best-effort */ }
+}
+
+/**
  * Start the active runtime agent.
  * Clears stale state files, delegates launch to the RuntimeAdapter,
  * then enqueues the startup control prompt if no session-start hook is installed.
@@ -1160,6 +1180,9 @@ async function monitorLoop() {
       log('State: OFFLINE (tmux session not found)');
     }
 
+    // Check for user message signal — clears auth suppression for immediate retry.
+    maybeConsumeUserMessageSignal(currentTime);
+
     // Delegate restart permission to HeartbeatEngine (e.g. won't restart during rate_limited).
     // Counter mutations (consecutiveRestarts, startupGrace, notRunningCount) are handled
     // inside startAgent() after auth check passes — not here.
@@ -1211,6 +1234,9 @@ async function monitorLoop() {
     if (state !== lastState) {
       log(`State: STOPPED (${adapter.displayName} not running in tmux session)`);
     }
+
+    // Check for user message signal — clears auth suppression for immediate retry.
+    maybeConsumeUserMessageSignal(currentTime);
 
     // Delegate restart permission to HeartbeatEngine (e.g. won't restart during rate_limited).
     // Counter mutations (consecutiveRestarts, startupGrace, notRunningCount) are handled
@@ -1318,19 +1344,7 @@ async function monitorLoop() {
   // User message triggered recovery: when a user sends a message while unavailable,
   // c4-receive writes a signal file. Read and consume it to trigger/accelerate recovery.
   if (engine.health !== 'ok') {
-    try {
-      if (fs.existsSync(USER_MESSAGE_SIGNAL_FILE)) {
-        const signal = JSON.parse(fs.readFileSync(USER_MESSAGE_SIGNAL_FILE, 'utf8'));
-        fs.unlinkSync(USER_MESSAGE_SIGNAL_FILE);
-        if (signal.timestamp && (currentTime - signal.timestamp) < 60) {
-          if (authRetrySuppressedUntil > 0) {
-            log('Guardian: user message received, clearing auth retry suppression');
-            authRetrySuppressedUntil = 0;
-          }
-          engine.notifyUserMessage(currentTime);
-        }
-      }
-    } catch { /* best-effort */ }
+    maybeConsumeUserMessageSignal(currentTime);
   }
 
   // Periodic probe: fixed 5-min interval, skipped when agent is busy (active_tools > 0).
