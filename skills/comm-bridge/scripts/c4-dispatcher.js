@@ -21,6 +21,7 @@ import {
   claimControl,
   requeueControl,
   retryOrFailControl,
+  ackControl,
   expireTimedOutControls,
   cleanupControlQueue
 } from './c4-db.js';
@@ -403,12 +404,13 @@ async function processNextMessage() {
   }
 
   // D1: bypass_state messages (heartbeat) must not interrupt active generation.
-  // Requeue if agent has active tools — the heartbeat will naturally time out and
-  // HeartbeatEngine will retry on the next probe cycle.
+  // If agent has active tools, it is provably alive — auto-ack the heartbeat
+  // instead of pasting it into tmux. This avoids interrupting generation and
+  // prevents false-positive recovery from ack_deadline expiry during long tasks.
   if (bypass && isAgentBusy()) {
-    log(`Deferring bypass control id=${item.id}: agent has active tools`);
-    releaseItem(item);
-    return { delivered: false, state: agentState.state };
+    log(`Auto-acking bypass control id=${item.id}: agent has active tools (provably alive)`);
+    ackControl(item.id);
+    return { delivered: true, state: agentState.state };
   }
 
   log(`Delivering ${item.type} id=${item.id}${item.type === 'control' ? ` priority=${item.priority}` : ` from ${item.channel}`}`);
