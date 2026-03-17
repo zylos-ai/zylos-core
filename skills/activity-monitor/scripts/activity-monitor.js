@@ -1,6 +1,12 @@
 #!/usr/bin/env node
 /**
- * Activity Monitor v23 - RuntimeAdapter (multi-runtime) + Guardian + Heartbeat v4 + Health Check + Daily Tasks + Upgrade Check + Usage Monitor
+ * Activity Monitor v24 - RuntimeAdapter (multi-runtime) + Guardian + Heartbeat v4 + Health Check + Daily Tasks + Upgrade Check + Usage Monitor
+ *
+ * v24 changes (service recovery — auth retry backoff):
+ *   - Auth failure now suppresses restart attempts for 3 minutes (authRetrySuppressedUntil)
+ *     instead of retrying every second after the initial backoff delay is exceeded
+ *   - User message signal clears the suppression for immediate retry
+ *   - Suppression log is emitted once per 60s to avoid log spam
  *
  * v23 changes (service recovery — execSync timeout hardening — #319):
  *   - All execSync/execFileSync calls now have explicit timeouts to prevent
@@ -218,6 +224,7 @@ let idleSince = 0;
 let lastPeriodicProbeAt = 0;
 let lastDeadApiPid = null;
 let authFailedNotifiedAt = 0;
+let authRetrySuppressedUntil = 0;
 let startAgentInProgress = false;
 
 let adapter;         // initialized in init() via getActiveAdapter()
@@ -420,7 +427,8 @@ async function startAgent() {
     // Live auth check before restarting — avoids infinite restart loop on revoked/expired tokens.
     const authResult = adapter.checkAuth ? await adapter.checkAuth() : { ok: true };
     if (!authResult.ok) {
-      log(`Guardian: auth failed (${authResult.reason ?? 'unknown'}), skipping restart`);
+      log(`Guardian: auth failed (${authResult.reason ?? 'unknown'}), skipping restart. Next retry in 3 min.`);
+      authRetrySuppressedUntil = Date.now() + 180_000;
       const now = Math.floor(Date.now() / 1000);
       if ((now - authFailedNotifiedAt) > 3600) {
         authFailedNotifiedAt = now;
@@ -435,6 +443,7 @@ async function startAgent() {
 
     // Auth passed — consume the restart budget and mark startup in progress.
     // Done here (after auth check) so auth failures don't consume backoff budget.
+    authRetrySuppressedUntil = 0;
     consecutiveRestarts += 1;
     startupGrace = 30;
     notRunningCount = 0;
@@ -1156,8 +1165,12 @@ async function monitorLoop() {
     // inside startAgent() after auth check passes — not here.
     const restartDelay = Math.min(BASE_RESTART_DELAY * Math.pow(2, consecutiveRestarts), MAX_RESTART_DELAY);
     if (engine.canRestart() && notRunningCount >= restartDelay) {
-      log(`Guardian: Session not found for ${notRunningCount}s, attempting to start ${adapter.displayName}...`);
-      startAgent();
+      if (Date.now() < authRetrySuppressedUntil) {
+        if (notRunningCount % 60 === 0) log(`Guardian: auth retry suppressed for ${Math.ceil((authRetrySuppressedUntil - Date.now()) / 1000)}s`);
+      } else {
+        log(`Guardian: Session not found for ${notRunningCount}s, attempting to start ${adapter.displayName}...`);
+        startAgent();
+      }
     }
 
     engine.processHeartbeat(false, currentTime);
@@ -1204,8 +1217,12 @@ async function monitorLoop() {
     // inside startAgent() after auth check passes — not here.
     const restartDelay = Math.min(BASE_RESTART_DELAY * Math.pow(2, consecutiveRestarts), MAX_RESTART_DELAY);
     if (engine.canRestart() && notRunningCount >= restartDelay) {
-      log(`Guardian: Agent not running for ${notRunningCount}s, attempting to start ${adapter.displayName}...`);
-      startAgent();
+      if (Date.now() < authRetrySuppressedUntil) {
+        if (notRunningCount % 60 === 0) log(`Guardian: auth retry suppressed for ${Math.ceil((authRetrySuppressedUntil - Date.now()) / 1000)}s`);
+      } else {
+        log(`Guardian: Agent not running for ${notRunningCount}s, attempting to start ${adapter.displayName}...`);
+        startAgent();
+      }
     }
 
     engine.processHeartbeat(false, currentTime);
@@ -1306,6 +1323,10 @@ async function monitorLoop() {
         const signal = JSON.parse(fs.readFileSync(USER_MESSAGE_SIGNAL_FILE, 'utf8'));
         fs.unlinkSync(USER_MESSAGE_SIGNAL_FILE);
         if (signal.timestamp && (currentTime - signal.timestamp) < 60) {
+          if (authRetrySuppressedUntil > 0) {
+            log('Guardian: user message received, clearing auth retry suppression');
+            authRetrySuppressedUntil = 0;
+          }
           engine.notifyUserMessage(currentTime);
         }
       }
