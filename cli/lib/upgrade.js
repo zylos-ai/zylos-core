@@ -458,7 +458,13 @@ function step7_startService(ctx) {
     execSync(`pm2 restart ${serviceName} 2>/dev/null`, { stdio: 'pipe' });
     return { step: 7, name: 'start_service', status: 'done', message: serviceName, duration: Date.now() - startTime };
   } catch {
-    return { step: 7, name: 'start_service', status: 'failed', error: `Failed to restart ${serviceName}`, duration: Date.now() - startTime };
+    // restart fails if process was deleted from PM2 between step1 and step7; fall back to start
+    try {
+      execSync(`pm2 start ${serviceName} 2>/dev/null`, { stdio: 'pipe' });
+      return { step: 7, name: 'start_service', status: 'done', message: `${serviceName} (started)`, duration: Date.now() - startTime };
+    } catch {
+      return { step: 7, name: 'start_service', status: 'failed', error: `Failed to restart ${serviceName}`, duration: Date.now() - startTime };
+    }
   }
 }
 
@@ -504,7 +510,7 @@ export function rollback(ctx) {
     const parsed = parseSkillMd(ctx.skillDir);
     const serviceName = parsed?.frontmatter?.lifecycle?.service?.name || `zylos-${ctx.component}`;
     try {
-      execSync(`pm2 restart ${serviceName} 2>/dev/null || true`, { stdio: 'pipe' });
+      execSync(`pm2 restart ${serviceName} 2>/dev/null`, { stdio: 'pipe' });
       results.push({ action: 'restart_service', success: true });
     } catch (err) {
       results.push({ action: 'restart_service', success: false, error: err.message });
