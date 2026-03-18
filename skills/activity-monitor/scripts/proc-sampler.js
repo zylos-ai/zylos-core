@@ -74,8 +74,10 @@ export class ProcSampler {
   /**
    * Called every second from monitorLoop. Internally gates on sampleInterval.
    * @param {number} currentTime  epoch seconds
+   * @param {object} [opts]
+   * @param {boolean} [opts.isActive]  true when agent has active tools (expected to be working)
    */
-  tick(currentTime) {
+  tick(currentTime, opts = {}) {
     if ((currentTime - this._lastSampleAt) < this._sampleInterval) return;
     this._lastSampleAt = currentTime;
 
@@ -121,9 +123,16 @@ export class ProcSampler {
     if (delta > 0) {
       this._frozenCount = 0;
       this._alive = true;
-    } else {
+    } else if (opts.isActive) {
+      // Only accumulate frozen count when agent is expected to be working
+      // (active_tools > 0). An idle agent waiting for input naturally has
+      // zero context switches — that's normal, not frozen.
       this._frozenCount += this._sampleInterval;
       this._alive = this._frozenCount < this._frozenThreshold;
+    } else {
+      // Idle — zero delta is expected, don't accumulate frozen count
+      this._frozenCount = 0;
+      this._alive = true;
     }
 
     this._writeProcState();

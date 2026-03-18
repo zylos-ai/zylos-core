@@ -411,13 +411,15 @@ async function processNextMessage() {
     return { delivered: false, state: agentState.state };
   }
 
-  // D1: bypass_state messages (heartbeat) must not interrupt active generation.
+  // D1: heartbeat must not interrupt active generation.
   // Use ProcSampler state as the ground truth: if /proc confirms the process is alive,
   // auto-ack the heartbeat instead of pasting it into tmux.
+  // Scoped to heartbeat only — other bypass controls (e.g. context rotation) must be delivered.
   if (bypass) {
+    const isHeartbeat = (item.content || '').includes('Heartbeat check');
     const procState = readProcState();
-    if (procState && procState.alive === true) {
-      log(`Auto-acking bypass control id=${item.id}: /proc confirms process alive (delta=${procState.lastDelta})`);
+    if (isHeartbeat && procState && procState.alive === true) {
+      log(`Auto-acking heartbeat id=${item.id}: /proc confirms process alive (delta=${procState.lastDelta})`);
       ackControl(item.id);
       return { delivered: true, state: agentState.state };
     }

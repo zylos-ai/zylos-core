@@ -1284,18 +1284,6 @@ async function monitorLoop() {
     }
   }
 
-  // /proc context-switch sampling: tick every loop iteration (internally gated to 10s).
-  // Detects frozen processes by observing zero ctx_switch delta for 60s.
-  procSampler.tick(currentTime);
-  if (procSampler.isFrozen()) {
-    log(`Guardian: Process frozen (0 ctx_switch delta for ${procSampler.getState().frozenCount}s), killing session`);
-    adapter.stop();
-    procSampler.reset();
-    // Guardian will detect offline on next tick and call startAgent().
-    lastState = 'frozen';
-    return;
-  }
-
   let activity = adapter.runtimeId === 'claude' ? getConversationFileModTime() : null;
   let source = 'conv_file';
 
@@ -1314,6 +1302,19 @@ async function monitorLoop() {
   const apiUpdatedSec = apiActivity?.updated_at ? Math.floor(apiActivity.updated_at / 1000) : 0;
   const activeTools = apiActivity?.active_tools ?? 0;
   const thinking = apiActivity?.active === true || activeTools > 0;
+
+  // /proc context-switch sampling: tick every loop iteration (internally gated to 10s).
+  // Only counts frozen time when agent has active tools (isActive), since an idle agent
+  // naturally has zero context switches.
+  procSampler.tick(currentTime, { isActive: activeTools > 0 });
+  if (procSampler.isFrozen()) {
+    log(`Guardian: Process frozen (0 ctx_switch delta for ${procSampler.getState().frozenCount}s while active_tools > 0), killing session`);
+    adapter.stop();
+    procSampler.reset();
+    // Guardian will detect offline on next tick and call startAgent().
+    lastState = 'frozen';
+    return;
+  }
 
   // Merge activity sources: use API timestamp when it indicates active work
   // (PreToolUse/UserPromptSubmit set active=true). Don't extend activity on
