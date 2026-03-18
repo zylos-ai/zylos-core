@@ -21,6 +21,7 @@ import {
   claimControl,
   requeueControl,
   retryOrFailControl,
+  ackControl,
   expireTimedOutControls,
   cleanupControlQueue
 } from './c4-db.js';
@@ -43,6 +44,7 @@ import {
   REQUIRE_IDLE_EXECUTION_POLL_MS,
   TMUX_SESSION,
   AGENT_STATUS_FILE,
+  PROC_STATE_FILE,
   STALE_STATUS_THRESHOLD,
   TMUX_MISSING_WARN_THRESHOLD
 } from './c4-config.js';
@@ -94,6 +96,22 @@ function getAgentState() {
     log(`Warning: Error reading agent status (${err.message})`);
     // health is fail-open by design; state still degrades to offline on read failure.
     return { state: 'offline', health: 'ok', healthy: false, reason: 'error' };
+  }
+}
+
+/**
+ * Read proc-state.json written by the activity monitor's ProcSampler.
+ * Returns { alive, frozen, ... } or null if unavailable/stale (>30s).
+ */
+function readProcState() {
+  try {
+    if (!existsSync(PROC_STATE_FILE)) return null;
+    const data = JSON.parse(readFileSync(PROC_STATE_FILE, 'utf8'));
+    const age = nowSeconds() - (data.lastSampleAt || 0);
+    if (age > 30) return null;
+    return data;
+  } catch {
+    return null;
   }
 }
 
@@ -178,7 +196,7 @@ async function submitAndVerify() {
     const state = checkInputBox(capture);
 
     if (state === 'empty') {
-      return;
+      return true;
     }
 
     if (state === 'indeterminate') {
@@ -190,6 +208,8 @@ async function submitAndVerify() {
     log(`Enter verify attempt ${attempt + 1}: input box has content, retrying Enter`);
     execFileSync('tmux', ['send-keys', '-t', TMUX_SESSION, 'Enter'], { stdio: 'pipe', timeout: 5000 });
   }
+
+  return false;
 }
 
 async function sendToTmux(message) {
@@ -214,10 +234,24 @@ async function sendToTmux(message) {
 
   await sleep(delayMs);
 
+  let verified = false;
   try {
-    await submitAndVerify();
+    verified = await submitAndVerify();
   } catch (err) {
-    log(`Warning: Enter verification error (paste already succeeded): ${err.message}`);
+    log(`Warning: Enter verification error: ${err.message}`);
+  }
+
+  // D2: If verification failed, check process state via ProcSampler.
+  // If process is confirmed dead (alive === false or frozen), the message was lost.
+  // If process is alive, the paste likely succeeded but verification timing was off.
+  if (!verified) {
+    const procState = readProcState();
+    const agentState = getAgentState();
+    if ((procState && procState.alive === false) ||
+        agentState.state === 'offline' || agentState.state === 'stopped') {
+      log('Verification failed and agent is dead/offline — marking as verify_failed');
+      return 'verify_failed';
+    }
   }
 
   return 'submitted';
@@ -377,6 +411,18 @@ async function processNextMessage() {
     return { delivered: false, state: agentState.state };
   }
 
+  // D1: bypass_state messages (heartbeat) must not interrupt active generation.
+  // Use ProcSampler state as the ground truth: if /proc confirms the process is alive,
+  // auto-ack the heartbeat instead of pasting it into tmux.
+  if (bypass) {
+    const procState = readProcState();
+    if (procState && procState.alive === true) {
+      log(`Auto-acking bypass control id=${item.id}: /proc confirms process alive (delta=${procState.lastDelta})`);
+      ackControl(item.id);
+      return { delivered: true, state: agentState.state };
+    }
+  }
+
   log(`Delivering ${item.type} id=${item.id}${item.type === 'control' ? ` priority=${item.priority}` : ` from ${item.channel}`}`);
   const deliveryContent = item.content || '';
   const result = await sendToTmux(deliveryContent);
@@ -395,10 +441,11 @@ async function processNextMessage() {
     return { delivered: true, state: agentState.state };
   }
 
-  log(`Failed to paste ${item.type} id=${item.id} to tmux`);
-  logDeliveryFailure(item.type, item.id, 'TMUX_PASTE_FAILED');
+  const reason = result === 'verify_failed' ? 'VERIFY_FAILED' : 'TMUX_PASTE_FAILED';
+  log(`Failed to deliver ${item.type} id=${item.id} to tmux (${reason})`);
+  logDeliveryFailure(item.type, item.id, reason);
   if (item.type === 'control') {
-    await handleControlDeliveryFailure(item, 'TMUX_PASTE_FAILED');
+    await handleControlDeliveryFailure(item, reason);
   } else {
     await handleConversationDeliveryFailure(item);
   }
