@@ -45,6 +45,7 @@ import {
   TMUX_SESSION,
   AGENT_STATUS_FILE,
   PROC_STATE_FILE,
+  API_ACTIVITY_FILE,
   STALE_STATUS_THRESHOLD,
   TMUX_MISSING_WARN_THRESHOLD
 } from './c4-config.js';
@@ -112,6 +113,22 @@ function readProcState() {
     return data;
   } catch {
     return null;
+  }
+}
+
+/**
+ * Check if agent is confirmed active: api-activity.json must show active_tools > 0
+ * AND be fresh (updated within 60s). Prevents stale hook state from gating auto-ack.
+ */
+function isAgentConfirmedActive() {
+  try {
+    if (!existsSync(API_ACTIVITY_FILE)) return false;
+    const data = JSON.parse(readFileSync(API_ACTIVITY_FILE, 'utf8'));
+    const updatedAt = data?.updated_at ? Math.floor(data.updated_at / 1000) : 0;
+    const age = nowSeconds() - updatedAt;
+    return (data?.active_tools ?? 0) > 0 && age < 60;
+  } catch {
+    return false;
   }
 }
 
@@ -412,14 +429,18 @@ async function processNextMessage() {
   }
 
   // D1: heartbeat must not interrupt active generation.
-  // Use ProcSampler state as the ground truth: if /proc confirms the process is alive,
-  // auto-ack the heartbeat instead of pasting it into tmux.
-  // Scoped to heartbeat only — other bypass controls (e.g. context rotation) must be delivered.
+  // Auto-ack requires ALL three conditions:
+  //   1. It's a heartbeat (not other bypass controls like context rotation)
+  //   2. /proc confirms process is alive (not just scheduled)
+  //   3. Agent is confirmed active with fresh hooks (active_tools > 0 + updated <60s)
+  // When idle (active_tools === 0) or hooks are stale, heartbeat is delivered as a
+  // real end-to-end probe to verify the agent can actually process messages.
   if (bypass) {
     const isHeartbeat = (item.content || '').includes('Heartbeat check');
     const procState = readProcState();
-    if (isHeartbeat && procState && procState.alive === true) {
-      log(`Auto-acking heartbeat id=${item.id}: /proc confirms process alive (delta=${procState.lastDelta})`);
+    const confirmed = isAgentConfirmedActive();
+    if (isHeartbeat && procState && procState.alive === true && confirmed) {
+      log(`Auto-acking heartbeat id=${item.id}: /proc alive + active_tools>0 fresh (delta=${procState.lastDelta})`);
       ackControl(item.id);
       return { delivered: true, state: agentState.state };
     }

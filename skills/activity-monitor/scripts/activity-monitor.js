@@ -1303,10 +1303,16 @@ async function monitorLoop() {
   const activeTools = apiActivity?.active_tools ?? 0;
   const thinking = apiActivity?.active === true || activeTools > 0;
 
+  // Hook freshness: if api-activity.json hasn't been updated in 60s, treat active_tools
+  // as stale. Prevents stale hook state from driving destructive ProcSampler restarts
+  // and also gates heartbeat auto-ack in the dispatcher (via proc-state.json).
+  const hookFresh = apiUpdatedSec > 0 && (currentTime - apiUpdatedSec) < 60;
+  const confirmedActive = activeTools > 0 && hookFresh;
+
   // /proc context-switch sampling: tick every loop iteration (internally gated to 10s).
-  // Only counts frozen time when agent has active tools (isActive), since an idle agent
-  // naturally has zero context switches.
-  procSampler.tick(currentTime, { isActive: activeTools > 0 });
+  // Only counts frozen time when agent has confirmed active tools (fresh hook + active_tools > 0),
+  // since an idle agent naturally has zero context switches.
+  procSampler.tick(currentTime, { isActive: confirmedActive });
   if (procSampler.isFrozen()) {
     log(`Guardian: Process frozen (0 ctx_switch delta for ${procSampler.getState().frozenCount}s while active_tools > 0), killing session`);
     adapter.stop();
