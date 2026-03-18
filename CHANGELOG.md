@@ -5,12 +5,6 @@ All notable changes to zylos-core will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.4.1] - 2026-03-18
-
-### Fixed
-- **`.env` parsing tolerates quotes and spaces**: `checkAuth()`, `launch()`, and PM2 ecosystem config now accept common `.env` formatting variations — `KEY="value"`, `KEY = value`, tab-indented keys — instead of silently failing with auth errors
-- **Launch grace period (3 min)**: periodic heartbeat probes are skipped for 180 seconds after a fresh agent launch, preventing false `stuck_timeout` kills while the new session initializes hooks and instruction files
-
 ## [0.4.0] - 2026-03-15
 
 ### Added
