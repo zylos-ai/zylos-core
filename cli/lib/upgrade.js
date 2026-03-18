@@ -290,7 +290,7 @@ function createContext(component, { tempDir, newVersion, mode } = {}) {
 }
 
 // ---------------------------------------------------------------------------
-// 5-step upgrade pipeline
+// 7-step upgrade pipeline
 // ---------------------------------------------------------------------------
 
 /**
@@ -441,6 +441,33 @@ function step6_updateCaddyRoutes(ctx) {
   return { step: 6, name: 'caddy_routes', status: 'skipped', message: result.error, duration: Date.now() - startTime };
 }
 
+/**
+ * Step 7: restart PM2 service (if it was running before upgrade)
+ */
+function step7_startService(ctx) {
+  const startTime = Date.now();
+
+  if (!ctx.serviceWasRunning) {
+    return { step: 7, name: 'start_service', status: 'skipped', message: 'was not running', duration: Date.now() - startTime };
+  }
+
+  const parsed = parseSkillMd(ctx.skillDir);
+  const serviceName = parsed?.frontmatter?.lifecycle?.service?.name || `zylos-${ctx.component}`;
+
+  try {
+    execSync(`pm2 restart ${serviceName} 2>/dev/null`, { stdio: 'pipe' });
+    return { step: 7, name: 'start_service', status: 'done', message: serviceName, duration: Date.now() - startTime };
+  } catch {
+    // restart fails if process was deleted from PM2 between step1 and step7; fall back to start
+    try {
+      execSync(`pm2 start ${serviceName} 2>/dev/null`, { stdio: 'pipe' });
+      return { step: 7, name: 'start_service', status: 'done', message: `${serviceName} (started)`, duration: Date.now() - startTime };
+    } catch {
+      return { step: 7, name: 'start_service', status: 'failed', error: `Failed to restart ${serviceName}`, duration: Date.now() - startTime };
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Public: rollback
 // ---------------------------------------------------------------------------
@@ -483,7 +510,7 @@ export function rollback(ctx) {
     const parsed = parseSkillMd(ctx.skillDir);
     const serviceName = parsed?.frontmatter?.lifecycle?.service?.name || `zylos-${ctx.component}`;
     try {
-      execSync(`pm2 restart ${serviceName} 2>/dev/null || true`, { stdio: 'pipe' });
+      execSync(`pm2 restart ${serviceName} 2>/dev/null`, { stdio: 'pipe' });
       results.push({ action: 'restart_service', success: true });
     } catch (err) {
       results.push({ action: 'restart_service', success: false, error: err.message });
@@ -498,8 +525,8 @@ export function rollback(ctx) {
 // ---------------------------------------------------------------------------
 
 /**
- * Run the 6-step upgrade pipeline (mechanical operations only).
- * Hooks and service management are handled by Claude after this completes.
+ * Run the 7-step upgrade pipeline (mechanical operations only).
+ * Post-upgrade hooks are handled by Claude after this completes.
  * Lock must be acquired by caller (component.js).
  *
  * @param {string} component
@@ -533,6 +560,7 @@ export function runUpgrade(component, { tempDir, newVersion, mode, onStep } = {}
     step4_npmInstall,
     step5_generateManifest,
     step6_updateCaddyRoutes,
+    step7_startService,
   ];
 
   const total = steps.length;
