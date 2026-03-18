@@ -4,9 +4,10 @@
  *
  * v27 changes (proactive API error scan):
  *   - monitorLoop scans tmux pane every 15s for fatal API errors (400, invalid_request_error)
- *     independently of heartbeat state — detects errors within 15s instead of waiting for
- *     the next periodic probe (up to 3 min) + 30s fast-detection window
- *   - On detection: adapter.stop() → Guardian auto-restarts with fresh context
+ *     independently of heartbeat state — detects errors within 30s (2 consecutive scans)
+ *     instead of waiting for the next periodic probe (up to 3 min) + 30s fast-detection window
+ *   - Requires 2 consecutive detections to avoid false positives from conversation content
+ *   - On confirmed detection: adapter.stop() → Guardian auto-restarts with fresh context
  *   - Skipped during launch grace period (same as periodic probes)
  *
  * v26 changes (launch grace period + stale heartbeat fix):
@@ -252,6 +253,7 @@ let idleSince = 0;
 let lastPeriodicProbeAt = 0;
 let lastLaunchAt = 0;
 let lastApiErrorScanAt = 0;
+let apiErrorConsecutiveHits = 0;  // consecutive scans that detected an API error
 let lastDeadApiPid = null;
 let authFailedNotifiedAt = 0;
 let authRetrySuppressedUntil = 0;
@@ -1419,8 +1421,8 @@ async function monitorLoop() {
   }
 
   // Proactive API error scan: detect fatal API errors (e.g. 400 from corrupted image)
-  // in the tmux pane independently of heartbeat state. When detected, kill the session
-  // so Guardian auto-restarts with a fresh context. Throttled to once per 15s.
+  // in the tmux pane independently of heartbeat state. Requires 2 consecutive detections
+  // (30s apart) to avoid false positives from conversation content mentioning API errors.
   // Skipped during launch grace period (session still initializing).
   if (engine.health === 'ok' && engine.deps.detectApiError) {
     const withinGrace = lastLaunchAt > 0 && (currentTime - lastLaunchAt) < LAUNCH_GRACE_PERIOD;
@@ -1428,8 +1430,16 @@ async function monitorLoop() {
       lastApiErrorScanAt = currentTime;
       const apiError = engine.deps.detectApiError();
       if (apiError.detected) {
-        log(`Proactive API error scan: detected "${apiError.pattern}" in tmux pane. Killing session for restart.`);
-        adapter.stop();
+        apiErrorConsecutiveHits++;
+        if (apiErrorConsecutiveHits >= 2) {
+          log(`Proactive API error scan: "${apiError.pattern}" detected ${apiErrorConsecutiveHits} consecutive times. Killing session for restart.`);
+          adapter.stop();
+          apiErrorConsecutiveHits = 0;
+        } else {
+          log(`Proactive API error scan: "${apiError.pattern}" detected (${apiErrorConsecutiveHits}/2, confirming on next scan)`);
+        }
+      } else {
+        apiErrorConsecutiveHits = 0;
       }
     }
   }
