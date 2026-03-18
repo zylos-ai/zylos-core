@@ -491,6 +491,13 @@ async function startAgent() {
   log(`Guardian: Starting ${adapter.displayName}...`);
   lastLaunchAt = Math.floor(Date.now() / 1000);
 
+  // Clear stale heartbeat pending from previous session — prevents a race where
+  // the old heartbeat times out AFTER the new session starts, pushing health to
+  // "recovering" when the process signal (false→true) was already consumed while
+  // health was still "ok". Without this, health gets stuck in "recovering" with
+  // no signal to trigger acceleration.
+  try { engine.deps.clearHeartbeatPending(); } catch { }
+
   // Clear stale context temp files from a previous session
   try { fs.unlinkSync('/tmp/context-alert-cooldown'); } catch { }
   try { fs.unlinkSync('/tmp/context-compact-scheduled'); } catch { }
