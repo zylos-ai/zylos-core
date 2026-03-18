@@ -227,7 +227,7 @@ export function saveSetupTokenToEnv(token) {
       content = content.trimEnd() + `\n\n# Claude Code setup token (set by zylos init)\nCLAUDE_CODE_OAUTH_TOKEN=${token}\n`;
     }
     content = content.replace(/^# Anthropic API key \(set by zylos init\)\n/m, '');
-    content = content.replace(/^ANTHROPIC_API_KEY=.*\n?/m, '');
+    content = content.replace(/^\s*ANTHROPIC_API_KEY\s*=.*\n?/m, '');
     fs.writeFileSync(envPath, content);
   } catch {}
 }
