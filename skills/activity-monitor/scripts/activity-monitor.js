@@ -1424,6 +1424,11 @@ function _readMemorySnapshot() {
 }
 
 function init() {
+  // Strip stale TMUX env var — PM2 dump can carry over the old tmux session
+  // reference from before a reboot, causing child tmux commands to fail with
+  // "error creating /tmp/tmux-<uid>/default (No such file or directory)".
+  delete process.env.TMUX;
+
   if (!fs.existsSync(MONITOR_DIR)) {
     fs.mkdirSync(MONITOR_DIR, { recursive: true });
   }
