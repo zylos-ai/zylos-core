@@ -184,9 +184,10 @@ const SIGNAL_GRACE_PERIOD = 30;      // Wait 30s after agentRunning transitions 
 const RATE_LIMIT_DEFAULT_COOLDOWN = 3600;  // 1 hour default when reset time can't be parsed
 const USER_MESSAGE_RECOVERY_COOLDOWN = 60; // 1 min between user-message-triggered recoveries
 
-// Periodic probe config — relaxed to 30 min safety-net now that ProcSampler handles
-// liveness detection via context-switch sampling (10s interval, 60s frozen threshold).
-const PERIODIC_PROBE_INTERVAL = 1800; // 30 min (was 3 min pre-ProcSampler)
+// Periodic probe config — kept at 3 min for end-to-end health verification.
+// ProcSampler handles frozen-process detection, but periodic probe catches cases where
+// the process is alive but functionally broken (e.g., stuck API errors, auth expired).
+const PERIODIC_PROBE_INTERVAL = 180; // 3 min — complementary to ProcSampler, not replaced by it
 
 // Health check config
 const HEALTH_CHECK_INTERVAL = 21600; // 6 hours
@@ -1377,12 +1378,12 @@ async function monitorLoop() {
     maybeConsumeUserMessageSignal(currentTime);
   }
 
-  // Periodic probe: 30-min safety-net heartbeat (relaxed from 3 min now that ProcSampler
-  // handles liveness detection). Serves as a functional health check — confirms the agent
-  // can actually process messages, not just that the process exists.
+  // Periodic probe: 3-min end-to-end health check. Complementary to ProcSampler:
+  // ProcSampler detects frozen processes, periodic probe catches functional failures
+  // (API errors, auth expired, stuck prompts) where the process is alive but broken.
   if (engine.health === 'ok') {
     if (activeTools === 0 && (currentTime - lastPeriodicProbeAt) >= PERIODIC_PROBE_INTERVAL) {
-      const ok = engine.requestImmediateProbe('periodic_30min');
+      const ok = engine.requestImmediateProbe('periodic_3min');
       if (ok) lastPeriodicProbeAt = currentTime;
     }
   }
