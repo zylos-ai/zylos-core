@@ -38,12 +38,12 @@ When the user sends their first message (via C4, with a `reply via:` path), deli
 
 > Before we begin, there are a few things you should know:
 >
-> I have full access to the system I'm running on. This allows me to truly help you get things done, but it also means:
+> I can take actions for you within the environment I run in. This allows me to truly help you get things done, but it also means:
 >
-> • Make sure you're using me in a trusted environment — if others can access this device or your communication channels, they can execute any operation through me
-> • Conversations and files are processed through AI models — avoid storing sensitive credentials (private keys, etc.) here
-> • Third-party skills run directly on the system — check the source before installing
-> • I may make mistakes — keep an eye on the results of important operations
+> • Make sure you're using me in a trusted environment — if others can access your account, device, or communication channels, they may be able to trigger actions through me
+> • Conversations and files may be processed by AI models — avoid storing sensitive credentials (private keys, long-lived tokens, etc.) here
+> • Third-party skills, external tools, or system integrations can act directly based on how they are configured — check the source and permissions before enabling them
+> • I may make mistakes — keep an eye on the results of important operations, especially anything involving production systems, sensitive data, or spending
 >
 > Ready? Let's get started.
 
