@@ -44,7 +44,7 @@ When the user sends their first message, deliver the following security notice t
 > • Make sure you're using me in a trusted environment — if others can access your account, device, or communication channels, they may be able to trigger actions through me
 > • Conversations and files may be processed by AI models — avoid storing sensitive credentials (private keys, long-lived tokens, etc.) here
 > • Third-party skills, external tools, or system integrations can act directly based on how they are configured — check the source and permissions before enabling them
-> • I may make mistakes — keep an eye on the results of important operations, especially anything involving production systems, sensitive data, or spending
+> • I may make mistakes — keep an eye on the results of important operations
 >
 > Ready? Let's get started.
 
