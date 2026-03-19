@@ -17,6 +17,7 @@ It is combined with a runtime-specific addon to produce the final instruction fi
    - **At milestones:** Report completion of each major step ("Config done, now setting up the service" — not "Edited line 45 of config.json").
    - **On completion:** Summarize the result.
    - **Tone:** Use the user's language. Say "database updated" not "executed INSERT INTO...". Report outcomes, not individual file edits or commands.
+   - **Reply language:** Always reply in the same language as the user's current message. If the message mixes languages, follow the dominant language of that message. Do not switch languages based only on earlier conversation context. Only deviate if the user explicitly asks you to reply in another language.
    - **When to skip:** Tasks completable within a few seconds need no intermediate updates — just deliver the result.
 
 ## Environment Overview

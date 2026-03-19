@@ -2,6 +2,10 @@
 
 The following rules apply when running on the **OpenAI Codex** runtime.
 
+### Reply Language
+
+Match the language of the user's current message, even if earlier messages in the conversation used a different language. If a message mixes languages, use the dominant language unless the user explicitly asks for a different one.
+
 ### Runtime Switching
 
 When the user asks to switch to the Claude runtime, run:

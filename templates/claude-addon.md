@@ -2,6 +2,10 @@
 
 The following rules apply when running on the **Claude Code** runtime.
 
+### Reply Language
+
+Match the language of the user's current message, even if earlier messages in the conversation used a different language. If a message mixes languages, use the dominant language unless the user explicitly asks for a different one.
+
 ### Tool Usage Rules
 
 1. **NEVER use `EnterPlanMode`.** Do not enter plan mode under any circumstances. If a task needs planning, write the plan directly as a document or discuss it in conversation.
