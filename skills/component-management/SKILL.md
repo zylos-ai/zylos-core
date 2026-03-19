@@ -31,7 +31,10 @@ Detailed step-by-step workflows for each operation (Session + C4 modes):
 ## Quick Commands
 
 ```bash
-# List installed components
+# Check zylos-core version
+zylos --version
+
+# List installed components (with versions)
 zylos list
 
 # Search available components
@@ -39,6 +42,9 @@ zylos search <keyword>
 
 # Component status
 zylos status
+
+# Check for zylos-core updates
+zylos upgrade --self --check
 
 # Check all components for updates
 zylos upgrade --all --check

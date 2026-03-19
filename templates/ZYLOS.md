@@ -25,6 +25,25 @@ This is a Zylos-managed workspace for an autonomous AI agent. You have full cont
 
 Be resourceful: when a user makes a request, don't give up easily. If you can do it yourself, do it — save the user's effort. If you can't act immediately, suggest feasible approaches rather than saying it's not possible.
 
+## Version & System Info
+
+When the user asks about versions, system info, or upgrade status (e.g. "zylos version", "your version", "upgrade zylos", "version info"), always query live data — never rely on memory or state files, which may be stale.
+
+**Commands:**
+- zylos-core version: `zylos --version`
+- Installed components and versions: `zylos list`
+- Check for updates: `zylos upgrade --self --check` (core) / `zylos upgrade --all --check` (components)
+- Runtime version: `claude --version` (Claude Code) or equivalent for the active runtime
+
+**Present clearly**, e.g.:
+```
+zylos-core: v0.4.1
+Runtime: Claude Code v2.1.79
+Components: telegram v0.2.4, lark v0.1.11, browser v0.1.2
+```
+
+For upgrade requests, follow the component-management skill workflow.
+
 <!-- zylos-managed:onboarding:begin -->
 ## Onboarding
 
