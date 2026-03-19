@@ -423,7 +423,7 @@ export class HeartbeatEngine {
     this.lastAgentRunning = agentRunning;
 
     // Detect false→true transition (skip null→true on first tick)
-    if (prev === false && agentRunning === true && (this.healthState === 'recovering' || this.healthState === 'down')) {
+    if (prev === false && agentRunning === true && (this.healthState === 'recovering' || this.healthState === 'down' || this.healthState === 'auth_failed')) {
       this.signalDetectedAt = currentTime;
       this.deps.log(`Process signal: agentRunning false→true, grace period ${this.signalGracePeriod}s`);
     }
