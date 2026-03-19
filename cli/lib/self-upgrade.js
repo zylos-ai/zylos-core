@@ -11,7 +11,7 @@ import { execSync } from 'node:child_process';
 import { SKILLS_DIR, ZYLOS_DIR } from './config.js';
 import { downloadArchive, downloadBranch } from './download.js';
 import { generateManifest, saveManifest, saveOriginals } from './manifest.js';
-import { fetchRawFile, fetchLatestTag, sanitizeError } from './github.js';
+import { fetchRawFile, fetchLatestTag, compareSemverDesc, sanitizeError } from './github.js';
 import { copyTree, syncTree } from './fs-utils.js';
 import { extractScriptPath, extractSkillName, getCommandHooks } from './hook-utils.js';
 import { smartSync, formatMergeResult } from './smart-merge.js';
@@ -92,9 +92,13 @@ export function checkForCoreUpdates({ branch, beta = false } = {}) {
     return { success: false, error: 'remote_version_failed', message: latest.error };
   }
 
+  // Use semver comparison (not string inequality) to avoid suggesting downgrades.
+  // compareSemverDesc(a, b) > 0 means b is higher than a.
+  const hasUpdate = compareSemverDesc(current.version, latest.version) > 0;
+
   return {
     success: true,
-    hasUpdate: current.version !== latest.version,
+    hasUpdate,
     current: current.version,
     latest: latest.version,
   };

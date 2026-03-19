@@ -14,7 +14,7 @@ import { loadLocalRegistry } from './registry.js';
 import { parseSkillMd } from './skill.js';
 import { generateManifest, saveManifest } from './manifest.js';
 import { downloadArchive, downloadBranch } from './download.js';
-import { fetchLatestTag, fetchRawFile, sanitizeError } from './github.js';
+import { fetchLatestTag, fetchRawFile, compareSemverDesc, sanitizeError } from './github.js';
 import { copyTree, syncTree } from './fs-utils.js';
 import { applyCaddyRoutes } from './caddy.js';
 import { smartSync, formatMergeResult } from './smart-merge.js';
@@ -141,7 +141,9 @@ export function checkForUpdates(component, { beta = false } = {}) {
     };
   }
 
-  const hasUpdate = localVersion.version !== latest.version;
+  // Use semver comparison (not string inequality) to avoid suggesting downgrades.
+  // compareSemverDesc(a, b) > 0 means b is higher than a.
+  const hasUpdate = compareSemverDesc(localVersion.version, latest.version) > 0;
 
   return {
     success: true,
