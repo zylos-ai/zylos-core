@@ -13,8 +13,12 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
+import { smartSync, formatMergeResult } from '../cli/lib/smart-merge.js';
+import { copyTree } from '../cli/lib/fs-utils.js';
+import { generateManifest, saveManifest, saveOriginals } from '../cli/lib/manifest.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(process.env.HOME, 'zylos');
@@ -28,8 +32,10 @@ function syncSkills() {
   }
 
   console.log('Syncing Core Skills...');
-  let synced = 0;
-  let skipped = 0;
+  let added = 0;
+  let updated = 0;
+  let unchanged = 0;
+  const backupBase = path.join(os.tmpdir(), `zylos-postinstall-backup-${Date.now()}`);
 
   const entries = fs.readdirSync(CORE_SKILLS_SRC, { withFileTypes: true });
   for (const entry of entries) {
@@ -38,23 +44,46 @@ function syncSkills() {
     const srcDir = path.join(CORE_SKILLS_SRC, entry.name);
     const destDir = path.join(SKILLS_DIR, entry.name);
 
-    if (fs.existsSync(destDir)) {
-      // Skill already exists - don't overwrite (preserves user modifications)
-      skipped++;
+    if (!fs.existsSync(destDir)) {
+      // New skill — copy fresh + initialize manifest/originals
+      try {
+        copyTree(srcDir, destDir);
+        const manifest = generateManifest(destDir);
+        saveManifest(destDir, manifest);
+        saveOriginals(destDir, srcDir);
+        console.log(`  + ${entry.name}`);
+        added++;
+      } catch (err) {
+        console.log(`  Warning: Failed to sync ${entry.name}: ${err.message}`);
+      }
       continue;
     }
 
+    // Existing skill — smart merge (three-way when manifest exists, overwrite otherwise)
     try {
-      execFileSync('cp', ['-r', srcDir, destDir], { stdio: 'pipe' });
-      console.log(`  + ${entry.name}`);
-      synced++;
+      const backupDir = path.join(backupBase, entry.name);
+      const mergeResult = smartSync(srcDir, destDir, { backupDir });
+      const hasChanges = mergeResult.overwritten.length || mergeResult.added.length
+        || mergeResult.merged.length || mergeResult.deleted.length || mergeResult.conflicts.length;
+      if (hasChanges) {
+        const summary = formatMergeResult(mergeResult);
+        console.log(`  ~ ${entry.name} (${summary})`);
+        updated++;
+      } else {
+        unchanged++;
+      }
+      if (mergeResult.conflicts.length) {
+        for (const c of mergeResult.conflicts) {
+          if (c.backupPath) console.log(`    Conflict backup: ${c.backupPath}`);
+        }
+      }
     } catch (err) {
-      console.log(`  Warning: Failed to sync ${entry.name}: ${err.message}`);
+      console.log(`  Warning: Failed to update ${entry.name}: ${err.message}`);
     }
   }
 
-  if (synced > 0 || skipped > 0) {
-    console.log(`Core Skills: ${synced} synced, ${skipped} already present.`);
+  if (added > 0 || updated > 0 || unchanged > 0) {
+    console.log(`Core Skills: ${added} added, ${updated} updated, ${unchanged} unchanged.`);
   }
 }
 
