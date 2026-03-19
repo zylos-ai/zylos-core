@@ -5,6 +5,34 @@ All notable changes to zylos-core will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.1] - 2026-03-19
+
+### Added
+- **`auth_failed` health state**: authentication failures now set a dedicated health state instead of silently staying `ok`. Users see "authentication issues — please check credentials" instead of a generic error. User messages trigger immediate auth retry with no 3-minute wait (#359)
+- **Proactive API error scan**: detects API errors (HTTP 400/401/403/500) within ~15 seconds via tmux pane scanning, triggering fast heartbeat recovery instead of waiting for the next periodic probe (#355)
+- **/proc context-switch sampling**: frozen-process detection via `/proc/<pid>/status` context-switch counters — catches stuck Claude processes that appear alive but aren't processing (#351)
+- **API error fast-detection for heartbeat recovery**: `detectApiError` callback in HeartbeatEngine — on heartbeat failure, scans for API errors before triggering kill+restart, enabling targeted recovery (#352)
+
+### Fixed
+- **Auth recovery delayed by 3 minutes**: user messages during auth failure now clear the backoff timer immediately via the existing signal file mechanism (#359)
+- **`notifyPendingChannels` skipped after auth recovery**: health was prematurely cleared to `ok` before heartbeat verification, causing queued users to miss the "service recovered" notification. Health now stays `auth_failed` until heartbeat confirms the agent is alive (#359)
+- **Signal acceleration missing for `auth_failed`**: process signal detection (`_trackAgentRunning`) and acceleration (`processHeartbeat`) now include `auth_failed`, ensuring immediate heartbeat verification after auth-recovered restart instead of waiting up to 30 minutes (#359)
+- **Init fails to accept Claude terms**: `zylos init` now creates `settings.json` with autonomous mode consent regardless of auth state, fixing "NOT READY — autonomous mode not yet accepted" after adding a token post-init (#357)
+- **Stale heartbeat pending on new session**: `startAgent()` now clears leftover `heartbeat-pending.json` before launching, preventing false "recovering" transitions from a previous session's timed-out heartbeat (#354)
+- **.env parsing breaks on special characters**: regex-based `.env` parser now handles values with spaces, quotes, and special characters; 3-minute startup grace period prevents false alarms during slow launches (#353)
+- **Auth check failure causes infinite restart loop**: Guardian now suppresses restart attempts for 3 minutes after auth failure, with owner notification rate-limited to once per hour (#346)
+- **Auto-restart service after upgrade**: post-upgrade hook now restarts PM2 services automatically (#345)
+- **HTTP validation for API keys**: replaced 30-second ping-based validation with direct HTTP header check (`x-api-key`) for faster, more reliable auth verification (#341, #344)
+- **Guard /usage against active prompts**: `/usage` check skips when an active prompt is in progress, preventing interference with ongoing Claude operations (#343)
+- **`--temp-dir` contents validation before smart merge**: prevents corrupted temp directories from breaking the upgrade merge step (#342)
+- **`checkAuth()` false-positive with no credentials**: handles non-zero exit and missing credentials in Claude v2.1.76+ (#336, #339, #340)
+- **Codex API key leaked to .env**: API key now stored only in `~/.codex/auth.json` (#338)
+- **`execSync` hangs in monitor/dispatcher**: added timeouts to all `execSync` calls to prevent indefinite blocking (#335)
+- **Periodic probe interval too long**: reduced from 5 minutes to 3 minutes for faster liveness detection (#334)
+- **PM2 systemd unit instability**: stable systemd integration with consistent `zylos start` behavior (#331)
+- **Guardian tightly coupled to heartbeat engine**: decoupled Guardian restart logic from HeartbeatEngine internals via `canRestart()` API, live auth check before each restart, and periodic probe scheduling (#332)
+- **Boot-time service discovery**: component PM2 services are now auto-discovered and started on boot (#317)
+
 ## [0.4.0] - 2026-03-15
 
 ### Added
