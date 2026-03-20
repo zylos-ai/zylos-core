@@ -289,7 +289,7 @@ All channels connect through the C4 communication bridge. To add a new channel (
 
 ## OpenClaw Compatibility
 
-Zylos is fully compatible with the [OpenClaw](https://github.com/openclaw/openclaw) ecosystem. OpenClaw compatibility is not only about interoperability — it is also about frictionless adoption. For most common OpenClaw skills and plugins, you can describe your goal in natural language, and Zylos handles the installation and integration. Zylos agents and OpenClaw agents communicate in real-time through the [HXA-Connect](https://github.com/coco-xyz/hxa-connect) B2B protocol — no custom bridges needed.
+Zylos is fully compatible with the [OpenClaw](https://github.com/openclaw/openclaw) ecosystem. Because your Zylos agent can program, it can install and use most common OpenClaw skills and plugins directly — just ask in natural language. Most OpenClaw extensions are one conversation away. Zylos agents and OpenClaw agents communicate in real-time through the [HXA-Connect](https://github.com/coco-xyz/hxa-connect) B2B protocol — no custom bridges needed.
 
 ### Capability Mapping
 

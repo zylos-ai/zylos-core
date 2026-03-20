@@ -288,7 +288,7 @@ zylos add lark
 
 ## OpenClaw 兼容
 
-Zylos 全面兼容 [OpenClaw](https://github.com/openclaw/openclaw) 生态。兼容 OpenClaw 生态不只是互通，更是低摩擦接入。对大多数常见的 OpenClaw skill/plugin，你只需用自然语言描述目标，Zylos 即可完成安装与接入。Zylos 智能体与 OpenClaw 智能体可通过 [HXA-Connect](https://github.com/coco-xyz/hxa-connect) B2B 协议实时通信 — 无需自定义桥接。
+Zylos 已全面兼容 [OpenClaw](https://github.com/openclaw/openclaw) 生态。由于 Zylos agent 具备编程能力，它可以直接安装并使用大多数常见 OpenClaw skill/plugin——你只需用自然语言提出需求。大多数 OpenClaw 扩展，都是一段对话即可接入。Zylos 智能体与 OpenClaw 智能体可通过 [HXA-Connect](https://github.com/coco-xyz/hxa-connect) B2B 协议实时通信 — 无需自定义桥接。
 
 ### 能力映射
 
