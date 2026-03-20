@@ -344,11 +344,12 @@ function checkTelegramGroupPolicy(config) {
   }];
 }
 
-function checkWebConsoleExposure(caddyfile) {
-  if (!caddyfile || !caddyfile.includes('/console')) return [];
-  if (hasAuthDirective(caddyfile)) return [];
+export function checkWebConsoleExposure(caddyfile) {
+  const block = findSiteBlockForPath(caddyfile, '/console');
+  if (!block) return [];
+  if (hasAuthDirective(block.body)) return [];
 
-  const address = getCaddySiteAddress(caddyfile);
+  const address = block.address;
   if (address && !isPublicAddress(address)) return [];
 
   return [{
@@ -363,9 +364,10 @@ function checkWebConsoleExposure(caddyfile) {
 function checkCaddyExposure(caddyfile, zylosConfig) {
   if (!caddyfile) return [];
 
-  const address = getCaddySiteAddress(caddyfile) || zylosConfig.domain || '';
+  const block = findSiteBlockForPath(caddyfile, '/console') || getCaddySiteBlocks(caddyfile)[0] || null;
+  const address = block?.address || zylosConfig.domain || '';
   if (!isPublicAddress(address)) return [];
-  if (hasAuthDirective(caddyfile)) return [];
+  if (block && hasAuthDirective(block.body)) return [];
   if (String(zylosConfig.protocol || '').toLowerCase() !== 'http') return [];
 
   return [{
@@ -382,13 +384,65 @@ export function hasAuthDirective(caddyfile) {
 }
 
 export function getCaddySiteAddress(caddyfile) {
-  if (!caddyfile) return '';
-  for (const rawLine of caddyfile.split('\n')) {
+  return getCaddySiteBlocks(caddyfile)[0]?.address || '';
+}
+
+export function getCaddySiteBlocks(caddyfile) {
+  if (!caddyfile) return [];
+
+  const lines = caddyfile.split('\n');
+  const blocks = [];
+  let current = null;
+  let depth = 0;
+
+  for (const rawLine of lines) {
     const line = rawLine.trim();
-    if (!line || line.startsWith('#')) continue;
-    if (line.endsWith('{')) return line.slice(0, -1).trim();
+
+    if (!current) {
+      if (!line || line.startsWith('#') || !line.endsWith('{')) continue;
+
+      const header = line.slice(0, -1).trim();
+      current = {
+        address: header,
+        body: rawLine,
+        collect: isSiteAddress(header),
+      };
+      depth = countBraces(rawLine);
+
+      if (depth === 0) {
+        if (current.collect) blocks.push({ address: current.address, body: current.body });
+        current = null;
+      }
+      continue;
+    }
+
+    current.body += `\n${rawLine}`;
+    depth += countBraces(rawLine);
+
+    if (depth === 0) {
+      if (current.collect) blocks.push({ address: current.address, body: current.body });
+      current = null;
+    }
   }
-  return '';
+
+  return blocks;
+}
+
+export function findSiteBlockForPath(caddyfile, pathNeedle) {
+  return getCaddySiteBlocks(caddyfile).find((block) => block.body.includes(pathNeedle)) || null;
+}
+
+function isSiteAddress(header) {
+  return Boolean(header) && !header.startsWith('(');
+}
+
+function countBraces(line) {
+  let depth = 0;
+  for (const char of line) {
+    if (char === '{') depth += 1;
+    if (char === '}') depth -= 1;
+  }
+  return depth;
 }
 
 export function isPublicAddress(address) {

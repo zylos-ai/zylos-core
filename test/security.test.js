@@ -1,8 +1,11 @@
 import { describe, expect, test } from '@jest/globals';
 import {
+  checkWebConsoleExposure,
   classifyPermissionSeverity,
+  findSiteBlockForPath,
   formatMode,
   getCaddySiteAddress,
+  getCaddySiteBlocks,
   hasAuthDirective,
   isPublicAddress,
   objectContainsSecrets,
@@ -44,6 +47,28 @@ describe('security helpers', () => {
 
   test('getCaddySiteAddress returns the first site label', () => {
     expect(getCaddySiteAddress('# comment\nexample.com {\n  respond \"ok\"\n}')).toBe('example.com');
+  });
+
+  test('getCaddySiteAddress ignores snippets and returns the first real site label', () => {
+    const caddyfile = '(shared) {\n  header X-Test 1\n}\n\nexample.com {\n  import shared\n}';
+    expect(getCaddySiteAddress(caddyfile)).toBe('example.com');
+  });
+
+  test('findSiteBlockForPath returns the matching site block instead of unrelated auth blocks', () => {
+    const caddyfile = 'admin.example.com {\n  basic_auth {\n    admin hash\n  }\n}\n\nexample.com {\n  handle /console/* {\n    reverse_proxy localhost:3456\n  }\n}';
+    expect(findSiteBlockForPath(caddyfile, '/console')?.address).toBe('example.com');
+  });
+
+  test('checkWebConsoleExposure still flags unauthenticated console when auth exists on another site', () => {
+    const caddyfile = 'admin.example.com {\n  basic_auth {\n    admin hash\n  }\n}\n\nexample.com {\n  handle /console/* {\n    reverse_proxy localhost:3456\n  }\n}';
+    expect(checkWebConsoleExposure(caddyfile)).toEqual([
+      expect.objectContaining({ id: 'web-console:auth', severity: 'critical' }),
+    ]);
+  });
+
+  test('getCaddySiteBlocks collects only actual site blocks', () => {
+    const caddyfile = '{\n  debug\n}\n\n(shared) {\n  encode gzip\n}\n\nexample.com {\n  import shared\n}\n\nlocalhost {\n  respond \"ok\"\n}';
+    expect(getCaddySiteBlocks(caddyfile).map((block) => block.address)).toEqual(['example.com', 'localhost']);
   });
 
   test('isPublicAddress distinguishes local and public hosts', () => {
