@@ -79,7 +79,7 @@ export class ClaudeAdapter extends RuntimeAdapter {
   // ── Auth ──────────────────────────────────────────────────────────────────
 
   /**
-   * Live auth check via `claude -p ping --max-turns 1` (10s timeout).
+   * Live auth check via `claude -p ping --max-turns 1` (30s timeout).
    * End-to-end validation through the same path Claude Code uses at runtime.
    * Works with all credential types (API keys, setup tokens, OAuth tokens).
    *
@@ -110,11 +110,11 @@ export class ClaudeAdapter extends RuntimeAdapter {
     // End-to-end validation: works with all credential types (API keys, setup tokens,
     // OAuth tokens) without needing to know the correct HTTP header format.
     // Claude Code handles credential routing internally.
-    // Use async execFile — spawnSync would block the event loop for up to 10s.
+    // Use async execFile — spawnSync would block the event loop for up to 30s.
     try {
       const { stdout } = await execFileAsync(CLAUDE_BIN, ['-p', 'ping', '--max-turns', '1'], {
         env: injectedEnv,
-        timeout: 10_000,
+        timeout: 30_000,
         encoding: 'utf8',
       });
       // Safety net: some Claude versions exit 0 with "Not logged in" on stdout.
