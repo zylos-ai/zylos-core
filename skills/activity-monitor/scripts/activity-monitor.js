@@ -1590,7 +1590,7 @@ function init() {
           if (lastChannel) {
             try {
               execFileSync('node', [C4_SEND_PATH, lastChannel.channel, lastChannel.endpoint,
-                '上下文快满了，正在切换新 session，记忆完整保留，稍等片刻…'], { stdio: 'pipe', timeout: 15000 });
+                'Context is almost full — switching to a new session. Memory is fully preserved, back in a moment.'], { stdio: 'pipe', timeout: 15000 });
               log(`Rotation notice sent to ${lastChannel.channel}:${lastChannel.endpoint}`);
             } catch (notifyErr) {
               log(`Rotation notice failed (non-fatal): ${notifyErr.message}`);
