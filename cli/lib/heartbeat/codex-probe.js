@@ -5,131 +5,104 @@
  *   enqueueHeartbeat, getHeartbeatStatus, detectRateLimit,
  *   readHeartbeatPending, clearHeartbeatPending
  *
- * Mechanism — dual-signal probe:
- *   1. Send "Heartbeat check." via tmux stdin injection.
- *   2. Record baseline: rollout JSONL mtime + tmux pane line count.
- *   3. On check: if EITHER signal changed since baseline → agent responded → 'done'.
- *      Neither changed within deadline → 'timeout' → HeartbeatEngine triggers recovery.
+ * Mechanism — C4 control queue (same as Claude):
+ *   - enqueueHeartbeat: enqueues a C4 control message with an ACK deadline.
+ *     Codex's ACK (via c4-control.js ack --id <id>) marks it done.
+ *   - getHeartbeatStatus: queries C4 control for the message status.
  *
- * Why dual-signal:
- *   - Rollout mtime alone: false alarm if Codex is idle (no new events = not stuck)
- *   - Tmux pane alone: rollout format changes could blind the health check
- *   - Together: independent signals make false positives near-impossible
+ * This replaces the previous dual-signal tmux injection approach which caused
+ * kill-restart loops (rollout_path null after restart) and disrupted user
+ * conversations (Codex treated injected text as new prompts).
+ *
+ * C4 delivery flow:
+ *   1. Probe enqueues heartbeat → control_queue in DB
+ *   2. c4-dispatcher reads queue → delivers to Codex via tmux
+ *   3. Codex processes heartbeat → executes ack command
+ *   4. Probe checks C4 status → done/pending/timeout
+ *
+ * Auto-ack (optional, requires hooks):
+ *   When Codex has UserPromptSubmit hooks writing api-activity.json,
+ *   the dispatcher can auto-ack heartbeats while Codex is busy,
+ *   avoiding unnecessary interruption.
  *
  * Usage:
- *   const probe = createCodexProbe({ pendingFile, tmuxSession, sqliteFile });
- *   // Merge with remaining HeartbeatEngine deps (killTmuxSession, etc.) in Phase 7.
+ *   const probe = createCodexProbe({ pendingFile });
  */
 
-import { execSync, execFileSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 
-const HOME = os.homedir();
-const CODEX_DIR = path.join(HOME, '.codex');
-const DEFAULT_SQLITE = path.join(CODEX_DIR, 'state_5.sqlite');
+const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
+const C4_CONTROL = path.join(ZYLOS_DIR, '.claude/skills/comm-bridge/scripts/c4-control.js');
 
 /**
  * Create a Codex CLI heartbeat probe.
  *
  * @param {object} opts
  * @param {string}  opts.pendingFile       - Path to codex-heartbeat-pending.json
- * @param {string}  [opts.tmuxSession='codex-main']
- * @param {string}  [opts.sqliteFile]      - Path to state_5.sqlite (defaults to ~/.codex/state_5.sqlite)
- * @param {number}  [opts.ackDeadline=300]      - Response deadline for normal heartbeats (seconds)
- * @param {number}  [opts.stuckAckDeadline=120] - Response deadline for stuck-phase heartbeats
+ * @param {number}  [opts.ackDeadline=300]      - ACK deadline for normal heartbeats (seconds)
+ * @param {number}  [opts.stuckAckDeadline=120] - ACK deadline for stuck-phase heartbeats
  * @returns {object} Partial HeartbeatEngine deps
  */
 export function createCodexProbe({
   pendingFile,
-  tmuxSession = 'codex-main',
-  sqliteFile = DEFAULT_SQLITE,
   ackDeadline = 300,
   stuckAckDeadline = 120,
 }) {
-  // Record creation time so SQLite queries ignore threads from prior sessions.
-  // Matches the start-time filter used in CodexContextMonitor._getActiveRolloutPath().
-  const _startTime = Math.floor(Date.now() / 1000);
-
   return {
 
     // ── HeartbeatEngine probe deps ──────────────────────────────────────────
 
     /**
-     * Send a heartbeat ping via tmux and record dual-signal baselines.
-     *
-     * Baselines captured:
-     *   - rollout_path + rollout_mtime: active JSONL file modification time
-     *   - pane_line_count: non-empty lines in tmux pane (detects any new output)
-     *
+     * Enqueue a heartbeat control message via C4 and record the pending state.
      * @param {string} phase - 'normal' | 'stuck'
      * @returns {boolean}
      */
     enqueueHeartbeat(phase) {
-      const probeId = Date.now();
       const deadline = phase === 'stuck' ? stuckAckDeadline : ackDeadline;
+      try {
+        const out = execFileSync('node', [C4_CONTROL, 'enqueue',
+          '--content', 'Heartbeat check.',
+          '--priority', '0',
+          '--bypass-state',
+          '--ack-deadline', String(deadline),
+        ], { encoding: 'utf8', stdio: 'pipe', timeout: 15_000 });
 
-      // Capture rollout baseline before injecting (mtime changes only when agent writes)
-      const rolloutPath = _getActiveRolloutPath(sqliteFile, _startTime);
-      const rolloutMtime = rolloutPath ? _getMtime(rolloutPath) : 0;
+        const match = out.match(/control\s+(\d+)/i);
+        if (!match) return false;
 
-      // Inject heartbeat message
-      if (!_sendTmuxMessage(tmuxSession, 'Heartbeat check.')) return false;
-
-      // Capture pane baseline AFTER injection so the injected line is already
-      // included in the count — only subsequent output from the agent triggers 'done'.
-      const paneContent = _captureTmuxPane(tmuxSession) || '';
-      const paneLineCount = paneContent.split('\n').filter(l => l.trim()).length;
-
-      return _writePending(pendingFile, {
-        control_id: probeId,
-        phase,
-        created_at: Math.floor(Date.now() / 1000),
-        deadline,
-        rollout_path: rolloutPath,
-        rollout_mtime_baseline: rolloutMtime,
-        pane_line_count_baseline: paneLineCount,
-      });
+        const controlId = parseInt(match[1], 10);
+        return _writePending(pendingFile, {
+          control_id: controlId,
+          phase,
+          created_at: Math.floor(Date.now() / 1000),
+        });
+      } catch {
+        return false;
+      }
     },
 
     /**
-     * Check if the Codex agent has responded since the probe was sent.
-     * Returns 'done' if either signal changed; 'pending' while waiting;
-     * 'timeout' after deadline.
-     *
-     * @param {number} probeId
-     * @returns {string} 'done' | 'pending' | 'timeout' | 'error'
+     * Query C4 for the ACK status of a heartbeat control message.
+     * @param {number} controlId
+     * @returns {string} 'done' | 'pending' | 'timeout' | 'not_found' | 'error'
      */
-    getHeartbeatStatus(probeId) {
-      let pending;
+    getHeartbeatStatus(controlId) {
       try {
-        pending = JSON.parse(fs.readFileSync(pendingFile, 'utf8'));
-        if (pending.control_id !== probeId) return 'error';
-      } catch {
+        const out = execFileSync('node', [C4_CONTROL, 'get', '--id', String(controlId)], {
+          encoding: 'utf8', stdio: 'pipe', timeout: 10_000,
+        });
+        const match = out.match(/status=([a-z_]+)/i);
+        return match ? match[1].toLowerCase() : 'error';
+      } catch (e) {
+        if (e.stdout?.toLowerCase().includes('not found') ||
+            e.message?.toLowerCase().includes('not found')) {
+          return 'not_found';
+        }
         return 'error';
       }
-
-      const now = Math.floor(Date.now() / 1000);
-      const age = now - (pending.created_at || 0);
-
-      // Signal 1: rollout JSONL file has new entries
-      if (pending.rollout_path) {
-        const currentMtime = _getMtime(pending.rollout_path);
-        if (currentMtime > pending.rollout_mtime_baseline) return 'done';
-      }
-
-      // Signal 2: tmux pane output changed since baseline.
-      // Use !== (not >) because on a busy terminal the visible line count can
-      // decrease as lines scroll off-screen — a decrease still means new output.
-      const currentPane = _captureTmuxPane(tmuxSession) || '';
-      const currentLineCount = currentPane.split('\n').filter(l => l.trim()).length;
-      if (currentLineCount !== pending.pane_line_count_baseline) return 'done';
-
-      // Check deadline
-      if (age > (pending.deadline ?? ackDeadline)) return 'timeout';
-
-      return 'pending';
     },
 
     /**
@@ -146,7 +119,7 @@ export function createCodexProbe({
 
     /**
      * Read pending heartbeat state from disk.
-     * @returns {object | null}
+     * @returns {{ control_id: number, phase: string, created_at: number } | null}
      */
     readHeartbeatPending() {
       try {
@@ -166,84 +139,6 @@ export function createCodexProbe({
 }
 
 // ── Private helpers ──────────────────────────────────────────────────────────
-
-function _captureTmuxPane(session) {
-  try {
-    return execSync(`tmux capture-pane -p -t "${session}" 2>/dev/null`, { encoding: 'utf8' });
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Send a message to a tmux session via buffer paste.
- * Reuses the same technique as CodexAdapter.sendMessage().
- *
- * @param {string} session
- * @param {string} text
- * @returns {boolean}
- */
-function _sendTmuxMessage(session, text) {
-  const id = `${Date.now()}-${process.pid}`;
-  const bufName = `zylos-hb-${id}`;
-  let tmpFile;
-  try {
-    tmpFile = path.join(os.tmpdir(), `zylos-hb-${id}.txt`);
-    fs.writeFileSync(tmpFile, text);
-    execSync(`tmux load-buffer -b "${bufName}" "${tmpFile}" 2>/dev/null`);
-    execSync(`sleep 0.1`);
-    execSync(`tmux paste-buffer -b "${bufName}" -t "${session}" 2>/dev/null`);
-    execSync(`sleep 0.1`);
-    execSync(`tmux send-keys -t "${session}" Enter 2>/dev/null`);
-    return true;
-  } catch {
-    return false;
-  } finally {
-    try { if (tmpFile) fs.unlinkSync(tmpFile); } catch { }
-    try { execSync(`tmux delete-buffer -b "${bufName}" 2>/dev/null`); } catch { }
-  }
-}
-
-/**
- * Get the active Codex rollout JSONL path from SQLite threads table.
- *
- * Filters to threads updated after startTime (epoch seconds) so stale threads
- * from a previous session are never selected after a restart — matching the
- * same guard used in CodexContextMonitor._getActiveRolloutPath().
- *
- * @param {string} sqliteFile
- * @param {number} startTime - Epoch seconds; only threads updated at or after this are considered
- * @returns {string | null}
- */
-function _getActiveRolloutPath(sqliteFile, startTime) {
-  try {
-    const sql = `SELECT rollout_path FROM threads
-                 WHERE archived = 0
-                   AND updated_at >= ${startTime}
-                 ORDER BY updated_at DESC
-                 LIMIT 1;`;
-    const out = execFileSync('sqlite3', [sqliteFile, sql], {
-      encoding: 'utf8', stdio: 'pipe', timeout: 5_000,
-    }).trim();
-    return out || null;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Get file modification time in seconds since epoch.
- * Returns 0 if the file doesn't exist or stat fails.
- * @param {string} filePath
- * @returns {number}
- */
-function _getMtime(filePath) {
-  try {
-    return Math.floor(fs.statSync(filePath).mtimeMs / 1000);
-  } catch {
-    return 0;
-  }
-}
 
 function _writePending(file, data) {
   try {
