@@ -26,7 +26,7 @@
  *   avoiding unnecessary interruption.
  *
  * Usage:
- *   const probe = createCodexProbe({ pendingFile, tmuxSession });
+ *   const probe = createCodexProbe({ pendingFile });
  */
 
 import { execFileSync } from 'node:child_process';
@@ -42,14 +42,12 @@ const C4_CONTROL = path.join(ZYLOS_DIR, '.claude/skills/comm-bridge/scripts/c4-c
  *
  * @param {object} opts
  * @param {string}  opts.pendingFile       - Path to codex-heartbeat-pending.json
- * @param {string}  [opts.tmuxSession='codex-main']
  * @param {number}  [opts.ackDeadline=300]      - ACK deadline for normal heartbeats (seconds)
  * @param {number}  [opts.stuckAckDeadline=120] - ACK deadline for stuck-phase heartbeats
  * @returns {object} Partial HeartbeatEngine deps
  */
 export function createCodexProbe({
   pendingFile,
-  tmuxSession = 'codex-main',
   ackDeadline = 300,
   stuckAckDeadline = 120,
 }) {
