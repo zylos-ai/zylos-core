@@ -79,22 +79,14 @@ export class ClaudeAdapter extends RuntimeAdapter {
   // ── Auth ──────────────────────────────────────────────────────────────────
 
   /**
-   * Live auth check. Three-stage:
-   *   1. `claude auth status` (fast, local, structured JSON) — detects missing/no credentials
-   *      without a network round-trip. Guards against `claude -p ping` exiting 0 with
-   *      "Not logged in" message (observed in Claude Code v2.1.76+).
-   *   2. HTTP probe (GET /v1/models) — when .env has ANTHROPIC_API_KEY or
-   *      CLAUDE_CODE_OAUTH_TOKEN. Validates the key directly against the Anthropic API with
-   *      a 5s timeout. Avoids the 30s ping hang in firewalled/Docker environments where a
-   *      fake key passes Stage 1 (claude auth status sees env var → loggedIn:true) but
-   *      Stage 3 ping times out → err.killed → false-positive ok:true.
-   *   3. `claude -p ping --max-turns 1` (live CLI probe) — fallback when no .env key is
-   *      present (e.g. credentials stored only in ~/.claude/).
+   * Live auth check via `claude -p ping --max-turns 1` (30s timeout).
+   * End-to-end validation through the same path Claude Code uses at runtime.
+   * Works with all credential types (API keys, setup tokens, OAuth tokens).
    *
    * Return values:
    *   { ok: true }  — probe succeeded or outcome is uncertain (rate limit, server error) —
    *                   don't block restart in uncertain cases
-   *   { ok: false } — no credentials, invalid key (401), or network unreachable (Stage 2)
+   *   { ok: false } — no credentials, or authentication error
    *
    * @returns {Promise<{ok: boolean, reason: string}>}
    */
@@ -114,47 +106,10 @@ export class ClaudeAdapter extends RuntimeAdapter {
     // Strip vars that would make Claude refuse to start ("already running" guard).
     for (const v of ENV_VARS_TO_STRIP) delete injectedEnv[v];
 
-    // Stage 1: `claude auth status` — fast local check.
-    // Returns JSON { loggedIn: bool, authMethod, apiProvider }. Available since Claude Code v2+.
-    // Exits non-zero when not logged in. Two separate try/catch blocks:
-    //   - execFileSync throw (non-zero exit) → definitively not authenticated
-    //   - JSON.parse throw (exit 0, bad output) → fall through to Stage 2, don't false-negative
-    let authOutput;
-    try {
-      authOutput = execFileSync(CLAUDE_BIN, ['auth', 'status'], {
-        env: injectedEnv, stdio: 'pipe', encoding: 'utf8', timeout: 5000,
-      });
-    } catch {
-      // Non-zero exit means not logged in.
-      return { ok: false, reason: 'auth_status_not_logged_in' };
-    }
-    try {
-      const authStatus = JSON.parse(authOutput);
-      if (authStatus?.loggedIn === false) {
-        return { ok: false, reason: 'auth_status_not_logged_in' };
-      }
-    } catch { /* JSON parse failed — fall through to Stage 2/3 probe */ }
-
-    // Stage 2: HTTP validation for .env credentials.
-    // `claude auth status` returns loggedIn:true whenever ANTHROPIC_API_KEY is set in env —
-    // it never validates the key against the Anthropic API. A fake key passes Stage 1 but
-    // returns 401 here immediately, avoiding the 30s ping timeout in firewalled environments.
-    //
-    // Response handling:
-    //   200 → valid credentials                        → ok: true
-    //   401 → invalid / revoked key or token           → ok: false
-    //   429 → rate-limited (key is valid)              → ok: true
-    //   5xx / other → server-side uncertainty          → ok: true (don't block restart)
-    //   AbortError (5s timeout) / network error        → ok: false (conservative; can't verify)
-    if (envApiKey) {
-      return await this._httpValidateCredentials({ 'x-api-key': envApiKey });
-    }
-    if (envOauthToken) {
-      return await this._httpValidateCredentials({ 'x-api-key': envOauthToken });
-    }
-
-    // Stage 3: Live CLI probe — `claude -p ping --max-turns 1`.
-    // Reached only when no .env key is present (credentials stored in ~/.claude/).
+    // Live CLI probe — `claude -p ping --max-turns 1`.
+    // End-to-end validation: works with all credential types (API keys, setup tokens,
+    // OAuth tokens) without needing to know the correct HTTP header format.
+    // Claude Code handles credential routing internally.
     // Use async execFile — spawnSync would block the event loop for up to 30s.
     try {
       const { stdout } = await execFileAsync(CLAUDE_BIN, ['-p', 'ping', '--max-turns', '1'], {
@@ -183,38 +138,6 @@ export class ClaudeAdapter extends RuntimeAdapter {
         return { ok: true, reason: 'cli_probe_uncertain' };
       }
       return { ok: false, reason: 'cli_probe_not_authenticated' };
-    }
-  }
-
-  /**
-   * Validate Anthropic credentials via a lightweight HTTP probe (GET /v1/models).
-   * Uses a 5s timeout — fast enough to not block the monitor loop, short enough to detect
-   * firewalled environments (Docker DROP rules) without a 30s ping hang.
-   *
-   * @param {Record<string,string>} authHeaders — { 'x-api-key': key } or { 'Authorization': 'Bearer token' }
-   * @returns {Promise<{ok: boolean, reason: string}>}
-   */
-  async _httpValidateCredentials(authHeaders) {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 5000);
-    try {
-      const resp = await fetch('https://api.anthropic.com/v1/models', {
-        method: 'GET',
-        headers: { 'anthropic-version': '2023-06-01', ...authHeaders },
-        signal: controller.signal,
-      });
-      if (resp.status === 200) return { ok: true, reason: 'http_validate_200' };
-      if (resp.status === 401) return { ok: false, reason: 'http_validate_401' };
-      if (resp.status === 429) return { ok: true, reason: 'http_validate_429_rate_limited' };
-      // 5xx and unusual 4xx — server-side issue; don't block restart
-      return { ok: true, reason: `http_validate_${resp.status}` };
-    } catch (err) {
-      if (err.name === 'AbortError') {
-        return { ok: false, reason: 'http_validate_timeout' };
-      }
-      return { ok: false, reason: 'http_validate_network_error' };
-    } finally {
-      clearTimeout(timeoutId);
     }
   }
 
