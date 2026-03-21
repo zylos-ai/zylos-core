@@ -5,6 +5,17 @@ All notable changes to zylos-core will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.3] - 2026-03-22
+
+### Added
+- **OpenClaw ecosystem compatibility**: documentation for skill installation, capability mapping, and natural-language skill messaging (#372)
+
+### Fixed
+- **Codex heartbeat kill-restart loop**: replaced tmux stdin injection with C4 control queue delivery, matching Claude's architecture. Eliminates false timeouts from `rollout_path` null after restart and user conversation disruption (#379)
+- **checkAuth over-engineered**: removed Stage 1 (`claude auth status`) and Stage 2 (HTTP `/v1/models`) — neither validates setup tokens or API keys reliably. Now uses only `claude -p ping --max-turns 1` for end-to-end auth verification (#378)
+- **Hardcoded Chinese in context rotation message**: replaced with English — zylos-core is open source, the agent translates at runtime (#377)
+- **Codex heartbeat ack instruction too vague**: updated `codex-addon.md` to explicitly instruct Codex to execute the ack command, matching Claude's template (#379)
+
 ## [0.4.2] - 2026-03-20
 
 ### Added
