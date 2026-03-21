@@ -5,20 +5,22 @@
  *   enqueueHeartbeat, getHeartbeatStatus, detectRateLimit,
  *   readHeartbeatPending, clearHeartbeatPending
  *
- * Mechanism — dual-signal probe:
- *   1. Send "Heartbeat check." via tmux stdin injection.
- *   2. Record baseline: rollout JSONL mtime + tmux pane line count.
- *   3. On check: if EITHER signal changed since baseline → agent responded → 'done'.
- *      Neither changed within deadline → 'timeout' → HeartbeatEngine triggers recovery.
+ * Mechanism — passive triple-signal probe (no stdin injection):
+ *   1. Record baselines: rollout JSONL mtime + tmux pane line count.
+ *   2. On check: if rollout mtime or pane lines changed → agent is active → 'done'.
+ *   3. If neither changed, check process liveness (tmux session + PID) → alive → 'done'.
+ *   4. All three signals unchanged + process dead → 'timeout' → recovery.
  *
- * Why dual-signal:
- *   - Rollout mtime alone: false alarm if Codex is idle (no new events = not stuck)
- *   - Tmux pane alone: rollout format changes could blind the health check
- *   - Together: independent signals make false positives near-impossible
+ * Why passive (no tmux stdin injection):
+ *   - Injecting "Heartbeat check." into Codex stdin interrupts the user's conversation
+ *   - Codex treats injected text as a new user prompt, disrupting current work
+ *   - After restart, rollout_path is often null (startTime filter race), causing
+ *     false timeout → kill → restart loops
+ *   - Process liveness check (signal 3) reliably distinguishes idle from dead
  *
  * Usage:
  *   const probe = createCodexProbe({ pendingFile, tmuxSession, sqliteFile });
- *   // Merge with remaining HeartbeatEngine deps (killTmuxSession, etc.) in Phase 7.
+ *   // Merge with remaining HeartbeatEngine deps (killTmuxSession, etc.).
  */
 
 import { execSync, execFileSync } from 'node:child_process';
@@ -57,7 +59,8 @@ export function createCodexProbe({
     // ── HeartbeatEngine probe deps ──────────────────────────────────────────
 
     /**
-     * Send a heartbeat ping via tmux and record dual-signal baselines.
+     * Record passive baselines for heartbeat liveness check.
+     * Does NOT inject any message into Codex stdin — purely observational.
      *
      * Baselines captured:
      *   - rollout_path + rollout_mtime: active JSONL file modification time
@@ -70,15 +73,11 @@ export function createCodexProbe({
       const probeId = Date.now();
       const deadline = phase === 'stuck' ? stuckAckDeadline : ackDeadline;
 
-      // Capture rollout baseline before injecting (mtime changes only when agent writes)
+      // Capture rollout baseline
       const rolloutPath = _getActiveRolloutPath(sqliteFile, _startTime);
       const rolloutMtime = rolloutPath ? _getMtime(rolloutPath) : 0;
 
-      // Inject heartbeat message
-      if (!_sendTmuxMessage(tmuxSession, 'Heartbeat check.')) return false;
-
-      // Capture pane baseline AFTER injection so the injected line is already
-      // included in the count — only subsequent output from the agent triggers 'done'.
+      // Capture pane baseline
       const paneContent = _captureTmuxPane(tmuxSession) || '';
       const paneLineCount = paneContent.split('\n').filter(l => l.trim()).length;
 
@@ -94,9 +93,12 @@ export function createCodexProbe({
     },
 
     /**
-     * Check if the Codex agent has responded since the probe was sent.
-     * Returns 'done' if either signal changed; 'pending' while waiting;
-     * 'timeout' after deadline.
+     * Check if the Codex agent is alive since the probe was sent.
+     * Triple-signal passive check:
+     *   1. Rollout JSONL mtime changed → agent is writing → 'done'
+     *   2. Tmux pane output changed → agent produced output → 'done'
+     *   3. Process alive (tmux session + PID) → agent is idle but alive → 'done'
+     * All three unchanged + process dead → 'timeout' after deadline.
      *
      * @param {number} probeId
      * @returns {string} 'done' | 'pending' | 'timeout' | 'error'
@@ -126,7 +128,12 @@ export function createCodexProbe({
       const currentLineCount = currentPane.split('\n').filter(l => l.trim()).length;
       if (currentLineCount !== pending.pane_line_count_baseline) return 'done';
 
-      // Check deadline
+      // Signal 3: process liveness — distinguishes idle-but-alive from dead.
+      // If the Codex process is still running, it's alive even without new output
+      // (e.g., waiting for user input, or waiting for an API response).
+      if (_isProcessAlive(tmuxSession)) return 'done';
+
+      // All signals negative + deadline exceeded → truly unresponsive
       if (age > (pending.deadline ?? ackDeadline)) return 'timeout';
 
       return 'pending';
@@ -176,31 +183,28 @@ function _captureTmuxPane(session) {
 }
 
 /**
- * Send a message to a tmux session via buffer paste.
- * Reuses the same technique as CodexAdapter.sendMessage().
+ * Check if the Codex process is alive in the tmux session.
+ * Uses tmux session existence + PID liveness (kill -0).
  *
  * @param {string} session
- * @param {string} text
  * @returns {boolean}
  */
-function _sendTmuxMessage(session, text) {
-  const id = `${Date.now()}-${process.pid}`;
-  const bufName = `zylos-hb-${id}`;
-  let tmpFile;
+function _isProcessAlive(session) {
   try {
-    tmpFile = path.join(os.tmpdir(), `zylos-hb-${id}.txt`);
-    fs.writeFileSync(tmpFile, text);
-    execSync(`tmux load-buffer -b "${bufName}" "${tmpFile}" 2>/dev/null`);
-    execSync(`sleep 0.1`);
-    execSync(`tmux paste-buffer -b "${bufName}" -t "${session}" 2>/dev/null`);
-    execSync(`sleep 0.1`);
-    execSync(`tmux send-keys -t "${session}" Enter 2>/dev/null`);
+    execSync(`tmux has-session -t "${session}" 2>/dev/null`);
+  } catch {
+    return false;
+  }
+  try {
+    const pid = execSync(
+      `tmux list-panes -t "${session}" -F "#{pane_pid}" 2>/dev/null | head -1`,
+      { encoding: 'utf8' }
+    ).trim();
+    if (!pid) return false;
+    process.kill(parseInt(pid, 10), 0); // signal-0: existence check only
     return true;
   } catch {
     return false;
-  } finally {
-    try { if (tmpFile) fs.unlinkSync(tmpFile); } catch { }
-    try { execSync(`tmux delete-buffer -b "${bufName}" 2>/dev/null`); } catch { }
   }
 }
 
