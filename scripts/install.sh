@@ -14,6 +14,10 @@
 # Install with Codex runtime:
 #   curl -fsSL .../install.sh | bash -s -- -y --runtime codex --domain example.com --https
 #
+# Install with custom API base URLs:
+#   curl -fsSL .../install.sh | bash -s -- -y --base-url https://claude-proxy.example.com
+#   curl -fsSL .../install.sh | bash -s -- -y --runtime codex --codex-base-url https://proxy.example.com/v1
+#
 # Install environment only (no init):
 #   curl -fsSL .../install.sh | bash -s -- --no-init
 #
@@ -45,7 +49,7 @@ while [ $# -gt 0 ]; do
       shift
       ;;
     # Flags that take a value — forward both flag and value to zylos init
-    --timezone|--setup-token|--api-key|--codex-api-key|--domain|--web-password|--runtime)
+    --timezone|--setup-token|--api-key|--codex-api-key|--base-url|--codex-base-url|--domain|--web-password|--runtime)
       if [ -z "${2:-}" ]; then
         echo "[zylos] Error: $1 requires a value" >&2
         exit 1

@@ -28,9 +28,14 @@ import {
   approveApiKey,
   saveApiKey,
   saveApiKeyToEnv,
+  saveClaudeBaseUrl,
+  saveClaudeBaseUrlToEnv,
   saveSetupToken,
   saveSetupTokenToEnv,
+  saveCodexBaseUrl,
   saveCodexApiKey,
+  saveCodexApiKeyToEnv,
+  saveCodexBaseUrlToEnv,
   writeCodexConfig,
 } from '../lib/runtime-setup.js';
 
@@ -1571,7 +1576,7 @@ async function setupCaddy(skipConfirm, opts = {}) {
  * @param {string[]} args - CLI arguments (after command name)
  * @returns {object} Parsed options
  */
-function parseInitFlags(args) {
+export function parseInitFlags(args) {
   const opts = {
     yes: false,
     quiet: false,
@@ -1582,6 +1587,8 @@ function parseInitFlags(args) {
     setupToken: null,
     apiKey: null,
     codexApiKey: null,
+    baseUrl: null,
+    codexBaseUrl: null,
     domain: null,
     https: null,   // null = not specified, true = --https, false = --no-https
     caddy: null,   // null = not specified, true = --caddy, false = --no-caddy
@@ -1610,6 +1617,8 @@ function parseInitFlags(args) {
       case '--setup-token':
       case '--api-key':
       case '--codex-api-key':
+      case '--base-url':
+      case '--codex-base-url':
       case '--domain':
       case '--web-password': {
         const val = args[++i];
@@ -1622,6 +1631,8 @@ function parseInitFlags(args) {
         else if (arg === '--setup-token') opts.setupToken = val;
         else if (arg === '--api-key') opts.apiKey = val;
         else if (arg === '--codex-api-key') opts.codexApiKey = val;
+        else if (arg === '--base-url') opts.baseUrl = val;
+        else if (arg === '--codex-base-url') opts.codexBaseUrl = val;
         else if (arg === '--domain') opts.domain = val;
         else if (arg === '--web-password') opts.webPassword = val;
         break;
@@ -1685,7 +1696,16 @@ function resolveFromEnv(opts) {
  * @param {object} opts - Resolved options
  * @returns {string|null} Error message or null
  */
-function validateInitOptions(opts) {
+function isValidBaseUrl(value) {
+  try {
+    const url = new URL(value);
+    return (url.protocol === 'http:' || url.protocol === 'https:') && !!url.host;
+  } catch {
+    return false;
+  }
+}
+
+export function validateInitOptions(opts) {
   // Mutual exclusion: setup-token and api-key
   if (opts.setupToken && opts.apiKey) {
     return '--setup-token and --api-key are mutually exclusive.\n  Run zylos init and choose one during setup.';
@@ -1714,6 +1734,13 @@ function validateInitOptions(opts) {
     return `Invalid timezone: "${opts.timezone}".\n  Run: zylos init --timezone Asia/Shanghai`;
   }
 
+  if (opts.baseUrl && !isValidBaseUrl(opts.baseUrl)) {
+    return `Invalid base URL: "${opts.baseUrl}".\n  Run: zylos init --base-url https://example.com/v1`;
+  }
+  if (opts.codexBaseUrl && !isValidBaseUrl(opts.codexBaseUrl)) {
+    return `Invalid Codex base URL: "${opts.codexBaseUrl}".\n  Run: zylos init --codex-base-url https://example.com/v1`;
+  }
+
   // Domain validation (basic hostname check)
   if (opts.domain) {
     const domainPattern = /^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*$/;
@@ -1734,7 +1761,7 @@ function validateInitOptions(opts) {
 /**
  * Print help text for `zylos init`.
  */
-function printInitHelp() {
+export function printInitHelp() {
   console.log(`
 Usage: zylos init [options]
 
@@ -1746,6 +1773,8 @@ Options:
   --setup-token <token>      Authenticate with Claude setup token
   --api-key <key>            Authenticate with Anthropic API key
   --codex-api-key <key>      Authenticate Codex with OpenAI API key (sk-...)
+  --base-url <url>           Custom API base URL for Claude Code
+  --codex-base-url <url>     Custom API base URL for Codex
   --domain <domain>          Configure Caddy with this domain
   --https / --no-https       Enable/disable HTTPS (default: https when domain set)
   --caddy / --no-caddy       Install/skip Caddy web server (default: install)
@@ -1922,6 +1951,18 @@ export async function initCommand(args) {
   let codexAuthenticated = false;
   let pendingApiKey = null; // set if user enters API key, written to .env after templates
   let pendingSetupToken = null; // set if user enters setup-token, written to .env after templates
+  let pendingCodexApiKey = null; // set if codex api key provided, written to .env after templates
+  let pendingClaudeBaseUrl = null;
+  let pendingCodexBaseUrl = null;
+
+  if (opts.baseUrl) {
+    saveClaudeBaseUrl(opts.baseUrl);
+    pendingClaudeBaseUrl = opts.baseUrl;
+  }
+  if (opts.codexBaseUrl) {
+    saveCodexBaseUrl(opts.codexBaseUrl);
+    pendingCodexBaseUrl = opts.codexBaseUrl;
+  }
 
   if (selectedRuntime === 'codex') {
     // ── Step 5 (Codex): install ───────────────────────────────────────────
@@ -2035,7 +2076,7 @@ export async function initCommand(args) {
       }
 
       // Write ~/.codex/config.toml to suppress interactive prompts on first launch
-      if (writeCodexConfig(ZYLOS_DIR)) {
+      if (writeCodexConfig(ZYLOS_DIR, { openaiBaseUrl: pendingCodexBaseUrl || undefined })) {
         if (!quiet) console.log(`  ${success('Codex startup config written')}`);
       }
     }
@@ -2252,6 +2293,16 @@ export async function initCommand(args) {
     if (pendingSetupToken) {
       saveSetupTokenToEnv(pendingSetupToken);
     }
+    if (pendingCodexApiKey) {
+      saveCodexApiKeyToEnv(pendingCodexApiKey);
+    }
+    if (pendingClaudeBaseUrl) {
+      saveClaudeBaseUrlToEnv(pendingClaudeBaseUrl);
+    }
+    if (pendingCodexBaseUrl) {
+      saveCodexBaseUrlToEnv(pendingCodexBaseUrl);
+      writeCodexConfig(ZYLOS_DIR, { openaiBaseUrl: pendingCodexBaseUrl });
+    }
 
     // Timezone: use resolved value or show current
     if (!quiet) console.log(heading('Checking timezone...'));
@@ -2346,6 +2397,16 @@ export async function initCommand(args) {
   }
   if (pendingSetupToken) {
     saveSetupTokenToEnv(pendingSetupToken);
+  }
+  if (pendingCodexApiKey) {
+    saveCodexApiKeyToEnv(pendingCodexApiKey);
+  }
+  if (pendingClaudeBaseUrl) {
+    saveClaudeBaseUrlToEnv(pendingClaudeBaseUrl);
+  }
+  if (pendingCodexBaseUrl) {
+    saveCodexBaseUrlToEnv(pendingCodexBaseUrl);
+    writeCodexConfig(ZYLOS_DIR, { openaiBaseUrl: pendingCodexBaseUrl });
   }
   // Step 8: Configure timezone
   if (!quiet) console.log(`\n${heading('Timezone configuration...')}`);

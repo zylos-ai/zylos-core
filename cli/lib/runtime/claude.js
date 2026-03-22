@@ -230,6 +230,7 @@ export class ClaudeAdapter extends RuntimeAdapter {
     let hasNativeAuth = useCredentialsFile;
     let apiKeyValue = '';
     let oauthTokenValue = '';
+    let baseUrlValue = '';
 
     if (!hasNativeAuth) {
       // Check if user is logged in via `claude login`
@@ -250,6 +251,7 @@ export class ClaudeAdapter extends RuntimeAdapter {
         const envContent = fs.readFileSync(path.join(ZYLOS_DIR, '.env'), 'utf8');
         apiKeyValue = _parseEnvValue(envContent, 'ANTHROPIC_API_KEY');
         oauthTokenValue = _parseEnvValue(envContent, 'CLAUDE_CODE_OAUTH_TOKEN');
+        baseUrlValue = _parseEnvValue(envContent, 'ANTHROPIC_BASE_URL');
       } catch { }
 
       // Pre-approve API keys to skip interactive confirmation prompts
@@ -280,12 +282,13 @@ export class ClaudeAdapter extends RuntimeAdapter {
       let shellCmd;
       let tmpEnv = null;
 
-      if (!hasNativeAuth && (apiKeyValue || oauthTokenValue)) {
+      if (baseUrlValue || (!hasNativeAuth && (apiKeyValue || oauthTokenValue))) {
         // Write secrets to a temp file, source it, then delete it
         // Avoids exposing secrets in ps/proc/cmdline
         const envParts = [];
         if (apiKeyValue) envParts.push(`ANTHROPIC_API_KEY='${apiKeyValue}'`);
         if (oauthTokenValue) envParts.push(`CLAUDE_CODE_OAUTH_TOKEN='${oauthTokenValue}'`);
+        if (baseUrlValue) envParts.push(`ANTHROPIC_BASE_URL='${baseUrlValue}'`);
         tmpEnv = path.join(os.tmpdir(), `.zylos-env-${process.pid}-${Date.now()}`);
         fs.writeFileSync(tmpEnv, envParts.join('\n') + '\n', { mode: 0o600 });
         shellCmd = `set -a; . "${tmpEnv}"; set +a; rm -f "${tmpEnv}"; cd "${ZYLOS_DIR}" && ${claudeCmd}; ${exitLogSnippet}`;
