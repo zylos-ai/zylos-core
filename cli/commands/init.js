@@ -1655,7 +1655,7 @@ export function parseInitFlags(args) {
  *
  * @param {object} opts - Parsed CLI options (mutated in place)
  */
-function resolveFromEnv(opts) {
+export function resolveFromEnv(opts) {
   // Only promote auth tokens from env when:
   // 1. Not already authenticated (avoids redundant re-verification)
   // 2. No auth token was provided via CLI flag (avoids false mutual-exclusion
@@ -1684,6 +1684,12 @@ function resolveFromEnv(opts) {
   }
   if (opts.codexApiKey === null && (process.env.OPENAI_API_KEY || process.env.CODEX_API_KEY)) {
     opts.codexApiKey = process.env.OPENAI_API_KEY || process.env.CODEX_API_KEY;
+  }
+  if (opts.baseUrl === null && process.env.ANTHROPIC_BASE_URL) {
+    opts.baseUrl = process.env.ANTHROPIC_BASE_URL;
+  }
+  if (opts.codexBaseUrl === null && process.env.OPENAI_BASE_URL) {
+    opts.codexBaseUrl = process.env.OPENAI_BASE_URL;
   }
   // TZ: do NOT pick up ambient TZ from the environment.
   // Docker containers often have TZ=UTC set by default, which would silently

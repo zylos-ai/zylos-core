@@ -41,6 +41,36 @@ describe('base URL support', () => {
     assert.match(output, /--codex-base-url <url>/);
   });
 
+  test('resolveFromEnv reads base URL env vars without overriding explicit flags', async () => {
+    const initModule = await import('../../commands/init.js');
+    const originalAnthropicBaseUrl = process.env.ANTHROPIC_BASE_URL;
+    const originalOpenAiBaseUrl = process.env.OPENAI_BASE_URL;
+
+    process.env.ANTHROPIC_BASE_URL = 'https://claude-env.example.com';
+    process.env.OPENAI_BASE_URL = 'https://codex-env.example.com/v1';
+
+    try {
+      const envOnly = initModule.parseInitFlags([]);
+      initModule.resolveFromEnv(envOnly);
+      assert.equal(envOnly.baseUrl, 'https://claude-env.example.com');
+      assert.equal(envOnly.codexBaseUrl, 'https://codex-env.example.com/v1');
+
+      const explicitFlags = initModule.parseInitFlags([
+        '--base-url', 'https://claude-flag.example.com',
+        '--codex-base-url', 'https://codex-flag.example.com/v1',
+      ]);
+      initModule.resolveFromEnv(explicitFlags);
+      assert.equal(explicitFlags.baseUrl, 'https://claude-flag.example.com');
+      assert.equal(explicitFlags.codexBaseUrl, 'https://codex-flag.example.com/v1');
+    } finally {
+      if (originalAnthropicBaseUrl === undefined) delete process.env.ANTHROPIC_BASE_URL;
+      else process.env.ANTHROPIC_BASE_URL = originalAnthropicBaseUrl;
+
+      if (originalOpenAiBaseUrl === undefined) delete process.env.OPENAI_BASE_URL;
+      else process.env.OPENAI_BASE_URL = originalOpenAiBaseUrl;
+    }
+  });
+
   test('writeCodexConfig writes openai_base_url when OPENAI_BASE_URL is set', async () => {
     const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-base-url-'));
     const originalHome = process.env.HOME;
