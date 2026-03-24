@@ -529,9 +529,12 @@ async function startAgent() {
     log(`Guardian: Failed to start ${adapter.displayName}: ${err.message}`);
   });
 
-  // Enqueue startup prompt (fires with --available-in 3 delay — no need to
-  // wait for launch to complete before enqueueing).
-  if (!hasStartupHook()) {
+  // Enqueue startup prompt only when runtime cannot self-inject it.
+  // Codex already injects the startup trigger in runtime/codex.js launch();
+  // adding fallback control here would duplicate triggers and cause repeated
+  // autonomous "continue work" runs.
+  const needsStartupFallback = adapter.runtimeId === 'claude' && !hasStartupHook();
+  if (needsStartupFallback) {
     enqueueStartupControl();
   }
   } finally {
