@@ -74,7 +74,7 @@ export function createClaudeProbe({
       try {
         const out = execFileSync('node', [C4_CONTROL, 'enqueue',
           '--content', 'Heartbeat check.',
-          '--priority', '0',
+          '--priority', '3',
           '--bypass-state',
           '--ack-deadline', String(deadline),
         ], { encoding: 'utf8', stdio: 'pipe', timeout: 15_000 });
