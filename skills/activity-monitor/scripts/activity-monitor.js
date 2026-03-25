@@ -132,6 +132,10 @@ import { fileURLToPath } from 'url';
 import { HeartbeatEngine } from './heartbeat-engine.js';
 import { DailySchedule } from './daily-schedule.js';
 import { ProcSampler } from './proc-sampler.js';
+import { runUsageProbe } from './usage-probe-runner.js';
+import { parseUsageFromPane as parseUsageFromPaneCore } from './usage-probe-parser.js';
+import { acquireUsageProbeLock, releaseUsageProbeLock } from './usage-probe-lock.js';
+import { shouldStartUsageCheck } from './usage-check-engine.js';
 // activity-monitor runs as a deployed skill at ~/zylos/.claude/skills/activity-monitor/scripts/.
 // A relative import to cli/lib/runtime/ resolves correctly in the repo (dev) but NOT from
 // the deployed path — the CLI lives in the globally installed zylos npm package.
@@ -178,6 +182,7 @@ const UPGRADE_CHECK_STATE_FILE = path.join(MONITOR_DIR, 'upgrade-check-state.jso
 const PENDING_CHANNELS_FILE = path.join(MONITOR_DIR, 'pending-channels.jsonl');
 const USER_MESSAGE_SIGNAL_FILE = path.join(MONITOR_DIR, 'user-message-signal.json');
 const USAGE_STATE_FILE = path.join(MONITOR_DIR, 'usage.json');
+const USAGE_PROBE_LOCK_FILE = path.join(MONITOR_DIR, 'usage-probe.lock');
 
 // API activity file — written by hook-activity.js (Claude Code hooks)
 const API_ACTIVITY_FILE = path.join(MONITOR_DIR, 'api-activity.json');
@@ -229,6 +234,18 @@ function readConfigInt(key, fallback) {
   return fallback;
 }
 
+function readConfigString(key, fallback) {
+  try {
+    const config = JSON.parse(fs.readFileSync(path.join(CONFIG_DIR, 'config.json'), 'utf8'));
+    const val = config[key];
+    if (val !== undefined && val !== null) {
+      const s = String(val).trim();
+      if (s) return s;
+    }
+  } catch { }
+  return fallback;
+}
+
 const USAGE_CHECK_INTERVAL = readConfigInt('usage_check_interval', 3600);     // seconds between checks (default 1 hour)
 const USAGE_IDLE_GATE = readConfigInt('usage_idle_gate', 30);                 // idle seconds required (default 30)
 const USAGE_CAPTURE_WAIT = readConfigInt('usage_capture_wait', 5);            // seconds to wait for UI render
@@ -238,6 +255,12 @@ const USAGE_CRITICAL_THRESHOLD = readConfigInt('usage_critical_threshold', 95); 
 const USAGE_NOTIFY_COOLDOWN = readConfigInt('usage_notify_cooldown', 14400);  // seconds between same-tier notifications (4 hours)
 const USAGE_ACTIVE_HOURS_START = readConfigInt('usage_active_hours_start', 8); // check only during 8:00–23:00
 const USAGE_ACTIVE_HOURS_END = readConfigInt('usage_active_hours_end', 23);
+const USAGE_PROBE_MODE = readConfigString('usage_probe_mode', 'auto').toLowerCase(); // auto | sidecar | legacy
+const USAGE_PROBE_TIMEOUT_SECONDS = readConfigInt('usage_probe_timeout_seconds', 20);
+const USAGE_PROBE_LOCK_TTL_SECONDS = readConfigInt('usage_probe_lock_ttl_seconds', 120);
+const USAGE_PROBE_FAILURE_BACKOFF_SECONDS = readConfigInt('usage_probe_failure_backoff_seconds', 600);
+const USAGE_PROBE_CIRCUIT_BREAKER_THRESHOLD = readConfigInt('usage_probe_circuit_breaker_threshold', 3);
+const USAGE_PROBE_CIRCUIT_BREAKER_SECONDS = readConfigInt('usage_probe_circuit_breaker_seconds', 1800);
 
 // Daily tasks config
 const DAILY_UPGRADE_HOUR = 5;        // 5:00 AM local time
@@ -271,6 +294,9 @@ let procSampler;     // initialized in init()
 let usageCheckPhase = 'idle';
 let usageCheckWaitCount = 0;
 let lastUsageCheckAt = 0;
+let usageProbeBackoffUntil = 0;
+let usageProbeCircuitUntil = 0;
+let usageProbeConsecutiveFailures = 0;
 
 // Timezone: reuse scheduler's tz.js (.env TZ → process.env.TZ → UTC)
 import { loadTimezone } from '../../scheduler/scripts/tz.js';
@@ -958,32 +984,56 @@ function sendTmuxKeys(keys) {
 }
 
 function parseUsageFromPane(paneContent) {
-  if (!paneContent) return null;
+  return parseUsageFromPaneCore(paneContent);
+}
 
-  // Match patterns like "5% used" near category labels
-  const result = {};
+function getUsageProbeMode() {
+  if (USAGE_PROBE_MODE === 'legacy' || USAGE_PROBE_MODE === 'sidecar') {
+    return USAGE_PROBE_MODE;
+  }
+  return 'auto';
+}
 
-  // Current session
-  const sessionMatch = paneContent.match(/Current session[\s\S]*?(\d+)%\s*used/i);
-  if (sessionMatch) result.session = parseInt(sessionMatch[1], 10);
+function tmuxSessionExists(sessionName) {
+  try {
+    execSync(`tmux has-session -t "${sessionName}" 2>/dev/null`, { timeout: 3000, stdio: 'pipe' });
+    return true;
+  } catch {
+    return false;
+  }
+}
 
-  // Current week (all models)
-  const weekAllMatch = paneContent.match(/Current week \(all models\)[\s\S]*?(\d+)%\s*used/i);
-  if (weekAllMatch) result.weeklyAll = parseInt(weekAllMatch[1], 10);
+function getPendingWorkCount() {
+  try {
+    const dbPath = path.join(ZYLOS_DIR, 'comm-bridge', 'c4.db');
+    if (!fs.existsSync(dbPath)) return 0;
 
-  // Current week (Sonnet only)
-  const weekSonnetMatch = paneContent.match(/Current week \(Sonnet[^)]*\)[\s\S]*?(\d+)%\s*used/i);
-  if (weekSonnetMatch) result.weeklySonnet = parseInt(weekSonnetMatch[1], 10);
+    const out = execSync(
+      `sqlite3 "${dbPath}" "SELECT ((SELECT COUNT(*) FROM control_queue WHERE status='pending') + (SELECT COUNT(*) FROM conversations WHERE direction='in' AND status='pending'))" 2>/dev/null`,
+      { encoding: 'utf8', timeout: 3000 }
+    ).trim();
 
-  // Reset times
-  const resetMatches = [...paneContent.matchAll(/Resets\s+(.+?)(?:\n|$)/gi)];
-  if (resetMatches.length >= 1) result.sessionResets = resetMatches[0][1].trim();
-  if (resetMatches.length >= 2) result.weeklyAllResets = resetMatches[1][1].trim();
-  if (resetMatches.length >= 3) result.weeklySonnetResets = resetMatches[2][1].trim();
+    return parseInt(out || '0', 10) || 0;
+  } catch {
+    return 0;
+  }
+}
 
-  // Must have at least one valid reading
-  if (result.session === undefined && result.weeklyAll === undefined) return null;
-  return result;
+function maybeCleanupUsageProbeSessions() {
+  // Sidecar sessions are disposable. On startup, clear any old leftovers.
+  try {
+    const out = execSync('tmux list-sessions -F "#{session_name}" 2>/dev/null', {
+      encoding: 'utf8',
+      timeout: 3000
+    });
+    const sessions = out.split('\n').map(s => s.trim()).filter(Boolean);
+    for (const session of sessions) {
+      if (!session.startsWith('claude-usage-probe-')) continue;
+      try {
+        execSync(`tmux kill-session -t "${session}" 2>/dev/null`, { timeout: 3000, stdio: 'pipe' });
+      } catch { /* best effort */ }
+    }
+  } catch { /* no tmux sessions */ }
 }
 
 function getUsageTier(weeklyPercent) {
@@ -1051,6 +1101,124 @@ function sendUsageNotification(message) {
 function maybeCheckUsage(claudeState, idleSeconds, currentTime, apiActivity) {
   // /usage is a Claude Code-only slash command — skip for other runtimes
   if (adapter.runtimeId !== 'claude') return;
+
+  const probeMode = getUsageProbeMode();
+  if (probeMode !== 'legacy') {
+    const promptUpdatedAt = apiActivity?.updated_at
+      ? Math.floor(apiActivity.updated_at / 1000) : 0;
+
+    const shouldStart = shouldStartUsageCheck({
+      runtimeId: adapter.runtimeId,
+      claudeState,
+      idleSeconds,
+      currentTime,
+      lastUsageCheckAt,
+      checkInterval: { seconds: USAGE_CHECK_INTERVAL, idleGate: USAGE_IDLE_GATE },
+      inPrompt: Boolean(apiActivity?.in_prompt),
+      promptUpdatedAt,
+      localHour: getLocalHour(),
+      activeHoursStart: USAGE_ACTIVE_HOURS_START,
+      activeHoursEnd: USAGE_ACTIVE_HOURS_END,
+      pendingQueueCount: getPendingWorkCount(),
+      lockBusy: false,
+      backoffUntil: usageProbeBackoffUntil,
+      circuitUntil: usageProbeCircuitUntil,
+    });
+
+    if (!shouldStart) return;
+
+    const probeSessionName = `claude-usage-probe-${process.pid}-${Date.now()}`;
+    const lockResult = acquireUsageProbeLock({
+      lockFile: USAGE_PROBE_LOCK_FILE,
+      ttlSeconds: USAGE_PROBE_LOCK_TTL_SECONDS,
+      sessionName: probeSessionName,
+      sessionExistsFn: tmuxSessionExists
+    });
+
+    if (!lockResult.ok) {
+      if (lockResult.reason === 'lock_busy') return;
+      usageProbeConsecutiveFailures += 1;
+      usageProbeBackoffUntil = currentTime + USAGE_PROBE_FAILURE_BACKOFF_SECONDS;
+      lastUsageCheckAt = currentTime;
+      log(`Usage monitor: sidecar lock error (${lockResult.reason})`);
+      return;
+    }
+
+    let probeResult;
+    try {
+      log(`Usage monitor: initiating sidecar check (${probeMode})`);
+      probeResult = runUsageProbe({
+        zylosDir: ZYLOS_DIR,
+        timeoutSeconds: USAGE_PROBE_TIMEOUT_SECONDS,
+        captureWaitSeconds: USAGE_CAPTURE_WAIT,
+        sessionName: probeSessionName,
+      });
+    } finally {
+      releaseUsageProbeLock({
+        lockFile: USAGE_PROBE_LOCK_FILE,
+        token: lockResult.token
+      });
+    }
+
+    if (!probeResult.ok) {
+      usageProbeConsecutiveFailures += 1;
+      if (probeResult.reason === 'timeout' || probeResult.reason === 'sidecar_error') {
+        usageProbeBackoffUntil = currentTime + USAGE_PROBE_FAILURE_BACKOFF_SECONDS;
+      }
+      if (usageProbeConsecutiveFailures >= USAGE_PROBE_CIRCUIT_BREAKER_THRESHOLD) {
+        usageProbeCircuitUntil = currentTime + USAGE_PROBE_CIRCUIT_BREAKER_SECONDS;
+        usageProbeConsecutiveFailures = 0;
+        log(`Usage monitor: circuit open for ${USAGE_PROBE_CIRCUIT_BREAKER_SECONDS}s`);
+      }
+      lastUsageCheckAt = currentTime;
+      log(`Usage monitor: sidecar probe failed (${probeResult.reason})`);
+      return;
+    }
+
+    usageProbeConsecutiveFailures = 0;
+    usageProbeBackoffUntil = 0;
+    usageProbeCircuitUntil = 0;
+
+    const usage = probeResult.usage;
+    const prevState = loadUsageState();
+    const now = new Date().toISOString();
+    const weeklyPercent = usage.weeklyAll ?? 0;
+    const tier = getUsageTier(weeklyPercent);
+
+    const usageData = {
+      lastCheck: now,
+      lastCheckEpoch: currentTime,
+      session: { percent: usage.session, resets: usage.sessionResets },
+      weeklyAll: { percent: usage.weeklyAll, resets: usage.weeklyAllResets },
+      weeklySonnet: { percent: usage.weeklySonnet, resets: usage.weeklySonnetResets },
+      tier,
+      probeReason: probeResult.reason,
+      probeDurationMs: probeResult.durationMs,
+      probeAt: now,
+      lastNotifiedTier: prevState?.lastNotifiedTier || null,
+      lastNotifiedAt: prevState?.lastNotifiedAt || null
+    };
+
+    log(`Usage monitor: session=${usage.session}% weekly=${usage.weeklyAll}% sonnet=${usage.weeklySonnet}% tier=${tier}`);
+
+    if (tier !== 'ok') {
+      const prevTier = prevState?.lastNotifiedTier;
+      const prevNotifiedAt = prevState?.lastNotifiedAt ? Math.floor(new Date(prevState.lastNotifiedAt).getTime() / 1000) : 0;
+      const tierEscalated = prevTier !== tier && tierRank(tier) > tierRank(prevTier);
+      const cooldownExpired = (currentTime - prevNotifiedAt) >= USAGE_NOTIFY_COOLDOWN;
+
+      if (tierEscalated || cooldownExpired) {
+        const message = formatUsageNotification(usage, tier);
+        sendUsageNotification(message);
+        usageData.lastNotifiedTier = tier;
+        usageData.lastNotifiedAt = now;
+      }
+    }
+
+    writeUsageState(usageData);
+    lastUsageCheckAt = currentTime;
+    return;
+  }
 
   // Abort in-progress check if Claude becomes busy (e.g., message arrived
   // during the wait window). The /usage UI may be overlaid or dismissed —
@@ -1535,6 +1703,9 @@ function init() {
   // after Claude's first startup.
   const usageState = loadUsageState();
   lastUsageCheckAt = usageState?.lastCheckEpoch || Math.floor(Date.now() / 1000);
+  if (getUsageProbeMode() !== 'legacy') {
+    maybeCleanupUsageProbeSessions();
+  }
 
   // Start context monitor if the adapter provides one (Codex polling-based monitor).
   // Claude uses the statusLine hook instead — no adapter-provided monitor.
