@@ -37,8 +37,9 @@ async function logHookTimingSafe(name, durationMs) {
 }
 
 const prompt = [
-  'reply to your human partner if they are waiting your reply,',
-  'and continue your work if you have ongoing task according to the previous conversations.'
+  'reply to your human partner if they are waiting for your reply,',
+  'then continue your ongoing tasks using the startup memory and C4 context already injected in this session,',
+  'and do not query c4.db for recent conversations unless explicitly required.'
 ].join(' ');
 
 async function main() {
@@ -47,7 +48,7 @@ async function main() {
       C4_CONTROL, 'enqueue',
       '--content', prompt,
       '--priority', '2',
-      '--ack-deadline', '120'
+      '--no-ack-suffix'
     ], { stdio: 'pipe' });
   } catch {
     // Silently fail — session still starts even if enqueue fails
