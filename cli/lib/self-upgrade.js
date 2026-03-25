@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { execSync } from 'node:child_process';
-import { SKILLS_DIR, ZYLOS_DIR } from './config.js';
+import { SKILLS_DIR, ZYLOS_DIR, getZylosConfig } from './config.js';
 import { downloadArchive, downloadBranch } from './download.js';
 import { generateManifest, saveManifest, saveOriginals } from './manifest.js';
 import { fetchRawFile, fetchLatestTag, compareSemverDesc, sanitizeError } from './github.js';
@@ -16,6 +16,7 @@ import { copyTree, syncTree } from './fs-utils.js';
 import { extractScriptPath, extractSkillName, getCommandHooks } from './hook-utils.js';
 import { smartSync, formatMergeResult } from './smart-merge.js';
 import { runMigrations } from './migrate.js';
+import { writeCodexConfig } from './runtime-setup.js';
 
 const REPO = 'zylos-ai/zylos-core';
 
@@ -1054,13 +1055,38 @@ function resolveInstalledSyncScript() {
 }
 
 /**
- * Step 10: start core services
+ * Step 10: ensure Codex config is current for existing Codex-capable installs.
+ *
+ * Fresh install/init and `zylos runtime codex` already call writeCodexConfig().
+ * This upgrade-time step covers existing deployments so newly required config
+ * keys (for example [features].multi_agent) are backfilled during self-upgrade.
  */
-function step10_startCoreServices(ctx) {
+function step10_ensureCodexConfig() {
+  const startTime = Date.now();
+  const cfg = getZylosConfig();
+  const codexDir = path.join(os.homedir(), '.codex');
+  const hasCodexState = fs.existsSync(path.join(codexDir, 'config.toml'))
+    || fs.existsSync(path.join(codexDir, 'auth.json'));
+
+  if (cfg.runtime !== 'codex' && !hasCodexState) {
+    return { step: 10, name: 'ensure_codex_config', status: 'skipped', message: 'codex not in use', duration: Date.now() - startTime };
+  }
+
+  if (!writeCodexConfig(ZYLOS_DIR)) {
+    return { step: 10, name: 'ensure_codex_config', status: 'failed', error: 'failed to write ~/.codex/config.toml', duration: Date.now() - startTime };
+  }
+
+  return { step: 10, name: 'ensure_codex_config', status: 'done', message: 'updated ~/.codex/config.toml', duration: Date.now() - startTime };
+}
+
+/**
+ * Step 11: start core services
+ */
+function step11_startCoreServices(ctx) {
   const startTime = Date.now();
 
   if (ctx.servicesWereRunning.length === 0) {
-    return { step: 10, name: 'start_core_services', status: 'skipped', message: 'no services to restart', duration: Date.now() - startTime };
+    return { step: 11, name: 'start_core_services', status: 'skipped', message: 'no services to restart', duration: Date.now() - startTime };
   }
 
   // Deploy the new ecosystem.config.cjs from the upgraded package so PM2
@@ -1103,24 +1129,24 @@ function step10_startCoreServices(ctx) {
   }
 
   if (failed.length > 0) {
-    return { step: 10, name: 'start_core_services', status: 'failed', error: `Failed to restart: ${failed.join(', ')}`, duration: Date.now() - startTime };
+    return { step: 11, name: 'start_core_services', status: 'failed', error: `Failed to restart: ${failed.join(', ')}`, duration: Date.now() - startTime };
   }
 
-  return { step: 10, name: 'start_core_services', status: 'done', message: started.join(', '), duration: Date.now() - startTime };
+  return { step: 11, name: 'start_core_services', status: 'done', message: started.join(', '), duration: Date.now() - startTime };
 }
 
 /**
- * Step 11: verify services
+ * Step 12: verify services
  *
  * Polls up to 30 seconds (every 2 s) for all services to come online.
  * Some services (e.g. component bots) take longer than 2 s to start after
  * PM2 restarts them — a one-shot check caused spurious rollbacks.
  */
-function step11_verifyServices(ctx) {
+function step12_verifyServices(ctx) {
   const startTime = Date.now();
 
   if (ctx.servicesWereRunning.length === 0) {
-    return { step: 11, name: 'verify_services', status: 'skipped', message: 'no services to verify', duration: Date.now() - startTime };
+    return { step: 12, name: 'verify_services', status: 'skipped', message: 'no services to verify', duration: Date.now() - startTime };
   }
 
   const POLL_INTERVAL_MS = 2000;
@@ -1139,20 +1165,20 @@ function step11_verifyServices(ctx) {
       });
 
       if (notOnline.length === 0) {
-        return { step: 11, name: 'verify_services', status: 'done', duration: Date.now() - startTime };
+        return { step: 12, name: 'verify_services', status: 'done', duration: Date.now() - startTime };
       }
 
       // If we still have time, keep polling
       if (Date.now() - startTime + POLL_INTERVAL_MS >= TIMEOUT_MS) {
-        return { step: 11, name: 'verify_services', status: 'failed', error: `Not online after ${TIMEOUT_MS / 1000}s: ${notOnline.join(', ')}`, duration: Date.now() - startTime };
+        return { step: 12, name: 'verify_services', status: 'failed', error: `Not online after ${TIMEOUT_MS / 1000}s: ${notOnline.join(', ')}`, duration: Date.now() - startTime };
       }
     } catch (err) {
-      return { step: 11, name: 'verify_services', status: 'failed', error: err.message, duration: Date.now() - startTime };
+      return { step: 12, name: 'verify_services', status: 'failed', error: err.message, duration: Date.now() - startTime };
     }
   }
 
   // Timed out
-  return { step: 11, name: 'verify_services', status: 'failed', error: `Timed out after ${TIMEOUT_MS / 1000}s`, duration: Date.now() - startTime };
+  return { step: 12, name: 'verify_services', status: 'failed', error: `Timed out after ${TIMEOUT_MS / 1000}s`, duration: Date.now() - startTime };
 }
 
 // ---------------------------------------------------------------------------
@@ -1234,8 +1260,9 @@ export function runSelfUpgrade({ tempDir, newVersion, mode, onStep } = {}) {
     step7_syncClaudeMd,
     step8_migrateStateMd,
     step9_syncSettingsHooks,
-    step10_startCoreServices,
-    step11_verifyServices,
+    step10_ensureCodexConfig,
+    step11_startCoreServices,
+    step12_verifyServices,
   ];
 
   const total = steps.length;
