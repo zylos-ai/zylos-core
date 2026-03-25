@@ -71,8 +71,6 @@ Automatically when no TTY is available — e.g. Docker containers (without `-it`
 | `--setup-token <token>` | Claude [setup token](https://code.claude.com/docs/en/authentication) (starts with `sk-ant-oat`) | — |
 | `--api-key <key>` | Anthropic API key (starts with `sk-ant-`) | — |
 | `--codex-api-key <key>` | OpenAI API key for Codex runtime (starts with `sk-`) | — |
-| `--base-url <url>` | Custom API base URL for Claude Code | — |
-| `--codex-base-url <url>` | Custom API base URL for Codex | — |
 | `--timezone <tz>` | [IANA timezone](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones), e.g. `Asia/Shanghai`, `America/New_York`, `Europe/London` | System default |
 | `--domain <domain>` | Domain for Caddy reverse proxy, e.g. `agent.example.com` | None |
 | `--https` / `--no-https` | Enable or disable HTTPS | `--https` when domain is set |
@@ -81,16 +79,14 @@ Automatically when no TTY is available — e.g. Docker containers (without `-it`
 
 **Environment variables:**
 
-Flags can also be set via environment variables during `zylos init`. Resolution order: CLI flag > env var > existing `.env` > interactive prompt.
+Flags can also be set via environment variables. Resolution order: CLI flag > env var > existing `.env` > interactive prompt.
 
 | Environment Variable | Equivalent Flag |
 |---------------------|-----------------|
 | `ZYLOS_RUNTIME` | `--runtime` |
 | `CLAUDE_CODE_OAUTH_TOKEN` | `--setup-token` |
 | `ANTHROPIC_API_KEY` | `--api-key` |
-| `ANTHROPIC_BASE_URL` | `--base-url` |
-| `OPENAI_API_KEY` | `--codex-api-key` |
-| `OPENAI_BASE_URL` | `--codex-base-url` |
+| `OPENAI_API_KEY` | `--codex-api-key` (stored in `~/.codex/auth.json`, not `.env`) |
 | `ZYLOS_DOMAIN` | `--domain` |
 | `ZYLOS_PROTOCOL` (`https` or `http`) | `--https` / `--no-https` |
 | `ZYLOS_WEB_PASSWORD` | `--web-password` |

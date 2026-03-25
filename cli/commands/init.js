@@ -25,18 +25,12 @@ import {
   installCodex,
   isClaudeAuthenticated,
   isCodexAuthenticated,
-  isValidBaseUrl,
   approveApiKey,
   saveApiKey,
   saveApiKeyToEnv,
-  saveClaudeBaseUrl,
-  saveClaudeBaseUrlToSettingsAndEnv,
   saveSetupToken,
   saveSetupTokenToEnv,
-  saveCodexBaseUrl,
   saveCodexApiKey,
-  saveCodexApiKeyToEnv,
-  saveCodexBaseUrlToEnv,
   writeCodexConfig,
 } from '../lib/runtime-setup.js';
 
@@ -1577,7 +1571,7 @@ async function setupCaddy(skipConfirm, opts = {}) {
  * @param {string[]} args - CLI arguments (after command name)
  * @returns {object} Parsed options
  */
-export function parseInitFlags(args) {
+function parseInitFlags(args) {
   const opts = {
     yes: false,
     quiet: false,
@@ -1588,8 +1582,6 @@ export function parseInitFlags(args) {
     setupToken: null,
     apiKey: null,
     codexApiKey: null,
-    baseUrl: null,
-    codexBaseUrl: null,
     domain: null,
     https: null,   // null = not specified, true = --https, false = --no-https
     caddy: null,   // null = not specified, true = --caddy, false = --no-caddy
@@ -1618,8 +1610,6 @@ export function parseInitFlags(args) {
       case '--setup-token':
       case '--api-key':
       case '--codex-api-key':
-      case '--base-url':
-      case '--codex-base-url':
       case '--domain':
       case '--web-password': {
         const val = args[++i];
@@ -1632,8 +1622,6 @@ export function parseInitFlags(args) {
         else if (arg === '--setup-token') opts.setupToken = val;
         else if (arg === '--api-key') opts.apiKey = val;
         else if (arg === '--codex-api-key') opts.codexApiKey = val;
-        else if (arg === '--base-url') opts.baseUrl = val;
-        else if (arg === '--codex-base-url') opts.codexBaseUrl = val;
         else if (arg === '--domain') opts.domain = val;
         else if (arg === '--web-password') opts.webPassword = val;
         break;
@@ -1655,7 +1643,7 @@ export function parseInitFlags(args) {
  *
  * @param {object} opts - Parsed CLI options (mutated in place)
  */
-export function resolveFromEnv(opts) {
+function resolveFromEnv(opts) {
   // Only promote auth tokens from env when:
   // 1. Not already authenticated (avoids redundant re-verification)
   // 2. No auth token was provided via CLI flag (avoids false mutual-exclusion
@@ -1685,19 +1673,19 @@ export function resolveFromEnv(opts) {
   if (opts.codexApiKey === null && (process.env.OPENAI_API_KEY || process.env.CODEX_API_KEY)) {
     opts.codexApiKey = process.env.OPENAI_API_KEY || process.env.CODEX_API_KEY;
   }
-  if (opts.baseUrl === null && process.env.ANTHROPIC_BASE_URL) {
-    opts.baseUrl = process.env.ANTHROPIC_BASE_URL;
-  }
-  if (opts.codexBaseUrl === null && process.env.OPENAI_BASE_URL) {
-    opts.codexBaseUrl = process.env.OPENAI_BASE_URL;
-  }
   // TZ: do NOT pick up ambient TZ from the environment.
   // Docker containers often have TZ=UTC set by default, which would silently
   // overwrite user-configured timezones on re-init. Only --timezone flag applies.
   // The auto-detect in configureTimezone() will handle the default case.
 }
 
-export function validateInitOptions(opts) {
+/**
+ * Validate resolved options. Returns error message or null if valid.
+ *
+ * @param {object} opts - Resolved options
+ * @returns {string|null} Error message or null
+ */
+function validateInitOptions(opts) {
   // Mutual exclusion: setup-token and api-key
   if (opts.setupToken && opts.apiKey) {
     return '--setup-token and --api-key are mutually exclusive.\n  Run zylos init and choose one during setup.';
@@ -1726,13 +1714,6 @@ export function validateInitOptions(opts) {
     return `Invalid timezone: "${opts.timezone}".\n  Run: zylos init --timezone Asia/Shanghai`;
   }
 
-  if (opts.baseUrl && !isValidBaseUrl(opts.baseUrl)) {
-    return `Invalid base URL: "${opts.baseUrl}".\n  Run: zylos init --base-url https://example.com/v1`;
-  }
-  if (opts.codexBaseUrl && !isValidBaseUrl(opts.codexBaseUrl)) {
-    return `Invalid Codex base URL: "${opts.codexBaseUrl}".\n  Run: zylos init --codex-base-url https://example.com/v1`;
-  }
-
   // Domain validation (basic hostname check)
   if (opts.domain) {
     const domainPattern = /^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*$/;
@@ -1753,7 +1734,7 @@ export function validateInitOptions(opts) {
 /**
  * Print help text for `zylos init`.
  */
-export function printInitHelp() {
+function printInitHelp() {
   console.log(`
 Usage: zylos init [options]
 
@@ -1765,8 +1746,6 @@ Options:
   --setup-token <token>      Authenticate with Claude setup token
   --api-key <key>            Authenticate with Anthropic API key
   --codex-api-key <key>      Authenticate Codex with OpenAI API key (sk-...)
-  --base-url <url>           Custom API base URL for Claude Code
-  --codex-base-url <url>     Custom API base URL for Codex
   --domain <domain>          Configure Caddy with this domain
   --https / --no-https       Enable/disable HTTPS (default: https when domain set)
   --caddy / --no-caddy       Install/skip Caddy web server (default: install)
@@ -1943,18 +1922,6 @@ export async function initCommand(args) {
   let codexAuthenticated = false;
   let pendingApiKey = null; // set if user enters API key, written to .env after templates
   let pendingSetupToken = null; // set if user enters setup-token, written to .env after templates
-  let pendingCodexApiKey = null; // set if codex api key provided, written to .env after templates
-  let pendingClaudeBaseUrl = null;
-  let pendingCodexBaseUrl = null;
-
-  if (opts.baseUrl) {
-    saveClaudeBaseUrl(opts.baseUrl);
-    pendingClaudeBaseUrl = opts.baseUrl;
-  }
-  if (opts.codexBaseUrl) {
-    saveCodexBaseUrl(opts.codexBaseUrl);
-    pendingCodexBaseUrl = opts.codexBaseUrl;
-  }
 
   if (selectedRuntime === 'codex') {
     // ── Step 5 (Codex): install ───────────────────────────────────────────
@@ -2068,7 +2035,7 @@ export async function initCommand(args) {
       }
 
       // Write ~/.codex/config.toml to suppress interactive prompts on first launch
-      if (writeCodexConfig(ZYLOS_DIR, { openaiBaseUrl: pendingCodexBaseUrl || undefined })) {
+      if (writeCodexConfig(ZYLOS_DIR)) {
         if (!quiet) console.log(`  ${success('Codex startup config written')}`);
       }
     }
@@ -2285,16 +2252,6 @@ export async function initCommand(args) {
     if (pendingSetupToken) {
       saveSetupTokenToEnv(pendingSetupToken);
     }
-    if (pendingCodexApiKey) {
-      saveCodexApiKeyToEnv(pendingCodexApiKey);
-    }
-    if (pendingClaudeBaseUrl) {
-      saveClaudeBaseUrlToSettingsAndEnv(pendingClaudeBaseUrl);
-    }
-    if (pendingCodexBaseUrl) {
-      saveCodexBaseUrlToEnv(pendingCodexBaseUrl);
-      writeCodexConfig(ZYLOS_DIR, { openaiBaseUrl: pendingCodexBaseUrl });
-    }
 
     // Timezone: use resolved value or show current
     if (!quiet) console.log(heading('Checking timezone...'));
@@ -2389,16 +2346,6 @@ export async function initCommand(args) {
   }
   if (pendingSetupToken) {
     saveSetupTokenToEnv(pendingSetupToken);
-  }
-  if (pendingCodexApiKey) {
-    saveCodexApiKeyToEnv(pendingCodexApiKey);
-  }
-  if (pendingClaudeBaseUrl) {
-    saveClaudeBaseUrlToSettingsAndEnv(pendingClaudeBaseUrl);
-  }
-  if (pendingCodexBaseUrl) {
-    saveCodexBaseUrlToEnv(pendingCodexBaseUrl);
-    writeCodexConfig(ZYLOS_DIR, { openaiBaseUrl: pendingCodexBaseUrl });
   }
   // Step 8: Configure timezone
   if (!quiet) console.log(`\n${heading('Timezone configuration...')}`);
