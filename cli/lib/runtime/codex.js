@@ -34,6 +34,49 @@ const CODEX_BIN = process.env.CODEX_BIN || 'codex';
 // Defaults to enabled for unattended server operation.
 const DEFAULT_BYPASS = process.env.CODEX_BYPASS_PERMISSIONS !== 'false';
 
+export function isOnboardingPendingState(stateContent = '') {
+  return /^-\s+Status:\s+pending\b/m.test(stateContent);
+}
+
+export function buildCodexBootstrapPrompt(zylosDir = ZYLOS_DIR) {
+  const memInjectScript = path.join(zylosDir, '.claude', 'skills', 'zylos-memory', 'scripts', 'session-start-inject.js');
+  const sessionInitScript = path.join(zylosDir, '.claude', 'skills', 'comm-bridge', 'scripts', 'c4-session-init.js');
+  const startupPromptScript = path.join(zylosDir, '.claude', 'skills', 'activity-monitor', 'scripts', 'session-start-prompt.js');
+  const statePath = path.join(zylosDir, 'memory', 'state.md');
+
+  let onboardingPending = false;
+  try {
+    const stateContent = fs.readFileSync(statePath, 'utf8');
+    onboardingPending = isOnboardingPendingState(stateContent);
+  } catch {
+    onboardingPending = false;
+  }
+
+  const lines = [
+    'Codex session bootstrap: run the following startup steps in order before doing any other work.',
+    `1) node "${memInjectScript}"`,
+    '   Read its stdout as startup memory context (identity/state/references).',
+    `2) node "${sessionInitScript}"`,
+    '   Read its stdout as C4 startup context (checkpoint + recent conversations).',
+  ];
+
+  if (onboardingPending) {
+    lines.push(
+      '3) Do not run the startup follow-up trigger yet because onboarding is pending.',
+      '   Wait for the first real user message with a `reply via:` path before any proactive reply, onboarding notice, or ongoing-task continuation.',
+      'Then stop and wait for that user message.'
+    );
+  } else {
+    lines.push(
+      `3) node "${startupPromptScript}"`,
+      '   This enqueues the startup control message for active follow-up.',
+      'Then continue according to the latest control message and ongoing conversation context.'
+    );
+  }
+
+  return lines.join('\n');
+}
+
 // ── CodexAdapter ──────────────────────────────────────────────────────────────
 
 export class CodexAdapter extends RuntimeAdapter {
@@ -214,27 +257,12 @@ export class CodexAdapter extends RuntimeAdapter {
       } catch { /* non-fatal: Codex starts without skill discovery if symlink fails */ }
     }
 
-    // 2. Build the initial user prompt.
-    // Codex has no native SessionStart hooks, so we ask it to run the same
-    // three startup scripts before any other work.
-    // Keep the order aligned with Claude SessionStart execution:
-    // session-start-inject -> c4-session-init -> session-start-prompt.
+    // 2. Build the initial user prompt. Codex has no native SessionStart hooks,
+    // so we ask it to run the same startup steps before any other work while
+    // preserving the onboarding pending guard from the older bootstrap flow.
     let tmpPrompt = null;
     try {
-      const memInjectScript = path.join(ZYLOS_DIR, '.claude', 'skills', 'zylos-memory', 'scripts', 'session-start-inject.js');
-      const sessionInitScript = path.join(ZYLOS_DIR, '.claude', 'skills', 'comm-bridge', 'scripts', 'c4-session-init.js');
-      const startupPromptScript = path.join(ZYLOS_DIR, '.claude', 'skills', 'activity-monitor', 'scripts', 'session-start-prompt.js');
-      const combined = [
-        'Codex session bootstrap: run the following scripts in order before doing any other work.',
-        `1) node "${memInjectScript}"`,
-        '   Read its stdout as startup memory context (identity/state/references).',
-        `2) node "${sessionInitScript}"`,
-        '   Read its stdout as C4 startup context (checkpoint + recent conversations).',
-        `3) node "${startupPromptScript}"`,
-        '   This enqueues the startup control message for active follow-up.',
-        'Then continue according to the latest control message and ongoing conversation context.',
-      ].join('\n');
-
+      const combined = buildCodexBootstrapPrompt(ZYLOS_DIR);
       tmpPrompt = path.join(os.tmpdir(), `.zylos-prompt-${process.pid}-${Date.now()}`);
       fs.writeFileSync(tmpPrompt, combined, { mode: 0o600 });
     } catch { /* prompt build failed — launch without initial prompt */ }

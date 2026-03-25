@@ -9,7 +9,9 @@
   },
   "scripts": {
     "postinstall": "node scripts/postinstall.js || true",
-    "test": "node --experimental-vm-modules node_modules/.bin/jest"
+    "test": "npm run test:jest && npm run test:node",
+    "test:jest": "node --experimental-vm-modules node_modules/.bin/jest",
+    "test:node": "node --test cli/lib/__tests__/*.test.js skills/*/scripts/__tests__/*.test.js"
   },
   "repository": {
     "type": "git",

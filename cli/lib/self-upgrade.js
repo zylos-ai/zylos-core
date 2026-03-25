@@ -1061,18 +1061,29 @@ function resolveInstalledSyncScript() {
  * This upgrade-time step covers existing deployments so newly required config
  * keys (for example [features].multi_agent) are backfilled during self-upgrade.
  */
-function step10_ensureCodexConfig() {
+export function step10_ensureCodexConfig(deps = {}) {
   const startTime = Date.now();
-  const cfg = getZylosConfig();
-  const codexDir = path.join(os.homedir(), '.codex');
-  const hasCodexState = fs.existsSync(path.join(codexDir, 'config.toml'))
-    || fs.existsSync(path.join(codexDir, 'auth.json'));
+  const cfg = deps.cfg ?? getZylosConfig();
+  const codexDir = deps.codexDir ?? path.join(os.homedir(), '.codex');
+  const writeConfig = deps.writeConfig ?? writeCodexConfig;
+  const existsSync = deps.existsSync ?? fs.existsSync;
+  const hasCodexState = existsSync(path.join(codexDir, 'config.toml'))
+    || existsSync(path.join(codexDir, 'auth.json'));
 
   if (cfg.runtime !== 'codex' && !hasCodexState) {
     return { step: 10, name: 'ensure_codex_config', status: 'skipped', message: 'codex not in use', duration: Date.now() - startTime };
   }
 
-  if (!writeCodexConfig(ZYLOS_DIR)) {
+  if (!writeConfig(ZYLOS_DIR)) {
+    if (cfg.runtime !== 'codex') {
+      return {
+        step: 10,
+        name: 'ensure_codex_config',
+        status: 'skipped',
+        message: 'warning: failed to refresh ~/.codex/config.toml outside codex runtime',
+        duration: Date.now() - startTime
+      };
+    }
     return { step: 10, name: 'ensure_codex_config', status: 'failed', error: 'failed to write ~/.codex/config.toml', duration: Date.now() - startTime };
   }
 

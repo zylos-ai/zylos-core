@@ -14,7 +14,9 @@ import {
 // initialises in an isolated location and the background main() loop is harmless.
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'c4-disp-test-'));
 const origZylosDir = process.env.ZYLOS_DIR;
+const origSkipMain = process.env.ZYLOS_SKIP_C4_DISPATCHER_MAIN;
 process.env.ZYLOS_DIR = tmpDir;
+process.env.ZYLOS_SKIP_C4_DISPATCHER_MAIN = '1';
 
 const cacheBuster = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 const mod = await import(new URL(`../c4-dispatcher.js?${cacheBuster}`, import.meta.url));
@@ -26,6 +28,11 @@ after(() => {
     delete process.env.ZYLOS_DIR;
   } else {
     process.env.ZYLOS_DIR = origZylosDir;
+  }
+  if (origSkipMain === undefined) {
+    delete process.env.ZYLOS_SKIP_C4_DISPATCHER_MAIN;
+  } else {
+    process.env.ZYLOS_SKIP_C4_DISPATCHER_MAIN = origSkipMain;
   }
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });

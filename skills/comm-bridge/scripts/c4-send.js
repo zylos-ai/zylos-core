@@ -45,6 +45,15 @@ function readStdin() {
   });
 }
 
+function hasRedirectedStdin() {
+  try {
+    const stats = fs.fstatSync(0);
+    return stats.isFIFO() || stats.isFile() || stats.isSocket();
+  } catch {
+    return false;
+  }
+}
+
 async function main() {
   const args = process.argv.slice(2);
 
@@ -55,16 +64,29 @@ async function main() {
   // Remove --stdin flag if present (backward compat)
   const cleanArgs = args.filter(a => a !== '--stdin');
   const hasStdinFlag = cleanArgs.length !== args.length;
-  const stdinAvailable = !process.stdin.isTTY;
+  const stdinAvailable = hasRedirectedStdin();
 
   const channel = cleanArgs[0];
   let endpoint = null;
   let message = null;
 
-  if (cleanArgs.length === 2 && (stdinAvailable || hasStdinFlag)) {
-    // 2 args (channel + endpoint) with piped stdin or --stdin flag: read from stdin
+  if (cleanArgs.length === 2 && hasStdinFlag) {
+    // Explicit --stdin keeps the original channel + endpoint + stdin behavior.
     endpoint = cleanArgs[1];
     message = (await readStdin()).trimEnd();
+  } else if (cleanArgs.length === 2 && stdinAvailable) {
+    // In non-interactive runners, stdin may be an empty pipe even when the caller
+    // intended the 2-arg broadcast form. Probe stdin first and only treat arg #2
+    // as an endpoint when actual message content is present.
+    const stdinMessage = (await readStdin()).trimEnd();
+    if (stdinMessage) {
+      endpoint = cleanArgs[1];
+      message = stdinMessage;
+    } else {
+      process.stderr.write('[c4-send] Deprecated: passing message as CLI argument. Use stdin/heredoc mode instead.\n');
+      message = cleanArgs[1];
+      message = message.replace(/\\n/g, '\n');
+    }
   } else if (cleanArgs.length === 1 && (stdinAvailable || hasStdinFlag)) {
     // 1 arg (channel only) with piped stdin: read from stdin
     message = (await readStdin()).trimEnd();
