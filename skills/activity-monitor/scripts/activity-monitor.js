@@ -1562,7 +1562,7 @@ function init() {
   contextMonitor = adapter.getContextMonitor?.() ?? null;
   if (contextMonitor) {
     contextMonitor.startPolling({
-      intervalMs: 30_000,
+      intervalMs: 5_000,
       onExceed: async ({ used, ceiling, ratio }) => {
         const pct = Math.round(ratio * 100);
         log(`Context at ${pct}% (${used}/${ceiling}), requesting new-session handoff`);
