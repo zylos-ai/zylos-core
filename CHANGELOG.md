@@ -5,7 +5,13 @@ All notable changes to zylos-core will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.4.4] - 2026-03-26
+## [0.4.5] - 2026-03-26
+
+### Fixed
+- **Codex self-upgrade config backfill**: `0.4.3 -> 0.4.4` upgrades now also backfill `~/.codex/config.toml` through the installed `sync-settings-hooks.js` path, so Codex sessions get `[features] multi_agent = true` even when the running upgrader is still the old 11-step flow (#415)
+- **Symlinked skills-root backup path**: self-upgrade now handles installations where the top-level `skills/` directory is itself a symlink, avoiding `EEXIST` failures during `backup_core_skills` (#414)
+
+## [0.4.4] - 2026-03-26 _(superseded by 0.4.5 — self-upgrade compatibility fixes for symlinked skills roots and Codex config backfill)_
 
 ### Added
 - **Codex multi-agent config bootstrap**: `init`, runtime switching, and self-upgrade now ensure `~/.codex/config.toml` contains `[features] multi_agent = true` for Codex sessions (#407)
