@@ -259,6 +259,7 @@ let startupGrace = 0;
 let idleSince = 0;
 let lastPeriodicProbeAt = 0;
 let lastHandledClearEventKey = '';
+let lastHandledClearPaneKey = '';
 let lastClearProbeAttemptAt = 0;
 let lastLaunchAt = 0;
 let lastApiErrorScanAt = 0;
@@ -1026,9 +1027,42 @@ function readLatestCodexClearEvent() {
   return null;
 }
 
+function readLatestPaneClearSignal() {
+  const pane = captureTmuxPane();
+  if (!pane) return null;
+
+  const tail = pane.split('\n').slice(-14).map(line => line.trim()).filter(Boolean);
+  if (!tail.length) return null;
+
+  // "/clear is disabled while a task is in progress" means no actual clear happened.
+  if (tail.some(line => /\/clear.*disabled while a task is in progress/i.test(line))) {
+    return null;
+  }
+
+  const hasClear = tail.some(line => /^›\s*\/clear$/i.test(line) || /^\/clear$/i.test(line));
+  if (!hasClear) return null;
+
+  return tail.slice(-8).join('\n');
+}
+
 function maybeTriggerClearImmediateProbe(currentTime) {
   if (adapter.runtimeId !== 'codex') return;
 
+  // Primary signal: pane-local /clear command capture (works even when history.jsonl
+  // does not persist slash commands in this Codex build).
+  const paneKey = readLatestPaneClearSignal();
+  if (paneKey && paneKey !== lastHandledClearPaneKey) {
+    if ((currentTime - lastClearProbeAttemptAt) < 5) return;
+    lastClearProbeAttemptAt = currentTime;
+    const ok = engine.requestImmediateProbe('clear_command');
+    if (!ok) return;
+    lastHandledClearPaneKey = paneKey;
+    lastPeriodicProbeAt = currentTime;
+    return;
+  }
+
+  // Fallback signal: history.jsonl (kept for compatibility with environments
+  // where slash commands do get written to history).
   const clearEvent = readLatestCodexClearEvent();
   if (!clearEvent) return;
 
@@ -1041,15 +1075,11 @@ function maybeTriggerClearImmediateProbe(currentTime) {
     return;
   }
 
-  // Throttle retry when a heartbeat is already pending.
   if ((currentTime - lastClearProbeAttemptAt) < 5) return;
   lastClearProbeAttemptAt = currentTime;
-
   const ok = engine.requestImmediateProbe('clear_command');
   if (!ok) return;
-
   lastHandledClearEventKey = eventKey;
-  // Avoid immediately stacking periodic_3min probe right after clear-triggered probe.
   lastPeriodicProbeAt = currentTime;
 }
 
