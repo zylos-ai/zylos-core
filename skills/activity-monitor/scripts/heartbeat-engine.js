@@ -400,7 +400,8 @@ export class HeartbeatEngine {
     if (this.healthState !== 'ok') return false;
     const pending = this.deps.readHeartbeatPending();
     if (pending) return false;
-    this.deps.log(`Immediate probe triggered: ${reason}`);
+    // Keep "Stuck detection" wording for existing observability/tests.
+    this.deps.log(`Stuck detection: ${reason}`);
     return this.enqueueHeartbeat('stuck');
   }
 
