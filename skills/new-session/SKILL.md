@@ -1,12 +1,14 @@
 ---
 name: new-session
-description: Start a new session when context is high. Both Claude and Codex use /clear. Use when context is high or when a fresh session is needed.
+description: Start a new session when context is high. Claude uses /clear, Codex uses /exit. Use when context is high or when a fresh session is needed.
 ---
 
 # New Session Skill
 
 Start a fresh session with graceful handoff.
-Claude and Codex both use `/clear` (process stays alive, only context resets).
+Use runtime-specific switch commands:
+- Claude: `/clear`
+- Codex: `/exit`
 
 ## When to Use
 
@@ -14,7 +16,7 @@ Claude and Codex both use `/clear` (process stays alive, only context resets).
 - User explicitly asks for a new session or context reset
 - When you need a clean context but don't need to reload settings/hooks (use restart-claude for that)
 
-## Pre-Clear Checklist
+## Pre-Switch Checklist
 
 Before sending the session switch command, complete these steps **in order**:
 
@@ -51,16 +53,22 @@ The goal is twofold: (a) the user knows what's happening, and (b) the handoff su
 
 ### 5. Enqueue Session Switch Command
 
+For Codex:
+```bash
+node ~/zylos/.claude/skills/comm-bridge/scripts/c4-control.js enqueue --content "/exit" --priority 1 --require-idle --no-ack-suffix
+```
+
+For Claude:
 ```bash
 node ~/zylos/.claude/skills/comm-bridge/scripts/c4-control.js enqueue --content "/clear" --priority 1 --require-idle --no-ack-suffix
 ```
 
 ## How It Works
 
-1. **Enqueue switch command**: Puts `/clear` into the control queue
+1. **Enqueue switch command**: Puts the runtime-specific command into the control queue (`/clear` for Claude, `/exit` for Codex)
 2. **Deliver when idle**: Dispatcher delivers the command when idle
 3. **Session switches**:
-   - Claude: clears conversation context, session-start hooks fire
-   - Codex: clears conversation context and continues in the same runtime process
+   - Claude: `/clear` resets conversation context, session-start hooks fire
+   - Codex: `/exit` exits the current session so a fresh one can start
 4. **Background tasks survive**: Any running subagents continue as independent processes
 5. **New session**: The new session picks up handoff context (including background task IDs) from C4 conversation history via session-start hooks, and can use `TaskOutput` to receive results from still-running tasks
