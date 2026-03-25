@@ -22,7 +22,7 @@ Before sending the session switch command, complete these steps **in order**:
 
 ### 1. Inventory running background tasks
 
-Check for running background agents using `TaskList`. **Do NOT stop them** — background subagents survive /clear and will continue running to completion in the new session.
+Check for running background agents using the current runtime's available agent/task listing capability. For Claude, this is `TaskList`. **Do NOT stop them** — background subagents survive `/clear` / `/exit` and will continue running to completion in the new session.
 
 For each running task, note:
 - **Agent ID** (e.g., `a42c1aabc5b984e69`)
@@ -33,14 +33,14 @@ This information goes into the handoff summary (step 3).
 
 ### 2. Sync memory
 
-Launch a background subagent for memory sync using the **Task tool** (`subagent_type: general-purpose`, `model: sonnet`, `run_in_background: true`). The subagent's prompt must instruct it to follow the full sync flow in `~/zylos/.claude/skills/zylos-memory/SKILL.md`. Wait for it to complete before proceeding.
+Launch a background subagent for memory sync using the current runtime's supported background-agent mechanism. For Claude, use the **Task tool** (`subagent_type: general-purpose`, `model: sonnet`, `run_in_background: true`). For Codex, use the current session's available background-agent capability with a Codex-supported model; do not hardcode `sonnet`. The subagent's prompt must instruct it to follow the full sync flow in `~/zylos/.claude/skills/zylos-memory/SKILL.md`. Wait for it to complete before proceeding.
 
 ### 3. Write a session handoff summary
 
 Write a brief message covering:
 - **What was being worked on** (active tasks, user requests in progress)
 - **Current state** (what's done, what's pending, any blockers)
-- **Running background tasks** (from step 1 — include agent IDs and output file paths so the new session can use `TaskOutput` or `Read` to check on them)
+- **Running background tasks** (from step 1 — include agent/task IDs and any output file paths or result handles so the new session can check on them with the runtime-appropriate output mechanism)
 - **What the next session should pick up** (if anything)
 
 ### 4. Send the handoff summary
@@ -71,4 +71,4 @@ node ~/zylos/.claude/skills/comm-bridge/scripts/c4-control.js enqueue --content 
    - Claude: `/clear` resets conversation context, session-start hooks fire
    - Codex: `/exit` exits the current session so a fresh one can start
 4. **Background tasks survive**: Any running subagents continue as independent processes
-5. **New session**: The new session picks up handoff context (including background task IDs) from C4 conversation history via session-start hooks, and can use `TaskOutput` to receive results from still-running tasks
+5. **New session**: The new session picks up handoff context (including background task IDs) from C4 conversation history via session-start hooks, and can use the runtime-appropriate agent output mechanism to receive results from still-running tasks

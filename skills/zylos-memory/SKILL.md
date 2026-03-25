@@ -4,8 +4,8 @@ description: >-
   Core memory system. Maintains persistent memory across sessions via tiered
   markdown files following the Inside Out model. Handles Memory Sync (processing
   conversations into structured memory), session rotation, consolidation, and
-  context-aware state saving. Must be launched via the Task tool as a background
-  subagent — do not invoke with the Skill tool.
+  context-aware state saving. Must be launched via a runtime-appropriate
+  background subagent mechanism — do not invoke with the Skill tool.
 disable-model-invocation: true
 user-invocable: false
 ---
@@ -13,7 +13,7 @@ user-invocable: false
 # Memory System
 
 Maintains persistent memory across sessions via tiered markdown files.
-This skill must be run via the Task tool (`subagent_type: general-purpose`, `model: sonnet`, `run_in_background: true`). The subagent reads this file for the sync flow.
+This skill must be run via a runtime-appropriate background subagent mechanism. For Claude, use the Task tool (`subagent_type: general-purpose`, `model: sonnet`, `run_in_background: true`). For Codex, use the current session's available background-agent capability with a Codex-supported model; do not hardcode `sonnet`.
 
 ## Architecture
 
@@ -47,7 +47,7 @@ When triggered, run it before handling queued user messages.
 1. Session init: if C4 unsummarized count is over threshold, launch memory sync.
 2. Scheduled context check: if context usage is high, launch memory sync.
 
-Both launch a background subagent via the Task tool with this file's Sync Flow as the prompt.
+Both launch a background subagent using the current runtime's supported subagent mechanism with this file's Sync Flow as the prompt.
 
 ### Sync Flow
 
