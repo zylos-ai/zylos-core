@@ -50,7 +50,9 @@ function cpSyncFiltered(src, dest, excludes) {
  * @param {string[]} [opts.excludes=[]] - Top-level names to exclude
  */
 export function copyTree(src, dest, { excludes = [] } = {}) {
-  fs.mkdirSync(dest, { recursive: true });
+  const srcStat = fs.lstatSync(src);
+  const destParent = srcStat.isSymbolicLink() ? path.dirname(dest) : dest;
+  fs.mkdirSync(destParent, { recursive: true });
 
   const resolvedSrc = path.resolve(src);
   const resolvedDest = path.resolve(dest);

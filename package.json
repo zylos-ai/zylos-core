@@ -11,7 +11,7 @@
     "postinstall": "node scripts/postinstall.js || true",
     "test": "npm run test:jest && npm run test:node",
     "test:jest": "node --experimental-vm-modules node_modules/.bin/jest",
-    "test:node": "node --test cli/lib/__tests__/codex.test.js cli/lib/__tests__/runtime-setup.test.js cli/lib/__tests__/self-upgrade.test.js"
+    "test:node": "node --test cli/lib/__tests__/codex.test.js cli/lib/__tests__/fs-utils.test.js cli/lib/__tests__/runtime-setup.test.js cli/lib/__tests__/self-upgrade.test.js"
   },
   "repository": {
     "type": "git",
