@@ -246,9 +246,8 @@ Codex adapter 提供 `CodexContextMonitor`：
 
 1. 每 30 秒轮询 context 使用率（JSONL token_count 优先，SQLite 回退）
 2. 超阈值（默认 75%）触发 onExceed：
-   - 通知最近活跃 channel
-   - 停止当前 session
-   - 重新 launch 并注入 memory snapshot
+   - enqueue `new-session` 控制消息（`priority=1` + `bypass-state`）
+   - 后续由 runtime 内执行 `new-session` skill 完成 handoff
 
 ## 11. 关键状态文件
 
@@ -276,7 +275,7 @@ Codex adapter 提供 `CodexContextMonitor`：
    - Codex probe 固定返回 `detected=false`
 4. context 轮换路径不同：
    - Claude 用 statusLine + `new-session` 控制消息（优雅）
-   - Codex 用 polling + stop/launch（基础设施级切换）
+   - Codex 用 polling + `new-session` 控制消息（skill 驱动切换）
 5. Daily upgrade 只对 Claude 生效
 
 ## 13. 当前实现里的已知边界

@@ -440,6 +440,33 @@ function enqueueStartupControl() {
   }
 }
 
+function enqueueContextRotationHandoff({ ratio = 0, used = 0, ceiling = 0 } = {}) {
+  const pct = Math.round(ratio * 100);
+  const usedTokens = Number.isFinite(used) ? used : 0;
+  const ceilingTokens = Number.isFinite(ceiling) ? ceiling : 0;
+  const content =
+    `Context usage at ${pct}% ` +
+    `(${usedTokens.toLocaleString()} / ${ceilingTokens.toLocaleString()} tokens), ` +
+    'exceeding threshold. Use the new-session skill to start a fresh session.';
+
+  const result = runC4Control([
+    'enqueue',
+    '--content', content,
+    '--priority', '1',
+    '--bypass-state',
+    '--ack-deadline', '300',
+  ]);
+
+  if (result.ok) {
+    const match = result.output.match(/control\s+(\d+)/i);
+    log(`Context rotation handoff enqueued id=${match?.[1] ?? '?'} (pct=${pct}%)`);
+    return true;
+  }
+
+  log(`Context rotation handoff enqueue failed (pct=${pct}%): ${result.output}`);
+  return false;
+}
+
 /**
  * Check for a user-message signal file and clear auth suppression if found.
  * Called from offline/stopped branches (which return early before the main
@@ -641,37 +668,6 @@ function sendRecoveryNotice(channel, endpoint) {
   } catch (err) {
     log(`Recovery notice failed for ${channel}:${endpoint} (${err.message})`);
     return false;
-  }
-}
-
-/**
- * Query the C4 database for the most recently active user channel.
- * Returns { channel, endpoint } with the msg: component stripped so the
- * result can be used for proactive (non-reply) sends.
- *
- * @returns {{ channel: string, endpoint: string } | null}
- */
-async function getLastActiveChannel() {
-  try {
-    const dbPath = path.join(ZYLOS_DIR, 'comm-bridge', 'c4.db');
-    // Use better-sqlite3 (JS layer) — avoids dependency on the sqlite3 system CLI,
-    // which may be absent in some Docker environments.
-    const Database = (await import('better-sqlite3')).default;
-    const db = new Database(dbPath, { readonly: true });
-    try {
-      const row = db.prepare(
-        "SELECT channel, endpoint_id FROM conversations WHERE direction='in' ORDER BY id DESC LIMIT 1"
-      ).get();
-      if (!row) return null;
-      // Strip msg:... and req:... so we send a new standalone message, not a thread reply.
-      // Matches c4-receive.js normalisation: /\|(msg|req):[^|]+/g
-      const endpoint = row.endpoint_id.replace(/\|(msg|req):[^|]+/g, '');
-      return row.channel && endpoint ? { channel: row.channel, endpoint } : null;
-    } finally {
-      db.close();
-    }
-  } catch {
-    return null;
   }
 }
 
@@ -1458,28 +1454,6 @@ async function monitorLoop() {
   lastState = state;
 }
 
-/**
- * Read core memory files and return a condensed snapshot string for injection
- * into AGENTS.md on Codex session rotation. Gives the new session context from
- * the previous session so autonomous work is not silently interrupted.
- *
- * @returns {string} Snapshot content, or empty string if memory dir is absent.
- */
-function _readMemorySnapshot() {
-  const memDir = path.join(ZYLOS_DIR, 'memory');
-  const files = ['identity.md', 'state.md', 'references.md'];
-  const parts = [];
-  for (const file of files) {
-    try {
-      const content = fs.readFileSync(path.join(memDir, file), 'utf8').trim();
-      if (content) parts.push(`## ${file}\n\n${content}`);
-    } catch { /* file absent — skip */ }
-  }
-  return parts.length
-    ? `# Memory Snapshot (auto-injected on session rotation)\n\n${parts.join('\n\n')}`
-    : '';
-}
-
 function init() {
   // Strip stale TMUX env var — PM2 dump can carry over the old tmux session
   // reference from before a reboot, causing child tmux commands to fail with
@@ -1575,40 +1549,8 @@ function init() {
       intervalMs: 30_000,
       onExceed: async ({ used, ceiling, ratio }) => {
         const pct = Math.round(ratio * 100);
-        log(`Context at ${pct}% (${used}/${ceiling}), triggering session rotation`);
-        // Codex has no skill-invocation mechanism (no /clear equivalent).
-        // The activity monitor directly stops and relaunches to start a fresh session.
-        // Read core memory files first so the new session has continuity.
-        try {
-          const memorySnapshot = _readMemorySnapshot();
-
-          // Notify the last active channel before stopping — mirrors Claude's behaviour
-          // where the agent notifies users before initiating a context rotation.
-          // Done here (infrastructure level) rather than relying on the new session to
-          // self-report, which was unreliable in practice.
-          const lastChannel = await getLastActiveChannel();
-          if (lastChannel) {
-            try {
-              execFileSync('node', [C4_SEND_PATH, lastChannel.channel, lastChannel.endpoint,
-                'Context is almost full — switching to a new session. Memory is fully preserved, back in a moment.'], { stdio: 'pipe', timeout: 15000 });
-              log(`Rotation notice sent to ${lastChannel.channel}:${lastChannel.endpoint}`);
-            } catch (notifyErr) {
-              log(`Rotation notice failed (non-fatal): ${notifyErr.message}`);
-            }
-          }
-
-          // Reset guardian counters before stopping so the guardian does not
-          // treat the intentional stop as a crash and launch a second session
-          // while adapter.launch() is still starting the new one.
-          startupGrace = 30;
-          notRunningCount = 0;
-          adapter.stop();
-          await new Promise(r => setTimeout(r, 2000));
-          await adapter.launch({ memorySnapshot });
-          log(`Codex session rotated (context ${pct}% exceeded threshold)`);
-        } catch (err) {
-          log(`Codex session rotation failed: ${err.message}`);
-        }
+        log(`Context at ${pct}% (${used}/${ceiling}), requesting new-session handoff`);
+        enqueueContextRotationHandoff({ ratio, used, ceiling });
       }
     });
     log(`Context monitor started (${adapter.displayName})`);

@@ -161,15 +161,18 @@ The control message instructs Claude to use the `upgrade-claude` skill, which ha
 
 ## Context Monitoring
 
-Event-driven context monitoring via Claude Code's statusLine feature, replacing the old hourly polling.
+Context monitoring is runtime-specific:
 
-- **Mechanism**: `context-monitor.js` runs as a statusLine command — Claude Code pipes context data to it via stdin after every turn (zero turn cost)
-- **Status file**: Writes `~/zylos/activity-monitor/statusline.json` with full context data (used_percentage, remaining_percentage, cost, session_id)
-- **Threshold**: Triggers new-session handoff when `used_percentage >= 70%`
-- **Cooldown**: 10 minutes between triggers (state in `~/zylos/activity-monitor/context-monitor-state.json`)
-- **Delivery**: Enqueues via C4 control queue with priority 1, no require-idle — ensures the trigger reaches Claude even during long tasks
-- **Two-stage design**: The trigger message instructs Claude to start the new-session handoff flow; the actual `/clear` is gated by require-idle in the new-session skill's final step
-- **Log**: `~/zylos/activity-monitor/context-monitor.log`
+- **Claude path**:
+  - Mechanism: `context-monitor.js` as `statusLine` command (event-driven, every turn)
+  - Threshold: `used_percentage >= 70%`
+  - State/log: `statusline.json`, `context-monitor-state.json`, `cost-log.jsonl`, `context-monitor.log`
+- **Codex path**:
+  - Mechanism: `CodexContextMonitor` polling every 30s (JSONL token_count first, SQLite fallback)
+  - Threshold: `used/ceiling >= 75%` (default from `ContextMonitorBase`)
+  - State/log: activity-monitor log records handoff enqueue events
+
+For both runtimes, threshold exceed enqueues a high-priority C4 control message instructing the agent to run the `new-session` skill. The final session switch command itself is runtime-specific inside `new-session` (`/clear` for Claude, `/exit` for Codex) and is gated by `--require-idle`.
 
 The `check-context` skill remains available for manual on-demand context checks.
 

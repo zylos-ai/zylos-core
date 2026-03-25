@@ -9,8 +9,8 @@
  *   (Claude handles /clear and pre-flush summary internally)
  *
  * Codex flow:
- *   enqueueNewSession() → C4 delivers control message → Codex writes memory summary
- *   → activity-monitor calls adapter.stop() + adapter.launch() (Phase 6/7)
+ *   enqueueNewSession() → C4 delivers control message → Codex runs new-session skill
+ *   (Codex path uses /exit handoff + activity-monitor relaunch)
  */
 
 import { execFileSync } from 'node:child_process';
