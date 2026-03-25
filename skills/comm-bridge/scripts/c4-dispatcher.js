@@ -539,11 +539,6 @@ async function main() {
   process.exit(0);
 }
 
-function shouldAutoStart() {
-  return process.env.ZYLOS_SKIP_C4_DISPATCHER_MAIN !== '1';
-}
-
-// Default to auto-start for PM2/runtime usage. Tests can opt out before import.
-if (shouldAutoStart()) {
-  main();
-}
+// Always call main() — PM2 sets argv[1] to its own ProcessContainerFork.js,
+// breaking realpathSync-based isMainModule checks for ESM scripts.
+main();
