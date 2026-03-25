@@ -28,7 +28,7 @@ export class ClaudeContextMonitor extends ContextMonitorBase {
   /**
    * Read context usage from Claude Code's statusLine JSON file.
    *
-   * @returns {Promise<{used: number, ceiling: number, sessionId?: string} | null>}
+   * @returns {Promise<{used: number, ceiling: number} | null>}
    */
   async getUsage() {
     try {
@@ -42,7 +42,7 @@ export class ClaudeContextMonitor extends ContextMonitorBase {
       if (pct == null || !ceiling) return null;
 
       const used = Math.round((pct / 100) * ceiling);
-      return { used, ceiling, sessionId: status.session_id || undefined };
+      return { used, ceiling };
     } catch {
       return null;
     }
