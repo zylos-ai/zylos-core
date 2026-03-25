@@ -66,6 +66,13 @@ describe('insertControl', () => {
     assert.ok(row.content.includes(`ack --id ${rec.id}`));
   });
 
+  it('supports appendAckSuffix=false for clean slash controls', () => {
+    const rec = mod.insertControl('/clear', { appendAckSuffix: false });
+    assert.equal(rec.content, '/clear');
+    const row = mod.getControlById(rec.id);
+    assert.equal(row.content, '/clear');
+  });
+
   it('populates all options when provided', () => {
     const rec = mod.insertControl('full opts', {
       priority: 5,

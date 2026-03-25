@@ -52,7 +52,7 @@ The goal is twofold: (a) the user knows what's happening, and (b) the handoff su
 ### 5. Enqueue Session Switch Command
 
 ```bash
-node ~/zylos/.claude/skills/comm-bridge/scripts/c4-control.js enqueue --content "/clear" --priority 1 --require-idle
+node ~/zylos/.claude/skills/comm-bridge/scripts/c4-control.js enqueue --content "/clear" --priority 1 --require-idle --no-ack-suffix
 ```
 
 ## How It Works

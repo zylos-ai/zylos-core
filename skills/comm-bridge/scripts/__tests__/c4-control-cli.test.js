@@ -100,6 +100,16 @@ describe('c4-control enqueue', () => {
     });
   });
 
+  it('enqueue with --no-ack-suffix', () => {
+    withTmpDir(({ env }) => {
+      const { stdout, status } = cliRaw(
+        ['enqueue', '--content', '/clear', '--no-ack-suffix'], env
+      );
+      assert.equal(status, 0);
+      assert.match(stdout, /OK: enqueued control \d+/);
+    });
+  });
+
   it('enqueue auto-appends ack suffix to content', () => {
     withTmpDir(({ env }) => {
       const { stdout, status } = cliRaw(

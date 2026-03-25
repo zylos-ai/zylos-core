@@ -9,8 +9,8 @@
  *   (Claude handles /clear and pre-flush summary internally)
  *
  * Codex flow:
- *   enqueueNewSession() → C4 delivers control message → Codex writes memory summary
- *   → activity-monitor calls adapter.stop() + adapter.launch() (Phase 6/7)
+ *   enqueueNewSession() → C4 delivers control message → Codex runs new-session skill
+ *   (memory sync + handoff summary + /clear)
  */
 
 import { execFileSync } from 'node:child_process';
@@ -30,15 +30,19 @@ const C4_CONTROL = path.join(ZYLOS_DIR, '.claude/skills/comm-bridge/scripts/c4-c
  * @param {number}  opts.ratio       Context usage ratio (0.0–1.0)
  * @param {number}  opts.used        Tokens used
  * @param {number}  opts.ceiling     Token ceiling
+ * @param {string}  [opts.runtime='claude']  Runtime id ('claude' | 'codex')
  * @param {number}  [opts.maxRetries=3]  Maximum enqueue attempts
  * @returns {boolean} true if enqueued successfully
  */
-export function enqueueNewSession({ ratio = 0, used = 0, ceiling = 0, maxRetries = 3 } = {}) {
+export function enqueueNewSession({ ratio = 0, used = 0, ceiling = 0, runtime = 'claude', maxRetries = 3 } = {}) {
   const pct = Math.round(ratio * 100);
-  const content =
+  const base =
     `Context usage at ${pct}% ` +
     `(${used.toLocaleString()} / ${ceiling.toLocaleString()} tokens), ` +
-    `exceeding threshold. Use the new-session skill to start a fresh session.`;
+    'exceeding threshold.';
+  const content = runtime === 'codex'
+    ? `${base} Run $new-session now and follow SKILL.md in order. Complete memory sync before the final session-switch command; do not skip checklist steps.`
+    : `${base} Use the new-session skill to start a fresh session.`;
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {

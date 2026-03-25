@@ -286,6 +286,10 @@ function releaseItem(item, reason = null) {
   requeueConversation(item.id);
 }
 
+function hasAckSuffix(content = '') {
+  return content.includes('---- ack via:');
+}
+
 async function handleConversationDeliveryFailure(msg) {
   const channelHealthy = isAgentStatusFresh();
 
@@ -457,7 +461,12 @@ async function processNextMessage() {
       markDelivered(item.id);
       log(`Conversation id=${item.id} delivered`);
     } else {
-      log(`Control id=${item.id} submitted, waiting ack`);
+      if (hasAckSuffix(item.content || '')) {
+        log(`Control id=${item.id} submitted, waiting ack`);
+      } else {
+        ackControl(item.id);
+        log(`Control id=${item.id} submitted (no-ack mode), marked done`);
+      }
     }
 
     if (item.require_idle === 1) {

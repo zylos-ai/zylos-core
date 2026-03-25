@@ -17,7 +17,7 @@ Control messages are stored in the `control_queue` table in `~/zylos/comm-bridge
 Insert a new control message into the queue.
 
 ```bash
-c4-control.js enqueue --content "<text>" [--priority 3] [--require-idle] [--bypass-state] [--ack-deadline <seconds>] [--available-in <seconds>]
+c4-control.js enqueue --content "<text>" [--priority 3] [--require-idle] [--bypass-state] [--ack-deadline <seconds>] [--available-in <seconds>] [--no-ack-suffix]
 ```
 
 | Option | Description |
@@ -28,6 +28,7 @@ c4-control.js enqueue --content "<text>" [--priority 3] [--require-idle] [--bypa
 | `--bypass-state` | Deliver regardless of current state |
 | `--ack-deadline <seconds>` | Seconds from now until the control times out if unacknowledged |
 | `--available-in <seconds>` | Delay before the control becomes eligible for delivery |
+| `--no-ack-suffix` | Do not append `ack via` suffix; dispatcher marks done right after successful submit |
 
 **Output:**
 
@@ -88,7 +89,7 @@ Lower number = higher priority. The dispatcher consumes control messages in `ORD
 
 ## Auto-Appended Ack Suffix
 
-When a control message is enqueued, the C4 layer automatically appends an ack instruction to the content, similar to how `c4-receive` appends `---- reply via:` to conversation messages.
+By default, when a control message is enqueued, the C4 layer automatically appends an ack instruction to the content, similar to how `c4-receive` appends `---- reply via:` to conversation messages.
 
 The stored content will include a suffix like:
 
@@ -97,6 +98,8 @@ The stored content will include a suffix like:
 ```
 
 Callers do **not** need to include ack instructions in `--content`. The recipient uses the appended suffix to acknowledge the control after processing.
+
+For slash-style controls that must stay as a clean command (for example `/clear` in Codex), use `--no-ack-suffix`. In that mode, dispatcher marks the control as `done` immediately after successful submit.
 
 ## Status Lifecycle
 
@@ -130,4 +133,9 @@ pending ──► timeout  (ack deadline exceeded)
 ~/zylos/.claude/skills/comm-bridge/scripts/c4-control.js \
     enqueue --content "Run log rotation" \
     --require-idle --available-in 60
+
+# Enqueue clean slash command (no ack suffix)
+~/zylos/.claude/skills/comm-bridge/scripts/c4-control.js \
+    enqueue --content "/clear" \
+    --priority 1 --require-idle --no-ack-suffix
 ```

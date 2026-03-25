@@ -195,6 +195,7 @@ export function getPendingControlCount() {
  * Insert a control queue record
  * @param {string} content - instruction content
  * @param {object} options - queue options
+ * @param {boolean} [options.appendAckSuffix=true] - append "ack via" suffix to content
  * @returns {object} inserted control record
  */
 export function insertControl(content, options = {}) {
@@ -204,7 +205,8 @@ export function insertControl(content, options = {}) {
     requireIdle = false,
     bypassState = false,
     ackDeadlineAt = null,
-    availableAt = null
+    availableAt = null,
+    appendAckSuffix = true
   } = options;
 
   const tx = database.transaction(() => {
@@ -230,10 +232,13 @@ export function insertControl(content, options = {}) {
 
     const id = Number(result.lastInsertRowid);
 
-    // Auto-append ack suffix (like c4-receive appends "reply via")
-    const controlScriptPath = path.join(__dirname, 'c4-control.js');
-    const ackSuffix = ` ---- ack via: node ${controlScriptPath} ack --id ${id}`;
-    const finalContent = content + ackSuffix;
+    let finalContent = content;
+    if (appendAckSuffix) {
+      // Auto-append ack suffix (like c4-receive appends "reply via")
+      const controlScriptPath = path.join(__dirname, 'c4-control.js');
+      const ackSuffix = ` ---- ack via: node ${controlScriptPath} ack --id ${id}`;
+      finalContent = content + ackSuffix;
+    }
 
     database.prepare(`
       UPDATE control_queue

@@ -447,7 +447,13 @@ function enqueueContextRotationHandoff({ ratio = 0, used = 0, ceiling = 0 } = {}
   const pct = Math.round(ratio * 100);
   const usedTokens = Number.isFinite(used) ? used : 0;
   const ceilingTokens = Number.isFinite(ceiling) ? ceiling : 0;
-  const ok = enqueueNewSession({ ratio, used: usedTokens, ceiling: ceilingTokens, maxRetries: 3 });
+  const ok = enqueueNewSession({
+    ratio,
+    used: usedTokens,
+    ceiling: ceilingTokens,
+    runtime: adapter.runtimeId,
+    maxRetries: 3
+  });
   if (ok) {
     log(`Context rotation handoff enqueued (pct=${pct}%)`);
     return true;
