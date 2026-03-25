@@ -214,50 +214,27 @@ export class CodexAdapter extends RuntimeAdapter {
       } catch { /* non-fatal: Codex starts without skill discovery if symlink fails */ }
     }
 
-    // 2. Build the initial user prompt by mirroring Claude's three SessionStart hooks:
-    //    a) session-start-inject.js  → identity.md + state.md + references.md
-    //    b) c4-session-init.js       → C4 conversation history + checkpoint summary
-    //    c) session-start-prompt     → "reply to waiting partners / continue ongoing work"
-    //
-    //    Codex has no hook mechanism, so we inject all context at launch time instead.
-    //    Memory files come first so the agent knows its state before reading conversations.
+    // 2. Build the initial user prompt.
+    // Codex has no native SessionStart hooks, so we ask it to run the same
+    // three startup scripts before any other work.
+    // Keep the order aligned with Claude SessionStart execution:
+    // session-start-inject -> c4-session-init -> session-start-prompt.
     let tmpPrompt = null;
     try {
-      const parts = [];
-
-      // a) Memory: identity + state + references (mirrors session-start-inject.js)
       const memInjectScript = path.join(ZYLOS_DIR, '.claude', 'skills', 'zylos-memory', 'scripts', 'session-start-inject.js');
-      try {
-        const memResult = spawnSync('node', [memInjectScript], { encoding: 'utf8', timeout: 10_000 });
-        const memContext = memResult.stdout?.trim();
-        if (memResult.status === 0 && memContext) parts.push(memContext);
-      } catch { /* memory files unavailable — continue without them */ }
-
-      // b) C4 conversation history (mirrors c4-session-init.js)
       const sessionInitScript = path.join(ZYLOS_DIR, '.claude', 'skills', 'comm-bridge', 'scripts', 'c4-session-init.js');
-      try {
-        const c4Result = spawnSync('node', [sessionInitScript], { encoding: 'utf8', timeout: 10_000 });
-        const c4Context = c4Result.stdout?.trim();
-        if (c4Result.status === 0 && c4Context) parts.push(c4Context);
-      } catch { /* c4 context unavailable — continue without it */ }
+      const startupPromptScript = path.join(ZYLOS_DIR, '.claude', 'skills', 'activity-monitor', 'scripts', 'session-start-prompt.js');
+      const combined = [
+        'Codex session bootstrap: run the following scripts in order before doing any other work.',
+        `1) node "${memInjectScript}"`,
+        '   Read its stdout as startup memory context (identity/state/references).',
+        `2) node "${sessionInitScript}"`,
+        '   Read its stdout as C4 startup context (checkpoint + recent conversations).',
+        `3) node "${startupPromptScript}"`,
+        '   This enqueues the startup control message for active follow-up.',
+        'Then continue according to the latest control message and ongoing conversation context.',
+      ].join('\n');
 
-      // c) Active trigger (mirrors session-start-prompt.js)
-      //    For fresh installs (onboarding pending), wait for user's first message —
-      //    do NOT run any "continue your work" tasks first, as that skips onboarding.
-      let activeTrigger;
-      try {
-        const statePath = path.join(ZYLOS_DIR, 'memory', 'state.md');
-        const stateContent = fs.readFileSync(statePath, 'utf8');
-        const onboardingPending = /^-\s+Status:\s+pending\b/m.test(stateContent);
-        activeTrigger = onboardingPending
-          ? 'Wait for the user\'s first message via C4 — onboarding is pending and must be completed first before any other work.'
-          : 'reply to your human partner if they are waiting your reply, and continue your work if you have ongoing task according to the previous conversations.';
-      } catch {
-        activeTrigger = 'reply to your human partner if they are waiting your reply, and continue your work if you have ongoing task according to the previous conversations.';
-      }
-      parts.push(activeTrigger);
-
-      const combined = parts.join('\n\n');
       tmpPrompt = path.join(os.tmpdir(), `.zylos-prompt-${process.pid}-${Date.now()}`);
       fs.writeFileSync(tmpPrompt, combined, { mode: 0o600 });
     } catch { /* prompt build failed — launch without initial prompt */ }

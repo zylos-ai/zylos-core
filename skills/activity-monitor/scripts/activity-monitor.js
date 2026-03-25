@@ -400,10 +400,10 @@ function waitForMaintenance() {
   }
 }
 
-// Startup prompt: prefer session start hook (session-start-prompt.js) which
-// injects directly into session context. Fall back to C4 control for existing
-// installations that haven't received the new hook via `zylos init`.
-// Non-Claude runtimes don't use Claude settings.json hooks — always fall back to C4.
+// Startup prompt: Claude uses SessionStart hooks (session-start-prompt.js).
+// For legacy Claude setups without that hook, fall back to C4 control.
+// Codex path is handled inside CodexAdapter.launch() via startup instruction;
+// do not enqueue the fallback here to avoid duplicate startup prompts.
 function hasStartupHook() {
   if (adapter.runtimeId !== 'claude') return false;
   try {
@@ -529,9 +529,9 @@ async function startAgent() {
     log(`Guardian: Failed to start ${adapter.displayName}: ${err.message}`);
   });
 
-  // Enqueue startup prompt (fires with --available-in 3 delay — no need to
-  // wait for launch to complete before enqueueing).
-  if (!hasStartupHook()) {
+  // Claude legacy fallback only (Codex bootstrap prompt handles its own
+  // session-start flow and triggers session-start-prompt.js itself).
+  if (adapter.runtimeId === 'claude' && !hasStartupHook()) {
     enqueueStartupControl();
   }
   } finally {
