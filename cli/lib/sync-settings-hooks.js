@@ -21,14 +21,79 @@ import path from 'path';
 import os from 'os';
 import { fileURLToPath } from 'url';
 import { extractScriptPath, extractSkillName, getCommandHooks } from './hook-utils.js';
+import { getZylosConfig } from './config.js';
+import { renderCodexConfig, writeCodexConfig } from './runtime-setup.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ZYLOS_DIR = path.resolve(process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos'));
 const TEMPLATE_SETTINGS = path.join(__dirname, '..', '..', 'templates', '.claude', 'settings.json');
 const INSTALLED_SETTINGS = path.join(ZYLOS_DIR, '.claude', 'settings.json');
 
-function main() {
-  const dryRun = process.argv.includes('--dry-run');
+export function shouldSyncCodexConfig({
+  cfg = getZylosConfig(),
+  homeDir = os.homedir(),
+  existsSync = fs.existsSync,
+} = {}) {
+  const codexDir = path.join(homeDir, '.codex');
+  const configPath = path.join(codexDir, 'config.toml');
+  const hasCodexState = existsSync(configPath) || existsSync(path.join(codexDir, 'auth.json'));
+  return {
+    cfg,
+    configPath,
+    shouldSync: cfg.runtime === 'codex' || hasCodexState,
+  };
+}
+
+export function syncCodexConfig({
+  dryRun = false,
+  cfg = getZylosConfig(),
+  projectDir = ZYLOS_DIR,
+  homeDir = os.homedir(),
+  existsSync = fs.existsSync,
+  readFileSync = fs.readFileSync,
+  renderConfig = renderCodexConfig,
+  writeConfig = writeCodexConfig,
+  log = console.log,
+} = {}) {
+  const state = shouldSyncCodexConfig({ cfg, homeDir, existsSync });
+  if (!state.shouldSync) {
+    return { attempted: false, changed: false, fatal: false };
+  }
+
+  let existing = '';
+  try {
+    existing = readFileSync(state.configPath, 'utf8');
+  } catch {}
+
+  const desired = renderConfig(projectDir, existing);
+  if (existing === desired) {
+    return { attempted: true, changed: false, fatal: false };
+  }
+
+  if (dryRun) {
+    log(`  ~ codex config: ${state.configPath}`);
+    return { attempted: true, changed: true, fatal: false };
+  }
+
+  if (!writeConfig(projectDir)) {
+    if (cfg.runtime !== 'codex') {
+      log('  Warning: failed to refresh ~/.codex/config.toml outside codex runtime.');
+      return { attempted: true, changed: false, fatal: false, warning: true };
+    }
+    return {
+      attempted: true,
+      changed: false,
+      fatal: true,
+      error: 'Failed to refresh ~/.codex/config.toml.',
+    };
+  }
+
+  log(`  ~ codex config: ${state.configPath}`);
+  return { attempted: true, changed: true, fatal: false };
+}
+
+export function main(argv = process.argv.slice(2)) {
+  const dryRun = argv.includes('--dry-run');
 
   if (!fs.existsSync(TEMPLATE_SETTINGS)) {
     console.log('Settings hooks: template not found, skipping.');
@@ -193,13 +258,19 @@ function main() {
     console.log(`  - statusLine: (removed)`);
   }
 
-  if (added === 0 && updated === 0 && removed === 0 && !statusLineChanged) {
+  const codexSync = syncCodexConfig({ dryRun });
+  if (codexSync.fatal) {
+    console.error(codexSync.error);
+    process.exit(1);
+  }
+
+  if (added === 0 && updated === 0 && removed === 0 && !statusLineChanged && !codexSync.changed) {
     console.log('Settings hooks: all up to date (no changes).');
     return;
   }
 
   if (dryRun) {
-    console.log(`Settings hooks (dry run): ${added} to add, ${updated} to update, ${removed} to remove${statusLineChanged ? ', statusLine to update' : ''}.`);
+    console.log(`Settings hooks (dry run): ${added} to add, ${updated} to update, ${removed} to remove${statusLineChanged ? ', statusLine to update' : ''}${codexSync.changed ? ', codex config to refresh' : ''}.`);
     return;
   }
 
@@ -207,7 +278,14 @@ function main() {
   const dir = path.dirname(INSTALLED_SETTINGS);
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(INSTALLED_SETTINGS, JSON.stringify(installedSettings, null, 2) + '\n');
-  console.log(`Settings hooks: ${added} added, ${updated} updated, ${removed} removed${statusLineChanged ? ', statusLine updated' : ''}.`);
+  if (added === 0 && updated === 0 && removed === 0 && !statusLineChanged) {
+    console.log(`Settings hooks: all up to date; Codex config ${codexSync.changed ? 'refreshed' : 'unchanged'}.`);
+    return;
+  }
+
+  console.log(`Settings hooks: ${added} added, ${updated} updated, ${removed} removed${statusLineChanged ? ', statusLine updated' : ''}${codexSync.changed ? ', Codex config refreshed' : ''}.`);
 }
 
-main();
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  main();
+}

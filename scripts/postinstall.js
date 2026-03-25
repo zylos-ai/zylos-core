@@ -3,12 +3,13 @@
  *
  * Two responsibilities:
  * 1. Sync Core Skills (skipped during self-upgrade — step 5 handles it)
- * 2. Sync settings.json hooks/statusLine (ALWAYS runs when zylos is initialized)
+ * 2. Sync settings.json hooks/statusLine and refresh Codex config backfills
+ *    (ALWAYS runs when zylos is initialized)
  *
  * Settings sync runs even when ZYLOS_SKIP_POSTINSTALL is set because this is
  * the only reliable hook where the NEWLY INSTALLED code executes during
- * self-upgrade. The old version's step 8 may not know about new config fields
- * (e.g. statusLine added in v0.2.1), so this postinstall catches them.
+ * self-upgrade. The old version's in-memory upgrader may not know about new
+ * config fields or backfills, so this postinstall catches them.
  */
 
 import fs from 'node:fs';

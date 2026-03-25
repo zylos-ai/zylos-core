@@ -997,11 +997,13 @@ function step8_migrateStateMd() {
 }
 
 /**
- * Step 9: sync settings.json hooks from template.
+ * Step 9: sync settings.json hooks from template and refresh upgrade-safe
+ * config backfills via the newly installed package.
  *
  * Shells out to the NEWLY INSTALLED sync-settings-hooks.js instead of using
  * the in-memory generateMigrationHints(). This avoids bootstrap problems where
- * the old version's sync logic misses new config fields (e.g. statusLine).
+ * the old version's sync logic misses new config fields or backfills
+ * (e.g. statusLine, Codex config refreshes).
  */
 function step9_syncSettingsHooks(ctx) {
   const startTime = Date.now();
