@@ -426,14 +426,14 @@ function hasStartupHook() {
 }
 
 function enqueueStartupControl() {
-  const content = 'reply to your human partner if they are waiting your reply, and continue your work if you have ongoing task according to the previous conversations.';
+  const content = 'reply to your human partner if they are waiting for your reply, then continue your ongoing tasks using the startup memory and C4 context already injected in this session, and do not query c4.db for recent conversations unless explicitly required.';
   const result = runC4Control([
     'enqueue',
     '--content', content,
     '--priority', '3',
     '--require-idle',
     '--available-in', '3',
-    '--ack-deadline', '600'
+    '--no-ack-suffix'
   ]);
   if (result.ok) {
     const match = result.output.match(/control\s+(\d+)/i);
