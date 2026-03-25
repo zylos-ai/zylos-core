@@ -5,7 +5,18 @@ All notable changes to zylos-core will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.4.3] - 2026-03-22
+## [0.4.4] - 2026-03-26
+
+### Added
+- **Codex multi-agent config bootstrap**: `init`, runtime switching, and self-upgrade now ensure `~/.codex/config.toml` contains `[features] multi_agent = true` for Codex sessions (#407)
+
+### Fixed
+- **Codex startup bootstrap flow**: startup hooks now inject session context reliably, and the startup control prompt avoids redundant recent-conversation fetching during bootstrap (#400, #404)
+- **Codex heartbeat delivery behavior**: heartbeat ack handling stays silent, and periodic heartbeat controls now use normal priority instead of the previous overly aggressive queue priority (#384, #408)
+- **Codex context rotation / new-session flow**: context rotation now routes through the `new-session` skill, enforces handoff behavior correctly, and uses `/exit` as the Codex session switch command (#401, #403, #406)
+- **Codex Memory Sync / new-session guidance**: runtime instructions now distinguish Claude vs Codex behavior correctly, remove the invalid Codex `model: sonnet` guidance, and require Memory Sync to finish before enqueueing Codex `/exit` (#411)
+
+## [0.4.3] - 2026-03-22 _(superseded by 0.4.4 — Codex session rotation, Memory Sync, and heartbeat flow fixes)_
 
 ### Added
 - **OpenClaw ecosystem compatibility**: documentation for skill installation, capability mapping, and natural-language skill messaging (#372)
