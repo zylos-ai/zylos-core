@@ -50,7 +50,7 @@ nohup node ~/zylos/.claude/skills/upgrade-claude/scripts/upgrade.js >> ~/zylos/l
 
 ## How It Works
 
-1. **Enqueue /exit**: Puts `/exit` into the control queue (priority=1, require_idle) — dispatcher handles idle detection and message blocking
+1. **Enqueue /exit**: Puts `/exit` into the control queue (priority=1, block_queue_until_idle) — dispatcher handles idle detection and message blocking
 2. **Wait for exit**: Monitors Claude process until it exits (up to 120s); aborts if timeout
 3. **Upgrade**: Runs native installer (`curl -fsSL https://claude.ai/install.sh | bash`)
 4. **Daemon restart**: activity-monitor detects exit and restarts Claude automatically

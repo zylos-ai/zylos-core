@@ -80,7 +80,17 @@ describe('c4-control enqueue', () => {
     });
   });
 
-  it('enqueue with --require-idle', () => {
+  it('enqueue with --block-queue-until-idle', () => {
+    withTmpDir(({ env }) => {
+      const { stdout, status } = cliRaw(
+        ['enqueue', '--content', 'idle test', '--block-queue-until-idle'], env
+      );
+      assert.equal(status, 0);
+      assert.match(stdout, /OK: enqueued control \d+/);
+    });
+  });
+
+  it('enqueue still accepts legacy --require-idle', () => {
     withTmpDir(({ env }) => {
       const { stdout, status } = cliRaw(
         ['enqueue', '--content', 'idle test', '--require-idle'], env

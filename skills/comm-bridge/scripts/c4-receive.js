@@ -23,11 +23,13 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 function printUsage() {
-  console.log('Usage: node c4-receive.js --channel <channel> [--endpoint <endpoint_id>] [--priority <1-3>] [--no-reply] [--require-idle] [--json] --content "<message>"');
+  console.log('Usage: node c4-receive.js --channel <channel> [--endpoint <endpoint_id>] [--priority <1-3>] [--no-reply] [--block-queue-until-idle] [--json] --content "<message>"');
   console.log('');
   console.log('Options:');
   console.log('  --no-reply       Do not append "reply via" suffix (use for system messages)');
-  console.log('  --require-idle   Only deliver when Claude is idle');
+  console.log('  --block-queue-until-idle');
+  console.log('                   Wait for sustained idle, then block subsequent dispatch until execution settles');
+  console.log('                   Legacy alias: --require-idle');
   console.log('  --json           Output structured JSON');
   console.log('');
   console.log('Priority levels:');
@@ -62,6 +64,7 @@ function parseArgs(args) {
         result.noReply = true;
         break;
       case '--require-idle':
+      case '--block-queue-until-idle':
         result.requireIdle = true;
         break;
       case '--json':

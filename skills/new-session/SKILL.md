@@ -55,12 +55,12 @@ The goal is twofold: (a) the user knows what's happening, and (b) the handoff su
 
 For Codex:
 ```bash
-node ~/zylos/.claude/skills/comm-bridge/scripts/c4-control.js enqueue --content "/exit" --priority 1 --require-idle --no-ack-suffix
+node ~/zylos/.claude/skills/comm-bridge/scripts/c4-control.js enqueue --content "/exit" --priority 1 --block-queue-until-idle --no-ack-suffix
 ```
 
 For Claude:
 ```bash
-node ~/zylos/.claude/skills/comm-bridge/scripts/c4-control.js enqueue --content "/clear" --priority 1 --require-idle --no-ack-suffix
+node ~/zylos/.claude/skills/comm-bridge/scripts/c4-control.js enqueue --content "/clear" --priority 1 --block-queue-until-idle --no-ack-suffix
 ```
 
 ## How It Works

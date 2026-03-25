@@ -13,8 +13,8 @@ All `add` timing options (`--in`, `--at`, `--cron`, `--every`) plus:
 | `--name "<name>"` | Update task name |
 | `--prompt "<prompt>"` | Update task content |
 | `--priority <1-3>` | Update priority |
-| `--require-idle` | Enable idle requirement |
-| `--no-require-idle` | Disable idle requirement |
+| `--block-queue-until-idle` | Enable block-queue-until-idle behavior |
+| `--no-block-queue-until-idle` | Disable block-queue-until-idle behavior |
 | `--reply-channel "<source>"` | Update reply channel |
 | `--reply-endpoint "<endpoint>"` | Update reply endpoint |
 | `--clear-reply` | Clear reply configuration |
@@ -32,7 +32,7 @@ cli.js update task-abc --priority 1
 cli.js update task-abc --cron "0 10 * * *"
 
 # Enable idle requirement
-cli.js update task-abc --require-idle
+cli.js update task-abc --block-queue-until-idle
 
 # Update reply
 cli.js update task-abc --reply-channel "telegram" --reply-endpoint "new_id"

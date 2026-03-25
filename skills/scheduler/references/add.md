@@ -25,7 +25,7 @@ Creates a new scheduled task. Exactly one timing option is required.
 |--------|-------------|---------|
 | `--priority <1-3>` | 1=urgent, 2=high, 3=normal | 3 |
 | `--name "<name>"` | Task display name | Truncated prompt |
-| `--require-idle` | Wait for Claude to be idle | off |
+| `--block-queue-until-idle` | Wait for sustained idle, then block later dispatch until execution settles | off |
 | `--miss-threshold <seconds>` | Skip if overdue by more than this | 300 |
 | `--reply-channel "<source>"` | Reply channel (e.g., "telegram", "lark") | none |
 | `--reply-endpoint "<endpoint>"` | Reply endpoint (e.g., user ID) | none |
@@ -47,7 +47,7 @@ cli.js add "Check updates" --every "2 hours"
 cli.js add "Check updates" --every "90 minutes"
 
 # Maintenance (wait for idle)
-cli.js add "Compact session" --cron "0 2 * * *" --require-idle
+cli.js add "Compact session" --cron "0 2 * * *" --block-queue-until-idle
 
 # With reply
 cli.js add "Daily report" --at "9am" --reply-channel "telegram" --reply-endpoint "8101553026"
@@ -59,7 +59,7 @@ cli.js add "Backup data" --cron "0 2 * * *" --miss-threshold 86400
 
 ## Best Practices
 
-### --require-idle
+### --block-queue-until-idle
 
 Use for: session compaction, data cleanup, health checks needing full attention.
 Don't use for: user notifications, time-sensitive tasks, high-priority alerts.

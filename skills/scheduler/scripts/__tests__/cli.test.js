@@ -110,9 +110,9 @@ describe('cli add', () => {
     });
   });
 
-  it('sets require_idle and reply fields', () => {
+  it('sets require_idle and reply fields via --block-queue-until-idle', () => {
     withTmpDir(({ dbPath, env }) => {
-      cli(['add', 'idle task', '--cron', '0 2 * * *', '--require-idle',
+      cli(['add', 'idle task', '--cron', '0 2 * * *', '--block-queue-until-idle',
            '--reply-channel', 'telegram', '--reply-endpoint', '12345'], env);
       const db = new Database(dbPath);
       try {
@@ -120,6 +120,19 @@ describe('cli add', () => {
         assert.equal(task.require_idle, 1);
         assert.equal(task.reply_channel, 'telegram');
         assert.equal(task.reply_endpoint, '12345');
+      } finally {
+        db.close();
+      }
+    });
+  });
+
+  it('still accepts legacy --require-idle', () => {
+    withTmpDir(({ dbPath, env }) => {
+      cli(['add', 'legacy idle task', '--cron', '0 2 * * *', '--require-idle'], env);
+      const db = new Database(dbPath);
+      try {
+        const task = db.prepare('SELECT require_idle FROM tasks LIMIT 1').get();
+        assert.equal(task.require_idle, 1);
       } finally {
         db.close();
       }
@@ -314,6 +327,36 @@ describe('cli update', () => {
         assert.equal(updated.type, 'interval');
         assert.ok(updated.interval_seconds >= 7190 && updated.interval_seconds <= 7210);
         assert.equal(updated.cron_expression, null);
+      } finally {
+        db.close();
+      }
+    });
+  });
+
+  it('disables require_idle via --no-block-queue-until-idle', () => {
+    withTmpDir(({ dbPath, env }) => {
+      cli(['add', 'idle task', '--cron', '0 9 * * *', '--block-queue-until-idle'], env);
+      const db = new Database(dbPath);
+      try {
+        const task = db.prepare('SELECT id FROM tasks LIMIT 1').get();
+        cli(['update', task.id, '--no-block-queue-until-idle'], env);
+        const updated = db.prepare('SELECT require_idle FROM tasks WHERE id = ?').get(task.id);
+        assert.equal(updated.require_idle, 0);
+      } finally {
+        db.close();
+      }
+    });
+  });
+
+  it('still accepts legacy --no-require-idle', () => {
+    withTmpDir(({ dbPath, env }) => {
+      cli(['add', 'idle task', '--cron', '0 9 * * *', '--require-idle'], env);
+      const db = new Database(dbPath);
+      try {
+        const task = db.prepare('SELECT id FROM tasks LIMIT 1').get();
+        cli(['update', task.id, '--no-require-idle'], env);
+        const updated = db.prepare('SELECT require_idle FROM tasks WHERE id = ?').get(task.id);
+        assert.equal(updated.require_idle, 0);
       } finally {
         db.close();
       }

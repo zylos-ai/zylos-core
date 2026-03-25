@@ -45,14 +45,18 @@ Add Options:
   --every "<interval>"    Interval: repeat every X time (e.g., "2 hours")
   --priority <1-3>        Priority level (1=urgent, 2=high, 3=normal, default=3)
   --name "<name>"         Task name (optional)
-  --require-idle          Wait for Claude to be idle before executing
+  --block-queue-until-idle
+                          Wait for sustained idle, then block subsequent dispatch until execution settles
+                          Legacy alias: --require-idle
   --reply-channel "<source>"      Reply channel (e.g., "telegram", "lark")
   --reply-endpoint "<endpoint>"  Reply endpoint (e.g., "8101553026", "chat_id topic_id")
   --miss-threshold <seconds>  Skip if overdue by more than this (default=300)
 
 Update Options (same as Add, plus):
   --prompt "<prompt>"     Update task content
-  --no-require-idle       Disable idle requirement
+  --no-block-queue-until-idle
+                          Disable block-queue-until-idle behavior
+                          Legacy alias: --no-require-idle
   --clear-reply           Clear reply configuration
 
 Examples:
@@ -60,7 +64,7 @@ Examples:
   ~/zylos/.claude/skills/scheduler/scripts/cli.js add "Health check" --cron "0 8 * * *"
   ~/zylos/.claude/skills/scheduler/scripts/cli.js add "Check updates" --every "1 hour"
   ~/zylos/.claude/skills/scheduler/scripts/cli.js update task-abc --priority 1
-  ~/zylos/.claude/skills/scheduler/scripts/cli.js update task-abc --require-idle
+  ~/zylos/.claude/skills/scheduler/scripts/cli.js update task-abc --block-queue-until-idle
   ~/zylos/.claude/skills/scheduler/scripts/cli.js done task-abc123
 `;
 
@@ -75,6 +79,8 @@ function parseArgs(args) {
 
   // Boolean flags (no value required)
   const booleanFlags = new Set([
+    'block-queue-until-idle',
+    'no-block-queue-until-idle',
     'require-idle',
     'no-require-idle',
     'clear-reply'
@@ -198,8 +204,8 @@ function cmdAdd(args, options) {
     return;
   }
 
-  // Parse require-idle flag
-  const requireIdle = options['require-idle'] ? 1 : 0;
+  // Parse block-queue-until-idle flag (legacy alias: require-idle)
+  const requireIdle = (options['block-queue-until-idle'] || options['require-idle']) ? 1 : 0;
 
   // Parse reply-channel and reply-endpoint
   const replyChannel = options['reply-channel'] || null;
@@ -546,11 +552,11 @@ function cmdUpdate(taskId, options) {
     updatedFields.push('priority');
   }
 
-  // Update require_idle
-  if (options['require-idle']) {
+  // Update require_idle (external flag renamed to block-queue-until-idle)
+  if (options['block-queue-until-idle'] || options['require-idle']) {
     updates.require_idle = 1;
     updatedFields.push('require_idle');
-  } else if (options['no-require-idle']) {
+  } else if (options['no-block-queue-until-idle'] || options['no-require-idle']) {
     updates.require_idle = 0;
     updatedFields.push('require_idle');
   }

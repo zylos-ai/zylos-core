@@ -169,7 +169,7 @@ Event-driven context monitoring via Claude Code's statusLine feature, replacing 
   - **Early memory sync** at `64%` (80% of 80%): Enqueues a prompt for Claude to run memory sync as a background task, so it completes well before the session switch. Priority 2, 10-minute cooldown.
   - **New-session handoff** at `80%`: Enqueues the new-session trigger. Priority 1, 5-minute cooldown.
 - **Delivery**: Enqueues via C4 control queue with bypass_state — ensures the trigger reaches Claude even during long tasks
-- **Two-stage design**: The trigger message instructs Claude to start the new-session handoff flow; the actual `/clear` is gated by require-idle in the new-session skill's final step
+- **Two-stage design**: The trigger message instructs Claude to start the new-session handoff flow; the actual `/clear` is gated by block-queue-until-idle in the new-session skill's final step
 - **Log**: `~/zylos/activity-monitor/context-monitor.log`
 
 The early memory sync decouples memory sync from the session switch. Memory sync is also triggered by the new session's startup hook if unsummarized conversations exceed the threshold, so data is never lost.

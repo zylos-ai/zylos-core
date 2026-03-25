@@ -1107,7 +1107,7 @@ async function upgradeSelfCore({ providedTempDir, branch, beta = false, mode = '
           if (activeRuntime === 'claude') {
             const c4ControlPath = path.join(ZYLOS_DIR, '.claude', 'skills', 'comm-bridge', 'scripts', 'c4-control.js');
             const { spawnSync } = await import('child_process');
-            spawnSync('node', [c4ControlPath, 'enqueue', '--content', '/exit', '--priority', '1', '--require-idle'], { stdio: 'pipe' });
+            spawnSync('node', [c4ControlPath, 'enqueue', '--content', '/exit', '--priority', '1', '--block-queue-until-idle'], { stdio: 'pipe' });
           }
         } catch { /* non-fatal */ }
       }

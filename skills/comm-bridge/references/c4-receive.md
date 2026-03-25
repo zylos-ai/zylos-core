@@ -20,7 +20,7 @@ Messages are written to DB with `status='pending'`. The c4-dispatcher daemon han
 | `--content <text>` | Message content (required) |
 | `--priority <1-3>` | Priority level (default: 3) |
 | `--no-reply` | Omit `reply via` suffix; defaults channel to `system` |
-| `--require-idle` | Only deliver when Claude is idle |
+| `--block-queue-until-idle` | Wait for sustained idle, then block later dispatch until execution settles |
 | `--json` | Output structured JSON instead of plain text |
 
 ## Priority Levels
@@ -46,7 +46,7 @@ Messages are written to DB with `status='pending'`. The c4-dispatcher daemon han
 
 # Idle-only delivery
 ~/zylos/.claude/skills/comm-bridge/scripts/c4-receive.js \
-    --channel scheduler --require-idle \
+    --channel scheduler --block-queue-until-idle \
     --content 'Run daily report'
 
 # Lark topic (endpoint with multiple parts)

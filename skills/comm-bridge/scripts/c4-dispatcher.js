@@ -426,17 +426,17 @@ async function handleControlDeliveryFailure(control, reason) {
 }
 
 async function waitForRequireIdleSettlement(msgId) {
-  log(`require_idle item id=${msgId}: hold ${REQUIRE_IDLE_POST_SEND_HOLD_MS}ms before next dispatch`);
+  log(`block_queue_until_idle item id=${msgId}: hold ${REQUIRE_IDLE_POST_SEND_HOLD_MS}ms before next dispatch`);
   await sleep(REQUIRE_IDLE_POST_SEND_HOLD_MS);
 
   let state = getAgentState().state;
   if (state === 'offline' || state === 'stopped') {
-    log(`require_idle item id=${msgId}: agent state=${state}, continuing`);
+    log(`block_queue_until_idle item id=${msgId}: agent state=${state}, continuing`);
     return;
   }
 
   if (state === 'idle') {
-    log(`require_idle item id=${msgId}: agent remained idle after hold, continuing`);
+    log(`block_queue_until_idle item id=${msgId}: agent remained idle after hold, continuing`);
     return;
   }
 
@@ -445,12 +445,12 @@ async function waitForRequireIdleSettlement(msgId) {
     await sleep(REQUIRE_IDLE_EXECUTION_POLL_MS);
     state = getAgentState().state;
     if (state === 'idle' || state === 'offline' || state === 'stopped') {
-      log(`require_idle item id=${msgId}: settled with agent state=${state}`);
+      log(`block_queue_until_idle item id=${msgId}: settled with agent state=${state}`);
       return;
     }
   }
 
-  log(`require_idle item id=${msgId}: timeout after ${REQUIRE_IDLE_EXECUTION_MAX_WAIT_MS}ms, continuing`);
+  log(`block_queue_until_idle item id=${msgId}: timeout after ${REQUIRE_IDLE_EXECUTION_MAX_WAIT_MS}ms, continuing`);
 }
 
 function claimNextItem() {

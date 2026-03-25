@@ -49,7 +49,7 @@ SQLite at `~/zylos/scheduler/scheduler.db`
 | 2 | High | Important tasks, execute soon |
 | 3 | Normal | Default priority, standard execution |
 
-Priority only affects dispatch order, not idle waiting. Use `--require-idle` for idle control.
+Priority only affects dispatch order, not idle waiting. Use `--block-queue-until-idle` for this queue-blocking idle gate.
 
 ## Retry / Missed Task Behavior
 

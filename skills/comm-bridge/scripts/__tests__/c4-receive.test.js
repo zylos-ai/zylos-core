@@ -101,6 +101,34 @@ describe('c4-receive basic intake', () => {
       assert.equal(row.channel, 'test-channel');
     });
   });
+
+  it('accepts --block-queue-until-idle', () => {
+    withTmpDir(({ tmpDir, env }) => {
+      const r = cliRaw(['--no-reply', '--json', '--block-queue-until-idle', '--content', 'idle flag'], env);
+      assert.equal(r.status, 0);
+      const out = parseJsonStdout(r.stdout);
+
+      const db = openDb(tmpDir);
+      const row = db.prepare('SELECT require_idle FROM conversations WHERE id = ?').get(Number(out.id));
+      db.close();
+
+      assert.equal(row.require_idle, 1);
+    });
+  });
+
+  it('still accepts legacy --require-idle', () => {
+    withTmpDir(({ tmpDir, env }) => {
+      const r = cliRaw(['--no-reply', '--json', '--require-idle', '--content', 'legacy idle flag'], env);
+      assert.equal(r.status, 0);
+      const out = parseJsonStdout(r.stdout);
+
+      const db = openDb(tmpDir);
+      const row = db.prepare('SELECT require_idle FROM conversations WHERE id = ?').get(Number(out.id));
+      db.close();
+
+      assert.equal(row.require_idle, 1);
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------

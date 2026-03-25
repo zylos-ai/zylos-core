@@ -44,12 +44,12 @@ The goal is twofold: (a) the user knows what's happening, and (b) the handoff su
 ### 5. Enqueue /exit
 
 ```bash
-node ~/zylos/.claude/skills/comm-bridge/scripts/c4-control.js enqueue --content "/exit" --priority 1 --require-idle
+node ~/zylos/.claude/skills/comm-bridge/scripts/c4-control.js enqueue --content "/exit" --priority 1 --block-queue-until-idle
 ```
 
 ## How It Works
 
-1. **Enqueue /exit**: Puts `/exit` into the control queue (priority=1, require_idle)
-2. **Block subsequent messages**: require_idle prevents other messages from being dispatched
+1. **Enqueue /exit**: Puts `/exit` into the control queue (priority=1, block_queue_until_idle)
+2. **Block subsequent messages**: block_queue_until_idle prevents other messages from being dispatched
 3. **Deliver when idle**: Dispatcher delivers `/exit` to tmux when Claude is idle
 4. **Daemon restart**: activity-monitor detects exit and restarts Claude
