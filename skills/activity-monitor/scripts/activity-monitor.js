@@ -158,7 +158,10 @@ const _runtimeIndexPath = (() => {
     'Ensure ZYLOS_PACKAGE_ROOT is set in the PM2 ecosystem config.'
   );
 })();
+const _runtimeDirPath = path.dirname(_runtimeIndexPath);
+const _sessionHandoffPath = path.join(_runtimeDirPath, 'session-handoff.js');
 const { getActiveAdapter } = await import(_runtimeIndexPath);
+const { enqueueNewSession } = await import(_sessionHandoffPath);
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -444,26 +447,12 @@ function enqueueContextRotationHandoff({ ratio = 0, used = 0, ceiling = 0 } = {}
   const pct = Math.round(ratio * 100);
   const usedTokens = Number.isFinite(used) ? used : 0;
   const ceilingTokens = Number.isFinite(ceiling) ? ceiling : 0;
-  const content =
-    `Context usage at ${pct}% ` +
-    `(${usedTokens.toLocaleString()} / ${ceilingTokens.toLocaleString()} tokens), ` +
-    'exceeding threshold. Use the new-session skill to start a fresh session.';
-
-  const result = runC4Control([
-    'enqueue',
-    '--content', content,
-    '--priority', '1',
-    '--bypass-state',
-    '--ack-deadline', '300',
-  ]);
-
-  if (result.ok) {
-    const match = result.output.match(/control\s+(\d+)/i);
-    log(`Context rotation handoff enqueued id=${match?.[1] ?? '?'} (pct=${pct}%)`);
+  const ok = enqueueNewSession({ ratio, used: usedTokens, ceiling: ceilingTokens, maxRetries: 3 });
+  if (ok) {
+    log(`Context rotation handoff enqueued (pct=${pct}%)`);
     return true;
   }
-
-  log(`Context rotation handoff enqueue failed (pct=${pct}%): ${result.output}`);
+  log(`Context rotation handoff enqueue failed (pct=${pct}%)`);
   return false;
 }
 
