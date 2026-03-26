@@ -14,7 +14,9 @@ import {
 // initialises in an isolated location and the background main() loop is harmless.
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'c4-disp-test-'));
 const origZylosDir = process.env.ZYLOS_DIR;
+const origDisableMain = process.env.C4_DISPATCHER_DISABLE_MAIN;
 process.env.ZYLOS_DIR = tmpDir;
+process.env.C4_DISPATCHER_DISABLE_MAIN = '1';
 
 const cacheBuster = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 const mod = await import(new URL(`../c4-dispatcher.js?${cacheBuster}`, import.meta.url));
@@ -33,6 +35,11 @@ after(() => {
     delete process.env.ZYLOS_DIR;
   } else {
     process.env.ZYLOS_DIR = origZylosDir;
+  }
+  if (origDisableMain === undefined) {
+    delete process.env.C4_DISPATCHER_DISABLE_MAIN;
+  } else {
+    process.env.C4_DISPATCHER_DISABLE_MAIN = origDisableMain;
   }
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
@@ -136,6 +143,27 @@ describe('getInputBoxText', () => {
     const capture = makeCapture('line1\nline2\nline3');
     assert.equal(getInputBoxText(capture), 'line1\nline2\nline3');
   });
+
+  it('falls back to Codex prompt/footer layout when separators are absent', () => {
+    const capture = [
+      '',
+      '› [Lark DM] hello',
+      '  wrapped line',
+      '',
+      '  tab to queue message                                        72% context left'
+    ].join('\n');
+    assert.equal(getInputBoxText(capture), '[Lark DM] hello\n  wrapped line');
+  });
+
+  it('returns empty string for a bare Codex prompt before the footer', () => {
+    const capture = [
+      '',
+      '›',
+      '',
+      '  tab to queue message                                        72% context left'
+    ].join('\n');
+    assert.equal(getInputBoxText(capture), '');
+  });
 });
 
 // ── checkInputBox ───────────────────────────────────────────────────
@@ -162,6 +190,27 @@ describe('checkInputBox', () => {
 
   it('returns "empty" for box with only ❯ and whitespace', () => {
     const capture = makeCapture('  \u276F  ');
+    assert.equal(checkInputBox(capture), 'empty');
+  });
+
+  it('returns "has_content" for Codex prompt/footer captures', () => {
+    const capture = [
+      '',
+      '› [Lark DM] hello',
+      '  wrapped line',
+      '',
+      '  tab to queue message                                        72% context left'
+    ].join('\n');
+    assert.equal(checkInputBox(capture), 'has_content');
+  });
+
+  it('returns "empty" for a bare Codex prompt/footer capture', () => {
+    const capture = [
+      '',
+      '›',
+      '',
+      '  tab to queue message                                        72% context left'
+    ].join('\n');
     assert.equal(checkInputBox(capture), 'empty');
   });
 });

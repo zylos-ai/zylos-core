@@ -164,7 +164,32 @@ export function getInputBoxText(capture) {
   }
 
   if (separatorIndexes.length < 2) {
-    return null;
+    const footerIndex = lines.findIndex(line => /tab to queue message/i.test(line));
+    if (footerIndex === -1) {
+      return null;
+    }
+
+    let promptIndex = -1;
+    for (let i = footerIndex - 1; i >= 0; i--) {
+      if (/^\s*[›❯](?:\s.*)?$/.test(lines[i])) {
+        promptIndex = i;
+        break;
+      }
+    }
+
+    if (promptIndex === -1) {
+      return null;
+    }
+
+    const promptText = [lines[promptIndex].replace(/^\s*[›❯]\s?/, '')];
+    for (let i = promptIndex + 1; i < footerIndex; i++) {
+      const line = lines[i];
+      if (!line.trim()) break;
+      if (/^\s*[›❯](?:\s.*)?$/.test(line)) break;
+      promptText.push(line);
+    }
+
+    return promptText.join('\n').trimEnd();
   }
 
   const start = separatorIndexes[separatorIndexes.length - 2] + 1;
@@ -564,6 +589,9 @@ async function main() {
   process.exit(0);
 }
 
-// Always call main() — PM2 sets argv[1] to its own ProcessContainerFork.js,
-// breaking realpathSync-based isMainModule checks for ESM scripts.
-main();
+// PM2 sets argv[1] to its own ProcessContainerFork.js, so classic ESM
+// isMainModule checks are unreliable here. Keep the default auto-start
+// behavior, but allow tests to disable the live loop before import.
+if (process.env.C4_DISPATCHER_DISABLE_MAIN !== '1') {
+  main();
+}
