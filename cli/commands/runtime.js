@@ -5,6 +5,7 @@
  *   zylos runtime <name>                        Switch to the specified runtime (claude|codex)
  *   zylos runtime status                        Show the currently configured runtime
  *   zylos runtime <name> --save-apikey <key>    Save API key and switch (all runtimes)
+ *   zylos runtime <name> --save-base-url <url>  Save base URL and switch
  *   zylos runtime claude --save-setup-token <t> Save Claude setup token and switch
  */
 
@@ -18,11 +19,15 @@ import { commandExists } from '../lib/shell-utils.js';
 import {
   installClaude,
   installCodex,
+  isValidBaseUrl,
   saveApiKey,
   saveApiKeyToEnv,
+  saveClaudeBaseUrlToSettingsAndEnv,
   saveSetupToken,
   saveSetupTokenToEnv,
   saveCodexApiKey,
+  saveCodexBaseUrlToEnv,
+  saveCodexApiKeyToEnv,
   writeCodexConfig,
 } from '../lib/runtime-setup.js';
 
@@ -102,34 +107,85 @@ function applyCredentials(target, creds) {
   return false;
 }
 
+export function applyBaseUrl(target, baseUrl) {
+  if (target === 'claude') {
+    return saveClaudeBaseUrlToSettingsAndEnv(baseUrl);
+  }
+  if (target === 'codex') {
+    if (!saveCodexBaseUrlToEnv(baseUrl)) return false;
+    return writeCodexConfig(ZYLOS_DIR, { openaiBaseUrl: baseUrl });
+  }
+  return false;
+}
+
+export function parseRuntimeFlags(flags) {
+  const apiKeyIdx = flags.indexOf('--save-apikey');
+  const setupTokenIdx = flags.indexOf('--save-setup-token');
+  const baseUrlIdx = flags.indexOf('--save-base-url');
+
+  return {
+    apiKey: apiKeyIdx >= 0 ? flags[apiKeyIdx + 1] : null,
+    setupToken: setupTokenIdx >= 0 ? flags[setupTokenIdx + 1] : null,
+    baseUrl: baseUrlIdx >= 0 ? flags[baseUrlIdx + 1] : null,
+    hasApiKey: apiKeyIdx >= 0,
+    hasSetupToken: setupTokenIdx >= 0,
+    hasBaseUrl: baseUrlIdx >= 0,
+  };
+}
+
+export function validateRuntimeFlags(target, parsed) {
+  if (parsed.hasApiKey && (!parsed.apiKey || parsed.apiKey.startsWith('--'))) {
+    return {
+      error: 'Missing value for --save-apikey.',
+      example: target === 'codex'
+        ? 'zylos runtime codex --save-apikey sk-proj-xxx'
+        : 'zylos runtime claude --save-apikey sk-ant-api-xxx',
+    };
+  }
+  if (parsed.hasSetupToken && (!parsed.setupToken || parsed.setupToken.startsWith('--'))) {
+    return {
+      error: 'Missing value for --save-setup-token.',
+      example: 'zylos runtime claude --save-setup-token sk-ant-oat-xxx',
+    };
+  }
+  if (parsed.hasBaseUrl && (!parsed.baseUrl || parsed.baseUrl.startsWith('--'))) {
+    return {
+      error: 'Missing value for --save-base-url.',
+      example: target === 'codex'
+        ? 'zylos runtime codex --save-base-url https://proxy.example.com/v1'
+        : 'zylos runtime claude --save-base-url https://claude-proxy.example.com',
+    };
+  }
+  if (parsed.baseUrl && !isValidBaseUrl(parsed.baseUrl)) {
+    return {
+      error: `Invalid base URL: "${parsed.baseUrl}".`,
+      example: target === 'codex'
+        ? 'zylos runtime codex --save-base-url https://proxy.example.com/v1'
+        : 'zylos runtime claude --save-base-url https://claude-proxy.example.com',
+    };
+  }
+  return null;
+}
+
 // ── Switch ────────────────────────────────────────────────────────────────
 
 async function switchRuntime(target, flags) {
   const cfg = getZylosConfig();
   const current = cfg.runtime ?? 'claude';
   const monitorDir = path.join(ZYLOS_DIR, 'activity-monitor');
+  const parsed = parseRuntimeFlags(flags);
+  const validationError = validateRuntimeFlags(target, parsed);
+  if (validationError) {
+    console.error(red(`\n${validationError.error}`));
+    console.error(dim(`  Example: ${validationError.example}`));
+    process.exit(1);
+  }
 
-  if (current === target) {
+  const { apiKey, setupToken, baseUrl } = parsed;
+
+  if (current === target && !apiKey && !setupToken && !baseUrl) {
     console.log(`Already on ${bold(target)} runtime.`);
     return;
-  }
-
-  // Parse credential flags
-  const apiKeyIdx = flags.indexOf('--save-apikey');
-  const setupTokenIdx = flags.indexOf('--save-setup-token');
-  const apiKey = apiKeyIdx >= 0 ? flags[apiKeyIdx + 1] : null;
-  const setupToken = setupTokenIdx >= 0 ? flags[setupTokenIdx + 1] : null;
-
-  // Validate that flag values were actually provided (not undefined / another flag).
-  if (apiKeyIdx >= 0 && (!apiKey || apiKey.startsWith('--'))) {
-    console.error(red(`\nMissing value for --save-apikey.`));
-    console.error(dim('  Example: zylos runtime codex --save-apikey sk-proj-xxx'));
-    process.exit(1);
-  }
-  if (setupTokenIdx >= 0 && (!setupToken || setupToken.startsWith('--'))) {
-    console.error(red(`\nMissing value for --save-setup-token.`));
-    console.error(dim('  Example: zylos runtime claude --save-setup-token sk-ant-oat-xxx'));
-    process.exit(1);
   }
 
   // Step 1: Ensure target runtime CLI is installed.
@@ -156,6 +212,15 @@ async function switchRuntime(target, flags) {
       process.exit(1);
     }
     console.log(`  ${green('✓')} credentials saved`);
+  }
+
+  if (baseUrl) {
+    console.log(`Saving base URL for ${bold(target)}...`);
+    if (!applyBaseUrl(target, baseUrl)) {
+      console.error(red(`\nFailed to save base URL.`));
+      process.exit(1);
+    }
+    console.log(`  ${green('✓')} base URL saved`);
   }
 
   // Step 2b: Write Codex headless config (trust dir, suppress all interactive prompts).
@@ -230,7 +295,7 @@ async function switchRuntime(target, flags) {
 
 // ── Help ──────────────────────────────────────────────────────────────────
 
-function showHelp() {
+export function showHelp() {
   console.log(`
 zylos runtime — switch agent runtime
 
@@ -238,6 +303,7 @@ Usage:
   zylos runtime <name>                        Switch to the specified runtime
   zylos runtime status                        Show currently configured runtime
   zylos runtime <name> --save-apikey <key>    Save API key and switch
+  zylos runtime <name> --save-base-url <url>  Save base URL and switch
   zylos runtime claude --save-setup-token <t> Save Claude setup token and switch
 
 Supported runtimes:
@@ -246,9 +312,11 @@ Supported runtimes:
 
 Authentication options (if not already authenticated):
   Claude:  --save-apikey <sk-ant-api...>   Anthropic API key
+           --save-base-url <url>           Claude base URL
            --save-setup-token <sk-ant-oat...>  Setup token
            claude auth login               Browser OAuth (then retry)
   Codex:   --save-apikey <sk-...>          OpenAI API key
+           --save-base-url <url>           Codex base URL
            codex login --device-auth       Device auth (headless)
            codex login                     Browser login (then retry)
 
@@ -261,7 +329,9 @@ Examples:
   zylos runtime status
   zylos runtime codex
   zylos runtime claude --save-apikey sk-ant-api-xxx
+  zylos runtime claude --save-base-url https://claude-proxy.example.com
   zylos runtime claude --save-setup-token sk-ant-oat-xxx
   zylos runtime codex --save-apikey sk-proj-xxx
+  zylos runtime codex --save-base-url https://proxy.example.com/v1
 `);
 }
