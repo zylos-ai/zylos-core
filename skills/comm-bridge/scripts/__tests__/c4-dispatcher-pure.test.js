@@ -19,7 +19,14 @@ process.env.ZYLOS_DIR = tmpDir;
 const cacheBuster = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 const mod = await import(new URL(`../c4-dispatcher.js?${cacheBuster}`, import.meta.url));
 
-const { sanitizeMessage, getDeliveryDelay, getInputBoxText, checkInputBox, isBypassState } = mod;
+const {
+  sanitizeMessage,
+  getDeliveryDelay,
+  getInputBoxText,
+  checkInputBox,
+  isUsageOverlayCapture,
+  isBypassState
+} = mod;
 
 after(() => {
   if (origZylosDir === undefined) {
@@ -156,6 +163,26 @@ describe('checkInputBox', () => {
   it('returns "empty" for box with only ❯ and whitespace', () => {
     const capture = makeCapture('  \u276F  ');
     assert.equal(checkInputBox(capture), 'empty');
+  });
+});
+
+// ── isUsageOverlayCapture ───────────────────────────────────────────
+
+describe('isUsageOverlayCapture', () => {
+  it('detects /usage settings overlay capture', () => {
+    const capture = [
+      'Settings:  Status   Config   Usage  (←/→ or tab to cycle)',
+      '',
+      '/usage is only available for subscription plans.',
+      '',
+      'Esc to cancel'
+    ].join('\n');
+    assert.equal(isUsageOverlayCapture(capture), true);
+  });
+
+  it('returns false for normal chat capture', () => {
+    const capture = makeCapture('hello world');
+    assert.equal(isUsageOverlayCapture(capture), false);
   });
 });
 

@@ -189,6 +189,13 @@ export function checkInputBox(capture) {
   return 'has_content';
 }
 
+export function isUsageOverlayCapture(capture) {
+  if (!capture) return false;
+  const hasUsageHeader = /Settings:\s+Status\s+Config\s+Usage/i.test(capture);
+  const hasEscHint = /Esc to cancel/i.test(capture);
+  return hasUsageHeader && hasEscHint;
+}
+
 async function dismissGhostTextAndCapture() {
   execFileSync('tmux', ['send-keys', '-t', TMUX_SESSION, 'Space'], { stdio: 'pipe', timeout: 5000 });
   await sleep(100);
@@ -206,19 +213,28 @@ async function dismissGhostTextAndCapture() {
 
 async function submitAndVerify() {
   execFileSync('tmux', ['send-keys', '-t', TMUX_SESSION, 'Enter'], { stdio: 'pipe', timeout: 5000 });
+  let lastState = 'indeterminate';
 
   for (let attempt = 0; attempt < ENTER_VERIFY_MAX_RETRIES; attempt++) {
     await sleep(ENTER_VERIFY_WAIT_MS);
     const capture = await dismissGhostTextAndCapture();
     const state = checkInputBox(capture);
+    lastState = state;
 
     if (state === 'empty') {
-      return true;
+      return { verified: true, state };
     }
 
     if (state === 'indeterminate') {
       log(`Enter verify attempt ${attempt + 1}: separator detection failed, retrying capture`);
       saveTmuxCapture(capture, `separator-fail-attempt-${attempt + 1}`);
+
+      // If a /usage settings overlay is open in the main session, dismiss it so
+      // pasted user messages can be submitted normally.
+      if (isUsageOverlayCapture(capture)) {
+        log(`Enter verify attempt ${attempt + 1}: /usage overlay detected, sending Escape`);
+        execFileSync('tmux', ['send-keys', '-t', TMUX_SESSION, 'Escape'], { stdio: 'pipe', timeout: 5000 });
+      }
       continue;
     }
 
@@ -226,10 +242,11 @@ async function submitAndVerify() {
     execFileSync('tmux', ['send-keys', '-t', TMUX_SESSION, 'Enter'], { stdio: 'pipe', timeout: 5000 });
   }
 
-  return false;
+  return { verified: false, state: lastState };
 }
 
-async function sendToTmux(message) {
+async function sendToTmux(message, options = {}) {
+  const strictVerify = options.strictVerify === true;
   const bufferName = `c4-msg-${process.pid}-${Date.now()}`;
   const sanitized = sanitizeMessage(message);
   const delayMs = getDeliveryDelay(Buffer.byteLength(sanitized, 'utf8'));
@@ -251,17 +268,23 @@ async function sendToTmux(message) {
 
   await sleep(delayMs);
 
-  let verified = false;
+  let verifyResult = { verified: false, state: 'indeterminate' };
   try {
-    verified = await submitAndVerify();
+    verifyResult = await submitAndVerify();
   } catch (err) {
     log(`Warning: Enter verification error: ${err.message}`);
   }
 
-  // D2: If verification failed, check process state via ProcSampler.
-  // If process is confirmed dead (alive === false or frozen), the message was lost.
-  // If process is alive, the paste likely succeeded but verification timing was off.
-  if (!verified) {
+  // Conversation delivery must be strict: if we cannot verify submission,
+  // retry instead of marking delivered to avoid false positives.
+  if (!verifyResult.verified && strictVerify) {
+    log(`Verification failed in strict mode (state=${verifyResult.state}) — marking as verify_failed`);
+    return 'verify_failed';
+  }
+
+  // For non-conversation controls, preserve prior permissive behavior when the
+  // process is confirmed alive (only hard-fail if process is dead/offline).
+  if (!verifyResult.verified) {
     const procState = readProcState();
     const agentState = getAgentState();
     if ((procState && procState.alive === false) ||
@@ -454,7 +477,9 @@ async function processNextMessage() {
 
   log(`Delivering ${item.type} id=${item.id}${item.type === 'control' ? ` priority=${item.priority}` : ` from ${item.channel}`}`);
   const deliveryContent = item.content || '';
-  const result = await sendToTmux(deliveryContent);
+  const result = await sendToTmux(deliveryContent, {
+    strictVerify: item.type === 'conversation'
+  });
 
   if (result === 'submitted') {
     if (item.type === 'conversation') {
