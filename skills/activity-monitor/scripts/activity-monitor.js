@@ -203,10 +203,11 @@ const SIGNAL_GRACE_PERIOD = 30;      // Wait 30s after agentRunning transitions 
 const RATE_LIMIT_DEFAULT_COOLDOWN = 3600;  // 1 hour default when reset time can't be parsed
 const USER_MESSAGE_RECOVERY_COOLDOWN = 60; // 1 min between user-message-triggered recoveries
 
-// Periodic probe config — kept at 3 min for end-to-end health verification.
-// ProcSampler handles frozen-process detection, but periodic probe catches cases where
-// the process is alive but functionally broken (e.g., stuck API errors, auth expired).
-const PERIODIC_PROBE_INTERVAL = 180; // 3 min — complementary to ProcSampler, not replaced by it
+// Periodic probe config — 30 min end-to-end health verification.
+// ProcSampler (10s sampling) handles frozen-process detection; this probe catches cases
+// where the process is alive but functionally broken (e.g., stuck API errors, auth expired).
+// Previous 3-min interval caused excessive token consumption during idle periods.
+const PERIODIC_PROBE_INTERVAL = 1800; // 30 min — reduced from 3 min to cut idle token usage
 const LAUNCH_GRACE_PERIOD = 180;     // 3 min — skip periodic probes after fresh launch to allow initialization
 const API_ERROR_SCAN_INTERVAL = 15;  // seconds between proactive tmux API error scans
 
