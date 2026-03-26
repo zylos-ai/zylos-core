@@ -1,5 +1,6 @@
 export function shouldStartUsageCheck({
   runtimeId,
+  allowedRuntimeIds = ['claude'],
   claudeState,
   idleSeconds,
   currentTime,
@@ -15,7 +16,7 @@ export function shouldStartUsageCheck({
   backoffUntil,
   circuitUntil,
 }) {
-  if (runtimeId !== 'claude') return false;
+  if (!allowedRuntimeIds.includes(runtimeId)) return false;
   if (claudeState !== 'idle') return false;
   if (idleSeconds < checkInterval.idleGate) return false;
   if ((currentTime - lastUsageCheckAt) < checkInterval.seconds) return false;

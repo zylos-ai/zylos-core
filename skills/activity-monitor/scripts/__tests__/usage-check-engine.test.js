@@ -33,6 +33,13 @@ describe('usage-check-engine', () => {
     assert.equal(shouldStartUsageCheck(input), false);
   });
 
+  it('allows codex when explicitly enabled', () => {
+    const input = baseInput();
+    input.runtimeId = 'codex';
+    input.allowedRuntimeIds = ['claude', 'codex'];
+    assert.equal(shouldStartUsageCheck(input), true);
+  });
+
   it('blocks check when queue has pending work', () => {
     const input = baseInput();
     input.pendingQueueCount = 2;

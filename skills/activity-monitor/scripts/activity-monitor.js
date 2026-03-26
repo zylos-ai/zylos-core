@@ -133,6 +133,7 @@ import { HeartbeatEngine } from './heartbeat-engine.js';
 import { DailySchedule } from './daily-schedule.js';
 import { ProcSampler } from './proc-sampler.js';
 import { runUsageProbe } from './usage-probe-runner.js';
+import { runCodexStatusProbe } from './usage-codex-probe-runner.js';
 import { parseUsageFromPane as parseUsageFromPaneCore } from './usage-probe-parser.js';
 import { acquireUsageProbeLock, releaseUsageProbeLock } from './usage-probe-lock.js';
 import { shouldStartUsageCheck } from './usage-check-engine.js';
@@ -182,7 +183,9 @@ const UPGRADE_CHECK_STATE_FILE = path.join(MONITOR_DIR, 'upgrade-check-state.jso
 const PENDING_CHANNELS_FILE = path.join(MONITOR_DIR, 'pending-channels.jsonl');
 const USER_MESSAGE_SIGNAL_FILE = path.join(MONITOR_DIR, 'user-message-signal.json');
 const USAGE_STATE_FILE = path.join(MONITOR_DIR, 'usage.json');
+const USAGE_CODEX_STATE_FILE = path.join(MONITOR_DIR, 'usage-codex.json');
 const USAGE_PROBE_LOCK_FILE = path.join(MONITOR_DIR, 'usage-probe.lock');
+const USAGE_CODEX_PROBE_LOCK_FILE = path.join(MONITOR_DIR, 'usage-codex-probe.lock');
 
 // API activity file — written by hook-activity.js (Claude Code hooks)
 const API_ACTIVITY_FILE = path.join(MONITOR_DIR, 'api-activity.json');
@@ -956,18 +959,29 @@ function executeUpgradeCheck() {
 
 function loadUsageState() {
   try {
-    if (!fs.existsSync(USAGE_STATE_FILE)) return null;
-    return JSON.parse(fs.readFileSync(USAGE_STATE_FILE, 'utf8'));
+    const stateFile = getUsageStateFile();
+    if (!fs.existsSync(stateFile)) return null;
+    return JSON.parse(fs.readFileSync(stateFile, 'utf8'));
   } catch { }
   return null;
 }
 
 function writeUsageState(data) {
   try {
-    fs.writeFileSync(USAGE_STATE_FILE, JSON.stringify(data, null, 2));
+    fs.writeFileSync(getUsageStateFile(), JSON.stringify(data, null, 2));
   } catch (err) {
     log(`Usage monitor: failed to write state (${err.message})`);
   }
+}
+
+function getUsageStateFile() {
+  if (adapter?.runtimeId === 'codex') return USAGE_CODEX_STATE_FILE;
+  return USAGE_STATE_FILE;
+}
+
+function getUsageProbeLockFile() {
+  if (adapter?.runtimeId === 'codex') return USAGE_CODEX_PROBE_LOCK_FILE;
+  return USAGE_PROBE_LOCK_FILE;
 }
 
 function captureTmuxPane() {
@@ -1029,7 +1043,7 @@ function maybeCleanupUsageProbeSessions() {
     });
     const sessions = out.split('\n').map(s => s.trim()).filter(Boolean);
     for (const session of sessions) {
-      if (!session.startsWith('claude-usage-probe-')) continue;
+      if (!session.startsWith('claude-usage-probe-') && !session.startsWith('codex-status-probe-')) continue;
       try {
         execSync(`tmux kill-session -t "${session}" 2>/dev/null`, { timeout: 3000, stdio: 'pipe' });
       } catch { /* best effort */ }
@@ -1100,6 +1114,137 @@ function sendUsageNotification(message) {
  * Only progresses when Claude is idle with no pending work.
  */
 function maybeCheckUsage(claudeState, idleSeconds, currentTime, apiActivity) {
+  if (adapter.runtimeId === 'codex') {
+    const shouldStart = shouldStartUsageCheck({
+      runtimeId: adapter.runtimeId,
+      allowedRuntimeIds: ['codex'],
+      claudeState,
+      idleSeconds,
+      currentTime,
+      lastUsageCheckAt,
+      checkInterval: { seconds: USAGE_CHECK_INTERVAL, idleGate: USAGE_IDLE_GATE },
+      inPrompt: false,
+      promptUpdatedAt: 0,
+      localHour: getLocalHour(),
+      activeHoursStart: USAGE_ACTIVE_HOURS_START,
+      activeHoursEnd: USAGE_ACTIVE_HOURS_END,
+      pendingQueueCount: getPendingWorkCount(),
+      lockBusy: false,
+      backoffUntil: usageProbeBackoffUntil,
+      circuitUntil: usageProbeCircuitUntil,
+    });
+
+    if (!shouldStart) return;
+
+    const probeSessionName = `codex-status-probe-${process.pid}-${Date.now()}`;
+    const lockResult = acquireUsageProbeLock({
+      lockFile: getUsageProbeLockFile(),
+      ttlSeconds: USAGE_PROBE_LOCK_TTL_SECONDS,
+      sessionName: probeSessionName,
+      sessionExistsFn: tmuxSessionExists
+    });
+
+    if (!lockResult.ok) {
+      if (lockResult.reason === 'lock_busy') return;
+      usageProbeConsecutiveFailures += 1;
+      usageProbeBackoffUntil = currentTime + USAGE_PROBE_FAILURE_BACKOFF_SECONDS;
+      lastUsageCheckAt = currentTime;
+      log(`Usage monitor (codex): sidecar lock error (${lockResult.reason})`);
+      return;
+    }
+
+    let probeResult;
+    try {
+      log('Usage monitor (codex): initiating sidecar /status check');
+      probeResult = runCodexStatusProbe({
+        zylosDir: ZYLOS_DIR,
+        timeoutSeconds: USAGE_PROBE_TIMEOUT_SECONDS,
+        captureWaitSeconds: USAGE_CAPTURE_WAIT,
+        sessionName: probeSessionName,
+      });
+    } finally {
+      releaseUsageProbeLock({
+        lockFile: getUsageProbeLockFile(),
+        token: lockResult.token
+      });
+    }
+
+    if (!probeResult.ok) {
+      usageProbeConsecutiveFailures += 1;
+      if (probeResult.reason === 'timeout' || probeResult.reason === 'sidecar_error') {
+        usageProbeBackoffUntil = currentTime + USAGE_PROBE_FAILURE_BACKOFF_SECONDS;
+      }
+      if (usageProbeConsecutiveFailures >= USAGE_PROBE_CIRCUIT_BREAKER_THRESHOLD) {
+        usageProbeCircuitUntil = currentTime + USAGE_PROBE_CIRCUIT_BREAKER_SECONDS;
+        usageProbeConsecutiveFailures = 0;
+        log(`Usage monitor (codex): circuit open for ${USAGE_PROBE_CIRCUIT_BREAKER_SECONDS}s`);
+      }
+      lastUsageCheckAt = currentTime;
+      log(`Usage monitor (codex): sidecar probe failed (${probeResult.reason})`);
+      return;
+    }
+
+    usageProbeConsecutiveFailures = 0;
+    usageProbeBackoffUntil = 0;
+    usageProbeCircuitUntil = 0;
+
+    const status = probeResult.status;
+    const usage = {
+      session: status.sessionPercent,
+      sessionResets: null,
+      weeklyAll: status.weeklyAllPercent,
+      weeklyAllResets: status.weeklyAllResets,
+      weeklySonnet: null,
+      weeklySonnetResets: null,
+      fiveHour: status.fiveHourPercent,
+      fiveHourResets: status.fiveHourResets
+    };
+    const prevState = loadUsageState();
+    const now = new Date().toISOString();
+    const tierMetric = usage.weeklyAll ?? usage.session;
+    const tier = getUsageTier(tierMetric ?? 0);
+
+    const usageData = {
+      lastCheck: now,
+      lastCheckEpoch: currentTime,
+      session: { percent: usage.session, resets: usage.sessionResets },
+      weeklyAll: { percent: usage.weeklyAll, resets: usage.weeklyAllResets },
+      weeklySonnet: { percent: usage.weeklySonnet, resets: usage.weeklySonnetResets },
+      fiveHour: { percent: usage.fiveHour, resets: usage.fiveHourResets },
+      tier,
+      statusShape: status.statusShape,
+      probeReason: probeResult.reason,
+      probeDurationMs: probeResult.durationMs,
+      probeAt: now,
+      lastNotifiedTier: prevState?.lastNotifiedTier || null,
+      lastNotifiedAt: prevState?.lastNotifiedAt || null
+    };
+
+    log(
+      `Usage monitor (codex): session=${usage.session ?? 'null'}% ` +
+      `5h=${usage.fiveHour ?? 'null'}% weekly=${usage.weeklyAll ?? 'null'}% ` +
+      `tier=${tier} shape=${status.statusShape}`
+    );
+
+    if (tier !== 'ok' && usage.weeklyAll !== null && usage.weeklyAll !== undefined) {
+      const prevTier = prevState?.lastNotifiedTier;
+      const prevNotifiedAt = prevState?.lastNotifiedAt ? Math.floor(new Date(prevState.lastNotifiedAt).getTime() / 1000) : 0;
+      const tierEscalated = prevTier !== tier && tierRank(tier) > tierRank(prevTier);
+      const cooldownExpired = (currentTime - prevNotifiedAt) >= USAGE_NOTIFY_COOLDOWN;
+
+      if (tierEscalated || cooldownExpired) {
+        const message = formatUsageNotification(usage, tier);
+        sendUsageNotification(message);
+        usageData.lastNotifiedTier = tier;
+        usageData.lastNotifiedAt = now;
+      }
+    }
+
+    writeUsageState(usageData);
+    lastUsageCheckAt = currentTime;
+    return;
+  }
+
   // /usage is a Claude Code-only slash command — skip for other runtimes
   if (adapter.runtimeId !== 'claude') return;
 
@@ -1110,6 +1255,7 @@ function maybeCheckUsage(claudeState, idleSeconds, currentTime, apiActivity) {
 
     const shouldStart = shouldStartUsageCheck({
       runtimeId: adapter.runtimeId,
+      allowedRuntimeIds: ['claude'],
       claudeState,
       idleSeconds,
       currentTime,
@@ -1130,7 +1276,7 @@ function maybeCheckUsage(claudeState, idleSeconds, currentTime, apiActivity) {
 
     const probeSessionName = `claude-usage-probe-${process.pid}-${Date.now()}`;
     const lockResult = acquireUsageProbeLock({
-      lockFile: USAGE_PROBE_LOCK_FILE,
+      lockFile: getUsageProbeLockFile(),
       ttlSeconds: USAGE_PROBE_LOCK_TTL_SECONDS,
       sessionName: probeSessionName,
       sessionExistsFn: tmuxSessionExists
@@ -1156,7 +1302,7 @@ function maybeCheckUsage(claudeState, idleSeconds, currentTime, apiActivity) {
       });
     } finally {
       releaseUsageProbeLock({
-        lockFile: USAGE_PROBE_LOCK_FILE,
+        lockFile: getUsageProbeLockFile(),
         token: lockResult.token
       });
     }
