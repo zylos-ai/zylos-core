@@ -4,6 +4,7 @@ import { execSync, execFileSync } from 'node:child_process';
 import { parseUsageFromPane } from './usage-probe-parser.js';
 
 const CLAUDE_BIN = process.env.CLAUDE_BIN || 'claude';
+const UNSUPPORTED_PLAN_RE = /\/usage is only available for subscription plans\./i;
 
 function parseEnvValue(content, key) {
   const re = new RegExp(`^\\s*${key}\\s*=\\s*(.+)$`, 'm');
@@ -62,6 +63,19 @@ function readProbeAuthEnv(zylosDir) {
   return result;
 }
 
+export function classifyUsageProbePane(paneContent) {
+  const usage = parseUsageFromPane(paneContent);
+  if (usage) {
+    return { ok: true, usage };
+  }
+
+  if (UNSUPPORTED_PLAN_RE.test(paneContent || '')) {
+    return { ok: false, reason: 'unsupported_plan' };
+  }
+
+  return { ok: false, reason: 'parse_failed' };
+}
+
 export function runUsageProbe({
   zylosDir,
   timeoutSeconds,
@@ -103,7 +117,7 @@ export function runUsageProbe({
       };
     }
 
-    sendKeys(sessionName, '"/usage"');
+    sendKeys(sessionName, '/usage');
     sleep(1);
     sendKeys(sessionName, 'Enter');
 
@@ -114,11 +128,19 @@ export function runUsageProbe({
 
     let paneContent = '';
     let usage = null;
+    let probeFailureReason = 'parse_failed';
 
     while (Date.now() < captureDeadline) {
       paneContent = capturePane(sessionName);
-      usage = parseUsageFromPane(paneContent);
-      if (usage) break;
+      const classified = classifyUsageProbePane(paneContent);
+      if (classified.ok) {
+        usage = classified.usage;
+        break;
+      }
+      probeFailureReason = classified.reason;
+      if (probeFailureReason === 'unsupported_plan') {
+        break;
+      }
       sleep(1);
     }
 
@@ -134,7 +156,7 @@ export function runUsageProbe({
       }
       return {
         ok: false,
-        reason: 'parse_failed',
+        reason: probeFailureReason,
         durationMs: Date.now() - startedAt,
       };
     }
