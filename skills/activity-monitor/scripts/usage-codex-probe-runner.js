@@ -60,10 +60,31 @@ export function classifyCodexStatusProbePane(paneContent) {
   return { ok: false, reason: 'parse_failed' };
 }
 
+export function isCompleteCodexPanel(status) {
+  return status?.statusShape === 'panel' &&
+    status.weeklyAllPercent !== null &&
+    status.weeklyAllPercent !== undefined;
+}
+
+function statusScore(status) {
+  if (!status) return -1;
+
+  let score = 0;
+  if (status.statusShape === 'panel') score += 10;
+  if (status.statusShape === 'statusline') score += 1;
+
+  if (status.sessionPercent !== null && status.sessionPercent !== undefined) score += 1;
+  if (status.fiveHourPercent !== null && status.fiveHourPercent !== undefined) score += 2;
+  if (status.weeklyAllPercent !== null && status.weeklyAllPercent !== undefined) score += 4;
+  if (status.weeklyAllResets) score += 1;
+
+  return score;
+}
+
 export function pickPreferredCodexStatus(previous, candidate) {
-  if (!candidate) return previous;
+  if (!candidate) return previous || null;
   if (!previous) return candidate;
-  if (candidate.statusShape === 'panel') return candidate;
+  if (statusScore(candidate) >= statusScore(previous)) return candidate;
   return previous;
 }
 
@@ -120,15 +141,16 @@ export function runCodexStatusProbe({
       const classified = classifyCodexStatusProbePane(paneContent);
       if (classified.ok) {
         const candidate = classified.status;
-        if (candidate.statusShape === 'panel') {
+        fallbackStatus = pickPreferredCodexStatus(fallbackStatus, candidate);
+
+        if (isCompleteCodexPanel(candidate)) {
           status = candidate;
           break;
         }
 
-        fallbackStatus = pickPreferredCodexStatus(fallbackStatus, candidate);
         if (!extendedForPanel) {
-          // Statusline may appear before /status panel is fully rendered.
-          // Extend once to session timeout and keep polling for panel fields.
+          // /status can render incrementally (statusline or partial panel first).
+          // Extend once to session timeout and keep polling for a full panel.
           captureDeadline = sessionDeadline;
           extendedForPanel = true;
         }

@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { classifyCodexStatusProbePane, pickPreferredCodexStatus } from '../usage-codex-probe-runner.js';
+import {
+  classifyCodexStatusProbePane,
+  pickPreferredCodexStatus,
+  isCompleteCodexPanel
+} from '../usage-codex-probe-runner.js';
 
 describe('usage-codex-probe-runner', () => {
   it('classifies panel status as success', () => {
@@ -38,5 +42,19 @@ describe('usage-codex-probe-runner', () => {
     const selected = pickPreferredCodexStatus(statusline, panel);
     assert.equal(selected.statusShape, 'panel');
     assert.equal(selected.weeklyAllPercent, 40);
+  });
+
+  it('prefers richer panel over partial panel', () => {
+    const partialPanel = { statusShape: 'panel', sessionPercent: 68, weeklyAllPercent: null, fiveHourPercent: null };
+    const fullPanel = { statusShape: 'panel', sessionPercent: 68, weeklyAllPercent: 40, fiveHourPercent: 6 };
+
+    const selected = pickPreferredCodexStatus(partialPanel, fullPanel);
+    assert.equal(selected.weeklyAllPercent, 40);
+    assert.equal(selected.fiveHourPercent, 6);
+  });
+
+  it('treats panel without weekly as incomplete', () => {
+    assert.equal(isCompleteCodexPanel({ statusShape: 'panel', weeklyAllPercent: null }), false);
+    assert.equal(isCompleteCodexPanel({ statusShape: 'panel', weeklyAllPercent: 40 }), true);
   });
 });
