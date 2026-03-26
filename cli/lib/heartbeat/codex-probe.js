@@ -65,7 +65,9 @@ export function createCodexProbe({
       try {
         const out = execFileSync('node', [C4_CONTROL, 'enqueue',
           '--content', 'Heartbeat check.',
-          '--priority', '3',
+          // Priority 0 = highest. Must not be lowered — heartbeat must jump
+          // the queue ahead of conversation messages to avoid false timeout kills.
+          '--priority', '0',
           '--bypass-state',
           '--ack-deadline', String(deadline),
         ], { encoding: 'utf8', stdio: 'pipe', timeout: 15_000 });

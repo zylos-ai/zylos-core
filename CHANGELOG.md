@@ -5,7 +5,14 @@ All notable changes to zylos-core will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.4.5] - 2026-03-26
+## [0.4.6] - 2026-03-26 ⚠️ UPGRADE STRONGLY RECOMMENDED
+
+> **All instances should upgrade to this version.** Heartbeat probes previously used normal priority (3), which could be delayed behind queued conversation messages. This caused false liveness timeouts and unnecessary kill-restart cycles. v0.4.6 sets heartbeat priority to 0 (highest), ensuring timely delivery regardless of queue depth.
+
+### Fixed
+- **Heartbeat probe priority elevated to highest (0)**: both `claude-probe` and `codex-probe` now enqueue heartbeat checks at priority 0 instead of 3, preventing false timeout kills when the C4 queue has pending conversation messages (#421)
+
+## [0.4.5] - 2026-03-26 _(superseded by 0.4.6 — heartbeat priority fix prevents false timeout kills)_
 
 ### Fixed
 - **Codex self-upgrade config backfill**: `0.4.3 -> 0.4.4` upgrades now also backfill `~/.codex/config.toml` through the installed `sync-settings-hooks.js` path, so Codex sessions get `[features] multi_agent = true` even when the running upgrader is still the old 11-step flow (#415)
