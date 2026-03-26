@@ -137,6 +137,7 @@ import { runCodexStatusProbe } from './usage-codex-probe-runner.js';
 import { parseUsageFromPane as parseUsageFromPaneCore } from './usage-probe-parser.js';
 import { acquireUsageProbeLock, releaseUsageProbeLock } from './usage-probe-lock.js';
 import { shouldStartUsageCheck } from './usage-check-engine.js';
+import { getInitialUsageCheckAt } from './usage-check-init.js';
 // activity-monitor runs as a deployed skill at ~/zylos/.claude/skills/activity-monitor/scripts/.
 // A relative import to cli/lib/runtime/ resolves correctly in the repo (dev) but NOT from
 // the deployed path — the CLI lives in the globally installed zylos npm package.
@@ -1854,11 +1855,14 @@ function init() {
   });
 
   // Restore usage check timestamp from persisted state.
-  // On fresh installs (no usage.json), default to current time so the first
-  // check waits a full interval — prevents /usage from firing immediately
-  // after Claude's first startup.
+  // Claude fresh installs keep the old delayed-first-check behavior, while
+  // Codex must allow an initial /status probe to create usage-codex.json.
   const usageState = loadUsageState();
-  lastUsageCheckAt = usageState?.lastCheckEpoch || Math.floor(Date.now() / 1000);
+  lastUsageCheckAt = getInitialUsageCheckAt({
+    runtimeId: adapter.runtimeId,
+    usageState,
+    nowEpoch: Math.floor(Date.now() / 1000)
+  });
   if (getUsageProbeMode() !== 'legacy') {
     maybeCleanupUsageProbeSessions();
   }
