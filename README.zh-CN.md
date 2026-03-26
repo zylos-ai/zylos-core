@@ -70,6 +70,8 @@ curl -fsSL https://raw.githubusercontent.com/zylos-ai/zylos-core/main/scripts/in
 | `--setup-token <token>` | Claude [setup token](https://code.claude.com/docs/en/authentication)（以 `sk-ant-oat` 开头） | — |
 | `--api-key <key>` | Anthropic API key（以 `sk-ant-` 开头） | — |
 | `--codex-api-key <key>` | Codex 运行时的 OpenAI API key（以 `sk-` 开头） | — |
+| `--base-url <url>` | 给 Claude Code 设置自定义 API 地址 | — |
+| `--codex-base-url <url>` | 给 Codex 设置自定义 API 地址 | — |
 | `--timezone <tz>` | [IANA 时区](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones)，如 `Asia/Shanghai`、`America/New_York`、`Europe/London` | 系统默认 |
 | `--domain <domain>` | Caddy 反向代理域名，如 `agent.example.com` | 无 |
 | `--https` / `--no-https` | 启用或禁用 HTTPS | 设置域名时默认 `--https` |
@@ -78,14 +80,16 @@ curl -fsSL https://raw.githubusercontent.com/zylos-ai/zylos-core/main/scripts/in
 
 **环境变量：**
 
-参数也可通过环境变量设置。优先级：CLI 参数 > 环境变量 > 已有 `.env` > 交互式提示。
+参数也可在 `zylos init` 时通过环境变量设置。优先级：CLI 参数 > 环境变量 > 已有 `.env` > 交互式提示。
 
 | 环境变量 | 对应参数 |
 |---------|---------|
 | `ZYLOS_RUNTIME` | `--runtime` |
 | `CLAUDE_CODE_OAUTH_TOKEN` | `--setup-token` |
 | `ANTHROPIC_API_KEY` | `--api-key` |
-| `OPENAI_API_KEY` | `--codex-api-key`（存储在 `~/.codex/auth.json`，不在 `.env`） |
+| `ANTHROPIC_BASE_URL` | `--base-url` |
+| `OPENAI_API_KEY` | `--codex-api-key` |
+| `OPENAI_BASE_URL` | `--codex-base-url` |
 | `ZYLOS_DOMAIN` | `--domain` |
 | `ZYLOS_PROTOCOL`（`https` 或 `http`） | `--https` / `--no-https` |
 | `ZYLOS_WEB_PASSWORD` | `--web-password` |
