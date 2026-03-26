@@ -259,7 +259,7 @@ const USAGE_PROBE_MODE = readConfigString('usage_probe_mode', 'auto').toLowerCas
 const USAGE_PROBE_TIMEOUT_SECONDS = readConfigInt('usage_probe_timeout_seconds', 20);
 const USAGE_PROBE_LOCK_TTL_SECONDS = readConfigInt('usage_probe_lock_ttl_seconds', 120);
 const USAGE_PROBE_FAILURE_BACKOFF_SECONDS = readConfigInt('usage_probe_failure_backoff_seconds', 600);
-const USAGE_PROBE_UNSUPPORTED_PLAN_BACKOFF_SECONDS = readConfigInt('usage_probe_unsupported_plan_backoff_seconds', 86400);
+const USAGE_PROBE_UNSUPPORTED_PLAN_BACKOFF_SECONDS = readConfigInt('usage_probe_unsupported_plan_backoff_seconds', 3600);
 const USAGE_PROBE_CIRCUIT_BREAKER_THRESHOLD = readConfigInt('usage_probe_circuit_breaker_threshold', 3);
 const USAGE_PROBE_CIRCUIT_BREAKER_SECONDS = readConfigInt('usage_probe_circuit_breaker_seconds', 1800);
 
