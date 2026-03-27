@@ -4,7 +4,6 @@
     "test": "node --test scripts/__tests__/*.test.js"
   },
   "dependencies": {
-    "better-sqlite3": "^12.8.0",
     "dotenv": "^16.6.1"
   }
 }
