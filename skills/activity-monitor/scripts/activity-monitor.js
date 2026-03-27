@@ -259,7 +259,6 @@ let lastLaunchAt = 0;
 let lastApiErrorScanAt = 0;
 let apiErrorConsecutiveHits = 0;  // consecutive scans that detected an API error
 let lastDeadApiPid = null;
-let authFailedNotifiedAt = 0;
 let authRetrySuppressedUntil = 0;
 let startAgentInProgress = false;
 
@@ -506,15 +505,6 @@ async function startAgent() {
       log(`Guardian: auth failed (${authResult.reason ?? 'unknown'}), skipping restart. Next retry in 3 min.${authResult.output ? ' Output: ' + authResult.output : ''}`);
       authRetrySuppressedUntil = Date.now() + 180_000;
       engine.setHealth('auth_failed', authResult.reason ?? 'unknown');
-      const now = Math.floor(Date.now() / 1000);
-      if ((now - authFailedNotifiedAt) > 3600) {
-        authFailedNotifiedAt = now;
-        runC4Control([
-          'enqueue',
-          '--content', `Authentication failed for ${adapter.displayName} (${authResult.reason ?? 'unknown'}). Agent cannot restart. Please check your API key or login credentials.`,
-          '--priority', '1',
-        ]);
-      }
       return;
     }
 
