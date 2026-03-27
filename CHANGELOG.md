@@ -5,6 +5,17 @@ All notable changes to zylos-core will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.9] - 2026-03-27
+
+### Fixed
+- **Idle heartbeat auto-ack limited to primary probes**: only periodic `primary` heartbeat probes are auto-acked when the agent is healthy and stably idle; `stuck`, `recovery`, and `down-check` phases still require full end-to-end delivery to verify liveness (#431)
+- **Auth probe diagnostics improved**: `checkAuth()` fallback branch now includes the CLI output (truncated to 500 chars) in the result, and Guardian logs the actual error text for easier remote debugging (#432)
+- **Spurious auth-failure C4 notification removed**: Guardian no longer enqueues a control message on auth failure — the existing passive reply in `c4-receive.js` already notifies users when they send a message during auth_failed state (#432)
+
+### Added
+- **Heartbeat phase tagging**: heartbeat content now includes `[phase=primary|stuck|recovery|down-check]` markers, enabling phase-aware dispatch decisions (#431)
+- **Atomic status file writes**: `atomicWriteJson()` in activity-monitor prevents torn writes to the agent status file; `readJsonFileWithRetry()` in c4-dispatcher adds retry-on-parse-failure for robustness (#431)
+
 ## [0.4.8] - 2026-03-26
 
 ### Added
