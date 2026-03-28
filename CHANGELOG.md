@@ -5,6 +5,17 @@ All notable changes to zylos-core will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.10] - 2026-03-28
+
+### Added
+- **Codex usage sidecar probe**: usage probing moved out of main runtime input path into dedicated sidecar flow; Codex rollout and `/status` data sources; probe locking and parser infrastructure (#429, closes #376)
+- **Heartbeat config module**: extracted heartbeat configuration (enabled/disabled, default per-runtime) into dedicated `heartbeat-config.js` for cleaner separation (#439)
+
+### Fixed
+- **Codex heartbeat disabled by default**: Codex runtime now defaults to heartbeat off, preventing false liveness timeouts on a runtime that doesn't support interactive heartbeat probing (#439)
+- **Codex runtime auth checks for custom base URL**: auth validation now works correctly when a custom API base URL is configured (#435)
+- **Idle heartbeat auto-ack full version**: complete implementation with primary probe limitation, phase markers, and atomic write/retry-read (full #431, previously cherry-picked partially into v0.4.9)
+
 ## [0.4.9] - 2026-03-27
 
 ### Fixed
