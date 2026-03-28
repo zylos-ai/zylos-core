@@ -48,6 +48,7 @@ export class HeartbeatEngine {
    * @param {number} [options.rateLimitDefaultCooldown=3600] - Default cooldown when reset time can't be parsed
    * @param {number} [options.userMessageRecoveryCooldown=60] - Min seconds between user-message-triggered recoveries
    * @param {string} [options.initialHealth='ok']
+   * @param {boolean} [options.heartbeatEnabled=true]
    */
   constructor(deps, options = {}) {
     this.deps = deps;
@@ -57,6 +58,7 @@ export class HeartbeatEngine {
     this.signalGracePeriod = options.signalGracePeriod ?? 30;
     this.rateLimitDefaultCooldown = options.rateLimitDefaultCooldown ?? 3600; // 1 hour
     this.userMessageRecoveryCooldown = options.userMessageRecoveryCooldown ?? 60; // 1 min
+    this.heartbeatEnabled = options.heartbeatEnabled ?? true;
 
     // Internal state
     this.healthState = options.initialHealth ?? 'ok';
@@ -194,6 +196,11 @@ export class HeartbeatEngine {
     this._trackAgentRunning(agentRunning, currentTime);
 
     const pending = this.deps.readHeartbeatPending();
+    if (!this.heartbeatEnabled) {
+      if (pending) this.deps.clearHeartbeatPending();
+      return;
+    }
+
     if (pending) {
       const status = this.deps.getHeartbeatStatus(pending.control_id);
 
@@ -398,6 +405,7 @@ export class HeartbeatEngine {
    */
   requestImmediateProbe(reason) {
     if (this.healthState !== 'ok') return false;
+    if (!this.heartbeatEnabled) return false;
     const pending = this.deps.readHeartbeatPending();
     if (pending) return false;
     // Keep "Stuck detection" wording for existing observability/tests.

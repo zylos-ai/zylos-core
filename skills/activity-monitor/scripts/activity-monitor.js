@@ -139,6 +139,7 @@ import { parseUsageFromPane as parseUsageFromPaneCore } from './usage-probe-pars
 import { acquireUsageProbeLock, releaseUsageProbeLock } from './usage-probe-lock.js';
 import { shouldStartUsageCheck } from './usage-check-engine.js';
 import { getInitialUsageCheckAt } from './usage-check-init.js';
+import { isRuntimeHeartbeatEnabled } from './heartbeat-config.js';
 // activity-monitor runs as a deployed skill at ~/zylos/.claude/skills/activity-monitor/scripts/.
 // A relative import to cli/lib/runtime/ resolves correctly in the repo (dev) but NOT from
 // the deployed path — the CLI lives in the globally installed zylos npm package.
@@ -250,6 +251,14 @@ function readConfigString(key, fallback) {
     }
   } catch { }
   return fallback;
+}
+
+function readConfigObject() {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(CONFIG_DIR, 'config.json'), 'utf8'));
+  } catch {
+    return {};
+  }
 }
 
 const USAGE_CHECK_INTERVAL = readConfigInt('usage_check_interval', 3600);     // seconds between checks (default 1 hour)
@@ -1846,13 +1855,15 @@ function init() {
 
   // Load the active runtime adapter (claude or codex, from config.json)
   adapter = getActiveAdapter();
+  const config = readConfigObject();
+  const heartbeatEnabled = isRuntimeHeartbeatEnabled({ runtimeId: adapter.runtimeId, config });
 
   // Initialize ProcSampler for frozen-process detection via context-switch sampling.
   // sessionName comes from the adapter (claude-main or codex-main).
   procSampler = new ProcSampler({ sessionName: adapter.sessionName, log });
 
   const initialStatus = loadInitialHealth();
-  const initialHealth = initialStatus.health;
+  const initialHealth = heartbeatEnabled ? initialStatus.health : 'ok';
 
   // Merge runtime-specific heartbeat deps (enqueueHeartbeat, getHeartbeatStatus,
   // detectRateLimit, readHeartbeatPending, clearHeartbeatPending) from the adapter,
@@ -1864,6 +1875,7 @@ function init() {
     log,
   }, {
     initialHealth,
+    heartbeatEnabled,
     heartbeatInterval: HEARTBEAT_INTERVAL,
     downDegradeThreshold: DOWN_DEGRADE_THRESHOLD,
     downRetryInterval: DOWN_RETRY_INTERVAL,
@@ -1871,6 +1883,10 @@ function init() {
     rateLimitDefaultCooldown: RATE_LIMIT_DEFAULT_COOLDOWN,
     userMessageRecoveryCooldown: USER_MESSAGE_RECOVERY_COOLDOWN
   });
+
+  if (!heartbeatEnabled && adapter.runtimeId === 'codex') {
+    log('Heartbeat: disabled for codex (set `zylos config set codex_heartbeat_enabled true` to re-enable)');
+  }
 
   // Rehydrate rate-limit state from persisted status file on PM2 restart
   if (initialHealth === 'rate_limited' && initialStatus.cooldown_until) {
