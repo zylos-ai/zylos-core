@@ -1,0 +1,16 @@
+{
+  "name": "runtime-work",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Shared runtime work ledger module",
+  "main": "scripts/api.js",
+  "bin": {
+    "runtime-work-cli": "./scripts/cli.js"
+  },
+  "scripts": {
+    "cli": "node scripts/cli.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.6.2"
+  }
+}
