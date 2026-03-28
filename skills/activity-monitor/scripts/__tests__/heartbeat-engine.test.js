@@ -75,6 +75,17 @@ describe('HeartbeatEngine', () => {
       const diff = Math.abs(engine.lastHeartbeatAt - Math.floor(Date.now() / 1000));
       assert.ok(diff <= 1, `lastHeartbeatAt should be updated to current time, diff=${diff}`);
     });
+
+    it('does not enqueue primary heartbeat when disabled', () => {
+      const { deps, calls } = createMockDeps();
+      const engine = new HeartbeatEngine(deps, { heartbeatInterval: 7200, heartbeatEnabled: false });
+      const currentTime = Math.floor(Date.now() / 1000);
+      engine.lastHeartbeatAt = currentTime - 7201;
+
+      engine.processHeartbeat(true, currentTime);
+
+      assert.deepStrictEqual(calls.enqueueHeartbeat, []);
+    });
   });
 
   describe('heartbeat success', () => {
@@ -623,6 +634,15 @@ describe('HeartbeatEngine', () => {
       engine.processHeartbeat(true, Math.floor(Date.now() / 1000));
 
       assert.deepStrictEqual(calls.enqueueHeartbeat, ['recovery']);
+    });
+
+    it('does not enqueue recovery heartbeat when disabled', () => {
+      const { deps, calls } = createMockDeps();
+      const engine = new HeartbeatEngine(deps, { initialHealth: 'recovering', heartbeatEnabled: false });
+
+      engine.processHeartbeat(true, Math.floor(Date.now() / 1000));
+
+      assert.deepStrictEqual(calls.enqueueHeartbeat, []);
     });
   });
 
