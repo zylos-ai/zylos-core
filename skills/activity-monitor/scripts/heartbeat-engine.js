@@ -196,6 +196,11 @@ export class HeartbeatEngine {
     this._trackAgentRunning(agentRunning, currentTime);
 
     const pending = this.deps.readHeartbeatPending();
+    if (!this.heartbeatEnabled) {
+      if (pending) this.deps.clearHeartbeatPending();
+      return;
+    }
+
     if (pending) {
       const status = this.deps.getHeartbeatStatus(pending.control_id);
 
@@ -252,10 +257,6 @@ export class HeartbeatEngine {
       this.cooldownUntil = 0;
       this.setHealth('recovering', 'rate_limit_cooldown_expired');
       // Guardian will now restart Claude since health !== 'rate_limited'
-      return;
-    }
-
-    if (!this.heartbeatEnabled) {
       return;
     }
 

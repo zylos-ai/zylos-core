@@ -541,6 +541,16 @@ describe('HeartbeatEngine', () => {
       assert.deepStrictEqual(calls.enqueueHeartbeat, []);
     });
 
+    it('returns false when heartbeat is disabled', () => {
+      const { deps, calls } = createMockDeps();
+      const engine = new HeartbeatEngine(deps, { heartbeatEnabled: false });
+
+      const result = engine.requestImmediateProbe('test');
+
+      assert.equal(result, false);
+      assert.deepStrictEqual(calls.enqueueHeartbeat, []);
+    });
+
     it('returns false when another heartbeat is pending', () => {
       const { deps, calls } = createMockDeps();
       deps._pending = { control_id: 1, phase: 'primary' };
@@ -573,6 +583,21 @@ describe('HeartbeatEngine', () => {
   });
 
   describe('in-flight heartbeat handling', () => {
+    it('clears stale pending and skips processing when heartbeat is disabled', () => {
+      const { deps, calls } = createMockDeps();
+      const now = Math.floor(Date.now() / 1000);
+      deps._pending = { control_id: 1, phase: 'primary', created_at: now - 700 };
+      deps._heartbeatStatus = 'timeout';
+      const engine = new HeartbeatEngine(deps, { heartbeatEnabled: false });
+
+      engine.processHeartbeat(true, now);
+
+      assert.equal(calls.clearHeartbeatPending, 1);
+      assert.deepStrictEqual(calls.getHeartbeatStatus, []);
+      assert.equal(calls.killTmuxSession, 0);
+      assert.equal(engine.health, 'ok');
+    });
+
     it('does nothing when status is pending (fresh)', () => {
       const { deps, calls } = createMockDeps();
       const now = Math.floor(Date.now() / 1000);
