@@ -34,6 +34,23 @@ const CODEX_BIN = process.env.CODEX_BIN || 'codex';
 // Defaults to enabled for unattended server operation.
 const DEFAULT_BYPASS = process.env.CODEX_BYPASS_PERMISSIONS !== 'false';
 
+function getCodexApiBaseUrl() {
+  try {
+    const configPath = path.join(os.homedir(), '.codex', 'config.toml');
+    const config = fs.readFileSync(configPath, 'utf8');
+    const match = config.match(/^\s*openai_base_url\s*=\s*"([^"]+)"\s*$/m);
+    if (match?.[1]) {
+      return match[1].replace(/\/+$/, '');
+    }
+  } catch { /* ignore missing config */ }
+
+  if (process.env.OPENAI_BASE_URL) {
+    return process.env.OPENAI_BASE_URL.replace(/\/+$/, '');
+  }
+
+  return 'https://api.openai.com/v1';
+}
+
 export function isOnboardingPendingState(stateContent = '') {
   return /^-\s+Status:\s+pending\b/m.test(stateContent);
 }
@@ -146,7 +163,8 @@ export class CodexAdapter extends RuntimeAdapter {
     // Guard against corrupted auth.json (mode set to "apikey" but key missing).
     if (!apiKey) return { ok: false, reason: 'apikey_mode_but_no_key' };
     try {
-      const res = await fetch('https://api.openai.com/v1/models', {
+      const baseUrl = getCodexApiBaseUrl();
+      const res = await fetch(`${baseUrl}/models`, {
         headers: { Authorization: `Bearer ${apiKey}` },
         signal: AbortSignal.timeout(10_000),
       });
