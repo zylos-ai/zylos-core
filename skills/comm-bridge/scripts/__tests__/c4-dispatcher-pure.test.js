@@ -182,6 +182,11 @@ describe('checkInputBox', () => {
     assert.equal(checkInputBox(capture), 'empty');
   });
 
+  it('returns "empty" when box contains only the prompt char ›', () => {
+    const capture = makeCapture('›');
+    assert.equal(checkInputBox(capture), 'empty');
+  });
+
   it('returns "has_content" when box contains actual text', () => {
     const capture = makeCapture('some user input');
     assert.equal(checkInputBox(capture), 'has_content');
@@ -193,6 +198,11 @@ describe('checkInputBox', () => {
 
   it('returns "empty" for box with only ❯ and whitespace', () => {
     const capture = makeCapture('  \u276F  ');
+    assert.equal(checkInputBox(capture), 'empty');
+  });
+
+  it('returns "empty" for Codex separator layout with only › prompt', () => {
+    const capture = makeCapture('›');
     assert.equal(checkInputBox(capture), 'empty');
   });
 

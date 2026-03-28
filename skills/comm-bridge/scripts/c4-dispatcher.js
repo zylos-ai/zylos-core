@@ -248,7 +248,7 @@ export function checkInputBox(capture) {
   }
 
   const stripped = text
-    .replace(/\u276F/g, '')
+    .replace(/[›❯]/g, '')
     .replace(/[\p{C}\p{Z}]+/gu, '');
 
   if (stripped.length === 0) {
