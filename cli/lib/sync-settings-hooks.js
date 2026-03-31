@@ -364,14 +364,24 @@ export function migrateMatcherSplit(installedSettings, templateSettings, { dryRu
 
     if (!dryRun) {
       // Replace catch-all with specific matcher groups, preserving hook content
-      const hooks = catchAllGroup.hooks || [];
+      const catchAllHooks = catchAllGroup.hooks || [];
       installedMatchers.splice(catchAllIdx, 1);
       for (const matcher of templateSpecificMatchers) {
-        // Only add if this matcher doesn't already exist
-        if (!installedMatchers.some(g => g.matcher === matcher)) {
+        const existing = installedMatchers.find(g => g.matcher === matcher);
+        if (existing) {
+          // Merge: add catch-all hooks that don't already exist in this matcher
+          const existingPaths = new Set(
+            getCommandHooks(existing).map(h => extractScriptPath(h.command))
+          );
+          for (const h of catchAllHooks) {
+            if (h.type === 'command' && !existingPaths.has(extractScriptPath(h.command))) {
+              existing.hooks.push({ ...h });
+            }
+          }
+        } else {
           installedMatchers.push({
             matcher,
-            hooks: hooks.map(h => ({ ...h })),
+            hooks: catchAllHooks.map(h => ({ ...h })),
           });
         }
       }
