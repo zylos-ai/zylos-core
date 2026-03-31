@@ -27,7 +27,7 @@ const STATE_FILE = path.join(AM_DIR, 'context-monitor-state.json');
 const COST_LOG_FILE = path.join(AM_DIR, 'cost-log.jsonl');
 const C4_CONTROL = path.join(ZYLOS_DIR, '.claude/skills/comm-bridge/scripts/c4-control.js');
 
-// Thresholds — keep COOLDOWN_SECONDS and ack-deadline (in enqueue call) in sync
+// Thresholds
 const RESTART_THRESHOLD = 80;   // Trigger new-session at this percentage
 const COOLDOWN_SECONDS = 300;   // Re-trigger after 5 minutes if still above threshold
 
@@ -106,7 +106,7 @@ function main(raw) {
         '--content', `Context usage at ${usedPct}%, exceeding ${RESTART_THRESHOLD}% threshold. Use the new-session skill to start a fresh session.`,
         '--priority', '1',
         '--bypass-state',
-        '--ack-deadline', '300'
+        '--no-ack-suffix'
       ], { encoding: 'utf8', stdio: 'pipe' });
 
       enqueued = true;

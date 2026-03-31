@@ -786,7 +786,7 @@ function enqueueHealthCheck() {
     'enqueue',
     '--content', content,
     '--priority', '3',
-    '--ack-deadline', '600'
+    '--no-ack-suffix'
   ]);
 
   if (!result.ok) {
@@ -852,7 +852,7 @@ function enqueueDailyUpgradeControl() {
     'enqueue',
     '--content', content,
     '--priority', '3',
-    '--ack-deadline', '600'
+    '--no-ack-suffix'
   ]);
 
   if (!result.ok) {
@@ -1108,7 +1108,8 @@ function sendUsageNotification(message) {
     '--content', content,
     '--priority', '1',
     '--require-idle',
-    '--available-in', '5'
+    '--available-in', '5',
+    '--no-ack-suffix'
   ]);
   if (result.ok) {
     log(`Usage monitor: notification enqueued (${result.output})`);

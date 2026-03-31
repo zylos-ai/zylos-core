@@ -136,7 +136,7 @@ function main() {
 
   const content = `Component upgrades available: ${upgrades.join(', ')}. When the user next sends a message, mention these available upgrades and ask if they would like to upgrade.`;
   const result = runC4Control([
-    'enqueue', '--content', content, '--priority', '3', '--ack-deadline', '600'
+    'enqueue', '--content', content, '--priority', '3', '--no-ack-suffix'
   ]);
 
   if (result.ok) {
