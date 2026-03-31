@@ -145,7 +145,8 @@ function maybeEnqueueMemorySync(usedPct) {
     try {
       execFileSync('node', [C4_CONTROL, 'enqueue',
         '--content', `Context usage at ${usedPct}% (approaching ${RESTART_THRESHOLD}% session-switch threshold). Run Memory Sync now as a background task so it completes before the session switch. Launch a background subagent for memory sync following ~/zylos/.claude/skills/zylos-memory/SKILL.md. Do NOT wait for completion — continue normal work.`,
-        '--priority', '2'
+        '--priority', '2',
+        '--no-ack-suffix'
       ], { encoding: 'utf8', stdio: 'pipe' });
 
       enqueued = true;

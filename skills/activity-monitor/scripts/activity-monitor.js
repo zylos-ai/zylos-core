@@ -1961,7 +1961,8 @@ function init() {
         try {
           execFileSync('node', [C4_CONTROL_PATH, 'enqueue',
             '--content', `Context usage at ${pct}% (approaching ${thresholdPct}% session-switch threshold). Run Memory Sync now as a background task so it completes before the session switch. Launch a background subagent for memory sync following ~/zylos/.claude/skills/zylos-memory/SKILL.md. Do NOT wait for completion — continue normal work.`,
-            '--priority', '2'
+            '--priority', '2',
+            '--no-ack-suffix'
           ], { encoding: 'utf8', stdio: 'pipe', timeout: 10_000 });
           log(`Early memory sync enqueued at ${pct}%`);
         } catch (err) {
