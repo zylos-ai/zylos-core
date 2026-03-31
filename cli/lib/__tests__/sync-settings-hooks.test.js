@@ -571,4 +571,39 @@ describe('syncHooks forward pass', () => {
     assert.equal(startupGroup.hooks.length, 1);
     assert.ok(startupGroup.hooks[0].command.includes('my-hook.js'));
   });
+
+  it('reverse pass removes core hook from one matcher when template removes it (matcher-aware)', () => {
+    // Hook exists in both startup and clear in installed config
+    // Template keeps it in startup but removes it from clear
+    const installed = {
+      hooks: {
+        SessionStart: [
+          { matcher: 'startup', hooks: [
+            { type: 'command', command: 'node ~/zylos/.claude/skills/activity-monitor/scripts/session-start-prompt.js', timeout: 5000 },
+          ]},
+          { matcher: 'clear', hooks: [
+            { type: 'command', command: 'node ~/zylos/.claude/skills/activity-monitor/scripts/session-start-prompt.js', timeout: 5000 },
+          ]},
+        ],
+      },
+    };
+    const template = {
+      hooks: {
+        SessionStart: [
+          makeMatcherGroup('startup', ['~/zylos/.claude/skills/activity-monitor/scripts/session-start-prompt.js']),
+          makeMatcherGroup('clear', []),  // removed from clear
+        ],
+      },
+    };
+
+    const result = syncHooks(installed, template, { log: noopLog });
+
+    assert.equal(result.removed, 1);
+    // startup should still have the hook
+    const startupGroup = installed.hooks.SessionStart.find(g => g.matcher === 'startup');
+    assert.equal(startupGroup.hooks.length, 1);
+    // clear group should be cleaned up (empty after removal)
+    const clearGroup = installed.hooks.SessionStart.find(g => g.matcher === 'clear');
+    assert.equal(clearGroup, undefined); // empty group gets removed
+  });
 });

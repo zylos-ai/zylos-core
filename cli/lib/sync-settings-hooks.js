@@ -194,7 +194,10 @@ export function syncHooks(installedSettings, templateSettings, { dryRun = false,
     }
   }
 
-  // --- Reverse pass: remove obsolete core hooks ---
+  // --- Reverse pass: remove obsolete core hooks (matcher-aware) ---
+  // Check each installed group against its corresponding template group (same matcher).
+  // A core hook is removed if it's not present in the matching template group,
+  // even if it exists in other template groups for the same event.
   for (const [event, matchers] of Object.entries(installedSettings.hooks)) {
     if (!Array.isArray(matchers)) continue;
 
@@ -204,6 +207,11 @@ export function syncHooks(installedSettings, templateSettings, { dryRun = false,
       const group = matchers[gi];
       if (!Array.isArray(group.hooks)) continue;
 
+      const groupMatcher = group.matcher !== undefined ? group.matcher : '';
+      const correspondingTemplate = templateMatchers.find(tm =>
+        (tm.matcher !== undefined ? tm.matcher : '') === groupMatcher
+      );
+
       for (let hi = group.hooks.length - 1; hi >= 0; hi--) {
         const h = group.hooks[hi];
         if (h.type !== 'command') continue;
@@ -212,16 +220,17 @@ export function syncHooks(installedSettings, templateSettings, { dryRun = false,
         if (!skillName || !coreSkillNames.has(skillName)) continue;
 
         const installedKey = extractScriptPath(h.command);
-        const foundInTemplate = templateMatchers.some(tm =>
-          getCommandHooks(tm).some(th => extractScriptPath(th.command) === installedKey)
-        );
+        // Check only the corresponding template group, not all groups
+        const foundInTemplate = correspondingTemplate
+          ? getCommandHooks(correspondingTemplate).some(th => extractScriptPath(th.command) === installedKey)
+          : false;
 
         if (!foundInTemplate) {
           if (!dryRun) {
             group.hooks.splice(hi, 1);
           }
           removed++;
-          log(`  - ${event}: ${h.command}`);
+          log(`  - ${event}[${groupMatcher}]: ${h.command}`);
         }
       }
 
