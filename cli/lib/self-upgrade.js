@@ -381,23 +381,26 @@ function listTemplateFiles(templatesDir) {
  *  - modified_hook: same script path, different command or timeout
  *  - removed_hook:  in installed, not in template (core skills only)
  */
-function generateMigrationHints(templatesDir) {
+export function generateMigrationHints(templatesDir, deps = {}) {
   const hints = [];
+  const zylosDir = deps.zylosDir ?? ZYLOS_DIR;
+  const existsSync = deps.existsSync ?? fs.existsSync;
+  const readFileSync = deps.readFileSync ?? fs.readFileSync;
 
   const templateSettingsPath = path.join(templatesDir, '.claude', 'settings.json');
-  if (!fs.existsSync(templateSettingsPath)) return hints;
+  if (!existsSync(templateSettingsPath)) return hints;
 
-  const installedSettingsPath = path.join(ZYLOS_DIR, '.claude', 'settings.json');
+  const installedSettingsPath = path.join(zylosDir, '.claude', 'settings.json');
 
   let templateSettings, installedSettings;
   try {
-    templateSettings = JSON.parse(fs.readFileSync(templateSettingsPath, 'utf8'));
+    templateSettings = JSON.parse(readFileSync(templateSettingsPath, 'utf8'));
   } catch {
     return hints;
   }
   try {
-    installedSettings = fs.existsSync(installedSettingsPath)
-      ? JSON.parse(fs.readFileSync(installedSettingsPath, 'utf8'))
+    installedSettings = existsSync(installedSettingsPath)
+      ? JSON.parse(readFileSync(installedSettingsPath, 'utf8'))
       : {};
   } catch {
     installedSettings = {};
@@ -475,6 +478,13 @@ function generateMigrationHints(templatesDir) {
     // Template removed statusLine — generate removal hint
     hints.push({
       type: 'statusLine_remove',
+    });
+  }
+
+  if (Object.hasOwn(templateSettings, 'model') && !Object.hasOwn(installedSettings, 'model')) {
+    hints.push({
+      type: 'model_backfill',
+      value: templateSettings.model,
     });
   }
 
@@ -836,15 +846,20 @@ function step7_syncClaudeMd(ctx) {
  * @param {object[]} hints - Output from generateMigrationHints()
  * @returns {{ applied: number, errors: string[] }}
  */
-function applyMigrationHints(hints) {
+export function applyMigrationHints(hints, deps = {}) {
   const result = { applied: 0, errors: [] };
   if (!hints || hints.length === 0) return result;
 
-  const settingsPath = path.join(ZYLOS_DIR, '.claude', 'settings.json');
+  const zylosDir = deps.zylosDir ?? ZYLOS_DIR;
+  const existsSync = deps.existsSync ?? fs.existsSync;
+  const readFileSync = deps.readFileSync ?? fs.readFileSync;
+  const mkdirSync = deps.mkdirSync ?? fs.mkdirSync;
+  const writeFileSync = deps.writeFileSync ?? fs.writeFileSync;
+  const settingsPath = path.join(zylosDir, '.claude', 'settings.json');
   let settings;
   try {
-    settings = fs.existsSync(settingsPath)
-      ? JSON.parse(fs.readFileSync(settingsPath, 'utf8'))
+    settings = existsSync(settingsPath)
+      ? JSON.parse(readFileSync(settingsPath, 'utf8'))
       : {};
   } catch {
     settings = {};
@@ -923,6 +938,12 @@ function applyMigrationHints(hints) {
           result.applied++;
         }
 
+      } else if (hint.type === 'model_backfill') {
+        if (!Object.hasOwn(settings, 'model')) {
+          settings.model = hint.value;
+          result.applied++;
+        }
+
       } else if (hint.type === 'removed_hook') {
         // Remove the hook by script path
         const matchers = settings.hooks[hint.event];
@@ -968,8 +989,8 @@ function applyMigrationHints(hints) {
 
   // Write back
   const dir = path.dirname(settingsPath);
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n');
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n');
 
   return result;
 }

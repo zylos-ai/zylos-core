@@ -29,6 +29,23 @@ const ZYLOS_DIR = path.resolve(process.env.ZYLOS_DIR || path.join(os.homedir(), 
 const TEMPLATE_SETTINGS = path.join(__dirname, '..', '..', 'templates', '.claude', 'settings.json');
 const INSTALLED_SETTINGS = path.join(ZYLOS_DIR, '.claude', 'settings.json');
 
+export function syncTemplateModelSetting({
+  templateSettings,
+  installedSettings,
+  dryRun = false,
+  log = console.log,
+} = {}) {
+  if (!Object.hasOwn(templateSettings, 'model') || Object.hasOwn(installedSettings, 'model')) {
+    return { changed: false };
+  }
+
+  if (!dryRun) {
+    installedSettings.model = templateSettings.model;
+  }
+  log(`  + model: ${templateSettings.model}`);
+  return { changed: true };
+}
+
 export function shouldSyncCodexConfig({
   cfg = getZylosConfig(),
   homeDir = os.homedir(),
@@ -258,19 +275,25 @@ export function main(argv = process.argv.slice(2)) {
     console.log(`  - statusLine: (removed)`);
   }
 
+  const modelSync = syncTemplateModelSetting({
+    templateSettings,
+    installedSettings,
+    dryRun,
+  });
+
   const codexSync = syncCodexConfig({ dryRun });
   if (codexSync.fatal) {
     console.error(codexSync.error);
     process.exit(1);
   }
 
-  if (added === 0 && updated === 0 && removed === 0 && !statusLineChanged && !codexSync.changed) {
+  if (added === 0 && updated === 0 && removed === 0 && !statusLineChanged && !modelSync.changed && !codexSync.changed) {
     console.log('Settings hooks: all up to date (no changes).');
     return;
   }
 
   if (dryRun) {
-    console.log(`Settings hooks (dry run): ${added} to add, ${updated} to update, ${removed} to remove${statusLineChanged ? ', statusLine to update' : ''}${codexSync.changed ? ', codex config to refresh' : ''}.`);
+    console.log(`Settings hooks (dry run): ${added} to add, ${updated} to update, ${removed} to remove${statusLineChanged ? ', statusLine to update' : ''}${modelSync.changed ? ', model to backfill' : ''}${codexSync.changed ? ', codex config to refresh' : ''}.`);
     return;
   }
 
@@ -278,12 +301,12 @@ export function main(argv = process.argv.slice(2)) {
   const dir = path.dirname(INSTALLED_SETTINGS);
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(INSTALLED_SETTINGS, JSON.stringify(installedSettings, null, 2) + '\n');
-  if (added === 0 && updated === 0 && removed === 0 && !statusLineChanged) {
+  if (added === 0 && updated === 0 && removed === 0 && !statusLineChanged && !modelSync.changed) {
     console.log(`Settings hooks: all up to date; Codex config ${codexSync.changed ? 'refreshed' : 'unchanged'}.`);
     return;
   }
 
-  console.log(`Settings hooks: ${added} added, ${updated} updated, ${removed} removed${statusLineChanged ? ', statusLine updated' : ''}${codexSync.changed ? ', Codex config refreshed' : ''}.`);
+  console.log(`Settings hooks: ${added} added, ${updated} updated, ${removed} removed${statusLineChanged ? ', statusLine updated' : ''}${modelSync.changed ? ', model backfilled' : ''}${codexSync.changed ? ', Codex config refreshed' : ''}.`);
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
