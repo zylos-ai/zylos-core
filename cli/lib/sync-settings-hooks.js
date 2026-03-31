@@ -264,7 +264,7 @@ function enqueueRestartIfNeeded() {
     const c4ControlPath = path.join(ZYLOS_DIR, '.claude', 'skills', 'comm-bridge', 'scripts', 'c4-control.js');
     if (!fs.existsSync(c4ControlPath)) return;
 
-    execFileSync('node', [c4ControlPath, 'enqueue', '--content', '/exit', '--priority', '1', '--block-queue-until-idle'], { stdio: 'pipe', timeout: 10000 });
+    execFileSync('node', [c4ControlPath, 'enqueue', '--content', '/exit', '--priority', '1', '--block-queue-until-idle', '--no-ack-suffix'], { stdio: 'pipe', timeout: 10000 });
     console.log('Settings hooks: restart enqueued (Claude will reload new configuration).');
   } catch { /* non-fatal */ }
 }
