@@ -211,7 +211,7 @@ fast API error 检测：
 | --- | --- | --- | --- |
 | 健康检查 | 每 6 小时 | `agentRunning && health=ok` | enqueue 控制消息，让 agent 执行 PM2/磁盘/内存检查并写日志 |
 | Daily memory commit | 每天 03:00 | 无 health 门控 | 直接执行 `zylos-memory/scripts/daily-commit.js` |
-| Daily upgrade | 每天 05:00 | `health=ok` 且 runtime=Claude | enqueue `upgrade-claude` 控制消息 |
+| Daily upgrade | 每天 05:00 | `health=ok` 且 `daily_upgrade_enabled=true` | enqueue `upgrade-claude` 控制消息（默认关闭） |
 | Daily upgrade check | 每天 06:00 | `health=ok` | 后台 spawn `upgrade-check.js`，检查 core/components 可升级版本并通知 |
 | Usage monitor | 配置化周期（默认 1h） | Claude + idle + 活跃时段 + 无 pending 控制消息 | 自动 `/usage` 解析并按阈值告警 |
 
@@ -276,7 +276,7 @@ Codex adapter 提供 `CodexContextMonitor`：
 4. context 轮换路径不同：
    - Claude 用 statusLine + `new-session` 控制消息（优雅）
    - Codex 用 polling + `new-session` 控制消息（skill 驱动切换）
-5. Daily upgrade 只对 Claude 生效
+5. Daily upgrade 默认关闭，需 `zylos config set daily_upgrade_enabled true` 显式启用
 
 ## 13. 当前实现里的已知边界
 

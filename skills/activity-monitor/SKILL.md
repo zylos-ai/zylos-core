@@ -20,7 +20,7 @@ This is a **PM2 service** (not directly invoked by Claude). It runs continuously
 4. **Maintenance Awareness**: Waits for restart/upgrade scripts to complete before starting the agent
 5. **Heartbeat Liveness Detection**: Periodically sends heartbeat probes via the C4 control queue to verify the agent is responsive, triggering recovery when probes fail
 6. **Health Check**: Periodically enqueues system health checks (PM2, disk, memory) via the C4 control queue
-7. **Daily Upgrade**: Enqueues a Claude Code upgrade via the C4 control queue at 5:00 AM local time daily (Claude runtime only)
+7. **Daily Upgrade**: Enqueues a Claude Code upgrade via the C4 control queue at 5:00 AM local time daily (disabled by default; enable with `zylos config set daily_upgrade_enabled true`)
 8. **Context Monitoring**: Receives context usage data after every turn; triggers early memory sync at 64% and new-session handoff at 80%
 
 ## Status File Format
@@ -149,12 +149,13 @@ The health check control message instructs Claude to:
 
 The activity monitor enqueues a daily Claude Code upgrade via the C4 control queue.
 
+- **Enabled**: Off by default. Enable with `zylos config set daily_upgrade_enabled true`
 - **Schedule**: 5:00 AM local time (configured by `DAILY_UPGRADE_HOUR`)
 - **Timezone**: Loaded from `~/zylos/.env` `TZ` field, falls back to `process.env.TZ`, then `UTC`
 - **Persisted state**: `~/zylos/activity-monitor/daily-upgrade-state.json` (tracks last upgrade date)
 - **Priority**: 3 (normal)
 - **Gated by health**: Only enqueued when `health === 'ok'`
-- **Gated by agent**: Only enqueued when the agent process is running (Claude runtime only)
+- **Gated by config**: Only enqueued when `daily_upgrade_enabled` is `true` in config
 - **Once per day**: Checks local date to avoid duplicate enqueues
 
 The control message instructs Claude to use the `upgrade-claude` skill, which handles idle detection, `/exit`, upgrade, and automatic restart.
