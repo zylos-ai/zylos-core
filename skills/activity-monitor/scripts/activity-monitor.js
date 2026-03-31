@@ -223,7 +223,7 @@ const LAUNCH_GRACE_PERIOD = 180;     // 3 min — skip periodic probes after fre
 const API_ERROR_SCAN_INTERVAL = 15;  // seconds between proactive tmux API error scans
 
 // Health check config
-const HEALTH_CHECK_INTERVAL = 21600; // 6 hours
+const HEALTH_CHECK_INTERVAL = 86400; // 24 hours
 
 // Usage monitoring config — configurable via zylos config (config.json), with sensible defaults.
 // Example: zylos config set usage_warn_threshold 60

@@ -131,7 +131,7 @@ When health transitions back to `ok`, the engine reads `~/zylos/activity-monitor
 
 The activity monitor periodically enqueues system health checks via the C4 control queue.
 
-- **Interval**: Every 6 hours (21600 seconds)
+- **Interval**: Every 24 hours (86400 seconds)
 - **Persisted state**: `~/zylos/activity-monitor/health-check-state.json` (survives restarts)
 - **Priority**: 3 (normal)
 - **Gated by health**: Only enqueued when `health === 'ok'`
