@@ -16,6 +16,7 @@ import { getZylosConfig, updateZylosConfig, ZYLOS_DIR } from '../lib/config.js';
 import { getAdapter, SUPPORTED_RUNTIMES } from '../lib/runtime/index.js';
 import { buildInstructionFile } from '../lib/runtime/instruction-builder.js';
 import { commandExists } from '../lib/shell-utils.js';
+import { getCoreEcosystemPath, restartManagedProcess } from '../lib/pm2.js';
 import {
   installClaude,
   installCodex,
@@ -167,6 +168,27 @@ export function validateRuntimeFlags(target, parsed) {
   return null;
 }
 
+export function restartRuntimeServices({
+  services = ['activity-monitor', 'c4-dispatcher'],
+  ecosystemPath = getCoreEcosystemPath(),
+  restartManagedProcessFn = restartManagedProcess,
+  logSuccess = console.log,
+  logWarning = console.error,
+} = {}) {
+  for (const svc of services) {
+    try {
+      restartManagedProcessFn(svc, {
+        ecosystemPath,
+        stdio: 'pipe',
+        fallbackToPlainRestartOnError: true,
+      });
+      logSuccess(`  ${green('✓')} ${svc}`);
+    } catch (e) {
+      logWarning(`  ${yellow(`Warning: failed to restart ${svc} — ${e.message}`)}`);
+    }
+  }
+}
+
 // ── Switch ────────────────────────────────────────────────────────────────
 
 async function switchRuntime(target, flags) {
@@ -279,14 +301,7 @@ async function switchRuntime(target, flags) {
   // on startup it kills the other runtime's session (OTHER_SESSION in init()) after a
   // short delay, then starts the correct new session.
   console.log('\nRestarting services...');
-  for (const svc of ['activity-monitor', 'c4-dispatcher']) {
-    try {
-      execSync(`pm2 restart ${svc}`, { stdio: 'pipe' });
-      console.log(`  ${green('✓')} ${svc}`);
-    } catch (e) {
-      console.error(`  ${yellow(`Warning: pm2 restart ${svc} failed — ${e.message}`)}`);
-    }
-  }
+  restartRuntimeServices();
 
   const targetLabel = target === 'codex' ? 'Codex (OpenAI)' : 'Claude Code (Anthropic)';
   console.log(`\n${green(`Switched to ${bold(targetLabel)}.`)}`);

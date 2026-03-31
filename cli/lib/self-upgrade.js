@@ -17,6 +17,7 @@ import { extractScriptPath, extractSkillName, getCommandHooks } from './hook-uti
 import { smartSync, formatMergeResult } from './smart-merge.js';
 import { runMigrations } from './migrate.js';
 import { writeCodexConfig } from './runtime-setup.js';
+import { getCoreEcosystemPath, restartManagedProcess } from './pm2.js';
 
 const REPO = 'zylos-ai/zylos-core';
 
@@ -544,25 +545,36 @@ function createContext({ tempDir, newVersion, mode } = {}) {
 /**
  * Step 1: backup Core Skills
  */
-function step1_backupCoreSkills(ctx) {
+export function step1_backupCoreSkills(ctx, deps = {}) {
   const startTime = Date.now();
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const backupDir = path.join(os.tmpdir(), `zylos-core-backup-${timestamp}`);
+  const backupDir = deps.backupDir ?? path.join(os.tmpdir(), `zylos-core-backup-${timestamp}`);
+  const zylosDir = deps.zylosDir ?? ZYLOS_DIR;
+  const skillsDir = deps.skillsDir ?? SKILLS_DIR;
+  const copyTreeFn = deps.copyTree ?? copyTree;
+  const fsApi = deps.fs ?? fs;
 
   try {
-    fs.mkdirSync(backupDir, { recursive: true });
+    fsApi.mkdirSync(backupDir, { recursive: true });
 
     // Backup the skills directory (include .zylos manifests — needed for correct rollback)
-    if (fs.existsSync(SKILLS_DIR)) {
-      copyTree(SKILLS_DIR, path.join(backupDir, 'skills'), { excludes: ['node_modules'] });
+    if (fsApi.existsSync(skillsDir)) {
+      copyTreeFn(skillsDir, path.join(backupDir, 'skills'), { excludes: ['node_modules'] });
     }
 
     // Backup instruction files (will be modified in step 7)
     for (const name of ['CLAUDE.md', 'ZYLOS.md', 'AGENTS.md']) {
-      const src = path.join(ZYLOS_DIR, name);
-      if (fs.existsSync(src)) {
-        fs.copyFileSync(src, path.join(backupDir, name));
+      const src = path.join(zylosDir, name);
+      if (fsApi.existsSync(src)) {
+        fsApi.copyFileSync(src, path.join(backupDir, name));
       }
+    }
+
+    const ecosystemSrc = deps.ecosystemPath ?? path.join(zylosDir, 'pm2', 'ecosystem.config.cjs');
+    if (fsApi.existsSync(ecosystemSrc)) {
+      const backupPm2Dir = path.join(backupDir, 'pm2');
+      fsApi.mkdirSync(backupPm2Dir, { recursive: true });
+      fsApi.copyFileSync(ecosystemSrc, path.join(backupPm2Dir, 'ecosystem.config.cjs'));
     }
 
     ctx.backupDir = backupDir;
@@ -1095,8 +1107,11 @@ export function step10_ensureCodexConfig(deps = {}) {
 /**
  * Step 11: start core services
  */
-function step11_startCoreServices(ctx) {
+export function step11_startCoreServices(ctx, deps = {}) {
   const startTime = Date.now();
+  const fsApi = deps.fs ?? fs;
+  const restartFn = deps.restartFromEcosystem ?? restartFromEcosystem;
+  const zylosDir = deps.zylosDir ?? ZYLOS_DIR;
 
   if (ctx.servicesWereRunning.length === 0) {
     return { step: 11, name: 'start_core_services', status: 'skipped', message: 'no services to restart', duration: Date.now() - startTime };
@@ -1109,32 +1124,28 @@ function step11_startCoreServices(ctx) {
   const ecosystemTemplateSrc = ctx.tempDir
     ? path.join(ctx.tempDir, 'templates', 'pm2', 'ecosystem.config.cjs')
     : null;
-  const pm2Dir = path.join(ZYLOS_DIR, 'pm2');
-  const ecosystemDest = path.join(pm2Dir, 'ecosystem.config.cjs');
-  if (ecosystemTemplateSrc && fs.existsSync(ecosystemTemplateSrc)) {
+  const pm2Dir = path.join(zylosDir, 'pm2');
+  const ecosystemDest = deps.ecosystemPath ?? getCoreEcosystemPath();
+  if (ecosystemTemplateSrc && fsApi.existsSync(ecosystemTemplateSrc)) {
     try {
-      fs.mkdirSync(pm2Dir, { recursive: true });
-      fs.copyFileSync(ecosystemTemplateSrc, ecosystemDest);
+      fsApi.mkdirSync(pm2Dir, { recursive: true });
+      fsApi.copyFileSync(ecosystemTemplateSrc, ecosystemDest);
       ecosystemPath = ecosystemDest;
     } catch {
-      // Non-fatal — fall back to pm2 restart below
+      // Non-fatal — if copy fails, we can still use an already-deployed ecosystem file below.
     }
-  } else if (fs.existsSync(ecosystemDest)) {
+  } else if (fsApi.existsSync(ecosystemDest)) {
     // No new template available; use the existing ecosystem file
     ecosystemPath = ecosystemDest;
   }
+  ecosystemPath = ecosystemPath ?? ecosystemDest;
 
   const started = [];
   const failed = [];
 
   for (const name of ctx.servicesWereRunning) {
     try {
-      if (ecosystemPath) {
-        // Re-read the ecosystem file so PM2 picks up updated env vars
-        execSync(`pm2 start "${ecosystemPath}" --only ${name} 2>/dev/null`, { stdio: 'pipe' });
-      } else {
-        execSync(`pm2 restart ${name} 2>/dev/null`, { stdio: 'pipe' });
-      }
+      restartFn([name], { ecosystemPath, stdio: 'pipe' });
       started.push(name);
     } catch {
       failed.push(name);
@@ -1201,13 +1212,19 @@ function step12_verifyServices(ctx) {
 /**
  * Rollback from backup.
  */
-function rollbackSelf(ctx) {
+export function rollbackSelf(ctx, deps = {}) {
   const results = [];
+  const fsApi = deps.fs ?? fs;
+  const syncTreeFn = deps.syncTree ?? syncTree;
+  const restartFn = deps.restartManagedProcess ?? restartManagedProcess;
+  const zylosDir = deps.zylosDir ?? ZYLOS_DIR;
+  const skillsDir = deps.skillsDir ?? SKILLS_DIR;
+  const ecosystemPath = deps.ecosystemPath ?? getCoreEcosystemPath();
 
   // Restore Core Skills from backup (include .zylos manifests to keep them in sync with files)
-  if (ctx.backupDir && fs.existsSync(path.join(ctx.backupDir, 'skills'))) {
+  if (ctx.backupDir && fsApi.existsSync(path.join(ctx.backupDir, 'skills'))) {
     try {
-      syncTree(path.join(ctx.backupDir, 'skills'), SKILLS_DIR, { excludes: ['node_modules'] });
+      syncTreeFn(path.join(ctx.backupDir, 'skills'), skillsDir, { excludes: ['node_modules'] });
       results.push({ action: 'restore_core_skills', success: true });
     } catch (err) {
       results.push({ action: 'restore_core_skills', success: false, error: err.message });
@@ -1218,13 +1235,24 @@ function rollbackSelf(ctx) {
   if (ctx.backupDir) {
     for (const name of ['CLAUDE.md', 'ZYLOS.md', 'AGENTS.md']) {
       const backup = path.join(ctx.backupDir, name);
-      if (fs.existsSync(backup)) {
+      if (fsApi.existsSync(backup)) {
         try {
-          fs.copyFileSync(backup, path.join(ZYLOS_DIR, name));
+          fsApi.copyFileSync(backup, path.join(zylosDir, name));
           results.push({ action: `restore_${name.toLowerCase().replace('.', '_')}`, success: true });
         } catch (err) {
           results.push({ action: `restore_${name.toLowerCase().replace('.', '_')}`, success: false, error: err.message });
         }
+      }
+    }
+
+    const backupEcosystem = path.join(ctx.backupDir, 'pm2', 'ecosystem.config.cjs');
+    if (fsApi.existsSync(backupEcosystem)) {
+      try {
+        fsApi.mkdirSync(path.dirname(ecosystemPath), { recursive: true });
+        fsApi.copyFileSync(backupEcosystem, ecosystemPath);
+        results.push({ action: 'restore_pm2_ecosystem', success: true });
+      } catch (err) {
+        results.push({ action: 'restore_pm2_ecosystem', success: false, error: err.message });
       }
     }
   }
@@ -1232,7 +1260,11 @@ function rollbackSelf(ctx) {
   // Restart services if they were running
   for (const name of ctx.servicesWereRunning) {
     try {
-      execSync(`pm2 restart ${name} 2>/dev/null || true`, { stdio: 'pipe' });
+      restartFn(name, {
+        ecosystemPath,
+        stdio: 'pipe',
+        fallbackToPlainRestartOnError: true,
+      });
       results.push({ action: `restart_${name}`, success: true });
     } catch (err) {
       results.push({ action: `restart_${name}`, success: false, error: err.message });
