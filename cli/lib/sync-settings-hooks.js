@@ -19,6 +19,7 @@
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import { execFileSync } from 'child_process';
 import { fileURLToPath } from 'url';
 import { extractScriptPath, extractSkillName, getCommandHooks } from './hook-utils.js';
 import { getZylosConfig } from './config.js';
@@ -249,6 +250,25 @@ export function syncHooks(installedSettings, templateSettings, { dryRun = false,
   return { added, updated, removed };
 }
 
+/**
+ * Enqueue a /exit command so the Claude runtime restarts and loads the new
+ * settings.json hooks.  Only acts when the active runtime is Claude and the
+ * C4 control script exists.  Failures are non-fatal — the worst case is the
+ * user manually restarts.
+ */
+function enqueueRestartIfNeeded() {
+  try {
+    const cfg = getZylosConfig();
+    if ((cfg.runtime ?? 'claude') !== 'claude') return;
+
+    const c4ControlPath = path.join(ZYLOS_DIR, '.claude', 'skills', 'comm-bridge', 'scripts', 'c4-control.js');
+    if (!fs.existsSync(c4ControlPath)) return;
+
+    execFileSync('node', [c4ControlPath, 'enqueue', '--content', '/exit', '--priority', '1', '--block-queue-until-idle'], { stdio: 'pipe', timeout: 10000 });
+    console.log('Settings hooks: restart enqueued (Claude will reload new configuration).');
+  } catch { /* non-fatal */ }
+}
+
 export function main(argv = process.argv.slice(2)) {
   const dryRun = argv.includes('--dry-run');
 
@@ -328,6 +348,11 @@ export function main(argv = process.argv.slice(2)) {
   }
 
   console.log(`Settings hooks: ${added} added, ${updated} updated, ${removed} removed${statusLineChanged ? ', statusLine updated' : ''}${modelSync.changed ? ', model backfilled' : ''}${codexSync.changed ? ', Codex config refreshed' : ''}.`);
+
+  // Enqueue restart when hooks changed — this runs from the NEWLY installed
+  // package during upgrade (via resolveInstalledSyncScript), so it works even
+  // when the calling component.js is an older version without restart logic.
+  enqueueRestartIfNeeded();
 }
 
 /**

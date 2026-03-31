@@ -1101,11 +1101,11 @@ async function upgradeSelfCore({ providedTempDir, branch, beta = false, mode = '
       }
       output.reply = formatC4Reply('self-upgrade', { ...result, changelog: coreChangelog });
       console.log(JSON.stringify(output, null, 2));
-      // Auto-restart when instruction files or settings were changed so the
-      // runtime reloads the new CLAUDE.md / AGENTS.md / settings.json hooks.
-      // /exit is a Claude Code slash command — only enqueue it for Claude runtime.
-      // For Codex, the guardian picks up the new AGENTS.md on next launch cycle.
-      if (result.success && (result.instructionFilesRebuilt || result.settingsChanged)) {
+      // Auto-restart for instruction file changes (CLAUDE.md / AGENTS.md).
+      // Settings hook changes are handled by sync-settings-hooks.js directly,
+      // which enqueues /exit from the newly installed package — avoiding the
+      // bootstrap problem where the old component.js lacks restart logic.
+      if (result.success && result.instructionFilesRebuilt) {
         try {
           const activeRuntime = getZylosConfig().runtime ?? 'claude';
           if (activeRuntime === 'claude') {
