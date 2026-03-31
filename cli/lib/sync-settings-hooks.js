@@ -154,6 +154,12 @@ export function main(argv = process.argv.slice(2)) {
   // Ensure hooks object exists
   if (!installedSettings.hooks) installedSettings.hooks = {};
 
+  // --- Pre-migration: split catch-all matchers into specific matchers ---
+  const migrated = migrateMatcherSplit(installedSettings, templateSettings, { dryRun });
+  if (migrated > 0) {
+    updated += migrated;
+  }
+
   // --- Forward pass: add missing, update modified ---
   for (const [event, matchers] of Object.entries(templateHooks)) {
     if (!Array.isArray(matchers)) continue;
@@ -307,6 +313,75 @@ export function main(argv = process.argv.slice(2)) {
   }
 
   console.log(`Settings hooks: ${added} added, ${updated} updated, ${removed} removed${statusLineChanged ? ', statusLine updated' : ''}${modelSync.changed ? ', model backfilled' : ''}${codexSync.changed ? ', Codex config refreshed' : ''}.`);
+}
+
+/**
+ * Pre-migration: when a template splits a catch-all matcher ("") into specific
+ * matchers (e.g. "startup", "clear", "compact"), transform the installed config
+ * to match before the forward/reverse passes run.
+ *
+ * Without this, the forward pass sees the script paths already exist (under "")
+ * and skips adding the specific matchers; the reverse pass sees the script paths
+ * in the template and keeps the old catch-all. Result: no migration happens.
+ *
+ * @returns {number} Number of hook entries migrated
+ */
+export function migrateMatcherSplit(installedSettings, templateSettings, { dryRun = false, log = console.log } = {}) {
+  let count = 0;
+  const templateHooks = templateSettings.hooks || {};
+  const installedHooks = installedSettings.hooks || {};
+
+  for (const [event, templateMatchers] of Object.entries(templateHooks)) {
+    if (!Array.isArray(templateMatchers)) continue;
+    const installedMatchers = installedHooks[event];
+    if (!Array.isArray(installedMatchers)) continue;
+
+    // Find catch-all group in installed config
+    const catchAllIdx = installedMatchers.findIndex(g => g.matcher === '' || g.matcher === undefined);
+    if (catchAllIdx === -1) continue;
+
+    // Check if template has NO catch-all but has specific matchers
+    const templateHasCatchAll = templateMatchers.some(g => g.matcher === '' || g.matcher === undefined);
+    if (templateHasCatchAll) continue;
+
+    const templateSpecificMatchers = templateMatchers
+      .filter(g => g.matcher !== '' && g.matcher !== undefined)
+      .map(g => g.matcher);
+    if (templateSpecificMatchers.length === 0) continue;
+
+    // Verify the catch-all hooks match the template hooks (same script paths)
+    const catchAllGroup = installedMatchers[catchAllIdx];
+    const catchAllPaths = new Set(
+      getCommandHooks(catchAllGroup).map(h => extractScriptPath(h.command))
+    );
+    const templatePaths = new Set(
+      templateMatchers.flatMap(g => getCommandHooks(g).map(h => extractScriptPath(h.command)))
+    );
+
+    // Only migrate if all catch-all hooks exist in the template
+    const allCovered = [...catchAllPaths].every(p => templatePaths.has(p));
+    if (!allCovered) continue;
+
+    if (!dryRun) {
+      // Replace catch-all with specific matcher groups, preserving hook content
+      const hooks = catchAllGroup.hooks || [];
+      installedMatchers.splice(catchAllIdx, 1);
+      for (const matcher of templateSpecificMatchers) {
+        // Only add if this matcher doesn't already exist
+        if (!installedMatchers.some(g => g.matcher === matcher)) {
+          installedMatchers.push({
+            matcher,
+            hooks: hooks.map(h => ({ ...h })),
+          });
+        }
+      }
+    }
+
+    count += templateSpecificMatchers.length;
+    log(`  ↔ ${event}: split catch-all matcher into ${templateSpecificMatchers.join(', ')}`);
+  }
+
+  return count;
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
