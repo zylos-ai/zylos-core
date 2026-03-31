@@ -26,6 +26,7 @@ const STATUS_FILE = path.join(AM_DIR, 'statusline.json');
 const STATE_FILE = path.join(AM_DIR, 'context-monitor-state.json');
 const COST_LOG_FILE = path.join(AM_DIR, 'cost-log.jsonl');
 const C4_CONTROL = path.join(ZYLOS_DIR, '.claude/skills/comm-bridge/scripts/c4-control.js');
+const C4_DB = path.join(ZYLOS_DIR, '.claude/skills/comm-bridge/scripts/c4-db.js');
 
 // Thresholds
 const RESTART_THRESHOLD = 80;   // Trigger new-session at this percentage
@@ -35,7 +36,7 @@ const COOLDOWN_SECONDS = 300;   // Re-trigger after 5 minutes if still above thr
 // completes in the background before new-session fires.  (e.g. 80% × 0.8 = 64%)
 const MEMORY_SYNC_RATIO = 0.8;
 const MEMORY_SYNC_THRESHOLD = Math.round(RESTART_THRESHOLD * MEMORY_SYNC_RATIO);
-const MEMORY_SYNC_COOLDOWN_SECONDS = 600;  // 10 min — only inject once per window
+const CHECKPOINT_THRESHOLD = 30;  // must match c4-config.js CHECKPOINT_THRESHOLD
 
 // Ensure data directory exists once at startup
 let dirReady = false;
@@ -129,13 +130,12 @@ function main(raw) {
 
 /**
  * Enqueue early memory sync when context approaches the session-switch threshold.
- * Uses its own cooldown so it fires at most once per window.
+ * Only triggers when there are enough unsummarized conversations to warrant sync.
  */
 function maybeEnqueueMemorySync(usedPct) {
-  const now = Math.floor(Date.now() / 1000);
-  const state = loadState();
-  if (state && state.last_memory_sync_trigger_at &&
-      (now - state.last_memory_sync_trigger_at) < MEMORY_SYNC_COOLDOWN_SECONDS) {
+  // Check unsummarized conversation count — skip if below threshold
+  const unsummarizedCount = getUnsummarizedCount();
+  if (unsummarizedCount <= CHECKPOINT_THRESHOLD) {
     return;
   }
 
@@ -150,18 +150,27 @@ function maybeEnqueueMemorySync(usedPct) {
       ], { encoding: 'utf8', stdio: 'pipe' });
 
       enqueued = true;
-      log(`Triggered early memory sync: context at ${usedPct}% (threshold: ${MEMORY_SYNC_THRESHOLD}%)`);
+      log(`Triggered early memory sync: context at ${usedPct}%, unsummarized=${unsummarizedCount} (threshold: ${CHECKPOINT_THRESHOLD})`);
       break;
     } catch (err) {
       log(`Failed to enqueue memory sync (attempt ${attempt}/${MAX_RETRIES}): ${err.message}`);
     }
   }
+}
 
-  if (enqueued) {
-    saveState({
-      ...state,
-      last_memory_sync_trigger_at: now,
+/**
+ * Get count of unsummarized conversations from C4 database.
+ * Returns 0 on any error (fail-safe: don't trigger sync on error).
+ */
+function getUnsummarizedCount() {
+  try {
+    const output = execFileSync('node', [C4_DB, 'unsummarized'], {
+      encoding: 'utf8', stdio: 'pipe', timeout: 5000
     });
+    const range = JSON.parse(output);
+    return range.count || 0;
+  } catch {
+    return 0;
   }
 }
 
