@@ -655,6 +655,8 @@ function getTmuxActivity() {
 }
 
 const CHECKPOINT_THRESHOLD = 30;  // must match c4-config.js CHECKPOINT_THRESHOLD
+const MEMORY_SYNC_COOLDOWN_SECONDS = 300;  // 5 min — prevent re-inject while sync is running
+let lastMemorySyncTriggerAt = 0;
 
 function getUnsummarizedCount() {
   try {
@@ -1973,6 +1975,11 @@ function init() {
       onEarlyThreshold: async ({ used, ceiling, ratio }) => {
         const pct = Math.round(ratio * 100);
         const thresholdPct = Math.round(contextMonitor.threshold * 100);
+        // Cooldown: prevent re-inject while sync is still running
+        const now = Math.floor(Date.now() / 1000);
+        if ((now - lastMemorySyncTriggerAt) < MEMORY_SYNC_COOLDOWN_SECONDS) {
+          return;
+        }
         const unsummarizedCount = getUnsummarizedCount();
         if (unsummarizedCount <= CHECKPOINT_THRESHOLD) {
           log(`Early memory sync skipped at ${pct}%: unsummarized=${unsummarizedCount} <= ${CHECKPOINT_THRESHOLD}`);
@@ -1985,6 +1992,7 @@ function init() {
             '--priority', '2',
             '--no-ack-suffix'
           ], { encoding: 'utf8', stdio: 'pipe', timeout: 10_000 });
+          lastMemorySyncTriggerAt = now;
           log(`Early memory sync enqueued at ${pct}%`);
         } catch (err) {
           log(`Failed to enqueue early memory sync: ${err.message}`);

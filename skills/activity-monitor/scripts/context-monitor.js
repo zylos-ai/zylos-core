@@ -37,6 +37,7 @@ const COOLDOWN_SECONDS = 300;   // Re-trigger after 5 minutes if still above thr
 const MEMORY_SYNC_RATIO = 0.8;
 const MEMORY_SYNC_THRESHOLD = Math.round(RESTART_THRESHOLD * MEMORY_SYNC_RATIO);
 const CHECKPOINT_THRESHOLD = 30;  // must match c4-config.js CHECKPOINT_THRESHOLD
+const MEMORY_SYNC_COOLDOWN_SECONDS = 300;  // 5 min — prevent re-inject while sync is running
 
 // Ensure data directory exists once at startup
 let dirReady = false;
@@ -134,6 +135,14 @@ function main(raw) {
  * Only triggers when there are enough unsummarized conversations to warrant sync.
  */
 function maybeEnqueueMemorySync(usedPct) {
+  // Cooldown: prevent re-inject while sync is still running
+  const now = Math.floor(Date.now() / 1000);
+  const state = loadState();
+  if (state && state.last_memory_sync_trigger_at &&
+      (now - state.last_memory_sync_trigger_at) < MEMORY_SYNC_COOLDOWN_SECONDS) {
+    return;
+  }
+
   // Check unsummarized conversation count — skip if below threshold
   const unsummarizedCount = getUnsummarizedCount();
   if (unsummarizedCount <= CHECKPOINT_THRESHOLD) {
@@ -156,6 +165,13 @@ function maybeEnqueueMemorySync(usedPct) {
     } catch (err) {
       log(`Failed to enqueue memory sync (attempt ${attempt}/${MAX_RETRIES}): ${err.message}`);
     }
+  }
+
+  if (enqueued) {
+    saveState({
+      ...state,
+      last_memory_sync_trigger_at: now,
+    });
   }
 }
 
