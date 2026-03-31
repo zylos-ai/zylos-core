@@ -552,7 +552,10 @@ async function processNextMessage() {
   }
 
   log(`Delivering ${item.type} id=${item.id}${item.type === 'control' ? ` priority=${item.priority}` : ` from ${item.channel}`}`);
-  const deliveryContent = item.content || '';
+  // Prefix control messages with "Meanwhile, " so the agent treats them as
+  // concurrent background tasks that should not interrupt the user's active work.
+  const rawContent = item.content || '';
+  const deliveryContent = item.type === 'control' ? `Meanwhile, ${rawContent}` : rawContent;
   const result = await sendToTmux(deliveryContent, {
     strictVerify: item.type === 'conversation'
   });
