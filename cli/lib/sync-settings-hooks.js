@@ -109,31 +109,14 @@ export function syncCodexConfig({
   return { attempted: true, changed: true, fatal: false };
 }
 
-export function main(argv = process.argv.slice(2)) {
-  const dryRun = argv.includes('--dry-run');
-
-  if (!fs.existsSync(TEMPLATE_SETTINGS)) {
-    console.log('Settings hooks: template not found, skipping.');
-    return;
-  }
-
-  let templateSettings, installedSettings;
-  try {
-    templateSettings = JSON.parse(fs.readFileSync(TEMPLATE_SETTINGS, 'utf8'));
-  } catch {
-    console.log('Settings hooks: failed to parse template, skipping.');
-    return;
-  }
-  try {
-    installedSettings = fs.existsSync(INSTALLED_SETTINGS)
-      ? JSON.parse(fs.readFileSync(INSTALLED_SETTINGS, 'utf8'))
-      : {};
-  } catch {
-    installedSettings = {};
-  }
-
+/**
+ * Sync hooks between template and installed settings (in-memory).
+ * Exported for unit testing. Called by main() after loading files.
+ *
+ * @returns {{ added: number, updated: number, removed: number }}
+ */
+export function syncHooks(installedSettings, templateSettings, { dryRun = false, log = console.log } = {}) {
   const templateHooks = templateSettings.hooks || {};
-  const installedHooks = installedSettings.hooks || {};
 
   // Collect core skill names from template
   const coreSkillNames = new Set();
@@ -155,12 +138,16 @@ export function main(argv = process.argv.slice(2)) {
   if (!installedSettings.hooks) installedSettings.hooks = {};
 
   // --- Pre-migration: split catch-all matchers into specific matchers ---
-  const migrated = migrateMatcherSplit(installedSettings, templateSettings, { dryRun });
+  const migrated = migrateMatcherSplit(installedSettings, templateSettings, { dryRun, log });
   if (migrated > 0) {
     updated += migrated;
   }
 
-  // --- Forward pass: add missing, update modified ---
+  // --- Forward pass: add missing matcher groups, update hooks in matched groups ---
+  // Strategy: align by matcher group, not by individual hook across all groups.
+  //   - If installed has a group with the same matcher → respect user config, only
+  //     update existing hooks (command/timeout drift) but don't add new hooks
+  //   - If installed has NO group with that matcher → add the whole group from template
   for (const [event, matchers] of Object.entries(templateHooks)) {
     if (!Array.isArray(matchers)) continue;
     if (!Array.isArray(installedSettings.hooks[event])) {
@@ -168,50 +155,41 @@ export function main(argv = process.argv.slice(2)) {
     }
     const installedMatchers = installedSettings.hooks[event];
 
-    for (const matcher of matchers) {
-      for (const templateCmd of getCommandHooks(matcher)) {
-        const templateKey = extractScriptPath(templateCmd.command);
+    for (const templateGroup of matchers) {
+      const matcherValue = templateGroup.matcher !== undefined ? templateGroup.matcher : '';
+      const installedGroup = installedMatchers.find(g =>
+        (g.matcher !== undefined ? g.matcher : '') === matcherValue
+      );
 
-        // Find installed hook with the same script path
-        let matched = null;
-        let matchedGroup = null;
-        for (const im of installedMatchers) {
-          const found = getCommandHooks(im).find(
+      if (installedGroup) {
+        // Group exists — only update existing hooks (command/timeout drift)
+        for (const templateCmd of getCommandHooks(templateGroup)) {
+          const templateKey = extractScriptPath(templateCmd.command);
+          const existing = getCommandHooks(installedGroup).find(
             h => extractScriptPath(h.command) === templateKey
           );
-          if (found) {
-            matched = found;
-            matchedGroup = im;
-            break;
+          if (existing && (existing.command !== templateCmd.command || existing.timeout !== templateCmd.timeout)) {
+            if (!dryRun) {
+              existing.command = templateCmd.command;
+              if (templateCmd.timeout !== undefined) existing.timeout = templateCmd.timeout;
+            }
+            updated++;
+            log(`  ~ ${event}[${matcherValue}]: ${templateCmd.command}`);
           }
         }
-
-        if (!matched) {
-          // Missing — add it
-          if (!dryRun) {
-            const matcherValue = matcher.matcher !== undefined ? matcher.matcher : null;
-            let targetGroup = null;
-            if (matcherValue !== null) {
-              targetGroup = installedMatchers.find(g => g.matcher === matcherValue);
-            }
-            if (!targetGroup) {
-              targetGroup = { hooks: [] };
-              if (matcherValue !== null) targetGroup.matcher = matcherValue;
-              installedMatchers.push(targetGroup);
-            }
-            targetGroup.hooks.push({ ...templateCmd });
+      } else {
+        // Group missing — add the whole group from template
+        if (!dryRun) {
+          const newGroup = { hooks: [] };
+          if (templateGroup.matcher !== undefined) newGroup.matcher = templateGroup.matcher;
+          for (const templateCmd of getCommandHooks(templateGroup)) {
+            newGroup.hooks.push({ ...templateCmd });
           }
-          added++;
-          console.log(`  + ${event}: ${templateCmd.command}`);
-        } else if (matched.command !== templateCmd.command || matched.timeout !== templateCmd.timeout) {
-          // Modified — update
-          if (!dryRun) {
-            matched.command = templateCmd.command;
-            if (templateCmd.timeout !== undefined) matched.timeout = templateCmd.timeout;
-          }
-          updated++;
-          console.log(`  ~ ${event}: ${templateCmd.command}`);
+          installedMatchers.push(newGroup);
         }
+        const hookCount = getCommandHooks(templateGroup).length;
+        added += hookCount;
+        log(`  + ${event}[${matcherValue}]: added matcher group (${hookCount} hooks)`);
       }
     }
   }
@@ -243,7 +221,7 @@ export function main(argv = process.argv.slice(2)) {
             group.hooks.splice(hi, 1);
           }
           removed++;
-          console.log(`  - ${event}: ${h.command}`);
+          log(`  - ${event}: ${h.command}`);
         }
       }
 
@@ -258,6 +236,34 @@ export function main(argv = process.argv.slice(2)) {
       delete installedSettings.hooks[event];
     }
   }
+
+  return { added, updated, removed };
+}
+
+export function main(argv = process.argv.slice(2)) {
+  const dryRun = argv.includes('--dry-run');
+
+  if (!fs.existsSync(TEMPLATE_SETTINGS)) {
+    console.log('Settings hooks: template not found, skipping.');
+    return;
+  }
+
+  let templateSettings, installedSettings;
+  try {
+    templateSettings = JSON.parse(fs.readFileSync(TEMPLATE_SETTINGS, 'utf8'));
+  } catch {
+    console.log('Settings hooks: failed to parse template, skipping.');
+    return;
+  }
+  try {
+    installedSettings = fs.existsSync(INSTALLED_SETTINGS)
+      ? JSON.parse(fs.readFileSync(INSTALLED_SETTINGS, 'utf8'))
+      : {};
+  } catch {
+    installedSettings = {};
+  }
+
+  const { added, updated, removed } = syncHooks(installedSettings, templateSettings, { dryRun });
 
   // --- Sync top-level statusLine from template ---
   let statusLineChanged = false;
