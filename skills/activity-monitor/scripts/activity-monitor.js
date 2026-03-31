@@ -253,6 +253,16 @@ function readConfigString(key, fallback) {
   return fallback;
 }
 
+function readConfigBool(key, fallback) {
+  try {
+    const config = JSON.parse(fs.readFileSync(path.join(CONFIG_DIR, 'config.json'), 'utf8'));
+    const val = config[key];
+    if (val === true || val === 'true') return true;
+    if (val === false || val === 'false') return false;
+  } catch { }
+  return fallback;
+}
+
 function readConfigObject() {
   try {
     return JSON.parse(fs.readFileSync(path.join(CONFIG_DIR, 'config.json'), 'utf8'));
@@ -1851,7 +1861,9 @@ async function monitorLoop() {
   engine.processHeartbeat(true, currentTime);
   maybeEnqueueHealthCheck(true, currentTime);
   if (engine.health === 'ok') {
-    upgradeScheduler.maybeTrigger();
+    if (readConfigBool('daily_upgrade_enabled', false)) {
+      upgradeScheduler.maybeTrigger();
+    }
     upgradeCheckScheduler.maybeTrigger();
   }
   memoryCommitScheduler.maybeTrigger();
@@ -1910,6 +1922,11 @@ function init() {
   if (initialHealth === 'rate_limited' && initialStatus.cooldown_until) {
     engine.cooldownUntil = initialStatus.cooldown_until;
     engine.rateLimitResetTime = initialStatus.rate_limit_reset || '';
+  }
+
+  const dailyUpgradeEnabled = readConfigBool('daily_upgrade_enabled', false);
+  if (!dailyUpgradeEnabled) {
+    log('Daily upgrade: disabled (set `zylos config set daily_upgrade_enabled true` to enable)');
   }
 
   upgradeScheduler = new DailySchedule({
