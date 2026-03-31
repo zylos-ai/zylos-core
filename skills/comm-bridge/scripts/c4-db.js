@@ -542,12 +542,12 @@ export function getConversationsByRange(beginId, endId) {
 /**
  * Get recent conversations (for debugging/testing)
  * @param {number} limit - max records to return
- * @returns {array} - array of conversation records
+ * @returns {array} - latest N conversation records in chronological order
  */
 export function getRecentConversations(limit = 20) {
   const db = getDb();
   return db.prepare(
-    'SELECT * FROM conversations ORDER BY timestamp DESC LIMIT ?'
+    'SELECT * FROM (SELECT * FROM conversations ORDER BY timestamp DESC LIMIT ?) ORDER BY timestamp ASC, id ASC'
   ).all(limit);
 }
 

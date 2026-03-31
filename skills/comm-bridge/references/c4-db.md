@@ -20,13 +20,13 @@ c4-db.js init
 
 ### recent
 
-Get recent conversations (default: 20).
+Get the latest conversations (default: 20), printed in chronological order.
 
 ```bash
 c4-db.js recent [limit]
 ```
 
-**Output:** JSON array of conversation records, most recent first.
+**Output:** JSON array of the latest conversation records, oldest to newest within the returned slice.
 
 ```json
 [
