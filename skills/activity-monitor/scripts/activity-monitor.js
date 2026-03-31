@@ -1953,6 +1953,22 @@ function init() {
         const pct = Math.round(ratio * 100);
         log(`Context at ${pct}% (${used}/${ceiling}), requesting new-session handoff`);
         enqueueContextRotationHandoff({ ratio, used, ceiling });
+      },
+      onEarlyThreshold: async ({ used, ceiling, ratio }) => {
+        const pct = Math.round(ratio * 100);
+        const thresholdPct = Math.round(contextMonitor.threshold * 100);
+        log(`Context at ${pct}% (approaching ${thresholdPct}% threshold), triggering early memory sync`);
+        try {
+          execFileSync('node', [C4_CONTROL_PATH, 'enqueue',
+            '--content', `Context usage at ${pct}% (approaching ${thresholdPct}% session-switch threshold). Run Memory Sync now as a background task so it completes before the session switch. Launch a background subagent for memory sync following ~/zylos/.claude/skills/zylos-memory/SKILL.md. Do NOT wait for completion — continue normal work.`,
+            '--priority', '2',
+            '--bypass-state',
+            '--ack-deadline', '600'
+          ], { encoding: 'utf8', stdio: 'pipe', timeout: 10_000 });
+          log(`Early memory sync enqueued at ${pct}%`);
+        } catch (err) {
+          log(`Failed to enqueue early memory sync: ${err.message}`);
+        }
       }
     });
     log(`Context monitor started (${adapter.displayName})`);
