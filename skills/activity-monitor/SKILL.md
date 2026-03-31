@@ -174,8 +174,6 @@ Event-driven context monitoring via Claude Code's statusLine feature, replacing 
 
 The early memory sync decouples memory sync from the session switch. Memory sync is also triggered by the new session's startup hook if unsummarized conversations exceed the threshold, so data is never lost.
 
-The `check-context` skill remains available for manual on-demand context checks.
-
 ## Daily Memory Commit
 
 The activity monitor runs a daily git commit of the `memory/` directory.
