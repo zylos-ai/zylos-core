@@ -1379,6 +1379,12 @@ export function runSelfUpgrade({ tempDir, newVersion, mode, onStep } = {}) {
   const step7 = ctx.steps.find(s => s.step === 7);
   const instructionFilesRebuilt = step7?.status === 'done' && Boolean(step7?.message?.includes('rebuilt'));
 
+  // Check if settings.json was modified (hooks, statusLine, model) — requires
+  // Claude restart to load the new configuration.
+  const step9 = ctx.steps.find(s => s.step === 9);
+  const settingsChanged = step9?.status === 'done' &&
+    !/all up to date|no changes/.test(step9?.message || '');
+
   return {
     action: 'self_upgrade',
     success: true,
@@ -1389,6 +1395,7 @@ export function runSelfUpgrade({ tempDir, newVersion, mode, onStep } = {}) {
     templates,
     migrationHints,
     instructionFilesRebuilt,
+    settingsChanged,
     mergeConflicts: ctx.mergeConflicts.length > 0 ? ctx.mergeConflicts : null,
     mergedFiles: ctx.mergedFiles.length > 0 ? ctx.mergedFiles : null,
   };

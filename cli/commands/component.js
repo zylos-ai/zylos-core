@@ -113,7 +113,7 @@ function formatC4Reply(type, data) {
       return r;
     }
     case 'self-upgrade': {
-      const { success, from, to, changelog, failedStep, error, rollback, migrationHints, mergeConflicts, mergedFiles, instructionFilesRebuilt } = data;
+      const { success, from, to, changelog, failedStep, error, rollback, migrationHints, mergeConflicts, mergedFiles, instructionFilesRebuilt, settingsChanged } = data;
       if (!success) {
         let r = `zylos-core upgrade failed (step ${failedStep}): ${error}`;
         if (rollback?.performed) {
@@ -151,8 +151,12 @@ function formatC4Reply(type, data) {
         }
         r += '\nPlease update hooks in ~/zylos/.claude/settings.json and restart Claude to apply.';
       }
-      if (instructionFilesRebuilt) {
-        r += '\n\nInstruction files updated — Claude will restart automatically to load the new instructions. No action needed.';
+      if (instructionFilesRebuilt || settingsChanged) {
+        const what = [
+          instructionFilesRebuilt && 'instruction files',
+          settingsChanged && 'hook settings',
+        ].filter(Boolean).join(' and ');
+        r += `\n\n${what.charAt(0).toUpperCase() + what.slice(1)} updated — Claude will restart automatically to load the new configuration. No action needed.`;
       }
       return r;
     }
@@ -1097,11 +1101,11 @@ async function upgradeSelfCore({ providedTempDir, branch, beta = false, mode = '
       }
       output.reply = formatC4Reply('self-upgrade', { ...result, changelog: coreChangelog });
       console.log(JSON.stringify(output, null, 2));
-      // Auto-restart when instruction files were rebuilt so the runtime reloads
-      // the new CLAUDE.md / AGENTS.md without prompting the user.
+      // Auto-restart when instruction files or settings were changed so the
+      // runtime reloads the new CLAUDE.md / AGENTS.md / settings.json hooks.
       // /exit is a Claude Code slash command — only enqueue it for Claude runtime.
       // For Codex, the guardian picks up the new AGENTS.md on next launch cycle.
-      if (result.success && result.instructionFilesRebuilt) {
+      if (result.success && (result.instructionFilesRebuilt || result.settingsChanged)) {
         try {
           const activeRuntime = getZylosConfig().runtime ?? 'claude';
           if (activeRuntime === 'claude') {
