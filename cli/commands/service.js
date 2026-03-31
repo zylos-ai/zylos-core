@@ -10,7 +10,7 @@ import { ZYLOS_DIR, SKILLS_DIR, getZylosConfig } from '../lib/config.js';
 import { bold, dim, green, red, yellow, cyan, success, error, warn, heading } from '../lib/colors.js';
 import { commandExists } from '../lib/shell-utils.js';
 import { getActiveAdapter } from '../lib/runtime/index.js';
-import { getCoreEcosystemPath, restartFromEcosystem } from '../lib/pm2.js';
+import { getCoreEcosystemPath, restartFromEcosystem, restartManagedProcess } from '../lib/pm2.js';
 
 export async function showStatus() {
   console.log(heading('Zylos Status') + '\n' + dim('============') + '\n');
@@ -236,6 +236,19 @@ export function restartServices() {
     restartFromEcosystem(services, { stdio: 'inherit', save: true });
     console.log(success('Services restarted.'));
   } catch (e) {
-    console.error(error('Failed to restart services'));
+    const ecosystemPath = getCoreEcosystemPath();
+    try {
+      for (const name of services) {
+        restartManagedProcess(name, {
+          ecosystemPath,
+          stdio: 'inherit',
+          fallbackToPlainRestartOnError: true,
+        });
+      }
+      execSync('pm2 save 2>/dev/null', { stdio: 'inherit' });
+      console.log(success('Services restarted with plain PM2 fallback.'));
+    } catch {
+      console.error(error('Failed to restart services'));
+    }
   }
 }

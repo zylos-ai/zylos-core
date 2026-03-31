@@ -16,6 +16,7 @@ Expected output:
 == service restart ==
 == runtime switch ==
 == component rollback restart ==
+== self-upgrade rollback restart ==
 E2E OK
 ```
 
@@ -32,13 +33,16 @@ The script creates a temporary fake home directory, a fake `pm2` binary, and a f
 3. `rollback()` in `cli/lib/upgrade.js`
    Confirms component rollback restart uses the component's own `ecosystem.config.cjs` when it exists, instead of plain `pm2 restart`.
 
+4. `rollbackSelf()` in `cli/lib/self-upgrade.js`
+   Confirms self-upgrade rollback restores the previously backed-up core `pm2/ecosystem.config.cjs` before restarting services.
+
 ## Manual Review Notes
 
 The harness is intentionally PM2-free:
 
 - `pm2` is replaced with a fake binary that logs every invocation
 - assertions are made against the captured PM2 command log
-- the script fails immediately if a required ecosystem restart is missing or if an unexpected plain `pm2 restart` appears
+- the script fails immediately if a required ecosystem restart is missing, if an unexpected plain `pm2 restart` appears, or if self-upgrade rollback fails to restore the backed-up ecosystem file before restart
 
 ## Related Unit Tests
 

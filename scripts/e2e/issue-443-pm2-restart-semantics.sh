@@ -122,4 +122,27 @@ EOF
 assert_log_contains "start $SKILL_DIR/ecosystem.config.cjs --only zylos-demo"
 assert_log_not_contains "restart zylos-demo"
 
+echo "== self-upgrade rollback restart =="
+: > "$PM2_LOG"
+BACKUP_DIR="$TMP_DIR/self-upgrade-backup"
+mkdir -p "$BACKUP_DIR/pm2"
+printf 'module.exports = { apps: ["restored-old"] };\n' > "$BACKUP_DIR/pm2/ecosystem.config.cjs"
+printf 'module.exports = { apps: ["broken-new"] };\n' > "$ZYLOS_HOME/pm2/ecosystem.config.cjs"
+node --input-type=module <<EOF >/dev/null
+import fs from 'node:fs';
+import { rollbackSelf } from '$ROOT_DIR/cli/lib/self-upgrade.js';
+
+rollbackSelf({
+  backupDir: '$BACKUP_DIR',
+  servicesWereRunning: ['activity-monitor'],
+});
+
+const restored = fs.readFileSync('$ZYLOS_HOME/pm2/ecosystem.config.cjs', 'utf8');
+if (!restored.includes('restored-old')) {
+  throw new Error('self-upgrade rollback did not restore the backed-up ecosystem config');
+}
+EOF
+assert_log_contains "start $ZYLOS_HOME/pm2/ecosystem.config.cjs --only activity-monitor"
+assert_log_not_contains "restart activity-monitor"
+
 echo "E2E OK"

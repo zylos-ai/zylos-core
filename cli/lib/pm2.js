@@ -33,10 +33,17 @@ export function createPm2Helpers({
     ecosystemPath,
     stdio = 'pipe',
     save = false,
+    fallbackToPlainRestartOnError = false,
   } = {}) {
     if (ecosystemPath && exists(ecosystemPath)) {
-      restartFromEcosystem([name], { ecosystemPath, stdio, save });
-      return;
+      try {
+        restartFromEcosystem([name], { ecosystemPath, stdio, save });
+        return;
+      } catch (err) {
+        if (!fallbackToPlainRestartOnError) {
+          throw err;
+        }
+      }
     }
 
     exec(`pm2 restart "${name}" 2>/dev/null`, { stdio });

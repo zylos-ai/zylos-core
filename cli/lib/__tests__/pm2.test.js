@@ -91,4 +91,34 @@ describe('PM2 ecosystem restart helpers', () => {
       },
     ]);
   });
+
+  it('can fall back to plain restart when ecosystem restart execution fails', () => {
+    const calls = [];
+    const { restartManagedProcess } = createPm2Helpers({
+      exists: (file) => file === '/tmp/core-ecosystem.config.cjs',
+      exec: (cmd, opts) => {
+        calls.push({ cmd, opts });
+        if (cmd.includes('pm2 start "/tmp/core-ecosystem.config.cjs"')) {
+          throw new Error('bad ecosystem');
+        }
+      },
+    });
+
+    restartManagedProcess('activity-monitor', {
+      ecosystemPath: '/tmp/core-ecosystem.config.cjs',
+      stdio: 'inherit',
+      fallbackToPlainRestartOnError: true,
+    });
+
+    assert.deepStrictEqual(calls, [
+      {
+        cmd: 'pm2 start "/tmp/core-ecosystem.config.cjs" --only "activity-monitor" 2>/dev/null',
+        opts: { stdio: 'inherit' },
+      },
+      {
+        cmd: 'pm2 restart "activity-monitor" 2>/dev/null',
+        opts: { stdio: 'inherit' },
+      },
+    ]);
+  });
 });
