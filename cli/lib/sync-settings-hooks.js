@@ -109,6 +109,146 @@ export function syncCodexConfig({
   return { attempted: true, changed: true, fatal: false };
 }
 
+/**
+ * Sync hooks between template and installed settings (in-memory).
+ * Exported for unit testing. Called by main() after loading files.
+ *
+ * @returns {{ added: number, updated: number, removed: number }}
+ */
+export function syncHooks(installedSettings, templateSettings, { dryRun = false, log = console.log } = {}) {
+  const templateHooks = templateSettings.hooks || {};
+
+  // Collect core skill names from template
+  const coreSkillNames = new Set();
+  for (const matchers of Object.values(templateHooks)) {
+    if (!Array.isArray(matchers)) continue;
+    for (const m of matchers) {
+      for (const h of getCommandHooks(m)) {
+        const name = extractSkillName(h.command);
+        if (name) coreSkillNames.add(name);
+      }
+    }
+  }
+
+  let added = 0;
+  let updated = 0;
+  let removed = 0;
+
+  // Ensure hooks object exists
+  if (!installedSettings.hooks) installedSettings.hooks = {};
+
+  // --- Pre-migration: split catch-all matchers into specific matchers ---
+  const migrated = migrateMatcherSplit(installedSettings, templateSettings, { dryRun, log });
+  if (migrated > 0) {
+    updated += migrated;
+  }
+
+  // --- Forward pass: add missing matcher groups, update hooks in matched groups ---
+  // Strategy: align by matcher group, not by individual hook across all groups.
+  //   - If installed has a group with the same matcher → respect user config, only
+  //     update existing hooks (command/timeout drift) but don't add new hooks
+  //   - If installed has NO group with that matcher → add the whole group from template
+  for (const [event, matchers] of Object.entries(templateHooks)) {
+    if (!Array.isArray(matchers)) continue;
+    if (!Array.isArray(installedSettings.hooks[event])) {
+      installedSettings.hooks[event] = [];
+    }
+    const installedMatchers = installedSettings.hooks[event];
+
+    for (const templateGroup of matchers) {
+      const matcherValue = templateGroup.matcher !== undefined ? templateGroup.matcher : '';
+      const installedGroup = installedMatchers.find(g =>
+        (g.matcher !== undefined ? g.matcher : '') === matcherValue
+      );
+
+      if (installedGroup) {
+        // Group exists — only update existing hooks (command/timeout drift)
+        for (const templateCmd of getCommandHooks(templateGroup)) {
+          const templateKey = extractScriptPath(templateCmd.command);
+          const existing = getCommandHooks(installedGroup).find(
+            h => extractScriptPath(h.command) === templateKey
+          );
+          if (existing && (existing.command !== templateCmd.command || existing.timeout !== templateCmd.timeout)) {
+            if (!dryRun) {
+              existing.command = templateCmd.command;
+              if (templateCmd.timeout !== undefined) existing.timeout = templateCmd.timeout;
+            }
+            updated++;
+            log(`  ~ ${event}[${matcherValue}]: ${templateCmd.command}`);
+          }
+        }
+      } else {
+        // Group missing — add the whole group from template
+        if (!dryRun) {
+          const newGroup = { hooks: [] };
+          if (templateGroup.matcher !== undefined) newGroup.matcher = templateGroup.matcher;
+          for (const templateCmd of getCommandHooks(templateGroup)) {
+            newGroup.hooks.push({ ...templateCmd });
+          }
+          installedMatchers.push(newGroup);
+        }
+        const hookCount = getCommandHooks(templateGroup).length;
+        added += hookCount;
+        log(`  + ${event}[${matcherValue}]: added matcher group (${hookCount} hooks)`);
+      }
+    }
+  }
+
+  // --- Reverse pass: remove obsolete core hooks (matcher-aware) ---
+  // Check each installed group against its corresponding template group (same matcher).
+  // A core hook is removed if it's not present in the matching template group,
+  // even if it exists in other template groups for the same event.
+  for (const [event, matchers] of Object.entries(installedSettings.hooks)) {
+    if (!Array.isArray(matchers)) continue;
+
+    const templateMatchers = Array.isArray(templateHooks[event]) ? templateHooks[event] : [];
+
+    for (let gi = matchers.length - 1; gi >= 0; gi--) {
+      const group = matchers[gi];
+      if (!Array.isArray(group.hooks)) continue;
+
+      const groupMatcher = group.matcher !== undefined ? group.matcher : '';
+      const correspondingTemplate = templateMatchers.find(tm =>
+        (tm.matcher !== undefined ? tm.matcher : '') === groupMatcher
+      );
+
+      for (let hi = group.hooks.length - 1; hi >= 0; hi--) {
+        const h = group.hooks[hi];
+        if (h.type !== 'command') continue;
+
+        const skillName = extractSkillName(h.command);
+        if (!skillName || !coreSkillNames.has(skillName)) continue;
+
+        const installedKey = extractScriptPath(h.command);
+        // Check only the corresponding template group, not all groups
+        const foundInTemplate = correspondingTemplate
+          ? getCommandHooks(correspondingTemplate).some(th => extractScriptPath(th.command) === installedKey)
+          : false;
+
+        if (!foundInTemplate) {
+          if (!dryRun) {
+            group.hooks.splice(hi, 1);
+          }
+          removed++;
+          log(`  - ${event}[${groupMatcher}]: ${h.command}`);
+        }
+      }
+
+      // Remove empty groups
+      if (!dryRun && group.hooks.length === 0) {
+        matchers.splice(gi, 1);
+      }
+    }
+
+    // Clean up empty event arrays
+    if (!dryRun && matchers.length === 0) {
+      delete installedSettings.hooks[event];
+    }
+  }
+
+  return { added, updated, removed };
+}
+
 export function main(argv = process.argv.slice(2)) {
   const dryRun = argv.includes('--dry-run');
 
@@ -132,132 +272,7 @@ export function main(argv = process.argv.slice(2)) {
     installedSettings = {};
   }
 
-  const templateHooks = templateSettings.hooks || {};
-  const installedHooks = installedSettings.hooks || {};
-
-  // Collect core skill names from template
-  const coreSkillNames = new Set();
-  for (const matchers of Object.values(templateHooks)) {
-    if (!Array.isArray(matchers)) continue;
-    for (const m of matchers) {
-      for (const h of getCommandHooks(m)) {
-        const name = extractSkillName(h.command);
-        if (name) coreSkillNames.add(name);
-      }
-    }
-  }
-
-  let added = 0;
-  let updated = 0;
-  let removed = 0;
-
-  // Ensure hooks object exists
-  if (!installedSettings.hooks) installedSettings.hooks = {};
-
-  // --- Pre-migration: split catch-all matchers into specific matchers ---
-  const migrated = migrateMatcherSplit(installedSettings, templateSettings, { dryRun });
-  if (migrated > 0) {
-    updated += migrated;
-  }
-
-  // --- Forward pass: add missing, update modified ---
-  for (const [event, matchers] of Object.entries(templateHooks)) {
-    if (!Array.isArray(matchers)) continue;
-    if (!Array.isArray(installedSettings.hooks[event])) {
-      installedSettings.hooks[event] = [];
-    }
-    const installedMatchers = installedSettings.hooks[event];
-
-    for (const matcher of matchers) {
-      for (const templateCmd of getCommandHooks(matcher)) {
-        const templateKey = extractScriptPath(templateCmd.command);
-
-        // Find installed hook with the same script path
-        let matched = null;
-        let matchedGroup = null;
-        for (const im of installedMatchers) {
-          const found = getCommandHooks(im).find(
-            h => extractScriptPath(h.command) === templateKey
-          );
-          if (found) {
-            matched = found;
-            matchedGroup = im;
-            break;
-          }
-        }
-
-        if (!matched) {
-          // Missing — add it
-          if (!dryRun) {
-            const matcherValue = matcher.matcher !== undefined ? matcher.matcher : null;
-            let targetGroup = null;
-            if (matcherValue !== null) {
-              targetGroup = installedMatchers.find(g => g.matcher === matcherValue);
-            }
-            if (!targetGroup) {
-              targetGroup = { hooks: [] };
-              if (matcherValue !== null) targetGroup.matcher = matcherValue;
-              installedMatchers.push(targetGroup);
-            }
-            targetGroup.hooks.push({ ...templateCmd });
-          }
-          added++;
-          console.log(`  + ${event}: ${templateCmd.command}`);
-        } else if (matched.command !== templateCmd.command || matched.timeout !== templateCmd.timeout) {
-          // Modified — update
-          if (!dryRun) {
-            matched.command = templateCmd.command;
-            if (templateCmd.timeout !== undefined) matched.timeout = templateCmd.timeout;
-          }
-          updated++;
-          console.log(`  ~ ${event}: ${templateCmd.command}`);
-        }
-      }
-    }
-  }
-
-  // --- Reverse pass: remove obsolete core hooks ---
-  for (const [event, matchers] of Object.entries(installedSettings.hooks)) {
-    if (!Array.isArray(matchers)) continue;
-
-    const templateMatchers = Array.isArray(templateHooks[event]) ? templateHooks[event] : [];
-
-    for (let gi = matchers.length - 1; gi >= 0; gi--) {
-      const group = matchers[gi];
-      if (!Array.isArray(group.hooks)) continue;
-
-      for (let hi = group.hooks.length - 1; hi >= 0; hi--) {
-        const h = group.hooks[hi];
-        if (h.type !== 'command') continue;
-
-        const skillName = extractSkillName(h.command);
-        if (!skillName || !coreSkillNames.has(skillName)) continue;
-
-        const installedKey = extractScriptPath(h.command);
-        const foundInTemplate = templateMatchers.some(tm =>
-          getCommandHooks(tm).some(th => extractScriptPath(th.command) === installedKey)
-        );
-
-        if (!foundInTemplate) {
-          if (!dryRun) {
-            group.hooks.splice(hi, 1);
-          }
-          removed++;
-          console.log(`  - ${event}: ${h.command}`);
-        }
-      }
-
-      // Remove empty groups
-      if (!dryRun && group.hooks.length === 0) {
-        matchers.splice(gi, 1);
-      }
-    }
-
-    // Clean up empty event arrays
-    if (!dryRun && matchers.length === 0) {
-      delete installedSettings.hooks[event];
-    }
-  }
+  const { added, updated, removed } = syncHooks(installedSettings, templateSettings, { dryRun });
 
   // --- Sync top-level statusLine from template ---
   let statusLineChanged = false;

@@ -8,6 +8,7 @@ const {
   migrateMatcherSplit,
   shouldSyncCodexConfig,
   syncCodexConfig,
+  syncHooks,
   syncTemplateModelSetting,
 } = await import('../sync-settings-hooks.js');
 
@@ -107,7 +108,7 @@ describe('syncCodexConfig', () => {
   });
 });
 
-// --- Helper to build hook entries ---
+// --- Helpers ---
 function makeHook(scriptPath, timeout = 10000) {
   return { type: 'command', command: `node ${scriptPath}`, timeout };
 }
@@ -119,6 +120,7 @@ function makeMatcherGroup(matcher, scriptPaths) {
   };
 }
 
+// --- migrateMatcherSplit tests ---
 describe('migrateMatcherSplit', () => {
   const noopLog = () => {};
 
@@ -146,7 +148,6 @@ describe('migrateMatcherSplit', () => {
     assert.equal(installed.hooks.SessionStart.length, 3);
     const matchers = installed.hooks.SessionStart.map(g => g.matcher).sort();
     assert.deepEqual(matchers, ['clear', 'compact', 'startup']);
-    // Each group should have the same hooks
     for (const group of installed.hooks.SessionStart) {
       assert.equal(group.hooks.length, 2);
     }
@@ -213,7 +214,6 @@ describe('migrateMatcherSplit', () => {
 
     const count = migrateMatcherSplit(installed, template, { log: noopLog });
     assert.equal(count, 0);
-    // Original catch-all should be preserved
     assert.equal(installed.hooks.SessionStart.length, 1);
     assert.equal(installed.hooks.SessionStart[0].matcher, '');
   });
@@ -238,8 +238,7 @@ describe('migrateMatcherSplit', () => {
     };
 
     const count = migrateMatcherSplit(installed, template, { log: noopLog });
-    assert.equal(count, 3); // count reflects template matchers, not actually added
-    // startup already existed, catch-all removed, clear + compact added
+    assert.equal(count, 3);
     assert.equal(installed.hooks.SessionStart.length, 3);
     const matchers = installed.hooks.SessionStart.map(g => g.matcher).sort();
     assert.deepEqual(matchers, ['clear', 'compact', 'startup']);
@@ -264,7 +263,6 @@ describe('migrateMatcherSplit', () => {
 
     const count = migrateMatcherSplit(installed, template, { dryRun: true, log: noopLog });
     assert.equal(count, 2);
-    // Config unchanged
     assert.equal(installed.hooks.SessionStart.length, 1);
     assert.equal(installed.hooks.SessionStart[0].matcher, '');
   });
@@ -273,7 +271,7 @@ describe('migrateMatcherSplit', () => {
     const installed = {
       hooks: {
         SessionStart: [
-          { hooks: [makeHook('/skills/a/scripts/a.js')] }, // no matcher field = undefined
+          { hooks: [makeHook('/skills/a/scripts/a.js')] },
         ],
       },
     };
@@ -354,7 +352,7 @@ describe('migrateMatcherSplit', () => {
     };
 
     const count = migrateMatcherSplit(installed, template, { log: noopLog });
-    assert.equal(count, 3); // 2 for SessionStart + 1 for Stop
+    assert.equal(count, 3);
     assert.equal(installed.hooks.SessionStart.length, 2);
     assert.equal(installed.hooks.Stop.length, 1);
     assert.equal(installed.hooks.Stop[0].matcher, 'success');
@@ -383,5 +381,229 @@ describe('migrateMatcherSplit', () => {
     assert.ok(logs[0].includes('SessionStart'));
     assert.ok(logs[0].includes('startup'));
     assert.ok(logs[0].includes('clear'));
+  });
+});
+
+// --- syncHooks (forward + reverse pass) tests ---
+describe('syncHooks forward pass', () => {
+  const noopLog = () => {};
+
+  it('does not modify user-owned matcher group (respects user intent)', () => {
+    const installed = {
+      hooks: {
+        SessionStart: [
+          makeMatcherGroup('startup', [
+            '~/zylos/.claude/skills/comm-bridge/scripts/c4-session-init.js',
+            '~/zylos/.claude/skills/zylos-memory/scripts/session-start-inject.js',
+          ]),
+        ],
+      },
+    };
+    const template = {
+      hooks: {
+        SessionStart: [
+          makeMatcherGroup('startup', [
+            '~/zylos/.claude/skills/comm-bridge/scripts/c4-session-init.js',
+            '~/zylos/.claude/skills/zylos-memory/scripts/session-start-inject.js',
+            '~/zylos/.claude/skills/activity-monitor/scripts/session-start-prompt.js',
+          ]),
+          makeMatcherGroup('clear', [
+            '~/zylos/.claude/skills/comm-bridge/scripts/c4-session-init.js',
+            '~/zylos/.claude/skills/zylos-memory/scripts/session-start-inject.js',
+            '~/zylos/.claude/skills/activity-monitor/scripts/session-start-prompt.js',
+          ]),
+          makeMatcherGroup('compact', [
+            '~/zylos/.claude/skills/comm-bridge/scripts/c4-session-init.js',
+            '~/zylos/.claude/skills/zylos-memory/scripts/session-start-inject.js',
+            '~/zylos/.claude/skills/activity-monitor/scripts/session-start-prompt.js',
+          ]),
+        ],
+      },
+    };
+
+    const result = syncHooks(installed, template, { log: noopLog });
+
+    // startup should NOT gain a 3rd hook
+    const startupGroup = installed.hooks.SessionStart.find(g => g.matcher === 'startup');
+    assert.equal(startupGroup.hooks.length, 2);
+
+    // clear and compact should be added
+    assert.equal(installed.hooks.SessionStart.length, 3);
+    const clearGroup = installed.hooks.SessionStart.find(g => g.matcher === 'clear');
+    const compactGroup = installed.hooks.SessionStart.find(g => g.matcher === 'compact');
+    assert.ok(clearGroup);
+    assert.ok(compactGroup);
+    assert.equal(clearGroup.hooks.length, 3);
+    assert.equal(compactGroup.hooks.length, 3);
+  });
+
+  it('adds missing matcher groups from template', () => {
+    const installed = { hooks: {} };
+    const template = {
+      hooks: {
+        SessionStart: [
+          makeMatcherGroup('startup', ['/skills/a/scripts/a.js']),
+          makeMatcherGroup('clear', ['/skills/a/scripts/a.js']),
+        ],
+      },
+    };
+
+    const result = syncHooks(installed, template, { log: noopLog });
+
+    assert.equal(result.added, 2);
+    assert.equal(installed.hooks.SessionStart.length, 2);
+  });
+
+  it('updates command/timeout drift in existing matcher group', () => {
+    const installed = {
+      hooks: {
+        SessionStart: [
+          { matcher: 'startup', hooks: [
+            { type: 'command', command: 'node ~/zylos/.claude/skills/a/scripts/a.js', timeout: 5000 },
+          ]},
+        ],
+      },
+    };
+    const template = {
+      hooks: {
+        SessionStart: [
+          { matcher: 'startup', hooks: [
+            { type: 'command', command: 'node ~/zylos/.claude/skills/a/scripts/a.js', timeout: 10000 },
+          ]},
+        ],
+      },
+    };
+
+    const result = syncHooks(installed, template, { log: noopLog });
+
+    assert.equal(result.updated, 1);
+    assert.equal(installed.hooks.SessionStart[0].hooks[0].timeout, 10000);
+  });
+
+  it('handles the full migration scenario: catch-all → specific matchers', () => {
+    const installed = {
+      hooks: {
+        SessionStart: [
+          makeMatcherGroup('', [
+            '~/zylos/.claude/skills/comm-bridge/scripts/c4-session-init.js',
+            '~/zylos/.claude/skills/zylos-memory/scripts/session-start-inject.js',
+            '~/zylos/.claude/skills/activity-monitor/scripts/session-start-prompt.js',
+          ]),
+        ],
+      },
+    };
+    const template = {
+      hooks: {
+        SessionStart: [
+          makeMatcherGroup('startup', [
+            '~/zylos/.claude/skills/comm-bridge/scripts/c4-session-init.js',
+            '~/zylos/.claude/skills/zylos-memory/scripts/session-start-inject.js',
+            '~/zylos/.claude/skills/activity-monitor/scripts/session-start-prompt.js',
+          ]),
+          makeMatcherGroup('clear', [
+            '~/zylos/.claude/skills/comm-bridge/scripts/c4-session-init.js',
+            '~/zylos/.claude/skills/zylos-memory/scripts/session-start-inject.js',
+            '~/zylos/.claude/skills/activity-monitor/scripts/session-start-prompt.js',
+          ]),
+          makeMatcherGroup('compact', [
+            '~/zylos/.claude/skills/comm-bridge/scripts/c4-session-init.js',
+            '~/zylos/.claude/skills/zylos-memory/scripts/session-start-inject.js',
+            '~/zylos/.claude/skills/activity-monitor/scripts/session-start-prompt.js',
+          ]),
+        ],
+      },
+    };
+
+    syncHooks(installed, template, { log: noopLog });
+
+    assert.equal(installed.hooks.SessionStart.length, 3);
+    const matchers = installed.hooks.SessionStart.map(g => g.matcher).sort();
+    assert.deepEqual(matchers, ['clear', 'compact', 'startup']);
+    for (const group of installed.hooks.SessionStart) {
+      assert.equal(group.hooks.length, 3);
+    }
+  });
+
+  it('reverse pass removes obsolete core hooks', () => {
+    const installed = {
+      hooks: {
+        SessionStart: [
+          { matcher: 'startup', hooks: [
+            { type: 'command', command: 'node ~/zylos/.claude/skills/old-skill/scripts/old.js', timeout: 5000 },
+          ]},
+        ],
+      },
+    };
+    const template = {
+      hooks: {
+        SessionStart: [],
+      },
+    };
+
+    const result = syncHooks(installed, template, { log: noopLog });
+
+    // old-skill is not a core skill (not in template), so it's preserved
+    assert.equal(result.removed, 0);
+  });
+
+  it('reverse pass preserves user hooks not in template', () => {
+    const installed = {
+      hooks: {
+        SessionStart: [
+          { matcher: 'startup', hooks: [
+            { type: 'command', command: 'node /custom/my-hook.js', timeout: 5000 },
+          ]},
+        ],
+      },
+    };
+    const template = {
+      hooks: {
+        SessionStart: [
+          makeMatcherGroup('startup', ['~/zylos/.claude/skills/a/scripts/a.js']),
+        ],
+      },
+    };
+
+    syncHooks(installed, template, { log: noopLog });
+
+    // User's custom hook should still be there (startup group exists, not modified)
+    const startupGroup = installed.hooks.SessionStart.find(g => g.matcher === 'startup');
+    assert.equal(startupGroup.hooks.length, 1);
+    assert.ok(startupGroup.hooks[0].command.includes('my-hook.js'));
+  });
+
+  it('reverse pass removes core hook from one matcher when template removes it (matcher-aware)', () => {
+    // Hook exists in both startup and clear in installed config
+    // Template keeps it in startup but removes it from clear
+    const installed = {
+      hooks: {
+        SessionStart: [
+          { matcher: 'startup', hooks: [
+            { type: 'command', command: 'node ~/zylos/.claude/skills/activity-monitor/scripts/session-start-prompt.js', timeout: 5000 },
+          ]},
+          { matcher: 'clear', hooks: [
+            { type: 'command', command: 'node ~/zylos/.claude/skills/activity-monitor/scripts/session-start-prompt.js', timeout: 5000 },
+          ]},
+        ],
+      },
+    };
+    const template = {
+      hooks: {
+        SessionStart: [
+          makeMatcherGroup('startup', ['~/zylos/.claude/skills/activity-monitor/scripts/session-start-prompt.js']),
+          makeMatcherGroup('clear', []),  // removed from clear
+        ],
+      },
+    };
+
+    const result = syncHooks(installed, template, { log: noopLog });
+
+    assert.equal(result.removed, 1);
+    // startup should still have the hook
+    const startupGroup = installed.hooks.SessionStart.find(g => g.matcher === 'startup');
+    assert.equal(startupGroup.hooks.length, 1);
+    // clear group should be cleaned up (empty after removal)
+    const clearGroup = installed.hooks.SessionStart.find(g => g.matcher === 'clear');
+    assert.equal(clearGroup, undefined); // empty group gets removed
   });
 });
