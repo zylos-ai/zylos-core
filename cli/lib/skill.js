@@ -38,6 +38,32 @@ export function parseSkillMd(dir) {
 }
 
 /**
+ * Whether a parsed skill should be exposed to user-facing invocation surfaces.
+ *
+ * Missing metadata defaults to visible so existing skills remain discoverable
+ * unless they explicitly opt out.
+ *
+ * @param {{ frontmatter?: object } | null} parsed
+ * @returns {boolean}
+ */
+export function isUserInvocableSkill(parsed) {
+  return parsed?.frontmatter?.['user-invocable'] !== false;
+}
+
+/**
+ * Whether a parsed skill remains available for model-side invocation.
+ *
+ * Missing metadata defaults to enabled so existing skills keep their current
+ * behavior unless they explicitly opt out.
+ *
+ * @param {{ frontmatter?: object } | null} parsed
+ * @returns {boolean}
+ */
+export function isModelInvocableSkill(parsed) {
+  return parsed?.frontmatter?.['disable-model-invocation'] !== true;
+}
+
+/**
  * Detect the component type based on directory contents.
  *
  * - 'declarative': Has SKILL.md with frontmatter (self-contained install)
