@@ -35,13 +35,13 @@ For each running task, note:
 
 This information goes into the handoff summary (step 3).
 
-### 2. Sync memory
+### 2. Memory sync (runtime-dependent)
 
-Launch a background subagent for memory sync using the current runtime's supported background-agent mechanism. For Claude, use the **Task tool** (`subagent_type: general-purpose`, `model: sonnet`, `run_in_background: true`). For Codex, use the current session's available background-agent capability with a Codex-supported model; do not hardcode `sonnet`. The subagent's prompt must instruct it to follow the full sync flow in `~/zylos/.claude/skills/zylos-memory/SKILL.md`.
+Memory sync is normally triggered **earlier** by the context monitor — at 80% of the session-switch threshold — so it should already be running (or finished) by the time this skill fires.
 
-Do not proceed to the enqueue step until this memory sync has completed.
+- **Claude**: Memory sync is **not** required here. Background subagents survive `/clear`, so any in-progress sync will continue in the new session. If you notice memory sync was NOT already triggered (e.g., the session switch was user-requested rather than threshold-triggered), launch it as a background task but **do not wait** for it to complete — proceed immediately to step 3.
 
-For Codex specifically, this is mandatory: `/exit` kills background tasks, so enqueue `/exit` only after the background memory sync has fully finished.
+- **Codex**: `/exit` kills background tasks, so memory sync **must** complete before enqueueing `/exit`. Launch a background subagent for memory sync using the current session's available background-agent capability with a Codex-supported model (do not hardcode `sonnet`). The subagent's prompt must instruct it to follow the full sync flow in `~/zylos/.claude/skills/zylos-memory/SKILL.md`. Wait for completion before proceeding.
 
 ### 3. Write a session handoff summary
 
@@ -73,12 +73,13 @@ node ~/zylos/.claude/skills/comm-bridge/scripts/c4-control.js enqueue --content 
 
 ## How It Works
 
-1. **Finish required pre-switch background work**: memory sync must complete before switch enqueue; this is especially required for Codex
-2. **Enqueue switch command**: Puts the runtime-specific command into the control queue (`/clear` for Claude, `/exit` for Codex)
-3. **Deliver when idle**: Dispatcher delivers the command when idle
-4. **Session switches**:
-   - Claude: `/clear` resets conversation context, session-start hooks fire, and background subagents can continue independently
+1. **Early memory sync** (handled by context-monitor, not this skill): At 80% of the session-switch threshold, the context monitor injects a prompt for Claude to run memory sync in the background. This gives sync ample time to finish before the session switch fires.
+2. **Pre-switch checks**: Inventory background tasks, write handoff summary. For Codex only, ensure memory sync has completed (since `/exit` kills background tasks).
+3. **Enqueue switch command**: Puts the runtime-specific command into the control queue (`/clear` for Claude, `/exit` for Codex)
+4. **Deliver when idle**: Dispatcher delivers the command when idle
+5. **Session switches**:
+   - Claude: `/clear` resets conversation context, session-start hooks fire, and background subagents (including any in-progress memory sync) continue independently
    - Codex: `/exit` exits the current session so a fresh one can start, and background tasks from that session do not survive
-5. **New session**:
+6. **New session**:
    - Claude: the new session can continue alongside surviving background tasks
    - Codex: the new session relies on the completed handoff state recorded before `/exit`
