@@ -92,7 +92,7 @@ export class ContextMonitorBase {
   }
 
   /**
-   * Start periodic polling. Calls checkThreshold() at each interval.
+   * Start periodic polling. Calls checkOnce() at each interval.
    * No-op if already started.
    *
    * @param {object} [opts]

@@ -32,6 +32,28 @@ const TAIL_BYTES = 65_536; // 64 KB
 // Fallback ceiling when models_cache.json is unavailable
 const DEFAULT_CEILING = 128_000;
 
+export function parseSqliteThreadRow(raw) {
+  if (!raw) return null;
+
+  try {
+    const rows = JSON.parse(raw);
+    const row = Array.isArray(rows) ? rows[0] : rows;
+    if (!row || typeof row !== 'object') return null;
+
+    const threadIdRaw = row.id != null ? String(row.id) : '';
+    const tokensUsed = parseInt(row.tokens_used, 10);
+    if (Number.isNaN(tokensUsed)) return null;
+
+    return {
+      threadIdRaw,
+      tokensUsed,
+      rolloutPathRaw: row.rollout_path != null ? String(row.rollout_path) : '',
+    };
+  } catch {
+    return null;
+  }
+}
+
 export class CodexContextMonitor extends ContextMonitorBase {
   /**
    * @param {object} [opts]
@@ -194,13 +216,12 @@ export class CodexContextMonitor extends ContextMonitorBase {
                      AND updated_at >= ${this._startTime}
                    ORDER BY updated_at DESC
                    LIMIT 1;`;
-      const out = execFileSync('sqlite3', [SQLITE_FILE, '-separator', '|', sql], {
+      const out = execFileSync('sqlite3', [SQLITE_FILE, '-json', sql], {
         encoding: 'utf8', stdio: 'pipe', timeout: 5_000,
       }).trim();
-      if (!out) return null;
-      const [threadIdRaw, tokensUsedRaw, rolloutPathRaw] = out.split('|');
-      const tokensUsed = parseInt(tokensUsedRaw, 10);
-      if (isNaN(tokensUsed)) return null;
+      const parsed = parseSqliteThreadRow(out);
+      if (!parsed) return null;
+      const { threadIdRaw, tokensUsed, rolloutPathRaw } = parsed;
       const rolloutSessionId = rolloutPathRaw
         ? this._sessionIdFromRolloutPath(rolloutPathRaw)
         : undefined;

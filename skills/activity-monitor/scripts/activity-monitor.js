@@ -193,6 +193,7 @@ const CONV_DIR = path.join(os.homedir(), '.claude', 'projects', ZYLOS_PATH);
 const INTERVAL = 1000;
 const IDLE_THRESHOLD = 3;
 const LOG_MAX_LINES = 500;
+const SESSION_SWITCH_LOG_MAX_LINES = 1000;
 const BASE_RESTART_DELAY = 5;
 const MAX_RESTART_DELAY = 60;
 const BACKOFF_RESET_THRESHOLD = 60; // Claude must stay running this long before backoff resets
@@ -260,6 +261,7 @@ let idleSince = 0;
 let lastPeriodicProbeAt = 0;
 let lastHandledClearEventKey = '';
 let lastHandledClearPaneKey = '';
+let lastHandledClearPaneAt = 0;
 let lastClearProbeAttemptAt = 0;
 let lastLaunchAt = 0;
 let lastApiErrorScanAt = 0;
@@ -326,8 +328,20 @@ function recordSessionSwitch({ runtime, previousSessionId, sessionId, used, ceil
       ratio,
     };
     fs.appendFileSync(SESSION_SWITCH_LOG_FILE, JSON.stringify(entry) + '\n');
+    truncateJsonlFile(SESSION_SWITCH_LOG_FILE, SESSION_SWITCH_LOG_MAX_LINES);
   } catch (err) {
     log(`Failed to record session switch: ${err.message}`);
+  }
+}
+
+function truncateJsonlFile(file, maxLines) {
+  try {
+    if (!fs.existsSync(file)) return;
+    const lines = fs.readFileSync(file, 'utf8').split('\n').filter(Boolean);
+    if (lines.length <= maxLines) return;
+    fs.writeFileSync(file, lines.slice(-maxLines).join('\n') + '\n');
+  } catch (err) {
+    log(`Failed to truncate ${path.basename(file)}: ${err.message}`);
   }
 }
 
@@ -1014,10 +1028,13 @@ function readLatestCodexClearEvent() {
       const text = typeof event?.text === 'string' ? event.text.trim() : '';
       if (!text.startsWith('/clear')) continue;
 
-      const ts = Number(event?.ts);
+      const rawTs = Number(event?.ts);
+      const ts = Number.isFinite(rawTs)
+        ? (rawTs > 1_000_000_000_000 ? Math.floor(rawTs / 1000) : rawTs)
+        : 0;
       const sessionId = event?.session_id ? String(event.session_id) : '';
       return {
-        ts: Number.isFinite(ts) ? ts : 0,
+        ts,
         sessionId,
         text,
       };
@@ -1047,16 +1064,20 @@ function readLatestPaneClearSignal() {
 
 function maybeTriggerClearImmediateProbe(currentTime) {
   if (adapter.runtimeId !== 'codex') return;
+  if (engine.health !== 'ok') return;
 
   // Primary signal: pane-local /clear command capture (works even when history.jsonl
   // does not persist slash commands in this Codex build).
   const paneKey = readLatestPaneClearSignal();
-  if (paneKey && paneKey !== lastHandledClearPaneKey) {
+  const paneKeyChanged = paneKey && paneKey !== lastHandledClearPaneKey;
+  const paneDedupExpired = paneKey && (currentTime - lastHandledClearPaneAt) >= 30;
+  if (paneKey && (paneKeyChanged || paneDedupExpired)) {
     if ((currentTime - lastClearProbeAttemptAt) < 5) return;
     lastClearProbeAttemptAt = currentTime;
     const ok = engine.requestImmediateProbe('clear_command');
     if (!ok) return;
     lastHandledClearPaneKey = paneKey;
+    lastHandledClearPaneAt = currentTime;
     lastPeriodicProbeAt = currentTime;
     return;
   }
@@ -1672,7 +1693,7 @@ function init() {
   contextMonitor = adapter.getContextMonitor?.() ?? null;
   if (contextMonitor) {
     contextMonitor.startPolling({
-      intervalMs: 5_000,
+      intervalMs: 30_000,
       onExceed: async ({ used, ceiling, ratio }) => {
         const pct = Math.round(ratio * 100);
         log(`Context at ${pct}% (${used}/${ceiling}), requesting new-session handoff`);
