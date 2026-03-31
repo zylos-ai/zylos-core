@@ -37,7 +37,7 @@ const COOLDOWN_SECONDS = 300;   // Re-trigger after 5 minutes if still above thr
 const MEMORY_SYNC_RATIO = 0.8;
 const MEMORY_SYNC_THRESHOLD = Math.round(RESTART_THRESHOLD * MEMORY_SYNC_RATIO);
 const CHECKPOINT_THRESHOLD = 30;  // must match c4-config.js CHECKPOINT_THRESHOLD
-const MEMORY_SYNC_COOLDOWN_SECONDS = 300;  // 5 min — prevent re-inject while sync is running
+const MEMORY_SYNC_COOLDOWN_SECONDS = 600;  // 10 min — prevent re-inject while sync is running
 
 // Ensure data directory exists once at startup
 let dirReady = false;

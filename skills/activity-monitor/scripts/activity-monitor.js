@@ -655,7 +655,7 @@ function getTmuxActivity() {
 }
 
 const CHECKPOINT_THRESHOLD = 30;  // must match c4-config.js CHECKPOINT_THRESHOLD
-const MEMORY_SYNC_COOLDOWN_SECONDS = 300;  // 5 min — prevent re-inject while sync is running
+const MEMORY_SYNC_COOLDOWN_SECONDS = 600;  // 10 min — prevent re-inject while sync is running
 let lastMemorySyncTriggerAt = 0;
 
 function getUnsummarizedCount() {
