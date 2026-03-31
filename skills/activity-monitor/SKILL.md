@@ -21,7 +21,7 @@ This is a **PM2 service** (not directly invoked by Claude). It runs continuously
 5. **Heartbeat Liveness Detection**: Periodically sends heartbeat probes via the C4 control queue to verify the agent is responsive, triggering recovery when probes fail
 6. **Health Check**: Periodically enqueues system health checks (PM2, disk, memory) via the C4 control queue
 7. **Daily Upgrade**: Enqueues a Claude Code upgrade via the C4 control queue at 5:00 AM local time daily (Claude runtime only)
-8. **Context Monitoring**: Receives context usage data after every turn; triggers early memory sync at 56% and new-session handoff at 70%
+8. **Context Monitoring**: Receives context usage data after every turn; triggers early memory sync at 64% and new-session handoff at 80%
 
 ## Status File Format
 
@@ -166,13 +166,13 @@ Event-driven context monitoring via Claude Code's statusLine feature, replacing 
 - **Mechanism**: `context-monitor.js` runs as a statusLine command — Claude Code pipes context data to it via stdin after every turn (zero turn cost)
 - **Status file**: Writes `~/zylos/activity-monitor/statusline.json` with full context data (used_percentage, remaining_percentage, cost, session_id)
 - **Two thresholds**:
-  - **Early memory sync** at `56%` (80% of 70%): Enqueues a prompt for Claude to run memory sync as a background task, so it completes well before the session switch. Priority 2, 10-minute cooldown.
-  - **New-session handoff** at `70%`: Enqueues the new-session trigger. Priority 1, 5-minute cooldown.
+  - **Early memory sync** at `64%` (80% of 80%): Enqueues a prompt for Claude to run memory sync as a background task, so it completes well before the session switch. Priority 2, 10-minute cooldown.
+  - **New-session handoff** at `80%`: Enqueues the new-session trigger. Priority 1, 5-minute cooldown.
 - **Delivery**: Enqueues via C4 control queue with bypass_state — ensures the trigger reaches Claude even during long tasks
 - **Two-stage design**: The trigger message instructs Claude to start the new-session handoff flow; the actual `/clear` is gated by require-idle in the new-session skill's final step
 - **Log**: `~/zylos/activity-monitor/context-monitor.log`
 
-The early memory sync decouples memory sync from the session switch: by the time `new-session` fires, sync should already be done (or nearly done), making session switching faster.
+The early memory sync decouples memory sync from the session switch. Memory sync is also triggered by the new session's startup hook if unsummarized conversations exceed the threshold, so data is never lost.
 
 The `check-context` skill remains available for manual on-demand context checks.
 

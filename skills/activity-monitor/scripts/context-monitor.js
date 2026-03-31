@@ -28,11 +28,11 @@ const COST_LOG_FILE = path.join(AM_DIR, 'cost-log.jsonl');
 const C4_CONTROL = path.join(ZYLOS_DIR, '.claude/skills/comm-bridge/scripts/c4-control.js');
 
 // Thresholds — keep COOLDOWN_SECONDS and ack-deadline (in enqueue call) in sync
-const RESTART_THRESHOLD = 70;   // Trigger new-session at this percentage
+const RESTART_THRESHOLD = 80;   // Trigger new-session at this percentage
 const COOLDOWN_SECONDS = 300;   // Re-trigger after 5 minutes if still above threshold
 
 // Early memory sync: inject at 80% of session-switch threshold so memory sync
-// completes in the background before new-session fires.  (e.g. 70% × 0.8 = 56%)
+// completes in the background before new-session fires.  (e.g. 80% × 0.8 = 64%)
 const MEMORY_SYNC_RATIO = 0.8;
 const MEMORY_SYNC_THRESHOLD = Math.round(RESTART_THRESHOLD * MEMORY_SYNC_RATIO);
 const MEMORY_SYNC_COOLDOWN_SECONDS = 600;  // 10 min — only inject once per window
@@ -103,7 +103,7 @@ function main(raw) {
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     try {
       execFileSync('node', [C4_CONTROL, 'enqueue',
-        '--content', `Context usage at ${usedPct}%, exceeding 70% threshold. Use the new-session skill to start a fresh session.`,
+        '--content', `Context usage at ${usedPct}%, exceeding ${RESTART_THRESHOLD}% threshold. Use the new-session skill to start a fresh session.`,
         '--priority', '1',
         '--bypass-state',
         '--ack-deadline', '300'

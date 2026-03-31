@@ -12,10 +12,10 @@
 export class ContextMonitorBase {
   /**
    * @param {object} [opts]
-   * @param {number} [opts.threshold=0.75]   Fraction of ceiling that triggers handoff (0.0–1.0)
+   * @param {number} [opts.threshold=0.80]   Fraction of ceiling that triggers handoff (0.0–1.0)
    * @param {number} [opts.cooldownMs=300000] Minimum ms between successive triggers (default 5 min)
    */
-  constructor({ threshold = 0.75, cooldownMs = 300_000 } = {}) {
+  constructor({ threshold = 0.80, cooldownMs = 300_000 } = {}) {
     this.threshold = threshold;
     this.cooldownMs = cooldownMs;
     this._lastTriggerAt = 0;
