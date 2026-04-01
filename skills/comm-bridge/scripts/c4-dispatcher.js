@@ -551,11 +551,28 @@ async function processNextMessage() {
     }
   }
 
+  // Keystroke delivery: content prefixed with [KEYSTROKE] sends raw key to tmux
+  // without buffer paste or "Meanwhile" prefix. Used for auto-approve permission prompts.
+  const rawContent = item.content || '';
+  if (item.type === 'control' && rawContent.startsWith('[KEYSTROKE]')) {
+    const key = rawContent.slice('[KEYSTROKE]'.length).trim();
+    log(`Delivering keystroke key=${key} (control id=${item.id} priority=${item.priority})`);
+    try {
+      execFileSync('tmux', ['send-keys', '-t', TMUX_SESSION, key], { stdio: 'pipe', timeout: 5000 });
+      ackControl(item.id);
+      log(`Keystroke delivered: key=${key} (control id=${item.id})`);
+      return { delivered: true, state: agentState.state };
+    } catch (err) {
+      log(`Keystroke delivery error: ${err.message}`);
+      await handleControlDeliveryFailure(item, `KEYSTROKE_ERROR: ${err.message}`);
+      return { delivered: false, state: agentState.state };
+    }
+  }
+
   log(`Delivering ${item.type} id=${item.id}${item.type === 'control' ? ` priority=${item.priority}` : ` from ${item.channel}`}`);
   // Prefix control messages with "Meanwhile, " so the agent treats them as
   // concurrent background tasks that should not interrupt the user's active work.
   // Skip for slash commands (e.g. /exit, /clear) which must be delivered verbatim.
-  const rawContent = item.content || '';
   const isSlashCommand = rawContent.startsWith('/');
   const deliveryContent = (item.type === 'control' && !isSlashCommand) ? `Meanwhile, ${rawContent}` : rawContent;
   const result = await sendToTmux(deliveryContent, {

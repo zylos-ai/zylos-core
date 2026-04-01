@@ -1,13 +1,15 @@
 #!/usr/bin/env node
 
 /**
- * Auth Prompt Hook — logs PermissionRequest events to observe when
- * Claude Code's authorization prompt is triggered.
+ * Auth Prompt Hook — logs PermissionRequest events and optionally auto-approves
+ * by sending an Enter keystroke via the C4 control channel.
  *
  * Registered as a PermissionRequest hook. Claude Code fires this only
  * when a tool call requires user permission (not for auto-allowed tools).
- * The script logs the event and exits without output, so Claude Code
- * proceeds with its normal permission flow.
+ *
+ * Auto-approve: when config.auto_approve_permission is true (default),
+ * enqueues a [KEYSTROKE]Enter control at priority 0 with bypass-state
+ * and 1s delay. The C4 dispatcher sends the Enter key to auto-confirm.
  *
  * Log file: ~/zylos/activity-monitor/hook-timing.log (shared with other hooks)
  */
@@ -15,8 +17,20 @@
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import { execFileSync } from 'child_process';
 
-const LOG_FILE = path.join(os.homedir(), 'zylos', 'activity-monitor', 'hook-timing.log');
+const ZYLOS_DIR = path.join(os.homedir(), 'zylos');
+const LOG_FILE = path.join(ZYLOS_DIR, 'activity-monitor', 'hook-timing.log');
+const CONFIG_FILE = path.join(ZYLOS_DIR, '.zylos', 'config.json');
+const C4_CONTROL = path.join(ZYLOS_DIR, '.claude', 'skills', 'comm-bridge', 'scripts', 'c4-control.js');
+
+function readConfig() {
+  try {
+    return JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
+  } catch {
+    return {};
+  }
+}
 
 async function main() {
   let input = '';
@@ -40,6 +54,25 @@ async function main() {
     fs.appendFileSync(LOG_FILE, line);
   } catch {
     // best-effort — don't crash hook pipeline
+  }
+
+  // Auto-approve: enqueue Enter keystroke via C4 control channel
+  const config = readConfig();
+  const autoApprove = config.auto_approve_permission !== false; // default: true
+
+  if (autoApprove) {
+    try {
+      execFileSync('node', [
+        C4_CONTROL, 'enqueue',
+        '--content', '[KEYSTROKE]Enter',
+        '--priority', '0',
+        '--bypass-state',
+        '--available-in', '1',
+        '--no-ack-suffix'
+      ], { stdio: 'pipe', timeout: 5000 });
+    } catch {
+      // best-effort — don't block permission flow
+    }
   }
 }
 
