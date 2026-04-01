@@ -56,11 +56,13 @@ async function main() {
     // best-effort — don't crash hook pipeline
   }
 
-  // Auto-approve: enqueue Enter keystroke via C4 control channel
+  // Auto-approve: enqueue Enter keystroke via C4 control channel.
+  // Claude-only — Codex runtime has no permission prompt UI.
   const config = readConfig();
   const autoApprove = config.auto_approve_permission !== false; // default: true
+  const runtime = config.runtime || 'claude';
 
-  if (autoApprove) {
+  if (autoApprove && runtime === 'claude') {
     try {
       execFileSync('node', [
         C4_CONTROL, 'enqueue',

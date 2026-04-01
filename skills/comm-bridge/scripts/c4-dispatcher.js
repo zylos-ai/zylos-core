@@ -43,6 +43,7 @@ import {
   REQUIRE_IDLE_EXECUTION_MAX_WAIT_MS,
   REQUIRE_IDLE_EXECUTION_POLL_MS,
   TMUX_SESSION,
+  ACTIVE_RUNTIME,
   AGENT_STATUS_FILE,
   PROC_STATE_FILE,
   API_ACTIVITY_FILE,
@@ -197,17 +198,25 @@ export function getDeliveryDelay(byteLength) {
   return Math.min(DELIVERY_DELAY_BASE + extra, DELIVERY_DELAY_MAX);
 }
 
-export function getInputBoxText(capture) {
+export function getInputBoxText(capture, { runtime = ACTIVE_RUNTIME } = {}) {
   const lines = capture.split('\n');
-  const separatorIndexes = [];
 
-  for (let i = 0; i < lines.length; i++) {
-    if (/^\u2500{10,}/.test(lines[i])) {
-      separatorIndexes.push(i);
+  // Separator detection is Claude-only — Codex has no ─ separator lines.
+  if (runtime === 'claude') {
+    const separatorIndexes = [];
+    for (let i = 0; i < lines.length; i++) {
+      if (/^\u2500{10,}/.test(lines[i])) {
+        separatorIndexes.push(i);
+      }
+    }
+    if (separatorIndexes.length >= 2) {
+      const start = separatorIndexes[separatorIndexes.length - 2] + 1;
+      const end = separatorIndexes[separatorIndexes.length - 1];
+      return lines.slice(start, end).join('\n');
     }
   }
 
-  if (separatorIndexes.length < 2) {
+  {
     const footerIndex = lines.findIndex(line =>
       /tab to queue message/i.test(line) ||
       /\b\d+%\s+left\s+·\s+~\//i.test(line)
@@ -238,10 +247,6 @@ export function getInputBoxText(capture) {
 
     return promptText.join('\n').trimEnd();
   }
-
-  const start = separatorIndexes[separatorIndexes.length - 2] + 1;
-  const end = separatorIndexes[separatorIndexes.length - 1];
-  return lines.slice(start, end).join('\n');
 }
 
 export function checkInputBox(capture) {

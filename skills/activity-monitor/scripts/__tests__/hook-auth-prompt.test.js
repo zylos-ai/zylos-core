@@ -52,8 +52,9 @@ try { fs.appendFileSync(LOG_FILE, line); } catch {}
 
 const config = readConfig();
 const autoApprove = config.auto_approve_permission !== false;
+const runtime = config.runtime || 'claude';
 
-if (autoApprove) {
+if (autoApprove && runtime === 'claude') {
   try {
     execFileSync('node', [C4_CONTROL, 'enqueue', '--content', '[KEYSTROKE]Enter',
       '--priority', '0', '--bypass-state', '--available-in', '1', '--no-ack-suffix'
@@ -155,6 +156,15 @@ describe('hook-auth-prompt', () => {
 
     it('skips enqueue when config is false', () => {
       writeConfig({ auto_approve_permission: false });
+      runHook(sampleInput);
+      assert.equal(enqueueAttempted(), false);
+      // Event is still logged
+      const log = fs.readFileSync(logFile, 'utf8');
+      assert.match(log, /hook=auth-prompt/);
+    });
+
+    it('skips enqueue when runtime is codex', () => {
+      writeConfig({ auto_approve_permission: true, runtime: 'codex' });
       runHook(sampleInput);
       assert.equal(enqueueAttempted(), false);
       // Event is still logged

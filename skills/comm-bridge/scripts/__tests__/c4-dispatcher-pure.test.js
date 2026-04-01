@@ -167,6 +167,23 @@ describe('getInputBoxText', () => {
     assert.notEqual(text, null); // separator detected even with buddy art
   });
 
+  it('skips separator detection when runtime is codex', () => {
+    // Even with 2 separators, Codex runtime ignores them and uses fallback
+    const sep = '\u2500'.repeat(40);
+    const capture = [
+      sep,
+      'between separators',
+      sep,
+      '› codex prompt',
+      '',
+      '  tab to queue message                                        72% context left'
+    ].join('\n');
+    // Codex: skips separators, finds footer/prompt → returns 'codex prompt'
+    assert.equal(getInputBoxText(capture, { runtime: 'codex' }), 'codex prompt');
+    // Claude: uses separator path → returns 'between separators'
+    assert.equal(getInputBoxText(capture, { runtime: 'claude' }), 'between separators');
+  });
+
   it('falls back to Codex prompt/footer layout when separators are absent', () => {
     const capture = [
       '',
