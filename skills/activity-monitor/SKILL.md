@@ -193,6 +193,31 @@ Both daily tasks (upgrade, memory commit) use the same `DailySchedule` class:
 - **Dedup**: Date-based (`last_date === today`) ensures exactly-once per day, even with imprecise timing
 - **Persistence**: State files survive activity monitor restarts
 
+## Permission Auto-Approve
+
+When Claude Code shows a permission prompt (PermissionRequest event), the `hook-auth-prompt.js` hook automatically sends an Enter keystroke to approve it.
+
+**This is intentional by design.** Zylos operates in a full-delegation model where the machine's permissions are entirely granted to the AI agent. Auto-approving permission prompts is the expected behavior, not a security gap.
+
+### How It Works
+
+1. Claude Code fires a PermissionRequest hook when a tool call requires user approval
+2. `hook-auth-prompt.js` logs the event to `hook-timing.log`
+3. If `auto_approve_permission` is true (default), it enqueues a `[KEYSTROKE]Enter` control at priority 0 with bypass-state and 1-second delay
+4. The C4 dispatcher delivers the Enter keystroke to the tmux session, auto-confirming the prompt
+
+### Configuration
+
+```bash
+# Disable auto-approve (require manual confirmation)
+zylos config set auto_approve_permission false
+
+# Re-enable (default)
+zylos config set auto_approve_permission true
+```
+
+Config key: `auto_approve_permission` in `~/.zylos/config.json` (default: `true`).
+
 ## Log File
 
 Activity log: `~/zylos/activity-monitor/activity.log`

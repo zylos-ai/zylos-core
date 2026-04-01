@@ -373,6 +373,14 @@ export function isBypassState(item) {
   return item.type === 'control' && item.bypass_state === 1;
 }
 
+export function isKeystrokeControl(item) {
+  return item.type === 'control' && (item.content || '').startsWith('[KEYSTROKE]');
+}
+
+export function parseKeystrokeKey(content) {
+  return (content || '').slice('[KEYSTROKE]'.length).trim();
+}
+
 function releaseItem(item, reason = null) {
   if (item.type === 'control') {
     requeueControl(item.id, reason);
@@ -554,8 +562,8 @@ async function processNextMessage() {
   // Keystroke delivery: content prefixed with [KEYSTROKE] sends raw key to tmux
   // without buffer paste or "Meanwhile" prefix. Used for auto-approve permission prompts.
   const rawContent = item.content || '';
-  if (item.type === 'control' && rawContent.startsWith('[KEYSTROKE]')) {
-    const key = rawContent.slice('[KEYSTROKE]'.length).trim();
+  if (isKeystrokeControl(item)) {
+    const key = parseKeystrokeKey(rawContent);
     log(`Delivering keystroke key=${key} (control id=${item.id} priority=${item.priority})`);
     try {
       execFileSync('tmux', ['send-keys', '-t', TMUX_SESSION, key], { stdio: 'pipe', timeout: 5000 });

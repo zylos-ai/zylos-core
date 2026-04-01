@@ -28,6 +28,8 @@ const {
   checkInputBox,
   isUsageOverlayCapture,
   isBypassState,
+  isKeystrokeControl,
+  parseKeystrokeKey,
   getHeartbeatPhase,
   shouldAutoAckHeartbeat,
   readJsonFileWithRetry
@@ -389,5 +391,60 @@ describe('readJsonFileWithRetry', () => {
     const file = path.join(tmpDir, 'broken.json');
     fs.writeFileSync(file, '{"health":');
     assert.throws(() => readJsonFileWithRetry(file, 2), /Unexpected end of JSON input|JSON/);
+  });
+});
+
+// ── isKeystrokeControl ──────────────────────────────────────────────
+
+describe('isKeystrokeControl', () => {
+  it('returns true for control items with [KEYSTROKE] prefix', () => {
+    assert.equal(isKeystrokeControl({ type: 'control', content: '[KEYSTROKE]Enter' }), true);
+  });
+
+  it('returns true for keystroke with other keys', () => {
+    assert.equal(isKeystrokeControl({ type: 'control', content: '[KEYSTROKE]Tab' }), true);
+  });
+
+  it('returns false for conversation items with [KEYSTROKE] prefix', () => {
+    assert.equal(isKeystrokeControl({ type: 'conversation', content: '[KEYSTROKE]Enter' }), false);
+  });
+
+  it('returns false for control items without [KEYSTROKE] prefix', () => {
+    assert.equal(isKeystrokeControl({ type: 'control', content: 'Heartbeat check' }), false);
+  });
+
+  it('returns false for empty content', () => {
+    assert.equal(isKeystrokeControl({ type: 'control', content: '' }), false);
+  });
+
+  it('returns false for null/undefined content', () => {
+    assert.equal(isKeystrokeControl({ type: 'control' }), false);
+    assert.equal(isKeystrokeControl({ type: 'control', content: null }), false);
+  });
+});
+
+// ── parseKeystrokeKey ───────────────────────────────────────────────
+
+describe('parseKeystrokeKey', () => {
+  it('extracts Enter key from [KEYSTROKE]Enter', () => {
+    assert.equal(parseKeystrokeKey('[KEYSTROKE]Enter'), 'Enter');
+  });
+
+  it('trims whitespace from key name', () => {
+    assert.equal(parseKeystrokeKey('[KEYSTROKE]  Enter  '), 'Enter');
+  });
+
+  it('extracts other key names', () => {
+    assert.equal(parseKeystrokeKey('[KEYSTROKE]Tab'), 'Tab');
+    assert.equal(parseKeystrokeKey('[KEYSTROKE]Escape'), 'Escape');
+  });
+
+  it('returns empty string for bare prefix', () => {
+    assert.equal(parseKeystrokeKey('[KEYSTROKE]'), '');
+  });
+
+  it('handles null/undefined content', () => {
+    assert.equal(parseKeystrokeKey(null), '');
+    assert.equal(parseKeystrokeKey(undefined), '');
   });
 });

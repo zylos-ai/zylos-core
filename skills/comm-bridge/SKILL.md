@@ -55,6 +55,19 @@ The activity monitor writes `~/zylos/activity-monitor/agent-status.json` which i
 
 When health is not `ok`, `c4-receive.js` rejects incoming messages and records the channel/endpoint in `~/zylos/activity-monitor/pending-channels.jsonl`. Once health returns to `ok`, the activity monitor sends recovery notifications to all pending channels.
 
+## Keystroke Delivery
+
+The dispatcher supports `[KEYSTROKE]` control messages for sending raw keystrokes to the tmux session. This is an **ops-level capability** — no source gating is applied.
+
+When a control message content starts with `[KEYSTROKE]`, the dispatcher:
+- Extracts the key name (e.g., `Enter`, `Tab`, `Escape`)
+- Sends it directly via `tmux send-keys` (no buffer paste, no "Meanwhile" prefix, no verification)
+- Auto-acks the control immediately after delivery
+
+Example: the permission auto-approve hook enqueues `[KEYSTROKE]Enter` at priority 0 with bypass-state to auto-confirm Claude Code's permission prompts.
+
+Any process with access to `c4-control.js` can enqueue keystroke controls. This mirrors the existing reality that any process can call `tmux send-keys` directly — the C4 queue adds priority ordering and delivery guarantees, not access control.
+
 ## Service Management
 
 ```bash
