@@ -202,7 +202,7 @@ export function getInputBoxText(capture) {
   const separatorIndexes = [];
 
   for (let i = 0; i < lines.length; i++) {
-    if (/^\u2500+$/.test(lines[i]) && lines[i].length > 10) {
+    if (/^\u2500{10,}/.test(lines[i])) {
       separatorIndexes.push(i);
     }
   }

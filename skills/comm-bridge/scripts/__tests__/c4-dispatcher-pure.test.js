@@ -57,6 +57,12 @@ function makeCapture(content) {
   return `${sep}\n${content}\n${sep}`;
 }
 
+/** Build a capture with buddy art appended to separator lines. */
+function makeBuddyCapture(content) {
+  const sep = '\u2500'.repeat(40);
+  return `${sep}  /^\\  /^\\\n${content}  <  \u25C9  \u25C9  >\n${sep}   \`-vvvv-\u00B4`;
+}
+
 // ── sanitizeMessage ─────────────────────────────────────────────────
 
 describe('sanitizeMessage', () => {
@@ -147,6 +153,18 @@ describe('getInputBoxText', () => {
   it('handles multi-line content in the input box', () => {
     const capture = makeCapture('line1\nline2\nline3');
     assert.equal(getInputBoxText(capture), 'line1\nline2\nline3');
+  });
+
+  it('detects separators with buddy art appended (/buddy pet)', () => {
+    const capture = makeBuddyCapture('❯ hello');
+    assert.equal(getInputBoxText(capture), '❯ hello  <  \u25C9  \u25C9  >');
+  });
+
+  it('detects empty input box with buddy art', () => {
+    const sep = '\u2500'.repeat(40);
+    const capture = `${sep}  /^\\  /^\\\n❯   <  \u25C9  \u25C9  >\n${sep}   \`-vvvv-\u00B4`;
+    const text = getInputBoxText(capture);
+    assert.notEqual(text, null); // separator detected even with buddy art
   });
 
   it('falls back to Codex prompt/footer layout when separators are absent', () => {
