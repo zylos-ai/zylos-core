@@ -135,6 +135,7 @@ import { ProcSampler } from './proc-sampler.js';
 import { runUsageProbe } from './usage-probe-runner.js';
 import { runCodexStatusProbe } from './usage-codex-probe-runner.js';
 import { readCodexUsageFromActiveRollout } from './usage-codex-rollout-reader.js';
+import { readUsageFromMonitorFile } from './usage-monitor-file-reader.js';
 import { parseUsageFromPane as parseUsageFromPaneCore } from './usage-probe-parser.js';
 import { acquireUsageProbeLock, releaseUsageProbeLock } from './usage-probe-lock.js';
 import { shouldStartUsageCheck } from './usage-check-engine.js';
@@ -280,13 +281,14 @@ const USAGE_CRITICAL_THRESHOLD = readConfigInt('usage_critical_threshold', 95); 
 const USAGE_NOTIFY_COOLDOWN = readConfigInt('usage_notify_cooldown', 14400);  // seconds between same-tier notifications (4 hours)
 const USAGE_ACTIVE_HOURS_START = readConfigInt('usage_active_hours_start', 8); // check only during 8:00–23:00
 const USAGE_ACTIVE_HOURS_END = readConfigInt('usage_active_hours_end', 23);
-const USAGE_PROBE_MODE = readConfigString('usage_probe_mode', 'auto').toLowerCase(); // auto | sidecar | legacy
+const USAGE_PROBE_MODE = readConfigString('usage_probe_mode', 'auto').toLowerCase(); // auto | sidecar | legacy | files
 const USAGE_PROBE_TIMEOUT_SECONDS = readConfigInt('usage_probe_timeout_seconds', 20);
 const USAGE_PROBE_LOCK_TTL_SECONDS = readConfigInt('usage_probe_lock_ttl_seconds', 120);
 const USAGE_PROBE_FAILURE_BACKOFF_SECONDS = readConfigInt('usage_probe_failure_backoff_seconds', 600);
 const USAGE_PROBE_UNSUPPORTED_PLAN_BACKOFF_SECONDS = readConfigInt('usage_probe_unsupported_plan_backoff_seconds', 3600);
 const USAGE_PROBE_CIRCUIT_BREAKER_THRESHOLD = readConfigInt('usage_probe_circuit_breaker_threshold', 3);
 const USAGE_PROBE_CIRCUIT_BREAKER_SECONDS = readConfigInt('usage_probe_circuit_breaker_seconds', 1800);
+const USAGE_MONITOR_FILE_MAX_AGE_SECONDS = readConfigInt('usage_monitor_file_max_age_seconds', 600);
 
 // Daily tasks config
 const DAILY_UPGRADE_HOUR = 5;        // 5:00 AM local time
@@ -1038,10 +1040,86 @@ function parseUsageFromPane(paneContent) {
 }
 
 function getUsageProbeMode() {
-  if (USAGE_PROBE_MODE === 'legacy' || USAGE_PROBE_MODE === 'sidecar') {
+  if (USAGE_PROBE_MODE === 'legacy' || USAGE_PROBE_MODE === 'sidecar' || USAGE_PROBE_MODE === 'files') {
     return USAGE_PROBE_MODE;
   }
   return 'auto';
+}
+
+function recordUsageSnapshot({ usage, currentTime, prevState, statusShape, probeReason, lastCheck, lastCheckEpoch, probeAt }) {
+  const now = new Date().toISOString();
+  const tierMetric = usage.weeklyAll ?? usage.session ?? 0;
+  const tier = getUsageTier(tierMetric);
+
+  const usageData = {
+    lastCheck: lastCheck ?? now,
+    lastCheckEpoch: lastCheckEpoch ?? currentTime,
+    session: { percent: usage.session, resets: usage.sessionResets },
+    weeklyAll: { percent: usage.weeklyAll, resets: usage.weeklyAllResets },
+    weeklySonnet: { percent: usage.weeklySonnet, resets: usage.weeklySonnetResets },
+    fiveHour: { percent: usage.fiveHour, resets: usage.fiveHourResets },
+    tier,
+    statusShape: statusShape ?? null,
+    probeReason: probeReason ?? null,
+    probeDurationMs: 0,
+    probeAt: probeAt ?? lastCheck ?? now,
+    lastNotifiedTier: prevState?.lastNotifiedTier || null,
+    lastNotifiedAt: prevState?.lastNotifiedAt || null
+  };
+
+  if (tier !== 'ok') {
+    const prevTier = prevState?.lastNotifiedTier;
+    const prevNotifiedAt = prevState?.lastNotifiedAt ? Math.floor(new Date(prevState.lastNotifiedAt).getTime() / 1000) : 0;
+    const tierEscalated = prevTier !== tier && tierRank(tier) > tierRank(prevTier);
+    const cooldownExpired = (currentTime - prevNotifiedAt) >= USAGE_NOTIFY_COOLDOWN;
+
+    if (tierEscalated || cooldownExpired) {
+      const message = formatUsageNotification(usage, tier);
+      sendUsageNotification(message);
+      usageData.lastNotifiedTier = tier;
+      usageData.lastNotifiedAt = now;
+    }
+  }
+
+  writeUsageState(usageData);
+  lastUsageCheckAt = currentTime;
+  return usageData;
+}
+
+function maybeUseMonitorFileUsage(runtimeId, currentTime, logPrefix) {
+  const snapshot = readUsageFromMonitorFile({
+    runtimeId,
+    monitorDir: MONITOR_DIR,
+    nowEpoch: currentTime,
+    maxAgeSeconds: USAGE_MONITOR_FILE_MAX_AGE_SECONDS,
+    zylosDir: ZYLOS_DIR
+  });
+
+  if (!snapshot) {
+    lastUsageCheckAt = currentTime;
+    log(`${logPrefix}: monitor-file data unavailable or stale`);
+    return true;
+  }
+
+  const usage = snapshot.usage;
+  const prevState = loadUsageState();
+  recordUsageSnapshot({
+    usage,
+    currentTime,
+    prevState,
+    statusShape: snapshot.statusShape,
+    probeReason: snapshot.probeReason,
+    lastCheck: snapshot.lastCheck,
+    lastCheckEpoch: snapshot.lastCheckEpoch,
+    probeAt: snapshot.probeAt
+  });
+
+  log(
+    `${logPrefix}: session=${usage.session ?? 'null'}% ` +
+    `5h=${usage.fiveHour ?? 'null'}% weekly=${usage.weeklyAll ?? 'null'}% ` +
+    `shape=${snapshot.statusShape}`
+  );
+  return true;
 }
 
 function tmuxSessionExists(sessionName) {
@@ -1094,9 +1172,9 @@ function getUsageTier(weeklyPercent) {
 }
 
 function formatUsageNotification(usage, tier) {
-  const weekly = usage.weeklyAll ?? 0;
+  const weekly = usage.weeklyAll;
   const session = usage.session ?? 0;
-  const resets = usage.weeklyAllResets || 'unknown';
+  const resets = usage.weeklyAllResets || usage.sessionResets || 'unknown';
 
   const tierLabels = {
     warning: '⚠️ Usage Warning',
@@ -1106,10 +1184,15 @@ function formatUsageNotification(usage, tier) {
 
   const lines = [
     tierLabels[tier] || 'Usage Alert',
-    '',
-    `Weekly (all models): ${weekly}% used`,
-    `Session: ${session}% used`
+    ''
   ];
+
+  if (weekly !== null && weekly !== undefined) {
+    lines.push(`Weekly (all models): ${weekly}% used`);
+    lines.push(`Session: ${session}% used`);
+  } else {
+    lines.push(`Context/session: ${session}% used`);
+  }
 
   if (usage.weeklySonnet !== undefined && usage.weeklySonnet !== null) {
     lines.push(`Weekly (Sonnet): ${usage.weeklySonnet}% used`);
@@ -1151,6 +1234,7 @@ function sendUsageNotification(message) {
  */
 function maybeCheckUsage(claudeState, idleSeconds, currentTime, apiActivity) {
   if (adapter.runtimeId === 'codex') {
+    const probeMode = getUsageProbeMode();
     const shouldStart = shouldStartUsageCheck({
       runtimeId: adapter.runtimeId,
       allowedRuntimeIds: ['codex'],
@@ -1171,6 +1255,11 @@ function maybeCheckUsage(claudeState, idleSeconds, currentTime, apiActivity) {
     });
 
     if (!shouldStart) return;
+
+    if (probeMode === 'files') {
+      maybeUseMonitorFileUsage('codex', currentTime, 'Usage monitor (codex)');
+      return;
+    }
 
     const rolloutStatus = readCodexUsageFromActiveRollout();
     if (rolloutStatus) {
@@ -1371,6 +1460,11 @@ function maybeCheckUsage(claudeState, idleSeconds, currentTime, apiActivity) {
     });
 
     if (!shouldStart) return;
+
+    if (probeMode === 'files') {
+      maybeUseMonitorFileUsage('claude', currentTime, 'Usage monitor');
+      return;
+    }
 
     const probeSessionName = `claude-usage-probe-${process.pid}-${Date.now()}`;
     const lockResult = acquireUsageProbeLock({
