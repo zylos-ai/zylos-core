@@ -21,7 +21,7 @@ This is a **PM2 service** (not directly invoked by Claude). It runs continuously
 5. **Heartbeat Liveness Detection**: Periodically sends heartbeat probes via the C4 control queue to verify the agent is responsive, triggering recovery when probes fail
 6. **Health Check**: Periodically enqueues system health checks (PM2, disk, memory) via the C4 control queue
 7. **Daily Upgrade**: Enqueues a Claude Code upgrade via the C4 control queue at 5:00 AM local time daily (disabled by default; enable with `zylos config set daily_upgrade_enabled true`)
-8. **Context Monitoring**: Receives context usage data after every turn; triggers early memory sync at 64% and new-session handoff at 80%
+8. **Context Monitoring**: Receives context usage data after every turn; triggers early memory sync at 60% and new-session handoff at 75%
 
 ## Status File Format
 
@@ -167,8 +167,8 @@ Event-driven context monitoring via Claude Code's statusLine feature, replacing 
 - **Mechanism**: `context-monitor.js` runs as a statusLine command — Claude Code pipes context data to it via stdin after every turn (zero turn cost)
 - **Status file**: Writes `~/zylos/activity-monitor/statusline.json` with full context data (used_percentage, remaining_percentage, cost, session_id)
 - **Two thresholds**:
-  - **Early memory sync** at `64%` (80% of 80%): Enqueues a prompt for Claude to run memory sync as a background task, so it completes well before the session switch. Only triggers when unsummarized conversation count exceeds the checkpoint threshold (30).
-  - **New-session handoff** at `80%`: Enqueues the new-session trigger. Priority 1, 5-minute cooldown.
+  - **Early memory sync** at `60%` (80% of 75%): Enqueues a prompt for Claude to run memory sync as a background task, so it completes well before the session switch. Only triggers when unsummarized conversation count exceeds the checkpoint threshold (30).
+  - **New-session handoff** at `75%`: Enqueues the new-session trigger. Priority 1, 5-minute cooldown.
 - **Delivery**: Enqueues via C4 control queue with bypass_state — ensures the trigger reaches Claude even during long tasks
 - **Two-stage design**: The trigger message instructs Claude to start the new-session handoff flow; the actual `/clear` is gated by block-queue-until-idle in the new-session skill's final step
 - **Log**: `~/zylos/activity-monitor/context-monitor.log`

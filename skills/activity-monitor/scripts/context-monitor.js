@@ -29,11 +29,11 @@ const C4_CONTROL = path.join(ZYLOS_DIR, '.claude/skills/comm-bridge/scripts/c4-c
 const C4_DB = path.join(ZYLOS_DIR, '.claude/skills/comm-bridge/scripts/c4-db.js');
 
 // Thresholds
-const RESTART_THRESHOLD = 80;   // Trigger new-session at this percentage
+const RESTART_THRESHOLD = 75;   // Trigger new-session at this percentage
 const COOLDOWN_SECONDS = 300;   // Re-trigger after 5 minutes if still above threshold
 
 // Early memory sync: inject at 80% of session-switch threshold so memory sync
-// completes in the background before new-session fires.  (e.g. 80% × 0.8 = 64%)
+// completes in the background before new-session fires.  (e.g. 75% × 0.8 = 60%)
 const MEMORY_SYNC_RATIO = 0.8;
 const MEMORY_SYNC_THRESHOLD = Math.round(RESTART_THRESHOLD * MEMORY_SYNC_RATIO);
 const CHECKPOINT_THRESHOLD = 30;  // must match c4-config.js CHECKPOINT_THRESHOLD
