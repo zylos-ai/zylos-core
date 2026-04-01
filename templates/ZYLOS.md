@@ -168,11 +168,16 @@ Reply using the exact path specified in `reply via:`.
 **Always use stdin/heredoc mode** — never pass the message as a CLI argument. CLI args corrupt multi-line messages (newlines become literal `\n`). Use:
 
 ```bash
-node ~/zylos/.claude/skills/comm-bridge/scripts/c4-send.js "channel" "endpoint" <<'EOF'
+cat <<'EOF' | node ~/zylos/.claude/skills/comm-bridge/scripts/c4-send.js "channel" "endpoint"
 Your message here.
 Multi-line is fine.
 EOF
 ```
+
+Important:
+- Treat the heredoc wrapper as fixed shell syntax. Only substitute the channel, endpoint, and message body.
+- The closing token (`EOF` above) is not part of the message. Do not repeat it in the message body.
+- If the body itself needs a standalone `EOF` line, switch the wrapper token to another label such as `C4MSG`.
 
 ### Platform Identity
 
