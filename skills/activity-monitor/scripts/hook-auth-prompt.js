@@ -1,12 +1,13 @@
 #!/usr/bin/env node
 
 /**
- * Auth Prompt Hook — logs PreToolUse events to observe authorization timing.
+ * Auth Prompt Hook — logs PermissionRequest events to observe when
+ * Claude Code's authorization prompt is triggered.
  *
- * Registered as a PreToolUse hook. Claude Code fires this before each tool
- * execution, passing tool_name and tool_input via stdin JSON. The script
- * logs the event and exits without output, so Claude Code proceeds with
- * its normal permission check flow.
+ * Registered as a PermissionRequest hook. Claude Code fires this only
+ * when a tool call requires user permission (not for auto-allowed tools).
+ * The script logs the event and exits without output, so Claude Code
+ * proceeds with its normal permission flow.
  *
  * Log file: ~/zylos/activity-monitor/auth-prompt.log
  */
@@ -32,7 +33,7 @@ async function main() {
 
   const entry = {
     ts: new Date().toISOString(),
-    event: hookData.hook_event_name || 'PreToolUse',
+    event: hookData.hook_event_name || 'PermissionRequest',
     tool: hookData.tool_name || '(unknown)',
     input_keys: hookData.tool_input ? Object.keys(hookData.tool_input) : [],
     session_id: hookData.session_id || null,

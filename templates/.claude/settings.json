@@ -83,15 +83,21 @@
             "command": "node ~/zylos/.claude/skills/activity-monitor/scripts/hook-activity.js",
             "async": true,
             "timeout": 5
-          },
+          }
+        ],
+        "matcher": ""
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "hooks": [
           {
             "type": "command",
             "command": "node ~/zylos/.claude/skills/activity-monitor/scripts/hook-auth-prompt.js",
             "async": true,
             "timeout": 5000
           }
-        ],
-        "matcher": ""
+        ]
       }
     ],
     "PostToolUse": [
