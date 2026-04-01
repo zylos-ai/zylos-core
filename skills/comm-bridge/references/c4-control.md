@@ -50,7 +50,7 @@ c4-control.js get --id <control_id>
 status=pending
 ```
 
-Possible status values: `pending`, `running`, `done`, `failed`, `timeout`.
+Possible status values: `pending`, `running`, `done`, `failed`, `timeout`, `superseded`.
 
 ### ack
 
@@ -107,6 +107,7 @@ For slash-style controls that must stay as a clean command (for example `/clear`
 pending ──► running ──► done
                    └──► failed
 pending ──► timeout  (ack deadline exceeded)
+pending ──► superseded  (replaced by a newer equivalent pending control)
 ```
 
 - `pending`: Queued, waiting for delivery
@@ -114,6 +115,7 @@ pending ──► timeout  (ack deadline exceeded)
 - `done`: Acknowledged successfully
 - `failed`: Delivery or processing failed
 - `timeout`: Ack deadline exceeded without acknowledgement
+- `superseded`: Older equivalent pending control replaced by a newer one; retained for audit only
 
 ## Examples
 

@@ -44,6 +44,7 @@ describe('insertControl', () => {
   it('inserts a basic control record with defaults', () => {
     const rec = mod.insertControl('do something');
     assert.ok(typeof rec.id === 'number' && rec.id > 0);
+    assert.equal(rec.raw_content, 'do something');
     assert.ok(rec.content.startsWith('do something'));
     assert.ok(rec.content.includes('---- ack via:'));
     assert.equal(rec.priority, 3);
@@ -68,6 +69,7 @@ describe('insertControl', () => {
 
   it('supports appendAckSuffix=false for clean slash controls', () => {
     const rec = mod.insertControl('/clear', { appendAckSuffix: false });
+    assert.equal(rec.raw_content, '/clear');
     assert.equal(rec.content, '/clear');
     const row = mod.getControlById(rec.id);
     assert.equal(row.content, '/clear');
@@ -92,6 +94,70 @@ describe('insertControl', () => {
     const a = mod.insertControl('a');
     const b = mod.insertControl('b');
     assert.equal(b.id, a.id + 1);
+  });
+
+  it('supersedes older equivalent pending controls', () => {
+    const first = mod.insertControl('repeat me');
+    const second = mod.insertControl('repeat me');
+
+    const oldRow = mod.getControlById(first.id);
+    const newRow = mod.getControlById(second.id);
+
+    assert.equal(first.superseded_count, 0);
+    assert.equal(second.superseded_count, 1);
+    assert.equal(oldRow.status, 'superseded');
+    assert.equal(newRow.status, 'pending');
+  });
+
+  it('supersedes older pending controls even when other delivery options differ', () => {
+    const base = mod.insertControl('same content', { priority: 2 });
+    const replacement = mod.insertControl('same content', { priority: 3, requireIdle: true, bypassState: true });
+
+    assert.equal(replacement.superseded_count, 1);
+    assert.equal(mod.getControlById(base.id).status, 'superseded');
+    assert.equal(mod.getControlById(replacement.id).status, 'pending');
+  });
+
+  it('does not supersede running or final controls', () => {
+    const running = mod.insertControl('same content');
+    mod.claimControl(running.id);
+
+    const done = mod.insertControl('same content');
+    mod.ackControl(done.id);
+
+    const replacement = mod.insertControl('same content');
+
+    assert.equal(mod.getControlById(running.id).status, 'running');
+    assert.equal(mod.getControlById(done.id).status, 'done');
+    assert.equal(replacement.superseded_count, 0);
+    assert.equal(mod.getControlById(replacement.id).status, 'pending');
+  });
+
+  it('does not supersede failed or timeout controls', () => {
+    const failed = mod.insertControl('same content');
+    mod.claimControl(failed.id);
+    mod.retryOrFailControl(failed.id, 'boom', 1);
+
+    const timedOut = mod.insertControl('same content', { ackDeadlineAt: Math.floor(Date.now() / 1000) - 5 });
+    mod.expireTimedOutControls();
+
+    const replacement = mod.insertControl('same content');
+
+    assert.equal(mod.getControlById(failed.id).status, 'failed');
+    assert.equal(mod.getControlById(timedOut.id).status, 'timeout');
+    assert.equal(replacement.superseded_count, 0);
+    assert.equal(mod.getControlById(replacement.id).status, 'pending');
+  });
+
+  it('strips only a trailing ack suffix when backfilling raw_content', () => {
+    assert.equal(
+      mod.stripTrailingAckSuffix('literal ---- ack via: inside body ---- ack via: node /tmp/c4-control.js ack --id 7'),
+      'literal ---- ack via: inside body'
+    );
+    assert.equal(
+      mod.stripTrailingAckSuffix('literal ---- ack via: inside body'),
+      'literal ---- ack via: inside body'
+    );
   });
 });
 
@@ -133,6 +199,13 @@ describe('getNextPendingControl', () => {
     const second = mod.insertControl('second');
     const next = mod.getNextPendingControl();
     assert.equal(next.id, first.id);
+  });
+
+  it('skips superseded records', () => {
+    mod.insertControl('dupe');
+    const latest = mod.insertControl('dupe');
+    const next = mod.getNextPendingControl();
+    assert.equal(next.id, latest.id);
   });
 
   it('respects available_at filter', () => {
@@ -259,6 +332,17 @@ describe('ackControl', () => {
     const result = mod.ackControl(999999);
     assert.equal(result.found, false);
   });
+
+  it('treats superseded as an already-final state', () => {
+    const first = mod.insertControl('dupe');
+    const second = mod.insertControl('dupe');
+    const result = mod.ackControl(first.id);
+
+    assert.equal(second.status, 'pending');
+    assert.equal(result.found, true);
+    assert.equal(result.alreadyFinal, true);
+    assert.equal(result.status, 'superseded');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -330,6 +414,16 @@ describe('expireTimedOutControls', () => {
     assert.equal(count, 0);
   });
 
+  it('ignores superseded records', () => {
+    const now = Math.floor(Date.now() / 1000);
+    const pastDeadline = now - 100;
+    mod.insertControl('dupe', { ackDeadlineAt: pastDeadline });
+    mod.insertControl('dupe', { ackDeadlineAt: pastDeadline });
+
+    const count = mod.expireTimedOutControls(now);
+    assert.equal(count, 1);
+  });
+
   it('ignores records with no deadline', () => {
     const now = Math.floor(Date.now() / 1000);
     mod.insertControl('no deadline');
@@ -350,13 +444,18 @@ describe('cleanupControlQueue', () => {
 
     // Insert an old done record via raw SQL so we control updated_at
     db.prepare(`
-      INSERT INTO control_queue (content, priority, require_idle, bypass_state, status, retry_count, created_at, updated_at)
-      VALUES ('old done', 0, 0, 0, 'done', 0, ?, ?)
+      INSERT INTO control_queue (raw_content, content, priority, require_idle, bypass_state, status, retry_count, created_at, updated_at)
+      VALUES ('old done', 'old done', 0, 0, 0, 'done', 0, ?, ?)
+    `).run(old, old);
+
+    db.prepare(`
+      INSERT INTO control_queue (raw_content, content, priority, require_idle, bypass_state, status, retry_count, created_at, updated_at)
+      VALUES ('old superseded', 'old superseded', 0, 0, 0, 'superseded', 0, ?, ?)
     `).run(old, old);
 
     const cutoff = now - 86400 * 7; // 7 days
     const deleted = mod.cleanupControlQueue(cutoff);
-    assert.equal(deleted, 1);
+    assert.equal(deleted, 2);
   });
 
   it('preserves recent terminal records', () => {
@@ -375,8 +474,8 @@ describe('cleanupControlQueue', () => {
 
     // Old pending record
     db.prepare(`
-      INSERT INTO control_queue (content, priority, require_idle, bypass_state, status, retry_count, created_at, updated_at)
-      VALUES ('old pending', 0, 0, 0, 'pending', 0, ?, ?)
+      INSERT INTO control_queue (raw_content, content, priority, require_idle, bypass_state, status, retry_count, created_at, updated_at)
+      VALUES ('old pending', 'old pending', 0, 0, 0, 'pending', 0, ?, ?)
     `).run(old, old);
 
     const cutoff = now - 86400 * 7;

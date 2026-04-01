@@ -101,6 +101,9 @@ function handleEnqueue(args) {
   });
 
   console.log(`OK: enqueued control ${record.id}`);
+  if (record.superseded_count > 0) {
+    console.log(`OK: superseded ${record.superseded_count} equivalent pending control(s)`);
+  }
 }
 
 function handleGet(args) {

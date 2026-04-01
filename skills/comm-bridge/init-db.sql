@@ -34,6 +34,7 @@ CREATE INDEX IF NOT EXISTS idx_conversations_priority ON conversations(priority)
 -- Control queue table (heartbeat/system control plane)
 CREATE TABLE IF NOT EXISTS control_queue (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    raw_content TEXT NOT NULL,
     content TEXT NOT NULL,
     priority INTEGER DEFAULT 3,
     require_idle INTEGER DEFAULT 0, -- legacy/internal name for block_queue_until_idle behavior

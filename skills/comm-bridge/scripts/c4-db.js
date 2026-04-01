@@ -36,6 +36,8 @@ export function getDb() {
     if (isNew) {
       initSchema();
     }
+
+    ensureControlQueueSchema(db);
   }
   return db;
 }
@@ -47,6 +49,40 @@ function initSchema() {
   const initSql = fs.readFileSync(INIT_SQL_PATH, 'utf8');
   db.exec(initSql);
   console.log('[C4-DB] Database initialized');
+}
+
+export function stripTrailingAckSuffix(content) {
+  if (typeof content !== 'string') return content;
+  return content.replace(/\s---- ack via: node .+ ack --id \d+$/, '');
+}
+
+function ensureControlQueueSchema(database) {
+  const columns = database.prepare('PRAGMA table_info(control_queue)').all();
+  const columnNames = new Set(columns.map((column) => column.name));
+
+  if (!columnNames.has('raw_content')) {
+    database.exec('ALTER TABLE control_queue ADD COLUMN raw_content TEXT');
+  }
+
+  const rows = database.prepare(`
+    SELECT id, content
+    FROM control_queue
+    WHERE raw_content IS NULL
+  `).all();
+
+  const updateRawContent = database.prepare(`
+    UPDATE control_queue
+    SET raw_content = ?
+    WHERE id = ?
+  `);
+
+  const tx = database.transaction((pendingRows) => {
+    for (const row of pendingRows) {
+      updateRawContent.run(stripTrailingAckSuffix(row.content), row.id);
+    }
+  });
+
+  tx(rows);
 }
 
 function nowSeconds() {
@@ -213,13 +249,14 @@ export function insertControl(content, options = {}) {
     const current = nowSeconds();
     const insertStmt = database.prepare(`
       INSERT INTO control_queue (
-        content, priority, require_idle, bypass_state, ack_deadline_at,
+        raw_content, content, priority, require_idle, bypass_state, ack_deadline_at,
         status, retry_count, available_at, last_error, created_at, updated_at
       )
-      VALUES (?, ?, ?, ?, ?, 'pending', 0, ?, NULL, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, 'pending', 0, ?, NULL, ?, ?)
     `);
 
     const result = insertStmt.run(
+      content,
       content,
       priority,
       requireIdle ? 1 : 0,
@@ -246,18 +283,28 @@ export function insertControl(content, options = {}) {
       WHERE id = ?
     `).run(finalContent, current, id);
 
-    return {
+    const supersedeResult = database.prepare(`
+      UPDATE control_queue
+      SET status = 'superseded', updated_at = ?, last_error = NULL
+      WHERE id != ?
+        AND status = 'pending'
+        AND raw_content = ?
+    `).run(
+      current,
       id,
-      content: finalContent,
-      priority,
-      require_idle: requireIdle ? 1 : 0,
-      bypass_state: bypassState ? 1 : 0,
-      ack_deadline_at: ackDeadlineAt,
-      status: 'pending',
-      retry_count: 0,
-      available_at: availableAt,
-      created_at: current,
-      updated_at: current
+      content
+    );
+
+    const row = database.prepare(`
+      SELECT id, raw_content, content, priority, require_idle, bypass_state, ack_deadline_at,
+             status, retry_count, available_at, last_error, created_at, updated_at
+      FROM control_queue
+      WHERE id = ?
+    `).get(id);
+
+    return {
+      ...row,
+      superseded_count: supersedeResult.changes || 0
     };
   });
 
@@ -272,7 +319,7 @@ export function insertControl(content, options = {}) {
 export function getControlById(id) {
   const database = getDb();
   return database.prepare(`
-    SELECT id, content, priority, require_idle, bypass_state, ack_deadline_at,
+    SELECT id, raw_content, content, priority, require_idle, bypass_state, ack_deadline_at,
            status, retry_count, available_at, last_error, created_at, updated_at
     FROM control_queue
     WHERE id = ?
@@ -287,7 +334,7 @@ export function getControlById(id) {
 export function getNextPendingControl(current = nowSeconds()) {
   const database = getDb();
   return database.prepare(`
-    SELECT id, content, priority, require_idle, bypass_state, ack_deadline_at,
+    SELECT id, raw_content, content, priority, require_idle, bypass_state, ack_deadline_at,
            status, retry_count, available_at, last_error, created_at, updated_at
     FROM control_queue
     WHERE status = 'pending'
@@ -353,7 +400,7 @@ export function ackControl(id) {
       return { found: true, alreadyFinal: true, status: 'timeout' };
     }
 
-    if (row.status === 'done' || row.status === 'failed' || row.status === 'timeout') {
+    if (row.status === 'done' || row.status === 'failed' || row.status === 'timeout' || row.status === 'superseded') {
       return { found: true, alreadyFinal: true, status: row.status };
     }
 
@@ -439,7 +486,7 @@ export function cleanupControlQueue(cutoff) {
   const database = getDb();
   const result = database.prepare(`
     DELETE FROM control_queue
-    WHERE status IN ('done', 'failed', 'timeout')
+    WHERE status IN ('done', 'failed', 'timeout', 'superseded')
       AND updated_at < ?
   `).run(cutoff);
   return result.changes || 0;

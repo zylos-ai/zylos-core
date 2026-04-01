@@ -32,6 +32,21 @@ function parseControlId(stdout) {
   return match[1];
 }
 
+function getControlRow(tmpDir, id) {
+  const dbPath = path.join(tmpDir, 'comm-bridge', 'c4.db');
+  const result = spawnSync(
+    'sqlite3',
+    [
+      dbPath,
+      `.mode tabs`,
+      `SELECT status FROM control_queue WHERE id = ${id};`
+    ],
+    { encoding: 'utf8' }
+  );
+  assert.equal(result.status, 0, result.stderr);
+  return { status: result.stdout.trim() };
+}
+
 // -- enqueue --
 
 describe('c4-control enqueue', () => {
@@ -131,6 +146,25 @@ describe('c4-control enqueue', () => {
       // We can't verify content via CLI get (it only prints status), but we verify
       // the enqueue itself succeeded and returned a valid id.
       assert.ok(Number(id) > 0);
+    });
+  });
+
+  it('new equivalent enqueue leaves only the newest record pending', () => {
+    withTmpDir(({ env, tmpDir }) => {
+      const { stdout: firstOut, status: firstStatus } = cliRaw(['enqueue', '--content', 'repeat me'], env);
+      assert.equal(firstStatus, 0);
+      const firstId = Number(parseControlId(firstOut));
+
+      const { stdout: secondOut, status: secondStatus } = cliRaw(['enqueue', '--content', 'repeat me'], env);
+      assert.equal(secondStatus, 0);
+      const secondId = Number(parseControlId(secondOut));
+
+      const firstRow = getControlRow(tmpDir, firstId);
+      const secondRow = getControlRow(tmpDir, secondId);
+
+      assert.match(secondOut, /superseded 1 equivalent pending control\(s\)/);
+      assert.equal(firstRow.status, 'superseded');
+      assert.equal(secondRow.status, 'pending');
     });
   });
 });
