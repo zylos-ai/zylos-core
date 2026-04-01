@@ -44,7 +44,7 @@ describe('HeartbeatEngine — rate_limited recovery', () => {
     // After fix: transitions to recovering
     engine.processHeartbeat(false, 1000);
     expect(engine.health).toBe('recovering');
-    expect(killed).toBe(1);
+    expect(killed).toBe(0); // agent not running, nothing to kill
     expect(engine.cooldownUntil).toBe(0);
   });
 

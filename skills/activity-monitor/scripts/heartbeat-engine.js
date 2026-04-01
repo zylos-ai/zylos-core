@@ -289,18 +289,30 @@ export class HeartbeatEngine {
       return;
     }
 
-    // Rate-limited recovery: must be checked BEFORE the !agentRunning early
-    // return — after cooldown expires the agent is not running (tmux was killed),
-    // so the early return would skip this block and cause a deadlock.
+    // Rate-limited recovery: when cooldown expires, behavior depends on whether
+    // the agent is currently running.
+    //
+    // Agent RUNNING: don't kill — let the proactive scan (bidirectional) detect
+    //   whether rate limit has cleared. Killing a running agent is destructive
+    //   and unnecessary when scan can observe the tmux pane directly.
+    //
+    // Agent NOT RUNNING: transition to recovering so Guardian can restart.
+    //   Must be checked BEFORE the !agentRunning early return below, otherwise
+    //   the early return would skip this block and cause a deadlock.
     if (this.healthState === 'rate_limited') {
       if (currentTime < this.cooldownUntil) {
         return;
       }
-      this.deps.log('Rate limit cooldown expired, transitioning to recovering');
-      this.deps.killTmuxSession();
+      if (agentRunning) {
+        // Agent is up — proactive scan will detect rate limit status and
+        // transition to ok (or keep rate_limited). No kill needed.
+        this.cooldownUntil = 0;
+        return;
+      }
+      this.deps.log('Rate limit cooldown expired (agent not running), transitioning to recovering');
       this.cooldownUntil = 0;
       this.setHealth('recovering', 'rate_limit_cooldown_expired');
-      // Guardian will now restart Claude since health !== 'rate_limited'
+      // Guardian will now restart the agent since health !== 'rate_limited'
       return;
     }
 

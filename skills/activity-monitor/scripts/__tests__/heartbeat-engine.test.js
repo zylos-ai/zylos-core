@@ -751,14 +751,26 @@ describe('HeartbeatEngine', () => {
       assert.equal(calls.killTmuxSession, 0);
     });
 
-    it('kills tmux and transitions to recovering when cooldown expires', () => {
+    it('does not kill tmux when cooldown expires and agent is running (scan handles it)', () => {
       const { deps, calls } = createMockDeps();
       const engine = new HeartbeatEngine(deps);
 
       engine.enterRateLimited(2000, '7am');
       engine.processHeartbeat(true, 2001);
 
-      assert.equal(calls.killTmuxSession, 1);
+      assert.equal(calls.killTmuxSession, 0);
+      assert.equal(engine.health, 'rate_limited'); // stays rate_limited, scan will transition
+      assert.equal(engine.cooldownUntil, 0); // cooldown cleared so scan is unblocked
+    });
+
+    it('transitions to recovering when cooldown expires and agent is NOT running', () => {
+      const { deps, calls } = createMockDeps();
+      const engine = new HeartbeatEngine(deps);
+
+      engine.enterRateLimited(2000, '7am');
+      engine.processHeartbeat(false, 2001);
+
+      assert.equal(calls.killTmuxSession, 0); // no need to kill what's not running
       assert.equal(engine.health, 'recovering');
       assert.equal(engine.cooldownUntil, 0);
     });
@@ -1107,6 +1119,38 @@ describe('HeartbeatEngine', () => {
       // Simulate time passing beyond throttle interval
       engine.lastRateLimitedRestartAt = Math.floor(Date.now() / 1000) - 301;
       assert.equal(engine.canRestart(), true);
+    });
+  });
+
+  describe('user message + rate_limited (no-kill behavior)', () => {
+    it('user message clears cooldown but does not kill tmux when agent running', () => {
+      const { deps, calls } = createMockDeps();
+      const engine = new HeartbeatEngine(deps);
+
+      engine.enterRateLimited(5000, '7am');
+      assert.equal(engine.cooldownUntil, 5000);
+
+      // User sends a message while rate_limited
+      engine.notifyUserMessage(3000);
+      assert.equal(engine.cooldownUntil, 0); // cleared
+
+      // Next processHeartbeat with agent running — should NOT kill
+      engine.processHeartbeat(true, 3001);
+      assert.equal(calls.killTmuxSession, 0);
+      assert.equal(engine.health, 'rate_limited'); // stays, scan will handle
+    });
+
+    it('user message clears cooldown and transitions to recovering when agent NOT running', () => {
+      const { deps, calls } = createMockDeps();
+      const engine = new HeartbeatEngine(deps);
+
+      engine.enterRateLimited(5000, '7am');
+      engine.notifyUserMessage(3000);
+
+      // Next processHeartbeat with agent NOT running — transitions to recovering
+      engine.processHeartbeat(false, 3001);
+      assert.equal(engine.health, 'recovering');
+      assert.equal(calls.killTmuxSession, 0); // nothing to kill
     });
   });
 });
