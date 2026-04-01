@@ -81,6 +81,10 @@ export class HeartbeatEngine {
 
     // API error detection throttle
     this._lastApiErrorScanAt = 0; // Last time tmux pane was scanned for API errors
+
+    // Persisted metadata for user-facing unhealthy messaging.
+    this.healthReason = '';
+    this.healthDetail = '';
   }
 
   get health() {
@@ -100,11 +104,21 @@ export class HeartbeatEngine {
     return this.healthState !== 'rate_limited';
   }
 
-  setHealth(nextHealth, reason = '') {
+  setHealth(nextHealth, reason = '', metadata = null) {
     if (this.healthState === nextHealth) return;
     const suffix = reason ? ` (${reason})` : '';
     this.deps.log(`Health: ${this.healthState.toUpperCase()} -> ${nextHealth.toUpperCase()}${suffix}`);
     this.healthState = nextHealth;
+    if (metadata) {
+      this.healthReason = metadata.reason ?? '';
+      this.healthDetail = metadata.detail ?? '';
+    } else if (nextHealth === 'ok') {
+      this.healthReason = '';
+      this.healthDetail = '';
+    } else {
+      this.healthReason = reason || '';
+      this.healthDetail = '';
+    }
   }
 
   /**
@@ -124,12 +138,14 @@ export class HeartbeatEngine {
    * @param {number} cooldownUntil - Epoch seconds when cooldown expires
    * @param {string} [resetTime] - Human-readable reset time for display
    */
-  enterRateLimited(cooldownUntil, resetTime = '') {
+  enterRateLimited(cooldownUntil, resetTime = '', metadata = {}) {
     if (this.healthState === 'rate_limited') {
       // Already rate-limited; update cooldown if the new one is later
       if (cooldownUntil > this.cooldownUntil) {
         this.cooldownUntil = cooldownUntil;
         this.rateLimitResetTime = resetTime || this.rateLimitResetTime;
+        this.healthReason = metadata.reason ?? this.healthReason;
+        this.healthDetail = metadata.detail ?? this.healthDetail;
         this.deps.log(`Rate limit cooldown extended to ${cooldownUntil} (${resetTime || 'unknown'})`);
       }
       return;
@@ -140,7 +156,14 @@ export class HeartbeatEngine {
     this.restartFailureCount = 0;
     this.recoveringStartedAt = 0;
     this.signalDetectedAt = 0;
-    this.setHealth('rate_limited', resetTime ? `resets at ${resetTime}` : `cooldown ${cooldownUntil - Math.floor(Date.now() / 1000)}s`);
+    this.setHealth(
+      'rate_limited',
+      resetTime ? `resets at ${resetTime}` : `cooldown ${cooldownUntil - Math.floor(Date.now() / 1000)}s`,
+      {
+        reason: metadata.reason ?? 'rate_limited',
+        detail: metadata.detail ?? ''
+      }
+    );
   }
 
   /**
@@ -372,7 +395,10 @@ export class HeartbeatEngine {
     if ((this.healthState === 'ok' || this.healthState === 'recovering') && this.deps.detectRateLimit) {
       const rateLimit = this.deps.detectRateLimit();
       if (rateLimit.detected) {
-        this.enterRateLimited(rateLimit.cooldownUntil, rateLimit.resetTime);
+        this.enterRateLimited(rateLimit.cooldownUntil, rateLimit.resetTime, {
+          reason: rateLimit.reason ?? 'rate_limited',
+          detail: rateLimit.detail ?? ''
+        });
         return;
       }
     }

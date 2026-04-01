@@ -619,7 +619,11 @@ function atomicWriteJson(filePath, value) {
 function writeStatusFile(statusObj) {
   try {
     ensureStatusDir();
-    const extra = {};
+    const extra = {
+      runtime: adapter?.runtimeId || null,
+      health_reason: engine.healthReason || null,
+      health_detail: engine.healthDetail || null
+    };
     if (engine.health === 'rate_limited') {
       extra.rate_limit_reset = engine.rateLimitResetTime || null;
       extra.cooldown_until = engine.cooldownUntil || null;
@@ -1531,6 +1535,8 @@ function init() {
     engine.cooldownUntil = initialStatus.cooldown_until;
     engine.rateLimitResetTime = initialStatus.rate_limit_reset || '';
   }
+  engine.healthReason = initialStatus.health_reason || '';
+  engine.healthDetail = initialStatus.health_detail || '';
 
   const dailyUpgradeEnabled = readConfigBool('daily_upgrade_enabled', false);
   if (!dailyUpgradeEnabled) {
