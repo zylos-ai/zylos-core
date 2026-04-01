@@ -34,6 +34,22 @@ Lark        ───┘
 | `c4-db.js` | Database module and CLI for querying conversations and checkpoints | [c4-db](references/c4-db.md) |
 | `c4-checkpoint.js` | Create/query checkpoints (sync boundaries) | [c4-checkpoint](references/c4-checkpoint.md) |
 
+## Sending Messages
+
+```bash
+# Send to Telegram DM
+cat <<'EOF' | node ~/zylos/.claude/skills/comm-bridge/scripts/c4-send.js telegram 8101553026
+Hello! Quotes, $vars, **markdown** — all safe via stdin.
+EOF
+
+# Send to Lark group thread
+cat <<'EOF' | node ~/zylos/.claude/skills/comm-bridge/scripts/c4-send.js lark "chat_xxx|type:group|root:msg_yyy"
+Report ready.
+EOF
+```
+
+Always pipe messages via stdin heredoc — never pass as CLI arguments. See [c4-send](references/c4-send.md) for full reference.
+
 ## Database
 
 SQLite at `~/zylos/comm-bridge/c4.db`:
