@@ -583,7 +583,8 @@ describe('HeartbeatEngine', () => {
   });
 
   describe('in-flight heartbeat handling', () => {
-    it('clears stale pending and skips processing when heartbeat is disabled', () => {
+    it('processes stale pending even when heartbeat is disabled', () => {
+      // heartbeatEnabled=false only disables primary polling, not in-flight handling
       const { deps, calls } = createMockDeps();
       const now = Math.floor(Date.now() / 1000);
       deps._pending = { control_id: 1, phase: 'primary', created_at: now - 700 };
@@ -592,10 +593,8 @@ describe('HeartbeatEngine', () => {
 
       engine.processHeartbeat(true, now);
 
+      assert.deepStrictEqual(calls.getHeartbeatStatus, [1]);
       assert.equal(calls.clearHeartbeatPending, 1);
-      assert.deepStrictEqual(calls.getHeartbeatStatus, []);
-      assert.equal(calls.killTmuxSession, 0);
-      assert.equal(engine.health, 'ok');
     });
 
     it('does nothing when status is pending (fresh)', () => {
@@ -661,13 +660,14 @@ describe('HeartbeatEngine', () => {
       assert.deepStrictEqual(calls.enqueueHeartbeat, ['recovery']);
     });
 
-    it('does not enqueue recovery heartbeat when disabled', () => {
+    it('enqueues recovery heartbeat even when disabled (special-purpose)', () => {
+      // heartbeatEnabled=false only disables primary polling, not recovery verification
       const { deps, calls } = createMockDeps();
       const engine = new HeartbeatEngine(deps, { initialHealth: 'recovering', heartbeatEnabled: false });
 
       engine.processHeartbeat(true, Math.floor(Date.now() / 1000));
 
-      assert.deepStrictEqual(calls.enqueueHeartbeat, []);
+      assert.deepStrictEqual(calls.enqueueHeartbeat, ['recovery']);
     });
   });
 
@@ -1039,6 +1039,74 @@ describe('HeartbeatEngine', () => {
 
       assert.equal(calls.killTmuxSession, 0);
       assert.equal(engine.health, 'ok');
+    });
+  });
+
+  describe('canRestart', () => {
+    it('returns true for ok state', () => {
+      const { deps } = createMockDeps();
+      const engine = new HeartbeatEngine(deps, { initialHealth: 'ok' });
+      assert.equal(engine.canRestart(), true);
+    });
+
+    it('returns true for recovering state', () => {
+      const { deps } = createMockDeps();
+      const engine = new HeartbeatEngine(deps, { initialHealth: 'recovering' });
+      assert.equal(engine.canRestart(), true);
+    });
+
+    it('returns true for down state', () => {
+      const { deps } = createMockDeps();
+      const engine = new HeartbeatEngine(deps, { initialHealth: 'down' });
+      assert.equal(engine.canRestart(), true);
+    });
+
+    it('allows first restart in rate_limited state', () => {
+      const { deps } = createMockDeps();
+      const engine = new HeartbeatEngine(deps, {
+        initialHealth: 'rate_limited',
+        rateLimitedRestartInterval: 300
+      });
+      assert.equal(engine.canRestart(), true);
+    });
+
+    it('canRestart stays true until recordRateLimitedRestart is called', () => {
+      const { deps } = createMockDeps();
+      const engine = new HeartbeatEngine(deps, {
+        initialHealth: 'rate_limited',
+        rateLimitedRestartInterval: 300
+      });
+      // Multiple canRestart calls without recording should all return true
+      assert.equal(engine.canRestart(), true);
+      assert.equal(engine.canRestart(), true);
+      // After recording, throttle kicks in
+      engine.recordRateLimitedRestart();
+      assert.equal(engine.canRestart(), false);
+    });
+
+    it('throttles restart after recordRateLimitedRestart within interval', () => {
+      const { deps } = createMockDeps();
+      const engine = new HeartbeatEngine(deps, {
+        initialHealth: 'rate_limited',
+        rateLimitedRestartInterval: 300
+      });
+      assert.equal(engine.canRestart(), true);
+      engine.recordRateLimitedRestart();
+      // Within 300s window should be throttled
+      assert.equal(engine.canRestart(), false);
+    });
+
+    it('allows restart after throttle interval expires', () => {
+      const { deps } = createMockDeps();
+      const engine = new HeartbeatEngine(deps, {
+        initialHealth: 'rate_limited',
+        rateLimitedRestartInterval: 300
+      });
+      assert.equal(engine.canRestart(), true);
+      engine.recordRateLimitedRestart();
+      // Simulate time passing beyond throttle interval
+      engine.lastRateLimitedRestartAt = Math.floor(Date.now() / 1000) - 301;
+      assert.equal(engine.canRestart(), true);
     });
   });
 });

@@ -124,7 +124,7 @@ export function createClaudeProbe({
      * @returns {{ detected: boolean, cooldownUntil?: number, resetTime?: string }}
      */
     detectRateLimit() {
-      const pane = _captureTmuxPane(tmuxSession);
+      const pane = _captureTmuxPane(tmuxSession, 10);
       if (!pane) return { detected: false };
 
       const detected = RATE_LIMIT_PATTERNS.some(p => p.test(pane));
@@ -190,9 +190,10 @@ export function createClaudeProbe({
 
 // ── Private helpers ──────────────────────────────────────────────────────────
 
-function _captureTmuxPane(session) {
+function _captureTmuxPane(session, lastLines = 0) {
   try {
-    return execSync(`tmux capture-pane -p -t "${session}" 2>/dev/null`, { encoding: 'utf8' });
+    const startArg = lastLines > 0 ? `-S -${lastLines} ` : '';
+    return execSync(`tmux capture-pane -p ${startArg}-t "${session}" 2>/dev/null`, { encoding: 'utf8' });
   } catch {
     return null;
   }

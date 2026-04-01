@@ -29,7 +29,7 @@
  *   const probe = createCodexProbe({ pendingFile });
  */
 
-import { execFileSync } from 'node:child_process';
+import { execFileSync, execSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -48,6 +48,7 @@ const C4_CONTROL = path.join(ZYLOS_DIR, '.claude/skills/comm-bridge/scripts/c4-c
  */
 export function createCodexProbe({
   pendingFile,
+  tmuxSession = 'codex-main',
   ackDeadline = 300,
   stuckAckDeadline = 120,
 }) {
@@ -109,13 +110,16 @@ export function createCodexProbe({
     },
 
     /**
-     * Codex CLI (OpenAI) does not have Anthropic-style per-plan usage limits.
-     * Always returns not-detected.
+     * Detect OpenAI/Codex limit failures shown in the tmux pane.
+     * This covers both temporary throttling (TPM/RPM) and harder quota/billing
+     * failures that should not be reported to users as a generic "unhealthy".
      *
-     * @returns {{ detected: false }}
+     * @returns {{ detected: boolean, cooldownUntil?: number, resetTime?: string, reason?: string, detail?: string }}
      */
     detectRateLimit() {
-      return { detected: false };
+      const pane = _captureTmuxPane(tmuxSession, 10);
+      if (!pane) return { detected: false };
+      return detectCodexLimitFromPane(pane);
     },
 
     // ── Pending state management ─────────────────────────────────────────────
@@ -143,6 +147,38 @@ export function createCodexProbe({
 
 // ── Private helpers ──────────────────────────────────────────────────────────
 
+function _captureTmuxPane(session, lastLines = 0) {
+  try {
+    const startArg = lastLines > 0 ? `-S -${lastLines} ` : '';
+    return execSync(`tmux capture-pane -p ${startArg}-t "${session}" 2>/dev/null`, { encoding: 'utf8', timeout: 3000 });
+  } catch {
+    return null;
+  }
+}
+
+export function detectCodexLimitFromPane(pane) {
+  if (!pane || typeof pane !== 'string') return { detected: false };
+
+  // Confirmed pattern from Codex CLI (OpenAI):
+  // "■ You've hit your usage limit. To get more access now, send a request to your admin or try again at Apr 2nd, 2026\n2:41 AM."
+  // Require surrounding context (admin/try again) to avoid false positives from
+  // conversation content that merely quotes/discusses the usage limit text.
+  if (/you[''\u2019]ve hit your usage limit[\s\S]*?(?:send a request to your admin|try again)/i.test(pane)) {
+    const now = Math.floor(Date.now() / 1000);
+    const resetTime = _parseCodexResetTime(pane);
+    const cooldownUntil = resetTime.epoch || (now + 3600);
+    return {
+      detected: true,
+      cooldownUntil,
+      resetTime: resetTime.display,
+      reason: 'codex_usage_limit',
+      detail: _extractRelevantLine(pane)
+    };
+  }
+
+  return { detected: false };
+}
+
 function _writePending(file, data) {
   try {
     const tmp = `${file}.tmp.${process.pid}`;
@@ -152,4 +188,34 @@ function _writePending(file, data) {
   } catch {
     return false;
   }
+}
+
+function _extractRelevantLine(pane) {
+  const lines = pane.split('\n').map(line => line.trim()).filter(Boolean);
+  for (const line of lines) {
+    if (/you['']ve hit your usage limit/i.test(line)) {
+      return line.slice(0, 300);
+    }
+  }
+  return '';
+}
+
+/**
+ * Parse reset time from Codex usage limit message.
+ * Format: "try again at Apr 2nd, 2026\n2:41 AM."
+ * The date and time may span two lines in the tmux capture.
+ */
+function _parseCodexResetTime(pane) {
+  // Match "try again at <date>\n<time>" across lines
+  const match = pane.match(/try again at\s+([A-Z][a-z]{2}\s+\d{1,2}(?:st|nd|rd|th)?,?\s*\d{4})\s*\.?\s*\n?\s*(\d{1,2}:\d{2}\s*(?:AM|PM))/i);
+  if (!match) return { display: '', epoch: 0 };
+
+  const dateStr = match[1].replace(/(\d{1,2})(?:st|nd|rd|th)/, '$1'); // "Apr 2, 2026"
+  const timeStr = match[2].trim(); // "2:41 AM"
+  const display = `${match[1]} ${timeStr}`;
+
+  const parsed = new Date(`${dateStr} ${timeStr}`);
+  const epoch = isNaN(parsed.getTime()) ? 0 : Math.floor(parsed.getTime() / 1000);
+
+  return { display, epoch };
 }

@@ -223,6 +223,7 @@ const USER_MESSAGE_RECOVERY_COOLDOWN = 60; // 1 min between user-message-trigger
 const PERIODIC_PROBE_INTERVAL = 1800; // 30 min — reduced from 3 min to cut idle token usage
 const LAUNCH_GRACE_PERIOD = 180;     // 3 min — skip periodic probes after fresh launch to allow initialization
 const API_ERROR_SCAN_INTERVAL = 15;  // seconds between proactive tmux API error scans
+const RATE_LIMIT_SCAN_INTERVAL = 15; // seconds between proactive rate limit scans (tmux text only, no AI tokens)
 
 // Health check config
 const HEALTH_CHECK_INTERVAL = 86400; // 24 hours
@@ -301,6 +302,9 @@ let lastPeriodicProbeAt = 0;
 let lastLaunchAt = 0;
 let lastApiErrorScanAt = 0;
 let apiErrorConsecutiveHits = 0;  // consecutive scans that detected an API error
+let lastRateLimitScanAt = 0;
+let rateLimitConsecutiveHits = 0;  // consecutive scans that detected rate limit text
+let rateLimitCleanHits = 0;        // consecutive scans with NO rate limit text (for reverse scan)
 let lastDeadApiPid = null;
 let authRetrySuppressedUntil = 0;
 let startAgentInProgress = false;
@@ -540,8 +544,12 @@ async function startAgent() {
       waitForMaintenance();
     }
 
+    // Skip auth check when recovering from rate limit — `claude -p ping` would hit the
+    // same rate limit and be misidentified as an auth failure (cli_probe_not_authenticated).
+    const skipAuth = engine.healthReason === 'rate_limit_cooldown_expired';
     // Live auth check before restarting — avoids infinite restart loop on revoked/expired tokens.
-    const authResult = adapter.checkAuth ? await adapter.checkAuth() : { ok: true };
+    const authResult = skipAuth ? { ok: true, reason: 'skipped_rate_limit_recovery' }
+      : adapter.checkAuth ? await adapter.checkAuth() : { ok: true };
     if (!authResult.ok) {
       log(`Guardian: auth failed (${authResult.reason ?? 'unknown'}), skipping restart. Next retry in 3 min.${authResult.output ? ' Output: ' + authResult.output : ''}`);
       authRetrySuppressedUntil = Date.now() + 180_000;
@@ -619,7 +627,11 @@ function atomicWriteJson(filePath, value) {
 function writeStatusFile(statusObj) {
   try {
     ensureStatusDir();
-    const extra = {};
+    const extra = {
+      runtime: adapter?.runtimeId || null,
+      health_reason: engine.healthReason || null,
+      health_detail: engine.healthDetail || null
+    };
     if (engine.health === 'rate_limited') {
       extra.rate_limit_reset = engine.rateLimitResetTime || null;
       extra.cooldown_until = engine.cooldownUntil || null;
@@ -1254,6 +1266,7 @@ async function monitorLoop() {
       if (Date.now() < authRetrySuppressedUntil) {
         if (notRunningCount % 60 === 0) log(`Guardian: auth retry suppressed for ${Math.ceil((authRetrySuppressedUntil - Date.now()) / 1000)}s`);
       } else {
+        engine.recordRateLimitedRestart();
         log(`Guardian: Session not found for ${notRunningCount}s, attempting to start ${adapter.displayName}...`);
         startAgent();
       }
@@ -1309,6 +1322,7 @@ async function monitorLoop() {
       if (Date.now() < authRetrySuppressedUntil) {
         if (notRunningCount % 60 === 0) log(`Guardian: auth retry suppressed for ${Math.ceil((authRetrySuppressedUntil - Date.now()) / 1000)}s`);
       } else {
+        engine.recordRateLimitedRestart();
         log(`Guardian: Agent not running for ${notRunningCount}s, attempting to start ${adapter.displayName}...`);
         startAgent();
       }
@@ -1419,9 +1433,61 @@ async function monitorLoop() {
     }
   }
 
-  // Rate-limit detection is now handled inside HeartbeatEngine.onHeartbeatFailure
-  // via the detectRateLimit dep callback (dual-signal: heartbeat failure + tmux text).
-  // This eliminates false positives from conversation content matching rate-limit patterns.
+  // Proactive rate limit scan: detect rate limit text in tmux pane (last 10 lines only)
+  // independently of heartbeat state. Requires 2 consecutive detections to
+  // avoid false positives from conversation content quoting rate limit text.
+  // Pure tmux text scan — no AI tokens consumed.
+  //
+  // Bidirectional:
+  //   Forward (ok → rate_limited): detect rate limit text appearing
+  //   Reverse (rate_limited → ok): detect rate limit text disappearing (e.g. after
+  //     admin credential change + tmux restart). Enables admin ops recovery without
+  //     waiting for cooldown expiry or user message trigger.
+  if ((engine.health === 'ok' || engine.health === 'rate_limited') && engine.deps.detectRateLimit) {
+    const withinGrace = lastLaunchAt > 0 && (currentTime - lastLaunchAt) < LAUNCH_GRACE_PERIOD;
+    if (!withinGrace && (currentTime - lastRateLimitScanAt) >= RATE_LIMIT_SCAN_INTERVAL) {
+      lastRateLimitScanAt = currentTime;
+      const rateLimit = engine.deps.detectRateLimit();
+
+      if (engine.health === 'ok') {
+        // Forward scan: ok → rate_limited
+        if (rateLimit.detected) {
+          rateLimitConsecutiveHits++;
+          rateLimitCleanHits = 0;
+          if (rateLimitConsecutiveHits >= 2) {
+            log(`Proactive rate limit scan: confirmed after ${rateLimitConsecutiveHits} consecutive hits (reason: ${rateLimit.reason ?? 'rate_limited'}, resetTime: ${rateLimit.resetTime || 'unknown'})`);
+            engine.enterRateLimited(rateLimit.cooldownUntil, rateLimit.resetTime, {
+              reason: rateLimit.reason ?? 'rate_limited',
+              detail: rateLimit.detail ?? ''
+            });
+            rateLimitConsecutiveHits = 0;
+          } else {
+            log(`Proactive rate limit scan: detected (${rateLimitConsecutiveHits}/2, confirming on next scan)`);
+          }
+        } else {
+          rateLimitConsecutiveHits = 0;
+        }
+      } else if (engine.health === 'rate_limited' && agentRunning) {
+        // Reverse scan: rate_limited → ok (requires tmux running)
+        if (!rateLimit.detected) {
+          rateLimitCleanHits++;
+          rateLimitConsecutiveHits = 0;
+          if (rateLimitCleanHits >= 2) {
+            log(`Proactive rate limit scan: rate limit cleared after ${rateLimitCleanHits} consecutive clean scans, transitioning to ok`);
+            engine.cooldownUntil = 0;
+            engine.rateLimitResetTime = '';
+            engine.lastUserMessageRecoveryAt = 0;
+            engine.setHealth('ok', 'rate_limit_cleared');
+            rateLimitCleanHits = 0;
+          } else {
+            log(`Proactive rate limit scan: no rate limit detected (${rateLimitCleanHits}/2, confirming on next scan)`);
+          }
+        } else {
+          rateLimitCleanHits = 0;
+        }
+      }
+    }
+  }
 
   // User message triggered recovery: when a user sends a message while unavailable,
   // c4-receive writes a signal file. Read and consume it to trigger/accelerate recovery.
@@ -1501,7 +1567,11 @@ function init() {
   procSampler = new ProcSampler({ sessionName: adapter.sessionName, log });
 
   const initialStatus = loadInitialHealth();
-  const initialHealth = heartbeatEnabled ? initialStatus.health : 'ok';
+  // When heartbeat is disabled, default to 'ok' — except preserve 'rate_limited'
+  // state across restarts so the proactive scan doesn't briefly clear a valid cooldown.
+  const initialHealth = heartbeatEnabled
+    ? initialStatus.health
+    : (initialStatus.health === 'rate_limited' ? 'rate_limited' : 'ok');
 
   // Merge runtime-specific heartbeat deps (enqueueHeartbeat, getHeartbeatStatus,
   // detectRateLimit, readHeartbeatPending, clearHeartbeatPending) from the adapter,
@@ -1531,6 +1601,8 @@ function init() {
     engine.cooldownUntil = initialStatus.cooldown_until;
     engine.rateLimitResetTime = initialStatus.rate_limit_reset || '';
   }
+  engine.healthReason = initialStatus.health_reason || '';
+  engine.healthDetail = initialStatus.health_detail || '';
 
   const dailyUpgradeEnabled = readConfigBool('daily_upgrade_enabled', false);
   if (!dailyUpgradeEnabled) {

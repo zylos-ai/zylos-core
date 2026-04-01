@@ -46,6 +46,7 @@ export class HeartbeatEngine {
    * @param {number} [options.downRetryInterval=3600] - Seconds between DOWN-state probes
    * @param {number} [options.signalGracePeriod=30] - Seconds to wait after agentRunning transitions before probing
    * @param {number} [options.rateLimitDefaultCooldown=3600] - Default cooldown when reset time can't be parsed
+   * @param {number} [options.recoveryStartupGrace=10] - Seconds to wait before first recovery heartbeat after restart
    * @param {number} [options.userMessageRecoveryCooldown=60] - Min seconds between user-message-triggered recoveries
    * @param {string} [options.initialHealth='ok']
    * @param {boolean} [options.heartbeatEnabled=true]
@@ -57,6 +58,7 @@ export class HeartbeatEngine {
     this.downRetryInterval = options.downRetryInterval ?? 3600; // 1 hour
     this.signalGracePeriod = options.signalGracePeriod ?? 30;
     this.rateLimitDefaultCooldown = options.rateLimitDefaultCooldown ?? 3600; // 1 hour
+    this.recoveryStartupGrace = options.recoveryStartupGrace ?? 10; // 10s
     this.userMessageRecoveryCooldown = options.userMessageRecoveryCooldown ?? 60; // 1 min
     this.heartbeatEnabled = options.heartbeatEnabled ?? true;
 
@@ -78,9 +80,15 @@ export class HeartbeatEngine {
     this.cooldownUntil = 0; // Epoch seconds when rate limit cooldown expires
     this.rateLimitResetTime = ''; // Human-readable reset time for display
     this.lastUserMessageRecoveryAt = 0; // Last time user message triggered early recovery
+    this.lastRateLimitedRestartAt = 0; // Throttle restarts during rate_limited
+    this.rateLimitedRestartInterval = options.rateLimitedRestartInterval ?? 300; // 5 min
 
     // API error detection throttle
     this._lastApiErrorScanAt = 0; // Last time tmux pane was scanned for API errors
+
+    // Persisted metadata for user-facing unhealthy messaging.
+    this.healthReason = '';
+    this.healthDetail = '';
   }
 
   get health() {
@@ -93,18 +101,52 @@ export class HeartbeatEngine {
    * internal state directly (separation of concerns).
    *
    * 'recovering' and 'down' allow restarts — the agent is down and we want to
-   * bring it back. Only 'rate_limited' blocks restarts because restarting cannot
-   * clear a rate limit; the HeartbeatEngine manages its own cooldown recovery.
+   * bring it back.
+   *
+   * 'rate_limited' allows throttled restarts (max once per rateLimitedRestartInterval)
+   * so that tmux stays alive and the proactive scan can detect when the rate limit
+   * clears (e.g. after admin credential change). Without a running tmux, the scan
+   * has nothing to read and the system is stuck until cooldown expires.
    */
   canRestart() {
-    return this.healthState !== 'rate_limited';
+    if (this.healthState !== 'rate_limited') return true;
+    // Throttle restarts during rate_limited to avoid rapid restart loops
+    // (agent may exit immediately if still rate-limited).
+    const now = Math.floor(Date.now() / 1000);
+    if (now - this.lastRateLimitedRestartAt < this.rateLimitedRestartInterval) {
+      return false;
+    }
+    // Don't set lastRateLimitedRestartAt here — caller must call
+    // recordRateLimitedRestart() when the restart actually happens.
+    // Setting it here would waste the throttle window when the caller's
+    // own conditions (e.g. notRunningCount < restartDelay) prevent restart.
+    return true;
   }
 
-  setHealth(nextHealth, reason = '') {
+  /**
+   * Record that a rate-limited restart was actually initiated.
+   * Must be called by the Guardian after canRestart() returns true
+   * AND the restart is actually performed.
+   */
+  recordRateLimitedRestart() {
+    this.lastRateLimitedRestartAt = Math.floor(Date.now() / 1000);
+  }
+
+  setHealth(nextHealth, reason = '', metadata = null) {
     if (this.healthState === nextHealth) return;
     const suffix = reason ? ` (${reason})` : '';
     this.deps.log(`Health: ${this.healthState.toUpperCase()} -> ${nextHealth.toUpperCase()}${suffix}`);
     this.healthState = nextHealth;
+    if (metadata) {
+      this.healthReason = metadata.reason ?? '';
+      this.healthDetail = metadata.detail ?? '';
+    } else if (nextHealth === 'ok') {
+      this.healthReason = '';
+      this.healthDetail = '';
+    } else {
+      this.healthReason = reason || '';
+      this.healthDetail = '';
+    }
   }
 
   /**
@@ -124,12 +166,14 @@ export class HeartbeatEngine {
    * @param {number} cooldownUntil - Epoch seconds when cooldown expires
    * @param {string} [resetTime] - Human-readable reset time for display
    */
-  enterRateLimited(cooldownUntil, resetTime = '') {
+  enterRateLimited(cooldownUntil, resetTime = '', metadata = {}) {
     if (this.healthState === 'rate_limited') {
       // Already rate-limited; update cooldown if the new one is later
       if (cooldownUntil > this.cooldownUntil) {
         this.cooldownUntil = cooldownUntil;
         this.rateLimitResetTime = resetTime || this.rateLimitResetTime;
+        this.healthReason = metadata.reason ?? this.healthReason;
+        this.healthDetail = metadata.detail ?? this.healthDetail;
         this.deps.log(`Rate limit cooldown extended to ${cooldownUntil} (${resetTime || 'unknown'})`);
       }
       return;
@@ -140,7 +184,14 @@ export class HeartbeatEngine {
     this.restartFailureCount = 0;
     this.recoveringStartedAt = 0;
     this.signalDetectedAt = 0;
-    this.setHealth('rate_limited', resetTime ? `resets at ${resetTime}` : `cooldown ${cooldownUntil - Math.floor(Date.now() / 1000)}s`);
+    this.setHealth(
+      'rate_limited',
+      resetTime ? `resets at ${resetTime}` : `cooldown ${cooldownUntil - Math.floor(Date.now() / 1000)}s`,
+      {
+        reason: metadata.reason ?? 'rate_limited',
+        detail: metadata.detail ?? ''
+      }
+    );
   }
 
   /**
@@ -196,11 +247,6 @@ export class HeartbeatEngine {
     this._trackAgentRunning(agentRunning, currentTime);
 
     const pending = this.deps.readHeartbeatPending();
-    if (!this.heartbeatEnabled) {
-      if (pending) this.deps.clearHeartbeatPending();
-      return;
-    }
-
     if (pending) {
       const status = this.deps.getHeartbeatStatus(pending.control_id);
 
@@ -246,8 +292,8 @@ export class HeartbeatEngine {
     }
 
     // Rate-limited recovery: must be checked BEFORE the !agentRunning early
-    // return. After cooldown expires Claude is not running (tmux was killed),
-    // so the early return would skip this block and cause a deadlock (#252).
+    // return — after cooldown expires the agent is not running (tmux was killed),
+    // so the early return would skip this block and cause a deadlock.
     if (this.healthState === 'rate_limited') {
       if (currentTime < this.cooldownUntil) {
         return;
@@ -255,6 +301,7 @@ export class HeartbeatEngine {
       this.deps.log('Rate limit cooldown expired, transitioning to recovering');
       this.deps.killTmuxSession();
       this.cooldownUntil = 0;
+      this.lastRecoveryAt = Math.floor(Date.now() / 1000); // Grace before first heartbeat
       this.setHealth('recovering', 'rate_limit_cooldown_expired');
       // Guardian will now restart Claude since health !== 'rate_limited'
       return;
@@ -282,9 +329,11 @@ export class HeartbeatEngine {
     }
 
     if (this.healthState === 'recovering') {
-      // Exponential backoff: wait progressively longer between recovery attempts
-      const backoffDelay = this.getBackoffDelay();
-      if (backoffDelay > 0 && (currentTime - this.lastRecoveryAt) < backoffDelay) {
+      // Exponential backoff: wait progressively longer between recovery attempts.
+      // Use recoveryStartupGrace as minimum delay for first attempt (backoffDelay=0)
+      // to let the agent finish starting before probing.
+      const backoffDelay = this.getBackoffDelay() || this.recoveryStartupGrace;
+      if ((currentTime - this.lastRecoveryAt) < backoffDelay) {
         return;
       }
       const ok = this.enqueueHeartbeat('recovery');
@@ -307,7 +356,10 @@ export class HeartbeatEngine {
       return;
     }
 
-    if ((currentTime - this.lastHeartbeatAt) >= this.heartbeatInterval) {
+    // Only routine polling heartbeat is gated on heartbeatEnabled.
+    // All other paths (rate_limited recovery, recovering retry, down-state probe,
+    // signal acceleration) are special-purpose and must run regardless.
+    if (this.heartbeatEnabled && (currentTime - this.lastHeartbeatAt) >= this.heartbeatInterval) {
       this.enqueueHeartbeat('primary');
     }
   }
@@ -372,7 +424,10 @@ export class HeartbeatEngine {
     if ((this.healthState === 'ok' || this.healthState === 'recovering') && this.deps.detectRateLimit) {
       const rateLimit = this.deps.detectRateLimit();
       if (rateLimit.detected) {
-        this.enterRateLimited(rateLimit.cooldownUntil, rateLimit.resetTime);
+        this.enterRateLimited(rateLimit.cooldownUntil, rateLimit.resetTime, {
+          reason: rateLimit.reason ?? 'rate_limited',
+          detail: rateLimit.detail ?? ''
+        });
         return;
       }
     }
