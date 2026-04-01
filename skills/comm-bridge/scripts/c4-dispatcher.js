@@ -278,41 +278,41 @@ export function isUsageOverlayCapture(capture) {
   return hasUsageHeader && hasEscHint;
 }
 
-async function dismissGhostTextAndCapture() {
-  execFileSync('tmux', ['send-keys', '-t', TMUX_SESSION, 'Space'], { stdio: 'pipe', timeout: 5000 });
-  await sleep(100);
+// Empty prompt threshold: cursor at column 0, 1, or 2 means the input box
+// is empty (cursor sits right after the prompt char, e.g. "❯ " = column 2).
+const CURSOR_EMPTY_THRESHOLD = 2;
 
-  const capture = execFileSync('tmux', ['capture-pane', '-p', '-t', TMUX_SESSION], {
-    encoding: 'utf8',
-    stdio: 'pipe',
-    timeout: 5000
-  });
-
-  execFileSync('tmux', ['send-keys', '-t', TMUX_SESSION, 'BSpace'], { stdio: 'pipe', timeout: 5000 });
-  await sleep(100);
-  return capture;
+export function getCursorX() {
+  try {
+    const out = execFileSync('tmux', ['display-message', '-p', '-t', TMUX_SESSION, '#{cursor_x}'], {
+      encoding: 'utf8',
+      stdio: 'pipe',
+      timeout: 5000
+    });
+    return parseInt(out.trim(), 10);
+  } catch {
+    return -1;
+  }
 }
 
 async function submitAndVerify() {
   execFileSync('tmux', ['send-keys', '-t', TMUX_SESSION, 'Enter'], { stdio: 'pipe', timeout: 5000 });
-  let lastState = 'indeterminate';
 
   for (let attempt = 0; attempt < ENTER_VERIFY_MAX_RETRIES; attempt++) {
     await sleep(ENTER_VERIFY_WAIT_MS);
-    const capture = await dismissGhostTextAndCapture();
-    const state = checkInputBox(capture);
-    lastState = state;
+    const cursorX = getCursorX();
 
-    if (state === 'empty') {
-      return { verified: true, state };
+    if (cursorX >= 0 && cursorX <= CURSOR_EMPTY_THRESHOLD) {
+      return { verified: true, state: 'empty' };
     }
 
-    if (state === 'indeterminate') {
-      log(`Enter verify attempt ${attempt + 1}: separator detection failed, retrying capture`);
-      saveTmuxCapture(capture, `separator-fail-attempt-${attempt + 1}`);
+    if (cursorX < 0) {
+      // tmux query failed — fall back to capture-based check
+      log(`Enter verify attempt ${attempt + 1}: cursor query failed, falling back to capture`);
+      const capture = execFileSync('tmux', ['capture-pane', '-p', '-t', TMUX_SESSION], {
+        encoding: 'utf8', stdio: 'pipe', timeout: 5000
+      });
 
-      // If a /usage settings overlay is open in the main session, dismiss it so
-      // pasted user messages can be submitted normally.
       if (isUsageOverlayCapture(capture)) {
         log(`Enter verify attempt ${attempt + 1}: /usage overlay detected, sending Escape`);
         execFileSync('tmux', ['send-keys', '-t', TMUX_SESSION, 'Escape'], { stdio: 'pipe', timeout: 5000 });
@@ -320,11 +320,11 @@ async function submitAndVerify() {
       continue;
     }
 
-    log(`Enter verify attempt ${attempt + 1}: input box has content, retrying Enter`);
+    log(`Enter verify attempt ${attempt + 1}: cursor_x=${cursorX} (content present), retrying Enter`);
     execFileSync('tmux', ['send-keys', '-t', TMUX_SESSION, 'Enter'], { stdio: 'pipe', timeout: 5000 });
   }
 
-  return { verified: false, state: lastState };
+  return { verified: false, state: 'has_content' };
 }
 
 async function sendToTmux(message, options = {}) {
