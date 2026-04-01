@@ -46,6 +46,7 @@ export class HeartbeatEngine {
    * @param {number} [options.downRetryInterval=3600] - Seconds between DOWN-state probes
    * @param {number} [options.signalGracePeriod=30] - Seconds to wait after agentRunning transitions before probing
    * @param {number} [options.rateLimitDefaultCooldown=3600] - Default cooldown when reset time can't be parsed
+   * @param {number} [options.recoveryStartupGrace=10] - Seconds to wait before first recovery heartbeat after restart
    * @param {number} [options.userMessageRecoveryCooldown=60] - Min seconds between user-message-triggered recoveries
    * @param {string} [options.initialHealth='ok']
    * @param {boolean} [options.heartbeatEnabled=true]
@@ -57,6 +58,7 @@ export class HeartbeatEngine {
     this.downRetryInterval = options.downRetryInterval ?? 3600; // 1 hour
     this.signalGracePeriod = options.signalGracePeriod ?? 30;
     this.rateLimitDefaultCooldown = options.rateLimitDefaultCooldown ?? 3600; // 1 hour
+    this.recoveryStartupGrace = options.recoveryStartupGrace ?? 10; // 10s
     this.userMessageRecoveryCooldown = options.userMessageRecoveryCooldown ?? 60; // 1 min
     this.heartbeatEnabled = options.heartbeatEnabled ?? true;
 
@@ -299,6 +301,7 @@ export class HeartbeatEngine {
       this.deps.log('Rate limit cooldown expired, transitioning to recovering');
       this.deps.killTmuxSession();
       this.cooldownUntil = 0;
+      this.lastRecoveryAt = Math.floor(Date.now() / 1000); // Grace before first heartbeat
       this.setHealth('recovering', 'rate_limit_cooldown_expired');
       // Guardian will now restart Claude since health !== 'rate_limited'
       return;
@@ -326,9 +329,11 @@ export class HeartbeatEngine {
     }
 
     if (this.healthState === 'recovering') {
-      // Exponential backoff: wait progressively longer between recovery attempts
-      const backoffDelay = this.getBackoffDelay();
-      if (backoffDelay > 0 && (currentTime - this.lastRecoveryAt) < backoffDelay) {
+      // Exponential backoff: wait progressively longer between recovery attempts.
+      // Use recoveryStartupGrace as minimum delay for first attempt (backoffDelay=0)
+      // to let the agent finish starting before probing.
+      const backoffDelay = this.getBackoffDelay() || this.recoveryStartupGrace;
+      if ((currentTime - this.lastRecoveryAt) < backoffDelay) {
         return;
       }
       const ok = this.enqueueHeartbeat('recovery');
