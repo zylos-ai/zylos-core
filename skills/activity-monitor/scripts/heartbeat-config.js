@@ -10,6 +10,6 @@ function parseBooleanish(value, fallback) {
 }
 
 export function isRuntimeHeartbeatEnabled({ runtimeId, config = {} } = {}) {
-  if (runtimeId !== 'codex') return true;
-  return parseBooleanish(config.codex_heartbeat_enabled, false);
+  const key = runtimeId === 'codex' ? 'codex_heartbeat_enabled' : 'heartbeat_enabled';
+  return parseBooleanish(config[key], false);
 }
