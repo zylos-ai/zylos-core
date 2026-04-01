@@ -43,6 +43,7 @@ import {
   REQUIRE_IDLE_EXECUTION_MAX_WAIT_MS,
   REQUIRE_IDLE_EXECUTION_POLL_MS,
   TMUX_SESSION,
+  ACTIVE_RUNTIME,
   AGENT_STATUS_FILE,
   PROC_STATE_FILE,
   API_ACTIVITY_FILE,
@@ -197,17 +198,25 @@ export function getDeliveryDelay(byteLength) {
   return Math.min(DELIVERY_DELAY_BASE + extra, DELIVERY_DELAY_MAX);
 }
 
-export function getInputBoxText(capture) {
+export function getInputBoxText(capture, { runtime = ACTIVE_RUNTIME } = {}) {
   const lines = capture.split('\n');
-  const separatorIndexes = [];
 
-  for (let i = 0; i < lines.length; i++) {
-    if (/^\u2500+$/.test(lines[i]) && lines[i].length > 10) {
-      separatorIndexes.push(i);
+  // Separator detection is Claude-only — Codex has no ─ separator lines.
+  if (runtime === 'claude') {
+    const separatorIndexes = [];
+    for (let i = 0; i < lines.length; i++) {
+      if (/^\u2500{10,}/.test(lines[i])) {
+        separatorIndexes.push(i);
+      }
+    }
+    if (separatorIndexes.length >= 2) {
+      const start = separatorIndexes[separatorIndexes.length - 2] + 1;
+      const end = separatorIndexes[separatorIndexes.length - 1];
+      return lines.slice(start, end).join('\n');
     }
   }
 
-  if (separatorIndexes.length < 2) {
+  {
     const footerIndex = lines.findIndex(line =>
       /tab to queue message/i.test(line) ||
       /\b\d+%\s+left\s+·\s+~\//i.test(line)
@@ -238,10 +247,6 @@ export function getInputBoxText(capture) {
 
     return promptText.join('\n').trimEnd();
   }
-
-  const start = separatorIndexes[separatorIndexes.length - 2] + 1;
-  const end = separatorIndexes[separatorIndexes.length - 1];
-  return lines.slice(start, end).join('\n');
 }
 
 export function checkInputBox(capture) {
@@ -250,7 +255,12 @@ export function checkInputBox(capture) {
     return 'indeterminate';
   }
 
-  const stripped = text
+  // Strip buddy art from the right side of each line.
+  // /buddy renders ASCII art far to the right (e.g. "❯          (  ~~  )"),
+  // separated from actual input by 10+ consecutive spaces.
+  const cleaned = text.replace(/\s{10,}\S.*$/gm, '');
+
+  const stripped = cleaned
     .replace(/[›❯]/g, '')
     .replace(/[\p{C}\p{Z}]+/gu, '');
 
@@ -268,41 +278,41 @@ export function isUsageOverlayCapture(capture) {
   return hasUsageHeader && hasEscHint;
 }
 
-async function dismissGhostTextAndCapture() {
-  execFileSync('tmux', ['send-keys', '-t', TMUX_SESSION, 'Space'], { stdio: 'pipe', timeout: 5000 });
-  await sleep(100);
+// Empty prompt threshold: cursor at column 0, 1, or 2 means the input box
+// is empty (cursor sits right after the prompt char, e.g. "❯ " = column 2).
+const CURSOR_EMPTY_THRESHOLD = 2;
 
-  const capture = execFileSync('tmux', ['capture-pane', '-p', '-t', TMUX_SESSION], {
-    encoding: 'utf8',
-    stdio: 'pipe',
-    timeout: 5000
-  });
-
-  execFileSync('tmux', ['send-keys', '-t', TMUX_SESSION, 'BSpace'], { stdio: 'pipe', timeout: 5000 });
-  await sleep(100);
-  return capture;
+export function getCursorX() {
+  try {
+    const out = execFileSync('tmux', ['display-message', '-p', '-t', TMUX_SESSION, '#{cursor_x}'], {
+      encoding: 'utf8',
+      stdio: 'pipe',
+      timeout: 5000
+    });
+    return parseInt(out.trim(), 10);
+  } catch {
+    return -1;
+  }
 }
 
 async function submitAndVerify() {
   execFileSync('tmux', ['send-keys', '-t', TMUX_SESSION, 'Enter'], { stdio: 'pipe', timeout: 5000 });
-  let lastState = 'indeterminate';
 
   for (let attempt = 0; attempt < ENTER_VERIFY_MAX_RETRIES; attempt++) {
     await sleep(ENTER_VERIFY_WAIT_MS);
-    const capture = await dismissGhostTextAndCapture();
-    const state = checkInputBox(capture);
-    lastState = state;
+    const cursorX = getCursorX();
 
-    if (state === 'empty') {
-      return { verified: true, state };
+    if (cursorX >= 0 && cursorX <= CURSOR_EMPTY_THRESHOLD) {
+      return { verified: true, state: 'empty' };
     }
 
-    if (state === 'indeterminate') {
-      log(`Enter verify attempt ${attempt + 1}: separator detection failed, retrying capture`);
-      saveTmuxCapture(capture, `separator-fail-attempt-${attempt + 1}`);
+    if (cursorX < 0) {
+      // tmux query failed — fall back to capture-based check
+      log(`Enter verify attempt ${attempt + 1}: cursor query failed, falling back to capture`);
+      const capture = execFileSync('tmux', ['capture-pane', '-p', '-t', TMUX_SESSION], {
+        encoding: 'utf8', stdio: 'pipe', timeout: 5000
+      });
 
-      // If a /usage settings overlay is open in the main session, dismiss it so
-      // pasted user messages can be submitted normally.
       if (isUsageOverlayCapture(capture)) {
         log(`Enter verify attempt ${attempt + 1}: /usage overlay detected, sending Escape`);
         execFileSync('tmux', ['send-keys', '-t', TMUX_SESSION, 'Escape'], { stdio: 'pipe', timeout: 5000 });
@@ -310,11 +320,11 @@ async function submitAndVerify() {
       continue;
     }
 
-    log(`Enter verify attempt ${attempt + 1}: input box has content, retrying Enter`);
+    log(`Enter verify attempt ${attempt + 1}: cursor_x=${cursorX} (content present), retrying Enter`);
     execFileSync('tmux', ['send-keys', '-t', TMUX_SESSION, 'Enter'], { stdio: 'pipe', timeout: 5000 });
   }
 
-  return { verified: false, state: lastState };
+  return { verified: false, state: 'has_content' };
 }
 
 async function sendToTmux(message, options = {}) {
@@ -371,6 +381,14 @@ async function sendToTmux(message, options = {}) {
 
 export function isBypassState(item) {
   return item.type === 'control' && item.bypass_state === 1;
+}
+
+export function isKeystrokeControl(item) {
+  return item.type === 'control' && (item.content || '').startsWith('[KEYSTROKE]');
+}
+
+export function parseKeystrokeKey(content) {
+  return (content || '').slice('[KEYSTROKE]'.length).trim();
 }
 
 function releaseItem(item, reason = null) {
@@ -551,11 +569,28 @@ async function processNextMessage() {
     }
   }
 
+  // Keystroke delivery: content prefixed with [KEYSTROKE] sends raw key to tmux
+  // without buffer paste or "Meanwhile" prefix. Used for auto-approve permission prompts.
+  const rawContent = item.content || '';
+  if (isKeystrokeControl(item)) {
+    const key = parseKeystrokeKey(rawContent);
+    log(`Delivering keystroke key=${key} (control id=${item.id} priority=${item.priority})`);
+    try {
+      execFileSync('tmux', ['send-keys', '-t', TMUX_SESSION, key], { stdio: 'pipe', timeout: 5000 });
+      ackControl(item.id);
+      log(`Keystroke delivered: key=${key} (control id=${item.id})`);
+      return { delivered: true, state: agentState.state };
+    } catch (err) {
+      log(`Keystroke delivery error: ${err.message}`);
+      await handleControlDeliveryFailure(item, `KEYSTROKE_ERROR: ${err.message}`);
+      return { delivered: false, state: agentState.state };
+    }
+  }
+
   log(`Delivering ${item.type} id=${item.id}${item.type === 'control' ? ` priority=${item.priority}` : ` from ${item.channel}`}`);
   // Prefix control messages with "Meanwhile, " so the agent treats them as
   // concurrent background tasks that should not interrupt the user's active work.
   // Skip for slash commands (e.g. /exit, /clear) which must be delivered verbatim.
-  const rawContent = item.content || '';
   const isSlashCommand = rawContent.startsWith('/');
   const deliveryContent = (item.type === 'control' && !isSlashCommand) ? `Meanwhile, ${rawContent}` : rawContent;
   const result = await sendToTmux(deliveryContent, {

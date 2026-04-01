@@ -28,6 +28,8 @@ const {
   checkInputBox,
   isUsageOverlayCapture,
   isBypassState,
+  isKeystrokeControl,
+  parseKeystrokeKey,
   getHeartbeatPhase,
   shouldAutoAckHeartbeat,
   readJsonFileWithRetry
@@ -53,6 +55,12 @@ after(() => {
 function makeCapture(content) {
   const sep = '\u2500'.repeat(40);
   return `${sep}\n${content}\n${sep}`;
+}
+
+/** Build a capture with buddy art appended to separator lines. */
+function makeBuddyCapture(content) {
+  const sep = '\u2500'.repeat(40);
+  return `${sep}  /^\\  /^\\\n${content}  <  \u25C9  \u25C9  >\n${sep}   \`-vvvv-\u00B4`;
 }
 
 // ── sanitizeMessage ─────────────────────────────────────────────────
@@ -147,6 +155,35 @@ describe('getInputBoxText', () => {
     assert.equal(getInputBoxText(capture), 'line1\nline2\nline3');
   });
 
+  it('detects separators with buddy art appended (/buddy pet)', () => {
+    const capture = makeBuddyCapture('❯ hello');
+    assert.equal(getInputBoxText(capture), '❯ hello  <  \u25C9  \u25C9  >');
+  });
+
+  it('detects empty input box with buddy art', () => {
+    const sep = '\u2500'.repeat(40);
+    const capture = `${sep}  /^\\  /^\\\n❯   <  \u25C9  \u25C9  >\n${sep}   \`-vvvv-\u00B4`;
+    const text = getInputBoxText(capture);
+    assert.notEqual(text, null); // separator detected even with buddy art
+  });
+
+  it('skips separator detection when runtime is codex', () => {
+    // Even with 2 separators, Codex runtime ignores them and uses fallback
+    const sep = '\u2500'.repeat(40);
+    const capture = [
+      sep,
+      'between separators',
+      sep,
+      '› codex prompt',
+      '',
+      '  tab to queue message                                        72% context left'
+    ].join('\n');
+    // Codex: skips separators, finds footer/prompt → returns 'codex prompt'
+    assert.equal(getInputBoxText(capture, { runtime: 'codex' }), 'codex prompt');
+    // Claude: uses separator path → returns 'between separators'
+    assert.equal(getInputBoxText(capture, { runtime: 'claude' }), 'between separators');
+  });
+
   it('falls back to Codex prompt/footer layout when separators are absent', () => {
     const capture = [
       '',
@@ -216,6 +253,18 @@ describe('checkInputBox', () => {
   it('returns "empty" for Codex separator layout with only › prompt', () => {
     const capture = makeCapture('›');
     assert.equal(checkInputBox(capture), 'empty');
+  });
+
+  it('returns "empty" when input box has only prompt + buddy art', () => {
+    const sep = '\u2500'.repeat(80);
+    const capture = `${sep}  <  \u25C9  \u25C9  >\n\u276F                                                                                                                                 (   ~~   )\n${sep}   \`-vvvv-\u00B4`;
+    assert.equal(checkInputBox(capture), 'empty');
+  });
+
+  it('returns "has_content" when input box has real text + buddy art', () => {
+    const sep = '\u2500'.repeat(80);
+    const capture = `${sep}  <  \u25C9  \u25C9  >\nhello world                                                                                                                          (   ~~   )\n${sep}   \`-vvvv-\u00B4`;
+    assert.equal(checkInputBox(capture), 'has_content');
   });
 
   it('returns "has_content" for Codex prompt/footer captures', () => {
@@ -389,5 +438,60 @@ describe('readJsonFileWithRetry', () => {
     const file = path.join(tmpDir, 'broken.json');
     fs.writeFileSync(file, '{"health":');
     assert.throws(() => readJsonFileWithRetry(file, 2), /Unexpected end of JSON input|JSON/);
+  });
+});
+
+// ── isKeystrokeControl ──────────────────────────────────────────────
+
+describe('isKeystrokeControl', () => {
+  it('returns true for control items with [KEYSTROKE] prefix', () => {
+    assert.equal(isKeystrokeControl({ type: 'control', content: '[KEYSTROKE]Enter' }), true);
+  });
+
+  it('returns true for keystroke with other keys', () => {
+    assert.equal(isKeystrokeControl({ type: 'control', content: '[KEYSTROKE]Tab' }), true);
+  });
+
+  it('returns false for conversation items with [KEYSTROKE] prefix', () => {
+    assert.equal(isKeystrokeControl({ type: 'conversation', content: '[KEYSTROKE]Enter' }), false);
+  });
+
+  it('returns false for control items without [KEYSTROKE] prefix', () => {
+    assert.equal(isKeystrokeControl({ type: 'control', content: 'Heartbeat check' }), false);
+  });
+
+  it('returns false for empty content', () => {
+    assert.equal(isKeystrokeControl({ type: 'control', content: '' }), false);
+  });
+
+  it('returns false for null/undefined content', () => {
+    assert.equal(isKeystrokeControl({ type: 'control' }), false);
+    assert.equal(isKeystrokeControl({ type: 'control', content: null }), false);
+  });
+});
+
+// ── parseKeystrokeKey ───────────────────────────────────────────────
+
+describe('parseKeystrokeKey', () => {
+  it('extracts Enter key from [KEYSTROKE]Enter', () => {
+    assert.equal(parseKeystrokeKey('[KEYSTROKE]Enter'), 'Enter');
+  });
+
+  it('trims whitespace from key name', () => {
+    assert.equal(parseKeystrokeKey('[KEYSTROKE]  Enter  '), 'Enter');
+  });
+
+  it('extracts other key names', () => {
+    assert.equal(parseKeystrokeKey('[KEYSTROKE]Tab'), 'Tab');
+    assert.equal(parseKeystrokeKey('[KEYSTROKE]Escape'), 'Escape');
+  });
+
+  it('returns empty string for bare prefix', () => {
+    assert.equal(parseKeystrokeKey('[KEYSTROKE]'), '');
+  });
+
+  it('handles null/undefined content', () => {
+    assert.equal(parseKeystrokeKey(null), '');
+    assert.equal(parseKeystrokeKey(undefined), '');
   });
 });
