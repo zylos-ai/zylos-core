@@ -43,7 +43,6 @@ import {
   REQUIRE_IDLE_EXECUTION_MAX_WAIT_MS,
   REQUIRE_IDLE_EXECUTION_POLL_MS,
   TMUX_SESSION,
-  ACTIVE_RUNTIME,
   AGENT_STATUS_FILE,
   PROC_STATE_FILE,
   API_ACTIVITY_FILE,
@@ -198,77 +197,54 @@ export function getDeliveryDelay(byteLength) {
   return Math.min(DELIVERY_DELAY_BASE + extra, DELIVERY_DELAY_MAX);
 }
 
-export function getInputBoxText(capture, { runtime = ACTIVE_RUNTIME } = {}) {
+/**
+ * Find the Y coordinate (0-indexed line number) of the last prompt line
+ * (starting with › or ❯) in a tmux capture string.
+ * Returns -1 if no prompt line is found.
+ */
+export function findPromptY(capture) {
   const lines = capture.split('\n');
-
-  // Separator detection is Claude-only — Codex has no ─ separator lines.
-  if (runtime === 'claude') {
-    const separatorIndexes = [];
-    for (let i = 0; i < lines.length; i++) {
-      if (/^\u2500{10,}/.test(lines[i])) {
-        separatorIndexes.push(i);
-      }
-    }
-    if (separatorIndexes.length >= 2) {
-      const start = separatorIndexes[separatorIndexes.length - 2] + 1;
-      const end = separatorIndexes[separatorIndexes.length - 1];
-      return lines.slice(start, end).join('\n');
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (/^\s*[›❯]/.test(lines[i])) {
+      return i;
     }
   }
-
-  {
-    const footerIndex = lines.findIndex(line =>
-      /tab to queue message/i.test(line) ||
-      /\b\d+%\s+left\s+·\s+~\//i.test(line)
-    );
-    if (footerIndex === -1) {
-      return null;
-    }
-
-    let promptIndex = -1;
-    for (let i = footerIndex - 1; i >= 0; i--) {
-      if (/^\s*[›❯](?:\s.*)?$/.test(lines[i])) {
-        promptIndex = i;
-        break;
-      }
-    }
-
-    if (promptIndex === -1) {
-      return null;
-    }
-
-    const promptText = [lines[promptIndex].replace(/^\s*[›❯]\s?/, '')];
-    for (let i = promptIndex + 1; i < footerIndex; i++) {
-      const line = lines[i];
-      if (!line.trim()) break;
-      if (/^\s*[›❯](?:\s.*)?$/.test(line)) break;
-      promptText.push(line);
-    }
-
-    return promptText.join('\n').trimEnd();
-  }
+  return -1;
 }
 
-export function checkInputBox(capture) {
-  const text = getInputBoxText(capture);
-  if (text === null) {
+/**
+ * Unified input box state detection for both Claude and Codex runtimes.
+ *
+ * Primary signal: cursor_x (from tmux) — fast, no content parsing.
+ * Secondary signal: when cursor_x ≤ threshold, compare cursor_y with the
+ * prompt line's Y coordinate to catch multi-line wrapped input where the
+ * cursor wraps to a new line at x ≤ 2.
+ */
+export function checkInputBox() {
+  const cursorX = getCursorX();
+  if (cursorX < 0) return 'indeterminate';
+  if (cursorX > CURSOR_EMPTY_THRESHOLD) return 'has_content';
+
+  // cursor_x ≤ threshold — could be truly empty or multi-line wrapped input.
+  // Capture the pane and compare prompt line Y with cursor Y.
+  const cursorY = getCursorY();
+  if (cursorY < 0) return 'indeterminate';
+
+  let capture;
+  try {
+    capture = execFileSync('tmux', ['capture-pane', '-p', '-t', TMUX_SESSION], {
+      encoding: 'utf8', stdio: 'pipe', timeout: 5000
+    });
+  } catch {
     return 'indeterminate';
   }
 
-  // Strip buddy art from the right side of each line.
-  // /buddy renders ASCII art far to the right (e.g. "❯          (  ~~  )"),
-  // separated from actual input by 10+ consecutive spaces.
-  const cleaned = text.replace(/\s{10,}\S.*$/gm, '');
+  const promptY = findPromptY(capture);
+  if (promptY < 0) return 'indeterminate';
 
-  const stripped = cleaned
-    .replace(/[›❯]/g, '')
-    .replace(/[\p{C}\p{Z}]+/gu, '');
-
-  if (stripped.length === 0) {
-    return 'empty';
-  }
-
-  return 'has_content';
+  // If cursor is on the prompt line itself, input is empty.
+  // If cursor is below the prompt line, there's wrapped multi-line content.
+  return cursorY === promptY ? 'empty' : 'has_content';
 }
 
 export function isUsageOverlayCapture(capture) {
@@ -285,6 +261,19 @@ const CURSOR_EMPTY_THRESHOLD = 2;
 export function getCursorX() {
   try {
     const out = execFileSync('tmux', ['display-message', '-p', '-t', TMUX_SESSION, '#{cursor_x}'], {
+      encoding: 'utf8',
+      stdio: 'pipe',
+      timeout: 5000
+    });
+    return parseInt(out.trim(), 10);
+  } catch {
+    return -1;
+  }
+}
+
+export function getCursorY() {
+  try {
+    const out = execFileSync('tmux', ['display-message', '-p', '-t', TMUX_SESSION, '#{cursor_y}'], {
       encoding: 'utf8',
       stdio: 'pipe',
       timeout: 5000
