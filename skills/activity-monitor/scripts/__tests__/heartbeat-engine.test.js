@@ -1041,4 +1041,58 @@ describe('HeartbeatEngine', () => {
       assert.equal(engine.health, 'ok');
     });
   });
+
+  describe('canRestart', () => {
+    it('returns true for ok state', () => {
+      const { deps } = createMockDeps();
+      const engine = new HeartbeatEngine(deps, { initialHealth: 'ok' });
+      assert.equal(engine.canRestart(), true);
+    });
+
+    it('returns true for recovering state', () => {
+      const { deps } = createMockDeps();
+      const engine = new HeartbeatEngine(deps, { initialHealth: 'recovering' });
+      assert.equal(engine.canRestart(), true);
+    });
+
+    it('returns true for down state', () => {
+      const { deps } = createMockDeps();
+      const engine = new HeartbeatEngine(deps, { initialHealth: 'down' });
+      assert.equal(engine.canRestart(), true);
+    });
+
+    it('allows first restart in rate_limited state', () => {
+      const { deps } = createMockDeps();
+      const engine = new HeartbeatEngine(deps, {
+        initialHealth: 'rate_limited',
+        rateLimitedRestartInterval: 300
+      });
+      assert.equal(engine.canRestart(), true);
+    });
+
+    it('throttles second restart in rate_limited state within interval', () => {
+      const { deps } = createMockDeps();
+      const engine = new HeartbeatEngine(deps, {
+        initialHealth: 'rate_limited',
+        rateLimitedRestartInterval: 300
+      });
+      // First call sets lastRateLimitedRestartAt
+      assert.equal(engine.canRestart(), true);
+      // Second call within 300s window should be throttled
+      assert.equal(engine.canRestart(), false);
+    });
+
+    it('allows restart after throttle interval expires', () => {
+      const { deps } = createMockDeps();
+      const engine = new HeartbeatEngine(deps, {
+        initialHealth: 'rate_limited',
+        rateLimitedRestartInterval: 300
+      });
+      // First call
+      assert.equal(engine.canRestart(), true);
+      // Simulate time passing beyond throttle interval
+      engine.lastRateLimitedRestartAt = Math.floor(Date.now() / 1000) - 301;
+      assert.equal(engine.canRestart(), true);
+    });
+  });
 });

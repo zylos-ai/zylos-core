@@ -78,6 +78,8 @@ export class HeartbeatEngine {
     this.cooldownUntil = 0; // Epoch seconds when rate limit cooldown expires
     this.rateLimitResetTime = ''; // Human-readable reset time for display
     this.lastUserMessageRecoveryAt = 0; // Last time user message triggered early recovery
+    this.lastRateLimitedRestartAt = 0; // Throttle restarts during rate_limited
+    this.rateLimitedRestartInterval = options.rateLimitedRestartInterval ?? 300; // 5 min
 
     // API error detection throttle
     this._lastApiErrorScanAt = 0; // Last time tmux pane was scanned for API errors
@@ -97,11 +99,23 @@ export class HeartbeatEngine {
    * internal state directly (separation of concerns).
    *
    * 'recovering' and 'down' allow restarts — the agent is down and we want to
-   * bring it back. Only 'rate_limited' blocks restarts because restarting cannot
-   * clear a rate limit; the HeartbeatEngine manages its own cooldown recovery.
+   * bring it back.
+   *
+   * 'rate_limited' allows throttled restarts (max once per rateLimitedRestartInterval)
+   * so that tmux stays alive and the proactive scan can detect when the rate limit
+   * clears (e.g. after admin credential change). Without a running tmux, the scan
+   * has nothing to read and the system is stuck until cooldown expires.
    */
   canRestart() {
-    return this.healthState !== 'rate_limited';
+    if (this.healthState !== 'rate_limited') return true;
+    // Throttle restarts during rate_limited to avoid rapid restart loops
+    // (agent may exit immediately if still rate-limited).
+    const now = Math.floor(Date.now() / 1000);
+    if (now - this.lastRateLimitedRestartAt < this.rateLimitedRestartInterval) {
+      return false;
+    }
+    this.lastRateLimitedRestartAt = now;
+    return true;
   }
 
   setHealth(nextHealth, reason = '', metadata = null) {
