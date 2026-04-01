@@ -544,8 +544,12 @@ async function startAgent() {
       waitForMaintenance();
     }
 
+    // Skip auth check when recovering from rate limit — `claude -p ping` would hit the
+    // same rate limit and be misidentified as an auth failure (cli_probe_not_authenticated).
+    const skipAuth = engine.healthReason === 'rate_limit_cooldown_expired';
     // Live auth check before restarting — avoids infinite restart loop on revoked/expired tokens.
-    const authResult = adapter.checkAuth ? await adapter.checkAuth() : { ok: true };
+    const authResult = skipAuth ? { ok: true, reason: 'skipped_rate_limit_recovery' }
+      : adapter.checkAuth ? await adapter.checkAuth() : { ok: true };
     if (!authResult.ok) {
       log(`Guardian: auth failed (${authResult.reason ?? 'unknown'}), skipping restart. Next retry in 3 min.${authResult.output ? ' Output: ' + authResult.output : ''}`);
       authRetrySuppressedUntil = Date.now() + 180_000;
