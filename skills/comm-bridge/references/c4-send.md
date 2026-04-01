@@ -12,6 +12,12 @@ EOF
 
 Messages are piped via stdin using a heredoc. This bypasses shell argument parsing entirely, so any content (quotes, variables, markdown) is delivered verbatim.
 
+### Important safety rule
+
+- The heredoc terminator line (for example `EOF`) is shell wrapper syntax, not part of the message body.
+- Do not include the terminator token itself as a standalone line inside the message content.
+- When generating a send command, treat the wrapper as fixed boilerplate and only substitute `<channel>`, `<endpoint_id>`, and the message body.
+
 ### How it works
 
 1. When stdin is piped, c4-send.js reads the full message from stdin.
@@ -35,6 +41,14 @@ EOF
 cat <<'EOF' | node ~/zylos/.claude/skills/comm-bridge/scripts/c4-send.js telegram
 Hello everyone!
 EOF
+```
+
+If the message body itself may contain a line like `EOF`, use a different terminator token for the wrapper, for example:
+
+```bash
+cat <<'C4MSG' | node ~/zylos/.claude/skills/comm-bridge/scripts/c4-send.js telegram 8101553026
+This message can mention EOF safely.
+C4MSG
 ```
 
 **Note**: Endpoint structure depends on the channel implementation. Some channels use multi-part endpoints with pipe-separated values. Always quote multi-part endpoints as a single argument.
