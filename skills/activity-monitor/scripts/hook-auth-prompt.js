@@ -9,14 +9,14 @@
  * The script logs the event and exits without output, so Claude Code
  * proceeds with its normal permission flow.
  *
- * Log file: ~/zylos/activity-monitor/auth-prompt.log
+ * Log file: ~/zylos/activity-monitor/hook-timing.log (shared with other hooks)
  */
 
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
 
-const LOG_FILE = path.join(os.homedir(), 'zylos', 'activity-monitor', 'auth-prompt.log');
+const LOG_FILE = path.join(os.homedir(), 'zylos', 'activity-monitor', 'hook-timing.log');
 
 async function main() {
   let input = '';
@@ -31,15 +31,10 @@ async function main() {
     return; // malformed input, skip
   }
 
-  const entry = {
-    ts: new Date().toISOString(),
-    event: hookData.hook_event_name || 'PermissionRequest',
-    tool: hookData.tool_name || '(unknown)',
-    input_keys: hookData.tool_input ? Object.keys(hookData.tool_input) : [],
-    session_id: hookData.session_id || null,
-  };
-
-  const line = JSON.stringify(entry) + '\n';
+  const tool = hookData.tool_name || '(unknown)';
+  const inputKeys = hookData.tool_input ? Object.keys(hookData.tool_input).join(',') : '';
+  const ts = new Date().toISOString().replace('T', ' ').substring(0, 19);
+  const line = `[${ts}] hook=auth-prompt event=PermissionRequest tool=${tool} input_keys=[${inputKeys}]\n`;
 
   try {
     fs.appendFileSync(LOG_FILE, line);
