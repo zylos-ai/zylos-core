@@ -380,22 +380,6 @@ export function renderCodexGlobalConfig(projectDir, existingContent = '', opts =
 }
 
 /**
- * Render combined Codex config (backward-compatible wrapper).
- *
- * Returns the concatenation of project-level and global config content.
- * Used by syncCodexConfig for content comparison. New code should use
- * renderCodexProjectConfig() and renderCodexGlobalConfig() directly.
- *
- * @param {string} projectDir - The zylos working directory to pre-trust
- * @param {string} existingContent - Existing global config.toml contents (optional)
- * @param {{ openaiBaseUrl?: string }} opts - Optional Codex config overrides
- * @returns {string}
- */
-export function renderCodexConfig(projectDir, existingContent = '', opts = {}) {
-  return renderCodexProjectConfig() + '\n' + renderCodexGlobalConfig(projectDir, existingContent, opts);
-}
-
-/**
  * Write Codex configuration to both project-level and global locations.
  *
  * - Project config (<projectDir>/.codex/config.toml): headless settings,
