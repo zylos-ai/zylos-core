@@ -255,6 +255,18 @@ describe('checkInputBox', () => {
     assert.equal(checkInputBox(capture), 'empty');
   });
 
+  it('returns "empty" when input box has only prompt + buddy art', () => {
+    const sep = '\u2500'.repeat(80);
+    const capture = `${sep}  <  \u25C9  \u25C9  >\n\u276F                                                                                                                                 (   ~~   )\n${sep}   \`-vvvv-\u00B4`;
+    assert.equal(checkInputBox(capture), 'empty');
+  });
+
+  it('returns "has_content" when input box has real text + buddy art', () => {
+    const sep = '\u2500'.repeat(80);
+    const capture = `${sep}  <  \u25C9  \u25C9  >\nhello world                                                                                                                          (   ~~   )\n${sep}   \`-vvvv-\u00B4`;
+    assert.equal(checkInputBox(capture), 'has_content');
+  });
+
   it('returns "has_content" for Codex prompt/footer captures', () => {
     const capture = [
       '',

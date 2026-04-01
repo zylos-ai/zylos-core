@@ -255,7 +255,12 @@ export function checkInputBox(capture) {
     return 'indeterminate';
   }
 
-  const stripped = text
+  // Strip buddy art from the right side of each line.
+  // /buddy renders ASCII art far to the right (e.g. "❯          (  ~~  )"),
+  // separated from actual input by 10+ consecutive spaces.
+  const cleaned = text.replace(/\s{10,}\S.*$/gm, '');
+
+  const stripped = cleaned
     .replace(/[›❯]/g, '')
     .replace(/[\p{C}\p{Z}]+/gu, '');
 
