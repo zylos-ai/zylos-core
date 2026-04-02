@@ -33,9 +33,10 @@ export async function selfUninstall(args) {
   console.log(bold('This will:'));
   console.log(`  1. Stop all zylos services (tmux + PM2)`);
   console.log(`  2. Uninstall the ${cyan('zylos')} npm package`);
-  console.log(`  3. Remove ${cyan('~/zylos/')} and clean shell PATH entries`);
+  console.log(`  3. Clean shell PATH entries`);
   if (!force) {
     console.log(`  4. Optionally remove PM2, Claude CLI, and/or Codex CLI`);
+    console.log(`  5. Optionally remove ${cyan('~/zylos/')} data directory`);
   }
   console.log();
   console.log(dim('This will NOT remove Node.js or nvm.'));
@@ -103,15 +104,14 @@ export async function selfUninstall(args) {
   }
   console.log();
 
-  // ── Phase 3: Remove directory + shell config ─────────
-  console.log(heading('Phase 3: Removing zylos directory and shell config'));
+  // ── Phase 3: Clean shell config ──────────────────────
+  console.log(heading('Phase 3: Cleaning shell config'));
 
   const profilesCleaned = cleanShellProfiles();
-  removeDirectory(ZYLOS_DIR);
-
-  console.log(success('zylos directory removed'));
   if (profilesCleaned.length > 0) {
     console.log(success(`Shell profiles cleaned: ${profilesCleaned.join(', ')}`));
+  } else {
+    console.log(dim('  No shell profile changes needed'));
   }
   console.log();
 
@@ -132,6 +132,27 @@ export async function selfUninstall(args) {
     console.log(dim('Removing Codex CLI...'));
     uninstallCodexCli();
     console.log(success('Codex CLI removed'));
+  }
+
+  // ── Phase 5: Data directory removal (explicit opt-in) ──
+  let removeData = force;
+  if (!force) {
+    console.log();
+    console.log(heading('Data directory'));
+    console.log(red(bold('  ⚠  WARNING: ~/zylos/ contains your memory, skills, and configuration.')));
+    console.log(red(bold('     This data cannot be recovered once deleted.')));
+    console.log();
+    removeData = await promptYesNo(
+      red(bold('  Delete ~/zylos/ permanently? [y/N] '))
+    );
+  }
+
+  if (removeData) {
+    removeDirectory(ZYLOS_DIR);
+    console.log(success('zylos data directory removed'));
+  } else {
+    console.log(dim(`  Data directory preserved at ${cyan('~/zylos/')}`));
+    console.log(dim('  You can remove it later with: rm -rf ~/zylos'));
   }
 
   // ── Done ─────────────────────────────────────────────
