@@ -196,10 +196,6 @@ export class HeartbeatEngine {
     this._trackAgentRunning(agentRunning, currentTime);
 
     const pending = this.deps.readHeartbeatPending();
-    if (!this.heartbeatEnabled) {
-      if (pending) this.deps.clearHeartbeatPending();
-      return;
-    }
 
     if (pending) {
       const status = this.deps.getHeartbeatStatus(pending.control_id);
@@ -307,6 +303,11 @@ export class HeartbeatEngine {
       return;
     }
 
+    // heartbeatEnabled only gates primary periodic polling — all other paths
+    // (pending result processing, rate_limited recovery, signal acceleration,
+    // recovering backoff, down-check) remain active regardless of this flag.
+    if (!this.heartbeatEnabled) return;
+
     if ((currentTime - this.lastHeartbeatAt) >= this.heartbeatInterval) {
       this.enqueueHeartbeat('primary');
     }
@@ -405,7 +406,6 @@ export class HeartbeatEngine {
    */
   requestImmediateProbe(reason) {
     if (this.healthState !== 'ok') return false;
-    if (!this.heartbeatEnabled) return false;
     const pending = this.deps.readHeartbeatPending();
     if (pending) return false;
     // Keep "Stuck detection" wording for existing observability/tests.
