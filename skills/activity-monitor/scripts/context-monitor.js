@@ -27,17 +27,28 @@ const STATE_FILE = path.join(AM_DIR, 'context-monitor-state.json');
 const COST_LOG_FILE = path.join(AM_DIR, 'cost-log.jsonl');
 const C4_CONTROL = path.join(ZYLOS_DIR, '.claude/skills/comm-bridge/scripts/c4-control.js');
 const C4_DB = path.join(ZYLOS_DIR, '.claude/skills/comm-bridge/scripts/c4-db.js');
+const CONFIG_FILE = path.join(ZYLOS_DIR, '.zylos', 'config.json');
 
-// Thresholds
-const RESTART_THRESHOLD = 80;   // Trigger new-session at this percentage
+// Thresholds — configurable via config.json `new_session_threshold` (default 80)
+const DEFAULT_THRESHOLD = 80;
+const RESTART_THRESHOLD = readThresholdFromConfig();
 const COOLDOWN_SECONDS = 300;   // Re-trigger after 5 minutes if still above threshold
 
 // Early memory sync: inject at 80% of session-switch threshold so memory sync
-// completes in the background before new-session fires.  (e.g. 80% × 0.8 = 64%)
+// completes in the background before new-session fires.
 const MEMORY_SYNC_RATIO = 0.8;
 const MEMORY_SYNC_THRESHOLD = Math.round(RESTART_THRESHOLD * MEMORY_SYNC_RATIO);
 const CHECKPOINT_THRESHOLD = 30;  // must match c4-config.js CHECKPOINT_THRESHOLD
 const MEMORY_SYNC_COOLDOWN_SECONDS = 600;  // 10 min — prevent re-inject while sync is running
+
+function readThresholdFromConfig() {
+  try {
+    const config = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
+    const val = parseInt(config.new_session_threshold, 10);
+    if (!isNaN(val) && val > 0 && val <= 100) return val;
+  } catch { /* config missing or malformed */ }
+  return DEFAULT_THRESHOLD;
+}
 
 // Ensure data directory exists once at startup
 let dirReady = false;

@@ -917,6 +917,19 @@ function ensureWebConsolePassword(explicitPassword = null) {
  * Migrate WEB_CONSOLE_PASSWORD → ZYLOS_WEB_PASSWORD in .env.
  * If old name found and new name not present, rename in-place.
  */
+
+/**
+ * Ensure new-session threshold defaults are explicitly set in config.json.
+ * Idempotent — only writes keys that are missing.
+ */
+function ensureNewSessionThresholdDefaults() {
+  const config = getZylosConfig();
+  const updates = {};
+  if (config.new_session_threshold === undefined) updates.new_session_threshold = 80;
+  if (config.codex_new_session_threshold === undefined) updates.codex_new_session_threshold = 80;
+  if (Object.keys(updates).length > 0) updateZylosConfig(updates);
+}
+
 function migrateWebConsolePassword() {
   const envPath = path.join(ZYLOS_DIR, '.env');
   let content = '';
@@ -2268,6 +2281,9 @@ export async function initCommand(args) {
     if (!existingRuntime || existingRuntime !== selectedRuntime) {
       updateZylosConfig({ runtime: selectedRuntime });
     }
+
+    // Ensure new-session thresholds are explicitly set in config (idempotent)
+    ensureNewSessionThresholdDefaults();
 
     // Run data migrations before deploying templates (idempotent)
     runMigrations();
