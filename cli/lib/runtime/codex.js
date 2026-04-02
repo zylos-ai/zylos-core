@@ -361,13 +361,13 @@ export class CodexAdapter extends RuntimeAdapter {
 
   /**
    * Returns a CodexContextMonitor instance for this runtime.
-   * Reads threshold from config.json `codex_new_session_threshold` (default 80%).
+   * Reads threshold from config.json `codex_new_session_threshold` (default 75%).
    * @returns {CodexContextMonitor}
    */
   getContextMonitor() {
     const config = getZylosConfig();
     const val = parseInt(config.codex_new_session_threshold, 10);
-    const threshold = (!isNaN(val) && val > 0 && val <= 100) ? val / 100 : 0.80;
+    const threshold = (!isNaN(val) && val > 0 && val <= 100) ? val / 100 : 0.75;
     return new CodexContextMonitor({ threshold });
   }
 }

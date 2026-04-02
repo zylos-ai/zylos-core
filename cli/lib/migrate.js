@@ -148,8 +148,8 @@ function migrateClaudeMdToZylosMd() {
 function migrateNewSessionThresholdDefaults() {
   const config = getZylosConfig();
   const updates = {};
-  if (config.new_session_threshold === undefined) updates.new_session_threshold = 80;
-  if (config.codex_new_session_threshold === undefined) updates.codex_new_session_threshold = 80;
+  if (config.new_session_threshold === undefined) updates.new_session_threshold = 70;
+  if (config.codex_new_session_threshold === undefined) updates.codex_new_session_threshold = 75;
   if (Object.keys(updates).length === 0) return false;
   updateZylosConfig(updates);
   return true;

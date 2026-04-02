@@ -29,8 +29,8 @@ const C4_CONTROL = path.join(ZYLOS_DIR, '.claude/skills/comm-bridge/scripts/c4-c
 const C4_DB = path.join(ZYLOS_DIR, '.claude/skills/comm-bridge/scripts/c4-db.js');
 const CONFIG_FILE = path.join(ZYLOS_DIR, '.zylos', 'config.json');
 
-// Thresholds — configurable via config.json `new_session_threshold` (default 80)
-const DEFAULT_THRESHOLD = 80;
+// Thresholds — configurable via config.json `new_session_threshold` (default 70)
+const DEFAULT_THRESHOLD = 70;
 const RESTART_THRESHOLD = readThresholdFromConfig();
 const COOLDOWN_SECONDS = 300;   // Re-trigger after 5 minutes if still above threshold
 
