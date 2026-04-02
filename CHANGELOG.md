@@ -26,6 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - **block-queue-until-idle removed from non-exit messages**: context threshold, startup fallback, usage notification, and session handoff messages no longer wait for idle state before delivery — only `/exit` commands retain the flag (#478)
 - **heartbeatEnabled scope corrected**: `heartbeatEnabled=false` now only disables primary polling dispatch — recovery, detection, and immediate probe paths remain active for both Claude and Codex runtimes (#477)
+- **Periodic probe gated behind heartbeatEnabled**: 30-min periodic health probe now respects the `heartbeat_enabled` config flag — disabled by default along with primary heartbeat (#479)
 - **PM2 restart semantics**: ecosystem-managed services now restart correctly with proper fallback paths for runtime recovery (#450, closes #443)
 - **Self-upgrade settings.json restart**: Claude auto-restarts after settings.json changes during upgrade (#463)
 - **SessionStart hook matcher split**: matchers correctly exclude resume events, preventing duplicate hook execution (#458)
