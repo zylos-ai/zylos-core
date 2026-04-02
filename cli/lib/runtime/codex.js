@@ -24,7 +24,7 @@ import { RuntimeAdapter } from './base.js';
 import { buildInstructionFile } from './instruction-builder.js';
 import { CodexContextMonitor } from './codex-context-monitor.js';
 import { createCodexProbe } from '../heartbeat/codex-probe.js';
-import { ZYLOS_DIR, SKILLS_DIR } from '../config.js';
+import { ZYLOS_DIR, SKILLS_DIR, getZylosConfig } from '../config.js';
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -361,10 +361,14 @@ export class CodexAdapter extends RuntimeAdapter {
 
   /**
    * Returns a CodexContextMonitor instance for this runtime.
+   * Reads threshold from config.json `codex_new_session_threshold` (default 75%).
    * @returns {CodexContextMonitor}
    */
   getContextMonitor() {
-    return new CodexContextMonitor();
+    const config = getZylosConfig();
+    const val = parseInt(config.codex_new_session_threshold, 10);
+    const threshold = (!isNaN(val) && val > 0 && val <= 100) ? val / 100 : 0.75;
+    return new CodexContextMonitor({ threshold });
   }
 }
 

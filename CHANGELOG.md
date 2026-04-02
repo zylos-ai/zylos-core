@@ -5,6 +5,39 @@ All notable changes to zylos-core will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.11] - 2026-04-02
+
+### Added
+- **PreToolUse auth prompt logging hook**: logs permission request events for audit and analysis (#466)
+- **Codex project-level config**: split Codex configuration into project-level and global locations for multi-project support (#475)
+- **Control message supersede**: equivalent pending control messages are automatically superseded, reducing duplicate processing (#465, closes #454)
+- **Claude default model backfill on upgrade**: self-upgrade now ensures the Claude default model is configured (#456)
+- **Daily Claude Code upgrade opt-in**: automatic daily upgrade is now disabled by default, configurable via settings (#460)
+
+### Changed
+- **Unified input box detection**: cursor_x fast path with cursor_y/prompt_y fallback replaces previous detection logic, improving accuracy for multi-line edge cases (#473)
+- **Memory sync decoupled from new-session**: faster session switching by running memory sync independently (#449)
+- **autoMemory and autoDream disabled by default**: both features now opt-in to reduce unnecessary background processing (#476)
+- **Periodic heartbeat disabled by default for Claude runtime**: reduces unnecessary heartbeat traffic when not needed (#472)
+- **Usage sidecar probes removed**: simplified architecture by removing the dedicated usage sidecar probe flow (#471)
+- **check-context hidden from user menu**: skill remains available to Claude but not shown in user-facing skill list (#453)
+- **c4 require-idle flag renamed**: external flag name updated for clarity (#409)
+
+### Fixed
+- **block-queue-until-idle removed from non-exit messages**: context threshold, startup fallback, usage notification, and session handoff messages no longer wait for idle state before delivery — only `/exit` commands retain the flag (#478)
+- **heartbeatEnabled scope corrected**: `heartbeatEnabled=false` now only disables primary polling dispatch — recovery, detection, and immediate probe paths remain active for both Claude and Codex runtimes (#477)
+- **PM2 restart semantics**: ecosystem-managed services now restart correctly with proper fallback paths for runtime recovery (#450, closes #443)
+- **Self-upgrade settings.json restart**: Claude auto-restarts after settings.json changes during upgrade (#463)
+- **SessionStart hook matcher split**: matchers correctly exclude resume events, preventing duplicate hook execution (#458)
+- **Hook sync forward pass**: matcher-aware forward pass prevents incorrect hook synchronization (#462)
+- **Bootstrap restart enqueue**: restart enqueue moved into sync-settings-hooks to fix bootstrap ordering (#464)
+- **Codex input box detection**: empty prompt and status-line layout correctly recognized (#440)
+- **Activity-monitor health checks**: now run daily instead of being skipped (#459)
+- **Activity-monitor statusline format**: handles five_hour/seven_day format variants correctly
+- **Recent conversations order**: C4 recent conversations now print chronologically (#457)
+- **Early memory sync guard**: prevents memory sync from triggering before sufficient unsummarized content exists (#455)
+- **Self-upgrade step11 service restart**: repaired service restart step in self-upgrade flow (#456)
+
 ## [0.4.10] - 2026-03-28
 
 ### Added

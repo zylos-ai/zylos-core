@@ -6,11 +6,12 @@
  *
  * Current migrations:
  *   - v0.4.0: CLAUDE.md → ZYLOS.md split (multi-runtime support)
+ *   - v0.4.11: Add new_session_threshold defaults to config.json
  */
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { ZYLOS_DIR } from './config.js';
+import { ZYLOS_DIR, getZylosConfig, updateZylosConfig } from './config.js';
 
 const CLAUDE_MD = path.join(ZYLOS_DIR, 'CLAUDE.md');
 const AGENTS_MD = path.join(ZYLOS_DIR, 'AGENTS.md');
@@ -27,6 +28,10 @@ export function runMigrations() {
 
   if (migrateClaudeMdToZylosMd()) {
     migrated.push('v0.4.0/claude-md-to-zylos-md');
+  }
+
+  if (migrateNewSessionThresholdDefaults()) {
+    migrated.push('v0.4.11/new-session-threshold-defaults');
   }
 
   return { migrated };
@@ -127,5 +132,25 @@ function migrateClaudeMdToZylosMd() {
   fs.renameSync(zylosMdTmp, ZYLOS_MD);
   fs.renameSync(claudeMdNew, CLAUDE_MD);
 
+  return true;
+}
+
+/**
+ * v0.4.11 migration: Add new_session_threshold defaults to config.json
+ *
+ * Ensures both `new_session_threshold` (Claude) and `codex_new_session_threshold`
+ * (Codex) are explicitly set in config.json. Only writes missing keys.
+ *
+ * Idempotent: no-op if both keys already exist.
+ *
+ * @returns {boolean} true if migration ran
+ */
+function migrateNewSessionThresholdDefaults() {
+  const config = getZylosConfig();
+  const updates = {};
+  if (config.new_session_threshold === undefined) updates.new_session_threshold = 70;
+  if (config.codex_new_session_threshold === undefined) updates.codex_new_session_threshold = 75;
+  if (Object.keys(updates).length === 0) return false;
+  updateZylosConfig(updates);
   return true;
 }

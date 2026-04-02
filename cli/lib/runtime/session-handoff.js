@@ -50,7 +50,6 @@ export function enqueueNewSession({ ratio = 0, used = 0, ceiling = 0, runtime = 
         '--content', content,
         '--priority', '1',
         '--bypass-state',
-        '--block-queue-until-idle',
         '--no-ack-suffix',
       ], { encoding: 'utf8', stdio: 'pipe', timeout: 10_000 });
       return true;
