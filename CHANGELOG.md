@@ -24,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **c4 require-idle flag renamed**: external flag name updated for clarity (#409)
 
 ### Fixed
+- **block-queue-until-idle removed from non-exit messages**: context threshold, startup fallback, usage notification, and session handoff messages no longer wait for idle state before delivery — only `/exit` commands retain the flag (#478)
 - **heartbeatEnabled scope corrected**: `heartbeatEnabled=false` now only disables primary polling dispatch — recovery, detection, and immediate probe paths remain active for both Claude and Codex runtimes (#477)
 - **PM2 restart semantics**: ecosystem-managed services now restart correctly with proper fallback paths for runtime recovery (#450, closes #443)
 - **Self-upgrade settings.json restart**: Claude auto-restarts after settings.json changes during upgrade (#463)
