@@ -472,7 +472,6 @@ function enqueueStartupControl() {
     'enqueue',
     '--content', content,
     '--priority', '3',
-    '--block-queue-until-idle',
     '--available-in', '3',
     '--no-ack-suffix'
   ]);
@@ -1071,7 +1070,6 @@ function sendUsageNotification(message) {
     'enqueue',
     '--content', content,
     '--priority', '1',
-    '--block-queue-until-idle',
     '--available-in', '5',
     '--no-ack-suffix'
   ]);

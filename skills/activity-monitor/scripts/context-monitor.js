@@ -119,7 +119,6 @@ function main(raw) {
         '--content', `Context usage at ${usedPct}%, exceeding ${RESTART_THRESHOLD}% threshold. Use the new-session skill to start a fresh session.`,
         '--priority', '1',
         '--bypass-state',
-        '--block-queue-until-idle',
         '--no-ack-suffix'
       ], { encoding: 'utf8', stdio: 'pipe' });
 
