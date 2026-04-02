@@ -541,14 +541,14 @@ describe('HeartbeatEngine', () => {
       assert.deepStrictEqual(calls.enqueueHeartbeat, []);
     });
 
-    it('returns false when heartbeat is disabled', () => {
+    it('still works when primary heartbeat is disabled', () => {
       const { deps, calls } = createMockDeps();
       const engine = new HeartbeatEngine(deps, { heartbeatEnabled: false });
 
       const result = engine.requestImmediateProbe('test');
 
-      assert.equal(result, false);
-      assert.deepStrictEqual(calls.enqueueHeartbeat, []);
+      assert.equal(result, true);
+      assert.deepStrictEqual(calls.enqueueHeartbeat, ['stuck']);
     });
 
     it('returns false when another heartbeat is pending', () => {
@@ -583,7 +583,7 @@ describe('HeartbeatEngine', () => {
   });
 
   describe('in-flight heartbeat handling', () => {
-    it('clears stale pending and skips processing when heartbeat is disabled', () => {
+    it('processes stale pending normally even when primary heartbeat is disabled', () => {
       const { deps, calls } = createMockDeps();
       const now = Math.floor(Date.now() / 1000);
       deps._pending = { control_id: 1, phase: 'primary', created_at: now - 700 };
@@ -592,10 +592,9 @@ describe('HeartbeatEngine', () => {
 
       engine.processHeartbeat(true, now);
 
-      assert.equal(calls.clearHeartbeatPending, 1);
-      assert.deepStrictEqual(calls.getHeartbeatStatus, []);
-      assert.equal(calls.killTmuxSession, 0);
-      assert.equal(engine.health, 'ok');
+      // Stale pending is processed (treated as timeout), not silently cleared
+      assert.deepStrictEqual(calls.getHeartbeatStatus, [1]);
+      assert.equal(engine.health, 'recovering');
     });
 
     it('does nothing when status is pending (fresh)', () => {
@@ -661,13 +660,13 @@ describe('HeartbeatEngine', () => {
       assert.deepStrictEqual(calls.enqueueHeartbeat, ['recovery']);
     });
 
-    it('does not enqueue recovery heartbeat when disabled', () => {
+    it('still enqueues recovery heartbeat when primary heartbeat is disabled', () => {
       const { deps, calls } = createMockDeps();
       const engine = new HeartbeatEngine(deps, { initialHealth: 'recovering', heartbeatEnabled: false });
 
       engine.processHeartbeat(true, Math.floor(Date.now() / 1000));
 
-      assert.deepStrictEqual(calls.enqueueHeartbeat, []);
+      assert.deepStrictEqual(calls.enqueueHeartbeat, ['recovery']);
     });
   });
 

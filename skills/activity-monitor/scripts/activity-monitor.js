@@ -1501,7 +1501,7 @@ function init() {
   procSampler = new ProcSampler({ sessionName: adapter.sessionName, log });
 
   const initialStatus = loadInitialHealth();
-  const initialHealth = heartbeatEnabled ? initialStatus.health : 'ok';
+  const initialHealth = initialStatus.health;
 
   // Merge runtime-specific heartbeat deps (enqueueHeartbeat, getHeartbeatStatus,
   // detectRateLimit, readHeartbeatPending, clearHeartbeatPending) from the adapter,
