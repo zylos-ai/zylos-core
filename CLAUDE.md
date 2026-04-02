@@ -46,14 +46,11 @@ module.exports = myFunction;
 When releasing a new version:
 
 1. **Update `package.json`** — bump `version` field to the new version number
-2. **Update `CHANGELOG.md`** — add a new section following [Keep a Changelog](https://keepachangelog.com/) format with Added/Fixed/Changed/Removed subsections as applicable
-3. **Commit and push** — include both files in the PR
-4. **Merge PR first** — all changes must be merged to `main` before tagging
-5. **Tag and release** — after merge, create a git tag (`vX.Y.Z`) on `main` and a GitHub release with release notes summarizing the changelog
-
-When a new version supersedes a previous one:
-- Mark the old version's CHANGELOG entry with `_(superseded by X.Y.Z — reason)_`
-- Edit the old GitHub release: prepend `> **Superseded by vX.Y.Z**` to the body
+2. **Update `package-lock.json`** — run `npm install` to sync the lock file with the new version
+3. **Update `CHANGELOG.md`** — add a new section following [Keep a Changelog](https://keepachangelog.com/) format with Added/Fixed/Changed/Removed subsections as applicable
+4. **Commit and push** — include all three files in the PR
+5. **Merge PR first** — all changes must be merged to `main` before tagging
+6. **Tag and release** — after merge, create a git tag (`vX.Y.Z`) on `main` and a GitHub release with release notes summarizing the changelog
 
 Version numbers follow [Semantic Versioning](https://semver.org/).
 
