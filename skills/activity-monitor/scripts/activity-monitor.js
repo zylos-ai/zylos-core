@@ -1427,15 +1427,16 @@ async function monitorLoop() {
     maybeConsumeUserMessageSignal(currentTime);
   }
 
-  // Periodic probe: 3-min end-to-end health check. Complementary to ProcSampler:
+  // Periodic probe: 30-min end-to-end health check. Complementary to ProcSampler:
   // ProcSampler detects frozen processes, periodic probe catches functional failures
   // (API errors, auth expired, stuck prompts) where the process is alive but broken.
+  // Gated by heartbeatEnabled — disabled by default (same config as primary heartbeat).
   // Skip during launch grace period — new sessions need time to initialize hooks/CLAUDE.md
   // before they can respond to heartbeats.
-  if (engine.health === 'ok') {
+  if (engine.heartbeatEnabled && engine.health === 'ok') {
     const withinGracePeriod = lastLaunchAt > 0 && (currentTime - lastLaunchAt) < LAUNCH_GRACE_PERIOD;
     if (!withinGracePeriod && activeTools === 0 && (currentTime - lastPeriodicProbeAt) >= PERIODIC_PROBE_INTERVAL) {
-      const ok = engine.requestImmediateProbe('periodic_3min');
+      const ok = engine.requestImmediateProbe('periodic_30min');
       if (ok) lastPeriodicProbeAt = currentTime;
     }
   }
