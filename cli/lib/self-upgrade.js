@@ -117,16 +117,21 @@ export function checkForCoreUpdates({ branch, beta = false } = {}) {
  * @param {string} version
  * @returns {{ success: boolean, tempDir?: string, error?: string }}
  */
-export function downloadCoreToTemp(version, branch) {
+function getWritableTmpBase(prefix = 'zylos-self-upgrade-probe-') {
   let base = os.tmpdir();
   try {
-    const probe = fs.mkdtempSync(path.join(base, 'zylos-self-upgrade-probe-'));
+    const probe = fs.mkdtempSync(path.join(base, prefix));
     fs.rmSync(probe, { recursive: true, force: true });
   } catch {
     // System tmp unavailable — fallback to ~/tmp
     base = path.join(os.homedir(), 'tmp');
     fs.mkdirSync(base, { recursive: true });
   }
+  return base;
+}
+
+export function downloadCoreToTemp(version, branch) {
+  const base = getWritableTmpBase('zylos-self-upgrade-probe-');
   const tempDir = fs.mkdtempSync(path.join(base, 'zylos-self-upgrade-'));
 
   if (branch) {
@@ -579,7 +584,8 @@ function createContext({ tempDir, newVersion, mode } = {}) {
 export function step1_backupCoreSkills(ctx, deps = {}) {
   const startTime = Date.now();
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const backupDir = deps.backupDir ?? path.join(os.tmpdir(), `zylos-core-backup-${timestamp}`);
+  const backupDir = deps.backupDir
+    ?? path.join(getWritableTmpBase('zylos-core-backup-probe-'), `zylos-core-backup-${timestamp}`);
   const zylosDir = deps.zylosDir ?? ZYLOS_DIR;
   const skillsDir = deps.skillsDir ?? SKILLS_DIR;
   const copyTreeFn = deps.copyTree ?? copyTree;
