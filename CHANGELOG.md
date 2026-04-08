@@ -7,11 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.4.12] - 2026-04-08
 
+> **⚠️ UPGRADE STRONGLY RECOMMENDED for all instances.** This release hardens temporary directory handling across all upgrade paths. Previous versions could fail silently or leave orphaned temp directories when the system tmpdir was not writable, and the `--temp-dir` flag created a fragile cross-step state that risked accidental directory deletion.
+
+### Changed
+- **`--temp-dir` flag removed**: the two-step upgrade flow (`--check` → `--yes --temp-dir <path>`) has been simplified. `--check` now performs preview analysis only and cleans up its temp artifacts automatically; the confirm step always performs a fresh download instead of reusing check-phase artifacts. Passing `--temp-dir` now exits immediately with an error. The `tempDir` field has been removed from `--check --json` output. (#487)
+
 ### Fixed
-- **Upgrade temp-dir safety checks**: `zylos upgrade --temp-dir` now validates candidate paths more strictly before cleanup, preventing accidental directory deletion outside the intended temp roots (#487)
-- **Download temp-dir fallback**: download helpers now fall back to `~/tmp` when `TMPDIR` is invalid or not writable, preventing archive download/setup failures in broken temp-dir environments (#488)
-- **Self-upgrade backup temp-dir fallback**: `backup_core_skills` now uses the same writable-temp probing and `~/tmp` fallback path, fixing self-upgrade failures before the backup step completes (#489)
-- **Upgrade merge/backup temp-dir fallback completed**: component backup self-copy and smart-merge `diff3` workspaces now also fall back to `~/tmp`, closing the remaining `TMPDIR=/nonexistent` failure paths in upgrade/self-upgrade flows (#490)
+- **Fallback to `~/tmp` when system tmpdir is not writable**: all code paths that create temporary directories — archive download, self-upgrade backup, `copyTree` self-copy, and `diff3` merge workspace — now probe the system tmpdir for write access first. If unavailable (e.g. containerized or restricted environments), they fall back to `~/tmp` (created automatically). (#488, #489, #490)
+- **`cleanupTemp()` path safety validation**: temporary directory cleanup now verifies the target path is under an allowed temp root (system tmpdir or `~/tmp`) before deletion, preventing accidental removal of arbitrary directories. (#487)
 
 ## [0.4.11] - 2026-04-02
 
