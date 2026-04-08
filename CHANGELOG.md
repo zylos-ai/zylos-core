@@ -5,6 +5,12 @@ All notable changes to zylos-core will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.12] - 2026-04-08
+
+### Fixed
+- **Upgrade tmpdir fallback completed**: component backup self-copy now falls back to `~/tmp` when `TMPDIR` is invalid or not writable, preventing `zylos upgrade <component>` from failing in the backup step under broken temp-dir environments (#490)
+- **diff3 merge workspace tmpdir fallback**: smart-merge three-way merge now also falls back to `~/tmp` for its temporary workspace, closing the remaining `TMPDIR=/nonexistent` failure path in upgrade/self-upgrade flows (#490)
+
 ## [0.4.11] - 2026-04-02
 
 ### Added
