@@ -556,7 +556,7 @@ async function handleCheckOnly(component, { jsonOutput, branch, beta = false }) 
 async function handleUpgradeFlow(component, { jsonOutput, skipConfirm, skipEval, providedTempDir, branch, beta = false, mode = 'merge' }) {
   const skillDir = path.join(SKILLS_DIR, component);
   let tempDir = providedTempDir || null;
-  const tempDirWasProvided = !!providedTempDir;
+  let tempDirWasProvided = !!providedTempDir;
 
   // 1. Acquire lock
   const lockResult = acquireLock(component);
@@ -1008,7 +1008,7 @@ async function upgradeSelfCore({ providedTempDir, branch, beta = false, mode = '
   const jsonOutput = process.argv.includes('--json');
   const skipConfirm = process.argv.includes('--yes') || process.argv.includes('-y');
   let tempDir = providedTempDir || null;
-  const tempDirWasProvided = !!providedTempDir;
+  let tempDirWasProvided = !!providedTempDir;
 
   // 1. Acquire lock (reuse component lock mechanism with special name)
   const lockResult = acquireLock('_zylos-core');
