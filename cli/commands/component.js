@@ -230,7 +230,7 @@ export async function upgradeComponent(args) {
   const hasTempDirFlag = args.includes('--temp-dir');
 
   if (hasTempDirFlag) {
-    const msg = '--temp-dir is no longer supported. Run --check for preview and run confirm/--yes without --temp-dir.';
+    const msg = '--temp-dir is not supported.';
     if (jsonOutput) {
       const errOutput = { action: 'upgrade', success: false, error: msg };
       errOutput.reply = formatC4Reply('error', { message: msg });
