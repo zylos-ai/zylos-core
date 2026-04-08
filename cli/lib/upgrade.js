@@ -165,8 +165,8 @@ function safeResolve(p) {
 
 /**
  * Return the list of directory roots under which temp dirs are allowed.
- * Used by validateTempDir (in component.js) and cleanupTemp to keep the
- * whitelist in sync.  Order: system tmpdir first, ~/tmp as fallback.
+ * Used by cleanupTemp in both component and self-upgrade flows.
+ * Order: system tmpdir first, ~/tmp as fallback.
  */
 export function getAllowedTmpRoots() {
   const roots = [];
