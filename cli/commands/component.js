@@ -10,7 +10,7 @@ import { ZYLOS_DIR, SKILLS_DIR, COMPONENTS_DIR, getZylosConfig } from '../lib/co
 import { bold, dim, green, red, yellow, cyan, success, error, warn, heading } from '../lib/colors.js';
 import { loadRegistry } from '../lib/registry.js';
 import { loadComponents, saveComponents } from '../lib/components.js';
-import { checkForUpdates, getRepo, runUpgrade, downloadToTemp, readChangelog, filterChangelog, cleanupTemp } from '../lib/upgrade.js';
+import { checkForUpdates, getRepo, runUpgrade, downloadToTemp, readChangelog, filterChangelog, cleanupTemp, getAllowedTmpRoots } from '../lib/upgrade.js';
 import {
   checkForCoreUpdates, runSelfUpgrade,
   downloadCoreToTemp, readChangelog as readCoreChangelog,
@@ -381,13 +381,13 @@ function isProtectedPath(resolved) {
 function validateTempDir(tempDir, { jsonOutput, action, component }) {
   // Use realpathSync to resolve symlinks — prevents /tmp/link -> /home/user bypass
   const resolved = safeRealpathSync(tempDir);
-  const tmpRoot = safeRealpathSync(os.tmpdir());
+  const allowedRoots = getAllowedTmpRoots();
 
   const checks = [
     // Safety: must not be a protected directory
     { test: () => !isProtectedPath(resolved), msg: `Refusing --temp-dir: ${resolved} is a protected directory` },
-    // Safety: must be under the system temp directory
-    { test: () => resolved.startsWith(tmpRoot + '/'), msg: `Refusing --temp-dir: path must be under ${tmpRoot}` },
+    // Safety: must be under an allowed temp root (os.tmpdir() or ~/tmp)
+    { test: () => allowedRoots.some(root => resolved.startsWith(root + '/')), msg: `Refusing --temp-dir: path must be under ${allowedRoots.join(' or ')}` },
     // Original checks
     { test: () => fs.existsSync(tempDir), msg: `Provided temp dir does not exist: ${tempDir}` },
     { test: () => fs.existsSync(path.join(tempDir, 'package.json')), msg: `Provided temp dir is missing package.json (empty or invalid): ${tempDir}` },
@@ -442,7 +442,12 @@ async function handleCheckOnly(component, { jsonOutput, branch, beta = false }) 
   if (shouldDownload) {
     const repo = result.repo || (branch ? getRepo(component) : null);
     if (repo) {
-      const dlResult = downloadToTemp(repo, result.latest, branch);
+      let dlResult;
+      try {
+        dlResult = downloadToTemp(repo, result.latest, branch);
+      } catch (err) {
+        dlResult = { success: false, error: err.message };
+      }
       if (dlResult.success) {
         tempDir = dlResult.tempDir;
 
@@ -640,7 +645,12 @@ async function handleUpgradeFlow(component, { jsonOutput, skipConfirm, skipEval,
         console.log(`\nDownloading ${bold(downloadLabel)}...`);
       }
 
-      const dlResult = downloadToTemp(repo, check.latest, branch);
+      let dlResult;
+      try {
+        dlResult = downloadToTemp(repo, check.latest, branch);
+      } catch (err) {
+        dlResult = { success: false, error: err.message };
+      }
       if (!dlResult.success) {
         if (jsonOutput) {
           const errOutput = { action: 'upgrade', component, success: false, error: dlResult.error };
@@ -939,7 +949,12 @@ function handleSelfCheckOnly({ jsonOutput, branch, beta = false }) {
   // With --branch, always proceed even if versions match (user wants to install specific branch)
   if (check.hasUpdate || branch) {
     // Download new version to temp dir (for template/file comparison by Claude)
-    const dlResult = downloadCoreToTemp(check.latest, branch);
+    let dlResult;
+    try {
+      dlResult = downloadCoreToTemp(check.latest, branch);
+    } catch (err) {
+      dlResult = { success: false, error: err.message };
+    }
     if (dlResult.success) {
       tempDir = dlResult.tempDir;
 
@@ -1079,7 +1094,12 @@ async function upgradeSelfCore({ providedTempDir, branch, beta = false, mode = '
         console.log(`\nDownloading ${bold(downloadLabel)}...`);
       }
 
-      const dlResult = downloadCoreToTemp(check.latest, branch);
+      let dlResult;
+      try {
+        dlResult = downloadCoreToTemp(check.latest, branch);
+      } catch (err) {
+        dlResult = { success: false, error: err.message };
+      }
       if (!dlResult.success) {
         if (jsonOutput) {
           const errOutput = { action: 'self_upgrade', success: false, error: dlResult.error };

@@ -156,6 +156,27 @@ export function checkForUpdates(component, { beta = false } = {}) {
 }
 
 // ---------------------------------------------------------------------------
+// Internal: allowed temp roots for safety checks
+// ---------------------------------------------------------------------------
+
+function safeResolve(p) {
+  try { return fs.realpathSync(p); } catch { return path.resolve(p); }
+}
+
+/**
+ * Return the list of directory roots under which temp dirs are allowed.
+ * Used by validateTempDir (in component.js) and cleanupTemp to keep the
+ * whitelist in sync.  Order: system tmpdir first, ~/tmp as fallback.
+ */
+export function getAllowedTmpRoots() {
+  const roots = [];
+  try { roots.push(safeResolve(os.tmpdir())); } catch { /* skip */ }
+  const userTmp = path.join(os.homedir(), 'tmp');
+  roots.push(safeResolve(userTmp));
+  return roots;
+}
+
+// ---------------------------------------------------------------------------
 // Public: downloadToTemp
 // ---------------------------------------------------------------------------
 
@@ -168,7 +189,16 @@ export function checkForUpdates(component, { beta = false } = {}) {
  * @returns {{ success: boolean, tempDir?: string, error?: string }}
  */
 export function downloadToTemp(repo, version, branch) {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-upgrade-'));
+  let base = os.tmpdir();
+  try {
+    const probe = fs.mkdtempSync(path.join(base, 'zylos-upgrade-probe-'));
+    fs.rmSync(probe, { recursive: true, force: true });
+  } catch {
+    // System tmp unavailable — fallback to ~/tmp
+    base = path.join(os.homedir(), 'tmp');
+    fs.mkdirSync(base, { recursive: true });
+  }
+  const tempDir = fs.mkdtempSync(path.join(base, 'zylos-upgrade-'));
 
   if (branch) {
     const branchResult = downloadBranch(repo, branch, tempDir);
@@ -271,12 +301,11 @@ export function cleanupTemp(tempDir) {
 
   let resolved;
   try { resolved = fs.realpathSync(tempDir); } catch { resolved = path.resolve(tempDir); }
-  let tmpRoot;
-  try { tmpRoot = fs.realpathSync(os.tmpdir()); } catch { tmpRoot = path.resolve(os.tmpdir()); }
 
-  // Safety: only delete directories under the system temp directory
-  if (!resolved.startsWith(tmpRoot + '/')) {
-    console.error(`SAFETY: refusing to delete ${resolved} (not under ${tmpRoot})`);
+  // Safety: only delete directories under allowed temp roots
+  const allowedRoots = getAllowedTmpRoots();
+  if (!allowedRoots.some(root => resolved.startsWith(root + '/'))) {
+    console.error(`SAFETY: refusing to delete ${resolved} (not under any allowed temp root)`);
     return;
   }
 

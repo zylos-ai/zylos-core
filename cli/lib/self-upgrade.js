@@ -15,6 +15,7 @@ import { fetchRawFile, fetchLatestTag, compareSemverDesc, sanitizeError } from '
 import { copyTree, syncTree } from './fs-utils.js';
 import { extractScriptPath, extractSkillName, getCommandHooks } from './hook-utils.js';
 import { smartSync, formatMergeResult } from './smart-merge.js';
+import { getAllowedTmpRoots } from './upgrade.js';
 import { runMigrations } from './migrate.js';
 import { writeCodexConfig } from './runtime-setup.js';
 import { getCoreEcosystemPath, restartManagedProcess } from './pm2.js';
@@ -117,7 +118,16 @@ export function checkForCoreUpdates({ branch, beta = false } = {}) {
  * @returns {{ success: boolean, tempDir?: string, error?: string }}
  */
 export function downloadCoreToTemp(version, branch) {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-self-upgrade-'));
+  let base = os.tmpdir();
+  try {
+    const probe = fs.mkdtempSync(path.join(base, 'zylos-self-upgrade-probe-'));
+    fs.rmSync(probe, { recursive: true, force: true });
+  } catch {
+    // System tmp unavailable — fallback to ~/tmp
+    base = path.join(os.homedir(), 'tmp');
+    fs.mkdirSync(base, { recursive: true });
+  }
+  const tempDir = fs.mkdtempSync(path.join(base, 'zylos-self-upgrade-'));
 
   if (branch) {
     const branchResult = downloadBranch(REPO, branch, tempDir);
@@ -1427,12 +1437,11 @@ export function cleanupTemp(tempDir) {
 
   let resolved;
   try { resolved = fs.realpathSync(tempDir); } catch { resolved = path.resolve(tempDir); }
-  let tmpRoot;
-  try { tmpRoot = fs.realpathSync(os.tmpdir()); } catch { tmpRoot = path.resolve(os.tmpdir()); }
 
-  // Safety: only delete directories under the system temp directory
-  if (!resolved.startsWith(tmpRoot + '/')) {
-    console.error(`SAFETY: refusing to delete ${resolved} (not under ${tmpRoot})`);
+  // Safety: only delete directories under allowed temp roots
+  const allowedRoots = getAllowedTmpRoots();
+  if (!allowedRoots.some(root => resolved.startsWith(root + '/'))) {
+    console.error(`SAFETY: refusing to delete ${resolved} (not under any allowed temp root)`);
     return;
   }
 
