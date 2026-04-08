@@ -7,6 +7,19 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 
+function getWritableTmpBase(prefix = 'zylos-copy-probe-') {
+  let base = os.tmpdir();
+  try {
+    const probe = fs.mkdtempSync(path.join(base, prefix));
+    fs.rmSync(probe, { recursive: true, force: true });
+  } catch {
+    // System tmp unavailable — fallback to ~/tmp
+    base = path.join(os.homedir(), 'tmp');
+    fs.mkdirSync(base, { recursive: true });
+  }
+  return base;
+}
+
 /**
  * Check if a relative path should be excluded.
  * Matches top-level directory names (e.g., 'node_modules', '.git').
@@ -59,7 +72,7 @@ export function copyTree(src, dest, { excludes = [] } = {}) {
 
   // Detect self-copy: dest is inside src (e.g., src/.backup/timestamp)
   if (resolvedDest.startsWith(resolvedSrc + path.sep)) {
-    const tmpDest = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-copy-'));
+    const tmpDest = fs.mkdtempSync(path.join(getWritableTmpBase(), 'zylos-copy-'));
     try {
       cpSyncFiltered(resolvedSrc, tmpDest, excludes);
       // Move from temp to real dest
