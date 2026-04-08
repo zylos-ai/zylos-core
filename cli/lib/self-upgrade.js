@@ -1425,8 +1425,8 @@ export function runSelfUpgrade({ tempDir, newVersion, mode, onStep } = {}) {
 export function cleanupTemp(tempDir) {
   if (!tempDir || !fs.existsSync(tempDir)) return;
 
-  const resolved = path.resolve(tempDir);
-  const tmpRoot = path.resolve(os.tmpdir());
+  const resolved = fs.realpathSync(tempDir);
+  const tmpRoot = fs.realpathSync(os.tmpdir());
 
   // Safety: only delete directories under the system temp directory
   if (!resolved.startsWith(tmpRoot + '/')) {

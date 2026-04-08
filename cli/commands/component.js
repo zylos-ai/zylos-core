@@ -360,10 +360,10 @@ export async function upgradeComponent(args) {
  * never be deleted by cleanup routines.
  */
 function isProtectedPath(resolved) {
-  const home = path.resolve(os.homedir());
-  const zylosDir = path.resolve(ZYLOS_DIR);
+  const home = fs.realpathSync(os.homedir());
+  const zylosDir = fs.realpathSync(ZYLOS_DIR);
   const forbidden = [home, zylosDir, '/', '/tmp', '/var', '/etc', '/usr', '/home'];
-  if (forbidden.some(d => resolved === path.resolve(d))) return true;
+  if (forbidden.some(d => resolved === (fs.existsSync(d) ? fs.realpathSync(d) : path.resolve(d)))) return true;
   // Also reject anything that is a parent of or equal to ZYLOS_DIR
   if (zylosDir.startsWith(resolved + '/')) return true;
   return false;
@@ -375,8 +375,9 @@ function isProtectedPath(resolved) {
  * Prints/logs the error if invalid. Returns { valid: boolean }.
  */
 function validateTempDir(tempDir, { jsonOutput, action, component }) {
-  const resolved = path.resolve(tempDir);
-  const tmpRoot = path.resolve(os.tmpdir());
+  // Use realpathSync to resolve symlinks — prevents /tmp/link -> /home/user bypass
+  const resolved = fs.existsSync(tempDir) ? fs.realpathSync(tempDir) : path.resolve(tempDir);
+  const tmpRoot = fs.realpathSync(os.tmpdir());
 
   const checks = [
     // Safety: must not be a protected directory
@@ -604,7 +605,9 @@ async function handleUpgradeFlow(component, { jsonOutput, skipConfirm, skipEval,
     if (tempDirWasProvided) {
       if (!validateTempDir(tempDir, { jsonOutput, action: 'upgrade', component }).valid) {
         // Fallback: re-download instead of failing — prevents LLM from retrying with unsafe paths
-        if (!jsonOutput) {
+        if (jsonOutput) {
+          console.error(JSON.stringify({ warning: 'temp-dir-fallback', message: 'Provided --temp-dir was invalid, falling back to fresh download. The installed version may differ from the one previously checked.' }));
+        } else {
           console.log(`\n${dim('Provided temp dir invalid, downloading fresh copy...')}`);
         }
         tempDirWasProvided = false;
@@ -1053,7 +1056,9 @@ async function upgradeSelfCore({ providedTempDir, branch, beta = false, mode = '
     if (tempDirWasProvided) {
       if (!validateTempDir(tempDir, { jsonOutput, action: 'self_upgrade' }).valid) {
         // Fallback: re-download instead of failing — prevents LLM from retrying with unsafe paths
-        if (!jsonOutput) {
+        if (jsonOutput) {
+          console.error(JSON.stringify({ warning: 'temp-dir-fallback', message: 'Provided --temp-dir was invalid, falling back to fresh download. The installed version may differ from the one previously checked.' }));
+        } else {
           console.log(`\n${dim('Provided temp dir invalid, downloading fresh copy...')}`);
         }
         tempDirWasProvided = false;
