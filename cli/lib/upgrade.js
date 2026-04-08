@@ -269,8 +269,10 @@ export function filterChangelog(changelog, fromVersion) {
 export function cleanupTemp(tempDir) {
   if (!tempDir || !fs.existsSync(tempDir)) return;
 
-  const resolved = fs.realpathSync(tempDir);
-  const tmpRoot = fs.realpathSync(os.tmpdir());
+  let resolved;
+  try { resolved = fs.realpathSync(tempDir); } catch { resolved = path.resolve(tempDir); }
+  let tmpRoot;
+  try { tmpRoot = fs.realpathSync(os.tmpdir()); } catch { tmpRoot = path.resolve(os.tmpdir()); }
 
   // Safety: only delete directories under the system temp directory
   if (!resolved.startsWith(tmpRoot + '/')) {

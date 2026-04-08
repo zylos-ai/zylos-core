@@ -359,11 +359,15 @@ export async function upgradeComponent(args) {
  * Check whether a resolved path is a protected system directory that must
  * never be deleted by cleanup routines.
  */
+function safeRealpathSync(p) {
+  try { return fs.realpathSync(p); } catch { return path.resolve(p); }
+}
+
 function isProtectedPath(resolved) {
-  const home = fs.realpathSync(os.homedir());
-  const zylosDir = fs.realpathSync(ZYLOS_DIR);
+  const home = safeRealpathSync(os.homedir());
+  const zylosDir = safeRealpathSync(ZYLOS_DIR);
   const forbidden = [home, zylosDir, '/', '/tmp', '/var', '/etc', '/usr', '/home'];
-  if (forbidden.some(d => resolved === (fs.existsSync(d) ? fs.realpathSync(d) : path.resolve(d)))) return true;
+  if (forbidden.some(d => resolved === safeRealpathSync(d))) return true;
   // Also reject anything that is a parent of or equal to ZYLOS_DIR
   if (zylosDir.startsWith(resolved + '/')) return true;
   return false;
@@ -376,8 +380,8 @@ function isProtectedPath(resolved) {
  */
 function validateTempDir(tempDir, { jsonOutput, action, component }) {
   // Use realpathSync to resolve symlinks — prevents /tmp/link -> /home/user bypass
-  const resolved = fs.existsSync(tempDir) ? fs.realpathSync(tempDir) : path.resolve(tempDir);
-  const tmpRoot = fs.realpathSync(os.tmpdir());
+  const resolved = safeRealpathSync(tempDir);
+  const tmpRoot = safeRealpathSync(os.tmpdir());
 
   const checks = [
     // Safety: must not be a protected directory
