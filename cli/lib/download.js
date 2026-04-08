@@ -10,6 +10,23 @@ import os from 'node:os';
 import { getGitHubToken, sanitizeError } from './github.js';
 import { copyTree } from './fs-utils.js';
 
+function getWritableTmpBase() {
+  let base = os.tmpdir();
+  try {
+    const probe = fs.mkdtempSync(path.join(base, 'zylos-download-probe-'));
+    fs.rmSync(probe, { recursive: true, force: true });
+  } catch {
+    base = path.join(os.homedir(), 'tmp');
+    fs.mkdirSync(base, { recursive: true });
+  }
+  return base;
+}
+
+function createDownloadTmpDir() {
+  const base = getWritableTmpBase();
+  return fs.mkdtempSync(path.join(base, 'zylos-download-'));
+}
+
 /**
  * Download a tarball from a URL using curl.
  * Tries the public endpoint first (works for public repos without auth),
@@ -65,7 +82,16 @@ function curlDownload(repo, ref, refType, tarballPath) {
  */
 export function downloadArchive(repo, version, destDir) {
   const tag = version.startsWith('v') ? version : `v${version}`;
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-download-'));
+  let tmpDir;
+  try {
+    tmpDir = createDownloadTmpDir();
+  } catch (err) {
+    return {
+      success: false,
+      extractedDir: null,
+      error: `Failed to prepare temp dir: ${sanitizeError(err.message)}`,
+    };
+  }
   const tarballPath = path.join(tmpDir, 'archive.tar.gz');
 
   try {
@@ -121,7 +147,16 @@ export function copyLocal(localPath, destDir) {
  * @returns {{ success: boolean, extractedDir: string, error?: string }}
  */
 export function downloadBranch(repo, branch, destDir) {
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-download-'));
+  let tmpDir;
+  try {
+    tmpDir = createDownloadTmpDir();
+  } catch (err) {
+    return {
+      success: false,
+      extractedDir: null,
+      error: `Failed to prepare temp dir: ${sanitizeError(err.message)}`,
+    };
+  }
   const tarballPath = path.join(tmpDir, 'archive.tar.gz');
 
   try {
