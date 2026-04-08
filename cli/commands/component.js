@@ -4,6 +4,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { ZYLOS_DIR, SKILLS_DIR, COMPONENTS_DIR, getZylosConfig } from '../lib/config.js';
 import { bold, dim, green, red, yellow, cyan, success, error, warn, heading } from '../lib/colors.js';
@@ -355,11 +356,34 @@ export async function upgradeComponent(args) {
 }
 
 /**
- * Validate that a provided --temp-dir exists and contains a valid package.
+ * Check whether a resolved path is a protected system directory that must
+ * never be deleted by cleanup routines.
+ */
+function isProtectedPath(resolved) {
+  const home = path.resolve(os.homedir());
+  const zylosDir = path.resolve(ZYLOS_DIR);
+  const forbidden = [home, zylosDir, '/', '/tmp', '/var', '/etc', '/usr', '/home'];
+  if (forbidden.some(d => resolved === path.resolve(d))) return true;
+  // Also reject anything that is a parent of or equal to ZYLOS_DIR
+  if (zylosDir.startsWith(resolved + '/')) return true;
+  return false;
+}
+
+/**
+ * Validate that a provided --temp-dir exists, contains a valid package,
+ * and is safe to use (not a protected directory).
  * Prints/logs the error if invalid. Returns { valid: boolean }.
  */
 function validateTempDir(tempDir, { jsonOutput, action, component }) {
+  const resolved = path.resolve(tempDir);
+  const tmpRoot = path.resolve(os.tmpdir());
+
   const checks = [
+    // Safety: must not be a protected directory
+    { test: () => !isProtectedPath(resolved), msg: `Refusing --temp-dir: ${resolved} is a protected directory` },
+    // Safety: must be under the system temp directory
+    { test: () => resolved.startsWith(tmpRoot + '/'), msg: `Refusing --temp-dir: path must be under ${tmpRoot}` },
+    // Original checks
     { test: () => fs.existsSync(tempDir), msg: `Provided temp dir does not exist: ${tempDir}` },
     { test: () => fs.existsSync(path.join(tempDir, 'package.json')), msg: `Provided temp dir is missing package.json (empty or invalid): ${tempDir}` },
   ];
@@ -578,11 +602,20 @@ async function handleUpgradeFlow(component, { jsonOutput, skipConfirm, skipEval,
 
     // 3. Download new version to temp (skip if reusing from --check)
     if (tempDirWasProvided) {
-      if (!validateTempDir(tempDir, { jsonOutput, action: 'upgrade', component }).valid) return false;
-      if (!jsonOutput) {
-        console.log(`\n${dim(`Reusing previously downloaded package from ${tempDir}`)}`);
+      if (!validateTempDir(tempDir, { jsonOutput, action: 'upgrade', component }).valid) {
+        // Fallback: re-download instead of failing — prevents LLM from retrying with unsafe paths
+        if (!jsonOutput) {
+          console.log(`\n${dim('Provided temp dir invalid, downloading fresh copy...')}`);
+        }
+        tempDirWasProvided = false;
+        tempDir = null;
+      } else {
+        if (!jsonOutput) {
+          console.log(`\n${dim(`Reusing previously downloaded package from ${tempDir}`)}`);
+        }
       }
-    } else {
+    }
+    if (!tempDirWasProvided) {
       const repo = check.repo || (branch ? getRepo(component) : null);
       if (!repo) {
         if (jsonOutput) {
@@ -1018,11 +1051,20 @@ async function upgradeSelfCore({ providedTempDir, branch, beta = false, mode = '
 
     // 3. Download new version to temp (skip if reusing from --check)
     if (tempDirWasProvided) {
-      if (!validateTempDir(tempDir, { jsonOutput, action: 'self_upgrade' }).valid) return false;
-      if (!jsonOutput) {
-        console.log(`\n${dim(`Reusing previously downloaded package: ${tempDir}`)}`);
+      if (!validateTempDir(tempDir, { jsonOutput, action: 'self_upgrade' }).valid) {
+        // Fallback: re-download instead of failing — prevents LLM from retrying with unsafe paths
+        if (!jsonOutput) {
+          console.log(`\n${dim('Provided temp dir invalid, downloading fresh copy...')}`);
+        }
+        tempDirWasProvided = false;
+        tempDir = null;
+      } else {
+        if (!jsonOutput) {
+          console.log(`\n${dim(`Reusing previously downloaded package: ${tempDir}`)}`);
+        }
       }
-    } else {
+    }
+    if (!tempDirWasProvided) {
       const downloadLabel = branch ? `zylos-core (branch: ${branch})` : `zylos-core@${check.latest}`;
       if (!jsonOutput) {
         console.log(`\nDownloading ${bold(downloadLabel)}...`);

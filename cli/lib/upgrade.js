@@ -267,9 +267,18 @@ export function filterChangelog(changelog, fromVersion) {
  * @param {string} tempDir
  */
 export function cleanupTemp(tempDir) {
-  if (tempDir && fs.existsSync(tempDir)) {
-    fs.rmSync(tempDir, { recursive: true, force: true });
+  if (!tempDir || !fs.existsSync(tempDir)) return;
+
+  const resolved = path.resolve(tempDir);
+  const tmpRoot = path.resolve(os.tmpdir());
+
+  // Safety: only delete directories under the system temp directory
+  if (!resolved.startsWith(tmpRoot + '/')) {
+    console.error(`SAFETY: refusing to delete ${resolved} (not under ${tmpRoot})`);
+    return;
   }
+
+  fs.rmSync(tempDir, { recursive: true, force: true });
 }
 
 // ---------------------------------------------------------------------------

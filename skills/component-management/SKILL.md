@@ -99,6 +99,12 @@ All `--json` outputs include structured data and a `reply` field (pre-formatted 
 
 **CRITICAL: "add \<name\>" and "upgrade \<name\>" MUST ONLY run --check. NEVER execute install/upgrade without the word "confirm" in the user's message.**
 
+**CRITICAL: --temp-dir safety rules:**
+- The `--temp-dir` flag is ONLY for reusing a path returned by a previous `--check` command. It points to an already-downloaded package.
+- NEVER create a temp directory yourself and pass it as `--temp-dir`.
+- NEVER pass any path other than the `tempDir` value from a previous `--check` JSON output.
+- If `--temp-dir` fails, drop the flag and re-run without it (the system will re-download automatically). NEVER substitute a different path.
+
 | User says | CLI command |
 |-----------|------------|
 | list / list components | `zylos list` |
