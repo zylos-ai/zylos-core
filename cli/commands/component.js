@@ -227,8 +227,19 @@ export async function upgradeComponent(args) {
   const upgradeAll = args.includes('--all');
   const skipEval = args.includes('--skip-eval');
   const beta = args.includes('--beta');
-  const tempDirIdx = args.indexOf('--temp-dir');
-  const providedTempDir = tempDirIdx !== -1 ? args[tempDirIdx + 1] : null;
+  const hasTempDirFlag = args.includes('--temp-dir');
+
+  if (hasTempDirFlag) {
+    const msg = '--temp-dir is no longer supported. Run --check for preview and run confirm/--yes without --temp-dir.';
+    if (jsonOutput) {
+      const errOutput = { action: 'upgrade', success: false, error: msg };
+      errOutput.reply = formatC4Reply('error', { message: msg });
+      console.log(JSON.stringify(errOutput, null, 2));
+    } else {
+      console.error(`Error: ${msg}`);
+    }
+    process.exit(1);
+  }
 
   // Parse --branch <name> flag
   const branchIndex = args.indexOf('--branch');
@@ -257,7 +268,7 @@ export async function upgradeComponent(args) {
   }
 
   // Get target component (filter out flags and flag values)
-  const flagsWithValues = new Set(['--temp-dir', '--branch', '--mode']);
+  const flagsWithValues = new Set(['--branch', '--mode']);
   const target = args.find((a, i) => {
     if (a.startsWith('-')) return false;
     if (a === 'confirm') return false;
@@ -268,9 +279,6 @@ export async function upgradeComponent(args) {
 
   // Handle --self: upgrade zylos-core itself
   if (upgradeSelf) {
-    if (providedTempDir && !jsonOutput) {
-      console.log(warn('--temp-dir is deprecated and ignored. Upgrade will download a fresh package.'));
-    }
     if (checkOnly) {
       return handleSelfCheckOnly({ jsonOutput, branch, beta });
     }
@@ -347,10 +355,6 @@ export async function upgradeComponent(args) {
   }
 
   // Mode 2 & 3: Full upgrade flow (lock-first)
-  if (providedTempDir && !jsonOutput) {
-    console.log(warn('--temp-dir is deprecated and ignored. Upgrade will download a fresh package.'));
-  }
-
   const ok = await handleUpgradeFlow(target, { jsonOutput, skipConfirm: skipConfirm || explicitConfirm, skipEval, branch, beta, mode });
   if (!ok) process.exit(1);
 }

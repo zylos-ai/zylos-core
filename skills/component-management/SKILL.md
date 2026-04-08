@@ -102,7 +102,7 @@ All `--json` outputs include structured data and a `reply` field (pre-formatted 
 **CRITICAL: confirm flow now always re-downloads (no temp-dir reuse):**
 - `--check` is for preview/analysis only; any temporary download from check is cleaned up after the check completes.
 - `upgrade <name> confirm` and `upgrade zylos confirm` always download a fresh package.
-- Do not pass `--temp-dir`; it is deprecated and ignored.
+- Do not pass `--temp-dir`; it is no longer supported and the CLI will fail fast.
 
 | User says | CLI command |
 |-----------|------------|
