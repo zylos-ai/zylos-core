@@ -12,6 +12,19 @@ import { execFileSync } from 'node:child_process';
 
 let _diff3Available = null;
 
+function getWritableTmpBase(prefix = 'zylos-merge-probe-') {
+  let base = os.tmpdir();
+  try {
+    const probe = fs.mkdtempSync(path.join(base, prefix));
+    fs.rmSync(probe, { recursive: true, force: true });
+  } catch {
+    // System tmp unavailable — fallback to ~/tmp
+    base = path.join(os.homedir(), 'tmp');
+    fs.mkdirSync(base, { recursive: true });
+  }
+  return base;
+}
+
 /**
  * Check if the diff3 command is available on this system.
  * Result is cached after first check.
@@ -40,7 +53,7 @@ export function isDiff3Available() {
  *   clean=false: merge has conflict markers, content contains <<<<<<< markers
  */
 export function merge3(baseContent, localContent, newContent) {
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-merge-'));
+  const tmpDir = fs.mkdtempSync(path.join(getWritableTmpBase(), 'zylos-merge-'));
 
   const basePath = path.join(tmpDir, 'base');
   const localPath = path.join(tmpDir, 'local');
