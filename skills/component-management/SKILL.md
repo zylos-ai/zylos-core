@@ -99,11 +99,10 @@ All `--json` outputs include structured data and a `reply` field (pre-formatted 
 
 **CRITICAL: "add \<name\>" and "upgrade \<name\>" MUST ONLY run --check. NEVER execute install/upgrade without the word "confirm" in the user's message.**
 
-**CRITICAL: --temp-dir safety rules:**
-- The `--temp-dir` flag is ONLY for reusing a path returned by a previous `--check` command. It points to an already-downloaded package.
-- NEVER create a temp directory yourself and pass it as `--temp-dir`.
-- NEVER pass any path other than the `tempDir` value from a previous `--check` JSON output.
-- If `--temp-dir` fails, drop the flag and re-run without it (the system will re-download automatically). NEVER substitute a different path.
+**CRITICAL: confirm flow now always re-downloads (no temp-dir reuse):**
+- `--check` is for preview/analysis only; any temporary download from check is cleaned up after the check completes.
+- `upgrade <name> confirm` and `upgrade zylos confirm` always download a fresh package.
+- Do not pass `--temp-dir`; it is deprecated and ignored.
 
 | User says | CLI command |
 |-----------|------------|
@@ -112,15 +111,15 @@ All `--json` outputs include structured data and a `reply` field (pre-formatted 
 | check / check updates | `zylos upgrade --all --check --json` |
 | check \<name\> | `zylos upgrade <name> --check --json` |
 | upgrade \<name\> | `zylos upgrade <name> --check --json` **(CHECK ONLY)** |
-| upgrade \<name\> confirm | `zylos upgrade <name> --yes --skip-eval --json --temp-dir <tempDir>` |
+| upgrade \<name\> confirm | `zylos upgrade <name> --yes --skip-eval --json` |
 | upgrade \<name\> beta | `zylos upgrade <name> --check --beta --json` **(CHECK ONLY)** |
-| upgrade \<name\> beta confirm | `zylos upgrade <name> --yes --skip-eval --beta --json --temp-dir <tempDir>` |
+| upgrade \<name\> beta confirm | `zylos upgrade <name> --yes --skip-eval --beta --json` |
 | add \<name\> | `zylos add <name> --check --json` **(CHECK ONLY)** |
 | add \<name\> confirm | `zylos add <name> --json` |
 | upgrade zylos | `zylos upgrade --self --check --json` **(CHECK ONLY)** |
-| upgrade zylos confirm | `zylos upgrade --self --yes --json --temp-dir <tempDir>` |
+| upgrade zylos confirm | `zylos upgrade --self --yes --json` |
 | upgrade zylos beta | `zylos upgrade --self --check --beta --json` **(CHECK ONLY)** |
-| upgrade zylos beta confirm | `zylos upgrade --self --yes --beta --json --temp-dir <tempDir>` |
+| upgrade zylos beta confirm | `zylos upgrade --self --yes --beta --json` |
 | uninstall \<name\> | `zylos uninstall <name> --check --json` **(CHECK ONLY)** |
 | uninstall \<name\> confirm | `zylos uninstall <name> confirm --json` |
 | uninstall \<name\> purge | `zylos uninstall <name> purge --json` |

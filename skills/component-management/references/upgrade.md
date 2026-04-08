@@ -48,11 +48,10 @@ When user asks to upgrade a component:
 zylos upgrade <component> --check --json
 ```
 
-The CLI checks for updates **and downloads the new version to a temporary directory** when an update is available. JSON output includes:
+The CLI checks for updates and prepares analysis metadata. JSON output includes:
 - `current`, `latest`, `hasUpdate` — version info
 - `changelog` — filtered changelog text
 - `localChanges` — local modifications detected against manifest
-- `tempDir` — path to downloaded package (for file comparison)
 
 **If already at latest version, inform user and stop.**
 
@@ -61,7 +60,7 @@ The CLI checks for updates **and downloads the new version to a temporary direct
 **All information must be presented BEFORE asking for confirmation.** No surprises after execution.
 
 1. **Analyze changes**: Read `changelog` from JSON + fetch commit history via `gh api`. Synthesize a clear summary — don't just relay changelog text.
-2. **Compare files**: Read files from `tempDir`, compare with installed files in the skill directory:
+2. **Compare files**: Compare incoming version changes with the installed skill directory:
    - **New files**: list them
    - **Changed files**: show differences for user awareness
    - **Unchanged files**: skip
@@ -80,13 +79,13 @@ If the hook fails (exit code 1), **abort the upgrade** and inform user.
 
 ### Step 4: Execute CLI Upgrade
 
-Only after pre-upgrade hook succeeds (or doesn't exist). **Reuse the temp dir from Step 1**:
+Only after pre-upgrade hook succeeds (or doesn't exist). Confirm flow always uses a fresh download:
 
 ```bash
-zylos upgrade <component> --yes --skip-eval --json --temp-dir <tempDir>
+zylos upgrade <component> --yes --skip-eval --json
 ```
 
-The CLI handles: stop service, backup, smart merge from tempDir, npm install, manifest, **cleanup tempDir**.
+The CLI handles: stop service, backup, smart merge, npm install, manifest, cleanup.
 The JSON output includes:
 - `skill` field with updated hooks, config, and service info
 - `mergeConflicts` — files where local was backed up (may be null)
@@ -117,11 +116,10 @@ This typically handles config migration. If it fails, investigate.
 zylos upgrade --self --check --json
 ```
 
-The CLI checks for updates **and downloads the new version to a temporary directory**. JSON output includes:
+The CLI checks for updates and prepares analysis metadata. JSON output includes:
 - `current`, `latest`, `hasUpdate` — version info
 - `changelog` — filtered changelog text
 - `localChanges` — local modifications to core skills
-- `tempDir` — path to downloaded package (for template comparison)
 
 **If already at latest version, inform user and stop.**
 
@@ -130,7 +128,7 @@ The CLI checks for updates **and downloads the new version to a temporary direct
 **All information must be presented BEFORE asking for confirmation.** No surprises after execution.
 
 1. **Analyze changes**: Read changelog from JSON + fetch commit history via `gh api`, synthesize change summary
-2. **Analyze templates**: Read template files from `tempDir`, compare each with local files:
+2. **Analyze templates**: Compare template changes with local files:
    - **New files** (not in local): list them, explain what they add
    - **Changed files** (local exists but differs from new template): show differences, let user decide (use new version / keep current)
    - **Unchanged files** (local matches new template): skip
@@ -139,13 +137,13 @@ The CLI checks for updates **and downloads the new version to a temporary direct
 
 ### Step 3: Execute Self-Upgrade
 
-After user confirms (with full knowledge of all changes). **Reuse the temp dir from Step 1**:
+After user confirms (with full knowledge of all changes). Confirm flow always uses a fresh download:
 
 ```bash
-zylos upgrade --self --yes --json --temp-dir <tempDir>
+zylos upgrade --self --yes --json
 ```
 
-The CLI handles: backup, npm install -g from tempDir, smart merge Core Skills, sync CLAUDE.md, sync settings hooks, restart PM2 services, verify, **cleanup tempDir**.
+The CLI handles: backup, npm install -g from downloaded package, smart merge Core Skills, sync CLAUDE.md, sync settings hooks, restart PM2 services, verify.
 
 JSON output includes:
 - `mergeConflicts` — core skill files where local was backed up
@@ -173,12 +171,12 @@ Deploy templates according to the decisions made in Step 2:
 
 User: `upgrade telegram`
 
-Run `zylos upgrade telegram --check --json`, parse the JSON output. **Save the `tempDir` from output** for use in confirm step. Then **actively analyze what changed**:
+Run `zylos upgrade telegram --check --json`, parse the JSON output, then actively analyze what changed:
 
 1. Read the `changelog` field from JSON output (if present)
 2. Fetch commit history: `gh api repos/zylos-ai/zylos-<component>/compare/v<current>...v<latest> --jq '.commits[].commit.message'` (with proxy)
 3. Synthesize a clear change summary from both sources — explain what changed and why, don't just copy changelog text
-4. Compare files from `tempDir` with installed skill directory — note new, changed files
+4. Compare incoming changes with installed skill directory — note new, changed files
 
 Reply with ALL of the following:
 1. Version change: `<name>: <current> -> <latest>`
@@ -229,7 +227,7 @@ Reply "upgrade telegram confirm" to proceed.
 User: `upgrade telegram confirm`
 
 1. Run pre-upgrade hook if it exists (check SKILL.md hooks)
-2. Run `zylos upgrade telegram --yes --skip-eval --json --temp-dir <tempDir>` (reuse tempDir saved from Step 1)
+2. Run `zylos upgrade telegram --yes --skip-eval --json`
 3. Run post-upgrade hook if `skill.hooks.post-upgrade` exists in result
 4. Restart service if `skill.service` exists in result
 5. **If `mergeConflicts` in result**: Review and re-merge backed-up local changes
@@ -256,10 +254,10 @@ Same two-step pattern for upgrading zylos itself. **All information shown before
 
 User: `upgrade zylos`
 
-Run `zylos upgrade --self --check --json`. **Save the `tempDir` from output.** Then:
+Run `zylos upgrade --self --check --json`. Then:
 
 1. **Analyze changes**: Read changelog + fetch commit history via `gh api repos/zylos-ai/zylos-core/compare/v<current>...v<latest> --jq '.commits[].commit.message'` (with proxy). Synthesize change summary.
-2. **Analyze templates**: Read template files from `tempDir`, compare with local files. Categorize as new / changed / unchanged.
+2. **Analyze templates**: Compare template changes with local files. Categorize as new / changed / unchanged.
 3. **Reply with ALL information**:
 
 ```
@@ -287,7 +285,7 @@ If already up to date, reply: `zylos-core is up to date (v0.1.0)`
 
 User: `upgrade zylos confirm`
 
-1. Run `zylos upgrade --self --yes --json --temp-dir <tempDir>` (reuse tempDir saved from Step 1)
+1. Run `zylos upgrade --self --yes --json`
 2. Deploy templates per user's decisions from Step 1 (new files: copy, changed: follow user choice, unchanged: skip)
 3. **If `mergeConflicts` in result**: Review and re-merge backed-up local changes
 4. If hooks/skills changed, execute restart-claude
