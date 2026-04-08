@@ -8,8 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.4.12] - 2026-04-08
 
 ### Fixed
-- **Upgrade tmpdir fallback completed**: component backup self-copy now falls back to `~/tmp` when `TMPDIR` is invalid or not writable, preventing `zylos upgrade <component>` from failing in the backup step under broken temp-dir environments (#490)
-- **diff3 merge workspace tmpdir fallback**: smart-merge three-way merge now also falls back to `~/tmp` for its temporary workspace, closing the remaining `TMPDIR=/nonexistent` failure path in upgrade/self-upgrade flows (#490)
+- **Upgrade temp-dir safety checks**: `zylos upgrade --temp-dir` now validates candidate paths more strictly before cleanup, preventing accidental directory deletion outside the intended temp roots (#487)
+- **Download temp-dir fallback**: download helpers now fall back to `~/tmp` when `TMPDIR` is invalid or not writable, preventing archive download/setup failures in broken temp-dir environments (#488)
+- **Self-upgrade backup temp-dir fallback**: `backup_core_skills` now uses the same writable-temp probing and `~/tmp` fallback path, fixing self-upgrade failures before the backup step completes (#489)
+- **Upgrade merge/backup temp-dir fallback completed**: component backup self-copy and smart-merge `diff3` workspaces now also fall back to `~/tmp`, closing the remaining `TMPDIR=/nonexistent` failure paths in upgrade/self-upgrade flows (#490)
 
 ## [0.4.11] - 2026-04-02
 
