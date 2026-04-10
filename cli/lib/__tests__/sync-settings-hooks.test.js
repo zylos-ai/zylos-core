@@ -27,6 +27,23 @@ describe('Claude settings template', () => {
     assert.equal(template.autoMemoryEnabled, false);
     assert.equal(template.autoDreamEnabled, false);
   });
+
+  it('includes session-foreground hooks for all SessionStart matchers', () => {
+    const template = JSON.parse(fs.readFileSync(TEMPLATE_SETTINGS_PATH, 'utf8'));
+    const groups = template.hooks.SessionStart;
+    assert.equal(groups.length, 3);
+    for (const group of groups) {
+      const commands = group.hooks.map(h => h.command);
+      assert.ok(commands.some(cmd => cmd.includes('session-foreground.js')));
+    }
+  });
+
+  it('includes PostToolUseFailure activity hook', () => {
+    const template = JSON.parse(fs.readFileSync(TEMPLATE_SETTINGS_PATH, 'utf8'));
+    const groups = template.hooks.PostToolUseFailure || [];
+    assert.equal(groups.length, 1);
+    assert.ok(groups[0].hooks.some(h => h.command.includes('hook-activity.js')));
+  });
 });
 
 describe('syncTemplateModelSetting', () => {

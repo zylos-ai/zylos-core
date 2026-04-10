@@ -49,6 +49,11 @@ import {
   STALE_STATUS_THRESHOLD,
   TMUX_MISSING_WARN_THRESHOLD
 } from './c4-config.js';
+import {
+  findPromptY as sharedFindPromptY,
+  isUsageOverlayCapture as sharedIsUsageOverlayCapture,
+  readTmuxInputState
+} from './tmux-input-state.js';
 
 let isShuttingDown = false;
 let pollInterval = POLL_INTERVAL_BASE;
@@ -203,13 +208,7 @@ export function getDeliveryDelay(byteLength) {
  * Returns -1 if no prompt line is found.
  */
 export function findPromptY(capture) {
-  const lines = capture.split('\n');
-  for (let i = lines.length - 1; i >= 0; i--) {
-    if (/^\s*[›❯]/.test(lines[i])) {
-      return i;
-    }
-  }
-  return -1;
+  return sharedFindPromptY(capture);
 }
 
 /**
@@ -221,67 +220,14 @@ export function findPromptY(capture) {
  * cursor wraps to a new line at x ≤ 2.
  */
 export function checkInputBox() {
-  const cursorX = getCursorX();
-  if (cursorX < 0) return 'indeterminate';
-  if (cursorX > CURSOR_EMPTY_THRESHOLD) return 'has_content';
-
-  // cursor_x ≤ threshold — could be truly empty or multi-line wrapped input.
-  // Capture the pane and compare prompt line Y with cursor Y.
-  const cursorY = getCursorY();
-  if (cursorY < 0) return 'indeterminate';
-
-  let capture;
-  try {
-    capture = execFileSync('tmux', ['capture-pane', '-p', '-t', TMUX_SESSION], {
-      encoding: 'utf8', stdio: 'pipe', timeout: 5000
-    });
-  } catch {
-    return 'indeterminate';
-  }
-
-  const promptY = findPromptY(capture);
-  if (promptY < 0) return 'indeterminate';
-
-  // If cursor is on the prompt line itself, input is empty.
-  // If cursor is below the prompt line, there's wrapped multi-line content.
-  return cursorY === promptY ? 'empty' : 'has_content';
+  return readTmuxInputState({
+    sessionName: TMUX_SESSION,
+    execFileSyncImpl: execFileSync
+  }).inputState;
 }
 
 export function isUsageOverlayCapture(capture) {
-  if (!capture) return false;
-  const hasUsageHeader = /Settings:\s+Status\s+Config\s+Usage/i.test(capture);
-  const hasEscHint = /Esc to cancel/i.test(capture);
-  return hasUsageHeader && hasEscHint;
-}
-
-// Empty prompt threshold: cursor at column 0, 1, or 2 means the input box
-// is empty (cursor sits right after the prompt char, e.g. "❯ " = column 2).
-const CURSOR_EMPTY_THRESHOLD = 2;
-
-export function getCursorX() {
-  try {
-    const out = execFileSync('tmux', ['display-message', '-p', '-t', TMUX_SESSION, '#{cursor_x}'], {
-      encoding: 'utf8',
-      stdio: 'pipe',
-      timeout: 5000
-    });
-    return parseInt(out.trim(), 10);
-  } catch {
-    return -1;
-  }
-}
-
-export function getCursorY() {
-  try {
-    const out = execFileSync('tmux', ['display-message', '-p', '-t', TMUX_SESSION, '#{cursor_y}'], {
-      encoding: 'utf8',
-      stdio: 'pipe',
-      timeout: 5000
-    });
-    return parseInt(out.trim(), 10);
-  } catch {
-    return -1;
-  }
+  return sharedIsUsageOverlayCapture(capture);
 }
 
 async function submitAndVerify() {
