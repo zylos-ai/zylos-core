@@ -5,6 +5,14 @@ All notable changes to zylos-core will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.13] - 2026-04-12
+
+### Fixed
+- **C4 dispatcher: Claude input-box fallback detection**: when running under the Claude runtime, the cursor-only input-box probe can misreport `has_content` due to a known tmux cursor-Y quirk with wrapped input. `checkInputBox()` now falls back to a text-window parser (`checkClaudeFallbackInputBox`) that reads the 10 characters to the right of the prompt marker to disambiguate. The Codex runtime path is unchanged (cursor-only). (#493)
+
+### Changed
+- **C4 send retry reduced from 5 to 2**: repeated send retries past 2 attempts almost always indicated a stuck input state rather than a transient failure, so the outer `MAX_RETRIES` budget has been cut to fail faster and surface real delivery problems sooner. (#493)
+
 ## [0.4.12] - 2026-04-08
 
 > **⚠️ UPGRADE STRONGLY RECOMMENDED for all instances.** This release hardens temporary directory handling across all upgrade paths. Previous versions could fail silently or leave orphaned temp directories when the system tmpdir was not writable, and the `--temp-dir` flag created a fragile cross-step state that risked accidental directory deletion.
