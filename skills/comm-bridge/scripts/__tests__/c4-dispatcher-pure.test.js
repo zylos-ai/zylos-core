@@ -230,6 +230,17 @@ describe('checkInputBoxByText', () => {
     ].join('\n');
     assert.equal(checkInputBoxByText(capture, { runtime: 'claude' }), 'has_content');
   });
+
+  it('treats Claude buddy-art variants as empty when first 10 chars are blank', () => {
+    const sep = '\u2500'.repeat(20);
+    const capture = [
+      'output',
+      sep,
+      '❯          (  ~~  )',
+      sep
+    ].join('\n');
+    assert.equal(checkInputBoxByText(capture, { runtime: 'claude' }), 'empty');
+  });
 });
 
 // ── isUsageOverlayCapture ───────────────────────────────────────────

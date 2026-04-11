@@ -271,9 +271,17 @@ export function checkInputBoxByText(capture, { runtime = ACTIVE_RUNTIME } = {}) 
     return 'indeterminate';
   }
 
-  // Strip buddy art from the right side of each line.
-  const cleaned = text.replace(/\s{10,}\S.*$/gm, '');
-  const stripped = cleaned
+  // Claude fallback: only inspect the first 10 chars to the right of the
+  // prompt symbol to avoid buddy-art variants on the far right side.
+  if (runtime === 'claude') {
+    const firstLine = text.split('\n')[0] || '';
+    const promptRight = firstLine.replace(/^\s*[›❯]/, '');
+    const window = Array.from(promptRight).slice(0, 10).join('');
+    const stripped = window.replace(/[\p{C}\p{Z}]+/gu, '');
+    return stripped.length === 0 ? 'empty' : 'has_content';
+  }
+
+  const stripped = text
     .replace(/[›❯]/g, '')
     .replace(/[\p{C}\p{Z}]+/gu, '');
 
