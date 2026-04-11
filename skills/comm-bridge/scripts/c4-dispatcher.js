@@ -42,6 +42,7 @@ import {
   REQUIRE_IDLE_POST_SEND_HOLD_MS,
   REQUIRE_IDLE_EXECUTION_MAX_WAIT_MS,
   REQUIRE_IDLE_EXECUTION_POLL_MS,
+  ACTIVE_RUNTIME,
   TMUX_SESSION,
   AGENT_STATUS_FILE,
   PROC_STATE_FILE,
@@ -197,6 +198,24 @@ export function getDeliveryDelay(byteLength) {
   return Math.min(DELIVERY_DELAY_BASE + extra, DELIVERY_DELAY_MAX);
 }
 
+export function getClaudeInputBoxText(capture) {
+  const lines = capture.split('\n');
+
+  const separatorIndexes = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (/^\u2500{10,}/.test(lines[i])) {
+      separatorIndexes.push(i);
+    }
+  }
+  if (separatorIndexes.length < 2) {
+    return null;
+  }
+
+  const start = separatorIndexes[separatorIndexes.length - 2] + 1;
+  const end = separatorIndexes[separatorIndexes.length - 1];
+  return lines.slice(start, end).join('\n');
+}
+
 /**
  * Find the Y coordinate (0-indexed line number) of the last prompt line
  * (starting with › or ❯) in a tmux capture string.
@@ -213,14 +232,28 @@ export function findPromptY(capture) {
 }
 
 /**
- * Unified input box state detection for both Claude and Codex runtimes.
- *
- * Primary signal: cursor_x (from tmux) — fast, no content parsing.
- * Secondary signal: when cursor_x ≤ threshold, compare cursor_y with the
- * prompt line's Y coordinate to catch multi-line wrapped input where the
- * cursor wraps to a new line at x ≤ 2.
+ * Claude-only fallback parser.
  */
-export function checkInputBox() {
+export function checkClaudeFallbackInputBox(capture) {
+  const text = getClaudeInputBoxText(capture);
+  if (text === null) {
+    return 'indeterminate';
+  }
+
+  // Only inspect the first 10 chars to the right of the prompt symbol
+  // to avoid buddy-art variants on the far right side.
+  const firstLine = text.split('\n')[0] || '';
+  const promptRight = firstLine.replace(/^\s*[›❯]/, '');
+  const window = Array.from(promptRight).slice(0, 10).join('');
+  const stripped = window.replace(/[\p{C}\p{Z}]+/gu, '');
+
+  return stripped.length === 0 ? 'empty' : 'has_content';
+}
+
+/**
+ * Cursor-based detector: primary signal for all runtimes.
+ */
+export function checkInputBoxByCursor() {
   const cursorX = getCursorX();
   if (cursorX < 0) return 'indeterminate';
   if (cursorX > CURSOR_EMPTY_THRESHOLD) return 'has_content';
@@ -245,6 +278,34 @@ export function checkInputBox() {
   // If cursor is on the prompt line itself, input is empty.
   // If cursor is below the prompt line, there's wrapped multi-line content.
   return cursorY === promptY ? 'empty' : 'has_content';
+}
+
+/**
+ * Unified detector:
+ * - Codex: cursor-only.
+ * - Claude: cursor-first; if it reports has_content, fallback to text parser.
+ */
+export function checkInputBox() {
+  const cursorState = checkInputBoxByCursor();
+  if (cursorState !== 'has_content') {
+    return cursorState;
+  }
+
+  if (ACTIVE_RUNTIME !== 'claude') {
+    return cursorState;
+  }
+
+  let capture;
+  try {
+    capture = execFileSync('tmux', ['capture-pane', '-p', '-t', TMUX_SESSION], {
+      encoding: 'utf8', stdio: 'pipe', timeout: 5000
+    });
+  } catch {
+    return cursorState;
+  }
+
+  const fallbackState = checkClaudeFallbackInputBox(capture);
+  return fallbackState === 'indeterminate' ? cursorState : fallbackState;
 }
 
 export function isUsageOverlayCapture(capture) {
