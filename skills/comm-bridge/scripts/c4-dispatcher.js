@@ -198,53 +198,22 @@ export function getDeliveryDelay(byteLength) {
   return Math.min(DELIVERY_DELAY_BASE + extra, DELIVERY_DELAY_MAX);
 }
 
-export function getInputBoxText(capture, { runtime = ACTIVE_RUNTIME } = {}) {
+export function getClaudeInputBoxText(capture) {
   const lines = capture.split('\n');
 
-  // Separator detection is Claude-only — Codex has no prompt separators.
-  if (runtime === 'claude') {
-    const separatorIndexes = [];
-    for (let i = 0; i < lines.length; i++) {
-      if (/^\u2500{10,}/.test(lines[i])) {
-        separatorIndexes.push(i);
-      }
-    }
-    if (separatorIndexes.length >= 2) {
-      const start = separatorIndexes[separatorIndexes.length - 2] + 1;
-      const end = separatorIndexes[separatorIndexes.length - 1];
-      return lines.slice(start, end).join('\n');
+  const separatorIndexes = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (/^\u2500{10,}/.test(lines[i])) {
+      separatorIndexes.push(i);
     }
   }
-
-  const footerIndex = lines.findIndex(line =>
-    /tab to queue message/i.test(line) ||
-    /\b\d+%\s+left\s+·\s+~\//i.test(line)
-  );
-  if (footerIndex === -1) {
+  if (separatorIndexes.length < 2) {
     return null;
   }
 
-  let promptIndex = -1;
-  for (let i = footerIndex - 1; i >= 0; i--) {
-    if (/^\s*[›❯](?:\s.*)?$/.test(lines[i])) {
-      promptIndex = i;
-      break;
-    }
-  }
-
-  if (promptIndex === -1) {
-    return null;
-  }
-
-  const promptText = [lines[promptIndex].replace(/^\s*[›❯]\s?/, '')];
-  for (let i = promptIndex + 1; i < footerIndex; i++) {
-    const line = lines[i];
-    if (!line.trim()) break;
-    if (/^\s*[›❯](?:\s.*)?$/.test(line)) break;
-    promptText.push(line);
-  }
-
-  return promptText.join('\n').trimEnd();
+  const start = separatorIndexes[separatorIndexes.length - 2] + 1;
+  const end = separatorIndexes[separatorIndexes.length - 1];
+  return lines.slice(start, end).join('\n');
 }
 
 /**
@@ -263,27 +232,20 @@ export function findPromptY(capture) {
 }
 
 /**
- * Legacy separator/text parser used as a fallback for Claude runtime.
+ * Claude-only fallback parser.
  */
-export function checkInputBoxByText(capture, { runtime = ACTIVE_RUNTIME } = {}) {
-  const text = getInputBoxText(capture, { runtime });
+export function checkClaudeFallbackInputBox(capture) {
+  const text = getClaudeInputBoxText(capture);
   if (text === null) {
     return 'indeterminate';
   }
 
-  // Claude fallback: only inspect the first 10 chars to the right of the
-  // prompt symbol to avoid buddy-art variants on the far right side.
-  if (runtime === 'claude') {
-    const firstLine = text.split('\n')[0] || '';
-    const promptRight = firstLine.replace(/^\s*[›❯]/, '');
-    const window = Array.from(promptRight).slice(0, 10).join('');
-    const stripped = window.replace(/[\p{C}\p{Z}]+/gu, '');
-    return stripped.length === 0 ? 'empty' : 'has_content';
-  }
-
-  const stripped = text
-    .replace(/[›❯]/g, '')
-    .replace(/[\p{C}\p{Z}]+/gu, '');
+  // Only inspect the first 10 chars to the right of the prompt symbol
+  // to avoid buddy-art variants on the far right side.
+  const firstLine = text.split('\n')[0] || '';
+  const promptRight = firstLine.replace(/^\s*[›❯]/, '');
+  const window = Array.from(promptRight).slice(0, 10).join('');
+  const stripped = window.replace(/[\p{C}\p{Z}]+/gu, '');
 
   return stripped.length === 0 ? 'empty' : 'has_content';
 }
@@ -342,7 +304,7 @@ export function checkInputBox() {
     return cursorState;
   }
 
-  const fallbackState = checkInputBoxByText(capture, { runtime: 'claude' });
+  const fallbackState = checkClaudeFallbackInputBox(capture);
   return fallbackState === 'indeterminate' ? cursorState : fallbackState;
 }
 

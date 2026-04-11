@@ -24,8 +24,8 @@ const mod = await import(new URL(`../c4-dispatcher.js?${cacheBuster}`, import.me
 const {
   sanitizeMessage,
   getDeliveryDelay,
-  getInputBoxText,
-  checkInputBoxByText,
+  getClaudeInputBoxText,
+  checkClaudeFallbackInputBox,
   findPromptY,
   isUsageOverlayCapture,
   isBypassState,
@@ -176,9 +176,9 @@ describe('findPromptY', () => {
   });
 });
 
-// ── getInputBoxText / checkInputBoxByText ──────────────────────────
+// ── getClaudeInputBoxText / checkClaudeFallbackInputBox ────────────
 
-describe('getInputBoxText', () => {
+describe('getClaudeInputBoxText', () => {
   it('extracts Claude input text between separator lines', () => {
     const sep = '\u2500'.repeat(24);
     const capture = [
@@ -189,26 +189,23 @@ describe('getInputBoxText', () => {
       'footer'
     ].join('\n');
     assert.equal(
-      getInputBoxText(capture, { runtime: 'claude' }),
+      getClaudeInputBoxText(capture),
       '❯ hello from claude'
     );
   });
 
-  it('extracts Codex input text from prompt+footer layout', () => {
+  it('returns null when Claude separators are not found', () => {
     const capture = [
       '• output',
-      '› hello codex',
+      '› maybe input',
       '',
-      '  gpt-5.4 medium · 82% left · ~/zylos'
+      '  footer'
     ].join('\n');
-    assert.equal(
-      getInputBoxText(capture, { runtime: 'codex' }),
-      'hello codex'
-    );
+    assert.equal(getClaudeInputBoxText(capture), null);
   });
 });
 
-describe('checkInputBoxByText', () => {
+describe('checkClaudeFallbackInputBox', () => {
   it('returns empty for Claude empty prompt', () => {
     const sep = '\u2500'.repeat(20);
     const capture = [
@@ -217,7 +214,7 @@ describe('checkInputBoxByText', () => {
       '❯ ',
       sep
     ].join('\n');
-    assert.equal(checkInputBoxByText(capture, { runtime: 'claude' }), 'empty');
+    assert.equal(checkClaudeFallbackInputBox(capture), 'empty');
   });
 
   it('returns has_content for Claude non-empty prompt', () => {
@@ -228,7 +225,7 @@ describe('checkInputBoxByText', () => {
       '❯ run tests',
       sep
     ].join('\n');
-    assert.equal(checkInputBoxByText(capture, { runtime: 'claude' }), 'has_content');
+    assert.equal(checkClaudeFallbackInputBox(capture), 'has_content');
   });
 
   it('treats Claude buddy-art variants as empty when first 10 chars are blank', () => {
@@ -239,7 +236,7 @@ describe('checkInputBoxByText', () => {
       '❯          (  ~~  )',
       sep
     ].join('\n');
-    assert.equal(checkInputBoxByText(capture, { runtime: 'claude' }), 'empty');
+    assert.equal(checkClaudeFallbackInputBox(capture), 'empty');
   });
 });
 
