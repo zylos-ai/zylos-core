@@ -9,7 +9,7 @@ export const DELIVERY_DELAY_BASE = 200;
 export const DELIVERY_DELAY_PER_KB = 100;
 export const DELIVERY_DELAY_MAX = 1000;
 
-export const MAX_RETRIES = 5;
+export const MAX_RETRIES = 2;
 export const RETRY_BASE_MS = 500;
 export const CONTROL_MAX_RETRIES = 3;
 export const CONTROL_RETENTION_DAYS = 7;

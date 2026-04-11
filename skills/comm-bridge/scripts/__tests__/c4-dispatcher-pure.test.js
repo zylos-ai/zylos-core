@@ -24,6 +24,8 @@ const mod = await import(new URL(`../c4-dispatcher.js?${cacheBuster}`, import.me
 const {
   sanitizeMessage,
   getDeliveryDelay,
+  getInputBoxText,
+  checkInputBoxByText,
   findPromptY,
   isUsageOverlayCapture,
   isBypassState,
@@ -171,6 +173,62 @@ describe('findPromptY', () => {
       '  gpt-5.4 medium · 82% left · ~/zylos'             // Y=6
     ].join('\n');
     assert.equal(findPromptY(capture), 4);
+  });
+});
+
+// ── getInputBoxText / checkInputBoxByText ──────────────────────────
+
+describe('getInputBoxText', () => {
+  it('extracts Claude input text between separator lines', () => {
+    const sep = '\u2500'.repeat(24);
+    const capture = [
+      'previous output',
+      sep,
+      '❯ hello from claude',
+      sep,
+      'footer'
+    ].join('\n');
+    assert.equal(
+      getInputBoxText(capture, { runtime: 'claude' }),
+      '❯ hello from claude'
+    );
+  });
+
+  it('extracts Codex input text from prompt+footer layout', () => {
+    const capture = [
+      '• output',
+      '› hello codex',
+      '',
+      '  gpt-5.4 medium · 82% left · ~/zylos'
+    ].join('\n');
+    assert.equal(
+      getInputBoxText(capture, { runtime: 'codex' }),
+      'hello codex'
+    );
+  });
+});
+
+describe('checkInputBoxByText', () => {
+  it('returns empty for Claude empty prompt', () => {
+    const sep = '\u2500'.repeat(20);
+    const capture = [
+      'output',
+      sep,
+      '❯ ',
+      sep
+    ].join('\n');
+    assert.equal(checkInputBoxByText(capture, { runtime: 'claude' }), 'empty');
+  });
+
+  it('returns has_content for Claude non-empty prompt', () => {
+    const sep = '\u2500'.repeat(20);
+    const capture = [
+      'output',
+      sep,
+      '❯ run tests',
+      sep
+    ].join('\n');
+    assert.equal(checkInputBoxByText(capture, { runtime: 'claude' }), 'has_content');
   });
 });
 

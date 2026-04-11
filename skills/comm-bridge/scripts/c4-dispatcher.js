@@ -42,6 +42,7 @@ import {
   REQUIRE_IDLE_POST_SEND_HOLD_MS,
   REQUIRE_IDLE_EXECUTION_MAX_WAIT_MS,
   REQUIRE_IDLE_EXECUTION_POLL_MS,
+  ACTIVE_RUNTIME,
   TMUX_SESSION,
   AGENT_STATUS_FILE,
   PROC_STATE_FILE,
@@ -197,6 +198,55 @@ export function getDeliveryDelay(byteLength) {
   return Math.min(DELIVERY_DELAY_BASE + extra, DELIVERY_DELAY_MAX);
 }
 
+export function getInputBoxText(capture, { runtime = ACTIVE_RUNTIME } = {}) {
+  const lines = capture.split('\n');
+
+  // Separator detection is Claude-only — Codex has no prompt separators.
+  if (runtime === 'claude') {
+    const separatorIndexes = [];
+    for (let i = 0; i < lines.length; i++) {
+      if (/^\u2500{10,}/.test(lines[i])) {
+        separatorIndexes.push(i);
+      }
+    }
+    if (separatorIndexes.length >= 2) {
+      const start = separatorIndexes[separatorIndexes.length - 2] + 1;
+      const end = separatorIndexes[separatorIndexes.length - 1];
+      return lines.slice(start, end).join('\n');
+    }
+  }
+
+  const footerIndex = lines.findIndex(line =>
+    /tab to queue message/i.test(line) ||
+    /\b\d+%\s+left\s+·\s+~\//i.test(line)
+  );
+  if (footerIndex === -1) {
+    return null;
+  }
+
+  let promptIndex = -1;
+  for (let i = footerIndex - 1; i >= 0; i--) {
+    if (/^\s*[›❯](?:\s.*)?$/.test(lines[i])) {
+      promptIndex = i;
+      break;
+    }
+  }
+
+  if (promptIndex === -1) {
+    return null;
+  }
+
+  const promptText = [lines[promptIndex].replace(/^\s*[›❯]\s?/, '')];
+  for (let i = promptIndex + 1; i < footerIndex; i++) {
+    const line = lines[i];
+    if (!line.trim()) break;
+    if (/^\s*[›❯](?:\s.*)?$/.test(line)) break;
+    promptText.push(line);
+  }
+
+  return promptText.join('\n').trimEnd();
+}
+
 /**
  * Find the Y coordinate (0-indexed line number) of the last prompt line
  * (starting with › or ❯) in a tmux capture string.
@@ -213,14 +263,27 @@ export function findPromptY(capture) {
 }
 
 /**
- * Unified input box state detection for both Claude and Codex runtimes.
- *
- * Primary signal: cursor_x (from tmux) — fast, no content parsing.
- * Secondary signal: when cursor_x ≤ threshold, compare cursor_y with the
- * prompt line's Y coordinate to catch multi-line wrapped input where the
- * cursor wraps to a new line at x ≤ 2.
+ * Legacy separator/text parser used as a fallback for Claude runtime.
  */
-export function checkInputBox() {
+export function checkInputBoxByText(capture, { runtime = ACTIVE_RUNTIME } = {}) {
+  const text = getInputBoxText(capture, { runtime });
+  if (text === null) {
+    return 'indeterminate';
+  }
+
+  // Strip buddy art from the right side of each line.
+  const cleaned = text.replace(/\s{10,}\S.*$/gm, '');
+  const stripped = cleaned
+    .replace(/[›❯]/g, '')
+    .replace(/[\p{C}\p{Z}]+/gu, '');
+
+  return stripped.length === 0 ? 'empty' : 'has_content';
+}
+
+/**
+ * Cursor-based detector: primary signal for all runtimes.
+ */
+export function checkInputBoxByCursor() {
   const cursorX = getCursorX();
   if (cursorX < 0) return 'indeterminate';
   if (cursorX > CURSOR_EMPTY_THRESHOLD) return 'has_content';
@@ -245,6 +308,34 @@ export function checkInputBox() {
   // If cursor is on the prompt line itself, input is empty.
   // If cursor is below the prompt line, there's wrapped multi-line content.
   return cursorY === promptY ? 'empty' : 'has_content';
+}
+
+/**
+ * Unified detector:
+ * - Codex: cursor-only.
+ * - Claude: cursor-first; if it reports has_content, fallback to text parser.
+ */
+export function checkInputBox() {
+  const cursorState = checkInputBoxByCursor();
+  if (cursorState !== 'has_content') {
+    return cursorState;
+  }
+
+  if (ACTIVE_RUNTIME !== 'claude') {
+    return cursorState;
+  }
+
+  let capture;
+  try {
+    capture = execFileSync('tmux', ['capture-pane', '-p', '-t', TMUX_SESSION], {
+      encoding: 'utf8', stdio: 'pipe', timeout: 5000
+    });
+  } catch {
+    return cursorState;
+  }
+
+  const fallbackState = checkInputBoxByText(capture, { runtime: 'claude' });
+  return fallbackState === 'indeterminate' ? cursorState : fallbackState;
 }
 
 export function isUsageOverlayCapture(capture) {
