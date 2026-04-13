@@ -174,7 +174,7 @@ curl -fsSL https://raw.githubusercontent.com/zylos-ai/zylos-core/main/scripts/in
 >
 > ```bash
 > # 推荐：让安装脚本自动处理，或通过 nvm 手动安装
-> curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash
+> curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.4/install.sh | bash
 > nvm install 24
 > nvm alias default 24
 > ```

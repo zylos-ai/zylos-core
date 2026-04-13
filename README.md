@@ -175,7 +175,7 @@ This works from Windows, ChromeOS, or any platform that can run Claude Code loca
 >
 > ```bash
 > # Recommended: let the install script handle it, or install manually via nvm
-> curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash
+> curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.4/install.sh | bash
 > nvm install 24
 > nvm alias default 24
 > ```
