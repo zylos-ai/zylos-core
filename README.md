@@ -171,7 +171,14 @@ This works from Windows, ChromeOS, or any platform that can run Claude Code loca
 
 </details>
 
-> **Node.js note:** If your system already has Node.js installed, Zylos will use it instead of installing its own. This means npm packages (including Zylos itself) are tied to that Node.js installation. If you later upgrade or change your system Node.js version (e.g. via nvm), globally installed packages may disappear. In that case, simply reinstall: `npm install -g --install-links https://github.com/zylos-ai/zylos-core`
+> **Node.js requirement:** Zylos requires Node.js 20 or later. We recommend installing via [nvm](https://github.com/nvm-sh/nvm) — the install script does this automatically. If you manage Node.js yourself, make sure to use a single, stable version and avoid switching versions after installation, as globally installed npm packages (including Zylos) are tied to the Node.js version that installed them.
+>
+> ```bash
+> # Recommended: let the install script handle it, or install manually via nvm
+> curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash
+> nvm install 24
+> nvm alias default 24
+> ```
 
 `zylos init` is idempotent and supports both interactive and non-interactive modes. It will:
 1. Install missing tools (tmux, git, PM2, Claude Code or Codex)
