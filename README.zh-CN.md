@@ -170,6 +170,8 @@ curl -fsSL https://raw.githubusercontent.com/zylos-ai/zylos-core/main/scripts/in
 
 </details>
 
+> **Node.js 注意事项：** 如果你的系统已经安装了 Node.js，Zylos 会直接使用它，而不会另外安装。这意味着 npm 包（包括 Zylos 本身）与当前 Node.js 版本绑定。如果之后升级或切换了 Node.js 版本（例如通过 nvm），全局安装的包可能会丢失。遇到这种情况，重新安装即可：`npm install -g --install-links https://github.com/zylos-ai/zylos-core`
+
 `zylos init` 可重复运行，支持交互式和非交互式两种模式。它会：
 1. 安装缺失的工具（tmux、git、PM2、Claude Code 或 Codex）
 2. 配置认证（Claude：浏览器登录、API key 或 [setup token](https://code.claude.com/docs/en/authentication)；Codex：API key 或 device auth）
