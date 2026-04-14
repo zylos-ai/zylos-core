@@ -4,7 +4,8 @@
  * Provides database operations for message logging and checkpoint management
  */
 
-import Database from 'better-sqlite3';
+import { execFileSync } from 'child_process';
+import { createRequire } from 'module';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
@@ -12,10 +13,101 @@ import { DATA_DIR, DB_PATH, CONTROL_MAX_RETRIES } from './c4-config.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+const require = createRequire(import.meta.url);
 
 const INIT_SQL_PATH = path.join(__dirname, '..', 'init-db.sql');
+const SKILL_ROOT = path.join(__dirname, '..');
 
 let db = null;
+let databaseCtor = null;
+let repairAttempted = false;
+
+function nodeVersionHint() {
+  const [major] = process.versions.node.split('.').map(Number);
+  if (Number.isNaN(major)) return '';
+  if (major >= 23) {
+    return `Node.js ${process.version} detected. Recommended: Node 22 LTS (nvm install 22 && nvm use 22).`;
+  }
+  return '';
+}
+
+function formatLoadError(err, repairLog = []) {
+  const lines = [
+    '[C4-DB] Failed to load better-sqlite3.',
+    `Node: ${process.version} (${process.platform} ${process.arch})`,
+    `Skill dir: ${SKILL_ROOT}`,
+    'Try:',
+    '1) npm config set ignore-scripts false',
+    '2) cd ~/zylos/.claude/skills/comm-bridge && npm install --omit=dev && npm rebuild better-sqlite3 --build-from-source',
+    '3) If this still fails, switch to Node 22 LTS (nvm install 22 && nvm use 22)',
+  ];
+  const hint = nodeVersionHint();
+  if (hint) lines.push(hint);
+  if (repairLog.length > 0) lines.push(...repairLog);
+  const reason = err?.message ? `Original error: ${err.message}` : `Original error: ${String(err)}`;
+  lines.push(reason);
+  return new Error(lines.join('\n'));
+}
+
+function runNpm(args) {
+  const npmBin = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+  return execFileSync(npmBin, args, {
+    cwd: SKILL_ROOT,
+    stdio: 'pipe',
+    encoding: 'utf8',
+    timeout: 180000,
+    env: { ...process.env, npm_config_ignore_scripts: 'false' }
+  });
+}
+
+function repairBetterSqlite3(loadErr) {
+  if (repairAttempted) return { ok: false, repairLog: ['[C4-DB] Auto-repair already attempted in this process.'] };
+  repairAttempted = true;
+  const repairLog = [`[C4-DB] better-sqlite3 load failed: ${loadErr?.message || String(loadErr)}`];
+
+  try {
+    const ignoreScripts = runNpm(['config', 'get', 'ignore-scripts']).trim();
+    repairLog.push(`[C4-DB] npm ignore-scripts=${ignoreScripts}`);
+  } catch (err) {
+    repairLog.push(`[C4-DB] npm config probe failed: ${err?.message || String(err)}`);
+  }
+
+  try {
+    runNpm(['install', '--omit=dev', '--ignore-scripts=false']);
+    repairLog.push('[C4-DB] npm install --omit=dev succeeded');
+  } catch (err) {
+    repairLog.push(`[C4-DB] npm install failed: ${err?.message || String(err)}`);
+  }
+
+  try {
+    runNpm(['rebuild', 'better-sqlite3', '--build-from-source']);
+    repairLog.push('[C4-DB] npm rebuild better-sqlite3 --build-from-source succeeded');
+  } catch (err) {
+    repairLog.push(`[C4-DB] npm rebuild failed: ${err?.message || String(err)}`);
+  }
+
+  try {
+    databaseCtor = require('better-sqlite3');
+    repairLog.push('[C4-DB] better-sqlite3 recovered after auto-repair');
+    console.error(repairLog.join('\n'));
+    return { ok: true, repairLog };
+  } catch (err) {
+    repairLog.push(`[C4-DB] better-sqlite3 still unavailable: ${err?.message || String(err)}`);
+    return { ok: false, repairLog };
+  }
+}
+
+function getDatabaseCtor() {
+  if (databaseCtor) return databaseCtor;
+  try {
+    databaseCtor = require('better-sqlite3');
+    return databaseCtor;
+  } catch (loadErr) {
+    const { ok, repairLog } = repairBetterSqlite3(loadErr);
+    if (ok && databaseCtor) return databaseCtor;
+    throw formatLoadError(loadErr, repairLog);
+  }
+}
 
 /**
  * Get database connection, initializing if needed
@@ -28,7 +120,8 @@ export function getDb() {
     }
 
     const isNew = !fs.existsSync(DB_PATH);
-    db = new Database(DB_PATH);
+    const BetterSqlite3 = getDatabaseCtor();
+    db = new BetterSqlite3(DB_PATH);
     db.pragma('journal_mode = WAL');  // Better concurrent access
     db.pragma('busy_timeout = 5000');
     db.pragma('foreign_keys = ON');

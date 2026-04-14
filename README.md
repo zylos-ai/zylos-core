@@ -351,6 +351,24 @@ zylos list                    # List installed components
 zylos search [keyword]        # Search component registry
 ```
 
+### Native addon repair (`better-sqlite3`)
+
+If `comm-bridge` fails to start with a `better-sqlite3` binding error, Zylos now auto-attempts a one-time `npm` repair on startup. If it still fails, run:
+
+```bash
+npm config set ignore-scripts false
+cd ~/zylos/.claude/skills/comm-bridge
+npm install --omit=dev
+npm rebuild better-sqlite3 --build-from-source
+```
+
+If your Node major version is very new (for example Node 25), prefer Node 22 LTS:
+
+```bash
+nvm install 22
+nvm use 22
+```
+
 ---
 
 ## Uninstall
