@@ -29,12 +29,15 @@ function readEnvValue(key, defaultValue = '') {
 }
 
 // Build PATH: Claude locations + user's full shell PATH + PM2's own PATH
-const ENHANCED_PATH = [
+// Deduplicate to prevent PATH bloat across PM2 restarts — each restart
+// re-evaluates this file with process.env.PATH already containing the
+// previous ENHANCED_PATH, which would otherwise compound indefinitely.
+const ENHANCED_PATH = [...new Set([
   path.join(HOME, '.local', 'bin'),
   path.join(HOME, '.claude', 'bin'),
-  readEnvValue('SYSTEM_PATH'),
-  process.env.PATH
-].filter(Boolean).join(':');
+  ...(readEnvValue('SYSTEM_PATH') || '').split(':').filter(Boolean),
+  ...(process.env.PATH || '').split(':').filter(Boolean),
+])].join(':');
 
 // Whether Claude should run with --dangerously-skip-permissions
 const CLAUDE_BYPASS_PERMISSIONS = readEnvValue('CLAUDE_BYPASS_PERMISSIONS', 'true');

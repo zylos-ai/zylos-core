@@ -154,6 +154,10 @@ function ensureLocalBinInProfile() {
  */
 function saveSystemPath(envPath) {
   const currentPath = process.env.PATH || '';
+  // Deduplicate PATH entries before saving — prevents bloat when zylos init
+  // runs while PM2 is already live (process.env.PATH may already contain
+  // the previous ENHANCED_PATH from ecosystem.config.cjs).
+  const dedupedPath = [...new Set(currentPath.split(':').filter(Boolean))].join(':');
   let content = '';
   try {
     content = fs.readFileSync(envPath, 'utf8');
@@ -161,7 +165,7 @@ function saveSystemPath(envPath) {
     return; // .env doesn't exist yet
   }
 
-  const line = `SYSTEM_PATH=${currentPath}`;
+  const line = `SYSTEM_PATH=${dedupedPath}`;
   if (content.includes('SYSTEM_PATH=')) {
     content = content.replace(/^SYSTEM_PATH=.*$/m, line);
   } else {

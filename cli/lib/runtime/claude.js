@@ -276,7 +276,8 @@ export class ClaudeAdapter extends RuntimeAdapter {
       await this.sendMessage(cmd);
     } else {
       // New tmux session
-      const tmuxArgs = ['new-session', '-d', '-s', SESSION, '-e', `PATH=${process.env.PATH}`];
+      const dedupedPath = [...new Set((process.env.PATH || '').split(':').filter(Boolean))].join(':');
+      const tmuxArgs = ['new-session', '-d', '-s', SESSION, '-e', `PATH=${dedupedPath}`];
       if (process.getuid?.() === 0) tmuxArgs.push('-e', 'IS_SANDBOX=1');
 
       let shellCmd;

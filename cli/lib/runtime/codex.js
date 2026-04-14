@@ -300,7 +300,8 @@ export class CodexAdapter extends RuntimeAdapter {
         : `cd "${ZYLOS_DIR}"; ${codexCmd}; ${exitLogSnippet}`;
       await this.sendMessage(cmd);
     } else {
-      const tmuxArgs = ['new-session', '-d', '-s', SESSION, '-e', `PATH=${process.env.PATH}`];
+      const dedupedPath = [...new Set((process.env.PATH || '').split(':').filter(Boolean))].join(':');
+      const tmuxArgs = ['new-session', '-d', '-s', SESSION, '-e', `PATH=${dedupedPath}`];
       if (process.getuid?.() === 0) tmuxArgs.push('-e', 'IS_SANDBOX=1');
 
       const promptSnippet = tmpPrompt
