@@ -57,7 +57,7 @@ export function summarizeToolInput(toolName, toolInput = {}) {
 
 export function getToolRules({ runtimeId = 'claude', config = {} } = {}) {
   const watchdogEnabled = toBool(config.web_tool_watchdog_enabled, true);
-  const timeoutSec = toPositiveInt(config.web_tool_timeout_sec, 1800);
+  const timeoutSec = toPositiveInt(config.web_tool_timeout_sec, 3600);
   const interruptGraceSec = toPositiveInt(config.web_tool_interrupt_grace_sec, 15);
   const cooldownSec = toPositiveInt(config.web_tool_timeout_cooldown_sec, 60);
 

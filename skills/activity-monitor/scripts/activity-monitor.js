@@ -119,7 +119,7 @@
  *
  * v11 changes (Hook-based activity tracking):
  *   - Replaced non-functional fetch-preload with Claude Code hooks
- *   - hook-activity.js writes api-activity.json on tool/stop/idle events
+ *   - Hook signals now feed monitor-owned activity state instead of preload polling
  *   - Stuck detection: triggers immediate probe when no activity for STUCK_THRESHOLD
  *   - Removed verify phase: single heartbeat failure → recovery
  *   - Safety-net heartbeat interval relaxed to 2 hours
@@ -144,8 +144,14 @@ import {
   applyOrderedToolEvents,
   createToolLifecycleState,
   getSessionSnapshot,
+  normalizeToolLifecycleState,
   pruneToolLifecycleState,
 } from './tool-lifecycle.js';
+import {
+  createToolEventStreamState,
+  readToolEventsIncrementalFromStream,
+  rotateToolEventStream,
+} from './tool-event-stream.js';
 import {
   readClaudeUsageFromMonitorFiles,
   readCodexUsageFromMonitorFile
@@ -200,7 +206,7 @@ const USER_MESSAGE_SIGNAL_FILE = path.join(MONITOR_DIR, 'user-message-signal.jso
 const USAGE_STATE_FILE = path.join(MONITOR_DIR, 'usage.json');
 const USAGE_CODEX_STATE_FILE = path.join(MONITOR_DIR, 'usage-codex.json');
 
-// API activity file — written by hook-activity.js (Claude Code hooks)
+// API activity snapshot — built by activity-monitor from Claude hook/session signals
 const API_ACTIVITY_FILE = path.join(MONITOR_DIR, 'api-activity.json');
 const HOOK_STATE_FILE = path.join(MONITOR_DIR, 'hook-state.json');
 const TOOL_EVENTS_FILE = path.join(MONITOR_DIR, 'tool-events.jsonl');
@@ -238,8 +244,10 @@ const LAUNCH_GRACE_PERIOD = 180;     // 3 min — skip periodic probes after fre
 const API_ERROR_SCAN_INTERVAL = 15;  // seconds between proactive tmux API error scans
 const TOOL_EVENT_REORDER_WINDOW_MS = 2000;
 const STATUSLINE_LAUNCH_GUARD_MS = 5000;
+const STATUSLINE_ACTIVE_TOOL_CLEAR_GRACE_MS = 5000;
 const TOOL_SESSION_TTL_MS = 3600_000;
 const TOOL_EVENT_ROTATION_BYTES = 1024 * 1024;
+const TOOL_EVENT_ROTATION_DRAIN_MS = 2000;
 
 // Health check config
 const HEALTH_CHECK_INTERVAL = 86400; // 24 hours
@@ -318,21 +326,14 @@ let lastPeriodicProbeAt = 0;
 let lastLaunchAt = 0;
 let lastApiErrorScanAt = 0;
 let apiErrorConsecutiveHits = 0;  // consecutive scans that detected an API error
-let lastDeadApiPid = null;
 let authRetrySuppressedUntil = 0;
 let startAgentInProgress = false;
 let runtimeLaunchAtMs = 0;
 let toolRules = [];
 let toolLifecycleState = createToolLifecycleState();
-let toolEventStreamState = {
-  version: 1,
-  path: TOOL_EVENTS_FILE,
-  inode: 0,
-  offset: 0,
-  last_processed_at: 0,
-  last_rotation_at: 0,
-};
+let toolEventStreamState = createToolEventStreamState(TOOL_EVENTS_FILE);
 let toolEventTail = '';
+let toolEventRotatedTail = '';
 let toolEventArrivalSeq = 0;
 let toolEventReorderBuffer = [];
 let watchdogState = null;
@@ -722,36 +723,6 @@ function runC4Control(args) {
   }
 }
 
-function readApiActivity() {
-  try {
-    if (!fs.existsSync(API_ACTIVITY_FILE)) return null;
-    const activity = JSON.parse(fs.readFileSync(API_ACTIVITY_FILE, 'utf8'));
-    const pid = Number(activity?.pid);
-
-    if (Number.isInteger(pid) && pid > 0) {
-      try {
-        process.kill(pid, 0);
-      } catch (err) {
-        if (err?.code !== 'EPERM') {
-          if (lastDeadApiPid !== pid) {
-            log(`Hook activity ignored: stale pid ${pid} not running (${API_ACTIVITY_FILE})`);
-          }
-          lastDeadApiPid = pid;
-          return null;
-        }
-      }
-
-      if (lastDeadApiPid === pid) {
-        lastDeadApiPid = null;
-      }
-    }
-
-    return activity;
-  } catch {
-    return null;
-  }
-}
-
 function readJsonFileSafe(filePath) {
   try {
     if (!fs.existsSync(filePath)) return null;
@@ -818,17 +789,6 @@ function getTmuxClaudePid(sessionName) {
   }
 }
 
-function createToolEventStreamState() {
-  return {
-    version: 1,
-    path: TOOL_EVENTS_FILE,
-    inode: 0,
-    offset: 0,
-    last_processed_at: 0,
-    last_rotation_at: 0,
-  };
-}
-
 function writeToolEventStreamState() {
   try {
     atomicWriteJson(TOOL_EVENT_STREAM_STATE_FILE, toolEventStreamState);
@@ -885,26 +845,84 @@ function writeWatchdogState() {
   }
 }
 
+function loadPersistedToolEventStreamState() {
+  const persisted = readJsonFileSafe(TOOL_EVENT_STREAM_STATE_FILE);
+  if (!persisted || persisted.version !== 1) return null;
+  try {
+    if (!fs.existsSync(TOOL_EVENTS_FILE)) return null;
+    const stat = fs.statSync(TOOL_EVENTS_FILE);
+    const inode = Number(stat.ino) || 0;
+    if (persisted.inode && persisted.inode !== inode) return null;
+    if (stat.size < (Number(persisted.offset) || 0)) return null;
+
+    const loaded = {
+      ...createToolEventStreamState(TOOL_EVENTS_FILE),
+      inode,
+      offset: Number(persisted.offset) || 0,
+      last_processed_at: Number(persisted.last_processed_at) || 0,
+      last_rotation_at: Number(persisted.last_rotation_at) || 0,
+    };
+
+    const rotatedDrain = persisted.rotated_drain;
+    if (rotatedDrain?.path) {
+      if (fs.existsSync(rotatedDrain.path)) {
+        const rotatedStat = fs.statSync(rotatedDrain.path);
+        const rotatedInode = Number(rotatedStat.ino) || 0;
+        const rotatedOffset = Number(rotatedDrain.offset) || 0;
+        if ((!rotatedDrain.inode || rotatedDrain.inode === rotatedInode) && rotatedStat.size >= rotatedOffset) {
+          loaded.rotated_drain = {
+            path: rotatedDrain.path,
+            inode: rotatedInode,
+            offset: rotatedOffset,
+            last_size: Math.max(Number(rotatedDrain.last_size) || 0, rotatedOffset),
+            quiet_since: Number(rotatedDrain.quiet_since) || loaded.last_rotation_at || 0,
+          };
+        }
+      }
+    }
+
+    if (!loaded.offset && !loaded.rotated_drain) return null;
+    return loaded;
+  } catch {
+    return null;
+  }
+}
+
 function resetToolLifecycleRuntimeState({ clearFiles = false } = {}) {
   toolLifecycleState = createToolLifecycleState();
-  toolEventStreamState = createToolEventStreamState();
+  toolEventStreamState = createToolEventStreamState(TOOL_EVENTS_FILE);
   toolEventTail = '';
+  toolEventRotatedTail = '';
   toolEventArrivalSeq = 0;
   toolEventReorderBuffer = [];
   lastStatuslineSyntheticClearAt = 0;
   watchdogState = null;
 
-  if (!clearFiles) return;
-
-  try {
-    fs.writeFileSync(TOOL_EVENTS_FILE, '');
-  } catch {
-    // Best-effort.
+  if (clearFiles) {
+    try {
+      fs.writeFileSync(TOOL_EVENTS_FILE, '');
+    } catch {
+      // Best-effort.
+    }
+    safeUnlink(TOOL_EVENT_STREAM_STATE_FILE);
+    safeUnlink(SESSION_TOOL_STATE_FILE);
+    safeUnlink(TOOL_WATCHDOG_STATE_FILE);
+    safeUnlink(FOREGROUND_SESSION_FILE);
+    safeUnlink(`${TOOL_EVENTS_FILE}.old`);
+    return;
   }
-  safeUnlink(TOOL_EVENT_STREAM_STATE_FILE);
-  safeUnlink(SESSION_TOOL_STATE_FILE);
-  safeUnlink(TOOL_WATCHDOG_STATE_FILE);
-  safeUnlink(FOREGROUND_SESSION_FILE);
+
+  // PM2 restart path: resume from persisted state to avoid full replay.
+  // Both stream cursor and lifecycle state must load successfully;
+  // if either is stale or missing, fall back to offset-0 full replay.
+  const loadedStreamState = loadPersistedToolEventStreamState();
+  if (!loadedStreamState) return;
+
+  const loadedSessionState = readJsonFileSafe(SESSION_TOOL_STATE_FILE);
+  if (!loadedSessionState || loadedSessionState.version !== 1) return;
+
+  toolEventStreamState = loadedStreamState;
+  toolLifecycleState = normalizeToolLifecycleState(loadedSessionState);
 }
 
 function readForegroundSessionRecord() {
@@ -931,6 +949,16 @@ function readStatuslineRecord() {
   } catch {
     return null;
   }
+}
+
+function canTreatPaneAsRecovered(interactiveState) {
+  return Boolean(
+    interactiveState?.captureOk &&
+    interactiveState.promptVisible &&
+    !interactiveState.usageOverlay &&
+    !interactiveState.inProgressCapture &&
+    (interactiveState.inputState === 'empty' || interactiveState.inputState === 'has_content')
+  );
 }
 
 function resolveTrustedForegroundIdentity(currentTmuxClaudePid) {
@@ -1035,62 +1063,37 @@ function sortToolEvents(events) {
   });
 }
 
-function readToolEventsIncremental() {
-  if (!fs.existsSync(TOOL_EVENTS_FILE)) {
-    toolEventStreamState = createToolEventStreamState();
-    return [];
-  }
-
-  const stat = fs.statSync(TOOL_EVENTS_FILE);
-  const inode = Number(stat.ino) || 0;
-  if ((toolEventStreamState.inode && toolEventStreamState.inode !== inode) || stat.size < toolEventStreamState.offset) {
-    toolEventStreamState = createToolEventStreamState();
-    toolEventTail = '';
-  }
-
-  toolEventStreamState.inode = inode;
-
-  if (stat.size <= toolEventStreamState.offset) {
-    return [];
-  }
-
-  const length = stat.size - toolEventStreamState.offset;
-  const fd = fs.openSync(TOOL_EVENTS_FILE, 'r');
-  let chunk = '';
-  try {
-    const buffer = Buffer.alloc(length);
-    fs.readSync(fd, buffer, 0, length, toolEventStreamState.offset);
-    chunk = buffer.toString('utf8');
-  } finally {
-    fs.closeSync(fd);
-  }
-
-  const raw = toolEventTail + chunk;
-  const lines = raw.split('\n');
-  toolEventTail = raw.endsWith('\n') ? '' : (lines.pop() || '');
-  toolEventStreamState.offset = stat.size - Buffer.byteLength(toolEventTail, 'utf8');
-  toolEventStreamState.last_processed_at = Date.now();
-
-  const events = [];
-  for (const line of lines) {
-    if (!line.trim()) continue;
-    try {
-      const parsed = JSON.parse(line);
-      parsed._arrival_seq = ++toolEventArrivalSeq;
-      events.push(parsed);
-    } catch {
-      log('Tool event stream: skipped malformed JSONL line');
-    }
-  }
-
-  return events;
+function readToolEventsIncremental(nowMs) {
+  const result = readToolEventsIncrementalFromStream({
+    filePath: TOOL_EVENTS_FILE,
+    streamState: toolEventStreamState,
+    activeTail: toolEventTail,
+    rotatedTail: toolEventRotatedTail,
+    arrivalSeq: toolEventArrivalSeq,
+    nowMs,
+    drainQuietMs: TOOL_EVENT_ROTATION_DRAIN_MS,
+    log,
+  });
+  toolEventStreamState = result.streamState;
+  toolEventTail = result.activeTail;
+  toolEventRotatedTail = result.rotatedTail;
+  toolEventArrivalSeq = result.arrivalSeq;
+  return result.events;
 }
 
-function maybeBuildStatuslineClearHint(currentTmuxClaudePid) {
+function maybeBuildStatuslineClearHint(currentTmuxClaudePid, interactiveState) {
   const statusline = readStatuslineRecord();
   if (!statusline?.sessionId) return null;
   if (statusline.observedAt < Math.max(0, runtimeLaunchAtMs - STATUSLINE_LAUNCH_GUARD_MS)) return null;
   if (statusline.observedAt <= lastStatuslineSyntheticClearAt) return null;
+  if (!canTreatPaneAsRecovered(interactiveState)) return null;
+  const session = getSessionSnapshot(toolLifecycleState, statusline.sessionId, statusline.sessionId);
+  const runningTools = session?.running_tools || [];
+  if (runningTools.length === 0) return null;
+  const newestStartedAt = Number(runningTools[runningTools.length - 1]?.started_at) || 0;
+  if (newestStartedAt > 0 && statusline.observedAt < (newestStartedAt + STATUSLINE_ACTIVE_TOOL_CLEAR_GRACE_MS)) {
+    return null;
+  }
   lastStatuslineSyntheticClearAt = statusline.observedAt;
   return {
     ts: statusline.observedAt,
@@ -1123,15 +1126,23 @@ function maybeRotateToolEventStream(nowMs, foregroundSessionId) {
       return Boolean(snapshot?.running_tools?.length);
     });
     const hasPendingBuffers = toolLifecycleState.pending_completions.length > 0 || toolLifecycleState.pending_clear_hints.length > 0;
-    if (hasAnyActiveTools || hasPendingBuffers || toolEventReorderBuffer.length > 0 || toolEventTail) {
+    if (
+      hasAnyActiveTools ||
+      hasPendingBuffers ||
+      toolEventReorderBuffer.length > 0 ||
+      toolEventTail ||
+      toolEventRotatedTail ||
+      toolEventStreamState.rotated_drain
+    ) {
       return;
     }
 
-    fs.writeFileSync(TOOL_EVENTS_FILE, '');
-    toolEventStreamState = {
-      ...createToolEventStreamState(),
-      last_rotation_at: nowMs
-    };
+    toolEventStreamState = rotateToolEventStream({
+      filePath: TOOL_EVENTS_FILE,
+      nowMs,
+    });
+    toolEventTail = '';
+    toolEventRotatedTail = '';
     writeToolEventStreamState();
     log('Tool event stream: rotated event log');
   } catch (err) {
@@ -1139,9 +1150,9 @@ function maybeRotateToolEventStream(nowMs, foregroundSessionId) {
   }
 }
 
-function processToolLifecycle(nowMs, currentTmuxClaudePid) {
-  const newEvents = readToolEventsIncremental();
-  const syntheticClear = maybeBuildStatuslineClearHint(currentTmuxClaudePid);
+function processToolLifecycle(nowMs, currentTmuxClaudePid, interactiveState) {
+  const newEvents = readToolEventsIncremental(nowMs);
+  const syntheticClear = maybeBuildStatuslineClearHint(currentTmuxClaudePid, interactiveState);
   if (syntheticClear) newEvents.push(syntheticClear);
   if (newEvents.length > 0) {
     toolEventReorderBuffer.push(...newEvents);
@@ -1241,7 +1252,7 @@ function applySyntheticClearHint(sessionId, pid, reason, nowMs) {
   }], { nowMs });
 }
 
-function evaluateToolWatchdog({ nowMs, foregroundIdentity, apiActivity }) {
+function evaluateToolWatchdog({ nowMs, foregroundIdentity, apiActivity, interactiveState }) {
   const candidate = apiActivity?.watchdog_candidate_tool || null;
   const phase = {
     watchdog_phase: 'idle',
@@ -1290,8 +1301,6 @@ function evaluateToolWatchdog({ nowMs, foregroundIdentity, apiActivity }) {
     return phase;
   }
 
-  const interactiveState = readTmuxInputState({ sessionName: adapter.sessionName });
-
   if (watchdogState && watchdogState.episode_key === candidate.event_id) {
     if (!apiActivity.watchdog_candidate_tool) {
       clearWatchdogState();
@@ -1299,8 +1308,7 @@ function evaluateToolWatchdog({ nowMs, foregroundIdentity, apiActivity }) {
       return phase;
     }
 
-    if (interactiveState.promptVisible && !interactiveState.usageOverlay &&
-        (interactiveState.inputState === 'empty' || interactiveState.inputState === 'has_content')) {
+    if (canTreatPaneAsRecovered(interactiveState)) {
       applySyntheticClearHint(foregroundIdentity.sessionId, foregroundIdentity.claudePid, 'interactive_recovered', nowMs);
       watchdogState.interactive_recovered_at = nowMs;
       writeWatchdogState();
@@ -2045,26 +2053,31 @@ async function monitorLoop() {
   const currentTmuxClaudePid = adapter.runtimeId === 'claude'
     ? getTmuxClaudePid(adapter.sessionName)
     : 0;
+  const interactiveState = adapter.runtimeId === 'claude'
+    ? readTmuxInputState({ sessionName: adapter.sessionName })
+    : null;
 
   let apiActivity = null;
   let foregroundIdentity = null;
   let watchdogStatus = { watchdog_phase: 'idle', watchdog_block_reason: null };
 
   if (adapter.runtimeId === 'claude') {
-    processToolLifecycle(Date.now(), currentTmuxClaudePid);
+    const toolNowMs = Date.now();
+    processToolLifecycle(toolNowMs, currentTmuxClaudePid, interactiveState);
     foregroundIdentity = resolveTrustedForegroundIdentity(currentTmuxClaudePid);
     apiActivity = buildApiActivity(foregroundIdentity, currentTmuxClaudePid);
     watchdogStatus = evaluateToolWatchdog({
-      nowMs: Date.now(),
+      nowMs: toolNowMs,
       foregroundIdentity,
-      apiActivity
+      apiActivity,
+      interactiveState
     });
     if (watchdogStatus.api_activity_dirty) {
       apiActivity = buildApiActivity(foregroundIdentity, currentTmuxClaudePid);
     }
     writeSessionToolState(foregroundIdentity, foregroundIdentity?.trusted ? foregroundIdentity.sessionId : null);
     writeApiActivitySnapshot(apiActivity);
-    maybeRotateToolEventStream(Date.now(), foregroundIdentity?.trusted ? foregroundIdentity.sessionId : null);
+    maybeRotateToolEventStream(toolNowMs, foregroundIdentity?.trusted ? foregroundIdentity.sessionId : null);
   }
 
   const apiUpdatedSec = apiActivity?.updated_at ? Math.floor(apiActivity.updated_at / 1000) : 0;

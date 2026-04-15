@@ -44,12 +44,22 @@ function appendError(message) {
   }
 }
 
+function readToolUseId(hookData) {
+  const raw = hookData?.tool_use_id;
+  return typeof raw === 'string' && raw.trim() ? raw.trim() : null;
+}
+
+function hasMeaningfulToolInput(toolInput) {
+  return Boolean(toolInput && typeof toolInput === 'object' && Object.keys(toolInput).length > 0);
+}
+
 function buildToolEvent({ hookData, eventName, claudePid, nowMs }) {
   const sessionId = hookData.session_id || process.env.CLAUDE_SESSION_ID || null;
   if (!sessionId) return null;
 
   const toolName = hookData.tool_name || null;
   const toolInput = hookData.tool_input || {};
+  const toolUseId = readToolUseId(hookData);
   const rule = toolName
     ? findMatchingToolRule({ runtimeId: 'claude', toolName, toolInput, config: {} })
     : null;
@@ -63,11 +73,18 @@ function buildToolEvent({ hookData, eventName, claudePid, nowMs }) {
 
   if (toolName) {
     base.tool = toolName;
+    if (hasMeaningfulToolInput(toolInput)) {
+      base.summary = summarizeToolInput(toolName, toolInput);
+    }
+  }
+
+  if (toolUseId) {
+    base.event_id = toolUseId;
+  } else if (eventName === 'pre_tool') {
+    base.event_id = `evt_${nowMs}_${randomBytes(4).toString('hex')}`;
   }
 
   if (eventName === 'pre_tool') {
-    base.event_id = `evt_${nowMs}_${randomBytes(4).toString('hex')}`;
-    base.summary = summarizeToolInput(toolName, toolInput);
     if (rule?.id) {
       base.rule_id = rule.id;
     }

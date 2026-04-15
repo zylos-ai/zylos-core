@@ -58,11 +58,12 @@ Fields:
 - `active_tools`: Count of tools currently in flight (incremented on pre_tool, decremented on post_tool)
 - `updated_at`: Timestamp in milliseconds
 
-### Compatibility with readApiActivity()
+### Historical note
 
-The current `readApiActivity()` function reads:
-- `updated_at` → used for `apiUpdatedSec` (stuck detection timestamp) — **compatible**
-- `active_fetches` → used for `thinking` state — replaced by `active_tools` (activity-monitor.js needs a small update)
+This document describes the earlier hook-to-`api-activity.json` approach.
+The current watchdog implementation no longer uses `readApiActivity()`; it
+reconstructs session/tool state from `tool-events.jsonl` and then writes the
+derived `api-activity.json` snapshot from `activity-monitor.js`.
 
 ## Changes
 
@@ -189,7 +190,8 @@ Changes:
 - Update `monitorLoop()` to read `active_tools` instead of `active_fetches` (line 868)
 - Update log messages to reference "hook activity" instead of "fetch preload"
 
-The `readApiActivity()` function stays unchanged — it reads the same `api-activity.json` file.
+Current code no longer keeps a standalone `readApiActivity()` helper. The
+monitor owns both the event-stream replay and the derived activity snapshot.
 
 ### 4. Delete: `fetch-preload.cjs`
 

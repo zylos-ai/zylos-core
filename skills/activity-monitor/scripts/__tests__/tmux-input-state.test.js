@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { readTmuxInputState, isUsageOverlayCapture } from '../../../../cli/lib/tmux-input-state.js';
+import {
+  hasInProgressCapture,
+  readTmuxInputState,
+  isUsageOverlayCapture
+} from '../../../../cli/lib/tmux-input-state.js';
 
 function createExecStub({ cursorX = '2', cursorY = '5', capture = 'line\n❯ ', failCapture = false } = {}) {
   return (_cmd, args) => {
@@ -72,5 +76,64 @@ describe('tmux-input-state', () => {
 
     assert.equal(state.captureOk, false);
     assert.equal(state.inputState, 'indeterminate');
+  });
+
+  it('flags prompt-visible progress output as still in-progress', () => {
+    const capture = 'header\n⎿  Fetching…\n✻ Proofing…\n❯ ';
+    const state = readTmuxInputState({
+      sessionName: 'claude-main',
+      execFileSyncImpl: createExecStub({
+        cursorX: '2',
+        cursorY: '3',
+        capture
+      })
+    });
+
+    assert.equal(hasInProgressCapture(capture), true);
+    assert.equal(state.promptVisible, true);
+    assert.equal(state.inputState, 'empty');
+    assert.equal(state.inProgressCapture, true);
+  });
+
+  it('recognizes newer Claude progress verbs like Sketching', () => {
+    const capture = 'header\n✻ Sketching...\n❯ ';
+    const state = readTmuxInputState({
+      sessionName: 'claude-main',
+      execFileSyncImpl: createExecStub({
+        cursorX: '2',
+        cursorY: '2',
+        capture
+      })
+    });
+
+    assert.equal(hasInProgressCapture(capture), true);
+    assert.equal(state.promptVisible, true);
+    assert.equal(state.inProgressCapture, true);
+  });
+
+  it('returns indeterminate when sessionName is missing', () => {
+    const state = readTmuxInputState({});
+    assert.equal(state.inputState, 'indeterminate');
+    assert.equal(state.promptVisible, false);
+    assert.equal(state.captureOk, false);
+  });
+
+  it('detects has_content when cursorX exceeds threshold', () => {
+    const state = readTmuxInputState({
+      sessionName: 'claude-main',
+      execFileSyncImpl: createExecStub({
+        cursorX: '15',
+        cursorY: '1',
+        capture: 'header\n❯ some typed text here'
+      })
+    });
+
+    assert.equal(state.inputState, 'has_content');
+    assert.equal(state.promptVisible, true);
+  });
+
+  it('does not flag normal output as in-progress', () => {
+    const capture = 'Some normal output\nMore output\n❯ ';
+    assert.equal(hasInProgressCapture(capture), false);
   });
 });

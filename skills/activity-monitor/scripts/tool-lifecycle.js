@@ -6,6 +6,12 @@ function cloneSummary(summary) {
   return JSON.parse(JSON.stringify(summary));
 }
 
+function summariesEqual(left, right) {
+  if (!left && !right) return true;
+  if (!left || !right) return false;
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
 function ensureSession(state, sessionId, pid = 0) {
   if (!state.sessions[sessionId]) {
     state.sessions[sessionId] = {
@@ -31,6 +37,32 @@ function findLastRunningToolIndex(runningTools, toolName) {
   return -1;
 }
 
+function findRunningToolIndexByEventId(runningTools, eventId) {
+  if (!eventId) return -1;
+  return runningTools.findIndex((candidate) => candidate.event_id === eventId);
+}
+
+function findRunningToolIndexBySummary(runningTools, toolName, summary) {
+  if (!toolName || !summary) return -1;
+  const matches = [];
+  for (let i = 0; i < runningTools.length; i++) {
+    const candidate = runningTools[i];
+    if (candidate.name !== toolName) continue;
+    if (!summariesEqual(candidate.summary, summary)) continue;
+    matches.push(i);
+  }
+  if (matches.length === 1) return matches[0];
+  return matches.length > 1 ? matches[matches.length - 1] : -1;
+}
+
+function findRunningToolIndexForCompletion(runningTools, event) {
+  const exactIdx = findRunningToolIndexByEventId(runningTools, event.event_id);
+  if (exactIdx >= 0) return exactIdx;
+  const summaryIdx = findRunningToolIndexBySummary(runningTools, event.tool, event.summary);
+  if (summaryIdx >= 0) return summaryIdx;
+  return findLastRunningToolIndex(runningTools, event.tool);
+}
+
 function completeEpisode(session, episode, status, endedAt, extra = {}) {
   session.last_completed_tool = {
     event_id: episode.event_id,
@@ -44,12 +76,30 @@ function completeEpisode(session, episode, status, endedAt, extra = {}) {
 }
 
 function applyPendingCompletionIfPresent(state, session, episode) {
+  const exactIdx = episode.event_id
+    ? state.pending_completions.findIndex((pending) => pending.event_id === episode.event_id)
+    : -1;
+  if (exactIdx >= 0) {
+    const pending = state.pending_completions.splice(exactIdx, 1)[0];
+    const runningIdx = session.running_tools.findIndex(
+      (candidate) => candidate.event_id === episode.event_id
+    );
+    if (runningIdx >= 0) {
+      session.running_tools.splice(runningIdx, 1);
+    }
+    completeEpisode(session, episode, pending.status, pending.ended_at, { clear_reason: pending.reason || undefined });
+    return true;
+  }
+
   let idx = -1;
   let bestDistance = Number.POSITIVE_INFINITY;
 
   for (let i = 0; i < state.pending_completions.length; i++) {
     const pending = state.pending_completions[i];
     if (pending.session_id !== episode.session_id || pending.tool !== episode.name) {
+      continue;
+    }
+    if (pending.summary && !summariesEqual(pending.summary, episode.summary)) {
       continue;
     }
 
@@ -79,7 +129,8 @@ function applyPendingCompletionIfPresent(state, session, episode) {
 
 function applyPendingClearHintsIfPresent(state, session, episode) {
   const matched = state.pending_clear_hints.filter(
-    (hint) => hint.session_id === episode.session_id && episode.started_at <= hint.ts
+    (hint) => hint.session_id === episode.session_id
+      && episode.started_at <= hint.ts + (hint.match_slack_ms || 0)
   );
   if (matched.length === 0) return false;
 
@@ -128,20 +179,38 @@ function applyCompletion(state, event, status) {
   session.last_event = event.event;
   session.last_event_at = Math.max(session.last_event_at || 0, event.ts || 0);
 
-  const runningIdx = findLastRunningToolIndex(session.running_tools, event.tool);
+  const runningIdx = findRunningToolIndexForCompletion(session.running_tools, event);
   if (runningIdx >= 0) {
     const [episode] = session.running_tools.splice(runningIdx, 1);
     completeEpisode(session, episode, status, event.ts || 0);
     return;
   }
 
+  if (
+    event.event_id &&
+    session.last_completed_tool?.status === 'cleared_by_session_event' &&
+    session.last_completed_tool.event_id === event.event_id
+  ) {
+    session.last_completed_tool = {
+      ...session.last_completed_tool,
+      name: session.last_completed_tool.name || event.tool,
+      status,
+      ended_at: event.ts || 0,
+      summary: cloneSummary(session.last_completed_tool.summary || event.summary),
+    };
+    delete session.last_completed_tool.clear_reason;
+    return;
+  }
+
   state.pending_completions.push({
+    event_id: event.event_id || null,
     session_id: event.session_id,
     pid: event.pid || 0,
     tool: event.tool,
     status,
     ended_at: event.ts || 0,
     reason: event.reason || null,
+    summary: cloneSummary(event.summary),
   });
 }
 
@@ -157,7 +226,7 @@ function clearSessionEpisodes(state, event) {
   let clearedAny = false;
 
   for (const episode of session.running_tools) {
-    if (episode.started_at <= event.ts) {
+    if (episode.started_at <= event.ts + (event.match_slack_ms || 0)) {
       completeEpisode(session, episode, 'cleared_by_session_event', event.ts || 0, {
         clear_reason: event.reason || event.event
       });
