@@ -170,6 +170,15 @@ curl -fsSL https://raw.githubusercontent.com/zylos-ai/zylos-core/main/scripts/in
 
 </details>
 
+> **Node.js 要求：** Zylos 需要 Node.js 20 或更高版本。推荐通过 [nvm](https://github.com/nvm-sh/nvm) 安装 — 安装脚本会自动完成。如果你自行管理 Node.js，请使用固定版本，避免安装后切换版本，因为全局 npm 包（包括 Zylos）与安装时的 Node.js 版本绑定。
+>
+> ```bash
+> # 推荐：让安装脚本自动处理，或通过 nvm 手动安装
+> curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash
+> nvm install 24
+> nvm alias default 24
+> ```
+
 `zylos init` 可重复运行，支持交互式和非交互式两种模式。它会：
 1. 安装缺失的工具（tmux、git、PM2、Claude Code 或 Codex）
 2. 配置认证（Claude：浏览器登录、API key 或 [setup token](https://code.claude.com/docs/en/authentication)；Codex：API key 或 device auth）
