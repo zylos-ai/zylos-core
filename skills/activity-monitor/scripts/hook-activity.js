@@ -18,23 +18,13 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
+import { getClaudePid } from './claude-pid.js';
 import { findMatchingToolRule, summarizeToolInput } from './tool-rules.js';
 
 const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
 const MONITOR_DIR = path.join(ZYLOS_DIR, 'activity-monitor');
 const TOOL_EVENTS_FILE = path.join(MONITOR_DIR, 'tool-events.jsonl');
 const HOOK_ERROR_LOG = path.join(MONITOR_DIR, 'hook-activity-errors.log');
-
-function getClaudePid() {
-  try {
-    const status = fs.readFileSync(`/proc/${process.ppid}/status`, 'utf8');
-    const match = status.match(/^PPid:\s*(\d+)/m);
-    if (match) return Number.parseInt(match[1], 10);
-  } catch {
-    // Best-effort.
-  }
-  return process.ppid;
-}
 
 function appendError(message) {
   try {

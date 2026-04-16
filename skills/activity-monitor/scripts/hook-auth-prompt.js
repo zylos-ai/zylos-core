@@ -23,6 +23,7 @@ const ZYLOS_DIR = path.join(os.homedir(), 'zylos');
 const LOG_FILE = path.join(ZYLOS_DIR, 'activity-monitor', 'hook-timing.log');
 const CONFIG_FILE = path.join(ZYLOS_DIR, '.zylos', 'config.json');
 const C4_CONTROL = path.join(ZYLOS_DIR, '.claude', 'skills', 'comm-bridge', 'scripts', 'c4-control.js');
+const AUTO_APPROVE_AVAILABLE_IN_SEC = 1;
 
 function readConfig() {
   try {
@@ -69,7 +70,7 @@ async function main() {
         '--content', '[KEYSTROKE]Enter',
         '--priority', '0',
         '--bypass-state',
-        '--available-in', '1',
+        '--available-in', String(AUTO_APPROVE_AVAILABLE_IN_SEC),
         '--no-ack-suffix'
       ], { stdio: 'pipe', timeout: 5000 });
     } catch {

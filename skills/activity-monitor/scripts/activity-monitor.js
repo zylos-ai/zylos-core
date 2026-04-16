@@ -153,6 +153,10 @@ import {
   rotateToolEventStream,
 } from './tool-event-stream.js';
 import {
+  WATCHDOG_INTERRUPT_AVAILABLE_IN_SEC,
+  evaluateToolWatchdogTransition
+} from './tool-watchdog.js';
+import {
   readClaudeUsageFromMonitorFiles,
   readCodexUsageFromMonitorFile
 } from './usage-monitor-file-reader.js';
@@ -1253,136 +1257,46 @@ function applySyntheticClearHint(sessionId, pid, reason, nowMs) {
 }
 
 function evaluateToolWatchdog({ nowMs, foregroundIdentity, apiActivity, interactiveState }) {
-  const candidate = apiActivity?.watchdog_candidate_tool || null;
-  const phase = {
-    watchdog_phase: 'idle',
-    watchdog_block_reason: null,
-    api_activity_dirty: false,
+  const state = {
+    watchdogState,
+    runtimeLaunchAtMs,
+    launchGracePeriodSec: LAUNCH_GRACE_PERIOD,
+    engineHealth: engine.health,
   };
 
-  if (!foregroundIdentity?.trusted) {
-    clearWatchdogState();
-    phase.watchdog_block_reason = foregroundIdentity?.blockReason || 'foreground_untrusted';
-    return phase;
-  }
-
-  const withinLaunchGrace = runtimeLaunchAtMs > 0 && (nowMs - runtimeLaunchAtMs) < (LAUNCH_GRACE_PERIOD * 1000);
-  if (withinLaunchGrace) {
-    clearWatchdogState();
-    phase.watchdog_block_reason = 'launch_grace';
-    return phase;
-  }
-
-  if (engine.health !== 'ok') {
-    clearWatchdogState();
-    phase.watchdog_block_reason = `health_${engine.health}`;
-    return phase;
-  }
-
-  if (!candidate) {
-    clearWatchdogState();
-    phase.watchdog_block_reason = 'no_watchdog_candidate';
-    return phase;
-  }
-
-  const rule = getRuleById(candidate.rule_id);
-  if (!rule?.watchdog?.enabled) {
-    clearWatchdogState();
-    phase.watchdog_block_reason = 'watchdog_disabled';
-    return phase;
-  }
-
-  const maxRuntimeMs = rule.watchdog.maxRuntimeSec * 1000;
-  if ((nowMs - candidate.started_at) < maxRuntimeMs) {
-    if (watchdogState?.episode_key !== candidate.event_id) {
-      clearWatchdogState();
+  const phase = evaluateToolWatchdogTransition({
+    nowMs,
+    foregroundIdentity,
+    apiActivity,
+    interactiveState,
+    state,
+    deps: {
+      canTreatPaneAsRecovered,
+      getRuleById,
+      clearWatchdogState: () => {
+        watchdogState = null;
+        state.watchdogState = null;
+        writeWatchdogState();
+      },
+      writeWatchdogState: () => {
+        watchdogState = state.watchdogState;
+        writeWatchdogState();
+      },
+      applySyntheticClearHint,
+      enqueueInterrupt: (interruptKey) => runC4Control([
+        'enqueue',
+        '--content', `[KEYSTROKE]${interruptKey}`,
+        '--priority', '0',
+        '--bypass-state',
+        '--available-in', String(WATCHDOG_INTERRUPT_AVAILABLE_IN_SEC),
+        '--no-ack-suffix'
+      ]),
+      triggerRecovery: (reason) => engine.triggerRecovery(reason),
+      log,
     }
-    phase.watchdog_phase = 'observing';
-    return phase;
-  }
+  });
 
-  if (watchdogState && watchdogState.episode_key === candidate.event_id) {
-    if (!apiActivity.watchdog_candidate_tool) {
-      clearWatchdogState();
-      phase.watchdog_phase = 'recovered';
-      return phase;
-    }
-
-    if (canTreatPaneAsRecovered(interactiveState)) {
-      applySyntheticClearHint(foregroundIdentity.sessionId, foregroundIdentity.claudePid, 'interactive_recovered', nowMs);
-      watchdogState.interactive_recovered_at = nowMs;
-      writeWatchdogState();
-      clearWatchdogState();
-      phase.watchdog_phase = 'recovered';
-      phase.api_activity_dirty = true;
-      return phase;
-    }
-
-    if (watchdogState.interrupt_sent_at && nowMs <= watchdogState.grace_deadline_at) {
-      phase.watchdog_phase = 'interrupt_wait';
-      return phase;
-    }
-
-    if (!watchdogState.interrupt_sent_at && watchdogState.retry_after_at && nowMs < watchdogState.retry_after_at) {
-      phase.watchdog_phase = 'interrupt_retry_wait';
-      return phase;
-    }
-
-    if (watchdogState.escalated_at) {
-      phase.watchdog_phase = 'escalated';
-      return phase;
-    }
-  }
-
-  if (!watchdogState || watchdogState.episode_key !== candidate.event_id || !watchdogState.interrupt_sent_at) {
-    const retryCooldownMs = rule.watchdog.cooldownSec * 1000;
-    const result = runC4Control([
-      'enqueue',
-      '--content', `[KEYSTROKE]${rule.watchdog.interruptKey}`,
-      '--priority', '0',
-      '--bypass-state',
-      '--available-in', '1',
-      '--no-ack-suffix'
-    ]);
-
-    watchdogState = {
-      version: 1,
-      episode_key: candidate.event_id,
-      session_id: foregroundIdentity.sessionId,
-      claude_pid: foregroundIdentity.claudePid,
-      tool_name: candidate.name,
-      rule_id: candidate.rule_id,
-      started_at: candidate.started_at,
-      first_timeout_at: watchdogState?.episode_key === candidate.event_id
-        ? watchdogState.first_timeout_at
-        : nowMs,
-      interrupt_sent_at: result.ok ? nowMs : 0,
-      interrupt_key: rule.watchdog.interruptKey,
-      interrupt_count: (watchdogState?.episode_key === candidate.event_id ? watchdogState.interrupt_count : 0) + 1,
-      grace_deadline_at: result.ok ? (nowMs + (rule.watchdog.interruptGraceSec * 1000)) : 0,
-      interactive_recovered_at: 0,
-      escalated_at: 0,
-      escalation: rule.watchdog.escalation,
-      retry_after_at: result.ok ? 0 : (nowMs + retryCooldownMs),
-      last_action_at: nowMs,
-    };
-    writeWatchdogState();
-    log(result.ok
-      ? `Tool watchdog: sent ${rule.watchdog.interruptKey} for ${candidate.name} (session=${foregroundIdentity.sessionId})`
-      : `Tool watchdog: failed to enqueue ${rule.watchdog.interruptKey} for ${candidate.name} (${result.output})`);
-    phase.watchdog_phase = result.ok ? 'interrupt_sent' : 'interrupt_retry_wait';
-    if (!result.ok) {
-      phase.watchdog_block_reason = 'interrupt_enqueue_failed';
-    }
-    return phase;
-  }
-
-  engine.triggerRecovery(`tool_timeout_${candidate.name}`);
-  watchdogState.escalated_at = nowMs;
-  watchdogState.last_action_at = nowMs;
-  writeWatchdogState();
-  log(`Tool watchdog: escalated ${candidate.name} timeout to guardian recovery`);
-  phase.watchdog_phase = 'escalated';
+  watchdogState = state.watchdogState;
   return phase;
 }
 
