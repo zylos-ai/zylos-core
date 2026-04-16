@@ -118,6 +118,36 @@ describe('tool-lifecycle', () => {
     assert.equal(snapshot.last_completed_tool.event_id, 'toolu-old');
   });
 
+  it('ignores duplicate pre_tool events with the same event_id', () => {
+    const state = createToolLifecycleState();
+    applyOrderedToolEvents(state, [
+      createPreEvent({ eventId: 'toolu-dup', ts: 1000 }),
+      createPreEvent({ eventId: 'toolu-dup', ts: 1001 }),
+      createPostEvent({ ts: 1200, eventId: 'toolu-dup' })
+    ], { nowMs: 1200 });
+
+    const snapshot = getSessionSnapshot(state, 's1', 's1');
+    assert.equal(snapshot.running_tools.length, 0);
+    assert.equal(snapshot.last_completed_tool.event_id, 'toolu-dup');
+    assert.equal(snapshot.last_completed_tool.status, 'success');
+  });
+
+  it('ignores a late duplicate pre_tool even after other tools completed', () => {
+    const state = createToolLifecycleState();
+    applyOrderedToolEvents(state, [
+      createPreEvent({ eventId: 'toolu-a', ts: 1000 }),
+      createPostEvent({ ts: 1100, eventId: 'toolu-a' }),
+      createPreEvent({ eventId: 'toolu-b', ts: 1200 }),
+      createPostEvent({ ts: 1300, eventId: 'toolu-b' }),
+      createPreEvent({ eventId: 'toolu-a', ts: 1400 })
+    ], { nowMs: 1400 });
+
+    const snapshot = getSessionSnapshot(state, 's1', 's1');
+    assert.equal(snapshot.running_tools.length, 0);
+    assert.equal(snapshot.last_completed_tool.event_id, 'toolu-b');
+    assert.equal(snapshot.last_completed_tool.status, 'success');
+  });
+
   it('matches pending completion by event_id before the corresponding pre_tool arrives', () => {
     const state = createToolLifecycleState();
     applyOrderedToolEvents(state, [
@@ -137,6 +167,38 @@ describe('tool-lifecycle', () => {
     assert.equal(snapshot.running_tools.length, 0);
     assert.equal(snapshot.last_completed_tool.event_id, 'toolu-late');
     assert.equal(snapshot.last_completed_tool.status, 'success');
+  });
+
+  it('ignores duplicate completion events with the same event_id after completion', () => {
+    const state = createToolLifecycleState();
+    applyOrderedToolEvents(state, [
+      createPreEvent({ eventId: 'toolu-post-dup', ts: 1000 }),
+      createPostEvent({ ts: 1200, eventId: 'toolu-post-dup' }),
+      createPostEvent({ ts: 1201, eventId: 'toolu-post-dup' })
+    ], { nowMs: 1201 });
+
+    const snapshot = getSessionSnapshot(state, 's1', 's1');
+    assert.equal(snapshot.running_tools.length, 0);
+    assert.equal(snapshot.last_completed_tool.event_id, 'toolu-post-dup');
+    assert.equal(snapshot.last_completed_tool.status, 'success');
+    assert.equal(state.pending_completions.length, 0);
+  });
+
+  it('ignores a late duplicate completion even after another tool completed', () => {
+    const state = createToolLifecycleState();
+    applyOrderedToolEvents(state, [
+      createPreEvent({ eventId: 'toolu-a', ts: 1000 }),
+      createPostEvent({ ts: 1100, eventId: 'toolu-a' }),
+      createPreEvent({ eventId: 'toolu-b', ts: 1200 }),
+      createPostEvent({ ts: 1300, eventId: 'toolu-b' }),
+      createPostEvent({ ts: 1400, eventId: 'toolu-a' })
+    ], { nowMs: 1400 });
+
+    const snapshot = getSessionSnapshot(state, 's1', 's1');
+    assert.equal(snapshot.running_tools.length, 0);
+    assert.equal(snapshot.last_completed_tool.event_id, 'toolu-b');
+    assert.equal(snapshot.last_completed_tool.status, 'success');
+    assert.equal(state.pending_completions.length, 0);
   });
 
   it('uses summary as a fallback discriminator when event_id is absent', () => {

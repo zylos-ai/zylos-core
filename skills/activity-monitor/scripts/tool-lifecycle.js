@@ -1,5 +1,6 @@
 const PENDING_EVENT_TTL_MS = 30_000;
 const COMPLETION_MATCH_WINDOW_MS = 5_000;
+const COMPLETED_EVENT_TTL_MS = 30_000;
 
 function cloneSummary(summary) {
   if (!summary || typeof summary !== 'object') return null;
@@ -23,10 +24,14 @@ function ensureSession(state, sessionId, pid = 0) {
       last_event: null,
       running_tools: [],
       last_completed_tool: null,
+      completed_event_ids: {},
     };
   }
   const session = state.sessions[sessionId];
   if (pid) session.pid = pid;
+  if (!session.completed_event_ids || typeof session.completed_event_ids !== 'object') {
+    session.completed_event_ids = {};
+  }
   return session;
 }
 
@@ -40,6 +45,19 @@ function findLastRunningToolIndex(runningTools, toolName) {
 function findRunningToolIndexByEventId(runningTools, eventId) {
   if (!eventId) return -1;
   return runningTools.findIndex((candidate) => candidate.event_id === eventId);
+}
+
+function hasCompletedEpisodeEventId(session, eventId) {
+  if (!eventId) return false;
+  return Boolean(session.completed_event_ids?.[eventId]);
+}
+
+function rememberCompletedEpisodeEventId(session, episode, status, endedAt) {
+  if (!episode?.event_id) return;
+  session.completed_event_ids[episode.event_id] = {
+    status,
+    ended_at: endedAt || 0,
+  };
 }
 
 function findRunningToolIndexBySummary(runningTools, toolName, summary) {
@@ -73,6 +91,7 @@ function completeEpisode(session, episode, status, endedAt, extra = {}) {
     summary: cloneSummary(episode.summary),
     ...extra,
   };
+  rememberCompletedEpisodeEventId(session, episode, status, endedAt);
 }
 
 function applyPendingCompletionIfPresent(state, session, episode) {
@@ -152,6 +171,13 @@ function applyPreTool(state, event) {
   if (!event.session_id || !event.tool || !event.event_id) return;
 
   const session = ensureSession(state, event.session_id, event.pid);
+  if (
+    findRunningToolIndexByEventId(session.running_tools, event.event_id) >= 0 ||
+    hasCompletedEpisodeEventId(session, event.event_id)
+  ) {
+    return;
+  }
+
   session.in_prompt = false;
   session.last_event = event.event;
   session.last_event_at = Math.max(session.last_event_at || 0, event.ts || 0);
@@ -199,6 +225,27 @@ function applyCompletion(state, event, status) {
       summary: cloneSummary(session.last_completed_tool.summary || event.summary),
     };
     delete session.last_completed_tool.clear_reason;
+    session.completed_event_ids[event.event_id] = {
+      status,
+      ended_at: event.ts || 0,
+    };
+    return;
+  }
+
+  if (
+    event.event_id &&
+    hasCompletedEpisodeEventId(session, event.event_id)
+  ) {
+    return;
+  }
+
+  if (
+    event.event_id &&
+    state.pending_completions.some((pending) =>
+      pending.event_id === event.event_id
+      && pending.session_id === event.session_id
+      && pending.status === status)
+  ) {
     return;
   }
 
@@ -255,6 +302,15 @@ function purgeExpiredPending(state, nowMs) {
   state.pending_clear_hints = state.pending_clear_hints.filter(
     (hint) => (nowMs - (hint.ts || 0)) <= PENDING_EVENT_TTL_MS
   );
+  for (const session of Object.values(state.sessions)) {
+    const completedEventIds = session?.completed_event_ids;
+    if (!completedEventIds || typeof completedEventIds !== 'object') continue;
+    for (const [eventId, completed] of Object.entries(completedEventIds)) {
+      if ((nowMs - (Number(completed?.ended_at) || 0)) > COMPLETED_EVENT_TTL_MS) {
+        delete completedEventIds[eventId];
+      }
+    }
+  }
 }
 
 export function createToolLifecycleState() {
@@ -290,6 +346,17 @@ export function normalizeToolLifecycleState(raw = {}) {
           }))
         : [];
       normalized.last_completed_tool = session?.last_completed_tool || null;
+      normalized.completed_event_ids = session?.completed_event_ids && typeof session.completed_event_ids === 'object'
+        ? Object.fromEntries(
+            Object.entries(session.completed_event_ids).map(([eventId, completed]) => [
+              eventId,
+              {
+                status: completed?.status || null,
+                ended_at: Number(completed?.ended_at) || 0,
+              }
+            ])
+          )
+        : {};
     }
   }
 
