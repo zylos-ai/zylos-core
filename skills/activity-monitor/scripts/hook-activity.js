@@ -10,6 +10,10 @@
  * Registered as an async hook on: UserPromptSubmit, PreToolUse, PostToolUse,
  * PostToolUseFailure, Stop, Notification(idle_prompt).
  *
+ * Scope: phase 1 watchdog tracks only the root Claude agent. Nested subagent
+ * hook payloads carry agent_id and are ignored here because recovery actions
+ * operate on the whole tmux pane, not on an individual subagent.
+ *
  * Safety: writes are best-effort and fail-open. Hook failures must never
  * interfere with Claude.
  */
@@ -41,6 +45,10 @@ function readToolUseId(hookData) {
 
 function hasMeaningfulToolInput(toolInput) {
   return Boolean(toolInput && typeof toolInput === 'object' && Object.keys(toolInput).length > 0);
+}
+
+function isSubagentHook(hookData) {
+  return typeof hookData?.agent_id === 'string' && hookData.agent_id.trim().length > 0;
 }
 
 function buildToolEvent({ hookData, eventName, claudePid, nowMs }) {
@@ -88,6 +96,8 @@ function appendJsonLine(filePath, record) {
 }
 
 export function handleHookActivity(hookData, { nowMs = Date.now(), claudePid = getClaudePid() } = {}) {
+  if (isSubagentHook(hookData)) return null;
+
   const hookEventName = hookData?.hook_event_name;
 
   let eventName = null;

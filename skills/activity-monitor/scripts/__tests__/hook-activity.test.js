@@ -137,6 +137,40 @@ describe('hook-activity', () => {
     assert.equal(event.event, 'idle');
   });
 
+  it('ignores subagent hook events when agent_id is present', async () => {
+    process.env.ZYLOS_DIR = tmpDir;
+    process.env.HOOK_ACTIVITY_DISABLE_MAIN = '1';
+    const modulePath = new URL('../hook-activity.js', import.meta.url);
+    const { handleHookActivity } = await import(`${modulePath.href}?t=${Date.now()}-${Math.random()}`);
+    const result = handleHookActivity({
+      hook_event_name: 'PreToolUse',
+      session_id: 'session-subagent',
+      agent_id: 'agent-123',
+      agent_type: 'Explore',
+      tool_name: 'WebFetch',
+      tool_input: { url: 'https://example.com/subagent' },
+      tool_use_id: 'toolu_subagent_1'
+    }, { nowMs: 4500, claudePid: 4242 });
+    assert.equal(result, null);
+    assert.equal(fs.existsSync(eventsFile), false);
+  });
+
+  it('still records root-agent events when only agent_type is present', async () => {
+    await runHook({
+      hook_event_name: 'PreToolUse',
+      session_id: 'session-agent-mode',
+      agent_type: 'security-reviewer',
+      tool_name: 'WebFetch',
+      tool_input: { url: 'https://example.com/root-agent' },
+      tool_use_id: 'toolu_root_agent_1'
+    }, 4600);
+
+    const [event] = readEvents();
+    assert.equal(event.event, 'pre_tool');
+    assert.equal(event.session_id, 'session-agent-mode');
+    assert.equal(event.event_id, 'toolu_root_agent_1');
+  });
+
   it('returns null for unknown hook event', async () => {
     process.env.ZYLOS_DIR = tmpDir;
     process.env.HOOK_ACTIVITY_DISABLE_MAIN = '1';
