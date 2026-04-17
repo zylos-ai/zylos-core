@@ -611,7 +611,7 @@ v1 / v2 早期描述 "Hook 只写文件，不调用主进程" 是**字面错误*
 
 | Hook | 写入 | 消费方 |
 |------|------|--------|
-| `hook-activity.js` | `tool-events.jsonl`、`api-activity.json`（合成） | HealthEngine / ToolTracker |
+| `hook-activity.js` | 仅写 `tool-events.jsonl`（`api-activity.json` 由 monitor.js / toolTracker 在 tick 里合成生成，**不是 hook 直接产出**——见 §4.4 line 310-319） | HealthEngine / ToolTracker |
 | `context-monitor.js`（statusLine） | `statusline.json` | ContextMonitor |
 | `session-foreground.js`（SessionStart × 3 matcher） | `foreground-session.json` | SessionForeground |
 | `claude-pid.js`（若启用） | `claude-pid.json` | Guardian |
@@ -683,15 +683,17 @@ v1 将两者分两个阶段，会产生中间混合态——新 HealthEngine 调
 ### Phase 4: 消息路由
 
 1. 在 `monitor.js` 进程内实例化 MessageRouter，启动 Unix socket 监听
-2. 修改 `c4-receive.js`：尝试连接 socket，失败则回退到直接 tmux 投递
+2. 修改 `c4-receive.js`：尝试连接 socket；**socket 失败时仍然入 C4 队列，跳过 MessageRouter 的主动聚合**，由 `c4-dispatcher.js` 按现有 `health` gating / priority / `require_idle` 继续投递。**禁止 direct-to-tmux fallback**（见 §4.8 "C4 主链原则" + §4.8.1 DELIVERED 语义边界 + §9 Q5）
 3. 实现并发聚合（`#pendingCheck` + `#waitingMessages`），注意 splice 必须在 `pendingCheck = null` 之前
 4. 修改 `c4-dispatcher.js` 适配新 health 值域
-5. 测试：MessageRouter 并发测试（5 个并发消息同时触发一次检查）、socket 失败回退测试
+5. 测试：MessageRouter 并发测试（5 个并发消息同时触发一次检查）、socket 降级测试（验证 socket 不可用时：消息仍入 C4 DB / 不 direct-to-tmux / dispatcher 按现有 gating 继续投递 / 返回 router unavailable 或 queued 语义而非误报 DELIVERED——见 §8）
+
+> **实现 checklist 防呆**：MessageRouter **不拥有 tmux 投递权**——happy path 不直接写 tmux，socket 降级路径也不直接写 tmux。tmux 写入在整个 v2 架构里**仅由 `c4-dispatcher.js` 独占**（`c4-dispatcher.js:572-660`）。只看 Phase 4 checklist 的实现者必须同时回读 §4.8.1。
 
 ### Phase 5: 收尾
 
 1. 更新 `agent-status.json` schema（加 `schema_version: 2`）
-2. 更新 `c4-receive.js` 的 `health === 'down'` → `'unavailable'`
+2. 更新 `c4-receive.js` 下游：主状态改为 `health: 'unavailable'`，**同时读取 `health_substate`**——`degraded` 继续对应原来的 HEALTH_DOWN 文案，`recovering` 对应原来的 HEALTH_RECOVERING 文案（见 §3.4 代码示例 + §6.2 下游表）。不要只收敛到 `'unavailable'` 一个值——那会压平 §3.4 / §6.2 好不容易保住的外部语义差异
 3. 更新 SKILL.md 文档
 4. 更新 web-console 状态显示文案
 5. 观察 1 周稳定后，删除 `activity-monitor.legacy.js` 和 heartbeat-engine.js
@@ -719,7 +721,7 @@ PR #500 的 watchdog 子系统已在 main 上运行。Phase 1–5 期间 watchdo
 | 单元测试（`node --test`） | Guardian, HealthEngine, TaskScheduler, MessageRouter, ToolTracker, ToolWatchdog | 延续现有 deps-injection mock 模式 |
 | 状态转换测试 | HealthEngine 的 OK/Unavailable/RateLimited/AuthFailed 全覆盖 + PM2 重启恢复 | 新增 |
 | 并发测试 | MessageRouter 多消息同时触发一次检查 | 新增 |
-| Socket 降级测试 | MessageRouter socket 挂掉，c4-receive 回退路径 | 新增 |
+| Socket 降级测试 | MessageRouter socket 不可用时：(1) 消息仍然入 C4 DB（`insertConversation` 被调用）；(2) **不** direct-to-tmux（tmux 写入计数应为 0，或仅由后续 dispatcher 触发）；(3) dispatcher 仍按现有 `health` gating / priority / `require_idle` 负责投递；(4) c4-receive 返回 router unavailable / queued 语义给调用方，**不误报 DELIVERED** | 新增 |
 | 集成测试 | 新旧架构同一场景对照（状态转换、重启序列、定时任务触发） | 新增 |
 | Watchdog 测试 | 继承 PR #500 的 `tool-watchdog.test.js` / `tool-lifecycle.test.js` | 已存在 |
 
