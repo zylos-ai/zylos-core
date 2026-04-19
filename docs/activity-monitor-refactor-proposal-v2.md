@@ -271,7 +271,7 @@ skills/activity-monitor/scripts/
     └── codex.js
 ```
 
-### 4.2 主循环（monitor.js，7 步 tick）
+### 4.2 主循环（monitor.js，8 步 tick）
 
 ```
 每秒 tick:
@@ -675,7 +675,7 @@ v1 将两者分两个阶段，会产生中间混合态——新 HealthEngine 调
 1. 同步新建 `guardian.js` + `health-engine.js` + 新 `monitor.js`
 2. HealthEngine：合并 `recovering + down → unavailable`（内部保留 first-stage/degraded 差异）
 3. Guardian：从 activity-monitor.js 提取 Guardian 逻辑，复合 `restartBlocked` 由 Guardian 自己组装
-4. 新 `monitor.js` 实现 7 步 tick，成为新 PM2 入口候选
+4. 新 `monitor.js` 实现 8 步 tick，成为新 PM2 入口候选
 5. **关键**：保留 `activity-monitor.legacy.js`（即当前 `activity-monitor.js` 的完整拷贝）
 6. PM2 配置通过 `PM2_APP_NAME` 或启动参数切换新旧入口
 7. 测试：HealthEngine 状态转换（含 PM2 重启恢复）、Guardian 单元测试、新旧对照的集成测试
