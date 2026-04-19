@@ -5,6 +5,11 @@ All notable changes to zylos-core will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.14] - 2026-04-20
+
+### Fixed
+- **Claude launcher: propagate stream-watchdog env vars from `.env`**: the activity-monitor stream watchdog added in #500 is gated on `CLAUDE_ENABLE_STREAM_WATCHDOG` / `CLAUDE_STREAM_IDLE_TIMEOUT_MS`, but `ClaudeAdapter.launch()` previously only forwarded `ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN` / `ANTHROPIC_BASE_URL` from `.env` and dropped everything else. Setting the watchdog vars in `.env` therefore had no effect — the Claude subprocess never saw them. `launch()` now reads these two vars from `.env` and splices them into the shared `claudeCmd` via the existing `env` invocation, so they reach Claude in both the new-session and existing-session launch paths.
+
 ## [0.4.13] - 2026-04-12
 
 ### Fixed
