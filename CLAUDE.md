@@ -41,6 +41,16 @@ const path = require('path');
 module.exports = myFunction;
 ```
 
+## Deployment Safety
+
+**These rules are mandatory for all zylos components.**
+
+1. **Never deploy before code review is complete.** Any PR that touches database migrations, data-destructive operations, or production config must pass review before deployment. Review and deploy are strictly sequential — never parallel. (Incident: Recruit v0.2.8 deployed a buggy migration before review caught a CASCADE DELETE bug, destroying all production data with no backup.)
+
+2. **Back up runtime data before upgrades.** The `zylos upgrade` pipeline (step2_backup) backs up both skillDir and dataDir. Components with databases or stateful files in dataDir are protected by this. Never bypass or skip the backup step.
+
+3. **SQLite migrations must disable FK enforcement around DROP TABLE.** SQLite's `DROP TABLE` with `foreign_keys=ON` silently cascades deletes to child tables. Any migration that rebuilds tables must wrap the operation with `PRAGMA foreign_keys = OFF` / `ON` and run `PRAGMA foreign_key_check` afterward.
+
 ## Release Process
 
 When releasing a new version:
