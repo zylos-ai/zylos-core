@@ -570,12 +570,21 @@ export function rollback(ctx) {
       results.push({ action: 'restore_files', success: false, error: err.message });
     }
 
-    // Restore dataDir from backup
+    // Restore dataDir from backup (symmetric: delete files not in backup, then copy back)
     const dataBackupDir = path.join(ctx.backupDir, '_datadir');
     if (ctx.dataDir && fs.existsSync(dataBackupDir)) {
       try {
-        const entries = fs.readdirSync(dataBackupDir);
-        for (const entry of entries) {
+        fs.mkdirSync(ctx.dataDir, { recursive: true });
+        const backedUpFiles = new Set(fs.readdirSync(dataBackupDir));
+        // Remove top-level files added by the failed upgrade (not in backup)
+        for (const entry of fs.readdirSync(ctx.dataDir)) {
+          const entryPath = path.join(ctx.dataDir, entry);
+          if (!backedUpFiles.has(entry) && fs.statSync(entryPath).isFile()) {
+            fs.unlinkSync(entryPath);
+          }
+        }
+        // Restore backed-up files
+        for (const entry of backedUpFiles) {
           fs.copyFileSync(path.join(dataBackupDir, entry), path.join(ctx.dataDir, entry));
         }
         results.push({ action: 'restore_data', success: true });
