@@ -383,6 +383,7 @@ function step1_stopService(ctx) {
 
 /**
  * Step 2: filesystem backup to .backup/<timestamp>/
+ * Backs up both skillDir (source code) and dataDir (runtime data: databases, config).
  */
 function step2_backup(ctx) {
   const startTime = Date.now();
@@ -391,6 +392,21 @@ function step2_backup(ctx) {
 
   try {
     copyTree(ctx.skillDir, backupDir, { excludes: ['node_modules', '.backup', '.zylos'] });
+
+    // Back up dataDir (databases, config, credentials) if it exists and differs from skillDir
+    if (ctx.dataDir && fs.existsSync(ctx.dataDir) && fs.realpathSync(ctx.dataDir) !== fs.realpathSync(ctx.skillDir)) {
+      const dataBackupDir = path.join(backupDir, '_datadir');
+      fs.mkdirSync(dataBackupDir, { recursive: true });
+      const entries = fs.readdirSync(ctx.dataDir);
+      for (const entry of entries) {
+        const srcPath = path.join(ctx.dataDir, entry);
+        const stat = fs.statSync(srcPath);
+        // Back up files (db, json, config) and small directories; skip large dirs like node_modules, resumes, logs
+        if (stat.isFile()) {
+          fs.copyFileSync(srcPath, path.join(dataBackupDir, entry));
+        }
+      }
+    }
 
     ctx.backupDir = backupDir;
     return { step: 2, name: 'backup', status: 'done', message: path.basename(backupDir), duration: Date.now() - startTime };
@@ -548,10 +564,24 @@ export function rollback(ctx) {
   // Restore files from backup (--delete removes files added by the failed upgrade)
   if (ctx.backupDir && fs.existsSync(ctx.backupDir)) {
     try {
-      syncTree(ctx.backupDir, ctx.skillDir, { excludes: ['node_modules', '.backup', '.zylos'] });
+      syncTree(ctx.backupDir, ctx.skillDir, { excludes: ['node_modules', '.backup', '.zylos', '_datadir'] });
       results.push({ action: 'restore_files', success: true });
     } catch (err) {
       results.push({ action: 'restore_files', success: false, error: err.message });
+    }
+
+    // Restore dataDir from backup
+    const dataBackupDir = path.join(ctx.backupDir, '_datadir');
+    if (ctx.dataDir && fs.existsSync(dataBackupDir)) {
+      try {
+        const entries = fs.readdirSync(dataBackupDir);
+        for (const entry of entries) {
+          fs.copyFileSync(path.join(dataBackupDir, entry), path.join(ctx.dataDir, entry));
+        }
+        results.push({ action: 'restore_data', success: true });
+      } catch (err) {
+        results.push({ action: 'restore_data', success: false, error: err.message });
+      }
     }
 
     // Restore dependencies
