@@ -454,13 +454,14 @@ describe('migrateMatcherSplit', () => {
 describe('syncHooks forward pass', () => {
   const noopLog = () => {};
 
-  it('does not modify user-owned matcher group (respects user intent)', () => {
+  it('adds missing template hooks to an existing matcher group and preserves user hooks', () => {
     const installed = {
       hooks: {
         SessionStart: [
           makeMatcherGroup('startup', [
             '~/zylos/.claude/skills/comm-bridge/scripts/c4-session-init.js',
             '~/zylos/.claude/skills/zylos-memory/scripts/session-start-inject.js',
+            '/custom/user-startup-hook.js',
           ]),
         ],
       },
@@ -489,9 +490,12 @@ describe('syncHooks forward pass', () => {
 
     const result = syncHooks(installed, template, { log: noopLog });
 
-    // startup should NOT gain a 3rd hook
+    assert.equal(result.added, 7);
+
     const startupGroup = installed.hooks.SessionStart.find(g => g.matcher === 'startup');
-    assert.equal(startupGroup.hooks.length, 2);
+    assert.equal(startupGroup.hooks.length, 4);
+    assert.ok(startupGroup.hooks.some(h => h.command.includes('session-start-prompt.js')));
+    assert.ok(startupGroup.hooks.some(h => h.command.includes('user-startup-hook.js')));
 
     // clear and compact should be added
     assert.equal(installed.hooks.SessionStart.length, 3);
@@ -544,6 +548,61 @@ describe('syncHooks forward pass', () => {
 
     assert.equal(result.updated, 1);
     assert.equal(installed.hooks.SessionStart[0].hooks[0].timeout, 10000);
+  });
+
+  it('backfills hooks added after v0.4.13 into existing historical settings', () => {
+    const template = JSON.parse(fs.readFileSync(TEMPLATE_SETTINGS_PATH, 'utf8'));
+    const installed = structuredClone(template);
+
+    for (const group of installed.hooks.SessionStart) {
+      group.hooks = group.hooks.filter(h => !h.command.includes('session-foreground.js'));
+    }
+    delete installed.hooks.PostToolUseFailure;
+    installed.hooks.SessionStart[0].hooks.push({
+      type: 'command',
+      command: 'node /custom/user-startup-hook.js',
+      timeout: 1234,
+    });
+
+    const result = syncHooks(installed, template, { log: noopLog });
+
+    assert.equal(result.added, 4);
+    for (const group of installed.hooks.SessionStart) {
+      assert.ok(
+        group.hooks.some(h => h.command.includes('session-foreground.js')),
+        `${group.matcher} should include session-foreground.js`
+      );
+    }
+    assert.ok(installed.hooks.PostToolUseFailure);
+    assert.ok(
+      installed.hooks.SessionStart[0].hooks.some(h => h.command.includes('user-startup-hook.js'))
+    );
+  });
+
+  it('dry run reports missing hooks in existing matcher groups without mutating settings', () => {
+    const installed = {
+      hooks: {
+        SessionStart: [
+          makeMatcherGroup('startup', ['~/zylos/.claude/skills/a/scripts/a.js']),
+        ],
+      },
+    };
+    const before = JSON.stringify(installed);
+    const template = {
+      hooks: {
+        SessionStart: [
+          makeMatcherGroup('startup', [
+            '~/zylos/.claude/skills/a/scripts/a.js',
+            '~/zylos/.claude/skills/b/scripts/b.js',
+          ]),
+        ],
+      },
+    };
+
+    const result = syncHooks(installed, template, { dryRun: true, log: noopLog });
+
+    assert.equal(result.added, 1);
+    assert.equal(JSON.stringify(installed), before);
   });
 
   it('handles the full migration scenario: catch-all → specific matchers', () => {
@@ -612,7 +671,7 @@ describe('syncHooks forward pass', () => {
     assert.equal(result.removed, 0);
   });
 
-  it('reverse pass preserves user hooks not in template', () => {
+  it('preserves user hooks while adding missing template hooks', () => {
     const installed = {
       hooks: {
         SessionStart: [
@@ -632,10 +691,10 @@ describe('syncHooks forward pass', () => {
 
     syncHooks(installed, template, { log: noopLog });
 
-    // User's custom hook should still be there (startup group exists, not modified)
     const startupGroup = installed.hooks.SessionStart.find(g => g.matcher === 'startup');
-    assert.equal(startupGroup.hooks.length, 1);
-    assert.ok(startupGroup.hooks[0].command.includes('my-hook.js'));
+    assert.equal(startupGroup.hooks.length, 2);
+    assert.ok(startupGroup.hooks.some(h => h.command.includes('my-hook.js')));
+    assert.ok(startupGroup.hooks.some(h => h.command.includes('/skills/a/scripts/a.js')));
   });
 
   it('reverse pass removes core hook from one matcher when template removes it (matcher-aware)', () => {

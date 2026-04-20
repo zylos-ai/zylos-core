@@ -282,3 +282,138 @@ describe('Boolean setting migration hints (autoMemoryEnabled, autoDreamEnabled)'
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 });
+
+function makeHook(scriptPath, timeout = 10000) {
+  return { type: 'command', command: `node ${scriptPath}`, timeout };
+}
+
+function makeMatcherGroup(matcher, scriptPaths) {
+  return {
+    matcher,
+    hooks: scriptPaths.map(p => makeHook(p)),
+  };
+}
+
+describe('settings hook migration hints', () => {
+  it('detects missing hooks inside the corresponding matcher group', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-hook-hints-'));
+    const templatesDir = path.join(tmpDir, 'templates');
+    const zylosDir = path.join(tmpDir, 'zylos');
+
+    fs.mkdirSync(path.join(templatesDir, '.claude'), { recursive: true });
+    fs.mkdirSync(path.join(zylosDir, '.claude'), { recursive: true });
+
+    const hookA = '~/zylos/.claude/skills/activity-monitor/scripts/a.js';
+    const hookB = '~/zylos/.claude/skills/activity-monitor/scripts/b.js';
+    fs.writeFileSync(path.join(templatesDir, '.claude', 'settings.json'), JSON.stringify({
+      hooks: {
+        SessionStart: [
+          makeMatcherGroup('startup', [hookA, hookB]),
+          makeMatcherGroup('clear', [hookA, hookB]),
+        ],
+      },
+    }), 'utf8');
+    fs.writeFileSync(path.join(zylosDir, '.claude', 'settings.json'), JSON.stringify({
+      hooks: {
+        SessionStart: [
+          makeMatcherGroup('startup', [hookA]),
+          makeMatcherGroup('clear', [hookA, hookB]),
+        ],
+      },
+    }), 'utf8');
+
+    const hints = generateMigrationHints(templatesDir, { zylosDir });
+    const missing = hints.filter((hint) => hint.type === 'missing_hook');
+
+    assert.deepEqual(missing.map((hint) => ({
+      event: hint.event,
+      matcher: hint.matcher,
+      command: hint.command,
+    })), [{
+      event: 'SessionStart',
+      matcher: 'startup',
+      command: `node ${hookB}`,
+    }]);
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('applies removed-hook hints only to the hinted matcher group', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-hook-remove-hints-'));
+    const templatesDir = path.join(tmpDir, 'templates');
+    const zylosDir = path.join(tmpDir, 'zylos');
+    const settingsPath = path.join(zylosDir, '.claude', 'settings.json');
+
+    fs.mkdirSync(path.join(templatesDir, '.claude'), { recursive: true });
+    fs.mkdirSync(path.join(zylosDir, '.claude'), { recursive: true });
+
+    const hookA = '~/zylos/.claude/skills/activity-monitor/scripts/a.js';
+    fs.writeFileSync(path.join(templatesDir, '.claude', 'settings.json'), JSON.stringify({
+      hooks: {
+        SessionStart: [
+          makeMatcherGroup('startup', [hookA]),
+          makeMatcherGroup('clear', []),
+        ],
+      },
+    }), 'utf8');
+    fs.writeFileSync(settingsPath, JSON.stringify({
+      hooks: {
+        SessionStart: [
+          makeMatcherGroup('startup', [hookA]),
+          makeMatcherGroup('clear', [hookA]),
+        ],
+      },
+    }) + '\n', 'utf8');
+
+    const hints = generateMigrationHints(templatesDir, { zylosDir });
+    assert.deepEqual(hints.filter((hint) => hint.type === 'removed_hook').map((hint) => ({
+      matcher: hint.matcher,
+      command: hint.command,
+    })), [{
+      matcher: 'clear',
+      command: `node ${hookA}`,
+    }]);
+
+    const result = applyMigrationHints(hints, { zylosDir });
+    const updated = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+
+    assert.equal(result.applied, 1);
+    assert.equal(updated.hooks.SessionStart.length, 1);
+    assert.equal(updated.hooks.SessionStart[0].matcher, 'startup');
+    assert.equal(updated.hooks.SessionStart[0].hooks[0].command, `node ${hookA}`);
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('does not duplicate stale missing-hook hints during apply', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-hook-stale-hints-'));
+    const zylosDir = path.join(tmpDir, 'zylos');
+    const settingsPath = path.join(zylosDir, '.claude', 'settings.json');
+
+    fs.mkdirSync(path.join(zylosDir, '.claude'), { recursive: true });
+
+    const hookA = '~/zylos/.claude/skills/activity-monitor/scripts/a.js';
+    fs.writeFileSync(settingsPath, JSON.stringify({
+      hooks: {
+        SessionStart: [
+          makeMatcherGroup('startup', [hookA]),
+        ],
+      },
+    }) + '\n', 'utf8');
+
+    const result = applyMigrationHints([{
+      type: 'missing_hook',
+      event: 'SessionStart',
+      matcher: 'startup',
+      hook: makeHook(hookA),
+      command: `node ${hookA}`,
+    }], { zylosDir });
+    const updated = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+
+    assert.equal(result.applied, 0);
+    assert.equal(updated.hooks.SessionStart[0].hooks.length, 1);
+    assert.equal(updated.hooks.SessionStart[0].hooks[0].command, `node ${hookA}`);
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+});
