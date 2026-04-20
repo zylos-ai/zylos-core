@@ -174,10 +174,10 @@ export function syncHooks(installedSettings, templateSettings, { dryRun = false,
     updated += migrated;
   }
 
-  // --- Forward pass: add missing matcher groups, update hooks in matched groups ---
+  // --- Forward pass: add missing matcher groups/hooks, update hooks in matched groups ---
   // Strategy: align by matcher group, not by individual hook across all groups.
-  //   - If installed has a group with the same matcher → respect user config, only
-  //     update existing hooks (command/timeout drift) but don't add new hooks
+  //   - If installed has a group with the same matcher → update existing template
+  //     hooks and append missing template hooks, preserving unrelated user hooks
   //   - If installed has NO group with that matcher → add the whole group from template
   for (const [event, matchers] of Object.entries(templateHooks)) {
     if (!Array.isArray(matchers)) continue;
@@ -193,7 +193,8 @@ export function syncHooks(installedSettings, templateSettings, { dryRun = false,
       );
 
       if (installedGroup) {
-        // Group exists — only update existing hooks (command/timeout drift)
+        // Group exists — update existing template hooks and append missing
+        // template hooks while preserving unrelated user hooks in the group.
         for (const templateCmd of getCommandHooks(templateGroup)) {
           const templateKey = extractScriptPath(templateCmd.command);
           const existing = getCommandHooks(installedGroup).find(
@@ -206,6 +207,13 @@ export function syncHooks(installedSettings, templateSettings, { dryRun = false,
             }
             updated++;
             log(`  ~ ${event}[${matcherValue}]: ${templateCmd.command}`);
+          } else if (!existing) {
+            if (!dryRun) {
+              if (!Array.isArray(installedGroup.hooks)) installedGroup.hooks = [];
+              installedGroup.hooks.push({ ...templateCmd });
+            }
+            added++;
+            log(`  + ${event}[${matcherValue}]: ${templateCmd.command}`);
           }
         }
       } else {

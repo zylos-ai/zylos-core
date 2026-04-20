@@ -389,6 +389,10 @@ function listTemplateFiles(templatesDir) {
   return files;
 }
 
+function hookMatcherValue(group) {
+  return group && group.matcher !== undefined ? group.matcher : null;
+}
+
 /**
  * Compare template settings.json hooks with installed settings.json.
  * Matches hooks by script path (not full command string) to detect:
@@ -442,24 +446,24 @@ export function generateMigrationHints(templatesDir, deps = {}) {
     const installedMatchers = Array.isArray(installedHooks[event]) ? installedHooks[event] : [];
 
     for (const matcher of matchers) {
+      const matcherValue = hookMatcherValue(matcher);
+      const installedGroup = installedMatchers.find(
+        im => hookMatcherValue(im) === matcherValue
+      );
+      const installedGroupHooks = installedGroup ? getCommandHooks(installedGroup) : [];
+
       for (const templateCmd of getCommandHooks(matcher)) {
         const templateKey = extractScriptPath(templateCmd.command);
-
-        // Find installed hook with the same script path
-        let matched = null;
-        for (const im of installedMatchers) {
-          matched = getCommandHooks(im).find(
-            h => extractScriptPath(h.command) === templateKey
-          );
-          if (matched) break;
-        }
+        const matched = installedGroupHooks.find(
+          h => extractScriptPath(h.command) === templateKey
+        );
 
         if (!matched) {
           hints.push({
             type: 'missing_hook',
             event,
             hook: { ...templateCmd },
-            matcher: matcher.matcher !== undefined ? matcher.matcher : null,
+            matcher: matcherValue,
             // Keep flat fields for backward compatibility
             command: templateCmd.command,
             timeout: templateCmd.timeout,
@@ -469,6 +473,7 @@ export function generateMigrationHints(templatesDir, deps = {}) {
             type: 'modified_hook',
             event,
             hook: { ...templateCmd },
+            matcher: matcherValue,
             command: templateCmd.command,
             timeout: templateCmd.timeout,
             oldCommand: matched.command,
@@ -520,6 +525,11 @@ export function generateMigrationHints(templatesDir, deps = {}) {
     const templateMatchers = Array.isArray(templateHooks[event]) ? templateHooks[event] : [];
 
     for (const matcher of matchers) {
+      const matcherValue = hookMatcherValue(matcher);
+      const correspondingTemplate = templateMatchers.find(
+        tm => hookMatcherValue(tm) === matcherValue
+      );
+
       for (const installedCmd of getCommandHooks(matcher)) {
         // Only flag hooks from core skills to avoid false positives
         // for optional component hooks
@@ -527,16 +537,17 @@ export function generateMigrationHints(templatesDir, deps = {}) {
         if (!skillName || !coreSkillNames.has(skillName)) continue;
 
         const installedKey = extractScriptPath(installedCmd.command);
-        const foundInTemplate = templateMatchers.some(tm =>
-          getCommandHooks(tm).some(
-            h => extractScriptPath(h.command) === installedKey
-          )
-        );
+        const foundInTemplate = correspondingTemplate
+          ? getCommandHooks(correspondingTemplate).some(
+              h => extractScriptPath(h.command) === installedKey
+            )
+          : false;
 
         if (!foundInTemplate) {
           hints.push({
             type: 'removed_hook',
             event,
+            matcher: matcherValue,
             command: installedCmd.command,
             timeout: installedCmd.timeout,
           });
@@ -910,20 +921,21 @@ export function applyMigrationHints(hints, deps = {}) {
 
         // Find or create a matcher group
         const matcherValue = hint.matcher !== undefined ? hint.matcher : null;
-        let targetGroup = null;
-
-        if (matcherValue !== null) {
-          // Look for an existing group with this matcher
-          targetGroup = settings.hooks[hint.event].find(
-            g => g.matcher === matcherValue
-          );
-        }
+        let targetGroup = settings.hooks[hint.event].find(
+          g => hookMatcherValue(g) === matcherValue
+        );
 
         if (!targetGroup) {
           targetGroup = { hooks: [] };
           if (matcherValue !== null) targetGroup.matcher = matcherValue;
           settings.hooks[hint.event].push(targetGroup);
         }
+
+        const hookKey = extractScriptPath(hookObj.command);
+        const alreadyPresent = getCommandHooks(targetGroup).some(
+          h => extractScriptPath(h.command) === hookKey
+        );
+        if (alreadyPresent) continue;
 
         targetGroup.hooks.push(hookObj);
         result.applied++;
@@ -934,9 +946,11 @@ export function applyMigrationHints(hints, deps = {}) {
         if (!Array.isArray(matchers)) continue;
 
         const oldScriptPath = extractScriptPath(hint.oldCommand);
+        const hasMatcher = Object.hasOwn(hint, 'matcher');
         let updated = false;
 
         for (const group of matchers) {
+          if (hasMatcher && hookMatcherValue(group) !== hint.matcher) continue;
           if (!Array.isArray(group.hooks)) continue;
           for (let i = 0; i < group.hooks.length; i++) {
             const h = group.hooks[i];
@@ -983,10 +997,12 @@ export function applyMigrationHints(hints, deps = {}) {
         if (!Array.isArray(matchers)) continue;
 
         const scriptPath = extractScriptPath(hint.command);
+        const hasMatcher = Object.hasOwn(hint, 'matcher');
         let removed = false;
 
         for (let gi = matchers.length - 1; gi >= 0; gi--) {
           const group = matchers[gi];
+          if (hasMatcher && hookMatcherValue(group) !== hint.matcher) continue;
           if (!Array.isArray(group.hooks)) continue;
 
           group.hooks = group.hooks.filter(h => {
