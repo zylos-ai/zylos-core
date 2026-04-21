@@ -59,6 +59,37 @@ function _parseEnvValue(content, key) {
   return m[1].trim().replace(/^(['"])(.*)\1$/, '$2');
 }
 
+/**
+ * Classify a failed Claude CLI auth probe.
+ *
+ * Unknown non-auth failures must not be collapsed into `not_authenticated`,
+ * otherwise transient or changed CLI failures get misdiagnosed as revoked auth.
+ *
+ * @param {NodeJS.ErrnoException & { stdout?: string, stderr?: string, killed?: boolean }} err
+ * @returns {{ ok: boolean, reason: string, output?: string }}
+ */
+export function classifyClaudeProbeFailure(err) {
+  const output = `${err?.stdout ?? ''}${err?.stderr ?? ''}`;
+
+  if (output.includes('authentication_error')) {
+    return { ok: false, reason: 'cli_probe_authentication_error' };
+  }
+
+  const isTransient =
+    output.includes('rate_limit_error') ||
+    output.includes('api_error') ||
+    err?.code === 'ETIMEDOUT' ||
+    err?.code === 'ECONNREFUSED' ||
+    err?.code === 'ENOTFOUND' ||
+    err?.killed;
+
+  if (isTransient) {
+    return { ok: true, reason: 'cli_probe_uncertain' };
+  }
+
+  return { ok: false, reason: 'cli_probe_unknown', output: output.slice(0, 500) };
+}
+
 // ── ClaudeAdapter ─────────────────────────────────────────────────────────────
 
 export class ClaudeAdapter extends RuntimeAdapter {
@@ -123,21 +154,7 @@ export class ClaudeAdapter extends RuntimeAdapter {
       }
       return { ok: true, reason: 'cli_probe' };
     } catch (err) {
-      const output = (err.stdout ?? '') + (err.stderr ?? '');
-      if (output.includes('authentication_error')) {
-        return { ok: false, reason: 'cli_probe_authentication_error' };
-      }
-      const isTransient =
-        output.includes('rate_limit_error') ||
-        output.includes('api_error') ||
-        err.code === 'ETIMEDOUT' ||
-        err.code === 'ECONNREFUSED' ||
-        err.code === 'ENOTFOUND' ||
-        err.killed;
-      if (isTransient) {
-        return { ok: true, reason: 'cli_probe_uncertain' };
-      }
-      return { ok: false, reason: 'cli_probe_not_authenticated', output: output.slice(0, 500) };
+      return classifyClaudeProbeFailure(err);
     }
   }
 
