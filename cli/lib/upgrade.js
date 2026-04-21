@@ -383,6 +383,7 @@ function step1_stopService(ctx) {
 
 /**
  * Step 2: filesystem backup to .backup/<timestamp>/
+ * Backs up skillDir (source code) and preserve-declared dataDir files (runtime data).
  */
 function step2_backup(ctx) {
   const startTime = Date.now();
@@ -391,6 +392,24 @@ function step2_backup(ctx) {
 
   try {
     copyTree(ctx.skillDir, backupDir, { excludes: ['node_modules', '.backup', '.zylos'] });
+
+    // Back up dataDir files declared in preserve with data:// prefix
+    const parsed = parseSkillMd(ctx.skillDir);
+    const preserve = parsed?.frontmatter?.lifecycle?.preserve || [];
+    const dataEntries = preserve
+      .filter(entry => typeof entry === 'string' && entry.startsWith('data://'))
+      .map(entry => entry.slice('data://'.length));
+
+    if (dataEntries.length > 0 && ctx.dataDir && fs.existsSync(ctx.dataDir)) {
+      const dataBackupDir = path.join(backupDir, '_datadir');
+      fs.mkdirSync(dataBackupDir, { recursive: true });
+      for (const entry of dataEntries) {
+        const srcPath = path.join(ctx.dataDir, entry);
+        if (fs.existsSync(srcPath) && fs.statSync(srcPath).isFile()) {
+          fs.copyFileSync(srcPath, path.join(dataBackupDir, entry));
+        }
+      }
+    }
 
     ctx.backupDir = backupDir;
     return { step: 2, name: 'backup', status: 'done', message: path.basename(backupDir), duration: Date.now() - startTime };
@@ -548,10 +567,24 @@ export function rollback(ctx) {
   // Restore files from backup (--delete removes files added by the failed upgrade)
   if (ctx.backupDir && fs.existsSync(ctx.backupDir)) {
     try {
-      syncTree(ctx.backupDir, ctx.skillDir, { excludes: ['node_modules', '.backup', '.zylos'] });
+      syncTree(ctx.backupDir, ctx.skillDir, { excludes: ['node_modules', '.backup', '.zylos', '_datadir'] });
       results.push({ action: 'restore_files', success: true });
     } catch (err) {
       results.push({ action: 'restore_files', success: false, error: err.message });
+    }
+
+    // Restore dataDir files from backup
+    const dataBackupDir = path.join(ctx.backupDir, '_datadir');
+    if (ctx.dataDir && fs.existsSync(dataBackupDir)) {
+      try {
+        fs.mkdirSync(ctx.dataDir, { recursive: true });
+        for (const entry of fs.readdirSync(dataBackupDir)) {
+          fs.copyFileSync(path.join(dataBackupDir, entry), path.join(ctx.dataDir, entry));
+        }
+        results.push({ action: 'restore_data', success: true });
+      } catch (err) {
+        results.push({ action: 'restore_data', success: false, error: err.message });
+      }
     }
 
     // Restore dependencies
