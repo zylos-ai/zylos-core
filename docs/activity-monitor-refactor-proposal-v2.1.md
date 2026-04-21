@@ -333,16 +333,68 @@ c4-receive 收到用户消息
 
 具体实现（`#pendingCheck` + `#waitingMessages` 的进程内变量管理，以及临界区顺序）属于实现层，不在架构文档展开。
 
-### 3.7 不健康状态下消息进入（Howard direction fix）
+### 3.7 不健康状态下消息进入（v2.2 恢复 v2.0 语义）
 
-v1 / v2 早期方案在 Grace 期间有一条隐含的错误路径：c4-receive 看到 health 非 OK 时直接 `emitError() → process.exit(1)`，导致 Grace 窗口内的用户消息丢失。v2.1 修正后，c4-receive 在 health 非 OK 时走**入队 + 触发 check 并列**的双动作路径：
+v2.1 §3.7 曾让 c4-receive 在 health 非 OK 时**立即入队 + 异步触发 check + 回一条 interim ACK**。Howard 2026-04-21 (id=4288078239) 指出这违反 §1.2 原则 1：interim ACK 不是基于真实 probe 的答复，把 liveness 判断下放给"等更久看 AI 是否回"的隐式轮询，"一次 c4-receive 一次真实答案"不变量丢失。v2.2 恢复 v2.0 §4.8 的同步语义——c4-receive 同步等 in-flight probe 结果（短 window + timeout fallback），再给用户**唯一一次真实回复**。
 
-1. **正常入队**：消息写入 SQLite 队列（现有 `insertConversation` 路径），不 exit、不绕 Unavailable——保证不丢
-2. **触发一次 recovery check**：同步通知 MessageRouter 发起一次健康探测（异步执行，不阻塞入队返回）；多条并发消息共享同一次 check（并发聚合见 §3.6）——加速恢复感知，不必等 tick 的定期探测
-3. **回复用户一条提示**：按 health + `unavailable_since` 决定文案（Grace/ Unavailable 初期"消息已入队，等恢复后处理"；`unavailable_since ≥ 60min` 走"需管理员介入"）
-4. **c4-dispatcher 按现有 `health === 'ok'` + priority + `require_idle` 门控**在健康恢复后投递
+#### 流程（对齐 §3.6 路由决策）
 
-两个动作（入队 / 触发 check）**并列发生，不是二选一**：入队保证消息不丢，触发 check 保证 recovery 被消息驱动（不只是 tick 驱动）。**消息丢失的修复职责落在 c4-receive 自己**，不由 MessageRouter 的 fallback 承担——MessageRouter 即便通信不可用，入队仍然执行，消息进 C4 DB 后 dispatcher 在 health 恢复后投递，下限是等 HealthEngine 的 tick 定期探测。DB audit、priority ordering、门控约束全链路保留。
+1. **c4-receive 向 MessageRouter 请求路由决策**（进程内 IPC，实现层不展开）
+2. **MessageRouter 读 health（SignalStore 投射）**：
+   - **OK** → c4-receive 写 DB（`insertConversation`）→ dispatcher 主链处理 → AI 真实回复
+   - **Unavailable / AuthFailed / RateLimited** → MessageRouter 聚合一次 recovery check（§3.6），c4-receive 阻塞等结果
+3. **Probe 返回**：
+   - **recovered = true** → c4-receive 写 DB → dispatcher 处理 → AI 真实回复
+   - **recovered = false** → c4-receive **不写 DB**，直接回用户 terminal 文案（按 probe 结果选 recovering / degraded / rate_limited / auth_failed 文案；`unavailable_since ≥ 60min` 切"需管理员介入"语义）
+
+#### 四条关键约束
+
+**C1. DB 写入只在"将投递"路径发生**
+
+`insertConversation` 只在 OK 直投或 probe recovered 分支里执行。STATUS 回复分支**不写 DB**——消息在这一次交互中完结，不留给 dispatcher 再次处理。这关闭了 v2.0 §4.8 没讲清的边界（"STATUS 回复后消息是否会被 dispatcher 再处理"）：不会，因为从未进入 DB。用户若要重试，STATUS 文案明示"请恢复后重发"。这是"一次 c4-receive 一次真实答案"不变量的物理保障。
+
+**C2. 短 window + timeout fallback**
+
+- Probe 自然时长预期 10-30s（HealthEngine 检查耗时）
+- c4-receive 硬超时 30s（IPC read timeout）
+- 超时触发 → c4-receive 回 `STATUS degraded` 文案；MessageRouter 的 probe 继续跑，聚合池不因单个 caller 超时被破坏
+- 不做长时间阻塞轮询；window 由 probe 完成自然封顶
+
+**C3. MessageRouter 读 health 走 SignalStore**
+
+读 `agent-status.json` + `rate-limit-state.json`（§3.3），不直接调 HealthEngine 方法。符合 §1.2 原则 1 "状态共享走 SignalStore"。这是 v2.2 相对 v2.0 的唯一收紧——v2.0 时代 MessageRouter 可能直接引用 HealthEngine 字段，v2.2 收敛到 SignalStore 通道。
+
+**C4. IPC 不可用时的降级**
+
+c4-receive 连不上 MessageRouter（monitor.js crash / socket down）时：
+- **入队**（`insertConversation`，保证不丢）
+- 回一条 "router 暂时不可用，消息已入队" 错误
+- socket 恢复后 dispatcher 按 health gating 继续处理这条消息 → 会产出一条 AI 回复
+
+**这是唯一允许 2 条回复的场景**——降级路径下"不丢消息" > "单次回复"。文档显式承认为可接受妥协，因为正常路径 MessageRouter 必然可用。
+
+#### 不变量对照
+
+| 路径 | 用户收到消息数 | 守 "一次 receive 一次真实答案"? |
+|------|------|------|
+| OK 直投 | 1（AI 回复） | ✓ |
+| Probe recovered → 投递 | 1（AI 回复） | ✓ |
+| Probe not recovered → STATUS | 1（terminal 文案）| ✓ |
+| 硬超时 → STATUS degraded | 1（terminal 文案）| ✓ |
+| IPC 降级 → 入队 + error | 2（error + 后续 AI 回复）| 降级例外，文档显式承认 |
+
+#### v2.1 → v2.2 变更说明
+
+**变化**：去掉 v2.1 "立即入队 + 异步触发 check + interim ACK" 的三动作并列模型，改为 "c4-receive 同步等 MessageRouter 响应 → 一次真实回复" 的单一路径。
+
+**为什么改**（回应 Howard "论证为什么改，或改回"）：
+- v2.1 的 interim ACK 是假 liveness——"消息已入队"不等于"系统能处理"
+- 一条 receive 产生两条 bot reply（interim + 最终 AI），违反 "一次 c4-receive 一次真实答案" 不变量
+- liveness 判断被下放给"等更久看 AI 是否回"的隐式轮询，违反 §1.2 原则 1（具名接口传递事件、状态走 SignalStore）
+
+**保留了什么**：消息不丢机制（OK / probe recovered 走 insertConversation；IPC 降级显式入队）；MessageRouter 并发聚合（§3.6）；dispatcher 的 health gating + priority + `require_idle` 全链路约束。
+
+**舍弃了什么**：STATUS 回复路径下的 DB 入队（v2.1 "不管健康与否都先入队" 模型——会导致二次 AI 回复）；用户 Grace 期间"立即看到反馈"的体感，改为等 10-30s 看到真实答复。权衡依据 Howard 原则 "宁可慢，不要假"。
 
 ### 3.8 ToolPipeline（物理合并 PR #500 tool-lifecycle + tool-event-stream）
 
