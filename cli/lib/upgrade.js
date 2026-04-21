@@ -425,7 +425,8 @@ function step2_backup(ctx) {
         const srcPath = path.resolve(ctx.dataDir, entry);
         // Path traversal guard: resolved path must stay within dataDir
         if (!srcPath.startsWith(resolvedDataDir + path.sep)) continue;
-        if (fs.existsSync(srcPath) && fs.statSync(srcPath).isFile()) {
+        // Use lstatSync to reject symlinks (prevents symlink-based traversal escape)
+        if (fs.existsSync(srcPath) && fs.lstatSync(srcPath).isFile()) {
           const destPath = path.join(dataBackupDir, entry);
           fs.mkdirSync(path.dirname(destPath), { recursive: true });
           fs.copyFileSync(srcPath, destPath);
