@@ -355,7 +355,7 @@ zylos add <component>         # Install a channel or capability
 zylos upgrade <component>     # Upgrade a component
 zylos upgrade --self          # Upgrade zylos-core itself
 zylos upgrade --self --beta   # Check for beta/prerelease versions
-zylos uninstall --self        # Uninstall zylos entirely
+zylos uninstall --self        # Remove zylos core, preserving ~/zylos data
 zylos list                    # List installed components
 zylos search [keyword]        # Search component registry
 ```
@@ -368,9 +368,10 @@ zylos search [keyword]        # Search component registry
 zylos uninstall --self
 ```
 
-This will stop all services, remove the `zylos` npm package, delete `~/zylos/`, and clean shell PATH entries. You'll be prompted to optionally remove PM2 and Claude CLI.
+This will stop all services, remove the `zylos` npm package, preserve `~/zylos/`, and clean shell PATH entries. You'll be prompted to optionally remove PM2, Claude CLI, and Codex CLI.
 
 Use `--force` to skip all prompts (only performs core removal, no optional cleanup).
+Use `--purge` to also remove `~/zylos/`; combine with `--force` only when you want a non-interactive data purge.
 
 Node.js and nvm are not touched.
 

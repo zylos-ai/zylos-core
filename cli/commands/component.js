@@ -1175,7 +1175,7 @@ export async function uninstallComponent(args) {
     console.log('  --purge    Also remove data directory');
     console.log('  --force    Remove even if other components depend on it');
     console.log('  --yes, -y  Skip confirmation (keeps data)');
-    console.log('  --self     Uninstall zylos entirely from the system');
+    console.log('  --self     Remove zylos core; combine with --purge to delete ~/zylos');
     process.exit(1);
   }
 

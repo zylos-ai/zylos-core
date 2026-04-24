@@ -157,6 +157,64 @@ describe('syncCodexConfig', () => {
     assert.ok(logs.some(line => line.includes('codex')));
   });
 
+  it('refreshes when codex hooks config is missing', () => {
+    const writes = [];
+    const logs = [];
+    const globalConfigPath = '/tmp/home/.codex/config.toml';
+    const projectConfigPath = '/tmp/zylos/.codex/config.toml';
+
+    const result = syncCodexConfig({
+      cfg: { runtime: 'codex' },
+      homeDir: '/tmp/home',
+      projectDir: '/tmp/zylos',
+      existsSync: (filePath) => filePath === globalConfigPath,
+      readFileSync: (filePath) => {
+        if (filePath === projectConfigPath) {
+          return [
+            '# Zylos project-level Codex config — written by zylos, do not edit manually.',
+            '# Re-generated on each `zylos init` / `zylos runtime codex`.',
+            '# Headless operation: suppress all interactive prompts.',
+            '',
+            '# Disable startup checks',
+            'check_for_update_on_startup = false',
+            '',
+            '# Acknowledge the latest model NUX so the "Introducing GPT-X" dialog',
+            '# is not shown on startup.  Update this when Codex ships a new default model.',
+            'model_availability_nux = "gpt-5.4"',
+            '',
+            '# Enable Codex features required by Zylos runtime workflows.',
+            '[features]',
+            'multi_agent = true',
+            'codex_hooks = true',
+            '',
+            '# Suppress all known interactive notice dialogs',
+            '[notice]',
+            'hide_full_access_warning = true',
+            'hide_world_writable_warning = true',
+            'hide_rate_limit_model_nudge = true',
+            'hide_gpt5_1_migration_prompt = true',
+            '"hide_gpt-5.1-codex-max_migration_prompt" = true',
+            '',
+            '# Acknowledge known model migrations so no migration prompt appears',
+            '[notice.model_migrations]',
+            '"gpt-5.3-codex" = "gpt-5.4"',
+            '',
+          ].join('\n');
+        }
+        return '';
+      },
+      writeConfig: (projectDir) => {
+        writes.push(projectDir);
+        return true;
+      },
+      log: (line) => logs.push(line),
+    });
+
+    assert.equal(result.changed, true);
+    assert.deepEqual(writes, ['/tmp/zylos']);
+    assert.ok(logs.some(line => line.includes('codex hooks config')));
+  });
+
   it('treats refresh failures as fatal only in codex runtime', () => {
     const result = syncCodexConfig({
       cfg: { runtime: 'codex' },

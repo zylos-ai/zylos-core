@@ -115,7 +115,7 @@ Component Management:
   upgrade --all       Upgrade all components
   upgrade --self      Upgrade zylos-core itself
   uninstall <name>    Remove a component (--purge, --force)
-  uninstall --self    Uninstall zylos entirely (--force to skip prompts)
+  uninstall --self    Remove zylos core (--purge also removes data)
   remove <name>       Alias for uninstall
   list                List installed components
   search [keyword]    Search available components

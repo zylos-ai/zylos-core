@@ -5,8 +5,9 @@
  *
  * Phase 1: Stop services (tmux sessions + PM2 zylos services)
  * Phase 2: Uninstall the zylos npm package
- * Phase 3: Remove ~/zylos/ directory and clean shell profile PATH entries
+ * Phase 3: Clean shell PATH entries
  * Phase 4: Optional cleanup (PM2, Claude CLI) — interactive, skipped with --force
+ * Phase 5: Optionally remove ~/zylos/ directory — only with --purge
  */
 
 import fs from 'node:fs';
@@ -23,7 +24,7 @@ import { commandExists } from '../lib/shell-utils.js';
 const TMUX_SESSIONS = ['claude-main', 'codex-main'];
 
 export async function selfUninstall(args) {
-  const force = args.includes('--force') || args.includes('-f');
+  const { force, purge } = parseSelfUninstallOptions(args);
 
   console.log();
   console.log(heading('Zylos Uninstall'));
@@ -36,7 +37,9 @@ export async function selfUninstall(args) {
   console.log(`  3. Clean shell PATH entries`);
   if (!force) {
     console.log(`  4. Optionally remove PM2, Claude CLI, and/or Codex CLI`);
-    console.log(`  5. Optionally remove ${cyan('~/zylos/')} data directory`);
+  }
+  if (purge) {
+    console.log(`  ${force ? 4 : 5}. Remove ${cyan('~/zylos/')} data directory`);
   }
   console.log();
   console.log(dim('This will NOT remove Node.js or nvm.'));
@@ -135,18 +138,19 @@ export async function selfUninstall(args) {
   }
 
   // ── Phase 5: Data directory removal (explicit opt-in) ──
-  let removeData = force;
-  if (!force) {
+  let confirmedDataRemoval = false;
+  if (purge && !force) {
     console.log();
     console.log(heading('Data directory'));
     console.log(red(bold('  ⚠  WARNING: ~/zylos/ contains your memory, skills, and configuration.')));
     console.log(red(bold('     This data cannot be recovered once deleted.')));
     console.log();
-    removeData = await promptYesNo(
+    confirmedDataRemoval = await promptYesNo(
       red(bold('  Delete ~/zylos/ permanently? [y/N] '))
     );
   }
 
+  const removeData = shouldRemoveSelfUninstallData({ force, purge, confirmed: confirmedDataRemoval });
   if (removeData) {
     removeDirectory(ZYLOS_DIR);
     console.log(success('zylos data directory removed'));
@@ -164,6 +168,19 @@ export async function selfUninstall(args) {
   if (profilesCleaned.length > 0) {
     console.log(dim(`Restart your shell or run: source ${rcFile}`));
   }
+}
+
+export function parseSelfUninstallOptions(args = []) {
+  return {
+    force: args.includes('--force') || args.includes('-f'),
+    purge: args.includes('--purge') || args.includes('purge'),
+  };
+}
+
+export function shouldRemoveSelfUninstallData({ force = false, purge = false, confirmed = false } = {}) {
+  if (!purge) return false;
+  if (force) return true;
+  return confirmed;
 }
 
 // ── Phase 1 helpers ──────────────────────────────────────

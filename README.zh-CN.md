@@ -354,7 +354,7 @@ zylos add <component>         # 安装通道或能力组件
 zylos upgrade <component>     # 升级组件
 zylos upgrade --self          # 升级 zylos-core 本体
 zylos upgrade --self --beta   # 检查 beta/预发布版本
-zylos uninstall --self        # 完全卸载 zylos
+zylos uninstall --self        # 卸载 zylos 核心，保留 ~/zylos 数据
 zylos list                    # 列出已安装组件
 zylos search [keyword]        # 搜索组件注册表
 ```
@@ -367,9 +367,10 @@ zylos search [keyword]        # 搜索组件注册表
 zylos uninstall --self
 ```
 
-停止所有服务、卸载 `zylos` npm 包、删除 `~/zylos/`、清理 shell PATH 配置。可选择是否同时卸载 PM2 和 Claude CLI。
+停止所有服务、卸载 `zylos` npm 包、保留 `~/zylos/`、清理 shell PATH 配置。可选择是否同时卸载 PM2、Claude CLI 和 Codex CLI。
 
 使用 `--force` 跳过所有提示（仅执行核心卸载，不进行可选清理）。
+使用 `--purge` 才会同时删除 `~/zylos/`；只有在需要非交互式删除数据时才和 `--force` 一起使用。
 
 不会影响 Node.js 和 nvm。
 

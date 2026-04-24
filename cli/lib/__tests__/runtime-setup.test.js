@@ -17,7 +17,12 @@ process.env.ZYLOS_DIR = fakeZylosDir;
 fs.mkdirSync(fakeHome, { recursive: true });
 fs.mkdirSync(fakeZylosDir, { recursive: true });
 
-const { writeCodexConfig, renderCodexProjectConfig, renderCodexGlobalConfig } = await import('../runtime-setup.js');
+const {
+  writeCodexConfig,
+  renderCodexProjectConfig,
+  renderCodexGlobalConfig,
+  renderCodexHooksConfig,
+} = await import('../runtime-setup.js');
 
 before(() => {
   fs.mkdirSync(path.join(fakeHome, '.codex'), { recursive: true });
@@ -39,6 +44,7 @@ describe('renderCodexProjectConfig', () => {
     assert.match(content, /check_for_update_on_startup = false/);
     assert.match(content, /model_availability_nux = "gpt-5\.4"/);
     assert.match(content, /\[features\]\nmulti_agent = true/);
+    assert.match(content, /\[features\]\nmulti_agent = true\ncodex_hooks = true/);
     assert.match(content, /\[notice\]/);
     assert.match(content, /hide_full_access_warning = true/);
     assert.match(content, /hide_rate_limit_model_nudge = true/);
@@ -50,6 +56,17 @@ describe('renderCodexProjectConfig', () => {
     assert.doesNotMatch(content, /\[projects\./);
     assert.doesNotMatch(content, /trust_level/);
     assert.doesNotMatch(content, /openai_base_url/);
+  });
+});
+
+describe('renderCodexHooksConfig', () => {
+  it('registers the path guard for Bash tool hooks', () => {
+    const content = renderCodexHooksConfig({ guardScriptPath: '/opt/zylos/cli/lib/codex-path-guard.js' });
+    const parsed = JSON.parse(content);
+
+    assert.equal(parsed.hooks.PreToolUse[0].matcher, 'Bash');
+    assert.equal(parsed.hooks.PermissionRequest[0].matcher, 'Bash');
+    assert.match(parsed.hooks.PreToolUse[0].hooks[0].command, /codex-path-guard\.js/);
   });
 });
 
@@ -88,6 +105,7 @@ describe('writeCodexConfig', () => {
     const globalConfigPath = path.join(fakeHome, '.codex', 'config.toml');
     const projectDir = path.join(fakeZylosDir, 'workspace', 'project-a');
     const projectConfigPath = path.join(path.resolve(projectDir), '.codex', 'config.toml');
+    const projectHooksPath = path.join(path.resolve(projectDir), '.codex', 'hooks.json');
 
     fs.mkdirSync(projectDir, { recursive: true });
 
@@ -96,9 +114,11 @@ describe('writeCodexConfig', () => {
     // Project-level config has headless settings
     const projectContent = fs.readFileSync(projectConfigPath, 'utf8');
     assert.match(projectContent, /\[features\]\nmulti_agent = true/);
+    assert.match(projectContent, /codex_hooks = true/);
     assert.match(projectContent, /\[notice\]/);
     assert.match(projectContent, /check_for_update_on_startup = false/);
     assert.doesNotMatch(projectContent, /\[projects\./);
+    assert.equal(JSON.parse(fs.readFileSync(projectHooksPath, 'utf8')).hooks.PreToolUse[0].matcher, 'Bash');
 
     // Global config has trust only
     const globalContent = fs.readFileSync(globalConfigPath, 'utf8');

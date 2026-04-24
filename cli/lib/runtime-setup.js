@@ -10,8 +10,11 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execSync, execFileSync, spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { ZYLOS_DIR } from './config.js';
 import { commandExists } from './shell-utils.js';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 function upsertEnvValue(content, key, value, comment = null) {
   const line = `${key}=${value}`;
@@ -326,6 +329,7 @@ export function renderCodexProjectConfig() {
     '# Enable Codex features required by Zylos runtime workflows.',
     '[features]',
     'multi_agent = true',
+    'codex_hooks = true',
     '',
     '# Suppress all known interactive notice dialogs',
     '[notice]',
@@ -339,6 +343,41 @@ export function renderCodexProjectConfig() {
     '[notice.model_migrations]',
     '"gpt-5.3-codex" = "gpt-5.4"',
   ].join('\n') + '\n';
+}
+
+export function renderCodexHooksConfig(opts = {}) {
+  const guardScriptPath = opts.guardScriptPath || path.join(__dirname, 'codex-path-guard.js');
+  const guardCommand = `node "${guardScriptPath.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+  return JSON.stringify({
+    hooks: {
+      PreToolUse: [
+        {
+          matcher: 'Bash',
+          hooks: [
+            {
+              type: 'command',
+              command: guardCommand,
+              timeout: 5,
+              statusMessage: 'Checking workspace scope',
+            },
+          ],
+        },
+      ],
+      PermissionRequest: [
+        {
+          matcher: 'Bash',
+          hooks: [
+            {
+              type: 'command',
+              command: guardCommand,
+              timeout: 5,
+              statusMessage: 'Checking workspace scope',
+            },
+          ],
+        },
+      ],
+    },
+  }, null, 2) + '\n';
 }
 
 /**
@@ -401,6 +440,11 @@ export function writeCodexConfig(projectDir, opts = {}) {
     fs.writeFileSync(
       path.join(projectCodexDir, 'config.toml'),
       renderCodexProjectConfig(),
+      'utf8'
+    );
+    fs.writeFileSync(
+      path.join(projectCodexDir, 'hooks.json'),
+      renderCodexHooksConfig(opts),
       'utf8'
     );
 

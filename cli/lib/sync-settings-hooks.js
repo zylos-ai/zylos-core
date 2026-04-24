@@ -23,7 +23,7 @@ import { execFileSync } from 'child_process';
 import { fileURLToPath } from 'url';
 import { extractScriptPath, extractSkillName, getCommandHooks } from './hook-utils.js';
 import { getZylosConfig } from './config.js';
-import { renderCodexProjectConfig, renderCodexGlobalConfig, writeCodexConfig } from './runtime-setup.js';
+import { renderCodexProjectConfig, renderCodexGlobalConfig, renderCodexHooksConfig, writeCodexConfig } from './runtime-setup.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ZYLOS_DIR = path.resolve(process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos'));
@@ -78,11 +78,13 @@ export function shouldSyncCodexConfig({
   const codexDir = path.join(homeDir, '.codex');
   const globalConfigPath = path.join(codexDir, 'config.toml');
   const projectConfigPath = path.join(path.resolve(projectDir), '.codex', 'config.toml');
+  const projectHooksPath = path.join(path.resolve(projectDir), '.codex', 'hooks.json');
   const hasCodexState = existsSync(globalConfigPath) || existsSync(path.join(codexDir, 'auth.json'));
   return {
     cfg,
     globalConfigPath,
     projectConfigPath,
+    projectHooksPath,
     // Keep legacy alias for any external callers
     configPath: globalConfigPath,
     shouldSync: cfg.runtime === 'codex' || hasCodexState,
@@ -109,15 +111,19 @@ export function syncCodexConfig({
   try { existingGlobal = readFileSync(state.globalConfigPath, 'utf8'); } catch {}
   let existingProject = '';
   try { existingProject = readFileSync(state.projectConfigPath, 'utf8'); } catch {}
+  let existingHooks = '';
+  try { existingHooks = readFileSync(state.projectHooksPath, 'utf8'); } catch {}
 
   const desiredProject = renderCodexProjectConfig();
+  const desiredHooks = renderCodexHooksConfig();
   const desiredGlobal = renderCodexGlobalConfig(projectDir, existingGlobal);
-  if (existingProject === desiredProject && existingGlobal === desiredGlobal) {
+  if (existingProject === desiredProject && existingHooks === desiredHooks && existingGlobal === desiredGlobal) {
     return { attempted: true, changed: false, fatal: false };
   }
 
   if (dryRun) {
     if (existingProject !== desiredProject) log(`  ~ codex project config: ${state.projectConfigPath}`);
+    if (existingHooks !== desiredHooks) log(`  ~ codex hooks config: ${state.projectHooksPath}`);
     if (existingGlobal !== desiredGlobal) log(`  ~ codex global config: ${state.globalConfigPath}`);
     return { attempted: true, changed: true, fatal: false };
   }
@@ -136,6 +142,7 @@ export function syncCodexConfig({
   }
 
   if (existingProject !== desiredProject) log(`  ~ codex project config: ${state.projectConfigPath}`);
+  if (existingHooks !== desiredHooks) log(`  ~ codex hooks config: ${state.projectHooksPath}`);
   if (existingGlobal !== desiredGlobal) log(`  ~ codex global config: ${state.globalConfigPath}`);
   return { attempted: true, changed: true, fatal: false };
 }
