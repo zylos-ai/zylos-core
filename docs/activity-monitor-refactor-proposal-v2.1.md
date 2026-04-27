@@ -573,8 +573,10 @@ c4-receive 等结果时若 timeout（≈1.5s）或 monitor.js crash 导致 valid
 [99% 工作正常 / 1% 触发未预知 4xx]
    ↓
 [catalog-driven 出口治理兜底]   ← 漏过的 edge case
-   ├─ catalog 已知 → 60-70s + 精确诊断通知
-   └─ unknown → 60-70s + generic 通知（同时落 jsonl 累积）
+   ├─ catalog 已知 (recoveryAction=restart_session) → 60-70s 后 adapter.stop 重启
+   │      → c4-session-init 注入 context → agent 自治续接（详 §5.3.2）
+   └─ catalog miss → 默认 probe_only；持续 5min 未匹配升级为 restart_session
+          (同时写 unknown-api-errors.jsonl 累积学习)
 ```
 
 入口快但只覆盖**已知可预防**；出口慢但覆盖**未预知**。两层组合是**完整防御**。
