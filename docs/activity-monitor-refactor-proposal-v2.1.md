@@ -247,18 +247,18 @@ tick(signals):
   ③ 被动检测（tmux scan 零成本）— catalog-driven dispatch（详见 §5.3.1）
       - 限流文本 → 进 RateLimited + 写 rate-limit-state.json
       - API error catalog 命中 → 按 entry.action 分派
-        ├─ session_restart → adapter.stop() + 进 Unavailable + 写 unavailable_reason
+        ├─ session_restart → 走 §5.3.2 流程（snapshot recent-inbound → 生成 pending-channels → 清空已升级 → adapter.stop()）+ 进 Unavailable + 写 unavailable_reason（顺序见 §5.3.2 C1）
         ├─ unavailable_with_probe → 进 Unavailable
         ├─ rate_limit_cooldown → 进 RateLimited
         ├─ auth_failure → 进 AuthFailed
-        └─ notify_only → 仅文案给用户，不改 health
+        └─ notify_only → 仅 log + 可选用户即时通知，不改 health（详 §5.3.1 / §5.3.1.1：不写 pending-channels，不进 cold-restart broadcast）
   ④ 按当前 state 驱动主动检测
       - OK: 30min heartbeat 安全网
       - Unavailable: 指数退避 probe
       - RateLimited: 查冷却是否到期
       - AuthFailed: 180s 后或用户消息触发 auth-check
   ⑤ probe 结果回调更新 state
-  ⑥ 若 state 变动：更新内存 + 写/清 rate-limit-state.json + 维护 pending-channels.jsonl
+  ⑥ 若 state 变动：更新内存 + 写/清 rate-limit-state.json + Unavailable→OK 时 drain pending-channels.jsonl 触发 broadcast（详 §5.3.2 ⑤；session_restart 时的 pending-channels 生成已在 ③ 完成）
 ```
 
 #### 3 层健康监控（OK 状态下）
@@ -355,7 +355,8 @@ Layer 2 tmux scan 检测 API error 时，**不硬编码 pattern + action**——
 | `rate_limit_cooldown` | 不丢（延迟投递）| "限流冷却中，预计 X 后恢复" 类 | dispatcher 等冷却到期自然投递；**无需主动 broadcast** |
 | `auth_failure` | 阻塞（dispatcher health gating 拦住） | "auth 失败，请检查凭证" 类 | 现有 auth_failed 文案路径 |
 | `notify_only` | 不影响 | （可选 user 文案，轻量级警告） | 仅日志 + 可选 user 通知；**不进 broadcast** |
-| `unknown` (fallback) | = unavailable_with_probe 行 | 同上 | 同上 |
+| `unknown` (fallback, < 5min 持续命中) | = `unavailable_with_probe` 行 | 同上 | 同上 |
+| `unknown` (escalated, ≥ 5min 持续命中→升级 session_restart) | = `session_restart` 行（**消息丢失**） | "未识别错误已重置" 通用文案 | = `session_restart` 行（**§5.3.2 cold-restart broadcast** via recent-inbound 升级）|
 
 **核心约束**：**只有 action=`session_restart` 才会让用户消息丢失**——所以**只有这一行**走 §5.3.2 的 cold-restart broadcast。其他 action 路径上消息没丢，dispatcher 会在状态恢复后自然投递，**主动 broadcast 反而误导用户以为消息已重置**。
 
@@ -476,7 +477,7 @@ MessageRouter 读 health（SignalStore 投射）
     └─ AuthFailed      ↲
          ↓
 Probe 返回
-    ├─ recovered=true  → c4-receive 写 DB → dispatcher → AI 真实回复
+    ├─ recovered=true  → c4-receive 写 DB **+ append `recent-inbound.jsonl`** → dispatcher → AI 真实回复
     └─ recovered=false → c4-receive 不写 DB，回 terminal 文案
 ```
 
@@ -535,7 +536,7 @@ tick 第 2 步。**runtime-specific 输入校验**，配合 §5.3.1 的出口治
    ① signalStore.refresh()      ← 看到新的 validate-request
    ② inputValidator.tick()      ← 处理：调 adapter.validateInput() → 写 validate-result
 [c4-receive 看到 result]
-   ├─ valid=true  → insertConversation → dispatcher → Claude（正常路径）
+   ├─ valid=true  → insertConversation → append recent-inbound.jsonl → dispatcher → Claude（正常路径，完整路径见 §5.4）
    └─ valid=false → 不写 DB，回 channel 错误文案（来自 result.userMessage）
         ↓ via channel reply 路径
 [用户 ≈1-1.5s 内看到] "图片 45MB 超过 32MB 限制，请压缩后重发"
@@ -586,7 +587,7 @@ Codex / Bedrock / Vertex 各自维护 adapter，不同 runtime 限制独立。
 c4-receive 等结果时若 timeout（≈1.5s）或 monitor.js crash 导致 validate-result 永远不写出现：
 
 - **Fail-open**：直接放行 → insertConversation → dispatcher → Claude
-- 漏过的坏图触发 sticky API error → 走 §5.3.1 catalog A+ 兜底（adapter.stop + 重启）
+- 漏过的坏图触发 sticky API error → 走 §5.3.1 catalog-driven 出口治理兜底（adapter.stop + 重启）
 - 退化到当前 main 分支行为，**不阻断主链路**
 
 **理由**：input-validator 是优化层而非阻塞层。AM 临时不可用时主路径仍工作，否则用户被 false-block 影响更大。
@@ -612,7 +613,7 @@ c4-receive 等结果时若 timeout（≈1.5s）或 monitor.js crash 导致 valid
    ↓
 [99% 工作正常 / 1% 触发未预知 4xx]
    ↓
-[catalog A+ 出口兜底]      ← 漏过的 edge case
+[catalog-driven 出口治理兜底]   ← 漏过的 edge case
    ├─ catalog 已知 → 60-70s + 精确诊断通知
    └─ unknown → 60-70s + generic 通知（同时落 jsonl 累积）
 ```
@@ -836,7 +837,7 @@ PR #500 已在 main 跑 2 个月。内部状态机/规则值/intervention 按键
   - **带 attachment 消息先写 `validate-request/<msgid>.json` 等 InputValidator 结果**（fail-open timeout ≈ 1.5s），再决定 insertConversation 或 reply user reject
   - **insertConversation 成功后 append `recent-inbound.jsonl`**（受害者识别信号，§5.3.2；单 syscall atomic write）
 - c4-dispatcher：适配新 health 值域（**不参与 recent-inbound 生命周期**——§5.3.2 设计去耦）
-- 测试：并发聚合 / IPC 降级（terminal 文案 + 不入队）/ 硬超时 30s / C1~C4 不变量 / **InputValidator 拦截路径 / fail-open 路径 / 与 catalog A+ 配合的双层防御 E2E** / **recent-inbound 受害者识别（A 触发者 + B 类同期 + 5min 窗口 / snapshot 先于 stop 约束 C1 / 升级后清空防 loop C2 / fail-open C3 / multi-process append atomic / 假阳性 group bystander 文案引导）/ unknown 5min 升级路径 E2E**
+- 测试：并发聚合 / IPC 降级（terminal 文案 + 不入队）/ 硬超时 30s / C1~C4 不变量 / **InputValidator 拦截路径 / fail-open 路径 / 与 catalog 出口治理配合的双层防御 E2E** / **recent-inbound 受害者识别（A 触发者 + B 类同期 + 5min 窗口 / snapshot 先于 stop 约束 C1 / 升级后清空防 loop C2 / fail-open C3 / multi-process append atomic / 假阳性 group bystander 文案引导）/ probe-recovered 也 append recent-inbound / unknown 5min 升级路径 E2E**
 
 ### Phase 4：Schema + 下游文案
 
