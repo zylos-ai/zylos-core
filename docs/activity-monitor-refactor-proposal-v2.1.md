@@ -10,7 +10,7 @@
 
 `activity-monitor`（AM）是守护 runtime（Claude / Codex）的 PM2 长驻进程。现状是一个 2300+ 行的 God Object，6 大结构痛点。本方案：
 
-- **模块化**：拆成 11 个职责清晰的模块，`monitor.js` 只做编排
+- **模块化**：拆成 12 个职责清晰的模块（含 Adapter，业务模块 11 个），`monitor.js` 只做编排
 - **两层正交状态机**：ActivityState（进程层）/ HealthState（功能层）互不读字段
 - **两条通信通道**：状态走 SignalStore 只读快照，事件走具名接口，反向查询路径不存在
 - **健康状态收敛**：5 种 → 4 种；对外不暴露子状态，用时间戳做区分
@@ -47,7 +47,7 @@
 
 ## 三、架构总览
 
-### 3.1 11 模块职责表
+### 3.1 模块职责表（12 项：11 业务模块 + 1 Adapter DI）
 
 | 模块 | 所在文件 | 一句话职责 | tick 步骤 |
 |------|---------|-----------|-----------|
@@ -165,7 +165,7 @@ ELSE: state = Idle
 |---------|--------|--------|
 | `api-activity.json` | ToolPipeline（tick 合成）| HealthEngine / UI / StatusWriter |
 | `statusline.json` | context-monitor.js（hook） | TaskScheduler（context-check）|
-| `heartbeat-pending.json` | HealthEngine | HealthEngine（自消费）|
+| `heartbeat-pending.json` (Claude) / `codex-heartbeat-pending.json` (Codex) — runtime-specific 文件名通过 `adapter.getHeartbeatDeps().pendingKey` 注入 | HealthEngine | HealthEngine（自消费）|
 | `user-message-signal.json` | c4-receive.js | HealthEngine（加速探测）|
 | `proc-state.json` | ProcSampler | Guardian / StatusWriter |
 | `foreground-session.json` | session-foreground.js（hook） | ToolWatchdog |
@@ -332,22 +332,37 @@ Layer 2 tmux scan 检测 API error 时，**不硬编码 pattern + action**——
 - 默认走 `unavailable_with_probe`（保守，不强 restart 避免误杀）
 - 同时写 `unknown-api-errors.jsonl`：`{ts, pane_snippet, current_state}`
 - 后续人工 weekly review jsonl → 增补 catalog → 下次同类有专属 entry
-- 用户文案 fallback：「session 因未识别的运行时错误已重置，请重发——如能描述问题将帮助定位原因」
+- 用户文案 fallback：「服务暂时不可用，正在自动重试探测——请稍候，如长时间无响应请重发」（**注意**：fallback action 是 `unavailable_with_probe` 不重启，所以文案不能说"已重置"）
 
 **渐进可知**：catalog 不是一次性写死，是**活的知识库**。今天的 unknown 通过 jsonl 累积 + review，明天就是 known + 精确文案。
 
-#### 5.3.2 Cold-restart 用户通知（pending-channels 增强）
+#### 5.3.1.1 Action × 通知机制 正交矩阵
+
+不同 action 对**消息状态**和**用户通知机制**有不同蕴含。这张表是 §5.3.1 catalog 设计的隐含逻辑显性化——避免出现"action=A 但文案/通知按 action=B 写"的不对齐：
+
+| action | DB 消息状态 | userMessage 应有的语气 | 用户通知机制 |
+|--------|------------|----------------------|------------|
+| `session_restart` | **丢失**（context 已 reset，新 session 看不到旧 conv）| "已重置，请重发" 类（明示需要重发）| **§5.3.2 cold-restart broadcast**：drain pending-channels.jsonl 走 C4 主链 |
+| `unavailable_with_probe` | **不丢**（在 DB 队列里等 probe 通过自然投递）| "暂不可用，正在重试" 类（不要说"已重置"）| dispatcher 自动恢复投递；**无需主动 broadcast** |
+| `rate_limit_cooldown` | 不丢（延迟投递）| "限流冷却中，预计 X 后恢复" 类 | dispatcher 等冷却到期自然投递；**无需主动 broadcast** |
+| `auth_failure` | 阻塞（dispatcher health gating 拦住） | "auth 失败，请检查凭证" 类 | 现有 auth_failed 文案路径 |
+| `notify_only` | 不影响 | （可选 user 文案，轻量级警告） | 仅日志 + 可选 user 通知；**不进 broadcast** |
+| `unknown` (fallback) | = unavailable_with_probe 行 | 同上 | 同上 |
+
+**核心约束**：**只有 action=`session_restart` 才会让用户消息丢失**——所以**只有这一行**走 §5.3.2 的 cold-restart broadcast。其他 action 路径上消息没丢，dispatcher 会在状态恢复后自然投递，**主动 broadcast 反而误导用户以为消息已重置**。
+
+#### 5.3.2 Cold-restart 用户通知（pending-channels 增强）—— **仅 session_restart action**
 
 current main 分支已有 `pending-channels.jsonl` 机制（sticky error 期间被拒收的 channel/user 记录，session 恢复后 broadcast"我恢复了"），但**不附原因**。
 
-v2.1 把它增强为**带诊断的恢复通知**：
+v2.1 把它增强为**带诊断的恢复通知**——**严格限定在 catalog action = `session_restart` 时才触发**（其他 action 走 §5.3.1.1 的自然恢复路径，不进本机制）：
 
 ```
-HealthEngine 触发 session_restart 时：
+HealthEngine 触发 session_restart 时（仅这条 action 进入此流程）：
   ↓
 写 pending-channels.jsonl entry：
   { channelId, userId, msgId, ts,
-    unavailable_reason: '<catalog.id>',
+    unavailable_reason: '<catalog.id>',          # corrupted_context / context_too_long / ...
     userMessage: '<catalog.userMessage>' }
   ↓
 adapter.stop() → Guardian 拉新 session → launchGracePeriod 通过
@@ -359,17 +374,23 @@ HealthEngine 在 OK 转换时 drain pending-channels：
 
 **关键点**：
 - 通知**走 C4 主链**（c4-control enqueue），保留 audit trail，priority 最高
-- 即使 `unavailable_reason` 是 fallback `unknown` 也通知（generic 文案胜过完全静默）
+- **仅 `session_restart` action 触发本机制**——unknown fallback 走 `unavailable_with_probe` 不进入此流程；用户的消息没丢，dispatcher 自动恢复投递即可
 - channel-aware：仅通知**真正在 sticky window 期间发过消息的 user/channel**，不打扰其他人
 - 通知触发条件可配置（per-channel 默认 on，可关）
 
+**为什么不"unknown 也广播"**：unknown action 是 unavailable_with_probe 不重启 session，用户消息**还在 DB 队列**等 probe 通过——主动 broadcast"已重置"会误导用户以为消息丢了，反而比静默更糟。dispatcher 通过 probe 后会自然恢复投递，无需主动通知。
+
 **用户视角的 UX 改善**：
 
-| 错误类型 | 当前 main 用户体验 | v2.1 (A+) 用户体验 |
-|---------|------------------|-------------------|
-| 已知 sticky（图片 400） | 60s 静默 + 无解释 + 原消息丢 | 60-70s 静默 + **精确诊断通知**（"图片规格问题"）+ 原消息丢但知道原因 |
-| Unknown 4xx | 60s 静默 + 完全无解释 | 60-70s 静默 + **generic 通知**（"运行时错误已重置"）+ 至少知道发生过 |
-| 完全无 pattern 匹配（理论极罕见）| 永久卡死 | heartbeat 30min 安全网兜底 + generic Unavailable 文案 |
+| 错误类型 | catalog action | 当前 main 用户体验 | v2.1 (A+) 用户体验 |
+|---------|---------------|------------------|-------------------|
+| 已知 sticky（图片 400 / context 超长） | `session_restart` | 60s 静默 + 无解释 + 原消息丢 | 60-70s 静默 + **精确诊断 broadcast**（"图片规格问题已重置..."）+ 原消息丢但知道原因 |
+| Unknown 4xx（catalog 未匹配） | `unavailable_with_probe` (fallback) | 60s 静默 → unknown 不被处理 | 60-70s 后 dispatcher probe 通过 → **消息自然投递**（用户没察觉异常）；同时 jsonl 累积 |
+| 503 / overload | `unavailable_with_probe` | 同上 | 同上（消息延迟投递，无 broadcast）|
+| 限流 | `rate_limit_cooldown` | 现有 cooldown 通知 | 同上 + dispatcher 自然恢复 |
+| 完全无 pattern 匹配（极罕见）| heartbeat 30min 安全网兜底 | 永久卡死 | 30min 内被 Layer 3 heartbeat probe 兜住，转通用 Unavailable |
+
+注意 unknown 4xx 的体验**实际上比 main 还好**——main 完全不处理 unknown，v2.1 让 dispatcher 等 probe 通过后自然投递，用户可能完全察觉不到 60-70s 的小延迟。
 
 ### 5.4 MessageRouter（消息路由）
 
