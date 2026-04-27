@@ -375,6 +375,7 @@ async function submitAndVerify() {
 
 async function sendToTmux(message, options = {}) {
   const strictVerify = options.strictVerify === true;
+  const acceptShutdownAfterSubmit = options.acceptShutdownAfterSubmit === true;
   const bufferName = `c4-msg-${process.pid}-${Date.now()}`;
   const sanitized = sanitizeMessage(message);
   const delayMs = getDeliveryDelay(Buffer.byteLength(sanitized, 'utf8'));
@@ -417,6 +418,10 @@ async function sendToTmux(message, options = {}) {
     const agentState = getAgentState();
     if ((procState && procState.alive === false) ||
         agentState.state === 'offline' || agentState.state === 'stopped') {
+      if (acceptShutdownAfterSubmit) {
+        log('Verification failed after lifecycle shutdown control; treating paste+Enter as submitted');
+        return 'submitted';
+      }
       log('Verification failed and agent is dead/offline — marking as verify_failed');
       return 'verify_failed';
     }
@@ -435,6 +440,10 @@ export function isKeystrokeControl(item) {
 
 export function parseKeystrokeKey(content) {
   return (content || '').slice('[KEYSTROKE]'.length).trim();
+}
+
+export function isCodexExitLifecycleControl(item, activeRuntime = ACTIVE_RUNTIME) {
+  return item.type === 'control' && activeRuntime === 'codex' && item.content === '/exit';
 }
 
 function releaseItem(item, reason = null) {
@@ -640,7 +649,8 @@ async function processNextMessage() {
   const isSlashCommand = rawContent.startsWith('/');
   const deliveryContent = (item.type === 'control' && !isSlashCommand) ? `Meanwhile, ${rawContent}` : rawContent;
   const result = await sendToTmux(deliveryContent, {
-    strictVerify: item.type === 'conversation'
+    strictVerify: item.type === 'conversation',
+    acceptShutdownAfterSubmit: isCodexExitLifecycleControl(item)
   });
 
   if (result === 'submitted') {
