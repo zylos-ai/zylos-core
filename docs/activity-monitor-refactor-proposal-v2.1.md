@@ -173,7 +173,9 @@ ELSE: state = Idle
 | `maintenance-state.json` | TaskScheduler（maintenance 任务进出时写/清）| Guardian（条件 #4）|
 | `validate-request/<msgid>.json` | c4-receive（带 attachment 消息到达时写）| InputValidator（tick 处理）|
 | `validate-result/<msgid>.json` | InputValidator（tick 处理完写，one-shot）| c4-receive（轮询读，处理后 unlink）|
-| `recent-inbound.jsonl` | c4-receive（每条入站消息 append，单 syscall atomic write）| HealthEngine（session_restart 时 snapshot + 升级为 pending-channels）/ stale-signal GC（TTL 5min） |
+| `recent-inbound.jsonl` | c4-receive（每条入站消息 append，**持 `recent-inbound.lock` 写入**）| HealthEngine（session_restart 时 snapshot + 升级为 pending-channels，**同锁下操作**）/ stale-signal GC（TTL 5min trim，**同锁下操作**） |
+| `recent-inbound.lock` | c4-receive / HealthEngine / stale-GC （沿用 `cli/lib/lock.js` O_EXCL + PID + ts stale 检测模式；timeout 1s）| 同上三方互斥访问 `recent-inbound.jsonl` |
+| `restart-in-progress.json` | HealthEngine（session_restart 触发时写，atomic via tmp+rename；OK 转换后 unlink）| c4-receive（intake 路径 lock 内 re-check 阻拦泄漏）|
 | `pending-channels.jsonl` | c4-receive（health=非 OK 拒收时记录，main 既有路径）/ HealthEngine（session_restart 时由 recent-inbound 升级生成，附 unavailable_reason + userMessage）| AM 恢复后主动 broadcast 通知 |
 | `unknown-api-errors.jsonl` | HealthEngine（catalog 未匹配的 API error 落库）| 人工 weekly review → 增补 catalog |
 | `usage.json` | usage-monitor 任务（tier 计算结果） | usage-alerter / dashboard / web-console |
@@ -372,43 +374,118 @@ v2.1 增强为**带诊断的恢复通知**——**严格限定在 catalog action
 
 ```
 [c4-receive 收消息后]
-   ① InputValidator + MessageRouter 通过 → insertConversation
-   ② append recent-inbound.jsonl：
+   ① InputValidator + MessageRouter 通过，决定 OK 路由
+   ② read SignalStore.health (cached snapshot)
+        ├─ !OK → recovery-wait 路径（无锁直接放弃）
+        └─ OK → 继续
+   ③ acquireLock('recent-inbound', timeout=1s, try/finally)
+   ④ 【lock 内】★ re-check existsSync('restart-in-progress.json') ★
+        ├─ barrier 存在 → releaseLock + recovery-wait（防 SignalStore 1-tick 缓存延迟泄漏）
+        └─ 不存在 → 继续
+   ⑤ 【lock 内】insertConversation + append recent-inbound.jsonl：
         { channelId, endpointId, msgId, ts }
-        （单 syscall atomic write，size << PIPE_BUF=4KB）
-        // 注意：不写消息 content；TTL 5min 限制 PII 在制时长
+        // 不写消息 content；TTL 5min 限制 PII 在制时长
+   ⑥ releaseLock（finally 块保证）
 
-[stale-signal GC tick 任务]
-   每秒扫 recent-inbound.jsonl，trim ts < NOW - 5min 的条目（rewrite 整个文件）
-   既有 §5.5 stale-signal 清理任务上加一条规则即可
+[stale-signal GC tick 任务（同锁）]
+   ① acquireLock('recent-inbound', timeout=1s, try/finally)
+   ② trim recent-inbound.jsonl 中 ts < NOW - 5min 的条目（tmp+rename atomic）
+   ③ releaseLock
 
 [HealthEngine 触发 session_restart action 时]
-   ① snapshot recent-inbound.jsonl
-       filter: ts > NOW - 5min（自防御，不依赖 stale-GC 完全清完）
+   ① write restart-in-progress.json = { barrier_ts: NOW }（atomic via tmp+rename）
+        // ★ barrier 必须 publish 在 lock acquire 之前，让任何**之后**进 c4-receive 的实例
+        //   能在 lock 内 re-check 时看到 ★
+   ② acquireLock('recent-inbound', timeout=1s, try/finally)
+   ③ 【lock 内】snapshot recent-inbound.jsonl
+       filter: ts > NOW-5min AND ts < barrier_ts（自防御 + 排除 barrier 之后泄漏）
        de-dup: 同 (channelId, endpointId) 合并为一条（防多发）
-   ② 每条生成 pending-channels.jsonl entry：
+   ④ 【lock 内】每条生成 pending-channels.jsonl entry：
         { channelId, endpointId, msgId, ts,
           unavailable_reason: '<catalog.id>',
           userMessage: '<catalog.userMessage>' }
-   ③ 清空 recent-inbound 中已升级的条目（防 restart loop 重复升级）
-   ④ adapter.stop() → Guardian 拉新 session → launchGracePeriod 通过
-   ⑤ HealthEngine 在 OK 转换时 drain pending-channels 走 c4-control 主链通知
+   ⑤ 【lock 内】清空 recent-inbound.jsonl 中已升级的条目（防 restart loop 重复升级）
+   ⑥ releaseLock（finally 块保证）
+   ⑦ adapter.stop() → Guardian 拉新 session → launchGracePeriod 通过
+   ⑧ HealthEngine 在 OK 转换时：drain pending-channels 走 c4-control 主链通知
+   ⑨ unlink restart-in-progress.json（barrier 撤销，恢复 OK intake）
 
 [notify_only / unavailable_with_probe / rate_limit_cooldown action]
    不进入本流程；recent-inbound 自然 5min 后被 GC 清掉，无副作用
 ```
 
-##### 3 项设计约束
+##### 4 项设计约束
 
-- **C1 Snapshot 必须先于 stop**：HealthEngine 顺序固定为 ①snapshot recent-inbound → ②生成 pending-channels → ③清空已升级条目 → **④ adapter.stop()**。反序会让 c4-receive 在 stop 边缘继续 append，造成"刚 append 的消息没被升级也没被通知"。这是 §5.3.2 流程图步骤 ①-④ 的核心约束
+- **C1 Barrier publish 必须先于 lock acquire；lock 内 snapshot+生成+清空必须先于 stop**：HealthEngine 顺序固定为 ①publish barrier → ②acquireLock → ③(lock 内)snapshot → ④生成 pending-channels → ⑤清空已升级 → ⑥releaseLock → **⑦ adapter.stop()**。反序会让 c4-receive 在 stop 边缘继续 OK 路径 append，造成"刚 append 的消息没被升级也没被通知"。
 - **C2 受害者去重（restart loop 防呆）**：升级时清空 recent-inbound 已快照的条目；同一 msgId 不会跨 restart 重复 broadcast。用户硬要重发同坏图：会写**新的** recent-inbound entry，下轮仍会通知——预期行为（每次重发都该被告知失败），但每分钟 ≤1 次受 60-70s cycle 自然限速
-- **C3 Fail-open**：append recent-inbound 失败（磁盘满 / fs 异常）→ c4-receive 不阻塞主链，仅 log warning 继续 insertConversation；该消息成为沉默受害者（回退 main 行为，不更糟）。snapshot 失败 → 仍 stop（保安全），broadcast 退化为通用文案"session 已重置，刚发的消息可能丢失，请检查后重发"。**故障下退化到通用通知 + 自然恢复，不阻塞 session_restart 主路径**
+- **C3 Fail-open（功能失败兜底）**：append recent-inbound 失败（磁盘满 / fs 异常）→ c4-receive 不阻塞主链，仅 log warning 继续 insertConversation；该消息成为沉默受害者（回退 main 行为，不更糟）。snapshot 失败 → 仍 stop（保安全），broadcast 退化为通用文案"session 已重置，刚发的消息可能丢失，请检查后重发"。**故障下退化到通用通知 + 自然恢复，不阻塞 session_restart 主路径**
+- **C4 Lock fail-open（锁故障兜底）**：lock acquire timeout 时——c4-receive 退化到**无锁 append + log warn**（保 intake 不阻塞，接受单次 race risk 作为 lock 故障下的合理代价）；HealthEngine 退化到**强行 stop + 通用文案 broadcast**（不阻塞 session_restart 主路径）；stale-GC 退化到**跳过本轮 trim**（下轮再尝试，TTL 略延迟无碍）
 
-##### 实现注意（multi-process correctness）
+##### 并发安全合约（lock mutex + intake barrier）
 
-- **并发 append 原子性**：c4-receive 是 per-msg fork 的脚本，多个并发 append 必须用 `fs.appendFileSync`（不 stream），单 syscall write < PIPE_BUF=4KB 保证 POSIX append atomic
-- **Snapshot 拷贝语义**：HealthEngine 读 recent-inbound 时一次性 readFile + parse，不持续 tail；snapshot 后立即生成 pending-channels + 清空 recent-inbound（rewrite 整个文件），避免 c4-receive 并发 append 的 race
-- **Rewrite 原子性**：清空 recent-inbound 用 `fs.writeFileSync(tmp) + fs.renameSync(tmp, target)` 模式（atomic on POSIX），防止部分写入
+`recent-inbound.jsonl` 是 multi-process 共享文件（c4-receive per-msg fork 多个 + AM stale-GC + HealthEngine）。三类操作必须互斥，否则会出现两种 race，**lock 和 barrier 缺一不可**。
+
+###### Race 1（文件丢写）：append vs rename/rewrite
+
+c4-receive `appendFileSync` 跟 HealthEngine clear 用 `tmp+rename` 并发——后者 rename 后，前者的 append 写到孤儿 inode 永久丢失。POSIX `O_APPEND` **仅保证 appender 之间不互踩**（PIPE_BUF=4KB 内单 syscall），不保证与 rename 的并发安全。
+
+**Layer A 修复：文件互斥锁** — 沿用 zylos `cli/lib/lock.js` O_EXCL + PID + ts stale 检测模式，新建 `recent-inbound.lock` 覆盖**三条访问路径**：
+
+| 路径 | 拿锁动作 |
+|---|---|
+| c4-receive OK intake | acquire → re-check barrier → insertConv + append → release（try/finally） |
+| AM stale-GC trim/rotate | acquire → 删过期条目（tmp+rename） → release |
+| HealthEngine snapshot/clear | acquire → snapshot+生成 pending+清空 → release |
+
+锁特性：
+- **timeout 短（1s）**：远短于 component upgrade 的 10min 默认；高频 intake 路径不能容忍长 stale
+- **try/finally release**：c4-receive crash 不持锁；release 失败仅 log warn
+- **stale 检测**：lock file 含 PID + ts，acquire 时检查 PID 是否还活着 + ts 是否 > timeout，stale 则强删（同 cli/lib/lock.js 模式）
+- **lock 文件位置**：`~/zylos/activity-monitor/locks/recent-inbound.lock`（AM scope，因为 victim 识别机制属 AM 守护层）
+
+**lock.js 复用建议**（实施层面，非本 PR doc-only）：把 `cli/lib/lock.js` 重构为 `lib/lock.js` 通用 helper + 加 `staleTimeoutMs` 参数；CLI 用 10min default、AM 用 1s。一次提升、双方受益。
+
+###### Race 2（intake 泄漏）：snapshot 后 c4-receive 仍以 OK 直投
+
+HealthEngine snapshot 完成后、StatusWriter 在 tick 末步 publish health=Unavailable 之前，c4-receive 仍可能从 SignalStore 缓存读到 OK，继续 OK 直投路径——这条消息进 DB 但**不在 snapshot 里**，session_restart 后 silent loss。**Layer A 锁单独不解此 race**，因为 c4-receive 拿到锁时 SignalStore 缓存还是 OK 就会照常 append。
+
+**Layer B 修复：Intake barrier signal**
+
+HealthEngine 在 acquire lock 之前**先发布** `restart-in-progress.json`（独立 signal，不破坏 StatusWriter "唯一 publisher" 不变量）。c4-receive 在锁内**二次检查** barrier file 存在性：
+
+```js
+// HealthEngine session_restart:
+1. fs.writeFileSync('restart-in-progress.json', {barrier_ts}, atomic via tmp+rename)
+2. acquireLock('recent-inbound', timeout=1000)
+3. snapshot recent-inbound (filter ts < barrier_ts)
+4. generate pending-channels.jsonl entries
+5. clear recent-inbound.jsonl（tmp+rename，still 持锁）
+6. releaseLock
+7. adapter.stop()
+8. (post-restart, OK transition) unlink restart-in-progress.json
+
+// c4-receive OK intake:
+1. read SignalStore.health (cached, no lock)
+2. if !OK: recovery-wait（无锁）
+3. acquireLock('recent-inbound', timeout=1000)
+4. ★ (under lock) existsSync('restart-in-progress.json') ★
+5. if exists barrier: releaseLock + recovery-wait
+6. else: insertConv + append + releaseLock (try/finally)
+```
+
+**为什么 step 4 必须在 lock 内 re-check barrier**：StatusWriter 发布 health 是 tick 末步，可能比 HealthEngine 写 barrier 慢 1 tick。c4-receive 拿到锁时 SignalStore 缓存还是 OK，但 barrier 文件已经存在——**只有 lock 内 re-check 能拦下这个泄漏窗口**。这是 Layer A + Layer B 必须组合的核心理由。
+
+###### Race coverage summary
+
+| 场景 | 防护机制 |
+|---|---|
+| 多个 c4-receive 并发 append | Layer A 锁 serialize |
+| GC trim 跟 c4-receive append 并发 | Layer A 锁 serialize |
+| HealthEngine snapshot+clear 跟 c4-receive append 并发 | Layer A 锁 serialize |
+| HealthEngine snapshot 后、StatusWriter publish 前 c4-receive intake leak | Layer B barrier signal + Layer A 锁内 re-check 拦下 |
+| HealthEngine 持锁过久阻塞 intake | Layer A timeout=1s + try/finally release 限制 worst case；C4 fail-open 兜底 |
+| c4-receive crash 持锁 | Layer A stale 检测（PID + ts）强删 |
+| Lock 模块自身故障 | C4 fail-open：c4-receive 退化无锁 append；HealthEngine 退化强 stop + 通用文案；stale-GC 跳过本轮 |
 
 ##### 为什么不让 dispatcher 参与
 
@@ -598,7 +675,7 @@ c4-receive 等结果时若 timeout（≈1.5s）或 monitor.js crash 导致 valid
 - InputValidator 处理后写 `validate-result/<msgid>.json` 并 unlink request
 - c4-receive 读取 result 后 unlink result（用完即焚）
 - 异常情况（c4-receive crash）：定时清理任务（在 TaskScheduler 注册一个 5min 间隔任务，扫超过 30s 未消费的 stale signal 文件）
-- 同一清理任务上挂另一条规则：**`recent-inbound.jsonl` 每秒 trim ts > 5min ago 的条目**（见 §5.3.2 受害者识别机制）；rewrite 走 `tmp + rename` atomic 模式
+- 同一清理任务上挂另一条规则：**`recent-inbound.jsonl` 每秒 trim ts > 5min ago 的条目**（见 §5.3.2 受害者识别机制）。**操作前必须 `acquireLock('recent-inbound', timeout=1s)`，try/finally release**；rewrite 走 `tmp + rename` atomic 模式。lock 故障时跳过本轮（C4 fail-open）
 
 #### 与出口治理（§5.3.1）的协作
 
@@ -824,7 +901,7 @@ PR #500 已在 main 跑 2 个月。内部状态机/规则值/intervention 按键
 - Guardian 自组装 4 拉起条件（不查询其他模块），bypass-once + marker 重置
 - 新 `monitor.js` **9 步 tick**（含 InputValidator 第 2 步）
 - **HealthEngine catalog-driven api-error-check（§5.3.1）**：Adapter `getApiErrorPatterns()` + dispatch + unknown-api-errors.jsonl + pending-channels.jsonl 增强（含 unavailable_reason + userMessage）
-- **Recent-inbound 升级 AM 端（§5.3.2）**：HealthEngine session_restart 触发时 snapshot `recent-inbound.jsonl`（filter ts > NOW-5min + de-dup by channel+endpoint）→ 生成 pending-channels.jsonl entry → 清空已升级条目 → adapter.stop()。先 snapshot 后 stop 顺序保证（C1）；清空防 restart loop 重复升级（C2）；fail-open（C3）。stale-signal 清理任务挂 trim 规则（§5.5）
+- **Recent-inbound 升级 AM 端（§5.3.2，含并发安全合约）**：HealthEngine session_restart 触发时 ① publish `restart-in-progress.json` barrier → ② acquireLock(`recent-inbound`, 1s) → ③ snapshot recent-inbound（filter ts > NOW-5min AND ts < barrier_ts + de-dup by channel+endpoint）→ ④ 生成 pending-channels entry → ⑤ 清空已升级 → ⑥ releaseLock → ⑦ adapter.stop() → ⑧ OK 转换后 drain pending-channels broadcast + unlink barrier。Lock 沿用 `cli/lib/lock.js` O_EXCL + PID + ts stale 模式（建议重构为通用 `lib/lock.js` + `staleTimeoutMs` 参数）；try/finally release。stale-signal 清理任务挂 trim 规则同样持锁（§5.5）。Layer A 锁解 Race 1（append vs rewrite），Layer B barrier 解 Race 2（snapshot 后 intake leak）；C1（barrier+lock 顺序）/ C2（去重）/ C3（功能 fail-open）/ C4（lock fail-open）
 - **Unknown error 持续性升级（§5.3.1）**：连续 10 次扫描命中（5min）→ 升级到 session_restart action；防 v2.1 unknown fallback 在 sticky context 下自困死
 - 保留 `activity-monitor.legacy.js` 作为回滚路径
 - PM2 通过启动参数切换新旧入口
@@ -835,9 +912,9 @@ PR #500 已在 main 跑 2 个月。内部状态机/规则值/intervention 按键
 - c4-receive 改造：
   - 按 §5.4 流程同步等 MessageRouter 响应；STATUS 文案路径不 `insertConversation`
   - **带 attachment 消息先写 `validate-request/<msgid>.json` 等 InputValidator 结果**（fail-open timeout ≈ 1.5s），再决定 insertConversation 或 reply user reject
-  - **insertConversation 成功后 append `recent-inbound.jsonl`**（受害者识别信号，§5.3.2；单 syscall atomic write）
+  - **OK 路径下 acquireLock(`recent-inbound`, 1s) → re-check `restart-in-progress.json` barrier → insertConversation + append `recent-inbound.jsonl` → releaseLock**（try/finally；受害者识别信号，§5.3.2 并发安全合约 Layer A + B）
 - c4-dispatcher：适配新 health 值域（**不参与 recent-inbound 生命周期**——§5.3.2 设计去耦）
-- 测试：并发聚合 / IPC 降级（terminal 文案 + 不入队）/ 硬超时 30s / C1~C4 不变量 / **InputValidator 拦截路径 / fail-open 路径 / 与 catalog 出口治理配合的双层防御 E2E** / **recent-inbound 受害者识别（A 触发者 + B 类同期 + 5min 窗口 / snapshot 先于 stop 约束 C1 / 升级后清空防 loop C2 / fail-open C3 / multi-process append atomic / 假阳性 group bystander 文案引导）/ probe-recovered 也 append recent-inbound / unknown 5min 升级路径 E2E**
+- 测试：并发聚合 / IPC 降级（terminal 文案 + 不入队）/ 硬超时 30s / C1~C4 不变量 / **InputValidator 拦截路径 / fail-open 路径 / 与 catalog 出口治理配合的双层防御 E2E** / **recent-inbound 受害者识别（A 触发者 + B 类同期 + 5min 窗口 / barrier+lock 顺序 C1 / 升级后清空防 loop C2 / 功能 fail-open C3 / lock fail-open C4 / 假阳性 group bystander 文案引导）/ probe-recovered 也 append recent-inbound / unknown 5min 升级路径 E2E** / **并发安全合约（§5.3.2）：Layer A 锁——多 c4-receive 并发 append+stale-GC trim+HealthEngine snapshot/clear 互斥不丢写；Layer B barrier——HealthEngine snapshot 后 c4-receive 在 lock 内 re-check barrier 拦下 intake leak；stale-lock recovery（PID + ts 强删）；c4-receive crash try/finally 不持锁；HealthEngine 持锁过久 timeout=1s 触发 fail-open 强 stop**
 
 ### Phase 4：Schema + 下游文案
 
