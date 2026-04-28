@@ -48,7 +48,7 @@ flowchart LR
 
 - AM 可以启动、停止、观察 runtime，但不直接绕过 C4 主链向 tmux 投递用户消息。
 - `c4-dispatcher` 仍是用户消息进入 runtime 的唯一主链写入者。
-- `c4-receive` 是 unhealthy 用户反馈的同步决策点，但不成为长期状态机。
+- `c4-receive` 是 unhealthy 用户反馈的同步决策点，本身无状态——每次调用独立判断，不跨调用积累上下文。
 - 对外状态只通过 `agent-status.json` 暴露，内部状态不泄漏给 channel daemon。
 
 ---
