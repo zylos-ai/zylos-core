@@ -484,7 +484,7 @@ activity-monitor/
 #### D-27. 升级兼容策略：旧 config 默认告警关闭
 
 **状态**：已确认
-**决策**：旧 config 只有 usage_monitor_enabled=true 时，新版 default usage_alert_enabled=false。启动检测 legacy config 输出 warning，鼓励 opt-in。
+**决策**：旧 config 只有 usage_monitor_enabled=true 时，新版 default usage_alert_enabled=false。静默处理，不输出 warning，不鼓励用户开启告警。
 
 ### HealthEngine 接口
 
