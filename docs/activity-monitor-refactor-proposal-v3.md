@@ -60,7 +60,7 @@ AM 在过去一年随需求演进，积累了多重结构性债务：
 
 1. **单一职责的模块拆分**——每个模块一份模块实施档，AI 与 reviewer 可按需加载
 2. **状态语义正交化**——进程层 / 功能层零字段互读；对外状态 schema 收敛
-3. **C4 DB 是消息可靠性边界**——AM 不重做 c4 DB + c4-session-init 已经覆盖的事；不引入私有受害者识别 ledger
+3. **C4 DB 是消息可靠性边界**——AM 不维护私有 ledger；本 PR 在 C4 内部补齐 accepted-message durability、terminal status、unresolved-inbound exposure / reply-resolution contract（详 §三原则 1 / [`c4-reliability-contract.md`](activity-monitor/modules/c4-reliability-contract.md)）
 4. **probe / restart 解耦**——按错误类型决定是否 restart；限流 / auth / transient overload 不一律 restart
 5. **catalog 化错误处理**——runtime-specific 错误模式 + 处理路径由 Adapter 注入，HealthEngine 统一 dispatch
 6. **冷启动行为显式化**——operator 重置 vs auto-restart 用 marker 文件区分，bypass-once 默认语义保护
@@ -254,7 +254,12 @@ AM 的对外契约：
 
 **不变量**：消息进入 c4 DB inbound 即视为持久化成功；后续 runtime 异常不算"消息丢失"（详 §5.3）。
 
-**Terminal status 维护**：agent 通过 c4 写 outbound（reply）时，c4 协同标对应 inbound 为 `replied` (terminal)；之后 dispatcher 不再投递该 inbound（即使 future restart）。配对策略 / 边缘 case 详 [`c4-reliability-contract.md`](activity-monitor/modules/c4-reliability-contract.md)。
+**Terminal status 维护（R4 review zylos0t 修订：reply command token-passing）**：
+- c4-dispatcher claim inbound A 投递时，**生成的 reply via 命令本身**带 `--reply-to-id A`
+- agent 看 prompt context 直接 follow 命令 → c4-send 写 outbound 含 `reply_to_inbound_id=A` → 标 inbound A `replied` (terminal)
+- agent **主动消息**（无 dispatcher claim）→ c4-send 不带 `--reply-to-id` → 默认 `reply_to_inbound_id=NULL` → **不动任何 pending**
+- c4-send 输入校验分两层：hard validation (不存在/channel/endpoint mismatch → 整批 reject) + soft idempotent (已 terminal → outbound 写入 + mark no-op + warning，C-Term-5 单调)
+- 配对完全 mechanical（不靠 endpoint heuristic / 不靠 agent 语义判断 / 不靠跨进程内存读取）。详 [`c4-reliability-contract.md`](activity-monitor/modules/c4-reliability-contract.md)
 
 ### 5.2 Unhealthy 路由（degraded path）
 
@@ -296,13 +301,15 @@ Catalog 命中"重启会话"类 error（如图 400 / context_length 超长）时
 [c4-session-init hook] 注入 startup context（按 C4 reliability contract 三段）
    • last checkpoint summary（既有）
    • recent unsummarized 对话（既有，会被 recent-N 窗口截断）
-   • **当前 endpoint pending inbounds 独立段**（v3 新增，跨 restart 持久，
-     不被 checkpoint 总结 / recent-N 窗口吞掉）
+   • **当前 endpoint pending inbounds bounded subset**（v3 新增）
+     - default top-K=20 + total/omitted count + continuation 提示
+     - DB 持久化完整（C-SR-2a），startup context bounded exposure（C-SR-2b）
+     - agent 看 omitted 提示自决策是否调 `c4-db.js list-pending --offset K` 续查
    ↓
 [Runtime Agent] 启动后看到 context，明确知道哪些 inbound 是 pending
    ↓ agent 自决策（LLM core capability）
-   ├── 处理 pending 写 outbound → c4 自动标对应 inbound 'replied' (terminal)
-   ├── 显式判定不答 → 标 'manually_dropped' (terminal)
+   ├── 处理 pending 写 outbound 用 c4-send.js ... --reply-to-id <id> → 标 inbound 'replied'
+   ├── 显式判定不答 → 调 c4-db.js mark-dropped <id> → 标 'manually_dropped' (terminal)
    └── 暂不处理 → inbound 保持 pending，下次 restart 仍会被注入
 ```
 
@@ -428,7 +435,7 @@ ActivityState 无历史依赖——任何 tick 看到同样信号都得出同样
 
 11 个模块（10 业务 + 1 Adapter DI），按职责聚合为 **9 份模块实施档**（含 1 份跨模块 C4 契约档）。每份独立可加载，按需读取。
 
-> 📝 **9 份模块实施档已全部初稿 landing**（同 commit）。**v3 当前仍标 REVIEW DRAFT**——等顶层 + 9 模块档一并 review pass 后做 final pass：v3 升 IMPLEMENTATION BASELINE + v2.1 / v2 / v1 全部 SUPERSEDED。在 final pass 之前，实施 / 测试 / 评审仍以 [v2.1](activity-monitor-refactor-proposal-v2.1.md) 为准。
+> 📝 **9 份模块实施档已全部 landing**（多 commit 演进——R3 reframe + R4 reply-correlation token-passing 修订）。**v3 当前仍标 REVIEW DRAFT**——等顶层 + 9 模块档一并 review pass 后做 final pass：v3 升 IMPLEMENTATION BASELINE + v2.1 / v2 / v1 全部 SUPERSEDED。在 final pass 之前，实施 / 测试 / 评审仍以 [v2.1](activity-monitor-refactor-proposal-v2.1.md) 为准。
 
 | 模块实施档 | 覆盖模块 | 核心职责 |
 |---|---|---|

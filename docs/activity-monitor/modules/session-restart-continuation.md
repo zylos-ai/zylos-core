@@ -55,9 +55,12 @@
 ### 不变量
 
 - **C-SR-1**：restart 触发到新 session 启动到 startup context 注入完成 = 用户**最长**感知 60-70s 静默后看到 agent 主动答复（如果 agent 决定补答）
-- **C-SR-2**：restart 后 startup context **必须**包含当前所有 endpoint 的 pending inbounds（不能只注入 recent-N）
+- **C-SR-2a (DB 持久化完整性)**：所有 pending inbounds 在 c4 DB 持久且可查（无截断、跨 restart 持久，由 [`c4-reliability-contract.md`](c4-reliability-contract.md) 提供）
+- **C-SR-2b (Startup context bounded exposure)**：c4-session-init 注入 default top-K (K=20) 条 pending + 显示 total / omitted count + continuation 提示；agent 看 omitted 提示自决策是否调 `c4-db.js list-pending --offset K` 拉全集
 - **C-SR-3**：agent 不主动 broadcast "我恢复了"——unhealthy 时用户已同步收到状态文案（C-Term-2 / message-router.md C1）
 - **C-SR-4**：Pending inbound 跨多次 restart 持久——agent 不主动 drop / reply 的话，下次 restart 仍会注入
+
+**R4 review zylos0t 拆 C-SR-2 reasoning**：完整持久化（DB 层）和 bounded exposure（context 层）是两个不同预算——前者保证不丢消息（C-SR-2a），后者保证 prompt 不溢出（C-SR-2b）。混用导致 100+ pending 时矛盾（"必须全注入" vs "只注入 20"）。拆开后语义清晰：DB 永远完整 + context 永远 bounded + 通过 list-pending continuation 接口连接两层。
 
 ---
 
@@ -122,12 +125,17 @@ T0 → T7 总耗时 ≈ 60-70s（restart 主流程）；c4-session-init hook 注
 {N most-recent conversations within unsummarized window, grouped by endpoint}
 
 [Pending Inbounds — 跨 restart 持久，需自决策处理]
-- [endpoint A | ts=2026-04-28T03:15:22Z] {inbound content #1}
-- [endpoint B | ts=2026-04-28T03:18:45Z] {inbound content #2}
-- ...
+共 N 条 pending；显示最近 K 条；其余 M = N - K 条仍 pending 但未注入此次 startup。
+如需查全部 pending，调：c4-db.js list-pending --endpoint <endpoint_id> --offset K
 
-(共 N 条 pending；agent 看完决定：补答 / 显式 drop / 暂不处理；
-未处理的下次 session restart 仍会被注入)
+- [inbound 42 | endpoint A | ts=2026-04-28T03:15:22Z] {inbound content #1 (latest)}
+- [inbound 41 | endpoint B | ts=2026-04-28T03:18:45Z] {inbound content #2}
+- ...（最多 K 条 = 20 默认）
+
+agent 处理路径：
+  补答 → 写 outbound 用 c4-send.js ... --reply-to-id <inbound_id>
+  显式 drop → 调 c4-db.js mark-dropped <inbound_id>
+  暂不动 → 不操作，下次 restart 仍会注入
 ```
 
 第三段独立可识别（明确 marker `[Pending Inbounds]`），让 agent 在 prompt 解析阶段不会跟前两段混淆。
@@ -143,16 +151,34 @@ T0 → T7 总耗时 ≈ 60-70s（restart 主流程）；c4-session-init hook 注
 - 新行为（fail-open）：hook 异常时降级到老行为（只注入 last checkpoint + recent unsummarized），pending 段缺失但 agent 仍能启动
 - pending inbound 不会丢——下次 c4-session-init 跑成功时仍能查到
 
-### Case 2：Pending 列表过长
+### Case 2：Pending 列表过长 → Bounded exposure + Continuation（C-SR-2a / C-SR-2b 协同）
 
-如果 endpoint 累积大量 pending（例如 100+ 条）：
-- startup context 注入会膨胀 prompt 大小
-- 风险：context 超长导致 API 调用失败
+不是错误处理 case——是**正常场景下 DB 持久化与 startup context 预算分离**的设计：
 
-**处理策略**：
-- c4-session-init 注入前对 pending 列表按 ts 倒序取最近 N（默认 20）
-- 第三段开头标注："共 N 条 pending；显示最近 20 条；其余 X 条仍 pending 但未注入此次 startup"
-- 老的 pending 仍在 c4 DB，下次 restart 仍可被查到
+- **DB 层（C-SR-2a）**：所有 pending 在 c4 DB 完整持久且可查（不截断）
+- **Startup context 层（C-SR-2b）**：c4-session-init 注入 default top-K=20（按 ts 倒序）
+- **Continuation 路径**：startup context 第三段开头明确标注：
+
+```
+[Pending Inbounds — 跨 restart 持久]
+共 N 条 pending；显示最近 K 条；其余 M=N-K 条仍 pending 但未注入此次 startup。
+如需查全部 pending，调：
+  c4-db.js list-pending --endpoint <endpoint_id> --offset 20
+
+- [endpoint A | ts=...] {content #1 (latest)}
+- [endpoint B | ts=...] {content #2}
+- ... (最多 K 条)
+```
+
+**Agent 续查使用方式**：
+- agent 看 omitted count 自决策
+- M 较小（< 50）→ 一次 list-pending 拉完
+- M 较大（100+）→ 用 limit/offset 分页拉
+- 一次拉来后 agent 自由处理：补答 / 显式 mark dropped / 暂不动（保持 pending）
+
+**K 的 configurable**：
+- `~/zylos/activity-monitor/config.json` 加 `pending_exposure_top_k: 20` (default)
+- 不绑定 SESSION_INIT_RECENT_COUNT（两种不同预算，独立 tuning）
 
 ### Case 3：Agent 启动后立即 crash
 
@@ -227,7 +253,9 @@ agent 看到 startup context 但忽略第三段：
 ### 验收标准
 
 - ✅ C-SR-1 时序在 100 次 restart 测试中 95 分位 ≤ 80s
-- ✅ C-SR-2 pending 注入完整性 100%（不丢任何 pending；列表截断需有标注）
+- ✅ **C-SR-2a DB 持久化完整性 100%**——1000 次 restart 0 pending 丢失 / 0 错误标 terminal（c4 reliability contract 责任）
+- ✅ **C-SR-2b Startup context bounded subset 准确性**——含 latest K + 准确 total count + 准确 omitted count（不要求 100% 注入，只要求 bounded subset 正确）
+- ✅ Continuation 接口可用——agent 调 `c4-db.js list-pending --offset K --endpoint X` 拉到剩余 pending（test：50 条 pending，注入 20，agent 续查拿到 30 条）
 - ✅ C-SR-3 不主动 broadcast——log 扫描 0 次"我恢复了"类消息
 - ✅ C-SR-4 跨 1000 次 restart pending 持久 100%
 

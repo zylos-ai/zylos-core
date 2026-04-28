@@ -122,19 +122,82 @@ CREATE INDEX IF NOT EXISTS idx_conversations_terminal
 | `status_replied` | agent 不可用，c4 同步给了状态文案 | unhealthy 路径 outbound 状态文案 | ✗ | ✗ |
 | `manually_dropped` | agent 显式判定不答 | agent 通过 c4-db.js mark-dropped | ✗ | ✗ |
 
-### Reply 配对策略（pending → replied）
+### Reply 配对：dispatcher claim + reply command token-passing（R4 review by zylos0t 修订）
 
-最简模型：**per-endpoint last-pending-cleared semantic**：
-- agent 通过 c4 写 outbound（`direction='out'`）到 endpoint X
-- c4-receive / c4-dispatcher hook 把同 endpoint 的**所有**当前 `pending` inbound 标 `replied`
-- 不做精确逐条配对（group / multi-msg 假阳性已在 R3 review 讨论中明确）
+**核心机制**：correlation 不靠 endpoint heuristic / 不靠 agent 语义判断 / 不靠 dispatcher 内存跨进程读取，而是 **dispatcher claim 时生成的 reply command 本身就携带 inbound id**——这是 mechanical contract 的真正落地形式。
 
-**理由**：
-- 简单可观察——agent 发了 outbound 即视为"对话推进，未答的 prior pending 视作 considered"
-- 不需要 reply-to msgid 等精确配对元数据（zylos channels 不一定都支持）
-- 边缘 case："agent 选择性答 1 条留 4 条 pending" 比"全部一刀切标 replied"少见，可用 `manually_dropped` 显式 escape
+#### conversations 表第二个新增字段
 
-**配对边缘 case + 处理**见 §5 错误处理。
+```sql
+ALTER TABLE conversations
+ADD COLUMN reply_to_inbound_id INTEGER NULL;
+
+-- 仅 outbound 行可能有值，inbound 行始终 NULL
+-- 索引（可选，加速 mark replied 查找路径）：
+CREATE INDEX IF NOT EXISTS idx_conversations_reply_to
+  ON conversations (reply_to_inbound_id)
+  WHERE reply_to_inbound_id IS NOT NULL;
+```
+
+#### Dispatcher claim → 生成 reply command 流程
+
+c4-dispatcher 投递 inbound A 给 tmux 时：
+
+1. **持久化 claim**：在 conversations 表更新 inbound A 的 `claimed_at` 字段（轻量），或写一条 `delivery_context` 表记录（schema 设计可选——倾向前者更轻）。这是 mechanical 持久化，不靠内存。
+2. **生成 reply command 含 inbound id**：dispatcher 把发到 agent prompt 里的 `reply via:` 字符串改写为携带 `--reply-to-id A`：
+
+```
+原 (无 correlation):
+  reply via: node ~/zylos/.claude/skills/comm-bridge/scripts/c4-send.js "lark" "<endpoint>"
+
+新 (带 token-passing correlation):
+  reply via: node ~/zylos/.claude/skills/comm-bridge/scripts/c4-send.js "lark" "<endpoint>" --reply-to-id 42
+```
+
+3. agent 看到 prompt 里这个 ready-to-go 命令，**只需 follow 即可**——不需要"知道"自己在回哪条，dispatcher 已替它准备好。
+
+#### Outbound 写入 4 种场景
+
+| # | 场景 | reply_to_inbound_id | mark inbound terminal | 说明 |
+|---|---|---|---|---|
+| 1 | normal reply (agent follow dispatcher 的 reply command) | inbound id（来自 `--reply-to-id`） | 标该 inbound `replied`（同事务）| agent 不需手工判断，命令本身已带 token |
+| 2 | batch reply (agent 显式)| `--reply-to-ids "1,2,3"` 数组 | 标 1/2/3 全 `replied`（同事务，**任一校验失败整批 reject**）| 少见但需要时显式表达 |
+| 3 | agent 主动消息 (无 dispatcher claim) | `null` | **不动任何 pending** | 解决 silent swallow——这是关键修正 |
+| 4 | unhealthy 同步状态文案（c4-receive 内部）| 显式填当前正在处理的 inbound id | 标该 inbound `status_replied`（同事务）| caller 是 c4-receive 自己不是 agent |
+
+#### 输入校验：两层语义（hard error vs warning），优先级清晰
+
+`c4-send --reply-to-id N`（或 `--reply-to-ids N1,N2,...`）写入流程分两层校验，**优先级 hard validation 在前，soft idempotent handling 在后**——这样 error / warning 分界不歧义：
+
+##### 层 A：Hard validation（输入格式 / 归属错误 → 整批 reject，不写 outbound）
+
+逐条校验，任一失败整批拒绝：
+
+1. **存在性**：inbound N 必须存在
+2. **Channel 一致性**：inbound N `channel` 跟 outbound 目标 channel 一致
+3. **Endpoint 一致性**：inbound N `endpoint` 跟 outbound 目标 endpoint 一致
+
+任一失败 → c4-send 返 **error**（exit non-zero）+ 不写任何 outbound + 不改任何 inbound state（避免半完成态）。这是真正的"输入格式 / 归属错误"。
+
+##### 层 B：Soft idempotent handling（已 terminal → outbound 写入但 mark no-op + warning）
+
+层 A 全部通过后，c4-send **写 outbound 行**（含 `reply_to_inbound_id` 指向参数中的 ids）。然后逐条尝试 mark terminal：
+
+- inbound `terminal_status = 'pending'` → mark replied（或 status_replied，看 caller 路径）✓
+- inbound 已 terminal（replied / status_replied / manually_dropped）：
+  - **outbound 仍写入**（保留 audit trail）
+  - mark terminal **no-op**（C-Term-5 单调：不动既有 terminal status）
+  - c4-send 返 **warning**（exit code 0，但 stderr 含 warning）
+  - log 明确记录 "inbound N already terminal (was: <status>), outbound recorded but terminal_status unchanged"
+
+**为什么这样分**（zylos0t R4 follow-through 修订）：
+
+- 层 A "不存在 / 跨 channel / 跨 endpoint" = 输入根本错了 → 整批 reject 防止 outbound 误写到错误位置
+- 层 B "已 terminal" 不是输入错——是同一 reply command 重复执行或迟到 reply 的**幂等场景**（agent 重发 / 网络重试 / 手工触发等）→ 不能丢 outbound audit trail，但 terminal mark 必须保护单调性
+
+#### 不变量补充
+
+- **C-Term-5 mark-terminal 幂等单调**：同一 inbound 只会被首次成功 mark 标 terminal，后续 mark 调用 no-op + warning（**不是** error）。配合 C-Term-1 共同保证：同一 inbound 终态稳定，重复 mark 不破坏既有状态。
 
 ---
 
@@ -144,93 +207,144 @@ CREATE INDEX IF NOT EXISTS idx_conversations_terminal
 
 | 接口 | 实现位置 | 职责 |
 |---|---|---|
-| `insertConversation('in', ...)` | `c4-db.js` / `c4-receive.js` | 写 inbound，默认 `terminal_status = 'pending'` |
-| `insertConversation('out', ...)` | `c4-db.js` / `c4-receive.js` / agent 路径 | 写 outbound；如果是 status 文案路径**额外**调 `markInboundTerminal(inbound_id, 'status_replied')`；如果是 agent reply 路径**额外**调 `clearEndpointPending(endpoint_id, 'replied')` |
-| `markInboundTerminal(inbound_id, status)` | `c4-db.js` 新增 | 显式标某条 inbound 为 terminal（status_replied / manually_dropped）|
-| `clearEndpointPending(endpoint_id, status)` | `c4-db.js` 新增 | 把 endpoint 当前所有 pending inbound 标 terminal（默认 `replied`，用于 agent reply 路径）|
-| `listPendingInbounds(endpoint_id?)` | `c4-db.js` 新增 | 查询 pending inbounds（无 endpoint 即查全部，session-init 用全部 endpoint）|
-| `c4-dispatcher` 主循环 | `c4-dispatcher.js` | 拉取待投递时加 `WHERE terminal_status = 'pending'` 过滤 |
-| `c4-session-init` 注入 | `c4-session-init.js` | 调 `listPendingInbounds()` 把结果作为 startup context 第三段 |
+| `insertConversation('in', ...)` | `c4-db.js` / `c4-receive.js` | 写 inbound，默认 `terminal_status = 'pending'`，`reply_to_inbound_id = NULL` |
+| `c4-send.js [...] [--reply-to-id N \| --reply-to-ids N1,N2]` | `c4-send.js` 新增参数 | agent / channel reply 路径写 outbound 含 reply correlation token；做 hard validation（层 A）后写 outbound + 尝试 mark terminal（层 B 幂等）|
+| `c4-receive.js` 内部 outbound 路径（unhealthy）| `c4-receive.js` | unhealthy 同事务写 inbound + outbound + 标 `status_replied`，内部直传 `reply_to_inbound_id` 给 c4-db API |
+| `markInboundTerminal(inbound_id, status)` | `c4-db.js` 新增 | 显式标某条 inbound 为 terminal（replied / status_replied / manually_dropped）；幂等单调（C-Term-5）|
+| `markInboundsReplied(inbound_ids[])` | `c4-db.js` 新增 | batch 版本——逐条 mark；内部就是循环调 markInboundTerminal(_, 'replied')，逐条幂等单调；**注意**：批量 hard validation（存在 / channel / endpoint）应在 c4-send 调用前完成，进入 markInboundsReplied 时 ids 都已通过层 A |
+| `listPendingInbounds(endpoint_id?, opts?)` | `c4-db.js` 新增 | 查询 pending inbounds；返完整集合 + 总数；session-init / agent 续查接口都用此 API；可选参数 `{limit, offset}` 支持 continuation |
+| `claimInboundForDelivery(inbound_id)` | `c4-db.js` 新增（或扩展）| dispatcher 投递前更新 `claimed_at` 字段（轻量持久化）；不阻塞——claim 仅记录"已开始投递"，不影响其他模块查询 |
+| `c4-dispatcher` 投递主循环 | `c4-dispatcher.js` | (1) 拉取候选 inbound 加 `WHERE terminal_status = 'pending'` 过滤；(2) 投递前调 `claimInboundForDelivery`；(3) 生成包含 `--reply-to-id <id>` 的 reply via 命令注入 prompt |
+| `c4-session-init` 注入 | `c4-session-init.js` | 调 `listPendingInbounds(endpoint_id, {limit: K})` 把 bounded subset 作为 startup context 第三段 + total/omitted count + continuation 提示 |
 
-### 调用关系
+### 调用关系（含 reply command token-passing）
 
 ```
-┌─────────────────┐  --content          ┌───────────────┐
-│ channel daemon  │ ───────────────────▶│ c4-receive.js │
-└─────────────────┘                     └───────┬───────┘
-                                                │
-                                                │ insertConversation('in', ...)
-                                                ▼
-                                        ┌────────────────────────────┐
-                                        │ conversations 表           │
-                                        │ direction='in'             │
-                                        │ terminal_status='pending'  │
-                                        └──────────┬─────────────────┘
-                                                   │
-                  ┌────────────────────────────────┼───────────────────────────┐
-                  │                                │                           │
-                  ▼ (健康)                        ▼ (unhealthy)              ▼ (启动)
-          ┌──────────────┐              ┌────────────────┐         ┌────────────────────┐
-          │c4-dispatcher │              │MessageRouter   │         │c4-session-init.js  │
-          │WHERE         │              │unhealthy 路径  │         │listPendingInbounds()│
-          │  pending     │              │同步写 status   │         │→ inject startup    │
-          │  + priority  │              │+ markTerminal  │         │  context 第三段    │
-          └──────┬───────┘              └────────┬───────┘         └────────────────────┘
-                 ▼                               ▼
-          ┌──────────────┐              ┌─────────────────┐
-          │ tmux runtime │              │ 用户立即收到   │
-          │ agent 处理   │              │ 状态文案        │
-          └──────┬───────┘              │ inbound 已 term │
-                 │                      └─────────────────┘
-                 │ agent 写 outbound (reply)
-                 ▼
-          ┌─────────────────────────┐
-          │ c4 自动 clearEndpoint   │
-          │ Pending(endpoint_id,    │
-          │   'replied')            │
-          └─────────────────────────┘
+┌─────────────────┐  --content                ┌───────────────┐
+│ channel daemon  │ ─────────────────────────▶│ c4-receive.js │
+└─────────────────┘                           └───────┬───────┘
+                                                      │
+                                                      │ insertConversation('in', ...)
+                                                      │  terminal_status='pending'
+                                                      │  reply_to_inbound_id=NULL
+                                                      ▼
+                                              ┌────────────────────────────┐
+                                              │ conversations 表           │
+                                              └──────────┬─────────────────┘
+                                                         │
+                  ┌──────────────────────────────────────┼──────────────────────────┐
+                  │                                      │                          │
+                  ▼ (健康 OK)                           ▼ (unhealthy)             ▼ (启动)
+          ┌────────────────────────┐         ┌──────────────────────┐    ┌────────────────────┐
+          │ c4-dispatcher          │         │ MessageRouter        │    │c4-session-init.js  │
+          │ 1) WHERE pending       │         │ unhealthy: c4-receive│    │listPendingInbounds │
+          │ 2) claimInboundFor-    │         │ 内部同事务：         │    │  (endpoint, K=20)  │
+          │    Delivery(A)         │         │  insertConv('in')    │    │→ 注入 startup       │
+          │ 3) 生成 reply via:     │         │  insertConv('out',   │    │  context 第三段 +   │
+          │    c4-send.js "lark"   │         │    status文案,       │    │  total/omitted      │
+          │    "<endpoint>"        │         │    reply_to=in.id)   │    │  count + continu-  │
+          │    --reply-to-id A     │         │  markInboundTerminal │    │  ation 提示         │
+          └──────────┬─────────────┘         │   (in.id, 'status_   │    └────────────────────┘
+                     ▼                       │    replied')          │
+            ┌──────────────────┐             └────────────┬─────────┘
+            │ tmux runtime     │                          ▼
+            │ agent 看 prompt  │                  ┌──────────────┐
+            │ → follow reply   │                  │ 用户立即收到 │
+            │   command:       │                  │ 状态文案     │
+            │   c4-send.js ... │                  │ inbound 已   │
+            │   --reply-to-id A│                  │ status_      │
+            └──────────┬───────┘                  │ replied      │
+                       ▼                          └──────────────┘
+            ┌────────────────────────────────────────┐
+            │ c4-send.js 接收 --reply-to-id A:        │
+            │ 层 A Hard validation:                   │
+            │   inbound A 存在? channel? endpoint?    │
+            │   ❌ → exit non-zero error              │
+            │   ✅ → 进入层 B                         │
+            │ 写 outbound (reply_to_inbound_id=A)     │
+            │ 层 B Soft idempotent:                   │
+            │   A.terminal == 'pending':              │
+            │     → markInboundTerminal(A, 'replied') │
+            │   A.terminal != 'pending':              │
+            │     → no-op + warning (C-Term-5)        │
+            └────────────────────────────────────────┘
+
+agent 主动消息（无 dispatcher claim）：
+  agent 自己组装命令，**不带** --reply-to-id
+  c4-send 写 outbound 默认 reply_to_inbound_id=NULL
+  → 不动任何 pending（解决 silent swallow）
 ```
 
 ---
 
 ## 5. 错误处理与恢复逻辑
 
-### 配对边缘 case
+### 配对边缘 case（R4 reframe 后重写）
 
-#### Case 1：agent 写 outbound 但 endpoint 当前无 pending inbound
+#### Case 1：agent 主动消息（dispatcher 未 claim）
 
-可能原因：
-- agent 自发主动消息（不是回复任何 inbound）
-- 已经被其他路径 terminal 化的 endpoint 又来了 outbound
+agent 自发写一条消息（不在回复任何 dispatched inbound）：
 
-**处理**：`clearEndpointPending` 是 no-op（没有 pending 可标）。outbound 正常写入。不报错。
+- agent 组装 c4-send 命令**不带** `--reply-to-id`
+- c4-send 写 outbound `reply_to_inbound_id = NULL`
+- **不动任何 pending**——pending inbound 仍 pending，下次 dispatcher 投递正常
 
-#### Case 2：endpoint 有多条 pending，agent 只想答 1 条
+这是关键修正——R3 的 endpoint heuristic 在这个 case 会把全部 pending 误标 replied，R4 修订彻底解决。
 
-最简模型下，agent 写 outbound → 全部 pending 标 `replied`。如果 agent 实际只想答 1 条留其他 pending：
+#### Case 2：endpoint 有多条 pending，agent 选择性答 1 条
 
-**处理**：
-- 默认行为：全部标 `replied`（接受信息丢失边缘）
-- 如果 agent 显式想保留：在写 outbound **之前**先 `markInboundTerminal(other_id, 'manually_dropped')` 显式 drop 不想答的，剩余的"被 outbound 关联标 replied" 是真正答的那一条
-- agent 发现 endpoint 还有 prior pending 想保留，可以**先**显式标其他为 `manually_dropped`，再写 outbound——会被关联标 `replied` 的就只剩一条
+dispatcher 串行投递（require_idle 保证）一次只 claim 1 条 inbound：
 
-复杂逻辑放给 agent 决策——LLM 的本职是看 context 自决策；c4 只提供工具不强制策略。
+- inbound A 被 claim → 注入 reply via 命令含 `--reply-to-id A`
+- agent 处理 A，写 outbound → 标 A `replied`
+- dispatcher 看到 A terminal + agent idle → 拉下一条 pending 投递
 
-#### Case 3：unhealthy 路径写状态文案后 health 又恢复
+如果 agent 要批量答多条：用显式 `--reply-to-ids "A,B,C"` 一次性标 3 条 `replied`，**输入校验逐条做（层 A）**，全部 hard 校验通过才写 outbound + 进入层 B 各自幂等处理。
+
+如果 agent 选择性答（claim 了 A 但发现答案同时也 cover B），可以：
+- 写 outbound 用 `--reply-to-ids "A,B"` 显式带上
+- 或 agent 决定 B 不答（不 force drop），保持 pending 跨 restart 持久——下次 restart c4-session-init 仍注入 B，agent 再决策
+
+#### Case 3：unhealthy 路径写状态文案后 health 恢复
 
 时序：
-1. health=Unavailable → c4-receive 写 inbound + status_replied 文案 → inbound 标 `status_replied`
+1. health=Unavailable → c4-receive 写 inbound A + outbound 状态文案（同事务：`reply_to_inbound_id=A`，标 A `status_replied`）
 2. health 恢复 OK
-3. 同 endpoint 用户发新消息 N → c4-receive 写 inbound N 默认 `pending`
-4. c4-dispatcher 投递 N → agent 处理 → 写 outbound
+3. 同 endpoint 用户发新消息 B → c4-receive 写 inbound B 默认 `pending`
+4. c4-dispatcher claim B → 注入 reply via 含 `--reply-to-id B`
+5. agent 处理 B → 写 outbound → 标 B `replied`
 
-**期望**：agent 的 outbound 只标 N 为 `replied`，**不影响**已经 `status_replied` 的旧 inbound。
+**期望**：B 的 outbound 只动 B 不动 A。**实现**：reply command 含 `--reply-to-id B`，c4-send 层 A 校验 B 存在 + channel/endpoint 一致 ✓；层 B 看 B `pending` → 标 `replied`。A 完全没出现在 reply command 里——根本不会被触碰。
 
-**实现保证**：`clearEndpointPending` 只标 `pending` → `replied`（不动 terminal 状态，C-Term-1 不变量）。
+#### Case 4：旧 reply command 重复执行（agent 重发 / 操作员重试）
 
-#### Case 4：agent 写 outbound 跨多 endpoint（如群组转发）
+时序：
+1. dispatcher claim A → reply via 含 `--reply-to-id A`
+2. agent 写 outbound → 标 A `replied`
+3. agent 由于某种原因（重发 / 重试 / 操作员手工触发）再次跑同一 reply command
 
-罕见但可能。当前模型：每个 outbound 写到一个 endpoint，不跨 endpoint。如果 agent 用工具发多条 outbound，每条触发自己 endpoint 的 clearEndpointPending。
+**期望**：第二次 outbound 仍写入（audit trail），但不能破坏 A 的 terminal 状态。
+
+**实现（层 A + 层 B 协同）**：
+- 层 A：A 存在 ✓，channel/endpoint 一致 ✓ → 通过 hard validation
+- c4-send 写第二条 outbound `reply_to_inbound_id=A`
+- 层 B：A `terminal_status` 已 `replied`（不是 pending）→ markInboundTerminal no-op + log warning
+- c4-send exit code 0，stderr 含 "inbound A already terminal (was: replied), outbound recorded but terminal_status unchanged"
+
+#### Case 5：reply command 被复制 / 误用到错误 endpoint
+
+恶意 / 误操作场景：agent 把含 `--reply-to-id 42` 的命令复制到另一个 endpoint 调用：
+
+- 层 A 校验：inbound 42 的 endpoint 跟 outbound 目标 endpoint 不一致 → **integer error，整批 reject**
+- 不写任何 outbound + 不改任何 inbound state
+- 防 cross-endpoint 误标关键防线（C-Term-2 / C-Term-3 安全）
+
+#### Case 6：batch reply 部分 ids 失败
+
+agent 调 `--reply-to-ids "1,2,99"`，inbound 99 不存在：
+
+- 层 A 校验 1 ✓ 2 ✓ 99 ❌ → **整批 reject**（避免半完成态）
+- agent 收到 error，可以重试 `--reply-to-ids "1,2"`
 
 ### Crash 恢复
 
@@ -256,25 +370,36 @@ CREATE INDEX IF NOT EXISTS idx_conversations_terminal
 ### 落地阶段（同顶层方案 §八 Phase 3）
 
 **Step 1：Schema migration**
-- 新增 SQL：`ALTER TABLE conversations ADD COLUMN terminal_status ...`
-- 运行 idempotent 迁移脚本（`c4-db.js migrate-terminal-status`）
-- 既有所有行默认 `pending`——但既有 inbound 中**已经被 agent 答过的**会被错误识别为"未答"
+- 新增 SQL：
+  ```sql
+  ALTER TABLE conversations ADD COLUMN terminal_status TEXT DEFAULT 'pending'
+    CHECK (terminal_status IN ('pending','replied','status_replied','manually_dropped'));
+  ALTER TABLE conversations ADD COLUMN reply_to_inbound_id INTEGER NULL;
+  ALTER TABLE conversations ADD COLUMN claimed_at INTEGER NULL;  -- ms timestamp
+  ```
+- 运行 idempotent 迁移脚本（`c4-db.js migrate-reliability-schema`）
+- 既有所有行默认 `pending` / `NULL` —— 但既有 inbound 中**已经被 agent 答过的**会被错误识别为"未答"
 
 **Step 2：既有数据回填**
-- 一次性脚本扫描既有 `conversations`：对每个 endpoint，按时间顺序，每个 inbound **如果之后有 outbound** 标 `replied`，否则保持 `pending`
+- 一次性脚本扫描既有 `conversations`：对每个 endpoint，按时间顺序，每条 inbound **如果之后同 endpoint 有 outbound** 标 `replied`，否则保持 `pending`
 - 这是 best-effort 回填——不精确（不知道"哪条 outbound 答了哪条 inbound"）但**总比全部 pending 好**——保证启动时 session-init 不会把所有历史消息都注入
-- 回填脚本：`c4-db.js backfill-terminal-status`（在 schema migration 后立刻跑一次）
+- 回填脚本：`c4-db.js backfill-reliability-status`（在 schema migration 后立刻跑一次）
+- **注意**：回填只填 `terminal_status`，不填 `reply_to_inbound_id`（既有 outbound 没有 correlation token，留 NULL）
 
-**Step 3：c4-receive / c4-dispatcher 改造**
-- c4-receive 写 inbound 默认 `pending`（schema default）
-- c4-receive 写 outbound：health=OK 路径同事务 `clearEndpointPending(endpoint_id, 'replied')`；unhealthy 路径同事务 `markInboundTerminal(inbound_id, 'status_replied')`
-- c4-dispatcher 主循环加 `WHERE terminal_status = 'pending'` 过滤
+**Step 3：c4-receive / c4-dispatcher / c4-send 改造**
+- c4-receive 写 inbound 默认 `terminal_status='pending'`（schema default）
+- c4-send 加 `--reply-to-id` / `--reply-to-ids` 参数 + 实现层 A hard validation + 层 B soft idempotent + 同事务写 outbound + markInboundTerminal
+- c4-receive 内部 unhealthy 路径同事务写 inbound + outbound + 标 status_replied（caller 显式带 `reply_to_inbound_id`）
+- c4-dispatcher 改造：
+  - 拉取候选 inbound 加 `WHERE terminal_status = 'pending'` 过滤
+  - 投递前调 `claimInboundForDelivery(inbound.id)` 写 `claimed_at`
+  - 把 reply via 命令改写为携带 `--reply-to-id <inbound.id>`
 
 **Step 4：c4-session-init 改造**
 - 注入 startup context 三段：
   1. last checkpoint summary（既有）
   2. recent unsummarized 对话（既有，可能被 recent-N 截断）
-  3. **当前 endpoint pending inbounds**（新增段，不被截断）
+  3. **当前 endpoint pending inbounds bounded subset**（新增段，default top-K=20 + total/omitted count + continuation 提示）
 
 ### 兼容性
 
@@ -291,43 +416,56 @@ CREATE INDEX IF NOT EXISTS idx_conversations_terminal
 | 测试 | 描述 |
 |---|---|
 | `terminal_status default` | 新写 inbound 默认 `pending` |
-| `markInboundTerminal happy path` | `markInboundTerminal(id, 'status_replied')` 后查询确实变 status_replied |
-| `markInboundTerminal idempotent` | 重复调用不变状态（C-Term-1 不变量）|
-| `markInboundTerminal terminal monotonic` | 已 `replied` 的不能改回 `pending`（C-Term-1）|
-| `clearEndpointPending happy path` | 多条 pending → 全部标 replied |
-| `clearEndpointPending no-op` | 无 pending 时不报错 |
-| `clearEndpointPending 不影响 terminal` | `pending` + `status_replied` 混合 → 只动 pending（C-Term-1）|
+| `reply_to_inbound_id default` | 新写 inbound `reply_to_inbound_id=NULL`；新写 outbound 不传则 NULL |
+| `markInboundTerminal happy path` | `markInboundTerminal(id, 'replied')` 后查询确实变 `replied` |
+| `markInboundTerminal C-Term-1 单调` | 已 `replied` 的不能改回 `pending`（终态单调）|
+| `markInboundTerminal C-Term-5 幂等` | 同一 inbound 第二次 mark → no-op + 警告，不破坏既有 status |
+| `markInboundsReplied batch all-pending` | 3 条 pending → batch 全 `replied` |
+| `markInboundsReplied batch with terminal mix` | 2 条 pending + 1 条 already replied → 2 条变 replied，1 条 no-op + warning |
 | `listPendingInbounds endpoint filter` | 按 endpoint_id 过滤正确 |
 | `listPendingInbounds no terminal` | 已 terminal 的不被列出 |
+| `listPendingInbounds limit/offset` | 100 条 pending → limit=20, offset=20 拿到第 21~40 条 |
+| `claimInboundForDelivery` | 调用后 `claimed_at` 字段更新 |
+| `c4-send hard validation: not exists` | `--reply-to-id 99999` 不存在 → exit non-zero error，不写 outbound |
+| `c4-send hard validation: channel mismatch` | inbound 在 lark，outbound 目标 hxa-connect → exit error |
+| `c4-send hard validation: endpoint mismatch` | inbound endpoint A，outbound 目标 endpoint B → exit error |
+| `c4-send batch hard validation 整批 reject` | `--reply-to-ids "1,2,99999"`：99999 不存在 → 整批 reject，不写 outbound |
+| `c4-send soft idempotent: pending` | inbound pending → outbound 写入 + mark replied ✓ |
+| `c4-send soft idempotent: already replied` | inbound 已 replied → outbound 仍写入，mark no-op + warning to stderr (exit 0) |
+| `c4-send default reply_to=null` | 不带 `--reply-to-id` → outbound `reply_to_inbound_id=NULL`，**不动任何 pending** |
 
 ### 集成测试
 
 | 测试 | 描述 |
 |---|---|
-| OK 直通路径 → terminal=replied | 端到端：用户发消息 → agent 回复 → 查 inbound 已 `replied` |
-| Unhealthy 路径 → terminal=status_replied | 模拟 health=Unavailable → c4-receive 写 inbound + outbound 状态文案 → 查 inbound 已 `status_replied` |
-| Unhealthy 后恢复 OK 路径 | 上一步后 health 恢复，同 endpoint 新消息 → 新 inbound 走 OK 直通；老 inbound 仍 `status_replied`（不受影响）|
-| Dispatcher 不投 terminal | 模拟手工把 inbound 标 `replied` → dispatcher 不再投递 |
-| Session restart 注入 pending | 模拟有 pending inbound + restart → c4-session-init 把 pending 列表注入 startup context |
-| Reply 配对 - 多 pending | endpoint 有 3 条 pending → agent 写 1 条 outbound → 3 条全部 `replied` |
-| Reply 配对 - 跨 endpoint 不污染 | endpoint A 有 pending → agent 写 endpoint B outbound → A pending 不变 |
-| `manually_dropped` 路径 | agent 显式 mark-dropped → inbound 不再 pending，dispatcher 不投，session-init 不注入 |
+| OK 直通路径 → terminal=replied | 端到端：用户发消息 → dispatcher 注入 reply via `--reply-to-id A` → agent follow → c4-send 写 outbound + 标 A `replied` |
+| Unhealthy 路径 → terminal=status_replied | 模拟 health=Unavailable → c4-receive 内部同事务写 inbound + outbound 状态文案 + 标 `status_replied` |
+| Unhealthy 后恢复 OK 路径 | health 恢复，同 endpoint 新消息 B → 新 inbound 走 OK 直通；老 inbound 仍 `status_replied` 不受影响 |
+| Dispatcher 不投 terminal | 模拟手工标 `replied` → dispatcher 不再投递 |
+| Session restart 注入 pending bounded | 100 条 pending + restart → session-init 注入 latest 20 + total/omitted count |
+| Agent 主动消息不动 pending | endpoint 有 5 条 pending → agent 自行 c4-send 不带 `--reply-to-id` → 5 条 pending 完整保留 |
+| Batch reply 同事务 | `--reply-to-ids "1,2,3"` → 1 outbound 写入，3 inbound 全 `replied`，failure 时整批回滚 |
+| 重复执行同 reply command 幂等 | dispatcher 投递两次同 `--reply-to-id 42` → 2 outbound 行（audit），inbound 42 只第一次标 `replied` |
+| Cross-endpoint 误标拦截 | 复制 `--reply-to-id 42` 到错误 endpoint → exit error 不写 |
+| Continuation 拉取 | session-init 注入 latest 20 + agent 调 `c4-db.js list-pending --offset 20 --endpoint X` 拿剩余 |
 
-### Golden test：startup context 注入
+### Golden test：startup context 注入 bounded
 
-模拟一个有 5 条 inbound 的 conversations 表，2 条 `replied`、1 条 `status_replied`、1 条 `manually_dropped`、1 条 `pending`：
-- session-init 调 `listPendingInbounds(endpoint_id)`
-- **必须只返回 1 条** pending 的
-- startup context 第三段恰好包含这 1 条
+模拟一个有 50 条 pending inbound 的 endpoint：
+- session-init 调 `listPendingInbounds(endpoint, {limit: 20})`
+- **必须返回 latest 20 条**
+- startup context 第三段含这 20 + "共 50 条 pending；显示最近 20；其余 30 条调 `c4-db.js list-pending --offset 20` 查"
 
 ### 验收标准
 
-- ✅ 所有单元测试通过
-- ✅ 所有集成测试通过
+- ✅ 所有单元测试通过（18 项）
+- ✅ 所有集成测试通过（10 项）
 - ✅ Schema migration + backfill 在 staging 环境跑过 ≥ 1 周无 bug
 - ✅ 跨 channel（lark / tg / hxa / web-console）至少各跑过 1 个 OK 直通 + 1 个 unhealthy 路径
-- ✅ 1-reply invariant 在 100 次模拟跑里 100% 成立
-- ✅ pending inbound 跨 restart 持久——重启 1000 次，pending 不丢失也不被错误标 terminal
+- ✅ 1-reply invariant 在 100 次模拟跑里 100% 成立（**双层语义**：DB 持久化完整性 100% + bounded subset 准确）
+- ✅ DB 持久化完整性：1000 次 restart pending **不丢失**也**不被错误标 terminal**
+- ✅ Bounded subset 准确性：startup context 第三段含 latest K + 准确 total count
+- ✅ Reply command 重复执行幂等性：100 次重复执行同一 reply command → 1 inbound terminal，N outbound audit 行
 
 ---
 
@@ -337,10 +475,11 @@ CREATE INDEX IF NOT EXISTS idx_conversations_terminal
 
 | 依赖 | 关系 |
 |---|---|
-| `c4-db.js` (sqlite 持久层) | schema 扩展、新增 `markInboundTerminal` / `clearEndpointPending` / `listPendingInbounds` API |
-| `c4-receive.js` | 写 inbound / outbound 时调用新 API（同事务）|
-| `c4-dispatcher.js` | 投递主循环加 `terminal_status = 'pending'` 过滤 |
-| `c4-session-init.js` | 启动时调 `listPendingInbounds` 注入 startup context |
+| `c4-db.js` (sqlite 持久层) | schema 扩展（terminal_status / reply_to_inbound_id / claimed_at 三字段）、新增 `markInboundTerminal` / `markInboundsReplied` / `listPendingInbounds(opts)` / `claimInboundForDelivery` API |
+| `c4-send.js` | 新增 `--reply-to-id <id>` / `--reply-to-ids <id1,...>` 参数，实现层 A hard validation + 层 B soft idempotent + 同事务写 outbound + markInboundTerminal |
+| `c4-receive.js` | 写 inbound 默认 pending；unhealthy 路径内部同事务写 inbound + outbound + markInboundTerminal('status_replied')；caller 显式带 reply_to_inbound_id |
+| `c4-dispatcher.js` | 投递主循环 (1) `WHERE terminal_status = 'pending'` 过滤 (2) `claimInboundForDelivery` 写 claimed_at (3) reply via 命令注入 `--reply-to-id <inbound.id>` |
+| `c4-session-init.js` | 启动时调 `listPendingInbounds(endpoint, {limit: K=20})` 注入 startup context bounded subset + total/omitted count + continuation 提示 |
 
 ### 下游依赖（依赖本契约的模块）
 
@@ -363,10 +502,12 @@ AM 内业务模块（Guardian / HealthEngine / SignalStore / StatusWriter / Task
 |---|---|
 | Lark / TG / HXA / Web channel daemon ↔ c4-receive CLI 协议 | **不变** |
 | c4-receive `--content` / `--channel` / `--endpoint` / `--priority` 参数 | **不变** |
-| `c4-db.js insert <dir> <channel> <endpoint> <content>` CLI 签名 | **不变**（terminal_status 默认值由 schema 提供）|
-| conversations 表 schema | 加 1 列（`terminal_status`），向后兼容（带 DEFAULT，不影响 INSERT 现有签名）|
+| `c4-db.js insert <dir> <channel> <endpoint> <content>` CLI 签名 | **不变**（terminal_status / reply_to_inbound_id / claimed_at 默认值由 schema 提供）|
+| conversations 表 schema | 加 3 列（`terminal_status` / `reply_to_inbound_id` / `claimed_at`），向后兼容（全带 DEFAULT，不影响 INSERT 现有签名）|
+| c4-send.js `--reply-to-id` / `--reply-to-ids` | **新增**（向后兼容——不传时默认 NULL，行为 = "agent 主动消息不动 pending"）|
+| dispatcher 注入 reply via 命令格式 | **改写**（c4 内部生成的 `reply via:` 字符串现含 `--reply-to-id N`，但这是**注入到 prompt context** 给 agent follow，不是 channel daemon 协议变更）|
 
-**结论**：本契约在 c4 内部展开，对 channel daemon / 外部 CLI 调用方零感知，只需 c4 自己升级 release。
+**结论**：本契约在 c4 内部展开，对 channel daemon / 外部 CLI 调用方零感知，只需 c4 自己升级 release。c4-send `--reply-to-id` 是新参数但向后兼容（不传 = 老行为）。
 
 ---
 

@@ -55,7 +55,7 @@
 #### C1：C4 DB 是消息可靠性边界——所有 accepted 消息都进 DB
 
 - **OK 直通**：c4-receive 写 inbound（默认 `pending`）→ dispatcher 主链投递；runtime 后续异常**不算丢失**（详 [`session-restart-continuation.md`](session-restart-continuation.md)）
-- **Unhealthy + probe 仍异常**：c4-receive 同事务写 inbound + outbound 状态文案 + 标 inbound `status_replied`（详 [`c4-reliability-contract.md`](c4-reliability-contract.md)）—— 用户立即收到状态回复，DB 记录两端 + terminal status 一气呵成
+- **Unhealthy + probe 仍异常**：c4-receive 同事务写 inbound + outbound 状态文案 + 标 inbound `status_replied`（详 [`c4-reliability-contract.md`](c4-reliability-contract.md)）—— outbound 显式带 `reply_to_inbound_id = inbound.id`（不再走 endpoint heuristic）。用户立即收到状态回复，DB 记录两端 + terminal status 一气呵成
 - **仅 IPC 降级（C4）**才不写 DB（属 monitor.js crash 级罕见异常）
 
 #### C2：短 window + 30s timeout fallback
@@ -137,13 +137,15 @@ MessageRouter → c4-receive:
 ### c4-receive 协作（写 DB 责任在 c4-receive 侧）
 
 MessageRouter 不写 DB——只返决策。c4-receive 拿到决策后：
-- `route='ok'` / `route='recovered'` → `c4-db insertConversation('in', ...)`
+- `route='ok'` / `route='recovered'` → `insertConversation('in', ...)` (默认 pending) → dispatcher 后续 claim 投递
 - `route='unhealthy'` / `route='degraded'` → 同事务做：
   ```
-  insertConversation('in', ...)             # 默认 pending
-  insertConversation('out', userMessage)     # 状态文案
-  markInboundTerminal(in_id, 'status_replied')  # 标 terminal
+  in_id = insertConversation('in', ...)                            # 默认 pending
+  insertConversation('out', userMessage,                           # 状态文案
+                     reply_to_inbound_id = in_id)                  # 显式 correlation
+  markInboundTerminal(in_id, 'status_replied')                     # 标 terminal
   ```
+  显式 reply_to_inbound_id 走 c4-reliability-contract 标准路径，不依赖 endpoint heuristic
 - `IPC 降级` → 不调 c4-db，仅返 terminal 文案
 
 ---
