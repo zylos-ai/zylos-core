@@ -114,6 +114,8 @@ sequenceDiagram
   R->>DB: insert inbound status='delivered'
   R->>S: send userMessage to same channel endpoint
   S->>DB: insert outbound status='delivered'
+  S->>C: send via channel script
+  C->>U: status message
   S-->>R: exit 0
   R-->>C: exit 0
 ```
