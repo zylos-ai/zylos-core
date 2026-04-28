@@ -127,8 +127,7 @@ sequenceDiagram
 | C-1 C4 DB durability | `c4-receive` 写入 `status='pending'` 后，该消息才算被主链接受 |
 | C-2 no double delivery | unhealthy inbound 必须写 `status='delivered'`，dispatcher 不得再投递给 runtime |
 | C-3 single real answer | 每次 `c4-receive` 最多产生一种用户可见结果：后续 agent 真回复，或同步状态文案，或 terminal error |
-| C-4 no reply ledger | 不引入 `terminal_status` / `reply_to_inbound_id` / token-passing |
-| C-5 runtime independence | Claude / Codex 差异只进入 Adapter，不进入 HealthEngine / Guardian 分支逻辑 |
+| C-4 runtime independence | Claude / Codex 差异只进入 Adapter，不进入 HealthEngine / Guardian 分支逻辑 |
 
 ---
 
