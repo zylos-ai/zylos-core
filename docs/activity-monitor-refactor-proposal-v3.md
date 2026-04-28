@@ -5,16 +5,16 @@
 > 类型：**总方案文档**——面向 review 与跨角色共识，不深入代码 / 字段 / 函数 / 文件路径 / 测试 case。具体落地见模块实施档（[§7 模块索引](#七模块索引)）。
 >
 > **当前状态：v3 顶层方案 REVIEW DRAFT，尚未接管 IMPLEMENTATION BASELINE**
-> - 本文件只冻结顶层方向，不作为实施细节基线——8 份模块实施档（[§7](#七模块索引)）尚未落地
-> - 实施 / 测试 / 评审仍以 [`activity-monitor-refactor-proposal-v2.1.md`](activity-monitor-refactor-proposal-v2.1.md) 为准（仍是 active implementation baseline）
-> - 模块实施档全部落地后，本文件升格为 IMPLEMENTATION BASELINE，v2.1 / v2 / v1 同步降级为 SUPERSEDED，本节状态行同步更新
+> - **9 份模块实施档已全部 landing**（[§7](#七模块索引)，跨 R3 reframe + R4 reply correlation token-passing 多 commit 演进）
+> - v3 仍标 REVIEW DRAFT——等本轮 R5 cleanup pass 后做 final pass：v3 升 IMPLEMENTATION BASELINE + v2.1 / v2 / v1 全部降级 SUPERSEDED
+> - 在 final pass 之前，实施 / 测试 / 评审仍以 [`activity-monitor-refactor-proposal-v2.1.md`](activity-monitor-refactor-proposal-v2.1.md) 为准（仍是 active implementation baseline）
 >
 > 历史稿（按演进顺序，最新到最旧）：
 > - [`activity-monitor-refactor-proposal-v2.1.md`](activity-monitor-refactor-proposal-v2.1.md)：当前 IMPLEMENTATION BASELINE
 > - [`activity-monitor-refactor-proposal-v2.md`](activity-monitor-refactor-proposal-v2.md)：SUPERSEDED
 > - [`activity-monitor-refactor-proposal.md`](activity-monitor-refactor-proposal.md)：v1，SUPERSEDED
 >
-> 模块实施档目录：[`docs/activity-monitor/modules/`](activity-monitor/modules/)（待落地）
+> 模块实施档目录：[`docs/activity-monitor/modules/`](activity-monitor/modules/)（9 份已 landing）
 
 ---
 

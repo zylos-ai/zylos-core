@@ -111,7 +111,7 @@ T0 → T7 总耗时 ≈ 60-70s（restart 主流程）；c4-session-init hook 注
 | `c4-db.js listPendingInbounds(endpoint_id?)` | `c4-db.js`（C4 reliability contract 提供）→ `c4-session-init.js` 调用 | 拉所有 / 指定 endpoint 的 pending inbound 列表 |
 | `c4-session-init.js` 注入逻辑 | `c4-session-init.js`（既有 hook，扩展）| 把三段 context 输出给 stdin |
 | `c4-db.js markInboundTerminal(id, status)` | `c4-db.js`（C4 reliability contract 提供）→ agent 工具调用 | agent 显式 drop |
-| `c4-receive insertConversation('out', ...)` | `c4-receive.js`（通过 hook 或 agent 工具）| agent 写 reply（自动触发 clearEndpointPending） |
+| `c4-send.js [...] --reply-to-id <id>` | `c4-send.js`（agent follow dispatcher 注入的 reply via 命令）| agent 写 reply 时显式带 `--reply-to-id`，c4-send 写 outbound 同事务 markInboundTerminal(id, 'replied')（详 [`c4-reliability-contract.md`](c4-reliability-contract.md)） |
 
 ### Agent 视角的 startup context 格式
 
@@ -199,9 +199,11 @@ agent 看到 startup context 但忽略第三段：
 ### Case 5：旧 session 在 stop 前还在写 outbound
 
 时序：T1.5（HealthEngine state=Unavailable 之后，T2 stop 之前）老 agent 写出最后一个 outbound：
-- 老 outbound 触发 clearEndpointPending → 该 endpoint pending 全部标 `replied`
-- 然后 T2 adapter.stop() → 新 session 启动 → c4-session-init 看到该 endpoint 已无 pending
-- 行为正确：老 agent 已经回了，新 agent 不重做
+- 老 agent 通过 c4-send `--reply-to-id A` 写 outbound（command 来自 dispatcher 之前注入的 reply via）→ 同事务标 inbound A `replied`
+- 然后 T2 adapter.stop() → 新 session 启动 → c4-session-init 调 listPendingInbounds 看到该 endpoint 已无 A pending
+- 行为正确：老 agent 已经回了 A，新 agent 不重做（C-Term-1 单调保证）
+
+注：只有显式 `--reply-to-id` 标到的 inbound 会变 terminal；同 endpoint 其他 prior pending 仍保持 pending（不再像旧 endpoint heuristic 一刀切）
 
 ---
 
