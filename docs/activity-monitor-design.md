@@ -13,42 +13,33 @@ Activity Monitor 是 Zylos runtime 的本地守护系统。它负责观察、诊
 
 它不负责理解业务消息内容，也不负责判断"某条用户消息是否已经被 agent 回复"。这些仍由 agent 与 C4 通信层承担。
 
-### 1.2 外部参与者
+### 1.2 外部上下文
 
-| 参与者 | 关系 | 关心的问题 |
-|---|---|---|
-| 外部用户 | 通过 Lark / Telegram / Web Console / HXA-Connect 发消息 | 消息是否被接收；runtime 不健康时是否收到清晰反馈 |
-| Channel daemon | 各平台入口进程 | 调用 `c4-receive.js` 后按 exit code 判断是否成功 |
-| C4 Dispatcher | C4 主链投递器 | 只消费 `conversations.status='pending'` 的 inbound |
-| Runtime Agent | Claude / Codex 进程 | 接收 C4 投递的用户消息并回复 |
-| Operator | 系统维护者 | 需要可观测状态、恢复策略 |
-| PM2 / Host OS | 进程运行环境 | 负责长驻进程、重启与资源信号 |
+以 Activity Monitor 为中心，以下是与之交互的外部系统和角色：
+
+| 外部上下文 | 定义 | 与 AM 的关系 | 职责边界 |
+|---|---|---|---|
+| 外部用户 | 通过 Lark / Telegram / Web Console / HXA-Connect 发消息的终端用户 | 消息经 C4 通信层到达 AM 的 MessageRouter | 用户不直接与 AM 交互；AM 通过 C4 通信层间接向用户返回状态文案 |
+| C4 通信层 | 包含 c4-receive、c4-send、c4-dispatcher、C4 DB 的消息通信子系统 | c4-receive 通过 IPC 调用 AM 的 MessageRouter 获取路由决策；c4-receive 本身不判断健康状态，无状态，每次调用独立 | C4 负责消息的接收、持久化、投递、发送；AM 负责健康判断和路由决策。AM 不直接绕过 C4 主链向 runtime 投递用户消息 |
+| Channel Daemon | 各平台（Lark / Telegram / Web Console）的入口进程 | 调用 c4-receive 后按 exit code 判断是否成功 | Channel Daemon 负责平台协议适配和消息收发；AM 对外状态只通过 `agent-status.json` 暴露，内部状态不泄漏给 Channel Daemon |
+| Runtime Agent | Claude / Codex 交互式进程（运行在 tmux 中） | AM 启动、停止、观察 runtime；通过 Adapter 封装 runtime 差异 | AM 管理 runtime 生命周期和健康状态；runtime 负责业务消息处理。C4 Dispatcher 是用户消息进入 runtime 的唯一主链写入者 |
+| Operator | 系统维护者 | 通过 `agent-status.json` 了解系统状态 | Operator 关注可观测状态和恢复策略 |
+| PM2 / Host OS | 进程运行环境 | PM2 管理 AM 进程的长驻和重启 | PM2 负责进程生命周期；AM 在其上实现业务守护逻辑 |
 
 ### 1.3 上下文图
 
 ```mermaid
 flowchart LR
-  User["External User"] --> Channel["Channel Daemon"]
-  Channel --> Receive["c4-receive.js"]
-  Receive --> C4DB["C4 DB"]
-  C4DB --> Dispatcher["c4-dispatcher"]
-  Dispatcher --> Runtime["Runtime Agent"]
-  Runtime --> Send["c4-send.js"]
-  Send --> Channel
-
-  AM["Activity Monitor"] --> Runtime
-  AM --> Status["agent-status.json"]
-  Receive --> Router["MessageRouter IPC"]
-  Router --> AM
-  Operator --> AM
+  User["外部用户"] --> Channel["Channel Daemon"]
+  Channel --> C4["C4 通信层"]
+  C4 -->|IPC| AM["Activity Monitor"]
+  AM -->|启动/停止/观察| Runtime["Runtime Agent"]
+  C4 -->|投递消息| Runtime
+  Runtime -->|回复| C4
+  C4 --> Channel
+  AM -->|agent-status.json| Operator["Operator"]
+  PM2["PM2 / Host OS"] -->|进程管理| AM
 ```
-
-### 1.4 核心上下文边界
-
-- AM 可以启动、停止、观察 runtime，但不直接绕过 C4 主链向 tmux 投递用户消息。
-- `c4-dispatcher` 仍是用户消息进入 runtime 的唯一主链写入者。
-- `c4-receive` 本身不判断健康状态，它通过 IPC 调用 AM 的 MessageRouter 获取路由结果（健康/不健康），然后据此决定写 pending 还是返回状态文案。c4-receive 无状态，每次调用独立，不跨调用积累上下文。
-- 对外状态只通过 `agent-status.json` 暴露，内部状态不泄漏给 channel daemon。
 
 ---
 
