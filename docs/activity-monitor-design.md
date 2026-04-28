@@ -469,10 +469,10 @@ activity-monitor/
 **状态**：已确认
 **决策**：ToolWatchdog 是有状态的干预系统（5 阶段状态机 + 持久化 + 主动按键中断），不是无状态健康检查，不归入 health-checks 子系统。
 
-#### D-25. frozen 为瞬态，不需要独立 ActivityState 枚举
+#### D-25. frozen 不作为独立状态
 
 **状态**：已确认
-**决策**：ProcSampler 检测到冻结后 kill 会话，下一 tick 自然进入 Offline → Guardian 拉起。frozen 不需要独立枚举值，但 agent-status.json 可瞬时写入 state: 'frozen' 供日志使用。
+**决策**：ProcSampler 检测到冻结后 kill 会话，下一 tick 自然进入 Offline → Guardian 拉起。frozen 不需要独立 ActivityState 枚举值，也不写入 agent-status.json 或日志。
 
 ### 任务调度
 
