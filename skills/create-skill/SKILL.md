@@ -326,6 +326,13 @@ Write the YAML frontmatter with `name` and `description`:
   - Include both what the Skill does and specific triggers/contexts for when to use it.
   - Include all "when to use" information here - Not in the body. The body is only loaded after triggering, so "When to Use This Skill" sections in the body are not helpful to Claude.
   - Example description for a `docx` skill: "Comprehensive document creation, editing, and analysis with support for tracked changes, comments, formatting preservation, and text extraction. Use when Claude needs to work with professional documents (.docx files) for: (1) Creating new documents, (2) Modifying or editing content, (3) Working with tracked changes, (4) Adding comments, or any other document tasks"
+  - YAML safety: if the description contains `:` followed by a space, quotes, brackets, braces, `#`, or other YAML-significant characters, wrap it in quotes or use a folded block scalar:
+    ```yaml
+    description: >-
+      Use when reviewing technical solution documents. Applies the standard:
+      one top-level solution document plus module-level implementation docs.
+    ```
+  - Always run `node scripts/validate.js <skill-directory>` after creating or editing SKILL.md.
 
 Additional optional frontmatter fields for advanced control:
 
