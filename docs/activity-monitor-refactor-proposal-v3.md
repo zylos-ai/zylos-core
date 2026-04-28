@@ -24,12 +24,12 @@
 
 v3 核心命题：
 
-- **C4 DB 是消息可靠性边界**——AM 不维护私有受害者识别 ledger，session 重启后靠既有 c4-session-init 注入 context + agent 自治续接
+- **C4 DB 是消息可靠性边界（三层契约）**：accepted-message durability + per-message terminal status + unresolved-inbound 在 c4-session-init 暴露给 agent；AM 不维护私有受害者识别 ledger
 - **两层正交状态机**：进程层（Activity）与功能层（Health）零字段互读
 - **API error 出口治理 catalog 化**：runtime 错误模式 + 处理路径由 Adapter 注入；probe 与 restart 解耦
 - **结构上**：拆出 11 个职责清晰的模块，主循环只做编排
 - **冷启动行为显式化**：保留 bypass-once 默认语义；operator 通过 marker 文件做显式全清零
-- **对外契约保持向后兼容**：Hook 路径不变，对外状态文件加 schema 版本号 + 字段向后兼容
+- **对外契约保持向后兼容**：Hook 路径不变，channel daemon 外部协议不动，对外状态文件加 schema 版本号 + 字段向后兼容
 
 ---
 
@@ -73,17 +73,24 @@ AM 在过去一年随需求演进，积累了多重结构性债务：
 3. **不重做 PR #500 ToolWatchdog 内部语义**——只做边界适配，5-stage 状态机 / 规则值 / intervention 按键序列完全保留
 4. **不引入 multi-agent 协同 / 多 runtime 并发**——v3 仍是"一个 AM 守一个 runtime instance"
 5. **不做受害者识别 ledger / cold-restart broadcast**——session restart 后让 agent 看 context 自决策是否补答，不主动 broadcast"我恢复了"
-6. **不动 c4 协议 / channel daemon 协议**——任何会触发"channel daemon / c4-receive 接口变更"的能力（如附件 schema 升级）都不在本 PR scope
+6. **不动 channel daemon 外部协议 / c4-receive CLI 外部接口**——webhook 事件格式、message_type 解析、`c4-receive --content` 等外部契约不变；附件 schema 升级等需 channel daemon 联动改动的能力**不**在本 PR scope。
+   - **注**：c4 **内部** schema（如 conversations 表字段扩展）与 c4-session-init **内部**查询语义则**在 scope 内**——内部演进对 channel daemon 不可见，是 v3 落地 C4 reliability contract（§三原则 1）的必要支撑。换句话说：**外部不变 + 内部演进可控**。
 
 ---
 
 ## 三、核心设计原则
 
-### 原则 1：C4 DB 是消息可靠性边界
+### 原则 1：C4 DB 是消息可靠性边界（三层契约）
 
-所有 accepted 消息都在 c4 DB 持久化（inbound 记录）；AM 不维护私有受害者识别 ledger。session 重启后靠既有 c4-session-init 注入 last checkpoint summary + recent unsummarized 对话作为 startup context，agent 自决策是否补答。
+C4 DB 提供消息可靠性的**三层契约**——这三层共同保证 "accepted 消息一定有 terminal resolution，且 session restart 后 agent 能感知未完成的责任"：
 
-**推论**：delivered-but-unanswered（已入 DB 但 runtime 异常后未回复）**不算消息丢失**——在 user 视角等同 "agent 反应慢"，session restart 后 agent 看 context 自治续接。
+1. **Durability**：accepted 消息持久化为 inbound 记录（既有能力）
+2. **Terminal status**：每条 inbound 有明确的 resolution state（`pending` / `replied` / `status_replied` / `manually_dropped`），由 c4-receive / c4-dispatcher 协同维护，**不依赖外部 heuristic**
+3. **Unresolved-inbound exposure**：c4-session-init 能查询 pending inbounds 作为 startup context 的独立段注入新 session，**不被 checkpoint summary 或 recent-N 截断吞掉**
+
+**AM 不维护**任何私有受害者识别 ledger——reply-resolution 工作在 C4 内部 schema 完成（schema 字段 + 协同写入 + session-init 查询），AM 只关心 runtime liveness/health，不重做消息层可靠性。
+
+**推论**：delivered-but-unanswered（已入 DB 但 runtime 异常后未回复）不算消息丢失——session restart 后 c4-session-init 把 pending inbounds 注入 startup context；agent 自决策处理后写 outbound 隐式更新对应 inbound terminal status。详 [`c4-reliability-contract.md`](activity-monitor/modules/c4-reliability-contract.md)。
 
 ### 原则 2：两层正交状态机
 
@@ -247,6 +254,8 @@ AM 的对外契约：
 
 **不变量**：消息进入 c4 DB inbound 即视为持久化成功；后续 runtime 异常不算"消息丢失"（详 §5.3）。
 
+**Terminal status 维护**：agent 通过 c4 写 outbound（reply）时，c4 协同标对应 inbound 为 `replied` (terminal)；之后 dispatcher 不再投递该 inbound（即使 future restart）。配对策略 / 边缘 case 详 [`c4-reliability-contract.md`](activity-monitor/modules/c4-reliability-contract.md)。
+
 ### 5.2 Unhealthy 路由（degraded path）
 
 AM 健康异常（Unavailable / RateLimited / AuthFailed）时：
@@ -271,6 +280,8 @@ AM 健康异常（Unavailable / RateLimited / AuthFailed）时：
 
 **关键**：unhealthy 路径**同步**返回 outbound 状态文案——保证用户立即感知系统状态。**不需要**事后异步发"我恢复了"广播（避免双通知）。
 
+**1-reply invariant 守法**：写 outbound 状态文案的同时把对应 inbound 标 `status_replied` (terminal) → c4-dispatcher 之后**不再投递**该 inbound（即使 health 恢复 OK），避免"状态文案 + 后续 AI reply"双回复。详 [`c4-reliability-contract.md`](activity-monitor/modules/c4-reliability-contract.md)。
+
 ### 5.3 Session restart 后的对话续接
 
 Catalog 命中"重启会话"类 error（如图 400 / context_length 超长）时：
@@ -282,22 +293,26 @@ Catalog 命中"重启会话"类 error（如图 400 / context_length 超长）时
    ↓
 [Guardian] 下一 tick 看进程消失 → 拉新 session
    ↓
-[c4-session-init hook] 注入 startup context
-   • last checkpoint summary
-   • recent unsummarized 对话（或最近 N 条）
+[c4-session-init hook] 注入 startup context（按 C4 reliability contract 三段）
+   • last checkpoint summary（既有）
+   • recent unsummarized 对话（既有，会被 recent-N 窗口截断）
+   • **当前 endpoint pending inbounds 独立段**（v3 新增，跨 restart 持久，
+     不被 checkpoint 总结 / recent-N 窗口吞掉）
    ↓
-[Runtime Agent] 启动后看到 context（含恢复前可能未回复的 inbound）
+[Runtime Agent] 启动后看到 context，明确知道哪些 inbound 是 pending
    ↓ agent 自决策（LLM core capability）
-   ├── 判断需要补答 → 主动回复
-   └── 判断已经在新 context 下闭环 → 不回复
+   ├── 处理 pending 写 outbound → c4 自动标对应 inbound 'replied' (terminal)
+   ├── 显式判定不答 → 标 'manually_dropped' (terminal)
+   └── 暂不处理 → inbound 保持 pending，下次 restart 仍会被注入
 ```
 
 **边界声明**：
 - **不主动 broadcast** "我恢复了"——unhealthy 时用户已同步收到状态文案
-- **AM 不维护**任何受害者识别 ledger——靠 c4 DB 既有 inbound 持久化 + c4-session-init 既有 context 注入
-- **C4 DB 是消息可靠性边界**——message persistence 在 c4 层完成，AM 不重做
+- **AM 不维护**任何受害者识别 ledger——reply-resolution 工作落在 c4 DB schema（terminal status 字段 + dispatcher 协同 + session-init 查询）
+- **C4 DB 是消息可靠性边界（三层契约）**——durability + terminal status + unresolved-inbound exposure，message persistence + reply tracking 在 c4 层完成，AM 不重做
+- **pending inbounds 跨 restart 持久**——agent 不主动处理时，下次 session restart 仍会被注入；保证"未答消息不会因 restart 被吞掉"
 
-详见 [`session-restart-continuation.md`](activity-monitor/modules/session-restart-continuation.md)。
+详见 [`c4-reliability-contract.md`](activity-monitor/modules/c4-reliability-contract.md)（C4 schema/逻辑契约）+ [`session-restart-continuation.md`](activity-monitor/modules/session-restart-continuation.md)（AM 视角恢复流程）。
 
 ### 5.4 Cold start：bypass-once + marker 重置
 
@@ -338,21 +353,32 @@ AM 启动
 
 A-C 是 v3 核心架构 trade-off（Direction D 路径决断）；D-J 是承袭 v2.1 的设计权衡，按提出顺序排列。
 
-### A. 为什么 C4 DB 是消息可靠性边界（哪些机制被砍）
+### A. 为什么 C4 DB 是消息可靠性边界（哪些机制被砍 / 哪些移到 C4）
 
 历史上多次尝试在 AM 层维护私有受害者识别 ledger，最终全部 walk back：
 
-| 曾设计但被砍 | 砍掉原因 |
-|---|---|
-| 受害者识别滚动日志 | c4-session-init 已注入 recent context，重做无收益 |
-| 异步恢复广播（升级既有 pending-channels） | unhealthy 路径已同步返 outbound 状态文案，不需要事后异步广播 |
-| 重启 intake barrier | C4 DB 已是消息可靠性边界，不需要 atomic snapshot |
-| 文件互斥锁 | 不维护 shared mutable file 就没有 race |
-| activity-driven 日志清理 | 不维护 ledger 就不需要 cleanup |
-| Cold-restart broadcast 受害者通知 | agent 自治补答替代 |
-| sticky-trigger context taint 标记 | 难可靠判定，引入新 ledger 复杂度无收益 |
+| 曾设计但被砍 | 砍掉原因 | 处理 |
+|---|---|---|
+| 受害者识别滚动日志（recent-inbound.jsonl） | AM 重做 c4 已有职责；引入 race / lock 复杂度无收益 | ❌ 完全砍掉 |
+| 异步恢复广播（升级既有 pending-channels） | unhealthy 路径已同步返 outbound 状态文案，不需要事后异步广播 | ❌ 完全砍掉 |
+| 重启 intake barrier | C4 DB 已是消息可靠性边界，不需要 AM 层 atomic snapshot | ❌ 完全砍掉 |
+| 文件互斥锁 / activity-driven 日志清理 | 不维护 AM 私有 mutable file 就没有 race 也不需要 cleanup | ❌ 完全砍掉 |
+| Cold-restart broadcast 受害者通知 | agent 自治补答替代主动 broadcast | ❌ 完全砍掉 |
+| sticky-trigger context taint 标记 | 难可靠判定，引入新 ledger 复杂度无收益 | ❌ 完全砍掉 |
+| **显式 unanswered inbound 注入 session-init** | （早期 v2.1 walkback：理由"是否已回复难以可靠判定，group/multi-msg 假阳性"——但这只在 AM heuristic 层成立） | 🔄 **从 AM 砍掉，移到 C4 内部 schema** |
 
-**根本原因**：这些机制都建立在错误前提"session_restart 后消息丢失"上。实际 c4 DB inbound 持久化 + 既有 c4-session-init context 注入已经覆盖 silent loss 担忧。AM 重做即引入 race / lock / barrier 复杂度而无对应收益。
+**v2.1 walkback 重审 (R3 review by zylos0t, 2026-04-28)**：早期 v2.1 把 "unanswered inbound 注入" 跟 7 项 AM 私有 ledger 一起砍了——前 7 项砍对了（不该住在 AM），但最后一项**砍重了**。reply-resolution 不该在 AM 做 heuristic detection，但 C4 层是消息 source-of-truth，加 schema 字段做协同维护是 mechanical operation：
+
+- ✅ "AM 不做 victim tracking" — 保持砍
+- ❌ "C4 也不需要 reply-resolution / unresolved-inbound contract" — 这条不成立
+- ✅ detection 难是 AM heuristic 层的问题——在 C4 协同 schema 层是 mechanical：c4-receive 写 outbound 时同步标对应 inbound `replied` (terminal)，不需要事后猜配对
+
+**v3 的修正**：把"显式 unanswered inbound 注入"以 **C4 reliability contract 三层契约** 落地：
+1. Durability（既有）
+2. **Terminal status**（新增）：conversations 表加 `terminal_status` 字段，由 c4-receive / c4-dispatcher 协同维护
+3. **Unresolved-inbound exposure**（新增）：c4-session-init 查询 pending inbounds 注入 startup context
+
+详 [`c4-reliability-contract.md`](activity-monitor/modules/c4-reliability-contract.md)。
 
 **main 既有的异步恢复广播路径在 v3 下废弃**——Phase 5 legacy 清理项明列（c4-receive 写入分支 + AM drain 职责）。
 
@@ -400,17 +426,18 @@ ActivityState 无历史依赖——任何 tick 看到同样信号都得出同样
 
 ## 七、模块索引
 
-11 个模块（10 业务 + 1 Adapter DI），按职责聚合为 8 份模块实施档。每份独立可加载，按需读取。
+11 个模块（10 业务 + 1 Adapter DI），按职责聚合为 **9 份模块实施档**（含 1 份跨模块 C4 契约档）。每份独立可加载，按需读取。
 
-> ⚠️ **8 份模块实施档目前尚未落地** —— 本节链接均为 forward reference。在模块档全部产出之前，**v3 仅冻结顶层方向，不作为实施细节基线**；实施细节请参照 [v2.1](activity-monitor-refactor-proposal-v2.1.md) 对应章节（§5.x / §六）。
+> 📝 **9 份模块实施档已全部初稿 landing**（同 commit）。**v3 当前仍标 REVIEW DRAFT**——等顶层 + 9 模块档一并 review pass 后做 final pass：v3 升 IMPLEMENTATION BASELINE + v2.1 / v2 / v1 全部 SUPERSEDED。在 final pass 之前，实施 / 测试 / 评审仍以 [v2.1](activity-monitor-refactor-proposal-v2.1.md) 为准。
 
 | 模块实施档 | 覆盖模块 | 核心职责 |
 |---|---|---|
+| [`c4-reliability-contract.md`](activity-monitor/modules/c4-reliability-contract.md) | (跨模块契约 — C4 内部 schema/逻辑) | **C4 DB 三层契约**：durability + terminal status + unresolved-inbound exposure。包含 conversations 表 schema 扩展、c4-receive / c4-dispatcher 协同维护、c4-session-init 查询 pending inbounds |
 | [`signal-store-and-status-writer.md`](activity-monitor/modules/signal-store-and-status-writer.md) | SignalStore / StatusWriter | 信号聚合（每 tick 只读快照）+ 唯一对外契约发布者 |
 | [`guardian.md`](activity-monitor/modules/guardian.md) | Guardian | 进程存活守护 + 拉起条件 + bypass-once + marker 重置 |
 | [`health-engine.md`](activity-monitor/modules/health-engine.md) | HealthEngine | 4-state FSM + 触发源 + tick 内部步骤 + 3 层监控 + catalog-driven api-error-check + recoveryAction × HealthState 矩阵 + unknown error 持续性升级 |
 | [`message-router.md`](activity-monitor/modules/message-router.md) | MessageRouter | 用户消息路由 + 4 约束 C1~C4 + 不变量对照 + 并发聚合 + IPC 协议 |
-| [`session-restart-continuation.md`](activity-monitor/modules/session-restart-continuation.md) | (跨模块契约) | C4 DB 可靠性边界声明 + delivered-but-unanswered ≠ 丢失 + c4-session-init 注入契约 |
+| [`session-restart-continuation.md`](activity-monitor/modules/session-restart-continuation.md) | (跨模块契约 — AM 视角恢复流程) | 消费 C4 reliability contract：session restart 后 c4-session-init 注入 pending + agent 自治续接；delivered-but-unanswered ≠ 丢失边界声明 |
 | [`tool-pipeline-watchdog-procsampler.md`](activity-monitor/modules/tool-pipeline-watchdog-procsampler.md) | ToolPipeline / ToolWatchdog / ProcSampler | PR #500 边界适配 + 5-stage 工具状态机 + 60s 滑动窗冻结检测 |
 | [`task-scheduler.md`](activity-monitor/modules/task-scheduler.md) | TaskScheduler | 注册式调度 + 任务清单 + usage 监测/告警双 gate 拆分 |
 | [`runtime-adapter.md`](activity-monitor/modules/runtime-adapter.md) | Adapter (Claude / Codex) | 接口分类 + DI 模型 + Claude / Codex 差异封装 |
@@ -428,7 +455,7 @@ ActivityState 无历史依赖——任何 tick 看到同样信号都得出同样
 | **Phase 0** | Watchdog 边界适配（PR #500 内部语义不动） | 工具相关组件模块边界对齐；E2E golden 等价 |
 | **Phase 1** | 基础设施 | SignalStore / StatusWriter / TaskScheduler / ToolPipeline 新建；feature flag 挂接 |
 | **Phase 2** | 状态模型 + 组件拆分 | Guardian / HealthEngine 新建（含 catalog-driven api-error-check + recoveryAction dispatch + unknown 5min 升级）；新 monitor 8 步 tick |
-| **Phase 3** | 消息路由 + c4-receive 适配 | MessageRouter 新建；c4-receive 改造（同步等 MessageRouter + unhealthy 路径写状态文案 + IPC 降级 terminal 文案不入队）；c4-dispatcher 适配新 health 值域 |
+| **Phase 3** | 消息路由 + c4-receive 适配 + **C4 reliability contract 落地** | MessageRouter 新建；c4-receive 改造（同步等 MessageRouter + unhealthy 路径写状态文案 + IPC 降级 terminal 文案不入队）；c4-dispatcher 适配新 health 值域；**C4 schema 扩展**：conversations 表加 `terminal_status` 字段 + dispatcher 过滤 pending + c4-session-init 查询 pending inbounds 注入 startup context（详 [`c4-reliability-contract.md`](activity-monitor/modules/c4-reliability-contract.md)） |
 | **Phase 4** | 对外 schema + 下游文案 | 对外状态文件加 schema_version + 新增可选字段；下游消费端按时间戳差分文案；web-console 适配 |
 | **Phase 5** | 收尾 | 删除 legacy 分支 / 旧 heartbeat-engine / **main 既有异步恢复广播路径（c4-receive 写入分支 + AM drain 职责）**；全量回归 |
 
