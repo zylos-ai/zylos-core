@@ -143,7 +143,7 @@ sequenceDiagram
 | Monitor Orchestrator | 主循环入口，每秒驱动一次 tick，按固定顺序调用各组件；负责启动 IPC 监听供 MessageRouter 接入 | 系统时钟（1s interval）、config | 按顺序调用各组件的 tick 方法 |
 | SignalStore | tick 开头统一读取所有 signal files，生成当次 tick 的 immutable snapshot，供后续组件消费 | signal files（`agent-status.json`、`proc-state.json`、`api-activity.json` 等） | readonly snapshot（当次 tick 内所有组件共享同一份快照） |
 | StatusWriter | tick 末尾汇总当前 ActivityState、HealthState 及各组件状态，写入对外状态文件 | snapshot、HealthEngine 当前状态 | `agent-status.json`（Operator 和 MessageRouter 消费） |
-| Guardian | 守护 runtime 进程存活：检测进程退出后按策略重新拉起，RateLimited 状态下抑制拉起 | snapshot、guardian 内部状态（上次拉起时间、连续失败计数） | 调用 Runtime Adapter 拉起 runtime；向 HealthEngine 报告进程事件 |
+| Guardian | 守护 runtime 进程存活：检测进程退出后无条件拉起，拉起失败时按退避策略递增延迟重试 | snapshot、guardian 内部状态（上次拉起时间、连续失败计数） | 调用 Runtime Adapter 拉起 runtime；向 HealthEngine 报告进程事件 |
 | ProcSampler | 通过 OS 级指标（pid 存活、context switch 计数）检测 runtime 进程是否冻结 | runtime pid、`/proc` context switch 数据 | `proc-state.json`（冻结检测结果，供 SignalStore 下次 tick 读取） |
 | ToolPipeline | 从 runtime 产生的工具事件流中合成 API 活动摘要，判断 runtime 是否有近期活动 | `tool-events.jsonl`（runtime 写入的工具调用事件流） | `api-activity.json`（最近活动时间、活跃工具列表，供 HealthEngine 和 ToolWatchdog 消费） |
 | ToolWatchdog | 检测工具调用是否超时，超时则通过 Adapter 执行干预动作（如中断当前工具） | snapshot、Adapter 提供的工具超时规则 | 调用 Runtime Adapter 执行控制动作（中断/重启） |
@@ -310,7 +310,7 @@ skills/comm-bridge/scripts/
 #### D-1. ActivityState 与 HealthState 双层正交
 
 **状态**：已确认
-**决策**：ActivityState（Offline/Idle/Busy）管理进程生命周期，HealthState（OK/Unavailable/RateLimited/AuthFailed）管理功能健康，两层完全正交。HealthEngine 不读 ActivityState 决定自身状态，Guardian 不读 HealthState 决定是否拉起（RateLimited 例外除外）。
+**决策**：ActivityState（Offline/Idle/Busy）管理进程生命周期，HealthState（OK/Unavailable/RateLimited/AuthFailed）管理功能健康，两层完全正交。HealthEngine 不读 ActivityState 决定自身状态，Guardian 不读 HealthState 决定是否拉起。
 
 #### D-2. HealthState 保持 4 种枚举，不新增
 
@@ -412,10 +412,10 @@ skills/comm-bridge/scripts/
 
 ### Guardian 行为
 
-#### D-20. "无条件拉起"修正为 RateLimited 例外
+#### D-20. Guardian 无条件拉起 + 失败退避
 
 **状态**：已确认
-**决策**：Guardian 原则为"Offline → 拉起进程，仅 RateLimited 时阻止（拉起也会被限流，无意义）"。这是双层正交原则下唯一合法的 HealthState 读取。
+**决策**：Guardian 原则为"Offline → 无条件拉起进程"，不读 HealthState。拉起失败后通过退避逻辑（递增延迟）避免无限快速重启。进程状态与健康状态完全正交，Guardian 不因 RateLimited 或任何 HealthState 阻止拉起。
 
 #### D-21. AM 冷启动时 Guardian 退避状态重置
 
