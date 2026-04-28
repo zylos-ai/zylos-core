@@ -91,7 +91,7 @@ T5: c4-session-init 把三段 startup context 写入新 session stdin / context 
 T6: Runtime agent 看到 startup context
     │   ├── 解析 pending inbound 列表
     │   └── 自决策（每条 pending）：
-    │        ├── 补答 → 写 outbound → c4 自动标 inbound 'replied'
+    │        ├── 补答 → c4-send --reply-to-id <id> 写 outbound → 同事务 markInboundTerminal(id, 'replied')
     │        ├── 不答 → 显式 mark 'manually_dropped'
     │        └── 暂不动 → inbound 保持 pending
     │

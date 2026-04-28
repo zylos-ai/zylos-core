@@ -189,7 +189,7 @@ c4-dispatcher 投递 inbound A 给 tmux 时：
 
 ##### 层 B：Soft idempotent handling（已 terminal → outbound 写入但 mark no-op + warning）
 
-层 A 全部通过后，c4-send **写 outbound 行**（含 `reply_to_inbound_id` 指向参数中的 ids）。然后逐条尝试 mark terminal：
+层 A 全部通过后，c4-send **写 outbound 行**（含 `reply_to_inbound_id` 指向参数中的 id）。然后尝试 mark terminal：
 
 - inbound `terminal_status = 'pending'` → mark replied（或 status_replied，看 caller 路径）✓
 - inbound 已 terminal（replied / status_replied / manually_dropped）：
@@ -200,7 +200,7 @@ c4-dispatcher 投递 inbound A 给 tmux 时：
 
 **为什么这样分**（zylos0t R4 follow-through 修订）：
 
-- 层 A "不存在 / 跨 channel / 跨 endpoint" = 输入根本错了 → 整批 reject 防止 outbound 误写到错误位置
+- 层 A "不存在 / 跨 channel / 跨 endpoint" = 输入根本错了 → reject + 不写 outbound，防止 outbound 误写到错误位置
 - 层 B "已 terminal" 不是输入错——是同一 reply command 重复执行或迟到 reply 的**幂等场景**（agent 重发 / 网络重试 / 手工触发等）→ 不能丢 outbound audit trail，但 terminal mark 必须保护单调性
 
 #### 不变量补充
@@ -342,7 +342,7 @@ dispatcher 串行投递（require_idle 保证）一次只 claim 1 条 inbound：
 
 恶意 / 误操作场景：agent 把含 `--reply-to-id 42` 的命令复制到另一个 endpoint 调用：
 
-- 层 A 校验：inbound 42 的 endpoint 跟 outbound 目标 endpoint 不一致 → **hard error，整批 reject**
+- 层 A 校验：inbound 42 的 endpoint 跟 outbound 目标 endpoint 不一致 → **hard error，reject + 不写 outbound**
 - 不写任何 outbound + 不改任何 inbound state
 - 防 cross-endpoint 误标关键防线（C-Term-2 / C-Term-3 安全）
 
@@ -456,8 +456,8 @@ dispatcher 串行投递（require_idle 保证）一次只 claim 1 条 inbound：
 
 ### 验收标准
 
-- ✅ 所有单元测试通过（18 项）
-- ✅ 所有集成测试通过（10 项）
+- ✅ 上述单元测试全部通过
+- ✅ 上述集成测试全部通过
 - ✅ Schema migration + backfill 在 staging 环境跑过 ≥ 1 周无 bug
 - ✅ 跨 channel（lark / tg / hxa / web-console）至少各跑过 1 个 OK 直通 + 1 个 unhealthy 路径
 - ✅ 1-reply invariant 在 100 次模拟跑里 100% 成立（**双层语义**：DB 持久化完整性 100% + bounded subset 准确）

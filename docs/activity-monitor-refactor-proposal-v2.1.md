@@ -1,15 +1,18 @@
-# Activity Monitor 重构方案 v2.1 — ✅ IMPLEMENTATION BASELINE（唯一真源）
+# Activity Monitor 重构方案 v2.1 — ⚠️ SUPERSEDED — DO NOT IMPLEMENT
 
-> 日期：2026-04-24（v2.1 起草）/ 2026-04-28（Direction D walkback + R1 review 收敛）
-> 分支：`refactor/activity-monitor`
+> ⚠️ **本文件已 SUPERSEDED**（2026-04-28，R5 final pass）。
+> 当前 implementation baseline 是 [`activity-monitor-refactor-proposal-v3.md`](activity-monitor-refactor-proposal-v3.md) + 9 份模块实施档（[`docs/activity-monitor/modules/`](activity-monitor/modules/)）。
 >
-> **本文件是 PR #501 的唯一 implementation baseline**——实施 / 测试 / 评审都以本文件为准。
+> 本文件保留作为历史演进档——v2.1 是 R1 walkback 后的 implementation baseline 候选，但 R3 review 发现 v2.1 把 "unanswered inbound 注入" 跟 7 项 AM 私有 ledger 一起砍了——前 7 项砍对（不该住 AM）但最后一项砍重了（应在 C4 内部 schema）。v3 通过 C4 reliability contract 三层契约（durability + terminal status + unresolved-inbound exposure）+ reply command token-passing 落地 R3 reframe，是当前唯一 active truth。
+>
+> 详细演进路径见 PR #501 git history (commit `81c5d7d` → ... → `9114ec5`)。
+>
+> 日期：2026-04-24（v2.1 起草）/ 2026-04-28（Direction D walkback + R1 review 收敛 / R5 SUPERSEDED）
+> 分支：`refactor/activity-monitor`
 >
 > 历史稿（已 SUPERSEDED，不要据此实施）：
 > - `activity-monitor-refactor-proposal-v2.md` — v2 详细设计档（750 行，标记 SUPERSEDED）
 > - `activity-monitor-refactor-proposal.md` — v1 初稿（标记 SUPERSEDED）
->
-> 设计经多轮 review 演进至 Direction D（详 §5.3.2），过程沉淀在 PR #501 commits + comments + git history。
 
 ---
 

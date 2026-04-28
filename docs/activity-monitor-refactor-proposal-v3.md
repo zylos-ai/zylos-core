@@ -1,18 +1,15 @@
-# Activity Monitor 重构方案 v3 — 📝 顶层方案 REVIEW DRAFT
+# Activity Monitor 重构方案 v3 — ✅ IMPLEMENTATION BASELINE（唯一真源）
 
 > 日期：2026-04-28
 > 分支：`refactor/activity-monitor`
 > 类型：**总方案文档**——面向 review 与跨角色共识，不深入代码 / 字段 / 函数 / 文件路径 / 测试 case。具体落地见模块实施档（[§7 模块索引](#七模块索引)）。
 >
-> **当前状态：v3 顶层方案 REVIEW DRAFT，尚未接管 IMPLEMENTATION BASELINE**
-> - **9 份模块实施档已全部 landing**（[§7](#七模块索引)，跨 R3 reframe + R4 reply correlation token-passing 多 commit 演进）
-> - v3 仍标 REVIEW DRAFT——等本轮 R5 cleanup pass 后做 final pass：v3 升 IMPLEMENTATION BASELINE + v2.1 / v2 / v1 全部降级 SUPERSEDED
-> - 在 final pass 之前，实施 / 测试 / 评审仍以 [`activity-monitor-refactor-proposal-v2.1.md`](activity-monitor-refactor-proposal-v2.1.md) 为准（仍是 active implementation baseline）
+> **本文件 + 9 份模块实施档是 PR #501 的唯一 implementation baseline**——实施 / 测试 / 评审都以本套档为准。设计经多轮 review 收敛（R1 howard 文档规范 → R2 clear-and-restart → R3 zylos0t reframe (C4 reliability contract) → R4 reply correlation token-passing → R5 cleanup），跨 commit 序列详见 PR #501 git history。
 >
-> 历史稿（按演进顺序，最新到最旧）：
-> - [`activity-monitor-refactor-proposal-v2.1.md`](activity-monitor-refactor-proposal-v2.1.md)：当前 IMPLEMENTATION BASELINE
-> - [`activity-monitor-refactor-proposal-v2.md`](activity-monitor-refactor-proposal-v2.md)：SUPERSEDED
-> - [`activity-monitor-refactor-proposal.md`](activity-monitor-refactor-proposal.md)：v1，SUPERSEDED
+> 历史稿（已 SUPERSEDED，不要据此实施）：
+> - [`activity-monitor-refactor-proposal-v2.1.md`](activity-monitor-refactor-proposal-v2.1.md)：v2.1 R2 walkback 收敛档，已 SUPERSEDED
+> - [`activity-monitor-refactor-proposal-v2.md`](activity-monitor-refactor-proposal-v2.md)：v2 详细设计档，已 SUPERSEDED
+> - [`activity-monitor-refactor-proposal.md`](activity-monitor-refactor-proposal.md)：v1 初稿，已 SUPERSEDED
 >
 > 模块实施档目录：[`docs/activity-monitor/modules/`](activity-monitor/modules/)（9 份已 landing）
 
@@ -434,8 +431,6 @@ ActivityState 无历史依赖——任何 tick 看到同样信号都得出同样
 ## 七、模块索引
 
 11 个模块（10 业务 + 1 Adapter DI），按职责聚合为 **9 份模块实施档**（含 1 份跨模块 C4 契约档）。每份独立可加载，按需读取。
-
-> 📝 **9 份模块实施档已全部 landing**（多 commit 演进——R3 reframe + R4 reply-correlation token-passing 修订）。**v3 当前仍标 REVIEW DRAFT**——等顶层 + 9 模块档一并 review pass 后做 final pass：v3 升 IMPLEMENTATION BASELINE + v2.1 / v2 / v1 全部 SUPERSEDED。在 final pass 之前，实施 / 测试 / 评审仍以 [v2.1](activity-monitor-refactor-proposal-v2.1.md) 为准。
 
 | 模块实施档 | 覆盖模块 | 核心职责 |
 |---|---|---|
