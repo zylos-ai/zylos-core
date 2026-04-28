@@ -267,12 +267,12 @@ ActivityState 是无状态投射，不是 FSM。相同 signal snapshot 必须得
 
 | 状态 | 含义 | 转入依据 | 转出依据 |
 |---|---|---|---|
-| OK | runtime 功能可用，heartbeat 正常应答 | 任意状态 → OK：heartbeat / probe 成功（`onHeartbeatSuccess`） | → Unavailable：heartbeat 失败或 API error 触发 `triggerRecovery`；→ RateLimited：heartbeat 失败时检测到限流文本；→ AuthFailed：Guardian 重启前 auth check 失败 |
-| Unavailable | 兜底状态：排除 RateLimited 和 AuthFailed 后，其余所有不可用场景均归入此状态（D-2）。内部分 recovering / down 两阶段，对外统一暴露为 Unavailable（D-3） | OK → Unavailable：heartbeat 失败或 API error；RateLimited → Unavailable：冷却到期；AuthFailed → Unavailable：auth 通过但 runtime 仍需恢复 | → OK：probe 成功；→ RateLimited：恢复期间检测到限流文本；→ AuthFailed：Guardian 重启前 auth check 失败 |
-| RateLimited | 外部 API 限流 | OK / Unavailable → RateLimited：heartbeat 失败且 tmux 检测到 rate limit 文本（行为 + 文本双信号）；AuthFailed → RateLimited：auth 通过后发现限流 | → Unavailable：冷却到期，进入 recovering 重新探测；→ OK：冷却后 probe 直接成功；→ AuthFailed：Guardian 重启前 auth check 失败 |
-| AuthFailed | 凭证或认证失败 | 任意状态 → AuthFailed：Guardian 尝试重启 runtime 时 auth check 返回失败 | → OK：probe / heartbeat 成功（auth 恢复后）；→ Unavailable：auth 通过但 runtime 未恢复；→ RateLimited：auth 通过后发现限流 |
+| OK | runtime 功能可用 | 任意状态 → OK：recovery probe 成功 | → Unavailable：API error 检测触发 recovery；→ RateLimited：recovery probe 期间检测到限流文本；→ AuthFailed：Guardian 重启前 auth check 失败 |
+| Unavailable | 兜底状态：排除 RateLimited 和 AuthFailed 后，其余所有不可用场景均归入此状态（D-2）。内部分 recovering / down 两阶段，对外统一暴露为 Unavailable（D-3） | OK → Unavailable：API error 触发 recovery；RateLimited → Unavailable：冷却到期；AuthFailed → Unavailable：auth 通过但 runtime 仍需恢复 | → OK：recovery probe 成功；→ RateLimited：恢复期间检测到限流文本；→ AuthFailed：Guardian 重启前 auth check 失败 |
+| RateLimited | 外部 API 限流 | OK / Unavailable → RateLimited：recovery probe 失败且检测到限流文本（行为 + 文本双信号）；AuthFailed → RateLimited：auth 通过后发现限流 | → Unavailable：冷却到期，进入 recovering 重新探测；→ OK：冷却后 probe 直接成功；→ AuthFailed：Guardian 重启前 auth check 失败 |
+| AuthFailed | 凭证或认证失败 | 任意状态 → AuthFailed：Guardian 尝试重启 runtime 时 auth check 返回失败 | → OK：recovery probe 成功（auth 恢复后）；→ Unavailable：auth 通过但 runtime 未恢复；→ RateLimited：auth 通过后发现限流 |
 
-状态机为全连通（OK ↔ Unavailable ↔ RateLimited ↔ AuthFailed），由 HealthEngine 独占维护。Guardian 不读取 HealthEngine 内存字段，只通过 SignalStore 读取必要的 rate-limit / maintenance 文件。
+状态机为全连通（OK ↔ Unavailable ↔ RateLimited ↔ AuthFailed），由 HealthEngine 独占维护。Heartbeat 是 recovery probe 的内部探测手段，不作为独立定时检测任务（避免浪费 token）。Guardian 不读取 HealthEngine 内存字段，只通过 SignalStore 读取必要的 rate-limit / maintenance 文件。
 
 ### 3.6 Catalog-driven API Error Dispatch
 
