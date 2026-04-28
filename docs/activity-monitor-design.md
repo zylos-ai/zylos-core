@@ -53,9 +53,8 @@ flowchart LR
 
 | Container | 类型 | 职责 | 入口交互 | 出口交互 |
 |---|---|---|---|---|
-| AM Process | PM2 long-running process | 主循环编排、状态机、runtime 生命周期管理。内部通过 signal files（JSON/JSONL）存取状态 | runtime 进程状态变化（退出/启动/冻结）；HealthEngine 健康状态转移；signal file 更新（工具事件、进程采样） | 调用 Runtime Adapter 启停 runtime；写 `agent-status.json` 对外暴露状态；触发健康目录动作（通知、重启决策） |
+| AM Process | PM2 long-running process | 主循环编排、状态机、runtime 生命周期管理。内部通过 signal files（JSON/JSONL）存取状态 | runtime 进程状态变化（退出/启动/冻结）；HealthEngine 健康状态转移；signal file 更新（工具事件、进程采样） | 启停 Runtime Agent Process；写 `agent-status.json` 对外暴露状态；触发健康目录动作（通知、重启决策） |
 | MessageRouter | 一次性调用接口 | 接收 c4-receive 的路由请求，查询 AM 健康状态，返回路由决策（健康/不健康 + 用户文案） | c4-receive 调用 | 返回路由决策给 c4-receive |
-| Runtime Adapter | AM 内部 DI 层 | 封装 Claude / Codex runtime 差异，向 AM 业务组件提供统一接口 | AM Process 各组件调用 | 操作 Runtime Agent Process（启动/停止/探测） |
 
 #### C4 通信层
 
