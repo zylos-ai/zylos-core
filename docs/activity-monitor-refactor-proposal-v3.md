@@ -112,13 +112,16 @@ Layer 2 tmux scan 检测到 API error 时**不硬编码 pattern + action**——
 
 Catalog 是**活的知识库**：unknown error 走 `probe_only` 兜底 + 写入 unknown-error 日志，weekly review 增补 catalog；同时设持续未匹配升级（连续 5 分钟命中）→ 强制 `restart_session` 自愈，避免在 sticky context 下退避永远卡死。
 
-### 4. Unhealthy 路径同步返回状态文案 + queue status 排除
+### 4. Unhealthy 路径同步返回状态文案（用既有 c4 接口闭环）
 
-c4-receive 在 health 非 OK 时（且 recovery probe 仍异常）：写入 inbound + 立即写入一条 outbound 状态文案（catalog `userMessage` 决定文案），DB 同时持久化两端，用户立即感知。
+c4-receive 在 health 非 OK 时（且 recovery probe 仍异常）走两步——**全部用 c4 既有接口，不发明新机制**：
 
-**这条 inbound 不能进入 dispatcher 主投递队列**——用既有 `conversations.status` 字段表达为非待投递的 audit 语义（不引入新字段、不引入 terminal_status）。dispatcher 只看既有 queue status 决定是否投递；audit 语义的 inbound 在 dispatcher 视角即"已处理"，不会双投。
+1. **写入 inbound（status='delivered'）**：c4-receive 调 `insertConversation('in', ..., 'delivered')`——**显式覆盖 default 'pending'**。dispatcher SQL `WHERE status='pending'` 自然跳过这条 inbound，无需任何额外判断逻辑（详 §六.H）
+2. **调 c4-send.js 投递状态文案**：c4-receive 调既有 `c4-send.js` 接口（替代 main 的 `emitError` 错误响应路径）。c4-send 内部完成 `insertConversation('out', ..., catalog.userMessage)` + spawn `<channel>/scripts/send.js` 实际投递；用户收到的是"bot 发的状态消息"——跟 agent 正常 reply 完全同路径，不是错误 toast
 
-详 §六.H 取舍说明（zylos0t R6 TODO 1 落点）。
+DB 双行（inbound + outbound 都 status='delivered'）保留完整 audit trail；dispatcher 因 status 跳过 inbound 无双投风险——**不引入新字段、不引入 terminal_status、不发明新接口**。
+
+详 §六.H 取舍说明（zylos0t R6 TODO 1 精确落点）。
 
 ### 5. Session restart continuation 是 best-effort
 
@@ -214,16 +217,28 @@ agent 看消息回复；DB 既有 inbound 与后续 outbound 完整持久化。r
 ### 5.2 Unhealthy 同步状态文案路径
 
 ```
-user → c4-receive
-       → MessageRouter (health 非 OK) 触发 recovery probe 聚合
-       ↓ probe recovered=true
-         → 重走 OK 直通路径
-       ↓ probe recovered=false
-         → c4-receive (insertConv 'in', status=audit) + (insertConv 'out', <catalog.userMessage>)
-         → 用户立即收到状态文案
+user → channel daemon → c4-receive
+                            ↓
+                     调 MessageRouter IPC 触发 recovery probe 聚合
+                            ↓ probe recovered=true
+                              → 重走 OK 直通路径
+                            ↓ probe recovered=false
+                              → c4-receive: insertConv('in', ..., status='delivered')
+                                            ↑ 显式覆盖 default 'pending'
+                                            (dispatcher SELECT pending 自然跳过)
+                              → c4-receive 调 c4-send.js (catalog.userMessage)
+                                            ↓ c4-send 内部
+                                       insertConv('out', ..., catalog.userMessage)
+                                       + spawn <channel>/scripts/send.js
+                              → user 收到 "bot 状态消息"（跟 agent reply 同路径）
+                              → c4-receive exit 0
 ```
 
-**关键约束**（zylos0t R6 TODO 1 落点）：probe recovered=false 时写入的 inbound 用既有 `conversations.status` 字段标记为 audit 语义（即非待投递），dispatcher 看 queue status 不会再处理这条 inbound——**不引入新字段** `terminal_status`，**不引入 reply correlation token**。
+**关键约束**（zylos0t R6 TODO 1 精确落点）：
+
+- inbound `status='delivered'` 是显式覆盖 c4-db.js:107 的 default `'pending'`——dispatcher SQL `WHERE status='pending'`（c4-db.js:140）自然跳过这条 inbound
+- outbound 通过 c4-send.js 既有接口投递——跟 agent 正常 reply 完全同路径，**不发明新 path**
+- 全程**不引入新字段** `terminal_status`、**不引入 reply correlation token**、**不引入新表 / 新接口**
 
 ### 5.3 API error catalog dispatch 路径
 
@@ -310,20 +325,24 @@ PR #501 v3 早期演进路径（R3+R4+R5）尝试在 C4 DB 引入 reply-resoluti
 1. **prior decision 违背**：早期讨论已明确"C4 不需要记录消息已回复状态"；R3 引入 terminal_status 等是把 C4 纯机械层升级为业务语义，违背前置共识
 2. **discipline 假设过强**：reply command token-passing 假设 agent / dispatcher / channel daemon 都按规矩玩——agent 手写命令 / 复制旧命令 / 跨 thread 回复 / 主动补充等任一场景 break 即出现 correlation stale/missing/mismatch；配对错从 v2.1 的"软错"（agent 自决策错）变 v3 的"硬错"（系统机制写错 DB）
 3. **state 组合矩阵未拼完**：R3+R4 引入的 `terminal_status` 与 `claimed_at` 跟既有 `conversations.status`（pending / running / delivered / failed）字段交互**完全未讨论**——R3/R4/R5 reviewer 5 轮基于 v3 自身一致性 review 都未抓到此 blind spot；implementation baseline 自身漏字段交互契约不能算合格 baseline
-4. **大机制解小问题**：unhealthy status reply 的真正需求是"状态文案返回后对应 inbound 不进入 dispatcher 主队列"——用既有 queue status 表达即可（§六.H 落地），无需 terminal_status 全套
+4. **大机制解小问题**：unhealthy status reply 的真正需求是"状态文案返回后对应 inbound 不进入 dispatcher 主队列"——用既有 `conversations.status='delivered'` 显式覆盖 default 'pending' 即可（§六.H 精确落地），无需 terminal_status 全套
 5. **scope 蔓延**：pending exposure（bounded subset + continuation CLI）是产品语义不是 AM refactor 必要前置；塞进 PR #501 会让 AM refactor 变成 C4 reply ledger 重构，风险面扩大
 
 R6 决断保留 v2.1 已收敛的所有有效产物（catalog-driven api error / probe-restart 解耦 / 11 模块拆分 / bypass-once+marker / usage 双 gate 等），仅退出 R3+R4+R5 引入的 reply-resolution 增量。本 v3 重排版即在此决断基础上做 spec 化 + 落地两条窄修订（§六.H、§六.I）。
 
-### H. zylos0t R6 TODO 1：Unhealthy inbound 用既有 queue status 表达非待投递
+### H. zylos0t R6 TODO 1：Unhealthy inbound 用 status='delivered' 表达非待投递（精确措辞）
 
 **问题**：v2.1 多处描述 unhealthy 路径写入 `insertConv('in') + insertConv('out', 状态文案)`，但**没有显式声明**这条 inbound 在 dispatcher 视角的处理状态——理论上 dispatcher 看 inbound queue 仍可能尝试再次投递，造成双答（status outbound 已发 + dispatcher 又投递 → agent 又答一次）。
 
-**收敛**：用既有 `conversations.status` 字段（不引入新字段）把 unhealthy 路径写入的 inbound 标记为 audit 语义（即非待投递）。dispatcher 看 queue status 不会处理这条 inbound——双答边界由既有字段闭环。
+**精确收敛**：用既有 `conversations.status` 字段（不引入新字段），c4-receive 调 `insertConversation('in', channel, endpoint, content, 'delivered')`——第 5 个参数**显式覆盖 default 'pending'**，dispatcher SQL `getNextPending: WHERE direction='in' AND status='pending'`（c4-db.js:140）自然跳过这条 inbound。
 
-**为什么不引入 terminal_status**：`terminal_status` 把"是否已回复"做成 C4 业务语义，而 group / multi-msg / agent 主动消息等场景这件事 C4 纯机械层无法稳定判断（参 §六.G #1）。本 TODO 走既有 queue status 的窄修订，避免再次进入 reply-resolution scope。
+**不用模糊的"audit 语义"措辞**：早期讨论曾用过"audit inbound"等措辞，最终采用既有 `'delivered'` 值（c4-db.js:107 default 已为 outbound 使用此值）——既有字段值复用，**零新概念**，dispatcher 不需要任何额外判断逻辑。
 
-**落点**：[`message-router.md`](activity-monitor/modules/message-router.md) §3 不变量 + §5 c4-receive 适配；[`health-engine.md`](activity-monitor/modules/health-engine.md) §3 catalog × HealthState × DB 路径矩阵；Phase 3 c4-receive 改造说明（§八）。
+**outbound 走 c4-send.js 既有接口**：c4-receive 调用 `c4-send.js` 投递 catalog.userMessage——c4-send.js 内部完成 outbound DB 行写入（status='delivered' 默认）+ spawn `<channel>/scripts/send.js` 实际投递。**不发明新接口**——AM scope 内不直接管 channel 投递；用户感知统一为"bot 发的消息"，跟 agent 正常 reply 同路径。
+
+**为什么不引入 terminal_status**：`terminal_status` 把"是否已回复"做成 C4 业务语义，而 group / multi-msg / agent 主动消息等场景这件事 C4 纯机械层无法稳定判断（参 §六.G #1）。本 TODO 用既有 queue status + 既有 c4-send 接口的窄修订，避免再次进入 reply-resolution scope。
+
+**落点**：[`message-router.md`](activity-monitor/modules/message-router.md) §3 不变量 + §5 c4-receive 适配（含调 c4-send.js 流程）；[`health-engine.md`](activity-monitor/modules/health-engine.md) §3 catalog × HealthState × DB 路径矩阵；Phase 3 c4-receive 改造说明（§八）。
 
 ### I. zylos0t R6 TODO 2：Session restart continuation 降级 best-effort
 
@@ -353,7 +372,7 @@ R6 决断保留 v2.1 已收敛的所有有效产物（catalog-driven api error /
 | 4 | [`health-engine.md`](activity-monitor/modules/health-engine.md) | HealthEngine | 4-state FSM 转换表；3 层健康监控；catalog-driven dispatch + 5 recoveryAction × DB 路径矩阵；unknown 5min 升级；冷启动 health 回填 |
 | 5 | [`tool-pipeline-watchdog-procsampler.md`](activity-monitor/modules/tool-pipeline-watchdog-procsampler.md) | ProcSampler + ToolPipeline + ToolWatchdog | 三模块物理共置；PR #500 边界适配；5-stage watchdog；60s 滑动窗冻结判定 |
 | 6 | [`task-scheduler.md`](activity-monitor/modules/task-scheduler.md) | TaskScheduler | 注册式调度；7 任务清单；usage-monitor / usage-alerter 双 gate 拆分（4 语义矩阵 + 升级兼容路径） |
-| 7 | [`message-router.md`](activity-monitor/modules/message-router.md) | MessageRouter | 4 约束 C1~C4；OK / Unhealthy / Probe-recovered / IPC-down 路径；**unhealthy inbound queue-status audit 语义**（§六.H 落点） |
+| 7 | [`message-router.md`](activity-monitor/modules/message-router.md) | MessageRouter | 4 约束 C1~C4；OK / Unhealthy / Probe-recovered / IPC-down 路径；**unhealthy inbound `status='delivered'` + outbound 走 c4-send.js 既有接口**（§六.H 精确落点） |
 | 8 | [`session-restart-continuation.md`](activity-monitor/modules/session-restart-continuation.md) | (跨模块契约) | restart 后 startup context 注入；agent 自治续接边界；**best-effort contract 三句**（§六.I 落点）；不引入的机制清单 |
 
 **移除的模块档**（R3+R4+R5 引入，R6 production rollback 决断后退出）：
