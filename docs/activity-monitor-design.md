@@ -268,7 +268,7 @@ ActivityState 是无状态投射，不是 FSM。相同 signal snapshot 必须得
 | 状态 | 含义 | 恢复路径 |
 |---|---|---|
 | OK | runtime 功能可用 | 无 |
-| Unavailable | API error、heartbeat fail、probe fail 等一般不可用 | 指数退避 probe |
+| Unavailable | runtime 功能不可用（heartbeat 超时/失败、API error 检测），且非限流、非认证问题。内部分 recovering（首次失败，退避重启 + 持续 probe）和 down（持续失败超阈值，降低 probe 频率）两阶段，对外统一暴露为 Unavailable（D-3） | 指数退避 probe；recovering 阶段 kill + 重启 runtime；down 阶段降频 probe 等待恢复 |
 | RateLimited | 外部 API 限流 | 冷却到期后转 Unavailable |
 | AuthFailed | 凭证或认证失败 | 180s 冷却或 user message 触发 auth-check |
 
