@@ -47,16 +47,35 @@ flowchart LR
 
 ### 2.1 容器清单
 
-| Container | 类型 | 职责 | 持久化/接口 |
-|---|---|---|---|
-| Activity Monitor Process | PM2 long-running process | 主循环、状态机、runtime 恢复、MessageRouter 宿主。内部通过 signal files（JSON/JSONL）存取状态 | local IPC |
-| Runtime Adapter | AM 内部 DI 层 | 封装 Claude / Codex 差异 | JS interface |
-| C4 Receive CLI | per-message Node process | 外部消息入口；调用 AM MessageRouter 获取路由结果并据此行动；写 inbound DB | CLI, C4 DB |
-| C4 Send CLI | per-message Node process | agent/系统对外发送消息 | CLI, C4 DB, channel send scripts |
-| C4 Dispatcher | PM2 long-running process | 消费 C4 DB 中 `status='pending'` 的 inbound，投递给 runtime | C4 DB, tmux |
-| C4 DB | SQLite | C4 消息可靠性边界 | `conversations`, `control_queue` |
-| Channel Daemons | PM2/process | 平台消息收发 | channel APIs |
-| Runtime Agent Process | tmux interactive process | 真实 agent 工作循环 | tmux pane |
+按所属上下文分组：
+
+#### Activity Monitor（本模块）
+
+| Container | 类型 | 职责 | 入口交互 | 出口交互 |
+|---|---|---|---|---|
+| AM Process | PM2 long-running process | 主循环编排、状态机、runtime 生命周期管理、MessageRouter 宿主。内部通过 signal files（JSON/JSONL）存取状态 | c4-receive 通过 IPC 调用 MessageRouter | 调用 Runtime Adapter 启停 runtime；写 `agent-status.json` 对外暴露状态 |
+| Runtime Adapter | AM 内部 DI 层 | 封装 Claude / Codex runtime 差异，向 AM 业务组件提供统一接口 | AM Process 各组件调用 | 操作 Runtime Agent Process（启动/停止/探测） |
+
+#### C4 通信层
+
+| Container | 类型 | 职责 | 入口交互 | 出口交互 |
+|---|---|---|---|---|
+| C4 Receive CLI | per-message Node process | 外部消息入口；调用 AM MessageRouter 获取路由决策并据此行动；写 inbound DB | Channel Daemon spawn 调用 | 写 C4 DB；通过 IPC 调用 AM MessageRouter；unhealthy 时调用 C4 Send CLI |
+| C4 Send CLI | per-message Node process | agent/系统对外发送消息 | Runtime Agent 或 c4-receive 调用 | 写 C4 DB outbound；调用 Channel Daemon send script |
+| C4 Dispatcher | PM2 long-running process | 消费 C4 DB 中 `status='pending'` 的 inbound，投递给 runtime | 轮询 C4 DB | 通过 tmux 投递给 Runtime Agent |
+| C4 DB | SQLite | C4 消息可靠性边界，存储 inbound/outbound 消息记录 | c4-receive / c4-send / c4-dispatcher 读写 | 被 c4-dispatcher 消费 |
+
+#### Channel Daemon
+
+| Container | 类型 | 职责 | 入口交互 | 出口交互 |
+|---|---|---|---|---|
+| Channel Daemons | PM2/process | 平台协议适配（Lark / Telegram / Web Console 等），消息收发 | 外部用户消息到达 | spawn c4-receive 处理 inbound；被 c4-send channel script 调用发送 outbound |
+
+#### Runtime Agent
+
+| Container | 类型 | 职责 | 入口交互 | 出口交互 |
+|---|---|---|---|---|
+| Runtime Agent Process | tmux interactive process | 真实 agent 工作循环（Claude / Codex） | C4 Dispatcher 投递用户消息；AM 通过 Adapter 启停 | 调用 C4 Send CLI 回复用户 |
 
 ### 2.2 容器交互
 
