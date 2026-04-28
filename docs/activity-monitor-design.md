@@ -286,10 +286,10 @@ ActivityState 是无状态投射，不是 FSM。相同 signal snapshot 必须得
 
 | 状态 | 含义 | 转入依据 | 转出依据 |
 |---|---|---|---|
-| OK | runtime 功能可用 | 任意状态 → OK：recovery probe 未识别到异常字符模式（RateLimited / AuthFailed 通过 check tmux pane），或 heartbeat ack 成功（Unavailable） | → Unavailable：API error 检测触发 recovery；→ RateLimited：check tmux pane 识别到限流字符模式；→ AuthFailed：Guardian 重启前 auth check 失败 |
+| OK | runtime 功能可用 | 任意状态 → OK：recovery probe 未识别到异常字符模式（RateLimited / AuthFailed 通过 check tmux pane），或 heartbeat ack 成功（Unavailable） | → Unavailable：API error 检测触发 recovery；→ RateLimited：check tmux pane 识别到限流字符模式；→ AuthFailed：check tmux pane 识别到认证失败字符模式 |
 | Unavailable | 兜底状态：排除 RateLimited 和 AuthFailed 后，其余所有不可用场景均归入此状态（D-2）。内部分 recovering / down 两阶段，对外统一暴露为 Unavailable（D-3） | OK → Unavailable：API error 触发 recovery；RateLimited → Unavailable：冷却到期；AuthFailed → Unavailable：check tmux pane 未识别到任何异常但 runtime 仍需恢复 | → OK：heartbeat probe 在预期时间内收到 ack；→ RateLimited：heartbeat 未收到 ack 后 check tmux pane 识别到限流字符模式；→ AuthFailed：heartbeat 未收到 ack 后 check tmux pane 识别到认证失败字符模式 |
 | RateLimited | 外部 API 限流 | OK / Unavailable → RateLimited：check tmux pane 识别到 rate limit 字符模式；AuthFailed → RateLimited：check tmux pane 识别到限流字符模式 | → OK：check tmux pane 未识别到任何异常字符模式；→ AuthFailed：check tmux pane 识别到认证失败字符模式；→ Unavailable：冷却到期，进入 recovering 重新探测 |
-| AuthFailed | 凭证或认证失败 | 任意状态 → AuthFailed：Guardian 重启前 auth check 失败，或 check tmux pane 识别到认证失败字符模式 | → OK：check tmux pane 未识别到任何异常字符模式；→ RateLimited：check tmux pane 识别到限流字符模式；→ Unavailable：auth 通过但 runtime 未恢复 |
+| AuthFailed | 凭证或认证失败 | 任意状态 → AuthFailed：check tmux pane 识别到认证失败字符模式 | → OK：check tmux pane 未识别到任何异常字符模式；→ RateLimited：check tmux pane 识别到限流字符模式；→ Unavailable：check tmux pane 未识别到异常但 runtime 仍需恢复 |
 
 状态机为全连通（OK ↔ Unavailable ↔ RateLimited ↔ AuthFailed），由 HealthEngine 独占维护。Recovery probe 方法因当前状态不同而异（详见 §3.2 MessageRouter 容器）。Guardian 不读取 HealthEngine 内存字段，只通过 SignalStore 读取必要的 rate-limit / maintenance 文件。
 
