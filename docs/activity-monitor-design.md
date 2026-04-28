@@ -288,9 +288,9 @@ ActivityState 是无状态投射，不是 FSM。相同 signal snapshot 必须得
 | 状态 | 含义 | 从 OK 转入的依据 |
 |---|---|---|
 | OK | runtime 功能可用 | —（初始状态） |
-| Unavailable | 兜底状态：排除 RateLimited 和 AuthFailed 后，其余所有不可用场景均归入此状态（D-2）。内部分 recovering / down 两阶段，对外统一暴露为 Unavailable（D-3） | API error 检测触发 recovery |
-| RateLimited | 外部 API 限流 | check tmux pane 识别到 rate limit 字符模式 |
-| AuthFailed | 凭证或认证失败 | check tmux pane 识别到认证失败字符模式 |
+| Unavailable | 兜底状态：排除 RateLimited 和 AuthFailed 后，其余所有不可用场景均归入此状态（D-2）。内部分 recovering / down 两阶段，对外统一暴露为 Unavailable（D-3） | 暂未明确 |
+| RateLimited | 外部 API 限流 | 连续两次 check tmux pane 识别到 rate limit 字符模式 |
+| AuthFailed | 凭证或认证失败 | check tmux pane 识别到认证失败字符模式后，执行 check auth 确认 auth 确实失败 |
 
 状态机为全连通（OK ↔ Unavailable ↔ RateLimited ↔ AuthFailed），由 HealthEngine 独占维护。各状态的转出路径由 recovery probe 方法决定（详见 §3.2 MessageRouter 容器）。Guardian 不读取 HealthEngine 内存字段，只通过 SignalStore 读取必要的 rate-limit / maintenance 文件。
 
