@@ -255,7 +255,7 @@ AM 的对外契约：
 - c4-dispatcher claim inbound A 投递时，**生成的 reply via 命令本身**带 `--reply-to-id A`
 - agent 看 prompt context 直接 follow 命令 → c4-send 写 outbound 含 `reply_to_inbound_id=A` → 标 inbound A `replied` (terminal)
 - agent **主动消息**（无 dispatcher claim）→ c4-send 不带 `--reply-to-id` → 默认 `reply_to_inbound_id=NULL` → **不动任何 pending**
-- c4-send 输入校验分两层：hard validation (不存在/channel/endpoint mismatch → 整批 reject) + soft idempotent (已 terminal → outbound 写入 + mark no-op + warning，C-Term-5 单调)
+- c4-send 输入校验分两层：hard validation (不存在/channel/endpoint mismatch → reject + 不写 outbound) + soft idempotent (已 terminal → outbound 写入 + mark no-op + warning，C-Term-5 单调)
 - 配对完全 mechanical（不靠 endpoint heuristic / 不靠 agent 语义判断 / 不靠跨进程内存读取）。详 [`c4-reliability-contract.md`](activity-monitor/modules/c4-reliability-contract.md)
 
 ### 5.2 Unhealthy 路由（degraded path）
