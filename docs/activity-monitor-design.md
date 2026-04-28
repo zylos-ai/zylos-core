@@ -394,10 +394,10 @@ activity-monitor/
 **状态**：已确认
 **决策**：unhealthy 路径已即时返回状态文案，不需要事后异步"我恢复了"广播。pending-channels.jsonl 完全废弃。
 
-#### D-10. 首次启动 health=OK，仅故障恢复才进 Unavailable
+#### D-10. Health 状态持久化 + 未知默认 OK
 
 **状态**：已确认
-**决策**：HealthEngine 区分"首次启动"和"故障恢复"：首次 init 时 health 直接为 OK，只有故障恢复时 onProcessRestarted() 才进 Unavailable + Launch Grace，避免首次启动 Grace 期间消息被拒。
+**决策**：Health 状态不区分"首次启动"和"故障恢复"。health 未知时默认为 OK；每次启动 runtime agent 时直接沿用当前 health 状态（如重启前为 RateLimited，重启后仍为 RateLimited）。MessageRouter 机制保证 health≠OK 时消息仍能被正确处理，无需特殊的启动宽限期。
 
 ### C4 DB 语义与消息可靠性
 
