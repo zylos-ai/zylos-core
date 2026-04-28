@@ -135,23 +135,39 @@ sequenceDiagram
 
 ## 3. Components：组件级设计
 
-### 3.1 内部组件
+按容器分组。本方案聚焦 AM 容器和与之直接交互的 C4 容器组件。
 
-| Component | 所属容器 | 职责 | 输入 | 输出 |
-|---|---|---|---|---|
-| Monitor Orchestrator | AM Process | 每秒 tick 编排；启动 IPC | clock, config | component calls |
-| SignalStore | AM Process | tick 开头读信号，产出 immutable snapshot | signal files | readonly snapshot |
-| StatusWriter | AM Process | tick 末尾写对外状态 | snapshot, HealthEngine | `agent-status.json` |
-| Guardian | AM Process | runtime 进程存活守护 | snapshot, guardian state | `adapter.launch()`, HealthEngine events |
-| ProcSampler | AM Process | OS 级冻结检测 | pid/context switch | `proc-state.json` |
-| ToolPipeline | AM Process | 工具事件流合成 | `tool-events.jsonl` | `api-activity.json` |
-| ToolWatchdog | AM Process | 工具超时干预 | snapshot, adapter rules | adapter control action |
-| HealthEngine | AM Process | HealthState FSM + catalog dispatch | snapshot, Adapter catalog | health state, rate-limit state |
-| TaskScheduler | AM Process | 统一定时任务 | time, config | task execution, maintenance state |
-| MessageRouter | AM Process | c4-receive 路由 IPC + probe 聚合 | IPC request, HealthEngine | route decision |
-| Runtime Adapter | AM Process | runtime-specific 操作 | runtime config | launch/stop/probe/catalog/tool rules |
+### 3.1 AM Process 容器
 
-### 3.2 主循环顺序
+| Component | 职责 | 输入 | 输出 |
+|---|---|---|---|
+| Monitor Orchestrator | 每秒 tick 编排；启动 IPC | clock, config | component calls |
+| SignalStore | tick 开头读信号，产出 immutable snapshot | signal files | readonly snapshot |
+| StatusWriter | tick 末尾写对外状态 | snapshot, HealthEngine | `agent-status.json` |
+| Guardian | runtime 进程存活守护 | snapshot, guardian state | `adapter.launch()`, HealthEngine events |
+| ProcSampler | OS 级冻结检测 | pid/context switch | `proc-state.json` |
+| ToolPipeline | 工具事件流合成 | `tool-events.jsonl` | `api-activity.json` |
+| ToolWatchdog | 工具超时干预 | snapshot, adapter rules | adapter control action |
+| HealthEngine | HealthState FSM + catalog dispatch | snapshot, Adapter catalog | health state, rate-limit state |
+| TaskScheduler | 统一定时任务 | time, config | task execution, maintenance state |
+| Runtime Adapter | runtime-specific 操作（DI 层） | runtime config | launch/stop/probe/catalog/tool rules |
+
+### 3.2 MessageRouter 容器
+
+| Component | 职责 | 输入 | 输出 |
+|---|---|---|---|
+| MessageRouter | c4-receive 路由 IPC + probe 聚合 | IPC request, HealthEngine | route decision |
+
+MessageRouter 不在 AM Process 主循环中运行；它由 `c4-receive` 通过 IPC 事件触发，是一次性调用接口。详见 §3.7 MessageRouter contract。
+
+### 3.3 C4 通信层容器（与 AM 交互部分）
+
+| Component | 职责 | 与 AM 的交互 |
+|---|---|---|
+| c4-receive | 外部消息入口，触发路由决策 | 通过 IPC 调用 MessageRouter，根据返回决策决定写 pending 还是调 c4-send 返回状态文案 |
+| c4-send | 对外发送消息 | unhealthy 路径下被 c4-receive 调用，向用户投递状态文案 |
+
+### 3.4 主循环顺序
 
 ```text
 tick every 1s:
@@ -169,9 +185,8 @@ tick every 1s:
 
 - ToolPipeline 必须在 HealthEngine 前，因为 API activity 是健康判断输入。
 - ToolWatchdog 必须在 HealthEngine 前，因为干预结果可能改变健康判断。
-- MessageRouter 不在 tick 中运行；它由 `c4-receive` 通过 IPC 事件触发。
 
-### 3.3 状态模型
+### 3.5 状态模型
 
 #### ActivityState
 
@@ -194,7 +209,7 @@ ActivityState 是无状态投射，不是 FSM。相同 signal snapshot 必须得
 
 HealthState 是 FSM，由 HealthEngine 独占维护。Guardian 不读取 HealthEngine 内存字段，只通过 SignalStore 读取必要的 rate-limit / maintenance 文件。
 
-### 3.4 Catalog-driven API Error Dispatch
+### 3.6 Catalog-driven API Error Dispatch
 
 Adapter 提供 catalog entry：
 
@@ -217,7 +232,7 @@ type ApiErrorCatalogEntry = {
 
 HealthEngine 负责匹配与状态转换；MessageRouter 负责把 `reason` 映射为 `userMessage` 后返回给 `c4-receive`。`c4-receive` 不应该自己维护第二份 catalog lookup，避免文案来源分裂。
 
-### 3.5 MessageRouter contract
+### 3.7 MessageRouter contract
 
 请求：
 
