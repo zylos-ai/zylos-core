@@ -1,17 +1,8 @@
-> ⚠️ **本文件 SUPERSEDED**（2026-04-28，R6 production rollback by ccb981c2）。
->
-> v3 顶层方案 + 9 份模块实施档（含本文件）整套 SUPERSEDED——production trade-off 决策回退到 v2.1 baseline。详见 [`../../activity-monitor-refactor-proposal-v3.md`](../../activity-monitor-refactor-proposal-v3.md) 头部 R6 rollback reasoning。
->
-> **当前 implementation baseline**: [`../../activity-monitor-refactor-proposal-v2.1.md`](../../activity-monitor-refactor-proposal-v2.1.md)
->
-> 本文件保留作 R3+R4+R5 设计演进记录，**不要据此实施**。
-
----
-
 # TaskScheduler — 模块实施档
 
-> 关联顶层方案：[v3 §四.4 / §六取舍 I（不引入 cron）](../../activity-monitor-refactor-proposal-v3.md)
+> 关联顶层方案：[v3 §二目标 8 / §四.1 / §四.3 / §六.F](../../activity-monitor-refactor-proposal-v3.md)
 > 类型：AM 业务模块（tick 第 ⑦ 步）
+> Phase：1（基础设施）
 
 ---
 

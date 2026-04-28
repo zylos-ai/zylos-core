@@ -1,17 +1,8 @@
-> ⚠️ **本文件 SUPERSEDED**（2026-04-28，R6 production rollback by ccb981c2）。
->
-> v3 顶层方案 + 9 份模块实施档（含本文件）整套 SUPERSEDED——production trade-off 决策回退到 v2.1 baseline。详见 [`../../activity-monitor-refactor-proposal-v3.md`](../../activity-monitor-refactor-proposal-v3.md) 头部 R6 rollback reasoning。
->
-> **当前 implementation baseline**: [`../../activity-monitor-refactor-proposal-v2.1.md`](../../activity-monitor-refactor-proposal-v2.1.md)
->
-> 本文件保留作 R3+R4+R5 设计演进记录，**不要据此实施**。
-
----
-
 # SignalStore + StatusWriter — 模块实施档
 
-> 关联顶层方案：[v3 §三原则 4 / §四.4 / §六取舍 D-E](../../activity-monitor-refactor-proposal-v3.md)
+> 关联顶层方案：[v3 §三.1 / §三.6 / §四.1 / §四.2 / §四.3 / §四.4 / §六.B / §六.E](../../activity-monitor-refactor-proposal-v3.md)
 > 类型：AM 业务模块（tick 第 ① / ⑧ 步）
+> Phase：1（基础设施）
 > 合档原因：耦合紧——SignalStore 是输入侧（读所有 signal 到只读快照），StatusWriter 是输出侧（写唯一对外契约文件 `agent-status.json`）
 
 ---
@@ -230,4 +221,4 @@ tick:
 
 ---
 
-*v3 R3 review (2026-04-28) 整理：合 v2.1 §5.1 SignalStore + §5.5 StatusWriter，因两者一个是 tick 入口一个是 tick 出口，耦合契约——单一对外发布者。*
+*合档源由：v2.1 §5.1 SignalStore + §5.5 StatusWriter——一个是 tick 入口一个是 tick 出口，耦合契约——单一对外发布者。*
