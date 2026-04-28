@@ -303,6 +303,13 @@ type RouteDecision =
 - router probe budget 不超过 25s，给 `c4-send` 留出 5s 同步发送预算。
 - `noReply=true` 的消息不得走 external c4-send 状态文案路径。
 
+`noReply` 语义：
+
+- `noReply=false`（默认）：用户消息。probe 失败时 c4-receive 调 c4-send 向用户投递状态文案（"暂时不可用"等）。
+- `noReply=true`：系统/内部消息（scheduler 定时任务、maintenance 命令、内部控制消息等），通过 c4-receive 的 `--no-reply` flag 标记，channel 默认为 `system`。probe 失败时静默返回 `recovered=false`，不调 c4-send，不产生任何用户可见输出。
+
+设计意图：系统消息没有"用户"需要通知，unhealthy 时不应产生无意义的状态文案噪音。
+
 ---
 
 ## 4. Code：代码级落地方案
