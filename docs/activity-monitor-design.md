@@ -159,6 +159,44 @@ sequenceDiagram
 
 MessageRouter 不在 AM Process 主循环中运行；它由 `c4-receive` 通过 IPC 事件触发，是一次性调用接口。详见 §3.7 MessageRouter contract。
 
+路由逻辑：
+
+```text
+c4-receive IPC 请求到达
+        │
+        ▼
+  ┌─────────────┐
+  │ 读 HealthState │
+  └──────┬──────┘
+         │
+    health=OK?
+    ┌────┴────┐
+    │ YES     │ NO
+    ▼         ▼
+ 返回        ┌──────────────┐
+ recovered   │ 触发/加入      │
+ =true       │ recovery probe │
+ (走主链)     │ 聚合 (≤25s)    │
+             └──────┬───────┘
+                    │
+              probe 成功?
+              ┌─────┴─────┐
+              │ YES       │ NO
+              ▼           ▼
+           返回         noReply?
+           recovered    ┌───┴───┐
+           =true        │ YES   │ NO
+           (走主链)      ▼       ▼
+                      返回     返回
+                      recovered recovered
+                      =false   =false
+                      (静默)    + reason
+                               + userMessage
+                               (c4-receive
+                                调 c4-send
+                                投递文案)
+```
+
 ### 3.3 C4 通信层容器（与 AM 交互部分）
 
 | Component | 职责 | 输入 | 输出 |
