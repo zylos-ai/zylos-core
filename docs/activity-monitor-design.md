@@ -185,6 +185,25 @@ MessageRouter 不在 AM Process 主循环中运行；它由 `c4-receive` 通过 
 - `noReply=false`（默认）：用户消息。probe 失败时 c4-receive 调 c4-send 向用户投递状态文案（"暂时不可用"等）。
 - `noReply=true`：系统/内部消息（scheduler 定时任务、maintenance 命令、内部控制消息等），通过 c4-receive 的 `--no-reply` flag 标记，channel 默认为 `system`。probe 失败时静默返回 recovered=false，不调 c4-send，不产生任何用户可见输出。设计意图：系统消息没有"用户"需要通知，unhealthy 时不应产生无意义的状态文案噪音。
 
+Recovery probe 方法（按当前 HealthState 分支）：
+
+1. **RateLimited** → 执行 check tmux pane：
+   - 识别到 rate limit 字符模式 → 仍为 RateLimited
+   - 识别到 auth failed 字符模式 → 流转到 AuthFailed
+   - 均未识别到 → 流转到 OK
+2. **AuthFailed** → 执行 check tmux pane：
+   - 识别到 rate limit 字符模式 → 流转到 RateLimited
+   - 识别到 auth failed 字符模式 → 仍为 AuthFailed
+   - 均未识别到 → 流转到 OK
+3. **Unavailable** → 执行 heartbeat probe（向 runtime 发送 heartbeat 并等待 ack）：
+   - 预期时间内收到 ack → 流转到 OK
+   - 未收到 ack → 执行 check tmux pane：
+     - 识别到 rate limit 字符模式 → 流转到 RateLimited
+     - 识别到 auth failed 字符模式 → 流转到 AuthFailed
+     - 均未识别到 → 保持 Unavailable
+
+Heartbeat 是 recovery probe 在 Unavailable 状态下的内部探测手段，不作为独立定时检测任务（避免浪费 token）。RateLimited 和 AuthFailed 状态下只需 check tmux pane 即可判断，无需发送 heartbeat。
+
 userMessage 来源：HealthEngine 负责匹配 API error 与状态转换，MessageRouter 负责把 `reason` 映射为 `userMessage` 后返回给 c4-receive。c4-receive 不应自己维护第二份 catalog lookup，避免文案来源分裂。
 
 路由逻辑：
@@ -267,12 +286,12 @@ ActivityState 是无状态投射，不是 FSM。相同 signal snapshot 必须得
 
 | 状态 | 含义 | 转入依据 | 转出依据 |
 |---|---|---|---|
-| OK | runtime 功能可用 | 任意状态 → OK：recovery probe 成功 | → Unavailable：API error 检测触发 recovery；→ RateLimited：recovery probe 期间检测到限流文本；→ AuthFailed：Guardian 重启前 auth check 失败 |
-| Unavailable | 兜底状态：排除 RateLimited 和 AuthFailed 后，其余所有不可用场景均归入此状态（D-2）。内部分 recovering / down 两阶段，对外统一暴露为 Unavailable（D-3） | OK → Unavailable：API error 触发 recovery；RateLimited → Unavailable：冷却到期；AuthFailed → Unavailable：auth 通过但 runtime 仍需恢复 | → OK：recovery probe 成功；→ RateLimited：恢复期间检测到限流文本；→ AuthFailed：Guardian 重启前 auth check 失败 |
-| RateLimited | 外部 API 限流 | OK / Unavailable → RateLimited：recovery probe 失败且检测到限流文本（行为 + 文本双信号）；AuthFailed → RateLimited：auth 通过后发现限流 | → Unavailable：冷却到期，进入 recovering 重新探测；→ OK：冷却后 probe 直接成功；→ AuthFailed：Guardian 重启前 auth check 失败 |
-| AuthFailed | 凭证或认证失败 | 任意状态 → AuthFailed：Guardian 尝试重启 runtime 时 auth check 返回失败 | → OK：recovery probe 成功（auth 恢复后）；→ Unavailable：auth 通过但 runtime 未恢复；→ RateLimited：auth 通过后发现限流 |
+| OK | runtime 功能可用 | 任意状态 → OK：recovery probe 未识别到异常字符模式（RateLimited / AuthFailed 通过 check tmux pane），或 heartbeat ack 成功（Unavailable） | → Unavailable：API error 检测触发 recovery；→ RateLimited：check tmux pane 识别到限流字符模式；→ AuthFailed：Guardian 重启前 auth check 失败 |
+| Unavailable | 兜底状态：排除 RateLimited 和 AuthFailed 后，其余所有不可用场景均归入此状态（D-2）。内部分 recovering / down 两阶段，对外统一暴露为 Unavailable（D-3） | OK → Unavailable：API error 触发 recovery；RateLimited → Unavailable：冷却到期；AuthFailed → Unavailable：check tmux pane 未识别到任何异常但 runtime 仍需恢复 | → OK：heartbeat probe 在预期时间内收到 ack；→ RateLimited：heartbeat 未收到 ack 后 check tmux pane 识别到限流字符模式；→ AuthFailed：heartbeat 未收到 ack 后 check tmux pane 识别到认证失败字符模式 |
+| RateLimited | 外部 API 限流 | OK / Unavailable → RateLimited：check tmux pane 识别到 rate limit 字符模式；AuthFailed → RateLimited：check tmux pane 识别到限流字符模式 | → OK：check tmux pane 未识别到任何异常字符模式；→ AuthFailed：check tmux pane 识别到认证失败字符模式；→ Unavailable：冷却到期，进入 recovering 重新探测 |
+| AuthFailed | 凭证或认证失败 | 任意状态 → AuthFailed：Guardian 重启前 auth check 失败，或 check tmux pane 识别到认证失败字符模式 | → OK：check tmux pane 未识别到任何异常字符模式；→ RateLimited：check tmux pane 识别到限流字符模式；→ Unavailable：auth 通过但 runtime 未恢复 |
 
-状态机为全连通（OK ↔ Unavailable ↔ RateLimited ↔ AuthFailed），由 HealthEngine 独占维护。Heartbeat 是 recovery probe 的内部探测手段，不作为独立定时检测任务（避免浪费 token）。Guardian 不读取 HealthEngine 内存字段，只通过 SignalStore 读取必要的 rate-limit / maintenance 文件。
+状态机为全连通（OK ↔ Unavailable ↔ RateLimited ↔ AuthFailed），由 HealthEngine 独占维护。Recovery probe 方法因当前状态不同而异（详见 §3.2 MessageRouter 容器）。Guardian 不读取 HealthEngine 内存字段，只通过 SignalStore 读取必要的 rate-limit / maintenance 文件。
 
 ### 3.6 Catalog-driven API Error Dispatch
 
