@@ -203,7 +203,7 @@ Recovery probe 方法（按当前 HealthState 分支）：
      - 识别到 auth failed 字符模式 → 流转到 AuthFailed
      - 均未识别到 → 保持 Unavailable
 
-Heartbeat 是 recovery probe 的内部探测手段，不作为独立定时检测任务（避免浪费 token）。RateLimited 和 Unavailable 使用相同的 probe 方法（heartbeat → check tmux pane fallback），AuthFailed 使用 check auth。
+Heartbeat 是 recovery probe 的内部探测手段，不作为独立定时检测任务。RateLimited 和 Unavailable 使用相同的 probe 方法（heartbeat → check tmux pane fallback），AuthFailed 使用 check auth。
 
 userMessage 来源：HealthEngine 负责匹配 API error 与状态转换，MessageRouter 负责把 `reason` 映射为 `userMessage` 后返回给 c4-receive。c4-receive 不应自己维护第二份 catalog lookup，避免文案来源分裂。
 
@@ -292,7 +292,7 @@ ActivityState 是无状态投射，不是 FSM。相同 signal snapshot 必须得
 
 #### OK → 非 OK 检测时机
 
-HealthState 从 OK 转出不再由主循环定时检测（避免浪费 token），改为 **user message 事件触发**：
+HealthState 从 OK 转出不再由主循环定时检测，改为 **user message 事件触发**（利用事件驱动机制更快发现异常）：
 
 1. c4-dispatcher 成功将 user message 投递给 runtime agent
 2. c4-dispatcher 异步调用 HealthEngine 接口
@@ -386,7 +386,7 @@ skills/comm-bridge/scripts/
 #### D-4. 主循环 7 步 tick 编排
 
 **状态**：已确认
-**决策**：AM 主循环每 tick 按固定顺序执行 7 步：SignalStore.refresh → Guardian → ProcSampler → ToolPipeline → ToolWatchdog → TaskScheduler → StatusWriter。HealthEngine 不参与主循环 tick，改为由 user message 事件异步触发（避免定时检测浪费 token）。
+**决策**：AM 主循环每 tick 按固定顺序执行 7 步：SignalStore.refresh → Guardian → ProcSampler → ToolPipeline → ToolWatchdog → TaskScheduler → StatusWriter。HealthEngine 不参与主循环 tick，改为由 user message 事件异步触发（事件驱动机制更快发现异常）。
 
 #### D-5. Runtime 差异通过 Adapter 依赖注入
 
