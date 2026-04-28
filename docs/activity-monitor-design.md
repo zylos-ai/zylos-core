@@ -389,8 +389,6 @@ activity-monitor/
 **状态**：已确认
 **决策**：health 非 OK 时，c4-receive 通过 MessageRouter IPC 探测后若仍异常：(1) insertConversation('in', ..., 'delivered') 记录用户输入，dispatcher 自然跳过；(2) spawn c4-send.js 投递 catalog.userMessage 给用户。用户即时收到状态回复。
 
-> ⚠️ 后续讨论中有替代方案提出：复用 emitError 路径 + catalog.userMessage 文案替换，零 DB 写入。该替代方案尚未全员确认，如通过则本条需修订。
-
 #### D-9. 废弃 pending-channels.jsonl 异步恢复广播
 
 **状态**：已确认
