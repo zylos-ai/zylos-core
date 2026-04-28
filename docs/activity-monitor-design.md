@@ -48,7 +48,7 @@ flowchart LR
 
 - AM 可以启动、停止、观察 runtime，但不直接绕过 C4 主链向 tmux 投递用户消息。
 - `c4-dispatcher` 仍是用户消息进入 runtime 的唯一主链写入者。
-- `c4-receive` 是 unhealthy 用户反馈的同步决策点，本身无状态——每次调用独立判断，不跨调用积累上下文。
+- `c4-receive` 本身不判断健康状态，它通过 IPC 调用 AM 的 MessageRouter 获取路由结果（健康/不健康），然后据此决定写 pending 还是返回状态文案。c4-receive 无状态，每次调用独立，不跨调用积累上下文。
 - 对外状态只通过 `agent-status.json` 暴露，内部状态不泄漏给 channel daemon。
 
 ---
@@ -61,7 +61,7 @@ flowchart LR
 |---|---|---|---|
 | Activity Monitor Process | PM2 long-running process | 主循环、状态机、runtime 恢复、MessageRouter 宿主 | signal files, local IPC |
 | Runtime Adapter | AM 内部 DI 层 | 封装 Claude / Codex 差异 | JS interface |
-| C4 Receive CLI | per-message Node process | 外部消息入口；触发 MessageRouter 路由决策；写 inbound DB | CLI, C4 DB |
+| C4 Receive CLI | per-message Node process | 外部消息入口；调用 AM MessageRouter 获取路由结果并据此行动；写 inbound DB | CLI, C4 DB |
 | C4 Send CLI | per-message Node process | agent/系统对外发送消息 | CLI, C4 DB, channel send scripts |
 | C4 DB | SQLite | C4 消息可靠性边界 | `conversations`, `control_queue` |
 | Channel Daemons | PM2/process | 平台消息收发 | channel APIs |
