@@ -94,7 +94,7 @@ sequenceDiagram
 
   U->>C: message
   C->>R: spawn --channel --endpoint --content
-  R->>MR: route(channel, endpoint, priority)
+  R->>MR: route(channel, endpoint, noReply)
   MR-->>R: { recovered: true }
   R->>DB: insert inbound status='pending'
   R-->>C: exit 0
@@ -119,7 +119,7 @@ sequenceDiagram
 
   U->>C: message
   C->>R: spawn --channel --endpoint --content
-  R->>MR: route(channel, endpoint, priority)
+  R->>MR: route(channel, endpoint, noReply)
   MR-->>R: { recovered: false, reason, userMessage }
   R->>DB: insert inbound status='delivered'
   R->>S: send userMessage to same channel endpoint
@@ -155,9 +155,25 @@ sequenceDiagram
 
 | Component | 职责 | 输入 | 输出 |
 |---|---|---|---|
-| MessageRouter | 接收 c4-receive 的 IPC 路由请求，查询 HealthEngine 当前健康状态；health≠OK 时触发或加入 recovery probe 聚合，等待 probe 结果后返回最终路由决策和用户文案 | c4-receive 发来的 IPC 请求（channel、endpoint、priority、noReply）；HealthEngine 当前状态 | RouteDecision（recovered=true 走主链，recovered=false 附带 reason 和 userMessage） |
+| MessageRouter | 接收 c4-receive 的 IPC 路由请求，查询 HealthEngine 当前健康状态；health≠OK 时触发或加入 recovery probe 聚合，等待 probe 结果后返回最终路由决策和用户文案 | c4-receive 发来的 IPC 请求（channel、endpoint、noReply）；HealthEngine 当前状态 | 路由决策：recovered=true 走主链，recovered=false 附带 reason 和 userMessage |
 
-MessageRouter 不在 AM Process 主循环中运行；它由 `c4-receive` 通过 IPC 事件触发，是一次性调用接口。详见 §3.7 MessageRouter contract。
+MessageRouter 不在 AM Process 主循环中运行；它由 `c4-receive` 通过 IPC 事件触发，是一次性调用接口。
+
+路由规则：
+
+- `health=OK` 时立即返回 recovered=true，消息走主链。
+- `health!=OK` 时触发或加入 recovery probe 聚合（多个并发请求共享同一次 probe）。
+- probe 成功返回 recovered=true，消息走主链。
+- probe 失败返回 recovered=false 和最终用户文案。
+- router probe budget 不超过 25s，给 `c4-send` 留出 5s 同步发送预算。
+- `noReply=true` 的消息不得走 c4-send 状态文案路径。
+
+`noReply` 语义：
+
+- `noReply=false`（默认）：用户消息。probe 失败时 c4-receive 调 c4-send 向用户投递状态文案（"暂时不可用"等）。
+- `noReply=true`：系统/内部消息（scheduler 定时任务、maintenance 命令、内部控制消息等），通过 c4-receive 的 `--no-reply` flag 标记，channel 默认为 `system`。probe 失败时静默返回 recovered=false，不调 c4-send，不产生任何用户可见输出。设计意图：系统消息没有"用户"需要通知，unhealthy 时不应产生无意义的状态文案噪音。
+
+userMessage 来源：HealthEngine 负责匹配 API error 与状态转换，MessageRouter 负责把 `reason` 映射为 `userMessage` 后返回给 c4-receive。c4-receive 不应自己维护第二份 catalog lookup，避免文案来源分裂。
 
 路由逻辑：
 
@@ -268,47 +284,6 @@ type ApiErrorCatalogEntry = {
 ```
 
 HealthEngine 负责匹配与状态转换；MessageRouter 负责把 `reason` 映射为 `userMessage` 后返回给 `c4-receive`。`c4-receive` 不应该自己维护第二份 catalog lookup，避免文案来源分裂。
-
-### 3.7 MessageRouter contract
-
-请求：
-
-```ts
-type RouteRequest = {
-  channel: string
-  endpoint?: string
-  priority: 1 | 2 | 3
-  noReply: boolean
-}
-```
-
-响应：
-
-```ts
-type RouteDecision =
-  | { recovered: true }
-  | {
-      recovered: false
-      reason: 'unavailable' | 'rate_limited' | 'auth_failed'
-      userMessage: string
-    }
-```
-
-规则：
-
-- `health=OK` 时立即返回 `recovered=true`。
-- `health!=OK` 时触发/加入 recovery probe 聚合。
-- probe 成功返回 `recovered=true`，消息走主链。
-- probe 失败返回 `recovered=false` 和最终用户文案。
-- router probe budget 不超过 25s，给 `c4-send` 留出 5s 同步发送预算。
-- `noReply=true` 的消息不得走 external c4-send 状态文案路径。
-
-`noReply` 语义：
-
-- `noReply=false`（默认）：用户消息。probe 失败时 c4-receive 调 c4-send 向用户投递状态文案（"暂时不可用"等）。
-- `noReply=true`：系统/内部消息（scheduler 定时任务、maintenance 命令、内部控制消息等），通过 c4-receive 的 `--no-reply` flag 标记，channel 默认为 `system`。probe 失败时静默返回 `recovered=false`，不调 c4-send，不产生任何用户可见输出。
-
-设计意图：系统消息没有"用户"需要通知，unhealthy 时不应产生无意义的状态文案噪音。
 
 ---
 
