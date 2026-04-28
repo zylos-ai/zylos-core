@@ -131,15 +131,6 @@ sequenceDiagram
   R-->>C: exit 0
 ```
 
-### 2.3 关键容器契约
-
-| 契约 | 内容 |
-|---|---|
-| C-1 C4 DB durability | `c4-receive` 写入 `status='pending'` 后，该消息才算被主链接受 |
-| C-2 no double delivery | unhealthy inbound 必须写 `status='delivered'`，dispatcher 不得再投递给 runtime |
-| C-3 single real answer | 每次 `c4-receive` 最多产生一种用户可见结果：后续 agent 真回复，或同步状态文案，或 terminal error |
-| C-4 runtime independence | Claude / Codex 差异只进入 Adapter，不进入 HealthEngine / Guardian 分支逻辑 |
-
 ---
 
 ## 3. Components：组件级设计
@@ -491,5 +482,27 @@ skills/comm-bridge/scripts/
 
 **状态**：已确认
 **决策**：不引入 terminal_status 列、reply_to_inbound_id 列、claimed_at 列、dispatcher claim + reply command token-passing 机制。用既有 status='delivered' 字段值满足 unhealthy 路径需求，保持 C4 DB schema 不变。
+
+### 容器契约
+
+#### D-35. C4 DB durability
+
+**状态**：已确认
+**决策**：`c4-receive` 写入 `status='pending'` 后，该消息才算被主链接受。
+
+#### D-36. no double delivery
+
+**状态**：已确认
+**决策**：unhealthy inbound 必须写 `status='delivered'`，dispatcher 不得再投递给 runtime。
+
+#### D-37. single real answer
+
+**状态**：已确认
+**决策**：每次 `c4-receive` 最多产生一种用户可见结果：后续 agent 真回复，或同步状态文案，或 terminal error。
+
+#### D-38. runtime independence
+
+**状态**：已确认
+**决策**：Claude / Codex 差异只进入 Adapter，不进入 HealthEngine / Guardian 分支逻辑。
 
 ---
