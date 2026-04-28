@@ -40,7 +40,6 @@ flowchart LR
   AM --> Status["agent-status.json"]
   Receive --> Router["MessageRouter IPC"]
   Router --> AM
-  AM --> Signals["Signal Files"]
   Operator --> AM
 ```
 
@@ -59,14 +58,13 @@ flowchart LR
 
 | Container | 类型 | 职责 | 持久化/接口 |
 |---|---|---|---|
-| Activity Monitor Process | PM2 long-running process | 主循环、状态机、runtime 恢复、MessageRouter 宿主 | signal files, local IPC |
+| Activity Monitor Process | PM2 long-running process | 主循环、状态机、runtime 恢复、MessageRouter 宿主。内部通过 signal files（JSON/JSONL）存取状态 | local IPC |
 | Runtime Adapter | AM 内部 DI 层 | 封装 Claude / Codex 差异 | JS interface |
 | C4 Receive CLI | per-message Node process | 外部消息入口；调用 AM MessageRouter 获取路由结果并据此行动；写 inbound DB | CLI, C4 DB |
 | C4 Send CLI | per-message Node process | agent/系统对外发送消息 | CLI, C4 DB, channel send scripts |
 | C4 DB | SQLite | C4 消息可靠性边界 | `conversations`, `control_queue` |
 | Channel Daemons | PM2/process | 平台消息收发 | channel APIs |
 | Runtime Agent Process | tmux interactive process | 真实 agent 工作循环 | tmux pane |
-| Signal Files | local files | AM 与其他组件的低耦合状态通道 | JSON/JSONL files |
 
 ### 2.2 容器交互
 
