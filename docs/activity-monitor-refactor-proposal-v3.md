@@ -374,6 +374,7 @@ R6 决断保留 v2.1 已收敛的所有有效产物（catalog-driven api error /
 | 6 | [`task-scheduler.md`](activity-monitor/modules/task-scheduler.md) | TaskScheduler | 注册式调度；7 任务清单；usage-monitor / usage-alerter 双 gate 拆分（4 语义矩阵 + 升级兼容路径） |
 | 7 | [`message-router.md`](activity-monitor/modules/message-router.md) | MessageRouter | 4 约束 C1~C4；OK / Unhealthy / Probe-recovered / IPC-down 路径；**unhealthy inbound `status='delivered'` + outbound 走 c4-send.js 既有接口**（§六.H 精确落点） |
 | 8 | [`session-restart-continuation.md`](activity-monitor/modules/session-restart-continuation.md) | (跨模块契约) | restart 后 startup context 注入；agent 自治续接边界；**best-effort contract 三句**（§六.I 落点）；不引入的机制清单 |
+| 9 | [`c4-receive-adaptation.md`](activity-monitor/modules/c4-receive-adaptation.md) | (跨组件契约：comm-bridge skill) | c4-receive 在 Phase 3 的改造范围；vs main 路径精确对比；MessageRouter IPC + c4-send spawn 协议；不变量 5 路径 audit table |
 
 **移除的模块档**（R3+R4+R5 引入，R6 production rollback 决断后退出）：
 
@@ -390,7 +391,7 @@ R6 决断保留 v2.1 已收敛的所有有效产物（catalog-driven api error /
 | **Phase 0** | Watchdog 边界适配 | 内部语义不动；ToolPipeline 物理合并；Adapter DI 接管工具规则 |
 | **Phase 1** | 基础设施 | 新建 SignalStore / StatusWriter / TaskScheduler + 7 任务文件；feature flag 挂接，独立可 ship |
 | **Phase 2** | 状态模型 + 组件拆分 | 新建 Guardian + HealthEngine + 新主循环；catalog-driven dispatch + unknown 5min 升级；保留 legacy 入口作回滚路径 |
-| **Phase 3** | 消息路由 + c4-receive 适配 | MessageRouter IPC；c4-receive 同步等 + unhealthy 路径写 outbound + **inbound queue status audit**（§六.H）；c4-dispatcher 适配新 health 值域 |
+| **Phase 3** | 消息路由 + c4-receive 适配 | MessageRouter IPC；c4-receive 同步等 + unhealthy 路径 `insertConv('in', ..., 'delivered')` 显式覆盖 + spawn c4-send 投递 catalog.userMessage（§六.H 落地，详 [`c4-receive-adaptation.md`](activity-monitor/modules/c4-receive-adaptation.md)）；c4-dispatcher 适配新 health 值域 |
 | **Phase 4** | Schema + 下游文案 | 对外状态文件 schema_version；c4-receive 按 unavailable_since 差分文案；web-console |
 | **Phase 5** | 收尾 | 观察 1 周稳定后删除 legacy 入口；全量回归 |
 

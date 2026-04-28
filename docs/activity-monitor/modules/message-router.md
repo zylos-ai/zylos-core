@@ -162,21 +162,15 @@ c4-receive 连接失败 → 走 C4 路径（terminal 文案 + 不入队）。
 ### Phase 3：消息路由 + c4-receive 适配
 
 1. **monitor.js 进程内实例化 MessageRouter**，暴露本地 IPC（Unix 域 socket）
-2. **c4-receive 改造**：
-   - 删除 main 既有的 `recordPendingChannel` 调用 + `pending-channels.jsonl` 写入（v3 §六.G #4）
-   - 删除 main 既有的 `emitError(HEALTH_X, "...")` 错误响应路径
-   - 加：调 MessageRouter IPC 拿路由决策
-   - 加：unhealthy 路径 `insertConversation('in', ..., 'delivered')` 显式 status 覆盖
-   - 加：unhealthy 路径 spawn `c4-send.js` 投递 catalog.userMessage（HealthEngine 提供 catalog 文案查询接口或读 SignalStore 中的 unavailable_reason）
-   - 30s 硬超时 + IPC 降级处理
+2. **c4-receive 改造**：详细规格 + vs main 路径精确对比 + 5 路径 audit table 见 [`c4-receive-adaptation.md`](c4-receive-adaptation.md)（独立模块档，因 c4-receive 是 comm-bridge skill 组件，本 PR Phase 3 改造大头）
 3. **c4-dispatcher 适配新 health 值域**（v2.1 §八）：4 状态枚举（ok / unavailable / rate_limited / auth_failed）；`health !== 'ok'` 仍 defer，不区分子状态
 4. **legacy 清理**：AM 旧的 "drain pending-channels" 职责删除（v3 §六.G #4 砍 main 旧 broadcast 路径）
 
 ### 兼容性
 
-- channel daemon 调 c4-receive 接口签名不变
+- channel daemon 调 c4-receive 接口签名不变（详 [`c4-receive-adaptation.md`](c4-receive-adaptation.md) §6 兼容性）
 - `agent-status.json` schema 加 schema_version + unavailable_reason（详 [`signal-store-and-status-writer.md`](signal-store-and-status-writer.md)）
-- main 旧 emitError 错误路径在 Phase 3 切换 commit 中替换为新 c4-send 投递路径（一次切换，无灰度——新 channel 看到的是"bot 状态消息"，main 旧的"error toast"行为退场）
+- main 旧 emitError 错误路径在 Phase 3 切换 commit 中替换为新 c4-send 投递路径（一次切换，无灰度——详 [`c4-receive-adaptation.md`](c4-receive-adaptation.md) §6）
 
 ---
 
@@ -215,7 +209,7 @@ c4-receive 连接失败 → 走 C4 路径（terminal 文案 + 不入队）。
 | 下游 | 行为 |
 |---|---|
 | [`health-engine.md`](health-engine.md) | MessageRouter 触发 probe 时调 `triggerRecovery()` 单向事件接口（不读 HealthEngine getter）|
-| c4-receive（外部脚本，跨进程） | IPC 客户端；按路由决策选 OK / Unhealthy 两条 DB 写入路径 |
+| c4-receive（外部脚本，跨进程） | IPC 客户端；按路由决策选 OK / Unhealthy 两条 DB 写入路径（详 [`c4-receive-adaptation.md`](c4-receive-adaptation.md)）|
 | c4-send.js（外部脚本，跨进程） | unhealthy 路径下被 c4-receive spawn；MessageRouter 自身**不**直接调 c4-send |
 | c4-dispatcher（外部脚本，跨进程）| **不直接交互**——通过 DB 行的 `status` 字段间接协作（dispatcher 只 SELECT `status='pending'`，跳过 'delivered'）|
 
