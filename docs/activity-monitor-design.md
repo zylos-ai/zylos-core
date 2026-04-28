@@ -494,10 +494,10 @@ activity-monitor/
 **状态**：已确认
 **决策**：当前架构下图片作为路径文本传递，agent 通过 Read 工具加载（自带 size/format 边界），不触发 API 4xx。未来若新增 multimodal 直接注入路径，入口校验应放在该注入点。
 
-#### D-33. startupGrace 与 launchGracePeriod 不合并
+#### D-33. startupGrace 保留，launchGracePeriod 移除
 
 **状态**：已确认
-**决策**：startupGrace (30s) 是 AM 自身启动等待窗口，launchGracePeriod (180s) 是 runtime 拉起后探测宽限期，作用域不同，不合并。
+**决策**：保留 startupGrace (30s)，Guardian 拉起 runtime 后的启动保护窗口，防止 runtime 初始化期间被误判为 offline。移除 launchGracePeriod，tool-call 响应速度与 runtime 是否刚拉起无关，ToolWatchdog 不需要启动宽限期。
 
 #### D-34. C4 DB schema 扩展（terminal_status 等）全部不引入
 
