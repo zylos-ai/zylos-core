@@ -140,31 +140,31 @@ sequenceDiagram
 
 | Component | 职责 | 输入 | 输出 |
 |---|---|---|---|
-| Monitor Orchestrator | 每秒 tick 编排；启动 IPC | clock, config | component calls |
-| SignalStore | tick 开头读信号，产出 immutable snapshot | signal files | readonly snapshot |
-| StatusWriter | tick 末尾写对外状态 | snapshot, HealthEngine | `agent-status.json` |
-| Guardian | runtime 进程存活守护 | snapshot, guardian state | `adapter.launch()`, HealthEngine events |
-| ProcSampler | OS 级冻结检测 | pid/context switch | `proc-state.json` |
-| ToolPipeline | 工具事件流合成 | `tool-events.jsonl` | `api-activity.json` |
-| ToolWatchdog | 工具超时干预 | snapshot, adapter rules | adapter control action |
-| HealthEngine | HealthState FSM + catalog dispatch | snapshot, Adapter catalog | health state, rate-limit state |
-| TaskScheduler | 统一定时任务 | time, config | task execution, maintenance state |
-| Runtime Adapter | runtime-specific 操作（DI 层） | runtime config | launch/stop/probe/catalog/tool rules |
+| Monitor Orchestrator | 主循环入口，每秒驱动一次 tick，按固定顺序调用各组件；负责启动 IPC 监听供 MessageRouter 接入 | 系统时钟（1s interval）、config | 按顺序调用各组件的 tick 方法 |
+| SignalStore | tick 开头统一读取所有 signal files，生成当次 tick 的 immutable snapshot，供后续组件消费 | signal files（`agent-status.json`、`proc-state.json`、`api-activity.json` 等） | readonly snapshot（当次 tick 内所有组件共享同一份快照） |
+| StatusWriter | tick 末尾汇总当前 ActivityState、HealthState 及各组件状态，写入对外状态文件 | snapshot、HealthEngine 当前状态 | `agent-status.json`（Operator 和 MessageRouter 消费） |
+| Guardian | 守护 runtime 进程存活：检测进程退出后按策略重新拉起，RateLimited 状态下抑制拉起 | snapshot、guardian 内部状态（上次拉起时间、连续失败计数） | 调用 Runtime Adapter 拉起 runtime；向 HealthEngine 报告进程事件 |
+| ProcSampler | 通过 OS 级指标（pid 存活、context switch 计数）检测 runtime 进程是否冻结 | runtime pid、`/proc` context switch 数据 | `proc-state.json`（冻结检测结果，供 SignalStore 下次 tick 读取） |
+| ToolPipeline | 从 runtime 产生的工具事件流中合成 API 活动摘要，判断 runtime 是否有近期活动 | `tool-events.jsonl`（runtime 写入的工具调用事件流） | `api-activity.json`（最近活动时间、活跃工具列表，供 HealthEngine 和 ToolWatchdog 消费） |
+| ToolWatchdog | 检测工具调用是否超时，超时则通过 Adapter 执行干预动作（如中断当前工具） | snapshot、Adapter 提供的工具超时规则 | 调用 Runtime Adapter 执行控制动作（中断/重启） |
+| HealthEngine | 维护 HealthState FSM（OK/Unavailable/RateLimited/AuthFailed），根据 Adapter 提供的 error catalog 匹配 API error 并触发状态转换 | snapshot、Adapter 提供的 ApiErrorCatalog | HealthState 状态及转换事件；rate-limit 冷却状态 |
+| TaskScheduler | 统一管理定时任务（健康检查、日志清理、usage 告警等），按配置的 interval 触发执行 | 系统时钟、config 中的任务定义 | 任务执行结果；maintenance 状态文件 |
+| Runtime Adapter | DI 层，封装 Claude / Codex runtime 差异，向其他组件提供统一的 runtime 操作接口 | runtime config（runtime 类型、路径、参数） | launch/stop/probe/catalog/tool rules（统一接口，屏蔽 runtime 实现差异） |
 
 ### 3.2 MessageRouter 容器
 
 | Component | 职责 | 输入 | 输出 |
 |---|---|---|---|
-| MessageRouter | c4-receive 路由 IPC + probe 聚合 | IPC request, HealthEngine | route decision |
+| MessageRouter | 接收 c4-receive 的 IPC 路由请求，查询 HealthEngine 当前健康状态；health≠OK 时触发或加入 recovery probe 聚合，等待 probe 结果后返回最终路由决策和用户文案 | c4-receive 发来的 IPC 请求（channel、endpoint、priority、noReply）；HealthEngine 当前状态 | RouteDecision（recovered=true 走主链，recovered=false 附带 reason 和 userMessage） |
 
 MessageRouter 不在 AM Process 主循环中运行；它由 `c4-receive` 通过 IPC 事件触发，是一次性调用接口。详见 §3.7 MessageRouter contract。
 
 ### 3.3 C4 通信层容器（与 AM 交互部分）
 
-| Component | 职责 | 与 AM 的交互 |
-|---|---|---|
-| c4-receive | 外部消息入口，触发路由决策 | 通过 IPC 调用 MessageRouter，根据返回决策决定写 pending 还是调 c4-send 返回状态文案 |
-| c4-send | 对外发送消息 | unhealthy 路径下被 c4-receive 调用，向用户投递状态文案 |
+| Component | 职责 | 输入 | 输出 |
+|---|---|---|---|
+| c4-receive | 外部消息入口：Channel Daemon 收到用户消息后 spawn 本进程，负责写 inbound DB 并通过 IPC 调用 MessageRouter 获取路由决策 | Channel Daemon spawn 调用（携带 channel、endpoint、message）；MessageRouter 返回的 RouteDecision | 写 C4 DB inbound（status=pending）；健康时结束，不健康时调用 c4-send 向用户投递状态文案 |
+| c4-send | 对外发送消息：将 agent 回复或系统状态文案写入 C4 DB outbound 并通过 Channel Daemon 投递给用户 | Runtime Agent 调用（正常回复）或 c4-receive 调用（unhealthy 状态文案） | 写 C4 DB outbound；调用 Channel Daemon send script 投递给用户 |
 
 ### 3.4 主循环顺序
 
