@@ -375,7 +375,7 @@ activity-monitor/
 #### D-6. 模块拆分为 10 业务组件 + 1 Adapter
 
 **状态**：已确认
-**决策**：拆分为 SignalStore、StatusWriter、Guardian、ProcSampler、HealthEngine、MessageRouter、ToolPipeline、ToolWatchdog、TaskScheduler、SessionRestartContinuation + RuntimeAdapter。InputValidator 移出 baseline（见 D-28）。
+**决策**：拆分为 SignalStore、StatusWriter、Guardian、ProcSampler、HealthEngine、MessageRouter、ToolPipeline、ToolWatchdog、TaskScheduler、SessionRestartContinuation + RuntimeAdapter。InputValidator 移出 baseline。
 
 ### Unhealthy 路径
 
@@ -487,11 +487,6 @@ activity-monitor/
 **决策**：旧 config 只有 usage_monitor_enabled=true 时，新版 default usage_alert_enabled=false。静默处理，不输出 warning，不鼓励用户开启告警。
 
 ### HealthEngine 接口
-
-#### D-28. HealthEngine 暴露 triggerRecovery() 和 onAuthFailed()
-
-**状态**：已确认
-**决策**：最终接口：health / restartBlocked / onProcessRestarted() / onAuthFailed(reason) / triggerRecovery(reason) / notifyUserMessage() / tick(signals)。enterRateLimited 和 requestImmediateProbe 由 tick() 内部管理不暴露。
 
 #### D-29. triggerRecovery 在 Unavailable 内按时间区分行为
 
