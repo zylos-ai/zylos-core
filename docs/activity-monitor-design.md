@@ -151,6 +151,18 @@ sequenceDiagram
 | TaskScheduler | 统一管理定时任务（健康检查、日志清理、usage 告警等），按配置的 interval 触发执行 | 系统时钟、config 中的任务定义 | 任务执行结果；maintenance 状态文件 |
 | StatusWriter | tick 末尾汇总当前 ActivityState、HealthState 及各组件状态，写入对外状态文件 | snapshot、HealthEngine 当前状态 | `agent-status.json`（Operator 和 MessageRouter 消费） |
 
+#### Hook 脚本
+
+Hook 脚本是 AM 的重要数据采集层。它们注册为 Claude Code 的异步 hook，在 runtime 运行过程中被触发，将事件写入 signal files 供主循环组件消费。Hook 本身不参与主循环 tick，而是作为 runtime 侧的事件采集器独立运行。
+
+| Hook 脚本 | 触发时机 | 职责 | 输出 |
+|---|---|---|---|
+| hook-activity | UserPromptSubmit、PreToolUse、PostToolUse、PostToolUseFailure、Stop、Notification(idle_prompt) | 记录工具生命周期事件，追踪 runtime 前台/后台会话状态 | `tool-events.jsonl`（供 ToolPipeline 消费合成 `api-activity.json`） |
+| hook-auth-prompt | PermissionRequest | 记录权限请求事件；当 auto_approve_permission 开启时，通过 C4 control channel 自动发送 Enter 按键确认 | `hook-timing.log`；可选的 C4 control 自动确认 |
+| session-start-prompt | SessionStart | 会话启动时通过 C4 control queue 注入启动提示，触发 runtime 恢复工作或回复等待中的消息 | C4 control queue 消息 |
+
+数据流：Hook 脚本 → signal files → SignalStore（tick 开头读取）→ snapshot → 各组件消费。
+
 ### 3.2 MessageRouter 容器
 
 | Component | 职责 | 输入 | 输出 |
