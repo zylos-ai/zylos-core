@@ -62,6 +62,7 @@ flowchart LR
 | Runtime Adapter | AM 内部 DI 层 | 封装 Claude / Codex 差异 | JS interface |
 | C4 Receive CLI | per-message Node process | 外部消息入口；调用 AM MessageRouter 获取路由结果并据此行动；写 inbound DB | CLI, C4 DB |
 | C4 Send CLI | per-message Node process | agent/系统对外发送消息 | CLI, C4 DB, channel send scripts |
+| C4 Dispatcher | PM2 long-running process | 消费 C4 DB 中 `status='pending'` 的 inbound，投递给 runtime | C4 DB, tmux |
 | C4 DB | SQLite | C4 消息可靠性边界 | `conversations`, `control_queue` |
 | Channel Daemons | PM2/process | 平台消息收发 | channel APIs |
 | Runtime Agent Process | tmux interactive process | 真实 agent 工作循环 | tmux pane |
@@ -79,6 +80,7 @@ sequenceDiagram
   participant DB as C4 DB
   participant D as c4-dispatcher
   participant A as Runtime Agent
+  participant S as c4-send
 
   U->>C: message
   C->>R: spawn --channel --endpoint --content
@@ -88,6 +90,10 @@ sequenceDiagram
   R-->>C: exit 0
   D->>DB: select pending inbound
   D->>A: deliver via tmux
+  A->>S: reply
+  S->>DB: insert outbound status='delivered'
+  S->>C: send via channel script
+  C->>U: reply
 ```
 
 #### Unhealthy 状态文案路径
