@@ -21,7 +21,7 @@ Activity Monitor 是 Zylos runtime 的本地守护系统。它负责观察、诊
 | Channel daemon | 各平台入口进程 | 调用 `c4-receive.js` 后按 exit code 判断是否成功 |
 | C4 Dispatcher | C4 主链投递器 | 只消费 `conversations.status='pending'` 的 inbound |
 | Runtime Agent | Claude / Codex 进程 | 接收 C4 投递的用户消息并回复 |
-| Operator | 系统维护者 | 需要可观测状态、恢复策略、回滚路径 |
+| Operator | 系统维护者 | 需要可观测状态、恢复策略 |
 | PM2 / Host OS | 进程运行环境 | 负责长驻进程、重启与资源信号 |
 
 ### 1.3 上下文图
