@@ -140,16 +140,16 @@ sequenceDiagram
 
 | Component | 职责 | 输入 | 输出 |
 |---|---|---|---|
+| Runtime Adapter | DI 层，封装 Claude / Codex runtime 差异，向其他组件提供统一的 runtime 操作接口 | runtime config（runtime 类型、路径、参数） | launch/stop/probe/catalog/tool rules（统一接口，屏蔽 runtime 实现差异） |
 | Monitor Orchestrator | 主循环入口，每秒驱动一次 tick，按固定顺序调用各组件；负责启动 IPC 监听供 MessageRouter 接入 | 系统时钟（1s interval）、config | 按顺序调用各组件的 tick 方法 |
 | SignalStore | tick 开头统一读取所有 signal files，生成当次 tick 的 immutable snapshot，供后续组件消费 | signal files（`agent-status.json`、`proc-state.json`、`api-activity.json` 等） | readonly snapshot（当次 tick 内所有组件共享同一份快照） |
-| StatusWriter | tick 末尾汇总当前 ActivityState、HealthState 及各组件状态，写入对外状态文件 | snapshot、HealthEngine 当前状态 | `agent-status.json`（Operator 和 MessageRouter 消费） |
 | Guardian | 守护 runtime 进程存活：检测进程退出后无条件拉起，拉起失败时按退避策略递增延迟重试 | snapshot、guardian 内部状态（上次拉起时间、连续失败计数） | 调用 Runtime Adapter 拉起 runtime；向 HealthEngine 报告进程事件 |
 | ProcSampler | 通过 OS 级指标（pid 存活、context switch 计数）检测 runtime 进程是否冻结 | runtime pid、`/proc` context switch 数据 | `proc-state.json`（冻结检测结果，供 SignalStore 下次 tick 读取） |
 | ToolPipeline | 从 runtime 产生的工具事件流中合成 API 活动摘要，判断 runtime 是否有近期活动 | `tool-events.jsonl`（runtime 写入的工具调用事件流） | `api-activity.json`（最近活动时间、活跃工具列表，供 HealthEngine 和 ToolWatchdog 消费） |
 | ToolWatchdog | 检测工具调用是否超时，超时则通过 Adapter 执行干预动作（如中断当前工具） | snapshot、Adapter 提供的工具超时规则 | 调用 Runtime Adapter 执行控制动作（中断/重启） |
 | HealthEngine | 维护 HealthState FSM（OK/Unavailable/RateLimited/AuthFailed），根据 Adapter 提供的 error catalog 匹配 API error 并触发状态转换 | snapshot、Adapter 提供的 ApiErrorCatalog | HealthState 状态及转换事件；rate-limit 冷却状态 |
 | TaskScheduler | 统一管理定时任务（健康检查、日志清理、usage 告警等），按配置的 interval 触发执行 | 系统时钟、config 中的任务定义 | 任务执行结果；maintenance 状态文件 |
-| Runtime Adapter | DI 层，封装 Claude / Codex runtime 差异，向其他组件提供统一的 runtime 操作接口 | runtime config（runtime 类型、路径、参数） | launch/stop/probe/catalog/tool rules（统一接口，屏蔽 runtime 实现差异） |
+| StatusWriter | tick 末尾汇总当前 ActivityState、HealthState 及各组件状态，写入对外状态文件 | snapshot、HealthEngine 当前状态 | `agent-status.json`（Operator 和 MessageRouter 消费） |
 
 ### 3.2 MessageRouter 容器
 
