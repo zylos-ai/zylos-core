@@ -300,7 +300,7 @@ HealthState 从 OK 转出不再由主循环定时检测，改为 **user message 
 4. 执行 check tmux pane，按字符模式匹配结果决定状态流转：
    - 连续两次识别到 **rate limit** 字符模式 → 流转到 RateLimited
    - 识别到 **auth failed** 字符模式 → 执行 check auth 确认确实失败 → 流转到 AuthFailed
-   - 识别到 **corrupted image** 等 sticky error 字符模式 → 执行 new session 或 restart
+   - 连续两次识别到 **corrupted image** 等 sticky error 字符模式 → 执行 new session 或 restart
    - 未识别到异常 → 保持 OK
 
 ---
@@ -431,22 +431,12 @@ activity-monitor/
 #### D-16. Probe 与 restart 解耦
 
 **状态**：已确认
-**决策**：heartbeat/probe 失败不默认 trigger restart。只有 recoveryAction=restart_session 的 error 类型（如 sticky context-poison）才触发 restart。rate_limited / auth_failed / probe_only 路径不 restart。
-
-#### D-17. Catalog-driven API error 分类 + 5 种 recoveryAction
-
-**状态**：已确认
-**决策**：Adapter 注入 getApiErrorPatterns() 返回 catalog 数组，5 种 recoveryAction：restart_session / probe_only / mark_rate_limited / mark_auth_failed / notify_only。Unknown error fallback 走 probe_only + 落 unknown-api-errors.jsonl 累积学习。
+**决策**：heartbeat/probe 失败不默认触发 restart。目前唯一已知需要 restart 的场景是 corrupted image 等导致的 sticky context-poison（见 D-18）。具体的 error 分类与恢复动作类型留待技术实施方案定义。
 
 #### D-18. Sticky context 场景保留 session restart 自愈
 
 **状态**：已确认
 **决策**：图片损坏等导致的 sticky API error（400 / invalid_request_error）保留 adapter.stop() 强制 restart。连续 2 次命中防抖（30s 间隔），命中后 HealthEngine 调 adapter.stop()，Guardian 下一 tick 拉起新 session。
-
-#### D-19. Unknown error 持续 5min 升级为 restart_session
-
-**状态**：已确认
-**决策**：同一 unknown pattern 连续 10 次扫描命中（30s × 10 = 5min）时，recoveryAction 从 probe_only 升级到 restart_session，防止 sticky context 下 probe 永远失败导致长期 stuck。
 
 ### Guardian 行为
 
@@ -519,11 +509,6 @@ activity-monitor/
 
 **状态**：已确认
 **决策**：当前架构下图片作为路径文本传递，agent 通过 Read 工具加载（自带 size/format 边界），不触发 API 4xx。未来若新增 multimodal 直接注入路径，入口校验应放在该注入点。
-
-#### D-32. Adapter catalog 字段统一命名 recoveryAction
-
-**状态**：已确认
-**决策**：catalog entry 字段统一为 `recoveryAction`，不支持 `action` alias，避免字段漂移。
 
 #### D-33. startupGrace 与 launchGracePeriod 不合并
 
