@@ -61,7 +61,7 @@ flowchart LR
 |---|---|---|---|
 | Activity Monitor Process | PM2 long-running process | 主循环、状态机、runtime 恢复、MessageRouter 宿主 | signal files, local IPC |
 | Runtime Adapter | AM 内部 DI 层 | 封装 Claude / Codex 差异 | JS interface |
-| C4 Receive CLI | per-message Node process | 外部消息入口；健康路由；写 inbound DB | CLI, C4 DB |
+| C4 Receive CLI | per-message Node process | 外部消息入口；触发 MessageRouter 路由决策；写 inbound DB | CLI, C4 DB |
 | C4 Send CLI | per-message Node process | agent/系统对外发送消息 | CLI, C4 DB, channel send scripts |
 | C4 DB | SQLite | C4 消息可靠性边界 | `conversations`, `control_queue` |
 | Channel Daemons | PM2/process | 平台消息收发 | channel APIs |
