@@ -141,13 +141,13 @@ sequenceDiagram
 | Component | 职责 | 输入 | 输出 |
 |---|---|---|---|
 | Runtime Adapter | DI 层，封装 Claude / Codex runtime 差异，向其他组件提供统一的 runtime 操作接口 | runtime config（runtime 类型、路径、参数） | launch/stop/probe/catalog/tool rules（统一接口，屏蔽 runtime 实现差异） |
+| HealthEngine | 维护 HealthState FSM（OK/Unavailable/RateLimited/AuthFailed）的状态流转逻辑和触发动作。不在主循环 tick 中运行，由外部事件异步触发（见下方检测时机） | c4-dispatcher 的异步调用（user message 投递成功后）；check tmux pane / check auth 的检测结果 | HealthState 状态流转；触发动作（new session / restart） |
 | Monitor Orchestrator | 主循环入口，每秒驱动一次 tick，按固定顺序调用各组件；负责启动 IPC 监听供 MessageRouter 接入 | 系统时钟（1s interval）、config | 按顺序调用各组件的 tick 方法 |
 | SignalStore | tick 开头统一读取所有 signal files，生成当次 tick 的 immutable snapshot，供后续组件消费 | signal files（`agent-status.json`、`proc-state.json`、`api-activity.json` 等） | readonly snapshot（当次 tick 内所有组件共享同一份快照） |
-| Guardian | 守护 runtime 进程存活：检测进程退出后无条件拉起，拉起失败时按退避策略递增延迟重试 | snapshot、guardian 内部状态（上次拉起时间、连续失败计数） | 调用 Runtime Adapter 拉起 runtime；向 HealthEngine 报告进程事件 |
+| Guardian | 守护 runtime 进程存活：检测进程退出后无条件拉起，拉起失败时按退避策略递增延迟重试 | snapshot、guardian 内部状态（上次拉起时间、连续失败计数） | 调用 Runtime Adapter 拉起 runtime |
 | ProcSampler | 通过 OS 级指标（pid 存活、context switch 计数）检测 runtime 进程是否冻结 | runtime pid、`/proc` context switch 数据 | `proc-state.json`（冻结检测结果，供 SignalStore 下次 tick 读取） |
-| ToolPipeline | 从 runtime 产生的工具事件流中合成 API 活动摘要，判断 runtime 是否有近期活动 | `tool-events.jsonl`（runtime 写入的工具调用事件流） | `api-activity.json`（最近活动时间、活跃工具列表，供 HealthEngine 和 ToolWatchdog 消费） |
+| ToolPipeline | 从 runtime 产生的工具事件流中合成 API 活动摘要，判断 runtime 是否有近期活动 | `tool-events.jsonl`（runtime 写入的工具调用事件流） | `api-activity.json`（最近活动时间、活跃工具列表，供 ToolWatchdog 消费） |
 | ToolWatchdog | 检测工具调用是否超时，超时则通过 Adapter 执行干预动作（如中断当前工具） | snapshot、Adapter 提供的工具超时规则 | 调用 Runtime Adapter 执行控制动作（中断/重启） |
-| HealthEngine | 维护 HealthState FSM（OK/Unavailable/RateLimited/AuthFailed），根据 Adapter 提供的 error catalog 匹配 API error 并触发状态转换 | snapshot、Adapter 提供的 ApiErrorCatalog | HealthState 状态及转换事件；rate-limit 冷却状态 |
 | TaskScheduler | 统一管理定时任务（健康检查、日志清理、usage 告警等），按配置的 interval 触发执行 | 系统时钟、config 中的任务定义 | 任务执行结果；maintenance 状态文件 |
 | StatusWriter | tick 末尾汇总当前 ActivityState、HealthState 及各组件状态，写入对外状态文件 | snapshot、HealthEngine 当前状态 | `agent-status.json`（Operator 和 MessageRouter 消费） |
 
@@ -261,15 +261,11 @@ tick every 1s:
   3. ProcSampler.tick(snapshot)
   4. ToolPipeline.tick(snapshot)
   5. ToolWatchdog.tick(snapshot)
-  6. HealthEngine.tick(snapshot)
-  7. TaskScheduler.tick(snapshot)
-  8. StatusWriter.write(snapshot, healthEngine)
+  6. TaskScheduler.tick(snapshot)
+  7. StatusWriter.write(snapshot, healthEngine)
 ```
 
-顺序约束：
-
-- ToolPipeline 必须在 HealthEngine 前，因为 API activity 是健康判断输入。
-- ToolWatchdog 必须在 HealthEngine 前，因为干预结果可能改变健康判断。
+HealthEngine 不参与主循环 tick，由事件异步触发（见下方检测时机说明）。
 
 ### 3.5 状态模型
 
@@ -293,6 +289,19 @@ ActivityState 是无状态投射，不是 FSM。相同 signal snapshot 必须得
 | AuthFailed | 凭证或认证失败 | check tmux pane 识别到认证失败字符模式后，执行 check auth 确认 auth 确实失败 |
 
 状态机为全连通（OK ↔ Unavailable ↔ RateLimited ↔ AuthFailed），由 HealthEngine 独占维护。各状态的转出路径由 recovery probe 方法决定（详见 §3.2 MessageRouter 容器）。Guardian 不读取 HealthEngine 内存字段，只通过 SignalStore 读取必要的 rate-limit / maintenance 文件。
+
+#### OK → 非 OK 检测时机
+
+HealthState 从 OK 转出不再由主循环定时检测（避免浪费 token），改为 **user message 事件触发**：
+
+1. c4-dispatcher 成功将 user message 投递给 runtime agent
+2. c4-dispatcher 异步调用 HealthEngine 接口
+3. HealthEngine 等待约 5s（给 runtime 处理时间）
+4. 执行 check tmux pane，按字符模式匹配结果决定状态流转：
+   - 连续两次识别到 **rate limit** 字符模式 → 流转到 RateLimited
+   - 识别到 **auth failed** 字符模式 → 执行 check auth 确认确实失败 → 流转到 AuthFailed
+   - 识别到 **corrupted image** 等 sticky error 字符模式 → 执行 new session 或 restart
+   - 未识别到异常 → 保持 OK
 
 ### 3.6 Catalog-driven API Error Dispatch
 
@@ -374,10 +383,10 @@ skills/comm-bridge/scripts/
 **状态**：已确认
 **决策**：对外只暴露 `health: "unavailable"`，不暴露内部子状态。消费端基于 `unavailable_since` 时间戳自行判断（如 < 60min "稍后重试"，>= 60min "需管理员介入"）。
 
-#### D-4. 主循环 8 步 tick 编排
+#### D-4. 主循环 7 步 tick 编排
 
 **状态**：已确认
-**决策**：AM 主循环每 tick 按固定顺序执行 8 步：SignalStore.refresh → Guardian → ProcSampler → ToolPipeline → ToolWatchdog → HealthEngine → TaskScheduler → StatusWriter。ToolPipeline/ToolWatchdog 必须在 HealthEngine 前（API activity 和干预结果是健康判断输入）。
+**决策**：AM 主循环每 tick 按固定顺序执行 7 步：SignalStore.refresh → Guardian → ProcSampler → ToolPipeline → ToolWatchdog → TaskScheduler → StatusWriter。HealthEngine 不参与主循环 tick，改为由 user message 事件异步触发（避免定时检测浪费 token）。
 
 #### D-5. Runtime 差异通过 Adapter 依赖注入
 
