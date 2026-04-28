@@ -310,28 +310,30 @@ HealthState 从 OK 转出不再由主循环定时检测，改为 **user message 
 ### 4.1 目录结构
 
 ```
-skills/activity-monitor/
-├── monitor.js                          # 主入口 orchestrator
-├── lib/
-│   ├── signal-store.js                 # SignalStore
-│   ├── status-writer.js                # StatusWriter
-│   ├── guardian.js                      # Guardian
-│   ├── health-engine.js                # HealthEngine
-│   ├── message-router.js               # MessageRouter
-│   ├── proc-sampler.js                 # ProcSampler
-│   ├── tool-pipeline.js                # ToolPipeline
-│   ├── tool-watchdog.js                # ToolWatchdog
-│   └── task-scheduler.js               # TaskScheduler
-├── lib/runtime-adapters/
-│   ├── base-adapter.js                 # Adapter interface
-│   ├── claude-adapter.js               # Claude runtime
-│   └── codex-adapter.js                # Codex runtime
-└── test/                               # 测试
-
-skills/comm-bridge/scripts/
-├── c4-receive.js                       # 接入 MessageRouter IPC
-├── c4-send.js                          # 结构化发送结果与超时控制
-└── c4-dispatcher.js                    # health 值域 4 态兼容
+activity-monitor/
+├── scripts/
+│   ├── monitor.js               # 入口 + 主循环编排层
+│   ├── guardian.js               # 进程存活守护
+│   ├── health-engine.js          # 健康状态机
+│   ├── message-router.js         # 用户消息路由（事件驱动）
+│   ├── signal-store.js           # 信号聚合读取
+│   ├── status-writer.js          # agent-status.json 写入
+│   ├── task-scheduler.js         # 统一定时任务调度器
+│   ├── proc-sampler.js           # 进程冻结检测（保留）
+│   ├── hook-activity.js          # Hook 脚本
+│   ├── hook-auth-prompt.js       # Hook 脚本
+│   ├── context-monitor.js        # Hook 脚本
+│   ├── session-start-prompt.js   # Hook 脚本
+│   ├── tasks/                    # 注册式定时任务
+│   │   ├── daily-upgrade.js
+│   │   ├── daily-memory-commit.js
+│   │   ├── upgrade-check.js
+│   │   ├── health-check.js       # PM2/disk/memory
+│   │   ├── usage-monitor.js
+│   │   └── context-check.js      # 上下文占用检查（Codex 轮询 + Claude statusLine 二次判断）
+│   └── adapters/                 # 运行时适配器（依赖注入）
+│       ├── claude.js
+│       └── codex.js
 ```
 
 > 代码级详细设计（伪代码、接口定义、数据库语义等）将在后续迭代中补充。
