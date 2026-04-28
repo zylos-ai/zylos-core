@@ -1,18 +1,25 @@
-# Activity Monitor 重构方案 v2.1 — ⚠️ SUPERSEDED — DO NOT IMPLEMENT
+# Activity Monitor 重构方案 v2.1 — ✅ IMPLEMENTATION BASELINE（唯一真源）
 
-> ⚠️ **本文件已 SUPERSEDED**（2026-04-28，R5 final pass）。
-> 当前 implementation baseline 是 [`activity-monitor-refactor-proposal-v3.md`](activity-monitor-refactor-proposal-v3.md) + 9 份模块实施档（[`docs/activity-monitor/modules/`](activity-monitor/modules/)）。
->
-> 本文件保留作为历史演进档——v2.1 是 R1 walkback 后的 implementation baseline 候选，但 R3 review 发现 v2.1 把 "unanswered inbound 注入" 跟 7 项 AM 私有 ledger 一起砍了——前 7 项砍对（不该住 AM）但最后一项砍重了（应在 C4 内部 schema）。v3 通过 C4 reliability contract 三层契约（durability + terminal status + unresolved-inbound exposure）+ reply command token-passing 落地 R3 reframe，是当前唯一 active truth。
->
-> 详细演进路径见 PR #501 git history (commit `81c5d7d` → ... → `9114ec5`)。
->
-> 日期：2026-04-24（v2.1 起草）/ 2026-04-28（Direction D walkback + R1 review 收敛 / R5 SUPERSEDED）
+> 日期：2026-04-24（v2.1 起草）/ 2026-04-28（Direction D walkback + R1 review 收敛 / R6 production rollback 恢复 baseline）
 > 分支：`refactor/activity-monitor`
 >
+> **本文件是 PR #501 的唯一 implementation baseline**——实施 / 测试 / 评审都以本文件为准。
+>
+> **R6 production rollback (2026-04-28 by ccb981c2)**：v3 顶层方案 + 9 份模块实施档（包括 R3 引入的 C4 reliability contract / R4 reply command token-passing）经 production trade-off 评估后整套 SUPERSEDED 回退——理由：
+> 1. v2.1 实际生产表现可接受（多月运行无 silent swallow 大爆炸）
+> 2. R3 引入的 reply-resolution 在 group / multi-msg / agent 主动消息 / 跨 session reply command stale 等场景仍有配对 edge case 风险
+> 3. v3 模块档没讨论新加 `terminal_status` 跟既有 `conversations.status` (pending/running/delivered/failed) 字段交互——R3/R4/R5 reviewer 5 轮均未抓到的真实 review blind spot
+> 4. 强 mechanical contract 假设 agent / dispatcher / channel daemon 都按规矩玩；任一环节 break 就从 v2.1 的"软错"变 v3 的"硬错"
+>
+> v3 文件保留作 SUPERSEDED 历史，不删除（git history 完整 + 设计演进参考）。详 PR #501 git history (commit `81c5d7d` → R3 `c358ac5` → R4 `e1f5cb9` → R5 `9114ec5` → final `69adcf5` → R6 production rollback)。
+>
 > 历史稿（已 SUPERSEDED，不要据此实施）：
+> - `activity-monitor-refactor-proposal-v3.md` — v3 顶层方案 (R3+R4+R5 演进，production rollback)
+> - `activity-monitor/modules/*.md` — v3 9 份模块实施档（含 c4-reliability-contract.md / 等）
 > - `activity-monitor-refactor-proposal-v2.md` — v2 详细设计档（750 行，标记 SUPERSEDED）
 > - `activity-monitor-refactor-proposal.md` — v1 初稿（标记 SUPERSEDED）
+>
+> 设计经多轮 review 演进至 Direction D（详 §5.3.2），过程沉淀在 PR #501 commits + comments + git history。
 
 ---
 

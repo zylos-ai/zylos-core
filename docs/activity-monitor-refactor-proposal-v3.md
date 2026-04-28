@@ -1,17 +1,35 @@
-# Activity Monitor 重构方案 v3 — ✅ IMPLEMENTATION BASELINE（唯一真源）
+# Activity Monitor 重构方案 v3 — ⚠️ SUPERSEDED — DO NOT IMPLEMENT (R6 production rollback)
 
-> 日期：2026-04-28
-> 分支：`refactor/activity-monitor`
-> 类型：**总方案文档**——面向 review 与跨角色共识，不深入代码 / 字段 / 函数 / 文件路径 / 测试 case。具体落地见模块实施档（[§7 模块索引](#七模块索引)）。
+> ⚠️ **本文件已 SUPERSEDED**（2026-04-28，R6 production rollback by ccb981c2）。
 >
-> **本文件 + 9 份模块实施档是 PR #501 的唯一 implementation baseline**——实施 / 测试 / 评审都以本套档为准。设计经多轮 review 收敛（R1 howard 文档规范 → R2 clear-and-restart → R3 zylos0t reframe (C4 reliability contract) → R4 reply correlation token-passing → R5 cleanup），跨 commit 序列详见 PR #501 git history。
+> **当前 implementation baseline 恢复为 [`activity-monitor-refactor-proposal-v2.1.md`](activity-monitor-refactor-proposal-v2.1.md)**——v3 跟 9 份模块档作为 R3+R4+R5 演进的设计实验记录保留，不再作为实施依据。
 >
-> 历史稿（已 SUPERSEDED，不要据此实施）：
-> - [`activity-monitor-refactor-proposal-v2.1.md`](activity-monitor-refactor-proposal-v2.1.md)：v2.1 R2 walkback 收敛档，已 SUPERSEDED
-> - [`activity-monitor-refactor-proposal-v2.md`](activity-monitor-refactor-proposal-v2.md)：v2 详细设计档，已 SUPERSEDED
-> - [`activity-monitor-refactor-proposal.md`](activity-monitor-refactor-proposal.md)：v1 初稿，已 SUPERSEDED
+> **R6 production rollback 决策 reasoning**：
+> 1. v2.1 实际生产表现可接受（多月运行无 silent swallow 大爆炸）
+> 2. R3 引入的 reply-resolution / R4 reply command token-passing 机制在 group / multi-msg / agent 主动消息 / 跨 session reply command stale 等场景仍有配对 edge case 风险——配对错从 v2.1 的"软错"（agent 自决策错）变成 v3 的"硬错"（系统机制错）
+> 3. **review blind spot 曝光**：v3 模块档新加的 `terminal_status` / `reply_to_inbound_id` / `claimed_at` 跟既有 `conversations.status` (pending/running/delivered/failed) 字段交互**完全未讨论**——R3/R4/R5 reviewer 5 轮均没抓到（reviewer 基于 v3 自身一致性 review，没做 v3 vs main 实际 schema 对照）。implementation baseline 自身漏字段交互契约，不能算合格 baseline
+> 4. v3 强 mechanical contract 假设 agent / dispatcher / channel daemon 都按规矩玩；production 实际 discipline 假设破裂时硬错
 >
-> 模块实施档目录：[`docs/activity-monitor/modules/`](activity-monitor/modules/)（9 份已 landing）
+> 详 PR #501 git history (commit `81c5d7d` → R3 `c358ac5` → R4 `e1f5cb9` → R5 `9114ec5` → final `69adcf5` → R6 production rollback)。
+>
+> v3 路径保留的有价值产物（**已转移到 v2.1 / 其他 skill**）：
+> - 文档分层规范（顶层方案 + 模块实施档）→ 沉淀在 [`tech-doc-spec` skill](../.claude/skills/tech-doc-spec/) (R1 howard 收敛产物)
+> - Catalog-driven api-error-check + 5 recoveryAction → v2.1 §5.3.1 已含
+> - probe / restart 解耦 → v2.1 §5.3.1 已含
+> - 11 模块拆分 + 8 步 tick → v2.1 §三 已含
+> - bypass-once + marker 重置 → v2.1 §5.2 已含
+> - usage-monitor / usage-alerter 双 gate 拆分 → v2.1 §5.8.1 已含
+>
+> v3 路径砍掉的内容（仅本档与 9 模块档涉及的 reply-resolution）：
+> - C4 reliability contract 三层契约（durability + terminal_status + unresolved-inbound exposure）
+> - Reply command token-passing (`--reply-to-id` 参数 + dispatcher claim 时注入)
+> - C-Term-1 ~ C-Term-5 不变量
+> - C-SR-2a / C-SR-2b 拆分
+> - Hard / soft validation 两层语义
+>
+> ---
+>
+> 以下是 v3 SUPERSEDED 后的原顶层方案档内容（保留作设计演进记录）：
 
 ---
 
