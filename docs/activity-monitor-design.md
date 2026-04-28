@@ -303,29 +303,6 @@ HealthState 从 OK 转出不再由主循环定时检测，改为 **user message 
    - 识别到 **corrupted image** 等 sticky error 字符模式 → 执行 new session 或 restart
    - 未识别到异常 → 保持 OK
 
-### 3.6 Catalog-driven API Error Dispatch
-
-Adapter 提供 catalog entry：
-
-```ts
-type ApiErrorCatalogEntry = {
-  id: string
-  pattern: RegExp | string
-  severity: 'sticky' | 'transient' | 'permanent'
-  recoveryAction:
-    | 'restart_session'
-    | 'probe_only'
-    | 'mark_rate_limited'
-    | 'mark_auth_failed'
-    | 'notify_only'
-  debounce: number
-  scanInterval: number
-  userMessage: string
-}
-```
-
-HealthEngine 负责匹配与状态转换；MessageRouter 负责把 `reason` 映射为 `userMessage` 后返回给 `c4-receive`。`c4-receive` 不应该自己维护第二份 catalog lookup，避免文案来源分裂。
-
 ---
 
 ## 4. Code：代码级落地方案
