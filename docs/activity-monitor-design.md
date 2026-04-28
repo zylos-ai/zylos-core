@@ -486,17 +486,6 @@ activity-monitor/
 **状态**：已确认
 **决策**：旧 config 只有 usage_monitor_enabled=true 时，新版 default usage_alert_enabled=false。静默处理，不输出 warning，不鼓励用户开启告警。
 
-### HealthEngine 接口
-
-#### D-29. triggerRecovery 在 Unavailable 内按时间区分行为
-
-**状态**：待确认
-**决策**：进入 Unavailable < 60min 时接受 triggerRecovery，>= 60min 时拒绝（避免长时间故障下反复 kill+restart）。
-
-#### D-30. rate-limit 检测从被动改为主动 30s 扫描
-
-**状态**：待确认
-**决策**：30s 主动 tmux 扫描检测限流，替代当前被动触发。需考虑误报风险（session 内容中的 "rate limit" 文本可能误触发）。
 
 ### 其他
 
