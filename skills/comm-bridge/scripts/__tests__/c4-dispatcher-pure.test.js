@@ -31,6 +31,7 @@ const {
   isBypassState,
   isKeystrokeControl,
   parseKeystrokeKey,
+  isCodexExitLifecycleControl,
   getHeartbeatPhase,
   shouldAutoAckHeartbeat,
   readJsonFileWithRetry
@@ -431,5 +432,45 @@ describe('parseKeystrokeKey', () => {
   it('handles null/undefined content', () => {
     assert.equal(parseKeystrokeKey(null), '');
     assert.equal(parseKeystrokeKey(undefined), '');
+  });
+});
+
+// ── isCodexExitLifecycleControl ─────────────────────────────────────
+
+describe('isCodexExitLifecycleControl', () => {
+  it('matches only exact Codex /exit controls', () => {
+    assert.equal(
+      isCodexExitLifecycleControl({ type: 'control', content: '/exit' }, 'codex'),
+      true
+    );
+  });
+
+  it('does not match Codex /clear controls', () => {
+    assert.equal(
+      isCodexExitLifecycleControl({ type: 'control', content: '/clear' }, 'codex'),
+      false
+    );
+  });
+
+  it('does not match /exit outside the Codex runtime', () => {
+    assert.equal(
+      isCodexExitLifecycleControl({ type: 'control', content: '/exit' }, 'claude'),
+      false
+    );
+  });
+
+  it('does not match conversations or non-exact /exit text', () => {
+    assert.equal(
+      isCodexExitLifecycleControl({ type: 'conversation', content: '/exit' }, 'codex'),
+      false
+    );
+    assert.equal(
+      isCodexExitLifecycleControl({ type: 'control', content: ' /exit' }, 'codex'),
+      false
+    );
+    assert.equal(
+      isCodexExitLifecycleControl({ type: 'control', content: '/exit now' }, 'codex'),
+      false
+    );
   });
 });
