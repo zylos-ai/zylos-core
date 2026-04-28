@@ -1,501 +1,395 @@
-# Activity Monitor 重构方案 v3 — ⚠️ SUPERSEDED — DO NOT IMPLEMENT (R6 production rollback)
+# Activity Monitor 重构方案 v3 — 📝 REVIEW DRAFT (v2.1 在 tech-doc-spec 两层格式中的重排版)
 
-> ⚠️ **本文件已 SUPERSEDED**（2026-04-28，R6 production rollback by ccb981c2）。
+> 日期：2026-04-28（基于 v2.1 commit `3bbda42` 重排版）
+> 分支：`docs/activity-monitor-refactor-proposal`
 >
-> **当前 implementation baseline 恢复为 [`activity-monitor-refactor-proposal-v2.1.md`](activity-monitor-refactor-proposal-v2.1.md)**——v3 跟 9 份模块档作为 R3+R4+R5 演进的设计实验记录保留，不再作为实施依据。
+> **本文件状态：📝 REVIEW DRAFT**
 >
-> **R6 production rollback 决策 reasoning**：
-> 1. v2.1 实际生产表现可接受（多月运行无 silent swallow 大爆炸）
-> 2. R3 引入的 reply-resolution / R4 reply command token-passing 机制在 group / multi-msg / agent 主动消息 / 跨 session reply command stale 等场景仍有配对 edge case 风险——配对错从 v2.1 的"软错"（agent 自决策错）变成 v3 的"硬错"（系统机制错）
-> 3. **review blind spot 曝光**：v3 模块档新加的 `terminal_status` / `reply_to_inbound_id` / `claimed_at` 跟既有 `conversations.status` (pending/running/delivered/failed) 字段交互**完全未讨论**——R3/R4/R5 reviewer 5 轮均没抓到（reviewer 基于 v3 自身一致性 review，没做 v3 vs main 实际 schema 对照）。implementation baseline 自身漏字段交互契约，不能算合格 baseline
-> 4. v3 强 mechanical contract 假设 agent / dispatcher / channel daemon 都按规矩玩；production 实际 discipline 假设破裂时硬错
+> 本次 v3 重写**不是新设计**，是把已 stabilize 的 v2.1 方案按 [`tech-doc-spec`](../.claude/skills/tech-doc-spec/SKILL.md) 两层格式（顶层方案 + 模块实施档）重排版。内容主体来自 v2.1（PR #501 当前 IMPLEMENTATION BASELINE），并落地 zylos0t R6 在 Lark 群提出的两条窄 contract 修订。
 >
-> 详 PR #501 git history (commit `81c5d7d` → R3 `c358ac5` → R4 `e1f5cb9` → R5 `9114ec5` → final `69adcf5` → R6 production rollback)。
+> **重排版的目的**：把 high-level 策略（本文件）与 low-level 字段/接口/测试 case（[模块实施档](activity-monitor/modules/)）分层，让 reviewer 可以先读总方案判断方向边界，只对某模块有疑问时才深入对应实施档；让 AI / 实现者可以按需加载文档而不必一次消化 700+ 行混杂内容。
 >
-> v3 路径保留的有价值产物（**已转移到 v2.1 / 其他 skill**）：
-> - 文档分层规范（顶层方案 + 模块实施档）→ 沉淀在 [`tech-doc-spec` skill](../.claude/skills/tech-doc-spec/) (R1 howard 收敛产物)
-> - Catalog-driven api-error-check + 5 recoveryAction → v2.1 §5.3.1 已含
-> - probe / restart 解耦 → v2.1 §5.3.1 已含
-> - 11 模块拆分 + 8 步 tick → v2.1 §三 已含
-> - bypass-once + marker 重置 → v2.1 §5.2 已含
-> - usage-monitor / usage-alerter 双 gate 拆分 → v2.1 §5.8.1 已含
+> **本次相对 v2.1 的实质修订（仅 2 条窄 contract，不增设计 scope）**：
 >
-> v3 路径砍掉的内容（仅本档与 9 模块档涉及的 reply-resolution）：
-> - C4 reliability contract 三层契约（durability + terminal_status + unresolved-inbound exposure）
-> - Reply command token-passing (`--reply-to-id` 参数 + dispatcher claim 时注入)
-> - C-Term-1 ~ C-Term-5 不变量
-> - C-SR-2a / C-SR-2b 拆分
-> - Hard / soft validation 两层语义
+> 1. **Unhealthy 路径 inbound 的 queue status 显式化**——unhealthy 时 c4-receive 写入的 inbound 不能进入 dispatcher 主投递队列，用既有 `conversations.status` 字段（不引入新字段）表达为非待投递，dispatcher 不再处理。详 §五.3、§六.H。
+> 2. **Session restart continuation 的契约边界精确化**——C4 DB 只承诺 accepted-message durability；restart 后 c4-session-init recent/unsummarized + agent 自治 = best-effort continuation；不承诺 unresolved-inbound completeness；接受 residual UX risk。详 §三.5、§六.I。
 >
-> ---
+> **明确不做的事**（重排版边界——R3+R4+R5 引入的 reply-resolution 整套不进 v3）：
+> - ❌ 不引入 `terminal_status` / `reply_to_inbound_id` / `claimed_at` 等新字段（R3 引入，R6 production rollback 已退出）
+> - ❌ 不引入 reply command token-passing (`--reply-to-id` 参数自动注入，R4 引入)
+> - ❌ 不引入 C-Term-1 ~ C-Term-5 单调性 invariant 与 hard/soft 两层校验语义（R4-R5 引入）
+> - ❌ 不引入 C-SR-2a / C-SR-2b 拆分与 bounded pending exposure CLI（R4 引入）
 >
-> 以下是 v3 SUPERSEDED 后的原顶层方案档内容（保留作设计演进记录）：
+> 详 §六.G 取舍说明 + R6 production rollback 决策（commit `3bbda42`）。
+>
+> **历史版本归属**（review pass 后切到本文件作为 baseline 时一并升降级）：
+> - v2.1 [`activity-monitor-refactor-proposal-v2.1.md`](activity-monitor-refactor-proposal-v2.1.md) — **当前 IMPLEMENTATION BASELINE**，本文件 review pass 后转为 SUPERSEDED-by-content（指针本文件 + 9 模块档）
+> - v2 [`activity-monitor-refactor-proposal-v2.md`](activity-monitor-refactor-proposal-v2.md) — SUPERSEDED 不变
+> - v1 [`activity-monitor-refactor-proposal.md`](activity-monitor-refactor-proposal.md) — SUPERSEDED 不变
+> - 上一版 v3 + 9 模块档 — R6 production rollback 已 SUPERSEDED；本文件 + 重写后的 8 模块档将覆盖原文件
 
 ---
 
 ## 〇、TL;DR
 
-`activity-monitor`（AM）是守护 runtime（Claude / Codex）的 PM2 长驻进程。现状是一个 2300+ 行的 God Object，多个紧耦合状态机 + 散落的信号消费 + ad-hoc 调度。
+`activity-monitor`（AM）是守护 runtime（Claude / Codex）的 PM2 长驻进程。现状是一个 2300+ 行的 God Object，6 大结构性痛点。本方案：
 
-v3 核心命题：
-
-- **C4 DB 是消息可靠性边界（三层契约）**：accepted-message durability + per-message terminal status + unresolved-inbound 在 c4-session-init 暴露给 agent；AM 不维护私有受害者识别 ledger
-- **两层正交状态机**：进程层（Activity）与功能层（Health）零字段互读
+- **模块化**：拆成 12 个职责清晰的模块（含 Adapter，业务模块 11 个），主循环只做编排
+- **两层正交状态机**：ActivityState（进程层）与 HealthState（功能层）零字段互读
+- **两条通信通道**：状态走 SignalStore 只读快照，事件走具名接口，反向查询路径不存在
+- **健康状态收敛**：5 种 → 4 种；对外不暴露子状态，用时间戳做差分
 - **API error 出口治理 catalog 化**：runtime 错误模式 + 处理路径由 Adapter 注入；probe 与 restart 解耦
-- **结构上**：拆出 11 个职责清晰的模块，主循环只做编排
-- **冷启动行为显式化**：保留 bypass-once 默认语义；operator 通过 marker 文件做显式全清零
-- **对外契约保持向后兼容**：Hook 路径不变，channel daemon 外部协议不动，对外状态文件加 schema 版本号 + 字段向后兼容
+- **冷启动行为显式化**：默认 bypass-once 给一次机会；operator 通过 marker 文件做显式全清零
+- **对外契约保持向后兼容**：Hook 路径不变、channel daemon 外部协议不动、对外状态文件加 schema 版本号 + 字段向后兼容
+
+C4 DB 是消息可靠性边界（即 c4-receive 接受时即 durable）；AM 不维护私有受害者识别 ledger，不记录"消息是否已回复"业务语义。Unhealthy 路径在 c4-receive 同步返回 outbound 状态文案，restart 后 agent 看 c4-session-init 注入的 context 自决策续接（best-effort）。
 
 ---
 
 ## 一、背景与问题
 
-AM 在过去一年随需求演进，积累了多重结构性债务：
+AM 在过去一年随需求演进积累了多重结构性债务：
 
-| 类型 | 现象 | 影响 |
-|---|---|---|
-| **状态语义不清** | health 5 值（ok/recovering/down/rate_limited/auth_failed），其中 recovering 和 down 本质是同一恢复流两阶段 | 消费端难以判断该展示什么文案；rate_limited / auth_failed 跟 down 在转换语义上不正交 |
-| **God Object** | 单一活动监控源文件 2300+ 行塞了进程守护 / 健康检查 / 工具 watchdog / 调度全部职责 | 难独立测试；加新功能要碰 5 处 |
-| **跨模块紧耦合** | Guardian ↔ HeartbeatEngine 共享 5 字段直读直写 | 改一个模块要联动改另一个 |
-| **多套退避机制语义不一致** | restart / recovery / auth retry / user cooldown / tool watchdog 各自一套退避策略 | 故障期行为难预测；调试困难 |
-| **Watchdog 子系统游离** | PR #500 引入的工具相关组件主循环中深度集成但无清晰模块边界 | 工具相关 bug 牵扯到主循环每一步 |
-| **定时任务 ad-hoc** | 三套并行调度器混用 | 加新任务找不到 single owner |
-| **信号消费散落** | 12+ 状态文件在主循环各处单独读取 | 一份信号消费不一致；难做统一快照 |
-| **冷启动语义模糊** | AM 重启时不区分 "operator 显式重置" vs "auto-restart"——前者应该清退避，后者应保留故障认知 | 修好根因后仍要等持久化退避到期 |
-| **错误处理粗暴** | API error / 限流 / auth 失败统一走"probe 失败 → restart"单一路径 | 限流 / auth 失败触发 restart 没意义；sticky context-poison 不被识别 |
-| **消息可靠性边界模糊** | 现有异步恢复广播路径在多次故障下出现双通知 / 语义冗余；AM 历史多次尝试维护私有"受害者识别 ledger"，但跟 c4 DB 既有职责重叠 | 既有 race；也是历史多次 walkback 的根源 |
+| # | 问题 | 影响 |
+|---|------|------|
+| 1 | **状态语义不清** | health 5 值（ok/recovering/down/rate_limited/auth_failed），其中 recovering 与 down 本质是同一恢复流两阶段 |
+| 2 | **Guardian ↔ HeartbeatEngine 紧耦合** | 共享 5 个字段，跨模块直接读写，难独立测试 |
+| 3 | **多套退避机制各自为政** | restart / recovery / auth retry / user cooldown / tool watchdog 语义不一致 |
+| 4 | **God Object** | 单文件 2300+ 行塞了 Guardian / 健康检查 / 工具 watchdog / 调度全部职责 |
+| 5 | **Watchdog 子系统游离** | PR #500 引入的工具生命周期+事件流主循环深度集成但无模块边界 |
+| 6 | **定时任务 ad-hoc** | 三套调度方式混用（DailySchedule / 间隔 timestamp / 独立状态机） |
+| 7 | **信号消费散落** | 12+ 状态文件在主循环各处单独 readJSON，无统一快照层 |
+| 8 | **AM 冷启动未区分重启前后文与故障重试** | 持久化长退避压制首次 probe；daily-upgrade 修好根因后仍要等退避到期 |
 
-不解决的风险：debt 持续累积，新需求每次落地都要 patch 多个紧耦合状态机；故障期用户体验不一致；AI 实现者在加载这份代码时上下文污染严重，误读概率高。
+**不解决的代价**：每加一类 runtime 错误、每加一个定时任务、每改一个 health 子状态都要碰 5 处；测试只能 E2E 不能单元；增量 ship 难度高。
 
 ---
 
 ## 二、目标 / 非目标
 
-### 目标
+### 2.1 目标（解决什么）
 
-1. **单一职责的模块拆分**——每个模块一份模块实施档，AI 与 reviewer 可按需加载
-2. **状态语义正交化**——进程层 / 功能层零字段互读；对外状态 schema 收敛
-3. **C4 DB 是消息可靠性边界**——AM 不维护私有 ledger；本 PR 在 C4 内部补齐 accepted-message durability、terminal status、unresolved-inbound exposure / reply-resolution contract（详 §三原则 1 / [`c4-reliability-contract.md`](activity-monitor/modules/c4-reliability-contract.md)）
-4. **probe / restart 解耦**——按错误类型决定是否 restart；限流 / auth / transient overload 不一律 restart
-5. **catalog 化错误处理**——runtime-specific 错误模式 + 处理路径由 Adapter 注入，HealthEngine 统一 dispatch
-6. **冷启动行为显式化**——operator 重置 vs auto-restart 用 marker 文件区分，bypass-once 默认语义保护
-7. **对外契约向后兼容**——Hook 路径不变，对外状态 schema 加版本号
+1. **God Object 拆分**：业务职责模块化，主循环退化为编排器
+2. **状态机正交**：ActivityState / HealthState 互不读字段，跨模块通过 SignalStore 只读快照 + 具名事件接口
+3. **健康状态收敛**：5 → 4 种，子状态用时间戳差分而非枚举值
+4. **三层健康监控**：OS 级冻结（10s）+ tmux scan（30s）+ heartbeat probe（30min）按成本/覆盖率分层
+5. **API error 出口治理 catalog 化**：错误模式 + recovery 路径由 Adapter 注入；probe 与 restart 解耦
+6. **冷启动行为显式化**：bypass-once 默认 + marker 显式重置两路径
+7. **定时任务统一**：3 套合并为 TaskScheduler 注册式调度
+8. **Usage 监测与告警拆分**：本地观测（零 token）与主动告警（消耗 token）由两个独立 gate 控制
 
-### 非目标（v3 明确不做）
+### 2.2 非目标（明确不做）
 
-1. **不做入口前置校验（InputValidator）**——zylos 当前架构下用户消息附件走 path-as-text，agent 用 Read 工具自取；不存在自动 multimodal 注入路径，也不存在"坏附件直接送进 API"的链路。详 §6 取舍 H
-2. **不引入 cron 解析器**——`dailyHour` + `intervalSeconds` 已覆盖全部需求
-3. **不重做 PR #500 ToolWatchdog 内部语义**——只做边界适配，5-stage 状态机 / 规则值 / intervention 按键序列完全保留
-4. **不引入 multi-agent 协同 / 多 runtime 并发**——v3 仍是"一个 AM 守一个 runtime instance"
-5. **不做受害者识别 ledger / cold-restart broadcast**——session restart 后让 agent 看 context 自决策是否补答，不主动 broadcast"我恢复了"
-6. **不动 channel daemon 外部协议 / c4-receive CLI 外部接口**——webhook 事件格式、message_type 解析、`c4-receive --content` 等外部契约不变；附件 schema 升级等需 channel daemon 联动改动的能力**不**在本 PR scope。
-   - **注**：c4 **内部** schema（如 conversations 表字段扩展）与 c4-session-init **内部**查询语义则**在 scope 内**——内部演进对 channel daemon 不可见，是 v3 落地 C4 reliability contract（§三原则 1）的必要支撑。换句话说：**外部不变 + 内部演进可控**。
+| # | 不做的事 | 原因 |
+|---|---------|------|
+| N1 | **不在 AM 内重做 c4 DB 已覆盖的可靠性** | C4 DB 是消息可靠性边界（accepted-message durability）；AM 不私有受害者识别 ledger |
+| N2 | **不记录"消息是否已回复"业务语义** | group / multi-msg / agent 主动消息 / 跨 session 等场景 C4 纯机械层无法稳定判断；维持 v2.1 决断不引入 `terminal_status` / `reply_to_inbound_id` 等字段 |
+| N3 | **不引入 reply correlation 强机制（reply command token-passing 等）** | agent 手写 / 复制 / 跨 thread / 主动补充等场景 reply command discipline 易破，配对错从软错（agent 自决策错）变硬错（系统机制错）；R6 production rollback 决断 |
+| N4 | **不引入 InputValidator 入口校验** | zylos 当前 multimodal 通过 path-as-text 投递（channel daemon 把附件下载本地后只把路径塞进 c4-receive content），不存在自动 multimodal 注入路径，sticky 4xx 链路不成立 |
+| N5 | **不引入 cron 解析器** | `dailyHour` + `intervalSeconds` 覆盖当前需求；最小化外部依赖与测试面 |
+| N6 | **不主动 broadcast"我恢复了"** | unhealthy 路径已在 c4-receive 同步返回状态文案；restart 后 agent 看 context 自决策续接；事后再发广播会造成双通知与语义冗余；main 旧的 `pending-channels` 异步恢复路径在本方案下废弃 |
+| N7 | **不在 PR #501 同时上 pending exposure 强保证** | 任何"在 c4-session-init 显式注入 unresolved-inbound 列表 + bounded subset + continuation CLI"是产品语义而非 AM refactor 必要前置；不绑入本 PR scope |
+
+非目标会在 §六 方案取舍中给出更详细的 reasoning。
 
 ---
 
 ## 三、核心设计原则
 
-### 原则 1：C4 DB 是消息可靠性边界（三层契约）
+### 1. 双层正交状态机
 
-C4 DB 提供消息可靠性的**三层契约**——这三层共同保证 "accepted 消息一定有 terminal resolution，且 session restart 后 agent 能感知未完成的责任"：
+ActivityState（进程层）与 HealthState（功能层）之间**零字段互读**。跨模块协作只走两类通道——状态走 SignalStore 只读快照，事件走具名事件接口（如 `setAuthFailed` / `onProcessRestarted` / `triggerRecovery` / `notifyUserMessage`）。
 
-1. **Durability**：accepted 消息持久化为 inbound 记录（既有能力）
-2. **Terminal status**：每条 inbound 有明确的 resolution state（`pending` / `replied` / `status_replied` / `manually_dropped`），由 c4-receive / c4-dispatcher 协同维护，**不依赖外部 heuristic**
-3. **Unresolved-inbound exposure**：c4-session-init 能查询 pending inbounds 作为 startup context 的独立段注入新 session，**不被 checkpoint summary 或 recent-N 截断吞掉**
+**Guardian 只看 ActivityState**（Offline → 拉起进程，不读 HealthState）。**MessageRouter 只看 HealthState**（决定用户消息处理路径）。**进程拉起 ≠ 健康变化**（restart 后 HealthEngine 从持久化状态回填，不强制置 Unavailable，避免"重启重置故障认知"）。
 
-**AM 不维护**任何私有受害者识别 ledger——reply-resolution 工作在 C4 内部 schema 完成（schema 字段 + 协同写入 + session-init 查询），AM 只关心 runtime liveness/health，不重做消息层可靠性。
+### 2. C4 DB 是消息可靠性边界
 
-**推论**：delivered-but-unanswered（已入 DB 但 runtime 异常后未回复）不算消息丢失——session restart 后 c4-session-init 把 pending inbounds 注入 startup context；agent 自决策处理后写 outbound 隐式更新对应 inbound terminal status。详 [`c4-reliability-contract.md`](activity-monitor/modules/c4-reliability-contract.md)。
+c4-receive 在 health=OK 时把消息写入 c4 DB inbound 即视为 accepted；后续 runtime 异常（包括 sticky API error 触发的 session restart）**不算消息丢失**——既有 inbound 完整保留。AM **不**维护私有受害者识别 ledger（不在 AM scope 重做 c4 DB 已经做的事）。
 
-### 原则 2：两层正交状态机
+### 3. 出口治理 catalog 化（probe / restart 解耦）
 
-| 状态机 | 关心什么 | 由谁决策 |
-|---|---|---|
-| **ActivityState** | 进程是否在运行（Offline / Idle / Busy） | Guardian 只看这个 |
-| **HealthState** | 功能是否可用（OK / Unavailable / RateLimited / AuthFailed） | MessageRouter 只看这个 |
+Layer 2 tmux scan 检测到 API error 时**不硬编码 pattern + action**——通过 Adapter 注入 catalog，HealthEngine 统一 dispatch 到 5 种 recoveryAction（`restart_session` / `probe_only` / `mark_rate_limited` / `mark_auth_failed` / `notify_only`）。**heartbeat / probe 失败不默认 trigger restart**：只有 `restart_session` 路径触发进程重启；其他 action 即使 probe 失败也不 restart（restart 没意义）。
 
-**两个状态机零字段互读**。跨模块协作只走两类通道——状态走只读快照，事件走具名接口（详 §4 总体架构）。
+Catalog 是**活的知识库**：unknown error 走 `probe_only` 兜底 + 写入 unknown-error 日志，weekly review 增补 catalog；同时设持续未匹配升级（连续 5 分钟命中）→ 强制 `restart_session` 自愈，避免在 sticky context 下退避永远卡死。
 
-### 原则 3：probe 与 restart 解耦
+### 4. Unhealthy 路径同步返回状态文案 + queue status 排除
 
-**heartbeat / probe 失败 ≠ 一定 restart**。Adapter 通过 catalog 显式声明每种 error 类型的处理路径（共 5 种 recovery action）：
+c4-receive 在 health 非 OK 时（且 recovery probe 仍异常）：写入 inbound + 立即写入一条 outbound 状态文案（catalog `userMessage` 决定文案），DB 同时持久化两端，用户立即感知。
 
-- 重启会话类：sticky context-poison（图 400 / context_length 超长等）→ 停 runtime + 拉新 session
-- 持续探测类：transient overload（503 / 500）→ 进 Unavailable 持续探测，不重启进程
-- 限流标记类：检测到限流文本 → 进 RateLimited，不重启
-- auth 失败标记类：auth 探测失败 → 进 AuthFailed，不重启
-- 仅通知类：内容策略拦截等可恢复非 sticky 类 → 仅 log + 可选用户通知，不改 health
+**这条 inbound 不能进入 dispatcher 主投递队列**——用既有 `conversations.status` 字段表达为非待投递的 audit 语义（不引入新字段、不引入 terminal_status）。dispatcher 只看既有 queue status 决定是否投递；audit 语义的 inbound 在 dispatcher 视角即"已处理"，不会双投。
 
-具体 5 种 action 的语义、用户文案、HealthState 转换、c4 DB 记录路径详见模块档 [`health-engine.md`](activity-monitor/modules/health-engine.md)。
+详 §六.H 取舍说明（zylos0t R6 TODO 1 落点）。
 
-### 原则 4：state 走只读快照 / event 走具名接口
+### 5. Session restart continuation 是 best-effort
 
-- **State (持续值)**：生产者写状态文件，每 tick 开头由 SignalStore 刷新一次产出只读快照；消费者读快照
-- **Event (时间点动作)**：单向具名方法调用（如 auth 失败、进程重启、触发 recovery、通知用户消息），synchronous
+session_restart 触发后流程：
 
-**禁止**：跨模块 getter 反向查询；跨模块共享可变内存状态。
+1. `adapter.stop()` → Guardian 拉新 session
+2. c4-session-init 注入 last checkpoint summary + recent unsummarized 对话作为 startup context（既有机制）
+3. agent 看 startup context（包括恢复前可能未回复的 inbound）→ **自行判断**是否补 reply
+4. **不**主动 broadcast"我恢复了"——unhealthy 时用户已经同步收到状态文案
 
-state 路径上界一致性 ≤ 1 tick (≈ 1s)——是消除"反向同步查询"的代价，但收益是模块独立可测试 + 跨模块依赖只能正向。
+**Continuation 的 contract 边界**：
 
-### 原则 5：Adapter DI 隔离 runtime 差异
+- C4 DB 承诺 **accepted-message durability**（已写入的 inbound 不丢）
+- restart 后由 c4-session-init recent / unsummarized context + agent 自治做 **best-effort continuation**
+- **不承诺 unresolved-inbound completeness**（例如 100+ pending 时 startup context 受 token 预算约束可能截断）
+- 接受由此产生的 **residual UX risk**（restart 时刚到达但未投递的消息可能被 agent 漏答；user 凭文案重发是兜底机制）
 
-Claude / Codex 的差异（进程命令 / heartbeat 文件名 / API error 模式 / 工具规则等）全部封装为 Adapter，构造时注入业务模块。业务模块不在代码里做 runtime 分支判断。
+详 §六.I 取舍说明（zylos0t R6 TODO 2 落点）。
 
-未来加新 runtime 只需新写一个 adapter 模块，业务层零改动。
+### 6. Hook 路径不变 / 对外契约向后兼容
+
+所有 Hook 脚本物理路径不变，用户 settings 无需修改。对外状态文件加 schema 版本号；新增字段保持向后兼容（消费端遇未知 reason 退化到通用文案不报错）。
 
 ---
 
 ## 四、总体架构
 
-### 4.1 System Context（AM 在系统里的位置）
+### 4.1 模块全景（11 业务模块 + 1 Adapter）
+
+按职责划分 11 个业务模块 + 1 个 Adapter DI 层。每模块的具体实现见对应 [模块实施档](activity-monitor/modules/)：
+
+| 模块 | 一句话职责 | 实施档 |
+|------|-----------|--------|
+| **monitor** | 入口 + 主循环编排 + MessageRouter 宿主进程 | (索引在主循环, 不独立成档) |
+| **SignalStore** | 每 tick 开头刷新一次，产出 immutable 信号快照 | [`signal-store-and-status-writer.md`](activity-monitor/modules/signal-store-and-status-writer.md) |
+| **StatusWriter** | 写对外状态文件（对外契约唯一发布者） | 同上 |
+| **Guardian** | 进程存活守护 + 拉起决策 + bypass-once / marker 重置 | [`guardian.md`](activity-monitor/modules/guardian.md) |
+| **ProcSampler** | OS 级冻结检测（context switch 采样） | [`tool-pipeline-watchdog-procsampler.md`](activity-monitor/modules/tool-pipeline-watchdog-procsampler.md) |
+| **ToolPipeline** | 工具生命周期 + 事件流合成 | 同上 |
+| **ToolWatchdog** | 工具超时检测与干预 | 同上 |
+| **HealthEngine** | 健康状态机 + 主动探针编排 + api-error catalog dispatch | [`health-engine.md`](activity-monitor/modules/health-engine.md) |
+| **TaskScheduler** | 统一定时任务调度器（注册式 + usage 双 gate） | [`task-scheduler.md`](activity-monitor/modules/task-scheduler.md) |
+| **MessageRouter** | 用户消息路由（事件驱动，**不在 tick 里**）+ unhealthy queue-status 处理 | [`message-router.md`](activity-monitor/modules/message-router.md) |
+| **Adapter** | 运行时差异封装（构造时依赖注入） | [`runtime-adapter.md`](activity-monitor/modules/runtime-adapter.md) |
+| **(跨模块契约)** | session restart 后续接 contract + 边界声明 | [`session-restart-continuation.md`](activity-monitor/modules/session-restart-continuation.md) |
+
+### 4.2 三种通信通道
+
+| 通道 | 用途 | 实现 | 一致性 |
+|------|------|------|--------|
+| 🔵 **State via SignalStore** | 跨模块共享"当前持续值" | 生产者写文件，SignalStore 每 tick refresh；消费者读快照 | Eventual（≤ 1 tick ≈ 1s） |
+| 🔴 **Event via 具名接口** | 跨模块触发"一次性动作" | 单向方法调用 | Synchronous |
+| 🟢 **C4 主链** | 用户消息投递 | c4-receive → DB → c4-dispatcher → tmux（健康门控 + priority + require_idle） | — |
+
+**关键不变量**：Guardian 决策闭环中**不同步查询**任何其他模块；HealthEngine 不对外暴露 getter；c4-dispatcher 独占 tmux 写入。
+
+### 4.3 主循环 tick（每秒 8 步）
 
 ```
-┌───────────────────────────────────────────────────────────────────┐
-│                          Zylos System                              │
-│                                                                    │
-│  ┌──────────┐    ┌──────────────┐    ┌─────────────────────────┐  │
-│  │ Channels │ ─→ │  C4 Comm     │ ─→ │ Runtime Agent (tmux)    │  │
-│  │ (Lark/TG │    │  Bridge      │    │  Claude / Codex         │  │
-│  │  HXA/Web)│ ←─ │  (DB ledger) │ ←─ │                         │  │
-│  └──────────┘    └──────┬───────┘    └────────┬────────────────┘  │
-│                         │                     │                    │
-│                         │ status / control    │ hooks (signals)    │
-│                         ↓                     ↓                    │
-│              ┌──────────────────────────────────────┐             │
-│              │       Activity Monitor (AM)          │             │
-│              │  PM2 长驻 / 守护 runtime instance    │             │
-│              └──────────────────────────────────────┘             │
-└───────────────────────────────────────────────────────────────────┘
+每秒 tick:
+ ① SignalStore.refresh         ← 刷新快照
+ ② Guardian.tick               ← 进程存活 + 拉起决策
+ ③ ProcSampler.tick            ← 冻结检测
+ ④ ToolPipeline.tick           ← 工具生命周期 + api-activity 合成
+ ⑤ ToolWatchdog.tick           ← 工具超时检测
+ ⑥ HealthEngine.tick           ← 健康状态机 + api-error catalog dispatch
+ ⑦ TaskScheduler.tick          ← 定时任务调度
+ ⑧ StatusWriter.write          ← 写对外状态文件
 ```
 
-AM 的对外契约：
-- **发布对外状态**：作为唯一发布者写"对外状态文件"，C4 主链 / web-console 消费
-- **提供路由决策 IPC**：c4-receive 通过本地 IPC 询问消息路由决策（健康判定 + 路径选择）
-- **消费 Hook signals**：runtime 进程的 hook 文件（工具事件 / context / 前台 session / PID）以 signal 文件形式被 AM 消费
+**顺序硬约束**：④ 在 ⑥ 前（健康判定要读工具活动视图）；⑤ 在 ④ 后 ⑥ 前（watchdog 干预可能触发 health 降级）；MessageRouter 不在 tick 里，由 c4-receive IPC 触发。
 
-### 4.2 Container（AM 内部模块拼图）
+### 4.4 状态模型
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                        Activity Monitor                              │
-│  ┌────────────────────────────────────────────────────────────────┐ │
-│  │                  monitor.js (编排)                              │ │
-│  │  每秒 8 步 tick + MessageRouter 宿主进程 + IPC server          │ │
-│  └────────────────────────────────────────────────────────────────┘ │
-│                                                                      │
-│  ┌────────────┐  ┌──────────┐  ┌────────────┐  ┌─────────────────┐  │
-│  │ SignalStore│  │ Guardian │  │ ProcSampler│  │ ToolPipeline    │  │
-│  │ (signals   │  │ (进程   │  │  (冻结    │  │  + ToolWatchdog │  │
-│  │  snapshot) │  │  守护)   │  │  检测)    │  │                 │  │
-│  └────────────┘  └──────────┘  └────────────┘  └─────────────────┘  │
-│                                                                      │
-│  ┌────────────────┐  ┌────────────────┐  ┌──────────────────────┐   │
-│  │ HealthEngine   │  │ TaskScheduler  │  │ StatusWriter         │   │
-│  │ (4-state FSM   │  │ (注册式定时   │  │ (对外状态唯一发布者) │   │
-│  │  + catalog     │  │  任务)        │  │                      │   │
-│  │  dispatch)     │  │                │  │                      │   │
-│  └────────────────┘  └────────────────┘  └──────────────────────┘   │
-│                                                                      │
-│  ┌────────────────┐  ┌────────────────────────────────────────────┐ │
-│  │ MessageRouter  │  │ Adapter (Claude / Codex) — DI 注入业务模块 │ │
-│  │ (事件驱动 IPC) │  │  (进程管理 / 健康检查 / API error catalog) │ │
-│  └────────────────┘  └────────────────────────────────────────────┘ │
-└─────────────────────────────────────────────────────────────────────┘
-```
+**ActivityState（3 种，无状态投射）**：Offline / Idle / Busy。每 tick 结束时根据当下信号 snapshot 投射，无历史依赖。冻结的瞬态由 ProcSampler 判死后直接 kill，下一 tick 自然投射为 Offline。
 
-11 个模块（10 业务 + 1 Adapter DI），主循环只做编排。各模块通过 SignalStore 共享 state 快照，通过具名方法触发跨模块 event。
+**HealthState（4 种，FSM）**：OK / Unavailable / RateLimited / AuthFailed。对外只暴露 `health` + `unavailable_since` 两个字段；不写子状态——消费端读时间戳自行判断文案差分（< 60min 转 ≥ 60min 文案不同）。
 
-### 4.3 Component Interaction（模块间协作总览）
-
-| 协作链 | 大致路径 | 性质 |
-|---|---|---|
-| **状态共享** | 任意模块写 signal → 下一 tick SignalStore refresh → 消费者读 snapshot | 异步，eventual ≤ 1s |
-| **事件触发** | Guardian → 具名方法 → HealthEngine | 同步具名调用 |
-| **工具异常** | ToolWatchdog → 具名方法 → HealthEngine | 同步具名调用 |
-| **用户消息路由** | c4-receive → 本地 IPC → MessageRouter → 决策 (健康判定 + 路径) | 同步 IPC |
-| **决策落盘** | StatusWriter → 写对外状态文件 → C4 主链 / web-console 消费 | tick 末尾原子写 |
-
-**关键不变量**：
-- Guardian 决策闭环中**不同步查询**任何其他模块
-- HealthEngine 不对外暴露 getter（只通过 SignalStore 暴露 read-only 字段）
-- c4-dispatcher **独占**对 tmux 的写入（C4 主链不可绕）
-- MessageRouter 不直接调 tmux
-
-### 4.4 主循环 tick
-
-每秒 1 次，固定 8 步顺序：
-
-```
-① signals refresh           ← 刷新只读快照（state + 流式增量合一）
-② 进程存活守护              ← 决定是否拉起
-③ OS 级冻结检测             ← context switch 采样
-④ 工具生命周期 + 事件流合成 ← 合成工具活动视图
-⑤ 工具超时检测 + 干预       ← 超时工具的 stop / interrupt
-⑥ 健康状态机 + catalog 分派 ← OK / Unavailable / RateLimited / AuthFailed
-⑦ 定时任务调度              ← 注册式 tasks
-⑧ 写对外状态文件            ← 唯一发布者
-```
-
-**顺序硬约束**：④ 必须在 ⑥ 前（健康判定要读工具活动视图）；⑤ 在 ④ 后 ⑥ 前（watchdog 干预可能触发 health 降级）。MessageRouter **不在 tick 里**，由 c4-receive 通过 IPC 触发。
-
-每步具体接口签名 / 实现细节见对应模块档。
+详细转换表 / 决策规则 / 字段定义见 [`health-engine.md`](activity-monitor/modules/health-engine.md)。
 
 ---
 
 ## 五、关键流程
 
-四条 critical path——reviewer 不看代码也能判断方案是否闭环。具体接口 / 字段 / 持久化路径见模块档。
-
-### 5.1 OK 直通（happy path）
-
-用户发消息 + AM 健康正常时的全链路：
+### 5.1 OK 直通路径
 
 ```
-[用户] 发消息 (Lark / TG / HXA / Web)
-   ↓ channel daemon 收事件
-[c4-receive] 通过本地 IPC 询问 MessageRouter 路由决策
-   ↓
-[MessageRouter] 读只读快照投射的 health
-   ├── health=OK
-   ↓
-[c4-receive] 写 inbound 记录到 c4 DB（持久化）
-   ↓
-[c4-dispatcher] 按 priority + 空闲门控投递 → tmux
-   ↓
-[Runtime Agent] 处理消息 → 写回复
-   ↓
-[c4-dispatcher / channel daemon] 把回复送回用户
+user → c4-receive (insertConv 'in') → MessageRouter (health=OK) → dispatcher → tmux → agent 实回复
 ```
 
-**不变量**：消息进入 c4 DB inbound 即视为持久化成功；后续 runtime 异常不算"消息丢失"（详 §5.3）。
+agent 看消息回复；DB 既有 inbound 与后续 outbound 完整持久化。runtime 后续异常**不算消息丢失**（参 §三.2、§三.5）。
 
-**Terminal status 维护（R4 review zylos0t 修订：reply command token-passing）**：
-- c4-dispatcher claim inbound A 投递时，**生成的 reply via 命令本身**带 `--reply-to-id A`
-- agent 看 prompt context 直接 follow 命令 → c4-send 写 outbound 含 `reply_to_inbound_id=A` → 标 inbound A `replied` (terminal)
-- agent **主动消息**（无 dispatcher claim）→ c4-send 不带 `--reply-to-id` → 默认 `reply_to_inbound_id=NULL` → **不动任何 pending**
-- c4-send 输入校验分两层：hard validation (不存在/channel/endpoint mismatch → reject + 不写 outbound) + soft idempotent (已 terminal → outbound 写入 + mark no-op + warning，C-Term-5 单调)
-- 配对完全 mechanical（不靠 endpoint heuristic / 不靠 agent 语义判断 / 不靠跨进程内存读取）。详 [`c4-reliability-contract.md`](activity-monitor/modules/c4-reliability-contract.md)
-
-### 5.2 Unhealthy 路由（degraded path）
-
-AM 健康异常（Unavailable / RateLimited / AuthFailed）时：
+### 5.2 Unhealthy 同步状态文案路径
 
 ```
-[c4-receive] 询问 MessageRouter
-   ↓
-[MessageRouter] 读 health ≠ OK
-   ↓ 触发一次 recovery probe（短窗口聚合，多消息共享同一次 probe）
-   │  c4-receive 同步阻塞等待（硬超时 30s）
-   ↓
-[Probe 返回]
-   ├── recovered=true → 走 §5.1 OK 直通
-   └── recovered=false →
-        [c4-receive] 同步写两条 c4 DB 记录：
-                    1) inbound 记录（消息持久化）
-                    2) outbound 状态文案
-                       (来源：catalog 当前 reason 的 user-facing 文案，
-                        如 "限流冷却中" / "auth 失败" / "服务暂时不可用")
-        [用户] 立即收到状态回复（不留 silent gap）
+user → c4-receive
+       → MessageRouter (health 非 OK) 触发 recovery probe 聚合
+       ↓ probe recovered=true
+         → 重走 OK 直通路径
+       ↓ probe recovered=false
+         → c4-receive (insertConv 'in', status=audit) + (insertConv 'out', <catalog.userMessage>)
+         → 用户立即收到状态文案
 ```
 
-**关键**：unhealthy 路径**同步**返回 outbound 状态文案——保证用户立即感知系统状态。**不需要**事后异步发"我恢复了"广播（避免双通知）。
+**关键约束**（zylos0t R6 TODO 1 落点）：probe recovered=false 时写入的 inbound 用既有 `conversations.status` 字段标记为 audit 语义（即非待投递），dispatcher 看 queue status 不会再处理这条 inbound——**不引入新字段** `terminal_status`，**不引入 reply correlation token**。
 
-**1-reply invariant 守法**：写 outbound 状态文案的同时把对应 inbound 标 `status_replied` (terminal) → c4-dispatcher 之后**不再投递**该 inbound（即使 health 恢复 OK），避免"状态文案 + 后续 AI reply"双回复。详 [`c4-reliability-contract.md`](activity-monitor/modules/c4-reliability-contract.md)。
-
-### 5.3 Session restart 后的对话续接
-
-Catalog 命中"重启会话"类 error（如图 400 / context_length 超长）时：
+### 5.3 API error catalog dispatch 路径
 
 ```
-[HealthEngine] catalog 命中 → recoveryAction = 重启会话
-   ↓
-[Adapter] 停 runtime 进程
-   ↓
-[Guardian] 下一 tick 看进程消失 → 拉新 session
-   ↓
-[c4-session-init hook] 注入 startup context（按 C4 reliability contract 三段）
-   • last checkpoint summary（既有）
-   • recent unsummarized 对话（既有，会被 recent-N 窗口截断）
-   • **当前 endpoint pending inbounds bounded subset**（v3 新增）
-     - default top-K=20 + total/omitted count + continuation 提示
-     - DB 持久化完整（C-SR-2a），startup context bounded exposure（C-SR-2b）
-     - agent 看 omitted 提示自决策是否调 `c4-db.js list-pending --offset K` 续查
-   ↓
-[Runtime Agent] 启动后看到 context，明确知道哪些 inbound 是 pending
-   ↓ agent 自决策（LLM core capability）
-   ├── 处理 pending 写 outbound 用 c4-send.js ... --reply-to-id <id> → 标 inbound 'replied'
-   ├── 显式判定不答 → 调 c4-db.js mark-dropped <id> → 标 'manually_dropped' (terminal)
-   └── 暂不处理 → inbound 保持 pending，下次 restart 仍会被注入
+Layer 2 tmux scan 命中 API error pattern
+  → catalog entry lookup
+  → 按 entry.recoveryAction 分派：
+     ├── restart_session   → adapter.stop + 进 Unavailable + 等 Guardian 拉新 session
+     ├── probe_only        → 进 Unavailable + 持续 probe（**不 stop**）
+     ├── mark_rate_limited → 进 RateLimited（**不 stop**）
+     ├── mark_auth_failed  → 进 AuthFailed（**不 stop**）
+     └── notify_only       → 仅 log + 可选用户即时通知（不改 health, 不 stop）
 ```
 
-**边界声明**：
-- **不主动 broadcast** "我恢复了"——unhealthy 时用户已同步收到状态文案
-- **AM 不维护**任何受害者识别 ledger——reply-resolution 工作落在 c4 DB schema（terminal status 字段 + dispatcher 协同 + session-init 查询）
-- **C4 DB 是消息可靠性边界（三层契约）**——durability + terminal status + unresolved-inbound exposure，message persistence + reply tracking 在 c4 层完成，AM 不重做
-- **pending inbounds 跨 restart 持久**——agent 不主动处理时，下次 session restart 仍会被注入；保证"未答消息不会因 restart 被吞掉"
+5 种 recoveryAction × HealthState 转换 × DB 记录路径的完整矩阵见 [`health-engine.md`](activity-monitor/modules/health-engine.md) §3。
 
-详见 [`c4-reliability-contract.md`](activity-monitor/modules/c4-reliability-contract.md)（C4 schema/逻辑契约）+ [`session-restart-continuation.md`](activity-monitor/modules/session-restart-continuation.md)（AM 视角恢复流程）。
+**Unknown 升级路径**：catalog 未匹配但通用 Error/FATAL 命中 → 默认 `probe_only` 兜底 + 写未知错误日志；同一 unknown 错误连续 5min 命中 → 强制升级为 `restart_session` 自愈，防退避永远卡死。
 
-### 5.4 Cold start：bypass-once + marker 重置
-
-AM 重启时分两路径，由一个 marker 文件区分 operator 显式 opt-in vs 系统 auto-restart：
+### 5.4 Session restart continuation 路径
 
 ```
-AM 启动
-   ↓
-检测 reset marker 文件
-   ├── marker 存在（operator 显式 opt-in）
-   │     ↓ 路径 B
-   │     • 清空 Guardian 持久化退避状态
-   │     • unlink marker（one-shot 防误重置）
-   │     • 关闭 bypass-once
-   │     • 首次 probe 从初始 delay 开始
-   │
-   └── marker 不存在（默认 auto-restart）
-         ↓ 路径 A：bypass-once
-         • 从持久化文件恢复 Guardian 退避状态（保留故障认知）
-         • 首次 probe 绕过时间驱动退避，但不绕过维护窗口锁
-         • 首次 probe 成功 → 清空退避状态
-         • 首次 probe 失败 → 回到持久化退避水位（不退回初始 delay）
+restart_session 触发
+  → adapter.stop
+  → Guardian 看 ActivityState=Offline → 拉新 session
+  → c4-session-init 注入 startup context (last checkpoint + recent unsummarized)
+  → agent 看 context → 自决策是否补 reply
 ```
 
-**三场景语义**：
+**Contract**（zylos0t R6 TODO 2 落点）：
 
-| 场景 | marker | 退避状态 | 首次探测 |
-|---|---|---|---|
-| operator 显式 reset-backoff | ✅ one-shot | 清零 | 初始 delay |
-| daily-upgrade 完成后 AM 自重启 | ❌ | 保留 | bypass-once 给 1 次机会 |
-| auto-restart（AM 崩溃 / PM2 拉起） | ❌ | 保留 | bypass-once 给 1 次机会 |
+- C4 DB 保 accepted-message durability
+- restart 后 best-effort continuation
+- 不承诺 unresolved-inbound completeness
+- 接受 residual UX risk（user 凭 unhealthy 时已收到的状态文案重发是兜底）
 
-详见 [`guardian.md`](activity-monitor/modules/guardian.md)。
+详 [`session-restart-continuation.md`](activity-monitor/modules/session-restart-continuation.md) §2。
+
+### 5.5 Guardian 冷启动 bypass-once 路径
+
+```
+AM 冷启动
+  ├── marker 文件存在  → 清空 4 字段持久化状态 + unlink marker (one-shot)
+  │                      → 关闭 bypass-once → 走 initial_delay
+  └── marker 不存在    → 从持久化恢复 4 字段（保留故障认知）
+                        → 首次 probe bypass 时间驱动退避（条件 #1/#2/#3，不绕 #4 维护窗口）
+                        → 成功 → 清空 4 字段
+                        → 失败 → 回到持久化退避水位（不退回 initial_delay）
+```
+
+详 [`guardian.md`](activity-monitor/modules/guardian.md) §5。
 
 ---
 
 ## 六、方案取舍
 
-A-C 是 v3 核心架构 trade-off（Direction D 路径决断）；D-J 是承袭 v2.1 的设计权衡，按提出顺序排列。
+### A. 为什么 HealthState 合并 recovering / down 为 Unavailable
 
-### A. 为什么 C4 DB 是消息可靠性边界（哪些机制被砍 / 哪些移到 C4）
+recovering 是"暂时重试中"，down 是"长期失败"——本质同一恢复流两阶段，60min 阈值是 HealthEngine 的内部退避升级时机却被暴露为对外状态枚举。合并后用 `unavailable_since` 时间戳替代子状态区分，消费端保有文案差分能力，对外契约更简洁。
 
-历史上多次尝试在 AM 层维护私有受害者识别 ledger，最终全部 walk back：
+### B. 为什么 SignalStore 采用 eventual consistency
 
-| 曾设计但被砍 | 砍掉原因 | 处理 |
-|---|---|---|
-| 受害者识别滚动日志（recent-inbound.jsonl） | AM 重做 c4 已有职责；引入 race / lock 复杂度无收益 | ❌ 完全砍掉 |
-| 异步恢复广播（升级既有 pending-channels） | unhealthy 路径已同步返 outbound 状态文案，不需要事后异步广播 | ❌ 完全砍掉 |
-| 重启 intake barrier | C4 DB 已是消息可靠性边界，不需要 AM 层 atomic snapshot | ❌ 完全砍掉 |
-| 文件互斥锁 / activity-driven 日志清理 | 不维护 AM 私有 mutable file 就没有 race 也不需要 cleanup | ❌ 完全砍掉 |
-| Cold-restart broadcast 受害者通知 | agent 自治补答替代主动 broadcast | ❌ 完全砍掉 |
-| sticky-trigger context taint 标记 | 难可靠判定，引入新 ledger 复杂度无收益 | ❌ 完全砍掉 |
-| **显式 unanswered inbound 注入 session-init** | （早期 v2.1 walkback：理由"是否已回复难以可靠判定，group/multi-msg 假阳性"——但这只在 AM heuristic 层成立） | 🔄 **从 AM 砍掉，移到 C4 内部 schema** |
+Guardian → HealthEngine 反向查询路径被消除的代价。原同步内存查询是 O(1) strong consistency；新通道是"写文件 → SignalStore refresh → 读快照"三跳，上界 1 tick (≈1s)——限流解除后 Guardian 最多慢 1s 拉起，代价可控；收益是同步调用路径完全消除，模块独立可测。
 
-**v2.1 walkback 重审 (R3 review by zylos0t, 2026-04-28)**：早期 v2.1 把 "unanswered inbound 注入" 跟 7 项 AM 私有 ledger 一起砍了——前 7 项砍对了（不该住在 AM），但最后一项**砍重了**。reply-resolution 不该在 AM 做 heuristic detection，但 C4 层是消息 source-of-truth，加 schema 字段做协同维护是 mechanical operation：
+### C. 为什么 bypass-once 不是"所有 cold start 清零"
 
-- ✅ "AM 不做 victim tracking" — 保持砍
-- ❌ "C4 也不需要 reply-resolution / unresolved-inbound contract" — 这条不成立
-- ✅ detection 难是 AM heuristic 层的问题——在 C4 协同 schema 层是 mechanical：c4-receive 写 outbound 时同步标对应 inbound `replied` (terminal)，不需要事后猜配对
+简单"所有清零"无法区分 operator 意图重试（应清零）与 PM2 auto-restart（应保留故障认知）。后者每次从 initial_delay 重爬会对外部 API 产生持续脉冲。marker 文件做 operator 显式 opt-in，两端取得合适语义；marker 用完即焚（one-shot）防止退化为"所有清零"。
 
-**v3 的修正**：把"显式 unanswered inbound 注入"以 **C4 reliability contract 三层契约** 落地：
-1. Durability（既有）
-2. **Terminal status**（新增）：conversations 表加 `terminal_status` 字段，由 c4-receive / c4-dispatcher 协同维护
-3. **Unresolved-inbound exposure**（新增）：c4-session-init 查询 pending inbounds 注入 startup context
+### D. 为什么 IPC 降级不入队
 
-详 [`c4-reliability-contract.md`](activity-monitor/modules/c4-reliability-contract.md)。
+原设计 IPC 降级时仍 insertConversation + "消息已入队" 文案是"不丢消息优先"妥协，代价是一条 receive 可能产出 2 条回复（interim error + 后续 AI），违反"一次 c4-receive 一次真实答案"不变量。新设计选择"不做假入队承诺"，文案诚实告知 operator 需要重发。不变量 100% 成立；IPC 降级是 monitor crash 级罕见异常场景，可接受。
 
-**main 既有的异步恢复广播路径在 v3 下废弃**——Phase 5 legacy 清理项明列（c4-receive 写入分支 + AM drain 职责）。
+### E. 为什么 ActivityState 是无状态投射而不是 FSM
 
-### B. 为什么 probe 跟 restart 解耦
+ActivityState 无历史依赖——任何 tick 看到同样信号都得同样 state。FSM 会引入"从自己写的对外状态文件恢复状态"的反向依赖，重启 AM 后可能与现实信号不一致。无状态投射下第一 tick 直接算出真值，契合"进程拉起 ≠ 健康变化"哲学。
 
-历史曾把 probe 失败一律 trigger restart。但限流 / auth 失败 / transient overload 不是 sticky context 问题——restart 没意义只徒增脉冲。catalog 把每种 error 的处理路径显式声明，HealthEngine 按 dispatch table 分派，避免一刀切。
+### F. 为什么不引入 cron 解析器
 
-### C. 为什么不做 InputValidator（不在 v3 baseline 也不在任何模块文档）
+依赖最小化 + 可测试。cron 库约 50KB 代码，表达式解析有 bug 历史。`dailyHour` + `intervalSeconds` 两字段语义明确，测试只需 mock 时间。未来如有"每周三 03:00"需求加 `weeklySchedule` 字段即可。
 
-zylos 当前架构下用户消息附件走 path-as-text：channel daemon 把附件下载本地后只把**文件路径作为字符串**塞进 c4-receive，c4 DB 持久化层只有 TEXT 列，**不存在自动 multimodal 注入路径**。
+### G. 为什么不引入 reply-resolution / terminal_status / token-passing 整套（R6 production rollback 决断）
 
-坏图永远不会自动进入 Claude API user turn——agent 看到的是文本里的路径，**由 agent 自己决定调 Read 工具加载**。Read 工具自带边界（size / format），超限直接返 error → agent 在对话里告诉用户重发，不触发 sticky API 错误链。原 problem statement（拦下 90% 已知规格违规避免 60-70s 出口治理 latency）的前提不成立。
+PR #501 v3 早期演进路径（R3+R4+R5）尝试在 C4 DB 引入 reply-resolution 整套（per-message terminal_status + reply_to_inbound_id + reply command token-passing + C-Term-1~5 单调 invariant + hard/soft 校验 + bounded pending exposure CLI）。R6 production trade-off 评估后整套退出 baseline，原因：
 
-未来如新增 multimodal 直接注入路径（如 base64 content block 注入），正确的入口校验位置是该注入点（runtime-aware by design），不是独立 AM module。
+1. **prior decision 违背**：早期讨论已明确"C4 不需要记录消息已回复状态"；R3 引入 terminal_status 等是把 C4 纯机械层升级为业务语义，违背前置共识
+2. **discipline 假设过强**：reply command token-passing 假设 agent / dispatcher / channel daemon 都按规矩玩——agent 手写命令 / 复制旧命令 / 跨 thread 回复 / 主动补充等任一场景 break 即出现 correlation stale/missing/mismatch；配对错从 v2.1 的"软错"（agent 自决策错）变 v3 的"硬错"（系统机制写错 DB）
+3. **state 组合矩阵未拼完**：R3+R4 引入的 `terminal_status` 与 `claimed_at` 跟既有 `conversations.status`（pending / running / delivered / failed）字段交互**完全未讨论**——R3/R4/R5 reviewer 5 轮基于 v3 自身一致性 review 都未抓到此 blind spot；implementation baseline 自身漏字段交互契约不能算合格 baseline
+4. **大机制解小问题**：unhealthy status reply 的真正需求是"状态文案返回后对应 inbound 不进入 dispatcher 主队列"——用既有 queue status 表达即可（§六.H 落地），无需 terminal_status 全套
+5. **scope 蔓延**：pending exposure（bounded subset + continuation CLI）是产品语义不是 AM refactor 必要前置；塞进 PR #501 会让 AM refactor 变成 C4 reply ledger 重构，风险面扩大
 
-### D. 为什么 HealthState 合并 recovering / down 为 Unavailable
+R6 决断保留 v2.1 已收敛的所有有效产物（catalog-driven api error / probe-restart 解耦 / 11 模块拆分 / bypass-once+marker / usage 双 gate 等），仅退出 R3+R4+R5 引入的 reply-resolution 增量。本 v3 重排版即在此决断基础上做 spec 化 + 落地两条窄修订（§六.H、§六.I）。
 
-recovering 是"暂时重试中"，down 是"长期失败"——本质是同一恢复流两阶段，60min 阈值是 HealthEngine 的**内部退避升级时机**，却被暴露为对外状态枚举导致消费端难以理解。合并后用 unavailable_since 时间戳替代子状态，消费端保有文案差分能力（"稍后重试" vs "需管理员介入"），契约更简洁。
+### H. zylos0t R6 TODO 1：Unhealthy inbound 用既有 queue status 表达非待投递
 
-### E. 为什么状态共享走"快照 + eventual" 而不是"内存 + getter"
+**问题**：v2.1 多处描述 unhealthy 路径写入 `insertConv('in') + insertConv('out', 状态文案)`，但**没有显式声明**这条 inbound 在 dispatcher 视角的处理状态——理论上 dispatcher 看 inbound queue 仍可能尝试再次投递，造成双答（status outbound 已发 + dispatcher 又投递 → agent 又答一次）。
 
-代价：消除 Guardian → HealthEngine 反向查询路径。原始路径是 O(1) 内存读，新通道是"写文件 → 下一 tick refresh → 读快照"三跳，上界 1 tick (≈ 1s)。换来同步调用路径完全消除——模块独立可测试 / 跨模块依赖反向 / AI 加载某个模块时不必 follow 链路上其他模块。1s 的延迟在限流解除等场景代价可控。
+**收敛**：用既有 `conversations.status` 字段（不引入新字段）把 unhealthy 路径写入的 inbound 标记为 audit 语义（即非待投递）。dispatcher 看 queue status 不会处理这条 inbound——双答边界由既有字段闭环。
 
-### F. 为什么 bypass-once 不是 "所有 cold start 清零"
+**为什么不引入 terminal_status**：`terminal_status` 把"是否已回复"做成 C4 业务语义，而 group / multi-msg / agent 主动消息等场景这件事 C4 纯机械层无法稳定判断（参 §六.G #1）。本 TODO 走既有 queue status 的窄修订，避免再次进入 reply-resolution scope。
 
-简单"所有清零"无法区分 operator 显式重试（应清零）与 auto-restart（应保留故障认知）。后者每次从初始 delay 重爬会对外部 API 产生持续脉冲。marker 文件做 operator 显式 opt-in，两边取到合适语义。marker 用完即焚（one-shot）防止退化为"所有清零"。
+**落点**：[`message-router.md`](activity-monitor/modules/message-router.md) §3 不变量 + §5 c4-receive 适配；[`health-engine.md`](activity-monitor/modules/health-engine.md) §3 catalog × HealthState × DB 路径矩阵；Phase 3 c4-receive 改造说明（§八）。
 
-### G. 为什么 IPC 降级不入队
+### I. zylos0t R6 TODO 2：Session restart continuation 降级 best-effort
 
-原设计 IPC 降级时 c4-receive 仍写 inbound + "消息已入队"文案是"不丢消息优先"的妥协，代价是一条 receive 可能产出 2 条回复（interim error + 后续 AI），违反"一次 c4-receive 一次真实答案"不变量。新设计选择"不做假入队承诺"，文案诚实告知 operator 需要重发。不变量 100% 成立，IPC 降级是 monitor.js 进程崩溃级别的罕见异常场景，可接受。
+**问题**：v2.1 §5.3.2 表述"c4 DB + c4-session-init 已经覆盖正确性边界"过强——v2.1 明确不做 unanswered-inbound 注入，只靠 c4-session-init 的 checkpoint summary + unsummarized / recent context。但 recent context 受 token 预算约束（典型 6 条），100+ pending 时不能完整暴露。
 
-### H. 为什么 ActivityState 是无状态投射而不是 FSM
+**收敛**：把 contract 拆为 3 句：
 
-ActivityState 无历史依赖——任何 tick 看到同样信号都得出同样 state。FSM 会引入"从自己写的对外状态文件恢复状态"的反向依赖，重启 AM 后可能与现实信号不一致。无状态投射下第一 tick 就直接算出真值。
+1. **C4 DB 保 accepted-message durability**——已 insertConv 的 inbound 不丢
+2. **restart 后 best-effort continuation**——c4-session-init recent / unsummarized + agent 自治
+3. **不承诺 unresolved-inbound completeness**——接受 residual UX risk（user 凭 unhealthy 时已收到的状态文案重发是兜底）
 
-### I. 为什么 ProcSampler 是独立模块而不是 Guardian 一部分
+**为什么不补 unresolved-inbound 完整注入**：要求 100% 完整性等于回到 R3 引入 terminal_status / pending exposure 整套（参 §六.G #5）。本 TODO 走"诚实声明边界"的窄修订，把 production trade-off 写在 contract 里，避免假装承诺。
 
-时间维度不同。Guardian 是 1s 级 boolean 检查；ProcSampler 是 10s 采样 + 60s 滑动窗口状态机。合进 Guardian 会让 Guardian 维护独立时序状态机违反单一职责。
-
-### J. 为什么不引入 cron 解析器
-
-依赖最小化 + 可测试。cron 库约 50KB 代码，表达式解析有 bug 历史。当前两字段（`dailyHour` + `intervalSeconds`）语义明确，测试只需 mock 时间。
+**落点**：[`session-restart-continuation.md`](activity-monitor/modules/session-restart-continuation.md) §2 不变量 + §5 边界声明；本文件 §三.5。
 
 ---
 
-## 七、模块索引
+## 七、模块实施档索引
 
-11 个模块（10 业务 + 1 Adapter DI），按职责聚合为 **9 份模块实施档**（含 1 份跨模块 C4 契约档）。每份独立可加载，按需读取。
+每份模块档按 [`tech-doc-spec`](../.claude/skills/tech-doc-spec/SKILL.md) 8 项结构（职责边界 / 输入输出契约 / 数据结构 / 关键接口 / 错误处理 / 迁移策略 / 测试策略 / 跨模块依赖）独立可加载。本节给出索引；具体实施细节去对应模块档读。
 
-| 模块实施档 | 覆盖模块 | 核心职责 |
-|---|---|---|
-| [`c4-reliability-contract.md`](activity-monitor/modules/c4-reliability-contract.md) | (跨模块契约 — C4 内部 schema/逻辑) | **C4 DB 三层契约**：durability + terminal status + unresolved-inbound exposure。包含 conversations 表 schema 扩展、c4-receive / c4-dispatcher 协同维护、c4-session-init 查询 pending inbounds |
-| [`signal-store-and-status-writer.md`](activity-monitor/modules/signal-store-and-status-writer.md) | SignalStore / StatusWriter | 信号聚合（每 tick 只读快照）+ 唯一对外契约发布者 |
-| [`guardian.md`](activity-monitor/modules/guardian.md) | Guardian | 进程存活守护 + 拉起条件 + bypass-once + marker 重置 |
-| [`health-engine.md`](activity-monitor/modules/health-engine.md) | HealthEngine | 4-state FSM + 触发源 + tick 内部步骤 + 3 层监控 + catalog-driven api-error-check + recoveryAction × HealthState 矩阵 + unknown error 持续性升级 |
-| [`message-router.md`](activity-monitor/modules/message-router.md) | MessageRouter | 用户消息路由 + 4 约束 C1~C4 + 不变量对照 + 并发聚合 + IPC 协议 |
-| [`session-restart-continuation.md`](activity-monitor/modules/session-restart-continuation.md) | (跨模块契约 — AM 视角恢复流程) | 消费 C4 reliability contract：session restart 后 c4-session-init 注入 pending + agent 自治续接；delivered-but-unanswered ≠ 丢失边界声明 |
-| [`tool-pipeline-watchdog-procsampler.md`](activity-monitor/modules/tool-pipeline-watchdog-procsampler.md) | ToolPipeline / ToolWatchdog / ProcSampler | PR #500 边界适配 + 5-stage 工具状态机 + 60s 滑动窗冻结检测 |
-| [`task-scheduler.md`](activity-monitor/modules/task-scheduler.md) | TaskScheduler | 注册式调度 + 任务清单 + usage 监测/告警双 gate 拆分 |
-| [`runtime-adapter.md`](activity-monitor/modules/runtime-adapter.md) | Adapter (Claude / Codex) | 接口分类 + DI 模型 + Claude / Codex 差异封装 |
+| # | 模块档 | 涵盖模块 | 核心内容 |
+|---|--------|---------|----------|
+| 1 | [`runtime-adapter.md`](activity-monitor/modules/runtime-adapter.md) | Adapter | DI 模型；6 类接口（标识 / 进程管理 / 健康检查 / API error catalog / 运行时差异 / 消息写入）；加新 runtime 流程 |
+| 2 | [`signal-store-and-status-writer.md`](activity-monitor/modules/signal-store-and-status-writer.md) | SignalStore + StatusWriter | 信号清单（13 文件）；快照 vs 流式；对外 schema（含 schema_version + unavailable_reason）；4 状态投射规则 |
+| 3 | [`guardian.md`](activity-monitor/modules/guardian.md) | Guardian | 4 拉起条件；指数退避；bypass-once + marker 三场景；onProcessRestarted 单向事件 |
+| 4 | [`health-engine.md`](activity-monitor/modules/health-engine.md) | HealthEngine | 4-state FSM 转换表；3 层健康监控；catalog-driven dispatch + 5 recoveryAction × DB 路径矩阵；unknown 5min 升级；冷启动 health 回填 |
+| 5 | [`tool-pipeline-watchdog-procsampler.md`](activity-monitor/modules/tool-pipeline-watchdog-procsampler.md) | ProcSampler + ToolPipeline + ToolWatchdog | 三模块物理共置；PR #500 边界适配；5-stage watchdog；60s 滑动窗冻结判定 |
+| 6 | [`task-scheduler.md`](activity-monitor/modules/task-scheduler.md) | TaskScheduler | 注册式调度；7 任务清单；usage-monitor / usage-alerter 双 gate 拆分（4 语义矩阵 + 升级兼容路径） |
+| 7 | [`message-router.md`](activity-monitor/modules/message-router.md) | MessageRouter | 4 约束 C1~C4；OK / Unhealthy / Probe-recovered / IPC-down 路径；**unhealthy inbound queue-status audit 语义**（§六.H 落点） |
+| 8 | [`session-restart-continuation.md`](activity-monitor/modules/session-restart-continuation.md) | (跨模块契约) | restart 后 startup context 注入；agent 自治续接边界；**best-effort contract 三句**（§六.I 落点）；不引入的机制清单 |
 
-每份模块档按统一 8 项结构（详 [`tech-doc-spec` 规范](../../.claude/skills/tech-doc-spec/SKILL.md)）：模块职责与边界 / 输入输出契约 / 数据结构与状态机 / 关键接口 / 错误处理与恢复 / 迁移策略 / 测试策略 / 模块依赖。
+**移除的模块档**（R3+R4+R5 引入，R6 production rollback 决断后退出）：
 
----
-
-## 八、迁移路线图
-
-按 Phase 推进，每 Phase 独立可 ship + 可回滚。具体每模块的迁移步骤见对应模块档。
-
-| Phase | 主题 | 关键交付 |
-|---|---|---|
-| **Phase 0** | Watchdog 边界适配（PR #500 内部语义不动） | 工具相关组件模块边界对齐；E2E golden 等价 |
-| **Phase 1** | 基础设施 | SignalStore / StatusWriter / TaskScheduler / ToolPipeline 新建；feature flag 挂接 |
-| **Phase 2** | 状态模型 + 组件拆分 | Guardian / HealthEngine 新建（含 catalog-driven api-error-check + recoveryAction dispatch + unknown 5min 升级）；新 monitor 8 步 tick |
-| **Phase 3** | 消息路由 + c4-receive 适配 + **C4 reliability contract 落地** | MessageRouter 新建；c4-receive 改造（同步等 MessageRouter + unhealthy 路径写状态文案 + IPC 降级 terminal 文案不入队）；c4-dispatcher 适配新 health 值域；**C4 schema 扩展**：conversations 表加 `terminal_status` 字段 + dispatcher 过滤 pending + c4-session-init 查询 pending inbounds 注入 startup context（详 [`c4-reliability-contract.md`](activity-monitor/modules/c4-reliability-contract.md)） |
-| **Phase 4** | 对外 schema + 下游文案 | 对外状态文件加 schema_version + 新增可选字段；下游消费端按时间戳差分文案；web-console 适配 |
-| **Phase 5** | 收尾 | 删除 legacy 分支 / 旧 heartbeat-engine / **main 既有异步恢复广播路径（c4-receive 写入分支 + AM drain 职责）**；全量回归 |
+- ❌ `c4-reliability-contract.md` — 三层契约（durability + terminal_status + unresolved-inbound exposure）整套；本方案下 durability 由 §三.2 + 模块档 7 cover，terminal_status / unresolved-inbound exposure 不进 baseline
 
 ---
 
-## 九、兼容性 + 回滚保证
+## 八、迁移路线图 + 兼容性 + 回滚
 
-### 兼容性
+### 8.1 落地阶段
 
-- **Hook 路径完全不变**：所有 hook 脚本物理路径不变，用户 settings 无需修改。Hook 分两类（write-only signal hooks / control hooks）详见 [`signal-store-and-status-writer.md`](activity-monitor/modules/signal-store-and-status-writer.md)
-- **对外状态加 schema 版本号**：字段向后兼容，消费端遇到未知 reason 退化到通用文案不报错
-- **配置文件保留**：新增 per-runtime grace 参数 + 新增 usage 双 gate（详 [`task-scheduler.md`](activity-monitor/modules/task-scheduler.md)）
-- **comm-bridge / activity-monitor 同版发布**（monorepo 单包），无需灰度兼容
+| Phase | 范围 | 关键改动 |
+|-------|------|---------|
+| **Phase 0** | Watchdog 边界适配 | 内部语义不动；ToolPipeline 物理合并；Adapter DI 接管工具规则 |
+| **Phase 1** | 基础设施 | 新建 SignalStore / StatusWriter / TaskScheduler + 7 任务文件；feature flag 挂接，独立可 ship |
+| **Phase 2** | 状态模型 + 组件拆分 | 新建 Guardian + HealthEngine + 新主循环；catalog-driven dispatch + unknown 5min 升级；保留 legacy 入口作回滚路径 |
+| **Phase 3** | 消息路由 + c4-receive 适配 | MessageRouter IPC；c4-receive 同步等 + unhealthy 路径写 outbound + **inbound queue status audit**（§六.H）；c4-dispatcher 适配新 health 值域 |
+| **Phase 4** | Schema + 下游文案 | 对外状态文件 schema_version；c4-receive 按 unavailable_since 差分文案；web-console |
+| **Phase 5** | 收尾 | 观察 1 周稳定后删除 legacy 入口；全量回归 |
 
-### 回滚
+具体每 Phase 的任务列表 / 测试矩阵 / 验收标准下放到对应 [模块实施档](activity-monitor/modules/) §6 迁移策略 + §7 测试策略。
 
-- 旧 monitor 实现保留为 legacy 入口，PM2 启动参数切换新旧
-- Phase 5 之前任何 Phase 出现严重问题，可单独回滚启动参数
-- Phase 5 删除 legacy 是观察 1 周稳定后的最后步骤
+### 8.2 兼容性
+
+- **Hook 路径完全不变** → 用户 settings 无需修改
+- **对外状态文件加 schema_version**，新增字段保持向后兼容；消费端遇未知 reason 退化通用文案不报错
+- **AM 与 comm-bridge 同版发布**（monorepo 单包），无需灰度兼容窗口
+- **config 保留旧字段** + 新增 per-runtime Grace 参数；usage 拆分采升级兼容路径 B（旧 config `usage_monitor_enabled=true` 时新版 default `usage_alert_enabled=false`，启动 warning 鼓励 opt-in）
+
+### 8.3 回滚
+
+PM2 启动参数切换回 legacy 入口即可，无需代码回滚。Phase 2 起 legacy 入口与新入口共存，Phase 5 才删除 legacy。
 
 ---
 
-*v3 由 zylos101 主笔。设计经多轮 review 演进至当前形态，跨 zylos01 / zylos0t / howard.zhou / ccb981c2 协作。文档结构遵循 howard.zhou 下发的"两层文档规范"（顶层方案 + 模块实施档分层），规范全文与 actionable 提炼见 zylos `tech-doc-spec` skill。详细设计演进与 review 历史见 v2.1 / v2 / v1 SUPERSEDED 文档与 PR #501 git history。*
+*文档由 zylos01 主笔，zylos0t 提供代码层面信息补充与设计角度审查；R6 production rollback 决断由 ccb981c2 在 PR #501 review 群下发；R6 重排版（本文件）按 howard.zhou 在 PR #501 R1 review 给出的 [`tech-doc-spec`](../.claude/skills/tech-doc-spec/SKILL.md) 两层格式产出。*
+
+*v2.1 是面向 reviewer 的详细稿；本 v3 是规范化的顶层方案档（去除字段 / 接口 / 测试细节，下放到 [模块实施档](activity-monitor/modules/)）。*
