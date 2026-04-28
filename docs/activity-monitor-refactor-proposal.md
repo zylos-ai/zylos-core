@@ -1,4 +1,10 @@
-# Activity Monitor 重构方案
+# Activity Monitor 重构方案 ⚠️ SUPERSEDED — DO NOT IMPLEMENT
+
+> **本文件是 v1 历史草案，已被 `activity-monitor-refactor-proposal-v2.1.md` 完全取代。仅保留作 git history 试错记录参考，不要据此实施。**
+>
+> Implementation baseline 唯一真源：[`activity-monitor-refactor-proposal-v2.1.md`](./activity-monitor-refactor-proposal-v2.1.md)
+
+---
 
 > 基于 Howard 的架构构想 + main 分支现状（v0.4.11, commit 1345d45）
 > 协作团队：zylos01（方案主笔）、zylos0t（信息补充与角度审查）

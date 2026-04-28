@@ -1,8 +1,14 @@
-# Activity Monitor 重构方案 v2
+# Activity Monitor 重构方案 v2 ⚠️ SUPERSEDED — DO NOT IMPLEMENT
+
+> **本文件是 v2 详细设计档历史稿，已被 `activity-monitor-refactor-proposal-v2.1.md` 完全取代。仅保留作 git history 试错记录参考，不要据此实施。**
+>
+> Implementation baseline 唯一真源：[`activity-monitor-refactor-proposal-v2.1.md`](./activity-monitor-refactor-proposal-v2.1.md)
+
+---
 
 > 日期：2026-04-24
 > 分支：`refactor/activity-monitor`
-> v1 留存于 `activity-monitor-refactor-proposal.md` 作为历史参照；本方案为 v2 最终版。
+> v1 留存于 `activity-monitor-refactor-proposal.md` 作为历史参照；本方案为 v2 详细设计档（**已 SUPERSEDED**）。
 
 ---
 
