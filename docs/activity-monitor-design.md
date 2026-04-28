@@ -174,7 +174,7 @@ MessageRouter 不在 AM Process 主循环中运行；它由 `c4-receive` 通过 
 路由规则：
 
 - `health=OK` 时立即返回 recovered=true，消息走主链。
-- `health!=OK` 时触发 recovery probe 并缓存结果（带过期时间），有效期内的后续请求直接复用缓存。
+- `health!=OK` 时先检查本地缓存文件：缓存有效则直接使用，否则触发 recovery probe 并将结果写入缓存（带过期时间）。
 - probe 成功返回 recovered=true，消息走主链。
 - probe 失败返回 recovered=false 和最终用户文案。
 - router probe budget 不超过 25s，给 `c4-send` 留出 5s 同步发送预算。
@@ -382,7 +382,7 @@ activity-monitor/
 #### D-7. MessageRouter 事件驱动 + probe 结果缓存
 
 **状态**：已确认
-**决策**：MessageRouter 由 c4-receive IPC 事件驱动，不做定时轮询。当 health≠OK 时，触发一次 recovery probe 并将结果缓存到文件（带过期时间）；在缓存有效期内，后续请求直接复用缓存结果，不再重复探测。采用 IPC 通信 + 30s 硬超时 + 降级 fallback 方案。
+**决策**：MessageRouter 由 c4-receive IPC 事件驱动，不做定时轮询。当 health≠OK 时，每个请求先检查本地缓存文件：若缓存有效则直接使用；若缓存过期或不存在，则触发一次 recovery probe 并将结果写入缓存（带过期时间）。采用 IPC 通信 + 30s 硬超时 + 降级 fallback 方案。
 
 #### D-8. Unhealthy 路径即时双写 DB + c4-send 投递状态文案
 
