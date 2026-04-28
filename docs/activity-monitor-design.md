@@ -379,10 +379,10 @@ activity-monitor/
 
 ### Unhealthy 路径
 
-#### D-7. MessageRouter 保留事件驱动 + 并发聚合设计
+#### D-7. MessageRouter 事件驱动 + 单次 probe 共享
 
 **状态**：已确认
-**决策**：MessageRouter 保留事件驱动 + 并发聚合（一次 c4-receive 一次真实答案）的设计意图。采用 IPC 通信 + 30s 硬超时 + 降级 fallback 方案。
+**决策**：MessageRouter 由 c4-receive IPC 事件驱动，不做定时轮询。当多个 c4-receive 请求同时到达且 health≠OK 时，只触发一次 recovery probe，所有并发请求共享同一次 probe 结果（避免重复探测）。采用 IPC 通信 + 30s 硬超时 + 降级 fallback 方案。
 
 #### D-8. Unhealthy 路径即时双写 DB + c4-send 投递状态文案
 
