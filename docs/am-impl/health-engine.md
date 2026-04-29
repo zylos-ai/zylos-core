@@ -28,7 +28,7 @@
 | **状态管理** | HealthState FSM | 4 种状态：OK / Unavailable / RateLimited / AuthFailed |
 | | 状态转移 | `setHealth(next, reason)` 带日志记录 |
 | | 持久化 | health 写入 agent-status.json（via StatusWriter），冷启动恢复（D-10） |
-| **OK → 非 OK 检测** | 事件驱动检测（**行为变更**） | `onUserMessageDelivered()` 由 c4-dispatcher 异步调用 |
+| **OK → 非 OK 检测** | 事件驱动检测 | `onUserMessageDelivered()` 由 c4-dispatcher 异步调用（D-4） |
 | | check tmux pane | 等待 5s 后扫描 tmux pane 字符模式 |
 | | rate limit 检测 | 连续两次识别 rate limit 模式 → RateLimited |
 | | auth failed 检测 | 识别 auth failed 模式 + `checkAuth()` 确认 → AuthFailed |
@@ -90,11 +90,9 @@
 | Unavailable | heartbeat probe | ack → OK；无 ack → check tmux → rate_limited/auth_failed/保持 Unavailable |
 | AuthFailed | check auth | 通过 → OK；未通过 → 保持 AuthFailed |
 
-### OK → 非 OK 检测时机（行为变更）
+### OK → 非 OK 检测时机
 
-**现有行为**：主循环 tick 中定时扫描 tmux pane（15s 间隔 API error scan）+ heartbeat 定时探测（30min 间隔）。
-
-**目标行为**：改为 user message 事件驱动：
+事件驱动（D-4）：user message 投递后异步检测，不在主循环 tick 中运行。
 
 ```
 c4-dispatcher 投递 user message
@@ -127,8 +125,8 @@ class HealthEngine {
   setHealth(next: string, reason?: string): void
   enterRateLimited(cooldownUntil: number, resetTime?: string): void
 
-  // 事件触发接口
-  onUserMessageDelivered(): void          // c4-dispatcher 投递成功后异步调用（行为变更）
+  // 事件触发接口（D-4）
+  onUserMessageDelivered(): void          // c4-dispatcher 投递成功后异步调用
   notifyUserMessage(currentTime: number): boolean  // 加速 recovery
 
   // Recovery probe（供 MessageRouter 调用）
@@ -144,27 +142,28 @@ class HealthEngine {
 
 ```javascript
 interface HealthEngineDeps {
+  // Heartbeat probe（runRecoveryProbe / onUserMessageDelivered 内部使用）
   enqueueHeartbeat(phase: string): boolean
   getHeartbeatStatus(controlId: number): string
-  readHeartbeatPending(): { control_id: number, created_at: string, phase: string } | null
-  clearHeartbeatPending(): void
-  killTmuxSession(): void
+
+  // Runtime 操作
+  checkAuth(): Promise<boolean>
+  checkTmuxPane(): { rateLimit: boolean, authFailed: boolean, stickyError: boolean, pattern?: string }
+  stop(): void                    // adapter.stop()，kill session
+
+  // 基础设施
   log(message: string): void
-  detectRateLimit?(): { detected: boolean, cooldownUntil?: number, resetTime?: string }
-  detectApiError?(): { detected: boolean, pattern?: string }
 }
 ```
 
 ```javascript
 interface HealthEngineOptions {
   initialHealth?: string          // default 'ok'
-  heartbeatEnabled?: boolean      // default true
-  heartbeatInterval?: number      // default 1800 (30min)
   downDegradeThreshold?: number   // default 3600 (1h)
   downRetryInterval?: number      // default 3600 (1h)
-  signalGracePeriod?: number      // default 30s
   rateLimitDefaultCooldown?: number // default 3600
   userMessageRecoveryCooldown?: number // default 60
+  checkDelay?: number             // default 5s, onUserMessageDelivered() 等待时间
 }
 ```
 
@@ -185,21 +184,17 @@ interface ProbeResult {
   healthReason: string | null,            // 当前诊断信息（D-2），setHealth() 时同步保存
   restartFailureCount: number,            // 连续失败次数（退避指数）
   recoveringStartedAt: number,            // epoch seconds（DOWN 降级计时器）
-  lastHeartbeatAt: number,                // 上次 heartbeat 时间
-  lastRecoveryAt: number,                 // 上次 recovery 尝试时间
-  lastDownCheckAt: number,                // 上次 DOWN probe 时间
-
-  // Process signal acceleration
-  lastAgentRunning: boolean | null,       // 上一 tick 的 agentRunning
-  signalDetectedAt: number,              // false→true 转换检测时间
+  lastRecoveryAt: number,                 // 上次 recovery probe 时间
+  lastDownCheckAt: number,                // 上次 DOWN 定期 probe 时间
 
   // Rate-limited
   cooldownUntil: number,                 // cooldown 截止时间（epoch seconds）
   rateLimitResetTime: string,            // 人类可读重置时间
   lastUserMessageRecoveryAt: number,     // 上次 user message recovery 时间
 
-  // API error scan
-  apiErrorConsecutiveHits: number,       // 连续 API error 检测计数（需 2 次）
+  // 事件驱动检测（onUserMessageDelivered）
+  rateLimitConsecutiveHits: number,      // 连续 rate limit 检测计数（需 2 次）
+  stickyErrorConsecutiveHits: number,    // 连续 sticky error 检测计数（需 2 次，D-18）
 }
 ```
 
@@ -208,12 +203,12 @@ interface ProbeResult {
 | 交互方 | 方向 | 方法/数据 | 用途 |
 |-------|------|----------|------|
 | **Guardian** | **无交互** | — | D-20：Guardian 不持有 HealthEngine 引用，不读写 HealthState。stale heartbeat-pending.json 由 Guardian 直接删除文件 |
-| **c4-dispatcher** | 被调用 | `onUserMessageDelivered()` | user message 投递后检测（行为变更） |
+| **c4-dispatcher** | 被调用 | `onUserMessageDelivered()` | user message 投递后异步检测（D-4） |
 | **MessageRouter** | 被调用 | `runRecoveryProbe()` | IPC 路由时执行恢复探测 |
 | **ToolWatchdog** | 被调用 | `triggerRecovery(reason)` | 工具超时升级 |
 | **StatusWriter** | 读取 | `health`, `healthReason`, `rateLimitResetTime`, `cooldownUntil` | 写入 agent-status.json |
-| **Adapter** | 调用 | `checkAuth()`, `getHeartbeatDeps()` | 执行认证检查和 heartbeat probe |
-| **Adapter** | 调用 | `stop()` (via `killTmuxSession`) | sticky error / recovery 时 kill session |
+| **Adapter** | 调用 | `checkAuth()`, `checkTmuxPane()`, `enqueueHeartbeat()` | 认证检查、tmux 扫描、heartbeat probe |
+| **Adapter** | 调用 | `stop()` | sticky error / RateLimited cooldown 到期 kill session |
 
 ### 常量
 
@@ -223,13 +218,13 @@ interface ProbeResult {
 | DOWN_RETRY_INTERVAL | 3600s (1h) | down 状态定期 probe 间隔 |
 | RATE_LIMIT_DEFAULT_COOLDOWN | 3600s (1h) | rate limit 默认冷却 |
 | USER_MESSAGE_RECOVERY_COOLDOWN | 60s | user message recovery 冷却 |
-| CHECK_DELAY | 5s | user message 投递后等待时间 |
-| MAX_PENDING_AGE | 600s (10min) | pending heartbeat 超时上限 |
+| CHECK_DELAY | 5s | onUserMessageDelivered() 投递后等待时间 |
+| CONSECUTIVE_HITS_THRESHOLD | 2 | rate limit / sticky error 需连续命中次数 |
 | BACKOFF_SEQUENCE | 60s, 300s, 1500s, 3600s | `min(3600, 60 × 5^(n-1))` |
 
 ## 3. 实施方案
 
-**改动类型**：行为变更（D-4：从 tick 移出改为事件驱动）
+**改动类型**：行为变更（D-4：事件驱动检测 + 按需 recovery probe）
 
 ### 现有代码位置
 
@@ -244,12 +239,11 @@ interface ProbeResult {
 ### 实施步骤
 
 1. 创建 `scripts/health-engine.js`，基于现有 `heartbeat-engine.js` 重构
-2. **行为变更**：新增 `onUserMessageDelivered()` 方法，实现事件驱动检测
+2. 实现事件驱动检测 `onUserMessageDelivered()`
    - 等待 5s → check tmux pane → 按模式分支转移状态
    - 连续 2 次 rate limit / sticky error 的计数逻辑
-3. 新增 `runRecoveryProbe()` 方法供 MessageRouter 调用
+3. 实现 `runRecoveryProbe()` 供 MessageRouter 调用
    - 按当前 HealthState 分支：RateLimited/Unavailable → heartbeat probe；AuthFailed → check auth
-4. 新增 `onProcessRestarted()` 方法供 Guardian 调用
-5. 保留现有 `processHeartbeat()` 作为过渡期 heartbeat 处理
-6. 将 monitorLoop 中散落的 API error scan、periodic probe 逻辑收拢到 HealthEngine 内部
-7. **这是行为变更最大的组件**，建议在其他纯提取组件完成后再实施
+4. 实现 `onProcessRestarted()` 供 Guardian 调用
+5. 删除 `processHeartbeat()`、periodic probe、API error scan 等 tick-driven 接口
+6. **这是行为变更最大的组件**，建议在其他纯提取组件完成后再实施
