@@ -49,10 +49,10 @@
 | | user message 清除 | `notifyUserMessage()` 将 cooldownUntil 设为 0，跳过剩余 cooldown |
 | **AuthFailed** | 进入 | check tmux pane 识别 + `checkAuth()` 二次确认 |
 | | 恢复 | `runRecoveryProbe()` 中 `checkAuth()` 通过 → `setHealth('ok')` |
-| **Unavailable** | 进入 | heartbeat 失败 / ToolWatchdog 升级 / RateLimited cooldown kill |
+| **Unavailable** | 进入 | ToolWatchdog 升级 restart / RateLimited cooldown 到期 kill / RateLimited recovery probe 无 ack 且 pane 无 rate-limit/auth-failed |
 | | 退避 probe | `min(3600, 60 × 5^(n-1))` → 60s, 300s, 1500s, 3600s cap，cap 后固定 3600s 周期重试 |
 | | 恢复 | heartbeat ack → `setHealth('ok')` |
-| **ToolWatchdog 升级** | `triggerRecovery()` | 直接 `setHealth('unavailable')`，不 probe |
+| **ToolWatchdog 升级** | `triggerRecovery()` | `setHealth('unavailable')` + `stop()` kill session，Guardian 下一 tick 拉起 |
 
 ### HealthState FSM
 
@@ -84,7 +84,7 @@
 | 状态 | 对外暴露 | 进入条件 | 恢复方式 |
 |------|---------|---------|---------|
 | OK | `ok` | 初始状态；heartbeat ack；check auth 通过 | — |
-| Unavailable | `unavailable` | heartbeat 失败；ToolWatchdog 升级；RateLimited cooldown kill | heartbeat ack → OK |
+| Unavailable | `unavailable` | ToolWatchdog 升级 restart；RateLimited cooldown 到期 kill；RateLimited probe 无 ack 且 pane 无 rate-limit/auth-failed | heartbeat ack → OK |
 | RateLimited | `rate_limited` | 连续 2 次 check tmux 识别到 rate limit | cooldown 到期 kill → Unavailable → probe ack → OK |
 | AuthFailed | `auth_failed` | check tmux 识别 + checkAuth() 确认 | checkAuth() 通过 → OK |
 
@@ -106,7 +106,7 @@
   (user msg 到达)       │   → 清 cooldown / 重置 backoff         │
                        │                                         │
   ToolWatchdog ───────▶│ triggerRecovery(reason)                 │
-  (工具超时升级)        │   → setHealth('unavailable')           │
+  (工具超时升级)        │   → setHealth('unavailable') + stop()  │
                        │                                         │
   Orchestrator ────────▶│ onProcessRestarted()                    │
   (Guardian 拉起后代调)  │   → 重置退避 / 安排立即 probe          │
@@ -134,8 +134,8 @@
                                                   → ack → setHealth('ok')
                                                   → 返回 { recovered: true }
 
-路径 3：ToolWatchdog 升级 → Guardian 拉起 → 恢复
-  ToolWatchdog ──── triggerRecovery('tool_timeout') ▶ setHealth('unavailable')
+路径 3：ToolWatchdog 升级 → kill session → Guardian 拉起 → 恢复
+  ToolWatchdog ──── triggerRecovery('tool_timeout') ▶ setHealth('unavailable') + stop()
   (Guardian 检测进程退出, 拉起新 session)
   Orchestrator ──── onProcessRestarted() ───────────▶ 重置 restartFailureCount
                                                      → 安排 CHECK_DELAY 后 probe
@@ -147,7 +147,7 @@
 | 当前状态 | Probe 方法 | ack 结果 | 无 ack 结果 |
 |---------|-----------|---------|------------|
 | Unavailable | `sendHeartbeatProbe()` | `setHealth('ok')` → `{ recovered: true }` | checkTmuxPane() 检查跨状态转移 → `restartFailureCount++` → `{ recovered: false }` |
-| RateLimited | `sendHeartbeatProbe()` | `setHealth('ok')` → `{ recovered: true }` | 同上 |
+| RateLimited | `sendHeartbeatProbe()` | `setHealth('ok')` → `{ recovered: true }` | checkTmuxPane()：仍有 rate-limit → 保持；有 auth-failed → 转 AuthFailed；无异常 → `setHealth('unavailable')` 降级 |
 | AuthFailed | `checkAuth()` | `setHealth('ok')` → `{ recovered: true }` | `{ recovered: false, reason: 'auth_still_failed' }` |
 
 ### OK → 非 OK 检测流程
@@ -204,7 +204,7 @@ Unavailable 是唯一有退避策略的状态。进入后通过 `restartFailureC
 
 ```
 进入 Unavailable
-  │  （heartbeat fail / ToolWatchdog 升级 / RateLimited cooldown kill）
+  │  （ToolWatchdog 升级 restart / RateLimited cooldown 到期 kill / RateLimited probe 无 ack 降级）
   │  unavailable_since = now()
   │  restartFailureCount = 保持（从前一状态继承，或被 notifyUserMessage/onProcessRestarted 重置为 0）
   │
@@ -551,8 +551,12 @@ async runRecoveryProbe() {
   } else if (tmux.authFailed) {
     const authResult = await this.deps.checkAuth()
     if (!authResult.ok) this.setHealth('auth_failed', authResult.reason || 'auth_check_failed')
+  } else if (this.healthState === 'rate_limited') {
+    // RateLimited probe 无 ack，且 pane 里已无 rate-limit/auth-failed 模式
+    // → 不再保持 rate_limited，降级为 unavailable 进入退避流程
+    this.setHealth('unavailable', result.reason || 'heartbeat_timeout')
   }
-  // tmux 无新异常：保持当前状态
+  // Unavailable + tmux 无新异常：保持当前状态
 
   this.restartFailureCount++
   return { recovered: false, health: this.healthState, reason: result.reason }
@@ -689,6 +693,8 @@ triggerRecovery(reason) {
   // 只在 OK 时转移：升级意味着 runtime 已无响应
   if (this.healthState === 'ok') {
     this.setHealth('unavailable', reason)
+    this.deps.stop()
+    // 时序：标记 unavailable → kill session → Guardian 下一 tick 检测到 offline → 拉起新 session
   }
   // 已经是非 OK 时不覆盖，保留原状态和 reason
   // 例如已经是 rate_limited 时不降级为 unavailable
