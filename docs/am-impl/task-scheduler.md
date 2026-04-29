@@ -16,6 +16,100 @@
 
 ## 2. 组件设计
 
+### 功能清单
+
+| 能力类别 | 功能 | 说明 |
+|---------|------|------|
+| **调度框架** | daily 任务 | 每日指定小时触发一次（local timezone） |
+| | interval 任务 | 固定间隔触发（秒） |
+| | gate 条件 | 可选前置条件（如 idle 秒数、health 状态） |
+| | 状态持久化 | 每个任务的 last-run 时间持久化到独立 state 文件 |
+| **已注册任务** | daily-upgrade | 每日 5:00 触发自动升级（需 config 开启） |
+| | daily-memory-commit | 每日 3:00 git commit memory 目录 |
+| | upgrade-check | 每日 6:00 检查 Claude Code 新版本 |
+| | health-check | 每 24h 检查 PM2/disk/memory |
+| | usage-monitor | 每 1h 读取本地 usage 快照，达阈值通知（D-26） |
+| | context-check | Codex: polling 检查上下文占用；Claude: statusLine hook 处理 |
+
+### 已注册任务详情
+
+#### daily-upgrade（每日 5:00）
+
+```
+gate: daily_upgrade_enabled = true && health = 'ok'
+execute: enqueue C4 control → runtime 执行 /upgrade-claude
+state: ~/zylos/activity-monitor/daily-upgrade-state.json
+```
+
+#### daily-memory-commit（每日 3:00）
+
+```
+gate: 无
+execute: git add + commit ~/zylos/memory/ 目录
+state: ~/zylos/activity-monitor/daily-memory-commit-state.json
+```
+
+#### upgrade-check（每日 6:00）
+
+```
+gate: health = 'ok'
+execute: 检查 Claude Code 最新版本，如有新版写入 upgrade-available.json
+state: ~/zylos/activity-monitor/upgrade-check-state.json
+```
+
+#### health-check（每 24h）
+
+```
+gate: runtime 在线
+execute: enqueue C4 control → runtime 执行 /health-check skill
+state: ~/zylos/activity-monitor/health-check-state.json
+```
+
+#### usage-monitor（每 1h）
+
+```
+gate: usage_monitor_enabled = true && idle >= 30s && health = 'ok'
+execute:
+  1. 读取本地 usage 快照（Claude: statusline/usage.json; Codex: usage-codex.json）
+  2. 计算 session/weekly 用量百分比
+  3. usage_alert_enabled = true 且达阈值 → enqueue C4 通知 owner
+state: ~/zylos/activity-monitor/usage.json 或 usage-codex.json
+thresholds: warn(80%) → high(90%) → critical(95%)
+cooldown: 4h per tier, 升级跳过 cooldown
+active hours: 8:00-23:00 only
+```
+
+#### context-check（Codex only）
+
+```
+gate: adapter.getContextMonitor() != null
+execute: polling 检查上下文占用（Codex 没有 statusLine hook）
+  - >= 56% + unsummarized > 30 → memory sync
+  - >= 70% → new-session handoff
+note: Claude 由 context-monitor.js hook 处理，不经过 TaskScheduler
+```
+
+### 调度流程
+
+```
+tick(snapshot)
+  │
+  ├─ for each task in registeredTasks:
+  │   │
+  │   ├─ daily 任务：
+  │   │   ├─ 当前小时 == task.hour？
+  │   │   ├─ 今天未执行过？（检查 state 文件）
+  │   │   ├─ gate 条件满足？
+  │   │   └─ YES → execute(), 更新 state
+  │   │
+  │   └─ interval 任务：
+  │       ├─ 距上次执行 >= intervalSec？
+  │       ├─ gate 条件满足？
+  │       └─ YES → execute(), 更新 state
+  │
+  └─ return
+```
+
 ### 接口定义
 
 ```javascript
@@ -42,21 +136,15 @@ interface TaskDefinition {
 }
 ```
 
-### 已注册任务
-
-| 任务 ID | 类型 | 参数 | 说明 |
-|---------|------|------|------|
-| daily-upgrade | daily | hour=5 | 每日 5:00 自动升级 |
-| daily-memory-commit | daily | hour=3 | 每日 3:00 内存提交 |
-| upgrade-check | daily | hour=6 | 每日 6:00 检查更新 |
-| health-check | interval | 86400s | PM2/disk/memory 健康检查 |
-| usage-monitor | interval | 3600s | 用量监控（有 idle gate）|
-| context-check | interval | — | 上下文占用检查（Codex 轮询）|
-
 ### 与其他组件的交互
 
-- **Monitor Orchestrator** → 在 tick 编排中被调用
-- **SignalStore** → gate 条件可能读取 snapshot 数据
+| 交互方 | 方向 | 方法/数据 | 用途 |
+|-------|------|----------|------|
+| **Monitor Orchestrator** | 调用 | `tick()` | 在 tick 编排中被调用 |
+| **HealthEngine** | 读取 | `engine.health` | gate 条件（部分任务需 health=ok） |
+| **Adapter** | 读取 | `runtimeId` | 选择 usage 快照来源 |
+| **C4 Control** | 调用 | `c4-control.js enqueue` | daily-upgrade、health-check 通过 C4 控制 runtime |
+| **SignalStore** | 消费 | snapshot | idle 秒数等 gate 条件 |
 
 ### 可配置项
 
@@ -64,15 +152,15 @@ interface TaskDefinition {
 |------|------|------|
 | daily_upgrade_enabled | false | 是否启用每日自动升级 |
 | usage_monitor_enabled | false | 是否启用用量监控 |
-| usage_alert_enabled | false | 是否启用用量告警（D-26、D-27）|
-| usage_check_interval | 3600 | 用量检查间隔 |
+| usage_alert_enabled | false | 是否启用用量告警（D-26、D-27） |
+| usage_check_interval | 3600 | 用量检查间隔（秒） |
 | usage_idle_gate | 30 | 检查前需要的空闲秒数 |
-| usage_warn_threshold | 80 | 用量告警阈值（%）|
-| usage_high_threshold | 90 | 用量高阈值（%）|
-| usage_critical_threshold | 95 | 用量危急阈值（%）|
-| usage_notify_cooldown | 14400 | 告警通知冷却（秒）|
-| usage_active_hours_start | 8 | 活跃时段开始（小时）|
-| usage_active_hours_end | 23 | 活跃时段结束（小时）|
+| usage_warn_threshold | 80 | 用量告警阈值（%） |
+| usage_high_threshold | 90 | 用量高阈值（%） |
+| usage_critical_threshold | 95 | 用量危急阈值（%） |
+| usage_notify_cooldown | 14400 | 告警通知冷却（秒） |
+| usage_active_hours_start | 8 | 活跃时段开始 |
+| usage_active_hours_end | 23 | 活跃时段结束 |
 
 ## 3. 实施方案
 
@@ -80,12 +168,22 @@ interface TaskDefinition {
 
 ### 现有代码位置
 
-从 `activity-monitor.js` 的各 daily scheduler + usage check 提取。
+| 现有位置 | 内容 |
+|---------|------|
+| `scripts/daily-schedule.js`（52行） | DailySchedule class（通用 daily 调度框架） |
+| `scripts/upgrade-check.js`（150行） | upgrade-check 任务实现 |
+| `scripts/usage-check-engine.js`（36行） | usage check 初始化逻辑 |
+| `scripts/usage-monitor-file-reader.js`（144行） | Claude usage 文件读取 |
+| `scripts/usage-codex-rollout-reader.js`（151行） | Codex usage 读取 |
+| `activity-monitor.js:2131-2141` | tick 中的任务调度调用 |
+| `activity-monitor.js:2199-2247` | init 中的 DailySchedule 实例化 |
+| `activity-monitor.js:1680-1801` | `maybeCheckUsage()` 完整 usage monitor 逻辑 |
 
 ### 实施步骤
 
-1. 创建 `scripts/task-scheduler.js`，实现通用的 daily + interval 调度框架
+1. 创建 `scripts/task-scheduler.js`，实现统一的 daily + interval 调度框架
 2. 将各定时任务实现移到 `scripts/tasks/` 目录下的独立文件
 3. 每个任务文件导出符合 `TaskDefinition` 接口的对象
-4. TaskScheduler 在 `init()` 时接收所有任务定义，`tick()` 时统一调度
-5. 注意 D-26：usage_monitor 和 usage_alert 必须是两个独立任务
+4. 合并现有 `DailySchedule` 和 interval 调度逻辑为统一框架
+5. usage-monitor 和 usage-alert 拆为两个独立任务（D-26）
+6. context-check 只在 Codex 下注册（Claude 由 hook 处理）

@@ -11,43 +11,122 @@
 **输出**：按顺序调用各组件的 tick 方法
 
 **相关决策**：
-- **D-4**：AM 主循环每 tick 按固定顺序执行 7 步：SignalStore.refresh → Guardian → ProcSampler → ToolPipeline → ToolWatchdog → TaskScheduler → StatusWriter。HealthEngine 不参与主循环 tick，改为由 user message 事件异步触发。
-- **D-21**：PM2 重启 AM 自身时，Guardian 不从磁盘恢复 notRunningCount / consecutiveRestarts / restartDelay 等持久化计数器。AM 冷启动 = Guardian 全新开始。
+- **D-4**：AM 主循环每 tick 按固定顺序执行 7 步。HealthEngine 不参与主循环 tick。
+- **D-21**：PM2 重启 AM 时，Guardian 退避状态重置为零。持久化状态从磁盘恢复。
 
 ## 2. 组件设计
 
-### 接口定义
+### 功能清单
+
+| 能力类别 | 功能 | 说明 |
+|---------|------|------|
+| **初始化** | 加载 runtime adapter | `getActiveAdapter()` 读取 config.json |
+| | 实例化所有组件 | SignalStore / Guardian / ProcSampler / ToolPipeline / ToolWatchdog / TaskScheduler / StatusWriter / HealthEngine |
+| | 恢复持久化状态 | health 从 agent-status.json；tool stream 从 state file；watchdog 从 state file |
+| | 启动 IPC server | Unix socket，供 MessageRouter 接入 |
+| | 启动 context monitor | Codex: polling-based；Claude: null（hook 处理） |
+| | 清理其他 runtime session | 启动 10s 后 kill 非当前 runtime 的 tmux session |
+| **Tick 编排** | 7 步固定顺序 | SignalStore → Guardian → ProcSampler → ToolPipeline → ToolWatchdog → TaskScheduler → StatusWriter |
+| | 冻结处理 | ProcSampler.isFrozen() → adapter.stop()（在 ProcSampler.tick 和 ToolWatchdog.tick 之间） |
+| | 错误处理 | tick 异常 catch + log，不中断主循环 |
+| **主循环** | self-scheduling loop | `setTimeout(scheduleLoop, INTERVAL)` 而非 setInterval，防止异步 tick 重叠 |
+| | 日志截断 | 每日 0:00 检查日志行数，超过 500 行截断 |
+
+### 初始化流程
+
+```
+init()
+  │
+  ├─ 1. 环境清理
+  │     └─ 删除 stale TMUX env var（PM2 dump 残留）
+  │
+  ├─ 2. 加载 adapter
+  │     └─ getActiveAdapter() → ClaudeAdapter 或 CodexAdapter
+  │
+  ├─ 3. 读取 config
+  │     ├─ heartbeat_enabled
+  │     ├─ tool rules
+  │     └─ daily_upgrade_enabled, usage_monitor_enabled, ...
+  │
+  ├─ 4. 实例化组件
+  │     ├─ ProcSampler(adapter.sessionName)
+  │     ├─ HealthEngine(deps, options)（含 adapter.getHeartbeatDeps()）
+  │     ├─ DailySchedule × 3（upgrade, memory-commit, upgrade-check）
+  │     └─ 恢复 usage check 状态
+  │
+  ├─ 5. 恢复持久化状态
+  │     ├─ loadInitialHealth() → agent-status.json 的 health
+  │     ├─ runtimeLaunchAtMs → agent-status.json 的 runtime_launch_at
+  │     ├─ cooldownUntil / rateLimitResetTime（if rate_limited）
+  │     ├─ toolEventStreamState → tool-event-stream-state.json
+  │     ├─ toolLifecycleState → session-tool-state.json
+  │     └─ watchdogState → tool-watchdog-state.json
+  │
+  ├─ 6. 启动 context monitor（Codex only）
+  │     └─ adapter.getContextMonitor()?.startPolling()
+  │
+  ├─ 7. 启动 IPC server
+  │     └─ Unix socket，供 MessageRouter 查询 HealthEngine
+  │
+  └─ 8. 清理其他 runtime
+        └─ 10s 后 kill 非当前 runtime 的 tmux session
+```
+
+### Tick 编排（D-4）
+
+```
+tick() [every 1s, self-scheduling]
+  │
+  ├─ checkDailyTruncate()  ← 日志截断
+  │
+  ├─ tmux session 不存在？
+  │   └─ Guardian offline 路径 → return
+  │
+  ├─ adapter.isRunning() = false？
+  │   └─ Guardian stopped 路径 → return
+  │
+  ├─ ─── Running 路径 ───
+  │
+  ├─ 1. 活动时间来源计算
+  │     conversation file → tmux activity → default → api hook
+  │
+  ├─ 2. ProcSampler.tick()
+  │     └─ isFrozen() → adapter.stop() + return
+  │
+  ├─ 3. ToolPipeline.tick()
+  │     processToolLifecycle → foregroundIdentity → buildApiActivity
+  │
+  ├─ 4. ToolWatchdog.tick()
+  │     evaluateToolWatchdogTransition
+  │     └─ api_activity_dirty → rebuild apiActivity
+  │
+  ├─ 5. StatusWriter.write()
+  │
+  ├─ 6. user message signal 消费（health != ok 时）
+  │
+  ├─ 7. periodic probe（heartbeat enabled 时）
+  │
+  ├─ 8. API error scan（health = ok 时）
+  │
+  ├─ 9. HeartbeatEngine.processHeartbeat()
+  │
+  ├─ 10. TaskScheduler tasks
+  │      ├─ upgradeScheduler.maybeTrigger()
+  │      ├─ upgradeCheckScheduler.maybeTrigger()
+  │      ├─ memoryCommitScheduler.maybeTrigger()
+  │      └─ maybeCheckUsage()
+  │
+  └─ lastState = state
+```
+
+### 组件注册（init 时创建）
 
 ```javascript
-class MonitorOrchestrator {
-  async init(): void           // 初始化：加载 adapter、创建组件实例、恢复持久化状态、启动 IPC 监听
-  async tick(): void           // 单次 tick，按固定顺序调用各组件
-  start(): void                // 启动主循环（setInterval 1s）
-}
-```
-
-### Tick 编排顺序（D-4）
-
-```
-tick every 1s:
-  1. SignalStore.refresh()           → snapshot
-  2. Guardian.tick(snapshot)         → 可能触发 adapter.launch()
-  3. ProcSampler.tick(snapshot)      → 更新 proc-state.json
-  4. ToolPipeline.tick(snapshot)     → 更新 api-activity、tool lifecycle state
-  5. ToolWatchdog.tick(snapshot)     → 可能发送中断或触发 recovery
-  6. TaskScheduler.tick(snapshot)    → 执行到期的定时任务
-  7. StatusWriter.write(snapshot)    → 写 agent-status.json
-```
-
-### 组件注册
-
-```javascript
-// init() 中创建并注册
 this.adapter = getActiveAdapter()
 this.signalStore = new SignalStore(signalPaths)
-this.healthEngine = new HealthEngine(deps)
+this.healthEngine = new HealthEngine(deps, options)
 this.guardian = new Guardian(adapter, healthEngine, config)
-this.procSampler = new ProcSampler(adapter.sessionName)
+this.procSampler = new ProcSampler({ sessionName: adapter.sessionName })
 this.toolPipeline = new ToolPipeline(adapter, signalStore)
 this.toolWatchdog = new ToolWatchdog(deps)
 this.taskScheduler = new TaskScheduler(tasks)
@@ -60,31 +139,45 @@ Monitor Orchestrator 负责启动 IPC server（Unix socket），供 MessageRoute
 
 ### 状态恢复（AM 冷启动）
 
-PM2 重启 AM 时的状态恢复策略（D-21）：
-
 **从磁盘恢复**：
-- health 状态 → 从 agent-status.json 读取（D-10）
-- tool event stream cursor → 从 tool-event-stream-state.json
-- tool lifecycle state → 从 session-tool-state.json
-- watchdog state → 从 tool-watchdog-state.json
-- runtimeLaunchAtMs → 从 agent-status.json 的 runtime_launch_at
+- health 状态 → agent-status.json（D-10）
+- tool event stream cursor → tool-event-stream-state.json
+- tool lifecycle state → session-tool-state.json
+- watchdog state → tool-watchdog-state.json
+- runtimeLaunchAtMs → agent-status.json 的 runtime_launch_at
 - 各 daily task 状态 → 各自的 state 文件
 - usage check 状态 → usage.json / usage-codex.json
 
 **重置为零**（D-21）：
-- notRunningCount = 0
-- consecutiveRestarts = 0
-- startupGrace = 0
-- idleSince = 0
-- lastPeriodicProbeAt = 0
-- apiErrorConsecutiveHits = 0
-- authRetrySuppressedUntil = 0
+- notRunningCount, consecutiveRestarts, startupGrace
+- idleSince, lastPeriodicProbeAt
+- apiErrorConsecutiveHits, authRetrySuppressedUntil
+
+### 接口定义
+
+```javascript
+class MonitorOrchestrator {
+  async init(): void
+  async tick(): void
+  start(): void
+}
+```
 
 ### 与其他组件的交互
 
-- 创建并持有所有组件实例
-- 驱动 tick 循环，按固定顺序调用各组件
-- 启动 IPC server 供 MessageRouter 接入
+Monitor Orchestrator 持有并驱动所有组件：
+
+| 组件 | 关系 | 调用时机 |
+|------|------|---------|
+| **Adapter** | 持有 | init 创建，注入给其他组件 |
+| **SignalStore** | 持有 + 驱动 | tick 开头 `refresh()` |
+| **Guardian** | 持有 + 驱动 | tick offline/stopped 分支 |
+| **ProcSampler** | 持有 + 驱动 | tick running 分支 `tick()` + `isFrozen()` |
+| **ToolPipeline** | 持有 + 驱动 | tick running 分支 `tick()` |
+| **ToolWatchdog** | 持有 + 驱动 | tick running 分支 |
+| **TaskScheduler** | 持有 + 驱动 | tick 末尾 |
+| **StatusWriter** | 持有 + 驱动 | tick 末尾 `write()` |
+| **HealthEngine** | 持有 | 不直接 tick 驱动（事件驱动） |
 
 ### 常量
 
@@ -99,11 +192,17 @@ PM2 重启 AM 时的状态恢复策略（D-21）：
 
 ### 现有代码位置
 
-从 `activity-monitor.js` 的 `init()` + `monitorLoop()` 提取。
+| 现有位置 | 内容 |
+|---------|------|
+| `activity-monitor.js:2144-2305` | `init()` — 完整初始化流程 |
+| `activity-monitor.js:1803-2141` | `monitorLoop()` — 完整 tick 循环 |
+| `activity-monitor.js:2307-2324` | 入口：init + self-scheduling loop |
+| `activity-monitor.js` 全局变量 | 所有组件状态、全局 flag |
 
 ### 实施步骤
 
 1. 创建 `scripts/monitor.js` 作为入口文件
 2. 提取 `init()` 逻辑：adapter 创建、组件实例化、状态恢复、IPC server 启动
 3. 提取 `monitorLoop()` 逻辑：tick 编排、错误处理
-4. 这是组装层，最后实施（依赖所有其他组件先完成）
+4. 将全局变量收拢到 Orchestrator 实例或委托给各组件
+5. **这是组装层，最后实施**（依赖所有其他组件先完成）
