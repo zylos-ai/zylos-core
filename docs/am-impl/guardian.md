@@ -18,23 +18,97 @@
 
 ## 2. 组件设计
 
+### 功能清单
+
+| 能力类别 | 功能 | 说明 |
+|---------|------|------|
+| **进程检测** | tmux session 检测 | `tmux has-session` 检查 session 是否存在 |
+| | runtime 进程检测 | `adapter.isRunning()` 检查 runtime 进程是否在 tmux 内存活 |
+| **拉起** | 无条件拉起 | 进程不存在 → 调用 `adapter.launch()`，不读 HealthState（D-20） |
+| | 认证预检 | 拉起前 `adapter.checkAuth()`，失败则跳过本次拉起 |
+| | 状态清理 | 拉起前清除 stale heartbeat-pending、context temp files、tool lifecycle state |
+| | 启动提示注入 | Claude 无 SessionStart hook 时注入 C4 control 启动提示（fallback） |
+| **退避** | 指数退避 | `delay = min(5s × 2^n, 60s)` → 序列 5, 10, 20, 40, 60, 60... |
+| | 退避重置 | runtime 连续运行超过 60s → 重置 consecutiveRestarts |
+| **保护** | 启动保护 | 拉起后 30 ticks 跳过 offline 检测（D-33） |
+| | 维护等待 | 检测到 restart-claude/upgrade-claude/install.sh 运行中 → 等待完成（最多 300s） |
+| | Auth 抑制 | auth 失败后抑制 180s 不重试 |
+| | User message 解除 | user-message-signal 可立即清除 auth 抑制 |
+| | 并发保护 | `startAgentInProgress` flag 防止并发拉起 |
+
+### 拉起决策流程
+
+```
+monitorLoop() 每 tick：
+  │
+  ├─ tmux session 不存在？
+  │   └─ startupGrace > 0？ → 倒计时，跳过
+  │   └─ state = 'offline'
+  │       │
+  │       ▼
+  │   ┌─────────────────────────┐
+  │   │ 是否该拉起？             │
+  │   │                         │
+  │   │ 1. canRestart() = true  │ ← 注意：虽然调了 engine.canRestart()，
+  │   │ 2. notRunningCount      │   但这只是"rate_limited 时不拉起"的
+  │   │    >= restartDelay      │   防御性检查（D-20 的例外情况）
+  │   │ 3. auth 未抑制          │
+  │   └─────────┬───────────────┘
+  │             │ YES
+  │             ▼
+  │         startAgent()
+  │
+  ├─ tmux session 存在但 isRunning() = false？
+  │   └─ 同上逻辑（state = 'stopped'）
+  │
+  └─ isRunning() = true
+      └─ startupGrace = 0, notRunningCount = 0
+      └─ 连续运行 > 60s → 重置退避
+```
+
+### startAgent() 内部流程
+
+```
+startAgent()
+  │
+  ├─ 1. 并发检查（startAgentInProgress）
+  │
+  ├─ 2. 维护等待
+  │     检测 restart-claude / upgrade-claude / install.sh
+  │     等待最多 300s
+  │
+  ├─ 3. 认证预检
+  │     adapter.checkAuth()
+  │     ├─ 失败 → 设置 auth 抑制（180s），engine.setHealth('auth_failed')，return
+  │     └─ 成功 → 继续
+  │
+  ├─ 4. 状态更新
+  │     consecutiveRestarts++
+  │     startupGrace = 30
+  │     notRunningCount = 0
+  │     runtimeLaunchAtMs = Date.now()
+  │
+  ├─ 5. 清理 stale 状态
+  │     ├─ clearHeartbeatPending()
+  │     ├─ 删除 context temp files
+  │     └─ resetToolLifecycleRuntimeState()
+  │
+  ├─ 6. 启动 runtime
+  │     adapter.launch()（fire-and-forget，不 await）
+  │
+  └─ 7. 启动提示（Claude fallback）
+        无 SessionStart hook → enqueueStartupControl()
+```
+
 ### 接口定义
 
 ```javascript
 class Guardian {
-  tick(snapshot: Snapshot): void   // 每次 tick 调用，检测是否需要拉起
+  constructor(adapter: RuntimeAdapter, healthEngine: HealthEngine, config: object)
+  tick(snapshot: Snapshot): void         // 每次 tick 调用
+  async startAgent(): void               // 拉起 runtime（内部方法，tick 触发）
 }
 ```
-
-### 行为规则
-
-1. **无条件拉起**（D-20）：进程不存在（offline/stopped）→ 尝试拉起，不读 HealthState
-2. **退避策略**：`restartDelay = min(BASE_RESTART_DELAY × 2^consecutiveRestarts, MAX_RESTART_DELAY)`
-   - 序列：5s, 10s, 20s, 40s, 60s, 60s, ...
-3. **退避重置**：agent 连续运行超过 BACKOFF_RESET_THRESHOLD 后重置 consecutiveRestarts
-4. **启动保护**（D-33）：拉起成功后设置 startupGrace = 30 ticks，期间跳过 offline 检测
-5. **维护等待**：拉起前检查是否有正在进行的 `restart-claude`、`upgrade-claude`、`claude.ai/install.sh` 进程，等待最多 300s
-6. **Auth 抑制**：auth 失败后抑制 180s 不重试，user message signal 可清除抑制
 
 ### 内部状态
 
@@ -45,16 +119,24 @@ class Guardian {
   stableRunningSince: number,      // 连续运行起始时间（epoch seconds）
   startupGrace: number,            // 启动保护倒计时（ticks）
   startAgentInProgress: boolean,   // 防止并发拉起
-  authRetrySuppressedUntil: number,// auth 失败抑制截止时间
+  authRetrySuppressedUntil: number,// auth 失败抑制截止时间（ms timestamp）
+  runtimeLaunchAtMs: number,       // 最近一次拉起时间（ms timestamp）
 }
 ```
 
 ### 与其他组件的交互
 
-- 调用 `adapter.launch()` 拉起 runtime
-- 调用 `adapter.isRunning()` / `tmuxHasSession()` 检测进程存活
-- 读取 `user-message-signal.json` 清除 auth 抑制
-- **不读取** HealthEngine 状态（D-1、D-20）
+| 交互方 | 方向 | 方法/数据 | 用途 |
+|-------|------|----------|------|
+| **Adapter** | 调用 | `launch()` | 拉起 runtime |
+| **Adapter** | 调用 | `stop()` | kill tmux session（冻结处理由 Orchestrator 调用，不是 Guardian） |
+| **Adapter** | 调用 | `isRunning()` | 检测 runtime 进程存活 |
+| **Adapter** | 调用 | `checkAuth()` | 拉起前认证预检 |
+| **HealthEngine** | 调用 | `canRestart()` | rate_limited 时不拉起 |
+| **HealthEngine** | 调用 | `setHealth('auth_failed')` | auth 失败时设置健康状态 |
+| **HealthEngine** | 调用 | `clearHeartbeatPending()` | 拉起前清除 stale heartbeat |
+| **SignalStore** | 读取 | `user-message-signal.json` | 清除 auth 抑制 |
+| **HealthEngine** | **不读取** | `health` | D-1, D-20：Guardian 不读 HealthState |
 
 ### 常量
 
@@ -73,11 +155,20 @@ class Guardian {
 
 ### 现有代码位置
 
-从 `activity-monitor.js` 的 offline/stopped 分支提取。
+| 现有位置 | 内容 |
+|---------|------|
+| `activity-monitor.js:568-641` | `startAgent()` — 完整拉起流程 |
+| `activity-monitor.js:1809-1937` | monitorLoop offline/stopped 分支 — 检测 + 退避 + 触发拉起 |
+| `activity-monitor.js:1940-1952` | running 分支 — 退避重置逻辑 |
+| `activity-monitor.js:433-483` | `getRunningMaintenance()` + `waitForMaintenance()` |
+| `activity-monitor.js:486-521` | `hasStartupHook()` + `enqueueStartupControl()` |
+| `activity-monitor.js:548-561` | `maybeConsumeUserMessageSignal()` |
 
 ### 实施步骤
 
 1. 创建 `scripts/guardian.js`
-2. 提取 offline/stopped 分支的所有逻辑：进程存活检测、拉起、退避、启动保护、维护等待、auth 抑制
-3. 内部状态全部为运行时状态，AM 冷启动时重置为零（D-21）
-4. 确保不引入任何 HealthEngine 依赖（D-1、D-20）
+2. 提取 offline/stopped 分支的所有逻辑：进程存活检测、退避计算、拉起触发
+3. 提取 `startAgent()` 完整流程：维护等待、认证预检、状态清理、launch
+4. 提取辅助函数：`getRunningMaintenance()`、`waitForMaintenance()`、`hasStartupHook()`
+5. 内部状态全部为运行时状态，AM 冷启动时重置为零（D-21）
+6. 确保不引入 `engine.health` 直接读取（D-1、D-20），只用 `engine.canRestart()`

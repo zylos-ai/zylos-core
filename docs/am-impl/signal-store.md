@@ -16,17 +16,81 @@
 
 ## 2. 组件设计
 
+### 功能清单
+
+SignalStore 管理两层数据读取：
+
+| 能力类别 | 功能 | 说明 |
+|---------|------|------|
+| **快照层** | 读取 agent-status.json | StatusWriter 上一 tick 写入的状态（冷启动恢复 health） |
+| | 读取 proc-state.json | ProcSampler 写入的进程冻结检测结果 |
+| | 读取 statusline.json | context-monitor hook 写入的上下文使用率 |
+| | 读取 foreground-session.json | session-start hook 写入的前台会话身份 |
+| | 读取 user-message-signal.json | c4-receive 写入的用户消息信号（用于清除 auth 抑制、加速恢复） |
+| | 读取 health-check-state.json | 上次健康检查时间 |
+| **流式层** | 增量读取 tool-events.jsonl | 维护 inode + offset 游标，只读取新增事件 |
+| | 文件轮转处理 | 超过 1MB 时 rename → .old，新建空文件，drain 旧文件 |
+| | 轮转后 drain | 旧文件读完 + 2s 静默后删除 |
+| | inode 变更检测 | 文件被替换（inode 变化）时从头读取 |
+| **生命周期** | refresh() | tick 开头调用，读取所有数据，返回 immutable Snapshot |
+| | 状态持久化 | tool-event-stream-state.json 保存游标，AM 冷启动恢复 |
+
+### 数据流图
+
+```
+                     Signal Files (磁盘)
+                     ┌──────────────────────┐
+ Hook 脚本写入 ────▶ │ tool-events.jsonl     │──┐
+                     │ statusline.json       │  │
+                     │ foreground-session.json│  │
+                     └──────────────────────┘  │
+                                               │  refresh()
+ ProcSampler 写入 ──▶ proc-state.json ────────┤  (tick 开头)
+                                               │
+ StatusWriter 写入 ──▶ agent-status.json ──────┤
+                                               │
+ c4-receive 写入 ───▶ user-message-signal.json ┤
+                                               ▼
+                     ┌──────────────────────────┐
+                     │  Snapshot (immutable)     │
+                     │  ┌────────────────────┐  │
+                     │  │ 快照层：6 个 JSON   │  │
+                     │  │ 流式层：ToolEvent[] │  │
+                     │  │ 元数据：timestamp   │  │
+                     │  └────────────────────┘  │
+                     └───────────┬──────────────┘
+                                 │ 共享只读引用
+                     ┌───────────┼───────────┐
+                     ▼           ▼           ▼
+                  Guardian   ToolPipeline  StatusWriter
+                  ProcSampler ToolWatchdog TaskScheduler
+```
+
 ### 接口定义
 
 ```javascript
 class SignalStore {
+  constructor(signalPaths: SignalPaths)
   refresh(): Snapshot    // tick 开头调用，读取所有 signal files，返回 immutable snapshot
 }
 ```
 
 ```javascript
+interface SignalPaths {
+  agentStatus: string       // ~/zylos/activity-monitor/agent-status.json
+  procState: string         // ~/zylos/activity-monitor/proc-state.json
+  statusline: string        // ~/zylos/activity-monitor/statusline.json
+  foregroundSession: string // ~/zylos/activity-monitor/foreground-session.json
+  userMessageSignal: string // ~/zylos/activity-monitor/user-message-signal.json
+  healthCheckState: string  // ~/zylos/activity-monitor/health-check-state.json
+  toolEvents: string        // ~/zylos/activity-monitor/tool-events.jsonl
+  toolEventStreamState: string // ~/zylos/activity-monitor/tool-event-stream-state.json
+}
+```
+
+```javascript
 interface Snapshot {
-  // 快照层（readJSON）
+  // 快照层（readJSON，文件不存在或读取失败返回 null）
   agentStatus: AgentStatus | null
   procState: ProcState | null
   statusline: StatuslineData | null
@@ -129,7 +193,7 @@ interface Snapshot {
 }
 ```
 
-#### foreground-session.json（由 session-foreground hook 写入）
+#### foreground-session.json（由 session-start hook 写入）
 
 ```javascript
 {
@@ -172,10 +236,51 @@ interface Snapshot {
 }
 ```
 
+### 流式层增量读取算法
+
+```
+refresh() 流式层部分：
+
+1. 旧文件 drain（如果 rotated_drain 存在）：
+   ├─ 旧文件不存在 → 清除 drain 状态
+   ├─ 读取新增内容（从 drain.offset 开始）
+   ├─ 文件大小未增长 + 静默超过 2s → unlink 旧文件，清除 drain
+   └─ 否则 → 更新 drain offset/quiet_since
+
+2. 当前文件读取：
+   ├─ 文件不存在 → 重置 inode/offset
+   ├─ inode 变化或文件缩小 → 从头读取（文件被替换）
+   └─ 正常 → 从 offset 开始增量读取
+
+3. JSONL 解析：
+   ├─ 按 \n 分割
+   ├─ 最后一行不完整 → 存为 tail，下次 tick 拼接
+   ├─ 每行 JSON.parse，失败跳过（容错）
+   └─ 每个事件加 _arrival_seq（排序用）
+```
+
 ### 与其他组件的交互
 
-- **Monitor Orchestrator** → tick 开头调用 `refresh()`，将返回的 snapshot 传给所有后续组件
-- **所有 tick 组件** → 消费 snapshot（只读）
+| 消费方 | 读取的 Snapshot 字段 | 用途 |
+|-------|---------------------|------|
+| **Guardian** | `userMessageSignal` | 清除 auth 抑制 |
+| **ProcSampler** | （不读 snapshot，独立采样） | — |
+| **ToolPipeline** | `toolEvents`, `foregroundSession`, `statusline` | 事件处理 + 前台身份 |
+| **ToolWatchdog** | 通过 ToolPipeline 的 apiActivity | 候选工具超时检测 |
+| **TaskScheduler** | snapshot 整体（gate 条件） | idle 判断等 |
+| **StatusWriter** | snapshot 整体 | 汇总写入 agent-status.json |
+| **Monitor Orchestrator** | `agentStatus`（冷启动恢复 health） | 初始化 HealthEngine |
+
+### 写入方
+
+| 写入方 | 写入的文件 | 时机 |
+|-------|-----------|------|
+| **hook-activity** | tool-events.jsonl | runtime 工具事件触发 |
+| **context-monitor** | statusline.json | Claude 每 turn 后 |
+| **session-start-prompt** | foreground-session.json | SessionStart hook |
+| **ProcSampler** | proc-state.json | 每 10s 采样 |
+| **StatusWriter** | agent-status.json | 每 tick 末尾 |
+| **c4-receive** | user-message-signal.json | 用户消息到达 |
 
 ## 3. 实施方案
 
@@ -183,12 +288,17 @@ interface Snapshot {
 
 ### 现有代码位置
 
-逻辑散落在 `activity-monitor.js` 的 tick 循环开头，各处 `readJSON()` 调用。
+| 现有位置 | 内容 |
+|---------|------|
+| `activity-monitor.js` tick 循环开头 | 各处 `readJsonFileSafe()` 调用 |
+| `tool-event-stream.js`（241行） | 流式层完整实现：`readToolEventsIncrementalFromStream()` + `rotateToolEventStream()` |
+| `activity-monitor.js` 全局变量 | `toolEventStreamState`、`activeTail`、`rotatedTail`、`arrivalSeq` |
 
 ### 实施步骤
 
-1. 创建 `scripts/signal-store.js`，将 tick 循环开头的所有 `readJSON()` 调用收拢到 `refresh()` 方法
-2. 快照层：纯 `readJSON()`，文件不存在或读取失败返回 null
-3. 流式层：复用现有 `tool-event-stream.js` 模块，维护 offset + inode 状态实现增量读取
-4. Snapshot 在 tick 内 immutable，所有组件共享同一份引用，不应修改
-5. 文件轮转：tool-events.jsonl 超过 1MB 时轮转，旧文件 drain 完毕后删除（quiet window 2s）
+1. 创建 `scripts/signal-store.js`
+2. 将 tick 循环开头的所有 `readJsonFileSafe()` 调用收拢到 `refresh()` 方法
+3. 将 `tool-event-stream.js` 作为内部实现（流式层直接复用，不修改）
+4. 将全局的流式层状态变量（`toolEventStreamState` 等）移入 SignalStore 实例
+5. Snapshot 在 tick 内 immutable，所有组件共享同一份引用
+6. 流式层游标持久化到 `tool-event-stream-state.json`，AM 冷启动时恢复

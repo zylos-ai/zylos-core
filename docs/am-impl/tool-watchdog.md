@@ -16,40 +16,128 @@
 
 ## 2. 组件设计
 
-### 接口定义
+### 功能清单
 
-```javascript
-function evaluateToolWatchdogTransition({
-  nowMs, foregroundIdentity, apiActivity, interactiveState,
-  state, deps
-}): { watchdog_phase: string, watchdog_block_reason: string | null, api_activity_dirty: boolean }
+| 能力类别 | 功能 | 说明 |
+|---------|------|------|
+| **前置检查** | 前台身份验证 | `foregroundIdentity.trusted != true` → idle（不操作不信任的 session） |
+| | 启动宽限期 | `launchGracePeriod` 内 → idle（**D-33：待移除**） |
+| | 健康状态检查 | `engineHealth != 'ok'` → idle |
+| | 候选工具检查 | 无 `watchdog_candidate_tool` → idle |
+| | 规则检查 | 候选工具的 `watchdog.enabled = false` → idle |
+| **超时检测** | 运行时间计算 | `nowMs - candidate.started_at` vs `rule.watchdog.maxRuntimeSec` |
+| | 观察阶段 | 未超时 → `observing`（持续监控） |
+| **干预** | 发送中断 | `deps.enqueueInterrupt(interruptKey)` 向 tmux 发送按键（默认 Escape） |
+| | 中断等待 | 发送成功后等待 `interruptGraceSec`（默认 15s） |
+| | 中断重试 | 发送失败后等待 `cooldownSec`（默认 60s）后重试 |
+| | pane 恢复检测 | `deps.canTreatPaneAsRecovered(interactiveState)` 检查 tmux 是否回到交互态 |
+| | 升级（escalation） | grace 过期仍未恢复 → `deps.triggerRecovery()` → HealthEngine 介入 |
+| **状态持久化** | watchdog-state.json | 写入当前 episode 状态，AM 冷启动恢复 |
+
+### 6 阶段状态机
+
 ```
-
-### 6 阶段状态机（D-24）
-
-```
-idle → observing      : 出现 watchdog 候选工具
-observing → interrupt_sent     : 超时 + 发送中断成功
-observing → interrupt_retry_wait : 超时 + 发送中断失败
-interrupt_sent → interrupt_wait : 中断已发送，等待 grace
-interrupt_wait → escalated     : grace 过期仍未恢复
-interrupt_retry_wait → interrupt_sent : 重试冷却到期
-任何阶段 → recovered           : 候选工具消失或 pane 恢复
-任何阶段 → idle               : 前置条件不满足
+                        出现候选工具
+                 ┌─────────────────────┐
+                 │                     ▼
+              ┌──┴──┐           ┌──────────┐
+              │idle │           │observing  │
+              └──┬──┘           └─────┬────┘
+                 ▲                    │ 超时
+    前置条件不满足 │                    │
+    或候选工具消失 │              ┌─────┴─────┐
+                 │              │           │
+                 │         发送成功     发送失败
+                 │              │           │
+                 │              ▼           ▼
+                 │    ┌──────────────┐ ┌─────────────────┐
+                 │    │interrupt_sent│ │interrupt_retry   │
+                 │    └──────┬───────┘ │_wait             │
+                 │           │         └────────┬────────┘
+                 │           ▼                  │ 冷却到期
+                 │    ┌──────────────┐          │ → 重试发送
+                 │    │interrupt_wait│◄─────────┘
+                 │    └──────┬───────┘
+                 │           │ grace 过期
+                 │           ▼
+                 │    ┌──────────┐
+                 │    │escalated │ → triggerRecovery()
+                 │    └──────────┘
+                 │
+                 │  ┌──────────┐
+                 └──│recovered │ ← 候选消失或 pane 恢复
+                    └──────────┘
 ```
 
 ### 前置条件（idle 原因）
 
-| block_reason | 条件 |
-|------|------|
-| foreground_untrusted | foregroundIdentity.trusted != true |
-| health_\<state\> | engineHealth != 'ok' |
-| no_watchdog_candidate | 无候选工具 |
-| watchdog_disabled | 规则的 watchdog.enabled = false |
+| block_reason | 条件 | 说明 |
+|------|------|------|
+| foreground_untrusted | `foregroundIdentity.trusted != true` | 不操作不信任的 session |
+| launch_grace | `nowMs - runtimeLaunchAtMs < launchGracePeriodSec * 1000` | **D-33：待移除** |
+| health_\<state\> | `engineHealth != 'ok'` | runtime 不健康时不干预 |
+| no_watchdog_candidate | 无候选工具 | 没有需要监控的长时间工具 |
+| watchdog_disabled | `rule.watchdog.enabled = false` | 规则禁用了 watchdog |
+| interrupt_enqueue_failed | `enqueueInterrupt()` 返回失败 | tmux 中断发送失败 |
 
-### 行为变更（D-33）
+### 接口定义
 
-移除 `launchGracePeriod` 检查。ToolWatchdog 不再有启动宽限期。
+```javascript
+function evaluateToolWatchdogTransition({
+  nowMs: number,
+  foregroundIdentity: ForegroundIdentity,
+  apiActivity: ApiActivity,
+  interactiveState: InteractiveState | null,
+  state: {
+    runtimeLaunchAtMs: number,
+    launchGracePeriodSec: number,    // D-33: 待移除
+    engineHealth: string,
+    watchdogState: WatchdogEpisode | null,
+  },
+  deps: WatchdogDeps,
+}): {
+  watchdog_phase: string,
+  watchdog_block_reason: string | null,
+  api_activity_dirty: boolean,
+}
+```
+
+```javascript
+interface WatchdogDeps {
+  clearWatchdogState(): void
+  writeWatchdogState(): void
+  getRuleById(ruleId: string): ToolRule | null
+  enqueueInterrupt(key: string): { ok: boolean, output?: string }
+  canTreatPaneAsRecovered(interactiveState): boolean
+  applySyntheticClearHint(sessionId, claudePid, reason, nowMs): void
+  triggerRecovery(reason: string): void
+  log(message: string): void
+}
+```
+
+### Watchdog Episode 状态
+
+```javascript
+{
+  version: 1,
+  episode_key: string,          // = candidate.event_id
+  session_id: string,
+  claude_pid: number,
+  tool_name: string,
+  rule_id: string,
+  started_at: number,           // ms, 工具开始时间
+  first_timeout_at: number,     // ms, 首次超时检测时间
+  interrupt_sent_at: number,    // ms, 最近一次中断发送时间（0 = 未发送）
+  interrupt_key: string,        // 使用的按键
+  interrupt_count: number,      // 累计中断次数
+  grace_deadline_at: number,    // ms, grace 过期时间
+  interactive_recovered_at: number, // ms, pane 恢复时间
+  escalated_at: number,         // ms, 升级时间（0 = 未升级）
+  escalation: string,           // 'restart'
+  retry_after_at: number,       // ms, 重试冷却截止（0 = 无冷却）
+  last_action_at: number,       // ms, 最近动作时间
+}
+```
 
 ### 工具规则格式
 
@@ -71,10 +159,15 @@ interrupt_retry_wait → interrupt_sent : 重试冷却到期
 
 ### 与其他组件的交互
 
-- **ToolPipeline** → 消费 `api-activity.json` 获取 watchdog 候选工具
-- **HealthEngine** → 读取 health 状态作为前置条件；升级时触发 HealthEngine 状态转移
-- **Adapter** → 调用 `sendMessage()` 发送中断按键
-- **Monitor Orchestrator** → 在 tick 编排中被调用
+| 交互方 | 方向 | 方法/数据 | 用途 |
+|-------|------|----------|------|
+| **ToolPipeline** | 消费 | `apiActivity.watchdog_candidate_tool` | 获取候选超时工具 |
+| **ToolPipeline** | 消费 | `foregroundIdentity` | 前台身份验证 |
+| **HealthEngine** | 读取 | `engineHealth` | 前置条件检查 |
+| **HealthEngine** | 调用 | `triggerRecovery()` | escalation 时触发 HealthEngine |
+| **Adapter** | 调用 | `sendMessage()` (via `enqueueInterrupt`) | 发送中断按键 |
+| **Monitor Orchestrator** | 调用 | `evaluateToolWatchdogTransition()` | tick 中被调用 |
+| **StatusWriter** | 提供 | `watchdog_phase`, `watchdog_block_reason` | 写入 agent-status.json |
 
 ### 可配置项
 
@@ -91,10 +184,16 @@ interrupt_retry_wait → interrupt_sent : 重试冷却到期
 
 ### 现有代码位置
 
-已独立为 `scripts/tool-watchdog.js`。
+| 现有位置 | 内容 |
+|---------|------|
+| `scripts/tool-watchdog.js`（145行） | `evaluateToolWatchdogTransition()` 完整状态机 |
+| `scripts/tool-rules.js`（99行） | `getToolRules()` 规则定义 |
+| `activity-monitor.js:1983-1995` | Orchestrator 调用入口 + dirty flag 处理 |
+| `activity-monitor.js:840-850` | `writeWatchdogState()` |
 
 ### 实施步骤
 
-1. 确认现有 `tool-watchdog.js` 接口与本文档定义对齐
-2. 移除 `launchGracePeriod` 相关检查逻辑（D-33）
+1. 确认现有 `tool-watchdog.js` 接口与本文档定义对齐 — **已对齐**
+2. **移除 `launchGracePeriod` 相关检查逻辑**（D-33）：删除 `withinLaunchGrace` 判断和 `launch_grace` block_reason
 3. 确认 6 阶段状态机转换规则与现有代码一致
+4. 从 `state` 参数中移除 `launchGracePeriodSec` 字段
