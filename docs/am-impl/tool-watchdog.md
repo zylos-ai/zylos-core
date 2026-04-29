@@ -155,6 +155,144 @@ interface WatchdogDeps {
 }
 ```
 
+### 状态转移伪代码
+
+```javascript
+function evaluateToolWatchdogTransition({ nowMs, foregroundIdentity, apiActivity, interactiveState, snapshot, deps }) {
+  const candidate = apiActivity?.watchdog_candidate_tool || null
+  const phase = { watchdog_phase: 'idle', watchdog_block_reason: null, api_activity_dirty: false }
+
+  // ── 前置条件检查：任一不满足 → idle ──
+
+  if (!foregroundIdentity?.trusted) {
+    deps.clearWatchdogState()
+    phase.watchdog_block_reason = foregroundIdentity?.blockReason || 'foreground_untrusted'
+    return phase
+  }
+
+  // D-23: health 从 snapshot 读取（行为变更：原为直接读 HealthEngine 内存字段）
+  if (snapshot.health !== 'ok') {
+    deps.clearWatchdogState()
+    phase.watchdog_block_reason = `health_${snapshot.health}`
+    return phase
+  }
+
+  // D-33: 移除 launchGracePeriod 检查（行为变更）
+
+  if (!candidate) {
+    deps.clearWatchdogState()
+    phase.watchdog_block_reason = 'no_watchdog_candidate'
+    return phase
+  }
+
+  const rule = deps.getRuleById(candidate.rule_id)
+  if (!rule?.watchdog?.enabled) {
+    deps.clearWatchdogState()
+    phase.watchdog_block_reason = 'watchdog_disabled'
+    return phase
+  }
+
+  // ── 超时判断 ──
+
+  const maxRuntimeMs = rule.watchdog.maxRuntimeSec * 1000
+  if ((nowMs - candidate.started_at) < maxRuntimeMs) {
+    // 未超时：observing
+    if (snapshot.watchdogState?.episode_key !== candidate.event_id) {
+      deps.clearWatchdogState()   // 候选工具切换，清除旧 episode
+    }
+    phase.watchdog_phase = 'observing'
+    return phase
+  }
+
+  // ── 已超时：检查现有 episode 状态 ──
+
+  if (snapshot.watchdogState?.episode_key === candidate.event_id) {
+    // 候选工具消失 → recovered
+    if (!apiActivity.watchdog_candidate_tool) {
+      deps.clearWatchdogState()
+      phase.watchdog_phase = 'recovered'
+      return phase
+    }
+
+    // pane 已回到交互态 → recovered（注入 synthetic clear hint 让 ToolPipeline 清除 episode）
+    if (deps.canTreatPaneAsRecovered(interactiveState)) {
+      deps.applySyntheticClearHint(foregroundIdentity.sessionId, foregroundIdentity.claudePid, 'interactive_recovered', nowMs)
+      deps.clearWatchdogState()
+      phase.watchdog_phase = 'recovered'
+      phase.api_activity_dirty = true       // 通知 Orchestrator 重建 apiActivity
+      return phase
+    }
+
+    // 中断已发送且 grace 未过期 → interrupt_wait
+    if (snapshot.watchdogState.interrupt_sent_at && nowMs <= snapshot.watchdogState.grace_deadline_at) {
+      phase.watchdog_phase = 'interrupt_wait'
+      return phase
+    }
+
+    // 中断发送失败，冷却未到期 → interrupt_retry_wait
+    if (!snapshot.watchdogState.interrupt_sent_at
+      && snapshot.watchdogState.retry_after_at
+      && nowMs < snapshot.watchdogState.retry_after_at) {
+      phase.watchdog_phase = 'interrupt_retry_wait'
+      return phase
+    }
+
+    // 已升级 → 保持 escalated
+    if (snapshot.watchdogState.escalated_at) {
+      phase.watchdog_phase = 'escalated'
+      return phase
+    }
+  }
+
+  // ── 需要动作：发送中断 或 升级 ──
+
+  // 条件：无 episode / episode 切换 / 中断未发送（含重试）
+  if (!snapshot.watchdogState
+    || snapshot.watchdogState.episode_key !== candidate.event_id
+    || !snapshot.watchdogState.interrupt_sent_at) {
+
+    const result = deps.enqueueInterrupt(rule.watchdog.interruptKey)
+
+    // 写入 episode 状态（新建或更新）
+    snapshot.watchdogState = {
+      version: 1,
+      episode_key: candidate.event_id,
+      session_id: foregroundIdentity.sessionId,
+      claude_pid: foregroundIdentity.claudePid,
+      tool_name: candidate.name,
+      rule_id: candidate.rule_id,
+      started_at: candidate.started_at,
+      first_timeout_at: snapshot.watchdogState?.episode_key === candidate.event_id
+        ? snapshot.watchdogState.first_timeout_at : nowMs,
+      interrupt_sent_at: result.ok ? nowMs : 0,
+      interrupt_key: rule.watchdog.interruptKey,
+      interrupt_count: (snapshot.watchdogState?.episode_key === candidate.event_id
+        ? snapshot.watchdogState.interrupt_count : 0) + 1,
+      grace_deadline_at: result.ok ? (nowMs + rule.watchdog.interruptGraceSec * 1000) : 0,
+      interactive_recovered_at: 0,
+      escalated_at: 0,
+      escalation: rule.watchdog.escalation,
+      retry_after_at: result.ok ? 0 : (nowMs + rule.watchdog.cooldownSec * 1000),
+      last_action_at: nowMs,
+    }
+    deps.writeWatchdogState()
+
+    phase.watchdog_phase = result.ok ? 'interrupt_sent' : 'interrupt_retry_wait'
+    if (!result.ok) phase.watchdog_block_reason = 'interrupt_enqueue_failed'
+    return phase
+  }
+
+  // ── 兜底：grace 过期仍未恢复 → escalation ──
+
+  deps.triggerRecovery(`tool_timeout_${candidate.name}`)
+  snapshot.watchdogState.escalated_at = nowMs
+  snapshot.watchdogState.last_action_at = nowMs
+  deps.writeWatchdogState()
+  phase.watchdog_phase = 'escalated'
+  return phase
+}
+```
+
 ### 与其他组件的交互
 
 | 交互方 | 方向 | 方法/数据 | 用途 |
