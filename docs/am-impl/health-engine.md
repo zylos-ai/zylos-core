@@ -121,6 +121,7 @@ class HealthEngine {
 
   // 状态查询
   get health(): string                    // 当前 HealthState
+  get healthReason(): string | null       // 当前诊断信息（D-2），health=ok 时为 null
 
   // 状态转移
   setHealth(next: string, reason?: string): void
@@ -181,6 +182,7 @@ interface ProbeResult {
 ```javascript
 {
   healthState: string,                    // 当前 FSM 状态
+  healthReason: string | null,            // 当前诊断信息（D-2），setHealth() 时同步保存
   restartFailureCount: number,            // 连续失败次数（退避指数）
   recoveringStartedAt: number,            // epoch seconds（DOWN 降级计时器）
   lastHeartbeatAt: number,                // 上次 heartbeat 时间
@@ -209,7 +211,7 @@ interface ProbeResult {
 | **c4-dispatcher** | 被调用 | `onUserMessageDelivered()` | user message 投递后检测（行为变更） |
 | **MessageRouter** | 被调用 | `runRecoveryProbe()` | IPC 路由时执行恢复探测 |
 | **ToolWatchdog** | 被调用 | `triggerRecovery(reason)` | 工具超时升级 |
-| **StatusWriter** | 读取 | `health`, `rateLimitResetTime`, `cooldownUntil` | 写入 agent-status.json |
+| **StatusWriter** | 读取 | `health`, `healthReason`, `rateLimitResetTime`, `cooldownUntil` | 写入 agent-status.json |
 | **Adapter** | 调用 | `checkAuth()`, `getHeartbeatDeps()` | 执行认证检查和 heartbeat probe |
 | **Adapter** | 调用 | `stop()` (via `killTmuxSession`) | sticky error / recovery 时 kill session |
 
