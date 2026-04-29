@@ -125,7 +125,66 @@ this.statusWriter = new StatusWriter(healthEngine, signalStore)
 
 ### IPC 监听
 
-Monitor Orchestrator 负责启动 IPC server（Unix socket），供 MessageRouter 接入查询 HealthEngine 状态。IPC 协议定义见 MessageRouter 实施方案。
+Monitor Orchestrator 负责启动 IPC server（Unix socket），供 MessageRouter（c4-receive 进程）接入查询 HealthEngine 状态并触发 recovery probe。
+
+#### Socket 路径
+
+```
+~/zylos/activity-monitor/am.sock
+```
+
+AM 启动时创建，退出时自动清理（`server.close()`）。启动前删除 stale socket 文件（防止上次异常退出残留）。
+
+#### 协议
+
+JSON-over-newline：每条消息是一行 JSON，以 `\n` 分隔。客户端（c4-receive）发一条请求，AM 返回一条响应，然后关闭连接（短连接模式）。
+
+**请求**：
+
+```javascript
+{
+  type: 'route',                    // 消息类型，目前只有 'route'
+  channel: string,                  // 来源渠道（'telegram', 'lark', 'web', ...）
+  endpoint: string,                 // 渠道内标识（chat_id, user_id, ...）
+  noReply: boolean,                 // true = 系统消息，probe 失败时静默（§3.2 noReply 语义）
+}
+```
+
+**响应**：
+
+```javascript
+{
+  recovered: boolean,               // true = 健康，消息走主链；false = 不健康
+  health: string,                   // 当前 HealthState
+  reason?: string,                  // recovered=false 时的原因
+  userMessage?: string,             // recovered=false 且 noReply=false 时，投递给用户的状态文案
+}
+```
+
+**超时**：c4-receive 侧设 25s 读超时（对齐顶层 §3.2 router probe budget ≤25s）。超时视为 recovered=true（fail-open，与现有行为一致）。
+
+**降级**：socket 不存在或连接失败 → c4-receive 降级为直接读 `agent-status.json`（兼容 AM 未启动/升级中的场景），health=ok 时走主链，非 ok 时按文件中的状态生成文案。
+
+#### IPC 处理流程（AM 侧）
+
+```
+client 连接
+  │
+  ├─ 解析 JSON 请求
+  │
+  ├─ healthEngine.health === 'ok'?
+  │   └─ YES → 返回 { recovered: true, health: 'ok' }
+  │
+  ├─ NO → 调用 healthEngine.notifyUserMessage() 加速 recovery
+  │       调用 healthEngine.runRecoveryProbe()
+  │       │
+  │       ├─ recovered → 返回 { recovered: true, health: 'ok' }
+  │       └─ not recovered → 返回 { recovered: false, health, reason, userMessage }
+  │
+  └─ 关闭连接
+```
+
+> **注意**：IPC handler 持有 HealthEngine 引用，在 Orchestrator init 时注册。MessageRouter 的文案映射逻辑（reason → userMessage）也在此 handler 中实现，不需要独立的 MessageRouter 模块文件——它是 IPC handler 的一部分。
 
 ### 状态恢复（AM 冷启动）
 
