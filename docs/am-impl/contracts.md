@@ -10,6 +10,16 @@ AM 技术方案和 am-impl 子模块文档 review 发现若干关键链路 contr
 
 顶层方案（activity-monitor-design.md）不做修改。本文档中定义的 contract 作为顶层方案的补充约束。
 
+### 与顶层设计的关系
+
+本文不修改顶层设计决策，只补齐顶层未展开的实施 contract。对应顶层约束：
+
+- D-7 / D-8 / D-10：MessageRouter recovery probe、unhealthy routing、Health 持久化与 fallback。
+- D-16 / D-18：heartbeat probe 与 sticky restart 语义。
+- D-23 / D-24：immutable snapshot 与 ToolWatchdog 持久化状态。
+
+当子模块文档与本文冲突时，以本文为准；若本文需要改变顶层决策，必须先更新顶层设计。
+
 ---
 
 ## 1. Dispatcher Delivery-Result 事件源分析
@@ -68,7 +78,13 @@ HealthEngine 使用 heartbeat probe 作为 recovery 的核心探测手段（Rate
 
 ### 2.2 Contract 定义
 
-**核心原则**：Heartbeat control 消息必须绕过 health gate，在任何 HealthState 下都能被投递到 runtime。
+**核心原则**：HealthEngine recovery heartbeat 是真实 runtime liveness probe。它必须绕过 health gate，在任何 HealthState 下都能被投递到 runtime，并且不得由 dispatcher auto-ack。
+
+**适用 phase**：
+- `recovery`：MessageRouter / HealthEngine recovery probe 使用。
+- `post_restart`：Guardian 拉起 runtime 后的恢复确认 probe 使用。
+
+如果历史上存在 periodic / primary heartbeat auto-ack，它不能和 recovery heartbeat 混用。`phase='recovery' | 'post_restart'` 的 heartbeat 只有 runtime hook 显式 ack 才能变为 `done`。
 
 #### 投递链路
 
@@ -96,9 +112,27 @@ Heartbeat 不经过 MessageRouter / c4-receive。由 HealthEngine 直接写入 c
 | 规则 | 说明 |
 |------|------|
 | 独立投递循环 | control 消息和 user message 使用独立的投递循环（或同一循环中 control 优先处理），确保 control 不被 user message 队列阻塞 |
-| 无 health gate | dispatcher 投递 control 消息时不检查 HealthState，始终投递 |
+| 无 health gate | recovery heartbeat 必须绕过 dispatcher health gate；推荐由 `enqueueHeartbeat()` 写入 `bypass_state=1`，dispatcher 看到 bypass 后跳过 health gate |
 | 优先投递 | 同一 poll cycle 中 control 消息优先于 user message 投递 |
 | 单条投递 | 每次 poll 最多投递一条 control 消息，避免 tmux 输入冲突 |
+
+#### enqueueHeartbeat control 字段
+
+`enqueueHeartbeat(phase)` 必须写入一条 bypass control。字段名按现有 C4 control 表实现调整，但语义必须等价：
+
+```javascript
+{
+  type: 'heartbeat',
+  phase: 'recovery' | 'post_restart',
+  status: 'pending',
+  bypass_state: 1,              // 必须绕过 health gate
+  priority: 0,                  // 高于普通 user/control 消息
+  ack_deadline_seconds: 25,     // 对齐 PROBE_TIMEOUT
+  no_ack_suffix: true,          // 不依赖 dispatcher 自动 ack 后缀
+}
+```
+
+如果实现选择 control 投递循环天然不检查 agent health，仍建议保留 `bypass_state=1` 作为可审计 contract。
 
 #### status 生命周期
 
@@ -124,7 +158,7 @@ pending ─── dispatcher 取出并投递 ──▶ running
 
 #### ack 机制
 
-runtime 的 Heartbeat hook 检查 control 表，识别到 type='heartbeat' && status='running' → 处理 → UPDATE status='done'。
+runtime 的 Heartbeat hook 检查 control 表，识别到 `type='heartbeat' && phase in ('recovery', 'post_restart') && status='running'` → 处理 → UPDATE status='done'。
 
 **无 auto-ack**。heartbeat 的 ack 必须由 runtime hook 显式完成。原因：heartbeat 的目的是验证 runtime 是否响应，auto-ack 会导致 "runtime 已死但 heartbeat 显示 done" 的假阳性。
 
@@ -132,7 +166,7 @@ runtime 的 Heartbeat hook 检查 control 表，识别到 type='heartbeat' && st
 
 ```javascript
 // deps.enqueueHeartbeat(phase)
-//   写入 c4.db control 表：{ type: 'heartbeat', phase, status: 'pending' }
+//   写入 c4.db control 表：{ type: 'heartbeat', phase, status: 'pending', bypass_state: 1, ... }
 //   phase: 'recovery' | 'post_restart' — 标识 probe 阶段，供日志/调试
 //   返回 control_id（成功）或 false（DB 写入失败）
 
@@ -147,7 +181,7 @@ runtime 的 Heartbeat hook 检查 control 表，识别到 type='heartbeat' && st
 | 文档 | 变更 |
 |------|------|
 | health-engine.md | `enqueueHeartbeat()` / `getHeartbeatStatus()` 的 deps 注释更新为本 contract 定义的完整语义 |
-| c4-changes.md | c4-dispatcher 需实现 control 消息独立投递循环 + 无 health gate + 优先投递规则 |
+| c4-changes.md | c4-dispatcher 需实现 recovery heartbeat bypass health gate、无 auto-ack、优先投递规则 |
 | hooks.md | 确认 Heartbeat hook 的 ack 机制与本 contract 一致（显式 ack，无 auto-ack） |
 
 ---
@@ -244,9 +278,47 @@ if (result.stickyError) {
 
 ---
 
-## 4. 子模块修改汇总
+## 4. ToolWatchdog State Handoff Contract
 
-### 4.1 本 contract 驱动的子模块修改
+### 4.1 问题
+
+ToolWatchdog 的 `evaluate()` 已按 D-23 改为不修改 immutable snapshot，而是返回 `nextWatchdogState` / `clearWatchdogState`。但必须定义谁负责消费这些 state mutation intent，否则执行者可能只处理 phase 字段，漏掉 episode 持久化。
+
+### 4.2 Contract 定义
+
+ToolWatchdog 不直接写文件，不修改 snapshot。它只返回状态意图：
+
+```javascript
+{
+  watchdog_phase,
+  watchdog_block_reason,
+  api_activity_dirty,
+  nextWatchdogState,
+  clearWatchdogState,
+}
+```
+
+Monitor Orchestrator 是 ToolWatchdog episode 状态的落盘责任方：
+
+1. `clearWatchdogState === true` → 清除 `tool-watchdog-state.json`，并将本 tick 后续聚合使用的 watchdog state 置为 `null`。
+2. `nextWatchdogState != null` → atomic write `tool-watchdog-state.json`，并将本 tick 后续聚合使用的 watchdog state 置为该值。
+3. `api_activity_dirty === true` → 在 synthetic clear hint 后重建 apiActivity。
+4. StatusWriter 使用上述处理后的最终 phase / block reason / watchdog state 写入 `agent-status.json`。
+
+状态意图必须在同一 tick 内消费，避免 interrupt episode 丢失导致重复 interrupt 或无法进入 grace/escalated。
+
+### 4.3 子模块影响
+
+| 文档 | 变更 |
+|------|------|
+| tool-watchdog.md | 明确返回的 mutation intent 必须由 Orchestrator 同 tick 消费 |
+| monitor-orchestrator.md | Tick 编排补充 clear/write `tool-watchdog-state.json` 和 StatusWriter 输入 |
+
+---
+
+## 5. 子模块修改汇总
+
+### 5.1 本 contract 驱动的子模块修改
 
 | 文档 | 修改内容 | 来源 |
 |------|---------|------|
@@ -255,8 +327,10 @@ if (result.stickyError) {
 | c4-changes.md | dispatcher control 消息独立投递 + 无 health gate + 优先投递 | Contract §2 |
 | message-router.md | reason catalog 新增 `sticky_context_restart` | Contract §3 |
 | hooks.md | 确认 Heartbeat hook ack 机制（显式 ack，无 auto-ack） | Contract §2 |
+| monitor-orchestrator.md | 消费 ToolWatchdog state mutation intent 并落盘 | Contract §4 |
+| tool-watchdog.md | 明确自身只返回状态意图，不负责持久化 | Contract §4 |
 
-### 4.2 Review 同时发现的子模块独立修改
+### 5.2 Review 同时发现的子模块独立修改
 
 这些问题不需要顶层 contract 补充，直接在子模块文档内修改：
 

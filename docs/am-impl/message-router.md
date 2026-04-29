@@ -237,6 +237,8 @@ const USER_MESSAGE_CATALOG = {
     '我现在暂时没有响应，正在尝试恢复。请稍后再发一次。',
   heartbeat_failed:
     '我现在暂时没有响应，正在尝试恢复。请稍后再发一次。',
+  sticky_context_restart:
+    '我检测到当前会话上下文异常，正在切换到新会话恢复。请稍后再发一次。',
   tool_timeout:
     '我刚才的工具执行卡住了，正在重启会话恢复。请稍后再发一次。',
   unavailable:
@@ -249,6 +251,7 @@ const USER_MESSAGE_CATALOG = {
 匹配规则：
 
 - `reason.startsWith('tool_timeout_')` → `tool_timeout`
+- `reason.startsWith('sticky_')` → `sticky_context_restart`
 - exact reason 命中 catalog → 对应文案
 - `health='rate_limited'` 且无 exact reason → `rate_limit_detected`
 - `health='auth_failed'` 且无 exact reason → `auth_still_failed`
@@ -395,6 +398,7 @@ interface CacheStore {
    - health non-OK cache miss → probe success
    - health non-OK cache miss → probe failure → c4-send
    - `notifyUserMessage()` 返回 true 时绕过 cache
+   - `sticky_context_restart` / `sticky_*` reason 映射到 sticky 文案
    - noReply 静默 delivered
    - IPC fallback status missing/malformed → fail-open
    - IPC fallback status non-OK → unhealthy
