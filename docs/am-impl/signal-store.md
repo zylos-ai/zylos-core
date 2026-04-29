@@ -26,7 +26,6 @@ SignalStore 管理两层数据读取：
 | | 读取 proc-state.json | ProcSampler 写入的进程冻结检测结果 |
 | | 读取 statusline.json | context-monitor hook 写入的上下文使用率 |
 | | 读取 foreground-session.json | session-start hook 写入的前台会话身份 |
-| | 读取 user-message-signal.json | c4-receive 写入的用户消息信号（MessageRouter 消费，加速恢复） |
 | | 读取 health-check-state.json | 上次健康检查时间 |
 | **流式层** | 增量读取 tool-events.jsonl | 维护 inode + offset 游标，只读取新增事件 |
 | | 文件轮转处理 | 超过 1MB 时 rename → .old，新建空文件，drain 旧文件 |
@@ -48,13 +47,11 @@ SignalStore 管理两层数据读取：
  ProcSampler 写入 ──▶ proc-state.json ────────┤  (tick 开头)
                                                │
  StatusWriter 写入 ──▶ agent-status.json ──────┤
-                                               │
- c4-receive 写入 ───▶ user-message-signal.json ┤
                                                ▼
                      ┌──────────────────────────┐
                      │  Snapshot (immutable)     │
                      │  ┌────────────────────┐  │
-                     │  │ 快照层：6 个 JSON   │  │
+                     │  │ 快照层：5 个 JSON   │  │
                      │  │ 流式层：ToolEvent[] │  │
                      │  │ 元数据：timestamp   │  │
                      │  └────────────────────┘  │
@@ -81,7 +78,6 @@ interface SignalPaths {
   procState: string         // ~/zylos/activity-monitor/proc-state.json
   statusline: string        // ~/zylos/activity-monitor/statusline.json
   foregroundSession: string // ~/zylos/activity-monitor/foreground-session.json
-  userMessageSignal: string // ~/zylos/activity-monitor/user-message-signal.json
   healthCheckState: string  // ~/zylos/activity-monitor/health-check-state.json
   toolEvents: string        // ~/zylos/activity-monitor/tool-events.jsonl
   toolEventStreamState: string // ~/zylos/activity-monitor/tool-event-stream-state.json
@@ -95,7 +91,6 @@ interface Snapshot {
   procState: ProcState | null
   statusline: StatuslineData | null
   foregroundSession: ForegroundSession | null
-  userMessageSignal: { timestamp: number } | null
   healthCheckState: { last_check_at: number, last_check_human: string } | null
 
   // 流式层（有状态增量读取，D-22）
@@ -210,6 +205,8 @@ interface Snapshot {
 
 #### user-message-signal.json（由 c4-receive 写入）
 
+> **不纳入 SignalStore Snapshot**。AM Process 内部无消费方。由 MessageRouter 直接读取文件。Schema 保留在此作为文档记录。
+
 ```javascript
 {
   timestamp: number,         // epoch seconds
@@ -282,7 +279,7 @@ refresh() 流式层部分：
 | **session-start-prompt** | foreground-session.json | SessionStart hook |
 | **ProcSampler** | proc-state.json | 每 10s 采样 |
 | **StatusWriter** | agent-status.json | 每 tick 末尾 |
-| **c4-receive** | user-message-signal.json | 用户消息到达 |
+| **c4-receive** | user-message-signal.json | 用户消息到达（不纳入 Snapshot，MessageRouter 直接读取） |
 
 ## 3. 实施方案
 

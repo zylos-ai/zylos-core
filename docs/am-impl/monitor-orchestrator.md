@@ -87,10 +87,13 @@ tick() [every 1s, self-scheduling]
   │     ├─ isRunning() = false → stopped → 退避 → startAgent()
   │     └─ isRunning() = true → running（退避重置）
   │     返回 GuardianResult { state, attempted_restart, runtimeLaunchAtMs }
-  │     （state != 'running' 时仍继续执行后续步骤，由 StatusWriter 写入对应状态）
+  │
+  ├─ 2a. if (guardianResult.attempted_restart) healthEngine.onProcessRestarted()
+  │      （Guardian 不持有 HealthEngine 引用（D-20），由 Orchestrator 代调）
   │
   ├─ 3. ProcSampler.tick(snapshot)
-  │     └─ isFrozen() → adapter.stop() + return（D-25：下一 tick 自然进入 offline）
+  │     └─ isFrozen() → adapter.stop() + skip step 4-6, go to step 7
+  │        （D-25：kill 后仍执行 StatusWriter 写入当前状态，下一 tick 自然进入 offline）
   │
   ├─ 4. ToolPipeline.tick(snapshot)
   │     processToolLifecycle → foregroundIdentity → buildApiActivity
@@ -136,9 +139,9 @@ Monitor Orchestrator 负责启动 IPC server（Unix socket），供 MessageRoute
 - usage check 状态 → usage.json / usage-codex.json
 
 **重置为零**（D-21）：
-- notRunningCount, consecutiveRestarts, startupGrace
-- idleSince, lastPeriodicProbeAt
-- apiErrorConsecutiveHits, authRetrySuppressedUntil
+- Guardian：notRunningCount, consecutiveRestarts, startupGrace
+- StatusWriter：idleSince
+- HealthEngine 内部状态由 HealthEngine constructor 初始化（restartFailureCount, consecutiveHits 等）
 
 ### 接口定义
 
