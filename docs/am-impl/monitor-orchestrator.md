@@ -77,47 +77,35 @@ init()
 ```
 tick() [every 1s, self-scheduling]
   │
-  ├─ checkDailyTruncate()  ← 日志截断
+  ├─ checkDailyTruncate()  ← 日志截断（housekeeping，不计入 7 步）
   │
-  ├─ tmux session 不存在？
-  │   └─ Guardian offline 路径 → return
+  ├─ 1. SignalStore.refresh()
+  │     快照层：readJSON(agent-status, statusline, foreground-session, ...)
+  │     流式层：增量读取 tool-events.jsonl
   │
-  ├─ adapter.isRunning() = false？
-  │   └─ Guardian stopped 路径 → return
+  ├─ 2. Guardian.tick(snapshot)
+  │     ├─ tmux session 不存在 → offline → 退避 → startAgent()
+  │     ├─ isRunning() = false → stopped → 退避 → startAgent()
+  │     └─ isRunning() = true → running（退避重置）
+  │     返回 GuardianResult { state, attempted_restart, runtimeLaunchAtMs }
+  │     （state != 'running' 时仍继续执行后续步骤，由 StatusWriter 写入对应状态）
   │
-  ├─ ─── Running 路径 ───
+  ├─ 3. ProcSampler.tick(snapshot)
+  │     └─ isFrozen() → adapter.stop() + return（D-25：下一 tick 自然进入 offline）
   │
-  ├─ 1. 活动时间来源计算
-  │     conversation file → tmux activity → default → api hook
-  │
-  ├─ 2. ProcSampler.tick()
-  │     └─ isFrozen() → adapter.stop() + return
-  │
-  ├─ 3. ToolPipeline.tick()
+  ├─ 4. ToolPipeline.tick(snapshot)
   │     processToolLifecycle → foregroundIdentity → buildApiActivity
   │
-  ├─ 4. ToolWatchdog.tick()
+  ├─ 5. ToolWatchdog.tick(snapshot)
   │     evaluateToolWatchdogTransition
   │     └─ api_activity_dirty → rebuild apiActivity
   │
-  ├─ 5. StatusWriter.write()
+  ├─ 6. TaskScheduler.tick(snapshot)
   │
-  ├─ 6. user message signal 消费（health != ok 时）
-  │
-  ├─ 7. periodic probe（heartbeat enabled 时）
-  │
-  ├─ 8. API error scan（health = ok 时）
-  │
-  ├─ 9. HeartbeatEngine.processHeartbeat()
-  │
-  ├─ 10. TaskScheduler tasks
-  │      ├─ upgradeScheduler.maybeTrigger()
-  │      ├─ upgradeCheckScheduler.maybeTrigger()
-  │      ├─ memoryCommitScheduler.maybeTrigger()
-  │      └─ maybeCheckUsage()
-  │
-  └─ lastState = state
+  └─ 7. StatusWriter.write(snapshot, healthEngine)
 ```
+
+> **行为变更**：现有代码 tick 中包含 user message signal 消费、periodic probe、API error scan、processHeartbeat() 共 4 个 health 相关步骤。按 D-4，HealthEngine 不参与主循环 tick，这些能力全部移到 HealthEngine 内部，由 c4-dispatcher 异步调用 `onUserMessageDelivered()` 触发。
 
 ### 组件注册（init 时创建）
 

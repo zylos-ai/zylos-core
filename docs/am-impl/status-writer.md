@@ -39,7 +39,7 @@ write(snapshot, healthEngine, extra)
   ├─ Running 路径（Guardian 确认进程存活）
   │   │
   │   ├─ 1. 确定活动时间来源
-  │   │     ├─ conversation file mtime（Claude only，最高优先级）
+  │   │     ├─ adapter.getConversationMtime()（非 null 时最高优先级，D-5/D-38）
   │   │     ├─ tmux window activity
   │   │     ├─ 当前时间（default fallback）
   │   │     └─ api hook timestamp（如果 active=true 且更新）

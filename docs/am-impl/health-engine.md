@@ -38,7 +38,7 @@
 | | user message 加速 | `notifyUserMessage()` 清除 cooldown / 重置 backoff |
 | | 进程信号加速 | agentRunning false→true + grace period → 立即 probe |
 | **RateLimited** | 进入 | `enterRateLimited(cooldownUntil, resetTime)` |
-| | cooldown 等待 | 到期后 kill session → recovering → Guardian 拉起 |
+| | cooldown 等待 | 到期后 adapter.stop() → Guardian 下一 tick 拉起新 session（复用 D-18 模式） |
 | | user message 清除 | `notifyUserMessage()` 将 cooldownUntil 设为 0 |
 | **AuthFailed** | 进入 | check tmux pane 识别 auth failed 字符模式 → checkAuth() 确认 → `setHealth('auth_failed')` |
 | | 恢复 | check auth 通过 → OK |
@@ -136,10 +136,8 @@ class HealthEngine {
   // 进程生命周期事件
   onProcessRestarted(): void              // Guardian 拉起 runtime 后调用
 
-  // 现有接口（过渡期保留）
-  processHeartbeat(agentRunning: boolean, currentTime: number): void
+  // ToolWatchdog escalation
   triggerRecovery(reason: string): void
-  requestImmediateProbe(reason: string): boolean
 }
 ```
 
@@ -150,7 +148,6 @@ interface HealthEngineDeps {
   readHeartbeatPending(): { control_id: number, created_at: string, phase: string } | null
   clearHeartbeatPending(): void
   killTmuxSession(): void
-  notifyPendingChannels(): void
   log(message: string): void
   detectRateLimit?(): { detected: boolean, cooldownUntil?: number, resetTime?: string }
   detectApiError?(): { detected: boolean, pattern?: string }
@@ -220,14 +217,11 @@ interface ProbeResult {
 
 | 常量 | 值 | 说明 |
 |------|------|------|
-| HEARTBEAT_INTERVAL | 1800s (30min) | 主要 heartbeat 探测间隔 |
 | DOWN_DEGRADE_THRESHOLD | 3600s (1h) | recovering 超过此时间 → down |
 | DOWN_RETRY_INTERVAL | 3600s (1h) | down 状态定期 probe 间隔 |
-| SIGNAL_GRACE_PERIOD | 30s | 进程信号加速等待期 |
 | RATE_LIMIT_DEFAULT_COOLDOWN | 3600s (1h) | rate limit 默认冷却 |
 | USER_MESSAGE_RECOVERY_COOLDOWN | 60s | user message recovery 冷却 |
-| CHECK_DELAY | 5s | user message 投递后等待时间（新增） |
-| API_ERROR_SCAN_INTERVAL | 15s | API error 扫描间隔 |
+| CHECK_DELAY | 5s | user message 投递后等待时间 |
 | MAX_PENDING_AGE | 600s (10min) | pending heartbeat 超时上限 |
 | BACKOFF_SEQUENCE | 60s, 300s, 1500s, 3600s | `min(3600, 60 × 5^(n-1))` |
 

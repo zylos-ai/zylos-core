@@ -56,14 +56,14 @@ activity-monitor/scripts/
 
 | 文档 | 组件 | 改动类型 |
 |------|------|---------|
-| [runtime-adapter.md](runtime-adapter.md) | Runtime Adapter | 纯提取 |
+| [runtime-adapter.md](runtime-adapter.md) | Runtime Adapter | 提取 + 新增方法 |
 | [signal-store.md](signal-store.md) | SignalStore | 纯提取 |
-| [monitor-orchestrator.md](monitor-orchestrator.md) | Monitor Orchestrator | 纯提取 |
-| [guardian.md](guardian.md) | Guardian | 纯提取 |
+| [monitor-orchestrator.md](monitor-orchestrator.md) | Monitor Orchestrator | 行为变更 |
+| [guardian.md](guardian.md) | Guardian | 行为变更 |
 | [health-engine.md](health-engine.md) | HealthEngine | 行为变更 |
 | [proc-sampler.md](proc-sampler.md) | ProcSampler | 纯提取 |
 | [tool-pipeline.md](tool-pipeline.md) | ToolPipeline | 纯提取 |
-| [tool-watchdog.md](tool-watchdog.md) | ToolWatchdog | 纯提取 |
+| [tool-watchdog.md](tool-watchdog.md) | ToolWatchdog | 行为变更 |
 | [task-scheduler.md](task-scheduler.md) | TaskScheduler | 纯提取 |
 | [status-writer.md](status-writer.md) | StatusWriter | 纯提取 |
 | [hooks.md](hooks.md) | Hook 脚本（4个） | 无变更 |

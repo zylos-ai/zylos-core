@@ -33,6 +33,7 @@ Adapter 提供 6 类能力，每类封装了 Claude 和 Codex 的差异实现：
 | **认证** | `checkAuth()` | 端到端认证验证（Claude: `claude -p ping`；Codex: token 验证） |
 | **健康探测** | `getHeartbeatDeps()` | 返回 heartbeat probe 相关方法集（发送 heartbeat、读取 ack、检测 rate limit/API error） |
 | **上下文监控** | `getContextMonitor()` | Claude: 返回 null（由 statusLine hook 处理）；Codex: 返回 polling-based 监控器 |
+| **活动时间** | `getConversationMtime()` | 返回 conversation file 的 mtime（Claude: conversation file；Codex: null），StatusWriter 用于活动时间来源优先级链（D-5/D-38） |
 | **消息注入** | `sendMessage(text)` | 通过 tmux buffer paste 向 runtime 注入文本（处理特殊字符） |
 
 ### Launch 流程（以 Claude 为例）
@@ -134,6 +135,9 @@ interface RuntimeAdapter {
   // 消息注入
   sendMessage(text: string): Promise<void>
 
+  // 活动时间
+  getConversationMtime(): number | null   // conversation file mtime，Codex 返回 null
+
   // 指令文件
   buildInstructionFile(): Promise<string>
 }
@@ -159,6 +163,7 @@ interface HeartbeatDeps {
 | checkAuth | `claude -p ping --max-turns 1`（30s timeout） | token 文件验证 |
 | clearStaleState | 删除 `heartbeat-pending.json` + `/tmp/context-*` | 删除 `codex-heartbeat-pending.json` + 对应 temp files |
 | enqueueStartupPrompt | 检测 SessionStart hook → 有则 noop，无则 C4 control fallback | noop（Codex bootstrap prompt 自带） |
+| getConversationMtime | 读取 conversation file mtime（epoch ms） | `null`（无 conversation file） |
 | getHeartbeatDeps | `createClaudeProbe()`（C4 control + heartbeat-pending.json） | `createCodexProbe()` |
 | getContextMonitor | `null`（由 statusLine hook 处理） | `CodexContextMonitor`（polling） |
 | sendMessage | tmux buffer paste（临时文件 → load-buffer → paste-buffer → Enter） | tmux buffer paste（同机制） |
@@ -176,7 +181,7 @@ interface HeartbeatDeps {
 | **ToolWatchdog** | `sendMessage()` | 发送中断按键（Escape）终止超时工具 |
 | **ProcSampler** | `sessionName`（属性读取） | 获取 tmux PID 做冻结检测 |
 | **ToolPipeline** | `runtimeId`（属性读取） | 加载对应 runtime 的工具规则 |
-| **StatusWriter** | `runtimeId`, `displayName` | 写入 agent-status.json |
+| **StatusWriter** | `runtimeId`, `displayName`, `getConversationMtime()` | 写入 agent-status.json + 活动时间来源 |
 | **HealthEngine** | `stop()` | sticky error 时强制 restart（D-18） |
 
 ## 3. 实施方案
