@@ -25,15 +25,12 @@
 | **进程检测** | tmux session 检测 | `tmux has-session` 检查 session 是否存在 |
 | | runtime 进程检测 | `adapter.isRunning()` 检查 runtime 进程是否在 tmux 内存活 |
 | **拉起** | 无条件拉起 | 进程不存在 → 调用 `adapter.launch()`，不读 HealthState（D-20） |
-| | 认证预检 | 拉起前 `adapter.checkAuth()`，失败则跳过本次拉起 |
 | | 状态清理 | 拉起前清除 stale heartbeat-pending、context temp files、tool lifecycle state |
 | | 启动提示注入 | Claude 无 SessionStart hook 时注入 C4 control 启动提示（fallback） |
 | **退避** | 指数退避 | `delay = min(5s × 2^n, 60s)` → 序列 5, 10, 20, 40, 60, 60... |
 | | 退避重置 | runtime 连续运行超过 60s → 重置 consecutiveRestarts |
 | **保护** | 启动保护 | 拉起后 30 ticks 跳过 offline 检测（D-33） |
 | | 维护等待 | 检测到 restart-claude/upgrade-claude/install.sh 运行中 → 等待完成（最多 300s） |
-| | Auth 抑制 | auth 失败后抑制 180s 不重试 |
-| | User message 解除 | user-message-signal 可立即清除 auth 抑制 |
 | | 并发保护 | `startAgentInProgress` flag 防止并发拉起 |
 
 ### 拉起决策流程
@@ -49,10 +46,8 @@ monitorLoop() 每 tick：
   │   ┌─────────────────────────┐
   │   │ 是否该拉起？             │
   │   │                         │
-  │   │ 1. canRestart() = true  │ ← 注意：虽然调了 engine.canRestart()，
-  │   │ 2. notRunningCount      │   但这只是"rate_limited 时不拉起"的
-  │   │    >= restartDelay      │   防御性检查（D-20 的例外情况）
-  │   │ 3. auth 未抑制          │
+  │   │ 1. notRunningCount      │  ← 只看退避延迟，不读 HealthState
+  │   │    >= restartDelay      │
   │   └─────────┬───────────────┘
   │             │ YES
   │             ▼
@@ -77,28 +72,25 @@ startAgent()
   │     检测 restart-claude / upgrade-claude / install.sh
   │     等待最多 300s
   │
-  ├─ 3. 认证预检
-  │     adapter.checkAuth()
-  │     ├─ 失败 → 设置 auth 抑制（180s），engine.setHealth('auth_failed')，return
-  │     └─ 成功 → 继续
-  │
-  ├─ 4. 状态更新
+  ├─ 3. 状态更新
   │     consecutiveRestarts++
   │     startupGrace = 30
   │     notRunningCount = 0
   │     runtimeLaunchAtMs = Date.now()
   │
-  ├─ 5. 清理 stale 状态
+  ├─ 4. 清理 stale 状态
   │     ├─ clearHeartbeatPending()
   │     ├─ 删除 context temp files
   │     └─ resetToolLifecycleRuntimeState()
   │
-  ├─ 6. 启动 runtime
+  ├─ 5. 启动 runtime
   │     adapter.launch()（fire-and-forget，不 await）
   │
-  └─ 7. 启动提示（Claude fallback）
+  └─ 6. 启动提示（Claude fallback）
         无 SessionStart hook → enqueueStartupControl()
 ```
+
+> **行为变更**：移除现有代码中的认证预检（`adapter.checkAuth()`）和 auth 抑制机制。按 D-20，Guardian 无条件拉起，不关心 auth 状态。Auth 检测由 HealthEngine 在 user message 投递后事件驱动完成（见 [health-engine.md](health-engine.md) §2 OK → 非 OK 检测时机）。若 token 失效导致 runtime 启动后立即退出，Guardian 通过退避延迟自然减速。
 
 ### 接口定义
 
@@ -119,7 +111,6 @@ class Guardian {
   stableRunningSince: number,      // 连续运行起始时间（epoch seconds）
   startupGrace: number,            // 启动保护倒计时（ticks）
   startAgentInProgress: boolean,   // 防止并发拉起
-  authRetrySuppressedUntil: number,// auth 失败抑制截止时间（ms timestamp）
   runtimeLaunchAtMs: number,       // 最近一次拉起时间（ms timestamp）
 }
 ```
@@ -131,12 +122,8 @@ class Guardian {
 | **Adapter** | 调用 | `launch()` | 拉起 runtime |
 | **Adapter** | 调用 | `stop()` | kill tmux session（冻结处理由 Orchestrator 调用，不是 Guardian） |
 | **Adapter** | 调用 | `isRunning()` | 检测 runtime 进程存活 |
-| **Adapter** | 调用 | `checkAuth()` | 拉起前认证预检 |
-| **HealthEngine** | 调用 | `canRestart()` | rate_limited 时不拉起 |
-| **HealthEngine** | 调用 | `setHealth('auth_failed')` | auth 失败时设置健康状态 |
 | **HealthEngine** | 调用 | `clearHeartbeatPending()` | 拉起前清除 stale heartbeat |
-| **SignalStore** | 读取 | `user-message-signal.json` | 清除 auth 抑制 |
-| **HealthEngine** | **不读取** | `health` | D-1, D-20：Guardian 不读 HealthState |
+| **HealthEngine** | **不读取** | `health` / `canRestart()` | D-1, D-20：Guardian 不读 HealthState，不因任何健康状态阻止拉起 |
 
 ### 常量
 
@@ -147,11 +134,10 @@ class Guardian {
 | BACKOFF_RESET_THRESHOLD | 60s | 连续运行多久后重置退避 |
 | STARTUP_GRACE_TICKS | 30 | 启动保护 tick 数 |
 | MAINTENANCE_WAIT_TIMEOUT | 300s | 维护等待超时 |
-| AUTH_RETRY_SUPPRESSION | 180s | Auth 失败抑制时间 |
 
 ## 3. 实施方案
 
-**改动类型**：纯提取
+**改动类型**：行为变更
 
 ### 现有代码位置
 
@@ -168,7 +154,9 @@ class Guardian {
 
 1. 创建 `scripts/guardian.js`
 2. 提取 offline/stopped 分支的所有逻辑：进程存活检测、退避计算、拉起触发
-3. 提取 `startAgent()` 完整流程：维护等待、认证预检、状态清理、launch
-4. 提取辅助函数：`getRunningMaintenance()`、`waitForMaintenance()`、`hasStartupHook()`
-5. 内部状态全部为运行时状态，AM 冷启动时重置为零（D-21）
-6. 确保不引入 `engine.health` 直接读取（D-1、D-20），只用 `engine.canRestart()`
+3. 提取 `startAgent()` 完整流程：维护等待、状态清理、launch
+4. **移除 `adapter.checkAuth()` 认证预检**：现有代码在 `startAgent()` 中调用 `checkAuth()`，失败则跳过拉起并设置 `engine.setHealth('auth_failed')`——这违反 D-20 的无条件拉起原则。Auth 检测改由 HealthEngine 事件驱动（user message 投递后 check tmux pane）
+5. **移除 `engine.canRestart()` 调用**：现有代码在拉起前检查 `canRestart()`（rate_limited 时返回 false），这违反 D-20 的"不因任何 HealthState 阻止拉起"
+6. **移除 auth 抑制机制**：`authRetrySuppressedUntil` 及关联的 user-message-signal 清除逻辑全部移除
+7. 提取辅助函数：`getRunningMaintenance()`、`waitForMaintenance()`、`hasStartupHook()`
+8. 内部状态全部为运行时状态，AM 冷启动时重置为零（D-21）

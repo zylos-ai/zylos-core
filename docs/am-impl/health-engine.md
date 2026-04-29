@@ -40,13 +40,12 @@
 | **RateLimited** | 进入 | `enterRateLimited(cooldownUntil, resetTime)` |
 | | cooldown 等待 | 到期后 kill session → recovering → Guardian 拉起 |
 | | user message 清除 | `notifyUserMessage()` 将 cooldownUntil 设为 0 |
-| **AuthFailed** | 进入 | Guardian `startAgent()` auth check 失败 → `setHealth('auth_failed')` |
+| **AuthFailed** | 进入 | check tmux pane 识别 auth failed 字符模式 → checkAuth() 确认 → `setHealth('auth_failed')` |
 | | 恢复 | check auth 通过 → OK |
-| | user message 重试 | 清除 auth 抑制，触发立即重试 |
+| | user message 重试 | 触发立即 recovery probe |
 | **Unavailable** | 内部二阶段 | recovering（< 1h）→ down（>= 1h），对外统一为 Unavailable（D-3） |
 | | 指数退避 | `min(3600, 60 × 5^(n-1))` → 60s, 300s, 1500s, 3600s cap |
 | | DOWN 定期探测 | downRetryInterval(1h) 间隔发送 probe |
-| **Guardian 接口** | `canRestart()` | `true` unless rate_limited（Guardian 调用此方法而非直接读 health） |
 
 ### HealthState FSM
 
@@ -122,7 +121,6 @@ class HealthEngine {
 
   // 状态查询
   get health(): string                    // 当前 HealthState
-  get canRestart(): boolean               // true unless rate_limited
 
   // 状态转移
   setHealth(next: string, reason?: string): void
@@ -210,9 +208,8 @@ interface ProbeResult {
 
 | 交互方 | 方向 | 方法/数据 | 用途 |
 |-------|------|----------|------|
-| **Guardian** | 被调用 | `canRestart()` | 判断是否允许拉起 |
-| **Guardian** | 被调用 | `setHealth('auth_failed')` | auth 检查失败时 |
 | **Guardian** | 被调用 | `clearHeartbeatPending()` | 拉起前清除 stale heartbeat |
+| **Guardian** | **不调用** | `canRestart()` / `setHealth()` | D-20：Guardian 不读写 HealthState |
 | **c4-dispatcher** | 被调用 | `onUserMessageDelivered()` | user message 投递后检测（行为变更） |
 | **MessageRouter** | 被调用 | `runRecoveryProbe()` | IPC 路由时执行恢复探测 |
 | **ToolWatchdog** | 被调用 | `triggerRecovery(reason)` | 工具超时升级 |
