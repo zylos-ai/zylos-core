@@ -114,7 +114,8 @@ interface Snapshot {
 ```javascript
 {
   state: 'idle' | 'busy' | 'offline' | 'stopped',
-  health: 'ok' | 'recovering' | 'down' | 'rate_limited' | 'auth_failed',
+  health: 'ok' | 'unavailable' | 'rate_limited' | 'auth_failed',  // D-2/D-3
+  unavailable_since: number | null,  // D-3: epoch seconds, 消费端基于此判断严重程度
   thinking: boolean,
   last_activity: number,           // epoch seconds
   last_api_activity: number,       // epoch seconds (optional)

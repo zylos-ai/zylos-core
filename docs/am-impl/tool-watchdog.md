@@ -11,6 +11,7 @@
 **输出**：调用 Runtime Adapter 执行控制动作（中断/重启）
 
 **相关决策**：
+- **D-23**：跨模块状态走 SignalStore，不直接读其他模块私有数据。ToolWatchdog 通过 snapshot 读取 health 状态，不直接持有 HealthEngine 引用。
 - **D-24**：ToolWatchdog 是有状态的干预系统（6 阶段状态机 + 持久化 + 主动按键中断），不是无状态健康检查，不归入 health-checks 子系统。
 - **D-33**：移除 launchGracePeriod。tool-call 响应速度与 runtime 是否刚拉起无关，ToolWatchdog 不需要启动宽限期。
 
@@ -21,8 +22,7 @@
 | 能力类别 | 功能 | 说明 |
 |---------|------|------|
 | **前置检查** | 前台身份验证 | `foregroundIdentity.trusted != true` → idle（不操作不信任的 session） |
-| | 启动宽限期 | `launchGracePeriod` 内 → idle（**D-33：待移除**） |
-| | 健康状态检查 | `engineHealth != 'ok'` → idle |
+| | 健康状态检查 | `snapshot.health != 'ok'` → idle（从 snapshot 读取，D-23） |
 | | 候选工具检查 | 无 `watchdog_candidate_tool` → idle |
 | | 规则检查 | 候选工具的 `watchdog.enabled = false` → idle |
 | **超时检测** | 运行时间计算 | `nowMs - candidate.started_at` vs `rule.watchdog.maxRuntimeSec` |
@@ -74,8 +74,7 @@
 | block_reason | 条件 | 说明 |
 |------|------|------|
 | foreground_untrusted | `foregroundIdentity.trusted != true` | 不操作不信任的 session |
-| launch_grace | `nowMs - runtimeLaunchAtMs < launchGracePeriodSec * 1000` | **D-33：待移除** |
-| health_\<state\> | `engineHealth != 'ok'` | runtime 不健康时不干预 |
+| health_\<state\> | `snapshot.health != 'ok'` | runtime 不健康时不干预（从 snapshot 读取，D-23） |
 | no_watchdog_candidate | 无候选工具 | 没有需要监控的长时间工具 |
 | watchdog_disabled | `rule.watchdog.enabled = false` | 规则禁用了 watchdog |
 | interrupt_enqueue_failed | `enqueueInterrupt()` 返回失败 | tmux 中断发送失败 |
@@ -88,10 +87,9 @@ function evaluateToolWatchdogTransition({
   foregroundIdentity: ForegroundIdentity,
   apiActivity: ApiActivity,
   interactiveState: InteractiveState | null,
-  state: {
+  snapshot: {
+    health: string,                  // 从 snapshot.agentStatus.health 读取（D-23）
     runtimeLaunchAtMs: number,
-    launchGracePeriodSec: number,    // D-33: 待移除
-    engineHealth: string,
     watchdogState: WatchdogEpisode | null,
   },
   deps: WatchdogDeps,
@@ -163,8 +161,8 @@ interface WatchdogDeps {
 |-------|------|----------|------|
 | **ToolPipeline** | 消费 | `apiActivity.watchdog_candidate_tool` | 获取候选超时工具 |
 | **ToolPipeline** | 消费 | `foregroundIdentity` | 前台身份验证 |
-| **HealthEngine** | 读取 | `engineHealth` | 前置条件检查 |
-| **HealthEngine** | 调用 | `triggerRecovery()` | escalation 时触发 HealthEngine |
+| **SignalStore** | 读取 | `snapshot.health` | 前置条件检查（D-23：通过 snapshot，不直接读 HealthEngine） |
+| **HealthEngine** | 调用 | `triggerRecovery()` | escalation 时触发 HealthEngine（显式接口调用，D-23 允许） |
 | **Adapter** | 调用 | `sendMessage()` (via `enqueueInterrupt`) | 发送中断按键 |
 | **Monitor Orchestrator** | 调用 | `evaluateToolWatchdogTransition()` | tick 中被调用 |
 | **StatusWriter** | 提供 | `watchdog_phase`, `watchdog_block_reason` | 写入 agent-status.json |
@@ -180,7 +178,7 @@ interface WatchdogDeps {
 
 ## 3. 实施方案
 
-**改动类型**：纯提取（已独立模块，仅移除 launchGracePeriod，D-33）
+**改动类型**：行为变更（移除 launchGracePeriod D-33 + health 改从 snapshot 读取 D-23）
 
 ### 现有代码位置
 
@@ -194,6 +192,6 @@ interface WatchdogDeps {
 ### 实施步骤
 
 1. 确认现有 `tool-watchdog.js` 接口与本文档定义对齐 — **已对齐**
-2. **移除 `launchGracePeriod` 相关检查逻辑**（D-33）：删除 `withinLaunchGrace` 判断和 `launch_grace` block_reason
-3. 确认 6 阶段状态机转换规则与现有代码一致
-4. 从 `state` 参数中移除 `launchGracePeriodSec` 字段
+2. **移除 `launchGracePeriod` 相关检查逻辑**（D-33）：删除 `withinLaunchGrace` 判断和 `launch_grace` block_reason，从参数中移除 `launchGracePeriodSec`
+3. **`engineHealth` 改从 snapshot 读取**（D-23）：不再直接读 HealthEngine 内存字段，改为从 `snapshot.agentStatus.health` 获取
+4. 确认 6 阶段状态机转换规则与现有代码一致

@@ -29,14 +29,14 @@
 | | upgrade-check | 每日 6:00 检查 Claude Code 新版本 |
 | | health-check | 每 24h 检查 PM2/disk/memory |
 | | usage-monitor | 每 1h 读取本地 usage 快照，达阈值通知（D-26） |
-| | context-check | Codex: polling 检查上下文占用；Claude: statusLine hook 处理 |
+| | context-check | adapter.getContextMonitor() 非 null 时 polling 检查上下文占用 |
 
 ### 已注册任务详情
 
 #### daily-upgrade（每日 5:00）
 
 ```
-gate: daily_upgrade_enabled = true && health = 'ok'
+gate: daily_upgrade_enabled = true && snapshot.health = 'ok'
 execute: enqueue C4 control → runtime 执行 /upgrade-claude
 state: ~/zylos/activity-monitor/daily-upgrade-state.json
 ```
@@ -52,7 +52,7 @@ state: ~/zylos/activity-monitor/daily-memory-commit-state.json
 #### upgrade-check（每日 6:00）
 
 ```
-gate: health = 'ok'
+gate: snapshot.health = 'ok'
 execute: 检查 Claude Code 最新版本，如有新版写入 upgrade-available.json
 state: ~/zylos/activity-monitor/upgrade-check-state.json
 ```
@@ -68,7 +68,7 @@ state: ~/zylos/activity-monitor/health-check-state.json
 #### usage-monitor（每 1h）
 
 ```
-gate: usage_monitor_enabled = true && idle >= 30s && health = 'ok'
+gate: usage_monitor_enabled = true && idle >= 30s && snapshot.health = 'ok'
 execute:
   1. 读取本地 usage 快照（Claude: statusline/usage.json; Codex: usage-codex.json）
   2. 计算 session/weekly 用量百分比
@@ -79,14 +79,14 @@ cooldown: 4h per tier, 升级跳过 cooldown
 active hours: 8:00-23:00 only
 ```
 
-#### context-check（Codex only）
+#### context-check
 
 ```
 gate: adapter.getContextMonitor() != null
-execute: polling 检查上下文占用（Codex 没有 statusLine hook）
+execute: polling 检查上下文占用
   - >= 56% + unsummarized > 30 → memory sync
   - >= 70% → new-session handoff
-note: Claude 由 context-monitor.js hook 处理，不经过 TaskScheduler
+note: adapter.getContextMonitor() 返回 null 时跳过（由 statusLine hook 处理）
 ```
 
 ### 调度流程
@@ -141,7 +141,7 @@ interface TaskDefinition {
 | 交互方 | 方向 | 方法/数据 | 用途 |
 |-------|------|----------|------|
 | **Monitor Orchestrator** | 调用 | `tick()` | 在 tick 编排中被调用 |
-| **HealthEngine** | 读取 | `engine.health` | gate 条件（部分任务需 health=ok） |
+| **SignalStore** | 读取 | `snapshot.health` | gate 条件（部分任务需 health=ok，D-23：通过 snapshot 读取） |
 | **Adapter** | 读取 | `runtimeId` | 选择 usage 快照来源 |
 | **C4 Control** | 调用 | `c4-control.js enqueue` | daily-upgrade、health-check 通过 C4 控制 runtime |
 | **SignalStore** | 消费 | snapshot | idle 秒数等 gate 条件 |
@@ -186,4 +186,4 @@ interface TaskDefinition {
 3. 每个任务文件导出符合 `TaskDefinition` 接口的对象
 4. 合并现有 `DailySchedule` 和 interval 调度逻辑为统一框架
 5. usage-monitor 和 usage-alert 拆为两个独立任务（D-26）
-6. context-check 只在 Codex 下注册（Claude 由 hook 处理）
+6. context-check 在 adapter.getContextMonitor() 返回非 null 时注册（由 hook 处理时 adapter 返回 null）
