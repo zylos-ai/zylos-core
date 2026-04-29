@@ -28,7 +28,8 @@
 | | daily-memory-commit | 每日 3:00 git commit memory 目录 |
 | | upgrade-check | 每日 6:00 检查 Claude Code 新版本 |
 | | health-check | 每 24h 检查 PM2/disk/memory |
-| | usage-monitor | 每 1h 读取本地 usage 快照，达阈值通知（D-26） |
+| | usage-monitor | 每 1h 读取本地 usage 快照，刷新 state（D-26：零 token） |
+| | usage-alert | 每 1h 检查用量阈值，达阈值 C4 通知 owner（D-26） |
 | | context-check | adapter.getContextMonitor() 非 null 时 polling 检查上下文占用 |
 
 ### 已注册任务详情
@@ -72,12 +73,26 @@ gate: usage_monitor_enabled = true && idle >= 30s && snapshot.health = 'ok'
 execute:
   1. 读取本地 usage 快照（Claude: statusline/usage.json; Codex: usage-codex.json）
   2. 计算 session/weekly 用量百分比
-  3. usage_alert_enabled = true 且达阈值 → enqueue C4 通知 owner
+  3. 写入 state 文件（百分比 + 时间戳）
 state: ~/zylos/activity-monitor/usage.json 或 usage-codex.json
-thresholds: warn(80%) → high(90%) → critical(95%)
-cooldown: 4h per tier, 升级跳过 cooldown
+```
+
+职责边界：只做数据采集和 state 刷新，不做告警判断。零 token 开销（D-26）。
+
+#### usage-alert（每 1h）
+
+```
+gate: usage_alert_enabled = true && idle >= 30s && snapshot.health = 'ok'
+execute:
+  1. 读取 usage-monitor 写入的 state 文件
+  2. 按 tier 判断是否达阈值：warn(80%) → high(90%) → critical(95%)
+  3. 达阈值 → 检查 cooldown（4h per tier，升级跳过 cooldown）
+  4. 通过 cooldown → enqueue C4 通知 owner
+state: ~/zylos/activity-monitor/usage-alert-state.json
 active hours: 8:00-23:00 only
 ```
+
+职责边界：只做阈值判断和告警发送，不做数据采集。依赖 usage-monitor 的 state 文件作为数据源。默认关闭（D-27）。
 
 #### context-check
 
@@ -152,15 +167,16 @@ interface TaskDefinition {
 |------|------|------|
 | daily_upgrade_enabled | false | 是否启用每日自动升级 |
 | usage_monitor_enabled | true | 是否启用用量监控（D-26：零 token，本地 state 刷新） |
-| usage_alert_enabled | false | 是否启用用量告警（D-26、D-27） |
-| usage_check_interval | 3600 | 用量检查间隔（秒） |
-| usage_idle_gate | 30 | 检查前需要的空闲秒数 |
+| usage_check_interval | 3600 | usage-monitor 检查间隔（秒） |
+| usage_idle_gate | 30 | usage-monitor / usage-alert 共用：检查前需要的空闲秒数 |
+| usage_alert_enabled | false | 是否启用用量告警（D-26、D-27：独立任务） |
+| usage_alert_interval | 3600 | usage-alert 检查间隔（秒） |
 | usage_warn_threshold | 80 | 用量告警阈值（%） |
 | usage_high_threshold | 90 | 用量高阈值（%） |
 | usage_critical_threshold | 95 | 用量危急阈值（%） |
 | usage_notify_cooldown | 14400 | 告警通知冷却（秒） |
-| usage_active_hours_start | 8 | 活跃时段开始 |
-| usage_active_hours_end | 23 | 活跃时段结束 |
+| usage_active_hours_start | 8 | usage-alert 活跃时段开始 |
+| usage_active_hours_end | 23 | usage-alert 活跃时段结束 |
 
 ## 3. 实施方案
 
