@@ -125,7 +125,7 @@ tick() [every 1s, self-scheduling]
 this.adapter = getActiveAdapter()
 this.signalStore = new SignalStore(signalPaths)
 this.healthEngine = new HealthEngine(deps, options)
-this.guardian = new Guardian(adapter, healthEngine, config)
+this.guardian = new Guardian(adapter, { resetToolLifecycleState, log })
 this.procSampler = new ProcSampler({ sessionName: adapter.sessionName })
 this.toolPipeline = new ToolPipeline(adapter, signalStore)
 this.toolWatchdog = new ToolWatchdog(deps)
