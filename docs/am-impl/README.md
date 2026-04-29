@@ -66,9 +66,10 @@ activity-monitor/scripts/
 | [proc-sampler.md](proc-sampler.md) | ProcSampler | 纯提取 |
 | [tool-pipeline.md](tool-pipeline.md) | ToolPipeline | 纯提取 |
 | [tool-watchdog.md](tool-watchdog.md) | ToolWatchdog | 行为变更 |
-| [task-scheduler.md](task-scheduler.md) | TaskScheduler | 纯提取 |
+| [task-scheduler.md](task-scheduler.md) | TaskScheduler | 提取 + 行为变更 |
 | [status-writer.md](status-writer.md) | StatusWriter | 纯提取 |
 | [hooks.md](hooks.md) | Hook 脚本（4个） | 无变更 |
+| [contracts.md](contracts.md) | 顶层补充 Contract | 新增（Spec 1 Review） |
 
 > **SessionRestartContinuation**（D-6 列出）不设独立文档。其职责（session restart 后注入 unsummarized context）由 RuntimeAdapter.`enqueueStartupPrompt()` + session-start-prompt hook 覆盖（见 [runtime-adapter.md](runtime-adapter.md) 和 [hooks.md](hooks.md)）。
 
