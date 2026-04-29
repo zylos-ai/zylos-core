@@ -104,10 +104,12 @@ activity-monitor/scripts/
 | MAX_RESTART_DELAY | 60s | Guardian |
 | BACKOFF_RESET_THRESHOLD | 60s | Guardian |
 | STARTUP_GRACE_TICKS | 30 | Guardian |
-| DOWN_DEGRADE_THRESHOLD | 3600s | HealthEngine |
-| DOWN_RETRY_INTERVAL | 3600s | HealthEngine |
 | RATE_LIMIT_DEFAULT_COOLDOWN | 3600s | HealthEngine |
 | USER_MESSAGE_RECOVERY_COOLDOWN | 60s | HealthEngine |
+| BACKOFF_BASE | 60s | HealthEngine |
+| BACKOFF_MULTIPLIER | 5 | HealthEngine |
+| BACKOFF_CAP | 3600s | HealthEngine |
+| PROBE_TIMEOUT | 30s | HealthEngine |
 | SAMPLE_INTERVAL | 10s | ProcSampler |
 | FROZEN_THRESHOLD | 60s | ProcSampler |
 | REORDER_WINDOW_MS | 2000ms | ToolPipeline |

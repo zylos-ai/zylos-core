@@ -44,13 +44,12 @@ init()
   │     └─ getActiveAdapter() → ClaudeAdapter 或 CodexAdapter
   │
   ├─ 3. 读取 config
-  │     ├─ heartbeat_enabled
   │     ├─ tool rules
   │     └─ daily_upgrade_enabled, usage_monitor_enabled, ...
   │
   ├─ 4. 实例化组件
   │     ├─ ProcSampler(adapter.sessionName)
-  │     ├─ HealthEngine(deps, options)（含 adapter.getHeartbeatDeps()）
+  │     ├─ HealthEngine(deps, options)（deps 由 adapter 方法组装）
   │     ├─ DailySchedule × 3（upgrade, memory-commit, upgrade-check）
   │     └─ 恢复 usage check 状态
   │
@@ -105,7 +104,7 @@ tick() [every 1s, self-scheduling]
   └─ 7. StatusWriter.write(snapshot, healthEngine)
 ```
 
-> **行为变更**：现有代码 tick 中包含 user message signal 消费、periodic probe、API error scan、processHeartbeat() 共 4 个 health 相关步骤。按 D-4，HealthEngine 不参与主循环 tick，这些能力全部移到 HealthEngine 内部，由 c4-dispatcher 异步调用 `onUserMessageDelivered()` 触发。
+> **行为变更**：现有代码 tick 中包含 user message signal 消费、periodic probe、API error scan、processHeartbeat() 共 4 个 health 相关步骤。按 D-4，这些步骤全部删除。HealthEngine 改为事件驱动（c4-dispatcher 异步调用 `onUserMessageDelivered()`），不参与主循环 tick。
 
 ### 组件注册（init 时创建）
 
