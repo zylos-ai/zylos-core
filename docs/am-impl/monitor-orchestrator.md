@@ -180,7 +180,7 @@ Monitor Orchestrator 持有并驱动所有组件：
 
 ## 3. 实施方案
 
-**改动类型**：纯提取
+**改动类型**：行为变更（D-4 tick 重组 + MessageRouter IPC handler 注册）
 
 ### 现有代码位置
 
