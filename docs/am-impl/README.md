@@ -79,7 +79,7 @@ activity-monitor/scripts/
 | auto_approve_permission | bool | true | hook-auth-prompt |
 | new_session_threshold | int | 70 | context-monitor |
 | daily_upgrade_enabled | bool | false | TaskScheduler |
-| usage_monitor_enabled | bool | false | TaskScheduler |
+| usage_monitor_enabled | bool | true | TaskScheduler |
 | usage_alert_enabled | bool | false | TaskScheduler (D-26) |
 | usage_check_interval | int | 3600 | TaskScheduler |
 | usage_idle_gate | int | 30 | TaskScheduler |

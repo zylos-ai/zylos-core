@@ -151,7 +151,7 @@ interface TaskDefinition {
 | Config Key | 默认值 | 说明 |
 |------|------|------|
 | daily_upgrade_enabled | false | 是否启用每日自动升级 |
-| usage_monitor_enabled | false | 是否启用用量监控 |
+| usage_monitor_enabled | true | 是否启用用量监控（D-26：零 token，本地 state 刷新） |
 | usage_alert_enabled | false | 是否启用用量告警（D-26、D-27） |
 | usage_check_interval | 3600 | 用量检查间隔（秒） |
 | usage_idle_gate | 30 | 检查前需要的空闲秒数 |
