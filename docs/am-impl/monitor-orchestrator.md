@@ -178,7 +178,7 @@ Monitor Orchestrator 持有并驱动所有组件：
 
 ## 3. 实施方案
 
-**改动类型**：纯提取
+**改动类型**：行为变更（D-4：删除 tick 中 4 个 health 步骤，HealthEngine 改事件驱动；新增 step 2a onProcessRestarted 代调）
 
 ### 现有代码位置
 

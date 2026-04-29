@@ -156,7 +156,7 @@ interface TaskDefinition {
 | 交互方 | 方向 | 方法/数据 | 用途 |
 |-------|------|----------|------|
 | **Monitor Orchestrator** | 调用 | `tick()` | 在 tick 编排中被调用 |
-| **SignalStore** | 读取 | `snapshot.health` | gate 条件（部分任务需 health=ok，D-23：通过 snapshot 读取） |
+| **SignalStore** | 读取 | `snapshot.health` | gate 条件（部分任务需 health=ok，D-23：通过 snapshot 读取，eventual consistency——snapshot 来自 tick step 1，TaskScheduler 在 step 6 执行时 health 可能已变，这是 D-23 允许的） |
 | **Adapter** | 读取 | `runtimeId` | 选择 usage 快照来源 |
 | **C4 Control** | 调用 | `c4-control.js enqueue` | daily-upgrade、health-check 通过 C4 控制 runtime |
 | **SignalStore** | 消费 | snapshot | idle 秒数等 gate 条件 |
