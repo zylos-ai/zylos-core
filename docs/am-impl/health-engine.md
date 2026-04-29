@@ -273,7 +273,7 @@ class HealthEngine {
 
 ```javascript
 interface HealthEngineDeps {
-  // Heartbeat probe — 通过 C4 control queue 与 runtime 通信
+  // ── 来源: C4 Control（共享基础设施，与 runtime 无关）──
   enqueueHeartbeat(phase: string): number | false
   //   写入 c4.db control queue: {type:'heartbeat', phase}
   //   返回 control_id（成功）或 false（入队失败）
@@ -283,7 +283,7 @@ interface HealthEngineDeps {
   //   返回值：'pending' | 'running' | 'done' | 'failed' | 'timeout' | 'not_found'
   //   'done' = runtime hook 已消费并 ack
 
-  // Runtime 操作 — 由 Adapter 实现
+  // ── 来源: RuntimeAdapter（runtime-specific 实现）──
   checkAuth(): Promise<boolean>
   //   执行认证检查（runtime-specific）
   //   true = 认证有效，false = 认证失败
@@ -701,8 +701,8 @@ get backoffDelay() {
 | **MessageRouter** | 读取 | `health`, `backoffDelay`, `lastRecoveryAt` | IPC 路由时 | 判断是否过了退避期，决定是否触发 probe |
 | **ToolWatchdog** | 调用 | `triggerRecovery(reason)` | 工具超时升级 | 单向通知 |
 | **StatusWriter** | 读取 | `health`, `healthReason`, `unavailableSince`, `rateLimitResetTime`, `cooldownUntil` | tick 末尾 | 写入 agent-status.json |
-| **Adapter** | 被依赖 | `checkAuth()`, `checkTmuxPane()`, `stop()` | probe / 检测时 | Adapter 实现注入到 deps |
-| **Adapter** | 被依赖 | `enqueueHeartbeat()`, `getHeartbeatStatus()` | probe 时 | C4 control queue 操作 |
+| **RuntimeAdapter** | 被依赖 | `checkAuth()`, `checkTmuxPane()`, `stop()` | probe / 检测时 | runtime-specific 实现，注入到 deps |
+| **C4 Control** | 被依赖 | `enqueueHeartbeat()`, `getHeartbeatStatus()` | probe 时 | C4 control queue 读写，与 runtime 无关 |
 
 ### 常量
 
