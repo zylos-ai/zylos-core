@@ -123,14 +123,19 @@ Heartbeat 不经过 MessageRouter / c4-receive。由 HealthEngine 直接写入 c
 ```javascript
 {
   type: 'heartbeat',
+  content: `Heartbeat check. [phase=${phase}]`,
   phase: 'recovery' | 'post_restart',
   status: 'pending',
   bypass_state: 1,              // 必须绕过 health gate
   priority: 0,                  // 高于普通 user/control 消息
   ack_deadline_seconds: 25,     // 对齐 PROBE_TIMEOUT
-  no_ack_suffix: true,          // 不依赖 dispatcher 自动 ack 后缀
+  append_ack_suffix: true,      // 必须附带 ack via control_id，供 runtime hook 显式 ack
 }
 ```
+
+**content 格式**：`content` 必须以 `Heartbeat check.` 开头，并包含 `[phase=recovery]` 或 `[phase=post_restart]`。runtime hook 使用该前缀识别 heartbeat control，并解析 `[phase=...]` 判断 probe 类型。
+
+**ack suffix**：recovery heartbeat 不得传 `--no-ack-suffix`。C4 必须在投递内容后附加当前 `control_id` 的 `ack via: node ... c4-control.js ack --id <id>` 后缀，runtime hook 通过该后缀执行显式 ack。`无 auto-ack` 指 dispatcher 不得自行把 heartbeat 标记为 done，不代表去掉 ack suffix。
 
 如果实现选择 control 投递循环天然不检查 agent health，仍建议保留 `bypass_state=1` 作为可审计 contract。
 
@@ -158,7 +163,7 @@ pending ─── dispatcher 取出并投递 ──▶ running
 
 #### ack 机制
 
-runtime 的 Heartbeat hook 检查 control 表，识别到 `type='heartbeat' && phase in ('recovery', 'post_restart') && status='running'` → 处理 → UPDATE status='done'。
+runtime 的 Heartbeat hook 识别投递到 runtime 的 `Heartbeat check. [phase=...]` 文本，且 `phase in ('recovery', 'post_restart')`、消息带有当前 control id 的 ack suffix 时，执行 suffix 中的 `c4-control.js ack --id <id>`，使 control 状态变为 `done`。
 
 **无 auto-ack**。heartbeat 的 ack 必须由 runtime hook 显式完成。原因：heartbeat 的目的是验证 runtime 是否响应，auto-ack 会导致 "runtime 已死但 heartbeat 显示 done" 的假阳性。
 
@@ -166,7 +171,15 @@ runtime 的 Heartbeat hook 检查 control 表，识别到 `type='heartbeat' && p
 
 ```javascript
 // deps.enqueueHeartbeat(phase)
-//   写入 c4.db control 表：{ type: 'heartbeat', phase, status: 'pending', bypass_state: 1, ... }
+//   写入 c4.db control 表：{
+//     type: 'heartbeat',
+//     content: `Heartbeat check. [phase=${phase}]`,
+//     phase,
+//     status: 'pending',
+//     bypass_state: 1,
+//     append_ack_suffix: true,
+//     ...
+//   }
 //   phase: 'recovery' | 'post_restart' — 标识 probe 阶段，供日志/调试
 //   返回 control_id（成功）或 false（DB 写入失败）
 
