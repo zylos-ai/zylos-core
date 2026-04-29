@@ -23,7 +23,7 @@
 | **初始化** | 加载 runtime adapter | `getActiveAdapter()` 读取 config.json |
 | | 实例化所有组件 | SignalStore / Guardian / ProcSampler / ToolPipeline / ToolWatchdog / TaskScheduler / StatusWriter / HealthEngine / MessageRouter |
 | | 恢复持久化状态 | health 从 agent-status.json；tool stream 从 state file；watchdog 从 state file |
-| | 启动 IPC server | Unix socket，供 c4-receive 调用 MessageRouter route handler |
+| | 启动 IPC server | Unix socket，按 type 分发：route → MessageRouter，notify_delivered → HealthEngine |
 | | 启动 context monitor | Codex: polling-based；Claude: null（hook 处理） |
 | | 清理其他 runtime session | 启动 10s 后 kill 非当前 runtime 的 tmux session |
 | **Tick 编排** | 7 步固定顺序 | SignalStore → Guardian → ProcSampler → ToolPipeline → ToolWatchdog → TaskScheduler → StatusWriter |
@@ -66,7 +66,7 @@ init()
   │     └─ adapter.getContextMonitor()?.startPolling()
   │
   ├─ 7. 启动 IPC server
-  │     └─ Unix socket，注册 MessageRouter route handler
+  │     └─ Unix socket，按 type 分发：route → MessageRouter，notify_delivered → HealthEngine
   │
   └─ 8. 清理其他 runtime
         └─ 10s 后 kill 非当前 runtime 的 tmux session
@@ -127,7 +127,7 @@ this.statusWriter = new StatusWriter(healthEngine, signalStore)
 
 ### IPC 监听
 
-Monitor Orchestrator 负责启动 IPC server（Unix socket），并注册 MessageRouter route handler。c4-receive 只通过 IPC 调用该 handler，不直接读取 HealthEngine。IPC 协议定义见 MessageRouter 实施方案。
+Monitor Orchestrator 负责启动 IPC server（Unix socket）。IPC server 按 `request.type` 分发：`route` 交给 MessageRouter 处理路由决策，`notify_delivered` 调用 `healthEngine.onUserMessageDelivered()` 并立即返回 ack。c4-receive 和 c4-dispatcher 通过 IPC 调用，不直接读取 HealthEngine。IPC 协议定义见 [message-router.md](message-router.md) 和 [c4-changes.md](c4-changes.md)。
 
 ### 状态恢复（AM 冷启动）
 
