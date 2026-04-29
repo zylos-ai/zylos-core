@@ -26,7 +26,7 @@ SignalStore 管理两层数据读取：
 | | 读取 proc-state.json | ProcSampler 写入的进程冻结检测结果 |
 | | 读取 statusline.json | context-monitor hook 写入的上下文使用率 |
 | | 读取 foreground-session.json | session-start hook 写入的前台会话身份 |
-| | 读取 user-message-signal.json | c4-receive 写入的用户消息信号（用于清除 auth 抑制、加速恢复） |
+| | 读取 user-message-signal.json | c4-receive 写入的用户消息信号（MessageRouter 消费，加速恢复） |
 | | 读取 health-check-state.json | 上次健康检查时间 |
 | **流式层** | 增量读取 tool-events.jsonl | 维护 inode + offset 游标，只读取新增事件 |
 | | 文件轮转处理 | 超过 1MB 时 rename → .old，新建空文件，drain 旧文件 |
@@ -265,7 +265,7 @@ refresh() 流式层部分：
 
 | 消费方 | 读取的 Snapshot 字段 | 用途 |
 |-------|---------------------|------|
-| **Guardian** | `userMessageSignal` | 清除 auth 抑制 |
+| **Guardian** | （不读 snapshot，D-20） | — |
 | **ProcSampler** | （不读 snapshot，独立采样） | — |
 | **ToolPipeline** | `toolEvents`, `foregroundSession`, `statusline` | 事件处理 + 前台身份 |
 | **ToolWatchdog** | 通过 ToolPipeline 的 apiActivity | 候选工具超时检测 |
