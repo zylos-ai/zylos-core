@@ -276,14 +276,18 @@ class HealthEngine {
 ```javascript
 interface HealthEngineDeps {
   // ── 来源: C4 Control（共享基础设施，与 runtime 无关）──
+  // 完整 contract 见 contracts.md §2
   enqueueHeartbeat(phase: string): number | false
-  //   写入 c4.db control queue: {type:'heartbeat', phase}
-  //   返回 control_id（成功）或 false（入队失败）
+  //   写入 c4.db control 表: { type:'heartbeat', phase, status:'pending' }
+  //   phase: 'recovery' | 'post_restart' — 标识 probe 阶段
+  //   返回 control_id（成功）或 false（DB 写入失败）
+  //   heartbeat control 必须 bypass health gate（contracts.md §2）
 
   getHeartbeatStatus(controlId: number): string
-  //   查询 c4.db 该 control_id 的状态
+  //   读取 c4.db 该 control_id 的 status
   //   返回值：'pending' | 'running' | 'done' | 'failed' | 'timeout' | 'not_found'
-  //   'done' = runtime hook 已消费并 ack
+  //   'running' = dispatcher 已投递到 tmux，等待 runtime hook ack
+  //   'done' = runtime hook 已消费并显式 ack（无 auto-ack）
 
   // ── 来源: RuntimeAdapter（runtime-specific 实现）──
   checkAuth(): Promise<{ ok: boolean, reason?: string, output?: string }>
@@ -472,13 +476,11 @@ async onUserMessageDelivered() {
       this.stickyErrorConsecutiveHits = 0
       this.lastStickyErrorHitAt = 0        // 重置，下一轮重新计时
       this.deps.log(`sticky error 2x: ${result.pattern}, killing session (D-18)`)
+      this.setHealth('unavailable', 'sticky_context_restart')  // contracts.md §3：先进入 unavailable
       this.deps.stop()
-      // 设计决策：不改 health，保持 OK。
-      // 原因：sticky error（corrupted image 等）是 session 级问题，不是 runtime 级健康问题。
-      // 换一个新 session 通常就能恢复，不需要进入 unavailable 退避流程。
-      // 时序：stop() → Guardian 下一 tick 检测到 offline → 拉起新 session → Orchestrator
-      //       调 onProcessRestarted()（但 health=OK，所以 onProcessRestarted 内部直接 return）。
-      // 如果新 session 仍有同样的 error → 下一轮 onUserMessageDelivered 再次检测并 kill。
+      // 时序：unavailable → stop() → Guardian 下一 tick 检测到 offline → 拉起新 session
+      //       → Orchestrator 调 onProcessRestarted() → 安排 probe → 成功回 OK。
+      // unavailable 确保 restart 窗口内 MessageRouter 返回 unhealthy 文案（D-8/D-37）。
     }
     return
   }

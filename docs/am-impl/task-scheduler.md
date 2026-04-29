@@ -180,7 +180,12 @@ interface TaskDefinition {
 
 ## 3. 实施方案
 
-**改动类型**：纯提取
+**改动类型**：提取 + 行为变更
+
+**行为变更内容（D-26/D-27）**：
+- 新增 `usage_alert_enabled` config key（默认 false），从原 `usage_monitor_enabled` 中拆出告警逻辑
+- usage_monitor 变为纯本地 state 刷新（零 token），告警由独立的 usage_alert 任务负责
+- Migration/compat：旧 config 无 `usage_alert_enabled` key 时默认 false（D-27：静默关闭告警）。旧 `usage_monitor_enabled=true` 升级后：monitoring 继续，alert 默认关闭。旧 `usage_monitor_enabled=false`：monitoring 和 alert 都关闭
 
 ### 现有代码位置
 

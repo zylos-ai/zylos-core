@@ -51,7 +51,7 @@ init()
   │     ├─ ProcSampler(adapter.sessionName)
   │     ├─ HealthEngine(deps, options)（deps 由 adapter 方法组装）
   │     ├─ MessageRouter(healthEngine, cacheStore, options)
-  │     ├─ DailySchedule × 3（upgrade, memory-commit, upgrade-check）
+  │     ├─ TaskScheduler（注册 daily-upgrade, daily-memory-commit, upgrade-check, health-check, usage-monitor, usage-alert, context-check）
   │     └─ 恢复 usage check 状态
   │
   ├─ 5. 恢复持久化状态

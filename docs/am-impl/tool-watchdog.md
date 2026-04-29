@@ -90,26 +90,29 @@ function evaluateToolWatchdogTransition({
   snapshot: {
     health: string,                  // 从 snapshot.agentStatus.health 读取（D-23）
     runtimeLaunchAtMs: number,
-    watchdogState: WatchdogEpisode | null,
+    watchdogState: WatchdogEpisode | null,  // 只读，不得修改（D-23 immutable snapshot）
   },
   deps: WatchdogDeps,
 }): {
   watchdog_phase: string,
   watchdog_block_reason: string | null,
   api_activity_dirty: boolean,
+  nextWatchdogState: WatchdogEpisode | null,  // 非 null 时由 Orchestrator 写入
+  clearWatchdogState: boolean,                // true 时由 Orchestrator 清除
 }
 ```
 
 ```javascript
 interface WatchdogDeps {
-  clearWatchdogState(): void
-  writeWatchdogState(): void
   getRuleById(ruleId: string): ToolRule | null
   enqueueInterrupt(key: string): { ok: boolean, output?: string }
   canTreatPaneAsRecovered(interactiveState): boolean
   applySyntheticClearHint(sessionId, claudePid, reason, nowMs): void
   triggerRecovery(reason: string): void
   log(message: string): void
+  // clearWatchdogState / writeWatchdogState 移出 deps：
+  // evaluate() 通过返回值 clearWatchdogState / nextWatchdogState 表达意图，
+  // 由 Orchestrator 负责实际的清除和写入（D-23：snapshot 不可变）
 }
 ```
 
@@ -160,19 +163,19 @@ interface WatchdogDeps {
 ```javascript
 function evaluateToolWatchdogTransition({ nowMs, foregroundIdentity, apiActivity, interactiveState, snapshot, deps }) {
   const candidate = apiActivity?.watchdog_candidate_tool || null
-  const phase = { watchdog_phase: 'idle', watchdog_block_reason: null, api_activity_dirty: false }
+  const phase = { watchdog_phase: 'idle', watchdog_block_reason: null, api_activity_dirty: false, nextWatchdogState: null, clearWatchdogState: false }
 
   // ── 前置条件检查：任一不满足 → idle ──
 
   if (!foregroundIdentity?.trusted) {
-    deps.clearWatchdogState()
+    phase.clearWatchdogState = true
     phase.watchdog_block_reason = foregroundIdentity?.blockReason || 'foreground_untrusted'
     return phase
   }
 
   // D-23: health 从 snapshot 读取（行为变更：原为直接读 HealthEngine 内存字段）
   if (snapshot.health !== 'ok') {
-    deps.clearWatchdogState()
+    phase.clearWatchdogState = true
     phase.watchdog_block_reason = `health_${snapshot.health}`
     return phase
   }
@@ -180,14 +183,14 @@ function evaluateToolWatchdogTransition({ nowMs, foregroundIdentity, apiActivity
   // D-33: 移除 launchGracePeriod 检查（行为变更）
 
   if (!candidate) {
-    deps.clearWatchdogState()
+    phase.clearWatchdogState = true
     phase.watchdog_block_reason = 'no_watchdog_candidate'
     return phase
   }
 
   const rule = deps.getRuleById(candidate.rule_id)
   if (!rule?.watchdog?.enabled) {
-    deps.clearWatchdogState()
+    phase.clearWatchdogState = true
     phase.watchdog_block_reason = 'watchdog_disabled'
     return phase
   }
@@ -198,7 +201,7 @@ function evaluateToolWatchdogTransition({ nowMs, foregroundIdentity, apiActivity
   if ((nowMs - candidate.started_at) < maxRuntimeMs) {
     // 未超时：observing
     if (snapshot.watchdogState?.episode_key !== candidate.event_id) {
-      deps.clearWatchdogState()   // 候选工具切换，清除旧 episode
+      phase.clearWatchdogState = true   // 候选工具切换，清除旧 episode
     }
     phase.watchdog_phase = 'observing'
     return phase
@@ -209,7 +212,7 @@ function evaluateToolWatchdogTransition({ nowMs, foregroundIdentity, apiActivity
   if (snapshot.watchdogState?.episode_key === candidate.event_id) {
     // 候选工具消失 → recovered
     if (!apiActivity.watchdog_candidate_tool) {
-      deps.clearWatchdogState()
+      phase.clearWatchdogState = true
       phase.watchdog_phase = 'recovered'
       return phase
     }
@@ -217,7 +220,7 @@ function evaluateToolWatchdogTransition({ nowMs, foregroundIdentity, apiActivity
     // pane 已回到交互态 → recovered（注入 synthetic clear hint 让 ToolPipeline 清除 episode）
     if (deps.canTreatPaneAsRecovered(interactiveState)) {
       deps.applySyntheticClearHint(foregroundIdentity.sessionId, foregroundIdentity.claudePid, 'interactive_recovered', nowMs)
-      deps.clearWatchdogState()
+      phase.clearWatchdogState = true
       phase.watchdog_phase = 'recovered'
       phase.api_activity_dirty = true       // 通知 Orchestrator 重建 apiActivity
       return phase
@@ -253,8 +256,8 @@ function evaluateToolWatchdogTransition({ nowMs, foregroundIdentity, apiActivity
 
     const result = deps.enqueueInterrupt(rule.watchdog.interruptKey)
 
-    // 写入 episode 状态（新建或更新）
-    snapshot.watchdogState = {
+    // 构建新 episode 状态（不修改 snapshot，通过返回值传递）
+    phase.nextWatchdogState = {
       version: 1,
       episode_key: candidate.event_id,
       session_id: foregroundIdentity.sessionId,
@@ -275,7 +278,6 @@ function evaluateToolWatchdogTransition({ nowMs, foregroundIdentity, apiActivity
       retry_after_at: result.ok ? 0 : (nowMs + rule.watchdog.cooldownSec * 1000),
       last_action_at: nowMs,
     }
-    deps.writeWatchdogState()
 
     phase.watchdog_phase = result.ok ? 'interrupt_sent' : 'interrupt_retry_wait'
     if (!result.ok) phase.watchdog_block_reason = 'interrupt_enqueue_failed'
@@ -285,9 +287,11 @@ function evaluateToolWatchdogTransition({ nowMs, foregroundIdentity, apiActivity
   // ── 兜底：grace 过期仍未恢复 → escalation ──
 
   deps.triggerRecovery(`tool_timeout_${candidate.name}`)
-  snapshot.watchdogState.escalated_at = nowMs
-  snapshot.watchdogState.last_action_at = nowMs
-  deps.writeWatchdogState()
+  phase.nextWatchdogState = {
+    ...snapshot.watchdogState,
+    escalated_at: nowMs,
+    last_action_at: nowMs,
+  }
   phase.watchdog_phase = 'escalated'
   return phase
 }
