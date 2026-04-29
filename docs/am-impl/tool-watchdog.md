@@ -31,7 +31,7 @@
 | | 中断等待 | 发送成功后等待 `interruptGraceSec`（默认 15s） |
 | | 中断重试 | 发送失败后等待 `cooldownSec`（默认 60s）后重试 |
 | | pane 恢复检测 | `deps.canTreatPaneAsRecovered(interactiveState)` 检查 tmux 是否回到交互态 |
-| | 升级（escalation） | grace 过期仍未恢复 → `deps.triggerRecovery()` → HealthEngine 介入 |
+| | 升级（escalation） | grace 过期仍未恢复 → `deps.triggerRecovery()` → HealthEngine 标记 unavailable 并 stop session → Guardian 下一 tick 拉起 |
 | **状态持久化** | watchdog-state.json | 写入当前 episode 状态，AM 冷启动恢复 |
 
 ### 6 阶段状态机
@@ -61,7 +61,7 @@
                  │           │ grace 过期
                  │           ▼
                  │    ┌──────────┐
-                 │    │escalated │ → triggerRecovery()
+                 │    │escalated │ → triggerRecovery() → stop session
                  │    └──────────┘
                  │
                  │  ┌──────────┐
