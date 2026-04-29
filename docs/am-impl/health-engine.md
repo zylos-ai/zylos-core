@@ -186,9 +186,11 @@ healthEngine.onUserMessageDelivered()
   │   ├─ hits == 1? → lastStickyErrorHitAt = now（首次命中，记录基线时间）
   │   ├─ hits >= CONSECUTIVE_HITS_THRESHOLD(2)?
   │   │   ├─ now - lastStickyErrorHitAt < STICKY_ERROR_MIN_INTERVAL(30s)? → return（间隔过短）
-  │   │   ├─ YES → deps.stop()           // kill session（D-18）
+  │   │   ├─ YES → setHealth('unavailable', 'sticky_context_restart')
+  │   │   │        // 先标记 unavailable，再 kill session（contracts.md §3）
+  │   │   ├─ deps.stop()                 // kill session（D-18）
   │   │   │        重置 stickyErrorConsecutiveHits = 0, lastStickyErrorHitAt = 0
-  │   │   │        // 不改 health，Guardian 下一 tick 拉起
+  │   │   │        Guardian 下一 tick 拉起，post_restart probe 成功后回 OK
   │   │   └─ NO  → return
   │   └─ return
   │
@@ -278,10 +280,11 @@ interface HealthEngineDeps {
   // ── 来源: C4 Control（共享基础设施，与 runtime 无关）──
   // 完整 contract 见 contracts.md §2
   enqueueHeartbeat(phase: string): number | false
-  //   写入 c4.db control 表: { type:'heartbeat', phase, status:'pending' }
+  //   写入 c4.db control 表:
+  //   { type:'heartbeat', content:`Heartbeat check. [phase=${phase}]`, phase, status:'pending' }
   //   phase: 'recovery' | 'post_restart' — 标识 probe 阶段
   //   返回 control_id（成功）或 false（DB 写入失败）
-  //   heartbeat control 必须 bypass health gate（contracts.md §2）
+  //   heartbeat control 必须 bypass health gate，并保留 ack suffix 供 runtime hook 显式 ack（contracts.md §2）
 
   getHeartbeatStatus(controlId: number): string
   //   读取 c4.db 该 control_id 的 status
@@ -611,11 +614,16 @@ HealthEngine                     C4 control queue (c4.db)        Runtime Agent
     │ enqueueHeartbeat('recovery')    │                              │
     │ ────────────────────────────▶   │                              │
     │   INSERT {type:'heartbeat',     │                              │
+    │    content:'Heartbeat check.    │                              │
+    │    [phase=recovery]',           │                              │
     │    control_id:N, phase, status: │                              │
-    │    'pending'}                   │                              │
-    │                                 │  runtime hook 轮询 control   │
+    │    'pending', bypass_state:1,   │                              │
+    │    ack_suffix:true}             │                              │
+    │                                 │  dispatcher 投递 content     │
+    │                                 │  + ack suffix                │
     │                                 │ ─────────────────────────▶   │
     │                                 │                              │
+    │                                 │  runtime hook 执行 ack suffix│
     │                                 │  ◀──── UPDATE status='done'  │
     │                                 │                              │
     │ getHeartbeatStatus(N)           │                              │
@@ -625,7 +633,7 @@ HealthEngine                     C4 control queue (c4.db)        Runtime Agent
     │ → { ack: true }                 │                              │
 ```
 
-heartbeat 通过 C4 control queue（c4.db SQLite）传递，不是 HTTP ping。`enqueueHeartbeat()` 写入控制消息，runtime 侧 hook 消费并标记完成。runtime 无响应时 status 保持 pending 直到 PROBE_TIMEOUT。
+heartbeat 通过 C4 control queue（c4.db SQLite）传递，不是 HTTP ping。`enqueueHeartbeat()` 写入控制消息，内容格式固定为 `Heartbeat check. [phase=<phase>]`，dispatcher 投递时必须保留 ack suffix。runtime 侧 hook 识别该内容并执行 ack suffix 后，control 状态才变为 done；runtime 无响应时 status 保持 pending/running，直到 HealthEngine 的 PROBE_TIMEOUT。
 
 #### notifyUserMessage(currentTime)
 
