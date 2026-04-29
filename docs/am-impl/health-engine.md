@@ -182,11 +182,12 @@ healthEngine.onUserMessageDelivered()
   │   └─ return
   │
   ├─ result.stickyError === true?
-  │   ├─ stickyErrorConsecutiveHits++, lastStickyErrorHitAt = now
+  │   ├─ stickyErrorConsecutiveHits++
+  │   ├─ hits == 1? → lastStickyErrorHitAt = now（首次命中，记录基线时间）
   │   ├─ hits >= CONSECUTIVE_HITS_THRESHOLD(2)?
-  │   │   ├─ 距上次命中 < STICKY_ERROR_MIN_INTERVAL(30s)? → return（间隔过短）
+  │   │   ├─ now - lastStickyErrorHitAt < STICKY_ERROR_MIN_INTERVAL(30s)? → return（间隔过短）
   │   │   ├─ YES → deps.stop()           // kill session（D-18）
-  │   │   │        重置 stickyErrorConsecutiveHits = 0
+  │   │   │        重置 stickyErrorConsecutiveHits = 0, lastStickyErrorHitAt = 0
   │   │   │        // 不改 health，Guardian 下一 tick 拉起
   │   │   └─ NO  → return
   │   └─ return
@@ -353,7 +354,7 @@ interface ProbeResult {
   rateLimitConsecutiveHits: number,       // 连续 checkTmuxPane().rateLimit=true 次数
   stickyErrorConsecutiveHits: number,     // 连续 checkTmuxPane().stickyError=true 次数
                                           // 两个计数器独立，全 false 时同时重置
-  lastStickyErrorHitAt: number,           // 上次 stickyError 命中时间（epoch ms），D-18 30s 防抖用
+  lastStickyErrorHitAt: number,           // 首次 stickyError 命中时间（epoch ms），D-18 30s 防抖基线
 }
 ```
 
@@ -459,15 +460,17 @@ async onUserMessageDelivered() {
   // 优先级 3：sticky error（D-18：连续 2 次命中防抖，30s 间隔）
   if (result.stickyError) {
     this.stickyErrorConsecutiveHits++
-    this.lastStickyErrorHitAt = Date.now()
     this.rateLimitConsecutiveHits = 0      // 类型切换，重置另一个计数器
+    if (this.stickyErrorConsecutiveHits === 1) {
+      this.lastStickyErrorHitAt = Date.now()  // 首次命中：记录基线时间
+    }
     if (this.stickyErrorConsecutiveHits >= CONSECUTIVE_HITS_THRESHOLD) {
-      // D-18 30s 间隔防抖：两次 stickyError 命中间隔须 >= STICKY_ERROR_MIN_INTERVAL
-      if (this.lastStickyErrorHitAt > 0
-        && (Date.now() - this.lastStickyErrorHitAt) < STICKY_ERROR_MIN_INTERVAL) {
-        return  // 间隔过短，等下一次 user message
+      // D-18 30s 间隔防抖：第二次命中距首次命中须 >= 30s
+      if ((Date.now() - this.lastStickyErrorHitAt) < STICKY_ERROR_MIN_INTERVAL) {
+        return  // 间隔过短，等下一次 user message（hits 保持，下次继续检查间隔）
       }
       this.stickyErrorConsecutiveHits = 0
+      this.lastStickyErrorHitAt = 0        // 重置，下一轮重新计时
       this.deps.log(`sticky error 2x: ${result.pattern}, killing session (D-18)`)
       this.deps.stop()
       // 设计决策：不改 health，保持 OK。
