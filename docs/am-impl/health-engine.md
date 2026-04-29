@@ -82,6 +82,54 @@
 | RateLimited | `rate_limited` | 连续两次 rate limit 模式 | cooldown 到期 kill → recovering → ack → OK |
 | AuthFailed | `auth_failed` | auth check 失败 | check auth 通过 → OK |
 
+### 外部调用交互图
+
+```
+                       ┌─────────────────────────────────────────┐
+                       │           HealthEngine (FSM)            │
+                       │                                         │
+  c4-dispatcher ──────▶│ onUserMessageDelivered()                │
+  (user msg 投递后)     │   → check tmux → 状态转移              │
+                       │                                         │
+  MessageRouter ──────▶│ runRecoveryProbe()                      │
+  (IPC 路由,health≠OK) │   → heartbeat/checkAuth → ProbeResult  │
+                       │                                         │
+  MessageRouter ──────▶│ notifyUserMessage()                     │
+  (user msg 到达)       │   → 清 cooldown / 重置 backoff         │
+                       │                                         │
+  ToolWatchdog ───────▶│ triggerRecovery(reason)                 │
+  (工具超时升级)        │   → setHealth('unavailable')           │
+                       │                                         │
+  Guardian ───────────▶│ onProcessRestarted()                    │
+  (拉起 runtime 后)     │   → 重置退避 / 立即 probe              │
+                       │                                         │
+  StatusWriter ◀───────│ health / healthReason / cooldownUntil   │
+  (tick 末尾读取)       │   / rateLimitResetTime                 │
+                       └─────────────────────────────────────────┘
+```
+
+三条主路径时序：
+
+```
+路径 1：正常检测（OK → 保持 OK）
+  c4-dispatcher ─── onUserMessageDelivered() ───▶ sleep 5s → checkTmuxPane()
+                                                  → 无异常 → 保持 OK
+                                                  → 下次 tick StatusWriter 读 health=ok
+
+路径 2：异常检测 → 状态转移 → recovery
+  c4-dispatcher ─── onUserMessageDelivered() ───▶ sleep 5s → checkTmuxPane()
+                                                  → 2x rate limit → enterRateLimited()
+  (后续 user msg)
+  MessageRouter ─── runRecoveryProbe() ──────────▶ heartbeat probe
+                                                  → ack → setHealth('ok')
+                                                  → 返回 { recovered: true }
+
+路径 3：ToolWatchdog 升级 → Guardian 拉起 → 恢复
+  ToolWatchdog ──── triggerRecovery('tool_timeout') ▶ setHealth('unavailable')
+  Guardian ──────── onProcessRestarted() ───────────▶ 重置退避 → 立即 probe
+                                                     → ack → setHealth('ok')
+```
+
 ### Recovery Probe 方法（供 MessageRouter 调用）
 
 | 当前状态 | Probe 方法 | 结果分支 |
@@ -102,13 +150,55 @@ healthEngine.onUserMessageDelivered()
   │
   ├─ 等待约 5s（给 runtime 处理时间）
   │
-  ├─ 执行 check tmux pane
-  │   ├─ 连续两次 rate limit → enterRateLimited()
-  │   ├─ auth failed + checkAuth() 确认 → setHealth('auth_failed')
-  │   ├─ 连续两次 sticky error → adapter.stop()（D-18）
-  │   └─ 无异常 → 保持 OK
+  ├─ 执行 checkTmuxPane()
+  │   ├─ rateLimit=true → rateLimitConsecutiveHits++
+  │   │   └─ hits >= 2 → enterRateLimited()，重置 hits
+  │   ├─ authFailed=true → checkAuth()
+  │   │   └─ auth 确实失败 → setHealth('auth_failed')
+  │   ├─ stickyError=true → stickyErrorConsecutiveHits++
+  │   │   └─ hits >= 2 → stop()，重置 hits（D-18）
+  │   └─ 全 false → 重置所有 consecutiveHits
   │
   └─ return
+```
+
+### Unavailable 内部状态流程
+
+Unavailable 内部分 recovering 和 down 两阶段，对外统一暴露为 `health: 'unavailable'`（D-3）。
+
+```
+进入 Unavailable（heartbeat fail / ToolWatchdog 升级 / RateLimited cooldown kill）
+  │
+  ▼
+┌─────────────────────────────────────────────────────┐
+│ RECOVERING 阶段（recoveringStartedAt < 1h）          │
+│                                                     │
+│  退避策略：min(3600, 60 × 5^(n-1))                  │
+│    n=1: 60s → n=2: 300s → n=3: 1500s → n=4: 3600s │
+│                                                     │
+│  触发 probe 的时机：                                  │
+│    1. MessageRouter 调 runRecoveryProbe()            │
+│    2. notifyUserMessage() 重置 backoff 后立即 probe   │
+│    3. onProcessRestarted() 重置退避后立即 probe       │
+│                                                     │
+│  probe 结果：                                        │
+│    ack → setHealth('ok')，重置 restartFailureCount   │
+│    无 ack → restartFailureCount++，下次退避更长       │
+│    无 ack + check tmux 发现新异常 → 跨状态转移        │
+│                                                     │
+│  降级判定：now - recoveringStartedAt >= 1h           │
+│    → 进入 DOWN                                       │
+├─────────────────────────────────────────────────────┤
+│ DOWN 阶段（recoveringStartedAt >= 1h）               │
+│                                                     │
+│  定期探测：每 downRetryInterval(1h) 发 heartbeat     │
+│    lastDownCheckAt + interval <= now → probe         │
+│                                                     │
+│  probe 结果：同 recovering（ack → OK，无 ack → 保持）│
+│                                                     │
+│  notifyUserMessage() / onProcessRestarted()          │
+│    → 同样可触发立即 probe                             │
+└─────────────────────────────────────────────────────┘
 ```
 
 ### 接口定义
@@ -195,6 +285,196 @@ interface ProbeResult {
   // 事件驱动检测（onUserMessageDelivered）
   rateLimitConsecutiveHits: number,      // 连续 rate limit 检测计数（需 2 次）
   stickyErrorConsecutiveHits: number,    // 连续 sticky error 检测计数（需 2 次，D-18）
+}
+```
+
+### 核心方法实现逻辑
+
+#### setHealth(next, reason)
+
+```javascript
+setHealth(next, reason) {
+  if (next === this.healthState) return
+
+  const prev = this.healthState
+  this.healthState = next
+  this.healthReason = (next === 'ok') ? null : (reason || null)
+
+  if (next === 'ok') {
+    this.restartFailureCount = 0
+    this.recoveringStartedAt = 0
+    this.rateLimitConsecutiveHits = 0
+    this.stickyErrorConsecutiveHits = 0
+  }
+
+  if (next === 'unavailable' && prev !== 'unavailable') {
+    this.recoveringStartedAt = now()
+  }
+
+  this.deps.log(`health: ${prev} → ${next}` + (reason ? ` (${reason})` : ''))
+}
+```
+
+#### onUserMessageDelivered()
+
+```javascript
+async onUserMessageDelivered() {
+  if (this.healthState !== 'ok') return   // 非 OK 时不做 OK→非OK 检测
+
+  await sleep(this.options.checkDelay)     // 5s
+
+  const result = this.deps.checkTmuxPane()
+
+  if (result.rateLimit) {
+    this.rateLimitConsecutiveHits++
+    if (this.rateLimitConsecutiveHits >= CONSECUTIVE_HITS_THRESHOLD) {
+      this.rateLimitConsecutiveHits = 0
+      this.enterRateLimited(now() + this.options.rateLimitDefaultCooldown)
+    }
+    return
+  }
+
+  if (result.authFailed) {
+    const authOk = await this.deps.checkAuth()
+    if (!authOk) {
+      this.setHealth('auth_failed', 'auth_check_failed')
+    }
+    return
+  }
+
+  if (result.stickyError) {
+    this.stickyErrorConsecutiveHits++
+    if (this.stickyErrorConsecutiveHits >= CONSECUTIVE_HITS_THRESHOLD) {
+      this.stickyErrorConsecutiveHits = 0
+      this.deps.log(`sticky error 2x: ${result.pattern}, killing session (D-18)`)
+      this.deps.stop()
+      // Guardian 下一 tick 拉起，不在这里改 health
+    }
+    return
+  }
+
+  // 无异常 → 重置计数器
+  this.rateLimitConsecutiveHits = 0
+  this.stickyErrorConsecutiveHits = 0
+}
+```
+
+#### enterRateLimited(cooldownUntil, resetTime)
+
+```javascript
+enterRateLimited(cooldownUntil, resetTime) {
+  this.cooldownUntil = cooldownUntil
+  this.rateLimitResetTime = resetTime || null
+  this.setHealth('rate_limited', 'rate_limit_detected')
+
+  // 启动 cooldown 计时器
+  const delay = Math.max(0, cooldownUntil - now())
+  setTimeout(() => {
+    if (this.healthState !== 'rate_limited') return  // 已被 notifyUserMessage 清除
+    this.deps.log('rate limit cooldown expired, killing session (D-18 pattern)')
+    this.deps.stop()
+    this.setHealth('unavailable', 'rate_limit_cooldown_expired')
+    // Guardian 下一 tick 拉起新 session
+  }, delay * 1000)
+}
+```
+
+#### runRecoveryProbe()
+
+```javascript
+async runRecoveryProbe() {
+  this.lastRecoveryAt = now()
+
+  if (this.healthState === 'auth_failed') {
+    const authOk = await this.deps.checkAuth()
+    if (authOk) {
+      this.setHealth('ok', 'auth_recovered')
+      return { recovered: true, health: 'ok' }
+    }
+    return { recovered: false, health: 'auth_failed', reason: 'auth_still_failed' }
+  }
+
+  // RateLimited / Unavailable → heartbeat probe
+  const controlId = this.deps.enqueueHeartbeat(this.healthState)
+  if (!controlId) {
+    return { recovered: false, health: this.healthState, reason: 'heartbeat_enqueue_failed' }
+  }
+
+  // 等待 heartbeat ack（轮询 getHeartbeatStatus，硬超时 30s）
+  const status = await this.pollHeartbeatStatus(controlId, 30000)
+
+  if (status === 'ack') {
+    this.setHealth('ok', 'heartbeat_recovered')
+    return { recovered: true, health: 'ok' }
+  }
+
+  // 无 ack → check tmux 看是否有新异常（可能跨状态转移）
+  const tmux = this.deps.checkTmuxPane()
+  if (tmux.rateLimit && this.healthState !== 'rate_limited') {
+    this.enterRateLimited(now() + this.options.rateLimitDefaultCooldown)
+  } else if (tmux.authFailed) {
+    const authOk = await this.deps.checkAuth()
+    if (!authOk) this.setHealth('auth_failed', 'auth_check_failed')
+  }
+
+  this.restartFailureCount++
+  return { recovered: false, health: this.healthState, reason: 'heartbeat_timeout' }
+}
+```
+
+#### notifyUserMessage(currentTime)
+
+```javascript
+notifyUserMessage(currentTime) {
+  if (this.healthState === 'ok') return false
+
+  // 冷却期检查
+  if (currentTime - this.lastUserMessageRecoveryAt < this.options.userMessageRecoveryCooldown) {
+    return false
+  }
+  this.lastUserMessageRecoveryAt = currentTime
+
+  if (this.healthState === 'rate_limited') {
+    // 清除 cooldown，用户消息意味着愿意重试
+    this.cooldownUntil = 0
+  }
+
+  // 重置退避，允许立即 probe
+  this.restartFailureCount = 0
+  return true  // 调用方可据此触发 runRecoveryProbe()
+}
+```
+
+#### onProcessRestarted()
+
+```javascript
+onProcessRestarted() {
+  // Guardian 拉起 runtime 后调用
+  // 重置退避计数，让下次 probe 立即执行
+  this.restartFailureCount = 0
+  this.deps.log('process restarted, backoff reset')
+
+  // 如果当前非 OK，安排一次立即 probe（等 grace period）
+  if (this.healthState !== 'ok') {
+    setTimeout(() => {
+      if (this.healthState !== 'ok') {
+        this.runRecoveryProbe()
+      }
+    }, this.options.checkDelay * 1000)
+  }
+}
+```
+
+#### triggerRecovery(reason)
+
+```javascript
+triggerRecovery(reason) {
+  // ToolWatchdog 超时升级调用
+  // 直接标记为 unavailable，不 probe（因为升级意味着 runtime 已经无响应）
+  if (this.healthState === 'ok') {
+    this.setHealth('unavailable', reason)
+  }
+  // 已经是非 OK 状态时，不覆盖（保留原状态信息）
 }
 ```
 
