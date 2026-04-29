@@ -31,9 +31,7 @@ Adapter 提供 6 类能力，每类封装了 Claude 和 Codex 的差异实现：
 | | `clearStaleState()` | 拉起前清除上一 session 的残留文件（heartbeat-pending.json、context temp files 等），路径因 runtime 不同 |
 | | `enqueueStartupPrompt()` | 注入启动提示。Claude: 检测 SessionStart hook → 有则 noop、无则 C4 control fallback；Codex: 自带 bootstrap prompt，noop |
 | **认证** | `checkAuth()` | 端到端认证验证（Claude: `claude -p ping`；Codex: token 验证） |
-| **健康探测** | `enqueueHeartbeat()` | 通过 C4 control queue 发送 heartbeat，返回 control_id |
-| | `getHeartbeatStatus()` | 查询 heartbeat control_id 的状态（pending/done/failed/timeout） |
-| | `checkTmuxPane()` | 扫描 tmux pane 字符模式，返回 `{ rateLimit, authFailed, stickyError, pattern }` |
+| **健康探测** | `checkTmuxPane()` | 扫描 tmux pane 字符模式，返回 `{ rateLimit, authFailed, stickyError, pattern }` |
 | **上下文监控** | `getContextMonitor()` | Claude: 返回 null（由 statusLine hook 处理）；Codex: 返回 polling-based 监控器 |
 | **活动时间** | `getConversationMtime()` | 返回 conversation file 的 mtime（Claude: conversation file；Codex: null），StatusWriter 用于活动时间来源优先级链（D-5/D-38） |
 | **消息注入** | `sendMessage(text)` | 通过 tmux buffer paste 向 runtime 注入文本（处理特殊字符） |
@@ -128,8 +126,8 @@ interface RuntimeAdapter {
   // 认证
   checkAuth(): Promise<{ ok: boolean, reason?: string, output?: string }>
 
-  // 健康探测
-  getHeartbeatDeps(): HeartbeatDeps
+  // 健康探测（runtime-specific，注入到 HealthEngineDeps）
+  checkTmuxPane(): { rateLimit: boolean, authFailed: boolean, stickyError: boolean, pattern?: string }
 
   // 上下文监控
   getContextMonitor(): ContextMonitor | null
@@ -145,14 +143,7 @@ interface RuntimeAdapter {
 }
 ```
 
-```javascript
-interface HealthProbeDeps {
-  enqueueHeartbeat(phase: string): number | false    // C4 control queue 写入，返回 control_id
-  getHeartbeatStatus(controlId: number): string      // 查询状态：'pending'|'running'|'done'|'failed'|'timeout'|'not_found'
-  checkAuth(): Promise<boolean>                      // 端到端认证验证
-  checkTmuxPane(): { rateLimit: boolean, authFailed: boolean, stickyError: boolean, pattern?: string }
-}
-```
+> **注意**：`enqueueHeartbeat()` / `getHeartbeatStatus()` 是 C4 Control 的能力（共享基础设施，与 runtime 无关），不属于 RuntimeAdapter 接口。由 Orchestrator 在组装 HealthEngineDeps 时直接注入。见 [health-engine.md](health-engine.md) 的 deps 接口定义。
 
 ### Claude vs Codex 差异对照
 
@@ -164,8 +155,6 @@ interface HealthProbeDeps {
 | clearStaleState | 删除 `heartbeat-pending.json` + `/tmp/context-*` | 删除 `codex-heartbeat-pending.json` + 对应 temp files |
 | enqueueStartupPrompt | 检测 SessionStart hook → 有则 noop，无则 C4 control fallback | noop（Codex bootstrap prompt 自带） |
 | getConversationMtime | 读取 conversation file mtime（epoch ms） | `null`（无 conversation file） |
-| enqueueHeartbeat | C4 control queue 写入（共享实现） | 同左 |
-| getHeartbeatStatus | C4 control queue 查询（共享实现） | 同左 |
 | checkTmuxPane | 扫描 Claude tmux pane 字符模式 | 扫描 Codex tmux pane 字符模式 |
 | getContextMonitor | `null`（由 statusLine hook 处理） | `CodexContextMonitor`（polling） |
 | sendMessage | tmux buffer paste（临时文件 → load-buffer → paste-buffer → Enter） | tmux buffer paste（同机制） |
@@ -179,12 +168,11 @@ interface HealthProbeDeps {
 |-------|-----------|------|
 | **Monitor Orchestrator** | `getActiveAdapter()` | init 时创建 adapter 实例，注入给其他组件 |
 | **Guardian** | `launch()`, `isRunning()`, `clearStaleState()`, `enqueueStartupPrompt()`, `sessionName` | 进程存活守护：检测退出 → 清理 → 拉起 → 启动提示 |
-| **HealthEngine** | `checkAuth()`, `enqueueHeartbeat()`, `getHeartbeatStatus()`, `checkTmuxPane()`, `stop()` | 认证验证 + heartbeat probe + tmux 扫描 + kill session |
+| **HealthEngine** | `checkAuth()`, `checkTmuxPane()`, `stop()` | 认证验证 + tmux 扫描 + kill session（注入到 HealthEngineDeps） |
 | **ToolWatchdog** | `sendMessage()` | 发送中断按键（Escape）终止超时工具 |
 | **ProcSampler** | `sessionName`（属性读取） | 获取 tmux PID 做冻结检测 |
 | **ToolPipeline** | `runtimeId`（属性读取） | 加载对应 runtime 的工具规则 |
 | **StatusWriter** | `runtimeId`, `displayName`, `getConversationMtime()` | 写入 agent-status.json + 活动时间来源 |
-| **HealthEngine** | `stop()` | sticky error 时强制 restart（D-18） |
 
 ## 3. 实施方案
 
@@ -205,8 +193,9 @@ interface HealthProbeDeps {
 
 ### 实施步骤
 
-1. 在 `scripts/adapters/` 下创建 `claude.js` 和 `codex.js`，从 `cli/lib/runtime/` 迁移
-2. **新增 `clearStaleState()`**：从 `activity-monitor.js:600-613`（直接删除 heartbeat-pending.json + context temp files）提取，封装为 adapter 方法（文件路径因 runtime 不同）
-3. **新增 `enqueueStartupPrompt()`**：从 `activity-monitor.js:486-521`（`hasStartupHook()` + `enqueueStartupControl()`）+ `activity-monitor.js:636-639`（runtimeId 分支判断）提取，封装到 adapter 内部（D-5/D-38：消除 Guardian 中的 runtime 分支判断）
-4. 主文件中散落的 `adapter.xxx` 调用保持不变，只是 adapter 实例的创建位置从 `init()` 移到 Monitor Orchestrator
-5. `activity-monitor.js` 中残留的直接 runtime 分支判断（`adapter.runtimeId === 'claude'`）需要收拢到 adapter 方法中（D-5）
+1. **Adapter 留在 `cli/lib/runtime/`**，不做物理迁移。现有 base.js / claude.js / codex.js / index.js 结构保持不变
+2. **新增 `clearStaleState()`**：在 ClaudeAdapter / CodexAdapter 中各自新增方法，从 `activity-monitor.js:600-613`（直接删除 heartbeat-pending.json + context temp files）提取逻辑（文件路径因 runtime 不同）
+3. **新增 `enqueueStartupPrompt()`**：在 ClaudeAdapter / CodexAdapter 中各自新增方法，从 `activity-monitor.js:486-521`（`hasStartupHook()` + `enqueueStartupControl()`）+ `activity-monitor.js:636-639`（runtimeId 分支判断）提取逻辑（D-5/D-38：消除 Guardian 中的 runtime 分支判断）
+4. **新增 `checkTmuxPane()`**：在 ClaudeAdapter / CodexAdapter 中各自新增方法，封装 tmux pane 字符模式扫描（从 activity-monitor.js 现有的 detect 系列函数提取）
+5. 主文件中散落的 `adapter.xxx` 调用保持不变，只是 adapter 实例的创建位置从 `init()` 移到 Monitor Orchestrator
+6. `activity-monitor.js` 中残留的直接 runtime 分支判断（`adapter.runtimeId === 'claude'`）需要收拢到 adapter 方法中（D-5）

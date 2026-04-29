@@ -58,10 +58,11 @@ write(snapshot, healthEngine, extra)
   │   │     ├─ watchdog_phase, watchdog_block_reason, watchdog_episode_key
   │   │     ├─ foreground_session_source, foreground_session_observed_at
   │   │     └─ health 附加字段（from HealthEngine，按状态分支写入）：
-  │   │        ok:           清空所有附加字段
+  │   │        ok:           unavailable_since=null, unavailable_reason=null,
+  │   │                      rate_limit_reset=null, cooldown_until=null
   │   │        unavailable:  unavailable_since + unavailable_reason
-  │   │        rate_limited: unavailable_reason + rate_limit_reset + cooldown_until
-  │   │        auth_failed:  unavailable_reason
+  │   │        rate_limited: unavailable_since + unavailable_reason + rate_limit_reset + cooldown_until
+  │   │        auth_failed:  unavailable_since + unavailable_reason
   │   │
   │   └─ 4. atomicWriteJson(agent-status.json)
   │
@@ -124,7 +125,7 @@ StatusWriter 是该文件的唯一写入方，其他组件通过 SignalStore 读
 
 | 交互方 | 方向 | 方法/数据 | 用途 |
 |-------|------|----------|------|
-| **HealthEngine** | 读取 | `health`, `healthReason`, `rateLimitResetTime`, `cooldownUntil` | 写入 health 及附加信息（D-2） |
+| **HealthEngine** | 读取 | `health`, `healthReason`, `unavailableSince`, `rateLimitResetTime`, `cooldownUntil` | 写入 health 及附加信息（D-2/D-3） |
 | **ToolPipeline** | 读取 | `getActiveTools()`, foreground identity, watchdog 状态 | 写入工具相关字段 |
 | **ToolWatchdog** | 读取 | `watchdog_phase`, `watchdog_block_reason` | 写入 watchdog 状态 |
 | **Monitor Orchestrator** | 调用 | `write()` | tick 末尾调用 |
@@ -141,7 +142,7 @@ StatusWriter 是该文件的唯一写入方，其他组件通过 SignalStore 读
 
 ## 3. 实施方案
 
-**改动类型**：纯提取
+**改动类型**：提取 + Health schema 对齐（D-2/D-3 字段生命周期）
 
 ### 现有代码位置
 

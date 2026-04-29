@@ -43,7 +43,7 @@
 | **Recovery** | `runRecoveryProbe()` | 供 MessageRouter 调用，按当前状态分支执行 probe，返回 ProbeResult |
 | | `sendHeartbeatProbe()` | 内部方法，通过 C4 control queue 发送 heartbeat 并等待 ack |
 | | `notifyUserMessage()` | 加速 recovery：清除 cooldown / 重置 backoff |
-| | `onProcessRestarted()` | Guardian 拉起 runtime 后调用，重置退避并安排立即 probe |
+| | `onProcessRestarted()` | Orchestrator 在 Guardian 拉起 runtime 后调用，重置退避并安排立即 probe |
 | **RateLimited** | `enterRateLimited()` | 进入 rate_limited 状态 + 启动 cooldown 计时器 |
 | | cooldown 到期处理 | 到期后 `stop()` kill session → `setHealth('unavailable')`，Guardian 下一 tick 拉起 |
 | | user message 清除 | `notifyUserMessage()` 将 cooldownUntil 设为 0，跳过剩余 cooldown |
@@ -108,8 +108,8 @@
   ToolWatchdog ───────▶│ triggerRecovery(reason)                 │
   (工具超时升级)        │   → setHealth('unavailable')           │
                        │                                         │
-  Guardian ───────────▶│ onProcessRestarted()                    │
-  (拉起 runtime 后)     │   → 重置退避 / 安排立即 probe          │
+  Orchestrator ────────▶│ onProcessRestarted()                    │
+  (Guardian 拉起后代调)  │   → 重置退避 / 安排立即 probe          │
                        │                                         │
   StatusWriter ◀───────│ health / healthReason / cooldownUntil   │
   (tick 末尾读取)       │   / rateLimitResetTime                 │
@@ -128,7 +128,7 @@
   c4-dispatcher ─── onUserMessageDelivered() ───▶ sleep 5s → checkTmuxPane()
                                                   → rateLimit 2x → enterRateLimited()
   (cooldown 到期)                                 → stop() → setHealth('unavailable')
-  (Guardian 拉起)                                 → onProcessRestarted() → 安排 probe
+  (Orchestrator: Guardian 拉起后代调)              → onProcessRestarted() → 安排 probe
   (后续 user msg)
   MessageRouter ─── runRecoveryProbe() ──────────▶ sendHeartbeatProbe()
                                                   → ack → setHealth('ok')
@@ -137,7 +137,7 @@
 路径 3：ToolWatchdog 升级 → Guardian 拉起 → 恢复
   ToolWatchdog ──── triggerRecovery('tool_timeout') ▶ setHealth('unavailable')
   (Guardian 检测进程退出, 拉起新 session)
-  Guardian ──────── onProcessRestarted() ───────────▶ 重置 restartFailureCount
+  Orchestrator ──── onProcessRestarted() ───────────▶ 重置 restartFailureCount
                                                      → 安排 CHECK_DELAY 后 probe
                                                      → ack → setHealth('ok')
 ```
@@ -177,8 +177,8 @@ healthEngine.onUserMessageDelivered()
   │   └─ return
   │
   ├─ result.authFailed === true?
-  │   ├─ authOk = await deps.checkAuth()  // 二次确认，避免误判
-  │   ├─ !authOk → setHealth('auth_failed', 'auth_check_failed')
+  │   ├─ authResult = await deps.checkAuth()  // 二次确认，避免误判
+  │   ├─ !authResult.ok → setHealth('auth_failed', authResult.reason || 'auth_check_failed')
   │   └─ return
   │
   ├─ result.stickyError === true?
@@ -264,7 +264,7 @@ class HealthEngine {
   async runRecoveryProbe(): ProbeResult   // 供 MessageRouter 调用
 
   // ── 进程生命周期 ──
-  onProcessRestarted(): void              // Guardian 拉起 runtime 后调用
+  onProcessRestarted(): void              // Orchestrator 在 Guardian 拉起 runtime 后代调
 
   // ── ToolWatchdog escalation ──
   triggerRecovery(reason: string): void   // ToolWatchdog 超时升级
@@ -284,9 +284,9 @@ interface HealthEngineDeps {
   //   'done' = runtime hook 已消费并 ack
 
   // ── 来源: RuntimeAdapter（runtime-specific 实现）──
-  checkAuth(): Promise<boolean>
+  checkAuth(): Promise<{ ok: boolean, reason?: string, output?: string }>
   //   执行认证检查（runtime-specific）
-  //   true = 认证有效，false = 认证失败
+  //   ok=true: 认证有效；ok=false: 认证失败，reason 用于 unavailable_reason
 
   checkTmuxPane(): TmuxCheckResult
   //   扫描 tmux pane 输出，匹配预定义字符模式
@@ -390,14 +390,18 @@ setHealth(next, reason) {
   this.healthState = next
   this.healthReason = (next === 'ok') ? null : (reason || null)
 
-  // OK：清空所有附加状态
+  // OK：清空所有附加状态（StatusWriter 依赖这些字段为 null/0 来输出干净的 ok 状态）
   if (next === 'ok') {
     this.restartFailureCount = 0
     this.unavailableSince = 0
     this.rateLimitConsecutiveHits = 0
     this.stickyErrorConsecutiveHits = 0
-    // cooldown 相关由 enterRateLimited/notifyUserMessage 管理，这里不清
-    // 但 cooldownTimer 如果还在跑，不影响（timer 回调会检查 healthState）
+    this.rateLimitResetTime = null
+    this.cooldownUntil = 0
+    if (this.cooldownTimer) {
+      clearTimeout(this.cooldownTimer)
+      this.cooldownTimer = null
+    }
   }
 
   // 进入 Unavailable：记录时间戳（D-3：unavailable_since）
@@ -438,11 +442,11 @@ async onUserMessageDelivered() {
 
   // 优先级 2：auth failed
   if (result.authFailed) {
-    const authOk = await this.deps.checkAuth()
-    if (!authOk) {
-      this.setHealth('auth_failed', 'auth_check_failed')
+    const authResult = await this.deps.checkAuth()
+    if (!authResult.ok) {
+      this.setHealth('auth_failed', authResult.reason || 'auth_check_failed')
     }
-    // authOk=true：tmux 误判，不转移。重置计数器
+    // authResult.ok=true：tmux 误判，不转移。重置计数器
     this.rateLimitConsecutiveHits = 0
     this.stickyErrorConsecutiveHits = 0
     return
@@ -456,8 +460,12 @@ async onUserMessageDelivered() {
       this.stickyErrorConsecutiveHits = 0
       this.deps.log(`sticky error 2x: ${result.pattern}, killing session (D-18)`)
       this.deps.stop()
-      // 不改 health：Guardian 下一 tick 检测到进程退出后拉起新 session
-      // 如果新 session 仍有同样的 error，下一轮 onUserMessageDelivered 会再次触发
+      // 设计决策：不改 health，保持 OK。
+      // 原因：sticky error（corrupted image 等）是 session 级问题，不是 runtime 级健康问题。
+      // 换一个新 session 通常就能恢复，不需要进入 unavailable 退避流程。
+      // 时序：stop() → Guardian 下一 tick 检测到 offline → 拉起新 session → Orchestrator
+      //       调 onProcessRestarted()（但 health=OK，所以 onProcessRestarted 内部直接 return）。
+      // 如果新 session 仍有同样的 error → 下一轮 onUserMessageDelivered 再次检测并 kill。
     }
     return
   }
@@ -510,12 +518,12 @@ async runRecoveryProbe() {
 
   // ── AuthFailed 分支：checkAuth 即可，不需要 heartbeat ──
   if (this.healthState === 'auth_failed') {
-    const authOk = await this.deps.checkAuth()
-    if (authOk) {
+    const authResult = await this.deps.checkAuth()
+    if (authResult.ok) {
       this.setHealth('ok', 'auth_recovered')
       return { recovered: true, health: 'ok' }
     }
-    return { recovered: false, health: 'auth_failed', reason: 'auth_still_failed' }
+    return { recovered: false, health: 'auth_failed', reason: authResult.reason || 'auth_still_failed' }
   }
 
   // ── RateLimited / Unavailable 分支：heartbeat probe ──
@@ -531,8 +539,8 @@ async runRecoveryProbe() {
   if (tmux.rateLimit && this.healthState !== 'rate_limited') {
     this.enterRateLimited(now() + this.options.rateLimitDefaultCooldown)
   } else if (tmux.authFailed) {
-    const authOk = await this.deps.checkAuth()
-    if (!authOk) this.setHealth('auth_failed', 'auth_check_failed')
+    const authResult = await this.deps.checkAuth()
+    if (!authResult.ok) this.setHealth('auth_failed', authResult.reason || 'auth_check_failed')
   }
   // tmux 无新异常：保持当前状态
 
@@ -635,8 +643,9 @@ notifyUserMessage(currentTime) {
 
 #### onProcessRestarted()
 
-Guardian 拉起 runtime 后调用。重置退避并安排一次延迟 probe。
+Orchestrator 在 Guardian 拉起 runtime 后代调（Guardian 不持有 HealthEngine 引用，D-20）。重置退避并安排一次延迟 probe。
 
+**调用链**：Guardian.tick() 返回 `GuardianResult.attempted_restart=true` → Orchestrator 检测到 → 调用 `healthEngine.onProcessRestarted()`
 **前置条件**：runtime 进程刚被 Guardian 拉起
 **后置条件**：退避已重置；如果当前非 OK，CHECK_DELAY 后会自动执行 probe
 

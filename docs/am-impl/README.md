@@ -82,6 +82,7 @@ activity-monitor/scripts/
 | usage_monitor_enabled | bool | true | TaskScheduler |
 | usage_alert_enabled | bool | false | TaskScheduler (D-26) |
 | usage_check_interval | int | 3600 | TaskScheduler |
+| usage_alert_interval | int | 3600 | TaskScheduler (D-26) |
 | usage_idle_gate | int | 30 | TaskScheduler |
 | usage_warn_threshold | int | 80 | TaskScheduler |
 | usage_high_threshold | int | 90 | TaskScheduler |
