@@ -627,9 +627,9 @@ heartbeat 通过 C4 control queue（c4.db SQLite）传递，不是 HTTP ping。`
 
 #### notifyUserMessage(currentTime)
 
-user message 到达时的 recovery 加速。由 MessageRouter 在收到消息时调用（无论 health 状态）。
+user message 到达时的 recovery 加速。由 MessageRouter 在 `health!=ok && noReply=false` 时调用；`noReply=true` 的系统/内部消息不得调用，避免打破 cooldown 或 backoff。
 
-**前置条件**：无
+**前置条件**：调用方已确认当前 health 非 OK，且本次 route request 允许用户可见回复（`noReply=false`）
 **后置条件**：返回 true 时调用方应触发 `runRecoveryProbe()`
 **冷却期**：USER_MESSAGE_RECOVERY_COOLDOWN(60s) 内多次调用只有第一次生效
 
@@ -725,7 +725,7 @@ get backoffDelay() {
 | **Monitor Orchestrator** | 调用 | `onProcessRestarted()` | Guardian 拉起 runtime 后 | Orchestrator 持有 HealthEngine 引用，代为调用 |
 | **c4-dispatcher** | 调用 | `onUserMessageDelivered()` | user message 投递成功后 | 异步调用，不等待返回 |
 | **MessageRouter** | 调用 | `runRecoveryProbe()` | IPC 路由时 health≠OK | 同步等待 ProbeResult |
-| **MessageRouter** | 调用 | `notifyUserMessage()` | 收到 user message | 返回 true 时接着调 `runRecoveryProbe()` |
+| **MessageRouter** | 调用 | `notifyUserMessage()` | `health!=ok && noReply=false` | 返回 true 时接着调 `runRecoveryProbe()` |
 | **MessageRouter** | 读取 | `health`, `backoffDelay`, `lastRecoveryAt` | IPC 路由时 | 判断是否过了退避期，决定是否触发 probe |
 | **ToolWatchdog** | 调用 | `triggerRecovery(reason)` | 工具超时升级 | 单向通知 |
 | **StatusWriter** | 读取 | `health`, `healthReason`, `unavailableSince`, `rateLimitResetTime`, `cooldownUntil` | tick 末尾 | 写入 agent-status.json |

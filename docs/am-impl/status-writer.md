@@ -8,7 +8,7 @@
 
 **输入**：snapshot、HealthEngine 当前状态
 
-**输出**：`agent-status.json`（Operator 和 MessageRouter 消费）
+**输出**：`agent-status.json`（Operator 和 c4-receive fallback 消费）
 
 **相关决策**：
 - **D-1**：ActivityState 与 HealthState 双层正交。StatusWriter 同时写入两层状态。
@@ -131,7 +131,7 @@ StatusWriter 是该文件的唯一写入方，其他组件通过 SignalStore 读
 | **Monitor Orchestrator** | 调用 | `write()` | tick 末尾调用 |
 | **Guardian** | 调用 | `write()` | offline/stopped 路径也写状态 |
 | **SignalStore** | 消费方 | `agent-status.json` | 下次 tick 读取（冷启动恢复 health） |
-| **MessageRouter** | 消费方 | `agent-status.json` | 查询状态做路由决策 |
+| **c4-receive fallback** | 消费方 | `agent-status.json` | MessageRouter IPC 不可用时做静态 fail-open / unhealthy 判断 |
 | **外部（Operator）** | 消费方 | `agent-status.json` | 监控面板展示 |
 
 ### 常量
