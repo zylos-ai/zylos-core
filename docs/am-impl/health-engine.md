@@ -385,6 +385,7 @@ enterRateLimited(cooldownUntil, resetTime) {
 async runRecoveryProbe() {
   this.lastRecoveryAt = now()
 
+  // ── AuthFailed 分支：checkAuth 即可，不需要 heartbeat ──
   if (this.healthState === 'auth_failed') {
     const authOk = await this.deps.checkAuth()
     if (authOk) {
@@ -394,16 +395,10 @@ async runRecoveryProbe() {
     return { recovered: false, health: 'auth_failed', reason: 'auth_still_failed' }
   }
 
-  // RateLimited / Unavailable → heartbeat probe
-  const controlId = this.deps.enqueueHeartbeat(this.healthState)
-  if (!controlId) {
-    return { recovered: false, health: this.healthState, reason: 'heartbeat_enqueue_failed' }
-  }
+  // ── RateLimited / Unavailable 分支：heartbeat probe ──
+  const result = await this.sendHeartbeatProbe(this.healthState)
 
-  // 等待 heartbeat ack（轮询 getHeartbeatStatus，硬超时 30s）
-  const status = await this.pollHeartbeatStatus(controlId, 30000)
-
-  if (status === 'ack') {
+  if (result.ack) {
     this.setHealth('ok', 'heartbeat_recovered')
     return { recovered: true, health: 'ok' }
   }
@@ -418,9 +413,67 @@ async runRecoveryProbe() {
   }
 
   this.restartFailureCount++
-  return { recovered: false, health: this.healthState, reason: 'heartbeat_timeout' }
+  return { recovered: false, health: this.healthState, reason: result.reason }
 }
 ```
+
+#### sendHeartbeatProbe(phase) — 内部方法
+
+heartbeat probe 的完整异步实现。现有代码中这是 tick-based 的多轮轮询（processHeartbeat 每 tick 检查 pending 文件），新实现改为单次 async 调用。
+
+```javascript
+async sendHeartbeatProbe(phase) {
+  // 1. 通过 C4 control channel 入队一条 heartbeat 控制消息
+  //    enqueueHeartbeat 写入 c4.db control queue，runtime hook 会消费并写 ack
+  const controlId = this.deps.enqueueHeartbeat(phase)
+  if (!controlId) {
+    return { ack: false, reason: 'enqueue_failed' }
+  }
+
+  // 2. 轮询等待 ack（间隔 2s，硬超时 PROBE_TIMEOUT）
+  //    getHeartbeatStatus 查 c4.db 该 control_id 的状态
+  //    状态值：'pending' | 'running' | 'done' | 'failed' | 'timeout' | 'not_found'
+  const deadline = Date.now() + PROBE_TIMEOUT
+  while (Date.now() < deadline) {
+    const status = this.deps.getHeartbeatStatus(controlId)
+
+    if (status === 'done') {
+      return { ack: true }
+    }
+    if (status === 'failed' || status === 'timeout' || status === 'not_found') {
+      return { ack: false, reason: `heartbeat_${status}` }
+    }
+    // 'pending' / 'running' → 继续等待
+    await sleep(PROBE_POLL_INTERVAL)
+  }
+
+  // 3. 超时
+  return { ack: false, reason: 'heartbeat_timeout' }
+}
+```
+
+**heartbeat 机制说明**：
+
+```
+HealthEngine                     C4 control queue                Runtime Agent
+    │                                 │                              │
+    │ enqueueHeartbeat('recovery')    │                              │
+    │ ────────────────────────────▶   │                              │
+    │   写入 {type:'heartbeat',       │                              │
+    │    control_id, phase}           │                              │
+    │                                 │  runtime hook 读取 control   │
+    │                                 │ ─────────────────────────▶   │
+    │                                 │                              │
+    │                                 │  ◀──── ack (status='done')   │
+    │                                 │                              │
+    │ getHeartbeatStatus(controlId)   │                              │
+    │ ────────────────────────────▶   │                              │
+    │ ◀─── 'done'                     │                              │
+    │                                 │                              │
+    │ → recovered!                    │                              │
+```
+
+heartbeat 不是 HTTP ping — 它通过 C4 control queue（c4.db SQLite）传递。`enqueueHeartbeat()` 写入一条控制消息，runtime 侧的 hook 消费该消息并标记完成。如果 runtime 无响应（卡死/崩溃），status 会保持 pending 直到超时。
 
 #### notifyUserMessage(currentTime)
 
@@ -500,6 +553,8 @@ triggerRecovery(reason) {
 | USER_MESSAGE_RECOVERY_COOLDOWN | 60s | user message recovery 冷却 |
 | CHECK_DELAY | 5s | onUserMessageDelivered() 投递后等待时间 |
 | CONSECUTIVE_HITS_THRESHOLD | 2 | rate limit / sticky error 需连续命中次数 |
+| PROBE_TIMEOUT | 30000ms (30s) | sendHeartbeatProbe 硬超时 |
+| PROBE_POLL_INTERVAL | 2000ms (2s) | heartbeat status 轮询间隔 |
 | BACKOFF_SEQUENCE | 60s, 300s, 1500s, 3600s | `min(3600, 60 × 5^(n-1))` |
 
 ## 3. 实施方案
