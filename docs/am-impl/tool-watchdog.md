@@ -12,7 +12,7 @@
 
 **相关决策**：
 - **D-23**：跨模块状态走 SignalStore，不直接读其他模块私有数据。ToolWatchdog 通过 snapshot 读取 health 状态，不直接持有 HealthEngine 引用。
-- **D-24**：ToolWatchdog 是有状态的干预系统（6 阶段状态机 + 持久化 + 主动按键中断），不是无状态健康检查，不归入 health-checks 子系统。
+- **D-24**：ToolWatchdog 是有状态的干预系统（6 阶段状态机 + 持久化 + 主动按键中断），不是无状态健康检查，不归入 health-checks 子系统。顶层设计记为 5 阶段——将 interrupt_sent 与 interrupt_retry_wait 视为同一「干预」阶段；本文档按实现拆分为 6 阶段，因两者退出条件不同（grace_deadline vs retry_after）需独立 phase 值驱动状态机。
 - **D-33**：移除 launchGracePeriod。tool-call 响应速度与 runtime 是否刚拉起无关，ToolWatchdog 不需要启动宽限期。
 
 ## 2. 组件设计
