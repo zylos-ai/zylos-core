@@ -434,7 +434,7 @@ activity-monitor/
 #### D-16. Probe 与 restart 解耦
 
 **状态**：已确认
-**决策**：heartbeat/probe 失败不默认触发 restart。目前唯一已知需要 restart 的场景是 corrupted image 等导致的 sticky context-poison（见 D-18）。具体的 error 分类与恢复动作类型留待技术实施方案定义。
+**决策**：heartbeat/probe 失败不默认触发 restart。明确需要 restart 的场景只有两类：corrupted image 等导致的 sticky context-poison（见 D-18），以及 ToolWatchdog 中断/等待后仍未恢复的最终升级（见 D-24）。具体的 error 分类与恢复动作类型留待技术实施方案定义。
 
 #### D-18. Sticky context 场景保留 session restart 自愈
 

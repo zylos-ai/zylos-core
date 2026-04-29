@@ -72,7 +72,7 @@ auth failure 的发现路径：
 
 ### 2.1 问题
 
-HealthEngine 使用 heartbeat probe 作为 recovery 的核心探测手段（RateLimited / Unavailable 的 recovery 都依赖 heartbeat ack）。但 heartbeat control 消息从 HealthEngine 写入 c4.db 到 runtime hook 消费并 ack 的完整链路没有定义。
+HealthEngine 使用 heartbeat probe 作为 recovery 的核心探测手段（RateLimited / Unavailable 的 recovery 都依赖 heartbeat ack）。但 heartbeat control 消息从 HealthEngine 写入 c4.db 到 runtime heartbeat control 规则消费并 ack 的完整链路没有定义。
 
 关键风险：如果 heartbeat control 被 unhealthy gate 拦截（dispatcher 在 health != OK 时不投递 control），recovery probe 永远失败，系统无法自愈。
 
@@ -84,7 +84,7 @@ HealthEngine 使用 heartbeat probe 作为 recovery 的核心探测手段（Rate
 - `recovery`：MessageRouter / HealthEngine recovery probe 使用。
 - `post_restart`：Guardian 拉起 runtime 后的恢复确认 probe 使用。
 
-如果历史上存在 periodic / primary heartbeat auto-ack，它不能和 recovery heartbeat 混用。`phase='recovery' | 'post_restart'` 的 heartbeat 只有 runtime hook 显式 ack 才能变为 `done`。
+如果历史上存在 periodic / primary heartbeat auto-ack，它不能和 recovery heartbeat 混用。`phase='recovery' | 'post_restart'` 的 heartbeat 只有 runtime heartbeat control 规则显式 ack 才能变为 `done`。
 
 #### 投递链路
 
@@ -99,7 +99,7 @@ HealthEngine → enqueueHeartbeat(phase) → c4.db control 表
                                      tmux send-keys 注入
                                               │
                                               ▼
-                               runtime Heartbeat hook 消费
+                               runtime heartbeat control 规则消费
                                               │
                                               ▼
                                   UPDATE status = 'done'
@@ -129,13 +129,13 @@ Heartbeat 不经过 MessageRouter / c4-receive。由 HealthEngine 直接写入 c
   bypass_state: 1,              // 必须绕过 health gate
   priority: 0,                  // 高于普通 user/control 消息
   ack_deadline_seconds: 25,     // 对齐 PROBE_TIMEOUT
-  append_ack_suffix: true,      // 必须附带 ack via control_id，供 runtime hook 显式 ack
+  append_ack_suffix: true,      // 必须附带 ack via control_id，供 runtime heartbeat control 规则显式 ack
 }
 ```
 
-**content 格式**：`content` 必须以 `Heartbeat check.` 开头，并包含 `[phase=recovery]` 或 `[phase=post_restart]`。runtime hook 使用该前缀识别 heartbeat control，并解析 `[phase=...]` 判断 probe 类型。
+**content 格式**：`content` 必须以 `Heartbeat check.` 开头，并包含 `[phase=recovery]` 或 `[phase=post_restart]`。runtime heartbeat control 规则使用该前缀识别 heartbeat control，并解析 `[phase=...]` 判断 probe 类型。
 
-**ack suffix**：recovery heartbeat 不得传 `--no-ack-suffix`。C4 必须在投递内容后附加当前 `control_id` 的 `ack via: node ... c4-control.js ack --id <id>` 后缀，runtime hook 通过该后缀执行显式 ack。`无 auto-ack` 指 dispatcher 不得自行把 heartbeat 标记为 done，不代表去掉 ack suffix。
+**ack suffix**：recovery heartbeat 不得传 `--no-ack-suffix`。C4 必须在投递内容后附加当前 `control_id` 的 `ack via: node ... c4-control.js ack --id <id>` 后缀，runtime heartbeat control 规则通过该后缀执行显式 ack。`无 auto-ack` 指 dispatcher 不得自行把 heartbeat 标记为 done，不代表去掉 ack suffix。
 
 如果实现选择 control 投递循环天然不检查 agent health，仍建议保留 `bypass_state=1` 作为可审计 contract。
 
@@ -146,7 +146,7 @@ pending ─── dispatcher 取出并投递 ──▶ running
                                         │
                           ┌──────────────┴──────────────┐
                           │                             │
-                runtime hook 消费并 ack            超时未 ack
+                runtime control 规则 ack            超时未 ack
                           │                             │
                           ▼                             ▼
                         done                     HealthEngine
@@ -156,16 +156,16 @@ pending ─── dispatcher 取出并投递 ──▶ running
 | 状态转移 | 执行者 | 条件 |
 |---------|--------|------|
 | pending → running | c4-dispatcher | dispatcher 成功 send-keys 到 tmux |
-| running → done | runtime hook | hook 识别 heartbeat 内容，处理完毕后 UPDATE |
+| running → done | runtime heartbeat control 规则 | 识别 heartbeat 内容，处理完毕后 UPDATE |
 | pending/running → 超时 | HealthEngine | `sendHeartbeatProbe()` poll 循环超过 PROBE_TIMEOUT(25s) |
 
 **超时语义**：HealthEngine 在 `sendHeartbeatProbe()` 的 poll 循环中判定超时（`Date.now() > deadline`），返回 `{ ack: false, reason: 'heartbeat_timeout' }`。DB 中 status 可能仍为 pending 或 running——stale entries 由 TaskScheduler maintenance 清理，不影响 probe 判定。
 
 #### ack 机制
 
-runtime 的 Heartbeat hook 识别投递到 runtime 的 `Heartbeat check. [phase=...]` 文本，且 `phase in ('recovery', 'post_restart')`、消息带有当前 control id 的 ack suffix 时，执行 suffix 中的 `c4-control.js ack --id <id>`，使 control 状态变为 `done`。
+runtime 的 heartbeat control 规则识别投递到 runtime 的 `Heartbeat check. [phase=...]` 文本，且 `phase in ('recovery', 'post_restart')`、消息带有当前 control id 的 ack suffix 时，执行 suffix 中的 `c4-control.js ack --id <id>`，使 control 状态变为 `done`。这个规则由 runtime/system prompt 或等价 runtime 控制处理保证，不对应 `hooks.md` 中列出的 4 个代码 hook 文件。
 
-**无 auto-ack**。heartbeat 的 ack 必须由 runtime hook 显式完成。原因：heartbeat 的目的是验证 runtime 是否响应，auto-ack 会导致 "runtime 已死但 heartbeat 显示 done" 的假阳性。
+**无 auto-ack**。heartbeat 的 ack 必须由 runtime heartbeat control 规则显式完成。原因：heartbeat 的目的是验证 runtime 是否响应，auto-ack 会导致 "runtime 已死但 heartbeat 显示 done" 的假阳性。
 
 #### enqueueHeartbeat / getHeartbeatStatus 语义明确
 
@@ -195,7 +195,7 @@ runtime 的 Heartbeat hook 识别投递到 runtime 的 `Heartbeat check. [phase=
 |------|------|
 | health-engine.md | `enqueueHeartbeat()` / `getHeartbeatStatus()` 的 deps 注释更新为本 contract 定义的完整语义 |
 | c4-changes.md | c4-dispatcher 需实现 recovery heartbeat bypass health gate、无 auto-ack、优先投递规则 |
-| hooks.md | 确认 Heartbeat hook 的 ack 机制与本 contract 一致（显式 ack，无 auto-ack） |
+| hooks.md | 说明 heartbeat ack 是 runtime control 行为，不是新增代码 hook；确认显式 ack、无 auto-ack |
 
 ---
 
@@ -339,7 +339,7 @@ Monitor Orchestrator 是 ToolWatchdog episode 状态的落盘责任方：
 | health-engine.md | sticky error 分支改为进入 unavailable | Contract §3 |
 | c4-changes.md | dispatcher control 消息独立投递 + 无 health gate + 优先投递 | Contract §2 |
 | message-router.md | reason catalog 新增 `sticky_context_restart` | Contract §3 |
-| hooks.md | 确认 Heartbeat hook ack 机制（显式 ack，无 auto-ack） | Contract §2 |
+| hooks.md | 说明 heartbeat ack 是 runtime control 行为（显式 ack，无 auto-ack），不是新增代码 hook | Contract §2 |
 | monitor-orchestrator.md | 消费 ToolWatchdog state mutation intent 并落盘 | Contract §4 |
 | tool-watchdog.md | 明确自身只返回状态意图，不负责持久化 | Contract §4 |
 

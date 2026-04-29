@@ -284,13 +284,13 @@ interface HealthEngineDeps {
   //   { type:'heartbeat', content:`Heartbeat check. [phase=${phase}]`, phase, status:'pending' }
   //   phase: 'recovery' | 'post_restart' — 标识 probe 阶段
   //   返回 control_id（成功）或 false（DB 写入失败）
-  //   heartbeat control 必须 bypass health gate，并保留 ack suffix 供 runtime hook 显式 ack（contracts.md §2）
+  //   heartbeat control 必须 bypass health gate，并保留 ack suffix 供 runtime heartbeat control 规则显式 ack（contracts.md §2）
 
   getHeartbeatStatus(controlId: number): string
   //   读取 c4.db 该 control_id 的 status
   //   返回值：'pending' | 'running' | 'done' | 'failed' | 'timeout' | 'not_found'
-  //   'running' = dispatcher 已投递到 tmux，等待 runtime hook ack
-  //   'done' = runtime hook 已消费并显式 ack（无 auto-ack）
+  //   'running' = dispatcher 已投递到 tmux，等待 runtime heartbeat control 规则 ack
+  //   'done' = runtime heartbeat control 规则已消费并显式 ack（无 auto-ack）
 
   // ── 来源: RuntimeAdapter（runtime-specific 实现）──
   checkAuth(): Promise<{ ok: boolean, reason?: string, output?: string }>
@@ -544,8 +544,11 @@ async runRecoveryProbe() {
     return { recovered: false, health: 'auth_failed', reason: authResult.reason || 'auth_still_failed' }
   }
 
-  // ── RateLimited / Unavailable 分支：heartbeat probe ──
-  const result = await this.sendHeartbeatProbe(this.healthState)
+  // ── RateLimited / Unavailable 分支：recovery heartbeat probe ──
+  // phase 固定为 'recovery'，不得使用 healthState 作为 phase。
+  // contracts.md §2 / c4-changes.md §2.6-2.7 只允许 recovery | post_restart；
+  // dispatcher bypass / 禁 auto-ack 规则也只按这两个 phase 生效。
+  const result = await this.sendHeartbeatProbe('recovery')
 
   if (result.ack) {
     this.setHealth('ok', 'heartbeat_recovered')
@@ -623,7 +626,7 @@ HealthEngine                     C4 control queue (c4.db)        Runtime Agent
     │                                 │  + ack suffix                │
     │                                 │ ─────────────────────────▶   │
     │                                 │                              │
-    │                                 │  runtime hook 执行 ack suffix│
+    │                                 │  runtime control 规则执行 ack │
     │                                 │  ◀──── UPDATE status='done'  │
     │                                 │                              │
     │ getHeartbeatStatus(N)           │                              │
@@ -633,7 +636,7 @@ HealthEngine                     C4 control queue (c4.db)        Runtime Agent
     │ → { ack: true }                 │                              │
 ```
 
-heartbeat 通过 C4 control queue（c4.db SQLite）传递，不是 HTTP ping。`enqueueHeartbeat()` 写入控制消息，内容格式固定为 `Heartbeat check. [phase=<phase>]`，dispatcher 投递时必须保留 ack suffix。runtime 侧 hook 识别该内容并执行 ack suffix 后，control 状态才变为 done；runtime 无响应时 status 保持 pending/running，直到 HealthEngine 的 PROBE_TIMEOUT。
+heartbeat 通过 C4 control queue（c4.db SQLite）传递，不是 HTTP ping。`enqueueHeartbeat()` 写入控制消息，内容格式固定为 `Heartbeat check. [phase=<phase>]`，dispatcher 投递时必须保留 ack suffix。runtime heartbeat control 规则识别该内容并执行 ack suffix 后，control 状态才变为 done；runtime 无响应时 status 保持 pending/running，直到 HealthEngine 的 PROBE_TIMEOUT。
 
 #### notifyUserMessage(currentTime)
 
@@ -686,8 +689,14 @@ onProcessRestarted() {
   if (this.healthState !== 'ok') {
     setTimeout(async () => {
       if (this.healthState !== 'ok') {
-        const result = await this.runRecoveryProbe()
-        this.deps.log(`post-restart probe: recovered=${result.recovered}, health=${result.health}`)
+        const result = await this.sendHeartbeatProbe('post_restart')
+        if (result.ack) {
+          this.setHealth('ok', 'post_restart_recovered')
+          this.deps.log('post-restart probe: recovered=true, health=ok')
+          return
+        }
+        this.restartFailureCount++
+        this.deps.log(`post-restart probe: recovered=false, health=${this.healthState}, reason=${result.reason}`)
       }
     }, this.options.checkDelay * 1000)
   }
