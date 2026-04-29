@@ -76,8 +76,6 @@ activity-monitor/scripts/
 
 | Key | 类型 | 默认值 | 所属组件 |
 |-----|------|--------|---------|
-| heartbeat_enabled | bool | false | HealthEngine |
-| codex_heartbeat_enabled | bool | false | HealthEngine |
 | auto_approve_permission | bool | true | hook-auth-prompt |
 | new_session_threshold | int | 70 | context-monitor |
 | daily_upgrade_enabled | bool | false | TaskScheduler |
