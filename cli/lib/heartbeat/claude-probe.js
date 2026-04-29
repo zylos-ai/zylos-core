@@ -52,6 +52,7 @@ const API_ERROR_PATTERNS = [
  * @param {string}  [opts.tmuxSession='claude-main']
  * @param {number}  [opts.ackDeadline=300]      - ACK deadline for normal heartbeats (seconds)
  * @param {number}  [opts.stuckAckDeadline=120] - ACK deadline for stuck-phase heartbeats
+ * @param {number}  [opts.recoveryAckDeadline=25] - ACK deadline for recovery heartbeats
  * @returns {object} Partial HeartbeatEngine deps
  */
 export function createClaudeProbe({
@@ -59,6 +60,7 @@ export function createClaudeProbe({
   tmuxSession = 'claude-main',
   ackDeadline = 300,
   stuckAckDeadline = 120,
+  recoveryAckDeadline = 25,
 }) {
   return {
 
@@ -70,7 +72,7 @@ export function createClaudeProbe({
      * @returns {boolean}
      */
     enqueueHeartbeat(phase) {
-      const deadline = phase === 'stuck' ? stuckAckDeadline : ackDeadline;
+      const deadline = _getAckDeadline(phase, { ackDeadline, stuckAckDeadline, recoveryAckDeadline });
       const content = `Heartbeat check. [phase=${phase}]`;
       try {
         const out = execFileSync('node', [C4_CONTROL, 'enqueue',
@@ -186,6 +188,12 @@ export function createClaudeProbe({
       try { fs.unlinkSync(pendingFile); } catch { /* already gone */ }
     },
   };
+}
+
+function _getAckDeadline(phase, { ackDeadline, stuckAckDeadline, recoveryAckDeadline }) {
+  if (phase === 'recovery' || phase === 'post_restart') return recoveryAckDeadline;
+  if (phase === 'stuck') return stuckAckDeadline;
+  return ackDeadline;
 }
 
 // ── Private helpers ──────────────────────────────────────────────────────────

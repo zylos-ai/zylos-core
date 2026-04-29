@@ -452,11 +452,11 @@ describe('HeartbeatEngine', () => {
       engine.processHeartbeat(true, now + 1);
       assert.ok(engine.signalDetectedAt > 0);
       // Should NOT have sent probe yet (grace period not elapsed)
-      assert.ok(!calls.enqueueHeartbeat.includes('signal-recovery'));
+      assert.ok(!calls.enqueueHeartbeat.includes('post_restart'));
 
       // Third tick: grace period elapsed
       engine.processHeartbeat(true, now + 31);
-      assert.ok(calls.enqueueHeartbeat.includes('signal-recovery'));
+      assert.ok(calls.enqueueHeartbeat.includes('post_restart'));
     });
 
     it('does not trigger on null→true (first tick)', () => {
@@ -492,7 +492,7 @@ describe('HeartbeatEngine', () => {
       assert.ok(engine.signalDetectedAt > 0);
 
       engine.processHeartbeat(true, now + 15); // grace elapsed
-      assert.ok(calls.enqueueHeartbeat.includes('signal-down-check'));
+      assert.ok(calls.enqueueHeartbeat.includes('post_restart'));
     });
 
     it('consumes signal after acceleration fires', () => {
@@ -509,7 +509,7 @@ describe('HeartbeatEngine', () => {
 
     it('resets signalDetectedAt on heartbeat success', () => {
       const { deps } = createMockDeps();
-      deps._pending = { control_id: 1, phase: 'signal-recovery' };
+      deps._pending = { control_id: 1, phase: 'post_restart' };
       deps._heartbeatStatus = 'done';
       const engine = new HeartbeatEngine(deps, { initialHealth: 'recovering' });
       engine.signalDetectedAt = 1000;

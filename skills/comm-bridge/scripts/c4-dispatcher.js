@@ -162,13 +162,23 @@ function isAgentStatusFresh() {
 }
 
 export function getHeartbeatPhase(content) {
-  const match = String(content || '').match(/\[phase=([a-z-]+)\]/i);
+  const match = String(content || '').match(/\[phase=([a-z_-]+)\]/i);
   return match ? match[1].toLowerCase() : 'unknown';
+}
+
+export function isRecoveryHeartbeatPhase(phase) {
+  return phase === 'recovery' || phase === 'post_restart';
 }
 
 export function shouldAutoAckHeartbeat({ item, agentState, procState, confirmedActive }) {
   const isHeartbeat = Boolean(item && (item.content || '').includes('Heartbeat check'));
   if (!isHeartbeat) return false;
+  const phase = getHeartbeatPhase(item.content);
+
+  // Recovery heartbeats are real runtime liveness probes. They must be
+  // delivered end-to-end and explicitly acked by the runtime heartbeat control
+  // rule, never by dispatcher auto-ack.
+  if (isRecoveryHeartbeatPhase(phase)) return false;
 
   if (agentState?.healthy !== true) return false;
 
@@ -185,7 +195,7 @@ export function shouldAutoAckHeartbeat({ item, agentState, procState, confirmedA
   // probes must still be delivered end-to-end so the heartbeat engine can
   // observe real failures while the session is idle.
   return (
-    getHeartbeatPhase(item.content) === 'primary' &&
+    phase === 'primary' &&
     agentState?.health === 'ok' &&
     agentState?.state === 'idle' &&
     agentState?.idleSeconds >= REQUIRE_IDLE_MIN_SECONDS &&

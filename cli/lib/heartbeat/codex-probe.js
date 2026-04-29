@@ -44,12 +44,14 @@ const C4_CONTROL = path.join(ZYLOS_DIR, '.claude/skills/comm-bridge/scripts/c4-c
  * @param {string}  opts.pendingFile       - Path to codex-heartbeat-pending.json
  * @param {number}  [opts.ackDeadline=300]      - ACK deadline for normal heartbeats (seconds)
  * @param {number}  [opts.stuckAckDeadline=120] - ACK deadline for stuck-phase heartbeats
+ * @param {number}  [opts.recoveryAckDeadline=25] - ACK deadline for recovery heartbeats
  * @returns {object} Partial HeartbeatEngine deps
  */
 export function createCodexProbe({
   pendingFile,
   ackDeadline = 300,
   stuckAckDeadline = 120,
+  recoveryAckDeadline = 25,
 }) {
   return {
 
@@ -61,7 +63,7 @@ export function createCodexProbe({
      * @returns {boolean}
      */
     enqueueHeartbeat(phase) {
-      const deadline = phase === 'stuck' ? stuckAckDeadline : ackDeadline;
+      const deadline = _getAckDeadline(phase, { ackDeadline, stuckAckDeadline, recoveryAckDeadline });
       const content = `Heartbeat check. [phase=${phase}]`;
       try {
         const out = execFileSync('node', [C4_CONTROL, 'enqueue',
@@ -139,6 +141,12 @@ export function createCodexProbe({
       try { fs.unlinkSync(pendingFile); } catch { /* already gone */ }
     },
   };
+}
+
+function _getAckDeadline(phase, { ackDeadline, stuckAckDeadline, recoveryAckDeadline }) {
+  if (phase === 'recovery' || phase === 'post_restart') return recoveryAckDeadline;
+  if (phase === 'stuck') return stuckAckDeadline;
+  return ackDeadline;
 }
 
 // ── Private helpers ──────────────────────────────────────────────────────────

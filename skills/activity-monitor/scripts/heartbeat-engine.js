@@ -266,8 +266,7 @@ export class HeartbeatEngine {
     if ((this.healthState === 'recovering' || this.healthState === 'down' || this.healthState === 'auth_failed') && this._shouldAccelerate(currentTime)) {
       this.deps.log(`Process signal acceleration: Agent restarted (health=${this.healthState}), verifying immediately`);
       this.signalDetectedAt = 0; // Consume the signal
-      const phase = this.healthState === 'down' ? 'signal-down-check' : 'signal-recovery';
-      const ok = this.enqueueHeartbeat(phase);
+      const ok = this.enqueueHeartbeat('post_restart');
       if (!ok) {
         this.lastRecoveryAt = Math.floor(Date.now() / 1000);
       }
