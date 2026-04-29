@@ -25,7 +25,7 @@
 | **进程检测** | tmux session 检测 | `tmux has-session` 检查 session 是否存在 |
 | | runtime 进程检测 | `adapter.isRunning()` 检查 runtime 进程是否在 tmux 内存活 |
 | **拉起** | 无条件拉起 | 进程不存在 → 调用 `adapter.launch()`，不读 HealthState（D-20） |
-| | 状态清理 | 拉起前清除 stale heartbeat-pending、context temp files、tool lifecycle state |
+| | 状态清理 | 拉起前清除 stale 文件（heartbeat-pending.json、context temp files）+ 重置 tool lifecycle state |
 | | 启动提示注入 | Claude 无 SessionStart hook 时注入 C4 control 启动提示（fallback） |
 | **退避** | 指数退避 | `delay = min(5s × 2^n, 60s)` → 序列 5, 10, 20, 40, 60, 60... |
 | | 退避重置 | runtime 连续运行超过 60s → 重置 consecutiveRestarts |
@@ -79,12 +79,12 @@ startAgent()
   │     runtimeLaunchAtMs = Date.now()
   │
   ├─ 4. 清理 stale 状态
-  │     ├─ clearHeartbeatPending()
+  │     ├─ 删除 heartbeat-pending.json（直接文件操作，不经 HealthEngine）
   │     ├─ 删除 context temp files
   │     └─ resetToolLifecycleRuntimeState()
   │
   ├─ 5. 启动 runtime
-  │     adapter.launch()（fire-and-forget，不 await）
+  │     adapter.launch()（fire-and-forget，不 await，reject 只 log）
   │
   └─ 6. 启动提示（Claude fallback）
         无 SessionStart hook → enqueueStartupControl()
@@ -92,11 +92,26 @@ startAgent()
 
 > **行为变更**：移除现有代码中的认证预检（`adapter.checkAuth()`）和 auth 抑制机制。按 D-20，Guardian 无条件拉起，不关心 auth 状态。Auth 检测由 HealthEngine 在 user message 投递后事件驱动完成（见 [health-engine.md](health-engine.md) §2 OK → 非 OK 检测时机）。若 token 失效导致 runtime 启动后立即退出，Guardian 通过退避延迟自然减速。
 
+### 失败语义与退避触发
+
+`adapter.launch()` 是 fire-and-forget：调用后不等待结果，Promise reject 只记日志。Guardian 不通过 launch 的返回值判断成功或失败。
+
+**退避的驱动力是"进程不在"的持续观测，不是 launch 的返回值：**
+
+1. `startAgent()` 调用时立即 `consecutiveRestarts++`，计算 `restartDelay = min(5s × 2^n, 60s)`
+2. 调用 `adapter.launch()`，不 await
+3. 设置 `startupGrace = 30`（30 ticks 内不检测进程）
+4. grace 期结束后，若进程仍不存在 → `notRunningCount` 每 tick +1
+5. `notRunningCount >= restartDelay` 时触发下一次 `startAgent()`
+6. 若 runtime 连续运行超过 60s → `consecutiveRestarts` 重置为 0
+
+即：launch 成功但进程很快退出、launch Promise reject、tmux 创建失败——对 Guardian 来说都是同一种情况：下次检测时进程不在，继续走退避重试。
+
 ### 接口定义
 
 ```javascript
 class Guardian {
-  constructor(adapter: RuntimeAdapter, healthEngine: HealthEngine, config: object)
+  constructor(adapter: RuntimeAdapter, config: object)
   tick(snapshot: Snapshot): void         // 每次 tick 调用
   async startAgent(): void               // 拉起 runtime（内部方法，tick 触发）
 }
@@ -122,8 +137,7 @@ class Guardian {
 | **Adapter** | 调用 | `launch()` | 拉起 runtime |
 | **Adapter** | 调用 | `stop()` | kill tmux session（冻结处理由 Orchestrator 调用，不是 Guardian） |
 | **Adapter** | 调用 | `isRunning()` | 检测 runtime 进程存活 |
-| **HealthEngine** | 调用 | `clearHeartbeatPending()` | 拉起前清除 stale heartbeat |
-| **HealthEngine** | **不读取** | `health` / `canRestart()` | D-1, D-20：Guardian 不读 HealthState，不因任何健康状态阻止拉起 |
+| **HealthEngine** | **无交互** | — | D-1, D-20：Guardian 不读写 HealthState，不持有 HealthEngine 引用 |
 
 ### 常量
 
