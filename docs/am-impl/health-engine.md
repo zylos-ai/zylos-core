@@ -208,8 +208,7 @@ interface ProbeResult {
 
 | 交互方 | 方向 | 方法/数据 | 用途 |
 |-------|------|----------|------|
-| **Guardian** | 被调用 | `clearHeartbeatPending()` | 拉起前清除 stale heartbeat |
-| **Guardian** | **不调用** | `canRestart()` / `setHealth()` | D-20：Guardian 不读写 HealthState |
+| **Guardian** | **无交互** | — | D-20：Guardian 不持有 HealthEngine 引用，不读写 HealthState。stale heartbeat-pending.json 由 Guardian 直接删除文件 |
 | **c4-dispatcher** | 被调用 | `onUserMessageDelivered()` | user message 投递后检测（行为变更） |
 | **MessageRouter** | 被调用 | `runRecoveryProbe()` | IPC 路由时执行恢复探测 |
 | **ToolWatchdog** | 被调用 | `triggerRecovery(reason)` | 工具超时升级 |
