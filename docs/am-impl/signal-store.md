@@ -116,6 +116,7 @@ interface Snapshot {
   state: 'idle' | 'busy' | 'offline' | 'stopped',
   health: 'ok' | 'unavailable' | 'rate_limited' | 'auth_failed',  // D-2/D-3
   unavailable_since: number | null,  // D-3: epoch seconds, 消费端基于此判断严重程度
+  unavailable_reason: string | null, // D-2: 诊断信息，所有非 OK 状态共用
   thinking: boolean,
   last_activity: number,           // epoch seconds
   last_api_activity: number,       // epoch seconds (optional)

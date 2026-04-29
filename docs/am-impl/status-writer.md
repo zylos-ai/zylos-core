@@ -25,6 +25,7 @@
 | | 活动时间来源 | 优先级：conversation file mtime → tmux activity → default → api hook |
 | | idle 时间计算 | busy → idle 转换时记录 idleSince，计算 idleSeconds |
 | **状态聚合** | HealthState | 从 HealthEngine 读取 `health` 字段 |
+| | 诊断信息（D-2） | 非 OK 状态附加 `unavailable_reason`；ok 时清空 |
 | | rate limit 附加信息 | health=rate_limited 时附加 `rate_limit_reset` + `cooldown_until` |
 | | Tool watchdog 状态 | 从 ToolPipeline/ToolWatchdog 聚合工具监控信息 |
 | | Foreground identity | 从 ToolPipeline 获取前台会话身份 |
@@ -56,7 +57,11 @@ write(snapshot, healthEngine, extra)
   │   │     ├─ active_tool_name, active_tool_running_seconds, active_tool_summary
   │   │     ├─ watchdog_phase, watchdog_block_reason, watchdog_episode_key
   │   │     ├─ foreground_session_source, foreground_session_observed_at
-  │   │     └─ health + rate_limit_reset + cooldown_until（from HealthEngine）
+  │   │     └─ health 附加字段（from HealthEngine，按状态分支写入）：
+  │   │        ok:           清空所有附加字段
+  │   │        unavailable:  unavailable_since + unavailable_reason
+  │   │        rate_limited: unavailable_reason + rate_limit_reset + cooldown_until
+  │   │        auth_failed:  unavailable_reason
   │   │
   │   └─ 4. atomicWriteJson(agent-status.json)
   │
@@ -119,7 +124,7 @@ StatusWriter 是该文件的唯一写入方，其他组件通过 SignalStore 读
 
 | 交互方 | 方向 | 方法/数据 | 用途 |
 |-------|------|----------|------|
-| **HealthEngine** | 读取 | `health`, `rateLimitResetTime`, `cooldownUntil` | 写入 health 及附加信息 |
+| **HealthEngine** | 读取 | `health`, `healthReason`, `rateLimitResetTime`, `cooldownUntil` | 写入 health 及附加信息（D-2） |
 | **ToolPipeline** | 读取 | `getActiveTools()`, foreground identity, watchdog 状态 | 写入工具相关字段 |
 | **ToolWatchdog** | 读取 | `watchdog_phase`, `watchdog_block_reason` | 写入 watchdog 状态 |
 | **Monitor Orchestrator** | 调用 | `write()` | tick 末尾调用 |
