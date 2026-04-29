@@ -12,6 +12,7 @@
 
 **相关决策**：
 - **D-1**：ActivityState 与 HealthState 双层正交。Guardian 不读 HealthState 决定是否拉起。
+- **D-5/D-38**：业务模块不做 runtime 分支判断，所有 Claude / Codex 差异通过 Adapter DI 注入。
 - **D-20**：Guardian 原则为「Offline → 无条件拉起进程」，不读 HealthState。拉起失败后通过退避逻辑（递增延迟）避免无限快速重启。进程状态与健康状态完全正交，Guardian 不因 RateLimited 或任何 HealthState 阻止拉起。
 - **D-21**：PM2 重启 AM 自身时，Guardian 不从磁盘恢复退避计数器。AM 冷启动 = Guardian 全新开始，立即尝试拉起 tmux。
 - **D-33**：保留 startupGrace (30s)，Guardian 拉起 runtime 后的启动保护窗口，防止 runtime 初始化期间被误判为 offline。
@@ -25,8 +26,9 @@
 | **进程检测** | tmux session 检测 | `tmux has-session` 检查 session 是否存在 |
 | | runtime 进程检测 | `adapter.isRunning()` 检查 runtime 进程是否在 tmux 内存活 |
 | **拉起** | 无条件拉起 | 进程不存在 → 调用 `adapter.launch()`，不读 HealthState（D-20） |
-| | 状态清理 | 拉起前清除 stale 文件（heartbeat-pending.json、context temp files）+ 重置 tool lifecycle state |
-| | 启动提示注入 | Claude 无 SessionStart hook 时注入 C4 control 启动提示（fallback） |
+| | stale 状态清理 | 拉起前调用 `adapter.clearStaleState()` 清除上一 session 的残留文件（heartbeat-pending、context temp files） |
+| | tool 状态重置 | 拉起前调用 `deps.resetToolLifecycleState()` 重置 tool lifecycle / watchdog / api-activity |
+| | 启动提示注入 | 调用 `adapter.enqueueStartupPrompt()` 注入启动提示（D-5：差异封装在 adapter 内，Guardian 不做 runtime 分支判断） |
 | **退避** | 指数退避 | `delay = min(5s × 2^n, 60s)` → 序列 5, 10, 20, 40, 60, 60... |
 | | 退避重置 | runtime 连续运行超过 60s → 重置 consecutiveRestarts |
 | **保护** | 启动保护 | 拉起后 30 ticks 跳过 offline 检测（D-33） |
@@ -36,7 +38,7 @@
 ### 拉起决策流程
 
 ```
-monitorLoop() 每 tick：
+Guardian.tick() 每 tick：
   │
   ├─ tmux session 不存在？
   │   └─ startupGrace > 0？ → 倒计时，跳过
@@ -79,18 +81,24 @@ startAgent()
   │     runtimeLaunchAtMs = Date.now()
   │
   ├─ 4. 清理 stale 状态
-  │     ├─ 删除 heartbeat-pending.json（直接文件操作，不经 HealthEngine）
-  │     ├─ 删除 context temp files
-  │     └─ resetToolLifecycleRuntimeState()
+  │     ├─ adapter.clearStaleState()
+  │     │   （删除 heartbeat-pending.json、context temp files 等 runtime 相关残留）
+  │     └─ deps.resetToolLifecycleState()
+  │         （重置 tool lifecycle + watchdog + api-activity + hook state）
   │
   ├─ 5. 启动 runtime
   │     adapter.launch()（fire-and-forget，不 await，reject 只 log）
   │
-  └─ 6. 启动提示（Claude fallback）
-        无 SessionStart hook → enqueueStartupControl()
+  └─ 6. 启动提示
+        adapter.enqueueStartupPrompt()
+        （Claude: 检测 SessionStart hook 存在 → noop；不存在 → C4 control fallback）
+        （Codex: 自带 bootstrap prompt，noop）
 ```
 
-> **行为变更**：移除现有代码中的认证预检（`adapter.checkAuth()`）和 auth 抑制机制。按 D-20，Guardian 无条件拉起，不关心 auth 状态。Auth 检测由 HealthEngine 在 user message 投递后事件驱动完成（见 [health-engine.md](health-engine.md) §2 OK → 非 OK 检测时机）。若 token 失效导致 runtime 启动后立即退出，Guardian 通过退避延迟自然减速。
+> **行为变更**：
+> 1. 移除现有代码中的认证预检（`adapter.checkAuth()`）和 auth 抑制机制。按 D-20，Guardian 无条件拉起，不关心 auth 状态。Auth 检测由 HealthEngine 在 user message 投递后事件驱动完成（见 [health-engine.md](health-engine.md) §2 OK → 非 OK 检测时机）。若 token 失效导致 runtime 启动后立即退出，Guardian 通过退避延迟自然减速。
+> 2. 现有代码中的启动提示逻辑包含 `adapter.runtimeId === 'claude'` 分支判断，违反 D-5/D-38。改为 `adapter.enqueueStartupPrompt()`，runtime 差异封装在 adapter 内部。
+> 3. 现有代码通过 `engine.deps.clearHeartbeatPending()` 绕道 HealthEngine 删除 heartbeat-pending.json。改为 `adapter.clearStaleState()`，runtime 特定的文件清理封装在 adapter 内部。
 
 ### 失败语义与退避触发
 
@@ -111,9 +119,24 @@ startAgent()
 
 ```javascript
 class Guardian {
-  constructor(adapter: RuntimeAdapter, config: object)
-  tick(snapshot: Snapshot): void         // 每次 tick 调用
-  async startAgent(): void               // 拉起 runtime（内部方法，tick 触发）
+  constructor(adapter: RuntimeAdapter, deps: GuardianDeps)
+  tick(snapshot: Snapshot): GuardianResult
+  async startAgent(): void               // 内部方法，tick 触发
+}
+```
+
+```javascript
+interface GuardianDeps {
+  resetToolLifecycleState(): void         // 重置 tool lifecycle + watchdog + api-activity
+  log(message: string): void
+}
+```
+
+```javascript
+interface GuardianResult {
+  state: 'offline' | 'stopped' | 'running',
+  attempted_restart: boolean,             // 本次 tick 是否尝试了拉起
+  runtimeLaunchAtMs: number,              // 最近一次拉起时间（供 StatusWriter 使用）
 }
 ```
 
@@ -135,16 +158,19 @@ class Guardian {
 | 交互方 | 方向 | 方法/数据 | 用途 |
 |-------|------|----------|------|
 | **Adapter** | 调用 | `launch()` | 拉起 runtime |
-| **Adapter** | 调用 | `stop()` | kill tmux session（冻结处理由 Orchestrator 调用，不是 Guardian） |
 | **Adapter** | 调用 | `isRunning()` | 检测 runtime 进程存活 |
-| **HealthEngine** | **无交互** | — | D-1, D-20：Guardian 不读写 HealthState，不持有 HealthEngine 引用 |
+| **Adapter** | 调用 | `clearStaleState()` | 拉起前清除 runtime 相关残留文件 |
+| **Adapter** | 调用 | `enqueueStartupPrompt()` | 注入启动提示（runtime 差异封装在 adapter 内） |
+| **Adapter** | 读取 | `sessionName` | tmux has-session 检测 |
+| **ToolPipeline** | 间接 | `deps.resetToolLifecycleState()` | 拉起前重置 tool 状态（由 Orchestrator 注入） |
+| **HealthEngine** | **无交互** | — | D-1, D-20：Guardian 不持有 HealthEngine 引用，不读写 HealthState |
 
 ### 常量
 
 | 常量 | 值 | 说明 |
 |------|------|------|
-| BASE_RESTART_DELAY | 5s | 初始重启延迟 |
-| MAX_RESTART_DELAY | 60s | 最大重启延迟 |
+| BASE_RESTART_DELAY | 5s | 初始重启延迟（ticks） |
+| MAX_RESTART_DELAY | 60s | 最大重启延迟（ticks） |
 | BACKOFF_RESET_THRESHOLD | 60s | 连续运行多久后重置退避 |
 | STARTUP_GRACE_TICKS | 30 | 启动保护 tick 数 |
 | MAINTENANCE_WAIT_TIMEOUT | 300s | 维护等待超时 |
@@ -162,7 +188,7 @@ class Guardian {
 | `activity-monitor.js:1940-1952` | running 分支 — 退避重置逻辑 |
 | `activity-monitor.js:433-483` | `getRunningMaintenance()` + `waitForMaintenance()` |
 | `activity-monitor.js:486-521` | `hasStartupHook()` + `enqueueStartupControl()` |
-| `activity-monitor.js:548-561` | `maybeConsumeUserMessageSignal()` |
+| `activity-monitor.js:548-561` | `maybeConsumeUserMessageSignal()`（移除） |
 
 ### 实施步骤
 
@@ -172,5 +198,7 @@ class Guardian {
 4. **移除 `adapter.checkAuth()` 认证预检**：现有代码在 `startAgent()` 中调用 `checkAuth()`，失败则跳过拉起并设置 `engine.setHealth('auth_failed')`——这违反 D-20 的无条件拉起原则。Auth 检测改由 HealthEngine 事件驱动（user message 投递后 check tmux pane）
 5. **移除 `engine.canRestart()` 调用**：现有代码在拉起前检查 `canRestart()`（rate_limited 时返回 false），这违反 D-20 的"不因任何 HealthState 阻止拉起"
 6. **移除 auth 抑制机制**：`authRetrySuppressedUntil` 及关联的 user-message-signal 清除逻辑全部移除
-7. 提取辅助函数：`getRunningMaintenance()`、`waitForMaintenance()`、`hasStartupHook()`
-8. 内部状态全部为运行时状态，AM 冷启动时重置为零（D-21）
+7. **新增 `adapter.clearStaleState()`**：将现有的 `engine.deps.clearHeartbeatPending()` + context temp files 删除合并为 adapter 方法（见 [runtime-adapter.md](runtime-adapter.md)）
+8. **新增 `adapter.enqueueStartupPrompt()`**：将现有的 `runtimeId === 'claude'` + `hasStartupHook()` + `enqueueStartupControl()` 封装到 adapter 内部（D-5/D-38）
+9. 提取辅助函数：`getRunningMaintenance()`、`waitForMaintenance()`
+10. 内部状态全部为运行时状态，AM 冷启动时重置为零（D-21）

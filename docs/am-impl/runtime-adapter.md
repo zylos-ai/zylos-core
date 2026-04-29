@@ -28,6 +28,8 @@ Adapter 提供 6 类能力，每类封装了 Claude 和 Codex 的差异实现：
 | **进程管理** | `launch()` | 构建指令文件 → 预处理认证/信任 → 在 tmux session 中启动 runtime |
 | | `stop()` | kill tmux session（同步，不可 await） |
 | | `isRunning()` | 检查 tmux session 存在 + runtime 进程存活（PID + 进程名/子进程） |
+| | `clearStaleState()` | 拉起前清除上一 session 的残留文件（heartbeat-pending.json、context temp files 等），路径因 runtime 不同 |
+| | `enqueueStartupPrompt()` | 注入启动提示。Claude: 检测 SessionStart hook → 有则 noop、无则 C4 control fallback；Codex: 自带 bootstrap prompt，noop |
 | **认证** | `checkAuth()` | 端到端认证验证（Claude: `claude -p ping`；Codex: token 验证） |
 | **健康探测** | `getHeartbeatDeps()` | 返回 heartbeat probe 相关方法集（发送 heartbeat、读取 ack、检测 rate limit/API error） |
 | **上下文监控** | `getContextMonitor()` | Claude: 返回 null（由 statusLine hook 处理）；Codex: 返回 polling-based 监控器 |
@@ -75,9 +77,9 @@ launch()
 │                              ┌──────────────────────┐        │
 │  ┌───────────┐  launch()     │                      │        │
 │  │ Guardian   │─────────────▶│   Runtime Adapter     │        │
-│  │           │  stop()       │                      │        │
+│  │           │  isRunning()  │                      │        │
 │  │           │─────────────▶│   ┌────────────────┐  │        │
-│  │           │  isRunning()  │   │ ClaudeAdapter  │  │        │
+│  │           │  clearStale() │   │ ClaudeAdapter  │  │        │
 │  │           │─────────────▶│   │ or             │  │        │
 │  └───────────┘               │   │ CodexAdapter   │  │        │
 │                              │   └────────────────┘  │        │
@@ -117,6 +119,8 @@ interface RuntimeAdapter {
   launch(opts?: { bypassPermissions?: boolean }): Promise<void>
   stop(): void                          // kill tmux session（同步）
   isRunning(): Promise<boolean>
+  clearStaleState(): void               // 清除上一 session 残留文件
+  enqueueStartupPrompt(): void          // 注入启动提示（runtime 差异内部封装）
 
   // 认证
   checkAuth(): Promise<{ ok: boolean, reason?: string, output?: string }>
@@ -153,6 +157,8 @@ interface HeartbeatDeps {
 | sessionName | `'claude-main'` | `'codex-main'` |
 | launch | `claude --dangerously-skip-permissions` | `codex --full-auto` |
 | checkAuth | `claude -p ping --max-turns 1`（30s timeout） | token 文件验证 |
+| clearStaleState | 删除 `heartbeat-pending.json` + `/tmp/context-*` | 删除 `codex-heartbeat-pending.json` + 对应 temp files |
+| enqueueStartupPrompt | 检测 SessionStart hook → 有则 noop，无则 C4 control fallback | noop（Codex bootstrap prompt 自带） |
 | getHeartbeatDeps | `createClaudeProbe()`（C4 control + heartbeat-pending.json） | `createCodexProbe()` |
 | getContextMonitor | `null`（由 statusLine hook 处理） | `CodexContextMonitor`（polling） |
 | sendMessage | tmux buffer paste（临时文件 → load-buffer → paste-buffer → Enter） | tmux buffer paste（同机制） |
@@ -165,7 +171,7 @@ interface HeartbeatDeps {
 | 消费方 | 调用的方法 | 用途 |
 |-------|-----------|------|
 | **Monitor Orchestrator** | `getActiveAdapter()` | init 时创建 adapter 实例，注入给其他组件 |
-| **Guardian** | `launch()`, `stop()`, `isRunning()` | 进程存活守护：检测退出 → 拉起 |
+| **Guardian** | `launch()`, `isRunning()`, `clearStaleState()`, `enqueueStartupPrompt()`, `sessionName` | 进程存活守护：检测退出 → 清理 → 拉起 → 启动提示 |
 | **HealthEngine** | `checkAuth()`, `getHeartbeatDeps()` | 认证验证 + heartbeat probe |
 | **ToolWatchdog** | `sendMessage()` | 发送中断按键（Escape）终止超时工具 |
 | **ProcSampler** | `sessionName`（属性读取） | 获取 tmux PID 做冻结检测 |
@@ -175,7 +181,7 @@ interface HeartbeatDeps {
 
 ## 3. 实施方案
 
-**改动类型**：纯提取
+**改动类型**：提取 + 新增方法（`clearStaleState()`, `enqueueStartupPrompt()`）
 
 ### 现有代码位置
 
@@ -193,6 +199,7 @@ interface HeartbeatDeps {
 ### 实施步骤
 
 1. 在 `scripts/adapters/` 下创建 `claude.js` 和 `codex.js`，从 `cli/lib/runtime/` 迁移
-2. 现有 adapter 接口已满足顶层设计需求，不需要新增方法
-3. 主文件中散落的 `adapter.xxx` 调用保持不变，只是 adapter 实例的创建位置从 `init()` 移到 Monitor Orchestrator
-4. `activity-monitor.js` 中残留的直接 runtime 分支判断（`adapter.runtimeId === 'claude'`）需要收拢到 adapter 方法中（D-5）
+2. **新增 `clearStaleState()`**：从 `activity-monitor.js:600-613`（`engine.deps.clearHeartbeatPending()` + context temp files 删除）提取，封装为 adapter 方法（heartbeat-pending 文件路径因 runtime 不同）
+3. **新增 `enqueueStartupPrompt()`**：从 `activity-monitor.js:486-521`（`hasStartupHook()` + `enqueueStartupControl()`）+ `activity-monitor.js:636-639`（runtimeId 分支判断）提取，封装到 adapter 内部（D-5/D-38：消除 Guardian 中的 runtime 分支判断）
+4. 主文件中散落的 `adapter.xxx` 调用保持不变，只是 adapter 实例的创建位置从 `init()` 移到 Monitor Orchestrator
+5. `activity-monitor.js` 中残留的直接 runtime 分支判断（`adapter.runtimeId === 'claude'`）需要收拢到 adapter 方法中（D-5）
