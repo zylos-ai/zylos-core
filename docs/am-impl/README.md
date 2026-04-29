@@ -58,7 +58,7 @@ activity-monitor/scripts/
 |------|------|---------|
 | [runtime-adapter.md](runtime-adapter.md) | Runtime Adapter | 提取 + 新增方法 |
 | [signal-store.md](signal-store.md) | SignalStore | 纯提取 |
-| [monitor-orchestrator.md](monitor-orchestrator.md) | Monitor Orchestrator | 行为变更 |
+| [monitor-orchestrator.md](monitor-orchestrator.md) | Monitor Orchestrator | 行为变更（D-4 tick 重组） |
 | [guardian.md](guardian.md) | Guardian | 行为变更 |
 | [health-engine.md](health-engine.md) | HealthEngine | 行为变更 |
 | [proc-sampler.md](proc-sampler.md) | ProcSampler | 纯提取 |
@@ -67,6 +67,8 @@ activity-monitor/scripts/
 | [task-scheduler.md](task-scheduler.md) | TaskScheduler | 纯提取 |
 | [status-writer.md](status-writer.md) | StatusWriter | 纯提取 |
 | [hooks.md](hooks.md) | Hook 脚本（4个） | 无变更 |
+
+> **SessionRestartContinuation**（D-6 列出）不设独立文档。其职责（session restart 后注入 unsummarized context）由 RuntimeAdapter.`enqueueStartupPrompt()` + session-start-prompt hook 覆盖（见 [runtime-adapter.md](runtime-adapter.md) 和 [hooks.md](hooks.md)）。
 
 ## 配置项汇总
 
@@ -110,7 +112,8 @@ activity-monitor/scripts/
 | BACKOFF_BASE | 60s | HealthEngine |
 | BACKOFF_MULTIPLIER | 5 | HealthEngine |
 | BACKOFF_CAP | 3600s | HealthEngine |
-| PROBE_TIMEOUT | 30s | HealthEngine |
+| PROBE_TIMEOUT | 25s | HealthEngine |
+| STICKY_ERROR_MIN_INTERVAL | 30s | HealthEngine |
 | SAMPLE_INTERVAL | 10s | ProcSampler |
 | FROZEN_THRESHOLD | 60s | ProcSampler |
 | REORDER_WINDOW_MS | 2000ms | ToolPipeline |

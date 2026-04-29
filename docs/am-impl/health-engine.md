@@ -24,7 +24,7 @@
 - **D-4**：HealthEngine 事件驱动，不参与主循环 tick
 - **D-10**：Health 状态持久化到 agent-status.json，冷启动恢复。未知时默认 OK
 - **D-16**：Probe 与 restart 解耦
-- **D-18**：sticky API error 保留 adapter.stop() 强制 restart，连续 2 次命中防抖
+- **D-18**：sticky API error 保留 adapter.stop() 强制 restart，连续 2 次命中防抖（30s 间隔）
 
 ## 2. 组件设计
 
@@ -39,7 +39,7 @@
 | | check tmux pane | 等待 CHECK_DELAY(5s) 后扫描 tmux pane 字符模式 |
 | | rate limit 检测 | 连续 2 次识别 rate limit 模式 → `enterRateLimited()` |
 | | auth failed 检测 | 识别 auth failed 模式 + `checkAuth()` 二次确认 → `setHealth('auth_failed')` |
-| | sticky error 检测 | 连续 2 次 corrupted image 等 → `stop()` kill session（D-18） |
+| | sticky error 检测 | 连续 2 次 corrupted image 等（30s 间隔防抖）→ `stop()` kill session（D-18） |
 | **Recovery** | `runRecoveryProbe()` | 供 MessageRouter 调用，按当前状态分支执行 probe，返回 ProbeResult |
 | | `sendHeartbeatProbe()` | 内部方法，通过 C4 control queue 发送 heartbeat 并等待 ack |
 | | `notifyUserMessage()` | 加速 recovery：清除 cooldown / 重置 backoff |
@@ -182,8 +182,9 @@ healthEngine.onUserMessageDelivered()
   │   └─ return
   │
   ├─ result.stickyError === true?
-  │   ├─ stickyErrorConsecutiveHits++
+  │   ├─ stickyErrorConsecutiveHits++, lastStickyErrorHitAt = now
   │   ├─ hits >= CONSECUTIVE_HITS_THRESHOLD(2)?
+  │   │   ├─ 距上次命中 < STICKY_ERROR_MIN_INTERVAL(30s)? → return（间隔过短）
   │   │   ├─ YES → deps.stop()           // kill session（D-18）
   │   │   │        重置 stickyErrorConsecutiveHits = 0
   │   │   │        // 不改 health，Guardian 下一 tick 拉起
@@ -195,7 +196,7 @@ healthEngine.onUserMessageDelivered()
 
 **checkTmuxPane 判断优先级**：rateLimit > authFailed > stickyError。每次只匹配第一个命中的分支。
 
-**连续命中计数器语义**：计数器在 `onUserMessageDelivered()` 调用之间累积。两次调用间如果 checkTmuxPane 返回了不同类型的异常（如第一次 rateLimit，第二次 stickyError），两个计数器独立，不互相影响。只有全 false 时才同时重置两个计数器。
+**连续命中计数器语义**：计数器在 `onUserMessageDelivered()` 调用之间累积。类型切换时（如 rateLimit 后 stickyError）重置另一个计数器，防止交替出现的不同异常累积误触发。全 false 时同时重置两个计数器。此跨计数器重置逻辑是实现级别细节，超出顶层设计 D-18 描述范围。
 
 ### Unavailable 退避 Probe 策略
 
@@ -352,6 +353,7 @@ interface ProbeResult {
   rateLimitConsecutiveHits: number,       // 连续 checkTmuxPane().rateLimit=true 次数
   stickyErrorConsecutiveHits: number,     // 连续 checkTmuxPane().stickyError=true 次数
                                           // 两个计数器独立，全 false 时同时重置
+  lastStickyErrorHitAt: number,           // 上次 stickyError 命中时间（epoch ms），D-18 30s 防抖用
 }
 ```
 
@@ -370,6 +372,7 @@ interface ProbeResult {
   lastUserMessageRecoveryAt: 0,
   rateLimitConsecutiveHits: 0,
   stickyErrorConsecutiveHits: 0,
+  lastStickyErrorHitAt: 0,
 }
 ```
 
@@ -396,6 +399,7 @@ setHealth(next, reason) {
     this.unavailableSince = 0
     this.rateLimitConsecutiveHits = 0
     this.stickyErrorConsecutiveHits = 0
+    this.lastStickyErrorHitAt = 0
     this.rateLimitResetTime = null
     this.cooldownUntil = 0
     if (this.cooldownTimer) {
@@ -452,11 +456,17 @@ async onUserMessageDelivered() {
     return
   }
 
-  // 优先级 3：sticky error（D-18）
+  // 优先级 3：sticky error（D-18：连续 2 次命中防抖，30s 间隔）
   if (result.stickyError) {
     this.stickyErrorConsecutiveHits++
+    this.lastStickyErrorHitAt = Date.now()
     this.rateLimitConsecutiveHits = 0      // 类型切换，重置另一个计数器
     if (this.stickyErrorConsecutiveHits >= CONSECUTIVE_HITS_THRESHOLD) {
+      // D-18 30s 间隔防抖：两次 stickyError 命中间隔须 >= STICKY_ERROR_MIN_INTERVAL
+      if (this.lastStickyErrorHitAt > 0
+        && (Date.now() - this.lastStickyErrorHitAt) < STICKY_ERROR_MIN_INTERVAL) {
+        return  // 间隔过短，等下一次 user message
+      }
       this.stickyErrorConsecutiveHits = 0
       this.deps.log(`sticky error 2x: ${result.pattern}, killing session (D-18)`)
       this.deps.stop()
@@ -721,7 +731,8 @@ get backoffDelay() {
 | USER_MESSAGE_RECOVERY_COOLDOWN | 60s | notifyUserMessage 冷却期 |
 | CHECK_DELAY | 5s | onUserMessageDelivered / onProcessRestarted 延迟 |
 | CONSECUTIVE_HITS_THRESHOLD | 2 | rate limit / sticky error 需连续命中次数 |
-| PROBE_TIMEOUT | 30000ms (30s) | sendHeartbeatProbe 硬超时 |
+| STICKY_ERROR_MIN_INTERVAL | 30000ms (30s) | D-18：两次 stickyError 命中间最小间隔 |
+| PROBE_TIMEOUT | 25000ms (25s) | sendHeartbeatProbe 硬超时（对齐顶层设计 router probe budget ≤25s） |
 | PROBE_POLL_INTERVAL | 2000ms (2s) | heartbeat status 轮询间隔 |
 | BACKOFF_BASE | 60s | 退避基数 |
 | BACKOFF_MULTIPLIER | 5 | 退避指数底数 |

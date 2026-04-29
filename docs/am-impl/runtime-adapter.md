@@ -11,14 +11,14 @@
 **输出**：launch/stop/probe/catalog/tool rules（统一接口，屏蔽 runtime 实现差异）
 
 **相关决策**：
-- **D-5**：业务模块不做 runtime 分支判断，所有 Claude / Codex 差异通过 Adapter DI 注入。
+- **D-5**：业务模块不做 runtime 分支判断，所有 Claude / Codex 差异通过 Adapter DI 注入。顶层设计列 6 类（标识/进程管理/健康检查/API error catalog/运行时差异/消息写入），实施细化为 8 类——「API error catalog」演化为 `checkTmuxPane()` 模式匹配（归入健康探测）；新增上下文监控、活动时间、指令文件三类（从现有代码提取的 runtime 差异点）。
 - **D-38**：Claude / Codex 差异只进入 Adapter，不进入 HealthEngine / Guardian 分支逻辑。
 
 ## 2. 组件设计
 
 ### 功能清单
 
-Adapter 提供 6 类能力，每类封装了 Claude 和 Codex 的差异实现：
+Adapter 提供 8 类能力（D-5 的 6 类细化扩展），每类封装了 Claude 和 Codex 的差异实现：
 
 | 能力类别 | 功能 | 说明 |
 |---------|------|------|
