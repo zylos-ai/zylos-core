@@ -439,7 +439,7 @@ activity-monitor/
 #### D-18. Sticky context 场景保留 session restart 自愈
 
 **状态**：已确认
-**决策**：图片损坏等导致的 sticky API error（400 / invalid_request_error）保留 adapter.stop() 强制 restart。连续 2 次命中防抖（30s 间隔），命中后 HealthEngine 调 adapter.stop()，Guardian 下一 tick 拉起新 session。
+**决策**：图片损坏等导致的 sticky API error（400 / invalid_request_error）保留 adapter.stop() 强制 restart。连续 2 次命中防抖（30s 间隔），命中后 HealthEngine 先将 health 置为 `unavailable`、reason 置为 `sticky_context_restart`，再调用 adapter.stop()；Guardian 下一 tick 拉起新 session，post-restart probe 成功后恢复 OK。
 
 ### Guardian 行为
 
