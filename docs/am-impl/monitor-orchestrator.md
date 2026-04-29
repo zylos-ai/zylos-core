@@ -100,7 +100,9 @@ tick() [every 1s, self-scheduling]
   │     processToolLifecycle → foregroundIdentity → buildApiActivity
   │
   ├─ 5. ToolWatchdog.tick(snapshot)
-  │     evaluateToolWatchdogTransition
+  │     result = evaluateToolWatchdogTransition
+  │     ├─ clearWatchdogState → clear tool-watchdog-state.json
+  │     ├─ nextWatchdogState → atomic write tool-watchdog-state.json
   │     └─ api_activity_dirty → rebuild apiActivity
   │
   ├─ 6. TaskScheduler.tick(snapshot)
@@ -197,4 +199,5 @@ Monitor Orchestrator 持有并驱动所有组件：
 2. 提取 `init()` 逻辑：adapter 创建、组件实例化、状态恢复、IPC server 启动
 3. 提取 `monitorLoop()` 逻辑：tick 编排、错误处理
 4. 将全局变量收拢到 Orchestrator 实例或委托给各组件
-5. **这是组装层，最后实施**（依赖所有其他组件先完成）
+5. 消费 ToolWatchdog 返回的 state mutation intent：`clearWatchdogState` 清除 `tool-watchdog-state.json`，`nextWatchdogState` atomic write `tool-watchdog-state.json`，并将最终 watchdog state 传给 StatusWriter 聚合
+6. **这是组装层，最后实施**（依赖所有其他组件先完成）

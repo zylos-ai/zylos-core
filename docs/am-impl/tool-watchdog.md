@@ -116,6 +116,8 @@ interface WatchdogDeps {
 }
 ```
 
+返回值中的 state mutation intent 必须由 Monitor Orchestrator 在同一 tick 内消费；ToolWatchdog 不负责持久化，也不直接修改 snapshot。
+
 ### Watchdog Episode 状态
 
 ```javascript
@@ -306,7 +308,7 @@ function evaluateToolWatchdogTransition({ nowMs, foregroundIdentity, apiActivity
 | **SignalStore** | 读取 | `snapshot.health` | 前置条件检查（D-23：通过 snapshot，不直接读 HealthEngine） |
 | **HealthEngine** | 调用 | `triggerRecovery()` | escalation 时触发 HealthEngine（显式接口调用，D-23 允许） |
 | **Adapter** | 调用 | `sendMessage()` (via `enqueueInterrupt`) | 发送中断按键 |
-| **Monitor Orchestrator** | 调用 | `evaluateToolWatchdogTransition()` | tick 中被调用 |
+| **Monitor Orchestrator** | 调用 + 落盘 | `evaluateToolWatchdogTransition()`；消费 `clearWatchdogState` / `nextWatchdogState` | tick 中被调用；负责清除或 atomic write `tool-watchdog-state.json` |
 | **StatusWriter** | 提供 | `watchdog_phase`, `watchdog_block_reason` | 写入 agent-status.json |
 
 ### 可配置项
