@@ -203,9 +203,9 @@ interface Snapshot {
 }
 ```
 
-#### user-message-signal.json（由 c4-receive 写入）
+#### user-message-signal.json（legacy，删除）
 
-> **不纳入 SignalStore Snapshot**。AM Process 内部无消费方。由 MessageRouter 直接读取文件。Schema 保留在此作为文档记录。
+> 顶层 D-7 已将用户消息触发改为 `c4-receive` 通过 IPC 直接调用 MessageRouter。该文件不再写入、不纳入 SignalStore Snapshot，AM Process 内部无消费方。Schema 仅作为旧实现迁移记录。
 
 ```javascript
 {
@@ -279,7 +279,7 @@ refresh() 流式层部分：
 | **session-start-prompt** | foreground-session.json | SessionStart hook |
 | **ProcSampler** | proc-state.json | 每 10s 采样 |
 | **StatusWriter** | agent-status.json | 每 tick 末尾 |
-| **c4-receive** | user-message-signal.json | 用户消息到达（不纳入 Snapshot，MessageRouter 直接读取） |
+| **c4-receive** | user-message-signal.json | legacy：按 D-7 删除，改为 IPC 调用 MessageRouter |
 
 ## 3. 实施方案
 

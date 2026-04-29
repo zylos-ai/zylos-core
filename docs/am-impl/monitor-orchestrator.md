@@ -21,9 +21,9 @@
 | 能力类别 | 功能 | 说明 |
 |---------|------|------|
 | **初始化** | 加载 runtime adapter | `getActiveAdapter()` 读取 config.json |
-| | 实例化所有组件 | SignalStore / Guardian / ProcSampler / ToolPipeline / ToolWatchdog / TaskScheduler / StatusWriter / HealthEngine |
+| | 实例化所有组件 | SignalStore / Guardian / ProcSampler / ToolPipeline / ToolWatchdog / TaskScheduler / StatusWriter / HealthEngine / MessageRouter |
 | | 恢复持久化状态 | health 从 agent-status.json；tool stream 从 state file；watchdog 从 state file |
-| | 启动 IPC server | Unix socket，供 MessageRouter 接入 |
+| | 启动 IPC server | Unix socket，供 c4-receive 调用 MessageRouter route handler |
 | | 启动 context monitor | Codex: polling-based；Claude: null（hook 处理） |
 | | 清理其他 runtime session | 启动 10s 后 kill 非当前 runtime 的 tmux session |
 | **Tick 编排** | 7 步固定顺序 | SignalStore → Guardian → ProcSampler → ToolPipeline → ToolWatchdog → TaskScheduler → StatusWriter |
@@ -50,6 +50,7 @@ init()
   ├─ 4. 实例化组件
   │     ├─ ProcSampler(adapter.sessionName)
   │     ├─ HealthEngine(deps, options)（deps 由 adapter 方法组装）
+  │     ├─ MessageRouter(healthEngine, cacheStore, options)
   │     ├─ DailySchedule × 3（upgrade, memory-commit, upgrade-check）
   │     └─ 恢复 usage check 状态
   │
@@ -65,7 +66,7 @@ init()
   │     └─ adapter.getContextMonitor()?.startPolling()
   │
   ├─ 7. 启动 IPC server
-  │     └─ Unix socket，供 MessageRouter 查询 HealthEngine
+  │     └─ Unix socket，注册 MessageRouter route handler
   │
   └─ 8. 清理其他 runtime
         └─ 10s 后 kill 非当前 runtime 的 tmux session
@@ -115,6 +116,7 @@ tick() [every 1s, self-scheduling]
 this.adapter = getActiveAdapter()
 this.signalStore = new SignalStore(signalPaths)
 this.healthEngine = new HealthEngine(deps, options)
+this.messageRouter = new MessageRouter({ healthEngine, cacheStore, clock, log, options })
 this.guardian = new Guardian(adapter, { resetToolLifecycleState, log })
 this.procSampler = new ProcSampler({ sessionName: adapter.sessionName })
 this.toolPipeline = new ToolPipeline(adapter, signalStore)
@@ -125,66 +127,7 @@ this.statusWriter = new StatusWriter(healthEngine, signalStore)
 
 ### IPC 监听
 
-Monitor Orchestrator 负责启动 IPC server（Unix socket），供 MessageRouter（c4-receive 进程）接入查询 HealthEngine 状态并触发 recovery probe。
-
-#### Socket 路径
-
-```
-~/zylos/activity-monitor/am.sock
-```
-
-AM 启动时创建，退出时自动清理（`server.close()`）。启动前删除 stale socket 文件（防止上次异常退出残留）。
-
-#### 协议
-
-JSON-over-newline：每条消息是一行 JSON，以 `\n` 分隔。客户端（c4-receive）发一条请求，AM 返回一条响应，然后关闭连接（短连接模式）。
-
-**请求**：
-
-```javascript
-{
-  type: 'route',                    // 消息类型，目前只有 'route'
-  channel: string,                  // 来源渠道（'telegram', 'lark', 'web', ...）
-  endpoint: string,                 // 渠道内标识（chat_id, user_id, ...）
-  noReply: boolean,                 // true = 系统消息，probe 失败时静默（§3.2 noReply 语义）
-}
-```
-
-**响应**：
-
-```javascript
-{
-  recovered: boolean,               // true = 健康，消息走主链；false = 不健康
-  health: string,                   // 当前 HealthState
-  reason?: string,                  // recovered=false 时的原因
-  userMessage?: string,             // recovered=false 且 noReply=false 时，投递给用户的状态文案
-}
-```
-
-**超时**：c4-receive 侧设 25s 读超时（对齐顶层 §3.2 router probe budget ≤25s）。超时视为 recovered=true（fail-open，与现有行为一致）。
-
-**降级**：socket 不存在或连接失败 → c4-receive 降级为直接读 `agent-status.json`（兼容 AM 未启动/升级中的场景），health=ok 时走主链，非 ok 时按文件中的状态生成文案。
-
-#### IPC 处理流程（AM 侧）
-
-```
-client 连接
-  │
-  ├─ 解析 JSON 请求
-  │
-  ├─ healthEngine.health === 'ok'?
-  │   └─ YES → 返回 { recovered: true, health: 'ok' }
-  │
-  ├─ NO → 调用 healthEngine.notifyUserMessage() 加速 recovery
-  │       调用 healthEngine.runRecoveryProbe()
-  │       │
-  │       ├─ recovered → 返回 { recovered: true, health: 'ok' }
-  │       └─ not recovered → 返回 { recovered: false, health, reason, userMessage }
-  │
-  └─ 关闭连接
-```
-
-> **注意**：IPC handler 持有 HealthEngine 引用，在 Orchestrator init 时注册。MessageRouter 的文案映射逻辑（reason → userMessage）也在此 handler 中实现，不需要独立的 MessageRouter 模块文件——它是 IPC handler 的一部分。
+Monitor Orchestrator 负责启动 IPC server（Unix socket），并注册 MessageRouter route handler。c4-receive 只通过 IPC 调用该 handler，不直接读取 HealthEngine。IPC 协议定义见 MessageRouter 实施方案。
 
 ### 状态恢复（AM 冷启动）
 
@@ -237,7 +180,7 @@ Monitor Orchestrator 持有并驱动所有组件：
 
 ## 3. 实施方案
 
-**改动类型**：行为变更（D-4：删除 tick 中 4 个 health 步骤，HealthEngine 改事件驱动；新增 step 2a onProcessRestarted 代调）
+**改动类型**：纯提取
 
 ### 现有代码位置
 

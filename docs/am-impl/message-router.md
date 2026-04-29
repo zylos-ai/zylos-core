@@ -2,21 +2,19 @@
 
 ## 1. 组件定义
 
-> 来源：顶层设计 §3.2 MessageRouter 容器
+> 来源：顶层设计 §3.2
 
-**职责**：接收 c4-receive 的 IPC 路由请求，查询 HealthEngine 当前健康状态；health≠OK 时触发或加入 recovery probe 聚合，等待 probe 结果后返回最终路由决策和用户文案。
+**职责**：接收 `c4-receive` 的 IPC 路由请求，查询 HealthEngine 当前健康状态；health 非 OK 时按需触发或加入 recovery probe，返回路由决策。
 
-**输入**：c4-receive 发来的 IPC 请求（channel、endpoint、noReply）；HealthEngine 当前状态
+**输入**：`c4-receive` 发来的 IPC 请求（channel、endpoint、noReply）；HealthEngine 当前状态
 
-**输出**：路由决策：recovered=true 走主链，recovered=false 附带 reason 和 userMessage
-
-**运行模型**：MessageRouter 不在 AM Process 主循环中运行。它由 c4-receive 通过 IPC 事件触发，是一次性调用接口。代码上不是独立模块文件——它是 Monitor Orchestrator IPC handler 的一部分（见 [monitor-orchestrator.md](monitor-orchestrator.md) IPC 监听章节）。
+**输出**：`RouteDecision`。`recovered=true` 时消息走 C4 主链；`recovered=false` 时由 `c4-receive` 根据 noReply 决定是否发送状态文案。
 
 **相关决策**：
-- **D-7**：MessageRouter 事件驱动 + probe 结果缓存。c4-receive IPC 触发，不做定时轮询。health≠OK 时 cache-first lookup，缓存过期则触发 recovery probe 并写缓存（带过期时间）
-- **D-8**：unhealthy 路径即时双写 DB + c4-send 投递状态文案
-- **D-9**：废弃 pending-channels.jsonl 异步恢复广播（unhealthy 已即时返回状态文案）
-- **D-14**：status='delivered' 显式覆盖，不引入新 DB 字段
+- **D-7**：MessageRouter 事件驱动 + probe 结果缓存。采用 IPC 通信 + 30s 硬超时 + 降级 fallback。
+- **D-8**：unhealthy 路径即时写入 DB + c4-send 投递状态文案。
+- **D-14 / D-34 / D-36**：不扩展 C4 DB schema；unhealthy inbound 写 `status='delivered'`，避免 double delivery。
+- **D-37**：每次 `c4-receive` 最多产生一种用户可见结果。
 
 ## 2. 组件设计
 
@@ -24,416 +22,379 @@
 
 | 能力类别 | 功能 | 说明 |
 |---------|------|------|
-| **路由决策** | 健康时快速放行 | health=OK → 立即返回 `{ recovered: true }` |
-| | 不健康时 probe | health≠OK → cache-first → probe → 返回结果 |
-| **Probe 缓存** | cache-first lookup | 每次路由请求先检查缓存文件，TTL 内直接使用 |
-| | 缓存写入 | probe 完成后将结果写缓存 + 过期时间 |
-| **Probe 聚合** | 并发请求共用 | 多个 c4-receive 进程同时到达，只触发一次 probe，其余等待同一个 Promise |
-| **文案映射** | reason → userMessage | 将 HealthEngine 返回的 reason 映射为用户可读的状态文案 |
-| **Recovery 加速** | notifyUserMessage | 路由请求到达时通知 HealthEngine 加速 recovery |
-| **退避判断** | backoff 检查 | 检查距上次 probe 是否过了退避间隔，未过则使用缓存或等待 |
+| **IPC 路由** | Unix socket server handler | 由 Monitor Orchestrator 启动，MessageRouter 注册 `route` handler |
+| | request/response schema | JSON line framed request/response，单请求单响应 |
+| **健康路由** | OK 快速路径 | `health='ok'` 立即返回 `recovered=true` |
+| | 非 OK 路径 | 按 `notifyUserMessage`、cache、backoff、probe 聚合顺序决策 |
+| **Recovery probe** | probe 聚合 | 同一 health/reason key 同一时刻只允许一个 recovery probe 在 AM Process 内运行 |
+| | probe budget | route 内等待 probe 最多 25s，给 `c4-send` 留 5s |
+| **缓存** | negative cache | 缓存最近一次 probe 失败结果，避免并发请求重复 probe |
+| | cache 失效 | probe 成功、health/reason 变化、`notifyUserMessage()` 返回 true 时失效 |
+| **文案映射** | reason catalog | MessageRouter 负责 reason → userMessage，`c4-receive` 不维护第二份 catalog |
+| **降级** | c4-receive fallback | IPC 不可用/超时时，c4-receive 读 `agent-status.json` 做静态判断 |
 
-### 路由流程
+### 文件位置
 
 ```
-c4-receive IPC 请求到达
-        │
-        ▼
-  ┌─────────────────────────┐
-  │ healthEngine.health     │
-  └──────────┬──────────────┘
-             │
-        health=OK?
-        ┌────┴────┐
-        │ YES     │ NO
-        ▼         ▼
-     返回        notifyUserMessage()
-     recovered   │
-     =true       ├─ 检查 probe 缓存
-     (走主链)     │
-                 缓存有效?
-                 ┌──┴──┐
-                 YES   NO
-                 │     │
-                 │     ├─ 已有 in-flight probe?
-                 │     │   ┌──┴──┐
-                 │     │   YES   NO
-                 │     │   │     │
-                 │     │   │     └─ 过了退避间隔?
-                 │     │   │       ┌──┴──┐
-                 │     │   │       YES   NO
-                 │     │   │       │     │
-                 │     │   │       │     └─ 用过期缓存或
-                 │     │   │       │        返回 recovered=false
-                 │     │   │       │
-                 │     │   │       └─ 触发 runRecoveryProbe()
-                 │     │   │          写缓存
-                 │     │   │
-                 │     │   └─ 等待 in-flight probe 完成
-                 │     │
-                 ▼     ▼
-              probe 结果
-              ┌─────┴─────┐
-              recovered?
-              YES         NO
-              │           │
-              ▼           ▼
-           返回         noReply?
-           recovered    ┌───┴───┐
-           =true        YES     NO
-           (走主链)      │       │
-                        ▼       ▼
-                     返回     返回
-                     recovered recovered
-                     =false   =false
-                     (静默)    + reason
-                              + userMessage
+activity-monitor/scripts/
+├── message-router.js          # MessageRouter class + IPC handler
+└── monitor.js                 # 创建 HealthEngine 后启动 IPC server 并挂载 router
 ```
 
-### IPC 通信协议
+`c4-receive.js` 位于 C4 组件内，按本文件的 IPC contract 调用 AM Process。
 
-> 完整协议定义在 [monitor-orchestrator.md](monitor-orchestrator.md) IPC 监听章节。此处仅列出与 MessageRouter 路由逻辑直接相关的部分。
+### IPC 协议
 
-**传输层**：Unix socket，JSON-over-newline，短连接（一请求一响应后关闭）。
+#### Socket
 
-**Socket 路径**：`~/zylos/activity-monitor/am.sock`
+```text
+~/zylos/activity-monitor/am.sock
+```
 
-**请求**：
+Monitor Orchestrator 初始化时：
+
+1. 删除 stale socket 文件。
+2. 启动 Unix socket server。
+3. 将 `MessageRouter` 实例注入 handler。
+4. AM 退出时关闭 server 并清理 socket。
+
+#### Request
 
 ```javascript
-{
+interface RouteRequest {
+  version: 1,
   type: 'route',
-  channel: string,       // 来源渠道（'telegram', 'lark', 'web', ...）
-  endpoint: string,      // 渠道内标识（chat_id, user_id, ...）
-  noReply: boolean,      // true = 系统消息，probe 失败时静默
+  requestId: string,          // c4-receive 生成，用于日志关联
+  channel: string,            // lark | telegram | web-console | system | ...
+  endpoint: string,           // channel-specific endpoint
+  noReply: boolean,           // true = 不发送用户可见状态文案
+  receivedAt: number,         // epoch ms
 }
 ```
 
-**响应**：
+MessageRouter 不需要读取 message content。消息内容仍由 `c4-receive` 写 C4 DB，MessageRouter 只做路由决策，避免业务内容进入 AM。
+
+#### Response
 
 ```javascript
-{
-  recovered: boolean,     // true = 健康/已恢复，消息走主链
-  health: string,         // 当前 HealthState
-  reason?: string,        // recovered=false 时的原因
-  userMessage?: string,   // recovered=false 且 noReply=false 时的用户文案
+interface RouteDecision {
+  version: 1,
+  requestId: string,
+  recovered: boolean,         // true = c4-receive 写 pending，走主链
+  health: 'ok' | 'unavailable' | 'rate_limited' | 'auth_failed',
+  reason?: string,            // recovered=false 时必填
+  userMessage?: string,       // noReply=false && recovered=false 时必填
+  cacheHit?: boolean,
+  probeStarted?: boolean,
+  fallback?: boolean,
 }
 ```
 
-**超时**：c4-receive 侧 25s 读超时（对齐 router probe budget ≤25s）。超时视为 recovered=true（fail-open）。
+`recovered=true` 时 `reason/userMessage` 不返回。
 
-**降级**：socket 不存在或连接失败 → c4-receive 降级为直接读 `agent-status.json`（兼容 AM 未启动/升级中的场景）。
+### route() 主流程
 
-### Probe 缓存机制（D-7）
+```text
+route(request)
+  │
+  ├─ health = healthEngine.health
+  │
+  ├─ health == 'ok'?
+  │    └─ YES → clear cache if stale/non-ok → return recovered=true
+  │
+  ├─ noReply == false?
+  │    └─ YES → accelerated = healthEngine.notifyUserMessage(nowSec)
+  │              └─ accelerated=true → invalidate cache, forceProbe=true
+  │
+  ├─ forceProbe == false?
+  │    ├─ valid negative cache for current health/reason?
+  │    │    └─ YES → return recovered=false from cache
+  │    └─ within HealthEngine backoff window?
+  │         └─ YES → return recovered=false with current reason/userMessage
+  │
+  ├─ result = await joinOrStartProbe(healthEngine.runRecoveryProbe)
+  │
+  ├─ result.recovered?
+  │    └─ YES → invalidate cache → return recovered=true
+  │
+  └─ write negative cache → return recovered=false + mapped userMessage
+```
 
-缓存避免每条 user message 都触发 recovery probe（probe 最长 25s，高并发时开销大）。
+### notifyUserMessage() 顺序
 
-**缓存文件路径**：`~/zylos/activity-monitor/probe-cache.json`
+`notifyUserMessage()` 必须发生在 cache 命中判断之前，否则用户主动发消息无法加速 rate-limit/unavailable recovery。
 
-**缓存格式**：
+规则：
+
+- `noReply=false`：调用 `healthEngine.notifyUserMessage(nowSec)`。
+- `noReply=true`：不调用，避免 scheduler / internal message 打破 cooldown 或 backoff。
+- `notifyUserMessage()` 返回 true：绕过现有 negative cache 和 backoff，立即触发或加入 recovery probe。
+- `notifyUserMessage()` 返回 false：按 cache/backoff 正常处理。
+
+### Backoff 判断
+
+MessageRouter 读取：
 
 ```javascript
-{
-  recovered: boolean,
-  health: string,
-  reason?: string,
-  userMessage?: string,
-  expiresAt: number,      // epoch ms，缓存过期时间
-  probedAt: number,       // epoch ms，probe 执行时间
-}
+healthEngine.lastRecoveryAt
+healthEngine.backoffDelay
 ```
 
-**TTL 规则**：
+当 `health='unavailable'` 且 `nowSec - lastRecoveryAt < backoffDelay` 时，普通用户消息可以直接返回当前 unavailable 文案；但若 `notifyUserMessage()` 返回 true，则必须绕过 backoff。
 
-| probe 结果 | TTL | 说明 |
-|-----------|-----|------|
-| recovered=true | 0（不缓存） | 恢复后 HealthEngine 已转 OK，后续请求直接走 health=OK 快速路径 |
-| recovered=false | `backoffDelay × 1000` | 与 HealthEngine 退避间隔对齐，避免退避期内重复 probe |
+RateLimited / AuthFailed 不使用 Unavailable backoff：
 
-**缓存读写规则**：
-- 读：IPC handler 收到路由请求、health≠OK 时，先读缓存文件。文件不存在或 JSON 解析失败视为无缓存
-- 写：probe 完成且 recovered=false 时写入缓存。probe recovered=true 时删除缓存文件（如果存在）
-- 并发安全：缓存文件是 best-effort 提示，写操作用 `writeFileSync` 原子性足够（单文件、AM 进程内单线程）
+- RateLimited 由 cooldown/cache 控制；用户消息可通过 `notifyUserMessage()` 清 cooldown 后立即 probe。
+- AuthFailed 允许按 cache TTL 限制 checkAuth 频率。
 
 ### Probe 聚合
 
-多个 c4-receive 进程可能在同一时刻发来路由请求。如果每个请求都独立触发 probe，会产生不必要的开销。
-
-**实现**：AM 进程内用一个 module-level Promise 变量作为 in-flight probe 锁。
+MessageRouter 在 AM Process 内维护一个 in-memory probe promise：
 
 ```javascript
-let inflightProbe = null  // Promise<ProbeResult> | null
-
-async function probeWithAggregation(healthEngine) {
-  // 已有 in-flight probe → 等待同一个 Promise
-  if (inflightProbe) return inflightProbe
-
-  // 触发新 probe
-  inflightProbe = healthEngine.runRecoveryProbe()
-    .finally(() => { inflightProbe = null })
-
-  return inflightProbe
+{
+  key: string,                 // `${health}:${healthReason || ''}`
+  startedAt: number,           // epoch ms
+  promise: Promise<ProbeResult>
 }
 ```
 
-**行为**：
-- 第一个请求触发 probe，设置 `inflightProbe`
-- 后续请求发现 `inflightProbe` 非 null，await 同一个 Promise
-- probe 完成后 `inflightProbe` 重置为 null
-- 下一波请求可以触发新 probe
+规则：
 
-### 退避判断
+- 同一 key 已有 probe 运行时，后续 route 加入同一个 promise。
+- key 变化时不复用旧 probe，启动新 probe。
+- probe 等待 budget 为 25s；超时的 route 返回 recovered=false，但底层 probe 可以继续完成并更新 HealthEngine/cache。
+- probe promise settle 后清空 in-memory 状态。
+- AM Process 单进程内存聚合即可，不需要跨进程文件锁；所有 `c4-receive` 都通过同一个 IPC server 进入 AM Process。
 
-IPC handler 不盲目触发 probe，需要检查是否过了退避间隔：
+### Probe Cache
+
+#### 文件
+
+```text
+~/zylos/activity-monitor/message-router-probe-cache.json
+```
+
+#### Schema
 
 ```javascript
-function shouldProbe(healthEngine, cache) {
-  const now = Date.now()
-
-  // 有有效缓存 → 不 probe
-  if (cache && cache.expiresAt > now) return false
-
-  // 距上次 probe 未过退避间隔 → 不 probe
-  const backoffMs = healthEngine.backoffDelay * 1000
-  if (now - healthEngine.lastRecoveryAt * 1000 < backoffMs) return false
-
-  return true
+{
+  version: 1,
+  health: 'unavailable' | 'rate_limited' | 'auth_failed',
+  reason: string,
+  recovered: false,
+  userMessage: string,
+  createdAt: number,           // epoch ms
+  expiresAt: number,           // epoch ms
+  probeStartedAt: number,      // epoch ms
 }
 ```
 
-**注意**：`notifyUserMessage()` 返回 true 时会重置 `restartFailureCount=0`，使 `backoffDelay` 变回最小值（60s），从而加速 probe 触发。
+#### TTL
 
-### 用户文案映射
+```text
+PROBE_CACHE_TTL_MS = 30000
+```
 
-MessageRouter 负责将 HealthEngine 的 `reason` 映射为用户可读的 `userMessage`。c4-receive 不维护自己的文案映射——避免文案来源分裂。
+30s 与 D-7 的 IPC hard timeout 对齐，避免短时间并发请求重复 probe，同时不会长期阻断用户触发 recovery。
 
-**文案表**：
+#### 命中条件
 
-| health | reason 模式 | userMessage |
-|--------|-----------|-------------|
-| rate_limited | `rate_limit_*` | "I've hit my usage limit.{resetInfo} Please send your message again after I'm back!" |
-| auth_failed | `auth_*` | "I'm having authentication issues — please check the API credentials. Your message has been queued and I'll process it once authentication is restored." |
-| unavailable | `heartbeat_timeout` | "I'm temporarily unavailable but should be back shortly. Please try again in a moment!" |
-| unavailable | `rate_limit_cooldown_expired` | "I'm temporarily unavailable but should be back shortly. Please try again in a moment!" |
-| unavailable | `tool_timeout` | "I'm temporarily unavailable but should be back shortly. Please try again in a moment!" |
-| unavailable | 其他/未知 | "I'm temporarily unavailable but should be back shortly. Please try again in a moment!" |
+cache 同时满足以下条件才可用：
 
-**resetInfo 来源**：`healthEngine.rateLimitResetTime`。有值时追加 " I should be back around {resetTime}."；无值时追加 " I should be back within an hour."。
+- `expiresAt > nowMs`
+- `recovered === false`
+- `cache.health === healthEngine.health`
+- `cache.reason === healthEngine.healthReason`
 
-**文案生成函数**：
+#### 失效条件
+
+以下情况必须删除 cache：
+
+- `healthEngine.health === 'ok'`
+- `healthEngine.health` 或 `healthReason` 与 cache 不一致
+- `healthEngine.notifyUserMessage()` 返回 true
+- `runRecoveryProbe()` 返回 recovered=true
+- cache 解析失败或 version 不匹配
+
+cache 写入使用 atomic write：write tmp → rename。
+
+### reason → userMessage catalog
+
+MessageRouter 维护统一文案 catalog。`c4-receive` 只转发 `RouteDecision.userMessage`，不再做二次映射。
 
 ```javascript
-function buildUserMessage(health, reason, healthEngine) {
-  if (health === 'rate_limited') {
-    const resetInfo = healthEngine.rateLimitResetTime
-      ? ` I should be back around ${healthEngine.rateLimitResetTime}.`
-      : ' I should be back within an hour.'
-    return `I've hit my usage limit.${resetInfo} Please send your message again after I'm back!`
-  }
-
-  if (health === 'auth_failed') {
-    return "I'm having authentication issues — please check the API credentials. Your message has been queued and I'll process it once authentication is restored."
-  }
-
-  // unavailable（所有 reason 统一文案）
-  return "I'm temporarily unavailable but should be back shortly. Please try again in a moment!"
+const USER_MESSAGE_CATALOG = {
+  rate_limit_detected:
+    '我现在被上游服务限流了，稍后会自动恢复。你的消息已收到，但暂时不会进入处理队列。',
+  rate_limit_cooldown_expired:
+    '我正在从限流状态恢复，请稍后再试。',
+  auth_still_failed:
+    '我当前认证不可用，需要管理员处理后才能继续。',
+  auth_check_failed:
+    '我当前认证不可用，需要管理员处理后才能继续。',
+  heartbeat_timeout:
+    '我现在暂时没有响应，正在尝试恢复。请稍后再发一次。',
+  heartbeat_failed:
+    '我现在暂时没有响应，正在尝试恢复。请稍后再发一次。',
+  tool_timeout:
+    '我刚才的工具执行卡住了，正在重启会话恢复。请稍后再发一次。',
+  unavailable:
+    '我现在暂时不可用，正在尝试恢复。请稍后再发一次。',
+  unknown:
+    '我现在暂时不可用，正在尝试恢复。请稍后再发一次。',
 }
 ```
 
-### IPC Handler 完整逻辑（AM 侧）
+匹配规则：
 
-此逻辑在 Monitor Orchestrator 的 IPC server connection handler 中实现。
+- `reason.startsWith('tool_timeout_')` → `tool_timeout`
+- exact reason 命中 catalog → 对应文案
+- `health='rate_limited'` 且无 exact reason → `rate_limit_detected`
+- `health='auth_failed'` 且无 exact reason → `auth_still_failed`
+- 其他 → `unknown`
+
+## 3. c4-receive 集成
+
+### 正常 IPC 路径
+
+```text
+c4-receive
+  │
+  ├─ build RouteRequest
+  ├─ call IPC route() with 30s hard timeout
+  ├─ decision.recovered == true
+  │    └─ insertConversation('in', ..., status='pending')
+  │       dispatcher 后续投递给 runtime
+  │
+  └─ decision.recovered == false
+       ├─ insertConversation('in', ..., status='delivered')
+       ├─ noReply == true?
+       │    └─ YES → exit 0，静默跳过
+       └─ noReply == false
+            └─ spawn c4-send.js 投递 decision.userMessage
+```
+
+### noReply 语义
+
+`noReply=true && recovered=false` 时：
+
+- inbound 仍写入 C4 DB，但 status 必须是 `delivered`
+- 不调用 c4-send
+- dispatcher 不会投递该系统消息
+- c4-receive exit 0
+
+这样可以保留审计记录，同时避免 unhealthy 时内部任务进入 runtime。
+
+### c4-send 失败
+
+unhealthy 路径中，inbound 先写 `delivered`，再调用 c4-send。若 c4-send 失败：
+
+- 不得改回 `pending`
+- c4-receive exit non-zero
+- 记录 terminal error 日志
+- 不做 runtime 投递，避免 double delivery
+
+这符合 D-37：用户可见结果只能是状态文案或 terminal error，不能同时产生 runtime 回复。
+
+### IPC fallback
+
+D-7 要求 30s hard timeout + fallback。c4-receive fallback 只做静态判断，不执行 recovery probe。
+
+```text
+IPC route 成功
+  → 使用 RouteDecision
+
+IPC 连接失败 / 超时 / 响应解析失败
+  → read agent-status.json
+      ├─ 读不到 / JSON 损坏 / health 缺失
+      │    → fail-open: insert pending（D-10 未知默认 OK）
+      ├─ health == 'ok'
+      │    → insert pending
+      └─ health != 'ok'
+           → build fallback RouteDecision
+              recovered=false
+              health=agentStatus.health
+              reason=agentStatus.unavailable_reason || health
+              userMessage=MessageRouter fallback catalog 映射
+```
+
+fallback 中 `noReply=true` 仍遵循 noReply 语义：写 `delivered`，不发 c4-send。
+
+## 4. 接口定义
 
 ```javascript
-async function handleRouteRequest(req, healthEngine) {
-  // 1. 健康时快速放行
-  if (healthEngine.health === 'ok') {
-    return { recovered: true, health: 'ok' }
-  }
+class MessageRouter {
+  constructor({ healthEngine, cacheStore, clock, log, options })
 
-  // 2. 通知 HealthEngine 有用户消息到达（加速 recovery）
-  const shouldTryProbe = healthEngine.notifyUserMessage(Math.floor(Date.now() / 1000))
-
-  // 3. 检查缓存
-  const cache = readProbeCache()
-
-  // 4. 决定是否 probe
-  let result
-  if (shouldTryProbe || shouldProbe(healthEngine, cache)) {
-    result = await probeWithAggregation(healthEngine)
-    // 写缓存
-    if (result.recovered) {
-      deleteProbeCache()
-    } else {
-      writeProbeCache({
-        ...result,
-        userMessage: req.noReply ? undefined : buildUserMessage(result.health, result.reason, healthEngine),
-        expiresAt: Date.now() + healthEngine.backoffDelay * 1000,
-        probedAt: Date.now(),
-      })
-    }
-  } else if (cache && cache.expiresAt > Date.now()) {
-    // 缓存有效，直接使用
-    result = cache
-  } else {
-    // 无缓存且未过退避 → 返回当前状态（不 probe）
-    result = {
-      recovered: false,
-      health: healthEngine.health,
-      reason: healthEngine.healthReason || 'backoff_active',
-    }
-  }
-
-  // 5. 构造响应
-  if (result.recovered) {
-    return { recovered: true, health: 'ok' }
-  }
-
-  const response = {
-    recovered: false,
-    health: result.health,
-    reason: result.reason,
-  }
-
-  if (!req.noReply) {
-    response.userMessage = result.userMessage || buildUserMessage(result.health, result.reason, healthEngine)
-  }
-
-  return response
+  async route(request: RouteRequest): Promise<RouteDecision>
+  async joinOrStartProbe(key: string): Promise<ProbeResult>
+  mapUserMessage(health: string, reason?: string): string
 }
 ```
 
-### 与其他组件的交互
+```javascript
+interface MessageRouterOptions {
+  probeBudgetMs?: number,       // default 25000
+  probeCacheTtlMs?: number,     // default 30000
+}
+```
+
+```javascript
+interface CacheStore {
+  read(): ProbeCache | null
+  write(cache: ProbeCache): void
+  clear(): void
+}
+```
+
+## 5. 与其他组件的交互
 
 | 交互方 | 方向 | 方法/数据 | 触发时机 | 说明 |
 |-------|------|----------|---------|------|
-| **HealthEngine** | 读取 | `health`, `healthReason`, `backoffDelay`, `lastRecoveryAt`, `rateLimitResetTime` | 每次路由请求 | 判断状态、是否 probe、文案生成 |
-| **HealthEngine** | 调用 | `notifyUserMessage(currentTime)` | 每次路由请求 | 加速 recovery（清 cooldown / 重置 backoff） |
-| **HealthEngine** | 调用 | `runRecoveryProbe()` | cache miss + 过了退避间隔 | 执行 probe，等待结果 |
-| **c4-receive** | 被调用 | IPC socket 请求/响应 | c4-receive spawn 时 | 短连接，一问一答 |
-| **Monitor Orchestrator** | 宿主 | IPC handler 注册 | AM init 时 | handler 持有 healthEngine 引用 |
+| **Monitor Orchestrator** | 创建/挂载 | `new MessageRouter(...)` | init | Orchestrator 启动 IPC server 并注册 route handler |
+| **HealthEngine** | 读取 | `health`, `healthReason`, `backoffDelay`, `lastRecoveryAt` | route 时 | 判断是否 OK、是否需要 probe |
+| **HealthEngine** | 调用 | `notifyUserMessage()` | `noReply=false && health!=ok` | 用户消息加速 recovery |
+| **HealthEngine** | 调用 | `runRecoveryProbe()` | cache miss 且需要 probe | 执行 heartbeat/checkAuth recovery |
+| **c4-receive** | 调用方 | IPC `route` | 每条 inbound 到达 | 根据 RouteDecision 写 DB 和发送状态文案 |
+| **StatusWriter** | fallback 数据 | `agent-status.json` | IPC fallback | 仅 c4-receive 降级路径读取 |
 
-### 常量
+## 6. 常量
 
 | 常量 | 值 | 说明 |
 |------|------|------|
-| PROBE_CACHE_FILE | `~/zylos/activity-monitor/probe-cache.json` | 缓存文件路径 |
+| ROUTER_IPC_TIMEOUT_MS | 30000 | c4-receive 等待 IPC response 的硬超时 |
+| ROUTER_PROBE_BUDGET_MS | 25000 | MessageRouter 等待 recovery probe 的预算 |
+| PROBE_CACHE_TTL_MS | 30000 | negative cache TTL |
 
-> 其他常量（IPC socket 路径、probe 超时等）定义在 Monitor Orchestrator 或 HealthEngine 中。
+## 7. 实施方案
 
-## 3. 实施方案
+**改动类型**：新增模块 + C4 receive 行为变更
 
-**改动类型**：新增功能（现有代码中无 MessageRouter 概念，c4-receive 直接读 agent-status.json）
+### 现有代码位置
 
-### 涉及的现有代码
-
-| 现有位置 | 内容 | 改动 |
-|---------|------|------|
-| `c4-receive.js:87-111` | `readHealthStatus()` — 直接读 agent-status.json | 改为 IPC 调用 AM socket，保留文件读取作为降级 fallback |
-| `c4-receive.js:113-151` | `recordPendingChannel()` — 写 pending-channels.jsonl | 删除（D-9 废弃） |
-| `c4-receive.js:216-234` | 主流程中的健康检查和状态文案 | 改为使用 IPC 响应中的 userMessage |
-| `c4-config.js` | `PENDING_CHANNELS_FILE`, `USER_MESSAGE_SIGNAL_FILE` | 标记废弃 |
-| `monitor.js`（新） | Monitor Orchestrator IPC server | 新增 IPC handler 实现路由逻辑 |
-
-### c4-receive 侧改造
-
-c4-receive 从"直接读文件判断健康"改为"IPC 询问 AM，AM 返回路由决策"。
-
-**改造后的主流程**：
-
-```javascript
-// 取代现有的 readHealthStatus() + recordPendingChannel() + 状态文案分支
-async function queryRoute(channel, endpoint, noReply) {
-  try {
-    return await ipcQuery({ type: 'route', channel, endpoint, noReply })
-  } catch (err) {
-    // IPC 失败 → 降级到文件读取
-    return fallbackFileRoute()
-  }
-}
-
-function fallbackFileRoute() {
-  const status = readHealthStatus()  // 现有文件读取逻辑
-  if (status.health === 'ok') {
-    return { recovered: true, health: 'ok' }
-  }
-  return {
-    recovered: false,
-    health: status.health,
-    reason: status.health,
-    userMessage: buildFallbackMessage(status),
-  }
-}
-
-async function ipcQuery(request) {
-  return new Promise((resolve, reject) => {
-    const socket = net.createConnection(AM_SOCKET_PATH)
-    let data = ''
-
-    socket.setTimeout(IPC_TIMEOUT)  // 25s
-    socket.on('connect', () => {
-      socket.write(JSON.stringify(request) + '\n')
-    })
-    socket.on('data', (chunk) => { data += chunk })
-    socket.on('end', () => {
-      try { resolve(JSON.parse(data)) }
-      catch (e) { reject(e) }
-    })
-    socket.on('timeout', () => {
-      socket.destroy()
-      reject(new Error('IPC timeout'))
-    })
-    socket.on('error', reject)
-  })
-}
-```
-
-**c4-receive 主流程改造后**：
-
-```javascript
-// 现有：直接读文件 + 状态分支 + exit
-// 改为：IPC 路由查询
-const route = await queryRoute(channel, endpoint, noReply)
-
-if (!route.recovered) {
-  // D-8: 写 inbound 记录为 delivered（dispatcher 自然跳过）
-  insertConversation('in', channel, endpoint, dbContent, 'delivered', priority, requireIdle)
-
-  // D-8: noReply=false 时调 c4-send 投递状态文案
-  if (!noReply && route.userMessage) {
-    // spawn c4-send.js 向用户发送状态文案
-    execFileSync('node', [C4_SEND_SCRIPT, channel, endpoint, '--content', route.userMessage])
-  }
-
-  emitError(json, `HEALTH_${route.health.toUpperCase()}`, route.userMessage || route.reason)
-}
-
-// recovered=true → 正常流程：写 inbound pending + 等待 dispatcher 投递
-```
-
-### 废弃项清理（D-9）
-
-| 废弃项 | 位置 | 处理 |
-|--------|------|------|
-| `pending-channels.jsonl` | `~/zylos/activity-monitor/pending-channels.jsonl` | c4-receive 不再写入；AM 不再读取；保留文件（历史兼容），不主动删除 |
-| `user-message-signal` | `~/zylos/activity-monitor/user-message-signal.json` | c4-receive 不再写入（用户消息信号改走 IPC `notifyUserMessage()`）；AM SignalStore 不再读取 |
-| `recordPendingChannel()` | c4-receive.js:113-151 | 整段删除 |
-| `loadPendingChannelKeys()` | c4-receive.js:113-132 | 整段删除 |
-| `USER_MESSAGE_SIGNAL_FILE` | c4-config.js | 移除导出 |
-| `PENDING_CHANNELS_FILE` | c4-config.js | 移除导出 |
+| 现有位置 | 内容 |
+|---------|------|
+| `skills/comm-bridge/scripts/c4-receive.js` | 外部消息入口，需接入 IPC route 决策 |
+| `skills/comm-bridge/scripts/c4-send.js` | unhealthy 状态文案发送 |
+| `skills/activity-monitor/scripts/activity-monitor.js` | 现有 AM 主进程，需由 Orchestrator 启动 IPC server |
+| `scripts/heartbeat-engine.js` | 旧 HealthEngine/HeartbeatEngine probe 逻辑来源 |
 
 ### 实施步骤
 
-1. **AM 侧 IPC handler** — 在 Monitor Orchestrator 的 IPC server 中实现 `handleRouteRequest()`、`probeWithAggregation()`、`shouldProbe()`、`buildUserMessage()` 和 probe 缓存读写（已在 [monitor-orchestrator.md](monitor-orchestrator.md) IPC 监听章节定义 socket 和协议）
-2. **c4-receive 侧改造** — 新增 `ipcQuery()` 和 `queryRoute()`，替代 `readHealthStatus()` + 状态分支；保留 `readHealthStatus()` 作为 IPC 失败时的降级 fallback
-3. **c4-receive unhealthy 路径** — 实现 D-8：`insertConversation(..., 'delivered')` + spawn `c4-send.js` 投递 `userMessage`
-4. **废弃项清理** — 删除 `recordPendingChannel()`、`loadPendingChannelKeys()`、`USER_MESSAGE_SIGNAL_FILE` 写入
-5. **测试** — IPC 连通性（正常/AM 未启动/AM 重启中）；probe 缓存有效/过期/无缓存；probe 聚合（并发请求共用一次 probe）；noReply 静默；降级 fallback
-
-### 实施顺序（在整体 Spec 2 + Spec 3 中的位置）
-
-MessageRouter 的实现分布在两侧：
-- **AM 侧**（IPC handler + probe 缓存 + 文案映射）→ 依赖 HealthEngine（Spec 1 组件），在 Monitor Orchestrator 实施时一并完成
-- **c4-receive 侧**（IPC client + unhealthy 路径 + 废弃项清理）→ 属于 Spec 3: C4 改造
-
-实施顺序：先完成 AM 侧 IPC handler（确保 socket 可用），再改造 c4-receive 侧。两侧之间通过 IPC 协议解耦，可以灰度切换（c4-receive 有 fallback）。
+1. 新增 `activity-monitor/scripts/message-router.js`，实现 `MessageRouter`、cache store、reason catalog。
+2. 在 Monitor Orchestrator init 中创建 MessageRouter，并启动 Unix socket IPC server。
+3. 修改 `c4-receive.js`：写 inbound DB 前先调用 IPC route。
+4. 实现 30s IPC timeout 和 `agent-status.json` fallback。
+5. 按 RouteDecision 写入 C4 DB：
+   - recovered=true → inbound `status='pending'`
+   - recovered=false → inbound `status='delivered'`
+6. recovered=false 且 noReply=false 时，调用 `c4-send.js` 发送 `userMessage`。
+7. 添加测试：
+   - health OK fast path
+   - health non-OK cache miss → probe success
+   - health non-OK cache miss → probe failure → c4-send
+   - `notifyUserMessage()` 返回 true 时绕过 cache
+   - noReply 静默 delivered
+   - IPC fallback status missing/malformed → fail-open
+   - IPC fallback status non-OK → unhealthy

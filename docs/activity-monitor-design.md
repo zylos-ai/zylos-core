@@ -149,7 +149,7 @@ sequenceDiagram
 | ToolPipeline | 从 runtime 产生的工具事件流中合成 API 活动摘要，判断 runtime 是否有近期活动 | `tool-events.jsonl`（runtime 写入的工具调用事件流） | `api-activity.json`（最近活动时间、活跃工具列表，供 ToolWatchdog 消费） |
 | ToolWatchdog | 检测工具调用是否超时，超时则通过 Adapter 执行干预动作（如中断当前工具） | snapshot、Adapter 提供的工具超时规则 | 调用 Runtime Adapter 执行控制动作（中断/重启） |
 | TaskScheduler | 统一管理定时任务（健康检查、日志清理、usage 告警等），按配置的 interval 触发执行 | 系统时钟、config 中的任务定义 | 任务执行结果；maintenance 状态文件 |
-| StatusWriter | tick 末尾汇总当前 ActivityState、HealthState 及各组件状态，写入对外状态文件 | snapshot、HealthEngine 当前状态 | `agent-status.json`（Operator 和 MessageRouter 消费） |
+| StatusWriter | tick 末尾汇总当前 ActivityState、HealthState 及各组件状态，写入对外状态文件 | snapshot、HealthEngine 当前状态 | `agent-status.json`（Operator 和 c4-receive fallback 消费） |
 
 #### Hook 脚本
 
@@ -174,11 +174,14 @@ MessageRouter 不在 AM Process 主循环中运行；它由 `c4-receive` 通过 
 路由规则：
 
 - `health=OK` 时立即返回 recovered=true，消息走主链。
-- `health!=OK` 时先检查本地缓存文件：缓存有效则直接使用，否则触发 recovery probe 并将结果写入缓存（带过期时间）。
+- `health!=OK && noReply=false` 时先调用 `notifyUserMessage()`，用户消息可清 cooldown / backoff 并强制绕过缓存触发 probe。
+- `health!=OK && noReply=true` 时不调用 `notifyUserMessage()`，避免 scheduler / internal message 打破 cooldown 或 backoff。
+- `health!=OK` 时检查本地 negative cache：只有 cache 未过期且 health/reason 与 HealthEngine 当前状态一致才可使用，否则触发 recovery probe 并将失败结果写入缓存（带过期时间）。
 - probe 成功返回 recovered=true，消息走主链。
 - probe 失败返回 recovered=false 和最终用户文案。
 - router probe budget 不超过 25s，给 `c4-send` 留出 5s 同步发送预算。
 - `noReply=true` 的消息不得走 c4-send 状态文案路径。
+- `c4-send` 状态文案投递成功后，c4-receive exit 0；只有 c4-send 失败才返回 terminal error，避免用户已收到状态文案后上游再重试。
 
 `noReply` 语义：
 
@@ -382,12 +385,12 @@ activity-monitor/
 #### D-7. MessageRouter 事件驱动 + probe 结果缓存
 
 **状态**：已确认
-**决策**：MessageRouter 由 c4-receive IPC 事件驱动，不做定时轮询。当 health≠OK 时，每个请求先检查本地缓存文件：若缓存有效则直接使用；若缓存过期或不存在，则触发一次 recovery probe 并将结果写入缓存（带过期时间）。采用 IPC 通信 + 30s 硬超时 + 降级 fallback 方案。
+**决策**：MessageRouter 由 c4-receive IPC 事件驱动，不做定时轮询。当 health≠OK 时，用户消息先调用 `notifyUserMessage()` 以允许 recovery 加速；`noReply=true` 的系统/内部消息不调用该方法。每个请求检查本地 negative cache：只有 cache 未过期且 health/reason 与当前 HealthEngine 状态一致才可使用；cache 过期、不存在、状态不匹配，或 `notifyUserMessage()` 要求加速时，触发一次 recovery probe 并将失败结果写入缓存（带过期时间）。采用 IPC 通信 + 30s 硬超时 + 降级 fallback 方案；router probe budget 为 25s。
 
 #### D-8. Unhealthy 路径即时双写 DB + c4-send 投递状态文案
 
 **状态**：已确认
-**决策**：health 非 OK 时，c4-receive 通过 MessageRouter IPC 探测后若仍异常：(1) insertConversation('in', ..., 'delivered') 记录用户输入，dispatcher 自然跳过；(2) spawn c4-send.js 投递 catalog.userMessage 给用户。用户即时收到状态回复。
+**决策**：health 非 OK 时，c4-receive 通过 MessageRouter IPC 探测后若仍异常：(1) insertConversation('in', ..., 'delivered') 记录用户输入，dispatcher 自然跳过；(2) noReply=false 时 spawn c4-send.js 投递 catalog.userMessage 给用户，投递成功后 c4-receive exit 0；c4-send 失败才返回 terminal error。用户即时收到状态回复，且每次 c4-receive 最多产生一种用户可见结果。
 
 #### D-9. 废弃 pending-channels.jsonl 异步恢复广播
 

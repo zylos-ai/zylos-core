@@ -24,6 +24,7 @@ activity-monitor/scripts/
 ├── monitor.js                # Monitor Orchestrator：入口 + 主循环编排
 ├── guardian.js                # Guardian：进程存活守护
 ├── health-engine.js           # HealthEngine：健康状态机
+├── message-router.js          # MessageRouter：用户消息路由（事件驱动）
 ├── signal-store.js            # SignalStore：信号聚合读取
 ├── status-writer.js           # StatusWriter：agent-status.json 写入
 ├── task-scheduler.js          # TaskScheduler：统一定时任务调度
@@ -61,6 +62,7 @@ activity-monitor/scripts/
 | [monitor-orchestrator.md](monitor-orchestrator.md) | Monitor Orchestrator | 行为变更（D-4 tick 重组） |
 | [guardian.md](guardian.md) | Guardian | 行为变更 |
 | [health-engine.md](health-engine.md) | HealthEngine | 行为变更 |
+| [message-router.md](message-router.md) | MessageRouter | 新增模块 + C4 receive 行为变更 |
 | [proc-sampler.md](proc-sampler.md) | ProcSampler | 纯提取 |
 | [tool-pipeline.md](tool-pipeline.md) | ToolPipeline | 纯提取 |
 | [tool-watchdog.md](tool-watchdog.md) | ToolWatchdog | 行为变更 |
@@ -112,6 +114,9 @@ activity-monitor/scripts/
 | BACKOFF_CAP | 3600s | HealthEngine |
 | PROBE_TIMEOUT | 25s | HealthEngine |
 | STICKY_ERROR_MIN_INTERVAL | 30s | HealthEngine |
+| ROUTER_IPC_TIMEOUT_MS | 30000ms | MessageRouter / c4-receive |
+| ROUTER_PROBE_BUDGET_MS | 25000ms | MessageRouter |
+| PROBE_CACHE_TTL_MS | 30000ms | MessageRouter |
 | SAMPLE_INTERVAL | 10s | ProcSampler |
 | FROZEN_THRESHOLD | 60s | ProcSampler |
 | REORDER_WINDOW_MS | 2000ms | ToolPipeline |
@@ -134,6 +139,7 @@ activity-monitor/scripts/
 5. **ToolPipeline** — 依赖 SignalStore
 6. **ToolWatchdog** — 依赖 ToolPipeline，已独立，移除 launchGracePeriod
 7. **HealthEngine** — 行为变更最大，依赖 Adapter
-8. **TaskScheduler** — 依赖 config
-9. **StatusWriter** — 依赖所有其他组件输出
-10. **Monitor Orchestrator** — 组装层，最后实施
+8. **MessageRouter** — 依赖 HealthEngine，定义 IPC 路由与 c4-receive 集成
+9. **TaskScheduler** — 依赖 config
+10. **StatusWriter** — 依赖所有其他组件输出
+11. **Monitor Orchestrator** — 组装层，最后实施
