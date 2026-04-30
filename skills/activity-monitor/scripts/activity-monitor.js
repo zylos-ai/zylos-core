@@ -139,6 +139,7 @@ import { DailySchedule } from './daily-schedule.js';
 import { ProcSampler } from './proc-sampler.js';
 import { readCodexRolloutActivityFromActiveRollout } from './codex-rollout-activity-reader.js';
 import { readCodexUsageFromActiveRollout } from './usage-codex-rollout-reader.js';
+import { consumeRecentUserMessageSignal } from './signal-store.js';
 import { readInitialStatus, writeStatus } from './status-writer.js';
 import { shouldStartUsageCheck } from './usage-check-engine.js';
 import { getInitialUsageCheckAt } from './usage-check-init.js';
@@ -563,18 +564,17 @@ function enqueueContextRotationHandoff({ ratio = 0, used = 0, ceiling = 0 } = {}
  * signal-check code) so that user messages can trigger immediate auth retry.
  */
 function maybeConsumeUserMessageSignal(currentTime) {
-  try {
-    if (!fs.existsSync(USER_MESSAGE_SIGNAL_FILE)) return;
-    const signal = JSON.parse(fs.readFileSync(USER_MESSAGE_SIGNAL_FILE, 'utf8'));
-    fs.unlinkSync(USER_MESSAGE_SIGNAL_FILE);
-    if (signal.timestamp && (currentTime - signal.timestamp) < 60) {
-      if (authRetrySuppressedUntil > 0) {
-        log('Guardian: user message received, clearing auth retry suppression');
-        authRetrySuppressedUntil = 0;
-      }
-      engine.notifyUserMessage(currentTime);
+  const result = consumeRecentUserMessageSignal({
+    signalFile: USER_MESSAGE_SIGNAL_FILE,
+    currentTime,
+  });
+  if (result.fresh) {
+    if (authRetrySuppressedUntil > 0) {
+      log('Guardian: user message received, clearing auth retry suppression');
+      authRetrySuppressedUntil = 0;
     }
-  } catch { /* best-effort */ }
+    engine.notifyUserMessage(currentTime);
+  }
 }
 
 /**
