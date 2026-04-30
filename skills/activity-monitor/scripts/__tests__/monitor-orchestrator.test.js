@@ -705,6 +705,105 @@ describe('MonitorOrchestrator', () => {
     ]);
   });
 
+  it('handles Claude runtime activity and skips non-Claude runtimes', () => {
+    const calls = [];
+    const foregroundIdentity = {
+      trusted: true,
+      sessionId: 'session-1',
+      claudePid: 123,
+    };
+    const apiActivity = {
+      watchdog_candidate_tool: {
+        event_id: 'event-1',
+        name: 'WebFetch',
+        rule_id: 'web',
+        started_at: 19_000,
+      },
+    };
+    const toolPipeline = {
+      tick: (payload) => {
+        calls.push(['toolPipeline.tick', payload]);
+        return { foregroundIdentity, apiActivity };
+      },
+      getRuleById: (ruleId) => {
+        calls.push(['toolPipeline.getRuleById', ruleId]);
+        return {
+          watchdog: {
+            enabled: true,
+            maxRuntimeSec: 10,
+            interruptKey: 'Escape',
+            interruptGraceSec: 5,
+            cooldownSec: 30,
+            escalation: 'guardian',
+          },
+        };
+      },
+      buildApiActivity: (...args) => calls.push(['toolPipeline.buildApiActivity', ...args]),
+      writeApiActivitySnapshot: (...args) => calls.push(['toolPipeline.writeApiActivitySnapshot', ...args]),
+    };
+    const claudeHarness = createHarness({
+      adapter: { runtimeId: 'claude', displayName: 'Claude', sessionName: 'claude-main' },
+      toolPipeline,
+      watchdogState: null,
+      engine: {
+        health: 'ok',
+        start: () => calls.push(['engine.start']),
+        triggerRecovery: (reason) => calls.push(['engine.triggerRecovery', reason]),
+      },
+      initialHealth: 'ok',
+      log: (message) => calls.push(['log', message]),
+    });
+    claudeHarness.orchestrator.start();
+    calls.length = 0;
+
+    assert.deepEqual(claudeHarness.orchestrator.handleClaudeRuntimeActivity({
+      nowMs: 20_000,
+      currentTmuxClaudePid: 123,
+      interactiveState: { kind: 'busy' },
+      watchdogState: null,
+      canTreatPaneAsRecovered: () => false,
+      runC4Control: () => ({ ok: true, output: '' }),
+      clearWatchdogState: () => calls.push(['clearWatchdogState']),
+      writeWatchdogState: (nextWatchdogState) => calls.push(['writeWatchdogState', nextWatchdogState]),
+    }), {
+      foregroundIdentity,
+      apiActivity,
+      watchdogStatus: {
+        watchdog_phase: 'observing',
+        watchdog_block_reason: null,
+        api_activity_dirty: false,
+      },
+      watchdogState: null,
+    });
+    assert.deepEqual(calls, [
+      ['toolPipeline.tick', {
+        nowMs: 20_000,
+        currentTmuxClaudePid: 123,
+        interactiveState: { kind: 'busy' },
+      }],
+      ['toolPipeline.getRuleById', 'web'],
+      ['clearWatchdogState'],
+    ]);
+
+    const codexHarness = createHarness({ initialHealth: 'ok' });
+    codexHarness.orchestrator.start();
+    assert.deepEqual(codexHarness.orchestrator.handleClaudeRuntimeActivity({
+      nowMs: 20_000,
+      currentTmuxClaudePid: null,
+      interactiveState: null,
+      watchdogState: { episode_key: 'existing' },
+      canTreatPaneAsRecovered: () => false,
+      runC4Control: () => ({ ok: true, output: '' }),
+      clearWatchdogState: () => {},
+      writeWatchdogState: () => {},
+    }), {
+      foregroundIdentity: null,
+      apiActivity: null,
+      watchdogStatus: { watchdog_phase: 'idle', watchdog_block_reason: null },
+      watchdogState: { episode_key: 'existing' },
+    });
+  });
+
   it('ticks ProcSampler and continues when process is not frozen', () => {
     const calls = [];
     const procSampler = {

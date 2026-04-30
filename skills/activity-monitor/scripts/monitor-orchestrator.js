@@ -280,6 +280,60 @@ export class MonitorOrchestrator {
     return nextApiActivity;
   }
 
+  handleClaudeRuntimeActivity({
+    nowMs,
+    currentTmuxClaudePid,
+    interactiveState,
+    watchdogState,
+    canTreatPaneAsRecovered,
+    runC4Control,
+    clearWatchdogState,
+    writeWatchdogState,
+  }) {
+    if (!this.components) {
+      throw new Error('MonitorOrchestrator.start() must be called before handleClaudeRuntimeActivity()');
+    }
+
+    if (this.components.adapter.runtimeId !== 'claude') {
+      return {
+        foregroundIdentity: null,
+        apiActivity: null,
+        watchdogStatus: { watchdog_phase: 'idle', watchdog_block_reason: null },
+        watchdogState,
+      };
+    }
+
+    let { foregroundIdentity, apiActivity } = this.tickToolPipeline({
+      nowMs,
+      currentTmuxClaudePid,
+      interactiveState,
+    });
+    const watchdogStatus = this.evaluateToolWatchdog({
+      nowMs,
+      foregroundIdentity,
+      apiActivity,
+      interactiveState,
+      watchdogState,
+      canTreatPaneAsRecovered,
+      runC4Control,
+      clearWatchdogState,
+      writeWatchdogState,
+    });
+    apiActivity = this.refreshDirtyApiActivity({
+      watchdogStatus,
+      foregroundIdentity,
+      currentTmuxClaudePid,
+      apiActivity,
+    });
+
+    return {
+      foregroundIdentity,
+      apiActivity,
+      watchdogStatus,
+      watchdogState: this.components.watchdogState,
+    };
+  }
+
   evaluateToolWatchdog({
     nowMs,
     foregroundIdentity,

@@ -675,23 +675,6 @@ function clearWatchdogState() {
   writeWatchdogState();
 }
 
-function evaluateToolWatchdog({ nowMs, foregroundIdentity, apiActivity, interactiveState }) {
-  return orchestrator.evaluateToolWatchdog({
-    nowMs,
-    foregroundIdentity,
-    apiActivity,
-    interactiveState,
-    watchdogState,
-    canTreatPaneAsRecovered,
-    runC4Control,
-    clearWatchdogState,
-    writeWatchdogState: (nextWatchdogState) => {
-      watchdogState = nextWatchdogState;
-      writeWatchdogState();
-    },
-  });
-}
-
 function sendRecoveryNotice(channel, endpoint) {
   try {
     execFileSync('node', [C4_SEND_PATH, channel, endpoint, 'Hey! I was temporarily unavailable but I\'m back online now. If you sent me something while I was away, could you send it again? Thanks!'], { stdio: 'pipe', timeout: 15000 });
@@ -1193,26 +1176,24 @@ async function monitorLoop() {
   let foregroundIdentity = null;
   let watchdogStatus = { watchdog_phase: 'idle', watchdog_block_reason: null };
 
-  if (adapter.runtimeId === 'claude') {
-    const toolNowMs = Date.now();
-    ({ foregroundIdentity, apiActivity } = orchestrator.tickToolPipeline({
-      nowMs: toolNowMs,
-      currentTmuxClaudePid,
-      interactiveState,
-    }));
-    watchdogStatus = evaluateToolWatchdog({
-      nowMs: toolNowMs,
-      foregroundIdentity,
-      apiActivity,
-      interactiveState
-    });
-    apiActivity = orchestrator.refreshDirtyApiActivity({
-      watchdogStatus,
-      foregroundIdentity,
-      currentTmuxClaudePid,
-      apiActivity,
-    });
-  }
+  ({
+    foregroundIdentity,
+    apiActivity,
+    watchdogStatus,
+    watchdogState,
+  } = orchestrator.handleClaudeRuntimeActivity({
+    nowMs: Date.now(),
+    currentTmuxClaudePid,
+    interactiveState,
+    watchdogState,
+    canTreatPaneAsRecovered,
+    runC4Control,
+    clearWatchdogState,
+    writeWatchdogState: (nextWatchdogState) => {
+      watchdogState = nextWatchdogState;
+      writeWatchdogState();
+    },
+  }));
 
   const {
     apiUpdatedSec,
