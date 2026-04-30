@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { HeartbeatEngine } from '../heartbeat-engine.js';
+import { HealthEngine, HeartbeatEngine } from '../health-engine.js';
 
 function createMockDeps() {
   const calls = {
@@ -29,8 +29,12 @@ function createMockDeps() {
   return { deps, calls };
 }
 
-describe('HeartbeatEngine', () => {
+describe('HealthEngine', () => {
   describe('maintenance lifecycle', () => {
+    it('keeps HeartbeatEngine as a compatibility alias', () => {
+      assert.equal(HeartbeatEngine, HealthEngine);
+    });
+
     it('starts an internal maintenance loop and stop clears it', async () => {
       const { deps, calls } = createMockDeps();
       const engine = new HeartbeatEngine(deps, {
@@ -71,6 +75,16 @@ describe('HeartbeatEngine', () => {
       assert.equal(engine.maintenanceTimer, null);
       assert.equal(engine.cooldownTimer, null);
       assert.equal(engine.postRestartProbeTimer, null);
+    });
+
+    it('keeps processHeartbeat as a compatibility alias for runMaintenanceCycle', () => {
+      const { deps, calls } = createMockDeps();
+      const engine = new HealthEngine(deps, { heartbeatInterval: 1 });
+      engine.lastHeartbeatAt = 0;
+
+      engine.processHeartbeat(true, 10);
+
+      assert.deepEqual(calls.enqueueHeartbeat, ['primary']);
     });
   });
 

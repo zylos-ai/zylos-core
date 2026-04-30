@@ -1,5 +1,5 @@
 /**
- * HeartbeatEngine - Heartbeat liveness state machine.
+ * HealthEngine - Runtime functional liveness state machine.
  *
  * v4 changes (#256 — behavioral rate limit detection):
  *   - Rate limit detection moved from proactive tmux scan to heartbeat failure
@@ -43,7 +43,7 @@ function isPublicUnavailableState(health) {
   return isUnavailableRecoveryState(health) || health === 'down';
 }
 
-export class HeartbeatEngine {
+export class HealthEngine {
   /**
    * @param {object} deps - Injected dependencies
    * @param {(phase: string) => boolean} deps.enqueueHeartbeat
@@ -128,7 +128,7 @@ export class HeartbeatEngine {
     if (this.maintenanceTimer) return;
     this.maintenanceTimer = setInterval(() => {
       try {
-        this.processHeartbeat(this.agentRunning, Math.floor(this.now() / 1000));
+        this.runMaintenanceCycle(this.agentRunning, Math.floor(this.now() / 1000));
       } catch (err) {
         this.deps.log(`HealthEngine maintenance error: ${err?.message || err}`);
       }
@@ -271,7 +271,7 @@ export class HeartbeatEngine {
     return false;
   }
 
-  processHeartbeat(agentRunning, currentTime) {
+  runMaintenanceCycle(agentRunning, currentTime) {
     // Track agentRunning transitions for process signal acceleration
     this._trackAgentRunning(agentRunning, currentTime);
 
@@ -387,6 +387,10 @@ export class HeartbeatEngine {
     if ((currentTime - this.lastHeartbeatAt) >= this.heartbeatInterval) {
       this.enqueueHeartbeat('primary');
     }
+  }
+
+  processHeartbeat(agentRunning, currentTime) {
+    return this.runMaintenanceCycle(agentRunning, currentTime);
   }
 
   onHeartbeatSuccess(phase) {
@@ -725,3 +729,5 @@ export class HeartbeatEngine {
     }
   }
 }
+
+export { HealthEngine as HeartbeatEngine };

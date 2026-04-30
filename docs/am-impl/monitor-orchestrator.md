@@ -110,7 +110,7 @@ tick() [every 1s, self-scheduling]
   └─ 7. StatusWriter.write(snapshot, healthEngine)
 ```
 
-> **行为变更**：现有代码 tick 中包含 user message signal 消费、periodic probe、API error scan、processHeartbeat() 共 4 个 health 相关步骤。按 D-4，这些步骤全部删除。HealthEngine 改为事件驱动（c4-dispatcher 异步调用 `onUserMessageDelivered()`），不参与主循环 tick。
+> **行为变更**：旧 monitor tick 中包含 user message signal 消费、periodic probe、API error scan、health maintenance 驱动共 4 个 health 相关步骤。按 D-4，这些步骤不再由主循环 tick 驱动；HealthEngine 改为事件驱动（c4-dispatcher 异步调用 `onUserMessageDelivered()`）并由自身 maintenance timer 处理 pending heartbeat / cooldown / post-restart probe。
 
 ### 组件注册（init 时创建）
 

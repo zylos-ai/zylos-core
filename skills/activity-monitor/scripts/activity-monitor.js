@@ -62,7 +62,7 @@
  *   - RuntimeAdapter abstraction: getActiveAdapter() reads runtime from config.json
  *   - Replaced startClaude/killTmuxSession/isClaudeRunning/sendToTmux/isClaudeLoggedIn
  *     with adapter.launch/stop/isRunning/sendMessage/checkAuth
- *   - HeartbeatEngine deps now merged from adapter.getHeartbeatDeps() (probe) + fixed deps
+ *   - HealthEngine deps now merged from adapter.getHeartbeatDeps() (probe) + fixed deps
  *   - SESSION, CLAUDE_BIN, and all Claude-specific inline logic removed from this file
  *   - monitorLoop is now async (await adapter.isRunning() each tick)
  *

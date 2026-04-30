@@ -240,7 +240,7 @@ Unavailable 是唯一有退避策略的状态。进入后通过 `restartFailureC
 └─────────────────────────────────────────────────────┘
 ```
 
-**注意**：HealthEngine 自身不维护定时器来驱动退避 probe。退避间隔是给 MessageRouter 的参考——MessageRouter 在路由请求时检查是否距上次 probe 已过退避间隔，决定是否触发新 probe。HealthEngine 只响应外部调用。
+**当前实现说明**：HealthEngine 已有内部 maintenance timer，用于处理 pending heartbeat 结果、rate limit cooldown 到期、post-restart probe、以及 legacy primary heartbeat 兼容路径。退避间隔仍暴露给 MessageRouter 作为路由时是否触发 recovery probe 的参考；MessageRouter 可按需调用 `runRecoveryProbe()`。
 
 ### 接口定义
 
@@ -774,12 +774,12 @@ get backoffDelay() {
 
 | 现有位置 | 内容 | 对应新方法 |
 |---------|------|-----------|
-| `scripts/health-engine.js` | HealthEngine import surface — re-exports current HeartbeatEngine implementation during migration | 后续将实现迁移到此文件 |
-| `scripts/heartbeat-engine.js` | HeartbeatEngine class — FSM + timer-driven heartbeat maintenance | 保留为兼容入口，逐步迁移到 HealthEngine |
+| `scripts/health-engine.js` | HealthEngine import surface — re-exports the current HealthEngine implementation | 主入口 |
+| `scripts/heartbeat-engine.js` | HealthEngine class — FSM + timer-driven heartbeat maintenance; also exports `HeartbeatEngine` compatibility alias | 保留为兼容入口，逐步迁移文件名 |
 | `scripts/heartbeat-config.js`（15行） | `isRuntimeHeartbeatEnabled()` | 删除（不再有 tick-based heartbeat 开关） |
 | `activity-monitor.js:2081-2127` | monitorLoop 中的 API error scan + periodic probe + rate limit 检测 | `onUserMessageDelivered()` 替代 |
 | `activity-monitor.js:2087-2089` | user message signal 消费（tick 中读取 signal file） | `notifyUserMessage()` 替代（由 MessageRouter 调用） |
-| `activity-monitor.js:2173-2197` | init 中的 HeartbeatEngine 实例化 + state 恢复 | HealthEngine 构造 + D-10 冷启动恢复 |
+| `activity-monitor.js:2173-2197` | init 中的 HealthEngine 实例化 + state 恢复 | HealthEngine 构造 + D-10 冷启动恢复 |
 
 ### 实施步骤
 

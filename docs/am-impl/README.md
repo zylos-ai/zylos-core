@@ -15,7 +15,7 @@
 
 ## 现有结构
 
-大部分逻辑集中在 `activity-monitor.js`，仅 HeartbeatEngine、ProcSampler、DailySchedule、tool-watchdog、tool-lifecycle、tool-event-stream、tool-rules 已拆为独立模块。
+大部分逻辑集中在 `activity-monitor.js`，仅 HealthEngine、ProcSampler、TaskScheduler、tool-watchdog、tool-lifecycle、tool-event-stream、tool-rules 已拆为独立模块。
 
 ## 目标结构（对齐顶层设计 §4.1）
 

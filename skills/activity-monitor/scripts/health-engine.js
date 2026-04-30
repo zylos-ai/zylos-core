@@ -1,4 +1,4 @@
 export {
-  HeartbeatEngine,
-  HeartbeatEngine as HealthEngine,
+  HealthEngine,
+  HealthEngine as HeartbeatEngine,
 } from './heartbeat-engine.js';
