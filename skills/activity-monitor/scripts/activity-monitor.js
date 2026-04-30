@@ -136,7 +136,7 @@ import { fileURLToPath } from 'url';
 import { HeartbeatEngine } from './heartbeat-engine.js';
 import { Guardian } from './guardian.js';
 import { MessageRouter } from './message-router.js';
-import { DailySchedule } from './daily-schedule.js';
+import { TaskScheduler } from './task-scheduler.js';
 import { ProcSampler } from './proc-sampler.js';
 import { canTreatPaneAsRecovered, ToolPipeline } from './tool-pipeline.js';
 import { readCodexUsageFromActiveRollout } from './usage-codex-rollout-reader.js';
@@ -803,18 +803,6 @@ function enqueueHealthCheck() {
   return true;
 }
 
-function maybeEnqueueHealthCheck(agentRunning, currentTime) {
-  if (!agentRunning) return;
-  if (engine.health !== 'ok') return;
-
-  const state = loadHealthCheckState();
-  const lastCheckAt = state?.last_check_at ?? 0;
-
-  if ((currentTime - lastCheckAt) >= HEALTH_CHECK_INTERVAL) {
-    enqueueHealthCheck();
-  }
-}
-
 // ---------------------------------------------------------------------------
 // Daily Upgrade
 // ---------------------------------------------------------------------------
@@ -867,9 +855,7 @@ function enqueueDailyUpgradeControl() {
   return true;
 }
 
-let upgradeScheduler;      // initialized in init()
-let memoryCommitScheduler; // initialized in init()
-let upgradeCheckScheduler; // initialized in init()
+let taskScheduler; // initialized in init()
 
 // ---------------------------------------------------------------------------
 // Daily Memory Commit
@@ -1257,9 +1243,12 @@ async function monitorLoop() {
 
     maybeConsumeUserMessageSignal(currentTime);
     engine.processHeartbeat(false, currentTime);
-    maybeEnqueueHealthCheck(false, currentTime);
-
-    memoryCommitScheduler.maybeTrigger();
+    taskScheduler.tick({
+      currentTime,
+      health: engine.health,
+      agentRunning: false,
+      state,
+    });
     lastState = state;
     return;
   }
@@ -1440,14 +1429,14 @@ async function monitorLoop() {
   }
 
   engine.processHeartbeat(true, currentTime);
-  maybeEnqueueHealthCheck(true, currentTime);
-  if (engine.health === 'ok') {
-    if (readConfigBool('daily_upgrade_enabled', false)) {
-      upgradeScheduler.maybeTrigger();
-    }
-    upgradeCheckScheduler.maybeTrigger();
-  }
-  memoryCommitScheduler.maybeTrigger();
+  taskScheduler.tick({
+    currentTime,
+    health: engine.health,
+    agentRunning: true,
+    state,
+    idleSeconds,
+    apiActivity,
+  });
   if (engine.health === 'ok') {
     maybeCheckUsage(state, idleSeconds, currentTime, apiActivity);
   }
@@ -1547,40 +1536,47 @@ function init() {
     log('Daily upgrade: disabled (set `zylos config set daily_upgrade_enabled true` to enable)');
   }
 
-  upgradeScheduler = new DailySchedule({
+  taskScheduler = new TaskScheduler([
+    {
+      id: 'daily-upgrade',
+      type: 'daily',
+      hour: DAILY_UPGRADE_HOUR,
+      enabled: () => readConfigBool('daily_upgrade_enabled', false),
+      gate: (snapshot) => snapshot.health === 'ok',
+      loadState: loadDailyUpgradeState,
+      writeState: writeDailyUpgradeState,
+      execute: enqueueDailyUpgradeControl,
+    },
+    {
+      id: 'daily-memory-commit',
+      type: 'daily',
+      hour: DAILY_MEMORY_COMMIT_HOUR,
+      loadState: loadMemoryCommitState,
+      writeState: writeMemoryCommitState,
+      execute: executeDailyMemoryCommit,
+    },
+    {
+      id: 'daily-upgrade-check',
+      type: 'daily',
+      hour: DAILY_UPGRADE_CHECK_HOUR,
+      gate: (snapshot) => snapshot.health === 'ok',
+      loadState: loadUpgradeCheckState,
+      writeState: writeUpgradeCheckState,
+      execute: executeUpgradeCheck,
+    },
+    {
+      id: 'health-check',
+      type: 'interval',
+      intervalSec: HEALTH_CHECK_INTERVAL,
+      gate: (snapshot) => snapshot.agentRunning === true && snapshot.health === 'ok',
+      getLastRunAt: () => loadHealthCheckState()?.last_check_at ?? 0,
+      execute: enqueueHealthCheck,
+    },
+  ], {
     getLocalHour,
     getLocalDate,
-    loadState: loadDailyUpgradeState,
-    writeState: writeDailyUpgradeState,
-    execute: enqueueDailyUpgradeControl,
+    nowEpoch: () => Math.floor(Date.now() / 1000),
     log
-  }, {
-    hour: DAILY_UPGRADE_HOUR,
-    name: 'daily-upgrade'
-  });
-
-  memoryCommitScheduler = new DailySchedule({
-    getLocalHour,
-    getLocalDate,
-    loadState: loadMemoryCommitState,
-    writeState: writeMemoryCommitState,
-    execute: executeDailyMemoryCommit,
-    log
-  }, {
-    hour: DAILY_MEMORY_COMMIT_HOUR,
-    name: 'daily-memory-commit'
-  });
-
-  upgradeCheckScheduler = new DailySchedule({
-    getLocalHour,
-    getLocalDate,
-    loadState: loadUpgradeCheckState,
-    writeState: writeUpgradeCheckState,
-    execute: executeUpgradeCheck,
-    log
-  }, {
-    hour: DAILY_UPGRADE_CHECK_HOUR,
-    name: 'daily-upgrade-check'
   });
 
   // Restore usage check timestamp from persisted state.
