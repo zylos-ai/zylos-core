@@ -486,6 +486,139 @@ describe('MonitorOrchestrator', () => {
     });
   });
 
+  it('reads Claude runtime interaction state and skips it for non-Claude runtimes', () => {
+    const calls = [];
+    const claudeHarness = createHarness({
+      adapter: { runtimeId: 'claude', displayName: 'Claude', sessionName: 'claude-main' },
+      initialHealth: 'ok',
+    });
+    claudeHarness.orchestrator.start();
+
+    assert.deepEqual(claudeHarness.orchestrator.readRuntimeInteraction({
+      getTmuxClaudePid: (sessionName) => {
+        calls.push(['getTmuxClaudePid', sessionName]);
+        return 1234;
+      },
+      readTmuxInputState: (payload) => {
+        calls.push(['readTmuxInputState', payload]);
+        return { status: 'empty' };
+      },
+    }), {
+      currentTmuxClaudePid: 1234,
+      interactiveState: { status: 'empty' },
+    });
+    assert.deepEqual(calls, [
+      ['getTmuxClaudePid', 'claude-main'],
+      ['readTmuxInputState', { sessionName: 'claude-main' }],
+    ]);
+
+    calls.length = 0;
+    const codexHarness = createHarness({
+      adapter: { runtimeId: 'codex', displayName: 'Codex', sessionName: 'codex-main' },
+      initialHealth: 'ok',
+    });
+    codexHarness.orchestrator.start();
+
+    assert.deepEqual(codexHarness.orchestrator.readRuntimeInteraction({
+      getTmuxClaudePid: () => calls.push(['getTmuxClaudePid']),
+      readTmuxInputState: () => calls.push(['readTmuxInputState']),
+    }), {
+      currentTmuxClaudePid: 0,
+      interactiveState: null,
+    });
+    assert.deepEqual(calls, []);
+  });
+
+  it('ticks ToolPipeline only for Claude runtime', () => {
+    const calls = [];
+    const toolPipeline = {
+      tick: (payload) => {
+        calls.push(['toolPipeline.tick', payload]);
+        return {
+          foregroundIdentity: { source: 'session' },
+          apiActivity: { active: true },
+        };
+      },
+    };
+    const claudeHarness = createHarness({
+      adapter: { runtimeId: 'claude', displayName: 'Claude', sessionName: 'claude-main' },
+      toolPipeline,
+      initialHealth: 'ok',
+    });
+    claudeHarness.orchestrator.start();
+
+    assert.deepEqual(claudeHarness.orchestrator.tickToolPipeline({
+      nowMs: 123000,
+      currentTmuxClaudePid: 4321,
+      interactiveState: { status: 'has_content' },
+    }), {
+      foregroundIdentity: { source: 'session' },
+      apiActivity: { active: true },
+    });
+    assert.deepEqual(calls, [
+      ['toolPipeline.tick', {
+        nowMs: 123000,
+        currentTmuxClaudePid: 4321,
+        interactiveState: { status: 'has_content' },
+      }],
+    ]);
+
+    calls.length = 0;
+    const codexHarness = createHarness({
+      adapter: { runtimeId: 'codex', displayName: 'Codex', sessionName: 'codex-main' },
+      toolPipeline,
+      initialHealth: 'ok',
+    });
+    codexHarness.orchestrator.start();
+
+    assert.deepEqual(codexHarness.orchestrator.tickToolPipeline({
+      nowMs: 456000,
+      currentTmuxClaudePid: 0,
+      interactiveState: null,
+    }), {
+      foregroundIdentity: null,
+      apiActivity: null,
+    });
+    assert.deepEqual(calls, []);
+  });
+
+  it('refreshes API activity snapshot only when watchdog marks it dirty', () => {
+    const calls = [];
+    const previousApiActivity = { active: true, updated_at: 1000 };
+    const refreshedApiActivity = { active: false, updated_at: 2000 };
+    const toolPipeline = {
+      buildApiActivity: (foregroundIdentity, currentTmuxClaudePid) => {
+        calls.push(['buildApiActivity', foregroundIdentity, currentTmuxClaudePid]);
+        return refreshedApiActivity;
+      },
+      writeApiActivitySnapshot: (apiActivity) => calls.push(['writeApiActivitySnapshot', apiActivity]),
+    };
+    const { orchestrator } = createHarness({
+      toolPipeline,
+      initialHealth: 'ok',
+    });
+    orchestrator.start();
+
+    assert.equal(orchestrator.refreshDirtyApiActivity({
+      watchdogStatus: { api_activity_dirty: false },
+      foregroundIdentity: { source: 'session' },
+      currentTmuxClaudePid: 1234,
+      apiActivity: previousApiActivity,
+    }), previousApiActivity);
+    assert.deepEqual(calls, []);
+
+    assert.equal(orchestrator.refreshDirtyApiActivity({
+      watchdogStatus: { api_activity_dirty: true },
+      foregroundIdentity: { source: 'session' },
+      currentTmuxClaudePid: 1234,
+      apiActivity: previousApiActivity,
+    }), refreshedApiActivity);
+    assert.deepEqual(calls, [
+      ['buildApiActivity', { source: 'session' }, 1234],
+      ['writeApiActivitySnapshot', refreshedApiActivity],
+    ]);
+  });
+
   it('writes busy running status and resets idle tracking', () => {
     const calls = [];
     const engine = {

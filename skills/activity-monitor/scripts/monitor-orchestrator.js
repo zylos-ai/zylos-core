@@ -225,6 +225,57 @@ export class MonitorOrchestrator {
     return { activity, source };
   }
 
+  readRuntimeInteraction({ getTmuxClaudePid, readTmuxInputState }) {
+    if (!this.components) {
+      throw new Error('MonitorOrchestrator.start() must be called before readRuntimeInteraction()');
+    }
+
+    const { adapter } = this.components;
+    return {
+      currentTmuxClaudePid: adapter.runtimeId === 'claude'
+        ? getTmuxClaudePid(adapter.sessionName)
+        : 0,
+      interactiveState: adapter.runtimeId === 'claude'
+        ? readTmuxInputState({ sessionName: adapter.sessionName })
+        : null,
+    };
+  }
+
+  tickToolPipeline({ nowMs, currentTmuxClaudePid, interactiveState }) {
+    if (!this.components) {
+      throw new Error('MonitorOrchestrator.start() must be called before tickToolPipeline()');
+    }
+
+    const { adapter, toolPipeline } = this.components;
+    if (adapter.runtimeId !== 'claude') {
+      return {
+        foregroundIdentity: null,
+        apiActivity: null,
+      };
+    }
+
+    return toolPipeline.tick({
+      nowMs,
+      currentTmuxClaudePid,
+      interactiveState,
+    });
+  }
+
+  refreshDirtyApiActivity({ watchdogStatus, foregroundIdentity, currentTmuxClaudePid, apiActivity }) {
+    if (!this.components) {
+      throw new Error('MonitorOrchestrator.start() must be called before refreshDirtyApiActivity()');
+    }
+
+    if (!watchdogStatus.api_activity_dirty) {
+      return apiActivity;
+    }
+
+    const { toolPipeline } = this.components;
+    const nextApiActivity = toolPipeline.buildApiActivity(foregroundIdentity, currentTmuxClaudePid);
+    toolPipeline.writeApiActivitySnapshot(nextApiActivity);
+    return nextApiActivity;
+  }
+
   handleRunningRuntime({
     currentTime,
     currentTimeHuman,

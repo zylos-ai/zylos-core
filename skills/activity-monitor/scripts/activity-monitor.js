@@ -1216,12 +1216,10 @@ async function monitorLoop() {
     getTmuxActivity,
   });
 
-  const currentTmuxClaudePid = adapter.runtimeId === 'claude'
-    ? getTmuxClaudePid(adapter.sessionName)
-    : 0;
-  const interactiveState = adapter.runtimeId === 'claude'
-    ? readTmuxInputState({ sessionName: adapter.sessionName })
-    : null;
+  const { currentTmuxClaudePid, interactiveState } = orchestrator.readRuntimeInteraction({
+    getTmuxClaudePid,
+    readTmuxInputState,
+  });
 
   let apiActivity = null;
   let foregroundIdentity = null;
@@ -1229,10 +1227,10 @@ async function monitorLoop() {
 
   if (adapter.runtimeId === 'claude') {
     const toolNowMs = Date.now();
-    ({ foregroundIdentity, apiActivity } = toolPipeline.tick({
+    ({ foregroundIdentity, apiActivity } = orchestrator.tickToolPipeline({
       nowMs: toolNowMs,
       currentTmuxClaudePid,
-      interactiveState
+      interactiveState,
     }));
     watchdogStatus = evaluateToolWatchdog({
       nowMs: toolNowMs,
@@ -1240,10 +1238,12 @@ async function monitorLoop() {
       apiActivity,
       interactiveState
     });
-    if (watchdogStatus.api_activity_dirty) {
-      apiActivity = toolPipeline.buildApiActivity(foregroundIdentity, currentTmuxClaudePid);
-      toolPipeline.writeApiActivitySnapshot(apiActivity);
-    }
+    apiActivity = orchestrator.refreshDirtyApiActivity({
+      watchdogStatus,
+      foregroundIdentity,
+      currentTmuxClaudePid,
+      apiActivity,
+    });
   }
 
   const {
