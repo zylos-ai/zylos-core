@@ -73,6 +73,12 @@ activity-monitor/scripts/
 
 > **SessionRestartContinuation**（D-6 列出）不设独立文档。其职责（session restart 后注入 unsummarized context）由 RuntimeAdapter.`enqueueStartupPrompt()` + session-start-prompt hook 覆盖（见 [runtime-adapter.md](runtime-adapter.md) 和 [hooks.md](hooks.md)）。
 
+## Deferred Proposals
+
+| 文档 | 状态 | 说明 |
+|------|------|------|
+| [deferred-codex-tool-call-watchdog.md](deferred-codex-tool-call-watchdog.md) | Deferred | Codex tool-call stuck 兜底方案；当前 AM v3 implementation 不实现 |
+
 ## 配置项汇总
 
 ### config.json 可配置项
