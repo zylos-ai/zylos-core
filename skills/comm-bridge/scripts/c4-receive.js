@@ -112,29 +112,35 @@ function readHealthStatusFile() {
   }
 }
 
+function publicHealth(health) {
+  if (health === 'ok' || health === 'rate_limited' || health === 'auth_failed') {
+    return health;
+  }
+  return 'unavailable';
+}
+
 function buildFallbackMessage(status) {
-  if (status.health === 'rate_limited') {
+  const health = publicHealth(status.health);
+  if (health === 'rate_limited') {
     const resetInfo = status.rate_limit_reset ? ` I should be back around ${status.rate_limit_reset}.` : ' I should be back within an hour.';
     return `I've hit my usage limit.${resetInfo} Please send your message again after I'm back!`;
   }
-  if (status.health === 'auth_failed') {
+  if (health === 'auth_failed') {
     return "I'm having authentication issues — please check the API credentials.";
-  }
-  if (status.health === 'down') {
-    return "I'm currently offline and unable to recover on my own. Please let the admin know so they can take a look!";
   }
   return "I'm temporarily unavailable but should be back shortly. Please try again in a moment!";
 }
 
 function fallbackFileRoute() {
   const status = readHealthStatusFile();
-  if (!status || typeof status.health !== 'string' || status.health === 'ok') {
+  const health = publicHealth(status?.health);
+  if (!status || typeof status.health !== 'string' || health === 'ok') {
     return { recovered: true, health: 'ok', fallback: true };
   }
   return {
     recovered: false,
-    health: status.health,
-    reason: status.unavailable_reason || status.health,
+    health,
+    reason: status.unavailable_reason || health,
     userMessage: buildFallbackMessage(status),
     fallback: true
   };

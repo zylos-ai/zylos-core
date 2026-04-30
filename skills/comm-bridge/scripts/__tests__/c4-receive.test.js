@@ -311,7 +311,7 @@ describe('c4-receive health gating', () => {
     });
   });
 
-  it('fallback sends unhealthy status message and exits zero', () => {
+  it('fallback normalizes legacy unhealthy status and exits zero', () => {
     withTmpDir(({ tmpDir, env }) => {
       fs.writeFileSync(path.join(tmpDir, 'activity-monitor', 'agent-status.json'), JSON.stringify({ health: 'down' }));
       createChannelSendScript(tmpDir, 'test-chan');
@@ -324,7 +324,7 @@ describe('c4-receive health gating', () => {
 
       const sent = JSON.parse(fs.readFileSync(path.join(tmpDir, 'test-chan-send.json'), 'utf8'));
       assert.equal(sent.args[0], 'ep1');
-      assert.match(sent.args[1], /offline|unable to recover/i);
+      assert.match(sent.args[1], /temporarily unavailable/i);
 
       const db = openDb(tmpDir);
       const inbound = db.prepare("SELECT status, content FROM conversations WHERE direction = 'in'").get();
@@ -333,7 +333,7 @@ describe('c4-receive health gating', () => {
 
       assert.equal(inbound.status, 'delivered');
       assert.ok(inbound.content.includes('reply via'));
-      assert.ok(outbound.content.includes("I'm currently offline"));
+      assert.ok(outbound.content.includes("I'm temporarily unavailable"));
     });
   });
 
