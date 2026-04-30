@@ -137,23 +137,17 @@ import { HeartbeatEngine } from './heartbeat-engine.js';
 import { Guardian } from './guardian.js';
 import { MessageRouter } from './message-router.js';
 import { TaskScheduler } from './task-scheduler.js';
+import { UsageMonitor } from './usage-monitor.js';
 import { ProcSampler } from './proc-sampler.js';
 import { canTreatPaneAsRecovered, ToolPipeline } from './tool-pipeline.js';
-import { readCodexUsageFromActiveRollout } from './usage-codex-rollout-reader.js';
 import { consumeRecentUserMessageSignal } from './signal-store.js';
 import { readInitialStatus, writeStatus } from './status-writer.js';
-import { shouldStartUsageCheck } from './usage-check-engine.js';
-import { getInitialUsageCheckAt } from './usage-check-init.js';
 import { isRuntimeHeartbeatEnabled } from './heartbeat-config.js';
 import { getToolRules } from './tool-rules.js';
 import {
   WATCHDOG_INTERRUPT_AVAILABLE_IN_SEC,
   evaluateToolWatchdogTransition
 } from './tool-watchdog.js';
-import {
-  readClaudeUsageFromMonitorFiles,
-  readCodexUsageFromMonitorFile
-} from './usage-monitor-file-reader.js';
 import { readTmuxInputState } from '../../comm-bridge/scripts/tmux-input-state.js';
 // activity-monitor runs as a deployed skill at ~/zylos/.claude/skills/activity-monitor/scripts/.
 // A relative import to cli/lib/runtime/ resolves correctly in the repo (dev) but NOT from
@@ -332,8 +326,7 @@ let toolPipeline;    // initialized in init()
 let messageRouterServer; // initialized in init()
 let contextMonitor;  // initialized in init() if adapter provides one (Codex only)
 let procSampler;     // initialized in init()
-
-let lastUsageCheckAt = 0;
+let usageMonitor;    // initialized in init()
 
 // Timezone: reuse scheduler's tz.js (.env TZ → process.env.TZ → UTC)
 import { loadTimezone } from '../../scheduler/scripts/tz.js';
@@ -949,294 +942,6 @@ function executeUpgradeCheck() {
   }
 }
 
-// --- Usage Monitoring ---
-
-function loadUsageState() {
-  try {
-    const stateFile = getUsageStateFile();
-    if (!fs.existsSync(stateFile)) return null;
-    return JSON.parse(fs.readFileSync(stateFile, 'utf8'));
-  } catch { }
-  return null;
-}
-
-function writeUsageState(data) {
-  try {
-    fs.writeFileSync(getUsageStateFile(), JSON.stringify(data, null, 2));
-  } catch (err) {
-    log(`Usage monitor: failed to write state (${err.message})`);
-  }
-}
-
-function getUsageStateFile() {
-  if (adapter?.runtimeId === 'codex') return USAGE_CODEX_STATE_FILE;
-  return USAGE_STATE_FILE;
-}
-
-function loadUsageAlertState() {
-  try {
-    if (!fs.existsSync(USAGE_ALERT_STATE_FILE)) return null;
-    return JSON.parse(fs.readFileSync(USAGE_ALERT_STATE_FILE, 'utf8'));
-  } catch { }
-  return null;
-}
-
-function writeUsageAlertState(data) {
-  try {
-    fs.writeFileSync(USAGE_ALERT_STATE_FILE, JSON.stringify(data, null, 2));
-  } catch (err) {
-    log(`Usage alert: failed to write state (${err.message})`);
-  }
-}
-
-function getPendingWorkCount() {
-  try {
-    const dbPath = path.join(ZYLOS_DIR, 'comm-bridge', 'c4.db');
-    if (!fs.existsSync(dbPath)) return 0;
-
-    const out = execSync(
-      `sqlite3 "${dbPath}" "SELECT ((SELECT COUNT(*) FROM control_queue WHERE status='pending') + (SELECT COUNT(*) FROM conversations WHERE direction='in' AND status='pending'))" 2>/dev/null`,
-      { encoding: 'utf8', timeout: 3000 }
-    ).trim();
-
-    return parseInt(out || '0', 10) || 0;
-  } catch {
-    return 0;
-  }
-}
-
-function maybeCleanupUsageProbeSessions() {
-  // Sidecar probing was removed for issue #470.
-}
-
-function getUsageTier(weeklyPercent) {
-  if (weeklyPercent >= USAGE_CRITICAL_THRESHOLD) return 'critical';
-  if (weeklyPercent >= USAGE_HIGH_THRESHOLD) return 'high';
-  if (weeklyPercent >= USAGE_WARN_THRESHOLD) return 'warning';
-  return 'ok';
-}
-
-function formatUsageNotification(usage, tier) {
-  const weekly = usage.weeklyAll ?? 0;
-  const session = usage.session ?? 0;
-  const resets = usage.weeklyAllResets || 'unknown';
-
-  const tierLabels = {
-    warning: '⚠️ Usage Warning',
-    high: '🔶 Usage High',
-    critical: '🔴 Usage Critical'
-  };
-
-  const lines = [
-    tierLabels[tier] || 'Usage Alert',
-    '',
-    `Weekly (all models): ${weekly}% used`,
-    `Session: ${session}% used`
-  ];
-
-  if (usage.weeklySonnet !== undefined && usage.weeklySonnet !== null) {
-    lines.push(`Weekly (Sonnet): ${usage.weeklySonnet}% used`);
-  }
-
-  lines.push(`Resets: ${resets}`);
-
-  if (tier === 'critical') {
-    lines.push('', 'Approaching plan limit. Consider reducing activity to avoid interruption.');
-  } else if (tier === 'high') {
-    lines.push('', 'Usage is elevated. Monitor closely.');
-  }
-
-  return lines.join('\n');
-}
-
-function sendUsageNotification(message) {
-  // Enqueue as a control message — Claude will relay to the owner via C4.
-  // This avoids hardcoding owner channel/endpoint in the monitor.
-  const content = `Usage alert received from activity monitor. Please forward this to the owner via their preferred DM channel:\n\n${message}`;
-  const result = runC4Control([
-    'enqueue',
-    '--content', content,
-    '--priority', '1',
-    '--available-in', '5',
-    '--no-ack-suffix'
-  ]);
-  if (result.ok) {
-    log(`Usage monitor: notification enqueued (${result.output})`);
-  } else {
-    log(`Usage monitor: notification enqueue failed (${result.output})`);
-  }
-}
-
-function canRunUsageTask({ claudeState, idleSeconds, currentTime, apiActivity, activeHoursOnly = false }) {
-  if (adapter.runtimeId !== 'claude' && adapter.runtimeId !== 'codex') return;
-
-  const promptUpdatedAt = apiActivity?.updated_at
-    ? Math.floor(apiActivity.updated_at / 1000) : 0;
-  return shouldStartUsageCheck({
-    runtimeId: adapter.runtimeId,
-    allowedRuntimeIds: ['claude', 'codex'],
-    claudeState,
-    idleSeconds,
-    currentTime,
-    lastUsageCheckAt: 0,
-    checkInterval: { seconds: USAGE_CHECK_INTERVAL, idleGate: USAGE_IDLE_GATE },
-    inPrompt: adapter.runtimeId === 'claude' ? Boolean(apiActivity?.in_prompt) : false,
-    promptUpdatedAt,
-    localHour: getLocalHour(),
-    activeHoursStart: activeHoursOnly ? USAGE_ACTIVE_HOURS_START : 0,
-    activeHoursEnd: activeHoursOnly ? USAGE_ACTIVE_HOURS_END : 24,
-    pendingQueueCount: getPendingWorkCount(),
-    lockBusy: false,
-    backoffUntil: 0,
-    circuitUntil: 0,
-  });
-}
-
-/**
- * Refresh local usage state only. Alerting is handled by runUsageAlert().
- */
-function runUsageMonitor({ currentTime }) {
-  let snapshot = null;
-  let source = null;
-  if (adapter.runtimeId === 'claude') {
-    snapshot = readClaudeUsageFromMonitorFiles({
-      statuslineFile: STATUSLINE_FILE,
-      usageStateFile: USAGE_STATE_FILE
-    });
-    source = snapshot?.statusShape || 'none';
-  } else {
-    snapshot = readCodexUsageFromMonitorFile({
-      usageStateFile: USAGE_CODEX_STATE_FILE
-    });
-    source = snapshot?.statusShape || 'usage-codex-missing';
-
-    if (!snapshot) {
-      const rolloutStatus = readCodexUsageFromActiveRollout();
-      if (rolloutStatus) {
-        snapshot = {
-          sessionPercent: rolloutStatus.sessionPercent,
-          sessionResets: rolloutStatus.sessionResets,
-          weeklyAllPercent: rolloutStatus.weeklyAllPercent,
-          weeklyAllResets: rolloutStatus.weeklyAllResets,
-          weeklySonnetPercent: null,
-          weeklySonnetResets: null,
-          fiveHourPercent: rolloutStatus.fiveHourPercent,
-          fiveHourResets: rolloutStatus.fiveHourResets,
-          statusShape: 'rollout_fallback'
-        };
-        source = snapshot.statusShape;
-        log('Usage monitor (codex): usage-codex.json unavailable, falling back to rollout reader');
-      }
-    }
-  }
-
-  if (!snapshot) {
-    log(`Usage monitor (${adapter.runtimeId}): no local usage snapshot available`);
-    lastUsageCheckAt = currentTime;
-    return;
-  }
-
-  const usage = {
-    session: snapshot.sessionPercent,
-    sessionResets: snapshot.sessionResets,
-    weeklyAll: snapshot.weeklyAllPercent,
-    weeklyAllResets: snapshot.weeklyAllResets,
-    weeklySonnet: snapshot.weeklySonnetPercent,
-    weeklySonnetResets: snapshot.weeklySonnetResets,
-    fiveHour: snapshot.fiveHourPercent,
-    fiveHourResets: snapshot.fiveHourResets
-  };
-  const now = new Date().toISOString();
-  const tierMetric = usage.weeklyAll ?? usage.session;
-  const tier = getUsageTier(tierMetric ?? 0);
-
-  const usageData = {
-    lastCheck: now,
-    lastCheckEpoch: currentTime,
-    session: { percent: usage.session, resets: usage.sessionResets },
-    weeklyAll: { percent: usage.weeklyAll, resets: usage.weeklyAllResets },
-    weeklySonnet: { percent: usage.weeklySonnet, resets: usage.weeklySonnetResets },
-    fiveHour: { percent: usage.fiveHour, resets: usage.fiveHourResets },
-    tier,
-    statusShape: source
-  };
-
-  log(
-    `Usage monitor (${adapter.runtimeId}): source=${source} session=${usage.session ?? 'null'}% ` +
-    `5h=${usage.fiveHour ?? 'null'}% weekly=${usage.weeklyAll ?? 'null'}% tier=${tier}`
-  );
-
-  writeUsageState(usageData);
-  lastUsageCheckAt = currentTime;
-  return;
-}
-
-function runUsageAlert({ currentTime }) {
-  const checkedAt = new Date(currentTime * 1000).toISOString();
-  const alertState = loadUsageAlertState();
-  const writeCheckedState = (patch = {}) => {
-    writeUsageAlertState({
-      version: 1,
-      ...alertState,
-      lastCheckedAt: checkedAt,
-      sourceRuntime: adapter.runtimeId,
-      ...patch
-    });
-  };
-
-  const state = loadUsageState();
-  if (!state) {
-    log(`Usage alert (${adapter.runtimeId}): no usage state available`);
-    writeCheckedState();
-    return true;
-  }
-
-  const weekly = state.weeklyAll?.percent;
-  if (weekly === null || weekly === undefined) {
-    log(`Usage alert (${adapter.runtimeId}): no weekly usage metric available`);
-    writeCheckedState();
-    return true;
-  }
-
-  const tier = state.tier || getUsageTier(weekly);
-  if (tier === 'ok') {
-    writeCheckedState({ lastObservedTier: tier });
-    return true;
-  }
-
-  const prevTier = alertState?.lastNotifiedTier || state.lastNotifiedTier || null;
-  const prevNotifiedIso = alertState?.lastNotifiedAt || state.lastNotifiedAt || null;
-  const prevNotifiedAt = prevNotifiedIso ? Math.floor(new Date(prevNotifiedIso).getTime() / 1000) : 0;
-  const tierEscalated = prevTier !== tier && tierRank(tier) > tierRank(prevTier);
-  const cooldownExpired = (currentTime - prevNotifiedAt) >= USAGE_NOTIFY_COOLDOWN;
-
-  if (!tierEscalated && !cooldownExpired) {
-    log(`Usage alert (${adapter.runtimeId}): suppressing notification (cooldown active, tier=${tier})`);
-    writeCheckedState({ lastObservedTier: tier });
-    return true;
-  }
-
-  const usage = {
-    session: state.session?.percent,
-    weeklyAll: state.weeklyAll?.percent,
-    weeklySonnet: state.weeklySonnet?.percent,
-    weeklyAllResets: state.weeklyAll?.resets
-  };
-  log(`Usage alert (${adapter.runtimeId}): notifying owner for tier=${tier}`);
-  sendUsageNotification(formatUsageNotification(usage, tier));
-  writeCheckedState({
-    lastObservedTier: tier,
-    lastNotifiedTier: tier,
-    lastNotifiedAt: new Date().toISOString(),
-  });
-  return true;
-}
-
-function tierRank(tier) {
-  const ranks = { ok: 0, warning: 1, high: 2, critical: 3 };
-  return ranks[tier] ?? 0;
-}
-
 async function monitorLoop() {
   const currentTime = Math.floor(Date.now() / 1000);
   const currentTimeHuman = new Date().toISOString().replace('T', ' ').substring(0, 19);
@@ -1593,6 +1298,27 @@ function init() {
     log('Daily upgrade: disabled (set `zylos config set daily_upgrade_enabled true` to enable)');
   }
 
+  usageMonitor = new UsageMonitor(adapter, {
+    zylosDir: ZYLOS_DIR,
+    statuslineFile: STATUSLINE_FILE,
+    usageStateFile: USAGE_STATE_FILE,
+    usageCodexStateFile: USAGE_CODEX_STATE_FILE,
+    usageAlertStateFile: USAGE_ALERT_STATE_FILE,
+    monitorEnabled: USAGE_MONITOR_ENABLED,
+    alertEnabled: USAGE_ALERT_ENABLED,
+    checkIntervalSec: USAGE_CHECK_INTERVAL,
+    idleGateSec: USAGE_IDLE_GATE,
+    warnThreshold: USAGE_WARN_THRESHOLD,
+    highThreshold: USAGE_HIGH_THRESHOLD,
+    criticalThreshold: USAGE_CRITICAL_THRESHOLD,
+    notifyCooldownSec: USAGE_NOTIFY_COOLDOWN,
+    activeHoursStart: USAGE_ACTIVE_HOURS_START,
+    activeHoursEnd: USAGE_ACTIVE_HOURS_END,
+    getLocalHour,
+    runC4Control,
+    log,
+  });
+
   taskScheduler = new TaskScheduler([
     {
       id: 'daily-upgrade',
@@ -1633,33 +1359,30 @@ function init() {
       id: 'usage-monitor',
       type: 'interval',
       intervalSec: USAGE_CHECK_INTERVAL,
-      enabled: () => USAGE_MONITOR_ENABLED,
-      gate: (snapshot) => snapshot.health === 'ok' && canRunUsageTask({
+      enabled: () => usageMonitor.isMonitorEnabled(),
+      gate: (snapshot) => snapshot.health === 'ok' && usageMonitor.canRunTask({
         claudeState: snapshot.state,
         idleSeconds: snapshot.idleSeconds,
         currentTime: snapshot.currentTime,
         apiActivity: snapshot.apiActivity,
       }),
-      getLastRunAt: () => lastUsageCheckAt,
-      execute: runUsageMonitor,
+      getLastRunAt: () => usageMonitor.getLastMonitorRunAt(),
+      execute: (snapshot) => usageMonitor.runMonitor(snapshot),
     },
     {
       id: 'usage-alert',
       type: 'interval',
       intervalSec: USAGE_ALERT_INTERVAL,
-      enabled: () => USAGE_ALERT_ENABLED,
-      gate: (snapshot) => snapshot.health === 'ok' && canRunUsageTask({
+      enabled: () => usageMonitor.isAlertEnabled(),
+      gate: (snapshot) => snapshot.health === 'ok' && usageMonitor.canRunTask({
         claudeState: snapshot.state,
         idleSeconds: snapshot.idleSeconds,
         currentTime: snapshot.currentTime,
         apiActivity: snapshot.apiActivity,
         activeHoursOnly: true,
       }),
-      getLastRunAt: () => {
-        const state = loadUsageAlertState();
-        return state?.lastCheckedAt ? Math.floor(new Date(state.lastCheckedAt).getTime() / 1000) : 0;
-      },
-      execute: runUsageAlert,
+      getLastRunAt: () => usageMonitor.getLastAlertRunAt(),
+      execute: (snapshot) => usageMonitor.runAlert(snapshot),
     },
   ], {
     getLocalHour,
@@ -1668,13 +1391,7 @@ function init() {
     log
   });
 
-  // Restore usage check timestamp from persisted state.
-  const usageState = loadUsageState();
-  lastUsageCheckAt = getInitialUsageCheckAt({
-    runtimeId: adapter.runtimeId,
-    usageState,
-    nowEpoch: Math.floor(Date.now() / 1000)
-  });
+  usageMonitor.lastUsageCheckAt = usageMonitor.initializeLastCheckAt(Math.floor(Date.now() / 1000));
   log(`Usage monitor (${adapter.runtimeId}): enabled=${USAGE_MONITOR_ENABLED}`);
   log(`Usage alert (${adapter.runtimeId}): enabled=${USAGE_ALERT_ENABLED}`);
 
