@@ -774,7 +774,8 @@ get backoffDelay() {
 
 | 现有位置 | 内容 | 对应新方法 |
 |---------|------|-----------|
-| `scripts/heartbeat-engine.js`（449行） | HeartbeatEngine class — FSM + tick-based heartbeat | 整体重构为 HealthEngine |
+| `scripts/health-engine.js` | HealthEngine import surface — re-exports current HeartbeatEngine implementation during migration | 后续将实现迁移到此文件 |
+| `scripts/heartbeat-engine.js` | HeartbeatEngine class — FSM + timer-driven heartbeat maintenance | 保留为兼容入口，逐步迁移到 HealthEngine |
 | `scripts/heartbeat-config.js`（15行） | `isRuntimeHeartbeatEnabled()` | 删除（不再有 tick-based heartbeat 开关） |
 | `activity-monitor.js:2081-2127` | monitorLoop 中的 API error scan + periodic probe + rate limit 检测 | `onUserMessageDelivered()` 替代 |
 | `activity-monitor.js:2087-2089` | user message signal 消费（tick 中读取 signal file） | `notifyUserMessage()` 替代（由 MessageRouter 调用） |

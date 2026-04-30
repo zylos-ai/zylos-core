@@ -133,7 +133,7 @@ import net from 'net';
 import path from 'path';
 import os from 'os';
 import { fileURLToPath } from 'url';
-import { HeartbeatEngine } from './heartbeat-engine.js';
+import { HealthEngine } from './health-engine.js';
 import { Guardian } from './guardian.js';
 import { MessageRouter } from './message-router.js';
 import { TaskScheduler } from './task-scheduler.js';
@@ -1161,7 +1161,7 @@ function init() {
   // Merge runtime-specific heartbeat deps (enqueueHeartbeat, getHeartbeatStatus,
   // detectRateLimit, readHeartbeatPending, clearHeartbeatPending) from the adapter,
   // with the remaining non-runtime deps (killTmuxSession, notifyPendingChannels, log).
-  engine = new HeartbeatEngine({
+  engine = new HealthEngine({
     ...(adapter.getHeartbeatDeps() ?? {}),
     killTmuxSession: () => adapter.stop(),
     notifyPendingChannels,
