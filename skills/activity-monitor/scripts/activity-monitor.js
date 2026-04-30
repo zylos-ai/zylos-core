@@ -1203,56 +1203,15 @@ async function monitorLoop() {
   }
 
   if (guardianResult.state !== 'running') {
-    const state = guardianResult.state;
-
-    writeStatusFile(buildNotRunningStatus({
-      state,
+    ({ lastState } = orchestrator.handleNotRunningRuntime({
+      guardianResult,
       currentTime,
       currentTimeHuman,
-      guardianResult,
-      runtimeLaunchAtMsValue: runtimeLaunchAtMs,
+      lastState,
+      buildNotRunningStatus,
+      writeStatusFile,
+      clearWatchdogState,
     }));
-
-    if (state === 'stopped' && adapter.runtimeId === 'claude') {
-      clearWatchdogState();
-      toolPipeline.writeApiActivitySnapshot({
-        version: 3,
-        pid: 0,
-        sessionId: null,
-        scope: null,
-        foreground_identity: {
-          session_id: null,
-          source: null,
-          trusted: false,
-          observed_at: 0,
-        },
-        event: 'stop',
-        tool: null,
-        active: false,
-        active_tools: 0,
-        in_prompt: false,
-        updated_at: Date.now(),
-        oldest_active_tool: null,
-        watchdog_candidate_tool: null,
-        last_completed_tool: null,
-      });
-    }
-
-    if (state !== lastState) {
-      if (state === 'offline') {
-        log('State: OFFLINE (tmux session not found)');
-      } else {
-        log(`State: STOPPED (${adapter.displayName} not running in tmux session)`);
-      }
-    }
-
-    taskScheduler.tick({
-      currentTime,
-      health: engine.health,
-      agentRunning: false,
-      state,
-    });
-    lastState = state;
     return;
   }
 
