@@ -582,6 +582,44 @@ describe('HeartbeatEngine', () => {
     });
   });
 
+  describe('runRecoveryProbe', () => {
+    it('returns recovered immediately when health is ok', async () => {
+      const { deps } = createMockDeps();
+      const engine = new HeartbeatEngine(deps);
+
+      const result = await engine.runRecoveryProbe();
+
+      assert.equal(result.recovered, true);
+    });
+
+    it('enqueues recovery heartbeat and transitions to ok on done', async () => {
+      const { deps, calls } = createMockDeps();
+      const pending = { control_id: 7, phase: 'recovery' };
+      deps._pending = pending;
+      deps._heartbeatStatus = 'done';
+      const engine = new HeartbeatEngine(deps, { initialHealth: 'recovering' });
+
+      const result = await engine.runRecoveryProbe({ timeoutMs: 100, pollIntervalMs: 1 });
+
+      assert.equal(result.recovered, true);
+      assert.equal(engine.health, 'ok');
+      assert.deepStrictEqual(calls.enqueueHeartbeat, []);
+      assert.equal(calls.clearHeartbeatPending, 1);
+    });
+
+    it('returns enqueueFailed when no pending heartbeat can be created', async () => {
+      const { deps } = createMockDeps();
+      deps.enqueueHeartbeat = () => false;
+      deps._pending = null;
+      const engine = new HeartbeatEngine(deps, { initialHealth: 'recovering' });
+
+      const result = await engine.runRecoveryProbe({ timeoutMs: 100, pollIntervalMs: 1 });
+
+      assert.equal(result.recovered, false);
+      assert.equal(result.enqueueFailed, true);
+    });
+  });
+
   describe('in-flight heartbeat handling', () => {
     it('processes stale pending normally even when primary heartbeat is disabled', () => {
       const { deps, calls } = createMockDeps();
@@ -689,6 +727,17 @@ describe('HeartbeatEngine', () => {
 
       assert.ok(calls.log.some(m => m.includes('OK') && m.includes('RECOVERING') && m.includes('primary_timeout')));
       assert.equal(engine.health, 'recovering');
+    });
+
+    it('tracks non-ok reasons and clears them on recovery to ok', () => {
+      const { deps } = createMockDeps();
+      const engine = new HeartbeatEngine(deps);
+
+      engine.setHealth('recovering', 'heartbeat_timeout');
+      assert.equal(engine.healthReason, 'heartbeat_timeout');
+
+      engine.setHealth('ok', 'heartbeat_ack phase=recovery');
+      assert.equal(engine.healthReason, '');
     });
   });
 

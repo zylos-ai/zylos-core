@@ -62,6 +62,7 @@ export class HeartbeatEngine {
 
     // Internal state
     this.healthState = options.initialHealth ?? 'ok';
+    this.healthReason = options.initialReason ?? '';
     this.restartFailureCount = 0;
     this.lastHeartbeatAt = Math.floor(Date.now() / 1000);
     this.lastRecoveryAt = 0;
@@ -101,10 +102,14 @@ export class HeartbeatEngine {
   }
 
   setHealth(nextHealth, reason = '') {
-    if (this.healthState === nextHealth) return;
+    if (this.healthState === nextHealth) {
+      if (reason && nextHealth !== 'ok') this.healthReason = reason;
+      return;
+    }
     const suffix = reason ? ` (${reason})` : '';
     this.deps.log(`Health: ${this.healthState.toUpperCase()} -> ${nextHealth.toUpperCase()}${suffix}`);
     this.healthState = nextHealth;
+    this.healthReason = nextHealth === 'ok' ? '' : (reason || '');
   }
 
   /**
@@ -419,6 +424,42 @@ export class HeartbeatEngine {
       this.lastHeartbeatAt = Math.floor(Date.now() / 1000);
     }
     return ok;
+  }
+
+  async runRecoveryProbe({ timeoutMs = 25000, pollIntervalMs = 1000 } = {}) {
+    if (this.healthState === 'ok') {
+      return { recovered: true };
+    }
+
+    let pending = this.deps.readHeartbeatPending();
+    if (!pending) {
+      const ok = this.enqueueHeartbeat('recovery');
+      if (!ok) {
+        this.lastRecoveryAt = Math.floor(Date.now() / 1000);
+        return { recovered: false, reason: this.healthReason || this.healthState, enqueueFailed: true };
+      }
+      pending = this.deps.readHeartbeatPending();
+    }
+
+    if (!pending) {
+      return { recovered: false, reason: this.healthReason || this.healthState, pendingMissing: true };
+    }
+
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const status = this.deps.getHeartbeatStatus(pending.control_id);
+      if (status === 'done') {
+        this.onHeartbeatSuccess(pending.phase || 'recovery');
+        return { recovered: true };
+      }
+      if (status === 'failed' || status === 'timeout' || status === 'not_found') {
+        this.onHeartbeatFailure(pending, status);
+        return { recovered: false, reason: this.healthReason || status, status };
+      }
+      await new Promise(resolve => setTimeout(resolve, pollIntervalMs));
+    }
+
+    return { recovered: false, reason: this.healthReason || this.healthState, timedOut: true };
   }
 
   /**

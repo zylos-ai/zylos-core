@@ -129,10 +129,12 @@
 
 import { execSync, execFileSync, spawn } from 'child_process';
 import fs from 'fs';
+import net from 'net';
 import path from 'path';
 import os from 'os';
 import { fileURLToPath } from 'url';
 import { HeartbeatEngine } from './heartbeat-engine.js';
+import { MessageRouter } from './message-router.js';
 import { DailySchedule } from './daily-schedule.js';
 import { ProcSampler } from './proc-sampler.js';
 import { readCodexUsageFromActiveRollout } from './usage-codex-rollout-reader.js';
@@ -199,6 +201,8 @@ const __dirname = path.dirname(__filename);
 const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
 const MONITOR_DIR = path.join(ZYLOS_DIR, 'activity-monitor');
 const STATUS_FILE = path.join(MONITOR_DIR, 'agent-status.json');
+const AM_SOCKET_FILE = path.join(MONITOR_DIR, 'am.sock');
+const MESSAGE_ROUTER_CACHE_FILE = path.join(MONITOR_DIR, 'message-router-probe-cache.json');
 const STATUSLINE_FILE = path.join(MONITOR_DIR, 'statusline.json');
 const LOG_FILE = path.join(MONITOR_DIR, 'activity.log');
 const HEALTH_CHECK_STATE_FILE = path.join(MONITOR_DIR, 'health-check-state.json');
@@ -345,6 +349,7 @@ let lastStatuslineSyntheticClearAt = 0;
 
 let adapter;         // initialized in init() via getActiveAdapter()
 let engine;          // initialized in init()
+let messageRouterServer; // initialized in init()
 let contextMonitor;  // initialized in init() if adapter provides one (Codex only)
 let procSampler;     // initialized in init()
 
@@ -671,10 +676,71 @@ function writeStatusFile(statusObj) {
       extra.rate_limit_reset = engine.rateLimitResetTime || null;
       extra.cooldown_until = engine.cooldownUntil || null;
     }
+    if (engine.healthReason) {
+      extra.unavailable_reason = engine.healthReason;
+    }
     atomicWriteJson(STATUS_FILE, { ...statusObj, ...extra, health: engine.health });
   } catch {
     // Best-effort.
   }
+}
+
+function startMessageRouterServer() {
+  const router = new MessageRouter({
+    healthEngine: engine,
+    cacheFile: MESSAGE_ROUTER_CACHE_FILE,
+    log
+  });
+
+  try {
+    fs.rmSync(AM_SOCKET_FILE, { force: true });
+  } catch { /* best-effort */ }
+
+  messageRouterServer = net.createServer((socket) => {
+    let data = '';
+    socket.on('data', async (chunk) => {
+      data += chunk;
+      const newlineIndex = data.indexOf('\n');
+      if (newlineIndex === -1) return;
+
+      const raw = data.slice(0, newlineIndex);
+      data = data.slice(newlineIndex + 1);
+      try {
+        const request = JSON.parse(raw);
+        if (request.type !== 'route') {
+          throw new Error(`unsupported request type: ${request.type}`);
+        }
+        const decision = await router.route(request);
+        socket.end(`${JSON.stringify(decision)}\n`);
+      } catch (err) {
+        socket.end(`${JSON.stringify({
+          version: 1,
+          recovered: false,
+          health: 'unavailable',
+          reason: 'message_router_error',
+          userMessage: '我现在暂时不可用，正在尝试恢复。请稍后再发一次。',
+          error: err.message
+        })}\n`);
+      }
+    });
+  });
+
+  messageRouterServer.on('error', (err) => {
+    log(`MessageRouter IPC server error: ${err.message}`);
+  });
+
+  messageRouterServer.listen(AM_SOCKET_FILE, () => {
+    log(`MessageRouter IPC server listening at ${AM_SOCKET_FILE}`);
+  });
+}
+
+function stopMessageRouterServer() {
+  try {
+    messageRouterServer?.close();
+  } catch { /* best-effort */ }
+  try {
+    fs.rmSync(AM_SOCKET_FILE, { force: true });
+  } catch { /* best-effort */ }
 }
 
 function getConversationFileModTime() {
@@ -2177,6 +2243,7 @@ function init() {
     log,
   }, {
     initialHealth,
+    initialReason: initialStatus.unavailable_reason || '',
     heartbeatEnabled,
     heartbeatInterval: HEARTBEAT_INTERVAL,
     downDegradeThreshold: DOWN_DEGRADE_THRESHOLD,
@@ -2195,6 +2262,8 @@ function init() {
     engine.cooldownUntil = initialStatus.cooldown_until;
     engine.rateLimitResetTime = initialStatus.rate_limit_reset || '';
   }
+
+  startMessageRouterServer();
 
   const dailyUpgradeEnabled = readConfigBool('daily_upgrade_enabled', false);
   if (!dailyUpgradeEnabled) {
@@ -2313,6 +2382,13 @@ try {
   process.exit(1);
 }
 log(`=== Activity Monitor Started (v25 - RuntimeAdapter: ${adapter.displayName} | Guardian + Heartbeat v4 + ProcSampler + LiveAuth + DailyTasks + UpgradeCheck + UsageMonitor): ${new Date().toISOString()} tz=${timezone} ===`);
+
+for (const signal of ['SIGINT', 'SIGTERM']) {
+  process.once(signal, () => {
+    stopMessageRouterServer();
+    process.exit(0);
+  });
+}
 
 // Use self-scheduling loop instead of setInterval to prevent concurrent
 // invocations: async monitorLoop + setInterval can overlap if isRunning()
