@@ -650,8 +650,6 @@ function clearWatchdogState() {
 function evaluateToolWatchdog({ nowMs, foregroundIdentity, apiActivity, interactiveState }) {
   const state = {
     watchdogState,
-    runtimeLaunchAtMs,
-    launchGracePeriodSec: LAUNCH_GRACE_PERIOD,
     engineHealth: engine.health,
   };
 

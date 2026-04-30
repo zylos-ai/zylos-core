@@ -44,8 +44,6 @@ function createForegroundIdentity(overrides = {}) {
 function createState(overrides = {}) {
   return {
     watchdogState: null,
-    runtimeLaunchAtMs: 0,
-    launchGracePeriodSec: 180,
     engineHealth: 'ok',
     ...overrides,
   };
@@ -142,6 +140,27 @@ describe('tool-watchdog', () => {
     assert.equal(state.watchdogState?.interrupt_key, 'Escape');
     assert.equal(state.watchdogState?.interrupt_sent_at, 3_700_000);
     assert.equal(state.watchdogState?.interrupt_count, 1);
+  });
+
+  it('does not suppress timed-out tools during runtime launch grace', () => {
+    const state = createState({
+      runtimeLaunchAtMs: 3_699_000,
+      launchGracePeriodSec: 180,
+    });
+    const { deps, calls } = createDeps();
+
+    const phase = evaluateToolWatchdogTransition({
+      nowMs: 3_700_000,
+      foregroundIdentity: createForegroundIdentity(),
+      apiActivity: { watchdog_candidate_tool: createCandidate() },
+      interactiveState: {},
+      state,
+      deps,
+    });
+
+    assert.equal(phase.watchdog_phase, 'interrupt_sent');
+    assert.equal(phase.watchdog_block_reason, null);
+    assert.equal(calls.enqueues.length, 1);
   });
 
   it('clears state without a redundant write when the pane is interactively recovered', () => {
