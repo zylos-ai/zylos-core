@@ -306,7 +306,6 @@ let toolPipeline;    // initialized in init()
 let orchestrator;    // initialized in init()
 let messageRouterServer; // initialized in init()
 let contextMonitor;  // initialized in init() if adapter provides one (Codex only)
-let procSampler;     // initialized in init()
 
 // Timezone: reuse scheduler's tz.js (.env TZ → process.env.TZ → UTC)
 import { loadTimezone } from '../../scheduler/scripts/tz.js';
@@ -1253,16 +1252,9 @@ async function monitorLoop() {
     confirmedActive,
   } = orchestrator.summarizeApiActivity({ currentTime, apiActivity });
 
-  // /proc context-switch sampling: tick every loop iteration (internally gated to 10s).
-  // Only counts frozen time when agent has confirmed active tools (fresh hook + active_tools > 0),
-  // since an idle agent naturally has zero context switches.
-  procSampler.tick(currentTime, { isActive: confirmedActive });
-  if (procSampler.isFrozen()) {
-    log(`Guardian: Process frozen (0 ctx_switch delta for ${procSampler.getState().frozenCount}s while active_tools > 0), killing session`);
-    adapter.stop();
-    procSampler.reset();
-    // Guardian will detect offline on next tick and call startAgent().
-    lastState = 'frozen';
+  const procSamplerResult = orchestrator.handleProcSampler({ currentTime, confirmedActive });
+  if (procSamplerResult.frozen) {
+    lastState = procSamplerResult.lastState;
     return;
   }
 
@@ -1322,7 +1314,6 @@ function init() {
     adapter,
     toolPipeline,
     watchdogState,
-    procSampler,
     runtimeLaunchAtMs,
     engine,
     contextMonitor,

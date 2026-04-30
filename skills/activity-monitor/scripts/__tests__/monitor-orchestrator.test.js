@@ -18,7 +18,7 @@ describe('MonitorOrchestrator', () => {
     const toolPipeline = overrides.toolPipeline ?? { id: 'toolPipeline' };
     const toolRules = { id: 'toolRules' };
     const watchdogState = { id: 'watchdogState' };
-    const procSampler = { id: 'procSampler' };
+    const procSampler = overrides.procSampler ?? { id: 'procSampler' };
     const usageMonitor = {
       id: 'usageMonitor',
       initializeLastCheckAt: () => 900,
@@ -616,6 +616,78 @@ describe('MonitorOrchestrator', () => {
     assert.deepEqual(calls, [
       ['buildApiActivity', { source: 'session' }, 1234],
       ['writeApiActivitySnapshot', refreshedApiActivity],
+    ]);
+  });
+
+  it('ticks ProcSampler and continues when process is not frozen', () => {
+    const calls = [];
+    const procSampler = {
+      tick: (currentTime, payload) => calls.push(['procSampler.tick', currentTime, payload]),
+      isFrozen: () => {
+        calls.push(['procSampler.isFrozen']);
+        return false;
+      },
+      getState: () => ({ frozenCount: 0 }),
+      reset: () => calls.push(['procSampler.reset']),
+    };
+    const { orchestrator } = createHarness({
+      procSampler,
+      initialHealth: 'ok',
+      log: (message) => calls.push(['log', message]),
+    });
+    orchestrator.start();
+    calls.length = 0;
+
+    assert.deepEqual(orchestrator.handleProcSampler({
+      currentTime: 123,
+      confirmedActive: true,
+    }), { frozen: false });
+    assert.deepEqual(calls, [
+      ['procSampler.tick', 123, { isActive: true }],
+      ['procSampler.isFrozen'],
+    ]);
+  });
+
+  it('stops runtime and resets ProcSampler when process is frozen', () => {
+    const calls = [];
+    const adapter = {
+      runtimeId: 'claude',
+      displayName: 'Claude',
+      sessionName: 'claude-main',
+      stop: () => calls.push(['adapter.stop']),
+    };
+    const procSampler = {
+      tick: (currentTime, payload) => calls.push(['procSampler.tick', currentTime, payload]),
+      isFrozen: () => {
+        calls.push(['procSampler.isFrozen']);
+        return true;
+      },
+      getState: () => {
+        calls.push(['procSampler.getState']);
+        return { frozenCount: 60 };
+      },
+      reset: () => calls.push(['procSampler.reset']),
+    };
+    const { orchestrator } = createHarness({
+      adapter,
+      procSampler,
+      initialHealth: 'ok',
+      log: (message) => calls.push(['log', message]),
+    });
+    orchestrator.start();
+    calls.length = 0;
+
+    assert.deepEqual(orchestrator.handleProcSampler({
+      currentTime: 456,
+      confirmedActive: true,
+    }), { frozen: true, lastState: 'frozen' });
+    assert.deepEqual(calls, [
+      ['procSampler.tick', 456, { isActive: true }],
+      ['procSampler.isFrozen'],
+      ['procSampler.getState'],
+      ['log', 'Guardian: Process frozen (0 ctx_switch delta for 60s while active_tools > 0), killing session'],
+      ['adapter.stop'],
+      ['procSampler.reset'],
     ]);
   });
 

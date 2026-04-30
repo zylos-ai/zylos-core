@@ -276,6 +276,24 @@ export class MonitorOrchestrator {
     return nextApiActivity;
   }
 
+  handleProcSampler({ currentTime, confirmedActive }) {
+    if (!this.components) {
+      throw new Error('MonitorOrchestrator.start() must be called before handleProcSampler()');
+    }
+
+    const { adapter, procSampler } = this.components;
+    procSampler.tick(currentTime, { isActive: confirmedActive });
+    if (!procSampler.isFrozen()) {
+      return { frozen: false };
+    }
+
+    this.deps.log(`Guardian: Process frozen (0 ctx_switch delta for ${procSampler.getState().frozenCount}s while active_tools > 0), killing session`);
+    adapter.stop();
+    procSampler.reset();
+    // Guardian will detect offline on next tick and call startAgent().
+    return { frozen: true, lastState: 'frozen' };
+  }
+
   handleRunningRuntime({
     currentTime,
     currentTimeHuman,
