@@ -18,9 +18,8 @@
  *
  * v2 changes (#177 — exponential backoff + process signal acceleration):
  *   - Exponential backoff: min(3600, 60 × 5^(n-1)) → 1m, 5m, 25m, 60m cap
- *   - Infinite retries in recovering state (no maxRestartFailures limit)
- *   - DOWN degradation: after downDegradeThreshold seconds of continuous failure
- *   - DOWN retry interval: 60 min (periodic heartbeat probe)
+ *   - Infinite retries in unavailable/recovering state (no maxRestartFailures limit)
+ *   - Legacy DOWN state remains readable for transitional persisted status.
  *   - Process signal acceleration: when agentRunning transitions false→true,
  *     wait a grace period then immediately verify via heartbeat (skip backoff)
  *
@@ -397,11 +396,11 @@ export class HeartbeatEngine {
     this.deps.log(`Heartbeat recovery attempt ${this.restartFailureCount} (${reason}), next backoff ${this.getBackoffDelay()}s`);
     this.deps.killTmuxSession();
 
-    // Degrade to DOWN after continuous failure exceeds threshold
+    // Legacy DOWN is still accepted when restored from persisted state, but new
+    // AM v3 recovery paths stay in public unavailable and expose duration via reason.
     const failureDuration = now - this.recoveringStartedAt;
     if (this.recoveringStartedAt > 0 && failureDuration >= this.downDegradeThreshold) {
-      this.lastDownCheckAt = now;
-      this.setHealth('down', `continuous_failure_for_${failureDuration}s`);
+      this.setHealth('unavailable', `continuous_failure_for_${failureDuration}s`);
     }
   }
 

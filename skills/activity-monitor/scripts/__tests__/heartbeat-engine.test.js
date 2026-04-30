@@ -267,8 +267,8 @@ describe('HeartbeatEngine', () => {
     });
   });
 
-  describe('DOWN degradation after continuous failure', () => {
-    it('transitions to down after downDegradeThreshold exceeded', () => {
+  describe('continuous failure while unavailable', () => {
+    it('stays unavailable after downDegradeThreshold and updates the reason', () => {
       const { deps } = createMockDeps();
       const engine = new HeartbeatEngine(deps, { downDegradeThreshold: 100 });
 
@@ -281,7 +281,8 @@ describe('HeartbeatEngine', () => {
       engine.recoveringStartedAt = Math.floor(Date.now() / 1000) - 101;
 
       engine.triggerRecovery('fail_late');
-      assert.equal(engine.health, 'down');
+      assert.equal(engine.health, 'unavailable');
+      assert.match(engine.healthReason, /^continuous_failure_for_10[1-9]s$/);
     });
 
     it('initializes recoveringStartedAt when resuming in recovering state', () => {
