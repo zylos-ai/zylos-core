@@ -25,6 +25,7 @@
 | | 活动时间来源 | 优先级：conversation file mtime → tmux activity → default → api hook |
 | | idle 时间计算 | busy → idle 转换时记录 idleSince，计算 idleSeconds |
 | **状态聚合** | HealthState | 从 HealthEngine 读取 `health` 字段 |
+| | Public health 投射 | 写入前将内部 legacy 状态（如 `recovering` / `down`）规范化为对外 `unavailable` |
 | | 诊断信息（D-2） | 非 OK 状态附加 `unavailable_reason`；ok 时清空 |
 | | rate limit 附加信息 | health=rate_limited 时附加 `rate_limit_reset` + `cooldown_until` |
 | | Tool watchdog 状态 | 从 ToolPipeline/ToolWatchdog 聚合工具监控信息 |
@@ -57,7 +58,7 @@ write(snapshot, healthEngine, extra)
   │   │     ├─ active_tool_name, active_tool_running_seconds, active_tool_summary
   │   │     ├─ watchdog_phase, watchdog_block_reason, watchdog_episode_key
   │   │     ├─ foreground_session_source, foreground_session_observed_at
-  │   │     └─ health 附加字段（from HealthEngine，按状态分支写入）：
+  │   │     └─ health 附加字段（from HealthEngine，先投射到 public health 后按状态分支写入）：
   │   │        ok:           unavailable_since=null, unavailable_reason=null,
   │   │                      rate_limit_reset=null, cooldown_until=null
   │   │        unavailable:  unavailable_since + unavailable_reason
@@ -120,6 +121,8 @@ interface StatusExtra {
 见 [signal-store.md](signal-store.md) 的 agent-status.json Schema。
 
 StatusWriter 是该文件的唯一写入方，其他组件通过 SignalStore 读取。
+
+> 实现边界：HeartbeatEngine 内部可在迁移期继续保留 `recovering` / `down` 等 legacy 状态用于退避和 probe 调度；StatusWriter 写 `agent-status.json` 时必须将这些内部状态统一投射为 public `unavailable`，并通过 `unavailable_reason` 暴露诊断原因。
 
 ### 与其他组件的交互
 
