@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { describe, it } from 'node:test';
 import fs from 'node:fs';
+import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -17,6 +18,23 @@ function cliRaw(args, env = {}) {
   return { stdout: result.stdout, stderr: result.stderr, status: result.status };
 }
 
+function cliRawAsync(args, env = {}) {
+  return new Promise((resolve, reject) => {
+    const child = spawn('node', [CLI_PATH, ...args], {
+      env: { ...process.env, ...env },
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
+    child.stdout.on('data', chunk => { stdout += chunk; });
+    child.stderr.on('data', chunk => { stderr += chunk; });
+    child.on('error', reject);
+    child.on('close', status => resolve({ stdout, stderr, status }));
+  });
+}
+
 function withTmpDir(fn) {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'c4-receive-'));
   fs.mkdirSync(path.join(tmpDir, 'activity-monitor'), { recursive: true });
@@ -28,8 +46,56 @@ function withTmpDir(fn) {
   }
 }
 
+async function withTmpDirAsync(fn) {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'c4-receive-'));
+  fs.mkdirSync(path.join(tmpDir, 'activity-monitor'), { recursive: true });
+  const env = { ZYLOS_DIR: tmpDir };
+  try {
+    return await fn({ tmpDir, env });
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+}
+
 function openDb(tmpDir) {
   return new Database(path.join(tmpDir, 'comm-bridge', 'c4.db'));
+}
+
+function createChannelSendScript(tmpDir, channel, { exitCode = 0 } = {}) {
+  const scriptDir = path.join(tmpDir, '.claude', 'skills', channel, 'scripts');
+  fs.mkdirSync(scriptDir, { recursive: true });
+  fs.writeFileSync(path.join(scriptDir, 'send.js'), `
+import fs from 'node:fs';
+import path from 'node:path';
+const outPath = path.join(process.env.ZYLOS_DIR, '${channel}-send.json');
+fs.writeFileSync(outPath, JSON.stringify({ args: process.argv.slice(2) }));
+process.exit(${exitCode});
+`);
+}
+
+async function withRouteServer(tmpDir, handler, fn) {
+  const socketPath = path.join(tmpDir, 'activity-monitor', 'am.sock');
+  await fs.promises.rm(socketPath, { force: true });
+  const server = net.createServer((socket) => {
+    let data = '';
+    socket.on('data', (chunk) => {
+      data += chunk;
+      if (!data.includes('\n')) return;
+      const request = JSON.parse(data.slice(0, data.indexOf('\n')));
+      const response = handler(request);
+      socket.write(`${JSON.stringify(response)}\n`);
+    });
+  });
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(socketPath, resolve);
+  });
+  try {
+    return await fn();
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    await fs.promises.rm(socketPath, { force: true });
+  }
 }
 
 /**
@@ -226,64 +292,149 @@ describe('c4-receive health gating', () => {
     });
   });
 
-  it('rejects with HEALTH_RECOVERING when health is recovering', () => {
+  it('fallback marks no-reply unhealthy messages delivered without error', () => {
     withTmpDir(({ tmpDir, env }) => {
-      const dataDir = path.join(tmpDir, 'comm-bridge');
-      fs.mkdirSync(dataDir, { recursive: true });
       fs.writeFileSync(path.join(tmpDir, 'activity-monitor', 'agent-status.json'), JSON.stringify({ health: 'recovering' }));
 
       const r = cliRaw(['--no-reply', '--json', '--content', 'recovering msg'], env);
+      assert.equal(r.status, 0);
+      const out = parseJsonStdout(r.stdout);
+      assert.equal(out.ok, true);
+      assert.equal(out.action, 'delivered');
+
+      const db = openDb(tmpDir);
+      const row = db.prepare('SELECT status, content FROM conversations WHERE id = ?').get(Number(out.id));
+      db.close();
+
+      assert.equal(row.status, 'delivered');
+      assert.ok(row.content.includes('recovering msg'));
+    });
+  });
+
+  it('fallback sends unhealthy status message and exits zero', () => {
+    withTmpDir(({ tmpDir, env }) => {
+      fs.writeFileSync(path.join(tmpDir, 'activity-monitor', 'agent-status.json'), JSON.stringify({ health: 'down' }));
+      createChannelSendScript(tmpDir, 'test-chan');
+
+      const r = cliRaw(['--channel', 'test-chan', '--endpoint', 'ep1', '--json', '--content', 'down msg'], env);
+      assert.equal(r.status, 0);
+      const out = parseJsonStdout(r.stdout);
+      assert.equal(out.ok, true);
+      assert.equal(out.action, 'delivered');
+
+      const sent = JSON.parse(fs.readFileSync(path.join(tmpDir, 'test-chan-send.json'), 'utf8'));
+      assert.equal(sent.args[0], 'ep1');
+      assert.match(sent.args[1], /offline|unable to recover/i);
+
+      const db = openDb(tmpDir);
+      const inbound = db.prepare("SELECT status, content FROM conversations WHERE direction = 'in'").get();
+      const outbound = db.prepare("SELECT status, content FROM conversations WHERE direction = 'out'").get();
+      db.close();
+
+      assert.equal(inbound.status, 'delivered');
+      assert.ok(inbound.content.includes('reply via'));
+      assert.ok(outbound.content.includes("I'm currently offline"));
+    });
+  });
+
+  it('returns an error if unhealthy status delivery fails', () => {
+    withTmpDir(({ tmpDir, env }) => {
+      fs.writeFileSync(path.join(tmpDir, 'activity-monitor', 'agent-status.json'), JSON.stringify({ health: 'down' }));
+      createChannelSendScript(tmpDir, 'test-chan', { exitCode: 7 });
+
+      const r = cliRaw(['--channel', 'test-chan', '--endpoint', 'ep1', '--json', '--content', 'down msg'], env);
       assert.equal(r.status, 1);
       const out = parseJsonStdout(r.stdout);
       assert.equal(out.ok, false);
-      assert.equal(out.error.code, 'HEALTH_RECOVERING');
+      assert.equal(out.error.code, 'UNHEALTHY_NOTIFY_FAILED');
     });
   });
 
-  it('rejects with HEALTH_DOWN when health is down', () => {
+  it('does not write pending-channels.jsonl on fallback unhealthy route', () => {
     withTmpDir(({ tmpDir, env }) => {
-      const dataDir = path.join(tmpDir, 'comm-bridge');
-      fs.mkdirSync(dataDir, { recursive: true });
       fs.writeFileSync(path.join(tmpDir, 'activity-monitor', 'agent-status.json'), JSON.stringify({ health: 'down' }));
-
-      const r = cliRaw(['--no-reply', '--json', '--content', 'down msg'], env);
-      assert.equal(r.status, 1);
-      const out = parseJsonStdout(r.stdout);
-      assert.equal(out.ok, false);
-      assert.equal(out.error.code, 'HEALTH_DOWN');
-    });
-  });
-
-  it('writes pending-channels.jsonl after recovering rejection', () => {
-    withTmpDir(({ tmpDir, env }) => {
-      const dataDir = path.join(tmpDir, 'comm-bridge');
-      fs.mkdirSync(dataDir, { recursive: true });
-      fs.writeFileSync(path.join(tmpDir, 'activity-monitor', 'agent-status.json'), JSON.stringify({ health: 'recovering' }));
-      fs.mkdirSync(path.join(tmpDir, '.claude', 'skills', 'test-chan'), { recursive: true });
+      createChannelSendScript(tmpDir, 'test-chan');
 
       cliRaw(['--channel', 'test-chan', '--endpoint', 'ep1', '--json', '--content', 'x'], env);
-
       const pendingPath = path.join(tmpDir, 'activity-monitor', 'pending-channels.jsonl');
-      assert.ok(fs.existsSync(pendingPath), 'pending-channels.jsonl should exist');
-      const lines = fs.readFileSync(pendingPath, 'utf8').trim().split('\n');
-      assert.equal(lines.length, 1);
-      const record = JSON.parse(lines[0]);
-      assert.equal(record.channel, 'test-chan');
-      assert.equal(record.endpoint, 'ep1');
+      assert.equal(fs.existsSync(pendingPath), false);
+    });
+  });
+});
+
+describe('c4-receive MessageRouter IPC route', () => {
+  it('queues pending when router returns recovered=true', async () => {
+    await withTmpDirAsync(async ({ tmpDir, env }) => {
+      createChannelSendScript(tmpDir, 'test-chan');
+      await withRouteServer(tmpDir, (request) => ({
+        version: 1,
+        requestId: request.requestId,
+        recovered: true,
+        health: 'ok'
+      }), async () => {
+        const r = await cliRawAsync(['--channel', 'test-chan', '--endpoint', 'ep1', '--json', '--content', 'ok msg'], env);
+        assert.equal(r.status, 0);
+        const out = parseJsonStdout(r.stdout);
+        assert.equal(out.action, 'queued');
+
+        const db = openDb(tmpDir);
+        const row = db.prepare('SELECT status, content FROM conversations WHERE id = ?').get(Number(out.id));
+        db.close();
+        assert.equal(row.status, 'pending');
+        assert.ok(row.content.includes('reply via'));
+      });
     });
   });
 
-  it('writes pending-channels.jsonl after down rejection', () => {
-    withTmpDir(({ tmpDir, env }) => {
-      const dataDir = path.join(tmpDir, 'comm-bridge');
-      fs.mkdirSync(dataDir, { recursive: true });
-      fs.writeFileSync(path.join(tmpDir, 'activity-monitor', 'agent-status.json'), JSON.stringify({ health: 'down' }));
-      fs.mkdirSync(path.join(tmpDir, '.claude', 'skills', 'test-chan'), { recursive: true });
+  it('uses router userMessage for unhealthy delivery', async () => {
+    await withTmpDirAsync(async ({ tmpDir, env }) => {
+      createChannelSendScript(tmpDir, 'test-chan');
+      await withRouteServer(tmpDir, (request) => ({
+        version: 1,
+        requestId: request.requestId,
+        recovered: false,
+        health: 'unavailable',
+        reason: 'heartbeat_timeout',
+        userMessage: 'router says unavailable'
+      }), async () => {
+        const r = await cliRawAsync(['--channel', 'test-chan', '--endpoint', 'ep1', '--json', '--content', 'blocked msg'], env);
+        assert.equal(r.status, 0);
+        const out = parseJsonStdout(r.stdout);
+        assert.equal(out.action, 'delivered');
 
-      cliRaw(['--channel', 'test-chan', '--endpoint', 'ep1', '--json', '--content', 'x'], env);
+        const sent = JSON.parse(fs.readFileSync(path.join(tmpDir, 'test-chan-send.json'), 'utf8'));
+        assert.equal(sent.args[1], 'router says unavailable');
 
-      const pendingPath = path.join(tmpDir, 'activity-monitor', 'pending-channels.jsonl');
-      assert.ok(fs.existsSync(pendingPath), 'pending-channels.jsonl should exist');
+        const db = openDb(tmpDir);
+        const inbound = db.prepare("SELECT status, content FROM conversations WHERE direction = 'in'").get();
+        db.close();
+        assert.equal(inbound.status, 'delivered');
+        assert.ok(inbound.content.includes('blocked msg'));
+      });
+    });
+  });
+
+  it('accepts unhealthy no-reply router decisions without userMessage', async () => {
+    await withTmpDirAsync(async ({ tmpDir, env }) => {
+      await withRouteServer(tmpDir, (request) => ({
+        version: 1,
+        requestId: request.requestId,
+        recovered: false,
+        health: 'unavailable',
+        reason: 'heartbeat_timeout'
+      }), async () => {
+        const r = await cliRawAsync(['--no-reply', '--json', '--content', 'silent blocked msg'], env);
+        assert.equal(r.status, 0);
+        const out = parseJsonStdout(r.stdout);
+        assert.equal(out.action, 'delivered');
+
+        const db = openDb(tmpDir);
+        const inbound = db.prepare("SELECT status, content FROM conversations WHERE direction = 'in'").get();
+        const outboundCount = db.prepare("SELECT count(*) AS count FROM conversations WHERE direction = 'out'").get();
+        db.close();
+        assert.equal(inbound.status, 'delivered');
+        assert.equal(outboundCount.count, 0);
+      });
     });
   });
 });
@@ -311,99 +462,6 @@ describe('c4-receive fail-open', () => {
       assert.equal(r.status, 0);
       const out = parseJsonStdout(r.stdout);
       assert.equal(out.ok, true);
-    });
-  });
-});
-
-// ---------------------------------------------------------------------------
-// pending channels
-// ---------------------------------------------------------------------------
-describe('c4-receive pending channels', () => {
-  it('records channel+endpoint in pending-channels.jsonl', () => {
-    withTmpDir(({ tmpDir, env }) => {
-      const dataDir = path.join(tmpDir, 'comm-bridge');
-      fs.mkdirSync(dataDir, { recursive: true });
-      fs.writeFileSync(path.join(tmpDir, 'activity-monitor', 'agent-status.json'), JSON.stringify({ health: 'recovering' }));
-      fs.mkdirSync(path.join(tmpDir, '.claude', 'skills', 'my-chan'), { recursive: true });
-
-      cliRaw(['--channel', 'my-chan', '--endpoint', 'e1', '--json', '--content', 'x'], env);
-
-      const pendingPath = path.join(tmpDir, 'activity-monitor', 'pending-channels.jsonl');
-      const lines = fs.readFileSync(pendingPath, 'utf8').trim().split('\n');
-      assert.equal(lines.length, 1);
-      const record = JSON.parse(lines[0]);
-      assert.equal(record.channel, 'my-chan');
-      assert.equal(record.endpoint, 'e1');
-    });
-  });
-
-  it('deduplicates same channel+endpoint on second call', () => {
-    withTmpDir(({ tmpDir, env }) => {
-      const dataDir = path.join(tmpDir, 'comm-bridge');
-      fs.mkdirSync(dataDir, { recursive: true });
-      fs.writeFileSync(path.join(tmpDir, 'activity-monitor', 'agent-status.json'), JSON.stringify({ health: 'recovering' }));
-      fs.mkdirSync(path.join(tmpDir, '.claude', 'skills', 'dup-chan'), { recursive: true });
-
-      cliRaw(['--channel', 'dup-chan', '--endpoint', 'e1', '--json', '--content', 'first'], env);
-      cliRaw(['--channel', 'dup-chan', '--endpoint', 'e1', '--json', '--content', 'second'], env);
-
-      const pendingPath = path.join(tmpDir, 'activity-monitor', 'pending-channels.jsonl');
-      const lines = fs.readFileSync(pendingPath, 'utf8').trim().split('\n');
-      assert.equal(lines.length, 1, 'should have exactly 1 line after dedup');
-    });
-  });
-
-  it('deduplicates endpoints that differ only in |msg:xxx suffix', () => {
-    withTmpDir(({ tmpDir, env }) => {
-      const dataDir = path.join(tmpDir, 'comm-bridge');
-      fs.mkdirSync(dataDir, { recursive: true });
-      fs.writeFileSync(path.join(tmpDir, 'activity-monitor', 'agent-status.json'), JSON.stringify({ health: 'recovering' }));
-      fs.mkdirSync(path.join(tmpDir, '.claude', 'skills', 'lark'), { recursive: true });
-
-      cliRaw(['--channel', 'lark', '--endpoint', 'oc_123|type:p2p|msg:om_aaa', '--json', '--content', 'first'], env);
-      cliRaw(['--channel', 'lark', '--endpoint', 'oc_123|type:p2p|msg:om_bbb', '--json', '--content', 'second'], env);
-
-      const pendingPath = path.join(tmpDir, 'activity-monitor', 'pending-channels.jsonl');
-      const lines = fs.readFileSync(pendingPath, 'utf8').trim().split('\n');
-      assert.equal(lines.length, 1, 'same chat with different msg IDs should dedup to 1');
-      const record = JSON.parse(lines[0]);
-      assert.equal(record.endpoint, 'oc_123|type:p2p', 'stored endpoint should have msg stripped');
-    });
-  });
-
-  it('deduplicates endpoints that differ only in |msg:xxx and |req:xxx suffixes', () => {
-    withTmpDir(({ tmpDir, env }) => {
-      const dataDir = path.join(tmpDir, 'comm-bridge');
-      fs.mkdirSync(dataDir, { recursive: true });
-      fs.writeFileSync(path.join(tmpDir, 'activity-monitor', 'agent-status.json'), JSON.stringify({ health: 'recovering' }));
-      fs.mkdirSync(path.join(tmpDir, '.claude', 'skills', 'telegram'), { recursive: true });
-
-      cliRaw(['--channel', 'telegram', '--endpoint', '7446046953|msg:100|req:7446046953:100', '--json', '--content', 'first'], env);
-      cliRaw(['--channel', 'telegram', '--endpoint', '7446046953|msg:101|req:7446046953:101', '--json', '--content', 'second'], env);
-      cliRaw(['--channel', 'telegram', '--endpoint', '7446046953|msg:102|req:7446046953:102', '--json', '--content', 'third'], env);
-
-      const pendingPath = path.join(tmpDir, 'activity-monitor', 'pending-channels.jsonl');
-      const lines = fs.readFileSync(pendingPath, 'utf8').trim().split('\n');
-      assert.equal(lines.length, 1, 'same chat with different msg+req IDs should dedup to 1');
-      const record = JSON.parse(lines[0]);
-      assert.equal(record.endpoint, '7446046953', 'stored endpoint should have msg and req stripped');
-    });
-  });
-
-  it('records different channel+endpoint pairs separately', () => {
-    withTmpDir(({ tmpDir, env }) => {
-      const dataDir = path.join(tmpDir, 'comm-bridge');
-      fs.mkdirSync(dataDir, { recursive: true });
-      fs.writeFileSync(path.join(tmpDir, 'activity-monitor', 'agent-status.json'), JSON.stringify({ health: 'recovering' }));
-      fs.mkdirSync(path.join(tmpDir, '.claude', 'skills', 'chan-a'), { recursive: true });
-      fs.mkdirSync(path.join(tmpDir, '.claude', 'skills', 'chan-b'), { recursive: true });
-
-      cliRaw(['--channel', 'chan-a', '--endpoint', 'e1', '--json', '--content', 'a'], env);
-      cliRaw(['--channel', 'chan-b', '--endpoint', 'e2', '--json', '--content', 'b'], env);
-
-      const pendingPath = path.join(tmpDir, 'activity-monitor', 'pending-channels.jsonl');
-      const lines = fs.readFileSync(pendingPath, 'utf8').trim().split('\n');
-      assert.equal(lines.length, 2, 'should have 2 distinct entries');
     });
   });
 });
