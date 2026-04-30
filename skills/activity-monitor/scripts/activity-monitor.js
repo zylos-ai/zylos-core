@@ -137,7 +137,6 @@ import { HeartbeatEngine } from './heartbeat-engine.js';
 import { MessageRouter } from './message-router.js';
 import { DailySchedule } from './daily-schedule.js';
 import { ProcSampler } from './proc-sampler.js';
-import { readCodexRolloutActivityFromActiveRollout } from './codex-rollout-activity-reader.js';
 import { readCodexUsageFromActiveRollout } from './usage-codex-rollout-reader.js';
 import { consumeRecentUserMessageSignal } from './signal-store.js';
 import { readInitialStatus, writeStatus } from './status-writer.js';
@@ -325,9 +324,6 @@ const USAGE_ACTIVE_HOURS_END = readConfigInt('usage_active_hours_end', 23);
 const CODEX_PENDING_MESSAGE_INTERRUPT_SEC = readConfigInt('codex_pending_message_interrupt_sec', 30);
 const CODEX_PENDING_MESSAGE_GRACE_SEC = readConfigInt('codex_pending_message_grace_sec', 10);
 const CODEX_PENDING_MESSAGE_COOLDOWN_SEC = readConfigInt('codex_pending_message_cooldown_sec', 30);
-const CODEX_ACTIVE_CALL_INTERRUPT_SEC = readConfigInt('codex_active_call_interrupt_sec', 900);
-const CODEX_ACTIVE_CALL_GRACE_SEC = readConfigInt('codex_active_call_grace_sec', 30);
-const CODEX_ACTIVE_CALL_COOLDOWN_SEC = readConfigInt('codex_active_call_cooldown_sec', 120);
 
 // Daily tasks config
 const DAILY_UPGRADE_HOUR = 5;        // 5:00 AM local time
@@ -1359,7 +1355,7 @@ function evaluateToolWatchdog({ nowMs, foregroundIdentity, apiActivity, interact
   return phase;
 }
 
-function evaluateCodexTurnWatchdog({ nowMs, interactiveState, rolloutActivity }) {
+function evaluateCodexTurnWatchdog({ nowMs, interactiveState }) {
   const state = {
     watchdogState,
     runtimeLaunchAtMs,
@@ -1368,15 +1364,11 @@ function evaluateCodexTurnWatchdog({ nowMs, interactiveState, rolloutActivity })
     codexPendingMessageInterruptSec: CODEX_PENDING_MESSAGE_INTERRUPT_SEC,
     codexPendingMessageGraceSec: CODEX_PENDING_MESSAGE_GRACE_SEC,
     codexPendingMessageCooldownSec: CODEX_PENDING_MESSAGE_COOLDOWN_SEC,
-    codexActiveCallInterruptSec: CODEX_ACTIVE_CALL_INTERRUPT_SEC,
-    codexActiveCallGraceSec: CODEX_ACTIVE_CALL_GRACE_SEC,
-    codexActiveCallCooldownSec: CODEX_ACTIVE_CALL_COOLDOWN_SEC,
   };
 
   const phase = evaluateCodexTurnWatchdogTransition({
     nowMs,
     interactiveState,
-    rolloutActivity,
     state,
     deps: {
       clearWatchdogState: () => {
@@ -2079,7 +2071,6 @@ async function monitorLoop() {
   let apiActivity = null;
   let foregroundIdentity = null;
   let watchdogStatus = { watchdog_phase: 'idle', watchdog_block_reason: null };
-  let codexRolloutActivity = null;
 
   if (adapter.runtimeId === 'claude') {
     const toolNowMs = Date.now();
@@ -2099,11 +2090,9 @@ async function monitorLoop() {
     writeApiActivitySnapshot(apiActivity);
     maybeRotateToolEventStream(toolNowMs, foregroundIdentity?.trusted ? foregroundIdentity.sessionId : null);
   } else if (adapter.runtimeId === 'codex') {
-    codexRolloutActivity = readCodexRolloutActivityFromActiveRollout({ nowMs: Date.now() });
     watchdogStatus = evaluateCodexTurnWatchdog({
       nowMs: Date.now(),
-      interactiveState,
-      rolloutActivity: codexRolloutActivity
+      interactiveState
     });
   }
 
@@ -2182,12 +2171,6 @@ async function monitorLoop() {
     watchdog_block_reason: watchdogStatus.watchdog_block_reason,
     codex_working_seconds: interactiveState?.codexWorkingSeconds || 0,
     codex_queued_user_messages: Boolean(interactiveState?.codexQueuedUserMessages),
-    codex_active_call_id: codexRolloutActivity?.activeCall?.callId || null,
-    codex_active_call_name: codexRolloutActivity?.activeCall?.name || null,
-    codex_active_call_running_seconds: codexRolloutActivity?.activeCall?.ageSeconds || 0,
-    codex_rollout_last_event_at: codexRolloutActivity?.lastEventAtMs
-      ? Math.floor(codexRolloutActivity.lastEventAtMs / 1000)
-      : 0,
     foreground_session_source: foregroundIdentity?.source || null,
     foreground_session_observed_at: foregroundIdentity?.observedAt || 0,
   });

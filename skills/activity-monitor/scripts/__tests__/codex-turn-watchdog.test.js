@@ -15,9 +15,6 @@ function createState(overrides = {}) {
     codexPendingMessageInterruptSec: 30,
     codexPendingMessageGraceSec: 10,
     codexPendingMessageCooldownSec: 30,
-    codexActiveCallInterruptSec: 900,
-    codexActiveCallGraceSec: 30,
-    codexActiveCallCooldownSec: 120,
     ...overrides,
   };
 }
@@ -27,19 +24,6 @@ function createInteractiveState(overrides = {}) {
     captureOk: true,
     codexQueuedUserMessages: true,
     codexWorkingSeconds: 45,
-    ...overrides,
-  };
-}
-
-function createRolloutActivity(overrides = {}) {
-  return {
-    activeCall: {
-      callId: 'call_1',
-      name: 'exec_command',
-      startedAtMs: 100_000,
-      ageSeconds: 901,
-    },
-    lastEventAtMs: 100_000,
     ...overrides,
   };
 }
@@ -159,7 +143,6 @@ describe('codex-turn-watchdog', () => {
     const phase = evaluateCodexTurnWatchdogTransition({
       nowMs: 100_000,
       interactiveState: createInteractiveState({ codexQueuedUserMessages: false }),
-      rolloutActivity: { activeCall: null, lastEventAtMs: 0 },
       state,
       deps,
     });
@@ -168,75 +151,5 @@ describe('codex-turn-watchdog', () => {
     assert.equal(phase.watchdog_block_reason, 'no_queued_user_message');
     assert.equal(calls.cleared, 1);
     assert.equal(state.watchdogState, null);
-  });
-
-  it('observes an active rollout call before the active-call timeout', () => {
-    const state = createState();
-    const { deps, calls } = createDeps();
-
-    const phase = evaluateCodexTurnWatchdogTransition({
-      nowMs: 1_000_000,
-      interactiveState: createInteractiveState({ codexQueuedUserMessages: false }),
-      rolloutActivity: createRolloutActivity({
-        activeCall: {
-          callId: 'call_1',
-          name: 'exec_command',
-          startedAtMs: 100_000,
-          ageSeconds: 899,
-        }
-      }),
-      state,
-      deps,
-    });
-
-    assert.equal(phase.watchdog_phase, 'observing');
-    assert.equal(phase.watchdog_block_reason, 'no_queued_user_message');
-    assert.equal(calls.enqueues.length, 0);
-    assert.equal(state.watchdogState, null);
-  });
-
-  it('sends Escape for an active rollout call after the conservative timeout', () => {
-    const state = createState();
-    const { deps, calls } = createDeps();
-
-    const phase = evaluateCodexTurnWatchdogTransition({
-      nowMs: 1_001_000,
-      interactiveState: createInteractiveState({ codexQueuedUserMessages: false }),
-      rolloutActivity: createRolloutActivity(),
-      state,
-      deps,
-    });
-
-    assert.equal(phase.watchdog_phase, 'interrupt_sent');
-    assert.deepEqual(calls.enqueues, ['Escape']);
-    assert.equal(calls.writes, 1);
-    assert.equal(state.watchdogState?.type, 'codex_active_call');
-    assert.equal(state.watchdogState?.call_id, 'call_1');
-    assert.equal(state.watchdogState?.tool_name, 'exec_command');
-  });
-
-  it('escalates an active rollout call after interrupt grace expires', () => {
-    const state = createState({
-      watchdogState: {
-        type: 'codex_active_call',
-        episode_key: 'codex_active_call:call_1:100',
-        interrupt_sent_at: 1_001_000,
-        grace_deadline_at: 1_031_000,
-        retry_after_at: 0,
-        escalated_at: 0,
-      }
-    });
-    const { deps, calls } = createDeps();
-
-    const phase = evaluateCodexTurnWatchdogTransition({
-      nowMs: 1_032_000,
-      interactiveState: createInteractiveState({ codexQueuedUserMessages: false }),
-      rolloutActivity: createRolloutActivity({ activeCall: { ...createRolloutActivity().activeCall, ageSeconds: 932 } }),
-      state,
-      deps,
-    });
-
-    assert.equal(phase.watchdog_phase, 'escalated');
-    assert.deepEqual(calls.recoveries, ['codex_active_call_stuck']);
   });
 });
