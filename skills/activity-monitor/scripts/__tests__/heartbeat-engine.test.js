@@ -880,6 +880,21 @@ describe('HeartbeatEngine', () => {
       engine.setHealth('ok', 'heartbeat_ack phase=recovery');
       assert.equal(engine.healthReason, '');
     });
+
+    it('tracks unavailableSince for public unavailable health and clears it on recovery', () => {
+      const { deps } = createMockDeps();
+      const engine = new HeartbeatEngine(deps);
+
+      engine.setHealth('unavailable', 'heartbeat_timeout');
+      assert.ok(engine.unavailableSince > 0);
+      const unavailableSince = engine.unavailableSince;
+
+      engine.setHealth('down', 'continuous_failure');
+      assert.equal(engine.unavailableSince, unavailableSince);
+
+      engine.setHealth('ok', 'heartbeat_ack phase=recovery');
+      assert.equal(engine.unavailableSince, 0);
+    });
   });
 
   describe('rate_limited state', () => {

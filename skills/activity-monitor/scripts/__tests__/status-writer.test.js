@@ -64,12 +64,14 @@ describe('status-writer', () => {
       healthEngine: {
         health: 'recovering',
         healthReason: 'heartbeat_timeout',
+        unavailableSince: 1234,
       },
     });
 
     assert.deepEqual(payload, {
       state: 'busy',
       unavailable_reason: 'heartbeat_timeout',
+      unavailable_since: 1234,
       health: 'unavailable',
     });
   });

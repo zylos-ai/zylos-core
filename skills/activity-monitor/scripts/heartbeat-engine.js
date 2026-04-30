@@ -40,6 +40,10 @@ function isPostRestartProbeState(health) {
   return isUnavailableRecoveryState(health) || health === 'down' || health === 'auth_failed';
 }
 
+function isPublicUnavailableState(health) {
+  return isUnavailableRecoveryState(health) || health === 'down';
+}
+
 export class HeartbeatEngine {
   /**
    * @param {object} deps - Injected dependencies
@@ -89,6 +93,7 @@ export class HeartbeatEngine {
     // If resuming in recovering state (e.g., PM2 restart mid-recovery),
     // initialize recoveringStartedAt so DOWN degradation timer works correctly.
     this.recoveringStartedAt = isUnavailableRecoveryState(this.healthState) ? Math.floor(Date.now() / 1000) : 0;
+    this.unavailableSince = isPublicUnavailableState(this.healthState) ? Math.floor(Date.now() / 1000) : 0;
 
     // Process signal acceleration state
     this.lastAgentRunning = null; // null = unknown (first tick)
@@ -128,12 +133,23 @@ export class HeartbeatEngine {
   setHealth(nextHealth, reason = '') {
     if (this.healthState === nextHealth) {
       if (reason && nextHealth !== 'ok') this.healthReason = reason;
+      if (isPublicUnavailableState(nextHealth) && this.unavailableSince === 0) {
+        this.unavailableSince = Math.floor(Date.now() / 1000);
+      }
       return;
     }
     const suffix = reason ? ` (${reason})` : '';
+    const prevHealth = this.healthState;
     this.deps.log(`Health: ${this.healthState.toUpperCase()} -> ${nextHealth.toUpperCase()}${suffix}`);
     this.healthState = nextHealth;
     this.healthReason = nextHealth === 'ok' ? '' : (reason || '');
+    if (isPublicUnavailableState(nextHealth)) {
+      if (!isPublicUnavailableState(prevHealth) || this.unavailableSince === 0) {
+        this.unavailableSince = Math.floor(Date.now() / 1000);
+      }
+    } else {
+      this.unavailableSince = 0;
+    }
   }
 
   /**

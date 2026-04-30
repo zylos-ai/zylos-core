@@ -41,6 +41,9 @@ export function buildStatusPayload({ statusObj, healthEngine }) {
   if (healthEngine.healthReason) {
     extra.unavailable_reason = healthEngine.healthReason;
   }
+  if (health === 'unavailable' && healthEngine.unavailableSince) {
+    extra.unavailable_since = healthEngine.unavailableSince;
+  }
   return { ...statusObj, ...extra, health };
 }
 
