@@ -55,8 +55,8 @@
  *     1 notification per hour to avoid spam
  *   - Replaced stuck detection (indirect activity signals → 300s threshold → probe) with
  *     a fixed 5-min periodic probe gated on active_tools === 0 (busy = hook counter > 0)
- *   - Guardian now calls engine.canRestart() instead of reading engine.health directly —
- *     separates Guardian (process liveness) from HeartbeatEngine (functional liveness)
+ *   - Later AM v3 Guardian separation removed health-state restart gating entirely:
+ *     Guardian handles process liveness, HealthEngine handles functional liveness
  *
  * v21 changes (multi-runtime support — #311):
  *   - RuntimeAdapter abstraction: getActiveAdapter() reads runtime from config.json

@@ -116,19 +116,6 @@ export class HeartbeatEngine {
     return this.healthState;
   }
 
-  /**
-   * Returns true if Guardian is allowed to restart the agent now.
-   * Encapsulates health-state restart policy so Guardian does not read
-   * internal state directly (separation of concerns).
-   *
-   * 'recovering' and 'down' allow restarts — the agent is down and we want to
-   * bring it back. Only 'rate_limited' blocks restarts because restarting cannot
-   * clear a rate limit; the HeartbeatEngine manages its own cooldown recovery.
-   */
-  canRestart() {
-    return this.healthState !== 'rate_limited';
-  }
-
   setHealth(nextHealth, reason = '') {
     if (this.healthState === nextHealth) {
       if (reason && nextHealth !== 'ok') this.healthReason = reason;
