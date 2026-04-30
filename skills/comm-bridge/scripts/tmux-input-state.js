@@ -19,35 +19,6 @@ const IN_PROGRESS_CAPTURE_PATTERNS = [
   /\bRetrying(?:\.\.\.|…)\s*$/i,
 ];
 
-const CODEX_WORKING_PATTERN = /\bWorking\s*\(([^)]*)\)/i;
-
-function parseDurationSeconds(raw) {
-  const text = String(raw || '').trim();
-  if (!text) return 0;
-
-  let seconds = 0;
-  const minuteMatch = text.match(/(\d+)\s*m/i);
-  const secondMatch = text.match(/(\d+)\s*s/i);
-  if (minuteMatch) seconds += Number.parseInt(minuteMatch[1], 10) * 60;
-  if (secondMatch) seconds += Number.parseInt(secondMatch[1], 10);
-
-  if (seconds > 0) return seconds;
-  const numeric = Number.parseInt(text, 10);
-  return Number.isFinite(numeric) && numeric > 0 ? numeric : 0;
-}
-
-export function getCodexWorkingSeconds(capture) {
-  const match = String(capture || '').match(CODEX_WORKING_PATTERN);
-  if (!match) return 0;
-  return parseDurationSeconds(match[1]);
-}
-
-export function hasCodexQueuedUserMessages(capture) {
-  const text = String(capture || '');
-  return /Messages to be submitted after next tool call/i.test(text)
-    && /\[(?:Lark|TG|Telegram|Web Console|HXA|Discord)[^\]]*\]/i.test(text);
-}
-
 export function findPromptY(capture) {
   const lines = String(capture || '').split('\n');
   for (let i = lines.length - 1; i >= 0; i--) {
@@ -122,8 +93,6 @@ export function readTmuxInputState({
   const captureOk = typeof capture === 'string';
   const usageOverlay = isUsageOverlayCapture(capture);
   const inProgressCapture = captureOk ? hasInProgressCapture(capture) : false;
-  const codexWorkingSeconds = captureOk ? getCodexWorkingSeconds(capture) : 0;
-  const codexQueuedUserMessages = captureOk ? hasCodexQueuedUserMessages(capture) : false;
   const promptY = captureOk ? findPromptY(capture) : -1;
   const promptVisible = promptY >= 0;
 
@@ -141,8 +110,6 @@ export function readTmuxInputState({
     inputState,
     usageOverlay,
     inProgressCapture,
-    codexWorkingSeconds,
-    codexQueuedUserMessages,
     captureOk,
     cursorX,
     cursorY,
