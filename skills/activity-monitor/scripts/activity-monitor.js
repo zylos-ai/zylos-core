@@ -1182,6 +1182,7 @@ async function monitorLoop() {
         apiErrorConsecutiveHits++;
         if (apiErrorConsecutiveHits >= 2) {
           log(`Proactive API error scan: "${apiError.pattern}" detected ${apiErrorConsecutiveHits} consecutive times. Killing session for restart.`);
+          engine.setHealth('unavailable', 'sticky_context_restart');
           adapter.stop();
           apiErrorConsecutiveHits = 0;
         } else {

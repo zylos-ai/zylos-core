@@ -162,7 +162,7 @@ describe('HeartbeatEngine', () => {
 
       assert.equal(calls.clearHeartbeatPending, 1);
       assert.equal(calls.killTmuxSession, 1);
-      assert.equal(engine.health, 'recovering');
+      assert.equal(engine.health, 'unavailable');
     });
 
     it('does not enqueue verify phase', () => {
@@ -188,7 +188,7 @@ describe('HeartbeatEngine', () => {
 
       assert.equal(calls.clearHeartbeatPending, 1);
       assert.equal(calls.killTmuxSession, 1);
-      assert.equal(engine.health, 'recovering');
+      assert.equal(engine.health, 'unavailable');
     });
   });
 
@@ -274,7 +274,7 @@ describe('HeartbeatEngine', () => {
 
       // First failure: sets recoveringStartedAt
       engine.triggerRecovery('fail_1');
-      assert.equal(engine.health, 'recovering');
+      assert.equal(engine.health, 'unavailable');
       assert.ok(engine.recoveringStartedAt > 0);
 
       // Simulate time passing beyond threshold by backdating recoveringStartedAt
@@ -294,7 +294,7 @@ describe('HeartbeatEngine', () => {
       assert.ok(diff <= 1);
     });
 
-    it('stays recovering when within downDegradeThreshold', () => {
+    it('stays unavailable when within downDegradeThreshold', () => {
       const { deps } = createMockDeps();
       const engine = new HeartbeatEngine(deps, { downDegradeThreshold: 3600 });
 
@@ -304,7 +304,7 @@ describe('HeartbeatEngine', () => {
       engine.triggerRecovery('fail_4');
 
       // All within same second, well under 3600s threshold
-      assert.equal(engine.health, 'recovering');
+      assert.equal(engine.health, 'unavailable');
     });
   });
 
@@ -377,14 +377,14 @@ describe('HeartbeatEngine', () => {
       assert.equal(engine.restartFailureCount, 2);
     });
 
-    it('transitions ok to recovering', () => {
+    it('transitions ok to unavailable', () => {
       const { deps } = createMockDeps();
       const engine = new HeartbeatEngine(deps);
       assert.equal(engine.health, 'ok');
 
       engine.triggerRecovery('test_reason');
 
-      assert.equal(engine.health, 'recovering');
+      assert.equal(engine.health, 'unavailable');
     });
 
     it('sets recoveringStartedAt on first recovery', () => {
@@ -686,7 +686,7 @@ describe('HeartbeatEngine', () => {
       now += 30000;
       await engine.onUserMessageDelivered();
 
-      assert.equal(engine.health, 'recovering');
+      assert.equal(engine.health, 'unavailable');
       assert.equal(engine.healthReason, 'sticky_context_restart');
       assert.equal(calls.killTmuxSession, 1);
     });
@@ -722,7 +722,7 @@ describe('HeartbeatEngine', () => {
 
       // Stale pending is processed (treated as timeout), not silently cleared
       assert.deepStrictEqual(calls.getHeartbeatStatus, [1]);
-      assert.equal(engine.health, 'recovering');
+      assert.equal(engine.health, 'unavailable');
     });
 
     it('does nothing when status is pending (fresh)', () => {
@@ -795,6 +795,31 @@ describe('HeartbeatEngine', () => {
       engine.processHeartbeat(true, Math.floor(Date.now() / 1000));
 
       assert.deepStrictEqual(calls.enqueueHeartbeat, ['recovery']);
+    });
+  });
+
+  describe('unavailable state', () => {
+    it('enqueues recovery heartbeat when agent is running', () => {
+      const { deps, calls } = createMockDeps();
+      const engine = new HeartbeatEngine(deps, { initialHealth: 'unavailable' });
+
+      engine.processHeartbeat(true, Math.floor(Date.now() / 1000));
+
+      assert.deepStrictEqual(calls.enqueueHeartbeat, ['recovery']);
+    });
+
+    it('sends post-restart probe after process signal grace', () => {
+      const { deps, calls } = createMockDeps();
+      const engine = new HeartbeatEngine(deps, { initialHealth: 'unavailable', signalGracePeriod: 5 });
+      const now = Math.floor(Date.now() / 1000);
+      engine.restartFailureCount = 3;
+      engine.lastRecoveryAt = now;
+
+      engine.processHeartbeat(false, now);
+      engine.processHeartbeat(true, now + 1);
+      engine.processHeartbeat(true, now + 10);
+
+      assert.ok(calls.enqueueHeartbeat.includes('post_restart'));
     });
   });
 
@@ -889,7 +914,7 @@ describe('HeartbeatEngine', () => {
       assert.equal(calls.killTmuxSession, 0);
     });
 
-    it('kills tmux and transitions to recovering when cooldown expires', () => {
+    it('kills tmux and transitions to unavailable when cooldown expires', () => {
       const { deps, calls } = createMockDeps();
       const engine = new HeartbeatEngine(deps);
 
@@ -897,7 +922,7 @@ describe('HeartbeatEngine', () => {
       engine.processHeartbeat(true, 2001);
 
       assert.equal(calls.killTmuxSession, 1);
-      assert.equal(engine.health, 'recovering');
+      assert.equal(engine.health, 'unavailable');
       assert.equal(engine.cooldownUntil, 0);
     });
 
@@ -1053,7 +1078,7 @@ describe('HeartbeatEngine', () => {
 
       engine.processHeartbeat(true, 1500);
 
-      assert.equal(engine.health, 'recovering');
+      assert.equal(engine.health, 'unavailable');
       assert.equal(calls.killTmuxSession, 1);
     });
 
@@ -1079,7 +1104,7 @@ describe('HeartbeatEngine', () => {
 
       engine.processHeartbeat(true, 1500);
 
-      assert.equal(engine.health, 'recovering');
+      assert.equal(engine.health, 'unavailable');
       assert.equal(calls.killTmuxSession, 1);
     });
 
@@ -1110,7 +1135,7 @@ describe('HeartbeatEngine', () => {
       engine.processHeartbeat(true, now);
 
       assert.equal(calls.killTmuxSession, 1);
-      assert.equal(engine.health, 'recovering');
+      assert.equal(engine.health, 'unavailable');
       assert.ok(calls.log.some(m => m.includes('API error detected') && m.includes('APIError: 400')));
     });
 

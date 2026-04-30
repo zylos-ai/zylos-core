@@ -32,6 +32,14 @@ const USER_MESSAGE_CHECK_DELAY_MS = 5000;
 const CONSECUTIVE_HITS_THRESHOLD = 2;
 const STICKY_ERROR_MIN_INTERVAL_MS = 30000;
 
+function isUnavailableRecoveryState(health) {
+  return health === 'unavailable' || health === 'recovering';
+}
+
+function isPostRestartProbeState(health) {
+  return isUnavailableRecoveryState(health) || health === 'down' || health === 'auth_failed';
+}
+
 export class HeartbeatEngine {
   /**
    * @param {object} deps - Injected dependencies
@@ -80,7 +88,7 @@ export class HeartbeatEngine {
     this.lastDownCheckAt = 0;
     // If resuming in recovering state (e.g., PM2 restart mid-recovery),
     // initialize recoveringStartedAt so DOWN degradation timer works correctly.
-    this.recoveringStartedAt = this.healthState === 'recovering' ? Math.floor(Date.now() / 1000) : 0;
+    this.recoveringStartedAt = isUnavailableRecoveryState(this.healthState) ? Math.floor(Date.now() / 1000) : 0;
 
     // Process signal acceleration state
     this.lastAgentRunning = null; // null = unknown (first tick)
@@ -169,7 +177,7 @@ export class HeartbeatEngine {
    * Triggers or accelerates recovery depending on current health state.
    *
    * - rate_limited: clears cooldown for immediate recovery check
-   * - recovering: resets backoff to retry immediately
+   * - unavailable/recovering: resets backoff to retry immediately
    * - down: triggers immediate probe (skips downRetryInterval wait)
    *
    * Returns true if recovery was triggered/accelerated, false if on cooldown or healthy.
@@ -196,7 +204,7 @@ export class HeartbeatEngine {
       return true;
     }
 
-    if (this.healthState === 'recovering') {
+    if (isUnavailableRecoveryState(this.healthState)) {
       this.deps.log('User message triggered recovery acceleration (backoff reset)');
       this.restartFailureCount = 0;
       this.lastRecoveryAt = 0;
@@ -269,10 +277,10 @@ export class HeartbeatEngine {
       if (currentTime < this.cooldownUntil) {
         return;
       }
-      this.deps.log('Rate limit cooldown expired, transitioning to recovering');
+      this.deps.log('Rate limit cooldown expired, transitioning to unavailable');
       this.deps.killTmuxSession();
       this.cooldownUntil = 0;
-      this.setHealth('recovering', 'rate_limit_cooldown_expired');
+      this.setHealth('unavailable', 'rate_limit_cooldown_expired');
       // Guardian will now restart Claude since health !== 'rate_limited'
       return;
     }
@@ -283,8 +291,8 @@ export class HeartbeatEngine {
 
     // Process signal acceleration: agentRunning just transitioned false→true,
     // grace period elapsed — send immediate heartbeat to verify recovery.
-    // Works in recovering, down, and auth_failed states.
-    if ((this.healthState === 'recovering' || this.healthState === 'down' || this.healthState === 'auth_failed') && this._shouldAccelerate(currentTime)) {
+    // Works in unavailable/recovering, down, and auth_failed states.
+    if (isPostRestartProbeState(this.healthState) && this._shouldAccelerate(currentTime)) {
       this.deps.log(`Process signal acceleration: Agent restarted (health=${this.healthState}), verifying immediately`);
       this.signalDetectedAt = 0; // Consume the signal
       const ok = this.enqueueHeartbeat('post_restart');
@@ -297,7 +305,7 @@ export class HeartbeatEngine {
       return;
     }
 
-    if (this.healthState === 'recovering') {
+    if (isUnavailableRecoveryState(this.healthState)) {
       // Exponential backoff: wait progressively longer between recovery attempts
       const backoffDelay = this.getBackoffDelay();
       if (backoffDelay > 0 && (currentTime - this.lastRecoveryAt) < backoffDelay) {
@@ -364,7 +372,7 @@ export class HeartbeatEngine {
     const now = Math.floor(Date.now() / 1000);
 
     if (this.healthState === 'ok') {
-      this.setHealth('recovering', reason);
+      this.setHealth('unavailable', reason);
       this.recoveringStartedAt = now;
     }
 
@@ -390,7 +398,7 @@ export class HeartbeatEngine {
     // a rate limit. This is the "behavioral + text" dual-signal approach:
     // heartbeat failed (behavioral) AND tmux shows rate limit text (text signal).
     // Only checked in ok/recovering states where we'd otherwise kill the session.
-    if ((this.healthState === 'ok' || this.healthState === 'recovering') && this.deps.detectRateLimit) {
+    if ((this.healthState === 'ok' || isUnavailableRecoveryState(this.healthState)) && this.deps.detectRateLimit) {
       const rateLimit = this.deps.detectRateLimit();
       if (rateLimit.detected) {
         this.enterRateLimited(rateLimit.cooldownUntil, rateLimit.resetTime);
@@ -406,7 +414,7 @@ export class HeartbeatEngine {
       return;
     }
 
-    if (this.healthState === 'recovering') {
+    if (isUnavailableRecoveryState(this.healthState)) {
       this.triggerRecovery(`recovery_${status}`);
       return;
     }
@@ -488,7 +496,7 @@ export class HeartbeatEngine {
         this.stickyErrorConsecutiveHits = 0;
         this.lastStickyErrorHitAt = 0;
         this.deps.log(`sticky error 2x: ${stickyError.pattern || 'unknown'}, killing session`);
-        this.setHealth('recovering', 'sticky_context_restart');
+        this.setHealth('unavailable', 'sticky_context_restart');
         this.deps.killTmuxSession();
       }
       return;
@@ -546,7 +554,7 @@ export class HeartbeatEngine {
 
   /**
    * Track agentRunning state transitions for process signal acceleration.
-   * When agentRunning goes false→true while recovering, record the timestamp
+   * When agentRunning goes false→true while unavailable/recovering, record the timestamp
    * so we can send an accelerated probe after the grace period.
    */
   _trackAgentRunning(agentRunning, currentTime) {
@@ -554,7 +562,7 @@ export class HeartbeatEngine {
     this.lastAgentRunning = agentRunning;
 
     // Detect false→true transition (skip null→true on first tick)
-    if (prev === false && agentRunning === true && (this.healthState === 'recovering' || this.healthState === 'down' || this.healthState === 'auth_failed')) {
+    if (prev === false && agentRunning === true && isPostRestartProbeState(this.healthState)) {
       this.signalDetectedAt = currentTime;
       this.deps.log(`Process signal: agentRunning false→true, grace period ${this.signalGracePeriod}s`);
     }
