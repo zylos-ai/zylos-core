@@ -1134,6 +1134,60 @@ function scheduleStaleRuntimeCleanup(activeAdapter) {
   }, 10_000);
 }
 
+function createToolPipeline(activeAdapter, config) {
+  const rules = getToolRules({ runtimeId: activeAdapter.runtimeId, config });
+  return {
+    pipeline: new ToolPipeline({
+      files: {
+        toolEvents: TOOL_EVENTS_FILE,
+        toolEventStreamState: TOOL_EVENT_STREAM_STATE_FILE,
+        sessionToolState: SESSION_TOOL_STATE_FILE,
+        apiActivity: API_ACTIVITY_FILE,
+        foregroundSession: FOREGROUND_SESSION_FILE,
+        statusline: STATUSLINE_FILE,
+      },
+      toolRules: rules,
+      runtimeLaunchAtMs: () => runtimeLaunchAtMs,
+      isPidAlive,
+      log,
+    }),
+    toolRules: rules,
+  };
+}
+
+function createHealthEngine(activeAdapter, initialStatus) {
+  return new HealthEngine({
+    ...(activeAdapter.getHeartbeatDeps() ?? {}),
+    killTmuxSession: () => activeAdapter.stop(),
+    notifyPendingChannels,
+    checkAuth: () => activeAdapter.checkAuth ? activeAdapter.checkAuth() : { ok: true },
+    log,
+  }, {
+    initialHealth: initialStatus.health,
+    initialReason: initialStatus.unavailable_reason || '',
+    rateLimitDefaultCooldown: RATE_LIMIT_DEFAULT_COOLDOWN,
+    userMessageRecoveryCooldown: USER_MESSAGE_RECOVERY_COOLDOWN
+  });
+}
+
+function createGuardian(activeAdapter) {
+  return new Guardian(activeAdapter, {
+    log,
+    initialRuntimeLaunchAtMs: runtimeLaunchAtMs,
+    resetToolLifecycleState: () => {
+      toolPipeline.reset({ clearFiles: true });
+      fs.writeFileSync(API_ACTIVITY_FILE, JSON.stringify({
+        version: 3,
+        active: false,
+        active_tools: 0,
+        in_prompt: false,
+        updated_at: Date.now()
+      }));
+      fs.writeFileSync(HOOK_STATE_FILE, JSON.stringify({ active_tools: 0 }));
+    }
+  });
+}
+
 async function monitorLoop() {
   const currentTime = Math.floor(Date.now() / 1000);
   const currentTimeHuman = new Date().toISOString().replace('T', ' ').substring(0, 19);
@@ -1344,21 +1398,7 @@ function init() {
   // Load the active runtime adapter (claude or codex, from config.json)
   adapter = getActiveAdapter();
   const config = readConfigObject();
-  toolRules = getToolRules({ runtimeId: adapter.runtimeId, config });
-  toolPipeline = new ToolPipeline({
-    files: {
-      toolEvents: TOOL_EVENTS_FILE,
-      toolEventStreamState: TOOL_EVENT_STREAM_STATE_FILE,
-      sessionToolState: SESSION_TOOL_STATE_FILE,
-      apiActivity: API_ACTIVITY_FILE,
-      foregroundSession: FOREGROUND_SESSION_FILE,
-      statusline: STATUSLINE_FILE,
-    },
-    toolRules,
-    runtimeLaunchAtMs: () => runtimeLaunchAtMs,
-    isPidAlive,
-    log,
-  });
+  ({ pipeline: toolPipeline, toolRules } = createToolPipeline(adapter, config));
   watchdogState = readJsonFileSafe(TOOL_WATCHDOG_STATE_FILE);
 
   // Initialize ProcSampler for frozen-process detection via context-switch sampling.
@@ -1372,34 +1412,8 @@ function init() {
   // Merge runtime-specific heartbeat deps (enqueueHeartbeat, getHeartbeatStatus,
   // detectRateLimit, readHeartbeatPending, clearHeartbeatPending) from the adapter,
   // with the remaining non-runtime deps (killTmuxSession, notifyPendingChannels, log).
-  engine = new HealthEngine({
-    ...(adapter.getHeartbeatDeps() ?? {}),
-    killTmuxSession: () => adapter.stop(),
-    notifyPendingChannels,
-    checkAuth: () => adapter.checkAuth ? adapter.checkAuth() : { ok: true },
-    log,
-  }, {
-    initialHealth,
-    initialReason: initialStatus.unavailable_reason || '',
-    rateLimitDefaultCooldown: RATE_LIMIT_DEFAULT_COOLDOWN,
-    userMessageRecoveryCooldown: USER_MESSAGE_RECOVERY_COOLDOWN
-  });
-
-  guardian = new Guardian(adapter, {
-    log,
-    initialRuntimeLaunchAtMs: runtimeLaunchAtMs,
-    resetToolLifecycleState: () => {
-      toolPipeline.reset({ clearFiles: true });
-      fs.writeFileSync(API_ACTIVITY_FILE, JSON.stringify({
-        version: 3,
-        active: false,
-        active_tools: 0,
-        in_prompt: false,
-        updated_at: Date.now()
-      }));
-      fs.writeFileSync(HOOK_STATE_FILE, JSON.stringify({ active_tools: 0 }));
-    }
-  });
+  engine = createHealthEngine(adapter, initialStatus);
+  guardian = createGuardian(adapter);
 
   // Rehydrate rate-limit state from persisted status file on PM2 restart
   if (initialHealth === 'rate_limited' && initialStatus.cooldown_until) {
