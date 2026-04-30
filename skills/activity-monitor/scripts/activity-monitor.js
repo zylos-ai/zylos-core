@@ -305,6 +305,7 @@ let adapter;         // initialized in init() via getActiveAdapter()
 let engine;          // initialized in init()
 let guardian;        // initialized in init()
 let toolPipeline;    // initialized in init()
+let orchestrator;    // initialized in init()
 let messageRouterServer; // initialized in init()
 let contextMonitor;  // initialized in init() if adapter provides one (Codex only)
 let procSampler;     // initialized in init()
@@ -1193,14 +1194,9 @@ async function monitorLoop() {
   const currentTime = Math.floor(Date.now() / 1000);
   const currentTimeHuman = new Date().toISOString().replace('T', ' ').substring(0, 19);
 
-  checkDailyTruncate();
-
-  const guardianResult = await guardian.tick({ currentTime });
-  runtimeLaunchAtMs = guardianResult.runtimeLaunchAtMs;
-  engine.setAgentRunning(guardianResult.state === 'running', currentTime);
-  if (guardianResult.attempted_restart) {
-    engine.onProcessRestarted(currentTime);
-  }
+  const livenessTick = await orchestrator.tickRuntimeLiveness({ currentTime, checkDailyTruncate });
+  const guardianResult = livenessTick.guardianResult;
+  runtimeLaunchAtMs = livenessTick.runtimeLaunchAtMs;
 
   if (guardianResult.skippedForStartupGrace) {
     return;
@@ -1387,19 +1383,7 @@ async function monitorLoop() {
 }
 
 function init() {
-  ({
-    adapter,
-    toolRules,
-    toolPipeline,
-    watchdogState,
-    procSampler,
-    runtimeLaunchAtMs,
-    engine,
-    guardian,
-    usageMonitor,
-    taskScheduler,
-    contextMonitor,
-  } = new MonitorOrchestrator({
+  orchestrator = new MonitorOrchestrator({
     env: process.env,
     monitorDir: MONITOR_DIR,
     getActiveAdapter,
@@ -1422,7 +1406,21 @@ function init() {
     startContextMonitor,
     scheduleStaleRuntimeCleanup,
     log,
-  }).start());
+  });
+
+  ({
+    adapter,
+    toolRules,
+    toolPipeline,
+    watchdogState,
+    procSampler,
+    runtimeLaunchAtMs,
+    engine,
+    guardian,
+    usageMonitor,
+    taskScheduler,
+    contextMonitor,
+  } = orchestrator.start());
 }
 
 try {

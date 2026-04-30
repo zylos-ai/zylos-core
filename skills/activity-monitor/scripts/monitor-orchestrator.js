@@ -3,6 +3,7 @@ import fs from 'fs';
 export class MonitorOrchestrator {
   constructor(deps) {
     this.deps = deps;
+    this.components = null;
   }
 
   start() {
@@ -71,7 +72,7 @@ export class MonitorOrchestrator {
 
     scheduleStaleRuntimeCleanup(adapter);
 
-    return {
+    this.components = {
       adapter,
       toolRules,
       toolPipeline,
@@ -83,6 +84,28 @@ export class MonitorOrchestrator {
       usageMonitor,
       taskScheduler,
       contextMonitor,
+    };
+    return this.components;
+  }
+
+  async tickRuntimeLiveness({ currentTime, checkDailyTruncate }) {
+    if (!this.components) {
+      throw new Error('MonitorOrchestrator.start() must be called before tickRuntimeLiveness()');
+    }
+
+    checkDailyTruncate();
+
+    const { engine, guardian } = this.components;
+    const guardianResult = await guardian.tick({ currentTime });
+    this.components.runtimeLaunchAtMs = guardianResult.runtimeLaunchAtMs;
+    engine.setAgentRunning(guardianResult.state === 'running', currentTime);
+    if (guardianResult.attempted_restart) {
+      engine.onProcessRestarted(currentTime);
+    }
+
+    return {
+      guardianResult,
+      runtimeLaunchAtMs: this.components.runtimeLaunchAtMs,
     };
   }
 }
