@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from '@jest/globals';
-import { HeartbeatEngine } from '../skills/activity-monitor/scripts/heartbeat-engine.js';
+import { HeartbeatEngine } from '../skills/activity-monitor/scripts/health-engine.js';
 
 function makeDeps(overrides = {}) {
   return {

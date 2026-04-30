@@ -13,9 +13,16 @@
 2. **组件设计** — 接口签名、数据结构、状态机、与其他组件的交互
 3. **实施方案** — 现有代码位置、改动类型（纯提取/行为变更）、具体实施步骤
 
-## 现有结构
+## 当前实现结构
 
-大部分逻辑集中在 `activity-monitor.js`，仅 HealthEngine、ProcSampler、TaskScheduler、tool-watchdog、tool-lifecycle、tool-event-stream、tool-rules 已拆为独立模块。
+AM 仍以 `activity-monitor.js` 为入口和副作用壳。HealthEngine、Guardian、MessageRouter、MonitorOrchestrator、ProcSampler、TaskScheduler、ToolPipeline、tool-watchdog、tool-lifecycle、tool-event-stream、tool-rules、status-writer 已拆为独立模块。
+
+当前实现与目标结构的主要差异：
+- 未创建 `monitor.js` 入口；`activity-monitor.js` 仍负责启动和接回 module-level state
+- 未独立落地 `SignalStore`
+- 未创建 `scripts/tasks/` 目录；任务定义仍在 `activity-monitor.js` 内联组装
+- 未创建 AM 本地 `scripts/adapters/` 目录；runtime adapter 在 CLI runtime 层提供
+- `status-writer.js` 是薄写入/helper 模块，完整 ActivityState projection 仍在 Orchestrator / payload builder
 
 ## 目标结构（对齐顶层设计 §4.1）
 

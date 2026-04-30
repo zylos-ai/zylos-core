@@ -14,6 +14,12 @@
 - **D-26**：usage_monitor 与 usage_alert 拆为两个独立 gate。usage_monitor_enabled（默认 true，本地 state 刷新，零 token）和 usage_alert_enabled（默认 false，达阈值时 C4 enqueue alert）。
 - **D-27**：旧 config 只有 usage_monitor_enabled=true 时，新版 default usage_alert_enabled=false。静默处理，不输出 warning。
 
+### 当前实现状态
+
+`scripts/task-scheduler.js` 已提取统一调度框架，支持 daily 和 interval task，并由 task definition 自己持有 state 读写逻辑。
+
+任务定义尚未拆到 `scripts/tasks/` 目录。当前 daily-upgrade、daily-memory-commit、upgrade-check、health-check、usage-monitor、usage-alert、context-check 等任务仍在 `activity-monitor.js` 初始化阶段内联组装，再传入 `TaskScheduler`。这保留了既有 gate、state file、C4 enqueue 行为，避免在同一轮迁移中同时改变任务边界和调度语义。
+
 ## 2. 组件设计
 
 ### 功能清单
@@ -156,10 +162,10 @@ interface TaskDefinition {
 | 交互方 | 方向 | 方法/数据 | 用途 |
 |-------|------|----------|------|
 | **Monitor Orchestrator** | 调用 | `tick()` | 在 tick 编排中被调用 |
-| **SignalStore** | 读取 | `snapshot.health` | gate 条件（部分任务需 health=ok，D-23：通过 snapshot 读取，eventual consistency——snapshot 来自 tick step 1，TaskScheduler 在 step 6 执行时 health 可能已变，这是 D-23 允许的） |
+| **Snapshot input** | 读取 | `snapshot.health` | gate 条件（部分任务需 health=ok）。当前 snapshot 由 Orchestrator 构造传入；SignalStore 未独立落地 |
 | **Adapter** | 读取 | `runtimeId` | 选择 usage 快照来源 |
 | **C4 Control** | 调用 | `c4-control.js enqueue` | daily-upgrade、health-check 通过 C4 控制 runtime |
-| **SignalStore** | 消费 | snapshot | idle 秒数等 gate 条件 |
+| **Monitor Orchestrator** | 提供 | snapshot | idle 秒数等 gate 条件 |
 
 ### 可配置项
 
@@ -202,9 +208,9 @@ interface TaskDefinition {
 
 ### 实施步骤
 
-1. 创建 `scripts/task-scheduler.js`，实现统一的 daily + interval 调度框架
-2. 将各定时任务实现移到 `scripts/tasks/` 目录下的独立文件
-3. 每个任务文件导出符合 `TaskDefinition` 接口的对象
-4. 合并现有 `DailySchedule` 和 interval 调度逻辑为统一框架
-5. usage-monitor 和 usage-alert 拆为两个独立任务（D-26）
+1. 已创建 `scripts/task-scheduler.js`，实现统一的 daily + interval 调度框架
+2. 未创建 `scripts/tasks/` 目录；任务定义仍在 `activity-monitor.js` 内联组装
+3. 内联任务对象符合 `TaskDefinition` shape
+4. 已合并 daily 和 interval 调度逻辑为统一框架
+5. usage-monitor 和 usage-alert 已按 D-26 拆为两个独立任务
 6. context-check 在 adapter.getContextMonitor() 返回非 null 时注册（由 hook 处理时 adapter 返回 null）

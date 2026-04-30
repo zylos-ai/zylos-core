@@ -15,6 +15,18 @@
 - **D-24**：ToolWatchdog 是有状态的干预系统（6 阶段状态机 + 持久化 + 主动按键中断），不是无状态健康检查，不归入 health-checks 子系统。顶层设计记为 5 阶段——将 interrupt_sent 与 interrupt_retry_wait 视为同一「干预」阶段；本文档按实现拆分为 6 阶段，因两者退出条件不同（grace_deadline vs retry_after）需独立 phase 值驱动状态机。
 - **D-33**：移除 launchGracePeriod。tool-call 响应速度与 runtime 是否刚拉起无关，ToolWatchdog 不需要启动宽限期。
 
+### 当前实现状态
+
+`scripts/tool-watchdog.js` 当前不是持有依赖和内部状态的 class，而是 pure transition function：`evaluateToolWatchdogTransition()`。它只计算 phase、block reason、state mutation intent 和是否需要刷新 api activity，不直接读写 `tool-watchdog-state.json`。
+
+持久化和副作用由 `MonitorOrchestrator` 的 adapter glue 消费返回值后完成：
+- `clearWatchdogState` → 调用注入的清理函数，并同步更新 in-memory state
+- `nextWatchdogState` → 调用注入的写入函数，并同步更新 in-memory state
+- `api_activity_dirty` → 触发 ToolPipeline 重新读取/生成 api activity snapshot
+- `triggerRecovery()`、`enqueueInterrupt()`、synthetic clear hint 仍通过 deps 注入
+
+该形态是本轮迁移刻意保留的安全边界，用来避免改变 ToolWatchdog restart/recovery 语义。后续若要提取 class，可在保持 transition 函数测试覆盖的前提下包一层状态持有器。
+
 ## 2. 组件设计
 
 ### 功能清单
@@ -305,7 +317,7 @@ function evaluateToolWatchdogTransition({ nowMs, foregroundIdentity, apiActivity
 |-------|------|----------|------|
 | **ToolPipeline** | 消费 | `apiActivity.watchdog_candidate_tool` | 获取候选超时工具 |
 | **ToolPipeline** | 消费 | `foregroundIdentity` | 前台身份验证 |
-| **SignalStore** | 读取 | `snapshot.health` | 前置条件检查（D-23：通过 snapshot，不直接读 HealthEngine） |
+| **Snapshot input** | 读取 | `snapshot.health` | 前置条件检查（D-23：通过 snapshot，不直接读 HealthEngine）。当前 snapshot 由 Orchestrator adapter glue 构造 |
 | **HealthEngine** | 调用 | `triggerRecovery()` | escalation 时触发 HealthEngine（显式接口调用，D-23 允许） |
 | **Adapter** | 调用 | `sendMessage()` (via `enqueueInterrupt`) | 发送中断按键 |
 | **Monitor Orchestrator** | 调用 + 落盘 | `evaluateToolWatchdogTransition()`；消费 `clearWatchdogState` / `nextWatchdogState` | tick 中被调用；负责清除或 atomic write `tool-watchdog-state.json` |

@@ -38,7 +38,7 @@
 ```
 activity-monitor/scripts/
 ├── message-router.js          # MessageRouter class + IPC handler
-└── monitor.js                 # 创建 HealthEngine 后启动 IPC server 并挂载 router
+└── activity-monitor.js        # 当前入口；通过 Orchestrator 启动 IPC server 并挂载 router
 ```
 
 `c4-receive.js` 位于 C4 组件内，按本文件的 IPC contract 调用 AM Process。
@@ -381,7 +381,7 @@ interface CacheStore {
 | `skills/comm-bridge/scripts/c4-receive.js` | 外部消息入口，需接入 IPC route 决策 |
 | `skills/comm-bridge/scripts/c4-send.js` | unhealthy 状态文案发送 |
 | `skills/activity-monitor/scripts/activity-monitor.js` | 现有 AM 主进程，需由 Orchestrator 启动 IPC server |
-| `scripts/heartbeat-engine.js` | 旧 HealthEngine/HeartbeatEngine probe 逻辑来源 |
+| `scripts/health-engine.js` | HealthEngine/HeartbeatEngine probe 逻辑来源 |
 
 ### 实施步骤
 

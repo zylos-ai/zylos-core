@@ -14,6 +14,12 @@
 - **D-4**：AM 主循环每 tick 按固定顺序执行 7 步。HealthEngine 不参与主循环 tick。
 - **D-21**：PM2 重启 AM 时，Guardian 退避状态重置为零。持久化状态从磁盘恢复。
 
+### 当前实现状态
+
+当前实现采用更保守的迁移形态：`activity-monitor.js` 仍是入口和副作用壳，`MonitorOrchestrator` 负责启动组装和 tick sequencing。状态文件写入、watchdog 持久化、C4 interrupt enqueue、HealthEngine recovery action 等副作用通过回调注入，避免在同一轮迁移中改变 ToolWatchdog restart/recovery 语义。
+
+`MonitorOrchestrator` 当前不只是纯组装层。它还承担 ActivityState projection 相关逻辑，包括 activity source 选择、API activity summary/merge、running/stopped/offline 分支编排、ToolPipeline / ToolWatchdog / ProcSampler / TaskScheduler 顺序协调。这些逻辑后续可再提取为 `SignalStore + ActivityState projection` 边界；本轮不做大搬迁。
+
 ## 2. 组件设计
 
 ### 功能清单
@@ -21,12 +27,12 @@
 | 能力类别 | 功能 | 说明 |
 |---------|------|------|
 | **初始化** | 加载 runtime adapter | `getActiveAdapter()` 读取 config.json |
-| | 实例化所有组件 | SignalStore / Guardian / ProcSampler / ToolPipeline / ToolWatchdog / TaskScheduler / StatusWriter / HealthEngine / MessageRouter |
+| | 实例化所有组件 | Guardian / ProcSampler / ToolPipeline / TaskScheduler / HealthEngine / MessageRouter；SignalStore 未独立落地，StatusWriter 当前是函数模块 |
 | | 恢复持久化状态 | health 从 agent-status.json；tool stream 从 state file；watchdog 从 state file |
 | | 启动 IPC server | Unix socket，按 type 分发：route → MessageRouter，notify_delivered → HealthEngine |
 | | 启动 context monitor | Codex: polling-based；Claude: null（hook 处理） |
 | | 清理其他 runtime session | 启动 10s 后 kill 非当前 runtime 的 tmux session |
-| **Tick 编排** | 7 步固定顺序 | SignalStore → Guardian → ProcSampler → ToolPipeline → ToolWatchdog → TaskScheduler → StatusWriter |
+| **Tick 编排** | 当前固定顺序 | Guardian → ProcSampler → ToolPipeline → ToolWatchdog transition → TaskScheduler → StatusWriter callback |
 | | 冻结处理 | ProcSampler.isFrozen() → adapter.stop()（在 ProcSampler.tick 和 ToolWatchdog.tick 之间） |
 | | 错误处理 | tick 异常 catch + log，不中断主循环 |
 | **主循环** | self-scheduling loop | `setTimeout(scheduleLoop, INTERVAL)` 而非 setInterval，防止异步 tick 重叠 |
@@ -79,11 +85,10 @@ tick() [every 1s, self-scheduling]
   │
   ├─ checkDailyTruncate()  ← 日志截断（housekeeping，不计入 7 步）
   │
-  ├─ 1. SignalStore.refresh()
-  │     快照层：readJSON(agent-status, statusline, foreground-session, ...)
-  │     流式层：增量读取 tool-events.jsonl
+  ├─ 1. Runtime liveness tick
+  │     Guardian 检查 tmux/runtime 状态；HealthEngine 接收 running signal
   │
-  ├─ 2. Guardian.tick(snapshot)
+  ├─ 2. Not-running 分支
   │     ├─ tmux session 不存在 → offline → 退避 → startAgent()
   │     ├─ isRunning() = false → stopped → 退避 → startAgent()
   │     └─ isRunning() = true → running（退避重置）
@@ -92,14 +97,14 @@ tick() [every 1s, self-scheduling]
   ├─ 2a. if (guardianResult.attempted_restart) healthEngine.onProcessRestarted()
   │      （Guardian 不持有 HealthEngine 引用（D-20），由 Orchestrator 代调）
   │
-  ├─ 3. ProcSampler.tick(snapshot)
+  ├─ 3. Running 分支：ProcSampler.tick()
   │     └─ isFrozen() → adapter.stop() + skip step 4-6, go to step 7
   │        （D-25：kill 后仍执行 StatusWriter 写入当前状态，下一 tick 自然进入 offline）
   │
-  ├─ 4. ToolPipeline.tick(snapshot)
+  ├─ 4. ToolPipeline.tick()
   │     processToolLifecycle → foregroundIdentity → buildApiActivity
   │
-  ├─ 5. ToolWatchdog.tick(snapshot)
+  ├─ 5. ToolWatchdog transition
   │     result = evaluateToolWatchdogTransition
   │     ├─ clearWatchdogState → clear tool-watchdog-state.json
   │     ├─ nextWatchdogState → atomic write tool-watchdog-state.json
@@ -107,7 +112,7 @@ tick() [every 1s, self-scheduling]
   │
   ├─ 6. TaskScheduler.tick(snapshot)
   │
-  └─ 7. StatusWriter.write(snapshot, healthEngine)
+  └─ 7. writeStatusFile(buildRunningStatus(...))
 ```
 
 > **行为变更**：旧 monitor tick 中包含 user message signal 消费、periodic probe、API error scan、health maintenance 驱动共 4 个 health 相关步骤。按 D-4，这些步骤不再由主循环 tick 驱动；HealthEngine 改为事件驱动（c4-dispatcher 异步调用 `onUserMessageDelivered()`）并由自身 maintenance timer 处理 pending heartbeat / cooldown / post-restart probe。
@@ -116,15 +121,13 @@ tick() [every 1s, self-scheduling]
 
 ```javascript
 this.adapter = getActiveAdapter()
-this.signalStore = new SignalStore(signalPaths)
 this.healthEngine = new HealthEngine(deps, options)
 this.messageRouter = new MessageRouter({ healthEngine, cacheStore, clock, log, options })
 this.guardian = new Guardian(adapter, { resetToolLifecycleState, log })
 this.procSampler = new ProcSampler({ sessionName: adapter.sessionName })
-this.toolPipeline = new ToolPipeline(adapter, signalStore)
-this.toolWatchdog = new ToolWatchdog(deps)
+this.toolPipeline = new ToolPipeline(adapter, config)
 this.taskScheduler = new TaskScheduler(tasks)
-this.statusWriter = new StatusWriter(healthEngine, signalStore)
+// StatusWriter remains a thin function module called through injected wrappers.
 ```
 
 ### IPC 监听
@@ -159,18 +162,18 @@ class MonitorOrchestrator {
 
 ### 与其他组件的交互
 
-Monitor Orchestrator 持有并驱动所有组件：
+Monitor Orchestrator 持有并驱动大部分 runtime 组件：
 
 | 组件 | 关系 | 调用时机 |
 |------|------|---------|
 | **Adapter** | 持有 | init 创建，注入给其他组件 |
-| **SignalStore** | 持有 + 驱动 | tick 开头 `refresh()` |
+| **SignalStore** | 未独立实现 | 当前读取逻辑分散在 ToolPipeline、StatusWriter helper、Orchestrator 注入回调 |
 | **Guardian** | 持有 + 驱动 | tick offline/stopped 分支 |
 | **ProcSampler** | 持有 + 驱动 | tick running 分支 `tick()` + `isFrozen()` |
 | **ToolPipeline** | 持有 + 驱动 | tick running 分支 `tick()` |
 | **ToolWatchdog** | 持有 + 驱动 | tick running 分支 |
 | **TaskScheduler** | 持有 + 驱动 | tick 末尾 |
-| **StatusWriter** | 持有 + 驱动 | tick 末尾 `write()` |
+| **StatusWriter** | 通过回调调用 | tick 末尾由 `activity-monitor.js` 注入 `writeStatusFile()` / payload builder |
 | **HealthEngine** | 持有 | 不直接 tick 驱动（事件驱动） |
 
 ### 常量
@@ -195,9 +198,9 @@ Monitor Orchestrator 持有并驱动所有组件：
 
 ### 实施步骤
 
-1. 创建 `scripts/monitor.js` 作为入口文件
-2. 提取 `init()` 逻辑：adapter 创建、组件实例化、状态恢复、IPC server 启动
-3. 提取 `monitorLoop()` 逻辑：tick 编排、错误处理
-4. 将全局变量收拢到 Orchestrator 实例或委托给各组件
-5. 消费 ToolWatchdog 返回的 state mutation intent：`clearWatchdogState` 清除 `tool-watchdog-state.json`，`nextWatchdogState` atomic write `tool-watchdog-state.json`，并将最终 watchdog state 传给 StatusWriter 聚合
-6. **这是组装层，最后实施**（依赖所有其他组件先完成）
+1. 未创建 `scripts/monitor.js`；当前入口仍是 `activity-monitor.js`
+2. 已将 adapter 创建、组件实例化、状态恢复、IPC server 启动的主要编排迁入 `MonitorOrchestrator.start()`
+3. 已将 `monitorLoop()` 的 tick sequencing 迁入 `MonitorOrchestrator.handleMonitorTick()`
+4. 部分全局状态已收拢到 Orchestrator components；`runtimeLaunchAtMs` / `lastState` / `idleSince` / `watchdogState` 仍由 `activity-monitor.js` 接回以保持兼容边界
+5. 已消费 ToolWatchdog 返回的 state mutation intent：`clearWatchdogState` 清除 `tool-watchdog-state.json`，`nextWatchdogState` atomic write `tool-watchdog-state.json`，并同步 in-memory watchdog state
+6. 副作用仍通过注入回调保留在 `activity-monitor.js`，后续若继续收敛需单独评估 watchdog/recovery 语义

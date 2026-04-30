@@ -17,7 +17,7 @@
 ## 2. 核心组件
 
 1. 主循环：`skills/activity-monitor/scripts/activity-monitor.js`
-2. 心跳状态机：`skills/activity-monitor/scripts/heartbeat-engine.js`
+2. 心跳状态机：`skills/activity-monitor/scripts/health-engine.js`
 3. 日调度器：`skills/activity-monitor/scripts/daily-schedule.js`
 4. Hook 活动追踪：`skills/activity-monitor/scripts/hook-activity.js`
 5. Claude statusLine 上下文监控：`skills/activity-monitor/scripts/context-monitor.js`

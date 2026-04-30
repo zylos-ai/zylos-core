@@ -774,8 +774,7 @@ get backoffDelay() {
 
 | 现有位置 | 内容 | 对应新方法 |
 |---------|------|-----------|
-| `scripts/health-engine.js` | HealthEngine import surface — re-exports the current HealthEngine implementation | 主入口 |
-| `scripts/heartbeat-engine.js` | HealthEngine class — FSM + timer-driven heartbeat maintenance; also exports `HeartbeatEngine` compatibility alias | 保留为兼容入口，逐步迁移文件名 |
+| `scripts/health-engine.js` | HealthEngine class — FSM + timer-driven heartbeat maintenance; also exports `HeartbeatEngine` compatibility alias | 主入口 |
 | `scripts/heartbeat-config.js`（15行） | `isRuntimeHeartbeatEnabled()` | 删除（不再有 tick-based heartbeat 开关） |
 | `activity-monitor.js:2081-2127` | monitorLoop 中的 API error scan + periodic probe + rate limit 检测 | `onUserMessageDelivered()` 替代 |
 | `activity-monitor.js:2087-2089` | user message signal 消费（tick 中读取 signal file） | `notifyUserMessage()` 替代（由 MessageRouter 调用） |
@@ -783,13 +782,13 @@ get backoffDelay() {
 
 ### 实施步骤
 
-1. 创建 `scripts/health-engine.js`，按本文档接口定义和实现逻辑编写
+1. 已创建 `scripts/health-engine.js`，按本文档接口定义和实现逻辑编写
 2. 实现 `setHealth()` — FSM 转移 + reason + 计数器清零
 3. 实现 `onUserMessageDelivered()` — 事件驱动检测
 4. 实现 `enterRateLimited()` — cooldown 计时器
 5. 实现 `sendHeartbeatProbe()` + `runRecoveryProbe()` — async probe 流程
 6. 实现 `notifyUserMessage()` + `onProcessRestarted()` + `triggerRecovery()` — 外部事件响应
 7. 实现只读 getter：health/healthReason/cooldownUntil/rateLimitResetTime/unavailableSince/backoffDelay
-8. 删除 `heartbeat-engine.js` 和 `heartbeat-config.js`
+8. 已删除旧 `heartbeat-engine.js` re-export/implementation split；`HeartbeatEngine` 保留为导出别名以兼容测试和外部 import
 9. 删除 monitorLoop 中的 API error scan、periodic probe、user message signal 消费逻辑
 10. **这是行为变更最大的组件**，建议在其他纯提取组件完成后再实施

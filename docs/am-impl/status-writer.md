@@ -15,16 +15,26 @@
 - **D-2**：HealthState 诊断信息通过 `agent-status.json` 的 `unavailable_reason` 字段暴露。
 - **D-10**：Health 状态持久化到 agent-status.json，AM 冷启动时恢复。
 
+### 当前实现状态
+
+`scripts/status-writer.js` 已提取为薄函数模块，当前职责是：
+- 读取初始 `agent-status.json` health，失败时 fail-open 为 `ok`
+- 原子写入 `agent-status.json`
+- 将 HealthEngine 内部状态投射为 public health（例如 `recovering` / `down` → `unavailable`）
+- 追加 `unavailable_reason`、`unavailable_since`、rate limit 字段
+
+ActivityState projection 尚未迁入 StatusWriter。当前 activity source 选择、busy/idle 判断、API hook merge、tool/watchdog/foreground 字段聚合仍在 `MonitorOrchestrator` 和 `activity-monitor.js` 的 payload builder 中完成。后续若补 `SignalStore` / projection 边界，应先明确 StatusWriter 是否只负责文件输出，还是同时拥有 public status projection。
+
 ## 2. 组件设计
 
 ### 功能清单
 
 | 能力类别 | 功能 | 说明 |
 |---------|------|------|
-| **状态投射** | ActivityState 计算 | 无状态投射：activeTools > 0 → busy; inactiveSeconds < 3s → busy; else → idle |
+| **状态投射** | ActivityState 计算 | 设计目标；当前仍在 MonitorOrchestrator / payload builder |
 | | 活动时间来源 | 优先级：conversation file mtime → tmux activity → default → api hook |
 | | idle 时间计算 | busy → idle 转换时记录 idleSince，计算 idleSeconds |
-| **状态聚合** | HealthState | 从 HealthEngine 读取 `health` 字段 |
+| **状态聚合** | HealthState | 当前已实现：从 HealthEngine 读取 `health` 字段并规范化 public health |
 | | Public health 投射 | 写入前将内部 legacy 状态（如 `recovering` / `down`）规范化为对外 `unavailable` |
 | | 诊断信息（D-2） | 非 OK 状态附加 `unavailable_reason`；ok 时清空 |
 | | rate limit 附加信息 | health=rate_limited 时附加 `rate_limit_reset` + `cooldown_until` |
@@ -83,6 +93,15 @@ class StatusWriter {
 }
 ```
 
+当前实现接口为函数模块：
+
+```javascript
+readInitialStatus({ statusFile }): object
+publicHealth(health: string): string
+buildStatusPayload({ statusObj, healthEngine }): object
+writeStatus({ statusFile, statusObj, healthEngine }): boolean
+```
+
 ```javascript
 interface StatusExtra {
   // Running 路径
@@ -120,20 +139,20 @@ interface StatusExtra {
 
 见 [signal-store.md](signal-store.md) 的 agent-status.json Schema。
 
-StatusWriter 是该文件的唯一写入方，其他组件通过 SignalStore 读取。
+StatusWriter helper 是该文件的写入路径。当前未独立落地 SignalStore；其他组件通过注入 reader、ToolPipeline snapshot 或 fallback file read 获取所需状态。
 
-> 实现边界：HeartbeatEngine 内部可在迁移期继续保留 `recovering` / `down` 等 legacy 状态用于退避和 probe 调度；StatusWriter 写 `agent-status.json` 时必须将这些内部状态统一投射为 public `unavailable`，并通过 `unavailable_reason` 暴露诊断原因。
+> 实现边界：HealthEngine 内部可在迁移期继续保留 `recovering` / `down` 等 legacy 状态用于退避和 probe 调度；StatusWriter 写 `agent-status.json` 时必须将这些内部状态统一投射为 public `unavailable`，并通过 `unavailable_reason` 暴露诊断原因。
 
 ### 与其他组件的交互
 
 | 交互方 | 方向 | 方法/数据 | 用途 |
 |-------|------|----------|------|
 | **HealthEngine** | 读取 | `health`, `healthReason`, `unavailableSince`, `rateLimitResetTime`, `cooldownUntil` | 写入 health 及附加信息（D-2/D-3） |
-| **ToolPipeline** | 读取 | `getActiveTools()`, foreground identity, watchdog 状态 | 写入工具相关字段 |
-| **ToolWatchdog** | 读取 | `watchdog_phase`, `watchdog_block_reason` | 写入 watchdog 状态 |
-| **Monitor Orchestrator** | 调用 | `write()` | tick 末尾调用 |
-| **Guardian** | 调用 | `write()` | offline/stopped 路径也写状态 |
-| **SignalStore** | 消费方 | `agent-status.json` | 下次 tick 读取（冷启动恢复 health） |
+| **ToolPipeline** | 间接输入 | api activity snapshot / foreground identity | 由 Orchestrator/payload builder 聚合后传入 statusObj |
+| **ToolWatchdog** | 间接输入 | `watchdog_phase`, `watchdog_block_reason` | 由 Orchestrator/payload builder 聚合后传入 statusObj |
+| **Monitor Orchestrator** | 调用 | injected `writeStatusFile()` | tick 末尾调用 |
+| **Guardian** | 间接输入 | offline/stopped result | Orchestrator 构造 not-running status 后写入 |
+| **SignalStore** | 未独立实现 | `agent-status.json` | 设计目标；当前由注入 reader / ToolPipeline / fallback file read 分散消费 |
 | **c4-receive fallback** | 消费方 | `agent-status.json` | MessageRouter IPC 不可用时做静态 fail-open / unhealthy 判断 |
 | **外部（Operator）** | 消费方 | `agent-status.json` | 监控面板展示 |
 
@@ -161,9 +180,9 @@ StatusWriter 是该文件的唯一写入方，其他组件通过 SignalStore 读
 
 ### 实施步骤
 
-1. 创建 `scripts/status-writer.js`
-2. 提取 `writeStatusFile()` + `atomicWriteJson()`
-3. 提取活动时间来源计算逻辑（conversation file → tmux → default → api hook）
-4. 提取 ActivityState 投射逻辑（纯函数）
-5. 提取状态聚合逻辑（tool 字段、watchdog 字段、foreground 字段）
-6. running / offline / stopped 三条路径统一到 `write()` 方法
+1. 已创建 `scripts/status-writer.js`
+2. 已提取 atomic JSON 写入、初始 health 读取、public health normalization
+3. 未提取活动时间来源计算逻辑（当前在 Orchestrator）
+4. 未提取 ActivityState 投射逻辑（当前在 Orchestrator / payload builder）
+5. 未提取完整状态聚合逻辑（tool/watchdog/foreground 字段仍由 caller 构造）
+6. running / offline / stopped 三条路径仍由 Orchestrator 分支构造 payload 后调用写入函数
