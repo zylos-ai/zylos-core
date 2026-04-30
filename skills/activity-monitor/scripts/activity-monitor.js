@@ -1246,15 +1246,12 @@ async function monitorLoop() {
     }
   }
 
-  const apiUpdatedSec = apiActivity?.updated_at ? Math.floor(apiActivity.updated_at / 1000) : 0;
-  const activeTools = apiActivity?.active_tools ?? 0;
-  const thinking = apiActivity?.active === true || activeTools > 0;
-
-  // Hook freshness: if api-activity.json hasn't been updated in 60s, treat active_tools
-  // as stale. Prevents stale hook state from driving destructive ProcSampler restarts
-  // and also gates heartbeat auto-ack in the dispatcher (via proc-state.json).
-  const hookFresh = apiUpdatedSec > 0 && (currentTime - apiUpdatedSec) < 60;
-  const confirmedActive = activeTools > 0 && hookFresh;
+  const {
+    apiUpdatedSec,
+    activeTools,
+    thinking,
+    confirmedActive,
+  } = orchestrator.summarizeApiActivity({ currentTime, apiActivity });
 
   // /proc context-switch sampling: tick every loop iteration (internally gated to 10s).
   // Only counts frozen time when agent has confirmed active tools (fresh hook + active_tools > 0),
@@ -1269,13 +1266,12 @@ async function monitorLoop() {
     return;
   }
 
-  // Merge activity sources: use API timestamp when it indicates active work
-  // (PreToolUse/UserPromptSubmit set active=true). Don't extend activity on
-  // Stop/Notification events (active=false) — those signal idle, not work.
-  if (apiActivity?.active && apiUpdatedSec > activity) {
-    activity = apiUpdatedSec;
-    source = 'api_hook';
-  }
+  ({ activity, source } = orchestrator.mergeApiActivitySource({
+    activity,
+    source,
+    apiActivity,
+    apiUpdatedSec,
+  }));
 
   ({ lastState, idleSince } = orchestrator.handleRunningRuntime({
     currentTime,

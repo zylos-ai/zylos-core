@@ -418,6 +418,74 @@ describe('MonitorOrchestrator', () => {
     assert.deepEqual(calls, [['getTmuxActivity']]);
   });
 
+  it('summarizes API activity freshness and active tool state', () => {
+    const { orchestrator } = createHarness({ initialHealth: 'ok' });
+
+    assert.deepEqual(orchestrator.summarizeApiActivity({
+      currentTime: 100,
+      apiActivity: {
+        active: false,
+        active_tools: 2,
+        updated_at: 90_500,
+      },
+    }), {
+      apiUpdatedSec: 90,
+      activeTools: 2,
+      thinking: true,
+      hookFresh: true,
+      confirmedActive: true,
+    });
+
+    assert.deepEqual(orchestrator.summarizeApiActivity({
+      currentTime: 200,
+      apiActivity: {
+        active: true,
+        active_tools: 0,
+        updated_at: 100_000,
+      },
+    }), {
+      apiUpdatedSec: 100,
+      activeTools: 0,
+      thinking: true,
+      hookFresh: false,
+      confirmedActive: false,
+    });
+  });
+
+  it('merges API activity source only for newer active API events', () => {
+    const { orchestrator } = createHarness({ initialHealth: 'ok' });
+
+    assert.deepEqual(orchestrator.mergeApiActivitySource({
+      activity: 100,
+      source: 'tmux_activity',
+      apiActivity: { active: true },
+      apiUpdatedSec: 120,
+    }), {
+      activity: 120,
+      source: 'api_hook',
+    });
+
+    assert.deepEqual(orchestrator.mergeApiActivitySource({
+      activity: 100,
+      source: 'tmux_activity',
+      apiActivity: { active: false },
+      apiUpdatedSec: 120,
+    }), {
+      activity: 100,
+      source: 'tmux_activity',
+    });
+
+    assert.deepEqual(orchestrator.mergeApiActivitySource({
+      activity: 130,
+      source: 'conv_file',
+      apiActivity: { active: true },
+      apiUpdatedSec: 120,
+    }), {
+      activity: 130,
+      source: 'conv_file',
+    });
+  });
+
   it('writes busy running status and resets idle tracking', () => {
     const calls = [];
     const engine = {

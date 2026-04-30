@@ -199,6 +199,32 @@ export class MonitorOrchestrator {
     return { activity, source };
   }
 
+  summarizeApiActivity({ currentTime, apiActivity }) {
+    const apiUpdatedSec = apiActivity?.updated_at ? Math.floor(apiActivity.updated_at / 1000) : 0;
+    const activeTools = apiActivity?.active_tools ?? 0;
+    const thinking = apiActivity?.active === true || activeTools > 0;
+    const hookFresh = apiUpdatedSec > 0 && (currentTime - apiUpdatedSec) < 60;
+
+    return {
+      apiUpdatedSec,
+      activeTools,
+      thinking,
+      hookFresh,
+      confirmedActive: activeTools > 0 && hookFresh,
+    };
+  }
+
+  mergeApiActivitySource({ activity, source, apiActivity, apiUpdatedSec }) {
+    if (apiActivity?.active && apiUpdatedSec > activity) {
+      return {
+        activity: apiUpdatedSec,
+        source: 'api_hook',
+      };
+    }
+
+    return { activity, source };
+  }
+
   handleRunningRuntime({
     currentTime,
     currentTimeHuman,
