@@ -139,6 +139,7 @@ import { DailySchedule } from './daily-schedule.js';
 import { ProcSampler } from './proc-sampler.js';
 import { readCodexRolloutActivityFromActiveRollout } from './codex-rollout-activity-reader.js';
 import { readCodexUsageFromActiveRollout } from './usage-codex-rollout-reader.js';
+import { readInitialStatus, writeStatus } from './status-writer.js';
 import { shouldStartUsageCheck } from './usage-check-engine.js';
 import { getInitialUsageCheckAt } from './usage-check-init.js';
 import { isRuntimeHeartbeatEnabled } from './heartbeat-config.js';
@@ -656,21 +657,8 @@ async function startAgent() {
   }
 }
 
-function ensureStatusDir() {
-  if (!fs.existsSync(MONITOR_DIR)) {
-    fs.mkdirSync(MONITOR_DIR, { recursive: true });
-  }
-}
-
 function loadInitialHealth() {
-  try {
-    if (!fs.existsSync(STATUS_FILE)) return { health: 'ok' };
-    const status = JSON.parse(fs.readFileSync(STATUS_FILE, 'utf8'));
-    if (status && typeof status.health === 'string') {
-      return status;
-    }
-  } catch { }
-  return { health: 'ok' };
+  return readInitialStatus({ statusFile: STATUS_FILE });
 }
 
 function atomicWriteJson(filePath, value) {
@@ -680,20 +668,7 @@ function atomicWriteJson(filePath, value) {
 }
 
 function writeStatusFile(statusObj) {
-  try {
-    ensureStatusDir();
-    const extra = {};
-    if (engine.health === 'rate_limited') {
-      extra.rate_limit_reset = engine.rateLimitResetTime || null;
-      extra.cooldown_until = engine.cooldownUntil || null;
-    }
-    if (engine.healthReason) {
-      extra.unavailable_reason = engine.healthReason;
-    }
-    atomicWriteJson(STATUS_FILE, { ...statusObj, ...extra, health: engine.health });
-  } catch {
-    // Best-effort.
-  }
+  writeStatus({ statusFile: STATUS_FILE, statusObj, healthEngine: engine });
 }
 
 function startMessageRouterServer() {
