@@ -1140,80 +1140,37 @@ async function monitorLoop() {
   const currentTime = Math.floor(Date.now() / 1000);
   const currentTimeHuman = new Date().toISOString().replace('T', ' ').substring(0, 19);
 
-  const livenessTick = await orchestrator.tickRuntimeLiveness({ currentTime, checkDailyTruncate });
-  const guardianResult = livenessTick.guardianResult;
-  runtimeLaunchAtMs = livenessTick.runtimeLaunchAtMs;
-
-  if (guardianResult.skippedForStartupGrace) {
-    return;
-  }
-
-  if (guardianResult.state !== 'running') {
-    ({ lastState } = orchestrator.handleNotRunningRuntime({
-      guardianResult,
-      currentTime,
-      currentTimeHuman,
-      lastState,
-      buildNotRunningStatus,
-      writeStatusFile,
-      clearWatchdogState,
-    }));
-    return;
-  }
-
-  let { activity, source } = orchestrator.resolveActivitySource({
+  const tickState = await orchestrator.handleMonitorTick({
     currentTime,
-    getConversationFileModTime,
-    getTmuxActivity,
-  });
-
-  const { currentTmuxClaudePid, interactiveState } = orchestrator.readRuntimeInteraction({
-    getTmuxClaudePid,
-    readTmuxInputState,
-  });
-
-  let apiActivity = null;
-  let foregroundIdentity = null;
-  let watchdogStatus = { watchdog_phase: 'idle', watchdog_block_reason: null };
-
-  ({
-    foregroundIdentity,
-    apiActivity,
-    watchdogStatus,
-    watchdogState,
-  } = orchestrator.handleClaudeRuntimeActivity({
+    currentTimeHuman,
     nowMs: Date.now(),
-    currentTmuxClaudePid,
-    interactiveState,
-    watchdogState,
-    canTreatPaneAsRecovered,
-    runC4Control,
+    state: {
+      runtimeLaunchAtMs,
+      lastState,
+      idleSince,
+      watchdogState,
+    },
+    idleThreshold: IDLE_THRESHOLD,
+    checkDailyTruncate,
+    buildNotRunningStatus,
+    buildRunningStatus,
+    writeStatusFile,
     clearWatchdogState,
     writeWatchdogState: (nextWatchdogState) => {
       watchdogState = nextWatchdogState;
       writeWatchdogState();
     },
-  }));
-
-  const runningActivityState = orchestrator.handleRunningActivityState({
-    currentTime,
-    currentTimeHuman,
-    activity,
-    source,
-    apiActivity,
-    watchdogStatus,
-    foregroundIdentity,
-    lastState,
-    idleSince,
-    idleThreshold: IDLE_THRESHOLD,
-    buildRunningStatus,
-    writeStatusFile,
+    getConversationFileModTime,
+    getTmuxActivity,
+    getTmuxClaudePid,
+    readTmuxInputState,
+    canTreatPaneAsRecovered,
+    runC4Control,
   });
-  lastState = runningActivityState.lastState;
-  idleSince = runningActivityState.idleSince;
-  if (runningActivityState.frozen) {
-    return;
-  }
+  runtimeLaunchAtMs = tickState.runtimeLaunchAtMs;
+  lastState = tickState.lastState;
+  idleSince = tickState.idleSince;
+  watchdogState = tickState.watchdogState;
 }
 
 function init() {

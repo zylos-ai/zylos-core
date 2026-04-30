@@ -804,6 +804,298 @@ describe('MonitorOrchestrator', () => {
     });
   });
 
+  it('coordinates monitor tick startup-grace early return', async () => {
+    const calls = [];
+    const guardian = {
+      tick: async ({ currentTime }) => {
+        calls.push(['guardian.tick', currentTime]);
+        return {
+          state: 'running',
+          skippedForStartupGrace: true,
+          runtimeLaunchAtMs: 7777,
+        };
+      },
+    };
+    const engine = {
+      health: 'ok',
+      start: () => calls.push(['engine.start']),
+      setAgentRunning: (running, currentTime) => calls.push(['engine.setAgentRunning', running, currentTime]),
+    };
+    const { orchestrator } = createHarness({ guardian, engine, initialHealth: 'ok' });
+    orchestrator.start();
+    calls.length = 0;
+
+    const result = await orchestrator.handleMonitorTick({
+      currentTime: 300,
+      currentTimeHuman: '2026-04-30 14:35:00',
+      nowMs: 300000,
+      state: {
+        runtimeLaunchAtMs: 5678,
+        lastState: 'idle',
+        idleSince: 100,
+        watchdogState: { id: 'watchdogState' },
+      },
+      idleThreshold: 3,
+      checkDailyTruncate: () => calls.push(['checkDailyTruncate']),
+      buildNotRunningStatus: () => calls.push(['buildNotRunningStatus']),
+      buildRunningStatus: () => calls.push(['buildRunningStatus']),
+      writeStatusFile: () => calls.push(['writeStatusFile']),
+      clearWatchdogState: () => calls.push(['clearWatchdogState']),
+      writeWatchdogState: () => calls.push(['writeWatchdogState']),
+      getConversationFileModTime: () => calls.push(['getConversationFileModTime']),
+      getTmuxActivity: () => calls.push(['getTmuxActivity']),
+      getTmuxClaudePid: () => calls.push(['getTmuxClaudePid']),
+      readTmuxInputState: () => calls.push(['readTmuxInputState']),
+      canTreatPaneAsRecovered: () => false,
+      runC4Control: () => calls.push(['runC4Control']),
+    });
+
+    assert.deepEqual(result, {
+      runtimeLaunchAtMs: 7777,
+      lastState: 'idle',
+      idleSince: 100,
+      watchdogState: { id: 'watchdogState' },
+      skippedForStartupGrace: true,
+    });
+    assert.deepEqual(calls, [
+      ['checkDailyTruncate'],
+      ['guardian.tick', 300],
+      ['engine.setAgentRunning', true, 300],
+    ]);
+  });
+
+  it('coordinates monitor tick stopped-Claude cleanup state handoff', async () => {
+    const calls = [];
+    const adapter = { runtimeId: 'claude', displayName: 'Claude', sessionName: 'claude-main' };
+    const guardian = {
+      tick: async ({ currentTime }) => {
+        calls.push(['guardian.tick', currentTime]);
+        return {
+          state: 'stopped',
+          attempted_restart: false,
+          runtimeLaunchAtMs: 9999,
+        };
+      },
+    };
+    const engine = {
+      health: 'ok',
+      start: () => calls.push(['engine.start']),
+      setAgentRunning: (running, currentTime) => calls.push(['engine.setAgentRunning', running, currentTime]),
+    };
+    const taskScheduler = {
+      tick: (payload) => calls.push(['taskScheduler.tick', payload]),
+    };
+    const toolPipeline = {
+      writeApiActivitySnapshot: (snapshot) => calls.push(['toolPipeline.writeApiActivitySnapshot', snapshot]),
+    };
+    const { orchestrator } = createHarness({
+      adapter,
+      guardian,
+      engine,
+      taskScheduler,
+      toolPipeline,
+      watchdogState: { episode_key: 'existing' },
+      initialHealth: 'ok',
+      log: (message) => calls.push(['log', message]),
+    });
+    orchestrator.start();
+    calls.length = 0;
+
+    const result = await orchestrator.handleMonitorTick({
+      currentTime: 500,
+      currentTimeHuman: '2026-04-30 14:37:00',
+      nowMs: 500000,
+      state: {
+        runtimeLaunchAtMs: 5678,
+        lastState: 'busy',
+        idleSince: 0,
+        watchdogState: { episode_key: 'existing' },
+      },
+      idleThreshold: 3,
+      checkDailyTruncate: () => calls.push(['checkDailyTruncate']),
+      buildNotRunningStatus: (payload) => {
+        calls.push(['buildNotRunningStatus', payload.state]);
+        return { status: 'not-running', state: payload.state };
+      },
+      buildRunningStatus: () => calls.push(['buildRunningStatus']),
+      writeStatusFile: (status) => calls.push(['writeStatusFile', status]),
+      clearWatchdogState: () => calls.push(['clearWatchdogState']),
+      writeWatchdogState: () => calls.push(['writeWatchdogState']),
+      getConversationFileModTime: () => calls.push(['getConversationFileModTime']),
+      getTmuxActivity: () => calls.push(['getTmuxActivity']),
+      getTmuxClaudePid: () => calls.push(['getTmuxClaudePid']),
+      readTmuxInputState: () => calls.push(['readTmuxInputState']),
+      canTreatPaneAsRecovered: () => false,
+      runC4Control: () => calls.push(['runC4Control']),
+    });
+
+    assert.equal(result.runtimeLaunchAtMs, 9999);
+    assert.equal(result.lastState, 'stopped');
+    assert.equal(result.watchdogState, null);
+    assert.equal(calls[6][0], 'toolPipeline.writeApiActivitySnapshot');
+    assert.equal(Number.isInteger(calls[6][1].updated_at), true);
+    const stopSnapshot = {
+      ...calls[6][1],
+      updated_at: 500000,
+    };
+    assert.deepEqual([
+      ...calls.slice(0, 6),
+      ['toolPipeline.writeApiActivitySnapshot', stopSnapshot],
+      ...calls.slice(7),
+    ], [
+      ['checkDailyTruncate'],
+      ['guardian.tick', 500],
+      ['engine.setAgentRunning', false, 500],
+      ['buildNotRunningStatus', 'stopped'],
+      ['writeStatusFile', { status: 'not-running', state: 'stopped' }],
+      ['clearWatchdogState'],
+      ['toolPipeline.writeApiActivitySnapshot', {
+        version: 3,
+        pid: 0,
+        sessionId: null,
+        scope: null,
+        foreground_identity: {
+          session_id: null,
+          source: null,
+          trusted: false,
+          observed_at: 0,
+        },
+        event: 'stop',
+        tool: null,
+        active: false,
+        active_tools: 0,
+        in_prompt: false,
+        updated_at: 500000,
+        oldest_active_tool: null,
+        watchdog_candidate_tool: null,
+        last_completed_tool: null,
+      }],
+      ['log', 'State: STOPPED (Claude not running in tmux session)'],
+      ['taskScheduler.tick', {
+        currentTime: 500,
+        health: 'ok',
+        agentRunning: false,
+        state: 'stopped',
+      }],
+    ]);
+  });
+
+  it('coordinates a running monitor tick through injected boundaries', async () => {
+    const calls = [];
+    const guardian = {
+      tick: async ({ currentTime }) => {
+        calls.push(['guardian.tick', currentTime]);
+        return {
+          state: 'running',
+          attempted_restart: false,
+          runtimeLaunchAtMs: 8888,
+        };
+      },
+    };
+    const engine = {
+      health: 'ok',
+      start: () => calls.push(['engine.start']),
+      setAgentRunning: (running, currentTime) => calls.push(['engine.setAgentRunning', running, currentTime]),
+    };
+    const taskScheduler = {
+      tick: (payload) => calls.push(['taskScheduler.tick', payload]),
+    };
+    const procSampler = {
+      tick: (currentTime, payload) => calls.push(['procSampler.tick', currentTime, payload]),
+      isFrozen: () => false,
+      getState: () => ({ frozenCount: 0 }),
+      reset: () => calls.push(['procSampler.reset']),
+    };
+    const { orchestrator } = createHarness({
+      guardian,
+      engine,
+      taskScheduler,
+      procSampler,
+      initialHealth: 'ok',
+      log: (message) => calls.push(['log', message]),
+    });
+    orchestrator.start();
+    calls.length = 0;
+
+    const result = await orchestrator.handleMonitorTick({
+      currentTime: 400,
+      currentTimeHuman: '2026-04-30 14:36:00',
+      nowMs: 400000,
+      state: {
+        runtimeLaunchAtMs: 5678,
+        lastState: 'busy',
+        idleSince: 0,
+        watchdogState: { episode_key: 'existing' },
+      },
+      idleThreshold: 3,
+      checkDailyTruncate: () => calls.push(['checkDailyTruncate']),
+      buildNotRunningStatus: () => calls.push(['buildNotRunningStatus']),
+      buildRunningStatus: (payload) => {
+        calls.push(['buildRunningStatus', payload]);
+        return { status: 'running', state: payload.state };
+      },
+      writeStatusFile: (status) => calls.push(['writeStatusFile', status]),
+      clearWatchdogState: () => calls.push(['clearWatchdogState']),
+      writeWatchdogState: () => calls.push(['writeWatchdogState']),
+      getConversationFileModTime: () => 350,
+      getTmuxActivity: () => {
+        calls.push(['getTmuxActivity']);
+        return 390;
+      },
+      getTmuxClaudePid: () => {
+        calls.push(['getTmuxClaudePid']);
+        return 0;
+      },
+      readTmuxInputState: () => {
+        calls.push(['readTmuxInputState']);
+        return null;
+      },
+      canTreatPaneAsRecovered: () => false,
+      runC4Control: () => calls.push(['runC4Control']),
+    });
+
+    assert.deepEqual(result, {
+      runtimeLaunchAtMs: 8888,
+      lastState: 'idle',
+      idleSince: 400,
+      watchdogState: { episode_key: 'existing' },
+      frozen: false,
+    });
+    assert.deepEqual(calls, [
+      ['checkDailyTruncate'],
+      ['guardian.tick', 400],
+      ['engine.setAgentRunning', true, 400],
+      ['getTmuxActivity'],
+      ['procSampler.tick', 400, { isActive: false }],
+      ['buildRunningStatus', {
+        state: 'idle',
+        thinking: false,
+        activity: 390,
+        apiUpdatedSec: 0,
+        activeTools: 0,
+        currentTime: 400,
+        currentTimeHuman: '2026-04-30 14:36:00',
+        idleSeconds: 0,
+        inactiveSeconds: 10,
+        source: 'tmux_activity',
+        runtimeLaunchAtMsValue: 8888,
+        apiActivity: null,
+        watchdogStatus: { watchdog_phase: 'idle', watchdog_block_reason: null },
+        foregroundIdentity: null,
+      }],
+      ['writeStatusFile', { status: 'running', state: 'idle' }],
+      ['log', 'State: IDLE (entering idle state)'],
+      ['taskScheduler.tick', {
+        currentTime: 400,
+        health: 'ok',
+        agentRunning: true,
+        state: 'idle',
+        idleSeconds: 0,
+        apiActivity: null,
+      }],
+    ]);
+  });
+
   it('ticks ProcSampler and continues when process is not frozen', () => {
     const calls = [];
     const procSampler = {

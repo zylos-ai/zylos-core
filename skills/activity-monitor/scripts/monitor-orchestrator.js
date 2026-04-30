@@ -245,6 +245,114 @@ export class MonitorOrchestrator {
     };
   }
 
+  async handleMonitorTick({
+    currentTime,
+    currentTimeHuman,
+    nowMs,
+    state,
+    idleThreshold,
+    checkDailyTruncate,
+    buildNotRunningStatus,
+    buildRunningStatus,
+    writeStatusFile,
+    clearWatchdogState,
+    writeWatchdogState,
+    getConversationFileModTime,
+    getTmuxActivity,
+    getTmuxClaudePid,
+    readTmuxInputState,
+    canTreatPaneAsRecovered,
+    runC4Control,
+  }) {
+    if (!this.components) {
+      throw new Error('MonitorOrchestrator.start() must be called before handleMonitorTick()');
+    }
+
+    const livenessTick = await this.tickRuntimeLiveness({ currentTime, checkDailyTruncate });
+    let nextState = {
+      ...state,
+      runtimeLaunchAtMs: livenessTick.runtimeLaunchAtMs,
+    };
+    const guardianResult = livenessTick.guardianResult;
+
+    if (guardianResult.skippedForStartupGrace) {
+      return {
+        ...nextState,
+        skippedForStartupGrace: true,
+      };
+    }
+
+    if (guardianResult.state !== 'running') {
+      const notRunningState = this.handleNotRunningRuntime({
+        guardianResult,
+        currentTime,
+        currentTimeHuman,
+        lastState: state.lastState,
+        buildNotRunningStatus,
+        writeStatusFile,
+        clearWatchdogState: () => {
+          nextState = {
+            ...nextState,
+            watchdogState: null,
+          };
+          clearWatchdogState();
+        },
+      });
+      return {
+        ...nextState,
+        lastState: notRunningState.lastState,
+      };
+    }
+
+    const { activity, source } = this.resolveActivitySource({
+      currentTime,
+      getConversationFileModTime,
+      getTmuxActivity,
+    });
+
+    const { currentTmuxClaudePid, interactiveState } = this.readRuntimeInteraction({
+      getTmuxClaudePid,
+      readTmuxInputState,
+    });
+
+    const claudeActivityState = this.handleClaudeRuntimeActivity({
+      nowMs,
+      currentTmuxClaudePid,
+      interactiveState,
+      watchdogState: state.watchdogState,
+      canTreatPaneAsRecovered,
+      runC4Control,
+      clearWatchdogState,
+      writeWatchdogState,
+    });
+    nextState = {
+      ...nextState,
+      watchdogState: claudeActivityState.watchdogState,
+    };
+
+    const runningActivityState = this.handleRunningActivityState({
+      currentTime,
+      currentTimeHuman,
+      activity,
+      source,
+      apiActivity: claudeActivityState.apiActivity,
+      watchdogStatus: claudeActivityState.watchdogStatus,
+      foregroundIdentity: claudeActivityState.foregroundIdentity,
+      lastState: state.lastState,
+      idleSince: state.idleSince,
+      idleThreshold,
+      buildRunningStatus,
+      writeStatusFile,
+    });
+
+    return {
+      ...nextState,
+      lastState: runningActivityState.lastState,
+      idleSince: runningActivityState.idleSince,
+      frozen: runningActivityState.frozen,
+    };
+  }
+
   tickToolPipeline({ nowMs, currentTmuxClaudePid, interactiveState }) {
     if (!this.components) {
       throw new Error('MonitorOrchestrator.start() must be called before tickToolPipeline()');
