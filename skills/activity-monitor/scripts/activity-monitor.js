@@ -138,6 +138,7 @@ import { Guardian } from './guardian.js';
 import { MessageRouter } from './message-router.js';
 import { DailySchedule } from './daily-schedule.js';
 import { ProcSampler } from './proc-sampler.js';
+import { canTreatPaneAsRecovered, ToolPipeline } from './tool-pipeline.js';
 import { readCodexUsageFromActiveRollout } from './usage-codex-rollout-reader.js';
 import { consumeRecentUserMessageSignal } from './signal-store.js';
 import { readInitialStatus, writeStatus } from './status-writer.js';
@@ -145,18 +146,6 @@ import { shouldStartUsageCheck } from './usage-check-engine.js';
 import { getInitialUsageCheckAt } from './usage-check-init.js';
 import { isRuntimeHeartbeatEnabled } from './heartbeat-config.js';
 import { getToolRules } from './tool-rules.js';
-import {
-  applyOrderedToolEvents,
-  createToolLifecycleState,
-  getSessionSnapshot,
-  normalizeToolLifecycleState,
-  pruneToolLifecycleState,
-} from './tool-lifecycle.js';
-import {
-  createToolEventStreamState,
-  readToolEventsIncrementalFromStream,
-  rotateToolEventStream,
-} from './tool-event-stream.js';
 import {
   WATCHDOG_INTERRUPT_AVAILABLE_IN_SEC,
   evaluateToolWatchdogTransition
@@ -331,18 +320,12 @@ let lastApiErrorScanAt = 0;
 let apiErrorConsecutiveHits = 0;  // consecutive scans that detected an API error
 let runtimeLaunchAtMs = 0;
 let toolRules = [];
-let toolLifecycleState = createToolLifecycleState();
-let toolEventStreamState = createToolEventStreamState(TOOL_EVENTS_FILE);
-let toolEventTail = '';
-let toolEventRotatedTail = '';
-let toolEventArrivalSeq = 0;
-let toolEventReorderBuffer = [];
 let watchdogState = null;
-let lastStatuslineSyntheticClearAt = 0;
 
 let adapter;         // initialized in init() via getActiveAdapter()
 let engine;          // initialized in init()
 let guardian;        // initialized in init()
+let toolPipeline;    // initialized in init()
 let messageRouterServer; // initialized in init()
 let contextMonitor;  // initialized in init() if adapter provides one (Codex only)
 let procSampler;     // initialized in init()
@@ -646,50 +629,6 @@ function getTmuxClaudePid(sessionName) {
   }
 }
 
-function writeToolEventStreamState() {
-  try {
-    atomicWriteJson(TOOL_EVENT_STREAM_STATE_FILE, toolEventStreamState);
-  } catch {
-    // Best-effort.
-  }
-}
-
-function writeSessionToolState(foregroundIdentity, foregroundSessionId) {
-  try {
-    const sessions = {};
-    for (const sessionId of Object.keys(toolLifecycleState.sessions).sort()) {
-      const snapshot = getSessionSnapshot(toolLifecycleState, sessionId, foregroundSessionId);
-      if (!snapshot) continue;
-      sessions[sessionId] = {
-        ...snapshot,
-        watchdog_candidate: snapshot.running_tools.find((tool) => {
-          const rule = tool.rule_id ? toolRules.find((candidate) => candidate.id === tool.rule_id) : null;
-          return Boolean(rule?.watchdog?.enabled);
-        }) || null
-      };
-    }
-
-    atomicWriteJson(SESSION_TOOL_STATE_FILE, {
-      version: 1,
-      foreground_source: foregroundIdentity?.source || null,
-      foreground_session_id: foregroundSessionId || null,
-      sessions,
-      pending_completions: toolLifecycleState.pending_completions,
-      pending_clear_hints: toolLifecycleState.pending_clear_hints,
-    });
-  } catch {
-    // Best-effort.
-  }
-}
-
-function writeApiActivitySnapshot(apiActivity) {
-  try {
-    atomicWriteJson(API_ACTIVITY_FILE, apiActivity);
-  } catch {
-    // Best-effort.
-  }
-}
-
 function writeWatchdogState() {
   try {
     if (!watchdogState) {
@@ -702,411 +641,10 @@ function writeWatchdogState() {
   }
 }
 
-function loadPersistedToolEventStreamState() {
-  const persisted = readJsonFileSafe(TOOL_EVENT_STREAM_STATE_FILE);
-  if (!persisted || persisted.version !== 1) return null;
-  try {
-    if (!fs.existsSync(TOOL_EVENTS_FILE)) return null;
-    const stat = fs.statSync(TOOL_EVENTS_FILE);
-    const inode = Number(stat.ino) || 0;
-    if (persisted.inode && persisted.inode !== inode) return null;
-    if (stat.size < (Number(persisted.offset) || 0)) return null;
-
-    const loaded = {
-      ...createToolEventStreamState(TOOL_EVENTS_FILE),
-      inode,
-      offset: Number(persisted.offset) || 0,
-      last_processed_at: Number(persisted.last_processed_at) || 0,
-      last_rotation_at: Number(persisted.last_rotation_at) || 0,
-    };
-
-    const rotatedDrain = persisted.rotated_drain;
-    if (rotatedDrain?.path) {
-      if (fs.existsSync(rotatedDrain.path)) {
-        const rotatedStat = fs.statSync(rotatedDrain.path);
-        const rotatedInode = Number(rotatedStat.ino) || 0;
-        const rotatedOffset = Number(rotatedDrain.offset) || 0;
-        if ((!rotatedDrain.inode || rotatedDrain.inode === rotatedInode) && rotatedStat.size >= rotatedOffset) {
-          loaded.rotated_drain = {
-            path: rotatedDrain.path,
-            inode: rotatedInode,
-            offset: rotatedOffset,
-            last_size: Math.max(Number(rotatedDrain.last_size) || 0, rotatedOffset),
-            quiet_since: Number(rotatedDrain.quiet_since) || loaded.last_rotation_at || 0,
-          };
-        }
-      }
-    }
-
-    if (!loaded.offset && !loaded.rotated_drain) return null;
-    return loaded;
-  } catch {
-    return null;
-  }
-}
-
-function resetToolLifecycleRuntimeState({ clearFiles = false } = {}) {
-  toolLifecycleState = createToolLifecycleState();
-  toolEventStreamState = createToolEventStreamState(TOOL_EVENTS_FILE);
-  toolEventTail = '';
-  toolEventRotatedTail = '';
-  toolEventArrivalSeq = 0;
-  toolEventReorderBuffer = [];
-  lastStatuslineSyntheticClearAt = 0;
-  watchdogState = null;
-
-  if (clearFiles) {
-    try {
-      fs.writeFileSync(TOOL_EVENTS_FILE, '');
-    } catch {
-      // Best-effort.
-    }
-    safeUnlink(TOOL_EVENT_STREAM_STATE_FILE);
-    safeUnlink(SESSION_TOOL_STATE_FILE);
-    safeUnlink(TOOL_WATCHDOG_STATE_FILE);
-    safeUnlink(FOREGROUND_SESSION_FILE);
-    safeUnlink(`${TOOL_EVENTS_FILE}.old`);
-    return;
-  }
-
-  // PM2 restart path: resume from persisted state to avoid full replay.
-  // Both stream cursor and lifecycle state must load successfully;
-  // if either is stale or missing, fall back to offset-0 full replay.
-  const loadedStreamState = loadPersistedToolEventStreamState();
-  if (!loadedStreamState) return;
-
-  const loadedSessionState = readJsonFileSafe(SESSION_TOOL_STATE_FILE);
-  if (!loadedSessionState || loadedSessionState.version !== 1) return;
-
-  toolEventStreamState = loadedStreamState;
-  toolLifecycleState = normalizeToolLifecycleState(loadedSessionState);
-}
-
-function readForegroundSessionRecord() {
-  const data = readJsonFileSafe(FOREGROUND_SESSION_FILE);
-  if (!data || !data.session_id) return null;
-  return {
-    sessionId: String(data.session_id),
-    claudePid: Number(data.claude_pid) || 0,
-    source: data.source || 'session_start',
-    observedAt: Number(data.observed_at) || 0,
-  };
-}
-
-function readStatuslineRecord() {
-  try {
-    if (!fs.existsSync(STATUSLINE_FILE)) return null;
-    const stat = fs.statSync(STATUSLINE_FILE);
-    const data = JSON.parse(fs.readFileSync(STATUSLINE_FILE, 'utf8'));
-    if (!data?.session_id) return null;
-    return {
-      sessionId: String(data.session_id),
-      observedAt: Math.floor(stat.mtimeMs),
-    };
-  } catch {
-    return null;
-  }
-}
-
-function canTreatPaneAsRecovered(interactiveState) {
-  return Boolean(
-    interactiveState?.captureOk &&
-    interactiveState.promptVisible &&
-    !interactiveState.usageOverlay &&
-    !interactiveState.inProgressCapture &&
-    (interactiveState.inputState === 'empty' || interactiveState.inputState === 'has_content')
-  );
-}
-
-function resolveTrustedForegroundIdentity(currentTmuxClaudePid) {
-  const early = readForegroundSessionRecord();
-  const statusline = readStatuslineRecord();
-  const launchGuardFloor = Math.max(0, runtimeLaunchAtMs - STATUSLINE_LAUNCH_GUARD_MS);
-
-  const earlyTrusted = Boolean(
-    early &&
-    early.observedAt >= launchGuardFloor &&
-    isPidAlive(early.claudePid) &&
-    (!currentTmuxClaudePid || early.claudePid === currentTmuxClaudePid)
-  );
-
-  const statuslineFresh = Boolean(
-    statusline &&
-    statusline.observedAt >= launchGuardFloor
-  );
-
-  if (statuslineFresh && currentTmuxClaudePid > 0) {
-    return {
-      trusted: true,
-      sessionId: statusline.sessionId,
-      claudePid: currentTmuxClaudePid,
-      source: earlyTrusted && early.sessionId === statusline.sessionId
-        ? 'session_start+statusline'
-        : 'statusline',
-      observedAt: statusline.observedAt,
-      blockReason: null,
-    };
-  }
-
-  if (earlyTrusted) {
-    return {
-      trusted: true,
-      sessionId: early.sessionId,
-      claudePid: early.claudePid,
-      source: early.source || 'session_start',
-      observedAt: early.observedAt,
-      blockReason: null,
-    };
-  }
-
-  if (statusline && !statuslineFresh) {
-    return {
-      trusted: false,
-      sessionId: statusline.sessionId,
-      claudePid: 0,
-      source: 'statusline',
-      observedAt: statusline.observedAt,
-      blockReason: 'stale_statusline',
-    };
-  }
-
-  if (statusline && currentTmuxClaudePid <= 0) {
-    return {
-      trusted: false,
-      sessionId: statusline.sessionId,
-      claudePid: 0,
-      source: 'statusline',
-      observedAt: statusline.observedAt,
-      blockReason: 'missing_tmux_claude_pid',
-    };
-  }
-
-  return {
-    trusted: false,
-    sessionId: null,
-    claudePid: 0,
-    source: null,
-    observedAt: 0,
-    blockReason: 'missing_foreground_identity',
-  };
-}
-
-function getToolEventPriority(eventName) {
-  switch (eventName) {
-    case 'prompt':
-      return 10;
-    case 'pre_tool':
-      return 20;
-    case 'post_tool':
-    case 'post_tool_failure':
-      return 30;
-    case 'stop':
-    case 'stop_failure':
-    case 'idle':
-      return 40;
-    case 'session_clear_hint':
-      return 50;
-    default:
-      return 100;
-  }
-}
-
-function sortToolEvents(events) {
-  events.sort((left, right) => {
-    if (left.ts !== right.ts) return left.ts - right.ts;
-    const priorityDiff = getToolEventPriority(left.event) - getToolEventPriority(right.event);
-    if (priorityDiff !== 0) return priorityDiff;
-    return (left._arrival_seq || 0) - (right._arrival_seq || 0);
-  });
-}
-
-function readToolEventsIncremental(nowMs) {
-  const result = readToolEventsIncrementalFromStream({
-    filePath: TOOL_EVENTS_FILE,
-    streamState: toolEventStreamState,
-    activeTail: toolEventTail,
-    rotatedTail: toolEventRotatedTail,
-    arrivalSeq: toolEventArrivalSeq,
-    nowMs,
-    drainQuietMs: TOOL_EVENT_ROTATION_DRAIN_MS,
-    log,
-  });
-  toolEventStreamState = result.streamState;
-  toolEventTail = result.activeTail;
-  toolEventRotatedTail = result.rotatedTail;
-  toolEventArrivalSeq = result.arrivalSeq;
-  return result.events;
-}
-
-function maybeBuildStatuslineClearHint(currentTmuxClaudePid, interactiveState) {
-  const statusline = readStatuslineRecord();
-  if (!statusline?.sessionId) return null;
-  if (statusline.observedAt < Math.max(0, runtimeLaunchAtMs - STATUSLINE_LAUNCH_GUARD_MS)) return null;
-  if (statusline.observedAt <= lastStatuslineSyntheticClearAt) return null;
-  if (!canTreatPaneAsRecovered(interactiveState)) return null;
-  const session = getSessionSnapshot(toolLifecycleState, statusline.sessionId, statusline.sessionId);
-  const runningTools = session?.running_tools || [];
-  if (runningTools.length === 0) return null;
-  const newestStartedAt = Number(runningTools[runningTools.length - 1]?.started_at) || 0;
-  if (newestStartedAt > 0 && statusline.observedAt < (newestStartedAt + STATUSLINE_ACTIVE_TOOL_CLEAR_GRACE_MS)) {
-    return null;
-  }
-  lastStatuslineSyntheticClearAt = statusline.observedAt;
-  return {
-    ts: statusline.observedAt,
-    pid: currentTmuxClaudePid || 0,
-    session_id: statusline.sessionId,
-    event: 'session_clear_hint',
-    reason: 'statusline_turn_complete',
-    match_slack_ms: TOOL_EVENT_REORDER_WINDOW_MS,
-    _arrival_seq: ++toolEventArrivalSeq,
-  };
-}
-
-function collectLiveSessionPids() {
-  const livePids = new Set();
-  for (const session of Object.values(toolLifecycleState.sessions)) {
-    const pid = Number(session?.pid) || 0;
-    if (isPidAlive(pid)) livePids.add(pid);
-  }
-  return livePids;
-}
-
-function maybeRotateToolEventStream(nowMs, foregroundSessionId) {
-  try {
-    if (!fs.existsSync(TOOL_EVENTS_FILE)) return;
-    const stat = fs.statSync(TOOL_EVENTS_FILE);
-    if (stat.size < TOOL_EVENT_ROTATION_BYTES) return;
-
-    const hasAnyActiveTools = Object.keys(toolLifecycleState.sessions).some((sessionId) => {
-      const snapshot = getSessionSnapshot(toolLifecycleState, sessionId, foregroundSessionId);
-      return Boolean(snapshot?.running_tools?.length);
-    });
-    const hasPendingBuffers = toolLifecycleState.pending_completions.length > 0 || toolLifecycleState.pending_clear_hints.length > 0;
-    if (
-      hasAnyActiveTools ||
-      hasPendingBuffers ||
-      toolEventReorderBuffer.length > 0 ||
-      toolEventTail ||
-      toolEventRotatedTail ||
-      toolEventStreamState.rotated_drain
-    ) {
-      return;
-    }
-
-    toolEventStreamState = rotateToolEventStream({
-      filePath: TOOL_EVENTS_FILE,
-      nowMs,
-    });
-    toolEventTail = '';
-    toolEventRotatedTail = '';
-    writeToolEventStreamState();
-    log('Tool event stream: rotated event log');
-  } catch (err) {
-    log(`Tool event stream rotation failed: ${err.message}`);
-  }
-}
-
-function processToolLifecycle(nowMs, currentTmuxClaudePid, interactiveState) {
-  const newEvents = readToolEventsIncremental(nowMs);
-  const syntheticClear = maybeBuildStatuslineClearHint(currentTmuxClaudePid, interactiveState);
-  if (syntheticClear) newEvents.push(syntheticClear);
-  if (newEvents.length > 0) {
-    toolEventReorderBuffer.push(...newEvents);
-    sortToolEvents(toolEventReorderBuffer);
-  }
-
-  const flushBefore = nowMs - TOOL_EVENT_REORDER_WINDOW_MS;
-  const flushable = [];
-  const deferred = [];
-  for (const event of toolEventReorderBuffer) {
-    if ((event.ts || 0) <= flushBefore) {
-      flushable.push(event);
-    } else {
-      deferred.push(event);
-    }
-  }
-  toolEventReorderBuffer = deferred;
-
-  if (flushable.length > 0) {
-    applyOrderedToolEvents(toolLifecycleState, flushable, { nowMs });
-  }
-
-  pruneToolLifecycleState(toolLifecycleState, {
-    nowMs,
-    livePids: collectLiveSessionPids(),
-    sessionTtlMs: TOOL_SESSION_TTL_MS
-  });
-
-  writeToolEventStreamState();
-}
-
-function getRuleById(ruleId) {
-  if (!ruleId) return null;
-  return toolRules.find((rule) => rule.id === ruleId) || null;
-}
-
-function buildApiActivity(foregroundIdentity, currentTmuxClaudePid) {
-  const sessionId = foregroundIdentity?.trusted ? foregroundIdentity.sessionId : null;
-  const session = sessionId ? getSessionSnapshot(toolLifecycleState, sessionId, sessionId) : null;
-  const runningTools = session?.running_tools || [];
-  const oldestActiveTool = runningTools[0] || null;
-  const watchdogCandidate = runningTools.find((tool) => {
-    const rule = getRuleById(tool.rule_id);
-    return Boolean(rule?.watchdog?.enabled);
-  }) || null;
-  const pid = foregroundIdentity?.claudePid || session?.pid || currentTmuxClaudePid || 0;
-
-  return {
-    version: 3,
-    pid,
-    sessionId: sessionId || null,
-    scope: sessionId ? 'foreground' : null,
-    foreground_identity: {
-      session_id: foregroundIdentity?.sessionId || null,
-      source: foregroundIdentity?.source || null,
-      trusted: Boolean(foregroundIdentity?.trusted),
-      observed_at: foregroundIdentity?.observedAt || 0,
-    },
-    event: session?.last_event || null,
-    tool: watchdogCandidate?.name || oldestActiveTool?.name || session?.last_completed_tool?.name || null,
-    active: Boolean(runningTools.length > 0 || session?.in_prompt),
-    active_tools: runningTools.length,
-    in_prompt: Boolean(session?.in_prompt),
-    updated_at: session?.last_event_at || 0,
-    oldest_active_tool: oldestActiveTool ? {
-      event_id: oldestActiveTool.event_id,
-      name: oldestActiveTool.name,
-      rule_id: oldestActiveTool.rule_id,
-      started_at: oldestActiveTool.started_at,
-      summary: oldestActiveTool.summary,
-    } : null,
-    watchdog_candidate_tool: watchdogCandidate ? {
-      event_id: watchdogCandidate.event_id,
-      name: watchdogCandidate.name,
-      rule_id: watchdogCandidate.rule_id,
-      started_at: watchdogCandidate.started_at,
-      summary: watchdogCandidate.summary,
-    } : null,
-    last_completed_tool: session?.last_completed_tool || null,
-  };
-}
-
 function clearWatchdogState() {
   if (!watchdogState) return;
   watchdogState = null;
   writeWatchdogState();
-}
-
-function applySyntheticClearHint(sessionId, pid, reason, nowMs) {
-  applyOrderedToolEvents(toolLifecycleState, [{
-    ts: nowMs,
-    pid: pid || 0,
-    session_id: sessionId,
-    event: 'session_clear_hint',
-    reason,
-    match_slack_ms: TOOL_EVENT_REORDER_WINDOW_MS,
-  }], { nowMs });
 }
 
 function evaluateToolWatchdog({ nowMs, foregroundIdentity, apiActivity, interactiveState }) {
@@ -1125,7 +663,7 @@ function evaluateToolWatchdog({ nowMs, foregroundIdentity, apiActivity, interact
     state,
     deps: {
       canTreatPaneAsRecovered,
-      getRuleById,
+      getRuleById: (ruleId) => toolPipeline.getRuleById(ruleId),
       clearWatchdogState: () => {
         watchdogState = null;
         state.watchdogState = null;
@@ -1135,7 +673,9 @@ function evaluateToolWatchdog({ nowMs, foregroundIdentity, apiActivity, interact
         watchdogState = state.watchdogState;
         writeWatchdogState();
       },
-      applySyntheticClearHint,
+      applySyntheticClearHint: (sessionId, pid, reason, eventNowMs) => {
+        toolPipeline.applySyntheticClearHint(sessionId, pid, reason, eventNowMs);
+      },
       enqueueInterrupt: (interruptKey) => runC4Control([
         'enqueue',
         '--content', `[KEYSTROKE]${interruptKey}`,
@@ -1686,7 +1226,7 @@ async function monitorLoop() {
 
     if (state === 'stopped' && adapter.runtimeId === 'claude') {
       clearWatchdogState();
-      writeApiActivitySnapshot({
+      toolPipeline.writeApiActivitySnapshot({
         version: 3,
         pid: 0,
         sessionId: null,
@@ -1752,9 +1292,11 @@ async function monitorLoop() {
 
   if (adapter.runtimeId === 'claude') {
     const toolNowMs = Date.now();
-    processToolLifecycle(toolNowMs, currentTmuxClaudePid, interactiveState);
-    foregroundIdentity = resolveTrustedForegroundIdentity(currentTmuxClaudePid);
-    apiActivity = buildApiActivity(foregroundIdentity, currentTmuxClaudePid);
+    ({ foregroundIdentity, apiActivity } = toolPipeline.tick({
+      nowMs: toolNowMs,
+      currentTmuxClaudePid,
+      interactiveState
+    }));
     watchdogStatus = evaluateToolWatchdog({
       nowMs: toolNowMs,
       foregroundIdentity,
@@ -1762,11 +1304,9 @@ async function monitorLoop() {
       interactiveState
     });
     if (watchdogStatus.api_activity_dirty) {
-      apiActivity = buildApiActivity(foregroundIdentity, currentTmuxClaudePid);
+      apiActivity = toolPipeline.buildApiActivity(foregroundIdentity, currentTmuxClaudePid);
+      toolPipeline.writeApiActivitySnapshot(apiActivity);
     }
-    writeSessionToolState(foregroundIdentity, foregroundIdentity?.trusted ? foregroundIdentity.sessionId : null);
-    writeApiActivitySnapshot(apiActivity);
-    maybeRotateToolEventStream(toolNowMs, foregroundIdentity?.trusted ? foregroundIdentity.sessionId : null);
   }
 
   const apiUpdatedSec = apiActivity?.updated_at ? Math.floor(apiActivity.updated_at / 1000) : 0;
@@ -1931,7 +1471,20 @@ function init() {
   const config = readConfigObject();
   const heartbeatEnabled = isRuntimeHeartbeatEnabled({ runtimeId: adapter.runtimeId, config });
   toolRules = getToolRules({ runtimeId: adapter.runtimeId, config });
-  resetToolLifecycleRuntimeState();
+  toolPipeline = new ToolPipeline({
+    files: {
+      toolEvents: TOOL_EVENTS_FILE,
+      toolEventStreamState: TOOL_EVENT_STREAM_STATE_FILE,
+      sessionToolState: SESSION_TOOL_STATE_FILE,
+      apiActivity: API_ACTIVITY_FILE,
+      foregroundSession: FOREGROUND_SESSION_FILE,
+      statusline: STATUSLINE_FILE,
+    },
+    toolRules,
+    runtimeLaunchAtMs: () => runtimeLaunchAtMs,
+    isPidAlive,
+    log,
+  });
   watchdogState = readJsonFileSafe(TOOL_WATCHDOG_STATE_FILE);
 
   // Initialize ProcSampler for frozen-process detection via context-switch sampling.
@@ -1971,7 +1524,7 @@ function init() {
     log,
     initialRuntimeLaunchAtMs: runtimeLaunchAtMs,
     resetToolLifecycleState: () => {
-      resetToolLifecycleRuntimeState({ clearFiles: true });
+      toolPipeline.reset({ clearFiles: true });
       fs.writeFileSync(API_ACTIVITY_FILE, JSON.stringify({
         version: 3,
         active: false,
