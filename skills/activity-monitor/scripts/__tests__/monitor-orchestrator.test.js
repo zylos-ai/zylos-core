@@ -417,4 +417,132 @@ describe('MonitorOrchestrator', () => {
     assert.deepEqual(result, { activity: 640, source: 'tmux_activity' });
     assert.deepEqual(calls, [['getTmuxActivity']]);
   });
+
+  it('writes busy running status and resets idle tracking', () => {
+    const calls = [];
+    const engine = {
+      id: 'engine',
+      health: 'ok',
+      start: () => calls.push(['engine.start']),
+    };
+    const taskScheduler = {
+      id: 'taskScheduler',
+      tick: (payload) => calls.push(['taskScheduler.tick', payload]),
+    };
+    const { orchestrator } = createHarness({
+      engine,
+      taskScheduler,
+      initialHealth: 'ok',
+      log: (message) => calls.push(['log', message]),
+    });
+    orchestrator.start();
+    calls.length = 0;
+
+    const apiActivity = { active_tools: 1 };
+    const foregroundIdentity = { source: 'hook', observedAt: 123000 };
+    const watchdogStatus = { watchdog_phase: 'watching', watchdog_block_reason: null };
+    const result = orchestrator.handleRunningRuntime({
+      currentTime: 100,
+      currentTimeHuman: '2026-04-30 12:02:00',
+      activity: 80,
+      source: 'api_hook',
+      apiUpdatedSec: 90,
+      activeTools: 1,
+      thinking: true,
+      apiActivity,
+      watchdogStatus,
+      foregroundIdentity,
+      lastState: 'idle',
+      idleSince: 70,
+      idleThreshold: 3,
+      buildRunningStatus: (payload) => {
+        calls.push(['buildRunningStatus', payload]);
+        return { status: 'running', state: payload.state };
+      },
+      writeStatusFile: (status) => calls.push(['writeStatusFile', status]),
+    });
+
+    assert.deepEqual(result, { lastState: 'busy', idleSince: 0 });
+    assert.deepEqual(calls, [
+      ['buildRunningStatus', {
+        state: 'busy',
+        thinking: true,
+        activity: 80,
+        apiUpdatedSec: 90,
+        activeTools: 1,
+        currentTime: 100,
+        currentTimeHuman: '2026-04-30 12:02:00',
+        idleSeconds: 0,
+        inactiveSeconds: 20,
+        source: 'api_hook',
+        runtimeLaunchAtMsValue: 5678,
+        apiActivity,
+        watchdogStatus,
+        foregroundIdentity,
+      }],
+      ['writeStatusFile', { status: 'running', state: 'busy' }],
+      ['log', 'State: BUSY (last activity 20s ago)'],
+      ['taskScheduler.tick', {
+        currentTime: 100,
+        health: 'ok',
+        agentRunning: true,
+        state: 'busy',
+        idleSeconds: 0,
+        apiActivity,
+      }],
+    ]);
+  });
+
+  it('writes idle running status and starts idle timer on transition', () => {
+    const calls = [];
+    const engine = {
+      id: 'engine',
+      health: 'recovering',
+      start: () => calls.push(['engine.start']),
+    };
+    const taskScheduler = {
+      id: 'taskScheduler',
+      tick: (payload) => calls.push(['taskScheduler.tick', payload]),
+    };
+    const { orchestrator } = createHarness({
+      engine,
+      taskScheduler,
+      initialHealth: 'ok',
+      log: (message) => calls.push(['log', message]),
+    });
+    orchestrator.start();
+    calls.length = 0;
+
+    const result = orchestrator.handleRunningRuntime({
+      currentTime: 200,
+      currentTimeHuman: '2026-04-30 12:03:00',
+      activity: 190,
+      source: 'tmux_activity',
+      apiUpdatedSec: 0,
+      activeTools: 0,
+      thinking: false,
+      apiActivity: null,
+      watchdogStatus: { watchdog_phase: 'idle', watchdog_block_reason: null },
+      foregroundIdentity: null,
+      lastState: 'busy',
+      idleSince: 0,
+      idleThreshold: 3,
+      buildRunningStatus: (payload) => ({ status: 'running', state: payload.state, idle_seconds: payload.idleSeconds }),
+      writeStatusFile: (status) => calls.push(['writeStatusFile', status]),
+    });
+
+    assert.deepEqual(result, { lastState: 'idle', idleSince: 200 });
+    assert.deepEqual(calls, [
+      ['writeStatusFile', { status: 'running', state: 'idle', idle_seconds: 0 }],
+      ['log', 'State: IDLE (entering idle state)'],
+      ['taskScheduler.tick', {
+        currentTime: 200,
+        health: 'recovering',
+        agentRunning: true,
+        state: 'idle',
+        idleSeconds: 0,
+        apiActivity: null,
+      }],
+    ]);
+  });
 });

@@ -198,4 +198,75 @@ export class MonitorOrchestrator {
 
     return { activity, source };
   }
+
+  handleRunningRuntime({
+    currentTime,
+    currentTimeHuman,
+    activity,
+    source,
+    apiUpdatedSec,
+    activeTools,
+    thinking,
+    apiActivity,
+    watchdogStatus,
+    foregroundIdentity,
+    lastState,
+    idleSince,
+    idleThreshold,
+    buildRunningStatus,
+    writeStatusFile,
+  }) {
+    if (!this.components) {
+      throw new Error('MonitorOrchestrator.start() must be called before handleRunningRuntime()');
+    }
+
+    const { engine, taskScheduler } = this.components;
+    const inactiveSeconds = currentTime - activity;
+    const state = (activeTools > 0 || inactiveSeconds < idleThreshold) ? 'busy' : 'idle';
+
+    let nextIdleSince = idleSince;
+    if (state === 'idle' && lastState !== 'idle') {
+      nextIdleSince = currentTime;
+    } else if (state === 'busy') {
+      nextIdleSince = 0;
+    }
+
+    const idleSeconds = state === 'idle' ? currentTime - nextIdleSince : 0;
+
+    writeStatusFile(buildRunningStatus({
+      state,
+      thinking,
+      activity,
+      apiUpdatedSec,
+      activeTools,
+      currentTime,
+      currentTimeHuman,
+      idleSeconds,
+      inactiveSeconds,
+      source,
+      runtimeLaunchAtMsValue: this.components.runtimeLaunchAtMs,
+      apiActivity,
+      watchdogStatus,
+      foregroundIdentity,
+    }));
+
+    if (state !== lastState) {
+      if (state === 'busy') {
+        this.deps.log(`State: BUSY (last activity ${inactiveSeconds}s ago)`);
+      } else {
+        this.deps.log('State: IDLE (entering idle state)');
+      }
+    }
+
+    taskScheduler.tick({
+      currentTime,
+      health: engine.health,
+      agentRunning: true,
+      state,
+      idleSeconds,
+      apiActivity,
+    });
+
+    return { lastState: state, idleSince: nextIdleSince };
+  }
 }

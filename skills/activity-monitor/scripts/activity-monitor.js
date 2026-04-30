@@ -298,18 +298,15 @@ let lastTruncateDay = '';
 let lastState = '';
 let idleSince = 0;
 let runtimeLaunchAtMs = 0;
-let toolRules = [];
 let watchdogState = null;
 
 let adapter;         // initialized in init() via getActiveAdapter()
 let engine;          // initialized in init()
-let guardian;        // initialized in init()
 let toolPipeline;    // initialized in init()
 let orchestrator;    // initialized in init()
 let messageRouterServer; // initialized in init()
 let contextMonitor;  // initialized in init() if adapter provides one (Codex only)
 let procSampler;     // initialized in init()
-let usageMonitor;    // initialized in init()
 
 // Timezone: reuse scheduler's tz.js (.env TZ → process.env.TZ → UTC)
 import { loadTimezone } from '../../scheduler/scripts/tz.js';
@@ -891,8 +888,6 @@ function enqueueDailyUpgradeControl() {
   return true;
 }
 
-let taskScheduler; // initialized in init()
-
 // ---------------------------------------------------------------------------
 // Daily Memory Commit
 // ---------------------------------------------------------------------------
@@ -1282,56 +1277,23 @@ async function monitorLoop() {
     source = 'api_hook';
   }
 
-  const inactiveSeconds = currentTime - activity;
-
-  // State determination uses all available signals:
-  // 1. active_tools > 0 → tools in flight, definitely busy
-  // 2. recent activity (< IDLE_THRESHOLD) → busy
-  // 3. otherwise → idle
-  const state = (activeTools > 0 || inactiveSeconds < IDLE_THRESHOLD) ? 'busy' : 'idle';
-
-  if (state === 'idle' && lastState !== 'idle') {
-    idleSince = currentTime;
-  } else if (state === 'busy') {
-    idleSince = 0;
-  }
-
-  const idleSeconds = state === 'idle' ? currentTime - idleSince : 0;
-
-  writeStatusFile(buildRunningStatus({
-    state,
-    thinking,
-    activity,
-    apiUpdatedSec,
-    activeTools,
+  ({ lastState, idleSince } = orchestrator.handleRunningRuntime({
     currentTime,
     currentTimeHuman,
-    idleSeconds,
-    inactiveSeconds,
+    thinking,
+    activity,
     source,
-    runtimeLaunchAtMsValue: runtimeLaunchAtMs,
+    apiUpdatedSec,
+    activeTools,
     apiActivity,
     watchdogStatus,
     foregroundIdentity,
+    lastState,
+    idleSince,
+    idleThreshold: IDLE_THRESHOLD,
+    buildRunningStatus,
+    writeStatusFile,
   }));
-
-  if (state !== lastState) {
-    if (state === 'busy') {
-      log(`State: BUSY (last activity ${inactiveSeconds}s ago)`);
-    } else {
-      log('State: IDLE (entering idle state)');
-    }
-  }
-
-  taskScheduler.tick({
-    currentTime,
-    health: engine.health,
-    agentRunning: true,
-    state,
-    idleSeconds,
-    apiActivity,
-  });
-  lastState = state;
 }
 
 function init() {
@@ -1362,15 +1324,11 @@ function init() {
 
   ({
     adapter,
-    toolRules,
     toolPipeline,
     watchdogState,
     procSampler,
     runtimeLaunchAtMs,
     engine,
-    guardian,
-    usageMonitor,
-    taskScheduler,
     contextMonitor,
   } = orchestrator.start());
 }
