@@ -136,6 +136,7 @@ import { fileURLToPath } from 'url';
 import { HealthEngine } from './health-engine.js';
 import { Guardian } from './guardian.js';
 import { MessageRouter } from './message-router.js';
+import { MonitorOrchestrator } from './monitor-orchestrator.js';
 import { TaskScheduler } from './task-scheduler.js';
 import { UsageMonitor } from './usage-monitor.js';
 import { ProcSampler } from './proc-sampler.js';
@@ -1170,12 +1171,12 @@ function createHealthEngine(activeAdapter, initialStatus) {
   });
 }
 
-function createGuardian(activeAdapter) {
+function createGuardian(activeAdapter, activeToolPipeline, initialRuntimeLaunchAtMs) {
   return new Guardian(activeAdapter, {
     log,
-    initialRuntimeLaunchAtMs: runtimeLaunchAtMs,
+    initialRuntimeLaunchAtMs,
     resetToolLifecycleState: () => {
-      toolPipeline.reset({ clearFiles: true });
+      activeToolPipeline.reset({ clearFiles: true });
       fs.writeFileSync(API_ACTIVITY_FILE, JSON.stringify({
         version: 3,
         active: false,
@@ -1386,62 +1387,42 @@ async function monitorLoop() {
 }
 
 function init() {
-  // Strip stale TMUX env var — PM2 dump can carry over the old tmux session
-  // reference from before a reboot, causing child tmux commands to fail with
-  // "error creating /tmp/tmux-<uid>/default (No such file or directory)".
-  delete process.env.TMUX;
-
-  if (!fs.existsSync(MONITOR_DIR)) {
-    fs.mkdirSync(MONITOR_DIR, { recursive: true });
-  }
-
-  // Load the active runtime adapter (claude or codex, from config.json)
-  adapter = getActiveAdapter();
-  const config = readConfigObject();
-  ({ pipeline: toolPipeline, toolRules } = createToolPipeline(adapter, config));
-  watchdogState = readJsonFileSafe(TOOL_WATCHDOG_STATE_FILE);
-
-  // Initialize ProcSampler for frozen-process detection via context-switch sampling.
-  // sessionName comes from the adapter (claude-main or codex-main).
-  procSampler = new ProcSampler({ sessionName: adapter.sessionName, log });
-
-  const initialStatus = loadInitialHealth();
-  const initialHealth = initialStatus.health;
-  runtimeLaunchAtMs = Number(initialStatus.runtime_launch_at) || Date.now();
-
-  // Merge runtime-specific heartbeat deps (enqueueHeartbeat, getHeartbeatStatus,
-  // detectRateLimit, readHeartbeatPending, clearHeartbeatPending) from the adapter,
-  // with the remaining non-runtime deps (killTmuxSession, notifyPendingChannels, log).
-  engine = createHealthEngine(adapter, initialStatus);
-  guardian = createGuardian(adapter);
-
-  // Rehydrate rate-limit state from persisted status file on PM2 restart
-  if (initialHealth === 'rate_limited' && initialStatus.cooldown_until) {
-    engine.enterRateLimited(initialStatus.cooldown_until, initialStatus.rate_limit_reset || '');
-  }
-  engine.start();
-
-  startMessageRouterServer();
-
-  const dailyUpgradeEnabled = readConfigBool('daily_upgrade_enabled', false);
-  if (!dailyUpgradeEnabled) {
-    log('Daily upgrade: disabled (set `zylos config set daily_upgrade_enabled true` to enable)');
-  }
-
-  usageMonitor = createUsageMonitor(adapter);
-  taskScheduler = createTaskScheduler(usageMonitor);
-
-  usageMonitor.lastUsageCheckAt = usageMonitor.initializeLastCheckAt(Math.floor(Date.now() / 1000));
-  log(`Usage monitor (${adapter.runtimeId}): enabled=${USAGE_MONITOR_ENABLED}`);
-  log(`Usage alert (${adapter.runtimeId}): enabled=${USAGE_ALERT_ENABLED}`);
-
-  contextMonitor = startContextMonitor(adapter);
-
-  if (initialHealth !== 'ok') {
-    log(`Startup with health=${initialHealth}; will verify immediately when ${adapter.displayName} is running`);
-  }
-
-  scheduleStaleRuntimeCleanup(adapter);
+  ({
+    adapter,
+    toolRules,
+    toolPipeline,
+    watchdogState,
+    procSampler,
+    runtimeLaunchAtMs,
+    engine,
+    guardian,
+    usageMonitor,
+    taskScheduler,
+    contextMonitor,
+  } = new MonitorOrchestrator({
+    env: process.env,
+    monitorDir: MONITOR_DIR,
+    getActiveAdapter,
+    readConfigObject,
+    createToolPipeline,
+    readWatchdogState: () => readJsonFileSafe(TOOL_WATCHDOG_STATE_FILE),
+    createProcSampler: (activeAdapter) => new ProcSampler({ sessionName: activeAdapter.sessionName, log }),
+    loadInitialHealth,
+    createHealthEngine,
+    createGuardian,
+    startMessageRouterServer,
+    readDailyUpgradeEnabled: () => readConfigBool('daily_upgrade_enabled', false),
+    createUsageMonitor,
+    createTaskScheduler,
+    initializeUsageMonitor: (activeUsageMonitor, activeAdapter) => {
+      activeUsageMonitor.lastUsageCheckAt = activeUsageMonitor.initializeLastCheckAt(Math.floor(Date.now() / 1000));
+      log(`Usage monitor (${activeAdapter.runtimeId}): enabled=${USAGE_MONITOR_ENABLED}`);
+      log(`Usage alert (${activeAdapter.runtimeId}): enabled=${USAGE_ALERT_ENABLED}`);
+    },
+    startContextMonitor,
+    scheduleStaleRuntimeCleanup,
+    log,
+  }).start());
 }
 
 try {
