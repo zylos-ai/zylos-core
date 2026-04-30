@@ -140,7 +140,6 @@ import { TaskScheduler } from './task-scheduler.js';
 import { UsageMonitor } from './usage-monitor.js';
 import { ProcSampler } from './proc-sampler.js';
 import { canTreatPaneAsRecovered, ToolPipeline } from './tool-pipeline.js';
-import { consumeRecentUserMessageSignal } from './signal-store.js';
 import { readInitialStatus, writeStatus } from './status-writer.js';
 import { isRuntimeHeartbeatEnabled } from './heartbeat-config.js';
 import { getToolRules } from './tool-rules.js';
@@ -196,7 +195,6 @@ const DAILY_UPGRADE_STATE_FILE = path.join(MONITOR_DIR, 'daily-upgrade-state.jso
 const DAILY_MEMORY_COMMIT_STATE_FILE = path.join(MONITOR_DIR, 'daily-memory-commit-state.json');
 const UPGRADE_CHECK_STATE_FILE = path.join(MONITOR_DIR, 'upgrade-check-state.json');
 const PENDING_CHANNELS_FILE = path.join(MONITOR_DIR, 'pending-channels.jsonl');
-const USER_MESSAGE_SIGNAL_FILE = path.join(MONITOR_DIR, 'user-message-signal.json');
 const USAGE_STATE_FILE = path.join(MONITOR_DIR, 'usage.json');
 const USAGE_CODEX_STATE_FILE = path.join(MONITOR_DIR, 'usage-codex.json');
 const USAGE_ALERT_STATE_FILE = path.join(MONITOR_DIR, 'usage-alert-state.json');
@@ -413,21 +411,6 @@ function enqueueContextRotationHandoff({ ratio = 0, used = 0, ceiling = 0 } = {}
   }
   log(`Context rotation handoff enqueue failed (pct=${pct}%)`);
   return false;
-}
-
-/**
- * Check for a user-message signal file and clear auth suppression if found.
- * Called from offline/stopped branches (which return early before the main
- * signal-check code) so that user messages can trigger immediate auth retry.
- */
-function maybeConsumeUserMessageSignal(currentTime) {
-  const result = consumeRecentUserMessageSignal({
-    signalFile: USER_MESSAGE_SIGNAL_FILE,
-    currentTime,
-  });
-  if (result.fresh) {
-    engine.notifyUserMessage(currentTime);
-  }
 }
 
 function loadInitialHealth() {
@@ -1007,7 +990,6 @@ async function monitorLoop() {
       }
     }
 
-    maybeConsumeUserMessageSignal(currentTime);
     engine.processHeartbeat(false, currentTime);
     taskScheduler.tick({
       currentTime,
@@ -1149,12 +1131,6 @@ async function monitorLoop() {
   // Rate-limit detection is now handled inside HeartbeatEngine.onHeartbeatFailure
   // via the detectRateLimit dep callback (dual-signal: heartbeat failure + tmux text).
   // This eliminates false positives from conversation content matching rate-limit patterns.
-
-  // User message triggered recovery: when a user sends a message while unavailable,
-  // c4-receive writes a signal file. Read and consume it to trigger/accelerate recovery.
-  if (engine.health !== 'ok') {
-    maybeConsumeUserMessageSignal(currentTime);
-  }
 
   // Periodic probe: 30-min end-to-end health check. Complementary to ProcSampler:
   // ProcSampler detects frozen processes, periodic probe catches functional failures
