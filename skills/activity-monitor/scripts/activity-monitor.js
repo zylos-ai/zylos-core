@@ -908,6 +908,103 @@ function executeUpgradeCheck() {
   }
 }
 
+function createUsageMonitor(activeAdapter) {
+  return new UsageMonitor(activeAdapter, {
+    zylosDir: ZYLOS_DIR,
+    statuslineFile: STATUSLINE_FILE,
+    usageStateFile: USAGE_STATE_FILE,
+    usageCodexStateFile: USAGE_CODEX_STATE_FILE,
+    usageAlertStateFile: USAGE_ALERT_STATE_FILE,
+    monitorEnabled: USAGE_MONITOR_ENABLED,
+    alertEnabled: USAGE_ALERT_ENABLED,
+    checkIntervalSec: USAGE_CHECK_INTERVAL,
+    idleGateSec: USAGE_IDLE_GATE,
+    warnThreshold: USAGE_WARN_THRESHOLD,
+    highThreshold: USAGE_HIGH_THRESHOLD,
+    criticalThreshold: USAGE_CRITICAL_THRESHOLD,
+    notifyCooldownSec: USAGE_NOTIFY_COOLDOWN,
+    activeHoursStart: USAGE_ACTIVE_HOURS_START,
+    activeHoursEnd: USAGE_ACTIVE_HOURS_END,
+    getLocalHour,
+    runC4Control,
+    log,
+  });
+}
+
+function createTaskScheduler(activeUsageMonitor) {
+  return new TaskScheduler([
+    {
+      id: 'daily-upgrade',
+      type: 'daily',
+      hour: DAILY_UPGRADE_HOUR,
+      enabled: () => readConfigBool('daily_upgrade_enabled', false),
+      gate: (snapshot) => snapshot.health === 'ok',
+      loadState: loadDailyUpgradeState,
+      writeState: writeDailyUpgradeState,
+      execute: enqueueDailyUpgradeControl,
+    },
+    {
+      id: 'daily-memory-commit',
+      type: 'daily',
+      hour: DAILY_MEMORY_COMMIT_HOUR,
+      loadState: loadMemoryCommitState,
+      writeState: writeMemoryCommitState,
+      execute: executeDailyMemoryCommit,
+    },
+    {
+      id: 'daily-upgrade-check',
+      type: 'daily',
+      hour: DAILY_UPGRADE_CHECK_HOUR,
+      gate: (snapshot) => snapshot.health === 'ok',
+      loadState: loadUpgradeCheckState,
+      writeState: writeUpgradeCheckState,
+      execute: executeUpgradeCheck,
+    },
+    {
+      id: 'health-check',
+      type: 'interval',
+      intervalSec: HEALTH_CHECK_INTERVAL,
+      gate: (snapshot) => snapshot.agentRunning === true && snapshot.health === 'ok',
+      getLastRunAt: () => loadHealthCheckState()?.last_check_at ?? 0,
+      execute: enqueueHealthCheck,
+    },
+    {
+      id: 'usage-monitor',
+      type: 'interval',
+      intervalSec: USAGE_CHECK_INTERVAL,
+      enabled: () => activeUsageMonitor.isMonitorEnabled(),
+      gate: (snapshot) => snapshot.health === 'ok' && activeUsageMonitor.canRunTask({
+        claudeState: snapshot.state,
+        idleSeconds: snapshot.idleSeconds,
+        currentTime: snapshot.currentTime,
+        apiActivity: snapshot.apiActivity,
+      }),
+      getLastRunAt: () => activeUsageMonitor.getLastMonitorRunAt(),
+      execute: (snapshot) => activeUsageMonitor.runMonitor(snapshot),
+    },
+    {
+      id: 'usage-alert',
+      type: 'interval',
+      intervalSec: USAGE_ALERT_INTERVAL,
+      enabled: () => activeUsageMonitor.isAlertEnabled(),
+      gate: (snapshot) => snapshot.health === 'ok' && activeUsageMonitor.canRunTask({
+        claudeState: snapshot.state,
+        idleSeconds: snapshot.idleSeconds,
+        currentTime: snapshot.currentTime,
+        apiActivity: snapshot.apiActivity,
+        activeHoursOnly: true,
+      }),
+      getLastRunAt: () => activeUsageMonitor.getLastAlertRunAt(),
+      execute: (snapshot) => activeUsageMonitor.runAlert(snapshot),
+    },
+  ], {
+    getLocalHour,
+    getLocalDate,
+    nowEpoch: () => Math.floor(Date.now() / 1000),
+    log
+  });
+}
+
 async function monitorLoop() {
   const currentTime = Math.floor(Date.now() / 1000);
   const currentTimeHuman = new Date().toISOString().replace('T', ' ').substring(0, 19);
@@ -1203,98 +1300,8 @@ function init() {
     log('Daily upgrade: disabled (set `zylos config set daily_upgrade_enabled true` to enable)');
   }
 
-  usageMonitor = new UsageMonitor(adapter, {
-    zylosDir: ZYLOS_DIR,
-    statuslineFile: STATUSLINE_FILE,
-    usageStateFile: USAGE_STATE_FILE,
-    usageCodexStateFile: USAGE_CODEX_STATE_FILE,
-    usageAlertStateFile: USAGE_ALERT_STATE_FILE,
-    monitorEnabled: USAGE_MONITOR_ENABLED,
-    alertEnabled: USAGE_ALERT_ENABLED,
-    checkIntervalSec: USAGE_CHECK_INTERVAL,
-    idleGateSec: USAGE_IDLE_GATE,
-    warnThreshold: USAGE_WARN_THRESHOLD,
-    highThreshold: USAGE_HIGH_THRESHOLD,
-    criticalThreshold: USAGE_CRITICAL_THRESHOLD,
-    notifyCooldownSec: USAGE_NOTIFY_COOLDOWN,
-    activeHoursStart: USAGE_ACTIVE_HOURS_START,
-    activeHoursEnd: USAGE_ACTIVE_HOURS_END,
-    getLocalHour,
-    runC4Control,
-    log,
-  });
-
-  taskScheduler = new TaskScheduler([
-    {
-      id: 'daily-upgrade',
-      type: 'daily',
-      hour: DAILY_UPGRADE_HOUR,
-      enabled: () => readConfigBool('daily_upgrade_enabled', false),
-      gate: (snapshot) => snapshot.health === 'ok',
-      loadState: loadDailyUpgradeState,
-      writeState: writeDailyUpgradeState,
-      execute: enqueueDailyUpgradeControl,
-    },
-    {
-      id: 'daily-memory-commit',
-      type: 'daily',
-      hour: DAILY_MEMORY_COMMIT_HOUR,
-      loadState: loadMemoryCommitState,
-      writeState: writeMemoryCommitState,
-      execute: executeDailyMemoryCommit,
-    },
-    {
-      id: 'daily-upgrade-check',
-      type: 'daily',
-      hour: DAILY_UPGRADE_CHECK_HOUR,
-      gate: (snapshot) => snapshot.health === 'ok',
-      loadState: loadUpgradeCheckState,
-      writeState: writeUpgradeCheckState,
-      execute: executeUpgradeCheck,
-    },
-    {
-      id: 'health-check',
-      type: 'interval',
-      intervalSec: HEALTH_CHECK_INTERVAL,
-      gate: (snapshot) => snapshot.agentRunning === true && snapshot.health === 'ok',
-      getLastRunAt: () => loadHealthCheckState()?.last_check_at ?? 0,
-      execute: enqueueHealthCheck,
-    },
-    {
-      id: 'usage-monitor',
-      type: 'interval',
-      intervalSec: USAGE_CHECK_INTERVAL,
-      enabled: () => usageMonitor.isMonitorEnabled(),
-      gate: (snapshot) => snapshot.health === 'ok' && usageMonitor.canRunTask({
-        claudeState: snapshot.state,
-        idleSeconds: snapshot.idleSeconds,
-        currentTime: snapshot.currentTime,
-        apiActivity: snapshot.apiActivity,
-      }),
-      getLastRunAt: () => usageMonitor.getLastMonitorRunAt(),
-      execute: (snapshot) => usageMonitor.runMonitor(snapshot),
-    },
-    {
-      id: 'usage-alert',
-      type: 'interval',
-      intervalSec: USAGE_ALERT_INTERVAL,
-      enabled: () => usageMonitor.isAlertEnabled(),
-      gate: (snapshot) => snapshot.health === 'ok' && usageMonitor.canRunTask({
-        claudeState: snapshot.state,
-        idleSeconds: snapshot.idleSeconds,
-        currentTime: snapshot.currentTime,
-        apiActivity: snapshot.apiActivity,
-        activeHoursOnly: true,
-      }),
-      getLastRunAt: () => usageMonitor.getLastAlertRunAt(),
-      execute: (snapshot) => usageMonitor.runAlert(snapshot),
-    },
-  ], {
-    getLocalHour,
-    getLocalDate,
-    nowEpoch: () => Math.floor(Date.now() / 1000),
-    log
-  });
+  usageMonitor = createUsageMonitor(adapter);
+  taskScheduler = createTaskScheduler(usageMonitor);
 
   usageMonitor.lastUsageCheckAt = usageMonitor.initializeLastCheckAt(Math.floor(Date.now() / 1000));
   log(`Usage monitor (${adapter.runtimeId}): enabled=${USAGE_MONITOR_ENABLED}`);
