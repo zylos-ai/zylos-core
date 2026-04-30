@@ -411,6 +411,68 @@ export class MonitorOrchestrator {
     return { frozen: true, lastState: 'frozen' };
   }
 
+  handleRunningActivityState({
+    currentTime,
+    currentTimeHuman,
+    activity,
+    source,
+    apiActivity,
+    watchdogStatus,
+    foregroundIdentity,
+    lastState,
+    idleSince,
+    idleThreshold,
+    buildRunningStatus,
+    writeStatusFile,
+  }) {
+    const {
+      apiUpdatedSec,
+      activeTools,
+      thinking,
+      confirmedActive,
+    } = this.summarizeApiActivity({ currentTime, apiActivity });
+
+    const procSamplerResult = this.handleProcSampler({ currentTime, confirmedActive });
+    if (procSamplerResult.frozen) {
+      return {
+        frozen: true,
+        lastState: procSamplerResult.lastState,
+        idleSince,
+      };
+    }
+
+    const mergedActivity = this.mergeApiActivitySource({
+      activity,
+      source,
+      apiActivity,
+      apiUpdatedSec,
+    });
+
+    const runningState = this.handleRunningRuntime({
+      currentTime,
+      currentTimeHuman,
+      thinking,
+      activity: mergedActivity.activity,
+      source: mergedActivity.source,
+      apiUpdatedSec,
+      activeTools,
+      apiActivity,
+      watchdogStatus,
+      foregroundIdentity,
+      lastState,
+      idleSince,
+      idleThreshold,
+      buildRunningStatus,
+      writeStatusFile,
+    });
+
+    return {
+      frozen: false,
+      lastState: runningState.lastState,
+      idleSince: runningState.idleSince,
+    };
+  }
+
   handleRunningRuntime({
     currentTime,
     currentTimeHuman,

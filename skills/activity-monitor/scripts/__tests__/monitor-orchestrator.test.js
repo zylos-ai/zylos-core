@@ -876,6 +876,91 @@ describe('MonitorOrchestrator', () => {
     ]);
   });
 
+  it('handles running activity state through status write', () => {
+    const calls = [];
+    const procSampler = {
+      tick: (currentTime, payload) => calls.push(['procSampler.tick', currentTime, payload]),
+      isFrozen: () => false,
+      getState: () => ({ frozenCount: 0 }),
+      reset: () => calls.push(['procSampler.reset']),
+    };
+    const engine = {
+      id: 'engine',
+      health: 'ok',
+      start: () => calls.push(['engine.start']),
+    };
+    const taskScheduler = {
+      tick: (payload) => calls.push(['taskScheduler.tick', payload]),
+    };
+    const { orchestrator } = createHarness({
+      procSampler,
+      engine,
+      taskScheduler,
+      initialHealth: 'ok',
+      log: (message) => calls.push(['log', message]),
+    });
+    orchestrator.start();
+    calls.length = 0;
+    const apiActivity = {
+      active: true,
+      active_tools: 1,
+      updated_at: 121000,
+    };
+    const watchdogStatus = { watchdog_phase: 'observing', watchdog_block_reason: null };
+    const foregroundIdentity = { trusted: true };
+
+    assert.deepEqual(orchestrator.handleRunningActivityState({
+      currentTime: 120,
+      currentTimeHuman: '2026-04-30 14:30:00',
+      activity: 100,
+      source: 'tmux_activity',
+      apiActivity,
+      watchdogStatus,
+      foregroundIdentity,
+      lastState: 'idle',
+      idleSince: 90,
+      idleThreshold: 60,
+      buildRunningStatus: (payload) => {
+        calls.push(['buildRunningStatus', payload]);
+        return { state: payload.state, source: payload.source };
+      },
+      writeStatusFile: (status) => calls.push(['writeStatusFile', status]),
+    }), {
+      frozen: false,
+      lastState: 'busy',
+      idleSince: 0,
+    });
+    assert.deepEqual(calls, [
+      ['procSampler.tick', 120, { isActive: true }],
+      ['buildRunningStatus', {
+        state: 'busy',
+        thinking: true,
+        activity: 121,
+        apiUpdatedSec: 121,
+        activeTools: 1,
+        currentTime: 120,
+        currentTimeHuman: '2026-04-30 14:30:00',
+        idleSeconds: 0,
+        inactiveSeconds: -1,
+        source: 'api_hook',
+        runtimeLaunchAtMsValue: 5678,
+        apiActivity,
+        watchdogStatus,
+        foregroundIdentity,
+      }],
+      ['writeStatusFile', { state: 'busy', source: 'api_hook' }],
+      ['log', 'State: BUSY (last activity -1s ago)'],
+      ['taskScheduler.tick', {
+        currentTime: 120,
+        health: 'ok',
+        agentRunning: true,
+        state: 'busy',
+        idleSeconds: 0,
+        apiActivity,
+      }],
+    ]);
+  });
+
   it('writes busy running status and resets idle tracking', () => {
     const calls = [];
     const engine = {

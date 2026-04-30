@@ -1195,34 +1195,11 @@ async function monitorLoop() {
     },
   }));
 
-  const {
-    apiUpdatedSec,
-    activeTools,
-    thinking,
-    confirmedActive,
-  } = orchestrator.summarizeApiActivity({ currentTime, apiActivity });
-
-  const procSamplerResult = orchestrator.handleProcSampler({ currentTime, confirmedActive });
-  if (procSamplerResult.frozen) {
-    lastState = procSamplerResult.lastState;
-    return;
-  }
-
-  ({ activity, source } = orchestrator.mergeApiActivitySource({
-    activity,
-    source,
-    apiActivity,
-    apiUpdatedSec,
-  }));
-
-  ({ lastState, idleSince } = orchestrator.handleRunningRuntime({
+  const runningActivityState = orchestrator.handleRunningActivityState({
     currentTime,
     currentTimeHuman,
-    thinking,
     activity,
     source,
-    apiUpdatedSec,
-    activeTools,
     apiActivity,
     watchdogStatus,
     foregroundIdentity,
@@ -1231,7 +1208,12 @@ async function monitorLoop() {
     idleThreshold: IDLE_THRESHOLD,
     buildRunningStatus,
     writeStatusFile,
-  }));
+  });
+  lastState = runningActivityState.lastState;
+  idleSince = runningActivityState.idleSince;
+  if (runningActivityState.frozen) {
+    return;
+  }
 }
 
 function init() {
