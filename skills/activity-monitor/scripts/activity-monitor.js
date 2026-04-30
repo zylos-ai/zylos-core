@@ -134,6 +134,7 @@ import path from 'path';
 import os from 'os';
 import { fileURLToPath } from 'url';
 import { HeartbeatEngine } from './heartbeat-engine.js';
+import { Guardian } from './guardian.js';
 import { MessageRouter } from './message-router.js';
 import { DailySchedule } from './daily-schedule.js';
 import { ProcSampler } from './proc-sampler.js';
@@ -233,10 +234,6 @@ const CONV_DIR = path.join(os.homedir(), '.claude', 'projects', ZYLOS_PATH);
 const INTERVAL = 1000;
 const IDLE_THRESHOLD = 3;
 const LOG_MAX_LINES = 500;
-const BASE_RESTART_DELAY = 5;
-const MAX_RESTART_DELAY = 60;
-const BACKOFF_RESET_THRESHOLD = 60; // Claude must stay running this long before backoff resets
-
 // Heartbeat liveness config (v3)
 const HEARTBEAT_INTERVAL = 7200;     // 2 hours (safety-net; active_tools-stuck edge case fallback)
 const DOWN_DEGRADE_THRESHOLD = 3600; // 1 hour of continuous failure → enter DOWN
@@ -326,18 +323,12 @@ const DAILY_COMMIT_SCRIPT = path.join(__dirname, '..', '..', 'zylos-memory', 'sc
 
 // State
 let lastTruncateDay = '';
-let notRunningCount = 0;
-let consecutiveRestarts = 0;
-let stableRunningSince = 0;
 let lastState = '';
-let startupGrace = 0;
 let idleSince = 0;
 let lastPeriodicProbeAt = 0;
 let lastLaunchAt = 0;
 let lastApiErrorScanAt = 0;
 let apiErrorConsecutiveHits = 0;  // consecutive scans that detected an API error
-let authRetrySuppressedUntil = 0;
-let startAgentInProgress = false;
 let runtimeLaunchAtMs = 0;
 let toolRules = [];
 let toolLifecycleState = createToolLifecycleState();
@@ -351,6 +342,7 @@ let lastStatuslineSyntheticClearAt = 0;
 
 let adapter;         // initialized in init() via getActiveAdapter()
 let engine;          // initialized in init()
+let guardian;        // initialized in init()
 let messageRouterServer; // initialized in init()
 let contextMonitor;  // initialized in init() if adapter provides one (Codex only)
 let procSampler;     // initialized in init()
@@ -425,109 +417,6 @@ const C4_CONTROL_PATH = resolveCommBridgeScript('c4-control.js');
 const C4_DB_PATH = resolveCommBridgeScript('c4-db.js');
 const C4_SEND_PATH = resolveCommBridgeScript('c4-send.js');
 
-function tmuxHasSession() {
-  try {
-    execSync(`tmux has-session -t "${adapter.sessionName}" 2>/dev/null`, { encoding: 'utf8', timeout: 3000 });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-// TODO: Add Codex-specific maintenance process detection when Codex maintenance
-// scripts exist (e.g. restart-codex, upgrade-codex). Currently only Claude
-// maintenance scripts are detected; Codex maintenance runs would not be guarded.
-function getRunningMaintenance() {
-  try {
-    execSync('pgrep -f "[r]estart-claude" > /dev/null 2>&1', { timeout: 500 });
-    return 'restart-claude';
-  } catch { }
-
-  try {
-    execSync('pgrep -f "[u]pgrade-claude" > /dev/null 2>&1', { timeout: 500 });
-    return 'upgrade-claude';
-  } catch { }
-
-  try {
-    execSync('pgrep -f "[c]laude.ai/install.sh" > /dev/null 2>&1', { timeout: 500 });
-    return 'upgrade (curl install.sh)';
-  } catch { }
-
-  return null;
-}
-
-function isMaintenanceRunning() {
-  return getRunningMaintenance() !== null;
-}
-
-function waitForMaintenance() {
-  const maxWait = 300;
-  let waited = 0;
-  let scriptName = getRunningMaintenance();
-  if (!scriptName) return;
-
-  log(`Guardian: Detected ${scriptName} running, waiting for completion...`);
-  while (true) {
-    scriptName = getRunningMaintenance();
-    if (!scriptName) break;
-
-    if (waited >= maxWait) {
-      log(`Guardian: Warning - ${scriptName} still running after ${maxWait}s, proceeding anyway`);
-      break;
-    }
-
-    if (waited > 0 && waited % 30 === 0) {
-      log(`Guardian: Still waiting for ${scriptName}... (${waited}s)`);
-    }
-
-    execSync('sleep 1', { timeout: 1500 });
-    waited += 1;
-  }
-
-  if (waited > 0 && waited < maxWait) {
-    log(`Guardian: maintenance completed after ${waited}s`);
-  }
-}
-
-// Startup prompt: Claude uses SessionStart hooks (session-start-prompt.js).
-// For legacy Claude setups without that hook, fall back to C4 control.
-// Codex path is handled inside CodexAdapter.launch() via startup instruction;
-// do not enqueue the fallback here to avoid duplicate startup prompts.
-function hasStartupHook() {
-  if (adapter.runtimeId !== 'claude') return false;
-  try {
-    const settingsPath = path.join(ZYLOS_DIR, '.claude', 'settings.json');
-    const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
-    const matchers = settings?.hooks?.SessionStart;
-    if (!Array.isArray(matchers)) return false;
-    return matchers.some(m =>
-      Array.isArray(m?.hooks) && m.hooks.some(
-        h => h?.type === 'command' && typeof h.command === 'string'
-          && /(?:^|[\\/])session-start-prompt\.js(?:["'\s]|$)/.test(h.command)
-      )
-    );
-  } catch {
-    return false;
-  }
-}
-
-function enqueueStartupControl() {
-  const content = 'reply to your human partner if they are waiting for your reply, then continue your ongoing tasks using the startup memory and C4 context already injected in this session, and do not query c4.db for recent conversations unless explicitly required.';
-  const result = runC4Control([
-    'enqueue',
-    '--content', content,
-    '--priority', '3',
-    '--available-in', '3',
-    '--no-ack-suffix'
-  ]);
-  if (result.ok) {
-    const match = result.output.match(/control\s+(\d+)/i);
-    log(`Startup control enqueued (fallback) id=${match?.[1] ?? '?'}`);
-  } else {
-    log(`Startup control enqueue failed (fallback): ${result.output}`);
-  }
-}
-
 function enqueueContextRotationHandoff({ ratio = 0, used = 0, ceiling = 0 } = {}) {
   const pct = Math.round(ratio * 100);
   const usedTokens = Number.isFinite(used) ? used : 0;
@@ -558,91 +447,7 @@ function maybeConsumeUserMessageSignal(currentTime) {
     currentTime,
   });
   if (result.fresh) {
-    if (authRetrySuppressedUntil > 0) {
-      log('Guardian: user message received, clearing auth retry suppression');
-      authRetrySuppressedUntil = 0;
-    }
     engine.notifyUserMessage(currentTime);
-  }
-}
-
-/**
- * Start the active runtime agent.
- * Clears stale state files, delegates launch to the RuntimeAdapter,
- * then enqueues the startup control prompt if no session-start hook is installed.
- */
-async function startAgent() {
-  // Prevent concurrent calls: auth check is async (up to 20s), so two ticks could
-  // overlap. Guard ensures only one startAgent() runs at a time.
-  if (startAgentInProgress) return;
-  startAgentInProgress = true;
-
-  try {
-    if (isMaintenanceRunning()) {
-      log('Guardian: Maintenance script detected, waiting for completion...');
-      waitForMaintenance();
-    }
-
-    // Live auth check before restarting — avoids infinite restart loop on revoked/expired tokens.
-    const authResult = adapter.checkAuth ? await adapter.checkAuth() : { ok: true };
-    if (!authResult.ok) {
-      log(`Guardian: auth failed (${authResult.reason ?? 'unknown'}), skipping restart. Next retry in 3 min.${authResult.output ? ' Output: ' + authResult.output : ''}`);
-      authRetrySuppressedUntil = Date.now() + 180_000;
-      engine.setHealth('auth_failed', authResult.reason ?? 'unknown');
-      return;
-    }
-
-    // Auth passed — consume the restart budget and mark startup in progress.
-    // Done here (after auth check) so auth failures don't consume backoff budget.
-    authRetrySuppressedUntil = 0;
-    consecutiveRestarts += 1;
-    startupGrace = 30;
-    notRunningCount = 0;
-
-  log(`Guardian: Starting ${adapter.displayName}...`);
-  lastLaunchAt = Math.floor(Date.now() / 1000);
-  runtimeLaunchAtMs = Date.now();
-
-  // Clear stale heartbeat pending from previous session — prevents a race where
-  // the old heartbeat times out AFTER the new session starts, pushing health to
-  // "recovering" when the process signal (false→true) was already consumed while
-  // health was still "ok". Without this, health gets stuck in "recovering" with
-  // no signal to trigger acceleration.
-  try { engine.deps.clearHeartbeatPending(); } catch { }
-
-  // Clear stale context temp files from a previous session
-  try { fs.unlinkSync('/tmp/context-alert-cooldown'); } catch { }
-  try { fs.unlinkSync('/tmp/context-compact-scheduled'); } catch { }
-
-  // Reset tool lifecycle state — the new session gets a fresh event stream,
-  // watchdog state, and foreground-session identity. Late old-session events
-  // are still filtered by pid/session checks inside the watchdog path.
-  try {
-    resetToolLifecycleRuntimeState({ clearFiles: true });
-    fs.writeFileSync(API_ACTIVITY_FILE, JSON.stringify({
-      version: 3,
-      active: false,
-      active_tools: 0,
-      in_prompt: false,
-      updated_at: runtimeLaunchAtMs
-    }));
-    fs.writeFileSync(HOOK_STATE_FILE, JSON.stringify({ active_tools: 0 }));
-  } catch { }
-
-  // Fire-and-forget: launch() is intentionally not awaited. The monitor loop
-  // must not block for the full startup duration (several seconds for the agent
-  // to become interactive). startupGrace prevents re-entry for the next 30 ticks.
-  adapter.launch().catch(err => {
-    log(`Guardian: Failed to start ${adapter.displayName}: ${err.message}`);
-  });
-
-  // Claude legacy fallback only (Codex bootstrap prompt handles its own
-  // session-start flow and triggers session-start-prompt.js itself).
-  if (adapter.runtimeId === 'claude' && !hasStartupHook()) {
-    enqueueStartupControl();
-  }
-  } finally {
-    startAgentInProgress = false;
   }
 }
 
@@ -1854,72 +1659,19 @@ async function monitorLoop() {
 
   checkDailyTruncate();
 
-  if (!tmuxHasSession()) {
-    // Grace period: after starting Claude, wait for tmux session to appear
-    if (startupGrace > 0) {
-      startupGrace -= 1;
-      engine.processHeartbeat(false, currentTime);
-      return;
-    }
+  const guardianResult = await guardian.tick({ currentTime });
+  runtimeLaunchAtMs = guardianResult.runtimeLaunchAtMs;
+  if (guardianResult.attempted_restart) {
+    lastLaunchAt = Math.floor(runtimeLaunchAtMs / 1000);
+  }
 
-    const state = 'offline';
-    notRunningCount += 1;
-    stableRunningSince = 0;
-
-    writeStatusFile({
-      state,
-      since: currentTime,
-      last_check: currentTime,
-      last_check_human: currentTimeHuman,
-      idle_seconds: 0,
-      not_running_seconds: notRunningCount,
-      message: 'tmux session not found'
-    });
-
-    if (state !== lastState) {
-      log('State: OFFLINE (tmux session not found)');
-    }
-
-    // Check for user message signal — clears auth suppression for immediate retry.
-    maybeConsumeUserMessageSignal(currentTime);
-
-    // Delegate restart permission to HeartbeatEngine (e.g. won't restart during rate_limited).
-    // Counter mutations (consecutiveRestarts, startupGrace, notRunningCount) are handled
-    // inside startAgent() after auth check passes — not here.
-    const restartDelay = Math.min(BASE_RESTART_DELAY * Math.pow(2, consecutiveRestarts), MAX_RESTART_DELAY);
-    if (engine.canRestart() && notRunningCount >= restartDelay) {
-      if (Date.now() < authRetrySuppressedUntil) {
-        if (notRunningCount % 60 === 0) log(`Guardian: auth retry suppressed for ${Math.ceil((authRetrySuppressedUntil - Date.now()) / 1000)}s`);
-      } else {
-        log(`Guardian: Session not found for ${notRunningCount}s, attempting to start ${adapter.displayName}...`);
-        startAgent();
-      }
-    }
-
+  if (guardianResult.skippedForStartupGrace) {
     engine.processHeartbeat(false, currentTime);
-    maybeEnqueueHealthCheck(false, currentTime);
-
-    memoryCommitScheduler.maybeTrigger();
-    lastState = state;
     return;
   }
 
-  let agentRunning = false;
-  try {
-    agentRunning = await adapter.isRunning();
-  } catch (err) {
-    log(`Guardian: adapter.isRunning() threw: ${err.message}`);
-  }
-  if (!agentRunning) {
-    if (startupGrace > 0) {
-      startupGrace -= 1;
-      engine.processHeartbeat(false, currentTime);
-      return;
-    }
-
-    const state = 'stopped';
-    notRunningCount += 1;
-    stableRunningSince = 0;
+  if (guardianResult.state !== 'running') {
+    const state = guardianResult.state;
 
     writeStatusFile({
       state,
@@ -1927,12 +1679,12 @@ async function monitorLoop() {
       last_check: currentTime,
       last_check_human: currentTimeHuman,
       idle_seconds: 0,
-      not_running_seconds: notRunningCount,
-      message: `${adapter.displayName} not running in tmux`,
+      not_running_seconds: guardianResult.notRunningSeconds,
+      message: guardianResult.message,
       runtime_launch_at: runtimeLaunchAtMs
     });
 
-    if (adapter.runtimeId === 'claude') {
+    if (state === 'stopped' && adapter.runtimeId === 'claude') {
       clearWatchdogState();
       writeApiActivitySnapshot({
         version: 3,
@@ -1958,45 +1710,20 @@ async function monitorLoop() {
     }
 
     if (state !== lastState) {
-      log(`State: STOPPED (${adapter.displayName} not running in tmux session)`);
-    }
-
-    // Check for user message signal — clears auth suppression for immediate retry.
-    maybeConsumeUserMessageSignal(currentTime);
-
-    // Delegate restart permission to HeartbeatEngine (e.g. won't restart during rate_limited).
-    // Counter mutations (consecutiveRestarts, startupGrace, notRunningCount) are handled
-    // inside startAgent() after auth check passes — not here.
-    const restartDelay = Math.min(BASE_RESTART_DELAY * Math.pow(2, consecutiveRestarts), MAX_RESTART_DELAY);
-    if (engine.canRestart() && notRunningCount >= restartDelay) {
-      if (Date.now() < authRetrySuppressedUntil) {
-        if (notRunningCount % 60 === 0) log(`Guardian: auth retry suppressed for ${Math.ceil((authRetrySuppressedUntil - Date.now()) / 1000)}s`);
+      if (state === 'offline') {
+        log('State: OFFLINE (tmux session not found)');
       } else {
-        log(`Guardian: Agent not running for ${notRunningCount}s, attempting to start ${adapter.displayName}...`);
-        startAgent();
+        log(`State: STOPPED (${adapter.displayName} not running in tmux session)`);
       }
     }
 
+    maybeConsumeUserMessageSignal(currentTime);
     engine.processHeartbeat(false, currentTime);
     maybeEnqueueHealthCheck(false, currentTime);
 
     memoryCommitScheduler.maybeTrigger();
     lastState = state;
     return;
-  }
-
-  startupGrace = 0;
-  notRunningCount = 0;
-
-  // Only reset backoff after Claude stays running for BACKOFF_RESET_THRESHOLD seconds.
-  // Prevents flapping (brief start → immediate crash) from clearing the counter.
-  if (consecutiveRestarts > 0) {
-    if (stableRunningSince === 0) {
-      stableRunningSince = currentTime;
-    } else if (currentTime - stableRunningSince >= BACKOFF_RESET_THRESHOLD) {
-      consecutiveRestarts = 0;
-      stableRunningSince = 0;
-    }
   }
 
   let activity = adapter.runtimeId === 'claude' ? getConversationFileModTime() : null;
@@ -2239,6 +1966,22 @@ function init() {
   if (!heartbeatEnabled && adapter.runtimeId === 'codex') {
     log('Heartbeat: disabled for codex (set `zylos config set codex_heartbeat_enabled true` to re-enable)');
   }
+
+  guardian = new Guardian(adapter, {
+    log,
+    initialRuntimeLaunchAtMs: runtimeLaunchAtMs,
+    resetToolLifecycleState: () => {
+      resetToolLifecycleRuntimeState({ clearFiles: true });
+      fs.writeFileSync(API_ACTIVITY_FILE, JSON.stringify({
+        version: 3,
+        active: false,
+        active_tools: 0,
+        in_prompt: false,
+        updated_at: Date.now()
+      }));
+      fs.writeFileSync(HOOK_STATE_FILE, JSON.stringify({ active_tools: 0 }));
+    }
+  });
 
   // Rehydrate rate-limit state from persisted status file on PM2 restart
   if (initialHealth === 'rate_limited' && initialStatus.cooldown_until) {
