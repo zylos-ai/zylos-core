@@ -336,4 +336,85 @@ describe('MonitorOrchestrator', () => {
       }],
     ]);
   });
+
+  it('resolves Claude conversation activity before tmux fallback', () => {
+    const calls = [];
+    const { orchestrator } = createHarness({
+      adapter: { runtimeId: 'claude', displayName: 'Claude', sessionName: 'claude-main' },
+      initialHealth: 'ok',
+    });
+    orchestrator.start();
+
+    const result = orchestrator.resolveActivitySource({
+      currentTime: 500,
+      getConversationFileModTime: () => {
+        calls.push(['getConversationFileModTime']);
+        return 450;
+      },
+      getTmuxActivity: () => {
+        calls.push(['getTmuxActivity']);
+        return 400;
+      },
+    });
+
+    assert.deepEqual(result, { activity: 450, source: 'conv_file' });
+    assert.deepEqual(calls, [['getConversationFileModTime']]);
+  });
+
+  it('falls back to tmux activity and then current time', () => {
+    const calls = [];
+    const { orchestrator } = createHarness({
+      adapter: { runtimeId: 'claude', displayName: 'Claude', sessionName: 'claude-main' },
+      initialHealth: 'ok',
+    });
+    orchestrator.start();
+
+    assert.deepEqual(orchestrator.resolveActivitySource({
+      currentTime: 500,
+      getConversationFileModTime: () => {
+        calls.push(['getConversationFileModTime']);
+        return null;
+      },
+      getTmuxActivity: () => {
+        calls.push(['getTmuxActivity']);
+        return 420;
+      },
+    }), { activity: 420, source: 'tmux_activity' });
+
+    assert.deepEqual(orchestrator.resolveActivitySource({
+      currentTime: 600,
+      getConversationFileModTime: () => {
+        calls.push(['getConversationFileModTime']);
+        return 0;
+      },
+      getTmuxActivity: () => {
+        calls.push(['getTmuxActivity']);
+        return 0;
+      },
+    }), { activity: 600, source: 'default' });
+  });
+
+  it('skips conversation activity lookup for non-Claude runtimes', () => {
+    const calls = [];
+    const { orchestrator } = createHarness({
+      adapter: { runtimeId: 'codex', displayName: 'Codex', sessionName: 'codex-main' },
+      initialHealth: 'ok',
+    });
+    orchestrator.start();
+
+    const result = orchestrator.resolveActivitySource({
+      currentTime: 700,
+      getConversationFileModTime: () => {
+        calls.push(['getConversationFileModTime']);
+        return 650;
+      },
+      getTmuxActivity: () => {
+        calls.push(['getTmuxActivity']);
+        return 640;
+      },
+    });
+
+    assert.deepEqual(result, { activity: 640, source: 'tmux_activity' });
+    assert.deepEqual(calls, [['getTmuxActivity']]);
+  });
 });

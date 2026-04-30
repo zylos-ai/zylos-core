@@ -1215,18 +1215,11 @@ async function monitorLoop() {
     return;
   }
 
-  let activity = adapter.runtimeId === 'claude' ? getConversationFileModTime() : null;
-  let source = 'conv_file';
-
-  if (!activity) {
-    activity = getTmuxActivity();
-    source = 'tmux_activity';
-  }
-
-  if (!activity) {
-    activity = currentTime;
-    source = 'default';
-  }
+  let { activity, source } = orchestrator.resolveActivitySource({
+    currentTime,
+    getConversationFileModTime,
+    getTmuxActivity,
+  });
 
   const currentTmuxClaudePid = adapter.runtimeId === 'claude'
     ? getTmuxClaudePid(adapter.sessionName)

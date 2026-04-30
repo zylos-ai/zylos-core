@@ -176,4 +176,26 @@ export class MonitorOrchestrator {
 
     return { lastState: state };
   }
+
+  resolveActivitySource({ currentTime, getConversationFileModTime, getTmuxActivity }) {
+    if (!this.components) {
+      throw new Error('MonitorOrchestrator.start() must be called before resolveActivitySource()');
+    }
+
+    const { adapter } = this.components;
+    let activity = adapter.runtimeId === 'claude' ? getConversationFileModTime() : null;
+    let source = 'conv_file';
+
+    if (!activity) {
+      activity = getTmuxActivity();
+      source = 'tmux_activity';
+    }
+
+    if (!activity) {
+      activity = currentTime;
+      source = 'default';
+    }
+
+    return { activity, source };
+  }
 }
