@@ -410,6 +410,78 @@ function writeStatusFile(statusObj) {
   writeStatus({ statusFile: STATUS_FILE, statusObj, healthEngine: engine });
 }
 
+function buildNotRunningStatus({
+  state,
+  currentTime,
+  currentTimeHuman,
+  guardianResult,
+  runtimeLaunchAtMsValue,
+}) {
+  return {
+    state,
+    since: currentTime,
+    last_check: currentTime,
+    last_check_human: currentTimeHuman,
+    idle_seconds: 0,
+    not_running_seconds: guardianResult.notRunningSeconds,
+    message: guardianResult.message,
+    runtime_launch_at: runtimeLaunchAtMsValue,
+  };
+}
+
+function getActiveToolDetails(apiActivity) {
+  const activeTool = apiActivity?.watchdog_candidate_tool || apiActivity?.oldest_active_tool || null;
+  const startedAt = activeTool?.started_at || 0;
+
+  return {
+    active_tool_name: activeTool?.name || null,
+    active_tool_running_seconds: startedAt
+      ? Math.max(0, Math.floor((Date.now() - startedAt) / 1000))
+      : 0,
+    active_tool_summary: activeTool?.summary || null,
+    active_tool_rule_id: apiActivity?.watchdog_candidate_tool?.rule_id || null,
+  };
+}
+
+function buildRunningStatus({
+  state,
+  thinking,
+  activity,
+  apiUpdatedSec,
+  activeTools,
+  currentTime,
+  currentTimeHuman,
+  idleSeconds,
+  inactiveSeconds,
+  source,
+  runtimeLaunchAtMsValue,
+  apiActivity,
+  watchdogStatus,
+  foregroundIdentity,
+}) {
+  return {
+    state,
+    thinking,
+    last_activity: activity,
+    last_api_activity: apiUpdatedSec || undefined,
+    active_tools: activeTools,
+    last_check: currentTime,
+    last_check_human: currentTimeHuman,
+    idle_seconds: idleSeconds,
+    inactive_seconds: inactiveSeconds,
+    source,
+    runtime_launch_at: runtimeLaunchAtMsValue,
+    ...getActiveToolDetails(apiActivity),
+    active_tool_session_id: apiActivity?.sessionId || null,
+    watchdog_episode_key: watchdogState?.episode_key || null,
+    watchdog_phase: watchdogStatus.watchdog_phase,
+    watchdog_last_action_at: watchdogState?.last_action_at || null,
+    watchdog_block_reason: watchdogStatus.watchdog_block_reason,
+    foreground_session_source: foregroundIdentity?.source || null,
+    foreground_session_observed_at: foregroundIdentity?.observedAt || 0,
+  };
+}
+
 function startMessageRouterServer() {
   const router = new MessageRouter({
     healthEngine: engine,
@@ -1049,6 +1121,19 @@ function startContextMonitor(activeAdapter) {
   return monitor;
 }
 
+function scheduleStaleRuntimeCleanup(activeAdapter) {
+  // Runs on every startup (not just runtime switches). If the other session is
+  // absent, the kill fails silently. The delay gives a running agent time to
+  // finish its current response before being terminated.
+  const otherSession = activeAdapter.runtimeId === 'codex' ? 'claude-main' : 'codex-main';
+  setTimeout(() => {
+    try {
+      execSync(`tmux kill-session -t "${otherSession}" 2>/dev/null`, { stdio: 'pipe', timeout: 3000 });
+      log(`Startup cleanup: killed stale ${otherSession} session from previous runtime`);
+    } catch { /* session didn't exist, normal startup no-op */ }
+  }, 10_000);
+}
+
 async function monitorLoop() {
   const currentTime = Math.floor(Date.now() / 1000);
   const currentTimeHuman = new Date().toISOString().replace('T', ' ').substring(0, 19);
@@ -1069,16 +1154,13 @@ async function monitorLoop() {
   if (guardianResult.state !== 'running') {
     const state = guardianResult.state;
 
-    writeStatusFile({
+    writeStatusFile(buildNotRunningStatus({
       state,
-      since: currentTime,
-      last_check: currentTime,
-      last_check_human: currentTimeHuman,
-      idle_seconds: 0,
-      not_running_seconds: guardianResult.notRunningSeconds,
-      message: guardianResult.message,
-      runtime_launch_at: runtimeLaunchAtMs
-    });
+      currentTime,
+      currentTimeHuman,
+      guardianResult,
+      runtimeLaunchAtMsValue: runtimeLaunchAtMs,
+    }));
 
     if (state === 'stopped' && adapter.runtimeId === 'claude') {
       clearWatchdogState();
@@ -1213,34 +1295,22 @@ async function monitorLoop() {
 
   const idleSeconds = state === 'idle' ? currentTime - idleSince : 0;
 
-  writeStatusFile({
+  writeStatusFile(buildRunningStatus({
     state,
     thinking,
-    last_activity: activity,
-    last_api_activity: apiUpdatedSec || undefined,
-    active_tools: activeTools,
-    last_check: currentTime,
-    last_check_human: currentTimeHuman,
-    idle_seconds: idleSeconds,
-    inactive_seconds: inactiveSeconds,
+    activity,
+    apiUpdatedSec,
+    activeTools,
+    currentTime,
+    currentTimeHuman,
+    idleSeconds,
+    inactiveSeconds,
     source,
-    runtime_launch_at: runtimeLaunchAtMs,
-    active_tool_name: apiActivity?.watchdog_candidate_tool?.name || apiActivity?.oldest_active_tool?.name || null,
-    active_tool_running_seconds: apiActivity?.watchdog_candidate_tool?.started_at
-      ? Math.max(0, Math.floor((Date.now() - apiActivity.watchdog_candidate_tool.started_at) / 1000))
-      : (apiActivity?.oldest_active_tool?.started_at
-          ? Math.max(0, Math.floor((Date.now() - apiActivity.oldest_active_tool.started_at) / 1000))
-          : 0),
-    active_tool_summary: apiActivity?.watchdog_candidate_tool?.summary || apiActivity?.oldest_active_tool?.summary || null,
-    active_tool_rule_id: apiActivity?.watchdog_candidate_tool?.rule_id || null,
-    active_tool_session_id: apiActivity?.sessionId || null,
-    watchdog_episode_key: watchdogState?.episode_key || null,
-    watchdog_phase: watchdogStatus.watchdog_phase,
-    watchdog_last_action_at: watchdogState?.last_action_at || null,
-    watchdog_block_reason: watchdogStatus.watchdog_block_reason,
-    foreground_session_source: foregroundIdentity?.source || null,
-    foreground_session_observed_at: foregroundIdentity?.observedAt || 0,
-  });
+    runtimeLaunchAtMsValue: runtimeLaunchAtMs,
+    apiActivity,
+    watchdogStatus,
+    foregroundIdentity,
+  }));
 
   if (state !== lastState) {
     if (state === 'busy') {
@@ -1357,17 +1427,7 @@ function init() {
     log(`Startup with health=${initialHealth}; will verify immediately when ${adapter.displayName} is running`);
   }
 
-  // Startup cleanup: kill the other runtime's tmux session if it exists.
-  // Runs on every startup (not just runtime switches) — if the other session is
-  // absent (normal case) the kill fails silently. The 10 s delay gives a running
-  // agent time to finish its current response before being terminated.
-  const OTHER_SESSION = adapter.runtimeId === 'codex' ? 'claude-main' : 'codex-main';
-  setTimeout(() => {
-    try {
-      execSync(`tmux kill-session -t "${OTHER_SESSION}" 2>/dev/null`, { stdio: 'pipe', timeout: 3000 });
-      log(`Startup cleanup: killed stale ${OTHER_SESSION} session from previous runtime`);
-    } catch { /* session didn't exist — normal startup, no-op */ }
-  }, 10_000);
+  scheduleStaleRuntimeCleanup(adapter);
 }
 
 try {
