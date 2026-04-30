@@ -552,6 +552,16 @@ export class HeartbeatEngine {
     return { recovered: false, reason: this.healthReason || this.healthState, timedOut: true };
   }
 
+  onProcessRestarted(currentTime = Math.floor(Date.now() / 1000)) {
+    this.restartFailureCount = 0;
+    this.lastRecoveryAt = 0;
+    this.deps.log('Process restarted, recovery backoff reset');
+
+    if (this.healthState !== 'ok') {
+      this.signalDetectedAt = currentTime;
+    }
+  }
+
   /**
    * Track agentRunning state transitions for process signal acceleration.
    * When agentRunning goes false→true while unavailable/recovering, record the timestamp

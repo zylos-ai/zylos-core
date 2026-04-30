@@ -952,6 +952,7 @@ async function monitorLoop() {
   runtimeLaunchAtMs = guardianResult.runtimeLaunchAtMs;
   if (guardianResult.attempted_restart) {
     lastLaunchAt = Math.floor(runtimeLaunchAtMs / 1000);
+    engine.onProcessRestarted(currentTime);
   }
 
   if (guardianResult.skippedForStartupGrace) {

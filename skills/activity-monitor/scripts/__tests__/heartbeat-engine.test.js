@@ -823,6 +823,32 @@ describe('HeartbeatEngine', () => {
     });
   });
 
+  describe('onProcessRestarted', () => {
+    it('resets recovery backoff and schedules post-restart probe for non-ok health', () => {
+      const { deps, calls } = createMockDeps();
+      const engine = new HeartbeatEngine(deps, { initialHealth: 'unavailable', signalGracePeriod: 5 });
+      engine.restartFailureCount = 3;
+      engine.lastRecoveryAt = 100;
+
+      engine.onProcessRestarted(200);
+      engine.processHeartbeat(true, 206);
+
+      assert.equal(engine.restartFailureCount, 0);
+      assert.equal(engine.lastRecoveryAt, 0);
+      assert.deepStrictEqual(calls.enqueueHeartbeat, ['post_restart']);
+    });
+
+    it('does not schedule a post-restart probe while health is ok', () => {
+      const { deps, calls } = createMockDeps();
+      const engine = new HeartbeatEngine(deps, { signalGracePeriod: 5 });
+
+      engine.onProcessRestarted(200);
+      engine.processHeartbeat(true, 206);
+
+      assert.deepStrictEqual(calls.enqueueHeartbeat, []);
+    });
+  });
+
   describe('setHealth', () => {
     it('does nothing when state is unchanged', () => {
       const { deps, calls } = createMockDeps();
