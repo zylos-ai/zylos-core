@@ -413,13 +413,21 @@ export class HeartbeatEngine {
     // Before triggering kill+restart recovery, check if the failure is due to
     // a rate limit. This is the "behavioral + text" dual-signal approach:
     // heartbeat failed (behavioral) AND tmux shows rate limit text (text signal).
-    // Only checked in ok/recovering states where we'd otherwise kill the session.
-    if ((this.healthState === 'ok' || isUnavailableRecoveryState(this.healthState)) && this.deps.detectRateLimit) {
+    // Only checked in states where a heartbeat failure may otherwise change health.
+    if ((this.healthState === 'ok' || isUnavailableRecoveryState(this.healthState) || this.healthState === 'rate_limited') && this.deps.detectRateLimit) {
       const rateLimit = this.deps.detectRateLimit();
       if (rateLimit.detected) {
         this.enterRateLimited(rateLimit.cooldownUntil, rateLimit.resetTime);
         return;
       }
+    }
+
+    if (this.healthState === 'rate_limited') {
+      this.restartFailureCount += 1;
+      this.lastRecoveryAt = now;
+      this.setHealth('unavailable', `${phase}_${status}`);
+      this.deps.log(`Rate limit recovery failed without active rate-limit signal (${status}); transitioning to unavailable`);
+      return;
     }
 
     // In ok state, any failure triggers recovery directly (no verify phase).
@@ -537,11 +545,23 @@ export class HeartbeatEngine {
       return { recovered: true };
     }
 
+    this.lastRecoveryAt = Math.floor(Date.now() / 1000);
+
+    if (this.healthState === 'auth_failed') {
+      const authResult = await this._checkAuth();
+      if (authResult.ok) {
+        this.onHeartbeatSuccess('auth_recovered');
+        return { recovered: true, health: 'ok' };
+      }
+      const reason = authResult.reason || 'auth_still_failed';
+      this.setHealth('auth_failed', reason);
+      return { recovered: false, health: 'auth_failed', reason };
+    }
+
     let pending = this.deps.readHeartbeatPending();
     if (!pending) {
       const ok = this.enqueueHeartbeat('recovery');
       if (!ok) {
-        this.lastRecoveryAt = Math.floor(Date.now() / 1000);
         return { recovered: false, reason: this.healthReason || this.healthState, enqueueFailed: true };
       }
       pending = this.deps.readHeartbeatPending();

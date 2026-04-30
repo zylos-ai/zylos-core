@@ -618,6 +618,33 @@ describe('HeartbeatEngine', () => {
       assert.equal(result.recovered, false);
       assert.equal(result.enqueueFailed, true);
     });
+
+    it('checks auth directly when health is auth_failed', async () => {
+      const { deps, calls } = createMockDeps();
+      deps.checkAuth = async () => ({ ok: true });
+      const engine = new HeartbeatEngine(deps, { initialHealth: 'auth_failed' });
+
+      const result = await engine.runRecoveryProbe({ timeoutMs: 100, pollIntervalMs: 1 });
+
+      assert.equal(result.recovered, true);
+      assert.equal(result.health, 'ok');
+      assert.equal(engine.health, 'ok');
+      assert.deepStrictEqual(calls.enqueueHeartbeat, []);
+    });
+
+    it('keeps auth_failed when direct auth check still fails', async () => {
+      const { deps, calls } = createMockDeps();
+      deps.checkAuth = async () => ({ ok: false, reason: 'auth_still_failed' });
+      const engine = new HeartbeatEngine(deps, { initialHealth: 'auth_failed' });
+
+      const result = await engine.runRecoveryProbe({ timeoutMs: 100, pollIntervalMs: 1 });
+
+      assert.equal(result.recovered, false);
+      assert.equal(result.health, 'auth_failed');
+      assert.equal(result.reason, 'auth_still_failed');
+      assert.equal(engine.health, 'auth_failed');
+      assert.deepStrictEqual(calls.enqueueHeartbeat, []);
+    });
   });
 
   describe('onUserMessageDelivered', () => {
@@ -982,8 +1009,24 @@ describe('HeartbeatEngine', () => {
       assert.equal(calls.notifyPendingChannels, 1);
     });
 
-    it('stays rate_limited when heartbeat fails (no kill)', () => {
+    it('transitions rate_limited to unavailable when recovery fails without rate-limit signal', () => {
       const { deps, calls } = createMockDeps();
+      deps.detectRateLimit = () => ({ detected: false });
+      const engine = new HeartbeatEngine(deps);
+
+      engine.enterRateLimited(2000, '7am');
+      deps._pending = { control_id: 1, phase: 'recovery', created_at: 2000 };
+      deps._heartbeatStatus = 'failed';
+      engine.processHeartbeat(true, 2005);
+
+      assert.equal(engine.health, 'unavailable');
+      assert.equal(calls.killTmuxSession, 0);
+      assert.ok(calls.log.some(m => m.includes('Rate limit recovery failed')));
+    });
+
+    it('stays rate_limited when recovery still sees rate-limit signal', () => {
+      const { deps, calls } = createMockDeps();
+      deps.detectRateLimit = () => ({ detected: true, cooldownUntil: 5000, resetTime: '8am' });
       const engine = new HeartbeatEngine(deps);
 
       engine.enterRateLimited(2000, '7am');
@@ -992,8 +1035,9 @@ describe('HeartbeatEngine', () => {
       engine.processHeartbeat(true, 2005);
 
       assert.equal(engine.health, 'rate_limited');
+      assert.equal(engine.cooldownUntil, 5000);
+      assert.equal(engine.rateLimitResetTime, '8am');
       assert.equal(calls.killTmuxSession, 0);
-      assert.ok(calls.log.some(m => m.includes('skipped in RATE_LIMITED')));
     });
 
     it('triggerRecovery is skipped in rate_limited state', () => {
