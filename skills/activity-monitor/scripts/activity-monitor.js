@@ -205,6 +205,7 @@ const PENDING_CHANNELS_FILE = path.join(MONITOR_DIR, 'pending-channels.jsonl');
 const USER_MESSAGE_SIGNAL_FILE = path.join(MONITOR_DIR, 'user-message-signal.json');
 const USAGE_STATE_FILE = path.join(MONITOR_DIR, 'usage.json');
 const USAGE_CODEX_STATE_FILE = path.join(MONITOR_DIR, 'usage-codex.json');
+const USAGE_ALERT_STATE_FILE = path.join(MONITOR_DIR, 'usage-alert-state.json');
 
 // API activity snapshot — built by activity-monitor from Claude hook/session signals
 const API_ACTIVITY_FILE = path.join(MONITOR_DIR, 'api-activity.json');
@@ -294,9 +295,11 @@ function readConfigObject() {
   }
 }
 
-const USAGE_MONITOR_ENABLED = readConfigBool('usage_monitor_enabled', false);
+const USAGE_MONITOR_ENABLED = readConfigBool('usage_monitor_enabled', true);
 const USAGE_CHECK_INTERVAL = readConfigInt('usage_check_interval', 3600);     // seconds between checks (default 1 hour)
 const USAGE_IDLE_GATE = readConfigInt('usage_idle_gate', 30);                 // idle seconds required (default 30)
+const USAGE_ALERT_ENABLED = readConfigBool('usage_alert_enabled', false);
+const USAGE_ALERT_INTERVAL = readConfigInt('usage_alert_interval', 3600);
 const USAGE_WARN_THRESHOLD = readConfigInt('usage_warn_threshold', 80);       // weekly % → warning
 const USAGE_HIGH_THRESHOLD = readConfigInt('usage_high_threshold', 90);       // weekly % → high alert
 const USAGE_CRITICAL_THRESHOLD = readConfigInt('usage_critical_threshold', 95); // weekly % → critical alert
@@ -970,6 +973,22 @@ function getUsageStateFile() {
   return USAGE_STATE_FILE;
 }
 
+function loadUsageAlertState() {
+  try {
+    if (!fs.existsSync(USAGE_ALERT_STATE_FILE)) return null;
+    return JSON.parse(fs.readFileSync(USAGE_ALERT_STATE_FILE, 'utf8'));
+  } catch { }
+  return null;
+}
+
+function writeUsageAlertState(data) {
+  try {
+    fs.writeFileSync(USAGE_ALERT_STATE_FILE, JSON.stringify(data, null, 2));
+  } catch (err) {
+    log(`Usage alert: failed to write state (${err.message})`);
+  }
+}
+
 function getPendingWorkCount() {
   try {
     const dbPath = path.join(ZYLOS_DIR, 'comm-bridge', 'c4.db');
@@ -1048,36 +1067,35 @@ function sendUsageNotification(message) {
   }
 }
 
-/**
- * Usage check state machine — called from monitorLoop every second.
- * Only progresses when Claude is idle with no pending work.
- */
-function maybeCheckUsage(claudeState, idleSeconds, currentTime, apiActivity) {
-  if (!USAGE_MONITOR_ENABLED) return;
+function canRunUsageTask({ claudeState, idleSeconds, currentTime, apiActivity, activeHoursOnly = false }) {
   if (adapter.runtimeId !== 'claude' && adapter.runtimeId !== 'codex') return;
 
   const promptUpdatedAt = apiActivity?.updated_at
     ? Math.floor(apiActivity.updated_at / 1000) : 0;
-  const shouldStart = shouldStartUsageCheck({
+  return shouldStartUsageCheck({
     runtimeId: adapter.runtimeId,
     allowedRuntimeIds: ['claude', 'codex'],
     claudeState,
     idleSeconds,
     currentTime,
-    lastUsageCheckAt,
+    lastUsageCheckAt: 0,
     checkInterval: { seconds: USAGE_CHECK_INTERVAL, idleGate: USAGE_IDLE_GATE },
     inPrompt: adapter.runtimeId === 'claude' ? Boolean(apiActivity?.in_prompt) : false,
     promptUpdatedAt,
     localHour: getLocalHour(),
-    activeHoursStart: USAGE_ACTIVE_HOURS_START,
-    activeHoursEnd: USAGE_ACTIVE_HOURS_END,
+    activeHoursStart: activeHoursOnly ? USAGE_ACTIVE_HOURS_START : 0,
+    activeHoursEnd: activeHoursOnly ? USAGE_ACTIVE_HOURS_END : 24,
     pendingQueueCount: getPendingWorkCount(),
     lockBusy: false,
     backoffUntil: 0,
     circuitUntil: 0,
   });
-  if (!shouldStart) return;
+}
 
+/**
+ * Refresh local usage state only. Alerting is handled by runUsageAlert().
+ */
+function runUsageMonitor({ currentTime }) {
   let snapshot = null;
   let source = null;
   if (adapter.runtimeId === 'claude') {
@@ -1128,14 +1146,9 @@ function maybeCheckUsage(claudeState, idleSeconds, currentTime, apiActivity) {
     fiveHour: snapshot.fiveHourPercent,
     fiveHourResets: snapshot.fiveHourResets
   };
-  const prevState = loadUsageState();
   const now = new Date().toISOString();
   const tierMetric = usage.weeklyAll ?? usage.session;
   const tier = getUsageTier(tierMetric ?? 0);
-  const prevTier = prevState?.lastNotifiedTier;
-  const prevNotifiedAt = prevState?.lastNotifiedAt ? Math.floor(new Date(prevState.lastNotifiedAt).getTime() / 1000) : 0;
-  const tierEscalated = prevTier !== tier && tierRank(tier) > tierRank(prevTier);
-  const cooldownExpired = (currentTime - prevNotifiedAt) >= USAGE_NOTIFY_COOLDOWN;
 
   const usageData = {
     lastCheck: now,
@@ -1145,9 +1158,7 @@ function maybeCheckUsage(claudeState, idleSeconds, currentTime, apiActivity) {
     weeklySonnet: { percent: usage.weeklySonnet, resets: usage.weeklySonnetResets },
     fiveHour: { percent: usage.fiveHour, resets: usage.fiveHourResets },
     tier,
-    statusShape: source,
-    lastNotifiedTier: prevTier || null,
-    lastNotifiedAt: prevState?.lastNotifiedAt || null
+    statusShape: source
   };
 
   log(
@@ -1155,21 +1166,70 @@ function maybeCheckUsage(claudeState, idleSeconds, currentTime, apiActivity) {
     `5h=${usage.fiveHour ?? 'null'}% weekly=${usage.weeklyAll ?? 'null'}% tier=${tier}`
   );
 
-  if (tier !== 'ok' && usage.weeklyAll !== null && usage.weeklyAll !== undefined) {
-    if (tierEscalated || cooldownExpired) {
-      log(`Usage monitor (${adapter.runtimeId}): notifying owner for tier=${tier}`);
-      const message = formatUsageNotification(usage, tier);
-      sendUsageNotification(message);
-      usageData.lastNotifiedTier = tier;
-      usageData.lastNotifiedAt = now;
-    } else {
-      log(`Usage monitor (${adapter.runtimeId}): suppressing notification (cooldown active, tier=${tier})`);
-    }
-  }
-
   writeUsageState(usageData);
   lastUsageCheckAt = currentTime;
   return;
+}
+
+function runUsageAlert({ currentTime }) {
+  const checkedAt = new Date(currentTime * 1000).toISOString();
+  const alertState = loadUsageAlertState();
+  const writeCheckedState = (patch = {}) => {
+    writeUsageAlertState({
+      version: 1,
+      ...alertState,
+      lastCheckedAt: checkedAt,
+      sourceRuntime: adapter.runtimeId,
+      ...patch
+    });
+  };
+
+  const state = loadUsageState();
+  if (!state) {
+    log(`Usage alert (${adapter.runtimeId}): no usage state available`);
+    writeCheckedState();
+    return true;
+  }
+
+  const weekly = state.weeklyAll?.percent;
+  if (weekly === null || weekly === undefined) {
+    log(`Usage alert (${adapter.runtimeId}): no weekly usage metric available`);
+    writeCheckedState();
+    return true;
+  }
+
+  const tier = state.tier || getUsageTier(weekly);
+  if (tier === 'ok') {
+    writeCheckedState({ lastObservedTier: tier });
+    return true;
+  }
+
+  const prevTier = alertState?.lastNotifiedTier || state.lastNotifiedTier || null;
+  const prevNotifiedIso = alertState?.lastNotifiedAt || state.lastNotifiedAt || null;
+  const prevNotifiedAt = prevNotifiedIso ? Math.floor(new Date(prevNotifiedIso).getTime() / 1000) : 0;
+  const tierEscalated = prevTier !== tier && tierRank(tier) > tierRank(prevTier);
+  const cooldownExpired = (currentTime - prevNotifiedAt) >= USAGE_NOTIFY_COOLDOWN;
+
+  if (!tierEscalated && !cooldownExpired) {
+    log(`Usage alert (${adapter.runtimeId}): suppressing notification (cooldown active, tier=${tier})`);
+    writeCheckedState({ lastObservedTier: tier });
+    return true;
+  }
+
+  const usage = {
+    session: state.session?.percent,
+    weeklyAll: state.weeklyAll?.percent,
+    weeklySonnet: state.weeklySonnet?.percent,
+    weeklyAllResets: state.weeklyAll?.resets
+  };
+  log(`Usage alert (${adapter.runtimeId}): notifying owner for tier=${tier}`);
+  sendUsageNotification(formatUsageNotification(usage, tier));
+  writeCheckedState({
+    lastObservedTier: tier,
+    lastNotifiedTier: tier,
+    lastNotifiedAt: new Date().toISOString(),
+  });
+  return true;
 }
 
 function tierRank(tier) {
@@ -1437,9 +1497,6 @@ async function monitorLoop() {
     idleSeconds,
     apiActivity,
   });
-  if (engine.health === 'ok') {
-    maybeCheckUsage(state, idleSeconds, currentTime, apiActivity);
-  }
   lastState = state;
 }
 
@@ -1572,6 +1629,38 @@ function init() {
       getLastRunAt: () => loadHealthCheckState()?.last_check_at ?? 0,
       execute: enqueueHealthCheck,
     },
+    {
+      id: 'usage-monitor',
+      type: 'interval',
+      intervalSec: USAGE_CHECK_INTERVAL,
+      enabled: () => USAGE_MONITOR_ENABLED,
+      gate: (snapshot) => snapshot.health === 'ok' && canRunUsageTask({
+        claudeState: snapshot.state,
+        idleSeconds: snapshot.idleSeconds,
+        currentTime: snapshot.currentTime,
+        apiActivity: snapshot.apiActivity,
+      }),
+      getLastRunAt: () => lastUsageCheckAt,
+      execute: runUsageMonitor,
+    },
+    {
+      id: 'usage-alert',
+      type: 'interval',
+      intervalSec: USAGE_ALERT_INTERVAL,
+      enabled: () => USAGE_ALERT_ENABLED,
+      gate: (snapshot) => snapshot.health === 'ok' && canRunUsageTask({
+        claudeState: snapshot.state,
+        idleSeconds: snapshot.idleSeconds,
+        currentTime: snapshot.currentTime,
+        apiActivity: snapshot.apiActivity,
+        activeHoursOnly: true,
+      }),
+      getLastRunAt: () => {
+        const state = loadUsageAlertState();
+        return state?.lastCheckedAt ? Math.floor(new Date(state.lastCheckedAt).getTime() / 1000) : 0;
+      },
+      execute: runUsageAlert,
+    },
   ], {
     getLocalHour,
     getLocalDate,
@@ -1587,6 +1676,7 @@ function init() {
     nowEpoch: Math.floor(Date.now() / 1000)
   });
   log(`Usage monitor (${adapter.runtimeId}): enabled=${USAGE_MONITOR_ENABLED}`);
+  log(`Usage alert (${adapter.runtimeId}): enabled=${USAGE_ALERT_ENABLED}`);
 
   // Start context monitor if the adapter provides one (Codex polling-based monitor).
   // Claude uses the statusLine hook instead — no adapter-provided monitor.
