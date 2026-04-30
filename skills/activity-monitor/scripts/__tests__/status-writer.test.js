@@ -6,6 +6,7 @@ import { describe, it } from 'node:test';
 
 import {
   buildStatusPayload,
+  publicHealth,
   readInitialStatus,
   writeStatus
 } from '../status-writer.js';
@@ -50,6 +51,26 @@ describe('status-writer', () => {
       cooldown_until: 1234,
       unavailable_reason: 'rate_limit_detected',
       health: 'rate_limited',
+    });
+  });
+
+  it('normalizes legacy internal health states before writing public status', () => {
+    assert.equal(publicHealth('recovering'), 'unavailable');
+    assert.equal(publicHealth('down'), 'unavailable');
+    assert.equal(publicHealth('unavailable'), 'unavailable');
+
+    const payload = buildStatusPayload({
+      statusObj: { state: 'busy' },
+      healthEngine: {
+        health: 'recovering',
+        healthReason: 'heartbeat_timeout',
+      },
+    });
+
+    assert.deepEqual(payload, {
+      state: 'busy',
+      unavailable_reason: 'heartbeat_timeout',
+      health: 'unavailable',
     });
   });
 

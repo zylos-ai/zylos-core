@@ -24,16 +24,24 @@ export function readInitialStatus({ statusFile }) {
   return { health: 'ok' };
 }
 
+export function publicHealth(health) {
+  if (health === 'ok' || health === 'rate_limited' || health === 'auth_failed') {
+    return health;
+  }
+  return 'unavailable';
+}
+
 export function buildStatusPayload({ statusObj, healthEngine }) {
+  const health = publicHealth(healthEngine.health);
   const extra = {};
-  if (healthEngine.health === 'rate_limited') {
+  if (health === 'rate_limited') {
     extra.rate_limit_reset = healthEngine.rateLimitResetTime || null;
     extra.cooldown_until = healthEngine.cooldownUntil || null;
   }
   if (healthEngine.healthReason) {
     extra.unavailable_reason = healthEngine.healthReason;
   }
-  return { ...statusObj, ...extra, health: healthEngine.health };
+  return { ...statusObj, ...extra, health };
 }
 
 export function writeStatus({ statusFile, statusObj, healthEngine }) {
