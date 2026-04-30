@@ -159,6 +159,10 @@ import {
   evaluateToolWatchdogTransition
 } from './tool-watchdog.js';
 import {
+  CODEX_PENDING_MESSAGE_INTERRUPT_AVAILABLE_IN_SEC,
+  evaluateCodexTurnWatchdogTransition
+} from './codex-turn-watchdog.js';
+import {
   readClaudeUsageFromMonitorFiles,
   readCodexUsageFromMonitorFile
 } from './usage-monitor-file-reader.js';
@@ -315,6 +319,9 @@ const USAGE_CRITICAL_THRESHOLD = readConfigInt('usage_critical_threshold', 95); 
 const USAGE_NOTIFY_COOLDOWN = readConfigInt('usage_notify_cooldown', 14400);  // seconds between same-tier notifications (4 hours)
 const USAGE_ACTIVE_HOURS_START = readConfigInt('usage_active_hours_start', 8); // check only during 8:00–23:00
 const USAGE_ACTIVE_HOURS_END = readConfigInt('usage_active_hours_end', 23);
+const CODEX_PENDING_MESSAGE_INTERRUPT_SEC = readConfigInt('codex_pending_message_interrupt_sec', 30);
+const CODEX_PENDING_MESSAGE_GRACE_SEC = readConfigInt('codex_pending_message_grace_sec', 10);
+const CODEX_PENDING_MESSAGE_COOLDOWN_SEC = readConfigInt('codex_pending_message_cooldown_sec', 30);
 
 // Daily tasks config
 const DAILY_UPGRADE_HOUR = 5;        // 5:00 AM local time
@@ -1373,6 +1380,48 @@ function evaluateToolWatchdog({ nowMs, foregroundIdentity, apiActivity, interact
   return phase;
 }
 
+function evaluateCodexTurnWatchdog({ nowMs, interactiveState }) {
+  const state = {
+    watchdogState,
+    runtimeLaunchAtMs,
+    launchGracePeriodSec: LAUNCH_GRACE_PERIOD,
+    engineHealth: engine.health,
+    codexPendingMessageInterruptSec: CODEX_PENDING_MESSAGE_INTERRUPT_SEC,
+    codexPendingMessageGraceSec: CODEX_PENDING_MESSAGE_GRACE_SEC,
+    codexPendingMessageCooldownSec: CODEX_PENDING_MESSAGE_COOLDOWN_SEC,
+  };
+
+  const phase = evaluateCodexTurnWatchdogTransition({
+    nowMs,
+    interactiveState,
+    state,
+    deps: {
+      clearWatchdogState: () => {
+        watchdogState = null;
+        state.watchdogState = null;
+        writeWatchdogState();
+      },
+      writeWatchdogState: () => {
+        watchdogState = state.watchdogState;
+        writeWatchdogState();
+      },
+      enqueueInterrupt: (interruptKey) => runC4Control([
+        'enqueue',
+        '--content', `[KEYSTROKE]${interruptKey}`,
+        '--priority', '0',
+        '--bypass-state',
+        '--available-in', String(CODEX_PENDING_MESSAGE_INTERRUPT_AVAILABLE_IN_SEC),
+        '--no-ack-suffix'
+      ]),
+      triggerRecovery: (reason) => engine.triggerRecovery(reason),
+      log,
+    }
+  });
+
+  watchdogState = state.watchdogState;
+  return phase;
+}
+
 function sendRecoveryNotice(channel, endpoint) {
   try {
     execFileSync('node', [C4_SEND_PATH, channel, endpoint, 'Hey! I was temporarily unavailable but I\'m back online now. If you sent me something while I was away, could you send it again? Thanks!'], { stdio: 'pipe', timeout: 15000 });
@@ -2040,7 +2089,7 @@ async function monitorLoop() {
   const currentTmuxClaudePid = adapter.runtimeId === 'claude'
     ? getTmuxClaudePid(adapter.sessionName)
     : 0;
-  const interactiveState = adapter.runtimeId === 'claude'
+  const interactiveState = (adapter.runtimeId === 'claude' || adapter.runtimeId === 'codex')
     ? readTmuxInputState({ sessionName: adapter.sessionName })
     : null;
 
@@ -2065,6 +2114,11 @@ async function monitorLoop() {
     writeSessionToolState(foregroundIdentity, foregroundIdentity?.trusted ? foregroundIdentity.sessionId : null);
     writeApiActivitySnapshot(apiActivity);
     maybeRotateToolEventStream(toolNowMs, foregroundIdentity?.trusted ? foregroundIdentity.sessionId : null);
+  } else if (adapter.runtimeId === 'codex') {
+    watchdogStatus = evaluateCodexTurnWatchdog({
+      nowMs: Date.now(),
+      interactiveState
+    });
   }
 
   const apiUpdatedSec = apiActivity?.updated_at ? Math.floor(apiActivity.updated_at / 1000) : 0;
@@ -2136,9 +2190,12 @@ async function monitorLoop() {
     active_tool_rule_id: apiActivity?.watchdog_candidate_tool?.rule_id || null,
     active_tool_session_id: apiActivity?.sessionId || null,
     watchdog_episode_key: watchdogState?.episode_key || null,
+    watchdog_type: watchdogState?.type || null,
     watchdog_phase: watchdogStatus.watchdog_phase,
     watchdog_last_action_at: watchdogState?.last_action_at || null,
     watchdog_block_reason: watchdogStatus.watchdog_block_reason,
+    codex_working_seconds: interactiveState?.codexWorkingSeconds || 0,
+    codex_queued_user_messages: Boolean(interactiveState?.codexQueuedUserMessages),
     foreground_session_source: foregroundIdentity?.source || null,
     foreground_session_observed_at: foregroundIdentity?.observedAt || 0,
   });

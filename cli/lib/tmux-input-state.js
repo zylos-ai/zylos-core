@@ -1,5 +1,7 @@
 export {
   findPromptY,
+  getCodexWorkingSeconds,
+  hasCodexQueuedUserMessages,
   hasInProgressCapture,
   isUsageOverlayCapture,
   readTmuxInputState

@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import {
+  getCodexWorkingSeconds,
+  hasCodexQueuedUserMessages,
   hasInProgressCapture,
   readTmuxInputState,
   isUsageOverlayCapture
@@ -135,5 +137,27 @@ describe('tmux-input-state', () => {
   it('does not flag normal output as in-progress', () => {
     const capture = 'Some normal output\nMore output\n❯ ';
     assert.equal(hasInProgressCapture(capture), false);
+  });
+
+  it('detects Codex working duration and queued user messages', () => {
+    const capture = [
+      '• Working (6m 08s • esc to interrupt)',
+      '• Messages to be submitted after next tool call (press esc to interrupt and send immediately)',
+      '  ↳ [Lark DM] ccb981c2 said: <current-message>',
+    ].join('\n');
+
+    const state = readTmuxInputState({
+      sessionName: 'codex-main',
+      execFileSyncImpl: createExecStub({
+        cursorX: '2',
+        cursorY: '4',
+        capture
+      })
+    });
+
+    assert.equal(getCodexWorkingSeconds(capture), 368);
+    assert.equal(hasCodexQueuedUserMessages(capture), true);
+    assert.equal(state.codexWorkingSeconds, 368);
+    assert.equal(state.codexQueuedUserMessages, true);
   });
 });
