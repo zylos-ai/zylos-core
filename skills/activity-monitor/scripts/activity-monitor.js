@@ -916,6 +916,7 @@ async function monitorLoop() {
 
   const guardianResult = await guardian.tick({ currentTime });
   runtimeLaunchAtMs = guardianResult.runtimeLaunchAtMs;
+  engine.setAgentRunning(guardianResult.state === 'running', currentTime);
   if (guardianResult.attempted_restart) {
     engine.onProcessRestarted(currentTime);
   }
@@ -1193,6 +1194,7 @@ function init() {
   if (initialHealth === 'rate_limited' && initialStatus.cooldown_until) {
     engine.enterRateLimited(initialStatus.cooldown_until, initialStatus.rate_limit_reset || '');
   }
+  engine.start();
 
   startMessageRouterServer();
 
@@ -1368,6 +1370,7 @@ log(`=== Activity Monitor Started (v25 - RuntimeAdapter: ${adapter.displayName} 
 
 for (const signal of ['SIGINT', 'SIGTERM']) {
   process.once(signal, () => {
+    engine?.destroy();
     stopMessageRouterServer();
     process.exit(0);
   });

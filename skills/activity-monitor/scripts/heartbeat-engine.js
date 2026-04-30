@@ -67,6 +67,8 @@ export class HeartbeatEngine {
    * @param {number} [options.userMessageRecoveryCooldown=60] - Min seconds between user-message-triggered recoveries
    * @param {string} [options.initialHealth='ok']
    * @param {boolean} [options.heartbeatEnabled=true]
+   * @param {number} [options.maintenanceIntervalMs=1000]
+   * @param {number} [options.postRestartProbeDelayMs=5000]
    * @param {number} [options.userMessageCheckDelayMs=5000]
    * @param {() => number} [options.now]
    */
@@ -80,6 +82,8 @@ export class HeartbeatEngine {
     this.userMessageRecoveryCooldown = options.userMessageRecoveryCooldown ?? 60; // 1 min
     this.heartbeatEnabled = options.heartbeatEnabled ?? true;
     this.userMessageCheckDelayMs = options.userMessageCheckDelayMs ?? USER_MESSAGE_CHECK_DELAY_MS;
+    this.maintenanceIntervalMs = options.maintenanceIntervalMs ?? 1000;
+    this.postRestartProbeDelayMs = options.postRestartProbeDelayMs ?? USER_MESSAGE_CHECK_DELAY_MS;
     this.now = options.now ?? (() => Date.now());
 
     // Internal state
@@ -95,6 +99,7 @@ export class HeartbeatEngine {
     this.unavailableSince = isPublicUnavailableState(this.healthState) ? Math.floor(Date.now() / 1000) : 0;
 
     // Process signal acceleration state
+    this.agentRunning = false;
     this.lastAgentRunning = null; // null = unknown (first tick)
     this.signalDetectedAt = 0; // When agentRunning transitioned false→true
 
@@ -104,6 +109,7 @@ export class HeartbeatEngine {
     this.lastUserMessageRecoveryAt = 0; // Last time user message triggered early recovery
     this.cooldownTimer = null;
     this.postRestartProbeTimer = null;
+    this.maintenanceTimer = null;
 
     // API error detection throttle
     this._lastApiErrorScanAt = 0; // Last time tmux pane was scanned for API errors
@@ -116,6 +122,38 @@ export class HeartbeatEngine {
 
   get health() {
     return this.healthState;
+  }
+
+  start() {
+    if (this.maintenanceTimer) return;
+    this.maintenanceTimer = setInterval(() => {
+      try {
+        this.processHeartbeat(this.agentRunning, Math.floor(this.now() / 1000));
+      } catch (err) {
+        this.deps.log(`HealthEngine maintenance error: ${err?.message || err}`);
+      }
+    }, this.maintenanceIntervalMs);
+    if (typeof this.maintenanceTimer.unref === 'function') {
+      this.maintenanceTimer.unref();
+    }
+  }
+
+  stop() {
+    if (this.maintenanceTimer) {
+      clearInterval(this.maintenanceTimer);
+      this.maintenanceTimer = null;
+    }
+    this._clearRateLimitCooldownTimer();
+    this._clearPostRestartProbeTimer();
+  }
+
+  destroy() {
+    this.stop();
+  }
+
+  setAgentRunning(agentRunning, currentTime = Math.floor(this.now() / 1000)) {
+    this.agentRunning = Boolean(agentRunning);
+    this._trackAgentRunning(this.agentRunning, currentTime);
   }
 
   setHealth(nextHealth, reason = '') {
@@ -137,6 +175,12 @@ export class HeartbeatEngine {
       }
     } else {
       this.unavailableSince = 0;
+    }
+    if (prevHealth === 'rate_limited' && nextHealth !== 'rate_limited') {
+      this._clearRateLimitCooldownTimer();
+    }
+    if (nextHealth === 'ok' || nextHealth === 'rate_limited') {
+      this._clearPostRestartProbeTimer();
     }
   }
 
@@ -668,7 +712,7 @@ export class HeartbeatEngine {
       } catch (err) {
         this.deps.log(`post-restart recovery probe failed: ${err?.message || err}`);
       }
-    }, this.userMessageCheckDelayMs);
+    }, this.postRestartProbeDelayMs);
     if (typeof this.postRestartProbeTimer.unref === 'function') {
       this.postRestartProbeTimer.unref();
     }

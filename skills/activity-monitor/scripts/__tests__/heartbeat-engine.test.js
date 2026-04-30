@@ -30,6 +30,50 @@ function createMockDeps() {
 }
 
 describe('HeartbeatEngine', () => {
+  describe('maintenance lifecycle', () => {
+    it('starts an internal maintenance loop and stop clears it', async () => {
+      const { deps, calls } = createMockDeps();
+      const engine = new HeartbeatEngine(deps, {
+        heartbeatInterval: 1,
+        maintenanceIntervalMs: 5,
+        now: () => Date.now()
+      });
+      engine.lastHeartbeatAt = 0;
+
+      engine.setAgentRunning(true);
+      engine.start();
+      await new Promise(resolve => setTimeout(resolve, 20));
+      engine.stop();
+      const countAfterStop = calls.enqueueHeartbeat.length;
+      await new Promise(resolve => setTimeout(resolve, 15));
+
+      assert.ok(countAfterStop >= 1);
+      assert.equal(calls.enqueueHeartbeat.length, countAfterStop);
+      assert.equal(engine.maintenanceTimer, null);
+    });
+
+    it('destroy clears maintenance and recovery timers', () => {
+      const { deps } = createMockDeps();
+      const engine = new HeartbeatEngine(deps, {
+        maintenanceIntervalMs: 100,
+        now: () => 1000
+      });
+
+      engine.start();
+      engine.enterRateLimited(2000, 'later');
+      engine.onProcessRestarted(1000);
+      assert.ok(engine.maintenanceTimer);
+      assert.ok(engine.cooldownTimer);
+      assert.ok(engine.postRestartProbeTimer);
+
+      engine.destroy();
+
+      assert.equal(engine.maintenanceTimer, null);
+      assert.equal(engine.cooldownTimer, null);
+      assert.equal(engine.postRestartProbeTimer, null);
+    });
+  });
+
   describe('primary heartbeat', () => {
     it('enqueues after HEARTBEAT_INTERVAL elapsed', () => {
       const { deps, calls } = createMockDeps();
@@ -868,7 +912,7 @@ describe('HeartbeatEngine', () => {
 
     it('runs the post-restart probe without a monitor tick', async () => {
       const { deps, calls } = createMockDeps();
-      const engine = new HeartbeatEngine(deps, { initialHealth: 'unavailable', userMessageCheckDelayMs: 0 });
+      const engine = new HeartbeatEngine(deps, { initialHealth: 'unavailable', postRestartProbeDelayMs: 0 });
 
       engine.onProcessRestarted(200);
       await new Promise(resolve => setTimeout(resolve, 0));
