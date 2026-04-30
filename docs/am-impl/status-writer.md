@@ -23,7 +23,7 @@
 - 将 HealthEngine 内部状态投射为 public health（例如 `recovering` / `down` → `unavailable`）
 - 追加 `unavailable_reason`、`unavailable_since`、rate limit 字段
 
-ActivityState projection 尚未迁入 StatusWriter。当前 activity source 选择、busy/idle 判断、API hook merge、tool/watchdog/foreground 字段聚合仍在 `MonitorOrchestrator` 和 `activity-monitor.js` 的 payload builder 中完成。后续若补 `SignalStore` / projection 边界，应先明确 StatusWriter 是否只负责文件输出，还是同时拥有 public status projection。
+ActivityState projection 尚未迁入 StatusWriter。当前 activity source 选择、busy/idle 判断、API hook merge、tool/watchdog/foreground 字段聚合仍在 `MonitorOrchestrator` 和 `monitor.js` 的 payload builder 中完成。后续若补 `SignalStore` / projection 边界，应先明确 StatusWriter 是否只负责文件输出，还是同时拥有 public status projection。
 
 ## 2. 组件设计
 

@@ -15,13 +15,13 @@
 
 ## 当前实现结构
 
-AM 仍以 `activity-monitor.js` 为入口和副作用壳。HealthEngine、Guardian、MessageRouter、MonitorOrchestrator、ProcSampler、TaskScheduler、ToolPipeline、tool-watchdog、tool-lifecycle、tool-event-stream、tool-rules、status-writer 已拆为独立模块。
+AM 现在以 `activity-monitor.js` 作为兼容薄入口，实际启动和主循环在 `monitor.js`。HealthEngine、Guardian、MessageRouter、MonitorOrchestrator、ProcSampler、TaskScheduler、ToolPipeline、tool-watchdog、tool-lifecycle、tool-event-stream、tool-rules、status-writer 已拆为独立模块。
 
 当前实现与目标结构的主要差异：
-- 未创建 `monitor.js` 入口；`activity-monitor.js` 仍负责启动和接回 module-level state
+- `monitor.js` 已创建并承载启动和 module-level state handoff；`activity-monitor.js` 仅 re-export/route 入口以兼容 PM2 配置
 - 未独立落地 `SignalStore`
-- 未创建 `scripts/tasks/` 目录；任务定义仍在 `activity-monitor.js` 内联组装
-- 未创建 AM 本地 `scripts/adapters/` 目录；runtime adapter 在 CLI runtime 层提供
+- `scripts/tasks/` 已创建；当前由 `tasks/activity-monitor-tasks.js` 持有 6 个 TaskScheduler task definitions，state 读写和 C4 enqueue side effects 仍从 `monitor.js` 注入
+- AM 本地 `scripts/adapters/` 已创建；当前 `adapters/runtime-components.js` 只归拢 runtime-adjacent factory glue，真正 RuntimeAdapter 仍由 CLI runtime 层提供
 - `status-writer.js` 是薄写入/helper 模块，完整 ActivityState projection 仍在 Orchestrator / payload builder
 
 ## 目标结构（对齐顶层设计 §4.1）
@@ -43,15 +43,9 @@ activity-monitor/scripts/
 ├── context-monitor.js         # Hook：上下文监控（已独立）
 ├── session-start-prompt.js    # Hook：会话启动注入（已独立）
 ├── tasks/                     # 注册式定时任务
-│   ├── daily-upgrade.js
-│   ├── daily-memory-commit.js
-│   ├── upgrade-check.js
-│   ├── health-check.js
-│   ├── usage-monitor.js
-│   └── context-check.js
-└── adapters/                  # 运行时适配器
-    ├── claude.js
-    └── codex.js
+│   └── activity-monitor-tasks.js
+└── adapters/                  # AM-local runtime-adjacent factory glue
+    └── runtime-components.js
 ```
 
 ## 改动原则

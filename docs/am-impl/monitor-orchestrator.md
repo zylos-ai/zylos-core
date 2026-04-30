@@ -16,7 +16,7 @@
 
 ### 当前实现状态
 
-当前实现采用更保守的迁移形态：`activity-monitor.js` 仍是入口和副作用壳，`MonitorOrchestrator` 负责启动组装和 tick sequencing。状态文件写入、watchdog 持久化、C4 interrupt enqueue、HealthEngine recovery action 等副作用通过回调注入，避免在同一轮迁移中改变 ToolWatchdog restart/recovery 语义。
+当前实现采用更保守的迁移形态：`activity-monitor.js` 是兼容薄入口，`monitor.js` 是启动和副作用壳，`MonitorOrchestrator` 负责启动组装和 tick sequencing。状态文件写入、watchdog 持久化、C4 interrupt enqueue、HealthEngine recovery action 等副作用通过回调注入，避免在同一轮迁移中改变 ToolWatchdog restart/recovery 语义。
 
 `MonitorOrchestrator` 当前不只是纯组装层。它还承担 ActivityState projection 相关逻辑，包括 activity source 选择、API activity summary/merge、running/stopped/offline 分支编排、ToolPipeline / ToolWatchdog / ProcSampler / TaskScheduler 顺序协调。这些逻辑后续可再提取为 `SignalStore + ActivityState projection` 边界；本轮不做大搬迁。
 
@@ -191,16 +191,15 @@ Monitor Orchestrator 持有并驱动大部分 runtime 组件：
 
 | 现有位置 | 内容 |
 |---------|------|
-| `activity-monitor.js:2144-2305` | `init()` — 完整初始化流程 |
-| `activity-monitor.js:1803-2141` | `monitorLoop()` — 完整 tick 循环 |
-| `activity-monitor.js:2307-2324` | 入口：init + self-scheduling loop |
-| `activity-monitor.js` 全局变量 | 所有组件状态、全局 flag |
+| `monitor.js` | `init()`、`monitorLoop()`、self-scheduling loop、module-level state handoff |
+| `activity-monitor.js` | 兼容薄入口，import `monitor.js` |
+| `monitor-orchestrator.js` | startup assembly 和 tick sequencing |
 
 ### 实施步骤
 
-1. 未创建 `scripts/monitor.js`；当前入口仍是 `activity-monitor.js`
+1. 已创建 `scripts/monitor.js`；`activity-monitor.js` 仅保留为兼容薄入口
 2. 已将 adapter 创建、组件实例化、状态恢复、IPC server 启动的主要编排迁入 `MonitorOrchestrator.start()`
 3. 已将 `monitorLoop()` 的 tick sequencing 迁入 `MonitorOrchestrator.handleMonitorTick()`
-4. 部分全局状态已收拢到 Orchestrator components；`runtimeLaunchAtMs` / `lastState` / `idleSince` / `watchdogState` 仍由 `activity-monitor.js` 接回以保持兼容边界
+4. 部分全局状态已收拢到 Orchestrator components；`runtimeLaunchAtMs` / `lastState` / `idleSince` / `watchdogState` 仍由 `monitor.js` 接回以保持兼容边界
 5. 已消费 ToolWatchdog 返回的 state mutation intent：`clearWatchdogState` 清除 `tool-watchdog-state.json`，`nextWatchdogState` atomic write `tool-watchdog-state.json`，并同步 in-memory watchdog state
-6. 副作用仍通过注入回调保留在 `activity-monitor.js`，后续若继续收敛需单独评估 watchdog/recovery 语义
+6. 副作用仍通过注入回调保留在 `monitor.js`，后续若继续收敛需单独评估 watchdog/recovery 语义

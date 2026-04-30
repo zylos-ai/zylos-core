@@ -18,7 +18,7 @@
 
 `scripts/task-scheduler.js` 已提取统一调度框架，支持 daily 和 interval task，并由 task definition 自己持有 state 读写逻辑。
 
-任务定义尚未拆到 `scripts/tasks/` 目录。当前 daily-upgrade、daily-memory-commit、upgrade-check、health-check、usage-monitor、usage-alert、context-check 等任务仍在 `activity-monitor.js` 初始化阶段内联组装，再传入 `TaskScheduler`。这保留了既有 gate、state file、C4 enqueue 行为，避免在同一轮迁移中同时改变任务边界和调度语义。
+任务定义已拆到 `scripts/tasks/activity-monitor-tasks.js`。当前 daily-upgrade、daily-memory-commit、daily-upgrade-check、health-check、usage-monitor、usage-alert 6 个 task 在该模块内注册，再由 `monitor.js` 注入 state file 读写、C4 enqueue、usage monitor 等 side-effect callbacks。这保留了既有 gate、state file、C4 enqueue 行为，只改变结构边界。
 
 ## 2. 组件设计
 
@@ -202,14 +202,14 @@ interface TaskDefinition {
 | `scripts/usage-check-engine.js`（36行） | usage check 初始化逻辑 |
 | `scripts/usage-monitor-file-reader.js`（144行） | Claude usage 文件读取 |
 | `scripts/usage-codex-rollout-reader.js`（151行） | Codex usage 读取 |
-| `activity-monitor.js:2131-2141` | tick 中的任务调度调用 |
-| `activity-monitor.js:2199-2247` | init 中的 DailySchedule 实例化 |
-| `activity-monitor.js:1680-1801` | `maybeCheckUsage()` 完整 usage monitor 逻辑 |
+| `monitor.js` | tick 中的任务调度调用和 side-effect callbacks |
+| `scripts/tasks/activity-monitor-tasks.js` | 6 个 TaskScheduler task definitions |
+| `usage-monitor.js` | usage monitor 逻辑 |
 
 ### 实施步骤
 
 1. 已创建 `scripts/task-scheduler.js`，实现统一的 daily + interval 调度框架
-2. 未创建 `scripts/tasks/` 目录；任务定义仍在 `activity-monitor.js` 内联组装
+2. 已创建 `scripts/tasks/` 目录；任务定义在 `activity-monitor-tasks.js` 中注册，side effects 仍从 `monitor.js` 注入
 3. 内联任务对象符合 `TaskDefinition` shape
 4. 已合并 daily 和 interval 调度逻辑为统一框架
 5. usage-monitor 和 usage-alert 已按 D-26 拆为两个独立任务

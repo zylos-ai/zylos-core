@@ -38,7 +38,8 @@
 ```
 activity-monitor/scripts/
 ├── message-router.js          # MessageRouter class + IPC handler
-└── activity-monitor.js        # 当前入口；通过 Orchestrator 启动 IPC server 并挂载 router
+├── monitor.js                 # 当前主入口；通过 Orchestrator 启动 IPC server 并挂载 router
+└── activity-monitor.js        # PM2 兼容薄入口，import monitor.js
 ```
 
 `c4-receive.js` 位于 C4 组件内，按本文件的 IPC contract 调用 AM Process。
