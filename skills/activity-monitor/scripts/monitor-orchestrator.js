@@ -1,4 +1,8 @@
 import fs from 'fs';
+import {
+  WATCHDOG_INTERRUPT_AVAILABLE_IN_SEC,
+  evaluateToolWatchdogTransition,
+} from './tool-watchdog.js';
 
 export class MonitorOrchestrator {
   constructor(deps) {
@@ -274,6 +278,65 @@ export class MonitorOrchestrator {
     const nextApiActivity = toolPipeline.buildApiActivity(foregroundIdentity, currentTmuxClaudePid);
     toolPipeline.writeApiActivitySnapshot(nextApiActivity);
     return nextApiActivity;
+  }
+
+  evaluateToolWatchdog({
+    nowMs,
+    foregroundIdentity,
+    apiActivity,
+    interactiveState,
+    watchdogState,
+    canTreatPaneAsRecovered,
+    runC4Control,
+    clearWatchdogState,
+    writeWatchdogState,
+  }) {
+    if (!this.components) {
+      throw new Error('MonitorOrchestrator.start() must be called before evaluateToolWatchdog()');
+    }
+
+    const { engine, toolPipeline } = this.components;
+    const state = {
+      watchdogState,
+      engineHealth: engine.health,
+    };
+
+    const phase = evaluateToolWatchdogTransition({
+      nowMs,
+      foregroundIdentity,
+      apiActivity,
+      interactiveState,
+      state,
+      deps: {
+        canTreatPaneAsRecovered,
+        getRuleById: (ruleId) => toolPipeline.getRuleById(ruleId),
+        clearWatchdogState: () => {
+          state.watchdogState = null;
+          this.components.watchdogState = null;
+          clearWatchdogState();
+        },
+        writeWatchdogState: () => {
+          this.components.watchdogState = state.watchdogState;
+          writeWatchdogState(state.watchdogState);
+        },
+        applySyntheticClearHint: (sessionId, pid, reason, eventNowMs) => {
+          toolPipeline.applySyntheticClearHint(sessionId, pid, reason, eventNowMs);
+        },
+        enqueueInterrupt: (interruptKey) => runC4Control([
+          'enqueue',
+          '--content', `[KEYSTROKE]${interruptKey}`,
+          '--priority', '0',
+          '--bypass-state',
+          '--available-in', String(WATCHDOG_INTERRUPT_AVAILABLE_IN_SEC),
+          '--no-ack-suffix',
+        ]),
+        triggerRecovery: (reason) => engine.triggerRecovery(reason),
+        log: this.deps.log,
+      },
+    });
+
+    this.components.watchdogState = state.watchdogState;
+    return phase;
   }
 
   handleProcSampler({ currentTime, confirmedActive }) {

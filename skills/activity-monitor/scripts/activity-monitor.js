@@ -143,10 +143,6 @@ import { ProcSampler } from './proc-sampler.js';
 import { canTreatPaneAsRecovered, ToolPipeline } from './tool-pipeline.js';
 import { readInitialStatus, writeStatus } from './status-writer.js';
 import { getToolRules } from './tool-rules.js';
-import {
-  WATCHDOG_INTERRUPT_AVAILABLE_IN_SEC,
-  evaluateToolWatchdogTransition
-} from './tool-watchdog.js';
 import { readTmuxInputState } from '../../comm-bridge/scripts/tmux-input-state.js';
 // activity-monitor runs as a deployed skill at ~/zylos/.claude/skills/activity-monitor/scripts/.
 // A relative import to cli/lib/runtime/ resolves correctly in the repo (dev) but NOT from
@@ -680,47 +676,20 @@ function clearWatchdogState() {
 }
 
 function evaluateToolWatchdog({ nowMs, foregroundIdentity, apiActivity, interactiveState }) {
-  const state = {
-    watchdogState,
-    engineHealth: engine.health,
-  };
-
-  const phase = evaluateToolWatchdogTransition({
+  return orchestrator.evaluateToolWatchdog({
     nowMs,
     foregroundIdentity,
     apiActivity,
     interactiveState,
-    state,
-    deps: {
-      canTreatPaneAsRecovered,
-      getRuleById: (ruleId) => toolPipeline.getRuleById(ruleId),
-      clearWatchdogState: () => {
-        watchdogState = null;
-        state.watchdogState = null;
-        writeWatchdogState();
-      },
-      writeWatchdogState: () => {
-        watchdogState = state.watchdogState;
-        writeWatchdogState();
-      },
-      applySyntheticClearHint: (sessionId, pid, reason, eventNowMs) => {
-        toolPipeline.applySyntheticClearHint(sessionId, pid, reason, eventNowMs);
-      },
-      enqueueInterrupt: (interruptKey) => runC4Control([
-        'enqueue',
-        '--content', `[KEYSTROKE]${interruptKey}`,
-        '--priority', '0',
-        '--bypass-state',
-        '--available-in', String(WATCHDOG_INTERRUPT_AVAILABLE_IN_SEC),
-        '--no-ack-suffix'
-      ]),
-      triggerRecovery: (reason) => engine.triggerRecovery(reason),
-      log,
-    }
+    watchdogState,
+    canTreatPaneAsRecovered,
+    runC4Control,
+    clearWatchdogState,
+    writeWatchdogState: (nextWatchdogState) => {
+      watchdogState = nextWatchdogState;
+      writeWatchdogState();
+    },
   });
-
-  watchdogState = state.watchdogState;
-  return phase;
 }
 
 function sendRecoveryNotice(channel, endpoint) {

@@ -17,7 +17,7 @@ describe('MonitorOrchestrator', () => {
     const config = { runtime: 'codex' };
     const toolPipeline = overrides.toolPipeline ?? { id: 'toolPipeline' };
     const toolRules = { id: 'toolRules' };
-    const watchdogState = { id: 'watchdogState' };
+    const watchdogState = overrides.watchdogState ?? { id: 'watchdogState' };
     const procSampler = overrides.procSampler ?? { id: 'procSampler' };
     const usageMonitor = {
       id: 'usageMonitor',
@@ -616,6 +616,92 @@ describe('MonitorOrchestrator', () => {
     assert.deepEqual(calls, [
       ['buildApiActivity', { source: 'session' }, 1234],
       ['writeApiActivitySnapshot', refreshedApiActivity],
+    ]);
+  });
+
+  it('evaluates ToolWatchdog transitions through injected adapters', () => {
+    const calls = [];
+    let persistedWatchdogState = null;
+    const toolPipeline = {
+      getRuleById: (ruleId) => {
+        calls.push(['toolPipeline.getRuleById', ruleId]);
+        return {
+          watchdog: {
+            enabled: true,
+            maxRuntimeSec: 10,
+            interruptKey: 'Escape',
+            interruptGraceSec: 5,
+            cooldownSec: 30,
+            escalation: 'guardian',
+          },
+        };
+      },
+      applySyntheticClearHint: (...args) => calls.push(['toolPipeline.applySyntheticClearHint', ...args]),
+    };
+    const { orchestrator } = createHarness({
+      toolPipeline,
+      watchdogState: null,
+      engine: {
+        health: 'ok',
+        start: () => calls.push(['engine.start']),
+        triggerRecovery: (reason) => calls.push(['engine.triggerRecovery', reason]),
+      },
+      initialHealth: 'ok',
+      log: (message) => calls.push(['log', message]),
+    });
+    orchestrator.start();
+    calls.length = 0;
+
+    const phase = orchestrator.evaluateToolWatchdog({
+      nowMs: 20_000,
+      foregroundIdentity: {
+        trusted: true,
+        sessionId: 'session-1',
+        claudePid: 123,
+      },
+      apiActivity: {
+        watchdog_candidate_tool: {
+          event_id: 'event-1',
+          name: 'WebFetch',
+          rule_id: 'web',
+          started_at: 1_000,
+        },
+      },
+      interactiveState: { kind: 'busy' },
+      watchdogState: null,
+      canTreatPaneAsRecovered: () => false,
+      runC4Control: (args) => {
+        calls.push(['runC4Control', args]);
+        return { ok: true, output: '' };
+      },
+      clearWatchdogState: () => {
+        persistedWatchdogState = null;
+        calls.push(['clearWatchdogState']);
+      },
+      writeWatchdogState: (nextWatchdogState) => {
+        persistedWatchdogState = nextWatchdogState;
+        calls.push(['writeWatchdogState', nextWatchdogState]);
+      },
+    });
+
+    assert.equal(phase.watchdog_phase, 'interrupt_sent');
+    assert.equal(phase.watchdog_block_reason, null);
+    assert.equal(persistedWatchdogState.episode_key, 'event-1');
+    assert.deepEqual(calls, [
+      ['toolPipeline.getRuleById', 'web'],
+      ['runC4Control', [
+        'enqueue',
+        '--content',
+        '[KEYSTROKE]Escape',
+        '--priority',
+        '0',
+        '--bypass-state',
+        '--available-in',
+        '1',
+        '--no-ack-suffix',
+      ]],
+      ['writeWatchdogState', persistedWatchdogState],
+      ['log', 'Tool watchdog: sent Escape for WebFetch (session=session-1)'],
     ]);
   });
 
