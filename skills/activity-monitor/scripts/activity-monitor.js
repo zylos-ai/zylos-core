@@ -141,7 +141,6 @@ import { UsageMonitor } from './usage-monitor.js';
 import { ProcSampler } from './proc-sampler.js';
 import { canTreatPaneAsRecovered, ToolPipeline } from './tool-pipeline.js';
 import { readInitialStatus, writeStatus } from './status-writer.js';
-import { isRuntimeHeartbeatEnabled } from './heartbeat-config.js';
 import { getToolRules } from './tool-rules.js';
 import {
   WATCHDOG_INTERRUPT_AVAILABLE_IN_SEC,
@@ -216,21 +215,9 @@ const CONV_DIR = path.join(os.homedir(), '.claude', 'projects', ZYLOS_PATH);
 const INTERVAL = 1000;
 const IDLE_THRESHOLD = 3;
 const LOG_MAX_LINES = 500;
-// Heartbeat liveness config (v3)
-const HEARTBEAT_INTERVAL = 7200;     // 2 hours (safety-net; active_tools-stuck edge case fallback)
-const DOWN_DEGRADE_THRESHOLD = 3600; // 1 hour of continuous failure → enter DOWN
-const DOWN_RETRY_INTERVAL = 3600;    // 60 min periodic retry in DOWN state
-const SIGNAL_GRACE_PERIOD = 30;      // Wait 30s after agentRunning transitions before probing
 const RATE_LIMIT_DEFAULT_COOLDOWN = 3600;  // 1 hour default when reset time can't be parsed
 const USER_MESSAGE_RECOVERY_COOLDOWN = 60; // 1 min between user-message-triggered recoveries
 
-// Periodic probe config — 30 min end-to-end health verification.
-// ProcSampler (10s sampling) handles frozen-process detection; this probe catches cases
-// where the process is alive but functionally broken (e.g., stuck API errors, auth expired).
-// Previous 3-min interval caused excessive token consumption during idle periods.
-const PERIODIC_PROBE_INTERVAL = 1800; // 30 min — reduced from 3 min to cut idle token usage
-const LAUNCH_GRACE_PERIOD = 180;     // 3 min — skip periodic probes after fresh launch to allow initialization
-const API_ERROR_SCAN_INTERVAL = 15;  // seconds between proactive tmux API error scans
 const TOOL_EVENT_REORDER_WINDOW_MS = 2000;
 const STATUSLINE_LAUNCH_GUARD_MS = 5000;
 const STATUSLINE_ACTIVE_TOOL_CLEAR_GRACE_MS = 5000;
@@ -309,10 +296,6 @@ const DAILY_COMMIT_SCRIPT = path.join(__dirname, '..', '..', 'zylos-memory', 'sc
 let lastTruncateDay = '';
 let lastState = '';
 let idleSince = 0;
-let lastPeriodicProbeAt = 0;
-let lastLaunchAt = 0;
-let lastApiErrorScanAt = 0;
-let apiErrorConsecutiveHits = 0;  // consecutive scans that detected an API error
 let runtimeLaunchAtMs = 0;
 let toolRules = [];
 let watchdogState = null;
@@ -934,12 +917,10 @@ async function monitorLoop() {
   const guardianResult = await guardian.tick({ currentTime });
   runtimeLaunchAtMs = guardianResult.runtimeLaunchAtMs;
   if (guardianResult.attempted_restart) {
-    lastLaunchAt = Math.floor(runtimeLaunchAtMs / 1000);
     engine.onProcessRestarted(currentTime);
   }
 
   if (guardianResult.skippedForStartupGrace) {
-    engine.processHeartbeat(false, currentTime);
     return;
   }
 
@@ -990,7 +971,6 @@ async function monitorLoop() {
       }
     }
 
-    engine.processHeartbeat(false, currentTime);
     taskScheduler.tick({
       currentTime,
       health: engine.health,
@@ -1128,50 +1108,6 @@ async function monitorLoop() {
     }
   }
 
-  // Rate-limit detection is now handled inside HeartbeatEngine.onHeartbeatFailure
-  // via the detectRateLimit dep callback (dual-signal: heartbeat failure + tmux text).
-  // This eliminates false positives from conversation content matching rate-limit patterns.
-
-  // Periodic probe: 30-min end-to-end health check. Complementary to ProcSampler:
-  // ProcSampler detects frozen processes, periodic probe catches functional failures
-  // (API errors, auth expired, stuck prompts) where the process is alive but broken.
-  // Gated by heartbeatEnabled — disabled by default (same config as primary heartbeat).
-  // Skip during launch grace period — new sessions need time to initialize hooks/CLAUDE.md
-  // before they can respond to heartbeats.
-  if (engine.heartbeatEnabled && engine.health === 'ok') {
-    const withinGracePeriod = lastLaunchAt > 0 && (currentTime - lastLaunchAt) < LAUNCH_GRACE_PERIOD;
-    if (!withinGracePeriod && activeTools === 0 && (currentTime - lastPeriodicProbeAt) >= PERIODIC_PROBE_INTERVAL) {
-      const ok = engine.requestImmediateProbe('periodic_30min');
-      if (ok) lastPeriodicProbeAt = currentTime;
-    }
-  }
-
-  // Proactive API error scan: detect fatal API errors (e.g. 400 from corrupted image)
-  // in the tmux pane independently of heartbeat state. Requires 2 consecutive detections
-  // (30s apart) to avoid false positives from conversation content mentioning API errors.
-  // Skipped during launch grace period (session still initializing).
-  if (engine.health === 'ok' && engine.deps.detectApiError) {
-    const withinGrace = lastLaunchAt > 0 && (currentTime - lastLaunchAt) < LAUNCH_GRACE_PERIOD;
-    if (!withinGrace && (currentTime - lastApiErrorScanAt) >= API_ERROR_SCAN_INTERVAL) {
-      lastApiErrorScanAt = currentTime;
-      const apiError = engine.deps.detectApiError();
-      if (apiError.detected) {
-        apiErrorConsecutiveHits++;
-        if (apiErrorConsecutiveHits >= 2) {
-          log(`Proactive API error scan: "${apiError.pattern}" detected ${apiErrorConsecutiveHits} consecutive times. Killing session for restart.`);
-          engine.setHealth('unavailable', 'sticky_context_restart');
-          adapter.stop();
-          apiErrorConsecutiveHits = 0;
-        } else {
-          log(`Proactive API error scan: "${apiError.pattern}" detected (${apiErrorConsecutiveHits}/2, confirming on next scan)`);
-        }
-      } else {
-        apiErrorConsecutiveHits = 0;
-      }
-    }
-  }
-
-  engine.processHeartbeat(true, currentTime);
   taskScheduler.tick({
     currentTime,
     health: engine.health,
@@ -1196,7 +1132,6 @@ function init() {
   // Load the active runtime adapter (claude or codex, from config.json)
   adapter = getActiveAdapter();
   const config = readConfigObject();
-  const heartbeatEnabled = isRuntimeHeartbeatEnabled({ runtimeId: adapter.runtimeId, config });
   toolRules = getToolRules({ runtimeId: adapter.runtimeId, config });
   toolPipeline = new ToolPipeline({
     files: {
@@ -1234,18 +1169,9 @@ function init() {
   }, {
     initialHealth,
     initialReason: initialStatus.unavailable_reason || '',
-    heartbeatEnabled,
-    heartbeatInterval: HEARTBEAT_INTERVAL,
-    downDegradeThreshold: DOWN_DEGRADE_THRESHOLD,
-    downRetryInterval: DOWN_RETRY_INTERVAL,
-    signalGracePeriod: SIGNAL_GRACE_PERIOD,
     rateLimitDefaultCooldown: RATE_LIMIT_DEFAULT_COOLDOWN,
     userMessageRecoveryCooldown: USER_MESSAGE_RECOVERY_COOLDOWN
   });
-
-  if (!heartbeatEnabled && adapter.runtimeId === 'codex') {
-    log('Heartbeat: disabled for codex (set `zylos config set codex_heartbeat_enabled true` to re-enable)');
-  }
 
   guardian = new Guardian(adapter, {
     log,
@@ -1265,8 +1191,7 @@ function init() {
 
   // Rehydrate rate-limit state from persisted status file on PM2 restart
   if (initialHealth === 'rate_limited' && initialStatus.cooldown_until) {
-    engine.cooldownUntil = initialStatus.cooldown_until;
-    engine.rateLimitResetTime = initialStatus.rate_limit_reset || '';
+    engine.enterRateLimited(initialStatus.cooldown_until, initialStatus.rate_limit_reset || '');
   }
 
   startMessageRouterServer();

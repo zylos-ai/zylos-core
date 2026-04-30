@@ -866,6 +866,16 @@ describe('HeartbeatEngine', () => {
       assert.deepStrictEqual(calls.enqueueHeartbeat, ['post_restart']);
     });
 
+    it('runs the post-restart probe without a monitor tick', async () => {
+      const { deps, calls } = createMockDeps();
+      const engine = new HeartbeatEngine(deps, { initialHealth: 'unavailable', userMessageCheckDelayMs: 0 });
+
+      engine.onProcessRestarted(200);
+      await new Promise(resolve => setTimeout(resolve, 0));
+
+      assert.deepStrictEqual(calls.enqueueHeartbeat, ['post_restart']);
+    });
+
     it('does not schedule a post-restart probe while health is ok', () => {
       const { deps, calls } = createMockDeps();
       const engine = new HeartbeatEngine(deps, { signalGracePeriod: 5 });
@@ -989,6 +999,18 @@ describe('HeartbeatEngine', () => {
 
       engine.enterRateLimited(2000, '7am');
       engine.processHeartbeat(true, 2001);
+
+      assert.equal(calls.killTmuxSession, 1);
+      assert.equal(engine.health, 'unavailable');
+      assert.equal(engine.cooldownUntil, 0);
+    });
+
+    it('expires rate-limit cooldown without a monitor tick', async () => {
+      const { deps, calls } = createMockDeps();
+      const engine = new HeartbeatEngine(deps, { now: () => 1000 });
+
+      engine.enterRateLimited(1, '7am');
+      await new Promise(resolve => setTimeout(resolve, 0));
 
       assert.equal(calls.killTmuxSession, 1);
       assert.equal(engine.health, 'unavailable');

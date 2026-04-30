@@ -102,6 +102,8 @@ export class HeartbeatEngine {
     this.cooldownUntil = 0; // Epoch seconds when rate limit cooldown expires
     this.rateLimitResetTime = ''; // Human-readable reset time for display
     this.lastUserMessageRecoveryAt = 0; // Last time user message triggered early recovery
+    this.cooldownTimer = null;
+    this.postRestartProbeTimer = null;
 
     // API error detection throttle
     this._lastApiErrorScanAt = 0; // Last time tmux pane was scanned for API errors
@@ -162,6 +164,7 @@ export class HeartbeatEngine {
         this.cooldownUntil = cooldownUntil;
         this.rateLimitResetTime = resetTime || this.rateLimitResetTime;
         this.deps.log(`Rate limit cooldown extended to ${cooldownUntil} (${resetTime || 'unknown'})`);
+        this._scheduleRateLimitCooldown();
       }
       return;
     }
@@ -172,6 +175,7 @@ export class HeartbeatEngine {
     this.recoveringStartedAt = 0;
     this.signalDetectedAt = 0;
     this.setHealth('rate_limited', resetTime ? `resets at ${resetTime}` : `cooldown ${cooldownUntil - Math.floor(Date.now() / 1000)}s`);
+    this._scheduleRateLimitCooldown();
   }
 
   /**
@@ -203,6 +207,7 @@ export class HeartbeatEngine {
     if (this.healthState === 'rate_limited') {
       this.deps.log('User message triggered rate-limit recovery attempt');
       this.cooldownUntil = 0;
+      this._clearRateLimitCooldownTimer();
       return true;
     }
 
@@ -279,10 +284,7 @@ export class HeartbeatEngine {
       if (currentTime < this.cooldownUntil) {
         return;
       }
-      this.deps.log('Rate limit cooldown expired, transitioning to unavailable');
-      this.deps.killTmuxSession();
-      this.cooldownUntil = 0;
-      this.setHealth('unavailable', 'rate_limit_cooldown_expired');
+      this._expireRateLimitCooldown();
       // Guardian will now restart Claude since health !== 'rate_limited'
       return;
     }
@@ -350,6 +352,8 @@ export class HeartbeatEngine {
     this.signalDetectedAt = 0;
     this.cooldownUntil = 0;
     this.rateLimitResetTime = '';
+    this._clearRateLimitCooldownTimer();
+    this._clearPostRestartProbeTimer();
     this.lastUserMessageRecoveryAt = 0;
     if (this.healthState !== 'ok') {
       this.setHealth('ok', `heartbeat_ack phase=${phase}`);
@@ -526,7 +530,7 @@ export class HeartbeatEngine {
     return ok;
   }
 
-  async runRecoveryProbe({ timeoutMs = 25000, pollIntervalMs = 1000 } = {}) {
+  async runRecoveryProbe({ phase = 'recovery', timeoutMs = 25000, pollIntervalMs = 1000 } = {}) {
     if (this.healthState === 'ok') {
       return { recovered: true };
     }
@@ -546,7 +550,7 @@ export class HeartbeatEngine {
 
     let pending = this.deps.readHeartbeatPending();
     if (!pending) {
-      const ok = this.enqueueHeartbeat('recovery');
+      const ok = this.enqueueHeartbeat(phase);
       if (!ok) {
         return { recovered: false, reason: this.healthReason || this.healthState, enqueueFailed: true };
       }
@@ -581,6 +585,7 @@ export class HeartbeatEngine {
 
     if (this.healthState !== 'ok') {
       this.signalDetectedAt = currentTime;
+      this._schedulePostRestartProbe();
     }
   }
 
@@ -620,6 +625,59 @@ export class HeartbeatEngine {
       return await this.deps.checkAuth();
     } catch (err) {
       return { ok: false, reason: err?.message || 'auth_check_failed' };
+    }
+  }
+
+  _scheduleRateLimitCooldown() {
+    this._clearRateLimitCooldownTimer();
+    if (this.healthState !== 'rate_limited' || this.cooldownUntil <= 0) return;
+
+    const delayMs = Math.max(0, (this.cooldownUntil * 1000) - this.now());
+    this.cooldownTimer = setTimeout(() => {
+      this.cooldownTimer = null;
+      this._expireRateLimitCooldown();
+    }, delayMs);
+    if (typeof this.cooldownTimer.unref === 'function') {
+      this.cooldownTimer.unref();
+    }
+  }
+
+  _clearRateLimitCooldownTimer() {
+    if (this.cooldownTimer) {
+      clearTimeout(this.cooldownTimer);
+      this.cooldownTimer = null;
+    }
+  }
+
+  _expireRateLimitCooldown() {
+    if (this.healthState !== 'rate_limited') return;
+    this.deps.log('Rate limit cooldown expired, transitioning to unavailable');
+    this.deps.killTmuxSession();
+    this.cooldownUntil = 0;
+    this._clearRateLimitCooldownTimer();
+    this.setHealth('unavailable', 'rate_limit_cooldown_expired');
+  }
+
+  _schedulePostRestartProbe() {
+    this._clearPostRestartProbeTimer();
+    this.postRestartProbeTimer = setTimeout(async () => {
+      this.postRestartProbeTimer = null;
+      if (this.healthState === 'ok') return;
+      try {
+        await this.runRecoveryProbe({ phase: 'post_restart' });
+      } catch (err) {
+        this.deps.log(`post-restart recovery probe failed: ${err?.message || err}`);
+      }
+    }, this.userMessageCheckDelayMs);
+    if (typeof this.postRestartProbeTimer.unref === 'function') {
+      this.postRestartProbeTimer.unref();
+    }
+  }
+
+  _clearPostRestartProbeTimer() {
+    if (this.postRestartProbeTimer) {
+      clearTimeout(this.postRestartProbeTimer);
+      this.postRestartProbeTimer = null;
     }
   }
 }
