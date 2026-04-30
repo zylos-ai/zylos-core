@@ -6,6 +6,8 @@
 
 import { execFileSync } from 'child_process';
 import { readFileSync, existsSync, statSync } from 'fs';
+import net from 'net';
+import path from 'path';
 import { logDeliveryFailure, saveTmuxCapture } from './c4-diagnostic.js';
 import {
   getNextPending,
@@ -44,6 +46,7 @@ import {
   REQUIRE_IDLE_EXECUTION_POLL_MS,
   ACTIVE_RUNTIME,
   TMUX_SESSION,
+  ACTIVITY_MONITOR_DIR,
   AGENT_STATUS_FILE,
   PROC_STATE_FILE,
   API_ACTIVITY_FILE,
@@ -60,6 +63,9 @@ let pollInterval = POLL_INTERVAL_BASE;
 let tmuxMissingChecks = 0;
 let lastControlCleanupMs = 0;
 
+const AM_SOCKET_PATH = path.join(ACTIVITY_MONITOR_DIR, 'am.sock');
+const NOTIFY_DELIVERED_TIMEOUT_MS = 5000;
+
 function log(message) {
   const timestamp = new Date().toISOString().replace('T', ' ').substring(0, 19);
   console.log(`[${timestamp}] ${message}`);
@@ -67,6 +73,36 @@ function log(message) {
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+export function notifyMessageDelivered({ conversationId, channel, deliveredAt = Date.now() } = {}) {
+  return new Promise((resolve) => {
+    const socket = net.createConnection(AM_SOCKET_PATH);
+    let settled = false;
+
+    function settle() {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      resolve();
+    }
+
+    socket.setTimeout(NOTIFY_DELIVERED_TIMEOUT_MS);
+    socket.on('connect', () => {
+      socket.write(`${JSON.stringify({
+        version: 1,
+        type: 'notify_delivered',
+        requestId: `dispatcher-${process.pid}-${deliveredAt}`,
+        conversationId,
+        channel,
+        deliveredAt,
+      })}\n`);
+    });
+    socket.on('data', () => {});
+    socket.on('end', settle);
+    socket.on('timeout', settle);
+    socket.on('error', settle);
+  });
 }
 
 function nowSeconds() {
@@ -667,6 +703,9 @@ async function processNextMessage() {
     if (item.type === 'conversation') {
       markDelivered(item.id);
       log(`Conversation id=${item.id} delivered`);
+      notifyMessageDelivered({ conversationId: item.id, channel: item.channel }).catch((err) => {
+        log(`Warning: failed to notify AM of message delivery: ${err.message}`);
+      });
     } else {
       if (hasAckSuffix(item.content || '')) {
         log(`Control id=${item.id} submitted, waiting ack`);

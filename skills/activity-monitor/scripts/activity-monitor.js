@@ -707,6 +707,13 @@ function startMessageRouterServer() {
       data = data.slice(newlineIndex + 1);
       try {
         const request = JSON.parse(raw);
+        if (request.type === 'notify_delivered') {
+          engine.onUserMessageDelivered().catch((err) => {
+            log(`HealthEngine onUserMessageDelivered error: ${err.message}`);
+          });
+          socket.end(`${JSON.stringify({ version: 1, type: 'ack', requestId: request.requestId })}\n`);
+          return;
+        }
         if (request.type !== 'route') {
           throw new Error(`unsupported request type: ${request.type}`);
         }
@@ -2240,6 +2247,7 @@ function init() {
     ...(adapter.getHeartbeatDeps() ?? {}),
     killTmuxSession: () => adapter.stop(),
     notifyPendingChannels,
+    checkAuth: () => adapter.checkAuth ? adapter.checkAuth() : { ok: true },
     log,
   }, {
     initialHealth,

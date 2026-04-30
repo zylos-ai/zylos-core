@@ -620,6 +620,96 @@ describe('HeartbeatEngine', () => {
     });
   });
 
+  describe('onUserMessageDelivered', () => {
+    it('does nothing when health is not ok', async () => {
+      const { deps, calls } = createMockDeps();
+      let rateLimitScans = 0;
+      deps.detectRateLimit = () => {
+        rateLimitScans++;
+        return { detected: true, cooldownUntil: 5000 };
+      };
+      const engine = new HeartbeatEngine(deps, {
+        initialHealth: 'recovering',
+        userMessageCheckDelayMs: 0
+      });
+
+      await engine.onUserMessageDelivered();
+
+      assert.equal(rateLimitScans, 0);
+      assert.equal(engine.health, 'recovering');
+      assert.equal(calls.killTmuxSession, 0);
+    });
+
+    it('enters rate_limited after two OK-path rate-limit detections', async () => {
+      const { deps } = createMockDeps();
+      deps.detectRateLimit = () => ({ detected: true, cooldownUntil: 5000, resetTime: '7am' });
+      const engine = new HeartbeatEngine(deps, { userMessageCheckDelayMs: 0 });
+
+      await engine.onUserMessageDelivered();
+      assert.equal(engine.health, 'ok');
+      assert.equal(engine.rateLimitConsecutiveHits, 1);
+
+      await engine.onUserMessageDelivered();
+      assert.equal(engine.health, 'rate_limited');
+      assert.equal(engine.cooldownUntil, 5000);
+    });
+
+    it('sets auth_failed when delivery-triggered auth check fails', async () => {
+      const { deps } = createMockDeps();
+      deps.detectRateLimit = () => ({ detected: false });
+      deps.detectAuthFailure = () => ({ detected: true, pattern: 'authentication_error' });
+      deps.checkAuth = async () => ({ ok: false, reason: 'cli_probe_authentication_error' });
+      const engine = new HeartbeatEngine(deps, { userMessageCheckDelayMs: 0 });
+
+      await engine.onUserMessageDelivered();
+
+      assert.equal(engine.health, 'auth_failed');
+      assert.equal(engine.healthReason, 'cli_probe_authentication_error');
+    });
+
+    it('kills the session after two sticky detections spaced by the debounce interval', async () => {
+      const { deps, calls } = createMockDeps();
+      let now = 1000;
+      deps.detectRateLimit = () => ({ detected: false });
+      deps.detectAuthFailure = () => ({ detected: false });
+      deps.checkAuth = async () => ({ ok: true });
+      deps.detectApiError = () => ({ detected: true, pattern: 'APIError: 400' });
+      const engine = new HeartbeatEngine(deps, {
+        userMessageCheckDelayMs: 0,
+        now: () => now
+      });
+
+      await engine.onUserMessageDelivered();
+      assert.equal(engine.health, 'ok');
+      assert.equal(calls.killTmuxSession, 0);
+
+      now += 30000;
+      await engine.onUserMessageDelivered();
+
+      assert.equal(engine.health, 'recovering');
+      assert.equal(engine.healthReason, 'sticky_context_restart');
+      assert.equal(calls.killTmuxSession, 1);
+    });
+
+    it('resets OK-path counters after a clean delivery check', async () => {
+      const { deps } = createMockDeps();
+      deps.detectRateLimit = () => ({ detected: false });
+      deps.detectAuthFailure = () => ({ detected: false });
+      deps.checkAuth = async () => ({ ok: true });
+      deps.detectApiError = () => ({ detected: false });
+      const engine = new HeartbeatEngine(deps, { userMessageCheckDelayMs: 0 });
+      engine.rateLimitConsecutiveHits = 1;
+      engine.stickyErrorConsecutiveHits = 1;
+      engine.lastStickyErrorHitAt = 1000;
+
+      await engine.onUserMessageDelivered();
+
+      assert.equal(engine.rateLimitConsecutiveHits, 0);
+      assert.equal(engine.stickyErrorConsecutiveHits, 0);
+      assert.equal(engine.lastStickyErrorHitAt, 0);
+    });
+  });
+
   describe('in-flight heartbeat handling', () => {
     it('processes stale pending normally even when primary heartbeat is disabled', () => {
       const { deps, calls } = createMockDeps();

@@ -29,13 +29,19 @@
  *   const probe = createCodexProbe({ pendingFile });
  */
 
-import { execFileSync } from 'node:child_process';
+import { execFileSync, execSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 
 const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
 const C4_CONTROL = path.join(ZYLOS_DIR, '.claude/skills/comm-bridge/scripts/c4-control.js');
+const AUTH_FAILURE_PATTERNS = [
+  /authentication failed/i,
+  /not logged in/i,
+  /invalid api key/i,
+  /unauthorized/i,
+];
 
 /**
  * Create a Codex CLI heartbeat probe.
@@ -49,6 +55,7 @@ const C4_CONTROL = path.join(ZYLOS_DIR, '.claude/skills/comm-bridge/scripts/c4-c
  */
 export function createCodexProbe({
   pendingFile,
+  tmuxSession = 'codex-main',
   ackDeadline = 300,
   stuckAckDeadline = 120,
   recoveryAckDeadline = 25,
@@ -120,6 +127,25 @@ export function createCodexProbe({
       return { detected: false };
     },
 
+    /**
+     * Detect auth-failure text in the Codex pane. HealthEngine verifies this
+     * with the adapter's live checkAuth probe before changing health state.
+     *
+     * @returns {{ detected: boolean, pattern?: string }}
+     */
+    detectAuthFailure() {
+      const pane = _captureTmuxPane(tmuxSession);
+      if (!pane) return { detected: false };
+
+      for (const p of AUTH_FAILURE_PATTERNS) {
+        const match = pane.match(p);
+        if (match) {
+          return { detected: true, pattern: match[0] };
+        }
+      }
+      return { detected: false };
+    },
+
     // ── Pending state management ─────────────────────────────────────────────
 
     /**
@@ -159,5 +185,13 @@ function _writePending(file, data) {
     return true;
   } catch {
     return false;
+  }
+}
+
+function _captureTmuxPane(session) {
+  try {
+    return execSync(`tmux capture-pane -p -t "${session}" 2>/dev/null`, { encoding: 'utf8' });
+  } catch {
+    return null;
   }
 }

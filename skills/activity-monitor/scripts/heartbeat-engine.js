@@ -28,6 +28,10 @@
  * the `deps` object so the class can be tested in isolation.
  */
 
+const USER_MESSAGE_CHECK_DELAY_MS = 5000;
+const CONSECUTIVE_HITS_THRESHOLD = 2;
+const STICKY_ERROR_MIN_INTERVAL_MS = 30000;
+
 export class HeartbeatEngine {
   /**
    * @param {object} deps - Injected dependencies
@@ -39,7 +43,10 @@ export class HeartbeatEngine {
    * @param {() => void} deps.notifyPendingChannels
    * @param {(message: string) => void} deps.log
    * @param {() => {detected: boolean, cooldownUntil?: number, resetTime?: string}} [deps.detectRateLimit]
+   * @param {() => {detected: boolean, pattern?: string}} [deps.detectAuthFailure]
    * @param {() => {detected: boolean, pattern?: string}} [deps.detectApiError]
+   * @param {() => Promise<{ok: boolean, reason?: string}>|{ok: boolean, reason?: string}} [deps.checkAuth]
+   * @param {(ms: number) => Promise<void>} [deps.sleep]
    * @param {object} [options]
    * @param {number} [options.heartbeatInterval=1800]
    * @param {number} [options.downDegradeThreshold=3600] - Seconds of continuous failure before entering DOWN
@@ -49,6 +56,8 @@ export class HeartbeatEngine {
    * @param {number} [options.userMessageRecoveryCooldown=60] - Min seconds between user-message-triggered recoveries
    * @param {string} [options.initialHealth='ok']
    * @param {boolean} [options.heartbeatEnabled=true]
+   * @param {number} [options.userMessageCheckDelayMs=5000]
+   * @param {() => number} [options.now]
    */
   constructor(deps, options = {}) {
     this.deps = deps;
@@ -59,6 +68,8 @@ export class HeartbeatEngine {
     this.rateLimitDefaultCooldown = options.rateLimitDefaultCooldown ?? 3600; // 1 hour
     this.userMessageRecoveryCooldown = options.userMessageRecoveryCooldown ?? 60; // 1 min
     this.heartbeatEnabled = options.heartbeatEnabled ?? true;
+    this.userMessageCheckDelayMs = options.userMessageCheckDelayMs ?? USER_MESSAGE_CHECK_DELAY_MS;
+    this.now = options.now ?? (() => Date.now());
 
     // Internal state
     this.healthState = options.initialHealth ?? 'ok';
@@ -82,6 +93,11 @@ export class HeartbeatEngine {
 
     // API error detection throttle
     this._lastApiErrorScanAt = 0; // Last time tmux pane was scanned for API errors
+
+    // OK-path detection debounce counters, advanced by dispatcher delivery notifications.
+    this.rateLimitConsecutiveHits = 0;
+    this.stickyErrorConsecutiveHits = 0;
+    this.lastStickyErrorHitAt = 0;
   }
 
   get health() {
@@ -417,6 +433,72 @@ export class HeartbeatEngine {
     return this.enqueueHeartbeat('stuck');
   }
 
+  /**
+   * Event-driven OK-path health detection. Called asynchronously after the C4
+   * dispatcher successfully delivers a user message to the runtime.
+   */
+  async onUserMessageDelivered() {
+    if (this.healthState !== 'ok') return;
+
+    if (this.userMessageCheckDelayMs > 0) {
+      await this._sleep(this.userMessageCheckDelayMs);
+    }
+    if (this.healthState !== 'ok') return;
+
+    const rateLimit = this.deps.detectRateLimit ? this.deps.detectRateLimit() : { detected: false };
+    if (rateLimit.detected) {
+      this.rateLimitConsecutiveHits += 1;
+      this.stickyErrorConsecutiveHits = 0;
+      this.lastStickyErrorHitAt = 0;
+      if (this.rateLimitConsecutiveHits >= CONSECUTIVE_HITS_THRESHOLD) {
+        this.rateLimitConsecutiveHits = 0;
+        const nowSec = Math.floor(this.now() / 1000);
+        this.enterRateLimited(rateLimit.cooldownUntil || nowSec + this.rateLimitDefaultCooldown, rateLimit.resetTime || '');
+      }
+      return;
+    }
+
+    const authFailure = this.deps.detectAuthFailure ? this.deps.detectAuthFailure() : { detected: false };
+    if (authFailure.detected) {
+      const authResult = await this._checkAuth();
+      if (authResult && authResult.ok === false) {
+        this.rateLimitConsecutiveHits = 0;
+        this.stickyErrorConsecutiveHits = 0;
+        this.lastStickyErrorHitAt = 0;
+        this.setHealth('auth_failed', authResult.reason || 'auth_check_failed');
+      } else {
+        this.rateLimitConsecutiveHits = 0;
+        this.stickyErrorConsecutiveHits = 0;
+        this.lastStickyErrorHitAt = 0;
+      }
+      return;
+    }
+
+    const stickyError = this.deps.detectApiError ? this.deps.detectApiError() : { detected: false };
+    if (stickyError.detected) {
+      this.stickyErrorConsecutiveHits += 1;
+      this.rateLimitConsecutiveHits = 0;
+      if (this.stickyErrorConsecutiveHits === 1) {
+        this.lastStickyErrorHitAt = this.now();
+      }
+      if (this.stickyErrorConsecutiveHits >= CONSECUTIVE_HITS_THRESHOLD) {
+        if ((this.now() - this.lastStickyErrorHitAt) < STICKY_ERROR_MIN_INTERVAL_MS) {
+          return;
+        }
+        this.stickyErrorConsecutiveHits = 0;
+        this.lastStickyErrorHitAt = 0;
+        this.deps.log(`sticky error 2x: ${stickyError.pattern || 'unknown'}, killing session`);
+        this.setHealth('recovering', 'sticky_context_restart');
+        this.deps.killTmuxSession();
+      }
+      return;
+    }
+
+    this.rateLimitConsecutiveHits = 0;
+    this.stickyErrorConsecutiveHits = 0;
+    this.lastStickyErrorHitAt = 0;
+  }
+
   /** Wrapper that updates lastHeartbeatAt on successful primary/stuck enqueue. */
   enqueueHeartbeat(phase) {
     const ok = this.deps.enqueueHeartbeat(phase);
@@ -485,5 +567,19 @@ export class HeartbeatEngine {
   _shouldAccelerate(currentTime) {
     if (this.signalDetectedAt === 0) return false;
     return (currentTime - this.signalDetectedAt) >= this.signalGracePeriod;
+  }
+
+  _sleep(ms) {
+    if (typeof this.deps.sleep === 'function') return this.deps.sleep(ms);
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  async _checkAuth() {
+    if (typeof this.deps.checkAuth !== 'function') return { ok: true };
+    try {
+      return await this.deps.checkAuth();
+    } catch (err) {
+      return { ok: false, reason: err?.message || 'auth_check_failed' };
+    }
   }
 }

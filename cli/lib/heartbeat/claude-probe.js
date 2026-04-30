@@ -44,6 +44,13 @@ const API_ERROR_PATTERNS = [
   /overloaded_error/,                                      // Anthropic overloaded
 ];
 
+const AUTH_FAILURE_PATTERNS = [
+  /authentication_error/i,
+  /auth(?:entication)? failed/i,
+  /invalid api key/i,
+  /unauthorized/i,
+];
+
 /**
  * Create a Claude Code heartbeat probe.
  *
@@ -144,6 +151,25 @@ export function createClaudeProbe({
       }
 
       return { detected: true, cooldownUntil, resetTime };
+    },
+
+    /**
+     * Detect auth-failure text in the tmux pane. HealthEngine verifies this
+     * with the adapter's live checkAuth probe before changing health state.
+     *
+     * @returns {{ detected: boolean, pattern?: string }}
+     */
+    detectAuthFailure() {
+      const pane = _captureTmuxPane(tmuxSession);
+      if (!pane) return { detected: false };
+
+      for (const p of AUTH_FAILURE_PATTERNS) {
+        const match = pane.match(p);
+        if (match) {
+          return { detected: true, pattern: match[0] };
+        }
+      }
+      return { detected: false };
     },
 
     /**
