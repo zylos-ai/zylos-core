@@ -478,9 +478,9 @@ function buildRunningStatus({
   };
 }
 
-function startMessageRouterServer() {
+function startMessageRouterServer(activeEngine) {
   const router = new MessageRouter({
-    healthEngine: engine,
+    healthEngine: activeEngine,
     cacheFile: MESSAGE_ROUTER_CACHE_FILE,
     log
   });
@@ -501,7 +501,7 @@ function startMessageRouterServer() {
       try {
         const request = JSON.parse(raw);
         if (request.type === 'notify_delivered') {
-          engine.onUserMessageDelivered().catch((err) => {
+          activeEngine.onUserMessageDelivered().catch((err) => {
             log(`HealthEngine onUserMessageDelivered error: ${err.message}`);
           });
           socket.end(`${JSON.stringify({ version: 1, type: 'ack', requestId: request.requestId })}\n`);

@@ -58,7 +58,7 @@ export class MonitorOrchestrator {
     }
     engine.start();
 
-    startMessageRouterServer();
+    startMessageRouterServer(engine);
 
     if (!readDailyUpgradeEnabled()) {
       log('Daily upgrade: disabled (set `zylos config set daily_upgrade_enabled true` to enable)');

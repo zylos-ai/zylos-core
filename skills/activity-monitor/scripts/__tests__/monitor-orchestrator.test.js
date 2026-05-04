@@ -61,7 +61,7 @@ describe('MonitorOrchestrator', () => {
         calls.push(['createGuardian', activeAdapter, activeToolPipeline, runtimeLaunchAtMs]);
         return guardian;
       },
-      startMessageRouterServer: () => calls.push(['startMessageRouterServer']),
+      startMessageRouterServer: (activeEngine) => calls.push(['startMessageRouterServer', activeEngine]),
       readDailyUpgradeEnabled: () => false,
       createUsageMonitor: (activeAdapter) => {
         calls.push(['createUsageMonitor', activeAdapter]);
@@ -154,6 +154,7 @@ describe('MonitorOrchestrator', () => {
       'log',
       'scheduleStaleRuntimeCleanup',
     ]);
+    assert.equal(calls.find(([name]) => name === 'startMessageRouterServer')[1], engine);
   });
 
   it('coordinates runtime liveness tick and restart signaling', async () => {
