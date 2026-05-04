@@ -319,8 +319,8 @@ async function installDeclarative(resolved, skillDir, skipConfirm, jsonOutput, b
       try {
         execSync('npm install --omit=dev', {
           cwd: skillDir,
-          stdio: 'pipe',
-          timeout: 120000,
+          stdio: jsonOutput ? 'pipe' : 'inherit',
+          timeout: 300000,
         });
         if (!jsonOutput) console.log(`  ${success('npm install complete.')}`);
       } catch (err) {
