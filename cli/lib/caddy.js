@@ -36,7 +36,7 @@ export function isCaddyAvailable() {
  * @param {Array} httpRoutes - Array of { path, type, target, strip_prefix? }
  * @returns {string} Caddy configuration block (indented for domain block)
  */
-function generateRouteBlocks(httpRoutes) {
+export function generateRouteBlocks(httpRoutes) {
   const lines = [];
   for (const route of httpRoutes) {
     if (route.type === 'reverse_proxy') {
@@ -49,7 +49,13 @@ function generateRouteBlocks(httpRoutes) {
       if (route.strip_prefix) {
         lines.push(`        uri strip_prefix ${route.strip_prefix}`);
       }
-      lines.push(`        reverse_proxy ${route.target}`);
+      if (route.strip_prefix) {
+        lines.push(`        reverse_proxy ${route.target} {`);
+        lines.push(`            header_up X-Forwarded-Prefix ${route.strip_prefix}`);
+        lines.push('        }');
+      } else {
+        lines.push(`        reverse_proxy ${route.target}`);
+      }
       lines.push(`    }`);
     }
   }

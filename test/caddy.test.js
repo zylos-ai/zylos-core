@@ -1,5 +1,6 @@
 import { describe, test, expect } from '@jest/globals';
 import { isLocalAddress } from '../cli/commands/init.js';
+import { generateRouteBlocks } from '../cli/lib/caddy.js';
 
 describe('isLocalAddress', () => {
   // Positive cases — should return true
@@ -93,5 +94,33 @@ describe('isLocalAddress', () => {
 
   test('public IPv6', () => {
     expect(isLocalAddress('2001:db8::1')).toBe(false);
+  });
+});
+
+describe('generateRouteBlocks', () => {
+  test('adds X-Forwarded-Prefix for stripped reverse proxy routes', () => {
+    const block = generateRouteBlocks([{
+      path: '/recruit/*',
+      type: 'reverse_proxy',
+      target: 'localhost:3465',
+      strip_prefix: '/recruit',
+    }]);
+
+    expect(block).toContain('    redir /recruit /recruit/ permanent');
+    expect(block).toContain('        uri strip_prefix /recruit');
+    expect(block).toContain('        reverse_proxy localhost:3465 {');
+    expect(block).toContain('            header_up X-Forwarded-Prefix /recruit');
+  });
+
+  test('keeps simple reverse proxy routes as single-line directives', () => {
+    const block = generateRouteBlocks([{
+      path: '/api/*',
+      type: 'reverse_proxy',
+      target: 'localhost:3000',
+    }]);
+
+    expect(block).toContain('        reverse_proxy localhost:3000');
+    expect(block).not.toContain('header_up X-Forwarded-Prefix');
+    expect(block).not.toContain('reverse_proxy localhost:3000 {');
   });
 });
