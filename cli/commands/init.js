@@ -864,8 +864,8 @@ function installSkillDependencies() {
       console.log(`  ${cyan(`Installing ${bold(entry.name)} dependencies...`)}`);
       execSync('npm install --production', {
         cwd: skillDir,
-        stdio: 'pipe',
-        timeout: 120000,
+        stdio: 'inherit',
+        timeout: 300000,
       });
     } catch {
       console.log(`  ${warn(`Failed to install ${bold(entry.name)} dependencies`)}`);
