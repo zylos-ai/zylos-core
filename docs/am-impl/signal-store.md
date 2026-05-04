@@ -1,5 +1,7 @@
 # SignalStore
 
+> **当前实现状态：deferred / 未独立落地。** 顶层设计中的 SignalStore 仍是目标架构；`cecd498` 当前实现尚未提供 `scripts/signal-store.js`，也尚未在 tick 开头生成统一 immutable snapshot。现有读取仍由 Orchestrator、ToolPipeline、StatusWriter 相关路径分别完成，并通过显式参数传递保持模块边界。补齐 SignalStore 需要单独迁移这些读取路径和 ToolPipeline 流式 cursor 语义。
+
 ## 1. 组件定义
 
 > 来源：顶层设计 §3.1

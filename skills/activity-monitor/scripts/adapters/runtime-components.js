@@ -35,7 +35,6 @@ export function createToolPipeline(activeAdapter, config, {
 }
 
 export function createHealthEngine(activeAdapter, initialStatus, {
-  notifyPendingChannels,
   log,
   rateLimitDefaultCooldown,
   userMessageRecoveryCooldown,
@@ -43,7 +42,6 @@ export function createHealthEngine(activeAdapter, initialStatus, {
   return new HealthEngine({
     ...(activeAdapter.getHeartbeatDeps() ?? {}),
     killTmuxSession: () => activeAdapter.stop(),
-    notifyPendingChannels,
     checkAuth: () => activeAdapter.checkAuth ? activeAdapter.checkAuth() : { ok: true },
     log,
   }, {

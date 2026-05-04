@@ -353,3 +353,60 @@ Monitor Orchestrator 是 ToolWatchdog episode 状态的落盘责任方：
 | task-scheduler.md §3 | 改动类型从"纯提取"改为"提取 + 行为变更"，补 D-26/D-27 migration 说明 | 标注不准确 |
 | README.md | TaskScheduler 改动类型从"纯提取"改为"提取 + 行为变更" | 同上 |
 | monitor-orchestrator.md | 初始化流程"DailySchedule × 3" → TaskScheduler 统一注册 | 表述未统一 |
+
+---
+
+## 6. 当前实现偏差记录（cecd498 scope）
+
+本节只记录当前实现相对顶层目标的 staged 偏差和理由，不修改 `activity-monitor-design.md` 的顶层决策。
+
+### 6.1 SignalStore deferred
+
+顶层设计要求 tick 开头由 SignalStore 统一读取 signal files 并生成 immutable snapshot。`cecd498` 当前未独立实现 `scripts/signal-store.js`；读取仍分散在 Orchestrator callbacks、ToolPipeline、StatusWriter 相关路径中。
+
+这是 staged 偏差。原因是 ToolPipeline 的流式 cursor、api-activity dirty refresh、foreground/statusline 读取与现有 tick 编排耦合较深，同轮迁移会扩大行为风险。当前 contract 是：子模块不得修改传入 snapshot；跨模块状态继续通过显式返回值和 Orchestrator 聚合传递。完整 SignalStore 落地需后续单独迁移。
+
+### 6.2 当前 tick 顺序
+
+顶层 D-4 描述的是目标 7 步顺序。`cecd498` 当前实际顺序为：
+
+```text
+Guardian → ToolPipeline → ToolWatchdog → ProcSampler → StatusWriter → TaskScheduler
+```
+
+not-running 分支会提前写入 stopped/offline 状态并跳过 running-state 组件。
+
+这是有意的 staged 顺序。ProcSampler 放在 ToolPipeline 之后，是因为 freeze 判定需要本 tick 的 API activity / active tool summary；这些信号由 ToolPipeline 先归一化。若把 ProcSampler 提前到 ToolPipeline 之前，会只能看到上一 tick 的 active-tools 信号，可能改变 freeze 抑制语义。TaskScheduler 当前放在 StatusWriter 之后执行，使用本 tick 计算出的 state、idleSeconds、health gate 来触发 maintenance task。
+
+### 6.3 HealthEngine public state 与 internal phase
+
+对外 contract 保持四种 public HealthState：
+
+```text
+ok | unavailable | rate_limited | auth_failed
+```
+
+`cecd498` 内部仍保留 `recovering` / `down` 作为 recovery phase / legacy persisted state 兼容。它们不得泄漏到 public status contract：`publicHealth()`、`agent-status.json.health`、MessageRouter route decision 均应把 `recovering` / `down` 映射为 `unavailable`。如后续整理实现，建议把内部字段显式命名为 recovery phase，减少与 public HealthState 的歧义。
+
+### 6.4 当前目录结构与目标目录结构
+
+顶层 §4.1 是目标结构。`cecd498` 当前实现结构为阶段性拆分：
+
+```text
+skills/activity-monitor/scripts/
+├── monitor.js
+├── monitor-orchestrator.js
+├── health-engine.js
+├── guardian.js
+├── message-router.js
+├── proc-sampler.js
+├── task-scheduler.js
+├── tool-pipeline.js
+├── tool-watchdog.js
+├── adapters/
+│   └── runtime-components.js
+└── tasks/
+    └── activity-monitor-tasks.js
+```
+
+`adapters/runtime-components.js` 只承载 AM 侧 runtime-adjacent factory glue；Claude/Codex runtime adapter 本体仍由既有 runtime 模块提供，避免在 AM refactor 中复制或搬迁 runtime adapter 代码。`tasks/activity-monitor-tasks.js` 合并注册 6 个 TaskScheduler task，是先从 `monitor.js` 拆出 task definitions 的阶段性边界；后续可以再按 task 文件拆分。

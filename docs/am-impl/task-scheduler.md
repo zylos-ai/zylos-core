@@ -20,6 +20,8 @@
 
 任务定义已拆到 `scripts/tasks/activity-monitor-tasks.js`。当前 daily-upgrade、daily-memory-commit、daily-upgrade-check、health-check、usage-monitor、usage-alert 6 个 task 在该模块内注册，再由 `monitor.js` 注入 state file 读写、C4 enqueue、usage monitor 等 side-effect callbacks。这保留了既有 gate、state file、C4 enqueue 行为，只改变结构边界。
 
+context-check 不属于 TaskScheduler 注册任务。当前实现由 `monitor.js` 在启动阶段调用 `startContextMonitor(adapter)`，通过 adapter 提供的 ContextMonitor 独立 polling；adapter 返回 null 时表示 runtime 由 statusLine hook 或其他机制处理上下文信号。
+
 ## 2. 组件设计
 
 ### 功能清单
@@ -36,7 +38,6 @@
 | | health-check | 每 24h 检查 PM2/disk/memory |
 | | usage-monitor | 每 1h 读取本地 usage 快照，刷新 state（D-26：零 token） |
 | | usage-alert | 每 1h 检查用量阈值，达阈值 C4 通知 owner（D-26） |
-| | context-check | adapter.getContextMonitor() 非 null 时 polling 检查上下文占用 |
 
 ### 已注册任务详情
 
@@ -100,14 +101,17 @@ active hours: 8:00-23:00 only
 
 职责边界：只做阈值判断和告警发送，不做数据采集。依赖 usage-monitor 的 state 文件作为数据源。默认关闭（D-27）。
 
-#### context-check
+### ContextMonitor 独立 polling
+
+context-check 的职责由 ContextMonitor 独立承担，不走 `TaskScheduler.tick()`：
 
 ```
+start: MonitorOrchestrator 初始化阶段 → startContextMonitor(adapter)
 gate: adapter.getContextMonitor() != null
-execute: polling 检查上下文占用
+execute: ContextMonitor 自己按 adapter 策略 polling 检查上下文占用
   - >= 56% + unsummarized > 30 → memory sync
   - >= 70% → new-session handoff
-note: adapter.getContextMonitor() 返回 null 时跳过（由 statusLine hook 处理）
+note: adapter.getContextMonitor() 返回 null 时跳过；对应 runtime 可能由 statusLine hook 写入 signal file
 ```
 
 ### 调度流程
@@ -164,6 +168,7 @@ interface TaskDefinition {
 | **Monitor Orchestrator** | 调用 | `tick()` | 在 tick 编排中被调用 |
 | **Snapshot input** | 读取 | `snapshot.health` | gate 条件（部分任务需 health=ok）。当前 snapshot 由 Orchestrator 构造传入；SignalStore 未独立落地 |
 | **Adapter** | 读取 | `runtimeId` | 选择 usage 快照来源 |
+| **ContextMonitor** | 无 TaskScheduler 交互 | `startContextMonitor(adapter)` | 独立 polling；不注册为 TaskScheduler task |
 | **C4 Control** | 调用 | `c4-control.js enqueue` | daily-upgrade、health-check 通过 C4 控制 runtime |
 | **Monitor Orchestrator** | 提供 | snapshot | idle 秒数等 gate 条件 |
 
@@ -213,4 +218,4 @@ interface TaskDefinition {
 3. 内联任务对象符合 `TaskDefinition` shape
 4. 已合并 daily 和 interval 调度逻辑为统一框架
 5. usage-monitor 和 usage-alert 已按 D-26 拆为两个独立任务
-6. context-check 在 adapter.getContextMonitor() 返回非 null 时注册（由 hook 处理时 adapter 返回 null）
+6. context-check 不注册为 TaskScheduler task；ContextMonitor 由 Orchestrator 启动阶段独立启动

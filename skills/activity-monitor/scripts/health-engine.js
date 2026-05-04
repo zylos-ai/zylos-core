@@ -51,7 +51,6 @@ export class HealthEngine {
    * @param {() => object|null} deps.readHeartbeatPending
    * @param {() => void} deps.clearHeartbeatPending
    * @param {() => void} deps.killTmuxSession
-   * @param {() => void} deps.notifyPendingChannels
    * @param {(message: string) => void} deps.log
    * @param {() => {detected: boolean, cooldownUntil?: number, resetTime?: string}} [deps.detectRateLimit]
    * @param {() => {detected: boolean, pattern?: string}} [deps.detectAuthFailure]
@@ -405,7 +404,6 @@ export class HealthEngine {
     this.lastUserMessageRecoveryAt = 0;
     if (this.healthState !== 'ok') {
       this.setHealth('ok', `heartbeat_ack phase=${phase}`);
-      this.deps.notifyPendingChannels();
     }
     if (phase !== 'primary') {
       this.lastHeartbeatAt = Math.floor(Date.now() / 1000);

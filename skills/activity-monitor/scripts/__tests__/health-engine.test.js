@@ -9,7 +9,6 @@ function createMockDeps() {
     readHeartbeatPending: [],
     clearHeartbeatPending: 0,
     killTmuxSession: 0,
-    notifyPendingChannels: 0,
     log: []
   };
 
@@ -19,7 +18,6 @@ function createMockDeps() {
     readHeartbeatPending: () => { calls.readHeartbeatPending.push(true); return deps._pending || null; },
     clearHeartbeatPending: () => { calls.clearHeartbeatPending++; },
     killTmuxSession: () => { calls.killTmuxSession++; },
-    notifyPendingChannels: () => { calls.notifyPendingChannels++; },
     log: (msg) => { calls.log.push(msg); },
     // Test helpers
     _pending: null,
@@ -160,7 +158,7 @@ describe('HealthEngine', () => {
       assert.equal(engine.restartFailureCount, 0);
     });
 
-    it('transitions recovering to ok and notifies channels', () => {
+    it('transitions recovering to ok', () => {
       const { deps, calls } = createMockDeps();
       deps._pending = { control_id: 1, phase: 'recovery' };
       deps._heartbeatStatus = 'done';
@@ -169,10 +167,9 @@ describe('HealthEngine', () => {
       engine.processHeartbeat(true, Math.floor(Date.now() / 1000));
 
       assert.equal(engine.health, 'ok');
-      assert.equal(calls.notifyPendingChannels, 1);
     });
 
-    it('does not notify channels when already ok', () => {
+    it('keeps ok health on primary heartbeat success', () => {
       const { deps, calls } = createMockDeps();
       deps._pending = { control_id: 1, phase: 'primary' };
       deps._heartbeatStatus = 'done';
@@ -181,7 +178,6 @@ describe('HealthEngine', () => {
       engine.processHeartbeat(true, Math.floor(Date.now() / 1000));
 
       assert.equal(engine.health, 'ok');
-      assert.equal(calls.notifyPendingChannels, 0);
     });
 
     it('updates lastHeartbeatAt for non-primary success', () => {
@@ -399,7 +395,6 @@ describe('HealthEngine', () => {
       engine.processHeartbeat(true, Math.floor(Date.now() / 1000));
 
       assert.equal(engine.health, 'ok');
-      assert.equal(calls.notifyPendingChannels, 1);
     });
 
     it('stays down when pending heartbeat fails (no kill)', () => {
@@ -1087,7 +1082,6 @@ describe('HealthEngine', () => {
       assert.equal(engine.health, 'ok');
       assert.equal(engine.cooldownUntil, 0);
       assert.equal(engine.rateLimitResetTime, '');
-      assert.equal(calls.notifyPendingChannels, 1);
     });
 
     it('transitions rate_limited to unavailable when recovery fails without rate-limit signal', () => {

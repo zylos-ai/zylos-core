@@ -45,7 +45,7 @@
  *   - tmux helpers (has-session, list-windows, capture-pane, send-keys, kill-session): 3000ms
  *   - pgrep calls in getRunningMaintenance(): 500ms
  *   - runC4Control() (node c4-control.js): 10000ms
- *   - sendRecoveryNotice() and context rotation notify (node c4-send.js): 15000ms
+ *   - context rotation notify (node c4-send.js): 15000ms
  *   - SQLite COUNT query in maybeCheckUsage(): 3000ms
  *
  * v22 changes (service recovery — auth + periodic probe):
@@ -194,7 +194,6 @@ const HEALTH_CHECK_STATE_FILE = path.join(MONITOR_DIR, 'health-check-state.json'
 const DAILY_UPGRADE_STATE_FILE = path.join(MONITOR_DIR, 'daily-upgrade-state.json');
 const DAILY_MEMORY_COMMIT_STATE_FILE = path.join(MONITOR_DIR, 'daily-memory-commit-state.json');
 const UPGRADE_CHECK_STATE_FILE = path.join(MONITOR_DIR, 'upgrade-check-state.json');
-const PENDING_CHANNELS_FILE = path.join(MONITOR_DIR, 'pending-channels.jsonl');
 const USAGE_STATE_FILE = path.join(MONITOR_DIR, 'usage.json');
 const USAGE_CODEX_STATE_FILE = path.join(MONITOR_DIR, 'usage-codex.json');
 const USAGE_ALERT_STATE_FILE = path.join(MONITOR_DIR, 'usage-alert-state.json');
@@ -373,7 +372,6 @@ function resolveCommBridgeScript(fileName) {
 
 const C4_CONTROL_PATH = resolveCommBridgeScript('c4-control.js');
 const C4_DB_PATH = resolveCommBridgeScript('c4-db.js');
-const C4_SEND_PATH = resolveCommBridgeScript('c4-send.js');
 
 function enqueueContextRotationHandoff({ ratio = 0, used = 0, ceiling = 0 } = {}) {
   const pct = Math.round(ratio * 100);
@@ -679,60 +677,6 @@ function clearWatchdogState() {
   writeWatchdogState();
 }
 
-function sendRecoveryNotice(channel, endpoint) {
-  try {
-    execFileSync('node', [C4_SEND_PATH, channel, endpoint, 'Hey! I was temporarily unavailable but I\'m back online now. If you sent me something while I was away, could you send it again? Thanks!'], { stdio: 'pipe', timeout: 15000 });
-    return true;
-  } catch (err) {
-    log(`Recovery notice failed for ${channel}:${endpoint} (${err.message})`);
-    return false;
-  }
-}
-
-function notifyPendingChannels() {
-  if (!fs.existsSync(PENDING_CHANNELS_FILE)) {
-    return;
-  }
-
-  const dedup = new Map();
-  try {
-    const lines = fs.readFileSync(PENDING_CHANNELS_FILE, 'utf8').split('\n');
-    for (const line of lines) {
-      if (!line.trim()) continue;
-      try {
-        const record = JSON.parse(line);
-        if (!record.channel || !record.endpoint) continue;
-        dedup.set(`${record.channel}::${record.endpoint}`, record);
-      } catch {
-        // Ignore malformed line.
-      }
-    }
-  } catch (err) {
-    log(`Pending channel load failed: ${err.message}`);
-    return;
-  }
-
-  const failed = [];
-  for (const record of dedup.values()) {
-    const ok = sendRecoveryNotice(record.channel, record.endpoint);
-    if (!ok) failed.push(record);
-  }
-
-  // Only clear successfully sent notifications; re-queue failed ones
-  try {
-    if (failed.length > 0) {
-      const remaining = failed.map(r => JSON.stringify(r)).join('\n') + '\n';
-      fs.writeFileSync(PENDING_CHANNELS_FILE, remaining);
-    } else {
-      fs.writeFileSync(PENDING_CHANNELS_FILE, '');
-    }
-  } catch (err) {
-    log(`Pending channel cleanup failed: ${err.message}`);
-  }
-
-  log(`Recovery notification: ${dedup.size - failed.length} sent, ${failed.length} failed`);
-}
-
 // --- Health Check ---
 
 function loadHealthCheckState() {
@@ -1020,7 +964,6 @@ function createToolPipeline(activeAdapter, config) {
 
 function createHealthEngine(activeAdapter, initialStatus) {
   return createRuntimeHealthEngine(activeAdapter, initialStatus, {
-    notifyPendingChannels,
     log,
     rateLimitDefaultCooldown: RATE_LIMIT_DEFAULT_COOLDOWN,
     userMessageRecoveryCooldown: USER_MESSAGE_RECOVERY_COOLDOWN,
