@@ -20,7 +20,14 @@ Use runtime-specific switch commands:
 
 Before sending the session switch command, complete these steps **in order**:
 
-### 1. Inventory running background tasks
+### 1. Check for running memory-sync subagents
+
+Before doing anything else, check if a memory-sync subagent is already running (use `TaskList` on Claude, or the equivalent on other runtimes). Look for any task whose description contains "memory sync" or "zylos-memory".
+
+- **If a memory-sync subagent is already running:** Do NOT trigger a new memory sync. Skip straight to step 2 (inventory). The running sync will complete on its own — spawning a second one risks a deadlock where the main loop and multiple subagents contend for resources.
+- **If no memory-sync subagent is running:** Proceed normally (memory sync may be triggered as part of the session handoff if needed).
+
+### 2. Inventory running background tasks
 
 Check for running background agents using the current runtime's available agent/task listing capability. For Claude, this is `TaskList`.
 
@@ -33,17 +40,17 @@ For each running task, note:
 - **What it's doing** (brief description)
 - **Output file path** (so the new session can check on it)
 
-This information goes into the handoff summary (step 2).
+This information goes into the handoff summary (step 3).
 
-### 2. Write a session handoff summary
+### 3. Write a session handoff summary
 
 Write a brief message covering:
 - **What was being worked on** (active tasks, user requests in progress)
 - **Current state** (what's done, what's pending, any blockers)
-- **Running background tasks** (from step 1 — include agent/task IDs and any output file paths or result handles so the new session can check on them with the runtime-appropriate output mechanism)
+- **Running background tasks** (from step 2 — include agent/task IDs and any output file paths or result handles so the new session can check on them with the runtime-appropriate output mechanism)
 - **What the next session should pick up** (if anything)
 
-### 3. Send the handoff summary
+### 4. Send the handoff summary
 
 Determine who to notify:
 - **If actively collaborating with a user:** Send the summary to that user's channel via C4 (their `reply via` path). This keeps the user informed AND records the context into C4 conversation history.
@@ -51,7 +58,7 @@ Determine who to notify:
 
 The goal is twofold: (a) the user knows what's happening, and (b) the handoff summary appears in C4 conversation history, so the new session can seamlessly continue the work.
 
-### 4. Enqueue Session Switch Command
+### 5. Enqueue Session Switch Command
 
 For Codex:
 ```bash
