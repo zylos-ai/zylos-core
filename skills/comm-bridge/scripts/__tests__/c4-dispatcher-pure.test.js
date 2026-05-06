@@ -352,9 +352,9 @@ describe('shouldAutoAckHeartbeat', () => {
     }), true);
   });
 
-  it('does not auto-ack non-primary idle heartbeats', () => {
+  it('does not auto-ack recovery idle heartbeats', () => {
     assert.equal(shouldAutoAckHeartbeat({
-      item: { content: 'Heartbeat check. [phase=stuck]' },
+      item: { content: 'Heartbeat check. [phase=recovery]' },
       agentState: { state: 'idle', health: 'ok', idleSeconds: 10, healthy: true },
       procState: aliveProc,
       confirmedActive: false

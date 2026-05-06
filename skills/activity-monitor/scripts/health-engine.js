@@ -488,20 +488,6 @@ export class HealthEngine {
   }
 
   /**
-   * Request an immediate heartbeat probe (used by stuck detection).
-   * Returns false if a probe cannot be sent (wrong health state or
-   * another heartbeat is already in flight).
-   */
-  requestImmediateProbe(reason) {
-    if (this.healthState !== 'ok') return false;
-    const pending = this.deps.readHeartbeatPending();
-    if (pending) return false;
-    // Keep "Stuck detection" wording for existing observability/tests.
-    this.deps.log(`Stuck detection: ${reason}`);
-    return this.enqueueHeartbeat('stuck');
-  }
-
-  /**
    * Event-driven OK-path health detection. Called asynchronously after the C4
    * dispatcher successfully delivers a user message to the runtime.
    */
@@ -567,10 +553,10 @@ export class HealthEngine {
     this.lastStickyErrorHitAt = 0;
   }
 
-  /** Wrapper that updates lastHeartbeatAt on successful primary/stuck enqueue. */
+  /** Wrapper that updates lastHeartbeatAt on successful primary enqueue. */
   enqueueHeartbeat(phase) {
     const ok = this.deps.enqueueHeartbeat(phase);
-    if (ok && (phase === 'primary' || phase === 'stuck')) {
+    if (ok && phase === 'primary') {
       this.lastHeartbeatAt = Math.floor(Date.now() / 1000);
     }
     return ok;

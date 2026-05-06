@@ -231,21 +231,6 @@ describe('HealthEngine', () => {
     });
   });
 
-  describe('stuck probe failure triggers recovery', () => {
-    it('triggers recovery when stuck probe fails in ok state', () => {
-      const { deps, calls } = createMockDeps();
-      deps._pending = { control_id: 1, phase: 'stuck' };
-      deps._heartbeatStatus = 'timeout';
-      const engine = new HeartbeatEngine(deps);
-
-      engine.processHeartbeat(true, Math.floor(Date.now() / 1000));
-
-      assert.equal(calls.clearHeartbeatPending, 1);
-      assert.equal(calls.killTmuxSession, 1);
-      assert.equal(engine.health, 'unavailable');
-    });
-  });
-
   describe('exponential backoff', () => {
     it('calculates correct backoff delays', () => {
       const { deps } = createMockDeps();
@@ -571,68 +556,6 @@ describe('HealthEngine', () => {
       engine.processHeartbeat(true, Math.floor(Date.now() / 1000));
 
       assert.equal(engine.signalDetectedAt, 0);
-    });
-  });
-
-  describe('requestImmediateProbe', () => {
-    it('enqueues stuck phase when health is ok and no pending', () => {
-      const { deps, calls } = createMockDeps();
-      const engine = new HeartbeatEngine(deps);
-
-      const result = engine.requestImmediateProbe('no_activity_for_300s');
-
-      assert.equal(result, true);
-      assert.deepStrictEqual(calls.enqueueHeartbeat, ['stuck']);
-    });
-
-    it('returns false when health is not ok', () => {
-      const { deps, calls } = createMockDeps();
-      const engine = new HeartbeatEngine(deps, { initialHealth: 'recovering' });
-
-      const result = engine.requestImmediateProbe('test');
-
-      assert.equal(result, false);
-      assert.deepStrictEqual(calls.enqueueHeartbeat, []);
-    });
-
-    it('still works when primary heartbeat is disabled', () => {
-      const { deps, calls } = createMockDeps();
-      const engine = new HeartbeatEngine(deps, { heartbeatEnabled: false });
-
-      const result = engine.requestImmediateProbe('test');
-
-      assert.equal(result, true);
-      assert.deepStrictEqual(calls.enqueueHeartbeat, ['stuck']);
-    });
-
-    it('returns false when another heartbeat is pending', () => {
-      const { deps, calls } = createMockDeps();
-      deps._pending = { control_id: 1, phase: 'primary' };
-      const engine = new HeartbeatEngine(deps);
-
-      const result = engine.requestImmediateProbe('test');
-
-      assert.equal(result, false);
-      assert.deepStrictEqual(calls.enqueueHeartbeat, []);
-    });
-
-    it('updates lastHeartbeatAt on successful stuck enqueue', () => {
-      const { deps } = createMockDeps();
-      const engine = new HeartbeatEngine(deps);
-      engine.lastHeartbeatAt = 0;
-
-      engine.requestImmediateProbe('test');
-
-      assert.ok(engine.lastHeartbeatAt > 0);
-    });
-
-    it('logs stuck detection reason', () => {
-      const { deps, calls } = createMockDeps();
-      const engine = new HeartbeatEngine(deps);
-
-      engine.requestImmediateProbe('no_activity_for_600s');
-
-      assert.ok(calls.log.some(m => m.includes('Stuck detection') && m.includes('no_activity_for_600s')));
     });
   });
 
@@ -1287,7 +1210,7 @@ describe('HealthEngine', () => {
     it('triggers recovery when API error detected and pending age > 30s', () => {
       const { deps, calls } = createMockDeps();
       const now = Math.floor(Date.now() / 1000);
-      deps._pending = { control_id: 1, phase: 'stuck', created_at: now - 40 };
+      deps._pending = { control_id: 1, phase: 'primary', created_at: now - 40 };
       deps._heartbeatStatus = 'pending';
       deps.detectApiError = () => ({ detected: true, pattern: 'APIError: 400' });
       const engine = new HeartbeatEngine(deps);
@@ -1303,7 +1226,7 @@ describe('HealthEngine', () => {
       let scanCalled = false;
       const { deps, calls } = createMockDeps();
       const now = Math.floor(Date.now() / 1000);
-      deps._pending = { control_id: 1, phase: 'stuck', created_at: now - 10 };
+      deps._pending = { control_id: 1, phase: 'primary', created_at: now - 10 };
       deps._heartbeatStatus = 'pending';
       deps.detectApiError = () => { scanCalled = true; return { detected: false }; };
       const engine = new HeartbeatEngine(deps);
@@ -1318,7 +1241,7 @@ describe('HealthEngine', () => {
       let scanCount = 0;
       const { deps } = createMockDeps();
       const now = Math.floor(Date.now() / 1000);
-      deps._pending = { control_id: 1, phase: 'stuck', created_at: now - 50 };
+      deps._pending = { control_id: 1, phase: 'primary', created_at: now - 50 };
       deps._heartbeatStatus = 'pending';
       deps.detectApiError = () => { scanCount++; return { detected: false }; };
       const engine = new HeartbeatEngine(deps);
@@ -1339,7 +1262,7 @@ describe('HealthEngine', () => {
     it('does not scan when detectApiError dep is absent', () => {
       const { deps, calls } = createMockDeps();
       const now = Math.floor(Date.now() / 1000);
-      deps._pending = { control_id: 1, phase: 'stuck', created_at: now - 40 };
+      deps._pending = { control_id: 1, phase: 'primary', created_at: now - 40 };
       deps._heartbeatStatus = 'pending';
       // No detectApiError dep
       const engine = new HeartbeatEngine(deps);
@@ -1353,7 +1276,7 @@ describe('HealthEngine', () => {
     it('does not trigger when no API error detected', () => {
       const { deps, calls } = createMockDeps();
       const now = Math.floor(Date.now() / 1000);
-      deps._pending = { control_id: 1, phase: 'stuck', created_at: now - 40 };
+      deps._pending = { control_id: 1, phase: 'primary', created_at: now - 40 };
       deps._heartbeatStatus = 'pending';
       deps.detectApiError = () => ({ detected: false });
       const engine = new HeartbeatEngine(deps);

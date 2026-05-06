@@ -120,7 +120,6 @@
  * v11 changes (Hook-based activity tracking):
  *   - Replaced non-functional fetch-preload with Claude Code hooks
  *   - Hook signals now feed monitor-owned activity state instead of preload polling
- *   - Stuck detection: triggers immediate probe when no activity for STUCK_THRESHOLD
  *   - Removed verify phase: single heartbeat failure → recovery
  *   - Safety-net heartbeat interval relaxed to 2 hours
  *
