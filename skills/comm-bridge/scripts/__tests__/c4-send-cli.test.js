@@ -8,11 +8,12 @@ import { fileURLToPath } from 'node:url';
 
 const CLI_PATH = fileURLToPath(new URL('../c4-send.js', import.meta.url));
 
-function cli(args, env = {}) {
+function cli(args, env = {}, stdinInput = undefined) {
   const result = spawnSync('node', [CLI_PATH, ...args], {
     env: { ...process.env, ...env },
     encoding: 'utf8',
-    timeout: 5000
+    timeout: 5000,
+    input: stdinInput
   });
   return { stdout: result.stdout, stderr: result.stderr, status: result.status };
 }
@@ -105,6 +106,36 @@ describe('c4-send validation', () => {
       const { stderr, status } = cli(['fake-channel', 'Hello'], env);
       assert.equal(status, 1);
       assert.ok(stderr.includes('Channel script not found'));
+    });
+  });
+});
+
+// -- stdin marker '-' --
+
+describe('c4-send stdin "-" marker', () => {
+  it('reads message from stdin when 3rd arg is "-" with piped stdin', () => {
+    withTmpDir(({ tmpDir, env }) => {
+      const sentFile = setupMockChannel(tmpDir, 'mock-channel');
+
+      // 3 args (channel + endpoint + "-") + stdin content -> should read stdin
+      const { status } = cli(['mock-channel', 'endpoint1', '-'], env, 'stdin body content');
+      assert.equal(status, 0);
+
+      const sent = JSON.parse(fs.readFileSync(sentFile, 'utf8'));
+      assert.deepEqual(sent, ['endpoint1', 'stdin body content']);
+    });
+  });
+
+  it('reads multi-line stdin (heredoc-style) preserving newlines', () => {
+    withTmpDir(({ tmpDir, env }) => {
+      const sentFile = setupMockChannel(tmpDir, 'mock-channel');
+
+      const multiline = 'line one\nline two\nline three';
+      const { status } = cli(['mock-channel', 'endpoint1', '-'], env, multiline);
+      assert.equal(status, 0);
+
+      const sent = JSON.parse(fs.readFileSync(sentFile, 'utf8'));
+      assert.deepEqual(sent, ['endpoint1', multiline]);
     });
   });
 });
