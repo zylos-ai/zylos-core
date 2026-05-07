@@ -259,12 +259,28 @@ export class ClaudeAdapter extends RuntimeAdapter {
       if (oauthTokenValue) _approveApiKey(oauthTokenValue);
     }
 
+    // Propagate the two activity-monitor stream-watchdog config vars from
+    // .env to the Claude subprocess. Not secrets, so passed inline on the
+    // `env` command — which reaches both the new-session and existing-session
+    // launch paths via the shared claudeCmd below.
+    let streamWatchdogEnable = '';
+    let streamWatchdogTimeoutMs = '';
+    try {
+      const envContent = fs.readFileSync(path.join(ZYLOS_DIR, '.env'), 'utf8');
+      streamWatchdogEnable = _parseEnvValue(envContent, 'CLAUDE_ENABLE_STREAM_WATCHDOG');
+      streamWatchdogTimeoutMs = _parseEnvValue(envContent, 'CLAUDE_STREAM_IDLE_TIMEOUT_MS');
+    } catch { }
+    const watchdogEnvFlags = [
+      streamWatchdogEnable ? ` CLAUDE_ENABLE_STREAM_WATCHDOG='${streamWatchdogEnable}'` : '',
+      streamWatchdogTimeoutMs ? ` CLAUDE_STREAM_IDLE_TIMEOUT_MS='${streamWatchdogTimeoutMs}'` : '',
+    ].join('');
+
     // 4. Build the shell command
     const bypassFlag = bypassPermissions ? ' --dangerously-skip-permissions' : '';
     const envStripFlags = hasNativeAuth
       ? ' -u CLAUDE_CODE_OAUTH_TOKEN -u ANTHROPIC_API_KEY'
       : '';
-    const claudeCmd = `${ENV_CLEAN_PREFIX}${envStripFlags} ${CLAUDE_BIN}${bypassFlag}`;
+    const claudeCmd = `${ENV_CLEAN_PREFIX}${envStripFlags}${watchdogEnvFlags} ${CLAUDE_BIN}${bypassFlag}`;
 
     const monitorDir = path.join(ZYLOS_DIR, 'activity-monitor');
     const exitLogFile = path.join(monitorDir, 'claude-exit.log');
