@@ -116,16 +116,16 @@ The heartbeat engine runs inside the activity monitor and uses the C4 control qu
 |-------|---------|------------|------------|
 | **Primary** | Heartbeat interval elapsed (default 30min) | Reset timer, stay `ok` | Enter verify phase |
 | **Verify** | Primary probe failed | Return to `ok` | Kill tmux, enter `recovering` |
-| **Recovery** | In `recovering` state, Claude restarted | Return to `ok`, notify pending channels | Kill tmux, retry (up to max) |
-| **Down** | Max restart failures reached (default 3) | Return to `ok`, notify pending channels | Stay `down`, wait for manual fix |
+| **Recovery** | In `recovering` state, Claude restarted | Return to `ok` | Kill tmux, retry (up to max) |
+| **Down** | Max restart failures reached (default 3) | Return to `ok` | Stay `down`, wait for manual fix |
 
 ### Ack Deadline
 
 Each heartbeat probe is enqueued with an ack deadline. If Claude does not acknowledge the probe before the deadline expires, the control record transitions to `timeout` status and the engine treats it as a failure.
 
-### Recovery Behavior
+### Unhealthy Message Routing
 
-When health transitions back to `ok`, the engine reads `~/zylos/activity-monitor/pending-channels.jsonl` and sends a recovery notification to each recorded channel/endpoint via C4, then clears the file.
+When health is not `ok`, C4 intake still records incoming messages as delivered. The MessageRouter returns an immediate status response for the current message when replies are enabled; `--no-reply` messages are accepted silently. If the router IPC is unavailable, `c4-receive.js` falls back to the status file and follows the same delivered/current-message behavior.
 
 ## Health Check
 
