@@ -174,10 +174,10 @@ export function syncHooks(installedSettings, templateSettings, { dryRun = false,
     updated += migrated;
   }
 
-  // --- Forward pass: add missing matcher groups, update hooks in matched groups ---
+  // --- Forward pass: add missing matcher groups/hooks, update hooks in matched groups ---
   // Strategy: align by matcher group, not by individual hook across all groups.
-  //   - If installed has a group with the same matcher → respect user config, only
-  //     update existing hooks (command/timeout drift) but don't add new hooks
+  //   - If installed has a group with the same matcher → add missing template
+  //     hooks and update existing hooks (command/timeout drift)
   //   - If installed has NO group with that matcher → add the whole group from template
   for (const [event, matchers] of Object.entries(templateHooks)) {
     if (!Array.isArray(matchers)) continue;
@@ -193,13 +193,22 @@ export function syncHooks(installedSettings, templateSettings, { dryRun = false,
       );
 
       if (installedGroup) {
-        // Group exists — only update existing hooks (command/timeout drift)
+        // Group exists — add missing template hooks and update existing hooks
+        // (command/timeout drift). This is needed for upgrades where new core
+        // hooks are added to an existing matcher group.
         for (const templateCmd of getCommandHooks(templateGroup)) {
           const templateKey = extractScriptPath(templateCmd.command);
           const existing = getCommandHooks(installedGroup).find(
             h => extractScriptPath(h.command) === templateKey
           );
-          if (existing && (existing.command !== templateCmd.command || existing.timeout !== templateCmd.timeout)) {
+          if (!existing) {
+            if (!dryRun) {
+              if (!Array.isArray(installedGroup.hooks)) installedGroup.hooks = [];
+              installedGroup.hooks.push({ ...templateCmd });
+            }
+            added++;
+            log(`  + ${event}[${matcherValue}]: ${templateCmd.command}`);
+          } else if (existing.command !== templateCmd.command || existing.timeout !== templateCmd.timeout) {
             if (!dryRun) {
               existing.command = templateCmd.command;
               if (templateCmd.timeout !== undefined) existing.timeout = templateCmd.timeout;
