@@ -21,7 +21,7 @@ export function createPm2Helpers({
     }
 
     for (const name of names) {
-      exec(`pm2 start "${ecosystemPath}" --only "${name}" 2>/dev/null`, { stdio });
+      exec(`pm2 start "${ecosystemPath}" --only "${name}" --update-env 2>/dev/null`, { stdio });
     }
 
     // Persist only after every restart succeeded so callers don't save a
@@ -45,6 +45,9 @@ export function createPm2Helpers({
         if (!fallbackToPlainRestartOnError) {
           throw err;
         }
+        try { exec(`pm2 delete "${name}" 2>/dev/null`, { stdio }); } catch {}
+        restartFromEcosystem([name], { ecosystemPath, stdio, save });
+        return;
       }
     }
 
