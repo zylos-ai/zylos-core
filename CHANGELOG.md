@@ -5,6 +5,12 @@ All notable changes to zylos-core will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **`zylos init` API key prefix check honours custom base URL**: `validateInitOptions` and the interactive API-key prompt no longer reject keys that do not start with `sk-ant-` when `--base-url` / `ANTHROPIC_BASE_URL` points to a non-official host. Users behind custom gateways, proxies, or key-translation layers can now pass their native prefix to `--api-key` / `ANTHROPIC_API_KEY`. The check is unchanged for `api.anthropic.com`. Setup tokens (`sk-ant-oat-*`) are still rejected in the `--api-key` slot regardless of endpoint.
+- **`verifyApiKey` now routes to the configured base URL**: online API-key verification previously always hit `https://api.anthropic.com/v1/messages`, which rejected any key intended for a custom endpoint even after the prefix check was relaxed. Verification now resolves the endpoint from `--base-url` / `ANTHROPIC_BASE_URL` (host, port, protocol, path prefix). For custom endpoints, only an explicit 401 rejects the key; non-401 responses, network errors, and timeouts mark the key as saved-but-unverified with a warning, so third-party proxies that don't implement the empty-POST probe no longer block `zylos init` end-to-end. Official endpoint behavior (`api.anthropic.com`) is strict and unchanged.
+
 ## [0.4.13] - 2026-04-12
 
 ### Fixed

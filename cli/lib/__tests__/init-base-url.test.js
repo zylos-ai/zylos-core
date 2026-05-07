@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 import fs from 'node:fs';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -151,5 +152,183 @@ describe('base URL support', () => {
 
     assert.match(claudeError, /Invalid base URL/);
     assert.match(codexError, /Invalid Codex base URL/);
+  });
+
+  test('isCustomAnthropicEndpoint recognises official vs custom hosts', async () => {
+    const { isCustomAnthropicEndpoint } = await import('../../commands/init.js');
+
+    assert.equal(isCustomAnthropicEndpoint(null), false);
+    assert.equal(isCustomAnthropicEndpoint(undefined), false);
+    assert.equal(isCustomAnthropicEndpoint(''), false);
+    assert.equal(isCustomAnthropicEndpoint('https://api.anthropic.com'), false);
+    assert.equal(isCustomAnthropicEndpoint('https://api.anthropic.com/'), false);
+    assert.equal(isCustomAnthropicEndpoint('https://API.Anthropic.com'), false);
+    assert.equal(isCustomAnthropicEndpoint('https://beta.anthropic.com/v1'), false);
+    assert.equal(isCustomAnthropicEndpoint('https://api.lvlng.xyz'), true);
+    assert.equal(isCustomAnthropicEndpoint('http://api.lvlng.xyz'), true);
+    assert.equal(isCustomAnthropicEndpoint('https://claude-proxy.example.com/v1'), true);
+    assert.equal(isCustomAnthropicEndpoint('not-a-url'), true);
+  });
+
+  test('validateInitOptions rejects non-sk-ant- API keys against the official endpoint', async () => {
+    const { validateInitOptions } = await import('../../commands/init.js');
+
+    const err = validateInitOptions({
+      setupToken: null,
+      apiKey: 'custom-1234567890abcdef',
+      runtime: 'claude',
+      timezone: null,
+      domain: null,
+      baseUrl: null,
+    });
+
+    assert.match(err, /Invalid API key/);
+    assert.match(err, /Custom endpoints: set --base-url/);
+  });
+
+  test('validateInitOptions accepts non-sk-ant- API keys when a custom base URL is set', async () => {
+    const { validateInitOptions } = await import('../../commands/init.js');
+
+    const err = validateInitOptions({
+      setupToken: null,
+      apiKey: 'custom-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
+      runtime: 'claude',
+      timezone: null,
+      domain: null,
+      baseUrl: 'http://api.lvlng.xyz',
+    });
+
+    assert.equal(err, null);
+  });
+
+  test('validateInitOptions still rejects setup tokens in --api-key, even on custom endpoints', async () => {
+    const { validateInitOptions } = await import('../../commands/init.js');
+
+    const err = validateInitOptions({
+      setupToken: null,
+      apiKey: 'sk-ant-oat-abc123',
+      runtime: 'claude',
+      timezone: null,
+      domain: null,
+      baseUrl: 'https://claude-proxy.example.com',
+    });
+
+    assert.match(err, /looks like a setup token/);
+  });
+
+  test('validateInitOptions still accepts sk-ant- API keys against the official endpoint', async () => {
+    const { validateInitOptions } = await import('../../commands/init.js');
+
+    const err = validateInitOptions({
+      setupToken: null,
+      apiKey: 'sk-ant-api03-abcdef',
+      runtime: 'claude',
+      timezone: null,
+      domain: null,
+      baseUrl: null,
+    });
+
+    assert.equal(err, null);
+  });
+});
+
+describe('resolveVerifyEndpoint', () => {
+  test('falls back to api.anthropic.com when baseUrl is absent or unusable', async () => {
+    const { resolveVerifyEndpoint } = await import('../../commands/init.js');
+
+    const def = { hostname: 'api.anthropic.com', port: 443, protocol: 'https:', path: '/v1/messages' };
+    assert.deepEqual(resolveVerifyEndpoint(null), def);
+    assert.deepEqual(resolveVerifyEndpoint(undefined), def);
+    assert.deepEqual(resolveVerifyEndpoint(''), def);
+    assert.deepEqual(resolveVerifyEndpoint('not-a-url'), def);
+    assert.deepEqual(resolveVerifyEndpoint('ftp://ftp.example.com/'), def);
+  });
+
+  test('parses http/https hosts, ports, and base paths', async () => {
+    const { resolveVerifyEndpoint } = await import('../../commands/init.js');
+
+    assert.deepEqual(resolveVerifyEndpoint('http://api.lvlng.xyz'), {
+      hostname: 'api.lvlng.xyz',
+      port: 80,
+      protocol: 'http:',
+      path: '/v1/messages',
+    });
+    assert.deepEqual(resolveVerifyEndpoint('https://proxy.example.com/'), {
+      hostname: 'proxy.example.com',
+      port: 443,
+      protocol: 'https:',
+      path: '/v1/messages',
+    });
+    assert.deepEqual(resolveVerifyEndpoint('https://proxy.example.com/anthropic'), {
+      hostname: 'proxy.example.com',
+      port: 443,
+      protocol: 'https:',
+      path: '/anthropic/v1/messages',
+    });
+    assert.deepEqual(resolveVerifyEndpoint('http://localhost:8080'), {
+      hostname: 'localhost',
+      port: 8080,
+      protocol: 'http:',
+      path: '/v1/messages',
+    });
+  });
+});
+
+describe('verifyApiKey', () => {
+  // Starts a throwaway HTTP server that replies with the given status code and
+  // returns the baseUrl callers should pass to verifyApiKey.
+  async function startStubServer(statusCode) {
+    const server = http.createServer((req, res) => {
+      req.resume();
+      req.on('end', () => {
+        res.statusCode = statusCode;
+        res.end();
+      });
+    });
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const { port } = server.address();
+    return { server, baseUrl: `http://127.0.0.1:${port}` };
+  }
+
+  test('returns valid=true when custom endpoint responds with non-401 (e.g. 400)', async () => {
+    const { verifyApiKey } = await import('../../commands/init.js');
+    const { server, baseUrl } = await startStubServer(400);
+    try {
+      const result = await verifyApiKey('custom-fake', baseUrl);
+      assert.deepEqual(result, { valid: true });
+    } finally {
+      server.close();
+    }
+  });
+
+  test('returns valid=false with authError=true on explicit 401 from any endpoint', async () => {
+    const { verifyApiKey } = await import('../../commands/init.js');
+    const { server, baseUrl } = await startStubServer(401);
+    try {
+      const result = await verifyApiKey('custom-bad', baseUrl);
+      assert.deepEqual(result, { valid: false, authError: true });
+    } finally {
+      server.close();
+    }
+  });
+
+  test('custom endpoint: network error returns valid=true with unverified=true', async () => {
+    const { verifyApiKey } = await import('../../commands/init.js');
+    // Port 1 is almost always closed — connect will fail immediately.
+    const result = await verifyApiKey('custom-fake', 'http://127.0.0.1:1');
+    assert.equal(result.valid, true);
+    assert.equal(result.unverified, true);
+    assert.equal(result.reason, 'network');
+  });
+
+  test('custom endpoint 200 response is treated as valid (proxy contract-agnostic)', async () => {
+    const { verifyApiKey } = await import('../../commands/init.js');
+    const { server, baseUrl } = await startStubServer(200);
+    try {
+      const result = await verifyApiKey('custom-fake', baseUrl);
+      assert.deepEqual(result, { valid: true });
+    } finally {
+      server.close();
+    }
   });
 });

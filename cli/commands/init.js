@@ -7,6 +7,7 @@
 
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import http from 'node:http';
 import https from 'node:https';
 import os from 'node:os';
 import path from 'node:path';
@@ -408,18 +409,62 @@ function ensureBinInPath() {
  * @returns {boolean} true if saved successfully
  */
 /**
+ * Resolve the /v1/messages verification endpoint from an optional base URL.
+ * Falls back to api.anthropic.com when baseUrl is absent or unparseable.
+ *
+ * @param {string|null|undefined} baseUrl
+ * @returns {{ hostname: string, port: number, protocol: 'http:'|'https:', path: string }}
+ */
+export function resolveVerifyEndpoint(baseUrl) {
+  const DEFAULT = { hostname: 'api.anthropic.com', port: 443, protocol: 'https:', path: '/v1/messages' };
+  if (!baseUrl) return DEFAULT;
+  try {
+    const u = new URL(baseUrl);
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return DEFAULT;
+    const basePath = u.pathname.replace(/\/+$/, '');
+    const port = u.port ? parseInt(u.port, 10) : (u.protocol === 'https:' ? 443 : 80);
+    return {
+      hostname: u.hostname,
+      port,
+      protocol: u.protocol,
+      path: `${basePath}/v1/messages`,
+    };
+  } catch {
+    return DEFAULT;
+  }
+}
+
+/**
  * Verify an Anthropic API key by making a lightweight API call.
  * Sends an intentionally empty request — a valid key returns 400 (bad request),
  * an invalid key returns 401 (unauthorized).
  *
+ * Behavior differs by endpoint:
+ * - Official endpoint (api.anthropic.com): strict. Network errors or timeouts
+ *   are treated as invalid (fail-closed, preserves prior behavior).
+ * - Custom endpoint (via ANTHROPIC_BASE_URL / --base-url): lenient. Only an
+ *   explicit 401 rejects the key. Non-401 responses, network errors, and
+ *   timeouts are treated as "unverified but proceed", since third-party
+ *   proxies and gateways may not implement the empty-POST contract used by
+ *   the official API.
+ *
  * @param {string} apiKey - The API key to verify
- * @returns {Promise<boolean>} true if key is valid
+ * @param {string|null} [baseUrl] - Optional Anthropic-compatible base URL
+ * @returns {Promise<{ valid: boolean, authError?: boolean, unverified?: boolean, reason?: string }>}
  */
-function verifyApiKey(apiKey) {
+export function verifyApiKey(apiKey, baseUrl = null) {
+  const customEndpoint = isCustomAnthropicEndpoint(baseUrl);
+  const endpoint = resolveVerifyEndpoint(baseUrl);
+  const requester = endpoint.protocol === 'https:' ? https : http;
+  const lenientResult = (reason) => (customEndpoint
+    ? { valid: true, unverified: true, reason }
+    : { valid: false });
+
   return new Promise((resolve) => {
-    const req = https.request({
-      hostname: 'api.anthropic.com',
-      path: '/v1/messages',
+    const req = requester.request({
+      hostname: endpoint.hostname,
+      port: endpoint.port,
+      path: endpoint.path,
       method: 'POST',
       headers: {
         'x-api-key': apiKey,
@@ -429,11 +474,15 @@ function verifyApiKey(apiKey) {
       timeout: 10000,
     }, (res) => {
       res.resume(); // drain response
-      // 401 = invalid key, anything else (400, 200, etc.) = key is valid
-      resolve(res.statusCode !== 401);
+      if (res.statusCode === 401) {
+        resolve({ valid: false, authError: true });
+      } else {
+        // 200, 400, or anything else non-401 means the key is not explicitly rejected.
+        resolve({ valid: true });
+      }
     });
-    req.on('error', () => resolve(false));
-    req.on('timeout', () => { req.destroy(); resolve(false); });
+    req.on('error', () => resolve(lenientResult('network')));
+    req.on('timeout', () => { req.destroy(); resolve(lenientResult('timeout')); });
     req.write('{}');
     req.end();
   });
@@ -1714,6 +1763,20 @@ export function resolveFromEnv(opts) {
   // The auto-detect in configureTimezone() will handle the default case.
 }
 
+// Returns true when `baseUrl` points at a non-official Anthropic endpoint
+// (custom proxy, self-hosted relay, etc.). Such deployments
+// routinely issue API keys that do not carry the `sk-ant-` prefix, so the
+// positive prefix check should be skipped for them.
+export function isCustomAnthropicEndpoint(baseUrl) {
+  if (!baseUrl) return false;
+  try {
+    const host = new URL(baseUrl).hostname.toLowerCase();
+    return host !== 'api.anthropic.com' && !host.endsWith('.anthropic.com');
+  } catch {
+    return true;
+  }
+}
+
 export function validateInitOptions(opts) {
   // Mutual exclusion: setup-token and api-key
   if (opts.setupToken && opts.apiKey) {
@@ -1725,9 +1788,13 @@ export function validateInitOptions(opts) {
     return 'Invalid setup token. It should start with "sk-ant-oat".\n  Generate one with: claude setup-token\n  Then run: zylos init --setup-token <token>';
   }
 
-  // API key format (reject setup tokens — they start with sk-ant-oat)
-  if (opts.apiKey && !opts.apiKey.startsWith('sk-ant-')) {
-    return 'Invalid API key. It should start with "sk-ant-".\n  Get your key at: https://console.anthropic.com/settings/keys\n  Then run: zylos init --api-key <key>';
+  // API key format (reject setup tokens — they start with sk-ant-oat).
+  // The `sk-ant-` positive check only applies to the official endpoint:
+  // custom backends (set via --base-url / ANTHROPIC_BASE_URL) commonly
+  // issue keys with their own prefix (e.g. `proxy-`, `custom-`, etc.).
+  const customEndpoint = isCustomAnthropicEndpoint(opts.baseUrl);
+  if (opts.apiKey && !opts.apiKey.startsWith('sk-ant-') && !customEndpoint) {
+    return 'Invalid API key. It should start with "sk-ant-" for api.anthropic.com.\n  Get your key at: https://console.anthropic.com/settings/keys\n  Custom endpoints: set --base-url or ANTHROPIC_BASE_URL before --api-key.';
   }
   if (opts.apiKey && opts.apiKey.startsWith('sk-ant-oat')) {
     return 'That looks like a setup token, not an API key.\n  Use --setup-token instead: zylos init --setup-token <token>';
@@ -2146,15 +2213,26 @@ export async function initCommand(args) {
     } else if (opts.apiKey) {
       // API key provided via flag/env — verify and use directly (already validated format)
       if (!quiet) console.log(`  ${dim('Verifying API key...')}`);
-      const keyValid = await verifyApiKey(opts.apiKey);
-      if (!keyValid) {
+      const keyResult = await verifyApiKey(opts.apiKey, opts.baseUrl);
+      if (!keyResult.valid) {
         console.error(`  ${error('API key is invalid or could not be verified.')}`);
-        console.error(`    ${dim('Check your key at console.anthropic.com')}`);
+        if (keyResult.authError) {
+          console.error(`    ${dim('The endpoint responded with 401 Unauthorized.')}`);
+        } else {
+          console.error(`    ${dim('Check your key at console.anthropic.com')}`);
+        }
         if (skipConfirm) exitCode = 1;
       } else if (saveApiKey(opts.apiKey)) {
         pendingApiKey = opts.apiKey;
         claudeAuthenticated = true;
-        if (!quiet) console.log(`  ${success('API key verified and saved')}`);
+        if (!quiet) {
+          if (keyResult.unverified) {
+            console.log(`  ${warn('API key saved (online verification skipped for custom endpoint).')}`);
+            console.log(`    ${dim('Runtime will validate the key on first request.')}`);
+          } else {
+            console.log(`  ${success('API key verified and saved')}`);
+          }
+        }
       }
     } else {
       if (!quiet) console.log(`  ${warn('Claude Code not authenticated')}`);
@@ -2192,24 +2270,38 @@ export async function initCommand(args) {
             console.log(`    ${dim('Run "claude" to authenticate then "zylos init" again.')}`);
           }
         } else if (authChoice === 2) {
-          // Option 2: API key
-          console.log(`\n  ${dim('Paste your Anthropic API key (starts with sk-ant-):')}`);
+          // Option 2: API key. Accept any prefix when a custom base URL is
+          // configured — proxies and gateways routinely issue non-official prefixes.
+          const customEndpoint = isCustomAnthropicEndpoint(opts.baseUrl);
+          const promptHint = customEndpoint
+            ? 'Paste your API key:'
+            : 'Paste your Anthropic API key (starts with sk-ant-):';
+          console.log(`\n  ${dim(promptHint)}`);
           const apiKey = await promptSecret('  API key: ');
           if (!apiKey) {
             console.log(`  ${warn('No key entered. Skipped.')}`);
-          } else if (!apiKey.startsWith('sk-ant-')) {
+          } else if (!apiKey.startsWith('sk-ant-') && !customEndpoint) {
             console.log(`  ${error('Invalid format. API key should start with sk-ant-')}`);
             console.log(`    ${dim('You can set it later: export ANTHROPIC_API_KEY=sk-ant-xxx')}`);
           } else {
             console.log(`  ${dim('Verifying API key...')}`);
-            const keyValid = await verifyApiKey(apiKey);
-            if (!keyValid) {
+            const keyResult = await verifyApiKey(apiKey, opts.baseUrl);
+            if (!keyResult.valid) {
               console.log(`  ${error('API key is invalid or could not be verified.')}`);
-              console.log(`    ${dim('Check your key at console.anthropic.com')}`);
+              if (keyResult.authError) {
+                console.log(`    ${dim('The endpoint responded with 401 Unauthorized.')}`);
+              } else {
+                console.log(`    ${dim('Check your key at console.anthropic.com')}`);
+              }
             } else if (saveApiKey(apiKey)) {
               pendingApiKey = apiKey;
               claudeAuthenticated = true;
-              console.log(`  ${success('API key verified and saved')}`);
+              if (keyResult.unverified) {
+                console.log(`  ${warn('API key saved (online verification skipped for custom endpoint).')}`);
+                console.log(`    ${dim('Runtime will validate the key on first request.')}`);
+              } else {
+                console.log(`  ${success('API key verified and saved')}`);
+              }
             }
           }
         } else if (authChoice === 3) {
