@@ -16,21 +16,18 @@ function makeDeps(overrides = {}) {
 describe('HeartbeatEngine — rate_limited recovery', () => {
   let engine;
   let killed;
-  let enqueuedPhases;
 
   beforeEach(() => {
     killed = 0;
-    enqueuedPhases = [];
     engine = new HeartbeatEngine(makeDeps({
       killTmuxSession: () => { killed++; },
-      enqueueHeartbeat: (phase) => { enqueuedPhases.push(phase); return true; },
     }), {
       heartbeatInterval: 1800,
       signalGracePeriod: 30,
     });
   });
 
-  it('transitions to unavailable when cooldown expires and Claude is not running (#252)', () => {
+  it('keeps rate_limited when cooldown expires and Claude is not running', () => {
     // Enter rate_limited with cooldown at T=1000
     engine.enterRateLimited(1000, '10:00 AM');
     expect(engine.health).toBe('rate_limited');
@@ -39,41 +36,36 @@ describe('HeartbeatEngine — rate_limited recovery', () => {
     engine.processHeartbeat(false, 999);
     expect(engine.health).toBe('rate_limited');
 
-    // T=1000: cooldown expired, agentRunning=false
-    // Before fix: !agentRunning early return caused deadlock
-    // After fix: transitions out of rate_limited so Guardian can restart.
+    // T=1000: cooldown expired, agentRunning=false.
+    // Rate limit is an upstream condition, so expiry does not kill/restart.
     engine.processHeartbeat(false, 1000);
-    expect(engine.health).toBe('unavailable');
-    expect(killed).toBe(1);
+    expect(engine.health).toBe('rate_limited');
+    expect(killed).toBe(0);
     expect(engine.cooldownUntil).toBe(0);
   });
 
-  it('does not deadlock — guardian can restart after transition to unavailable', () => {
+  it('does not repeatedly expire after cooldown has been cleared', () => {
+    const logs = [];
+    engine.deps.log = (msg) => { logs.push(msg); };
     engine.enterRateLimited(1000);
     engine.processHeartbeat(false, 1000);
+    engine.processHeartbeat(false, 1001);
 
-    // Health is now 'unavailable', so Guardian process liveness is no longer blocked by rate_limited.
-    expect(engine.health).not.toBe('rate_limited');
-    expect(engine.health).toBe('unavailable');
+    expect(engine.health).toBe('rate_limited');
+    expect(killed).toBe(0);
+    expect(logs.filter(m => m.includes('Rate limit cooldown expired')).length).toBe(1);
   });
 
-  it('recovers fully after guardian restarts Claude and heartbeat succeeds', () => {
+  it('recovers fully when a later recovery heartbeat succeeds', () => {
     engine.enterRateLimited(1000);
 
-    // Cooldown expires, Claude not running → unavailable
+    // Cooldown expires without killing the existing session.
     engine.processHeartbeat(false, 1000);
-    expect(engine.health).toBe('unavailable');
+    expect(engine.health).toBe('rate_limited');
+    expect(killed).toBe(0);
 
-    // Guardian starts Claude, signal acceleration detects false→true
-    engine.processHeartbeat(false, 1005); // still starting
-    engine.processHeartbeat(true, 1010);  // Claude running, signal detected
-
-    // Grace period elapses
-    engine.processHeartbeat(true, 1045);  // 35s after signal, > 30s grace
-    expect(enqueuedPhases).toContain('post_restart');
-
-    // Heartbeat succeeds
-    engine.onHeartbeatSuccess('post_restart');
+    // A later user-triggered recovery probe can still verify recovery.
+    engine.onHeartbeatSuccess('rate-limit-recovery');
     expect(engine.health).toBe('ok');
     expect(engine.cooldownUntil).toBe(0);
     expect(engine.rateLimitResetTime).toBe('');
@@ -87,7 +79,7 @@ describe('HeartbeatEngine — rate_limited recovery', () => {
     expect(engine.health).toBe('rate_limited');
   });
 
-  it('user message triggered recovery clears cooldown for next tick', () => {
+  it('user message triggered recovery clears cooldown without changing health', () => {
     engine.enterRateLimited(2000);
 
     // User message triggers early recovery
@@ -95,25 +87,21 @@ describe('HeartbeatEngine — rate_limited recovery', () => {
     expect(triggered).toBe(true);
     expect(engine.cooldownUntil).toBe(0);
 
-    // Next tick: cooldown expired (0 < 1500), transitions to unavailable
+    // Next tick waits for the recovery probe instead of killing/restarting.
     engine.processHeartbeat(false, 1500);
-    expect(engine.health).toBe('unavailable');
+    expect(engine.health).toBe('rate_limited');
+    expect(killed).toBe(0);
   });
 
-  it('rate_limited recovery heartbeat failure stays unavailable', () => {
+  it('rate_limited recovery heartbeat failure without rate-limit signal becomes unavailable without killing immediately', () => {
+    engine.deps.detectRateLimit = () => ({ detected: false });
     engine.enterRateLimited(1000);
     engine.processHeartbeat(false, 1000);
-    expect(engine.health).toBe('unavailable');
+    expect(engine.health).toBe('rate_limited');
 
-    // Simulate: guardian restarts Claude, heartbeat sent, but rate limit still active
-    // Engine is in unavailable state now, heartbeat failure triggers triggerRecovery
-    engine.processHeartbeat(true, 1035);
-    engine.processHeartbeat(true, 1070); // signal acceleration fires
-
-    // Simulate heartbeat failure in unavailable state
-    engine.onHeartbeatFailure({ phase: 'post_restart' }, 'timeout');
-    // Should still be unavailable (triggerRecovery increments failure count)
+    engine.onHeartbeatFailure({ phase: 'recovery' }, 'timeout');
     expect(engine.health).toBe('unavailable');
+    expect(killed).toBe(0);
   });
 
   it('handles PM2 restart with persisted rate_limited state and expired cooldown', () => {
@@ -127,7 +115,7 @@ describe('HeartbeatEngine — rate_limited recovery', () => {
 
     // First tick after restart, cooldown already expired
     engine2.processHeartbeat(false, 1500);
-    expect(engine2.health).toBe('unavailable');
+    expect(engine2.health).toBe('rate_limited');
   });
 });
 

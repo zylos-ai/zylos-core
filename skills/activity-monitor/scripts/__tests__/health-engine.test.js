@@ -596,16 +596,19 @@ describe('HealthEngine', () => {
       assert.equal(result.enqueueFailed, true);
     });
 
-    it('checks auth directly when health is auth_failed', async () => {
+    it('restarts the session after auth_failed checkAuth succeeds', async () => {
       const { deps, calls } = createMockDeps();
       deps.checkAuth = async () => ({ ok: true });
       const engine = new HeartbeatEngine(deps, { initialHealth: 'auth_failed' });
 
       const result = await engine.runRecoveryProbe({ timeoutMs: 100, pollIntervalMs: 1 });
 
-      assert.equal(result.recovered, true);
-      assert.equal(result.health, 'ok');
-      assert.equal(engine.health, 'ok');
+      assert.equal(result.recovered, false);
+      assert.equal(result.health, 'unavailable');
+      assert.equal(result.restartTriggered, true);
+      assert.equal(engine.health, 'unavailable');
+      assert.equal(engine.healthReason, 'auth_recovered_restart');
+      assert.equal(calls.killTmuxSession, 1);
       assert.deepStrictEqual(calls.enqueueHeartbeat, []);
     });
 
@@ -969,27 +972,28 @@ describe('HealthEngine', () => {
       assert.equal(calls.killTmuxSession, 0);
     });
 
-    it('kills tmux and transitions to unavailable when cooldown expires', () => {
+    it('keeps session alive and waits for recovery trigger when cooldown expires', () => {
       const { deps, calls } = createMockDeps();
       const engine = new HeartbeatEngine(deps);
 
       engine.enterRateLimited(2000, '7am');
       engine.processHeartbeat(true, 2001);
 
-      assert.equal(calls.killTmuxSession, 1);
-      assert.equal(engine.health, 'unavailable');
+      assert.equal(calls.killTmuxSession, 0);
+      assert.equal(engine.health, 'rate_limited');
       assert.equal(engine.cooldownUntil, 0);
+      assert.ok(calls.log.some(m => m.includes('waiting for next recovery trigger')));
     });
 
-    it('expires rate-limit cooldown without a monitor tick', async () => {
+    it('expires rate-limit cooldown without a monitor tick and keeps session alive', async () => {
       const { deps, calls } = createMockDeps();
       const engine = new HeartbeatEngine(deps, { now: () => 1000 });
 
       engine.enterRateLimited(1, '7am');
       await new Promise(resolve => setTimeout(resolve, 0));
 
-      assert.equal(calls.killTmuxSession, 1);
-      assert.equal(engine.health, 'unavailable');
+      assert.equal(calls.killTmuxSession, 0);
+      assert.equal(engine.health, 'rate_limited');
       assert.equal(engine.cooldownUntil, 0);
     });
 

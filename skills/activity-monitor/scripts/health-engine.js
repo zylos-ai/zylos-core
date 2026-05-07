@@ -11,7 +11,8 @@
  *   - New RATE_LIMITED health state: no kill+restart, waits for cooldown
  *   - enterRateLimited(cooldownUntil, resetTime): called by activity-monitor
  *     when rate-limit signals detected in tmux pane content
- *   - After cooldownUntil expires: restart Claude + heartbeat verification
+ *   - After cooldownUntil expires: stay rate_limited and wait for a later
+ *     user-message/recovery probe to verify natural recovery
  *   - User message triggered recovery: notifyUserMessage() resets cooldown
  *     timer (5 min cooldown between triggers)
  *   - State transitions: ok/recovering → rate_limited → ok
@@ -320,15 +321,16 @@ export class HealthEngine {
       return;
     }
 
-    // Rate-limited recovery: must be checked BEFORE the !agentRunning early
-    // return. After cooldown expires Claude is not running (tmux was killed),
-    // so the early return would skip this block and cause a deadlock (#252).
+    // Rate-limited recovery: when cooldown expires, stop waiting but do not
+    // restart the runtime. Rate limit is an upstream condition; recovery is
+    // verified by the next user-message/recovery probe.
     if (this.healthState === 'rate_limited') {
-      if (currentTime < this.cooldownUntil) {
+      if (this.cooldownUntil > 0 && currentTime < this.cooldownUntil) {
         return;
       }
-      this._expireRateLimitCooldown();
-      // Guardian will now restart Claude since health !== 'rate_limited'
+      if (this.cooldownUntil > 0) {
+        this._expireRateLimitCooldown();
+      }
       return;
     }
 
@@ -572,8 +574,14 @@ export class HealthEngine {
     if (this.healthState === 'auth_failed') {
       const authResult = await this._checkAuth();
       if (authResult.ok) {
-        this.onHeartbeatSuccess('auth_recovered');
-        return { recovered: true, health: 'ok' };
+        const now = Math.floor(Date.now() / 1000);
+        this.deps.log('Auth probe recovered; restarting session before marking healthy');
+        this.restartFailureCount = 0;
+        this.lastRecoveryAt = now;
+        this.recoveringStartedAt = now;
+        this.setHealth('unavailable', 'auth_recovered_restart');
+        this.deps.killTmuxSession();
+        return { recovered: false, health: 'unavailable', restartTriggered: true };
       }
       const reason = authResult.reason || 'auth_still_failed';
       this.setHealth('auth_failed', reason);
@@ -683,11 +691,9 @@ export class HealthEngine {
 
   _expireRateLimitCooldown() {
     if (this.healthState !== 'rate_limited') return;
-    this.deps.log('Rate limit cooldown expired, transitioning to unavailable');
-    this.deps.killTmuxSession();
+    this.deps.log('Rate limit cooldown expired; waiting for next recovery trigger');
     this.cooldownUntil = 0;
     this._clearRateLimitCooldownTimer();
-    this.setHealth('unavailable', 'rate_limit_cooldown_expired');
   }
 
   _schedulePostRestartProbe() {
