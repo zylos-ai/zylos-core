@@ -43,7 +43,7 @@ cat > "$ZYLOS_DIR/.claude/settings.json" <<'EOF'
 }
 EOF
 HOME="$HOME_DIR" ZYLOS_DIR="$ZYLOS_DIR" node "$ROOT_DIR/cli/lib/sync-settings-hooks.js" >/dev/null
-assert_model "opus"
+assert_model "claude-opus-4-6"
 
 echo "== preserve user model =="
 cat > "$ZYLOS_DIR/.claude/settings.json" <<'EOF'

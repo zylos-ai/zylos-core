@@ -160,13 +160,13 @@ describe('Claude model migration hints', () => {
 
     fs.mkdirSync(path.join(templatesDir, '.claude'), { recursive: true });
     fs.mkdirSync(path.join(zylosDir, '.claude'), { recursive: true });
-    fs.writeFileSync(path.join(templatesDir, '.claude', 'settings.json'), JSON.stringify({ model: 'opus' }), 'utf8');
+    fs.writeFileSync(path.join(templatesDir, '.claude', 'settings.json'), JSON.stringify({ model: 'claude-opus-4-6' }), 'utf8');
     fs.writeFileSync(path.join(zylosDir, '.claude', 'settings.json'), JSON.stringify({ hooks: {} }), 'utf8');
 
     const hints = generateMigrationHints(templatesDir, { zylosDir });
     assert.deepEqual(
       hints.filter((hint) => hint.type === 'model_backfill'),
-      [{ type: 'model_backfill', value: 'opus' }]
+      [{ type: 'model_backfill', value: 'claude-opus-4-6' }]
     );
 
     fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -179,7 +179,7 @@ describe('Claude model migration hints', () => {
 
     fs.mkdirSync(path.join(templatesDir, '.claude'), { recursive: true });
     fs.mkdirSync(path.join(zylosDir, '.claude'), { recursive: true });
-    fs.writeFileSync(path.join(templatesDir, '.claude', 'settings.json'), JSON.stringify({ model: 'opus' }), 'utf8');
+    fs.writeFileSync(path.join(templatesDir, '.claude', 'settings.json'), JSON.stringify({ model: 'claude-opus-4-6' }), 'utf8');
     fs.writeFileSync(path.join(zylosDir, '.claude', 'settings.json'), JSON.stringify({ model: 'sonnet' }), 'utf8');
 
     const hints = generateMigrationHints(templatesDir, { zylosDir });
@@ -196,13 +196,13 @@ describe('Claude model migration hints', () => {
     fs.mkdirSync(path.join(zylosDir, '.claude'), { recursive: true });
     fs.writeFileSync(settingsPath, JSON.stringify({ hooks: {} }) + '\n', 'utf8');
 
-    const result = applyMigrationHints([{ type: 'model_backfill', value: 'opus' }], { zylosDir });
+    const result = applyMigrationHints([{ type: 'model_backfill', value: 'claude-opus-4-6' }], { zylosDir });
     const updated = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
     assert.equal(result.applied, 1);
-    assert.equal(updated.model, 'opus');
+    assert.equal(updated.model, 'claude-opus-4-6');
 
     fs.writeFileSync(settingsPath, JSON.stringify({ model: 'sonnet' }) + '\n', 'utf8');
-    const preserved = applyMigrationHints([{ type: 'model_backfill', value: 'opus' }], { zylosDir });
+    const preserved = applyMigrationHints([{ type: 'model_backfill', value: 'claude-opus-4-6' }], { zylosDir });
     const preservedSettings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
     assert.equal(preserved.applied, 0);
     assert.equal(preservedSettings.model, 'sonnet');

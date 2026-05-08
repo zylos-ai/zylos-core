@@ -17,9 +17,9 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const TEMPLATE_SETTINGS_PATH = path.join(__dirname, '..', '..', '..', 'templates', '.claude', 'settings.json');
 
 describe('Claude settings template', () => {
-  it('defaults fresh installs to the Opus model', () => {
+  it('defaults fresh installs to Claude Opus 4.6', () => {
     const template = JSON.parse(fs.readFileSync(TEMPLATE_SETTINGS_PATH, 'utf8'));
-    assert.equal(template.model, 'opus');
+    assert.equal(template.model, 'claude-opus-4-6');
   });
 
   it('disables autoMemoryEnabled and autoDreamEnabled by default', () => {
@@ -52,14 +52,14 @@ describe('syncTemplateModelSetting', () => {
     const logs = [];
 
     const result = syncTemplateModelSetting({
-      templateSettings: { model: 'opus' },
+      templateSettings: { model: 'claude-opus-4-6' },
       installedSettings,
       log: (line) => logs.push(line),
     });
 
     assert.equal(result.changed, true);
-    assert.equal(installedSettings.model, 'opus');
-    assert.deepEqual(logs, ['  + model: opus']);
+    assert.equal(installedSettings.model, 'claude-opus-4-6');
+    assert.deepEqual(logs, ['  + model: claude-opus-4-6']);
   });
 
   it('preserves an existing user-configured model', () => {
