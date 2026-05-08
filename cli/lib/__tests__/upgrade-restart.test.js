@@ -86,7 +86,7 @@ describe('step11_startCoreServices', () => {
 
     fs.mkdirSync(binDir, { recursive: true });
     fs.writeFileSync(ecosystemPath, 'module.exports = { apps: [] };\n', 'utf8');
-    fs.writeFileSync(pm2Path, `#!/bin/sh\necho "$@" >> "${logPath}"\nif [ "$1" = "env" ]; then echo "ZYLOS_PACKAGE_ROOT: ${tmpDir}"; fi\n`, { mode: 0o755 });
+    fs.writeFileSync(pm2Path, `#!/bin/sh\necho "$@" >> "${logPath}"\nif [ "$1" = "jlist" ]; then echo '[{"name":"activity-monitor","pm_id":3,"pm2_env":{"status":"online","ZYLOS_PACKAGE_ROOT":"${tmpDir}"}}]'; fi\n`, { mode: 0o755 });
 
     process.env.PATH = `${binDir}:${originalPath}`;
 
@@ -106,7 +106,46 @@ describe('step11_startCoreServices', () => {
       assert.equal(result.status, 'done');
       assert.match(fs.readFileSync(logPath, 'utf8'), /start .*ecosystem\.config\.cjs.*--only activity-monitor/);
       assert.match(fs.readFileSync(logPath, 'utf8'), /--update-env/);
+      assert.match(fs.readFileSync(logPath, 'utf8'), /^jlist$/m);
+      assert.doesNotMatch(fs.readFileSync(logPath, 'utf8'), /^env activity-monitor$/m);
       assert.match(fs.readFileSync(logPath, 'utf8'), /save/);
+    } finally {
+      process.env.PATH = originalPath;
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('fails before saving when pm2 jlist lacks activity-monitor package-root env', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-step11-jlist-missing-'));
+    const binDir = path.join(tmpDir, 'bin');
+    const logPath = path.join(tmpDir, 'pm2.log');
+    const ecosystemPath = path.join(tmpDir, 'ecosystem.config.cjs');
+    const pm2Path = path.join(binDir, 'pm2');
+    const originalPath = process.env.PATH;
+
+    fs.mkdirSync(binDir, { recursive: true });
+    fs.writeFileSync(ecosystemPath, 'module.exports = { apps: [] };\n', 'utf8');
+    fs.writeFileSync(pm2Path, `#!/bin/sh\necho "$@" >> "${logPath}"\nif [ "$1" = "jlist" ]; then echo '[{"name":"activity-monitor","pm_id":3,"pm2_env":{"status":"online"}}]'; fi\n`, { mode: 0o755 });
+
+    process.env.PATH = `${binDir}:${originalPath}`;
+
+    try {
+      const result = step11_startCoreServices({
+        tempDir: null,
+        servicesWereRunning: ['activity-monitor'],
+      }, {
+        fs: {
+          existsSync: (file) => file === ecosystemPath,
+          mkdirSync: () => {},
+          copyFileSync: () => {},
+        },
+        ecosystemPath,
+      });
+
+      assert.equal(result.status, 'failed');
+      assert.match(result.error, /ZYLOS_PACKAGE_ROOT/);
+      assert.match(fs.readFileSync(logPath, 'utf8'), /^jlist$/m);
+      assert.doesNotMatch(fs.readFileSync(logPath, 'utf8'), /^save$/m);
     } finally {
       process.env.PATH = originalPath;
       fs.rmSync(tmpDir, { recursive: true, force: true });
