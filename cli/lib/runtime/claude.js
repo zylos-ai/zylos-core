@@ -69,12 +69,19 @@ function _parseEnvValue(content, key) {
  * @param {string} envContent - Full .env file content
  * @returns {Array<{key: string, value: string}>} Resolved key-value pairs (skips missing/empty)
  */
+const VALID_ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+function _shellQuote(value) {
+  return "'" + value.replace(/'/g, "'\\''") + "'";
+}
+
 function _readManifestEnvVars(envContent) {
   const manifest = _parseEnvValue(envContent, 'ZYLOS_TMUX_ENV');
   if (!manifest) return [];
   const names = manifest.split(',').map(s => s.trim()).filter(Boolean);
   const result = [];
   for (const name of names) {
+    if (!VALID_ENV_NAME.test(name)) continue;
     const value = _parseEnvValue(envContent, name);
     if (value) result.push({ key: name, value });
   }
@@ -323,12 +330,12 @@ export class ClaudeAdapter extends RuntimeAdapter {
     // Collect env vars to inject via temp file (auth tokens + manifest vars)
     const envParts = [];
     if (baseUrlValue || (!hasNativeAuth && (apiKeyValue || oauthTokenValue))) {
-      if (apiKeyValue) envParts.push(`ANTHROPIC_API_KEY='${apiKeyValue}'`);
-      if (oauthTokenValue) envParts.push(`CLAUDE_CODE_OAUTH_TOKEN='${oauthTokenValue}'`);
-      if (baseUrlValue) envParts.push(`ANTHROPIC_BASE_URL='${baseUrlValue}'`);
+      if (apiKeyValue) envParts.push(`ANTHROPIC_API_KEY=${_shellQuote(apiKeyValue)}`);
+      if (oauthTokenValue) envParts.push(`CLAUDE_CODE_OAUTH_TOKEN=${_shellQuote(oauthTokenValue)}`);
+      if (baseUrlValue) envParts.push(`ANTHROPIC_BASE_URL=${_shellQuote(baseUrlValue)}`);
     }
     for (const { key, value } of manifestVars) {
-      envParts.push(`${key}='${value}'`);
+      envParts.push(`${key}=${_shellQuote(value)}`);
     }
 
     if (_tmuxHasSession()) {
@@ -519,4 +526,4 @@ function _approveApiKey(apiKey) {
 }
 
 // Exported for testing
-export { _parseEnvValue, _readManifestEnvVars };
+export { _parseEnvValue, _readManifestEnvVars, _shellQuote };

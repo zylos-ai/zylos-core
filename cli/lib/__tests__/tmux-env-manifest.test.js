@@ -10,7 +10,7 @@ process.env.ZYLOS_DIR = path.join(tmpRoot, 'zylos');
 fs.mkdirSync(process.env.ZYLOS_DIR, { recursive: true });
 fs.writeFileSync(path.join(process.env.ZYLOS_DIR, '.env'), '', 'utf8');
 
-const { _parseEnvValue, _readManifestEnvVars } = await import('../runtime/claude.js');
+const { _parseEnvValue, _readManifestEnvVars, _shellQuote } = await import('../runtime/claude.js');
 
 describe('ZYLOS_TMUX_ENV manifest', () => {
   test('_readManifestEnvVars returns empty array when ZYLOS_TMUX_ENV is absent', () => {
@@ -98,5 +98,27 @@ describe('ZYLOS_TMUX_ENV manifest', () => {
 
   test('_parseEnvValue returns empty string for missing key', () => {
     assert.equal(_parseEnvValue('FOO=bar', 'MISSING'), '');
+  });
+
+  test('_readManifestEnvVars skips invalid shell variable names', () => {
+    const env = [
+      'ZYLOS_TMUX_ENV=GOOD_VAR,BAD-NAME,123START,_OK',
+      'GOOD_VAR=yes',
+      'BAD-NAME=nope',
+      '123START=nope',
+      '_OK=yes',
+    ].join('\n');
+
+    const result = _readManifestEnvVars(env);
+    assert.deepEqual(result, [
+      { key: 'GOOD_VAR', value: 'yes' },
+      { key: '_OK', value: 'yes' },
+    ]);
+  });
+
+  test('_shellQuote escapes single quotes in values', () => {
+    assert.equal(_shellQuote("it's fine"), "'it'\\''s fine'");
+    assert.equal(_shellQuote("no quotes"), "'no quotes'");
+    assert.equal(_shellQuote("a'b'c"), "'a'\\''b'\\''c'");
   });
 });

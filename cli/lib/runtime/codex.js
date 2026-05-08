@@ -42,12 +42,19 @@ function _parseEnvValue(content, key) {
   return m[1].trim().replace(/^(['"])(.*)\1$/, '$2');
 }
 
+const VALID_ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+function _shellQuote(value) {
+  return "'" + value.replace(/'/g, "'\\''") + "'";
+}
+
 function _readManifestEnvVars(envContent) {
   const manifest = _parseEnvValue(envContent, 'ZYLOS_TMUX_ENV');
   if (!manifest) return [];
   const names = manifest.split(',').map(s => s.trim()).filter(Boolean);
   const result = [];
   for (const name of names) {
+    if (!VALID_ENV_NAME.test(name)) continue;
     const value = _parseEnvValue(envContent, name);
     if (value) result.push({ key: name, value });
   }
@@ -336,7 +343,7 @@ export class CodexAdapter extends RuntimeAdapter {
     let envPrefix = '';
     let tmpEnv = null;
     if (manifestVars.length > 0) {
-      const envParts = manifestVars.map(({ key, value }) => `${key}='${value}'`);
+      const envParts = manifestVars.map(({ key, value }) => `${key}=${_shellQuote(value)}`);
       tmpEnv = path.join(os.tmpdir(), `.zylos-env-${process.pid}-${Date.now()}`);
       fs.writeFileSync(tmpEnv, envParts.join('\n') + '\n', { mode: 0o600 });
       envPrefix = `set -a; . "${tmpEnv}"; set +a; rm -f "${tmpEnv}"; `;
