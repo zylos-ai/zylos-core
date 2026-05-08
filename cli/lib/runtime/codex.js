@@ -24,7 +24,7 @@ import { RuntimeAdapter } from './base.js';
 import { buildInstructionFile } from './instruction-builder.js';
 import { CodexContextMonitor } from './codex-context-monitor.js';
 import { createCodexProbe } from '../heartbeat/codex-probe.js';
-import { ZYLOS_DIR, SKILLS_DIR, getZylosConfig } from '../config.js';
+import { ZYLOS_DIR, SKILLS_DIR, getZylosConfig, ENV_FILE } from '../config.js';
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -34,6 +34,25 @@ const CODEX_BIN = process.env.CODEX_BIN || 'codex';
 // When CODEX_BYPASS_PERMISSIONS=false, skip --dangerously-bypass-approvals-and-sandbox.
 // Defaults to enabled for unattended server operation.
 const DEFAULT_BYPASS = process.env.CODEX_BYPASS_PERMISSIONS !== 'false';
+
+function _parseEnvValue(content, key) {
+  const re = new RegExp(`^\\s*${key}\\s*=\\s*(.+)$`, 'm');
+  const m = content.match(re);
+  if (!m) return '';
+  return m[1].trim().replace(/^(['"])(.*)\1$/, '$2');
+}
+
+function _readManifestEnvVars(envContent) {
+  const manifest = _parseEnvValue(envContent, 'ZYLOS_TMUX_ENV');
+  if (!manifest) return [];
+  const names = manifest.split(',').map(s => s.trim()).filter(Boolean);
+  const result = [];
+  for (const name of names) {
+    const value = _parseEnvValue(envContent, name);
+    if (value) result.push({ key: name, value });
+  }
+  return result;
+}
 
 function getCodexApiBaseUrl() {
   try {
@@ -306,10 +325,27 @@ export class CodexAdapter extends RuntimeAdapter {
     const exitLogFile = path.join(monitorDir, 'codex-exit.log');
     const exitLogSnippet = `_ec=$?; echo "[$(date -Iseconds)] exit_code=$_ec" >> "${exitLogFile}"`;
 
+    // ZYLOS_TMUX_ENV manifest: user-declared env vars to inject into the session
+    let manifestVars = [];
+    try {
+      const envContent = fs.readFileSync(ENV_FILE, 'utf8');
+      manifestVars = _readManifestEnvVars(envContent);
+    } catch { }
+
+    // Build env injection prefix (sourced before codex command)
+    let envPrefix = '';
+    let tmpEnv = null;
+    if (manifestVars.length > 0) {
+      const envParts = manifestVars.map(({ key, value }) => `${key}='${value}'`);
+      tmpEnv = path.join(os.tmpdir(), `.zylos-env-${process.pid}-${Date.now()}`);
+      fs.writeFileSync(tmpEnv, envParts.join('\n') + '\n', { mode: 0o600 });
+      envPrefix = `set -a; . "${tmpEnv}"; set +a; rm -f "${tmpEnv}"; `;
+    }
+
     if (_tmuxHasSession()) {
       const cmd = tmpPrompt
-        ? `cd "${ZYLOS_DIR}"; _p=$(cat "${tmpPrompt}"); rm -f "${tmpPrompt}"; ${codexCmd} "$_p"; ${exitLogSnippet}`
-        : `cd "${ZYLOS_DIR}"; ${codexCmd}; ${exitLogSnippet}`;
+        ? `${envPrefix}cd "${ZYLOS_DIR}"; _p=$(cat "${tmpPrompt}"); rm -f "${tmpPrompt}"; ${codexCmd} "$_p"; ${exitLogSnippet}`
+        : `${envPrefix}cd "${ZYLOS_DIR}"; ${codexCmd}; ${exitLogSnippet}`;
       await this.sendMessage(cmd);
     } else {
       const dedupedPath = [...new Set((process.env.PATH || '').split(':').filter(Boolean))].join(':');
@@ -319,12 +355,13 @@ export class CodexAdapter extends RuntimeAdapter {
       const promptSnippet = tmpPrompt
         ? `_p=$(cat "${tmpPrompt}"); rm -f "${tmpPrompt}"; ${codexCmd} "$_p"`
         : codexCmd;
-      const shellCmd = `cd "${ZYLOS_DIR}" && ${promptSnippet}; ${exitLogSnippet}`;
+      const shellCmd = `${envPrefix}cd "${ZYLOS_DIR}" && ${promptSnippet}; ${exitLogSnippet}`;
       tmuxArgs.push('--', shellCmd);
 
       try {
         execFileSync('tmux', tmuxArgs);
       } catch (e) {
+        if (tmpEnv) try { fs.unlinkSync(tmpEnv); } catch { }
         if (tmpPrompt) try { fs.unlinkSync(tmpPrompt); } catch { }
         throw new Error(`Failed to create tmux session: ${e.message}`);
       }

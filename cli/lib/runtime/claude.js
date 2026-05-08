@@ -60,6 +60,27 @@ function _parseEnvValue(content, key) {
   return m[1].trim().replace(/^(['"])(.*)\1$/, '$2');
 }
 
+/**
+ * Read ZYLOS_TMUX_ENV manifest from .env and resolve each declared variable.
+ *
+ * ZYLOS_TMUX_ENV is a comma-separated list of variable names whose values
+ * (also in .env) should be injected into the tmux session environment.
+ *
+ * @param {string} envContent - Full .env file content
+ * @returns {Array<{key: string, value: string}>} Resolved key-value pairs (skips missing/empty)
+ */
+function _readManifestEnvVars(envContent) {
+  const manifest = _parseEnvValue(envContent, 'ZYLOS_TMUX_ENV');
+  if (!manifest) return [];
+  const names = manifest.split(',').map(s => s.trim()).filter(Boolean);
+  const result = [];
+  for (const name of names) {
+    const value = _parseEnvValue(envContent, name);
+    if (value) result.push({ key: name, value });
+  }
+  return result;
+}
+
 // ── ClaudeAdapter ─────────────────────────────────────────────────────────────
 
 export class ClaudeAdapter extends RuntimeAdapter {
@@ -270,14 +291,18 @@ export class ClaudeAdapter extends RuntimeAdapter {
       } catch { }
     }
 
+    // Read .env once — used for auth tokens and manifest env vars
+    let envContent = '';
+    try { envContent = fs.readFileSync(path.join(ZYLOS_DIR, '.env'), 'utf8'); } catch { }
+
+    // ZYLOS_TMUX_ENV manifest: user-declared env vars to inject into the session
+    const manifestVars = _readManifestEnvVars(envContent);
+
     if (!hasNativeAuth) {
       // Read API tokens from .env — only when no native login
-      try {
-        const envContent = fs.readFileSync(path.join(ZYLOS_DIR, '.env'), 'utf8');
-        apiKeyValue = _parseEnvValue(envContent, 'ANTHROPIC_API_KEY');
-        oauthTokenValue = _parseEnvValue(envContent, 'CLAUDE_CODE_OAUTH_TOKEN');
-        baseUrlValue = _parseEnvValue(envContent, 'ANTHROPIC_BASE_URL');
-      } catch { }
+      apiKeyValue = _parseEnvValue(envContent, 'ANTHROPIC_API_KEY');
+      oauthTokenValue = _parseEnvValue(envContent, 'CLAUDE_CODE_OAUTH_TOKEN');
+      baseUrlValue = _parseEnvValue(envContent, 'ANTHROPIC_BASE_URL');
 
       // Pre-approve API keys to skip interactive confirmation prompts
       if (apiKeyValue) _approveApiKey(apiKeyValue);
@@ -295,9 +320,27 @@ export class ClaudeAdapter extends RuntimeAdapter {
     const exitLogFile = path.join(monitorDir, 'claude-exit.log');
     const exitLogSnippet = `_ec=$?; echo "[$(date -Iseconds)] exit_code=$_ec" >> "${exitLogFile}"`;
 
+    // Collect env vars to inject via temp file (auth tokens + manifest vars)
+    const envParts = [];
+    if (baseUrlValue || (!hasNativeAuth && (apiKeyValue || oauthTokenValue))) {
+      if (apiKeyValue) envParts.push(`ANTHROPIC_API_KEY='${apiKeyValue}'`);
+      if (oauthTokenValue) envParts.push(`CLAUDE_CODE_OAUTH_TOKEN='${oauthTokenValue}'`);
+      if (baseUrlValue) envParts.push(`ANTHROPIC_BASE_URL='${baseUrlValue}'`);
+    }
+    for (const { key, value } of manifestVars) {
+      envParts.push(`${key}='${value}'`);
+    }
+
     if (_tmuxHasSession()) {
       // Existing session — send command via tmux
-      const cmd = `cd "${ZYLOS_DIR}"; ${claudeCmd}; ${exitLogSnippet}`;
+      let cmd;
+      if (envParts.length > 0) {
+        const tmpEnv = path.join(os.tmpdir(), `.zylos-env-${process.pid}-${Date.now()}`);
+        fs.writeFileSync(tmpEnv, envParts.join('\n') + '\n', { mode: 0o600 });
+        cmd = `set -a; . "${tmpEnv}"; set +a; rm -f "${tmpEnv}"; cd "${ZYLOS_DIR}" && ${claudeCmd}; ${exitLogSnippet}`;
+      } else {
+        cmd = `cd "${ZYLOS_DIR}"; ${claudeCmd}; ${exitLogSnippet}`;
+      }
       await this.sendMessage(cmd);
     } else {
       // New tmux session
@@ -308,13 +351,7 @@ export class ClaudeAdapter extends RuntimeAdapter {
       let shellCmd;
       let tmpEnv = null;
 
-      if (baseUrlValue || (!hasNativeAuth && (apiKeyValue || oauthTokenValue))) {
-        // Write secrets to a temp file, source it, then delete it
-        // Avoids exposing secrets in ps/proc/cmdline
-        const envParts = [];
-        if (apiKeyValue) envParts.push(`ANTHROPIC_API_KEY='${apiKeyValue}'`);
-        if (oauthTokenValue) envParts.push(`CLAUDE_CODE_OAUTH_TOKEN='${oauthTokenValue}'`);
-        if (baseUrlValue) envParts.push(`ANTHROPIC_BASE_URL='${baseUrlValue}'`);
+      if (envParts.length > 0) {
         tmpEnv = path.join(os.tmpdir(), `.zylos-env-${process.pid}-${Date.now()}`);
         fs.writeFileSync(tmpEnv, envParts.join('\n') + '\n', { mode: 0o600 });
         shellCmd = `set -a; . "${tmpEnv}"; set +a; rm -f "${tmpEnv}"; cd "${ZYLOS_DIR}" && ${claudeCmd}; ${exitLogSnippet}`;
@@ -480,3 +517,6 @@ function _approveApiKey(apiKey) {
     }
   } catch { }
 }
+
+// Exported for testing
+export { _parseEnvValue, _readManifestEnvVars };
