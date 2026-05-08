@@ -4,8 +4,95 @@ import os from 'node:os';
 import path from 'node:path';
 import { describe, it } from 'node:test';
 
-const { step1_backupCoreSkills, rollbackSelf, step10_ensureCodexConfig } = await import('../self-upgrade.js');
+const {
+  createFinalizeState,
+  runSelfUpgradeFinalize,
+  step1_backupCoreSkills,
+  rollbackSelf,
+  step10_ensureCodexConfig,
+} = await import('../self-upgrade.js');
 const { generateMigrationHints, applyMigrationHints } = await import('../self-upgrade.js');
+
+describe('self-upgrade finalizer handoff', () => {
+  it('serializes the state needed by the newly installed finalizer', () => {
+    assert.deepEqual(createFinalizeState({
+      tempDir: '/tmp/new-core',
+      backupDir: '/tmp/backup',
+      servicesWereRunning: ['activity-monitor', 'c4-dispatcher'],
+      from: '0.4.12',
+      to: '0.4.13',
+      newVersion: '0.4.13',
+      mode: 'merge',
+    }), {
+      schemaVersion: 1,
+      tempDir: '/tmp/new-core',
+      backupDir: '/tmp/backup',
+      servicesWereRunning: ['activity-monitor', 'c4-dispatcher'],
+      from: '0.4.12',
+      to: '0.4.13',
+      newVersion: '0.4.13',
+      mode: 'merge',
+    });
+  });
+
+  it('runs post-install steps with restored state and returns upgrade metadata', () => {
+    const calls = [];
+    const result = runSelfUpgradeFinalize({
+      schemaVersion: 1,
+      tempDir: '/tmp/new-core',
+      backupDir: '/tmp/backup',
+      servicesStopped: ['activity-monitor'],
+      servicesWereRunning: ['activity-monitor'],
+      from: '0.4.12',
+      to: '0.4.13',
+      mode: 'merge',
+    }, {
+      steps: [
+        (ctx) => {
+          calls.push({
+            tempDir: ctx.tempDir,
+            backupDir: ctx.backupDir,
+            servicesWereRunning: ctx.servicesWereRunning,
+            mode: ctx.mode,
+          });
+          return { step: 5, name: 'sync_core_skills', status: 'done', message: 'ok' };
+        },
+      ],
+    });
+
+    assert.equal(result.success, true);
+    assert.equal(result.from, '0.4.12');
+    assert.equal(result.to, '0.4.13');
+    assert.equal(result.backupDir, '/tmp/backup');
+    assert.equal(result.steps.length, 1);
+    assert.deepEqual(calls, [{
+      tempDir: '/tmp/new-core',
+      backupDir: '/tmp/backup',
+      servicesWereRunning: ['activity-monitor'],
+      mode: 'merge',
+    }]);
+  });
+
+  it('fails without rollback when a post-install step fails', () => {
+    const result = runSelfUpgradeFinalize({
+      schemaVersion: 1,
+      tempDir: '/tmp/new-core',
+      backupDir: '/tmp/backup',
+      servicesWereRunning: ['activity-monitor'],
+      from: '0.4.12',
+      to: '0.4.13',
+    }, {
+      steps: [
+        () => ({ step: 5, name: 'sync_core_skills', status: 'failed', error: 'sync failed' }),
+      ],
+    });
+
+    assert.equal(result.success, false);
+    assert.equal(result.failedStep, 5);
+    assert.equal(result.error, 'sync failed');
+    assert.deepEqual(result.rollback, { performed: false, steps: [] });
+  });
+});
 
 describe('step10_ensureCodexConfig', () => {
   it('skips codex config write when non-codex runtime has no codex state', () => {

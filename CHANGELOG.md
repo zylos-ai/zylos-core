@@ -5,6 +5,11 @@ All notable changes to zylos-core will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Upgrade Notes
+- If self-upgrade fails with `failed to verify activity-monitor PM2 env after restart`, first run `pm2 stop activity-monitor`, then retry with `zylos upgrade --self -y`.
+
 ## [0.4.13] - 2026-04-12
 
 ### Fixed
