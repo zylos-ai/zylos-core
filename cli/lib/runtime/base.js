@@ -41,6 +41,22 @@ export class RuntimeAdapter {
   }
 
   /**
+   * Clear stale runtime-specific state before launching a fresh session.
+   * Implementations may override this for heartbeat/context temp files.
+   */
+  clearStaleState() {
+    // Optional hook.
+  }
+
+  /**
+   * Enqueue or otherwise provide the startup prompt after launch.
+   * Implementations may no-op when startup is handled inside launch().
+   */
+  enqueueStartupPrompt() {
+    // Optional hook.
+  }
+
+  /**
    * Stop the runtime (kill the tmux session).
    * Implementations MUST be synchronous — HeartbeatEngine calls this without await.
    */

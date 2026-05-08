@@ -65,12 +65,12 @@ The activity monitor writes `~/zylos/activity-monitor/agent-status.json` which i
 | Value | Meaning |
 |-------|---------|
 | `ok` | System healthy, messages accepted normally |
-| `recovering` | Liveness check failed, automatic recovery in progress |
-| `down` | Max recovery attempts exhausted, manual intervention required |
+| `recovering` | Legacy persisted liveness state; normalized to unavailable at runtime |
+| `down` | Legacy persisted liveness state; normalized to unavailable at runtime |
 
 **Fail-open semantics**: If the status file is missing or malformed, health is assumed `ok` — intake is never blocked by a read failure.
 
-When health is not `ok`, `c4-receive.js` rejects incoming messages and records the channel/endpoint in `~/zylos/activity-monitor/pending-channels.jsonl`. Once health returns to `ok`, the activity monitor sends recovery notifications to all pending channels.
+When health is not `ok`, `c4-receive.js` asks the activity monitor MessageRouter how to route the current message. Unhealthy messages are recorded as delivered and receive an immediate status reply when replies are enabled; `--no-reply` messages are accepted silently. If the MessageRouter IPC is unavailable, `c4-receive.js` falls back to the status file with the same delivered/current-message behavior.
 
 ## Keystroke Delivery
 

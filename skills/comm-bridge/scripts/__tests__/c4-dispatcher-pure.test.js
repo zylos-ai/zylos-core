@@ -33,6 +33,7 @@ const {
   parseKeystrokeKey,
   isCodexExitLifecycleControl,
   getHeartbeatPhase,
+  isRecoveryHeartbeatPhase,
   shouldAutoAckHeartbeat,
   readJsonFileWithRetry
 } = mod;
@@ -291,8 +292,21 @@ describe('getHeartbeatPhase', () => {
     assert.equal(getHeartbeatPhase('Heartbeat check. [phase=primary]'), 'primary');
   });
 
+  it('extracts underscore phases such as post_restart', () => {
+    assert.equal(getHeartbeatPhase('Heartbeat check. [phase=post_restart]'), 'post_restart');
+  });
+
   it('returns unknown when no phase marker is present', () => {
     assert.equal(getHeartbeatPhase('Heartbeat check.'), 'unknown');
+  });
+});
+
+describe('isRecoveryHeartbeatPhase', () => {
+  it('matches recovery contract phases only', () => {
+    assert.equal(isRecoveryHeartbeatPhase('recovery'), true);
+    assert.equal(isRecoveryHeartbeatPhase('post_restart'), true);
+    assert.equal(isRecoveryHeartbeatPhase('primary'), false);
+    assert.equal(isRecoveryHeartbeatPhase('signal-recovery'), false);
   });
 });
 
@@ -302,13 +316,31 @@ describe('shouldAutoAckHeartbeat', () => {
   const heartbeatItem = { content: 'Heartbeat check. [phase=primary]' };
   const aliveProc = { alive: true, frozen: false, lastDelta: 1 };
 
-  it('keeps the existing busy-path auto-ack when activity hooks confirm work is running', () => {
+  it('keeps the existing busy-path auto-ack for non-recovery heartbeats when activity hooks confirm work is running', () => {
+    assert.equal(shouldAutoAckHeartbeat({
+      item: { content: 'Heartbeat check. [phase=primary]' },
+      agentState: { state: 'busy', health: 'ok', idleSeconds: 0, healthy: true },
+      procState: aliveProc,
+      confirmedActive: true
+    }), true);
+  });
+
+  it('does not auto-ack recovery heartbeat even when activity hooks confirm work is running', () => {
     assert.equal(shouldAutoAckHeartbeat({
       item: { content: 'Heartbeat check. [phase=recovery]' },
       agentState: { state: 'busy', health: 'recovering', idleSeconds: 0, healthy: true },
       procState: aliveProc,
       confirmedActive: true
-    }), true);
+    }), false);
+  });
+
+  it('does not auto-ack post-restart heartbeat even when activity hooks confirm work is running', () => {
+    assert.equal(shouldAutoAckHeartbeat({
+      item: { content: 'Heartbeat check. [phase=post_restart]' },
+      agentState: { state: 'busy', health: 'recovering', idleSeconds: 0, healthy: true },
+      procState: aliveProc,
+      confirmedActive: true
+    }), false);
   });
 
   it('auto-acks on the idle path when the session is healthy and stably idle', () => {
@@ -320,9 +352,9 @@ describe('shouldAutoAckHeartbeat', () => {
     }), true);
   });
 
-  it('does not auto-ack non-primary idle heartbeats', () => {
+  it('does not auto-ack recovery idle heartbeats', () => {
     assert.equal(shouldAutoAckHeartbeat({
-      item: { content: 'Heartbeat check. [phase=stuck]' },
+      item: { content: 'Heartbeat check. [phase=recovery]' },
       agentState: { state: 'idle', health: 'ok', idleSeconds: 10, healthy: true },
       procState: aliveProc,
       confirmedActive: false

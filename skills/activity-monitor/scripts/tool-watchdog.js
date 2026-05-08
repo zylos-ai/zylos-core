@@ -21,14 +21,6 @@ export function evaluateToolWatchdogTransition({
     return phase;
   }
 
-  const withinLaunchGrace = state.runtimeLaunchAtMs > 0
-    && (nowMs - state.runtimeLaunchAtMs) < (state.launchGracePeriodSec * 1000);
-  if (withinLaunchGrace) {
-    deps.clearWatchdogState();
-    phase.watchdog_block_reason = 'launch_grace';
-    return phase;
-  }
-
   if (state.engineHealth !== 'ok') {
     deps.clearWatchdogState();
     phase.watchdog_block_reason = `health_${state.engineHealth}`;

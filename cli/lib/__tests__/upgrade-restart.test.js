@@ -58,6 +58,8 @@ describe('step11_startCoreServices', () => {
       restartManagedProcess: (name, opts) => {
         calls.push({ name, opts });
       },
+      verifyActivityMonitorEnv: () => true,
+      execSync: (cmd) => calls.push({ type: 'exec', cmd }),
     });
 
     assert.equal(result.status, 'done');
@@ -68,6 +70,9 @@ describe('step11_startCoreServices', () => {
         stdio: 'pipe',
         fallbackToPlainRestartOnError: true,
       },
+    }, {
+      type: 'exec',
+      cmd: 'pm2 save 2>/dev/null',
     }]);
   });
 
@@ -81,7 +86,7 @@ describe('step11_startCoreServices', () => {
 
     fs.mkdirSync(binDir, { recursive: true });
     fs.writeFileSync(ecosystemPath, 'module.exports = { apps: [] };\n', 'utf8');
-    fs.writeFileSync(pm2Path, `#!/bin/sh\necho \"$@\" >> "${logPath}"\n`, { mode: 0o755 });
+    fs.writeFileSync(pm2Path, `#!/bin/sh\necho "$@" >> "${logPath}"\nif [ "$1" = "env" ]; then echo "ZYLOS_PACKAGE_ROOT: ${tmpDir}"; fi\n`, { mode: 0o755 });
 
     process.env.PATH = `${binDir}:${originalPath}`;
 
@@ -100,10 +105,36 @@ describe('step11_startCoreServices', () => {
 
       assert.equal(result.status, 'done');
       assert.match(fs.readFileSync(logPath, 'utf8'), /start .*ecosystem\.config\.cjs.*--only activity-monitor/);
+      assert.match(fs.readFileSync(logPath, 'utf8'), /--update-env/);
+      assert.match(fs.readFileSync(logPath, 'utf8'), /save/);
     } finally {
       process.env.PATH = originalPath;
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
+  });
+
+  it('fails before saving when activity-monitor restarts without refreshed package-root env', () => {
+    const calls = [];
+    const result = step11_startCoreServices({
+      tempDir: null,
+      servicesWereRunning: ['activity-monitor'],
+    }, {
+      fs: {
+        existsSync: () => false,
+        mkdirSync: () => {},
+        copyFileSync: () => {},
+      },
+      ecosystemPath: '/tmp/core-ecosystem.config.cjs',
+      restartManagedProcess: (name, opts) => {
+        calls.push({ name, opts });
+      },
+      verifyActivityMonitorEnv: () => false,
+      execSync: (cmd) => calls.push({ type: 'exec', cmd }),
+    });
+
+    assert.equal(result.status, 'failed');
+    assert.match(result.error, /ZYLOS_PACKAGE_ROOT/);
+    assert.equal(calls.some(call => call.type === 'exec' && call.cmd === 'pm2 save 2>/dev/null'), false);
   });
 });
 

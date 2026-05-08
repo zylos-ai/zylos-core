@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from '@jest/globals';
-import { HeartbeatEngine } from '../skills/activity-monitor/scripts/heartbeat-engine.js';
+import { HeartbeatEngine } from '../skills/activity-monitor/scripts/health-engine.js';
 
 function makeDeps(overrides = {}) {
   return {
@@ -16,21 +16,18 @@ function makeDeps(overrides = {}) {
 describe('HeartbeatEngine — rate_limited recovery', () => {
   let engine;
   let killed;
-  let enqueuedPhases;
 
   beforeEach(() => {
     killed = 0;
-    enqueuedPhases = [];
     engine = new HeartbeatEngine(makeDeps({
       killTmuxSession: () => { killed++; },
-      enqueueHeartbeat: (phase) => { enqueuedPhases.push(phase); return true; },
     }), {
       heartbeatInterval: 1800,
       signalGracePeriod: 30,
     });
   });
 
-  it('transitions to recovering when cooldown expires and Claude is not running (#252)', () => {
+  it('keeps rate_limited when cooldown expires and Claude is not running', () => {
     // Enter rate_limited with cooldown at T=1000
     engine.enterRateLimited(1000, '10:00 AM');
     expect(engine.health).toBe('rate_limited');
@@ -39,41 +36,36 @@ describe('HeartbeatEngine — rate_limited recovery', () => {
     engine.processHeartbeat(false, 999);
     expect(engine.health).toBe('rate_limited');
 
-    // T=1000: cooldown expired, agentRunning=false
-    // Before fix: !agentRunning early return caused deadlock
-    // After fix: transitions to recovering
+    // T=1000: cooldown expired, agentRunning=false.
+    // Rate limit is an upstream condition, so expiry does not kill/restart.
     engine.processHeartbeat(false, 1000);
-    expect(engine.health).toBe('recovering');
-    expect(killed).toBe(1);
+    expect(engine.health).toBe('rate_limited');
+    expect(killed).toBe(0);
     expect(engine.cooldownUntil).toBe(0);
   });
 
-  it('does not deadlock — guardian can restart after transition to recovering', () => {
+  it('does not repeatedly expire after cooldown has been cleared', () => {
+    const logs = [];
+    engine.deps.log = (msg) => { logs.push(msg); };
     engine.enterRateLimited(1000);
     engine.processHeartbeat(false, 1000);
+    engine.processHeartbeat(false, 1001);
 
-    // Health is now 'recovering', so guardian check `health !== 'rate_limited'` passes
-    expect(engine.health).not.toBe('rate_limited');
-    expect(engine.health).toBe('recovering');
+    expect(engine.health).toBe('rate_limited');
+    expect(killed).toBe(0);
+    expect(logs.filter(m => m.includes('Rate limit cooldown expired')).length).toBe(1);
   });
 
-  it('recovers fully after guardian restarts Claude and heartbeat succeeds', () => {
+  it('recovers fully when a later recovery heartbeat succeeds', () => {
     engine.enterRateLimited(1000);
 
-    // Cooldown expires, Claude not running → recovering
+    // Cooldown expires without killing the existing session.
     engine.processHeartbeat(false, 1000);
-    expect(engine.health).toBe('recovering');
+    expect(engine.health).toBe('rate_limited');
+    expect(killed).toBe(0);
 
-    // Guardian starts Claude, signal acceleration detects false→true
-    engine.processHeartbeat(false, 1005); // still starting
-    engine.processHeartbeat(true, 1010);  // Claude running, signal detected
-
-    // Grace period elapses
-    engine.processHeartbeat(true, 1045);  // 35s after signal, > 30s grace
-    expect(enqueuedPhases).toContain('signal-recovery');
-
-    // Heartbeat succeeds
-    engine.onHeartbeatSuccess('signal-recovery');
+    // A later user-triggered recovery probe can still verify recovery.
+    engine.onHeartbeatSuccess('rate-limit-recovery');
     expect(engine.health).toBe('ok');
     expect(engine.cooldownUntil).toBe(0);
     expect(engine.rateLimitResetTime).toBe('');
@@ -87,7 +79,7 @@ describe('HeartbeatEngine — rate_limited recovery', () => {
     expect(engine.health).toBe('rate_limited');
   });
 
-  it('user message triggered recovery clears cooldown for next tick', () => {
+  it('user message triggered recovery clears cooldown without changing health', () => {
     engine.enterRateLimited(2000);
 
     // User message triggers early recovery
@@ -95,25 +87,21 @@ describe('HeartbeatEngine — rate_limited recovery', () => {
     expect(triggered).toBe(true);
     expect(engine.cooldownUntil).toBe(0);
 
-    // Next tick: cooldown expired (0 < 1500), transitions to recovering
+    // Next tick waits for the recovery probe instead of killing/restarting.
     engine.processHeartbeat(false, 1500);
-    expect(engine.health).toBe('recovering');
+    expect(engine.health).toBe('rate_limited');
+    expect(killed).toBe(0);
   });
 
-  it('rate_limited recovery heartbeat failure re-enters rate_limited with 60s retry', () => {
+  it('rate_limited recovery heartbeat failure without rate-limit signal becomes unavailable without killing immediately', () => {
+    engine.deps.detectRateLimit = () => ({ detected: false });
     engine.enterRateLimited(1000);
     engine.processHeartbeat(false, 1000);
-    expect(engine.health).toBe('recovering');
+    expect(engine.health).toBe('rate_limited');
 
-    // Simulate: guardian restarts Claude, heartbeat sent, but rate limit still active
-    // Engine is in recovering state now, heartbeat failure triggers triggerRecovery
-    engine.processHeartbeat(true, 1035);
-    engine.processHeartbeat(true, 1070); // signal acceleration fires
-
-    // Simulate heartbeat failure in recovering state
-    engine.onHeartbeatFailure({ phase: 'signal-recovery' }, 'timeout');
-    // Should still be in recovering (triggerRecovery increments failure count)
-    expect(engine.health).toBe('recovering');
+    engine.onHeartbeatFailure({ phase: 'recovery' }, 'timeout');
+    expect(engine.health).toBe('unavailable');
+    expect(killed).toBe(0);
   });
 
   it('handles PM2 restart with persisted rate_limited state and expired cooldown', () => {
@@ -127,22 +115,22 @@ describe('HeartbeatEngine — rate_limited recovery', () => {
 
     // First tick after restart, cooldown already expired
     engine2.processHeartbeat(false, 1500);
-    expect(engine2.health).toBe('recovering');
+    expect(engine2.health).toBe('rate_limited');
   });
 });
 
 describe('HeartbeatEngine — user message recovery across all states', () => {
-  it('recovering: resets backoff for immediate retry', () => {
+  it('unavailable: resets backoff for immediate retry', () => {
     const phases = [];
     const engine = new HeartbeatEngine(makeDeps({
       enqueueHeartbeat: (phase) => { phases.push(phase); return true; },
     }), { heartbeatInterval: 1800 });
 
-    // Enter recovering with high failure count (long backoff)
+    // Enter unavailable with high failure count (long backoff)
     engine.triggerRecovery('test_fail');
     engine.triggerRecovery('test_fail_2');
     engine.triggerRecovery('test_fail_3');
-    expect(engine.health).toBe('recovering');
+    expect(engine.health).toBe('unavailable');
     expect(engine.restartFailureCount).toBe(3);
     const backoffBefore = engine.getBackoffDelay(); // 60 * 5^2 = 1500s
 
@@ -167,10 +155,9 @@ describe('HeartbeatEngine — user message recovery across all states', () => {
       downRetryInterval: 3600,
     });
 
-    // Enter down state
-    engine.triggerRecovery('fail');
-    engine.recoveringStartedAt = 1;
-    engine.triggerRecovery('fail_degrade');
+    // Restore a legacy down state. New AM v3 recovery paths remain public unavailable,
+    // but persisted down is still readable during transition.
+    engine.setHealth('down', 'legacy_restored_down');
     expect(engine.health).toBe('down');
 
     // Without user message, would need to wait downRetryInterval (3600s)
@@ -203,7 +190,7 @@ describe('HeartbeatEngine — user message recovery across all states', () => {
     });
 
     engine.triggerRecovery('fail');
-    expect(engine.health).toBe('recovering');
+    expect(engine.health).toBe('unavailable');
 
     // First message triggers
     expect(engine.notifyUserMessage(1000)).toBe(true);
@@ -234,16 +221,16 @@ describe('HeartbeatEngine — basic health transitions', () => {
     expect(phases).toEqual(['primary']);
   });
 
-  it('enters recovering on heartbeat failure from ok state', () => {
+  it('enters unavailable on heartbeat failure from ok state', () => {
     const engine = new HeartbeatEngine(makeDeps());
     expect(engine.health).toBe('ok');
 
     engine.triggerRecovery('test_failure');
-    expect(engine.health).toBe('recovering');
+    expect(engine.health).toBe('unavailable');
     expect(engine.restartFailureCount).toBe(1);
   });
 
-  it('degrades to down after continuous failure exceeds threshold', () => {
+  it('keeps new continuous failures unavailable after threshold', () => {
     const engine = new HeartbeatEngine(makeDeps(), {
       downDegradeThreshold: 100,
     });
@@ -255,7 +242,8 @@ describe('HeartbeatEngine — basic health transitions', () => {
     // Manually advance recoveringStartedAt to test degradation
     engine.recoveringStartedAt = startTime - 200;
     engine.triggerRecovery('later_fail');
-    expect(engine.health).toBe('down');
+    expect(engine.health).toBe('unavailable');
+    expect(engine.healthReason).toMatch(/^continuous_failure_for_/);
   });
 
   it('triggerRecovery from rate_limited is a no-op (health and failure count unchanged)', () => {

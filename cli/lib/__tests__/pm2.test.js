@@ -19,11 +19,11 @@ describe('PM2 ecosystem restart helpers', () => {
 
     assert.deepStrictEqual(calls, [
       {
-        cmd: 'pm2 start "/tmp/ecosystem.config.cjs" --only "activity-monitor" 2>/dev/null',
+        cmd: 'pm2 start "/tmp/ecosystem.config.cjs" --only "activity-monitor" --update-env 2>/dev/null',
         opts: { stdio: 'inherit' },
       },
       {
-        cmd: 'pm2 start "/tmp/ecosystem.config.cjs" --only "c4-dispatcher" 2>/dev/null',
+        cmd: 'pm2 start "/tmp/ecosystem.config.cjs" --only "c4-dispatcher" --update-env 2>/dev/null',
         opts: { stdio: 'inherit' },
       },
       {
@@ -61,7 +61,7 @@ describe('PM2 ecosystem restart helpers', () => {
 
     assert.deepStrictEqual(calls, [
       {
-        cmd: 'pm2 start "/tmp/component-ecosystem.config.cjs" --only "zylos-wecom" 2>/dev/null',
+        cmd: 'pm2 start "/tmp/component-ecosystem.config.cjs" --only "zylos-wecom" --update-env 2>/dev/null',
         opts: { stdio: 'pipe' },
       },
     ]);
@@ -92,13 +92,17 @@ describe('PM2 ecosystem restart helpers', () => {
     ]);
   });
 
-  it('can fall back to plain restart when ecosystem restart execution fails', () => {
+  it('recreates the process from ecosystem when ecosystem restart execution fails', () => {
     const calls = [];
+    let startAttempts = 0;
     const { restartManagedProcess } = createPm2Helpers({
       exists: (file) => file === '/tmp/core-ecosystem.config.cjs',
       exec: (cmd, opts) => {
         calls.push({ cmd, opts });
         if (cmd.includes('pm2 start "/tmp/core-ecosystem.config.cjs"')) {
+          startAttempts += 1;
+        }
+        if (cmd.includes('pm2 start "/tmp/core-ecosystem.config.cjs"') && startAttempts === 1) {
           throw new Error('bad ecosystem');
         }
       },
@@ -112,11 +116,15 @@ describe('PM2 ecosystem restart helpers', () => {
 
     assert.deepStrictEqual(calls, [
       {
-        cmd: 'pm2 start "/tmp/core-ecosystem.config.cjs" --only "activity-monitor" 2>/dev/null',
+        cmd: 'pm2 start "/tmp/core-ecosystem.config.cjs" --only "activity-monitor" --update-env 2>/dev/null',
         opts: { stdio: 'inherit' },
       },
       {
-        cmd: 'pm2 restart "activity-monitor" 2>/dev/null',
+        cmd: 'pm2 delete "activity-monitor" 2>/dev/null',
+        opts: { stdio: 'inherit' },
+      },
+      {
+        cmd: 'pm2 start "/tmp/core-ecosystem.config.cjs" --only "activity-monitor" --update-env 2>/dev/null',
         opts: { stdio: 'inherit' },
       },
     ]);

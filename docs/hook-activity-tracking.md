@@ -290,9 +290,9 @@ The hooks are **additive** — they don't replace conversation file mtime monito
 1. **Immediate idle detection** via Stop and idle_prompt (vs 3-second threshold)
 2. **Tool-level granularity** (knowing *what* Claude is doing, not just *that* something changed)
 
-### Stuck detection improvement
+### Activity detection improvement
 
-Current stuck detection uses `Math.max(activity, apiUpdatedSec)` where `apiUpdatedSec` was always 0 (fetch preload never worked). With hooks, `apiUpdatedSec` will have real data from tool events, improving stuck detection accuracy.
+Activity detection uses `Math.max(activity, apiUpdatedSec)` where `apiUpdatedSec` was always 0 (fetch preload never worked). With hooks, `apiUpdatedSec` has real data from tool events, improving monitor accuracy.
 
 ## Future: OTel as Optional Component
 
@@ -312,7 +312,7 @@ This would be an install-time choice that adds environment variables to Claude's
    - PreToolUse hook fires → `active_tools: 1`
    - PostToolUse hook fires → `active_tools: 0`
    - Stop hook fires → `active: false`
-3. **Stuck detection test:** Verify stuck detection uses hook timestamps
+3. **Activity detection test:** Verify activity detection uses hook timestamps
 4. **Settings merge test:** Verify post-install preserves existing user hooks
 5. **Performance test:** Confirm no observable latency from async hooks
 

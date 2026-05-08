@@ -6,6 +6,8 @@
 
 import path from 'path';
 import fs from 'fs';
+import net from 'net';
+import { spawnSync } from 'child_process';
 import { fileURLToPath } from 'url';
 import { insertConversation, close } from './c4-db.js';
 import { validateChannel, validateEndpoint } from './c4-validate.js';
@@ -14,13 +16,13 @@ import {
   ATTACHMENTS_DIR,
   CONTENT_PREVIEW_CHARS,
   AGENT_STATUS_FILE,
-  PENDING_CHANNELS_FILE,
-  USER_MESSAGE_SIGNAL_FILE,
-  DATA_DIR
+  ACTIVITY_MONITOR_DIR
 } from './c4-config.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+const AM_SOCKET_PATH = path.join(ACTIVITY_MONITOR_DIR, 'am.sock');
+const ROUTER_IPC_TIMEOUT_MS = 30000;
 
 function printUsage() {
   console.log('Usage: node c4-receive.js --channel <channel> [--endpoint <endpoint_id>] [--priority <1-3>] [--no-reply] [--block-queue-until-idle] [--json] --content "<message>"');
@@ -84,7 +86,7 @@ function parseArgs(args) {
   return result;
 }
 
-function readHealthStatus() {
+function readHealthStatusFile() {
   try {
     if (!fs.existsSync(AGENT_STATUS_FILE)) {
       return { health: 'ok' };
@@ -110,52 +112,120 @@ function readHealthStatus() {
   }
 }
 
-function loadPendingChannelKeys() {
-  if (!fs.existsSync(PENDING_CHANNELS_FILE)) {
-    return new Set();
+function publicHealth(health) {
+  if (health === 'ok' || health === 'rate_limited' || health === 'auth_failed') {
+    return health;
   }
+  return 'unavailable';
+}
 
-  const keys = new Set();
-  const content = fs.readFileSync(PENDING_CHANNELS_FILE, 'utf8');
-  for (const line of content.split('\n')) {
-    if (!line.trim()) continue;
-    try {
-      const record = JSON.parse(line);
-      if (record.channel && record.endpoint) {
-        keys.add(`${record.channel}::${record.endpoint}`);
+function buildFallbackMessage(status) {
+  const health = publicHealth(status.health);
+  if (health === 'rate_limited') {
+    const resetInfo = status.rate_limit_reset ? ` I should be back around ${status.rate_limit_reset}.` : ' I should be back within an hour.';
+    return `I've hit my usage limit.${resetInfo} Please send your message again after I'm back!`;
+  }
+  if (health === 'auth_failed') {
+    return "I'm having authentication issues — please check the API credentials.";
+  }
+  return "I'm temporarily unavailable but should be back shortly. Please try again in a moment!";
+}
+
+function fallbackFileRoute() {
+  const status = readHealthStatusFile();
+  const health = publicHealth(status?.health);
+  if (!status || typeof status.health !== 'string' || health === 'ok') {
+    return { recovered: true, health: 'ok', fallback: true };
+  }
+  return {
+    recovered: false,
+    health,
+    reason: status.unavailable_reason || health,
+    userMessage: buildFallbackMessage(status),
+    fallback: true
+  };
+}
+
+function ipcRoute(request) {
+  return new Promise((resolve, reject) => {
+    const socket = net.createConnection(AM_SOCKET_PATH);
+    let data = '';
+    let settled = false;
+
+    function settle(fn, value) {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      fn(value);
+    }
+
+    function tryParseResponse(force = false) {
+      const newlineIndex = data.indexOf('\n');
+      if (newlineIndex === -1 && !force) return;
+      const raw = newlineIndex === -1 ? data : data.slice(0, newlineIndex);
+      try {
+        settle(resolve, JSON.parse(raw));
+      } catch {
+        settle(reject, new Error('IPC response parse error'));
       }
-    } catch {
-      // Ignore broken lines and keep appending new records.
     }
-  }
-  return keys;
+
+    socket.setTimeout(ROUTER_IPC_TIMEOUT_MS);
+    socket.on('connect', () => {
+      socket.write(`${JSON.stringify(request)}\n`);
+    });
+    socket.on('data', (chunk) => {
+      data += chunk;
+      tryParseResponse();
+    });
+    socket.on('end', () => {
+      tryParseResponse(true);
+    });
+    socket.on('timeout', () => {
+      settle(reject, new Error('IPC timeout'));
+    });
+    socket.on('error', (err) => settle(reject, err));
+  });
 }
 
-function recordPendingChannel(channel, endpoint) {
-  if (!channel || !endpoint) return;
+function isValidRouteDecision(decision, noReply) {
+  if (!decision || typeof decision.recovered !== 'boolean') return false;
+  if (decision.recovered) return true;
+  if (typeof decision.health !== 'string') return false;
+  if (noReply) return true;
+  return typeof decision.userMessage === 'string' && decision.userMessage.length > 0;
+}
+
+async function queryRoute(channel, endpoint, noReply) {
   try {
-    if (!fs.existsSync(DATA_DIR)) {
-      fs.mkdirSync(DATA_DIR, { recursive: true });
+    const decision = await ipcRoute({
+      version: 1,
+      type: 'route',
+      requestId: `${process.pid}-${Date.now()}`,
+      channel,
+      endpoint,
+      noReply,
+      receivedAt: Date.now()
+    });
+    if (!isValidRouteDecision(decision, noReply)) {
+      throw new Error('IPC response invalid route decision');
     }
-    // Strip |msg:xxx and |req:xxx from endpoint so same chat deduplicates correctly.
-    // Recovery notices should go to the chat, not reply to a specific message.
-    const normalizedEndpoint = endpoint.replace(/\|(msg|req):[^|]+/g, '');
-    const key = `${channel}::${normalizedEndpoint}`;
-    const keys = loadPendingChannelKeys();
-    if (keys.has(key)) return;
-    const line = `${JSON.stringify({ channel, endpoint: normalizedEndpoint })}\n`;
-    fs.appendFileSync(PENDING_CHANNELS_FILE, line, 'utf8');
-  } catch (err) {
-    console.error(`[C4] Warning: failed to record pending channel (${err.message})`);
+    return decision;
+  } catch {
+    return fallbackFileRoute();
   }
 }
 
-function emitSuccess(json, recordId) {
+function emitSuccess(json, recordId, action = 'queued') {
   if (json) {
-    console.log(JSON.stringify({ ok: true, action: 'queued', id: recordId }));
+    console.log(JSON.stringify({ ok: true, action, id: recordId }));
     return;
   }
-  console.log(`[C4] Message queued (id=${recordId})`);
+  if (action === 'queued') {
+    console.log(`[C4] Message queued (id=${recordId})`);
+  } else {
+    console.log(`[C4] Message handled (id=${recordId}, action=${action})`);
+  }
 }
 
 function emitError(json, code, message, exitCode = 1) {
@@ -170,7 +240,46 @@ function emitError(json, code, message, exitCode = 1) {
   process.exit(exitCode);
 }
 
-function main() {
+function sendUnhealthyMessage(channel, endpoint, message) {
+  const args = [path.join(__dirname, 'c4-send.js'), channel];
+  if (endpoint) args.push(endpoint);
+  const result = spawnSync('node', args, {
+    input: message,
+    encoding: 'utf8',
+    stdio: ['pipe', 'pipe', 'pipe']
+  });
+  return result;
+}
+
+function buildFullMessage(content, channel, endpoint, noReply) {
+  let replyViaSuffix = '';
+  if (!noReply) {
+    const scriptDir = __dirname;
+    const replyViaBase = `reply via: node ${path.join(scriptDir, 'c4-send.js')} "${channel}"`;
+    replyViaSuffix = endpoint ? ` ---- ${replyViaBase} "${endpoint}"` : ` ---- ${replyViaBase}`;
+  }
+
+  const fullMessage = content + replyViaSuffix;
+  let dbContent = fullMessage;
+  const byteLength = Buffer.byteLength(fullMessage, 'utf8');
+
+  if (byteLength > FILE_SIZE_THRESHOLD) {
+    const msgId = `${Date.now()}-${process.pid}`;
+    const messageDir = path.join(ATTACHMENTS_DIR, msgId);
+    fs.mkdirSync(messageDir, { recursive: true });
+    const filePath = path.join(messageDir, 'message.txt');
+    fs.writeFileSync(filePath, fullMessage, 'utf8');
+
+    const preview = content.substring(0, CONTENT_PREVIEW_CHARS);
+    const ellipsis = preview.length < content.length ? '...' : '';
+    const sizeKB = (byteLength / 1024).toFixed(1);
+    dbContent = `${preview}${ellipsis}\n\n[C4] Full message (${sizeKB}KB) at: ${filePath}${replyViaSuffix}`;
+  }
+
+  return dbContent;
+}
+
+async function main() {
   const parsed = parseArgs(process.argv.slice(2));
   if (parsed.error) {
     const asJson = process.argv.slice(2).includes('--json');
@@ -213,53 +322,24 @@ function main() {
     }
   }
 
-  const status = readHealthStatus();
-  if (status.health !== 'ok') {
-    recordPendingChannel(channel, endpoint);
-    // Signal activity-monitor that a user message arrived — may trigger or accelerate recovery
-    try {
-      fs.writeFileSync(USER_MESSAGE_SIGNAL_FILE, JSON.stringify({ timestamp: Math.floor(Date.now() / 1000), channel, endpoint }));
-    } catch { /* best-effort */ }
-
-    if (status.health === 'down') {
-      emitError(json, 'HEALTH_DOWN', "I'm currently offline and unable to recover on my own. Please let the admin know so they can take a look!");
-    } else if (status.health === 'rate_limited') {
-      const resetInfo = status.rate_limit_reset ? ` I should be back around ${status.rate_limit_reset}.` : ' I should be back within an hour.';
-      emitError(json, 'HEALTH_RATE_LIMITED', `I've hit my usage limit.${resetInfo} Please send your message again after I'm back!`);
-    } else if (status.health === 'auth_failed') {
-      emitError(json, 'HEALTH_AUTH_FAILED', "I'm having authentication issues — please check the API credentials. Your message has been queued and I'll process it once authentication is restored.");
-    } else {
-      emitError(json, 'HEALTH_RECOVERING', "I'm temporarily unavailable but should be back shortly. Please try again in a moment!");
-    }
-  }
-
-  let replyViaSuffix = '';
-  if (!noReply) {
-    const scriptDir = __dirname;
-    const replyViaBase = `reply via: node ${path.join(scriptDir, 'c4-send.js')} "${channel}"`;
-    replyViaSuffix = endpoint ? ` ---- ${replyViaBase} "${endpoint}"` : ` ---- ${replyViaBase}`;
-  }
-
-  const fullMessage = content + replyViaSuffix;
-  let dbContent = fullMessage;
-  const byteLength = Buffer.byteLength(fullMessage, 'utf8');
-
-  if (byteLength > FILE_SIZE_THRESHOLD) {
-    const msgId = `${Date.now()}-${process.pid}`;
-    const messageDir = path.join(ATTACHMENTS_DIR, msgId);
-    fs.mkdirSync(messageDir, { recursive: true });
-    const filePath = path.join(messageDir, 'message.txt');
-    fs.writeFileSync(filePath, fullMessage, 'utf8');
-
-    const preview = content.substring(0, CONTENT_PREVIEW_CHARS);
-    const ellipsis = preview.length < content.length ? '...' : '';
-    const sizeKB = (byteLength / 1024).toFixed(1);
-    dbContent = `${preview}${ellipsis}\n\n[C4] Full message (${sizeKB}KB) at: ${filePath}${replyViaSuffix}`;
-  }
+  const route = await queryRoute(channel, endpoint, noReply);
+  const dbContent = buildFullMessage(content, channel, endpoint, noReply);
+  const dbStatus = route.recovered ? 'pending' : 'delivered';
 
   try {
-    const record = insertConversation('in', channel, endpoint, dbContent, 'pending', priority, requireIdle);
-    emitSuccess(json, record.id);
+    const record = insertConversation('in', channel, endpoint, dbContent, dbStatus, priority, requireIdle);
+    if (route.recovered || noReply) {
+      emitSuccess(json, record.id, route.recovered ? 'queued' : 'delivered');
+      return;
+    }
+
+    const sendResult = sendUnhealthyMessage(channel, endpoint, route.userMessage);
+    if (sendResult.status === 0) {
+      emitSuccess(json, record.id, 'delivered');
+      return;
+    }
+    const detail = sendResult.stderr || sendResult.stdout || `exit ${sendResult.status}`;
+    emitError(json, 'UNHEALTHY_NOTIFY_FAILED', `failed to send unhealthy status message: ${detail.trim()}`);
   } catch (err) {
     emitError(json, 'INTERNAL_ERROR', `failed to queue message: ${err.message}`);
   } finally {

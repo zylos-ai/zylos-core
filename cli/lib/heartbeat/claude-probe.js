@@ -44,6 +44,13 @@ const API_ERROR_PATTERNS = [
   /overloaded_error/,                                      // Anthropic overloaded
 ];
 
+const AUTH_FAILURE_PATTERNS = [
+  /authentication_error/i,
+  /auth(?:entication)? failed/i,
+  /invalid api key/i,
+  /unauthorized/i,
+];
+
 /**
  * Create a Claude Code heartbeat probe.
  *
@@ -51,14 +58,14 @@ const API_ERROR_PATTERNS = [
  * @param {string}  opts.pendingFile       - Path to heartbeat-pending.json
  * @param {string}  [opts.tmuxSession='claude-main']
  * @param {number}  [opts.ackDeadline=300]      - ACK deadline for normal heartbeats (seconds)
- * @param {number}  [opts.stuckAckDeadline=120] - ACK deadline for stuck-phase heartbeats
+ * @param {number}  [opts.recoveryAckDeadline=120] - ACK deadline for recovery heartbeats
  * @returns {object} Partial HeartbeatEngine deps
  */
 export function createClaudeProbe({
   pendingFile,
   tmuxSession = 'claude-main',
   ackDeadline = 300,
-  stuckAckDeadline = 120,
+  recoveryAckDeadline = 120,
 }) {
   return {
 
@@ -66,11 +73,11 @@ export function createClaudeProbe({
 
     /**
      * Enqueue a heartbeat control message via C4 and record the pending state.
-     * @param {string} phase - 'normal' | 'stuck'
+     * @param {string} phase
      * @returns {boolean}
      */
     enqueueHeartbeat(phase) {
-      const deadline = phase === 'stuck' ? stuckAckDeadline : ackDeadline;
+      const deadline = _getAckDeadline(phase, { ackDeadline, recoveryAckDeadline });
       const content = `Heartbeat check. [phase=${phase}]`;
       try {
         const out = execFileSync('node', [C4_CONTROL, 'enqueue',
@@ -145,6 +152,25 @@ export function createClaudeProbe({
     },
 
     /**
+     * Detect auth-failure text in the tmux pane. HealthEngine verifies this
+     * with the adapter's live checkAuth probe before changing health state.
+     *
+     * @returns {{ detected: boolean, pattern?: string }}
+     */
+    detectAuthFailure() {
+      const pane = _captureTmuxPane(tmuxSession);
+      if (!pane) return { detected: false };
+
+      for (const p of AUTH_FAILURE_PATTERNS) {
+        const match = pane.match(p);
+        if (match) {
+          return { detected: true, pattern: match[0] };
+        }
+      }
+      return { detected: false };
+    },
+
+    /**
      * Detect Anthropic API errors (e.g. 400 from corrupted image) in the tmux pane.
      * Used for fast recovery: when a heartbeat is pending and the session appears
      * stuck, this check can trigger immediate recovery instead of waiting for the
@@ -186,6 +212,11 @@ export function createClaudeProbe({
       try { fs.unlinkSync(pendingFile); } catch { /* already gone */ }
     },
   };
+}
+
+function _getAckDeadline(phase, { ackDeadline, recoveryAckDeadline }) {
+  if (phase === 'recovery' || phase === 'post_restart') return recoveryAckDeadline;
+  return ackDeadline;
 }
 
 // ── Private helpers ──────────────────────────────────────────────────────────

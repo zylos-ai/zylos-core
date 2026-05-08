@@ -41,6 +41,7 @@ const ENV_VARS_TO_STRIP = ['CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT'];
 const ENV_CLEAN_PREFIX = 'env ' + ENV_VARS_TO_STRIP.map(v => `-u ${v}`).join(' ');
 
 const CREDENTIALS_FILE = path.join(os.homedir(), '.claude', '.credentials.json');
+const C4_CONTROL_PATH = path.join(ZYLOS_DIR, '.claude', 'skills', 'comm-bridge', 'scripts', 'c4-control.js');
 
 /**
  * Parse a value from a .env file, tolerating common formatting variations:
@@ -203,6 +204,30 @@ export class ClaudeAdapter extends RuntimeAdapter {
     }
   }
 
+  clearStaleState() {
+    try {
+      this.getHeartbeatDeps()?.clearHeartbeatPending?.();
+    } catch { }
+    try { fs.unlinkSync('/tmp/context-alert-cooldown'); } catch { }
+    try { fs.unlinkSync('/tmp/context-compact-scheduled'); } catch { }
+  }
+
+  enqueueStartupPrompt() {
+    if (_hasStartupHook()) return;
+
+    const content = 'reply to your human partner if they are waiting for your reply, then continue your ongoing tasks using the startup memory and C4 context already injected in this session, and do not query c4.db for recent conversations unless explicitly required.';
+    try {
+      execFileSync('node', [
+        C4_CONTROL_PATH,
+        'enqueue',
+        '--content', content,
+        '--priority', '3',
+        '--available-in', '3',
+        '--no-ack-suffix'
+      ], { encoding: 'utf8', timeout: 10_000 });
+    } catch { }
+  }
+
   // ── Launch ────────────────────────────────────────────────────────────────
 
   /**
@@ -363,6 +388,23 @@ function _getTmuxPanePid() {
     ).trim();
   } catch {
     return null;
+  }
+}
+
+function _hasStartupHook() {
+  try {
+    const settingsPath = path.join(ZYLOS_DIR, '.claude', 'settings.json');
+    const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+    const matchers = settings?.hooks?.SessionStart;
+    if (!Array.isArray(matchers)) return false;
+    return matchers.some(m =>
+      Array.isArray(m?.hooks) && m.hooks.some(
+        h => h?.type === 'command' && typeof h.command === 'string'
+          && /(?:^|[\\/])session-start-prompt\.js(?:["'\s]|$)/.test(h.command)
+      )
+    );
+  } catch {
+    return false;
   }
 }
 

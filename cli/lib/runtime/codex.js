@@ -242,6 +242,18 @@ export class CodexAdapter extends RuntimeAdapter {
     }
   }
 
+  clearStaleState() {
+    try {
+      this.getHeartbeatDeps()?.clearHeartbeatPending?.();
+    } catch { }
+    try { fs.unlinkSync('/tmp/context-alert-cooldown'); } catch { }
+    try { fs.unlinkSync('/tmp/context-compact-scheduled'); } catch { }
+  }
+
+  enqueueStartupPrompt() {
+    // Codex receives the bootstrap prompt as the initial launch argument.
+  }
+
   // ── Launch ────────────────────────────────────────────────────────────────
 
   /**

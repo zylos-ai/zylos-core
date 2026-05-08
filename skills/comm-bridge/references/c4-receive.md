@@ -59,14 +59,11 @@ Messages are written to DB with `status='pending'`. The c4-dispatcher daemon han
 
 Messages exceeding the configured size threshold are stored as files under `~/zylos/comm-bridge/attachments/`. The DB record contains a preview of the content plus the file path.
 
-## Health Gating
+## Health Routing
 
-Before queuing a message, `c4-receive.js` reads the `health` field from `~/zylos/activity-monitor/agent-status.json`. If health is not `ok`:
+Before queuing a message, `c4-receive.js` asks the activity monitor MessageRouter how the current message should be routed. If health is `ok` or the router reports recovery, the message is queued normally. If health is unavailable, rate limited, or authentication failed, the message is recorded as delivered and the current channel receives an immediate status reply when replies are enabled. `--no-reply` messages are recorded as delivered without sending a status reply.
 
-1. The channel/endpoint is recorded in `~/zylos/activity-monitor/pending-channels.jsonl` for recovery notification
-2. The message is rejected with a structured error:
-   - `HEALTH_RECOVERING` — automatic recovery in progress
-   - `HEALTH_DOWN` — manual intervention required
+If the MessageRouter IPC is unavailable, `c4-receive.js` reads `~/zylos/activity-monitor/agent-status.json` and applies the same fallback behavior. Missing, unreadable, or malformed status files fail open as `ok`.
 
 ## JSON Output
 
@@ -81,10 +78,10 @@ When `--json` is passed, all output uses structured JSON on stdout.
 **Error:**
 
 ```json
-{"ok": false, "error": {"code": "HEALTH_RECOVERING", "message": "System is recovering, please wait."}}
+{"ok": false, "error": {"code": "INVALID_ARGS", "message": "--content is required"}}
 ```
 
-Error codes: `INVALID_ARGS`, `HEALTH_RECOVERING`, `HEALTH_DOWN`, `INTERNAL_ERROR`.
+Error codes: `INVALID_ARGS`, `INTERNAL_ERROR`.
 
 ## Fail-Open Behavior
 
