@@ -18,7 +18,6 @@ describe('self-upgrade finalizer handoff', () => {
     assert.deepEqual(createFinalizeState({
       tempDir: '/tmp/new-core',
       backupDir: '/tmp/backup',
-      servicesStopped: ['activity-monitor'],
       servicesWereRunning: ['activity-monitor', 'c4-dispatcher'],
       from: '0.4.12',
       to: '0.4.13',
@@ -28,7 +27,6 @@ describe('self-upgrade finalizer handoff', () => {
       schemaVersion: 1,
       tempDir: '/tmp/new-core',
       backupDir: '/tmp/backup',
-      servicesStopped: ['activity-monitor'],
       servicesWereRunning: ['activity-monitor', 'c4-dispatcher'],
       from: '0.4.12',
       to: '0.4.13',
@@ -75,8 +73,7 @@ describe('self-upgrade finalizer handoff', () => {
     }]);
   });
 
-  it('rolls back with restored state when a post-install step fails', () => {
-    const rollbackCalls = [];
+  it('fails without rollback when a post-install step fails', () => {
     const result = runSelfUpgradeFinalize({
       schemaVersion: 1,
       tempDir: '/tmp/new-core',
@@ -88,17 +85,12 @@ describe('self-upgrade finalizer handoff', () => {
       steps: [
         () => ({ step: 5, name: 'sync_core_skills', status: 'failed', error: 'sync failed' }),
       ],
-      rollbackSelf: (ctx) => {
-        rollbackCalls.push({ backupDir: ctx.backupDir, servicesWereRunning: ctx.servicesWereRunning });
-        return [{ action: 'restore_core_skills', success: true }];
-      },
     });
 
     assert.equal(result.success, false);
     assert.equal(result.failedStep, 5);
     assert.equal(result.error, 'sync failed');
-    assert.deepEqual(result.rollback.steps, [{ action: 'restore_core_skills', success: true }]);
-    assert.deepEqual(rollbackCalls, [{ backupDir: '/tmp/backup', servicesWereRunning: ['activity-monitor'] }]);
+    assert.deepEqual(result.rollback, { performed: false, steps: [] });
   });
 });
 

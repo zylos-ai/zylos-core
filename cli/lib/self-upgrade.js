@@ -1385,7 +1385,7 @@ const POST_INSTALL_STEPS = [
   step12_verifyServices,
 ];
 
-function buildSelfUpgradeResult(ctx, failedStep, rollbackResults = null) {
+function buildSelfUpgradeResult(ctx, failedStep, rollbackResults = null, rollbackPerformed = Boolean(rollbackResults)) {
   if (failedStep) {
     return {
       action: 'self_upgrade',
@@ -1395,7 +1395,7 @@ function buildSelfUpgradeResult(ctx, failedStep, rollbackResults = null) {
       failedStep: failedStep.step,
       error: failedStep.error,
       steps: ctx.steps,
-      rollback: { performed: true, steps: rollbackResults || [] },
+      rollback: { performed: rollbackPerformed, steps: rollbackResults || [] },
     };
   }
 
@@ -1439,7 +1439,6 @@ export function createFinalizeState(ctx) {
     schemaVersion: 1,
     tempDir: ctx.tempDir,
     backupDir: ctx.backupDir,
-    servicesStopped: ctx.servicesStopped,
     servicesWereRunning: ctx.servicesWereRunning,
     from: ctx.from,
     to: ctx.to,
@@ -1509,7 +1508,6 @@ export function runSelfUpgradeFinalize(state = {}, deps = {}) {
     mode: state.mode,
   });
   ctx.backupDir = state.backupDir || null;
-  ctx.servicesStopped = Array.isArray(state.servicesStopped) ? [...state.servicesStopped] : [];
   ctx.servicesWereRunning = Array.isArray(state.servicesWereRunning) ? [...state.servicesWereRunning] : [];
   ctx.from = state.from || null;
   ctx.to = state.to || state.newVersion || null;
@@ -1531,9 +1529,7 @@ export function runSelfUpgradeFinalize(state = {}, deps = {}) {
   }
 
   if (failedStep) {
-    const rollbackFn = deps.rollbackSelf || rollbackSelf;
-    const rollbackResults = rollbackFn(ctx);
-    return buildSelfUpgradeResult(ctx, failedStep, rollbackResults);
+    return buildSelfUpgradeResult(ctx, failedStep, null, false);
   }
 
   return buildSelfUpgradeResult(ctx, null);
@@ -1609,8 +1605,7 @@ export function runSelfUpgrade({ tempDir, newVersion, mode, onStep } = {}) {
     };
     ctx.steps.push(failedStep);
     if (onStep) onStep(failedStep);
-    const rollbackResults = rollbackSelf(ctx);
-    return buildSelfUpgradeResult(ctx, failedStep, rollbackResults);
+    return buildSelfUpgradeResult(ctx, failedStep, null, false);
   }
 }
 
