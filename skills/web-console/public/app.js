@@ -3,7 +3,7 @@
  */
 
 class ZylosConsole {
-  constructor() {
+  constructor(timezone) {
     this.messagesContainer = document.getElementById('messages');
     this.messageForm = document.getElementById('message-form');
     this.messageInput = document.getElementById('message-input');
@@ -16,6 +16,7 @@ class ZylosConsole {
     this.reconnectAttempts = 0;
     this.maxReconnectAttempts = 10;
     this.pendingMessages = new Map(); // Track messages being sent
+    this.timezone = timezone || null;
 
     // Detect base path for API/WS calls (handles /console/ proxy)
     this.basePath = this.detectBasePath();
@@ -391,8 +392,11 @@ class ZylosConsole {
   }
 
   formatTime(timestamp) {
-    const date = new Date(timestamp);
-    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const ts = timestamp.endsWith('Z') ? timestamp : timestamp + 'Z';
+    const date = new Date(ts);
+    const opts = { hour: '2-digit', minute: '2-digit' };
+    if (this.timezone) opts.timeZone = this.timezone;
+    return date.toLocaleTimeString([], opts);
   }
 }
 
@@ -424,7 +428,7 @@ async function checkAuth() {
       // No password set, or already authenticated
       chatScreen.style.display = '';
       if (auth.required) showLogoutButton(basePath);
-      new ZylosConsole();
+      new ZylosConsole(auth.timezone);
       return;
     }
 
@@ -448,7 +452,7 @@ async function checkAuth() {
         loginScreen.style.display = 'none';
         chatScreen.style.display = '';
         showLogoutButton(basePath);
-        new ZylosConsole();
+        new ZylosConsole(result.timezone);
       } else {
         loginError.textContent = result.error || 'Login failed';
       }
