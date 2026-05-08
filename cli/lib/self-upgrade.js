@@ -7,7 +7,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { execSync } from 'node:child_process';
+import { execSync, spawnSync } from 'node:child_process';
 import { SKILLS_DIR, ZYLOS_DIR, getZylosConfig } from './config.js';
 import { downloadArchive, downloadBranch } from './download.js';
 import { generateManifest, saveManifest, saveOriginals } from './manifest.js';
@@ -372,6 +372,7 @@ function syncClaudeMd(templateDir) {
  */
 function listTemplateFiles(templatesDir) {
   const files = [];
+  if (!templatesDir) return files;
   if (!fs.existsSync(templatesDir)) return files;
 
   function walk(dir, prefix = '') {
@@ -1109,13 +1110,22 @@ function step9_syncSettingsHooks(ctx) {
  * @returns {string|null} Absolute path to the script, or null if not found.
  */
 function resolveInstalledSyncScript() {
+  return resolveInstalledPackageScript('cli', 'lib', 'sync-settings-hooks.js');
+}
+
+/**
+ * Resolve a script path in the globally installed package.
+ * Reads the package name from package.json to avoid hardcoding.
+ * @returns {string|null} Absolute path to the script, or null if not found.
+ */
+function resolveInstalledPackageScript(...parts) {
   try {
     // import.meta.dirname points to cli/lib/, go up two levels to package root
     const pkgPath = path.join(import.meta.dirname, '..', '..', 'package.json');
     const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
     const pkgName = pkg.name || 'zylos';
     const npmRoot = execSync('npm root -g', { encoding: 'utf8', stdio: 'pipe', timeout: 10000 }).trim();
-    const script = path.join(npmRoot, pkgName, 'cli', 'lib', 'sync-settings-hooks.js');
+    const script = path.join(npmRoot, pkgName, ...parts);
     return fs.existsSync(script) ? script : null;
   } catch {
     return null;
@@ -1364,57 +1374,19 @@ export function rollbackSelf(ctx, deps = {}) {
 // Public: runSelfUpgrade
 // ---------------------------------------------------------------------------
 
-/**
- * Run the 11-step self-upgrade pipeline.
- * Template migration and Claude restart are handled by Claude after this completes.
- * Lock must be acquired by caller.
- *
- * @param {{ tempDir: string, newVersion: string, onStep?: function }} opts
- * @returns {object} Upgrade result
- */
-export function runSelfUpgrade({ tempDir, newVersion, mode, onStep } = {}) {
-  const ctx = createContext({ tempDir, newVersion, mode });
+const POST_INSTALL_STEPS = [
+  step5_syncCoreSkills,
+  step6_installSkillDeps,
+  step7_syncClaudeMd,
+  step8_migrateStateMd,
+  step9_syncSettingsHooks,
+  step10_ensureCodexConfig,
+  step11_startCoreServices,
+  step12_verifyServices,
+];
 
-  const current = getCurrentVersion();
-  if (current.success) {
-    ctx.from = current.version;
-  }
-  ctx.to = newVersion || null;
-
-  const steps = [
-    step1_backupCoreSkills,
-    step2_preUpgradeHook,
-    step3_stopCoreServices,
-    step4_npmInstallGlobal,
-    step5_syncCoreSkills,
-    step6_installSkillDeps,
-    step7_syncClaudeMd,
-    step8_migrateStateMd,
-    step9_syncSettingsHooks,
-    step10_ensureCodexConfig,
-    step11_startCoreServices,
-    step12_verifyServices,
-  ];
-
-  const total = steps.length;
-  let failedStep = null;
-
-  for (const stepFn of steps) {
-    const result = stepFn(ctx);
-    result.total = total;
-    ctx.steps.push(result);
-    if (onStep) onStep(result);
-
-    if (result.status === 'failed') {
-      failedStep = result;
-      ctx.error = result.error;
-      break;
-    }
-  }
-
-  // If failed, rollback
+function buildSelfUpgradeResult(ctx, failedStep, rollbackResults = null) {
   if (failedStep) {
-    const rollbackResults = rollbackSelf(ctx);
     return {
       action: 'self_upgrade',
       success: false,
@@ -1423,12 +1395,12 @@ export function runSelfUpgrade({ tempDir, newVersion, mode, onStep } = {}) {
       failedStep: failedStep.step,
       error: failedStep.error,
       steps: ctx.steps,
-      rollback: { performed: true, steps: rollbackResults },
+      rollback: { performed: true, steps: rollbackResults || [] },
     };
   }
 
   // List template files for Claude to compare with local structure
-  const templatesDir = path.join(ctx.tempDir, 'templates');
+  const templatesDir = ctx.tempDir ? path.join(ctx.tempDir, 'templates') : null;
   const templates = listTemplateFiles(templatesDir);
 
   // Migration hints: step 8 already applied settings sync via the newly installed script.
@@ -1460,6 +1432,186 @@ export function runSelfUpgrade({ tempDir, newVersion, mode, onStep } = {}) {
     mergeConflicts: ctx.mergeConflicts.length > 0 ? ctx.mergeConflicts : null,
     mergedFiles: ctx.mergedFiles.length > 0 ? ctx.mergedFiles : null,
   };
+}
+
+export function createFinalizeState(ctx) {
+  return {
+    schemaVersion: 1,
+    tempDir: ctx.tempDir,
+    backupDir: ctx.backupDir,
+    servicesStopped: ctx.servicesStopped,
+    servicesWereRunning: ctx.servicesWereRunning,
+    from: ctx.from,
+    to: ctx.to,
+    newVersion: ctx.newVersion,
+    mode: ctx.mode,
+  };
+}
+
+function writeFinalizeState(ctx) {
+  const statePath = path.join(ctx.tempDir, 'self-upgrade-finalize-state.json');
+  fs.writeFileSync(statePath, `${JSON.stringify(createFinalizeState(ctx), null, 2)}\n`, {
+    encoding: 'utf8',
+    mode: 0o600,
+  });
+  return statePath;
+}
+
+function runInstalledFinalizer(ctx) {
+  const finalizeScript = resolveInstalledPackageScript('cli', 'lib', 'self-upgrade-finalize.js');
+  if (!finalizeScript) {
+    throw new Error('newly installed self-upgrade finalizer not found');
+  }
+
+  const statePath = writeFinalizeState(ctx);
+  const result = spawnSync(process.execPath, [finalizeScript, statePath], {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    timeout: 180000,
+  });
+
+  if (result.error) {
+    throw result.error;
+  }
+
+  const output = String(result.stdout || '').trim();
+  if (!output) {
+    const err = String(result.stderr || '').trim() || `finalizer exited ${result.status}`;
+    throw new Error(err);
+  }
+
+  const parsed = JSON.parse(output);
+  if (result.status !== 0 && parsed?.success !== false) {
+    const err = String(result.stderr || '').trim() || `finalizer exited ${result.status}`;
+    throw new Error(err);
+  }
+
+  return parsed;
+}
+
+export function runSelfUpgradeFinalize(state = {}, deps = {}) {
+  if (state.schemaVersion !== undefined && state.schemaVersion !== 1) {
+    return {
+      action: 'self_upgrade',
+      success: false,
+      from: state.from || null,
+      to: null,
+      failedStep: 5,
+      error: `unsupported finalize state schemaVersion: ${state.schemaVersion}`,
+      steps: [],
+      rollback: { performed: false, steps: [] },
+    };
+  }
+
+  const ctx = createContext({
+    tempDir: state.tempDir,
+    newVersion: state.newVersion || state.to,
+    mode: state.mode,
+  });
+  ctx.backupDir = state.backupDir || null;
+  ctx.servicesStopped = Array.isArray(state.servicesStopped) ? [...state.servicesStopped] : [];
+  ctx.servicesWereRunning = Array.isArray(state.servicesWereRunning) ? [...state.servicesWereRunning] : [];
+  ctx.from = state.from || null;
+  ctx.to = state.to || state.newVersion || null;
+
+  const steps = deps.steps || POST_INSTALL_STEPS;
+  const total = deps.total || 12;
+  let failedStep = null;
+
+  for (const stepFn of steps) {
+    const result = stepFn(ctx);
+    result.total = total;
+    ctx.steps.push(result);
+
+    if (result.status === 'failed') {
+      failedStep = result;
+      ctx.error = result.error;
+      break;
+    }
+  }
+
+  if (failedStep) {
+    const rollbackFn = deps.rollbackSelf || rollbackSelf;
+    const rollbackResults = rollbackFn(ctx);
+    return buildSelfUpgradeResult(ctx, failedStep, rollbackResults);
+  }
+
+  return buildSelfUpgradeResult(ctx, null);
+}
+
+/**
+ * Run the 12-step self-upgrade pipeline.
+ * Template migration and Claude restart are handled by Claude after this completes.
+ * Lock must be acquired by caller.
+ *
+ * @param {{ tempDir: string, newVersion: string, onStep?: function }} opts
+ * @returns {object} Upgrade result
+ */
+export function runSelfUpgrade({ tempDir, newVersion, mode, onStep } = {}) {
+  const ctx = createContext({ tempDir, newVersion, mode });
+
+  const current = getCurrentVersion();
+  if (current.success) {
+    ctx.from = current.version;
+  }
+  ctx.to = newVersion || null;
+
+  const preInstallSteps = [
+    step1_backupCoreSkills,
+    step2_preUpgradeHook,
+    step3_stopCoreServices,
+    step4_npmInstallGlobal,
+  ];
+
+  const total = 12;
+  let failedStep = null;
+
+  for (const stepFn of preInstallSteps) {
+    const result = stepFn(ctx);
+    result.total = total;
+    ctx.steps.push(result);
+    if (onStep) onStep(result);
+
+    if (result.status === 'failed') {
+      failedStep = result;
+      ctx.error = result.error;
+      break;
+    }
+  }
+
+  if (failedStep) {
+    const rollbackResults = rollbackSelf(ctx);
+    return buildSelfUpgradeResult(ctx, failedStep, rollbackResults);
+  }
+
+  try {
+    const finalizeResult = runInstalledFinalizer(ctx);
+    const finalizeSteps = Array.isArray(finalizeResult.steps) ? finalizeResult.steps : [];
+    for (const step of finalizeSteps) {
+      ctx.steps.push(step);
+      if (onStep) onStep(step);
+    }
+    return {
+      ...finalizeResult,
+      from: ctx.from,
+      steps: ctx.steps,
+      backupDir: finalizeResult.backupDir || ctx.backupDir,
+    };
+  } catch (err) {
+    const error = err.stderr?.toString().trim() || err.message;
+    failedStep = {
+      step: 5,
+      name: 'run_new_upgrade_finalizer',
+      status: 'failed',
+      error,
+      total,
+      duration: 0,
+    };
+    ctx.steps.push(failedStep);
+    if (onStep) onStep(failedStep);
+    const rollbackResults = rollbackSelf(ctx);
+    return buildSelfUpgradeResult(ctx, failedStep, rollbackResults);
+  }
 }
 
 // ---------------------------------------------------------------------------
