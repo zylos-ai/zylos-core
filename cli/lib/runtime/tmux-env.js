@@ -126,6 +126,11 @@ export function buildCleanEnv({ processEnv, dotenvVars, platform, uid }) {
 export function buildCompatEnv({ processEnv, dotenvVars }) {
   const env = { ...processEnv };
 
+  // Deduplicate PATH to prevent bloat across restarts (PR #499 defense)
+  if (env.PATH) {
+    env.PATH = [...new Set(env.PATH.split(':').filter(Boolean))].join(':');
+  }
+
   // Override with ZYLOS_TMUX_ENV manifest vars from dotenvVars
   const warnings = [];
   const tmuxEnvNames = parseManifest(dotenvVars.ZYLOS_TMUX_ENV, warnings);

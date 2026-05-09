@@ -173,6 +173,12 @@ describe('buildCompatEnv', () => {
     const { env } = buildCompatEnv({ processEnv, dotenvVars });
     assert.equal(env.MY_VAR, 'new_value');
   });
+
+  it('deduplicates PATH preserving first-occurrence order', () => {
+    const processEnv = { PATH: '/a:/b:/a:/c:/b', HOME: '/home/test' };
+    const { env } = buildCompatEnv({ processEnv, dotenvVars: {} });
+    assert.equal(env.PATH, '/a:/b:/c');
+  });
 });
 
 // ── spec file I/O ──────────────────────────────────────────────────────────

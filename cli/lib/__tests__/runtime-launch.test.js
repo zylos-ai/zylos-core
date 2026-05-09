@@ -212,6 +212,38 @@ describe('Claude launch — existing session', () => {
   });
 });
 
+describe('Claude launch — compat mode PATH dedupe', () => {
+  it('spec.env.PATH is deduplicated in compat mode', async () => {
+    tmuxSessionExists = false;
+    // Switch to compat mode
+    fs.writeFileSync(path.join(fakeZylosDir, '.env'), [
+      'ANTHROPIC_API_KEY=sk-ant-secret-test-key-do-not-expose',
+      'ZYLOS_CLEAN_ENV=false',
+    ].join('\n'));
+    // Inject a bloated PATH
+    const origPath = process.env.PATH;
+    process.env.PATH = '/a:/b:/a:/c:/b';
+    try {
+      await makeAdapter(ClaudeAdapter).launch({ bypassPermissions: false });
+      const env = readSpecEnv();
+      assert.ok(env, 'spec should be written');
+      assert.equal(env.PATH, '/a:/b:/c', 'PATH must be deduplicated in compat mode');
+
+      const tmux = findTmuxNewSession();
+      const pathArg = tmux.args.find(a => a.startsWith('PATH='));
+      assert.ok(pathArg, 'tmux args should contain PATH= env');
+      assert.equal(pathArg, 'PATH=/a:/b:/c', 'tmux -e PATH must also be deduplicated');
+    } finally {
+      process.env.PATH = origPath;
+      // Restore clean env mode for subsequent tests
+      fs.writeFileSync(path.join(fakeZylosDir, '.env'), [
+        'ANTHROPIC_API_KEY=sk-ant-secret-test-key-do-not-expose',
+        'ZYLOS_CLEAN_ENV=true',
+      ].join('\n'));
+    }
+  });
+});
+
 // ── Codex launch tests ───────────────────────────────────────────────────────
 
 describe('Codex launch — new session', () => {
