@@ -1,8 +1,8 @@
 # 实施文档：tmux-launcher 干净环境方案
 
 **PR branch**: `feat/tmux-launcher-clean-env`
-**方案文档**: https://zylos01.jinglever.com/pages/proposal-clean-env-v2
-**环境概念**: https://zylos01.jinglever.com/pages/env-concepts-tmux-session
+**方案文档**: `proposal-clean-env-v2` (internal)
+**环境概念**: `env-concepts-tmux-session` (internal)
 **日期**: 2026-05-09
 
 ---
