@@ -135,8 +135,9 @@ export function readAndDeleteSpec(specPath)
    - 仅在 env 未覆盖时从 processEnv 读取
 
 8. Auth tokens:
-   - 由调用方（claude.js / codex.js）在拿到 env 后单独注入
-   - tmux-env.js 不处理 auth
+   - Claude: 调用方在 env build 后根据 native auth 状态注入/移除 auth env
+   - Codex: 不注入 auth env；Codex CLI 通过 HOME 读取 ~/.codex/auth.json
+   - tmux-env.js 本身不处理 auth
 ```
 
 #### PATH 构建顺序
@@ -145,7 +146,7 @@ export function readAndDeleteSpec(specPath)
 ~/.local/bin, ~/.claude/bin          ← 永远最高优先（用户工具）
 nvm segments                         ← 从 process.env.PATH 提取 .nvm 段
 PREPEND (manifest + .env)            ← 用户配置，高于系统路径
-/opt/homebrew/bin, /sbin (darwin)    ← macOS Homebrew built-in default
+/opt/homebrew/bin, /opt/homebrew/sbin (darwin) ← macOS Homebrew built-in default
 /usr/local/sbin, /usr/local/bin      ← 系统 local
 /usr/sbin, /usr/bin, /sbin, /bin     ← 系统
 APPEND (manifest + .env)             ← 用户配置，低于系统路径
@@ -364,4 +365,3 @@ ZYLOS_TMUX_PATH_APPEND=/opt/extra/tools/bin
 - 改变 session-handoff
 - 改变 instruction-builder
 - 默认开启 ZYLOS_CLEAN_ENV=true（需要实机验证后再改默认值）
-- init/upgrade 时自动从模板复制的 copy behavior（已在本 PR 实现，通过 `deployManifestTemplate()`）
