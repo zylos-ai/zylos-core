@@ -34,7 +34,7 @@ import {
   getProcessName,
   hasChildProcess,
 } from './tmux-helpers.js';
-import { buildCleanEnv, buildCompatEnv, writeLaunchSpec } from './tmux-env.js';
+import { buildCleanEnv, buildCompatEnv, loadRuntimeEnvManifest, writeLaunchSpec } from './tmux-env.js';
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -295,9 +295,10 @@ export class ClaudeAdapter extends RuntimeAdapter {
       // New session — launcher pipeline
       const dotenvVars = _readDotenvVars();
       const useCleanEnv = dotenvVars.ZYLOS_CLEAN_ENV === 'true';
+      const manifest = useCleanEnv ? loadRuntimeEnvManifest(ZYLOS_DIR) : undefined;
 
       const { env } = useCleanEnv
-        ? buildCleanEnv({ processEnv: process.env, dotenvVars, uid: process.getuid?.() })
+        ? buildCleanEnv({ processEnv: process.env, dotenvVars, manifest, uid: process.getuid?.() })
         : buildCompatEnv({ processEnv: process.env, dotenvVars });
 
       // Strip vars that cause Claude to refuse startup ("already running" detection)

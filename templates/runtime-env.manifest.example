@@ -1,0 +1,50 @@
+# runtime-env.manifest — Clean environment configuration for tmux agent sessions.
+#
+# This file controls which variables are injected into the agent runtime
+# when ZYLOS_CLEAN_ENV=true. It does NOT affect compat mode (ZYLOS_CLEAN_ENV=false).
+#
+# Directives:
+#   env NAME           Read NAME from ~/zylos/.env and inject into runtime
+#   inherit NAME       Inherit NAME from the supervisor (AM/PM2) process.env
+#   path_prepend PATH  Add PATH before platform/system paths in clean PATH
+#   path_append PATH   Add PATH after system paths in clean PATH
+#
+# Rules:
+#   - One directive per line.
+#   - Lines starting with # are comments. Blank lines are ignored.
+#   - env/inherit names must match [A-Za-z_][A-Za-z0-9_]*.
+#   - path_prepend/path_append require absolute paths (starting with /).
+#   - No shell expansion (~, $HOME, quotes) — use literal values.
+#   - Do NOT put secret values here; env reads from .env, inherit reads from process.env.
+#
+# The base clean environment already includes:
+#   PATH, HOME, USER, LOGNAME, LANG, LC_ALL, TERM, SHELL,
+#   GH_PROMPT_DISABLED=1, proxy vars (auto-detected), IS_SANDBOX (auto),
+#   TMPDIR (macOS only), Homebrew paths (macOS only).
+
+# ── Timezone ──────────────────────────────────────────────────────────────────
+# Recommended: keeps shell tools and date output in local time.
+env TZ
+
+# ── Agent permissions ─────────────────────────────────────────────────────────
+# env CLAUDE_BYPASS_PERMISSIONS
+
+# ── Observability (OTel) ──────────────────────────────────────────────────────
+# Uncomment to enable telemetry collection in agent sessions.
+# env CLAUDE_CODE_ENABLE_TELEMETRY
+# env CLAUDE_CODE_ENHANCED_TELEMETRY_BETA
+# env OTEL_EXPORTER_OTLP_ENDPOINT
+# env OTEL_EXPORTER_OTLP_PROTOCOL
+# env OTEL_TRACES_EXPORTER
+# env OTEL_METRICS_EXPORTER
+# env OTEL_LOGS_EXPORTER
+
+# ── Inherit from supervisor environment ───────────────────────────────────────
+# inherit SSH_AUTH_SOCK
+# inherit ZYLOS_PACKAGE_ROOT
+# inherit NVM_DIR
+
+# ── Extend clean PATH ────────────────────────────────────────────────────────
+# macOS Homebrew is built-in; add custom paths here.
+# path_prepend /opt/custom/bin
+# path_append /opt/extra/tools/bin
