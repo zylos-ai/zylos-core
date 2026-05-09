@@ -12,6 +12,7 @@ const {
   step10_ensureCodexConfig,
 } = await import('../self-upgrade.js');
 const { generateMigrationHints, applyMigrationHints } = await import('../self-upgrade.js');
+const { deployManifestTemplate } = await import('../runtime/tmux-env.js');
 
 describe('self-upgrade finalizer handoff', () => {
   it('serializes the state needed by the newly installed finalizer', () => {
@@ -395,6 +396,91 @@ describe('Boolean setting migration hints (autoMemoryEnabled, autoDreamEnabled)'
     assert.equal(preserved.applied, 0);
     assert.equal(preservedSettings.autoMemoryEnabled, true);
     assert.equal(preservedSettings.autoDreamEnabled, true);
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+});
+
+describe('step7 manifest deploy via finalizer', () => {
+  it('creates manifest from tempDir templates and reports status in step message', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-step7-'));
+    const zylosDir = path.join(tmpDir, 'zylos');
+    const templatesDir = path.join(tmpDir, 'pkg', 'templates');
+    fs.mkdirSync(path.join(zylosDir, '.zylos'), { recursive: true });
+    fs.mkdirSync(templatesDir, { recursive: true });
+    fs.writeFileSync(path.join(templatesDir, 'runtime-env.manifest.example'), 'env TZ\n');
+
+    const manifestDest = path.join(zylosDir, '.zylos', 'runtime-env.manifest');
+    assert.ok(!fs.existsSync(manifestDest));
+
+    const step = (ctx) => {
+      const src = path.join(ctx.tempDir, 'templates', 'runtime-env.manifest.example');
+      const status = deployManifestTemplate(src, zylosDir);
+      return { step: 7, name: 'sync_claude_md', status: 'done', message: `rebuilt CLAUDE.md; manifest: ${status}` };
+    };
+
+    const result = runSelfUpgradeFinalize({
+      schemaVersion: 1, tempDir: path.join(tmpDir, 'pkg'),
+      from: '0.4.12', to: '0.4.13',
+    }, { steps: [step] });
+
+    assert.equal(result.success, true);
+    assert.ok(result.steps[0].message.includes('manifest: created'));
+    assert.ok(fs.existsSync(manifestDest));
+    assert.equal(fs.readFileSync(manifestDest, 'utf8'), 'env TZ\n');
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('does not overwrite existing manifest and reports exists status', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-step7-'));
+    const zylosDir = path.join(tmpDir, 'zylos');
+    const templatesDir = path.join(tmpDir, 'pkg', 'templates');
+    fs.mkdirSync(path.join(zylosDir, '.zylos'), { recursive: true });
+    fs.mkdirSync(templatesDir, { recursive: true });
+    fs.writeFileSync(path.join(templatesDir, 'runtime-env.manifest.example'), 'env NEW\n');
+    fs.writeFileSync(path.join(zylosDir, '.zylos', 'runtime-env.manifest'), 'env CUSTOM\n');
+
+    const step = (ctx) => {
+      const src = path.join(ctx.tempDir, 'templates', 'runtime-env.manifest.example');
+      const status = deployManifestTemplate(src, zylosDir);
+      return { step: 7, name: 'sync_claude_md', status: 'done', message: `rebuilt; manifest: ${status}` };
+    };
+
+    const result = runSelfUpgradeFinalize({
+      schemaVersion: 1, tempDir: path.join(tmpDir, 'pkg'),
+      from: '0.4.12', to: '0.4.13',
+    }, { steps: [step] });
+
+    assert.ok(result.steps[0].message.includes('manifest: exists'));
+    assert.equal(
+      fs.readFileSync(path.join(zylosDir, '.zylos', 'runtime-env.manifest'), 'utf8'),
+      'env CUSTOM\n',
+    );
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('reports template_missing when template is absent from tempDir', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-step7-'));
+    const zylosDir = path.join(tmpDir, 'zylos');
+    const templatesDir = path.join(tmpDir, 'pkg', 'templates');
+    fs.mkdirSync(zylosDir, { recursive: true });
+    fs.mkdirSync(templatesDir, { recursive: true });
+
+    const step = (ctx) => {
+      const src = path.join(ctx.tempDir, 'templates', 'runtime-env.manifest.example');
+      const status = deployManifestTemplate(src, zylosDir);
+      return { step: 7, name: 'sync_claude_md', status: 'done', message: `rebuilt; manifest: ${status}` };
+    };
+
+    const result = runSelfUpgradeFinalize({
+      schemaVersion: 1, tempDir: path.join(tmpDir, 'pkg'),
+      from: '0.4.12', to: '0.4.13',
+    }, { steps: [step] });
+
+    assert.ok(result.steps[0].message.includes('manifest: template_missing'));
+    assert.ok(!fs.existsSync(path.join(zylosDir, '.zylos', 'runtime-env.manifest')));
 
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });

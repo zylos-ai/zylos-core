@@ -818,7 +818,15 @@ function step7_syncClaudeMd(ctx) {
   }
 
   // runtime-env.manifest — create from template if missing (upgrade path)
-  deployManifestTemplate(path.join(templateDir, 'runtime-env.manifest.example'), ZYLOS_DIR);
+  // Try tempDir first, then fallback to installed package root
+  let manifestSrc = path.join(templateDir, 'runtime-env.manifest.example');
+  let manifestStatus = deployManifestTemplate(manifestSrc, ZYLOS_DIR);
+  if (manifestStatus === 'template_missing') {
+    const pkgRoot = path.join(import.meta.dirname, '..', '..');
+    manifestSrc = path.join(pkgRoot, 'templates', 'runtime-env.manifest.example');
+    manifestStatus = deployManifestTemplate(manifestSrc, ZYLOS_DIR);
+  }
+  const manifestNote = `; manifest: ${manifestStatus}`;
 
   // For legacy installs (ZYLOS.md absent, CLAUDE.md present): run v0.4.0 migration
   // first so the rebuild block below has a ZYLOS.md to work with.
@@ -845,9 +853,9 @@ function step7_syncClaudeMd(ctx) {
         rebuilt.push(destFile);
       }
       const msg = rebuilt.length ? `rebuilt ${rebuilt.join(', ')} from ZYLOS.md` : 'no addon templates found';
-      return { step: 7, name: 'sync_claude_md', status: 'done', message: msg, duration: Date.now() - startTime };
+      return { step: 7, name: 'sync_claude_md', status: 'done', message: msg + manifestNote, duration: Date.now() - startTime };
     } catch (err) {
-      return { step: 7, name: 'sync_claude_md', status: 'skipped', message: err.message, duration: Date.now() - startTime };
+      return { step: 7, name: 'sync_claude_md', status: 'skipped', message: err.message + manifestNote, duration: Date.now() - startTime };
     }
   }
 
@@ -855,7 +863,7 @@ function step7_syncClaudeMd(ctx) {
   try {
     const syncResult = syncClaudeMd(templateDir);
     if (syncResult.skipped) {
-      return { step: 7, name: 'sync_claude_md', status: 'skipped', message: 'no managed sections', duration: Date.now() - startTime };
+      return { step: 7, name: 'sync_claude_md', status: 'skipped', message: 'no managed sections' + manifestNote, duration: Date.now() - startTime };
     }
 
     const parts = [];
@@ -863,10 +871,10 @@ function step7_syncClaudeMd(ctx) {
     if (syncResult.added.length) parts.push(`${syncResult.added.length} added`);
     const msg = parts.join(', ') || 'no changes';
 
-    return { step: 7, name: 'sync_claude_md', status: 'done', message: msg, duration: Date.now() - startTime };
+    return { step: 7, name: 'sync_claude_md', status: 'done', message: msg + manifestNote, duration: Date.now() - startTime };
   } catch (err) {
     // Non-fatal — CLAUDE.md update failure shouldn't block the upgrade
-    return { step: 7, name: 'sync_claude_md', status: 'skipped', message: err.message, duration: Date.now() - startTime };
+    return { step: 7, name: 'sync_claude_md', status: 'skipped', message: err.message + manifestNote, duration: Date.now() - startTime };
   }
 }
 

@@ -791,7 +791,7 @@ function deployTemplates() {
 
   // runtime-env.manifest — create from template if missing
   const manifestSrc = path.join(TEMPLATES_SRC, 'runtime-env.manifest.example');
-  if (deployManifestTemplate(manifestSrc, ZYLOS_DIR)) {
+  if (deployManifestTemplate(manifestSrc, ZYLOS_DIR) === 'created') {
     console.log(`  ${success('Created runtime-env.manifest from template')}`);
   }
 }
