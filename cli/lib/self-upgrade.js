@@ -809,8 +809,10 @@ function step6_installSkillDeps(ctx) {
  * Pre-v0.4.0 installs (ZYLOS.md absent): fall through to the managed-section
  * sync on CLAUDE.md (legacy path).
  */
-function step7_syncClaudeMd(ctx) {
+export function step7_syncClaudeMd(ctx) {
   const startTime = Date.now();
+  const zylosDir = ctx.zylosDir || ZYLOS_DIR;
+  const packageRoot = ctx.packageRoot || path.join(import.meta.dirname, '..', '..');
 
   const templateDir = path.join(ctx.tempDir, 'templates');
   if (!fs.existsSync(templateDir)) {
@@ -820,17 +822,16 @@ function step7_syncClaudeMd(ctx) {
   // runtime-env.manifest — create from template if missing (upgrade path)
   // Try tempDir first, then fallback to installed package root
   let manifestSrc = path.join(templateDir, 'runtime-env.manifest.example');
-  let manifestStatus = deployManifestTemplate(manifestSrc, ZYLOS_DIR);
+  let manifestStatus = deployManifestTemplate(manifestSrc, zylosDir);
   if (manifestStatus === 'template_missing') {
-    const pkgRoot = path.join(import.meta.dirname, '..', '..');
-    manifestSrc = path.join(pkgRoot, 'templates', 'runtime-env.manifest.example');
-    manifestStatus = deployManifestTemplate(manifestSrc, ZYLOS_DIR);
+    manifestSrc = path.join(packageRoot, 'templates', 'runtime-env.manifest.example');
+    manifestStatus = deployManifestTemplate(manifestSrc, zylosDir);
   }
   const manifestNote = `; manifest: ${manifestStatus}`;
 
   // For legacy installs (ZYLOS.md absent, CLAUDE.md present): run v0.4.0 migration
   // first so the rebuild block below has a ZYLOS.md to work with.
-  const zylosMd = path.join(ZYLOS_DIR, 'ZYLOS.md');
+  const zylosMd = path.join(zylosDir, 'ZYLOS.md');
   if (!fs.existsSync(zylosMd)) {
     try {
       runMigrations();
@@ -849,7 +850,7 @@ function step7_syncClaudeMd(ctx) {
         const addonPath = path.join(templateDir, addonFile);
         if (!fs.existsSync(addonPath)) continue;
         const content = core.trimEnd() + '\n\n' + fs.readFileSync(addonPath, 'utf8').trimEnd() + '\n';
-        fs.writeFileSync(path.join(ZYLOS_DIR, destFile), content, 'utf8');
+        fs.writeFileSync(path.join(zylosDir, destFile), content, 'utf8');
         rebuilt.push(destFile);
       }
       const msg = rebuilt.length ? `rebuilt ${rebuilt.join(', ')} from ZYLOS.md` : 'no addon templates found';

@@ -8,6 +8,7 @@ const {
   createFinalizeState,
   runSelfUpgradeFinalize,
   step1_backupCoreSkills,
+  step7_syncClaudeMd,
   rollbackSelf,
   step10_ensureCodexConfig,
 } = await import('../self-upgrade.js');
@@ -401,38 +402,37 @@ describe('Boolean setting migration hints (autoMemoryEnabled, autoDreamEnabled)'
   });
 });
 
-describe('step7 manifest deploy via finalizer', () => {
-  it('creates manifest from tempDir templates and reports status in step message', () => {
+describe('step7 manifest deploy (real step7_syncClaudeMd)', () => {
+  it('creates manifest from tempDir template when missing, message includes manifest: created', () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-step7-'));
     const zylosDir = path.join(tmpDir, 'zylos');
     const templatesDir = path.join(tmpDir, 'pkg', 'templates');
     fs.mkdirSync(path.join(zylosDir, '.zylos'), { recursive: true });
     fs.mkdirSync(templatesDir, { recursive: true });
     fs.writeFileSync(path.join(templatesDir, 'runtime-env.manifest.example'), 'env TZ\n');
+    fs.writeFileSync(path.join(zylosDir, 'ZYLOS.md'), '# Core\n');
+    fs.writeFileSync(path.join(templatesDir, 'claude-addon.md'), '# Addon\n');
 
     const manifestDest = path.join(zylosDir, '.zylos', 'runtime-env.manifest');
     assert.ok(!fs.existsSync(manifestDest));
 
-    const step = (ctx) => {
-      const src = path.join(ctx.tempDir, 'templates', 'runtime-env.manifest.example');
-      const status = deployManifestTemplate(src, zylosDir);
-      return { step: 7, name: 'sync_claude_md', status: 'done', message: `rebuilt CLAUDE.md; manifest: ${status}` };
-    };
+    const result = step7_syncClaudeMd({
+      tempDir: path.join(tmpDir, 'pkg'),
+      zylosDir,
+      packageRoot: path.join(tmpDir, 'no-fallback'),
+    });
 
-    const result = runSelfUpgradeFinalize({
-      schemaVersion: 1, tempDir: path.join(tmpDir, 'pkg'),
-      from: '0.4.12', to: '0.4.13',
-    }, { steps: [step] });
-
-    assert.equal(result.success, true);
-    assert.ok(result.steps[0].message.includes('manifest: created'));
+    assert.equal(result.step, 7);
+    assert.equal(result.name, 'sync_claude_md');
+    assert.equal(result.status, 'done');
+    assert.ok(result.message.includes('manifest: created'));
     assert.ok(fs.existsSync(manifestDest));
     assert.equal(fs.readFileSync(manifestDest, 'utf8'), 'env TZ\n');
 
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it('does not overwrite existing manifest and reports exists status', () => {
+  it('does not overwrite existing manifest, message includes manifest: exists', () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-step7-'));
     const zylosDir = path.join(tmpDir, 'zylos');
     const templatesDir = path.join(tmpDir, 'pkg', 'templates');
@@ -440,19 +440,16 @@ describe('step7 manifest deploy via finalizer', () => {
     fs.mkdirSync(templatesDir, { recursive: true });
     fs.writeFileSync(path.join(templatesDir, 'runtime-env.manifest.example'), 'env NEW\n');
     fs.writeFileSync(path.join(zylosDir, '.zylos', 'runtime-env.manifest'), 'env CUSTOM\n');
+    fs.writeFileSync(path.join(zylosDir, 'ZYLOS.md'), '# Core\n');
+    fs.writeFileSync(path.join(templatesDir, 'claude-addon.md'), '# Addon\n');
 
-    const step = (ctx) => {
-      const src = path.join(ctx.tempDir, 'templates', 'runtime-env.manifest.example');
-      const status = deployManifestTemplate(src, zylosDir);
-      return { step: 7, name: 'sync_claude_md', status: 'done', message: `rebuilt; manifest: ${status}` };
-    };
+    const result = step7_syncClaudeMd({
+      tempDir: path.join(tmpDir, 'pkg'),
+      zylosDir,
+      packageRoot: path.join(tmpDir, 'no-fallback'),
+    });
 
-    const result = runSelfUpgradeFinalize({
-      schemaVersion: 1, tempDir: path.join(tmpDir, 'pkg'),
-      from: '0.4.12', to: '0.4.13',
-    }, { steps: [step] });
-
-    assert.ok(result.steps[0].message.includes('manifest: exists'));
+    assert.ok(result.message.includes('manifest: exists'));
     assert.equal(
       fs.readFileSync(path.join(zylosDir, '.zylos', 'runtime-env.manifest'), 'utf8'),
       'env CUSTOM\n',
@@ -461,26 +458,79 @@ describe('step7 manifest deploy via finalizer', () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it('reports template_missing when template is absent from tempDir', () => {
+  it('falls back to packageRoot template when tempDir template is missing', () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-step7-'));
     const zylosDir = path.join(tmpDir, 'zylos');
     const templatesDir = path.join(tmpDir, 'pkg', 'templates');
-    fs.mkdirSync(zylosDir, { recursive: true });
+    const pkgRoot = path.join(tmpDir, 'installed-pkg');
+    const pkgTemplates = path.join(pkgRoot, 'templates');
+    fs.mkdirSync(path.join(zylosDir, '.zylos'), { recursive: true });
     fs.mkdirSync(templatesDir, { recursive: true });
+    fs.mkdirSync(pkgTemplates, { recursive: true });
+    fs.writeFileSync(path.join(pkgTemplates, 'runtime-env.manifest.example'), 'env FALLBACK\n');
+    fs.writeFileSync(path.join(zylosDir, 'ZYLOS.md'), '# Core\n');
+    fs.writeFileSync(path.join(templatesDir, 'claude-addon.md'), '# Addon\n');
 
-    const step = (ctx) => {
-      const src = path.join(ctx.tempDir, 'templates', 'runtime-env.manifest.example');
-      const status = deployManifestTemplate(src, zylosDir);
-      return { step: 7, name: 'sync_claude_md', status: 'done', message: `rebuilt; manifest: ${status}` };
-    };
+    const result = step7_syncClaudeMd({
+      tempDir: path.join(tmpDir, 'pkg'),
+      zylosDir,
+      packageRoot: pkgRoot,
+    });
+
+    assert.ok(result.message.includes('manifest: created'));
+    const manifestDest = path.join(zylosDir, '.zylos', 'runtime-env.manifest');
+    assert.ok(fs.existsSync(manifestDest));
+    assert.equal(fs.readFileSync(manifestDest, 'utf8'), 'env FALLBACK\n');
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('reports template_missing when both tempDir and packageRoot templates are absent', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-step7-'));
+    const zylosDir = path.join(tmpDir, 'zylos');
+    const templatesDir = path.join(tmpDir, 'pkg', 'templates');
+    fs.mkdirSync(path.join(zylosDir, '.zylos'), { recursive: true });
+    fs.mkdirSync(templatesDir, { recursive: true });
+    fs.writeFileSync(path.join(zylosDir, 'ZYLOS.md'), '# Core\n');
+    fs.writeFileSync(path.join(templatesDir, 'claude-addon.md'), '# Addon\n');
+
+    const result = step7_syncClaudeMd({
+      tempDir: path.join(tmpDir, 'pkg'),
+      zylosDir,
+      packageRoot: path.join(tmpDir, 'no-such-pkg'),
+    });
+
+    assert.ok(result.message.includes('manifest: template_missing'));
+    assert.ok(!fs.existsSync(path.join(zylosDir, '.zylos', 'runtime-env.manifest')));
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('works end-to-end through runSelfUpgradeFinalize with real POST_INSTALL_STEPS', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-step7-'));
+    const zylosDir = path.join(tmpDir, 'zylos');
+    const templatesDir = path.join(tmpDir, 'pkg', 'templates');
+    fs.mkdirSync(path.join(zylosDir, '.zylos'), { recursive: true });
+    fs.mkdirSync(templatesDir, { recursive: true });
+    fs.writeFileSync(path.join(templatesDir, 'runtime-env.manifest.example'), 'env TZ\n');
+    fs.writeFileSync(path.join(zylosDir, 'ZYLOS.md'), '# Core\n');
+    fs.writeFileSync(path.join(templatesDir, 'claude-addon.md'), '# Addon\n');
+
+    const wrappedStep7 = (ctx) => step7_syncClaudeMd({ ...ctx, zylosDir, packageRoot: path.join(tmpDir, 'no-fallback') });
 
     const result = runSelfUpgradeFinalize({
-      schemaVersion: 1, tempDir: path.join(tmpDir, 'pkg'),
-      from: '0.4.12', to: '0.4.13',
-    }, { steps: [step] });
+      schemaVersion: 1,
+      tempDir: path.join(tmpDir, 'pkg'),
+      from: '0.4.12',
+      to: '0.4.13',
+    }, { steps: [wrappedStep7] });
 
-    assert.ok(result.steps[0].message.includes('manifest: template_missing'));
-    assert.ok(!fs.existsSync(path.join(zylosDir, '.zylos', 'runtime-env.manifest')));
+    assert.equal(result.success, true);
+    const step7Result = result.steps.find(s => s.step === 7);
+    assert.ok(step7Result);
+    assert.ok(step7Result.message.includes('manifest: created'));
+    assert.ok(step7Result.message.includes('rebuilt'));
+    assert.ok(fs.existsSync(path.join(zylosDir, '.zylos', 'runtime-env.manifest')));
 
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
