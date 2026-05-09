@@ -32,21 +32,32 @@ export function parseManifest(manifestStr, warnings = []) {
 /**
  * Build a clean PATH ensuring key directories exist.
  * Extracts .nvm segments from the current processEnv.PATH.
+ * On macOS, includes Homebrew paths for Apple Silicon and Intel.
  */
-function _buildPath(processEnv) {
+function _buildPath(processEnv, platform) {
   const home = processEnv.HOME || os.homedir();
+  const plat = platform || os.platform();
   const basePaths = [
     path.join(home, '.local', 'bin'),
     path.join(home, '.claude', 'bin'),
+  ];
+
+  // macOS: Homebrew paths (Apple Silicon + Intel)
+  if (plat === 'darwin') {
+    basePaths.push('/opt/homebrew/bin', '/opt/homebrew/sbin');
+  }
+
+  basePaths.push(
     '/usr/local/sbin', '/usr/local/bin',
     '/usr/sbin', '/usr/bin',
     '/sbin', '/bin',
-  ];
+  );
 
   // Extract .nvm path segments from current PATH
   const currentParts = (processEnv.PATH || '').split(':').filter(Boolean);
   const nvmParts = currentParts.filter(p => p.includes('.nvm'));
 
+  // user dirs → nvm → (homebrew on macOS) → system dirs
   const allParts = [...basePaths.slice(0, 2), ...nvmParts, ...basePaths.slice(2)];
   return [...new Set(allParts)].join(':');
 }
@@ -68,7 +79,7 @@ export function buildCleanEnv({ processEnv, dotenvVars, platform, uid }) {
   const env = {};
 
   // 1. Base set
-  env.PATH = _buildPath(processEnv);
+  env.PATH = _buildPath(processEnv, plat);
   env.HOME = processEnv.HOME || os.homedir();
   env.USER = processEnv.USER || os.userInfo().username;
   env.LOGNAME = processEnv.LOGNAME || env.USER;
@@ -77,12 +88,15 @@ export function buildCleanEnv({ processEnv, dotenvVars, platform, uid }) {
   env.TERM = processEnv.TERM || 'xterm-256color';
   env.SHELL = processEnv.SHELL || '/bin/bash';
 
-  // 2. Platform-specific
+  // 2. Agent automation defaults
+  env.GH_PROMPT_DISABLED = '1';
+
+  // 3. Platform-specific
   if (plat === 'darwin' && processEnv.TMPDIR) {
     env.TMPDIR = processEnv.TMPDIR;
   }
 
-  // 3. Built-in allowlist exceptions (auto-inherit from processEnv)
+  // 4. Built-in allowlist exceptions (auto-inherit from processEnv)
   for (const name of PROXY_VARS) {
     if (processEnv[name]) env[name] = processEnv[name];
   }
@@ -92,7 +106,7 @@ export function buildCleanEnv({ processEnv, dotenvVars, platform, uid }) {
     env.IS_SANDBOX = '1';
   }
 
-  // 4. ZYLOS_TMUX_ENV — read values from dotenvVars
+  // 5. ZYLOS_TMUX_ENV — read values from dotenvVars
   const tmuxEnvNames = parseManifest(dotenvVars.ZYLOS_TMUX_ENV, warnings);
   for (const name of tmuxEnvNames) {
     if (dotenvVars[name] !== undefined) {
@@ -100,7 +114,7 @@ export function buildCleanEnv({ processEnv, dotenvVars, platform, uid }) {
     }
   }
 
-  // 5. ZYLOS_TMUX_INHERIT — read values from processEnv (lower priority)
+  // 6. ZYLOS_TMUX_INHERIT — read values from processEnv (lower priority)
   const tmuxInheritNames = parseManifest(dotenvVars.ZYLOS_TMUX_INHERIT, warnings);
   for (const name of tmuxInheritNames) {
     if (env[name] === undefined && processEnv[name] !== undefined) {

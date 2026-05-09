@@ -155,6 +155,27 @@ describe('buildCleanEnv', () => {
     const { env } = buildCleanEnv({ processEnv, dotenvVars: {}, platform: 'linux' });
     assert.ok(env.PATH.includes('.nvm'), `PATH should include .nvm segment: ${env.PATH}`);
   });
+
+  it('darwin clean PATH includes Homebrew paths', () => {
+    const { env } = buildCleanEnv({ processEnv: baseProcessEnv, dotenvVars: {}, platform: 'darwin' });
+    const parts = env.PATH.split(':');
+    assert.ok(parts.includes('/opt/homebrew/bin'), 'Missing /opt/homebrew/bin');
+    assert.ok(parts.includes('/opt/homebrew/sbin'), 'Missing /opt/homebrew/sbin');
+    assert.ok(parts.includes('/usr/local/bin'), 'Missing /usr/local/bin');
+    assert.ok(parts.includes('/usr/local/sbin'), 'Missing /usr/local/sbin');
+  });
+
+  it('non-darwin clean PATH does not include Homebrew paths', () => {
+    const { env } = buildCleanEnv({ processEnv: baseProcessEnv, dotenvVars: {}, platform: 'linux' });
+    const parts = env.PATH.split(':');
+    assert.ok(!parts.includes('/opt/homebrew/bin'), 'Should not have /opt/homebrew/bin on Linux');
+    assert.ok(!parts.includes('/opt/homebrew/sbin'), 'Should not have /opt/homebrew/sbin on Linux');
+  });
+
+  it('clean env includes GH_PROMPT_DISABLED=1', () => {
+    const { env } = buildCleanEnv({ processEnv: baseProcessEnv, dotenvVars: {}, platform: 'linux' });
+    assert.equal(env.GH_PROMPT_DISABLED, '1');
+  });
 });
 
 // ── buildCompatEnv ─────────────────────────────────────────────────────────
@@ -178,6 +199,13 @@ describe('buildCompatEnv', () => {
     const processEnv = { PATH: '/a:/b:/a:/c:/b', HOME: '/home/test' };
     const { env } = buildCompatEnv({ processEnv, dotenvVars: {} });
     assert.equal(env.PATH, '/a:/b:/c');
+  });
+
+  it('does not inject GH_PROMPT_DISABLED or Homebrew paths', () => {
+    const processEnv = { PATH: '/usr/bin', HOME: '/home/test' };
+    const { env } = buildCompatEnv({ processEnv, dotenvVars: {} });
+    assert.equal(env.GH_PROMPT_DISABLED, undefined);
+    assert.ok(!env.PATH.includes('/opt/homebrew'), 'compat mode should not add Homebrew paths');
   });
 });
 
