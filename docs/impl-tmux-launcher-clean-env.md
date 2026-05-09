@@ -9,7 +9,7 @@
 
 ## 目标
 
-一步到位将 tmux session 启动从「shell source 机制」迁移到「launcher 管道」，实现 Level 1 环境变量 allowlisting。launcher 是唯一路径，没有 if/else 分支。
+一步到位将 tmux session 启动从「shell source 机制」迁移到「launcher 管道」，实现 Level 1 环境变量 allowlisting。**新建 runtime session 的唯一启动路径走 launcher**；existing session 分支保留 sendMessage 注入命令，不做 clean env 重建。
 
 ## 变更概览
 
@@ -26,8 +26,8 @@
 
 | 文件 | 变更内容 |
 |------|----------|
-| `cli/lib/runtime/claude.js` | `launch()` 方法重写——所有模式走 launcher 管道，删除 shell source 机制 |
-| `cli/lib/runtime/codex.js` | `launch()` 方法重写——所有模式走 launcher 管道 |
+| `cli/lib/runtime/claude.js` | `launch()` 方法重写——新建 session 走 launcher 管道，删除 shell source 机制；existing session 保留 sendMessage |
+| `cli/lib/runtime/codex.js` | `launch()` 方法重写——新建 session 走 launcher 管道；existing session 保留 sendMessage（含 bootstrap prompt） |
 
 ### 不改动的文件
 
@@ -59,6 +59,8 @@ export function buildCleanEnv({ processEnv, dotenvVars, platform })
 /**
  * 构建兼容环境对象（ZYLOS_CLEAN_ENV=false，默认）。
  * 传入完整 processEnv，加上 manifest 变量覆盖。
+ * 安全注意：compat env 包含完整 processEnv，可能含 secrets。
+ * 安全保障依赖 spec 文件 0600 + unlink-before-spawn。
  */
 export function buildCompatEnv({ processEnv, dotenvVars })
 // → 返回 { env: Object }
@@ -93,8 +95,9 @@ export function readAndDeleteSpec(specPath)
 2. 平台特定:
    - macOS (darwin): TMPDIR（从 processEnv 继承，若存在）
 
-3. 自动继承（从 processEnv，无需用户声明）:
+3. Built-in allowlist exceptions（从 processEnv 自动继承，无需用户声明）:
    - proxy: HTTP_PROXY, HTTPS_PROXY, NO_PROXY, http_proxy, https_proxy, no_proxy
+     （网络连通性必需，缺失导致 API 403；H1 验证已确认）
    - 沙箱: IS_SANDBOX（当 uid=0）
 
 4. ZYLOS_TMUX_ENV manifest（从 dotenvVars 读值）:
@@ -139,11 +142,16 @@ const basePaths = [
 // 3. spawn(spec.command, spec.args, { env: spec.env, cwd: spec.cwd, stdio: 'inherit' })
 // 4. child.on('exit', (code, signal) => {
 //      // 写 exit log
-//      process.exit(signal ? 128 : (code ?? 1));
+//      if (signal) {
+//        // 按 POSIX 惯例：128 + signal number（SIGTERM=143, SIGINT=130）
+//        const sigNum = { SIGTERM: 15, SIGINT: 2, SIGKILL: 9, SIGHUP: 1 }[signal] || 1;
+//        process.exit(128 + sigNum);
+//      }
+//      process.exit(code ?? 1);
 //    })
 ```
 
-信号透传：SIGTERM / SIGINT → child.kill(signal)
+信号透传：收到 SIGTERM / SIGINT / SIGHUP → child.kill(signal)。child 被信号终止时，launcher 按 `128 + signalNumber` 退出（POSIX convention）。
 
 ### 3. claude.js launch() 重写
 
@@ -166,8 +174,8 @@ const basePaths = [
   1. buildInstructionFile()
   2. 检测 auth 方式（逻辑不变）
   3. 判断 tmux session 是否已存在
-     - 已存在 → sendMessage(claudeCmd)  // 只发 claude 命令本身
-     - 不存在:
+     - 已存在 → sendMessage(claudeCmd)  // 与当前行为一致，发完整 claude 命令
+     - 不存在（新建 session，走 launcher）:
        a. 构建 env（clean 或 compat 模式）
        b. 注入 auth tokens 到 env
        c. 剥离 ENV_VARS_TO_STRIP
@@ -192,25 +200,33 @@ const basePaths = [
   1. buildInstructionFile()
   2. 构建 bootstrap prompt（逻辑不变）
   3. 判断 tmux session 是否已存在
-     - 已存在 → sendMessage(codexCmd)
-     - 不存在:
+     - 已存在 → sendMessage(带 bootstrap prompt 的完整 codex 命令)
+       // 保留当前 launch() 中的 prompt 语义：先 cat prompt 文件，
+       // 再拼接 codex "$_p" 命令发给 tmux。与新建 session 走
+       // launcher 的区别仅在于不重建 env。
+     - 不存在（新建 session，走 launcher）:
        a. 构建 env（clean 或 compat 模式）
-       b. 注入 codex auth（从 ~/.codex/auth.json 读取并放入 env）
+       b. 将 bootstrap prompt 写入 spec.args
        c. writeLaunchSpec({ command, args, env, cwd })
        d. execFileSync('tmux', [..., `node ${launcherPath} ${specPath}`])
   4. startup dialog check（setTimeout 逻辑不变）
 ```
 
 关键差异：
-- Codex 的 auth 在 `~/.codex/auth.json`，由 Codex CLI 自己读取，不需要注入 env
+- **Codex auth 不注入 env**——Codex CLI 自己从 `~/.codex/auth.json` 读取凭据，clean env 只需保留 `HOME`（让 CLI 能定位 `~/.codex/`）
 - Codex 的 bootstrap prompt 作为命令行参数传入，写在 spec.args 中
 - OPENAI_API_KEY 等 Codex 相关 key 走 auth.json，不走 env 注入
+- **existing session 保留 bootstrap prompt**——sendMessage 路径仍发送带 prompt 的完整命令，与当前行为一致
 
 ### 5. 已存在 session 的处理
 
-当 `_tmuxHasSession()` 返回 true 时，说明 tmux session 已经在跑（可能是空 shell 等待命令）。这条路径直接通过 `sendMessage()` 注入 CLI 命令，不走 launcher。
+当 `_tmuxHasSession()` 返回 true 时，说明 tmux session 已经在跑（可能是空 shell 等待命令）。这条路径直接通过 `sendMessage()` 注入 CLI 命令，**不走 launcher，不重建 env**。
 
-原因：已存在的 session 已经有自己的环境，重新构建 env 需要杀掉 session 再重建——这不是 restart 场景该做的事。当前 HeartbeatEngine 的 stop+launch 流程会先 kill session 再重建，所以 restart 场景总是走「不存在 session」的分支。
+具体行为：
+- **Claude**: sendMessage 发送完整 claude 命令（含 bypass flag 和 exit log），与当前行为一致
+- **Codex**: sendMessage 发送带 bootstrap prompt 的完整 codex 命令（先 cat prompt 文件 → 拼 `codex "$_p"` → 发送），保留当前 prompt 语义
+
+原因：已存在的 session 已经有自己的环境，重新构建 env 需要杀掉 session 再重建——这不是 restart 场景该做的事。当前 HeartbeatEngine 的 stop+launch 流程会先 kill session 再重建，所以 restart 场景总是走「不存在 session」的新建分支（走 launcher）。
 
 ---
 
@@ -255,7 +271,16 @@ ZYLOS_TMUX_INHERIT=SSH_AUTH_SOCK
 |---|------|--------|
 | 12 | 正常退出 | child exit code 0 → launcher exit code 0 |
 | 13 | 错误退出 | child exit code 1 → launcher exit code 1 |
-| 14 | spec 文件删除 | spawn 之前 spec 文件已被 unlink |
+| 14 | 信号终止退出码 | child 被 SIGTERM → launcher exit 143 (128+15)；child 被 SIGINT → launcher exit 130 (128+2) |
+| 15 | spec 文件删除 | spawn 之前 spec 文件已被 unlink |
+
+### 单元测试 (claude.test.js / codex.test.js 补充)
+
+| # | 场景 | 验证点 |
+|---|------|--------|
+| 16 | tmux cmdline 无 secret | 构造出的 tmux args 不包含 API key / token 值（secrets 只在 spec.json 中） |
+| 17 | existing session 不走 launcher | tmuxHasSession=true 时不调用 writeLaunchSpec，走 sendMessage |
+| 18 | Codex existing session 保留 bootstrap prompt | tmuxHasSession=true 时 sendMessage 包含 bootstrap prompt 内容 |
 
 ### 实机验证（PR merge 后在 zylos01 上执行）
 
