@@ -314,7 +314,7 @@ export class CodexAdapter extends RuntimeAdapter {
       const useCleanEnv = dotenvVars.ZYLOS_CLEAN_ENV === 'true';
 
       const { env } = useCleanEnv
-        ? buildCleanEnv({ processEnv: process.env, dotenvVars })
+        ? buildCleanEnv({ processEnv: process.env, dotenvVars, uid: process.getuid?.() })
         : buildCompatEnv({ processEnv: process.env, dotenvVars });
 
       // Build launch spec — Codex reads auth from ~/.codex/auth.json via HOME
@@ -333,7 +333,7 @@ export class CodexAdapter extends RuntimeAdapter {
 
       // tmux args — minimal env for launcher to start
       const tmuxArgs = [
-        'new-session', '-d', '-s', SESSION,
+        'new-session', '-d', '-E', '-s', SESSION,
         '-e', `PATH=${env.PATH}`,
         '-e', `HOME=${env.HOME}`,
         '-e', `TERM=${env.TERM || 'xterm-256color'}`,

@@ -125,6 +125,28 @@ describe('buildCleanEnv', () => {
     assert.ok(warnings.some(w => w.includes('bad-name')));
   });
 
+  it('inherits IS_SANDBOX from processEnv when present', () => {
+    const processEnv = { ...baseProcessEnv, IS_SANDBOX: '1' };
+    const { env } = buildCleanEnv({ processEnv, dotenvVars: {}, platform: 'linux' });
+    assert.equal(env.IS_SANDBOX, '1');
+  });
+
+  it('sets IS_SANDBOX when uid is 0 and not in processEnv', () => {
+    const { env } = buildCleanEnv({ processEnv: baseProcessEnv, dotenvVars: {}, platform: 'linux', uid: 0 });
+    assert.equal(env.IS_SANDBOX, '1');
+  });
+
+  it('processEnv IS_SANDBOX takes precedence over uid=0', () => {
+    const processEnv = { ...baseProcessEnv, IS_SANDBOX: 'custom' };
+    const { env } = buildCleanEnv({ processEnv, dotenvVars: {}, platform: 'linux', uid: 0 });
+    assert.equal(env.IS_SANDBOX, 'custom');
+  });
+
+  it('does not set IS_SANDBOX for non-root uid', () => {
+    const { env } = buildCleanEnv({ processEnv: baseProcessEnv, dotenvVars: {}, platform: 'linux', uid: 1000 });
+    assert.equal(env.IS_SANDBOX, undefined);
+  });
+
   it('extracts .nvm paths from processEnv.PATH', () => {
     const processEnv = {
       ...baseProcessEnv,

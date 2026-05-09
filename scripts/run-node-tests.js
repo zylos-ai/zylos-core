@@ -52,7 +52,7 @@ if (testFiles.length === 0) {
 }
 
 console.log(`Running ${testFiles.length} Node test files`);
-const result = spawnSync(process.execPath, ['--test', ...testFiles], {
+const result = spawnSync(process.execPath, ['--experimental-test-module-mocks', '--test', ...testFiles], {
   stdio: 'inherit',
 });
 

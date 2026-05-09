@@ -59,9 +59,10 @@ function _buildPath(processEnv) {
  * @param {object} opts.processEnv - AM's process.env
  * @param {object} opts.dotenvVars - Parsed .env file key-value pairs
  * @param {string} [opts.platform] - os.platform() value, defaults to current
+ * @param {number} [opts.uid] - Process UID; when 0, IS_SANDBOX is set for root/Docker safety
  * @returns {{ env: object, warnings: string[] }}
  */
-export function buildCleanEnv({ processEnv, dotenvVars, platform }) {
+export function buildCleanEnv({ processEnv, dotenvVars, platform, uid }) {
   const plat = platform || os.platform();
   const warnings = [];
   const env = {};
@@ -87,6 +88,8 @@ export function buildCleanEnv({ processEnv, dotenvVars, platform }) {
   }
   if (processEnv.IS_SANDBOX) {
     env.IS_SANDBOX = processEnv.IS_SANDBOX;
+  } else if (uid === 0) {
+    env.IS_SANDBOX = '1';
   }
 
   // 4. ZYLOS_TMUX_ENV — read values from dotenvVars
