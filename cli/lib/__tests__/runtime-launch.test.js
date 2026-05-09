@@ -116,6 +116,20 @@ function makeAdapter(Cls) {
   return adapter;
 }
 
+function readSpecEnv() {
+  const tmux = findTmuxNewSession();
+  if (!tmux) return null;
+  const lastArg = tmux.args[tmux.args.length - 1];
+  const specMatch = lastArg.match(/"([^"]+\.json)"/);
+  if (!specMatch) return null;
+  try {
+    const spec = JSON.parse(fs.readFileSync(specMatch[1], 'utf8'));
+    return spec.env;
+  } catch {
+    return null;
+  }
+}
+
 // ── Claude launch tests ──────────────────────────────────────────────────────
 
 describe('Claude launch — new session', () => {
@@ -137,6 +151,40 @@ describe('Claude launch — new session', () => {
     const joined = tmux.args.join(' ');
     assert.ok(!joined.includes('sk-ant-'), 'tmux cmdline must not contain API key value');
     assert.ok(!joined.includes('ANTHROPIC_API_KEY'), 'tmux cmdline must not expose ANTHROPIC_API_KEY');
+  });
+
+  it('spec.env excludes CLAUDECODE and CLAUDE_CODE_ENTRYPOINT even when present in process.env', async () => {
+    tmuxSessionExists = false;
+    process.env.CLAUDECODE = '1';
+    process.env.CLAUDE_CODE_ENTRYPOINT = 'cli';
+    try {
+      await makeAdapter(ClaudeAdapter).launch({ bypassPermissions: false });
+      const env = readSpecEnv();
+      assert.ok(env, 'spec should be written');
+      assert.equal(env.CLAUDECODE, undefined, 'CLAUDECODE must be stripped from spec.env');
+      assert.equal(env.CLAUDE_CODE_ENTRYPOINT, undefined, 'CLAUDE_CODE_ENTRYPOINT must be stripped from spec.env');
+    } finally {
+      delete process.env.CLAUDECODE;
+      delete process.env.CLAUDE_CODE_ENTRYPOINT;
+    }
+  });
+
+  it('spec.env excludes auth tokens when native auth is detected', async () => {
+    tmuxSessionExists = false;
+    // Simulate native auth by writing a credentials file
+    const credFile = path.join(fakeHome, '.claude', '.credentials.json');
+    fs.writeFileSync(credFile, JSON.stringify({
+      claudeAiOauth: { refreshToken: 'fake-refresh-token' },
+    }));
+    try {
+      await makeAdapter(ClaudeAdapter).launch({ bypassPermissions: false });
+      const env = readSpecEnv();
+      assert.ok(env, 'spec should be written');
+      assert.equal(env.ANTHROPIC_API_KEY, undefined, 'ANTHROPIC_API_KEY must be stripped when native auth detected');
+      assert.equal(env.CLAUDE_CODE_OAUTH_TOKEN, undefined, 'CLAUDE_CODE_OAUTH_TOKEN must be stripped when native auth detected');
+    } finally {
+      fs.unlinkSync(credFile);
+    }
   });
 });
 
