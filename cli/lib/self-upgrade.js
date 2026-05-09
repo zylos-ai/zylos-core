@@ -17,6 +17,7 @@ import { extractScriptPath, extractSkillName, getCommandHooks } from './hook-uti
 import { smartSync, formatMergeResult } from './smart-merge.js';
 import { getAllowedTmpRoots } from './upgrade.js';
 import { runMigrations } from './migrate.js';
+import { deployManifestTemplate } from './runtime/tmux-env.js';
 import { writeCodexConfig } from './runtime-setup.js';
 import { getCoreEcosystemPath, restartManagedProcess } from './pm2.js';
 
@@ -815,6 +816,9 @@ function step7_syncClaudeMd(ctx) {
   if (!fs.existsSync(templateDir)) {
     return { step: 7, name: 'sync_claude_md', status: 'skipped', message: 'no templates in new version', duration: Date.now() - startTime };
   }
+
+  // runtime-env.manifest — create from template if missing (upgrade path)
+  deployManifestTemplate(path.join(templateDir, 'runtime-env.manifest.example'), ZYLOS_DIR);
 
   // For legacy installs (ZYLOS.md absent, CLAUDE.md present): run v0.4.0 migration
   // first so the rebuild block below has a ZYLOS.md to work with.

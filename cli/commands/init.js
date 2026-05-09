@@ -19,6 +19,7 @@ import { bold, dim, green, red, yellow, cyan, bgGreen, success, error, warn, hea
 import { commandExists } from '../lib/shell-utils.js';
 import { getActiveAdapter } from '../lib/runtime/index.js';
 import { buildInstructionFile } from '../lib/runtime/instruction-builder.js';
+import { deployManifestTemplate } from '../lib/runtime/tmux-env.js';
 import { runMigrations } from '../lib/migrate.js';
 import {
   installGlobalPackage,
@@ -786,6 +787,12 @@ function deployTemplates() {
   const claudeDest = path.join(ZYLOS_DIR, '.claude');
   if (fs.existsSync(claudeSrc)) {
     copyMissingTree(claudeSrc, claudeDest);
+  }
+
+  // runtime-env.manifest — create from template if missing
+  const manifestSrc = path.join(TEMPLATES_SRC, 'runtime-env.manifest.example');
+  if (deployManifestTemplate(manifestSrc, ZYLOS_DIR)) {
+    console.log(`  ${success('Created runtime-env.manifest from template')}`);
   }
 }
 

@@ -6,7 +6,7 @@ import { afterEach, describe, it } from 'node:test';
 
 const {
   buildCleanEnv, buildCompatEnv, parseManifest, parsePathManifest,
-  parseRuntimeEnvManifest, loadRuntimeEnvManifest,
+  parseRuntimeEnvManifest, loadRuntimeEnvManifest, deployManifestTemplate,
   writeLaunchSpec, readAndDeleteSpec,
 } = await import('../runtime/tmux-env.js');
 
@@ -466,6 +466,52 @@ describe('buildCompatEnv', () => {
 });
 
 // ── spec file I/O ──────────────────────────────────────────────────────────
+
+// ── deployManifestTemplate ────────────────────────────────────────────────
+
+describe('deployManifestTemplate', () => {
+  it('creates manifest from template when missing', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-deploy-'));
+    tmpDirs.push(tmpDir);
+    const templatePath = path.join(tmpDir, 'runtime-env.manifest.example');
+    fs.writeFileSync(templatePath, 'env TZ\n');
+    const zylosDir = path.join(tmpDir, 'zylos');
+    fs.mkdirSync(zylosDir);
+
+    const created = deployManifestTemplate(templatePath, zylosDir);
+    assert.equal(created, true);
+    const dest = path.join(zylosDir, '.zylos', 'runtime-env.manifest');
+    assert.ok(fs.existsSync(dest));
+    assert.equal(fs.readFileSync(dest, 'utf8'), 'env TZ\n');
+  });
+
+  it('does not overwrite existing manifest', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-deploy-'));
+    tmpDirs.push(tmpDir);
+    const templatePath = path.join(tmpDir, 'runtime-env.manifest.example');
+    fs.writeFileSync(templatePath, 'env NEW_VAR\n');
+    const zylosDir = path.join(tmpDir, 'zylos');
+    const zylosSubdir = path.join(zylosDir, '.zylos');
+    fs.mkdirSync(zylosSubdir, { recursive: true });
+    fs.writeFileSync(path.join(zylosSubdir, 'runtime-env.manifest'), 'env USER_CUSTOM\n');
+
+    const created = deployManifestTemplate(templatePath, zylosDir);
+    assert.equal(created, false);
+    assert.equal(
+      fs.readFileSync(path.join(zylosSubdir, 'runtime-env.manifest'), 'utf8'),
+      'env USER_CUSTOM\n',
+    );
+  });
+
+  it('returns false when template does not exist', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-deploy-'));
+    tmpDirs.push(tmpDir);
+    const created = deployManifestTemplate('/nonexistent/template', tmpDir);
+    assert.equal(created, false);
+  });
+});
+
+// ── writeLaunchSpec / readAndDeleteSpec ────────────────────────────────────
 
 describe('writeLaunchSpec / readAndDeleteSpec', () => {
   it('writes 0600 file and reads it back', () => {
