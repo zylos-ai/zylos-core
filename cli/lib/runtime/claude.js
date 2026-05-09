@@ -34,6 +34,7 @@ import {
   getProcessName,
   hasChildProcess,
 } from './tmux-helpers.js';
+import { buildCleanEnv, buildCompatEnv, writeLaunchSpec } from './tmux-env.js';
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -228,9 +229,8 @@ export class ClaudeAdapter extends RuntimeAdapter {
   /**
    * Build the instruction file and start Claude Code in the tmux session.
    *
-   * Auth strategy:
-   *   - Native auth (credentials.json or claude.ai login): do NOT inject .env tokens
-   *   - API key auth (.env ANTHROPIC_API_KEY / CLAUDE_CODE_OAUTH_TOKEN): inject via temp env file
+   * New session: builds env via launcher pipeline (clean or compat mode).
+   * Existing session: sends command via sendMessage (no env rebuild).
    *
    * @param {object} [opts]
    * @param {boolean} [opts.bypassPermissions] - Override default bypass setting
@@ -253,7 +253,6 @@ export class ClaudeAdapter extends RuntimeAdapter {
     let baseUrlValue = '';
 
     if (!hasNativeAuth) {
-      // Check if user is logged in via `claude login`
       try {
         const out = execFileSync(CLAUDE_BIN, ['auth', 'status'], {
           encoding: 'utf8', timeout: 10_000, stdio: ['ignore', 'pipe', 'pipe'],
@@ -266,7 +265,6 @@ export class ClaudeAdapter extends RuntimeAdapter {
     }
 
     if (!hasNativeAuth) {
-      // Read API tokens from .env — only when no native login
       try {
         const envContent = fs.readFileSync(path.join(ZYLOS_DIR, '.env'), 'utf8');
         apiKeyValue = _parseEnvValue(envContent, 'ANTHROPIC_API_KEY');
@@ -274,12 +272,11 @@ export class ClaudeAdapter extends RuntimeAdapter {
         baseUrlValue = _parseEnvValue(envContent, 'ANTHROPIC_BASE_URL');
       } catch { }
 
-      // Pre-approve API keys to skip interactive confirmation prompts
       if (apiKeyValue) _approveApiKey(apiKeyValue);
       if (oauthTokenValue) _approveApiKey(oauthTokenValue);
     }
 
-    // 4. Build the shell command
+    // 4. Build the claude command string (for existing-session path)
     const bypassFlag = bypassPermissions ? ' --dangerously-skip-permissions' : '';
     const envStripFlags = hasNativeAuth
       ? ' -u CLAUDE_CODE_OAUTH_TOKEN -u ANTHROPIC_API_KEY'
@@ -291,38 +288,57 @@ export class ClaudeAdapter extends RuntimeAdapter {
     const exitLogSnippet = `_ec=$?; echo "[$(date -Iseconds)] exit_code=$_ec" >> "${exitLogFile}"`;
 
     if (tmuxHasSession(SESSION)) {
-      // Existing session — send command via tmux
+      // Existing session — send command via sendMessage, no env rebuild
       const cmd = `cd "${ZYLOS_DIR}"; ${claudeCmd}; ${exitLogSnippet}`;
       await this.sendMessage(cmd);
     } else {
-      // New tmux session
-      const dedupedPath = [...new Set((process.env.PATH || '').split(':').filter(Boolean))].join(':');
-      const tmuxArgs = ['new-session', '-d', '-s', SESSION, '-e', `PATH=${dedupedPath}`];
-      if (process.getuid?.() === 0) tmuxArgs.push('-e', 'IS_SANDBOX=1');
+      // New session — launcher pipeline
+      const dotenvVars = _readDotenvVars();
+      const useCleanEnv = dotenvVars.ZYLOS_CLEAN_ENV === 'true';
 
-      let shellCmd;
-      let tmpEnv = null;
+      const { env } = useCleanEnv
+        ? buildCleanEnv({ processEnv: process.env, dotenvVars })
+        : buildCompatEnv({ processEnv: process.env, dotenvVars });
 
-      if (baseUrlValue || (!hasNativeAuth && (apiKeyValue || oauthTokenValue))) {
-        // Write secrets to a temp file, source it, then delete it
-        // Avoids exposing secrets in ps/proc/cmdline
-        const envParts = [];
-        if (apiKeyValue) envParts.push(`ANTHROPIC_API_KEY='${apiKeyValue}'`);
-        if (oauthTokenValue) envParts.push(`CLAUDE_CODE_OAUTH_TOKEN='${oauthTokenValue}'`);
-        if (baseUrlValue) envParts.push(`ANTHROPIC_BASE_URL='${baseUrlValue}'`);
-        tmpEnv = path.join(os.tmpdir(), `.zylos-env-${process.pid}-${Date.now()}`);
-        fs.writeFileSync(tmpEnv, envParts.join('\n') + '\n', { mode: 0o600 });
-        shellCmd = `set -a; . "${tmpEnv}"; set +a; rm -f "${tmpEnv}"; cd "${ZYLOS_DIR}" && ${claudeCmd}; ${exitLogSnippet}`;
+      // Strip vars that cause Claude to refuse startup ("already running" detection)
+      for (const v of ENV_VARS_TO_STRIP) delete env[v];
+
+      // Inject auth tokens
+      if (hasNativeAuth) {
+        delete env.ANTHROPIC_API_KEY;
+        delete env.CLAUDE_CODE_OAUTH_TOKEN;
       } else {
-        shellCmd = `cd "${ZYLOS_DIR}" && ${claudeCmd}; ${exitLogSnippet}`;
+        if (apiKeyValue) env.ANTHROPIC_API_KEY = apiKeyValue;
+        if (oauthTokenValue) env.CLAUDE_CODE_OAUTH_TOKEN = oauthTokenValue;
+        if (baseUrlValue) env.ANTHROPIC_BASE_URL = baseUrlValue;
       }
 
-      tmuxArgs.push('--', shellCmd);
+      // Build launch spec
+      const args = [];
+      if (bypassPermissions) args.push('--dangerously-skip-permissions');
+
+      const launcherPath = path.join(path.dirname(import.meta.url.replace('file://', '')), 'tmux-launcher.js');
+      const specPath = writeLaunchSpec({
+        command: CLAUDE_BIN,
+        args,
+        env,
+        cwd: ZYLOS_DIR,
+        exitLogFile,
+      });
+
+      // tmux args — only pass minimal env for launcher itself to start
+      const tmuxArgs = [
+        'new-session', '-d', '-s', SESSION,
+        '-e', `PATH=${env.PATH}`,
+        '-e', `HOME=${env.HOME}`,
+        '-e', `TERM=${env.TERM || 'xterm-256color'}`,
+        '--', `node "${launcherPath}" "${specPath}"`,
+      ];
 
       try {
         tmuxNewSession(tmuxArgs);
       } catch (e) {
-        if (tmpEnv) try { fs.unlinkSync(tmpEnv); } catch { }
+        try { fs.unlinkSync(specPath); } catch { }
         throw new Error(`Failed to create tmux session: ${e.message}`);
       }
     }
@@ -356,6 +372,23 @@ export class ClaudeAdapter extends RuntimeAdapter {
 }
 
 // ── Private helpers ────────────────────────────────────────────────────────
+
+function _readDotenvVars() {
+  const vars = {};
+  try {
+    const content = fs.readFileSync(path.join(ZYLOS_DIR, '.env'), 'utf8');
+    for (const line of content.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) continue;
+      const eqIdx = trimmed.indexOf('=');
+      if (eqIdx < 1) continue;
+      const key = trimmed.slice(0, eqIdx).trim();
+      const val = trimmed.slice(eqIdx + 1).trim().replace(/^(['"])(.*)\1$/, '$2');
+      vars[key] = val;
+    }
+  } catch { /* .env absent */ }
+  return vars;
+}
 
 function _hasCredentialsFile() {
   try {
