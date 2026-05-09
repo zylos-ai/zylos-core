@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { describe, it } from 'node:test';
 
-const { step7_startService } = await import('../upgrade.js');
+const { rollback, step7_startService } = await import('../upgrade.js');
 const { step11_startCoreServices } = await import('../self-upgrade.js');
 const { restartRuntimeServices } = await import('../../commands/runtime.js');
 
@@ -37,6 +37,38 @@ describe('step7_startService', () => {
     assert.equal(result.status, 'done');
     assert.equal(calls.some((call) => call.type === 'ecosystem' && call.names[0] === 'zylos-demo'), true);
     assert.equal(calls.some((call) => call.type === 'exec' && call.cmd === 'pm2 start zylos-demo 2>/dev/null'), false);
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+});
+
+describe('component upgrade rollback', () => {
+  it('restores from skillDir/.backup/<timestamp> and preserves backup metadata', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-upgrade-rollback-'));
+    const skillDir = path.join(tmpDir, 'skills', 'demo');
+    const backupDir = path.join(skillDir, '.backup', 'run-1');
+
+    fs.mkdirSync(backupDir, { recursive: true });
+    fs.mkdirSync(path.join(skillDir, '.zylos'), { recursive: true });
+    fs.mkdirSync(path.join(skillDir, 'node_modules'), { recursive: true });
+    fs.writeFileSync(path.join(backupDir, 'SKILL.md'), 'old\n', 'utf8');
+    fs.writeFileSync(path.join(skillDir, 'SKILL.md'), 'broken\n', 'utf8');
+    fs.writeFileSync(path.join(skillDir, 'new-file.txt'), 'remove\n', 'utf8');
+    fs.writeFileSync(path.join(skillDir, '.zylos', 'manifest.json'), '{}\n', 'utf8');
+    fs.writeFileSync(path.join(skillDir, 'node_modules', 'keep.txt'), 'deps\n', 'utf8');
+
+    const results = rollback({
+      backupDir,
+      skillDir,
+      serviceWasRunning: false,
+    });
+
+    assert.equal(results.some((item) => item.action === 'restore_files' && item.success), true);
+    assert.equal(fs.readFileSync(path.join(skillDir, 'SKILL.md'), 'utf8'), 'old\n');
+    assert.equal(fs.existsSync(path.join(skillDir, 'new-file.txt')), false);
+    assert.equal(fs.readFileSync(path.join(skillDir, '.backup', 'run-1', 'SKILL.md'), 'utf8'), 'old\n');
+    assert.equal(fs.readFileSync(path.join(skillDir, '.zylos', 'manifest.json'), 'utf8'), '{}\n');
+    assert.equal(fs.readFileSync(path.join(skillDir, 'node_modules', 'keep.txt'), 'utf8'), 'deps\n');
 
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
