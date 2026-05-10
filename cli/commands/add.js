@@ -6,8 +6,10 @@
  *
  * Terminal mode (default): Full interactive setup
  *   1. Resolve target → download → npm install → manifest → register
- *   2. Collect required config (prompt user) → write to .env
- *   3. Run post-install hook → start PM2 service
+ *   2. Collect required config (prompt user)
+ *   3. If lifecycle.hooks.configure exists, pipe config JSON to it
+ *      Otherwise, write to .env for legacy components
+ *   4. Run post-install hook → start PM2 service
  *
  * JSON mode (--json): Mechanical installation only
  *   1. Resolve target → download → npm install → manifest → register
@@ -27,6 +29,7 @@ import { linkBins } from '../lib/bin.js';
 import { applyCaddyRoutes } from '../lib/caddy.js';
 import { promptYesNo, prompt, promptSecret } from '../lib/prompts.js';
 import { writeEnvEntries } from '../lib/env.js';
+import { hasConfigureHook, runConfigureHook } from '../lib/configure-hook.js';
 import { registerService } from '../lib/service.js';
 import { bold, dim, green, red, yellow, cyan, success, error, warn, heading } from '../lib/colors.js';
 
@@ -297,6 +300,8 @@ async function installDeclarative(resolved, skillDir, skipConfirm, jsonOutput, b
   const lifecycle = fm.lifecycle || {};
   const config = fm.config || {};
   const hooks = lifecycle.hooks || {};
+  const configureHook = hasConfigureHook(hooks) ? hooks.configure : null;
+  let configureResult = null;
 
   // Resolve version: prefer resolved tag, then SKILL.md frontmatter, then package.json
   // When installing from branch, skip resolved.version (it may be auto-populated
@@ -413,6 +418,14 @@ async function installDeclarative(resolved, skillDir, skipConfirm, jsonOutput, b
       dataDir,
       skill: {
         hooks: Object.keys(hooks).length > 0 ? hooks : null,
+        configure: configureHook ? {
+          hook: configureHook,
+          input: 'stdin_json',
+          legacyEnvFallback: false,
+          runAfterConfigCollection: true,
+          fatalOnFailure: false,
+        } : null,
+        configureResult,
         config: Object.keys(config).length > 0 ? config : null,
         service: lifecycle.service || null,
         bin: binResult || null,
@@ -431,7 +444,7 @@ async function installDeclarative(resolved, skillDir, skipConfirm, jsonOutput, b
   const requiredConfig = config.required;
   if (Array.isArray(requiredConfig) && requiredConfig.length > 0) {
     console.log(`\n${heading('Configuration:')}`);
-    const envEntries = {};
+    const collectedEntries = {};
 
     for (const item of requiredConfig) {
       const name = typeof item === 'string' ? item : item.name;
@@ -446,17 +459,34 @@ async function installDeclarative(resolved, skillDir, skipConfirm, jsonOutput, b
         value = await prompt(`  ${name}${hint}: `);
       }
       if (value) {
-        envEntries[name] = value;
+        collectedEntries[name] = value;
       }
     }
 
-    if (Object.keys(envEntries).length > 0) {
-      const envResult = writeEnvEntries(envEntries, resolved.name);
-      if (envResult.written.length > 0) {
-        console.log(`  ${success(`Saved ${envResult.written.length} variable(s) to .env`)}`);
-      }
-      if (envResult.skipped.length > 0) {
-        console.log(`  ${dim(`Skipped existing: ${envResult.skipped.join(', ')}`)}`);
+    if (Object.keys(collectedEntries).length > 0) {
+      if (configureHook) {
+        console.log(`  ${cyan('Running configure hook...')}`);
+        configureResult = runConfigureHook({
+          componentName: resolved.name,
+          skillDir,
+          dataDir,
+          hookRef: configureHook,
+          configValues: collectedEntries,
+        });
+        if (!configureResult.success) {
+          console.log(`  ${warn(`Configure hook failed: ${configureResult.error}`)}`);
+          console.log(`  ${dim('Installation will continue; the component may need manual configuration before it can run.')}`);
+        } else {
+          console.log(`  ${success('Configure hook complete.')}`);
+        }
+      } else {
+        const envResult = writeEnvEntries(collectedEntries, resolved.name);
+        if (envResult.written.length > 0) {
+          console.log(`  ${success(`Saved ${envResult.written.length} variable(s) to .env`)}`);
+        }
+        if (envResult.skipped.length > 0) {
+          console.log(`  ${dim(`Skipped existing: ${envResult.skipped.join(', ')}`)}`);
+        }
       }
     }
   }

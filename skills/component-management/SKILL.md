@@ -75,7 +75,17 @@ config:
 ---
 ```
 
-When `sensitive: true`, the value should be handled carefully (not logged, stored in .env).
+When `sensitive: true`, the value should be handled carefully and not logged.
+
+New components may declare a non-interactive configure hook:
+
+```yaml
+lifecycle:
+  hooks:
+    configure: hooks/configure.js
+```
+
+When present, collect `config.required` values and pipe them as stdin JSON to the hook. The component owns how those values are stored, usually in `~/zylos/components/<name>/config.json`. Components without `hooks.configure` are legacy-compatible and still receive collected values through `~/zylos/.env`.
 
 ---
 
