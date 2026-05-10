@@ -38,7 +38,18 @@ Please provide API_KEY (Your API key):
 ```
 
 For sensitive values, remind user it will be stored securely.
-Write collected values to `~/zylos/.env`.
+
+After collecting values:
+
+- If `skill.configure` or `skill.hooks.configure` exists, pipe the collected values as stdin JSON to that hook:
+
+```bash
+printf '%s\n' '{"API_KEY":"value"}' | ZYLOS_COMPONENT=<component> ZYLOS_SKILL_DIR=~/zylos/.claude/skills/<component> ZYLOS_DATA_DIR=~/zylos/components/<component> node ~/zylos/.claude/skills/<component>/hooks/configure.js
+```
+
+- If the configure hook succeeds, continue.
+- If the configure hook fails, clearly report the failure and continue the install flow. The component may need manual configuration before service start succeeds.
+- If no configure hook exists, write collected values to `~/zylos/.env` for legacy components.
 
 ### Step 4: Set Up PATH for Bin Commands
 
@@ -91,6 +102,9 @@ After `zylos add <name> --json` succeeds, the JSON `skill` field tells you what 
 
 1. **Bin PATH**: If `skill.bin` exists, prefix all subsequent commands with `export PATH="$HOME/zylos/bin:$PATH" && `.
 2. **Config**: If `skill.config.required` exists, inform user which config values are needed. In C4 mode, user provides values via follow-up messages.
+   - If `skill.configure` or `skill.hooks.configure` exists, pipe collected values as stdin JSON to the configure hook with `ZYLOS_COMPONENT`, `ZYLOS_SKILL_DIR`, and `ZYLOS_DATA_DIR` set.
+   - If the configure hook fails, report the failure and continue; do not roll back the installation solely because configuration failed.
+   - If no configure hook exists, write collected values to `~/zylos/.env` for backward compatibility.
 3. **Hooks**: If `skill.hooks.post-install` exists, run it (with PATH prefix if step 1 applied).
 4. **Service**: If `skill.service` exists, start it and verify.
 5. **Next Steps**: If `skill.nextSteps` exists, execute it — see [Next Steps Handling](#next-steps-handling) below.
