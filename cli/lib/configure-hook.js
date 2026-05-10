@@ -10,6 +10,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 
+export const CONFIGURE_HOOK_TIMEOUT_MS = 30_000;
+
 export function hasConfigureHook(hooks) {
   return typeof hooks?.configure === 'string' && hooks.configure.trim() !== '';
 }
@@ -41,6 +43,7 @@ export function runConfigureHook({
     input: JSON.stringify(configValues || {}) + '\n',
     encoding: 'utf8',
     stdio: ['pipe', stdio, stdio],
+    timeout: CONFIGURE_HOOK_TIMEOUT_MS,
     env: {
       ...process.env,
       ZYLOS_COMPONENT: componentName,

@@ -5,6 +5,7 @@ import path from 'node:path';
 import { describe, it } from 'node:test';
 
 const {
+  CONFIGURE_HOOK_TIMEOUT_MS,
   hasConfigureHook,
   resolveHookPath,
   runConfigureHook,
@@ -15,6 +16,10 @@ function makeTempDir() {
 }
 
 describe('configure-hook', () => {
+  it('uses a bounded timeout for configure hooks', () => {
+    assert.equal(CONFIGURE_HOOK_TIMEOUT_MS, 30_000);
+  });
+
   it('detects non-empty configure hook declarations', () => {
     assert.equal(hasConfigureHook({ configure: 'hooks/configure.js' }), true);
     assert.equal(hasConfigureHook({ configure: '  ' }), false);
