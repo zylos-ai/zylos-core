@@ -22,6 +22,7 @@ import { execSync, execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { detectApiErrorText } from './api-error-patterns.js';
 
 const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
 const C4_CONTROL = path.join(ZYLOS_DIR, '.claude/skills/comm-bridge/scripts/c4-control.js');
@@ -31,17 +32,6 @@ const RATE_LIMIT_PATTERNS = [
   /you['']re out of .* usage/i,
   /usage limit reached/i,
   /you['']ve hit your limit/i,
-];
-
-// Anthropic API error patterns — matched against tmux pane content to detect
-// fatal API errors (e.g. 400 from a corrupted image) that leave Claude Code
-// unresponsive. These patterns are specific to Claude Code's error display
-// to avoid false positives from conversation content containing "400".
-const API_ERROR_PATTERNS = [
-  /APIError:\s*\d{3}/,                                    // "APIError: 400 ..."
-  /\b(400|422)\b.*(?:bad request|invalid request)/i,      // "400 Bad Request"
-  /invalid_request_error/,                                 // Anthropic error type
-  /overloaded_error/,                                      // Anthropic overloaded
 ];
 
 const AUTH_FAILURE_PATTERNS = [
@@ -180,15 +170,7 @@ export function createClaudeProbe({
      */
     detectApiError() {
       const pane = _captureTmuxPane(tmuxSession);
-      if (!pane) return { detected: false };
-
-      for (const p of API_ERROR_PATTERNS) {
-        const match = pane.match(p);
-        if (match) {
-          return { detected: true, pattern: match[0] };
-        }
-      }
-      return { detected: false };
+      return detectApiErrorText(pane);
     },
 
     // ── Pending state management ─────────────────────────────────────────────
