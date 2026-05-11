@@ -161,6 +161,36 @@ describe('self-upgrade backup and rollback', () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
+  it('backs up real skill contents when the skills root is a symlink', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-self-upgrade-symlink-backup-'));
+    const zylosDir = path.join(tmpDir, 'zylos');
+    const realSkillsDir = path.join(tmpDir, 'real-skills');
+    const skillsDir = path.join(zylosDir, '.claude', 'skills');
+    const backupDir = path.join(tmpDir, 'backup');
+
+    fs.mkdirSync(path.dirname(skillsDir), { recursive: true });
+    fs.mkdirSync(path.join(realSkillsDir, 'activity-monitor'), { recursive: true });
+    fs.mkdirSync(path.join(realSkillsDir, 'lark'), { recursive: true });
+    fs.writeFileSync(path.join(realSkillsDir, 'activity-monitor', 'SKILL.md'), '# Activity Monitor\n', 'utf8');
+    fs.writeFileSync(path.join(realSkillsDir, 'lark', 'SKILL.md'), '# Lark\n', 'utf8');
+    fs.symlinkSync(realSkillsDir, skillsDir);
+
+    const ctx = {};
+    const result = step1_backupCoreSkills(ctx, {
+      zylosDir,
+      skillsDir,
+      backupDir,
+    });
+
+    assert.equal(result.status, 'done');
+    assert.equal(fs.lstatSync(path.join(backupDir, 'skills')).isDirectory(), true);
+    assert.equal(fs.lstatSync(path.join(backupDir, 'skills')).isSymbolicLink(), false);
+    assert.equal(fs.readFileSync(path.join(backupDir, 'skills', 'activity-monitor', 'SKILL.md'), 'utf8'), '# Activity Monitor\n');
+    assert.equal(fs.readFileSync(path.join(backupDir, 'skills', 'lark', 'SKILL.md'), 'utf8'), '# Lark\n');
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
   it('restores the backed-up ecosystem before restarting services', () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-self-upgrade-rollback-'));
     const zylosDir = path.join(tmpDir, 'zylos');

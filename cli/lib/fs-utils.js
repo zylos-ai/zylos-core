@@ -63,12 +63,9 @@ function cpSyncFiltered(src, dest, excludes) {
  * @param {string[]} [opts.excludes=[]] - Top-level names to exclude
  */
 export function copyTree(src, dest, { excludes = [] } = {}) {
-  const srcStat = fs.lstatSync(src);
-  const destParent = srcStat.isSymbolicLink() ? path.dirname(dest) : dest;
-  fs.mkdirSync(destParent, { recursive: true });
-
-  const resolvedSrc = path.resolve(src);
+  const resolvedSrc = fs.realpathSync(src);
   const resolvedDest = path.resolve(dest);
+  fs.mkdirSync(path.dirname(resolvedDest), { recursive: true });
 
   // Detect self-copy: dest is inside src (e.g., src/.backup/timestamp)
   if (resolvedDest.startsWith(resolvedSrc + path.sep)) {
@@ -83,7 +80,7 @@ export function copyTree(src, dest, { excludes = [] } = {}) {
     return;
   }
 
-  cpSyncFiltered(src, dest, excludes);
+  cpSyncFiltered(resolvedSrc, resolvedDest, excludes);
 }
 
 /**
@@ -101,6 +98,11 @@ export function copyTree(src, dest, { excludes = [] } = {}) {
  */
 export function syncTree(src, dest, { excludes = [] } = {}) {
   fs.mkdirSync(dest, { recursive: true });
+  const resolvedSrc = fs.realpathSync(src);
+  const resolvedDest = fs.realpathSync(dest);
+  if (resolvedSrc === resolvedDest) {
+    throw new Error(`Refusing to sync identical paths: ${src} -> ${dest}`);
+  }
 
   // Remove non-excluded entries in dest (equivalent to rsync --delete)
   const normalized = excludes.map(e => e.replace(/\/+$/, ''));
@@ -110,11 +112,11 @@ export function syncTree(src, dest, { excludes = [] } = {}) {
   }
 
   // Copy from src, skipping excluded entries
-  fs.cpSync(src, dest, {
+  fs.cpSync(resolvedSrc, resolvedDest, {
     recursive: true,
     force: true,
     filter: (source) => {
-      const rel = path.relative(src, source);
+      const rel = path.relative(resolvedSrc, source);
       if (!rel) return true;
       return !isExcluded(rel, excludes);
     },
