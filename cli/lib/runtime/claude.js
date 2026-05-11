@@ -43,6 +43,11 @@ const ENV_CLEAN_PREFIX = 'env ' + ENV_VARS_TO_STRIP.map(v => `-u ${v}`).join(' '
 const CREDENTIALS_FILE = path.join(os.homedir(), '.claude', '.credentials.json');
 const C4_CONTROL_PATH = path.join(ZYLOS_DIR, '.claude', 'skills', 'comm-bridge', 'scripts', 'c4-control.js');
 
+// Timeout for short tmux/ps commands (has-session, list-panes, ps, pgrep).
+// Must be finite — a SIGSTOP'd tmux server causes clients to hang indefinitely,
+// blocking the activity-monitor event loop.
+const TMUX_CMD_TIMEOUT = 3000;
+
 /**
  * Parse a value from a .env file, tolerating common formatting variations:
  *   - Spaces/tabs around key and `=`  (e.g. `KEY = value`)
@@ -155,13 +160,13 @@ export class ClaudeAdapter extends RuntimeAdapter {
 
     // Check direct process name
     try {
-      const name = execSync(`ps -p ${panePid} -o comm= 2>/dev/null`, { encoding: 'utf8' }).trim();
+      const name = execSync(`ps -p ${panePid} -o comm= 2>/dev/null`, { encoding: 'utf8', timeout: TMUX_CMD_TIMEOUT }).trim();
       if (name === 'claude') return true;
     } catch { }
 
     // Check children of pane process
     try {
-      execSync(`pgrep -P ${panePid} -f "claude" > /dev/null 2>&1`);
+      execSync(`pgrep -P ${panePid} -f "claude" > /dev/null 2>&1`, { timeout: TMUX_CMD_TIMEOUT });
       return true;
     } catch { }
 
@@ -174,7 +179,7 @@ export class ClaudeAdapter extends RuntimeAdapter {
    */
   stop() {
     try {
-      execSync(`tmux kill-session -t "${SESSION}" 2>/dev/null`);
+      execSync(`tmux kill-session -t "${SESSION}" 2>/dev/null`, { timeout: TMUX_CMD_TIMEOUT });
     } catch { /* session may not exist */ }
   }
 
@@ -193,14 +198,14 @@ export class ClaudeAdapter extends RuntimeAdapter {
 
     try {
       fs.writeFileSync(tmpFile, text);
-      execSync(`tmux load-buffer -b "${bufferName}" "${tmpFile}" 2>/dev/null`);
-      execSync(`sleep 0.1`);
-      execSync(`tmux paste-buffer -b "${bufferName}" -t "${SESSION}" 2>/dev/null`);
-      execSync(`sleep 0.2`);
-      execSync(`tmux send-keys -t "${SESSION}" Enter 2>/dev/null`);
+      execSync(`tmux load-buffer -b "${bufferName}" "${tmpFile}" 2>/dev/null`, { timeout: TMUX_CMD_TIMEOUT });
+      execSync(`sleep 0.1`, { timeout: TMUX_CMD_TIMEOUT });
+      execSync(`tmux paste-buffer -b "${bufferName}" -t "${SESSION}" 2>/dev/null`, { timeout: TMUX_CMD_TIMEOUT });
+      execSync(`sleep 0.2`, { timeout: TMUX_CMD_TIMEOUT });
+      execSync(`tmux send-keys -t "${SESSION}" Enter 2>/dev/null`, { timeout: TMUX_CMD_TIMEOUT });
     } finally {
       try { fs.unlinkSync(tmpFile); fs.rmdirSync(tmpDir); } catch { }
-      try { execSync(`tmux delete-buffer -b "${bufferName}" 2>/dev/null`); } catch { }
+      try { execSync(`tmux delete-buffer -b "${bufferName}" 2>/dev/null`, { timeout: TMUX_CMD_TIMEOUT }); } catch { }
     }
   }
 
@@ -325,7 +330,7 @@ export class ClaudeAdapter extends RuntimeAdapter {
       tmuxArgs.push('--', shellCmd);
 
       try {
-        execFileSync('tmux', tmuxArgs);
+        execFileSync('tmux', tmuxArgs, { timeout: 10_000 });
       } catch (e) {
         if (tmpEnv) try { fs.unlinkSync(tmpEnv); } catch { }
         throw new Error(`Failed to create tmux session: ${e.message}`);
@@ -373,7 +378,7 @@ function _hasCredentialsFile() {
 
 function _tmuxHasSession() {
   try {
-    execSync(`tmux has-session -t "${SESSION}" 2>/dev/null`);
+    execSync(`tmux has-session -t "${SESSION}" 2>/dev/null`, { timeout: TMUX_CMD_TIMEOUT });
     return true;
   } catch {
     return false;
@@ -384,7 +389,7 @@ function _getTmuxPanePid() {
   try {
     return execSync(
       `tmux list-panes -t "${SESSION}" -F '#{pane_pid}' 2>/dev/null | head -1`,
-      { encoding: 'utf8' }
+      { encoding: 'utf8', timeout: TMUX_CMD_TIMEOUT }
     ).trim();
   } catch {
     return null;

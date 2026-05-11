@@ -199,7 +199,7 @@ function _writePending(file, data) {
 
 function _captureTmuxPane(session) {
   try {
-    return execSync(`tmux capture-pane -p -t "${session}" 2>/dev/null`, { encoding: 'utf8' });
+    return execSync(`tmux capture-pane -p -t "${session}" 2>/dev/null`, { encoding: 'utf8', timeout: 3000 });
   } catch {
     return null;
   }

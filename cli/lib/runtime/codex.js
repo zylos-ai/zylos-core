@@ -35,6 +35,9 @@ const CODEX_BIN = process.env.CODEX_BIN || 'codex';
 // Defaults to enabled for unattended server operation.
 const DEFAULT_BYPASS = process.env.CODEX_BYPASS_PERMISSIONS !== 'false';
 
+// Timeout for short tmux/ps commands — prevents event-loop hangs when tmux server is unresponsive.
+const TMUX_CMD_TIMEOUT = 3000;
+
 function getCodexApiBaseUrl() {
   try {
     const configPath = path.join(os.homedir(), '.codex', 'config.toml');
@@ -192,13 +195,13 @@ export class CodexAdapter extends RuntimeAdapter {
 
     // Check direct process name
     try {
-      const name = execSync(`ps -p ${panePid} -o comm= 2>/dev/null`, { encoding: 'utf8' }).trim();
+      const name = execSync(`ps -p ${panePid} -o comm= 2>/dev/null`, { encoding: 'utf8', timeout: TMUX_CMD_TIMEOUT }).trim();
       if (name === 'codex' || name === 'node') return true;
     } catch { }
 
     // Check children of pane process for codex
     try {
-      execSync(`pgrep -P ${panePid} -f "codex" > /dev/null 2>&1`);
+      execSync(`pgrep -P ${panePid} -f "codex" > /dev/null 2>&1`, { timeout: TMUX_CMD_TIMEOUT });
       return true;
     } catch { }
 
@@ -211,7 +214,7 @@ export class CodexAdapter extends RuntimeAdapter {
    */
   stop() {
     try {
-      execSync(`tmux kill-session -t "${SESSION}" 2>/dev/null`);
+      execSync(`tmux kill-session -t "${SESSION}" 2>/dev/null`, { timeout: TMUX_CMD_TIMEOUT });
     } catch { /* session may not exist */ }
   }
 
@@ -231,14 +234,14 @@ export class CodexAdapter extends RuntimeAdapter {
 
     try {
       fs.writeFileSync(tmpFile, text);
-      execSync(`tmux load-buffer -b "${bufferName}" "${tmpFile}" 2>/dev/null`);
-      execSync(`sleep 0.1`);
-      execSync(`tmux paste-buffer -b "${bufferName}" -t "${SESSION}" 2>/dev/null`);
-      execSync(`sleep 0.2`);
-      execSync(`tmux send-keys -t "${SESSION}" Enter 2>/dev/null`);
+      execSync(`tmux load-buffer -b "${bufferName}" "${tmpFile}" 2>/dev/null`, { timeout: TMUX_CMD_TIMEOUT });
+      execSync(`sleep 0.1`, { timeout: TMUX_CMD_TIMEOUT });
+      execSync(`tmux paste-buffer -b "${bufferName}" -t "${SESSION}" 2>/dev/null`, { timeout: TMUX_CMD_TIMEOUT });
+      execSync(`sleep 0.2`, { timeout: TMUX_CMD_TIMEOUT });
+      execSync(`tmux send-keys -t "${SESSION}" Enter 2>/dev/null`, { timeout: TMUX_CMD_TIMEOUT });
     } finally {
       try { fs.unlinkSync(tmpFile); fs.rmdirSync(tmpDir); } catch { }
-      try { execSync(`tmux delete-buffer -b "${bufferName}" 2>/dev/null`); } catch { }
+      try { execSync(`tmux delete-buffer -b "${bufferName}" 2>/dev/null`, { timeout: TMUX_CMD_TIMEOUT }); } catch { }
     }
   }
 
@@ -323,7 +326,7 @@ export class CodexAdapter extends RuntimeAdapter {
       tmuxArgs.push('--', shellCmd);
 
       try {
-        execFileSync('tmux', tmuxArgs);
+        execFileSync('tmux', tmuxArgs, { timeout: 10_000 });
       } catch (e) {
         if (tmpPrompt) try { fs.unlinkSync(tmpPrompt); } catch { }
         throw new Error(`Failed to create tmux session: ${e.message}`);
@@ -346,11 +349,11 @@ export class CodexAdapter extends RuntimeAdapter {
     // a list containing "›  1." in the conversation text.
     setTimeout(() => {
       try {
-        const pane = execSync(`tmux capture-pane -p -t "${SESSION}" 2>/dev/null`, { encoding: 'utf8' });
+        const pane = execSync(`tmux capture-pane -p -t "${SESSION}" 2>/dev/null`, { encoding: 'utf8', timeout: TMUX_CMD_TIMEOUT });
         const hasMenu = /›\s+\d+\./m.test(pane) || /press enter to continue/i.test(pane);
         const hasStatusBar = /\d+%\s+left\s+·/.test(pane);  // e.g. "94% left · ~/zylos"
         if (hasMenu && !hasStatusBar) {
-          execSync(`tmux send-keys -t "${SESSION}" "1" Enter 2>/dev/null`);
+          execSync(`tmux send-keys -t "${SESSION}" "1" Enter 2>/dev/null`, { timeout: TMUX_CMD_TIMEOUT });
         }
       } catch { /* non-fatal — Codex may have exited or session not ready */ }
     }, 8000);
@@ -389,7 +392,7 @@ export class CodexAdapter extends RuntimeAdapter {
 
 function _tmuxHasSession() {
   try {
-    execSync(`tmux has-session -t "${SESSION}" 2>/dev/null`);
+    execSync(`tmux has-session -t "${SESSION}" 2>/dev/null`, { timeout: TMUX_CMD_TIMEOUT });
     return true;
   } catch {
     return false;
@@ -400,7 +403,7 @@ function _getTmuxPanePid() {
   try {
     return execSync(
       `tmux list-panes -t "${SESSION}" -F '#{pane_pid}' 2>/dev/null | head -1`,
-      { encoding: 'utf8' }
+      { encoding: 'utf8', timeout: TMUX_CMD_TIMEOUT }
     ).trim();
   } catch {
     return null;
