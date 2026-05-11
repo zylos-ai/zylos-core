@@ -15,7 +15,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { execSync, execFileSync, execFile } from 'node:child_process';
+import { execFileSync, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
@@ -24,6 +24,16 @@ import { buildInstructionFile } from './instruction-builder.js';
 import { ClaudeContextMonitor } from './claude-context-monitor.js';
 import { createClaudeProbe } from '../heartbeat/claude-probe.js';
 import { ZYLOS_DIR } from '../config.js';
+import {
+  tmuxHasSession,
+  tmuxGetPanePid,
+  tmuxKillSession,
+  tmuxPasteBuffer,
+  tmuxDeleteBuffer,
+  tmuxNewSession,
+  getProcessName,
+  hasChildProcess,
+} from './tmux-helpers.js';
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -42,11 +52,6 @@ const ENV_CLEAN_PREFIX = 'env ' + ENV_VARS_TO_STRIP.map(v => `-u ${v}`).join(' '
 
 const CREDENTIALS_FILE = path.join(os.homedir(), '.claude', '.credentials.json');
 const C4_CONTROL_PATH = path.join(ZYLOS_DIR, '.claude', 'skills', 'comm-bridge', 'scripts', 'c4-control.js');
-
-// Timeout for short tmux/ps commands (has-session, list-panes, ps, pgrep).
-// Must be finite — a SIGSTOP'd tmux server causes clients to hang indefinitely,
-// blocking the activity-monitor event loop.
-const TMUX_CMD_TIMEOUT = 3000;
 
 /**
  * Parse a value from a .env file, tolerating common formatting variations:
@@ -153,24 +158,15 @@ export class ClaudeAdapter extends RuntimeAdapter {
    * @returns {Promise<boolean>}
    */
   async isRunning() {
-    if (!_tmuxHasSession()) return false;
+    if (!tmuxHasSession(SESSION)) return false;
 
-    const panePid = parseInt(_getTmuxPanePid(), 10);
+    const panePid = tmuxGetPanePid(SESSION);
     if (!panePid) return false;
 
-    // Check direct process name
-    try {
-      const name = execSync(`ps -p ${panePid} -o comm= 2>/dev/null`, { encoding: 'utf8', timeout: TMUX_CMD_TIMEOUT }).trim();
-      if (name === 'claude') return true;
-    } catch { }
+    const name = getProcessName(panePid);
+    if (name === 'claude') return true;
 
-    // Check children of pane process
-    try {
-      execSync(`pgrep -P ${panePid} -f "claude" > /dev/null 2>&1`, { timeout: TMUX_CMD_TIMEOUT });
-      return true;
-    } catch { }
-
-    return false;
+    return hasChildProcess(panePid, 'claude');
   }
 
   /**
@@ -178,9 +174,7 @@ export class ClaudeAdapter extends RuntimeAdapter {
    * Synchronous — HeartbeatEngine calls this without await.
    */
   stop() {
-    try {
-      execSync(`tmux kill-session -t "${SESSION}" 2>/dev/null`, { timeout: TMUX_CMD_TIMEOUT });
-    } catch { /* session may not exist */ }
+    tmuxKillSession(SESSION);
   }
 
   /**
@@ -198,14 +192,10 @@ export class ClaudeAdapter extends RuntimeAdapter {
 
     try {
       fs.writeFileSync(tmpFile, text);
-      execSync(`tmux load-buffer -b "${bufferName}" "${tmpFile}" 2>/dev/null`, { timeout: TMUX_CMD_TIMEOUT });
-      execSync(`sleep 0.1`, { timeout: TMUX_CMD_TIMEOUT });
-      execSync(`tmux paste-buffer -b "${bufferName}" -t "${SESSION}" 2>/dev/null`, { timeout: TMUX_CMD_TIMEOUT });
-      execSync(`sleep 0.2`, { timeout: TMUX_CMD_TIMEOUT });
-      execSync(`tmux send-keys -t "${SESSION}" Enter 2>/dev/null`, { timeout: TMUX_CMD_TIMEOUT });
+      tmuxPasteBuffer(SESSION, tmpFile, bufferName);
     } finally {
       try { fs.unlinkSync(tmpFile); fs.rmdirSync(tmpDir); } catch { }
-      try { execSync(`tmux delete-buffer -b "${bufferName}" 2>/dev/null`, { timeout: TMUX_CMD_TIMEOUT }); } catch { }
+      tmuxDeleteBuffer(bufferName);
     }
   }
 
@@ -300,7 +290,7 @@ export class ClaudeAdapter extends RuntimeAdapter {
     const exitLogFile = path.join(monitorDir, 'claude-exit.log');
     const exitLogSnippet = `_ec=$?; echo "[$(date -Iseconds)] exit_code=$_ec" >> "${exitLogFile}"`;
 
-    if (_tmuxHasSession()) {
+    if (tmuxHasSession(SESSION)) {
       // Existing session — send command via tmux
       const cmd = `cd "${ZYLOS_DIR}"; ${claudeCmd}; ${exitLogSnippet}`;
       await this.sendMessage(cmd);
@@ -330,7 +320,7 @@ export class ClaudeAdapter extends RuntimeAdapter {
       tmuxArgs.push('--', shellCmd);
 
       try {
-        execFileSync('tmux', tmuxArgs, { timeout: 10_000 });
+        tmuxNewSession(tmuxArgs);
       } catch (e) {
         if (tmpEnv) try { fs.unlinkSync(tmpEnv); } catch { }
         throw new Error(`Failed to create tmux session: ${e.message}`);
@@ -373,26 +363,6 @@ function _hasCredentialsFile() {
     return !!(data.claudeAiOauth && data.claudeAiOauth.refreshToken);
   } catch {
     return false;
-  }
-}
-
-function _tmuxHasSession() {
-  try {
-    execSync(`tmux has-session -t "${SESSION}" 2>/dev/null`, { timeout: TMUX_CMD_TIMEOUT });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function _getTmuxPanePid() {
-  try {
-    return execSync(
-      `tmux list-panes -t "${SESSION}" -F '#{pane_pid}' 2>/dev/null | head -1`,
-      { encoding: 'utf8', timeout: TMUX_CMD_TIMEOUT }
-    ).trim();
-  } catch {
-    return null;
   }
 }
 

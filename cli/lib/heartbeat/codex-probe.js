@@ -29,11 +29,12 @@
  *   const probe = createCodexProbe({ pendingFile });
  */
 
-import { execFileSync, execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { detectApiErrorText } from './api-error-patterns.js';
+import { tmuxCapturePaneText } from '../runtime/tmux-helpers.js';
 
 const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
 const C4_CONTROL = path.join(ZYLOS_DIR, '.claude/skills/comm-bridge/scripts/c4-control.js');
@@ -133,7 +134,7 @@ export function createCodexProbe({
      * @returns {{ detected: boolean, pattern?: string }}
      */
     detectAuthFailure() {
-      const pane = _captureTmuxPane(tmuxSession);
+      const pane = tmuxCapturePaneText(tmuxSession);
       if (!pane) return { detected: false };
 
       for (const p of AUTH_FAILURE_PATTERNS) {
@@ -152,7 +153,7 @@ export function createCodexProbe({
      * @returns {{ detected: boolean, pattern?: string }}
      */
     detectApiError() {
-      const pane = _captureTmuxPane(tmuxSession);
+      const pane = tmuxCapturePaneText(tmuxSession);
       return detectApiErrorText(pane);
     },
 
@@ -197,10 +198,3 @@ function _writePending(file, data) {
   }
 }
 
-function _captureTmuxPane(session) {
-  try {
-    return execSync(`tmux capture-pane -p -t "${session}" 2>/dev/null`, { encoding: 'utf8', timeout: 3000 });
-  } catch {
-    return null;
-  }
-}

@@ -16,7 +16,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { execSync, execFileSync, execFile } from 'node:child_process';
+import { execFileSync, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
@@ -25,6 +25,18 @@ import { buildInstructionFile } from './instruction-builder.js';
 import { CodexContextMonitor } from './codex-context-monitor.js';
 import { createCodexProbe } from '../heartbeat/codex-probe.js';
 import { ZYLOS_DIR, SKILLS_DIR, getZylosConfig } from '../config.js';
+import {
+  tmuxHasSession,
+  tmuxGetPanePid,
+  tmuxKillSession,
+  tmuxPasteBuffer,
+  tmuxDeleteBuffer,
+  tmuxCapturePaneText,
+  tmuxSendKeys,
+  tmuxNewSession,
+  getProcessName,
+  hasChildProcess,
+} from './tmux-helpers.js';
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -34,9 +46,6 @@ const CODEX_BIN = process.env.CODEX_BIN || 'codex';
 // When CODEX_BYPASS_PERMISSIONS=false, skip --dangerously-bypass-approvals-and-sandbox.
 // Defaults to enabled for unattended server operation.
 const DEFAULT_BYPASS = process.env.CODEX_BYPASS_PERMISSIONS !== 'false';
-
-// Timeout for short tmux/ps commands — prevents event-loop hangs when tmux server is unresponsive.
-const TMUX_CMD_TIMEOUT = 3000;
 
 function getCodexApiBaseUrl() {
   try {
@@ -188,24 +197,15 @@ export class CodexAdapter extends RuntimeAdapter {
    * @returns {Promise<boolean>}
    */
   async isRunning() {
-    if (!_tmuxHasSession()) return false;
+    if (!tmuxHasSession(SESSION)) return false;
 
-    const panePid = parseInt(_getTmuxPanePid(), 10);
+    const panePid = tmuxGetPanePid(SESSION);
     if (!panePid) return false;
 
-    // Check direct process name
-    try {
-      const name = execSync(`ps -p ${panePid} -o comm= 2>/dev/null`, { encoding: 'utf8', timeout: TMUX_CMD_TIMEOUT }).trim();
-      if (name === 'codex' || name === 'node') return true;
-    } catch { }
+    const name = getProcessName(panePid);
+    if (name === 'codex' || name === 'node') return true;
 
-    // Check children of pane process for codex
-    try {
-      execSync(`pgrep -P ${panePid} -f "codex" > /dev/null 2>&1`, { timeout: TMUX_CMD_TIMEOUT });
-      return true;
-    } catch { }
-
-    return false;
+    return hasChildProcess(panePid, 'codex');
   }
 
   /**
@@ -213,9 +213,7 @@ export class CodexAdapter extends RuntimeAdapter {
    * Synchronous — HeartbeatEngine calls this without await.
    */
   stop() {
-    try {
-      execSync(`tmux kill-session -t "${SESSION}" 2>/dev/null`, { timeout: TMUX_CMD_TIMEOUT });
-    } catch { /* session may not exist */ }
+    tmuxKillSession(SESSION);
   }
 
   /**
@@ -234,14 +232,10 @@ export class CodexAdapter extends RuntimeAdapter {
 
     try {
       fs.writeFileSync(tmpFile, text);
-      execSync(`tmux load-buffer -b "${bufferName}" "${tmpFile}" 2>/dev/null`, { timeout: TMUX_CMD_TIMEOUT });
-      execSync(`sleep 0.1`, { timeout: TMUX_CMD_TIMEOUT });
-      execSync(`tmux paste-buffer -b "${bufferName}" -t "${SESSION}" 2>/dev/null`, { timeout: TMUX_CMD_TIMEOUT });
-      execSync(`sleep 0.2`, { timeout: TMUX_CMD_TIMEOUT });
-      execSync(`tmux send-keys -t "${SESSION}" Enter 2>/dev/null`, { timeout: TMUX_CMD_TIMEOUT });
+      tmuxPasteBuffer(SESSION, tmpFile, bufferName);
     } finally {
       try { fs.unlinkSync(tmpFile); fs.rmdirSync(tmpDir); } catch { }
-      try { execSync(`tmux delete-buffer -b "${bufferName}" 2>/dev/null`, { timeout: TMUX_CMD_TIMEOUT }); } catch { }
+      tmuxDeleteBuffer(bufferName);
     }
   }
 
@@ -309,7 +303,7 @@ export class CodexAdapter extends RuntimeAdapter {
     const exitLogFile = path.join(monitorDir, 'codex-exit.log');
     const exitLogSnippet = `_ec=$?; echo "[$(date -Iseconds)] exit_code=$_ec" >> "${exitLogFile}"`;
 
-    if (_tmuxHasSession()) {
+    if (tmuxHasSession(SESSION)) {
       const cmd = tmpPrompt
         ? `cd "${ZYLOS_DIR}"; _p=$(cat "${tmpPrompt}"); rm -f "${tmpPrompt}"; ${codexCmd} "$_p"; ${exitLogSnippet}`
         : `cd "${ZYLOS_DIR}"; ${codexCmd}; ${exitLogSnippet}`;
@@ -326,7 +320,7 @@ export class CodexAdapter extends RuntimeAdapter {
       tmuxArgs.push('--', shellCmd);
 
       try {
-        execFileSync('tmux', tmuxArgs, { timeout: 10_000 });
+        tmuxNewSession(tmuxArgs);
       } catch (e) {
         if (tmpPrompt) try { fs.unlinkSync(tmpPrompt); } catch { }
         throw new Error(`Failed to create tmux session: ${e.message}`);
@@ -334,26 +328,14 @@ export class CodexAdapter extends RuntimeAdapter {
     }
 
     // 4. Schedule a startup dialog check.
-    // config.toml suppresses known interactive prompts, but new Codex versions may
-    // introduce new dialogs (e.g. "Introducing GPT-X.Y") before config.toml is updated.
-    //
-    // This check runs 8 s after launch. We distinguish startup dialogs from normal
-    // operation by checking the status bar:
-    //   - Codex normal mode:  pane contains "· XX% left ·" (token usage status bar)
-    //   - Startup dialog:     pane has "› N." menu entries but no status bar yet
-    //
-    // Only auto-dismiss when BOTH conditions hold:
-    //   1. pane has a numbered menu (›  1. pattern)
-    //   2. pane does NOT have the normal status bar ("% left ·")
-    // This prevents false positives if Codex is already mid-response and outputs
-    // a list containing "›  1." in the conversation text.
     setTimeout(() => {
       try {
-        const pane = execSync(`tmux capture-pane -p -t "${SESSION}" 2>/dev/null`, { encoding: 'utf8', timeout: TMUX_CMD_TIMEOUT });
+        const pane = tmuxCapturePaneText(SESSION);
+        if (!pane) return;
         const hasMenu = /›\s+\d+\./m.test(pane) || /press enter to continue/i.test(pane);
-        const hasStatusBar = /\d+%\s+left\s+·/.test(pane);  // e.g. "94% left · ~/zylos"
+        const hasStatusBar = /\d+%\s+left\s+·/.test(pane);
         if (hasMenu && !hasStatusBar) {
-          execSync(`tmux send-keys -t "${SESSION}" "1" Enter 2>/dev/null`, { timeout: TMUX_CMD_TIMEOUT });
+          tmuxSendKeys(SESSION, '1', 'Enter');
         }
       } catch { /* non-fatal — Codex may have exited or session not ready */ }
     }, 8000);
@@ -385,27 +367,5 @@ export class CodexAdapter extends RuntimeAdapter {
     const val = parseInt(config.codex_new_session_threshold, 10);
     const threshold = (!isNaN(val) && val > 0 && val <= 100) ? val / 100 : 0.75;
     return new CodexContextMonitor({ threshold });
-  }
-}
-
-// ── Private helpers ────────────────────────────────────────────────────────
-
-function _tmuxHasSession() {
-  try {
-    execSync(`tmux has-session -t "${SESSION}" 2>/dev/null`, { timeout: TMUX_CMD_TIMEOUT });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function _getTmuxPanePid() {
-  try {
-    return execSync(
-      `tmux list-panes -t "${SESSION}" -F '#{pane_pid}' 2>/dev/null | head -1`,
-      { encoding: 'utf8', timeout: TMUX_CMD_TIMEOUT }
-    ).trim();
-  } catch {
-    return null;
   }
 }
