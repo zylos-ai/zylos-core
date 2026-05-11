@@ -23,7 +23,7 @@ export function tmuxHasSession(session) {
     });
     return true;
   } catch (err) {
-    if (err.killed) _debugTimeout('tmux has-session', err);
+    if (isTimeoutError(err)) _debugTimeout('tmux has-session', err);
     return false;
   }
 }
@@ -44,7 +44,7 @@ export function tmuxGetPanePid(session) {
     const pid = parseInt(lines[0], 10);
     return Number.isInteger(pid) && pid > 0 ? pid : 0;
   } catch (err) {
-    if (err.killed) _debugTimeout('tmux list-panes', err);
+    if (isTimeoutError(err)) _debugTimeout('tmux list-panes', err);
     return 0;
   }
 }
@@ -111,7 +111,7 @@ export function tmuxCapturePaneText(session) {
       stdio: ['ignore', 'pipe', 'ignore'],
     });
   } catch (err) {
-    if (err.killed) _debugTimeout('tmux capture-pane', err);
+    if (isTimeoutError(err)) _debugTimeout('tmux capture-pane', err);
     return null;
   }
 }
@@ -171,7 +171,11 @@ export function hasChildProcess(parentPid, pattern) {
   }
 }
 
+export function isTimeoutError(err) {
+  return err?.code === 'ETIMEDOUT';
+}
+
 function _debugTimeout(label, err) {
   const signal = err.signal || 'unknown';
-  process.stderr.write(`[tmux-helpers] ${label} timed out (signal=${signal})\n`);
+  process.stderr.write(`[tmux-helpers] ${label} timed out (code=${err?.code}, signal=${signal})\n`);
 }

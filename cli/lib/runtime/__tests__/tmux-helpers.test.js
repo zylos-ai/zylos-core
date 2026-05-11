@@ -14,6 +14,7 @@ import {
   tmuxCapturePaneText,
   getProcessName,
   hasChildProcess,
+  isTimeoutError,
 } from '../tmux-helpers.js';
 
 // These tests verify the contract: each function must never throw,
@@ -81,7 +82,7 @@ describe('tmux-helpers timeout behavior', () => {
 
 describe('tmux-helpers does not log on normal exit failures', () => {
   it('tmuxHasSession with nonexistent session produces no stderr timeout warning', () => {
-    // Normal "session not found" exits with code 1 but err.killed is false.
+    // Normal "session not found" exits with code 1 and no ETIMEDOUT.
     // The wrapper should NOT log a timeout warning for this case.
     const origWrite = process.stderr.write;
     let stderrOutput = '';
@@ -106,5 +107,31 @@ describe('tmux-helpers does not log on normal exit failures', () => {
     } finally {
       process.stderr.write = origWrite;
     }
+  });
+});
+
+describe('isTimeoutError classifier', () => {
+  it('returns true for ETIMEDOUT error (Node execFileSync timeout)', () => {
+    const err = new Error('spawnSync sleep ETIMEDOUT');
+    err.code = 'ETIMEDOUT';
+    err.signal = 'SIGTERM';
+    assert.equal(isTimeoutError(err), true);
+  });
+
+  it('returns false for normal exit code 1 (session not found)', () => {
+    const err = new Error('Command failed: tmux has-session');
+    err.status = 1;
+    err.code = undefined;
+    err.signal = null;
+    assert.equal(isTimeoutError(err), false);
+  });
+
+  it('returns false for null/undefined', () => {
+    assert.equal(isTimeoutError(null), false);
+    assert.equal(isTimeoutError(undefined), false);
+  });
+
+  it('returns false for generic errors', () => {
+    assert.equal(isTimeoutError(new Error('ENOENT')), false);
   });
 });
