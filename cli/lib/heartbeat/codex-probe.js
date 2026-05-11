@@ -2,7 +2,7 @@
  * codex-probe.js — HeartbeatEngine probe for OpenAI Codex CLI runtime.
  *
  * Implements the runtime-specific deps subset for HeartbeatEngine:
- *   enqueueHeartbeat, getHeartbeatStatus, detectRateLimit,
+ *   enqueueHeartbeat, getHeartbeatStatus, detectRateLimit, detectApiError,
  *   readHeartbeatPending, clearHeartbeatPending
  *
  * Mechanism — C4 control queue (same as Claude):
@@ -29,10 +29,12 @@
  *   const probe = createCodexProbe({ pendingFile });
  */
 
-import { execFileSync, execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { detectApiErrorText } from './api-error-patterns.js';
+import { tmuxCapturePaneText } from '../runtime/tmux-helpers.js';
 
 const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
 const C4_CONTROL = path.join(ZYLOS_DIR, '.claude/skills/comm-bridge/scripts/c4-control.js');
@@ -132,7 +134,7 @@ export function createCodexProbe({
      * @returns {{ detected: boolean, pattern?: string }}
      */
     detectAuthFailure() {
-      const pane = _captureTmuxPane(tmuxSession);
+      const pane = tmuxCapturePaneText(tmuxSession);
       if (!pane) return { detected: false };
 
       for (const p of AUTH_FAILURE_PATTERNS) {
@@ -142,6 +144,17 @@ export function createCodexProbe({
         }
       }
       return { detected: false };
+    },
+
+    /**
+     * Detect fatal API/context errors in the Codex pane. Used by HealthEngine
+     * to recover from sticky contexts such as oversized many-image requests.
+     *
+     * @returns {{ detected: boolean, pattern?: string }}
+     */
+    detectApiError() {
+      const pane = tmuxCapturePaneText(tmuxSession);
+      return detectApiErrorText(pane);
     },
 
     // ── Pending state management ─────────────────────────────────────────────
@@ -185,10 +198,3 @@ function _writePending(file, data) {
   }
 }
 
-function _captureTmuxPane(session) {
-  try {
-    return execSync(`tmux capture-pane -p -t "${session}" 2>/dev/null`, { encoding: 'utf8' });
-  } catch {
-    return null;
-  }
-}
