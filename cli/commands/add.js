@@ -18,7 +18,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { execSync } from 'node:child_process';
+import { execFileSync, execSync } from 'node:child_process';
 import { SKILLS_DIR, COMPONENTS_DIR, BIN_DIR } from '../lib/config.js';
 import { loadRegistry } from '../lib/registry.js';
 import { loadComponents, saveComponents, resolveTarget, outputTask } from '../lib/components.js';
@@ -30,6 +30,7 @@ import { applyCaddyRoutes } from '../lib/caddy.js';
 import { promptYesNo, prompt, promptSecret } from '../lib/prompts.js';
 import { writeEnvEntries } from '../lib/env.js';
 import { hasConfigureHook, runConfigureHook } from '../lib/configure-hook.js';
+import { saveLarkCliConfig } from '../lib/config-init-store.js';
 import { registerService } from '../lib/service.js';
 import { bold, dim, green, red, yellow, cyan, success, error, warn, heading } from '../lib/colors.js';
 
@@ -57,8 +58,12 @@ export async function addComponent(args) {
     process.exit(1);
   }
 
+  // Parse --lang <lang> flag (for lark component, default: zh)
+  const langIndex = args.indexOf('--lang');
+  const lang = langIndex !== -1 ? args[langIndex + 1] : 'zh';
+
   // Find target (skip flags and their values)
-  const flagsWithValues = new Set(['--branch']);
+  const flagsWithValues = new Set(['--branch', '--lang']);
   const skipNext = new Set();
   const target = args.find((a, i) => {
     if (skipNext.has(i)) return false;
@@ -269,6 +274,11 @@ export async function addComponent(args) {
 
   if (!jsonOutput) console.log(`  ${success('Download complete.')}`);
 
+  // Lark also bundles the official Lark CLI skills into the installed skill dir.
+  if (resolved.name === 'lark' && resolved.repo === 'zylos-ai/zylos-lark') {
+    installLarkCliSkills(resolved, skillDir, jsonOutput);
+  }
+
   // 8. Generate manifest
   try {
     const manifest = generateManifest(skillDir);
@@ -284,6 +294,60 @@ export async function addComponent(args) {
     await installDeclarative(resolved, skillDir, skipConfirm, jsonOutput, branch);
   } else {
     installAI(resolved, skillDir, branch);
+  }
+}
+
+/**
+ * Install official Lark CLI skills into the same directory as the lark component.
+ */
+function installLarkCliSkills(resolved, skillDir, jsonOutput) {
+  if (!jsonOutput) console.log(`  ${cyan('Installing Lark CLI skills...')}`);
+
+  try {
+    execFileSync('npm', ['install', '-g', 'xc-skills'], {
+      stdio: jsonOutput ? 'pipe' : 'inherit',
+      timeout: 300000,
+    });
+
+    // Install @larksuite/cli globally before creating directory
+    execFileSync('npm', ['install', '-g', '@larksuite/cli'], {
+      stdio: jsonOutput ? 'pipe' : 'inherit',
+      timeout: 300000,
+    });
+
+    // Create references directory before executing xc-skills
+    const referencesDir = path.join(skillDir, 'references');
+    fs.mkdirSync(referencesDir, { recursive: true });
+
+    execFileSync('npx', [
+      'xc-skills',
+      'add',
+      'https://github.com/larksuite/cli',
+      '--out',
+      referencesDir,
+      '-y',
+    ], {
+      cwd: referencesDir,
+      stdio: jsonOutput ? 'pipe' : 'inherit',
+      timeout: 300000,
+    });
+
+    if (!jsonOutput) console.log(`  ${success('Lark CLI skills installed.')}`);
+  } catch (err) {
+    if (jsonOutput) {
+      console.log(JSON.stringify({
+        action: 'add',
+        component: resolved.name,
+        success: false,
+        error: 'lark_cli_skills_install_failed',
+        message: `Lark CLI skills install failed: ${err.message}`,
+        reply: `Failed to install ${resolved.name}: Lark CLI skills install failed.`,
+      }, null, 2));
+    } else {
+      console.error(`  ${error(`Lark CLI skills install failed: ${err.message}`)}`);
+    }
+    cleanup(skillDir);
+    process.exit(1);
   }
 }
 
@@ -486,6 +550,23 @@ async function installDeclarative(resolved, skillDir, skipConfirm, jsonOutput, b
         }
         if (envResult.skipped.length > 0) {
           console.log(`  ${dim(`Skipped existing: ${envResult.skipped.join(', ')}`)}`);
+        }
+
+        // Also save config to Lark CLI configuration for lark component
+        if (resolved.name === 'lark') {
+          const appId = collectedEntries.LARK_APP_ID || '';
+          const appSecret = collectedEntries.LARK_APP_SECRET || '';
+          console.log(`  ${cyan('Saving Lark CLI config...')}`);
+          console.log(`  ${dim(`App ID: ${appId}`)}`);
+          console.log(`  ${dim(`App Secret: ${appSecret.slice(0, 6)}${'*'.repeat(10)}${appSecret.slice(-4)}`)}`);
+          saveLarkCliConfig({
+            appId,
+            appSecret,
+            brand: 'lark',
+            lang: 'zh',
+            workspace: 'local',
+          });
+          console.log(`  ${success('Lark CLI config saved.')}`);
         }
       }
     }
