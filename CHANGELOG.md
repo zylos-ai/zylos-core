@@ -7,8 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-05-14
+
+### Added
+- **Tmux-launcher clean env**: agent sessions launch in a minimal, allowlisted environment instead of inheriting the full parent process env. Controlled by `ZYLOS_CLEAN_ENV` (default: `true`); set to `false` to fall back to compat mode. Includes `runtime-env.manifest` for declarative env var injection. (#576)
+- **Component configure hooks**: components can declare `lifecycle.hooks.configure` in SKILL.md to receive config values via stdin JSON during installation, replacing manual `.env` injection for supported components (#578)
+- **Health check toggle**: 24h health check can be disabled via `zylos config set health_check_enabled false` (default: on) (#586)
+- **Tool watchdog**: detects Claude web tool-use hangs and hardens tool event recovery (#500)
+
+### Changed
+- **Activity Monitor v3 — modular architecture**: extracted MonitorOrchestrator, HealthEngine, Guardian, MessageRouter, ToolPipeline, ProcSampler, and UsageMonitor into standalone modules with full unit test coverage. No behavioral changes to external APIs. (#545)
+
+### Fixed
+- **PATH deduplication**: prevent PATH bloat across tmux session restarts (#499)
+- **Codex /exit treated as lifecycle control**: C4 dispatcher correctly handles Codex exit commands (#517)
+- **Caddy route prefix forwarding**: stripped route prefix now forwarded to upstream (#521)
+- **npm install timeout**: increased timeout and added progress indicator for slow networks (#522)
+- **Claude default model**: settings model defaults to Opus 4.6 on fresh installs (#567)
+- **Web console timezone**: respects TZ config for timestamp display (#568)
+- **Upgrade: activity monitor env verification**: verifies AM environment via `pm2 jlist` after restart (#570)
+- **Session handoff routing**: handoff summaries routed to internal web-console channel only (#571)
+- **Upgrade: post-install from new package**: self-upgrade runs post-install steps from the newly installed package (#572)
+- **Upgrade: symlinked skills rollback**: hardened rollback for symlinked skill directories (#577)
+- **Activity monitor: image dimension errors**: detects and handles image dimension limit errors from API (#579)
+
 ### Upgrade Notes
 - If self-upgrade fails with `failed to verify activity-monitor PM2 env after restart`, first run `pm2 stop activity-monitor`, then retry with `zylos upgrade --self -y`.
+- Clean env is now the default. If your setup relies on inherited environment variables, set `ZYLOS_CLEAN_ENV=false` in `~/zylos/.env` or add needed variables to `~/.zylos/runtime-env.manifest`.
 
 ## [0.4.13] - 2026-04-12
 
