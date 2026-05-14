@@ -17,6 +17,7 @@ import { extractScriptPath, extractSkillName, getCommandHooks } from './hook-uti
 import { smartSync, formatMergeResult } from './smart-merge.js';
 import { getAllowedTmpRoots } from './upgrade.js';
 import { runMigrations } from './migrate.js';
+import { deployManifestTemplate } from './runtime/tmux-env.js';
 import { writeCodexConfig } from './runtime-setup.js';
 import { getCoreEcosystemPath, restartManagedProcess } from './pm2.js';
 
@@ -808,17 +809,29 @@ function step6_installSkillDeps(ctx) {
  * Pre-v0.4.0 installs (ZYLOS.md absent): fall through to the managed-section
  * sync on CLAUDE.md (legacy path).
  */
-function step7_syncClaudeMd(ctx) {
+export function step7_syncClaudeMd(ctx) {
   const startTime = Date.now();
+  const zylosDir = ctx.zylosDir || ZYLOS_DIR;
+  const packageRoot = ctx.packageRoot || path.join(import.meta.dirname, '..', '..');
 
   const templateDir = path.join(ctx.tempDir, 'templates');
   if (!fs.existsSync(templateDir)) {
     return { step: 7, name: 'sync_claude_md', status: 'skipped', message: 'no templates in new version', duration: Date.now() - startTime };
   }
 
+  // runtime-env.manifest — create from template if missing (upgrade path)
+  // Try tempDir first, then fallback to installed package root
+  let manifestSrc = path.join(templateDir, 'runtime-env.manifest.example');
+  let manifestStatus = deployManifestTemplate(manifestSrc, zylosDir);
+  if (manifestStatus === 'template_missing') {
+    manifestSrc = path.join(packageRoot, 'templates', 'runtime-env.manifest.example');
+    manifestStatus = deployManifestTemplate(manifestSrc, zylosDir);
+  }
+  const manifestNote = `; manifest: ${manifestStatus}`;
+
   // For legacy installs (ZYLOS.md absent, CLAUDE.md present): run v0.4.0 migration
   // first so the rebuild block below has a ZYLOS.md to work with.
-  const zylosMd = path.join(ZYLOS_DIR, 'ZYLOS.md');
+  const zylosMd = path.join(zylosDir, 'ZYLOS.md');
   if (!fs.existsSync(zylosMd)) {
     try {
       runMigrations();
@@ -837,13 +850,13 @@ function step7_syncClaudeMd(ctx) {
         const addonPath = path.join(templateDir, addonFile);
         if (!fs.existsSync(addonPath)) continue;
         const content = core.trimEnd() + '\n\n' + fs.readFileSync(addonPath, 'utf8').trimEnd() + '\n';
-        fs.writeFileSync(path.join(ZYLOS_DIR, destFile), content, 'utf8');
+        fs.writeFileSync(path.join(zylosDir, destFile), content, 'utf8');
         rebuilt.push(destFile);
       }
       const msg = rebuilt.length ? `rebuilt ${rebuilt.join(', ')} from ZYLOS.md` : 'no addon templates found';
-      return { step: 7, name: 'sync_claude_md', status: 'done', message: msg, duration: Date.now() - startTime };
+      return { step: 7, name: 'sync_claude_md', status: 'done', message: msg + manifestNote, duration: Date.now() - startTime };
     } catch (err) {
-      return { step: 7, name: 'sync_claude_md', status: 'skipped', message: err.message, duration: Date.now() - startTime };
+      return { step: 7, name: 'sync_claude_md', status: 'skipped', message: err.message + manifestNote, duration: Date.now() - startTime };
     }
   }
 
@@ -851,7 +864,7 @@ function step7_syncClaudeMd(ctx) {
   try {
     const syncResult = syncClaudeMd(templateDir);
     if (syncResult.skipped) {
-      return { step: 7, name: 'sync_claude_md', status: 'skipped', message: 'no managed sections', duration: Date.now() - startTime };
+      return { step: 7, name: 'sync_claude_md', status: 'skipped', message: 'no managed sections' + manifestNote, duration: Date.now() - startTime };
     }
 
     const parts = [];
@@ -859,10 +872,10 @@ function step7_syncClaudeMd(ctx) {
     if (syncResult.added.length) parts.push(`${syncResult.added.length} added`);
     const msg = parts.join(', ') || 'no changes';
 
-    return { step: 7, name: 'sync_claude_md', status: 'done', message: msg, duration: Date.now() - startTime };
+    return { step: 7, name: 'sync_claude_md', status: 'done', message: msg + manifestNote, duration: Date.now() - startTime };
   } catch (err) {
     // Non-fatal — CLAUDE.md update failure shouldn't block the upgrade
-    return { step: 7, name: 'sync_claude_md', status: 'skipped', message: err.message, duration: Date.now() - startTime };
+    return { step: 7, name: 'sync_claude_md', status: 'skipped', message: err.message + manifestNote, duration: Date.now() - startTime };
   }
 }
 

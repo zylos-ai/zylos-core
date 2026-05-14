@@ -37,6 +37,7 @@ import {
   getProcessName,
   hasChildProcess,
 } from './tmux-helpers.js';
+import { buildCleanEnv, buildCompatEnv, loadRuntimeEnvManifest, writeLaunchSpec } from './tmux-env.js';
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -256,8 +257,9 @@ export class CodexAdapter extends RuntimeAdapter {
   /**
    * Build the instruction file and start Codex in the tmux session.
    *
-   * Auth is handled by Codex internally (reads from ~/.codex/ credentials).
-   * Interactive prompts are suppressed via ~/.codex/config.toml.
+   * New session: builds env via launcher pipeline (clean or compat mode).
+   * Existing session: sends command via sendMessage with bootstrap prompt.
+   * Auth is handled by Codex internally (reads ~/.codex/auth.json via HOME).
    *
    * @param {object} [opts]
    * @param {boolean} [opts.bypassPermissions] - Override default bypass setting
@@ -270,29 +272,21 @@ export class CodexAdapter extends RuntimeAdapter {
     await this.buildInstructionFile({ memorySnapshot: opts.memorySnapshot });
 
     // 1.5. Ensure .agents/skills → .claude/skills symlink for Codex skill discovery.
-    // Codex follows the Agent Skills spec and looks for skills in <workdir>/.agents/skills/.
-    // We point it to the canonical skills directory via symlink — no files need to move.
     const agentsDir = path.join(ZYLOS_DIR, '.agents');
     const agentsSkillsPath = path.join(agentsDir, 'skills');
-    // Use lstatSync (not existsSync) so that a dangling symlink is detected and skipped
-    // rather than triggering a redundant symlinkSync that would throw EEXIST silently.
     let agentsSkillsExists = false;
     try { fs.lstatSync(agentsSkillsPath); agentsSkillsExists = true; } catch { /* not present */ }
     if (!agentsSkillsExists) {
       try {
         fs.mkdirSync(agentsDir, { recursive: true });
         fs.symlinkSync(SKILLS_DIR, agentsSkillsPath);
-      } catch { /* non-fatal: Codex starts without skill discovery if symlink fails */ }
+      } catch { /* non-fatal */ }
     }
 
-    // 2. Build the initial user prompt. Codex has no native SessionStart hooks,
-    // so we ask it to run the same startup steps before any other work while
-    // preserving the onboarding pending guard from the older bootstrap flow.
-    let tmpPrompt = null;
+    // 2. Build the bootstrap prompt
+    let bootstrapPrompt = null;
     try {
-      const combined = buildCodexBootstrapPrompt(ZYLOS_DIR);
-      tmpPrompt = path.join(os.tmpdir(), `.zylos-prompt-${process.pid}-${Date.now()}`);
-      fs.writeFileSync(tmpPrompt, combined, { mode: 0o600 });
+      bootstrapPrompt = buildCodexBootstrapPrompt(ZYLOS_DIR);
     } catch { /* prompt build failed — launch without initial prompt */ }
 
     // 3. Build the codex command
@@ -304,30 +298,58 @@ export class CodexAdapter extends RuntimeAdapter {
     const exitLogSnippet = `_ec=$?; echo "[$(date -Iseconds)] exit_code=$_ec" >> "${exitLogFile}"`;
 
     if (tmuxHasSession(SESSION)) {
-      const cmd = tmpPrompt
-        ? `cd "${ZYLOS_DIR}"; _p=$(cat "${tmpPrompt}"); rm -f "${tmpPrompt}"; ${codexCmd} "$_p"; ${exitLogSnippet}`
-        : `cd "${ZYLOS_DIR}"; ${codexCmd}; ${exitLogSnippet}`;
+      // Existing session — sendMessage with bootstrap prompt, no env rebuild
+      let cmd;
+      if (bootstrapPrompt) {
+        const tmpPrompt = path.join(os.tmpdir(), `.zylos-prompt-${process.pid}-${Date.now()}`);
+        fs.writeFileSync(tmpPrompt, bootstrapPrompt, { mode: 0o600 });
+        cmd = `cd "${ZYLOS_DIR}"; _p=$(cat "${tmpPrompt}"); rm -f "${tmpPrompt}"; ${codexCmd} "$_p"; ${exitLogSnippet}`;
+      } else {
+        cmd = `cd "${ZYLOS_DIR}"; ${codexCmd}; ${exitLogSnippet}`;
+      }
       await this.sendMessage(cmd);
     } else {
-      const dedupedPath = [...new Set((process.env.PATH || '').split(':').filter(Boolean))].join(':');
-      const tmuxArgs = ['new-session', '-d', '-s', SESSION, '-e', `PATH=${dedupedPath}`];
-      if (process.getuid?.() === 0) tmuxArgs.push('-e', 'IS_SANDBOX=1');
+      // New session — launcher pipeline
+      const dotenvVars = _readDotenvVars();
+      const useCleanEnv = dotenvVars.ZYLOS_CLEAN_ENV !== 'false';
+      const manifest = useCleanEnv ? loadRuntimeEnvManifest(ZYLOS_DIR) : undefined;
 
-      const promptSnippet = tmpPrompt
-        ? `_p=$(cat "${tmpPrompt}"); rm -f "${tmpPrompt}"; ${codexCmd} "$_p"`
-        : codexCmd;
-      const shellCmd = `cd "${ZYLOS_DIR}" && ${promptSnippet}; ${exitLogSnippet}`;
-      tmuxArgs.push('--', shellCmd);
+      const { env } = useCleanEnv
+        ? buildCleanEnv({ processEnv: process.env, dotenvVars, manifest, uid: process.getuid?.() })
+        : buildCompatEnv({ processEnv: process.env, dotenvVars });
+
+      // Build launch spec — Codex reads auth from ~/.codex/auth.json via HOME
+      const args = [];
+      if (bypassPermissions) args.push('--dangerously-bypass-approvals-and-sandbox');
+      if (bootstrapPrompt) args.push(bootstrapPrompt);
+
+      const launcherPath = path.join(path.dirname(import.meta.url.replace('file://', '')), 'tmux-launcher.js');
+      const specPath = writeLaunchSpec({
+        command: CODEX_BIN,
+        args,
+        env,
+        cwd: ZYLOS_DIR,
+        exitLogFile,
+      });
+
+      // tmux args — minimal env for launcher to start
+      const tmuxArgs = [
+        'new-session', '-d', '-E', '-s', SESSION,
+        '-e', `PATH=${env.PATH}`,
+        '-e', `HOME=${env.HOME}`,
+        '-e', `TERM=${env.TERM || 'xterm-256color'}`,
+        '--', `node "${launcherPath}" "${specPath}"`,
+      ];
 
       try {
         tmuxNewSession(tmuxArgs);
       } catch (e) {
-        if (tmpPrompt) try { fs.unlinkSync(tmpPrompt); } catch { }
+        try { fs.unlinkSync(specPath); } catch { }
         throw new Error(`Failed to create tmux session: ${e.message}`);
       }
     }
 
-    // 4. Schedule a startup dialog check.
+    // 4. Schedule startup dialog check (8s after launch)
     setTimeout(() => {
       try {
         const pane = tmuxCapturePaneText(SESSION);
@@ -337,7 +359,7 @@ export class CodexAdapter extends RuntimeAdapter {
         if (hasMenu && !hasStatusBar) {
           tmuxSendKeys(SESSION, '1', 'Enter');
         }
-      } catch { /* non-fatal — Codex may have exited or session not ready */ }
+      } catch { /* non-fatal */ }
     }, 8000);
   }
 
@@ -368,4 +390,24 @@ export class CodexAdapter extends RuntimeAdapter {
     const threshold = (!isNaN(val) && val > 0 && val <= 100) ? val / 100 : 0.75;
     return new CodexContextMonitor({ threshold });
   }
+}
+
+
+// ── Private helpers ────────────────────────────────────────────────────────
+
+function _readDotenvVars() {
+  const vars = {};
+  try {
+    const content = fs.readFileSync(path.join(ZYLOS_DIR, '.env'), 'utf8');
+    for (const line of content.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) continue;
+      const eqIdx = trimmed.indexOf('=');
+      if (eqIdx < 1) continue;
+      const key = trimmed.slice(0, eqIdx).trim();
+      const val = trimmed.slice(eqIdx + 1).trim().replace(/^(['"])(.*)\1$/, '$2');
+      vars[key] = val;
+    }
+  } catch { /* .env absent */ }
+  return vars;
 }
