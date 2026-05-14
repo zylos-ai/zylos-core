@@ -32,7 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Activity monitor: image dimension errors**: detects and handles image dimension limit errors from API (#579)
 
 ### Upgrade Notes
-- If self-upgrade fails with `failed to verify activity-monitor PM2 env after restart`: stop the activity monitor with `pm2 stop activity-monitor`, run the upgrade with `zylos upgrade --self -y`, then restart the activity monitor with `pm2 start activity-monitor`.
+- **⚠️ Upgrading from v0.4.13 or earlier**: you must stop the activity monitor before upgrading, then restart it after. Run: `pm2 stop activity-monitor`, then `zylos upgrade --self -y`, then `pm2 start activity-monitor`. Upgrading without stopping AM first will fail with `failed to verify activity-monitor PM2 env after restart`.
 - Clean env is now the default. If your setup relies on inherited environment variables, set `ZYLOS_CLEAN_ENV=false` in `~/zylos/.env` or add needed variables to `~/.zylos/runtime-env.manifest`.
 
 ## [0.4.13] - 2026-04-12
