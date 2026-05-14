@@ -283,8 +283,8 @@ tmux new-session -d -E -s SESSION -- "node tmux-launcher.js spec.json"
 写在 `~/zylos/.env` 中（legacy keys，与 manifest 共存）：
 
 ```bash
-# 启用干净环境模式（默认 false，兼容模式）
-ZYLOS_CLEAN_ENV=false
+# 干净环境模式开关（默认 true；设为 false 退回兼容模式）
+# ZYLOS_CLEAN_ENV=false
 
 # 从 .env 文件读值注入到 tmux session 的变量列表
 ZYLOS_TMUX_ENV=CLAUDE_CODE_ENABLE_TELEMETRY,OTEL_METRICS_EXPORTER,...
@@ -347,10 +347,9 @@ ZYLOS_TMUX_PATH_APPEND=/opt/extra/tools/bin
 
 ## 迁移策略
 
-1. 默认 `ZYLOS_CLEAN_ENV=false`——升级后行为不变（环境变量完整传入），内部管道从 shell source 切换到 launcher
+1. 默认 `ZYLOS_CLEAN_ENV=true`——升级后自动使用干净环境（zylos01 已验证 5 天无问题）
 2. 升级时自动部署 `runtime-env.manifest`（从模板复制，仅缺失时，不覆盖）
-3. 在 zylos01 上 opt-in `ZYLOS_CLEAN_ENV=true`，执行验证
-4. 验证通过后逐步推广
+3. 如需回退，在 .env 中设置 `ZYLOS_CLEAN_ENV=false` 退回兼容模式
 
 ## 回滚方案
 
@@ -364,4 +363,4 @@ ZYLOS_TMUX_PATH_APPEND=/opt/extra/tools/bin
 - 改变 HeartbeatEngine / ContextMonitor
 - 改变 session-handoff
 - 改变 instruction-builder
-- 默认开启 ZYLOS_CLEAN_ENV=true（需要实机验证后再改默认值）
+- ~~默认开启 ZYLOS_CLEAN_ENV=true~~ ✅ 已在本 PR 中完成（zylos01 实机验证 5 天通过）

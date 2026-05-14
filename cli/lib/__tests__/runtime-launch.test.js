@@ -40,7 +40,6 @@ for (const dir of [
 
 fs.writeFileSync(path.join(fakeZylosDir, '.env'), [
   'ANTHROPIC_API_KEY=sk-ant-secret-test-key-do-not-expose',
-  'ZYLOS_CLEAN_ENV=true',
 ].join('\n'));
 
 fs.writeFileSync(path.join(fakeZylosDir, 'memory', 'state.md'), '- Status: completed\n');
@@ -235,10 +234,9 @@ describe('Claude launch — compat mode PATH dedupe', () => {
       assert.equal(pathArg, 'PATH=/a:/b:/c', 'tmux -e PATH must also be deduplicated');
     } finally {
       process.env.PATH = origPath;
-      // Restore clean env mode for subsequent tests
+      // Restore default (clean env is now the default)
       fs.writeFileSync(path.join(fakeZylosDir, '.env'), [
         'ANTHROPIC_API_KEY=sk-ant-secret-test-key-do-not-expose',
-        'ZYLOS_CLEAN_ENV=true',
       ].join('\n'));
     }
   });

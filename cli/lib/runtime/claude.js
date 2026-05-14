@@ -294,7 +294,7 @@ export class ClaudeAdapter extends RuntimeAdapter {
     } else {
       // New session — launcher pipeline
       const dotenvVars = _readDotenvVars();
-      const useCleanEnv = dotenvVars.ZYLOS_CLEAN_ENV === 'true';
+      const useCleanEnv = dotenvVars.ZYLOS_CLEAN_ENV !== 'false';
       const manifest = useCleanEnv ? loadRuntimeEnvManifest(ZYLOS_DIR) : undefined;
 
       const { env } = useCleanEnv

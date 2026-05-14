@@ -178,7 +178,7 @@ function _buildPath(processEnv, platform, pathPrepend, pathAppend) {
 }
 
 /**
- * Build a clean environment object (ZYLOS_CLEAN_ENV=true).
+ * Build a clean environment object (default, or ZYLOS_CLEAN_ENV!=false).
  * Merges manifest file directives with legacy .env keys (ZYLOS_TMUX_ENV, etc.).
  * Manifest entries take precedence (listed first in dedup).
  *
@@ -257,7 +257,7 @@ export function buildCleanEnv({ processEnv, dotenvVars, manifest, platform, uid 
 }
 
 /**
- * Build a compat environment object (ZYLOS_CLEAN_ENV=false, default).
+ * Build a compat environment object (ZYLOS_CLEAN_ENV=false).
  * Passes through full processEnv with manifest variable overrides from dotenvVars.
  * Does NOT read the runtime-env.manifest file.
  *

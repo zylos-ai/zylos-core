@@ -1,7 +1,7 @@
 # runtime-env.manifest — Clean environment configuration for tmux agent sessions.
 #
 # This file controls which variables are injected into the agent runtime
-# when ZYLOS_CLEAN_ENV=true. It does NOT affect compat mode (ZYLOS_CLEAN_ENV=false).
+# in clean env mode (default). It does NOT affect compat mode (ZYLOS_CLEAN_ENV=false).
 #
 # Directives:
 #   env NAME           Read NAME from ~/zylos/.env and inject into runtime
