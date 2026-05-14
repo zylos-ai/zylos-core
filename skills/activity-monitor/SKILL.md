@@ -131,6 +131,7 @@ When health is not `ok`, C4 intake still records incoming messages as delivered.
 
 The activity monitor periodically enqueues system health checks via the C4 control queue.
 
+- **Enabled**: On by default. Disable with `zylos config set health_check_enabled false`
 - **Interval**: Every 24 hours (86400 seconds)
 - **Persisted state**: `~/zylos/activity-monitor/health-check-state.json` (survives restarts)
 - **Priority**: 3 (normal)

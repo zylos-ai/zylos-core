@@ -908,6 +908,7 @@ function createTaskScheduler(activeUsageMonitor) {
     usageCheckInterval: USAGE_CHECK_INTERVAL,
     usageAlertInterval: USAGE_ALERT_INTERVAL,
     readDailyUpgradeEnabled: () => readConfigBool('daily_upgrade_enabled', false),
+    readHealthCheckEnabled: () => readConfigBool('health_check_enabled', true),
     loadDailyUpgradeState,
     writeDailyUpgradeState,
     enqueueDailyUpgradeControl,
