@@ -68,6 +68,10 @@ mock.module('node:child_process', {
     }),
     execFileSync: mock.fn((file, args, opts) => {
       calls.execFileSync.push({ file, args: args ? [...args] : [], opts });
+      if (file === 'tmux' && args?.[0] === 'has-session') {
+        if (!tmuxSessionExists) throw new Error('no session');
+        return '';
+      }
       if (args?.[0] === '--version') return '2.1.137';
       if (args?.includes('auth')) throw new Error('not logged in');
       return '';

@@ -87,7 +87,7 @@ export function buildCleanEnv({ processEnv, dotenvVars, manifest, platform, uid 
 // → { env: Object, warnings: string[] }
 
 /**
- * 构建兼容环境对象（ZYLOS_CLEAN_ENV=false，默认）。
+ * 构建兼容环境对象（ZYLOS_CLEAN_ENV=false）。
  * 完整传入 processEnv + manifest 变量覆盖 + PATH dedupe。
  * 不读取 runtime-env.manifest 文件，不注入 GH_PROMPT_DISABLED / Homebrew paths / PATH manifest。
  */

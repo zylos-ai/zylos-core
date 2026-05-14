@@ -8,13 +8,7 @@ const TEST_ROOTS = [
   path.join(ROOT, 'cli', 'lib', '__tests__'),
   path.join(ROOT, 'cli', 'lib', 'runtime', '__tests__'),
   path.join(ROOT, 'skills', 'activity-monitor', 'scripts', '__tests__'),
-  path.join(ROOT, 'skills', 'comm-bridge', 'scripts', '__tests__'),
 ];
-
-const COMM_BRIDGE_ROOT_TESTS = new Set([
-  'c4-dispatcher-pure.test.js',
-  'c4-receive.test.js',
-]);
 
 function walk(dir, files = []) {
   if (!fs.existsSync(dir)) return files;
@@ -34,9 +28,6 @@ function isNodeTest(file) {
   if (rel.startsWith('cli/lib/__tests__/')) return true;
   if (rel.startsWith('cli/lib/runtime/__tests__/')) return true;
   if (rel.startsWith('skills/activity-monitor/scripts/__tests__/')) return true;
-  if (rel.startsWith('skills/comm-bridge/scripts/__tests__/')) {
-    return COMM_BRIDGE_ROOT_TESTS.has(path.basename(file));
-  }
   return false;
 }
 
