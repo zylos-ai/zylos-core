@@ -34,6 +34,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Upgrade Notes
 - **⚠️ Upgrading from v0.4.13 or earlier**: you must stop the activity monitor before upgrading, then restart it after. Run: `pm2 stop activity-monitor`, then `zylos upgrade --self -y`, then `pm2 start activity-monitor`. Upgrading without stopping AM first will fail with `failed to verify activity-monitor PM2 env after restart`.
 - Clean env is now the default. If your setup relies on inherited environment variables, set `ZYLOS_CLEAN_ENV=false` in `~/zylos/.env` or add needed variables to `~/zylos/.zylos/runtime-env.manifest`.
+- **⚠️ Upgrading from v0.4.13 or earlier**: the `runtime-env.manifest` file will not be created automatically (the deploy logic runs from the old version which lacks it). After upgrading, copy the template manually: `cp $(npm root -g)/zylos/templates/runtime-env.manifest.example ~/zylos/.zylos/runtime-env.manifest`. Without this file, the agent session will lack `TZ` and any other manifest-declared variables.
 
 ## [0.4.13] - 2026-04-12
 
