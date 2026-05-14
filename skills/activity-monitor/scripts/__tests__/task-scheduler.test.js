@@ -103,4 +103,49 @@ describe('TaskScheduler', () => {
     assert.equal(scheduler.tick({ health: 'ok' }), 1);
     assert.equal(runs, 1);
   });
+
+  it('skips interval task when enabled returns false', () => {
+    let runs = 0;
+    const { scheduler } = createScheduler([{
+      id: 'disabled-interval',
+      type: 'interval',
+      intervalSec: 1,
+      enabled: () => false,
+      gate: (snapshot) => snapshot.agentRunning === true && snapshot.health === 'ok',
+      getLastRunAt: () => 0,
+      execute: () => { runs++; return true; }
+    }], { now: 1000 });
+
+    assert.equal(scheduler.tick({ agentRunning: true, health: 'ok' }), 0);
+    assert.equal(runs, 0);
+  });
+
+  it('runs interval task when enabled is undefined (default)', () => {
+    let runs = 0;
+    const { scheduler } = createScheduler([{
+      id: 'default-enabled',
+      type: 'interval',
+      intervalSec: 1,
+      getLastRunAt: () => 0,
+      execute: () => { runs++; return true; }
+    }], { now: 1000 });
+
+    assert.equal(scheduler.tick({}), 1);
+    assert.equal(runs, 1);
+  });
+
+  it('runs interval task when enabled returns true', () => {
+    let runs = 0;
+    const { scheduler } = createScheduler([{
+      id: 'enabled-interval',
+      type: 'interval',
+      intervalSec: 1,
+      enabled: () => true,
+      getLastRunAt: () => 0,
+      execute: () => { runs++; return true; }
+    }], { now: 1000 });
+
+    assert.equal(scheduler.tick({}), 1);
+    assert.equal(runs, 1);
+  });
 });
