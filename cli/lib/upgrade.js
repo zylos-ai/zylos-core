@@ -496,9 +496,40 @@ function step6_updateCaddyRoutes(ctx) {
 }
 
 /**
- * Step 7: restart PM2 service (if it was running before upgrade)
+ * Step 7: run post-upgrade hook (non-fatal).
+ *
+ * Mirrors the post-install soft-failure pattern in cli/commands/add.js: hook
+ * problems are reported as 'skipped' (not 'failed') so they never trigger a
+ * rollback of an otherwise-successful upgrade.
  */
-export function step7_startService(ctx, deps = {}) {
+export function step7_runPostUpgradeHook(ctx, deps = {}) {
+  const startTime = Date.now();
+  const exec = deps.execSync ?? execSync;
+  const exists = deps.existsSync ?? fs.existsSync;
+
+  const parsed = parseSkillMd(ctx.skillDir);
+  const hookRel = parsed?.frontmatter?.lifecycle?.hooks?.['post-upgrade'];
+  if (!hookRel) {
+    return { step: 7, name: 'post_upgrade_hook', status: 'skipped', message: 'no post-upgrade hook', duration: Date.now() - startTime };
+  }
+
+  const hookPath = path.resolve(ctx.skillDir, hookRel);
+  if (!exists(hookPath)) {
+    return { step: 7, name: 'post_upgrade_hook', status: 'skipped', message: `hook not found: ${hookRel}`, duration: Date.now() - startTime };
+  }
+
+  try {
+    exec(`node "${hookPath}"`, { cwd: ctx.skillDir, stdio: 'inherit' });
+    return { step: 7, name: 'post_upgrade_hook', status: 'done', message: hookRel, duration: Date.now() - startTime };
+  } catch {
+    return { step: 7, name: 'post_upgrade_hook', status: 'skipped', message: 'hook had issues (non-fatal)', duration: Date.now() - startTime };
+  }
+}
+
+/**
+ * Step 8: restart PM2 service (if it was running before upgrade)
+ */
+export function step8_startService(ctx, deps = {}) {
   const startTime = Date.now();
   const exec = deps.execSync ?? execSync;
   const exists = deps.existsSync ?? fs.existsSync;
@@ -506,7 +537,7 @@ export function step7_startService(ctx, deps = {}) {
   const restartViaEcosystem = deps.restartFromEcosystem ?? restartFromEcosystem;
 
   if (!ctx.serviceWasRunning) {
-    return { step: 7, name: 'start_service', status: 'skipped', message: 'was not running', duration: Date.now() - startTime };
+    return { step: 8, name: 'start_service', status: 'skipped', message: 'was not running', duration: Date.now() - startTime };
   }
 
   const parsed = parseSkillMd(ctx.skillDir);
@@ -515,9 +546,9 @@ export function step7_startService(ctx, deps = {}) {
 
   try {
     restartManaged(serviceName, { ecosystemPath, stdio: 'pipe' });
-    return { step: 7, name: 'start_service', status: 'done', message: serviceName, duration: Date.now() - startTime };
+    return { step: 8, name: 'start_service', status: 'done', message: serviceName, duration: Date.now() - startTime };
   } catch {
-    // If the process disappeared from PM2 between step1 and step7, retry via
+    // If the process disappeared from PM2 between step1 and step8, retry via
     // the component ecosystem so PM2 reloads the current service definition.
     try {
       if (!exists(ecosystemPath)) {
@@ -525,9 +556,9 @@ export function step7_startService(ctx, deps = {}) {
       }
       try { exec(`pm2 delete "${serviceName}" 2>/dev/null`, { stdio: 'pipe' }); } catch {}
       restartViaEcosystem([serviceName], { ecosystemPath, stdio: 'pipe' });
-      return { step: 7, name: 'start_service', status: 'done', message: `${serviceName} (restarted from ecosystem)`, duration: Date.now() - startTime };
+      return { step: 8, name: 'start_service', status: 'done', message: `${serviceName} (restarted from ecosystem)`, duration: Date.now() - startTime };
     } catch {
-      return { step: 7, name: 'start_service', status: 'failed', error: `Failed to restart ${serviceName}`, duration: Date.now() - startTime };
+      return { step: 8, name: 'start_service', status: 'failed', error: `Failed to restart ${serviceName}`, duration: Date.now() - startTime };
     }
   }
 }
@@ -590,8 +621,7 @@ export function rollback(ctx) {
 // ---------------------------------------------------------------------------
 
 /**
- * Run the 7-step upgrade pipeline (mechanical operations only).
- * Post-upgrade hooks are handled by Claude after this completes.
+ * Run the 8-step upgrade pipeline (mechanical operations only).
  * Lock must be acquired by caller (component.js).
  *
  * @param {string} component
@@ -625,7 +655,8 @@ export function runUpgrade(component, { tempDir, newVersion, mode, onStep } = {}
     step4_npmInstall,
     step5_generateManifest,
     step6_updateCaddyRoutes,
-    step7_startService,
+    step7_runPostUpgradeHook,
+    step8_startService,
   ];
 
   const total = steps.length;

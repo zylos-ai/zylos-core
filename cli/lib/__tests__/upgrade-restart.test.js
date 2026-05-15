@@ -4,20 +4,20 @@ import os from 'node:os';
 import path from 'node:path';
 import { describe, it } from 'node:test';
 
-const { rollback, step7_startService } = await import('../upgrade.js');
+const { rollback, step8_startService } = await import('../upgrade.js');
 const { step11_startCoreServices } = await import('../self-upgrade.js');
 const { restartRuntimeServices } = await import('../../commands/runtime.js');
 
-describe('step7_startService', () => {
+describe('step8_startService', () => {
   it('retries deleted services through ecosystem restart instead of pm2 start <name>', () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-upgrade-step7-'));
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-upgrade-step8-'));
     const skillDir = path.join(tmpDir, 'demo');
     fs.mkdirSync(skillDir, { recursive: true });
     fs.writeFileSync(path.join(skillDir, 'SKILL.md'), `---\nname: demo\nlifecycle:\n  service:\n    name: zylos-demo\n---\n`, 'utf8');
     fs.writeFileSync(path.join(skillDir, 'ecosystem.config.cjs'), 'module.exports = { apps: [] };\n', 'utf8');
 
     const calls = [];
-    const result = step7_startService({
+    const result = step8_startService({
       component: 'demo',
       skillDir,
       serviceWasRunning: true,
