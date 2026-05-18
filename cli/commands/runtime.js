@@ -303,6 +303,13 @@ async function switchRuntime(target, flags) {
   console.log('\nRestarting services...');
   restartRuntimeServices();
 
+  // Step 8: Restart zylos-dashboard if running (component, not in core ecosystem).
+  // Dashboard reads runtime config to decide which collectors and panels to show.
+  try {
+    execSync('pm2 restart zylos-dashboard 2>/dev/null', { stdio: 'pipe' });
+    console.log(`  ${green('✓')} zylos-dashboard`);
+  } catch {}
+
   const targetLabel = target === 'codex' ? 'Codex (OpenAI)' : 'Claude Code (Anthropic)';
   console.log(`\n${green(`Switched to ${bold(targetLabel)}.`)}`);
   console.log(dim('The new runtime session will be ready in ~10 seconds.'));
