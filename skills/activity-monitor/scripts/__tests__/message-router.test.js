@@ -41,10 +41,10 @@ function routeRequest(overrides = {}) {
 
 describe('messageForRoute', () => {
   it('maps reason prefixes and health fallbacks', () => {
-    assert.match(messageForRoute({ health: 'unavailable', reason: 'tool_timeout_exec' }), /工具执行卡住/);
-    assert.match(messageForRoute({ health: 'unavailable', reason: 'sticky_context_restart' }), /上下文异常/);
-    assert.match(messageForRoute({ health: 'rate_limited', reason: '' }), /限流/);
-    assert.match(messageForRoute({ health: 'auth_failed', reason: '' }), /认证不可用/);
+    assert.match(messageForRoute({ health: 'unavailable', reason: 'tool_timeout_exec' }), /tool execution got stuck/i);
+    assert.match(messageForRoute({ health: 'unavailable', reason: 'sticky_context_restart' }), /session context/i);
+    assert.match(messageForRoute({ health: 'rate_limited', reason: '' }), /rate-limited/i);
+    assert.match(messageForRoute({ health: 'auth_failed', reason: '' }), /authentication/i);
   });
 });
 
@@ -96,7 +96,7 @@ describe('MessageRouter route', () => {
     assert.equal(probeCalls, 1);
     assert.equal(decision.recovered, false);
     assert.equal(decision.health, 'rate_limited');
-    assert.match(decision.userMessage, /限流/);
+    assert.match(decision.userMessage, /rate-limited/i);
   });
 
   it('returns cached negative decisions without probing', async () => {

@@ -6,25 +6,25 @@ export const ROUTE_PROBE_TIMEOUT_MS = 25000;
 
 const USER_MESSAGE_CATALOG = {
   rate_limit_detected:
-    '我现在被上游服务限流了，稍后会自动恢复。你的消息已收到，但暂时不会进入处理队列。',
+    'I am currently being rate-limited by the upstream service and will recover automatically. Your message has been received but will not enter the processing queue for now.',
   rate_limit_cooldown_expired:
-    '我正在从限流状态恢复，请稍后再试。',
+    'I am recovering from rate-limiting, please try again later.',
   auth_still_failed:
-    '我当前认证不可用，需要管理员处理后才能继续。',
+    'Authentication is currently unavailable. An administrator needs to resolve this before I can continue.',
   auth_check_failed:
-    '我当前认证不可用，需要管理员处理后才能继续。',
+    'Authentication is currently unavailable. An administrator needs to resolve this before I can continue.',
   heartbeat_timeout:
-    '我现在暂时没有响应，正在尝试恢复。请稍后再发一次。',
+    'I am temporarily unresponsive and attempting to recover. Please resend your message shortly.',
   heartbeat_failed:
-    '我现在暂时没有响应，正在尝试恢复。请稍后再发一次。',
+    'I am temporarily unresponsive and attempting to recover. Please resend your message shortly.',
   sticky_context_restart:
-    '我检测到当前会话上下文异常，正在切换到新会话恢复。请稍后再发一次。',
+    'I detected an issue with the current session context and am switching to a new session to recover. Please resend your message shortly.',
   tool_timeout:
-    '我刚才的工具执行卡住了，正在重启会话恢复。请稍后再发一次。',
+    'A tool execution got stuck. I am restarting the session to recover. Please resend your message shortly.',
   unavailable:
-    '我现在暂时不可用，正在尝试恢复。请稍后再发一次。',
+    'I am temporarily unavailable and attempting to recover. Please resend your message shortly.',
   unknown:
-    '我现在暂时不可用，正在尝试恢复。请稍后再发一次。',
+    'I am temporarily unavailable and attempting to recover. Please resend your message shortly.',
 };
 
 function nowMs() {

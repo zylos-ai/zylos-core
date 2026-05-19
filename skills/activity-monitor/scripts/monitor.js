@@ -517,7 +517,7 @@ function startMessageRouterServer(activeEngine) {
           recovered: false,
           health: 'unavailable',
           reason: 'message_router_error',
-          userMessage: '我现在暂时不可用，正在尝试恢复。请稍后再发一次。',
+          userMessage: 'I am temporarily unavailable and attempting to recover. Please resend your message shortly.',
           error: err.message
         })}\n`);
       }
