@@ -7,7 +7,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { execSync } from 'node:child_process';
+import { execSync, spawnSync } from 'node:child_process';
 import { SKILLS_DIR, COMPONENTS_DIR } from './config.js';
 import { loadComponents } from './components.js';
 import { loadLocalRegistry } from './registry.js';
@@ -316,7 +316,7 @@ export function cleanupTemp(tempDir) {
 // Internal: create upgrade context
 // ---------------------------------------------------------------------------
 
-function createContext(component, { tempDir, newVersion, mode } = {}) {
+function createContext(component, { tempDir, newVersion, mode, jsonOutput } = {}) {
   const skillDir = path.join(SKILLS_DIR, component);
   const dataDir = path.join(COMPONENTS_DIR, component);
 
@@ -327,6 +327,7 @@ function createContext(component, { tempDir, newVersion, mode } = {}) {
     tempDir: tempDir || null,
     newVersion: newVersion || null,
     mode: mode || 'merge',
+    jsonOutput: Boolean(jsonOutput),
     // State tracking
     backupDir: null,
     serviceStopped: false,
@@ -504,8 +505,10 @@ function step6_updateCaddyRoutes(ctx) {
  */
 export function step7_runPostUpgradeHook(ctx, deps = {}) {
   const startTime = Date.now();
-  const exec = deps.execSync ?? execSync;
+  const spawn = deps.spawnSync ?? spawnSync;
   const exists = deps.existsSync ?? fs.existsSync;
+  const stdout = deps.stdout ?? process.stdout;
+  const stderr = deps.stderr ?? process.stderr;
 
   const parsed = parseSkillMd(ctx.skillDir);
   const hookRel = parsed?.frontmatter?.lifecycle?.hooks?.['post-upgrade'];
@@ -514,16 +517,45 @@ export function step7_runPostUpgradeHook(ctx, deps = {}) {
   }
 
   const hookPath = path.resolve(ctx.skillDir, hookRel);
+  const hookRelativePath = path.relative(ctx.skillDir, hookPath);
+  if (hookRelativePath.startsWith('..') || path.isAbsolute(hookRelativePath)) {
+    return { step: 7, name: 'post_upgrade_hook', status: 'skipped', message: `hook path escapes skill directory: ${hookRel}`, duration: Date.now() - startTime };
+  }
   if (!exists(hookPath)) {
     return { step: 7, name: 'post_upgrade_hook', status: 'skipped', message: `hook not found: ${hookRel}`, duration: Date.now() - startTime };
   }
 
-  try {
-    exec(`node "${hookPath}"`, { cwd: ctx.skillDir, stdio: 'inherit' });
-    return { step: 7, name: 'post_upgrade_hook', status: 'done', message: hookRel, duration: Date.now() - startTime };
-  } catch {
-    return { step: 7, name: 'post_upgrade_hook', status: 'skipped', message: 'hook had issues (non-fatal)', duration: Date.now() - startTime };
+  const child = spawn(process.execPath, [hookPath], {
+    cwd: ctx.skillDir,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+
+  const hookStdout = child.stdout || '';
+  const hookStderr = child.stderr || '';
+  if (!ctx.jsonOutput) {
+    if (hookStdout) stdout.write(hookStdout);
+    if (hookStderr) stderr.write(hookStderr);
   }
+
+  const output = {
+    stdout: truncateHookOutput(hookStdout),
+    stderr: truncateHookOutput(hookStderr),
+  };
+
+  if (child.error) {
+    return { step: 7, name: 'post_upgrade_hook', status: 'skipped', message: `hook had issues (non-fatal): ${child.error.message}`, output, duration: Date.now() - startTime };
+  }
+  if (child.status !== 0) {
+    const detail = hookStderr.trim() || hookStdout.trim() || `exit code ${child.status}`;
+    return { step: 7, name: 'post_upgrade_hook', status: 'skipped', message: `hook had issues (non-fatal): ${truncateHookOutput(detail)}`, output, duration: Date.now() - startTime };
+  }
+  return { step: 7, name: 'post_upgrade_hook', status: 'done', message: hookRel, output, duration: Date.now() - startTime };
+}
+
+function truncateHookOutput(value, maxLength = 1000) {
+  if (!value) return '';
+  return value.length > maxLength ? `${value.slice(0, maxLength)}...` : value;
 }
 
 /**
@@ -628,8 +660,8 @@ export function rollback(ctx) {
  * @param {{ tempDir: string, newVersion: string }} opts
  * @returns {object} Upgrade result
  */
-export function runUpgrade(component, { tempDir, newVersion, mode, onStep } = {}) {
-  const ctx = createContext(component, { tempDir, newVersion, mode });
+export function runUpgrade(component, { tempDir, newVersion, mode, jsonOutput, onStep } = {}) {
+  const ctx = createContext(component, { tempDir, newVersion, mode, jsonOutput });
 
   if (!fs.existsSync(ctx.skillDir)) {
     return {
