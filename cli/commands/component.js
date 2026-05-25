@@ -673,6 +673,7 @@ async function handleUpgradeFlow(component, { jsonOutput, skipConfirm, skipEval,
       tempDir,
       newVersion: check.latest,
       mode,
+      jsonOutput,
       onStep: !jsonOutput ? printStep : undefined,
     });
 

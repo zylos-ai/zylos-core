@@ -7,7 +7,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { execSync } from 'node:child_process';
+import { execSync, spawnSync } from 'node:child_process';
 import { SKILLS_DIR, COMPONENTS_DIR } from './config.js';
 import { loadComponents } from './components.js';
 import { loadLocalRegistry } from './registry.js';
@@ -316,7 +316,7 @@ export function cleanupTemp(tempDir) {
 // Internal: create upgrade context
 // ---------------------------------------------------------------------------
 
-function createContext(component, { tempDir, newVersion, mode } = {}) {
+function createContext(component, { tempDir, newVersion, mode, jsonOutput } = {}) {
   const skillDir = path.join(SKILLS_DIR, component);
   const dataDir = path.join(COMPONENTS_DIR, component);
 
@@ -327,6 +327,7 @@ function createContext(component, { tempDir, newVersion, mode } = {}) {
     tempDir: tempDir || null,
     newVersion: newVersion || null,
     mode: mode || 'merge',
+    jsonOutput: Boolean(jsonOutput),
     // State tracking
     backupDir: null,
     serviceStopped: false,
@@ -496,9 +497,78 @@ function step6_updateCaddyRoutes(ctx) {
 }
 
 /**
- * Step 7: restart PM2 service (if it was running before upgrade)
+ * Step 7: run post-upgrade hook (non-fatal).
+ *
+ * Mirrors the post-install soft-failure pattern in cli/commands/add.js: hook
+ * problems are reported as 'skipped' (not 'failed') so they never trigger a
+ * rollback of an otherwise-successful upgrade.
  */
-export function step7_startService(ctx, deps = {}) {
+export function step7_runPostUpgradeHook(ctx, deps = {}) {
+  const startTime = Date.now();
+  const spawn = deps.spawnSync ?? spawnSync;
+  const exists = deps.existsSync ?? fs.existsSync;
+  const stdout = deps.stdout ?? process.stdout;
+  const stderr = deps.stderr ?? process.stderr;
+
+  const parsed = parseSkillMd(ctx.skillDir);
+  const hookRel = parsed?.frontmatter?.lifecycle?.hooks?.['post-upgrade'];
+  if (!hookRel) {
+    return { step: 7, name: 'post_upgrade_hook', status: 'skipped', message: 'no post-upgrade hook', duration: Date.now() - startTime };
+  }
+
+  const hookPath = path.resolve(ctx.skillDir, hookRel);
+  const hookRelativePath = path.relative(ctx.skillDir, hookPath);
+  if (hookRelativePath.startsWith('..') || path.isAbsolute(hookRelativePath)) {
+    return { step: 7, name: 'post_upgrade_hook', status: 'skipped', message: `hook path escapes skill directory: ${hookRel}`, duration: Date.now() - startTime };
+  }
+  if (!exists(hookPath)) {
+    return { step: 7, name: 'post_upgrade_hook', status: 'skipped', message: `hook not found: ${hookRel}`, duration: Date.now() - startTime };
+  }
+
+  const realSkillDir = fs.realpathSync(ctx.skillDir);
+  const realHookPath = fs.realpathSync(hookPath);
+  const realHookRelativePath = path.relative(realSkillDir, realHookPath);
+  if (realHookRelativePath.startsWith('..') || path.isAbsolute(realHookRelativePath)) {
+    return { step: 7, name: 'post_upgrade_hook', status: 'skipped', message: `hook path escapes skill directory: ${hookRel}`, duration: Date.now() - startTime };
+  }
+
+  const child = spawn(process.execPath, [hookPath], {
+    cwd: ctx.skillDir,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+
+  const hookStdout = child.stdout || '';
+  const hookStderr = child.stderr || '';
+  if (!ctx.jsonOutput) {
+    if (hookStdout) stdout.write(hookStdout);
+    if (hookStderr) stderr.write(hookStderr);
+  }
+
+  const output = {
+    stdout: truncateHookOutput(hookStdout),
+    stderr: truncateHookOutput(hookStderr),
+  };
+
+  if (child.error) {
+    return { step: 7, name: 'post_upgrade_hook', status: 'skipped', message: `hook had issues (non-fatal): ${child.error.message}`, output, duration: Date.now() - startTime };
+  }
+  if (child.status !== 0) {
+    const detail = hookStderr.trim() || hookStdout.trim() || `exit code ${child.status}`;
+    return { step: 7, name: 'post_upgrade_hook', status: 'skipped', message: `hook had issues (non-fatal): ${truncateHookOutput(detail)}`, output, duration: Date.now() - startTime };
+  }
+  return { step: 7, name: 'post_upgrade_hook', status: 'done', message: hookRel, output, duration: Date.now() - startTime };
+}
+
+function truncateHookOutput(value, maxLength = 1000) {
+  if (!value) return '';
+  return value.length > maxLength ? `${value.slice(0, maxLength)}...` : value;
+}
+
+/**
+ * Step 8: restart PM2 service (if it was running before upgrade)
+ */
+export function step8_startService(ctx, deps = {}) {
   const startTime = Date.now();
   const exec = deps.execSync ?? execSync;
   const exists = deps.existsSync ?? fs.existsSync;
@@ -506,7 +576,7 @@ export function step7_startService(ctx, deps = {}) {
   const restartViaEcosystem = deps.restartFromEcosystem ?? restartFromEcosystem;
 
   if (!ctx.serviceWasRunning) {
-    return { step: 7, name: 'start_service', status: 'skipped', message: 'was not running', duration: Date.now() - startTime };
+    return { step: 8, name: 'start_service', status: 'skipped', message: 'was not running', duration: Date.now() - startTime };
   }
 
   const parsed = parseSkillMd(ctx.skillDir);
@@ -515,9 +585,9 @@ export function step7_startService(ctx, deps = {}) {
 
   try {
     restartManaged(serviceName, { ecosystemPath, stdio: 'pipe' });
-    return { step: 7, name: 'start_service', status: 'done', message: serviceName, duration: Date.now() - startTime };
+    return { step: 8, name: 'start_service', status: 'done', message: serviceName, duration: Date.now() - startTime };
   } catch {
-    // If the process disappeared from PM2 between step1 and step7, retry via
+    // If the process disappeared from PM2 between step1 and step8, retry via
     // the component ecosystem so PM2 reloads the current service definition.
     try {
       if (!exists(ecosystemPath)) {
@@ -525,9 +595,9 @@ export function step7_startService(ctx, deps = {}) {
       }
       try { exec(`pm2 delete "${serviceName}" 2>/dev/null`, { stdio: 'pipe' }); } catch {}
       restartViaEcosystem([serviceName], { ecosystemPath, stdio: 'pipe' });
-      return { step: 7, name: 'start_service', status: 'done', message: `${serviceName} (restarted from ecosystem)`, duration: Date.now() - startTime };
+      return { step: 8, name: 'start_service', status: 'done', message: `${serviceName} (restarted from ecosystem)`, duration: Date.now() - startTime };
     } catch {
-      return { step: 7, name: 'start_service', status: 'failed', error: `Failed to restart ${serviceName}`, duration: Date.now() - startTime };
+      return { step: 8, name: 'start_service', status: 'failed', error: `Failed to restart ${serviceName}`, duration: Date.now() - startTime };
     }
   }
 }
@@ -590,16 +660,15 @@ export function rollback(ctx) {
 // ---------------------------------------------------------------------------
 
 /**
- * Run the 7-step upgrade pipeline (mechanical operations only).
- * Post-upgrade hooks are handled by Claude after this completes.
+ * Run the 8-step upgrade pipeline (mechanical operations only).
  * Lock must be acquired by caller (component.js).
  *
  * @param {string} component
  * @param {{ tempDir: string, newVersion: string }} opts
  * @returns {object} Upgrade result
  */
-export function runUpgrade(component, { tempDir, newVersion, mode, onStep } = {}) {
-  const ctx = createContext(component, { tempDir, newVersion, mode });
+export function runUpgrade(component, { tempDir, newVersion, mode, jsonOutput, onStep } = {}) {
+  const ctx = createContext(component, { tempDir, newVersion, mode, jsonOutput });
 
   if (!fs.existsSync(ctx.skillDir)) {
     return {
@@ -625,7 +694,8 @@ export function runUpgrade(component, { tempDir, newVersion, mode, onStep } = {}
     step4_npmInstall,
     step5_generateManifest,
     step6_updateCaddyRoutes,
-    step7_startService,
+    step7_runPostUpgradeHook,
+    step8_startService,
   ];
 
   const total = steps.length;
