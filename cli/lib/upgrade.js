@@ -525,6 +525,13 @@ export function step7_runPostUpgradeHook(ctx, deps = {}) {
     return { step: 7, name: 'post_upgrade_hook', status: 'skipped', message: `hook not found: ${hookRel}`, duration: Date.now() - startTime };
   }
 
+  const realSkillDir = fs.realpathSync(ctx.skillDir);
+  const realHookPath = fs.realpathSync(hookPath);
+  const realHookRelativePath = path.relative(realSkillDir, realHookPath);
+  if (realHookRelativePath.startsWith('..') || path.isAbsolute(realHookRelativePath)) {
+    return { step: 7, name: 'post_upgrade_hook', status: 'skipped', message: `hook path escapes skill directory: ${hookRel}`, duration: Date.now() - startTime };
+  }
+
   const child = spawn(process.execPath, [hookPath], {
     cwd: ctx.skillDir,
     encoding: 'utf8',

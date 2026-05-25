@@ -139,6 +139,28 @@ describe('step7_runPostUpgradeHook', () => {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   });
+
+  it('skips hook symlinks that resolve outside the skill directory', () => {
+    const { tmpDir, skillDir } = makeSkillDir('lifecycle:\n  hooks:\n    post-upgrade: hooks/outside.js\n');
+    const outsideHook = path.join(tmpDir, 'outside.js');
+    const hookPath = path.join(skillDir, 'hooks', 'outside.js');
+    fs.mkdirSync(path.dirname(hookPath), { recursive: true });
+    fs.writeFileSync(outsideHook, 'console.log("outside");\n', 'utf8');
+    fs.symlinkSync(outsideHook, hookPath);
+
+    try {
+      const result = step7_runPostUpgradeHook({ component: 'demo', skillDir }, {
+        spawnSync: () => {
+          throw new Error('should not run hook');
+        },
+      });
+
+      assert.equal(result.status, 'skipped');
+      assert.match(result.message, /escapes skill directory/);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('step8_startService', () => {
