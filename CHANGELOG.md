@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-05-25
+
+### Changed
+- **Activity Monitor user-facing messages**: translated runtime-facing status and route messages to English for consistency. (#591)
+
+### Fixed
+- **Component upgrade post-upgrade hooks**: component upgrades now run `lifecycle.hooks.post-upgrade` inside the CLI upgrade pipeline before service restart, while preserving `--json` output as a single parseable JSON object. Hook stdout/stderr are captured into bounded step metadata, replayed only in human output mode, and hook failures remain non-fatal with diagnostics. Hook path validation now rejects both lexical escapes and symlink escapes outside the component directory. (#589)
+- **Web console dependencies**: updated `qs` to 6.15.2 via npm overrides to address CVE-2026-8723 / GHSA-q8mj-m7cp-5q26, and updated `ws` to 8.21.0 to clear the current web-console npm audit report.
+
 ## [0.5.0] - 2026-05-14
 
 ### Added
