@@ -407,6 +407,53 @@ describe('c4-receive health gating', () => {
       assert.match(suppressed.content, /Status notification suppressed by cooldown/);
     });
   });
+
+  it('prunes expired status notice cooldown entries when recording a notification', () => {
+    withTmpDir(({ tmpDir, env }) => {
+      const monitorDir = path.join(tmpDir, 'activity-monitor');
+      const cooldownPath = path.join(monitorDir, 'status-notice-cooldowns.json');
+      const now = Math.floor(Date.now() / 1000);
+      fs.writeFileSync(path.join(monitorDir, 'agent-status.json'), JSON.stringify({ health: 'down' }));
+      fs.writeFileSync(cooldownPath, JSON.stringify({
+        'old::ep::unavailable::old': {
+          channel: 'old',
+          endpoint: 'ep',
+          status_type: 'unavailable',
+          reason: 'old',
+          last_notified_at: now - 9999
+        },
+        'recent::ep::unavailable::recent': {
+          channel: 'recent',
+          endpoint: 'ep',
+          status_type: 'unavailable',
+          reason: 'recent',
+          last_notified_at: now
+        },
+        'malformed::ep::unavailable::bad': {
+          channel: 'malformed',
+          endpoint: 'ep',
+          status_type: 'unavailable',
+          reason: 'bad',
+          last_notified_at: 'not-a-number'
+        }
+      }));
+      createChannelSendScript(tmpDir, 'test-chan');
+
+      const r = cliRaw(['--channel', 'test-chan', '--endpoint', 'ep1', '--json', '--content', 'new notice'], env);
+      assert.equal(r.status, 0);
+      assert.equal(parseJsonStdout(r.stdout).action, 'delivered');
+
+      const cooldowns = readCooldowns(tmpDir);
+      assert.equal(cooldowns['old::ep::unavailable::old'], undefined);
+      assert.equal(cooldowns['malformed::ep::unavailable::bad'], undefined);
+      assert.ok(cooldowns['recent::ep::unavailable::recent']);
+      assert.ok(cooldowns['test-chan::ep1::unavailable::unavailable']);
+      assert.deepEqual(
+        fs.readdirSync(monitorDir).filter((name) => name.includes('status-notice-cooldowns.json.tmp')),
+        []
+      );
+    });
+  });
 });
 
 describe('c4-receive MessageRouter IPC route', () => {

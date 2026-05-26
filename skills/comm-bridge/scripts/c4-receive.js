@@ -287,10 +287,23 @@ function readStatusNoticeCooldowns() {
 function writeStatusNoticeCooldowns(cooldowns) {
   try {
     fs.mkdirSync(path.dirname(STATUS_NOTICE_COOLDOWNS_FILE), { recursive: true });
-    fs.writeFileSync(STATUS_NOTICE_COOLDOWNS_FILE, JSON.stringify(cooldowns, null, 2), 'utf8');
+    const tmp = `${STATUS_NOTICE_COOLDOWNS_FILE}.tmp.${process.pid}.${Date.now()}`;
+    fs.writeFileSync(tmp, `${JSON.stringify(cooldowns, null, 2)}\n`, 'utf8');
+    fs.renameSync(tmp, STATUS_NOTICE_COOLDOWNS_FILE);
   } catch (err) {
     console.error(`[C4] Warning: failed to write status cooldowns (${err.message})`);
   }
+}
+
+function pruneStatusNoticeCooldowns(cooldowns, ttl, now = Math.floor(Date.now() / 1000)) {
+  const pruned = {};
+  for (const [key, entry] of Object.entries(cooldowns || {})) {
+    const lastNotifiedAt = Number(entry?.last_notified_at);
+    if (!Number.isFinite(lastNotifiedAt)) continue;
+    if ((now - lastNotifiedAt) >= ttl) continue;
+    pruned[key] = entry;
+  }
+  return pruned;
 }
 
 function getStatusNoticeCooldown(channel, endpoint, route, now = Math.floor(Date.now() / 1000)) {
@@ -310,7 +323,10 @@ function getStatusNoticeCooldown(channel, endpoint, route, now = Math.floor(Date
 
 function recordStatusNoticeCooldown(channel, endpoint, route, now = Math.floor(Date.now() / 1000)) {
   const key = statusNoticeCooldownKey(channel, endpoint, route);
-  const cooldowns = readStatusNoticeCooldowns();
+  const ttl = Number.isFinite(STATUS_NOTICE_COOLDOWN_SECONDS) && STATUS_NOTICE_COOLDOWN_SECONDS > 0
+    ? STATUS_NOTICE_COOLDOWN_SECONDS
+    : 600;
+  const cooldowns = pruneStatusNoticeCooldowns(readStatusNoticeCooldowns(), ttl, now);
   cooldowns[key] = {
     channel,
     endpoint: normalizeStatusEndpoint(endpoint),
