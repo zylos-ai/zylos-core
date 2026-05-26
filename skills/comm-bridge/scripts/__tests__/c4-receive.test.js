@@ -61,6 +61,10 @@ function openDb(tmpDir) {
   return new Database(path.join(tmpDir, 'comm-bridge', 'c4.db'));
 }
 
+function readCooldowns(tmpDir) {
+  return JSON.parse(fs.readFileSync(path.join(tmpDir, 'activity-monitor', 'status-notice-cooldowns.json'), 'utf8'));
+}
+
 function createChannelSendScript(tmpDir, channel, { exitCode = 0 } = {}) {
   const scriptDir = path.join(tmpDir, '.claude', 'skills', channel, 'scripts');
   fs.mkdirSync(scriptDir, { recursive: true });
@@ -360,6 +364,49 @@ describe('c4-receive health gating', () => {
       assert.equal(fs.existsSync(pendingPath), false);
     });
   });
+
+  it('fallback suppresses repeated status notices by normalized endpoint and public health', () => {
+    withTmpDir(({ tmpDir, env }) => {
+      fs.writeFileSync(path.join(tmpDir, 'activity-monitor', 'agent-status.json'), JSON.stringify({ health: 'down' }));
+      createChannelSendScript(tmpDir, 'test-chan');
+
+      const first = cliRaw([
+        '--channel', 'test-chan',
+        '--endpoint', 'oc_123|type:group|root:om_root|parent:om_a|msg:om_a',
+        '--json',
+        '--content', 'first'
+      ], env);
+      assert.equal(first.status, 0);
+      assert.equal(parseJsonStdout(first.stdout).action, 'delivered');
+
+      const second = cliRaw([
+        '--channel', 'test-chan',
+        '--endpoint', 'oc_123|type:group|root:om_root|parent:om_b|msg:om_b',
+        '--json',
+        '--content', 'second'
+      ], env);
+      assert.equal(second.status, 0);
+      const out = parseJsonStdout(second.stdout);
+      assert.equal(out.action, 'suppressed');
+
+      const cooldowns = readCooldowns(tmpDir);
+      const entries = Object.values(cooldowns);
+      assert.equal(entries.length, 1);
+      assert.equal(entries[0].endpoint, 'oc_123|type:group|root:om_root');
+      assert.equal(entries[0].status_type, 'unavailable');
+      assert.equal(entries[0].reason, 'unavailable');
+
+      const db = openDb(tmpDir);
+      const inboundCount = db.prepare("SELECT count(*) AS count FROM conversations WHERE direction = 'in'").get();
+      const outboundCount = db.prepare("SELECT count(*) AS count FROM conversations WHERE direction = 'out'").get();
+      const suppressed = db.prepare("SELECT content FROM conversations WHERE id = ?").get(Number(out.id));
+      db.close();
+
+      assert.equal(inboundCount.count, 2);
+      assert.equal(outboundCount.count, 1);
+      assert.match(suppressed.content, /Status notification suppressed by cooldown/);
+    });
+  });
 });
 
 describe('c4-receive MessageRouter IPC route', () => {
@@ -410,6 +457,54 @@ describe('c4-receive MessageRouter IPC route', () => {
         db.close();
         assert.equal(inbound.status, 'delivered');
         assert.ok(inbound.content.includes('blocked msg'));
+      });
+    });
+  });
+
+  it('suppresses repeated router unhealthy status notices', async () => {
+    await withTmpDirAsync(async ({ tmpDir, env }) => {
+      createChannelSendScript(tmpDir, 'test-chan');
+      await withRouteServer(tmpDir, (request) => ({
+        version: 1,
+        requestId: request.requestId,
+        recovered: false,
+        health: 'unavailable',
+        reason: 'heartbeat_timeout',
+        userMessage: 'router says unavailable'
+      }), async () => {
+        const first = await cliRawAsync([
+          '--channel', 'test-chan',
+          '--endpoint', 'oc_123|type:group|root:om_root|parent:om_a|msg:om_a',
+          '--json',
+          '--content', 'first'
+        ], env);
+        assert.equal(first.status, 0);
+        assert.equal(parseJsonStdout(first.stdout).action, 'delivered');
+
+        const second = await cliRawAsync([
+          '--channel', 'test-chan',
+          '--endpoint', 'oc_123|type:group|root:om_root|parent:om_b|msg:om_b',
+          '--json',
+          '--content', 'second'
+        ], env);
+        assert.equal(second.status, 0);
+        const out = parseJsonStdout(second.stdout);
+        assert.equal(out.action, 'suppressed');
+
+        const cooldowns = readCooldowns(tmpDir);
+        const entries = Object.values(cooldowns);
+        assert.equal(entries.length, 1);
+        assert.equal(entries[0].endpoint, 'oc_123|type:group|root:om_root');
+        assert.equal(entries[0].status_type, 'unavailable');
+        assert.equal(entries[0].reason, 'heartbeat_timeout');
+
+        const db = openDb(tmpDir);
+        const outboundCount = db.prepare("SELECT count(*) AS count FROM conversations WHERE direction = 'out'").get();
+        const suppressed = db.prepare("SELECT content FROM conversations WHERE id = ?").get(Number(out.id));
+        db.close();
+
+        assert.equal(outboundCount.count, 1);
+        assert.match(suppressed.content, /Status notification suppressed by cooldown/);
       });
     });
   });
