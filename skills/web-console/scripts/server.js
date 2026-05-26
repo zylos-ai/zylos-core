@@ -17,6 +17,7 @@ import fs from 'fs';
 import { spawn } from 'child_process';
 import Database from 'better-sqlite3';
 import { fileURLToPath } from 'url';
+import { hasStatusChanged } from './status-utils.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -192,7 +193,7 @@ function broadcast(type, data) {
 function checkUpdates() {
   // Check status changes
   const currentStatus = readStatus();
-  if (!lastStatus || currentStatus.state !== lastStatus.state) {
+  if (hasStatusChanged(currentStatus, lastStatus)) {
     lastStatus = currentStatus;
     broadcast('status', currentStatus);
   }

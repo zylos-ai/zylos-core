@@ -6,7 +6,7 @@
 
 import { getDb, cleanupHistory, now } from './database.js';
 import { getNextRun } from './cron-utils.js';
-import { sendViaC4, readStatusFile } from './runtime.js';
+import { sendViaC4, readStatusFile, isRuntimeReady } from './runtime.js';
 import { formatTime } from './time-utils.js';
 import { loadTimezone } from './tz.js';
 import { updateNextRunTime as _updateNextRunTime, processCompletedTasks as _processCompletedTasks, handleStaleRunningTasks as _handleStaleRunningTasks, TASK_TIMEOUT } from './daemon-tasks.js';
@@ -42,13 +42,11 @@ function getNextPendingTask() {
 }
 
 /**
- * Check if the active agent runtime is alive.
- * @returns {boolean} True if runtime is running (busy or idle state)
+ * Check if the active agent runtime is ready to accept scheduled tasks.
+ * @returns {boolean} True if runtime is running with healthy routing
  */
 function isRuntimeAlive() {
-  const status = readStatusFile();
-  if (!status) return false;
-  return status.state === 'busy' || status.state === 'idle';
+  return isRuntimeReady(readStatusFile());
 }
 
 /**

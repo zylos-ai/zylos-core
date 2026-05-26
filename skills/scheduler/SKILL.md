@@ -11,7 +11,7 @@ Enables Claude to work autonomously by dispatching scheduled tasks via C4 comm-b
 
 1. Activity Monitor writes state to `~/zylos/activity-monitor/agent-status.json`
 2. Scheduler checks for pending tasks that are due
-3. If runtime is alive, dispatches task to C4 comm-bridge
+3. If runtime is ready (`busy`/`idle` with `health: ok`), dispatches task to C4 comm-bridge
 4. C4 handles execution control (idle waiting, priority queueing)
 5. Task sent to Claude based on priority and idle requirements
 

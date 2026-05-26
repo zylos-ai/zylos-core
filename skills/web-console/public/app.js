@@ -149,24 +149,11 @@ class ZylosConsole {
 
   updateStatusDisplay(status) {
     this.statusDot.className = 'status-dot';
-
-    switch (status.state) {
-      case 'busy':
-        this.statusDot.classList.add('busy');
-        this.statusText.textContent = 'Claude is busy';
-        break;
-      case 'idle':
-        this.statusDot.classList.add('online');
-        this.statusText.textContent = 'Claude is ready';
-        break;
-      case 'offline':
-      case 'stopped':
-        this.statusDot.classList.add('offline');
-        this.statusText.textContent = 'Claude is offline';
-        break;
-      default:
-        this.statusText.textContent = 'Unknown status';
+    const display = window.ZylosStatusUtils.getStatusDisplay(status);
+    if (display.className) {
+      this.statusDot.classList.add(display.className);
     }
+    this.statusText.textContent = display.text;
   }
 
   async loadConversations() {

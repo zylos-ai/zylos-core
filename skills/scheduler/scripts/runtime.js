@@ -26,6 +26,11 @@ export function readStatusFile() {
   }
 }
 
+export function isRuntimeReady(status) {
+  if (!status) return false;
+  return (status.state === 'busy' || status.state === 'idle') && status.health === 'ok';
+}
+
 /**
  * Find the c4-receive.js path, trying production location first, then development
  * @returns {string} Path to c4-receive.js
@@ -52,6 +57,55 @@ function findC4ReceivePath() {
   return productionPath;
 }
 
+export function buildC4ReceiveArgs(c4ReceivePath, message, options = {}) {
+  const {
+    priority = 3,
+    blockQueueUntilIdle = false,
+    requireIdle = false,
+    replyChannel = null,
+    replyEndpoint = null
+  } = options;
+
+  const args = [c4ReceivePath, '--json'];
+
+  if (replyChannel) {
+    args.push('--channel', replyChannel);
+    if (replyEndpoint) {
+      args.push('--endpoint', replyEndpoint);
+    }
+  } else {
+    args.push('--no-reply');
+  }
+
+  if (blockQueueUntilIdle || requireIdle) {
+    args.push('--block-queue-until-idle');
+  }
+
+  args.push('--priority', String(priority), '--content', message);
+  return args;
+}
+
+export function parseC4ReceiveResult(stdout) {
+  let result;
+  try {
+    result = JSON.parse(String(stdout || '').trim());
+  } catch {
+    throw new Error('c4-receive did not return valid JSON');
+  }
+
+  if (!result.ok) {
+    const code = result.error?.code || 'UNKNOWN';
+    const message = result.error?.message || 'unknown c4-receive error';
+    throw new Error(`c4-receive failed [${code}]: ${message}`);
+  }
+
+  if (result.action !== 'queued') {
+    throw new Error(`c4-receive did not queue message (action=${result.action || 'unknown'})`);
+  }
+
+  return result;
+}
+
 /**
  * Send a message to Claude via C4 Communication Bridge
  * @param {string} message - Message to send
@@ -76,27 +130,15 @@ export function sendViaC4(message, options = {}) {
   try {
     const c4ReceivePath = findC4ReceivePath();
 
-    // Build c4-receive.js command arguments
-    const args = [c4ReceivePath];
-
-    // Source and reply configuration from task's reply settings
-    if (replyChannel) {
-      args.push('--channel', replyChannel);
-      if (replyEndpoint) {
-        args.push('--endpoint', replyEndpoint);
-      }
-    } else {
-      args.push('--no-reply');
-    }
-
-    if (blockQueueUntilIdle || requireIdle) {
-      args.push('--block-queue-until-idle');
-    }
-
-    args.push('--priority', String(priority), '--content', message);
-
     // Use execFileSync to avoid shell injection - passes arguments directly
-    execFileSync('node', args, { stdio: 'pipe', timeout: 10000 });
+    const stdout = execFileSync('node', buildC4ReceiveArgs(c4ReceivePath, message, {
+      priority,
+      blockQueueUntilIdle,
+      requireIdle,
+      replyChannel,
+      replyEndpoint
+    }), { encoding: 'utf8', stdio: 'pipe', timeout: 10000 });
+    parseC4ReceiveResult(stdout);
     return true;
   } catch (error) {
     console.error('Failed to send via C4:', error.message);
