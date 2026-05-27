@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS conversations (
     endpoint_id TEXT,               -- chat_id, can be NULL (e.g., scheduler)
     content TEXT NOT NULL,          -- message content (large messages: preview + file path)
     status TEXT DEFAULT 'pending',  -- 'pending' | 'delivered' | 'failed' (for direction='in' queue)
+    delivery_action TEXT,           -- optional action outcome, e.g. 'queued' | 'delivered' | 'suppressed'
     priority INTEGER DEFAULT 3,     -- 1=urgent, 2=high, 3=normal
     require_idle INTEGER DEFAULT 0, -- legacy/internal name for block_queue_until_idle behavior
     retry_count INTEGER DEFAULT 0   -- delivery retries for incoming queue
@@ -56,6 +57,21 @@ CREATE INDEX IF NOT EXISTS idx_control_queue_ack_deadline
   ON control_queue(ack_deadline_at);
 CREATE INDEX IF NOT EXISTS idx_control_queue_updated_at
   ON control_queue(updated_at);
+
+-- C4 unhealthy/status notice cooldowns
+CREATE TABLE IF NOT EXISTS status_notice_cooldowns (
+    cooldown_key TEXT PRIMARY KEY,
+    channel TEXT NOT NULL,
+    endpoint TEXT NOT NULL,
+    status_type TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    last_notified_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_status_notice_cooldowns_expires_at
+  ON status_notice_cooldowns(expires_at);
 
 -- Create initial checkpoint
 INSERT INTO checkpoints (summary) VALUES ('initial');

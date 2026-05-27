@@ -25,6 +25,7 @@ else process.env.ZYLOS_DIR = ORIG_ZYLOS_DIR;
 function resetTables() {
   db.exec('DELETE FROM control_queue');
   db.exec('DELETE FROM conversations');
+  db.exec('DELETE FROM status_notice_cooldowns');
   // Reset autoincrement counters
   db.exec("DELETE FROM sqlite_sequence WHERE name IN ('control_queue', 'conversations')");
 }
@@ -543,5 +544,64 @@ describe('insertConversation', () => {
   it('sets requireIdle flag', () => {
     const conv = mod.insertConversation('in', 'scheduler', null, 'task', null, 3, true);
     assert.equal(conv.require_idle, 1);
+  });
+
+  it('records delivery action metadata', () => {
+    const conv = mod.insertConversation('in', 'telegram', '123', 'msg', 'delivered', 3, false, 'suppressed');
+    assert.equal(conv.delivery_action, 'suppressed');
+
+    const row = db.prepare('SELECT delivery_action FROM conversations WHERE id = ?').get(conv.id);
+    assert.equal(row.delivery_action, 'suppressed');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// status notice cooldowns
+// ---------------------------------------------------------------------------
+describe('status notice cooldowns', () => {
+  beforeEach(() => resetTables());
+
+  it('reserves the first cooldown and suppresses repeats', () => {
+    const first = mod.reserveStatusNoticeCooldown({
+      cooldownKey: 'telegram::123::unavailable::down',
+      channel: 'telegram',
+      endpoint: '123',
+      statusType: 'unavailable',
+      reason: 'down',
+      ttl: 600,
+      now: 1000
+    });
+    const second = mod.reserveStatusNoticeCooldown({
+      cooldownKey: 'telegram::123::unavailable::down',
+      channel: 'telegram',
+      endpoint: '123',
+      statusType: 'unavailable',
+      reason: 'down',
+      ttl: 600,
+      now: 1001
+    });
+
+    assert.equal(first.suppressed, false);
+    assert.equal(first.reservedAt, 1000);
+    assert.equal(second.suppressed, true);
+    assert.equal(second.previous.last_notified_at, 1000);
+  });
+
+  it('clears only the matching reservation timestamp', () => {
+    const reserved = mod.reserveStatusNoticeCooldown({
+      cooldownKey: 'telegram::123::unavailable::down',
+      channel: 'telegram',
+      endpoint: '123',
+      statusType: 'unavailable',
+      reason: 'down',
+      ttl: 600,
+      now: 1000
+    });
+
+    mod.clearStatusNoticeCooldownReservation(reserved.key, 999);
+    assert.equal(mod.getStatusNoticeCooldowns().length, 1);
+
+    mod.clearStatusNoticeCooldownReservation(reserved.key, 1000);
+    assert.equal(mod.getStatusNoticeCooldowns().length, 0);
   });
 });

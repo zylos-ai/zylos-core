@@ -37,7 +37,9 @@ export function getDb() {
       initSchema();
     }
 
+    ensureConversationsSchema(db);
     ensureControlQueueSchema(db);
+    ensureStatusNoticeCooldownSchema(db);
   }
   return db;
 }
@@ -89,6 +91,35 @@ function nowSeconds() {
   return Math.floor(Date.now() / 1000);
 }
 
+function getColumnNames(database, tableName) {
+  return new Set(database.prepare(`PRAGMA table_info(${tableName})`).all().map((column) => column.name));
+}
+
+function ensureConversationsSchema(database) {
+  const columnNames = getColumnNames(database, 'conversations');
+  if (!columnNames.has('delivery_action')) {
+    database.exec('ALTER TABLE conversations ADD COLUMN delivery_action TEXT');
+  }
+}
+
+function ensureStatusNoticeCooldownSchema(database) {
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS status_notice_cooldowns (
+      cooldown_key TEXT PRIMARY KEY,
+      channel TEXT NOT NULL,
+      endpoint TEXT NOT NULL,
+      status_type TEXT NOT NULL,
+      reason TEXT NOT NULL,
+      last_notified_at INTEGER NOT NULL,
+      expires_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_status_notice_cooldowns_expires_at
+      ON status_notice_cooldowns(expires_at);
+  `);
+}
+
 /**
  * Insert a conversation record
  * @param {string} direction - 'in' or 'out'
@@ -100,7 +131,7 @@ function nowSeconds() {
  * @param {boolean} requireIdle - whether to wait for Claude idle state (default: false)
  * @returns {object} - inserted record with id
  */
-export function insertConversation(direction, channel, endpointId, content, status = null, priority = 3, requireIdle = false) {
+export function insertConversation(direction, channel, endpointId, content, status = null, priority = 3, requireIdle = false, deliveryAction = null) {
   const db = getDb();
 
   // Default status: 'pending' for incoming, 'delivered' for outgoing
@@ -109,11 +140,11 @@ export function insertConversation(direction, channel, endpointId, content, stat
   const requireIdleVal = requireIdle ? 1 : 0;
 
   const stmt = db.prepare(`
-    INSERT INTO conversations (direction, channel, endpoint_id, content, status, priority, require_idle)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO conversations (direction, channel, endpoint_id, content, status, delivery_action, priority, require_idle)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
-  const result = stmt.run(direction, channel, endpointId, content, finalStatus, priority, requireIdleVal);
+  const result = stmt.run(direction, channel, endpointId, content, finalStatus, deliveryAction, priority, requireIdleVal);
 
   return {
     id: result.lastInsertRowid,
@@ -122,10 +153,74 @@ export function insertConversation(direction, channel, endpointId, content, stat
     endpoint_id: endpointId,
     content,
     status: finalStatus,
+    delivery_action: deliveryAction,
     priority,
     require_idle: requireIdleVal,
     retry_count: 0
   };
+}
+
+/**
+ * Reserve or suppress an unhealthy/status notice cooldown.
+ * Uses SQLite as the comm-bridge persistence/concurrency boundary so
+ * concurrent c4-receive processes cannot both reserve the same cooldown key.
+ */
+export function reserveStatusNoticeCooldown({
+  cooldownKey,
+  channel,
+  endpoint,
+  statusType,
+  reason,
+  ttl,
+  now = nowSeconds()
+}) {
+  const database = getDb();
+  const expiresAt = now + ttl;
+
+  const tx = database.transaction(() => {
+    database.prepare('DELETE FROM status_notice_cooldowns WHERE expires_at <= ?').run(now);
+
+    const insertResult = database.prepare(`
+      INSERT OR IGNORE INTO status_notice_cooldowns (
+        cooldown_key, channel, endpoint, status_type, reason,
+        last_notified_at, expires_at, updated_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(cooldownKey, channel, endpoint, statusType, reason, now, expiresAt, now);
+
+    if (insertResult.changes === 1) {
+      return { suppressed: false, key: cooldownKey, ttl, reservedAt: now, expiresAt };
+    }
+
+    const previous = database.prepare(`
+      SELECT cooldown_key, channel, endpoint, status_type, reason,
+             last_notified_at, expires_at, updated_at
+      FROM status_notice_cooldowns
+      WHERE cooldown_key = ?
+    `).get(cooldownKey);
+
+    return { suppressed: true, key: cooldownKey, ttl, previous };
+  });
+
+  return tx();
+}
+
+export function clearStatusNoticeCooldownReservation(cooldownKey, reservedAt) {
+  const database = getDb();
+  database.prepare(`
+    DELETE FROM status_notice_cooldowns
+    WHERE cooldown_key = ? AND last_notified_at = ?
+  `).run(cooldownKey, reservedAt);
+}
+
+export function getStatusNoticeCooldowns() {
+  const database = getDb();
+  return database.prepare(`
+    SELECT cooldown_key, channel, endpoint, status_type, reason,
+           last_notified_at, expires_at, updated_at
+    FROM status_notice_cooldowns
+    ORDER BY cooldown_key ASC
+  `).all();
 }
 
 /**
