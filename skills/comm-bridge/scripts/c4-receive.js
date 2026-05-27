@@ -25,6 +25,9 @@ const __dirname = path.dirname(__filename);
 const AM_SOCKET_PATH = path.join(ACTIVITY_MONITOR_DIR, 'am.sock');
 const ROUTER_IPC_TIMEOUT_MS = 30000;
 const STATUS_NOTICE_COOLDOWN_SECONDS = Number.parseInt(process.env.C4_STATUS_NOTICE_COOLDOWN_SECONDS || '600', 10);
+const STATUS_NOTICE_COOLDOWNS_LOCK_DIR = `${STATUS_NOTICE_COOLDOWNS_FILE}.lock`;
+const STATUS_NOTICE_LOCK_TIMEOUT_MS = 5000;
+const STATUS_NOTICE_LOCK_STALE_MS = 30000;
 
 function printUsage() {
   console.log('Usage: node c4-receive.js --channel <channel> [--endpoint <endpoint_id>] [--priority <1-3>] [--no-reply] [--block-queue-until-idle] [--json] --content "<message>"');
@@ -284,6 +287,41 @@ function readStatusNoticeCooldowns() {
   }
 }
 
+function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function acquireStatusNoticeCooldownLock() {
+  const start = Date.now();
+  while (true) {
+    try {
+      fs.mkdirSync(STATUS_NOTICE_COOLDOWNS_LOCK_DIR);
+      return () => {
+        try {
+          fs.rmdirSync(STATUS_NOTICE_COOLDOWNS_LOCK_DIR);
+        } catch { /* best-effort */ }
+      };
+    } catch (err) {
+      if (err.code !== 'EEXIST') throw err;
+
+      try {
+        const stats = fs.statSync(STATUS_NOTICE_COOLDOWNS_LOCK_DIR);
+        if ((Date.now() - stats.mtimeMs) > STATUS_NOTICE_LOCK_STALE_MS) {
+          fs.rmSync(STATUS_NOTICE_COOLDOWNS_LOCK_DIR, { recursive: true, force: true });
+          continue;
+        }
+      } catch {
+        continue;
+      }
+
+      if ((Date.now() - start) >= STATUS_NOTICE_LOCK_TIMEOUT_MS) {
+        throw new Error('timed out waiting for status cooldown lock');
+      }
+      sleepSync(25);
+    }
+  }
+}
+
 function writeStatusNoticeCooldowns(cooldowns) {
   try {
     fs.mkdirSync(path.dirname(STATUS_NOTICE_COOLDOWNS_FILE), { recursive: true });
@@ -306,35 +344,48 @@ function pruneStatusNoticeCooldowns(cooldowns, ttl, now = Math.floor(Date.now() 
   return pruned;
 }
 
-function getStatusNoticeCooldown(channel, endpoint, route, now = Math.floor(Date.now() / 1000)) {
+function reserveStatusNoticeCooldown(channel, endpoint, route, now = Math.floor(Date.now() / 1000)) {
+  const key = statusNoticeCooldownKey(channel, endpoint, route);
   const ttl = Number.isFinite(STATUS_NOTICE_COOLDOWN_SECONDS) && STATUS_NOTICE_COOLDOWN_SECONDS > 0
     ? STATUS_NOTICE_COOLDOWN_SECONDS
     : 600;
-  const key = statusNoticeCooldownKey(channel, endpoint, route);
-  const cooldowns = readStatusNoticeCooldowns();
-  const previous = cooldowns[key];
+  const release = acquireStatusNoticeCooldownLock();
+  try {
+    const cooldowns = pruneStatusNoticeCooldowns(readStatusNoticeCooldowns(), ttl, now);
+    const previous = cooldowns[key];
 
-  if (previous && Number.isFinite(previous.last_notified_at) && (now - previous.last_notified_at) < ttl) {
-    return { suppressed: true, key, ttl, previous };
+    if (previous && Number.isFinite(previous.last_notified_at) && (now - previous.last_notified_at) < ttl) {
+      writeStatusNoticeCooldowns(cooldowns);
+      return { suppressed: true, key, ttl, previous };
+    }
+
+    cooldowns[key] = {
+      channel,
+      endpoint: normalizeStatusEndpoint(endpoint),
+      status_type: statusNoticeType(route),
+      reason: statusNoticeReason(route),
+      last_notified_at: now
+    };
+    writeStatusNoticeCooldowns(cooldowns);
+    return { suppressed: false, key, ttl, reservedAt: now };
+  } finally {
+    release();
   }
-
-  return { suppressed: false, key, ttl };
 }
 
-function recordStatusNoticeCooldown(channel, endpoint, route, now = Math.floor(Date.now() / 1000)) {
-  const key = statusNoticeCooldownKey(channel, endpoint, route);
-  const ttl = Number.isFinite(STATUS_NOTICE_COOLDOWN_SECONDS) && STATUS_NOTICE_COOLDOWN_SECONDS > 0
-    ? STATUS_NOTICE_COOLDOWN_SECONDS
-    : 600;
-  const cooldowns = pruneStatusNoticeCooldowns(readStatusNoticeCooldowns(), ttl, now);
-  cooldowns[key] = {
-    channel,
-    endpoint: normalizeStatusEndpoint(endpoint),
-    status_type: statusNoticeType(route),
-    reason: statusNoticeReason(route),
-    last_notified_at: now
-  };
-  writeStatusNoticeCooldowns(cooldowns);
+function clearStatusNoticeCooldownReservation(key, reservedAt) {
+  const release = acquireStatusNoticeCooldownLock();
+  try {
+    const cooldowns = readStatusNoticeCooldowns();
+    if (cooldowns[key]?.last_notified_at === reservedAt) {
+      delete cooldowns[key];
+      writeStatusNoticeCooldowns(cooldowns);
+    }
+  } catch (err) {
+    console.error(`[C4] Warning: failed to clear status cooldown reservation (${err.message})`);
+  } finally {
+    release();
+  }
 }
 
 function buildFullMessage(content, channel, endpoint, noReply) {
@@ -411,9 +462,14 @@ async function main() {
   const route = await queryRoute(channel, endpoint, noReply);
   let dbContent = buildFullMessage(content, channel, endpoint, noReply);
   const dbStatus = route.recovered ? 'pending' : 'delivered';
+  let cooldown = null;
 
   if (!route.recovered && !noReply) {
-    const cooldown = getStatusNoticeCooldown(channel, endpoint, route);
+    try {
+      cooldown = reserveStatusNoticeCooldown(channel, endpoint, route);
+    } catch (err) {
+      emitError(json, 'INTERNAL_ERROR', `failed to reserve status cooldown: ${err.message}`);
+    }
     if (cooldown.suppressed) {
       dbContent += `\n\n[C4] Status notification suppressed by cooldown while health=${statusNoticeType(route)} reason=${statusNoticeReason(route)}.`;
       try {
@@ -437,9 +493,11 @@ async function main() {
 
     const sendResult = sendUnhealthyMessage(channel, endpoint, route.userMessage);
     if (sendResult.status === 0) {
-      recordStatusNoticeCooldown(channel, endpoint, route);
       emitSuccess(json, record.id, 'delivered');
       return;
+    }
+    if (cooldown?.key && Number.isFinite(cooldown.reservedAt)) {
+      clearStatusNoticeCooldownReservation(cooldown.key, cooldown.reservedAt);
     }
     const detail = sendResult.stderr || sendResult.stdout || `exit ${sendResult.status}`;
     emitError(json, 'UNHEALTHY_NOTIFY_FAILED', `failed to send unhealthy status message: ${detail.trim()}`);

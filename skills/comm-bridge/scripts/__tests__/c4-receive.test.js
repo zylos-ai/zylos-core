@@ -77,6 +77,18 @@ process.exit(${exitCode});
 `);
 }
 
+function createSlowAppendChannelSendScript(tmpDir, channel) {
+  const scriptDir = path.join(tmpDir, '.claude', 'skills', channel, 'scripts');
+  fs.mkdirSync(scriptDir, { recursive: true });
+  fs.writeFileSync(path.join(scriptDir, 'send.js'), `
+import fs from 'node:fs';
+import path from 'node:path';
+const outPath = path.join(process.env.ZYLOS_DIR, '${channel}-send.jsonl');
+await new Promise((resolve) => setTimeout(resolve, 500));
+fs.appendFileSync(outPath, JSON.stringify({ args: process.argv.slice(2), pid: process.pid }) + '\\n');
+`);
+}
+
 async function withRouteServer(tmpDir, handler, fn) {
   const socketPath = path.join(tmpDir, 'activity-monitor', 'am.sock');
   await fs.promises.rm(socketPath, { force: true });
@@ -405,6 +417,47 @@ describe('c4-receive health gating', () => {
       assert.equal(inboundCount.count, 2);
       assert.equal(outboundCount.count, 1);
       assert.match(suppressed.content, /Status notification suppressed by cooldown/);
+    });
+  });
+
+  it('fallback reserves status notice cooldown before sending so concurrent receives suppress duplicates', async () => {
+    await withTmpDirAsync(async ({ tmpDir, env }) => {
+      fs.writeFileSync(path.join(tmpDir, 'activity-monitor', 'agent-status.json'), JSON.stringify({ health: 'down' }));
+      createSlowAppendChannelSendScript(tmpDir, 'test-chan');
+
+      const argsA = [
+        '--channel', 'test-chan',
+        '--endpoint', 'oc_123|type:group|root:om_root|parent:om_a|msg:om_a',
+        '--json',
+        '--content', 'first concurrent'
+      ];
+      const argsB = [
+        '--channel', 'test-chan',
+        '--endpoint', 'oc_123|type:group|root:om_root|parent:om_b|msg:om_b',
+        '--json',
+        '--content', 'second concurrent'
+      ];
+
+      const results = await Promise.all([
+        cliRawAsync(argsA, env),
+        cliRawAsync(argsB, env)
+      ]);
+      assert.deepEqual(results.map((r) => r.status), [0, 0]);
+      const actions = results.map((r) => parseJsonStdout(r.stdout).action).sort();
+      assert.deepEqual(actions, ['delivered', 'suppressed']);
+
+      const sendLog = fs.readFileSync(path.join(tmpDir, 'test-chan-send.jsonl'), 'utf8').trim().split('\n');
+      assert.equal(sendLog.length, 1);
+
+      const db = openDb(tmpDir);
+      const inboundCount = db.prepare("SELECT count(*) AS count FROM conversations WHERE direction = 'in'").get();
+      const outboundCount = db.prepare("SELECT count(*) AS count FROM conversations WHERE direction = 'out'").get();
+      const suppressedCount = db.prepare("SELECT count(*) AS count FROM conversations WHERE content LIKE '%Status notification suppressed by cooldown%'").get();
+      db.close();
+
+      assert.equal(inboundCount.count, 2);
+      assert.equal(outboundCount.count, 1);
+      assert.equal(suppressedCount.count, 1);
     });
   });
 
