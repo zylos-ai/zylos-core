@@ -41,6 +41,15 @@ function printStep(step) {
   if (step.status === 'failed' && step.error) {
     console.log(`       ${red(step.error)}`);
   }
+  if (step.name === 'caddy_routes' && step.caddy?.action === 'manual_required') {
+    console.log(`       ${yellow(step.caddy.message || 'HTTP routes were not configured automatically.')}`);
+    if (step.caddy.caddyBin) console.log(`       ${dim(`Binary: ${step.caddy.caddyBin}`)}`);
+    if (step.caddy.caddyfile) console.log(`       ${dim(`Caddyfile: ${step.caddy.caddyfile}`)}`);
+    console.log('       If you use your own Caddy server, add this snippet inside your site block:');
+    for (const line of (step.caddy.manualConfig || '').split('\n')) {
+      console.log(line);
+    }
+  }
 }
 
 /**

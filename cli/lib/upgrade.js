@@ -490,10 +490,20 @@ function step6_updateCaddyRoutes(ctx) {
 
   const result = applyCaddyRoutes(ctx.component, httpRoutes);
   if (result.success) {
-    return { step: 6, name: 'caddy_routes', status: 'done', message: result.action, duration: Date.now() - startTime };
+    return { step: 6, name: 'caddy_routes', status: 'done', message: result.action, caddy: result, duration: Date.now() - startTime };
+  }
+  if (result.action === 'manual_required') {
+    return {
+      step: 6,
+      name: 'caddy_routes',
+      status: 'skipped',
+      message: 'manual configuration required',
+      caddy: result,
+      duration: Date.now() - startTime,
+    };
   }
   // Caddy failures are non-fatal for upgrades
-  return { step: 6, name: 'caddy_routes', status: 'skipped', message: result.error, duration: Date.now() - startTime };
+  return { step: 6, name: 'caddy_routes', status: 'skipped', message: result.error, caddy: result, duration: Date.now() - startTime };
 }
 
 /**
@@ -745,7 +755,9 @@ export function runUpgrade(component, { tempDir, newVersion, mode, jsonOutput, o
 
   // Extract Caddy result from steps
   const caddyStep = ctx.steps.find(s => s.name === 'caddy_routes');
-  const caddyResult = caddyStep ? { action: caddyStep.message, status: caddyStep.status } : null;
+  const caddyResult = caddyStep?.caddy
+    ? { ...caddyStep.caddy, status: caddyStep.status }
+    : (caddyStep ? { action: caddyStep.message, status: caddyStep.status } : null);
 
   return {
     action: 'upgrade',

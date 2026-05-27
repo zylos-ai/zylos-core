@@ -1,6 +1,6 @@
 import { describe, test, expect } from '@jest/globals';
 import { isLocalAddress } from '../cli/commands/init.js';
-import { generateRouteBlocks } from '../cli/lib/caddy.js';
+import { applyCaddyRoutes, generateManualRouteSnippet, generateRouteBlocks } from '../cli/lib/caddy.js';
 
 describe('isLocalAddress', () => {
   // Positive cases — should return true
@@ -122,5 +122,55 @@ describe('generateRouteBlocks', () => {
     expect(block).toContain('        reverse_proxy localhost:3000');
     expect(block).not.toContain('header_up X-Forwarded-Prefix');
     expect(block).not.toContain('reverse_proxy localhost:3000 {');
+  });
+});
+
+describe('generateManualRouteSnippet', () => {
+  test('wraps route blocks in zylos component markers', () => {
+    const snippet = generateManualRouteSnippet('dashboard', [{
+      path: '/dashboard/*',
+      type: 'reverse_proxy',
+      target: 'localhost:3000',
+      strip_prefix: '/dashboard',
+    }]);
+
+    expect(snippet).toContain('    # BEGIN zylos-component:dashboard');
+    expect(snippet).toContain('    redir /dashboard /dashboard/ permanent');
+    expect(snippet).toContain('        uri strip_prefix /dashboard');
+    expect(snippet).toContain('        reverse_proxy localhost:3000 {');
+    expect(snippet).toContain('            header_up X-Forwarded-Prefix /dashboard');
+    expect(snippet).toContain('    # END zylos-component:dashboard');
+  });
+});
+
+describe('applyCaddyRoutes', () => {
+  test('returns manual configuration details when zylos-managed Caddy is unavailable', () => {
+    const result = applyCaddyRoutes('dashboard', [{
+      path: '/dashboard/*',
+      type: 'reverse_proxy',
+      target: 'localhost:3000',
+      strip_prefix: '/dashboard',
+    }], {
+      isCaddyAvailable: () => false,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.action).toBe('manual_required');
+    expect(result.error).toBe('caddy_not_available');
+    expect(result.caddyfile).toBeTruthy();
+    expect(result.caddyBin).toBeTruthy();
+    expect(result.manualConfigPlacement).toBe('inside_primary_site_block');
+    expect(result.message).toBe('Zylos-managed Caddy is not available. HTTP routes were not configured automatically.');
+    expect(result.manualConfig).toContain('# BEGIN zylos-component:dashboard');
+    expect(result.manualConfig).toContain('handle /dashboard/* {');
+    expect(result.manualConfig).toContain('reverse_proxy localhost:3000 {');
+  });
+
+  test('skips empty route declarations before checking Caddy availability', () => {
+    const result = applyCaddyRoutes('dashboard', [], {
+      isCaddyAvailable: () => false,
+    });
+
+    expect(result).toEqual({ success: true, action: 'skipped' });
   });
 });

@@ -63,6 +63,22 @@ export function generateRouteBlocks(httpRoutes) {
 }
 
 /**
+ * Generate a copyable Caddy snippet for manual component route setup.
+ * The snippet is intended to be pasted inside an existing Caddy site block.
+ *
+ * @param {string} componentName
+ * @param {Array} httpRoutes - Array of { path, type, target, strip_prefix? }
+ * @returns {string} Caddy configuration snippet with zylos markers
+ */
+export function generateManualRouteSnippet(componentName, httpRoutes) {
+  return [
+    `    # BEGIN zylos-component:${componentName}`,
+    generateRouteBlocks(httpRoutes),
+    `    # END zylos-component:${componentName}`,
+  ].join('\n');
+}
+
+/**
  * Remove a marker block (BEGIN to END, inclusive) from content.
  * Handles leading whitespace on marker lines and cleans up blank lines.
  */
@@ -207,13 +223,23 @@ function findPrimaryBlockEnd(content) {
  * @param {Array} httpRoutes - Array of { path, type, target, strip_prefix? }
  * @returns {{ success: boolean, action: string, error?: string }}
  */
-export function applyCaddyRoutes(componentName, httpRoutes) {
-  if (!isCaddyAvailable()) {
-    return { success: false, action: 'skipped', error: 'caddy_not_available' };
-  }
-
+export function applyCaddyRoutes(componentName, httpRoutes, deps = {}) {
   if (!httpRoutes || !Array.isArray(httpRoutes) || httpRoutes.length === 0) {
     return { success: true, action: 'skipped' };
+  }
+
+  const isAvailable = deps.isCaddyAvailable || isCaddyAvailable;
+  if (!isAvailable()) {
+    return {
+      success: false,
+      action: 'manual_required',
+      error: 'caddy_not_available',
+      caddyfile: CADDYFILE,
+      caddyBin: CADDY_BIN,
+      manualConfig: generateManualRouteSnippet(componentName, httpRoutes),
+      manualConfigPlacement: 'inside_primary_site_block',
+      message: 'Zylos-managed Caddy is not available. HTTP routes were not configured automatically.',
+    };
   }
 
   const beginMarker = `# BEGIN zylos-component:${componentName}`;
@@ -233,13 +259,8 @@ export function applyCaddyRoutes(componentName, httpRoutes) {
     content = stripMarkerBlock(content, beginMarker, endMarker);
   }
 
-  // Generate new route block
-  const routeBlock = generateRouteBlocks(httpRoutes);
-  const markedBlock = [
-    `    ${beginMarker}`,
-    routeBlock,
-    `    ${endMarker}`,
-  ].join('\n');
+  // Generate new route block with component markers.
+  const markedBlock = generateManualRouteSnippet(componentName, httpRoutes);
 
   // Find the closing `}` of the primary (first) server block.
   // The Caddyfile may contain multiple server blocks (e.g. user-added
