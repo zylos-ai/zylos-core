@@ -9,15 +9,19 @@ import fs from 'fs';
 import net from 'net';
 import { spawnSync } from 'child_process';
 import { fileURLToPath } from 'url';
-import { insertConversation, close } from './c4-db.js';
+import {
+  clearStatusNoticeCooldownReservation,
+  insertConversation,
+  close,
+  reserveStatusNoticeCooldown
+} from './c4-db.js';
 import { validateChannel, validateEndpoint } from './c4-validate.js';
 import {
   FILE_SIZE_THRESHOLD,
   ATTACHMENTS_DIR,
   CONTENT_PREVIEW_CHARS,
   AGENT_STATUS_FILE,
-  ACTIVITY_MONITOR_DIR,
-  STATUS_NOTICE_COOLDOWNS_FILE
+  ACTIVITY_MONITOR_DIR
 } from './c4-config.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -25,9 +29,6 @@ const __dirname = path.dirname(__filename);
 const AM_SOCKET_PATH = path.join(ACTIVITY_MONITOR_DIR, 'am.sock');
 const ROUTER_IPC_TIMEOUT_MS = 30000;
 const STATUS_NOTICE_COOLDOWN_SECONDS = Number.parseInt(process.env.C4_STATUS_NOTICE_COOLDOWN_SECONDS || '600', 10);
-const STATUS_NOTICE_COOLDOWNS_LOCK_DIR = `${STATUS_NOTICE_COOLDOWNS_FILE}.lock`;
-const STATUS_NOTICE_LOCK_TIMEOUT_MS = 5000;
-const STATUS_NOTICE_LOCK_STALE_MS = 30000;
 
 function printUsage() {
   console.log('Usage: node c4-receive.js --channel <channel> [--endpoint <endpoint_id>] [--priority <1-3>] [--no-reply] [--block-queue-until-idle] [--json] --content "<message>"');
@@ -258,6 +259,9 @@ function sendUnhealthyMessage(channel, endpoint, message) {
 
 function normalizeStatusEndpoint(endpoint) {
   if (!endpoint) return '';
+  // Group status-notice cooldowns by stable conversation root, not by each
+  // incoming message/request id. This keeps thread-specific cooldowns while
+  // suppressing repeated notices within the same root conversation.
   return endpoint.replace(/\|(msg|req|parent):[^|]+/g, '');
 }
 
@@ -278,113 +282,27 @@ function statusNoticeCooldownKey(channel, endpoint, route) {
   ].join('::');
 }
 
-function readStatusNoticeCooldowns() {
-  try {
-    if (!fs.existsSync(STATUS_NOTICE_COOLDOWNS_FILE)) return {};
-    return JSON.parse(fs.readFileSync(STATUS_NOTICE_COOLDOWNS_FILE, 'utf8'));
-  } catch {
-    return {};
-  }
-}
-
-function sleepSync(ms) {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-}
-
-function acquireStatusNoticeCooldownLock() {
-  const start = Date.now();
-  while (true) {
-    try {
-      fs.mkdirSync(STATUS_NOTICE_COOLDOWNS_LOCK_DIR);
-      return () => {
-        try {
-          fs.rmdirSync(STATUS_NOTICE_COOLDOWNS_LOCK_DIR);
-        } catch { /* best-effort */ }
-      };
-    } catch (err) {
-      if (err.code !== 'EEXIST') throw err;
-
-      try {
-        const stats = fs.statSync(STATUS_NOTICE_COOLDOWNS_LOCK_DIR);
-        if ((Date.now() - stats.mtimeMs) > STATUS_NOTICE_LOCK_STALE_MS) {
-          fs.rmSync(STATUS_NOTICE_COOLDOWNS_LOCK_DIR, { recursive: true, force: true });
-          continue;
-        }
-      } catch {
-        continue;
-      }
-
-      if ((Date.now() - start) >= STATUS_NOTICE_LOCK_TIMEOUT_MS) {
-        throw new Error('timed out waiting for status cooldown lock');
-      }
-      sleepSync(25);
-    }
-  }
-}
-
-function writeStatusNoticeCooldowns(cooldowns) {
-  try {
-    fs.mkdirSync(path.dirname(STATUS_NOTICE_COOLDOWNS_FILE), { recursive: true });
-    const tmp = `${STATUS_NOTICE_COOLDOWNS_FILE}.tmp.${process.pid}.${Date.now()}`;
-    fs.writeFileSync(tmp, `${JSON.stringify(cooldowns, null, 2)}\n`, 'utf8');
-    fs.renameSync(tmp, STATUS_NOTICE_COOLDOWNS_FILE);
-  } catch (err) {
-    console.error(`[C4] Warning: failed to write status cooldowns (${err.message})`);
-  }
-}
-
-function pruneStatusNoticeCooldowns(cooldowns, ttl, now = Math.floor(Date.now() / 1000)) {
-  const pruned = {};
-  for (const [key, entry] of Object.entries(cooldowns || {})) {
-    const lastNotifiedAt = Number(entry?.last_notified_at);
-    if (!Number.isFinite(lastNotifiedAt)) continue;
-    if ((now - lastNotifiedAt) >= ttl) continue;
-    pruned[key] = entry;
-  }
-  return pruned;
-}
-
-function reserveStatusNoticeCooldown(channel, endpoint, route, now = Math.floor(Date.now() / 1000)) {
+function reserveStatusNoticeCooldownForRoute(channel, endpoint, route, now = Math.floor(Date.now() / 1000)) {
   const key = statusNoticeCooldownKey(channel, endpoint, route);
   const ttl = Number.isFinite(STATUS_NOTICE_COOLDOWN_SECONDS) && STATUS_NOTICE_COOLDOWN_SECONDS > 0
     ? STATUS_NOTICE_COOLDOWN_SECONDS
     : 600;
-  const release = acquireStatusNoticeCooldownLock();
-  try {
-    const cooldowns = pruneStatusNoticeCooldowns(readStatusNoticeCooldowns(), ttl, now);
-    const previous = cooldowns[key];
-
-    if (previous && Number.isFinite(previous.last_notified_at) && (now - previous.last_notified_at) < ttl) {
-      writeStatusNoticeCooldowns(cooldowns);
-      return { suppressed: true, key, ttl, previous };
-    }
-
-    cooldowns[key] = {
-      channel,
-      endpoint: normalizeStatusEndpoint(endpoint),
-      status_type: statusNoticeType(route),
-      reason: statusNoticeReason(route),
-      last_notified_at: now
-    };
-    writeStatusNoticeCooldowns(cooldowns);
-    return { suppressed: false, key, ttl, reservedAt: now };
-  } finally {
-    release();
-  }
+  return reserveStatusNoticeCooldown({
+    cooldownKey: key,
+    channel,
+    endpoint: normalizeStatusEndpoint(endpoint),
+    statusType: statusNoticeType(route),
+    reason: statusNoticeReason(route),
+    ttl,
+    now
+  });
 }
 
-function clearStatusNoticeCooldownReservation(key, reservedAt) {
-  const release = acquireStatusNoticeCooldownLock();
+function clearStatusNoticeCooldownReservationForRoute(key, reservedAt) {
   try {
-    const cooldowns = readStatusNoticeCooldowns();
-    if (cooldowns[key]?.last_notified_at === reservedAt) {
-      delete cooldowns[key];
-      writeStatusNoticeCooldowns(cooldowns);
-    }
+    clearStatusNoticeCooldownReservation(key, reservedAt);
   } catch (err) {
     console.error(`[C4] Warning: failed to clear status cooldown reservation (${err.message})`);
-  } finally {
-    release();
   }
 }
 
@@ -466,14 +384,14 @@ async function main() {
 
   if (!route.recovered && !noReply) {
     try {
-      cooldown = reserveStatusNoticeCooldown(channel, endpoint, route);
+      cooldown = reserveStatusNoticeCooldownForRoute(channel, endpoint, route);
     } catch (err) {
       emitError(json, 'INTERNAL_ERROR', `failed to reserve status cooldown: ${err.message}`);
     }
     if (cooldown.suppressed) {
       dbContent += `\n\n[C4] Status notification suppressed by cooldown while health=${statusNoticeType(route)} reason=${statusNoticeReason(route)}.`;
       try {
-        const record = insertConversation('in', channel, endpoint, dbContent, dbStatus, priority, requireIdle);
+        const record = insertConversation('in', channel, endpoint, dbContent, dbStatus, priority, requireIdle, 'suppressed');
         emitSuccess(json, record.id, 'suppressed');
         return;
       } catch (err) {
@@ -497,7 +415,7 @@ async function main() {
       return;
     }
     if (cooldown?.key && Number.isFinite(cooldown.reservedAt)) {
-      clearStatusNoticeCooldownReservation(cooldown.key, cooldown.reservedAt);
+      clearStatusNoticeCooldownReservationForRoute(cooldown.key, cooldown.reservedAt);
     }
     const detail = sendResult.stderr || sendResult.stdout || `exit ${sendResult.status}`;
     emitError(json, 'UNHEALTHY_NOTIFY_FAILED', `failed to send unhealthy status message: ${detail.trim()}`);
