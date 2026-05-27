@@ -51,6 +51,7 @@ export const AGENT_STATUS_FILE = path.join(ACTIVITY_MONITOR_DIR, 'agent-status.j
 export const PROC_STATE_FILE = path.join(ACTIVITY_MONITOR_DIR, 'proc-state.json');
 export const API_ACTIVITY_FILE = path.join(ACTIVITY_MONITOR_DIR, 'api-activity.json');
 export const PENDING_CHANNELS_FILE = path.join(ACTIVITY_MONITOR_DIR, 'pending-channels.jsonl');
+export const STATUS_NOTICE_COOLDOWNS_FILE = path.join(ACTIVITY_MONITOR_DIR, 'status-notice-cooldowns.json');
 export const ATTACHMENTS_DIR = path.join(DATA_DIR, 'attachments');
 export const SKILLS_DIR = path.join(ZYLOS_DIR, '.claude', 'skills');
 

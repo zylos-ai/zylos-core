@@ -61,6 +61,10 @@ function openDb(tmpDir) {
   return new Database(path.join(tmpDir, 'comm-bridge', 'c4.db'));
 }
 
+function readCooldowns(tmpDir) {
+  return JSON.parse(fs.readFileSync(path.join(tmpDir, 'activity-monitor', 'status-notice-cooldowns.json'), 'utf8'));
+}
+
 function createChannelSendScript(tmpDir, channel, { exitCode = 0 } = {}) {
   const scriptDir = path.join(tmpDir, '.claude', 'skills', channel, 'scripts');
   fs.mkdirSync(scriptDir, { recursive: true });
@@ -70,6 +74,18 @@ import path from 'node:path';
 const outPath = path.join(process.env.ZYLOS_DIR, '${channel}-send.json');
 fs.writeFileSync(outPath, JSON.stringify({ args: process.argv.slice(2) }));
 process.exit(${exitCode});
+`);
+}
+
+function createSlowAppendChannelSendScript(tmpDir, channel) {
+  const scriptDir = path.join(tmpDir, '.claude', 'skills', channel, 'scripts');
+  fs.mkdirSync(scriptDir, { recursive: true });
+  fs.writeFileSync(path.join(scriptDir, 'send.js'), `
+import fs from 'node:fs';
+import path from 'node:path';
+const outPath = path.join(process.env.ZYLOS_DIR, '${channel}-send.jsonl');
+await new Promise((resolve) => setTimeout(resolve, 500));
+fs.appendFileSync(outPath, JSON.stringify({ args: process.argv.slice(2), pid: process.pid }) + '\\n');
 `);
 }
 
@@ -360,6 +376,137 @@ describe('c4-receive health gating', () => {
       assert.equal(fs.existsSync(pendingPath), false);
     });
   });
+
+  it('fallback suppresses repeated status notices by normalized endpoint and public health', () => {
+    withTmpDir(({ tmpDir, env }) => {
+      fs.writeFileSync(path.join(tmpDir, 'activity-monitor', 'agent-status.json'), JSON.stringify({ health: 'down' }));
+      createChannelSendScript(tmpDir, 'test-chan');
+
+      const first = cliRaw([
+        '--channel', 'test-chan',
+        '--endpoint', 'oc_123|type:group|root:om_root|parent:om_a|msg:om_a',
+        '--json',
+        '--content', 'first'
+      ], env);
+      assert.equal(first.status, 0);
+      assert.equal(parseJsonStdout(first.stdout).action, 'delivered');
+
+      const second = cliRaw([
+        '--channel', 'test-chan',
+        '--endpoint', 'oc_123|type:group|root:om_root|parent:om_b|msg:om_b',
+        '--json',
+        '--content', 'second'
+      ], env);
+      assert.equal(second.status, 0);
+      const out = parseJsonStdout(second.stdout);
+      assert.equal(out.action, 'suppressed');
+
+      const cooldowns = readCooldowns(tmpDir);
+      const entries = Object.values(cooldowns);
+      assert.equal(entries.length, 1);
+      assert.equal(entries[0].endpoint, 'oc_123|type:group|root:om_root');
+      assert.equal(entries[0].status_type, 'unavailable');
+      assert.equal(entries[0].reason, 'unavailable');
+
+      const db = openDb(tmpDir);
+      const inboundCount = db.prepare("SELECT count(*) AS count FROM conversations WHERE direction = 'in'").get();
+      const outboundCount = db.prepare("SELECT count(*) AS count FROM conversations WHERE direction = 'out'").get();
+      const suppressed = db.prepare("SELECT content FROM conversations WHERE id = ?").get(Number(out.id));
+      db.close();
+
+      assert.equal(inboundCount.count, 2);
+      assert.equal(outboundCount.count, 1);
+      assert.match(suppressed.content, /Status notification suppressed by cooldown/);
+    });
+  });
+
+  it('fallback reserves status notice cooldown before sending so concurrent receives suppress duplicates', async () => {
+    await withTmpDirAsync(async ({ tmpDir, env }) => {
+      fs.writeFileSync(path.join(tmpDir, 'activity-monitor', 'agent-status.json'), JSON.stringify({ health: 'down' }));
+      createSlowAppendChannelSendScript(tmpDir, 'test-chan');
+
+      const argsA = [
+        '--channel', 'test-chan',
+        '--endpoint', 'oc_123|type:group|root:om_root|parent:om_a|msg:om_a',
+        '--json',
+        '--content', 'first concurrent'
+      ];
+      const argsB = [
+        '--channel', 'test-chan',
+        '--endpoint', 'oc_123|type:group|root:om_root|parent:om_b|msg:om_b',
+        '--json',
+        '--content', 'second concurrent'
+      ];
+
+      const results = await Promise.all([
+        cliRawAsync(argsA, env),
+        cliRawAsync(argsB, env)
+      ]);
+      assert.deepEqual(results.map((r) => r.status), [0, 0]);
+      const actions = results.map((r) => parseJsonStdout(r.stdout).action).sort();
+      assert.deepEqual(actions, ['delivered', 'suppressed']);
+
+      const sendLog = fs.readFileSync(path.join(tmpDir, 'test-chan-send.jsonl'), 'utf8').trim().split('\n');
+      assert.equal(sendLog.length, 1);
+
+      const db = openDb(tmpDir);
+      const inboundCount = db.prepare("SELECT count(*) AS count FROM conversations WHERE direction = 'in'").get();
+      const outboundCount = db.prepare("SELECT count(*) AS count FROM conversations WHERE direction = 'out'").get();
+      const suppressedCount = db.prepare("SELECT count(*) AS count FROM conversations WHERE content LIKE '%Status notification suppressed by cooldown%'").get();
+      db.close();
+
+      assert.equal(inboundCount.count, 2);
+      assert.equal(outboundCount.count, 1);
+      assert.equal(suppressedCount.count, 1);
+    });
+  });
+
+  it('prunes expired status notice cooldown entries when recording a notification', () => {
+    withTmpDir(({ tmpDir, env }) => {
+      const monitorDir = path.join(tmpDir, 'activity-monitor');
+      const cooldownPath = path.join(monitorDir, 'status-notice-cooldowns.json');
+      const now = Math.floor(Date.now() / 1000);
+      fs.writeFileSync(path.join(monitorDir, 'agent-status.json'), JSON.stringify({ health: 'down' }));
+      fs.writeFileSync(cooldownPath, JSON.stringify({
+        'old::ep::unavailable::old': {
+          channel: 'old',
+          endpoint: 'ep',
+          status_type: 'unavailable',
+          reason: 'old',
+          last_notified_at: now - 9999
+        },
+        'recent::ep::unavailable::recent': {
+          channel: 'recent',
+          endpoint: 'ep',
+          status_type: 'unavailable',
+          reason: 'recent',
+          last_notified_at: now
+        },
+        'malformed::ep::unavailable::bad': {
+          channel: 'malformed',
+          endpoint: 'ep',
+          status_type: 'unavailable',
+          reason: 'bad',
+          last_notified_at: 'not-a-number'
+        }
+      }));
+      createChannelSendScript(tmpDir, 'test-chan');
+
+      const r = cliRaw(['--channel', 'test-chan', '--endpoint', 'ep1', '--json', '--content', 'new notice'], env);
+      assert.equal(r.status, 0);
+      assert.equal(parseJsonStdout(r.stdout).action, 'delivered');
+
+      const cooldowns = readCooldowns(tmpDir);
+      assert.equal(cooldowns['old::ep::unavailable::old'], undefined);
+      assert.equal(cooldowns['malformed::ep::unavailable::bad'], undefined);
+      assert.ok(cooldowns['recent::ep::unavailable::recent']);
+      assert.ok(cooldowns['test-chan::ep1::unavailable::unavailable']);
+      assert.deepEqual(
+        fs.readdirSync(monitorDir).filter((name) => name.includes('status-notice-cooldowns.json.tmp')),
+        []
+      );
+    });
+  });
 });
 
 describe('c4-receive MessageRouter IPC route', () => {
@@ -410,6 +557,54 @@ describe('c4-receive MessageRouter IPC route', () => {
         db.close();
         assert.equal(inbound.status, 'delivered');
         assert.ok(inbound.content.includes('blocked msg'));
+      });
+    });
+  });
+
+  it('suppresses repeated router unhealthy status notices', async () => {
+    await withTmpDirAsync(async ({ tmpDir, env }) => {
+      createChannelSendScript(tmpDir, 'test-chan');
+      await withRouteServer(tmpDir, (request) => ({
+        version: 1,
+        requestId: request.requestId,
+        recovered: false,
+        health: 'unavailable',
+        reason: 'heartbeat_timeout',
+        userMessage: 'router says unavailable'
+      }), async () => {
+        const first = await cliRawAsync([
+          '--channel', 'test-chan',
+          '--endpoint', 'oc_123|type:group|root:om_root|parent:om_a|msg:om_a',
+          '--json',
+          '--content', 'first'
+        ], env);
+        assert.equal(first.status, 0);
+        assert.equal(parseJsonStdout(first.stdout).action, 'delivered');
+
+        const second = await cliRawAsync([
+          '--channel', 'test-chan',
+          '--endpoint', 'oc_123|type:group|root:om_root|parent:om_b|msg:om_b',
+          '--json',
+          '--content', 'second'
+        ], env);
+        assert.equal(second.status, 0);
+        const out = parseJsonStdout(second.stdout);
+        assert.equal(out.action, 'suppressed');
+
+        const cooldowns = readCooldowns(tmpDir);
+        const entries = Object.values(cooldowns);
+        assert.equal(entries.length, 1);
+        assert.equal(entries[0].endpoint, 'oc_123|type:group|root:om_root');
+        assert.equal(entries[0].status_type, 'unavailable');
+        assert.equal(entries[0].reason, 'heartbeat_timeout');
+
+        const db = openDb(tmpDir);
+        const outboundCount = db.prepare("SELECT count(*) AS count FROM conversations WHERE direction = 'out'").get();
+        const suppressed = db.prepare("SELECT content FROM conversations WHERE id = ?").get(Number(out.id));
+        db.close();
+
+        assert.equal(outboundCount.count, 1);
+        assert.match(suppressed.content, /Status notification suppressed by cooldown/);
       });
     });
   });
