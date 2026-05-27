@@ -33,6 +33,19 @@ import { hasConfigureHook, runConfigureHook } from '../lib/configure-hook.js';
 import { registerService } from '../lib/service.js';
 import { bold, dim, green, red, yellow, cyan, success, error, warn, heading } from '../lib/colors.js';
 
+function printManualCaddyRoutes(result) {
+  console.log(`  ${warn('Caddy routes: manual configuration required')}`);
+  console.log(`    ${dim(result.message || 'HTTP routes were not configured automatically.')}`);
+  if (result.caddyBin) console.log(`    ${dim(`Binary: ${result.caddyBin}`)}`);
+  if (result.caddyfile) console.log(`    ${dim(`Caddyfile: ${result.caddyfile}`)}`);
+  console.log('');
+  console.log('    If you use your own Caddy server, add this snippet inside your site block:');
+  console.log('');
+  for (const line of (result.manualConfig || '').split('\n')) {
+    console.log(line);
+  }
+}
+
 /**
  * Main entry: zylos add <target> [--check] [--yes] [--json] [--branch <name>]
  */
@@ -389,6 +402,8 @@ async function installDeclarative(resolved, skillDir, skipConfirm, jsonOutput, b
     if (!jsonOutput) {
       if (caddyResult.success) {
         console.log(`  ${success(`Caddy routes: ${caddyResult.action}`)}`);
+      } else if (caddyResult.action === 'manual_required') {
+        printManualCaddyRoutes(caddyResult);
       } else {
         console.log(`  ${error(`Caddy routes: failed (${caddyResult.error})`)}`);
       }
