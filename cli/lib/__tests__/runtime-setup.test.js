@@ -38,7 +38,9 @@ describe('renderCodexProjectConfig', () => {
     const content = renderCodexProjectConfig();
     assert.match(content, /check_for_update_on_startup = false/);
     assert.match(content, /model_availability_nux = "gpt-5\.4"/);
-    assert.match(content, /\[features\]\nmulti_agent = true/);
+    assert.match(content, /^model = "gpt-5\.5"$/m);
+    assert.match(content, /^model_reasoning_effort = "medium"$/m);
+    assert.match(content, /\[features\][\s\S]*multi_agent = true[\s\S]*fast_mode = false/);
     assert.match(content, /\[notice\]/);
     assert.match(content, /hide_full_access_warning = true/);
     assert.match(content, /hide_rate_limit_model_nudge = true/);
@@ -59,8 +61,9 @@ describe('renderCodexProjectConfig', () => {
       'check_for_update_on_startup = true',
       '',
       '[features]',
-      'fast_mode = false',
+      'fast_mode = true',
       'multi_agent = false',
+      'custom_feature = true',
       '',
       '[profile.fast]',
       'model = "gpt-5.4-mini"',
@@ -73,8 +76,21 @@ describe('renderCodexProjectConfig', () => {
     assert.doesNotMatch(content, /# User comment/);
     assert.match(content, /check_for_update_on_startup = false/);
     assert.match(content, /model_availability_nux = "gpt-5\.4"/);
-    assert.match(content, /\[features\][\s\S]*fast_mode = false[\s\S]*multi_agent = true/);
+    assert.match(content, /\[features\][\s\S]*fast_mode = false[\s\S]*multi_agent = true[\s\S]*custom_feature = true/);
     assert.match(content, /\[profile\.fast\]\nmodel = "gpt-5\.4-mini"/);
+  });
+
+  it('backfills model defaults without overriding user configuration', () => {
+    const content = renderCodexProjectConfig([
+      'model = "gpt-5.4"',
+      'model_reasoning_effort = "high"',
+      '',
+    ].join('\n'));
+
+    assert.match(content, /^model = "gpt-5\.4"$/m);
+    assert.match(content, /^model_reasoning_effort = "high"$/m);
+    assert.doesNotMatch(content, /^model = "gpt-5\.5"$/m);
+    assert.doesNotMatch(content, /^model_reasoning_effort = "medium"$/m);
   });
 
   it('replaces zylos-owned notice sections exactly without touching dotted siblings', () => {
@@ -253,7 +269,7 @@ describe('writeCodexConfig', () => {
 
     const projectContent = fs.readFileSync(projectConfigPath, 'utf8');
     assert.match(projectContent, /user_added = "keep"/);
-    assert.match(projectContent, /\[features\][\s\S]*fast_mode = true[\s\S]*multi_agent = true/);
+    assert.match(projectContent, /\[features\][\s\S]*fast_mode = false[\s\S]*multi_agent = true/);
   });
 });
 

@@ -302,7 +302,7 @@ export function saveClaudeBaseUrlToSettingsAndEnv(baseUrl) {
 
 const CODEX_PROJECT_HEADER = [
   '# Zylos project-level Codex config.',
-  '# Zylos manages specific keys in this file; other settings are preserved across regeneration.',
+  '# Zylos applies overwrite, backfill, key-level, and exact-replacement settings; other settings are preserved.',
 ].join('\n');
 
 const CODEX_GLOBAL_HEADER = [
@@ -353,11 +353,18 @@ function isTomlSectionValue(value) {
  */
 export function renderCodexProjectConfig(existingContent = '') {
   const obj = parseCodexToml(existingContent);
+
+  // Always overwrite: these values are required for unattended Zylos runtime behavior.
   obj.check_for_update_on_startup = false;
   obj.model_availability_nux = 'gpt-5.4';
 
+  // Backfill: default only when the user has not configured a value.
+  if (obj.model === undefined) obj.model = 'gpt-5.5';
+  if (obj.model_reasoning_effort === undefined) obj.model_reasoning_effort = 'medium';
+
   obj.features = isTomlSectionValue(obj.features) ? obj.features : {};
   obj.features.multi_agent = true;
+  obj.features.fast_mode = false;
 
   const existingNotice = isTomlSectionValue(obj.notice) ? obj.notice : {};
   const notice = { ...CODEX_NOTICE };
