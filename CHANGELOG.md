@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-06-02
+
+### Fixed
+- **Codex config merge**: `writeCodexConfig()` now merges with existing configuration instead of overwriting it. Uses `smol-toml` for TOML parsing with four ownership semantics: always-overwrite, backfill, conditional, and exact-replacement. Adds managed defaults for `model`, `model_reasoning_effort` (backfill), and `fast_mode` (always-overwrite). (#606)
+- **C4 status notification dedup**: repeated status notices are now throttled with a cooldown mechanism persisted to SQLite, preventing notification flooding across service restarts. (#599, #604)
+- **Caddy route configuration**: graceful fallback to manual configuration guidance when Caddy API is unavailable, instead of throwing an error. (#602)
+
 ## [0.5.1] - 2026-05-25
 
 ### Changed
