@@ -12,6 +12,10 @@ const {
   syncTemplateSetting,
   syncTemplateModelSetting,
 } = await import('../sync-settings-hooks.js');
+const {
+  renderCodexGlobalConfig,
+  renderCodexProjectConfig,
+} = await import('../runtime-setup.js');
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const TEMPLATE_SETTINGS_PATH = path.join(__dirname, '..', '..', '..', 'templates', '.claude', 'settings.json');
@@ -171,6 +175,82 @@ describe('syncCodexConfig', () => {
 
     assert.equal(result.fatal, true);
     assert.match(result.error, /Failed to refresh/);
+  });
+
+  it('is idempotent after refreshing configs with external keys', () => {
+    const homeDir = '/tmp/home';
+    const projectDir = '/tmp/zylos';
+    const globalConfigPath = path.join(homeDir, '.codex', 'config.toml');
+    const projectConfigPath = path.join(projectDir, '.codex', 'config.toml');
+    const files = new Map([
+      [globalConfigPath, [
+        'model_reasoning_effort = "medium"',
+        '',
+        '[profile.fast]',
+        'model = "gpt-5.4-mini"',
+        '',
+      ].join('\n')],
+      [projectConfigPath, [
+        'user_added = "keep"',
+        '',
+        '[features]',
+        'fast_mode = false',
+        '',
+      ].join('\n')],
+    ]);
+
+    const syncOnce = () => syncCodexConfig({
+      cfg: { runtime: 'codex' },
+      homeDir,
+      projectDir,
+      existsSync: (filePath) => files.has(filePath),
+      readFileSync: (filePath) => files.get(filePath),
+      writeConfig: () => {
+        files.set(projectConfigPath, renderCodexProjectConfig(files.get(projectConfigPath)));
+        files.set(globalConfigPath, renderCodexGlobalConfig(projectDir, files.get(globalConfigPath)));
+        return true;
+      },
+      log: () => {},
+    });
+
+    const first = syncOnce();
+    const second = syncOnce();
+
+    assert.equal(first.changed, true);
+    assert.equal(second.changed, false);
+    assert.match(files.get(projectConfigPath), /user_added = "keep"/);
+    assert.match(files.get(projectConfigPath), /\[features\][\s\S]*fast_mode = false[\s\S]*multi_agent = true/);
+    assert.match(files.get(globalConfigPath), /model_reasoning_effort = "medium"/);
+    assert.match(files.get(globalConfigPath), /\[profile\.fast\]/);
+  });
+
+  it('detects real drift in zylos-managed project keys', () => {
+    const homeDir = '/tmp/home';
+    const projectDir = '/tmp/zylos';
+    const globalConfigPath = path.join(homeDir, '.codex', 'config.toml');
+    const projectConfigPath = path.join(projectDir, '.codex', 'config.toml');
+    const files = new Map([
+      [globalConfigPath, renderCodexGlobalConfig(projectDir, '')],
+      [projectConfigPath, renderCodexProjectConfig('').replace(
+        'check_for_update_on_startup = false',
+        'check_for_update_on_startup = true'
+      )],
+    ]);
+    const logs = [];
+
+    const result = syncCodexConfig({
+      cfg: { runtime: 'codex' },
+      homeDir,
+      projectDir,
+      existsSync: (filePath) => files.has(filePath),
+      readFileSync: (filePath) => files.get(filePath),
+      writeConfig: () => true,
+      log: (line) => logs.push(line),
+      dryRun: true,
+    });
+
+    assert.equal(result.changed, true);
+    assert.ok(logs.some((line) => line.includes('codex project config')));
   });
 });
 
