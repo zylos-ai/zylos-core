@@ -110,7 +110,7 @@ export function syncCodexConfig({
   let existingProject = '';
   try { existingProject = readFileSync(state.projectConfigPath, 'utf8'); } catch {}
 
-  const desiredProject = renderCodexProjectConfig();
+  const desiredProject = renderCodexProjectConfig(existingProject);
   const desiredGlobal = renderCodexGlobalConfig(projectDir, existingGlobal);
   if (existingProject === desiredProject && existingGlobal === desiredGlobal) {
     return { attempted: true, changed: false, fatal: false };

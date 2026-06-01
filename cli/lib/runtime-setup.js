@@ -10,6 +10,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execSync, execFileSync, spawnSync } from 'node:child_process';
+import { parse, stringify } from 'smol-toml';
 import { ZYLOS_DIR } from './config.js';
 import { commandExists } from './shell-utils.js';
 
@@ -299,6 +300,45 @@ export function saveClaudeBaseUrlToSettingsAndEnv(baseUrl) {
 
 // ── Codex credential helpers ───────────────────────────────────────────────
 
+const CODEX_PROJECT_HEADER = [
+  '# Zylos project-level Codex config.',
+  '# Zylos applies overwrite, backfill, key-level, and exact-replacement settings; other settings are preserved.',
+].join('\n');
+
+const CODEX_GLOBAL_HEADER = [
+  '# Codex global config.',
+  '# Zylos manages its project trust entry and optional base URL; other settings are preserved.',
+].join('\n');
+
+const CODEX_NOTICE = {
+  hide_full_access_warning: true,
+  hide_world_writable_warning: true,
+  hide_rate_limit_model_nudge: true,
+  hide_gpt5_1_migration_prompt: true,
+  'hide_gpt-5.1-codex-max_migration_prompt': true,
+};
+
+const CODEX_MODEL_MIGRATIONS = {
+  'gpt-5.3-codex': 'gpt-5.4',
+};
+
+function parseCodexToml(content) {
+  if (!content.trim()) return {};
+  try {
+    return parse(content);
+  } catch {
+    return {};
+  }
+}
+
+function tomlWithHeader(header, obj) {
+  return `${header}\n\n${stringify(obj)}`;
+}
+
+function isTomlSectionValue(value) {
+  return value && typeof value === 'object' && !Array.isArray(value);
+}
+
 /**
  * Render project-level .codex/config.toml with headless configuration.
  *
@@ -308,37 +348,35 @@ export function saveClaudeBaseUrlToSettingsAndEnv(baseUrl) {
  *
  * Written to <projectDir>/.codex/config.toml (Codex project-level config).
  *
+ * @param {string} existingContent - Existing project config.toml contents (optional)
  * @returns {string}
  */
-export function renderCodexProjectConfig() {
-  return [
-    '# Zylos project-level Codex config — written by zylos, do not edit manually.',
-    '# Re-generated on each `zylos init` / `zylos runtime codex`.',
-    '# Headless operation: suppress all interactive prompts.',
-    '',
-    '# Disable startup checks',
-    'check_for_update_on_startup = false',
-    '',
-    '# Acknowledge the latest model NUX so the "Introducing GPT-X" dialog',
-    '# is not shown on startup.  Update this when Codex ships a new default model.',
-    'model_availability_nux = "gpt-5.4"',
-    '',
-    '# Enable Codex features required by Zylos runtime workflows.',
-    '[features]',
-    'multi_agent = true',
-    '',
-    '# Suppress all known interactive notice dialogs',
-    '[notice]',
-    'hide_full_access_warning = true',
-    'hide_world_writable_warning = true',
-    'hide_rate_limit_model_nudge = true',
-    'hide_gpt5_1_migration_prompt = true',
-    '"hide_gpt-5.1-codex-max_migration_prompt" = true',
-    '',
-    '# Acknowledge known model migrations so no migration prompt appears',
-    '[notice.model_migrations]',
-    '"gpt-5.3-codex" = "gpt-5.4"',
-  ].join('\n') + '\n';
+export function renderCodexProjectConfig(existingContent = '') {
+  const obj = parseCodexToml(existingContent);
+
+  // Always overwrite: these values are required for unattended Zylos runtime behavior.
+  obj.check_for_update_on_startup = false;
+  obj.model_availability_nux = 'gpt-5.4';
+
+  // Backfill: default only when the user has not configured a value.
+  if (obj.model === undefined) obj.model = 'gpt-5.5';
+  if (obj.model_reasoning_effort === undefined) obj.model_reasoning_effort = 'medium';
+
+  obj.features = isTomlSectionValue(obj.features) ? obj.features : {};
+  obj.features.multi_agent = true;
+  obj.features.fast_mode = false;
+
+  const existingNotice = isTomlSectionValue(obj.notice) ? obj.notice : {};
+  const notice = { ...CODEX_NOTICE };
+  for (const [key, value] of Object.entries(existingNotice)) {
+    if (key !== 'model_migrations' && isTomlSectionValue(value)) {
+      notice[key] = value;
+    }
+  }
+  notice.model_migrations = { ...CODEX_MODEL_MIGRATIONS };
+  obj.notice = notice;
+
+  return tomlWithHeader(CODEX_PROJECT_HEADER, obj);
 }
 
 /**
@@ -356,27 +394,13 @@ export function renderCodexProjectConfig() {
 export function renderCodexGlobalConfig(projectDir, existingContent = '', opts = {}) {
   const absProject = path.resolve(projectDir);
   const openaiBaseUrl = opts.openaiBaseUrl || process.env.OPENAI_BASE_URL || '';
-
-  let preservedProjects = '';
-  const projectMatches = existingContent.match(/^\[projects\.[^\]]+\][^\[]+/gm);
-  if (projectMatches) {
-    const toKeep = projectMatches.filter(
-      (s) => !s.includes(`"${absProject}"`) && !s.includes(`'${absProject}'`)
-    );
-    if (toKeep.length) preservedProjects = '\n' + toKeep.join('\n').trimEnd() + '\n';
+  const obj = parseCodexToml(existingContent);
+  if (openaiBaseUrl) {
+    obj.openai_base_url = openaiBaseUrl;
   }
-
-  const config = [
-    '# Codex global config — written by zylos, do not edit manually.',
-    '# Re-generated on each `zylos init` / `zylos runtime codex`.',
-    ...(openaiBaseUrl ? ['', '# Use a custom OpenAI-compatible base URL', `openai_base_url = "${openaiBaseUrl.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`] : []),
-    '',
-    '# Trust the zylos project directory',
-    `[projects."${absProject}"]`,
-    'trust_level = "trusted"',
-  ].join('\n') + '\n';
-
-  return config + preservedProjects;
+  obj.projects = isTomlSectionValue(obj.projects) ? obj.projects : {};
+  obj.projects[absProject] = { trust_level: 'trusted' };
+  return tomlWithHeader(CODEX_GLOBAL_HEADER, obj);
 }
 
 /**
@@ -398,9 +422,14 @@ export function writeCodexConfig(projectDir, opts = {}) {
     // Write project-level config
     const projectCodexDir = path.join(path.resolve(projectDir), '.codex');
     fs.mkdirSync(projectCodexDir, { recursive: true });
+    const projectConfigPath = path.join(projectCodexDir, 'config.toml');
+    let existingProject = '';
+    try {
+      existingProject = fs.readFileSync(projectConfigPath, 'utf8');
+    } catch { /* new file — nothing to preserve */ }
     fs.writeFileSync(
-      path.join(projectCodexDir, 'config.toml'),
-      renderCodexProjectConfig(),
+      projectConfigPath,
+      renderCodexProjectConfig(existingProject),
       'utf8'
     );
 
