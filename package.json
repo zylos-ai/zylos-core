@@ -30,7 +30,8 @@
   },
   "dependencies": {
     "dotenv": "^16.4.7",
-    "js-yaml": "^4.1.1"
+    "js-yaml": "^4.1.1",
+    "smol-toml": "^1.6.1"
   },
   "devDependencies": {
     "@jest/globals": "^30.2.0",

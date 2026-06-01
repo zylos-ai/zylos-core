@@ -10,6 +10,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execSync, execFileSync, spawnSync } from 'node:child_process';
+import { parse, stringify } from 'smol-toml';
 import { ZYLOS_DIR } from './config.js';
 import { commandExists } from './shell-utils.js';
 
@@ -20,136 +21,6 @@ function upsertEnvValue(content, key, value, comment = null) {
   }
   const prefix = comment ? `\n\n# ${comment}\n` : '\n';
   return content.trimEnd() + `${prefix}${line}\n`;
-}
-
-function escapeTomlString(value) {
-  return String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-}
-
-function keyFromTomlLine(line) {
-  const match = line.match(/^\s*("[^"]+"|'[^']+'|[A-Za-z0-9_.-]+)\s*=/);
-  return match ? match[1] : null;
-}
-
-function sectionNameFromTomlLine(line) {
-  const match = line.match(/^\s*\[([^\]]+)\]\s*(?:#.*)?$/);
-  return match ? match[1] : null;
-}
-
-function parseTomlBlocks(content) {
-  const blocks = [{ name: null, lines: [] }];
-  for (const line of content.replace(/\r\n/g, '\n').split('\n')) {
-    const sectionName = sectionNameFromTomlLine(line);
-    if (sectionName) {
-      const previousLines = blocks[blocks.length - 1].lines;
-      let beforeTrailingBlanks = previousLines.length;
-      while (beforeTrailingBlanks > 0 && previousLines[beforeTrailingBlanks - 1].trim() === '') {
-        beforeTrailingBlanks -= 1;
-      }
-      let commentStart = beforeTrailingBlanks;
-      while (commentStart > 0 && previousLines[commentStart - 1].trim().startsWith('#')) {
-        commentStart -= 1;
-      }
-      const leadingComments = commentStart < beforeTrailingBlanks
-        ? previousLines.splice(commentStart)
-        : [];
-      blocks.push({ name: sectionName, lines: [...leadingComments, line] });
-    } else {
-      blocks[blocks.length - 1].lines.push(line);
-    }
-  }
-  if (blocks[blocks.length - 1]?.lines.at(-1) === '') {
-    blocks[blocks.length - 1].lines.pop();
-  }
-  return blocks;
-}
-
-function stripKnownZylosHeader(lines) {
-  let index = 0;
-  while (index < lines.length) {
-    const line = lines[index];
-    if (line.trim() === '') {
-      index += 1;
-      continue;
-    }
-    if (
-      line.startsWith('# Zylos ') ||
-      line.startsWith('# Codex global config') ||
-      line.startsWith('# Re-generated on each `zylos init`') ||
-      line.startsWith('# Headless operation:')
-    ) {
-      index += 1;
-      continue;
-    }
-    break;
-  }
-  return lines.slice(index);
-}
-
-function normalizeTomlLines(lines) {
-  const out = [...lines];
-  while (out.length && out[0].trim() === '') out.shift();
-  while (out.length && out[out.length - 1].trim() === '') out.pop();
-  return out;
-}
-
-function sectionBlock(name, bodyLines, comment = null) {
-  return normalizeTomlLines([
-    ...(comment ? [`# ${comment}`] : []),
-    `[${name}]`,
-    ...bodyLines,
-  ]);
-}
-
-function mergeKeyLines(lines, desiredKeys) {
-  const remaining = new Map(Object.entries(desiredKeys));
-  const out = lines.map((line) => {
-    const key = keyFromTomlLine(line);
-    if (key && remaining.has(key)) {
-      const nextLine = remaining.get(key);
-      remaining.delete(key);
-      return nextLine;
-    }
-    return line;
-  });
-
-  if (remaining.size) {
-    const insert = [...remaining.values()];
-    let insertAt = out.length;
-    while (insertAt > 0 && out[insertAt - 1].trim() === '') insertAt -= 1;
-    out.splice(insertAt, 0, ...(insertAt > 0 ? [''] : []), ...insert);
-  }
-  return out;
-}
-
-function mergeTomlConfig(existingContent, { header, topLevelKeys = {}, sections = {} }) {
-  const blocks = parseTomlBlocks(existingContent);
-  blocks[0].lines = mergeKeyLines(stripKnownZylosHeader(blocks[0].lines), topLevelKeys);
-  blocks[0].lines = normalizeTomlLines([...header, '', ...blocks[0].lines]);
-
-  for (const [name, spec] of Object.entries(sections)) {
-    const index = blocks.findIndex((block) => block.name === name);
-    if (spec.mode === 'full') {
-      const replacement = { name, lines: spec.lines };
-      if (index >= 0) blocks[index] = replacement;
-      else blocks.push(replacement);
-      continue;
-    }
-
-    if (spec.mode === 'keys') {
-      if (index >= 0) {
-        const [sectionHeader, ...body] = blocks[index].lines;
-        blocks[index].lines = [sectionHeader, ...mergeKeyLines(body, spec.keys)];
-      } else {
-        blocks.push({ name, lines: sectionBlock(name, Object.values(spec.keys), spec.comment) });
-      }
-    }
-  }
-
-  return blocks
-    .map((block) => normalizeTomlLines(block.lines).join('\n'))
-    .filter(Boolean)
-    .join('\n\n') + '\n';
 }
 
 export function isValidBaseUrl(value) {
@@ -429,6 +300,45 @@ export function saveClaudeBaseUrlToSettingsAndEnv(baseUrl) {
 
 // ── Codex credential helpers ───────────────────────────────────────────────
 
+const CODEX_PROJECT_HEADER = [
+  '# Zylos project-level Codex config.',
+  '# Zylos manages specific keys in this file; other settings are preserved across regeneration.',
+].join('\n');
+
+const CODEX_GLOBAL_HEADER = [
+  '# Codex global config.',
+  '# Zylos manages its project trust entry and optional base URL; other settings are preserved.',
+].join('\n');
+
+const CODEX_NOTICE = {
+  hide_full_access_warning: true,
+  hide_world_writable_warning: true,
+  hide_rate_limit_model_nudge: true,
+  hide_gpt5_1_migration_prompt: true,
+  'hide_gpt-5.1-codex-max_migration_prompt': true,
+};
+
+const CODEX_MODEL_MIGRATIONS = {
+  'gpt-5.3-codex': 'gpt-5.4',
+};
+
+function parseCodexToml(content) {
+  if (!content.trim()) return {};
+  try {
+    return parse(content);
+  } catch {
+    return {};
+  }
+}
+
+function tomlWithHeader(header, obj) {
+  return `${header}\n\n${stringify(obj)}`;
+}
+
+function isTomlSectionValue(value) {
+  return value && typeof value === 'object' && !Array.isArray(value);
+}
+
 /**
  * Render project-level .codex/config.toml with headless configuration.
  *
@@ -442,59 +352,24 @@ export function saveClaudeBaseUrlToSettingsAndEnv(baseUrl) {
  * @returns {string}
  */
 export function renderCodexProjectConfig(existingContent = '') {
-  const header = [
-    '# Zylos project-level Codex config.',
-    '# Zylos manages specific keys in this file; other settings are preserved across regeneration.',
-  ];
-  const noticeLines = sectionBlock('notice', [
-    'hide_full_access_warning = true',
-    'hide_world_writable_warning = true',
-    'hide_rate_limit_model_nudge = true',
-    'hide_gpt5_1_migration_prompt = true',
-    '"hide_gpt-5.1-codex-max_migration_prompt" = true',
-  ], 'Suppress all known interactive notice dialogs');
-  const modelMigrationLines = sectionBlock('notice.model_migrations', [
-    '"gpt-5.3-codex" = "gpt-5.4"',
-  ], 'Acknowledge known model migrations so no migration prompt appears');
+  const obj = parseCodexToml(existingContent);
+  obj.check_for_update_on_startup = false;
+  obj.model_availability_nux = 'gpt-5.4';
 
-  if (existingContent) {
-    return mergeTomlConfig(existingContent, {
-      header,
-      topLevelKeys: {
-        check_for_update_on_startup: 'check_for_update_on_startup = false',
-        model_availability_nux: 'model_availability_nux = "gpt-5.4"',
-      },
-      sections: {
-        features: {
-          mode: 'keys',
-          comment: 'Enable Codex features required by Zylos runtime workflows.',
-          keys: { multi_agent: 'multi_agent = true' },
-        },
-        notice: { mode: 'full', lines: noticeLines },
-        'notice.model_migrations': { mode: 'full', lines: modelMigrationLines },
-      },
-    });
+  obj.features = isTomlSectionValue(obj.features) ? obj.features : {};
+  obj.features.multi_agent = true;
+
+  const existingNotice = isTomlSectionValue(obj.notice) ? obj.notice : {};
+  const notice = { ...CODEX_NOTICE };
+  for (const [key, value] of Object.entries(existingNotice)) {
+    if (key !== 'model_migrations' && isTomlSectionValue(value)) {
+      notice[key] = value;
+    }
   }
+  notice.model_migrations = { ...CODEX_MODEL_MIGRATIONS };
+  obj.notice = notice;
 
-  return [
-    ...header,
-    '# Headless operation: suppress all interactive prompts.',
-    '',
-    '# Disable startup checks',
-    'check_for_update_on_startup = false',
-    '',
-    '# Acknowledge the latest model NUX so the "Introducing GPT-X" dialog',
-    '# is not shown on startup.  Update this when Codex ships a new default model.',
-    'model_availability_nux = "gpt-5.4"',
-    '',
-    '# Enable Codex features required by Zylos runtime workflows.',
-    '[features]',
-    'multi_agent = true',
-    '',
-    ...noticeLines,
-    '',
-    ...modelMigrationLines,
-  ].join('\n') + '\n';
+  return tomlWithHeader(CODEX_PROJECT_HEADER, obj);
 }
 
 /**
@@ -512,36 +387,13 @@ export function renderCodexProjectConfig(existingContent = '') {
 export function renderCodexGlobalConfig(projectDir, existingContent = '', opts = {}) {
   const absProject = path.resolve(projectDir);
   const openaiBaseUrl = opts.openaiBaseUrl || process.env.OPENAI_BASE_URL || '';
-  const header = [
-    '# Codex global config.',
-    '# Zylos manages its project trust entry and optional base URL; other settings are preserved.',
-  ];
-  const topLevelKeys = openaiBaseUrl
-    ? { openai_base_url: `openai_base_url = "${escapeTomlString(openaiBaseUrl)}"` }
-    : {};
-  const projectSectionName = `projects."${absProject}"`;
-  const projectSection = sectionBlock(
-    projectSectionName,
-    ['trust_level = "trusted"'],
-    'Trust the zylos project directory'
-  );
-
-  if (existingContent) {
-    return mergeTomlConfig(existingContent, {
-      header,
-      topLevelKeys,
-      sections: {
-        [projectSectionName]: { mode: 'full', lines: projectSection },
-      },
-    });
+  const obj = parseCodexToml(existingContent);
+  if (openaiBaseUrl) {
+    obj.openai_base_url = openaiBaseUrl;
   }
-
-  return [
-    ...header,
-    ...(openaiBaseUrl ? ['', '# Use a custom OpenAI-compatible base URL', topLevelKeys.openai_base_url] : []),
-    '',
-    ...projectSection,
-  ].join('\n') + '\n';
+  obj.projects = isTomlSectionValue(obj.projects) ? obj.projects : {};
+  obj.projects[absProject] = { trust_level: 'trusted' };
+  return tomlWithHeader(CODEX_GLOBAL_HEADER, obj);
 }
 
 /**

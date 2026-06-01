@@ -69,7 +69,8 @@ describe('renderCodexProjectConfig', () => {
 
     const content = renderCodexProjectConfig(existing);
     assert.match(content, /user_added = "keep"/);
-    assert.match(content, /# User comment/);
+    assert.match(content, /^# Zylos project-level Codex config\./);
+    assert.doesNotMatch(content, /# User comment/);
     assert.match(content, /check_for_update_on_startup = false/);
     assert.match(content, /model_availability_nux = "gpt-5\.4"/);
     assert.match(content, /\[features\][\s\S]*fast_mode = false[\s\S]*multi_agent = true/);
@@ -128,7 +129,7 @@ describe('renderCodexGlobalConfig', () => {
     assert.match(content, /openai_base_url = "https:\/\/proxy\.example\.com\/v1"/);
   });
 
-  it('preserves unknown global top-level keys, sections, comments, and unrelated projects', () => {
+  it('preserves unknown global top-level keys, sections, and unrelated projects', () => {
     const existing = [
       '# User global config',
       'model_reasoning_effort = "medium"',
@@ -142,7 +143,8 @@ describe('renderCodexGlobalConfig', () => {
     ].join('\n');
 
     const content = renderCodexGlobalConfig('/home/user/zylos', existing);
-    assert.match(content, /# User global config/);
+    assert.match(content, /^# Codex global config\./);
+    assert.doesNotMatch(content, /# User global config/);
     assert.match(content, /model_reasoning_effort = "medium"/);
     assert.match(content, /\[profile\.fast\]\nmodel = "gpt-5\.4-mini"/);
     assert.match(content, /\[projects\."\/tmp\/other-project"\]\ntrust_level = "trusted"/);
