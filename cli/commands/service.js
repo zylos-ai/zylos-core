@@ -11,6 +11,7 @@ import { bold, dim, green, red, yellow, cyan, success, error, warn, heading } fr
 import { commandExists } from '../lib/shell-utils.js';
 import { getActiveAdapter } from '../lib/runtime/index.js';
 import { getCoreEcosystemPath, restartFromEcosystem, restartManagedProcess } from '../lib/pm2.js';
+import { buildManagedPm2Env } from '../lib/pm2-env.js';
 
 function shellQuote(value) {
   return `'${String(value).replace(/'/g, `'\\''`)}'`;
@@ -53,7 +54,7 @@ export function restartServicesWithDeps({
         saveNeeded = true;
       } catch {
         if (saveNeeded) {
-          execSyncFn('pm2 save 2>/dev/null', { stdio: 'inherit' });
+          execSyncFn('pm2 save 2>/dev/null', { stdio: 'inherit', env: buildManagedPm2Env() });
         }
         logError(error('Failed to restart services'));
         return false;
@@ -62,7 +63,7 @@ export function restartServicesWithDeps({
   }
 
   if (saveNeeded) {
-    execSyncFn('pm2 save 2>/dev/null', { stdio: 'inherit' });
+    execSyncFn('pm2 save 2>/dev/null', { stdio: 'inherit', env: buildManagedPm2Env() });
   }
   if (fallbackServices.length > 0) {
     logSuccess(success(`Services restarted. Plain PM2 fallback used for: ${fallbackServices.join(', ')}.`));
@@ -159,7 +160,7 @@ export async function showStatus() {
   // Check PM2 services
   console.log(heading('Services (PM2):'));
   try {
-    const pm2Output = execSync('pm2 jlist 2>/dev/null', { encoding: 'utf8' });
+    const pm2Output = execSync('pm2 jlist 2>/dev/null', { encoding: 'utf8', env: buildManagedPm2Env() });
     const processes = JSON.parse(pm2Output);
     if (processes.length === 0) {
       console.log(`  ${dim('No services running')}`);
@@ -228,8 +229,8 @@ export function startServices() {
   const ecosystemPath = getCoreEcosystemPath();
   if (fs.existsSync(ecosystemPath)) {
     try {
-      execSync(`pm2 start "${ecosystemPath}"`, { stdio: 'pipe' });
-      execSync('pm2 save 2>/dev/null', { stdio: 'pipe' });
+      execSync(`pm2 start "${ecosystemPath}"`, { stdio: 'pipe', env: buildManagedPm2Env() });
+      execSync('pm2 save 2>/dev/null', { stdio: 'pipe', env: buildManagedPm2Env() });
       console.log(`  ${success('Started services from ecosystem.config.cjs')}`);
       console.log(`\n${green('Services started.')} Run ${dim('"zylos status"')} to check.`);
       return;
@@ -254,14 +255,14 @@ export function startServices() {
     }
     try {
       const envOpts = buildPm2EnvFlags(svc.env);
-      execSync(`pm2 start ${shellQuote(svc.script)} --name ${shellQuote(svc.name)} ${envOpts} 2>/dev/null`, { stdio: 'pipe' });
+      execSync(`pm2 start ${shellQuote(svc.script)} --name ${shellQuote(svc.name)} ${envOpts} 2>/dev/null`, { stdio: 'pipe', env: buildManagedPm2Env() });
       console.log(`  ${success(bold(svc.name))}`);
       started++;
     } catch (e) {
       try {
-        try { execSync(`pm2 delete "${svc.name}" 2>/dev/null`, { stdio: 'pipe' }); } catch {}
+        try { execSync(`pm2 delete "${svc.name}" 2>/dev/null`, { stdio: 'pipe', env: buildManagedPm2Env() }); } catch {}
         const envOpts = buildPm2EnvFlags(svc.env);
-        execSync(`pm2 start ${shellQuote(svc.script)} --name ${shellQuote(svc.name)} ${envOpts} 2>/dev/null`, { stdio: 'pipe' });
+        execSync(`pm2 start ${shellQuote(svc.script)} --name ${shellQuote(svc.name)} ${envOpts} 2>/dev/null`, { stdio: 'pipe', env: buildManagedPm2Env() });
         console.log(`  ${success(`${bold(svc.name)} ${dim('(started after cleanup)')}`)}`);
         started++;
       } catch (e2) {
@@ -271,7 +272,7 @@ export function startServices() {
   }
 
   if (started > 0) {
-    execSync('pm2 save 2>/dev/null', { stdio: 'pipe' });
+    execSync('pm2 save 2>/dev/null', { stdio: 'pipe', env: buildManagedPm2Env() });
     console.log(`\n${green(started + ' services started.')} Run ${dim('"zylos status"')} to check.`);
   } else {
     console.log('\n' + warn('No services started.'));
@@ -282,7 +283,7 @@ export function stopServices() {
   console.log(heading('Stopping Zylos services...'));
   const services = ['activity-monitor', 'scheduler', 'c4-dispatcher', 'web-console'];
   try {
-    execSync(`pm2 stop ${services.join(' ')} 2>/dev/null || true`, { stdio: 'inherit' });
+    execSync(`pm2 stop ${services.join(' ')} 2>/dev/null || true`, { stdio: 'inherit', env: buildManagedPm2Env() });
     console.log(success('Services stopped.'));
   } catch (e) {
     console.error(error('Failed to stop services'));
