@@ -4,7 +4,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { describe, it } from 'node:test';
 
-const { rollback, step7_runPostUpgradeHook, step8_startService } = await import('../upgrade.js');
+const {
+  rollback,
+  shouldRestartServiceAfterUpgrade,
+  step7_runPostUpgradeHook,
+  step8_startService,
+} = await import('../upgrade.js');
 const { step11_startCoreServices } = await import('../self-upgrade.js');
 const { restartRuntimeServices } = await import('../../commands/runtime.js');
 
@@ -164,6 +169,75 @@ describe('step7_runPostUpgradeHook', () => {
 });
 
 describe('step8_startService', () => {
+  it('restarts declared services unless PM2 status shows an intentional stop', () => {
+    assert.equal(shouldRestartServiceAfterUpgrade('online'), true);
+    assert.equal(shouldRestartServiceAfterUpgrade('errored'), true);
+    assert.equal(shouldRestartServiceAfterUpgrade('launching'), true);
+    assert.equal(shouldRestartServiceAfterUpgrade('waiting restart'), true);
+    assert.equal(shouldRestartServiceAfterUpgrade('unknown'), true);
+    assert.equal(shouldRestartServiceAfterUpgrade('stopped'), false);
+    assert.equal(shouldRestartServiceAfterUpgrade('stopping'), false);
+  });
+
+  for (const status of ['errored', 'launching', 'waiting restart', 'unexpected']) {
+    it(`restarts services that were ${status} before upgrade`, () => {
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-upgrade-step8-restart-'));
+      const skillDir = path.join(tmpDir, 'demo');
+      fs.mkdirSync(skillDir, { recursive: true });
+      fs.writeFileSync(path.join(skillDir, 'SKILL.md'), `---\nname: demo\nlifecycle:\n  service:\n    name: zylos-demo\n---\n`, 'utf8');
+      fs.writeFileSync(path.join(skillDir, 'ecosystem.config.cjs'), 'module.exports = { apps: [] };\n', 'utf8');
+
+      const calls = [];
+      try {
+        const result = step8_startService({
+          component: 'demo',
+          skillDir,
+          serviceInitialStatus: status,
+          serviceShouldRestart: true,
+          serviceWasRunning: false,
+        }, {
+          restartManagedProcess: (name, opts) => {
+            calls.push({ name, opts });
+          },
+        });
+
+        assert.equal(result.status, 'done');
+        assert.equal(result.message, 'zylos-demo');
+        assert.equal(calls.length, 1);
+        assert.equal(calls[0].name, 'zylos-demo');
+      } finally {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+  }
+
+  for (const status of ['stopped', 'stopping']) {
+    it(`skips services that were intentionally ${status} before upgrade`, () => {
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-upgrade-step8-stopped-'));
+      const skillDir = path.join(tmpDir, 'demo');
+      fs.mkdirSync(skillDir, { recursive: true });
+
+      try {
+        const result = step8_startService({
+          component: 'demo',
+          skillDir,
+          serviceInitialStatus: status,
+          serviceShouldRestart: false,
+          serviceWasRunning: false,
+        }, {
+          restartManagedProcess: () => {
+            throw new Error('should not restart');
+          },
+        });
+
+        assert.equal(result.status, 'skipped');
+        assert.equal(result.message, `was not running (${status})`);
+      } finally {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+  }
+
   it('retries deleted services through ecosystem restart instead of pm2 start <name>', () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-upgrade-step8-'));
     const skillDir = path.join(tmpDir, 'demo');
