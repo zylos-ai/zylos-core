@@ -213,6 +213,29 @@ function findPrimaryBlockEnd(content) {
   return -1;
 }
 
+export function generateCaddyfileWithComponentRoutes(originalContent, componentName, httpRoutes) {
+  const beginMarker = `# BEGIN zylos-component:${componentName}`;
+  const endMarker = `# END zylos-component:${componentName}`;
+
+  let content = originalContent;
+  if (content.includes(beginMarker)) {
+    content = stripMarkerBlock(content, beginMarker, endMarker);
+  }
+
+  const markedBlock = generateManualRouteSnippet(componentName, httpRoutes);
+  const primaryBrace = findPrimaryBlockEnd(content);
+  if (primaryBrace === -1) {
+    return { success: false, error: 'Cannot find domain block in Caddyfile' };
+  }
+
+  const before = content.slice(0, primaryBrace).trimEnd();
+  const after = content.slice(primaryBrace);
+  return {
+    success: true,
+    content: `${before}\n\n${markedBlock}\n${after}`,
+  };
+}
+
 /**
  * Apply Caddy routes for a component.
  * Reads Caddyfile, removes existing markers for this component (if any),
@@ -242,9 +265,6 @@ export function applyCaddyRoutes(componentName, httpRoutes, deps = {}) {
     };
   }
 
-  const beginMarker = `# BEGIN zylos-component:${componentName}`;
-  const endMarker = `# END zylos-component:${componentName}`;
-
   let original;
   try {
     original = fs.readFileSync(CADDYFILE, 'utf8');
@@ -252,32 +272,14 @@ export function applyCaddyRoutes(componentName, httpRoutes, deps = {}) {
     return { success: false, action: 'skipped', error: `Cannot read Caddyfile: ${err.message}` };
   }
 
-  // Remove existing marker block for this component (if any)
-  let content = original;
-  const isUpdate = content.includes(beginMarker);
-  if (isUpdate) {
-    content = stripMarkerBlock(content, beginMarker, endMarker);
+  const isUpdate = original.includes(`# BEGIN zylos-component:${componentName}`);
+  const generated = generateCaddyfileWithComponentRoutes(original, componentName, httpRoutes);
+  if (!generated.success) {
+    return { success: false, action: 'skipped', error: generated.error };
   }
-
-  // Generate new route block with component markers.
-  const markedBlock = generateManualRouteSnippet(componentName, httpRoutes);
-
-  // Find the closing `}` of the primary (first) server block.
-  // The Caddyfile may contain multiple server blocks (e.g. user-added
-  // reverse proxies for other services). Component routes must be
-  // inserted into the first block, which is always the zylos-managed one.
-  const primaryBrace = findPrimaryBlockEnd(content);
-  if (primaryBrace === -1) {
-    return { success: false, action: 'skipped', error: 'Cannot find domain block in Caddyfile' };
-  }
-
-  // Insert marked block before the closing brace, with proper spacing
-  const before = content.slice(0, primaryBrace).trimEnd();
-  const after = content.slice(primaryBrace);
-  const newContent = `${before}\n\n${markedBlock}\n${after}`;
 
   // Write to temp file, validate, then deploy
-  const result = validateAndDeploy(newContent, original);
+  const result = validateAndDeploy(generated.content, original);
   if (!result.success) {
     return { success: false, action: isUpdate ? 'updated' : 'added', error: result.error };
   }
