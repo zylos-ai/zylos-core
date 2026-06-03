@@ -115,12 +115,14 @@ describe('step11_startCoreServices', () => {
     const ecosystemPath = path.join(tmpDir, 'ecosystem.config.cjs');
     const pm2Path = path.join(binDir, 'pm2');
     const originalPath = process.env.PATH;
+    const originalSystemPath = process.env.SYSTEM_PATH;
 
     fs.mkdirSync(binDir, { recursive: true });
     fs.writeFileSync(ecosystemPath, 'module.exports = { apps: [] };\n', 'utf8');
     fs.writeFileSync(pm2Path, `#!/bin/sh\necho "$@" >> "${logPath}"\nif [ "$1" = "jlist" ]; then echo '[{"name":"activity-monitor","pm_id":3,"pm2_env":{"status":"online","ZYLOS_PACKAGE_ROOT":"${tmpDir}"}}]'; fi\n`, { mode: 0o755 });
 
     process.env.PATH = `${binDir}:${originalPath}`;
+    process.env.SYSTEM_PATH = binDir;
 
     try {
       const result = step11_startCoreServices({
@@ -143,6 +145,11 @@ describe('step11_startCoreServices', () => {
       assert.match(fs.readFileSync(logPath, 'utf8'), /save/);
     } finally {
       process.env.PATH = originalPath;
+      if (originalSystemPath === undefined) {
+        delete process.env.SYSTEM_PATH;
+      } else {
+        process.env.SYSTEM_PATH = originalSystemPath;
+      }
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   });
