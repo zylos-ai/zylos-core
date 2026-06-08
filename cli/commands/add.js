@@ -22,7 +22,7 @@ import { execSync } from 'node:child_process';
 import { SKILLS_DIR, COMPONENTS_DIR, BIN_DIR } from '../lib/config.js';
 import { loadRegistry } from '../lib/registry.js';
 import { loadComponents, saveComponents, resolveTarget, outputTask } from '../lib/components.js';
-import { downloadArchive, downloadBranch } from '../lib/download.js';
+import { downloadArchive, downloadBranch, installLocal } from '../lib/download.js';
 import { generateManifest, saveManifest } from '../lib/manifest.js';
 import { parseSkillMd, detectComponentType } from '../lib/skill.js';
 import { linkBins } from '../lib/bin.js';
@@ -32,6 +32,16 @@ import { writeEnvEntries } from '../lib/env.js';
 import { hasConfigureHook, runConfigureHook } from '../lib/configure-hook.js';
 import { registerService } from '../lib/service.js';
 import { bold, dim, green, red, yellow, cyan, success, error, warn, heading } from '../lib/colors.js';
+
+// Render the source URL for display. `gitlab:<group>/<project>` repos show the
+// GitLab host instead of github.com.
+function repoDisplayUrl(repo) {
+  if (typeof repo === 'string' && repo.startsWith('gitlab:')) {
+    const host = process.env.ZYLOS_GITLAB_HOST || 'git.coco.xyz';
+    return `https://${host}/${repo.slice('gitlab:'.length)}`;
+  }
+  return `https://github.com/${repo}`;
+}
 
 function printManualCaddyRoutes(result) {
   console.log(`  ${warn('Caddy routes: manual configuration required')}`);
@@ -103,7 +113,7 @@ export async function addComponent(args) {
     process.exit(1);
   }
 
-  if (!resolved.repo) {
+  if (!resolved.repo && !resolved.isLocal) {
     if (jsonOutput) {
       console.log(JSON.stringify({
         action: 'add_check', component: target, success: false,
@@ -139,6 +149,21 @@ export async function addComponent(args) {
 
   // 4. Check-only mode: show component info without installing
   if (checkOnly) {
+    // Local source (directory or .tar.gz/.tgz): no remote version to look up.
+    if (resolved.isLocal) {
+      if (jsonOutput) {
+        console.log(JSON.stringify({
+          action: 'add_check', component: resolved.name, success: true,
+          alreadyInstalled: false, isLocal: true, localPath: resolved.localPath,
+          reply: `${resolved.name} (local source: ${resolved.localPath})\nReply "add ${target} confirm" to install.`,
+        }, null, 2));
+      } else {
+        console.log(`\n${heading('Component:')} ${bold(resolved.name)} ${dim('(local source)')}`);
+        console.log(`${heading('Source:')} ${dim(resolved.localPath)}`);
+        console.log(`\n${dim(`Run "zylos add ${target} --yes" to install.`)}`);
+      }
+      process.exit(0);
+    }
     const noRelease = !branch && !resolved.version;
     const fetchFailed = !branch && !resolved.version && resolved.fetchError;
     if (jsonOutput) {
@@ -177,7 +202,7 @@ export async function addComponent(args) {
     } else {
       const versionInfo = branch ? ` (branch: ${bold(branch)})` : (resolved.version ? `@${bold(resolved.version)}` : '');
       console.log(`\n${heading('Component:')} ${bold(resolved.name)}${versionInfo}`);
-      console.log(`${heading('Repository:')} ${dim('https://github.com/' + resolved.repo)}`);
+      console.log(`${heading('Repository:')} ${dim(repoDisplayUrl(resolved.repo))}`);
       if (resolved.isThirdParty) {
         console.log(warn('Third-party component — not verified by Zylos team.'));
       }
@@ -202,7 +227,7 @@ export async function addComponent(args) {
   if (!jsonOutput) {
     const versionInfo = branch ? ` (branch: ${bold(branch)})` : (resolved.version ? `@${bold(resolved.version)}` : '');
     console.log(`\n${heading('Component:')} ${bold(resolved.name)}${versionInfo}`);
-    console.log(`${heading('Repository:')} ${dim('https://github.com/' + resolved.repo)}`);
+    console.log(`${heading(resolved.isLocal ? 'Source:' : 'Repository:')} ${dim(resolved.isLocal ? resolved.localPath : repoDisplayUrl(resolved.repo))}`);
 
     if (resolved.isThirdParty) {
       console.log(warn('Third-party component — not verified by Zylos team.'));
@@ -239,12 +264,20 @@ export async function addComponent(args) {
     process.exit(1);
   }
 
-  const downloadLabel = branch ? `${resolved.name} (branch: ${branch})` : resolved.name;
-  if (!jsonOutput) console.log(`\n${cyan('Downloading')} ${bold(downloadLabel)}...`);
+  const downloadLabel = resolved.isLocal
+    ? `${resolved.name} (local: ${resolved.localPath})`
+    : (branch ? `${resolved.name} (branch: ${branch})` : resolved.name);
+  if (!jsonOutput) console.log(`\n${cyan(resolved.isLocal ? 'Installing' : 'Downloading')} ${bold(downloadLabel)}...`);
+
+  // GitLab (and other non-tag) sources resolve a defaultBranch so they install
+  // without an explicit --branch.
+  const effectiveBranch = branch || resolved.defaultBranch || null;
 
   let downloadResult;
-  if (branch) {
-    downloadResult = downloadBranch(resolved.repo, branch, skillDir);
+  if (resolved.isLocal) {
+    downloadResult = installLocal(resolved.localPath, skillDir);
+  } else if (effectiveBranch) {
+    downloadResult = downloadBranch(resolved.repo, effectiveBranch, skillDir);
   } else if (resolved.version) {
     downloadResult = downloadArchive(resolved.repo, resolved.version, skillDir);
   } else {

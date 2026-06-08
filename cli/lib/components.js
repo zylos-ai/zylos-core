@@ -45,8 +45,23 @@ export async function resolveTarget(nameOrUrl) {
     version = nameOrUrl.substring(atIndex + 1);
   }
 
-  // Helper: try fetchLatestTag, capture network errors separately
+  // Local source: an existing directory or .tar.gz/.tgz archive on disk.
+  // Checked before the org/repo branch so a path like "./foo" or
+  // "/tmp/x.tar.gz" isn't misread as "org/repo". Bare registry names (no
+  // slash and not an archive) are never treated as local.
+  if ((target.includes('/') || /\.(tar\.gz|tgz)$/i.test(target)) && fs.existsSync(path.resolve(target))) {
+    const base = path.basename(target).replace(/\.(tar\.gz|tgz)$/i, '');
+    const name = base.replace(/^zylos-/, '');
+    return { name, repo: null, version: null, fetchError: null, isThirdParty: true, isLocal: true, localPath: path.resolve(target) };
+  }
+
+  // Helper: try fetchLatestTag, capture network errors separately.
+  // GitLab repos (repo "gitlab:<group>/<project>") skip the lookup — fetchLatestTag
+  // hits the GitHub API and would 404; caller must use --branch.
   function tryFetchLatestTag(repo) {
+    if (typeof repo === 'string' && repo.startsWith('gitlab:')) {
+      return { version: null, fetchError: 'GitLab repo: use --branch <name> to install' };
+    }
     try {
       return { version: fetchLatestTag(repo) || null, fetchError: null };
     } catch (err) {
@@ -61,6 +76,20 @@ export async function resolveTarget(nameOrUrl) {
     const name = repo.split('/')[1].replace(/^zylos-/, '');
     const tag = version ? { version, fetchError: null } : tryFetchLatestTag(repo);
     return { name, repo, version: tag.version, fetchError: tag.fetchError, isThirdParty: !repo.startsWith('zylos-ai/') };
+  }
+
+  // Any other http(s) URL → treat as a GitLab repo:
+  //   https://<host>/<group>/<project>[.git]  →  repo "gitlab:<group>/<project>"
+  // GitLab has no GitHub-style tag API wired here, so default to branch main
+  // (no --branch needed). The URL's host overrides ZYLOS_GITLAB_HOST so any
+  // GitLab instance works, not just the default.
+  const urlMatch = target.match(/^https?:\/\/([^/]+)\/(.+?)\/?$/);
+  if (urlMatch) {
+    const host = urlMatch[1];
+    const repoPath = urlMatch[2].replace(/\.git$/, '');
+    const name = repoPath.split('/').pop().replace(/^zylos-/, '');
+    if (host && host !== 'git.coco.xyz') process.env.ZYLOS_GITLAB_HOST = host;
+    return { name, repo: `gitlab:${repoPath}`, version, fetchError: null, isThirdParty: true, defaultBranch: 'main' };
   }
 
   // Check if it's in format org/repo

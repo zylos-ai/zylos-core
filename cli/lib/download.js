@@ -9,6 +9,7 @@ import { execFileSync } from 'node:child_process';
 import os from 'node:os';
 import { getGitHubToken, sanitizeError } from './github.js';
 import { copyTree } from './fs-utils.js';
+import { readEnvFile } from './env.js';
 
 function getWritableTmpBase() {
   let base = os.tmpdir();
@@ -39,6 +40,12 @@ function createDownloadTmpDir() {
  * @param {string} tarballPath - Destination file path for the tarball
  */
 function curlDownload(repo, ref, refType, tarballPath) {
+  // GitLab support: a repo of the form `gitlab:<group>/<project>` routes to the
+  // GitLab archive API (PRIVATE-TOKEN auth) instead of GitHub.
+  if (typeof repo === 'string' && repo.startsWith('gitlab:')) {
+    return curlGitlabDownload(repo.slice('gitlab:'.length), ref, tarballPath);
+  }
+
   // 1. Try public endpoint first (no auth needed for public repos)
   const publicUrl = refType === 'tag'
     ? `https://github.com/${repo}/archive/refs/tags/${ref}.tar.gz`
@@ -70,6 +77,46 @@ function curlDownload(repo, ref, refType, tarballPath) {
     timeout: 60000,
     stdio: 'pipe',
   });
+}
+
+/**
+ * Download a GitLab archive tarball via the GitLab API.
+ * Authenticates with a PAT from GITLAB_TOKEN / ZYLOS_GITLAB_TOKEN (env or
+ * ~/zylos/.env). Host is git.coco.xyz unless overridden via ZYLOS_GITLAB_HOST.
+ *
+ * @param {string} repoPath - GitLab project path "group/project" (no "gitlab:" prefix)
+ * @param {string} ref - Git ref (tag or branch) — passed as ?sha=
+ * @param {string} tarballPath - Destination file path
+ */
+function curlGitlabDownload(repoPath, ref, tarballPath) {
+  const host = process.env.ZYLOS_GITLAB_HOST || 'git.coco.xyz';
+  const token = getGitlabToken();
+  if (!token) {
+    throw new Error(
+      'GitLab repo install requires a token. Set GITLAB_TOKEN or ZYLOS_GITLAB_TOKEN ' +
+      '(env var or ~/zylos/.env entry).'
+    );
+  }
+  const encoded = encodeURIComponent(repoPath);
+  const apiUrl = `https://${host}/api/v4/projects/${encoded}/repository/archive.tar.gz?sha=${encodeURIComponent(ref)}`;
+  execFileSync('curl', ['-fsSL', '-H', `PRIVATE-TOKEN: ${token}`, '-o', tarballPath, apiUrl], {
+    timeout: 60000,
+    stdio: 'pipe',
+  });
+}
+
+let _gitlabTokenCache;
+function getGitlabToken() {
+  if (_gitlabTokenCache !== undefined) return _gitlabTokenCache;
+  const envTok = process.env.GITLAB_TOKEN || process.env.ZYLOS_GITLAB_TOKEN;
+  if (envTok) { _gitlabTokenCache = envTok; return _gitlabTokenCache; }
+  try {
+    const env = readEnvFile();
+    const fromEnv = env.get('GITLAB_TOKEN') || env.get('ZYLOS_GITLAB_TOKEN');
+    if (fromEnv) { _gitlabTokenCache = fromEnv; return _gitlabTokenCache; }
+  } catch { /* no ~/zylos/.env */ }
+  _gitlabTokenCache = null;
+  return _gitlabTokenCache;
 }
 
 /**
@@ -134,6 +181,60 @@ export function copyLocal(localPath, destDir) {
     return { success: true };
   } catch (err) {
     return { success: false, error: `Failed to copy from ${srcPath}: ${err.message}` };
+  }
+}
+
+/**
+ * Install a component from a local source — either a directory or a
+ * `.tar.gz` / `.tgz` archive. Lets `zylos add ./comp` or
+ * `zylos add ./comp.tar.gz` work without any remote (GitHub/GitLab) fetch.
+ *
+ * For archives: extracted to a temp dir; if the archive has a single
+ * top-level wrapper directory (the common case) its contents are used,
+ * otherwise the archive root is used. Then copied into destDir.
+ *
+ * @param {string} srcPath - Local path to a directory or .tar.gz/.tgz file
+ * @param {string} destDir - Destination directory
+ * @returns {{ success: boolean, extractedDir?: string, error?: string }}
+ */
+export function installLocal(srcPath, destDir) {
+  const abs = path.resolve(srcPath);
+  if (!fs.existsSync(abs)) {
+    return { success: false, error: `Local source not found: ${abs}` };
+  }
+
+  // Directory → straight copy.
+  if (fs.statSync(abs).isDirectory()) {
+    const r = copyLocal(abs, destDir);
+    return r.success ? { success: true, extractedDir: destDir } : r;
+  }
+
+  // File → must be a gzip tarball.
+  if (!/\.(tar\.gz|tgz)$/i.test(abs)) {
+    return { success: false, error: `Local file must be a .tar.gz/.tgz archive or a directory: ${abs}` };
+  }
+
+  let tmpDir;
+  try {
+    tmpDir = createDownloadTmpDir();
+  } catch (err) {
+    return { success: false, error: `Failed to prepare temp dir: ${sanitizeError(err.message)}` };
+  }
+  try {
+    fs.mkdirSync(destDir, { recursive: true });
+    execFileSync('tar', ['xzf', abs, '-C', tmpDir], { timeout: 30000, stdio: 'pipe' });
+    // Detect a single wrapper directory (e.g. "component-name/").
+    const entries = fs.readdirSync(tmpDir);
+    let root = tmpDir;
+    if (entries.length === 1 && fs.statSync(path.join(tmpDir, entries[0])).isDirectory()) {
+      root = path.join(tmpDir, entries[0]);
+    }
+    copyTree(root, destDir, { excludes: ['.git'] });
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    return { success: true, extractedDir: destDir };
+  } catch (err) {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    return { success: false, error: `Failed to install local archive ${abs}: ${err.message}` };
   }
 }
 
