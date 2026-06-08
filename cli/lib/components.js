@@ -78,6 +78,20 @@ export async function resolveTarget(nameOrUrl) {
     return { name, repo, version: tag.version, fetchError: tag.fetchError, isThirdParty: !repo.startsWith('zylos-ai/') };
   }
 
+  // Any other http(s) URL → treat as a GitLab repo:
+  //   https://<host>/<group>/<project>[.git]  →  repo "gitlab:<group>/<project>"
+  // GitLab has no GitHub-style tag API wired here, so default to branch main
+  // (no --branch needed). The URL's host overrides ZYLOS_GITLAB_HOST so any
+  // GitLab instance works, not just the default.
+  const urlMatch = target.match(/^https?:\/\/([^/]+)\/(.+?)\/?$/);
+  if (urlMatch) {
+    const host = urlMatch[1];
+    const repoPath = urlMatch[2].replace(/\.git$/, '');
+    const name = repoPath.split('/').pop().replace(/^zylos-/, '');
+    if (host && host !== 'git.coco.xyz') process.env.ZYLOS_GITLAB_HOST = host;
+    return { name, repo: `gitlab:${repoPath}`, version, fetchError: null, isThirdParty: true, defaultBranch: 'main' };
+  }
+
   // Check if it's in format org/repo
   if (target.includes('/')) {
     const name = target.split('/')[1].replace(/^zylos-/, '');

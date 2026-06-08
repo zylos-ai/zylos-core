@@ -269,11 +269,15 @@ export async function addComponent(args) {
     : (branch ? `${resolved.name} (branch: ${branch})` : resolved.name);
   if (!jsonOutput) console.log(`\n${cyan(resolved.isLocal ? 'Installing' : 'Downloading')} ${bold(downloadLabel)}...`);
 
+  // GitLab (and other non-tag) sources resolve a defaultBranch so they install
+  // without an explicit --branch.
+  const effectiveBranch = branch || resolved.defaultBranch || null;
+
   let downloadResult;
   if (resolved.isLocal) {
     downloadResult = installLocal(resolved.localPath, skillDir);
-  } else if (branch) {
-    downloadResult = downloadBranch(resolved.repo, branch, skillDir);
+  } else if (effectiveBranch) {
+    downloadResult = downloadBranch(resolved.repo, effectiveBranch, skillDir);
   } else if (resolved.version) {
     downloadResult = downloadArchive(resolved.repo, resolved.version, skillDir);
   } else {
