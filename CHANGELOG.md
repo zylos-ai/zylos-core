@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`zylos add` local source support**: `add <path>` now accepts a local directory or a `.tar.gz`/`.tgz` archive (e.g. `zylos add ./my-component.tar.gz`). `resolveTarget` detects an existing local path before the org/repo branch; `installLocal()` copies a directory or extracts an archive (auto-detecting a single top-level wrapper dir). No remote fetch needed.
+- **GitLab source support**: a component repo of the form `gitlab:<group>/<project>` routes to the GitLab archive API (`/api/v4/projects/{id}/repository/archive.tar.gz`) with `PRIVATE-TOKEN` auth instead of GitHub. Token from `GITLAB_TOKEN`/`ZYLOS_GITLAB_TOKEN` (env or `~/zylos/.env`); host `git.coco.xyz` (override `ZYLOS_GITLAB_HOST`). Tag lookup is skipped for gitlab repos (use `--branch`); `zylos add` display shows the GitLab URL.
+
 ## [0.5.2] - 2026-06-02
 
 ### Fixed
