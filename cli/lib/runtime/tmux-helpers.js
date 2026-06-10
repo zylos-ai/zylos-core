@@ -154,6 +154,73 @@ export function getProcessName(pid) {
 }
 
 /**
+ * Get the full command line for a PID.
+ * Unlike `comm=`, this includes script paths and arguments — needed on macOS,
+ * where shebang CLIs (claude, codex) report the interpreter (e.g. "node") as
+ * their process name instead of the script name.
+ * @param {number} pid
+ * @returns {string|null}
+ */
+export function getProcessCommand(pid) {
+  try {
+    return execFileSync('ps', ['-p', String(pid), '-o', 'command='], {
+      encoding: 'utf8',
+      timeout: CMD_TIMEOUT,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Get direct child PIDs of a process.
+ * @param {number} parentPid
+ * @returns {number[]}
+ */
+export function getChildPids(parentPid) {
+  try {
+    const out = execFileSync('pgrep', ['-P', String(parentPid)], {
+      encoding: 'utf8',
+      timeout: CMD_TIMEOUT,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    return out.trim().split('\n').filter(Boolean).map(Number);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Check whether an agent binary (e.g. "claude", "codex") is running anywhere
+ * in the pane's process tree, walking from the pane process down.
+ *
+ * A single comm/pgrep check is not portable: the pane process is usually the
+ * tmux launcher (comm "node" or "MainThread"), macOS reports the interpreter
+ * for shebang CLIs, and a shell wrapper can push the agent one generation
+ * deeper. At each level this matches either the process name or the full
+ * command line (binary name as a path segment or standalone word).
+ *
+ * @param {number} panePid
+ * @param {string} name - agent binary name, e.g. "claude"
+ * @param {number} [maxDepth=3] - generations to descend below the pane process
+ * @returns {boolean}
+ */
+export function isAgentInProcessTree(panePid, name, maxDepth = 3) {
+  const re = new RegExp(`(^|[/\\s])${name}(\\s|$)`);
+  let frontier = [panePid];
+  for (let depth = 0; depth <= maxDepth && frontier.length > 0; depth++) {
+    for (const pid of frontier) {
+      if (getProcessName(pid) === name) return true;
+      const cmd = getProcessCommand(pid);
+      if (cmd && re.test(cmd)) return true;
+    }
+    frontier = frontier.flatMap((pid) => getChildPids(pid));
+  }
+  return false;
+}
+
+/**
  * Check if a PID has a child matching a pattern.
  * @param {number} parentPid
  * @param {string} pattern
