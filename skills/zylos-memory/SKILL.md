@@ -49,6 +49,18 @@ When triggered, run it before handling queued user messages.
 
 Both launch a background subagent using the current runtime's supported subagent mechanism with this file's Sync Flow as the prompt.
 
+### Codex Background Execution
+
+In Codex, when the current session has a native background-agent capability,
+Memory Sync must use that capability directly. Do not create PM2 services,
+run `pm2 start ... codex exec ...`, or fork an extra `codex exec` sidecar.
+PM2 is only a fallback when no native background-agent capability is
+available; if used, explicitly record the reason in the handoff/status.
+
+Before starting Memory Sync, check for existing `memory-sync-*` PM2 entries.
+If one is running, do not start another sync writer. If only stopped entries
+exist, report them as historical records and do not create a replacement.
+
 ### Sync Flow
 
 1. Rotate session log if needed:
