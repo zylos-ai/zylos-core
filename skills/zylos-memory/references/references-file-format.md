@@ -11,7 +11,7 @@ Always loaded at session start via SessionStart hook.
 
 ## Size Guideline
 
-~2KB. Pointer/index only, not prose.
+~16KB. Pointer/index only, not prose.
 
 ## Update Frequency
 

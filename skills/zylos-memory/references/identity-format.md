@@ -13,7 +13,7 @@ Always loaded at session start via SessionStart hook.
 
 ## Size Guideline
 
-~4KB (always in context).
+~16KB (always in context).
 
 ## Update Frequency
 

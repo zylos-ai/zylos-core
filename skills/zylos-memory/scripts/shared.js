@@ -12,9 +12,9 @@ export const MEMORY_DIR = path.join(ZYLOS_DIR, 'memory');
 export const SESSIONS_DIR = path.join(MEMORY_DIR, 'sessions');
 
 export const BUDGETS = {
-  'identity.md': 4096,
+  'identity.md': 16 * 1024,
   'state.md': 16 * 1024,
-  'references.md': 2048
+  'references.md': 16 * 1024
 };
 
 export const REFERENCE_FILES = [

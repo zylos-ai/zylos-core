@@ -99,7 +99,11 @@ worked example in `examples/`:
 - `rotate-session.js`: rotates `sessions/current.md` at day boundary.
 - `daily-commit.js`: local git snapshot for `memory/` if changed.
 - `consolidate.js`: JSON consolidation report (sizes, age, budget checks).
+  Use for scheduled or deliberate memory maintenance. Review the report and
+  apply the Consolidation Review rules below.
 - `memory-status.js`: quick health summary.
+  Use when you need a fast manual check of core file sizes and budget status.
+  If it reports `OVER`, run `consolidate.js` and perform the needed cleanup.
 
 C4 scripts used by sync flow (provided by comm-bridge skill):
 - `c4-fetch.js --unsummarized`: fetch unsummarized conversations and range.
@@ -113,7 +117,16 @@ Review the report and apply these rules:
 ### Core File Budgets
 - Files over 100% budget: summarize and trim older entries.
   Move historical content to `reference/` or `archive/`.
-- `state.md` is the strictest — must stay under 16KB.
+- `identity.md`, `state.md`, and `references.md` must stay under 16KB.
+- Apply file-specific cleanup:
+  - `identity.md`: keep only stable identity traits, principles, durable
+    collaboration style, and digital asset references. Move operational state
+    and one-off lessons elsewhere.
+  - `state.md`: keep active focus, pending tasks, and recent completions.
+    Move completed or historical detail to `sessions/current.md` or
+    `reference/`.
+  - `references.md`: keep pointers and lookup facts only. Move prose,
+    project history, and detailed decisions to `reference/`.
 
 ### Session Logs
 - Logs in `archiveCandidatesOlderThan30Days`: move from `sessions/` to `archive/`.
