@@ -31,8 +31,7 @@ import {
   tmuxPasteBuffer,
   tmuxDeleteBuffer,
   tmuxNewSession,
-  getProcessName,
-  hasChildProcess,
+  isAgentInProcessTree,
 } from './tmux-helpers.js';
 import { buildCleanEnv, buildCompatEnv, loadRuntimeEnvManifest, writeLaunchSpec } from './tmux-env.js';
 
@@ -164,10 +163,7 @@ export class ClaudeAdapter extends RuntimeAdapter {
     const panePid = tmuxGetPanePid(SESSION);
     if (!panePid) return false;
 
-    const name = getProcessName(panePid);
-    if (name === 'claude') return true;
-
-    return hasChildProcess(panePid, 'claude');
+    return isAgentInProcessTree(panePid, 'claude');
   }
 
   /**
