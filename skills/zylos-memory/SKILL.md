@@ -99,8 +99,9 @@ worked example in `examples/`:
 - `rotate-session.js`: rotates `sessions/current.md` at day boundary.
 - `daily-commit.js`: local git snapshot for `memory/` if changed.
 - `consolidate.js`: JSON consolidation report (sizes, age, budget checks).
-  Use for scheduled or deliberate memory maintenance. Review the report and
-  apply the Consolidation Review rules below.
+  Use for deliberate memory maintenance, or for scheduler-triggered
+  consolidation when such a task is configured. Review the report and apply
+  the Consolidation Review rules below.
 - `memory-status.js`: quick health summary.
   Use when you need a fast manual check of core file sizes and budget status.
   If it reports `OVER`, run `consolidate.js` and perform the needed cleanup.
