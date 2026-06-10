@@ -75,7 +75,7 @@ describe('BUDGETS', () => {
   });
 
   it('contains state.md budget', () => {
-    assert.equal(BUDGETS['state.md'], 4096);
+    assert.equal(BUDGETS['state.md'], 16 * 1024);
   });
 
   it('contains references.md budget', () => {

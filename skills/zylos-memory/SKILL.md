@@ -113,7 +113,7 @@ Review the report and apply these rules:
 ### Core File Budgets
 - Files over 100% budget: summarize and trim older entries.
   Move historical content to `reference/` or `archive/`.
-- `state.md` is the strictest — must stay under 4KB.
+- `state.md` is the strictest — must stay under 16KB.
 
 ### Session Logs
 - Logs in `archiveCandidatesOlderThan30Days`: move from `sessions/` to `archive/`.

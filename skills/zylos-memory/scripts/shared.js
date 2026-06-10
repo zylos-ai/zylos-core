@@ -13,7 +13,7 @@ export const SESSIONS_DIR = path.join(MEMORY_DIR, 'sessions');
 
 export const BUDGETS = {
   'identity.md': 4096,
-  'state.md': 4096,
+  'state.md': 16 * 1024,
   'references.md': 2048
 };
 
