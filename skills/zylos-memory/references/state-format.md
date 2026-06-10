@@ -11,7 +11,7 @@ Always loaded at session start via SessionStart hook.
 
 ## Size Guideline
 
-~4KB max. This file is in every session's context. Every line must earn
+~16KB max. This file is in every session's context. Every line must earn
 its place.
 
 ## Update Frequency

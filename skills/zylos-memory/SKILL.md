@@ -49,6 +49,18 @@ When triggered, run it before handling queued user messages.
 
 Both launch a background subagent using the current runtime's supported subagent mechanism with this file's Sync Flow as the prompt.
 
+### Codex Background Execution
+
+In Codex, when the current session has a native background-agent capability,
+Memory Sync must use that capability directly. Do not create PM2 services,
+run `pm2 start ... codex exec ...`, or fork an extra `codex exec` sidecar.
+PM2 is only a fallback when no native background-agent capability is
+available; if used, explicitly record the reason in the handoff/status.
+
+Before starting Memory Sync, check for existing `memory-sync-*` PM2 entries.
+If one is running, do not start another sync writer. If only stopped entries
+exist, report them as historical records and do not create a replacement.
+
 ### Sync Flow
 
 1. Rotate session log if needed:
@@ -99,7 +111,12 @@ worked example in `examples/`:
 - `rotate-session.js`: rotates `sessions/current.md` at day boundary.
 - `daily-commit.js`: local git snapshot for `memory/` if changed.
 - `consolidate.js`: JSON consolidation report (sizes, age, budget checks).
+  Use for deliberate memory maintenance, or for scheduler-triggered
+  consolidation when such a task is configured. Review the report and apply
+  the Consolidation Review rules below.
 - `memory-status.js`: quick health summary.
+  Use when you need a fast manual check of core file sizes and budget status.
+  If it reports `OVER`, run `consolidate.js` and perform the needed cleanup.
 
 C4 scripts used by sync flow (provided by comm-bridge skill):
 - `c4-fetch.js --unsummarized`: fetch unsummarized conversations and range.
@@ -113,7 +130,16 @@ Review the report and apply these rules:
 ### Core File Budgets
 - Files over 100% budget: summarize and trim older entries.
   Move historical content to `reference/` or `archive/`.
-- `state.md` is the strictest — must stay under 4KB.
+- `identity.md`, `state.md`, and `references.md` must stay under 16KB.
+- Apply file-specific cleanup:
+  - `identity.md`: keep only stable identity traits, principles, durable
+    collaboration style, and digital asset references. Move operational state
+    and one-off lessons elsewhere.
+  - `state.md`: keep active focus, pending tasks, and recent completions.
+    Move completed or historical detail to `sessions/current.md` or
+    `reference/`.
+  - `references.md`: keep pointers and lookup facts only. Move prose,
+    project history, and detailed decisions to `reference/`.
 
 ### Session Logs
 - Logs in `archiveCandidatesOlderThan30Days`: move from `sessions/` to `archive/`.

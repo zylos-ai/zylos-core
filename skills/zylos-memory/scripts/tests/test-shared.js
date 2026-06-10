@@ -71,15 +71,15 @@ describe('dateInTimeZone', () => {
 // ---------------------------------------------------------------------------
 describe('BUDGETS', () => {
   it('contains identity.md budget', () => {
-    assert.equal(BUDGETS['identity.md'], 4096);
+    assert.equal(BUDGETS['identity.md'], 16 * 1024);
   });
 
   it('contains state.md budget', () => {
-    assert.equal(BUDGETS['state.md'], 4096);
+    assert.equal(BUDGETS['state.md'], 16 * 1024);
   });
 
   it('contains references.md budget', () => {
-    assert.equal(BUDGETS['references.md'], 2048);
+    assert.equal(BUDGETS['references.md'], 16 * 1024);
   });
 
   it('has exactly 3 entries', () => {
