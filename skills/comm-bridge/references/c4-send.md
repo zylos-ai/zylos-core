@@ -36,12 +36,9 @@ EOF
 cat <<'EOF' | node ~/zylos/.claude/skills/comm-bridge/scripts/c4-send.js lark "chat_xxx|type:group|root:msg_yyy"
 Report ready. Contains **markdown** and "special chars".
 EOF
-
-# Broadcast to all subscribers (no endpoint)
-cat <<'EOF' | node ~/zylos/.claude/skills/comm-bridge/scripts/c4-send.js telegram
-Hello everyone!
-EOF
 ```
+
+Both `<channel>` and `<endpoint_id>` are required — every channel routes to a specific destination, so there is no channel-wide broadcast form.
 
 If the message body itself may contain a line like `EOF`, use a different terminator token for the wrapper, for example:
 

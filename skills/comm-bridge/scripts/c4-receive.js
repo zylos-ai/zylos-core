@@ -247,8 +247,12 @@ function emitError(json, code, message, exitCode = 1) {
 }
 
 function sendUnhealthyMessage(channel, endpoint, message) {
-  const args = [path.join(__dirname, 'c4-send.js'), channel];
-  if (endpoint) args.push(endpoint);
+  // c4-send requires an endpoint to route to; without one there is nothing to
+  // deliver to, so fail cleanly instead of spawning an invalid invocation.
+  if (!endpoint) {
+    return { status: 1, stdout: '', stderr: 'no endpoint to deliver status notice', error: new Error('missing endpoint') };
+  }
+  const args = [path.join(__dirname, 'c4-send.js'), channel, endpoint];
   const result = spawnSync('node', args, {
     input: message,
     encoding: 'utf8',

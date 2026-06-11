@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **C4 send requires an endpoint**: `c4-send.js` now requires both `<channel>` and `<endpoint_id>` — every channel routes to a specific destination, so the channel-wide "broadcast" form (`c4-send <channel> <message>` / `c4-send <channel>` + stdin) has been removed. Only the real IM channels' actual behavior is reflected: telegram/lark/wechat/shell already rejected a missing endpoint, and web-console's no-endpoint branch (the sole consumer) was a no-op. Making the endpoint mandatory also removes the channel-vs-message argument ambiguity that previously caused `c4-send <channel> <message>` to fail with "Message is required" when run from any non-TTY context (test/cron/spawn): the second argument is now unambiguously the endpoint, with the message taken from the 3rd argument or stdin. `web-console/scripts/send.js` and `c4-receive.js`'s status-notice sender were updated accordingly, and the previously-failing `c4-send` CLI tests were rewritten to the endpoint-required contract (with added coverage for heredoc mode and the missing-message case).
+
 ## [0.5.2] - 2026-06-02
 
 ### Fixed
