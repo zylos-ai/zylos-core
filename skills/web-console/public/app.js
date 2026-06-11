@@ -462,7 +462,7 @@ class ZylosConsole {
         }
       }
       if (Array.isArray(msg.attachments) && msg.attachments.length > 0) {
-        const temp = this.messagesContainer.querySelector('.message.user.sending[data-temp-id]');
+        const temp = this.messagesContainer.querySelector('.message.user.sending[data-has-attachments="true"]');
         if (temp) temp.remove();
       }
     }
@@ -492,6 +492,7 @@ class ZylosConsole {
     const div = document.createElement('div');
     div.className = 'message user sending';
     div.dataset.tempId = tempId;
+    div.dataset.hasAttachments = attachments.length > 0 ? 'true' : 'false';
 
     const contentDiv = this.renderMessageContent({
       direction: 'in',

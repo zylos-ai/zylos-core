@@ -45,7 +45,7 @@ const PORT = process.env.WEB_CONSOLE_PORT || 3456;
 
 // Paths
 const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
-const SKILLS_DIR = path.join(os.homedir(), 'zylos', '.claude', 'skills');
+const SKILLS_DIR = process.env.WEB_CONSOLE_SKILLS_DIR || path.join(os.homedir(), 'zylos', '.claude', 'skills');
 const DB_DIR = path.join(ZYLOS_DIR, 'comm-bridge');
 const DB_PATH = path.join(DB_DIR, 'c4.db');
 const STATUS_FILE = path.join(ZYLOS_DIR, 'activity-monitor', 'agent-status.json');
@@ -329,13 +329,13 @@ async function sendConsoleMessage({ content, attachmentIds, sessionId }) {
   }
 
   const combined = buildSendContent(content, attachmentEntries);
+  await sendToC4(combined);
   if (ids.length > 0 && !uploadRegistry.consumeMany(ids, sessionId)) {
     const err = new Error('Attachment upload id is invalid or expired');
     err.status = 400;
     err.code = 'invalid_attachment';
     throw err;
   }
-  await sendToC4(combined);
   return {
     content: combined,
     attachments: attachmentEntries.map((entry) => ({
