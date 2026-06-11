@@ -1,0 +1,13 @@
+{
+  "name": "zylos-multi-session",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Multi-session runtime phase 1: worker registry + team adapter for delegated work sessions",
+  "bin": {
+    "multi-session-cli": "./scripts/cli.js"
+  },
+  "scripts": {
+    "cli": "node scripts/cli.js",
+    "test": "node --test scripts/__tests__/*.test.js"
+  }
+}
