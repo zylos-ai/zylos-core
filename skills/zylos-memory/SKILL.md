@@ -42,6 +42,11 @@ This skill must be run via a runtime-appropriate background subagent mechanism. 
 Memory Sync is the highest-priority internal maintenance task.
 When triggered, run it before handling queued user messages.
 
+Memory Sync is maintenance-only. A sync subagent must not reply through C4,
+process user-facing tasks, modify business/project repositories, install or
+upgrade components, restart services, or apply runtime changes outside the
+sync flow below.
+
 ### Trigger Paths
 
 1. Session init: if C4 unsummarized count is over threshold, launch memory sync.
@@ -62,6 +67,12 @@ fork an extra `codex exec` sidecar: one-shot sync processes leave stopped
 services piling up in the PM2 list. If the session exposes no native
 background-agent capability, run the sync inline as a last resort and note
 that in the handoff/status.
+
+Before starting Memory Sync, check for existing in-flight sync work: if the
+runtime exposes background-agent status, check it for a running sync subagent
+and do not start another sync writer while one is in flight. If a PM2-based
+sync was ever created by older instructions, treat stopped `memory-sync-*`
+entries as historical records and do not create replacements.
 
 ### Sync Flow
 

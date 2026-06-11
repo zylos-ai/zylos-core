@@ -6,6 +6,11 @@ import { ProcSampler } from '../proc-sampler.js';
 import { ToolPipeline } from '../tool-pipeline.js';
 import { UsageMonitor } from '../usage-monitor.js';
 import { getToolRules } from '../tool-rules.js';
+import {
+  createMemorySyncControlPrompt,
+  markMemorySyncRequested,
+  shouldTriggerMemorySync,
+} from '../memory-sync-gate.js';
 
 export function createUsageMonitor(activeAdapter, options) {
   return new UsageMonitor(activeAdapter, options);
@@ -77,9 +82,10 @@ export function createGuardian(activeAdapter, activeToolPipeline, initialRuntime
 export function startContextMonitor(activeAdapter, {
   getUnsummarizedCount,
   checkpointThreshold,
-  getLastMemorySyncTriggerAt,
-  setLastMemorySyncTriggerAt,
+  loadContextMonitorState,
+  saveContextMonitorState,
   memorySyncCooldownSeconds,
+  memorySyncInFlightTtlSeconds,
   c4ControlPath,
   enqueueContextRotationHandoff,
   log,
@@ -99,24 +105,40 @@ export function startContextMonitor(activeAdapter, {
     onEarlyThreshold: async ({ used, ceiling, ratio }) => {
       const pct = Math.round(ratio * 100);
       const thresholdPct = Math.round(monitor.threshold * 100);
-      // Cooldown: prevent re-inject while sync is still running
       const now = Math.floor(Date.now() / 1000);
-      if ((now - getLastMemorySyncTriggerAt()) < memorySyncCooldownSeconds) {
-        return;
-      }
       const unsummarizedCount = getUnsummarizedCount();
-      if (unsummarizedCount <= checkpointThreshold) {
-        log(`Early memory sync skipped at ${pct}%: unsummarized=${unsummarizedCount} <= ${checkpointThreshold}`);
+      const state = loadContextMonitorState();
+      const gate = shouldTriggerMemorySync({
+        state,
+        now,
+        unsummarizedCount,
+        checkpointThreshold,
+        cooldownSeconds: memorySyncCooldownSeconds,
+        inFlightTtlSeconds: memorySyncInFlightTtlSeconds,
+      });
+
+      if (!gate.shouldEnqueue) {
+        if (gate.nextState !== state) {
+          saveContextMonitorState(gate.nextState);
+        }
+        log(`Early memory sync skipped at ${pct}%: ${gate.reason} (unsummarized=${unsummarizedCount}, threshold=${checkpointThreshold})`);
         return;
       }
       log(`Context at ${pct}% (approaching ${thresholdPct}% threshold), triggering early memory sync (unsummarized=${unsummarizedCount})`);
       try {
         execFileSync('node', [c4ControlPath, 'enqueue',
-          '--content', `Context usage at ${pct}% (approaching ${thresholdPct}% session-switch threshold). Run Memory Sync now as a background task so it completes before the session switch. Launch a background subagent for memory sync following ~/zylos/.claude/skills/zylos-memory/SKILL.md. Do NOT wait for completion — continue normal work.`,
+          '--content', createMemorySyncControlPrompt({ pct, thresholdPct }),
           '--priority', '2',
           '--no-ack-suffix',
         ], { encoding: 'utf8', stdio: 'pipe', timeout: 10_000 });
-        setLastMemorySyncTriggerAt(now);
+        saveContextMonitorState(markMemorySyncRequested({
+          state,
+          now,
+          unsummarizedCount,
+          pct,
+          thresholdPct,
+          inFlightTtlSeconds: memorySyncInFlightTtlSeconds,
+        }));
         log(`Early memory sync enqueued at ${pct}%`);
       } catch (err) {
         log(`Failed to enqueue early memory sync: ${err.message}`);
