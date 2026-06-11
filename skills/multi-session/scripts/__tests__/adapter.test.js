@@ -46,6 +46,17 @@ describe('delegate-prep', () => {
     assert.equal(getWorker(worker.id, regPath).id, worker.id);
   });
 
+  it('refuses to prep when projectDir lacks guardrails, succeeds after write-guardrails', () => {
+    const projectDir = path.join(tmpDir, 'guarded');
+    assert.throws(() => prep('guarded-task', { projectDir, zylosDir: '/home/test/zylos' }), (err) => {
+      assert.equal(err.code, 'GUARDRAILS_MISSING');
+      return true;
+    });
+    writeGuardrails(projectDir, '/home/test/zylos');
+    const { worker } = prep('guarded-task', { projectDir, zylosDir: '/home/test/zylos' });
+    assert.equal(worker.status, 'pending');
+  });
+
   it('rejects invalid slugs', () => {
     assert.throws(() => prep('!!!'), /Invalid task slug/);
   });

@@ -241,5 +241,5 @@ try {
   main();
 } catch (err) {
   console.error(`Error: ${err.message}`);
-  process.exit(err.code === 'CAP_REACHED' ? 2 : 1);
+  process.exit(err.code === 'CAP_REACHED' ? 2 : err.code === 'GUARDRAILS_MISSING' ? 3 : 1);
 }

@@ -151,7 +151,7 @@ export function renderPrompt(worker, { projectDir } = {}) {
  * Prepare a delegation: enforce the cap, create the delivery dir, register
  * the worker, return { worker, prompt }.
  */
-export function delegatePrep(taskSlug, { task, team, teammate, projectDir, registryPath = REGISTRY_PATH, deliveriesDir = DELIVERIES_DIR } = {}) {
+export function delegatePrep(taskSlug, { task, team, teammate, projectDir, registryPath = REGISTRY_PATH, deliveriesDir = DELIVERIES_DIR, zylosDir = ZYLOS_DIR } = {}) {
   const active = activeWorkers(registryPath);
   if (active.length >= MAX_ACTIVE_WORKERS) {
     const err = new Error(
@@ -160,6 +160,16 @@ export function delegatePrep(taskSlug, { task, team, teammate, projectDir, regis
     );
     err.code = 'CAP_REACHED';
     throw err;
+  }
+  if (projectDir) {
+    const guard = checkGuardrails(projectDir, zylosDir);
+    if (!guard.ok) {
+      const err = new Error(
+        `Guardrails missing for ${projectDir}: ${guard.problems.join('; ')}. Run write-guardrails first.`
+      );
+      err.code = 'GUARDRAILS_MISSING';
+      throw err;
+    }
   }
   const slug = slugify(taskSlug);
   const deliveryDir = path.join(deliveriesDir, `${isoDate()}-${slug}`);
