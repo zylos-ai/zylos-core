@@ -201,4 +201,22 @@ describe('UploadRegistry', () => {
     now = 1200;
     expect(registry.consumeMany([expiring.id], 's1')).toBeNull();
   });
+
+  test('restores consumed entries with their original id and expiry', () => {
+    let now = 1000;
+    const registry = new UploadRegistry({ ttlMs: 100, now: () => now });
+    const entry = registry.add({ sessionId: 's1', path: '/tmp/a.txt' });
+    const consumed = registry.consumeMany([entry.id], 's1');
+
+    expect(registry.consumeMany([entry.id], 's1')).toBeNull();
+    registry.restoreMany(consumed);
+    expect(registry.getMany([entry.id], 's1')).toEqual([expect.objectContaining({
+      id: entry.id,
+      path: '/tmp/a.txt',
+      expiresAt: 1100
+    })]);
+
+    now = 1200;
+    expect(registry.consumeMany([entry.id], 's1')).toBeNull();
+  });
 });

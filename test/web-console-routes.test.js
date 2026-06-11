@@ -244,6 +244,26 @@ describe('web-console attachment routes', () => {
     expect(rows(ctx.dbPath).at(-1).content).toContain('short\n[attachment:file ');
   });
 
+  test('concurrent sends with the same upload id deliver exactly once', async () => {
+    ctx = await startServer();
+    const upload = await uploadFile(ctx, { name: 'report.txt', content: 'abc' });
+    const payload = { message: '', attachments: [upload.body.id] };
+
+    const results = await Promise.all([
+      sendHttp(ctx, payload),
+      sendHttp(ctx, payload)
+    ]);
+
+    const statuses = results.map((result) => result.res.status).sort();
+    expect(statuses).toEqual([200, 400]);
+    expect(results.map((result) => result.body.error).filter(Boolean)).toEqual(['invalid_attachment']);
+
+    const queuedRows = rows(ctx.dbPath);
+    expect(queuedRows).toHaveLength(1);
+    expect(queuedRows[0].content).toContain('[attachment:file ');
+    expect(queuedRows[0].content).toContain('name="report.txt" 3B]');
+  });
+
   test('GET /api/media/:messageId serves only revalidated media rows', async () => {
     ctx = await startServer();
     const imagePath = path.join(ctx.root, 'out.png');

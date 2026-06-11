@@ -329,11 +329,19 @@ async function sendConsoleMessage({ content, attachmentIds, sessionId }) {
   }
 
   const combined = buildSendContent(content, attachmentEntries);
-  await sendToC4(combined);
-  if (ids.length > 0 && !uploadRegistry.consumeMany(ids, sessionId)) {
-    const err = new Error('Attachment upload id is invalid or expired');
-    err.status = 400;
-    err.code = 'invalid_attachment';
+  if (ids.length > 0) {
+    attachmentEntries = uploadRegistry.consumeMany(ids, sessionId);
+    if (!attachmentEntries) {
+      const err = new Error('Attachment upload id is invalid or expired');
+      err.status = 400;
+      err.code = 'invalid_attachment';
+      throw err;
+    }
+  }
+  try {
+    await sendToC4(combined);
+  } catch (err) {
+    uploadRegistry.restoreMany(attachmentEntries);
     throw err;
   }
   return {

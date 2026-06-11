@@ -243,4 +243,10 @@ export class UploadRegistry {
     for (const id of ids) this.items.delete(id);
     return entries;
   }
+
+  restoreMany(entries) {
+    for (const entry of entries || []) {
+      if (entry?.id) this.items.set(entry.id, entry);
+    }
+  }
 }
