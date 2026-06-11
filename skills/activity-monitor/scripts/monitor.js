@@ -567,7 +567,8 @@ function getTmuxActivity() {
 
 const CHECKPOINT_THRESHOLD = 30;  // must match c4-config.js CHECKPOINT_THRESHOLD
 const MEMORY_SYNC_COOLDOWN_SECONDS = 600;  // 10 min — prevent re-inject while sync is running
-let lastMemorySyncTriggerAt = 0;
+const MEMORY_SYNC_IN_FLIGHT_TTL_SECONDS = 3600;  // 1 hour safety TTL for delivered-but-unacked sync prompts
+const CONTEXT_MONITOR_STATE_FILE = path.join(MONITOR_DIR, 'context-monitor-state.json');
 
 function getUnsummarizedCount() {
   try {
@@ -589,6 +590,25 @@ function runC4Control(args) {
     const stdout = err.stdout ? String(err.stdout).trim() : '';
     const stderr = err.stderr ? String(err.stderr).trim() : '';
     return { ok: false, output: stdout || stderr || err.message };
+  }
+}
+
+function loadContextMonitorState() {
+  try {
+    return JSON.parse(fs.readFileSync(CONTEXT_MONITOR_STATE_FILE, 'utf8'));
+  } catch {
+    return {};
+  }
+}
+
+function saveContextMonitorState(state) {
+  try {
+    if (!fs.existsSync(MONITOR_DIR)) {
+      fs.mkdirSync(MONITOR_DIR, { recursive: true });
+    }
+    atomicWriteJson(CONTEXT_MONITOR_STATE_FILE, state);
+  } catch (err) {
+    log(`Failed to write context monitor state: ${err.message}`);
   }
 }
 
@@ -931,11 +951,10 @@ function startContextMonitor(activeAdapter) {
   return startRuntimeContextMonitor(activeAdapter, {
     getUnsummarizedCount,
     checkpointThreshold: CHECKPOINT_THRESHOLD,
-    getLastMemorySyncTriggerAt: () => lastMemorySyncTriggerAt,
-    setLastMemorySyncTriggerAt: (nextValue) => {
-      lastMemorySyncTriggerAt = nextValue;
-    },
+    loadContextMonitorState,
+    saveContextMonitorState,
     memorySyncCooldownSeconds: MEMORY_SYNC_COOLDOWN_SECONDS,
+    memorySyncInFlightTtlSeconds: MEMORY_SYNC_IN_FLIGHT_TTL_SECONDS,
     c4ControlPath: C4_CONTROL_PATH,
     enqueueContextRotationHandoff,
     log,

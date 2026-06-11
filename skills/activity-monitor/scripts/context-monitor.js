@@ -19,6 +19,11 @@ import { execFileSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import {
+  createMemorySyncControlPrompt,
+  markMemorySyncRequested,
+  shouldTriggerMemorySync,
+} from './memory-sync-gate.js';
 
 const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
 const AM_DIR = path.join(ZYLOS_DIR, 'activity-monitor');
@@ -40,6 +45,7 @@ const MEMORY_SYNC_RATIO = 0.8;
 const MEMORY_SYNC_THRESHOLD = Math.round(RESTART_THRESHOLD * MEMORY_SYNC_RATIO);
 const CHECKPOINT_THRESHOLD = 30;  // must match c4-config.js CHECKPOINT_THRESHOLD
 const MEMORY_SYNC_COOLDOWN_SECONDS = 600;  // 10 min — prevent re-inject while sync is running
+const MEMORY_SYNC_IN_FLIGHT_TTL_SECONDS = 3600;  // 1 hour safety TTL for delivered-but-unacked sync prompts
 
 function readThresholdFromConfig() {
   try {
@@ -145,26 +151,38 @@ function main(raw) {
  * Only triggers when there are enough unsummarized conversations to warrant sync.
  */
 function maybeEnqueueMemorySync(usedPct) {
-  // Cooldown: prevent re-inject while sync is still running
   const now = Math.floor(Date.now() / 1000);
   const state = loadState();
-  if (state && state.last_memory_sync_trigger_at &&
-      (now - state.last_memory_sync_trigger_at) < MEMORY_SYNC_COOLDOWN_SECONDS) {
-    return;
-  }
 
   // Check unsummarized conversation count — skip if below threshold
   const unsummarizedCount = getUnsummarizedCount();
-  if (unsummarizedCount <= CHECKPOINT_THRESHOLD) {
+  const gate = shouldTriggerMemorySync({
+    state,
+    now,
+    unsummarizedCount,
+    checkpointThreshold: CHECKPOINT_THRESHOLD,
+    cooldownSeconds: MEMORY_SYNC_COOLDOWN_SECONDS,
+    inFlightTtlSeconds: MEMORY_SYNC_IN_FLIGHT_TTL_SECONDS,
+  });
+
+  if (!gate.shouldEnqueue) {
+    if (gate.nextState !== state) {
+      saveState(gate.nextState);
+    }
+    log(`Early memory sync skipped at ${usedPct}%: ${gate.reason} (unsummarized=${unsummarizedCount}, threshold=${CHECKPOINT_THRESHOLD})`);
     return;
   }
 
+  const content = createMemorySyncControlPrompt({
+    pct: usedPct,
+    thresholdPct: RESTART_THRESHOLD,
+  });
   const MAX_RETRIES = 3;
   let enqueued = false;
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     try {
       execFileSync('node', [C4_CONTROL, 'enqueue',
-        '--content', `Context usage at ${usedPct}% (approaching ${RESTART_THRESHOLD}% session-switch threshold). Run Memory Sync now as a background task so it completes before the session switch. Launch a background subagent for memory sync following ~/zylos/.claude/skills/zylos-memory/SKILL.md. Do NOT wait for completion — continue normal work.`,
+        '--content', content,
         '--priority', '2',
         '--no-ack-suffix'
       ], { encoding: 'utf8', stdio: 'pipe' });
@@ -178,10 +196,14 @@ function maybeEnqueueMemorySync(usedPct) {
   }
 
   if (enqueued) {
-    saveState({
-      ...state,
-      last_memory_sync_trigger_at: now,
-    });
+    saveState(markMemorySyncRequested({
+      state,
+      now,
+      unsummarizedCount,
+      pct: usedPct,
+      thresholdPct: RESTART_THRESHOLD,
+      inFlightTtlSeconds: MEMORY_SYNC_IN_FLIGHT_TTL_SECONDS,
+    }));
   }
 }
 

@@ -55,7 +55,7 @@ The `ack via:` path is included in the message.
 
 ### Memory Sync
 
-When Memory Sync is triggered, launch a background subagent using the **Task tool** (`subagent_type: general-purpose`, `model: sonnet`, `run_in_background: true`). The subagent's prompt must instruct it to follow the full sync flow in `~/zylos/.claude/skills/zylos-memory/SKILL.md`. Do NOT use the Skill tool for this — it does not support background execution. Continue your main work without waiting.
+When Memory Sync is triggered, launch a background subagent using the **Task tool** (`subagent_type: general-purpose`, `model: sonnet`, `run_in_background: true`). The subagent's prompt must instruct it to follow the full sync flow in `~/zylos/.claude/skills/zylos-memory/SKILL.md`. The subagent is maintenance-only: it must not reply through C4, process user-facing tasks, modify business/project repositories, install or upgrade components, restart services, or apply runtime changes outside the memory sync flow. Do NOT use the Skill tool for this — it does not support background execution. Continue your main work without waiting.
 
 ### Available Skills
 
