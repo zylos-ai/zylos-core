@@ -8,6 +8,9 @@ class ZylosConsole {
     this.messageForm = document.getElementById('message-form');
     this.messageInput = document.getElementById('message-input');
     this.sendButton = document.getElementById('send-button');
+    this.attachButton = document.getElementById('attach-button');
+    this.fileInput = document.getElementById('file-input');
+    this.attachmentTray = document.getElementById('attachment-tray');
     this.statusDot = document.querySelector('.status-dot');
     this.statusText = document.querySelector('.status-text');
 
@@ -16,6 +19,8 @@ class ZylosConsole {
     this.reconnectAttempts = 0;
     this.maxReconnectAttempts = 10;
     this.pendingMessages = new Map(); // Track messages being sent
+    this.pendingAttachments = [];
+    this.maxAttachments = 5;
     this.timezone = timezone || null;
 
     // Detect base path for API/WS calls (handles /console/ proxy)
@@ -45,6 +50,15 @@ class ZylosConsole {
     this.messageForm.addEventListener('submit', (e) => this.handleSubmit(e));
     this.messageInput.addEventListener('keydown', (e) => this.handleKeydown(e));
     this.messageInput.addEventListener('input', () => this.autoResize());
+    this.attachButton.addEventListener('click', () => this.fileInput.click());
+    this.fileInput.addEventListener('change', (e) => {
+      this.addFiles(Array.from(e.target.files || []));
+      this.fileInput.value = '';
+    });
+    this.messagesContainer.addEventListener('dragover', (e) => this.handleDragOver(e));
+    this.messagesContainer.addEventListener('dragleave', () => this.messagesContainer.classList.remove('drag-over'));
+    this.messagesContainer.addEventListener('drop', (e) => this.handleDrop(e));
+    document.addEventListener('paste', (e) => this.handlePaste(e));
 
     // Load initial conversations via HTTP (for history)
     this.loadConversations();
@@ -223,30 +237,47 @@ class ZylosConsole {
     e.preventDefault();
 
     const message = this.messageInput.value.trim();
-    if (!message) return;
+    const readyAttachments = this.pendingAttachments.filter((item) => item.status === 'ready');
+    const uploading = this.pendingAttachments.some((item) => item.status === 'uploading');
+    if (!message && readyAttachments.length === 0) return;
+    if (uploading) return;
 
     // Disable input while sending
     this.sendButton.disabled = true;
+    this.attachButton.disabled = true;
     this.messageInput.value = '';
     this.autoResize();
 
     // Add temporary message
     const tempId = `temp-${Date.now()}`;
-    this.addTempMessage(message, tempId);
+    const tempAttachments = readyAttachments.map((item) => ({
+      kind: item.kind,
+      name: item.name,
+      size_label: this.formatBytes(item.size),
+      url: item.previewUrl || null
+    }));
+    this.addTempMessage(message, tempId, tempAttachments);
     this.pendingMessages.set(tempId, message);
+    this.pendingAttachments = this.pendingAttachments.filter((item) => item.status !== 'ready');
+    this.updateAttachmentTray();
+    const attachmentIds = readyAttachments.map((item) => item.id);
 
     try {
       if (this.ws && this.ws.readyState === WebSocket.OPEN) {
         // Send via WebSocket
         // Note: Don't mark as sent immediately - wait for server confirmation
         // or for message to appear via polling
-        this.ws.send(JSON.stringify({ type: 'send', content: message, tempId }));
+        const payload = { type: 'send', content: message, tempId };
+        if (attachmentIds.length > 0) payload.attachments = attachmentIds;
+        this.ws.send(JSON.stringify(payload));
       } else {
         // Fallback to HTTP
+        const body = { message };
+        if (attachmentIds.length > 0) body.attachments = attachmentIds;
         const response = await fetch(`${this.basePath}/api/send`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message }),
+          body: JSON.stringify(body),
         });
 
         const result = await response.json();
@@ -263,8 +294,139 @@ class ZylosConsole {
       this.markMessageError(tempId);
     } finally {
       this.sendButton.disabled = false;
+      this.attachButton.disabled = false;
       this.messageInput.focus();
     }
+  }
+
+  handleDragOver(e) {
+    if (!e.dataTransfer || !Array.from(e.dataTransfer.types || []).includes('Files')) return;
+    e.preventDefault();
+    this.messagesContainer.classList.add('drag-over');
+  }
+
+  handleDrop(e) {
+    if (!e.dataTransfer || e.dataTransfer.files.length === 0) return;
+    e.preventDefault();
+    this.messagesContainer.classList.remove('drag-over');
+    this.addFiles(Array.from(e.dataTransfer.files));
+  }
+
+  handlePaste(e) {
+    const files = Array.from(e.clipboardData?.files || []);
+    if (files.length === 0) return;
+    this.addFiles(files);
+  }
+
+  addFiles(files) {
+    const slots = this.maxAttachments - this.pendingAttachments.length;
+    files.slice(0, Math.max(0, slots)).forEach((file) => this.queueUpload(file));
+  }
+
+  queueUpload(file) {
+    const localId = `att-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const item = {
+      localId,
+      file,
+      name: file.name || 'attachment',
+      size: file.size,
+      kind: file.type.startsWith('image/') ? 'image' : 'file',
+      status: 'uploading',
+      progress: 0,
+      previewUrl: file.type.startsWith('image/') ? URL.createObjectURL(file) : null
+    };
+    this.pendingAttachments.push(item);
+    this.updateAttachmentTray();
+    this.uploadAttachment(item);
+  }
+
+  uploadAttachment(item) {
+    const form = new FormData();
+    form.append('file', item.file, item.name);
+
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', `${this.basePath}/api/upload`);
+    xhr.upload.addEventListener('progress', (event) => {
+      if (!event.lengthComputable) return;
+      item.progress = Math.round((event.loaded / event.total) * 100);
+      this.updateAttachmentTray();
+    });
+    xhr.addEventListener('load', () => {
+      let result = {};
+      try {
+        result = JSON.parse(xhr.responseText || '{}');
+      } catch {
+        // Keep generic error below.
+      }
+      if (xhr.status >= 200 && xhr.status < 300 && result.id) {
+        item.status = 'ready';
+        item.progress = 100;
+        item.id = result.id;
+        item.name = result.name || item.name;
+        item.kind = result.kind || item.kind;
+        item.size = result.size ?? item.size;
+      } else {
+        item.status = 'error';
+        item.error = result.message || result.error || 'Upload failed';
+      }
+      this.updateAttachmentTray();
+    });
+    xhr.addEventListener('error', () => {
+      item.status = 'error';
+      item.error = 'Upload failed';
+      this.updateAttachmentTray();
+    });
+    xhr.send(form);
+  }
+
+  removeAttachment(localId) {
+    const item = this.pendingAttachments.find((candidate) => candidate.localId === localId);
+    if (item?.previewUrl) URL.revokeObjectURL(item.previewUrl);
+    this.pendingAttachments = this.pendingAttachments.filter((candidate) => candidate.localId !== localId);
+    this.updateAttachmentTray();
+  }
+
+  updateAttachmentTray() {
+    this.attachmentTray.textContent = '';
+    if (this.pendingAttachments.length === 0) {
+      this.attachmentTray.hidden = true;
+      return;
+    }
+    this.attachmentTray.hidden = false;
+
+    this.pendingAttachments.forEach((item) => {
+      const chip = document.createElement('div');
+      chip.className = `attachment-preview ${item.status}`;
+      if (item.previewUrl) {
+        const img = document.createElement('img');
+        img.src = item.previewUrl;
+        img.alt = '';
+        chip.appendChild(img);
+      }
+
+      const details = document.createElement('div');
+      details.className = 'attachment-details';
+      const name = document.createElement('span');
+      name.className = 'attachment-name';
+      name.textContent = item.name;
+      const status = document.createElement('span');
+      status.className = 'attachment-status';
+      status.textContent = item.status === 'uploading'
+        ? `Uploading ${item.progress}%`
+        : item.status === 'error' ? item.error : this.formatBytes(item.size);
+      details.appendChild(name);
+      details.appendChild(status);
+      chip.appendChild(details);
+
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'attachment-remove';
+      remove.textContent = 'x';
+      remove.setAttribute('aria-label', `Remove ${item.name}`);
+      remove.addEventListener('click', () => this.removeAttachment(item.localId));
+      chip.appendChild(remove);
+      this.attachmentTray.appendChild(chip);
+    });
   }
 
   handleKeydown(e) {
@@ -299,15 +461,17 @@ class ZylosConsole {
           break;
         }
       }
+      if (Array.isArray(msg.attachments) && msg.attachments.length > 0) {
+        const temp = this.messagesContainer.querySelector('.message.user.sending[data-temp-id]');
+        if (temp) temp.remove();
+      }
     }
 
     const div = document.createElement('div');
     div.className = `message ${msg.direction === 'in' ? 'user' : 'claude'}`;
     div.dataset.id = msg.id;
 
-    const content = document.createElement('div');
-    content.className = 'content';
-    content.textContent = msg.content;
+    const content = this.renderMessageContent(msg);
 
     const meta = document.createElement('div');
     meta.className = 'meta';
@@ -322,16 +486,18 @@ class ZylosConsole {
     }
   }
 
-  addTempMessage(content, tempId) {
+  addTempMessage(content, tempId, attachments = []) {
     this.clearEmptyState();
 
     const div = document.createElement('div');
     div.className = 'message user sending';
     div.dataset.tempId = tempId;
 
-    const contentDiv = document.createElement('div');
-    contentDiv.className = 'content';
-    contentDiv.textContent = content;
+    const contentDiv = this.renderMessageContent({
+      direction: 'in',
+      content,
+      attachments
+    });
 
     const meta = document.createElement('div');
     meta.className = 'meta';
@@ -397,6 +563,86 @@ class ZylosConsole {
     const opts = { hour: '2-digit', minute: '2-digit' };
     if (this.timezone) opts.timeZone = this.timezone;
     return date.toLocaleTimeString([], opts);
+  }
+
+  formatBytes(bytes) {
+    if (!Number.isFinite(bytes) || bytes < 0) return '?B';
+    if (bytes < 1024) return `${bytes}B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
+  }
+
+  renderMessageContent(msg) {
+    const content = document.createElement('div');
+    content.className = 'content';
+
+    if (msg.kind === 'media') {
+      content.appendChild(this.renderMediaMessage(msg));
+      return content;
+    }
+
+    if (msg.content) {
+      const text = document.createElement('div');
+      text.textContent = msg.content;
+      content.appendChild(text);
+    }
+
+    if (Array.isArray(msg.attachments) && msg.attachments.length > 0) {
+      const list = document.createElement('div');
+      list.className = 'message-attachments';
+      msg.attachments.forEach((attachment) => {
+        list.appendChild(this.renderAttachmentChip(attachment));
+      });
+      content.appendChild(list);
+    }
+
+    return content;
+  }
+
+  renderMediaMessage(msg) {
+    const href = `${this.basePath}/api/media/${msg.message_id}`;
+    if (msg.media_type === 'image') {
+      const link = document.createElement('a');
+      link.href = href;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      link.className = 'media-image-link';
+      const img = document.createElement('img');
+      img.src = href;
+      img.alt = msg.name || 'Image';
+      img.className = 'media-image';
+      link.appendChild(img);
+      return link;
+    }
+    return this.renderAttachmentChip({
+      kind: 'file',
+      name: msg.name || 'download',
+      size_label: Number.isFinite(msg.size) ? this.formatBytes(msg.size) : '',
+      href
+    });
+  }
+
+  renderAttachmentChip(attachment) {
+    const wrapper = attachment.href ? document.createElement('a') : document.createElement('div');
+    wrapper.className = `message-attachment ${attachment.kind === 'image' ? 'image' : 'file'}`;
+    if (attachment.href) {
+      wrapper.href = attachment.href;
+      wrapper.target = '_blank';
+      wrapper.rel = 'noopener noreferrer';
+    }
+    const icon = document.createElement('span');
+    icon.className = 'attachment-icon';
+    icon.textContent = attachment.kind === 'image' ? 'IMG' : 'FILE';
+    const label = document.createElement('span');
+    label.className = 'attachment-label';
+    label.textContent = attachment.name || 'attachment';
+    const size = document.createElement('span');
+    size.className = 'attachment-size';
+    size.textContent = attachment.size_label || '';
+    wrapper.appendChild(icon);
+    wrapper.appendChild(label);
+    if (size.textContent) wrapper.appendChild(size);
+    return wrapper;
   }
 }
 
