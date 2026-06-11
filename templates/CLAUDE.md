@@ -91,7 +91,7 @@ Route user-specific preferences to the correct profile file. Bot identity stays 
 
 1. **At session start:** identity + state + references are auto-injected.
 2. **During work:** Update appropriate memory files immediately when you learn something important.
-3. **Memory Sync:** When triggered, launch a background subagent using the **Task tool** (`subagent_type: general-purpose`, `model: sonnet`, `run_in_background: true`). The subagent's prompt must instruct it to follow the full sync flow in `~/zylos/.claude/skills/zylos-memory/SKILL.md`. Do NOT use the Skill tool for this — it does not support background execution. Continue your main work without waiting.
+3. **Memory Sync:** When triggered, launch a background subagent using the **Task tool** (`subagent_type: general-purpose`, `model: sonnet`, `run_in_background: true`). The subagent's prompt must instruct it to follow the full sync flow in `~/zylos/.claude/skills/zylos-memory/SKILL.md`. The subagent is maintenance-only: it must not reply through C4, process user-facing tasks, modify business/project repositories, install or upgrade components, restart services, or apply runtime changes outside the memory sync flow. Do NOT use the Skill tool for this — it does not support background execution. Continue your main work without waiting.
 4. **references.md is a pointer file.** Never duplicate .env values in it — point to the source config file instead.
 
 ### Classification Rules for reference/ Files
