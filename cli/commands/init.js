@@ -1146,9 +1146,172 @@ WantedBy=multi-user.target
 `;
 }
 
+function xmlEscape(value) {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
+
+export function buildPm2LaunchdResurrectScript({ home, zylosDir, pm2Path, pathEnv }) {
+  const pm2Home = path.join(home, '.pm2');
+  const logDir = path.join(zylosDir, 'logs');
+  return `#!/bin/zsh
+set -u
+
+export HOME="${home}"
+export PM2_HOME="${pm2Home}"
+export PATH="${pathEnv}"
+
+LOG_DIR="${logDir}"
+LOG_FILE="\${LOG_DIR}/pm2-resurrect.log"
+PM2_BIN="${pm2Path}"
+LOCK_DIR="/tmp/zylos-pm2-resurrect.lock"
+
+mkdir -p "\${LOG_DIR}" 2>/dev/null || true
+
+log() {
+  printf '[%s] %s\\n' "$(date '+%Y-%m-%d %H:%M:%S %z')" "$*" >> "\${LOG_FILE}" 2>/dev/null || true
+}
+
+if ! mkdir "\${LOCK_DIR}" 2>/dev/null; then
+  log "another resurrect attempt is already running; exiting"
+  exit 0
+fi
+trap 'rmdir "\${LOCK_DIR}" 2>/dev/null || true' EXIT
+
+if [ ! -x "\${PM2_BIN}" ]; then
+  log "pm2 binary missing or not executable: \${PM2_BIN}"
+  exit 1
+fi
+
+if [ ! -s "\${PM2_HOME}/dump.pm2" ]; then
+  log "pm2 dump missing or empty: \${PM2_HOME}/dump.pm2"
+  exit 1
+fi
+
+log "running pm2 resurrect"
+"\${PM2_BIN}" resurrect >> "\${LOG_FILE}" 2>&1
+resurrect_status=$?
+"\${PM2_BIN}" jlist >/dev/null 2>> "\${LOG_FILE}" || true
+log "pm2 resurrect exited with status \${resurrect_status}"
+exit "\${resurrect_status}"
+`;
+}
+
+export function buildPm2LaunchAgentPlist({ label, scriptPath, home, pathEnv, zylosDir }) {
+  const pm2Home = path.join(home, '.pm2');
+  const logDir = path.join(zylosDir, 'logs');
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <dict>
+    <key>Label</key>
+    <string>${xmlEscape(label)}</string>
+
+    <key>ProgramArguments</key>
+    <array>
+      <string>${xmlEscape(scriptPath)}</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>${xmlEscape(path.join(logDir, 'pm2-resurrect.launchd.out.log'))}</string>
+
+    <key>StandardErrorPath</key>
+    <string>${xmlEscape(path.join(logDir, 'pm2-resurrect.launchd.err.log'))}</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+      <key>HOME</key>
+      <string>${xmlEscape(home)}</string>
+      <key>PM2_HOME</key>
+      <string>${xmlEscape(pm2Home)}</string>
+      <key>PATH</key>
+      <string>${xmlEscape(pathEnv)}</string>
+    </dict>
+  </dict>
+</plist>
+`;
+}
+
+/**
+ * macOS needs an explicit LaunchAgent. PM2's generated plist can be left as a
+ * file without being bootstrapped, and LaunchAgents only run after FileVault
+ * unlock/user login. Installing our own user LaunchAgent gives `zylos init`
+ * an idempotent, verifiable restore path without requiring sudo.
+ */
+function setupPm2StartupMacOS() {
+  const user = os.userInfo().username;
+  const uid = os.userInfo().uid;
+  const home = os.homedir();
+  const pm2Path = findPm2Binary();
+  const pathEnv = process.env.PATH || '/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin';
+  const label = `com.zylos.pm2.${user}`;
+  const scriptPath = path.join(ZYLOS_DIR, 'bin', 'zylos-pm2-resurrect');
+  const launchAgentsDir = path.join(home, 'Library', 'LaunchAgents');
+  const plistPath = path.join(launchAgentsDir, `${label}.plist`);
+
+  try {
+    fs.mkdirSync(path.dirname(scriptPath), { recursive: true });
+    fs.mkdirSync(path.join(ZYLOS_DIR, 'logs'), { recursive: true });
+    fs.mkdirSync(launchAgentsDir, { recursive: true });
+
+    fs.writeFileSync(scriptPath, buildPm2LaunchdResurrectScript({
+      home,
+      zylosDir: ZYLOS_DIR,
+      pm2Path,
+      pathEnv,
+    }), { mode: 0o755 });
+    fs.chmodSync(scriptPath, 0o755);
+
+    fs.writeFileSync(plistPath, buildPm2LaunchAgentPlist({
+      label,
+      scriptPath,
+      home,
+      pathEnv,
+      zylosDir: ZYLOS_DIR,
+    }), { mode: 0o644 });
+    fs.chmodSync(plistPath, 0o644);
+
+    const domain = `gui/${uid}`;
+    spawnSync('launchctl', ['bootout', domain, plistPath], { stdio: 'ignore', timeout: 10000 });
+    const bootstrap = spawnSync('launchctl', ['bootstrap', domain, plistPath], {
+      stdio: 'pipe',
+      encoding: 'utf8',
+      timeout: 15000,
+    });
+    if (bootstrap.status !== 0) {
+      const msg = bootstrap.stderr?.trim() || bootstrap.stdout?.trim() || 'launchctl bootstrap failed';
+      throw new Error(msg);
+    }
+
+    spawnSync('launchctl', ['enable', `${domain}/${label}`], { stdio: 'ignore', timeout: 10000 });
+    spawnSync('launchctl', ['kickstart', '-k', `${domain}/${label}`], { stdio: 'ignore', timeout: 10000 });
+
+    const check = spawnSync('launchctl', ['print', `${domain}/${label}`], {
+      stdio: 'pipe',
+      encoding: 'utf8',
+      timeout: 10000,
+    });
+    if (check.status !== 0) {
+      throw new Error(check.stderr?.trim() || check.stdout?.trim() || 'launchctl print failed');
+    }
+
+    console.log(`  ${success('PM2 boot auto-start configured (macOS LaunchAgent)')}`);
+    console.log(`    ${dim(`LaunchAgent: ${plistPath}`)}`);
+  } catch (err) {
+    console.log(`  ${warn(`PM2 boot auto-start setup failed: ${err.message}`)}`);
+    console.log(`    ${dim(`Fix manually: launchctl bootstrap gui/${uid} "${plistPath}"`)}`);
+  }
+}
+
 /**
  * Fallback: use `pm2 startup` for platforms without systemd (macOS, etc.).
- * On macOS this generates a launchd plist which is reliable.
  */
 function setupPm2StartupViaCommand() {
   const result = spawnSync('pm2', ['startup'], {
@@ -1187,9 +1350,15 @@ function setupPm2StartupViaCommand() {
 /**
  * Configure PM2 to auto-start on system boot.
  * - Linux with systemd: generates a stable unit directly (avoids PIDFile issues)
- * - Other platforms (macOS, etc.): falls back to `pm2 startup`
+ * - macOS: installs a user LaunchAgent that runs `pm2 resurrect` after login
+ * - Other platforms: falls back to `pm2 startup`
  */
 function setupPm2Startup() {
+  if (process.platform === 'darwin') {
+    setupPm2StartupMacOS();
+    return;
+  }
+
   if (process.platform !== 'linux' || !commandExists('systemctl')) {
     setupPm2StartupViaCommand();
     return;
