@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import os from 'node:os';
-import { getGitHubToken, sanitizeError } from './github.js';
+import { getGitHubToken, sanitizeError, withRateLimitRetrySync } from './github.js';
 import { copyTree } from './fs-utils.js';
 
 function getWritableTmpBase() {
@@ -32,6 +32,7 @@ function createDownloadTmpDir() {
  * Tries the public endpoint first (works for public repos without auth),
  * then falls back to the authenticated GitHub API if a token is available.
  * This avoids 403 errors when a token lacks org access for public repos.
+ * Retries with backoff on GitHub rate limiting.
  *
  * @param {string} repo - GitHub repo in "org/name" format
  * @param {string} ref - Git ref (tag name or branch name)
@@ -39,6 +40,13 @@ function createDownloadTmpDir() {
  * @param {string} tarballPath - Destination file path for the tarball
  */
 function curlDownload(repo, ref, refType, tarballPath) {
+  withRateLimitRetrySync(
+    () => curlDownloadOnce(repo, ref, refType, tarballPath),
+    `${repo}@${ref}`
+  );
+}
+
+function curlDownloadOnce(repo, ref, refType, tarballPath) {
   // 1. Try public endpoint first (no auth needed for public repos)
   const publicUrl = refType === 'tag'
     ? `https://github.com/${repo}/archive/refs/tags/${ref}.tar.gz`
