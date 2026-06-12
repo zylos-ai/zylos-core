@@ -44,10 +44,105 @@ export function getGitHubToken() {
   return null;
 }
 
+// ── Rate-limit aware retry ───────────────────────────────────────
+
+// curl -f reports HTTP errors as "The requested URL returned error: NNN".
+// GitHub signals its primary rate limit with 403 and the secondary
+// (abuse) limit with 429.
+const RATE_LIMIT_STATUS_RE = /returned error:?\s+(403|429)\b/;
+const DEFAULT_RETRY_DELAYS_MS = [15000, 45000];
+
+/**
+ * Check whether a curl child-process error looks like GitHub rate limiting.
+ * Heuristic: with -f the response body is discarded, so the HTTP status in
+ * curl's stderr is the only signal. A 403 can also be a permission denial,
+ * in which case the retries add a bounded delay before the same failure.
+ *
+ * @param {Error} err - Error thrown by execFileSync/execFile for a curl call
+ * @returns {boolean}
+ */
+export function isRateLimitError(err) {
+  const text = [err?.stderr?.toString?.(), err?.message]
+    .filter(Boolean)
+    .join('\n');
+  return RATE_LIMIT_STATUS_RE.test(text);
+}
+
+/**
+ * Retry delays between attempts, in ms. Overridable via
+ * ZYLOS_GH_RETRY_DELAY_MS (comma-separated, e.g. "1000,5000";
+ * empty string disables retries) — used by tests and tunable in ops.
+ */
+function retryDelaysMs() {
+  const env = process.env.ZYLOS_GH_RETRY_DELAY_MS;
+  if (env === undefined) return DEFAULT_RETRY_DELAYS_MS;
+  return env
+    .split(',')
+    .map(s => s.trim())
+    .filter(s => s !== '')
+    .map(Number)
+    .filter(n => Number.isFinite(n) && n >= 0);
+}
+
+function notifyRetry(label, attempt, total, delayMs) {
+  // stderr on purpose: `zylos upgrade --json` reserves stdout for JSON
+  console.error(
+    `GitHub rate limited (${label}) — retrying in ${Math.round(delayMs / 1000)}s (attempt ${attempt}/${total})...`
+  );
+}
+
+function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/**
+ * Run an operation, retrying when it fails with a GitHub rate-limit
+ * signature. The operation should contain its full fallback chain
+ * (public endpoint → authenticated API), so a rate-limited public call
+ * still falls through to the authenticated endpoint before any sleep.
+ * Non-rate-limit failures are rethrown immediately.
+ *
+ * @param {Function} fn - Operation to run
+ * @param {string} label - Human-readable label for the retry notice
+ * @returns {*} The operation's return value
+ */
+export function withRateLimitRetrySync(fn, label) {
+  const delays = retryDelaysMs();
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return fn();
+    } catch (err) {
+      if (attempt >= delays.length || !isRateLimitError(err)) throw err;
+      notifyRetry(label, attempt + 1, delays.length, delays[attempt]);
+      sleepSync(delays[attempt]);
+    }
+  }
+}
+
+/**
+ * Async flavor of withRateLimitRetrySync.
+ *
+ * @param {Function} fn - Async operation to run
+ * @param {string} label - Human-readable label for the retry notice
+ * @returns {Promise<*>} The operation's resolved value
+ */
+export async function withRateLimitRetryAsync(fn, label) {
+  const delays = retryDelaysMs();
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      if (attempt >= delays.length || !isRateLimitError(err)) throw err;
+      notifyRetry(label, attempt + 1, delays.length, delays[attempt]);
+      await new Promise(resolve => setTimeout(resolve, delays[attempt]));
+    }
+  }
+}
+
 /**
  * Fetch raw file content from a GitHub repo.
  * Tries public endpoint first, falls back to authenticated GitHub API
- * for private repos.
+ * for private repos. Retries with backoff on GitHub rate limiting.
  *
  * @param {string} repo - GitHub repo in "org/name" format
  * @param {string} filePath - Path to file in the repo (e.g. "SKILL.md")
@@ -56,6 +151,13 @@ export function getGitHubToken() {
  * @throws {Error} If fetch fails
  */
 export function fetchRawFile(repo, filePath, branch = 'main') {
+  return withRateLimitRetrySync(
+    () => fetchRawFileOnce(repo, filePath, branch),
+    `${repo}/${filePath}`
+  );
+}
+
+function fetchRawFileOnce(repo, filePath, branch) {
   // 1. Try public endpoint first
   const publicUrl = `https://raw.githubusercontent.com/${repo}/${branch}/${filePath}`;
   try {
@@ -190,7 +292,8 @@ async function fetchTagsJsonAsync(repo) {
  */
 export function fetchLatestTag(repo, { includePrerelease = false } = {}) {
   try {
-    return parseTagsResponse(fetchTagsJsonSync(repo), { includePrerelease });
+    const json = withRateLimitRetrySync(() => fetchTagsJsonSync(repo), `${repo} tags`);
+    return parseTagsResponse(json, { includePrerelease });
   } catch (err) {
     const msg = err.stderr?.toString().trim() || err.message || 'unknown error';
     throw new Error(`Failed to fetch tags for ${repo}: ${sanitizeError(msg)}`);
@@ -210,7 +313,8 @@ export function fetchLatestTag(repo, { includePrerelease = false } = {}) {
  */
 export async function fetchLatestTagAsync(repo, { includePrerelease = false } = {}) {
   try {
-    return parseTagsResponse(await fetchTagsJsonAsync(repo), { includePrerelease });
+    const json = await withRateLimitRetryAsync(() => fetchTagsJsonAsync(repo), `${repo} tags`);
+    return parseTagsResponse(json, { includePrerelease });
   } catch (err) {
     const msg = err.stderr?.toString().trim() || err.message || 'unknown error';
     throw new Error(`Failed to fetch tags for ${repo}: ${sanitizeError(msg)}`);
