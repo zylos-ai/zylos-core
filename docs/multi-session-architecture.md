@@ -882,6 +882,58 @@ Minimum viable implementation to validate core mechanics on a real workload:
 
 **Validation target**: run one real issue/task through a worker agent bound to a thread. Verify: correct routing, session rotation with context preservation, crash recovery without duplicate reply, cost attribution to correct agent, MemoryProposal flow from worker to main.
 
+**V1 explicitly does NOT include**: LLM classifier routing, multiple concurrent workers, connector lease mechanism, sandbox filesystem isolation, automatic memory merge.
+
+### V1 Implementation Issues
+
+Issues are split by **mechanism closure** — each is independently verifiable.
+
+**Issue 1: Supervisor ledger foundation**
+- Agent / Session / ConversationBinding / MessageProcessing / DeliveryAttempt / WriterLease data models in supervisor SQLite DB
+- Audit event write path
+- Minimal CLI or debug inspect to query state
+- Acceptance: can create main + worker agent, start session, epoch increments on active session switch
+
+**Issue 2: Routing + binding MVP**
+- Explicit routing only (`/new`, `/switch`, `/kill`, `/agents`)
+- Binding target = agent_id (never session_id)
+- Binding survives session crash/rotation
+- Explicit stale behavior → ask_user
+- Acceptance: messages in a bound thread consistently reach worker; after worker session restart, binding still targets agent and routes to new session
+
+**Issue 3: Message replay / idempotency**
+- C4 conversation_id as idempotency key
+- MessageProcessing + DeliveryAttempt state progression
+- C4 outbound correlation ID written atomically on send (**hard gate — cannot be deferred**)
+- Acceptance: simulated session crash before/after reply — no lost messages, no duplicate replies
+
+**Issue 4: Context store + WriterLease**
+- Per-agent SQLite context store
+- WriterLease with active_session_id + epoch (**hard gate — must be enforced at store layer**)
+- Stale epoch writes rejected with audit event
+- Acceptance: old session that somehow resumes cannot write to context store; audit log records the rejected write
+
+**Issue 5: Proposal-only worker outputs**
+- MemoryProposal with target_base_hash and conflict detection
+- ActionProposal for side-effect requests
+- Memory-owner commit/reject flow
+- Acceptance: worker cannot directly write shared memory; base hash mismatch → conflict status; main agent can commit or reject proposals
+
+**Issue 6: End-to-end real issue smoke test**
+- Select a low-risk real issue
+- Main agent explicitly routes to worker via `/new`
+- Worker completes bounded work in its thread
+- Correct reply ownership (bound worker replies in thread, or main replies if unbound)
+- Acceptance: ledger, audit trail, cost attribution, thread binding, replay — all queryable from debug view
+
+### Implementation Hard Gates
+
+Two mechanisms that cannot be simplified during implementation:
+
+1. **C4 outbound correlation must be atomic.** The `outbound_correlation_id` on MessageProcessing must be set in the same durable write as the outbound message. "Send first, update status later" breaks idempotency on crash.
+
+2. **WriterLease epoch must be enforced at the store layer.** The context store itself must reject writes with stale epochs. The calling code cannot be trusted to check — the store is the enforcement point.
+
 ## Non-Goals
 
 - Multi-machine agent distribution (all agents on one host)
