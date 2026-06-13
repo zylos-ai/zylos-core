@@ -12,28 +12,52 @@ A single Claude Code session processes all inputs serially: scheduled tasks, bot
 2. **Context pollution**: task noise (heartbeats, scheduled jobs, bot chatter) dilutes the context available for deep thinking.
 3. **User-side interference**: on the user's channel, all topics interleave in one chat, making it hard to follow any single thread.
 
+## Invariants
+
+These are non-negotiable architectural constraints. Every spec table and implementation decision must satisfy all five.
+
+1. **Durable route bindings target agents, not sessions.** A ConversationBinding always points to an `agent_id`. Sessions are replaceable execution backends; the binding survives session rotation, crash, and restart. A binding must never point to a physical `session_id` as its durable target.
+
+2. **Sessions are replaceable execution backends; agents own continuity.** The agent is the entity with purpose, identity, cost history, and channel bindings. A session is a disposable Claude Code process. Anything that must survive a session restart belongs on the agent or in the supervisor ledger, never only in the session's context window.
+
+3. **Parallel work may produce proposals/artifacts; durable truth is committed through one owner path.** Multiple agents can work concurrently, but shared durable memory writes go through a single memory-owner (main agent). Other agents submit `MemoryProposal` artifacts; the memory-owner reviews and commits. External replies to users are sent only by the agent that owns the conversation binding — worker agents produce result artifacts, not user-facing messages.
+
+4. **Sandbox cannot directly write shared memory or send external messages.** A sandbox agent's only outputs are: writes to its own context store, files in its workspace, and task artifacts. All external communication and durable state changes are mediated by a full/internal agent.
+
+5. **Every external message processing attempt has an idempotency key and audit trail.** Each message entering the system is assigned a processing state tracked in the supervisor ledger. No message is re-delivered without checking whether a reply was already sent. All cross-boundary actions (route, spawn, kill, memory write, external send, approval request) are logged.
+
 ## Design Principles
 
-1. **Parallel execution is allowed, but truth is serialized.** Multiple agents can work concurrently, but durable state writes (shared memory), external replies (messages to users), and destructive actions must have a single commit path or an explicit owner. No two agents may write to the same shared memory region concurrently.
+1. **The supervisor is a mechanism layer, not a policy layer.** It routes messages, manages lifecycles, enforces capability boundaries, and records ledger entries. It does NOT make business decisions ("should this be an issue?", "is this memory durable?", "which component to install?"). Those decisions stay inside agents, handled by their internal skills and workflows.
 
-2. **The supervisor is a mechanism layer, not a policy layer.** It routes messages, manages lifecycles, enforces capability boundaries, and records ledger entries. It does NOT make business decisions ("should this be an issue?", "is this memory durable?", "which component to install?"). Those decisions stay inside agents, handled by their internal skills and workflows.
-
-3. **Bindings track agents, not sessions.** Users interact with agents. Sessions are invisible implementation details — they rotate, crash, and restart without affecting the user's mental model.
-
-4. **Information flows upward through gates.** Sub-agents write to their own context store freely. Promoting information to shared memory requires approval from a full-capability agent or the owner. This prevents memory poisoning from sandbox agents.
+2. **Reply ownership follows binding ownership.** In a conversation thread, only the bound agent sends replies to the user. If a worker agent (spawned via handoff) produces results, those results flow back to the bound agent as artifacts — the bound agent decides how to present them. This ensures identity consistency without relying on prompt engineering alone.
 
 ## Core Concepts
 
 ### Entity Model
 
-Four entities with distinct lifecycles and ownership:
+Four entities with distinct lifecycles, authoritative sources, and recovery behaviors:
 
-| Entity | Identity | Lifecycle | Owned by |
-|--------|----------|-----------|----------|
-| **Agent** | `agent_id` (stable) | Long-lived, survives session rotations | Supervisor |
-| **Session** | `session_id` (transient) | Ephemeral, replaced on context exhaustion | Agent |
-| **ConversationBinding** | `channel:thread_key` | Follows agent lifecycle (dies when agent is killed) | Supervisor |
-| **Task** | `task_id` / `issue_id` | Independent — survives both session and agent restarts | Supervisor ledger |
+| Entity | Identity | States | Authoritative source | Created by | Terminated by | Recovery on crash |
+|--------|----------|--------|---------------------|------------|---------------|-------------------|
+| **Agent** | `agent_id` (stable) | created → active → idle → killed → archived | Supervisor DB (SQLite) | Supervisor (on `/new` or handoff) | Supervisor (on `/kill` or budget) | Supervisor re-reads DB; spawns new session under agent |
+| **Session** | `session_id` (transient) | starting → running → rotating → crashed → ended | Supervisor DB + OS process | Agent (via supervisor) | Supervisor (rotation, crash, kill) | Supervisor spawns replacement; agent continuity preserved |
+| **ConversationBinding** | `channel:thread_key` | bound → stale → unbound | Supervisor DB | Supervisor (on route or `/new`) | Supervisor (on agent kill, TTL expiry, explicit unbind) | Supervisor re-reads DB; binding survives session crash |
+| **Task** | `task_id` | pending → active → done → cancelled | Supervisor DB | Any agent (via handoff or scheduler) | Completing agent or owner | Task persists in DB; re-assignable to new agent/session |
+
+**Audit events per entity:**
+
+| Entity | State change | Event logged |
+|--------|-------------|--------------|
+| Agent | created | `agent.created { agent_id, purpose, capability, spawned_by }` |
+| Agent | killed | `agent.killed { agent_id, reason, total_cost, sessions_count }` |
+| Session | started | `session.started { session_id, agent_id, pid }` |
+| Session | ended | `session.ended { session_id, end_reason, cost, context_usage_at_end }` |
+| Binding | bound | `binding.created { channel, thread_key, agent_id, explicit }` |
+| Binding | stale | `binding.stale { channel, thread_key, idle_since }` |
+| Binding | unbound | `binding.removed { channel, thread_key, reason }` |
+| Task | assigned | `task.assigned { task_id, agent_id, session_id }` |
+| Task | done | `task.completed { task_id, cost_total, sessions_used }` |
 
 ### Entity/Ledger Field Ownership
 
@@ -95,9 +119,16 @@ Session: {
 ConversationBinding: {
   channel,           // "telegram" | "lark" | "hxa-connect" | "web-console"
   thread_key,        // channel-specific thread identifier
-  agent_id,          // target agent
+  agent_id,          // target agent (NEVER a session_id)
+  status,            // "bound" | "stale" | "unbound"
+  explicit,          // true if created by user command; false if auto-assigned
+  overrideable,      // true if /switch can change it (default: true)
   bound_at,
-  unbound_at         // null if active
+  last_routed_at,    // updated on every message routed through this binding
+  idle_timeout,      // seconds of inactivity before binding goes stale (null = no expiry)
+  max_age,           // max seconds binding can live regardless of activity (null = no limit)
+  unbound_at,        // null if active
+  stale_behavior     // "fallback_main" | "ask_user" — what happens when binding goes stale
 }
 
 Task: {
@@ -174,7 +205,10 @@ Each capability level defines an enforceable permission boundary:
 | **Tool allowlist** | all Claude Code tools | all Claude Code tools | restricted subset (no Bash rm, no Read outside workspace) |
 | **Component access** | all installed | all installed | declared list only |
 | **Spawn sub-agents** | yes | yes | no |
-| **Browser / login sessions** | yes (with lease) | yes (with lease) | no |
+| **Browser / login sessions** | yes (exclusive lease required) | yes (exclusive lease required) | no |
+| **Side-effect connectors** (Gmail, calendar) | yes (single-owner or lease) | yes (single-owner or lease) | no |
+| **Destructive approval** | can request and consume | can request; consumption requires full agent or owner confirmation | cannot request |
+| **External reply** | yes (if binding owner) | yes (if binding owner) | no (output via artifacts only) |
 
 ### Sandbox Isolation
 
@@ -232,7 +266,9 @@ When a message arrives at C4, the supervisor decides which agent handles it. Rou
 | `/switch` in a bound thread | Rebind thread to new agent; old binding ends |
 | Agent crashes while bound | Binding preserved; new session under same agent picks up |
 | Agent killed while bound | Binding removed; subsequent messages fall through to next priority |
-| Binding idle > TTL | Supervisor may unbind (configurable; default: no expiry — agent stays warm) |
+| Binding idle > idle_timeout | Binding status → `stale`; stale_behavior applies (`fallback_main` or `ask_user`) |
+| Binding exceeds max_age | Binding status → `stale` regardless of activity; stale_behavior applies |
+| Stale binding receives message | If `fallback_main`: route to main, log. If `ask_user`: respond with "This thread was bound to [agent]. Route here or /switch?" |
 | Same user, different channels | Independent bindings per channel; no cross-channel inference |
 | Unknown `@agent-name` | Error message to user, route to main agent |
 
@@ -290,13 +326,32 @@ Memory is organized in three tiers with distinct write semantics:
 | **Session scratch** | in-context (LLM window) | current session | dies on rotation | Temporary reasoning, tool output, unverified hypotheses |
 
 **Shared durable write protocol:**
-Writing to shared memory (`~/zylos/memory/`) requires:
-1. **Source tagging**: which agent and session produced this write
-2. **Scope**: what entity this relates to (project, user, decision, etc.)
-3. **Confidence**: is this a verified fact, or an inference?
-4. **Supersedes**: does this replace an existing entry? (prevents stale data accumulation)
 
-Only one agent may hold the "memory writer" lock at a time (initially: main agent only). Other agents queue writes via their context store + promote flow.
+V1 decision: **single memory-owner model.** Only the designated memory-owner agent (initially: main agent) can write to `~/zylos/memory/`. All other agents submit `MemoryProposal` artifacts:
+
+```
+MemoryProposal: {
+  id,                // unique proposal identifier
+  source_agent_id,   // who produced this
+  source_session_id, // which session
+  target_path,       // which memory file to update (e.g., "reference/decisions.md")
+  operation,         // "append" | "update" | "delete"
+  content,           // proposed content
+  scope,             // what entity this relates to
+  confidence,        // "verified" | "inferred" | "uncertain"
+  supersedes,        // existing entry this replaces (null for new)
+  justification,     // why this should be committed
+  status,            // "pending" | "approved" | "rejected" | "committed"
+  submitted_at,
+  resolved_at
+}
+```
+
+The memory-owner's Memory Sync process reads pending proposals and either commits them (with source attribution) or rejects them. This ensures:
+- No concurrent writes to shared memory files
+- No memory poisoning from sandbox agents
+- Full audit trail of who proposed what and who approved it
+- Consistent with Invariant 3 (truth is serialized)
 
 ### Information Asset Classification
 
@@ -345,10 +400,26 @@ supervisor.inject(agent_id, { key, content, scope })
 supervisor.revoke(agent_id, { scope })
 ```
 
-**write** (sub → store): Agent writes structured knowledge it has learned. Append + overwrite by key.
+**write** (sub → store): Agent writes structured knowledge it has learned.
 ```
 store.write(agent_id, { key, content, scope })
 ```
+
+Each context item has revision tracking:
+```
+ContextItem: {
+  key,                // unique within this agent's store
+  value,              // content
+  writer_agent_id,    // which agent wrote this
+  writer_session_id,  // which session wrote this
+  revision,           // monotonically increasing per key
+  updated_at,
+  scope,              // visibility/access scope
+  supersedes           // previous revision this replaces (null for new items)
+}
+```
+
+V1 constraint: each agent's context store is **single-writer** — only the agent's current active session can write. This avoids the need for CAS/conflict resolution. The revision field enables future multi-writer support if needed.
 
 **promote** (sub → main, gated): Request that agent-local knowledge be promoted to shared durable memory. Requires approval from a full-capability agent or the owner.
 ```
@@ -428,7 +499,43 @@ When a session crashes unexpectedly:
 2. Session's end_reason is set to `"crash"`
 3. Supervisor spawns a new session under the same agent
 4. New session loads context store + last known state via session-start hook
-5. **In-flight message handling**: the message that was being processed when the crash occurred is re-delivered to the new session. To prevent duplicate replies, the supervisor checks C4 DB for whether a reply was already sent for that message_id before re-delivery.
+5. **In-flight message handling**: see Message Processing Ledger below
+
+#### Message Processing Ledger
+
+Every inbound message is tracked through a state machine in the supervisor's DB. The **idempotency key** is the C4 `conversation_id` (or channel-native `message_id` for platforms that provide one).
+
+```
+MessageState: {
+  idempotency_key,     // C4 conversation_id or channel:message_id
+  status,              // see state machine below
+  routed_to_agent_id,
+  routed_to_session_id,
+  route_rule,          // which routing rule matched
+  route_confidence,    // classifier confidence (if applicable)
+  accepted_at,
+  routed_at,
+  delivered_at,
+  reply_sent_at,       // null until reply confirmed in C4 DB
+  failed_at,
+  retry_count,
+  dead_letter_reason
+}
+```
+
+State machine:
+```
+accepted → routed → delivered_to_session → reply_sent
+                                        → failed → retryable → delivered_to_session (new session)
+                                                 → dead_letter (max retries exceeded)
+```
+
+On session crash:
+1. Find all messages in `delivered_to_session` state for the crashed session
+2. Check C4 DB: was a reply already sent for this `idempotency_key`?
+   - Yes → advance to `reply_sent` (no re-delivery)
+   - No → set to `retryable`, re-deliver to new session
+3. Maximum retry count: 3 (configurable). After that, message goes to `dead_letter` and owner is notified.
 
 ### Cancellation
 
@@ -679,23 +786,33 @@ Context store and session rotation are validated here on a real workload before 
 
 At any step, the system can revert to the previous step's behavior. The rollback path for each step is defined in the Migration Gate Table above. Agent directories under `~/zylos/agents/` are preserved but inactive during rollback.
 
+## Resolved Decisions
+
+| Question | Decision | Rationale |
+|----------|----------|-----------|
+| Memory writer lock model | Single memory-owner (main agent) | Avoids concurrent file edits; other agents submit MemoryProposal artifacts |
+| Binding target | Always agent_id, never session_id | Session is replaceable; binding must survive rotation/crash |
+| Context store concurrency | Single-writer per agent (V1) | Revision field enables future multi-writer; V1 avoids CAS complexity |
+| Sandbox external messaging | Prohibited | Output via artifacts only; prevents leakage and identity inconsistency |
+| Reply ownership | Only binding-owner agent sends replies | Workers produce artifacts, not user-facing messages |
+
 ## Open Questions
 
-1. **Memory writer lock granularity**: Single global lock (only main agent writes shared memory) or per-file locks (multiple agents can write different files concurrently)?
+1. **Supervisor persistence format**: SQLite or JSON for agent registry? SQLite is more robust but adds a dependency; JSON is simpler but risks corruption on crash. Leaning SQLite (consistency with C4 DB and context store).
 
-2. **Supervisor persistence format**: Agent registry stored in SQLite or JSON? Must survive supervisor restart. SQLite is more robust but adds a dependency; JSON is simpler but risks corruption on crash.
+2. **Identity in audit trail**: All agents share "zylos01". Should messages from sub-agents carry a sub-identity ("zylos01/ops") for the user to see, or is the identity always "zylos01" with agent_id only in internal logs?
 
-3. **Identity in audit trail**: All agents share "zylos01". Should messages from sub-agents carry a sub-identity ("zylos01/ops") for the user to see, or is the identity always "zylos01" with agent_id only in internal logs?
+3. **Scheduler integration**: Dedicated ops agent for scheduled tasks, or supervisor routes each task to the most relevant active agent?
 
-4. **Scheduler integration**: Dedicated ops agent for scheduled tasks, or supervisor routes each task to the most relevant active agent?
+4. **Projection quality**: LLM-based context projection may extract too much or too little. How to evaluate accuracy? Possible: projection review by full agent before injection.
 
-5. **Projection quality**: LLM-based context projection may extract too much or too little. How to evaluate accuracy? Possible: projection review by full agent before injection.
+5. **Cross-agent memory notification**: When memory-owner commits a MemoryProposal, should other active agents be notified (push) or do they re-read on next access (pull)? Push adds complexity; pull risks stale reads.
 
-6. **Cross-agent memory notification**: When one agent updates shared memory, should other active agents be notified (push) or do they re-read on next access (pull)? Push adds complexity; pull risks stale reads.
+6. **Connector lease implementation**: Side-effect tools (Gmail, browser) need exclusive lease. How is lease acquired/released? Timeout-based? Explicit acquire/release API? What happens on session crash with held lease?
 
-7. **External connector leases**: Tools with side effects (Gmail, browser, Figma) — should they require an exclusive lease to prevent concurrent sessions from conflicting? Or is per-agent tool isolation sufficient?
+7. **Approval gate UX**: When a promote request or destructive action needs approval, how is the owner notified? Options: inline in bound conversation, dedicated approval queue in dashboard, or Telegram notification.
 
-8. **Approval gate UX**: When a sandbox agent's promote request needs approval, how is the owner notified? Inline in current conversation? Dedicated approval queue? Dashboard notification?
+8. **Binding default TTL**: Should newly created bindings have a default idle_timeout? Explicit bindings (from `/new`) may want no expiry, while auto-assigned bindings (from classifier) should perhaps default to a timeout.
 
 ## Non-Goals
 
