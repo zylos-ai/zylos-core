@@ -12,48 +12,103 @@ A single Claude Code session processes all inputs serially: scheduled tasks, bot
 2. **Context pollution**: task noise (heartbeats, scheduled jobs, bot chatter) dilutes the context available for deep thinking.
 3. **User-side interference**: on the user's channel, all topics interleave in one chat, making it hard to follow any single thread.
 
+## Design Principles
+
+1. **Parallel execution is allowed, but truth is serialized.** Multiple agents can work concurrently, but durable state writes (shared memory), external replies (messages to users), and destructive actions must have a single commit path or an explicit owner. No two agents may write to the same shared memory region concurrently.
+
+2. **The supervisor is a mechanism layer, not a policy layer.** It routes messages, manages lifecycles, enforces capability boundaries, and records ledger entries. It does NOT make business decisions ("should this be an issue?", "is this memory durable?", "which component to install?"). Those decisions stay inside agents, handled by their internal skills and workflows.
+
+3. **Bindings track agents, not sessions.** Users interact with agents. Sessions are invisible implementation details — they rotate, crash, and restart without affecting the user's mental model.
+
+4. **Information flows upward through gates.** Sub-agents write to their own context store freely. Promoting information to shared memory requires approval from a full-capability agent or the owner. This prevents memory poisoning from sandbox agents.
+
 ## Core Concepts
 
-### Agent vs Session
+### Entity Model
 
-Two distinct entities that are often conflated:
+Four entities with distinct lifecycles and ownership:
 
-| | Agent (logical) | Session (physical) |
-|---|---|---|
-| **What** | A named worker with a purpose, capability level, and channel bindings | A Claude Code process with a context window |
-| **Lifecycle** | Long-lived — persists across session rotations | Ephemeral — replaced when context fills up |
-| **Identity** | Has a stable id, purpose, cost history | Has a transient process id |
-| **Cost** | Accumulates total spend across all sessions | Reports its own token usage to its parent agent |
+| Entity | Identity | Lifecycle | Owned by |
+|--------|----------|-----------|----------|
+| **Agent** | `agent_id` (stable) | Long-lived, survives session rotations | Supervisor |
+| **Session** | `session_id` (transient) | Ephemeral, replaced on context exhaustion | Agent |
+| **ConversationBinding** | `channel:thread_key` | Follows agent lifecycle (dies when agent is killed) | Supervisor |
+| **Task** | `task_id` / `issue_id` | Independent — survives both session and agent restarts | Supervisor ledger |
 
-An agent is the logical entity the user interacts with. A session is the "body" the agent inhabits. When context runs out, the agent gets a new body (session rotation) — the user doesn't notice.
+### Entity/Ledger Field Ownership
 
-```
-Agent "deploy-ops" (agent_abc)
-  ├── Session sess_001 (created Day 160, context rotated Day 162)
-  ├── Session sess_002 (created Day 162, context rotated Day 165)
-  └── Session sess_003 (created Day 165, active)
-```
+| Field | Agent | Session | ConversationBinding | Task |
+|-------|-------|---------|---------------------|------|
+| `id` | `agent_abc` | `sess_001` | `tg:topic_42` | `task_xyz` |
+| `purpose` | ✓ | — | — | ✓ (task description) |
+| `capability` | ✓ | inherited | — | — |
+| `status` | active/idle/killed | running/rotating/crashed | bound/unbound | pending/active/done |
+| `channel_bindings` | ✓ (list) | — | ✓ (single binding) | — |
+| `cost_budget` | ✓ (lifetime limit) | — | — | ✓ (per-task limit) |
+| `cost_spent` | ✓ (sum of sessions) | ✓ (this session's spend) | — | ✓ (sum across agents) |
+| `process_pid` | — | ✓ | — | — |
+| `tmux_session` | — | ✓ | — | — |
+| `context_usage` | — | ✓ (current %) | — | — |
+| `log_path` | — | ✓ | — | — |
+| `started_at` | ✓ | ✓ | ✓ (bound_at) | ✓ |
+| `ended_at` | ✓ (killed_at) | ✓ | ✓ (unbound_at) | ✓ |
+| `agent_id` | — | ✓ (parent) | ✓ (target) | ✓ (assigned) |
+| `session_id` | — | — | — | ✓ (current executor) |
+| `end_reason` | — | ✓ (rotation/crash/kill) | — | ✓ (done/cancelled) |
 
-Data model:
+Key invariants:
+- Cost is always recorded at the **session** level. Agent-level cost is a derived sum.
+- Thread bindings point to **agent_id**, never session_id. When a session crashes or rotates, bindings are unaffected.
+- Tasks are assigned to **agents**, not sessions. If a session rotates mid-task, the new session picks up the task via context store.
+- Memory sync writes are tagged with `agent_id` and `session_id` for audit trail.
+
+### Agent Data Model
 
 ```
 Agent: {
-  id,              // stable identifier (e.g., "agent_abc")
-  purpose,         // human-readable tag ("deploy-ops", "howard-chat")
-  capability,      // "full" | "internal" | "sandbox"
-  channel_bindings,// which channel threads route here
-  total_cost,      // accumulated across all sessions
-  sessions: []     // history of session instances
+  id,                // stable identifier (e.g., "agent_abc")
+  purpose,           // human-readable tag ("deploy-ops", "howard-chat")
+  capability,        // "full" | "internal" | "sandbox"
+  channel_bindings,  // [{ channel, thread_key, bound_at }]
+  cost_budget,       // optional lifetime cost limit
+  total_cost,        // derived: sum of all sessions' cost
+  sessions: [],      // history of session instances
+  created_at,
+  killed_at           // null if active
 }
 
 Session: {
-  id,              // transient identifier (e.g., "sess_001")
-  agent_id,        // parent agent
+  id,                // transient identifier (e.g., "sess_001")
+  agent_id,          // parent agent
+  pid,               // OS process id
+  tmux_session,      // tmux session name
+  log_path,          // transcript log location
+  context_usage,     // current context window usage (%)
   started_at,
-  ended_at,        // null if active
+  ended_at,          // null if active
+  end_reason,        // "rotation" | "crash" | "kill" | "budget"
   tokens_in,
   tokens_out,
-  cost             // this session's spend
+  cost               // this session's spend
+}
+
+ConversationBinding: {
+  channel,           // "telegram" | "lark" | "hxa-connect" | "web-console"
+  thread_key,        // channel-specific thread identifier
+  agent_id,          // target agent
+  bound_at,
+  unbound_at         // null if active
+}
+
+Task: {
+  id,                // task/issue identifier
+  description,
+  agent_id,          // assigned agent
+  session_id,        // current executing session (may change on rotation)
+  cost_spent,        // total cost across all sessions that worked on this
+  status,            // "pending" | "active" | "done" | "cancelled"
+  started_at,
+  ended_at
 }
 ```
 
@@ -83,24 +138,43 @@ Session: {
 
 A lightweight Node.js process (not an LLM session) that manages the agent pool.
 
-Responsibilities:
+**Mechanism-layer responsibilities only:**
 - **Agent lifecycle**: spawn, list, attach, detach, kill agents (and their sessions)
 - **Session rotation**: when a session hits context limit, rotate transparently under the same agent
-- **Routing**: decide which agent handles an incoming message
+- **Message routing**: apply routing rules (see Routing Decision Table) and dispatch
 - **Health**: unified AM for all sessions — heartbeat, crash recovery, restart
 - **Resource**: enforce concurrency limits based on system resources
 - **Hook injection**: auto-configure dashboard hooks per session on spawn
-- **Cost tracking**: aggregate per-session token usage into per-agent cost records
+- **Ledger**: record all lifecycle events, route decisions, and cost data
+- **Capability enforcement**: apply the capability contract on spawn and at runtime
+
+**Explicitly NOT in supervisor scope:**
+- Business logic ("should this be an issue?", "is this memory worth keeping?")
+- Workflow orchestration (dev-workflow, code-review — these are agent-internal skills)
+- Content understanding (what a message means, how to respond)
+- Memory management policy (what to sync, what to archive — handled by memory sync skill inside agents)
 
 The supervisor does NOT hold conversation context. It is a thin control plane.
 
-### Capability Levels
+### Capability Contract
 
-| Level | Memory | Components | Filesystem | Secrets | Use case |
-|-------|--------|------------|------------|---------|----------|
-| `full` | read/write all | all | full ~/zylos/ access | all | Main agent, primary interaction |
-| `internal` | read/write all | all | full ~/zylos/ access | all | Ops, research, deep thinking |
-| `sandbox` | read projected subset via context store | declared list | workspace only (see Sandbox Isolation) | none | External-facing, customer support |
+Each capability level defines an enforceable permission boundary:
+
+| Permission | `full` | `internal` | `sandbox` |
+|------------|--------|------------|-----------|
+| **Filesystem read** | `~/zylos/**` | `~/zylos/**` | `~/zylos/agents/<id>/workspace/**` only |
+| **Filesystem write** | `~/zylos/**` | `~/zylos/**` | `~/zylos/agents/<id>/workspace/**` only |
+| **Shared memory read** | direct file access | direct file access | via context store query only |
+| **Shared memory write** | direct (with sync protocol) | direct (with sync protocol) | never (promote through approval gate) |
+| **Context store read** | own + can query others | own + can query others | own only |
+| **Context store write** | own | own | own |
+| **Secrets / .env** | full access | full access | none |
+| **Network** | unrestricted | unrestricted | TBD (may restrict to allowlisted endpoints) |
+| **External messaging** | any channel | any channel | none (output via task artifacts only) |
+| **Tool allowlist** | all Claude Code tools | all Claude Code tools | restricted subset (no Bash rm, no Read outside workspace) |
+| **Component access** | all installed | all installed | declared list only |
+| **Spawn sub-agents** | yes | yes | no |
+| **Browser / login sessions** | yes (with lease) | yes (with lease) | no |
 
 ### Sandbox Isolation
 
@@ -126,37 +200,56 @@ The exact mechanism depends on Claude Code's permission model — the principle 
 **Information access:**
 Sandbox agents get information exclusively through the context store (pull-based RAG queries). They never read memory files directly. This makes `revoke` effective — revoked information is simply absent from future queries.
 
+**Output restrictions:**
+Sandbox agents cannot directly send external messages (Telegram, Lark, HXA, etc.) or write to shared memory. Their output is limited to:
+- Writing to their own context store (`store.write()`)
+- Writing files to their workspace directory
+- Completing task artifacts that a full/internal agent reviews before acting on
+
+This prevents both memory poisoning and cross-channel information leakage.
+
 For stronger isolation (untrusted third-party agents), a future option is Linux namespace isolation (unshare/container). But settings.json-level restriction is sufficient for internal sandbox use cases.
 
 ### Routing
 
-When a message arrives at C4, the supervisor decides which agent handles it. Routing follows a strict priority chain — no LLM call unless explicitly needed:
+When a message arrives at C4, the supervisor decides which agent handles it. Routing follows a strict priority chain — no LLM call unless explicitly needed.
 
-```
-message arrives
-    │
-    ├─ 1. Has thread binding (native thread channel)?
-    │   └─ yes → route to bound agent
-    │
-    ├─ 2. Has explicit command (/switch <agent>, @agent-name)?
-    │   └─ yes → route to specified agent (rebind thread if applicable)
-    │
-    ├─ 3. Channel supports threads AND no binding exists?
-    │   └─ yes → LLM classifier (haiku-tier): analyze content vs active agents
-    │          → route to best match, or spawn new agent + create thread
-    │
-    ├─ 4. Channel does NOT support threads (TG DM, basic Lark DM)?
-    │   └─ default → route to main agent
-    │       user can override with /switch or @agent-name prefix
-    │
-    └─ 5. System message (heartbeat, scheduled task)?
-        └─ route to ops agent (auto-spawn if needed)
-```
+#### Routing Decision Table
 
-Key design decisions:
-- **LLM classifier is auxiliary, not primary.** It only activates on thread-capable channels where auto-routing adds value. On non-thread channels, the cost of misrouting outweighs the convenience.
-- **Non-thread channels default to main agent.** The user explicitly routes via command symbols when they want a different agent. This avoids the "message went to the wrong session" problem.
-- **Error correction:** If a message is misrouted, the user can `/switch` to redirect. Sessions that detect off-topic input can signal the supervisor for re-routing.
+| Priority | Condition | Action | Thread binding | Audit fields |
+|----------|-----------|--------|----------------|--------------|
+| 1 | Message has active thread binding | Route to bound agent | unchanged | `rule: binding`, `agent_id` |
+| 2 | Message has explicit command (`/switch <agent>`, `@agent-name`) | Route to specified agent; rebind thread if applicable | updated | `rule: explicit`, `agent_id`, `prev_agent_id` |
+| 3 | Channel has native threads AND no binding exists | LLM classifier: analyze content vs active agents | new binding created | `rule: classifier`, `agent_id`, `confidence`, `candidates[]`, `reason` |
+| 4 | Channel does NOT support threads (TG DM, Lark DM) | Default to main agent | n/a | `rule: default`, `agent_id: main` |
+| 5 | System message (heartbeat, scheduled task) | Route to ops agent (auto-spawn if needed) | n/a | `rule: system`, `agent_id` |
+
+**Conflict and edge case rules:**
+
+| Scenario | Resolution |
+|----------|------------|
+| Classifier confidence < threshold | Route to main agent, log candidates for audit |
+| `/switch` in a bound thread | Rebind thread to new agent; old binding ends |
+| Agent crashes while bound | Binding preserved; new session under same agent picks up |
+| Agent killed while bound | Binding removed; subsequent messages fall through to next priority |
+| Binding idle > TTL | Supervisor may unbind (configurable; default: no expiry — agent stays warm) |
+| Same user, different channels | Independent bindings per channel; no cross-channel inference |
+| Unknown `@agent-name` | Error message to user, route to main agent |
+
+**Thread key normalization:**
+Each channel must normalize its thread identifier to a canonical `channel:thread_key` format:
+
+| Channel | Thread key format | Example |
+|---------|-------------------|---------|
+| TG Topics | `telegram:topic_{topic_id}` | `telegram:topic_42` |
+| TG DM | `telegram:dm_{user_id}` | `telegram:dm_8101553026` |
+| Lark thread | `lark:thread_{thread_id}` | `lark:thread_oc_abc123` |
+| Lark DM | `lark:dm_{user_id}` | `lark:dm_ou_abc123` |
+| HXA DM | `hxa:dm_{agent_name}` | `hxa:dm_Jinglever` |
+| HXA thread | `hxa:thread_{thread_id}` | `hxa:thread_695b55d2` |
+| Web console | `web:session_{session_id}` | `web:session_abc123` |
+
+Every routing decision is logged to the supervisor's audit log with the fields shown in the decision table.
 
 ### Channel Thread Mapping
 
@@ -185,6 +278,25 @@ getThreadCapability() → "native" | "simulated" | "none"
 For `native` channels, the user experience is seamless — each agent is a separate conversation space. For `simulated` and `none`, all messages arrive in one stream; the supervisor routes internally, and the user uses command symbols to direct messages to specific agents.
 
 ## Information Architecture
+
+### Memory Tiers
+
+Memory is organized in three tiers with distinct write semantics:
+
+| Tier | Location | Write access | Persistence | Purpose |
+|------|----------|-------------|-------------|---------|
+| **Shared durable** | `~/zylos/memory/` | full/internal agents only, via sync protocol | permanent | Verified facts, decisions, project status, identity |
+| **Agent-local** | `~/zylos/agents/<id>/context.db` | owning agent only | survives rotation | Agent's working state, cost, preferences, task context |
+| **Session scratch** | in-context (LLM window) | current session | dies on rotation | Temporary reasoning, tool output, unverified hypotheses |
+
+**Shared durable write protocol:**
+Writing to shared memory (`~/zylos/memory/`) requires:
+1. **Source tagging**: which agent and session produced this write
+2. **Scope**: what entity this relates to (project, user, decision, etc.)
+3. **Confidence**: is this a verified fact, or an inference?
+4. **Supersedes**: does this replace an existing entry? (prevents stale data accumulation)
+
+Only one agent may hold the "memory writer" lock at a time (initially: main agent only). Other agents queue writes via their context store + promote flow.
 
 ### Information Asset Classification
 
@@ -221,7 +333,7 @@ Each agent has its own persistent directory and SQLite-based context store:
     └── sess_002/    # Current session artifacts
 ```
 
-The context store supports three operations:
+The context store supports four operations:
 
 **inject** (main → sub): Add information to an agent's available context.
 ```
@@ -233,9 +345,15 @@ supervisor.inject(agent_id, { key, content, scope })
 supervisor.revoke(agent_id, { scope })
 ```
 
-**write** (sub → store): Agent writes structured knowledge it has learned.
+**write** (sub → store): Agent writes structured knowledge it has learned. Append + overwrite by key.
 ```
 store.write(agent_id, { key, content, scope })
+```
+
+**promote** (sub → main, gated): Request that agent-local knowledge be promoted to shared durable memory. Requires approval from a full-capability agent or the owner.
+```
+store.promote(agent_id, { key, target_path, justification })
+→ queued for review by full agent or owner
 ```
 
 Sub-agent information access is pull-based (RAG-style query against the store), not push-based (injected into context window). This ensures revoke is effective — revoked information is simply absent from future queries.
@@ -256,8 +374,8 @@ Main Agent Memory ──inject──→ Context Store ──query──→ Sub-A
 ```
 
 - **Main → Sub**: inject (controlled, projected)
-- **Sub → Store**: write (local to agent)
-- **Store → Main**: promote (requires main agent or owner approval)
+- **Sub → Store**: write (local to agent, append + overwrite by key)
+- **Store → Main**: promote (queued for approval, never automatic)
 - Sub-agents never write directly to main memory
 
 ### Sub-Agent Output Storage
@@ -302,20 +420,69 @@ When a session approaches context limit (~90%):
 
 The agent is continuous. Only the session changes.
 
+### Crash Recovery
+
+When a session crashes unexpectedly:
+
+1. Supervisor detects via missed heartbeat (within heartbeat interval, typically 30s)
+2. Session's end_reason is set to `"crash"`
+3. Supervisor spawns a new session under the same agent
+4. New session loads context store + last known state via session-start hook
+5. **In-flight message handling**: the message that was being processed when the crash occurred is re-delivered to the new session. To prevent duplicate replies, the supervisor checks C4 DB for whether a reply was already sent for that message_id before re-delivery.
+
+### Cancellation
+
+When the user says "stop" or sends `/kill`:
+
+| Command | Scope | Behavior |
+|---------|-------|----------|
+| `/kill <agent>` | Single agent | Graceful shutdown: memory sync → kill session → preserve agent directory |
+| "stop" / "cancel" in a bound thread | Current task in bound agent | Agent receives cancel signal, aborts current work, remains alive |
+| "stop everything" | All agents | Supervisor cascades kill to all non-main agents; main agent stays alive |
+
+The supervisor never kills the main agent automatically. Main agent can only be killed by explicit owner command or system shutdown.
+
+### Backpressure
+
+When system resources or budget are constrained:
+
+| Condition | Response |
+|-----------|----------|
+| Concurrent sessions at limit | New spawn requests queued; user notified "agent queued, will start when a slot opens" |
+| Agent cost budget exhausted | Session terminated with end_reason `"budget"`; user notified |
+| System memory pressure | Supervisor kills idle agents (least-recently-active first); active agents preserved |
+| Total fleet cost limit hit | No new agents spawned; existing agents continue; owner notified |
+
 ### Cost Tracking
 
-Token usage flows upward from session to agent:
+Cost is recorded at the session level and aggregated across multiple dimensions:
 
+**Per-session cost record:**
 ```
-Session reports: { tokens_in: 50000, tokens_out: 8000, cost: $0.42 }
-    → Supervisor aggregates into Agent.total_cost
-    → Dashboard reads Agent.total_cost for display
+{
+  session_id,
+  agent_id,
+  conversation_ids: [],   // which conversations were active
+  task_ids: [],            // which tasks were worked on
+  model,                   // which LLM model
+  tokens_in,
+  tokens_out,
+  tool_calls: { bash: N, read: N, write: N, web: N, ... },
+  cost_usd,
+  wall_time_seconds,
+  started_at,
+  ended_at
+}
 ```
 
-Each session's cost is recorded individually in `meta.json` under `sessions[]`. The agent-level `total_cost` is the sum. This lets the dashboard show:
-- Per-agent lifetime cost (useful for "is this agent worth keeping warm?")
-- Per-session cost (useful for debugging context rotation efficiency)
-- Per-time-period cost (useful for billing / budget alerts)
+**Queryable dimensions:**
+- Per-agent lifetime cost ("is this agent worth keeping warm?")
+- Per-session cost ("how efficient is context rotation?")
+- Per-task cost ("how much did this PR cost?")
+- Per-conversation/channel cost ("how much does Telegram cost vs web console?")
+- Per-model cost ("Opus vs Sonnet spend")
+- Per-time-period cost ("daily/weekly/monthly burn rate")
+- Per-tool-category cost ("how much goes to web searches?")
 
 ### Other Operations
 
@@ -366,6 +533,7 @@ The supervisor replaces per-session AM instances:
 - **Hook injection**: on spawn, supervisor auto-injects dashboard hooks into the session's Claude Code settings, with endpoint tagged by agent_id: `POST /api/ingest?agent_id=agent_xxx`
 - **Dashboard integration**: hook data flows to the dashboard, partitioned by agent_id
 - **Cost aggregation**: supervisor reads token usage from hooks and updates agent-level cost records
+- **Audit log**: all cross-boundary actions are logged — route decisions, spawns, kills, memory writes, external sends, destructive confirmations
 
 No per-session AM process needed. Supervisor is the single AM for all agents.
 
@@ -379,6 +547,7 @@ Fleet Wall
 │   └── Sub-agent indicators: small avatars with status dots (active/idle/rotating)
 │       Click → detail page:
 │         ├── Sub-agent list (purpose / status / context% / lifetime cost)
+│         ├── Route decision log (recent routing events with reason/confidence)
 │         └── Click specific sub-agent → activity feed / conversation summary / cost breakdown
 ├── Jinglever tile
 ├── zylos0t tile
@@ -388,6 +557,7 @@ Fleet Wall
 - **Sub-agent detail** shows only agent-specific data: purpose, status, context usage, current activity, cost
 - Agents automatically register/deregister from the fleet display on spawn/kill
 - Cost is displayed per-agent, not per-session — the user sees total spend for each logical worker
+- **Observability extras**: active tool, stuck state detection, last heartbeat time, route decision trail
 
 ## User Commands
 
@@ -418,79 +588,114 @@ Today's architecture is a single-session monolith:
 
 Supervisor-managed multi-agent pool as described in this document.
 
-### Migration Strategy
+### Migration Gate Table
 
-The migration must be **zero-downtime** — the system serves users continuously, so a "stop everything and rewrite" approach is not viable. The strategy is to wrap the existing session inside the new supervisor, then incrementally add capabilities.
+Each step has explicit invariants, verification methods, and rollback procedures.
 
-**Step 1: Supervisor as wrapper**
+#### Step 1: Supervisor as wrapper
 
-Deploy the supervisor as a new PM2 service. It launches the existing single session as the "main agent" (full capability). No behavior change — supervisor is a pass-through:
+**Change:** Deploy supervisor as PM2 service. It launches the existing single session as the "main agent" (full capability). Pure pass-through — no behavior change.
 
 ```
 Before:  C4 → Claude Code
 After:   C4 → Supervisor → Claude Code (main agent)
 ```
 
+| Aspect | Detail |
+|--------|--------|
+| **New artifacts** | `supervisor.js`, agent registry (single entry: main), audit log table |
+| **Invariant** | All messages delivered exactly once; response latency within 100ms of baseline |
+| **Verification** | Run full message delivery test suite; compare response times before/after; verify C4 DB shows identical message flow |
+| **Behavioral equivalence** | System behaves identically to pre-supervisor state |
+| **Rollback** | Stop supervisor PM2 service; revert C4 to direct Claude Code delivery |
+
 The supervisor:
 - Reads agent registry (initially just one entry: main)
 - Forwards all C4 messages to main agent unchanged
 - Runs unified AM (replacing the standalone activity-monitor service)
 - Begins collecting cost data from dashboard hooks
+- Logs all route decisions (all `rule: default` at this stage)
 
-At this point the system behaves identically to today, but the supervisor is in place.
+#### Step 2: Manual agent spawn
 
-**Step 2: Manual agent spawn**
+**Change:** Add `/new`, `/kill`, `/switch`, `/agents` commands. Users can manually spawn additional agents with explicit purpose and capability. Routing is explicit only — no LLM classifier.
 
-Add `/new` and `/kill` commands. Users (Howard) can manually spawn additional agents with explicit purpose and capability. Routing is explicit only — no LLM classifier yet.
+| Aspect | Detail |
+|--------|--------|
+| **New artifacts** | Agent directory structure, context store schema, session rotation logic, binding table |
+| **Invariant** | No message loss during session rotation; binding survives crash; cost correctly attributed per-agent |
+| **Verification** | Spawn a dev-worker agent for a real issue; verify: (1) messages route correctly via explicit binding, (2) session rotation preserves context, (3) crash recovery re-delivers in-flight message without duplicate reply, (4) cost ledger shows correct per-agent totals |
+| **Behavioral equivalence** | Existing single-agent behavior unchanged; new agents only via explicit `/new` |
+| **Rollback** | Kill all non-main agents; supervisor reverts to pass-through mode (Step 1) |
 
-- Thread-capable channels: `/new` creates a thread and binds it
-- Non-thread channels: `/switch` to direct messages
+Context store and session rotation are validated here on a real workload before any automation.
 
-Context store and session rotation are implemented here. This validates the core agent lifecycle mechanics.
+#### Step 3: Sandbox and projection
 
-**Step 3: Sandbox and projection**
+**Change:** Add sandbox capability level with filesystem isolation and context projection.
 
-Add sandbox capability level with filesystem isolation and context projection. This enables external-facing agents (e.g., a dedicated agent for a team member or customer).
+| Aspect | Detail |
+|--------|--------|
+| **New artifacts** | `access-control.json`, projection logic, sandbox settings.json generator, capability enforcement |
+| **Invariant** | Sandbox agent cannot read any file outside its workspace; cannot send external messages; promote requires approval |
+| **Verification** | Spawn sandbox agent; attempt to read `~/zylos/.env` (must fail); attempt to send TG message (must fail); write to context store + promote (must queue for approval); verify projected content matches access-control rules |
+| **Behavioral equivalence** | Full/internal agents unchanged; sandbox is additive |
+| **Rollback** | Kill sandbox agents; remove capability enforcement (Step 2 behavior) |
 
-`access-control.json` is authored, projection logic is implemented, and sandbox settings.json generation is tested.
+#### Step 4: Automatic routing
 
-**Step 4: Automatic routing**
+**Change:** Enable LLM classifier for thread-capable channels where no binding exists.
 
-Enable LLM classifier for thread-capable channels. This is the last step because it requires all prior infrastructure to be working reliably — misrouting without a working `/switch` fallback would be a worse experience than no routing.
+| Aspect | Detail |
+|--------|--------|
+| **New artifacts** | Classifier prompt, confidence threshold config, routing audit dashboard |
+| **Invariant** | Low-confidence routes default to main agent; every classifier decision logged with reason + confidence + candidates |
+| **Verification** | Send 50 test messages across topics; verify >90% correct routing; verify all low-confidence cases fall back to main; verify `/switch` can correct any misroute; verify audit log is complete and queryable |
+| **Behavioral equivalence** | Non-thread channels unchanged (still default to main); thread channels gain auto-routing with manual override |
+| **Rollback** | Disable classifier; all unbound messages route to main (Step 3 behavior) |
 
-**Step 5: Full integration**
+#### Step 5: Full integration
 
-- Dashboard sub-agent indicators
-- Cross-agent handoff protocol
-- Scheduler integration (ops agent for scheduled tasks)
-- Cost budgets and alerts
+**Change:** Dashboard sub-agent indicators, cross-agent handoff protocol, scheduler integration, cost budgets.
+
+| Aspect | Detail |
+|--------|--------|
+| **New artifacts** | Dashboard UI components, handoff protocol implementation, scheduler routing rules, budget enforcement |
+| **Invariant** | Handoff messages delivered exactly once; scheduler tasks assigned to correct agent; budget enforcement kills sessions cleanly |
+| **Verification** | End-to-end test: spawn agent via `/new`, handoff task from main, verify completion notification, verify dashboard shows correct state, verify cost is attributed to correct agent and task |
+| **Rollback** | Disable individual features (each is independently toggleable) |
 
 ### Migration Risks
 
 | Risk | Mitigation |
 |------|------------|
-| Supervisor crash takes down all agents | Supervisor is stateless control plane — agents are independent Claude Code processes. Supervisor restart re-discovers running sessions. |
-| C4 routing change breaks message delivery | Step 1 is a pure pass-through. No routing logic changes until Step 2. |
-| Memory contention (two agents editing same file) | Step 2 starts with explicit spawn only. File locking is implemented before Step 4 enables auto-spawn. |
-| Session rotation loses context | Context store + conversation summary are validated in Step 2 before any automatic rotation. |
+| Supervisor crash takes down all agents | Supervisor is stateless control plane — agents are independent Claude Code processes. Supervisor restart re-discovers running sessions via process scan. |
+| C4 routing change breaks message delivery | Step 1 is a pure pass-through with message delivery test suite. No routing logic changes until Step 2. |
+| Memory contention (two agents editing same file) | Memory writer lock ensures single-writer. Step 2 starts with explicit spawn only. File locking is implemented before Step 4 enables auto-spawn. |
+| Session rotation loses context | Context store + conversation summary are validated in Step 2 on real workloads before any automatic rotation. |
+| Duplicate replies after crash | Message idempotency check (C4 DB reply lookup) implemented in Step 2. |
 
 ### Rollback
 
-At any step, the supervisor can be disabled and C4 can be pointed back at the single Claude Code process. Agent directories under `~/zylos/agents/` are preserved but inactive. The rollback path is always "revert to the previous step."
+At any step, the system can revert to the previous step's behavior. The rollback path for each step is defined in the Migration Gate Table above. Agent directories under `~/zylos/agents/` are preserved but inactive during rollback.
 
 ## Open Questions
 
-1. **Memory contention**: Two internal agents editing the same memory file simultaneously. Mitigation: file-level locking, or designate one agent as memory-writer with others read-only?
+1. **Memory writer lock granularity**: Single global lock (only main agent writes shared memory) or per-file locks (multiple agents can write different files concurrently)?
 
-2. **Supervisor persistence**: Supervisor state (agent registry) stored in SQLite or JSON? Must survive supervisor restart.
+2. **Supervisor persistence format**: Agent registry stored in SQLite or JSON? Must survive supervisor restart. SQLite is more robust but adds a dependency; JSON is simpler but risks corruption on crash.
 
-3. **Identity**: All agents share "zylos01". Sub-identities ("zylos01/ops") for audit trail? Or just agent_id tagging?
+3. **Identity in audit trail**: All agents share "zylos01". Should messages from sub-agents carry a sub-identity ("zylos01/ops") for the user to see, or is the identity always "zylos01" with agent_id only in internal logs?
 
-4. **Scheduler integration**: Dedicated ops agent for scheduled tasks, or supervisor routes each task to the most relevant agent?
+4. **Scheduler integration**: Dedicated ops agent for scheduled tasks, or supervisor routes each task to the most relevant active agent?
 
-5. **Projection quality**: LLM-based context projection may extract too much or too little. How to evaluate and tune projection accuracy?
+5. **Projection quality**: LLM-based context projection may extract too much or too little. How to evaluate accuracy? Possible: projection review by full agent before injection.
 
-6. **Cross-agent memory sync**: When one agent updates memory, should other agents be notified? Or do they re-read on next access?
+6. **Cross-agent memory notification**: When one agent updates shared memory, should other active agents be notified (push) or do they re-read on next access (pull)? Push adds complexity; pull risks stale reads.
+
+7. **External connector leases**: Tools with side effects (Gmail, browser, Figma) — should they require an exclusive lease to prevent concurrent sessions from conflicting? Or is per-agent tool isolation sufficient?
+
+8. **Approval gate UX**: When a sandbox agent's promote request needs approval, how is the owner notified? Inline in current conversation? Dedicated approval queue? Dashboard notification?
 
 ## Non-Goals
 
