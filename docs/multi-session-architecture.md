@@ -20,7 +20,7 @@ These are non-negotiable architectural constraints. Every spec table and impleme
 
 2. **Sessions are replaceable execution backends; agents own continuity.** The agent is the entity with purpose, identity, cost history, and channel bindings. A session is a disposable Claude Code process. Anything that must survive a session restart belongs on the agent or in the supervisor ledger, never only in the session's context window.
 
-3. **Parallel work may produce proposals/artifacts; durable truth is committed through one owner path.** Multiple agents can work concurrently, but shared durable memory writes go through a single memory-owner (main agent). Other agents submit `MemoryProposal` artifacts; the memory-owner reviews and commits. External replies to users are sent only by the agent that owns the conversation binding — worker agents produce result artifacts, not user-facing messages.
+3. **Parallel work may produce proposals/artifacts; durable truth is committed through one owner path.** Multiple agents can work concurrently, but shared durable memory writes go through a single memory-owner (main agent). Other agents submit `MemoryProposal` artifacts; the memory-owner reviews and commits. External replies to users are sent only by the agent that owns the conversation binding — unbound worker agents produce result artifacts, not user-facing messages. (A worker agent that is explicitly bound to a thread via `/new` IS the reply owner for that thread.)
 
 4. **Sandbox cannot directly write shared memory or send external messages.** A sandbox agent's only outputs are: writes to its own context store, files in its workspace, and task artifacts. All external communication and durable state changes are mediated by a full/internal agent.
 
@@ -30,7 +30,7 @@ These are non-negotiable architectural constraints. Every spec table and impleme
 
 1. **The supervisor is a mechanism layer, not a policy layer.** It routes messages, manages lifecycles, enforces capability boundaries, and records ledger entries. It does NOT make business decisions ("should this be an issue?", "is this memory durable?", "which component to install?"). Those decisions stay inside agents, handled by their internal skills and workflows.
 
-2. **Reply ownership follows binding ownership.** In a conversation thread, only the bound agent sends replies to the user. If a worker agent (spawned via handoff) produces results, those results flow back to the bound agent as artifacts — the bound agent decides how to present them. This ensures identity consistency without relying on prompt engineering alone.
+2. **Reply ownership follows binding ownership.** In a conversation thread, only the bound agent sends replies to the user. If an unbound worker agent (spawned via handoff) produces results, those results flow back to the bound agent as artifacts — the bound agent decides how to present them. When a worker agent is explicitly bound to a thread (via `/new`), it IS the reply owner for that thread. This ensures identity consistency through routing mechanism, not prompt engineering.
 
 ## Core Concepts
 
@@ -205,10 +205,13 @@ Each capability level defines an enforceable permission boundary:
 | **Tool allowlist** | all Claude Code tools | all Claude Code tools | restricted subset (no Bash rm, no Read outside workspace) |
 | **Component access** | all installed | all installed | declared list only |
 | **Spawn sub-agents** | yes | yes | no |
-| **Browser / login sessions** | yes (exclusive lease required) | yes (exclusive lease required) | no |
-| **Side-effect connectors** (Gmail, calendar) | yes (single-owner or lease) | yes (single-owner or lease) | no |
-| **Destructive approval** | can request and consume | can request; consumption requires full agent or owner confirmation | cannot request |
-| **External reply** | yes (if binding owner) | yes (if binding owner) | no (output via artifacts only) |
+| **Browser / login sessions** | yes (V1: main-only; future: exclusive lease) | no (V1 default; future: lease-based) | no |
+| **Side-effect connectors** (Gmail, calendar) | yes (V1: main-only; future: lease-based) | no (V1 default; submit ActionProposal) | no |
+| **Destructive approval** | can request and consume | cannot (V1 default; submit ActionProposal for main to execute) | cannot request |
+| **External reply** | yes (if binding owner) | yes (if explicitly bound to thread) | no (output via artifacts only) |
+
+**V1 default policy for side-effect connectors and approval:**
+V1 takes the conservative path — only the main/full agent can use side-effect connectors (browser, Gmail, calendar, etc.) and consume destructive approvals. Internal/worker agents that need side effects submit an `ActionProposal` artifact, which the main agent executes on their behalf. This avoids implementing the full lease mechanism in V1 while maintaining safety. The lease mechanism is a future extension that will allow internal agents to acquire exclusive access to specific connectors.
 
 ### Sandbox Isolation
 
@@ -269,6 +272,7 @@ When a message arrives at C4, the supervisor decides which agent handles it. Rou
 | Binding idle > idle_timeout | Binding status → `stale`; stale_behavior applies (`fallback_main` or `ask_user`) |
 | Binding exceeds max_age | Binding status → `stale` regardless of activity; stale_behavior applies |
 | Stale binding receives message | If `fallback_main`: route to main, log. If `ask_user`: respond with "This thread was bound to [agent]. Route here or /switch?" |
+| Default stale behavior by binding type | Explicit bindings (from `/new`, `/switch`): `ask_user` — user had intent, don't silently redirect. Implicit bindings (from classifier): `fallback_main` — not worth interrupting user. |
 | Same user, different channels | Independent bindings per channel; no cross-channel inference |
 | Unknown `@agent-name` | Error message to user, route to main agent |
 
@@ -331,24 +335,34 @@ V1 decision: **single memory-owner model.** Only the designated memory-owner age
 
 ```
 MemoryProposal: {
-  id,                // unique proposal identifier
-  source_agent_id,   // who produced this
-  source_session_id, // which session
-  target_path,       // which memory file to update (e.g., "reference/decisions.md")
-  operation,         // "append" | "update" | "delete"
-  content,           // proposed content
-  scope,             // what entity this relates to
-  confidence,        // "verified" | "inferred" | "uncertain"
-  supersedes,        // existing entry this replaces (null for new)
-  justification,     // why this should be committed
-  status,            // "pending" | "approved" | "rejected" | "committed"
+  id,                  // unique proposal identifier
+  source_agent_id,     // who produced this
+  source_session_id,   // which session
+  target_path,         // which memory file to update (e.g., "reference/decisions.md")
+  target_base_hash,    // SHA-256 of target file at time proposal was generated
+  operation,           // "append" | "update" | "delete"
+  content,             // proposed content
+  scope,               // what entity this relates to
+  confidence,          // "verified" | "inferred" | "uncertain"
+  supersedes,          // existing entry this replaces (null for new)
+  justification,       // why this should be committed
+  status,              // "pending" | "approved" | "rejected" | "committed" | "conflict"
   submitted_at,
   resolved_at
 }
 ```
 
-The memory-owner's Memory Sync process reads pending proposals and either commits them (with source attribution) or rejects them. This ensures:
+**Commit flow with conflict detection:**
+1. Proposing agent reads target file, records its hash as `target_base_hash`
+2. Proposal submitted with status `pending`
+3. Memory-owner reads proposal and current target file
+4. If current file hash == `target_base_hash`: apply (no conflict)
+5. If current file hash != `target_base_hash`: file changed since proposal was generated → status set to `conflict`, memory-owner must review/rebase before applying
+6. On apply: status → `committed`, source attribution recorded in target file
+
+This ensures:
 - No concurrent writes to shared memory files
+- No silent overwrites when target has changed since proposal generation
 - No memory poisoning from sandbox agents
 - Full audit trail of who proposed what and who approved it
 - Consistent with Invariant 3 (truth is serialized)
@@ -412,6 +426,7 @@ ContextItem: {
   value,              // content
   writer_agent_id,    // which agent wrote this
   writer_session_id,  // which session wrote this
+  writer_epoch,       // must match current active session epoch (fencing)
   revision,           // monotonically increasing per key
   updated_at,
   scope,              // visibility/access scope
@@ -419,7 +434,22 @@ ContextItem: {
 }
 ```
 
-V1 constraint: each agent's context store is **single-writer** — only the agent's current active session can write. This avoids the need for CAS/conflict resolution. The revision field enables future multi-writer support if needed.
+V1 constraint: each agent's context store is **single-writer** — only the agent's current active session can write. Enforced via **writer lease fencing**:
+
+```
+WriterLease: {
+  agent_id,
+  active_session_id,
+  epoch,              // monotonically increasing, incremented on every session switch
+  granted_at
+}
+```
+
+- Supervisor increments `epoch` and issues a new `WriterLease` every time the active session changes (rotation, crash recovery, manual switch).
+- Context store rejects writes where `writer_epoch` does not match the current lease epoch.
+- This prevents split-brain: if a crashed session somehow resumes after a replacement is spawned, its stale epoch will be rejected.
+
+The revision field on ContextItem enables future multi-writer/CAS support if needed.
 
 **promote** (sub → main, gated): Request that agent-local knowledge be promoted to shared durable memory. Requires approval from a full-capability agent or the owner.
 ```
@@ -503,39 +533,57 @@ When a session crashes unexpectedly:
 
 #### Message Processing Ledger
 
-Every inbound message is tracked through a state machine in the supervisor's DB. The **idempotency key** is the C4 `conversation_id` (or channel-native `message_id` for platforms that provide one).
+Every inbound message is tracked through two related models in the supervisor's DB: `MessageProcessing` (the message's overall lifecycle) and `DeliveryAttempt` (each individual delivery to a session).
+
+The **idempotency key** is the C4 `conversation_id` (or channel-native `message_id` for platforms that provide one).
 
 ```
-MessageState: {
-  idempotency_key,     // C4 conversation_id or channel:message_id
-  status,              // see state machine below
+MessageProcessing: {
+  idempotency_key,       // C4 conversation_id or channel:message_id
+  status,                // "accepted" | "routed" | "completed" | "dead_letter"
   routed_to_agent_id,
-  routed_to_session_id,
-  route_rule,          // which routing rule matched
-  route_confidence,    // classifier confidence (if applicable)
+  route_rule,            // which routing rule matched
+  route_confidence,      // classifier confidence (if applicable)
+  outbound_correlation_id, // C4 conversation_id of the reply (set on completion)
   accepted_at,
   routed_at,
+  completed_at,
+  dead_letter_reason,
+  max_attempts,          // default: 3
+  attempts: []           // ordered list of DeliveryAttempts
+}
+
+DeliveryAttempt: {
+  attempt_number,        // 1, 2, 3...
+  session_id,            // which session received this attempt
+  status,                // "delivered" | "running" | "succeeded" | "failed"
   delivered_at,
-  reply_sent_at,       // null until reply confirmed in C4 DB
-  failed_at,
-  retry_count,
-  dead_letter_reason
+  completed_at,
+  failure_reason          // null if succeeded
 }
 ```
 
-State machine:
+**MessageProcessing state machine:**
 ```
-accepted → routed → delivered_to_session → reply_sent
-                                        → failed → retryable → delivered_to_session (new session)
-                                                 → dead_letter (max retries exceeded)
+accepted → routed → completed (when any attempt succeeds)
+                  → dead_letter (when max_attempts exhausted)
 ```
 
-On session crash:
-1. Find all messages in `delivered_to_session` state for the crashed session
-2. Check C4 DB: was a reply already sent for this `idempotency_key`?
-   - Yes → advance to `reply_sent` (no re-delivery)
-   - No → set to `retryable`, re-deliver to new session
-3. Maximum retry count: 3 (configurable). After that, message goes to `dead_letter` and owner is notified.
+**DeliveryAttempt state machine:**
+```
+delivered → running → succeeded
+                    → failed
+```
+
+**Completion confirmation:**
+When a session sends an outbound reply, the C4 send path records the `outbound_correlation_id` (the C4 out-conversation ID) on the MessageProcessing record in the same durable write. This is not inferred after the fact — it is set atomically by the send path. The MessageProcessing status advances to `completed` only when `outbound_correlation_id` is set.
+
+**On session crash:**
+1. Find all DeliveryAttempts in `delivered` or `running` state for the crashed session
+2. Check: does the parent MessageProcessing have an `outbound_correlation_id`?
+   - Yes → attempt status → `succeeded`, message status → `completed` (reply was sent before crash)
+   - No → attempt status → `failed`, create next attempt if under max_attempts, else message → `dead_letter`
+3. Dead-lettered messages trigger owner notification with full attempt history.
 
 ### Cancellation
 
@@ -788,13 +836,24 @@ At any step, the system can revert to the previous step's behavior. The rollback
 
 ## Resolved Decisions
 
+**Fully resolved (policy + mechanism defined):**
+
 | Question | Decision | Rationale |
 |----------|----------|-----------|
-| Memory writer lock model | Single memory-owner (main agent) | Avoids concurrent file edits; other agents submit MemoryProposal artifacts |
+| Memory writer lock model | Single memory-owner (main agent) | Avoids concurrent file edits; MemoryProposal with base hash for conflict detection |
 | Binding target | Always agent_id, never session_id | Session is replaceable; binding must survive rotation/crash |
-| Context store concurrency | Single-writer per agent (V1) | Revision field enables future multi-writer; V1 avoids CAS complexity |
+| Context store concurrency | Single-writer per agent, fenced by epoch | WriterLease with monotonic epoch prevents split-brain |
 | Sandbox external messaging | Prohibited | Output via artifacts only; prevents leakage and identity inconsistency |
-| Reply ownership | Only binding-owner agent sends replies | Workers produce artifacts, not user-facing messages |
+| Reply ownership | Binding-owner agent sends replies | Explicitly bound workers ARE reply owners for their thread; unbound workers produce artifacts |
+| Message idempotency | MessageProcessing + DeliveryAttempt split | Atomic outbound correlation ID; crash recovery checks correlation before re-delivery |
+
+**Policy resolved, mechanism deferred (V1 safe default):**
+
+| Question | V1 Policy | V1 Default | Future mechanism |
+|----------|-----------|------------|------------------|
+| Side-effect connectors | Main-only | Workers submit ActionProposal | Exclusive lease with acquire/release/timeout |
+| Destructive approval | Main-only consumer | Workers submit ActionProposal | Transferable approval tokens with owner/scope/expiry |
+| Stale binding behavior | Explicit → ask_user, implicit → fallback_main | Per binding type | Configurable per agent/channel |
 
 ## Open Questions
 
@@ -806,13 +865,22 @@ At any step, the system can revert to the previous step's behavior. The rollback
 
 4. **Projection quality**: LLM-based context projection may extract too much or too little. How to evaluate accuracy? Possible: projection review by full agent before injection.
 
-5. **Cross-agent memory notification**: When memory-owner commits a MemoryProposal, should other active agents be notified (push) or do they re-read on next access (pull)? Push adds complexity; pull risks stale reads.
+5. **Cross-agent memory notification**: When memory-owner commits a MemoryProposal, should other active agents be notified (push) or do they re-read on next access (pull)?
 
-6. **Connector lease implementation**: Side-effect tools (Gmail, browser) need exclusive lease. How is lease acquired/released? Timeout-based? Explicit acquire/release API? What happens on session crash with held lease?
+## V1 MVP Scope
 
-7. **Approval gate UX**: When a promote request or destructive action needs approval, how is the owner notified? Options: inline in bound conversation, dedicated approval queue in dashboard, or Telegram notification.
+Minimum viable implementation to validate core mechanics on a real workload:
 
-8. **Binding default TTL**: Should newly created bindings have a default idle_timeout? Explicit bindings (from `/new`) may want no expiry, while auto-assigned bindings (from classifier) should perhaps default to a timeout.
+- **Agents**: main + one manually spawned worker
+- **Routing**: explicit only (`/new`, `/switch`), no LLM classifier
+- **Bindings**: one thread binding per worker, explicit only
+- **Memory**: proposal-only for workers; main is sole memory-owner
+- **Connectors**: workers cannot use side-effect connectors (ActionProposal for main to execute)
+- **Replay**: C4 idempotent message ledger with outbound correlation
+- **Context store**: single-writer with epoch fencing
+- **Dashboard**: basic agent list in detail page (no avatar indicators yet)
+
+**Validation target**: run one real issue/task through a worker agent bound to a thread. Verify: correct routing, session rotation with context preservation, crash recovery without duplicate reply, cost attribution to correct agent, MemoryProposal flow from worker to main.
 
 ## Non-Goals
 
