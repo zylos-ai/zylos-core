@@ -42,9 +42,10 @@ export class SessionStore {
     this.db = db;
     this.maxAgeMs = maxAgeMs;
     this._stmts = {
-      has: db.prepare('SELECT 1 FROM sessions WHERE token = ?'),
+      has: db.prepare('SELECT 1 FROM sessions WHERE token = ? AND last_seen_at >= ?'),
       add: db.prepare('INSERT OR REPLACE INTO sessions (token, created_at, last_seen_at) VALUES (?, ?, ?)'),
       del: db.prepare('DELETE FROM sessions WHERE token = ?'),
+      delStale: db.prepare('DELETE FROM sessions WHERE token = ? AND last_seen_at < ?'),
       touch: db.prepare('UPDATE sessions SET last_seen_at = ? WHERE token = ?'),
       cleanup: db.prepare('DELETE FROM sessions WHERE last_seen_at < ?'),
     };
@@ -52,7 +53,10 @@ export class SessionStore {
   }
 
   has(token) {
-    return !!this._stmts.has.get(token);
+    const cutoff = Date.now() - this.maxAgeMs;
+    if (this._stmts.has.get(token, cutoff)) return true;
+    this._stmts.delStale.run(token, cutoff);
+    return false;
   }
 
   add(token) {

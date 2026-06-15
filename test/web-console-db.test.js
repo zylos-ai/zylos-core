@@ -43,7 +43,19 @@ describe('SessionStore', () => {
     expect(store2.has(token)).toBe(true);
   });
 
-  test('cleans up expired sessions', () => {
+  test('rejects stale tokens at auth time without explicit cleanup', () => {
+    const store = new SessionStore(db, { maxAgeMs: 100 });
+    const token = store.create();
+    expect(store.has(token)).toBe(true);
+
+    db.prepare('UPDATE sessions SET last_seen_at = ? WHERE token = ?')
+      .run(Date.now() - 200, token);
+
+    expect(store.has(token)).toBe(false);
+    expect(db.prepare('SELECT 1 FROM sessions WHERE token = ?').get(token)).toBeUndefined();
+  });
+
+  test('cleanup removes all expired sessions in bulk', () => {
     const store = new SessionStore(db, { maxAgeMs: 100 });
     const token = store.create();
     expect(store.has(token)).toBe(true);

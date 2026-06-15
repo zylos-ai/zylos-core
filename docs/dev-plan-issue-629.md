@@ -41,7 +41,7 @@ Agent-visible format (matches the "agent reads a path from the message" experien
 
 - Text-only sends produce exactly the same content as today (backward compatible).
 - Attachment-only sends (no text) are allowed; content is just the annotation lines. This changes three existing empty-text gates that must each be touched explicitly: client `public/app.js:225-226` (`if (!message) return`), WS handler `server.js:245` (requires `msg.content`), HTTP `server.js:343-344` (requires `message.trim()`). Rule: when `attachments.length > 0`, empty user text is allowed BUT the annotation content must be built (non-empty) BEFORE invoking c4-receive, which itself requires non-empty `--content` (`c4-receive.js:356-359`) — that requirement stays satisfied by construction.
-- Max 5 attachments per message (UI + server enforced).
+- Max 20 attachments per message (UI + server enforced).
 - **No special handling needed** — if c4-receive offloads content to `attachments/<msgId>/message.txt`, the agent reads the full content from message.txt (standard C4 behavior). Attachment path annotations are preserved in the offloaded file.
 
 ### D4. Outbound: reuse `[MEDIA:type]<path>` c4-send syntax; server maps message-id → file
@@ -96,9 +96,9 @@ web-console has no test setup; zylos-core root has jest. Tests go in `test/web-c
 ## Test Checklist
 
 - [ ] Upload: auth required; size cap 413; filename sanitization; UUID on disk; concurrent uploads
-- [ ] Send with attachments: annotation format exact-match; text-only send byte-identical to current behavior; >5 attachments rejected; expired/foreign upload id rejected
+- [ ] Send with attachments: annotation format exact-match; text-only send byte-identical to current behavior; >20 attachments rejected; expired/foreign upload id rejected
 - [ ] Media serving: message-id not found / not-out-row / wrong-channel / wrong-endpoint / not-media-row → 404; path outside allowlist → 404; **symlink escape** (`/tmp/link → file outside allowlist`) → 404; broken symlink → 404; allowlist root itself reached via symlinked parent handled via realpath’d roots; sniff mismatch (renamed .exe→.png) → attachment headers not inline; correct inline for real png/jpeg/gif/webp
-- [ ] Attachment-only send accepted on BOTH WS and HTTP paths (empty text + 1..5 attachments); empty text + zero attachments still rejected
+- [ ] Attachment-only send accepted on BOTH WS and HTTP paths (empty text + 1..20 attachments); empty text + zero attachments still rejected
 - [ ] MEDIA-row classifier: exact pattern only (no substring false positives on user text containing "[MEDIA:")
 - [ ] Manual browser: attach/drag/paste flows; image inline render both directions; file download; old client (no attachments field) still sends fine
 
