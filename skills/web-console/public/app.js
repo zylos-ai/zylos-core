@@ -457,8 +457,7 @@ class ZylosConsole {
     if (msg.direction === 'in') {
       const tempMessages = this.messagesContainer.querySelectorAll('[data-temp-id]');
       for (const temp of tempMessages) {
-        const tempContent = temp.querySelector('.content');
-        if (tempContent && tempContent.textContent === msg.content) {
+        if (temp.dataset.rawContent === msg.content) {
           temp.remove();
           break;
         }
@@ -494,6 +493,7 @@ class ZylosConsole {
     const div = document.createElement('div');
     div.className = 'message user sending';
     div.dataset.tempId = tempId;
+    div.dataset.rawContent = content;
     div.dataset.hasAttachments = attachments.length > 0 ? 'true' : 'false';
 
     const contentDiv = this.renderMessageContent({

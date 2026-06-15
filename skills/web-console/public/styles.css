@@ -207,10 +207,8 @@ header h1 {
 }
 
 .markdown-body { line-height: 1.4; }
-.markdown-body > * { margin: 0 0 0.3em; }
-.markdown-body > *:last-child { margin-bottom: 0; }
-.markdown-body p { margin: 0 0 0.3em; }
-.markdown-body p:last-child { margin-bottom: 0; }
+.markdown-body > *:not(:last-child) { margin-bottom: 0.15em; }
+.markdown-body p { margin: 0; }
 
 .markdown-body code {
   padding: 1px 5px;
@@ -221,7 +219,7 @@ header h1 {
 }
 
 .markdown-body pre {
-  margin: 0.5em 0;
+  margin: 0;
   padding: 0.6em 0.8em;
   border-radius: 6px;
   background: rgba(0, 0, 0, 0.25);
@@ -235,7 +233,7 @@ header h1 {
 }
 
 .markdown-body blockquote {
-  margin: 0.3em 0;
+  margin: 0;
   padding: 2px 0.8em;
   border-left: 3px solid var(--border-color);
   color: var(--text-secondary);
@@ -244,14 +242,12 @@ header h1 {
 .markdown-body blockquote p { margin: 0; }
 
 .markdown-body ul, .markdown-body ol {
-  margin: 0.2em 0;
+  margin: 0;
   padding-left: 1.5em;
-  list-style-position: outside;
 }
 
-.markdown-body li { margin: 0 !important; padding: 0 !important; line-height: 1.4; }
-.markdown-body li > p { margin: 0 !important; }
-.markdown-body li > p + p { margin-top: 0.2em !important; }
+.markdown-body li { margin: 0; padding: 0; }
+.markdown-body li > p { margin: 0; }
 
 .markdown-body h1, .markdown-body h2, .markdown-body h3 {
   margin: 0.5em 0 0.3em;
