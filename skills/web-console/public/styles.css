@@ -251,13 +251,13 @@ header h1 {
 
 .media-image-link {
   display: block;
-  max-width: min(460px, 100%);
+  max-width: min(280px, 100%);
 }
 
 .media-image {
   display: block;
   max-width: 100%;
-  max-height: 360px;
+  max-height: 200px;
   border-radius: 0.5rem;
   border: 1px solid var(--border-color);
   object-fit: contain;
