@@ -6,9 +6,11 @@ import { fileURLToPath } from 'node:url';
 
 const {
   migrateMatcherSplit,
+  persistInstalledSettingsAndSyncCoupledThreshold,
   shouldSyncCodexConfig,
   syncCodexConfig,
   syncHooks,
+  syncModelCoupledNewSessionThreshold,
   syncTemplateSetting,
   syncTemplateModelSetting,
 } = await import('../sync-settings-hooks.js');
@@ -19,6 +21,7 @@ const {
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const TEMPLATE_SETTINGS_PATH = path.join(__dirname, '..', '..', '..', 'templates', '.claude', 'settings.json');
+const CONTEXT_MONITOR_PATH = path.join(__dirname, '..', '..', '..', 'skills', 'activity-monitor', 'scripts', 'context-monitor.js');
 
 describe('Claude settings template', () => {
   it('defaults fresh installs to Opus with 1M context (opus[1m])', () => {
@@ -47,6 +50,13 @@ describe('Claude settings template', () => {
     const groups = template.hooks.PostToolUseFailure || [];
     assert.equal(groups.length, 1);
     assert.ok(groups[0].hooks.some(h => h.command.includes('hook-activity.js')));
+  });
+});
+
+describe('Activity monitor threshold fallback', () => {
+  it('keeps the runtime fallback threshold at 70', () => {
+    const source = fs.readFileSync(CONTEXT_MONITOR_PATH, 'utf8');
+    assert.match(source, /const DEFAULT_THRESHOLD = 70;/);
   });
 });
 
@@ -79,6 +89,96 @@ describe('syncTemplateModelSetting', () => {
 
     assert.equal(result.changed, false);
     assert.equal(installedSettings.model, 'sonnet');
+  });
+});
+
+describe('syncModelCoupledNewSessionThreshold', () => {
+  it('writes threshold 30 when model was backfilled and threshold is missing', () => {
+    const updates = [];
+    const logs = [];
+
+    const result = syncModelCoupledNewSessionThreshold({
+      modelBackfilled: true,
+      cfg: {},
+      updateConfig: (update) => updates.push(update),
+      log: (line) => logs.push(line),
+    });
+
+    assert.equal(result.changed, true);
+    assert.deepEqual(updates, [{ new_session_threshold: 30 }]);
+    assert.deepEqual(logs, ['  + new_session_threshold: 30 (paired with model backfill)']);
+  });
+
+  it('preserves an explicit threshold when model was backfilled', () => {
+    const result = syncModelCoupledNewSessionThreshold({
+      modelBackfilled: true,
+      cfg: { new_session_threshold: 70 },
+      updateConfig: () => {
+        throw new Error('should not overwrite explicit threshold');
+      },
+      log: () => {
+        throw new Error('should not log when threshold exists');
+      },
+    });
+
+    assert.equal(result.changed, false);
+    assert.equal(result.reason, 'threshold_already_set');
+  });
+
+  it('does not write threshold when model was not backfilled', () => {
+    const result = syncModelCoupledNewSessionThreshold({
+      modelBackfilled: false,
+      cfg: {},
+      updateConfig: () => {
+        throw new Error('should not write threshold without model backfill');
+      },
+      log: () => {
+        throw new Error('should not log without model backfill');
+      },
+    });
+
+    assert.equal(result.changed, false);
+    assert.equal(result.reason, 'model_not_backfilled');
+  });
+
+  it('supports dry run without writing config', () => {
+    const logs = [];
+    const result = syncModelCoupledNewSessionThreshold({
+      modelBackfilled: true,
+      cfg: {},
+      dryRun: true,
+      updateConfig: () => {
+        throw new Error('dry run should not write config');
+      },
+      log: (line) => logs.push(line),
+    });
+
+    assert.equal(result.changed, true);
+    assert.deepEqual(logs, ['  + new_session_threshold: 30 (paired with model backfill)']);
+  });
+});
+
+describe('persistInstalledSettingsAndSyncCoupledThreshold', () => {
+  it('writes settings before syncing the paired threshold', () => {
+    const calls = [];
+    const result = persistInstalledSettingsAndSyncCoupledThreshold({
+      installedSettings: { model: 'opus[1m]' },
+      settingsPath: '/tmp/zylos/.claude/settings.json',
+      modelBackfilled: true,
+      mkdirSync: (dir, opts) => calls.push(['mkdir', dir, opts]),
+      writeFileSync: (filePath, content) => calls.push(['writeSettings', filePath, JSON.parse(content)]),
+      syncThreshold: ({ modelBackfilled }) => {
+        calls.push(['syncThreshold', modelBackfilled]);
+        return { changed: true };
+      },
+    });
+
+    assert.equal(result.changed, true);
+    assert.deepEqual(calls, [
+      ['mkdir', '/tmp/zylos/.claude', { recursive: true }],
+      ['writeSettings', '/tmp/zylos/.claude/settings.json', { model: 'opus[1m]' }],
+      ['syncThreshold', true],
+    ]);
   });
 });
 
