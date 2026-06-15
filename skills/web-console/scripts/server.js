@@ -20,7 +20,6 @@ import Database from 'better-sqlite3';
 import { fileURLToPath } from 'url';
 import {
   MAX_ATTACHMENTS,
-  UploadRegistry,
   buildAnnotatedContent,
   classifyConversationMessage,
   contentDisposition,
@@ -32,6 +31,7 @@ import {
   splitContentAndAttachments,
   uploadKind
 } from './attachment-utils.js';
+import { openDb, SessionStore, PersistentUploadRegistry } from './db.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -76,8 +76,10 @@ function readEnvPassword() {
 
 const AUTH_PASSWORD = readEnvPassword();
 const AUTH_ENABLED = AUTH_PASSWORD.length > 0;
-const sessions = new Set(); // Active session tokens
-const uploadRegistry = new UploadRegistry();
+
+const wcDb = openDb();
+const sessionStore = new SessionStore(wcDb);
+const uploadRegistry = new PersistentUploadRegistry(wcDb);
 
 fs.mkdirSync(MEDIA_DIR, { recursive: true });
 
@@ -94,7 +96,9 @@ function parseCookies(cookieHeader) {
 function isAuthenticated(req) {
   if (!AUTH_ENABLED) return true;
   const cookies = parseCookies(req.headers.cookie);
-  return cookies.wc_session && sessions.has(cookies.wc_session);
+  if (!cookies.wc_session || !sessionStore.has(cookies.wc_session)) return false;
+  sessionStore.touch(cookies.wc_session);
+  return true;
 }
 
 function getSessionId(req) {
@@ -202,11 +206,18 @@ function cleanMessageForDisplay(msg) {
       return {
         ...cleaned,
         content: parsed.content,
-        attachments: parsed.attachments.map((attachment) => ({
-          kind: attachment.kind,
-          name: attachment.name,
-          size_label: attachment.sizeLabel
-        }))
+        attachments: parsed.attachments.map((attachment) => {
+          const result = {
+            kind: attachment.kind,
+            name: attachment.name,
+            size_label: attachment.sizeLabel
+          };
+          const basename = path.basename(attachment.path || '');
+          if (basename && attachment.path === path.join(MEDIA_DIR, basename)) {
+            result.href = `/api/inbound-media/${encodeURIComponent(basename)}`;
+          }
+          return result;
+        })
       };
     }
   }
@@ -408,10 +419,11 @@ wss.on('connection', (ws, req) => {
   // Check auth for WebSocket connections
   if (AUTH_ENABLED) {
     const cookies = parseCookies(req.headers.cookie);
-    if (!cookies.wc_session || !sessions.has(cookies.wc_session)) {
+    if (!cookies.wc_session || !sessionStore.has(cookies.wc_session)) {
       ws.close(4001, 'Authentication required');
       return;
     }
+    sessionStore.touch(cookies.wc_session);
   }
 
   clients.add(ws);
@@ -611,6 +623,42 @@ app.get('/api/media/:messageId', (req, res) => {
 });
 
 /**
+ * Serve a user-uploaded inbound media file by filename
+ */
+app.get('/api/inbound-media/:filename', (req, res) => {
+  try {
+    const filename = path.basename(req.params.filename);
+    if (!filename || filename === '.' || filename === '..') return res.sendStatus(404);
+    const target = path.join(MEDIA_DIR, filename);
+
+    const allowedPath = resolveAllowedPathSync(target, [MEDIA_DIR]);
+    if (!allowedPath) return res.sendStatus(404);
+
+    let stat;
+    try {
+      stat = fs.statSync(allowedPath);
+    } catch {
+      return res.sendStatus(404);
+    }
+    if (!stat.isFile()) return res.sendStatus(404);
+
+    const fd = fs.openSync(allowedPath, 'r');
+    const head = Buffer.alloc(Math.min(16, stat.size));
+    fs.readSync(fd, head, 0, head.length, 0);
+    fs.closeSync(fd);
+
+    const image = sniffImage(head);
+    const disposition = image ? 'inline' : 'attachment';
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Content-Type', image?.mime || 'application/octet-stream');
+    res.setHeader('Content-Disposition', contentDisposition(disposition, filename));
+    res.sendFile(allowedPath);
+  } catch {
+    res.sendStatus(404);
+  }
+});
+
+/**
  * Poll for new messages since given ID (HTTP fallback)
  */
 app.get('/api/poll', (req, res) => {
@@ -646,9 +694,8 @@ app.post('/api/auth', (req, res) => {
     return res.status(401).json({ success: false, error: 'Wrong password' });
   }
 
-  const token = crypto.randomBytes(32).toString('hex');
-  sessions.add(token);
-  res.setHeader('Set-Cookie', `wc_session=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=86400`);
+  const token = sessionStore.create();
+  res.setHeader('Set-Cookie', `wc_session=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${sessionStore.maxAgeSec}`);
   res.json({ success: true, timezone: ENV.TZ || null });
 });
 
@@ -657,7 +704,7 @@ app.post('/api/auth', (req, res) => {
  */
 app.post('/api/logout', (req, res) => {
   const cookies = parseCookies(req.headers.cookie);
-  if (cookies.wc_session) sessions.delete(cookies.wc_session);
+  if (cookies.wc_session) sessionStore.delete(cookies.wc_session);
   res.setHeader('Set-Cookie', 'wc_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0');
   res.json({ success: true });
 });
@@ -688,16 +735,13 @@ server.listen(PORT, BIND_HOST, () => {
 });
 
 // Graceful shutdown
-process.on('SIGINT', () => {
+function shutdown() {
   console.log('Shutting down...');
   wss.close();
   if (db) db.close();
+  if (wcDb) wcDb.close();
   process.exit(0);
-});
+}
 
-process.on('SIGTERM', () => {
-  console.log('Shutting down...');
-  wss.close();
-  if (db) db.close();
-  process.exit(0);
-});
+process.on('SIGINT', shutdown);
+process.on('SIGTERM', shutdown);

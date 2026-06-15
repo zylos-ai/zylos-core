@@ -567,6 +567,11 @@ class ZylosConsole {
     return date.toLocaleTimeString([], opts);
   }
 
+  resolveHref(href) {
+    if (!href || !href.startsWith('/')) return href;
+    return `${this.basePath}${href}`;
+  }
+
   formatBytes(bytes) {
     if (!Number.isFinite(bytes) || bytes < 0) return '?B';
     if (bytes < 1024) return `${bytes}B`;
@@ -593,20 +598,21 @@ class ZylosConsole {
       const list = document.createElement('div');
       list.className = 'message-attachments';
       msg.attachments.forEach((attachment) => {
-        if (attachment.kind === 'image' && attachment.href) {
+        const resolved = attachment.href ? { ...attachment, href: this.resolveHref(attachment.href) } : attachment;
+        if (resolved.kind === 'image' && resolved.href) {
           const link = document.createElement('a');
-          link.href = attachment.href;
+          link.href = resolved.href;
           link.target = '_blank';
           link.rel = 'noopener noreferrer';
           link.className = 'media-image-link';
           const img = document.createElement('img');
-          img.src = attachment.href;
-          img.alt = attachment.name || 'Image';
+          img.src = resolved.href;
+          img.alt = resolved.name || 'Image';
           img.className = 'media-image';
           link.appendChild(img);
           list.appendChild(link);
         } else {
-          list.appendChild(this.renderAttachmentChip(attachment));
+          list.appendChild(this.renderAttachmentChip(resolved));
         }
       });
       content.appendChild(list);

@@ -286,4 +286,55 @@ describe('web-console attachment routes', () => {
       expect(res.status).toBe(404);
     }
   });
+
+  test('GET /api/inbound-media/:filename serves uploaded files from media dir', async () => {
+    ctx = await startServer();
+    const pngBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00]);
+    const mediaDir = path.join(ctx.root, 'web-console', 'media');
+
+    const pngFile = path.join(mediaDir, 'wc-test-image.png');
+    fs.writeFileSync(pngFile, pngBytes);
+    const txtFile = path.join(mediaDir, 'wc-test-doc.txt');
+    fs.writeFileSync(txtFile, 'hello');
+
+    const imgRes = await fetch(`${ctx.baseUrl}/api/inbound-media/wc-test-image.png`);
+    expect(imgRes.status).toBe(200);
+    expect(imgRes.headers.get('content-type')).toBe('image/png');
+    expect(imgRes.headers.get('content-disposition')).toContain('inline');
+
+    const txtRes = await fetch(`${ctx.baseUrl}/api/inbound-media/wc-test-doc.txt`);
+    expect(txtRes.status).toBe(200);
+    expect(txtRes.headers.get('content-type')).toBe('application/octet-stream');
+    expect(txtRes.headers.get('content-disposition')).toContain('attachment');
+    expect(await txtRes.text()).toBe('hello');
+
+    const missing = await fetch(`${ctx.baseUrl}/api/inbound-media/nonexistent.png`);
+    expect(missing.status).toBe(404);
+
+    const traversal = await fetch(`${ctx.baseUrl}/api/inbound-media/..%2F..%2F.env`);
+    expect(traversal.status).toBe(404);
+  });
+
+  test('GET /api/conversations/recent includes inbound image href', async () => {
+    ctx = await startServer();
+    const mediaDir = path.join(ctx.root, 'web-console', 'media');
+    const imgFile = path.join(mediaDir, 'wc-uploaded.png');
+    fs.writeFileSync(imgFile, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+
+    const db = new Database(ctx.dbPath);
+    db.prepare('INSERT INTO conversations (direction, channel, endpoint_id, content, timestamp) VALUES (?, ?, ?, ?, ?)')
+      .run('in', 'web-console', 'console',
+        `hello\n[attachment:image ${imgFile} name="screenshot.png" 8B]`,
+        new Date().toISOString());
+    db.close();
+
+    const res = await fetch(`${ctx.baseUrl}/api/conversations/recent?limit=10`);
+    const conversations = await res.json();
+    const last = conversations.at(-1);
+
+    expect(last.content).toBe('hello');
+    expect(last.attachments).toHaveLength(1);
+    expect(last.attachments[0].kind).toBe('image');
+    expect(last.attachments[0].href).toBe('/api/inbound-media/wc-uploaded.png');
+  });
 });
