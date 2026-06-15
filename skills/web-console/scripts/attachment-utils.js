@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 
-export const MAX_ATTACHMENTS = 5;
+export const MAX_ATTACHMENTS = 20;
 export const UPLOAD_TTL_MS = 30 * 60 * 1000;
 const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp']);
 const MEDIA_RE = /^\[MEDIA:(image|file)\]([^\r\n]+)$/;

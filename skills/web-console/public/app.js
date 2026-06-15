@@ -20,7 +20,7 @@ class ZylosConsole {
     this.maxReconnectAttempts = 10;
     this.pendingMessages = new Map(); // Track messages being sent
     this.pendingAttachments = [];
-    this.maxAttachments = 5;
+    this.maxAttachments = 20;
     this.timezone = timezone || null;
 
     // Detect base path for API/WS calls (handles /console/ proxy)
