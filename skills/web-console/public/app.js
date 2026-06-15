@@ -582,7 +582,7 @@ class ZylosConsole {
 
   initMarkdown() {
     if (typeof window.markdownit === 'function') {
-      this.md = window.markdownit({ html: false, breaks: true, linkify: true });
+      this.md = window.markdownit({ html: false, linkify: true });
       const defaultRender = this.md.renderer.rules.link_open || function (tokens, idx, options, _env, self) {
         return self.renderToken(tokens, idx, options);
       };
@@ -597,6 +597,12 @@ class ZylosConsole {
   renderMarkdown(container, text) {
     if (this.md) {
       container.innerHTML = this.md.render(text);
+      for (const li of container.querySelectorAll('li')) {
+        const children = li.children;
+        if (children.length === 1 && children[0].tagName === 'P') {
+          li.innerHTML = children[0].innerHTML;
+        }
+      }
     } else {
       container.textContent = text;
     }

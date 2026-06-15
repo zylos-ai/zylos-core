@@ -206,7 +206,10 @@ header h1 {
   text-decoration-color: var(--accent-hover);
 }
 
-.markdown-body p { margin: 0 0 0.4em; }
+.markdown-body { line-height: 1.4; }
+.markdown-body > * { margin: 0 0 0.3em; }
+.markdown-body > *:last-child { margin-bottom: 0; }
+.markdown-body p { margin: 0 0 0.3em; }
 .markdown-body p:last-child { margin-bottom: 0; }
 
 .markdown-body code {
@@ -232,16 +235,23 @@ header h1 {
 }
 
 .markdown-body blockquote {
-  margin: 0.4em 0;
+  margin: 0.3em 0;
   padding: 2px 0.8em;
   border-left: 3px solid var(--border-color);
   color: var(--text-secondary);
 }
 
+.markdown-body blockquote p { margin: 0; }
+
 .markdown-body ul, .markdown-body ol {
-  margin: 0.3em 0;
+  margin: 0.2em 0;
   padding-left: 1.5em;
+  list-style-position: outside;
 }
+
+.markdown-body li { margin: 0 !important; padding: 0 !important; line-height: 1.4; }
+.markdown-body li > p { margin: 0 !important; }
+.markdown-body li > p + p { margin-top: 0.2em !important; }
 
 .markdown-body h1, .markdown-body h2, .markdown-body h3 {
   margin: 0.5em 0 0.3em;
