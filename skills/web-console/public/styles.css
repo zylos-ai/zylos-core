@@ -544,7 +544,7 @@ header h1 {
   margin-bottom: 1.5rem;
 }
 
-.login-box input {
+.login-box input:not([type="checkbox"]) {
   width: 100%;
   padding: 0.75rem 1rem;
   border: 1px solid var(--border-color);
@@ -553,11 +553,11 @@ header h1 {
   color: var(--text-primary);
   font-size: 1rem;
   outline: none;
-  margin-bottom: 1rem;
+  margin-bottom: 0.5rem;
   transition: border-color 0.2s, box-shadow 0.2s;
 }
 
-.login-box input:focus {
+.login-box input:not([type="checkbox"]):focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 2px var(--accent-glow);
 }
@@ -581,14 +581,16 @@ header h1 {
 }
 
 .remember-me {
-  display: flex;
+  display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 0.4rem;
   font-size: 0.85rem;
   color: var(--text-secondary);
   cursor: pointer;
   user-select: none;
-  margin-top: -0.25rem;
+  white-space: nowrap;
+  width: 100%;
 }
 
 .remember-me input[type="checkbox"] {
