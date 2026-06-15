@@ -215,8 +215,8 @@ header h1 {
   text-decoration-color: var(--accent-hover);
 }
 
-.markdown-body { line-height: 1.55; }
-.markdown-body > *:not(:last-child) { margin-bottom: 0.5em; }
+.markdown-body { line-height: 1.7; }
+.markdown-body > *:not(:last-child) { margin-bottom: 0.75em; }
 .markdown-body p { margin: 0; }
 
 .markdown-body code {
