@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Default provisioned model**: fresh installs now default to `opus[1m]` (latest Opus with 1M context window) instead of `claude-opus-4-6`. (#638)
+- **Claude new-session threshold**: default `new_session_threshold` lowered from 70% to 30% to pair with the larger 1M context window so sessions rotate earlier. Codex `codex_new_session_threshold` is unchanged (75%). (#638)
+
 ## [0.5.2] - 2026-06-02
 
 ### Fixed
