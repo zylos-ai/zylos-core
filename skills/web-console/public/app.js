@@ -714,11 +714,12 @@ async function checkAuth() {
       e.preventDefault();
       loginError.textContent = '';
       const password = document.getElementById('login-password').value;
+      const remember = document.getElementById('login-remember')?.checked ?? true;
 
       const loginRes = await fetch(`${basePath}/api/auth`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password }),
+        body: JSON.stringify({ password, remember }),
       });
       const result = await loginRes.json();
 

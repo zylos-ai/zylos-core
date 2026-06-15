@@ -689,13 +689,14 @@ app.post('/api/auth', (req, res) => {
     return res.json({ success: true, timezone: ENV.TZ || null });
   }
 
-  const { password } = req.body;
+  const { password, remember } = req.body;
   if (password !== AUTH_PASSWORD) {
     return res.status(401).json({ success: false, error: 'Wrong password' });
   }
 
   const token = sessionStore.create();
-  res.setHeader('Set-Cookie', `wc_session=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${sessionStore.maxAgeSec}`);
+  const maxAge = remember !== false ? `; Max-Age=${sessionStore.maxAgeSec}` : '';
+  res.setHeader('Set-Cookie', `wc_session=${token}; Path=/; HttpOnly; SameSite=Strict${maxAge}`);
   res.json({ success: true, timezone: ENV.TZ || null });
 });
 

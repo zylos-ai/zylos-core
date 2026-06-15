@@ -580,6 +580,21 @@ header h1 {
   box-shadow: 0 0 16px var(--accent-glow);
 }
 
+.remember-me {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
+  margin-top: -0.25rem;
+}
+
+.remember-me input[type="checkbox"] {
+  accent-color: var(--accent);
+}
+
 .login-error {
   color: var(--error);
   font-size: 0.875rem;
