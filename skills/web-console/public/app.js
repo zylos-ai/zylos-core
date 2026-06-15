@@ -579,6 +579,27 @@ class ZylosConsole {
     return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
   }
 
+  renderTextWithLinks(container, text) {
+    const urlRe = /https?:\/\/[^\s<>"')\]]+/g;
+    let lastIndex = 0;
+    let match;
+    while ((match = urlRe.exec(text)) !== null) {
+      if (match.index > lastIndex) {
+        container.appendChild(document.createTextNode(text.slice(lastIndex, match.index)));
+      }
+      const a = document.createElement('a');
+      a.href = match[0];
+      a.textContent = match[0];
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
+      container.appendChild(a);
+      lastIndex = urlRe.lastIndex;
+    }
+    if (lastIndex < text.length) {
+      container.appendChild(document.createTextNode(text.slice(lastIndex)));
+    }
+  }
+
   renderMessageContent(msg) {
     const content = document.createElement('div');
     content.className = 'content';
@@ -590,7 +611,7 @@ class ZylosConsole {
 
     if (msg.content) {
       const text = document.createElement('div');
-      text.textContent = msg.content;
+      this.renderTextWithLinks(text, msg.content);
       content.appendChild(text);
     }
 

@@ -194,6 +194,18 @@ header h1 {
   margin-top: 0.5rem;
 }
 
+.message .content a {
+  color: var(--accent);
+  text-decoration: underline;
+  text-decoration-color: rgba(77, 217, 208, 0.4);
+  word-break: break-all;
+}
+
+.message .content a:hover {
+  color: var(--accent-hover);
+  text-decoration-color: var(--accent-hover);
+}
+
 .message-attachments {
   display: flex;
   flex-direction: column;
