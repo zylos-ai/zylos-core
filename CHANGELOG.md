@@ -7,10 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Changed
-- **Default provisioned model**: fresh installs now default to `opus[1m]` (latest Opus with 1M context window) instead of `claude-opus-4-6`. (#638)
-- **Claude new-session threshold paired with `opus[1m]`**: fresh installs and upgrade-time model backfills to `opus[1m]` now write an explicit `new_session_threshold = 30` when the key is missing. Existing users with a configured model or explicit threshold are not changed, and the runtime fallback remains `70`. (#638)
-
 ## [0.5.2] - 2026-06-02
 
 ### Fixed
