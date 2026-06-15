@@ -315,6 +315,7 @@ class ZylosConsole {
   handlePaste(e) {
     const files = Array.from(e.clipboardData?.files || []);
     if (files.length === 0) return;
+    e.preventDefault();
     this.addFiles(files);
   }
 
