@@ -194,16 +194,80 @@ header h1 {
   margin-top: 0.5rem;
 }
 
-.message .content a {
+.markdown-body a {
   color: var(--accent);
   text-decoration: underline;
   text-decoration-color: rgba(77, 217, 208, 0.4);
   word-break: break-all;
 }
 
-.message .content a:hover {
+.markdown-body a:hover {
   color: var(--accent-hover);
   text-decoration-color: var(--accent-hover);
+}
+
+.markdown-body p { margin: 0 0 0.4em; }
+.markdown-body p:last-child { margin-bottom: 0; }
+
+.markdown-body code {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.07);
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 0.9em;
+}
+
+.markdown-body pre {
+  margin: 0.5em 0;
+  padding: 0.6em 0.8em;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.25);
+  overflow-x: auto;
+}
+
+.markdown-body pre code {
+  padding: 0;
+  background: none;
+  font-size: 0.88em;
+}
+
+.markdown-body blockquote {
+  margin: 0.4em 0;
+  padding: 2px 0.8em;
+  border-left: 3px solid var(--border-color);
+  color: var(--text-secondary);
+}
+
+.markdown-body ul, .markdown-body ol {
+  margin: 0.3em 0;
+  padding-left: 1.5em;
+}
+
+.markdown-body h1, .markdown-body h2, .markdown-body h3 {
+  margin: 0.5em 0 0.3em;
+  font-size: 1em;
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.markdown-body table {
+  margin: 0.4em 0;
+  border-collapse: collapse;
+  font-size: 0.9em;
+}
+
+.markdown-body th, .markdown-body td {
+  padding: 3px 8px;
+  border: 1px solid var(--border-color);
+  text-align: left;
+}
+
+.markdown-body th { background: rgba(255, 255, 255, 0.04); }
+
+.markdown-body hr {
+  margin: 0.5em 0;
+  border: none;
+  border-top: 1px solid var(--border-color);
 }
 
 .message-attachments {

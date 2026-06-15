@@ -26,6 +26,7 @@ class ZylosConsole {
     // Detect base path for API/WS calls (handles /console/ proxy)
     this.basePath = this.detectBasePath();
 
+    this.initMarkdown();
     this.init();
   }
 
@@ -579,24 +580,25 @@ class ZylosConsole {
     return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
   }
 
-  renderTextWithLinks(container, text) {
-    const urlRe = /https?:\/\/[^\s<>"')\]]+/g;
-    let lastIndex = 0;
-    let match;
-    while ((match = urlRe.exec(text)) !== null) {
-      if (match.index > lastIndex) {
-        container.appendChild(document.createTextNode(text.slice(lastIndex, match.index)));
-      }
-      const a = document.createElement('a');
-      a.href = match[0];
-      a.textContent = match[0];
-      a.target = '_blank';
-      a.rel = 'noopener noreferrer';
-      container.appendChild(a);
-      lastIndex = urlRe.lastIndex;
+  initMarkdown() {
+    if (typeof window.markdownit === 'function') {
+      this.md = window.markdownit({ html: false, breaks: true, linkify: true });
+      const defaultRender = this.md.renderer.rules.link_open || function (tokens, idx, options, _env, self) {
+        return self.renderToken(tokens, idx, options);
+      };
+      this.md.renderer.rules.link_open = function (tokens, idx, options, env, self) {
+        tokens[idx].attrSet('target', '_blank');
+        tokens[idx].attrSet('rel', 'noopener noreferrer');
+        return defaultRender(tokens, idx, options, env, self);
+      };
     }
-    if (lastIndex < text.length) {
-      container.appendChild(document.createTextNode(text.slice(lastIndex)));
+  }
+
+  renderMarkdown(container, text) {
+    if (this.md) {
+      container.innerHTML = this.md.render(text);
+    } else {
+      container.textContent = text;
     }
   }
 
@@ -611,7 +613,8 @@ class ZylosConsole {
 
     if (msg.content) {
       const text = document.createElement('div');
-      this.renderTextWithLinks(text, msg.content);
+      text.className = 'markdown-body';
+      this.renderMarkdown(text, msg.content);
       content.appendChild(text);
     }
 
