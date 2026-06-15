@@ -17,7 +17,7 @@ export function formatBytes(bytes) {
 
 export function sanitizeDisplayName(name, fallback = 'attachment') {
   const base = path.basename(String(name || fallback)).replace(/[\r\n\t"]/g, '_').trim();
-  const safe = base.replace(/[^\w .()[\]{}@+=,;:_-]/g, '_').replace(/\s+/g, ' ');
+  const safe = base.replace(/[/\\<>|*?\x00-\x1f"]/g, '_').replace(/\s+/g, ' ');
   return (safe || fallback).slice(0, 160);
 }
 
