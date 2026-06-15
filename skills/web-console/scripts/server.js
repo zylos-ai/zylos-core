@@ -21,7 +21,6 @@ import { fileURLToPath } from 'url';
 import {
   MAX_ATTACHMENTS,
   UploadRegistry,
-  assertAttachmentContentFitsC4,
   buildAnnotatedContent,
   classifyConversationMessage,
   contentDisposition,
@@ -271,13 +270,6 @@ function buildSendContent(content, attachmentEntries) {
     err.status = 400;
     err.code = 'message_required';
     throw err;
-  }
-  if (attachmentEntries.length > 0) {
-    assertAttachmentContentFitsC4(message, {
-      c4ReceiveScriptDir: C4_SCRIPT_DIR,
-      channel: 'web-console',
-      endpoint: 'console'
-    });
   }
   return message;
 }

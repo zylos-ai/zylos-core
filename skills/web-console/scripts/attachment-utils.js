@@ -4,8 +4,6 @@ import crypto from 'node:crypto';
 
 export const MAX_ATTACHMENTS = 5;
 export const UPLOAD_TTL_MS = 30 * 60 * 1000;
-export const DEFAULT_C4_FILE_SIZE_THRESHOLD = 2048;
-
 const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp']);
 const MEDIA_RE = /^\[MEDIA:(image|file)\]([^\r\n]+)$/;
 const ATTACHMENT_RE = /^\[attachment:(image|file) (.+) name="([^"]*)" ([^\]]+)\]$/;
@@ -87,34 +85,6 @@ export function splitContentAndAttachments(content) {
     content: bodyLines.join('\n').trim(),
     attachments
   };
-}
-
-export function c4ReplyViaSuffix({
-  c4ReceiveScriptDir,
-  channel = 'web-console',
-  endpoint = 'console'
-}) {
-  const base = `reply via: node ${path.join(c4ReceiveScriptDir, 'c4-send.js')} "${channel}"`;
-  return endpoint ? ` ---- ${base} "${endpoint}"` : ` ---- ${base}`;
-}
-
-export function assertAttachmentContentFitsC4(content, {
-  c4ReceiveScriptDir,
-  channel = 'web-console',
-  endpoint = 'console',
-  threshold = DEFAULT_C4_FILE_SIZE_THRESHOLD
-}) {
-  const suffix = c4ReplyViaSuffix({ c4ReceiveScriptDir, channel, endpoint });
-  const bytes = Buffer.byteLength(`${content}${suffix}`, 'utf8');
-  if (bytes > threshold) {
-    const err = new Error('Text is too long to send with attachments.');
-    err.code = 'text_too_long_with_attachments';
-    err.status = 400;
-    err.bytes = bytes;
-    err.threshold = threshold;
-    throw err;
-  }
-  return { bytes, threshold };
 }
 
 export function parseMediaContent(content) {

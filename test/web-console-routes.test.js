@@ -230,20 +230,6 @@ describe('web-console attachment routes', () => {
     expect(latest.content).toContain('name="image.png" 8B]');
   });
 
-  test('attachment send rejects over-threshold content before c4 offload', async () => {
-    ctx = await startServer();
-    const upload = await uploadFile(ctx, { name: 'report.txt', content: 'abc' });
-    const rejected = await sendHttp(ctx, { message: 'x'.repeat(2100), attachments: [upload.body.id] });
-
-    expect(rejected.res.status).toBe(400);
-    expect(rejected.body.error).toBe('text_too_long_with_attachments');
-    expect(rows(ctx.dbPath)).toHaveLength(0);
-
-    const retry = await sendHttp(ctx, { message: 'short', attachments: [upload.body.id] });
-    expect(retry.res.status).toBe(200);
-    expect(rows(ctx.dbPath).at(-1).content).toContain('short\n[attachment:file ');
-  });
-
   test('concurrent sends with the same upload id deliver exactly once', async () => {
     ctx = await startServer();
     const upload = await uploadFile(ctx, { name: 'report.txt', content: 'abc' });

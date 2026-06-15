@@ -42,7 +42,7 @@ Agent-visible format (matches the "agent reads a path from the message" experien
 - Text-only sends produce exactly the same content as today (backward compatible).
 - Attachment-only sends (no text) are allowed; content is just the annotation lines. This changes three existing empty-text gates that must each be touched explicitly: client `public/app.js:225-226` (`if (!message) return`), WS handler `server.js:245` (requires `msg.content`), HTTP `server.js:343-344` (requires `message.trim()`). Rule: when `attachments.length > 0`, empty user text is allowed BUT the annotation content must be built (non-empty) BEFORE invoking c4-receive, which itself requires non-empty `--content` (`c4-receive.js:356-359`) — that requirement stays satisfied by construction.
 - Max 5 attachments per message (UI + server enforced).
-- **2KB offload guard (hard rule)**: c4-receive offloads content > `FILE_SIZE_THRESHOLD` (2048B) to `attachments/<msgId>/message.txt`, leaving only a 100-char preview in the DB row — the attachment paths would vanish from what the agent and every other C4 consumer (dispatcher, session-init, memory sync, dashboard) actually sees (this is the #618 canonical-history problem; "agent reads message.txt" is NOT an acceptable attachment experience). Therefore v1 enforces: when attachments are present, combined content (user text + annotation lines + worst-case reply-via suffix) must stay under the 2KB threshold → otherwise reject the send with 400 `text_too_long_with_attachments` and the UI prompts the user to shorten the text (or send text and files as separate messages). Long text WITHOUT attachments keeps today's offload behavior unchanged. A test must prove annotation lines always appear verbatim in the queued DB `content`. (Alternative considered: making #629 depend on #618 — rejected to keep #629 self-contained; if #618 lands later this guard can be relaxed.)
+- **No special handling needed** — if c4-receive offloads content to `attachments/<msgId>/message.txt`, the agent reads the full content from message.txt (standard C4 behavior). Attachment path annotations are preserved in the offloaded file.
 
 ### D4. Outbound: reuse `[MEDIA:type]<path>` c4-send syntax; server maps message-id → file
 
@@ -87,7 +87,6 @@ web-console has no test setup; zylos-core root has jest. Tests go in `test/web-c
 - [ ] Upload registry (in-memory, session-scoped, 30-min TTL, single-use)
 - [ ] Extend WS `send` + `POST /api/send` with optional `attachments: [id]`; build annotation lines; pass combined content to c4-receive (text-only path untouched — assert byte-identical)
 - [ ] Attachment-only sends: relax all three empty-text gates (`public/app.js:225-226`, WS `server.js:245`, HTTP `server.js:343-344`) to allow empty text iff attachments present; annotation content built non-empty before the c4-receive call (its non-empty `--content` requirement holds by construction)
-- [ ] 2KB offload guard: compute combined size (text + annotations + worst-case reply-via suffix) server-side; reject 400 `text_too_long_with_attachments` when over `FILE_SIZE_THRESHOLD`; client error message prompts to shorten/split
 - [ ] Outbound MEDIA-row classifier + `GET /api/media/<message-id>` with row re-validation, path allowlist, magic-byte sniff, inline-vs-attachment headers
 - [ ] WS broadcast shape for media rows (`kind` field; plain rows unchanged shape)
 - [ ] Client: attach button, drag-drop, paste, pre-send strip, XHR upload w/ progress, send with attachment ids
@@ -100,7 +99,6 @@ web-console has no test setup; zylos-core root has jest. Tests go in `test/web-c
 - [ ] Send with attachments: annotation format exact-match; text-only send byte-identical to current behavior; >5 attachments rejected; expired/foreign upload id rejected
 - [ ] Media serving: message-id not found / not-out-row / wrong-channel / wrong-endpoint / not-media-row → 404; path outside allowlist → 404; **symlink escape** (`/tmp/link → file outside allowlist`) → 404; broken symlink → 404; allowlist root itself reached via symlinked parent handled via realpath’d roots; sniff mismatch (renamed .exe→.png) → attachment headers not inline; correct inline for real png/jpeg/gif/webp
 - [ ] Attachment-only send accepted on BOTH WS and HTTP paths (empty text + 1..5 attachments); empty text + zero attachments still rejected
-- [ ] 2KB guard: over-threshold combined content rejected 400 (annotations never offloaded); under-threshold annotations appear **verbatim in queued DB content** (query c4.db in test); long text without attachments still offloads as today
 - [ ] MEDIA-row classifier: exact pattern only (no substring false positives on user text containing "[MEDIA:")
 - [ ] Manual browser: attach/drag/paste flows; image inline render both directions; file download; old client (no attachments field) still sends fine
 
@@ -109,7 +107,6 @@ web-console has no test setup; zylos-core root has jest. Tests go in `test/web-c
 - [ ] Trust boundary (not a guarantee): authenticated browser users cannot create `out` rows via any console API; only local trusted C4 writers (agent + sibling processes in the same OS trust zone) can. Media-serving security holds under this boundary — see D4.
 - [ ] c4-receive `--content` arg handles multi-line content (annotation lines) — **needs validation** (check arg passing / escaping in server.js spawn).
 - [ ] Session cookie auth is sufficient for upload/media endpoints (no CSRF token in component today; SameSite=Strict mitigates) — same trust level as existing `/api/send`.
-- [ ] With the D3 2KB guard in place, attachment annotations are never subject to c4-receive offload — enforced by us, not assumed of c4-receive; covered by tests (verbatim-in-DB-content check).
 
 ## Acceptance Checklist
 

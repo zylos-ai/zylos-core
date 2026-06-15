@@ -4,7 +4,6 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, test } from '@jest/globals';
 import {
   UploadRegistry,
-  assertAttachmentContentFitsC4,
   buildAnnotatedContent,
   buildAttachmentAnnotation,
   classifyConversationMessage,
@@ -82,19 +81,6 @@ describe('web-console attachment annotations', () => {
     }]);
   });
 
-  test('enforces the 2KB pre-c4-receive guard for attachment content', () => {
-    const scriptDir = path.join(tempRoot, 'comm-bridge', 'scripts');
-    const short = assertAttachmentContentFitsC4('short message', {
-      c4ReceiveScriptDir: scriptDir,
-      threshold: 2048
-    });
-
-    expect(short.bytes).toBeLessThan(2048);
-    expect(() => assertAttachmentContentFitsC4('x'.repeat(2048), {
-      c4ReceiveScriptDir: scriptDir,
-      threshold: 2048
-    })).toThrow(/too long/i);
-  });
 });
 
 describe('web-console outbound media classification', () => {
