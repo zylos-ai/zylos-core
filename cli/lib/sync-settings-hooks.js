@@ -22,7 +22,7 @@ import os from 'os';
 import { execFileSync } from 'child_process';
 import { fileURLToPath } from 'url';
 import { extractScriptPath, extractSkillName, getCommandHooks } from './hook-utils.js';
-import { getZylosConfig } from './config.js';
+import { getZylosConfig, updateZylosConfig } from './config.js';
 import { renderCodexProjectConfig, renderCodexGlobalConfig, writeCodexConfig } from './runtime-setup.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -67,6 +67,42 @@ export function syncTemplateSetting(key, {
   }
   log(`  + ${key}: ${templateSettings[key]}`);
   return { changed: true };
+}
+
+export function syncModelCoupledNewSessionThreshold({
+  modelBackfilled = false,
+  cfg = getZylosConfig(),
+  updateConfig = updateZylosConfig,
+  dryRun = false,
+  log = console.log,
+} = {}) {
+  if (!modelBackfilled) {
+    return { changed: false, reason: 'model_not_backfilled' };
+  }
+
+  if (Object.hasOwn(cfg, 'new_session_threshold')) {
+    return { changed: false, reason: 'threshold_already_set' };
+  }
+
+  if (!dryRun) {
+    updateConfig({ new_session_threshold: 30 });
+  }
+  log('  + new_session_threshold: 30 (paired with model backfill)');
+  return { changed: true };
+}
+
+export function persistInstalledSettingsAndSyncCoupledThreshold({
+  installedSettings,
+  settingsPath = INSTALLED_SETTINGS,
+  modelBackfilled = false,
+  mkdirSync = fs.mkdirSync,
+  writeFileSync = fs.writeFileSync,
+  syncThreshold = syncModelCoupledNewSessionThreshold,
+} = {}) {
+  const dir = path.dirname(settingsPath);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(settingsPath, JSON.stringify(installedSettings, null, 2) + '\n');
+  return syncThreshold({ modelBackfilled });
 }
 
 export function shouldSyncCodexConfig({
@@ -389,16 +425,20 @@ export function main(argv = process.argv.slice(2)) {
     return;
   }
 
-  // Write back
-  const dir = path.dirname(INSTALLED_SETTINGS);
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(INSTALLED_SETTINGS, JSON.stringify(installedSettings, null, 2) + '\n');
+  // Write settings first. The paired threshold default is written only after
+  // the model backfill has persisted, so a crash cannot leave threshold=30
+  // without the matching opus[1m] settings model.
+  const thresholdSync = persistInstalledSettingsAndSyncCoupledThreshold({
+    installedSettings,
+    modelBackfilled: modelSync.changed,
+  });
+
   if (added === 0 && updated === 0 && removed === 0 && !statusLineChanged && !modelSync.changed && !settingsBackfilled) {
     console.log(`Settings hooks: all up to date; Codex config ${codexSync.changed ? 'refreshed' : 'unchanged'}.`);
     return;
   }
 
-  console.log(`Settings hooks: ${added} added, ${updated} updated, ${removed} removed${statusLineChanged ? ', statusLine updated' : ''}${modelSync.changed ? ', model backfilled' : ''}${settingsBackfilled ? ', settings backfilled' : ''}${codexSync.changed ? ', Codex config refreshed' : ''}.`);
+  console.log(`Settings hooks: ${added} added, ${updated} updated, ${removed} removed${statusLineChanged ? ', statusLine updated' : ''}${modelSync.changed ? ', model backfilled' : ''}${thresholdSync.changed ? ', new-session threshold paired' : ''}${settingsBackfilled ? ', settings backfilled' : ''}${codexSync.changed ? ', Codex config refreshed' : ''}.`);
 
   // Enqueue restart when hooks changed — this runs from the NEWLY installed
   // package during upgrade (via resolveInstalledSyncScript), so it works even

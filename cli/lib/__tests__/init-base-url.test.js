@@ -11,6 +11,7 @@ describe('base URL support', () => {
     assert.equal(typeof initModule.parseInitFlags, 'function');
     assert.equal(typeof initModule.validateInitOptions, 'function');
     assert.equal(typeof initModule.printInitHelp, 'function');
+    assert.equal(typeof initModule.seedFreshInstallNewSessionThresholdDefault, 'function');
   });
 
   test('parseInitFlags accepts runtime-specific base URL flags and printInitHelp shows them', async () => {
@@ -151,5 +152,33 @@ describe('base URL support', () => {
 
     assert.match(claudeError, /Invalid base URL/);
     assert.match(codexError, /Invalid Codex base URL/);
+  });
+});
+
+describe('fresh install new-session threshold default', () => {
+  test('seeds 30 when fresh install config has no Claude threshold', async () => {
+    const { seedFreshInstallNewSessionThresholdDefault } = await import('../../commands/init.js');
+    const updates = [];
+
+    const changed = seedFreshInstallNewSessionThresholdDefault({
+      config: { runtime: 'claude' },
+      updateConfig: (update) => updates.push(update),
+    });
+
+    assert.equal(changed, true);
+    assert.deepEqual(updates, [{ new_session_threshold: 30 }]);
+  });
+
+  test('preserves an existing Claude threshold value', async () => {
+    const { seedFreshInstallNewSessionThresholdDefault } = await import('../../commands/init.js');
+
+    const changed = seedFreshInstallNewSessionThresholdDefault({
+      config: { new_session_threshold: 70 },
+      updateConfig: () => {
+        throw new Error('should not overwrite an existing threshold');
+      },
+    });
+
+    assert.equal(changed, false);
   });
 });

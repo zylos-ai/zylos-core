@@ -1,5 +1,5 @@
 {
-  "model": "claude-opus-4-6",
+  "model": "opus[1m]",
   "autoMemoryEnabled": false,
   "autoDreamEnabled": false,
   "hooks": {

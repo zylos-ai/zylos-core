@@ -941,6 +941,15 @@ function ensureNewSessionThresholdDefaults() {
   if (Object.keys(updates).length > 0) updateZylosConfig(updates);
 }
 
+export function seedFreshInstallNewSessionThresholdDefault({
+  config = getZylosConfig(),
+  updateConfig = updateZylosConfig,
+} = {}) {
+  if (config.new_session_threshold !== undefined) return false;
+  updateConfig({ new_session_threshold: 30 });
+  return true;
+}
+
 function migrateWebConsolePassword() {
   const envPath = path.join(ZYLOS_DIR, '.env');
   let content = '';
@@ -2401,6 +2410,10 @@ export async function initCommand(args) {
   if (!existingRuntime || existingRuntime !== selectedRuntime) {
     updateZylosConfig({ runtime: selectedRuntime });
   }
+
+  // Fresh installs pair the opus[1m] default model with an explicit lower
+  // Claude new-session threshold. This is intentionally not used by re-init.
+  seedFreshInstallNewSessionThresholdDefault();
 
   // Step 7: Run data migrations then deploy templates (both idempotent)
   runMigrations();
