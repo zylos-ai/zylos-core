@@ -156,6 +156,15 @@ header h1 {
   white-space: pre-wrap;
 }
 
+.message .markdown-body {
+  white-space: normal;
+}
+
+.message .markdown-body pre,
+.message .markdown-body code {
+  white-space: pre-wrap;
+}
+
 .message.user {
   align-self: flex-end;
   background: linear-gradient(135deg, var(--user-msg-bg) 0%, #1a4555 100%);
