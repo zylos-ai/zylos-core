@@ -138,6 +138,13 @@ header h1 {
   display: flex;
   flex-direction: column;
   gap: 1rem;
+  border: 1px solid transparent;
+  transition: border-color 0.2s, background-color 0.2s;
+}
+
+.messages.drag-over {
+  border-color: var(--accent);
+  background-color: rgba(77, 217, 208, 0.05);
 }
 
 .message {
@@ -146,6 +153,15 @@ header h1 {
   border-radius: 1rem;
   line-height: 1.5;
   word-wrap: break-word;
+  white-space: pre-wrap;
+}
+
+.message .markdown-body {
+  white-space: normal;
+}
+
+.message .markdown-body pre,
+.message .markdown-body code {
   white-space: pre-wrap;
 }
 
@@ -187,6 +203,157 @@ header h1 {
   margin-top: 0.5rem;
 }
 
+.markdown-body a {
+  color: var(--accent);
+  text-decoration: underline;
+  text-decoration-color: rgba(77, 217, 208, 0.4);
+  word-break: break-all;
+}
+
+.markdown-body a:hover {
+  color: var(--accent-hover);
+  text-decoration-color: var(--accent-hover);
+}
+
+.markdown-body { line-height: 1.7; }
+.markdown-body > *:not(:last-child) { margin-bottom: 0.75em; }
+.markdown-body p { margin: 0; }
+
+.markdown-body code {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.07);
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 0.9em;
+}
+
+.markdown-body pre {
+  margin: 0;
+  padding: 0.6em 0.8em;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.25);
+  overflow-x: auto;
+}
+
+.markdown-body pre code {
+  padding: 0;
+  background: none;
+  font-size: 0.88em;
+}
+
+.markdown-body blockquote {
+  margin: 0;
+  padding: 2px 0.8em;
+  border-left: 3px solid var(--border-color);
+  color: var(--text-secondary);
+}
+
+.markdown-body blockquote p { margin: 0; }
+
+.markdown-body ul, .markdown-body ol {
+  margin: 0;
+  padding-left: 1.5em;
+}
+
+.markdown-body li { margin: 0; padding: 0; }
+.markdown-body li > p { margin: 0; }
+
+.markdown-body h1, .markdown-body h2, .markdown-body h3 {
+  margin: 0.5em 0 0.3em;
+  font-size: 1em;
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.markdown-body table {
+  margin: 0.4em 0;
+  border-collapse: collapse;
+  font-size: 0.9em;
+}
+
+.markdown-body th, .markdown-body td {
+  padding: 3px 8px;
+  border: 1px solid var(--border-color);
+  text-align: left;
+}
+
+.markdown-body th { background: rgba(255, 255, 255, 0.04); }
+
+.markdown-body hr {
+  margin: 0.5em 0;
+  border: none;
+  border-top: 1px solid var(--border-color);
+}
+
+.message-attachments {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  margin-top: 0.55rem;
+}
+
+.message-attachment {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  max-width: 260px;
+  padding: 0.45rem 0.55rem;
+  border: 1px solid var(--border-color);
+  border-radius: 0.5rem;
+  background-color: var(--bg-tertiary);
+  color: var(--text-primary);
+  text-decoration: none;
+}
+
+.attachment-icon {
+  flex: 0 0 auto;
+  padding: 0.15rem 0.3rem;
+  border-radius: 0.25rem;
+  background: rgba(77, 217, 208, 0.12);
+  color: var(--accent);
+  font-size: 0.68rem;
+  font-weight: 700;
+}
+
+.attachment-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.attachment-size {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.attachment-download {
+  flex-shrink: 0;
+  opacity: 0;
+  margin-left: auto;
+  font-size: 0.85rem;
+  transition: opacity 0.15s;
+}
+
+.message-attachment:hover .attachment-download {
+  opacity: 1;
+}
+
+.media-image-link {
+  display: block;
+  max-width: min(280px, 100%);
+}
+
+.media-image {
+  display: block;
+  max-width: 100%;
+  max-height: 200px;
+  border-radius: 0.5rem;
+  border: 1px solid var(--border-color);
+  object-fit: contain;
+}
+
 .message.sending {
   opacity: 0.7;
 }
@@ -197,10 +364,110 @@ header h1 {
   border-top: 1px solid var(--border-color);
 }
 
+.attachment-tray {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.attachment-tray[hidden] {
+  display: none;
+}
+
+.attachment-preview {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  max-width: 260px;
+  padding: 0.45rem 0.55rem;
+  border: 1px solid var(--border-color);
+  border-radius: 0.5rem;
+  background-color: var(--bg-tertiary);
+}
+
+.attachment-preview.ready {
+  border-color: rgba(77, 217, 208, 0.35);
+}
+
+.attachment-preview.error {
+  border-color: rgba(239, 95, 95, 0.55);
+}
+
+.attachment-preview img {
+  width: 38px;
+  height: 38px;
+  object-fit: cover;
+  border-radius: 0.375rem;
+}
+
+.attachment-details {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.attachment-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.attachment-status {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.attachment-remove {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  border: 1px solid var(--border-color);
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.attachment-remove:hover {
+  color: var(--error);
+  border-color: var(--error);
+}
+
 #message-form {
   display: flex;
   gap: 0.75rem;
   align-items: flex-end;
+}
+
+.icon-button {
+  width: 44px;
+  height: 44px;
+  border: 1px solid var(--border-color);
+  border-radius: 50%;
+  background-color: var(--bg-tertiary);
+  color: var(--text-secondary);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.2s, border-color 0.2s, transform 0.1s;
+}
+
+.icon-button:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.icon-button:active {
+  transform: scale(0.95);
+}
+
+.icon-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 
 #message-input {
@@ -368,7 +635,7 @@ header h1 {
   margin-bottom: 1.5rem;
 }
 
-.login-box input {
+.login-box input:not([type="checkbox"]) {
   width: 100%;
   padding: 0.75rem 1rem;
   border: 1px solid var(--border-color);
@@ -377,11 +644,11 @@ header h1 {
   color: var(--text-primary);
   font-size: 1rem;
   outline: none;
-  margin-bottom: 1rem;
+  margin-bottom: 0.75rem;
   transition: border-color 0.2s, box-shadow 0.2s;
 }
 
-.login-box input:focus {
+.login-box input:not([type="checkbox"]):focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 2px var(--accent-glow);
 }
@@ -402,6 +669,25 @@ header h1 {
 .login-box button:hover {
   background-color: var(--accent-hover);
   box-shadow: 0 0 16px var(--accent-glow);
+}
+
+.remember-me {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+  width: 100%;
+  margin-bottom: 1rem;
+}
+
+.remember-me input[type="checkbox"] {
+  accent-color: var(--accent);
+  width: 15px;
+  height: 15px;
 }
 
 .login-error {
