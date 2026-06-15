@@ -593,7 +593,21 @@ class ZylosConsole {
       const list = document.createElement('div');
       list.className = 'message-attachments';
       msg.attachments.forEach((attachment) => {
-        list.appendChild(this.renderAttachmentChip(attachment));
+        if (attachment.kind === 'image' && attachment.href) {
+          const link = document.createElement('a');
+          link.href = attachment.href;
+          link.target = '_blank';
+          link.rel = 'noopener noreferrer';
+          link.className = 'media-image-link';
+          const img = document.createElement('img');
+          img.src = attachment.href;
+          img.alt = attachment.name || 'Image';
+          img.className = 'media-image';
+          link.appendChild(img);
+          list.appendChild(link);
+        } else {
+          list.appendChild(this.renderAttachmentChip(attachment));
+        }
       });
       content.appendChild(list);
     }
@@ -644,6 +658,12 @@ class ZylosConsole {
     wrapper.appendChild(icon);
     wrapper.appendChild(label);
     if (size.textContent) wrapper.appendChild(size);
+    if (attachment.href) {
+      const dl = document.createElement('span');
+      dl.className = 'attachment-download';
+      dl.textContent = '⬇';
+      wrapper.appendChild(dl);
+    }
     return wrapper;
   }
 }

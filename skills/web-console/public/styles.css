@@ -237,6 +237,18 @@ header h1 {
   color: var(--text-secondary);
 }
 
+.attachment-download {
+  flex-shrink: 0;
+  opacity: 0;
+  margin-left: auto;
+  font-size: 0.85rem;
+  transition: opacity 0.15s;
+}
+
+.message-attachment:hover .attachment-download {
+  opacity: 1;
+}
+
 .media-image-link {
   display: block;
   max-width: min(460px, 100%);
