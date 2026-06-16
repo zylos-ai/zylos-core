@@ -74,9 +74,9 @@ run_one() {
     return 64
   fi
 
-  local SCENARIO_TARGET=""
-  local SCENARIO_CURRENT=""
-  local SCENARIO_ARGS=""
+  local SCENARIO_CMD=""
+  local SETUP=""
+  local SETUP_RUNTIME=""
   local SCENARIO_ENV_FILE=""
   local EXPECT_EXIT=""
   local EXPECT_STDOUT=""
@@ -86,8 +86,8 @@ run_one() {
   local EXPECT_INVOCATION_CONTAINS=""
   load_scenario "$scenario_file"
 
-  if [[ -z "$SCENARIO_TARGET" || -z "$SCENARIO_CURRENT" || -z "$EXPECT_EXIT" ]]; then
-    echo "Scenario $scenario is missing required fields" >&2
+  if [[ -z "$SCENARIO_CMD" || -z "$EXPECT_EXIT" ]]; then
+    echo "Scenario $scenario is missing required fields (need SCENARIO_CMD and EXPECT_EXIT)" >&2
     return 65
   fi
 
@@ -97,22 +97,50 @@ run_one() {
   local stderr_file="$run_dir/stderr.log"
   local invocation_log="$run_dir/invocations.log"
 
+  # The container fixture builds the requested workspace state, then runs the
+  # scenario command. SETUP selects how the workspace is prepared:
+  #   minimal — empty workspace; SETUP_RUNTIME optionally seeds config.json
+  #             (used to make a runtime switch a real switch, not a no-op).
+  #   init    — clone the golden, build-time `zylos init` workspace baked into
+  #             the image at $GOLDEN_DIR, giving a real post-init state.
+  # SCENARIO_CMD is any command line (typically a `zylos ...` invocation).
   local container_script='
 set -uo pipefail
 mkdir -p "$HOME" "$ZYLOS_DIR/.zylos" "$ZYLOS_DIR/pm2"
-printf "{\"runtime\":\"%s\"}\n" "$SCENARIO_CURRENT" > "$ZYLOS_DIR/.zylos/config.json"
+
+case "${SETUP:-minimal}" in
+  init)
+    if [ ! -d "$GOLDEN_DIR" ]; then
+      echo "golden init workspace not found at $GOLDEN_DIR" >&2
+      exit 70
+    fi
+    cp -a "$GOLDEN_DIR/." "$ZYLOS_DIR/"
+    ;;
+  minimal) ;;
+  *)
+    echo "unknown SETUP mode: $SETUP" >&2
+    exit 70
+    ;;
+esac
+
+if [ -n "${SETUP_RUNTIME:-}" ]; then
+  printf "{\"runtime\":\"%s\"}\n" "$SETUP_RUNTIME" > "$ZYLOS_DIR/.zylos/config.json"
+fi
+
 if [ -n "${SCENARIO_ENV_FILE:-}" ]; then
   printf "%b\n" "$SCENARIO_ENV_FILE" > "$ZYLOS_DIR/.env"
-else
+elif [ "${SETUP:-minimal}" = minimal ] && [ ! -f "$ZYLOS_DIR/.env" ]; then
   : > "$ZYLOS_DIR/.env"
 fi
-zylos runtime "$SCENARIO_TARGET" $SCENARIO_ARGS
+
+eval "$SCENARIO_CMD"
 '
 
   docker run --rm \
     --env-file "$scenario_file" \
     -e "HOME=/tmp/zylos-home" \
     -e "ZYLOS_DIR=/tmp/zylos-data" \
+    -e "GOLDEN_DIR=/opt/zylos-golden" \
     -e "FAKE_INVOCATION_LOG=/tmp/zylos-run/invocations.log" \
     -e "PATH=/runtime/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
     -v "$SCRIPT_DIR:/runtime:ro" \
