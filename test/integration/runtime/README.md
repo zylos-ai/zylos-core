@@ -27,8 +27,11 @@ summary.
   (`SCENARIO_CMD`), how to prepare the workspace (`SETUP`), what to inject, and
   what to assert. Adding a scenario means adding a file — never editing the
   runner or forking the Dockerfile.
-- Each scenario runs with an isolated `HOME` and `ZYLOS_DIR`, so scenarios never
-  contaminate each other.
+- Each scenario runs with an isolated `HOME`, and `ZYLOS_DIR` is set to
+  `$HOME/zylos` — the same invariant production relies on. This matters for
+  `SETUP=init`: generated artifacts such as `pm2/ecosystem.config.cjs` resolve
+  skill paths from `$HOME/zylos`, not from `$ZYLOS_DIR`, so a cloned post-init
+  workspace is only usable when the two coincide.
 - Fake `claude` and `codex` binaries are mounted at runtime and placed first on
   `PATH`, so both `commandExists()` and adapter probes use the deterministic
   shims.
@@ -39,14 +42,18 @@ summary.
   write `.zylos/config.json` (e.g. set the *current* runtime so a runtime switch
   is a real switch, not an already-on-target no-op).
 - `init` — clone the **golden init workspace** baked into the image. At build
-  time the Dockerfile runs `zylos init --yes --quiet` once into
-  `/opt/zylos-golden`; `SETUP=init` clones that into the scenario's `ZYLOS_DIR`.
+  time the Dockerfile runs `zylos init --yes --quiet` once (with
+  `ZYLOS_DIR == $HOME/zylos`, the production invariant) into `/opt/zylos-golden`;
+  `SETUP=init` clones that into the scenario's `ZYLOS_DIR` (which is `$HOME/zylos`).
   This gives a real post-init state (persisted config, deployed skills,
   templates) without re-running init per scenario. Fast (init runs once at
   build), real (genuine init output), isolated (each scenario gets its own
   copy). The build-time init runs offline via a throwaway `claude` stub that
   satisfies the auth probe; that stub lives at a build-only path and is absent
-  from the runtime `PATH`, so it never shadows the mounted test shims.
+  from the runtime `PATH`, so it never shadows the mounted test shims. The build
+  also gates golden-init health: it fails if init did not produce the expected
+  ecosystem config and skill scripts (init swallows PM2/DB warnings and still
+  exits 0, so the gate is what catches an incomplete bake).
 
 ## Add A Scenario
 
@@ -92,7 +99,11 @@ for a scenario.
   invariants.
 - `post-init-runtime-status` — demonstrates `SETUP=init`: runs
   `zylos runtime status` against the golden post-init workspace and asserts it
-  reports the runtime that init persisted.
+  reports the runtime that init persisted (config-readable check).
+- `post-init-ecosystem-paths` — stronger `SETUP=init` check: loads the generated
+  `pm2/ecosystem.config.cjs` and asserts every service's script file exists in
+  the cloned workspace, proving the post-init workspace is actually *usable*
+  (skill paths resolve), not merely config-readable.
 
 ## Scope Notes
 

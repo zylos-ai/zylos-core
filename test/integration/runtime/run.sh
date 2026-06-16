@@ -103,6 +103,10 @@ run_one() {
   #             (used to make a runtime switch a real switch, not a no-op).
   #   init    — clone the golden, build-time `zylos init` workspace baked into
   #             the image at $GOLDEN_DIR, giving a real post-init state.
+  # ZYLOS_DIR is deliberately $HOME/zylos (see docker run below): generated
+  # artifacts such as pm2/ecosystem.config.cjs resolve skill paths from
+  # $HOME/zylos, NOT from $ZYLOS_DIR, so a post-init workspace is only usable
+  # when this production invariant (ZYLOS_DIR == $HOME/zylos) holds.
   # SCENARIO_CMD is any command line (typically a `zylos ...` invocation).
   local container_script='
 set -uo pipefail
@@ -139,7 +143,7 @@ eval "$SCENARIO_CMD"
   docker run --rm \
     --env-file "$scenario_file" \
     -e "HOME=/tmp/zylos-home" \
-    -e "ZYLOS_DIR=/tmp/zylos-data" \
+    -e "ZYLOS_DIR=/tmp/zylos-home/zylos" \
     -e "GOLDEN_DIR=/opt/zylos-golden" \
     -e "FAKE_INVOCATION_LOG=/tmp/zylos-run/invocations.log" \
     -e "PATH=/runtime/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
