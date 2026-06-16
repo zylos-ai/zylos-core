@@ -22,13 +22,14 @@ are injected at run time as env/config.
   to a file. PATH shim is required — not just `CLAUDE_BIN`/`CODEX_BIN` env overrides —
   because full `zylos runtime` runs `commandExists(target)` = `which <cmd>`
   (`cli/lib/shell-utils.js:13-16`) before probing. The shim lets every branch be
-  reproduced in CI with no real credentials and no network, no production code change.
+  reproduced **locally** with no real credentials and no network, no production code change.
 - A `run.sh <scenario>` harness: build base once (layer-cached) → run container with
   the scenario's env/mounts **and an isolated `HOME` + `ZYLOS_DIR`** → assert on
   `zylos runtime …` exit code, stdout/stderr matchers, **and the fake-invocation
   record** → pass/fail.
 - A small set of **committed regression scenarios** (`scenarios/*.env` + fixtures),
-  plus a CI workflow running them as a matrix.
+  run **locally** via the harness (`run.sh all`). **No CI** — this repo has none yet;
+  the harness is a local, on-demand tool the developer/QA runs by hand.
 - Docs: how to run ad-hoc (nothing committed) vs. how to add a permanent scenario.
 
 ### Out of scope
@@ -41,6 +42,9 @@ are injected at run time as env/config.
   (clean `HOME`, no `~/.codex/auth.json`). Mock-HTTP Codex scenarios → **follow-up**.
 - Real-credential / real-network probing in CI. Real-cred runs are a documented
   **local-only ad-hoc** path, never committed, never in CI.
+- **CI integration** — this repo has no CI today (confirmed with Howard 2026-06-16).
+  The harness is local-only; no GitHub Actions / pipeline work in this deliverable. If
+  CI is added later, the committed scenarios drop into a matrix with zero changes.
 - The #644 probe-robustness changes — separate issue.
 
 ## Gate semantics (corrected — this drives every assertion)
@@ -77,10 +81,11 @@ authentication...` and/or the fake-invocation record). `--no-validate` asserts t
       honor `FAKE_<NAME>_EXIT` / `FAKE_<NAME>_STDOUT` / `FAKE_<NAME>_STDERR`, and
       append their argv + selected env (incl. `ANTHROPIC_BASE_URL`) to
       `$FAKE_INVOCATION_LOG`. Installed ahead of any real binary on PATH.
-- [ ] `test/integration/runtime/run.sh <scenario>` — build (cache) → `docker run` with
-      isolated `HOME`/`ZYLOS_DIR`, `--env-file scenarios/<scenario>.env`, fixture
+- [ ] `test/integration/runtime/run.sh <scenario|all>` — build (cache) → `docker run`
+      with isolated `HOME`/`ZYLOS_DIR`, `--env-file scenarios/<scenario>.env`, fixture
       `.zylos/config.json` (current ≠ target) → capture exit + stdout/stderr +
-      invocation log → assert → report.
+      invocation log → assert → report. `run.sh all` runs every committed scenario and
+      prints a pass/fail summary (this is the local "run the regression set" entry point).
 - [ ] `test/integration/runtime/scenarios/` — committed regression scenarios:
       - `claude-success` → exit 0, probe invoked.
       - `claude-confirmed-failure` → exit 2, probe invoked.
@@ -93,8 +98,6 @@ authentication...` and/or the fake-invocation record). `--no-validate` asserts t
         `codex login status` branch (`codex.js:152-184`); stub it to fail → exit 2.
 - [ ] `test/integration/runtime/README.md` — ad-hoc usage vs. adding a permanent
       scenario; note Codex apikey/base-URL is follow-up (needs mock HTTP).
-- [ ] `.github/workflows/runtime-integration.yml` — trigger on `cli/**` +
-      `test/integration/**`; buildx with layer cache; run scenarios as a matrix.
 - [ ] `.dockerignore` review so the test image build context stays lean.
 
 ## Test Checklist
@@ -105,7 +108,7 @@ authentication...` and/or the fake-invocation record). `--no-validate` asserts t
 - [ ] Each non-`--no-validate` scenario's invocation log proves the probe ran;
       `--no-validate` proves it did not.
 - [ ] Scenarios are order-independent (isolated `HOME`/`ZYLOS_DIR`, no cross-pollution).
-- [ ] CI workflow green on the branch.
+- [ ] `run.sh all` green locally (every committed scenario passes).
 - [ ] `grep` confirms no secret literals anywhere in the image build or committed files.
 
 ## Assumptions
@@ -136,5 +139,5 @@ authentication...` and/or the fake-invocation record). `--no-validate` asserts t
 - [ ] Scenarios isolate/reset `HOME` + `ZYLOS_DIR` + current runtime (order-independent).
 - [ ] Claude base-URL scenario proves `ANTHROPIC_BASE_URL` reached the probe env.
 - [ ] Codex scenario demonstrably hits the `login status` branch.
-- [ ] CI workflow green; `npm test` still green; lint clean.
+- [ ] `run.sh all` green locally; `npm test` still green; lint clean.
 - [ ] Howard signs off before merge.
