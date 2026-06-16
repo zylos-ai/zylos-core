@@ -38,7 +38,9 @@ The pass-1 audit suggested constraining `--no-validate` to pair with `--save-api
 
 **Codex login-status 3-way** (refinement enabled by #641): the current `parseCodexLoginStatus` returns a boolean. Add a sibling in `auth-parsers.js` (e.g. `classifyCodexLoginStatus(combined) → 'success' | 'failure' | 'uncertain'`): "Logged in" → success, "Not logged in" → failure, anything else / empty → uncertain. Keep the stdout+stderr combining (#641). The execFile `catch` (binary missing / killed) → **uncertain**, not failure.
 
-## Per-caller policy (6 sites)
+## Per-caller policy (6 policy sites + shim fallback)
+
+> Numbering note: the authoritative audit counts the `runtime-components.js:45` shim as a 7th upstream consumer; here it is folded into row 6 (wrapper/shim group) and also listed separately in the checklist, so it cannot be missed. The impl PR table header says "6 policy sites + shim fallback" to avoid 6-vs-7 confusion.
 
 | # | File:line (`48ac162`) | New policy |
 |---|---|---|
@@ -69,7 +71,7 @@ The pass-1 audit suggested constraining `--no-validate` to pair with `--save-api
 - [ ] `cli/lib/__tests__/codex.test.js` — migrate the **three** existing adapter `checkAuth()` tests from `{ ok }` → `{ status }` (apikey base-url; login-status "Not logged in"→failure; "Logged in"→success). Add: 401→failure; 429/5xx→uncertain; network error→uncertain; login-status unparseable→uncertain (use the existing `FAKE_CODEX_STATUS` harness).
 - [ ] `cli/lib/__tests__/claude.test.js` (or equivalent) — success/failure/uncertain mapping; **assert `ANTHROPIC_BASE_URL` is injected** into the probe env.
 - [ ] `cli/lib/__tests__/runtime-base-url.test.js` (or runtime flags test) — `--no-validate` is parsed; **bare `--no-validate` is accepted** (no `--save-*` required); switch gate skips probe when `noValidate`.
-- [ ] `skills/activity-monitor/scripts/__tests__/health-engine.test.js` — migrate `{ok:true/false}` mocks → `{ status }`. **Add regression locks:** (a) set-auth_failed path: `uncertain` does NOT set `auth_failed`; (b) recovery path: in `auth_failed` + `uncertain` → stays `auth_failed`, `killTmuxSession` NOT called (count 0).
+- [ ] `skills/activity-monitor/scripts/__tests__/health-engine.test.js` — migrate `{ok:true/false}` mocks → `{ status }`. **Add regression locks:** (a) set-auth_failed path: `uncertain` does NOT set `auth_failed`; (b) recovery path: in `auth_failed` + `uncertain` → assert all three in one test: `result.health === 'auth_failed'`, `engine.healthState === 'auth_failed'`, and `killTmuxSession` call count `=== 0`.
 - [ ] Switch-gate tests: `uncertain` → exit 2; `failure` → exit 2; `success` → proceeds.
 - [ ] Full suite green: `npm test` (node test runner 508+ ) **and** jest (111+). Run the complete CI locally before pushing.
 
@@ -83,7 +85,7 @@ The pass-1 audit suggested constraining `--no-validate` to pair with `--save-api
 
 ## Acceptance Checklist
 
-- [ ] `checkAuth()` returns `{ status, reason }` for both adapters; no `ok` field anywhere.
+- [ ] `checkAuth()` returns `{ status, reason }` for both adapters; no `ok` field on adapter `checkAuth()` results, and no `.ok` consumers of checkAuth results remain. (Unrelated `{ ok }` results elsewhere — doctor JSON, helper returns, test harnesses — are untouched.)
 - [ ] All 6 call sites migrated per the policy table; behavior changes limited to the intended ones (uncertain now blocks switch + shows "unverified" in status/doctor; health-engine unchanged in tolerance).
 - [ ] Switch gate: `success` proceeds; `uncertain` and `failure` both exit 2 with distinct messages.
 - [ ] `--no-validate`: skips the probe, works standalone, symmetric both runtimes; already-on-target no-op early-return still short-circuits before any work.
