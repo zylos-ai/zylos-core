@@ -66,9 +66,11 @@ export function copyTree(src, dest, { excludes = [] } = {}) {
   const resolvedSrc = fs.realpathSync(src);
   const resolvedDest = path.resolve(dest);
   fs.mkdirSync(path.dirname(resolvedDest), { recursive: true });
+  const resolvedDestParent = fs.realpathSync(path.dirname(resolvedDest));
+  const resolvedDestForCompare = path.join(resolvedDestParent, path.basename(resolvedDest));
 
   // Detect self-copy: dest is inside src (e.g., src/.backup/timestamp)
-  if (resolvedDest.startsWith(resolvedSrc + path.sep)) {
+  if (resolvedDestForCompare.startsWith(resolvedSrc + path.sep)) {
     const tmpDest = fs.mkdtempSync(path.join(getWritableTmpBase(), 'zylos-copy-'));
     try {
       cpSyncFiltered(resolvedSrc, tmpDest, excludes);
