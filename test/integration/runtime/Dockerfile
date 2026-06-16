@@ -22,8 +22,9 @@ RUN npm install -g pm2@latest \
 # ── Golden post-init workspace ────────────────────────────────────────────────
 # Bake one real `zylos init` workspace into the image so scenarios that need a
 # post-init state (SETUP=init) can clone it instead of re-running init every
-# time. init is run offline with a throwaway `claude` stub on PATH so the auth
-# probe resolves without network — the stub answers only `claude auth status`
+# time. init's auth probe is made to resolve without network via a throwaway
+# `claude` stub on PATH (the Docker build itself still installs apt/npm packages
+# — only the auth probe is offline). The stub answers only `claude auth status`
 # (what isClaudeAuthenticated() calls) and lives at a build-only path that is
 # absent from the runtime PATH, so it never shadows the real test shims mounted
 # at /runtime/bin.
