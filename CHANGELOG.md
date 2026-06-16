@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - **Claude init auth check**: `isClaudeAuthenticated()` now keys off the explicit `loggedIn` field from `claude auth status --json` instead of the process exit code. The exit code conflated "not logged in" with crashes, timeouts, and cross-version subcommand drift; the new check reads the unambiguous field and treats any unparseable payload as not authenticated. Extracted a pure, unit-tested `parseClaudeAuthStatus()` helper. Local-only — no network call. (#641)
+- **Codex auth false-pass (security)**: `codex login status` exits `0` in **both** the "Logged in using …" and "Not logged in" states, so keying off its exit code reported a logged-out OAuth/ChatGPT session as authenticated. This false-pass affected both `isCodexAuthenticated()` (init) and the `CodexAdapter.checkAuth()` gate used by runtime-switch and the health probe — i.e. a runtime switch into an unauthenticated Codex could pass the auth check and leave the agent unreachable. Both now parse the status text (the line is emitted on **stderr**) via a shared, unit-tested `parseCodexLoginStatus()` and fail closed on anything ambiguous. Pure parsers moved to a dependency-free `cli/lib/auth-parsers.js`. (#641)
 
 ## [0.5.2] - 2026-06-02
 

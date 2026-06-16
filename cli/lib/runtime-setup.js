@@ -13,6 +13,7 @@ import { execSync, execFileSync, spawnSync } from 'node:child_process';
 import { parse, stringify } from 'smol-toml';
 import { ZYLOS_DIR } from './config.js';
 import { commandExists } from './shell-utils.js';
+import { parseClaudeAuthStatus, parseCodexLoginStatus } from './auth-parsers.js';
 
 function upsertEnvValue(content, key, value, comment = null) {
   const line = `${key}=${value}`;
@@ -75,22 +76,6 @@ export function installClaude() {
 // ── Auth checks ────────────────────────────────────────────────────────────
 
 /**
- * Parse `claude auth status --json` output into an authenticated boolean.
- * Keys off the explicit `loggedIn` field — never the exit code, which conflates
- * "not logged in" with crashes, timeouts, and cross-version subcommand drift.
- * Any unparseable / unexpected payload is treated as not authenticated.
- * @param {string} stdout
- * @returns {boolean}
- */
-export function parseClaudeAuthStatus(stdout) {
-  try {
-    return JSON.parse(stdout)?.loggedIn === true;
-  } catch {
-    return false;
-  }
-}
-
-/**
  * Check if Claude Code is authenticated.
  * Reads the explicit `loggedIn` field from `claude auth status --json` rather
  * than trusting the process exit code. Local-only — reads stored credentials,
@@ -136,11 +121,14 @@ export function isCodexAuthenticated() {
   } catch { /* auth.json absent or malformed — fall through */ }
 
   // Use `codex login status` as the authoritative check for OAuth/device auth.
+  // NOTE: `codex login status` exits 0 in BOTH states ("Logged in using ..." and
+  // "Not logged in"), so the exit code is meaningless — parse the output text.
+  // The status line is written to STDERR (stdout is empty), so combine streams.
   try {
     const result = spawnSync('codex', ['login', 'status'], {
       stdio: 'pipe', encoding: 'utf8', timeout: 10000,
     });
-    return result.status === 0;
+    return parseCodexLoginStatus((result.stdout || '') + (result.stderr || ''));
   } catch {
     return false;
   }
