@@ -7,90 +7,134 @@ base-URL injection) under different environment scenarios — without forking a
 Dockerfile per scenario. The image is a stable, parameterized substrate; scenarios
 are injected at run time as env/config.
 
+> Revised after Jinglever R1 review: corrected `uncertain` gate semantics, added
+> no-op avoidance + probe-invocation proof, split Claude/Codex cred sourcing, added
+> base-URL assertion. Citations are to the reviewed runtime code.
+
 ## Scope
 
 ### In scope
 - One version-controlled base-image Dockerfile (`zylos-runtime-test`) that installs
   zylos from local source and is **scenario-agnostic**. No secrets baked into any layer.
-- A **deterministic probe stub**: a fake `claude` / `codex` binary placed on `PATH`
-  whose exit code / stdout / stderr is driven by env vars. This lets every tristate
-  branch (`success` / `uncertain` / `confirmed-failure`) be reproduced in CI with no
-  real credentials and no network.
+- A **deterministic probe stub via PATH shim**: fake `claude` / `codex` executables
+  placed **on `PATH`** (named exactly `claude`/`codex`) whose exit code / stdout /
+  stderr is driven by env vars, and which **record their own invocation** (args + env)
+  to a file. PATH shim is required — not just `CLAUDE_BIN`/`CODEX_BIN` env overrides —
+  because full `zylos runtime` runs `commandExists(target)` = `which <cmd>`
+  (`cli/lib/shell-utils.js:13-16`) before probing. The shim lets every branch be
+  reproduced in CI with no real credentials and no network, no production code change.
 - A `run.sh <scenario>` harness: build base once (layer-cached) → run container with
-  the scenario's env/mounts → assert on `zylos runtime …` output + exit code → pass/fail.
-- A small set of **committed regression scenarios** (`scenarios/*.env`) covering the
-  end-to-end wiring, plus a CI workflow running them as a matrix.
+  the scenario's env/mounts **and an isolated `HOME` + `ZYLOS_DIR`** → assert on
+  `zylos runtime …` exit code, stdout/stderr matchers, **and the fake-invocation
+  record** → pass/fail.
+- A small set of **committed regression scenarios** (`scenarios/*.env` + fixtures),
+  plus a CI workflow running them as a matrix.
 - Docs: how to run ad-hoc (nothing committed) vs. how to add a permanent scenario.
 
 ### Out of scope
 - Re-testing the tristate **classification logic** itself — already unit-locked by #640
   (Jest 111 + Node 523). This harness verifies the **end-to-end wiring** (env parsing
-  from `.env`, process spawn, exit-code propagation, `zylos runtime` command path) that
-  unit tests stub out.
-- Real-credential / real-network probing in CI (would require secrets). Real-cred runs
-  are documented as a **local-only ad-hoc** path, never committed, never in CI.
-- The #644 probe-robustness changes (pin model, reclassify unknown/non-zero) — separate issue.
+  from `.env`, `commandExists` preflight, process spawn, exit-code/stderr propagation,
+  the switch gate) that unit tests stub out.
+- **Codex `apikey` / base-URL branches** (`codex.js:186-200`) which need a mock HTTP
+  endpoint — first deliverable covers Codex only via the `login status` branch
+  (clean `HOME`, no `~/.codex/auth.json`). Mock-HTTP Codex scenarios → **follow-up**.
+- Real-credential / real-network probing in CI. Real-cred runs are a documented
+  **local-only ad-hoc** path, never committed, never in CI.
+- The #644 probe-robustness changes — separate issue.
 
-## Key design decision (please validate, Jinglever)
-`checkAuth` spawns the actual `claude` / `codex` CLI. To make integration scenarios
-**deterministic, credential-free, and network-free**, the proposal is a **fake runtime
-binary on PATH** controlled by env, e.g.:
+## Gate semantics (corrected — this drives every assertion)
+The tristate has **two different consumers with different policies**:
 
-```
-FAKE_CLAUDE_EXIT=0           # process exit code the stub returns
-FAKE_CLAUDE_STDOUT='...'     # scripted stdout (e.g. a successful probe reply)
-FAKE_CLAUDE_STDERR='...'     # scripted stderr (e.g. an auth-error string)
-```
+| Consumer | `success` | `confirmed failure` | `uncertain` |
+|----------|-----------|---------------------|-------------|
+| **`zylos runtime` switch gate** (`runtime.js:205-217`) — fail-closed | proceed → exit 0 | refuse → **exit 2** | refuse, "inconclusive" → **exit 2** |
+| **health-engine** (sites 4/5) — tolerant | recover | confirmed `auth_failed` | NOT treated as failure (no false restart) |
 
-A scenario then = a tiny `.env` that sets these (plus `ANTHROPIC_API_KEY` /
-`ANTHROPIC_BASE_URL` / `--no-validate` as needed) and an expected (exit code, stdout
-matcher). Open question for review: stub via PATH shim vs. a thin wrapper the adapter
-already respects — pick the lowest-touch option that doesn't require production code changes.
+This harness tests the **switch gate**, so `uncertain` → **exit 2 + stderr match**
+("authentication check was inconclusive" / reason), locked by
+`cli/lib/__tests__/runtime-base-url.test.js:65-89`. `--no-validate` skips the probe
+entirely → exit 0 regardless of stub outcome (`runtime.js:199-203`). The
+"uncertain never causes a false failure" wording applies only to health-engine and
+is **not** an assertion in this harness.
+
+## Avoiding the already-on-target no-op (false-pass guard)
+`switchRuntime()` returns early with "Already on `<target>` runtime." when
+`current === target` and no save flags (`runtime.js:252-255`) — **before** any
+install/save/probe (`:257+`, gate at `:298-301`). A scenario that hits this exits 0
+without ever calling `checkAuth` → green CI, zero coverage. Therefore **every
+scenario fixture must set the current runtime to the opposite of the target** (write
+`.zylos/config.json` in an isolated `ZYLOS_DIR`), and **every non-`--no-validate`
+scenario must assert the probe actually ran** (stdout `Checking <target>
+authentication...` and/or the fake-invocation record). `--no-validate` asserts the
+**reverse**: fake invocation count == 0.
 
 ## Development Checklist
 - [ ] `test/integration/runtime/Dockerfile` — base image: node:22-slim + git/curl/bash,
       install zylos from local source (`npm i -g --install-links .`), no PM2 services,
       no secrets. Verify `zylos --version` in build.
-- [ ] `test/integration/runtime/bin/fake-claude` + `bin/fake-codex` — env-driven stubs
-      (exit/stdout/stderr); installed onto PATH ahead of any real binary in the image
-      or via mount.
+- [ ] `test/integration/runtime/bin/claude` + `bin/codex` — env-driven PATH shims:
+      honor `FAKE_<NAME>_EXIT` / `FAKE_<NAME>_STDOUT` / `FAKE_<NAME>_STDERR`, and
+      append their argv + selected env (incl. `ANTHROPIC_BASE_URL`) to
+      `$FAKE_INVOCATION_LOG`. Installed ahead of any real binary on PATH.
 - [ ] `test/integration/runtime/run.sh <scenario>` — build (cache) → `docker run` with
-      `--env-file scenarios/<scenario>.env` → capture exit+output → assert → report.
-- [ ] `test/integration/runtime/scenarios/*.env` — committed regression scenarios:
-      (a) confirmed success → switch proceeds, exit 0;
-      (b) confirmed-failure → switch refused, non-zero exit;
-      (c) uncertain → tolerated per #640 policy (no false failure);
-      (d) `--no-validate` → probe skipped regardless of stub outcome.
-- [ ] `test/integration/runtime/README.md` — ad-hoc usage vs. adding a permanent scenario.
+      isolated `HOME`/`ZYLOS_DIR`, `--env-file scenarios/<scenario>.env`, fixture
+      `.zylos/config.json` (current ≠ target) → capture exit + stdout/stderr +
+      invocation log → assert → report.
+- [ ] `test/integration/runtime/scenarios/` — committed regression scenarios:
+      - `claude-success` → exit 0, probe invoked.
+      - `claude-confirmed-failure` → exit 2, probe invoked.
+      - `claude-uncertain` → **exit 2** + stderr "inconclusive", probe invoked.
+      - `claude-no-validate` → exit 0, **probe NOT invoked** (count 0).
+      - `claude-base-url` → fixture `.env` sets `ANTHROPIC_BASE_URL`; assert the shim's
+        recorded probe env contains that base URL (verifies injection
+        `claude.js:105-119`).
+      - `codex-login-status-fail` → clean `HOME` (no `~/.codex/auth.json`) forces the
+        `codex login status` branch (`codex.js:152-184`); stub it to fail → exit 2.
+- [ ] `test/integration/runtime/README.md` — ad-hoc usage vs. adding a permanent
+      scenario; note Codex apikey/base-URL is follow-up (needs mock HTTP).
 - [ ] `.github/workflows/runtime-integration.yml` — trigger on `cli/**` +
       `test/integration/**`; buildx with layer cache; run scenarios as a matrix.
 - [ ] `.dockerignore` review so the test image build context stays lean.
 
 ## Test Checklist
-- [ ] `run.sh` passes for all four committed scenarios locally.
+- [ ] `run.sh` passes for all committed scenarios locally.
 - [ ] Re-running with no rebuild reuses the cached base image (substrate is stable).
-- [ ] Adding a new scenario requires only a new `.env` + matrix row — no Dockerfile edit
-      (demonstrate by adding a throwaway 5th scenario in review, then removing it).
+- [ ] Adding a new scenario requires only a new `.env`/fixture + matrix row — no
+      Dockerfile edit (demonstrate by adding a throwaway scenario in review, then removing).
+- [ ] Each non-`--no-validate` scenario's invocation log proves the probe ran;
+      `--no-validate` proves it did not.
+- [ ] Scenarios are order-independent (isolated `HOME`/`ZYLOS_DIR`, no cross-pollution).
 - [ ] CI workflow green on the branch.
 - [ ] `grep` confirms no secret literals anywhere in the image build or committed files.
 
 ## Assumptions
-- [ ] The runtime adapter resolves `claude`/`codex` via `PATH` (so a PATH shim
-      intercepts it). **Needs validation** by reading `cli/lib/runtime/claude.js` /
-      `codex.js` spawn calls — if it uses an absolute path, the stub strategy changes.
-- [ ] `zylos runtime <name>` exit code reliably reflects the checkAuth outcome
-      (refused switch → non-zero). Confirm against `cli/commands/runtime.js`.
-- [ ] `checkAuth` reads creds from the workspace `.env`; the container must provide a
-      minimal valid workspace layout for the command to run. Confirm minimal fixture.
-- [ ] No production code change is required to make the runtime testable; if one is,
-      flag it (small seam is acceptable, large refactor is a separate decision).
+- [ ] Adapter resolves `claude`/`codex` via `PATH` — **confirmed**: defaults are bare
+      command names `CLAUDE_BIN`/`CODEX_BIN` (`claude.js:42`, `codex.js:46`) used via
+      `execFileAsync` (`claude.js:130`, `codex.js:175`); preflight `commandExists` is
+      `which` (`shell-utils.js:13-16`). ⇒ a PATH shim named `claude`/`codex` is required.
+- [ ] `zylos runtime <name>` exit code reflects checkAuth **except** the
+      already-on-target no-op — handled by the fixture guard above.
+- [ ] **Claude** `checkAuth` reads creds from `ZYLOS_DIR/.env` (`claude.js:105-119`) —
+      so Claude scenarios drive creds + base URL via the workspace `.env` fixture.
+- [ ] **Codex** `checkAuth` does **NOT** read workspace `.env` (`codex.js:142-143`);
+      it reads `~/.codex/auth.json`, else `codex login status` for chatgpt/missing
+      (`codex.js:152-184`), HTTP probe only for `apikey` (`:186-200`). ⇒ Codex
+      first-deliverable scenario uses a clean `HOME` to force the login-status branch;
+      apikey/base-URL branches are follow-up.
+- [ ] No production code change required — PATH shim + isolated `HOME`/`ZYLOS_DIR` is
+      sufficient. If any seam turns out to be needed, flag before adding it.
 
 ## Acceptance Checklist (Howard accepts — no direct merge)
 - [ ] Base image builds reproducibly; `grep` shows no secrets in any layer/file.
 - [ ] Ad-hoc scenario runnable via runtime env injection (documented, demoed).
-- [ ] All committed scenarios are **data** (`.env`) + matrix row, never a forked Dockerfile.
-- [ ] Four tristate/`--no-validate` scenarios pass; #640 safety invariant preserved
-      (uncertain never causes a false failure).
-- [ ] CI workflow green.
-- [ ] `npm test` still green; lint clean.
+- [ ] All committed scenarios are **data** (`.env`/fixture) + matrix row, never a forked Dockerfile.
+- [ ] Switch-gate semantics exact: success→0, confirmed-failure→2, **uncertain→2 +
+      "inconclusive" stderr**, `--no-validate`→0 with probe skipped.
+- [ ] Every non-`--no-validate` scenario proves the fake binary was invoked;
+      `--no-validate` proves it was not.
+- [ ] Scenarios isolate/reset `HOME` + `ZYLOS_DIR` + current runtime (order-independent).
+- [ ] Claude base-URL scenario proves `ANTHROPIC_BASE_URL` reached the probe env.
+- [ ] Codex scenario demonstrably hits the `login status` branch.
+- [ ] CI workflow green; `npm test` still green; lint clean.
 - [ ] Howard signs off before merge.
