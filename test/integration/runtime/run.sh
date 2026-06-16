@@ -118,7 +118,7 @@ zylos runtime "$SCENARIO_TARGET" $SCENARIO_ARGS
     -v "$SCRIPT_DIR:/runtime:ro" \
     -v "$run_dir:/tmp/zylos-run" \
     "$IMAGE_NAME" \
-    bash -lc "$container_script" >"$stdout_file" 2>"$stderr_file"
+    bash -c "$container_script" >"$stdout_file" 2>"$stderr_file"
   local exit_code=$?
 
   local failed=0
