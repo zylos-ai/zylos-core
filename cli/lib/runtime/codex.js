@@ -38,6 +38,7 @@ import {
   hasChildProcess,
 } from './tmux-helpers.js';
 import { buildCleanEnv, buildCompatEnv, loadRuntimeEnvManifest, writeLaunchSpec } from './tmux-env.js';
+import { parseCodexLoginStatus } from '../auth-parsers.js';
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -164,12 +165,19 @@ export class CodexAdapter extends RuntimeAdapter {
 
     if (authMode === 'chatgpt' || (authMode !== 'apikey' && !apiKey)) {
       // OAuth/device auth, or no auth.json — defer to the CLI which reads auth.json natively.
+      // NOTE: `codex login status` exits 0 in BOTH states ("Logged in using ..." and
+      // "Not logged in"), so a non-throwing call does NOT mean authenticated — parse
+      // the output text. Treating exit 0 as "ok" here would false-pass a logged-out
+      // OAuth session straight through the runtime-switch / health-probe auth gate.
+      // The status line is written to STDERR (stdout is empty), so combine streams.
       try {
-        await execFileAsync(CODEX_BIN, ['login', 'status'], {
+        const { stdout, stderr } = await execFileAsync(CODEX_BIN, ['login', 'status'], {
           stdio: 'pipe', encoding: 'utf8', timeout: 10_000,
         });
-        return { ok: true, reason: 'codex_login_status' };
-      } catch { /* binary missing, not logged in, or other error */ }
+        if (parseCodexLoginStatus((stdout || '') + (stderr || ''))) {
+          return { ok: true, reason: 'codex_login_status' };
+        }
+      } catch { /* binary missing, or other error */ }
       return { ok: false, reason: 'not_logged_in' };
     }
 

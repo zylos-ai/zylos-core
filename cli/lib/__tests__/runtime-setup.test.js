@@ -18,6 +18,7 @@ fs.mkdirSync(fakeHome, { recursive: true });
 fs.mkdirSync(fakeZylosDir, { recursive: true });
 
 const { writeCodexConfig, renderCodexProjectConfig, renderCodexGlobalConfig } = await import('../runtime-setup.js');
+const { parseClaudeAuthStatus, parseCodexLoginStatus } = await import('../auth-parsers.js');
 
 before(() => {
   fs.mkdirSync(path.join(fakeHome, '.codex'), { recursive: true });
@@ -270,6 +271,63 @@ describe('writeCodexConfig', () => {
     const projectContent = fs.readFileSync(projectConfigPath, 'utf8');
     assert.match(projectContent, /user_added = "keep"/);
     assert.match(projectContent, /\[features\][\s\S]*fast_mode = false[\s\S]*multi_agent = true/);
+  });
+});
+
+describe('parseClaudeAuthStatus', () => {
+  it('returns true only when loggedIn is exactly true', () => {
+    assert.equal(parseClaudeAuthStatus('{"loggedIn":true,"authMethod":"claude.ai"}'), true);
+  });
+
+  it('returns false when loggedIn is false', () => {
+    assert.equal(parseClaudeAuthStatus('{"loggedIn":false}'), false);
+  });
+
+  it('returns false when loggedIn is missing', () => {
+    assert.equal(parseClaudeAuthStatus('{"authMethod":"claude.ai"}'), false);
+  });
+
+  it('returns false for truthy-but-not-true loggedIn values', () => {
+    assert.equal(parseClaudeAuthStatus('{"loggedIn":"true"}'), false);
+    assert.equal(parseClaudeAuthStatus('{"loggedIn":1}'), false);
+  });
+
+  it('returns false for non-JSON / empty output', () => {
+    assert.equal(parseClaudeAuthStatus(''), false);
+    assert.equal(parseClaudeAuthStatus('Not logged in'), false);
+    assert.equal(parseClaudeAuthStatus(undefined), false);
+  });
+});
+
+describe('parseCodexLoginStatus', () => {
+  it('returns true for the logged-in message', () => {
+    assert.equal(parseCodexLoginStatus('Logged in using ChatGPT\n'), true);
+    assert.equal(parseCodexLoginStatus('Logged in using API key\n'), true);
+  });
+
+  it('returns false for the not-logged-in message (which also exits 0)', () => {
+    assert.equal(parseCodexLoginStatus('Not logged in\n'), false);
+  });
+
+  it('does not confuse "Not logged in" via a substring match', () => {
+    // "Not logged in" contains the lowercase substring "logged in" — must not match.
+    assert.equal(parseCodexLoginStatus('Not logged in'), false);
+  });
+
+  it('tolerates leading whitespace / warning-free stdout', () => {
+    assert.equal(parseCodexLoginStatus('   Logged in using ChatGPT'), true);
+  });
+
+  it('matches the status line even with a leading warning line (stderr combined)', () => {
+    // codex writes the status to stderr and may prepend an unrelated warning.
+    assert.equal(parseCodexLoginStatus('WARNING: could not update PATH\nLogged in using ChatGPT\n'), true);
+    assert.equal(parseCodexLoginStatus('WARNING: could not update PATH\nNot logged in\n'), false);
+  });
+
+  it('returns false for empty / undefined / unexpected output', () => {
+    assert.equal(parseCodexLoginStatus(''), false);
+    assert.equal(parseCodexLoginStatus(undefined), false);
+    assert.equal(parseCodexLoginStatus('some unrelated text'), false);
   });
 });
 
