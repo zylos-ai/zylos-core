@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Claude init auth check**: `isClaudeAuthenticated()` now keys off the explicit `loggedIn` field from `claude auth status --json` instead of the process exit code. The exit code conflated "not logged in" with crashes, timeouts, and cross-version subcommand drift; the new check reads the unambiguous field and treats any unparseable payload as not authenticated. Extracted a pure, unit-tested `parseClaudeAuthStatus()` helper. Local-only — no network call. (#641)
+
 ## [0.5.2] - 2026-06-02
 
 ### Fixed

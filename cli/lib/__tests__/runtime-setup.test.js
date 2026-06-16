@@ -17,7 +17,7 @@ process.env.ZYLOS_DIR = fakeZylosDir;
 fs.mkdirSync(fakeHome, { recursive: true });
 fs.mkdirSync(fakeZylosDir, { recursive: true });
 
-const { writeCodexConfig, renderCodexProjectConfig, renderCodexGlobalConfig } = await import('../runtime-setup.js');
+const { writeCodexConfig, renderCodexProjectConfig, renderCodexGlobalConfig, parseClaudeAuthStatus } = await import('../runtime-setup.js');
 
 before(() => {
   fs.mkdirSync(path.join(fakeHome, '.codex'), { recursive: true });
@@ -270,6 +270,31 @@ describe('writeCodexConfig', () => {
     const projectContent = fs.readFileSync(projectConfigPath, 'utf8');
     assert.match(projectContent, /user_added = "keep"/);
     assert.match(projectContent, /\[features\][\s\S]*fast_mode = false[\s\S]*multi_agent = true/);
+  });
+});
+
+describe('parseClaudeAuthStatus', () => {
+  it('returns true only when loggedIn is exactly true', () => {
+    assert.equal(parseClaudeAuthStatus('{"loggedIn":true,"authMethod":"claude.ai"}'), true);
+  });
+
+  it('returns false when loggedIn is false', () => {
+    assert.equal(parseClaudeAuthStatus('{"loggedIn":false}'), false);
+  });
+
+  it('returns false when loggedIn is missing', () => {
+    assert.equal(parseClaudeAuthStatus('{"authMethod":"claude.ai"}'), false);
+  });
+
+  it('returns false for truthy-but-not-true loggedIn values', () => {
+    assert.equal(parseClaudeAuthStatus('{"loggedIn":"true"}'), false);
+    assert.equal(parseClaudeAuthStatus('{"loggedIn":1}'), false);
+  });
+
+  it('returns false for non-JSON / empty output', () => {
+    assert.equal(parseClaudeAuthStatus(''), false);
+    assert.equal(parseClaudeAuthStatus('Not logged in'), false);
+    assert.equal(parseClaudeAuthStatus(undefined), false);
   });
 });
 

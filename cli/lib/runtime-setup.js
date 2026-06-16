@@ -75,17 +75,36 @@ export function installClaude() {
 // ── Auth checks ────────────────────────────────────────────────────────────
 
 /**
+ * Parse `claude auth status --json` output into an authenticated boolean.
+ * Keys off the explicit `loggedIn` field — never the exit code, which conflates
+ * "not logged in" with crashes, timeouts, and cross-version subcommand drift.
+ * Any unparseable / unexpected payload is treated as not authenticated.
+ * @param {string} stdout
+ * @returns {boolean}
+ */
+export function parseClaudeAuthStatus(stdout) {
+  try {
+    return JSON.parse(stdout)?.loggedIn === true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Check if Claude Code is authenticated.
+ * Reads the explicit `loggedIn` field from `claude auth status --json` rather
+ * than trusting the process exit code. Local-only — reads stored credentials,
+ * no network call.
  * @returns {boolean}
  */
 export function isClaudeAuthenticated() {
   try {
-    const result = spawnSync('claude', ['auth', 'status'], {
+    const result = spawnSync('claude', ['auth', 'status', '--json'], {
       stdio: 'pipe',
       encoding: 'utf8',
       timeout: 10000,
     });
-    return result.status === 0;
+    return parseClaudeAuthStatus(result.stdout);
   } catch {
     return false;
   }
