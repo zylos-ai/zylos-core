@@ -1,4 +1,10 @@
-node_modules
+# Exclude node_modules at every depth, not just the repo root. Nested
+# skills/*/node_modules can carry host-compiled native binaries (e.g.
+# better-sqlite3) built for the host's Node ABI; leaking them into an image
+# running a different Node major triggers NODE_MODULE_VERSION load errors.
+# With these excluded, each skill's in-image `npm install` pulls the matching
+# prebuilt binary instead.
+**/node_modules
 .git
 .github
 *.log
