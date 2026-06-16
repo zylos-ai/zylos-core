@@ -16,7 +16,7 @@ const fakeBinDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-codex-fakebin-')
 const fakeCodexPath = path.join(fakeBinDir, 'codex');
 fs.writeFileSync(
   fakeCodexPath,
-  '#!/usr/bin/env bash\necho "${FAKE_CODEX_STATUS:-Not logged in}" >&2\nexit 0\n',
+  '#!/usr/bin/env bash\nif [ -n "$FAKE_CODEX_EXIT" ]; then exit "$FAKE_CODEX_EXIT"; fi\necho "${FAKE_CODEX_STATUS:-Not logged in}" >&2\nexit 0\n',
   { mode: 0o755 }
 );
 process.env.CODEX_BIN = fakeCodexPath;
@@ -52,6 +52,9 @@ afterEach(() => {
 
   if (originalFetch === undefined) delete global.fetch;
   else global.fetch = originalFetch;
+
+  delete process.env.FAKE_CODEX_STATUS;
+  delete process.env.FAKE_CODEX_EXIT;
 });
 
 describe('Codex bootstrap onboarding guard', () => {
@@ -105,8 +108,73 @@ describe('Codex auth checks', () => {
     const adapter = new CodexAdapter({});
     const result = await adapter.checkAuth();
 
-    assert.equal(result.ok, true);
+    assert.equal(result.status, 'success');
     assert.equal(requestedUrl, 'https://proxy.example.com/v1/models');
+  });
+
+  it('API key auth checks return failure on 401', async () => {
+    const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-codex-auth-test-'));
+    tmpDirs.push(tmpHome);
+    process.env.HOME = tmpHome;
+
+    fs.mkdirSync(path.join(tmpHome, '.codex'), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpHome, '.codex', 'auth.json'),
+      JSON.stringify({ auth_mode: 'apikey', OPENAI_API_KEY: 'sk-test' }, null, 2) + '\n',
+      'utf8'
+    );
+
+    global.fetch = async () => ({ status: 401 });
+
+    const adapter = new CodexAdapter({});
+    const result = await adapter.checkAuth();
+
+    assert.equal(result.status, 'failure');
+    assert.equal(result.reason, 'http_probe_401');
+  });
+
+  it('API key auth checks return uncertain on 429 and 5xx', async () => {
+    const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-codex-auth-test-'));
+    tmpDirs.push(tmpHome);
+    process.env.HOME = tmpHome;
+
+    fs.mkdirSync(path.join(tmpHome, '.codex'), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpHome, '.codex', 'auth.json'),
+      JSON.stringify({ auth_mode: 'apikey', OPENAI_API_KEY: 'sk-test' }, null, 2) + '\n',
+      'utf8'
+    );
+
+    const adapter = new CodexAdapter({});
+
+    global.fetch = async () => ({ status: 429 });
+    assert.equal((await adapter.checkAuth()).status, 'uncertain');
+
+    global.fetch = async () => ({ status: 503 });
+    assert.equal((await adapter.checkAuth()).status, 'uncertain');
+  });
+
+  it('API key auth checks return uncertain on network errors', async () => {
+    const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-codex-auth-test-'));
+    tmpDirs.push(tmpHome);
+    process.env.HOME = tmpHome;
+
+    fs.mkdirSync(path.join(tmpHome, '.codex'), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpHome, '.codex', 'auth.json'),
+      JSON.stringify({ auth_mode: 'apikey', OPENAI_API_KEY: 'sk-test' }, null, 2) + '\n',
+      'utf8'
+    );
+
+    global.fetch = async () => {
+      throw new Error('network down');
+    };
+
+    const adapter = new CodexAdapter({});
+    const result = await adapter.checkAuth();
+
+    assert.equal(result.status, 'uncertain');
+    assert.equal(result.reason, 'http_probe_network_error');
   });
 
   // Regression guard: `codex login status` exits 0 even when logged out, so a
@@ -121,9 +189,8 @@ describe('Codex auth checks', () => {
     const adapter = new CodexAdapter({});
     const result = await adapter.checkAuth();
 
-    assert.equal(result.ok, false);
+    assert.equal(result.status, 'failure');
     assert.equal(result.reason, 'not_logged_in');
-    delete process.env.FAKE_CODEX_STATUS;
   });
 
   it('chatgpt/no-auth: returns ok when codex login status reports "Logged in" on stderr (exit 0)', async () => {
@@ -135,8 +202,33 @@ describe('Codex auth checks', () => {
     const adapter = new CodexAdapter({});
     const result = await adapter.checkAuth();
 
-    assert.equal(result.ok, true);
+    assert.equal(result.status, 'success');
     assert.equal(result.reason, 'codex_login_status');
-    delete process.env.FAKE_CODEX_STATUS;
+  });
+
+  it('chatgpt/no-auth: returns uncertain when codex login status output is unparseable', async () => {
+    const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-codex-auth-test-'));
+    tmpDirs.push(tmpHome);
+    process.env.HOME = tmpHome;
+    process.env.FAKE_CODEX_STATUS = 'Unexpected status text';
+
+    const adapter = new CodexAdapter({});
+    const result = await adapter.checkAuth();
+
+    assert.equal(result.status, 'uncertain');
+    assert.equal(result.reason, 'codex_login_status_uncertain');
+  });
+
+  it('chatgpt/no-auth: returns uncertain when codex login status cannot run', async () => {
+    const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-codex-auth-test-'));
+    tmpDirs.push(tmpHome);
+    process.env.HOME = tmpHome;
+    process.env.FAKE_CODEX_EXIT = '127';
+
+    const adapter = new CodexAdapter({});
+    const result = await adapter.checkAuth();
+
+    assert.equal(result.status, 'uncertain');
+    assert.equal(result.reason, 'codex_login_status_unavailable');
   });
 });

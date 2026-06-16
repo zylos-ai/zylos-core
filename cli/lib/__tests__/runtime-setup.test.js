@@ -18,7 +18,7 @@ fs.mkdirSync(fakeHome, { recursive: true });
 fs.mkdirSync(fakeZylosDir, { recursive: true });
 
 const { writeCodexConfig, renderCodexProjectConfig, renderCodexGlobalConfig } = await import('../runtime-setup.js');
-const { parseClaudeAuthStatus, parseCodexLoginStatus } = await import('../auth-parsers.js');
+const { parseClaudeAuthStatus, parseCodexLoginStatus, classifyCodexLoginStatus } = await import('../auth-parsers.js');
 
 before(() => {
   fs.mkdirSync(path.join(fakeHome, '.codex'), { recursive: true });
@@ -328,6 +328,22 @@ describe('parseCodexLoginStatus', () => {
     assert.equal(parseCodexLoginStatus(''), false);
     assert.equal(parseCodexLoginStatus(undefined), false);
     assert.equal(parseCodexLoginStatus('some unrelated text'), false);
+  });
+});
+
+describe('classifyCodexLoginStatus', () => {
+  it('classifies logged-in output as success', () => {
+    assert.equal(classifyCodexLoginStatus('WARNING: could not update PATH\nLogged in using ChatGPT\n'), 'success');
+  });
+
+  it('classifies logged-out output as failure', () => {
+    assert.equal(classifyCodexLoginStatus('WARNING: could not update PATH\nNot logged in\n'), 'failure');
+  });
+
+  it('classifies empty or unexpected output as uncertain', () => {
+    assert.equal(classifyCodexLoginStatus(''), 'uncertain');
+    assert.equal(classifyCodexLoginStatus(undefined), 'uncertain');
+    assert.equal(classifyCodexLoginStatus('some unrelated text'), 'uncertain');
   });
 });
 

@@ -598,7 +598,7 @@ describe('HealthEngine', () => {
 
     it('restarts the session after auth_failed checkAuth succeeds', async () => {
       const { deps, calls } = createMockDeps();
-      deps.checkAuth = async () => ({ ok: true });
+      deps.checkAuth = async () => ({ status: 'success' });
       const engine = new HeartbeatEngine(deps, { initialHealth: 'auth_failed' });
 
       const result = await engine.runRecoveryProbe({ timeoutMs: 100, pollIntervalMs: 1 });
@@ -614,7 +614,7 @@ describe('HealthEngine', () => {
 
     it('keeps auth_failed when direct auth check still fails', async () => {
       const { deps, calls } = createMockDeps();
-      deps.checkAuth = async () => ({ ok: false, reason: 'auth_still_failed' });
+      deps.checkAuth = async () => ({ status: 'failure', reason: 'auth_still_failed' });
       const engine = new HeartbeatEngine(deps, { initialHealth: 'auth_failed' });
 
       const result = await engine.runRecoveryProbe({ timeoutMs: 100, pollIntervalMs: 1 });
@@ -623,6 +623,20 @@ describe('HealthEngine', () => {
       assert.equal(result.health, 'auth_failed');
       assert.equal(result.reason, 'auth_still_failed');
       assert.equal(engine.health, 'auth_failed');
+      assert.deepStrictEqual(calls.enqueueHeartbeat, []);
+    });
+
+    it('keeps auth_failed and does not kill when direct auth check is uncertain', async () => {
+      const { deps, calls } = createMockDeps();
+      deps.checkAuth = async () => ({ status: 'uncertain', reason: 'auth_check_uncertain' });
+      const engine = new HeartbeatEngine(deps, { initialHealth: 'auth_failed' });
+
+      const result = await engine.runRecoveryProbe({ timeoutMs: 100, pollIntervalMs: 1 });
+
+      assert.equal(result.recovered, false);
+      assert.equal(result.health, 'auth_failed');
+      assert.equal(engine.healthState, 'auth_failed');
+      assert.equal(calls.killTmuxSession, 0);
       assert.deepStrictEqual(calls.enqueueHeartbeat, []);
     });
   });
@@ -665,7 +679,7 @@ describe('HealthEngine', () => {
       const { deps } = createMockDeps();
       deps.detectRateLimit = () => ({ detected: false });
       deps.detectAuthFailure = () => ({ detected: true, pattern: 'authentication_error' });
-      deps.checkAuth = async () => ({ ok: false, reason: 'cli_probe_authentication_error' });
+      deps.checkAuth = async () => ({ status: 'failure', reason: 'cli_probe_authentication_error' });
       const engine = new HeartbeatEngine(deps, { userMessageCheckDelayMs: 0 });
 
       await engine.onUserMessageDelivered();
@@ -674,12 +688,25 @@ describe('HealthEngine', () => {
       assert.equal(engine.healthReason, 'cli_probe_authentication_error');
     });
 
+    it('does not set auth_failed when delivery-triggered auth check is uncertain', async () => {
+      const { deps, calls } = createMockDeps();
+      deps.detectRateLimit = () => ({ detected: false });
+      deps.detectAuthFailure = () => ({ detected: true, pattern: 'authentication_error' });
+      deps.checkAuth = async () => ({ status: 'uncertain', reason: 'cli_probe_uncertain' });
+      const engine = new HeartbeatEngine(deps, { userMessageCheckDelayMs: 0 });
+
+      await engine.onUserMessageDelivered();
+
+      assert.equal(engine.health, 'ok');
+      assert.equal(calls.killTmuxSession, 0);
+    });
+
     it('kills the session after two sticky detections spaced by the debounce interval', async () => {
       const { deps, calls } = createMockDeps();
       let now = 1000;
       deps.detectRateLimit = () => ({ detected: false });
       deps.detectAuthFailure = () => ({ detected: false });
-      deps.checkAuth = async () => ({ ok: true });
+      deps.checkAuth = async () => ({ status: 'success' });
       deps.detectApiError = () => ({ detected: true, pattern: 'APIError: 400' });
       const engine = new HeartbeatEngine(deps, {
         userMessageCheckDelayMs: 0,
@@ -702,7 +729,7 @@ describe('HealthEngine', () => {
       const { deps } = createMockDeps();
       deps.detectRateLimit = () => ({ detected: false });
       deps.detectAuthFailure = () => ({ detected: false });
-      deps.checkAuth = async () => ({ ok: true });
+      deps.checkAuth = async () => ({ status: 'success' });
       deps.detectApiError = () => ({ detected: false });
       const engine = new HeartbeatEngine(deps, { userMessageCheckDelayMs: 0 });
       engine.rateLimitConsecutiveHits = 1;

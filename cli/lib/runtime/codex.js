@@ -38,7 +38,7 @@ import {
   hasChildProcess,
 } from './tmux-helpers.js';
 import { buildCleanEnv, buildCompatEnv, loadRuntimeEnvManifest, writeLaunchSpec } from './tmux-env.js';
-import { parseCodexLoginStatus } from '../auth-parsers.js';
+import { classifyCodexLoginStatus } from '../auth-parsers.js';
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -143,10 +143,11 @@ export class CodexAdapter extends RuntimeAdapter {
    * so a stale key in .env must never override a later OAuth login in auth.json.
    *
    * Return values:
-   *   { ok: true }  — authorized, or uncertain outcome (network error, timeout, non-401 HTTP error)
-   *   { ok: false } — explicit 401 from OpenAI API, or not logged in
+   *   { status: 'success' }   — authenticated
+   *   { status: 'failure' }   — explicit auth failure
+   *   { status: 'uncertain' } — probe could not confirm either way
    *
-   * @returns {Promise<{ok: boolean, reason: string}>}
+   * @returns {Promise<{status: 'success'|'failure'|'uncertain', reason: string}>}
    */
   async checkAuth() {
     // Read auth.json to determine the auth mode.
@@ -174,29 +175,28 @@ export class CodexAdapter extends RuntimeAdapter {
         const { stdout, stderr } = await execFileAsync(CODEX_BIN, ['login', 'status'], {
           stdio: 'pipe', encoding: 'utf8', timeout: 10_000,
         });
-        if (parseCodexLoginStatus((stdout || '') + (stderr || ''))) {
-          return { ok: true, reason: 'codex_login_status' };
-        }
-      } catch { /* binary missing, or other error */ }
-      return { ok: false, reason: 'not_logged_in' };
+        const status = classifyCodexLoginStatus((stdout || '') + (stderr || ''));
+        if (status === 'success') return { status: 'success', reason: 'codex_login_status' };
+        if (status === 'failure') return { status: 'failure', reason: 'not_logged_in' };
+        return { status: 'uncertain', reason: 'codex_login_status_uncertain' };
+      } catch { /* binary missing, killed, or other error */ }
+      return { status: 'uncertain', reason: 'codex_login_status_unavailable' };
     }
 
     // auth_mode = "apikey" — live HTTP probe to OpenAI API.
     // Guard against corrupted auth.json (mode set to "apikey" but key missing).
-    if (!apiKey) return { ok: false, reason: 'apikey_mode_but_no_key' };
+    if (!apiKey) return { status: 'failure', reason: 'apikey_mode_but_no_key' };
     try {
       const baseUrl = getCodexApiBaseUrl();
       const res = await fetch(`${baseUrl}/models`, {
         headers: { Authorization: `Bearer ${apiKey}` },
         signal: AbortSignal.timeout(10_000),
       });
-      if (res.status === 200) return { ok: true, reason: 'http_probe_200' };
-      if (res.status === 401) return { ok: false, reason: 'http_probe_401' };
-      // 429 (rate limit), 5xx, etc. — uncertain, don't block restart.
-      return { ok: true, reason: `http_probe_uncertain_${res.status}` };
+      if (res.status === 200) return { status: 'success', reason: 'http_probe_200' };
+      if (res.status === 401) return { status: 'failure', reason: 'http_probe_401' };
+      return { status: 'uncertain', reason: `http_probe_uncertain_${res.status}` };
     } catch {
-      // Network error or timeout — uncertain, don't block restart.
-      return { ok: true, reason: 'http_probe_network_error_skip' };
+      return { status: 'uncertain', reason: 'http_probe_network_error' };
     }
   }
 

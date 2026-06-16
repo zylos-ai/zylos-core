@@ -7,6 +7,7 @@
  *   zylos runtime <name> --save-apikey <key>    Save API key and switch (all runtimes)
  *   zylos runtime <name> --save-base-url <url>  Save base URL and switch
  *   zylos runtime claude --save-setup-token <t> Save Claude setup token and switch
+ *   zylos runtime <name> --no-validate          Skip switch-time auth probe
  */
 
 import fs from 'node:fs';
@@ -131,6 +132,7 @@ export function parseRuntimeFlags(flags) {
     hasApiKey: apiKeyIdx >= 0,
     hasSetupToken: setupTokenIdx >= 0,
     hasBaseUrl: baseUrlIdx >= 0,
+    noValidate: flags.includes('--no-validate'),
   };
 }
 
@@ -187,6 +189,48 @@ export function restartRuntimeServices({
       logWarning(`  ${yellow(`Warning: failed to restart ${svc} — ${e.message}`)}`);
     }
   }
+}
+
+export async function checkRuntimeAuthGate(target, adapter, parsed, {
+  log = console.log,
+  error = console.error,
+  exit = process.exit,
+} = {}) {
+  if (parsed.noValidate) {
+    log(`Skipping ${bold(target)} authentication check (--no-validate).`);
+    return { skipped: true };
+  }
+
+  log(`Checking ${bold(target)} authentication...`);
+  const auth = await adapter.checkAuth();
+  if (auth.status === 'success') {
+    log(`  ${green('✓')} authenticated`);
+    return { skipped: false, status: auth.status };
+  }
+
+  if (auth.status === 'uncertain') {
+    error(red(`\n${bold(target)} authentication check was inconclusive.`));
+    error(yellow('\nRetry after the service/API is reachable, or use --no-validate to skip the probe if you accept the risk.'));
+    error(dim(`Reason: ${auth.reason || 'auth_check_uncertain'}`));
+    error(yellow('\nSwitch aborted — auth could not be verified.'));
+    exit(2);
+    return { skipped: false, status: auth.status };
+  }
+
+  error(red(`\n${bold(target)} is not authenticated.`));
+  error(yellow('\nAuthenticate first, then retry. Options:\n'));
+  if (target === 'codex') {
+    error(`  ${cyan('zylos runtime codex --save-apikey <key>')}     ${dim('OpenAI API key')}`);
+    error(`  ${cyan('codex login --device-auth')}                   ${dim('Device auth (headless, no browser)')}`);
+    error(`  ${cyan('codex login')}                                 ${dim('Browser login (then retry)')}`);
+  } else {
+    error(`  ${cyan('zylos runtime claude --save-apikey <key>')}       ${dim('Anthropic API key (sk-ant-api...)')}`);
+    error(`  ${cyan('zylos runtime claude --save-setup-token <token>')} ${dim('Setup token (sk-ant-oat...)')}`);
+    error(`  ${cyan('claude auth login')}                               ${dim('Browser OAuth (then retry)')}`);
+  }
+  error(yellow('\nSwitch aborted — authenticate first to avoid losing IM access.'));
+  exit(2);
+  return { skipped: false, status: auth.status };
 }
 
 // ── Switch ────────────────────────────────────────────────────────────────
@@ -251,27 +295,10 @@ async function switchRuntime(target, flags) {
     writeCodexConfig(ZYLOS_DIR);
   }
 
-  // Step 3: Check auth for target runtime.
-  // An unauthenticated switch leaves the system unreachable via IM.
-  console.log(`Checking ${bold(target)} authentication...`);
+  // Step 3: Check auth for target runtime unless explicitly skipped.
+  // A confirmed unauthenticated switch leaves the system unreachable via IM.
   const adapter = getAdapter(target, cfg);
-  const auth = await adapter.checkAuth();
-  if (!auth.ok) {
-    console.error(red(`\n${bold(target)} is not authenticated.`));
-    console.error(yellow('\nAuthenticate first, then retry. Options:\n'));
-    if (target === 'codex') {
-      console.error(`  ${cyan('zylos runtime codex --save-apikey <key>')}     ${dim('OpenAI API key')}`);
-      console.error(`  ${cyan('codex login --device-auth')}                   ${dim('Device auth (headless, no browser)')}`);
-      console.error(`  ${cyan('codex login')}                                 ${dim('Browser login (then retry)')}`);
-    } else {
-      console.error(`  ${cyan('zylos runtime claude --save-apikey <key>')}       ${dim('Anthropic API key (sk-ant-api...)')}`);
-      console.error(`  ${cyan('zylos runtime claude --save-setup-token <token>')} ${dim('Setup token (sk-ant-oat...)')}`);
-      console.error(`  ${cyan('claude auth login')}                               ${dim('Browser OAuth (then retry)')}`);
-    }
-    console.error(yellow('\nSwitch aborted — authenticate first to avoid losing IM access.'));
-    process.exit(2);
-  }
-  console.log(`  ${green('✓')} authenticated`);
+  await checkRuntimeAuthGate(target, adapter, parsed);
 
   // Step 4: Persist new runtime in config.
   updateZylosConfig({ runtime: target });
@@ -320,6 +347,7 @@ Usage:
   zylos runtime <name> --save-apikey <key>    Save API key and switch
   zylos runtime <name> --save-base-url <url>  Save base URL and switch
   zylos runtime claude --save-setup-token <t> Save Claude setup token and switch
+  zylos runtime <name> --no-validate          Skip switch-time auth probe
 
 Supported runtimes:
   claude    Claude Code (Anthropic) — default
@@ -335,6 +363,10 @@ Authentication options (if not already authenticated):
            codex login --device-auth       Device auth (headless)
            codex login                     Browser login (then retry)
 
+Validation:
+  --no-validate skips only the switch-time auth probe. Use it for prepared,
+  mocked, or gateway contexts where the target runtime cannot be probed yet.
+
 Exit codes:
   0  Success
   1  Fatal error (install failed, credential save failed)
@@ -348,5 +380,6 @@ Examples:
   zylos runtime claude --save-setup-token sk-ant-oat-xxx
   zylos runtime codex --save-apikey sk-proj-xxx
   zylos runtime codex --save-base-url https://proxy.example.com/v1
+  zylos runtime codex --no-validate
 `);
 }

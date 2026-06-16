@@ -86,16 +86,19 @@ export async function showStatus() {
     console.log(`  ${dim('→ Run: zylos init')}`);
   } else {
     // Check authentication via adapter (same logic as the running process uses)
-    let authenticated = false;
+    let authStatus = 'failure';
     try {
       const adapter = getActiveAdapter();
       const authResult = await adapter.checkAuth();
-      authenticated = authResult.ok;
+      authStatus = authResult.status || 'failure';
     } catch {}
 
-    if (!authenticated) {
+    if (authStatus === 'failure') {
       console.log(`${bold(runtimeLabel)}: ${red('NOT AUTHENTICATED')}`);
       console.log(`  ${dim(`→ Run: ${isCodex ? 'codex login' : 'zylos init to authenticate'}`)}`);
+    } else if (authStatus === 'uncertain') {
+      console.log(`${bold(runtimeLabel)}: ${yellow('AUTH CHECK INCONCLUSIVE')}`);
+      console.log(`  ${dim('→ Retry later or run zylos doctor for details')}`);
     } else if (!isCodex) {
       // Claude-only: check terms/bypass acceptance
       let termsAccepted = false;

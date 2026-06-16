@@ -19,12 +19,17 @@ describe('runtime base URL support', () => {
     assert.equal(typeof runtimeModule.showHelp, 'function');
   });
 
-  test('parseRuntimeFlags accepts --save-base-url and showHelp shows it', async () => {
+  test('parseRuntimeFlags accepts --save-base-url and --no-validate, and showHelp shows both', async () => {
     const runtimeModule = await import('../../commands/runtime.js');
-    const flags = runtimeModule.parseRuntimeFlags(['--save-apikey', 'sk-test', '--save-base-url', 'https://proxy.example.com/v1']);
+    const flags = runtimeModule.parseRuntimeFlags([
+      '--save-apikey', 'sk-test',
+      '--save-base-url', 'https://proxy.example.com/v1',
+      '--no-validate',
+    ]);
 
     assert.equal(flags.apiKey, 'sk-test');
     assert.equal(flags.baseUrl, 'https://proxy.example.com/v1');
+    assert.equal(flags.noValidate, true);
 
     const originalLog = console.log;
     let output = '';
@@ -39,6 +44,49 @@ describe('runtime base URL support', () => {
     }
 
     assert.match(output, /--save-base-url <url>/);
+    assert.match(output, /--no-validate/);
+  });
+
+  test('checkRuntimeAuthGate skips adapter probe for standalone --no-validate', async () => {
+    const { checkRuntimeAuthGate, parseRuntimeFlags } = await import('../../commands/runtime.js');
+    let checkAuthCalls = 0;
+
+    const result = await checkRuntimeAuthGate(
+      'codex',
+      { checkAuth: async () => { checkAuthCalls++; return { status: 'failure', reason: 'should_not_run' }; } },
+      parseRuntimeFlags(['--no-validate']),
+      { log: () => {}, error: () => {}, exit: () => { throw new Error('exit should not be called'); } }
+    );
+
+    assert.equal(result.skipped, true);
+    assert.equal(checkAuthCalls, 0);
+  });
+
+  test('checkRuntimeAuthGate proceeds only on success and exits for failure or uncertain', async () => {
+    const { checkRuntimeAuthGate, parseRuntimeFlags } = await import('../../commands/runtime.js');
+    const parsed = parseRuntimeFlags([]);
+
+    const success = await checkRuntimeAuthGate(
+      'claude',
+      { checkAuth: async () => ({ status: 'success', reason: 'cli_probe' }) },
+      parsed,
+      { log: () => {}, error: () => {}, exit: () => { throw new Error('exit should not be called'); } }
+    );
+    assert.equal(success.status, 'success');
+
+    for (const status of ['failure', 'uncertain']) {
+      let exitCode = null;
+      await assert.rejects(
+        () => checkRuntimeAuthGate(
+          'claude',
+          { checkAuth: async () => ({ status, reason: `test_${status}` }) },
+          parsed,
+          { log: () => {}, error: () => {}, exit: (code) => { exitCode = code; throw new Error(`exit ${code}`); } }
+        ),
+        /exit 2/
+      );
+      assert.equal(exitCode, 2);
+    }
   });
 
   test('validateRuntimeFlags rejects invalid saved base URL values', async () => {

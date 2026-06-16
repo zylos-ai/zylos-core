@@ -291,17 +291,18 @@ async function collectDiagnostics(env) {
 
   // Runtime-specific CLI/auth checks.
   // Both runtimes use adapter.checkAuth() for consistency with the running process.
-  let cli, auth, autonomous;
+  let cli, authStatus, autonomous;
   if (ACTIVE_RUNTIME !== 'codex') {
     cli = checkClaudeCli();
-    auth = cli.installed ? (await _activeAdapter.checkAuth()).ok : false;
+    authStatus = cli.installed ? (await _activeAdapter.checkAuth()).status : 'failure';
     autonomous = cli.installed ? checkAutonomousMode() : false;
   } else {
     // Codex runtime — check Codex CLI and auth status.
     cli = checkCodexCli();
-    auth = cli.installed ? (await _activeAdapter.checkAuth()).ok : false;
+    authStatus = cli.installed ? (await _activeAdapter.checkAuth()).status : 'failure';
     autonomous = true; // not applicable for Codex
   }
+  const auth = authStatus === 'success';
 
   const services = pm2.installed
     ? checkPm2Services()
@@ -310,7 +311,7 @@ async function collectDiagnostics(env) {
 
   return {
     system: { tmux, pm2, network: net },
-    ai: { cli, auth, autonomous, networkSkipped: !net.reachable },
+    ai: { cli, auth, authStatus, autonomous, networkSkipped: !net.reachable },
     services: { ...services, session },
   };
 }
@@ -344,9 +345,12 @@ function buildDiagnosticJson(diag, coreVersion) {
   if (!diag.ai.cli.installed) {
     issues.push({ id: 'cli_missing', label: `${runtimeLabel} CLI not installed`, hint: 'Run zylos init' });
   }
-  if (diag.ai.cli.installed && !diag.ai.networkSkipped && !diag.ai.auth) {
+  if (diag.ai.cli.installed && !diag.ai.networkSkipped && diag.ai.authStatus === 'failure') {
     const hint = ACTIVE_RUNTIME === 'codex' ? 'Run: codex login' : 'Run zylos init to authenticate';
     issues.push({ id: 'cli_not_authed', label: `${runtimeLabel} not authorized`, hint });
+  }
+  if (diag.ai.cli.installed && !diag.ai.networkSkipped && diag.ai.authStatus === 'uncertain') {
+    issues.push({ id: 'cli_auth_unverified', label: `${runtimeLabel} auth check inconclusive`, hint: 'Retry after network/API health is stable' });
   }
   if (ACTIVE_RUNTIME !== 'codex' && diag.ai.cli.installed && diag.ai.auth && !diag.ai.autonomous) {
     issues.push({ id: 'autonomous_off', label: 'Autonomous mode not accepted', hint: 'Set skipDangerousModePermissionPrompt in ~/.claude/settings.json' });
@@ -381,7 +385,7 @@ function buildDiagnosticJson(diag, coreVersion) {
         skipped: diag.ai.networkSkipped,
         checks: {
           cli: { ok: diag.ai.cli.installed, version: diag.ai.cli.version || null },
-          auth: { ok: diag.ai.auth },
+          auth: { ok: diag.ai.auth, status: diag.ai.authStatus },
           autonomous: { ok: diag.ai.autonomous },
         },
       },
@@ -439,7 +443,7 @@ function displayAiGroup(diag, jsonGroup) {
   }
 
   const checks = [];
-  const { cli, auth, autonomous } = diag.ai;
+  const { cli, auth, authStatus, autonomous } = diag.ai;
 
   const cliLabel = ACTIVE_RUNTIME === 'codex' ? 'Codex CLI' : 'Claude CLI';
   if (cli.installed) {
@@ -449,8 +453,10 @@ function displayAiGroup(diag, jsonGroup) {
   }
 
   if (cli.installed) {
-    if (auth) {
+    if (authStatus === 'success') {
       checks.push('authorized');
+    } else if (authStatus === 'uncertain') {
+      checks.push(yellow('auth check inconclusive'));
     } else {
       checks.push(red('not authorized'));
     }
