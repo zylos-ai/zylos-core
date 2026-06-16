@@ -66,7 +66,7 @@ is **not** an assertion in this harness.
 `switchRuntime()` returns early with "Already on `<target>` runtime." when
 `current === target` and no save flags (`runtime.js:252-255`) — **before** any
 install/save/probe (`:257+`, gate at `:298-301`). A scenario that hits this exits 0
-without ever calling `checkAuth` → green CI, zero coverage. Therefore **every
+without ever calling `checkAuth` → a green run, zero coverage. Therefore **every
 scenario fixture must set the current runtime to the opposite of the target** (write
 `.zylos/config.json` in an isolated `ZYLOS_DIR`), and **every non-`--no-validate`
 scenario must assert the probe actually ran** (stdout `Checking <target>
@@ -103,7 +103,7 @@ authentication...` and/or the fake-invocation record). `--no-validate` asserts t
 ## Test Checklist
 - [ ] `run.sh` passes for all committed scenarios locally.
 - [ ] Re-running with no rebuild reuses the cached base image (substrate is stable).
-- [ ] Adding a new scenario requires only a new `.env`/fixture + matrix row — no
+- [ ] Adding a new scenario requires only a new `.env`/fixture + scenario entry — no
       Dockerfile edit (demonstrate by adding a throwaway scenario in review, then removing).
 - [ ] Each non-`--no-validate` scenario's invocation log proves the probe ran;
       `--no-validate` proves it did not.
@@ -131,7 +131,7 @@ authentication...` and/or the fake-invocation record). `--no-validate` asserts t
 ## Acceptance Checklist (Howard accepts — no direct merge)
 - [ ] Base image builds reproducibly; `grep` shows no secrets in any layer/file.
 - [ ] Ad-hoc scenario runnable via runtime env injection (documented, demoed).
-- [ ] All committed scenarios are **data** (`.env`/fixture) + matrix row, never a forked Dockerfile.
+- [ ] All committed scenarios are **data** (`.env`/fixture) + scenario entry, never a forked Dockerfile.
 - [ ] Switch-gate semantics exact: success→0, confirmed-failure→2, **uncertain→2 +
       "inconclusive" stderr**, `--no-validate`→0 with probe skipped.
 - [ ] Every non-`--no-validate` scenario proves the fake binary was invoked;
