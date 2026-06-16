@@ -42,7 +42,7 @@ export function createHealthEngine(activeAdapter, initialStatus, {
   return new HealthEngine({
     ...(activeAdapter.getHeartbeatDeps() ?? {}),
     killTmuxSession: () => activeAdapter.stop(),
-    checkAuth: () => activeAdapter.checkAuth ? activeAdapter.checkAuth() : { ok: true },
+    checkAuth: () => activeAdapter.checkAuth ? activeAdapter.checkAuth() : { status: 'success', reason: 'no_checkAuth' },
     log,
   }, {
     initialHealth: initialStatus.health,

@@ -26,18 +26,30 @@ export function parseClaudeAuthStatus(stdout) {
 }
 
 /**
- * Parse `codex login status` output into an authenticated boolean.
+ * Classify `codex login status` output into a tristate auth status.
  * The exit code is unusable: `codex login status` exits 0 for BOTH
- * "Logged in using ..." and "Not logged in". So we match the output text —
- * a line beginning with "Logged in", explicitly excluding "Not logged in".
- * Anything else (empty, unexpected wording, errors) is treated as not authed.
+ * "Logged in using ..." and "Not logged in". So we key off explicit text:
+ * "Not logged in" is a confirmed failure, a line beginning with "Logged in"
+ * is success, and anything else is inconclusive.
  * NOTE: codex writes the status line to STDERR (stdout is empty) and may emit
  * an unrelated leading warning line, so callers should pass combined
  * stdout+stderr; the per-line match (`m` flag) ignores the warning.
  * @param {string} stdout combined stdout+stderr from `codex login status`
+ * @returns {'success'|'failure'|'uncertain'}
+ */
+export function classifyCodexLoginStatus(stdout) {
+  const out = String(stdout ?? '');
+  if (/not logged in/i.test(out)) return 'failure';
+  if (/^\s*Logged in\b/im.test(out)) return 'success';
+  return 'uncertain';
+}
+
+/**
+ * Parse `codex login status` output into an authenticated boolean.
+ * Kept for init flows that only need a boolean answer.
+ * @param {string} stdout combined stdout+stderr from `codex login status`
  * @returns {boolean}
  */
 export function parseCodexLoginStatus(stdout) {
-  const out = String(stdout ?? '');
-  return /^\s*Logged in\b/im.test(out) && !/not logged in/i.test(out);
+  return classifyCodexLoginStatus(stdout) === 'success';
 }

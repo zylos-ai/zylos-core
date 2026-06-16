@@ -86,7 +86,8 @@ export class RuntimeAdapter {
   /**
    * Check authentication status for this runtime.
    *
-   * @returns {Promise<{ok: boolean, reason: string}>}
+   * @returns {Promise<{status: 'success'|'failure'|'uncertain', reason: string}>}
+   * `uncertain` means the probe could not confirm auth either way; callers decide policy.
    */
   async checkAuth() {
     _abstract('checkAuth');

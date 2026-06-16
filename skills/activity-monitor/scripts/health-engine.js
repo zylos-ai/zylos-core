@@ -56,7 +56,7 @@ export class HealthEngine {
    * @param {() => {detected: boolean, cooldownUntil?: number, resetTime?: string}} [deps.detectRateLimit]
    * @param {() => {detected: boolean, pattern?: string}} [deps.detectAuthFailure]
    * @param {() => {detected: boolean, pattern?: string}} [deps.detectApiError]
-   * @param {() => Promise<{ok: boolean, reason?: string}>|{ok: boolean, reason?: string}} [deps.checkAuth]
+   * @param {() => Promise<{status: 'success'|'failure'|'uncertain', reason?: string}>|{status: 'success'|'failure'|'uncertain', reason?: string}} [deps.checkAuth]
    * @param {(ms: number) => Promise<void>} [deps.sleep]
    * @param {object} [options]
    * @param {number} [options.heartbeatInterval=1800]
@@ -517,7 +517,7 @@ export class HealthEngine {
     const authFailure = this.deps.detectAuthFailure ? this.deps.detectAuthFailure() : { detected: false };
     if (authFailure.detected) {
       const authResult = await this._checkAuth();
-      if (authResult && authResult.ok === false) {
+      if (authResult && authResult.status === 'failure') {
         this.rateLimitConsecutiveHits = 0;
         this.stickyErrorConsecutiveHits = 0;
         this.lastStickyErrorHitAt = 0;
@@ -573,7 +573,7 @@ export class HealthEngine {
 
     if (this.healthState === 'auth_failed') {
       const authResult = await this._checkAuth();
-      if (authResult.ok) {
+      if (authResult.status === 'success') {
         const now = Math.floor(Date.now() / 1000);
         this.deps.log('Auth probe recovered; restarting session before marking healthy');
         this.restartFailureCount = 0;
@@ -660,11 +660,11 @@ export class HealthEngine {
   }
 
   async _checkAuth() {
-    if (typeof this.deps.checkAuth !== 'function') return { ok: true };
+    if (typeof this.deps.checkAuth !== 'function') return { status: 'success', reason: 'no_checkAuth' };
     try {
       return await this.deps.checkAuth();
     } catch (err) {
-      return { ok: false, reason: err?.message || 'auth_check_failed' };
+      return { status: 'failure', reason: err?.message || 'auth_check_failed' };
     }
   }
 

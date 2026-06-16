@@ -96,23 +96,26 @@ export class ClaudeAdapter extends RuntimeAdapter {
    * Works with all credential types (API keys, setup tokens, OAuth tokens).
    *
    * Return values:
-   *   { ok: true }  — probe succeeded or outcome is uncertain (rate limit, server error) —
-   *                   don't block restart in uncertain cases
-   *   { ok: false } — no credentials, or authentication error
+   *   { status: 'success' }   — authenticated
+   *   { status: 'failure' }   — explicit auth failure
+   *   { status: 'uncertain' } — probe could not confirm either way
    *
-   * @returns {Promise<{ok: boolean, reason: string}>}
+   * @returns {Promise<{status: 'success'|'failure'|'uncertain', reason: string}>}
    */
   async checkAuth() {
     // Build subprocess env: inherit current env, inject .env API keys (same as launch()).
     const injectedEnv = { ...process.env };
     let envApiKey = '';
     let envOauthToken = '';
+    let envBaseUrl = '';
     try {
       const envContent = fs.readFileSync(path.join(ZYLOS_DIR, '.env'), 'utf8');
       envApiKey = _parseEnvValue(envContent, 'ANTHROPIC_API_KEY');
       envOauthToken = _parseEnvValue(envContent, 'CLAUDE_CODE_OAUTH_TOKEN');
+      envBaseUrl = _parseEnvValue(envContent, 'ANTHROPIC_BASE_URL');
       if (envApiKey) injectedEnv.ANTHROPIC_API_KEY = envApiKey;
       if (envOauthToken) injectedEnv.CLAUDE_CODE_OAUTH_TOKEN = envOauthToken;
+      if (envBaseUrl) injectedEnv.ANTHROPIC_BASE_URL = envBaseUrl;
     } catch { /* .env absent — no keys to inject */ }
 
     // Strip vars that would make Claude refuse to start ("already running" guard).
@@ -131,13 +134,13 @@ export class ClaudeAdapter extends RuntimeAdapter {
       });
       // Safety net: some Claude versions exit 0 with "Not logged in" on stdout.
       if (stdout.includes('Not logged in')) {
-        return { ok: false, reason: 'cli_probe_not_logged_in' };
+        return { status: 'failure', reason: 'cli_probe_not_logged_in' };
       }
-      return { ok: true, reason: 'cli_probe' };
+      return { status: 'success', reason: 'cli_probe' };
     } catch (err) {
       const output = (err.stdout ?? '') + (err.stderr ?? '');
       if (output.includes('authentication_error')) {
-        return { ok: false, reason: 'cli_probe_authentication_error' };
+        return { status: 'failure', reason: 'cli_probe_authentication_error' };
       }
       const isTransient =
         output.includes('rate_limit_error') ||
@@ -147,9 +150,9 @@ export class ClaudeAdapter extends RuntimeAdapter {
         err.code === 'ENOTFOUND' ||
         err.killed;
       if (isTransient) {
-        return { ok: true, reason: 'cli_probe_uncertain' };
+        return { status: 'uncertain', reason: 'cli_probe_uncertain' };
       }
-      return { ok: false, reason: 'cli_probe_not_authenticated', output: output.slice(0, 500) };
+      return { status: 'failure', reason: 'cli_probe_not_authenticated', output: output.slice(0, 500) };
     }
   }
 
