@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.3] - 2026-06-17
+
+### Added
+- **Default to opus[1m] model**: new installs default to `opus[1m]` model and pair Claude new-session threshold with model backfill. (#638)
+- **Web console image and file upload**: web console now supports image and file upload with in-browser display. (#629, #636)
+- **Local runtime integration-test harness**: Docker-based integration test runner with env-injected scenarios for runtime auth, post-init, and service-health validation. (#645, #646)
+- **Real-smoke and service-health integration scenarios**: opt-in live credential smoke tests for Claude and Codex runtimes, plus `better-sqlite3` per-skill isolation validation. (#647, #650)
+
+### Fixed
+- **Tmux clean PATH node resolution**: `buildCleanEnv()` now prepends `dirname(process.execPath)` into the tmux clean PATH, and the tmux launcher command uses the absolute node binary path instead of bare `node`. Fixes `ERR_DLOPEN_FAILED` when PM2 strips nvm from PATH. (#445, #653)
+- **Runtime auth tristate**: `checkAuth()` unified into an explicit tristate (`authenticated` / `unauthenticated` / `uncertain`) with `--no-validate` flag, replacing ambiguous exit-code-based detection. (#640, #641, #642)
+- **GitHub API rate limiting**: `zylos add` and `zylos upgrade` now auto-retry GitHub API calls on rate limiting (HTTP 403/429) with exponential backoff. (#633)
+
+### Changed
+- **Memory file budgets**: zylos-memory core file budgets raised to 16KB. (#623)
+
 ## [0.5.2] - 2026-06-02
 
 ### Fixed
