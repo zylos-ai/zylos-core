@@ -41,7 +41,7 @@ Real credentials are runtime-only — never commit secrets; both seed files are
 git-ignored (`*.local.env`, `*.local.json`):
 
 - **Claude** reads env-style credentials. Put `ANTHROPIC_API_KEY=` or
-  `CLAUDE_CODE_OAUTH_TOKEN=` in `test/integration/runtime/real-creds.local.env`,
+  `CLAUDE_CODE_OAUTH_TOKEN=` in `test/integration/runtime/real-claude-auth.local.env`,
   or export them in the host environment.
 - **Codex** authenticates only from `~/.codex/auth.json` (it ignores env vars).
   Copy your live `~/.codex/auth.json` to
@@ -56,7 +56,7 @@ cd <repo root>
 
 # 1. Claude credential (token or API key) — env-file form:
 printf 'CLAUDE_CODE_OAUTH_TOKEN=%s\n' "$YOUR_TOKEN" \
-  > test/integration/runtime/real-creds.local.env
+  > test/integration/runtime/real-claude-auth.local.env
 #    ...or export ANTHROPIC_API_KEY / CLAUDE_CODE_OAUTH_TOKEN in your shell.
 
 # 2. Codex credential — copy your live auth.json:
@@ -71,7 +71,7 @@ test/integration/runtime/run.sh real-smoke
 #    → expect: PASS claude-real-auth-ok / PASS codex-real-auth-ok
 
 # 5. Clean up the live credential seeds when done:
-rm -f test/integration/runtime/real-creds.local.env \
+rm -f test/integration/runtime/real-claude-auth.local.env \
       test/integration/runtime/real-codex-auth.local.json
 ```
 
@@ -172,7 +172,7 @@ shell out to `claude`/`codex`.
 
 `RUNTIME_MODE=real` is only for scenarios under `scenarios/real/`, run through
 `run.sh real-smoke`. In real mode the fake `/runtime/bin` shims are not mounted,
-and credentials are injected from `real-creds.local.env` or host environment at
+and credentials are injected from `real-claude-auth.local.env` or host environment at
 container runtime.
 
 Ad-hoc experiments can be run by adding a temporary scenario file locally. Keep

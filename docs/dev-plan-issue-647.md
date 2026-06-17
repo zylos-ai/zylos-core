@@ -18,7 +18,7 @@ Extend the local integration harness (`test/integration/runtime/`) with two **op
 
 ### D1 — Credential injection (HARD CONSTRAINT: never in git)
 Support two runtime-only sources, in priority order:
-1. A git-ignored creds file `test/integration/runtime/real-creds.local.env` (add `*.local.env` under this dir to `.gitignore`), loaded as a *second* `--env-file` only in real mode.
+1. A git-ignored creds file `test/integration/runtime/real-claude-auth.local.env` (add `*.local.env` under this dir to `.gitignore`), loaded as a *second* `--env-file` only in real mode.
 2. Host-env pass-through: if the creds file is absent, pass through `ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN` / `ANTHROPIC_BASE_URL` (and codex equivalents) from the invoking shell via bare `-e VAR`.
 
 Committed real-mode scenario `.env` files contain **only** `SCENARIO_CMD` / `EXPECT_*` / `RUNTIME_MODE=real` — never secrets.

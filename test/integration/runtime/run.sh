@@ -7,7 +7,7 @@ IMAGE_NAME="${Z_RUNTIME_IMAGE:-zylos-runtime-test:local}"
 REAL_IMAGE_NAME="${Z_RUNTIME_REAL_IMAGE:-zylos-runtime-test:real}"
 SCENARIO_DIR="$SCRIPT_DIR/scenarios"
 REAL_SCENARIO_DIR="$SCENARIO_DIR/real"
-REAL_CREDS_FILE="$SCRIPT_DIR/real-creds.local.env"
+REAL_CLAUDE_AUTH_FILE="$SCRIPT_DIR/real-claude-auth.local.env"
 # Codex authenticates from ~/.codex/auth.json (it ignores env vars), so its real
 # credential is provisioned as a gitignored seed file the operator copies from
 # their own ~/.codex/auth.json. Mounted into the container for real codex scenarios.
@@ -54,8 +54,8 @@ build_image() {
 }
 
 has_claude_credentials() {
-  if [[ -f "$REAL_CREDS_FILE" ]]; then
-    grep -Eq '^(ANTHROPIC_API_KEY|CLAUDE_CODE_OAUTH_TOKEN)=.+' "$REAL_CREDS_FILE"
+  if [[ -f "$REAL_CLAUDE_AUTH_FILE" ]]; then
+    grep -Eq '^(ANTHROPIC_API_KEY|CLAUDE_CODE_OAUTH_TOKEN)=.+' "$REAL_CLAUDE_AUTH_FILE"
     return $?
   fi
 
@@ -174,8 +174,8 @@ run_one() {
         -e HTTP_PROXY -e HTTPS_PROXY -e NO_PROXY
         -e http_proxy -e https_proxy -e no_proxy
       )
-      if [[ -f "$REAL_CREDS_FILE" ]]; then
-        docker_args+=(--env-file "$REAL_CREDS_FILE")
+      if [[ -f "$REAL_CLAUDE_AUTH_FILE" ]]; then
+        docker_args+=(--env-file "$REAL_CLAUDE_AUTH_FILE")
       else
         docker_args+=(
           -e ANTHROPIC_API_KEY
