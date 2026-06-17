@@ -50,4 +50,14 @@ RUN mkdir -p /opt/zylos-buildbin /opt/zylos-buildhome \
   && mv /opt/zylos-buildhome/zylos /opt/zylos-golden \
   && rm -rf /opt/zylos-buildhome /opt/zylos-buildbin
 
+# ── Optional: real runtime CLIs (for `run.sh real-smoke`) ─────────────────────
+# OFF by default so the standard offline image stays lean and identical to
+# before. `run.sh real-smoke` builds a separate `zylos-runtime-test:real` image
+# with --build-arg INSTALL_REAL_RUNTIMES=1, which installs the genuine CLIs so a
+# real-mode scenario (no fake shim on PATH) drives the actual Claude/Codex API.
+ARG INSTALL_REAL_RUNTIMES=0
+RUN if [ "$INSTALL_REAL_RUNTIMES" = "1" ]; then \
+      npm install -g @anthropic-ai/claude-code @openai/codex; \
+    fi
+
 WORKDIR /work
