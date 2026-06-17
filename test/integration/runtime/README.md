@@ -14,11 +14,25 @@ Prerequisite: Docker CLI and a running Docker engine.
 ```bash
 test/integration/runtime/run.sh all
 test/integration/runtime/run.sh claude-success
+test/integration/runtime/run.sh real-smoke
 ```
 
 `run.sh all` is the regression entry point. It builds `zylos-runtime-test:local`
 with Docker layer cache, runs every committed scenario, and prints a pass/fail
-summary.
+summary. It covers the existing eight runtime/init scenarios plus the additive
+`service-health` scenario, for 9 scenarios total.
+
+`run.sh real-smoke` is an opt-in live check. Before any real image build, it
+performs a host-side preflight for Claude credentials and network access. If
+credentials are missing or the host is offline, it prints `SKIP real-smoke` and
+exits 0 without running `docker build`. When the preflight passes, it builds a
+separate `zylos-runtime-test:real` image with the genuine Claude/Codex CLIs and
+runs scenarios from `scenarios/real/`.
+
+Real credentials are runtime-only. Put local live credentials in
+`test/integration/runtime/real-creds.local.env` or export them in the host
+environment before running `real-smoke`; never commit secrets. The local creds
+file is ignored by git.
 
 ## How It Works
 
@@ -71,6 +85,7 @@ Common fields:
 ```text
 SETUP=minimal                  # minimal (default) | init
 SETUP_RUNTIME=codex            # minimal mode: seed current runtime in config.json
+RUNTIME_MODE=fake              # fake (default) | real
 SCENARIO_ENV_FILE=ANTHROPIC_API_KEY=fake\nANTHROPIC_BASE_URL=https://example.test
 FAKE_CLAUDE_EXIT=0
 FAKE_CLAUDE_STDOUT=pong
@@ -88,6 +103,11 @@ line — `zylos runtime claude --no-validate`, `zylos runtime status`,
 against the fake-binary invocation log and are only meaningful for commands that
 shell out to `claude`/`codex`.
 
+`RUNTIME_MODE=real` is only for scenarios under `scenarios/real/`, run through
+`run.sh real-smoke`. In real mode the fake `/runtime/bin` shims are not mounted,
+and credentials are injected from `real-creds.local.env` or host environment at
+container runtime.
+
 Ad-hoc experiments can be run by adding a temporary scenario file locally. Keep
 permanent regression scenarios as data/env fixtures; do not fork the Dockerfile
 for a scenario.
@@ -104,6 +124,15 @@ for a scenario.
   `pm2/ecosystem.config.cjs` and asserts every service's script file exists in
   the cloned workspace, proving the post-init workspace is actually *usable*
   (skill paths resolve), not merely config-readable.
+- `service-health` — uses `createRequire(<skill>/package.json)` for
+  `scheduler`, `comm-bridge`, and `web-console`; asserts each
+  `better-sqlite3` resolves from that skill's own nested
+  `node_modules/better-sqlite3/`, then opens and writes a SQLite DB with that
+  skill-scoped module. A hoisted/global `better-sqlite3` must not make this
+  scenario pass.
+- `real/claude-real-auth-ok` — opt-in live Claude auth smoke for
+  `run.sh real-smoke`. It uses the real Claude CLI and runtime-injected
+  credentials; no secret values belong in the scenario file.
 
 ## Scope Notes
 

@@ -6,6 +6,7 @@ node_modules/
 *.db-shm
 *.db-wal
 .zylos/runtime-env.manifest
+test/integration/runtime/*.local.env
 
 # Agent worktrees (runtime artifact)
 .claude/worktrees/

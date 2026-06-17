@@ -4,16 +4,22 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 IMAGE_NAME="${Z_RUNTIME_IMAGE:-zylos-runtime-test:local}"
+REAL_IMAGE_NAME="${Z_RUNTIME_REAL_IMAGE:-zylos-runtime-test:real}"
 SCENARIO_DIR="$SCRIPT_DIR/scenarios"
+REAL_SCENARIO_DIR="$SCENARIO_DIR/real"
+REAL_CREDS_FILE="$SCRIPT_DIR/real-creds.local.env"
+DEFAULT_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+FAKE_PATH="/runtime/bin:$DEFAULT_PATH"
 
 usage() {
   cat <<'USAGE'
 Usage:
-  test/integration/runtime/run.sh <scenario|all>
+  test/integration/runtime/run.sh <scenario|all|real-smoke>
 
 Examples:
   test/integration/runtime/run.sh claude-success
   test/integration/runtime/run.sh all
+  test/integration/runtime/run.sh real-smoke
 USAGE
 }
 
@@ -29,14 +35,45 @@ load_scenario() {
 }
 
 build_image() {
+  local target="${1:-all}"
+  local image="${2:-$IMAGE_NAME}"
+  local install_real="${3:-0}"
   if ! command -v docker >/dev/null 2>&1; then
-    echo "Docker CLI not found. Install/start Docker, then retry: $0 ${1:-all}" >&2
+    echo "Docker CLI not found. Install/start Docker, then retry: $0 $target" >&2
     return 127
   fi
   docker build \
     -f "$SCRIPT_DIR/Dockerfile" \
-    -t "$IMAGE_NAME" \
+    --build-arg "INSTALL_REAL_RUNTIMES=$install_real" \
+    -t "$image" \
     "$REPO_ROOT"
+}
+
+has_claude_credentials() {
+  if [[ -f "$REAL_CREDS_FILE" ]]; then
+    grep -Eq '^(ANTHROPIC_API_KEY|CLAUDE_CODE_OAUTH_TOKEN)=.+' "$REAL_CREDS_FILE"
+    return $?
+  fi
+
+  [[ -n "${ANTHROPIC_API_KEY:-}" || -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]]
+}
+
+network_available() {
+  command -v curl >/dev/null 2>&1 || return 1
+  curl -sS -I --connect-timeout 5 --max-time 8 https://api.anthropic.com >/dev/null 2>&1 &&
+    curl -sS -I --connect-timeout 5 --max-time 8 'https://registry.npmjs.org/@anthropic-ai%2fclaude-code' >/dev/null 2>&1
+}
+
+preflight_real_smoke() {
+  if ! has_claude_credentials; then
+    echo "SKIP real-smoke (no credentials / offline)"
+    return 1
+  fi
+  if ! network_available; then
+    echo "SKIP real-smoke (no credentials / offline)"
+    return 1
+  fi
+  return 0
 }
 
 count_invocations() {
@@ -68,7 +105,8 @@ assert_contains() {
 
 run_one() {
   local scenario="$1"
-  local scenario_file="$SCENARIO_DIR/$scenario.env"
+  local scenario_file="${2:-$SCENARIO_DIR/$scenario.env}"
+  local image="${3:-$IMAGE_NAME}"
   if [[ ! -f "$scenario_file" ]]; then
     echo "Unknown scenario: $scenario" >&2
     return 64
@@ -84,6 +122,7 @@ run_one() {
   local EXPECT_STDERR=""
   local EXPECT_INVOCATIONS=""
   local EXPECT_INVOCATION_CONTAINS=""
+  local RUNTIME_MODE="fake"
   load_scenario "$scenario_file"
 
   if [[ -z "$SCENARIO_CMD" || -z "$EXPECT_EXIT" ]]; then
@@ -96,6 +135,43 @@ run_one() {
   local stdout_file="$run_dir/stdout.log"
   local stderr_file="$run_dir/stderr.log"
   local invocation_log="$run_dir/invocations.log"
+  local docker_args=(
+    --rm
+    --env-file "$scenario_file"
+    -e "HOME=/tmp/zylos-home"
+    -e "ZYLOS_DIR=/tmp/zylos-home/zylos"
+    -e "GOLDEN_DIR=/opt/zylos-golden"
+    -e "FAKE_INVOCATION_LOG=/tmp/zylos-run/invocations.log"
+    -v "$run_dir:/tmp/zylos-run"
+  )
+
+  case "${RUNTIME_MODE:-fake}" in
+    real)
+      docker_args+=(-e "PATH=$DEFAULT_PATH")
+      if [[ -f "$REAL_CREDS_FILE" ]]; then
+        docker_args+=(--env-file "$REAL_CREDS_FILE")
+      else
+        docker_args+=(
+          -e ANTHROPIC_API_KEY
+          -e CLAUDE_CODE_OAUTH_TOKEN
+          -e ANTHROPIC_BASE_URL
+          -e OPENAI_API_KEY
+          -e CODEX_API_KEY
+          -e OPENAI_BASE_URL
+        )
+      fi
+      ;;
+    fake|"")
+      docker_args+=(
+        -e "PATH=$FAKE_PATH"
+        -v "$SCRIPT_DIR:/runtime:ro"
+      )
+      ;;
+    *)
+      echo "Scenario $scenario has unknown RUNTIME_MODE: $RUNTIME_MODE" >&2
+      return 65
+      ;;
+  esac
 
   # The container fixture builds the requested workspace state, then runs the
   # scenario command. SETUP selects how the workspace is prepared:
@@ -140,16 +216,8 @@ fi
 eval "$SCENARIO_CMD"
 '
 
-  docker run --rm \
-    --env-file "$scenario_file" \
-    -e "HOME=/tmp/zylos-home" \
-    -e "ZYLOS_DIR=/tmp/zylos-home/zylos" \
-    -e "GOLDEN_DIR=/opt/zylos-golden" \
-    -e "FAKE_INVOCATION_LOG=/tmp/zylos-run/invocations.log" \
-    -e "PATH=/runtime/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
-    -v "$SCRIPT_DIR:/runtime:ro" \
-    -v "$run_dir:/tmp/zylos-run" \
-    "$IMAGE_NAME" \
+  docker run "${docker_args[@]}" \
+    "$image" \
     bash -c "$container_script" >"$stdout_file" 2>"$stderr_file"
   local exit_code=$?
 
@@ -186,6 +254,38 @@ eval "$SCENARIO_CMD"
   return 1
 }
 
+run_real_smoke() {
+  preflight_real_smoke || return 0
+  build_image real-smoke "$REAL_IMAGE_NAME" 1 || return $?
+
+  local scenarios=()
+  local file
+  while IFS= read -r file; do
+    scenarios+=("$file")
+  done < <(find "$REAL_SCENARIO_DIR" -maxdepth 1 -name '*.env' -type f | sort 2>/dev/null)
+
+  if [[ "${#scenarios[@]}" == 0 ]]; then
+    echo "No real-smoke scenarios found in $REAL_SCENARIO_DIR" >&2
+    return 65
+  fi
+
+  local passed=0
+  local failed=0
+  for file in "${scenarios[@]}"; do
+    local scenario
+    scenario="$(basename "$file" .env)"
+    if run_one "$scenario" "$file" "$REAL_IMAGE_NAME"; then
+      passed=$((passed + 1))
+    else
+      failed=$((failed + 1))
+    fi
+  done
+
+  echo
+  echo "Real-smoke summary: $passed passed, $failed failed"
+  [[ "$failed" == 0 ]]
+}
+
 main() {
   local target="${1:-}"
   if [[ -z "$target" || "$target" == "-h" || "$target" == "--help" ]]; then
@@ -193,7 +293,12 @@ main() {
     exit 64
   fi
 
-  build_image "$target" || exit $?
+  if [[ "$target" == "real-smoke" ]]; then
+    run_real_smoke
+    exit $?
+  fi
+
+  build_image "$target" "$IMAGE_NAME" 0 || exit $?
 
   if [[ "$target" != "all" ]]; then
     run_one "$target"
