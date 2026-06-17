@@ -8,6 +8,10 @@ REAL_IMAGE_NAME="${Z_RUNTIME_REAL_IMAGE:-zylos-runtime-test:real}"
 SCENARIO_DIR="$SCRIPT_DIR/scenarios"
 REAL_SCENARIO_DIR="$SCENARIO_DIR/real"
 REAL_CREDS_FILE="$SCRIPT_DIR/real-creds.local.env"
+# Codex authenticates from ~/.codex/auth.json (it ignores env vars), so its real
+# credential is provisioned as a gitignored seed file the operator copies from
+# their own ~/.codex/auth.json. Mounted into the container for real codex scenarios.
+REAL_CODEX_AUTH_FILE="$SCRIPT_DIR/real-codex-auth.local.json"
 DEFAULT_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 FAKE_PATH="/runtime/bin:$DEFAULT_PATH"
 
@@ -58,6 +62,12 @@ has_claude_credentials() {
   [[ -n "${ANTHROPIC_API_KEY:-}" || -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]]
 }
 
+has_codex_credentials() {
+  # Codex reads ~/.codex/auth.json, so the only credential the harness can hand
+  # to the container is the seed file the operator placed.
+  [[ -f "$REAL_CODEX_AUTH_FILE" ]]
+}
+
 network_available() {
   command -v curl >/dev/null 2>&1 || return 1
   curl -sS -I --connect-timeout 5 --max-time 8 https://api.anthropic.com >/dev/null 2>&1 &&
@@ -65,7 +75,11 @@ network_available() {
 }
 
 preflight_real_smoke() {
-  if ! has_claude_credentials; then
+  # Gate the build on having at least one runtime's real credentials. Per-scenario
+  # credential gating (see run_real_smoke) then skips individual scenarios whose
+  # runtime lacks credentials, so a claude-only or codex-only operator still runs
+  # the scenarios they can and skips (not fails) the rest.
+  if ! has_claude_credentials && ! has_codex_credentials; then
     echo "SKIP real-smoke (no credentials / offline)"
     return 1
   fi
@@ -172,6 +186,12 @@ run_one() {
           -e OPENAI_BASE_URL
         )
       fi
+      # Codex reads ~/.codex/auth.json, not env. When a codex auth seed is
+      # provided, mount it so the container_script can stage it into HOME; the
+      # genuine codex CLI then authenticates from it (apikey or chatgpt mode).
+      if [[ -f "$REAL_CODEX_AUTH_FILE" ]]; then
+        docker_args+=(-v "$REAL_CODEX_AUTH_FILE:/seed/codex-auth.json:ro")
+      fi
       ;;
     fake|"")
       docker_args+=(
@@ -199,6 +219,14 @@ run_one() {
   local container_script='
 set -uo pipefail
 mkdir -p "$HOME" "$ZYLOS_DIR/.zylos" "$ZYLOS_DIR/pm2"
+
+# Stage the codex credential (mounted read-only at /seed) into HOME so the codex
+# CLI, which only reads ~/.codex/auth.json, can authenticate. Copied (not used in
+# place) because codex may rewrite the file when refreshing an OAuth token.
+if [ -f /seed/codex-auth.json ]; then
+  mkdir -p "$HOME/.codex"
+  cp /seed/codex-auth.json "$HOME/.codex/auth.json"
+fi
 
 case "${SETUP:-minimal}" in
   init)
@@ -283,9 +311,29 @@ run_real_smoke() {
 
   local passed=0
   local failed=0
+  local skipped=0
   for file in "${scenarios[@]}"; do
-    local scenario
+    local scenario requires
     scenario="$(basename "$file" .env)"
+    # Per-scenario credential gating: a scenario declares which runtime's real
+    # credentials it needs via REAL_REQUIRES (defaults to claude). When those
+    # credentials are absent, skip — not fail — so an operator with only one
+    # runtime's credentials still gets a green run for what they can test.
+    requires="$(grep -E '^REAL_REQUIRES=' "$file" | head -1 | cut -d= -f2- || true)"
+    case "${requires:-claude}" in
+      codex)
+        if ! has_codex_credentials; then
+          echo "SKIP $scenario (no codex credentials)"
+          skipped=$((skipped + 1)); continue
+        fi
+        ;;
+      *)
+        if ! has_claude_credentials; then
+          echo "SKIP $scenario (no claude credentials)"
+          skipped=$((skipped + 1)); continue
+        fi
+        ;;
+    esac
     if run_one "$scenario" "$file" "$REAL_IMAGE_NAME"; then
       passed=$((passed + 1))
     else
@@ -294,7 +342,7 @@ run_real_smoke() {
   done
 
   echo
-  echo "Real-smoke summary: $passed passed, $failed failed"
+  echo "Real-smoke summary: $passed passed, $failed failed, $skipped skipped"
   [[ "$failed" == 0 ]]
 }
 

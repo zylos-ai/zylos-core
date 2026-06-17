@@ -23,16 +23,60 @@ summary. It covers the existing eight runtime/init scenarios plus the additive
 `service-health` scenario, for 9 scenarios total.
 
 `run.sh real-smoke` is an opt-in live check. Before any real image build, it
-performs a host-side preflight for Claude credentials and network access. If
-credentials are missing or the host is offline, it prints `SKIP real-smoke` and
-exits 0 without running `docker build`. When the preflight passes, it builds a
-separate `zylos-runtime-test:real` image with the genuine Claude/Codex CLIs and
-runs scenarios from `scenarios/real/`.
+performs a host-side preflight for credentials and network access. If neither
+runtime's credentials are present, or the host is offline, it prints
+`SKIP real-smoke` and exits 0 without running `docker build`. When the preflight
+passes, it builds a separate `zylos-runtime-test:real` image with the genuine
+Claude/Codex CLIs and runs scenarios from `scenarios/real/`. It covers both
+runtimes and both switch directions: `claude-real-auth-ok` (starts on codex,
+switches to claude) and `codex-real-auth-ok` (starts on claude, switches to
+codex).
 
-Real credentials are runtime-only. Put local live credentials in
-`test/integration/runtime/real-creds.local.env` or export them in the host
-environment before running `real-smoke`; never commit secrets. The local creds
-file is ignored by git.
+Each real scenario declares the runtime whose credentials it needs via
+`REAL_REQUIRES` (`claude` | `codex`, default `claude`). A scenario whose
+credentials are absent is **skipped, not failed**, so an operator with only one
+runtime's credentials still gets a green run for what they can test.
+
+Real credentials are runtime-only — never commit secrets; both seed files are
+git-ignored (`*.local.env`, `*.local.json`):
+
+- **Claude** reads env-style credentials. Put `ANTHROPIC_API_KEY=` or
+  `CLAUDE_CODE_OAUTH_TOKEN=` in `test/integration/runtime/real-creds.local.env`,
+  or export them in the host environment.
+- **Codex** authenticates only from `~/.codex/auth.json` (it ignores env vars).
+  Copy your live `~/.codex/auth.json` to
+  `test/integration/runtime/real-codex-auth.local.json`; real mode mounts it and
+  stages it into the container's `~/.codex/auth.json` (works for both `apikey`
+  and `chatgpt` auth modes).
+
+### Running real-smoke step by step
+
+```bash
+cd <repo root>
+
+# 1. Claude credential (token or API key) — env-file form:
+printf 'CLAUDE_CODE_OAUTH_TOKEN=%s\n' "$YOUR_TOKEN" \
+  > test/integration/runtime/real-creds.local.env
+#    ...or export ANTHROPIC_API_KEY / CLAUDE_CODE_OAUTH_TOKEN in your shell.
+
+# 2. Codex credential — copy your live auth.json:
+cp ~/.codex/auth.json test/integration/runtime/real-codex-auth.local.json
+
+# 3. Ensure the container can reach the API. On a region-restricted host,
+#    export the proxy (real mode forwards it into the container):
+echo "$HTTPS_PROXY"   # should be set, e.g. http://host:7890
+
+# 4. Run:
+test/integration/runtime/run.sh real-smoke
+#    → expect: PASS claude-real-auth-ok / PASS codex-real-auth-ok
+
+# 5. Clean up the live credential seeds when done:
+rm -f test/integration/runtime/real-creds.local.env \
+      test/integration/runtime/real-codex-auth.local.json
+```
+
+Provide only one runtime's credentials and the other scenario is skipped (still
+exit 0). Provide neither and the whole run is skipped before any build.
 
 The live probe inside the container must reach the Anthropic API. Real mode
 forwards the host's `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` (both casings) into
