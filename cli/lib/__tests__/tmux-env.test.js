@@ -295,6 +295,34 @@ describe('buildCleanEnv', () => {
     assert.ok(env.PATH.includes('.nvm'), `PATH should include .nvm segment: ${env.PATH}`);
   });
 
+  it('includes execPath dir in PATH even when processEnv.PATH lacks nvm', () => {
+    const { env } = buildCleanEnv({
+      processEnv: baseProcessEnv,
+      dotenvVars: {},
+      platform: 'linux',
+      execPath: '/home/testuser/.nvm/versions/node/v22.0.0/bin/node',
+    });
+    const parts = env.PATH.split(':');
+    const execIdx = parts.indexOf('/home/testuser/.nvm/versions/node/v22.0.0/bin');
+    const sysIdx = parts.indexOf('/usr/bin');
+    assert.ok(execIdx >= 0, 'execPath dir should be in PATH');
+    assert.ok(execIdx < sysIdx, 'execPath dir should be before system paths');
+  });
+
+  it('dedupes execPath dir with nvm paths from processEnv.PATH', () => {
+    const nvmBin = '/home/testuser/.nvm/versions/node/v22.0.0/bin';
+    const processEnv = { ...baseProcessEnv, PATH: `${nvmBin}:/usr/bin` };
+    const { env } = buildCleanEnv({
+      processEnv,
+      dotenvVars: {},
+      platform: 'linux',
+      execPath: `${nvmBin}/node`,
+    });
+    const parts = env.PATH.split(':');
+    const count = parts.filter(p => p === nvmBin).length;
+    assert.equal(count, 1, 'nvm bin dir should appear exactly once');
+  });
+
   it('darwin clean PATH includes Homebrew paths', () => {
     const { env } = buildCleanEnv({ processEnv: baseProcessEnv, dotenvVars: {}, platform: 'darwin' });
     const parts = env.PATH.split(':');

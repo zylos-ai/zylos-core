@@ -143,16 +143,20 @@ export function parseManifest(manifestStr, warnings = []) {
 
 /**
  * Build a clean PATH ensuring key directories exist.
- * Order: user dirs → nvm → PREPEND → platform (Homebrew) → system → APPEND.
+ * Order: user dirs → execDir → nvm → PREPEND → platform (Homebrew) → system → APPEND.
  * PREPEND/APPEND are "before/after platform+system base paths", not before user dirs.
  */
-function _buildPath(processEnv, platform, pathPrepend, pathAppend) {
+function _buildPath(processEnv, platform, pathPrepend, pathAppend, execPath) {
   const home = processEnv.HOME || os.homedir();
 
   const userDirs = [
     path.join(home, '.local', 'bin'),
     path.join(home, '.claude', 'bin'),
   ];
+
+  // Pin the node binary that's running core — guarantees tmux child processes
+  // use the same node even when the caller's PATH lacks nvm (e.g. PM2).
+  const execDir = execPath ? [path.dirname(execPath)] : [];
 
   const currentParts = (processEnv.PATH || '').split(':').filter(Boolean);
   const nvmParts = currentParts.filter(p => p.includes('.nvm'));
@@ -169,7 +173,7 @@ function _buildPath(processEnv, platform, pathPrepend, pathAppend) {
   ];
 
   const allParts = [
-    ...userDirs, ...nvmParts,
+    ...userDirs, ...execDir, ...nvmParts,
     ...pathPrepend,
     ...platformPaths, ...systemPaths,
     ...pathAppend,
@@ -188,9 +192,10 @@ function _buildPath(processEnv, platform, pathPrepend, pathAppend) {
  * @param {object} [opts.manifest] - Parsed runtime-env.manifest (from parseRuntimeEnvManifest)
  * @param {string} [opts.platform] - os.platform() value, defaults to current
  * @param {number} [opts.uid] - Process UID; when 0, IS_SANDBOX is set for root/Docker safety
+ * @param {string} [opts.execPath] - process.execPath of the running node; defaults to process.execPath
  * @returns {{ env: object, warnings: string[] }}
  */
-export function buildCleanEnv({ processEnv, dotenvVars, manifest, platform, uid }) {
+export function buildCleanEnv({ processEnv, dotenvVars, manifest, platform, uid, execPath }) {
   const plat = platform || os.platform();
   const m = manifest || EMPTY_MANIFEST;
   const warnings = [];
@@ -208,7 +213,7 @@ export function buildCleanEnv({ processEnv, dotenvVars, manifest, platform, uid 
   const allAppend = [...new Set([...m.pathAppend, ...dotenvAppend])];
 
   // 1. Base set
-  env.PATH = _buildPath(processEnv, plat, allPrepend, allAppend);
+  env.PATH = _buildPath(processEnv, plat, allPrepend, allAppend, execPath ?? process.execPath);
   env.HOME = processEnv.HOME || os.homedir();
   env.USER = processEnv.USER || os.userInfo().username;
   env.LOGNAME = processEnv.LOGNAME || env.USER;

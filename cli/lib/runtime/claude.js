@@ -336,7 +336,7 @@ export class ClaudeAdapter extends RuntimeAdapter {
         '-e', `PATH=${env.PATH}`,
         '-e', `HOME=${env.HOME}`,
         '-e', `TERM=${env.TERM || 'xterm-256color'}`,
-        '--', `node "${launcherPath}" "${specPath}"`,
+        '--', `"${process.execPath}" "${launcherPath}" "${specPath}"`,
       ];
 
       try {
