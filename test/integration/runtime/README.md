@@ -78,17 +78,28 @@ rm -f test/integration/runtime/real-creds.local.env \
 Provide only one runtime's credentials and the other scenario is skipped (still
 exit 0). Provide neither and the whole run is skipped before any build.
 
-The live probe inside the container must reach the Anthropic API. Real mode
-forwards the host's `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` (both casings) into
-the container, so a host behind a region-restricted egress proxy threads it
-through, while a host whose IP reaches the API directly passes nothing and
-connects directly. Note the host-side preflight only checks *reachability*
-(an HTTP response), not authorization — `api.anthropic.com` answers an
-unauthenticated probe with `403`, which counts as reachable. So on a host whose
-IP is region-blocked **and** has no proxy configured, the preflight passes but
-the in-container probe gets a real `403 Request not allowed` and the scenario
+The live probe inside the container must reach the API of the runtime under
+test (Anthropic for claude; the codex `chatgpt` login-status check is local and
+needs no network, while `apikey` mode probes the OpenAI API). Real mode forwards
+the host's `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` (both casings) into the
+container, so a host behind a region-restricted egress proxy threads it through,
+while a host whose IP reaches the API directly passes nothing and connects
+directly. Note the host-side preflight only checks *reachability* (an HTTP
+response), not authorization — `api.anthropic.com` answers an unauthenticated
+probe with `403`, which counts as reachable. So on a host whose IP is
+region-blocked **and** has no proxy configured, the preflight passes but the
+in-container claude probe gets a real `403 Request not allowed` and that scenario
 fails. Configure a proxy (or run from an IP that can reach the API) for
 `real-smoke` to pass.
+
+Preflight network check (conservative precondition): `network_available()`
+currently uses the Anthropic API + the `@anthropic-ai/claude-code` npm registry
+as its single network sentinel. The npm reachability check is what gates the
+image build (both CLIs install from npm); the Anthropic check is claude-probe
+oriented. Consequence: a host that can reach OpenAI/npm but not Anthropic would
+`SKIP` the whole run at preflight even though the codex scenario alone could
+pass. This is an accepted conservative gate for now; a future change could
+relax it to "registry reachable + any required runtime's API reachable".
 
 ## How It Works
 
