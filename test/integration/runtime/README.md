@@ -34,6 +34,18 @@ Real credentials are runtime-only. Put local live credentials in
 environment before running `real-smoke`; never commit secrets. The local creds
 file is ignored by git.
 
+The live probe inside the container must reach the Anthropic API. Real mode
+forwards the host's `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` (both casings) into
+the container, so a host behind a region-restricted egress proxy threads it
+through, while a host whose IP reaches the API directly passes nothing and
+connects directly. Note the host-side preflight only checks *reachability*
+(an HTTP response), not authorization — `api.anthropic.com` answers an
+unauthenticated probe with `403`, which counts as reachable. So on a host whose
+IP is region-blocked **and** has no proxy configured, the preflight passes but
+the in-container probe gets a real `403 Request not allowed` and the scenario
+fails. Configure a proxy (or run from an IP that can reach the API) for
+`real-smoke` to pass.
+
 ## How It Works
 
 - The base image installs zylos from the local source tree.

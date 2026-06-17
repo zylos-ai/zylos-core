@@ -148,6 +148,18 @@ run_one() {
   case "${RUNTIME_MODE:-fake}" in
     real)
       docker_args+=(-e "PATH=$DEFAULT_PATH")
+      # Forward host proxy settings so the in-container live probe reaches the
+      # Anthropic API the same way the host does. The bare `-e NAME` form passes
+      # the host value through when set and is a no-op when unset — so a host
+      # behind a proxy (region-restricted egress) threads it into the container,
+      # while a host whose IP can reach the API directly passes nothing and
+      # connects directly. Both lower- and upper-case names are forwarded
+      # because curl/Node honor different casings. This mirrors how the host-side
+      # network_available() preflight already routes through the proxy.
+      docker_args+=(
+        -e HTTP_PROXY -e HTTPS_PROXY -e NO_PROXY
+        -e http_proxy -e https_proxy -e no_proxy
+      )
       if [[ -f "$REAL_CREDS_FILE" ]]; then
         docker_args+=(--env-file "$REAL_CREDS_FILE")
       else
