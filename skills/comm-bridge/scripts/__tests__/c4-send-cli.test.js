@@ -8,11 +8,12 @@ import { fileURLToPath } from 'node:url';
 
 const CLI_PATH = fileURLToPath(new URL('../c4-send.js', import.meta.url));
 
-function cli(args, env = {}) {
+function cli(args, env = {}, input = undefined) {
   const result = spawnSync('node', [CLI_PATH, ...args], {
     env: { ...process.env, ...env },
     encoding: 'utf8',
-    timeout: 5000
+    timeout: 5000,
+    ...(input !== undefined ? { input } : {})
   });
   return { stdout: result.stdout, stderr: result.stderr, status: result.status };
 }
@@ -63,16 +64,16 @@ describe('c4-send basic', () => {
     });
   });
 
-  it('sends message via mock channel without endpoint (broadcast)', () => {
+  it('reads message from stdin (heredoc mode: channel + endpoint, piped message)', () => {
     withTmpDir(({ tmpDir, env }) => {
       const sentFile = setupMockChannel(tmpDir, 'mock-channel');
 
-      const { stdout, status } = cli(['mock-channel', 'Hello broadcast!'], env);
+      const { stdout, status } = cli(['mock-channel', 'endpoint1'], env, 'Piped message');
       assert.equal(status, 0);
       assert.ok(stdout.includes('Message sent via mock-channel'));
 
       const sent = JSON.parse(fs.readFileSync(sentFile, 'utf8'));
-      assert.deepEqual(sent, ['Hello broadcast!']);
+      assert.deepEqual(sent, ['endpoint1', 'Piped message']);
     });
   });
 });
@@ -88,11 +89,20 @@ describe('c4-send validation', () => {
     });
   });
 
-  it('errors with only channel (no message)', () => {
+  it('errors with only channel (endpoint is required)', () => {
     withTmpDir(({ env }) => {
       const { stdout, status } = cli(['telegram'], env);
       assert.equal(status, 1);
       assert.ok(stdout.includes('Usage'));
+    });
+  });
+
+  it('errors when endpoint is given but no message is provided', () => {
+    withTmpDir(({ env }) => {
+      // channel + endpoint, empty stdin, no message arg
+      const { stderr, status } = cli(['telegram', 'endpoint1'], env, '');
+      assert.equal(status, 1);
+      assert.ok(stderr.includes('Message is required'));
     });
   });
 
@@ -102,7 +112,7 @@ describe('c4-send validation', () => {
       const skillDir = path.join(tmpDir, '.claude', 'skills', 'fake-channel');
       fs.mkdirSync(skillDir, { recursive: true });
 
-      const { stderr, status } = cli(['fake-channel', 'Hello'], env);
+      const { stderr, status } = cli(['fake-channel', 'endpoint1', 'Hello'], env);
       assert.equal(status, 1);
       assert.ok(stderr.includes('Channel script not found'));
     });
@@ -118,7 +128,7 @@ describe('c4-send failed channel', () => {
       fs.mkdirSync(skillDir, { recursive: true });
       fs.writeFileSync(path.join(skillDir, 'send.js'), 'process.exit(1);');
 
-      const { stdout, status } = cli(['bad-channel', 'Hello'], env);
+      const { stdout, status } = cli(['bad-channel', 'endpoint1', 'Hello'], env);
       assert.equal(status, 1);
       assert.ok(stdout.includes('Failed to send'));
     });

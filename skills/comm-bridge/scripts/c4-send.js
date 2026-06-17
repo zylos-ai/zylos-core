@@ -3,6 +3,9 @@
  * C4 Communication Bridge - Send Interface
  * Sends messages from Claude to external channels
  *
+ * Both <channel> and <endpoint_id> are required — every channel routes to a
+ * specific destination, so there is no channel-wide "broadcast" form.
+ *
  * Usage:
  *   Recommended (stdin — safe for any content):
  *     node c4-send.js <channel> <endpoint_id> <<'EOF'
@@ -10,7 +13,7 @@
  *     EOF
  *
  *   Simple messages (CLI arg — backward compatible):
- *     node c4-send.js <channel> [endpoint_id] "short message"
+ *     node c4-send.js <channel> <endpoint_id> "short message"
  *
  * When no message argument is provided, the message is read from stdin.
  * This avoids shell escaping issues with quotes and special characters.
@@ -27,7 +30,7 @@ function printUsage() {
   console.log('Usage: node c4-send.js <channel> <endpoint_id> <<\'EOF\'');
   console.log('       message content');
   console.log('       EOF');
-  console.log('       node c4-send.js <channel> [endpoint_id] "message"');
+  console.log('       node c4-send.js <channel> <endpoint_id> "message"');
   console.log('Example: node c4-send.js telegram 8101553026 "Hello!"');
   process.exit(1);
 }
@@ -48,40 +51,36 @@ function readStdin() {
 async function main() {
   const args = process.argv.slice(2);
 
-  if (args.length < 2) {
+  // Remove --stdin flag if present (backward compat: forces reading from stdin)
+  const cleanArgs = args.filter(a => a !== '--stdin');
+  const hasStdinFlag = cleanArgs.length !== args.length;
+
+  // <channel> and <endpoint> are both required. Every channel routes to a
+  // specific destination, so there is no channel-wide broadcast form. The
+  // message is either the 3rd argument or piped on stdin.
+  if (cleanArgs.length < 2) {
     printUsage();
   }
 
-  // Remove --stdin flag if present (backward compat)
-  const cleanArgs = args.filter(a => a !== '--stdin');
-  const hasStdinFlag = cleanArgs.length !== args.length;
-  const stdinAvailable = !process.stdin.isTTY;
-
   const channel = cleanArgs[0];
-  let endpoint = null;
+  const endpoint = cleanArgs[1];
   let message = null;
 
-  if (cleanArgs.length === 2 && (stdinAvailable || hasStdinFlag)) {
-    // 2 args (channel + endpoint) with piped stdin or --stdin flag: read from stdin
-    endpoint = cleanArgs[1];
-    message = (await readStdin()).trimEnd();
-  } else if (cleanArgs.length === 1 && (stdinAvailable || hasStdinFlag)) {
-    // 1 arg (channel only) with piped stdin: read from stdin
-    message = (await readStdin()).trimEnd();
-  } else if (cleanArgs.length === 2) {
-    // 2 args, no stdin: channel + message (no endpoint)
+  if (cleanArgs.length >= 3) {
+    // <channel> <endpoint> <message>
     process.stderr.write('[c4-send] Deprecated: passing message as CLI argument. Use stdin/heredoc mode instead.\n');
-    message = cleanArgs[1];
-    // Unescape literal \n sequences that shell may have preserved when passing
-    // multi-line content as a CLI argument (defense-in-depth; prefer stdin mode)
+    message = cleanArgs[2];
+    // Unescape literal \n sequences that the shell may have preserved when
+    // passing multi-line content as a CLI argument (prefer stdin mode).
     message = message.replace(/\\n/g, '\n');
   } else {
-    // 3+ args: channel + endpoint + message
-    process.stderr.write('[c4-send] Deprecated: passing message as CLI argument. Use stdin/heredoc mode instead.\n');
-    endpoint = cleanArgs[1];
-    message = cleanArgs[2];
-    // Same defense for the 3-arg form
-    message = message.replace(/\\n/g, '\n');
+    // <channel> <endpoint> with the message piped on stdin (heredoc mode).
+    const stdinAvailable = !process.stdin.isTTY || hasStdinFlag;
+    if (!stdinAvailable) {
+      console.error('Error: Message is required (pass as the 3rd argument or pipe it via stdin)');
+      process.exit(1);
+    }
+    message = (await readStdin()).trimEnd();
   }
 
   if (!message) {
@@ -96,13 +95,11 @@ async function main() {
     process.exit(1);
   }
 
-  if (endpoint) {
-    try {
-      validateEndpoint(endpoint);
-    } catch (err) {
-      console.error(`[C4] Invalid endpoint: ${err.stack}`);
-      process.exit(1);
-    }
+  try {
+    validateEndpoint(endpoint);
+  } catch (err) {
+    console.error(`[C4] Invalid endpoint: ${err.stack}`);
+    process.exit(1);
   }
 
   try {
@@ -121,7 +118,7 @@ async function main() {
     process.exit(1);
   }
 
-  const scriptArgs = endpoint ? [endpoint, message] : [message];
+  const scriptArgs = [endpoint, message];
 
   const child = spawn('node', [channelScript, ...scriptArgs], {
     stdio: 'inherit'
