@@ -145,6 +145,19 @@ describe('Claude launch — new session', () => {
     assert.ok(tmux.args.includes('-E'), 'tmux args must include -E');
   });
 
+  it('tmux shell-command uses absolute node path from process.execPath', async () => {
+    tmuxSessionExists = false;
+    await makeAdapter(ClaudeAdapter).launch({ bypassPermissions: false });
+
+    const tmux = findTmuxNewSession();
+    assert.ok(tmux);
+    const shellCmd = tmux.args[tmux.args.length - 1];
+    assert.ok(
+      shellCmd.includes(process.execPath),
+      `tmux shell-command must use absolute node path (process.execPath=${process.execPath}), got: ${shellCmd}`,
+    );
+  });
+
   it('tmux cmdline does not contain API key or ANTHROPIC_API_KEY', async () => {
     tmuxSessionExists = false;
     await makeAdapter(ClaudeAdapter).launch({ bypassPermissions: false });
@@ -256,6 +269,19 @@ describe('Codex launch — new session', () => {
     const tmux = findTmuxNewSession();
     assert.ok(tmux, 'should call execFileSync with tmux new-session');
     assert.ok(tmux.args.includes('-E'), 'tmux args must include -E');
+  });
+
+  it('tmux shell-command uses absolute node path from process.execPath', async () => {
+    tmuxSessionExists = false;
+    await makeAdapter(CodexAdapter).launch({ bypassPermissions: false });
+
+    const tmux = findTmuxNewSession();
+    assert.ok(tmux);
+    const shellCmd = tmux.args[tmux.args.length - 1];
+    assert.ok(
+      shellCmd.includes(process.execPath),
+      `tmux shell-command must use absolute node path (process.execPath=${process.execPath}), got: ${shellCmd}`,
+    );
   });
 
   it('tmux cmdline does not contain secrets', async () => {
