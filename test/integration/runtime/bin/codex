@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+log_file="${FAKE_INVOCATION_LOG:-}"
+if [[ -n "$log_file" ]]; then
+  mkdir -p "$(dirname "$log_file")"
+  {
+    echo "binary=codex"
+    printf 'argv='
+    printf '%q ' "$@"
+    printf '\n'
+    echo "OPENAI_BASE_URL=${OPENAI_BASE_URL:-}"
+    echo "---"
+  } >> "$log_file"
+fi
+
+if [[ -n "${FAKE_CODEX_STDOUT:-}" ]]; then
+  printf '%b' "$FAKE_CODEX_STDOUT"
+fi
+if [[ -n "${FAKE_CODEX_STDERR:-}" ]]; then
+  printf '%b' "$FAKE_CODEX_STDERR" >&2
+fi
+exit "${FAKE_CODEX_EXIT:-0}"

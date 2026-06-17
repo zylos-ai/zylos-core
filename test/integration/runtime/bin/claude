@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+log_file="${FAKE_INVOCATION_LOG:-}"
+if [[ -n "$log_file" ]]; then
+  mkdir -p "$(dirname "$log_file")"
+  {
+    echo "binary=claude"
+    printf 'argv='
+    printf '%q ' "$@"
+    printf '\n'
+    echo "ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}"
+    echo "CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}"
+    echo "ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL:-}"
+    echo "---"
+  } >> "$log_file"
+fi
+
+if [[ -n "${FAKE_CLAUDE_STDOUT:-}" ]]; then
+  printf '%b' "$FAKE_CLAUDE_STDOUT"
+fi
+if [[ -n "${FAKE_CLAUDE_STDERR:-}" ]]; then
+  printf '%b' "$FAKE_CLAUDE_STDERR" >&2
+fi
+exit "${FAKE_CLAUDE_EXIT:-0}"
