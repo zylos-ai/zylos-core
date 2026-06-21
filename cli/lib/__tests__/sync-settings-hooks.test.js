@@ -51,6 +51,16 @@ describe('Claude settings template', () => {
     assert.equal(groups.length, 1);
     assert.ok(groups[0].hooks.some(h => h.command.includes('hook-activity.js')));
   });
+
+  it('pre-approves only the Composio project MCP server and denies remote code-exec tools', () => {
+    const template = JSON.parse(fs.readFileSync(TEMPLATE_SETTINGS_PATH, 'utf8'));
+    assert.deepEqual(template.enabledMcpjsonServers, ['composio']);
+    assert.ok(template.permissions.allow.includes('mcp__composio__COMPOSIO_SEARCH_TOOLS'));
+    assert.ok(template.permissions.deny.includes('mcp__composio__*BASH*'));
+    assert.ok(template.permissions.deny.includes('mcp__composio__*WORKBENCH*'));
+    assert.equal(template.permissions.defaultMode, undefined);
+    assert.equal(template.enableAllProjectMcpServers, undefined);
+  });
 });
 
 describe('Activity monitor threshold fallback', () => {
@@ -248,7 +258,7 @@ describe('syncCodexConfig', () => {
       projectDir: '/tmp/zylos',
       existsSync: (filePath) => filePath === globalConfigPath,
       // Return stale content so drift is detected
-      readFileSync: () => 'stale-content\n',
+      readFileSync: () => 'model = "gpt-5.4"\n',
       writeConfig: (projectDir) => {
         writes.push(projectDir);
         return true;
@@ -268,7 +278,7 @@ describe('syncCodexConfig', () => {
       projectDir: '/tmp/zylos',
       existsSync: () => true,
       // Return stale content so drift is detected
-      readFileSync: () => 'stale-content\n',
+      readFileSync: () => 'model = "gpt-5.4"\n',
       writeConfig: () => false,
       log: () => {},
     });

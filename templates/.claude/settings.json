@@ -2,6 +2,23 @@
   "model": "opus[1m]",
   "autoMemoryEnabled": false,
   "autoDreamEnabled": false,
+  "enabledMcpjsonServers": [
+    "composio"
+  ],
+  "permissions": {
+    "allow": [
+      "mcp__composio__COMPOSIO_SEARCH_TOOLS",
+      "mcp__composio__COMPOSIO_GET_TOOL_SCHEMAS",
+      "mcp__composio__COMPOSIO_MULTI_EXECUTE_TOOL",
+      "mcp__composio__COMPOSIO_MANAGE_CONNECTIONS"
+    ],
+    "deny": [
+      "mcp__composio__*BASH*",
+      "mcp__composio__*WORKBENCH*",
+      "mcp__composio__COMPOSIO_REMOTE_BASH_TOOL",
+      "mcp__composio__COMPOSIO_REMOTE_WORKBENCH"
+    ]
+  },
   "hooks": {
     "SessionStart": [
       {

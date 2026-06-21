@@ -24,6 +24,12 @@ import { fileURLToPath } from 'url';
 import { extractScriptPath, extractSkillName, getCommandHooks } from './hook-utils.js';
 import { getZylosConfig, updateZylosConfig } from './config.js';
 import { renderCodexProjectConfig, renderCodexGlobalConfig, writeCodexConfig } from './runtime-setup.js';
+import {
+  CODEX_COMPOSIO_MCP_MARKER_FILE,
+  readJsonFile,
+  syncClaudeComposioMcpJson,
+  syncClaudeComposioSettings,
+} from './composio-mcp.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ZYLOS_DIR = path.resolve(process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos'));
@@ -145,11 +151,17 @@ export function syncCodexConfig({
   try { existingGlobal = readFileSync(state.globalConfigPath, 'utf8'); } catch {}
   let existingProject = '';
   try { existingProject = readFileSync(state.projectConfigPath, 'utf8'); } catch {}
+  const codexMarkerPath = path.join(path.dirname(state.projectConfigPath), CODEX_COMPOSIO_MCP_MARKER_FILE);
+  const codexComposioMarker = readJsonFile(codexMarkerPath, readFileSync);
 
-  const desiredProject = renderCodexProjectConfig(existingProject);
+  const mcpSync = syncClaudeComposioMcpJson({ projectDir, dryRun, log });
+  const desiredProject = renderCodexProjectConfig(existingProject, {
+    composioMcpUrl: mcpSync.enabled ? mcpSync.mcpUrl : '',
+    codexComposioMarker,
+  });
   const desiredGlobal = renderCodexGlobalConfig(projectDir, existingGlobal);
   if (existingProject === desiredProject && existingGlobal === desiredGlobal) {
-    return { attempted: true, changed: false, fatal: false };
+    return { attempted: true, changed: mcpSync.changed, fatal: false };
   }
 
   if (dryRun) {
@@ -171,6 +183,7 @@ export function syncCodexConfig({
     };
   }
 
+  if (mcpSync.changed) log(`  ~ claude MCP config: ${path.join(projectDir, '.mcp.json')}`);
   if (existingProject !== desiredProject) log(`  ~ codex project config: ${state.projectConfigPath}`);
   if (existingGlobal !== desiredGlobal) log(`  ~ codex global config: ${state.globalConfigPath}`);
   return { attempted: true, changed: true, fatal: false };
@@ -397,6 +410,11 @@ export function main(argv = process.argv.slice(2)) {
     dryRun,
   });
 
+  const composioSettingsSync = syncClaudeComposioSettings(installedSettings, templateSettings, { dryRun });
+  if (composioSettingsSync.changed) {
+    console.log('  ~ Composio MCP settings');
+  }
+
   // Backfill boolean settings (autoMemoryEnabled, autoDreamEnabled)
   const backfillKeys = ['autoMemoryEnabled', 'autoDreamEnabled'];
   let settingsBackfilled = false;
@@ -415,30 +433,30 @@ export function main(argv = process.argv.slice(2)) {
     process.exit(1);
   }
 
-  if (added === 0 && updated === 0 && removed === 0 && !statusLineChanged && !modelSync.changed && !settingsBackfilled && !codexSync.changed) {
+  if (added === 0 && updated === 0 && removed === 0 && !statusLineChanged && !modelSync.changed && !settingsBackfilled && !composioSettingsSync.changed && !codexSync.changed) {
     console.log('Settings hooks: all up to date (no changes).');
     return;
   }
 
   if (dryRun) {
-    console.log(`Settings hooks (dry run): ${added} to add, ${updated} to update, ${removed} to remove${statusLineChanged ? ', statusLine to update' : ''}${modelSync.changed ? ', model to backfill' : ''}${settingsBackfilled ? ', settings to backfill' : ''}${codexSync.changed ? ', codex config to refresh' : ''}.`);
+    console.log(`Settings hooks (dry run): ${added} to add, ${updated} to update, ${removed} to remove${statusLineChanged ? ', statusLine to update' : ''}${modelSync.changed ? ', model to backfill' : ''}${settingsBackfilled ? ', settings to backfill' : ''}${composioSettingsSync.changed ? ', Composio MCP settings to refresh' : ''}${codexSync.changed ? ', codex config to refresh' : ''}.`);
     return;
   }
 
   // Write settings first. The paired threshold default is written only after
   // the model backfill has persisted, so a crash cannot leave threshold=30
-  // without the matching opus[1m] settings model.
+  // without the matching settings model.
   const thresholdSync = persistInstalledSettingsAndSyncCoupledThreshold({
     installedSettings,
     modelBackfilled: modelSync.changed,
   });
 
-  if (added === 0 && updated === 0 && removed === 0 && !statusLineChanged && !modelSync.changed && !settingsBackfilled) {
+  if (added === 0 && updated === 0 && removed === 0 && !statusLineChanged && !modelSync.changed && !settingsBackfilled && !composioSettingsSync.changed) {
     console.log(`Settings hooks: all up to date; Codex config ${codexSync.changed ? 'refreshed' : 'unchanged'}.`);
     return;
   }
 
-  console.log(`Settings hooks: ${added} added, ${updated} updated, ${removed} removed${statusLineChanged ? ', statusLine updated' : ''}${modelSync.changed ? ', model backfilled' : ''}${thresholdSync.changed ? ', new-session threshold paired' : ''}${settingsBackfilled ? ', settings backfilled' : ''}${codexSync.changed ? ', Codex config refreshed' : ''}.`);
+  console.log(`Settings hooks: ${added} added, ${updated} updated, ${removed} removed${statusLineChanged ? ', statusLine updated' : ''}${modelSync.changed ? ', model backfilled' : ''}${thresholdSync.changed ? ', new-session threshold paired' : ''}${settingsBackfilled ? ', settings backfilled' : ''}${composioSettingsSync.changed ? ', Composio MCP settings refreshed' : ''}${codexSync.changed ? ', Codex config refreshed' : ''}.`);
 
   // Enqueue restart when hooks changed — this runs from the NEWLY installed
   // package during upgrade (via resolveInstalledSyncScript), so it works even
