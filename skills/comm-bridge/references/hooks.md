@@ -8,6 +8,6 @@ Runs when a Claude Code session starts. Outputs:
 
 1. **Last checkpoint summary** (always, if exists)
 2. **Recent conversations** — all unsummarized conversations if under threshold; most recent N if over threshold
-3. **Memory Sync instruction** — only if unsummarized conversation count exceeds the configured threshold; instructs Claude to invoke `/zylos-memory`
+3. **Memory Sync instruction** — only if unsummarized conversation count exceeds the configured threshold; instructs the runtime to launch Memory Sync via a runtime-appropriate background agent. In Codex, this means native multi-agent when available, without blocking the foreground on a long wait.
 
 There is no per-message threshold hook in v5. Additional Memory Sync triggering comes from scheduled context checks, not user-message hooks.

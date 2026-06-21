@@ -111,7 +111,7 @@ Route user-specific preferences to the correct profile file. Bot identity stays 
 
 1. **At session start:** identity + state + references are auto-injected.
 2. **During work:** Update appropriate memory files immediately when you learn something important.
-3. **Memory Sync:** When triggered, launch a background subagent using the current runtime's supported subagent/task mechanism. The subagent's prompt must instruct it to follow the full sync flow in `~/zylos/.claude/skills/zylos-memory/SKILL.md`. This also applies in Codex and in `new-session` handoff flows: do not run Memory Sync inline in the main loop.
+3. **Memory Sync:** When triggered, launch a background agent using the current runtime's supported mechanism. The agent prompt must instruct it to follow the full sync flow in `~/zylos/.claude/skills/zylos-memory/SKILL.md`. In Codex, prefer native multi-agent, spawn the worker, and keep the foreground responsive instead of blocking on a long wait; integrate the result from the completion notification or short status checks. This also applies in `new-session` handoff flows: do not run Memory Sync inline in the main loop.
 4. **references.md is a pointer file.** Never duplicate .env values in it — point to the source config file instead.
 
 ### Classification Rules for reference/ Files

@@ -75,7 +75,7 @@ The `ack via:` path and ID are included in the message.
 
 ### Memory Sync
 
-When Memory Sync is triggered, launch a background subagent using Codex's available multi-agent capability. Do not hardcode Claude-only Task tool parameters such as `model: sonnet` or `run_in_background`. Instead, use a Codex-supported agent configuration available in the current session and instruct that agent to follow the sync flow in `~/zylos/.claude/skills/zylos-memory/SKILL.md`. This applies in Codex too, including `new-session` handoff flows. Do not run Memory Sync inline in the main loop. Report when complete.
+When Memory Sync is triggered, launch a background worker using Codex's native multi-agent capability. Do not hardcode Claude-only Task tool parameters such as `model: sonnet` or `run_in_background`; use the current session's available Codex multi-agent configuration and instruct the worker to follow `~/zylos/.claude/skills/zylos-memory/SKILL.md`. After spawning the worker, do not block the foreground with a long `wait_agent`; keep handling user/control messages and integrate the result when the subagent notification arrives, or use only short status checks when necessary. This applies in Codex too, including `new-session` handoff flows. Do not run Memory Sync inline in the main loop.
 
 ### Available Tools
 

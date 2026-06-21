@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Codex Memory Sync prompt guidance**: clarified session-start and context-threshold prompts so Codex should spawn native multi-agent workers and keep the foreground responsive instead of blocking on long waits; PM2 remains fallback-only when native multi-agent is unavailable.
+
 ## [0.5.3] - 2026-06-17
 
 ### Added

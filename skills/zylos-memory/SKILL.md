@@ -5,7 +5,7 @@ description: >-
   markdown files following the Inside Out model. Handles Memory Sync (processing
   conversations into structured memory), session rotation, consolidation, and
   context-aware state saving. Must be launched via a runtime-appropriate
-  background subagent mechanism — do not invoke with the Skill tool.
+  background agent mechanism — do not invoke with the Skill tool.
 disable-model-invocation: true
 user-invocable: false
 ---
@@ -13,7 +13,7 @@ user-invocable: false
 # Memory System
 
 Maintains persistent memory across sessions via tiered markdown files.
-This skill must be run via a runtime-appropriate background subagent mechanism. For Claude, use the Task tool (`subagent_type: general-purpose`, `model: sonnet`, `run_in_background: true`). For Codex, use the current session's available background-agent capability with a Codex-supported model; do not hardcode `sonnet`.
+This skill must be run via a runtime-appropriate background agent mechanism. For Claude, use the Task tool (`subagent_type: general-purpose`, `model: sonnet`, `run_in_background: true`). For Codex, use the current session's native multi-agent capability when available; do not hardcode Claude-only parameters such as `sonnet` or `run_in_background`.
 
 ## Architecture
 
@@ -47,15 +47,20 @@ When triggered, run it before handling queued user messages.
 1. Session init: if C4 unsummarized count is over threshold, launch memory sync.
 2. Scheduled context check: if context usage is high, launch memory sync.
 
-Both launch a background subagent using the current runtime's supported subagent mechanism with this file's Sync Flow as the prompt.
+Both launch a background agent using the current runtime's supported mechanism with this file's Sync Flow as the prompt.
 
 ### Codex Background Execution
 
-In Codex, when the current session has a native background-agent capability,
-Memory Sync must use that capability directly. Do not create PM2 services,
-run `pm2 start ... codex exec ...`, or fork an extra `codex exec` sidecar.
-PM2 is only a fallback when no native background-agent capability is
-available; if used, explicitly record the reason in the handoff/status.
+In Codex, when the current session has native multi-agent capability,
+Memory Sync must use that capability directly. Spawn the worker and let the
+foreground session continue; do not immediately block the foreground with a
+long `wait_agent` call. Integrate the result when the subagent notification
+arrives, or use only short status checks when necessary.
+
+Do not create PM2 services, run `pm2 start ... codex exec ...`, or fork an
+extra `codex exec` sidecar. PM2 is only a fallback when no native multi-agent
+capability is available; if used, explicitly record the reason in the
+handoff/status.
 
 Before starting Memory Sync, check for existing `memory-sync-*` PM2 entries.
 If one is running, do not start another sync writer. If only stopped entries
