@@ -20,6 +20,7 @@ import { commandExists } from '../lib/shell-utils.js';
 import { getActiveAdapter } from '../lib/runtime/index.js';
 import { buildInstructionFile } from '../lib/runtime/instruction-builder.js';
 import { deployManifestTemplate } from '../lib/runtime/tmux-env.js';
+import { syncClaudeComposioMcpJson } from '../lib/composio-mcp.js';
 import { runMigrations } from '../lib/migrate.js';
 import {
   installGlobalPackage,
@@ -787,6 +788,12 @@ function deployTemplates() {
   const claudeDest = path.join(ZYLOS_DIR, '.claude');
   if (fs.existsSync(claudeSrc)) {
     copyMissingTree(claudeSrc, claudeDest);
+  }
+
+  // Project MCP config — generated from .env so secrets stay instance-local.
+  const composioMcp = syncClaudeComposioMcpJson({ projectDir: ZYLOS_DIR });
+  if (composioMcp.changed) {
+    console.log(`  ${success(composioMcp.enabled ? 'Updated Composio MCP config' : 'Disabled Composio MCP config')}`);
   }
 
   // runtime-env.manifest — create from template if missing
