@@ -58,6 +58,7 @@ describe('Claude settings template', () => {
     assert.ok(template.permissions.allow.includes('mcp__composio__COMPOSIO_SEARCH_TOOLS'));
     assert.ok(template.permissions.deny.includes('mcp__composio__*BASH*'));
     assert.ok(template.permissions.deny.includes('mcp__composio__*WORKBENCH*'));
+    assert.equal(template.permissions.defaultMode, undefined);
     assert.equal(template.enableAllProjectMcpServers, undefined);
   });
 });

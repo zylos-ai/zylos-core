@@ -121,6 +121,25 @@ describe('renderCodexProjectConfig', () => {
     assert.doesNotMatch(content, /generated/);
   });
 
+  it('does not promote unmarked Codex Composio config even when it matches the generated shape', () => {
+    const existing = [
+      '[mcp_servers.composio]',
+      'url = "https://backend.composio.dev/tool_router/generated/mcp"',
+      'bearer_token_env_var = "COMPOSIO_API_KEY"',
+      'disabled_tools = ["COMPOSIO_REMOTE_BASH_TOOL", "COMPOSIO_REMOTE_WORKBENCH"]',
+      'startup_timeout_sec = 20',
+      '',
+    ].join('\n');
+
+    const content = renderCodexProjectConfig(existing, {
+      composioMcpUrl: 'https://backend.composio.dev/tool_router/generated/mcp',
+    });
+
+    assert.match(content, /\[mcp_servers\.composio\]/);
+    assert.match(content, /url = "https:\/\/backend\.composio\.dev\/tool_router\/generated\/mcp"/);
+    assert.match(content, /startup_timeout_sec = 20/);
+  });
+
   it('preserves unknown top-level keys, sections, and feature flags while updating zylos keys', () => {
     const existing = [
       '# User comment',
@@ -394,6 +413,33 @@ describe('writeCodexConfig', () => {
     const projectContent = fs.readFileSync(projectConfigPath, 'utf8');
     assert.match(projectContent, /\[mcp_servers\.composio\]/);
     assert.match(projectContent, /user-owned/);
+    assert.equal(fs.existsSync(markerPath), false);
+  });
+
+  it('does not mark an existing unmarked Codex Composio config as generated', () => {
+    const projectDir = path.join(fakeZylosDir, 'workspace', 'project-composio-user-owned-enabled');
+    const projectConfigPath = path.join(path.resolve(projectDir), '.codex', 'config.toml');
+    const markerPath = path.join(path.resolve(projectDir), '.codex', 'composio.zylos.json');
+
+    fs.mkdirSync(path.dirname(projectConfigPath), { recursive: true });
+    fs.writeFileSync(path.join(projectDir, '.env'), [
+      'COMPOSIO_API_KEY=test-key',
+      'COMPOSIO_MCP_URL=https://backend.composio.dev/tool_router/user-owned/mcp',
+      '',
+    ].join('\n'));
+    fs.writeFileSync(projectConfigPath, [
+      '[mcp_servers.composio]',
+      'url = "https://backend.composio.dev/tool_router/user-owned/mcp"',
+      'bearer_token_env_var = "COMPOSIO_API_KEY"',
+      'disabled_tools = ["COMPOSIO_REMOTE_BASH_TOOL", "COMPOSIO_REMOTE_WORKBENCH"]',
+      'startup_timeout_sec = 20',
+      '',
+    ].join('\n'));
+
+    assert.equal(writeCodexConfig(projectDir), true);
+
+    const projectContent = fs.readFileSync(projectConfigPath, 'utf8');
+    assert.match(projectContent, /startup_timeout_sec = 20/);
     assert.equal(fs.existsSync(markerPath), false);
   });
 
