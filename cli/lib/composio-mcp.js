@@ -343,7 +343,6 @@ export function syncClaudeComposioMcpJson({
   const desired = JSON.parse(renderClaudeComposioMcpJson(resolved));
   const before = JSON.stringify(current.mcpServers[COMPOSIO_SERVER_NAME] || null);
   if (current.mcpServers[COMPOSIO_SERVER_NAME] &&
-      before !== JSON.stringify(desired.mcpServers[COMPOSIO_SERVER_NAME]) &&
       !matchesClaudeComposioMarker(current.mcpServers[COMPOSIO_SERVER_NAME], marker)) {
     log(`  Warning: ${mcpPath} already has an unmarked Composio MCP server; leaving it unchanged.`);
     return {

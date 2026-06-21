@@ -281,19 +281,23 @@ describe('writeCodexConfig', () => {
 
     // Project-level config has headless settings
     const projectContent = fs.readFileSync(projectConfigPath, 'utf8');
+    const projectMode = fs.statSync(projectConfigPath).mode & 0o777;
     assert.match(projectContent, /\[features\]\nmulti_agent = true/);
     assert.match(projectContent, /\[notice\]/);
     assert.match(projectContent, /check_for_update_on_startup = false/);
     assert.doesNotMatch(projectContent, /\[projects\./);
+    assert.equal(projectMode, 0o600);
 
     // Global config has trust only
     const globalContent = fs.readFileSync(globalConfigPath, 'utf8');
+    const globalMode = fs.statSync(globalConfigPath).mode & 0o777;
     assert.match(
       globalContent,
       new RegExp(`\\[projects\\."${escapeRegExp(path.resolve(projectDir))}"\\]\\ntrust_level = "trusted"`)
     );
     assert.doesNotMatch(globalContent, /\[features\]/);
     assert.doesNotMatch(globalContent, /\[notice\]/);
+    assert.equal(globalMode, 0o600);
   });
 
   it('preserves unrelated trusted projects in global config', () => {
@@ -468,6 +472,42 @@ describe('writeCodexConfig', () => {
     assert.doesNotMatch(projectContent, /\[mcp_servers\.composio\]/);
     assert.match(projectContent, /\[mcp_servers\.user_server\]/);
     assert.equal(fs.existsSync(markerPath), false);
+  });
+
+  it('preserves malformed project-level Codex config without overwriting it', () => {
+    const globalConfigPath = path.join(fakeHome, '.codex', 'config.toml');
+    const projectDir = path.join(fakeZylosDir, 'workspace', 'project-codex-malformed-project');
+    const projectConfigPath = path.join(path.resolve(projectDir), '.codex', 'config.toml');
+    const malformedProject = '<malformed [mcp_servers.composio>\nurl = "https://user.example/mcp"\n';
+
+    fs.mkdirSync(path.dirname(projectConfigPath), { recursive: true });
+    fs.mkdirSync(path.dirname(globalConfigPath), { recursive: true });
+    fs.writeFileSync(projectConfigPath, malformedProject);
+    fs.writeFileSync(globalConfigPath, '');
+
+    assert.equal(writeCodexConfig(projectDir), false);
+    assert.equal(fs.readFileSync(projectConfigPath, 'utf8'), malformedProject);
+  });
+
+  it('preserves malformed global Codex config without overwriting it', () => {
+    const globalConfigPath = path.join(fakeHome, '.codex', 'config.toml');
+    const projectDir = path.join(fakeZylosDir, 'workspace', 'project-codex-malformed-global');
+    const projectConfigPath = path.join(path.resolve(projectDir), '.codex', 'config.toml');
+    const existingProject = 'user_added = "keep"\n';
+    const malformedGlobal = '<malformed [projects."/tmp/example">\ntrust_level = "trusted"\n';
+
+    fs.mkdirSync(path.dirname(projectConfigPath), { recursive: true });
+    fs.mkdirSync(path.dirname(globalConfigPath), { recursive: true });
+    fs.writeFileSync(projectConfigPath, existingProject);
+    fs.writeFileSync(globalConfigPath, malformedGlobal);
+
+    try {
+      assert.equal(writeCodexConfig(projectDir), false);
+      assert.equal(fs.readFileSync(projectConfigPath, 'utf8'), existingProject);
+      assert.equal(fs.readFileSync(globalConfigPath, 'utf8'), malformedGlobal);
+    } finally {
+      fs.writeFileSync(globalConfigPath, '');
+    }
   });
 });
 

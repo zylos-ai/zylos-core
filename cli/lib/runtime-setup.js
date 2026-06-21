@@ -342,13 +342,19 @@ const CODEX_MODEL_MIGRATIONS = {
   'gpt-5.3-codex': 'gpt-5.4',
 };
 
-function parseCodexToml(content) {
-  if (!content.trim()) return {};
+function tryParseCodexToml(content) {
+  if (!content.trim()) return { ok: true, value: {} };
   try {
-    return parse(content);
-  } catch {
-    return {};
+    return { ok: true, value: parse(content) };
+  } catch (error) {
+    return { ok: false, error };
   }
+}
+
+function parseCodexToml(content) {
+  const result = tryParseCodexToml(content);
+  if (!result.ok) throw result.error;
+  return result.value;
 }
 
 function tomlWithHeader(header, obj) {
@@ -372,7 +378,9 @@ function isTomlSectionValue(value) {
  * @returns {string}
  */
 export function renderCodexProjectConfig(existingContent = '', opts = {}) {
-  const obj = parseCodexToml(existingContent);
+  const parsed = tryParseCodexToml(existingContent);
+  if (!parsed.ok) return existingContent;
+  const obj = parsed.value;
 
   // Always overwrite: these values are required for unattended Zylos runtime behavior.
   obj.check_for_update_on_startup = false;
@@ -431,7 +439,9 @@ export function renderCodexProjectConfig(existingContent = '', opts = {}) {
 export function renderCodexGlobalConfig(projectDir, existingContent = '', opts = {}) {
   const absProject = path.resolve(projectDir);
   const openaiBaseUrl = opts.openaiBaseUrl || process.env.OPENAI_BASE_URL || '';
-  const obj = parseCodexToml(existingContent);
+  const parsed = tryParseCodexToml(existingContent);
+  if (!parsed.ok) return existingContent;
+  const obj = parsed.value;
   if (openaiBaseUrl) {
     obj.openai_base_url = openaiBaseUrl;
   }
@@ -456,6 +466,26 @@ export function renderCodexGlobalConfig(projectDir, existingContent = '', opts =
  */
 export function writeCodexConfig(projectDir, opts = {}) {
   try {
+    const projectCodexDir = path.join(path.resolve(projectDir), '.codex');
+    const projectConfigPath = path.join(projectCodexDir, 'config.toml');
+    const codexMarkerPath = path.join(projectCodexDir, CODEX_COMPOSIO_MCP_MARKER_FILE);
+    let existingProject = '';
+    try {
+      existingProject = fs.readFileSync(projectConfigPath, 'utf8');
+    } catch { /* new file — nothing to preserve */ }
+
+    const globalCodexDir = path.join(os.homedir(), '.codex');
+    const globalConfigPath = path.join(globalCodexDir, 'config.toml');
+    let existing = '';
+    try {
+      existing = fs.readFileSync(globalConfigPath, 'utf8');
+    } catch { /* new file — nothing to preserve */ }
+
+    const parsedProject = tryParseCodexToml(existingProject);
+    if (!parsedProject.ok) return false;
+    const parsedGlobal = tryParseCodexToml(existing);
+    if (!parsedGlobal.ok) return false;
+
     const composio = opts.composioMcpUrl !== undefined
       ? { enabled: !!opts.composioMcpUrl, mcpUrl: opts.composioMcpUrl }
       : resolveComposioMcpUrl({ projectDir });
@@ -464,25 +494,18 @@ export function writeCodexConfig(projectDir, opts = {}) {
     }
 
     // Write project-level config
-    const projectCodexDir = path.join(path.resolve(projectDir), '.codex');
     fs.mkdirSync(projectCodexDir, { recursive: true });
-    const projectConfigPath = path.join(projectCodexDir, 'config.toml');
-    const codexMarkerPath = path.join(projectCodexDir, CODEX_COMPOSIO_MCP_MARKER_FILE);
     const codexMarker = readJsonFile(codexMarkerPath);
-    let existingProject = '';
-    try {
-      existingProject = fs.readFileSync(projectConfigPath, 'utf8');
-    } catch { /* new file — nothing to preserve */ }
-    const existingComposio = parseCodexToml(existingProject).mcp_servers?.[COMPOSIO_SERVER_NAME];
+    const existingComposio = parsedProject.value.mcp_servers?.[COMPOSIO_SERVER_NAME];
     const composioMcpUrl = composio.enabled ? composio.mcpUrl : '';
     const renderedProject = renderCodexProjectConfig(existingProject, {
       composioMcpUrl,
       codexComposioMarker: codexMarker,
     });
-    fs.writeFileSync(
+    writeTextFileAtomic(
       projectConfigPath,
       renderedProject,
-      'utf8'
+      { mode: 0o600 }
     );
     const renderedComposio = parseCodexToml(renderedProject).mcp_servers?.[COMPOSIO_SERVER_NAME];
     if (composioMcpUrl &&
@@ -494,17 +517,11 @@ export function writeCodexConfig(projectDir, opts = {}) {
     }
 
     // Write global config
-    const globalCodexDir = path.join(os.homedir(), '.codex');
-    const globalConfigPath = path.join(globalCodexDir, 'config.toml');
-    let existing = '';
-    try {
-      existing = fs.readFileSync(globalConfigPath, 'utf8');
-    } catch { /* new file — nothing to preserve */ }
     fs.mkdirSync(globalCodexDir, { recursive: true });
-    fs.writeFileSync(
+    writeTextFileAtomic(
       globalConfigPath,
       renderCodexGlobalConfig(projectDir, existing, opts),
-      'utf8'
+      { mode: 0o600 }
     );
 
     return true;

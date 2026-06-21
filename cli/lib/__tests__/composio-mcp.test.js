@@ -8,6 +8,7 @@ import {
   CLAUDE_COMPOSIO_DENIED_TOOLS,
   createComposioToolRouterSession,
   deriveComposioUserId,
+  renderClaudeComposioMcpJson,
   resolveComposioMcpUrl,
   syncClaudeComposioMcpJson,
   syncClaudeComposioSettings,
@@ -305,6 +306,41 @@ describe('syncClaudeComposioMcpJson', () => {
     assert.equal(parsed.mcpServers.composio.url, 'https://example.com/composio/mcp');
     assert.equal(fs.existsSync(path.join(projectDir, '.mcp.zylos.json')), false);
     assert.ok(logs.some(line => line.includes('unmarked Composio MCP server')));
+  });
+
+  it('does not adopt a same-shape unmarked user-owned Composio config', () => {
+    const projectDir = mkProject();
+    const mcpPath = path.join(projectDir, '.mcp.json');
+    const markerPath = path.join(projectDir, '.mcp.zylos.json');
+    const envPath = path.join(projectDir, '.env');
+    const generatedUrl = 'https://backend.composio.dev/tool_router/generated/mcp';
+    const generatedKey = 'test-key';
+    fs.writeFileSync(envPath, [
+      `COMPOSIO_API_KEY=${generatedKey}`,
+      `COMPOSIO_MCP_URL=${generatedUrl}`,
+      '',
+    ].join('\n'));
+    fs.writeFileSync(mcpPath, renderClaudeComposioMcpJson({
+      mcpUrl: generatedUrl,
+      apiKey: generatedKey,
+    }));
+
+    const enabledResult = syncClaudeComposioMcpJson({ projectDir });
+    const afterEnable = fs.readFileSync(mcpPath, 'utf8');
+
+    assert.equal(enabledResult.changed, false);
+    assert.equal(enabledResult.enabled, false);
+    assert.equal(enabledResult.skipped, true);
+    assert.equal(enabledResult.reason, 'user_owned_collision');
+    assert.equal(fs.existsSync(markerPath), false);
+
+    fs.writeFileSync(envPath, 'COMPOSIO_API_KEY=\nCOMPOSIO_MCP_URL=\n');
+    const disabledResult = syncClaudeComposioMcpJson({ projectDir });
+
+    assert.equal(disabledResult.changed, false);
+    assert.equal(fs.existsSync(mcpPath), true);
+    assert.equal(fs.readFileSync(mcpPath, 'utf8'), afterEnable);
+    assert.equal(fs.existsSync(markerPath), false);
   });
 });
 

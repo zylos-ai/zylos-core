@@ -258,7 +258,7 @@ describe('syncCodexConfig', () => {
       projectDir: '/tmp/zylos',
       existsSync: (filePath) => filePath === globalConfigPath,
       // Return stale content so drift is detected
-      readFileSync: () => 'stale-content\n',
+      readFileSync: () => 'model = "gpt-5.4"\n',
       writeConfig: (projectDir) => {
         writes.push(projectDir);
         return true;
@@ -278,7 +278,7 @@ describe('syncCodexConfig', () => {
       projectDir: '/tmp/zylos',
       existsSync: () => true,
       // Return stale content so drift is detected
-      readFileSync: () => 'stale-content\n',
+      readFileSync: () => 'model = "gpt-5.4"\n',
       writeConfig: () => false,
       log: () => {},
     });
