@@ -29,13 +29,6 @@ env TZ
 # ── Agent permissions ─────────────────────────────────────────────────────────
 # env CLAUDE_BYPASS_PERMISSIONS
 
-# ── Composio MCP ──────────────────────────────────────────────────────────────
-# Blank .env values are ignored by the runtime; populated values enable the
-# generated Composio MCP registration.
-env COMPOSIO_API_KEY
-env COMPOSIO_MCP_URL
-env COMPOSIO_USER_ID
-
 # ── Observability (OTel) ──────────────────────────────────────────────────────
 # Uncomment to enable telemetry collection in agent sessions.
 # env CLAUDE_CODE_ENABLE_TELEMETRY
