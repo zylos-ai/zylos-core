@@ -14,19 +14,6 @@ import { parse, stringify } from 'smol-toml';
 import { ZYLOS_DIR } from './config.js';
 import { commandExists } from './shell-utils.js';
 import { parseClaudeAuthStatus, parseCodexLoginStatus } from './auth-parsers.js';
-import {
-  CODEX_COMPOSIO_MCP_MARKER_FILE,
-  COMPOSIO_API_KEY_ENV,
-  COMPOSIO_REMOTE_CODE_TOOLS,
-  COMPOSIO_SERVER_NAME,
-  isDesiredCodexComposioServer,
-  matchesCodexComposioMarker,
-  readJsonFile,
-  renderCodexComposioMarker,
-  resolveComposioMcpUrl,
-  syncClaudeComposioMcpJson,
-  writeTextFileAtomic,
-} from './composio-mcp.js';
 
 function upsertEnvValue(content, key, value, comment = null) {
   const line = `${key}=${value}`;
@@ -342,19 +329,13 @@ const CODEX_MODEL_MIGRATIONS = {
   'gpt-5.3-codex': 'gpt-5.4',
 };
 
-function tryParseCodexToml(content) {
-  if (!content.trim()) return { ok: true, value: {} };
-  try {
-    return { ok: true, value: parse(content) };
-  } catch (error) {
-    return { ok: false, error };
-  }
-}
-
 function parseCodexToml(content) {
-  const result = tryParseCodexToml(content);
-  if (!result.ok) throw result.error;
-  return result.value;
+  if (!content.trim()) return {};
+  try {
+    return parse(content);
+  } catch {
+    return {};
+  }
 }
 
 function tomlWithHeader(header, obj) {
@@ -377,10 +358,8 @@ function isTomlSectionValue(value) {
  * @param {string} existingContent - Existing project config.toml contents (optional)
  * @returns {string}
  */
-export function renderCodexProjectConfig(existingContent = '', opts = {}) {
-  const parsed = tryParseCodexToml(existingContent);
-  if (!parsed.ok) return existingContent;
-  const obj = parsed.value;
+export function renderCodexProjectConfig(existingContent = '') {
+  const obj = parseCodexToml(existingContent);
 
   // Always overwrite: these values are required for unattended Zylos runtime behavior.
   obj.check_for_update_on_startup = false;
@@ -404,23 +383,6 @@ export function renderCodexProjectConfig(existingContent = '', opts = {}) {
   notice.model_migrations = { ...CODEX_MODEL_MIGRATIONS };
   obj.notice = notice;
 
-  obj.mcp_servers = isTomlSectionValue(obj.mcp_servers) ? obj.mcp_servers : {};
-  const existingComposio = obj.mcp_servers[COMPOSIO_SERVER_NAME];
-  if (opts.composioMcpUrl) {
-    const desiredComposio = {
-      url: opts.composioMcpUrl,
-      bearer_token_env_var: COMPOSIO_API_KEY_ENV,
-      disabled_tools: COMPOSIO_REMOTE_CODE_TOOLS,
-    };
-    if (!existingComposio ||
-        matchesCodexComposioMarker(existingComposio, opts.codexComposioMarker)) {
-      obj.mcp_servers[COMPOSIO_SERVER_NAME] = desiredComposio;
-    }
-  } else if (matchesCodexComposioMarker(existingComposio, opts.codexComposioMarker)) {
-    delete obj.mcp_servers[COMPOSIO_SERVER_NAME];
-  }
-  if (Object.keys(obj.mcp_servers).length === 0) delete obj.mcp_servers;
-
   return tomlWithHeader(CODEX_PROJECT_HEADER, obj);
 }
 
@@ -439,9 +401,7 @@ export function renderCodexProjectConfig(existingContent = '', opts = {}) {
 export function renderCodexGlobalConfig(projectDir, existingContent = '', opts = {}) {
   const absProject = path.resolve(projectDir);
   const openaiBaseUrl = opts.openaiBaseUrl || process.env.OPENAI_BASE_URL || '';
-  const parsed = tryParseCodexToml(existingContent);
-  if (!parsed.ok) return existingContent;
-  const obj = parsed.value;
+  const obj = parseCodexToml(existingContent);
   if (openaiBaseUrl) {
     obj.openai_base_url = openaiBaseUrl;
   }
@@ -466,62 +426,32 @@ export function renderCodexGlobalConfig(projectDir, existingContent = '', opts =
  */
 export function writeCodexConfig(projectDir, opts = {}) {
   try {
+    // Write project-level config
     const projectCodexDir = path.join(path.resolve(projectDir), '.codex');
+    fs.mkdirSync(projectCodexDir, { recursive: true });
     const projectConfigPath = path.join(projectCodexDir, 'config.toml');
-    const codexMarkerPath = path.join(projectCodexDir, CODEX_COMPOSIO_MCP_MARKER_FILE);
     let existingProject = '';
     try {
       existingProject = fs.readFileSync(projectConfigPath, 'utf8');
     } catch { /* new file — nothing to preserve */ }
+    fs.writeFileSync(
+      projectConfigPath,
+      renderCodexProjectConfig(existingProject),
+      'utf8'
+    );
 
+    // Write global config
     const globalCodexDir = path.join(os.homedir(), '.codex');
     const globalConfigPath = path.join(globalCodexDir, 'config.toml');
     let existing = '';
     try {
       existing = fs.readFileSync(globalConfigPath, 'utf8');
     } catch { /* new file — nothing to preserve */ }
-
-    const parsedProject = tryParseCodexToml(existingProject);
-    if (!parsedProject.ok) return false;
-    const parsedGlobal = tryParseCodexToml(existing);
-    if (!parsedGlobal.ok) return false;
-
-    const composio = opts.composioMcpUrl !== undefined
-      ? { enabled: !!opts.composioMcpUrl, mcpUrl: opts.composioMcpUrl }
-      : resolveComposioMcpUrl({ projectDir });
-    if (opts.composioMcpUrl === undefined) {
-      syncClaudeComposioMcpJson({ projectDir, resolve: () => composio });
-    }
-
-    // Write project-level config
-    fs.mkdirSync(projectCodexDir, { recursive: true });
-    const codexMarker = readJsonFile(codexMarkerPath);
-    const existingComposio = parsedProject.value.mcp_servers?.[COMPOSIO_SERVER_NAME];
-    const composioMcpUrl = composio.enabled ? composio.mcpUrl : '';
-    const renderedProject = renderCodexProjectConfig(existingProject, {
-      composioMcpUrl,
-      codexComposioMarker: codexMarker,
-    });
-    writeTextFileAtomic(
-      projectConfigPath,
-      renderedProject,
-      { mode: 0o600 }
-    );
-    const renderedComposio = parseCodexToml(renderedProject).mcp_servers?.[COMPOSIO_SERVER_NAME];
-    if (composioMcpUrl &&
-        isDesiredCodexComposioServer(renderedComposio, composioMcpUrl) &&
-        (!existingComposio || matchesCodexComposioMarker(existingComposio, codexMarker))) {
-      writeTextFileAtomic(codexMarkerPath, renderCodexComposioMarker(composioMcpUrl), { mode: 0o600 });
-    } else if (codexMarker && !matchesCodexComposioMarker(renderedComposio, codexMarker)) {
-      try { fs.unlinkSync(codexMarkerPath); } catch {}
-    }
-
-    // Write global config
     fs.mkdirSync(globalCodexDir, { recursive: true });
-    writeTextFileAtomic(
+    fs.writeFileSync(
       globalConfigPath,
       renderCodexGlobalConfig(projectDir, existing, opts),
-      { mode: 0o600 }
+      'utf8'
     );
 
     return true;

@@ -2,9 +2,6 @@ node_modules/
 *.log
 .DS_Store
 .env
-/.mcp.json
-/.mcp.zylos.json
-/.codex/composio.zylos.json
 *.db
 *.db-shm
 *.db-wal

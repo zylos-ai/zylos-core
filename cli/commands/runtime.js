@@ -18,7 +18,6 @@ import { getAdapter, SUPPORTED_RUNTIMES } from '../lib/runtime/index.js';
 import { buildInstructionFile } from '../lib/runtime/instruction-builder.js';
 import { commandExists } from '../lib/shell-utils.js';
 import { getCoreEcosystemPath, restartManagedProcess } from '../lib/pm2.js';
-import { syncClaudeComposioMcpJson } from '../lib/composio-mcp.js';
 import {
   installClaude,
   installCodex,
@@ -288,11 +287,6 @@ async function switchRuntime(target, flags) {
       process.exit(1);
     }
     console.log(`  ${green('✓')} base URL saved`);
-  }
-
-  const composioMcp = syncClaudeComposioMcpJson({ projectDir: ZYLOS_DIR });
-  if (composioMcp.changed) {
-    console.log(`  ${green('✓')} Composio MCP config ${composioMcp.enabled ? 'updated' : 'disabled'}`);
   }
 
   // Step 2b: Write Codex headless config (trust dir, suppress all interactive prompts).
