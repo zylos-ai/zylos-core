@@ -68,6 +68,7 @@ describe('syncTemplateModelSetting', () => {
     const result = syncTemplateModelSetting({
       templateSettings: { model: 'claude-opus-4-6' },
       installedSettings,
+      cfg: {},
       log: (line) => logs.push(line),
     });
 
@@ -82,6 +83,7 @@ describe('syncTemplateModelSetting', () => {
     const result = syncTemplateModelSetting({
       templateSettings: { model: 'opus' },
       installedSettings,
+      cfg: {},
       log: () => {
         throw new Error('should not log when model already exists');
       },
@@ -89,6 +91,67 @@ describe('syncTemplateModelSetting', () => {
 
     assert.equal(result.changed, false);
     assert.equal(installedSettings.model, 'sonnet');
+  });
+
+  it('downgrades opus[1m] to opus when threshold is above 30', () => {
+    const installedSettings = {};
+    const logs = [];
+
+    const result = syncTemplateModelSetting({
+      templateSettings: { model: 'opus[1m]' },
+      installedSettings,
+      cfg: { new_session_threshold: 70 },
+      log: (line) => logs.push(line),
+    });
+
+    assert.equal(result.changed, true);
+    assert.equal(installedSettings.model, 'opus');
+    assert.equal(result.model, 'opus');
+  });
+
+  it('keeps opus[1m] when threshold is not set', () => {
+    const installedSettings = {};
+    const logs = [];
+
+    const result = syncTemplateModelSetting({
+      templateSettings: { model: 'opus[1m]' },
+      installedSettings,
+      cfg: {},
+      log: (line) => logs.push(line),
+    });
+
+    assert.equal(result.changed, true);
+    assert.equal(installedSettings.model, 'opus[1m]');
+  });
+
+  it('keeps opus[1m] when threshold is at or below 30', () => {
+    const installedSettings = {};
+    const logs = [];
+
+    const result = syncTemplateModelSetting({
+      templateSettings: { model: 'opus[1m]' },
+      installedSettings,
+      cfg: { new_session_threshold: 30 },
+      log: (line) => logs.push(line),
+    });
+
+    assert.equal(result.changed, true);
+    assert.equal(installedSettings.model, 'opus[1m]');
+  });
+
+  it('does not guard non-1m models regardless of threshold', () => {
+    const installedSettings = {};
+    const logs = [];
+
+    const result = syncTemplateModelSetting({
+      templateSettings: { model: 'opus' },
+      installedSettings,
+      cfg: { new_session_threshold: 70 },
+      log: (line) => logs.push(line),
+    });
+
+    assert.equal(result.changed, true);
+    assert.equal(installedSettings.model, 'opus');
   });
 });
 

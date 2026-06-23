@@ -499,9 +499,14 @@ export function generateMigrationHints(templatesDir, deps = {}) {
   }
 
   if (Object.hasOwn(templateSettings, 'model') && !Object.hasOwn(installedSettings, 'model')) {
+    let model = templateSettings.model;
+    const cfg = (deps.getConfig ?? getZylosConfig)();
+    if (model.includes('[1m]') && Object.hasOwn(cfg, 'new_session_threshold') && cfg.new_session_threshold > 30) {
+      model = model.replace('[1m]', '');
+    }
     hints.push({
       type: 'model_backfill',
-      value: templateSettings.model,
+      value: model,
     });
   }
 

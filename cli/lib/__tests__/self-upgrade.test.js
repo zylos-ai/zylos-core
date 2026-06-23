@@ -291,6 +291,28 @@ describe('Claude model migration hints', () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
+  it('downgrades 1m model in hint when threshold is above 30', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-model-guard-'));
+    const templatesDir = path.join(tmpDir, 'templates');
+    const zylosDir = path.join(tmpDir, 'zylos');
+
+    fs.mkdirSync(path.join(templatesDir, '.claude'), { recursive: true });
+    fs.mkdirSync(path.join(zylosDir, '.claude'), { recursive: true });
+    fs.writeFileSync(path.join(templatesDir, '.claude', 'settings.json'), JSON.stringify({ model: 'opus[1m]' }), 'utf8');
+    fs.writeFileSync(path.join(zylosDir, '.claude', 'settings.json'), JSON.stringify({ hooks: {} }), 'utf8');
+
+    const hints = generateMigrationHints(templatesDir, {
+      zylosDir,
+      getConfig: () => ({ new_session_threshold: 70 }),
+    });
+    assert.deepEqual(
+      hints.filter((hint) => hint.type === 'model_backfill'),
+      [{ type: 'model_backfill', value: 'opus' }]
+    );
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
   it('does not add a model backfill hint when the user already configured model', () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-model-nohint-'));
     const templatesDir = path.join(tmpDir, 'templates');

@@ -30,9 +30,20 @@ const ZYLOS_DIR = path.resolve(process.env.ZYLOS_DIR || path.join(os.homedir(), 
 const TEMPLATE_SETTINGS = path.join(__dirname, '..', '..', 'templates', '.claude', 'settings.json');
 const INSTALLED_SETTINGS = path.join(ZYLOS_DIR, '.claude', 'settings.json');
 
+const MAX_SAFE_1M_THRESHOLD = 30;
+
+function is1mModel(model) {
+  return typeof model === 'string' && model.includes('[1m]');
+}
+
+function strip1mSuffix(model) {
+  return model.replace('[1m]', '');
+}
+
 export function syncTemplateModelSetting({
   templateSettings,
   installedSettings,
+  cfg = getZylosConfig(),
   dryRun = false,
   log = console.log,
 } = {}) {
@@ -40,11 +51,18 @@ export function syncTemplateModelSetting({
     return { changed: false };
   }
 
-  if (!dryRun) {
-    installedSettings.model = templateSettings.model;
+  let model = templateSettings.model;
+
+  if (is1mModel(model) && Object.hasOwn(cfg, 'new_session_threshold') && cfg.new_session_threshold > MAX_SAFE_1M_THRESHOLD) {
+    model = strip1mSuffix(model);
+    log(`  ! model: ${templateSettings.model} → ${model} (new_session_threshold ${cfg.new_session_threshold} too high for 1M context)`);
   }
-  log(`  + model: ${templateSettings.model}`);
-  return { changed: true };
+
+  if (!dryRun) {
+    installedSettings.model = model;
+  }
+  log(`  + model: ${model}`);
+  return { changed: true, model };
 }
 
 /**
