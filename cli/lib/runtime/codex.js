@@ -66,6 +66,46 @@ function getCodexApiBaseUrl() {
   return 'https://api.openai.com/v1';
 }
 
+export function syncCodexAuthFromSource({
+  sourcePath = process.env.CODEX_AUTH_SOURCE,
+  homeDir = os.homedir(),
+  fsImpl = fs,
+} = {}) {
+  if (!sourcePath) return { synced: false, reason: 'not_configured' };
+  if (!path.isAbsolute(sourcePath)) return { synced: false, reason: 'source_not_absolute' };
+
+  const destPath = path.join(homeDir, '.codex', 'auth.json');
+  if (path.resolve(sourcePath) === path.resolve(destPath)) {
+    return { synced: false, reason: 'same_path' };
+  }
+
+  let sourceContent;
+  try {
+    const sourceStat = fsImpl.statSync(sourcePath);
+    if (!sourceStat.isFile()) return { synced: false, reason: 'source_not_file' };
+    sourceContent = fsImpl.readFileSync(sourcePath, 'utf8');
+    JSON.parse(sourceContent);
+  } catch {
+    return { synced: false, reason: 'source_unreadable_or_invalid' };
+  }
+
+  try {
+    if (fsImpl.existsSync(destPath) && fsImpl.readFileSync(destPath, 'utf8') === sourceContent) {
+      return { synced: false, reason: 'already_current' };
+    }
+
+    fsImpl.mkdirSync(path.dirname(destPath), { recursive: true, mode: 0o700 });
+    const tmpPath = `${destPath}.${process.pid}.${Date.now()}.tmp`;
+    fsImpl.writeFileSync(tmpPath, sourceContent, { mode: 0o600 });
+    fsImpl.chmodSync(tmpPath, 0o600);
+    fsImpl.renameSync(tmpPath, destPath);
+    fsImpl.chmodSync(destPath, 0o600);
+    return { synced: true, reason: 'synced' };
+  } catch {
+    return { synced: false, reason: 'write_failed' };
+  }
+}
+
 export function isOnboardingPendingState(stateContent = '') {
   return /^-\s+Status:\s+pending\b/m.test(stateContent);
 }
@@ -150,6 +190,8 @@ export class CodexAdapter extends RuntimeAdapter {
    * @returns {Promise<{status: 'success'|'failure'|'uncertain', reason: string}>}
    */
   async checkAuth() {
+    syncCodexAuthFromSource();
+
     // Read auth.json to determine the auth mode.
     let authMode = null;
     let apiKey = '';
@@ -275,6 +317,8 @@ export class CodexAdapter extends RuntimeAdapter {
    */
   async launch(opts = {}) {
     const bypassPermissions = opts.bypassPermissions ?? DEFAULT_BYPASS;
+
+    syncCodexAuthFromSource();
 
     // 1. Build AGENTS.md before launching (pass memorySnapshot for session rotation)
     await this.buildInstructionFile({ memorySnapshot: opts.memorySnapshot });
