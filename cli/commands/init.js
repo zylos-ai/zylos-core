@@ -16,7 +16,7 @@ import { ZYLOS_DIR, SKILLS_DIR, CONFIG_DIR, COMPONENTS_DIR, LOCKS_DIR, COMPONENT
 import { generateManifest, saveManifest } from '../lib/manifest.js';
 import { prompt, promptYesNo, promptChoice, promptSecret } from '../lib/prompts.js';
 import { bold, dim, green, red, yellow, cyan, bgGreen, success, error, warn, heading } from '../lib/colors.js';
-import { commandExists } from '../lib/shell-utils.js';
+import { commandExists, testBwrapSandbox, isAppArmorRestrictingUserns, setupBwrapAppArmor } from '../lib/shell-utils.js';
 import { getActiveAdapter } from '../lib/runtime/index.js';
 import { buildInstructionFile } from '../lib/runtime/instruction-builder.js';
 import { deployManifestTemplate } from '../lib/runtime/tmux-env.js';
@@ -1949,7 +1949,52 @@ export async function initCommand(args) {
     }
   }
 
-  // Step 4.5: Select agent runtime
+  // Step 4.5: Check bwrap sandbox (optional — non-fatal)
+  if (process.platform === 'linux') {
+    if (!commandExists('bwrap')) {
+      if (!quiet) console.log(`  ${warn('bwrap not found — installing bubblewrap...')}`);
+      installSystemPackage('bubblewrap');
+    }
+
+    if (commandExists('bwrap')) {
+      const sandbox = testBwrapSandbox();
+      if (sandbox.ok) {
+        if (!quiet) console.log(`  ${success('bwrap sandbox working')}`);
+      } else if (isAppArmorRestrictingUserns()) {
+        if (!quiet) console.log(`  ${warn('bwrap blocked by AppArmor — configuring profile...')}`);
+        if (setupBwrapAppArmor()) {
+          const retest = testBwrapSandbox();
+          if (retest.ok) {
+            if (!quiet) console.log(`  ${success('bwrap sandbox working (AppArmor profile configured)')}`);
+          } else {
+            if (!quiet) console.log(`  ${warn('bwrap sandbox still failing after AppArmor fix')}`);
+            if (!quiet) console.log(`    ${dim('Components using sandboxed execution will fall back to unsandboxed mode.')}`);
+          }
+        } else {
+          if (!quiet) console.log(`  ${warn('Could not configure AppArmor profile (sudo required)')}`);
+          if (!quiet) console.log(`    ${dim('Fix manually:')}`);
+          if (!quiet) console.log(`    ${dim('sudo tee /etc/apparmor.d/bwrap <<\'EOF\'')}`);
+          if (!quiet) console.log(`    ${dim('abi <abi/4.0>,')}`);
+          if (!quiet) console.log(`    ${dim('include <tunables/global>')}`);
+          if (!quiet) console.log(`    ${dim('profile bwrap /usr/bin/bwrap flags=(unconfined) {')}`);
+          if (!quiet) console.log(`    ${dim('  userns,')}`);
+          if (!quiet) console.log(`    ${dim('  include if exists <local/bwrap>')}`);
+          if (!quiet) console.log(`    ${dim('}')}`);
+          if (!quiet) console.log(`    ${dim('EOF')}`);
+          if (!quiet) console.log(`    ${dim('sudo apparmor_parser -r /etc/apparmor.d/bwrap')}`);
+        }
+      } else {
+        if (!quiet) console.log(`  ${warn('bwrap sandbox not working')}`);
+        if (!quiet) console.log(`    ${dim(sandbox.error || 'Unknown error')}`);
+        if (!quiet) console.log(`    ${dim('Components using sandboxed execution will fall back to unsandboxed mode.')}`);
+      }
+    } else {
+      if (!quiet) console.log(`  ${warn('Could not install bubblewrap — sandbox unavailable')}`);
+      if (!quiet) console.log(`    ${dim('Install manually: apt install bubblewrap')}`);
+    }
+  }
+
+  // Step 5: Select agent runtime (was 4.5)
   // Resolution: --runtime flag > ZYLOS_RUNTIME env > existing config > interactive prompt
   const existingRuntime = getZylosConfig().runtime;
   let selectedRuntime = opts.runtime || existingRuntime || null;
