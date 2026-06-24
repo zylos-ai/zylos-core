@@ -39,6 +39,12 @@ import { tmuxCapturePaneText } from '../runtime/tmux-helpers.js';
 const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
 const C4_CONTROL = path.join(ZYLOS_DIR, '.claude/skills/comm-bridge/scripts/c4-control.js');
 const AUTH_FAILURE_PATTERNS = [
+  /MCP client for [`'"]?codex_apps[`'"]? failed to start/i,
+  /HTTP\s+401/i,
+  /token_expired/i,
+  /access token could not be refreshed/i,
+  /refresh token was already used/i,
+  /log out and sign in again/i,
   /authentication failed/i,
   /not logged in/i,
   /invalid api key/i,
@@ -197,4 +203,3 @@ function _writePending(file, data) {
     return false;
   }
 }
-

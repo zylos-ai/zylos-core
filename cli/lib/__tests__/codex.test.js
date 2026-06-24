@@ -22,7 +22,12 @@ fs.writeFileSync(
 process.env.CODEX_BIN = fakeCodexPath;
 after(() => { try { fs.rmSync(fakeBinDir, { recursive: true, force: true }); } catch {} });
 
-const { CodexAdapter, buildCodexBootstrapPrompt, isOnboardingPendingState } = await import('../runtime/codex.js');
+const {
+  CodexAdapter,
+  buildCodexBootstrapPrompt,
+  isOnboardingPendingState,
+  syncCodexAuthFromSource,
+} = await import('../runtime/codex.js');
 
 function makeZylosDir(stateContent) {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-codex-bootstrap-test-'));
@@ -82,6 +87,45 @@ describe('Codex bootstrap onboarding guard', () => {
 });
 
 describe('Codex auth checks', () => {
+  it('syncs Codex auth from a configured host source before runtime use', () => {
+    const sourceHome = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-codex-auth-source-'));
+    const agentHome = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-codex-auth-agent-'));
+    tmpDirs.push(sourceHome, agentHome);
+
+    const sourcePath = path.join(sourceHome, '.codex', 'auth.json');
+    fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
+    fs.writeFileSync(
+      sourcePath,
+      JSON.stringify({ auth_mode: 'chatgpt', tokens: { access_token: 'fresh' } }, null, 2) + '\n',
+      { mode: 0o600 }
+    );
+
+    const result = syncCodexAuthFromSource({ sourcePath, homeDir: agentHome });
+    const destPath = path.join(agentHome, '.codex', 'auth.json');
+
+    assert.deepEqual(result, { synced: true, reason: 'synced' });
+    assert.equal(fs.readFileSync(destPath, 'utf8'), fs.readFileSync(sourcePath, 'utf8'));
+    assert.equal(fs.statSync(destPath).mode & 0o777, 0o600);
+  });
+
+  it('does not overwrite existing Codex auth when the configured source is invalid', () => {
+    const sourceHome = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-codex-auth-source-'));
+    const agentHome = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-codex-auth-agent-'));
+    tmpDirs.push(sourceHome, agentHome);
+
+    const sourcePath = path.join(sourceHome, '.codex', 'auth.json');
+    const destPath = path.join(agentHome, '.codex', 'auth.json');
+    fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
+    fs.mkdirSync(path.dirname(destPath), { recursive: true });
+    fs.writeFileSync(sourcePath, '{not-json\n', 'utf8');
+    fs.writeFileSync(destPath, JSON.stringify({ auth_mode: 'chatgpt', tokens: { access_token: 'old' } }) + '\n', 'utf8');
+
+    const result = syncCodexAuthFromSource({ sourcePath, homeDir: agentHome });
+
+    assert.deepEqual(result, { synced: false, reason: 'source_unreadable_or_invalid' });
+    assert.match(fs.readFileSync(destPath, 'utf8'), /"old"/);
+  });
+
   it('uses the configured custom base URL for API key auth checks', async () => {
     const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-codex-auth-test-'));
     tmpDirs.push(tmpHome);

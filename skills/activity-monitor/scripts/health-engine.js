@@ -338,6 +338,16 @@ export class HealthEngine {
       return;
     }
 
+    if (isPostRestartProbeState(this.healthState) && this.deps.detectAuthFailure) {
+      const authFailure = this.deps.detectAuthFailure();
+      if (authFailure.detected) {
+        this.restartFailureCount = 0;
+        this.signalDetectedAt = 0;
+        this.setHealth('auth_failed', authFailure.pattern || 'auth_failure_detected');
+        return;
+      }
+    }
+
     // Process signal acceleration: agentRunning just transitioned false→true,
     // grace period elapsed — send immediate heartbeat to verify recovery.
     // Works in unavailable/recovering, down, and auth_failed states.
@@ -447,6 +457,17 @@ export class HealthEngine {
     const phase = pending.phase || 'primary';
     const now = Math.floor(Date.now() / 1000);
     this.deps.clearHeartbeatPending();
+
+    if ((this.healthState === 'ok' || isUnavailableRecoveryState(this.healthState) || this.healthState === 'rate_limited') && this.deps.detectAuthFailure) {
+      const authFailure = this.deps.detectAuthFailure();
+      if (authFailure.detected) {
+        this.restartFailureCount = 0;
+        this.recoveringStartedAt = 0;
+        this.signalDetectedAt = 0;
+        this.setHealth('auth_failed', authFailure.pattern || 'auth_failure_detected');
+        return;
+      }
+    }
 
     // Before triggering kill+restart recovery, check if the failure is due to
     // a rate limit. This is the "behavioral + text" dual-signal approach:
@@ -572,6 +593,13 @@ export class HealthEngine {
     this.lastRecoveryAt = Math.floor(Date.now() / 1000);
 
     if (this.healthState === 'auth_failed') {
+      const authFailure = this.deps.detectAuthFailure ? this.deps.detectAuthFailure() : { detected: false };
+      if (authFailure.detected) {
+        const reason = authFailure.pattern || this.healthReason || 'auth_still_failed';
+        this.setHealth('auth_failed', reason);
+        return { recovered: false, health: 'auth_failed', reason };
+      }
+
       const authResult = await this._checkAuth();
       if (authResult.status === 'success') {
         const now = Math.floor(Date.now() / 1000);
