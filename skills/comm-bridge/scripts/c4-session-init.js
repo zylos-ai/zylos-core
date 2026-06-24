@@ -51,7 +51,7 @@ function main() {
 
     // If over threshold, append Memory Sync instruction
     if (needsSync) {
-      lines.push(`[Action Required] There are ${range.count} unsummarized conversations (conversation id ${range.begin_id} ~ ${range.end_id}). Please use zylos-memory skill to process them.`);
+      lines.push(`[Action Required] There are ${range.count} unsummarized conversations (conversation id ${range.begin_id} ~ ${range.end_id}). Launch Memory Sync as a runtime-appropriate background agent following ~/zylos/.claude/skills/zylos-memory/SKILL.md. In Codex, use native multi-agent when available, keep the foreground responsive, and do not block on a long wait_agent call; integrate the result from the subagent notification or short status checks.`);
     }
 
     console.log(lines.join('\n'));

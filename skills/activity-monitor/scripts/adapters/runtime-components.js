@@ -112,7 +112,7 @@ export function startContextMonitor(activeAdapter, {
       log(`Context at ${pct}% (approaching ${thresholdPct}% threshold), triggering early memory sync (unsummarized=${unsummarizedCount})`);
       try {
         execFileSync('node', [c4ControlPath, 'enqueue',
-          '--content', `Context usage at ${pct}% (approaching ${thresholdPct}% session-switch threshold). Run Memory Sync now as a background task so it completes before the session switch. Launch a background subagent for memory sync following ~/zylos/.claude/skills/zylos-memory/SKILL.md. Do NOT wait for completion — continue normal work.`,
+          '--content', `Context usage at ${pct}% (approaching ${thresholdPct}% session-switch threshold). Run Memory Sync now as a background task so it completes before the session switch. In Codex, spawn a native multi-agent worker following ~/zylos/.claude/skills/zylos-memory/SKILL.md, then keep the foreground responsive; do not block on a long wait_agent call. Integrate the result when the subagent notification arrives.`,
           '--priority', '2',
           '--no-ack-suffix',
         ], { encoding: 'utf8', stdio: 'pipe', timeout: 10_000 });

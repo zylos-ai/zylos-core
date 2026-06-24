@@ -95,6 +95,9 @@ describe('c4-session-init', () => {
       assert.equal(status, 0);
       assert.ok(stdout.includes('Action Required'));
       assert.ok(stdout.includes('zylos-memory'));
+      assert.ok(stdout.includes('native multi-agent'));
+      assert.ok(stdout.includes('wait_agent'));
+      assert.ok(stdout.includes('subagent notification'));
       // Should show limited conversations (SESSION_INIT_RECENT_COUNT = 6)
       assert.ok(stdout.includes('msg31'));
       assert.ok(stdout.includes('msg26'));
