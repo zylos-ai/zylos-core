@@ -332,6 +332,8 @@ function createContext(component, { tempDir, newVersion, mode, jsonOutput } = {}
     backupDir: null,
     serviceStopped: false,
     serviceExists: true,
+    serviceInitialStatus: null,
+    serviceShouldRestart: false,
     serviceWasRunning: false,
     mergeConflicts: [],
     mergedFiles: [],
@@ -342,6 +344,10 @@ function createContext(component, { tempDir, newVersion, mode, jsonOutput } = {}
     success: false,
     error: null,
   };
+}
+
+export function shouldRestartServiceAfterUpgrade(status) {
+  return status !== 'stopped' && status !== 'stopping';
 }
 
 // ---------------------------------------------------------------------------
@@ -367,10 +373,12 @@ function step1_stopService(ctx) {
     }
 
     ctx.serviceExists = true;
-    ctx.serviceWasRunning = service.pm2_env?.status === 'online';
+    ctx.serviceInitialStatus = service.pm2_env?.status || 'unknown';
+    ctx.serviceWasRunning = ctx.serviceInitialStatus === 'online';
+    ctx.serviceShouldRestart = shouldRestartServiceAfterUpgrade(ctx.serviceInitialStatus);
 
     if (!ctx.serviceWasRunning) {
-      return { step: 1, name: 'stop_service', status: 'skipped', message: 'not running', duration: Date.now() - startTime };
+      return { step: 1, name: 'stop_service', status: 'skipped', message: `not running (${ctx.serviceInitialStatus})`, duration: Date.now() - startTime };
     }
 
     execSync(`pm2 stop ${serviceName} 2>/dev/null`, { stdio: 'pipe' });
@@ -576,7 +584,7 @@ function truncateHookOutput(value, maxLength = 1000) {
 }
 
 /**
- * Step 8: restart PM2 service (if it was running before upgrade)
+ * Step 8: restart PM2 service (unless it was intentionally stopped before upgrade)
  */
 export function step8_startService(ctx, deps = {}) {
   const startTime = Date.now();
@@ -585,8 +593,10 @@ export function step8_startService(ctx, deps = {}) {
   const restartManaged = deps.restartManagedProcess ?? restartManagedProcess;
   const restartViaEcosystem = deps.restartFromEcosystem ?? restartFromEcosystem;
 
-  if (!ctx.serviceWasRunning) {
-    return { step: 8, name: 'start_service', status: 'skipped', message: 'was not running', duration: Date.now() - startTime };
+  const shouldRestart = ctx.serviceShouldRestart ?? ctx.serviceWasRunning;
+  if (!shouldRestart) {
+    const status = ctx.serviceInitialStatus ? ` (${ctx.serviceInitialStatus})` : '';
+    return { step: 8, name: 'start_service', status: 'skipped', message: `was not running${status}`, duration: Date.now() - startTime };
   }
 
   const parsed = parseSkillMd(ctx.skillDir);
@@ -649,8 +659,8 @@ export function rollback(ctx) {
     }
   }
 
-  // Restart service if it was running
-  if (ctx.serviceWasRunning) {
+  // Restart service if it was meant to be running before the failed upgrade.
+  if (ctx.serviceShouldRestart ?? ctx.serviceWasRunning) {
     const parsed = parseSkillMd(ctx.skillDir);
     const serviceName = parsed?.frontmatter?.lifecycle?.service?.name || `zylos-${ctx.component}`;
     const ecosystemPath = path.join(ctx.skillDir, 'ecosystem.config.cjs');
