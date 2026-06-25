@@ -75,6 +75,10 @@ async function main() {
     // Unescape literal \n sequences that shell may have preserved when passing
     // multi-line content as a CLI argument (defense-in-depth; prefer stdin mode)
     message = message.replace(/\\n/g, '\n');
+  } else if (cleanArgs.length >= 3 && cleanArgs[2] === '-' && (stdinAvailable || hasStdinFlag)) {
+    // 3 args with explicit "-" stdin marker: channel + endpoint + read message from stdin
+    endpoint = cleanArgs[1];
+    message = (await readStdin()).trimEnd();
   } else {
     // 3+ args: channel + endpoint + message
     process.stderr.write('[c4-send] Deprecated: passing message as CLI argument. Use stdin/heredoc mode instead.\n');
