@@ -594,7 +594,7 @@ export function step8_startService(ctx, deps = {}) {
   const ecosystemPath = path.join(ctx.skillDir, 'ecosystem.config.cjs');
 
   try {
-    restartManaged(serviceName, { ecosystemPath, stdio: 'pipe' });
+    restartManaged(serviceName, { ecosystemPath, stdio: 'pipe', save: true });
     return { step: 8, name: 'start_service', status: 'done', message: serviceName, duration: Date.now() - startTime };
   } catch {
     // If the process disappeared from PM2 between step1 and step8, retry via
@@ -604,7 +604,7 @@ export function step8_startService(ctx, deps = {}) {
         throw new Error(`ecosystem config not found: ${ecosystemPath}`);
       }
       try { exec(`pm2 delete "${serviceName}" 2>/dev/null`, { stdio: 'pipe' }); } catch {}
-      restartViaEcosystem([serviceName], { ecosystemPath, stdio: 'pipe' });
+      restartViaEcosystem([serviceName], { ecosystemPath, stdio: 'pipe', save: true });
       return { step: 8, name: 'start_service', status: 'done', message: `${serviceName} (restarted from ecosystem)`, duration: Date.now() - startTime };
     } catch {
       return { step: 8, name: 'start_service', status: 'failed', error: `Failed to restart ${serviceName}`, duration: Date.now() - startTime };
@@ -620,9 +620,10 @@ export function step8_startService(ctx, deps = {}) {
  * Rollback from .backup/ directory.
  *
  * @param {object} ctx - Upgrade context
+ * @param {object} [deps] - Injectable dependencies (testing seam)
  * @returns {object[]} Array of rollback action results
  */
-export function rollback(ctx) {
+export function rollback(ctx, deps = {}) {
   const results = [];
 
   // Restore files from backup (--delete removes files added by the failed upgrade)
@@ -651,11 +652,15 @@ export function rollback(ctx) {
 
   // Restart service if it was running
   if (ctx.serviceWasRunning) {
+    const restartManaged = deps.restartManagedProcess ?? restartManagedProcess;
     const parsed = parseSkillMd(ctx.skillDir);
     const serviceName = parsed?.frontmatter?.lifecycle?.service?.name || `zylos-${ctx.component}`;
     const ecosystemPath = path.join(ctx.skillDir, 'ecosystem.config.cjs');
     try {
-      restartManagedProcess(serviceName, { ecosystemPath, stdio: 'pipe' });
+      // save: true persists the PM2 dump so the rolled-back service survives a
+      // reboot. Without it, a recreated process (pm2 delete + start) lives only
+      // in memory and is lost on the next `pm2 resurrect`.
+      restartManaged(serviceName, { ecosystemPath, stdio: 'pipe', save: true });
       results.push({ action: 'restart_service', success: true });
     } catch (err) {
       results.push({ action: 'restart_service', success: false, error: err.message });

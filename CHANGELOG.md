@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **`pm2 save` missing after component upgrade**: `zylos upgrade <component>` now persists the PM2 process list after restarting the service, so an upgraded service survives a reboot (`pm2 resurrect`). The restart calls in `upgrade.js` (`step8_startService` normal + ecosystem-fallback paths, and `rollback`) now pass `save: true`, matching the install path which already saved. Previously an upgraded service lived only in memory and was dropped on the next reboot. (coco-xyz/coco-dashboard#1696)
+
 ## [0.5.3] - 2026-06-17
 
 ### Added

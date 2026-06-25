@@ -195,6 +195,71 @@ describe('step8_startService', () => {
 
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
+
+  it('persists the PM2 dump (save: true) on a normal upgrade restart (#1696)', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-upgrade-step8-save-'));
+    const skillDir = path.join(tmpDir, 'demo');
+    const ecosystemPath = path.join(skillDir, 'ecosystem.config.cjs');
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(path.join(skillDir, 'SKILL.md'), `---\nname: demo\nlifecycle:\n  service:\n    name: zylos-demo\n---\n`, 'utf8');
+    fs.writeFileSync(ecosystemPath, 'module.exports = { apps: [] };\n', 'utf8');
+
+    const calls = [];
+    const result = step8_startService({
+      component: 'demo',
+      skillDir,
+      serviceWasRunning: true,
+    }, {
+      restartManagedProcess: (name, opts) => {
+        calls.push({ name, opts });
+      },
+      restartFromEcosystem: () => {
+        throw new Error('should not reach ecosystem fallback on the happy path');
+      },
+      existsSync: (file) => file === ecosystemPath,
+    });
+
+    assert.equal(result.status, 'done');
+    assert.deepStrictEqual(calls, [{
+      name: 'zylos-demo',
+      opts: { ecosystemPath, stdio: 'pipe', save: true },
+    }]);
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('persists the PM2 dump (save: true) when restarting from ecosystem after the process disappeared (#1696)', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-upgrade-step8-fallback-save-'));
+    const skillDir = path.join(tmpDir, 'demo');
+    const ecosystemPath = path.join(skillDir, 'ecosystem.config.cjs');
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(path.join(skillDir, 'SKILL.md'), `---\nname: demo\nlifecycle:\n  service:\n    name: zylos-demo\n---\n`, 'utf8');
+    fs.writeFileSync(ecosystemPath, 'module.exports = { apps: [] };\n', 'utf8');
+
+    const ecosystemCalls = [];
+    const result = step8_startService({
+      component: 'demo',
+      skillDir,
+      serviceWasRunning: true,
+    }, {
+      restartManagedProcess: () => {
+        throw new Error('process missing');
+      },
+      restartFromEcosystem: (names, opts) => {
+        ecosystemCalls.push({ names, opts });
+      },
+      execSync: () => {},
+      existsSync: (file) => file === ecosystemPath,
+    });
+
+    assert.equal(result.status, 'done');
+    assert.deepStrictEqual(ecosystemCalls, [{
+      names: ['zylos-demo'],
+      opts: { ecosystemPath, stdio: 'pipe', save: true },
+    }]);
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
 });
 
 describe('component upgrade rollback', () => {
@@ -224,6 +289,32 @@ describe('component upgrade rollback', () => {
     assert.equal(fs.readFileSync(path.join(skillDir, '.backup', 'run-1', 'SKILL.md'), 'utf8'), 'old\n');
     assert.equal(fs.readFileSync(path.join(skillDir, '.zylos', 'manifest.json'), 'utf8'), '{}\n');
     assert.equal(fs.readFileSync(path.join(skillDir, 'node_modules', 'keep.txt'), 'utf8'), 'deps\n');
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('persists the PM2 dump (save: true) when restarting the service after rollback (#1696)', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-upgrade-rollback-save-'));
+    const skillDir = path.join(tmpDir, 'skills', 'demo');
+    const ecosystemPath = path.join(skillDir, 'ecosystem.config.cjs');
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(path.join(skillDir, 'SKILL.md'), `---\nname: demo\nlifecycle:\n  service:\n    name: zylos-demo\n---\n`, 'utf8');
+
+    const calls = [];
+    const results = rollback({
+      skillDir,
+      serviceWasRunning: true,
+    }, {
+      restartManagedProcess: (name, opts) => {
+        calls.push({ name, opts });
+      },
+    });
+
+    assert.equal(results.some((item) => item.action === 'restart_service' && item.success), true);
+    assert.deepStrictEqual(calls, [{
+      name: 'zylos-demo',
+      opts: { ecosystemPath, stdio: 'pipe', save: true },
+    }]);
 
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
