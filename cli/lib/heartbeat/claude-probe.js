@@ -30,9 +30,9 @@ const C4_CONTROL = path.join(ZYLOS_DIR, '.claude/skills/comm-bridge/scripts/c4-c
 
 const RATE_LIMIT_PATTERNS = [
   /out of extra usage/i,
-  /you['']re out of .* usage/i,
+  /you[''’]re out of .* usage/i,
   /usage limit reached/i,
-  /you['']ve hit your limit/i,
+  /you[''’]ve hit your (?:\w+ )?limit/i,
 ];
 
 const AUTH_FAILURE_PATTERNS = [
@@ -129,14 +129,23 @@ export function createClaudeProbe({
       if (!detected) return { detected: false };
 
       let resetTime = '';
-      const timeMatch = pane.match(/resets?\s+(?:at\s+)?(\d{1,2}(?::\d{2})?\s*(?:am|pm))/i);
-      if (timeMatch) resetTime = timeMatch[1].trim();
+      let resetDate = '';
+      // Match "resets [at] [Mon DD[, YYYY],] HH[:MM]am/pm [(TZ)]"
+      const timeMatch = pane.match(/resets?\s+(?:at\s+)?(?:([A-Z][a-z]{2}\s+\d{1,2}(?:,\s*\d{4})?),?\s+)?(\d{1,2}(?::\d{2})?\s*(?:am|pm))/i);
+      if (timeMatch) {
+        resetDate = (timeMatch[1] || '').trim();
+        resetTime = timeMatch[2].trim();
+      }
 
       const now = Math.floor(Date.now() / 1000);
       let cooldownUntil = now + 3600; // default 1 hour
       if (resetTime) {
-        const parsed = _parseResetTime(resetTime);
+        const parsed = _parseResetTime(resetTime, resetDate);
         if (parsed > now) cooldownUntil = parsed;
+      }
+      // For weekly limits without a parseable reset, use a longer default
+      if (!resetTime && /weekly/i.test(pane)) {
+        cooldownUntil = now + 6 * 3600;
       }
 
       return { detected: true, cooldownUntil, resetTime };
@@ -206,9 +215,10 @@ function _getAckDeadline(phase, { ackDeadline, recoveryAckDeadline }) {
 
 /**
  * Parse a time string like "7am", "7:30am", "3pm" into epoch seconds.
- * Assumes local timezone; if the time is in the past, assumes tomorrow.
+ * Optionally accepts a date string like "Jun 29" or "Jun 29, 2026".
+ * Without a date, assumes local timezone; if the time is in the past, assumes tomorrow.
  */
-function _parseResetTime(timeStr) {
+function _parseResetTime(timeStr, dateStr) {
   const match = timeStr.match(/^(\d{1,2})(?::(\d{2}))?\s*(am|pm)$/i);
   if (!match) return 0;
 
@@ -221,11 +231,27 @@ function _parseResetTime(timeStr) {
 
   const now = new Date();
   const target = new Date(now);
+
+  if (dateStr) {
+    const dateMatch = dateStr.match(/^([A-Z][a-z]{2})\s+(\d{1,2})(?:,\s*(\d{4}))?$/);
+    if (dateMatch) {
+      const months = { Jan: 0, Feb: 1, Mar: 2, Apr: 3, May: 4, Jun: 5, Jul: 6, Aug: 7, Sep: 8, Oct: 9, Nov: 10, Dec: 11 };
+      const month = months[dateMatch[1]];
+      const day = parseInt(dateMatch[2], 10);
+      const year = dateMatch[3] ? parseInt(dateMatch[3], 10) : now.getFullYear();
+      if (month !== undefined) {
+        target.setFullYear(year, month, day);
+      }
+    }
+  }
+
   target.setHours(hours, minutes, 0, 0);
-  if (target <= now) target.setDate(target.getDate() + 1);
+  if (!dateStr && target <= now) target.setDate(target.getDate() + 1);
 
   return Math.floor(target.getTime() / 1000);
 }
+
+export { RATE_LIMIT_PATTERNS as _RATE_LIMIT_PATTERNS, _parseResetTime };
 
 function _writePending(file, data) {
   try {
