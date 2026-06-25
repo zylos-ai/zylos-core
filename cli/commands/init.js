@@ -40,6 +40,7 @@ import {
   saveCodexBaseUrlToEnv,
   writeCodexConfig,
 } from '../lib/runtime-setup.js';
+import { buildManagedPm2Env } from '../lib/pm2-env.js';
 
 // Source directories (shipped with zylos package)
 const PACKAGE_ROOT = path.join(import.meta.dirname, '..', '..');
@@ -596,7 +597,7 @@ async function guideBypassAcceptance() {
   console.log(`\n${heading('Setting up Claude Code...')}`);
 
   // Stop activity-monitor to prevent restart loop
-  try { execSync('pm2 stop activity-monitor', { stdio: 'pipe' }); } catch {}
+  try { execSync('pm2 stop activity-monitor', { stdio: 'pipe', env: buildManagedPm2Env() }); } catch {}
 
   // Kill existing session if stuck
   try { execSync(`tmux kill-session -t ${CLAUDE_SESSION} 2>/dev/null`, { stdio: 'pipe' }); } catch {}
@@ -630,7 +631,7 @@ async function guideBypassAcceptance() {
     } catch {}
   } catch (err) {
     console.log(`  ${warn(`Failed to create tmux session: ${err.message}`)}`);
-    try { execSync('pm2 start activity-monitor', { stdio: 'pipe' }); } catch {}
+    try { execSync('pm2 start activity-monitor', { stdio: 'pipe', env: buildManagedPm2Env() }); } catch {}
     return;
   }
 
@@ -642,7 +643,7 @@ async function guideBypassAcceptance() {
   await promptYesNo('Press Enter after you have accepted the prompt: ', true);
 
   // Restart activity-monitor
-  try { execSync('pm2 start activity-monitor', { stdio: 'pipe' }); } catch {}
+  try { execSync('pm2 start activity-monitor', { stdio: 'pipe', env: buildManagedPm2Env() }); } catch {}
   console.log(`  ${success('Claude Code configured')}`);
 }
 
@@ -674,7 +675,7 @@ function resetManagedState() {
   // Stop PM2 services managed by zylos
   const serviceNames = getCoreServiceNames();
   for (const name of serviceNames) {
-    try { execSync(`pm2 delete "${name}" 2>/dev/null`, { stdio: 'pipe' }); } catch { /* */ }
+    try { execSync(`pm2 delete "${name}" 2>/dev/null`, { stdio: 'pipe', env: buildManagedPm2Env() }); } catch { /* */ }
   }
 
   // Remove managed directories
@@ -1075,10 +1076,10 @@ function startCoreServices(webPassword = null) {
     // (--update-env does NOT re-execute the JS, so env changes like SYSTEM_PATH won't apply)
     const serviceNames = getCoreServiceNames();
     for (const name of serviceNames) {
-      try { execSync(`pm2 delete "${name}"`, { stdio: 'pipe' }); } catch {}
+      try { execSync(`pm2 delete "${name}"`, { stdio: 'pipe', env: buildManagedPm2Env() }); } catch {}
     }
-    execSync(`pm2 start "${ecosystemPath}"`, { stdio: 'pipe', timeout: 30000 });
-    execSync('pm2 save', { stdio: 'pipe' });
+    execSync(`pm2 start "${ecosystemPath}"`, { stdio: 'pipe', timeout: 30000, env: buildManagedPm2Env() });
+    execSync('pm2 save', { stdio: 'pipe', env: buildManagedPm2Env() });
   } catch (err) {
     console.log(`  ${warn(`Failed to start services: ${err.message}`)}`);
     return 0;
@@ -1087,7 +1088,7 @@ function startCoreServices(webPassword = null) {
   // Report status of core services only
   try {
     const serviceNames = getCoreServiceNames();
-    const list = execSync('pm2 jlist', { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] });
+    const list = execSync('pm2 jlist', { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], env: buildManagedPm2Env() });
     const procs = JSON.parse(list);
     let started = 0;
     for (const proc of procs) {
