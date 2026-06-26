@@ -29,6 +29,26 @@ export function installProcessBackstop({
   return timer;
 }
 
+export function writeAllSync(fd, text, {
+  writeSync = fs.writeSync,
+} = {}) {
+  const buffer = Buffer.isBuffer(text) ? text : Buffer.from(String(text));
+  let offset = 0;
+  while (offset < buffer.length) {
+    try {
+      const written = writeSync(fd, buffer, offset, buffer.length - offset);
+      if (written <= 0) {
+        throw new Error(`writeSync made no progress at offset ${offset}`);
+      }
+      offset += written;
+    } catch (error) {
+      if (error?.code === 'EAGAIN') continue;
+      throw error;
+    }
+  }
+  return offset;
+}
+
 export function readStdinPayload({
   stdin = process.stdin,
   timeoutMs = 500,
@@ -42,6 +62,8 @@ export function readStdinPayload({
       clearTimeout(timer);
       stdin.off?.('data', onData);
       stdin.off?.('end', onEnd);
+      stdin.pause?.();
+      stdin.unref?.();
       resolve(payload);
     };
     const onData = chunk => { input += chunk; };
@@ -92,13 +114,14 @@ export async function runStep({
   action,
   writeStdout = false,
   stdout = process.stdout,
+  writeSync = fs.writeSync,
 }) {
   const startMs = Date.now();
   try {
     const output = await withTimeout(Promise.resolve().then(action), budgetMs, name);
     const text = output == null ? '' : String(output);
     if (writeStdout && text.length > 0) {
-      fs.writeSync(stdout.fd ?? 1, text);
+      writeAllSync(stdout.fd ?? 1, text, { writeSync });
     }
     await logStep({
       name,
@@ -146,6 +169,7 @@ export async function runSessionStartOrchestrator(payload = {}, {
   totalBudgetMs = DEFAULT_TOTAL_BUDGET_MS,
   budgets = STEP_BUDGETS_MS,
   stdout = process.stdout,
+  hardBackstopTimer = null,
   actions = {
     memoryInject: runMemoryInject,
     c4SessionInit: runC4SessionInit,
@@ -154,7 +178,7 @@ export async function runSessionStartOrchestrator(payload = {}, {
   },
 } = {}) {
   const source = payload?.source || null;
-  const totalTimer = installProcessBackstop({ totalBudgetMs });
+  const totalTimer = hardBackstopTimer || installProcessBackstop({ totalBudgetMs });
 
   try {
     await runStep({
@@ -202,14 +226,17 @@ export async function runSessionStartOrchestrator(payload = {}, {
 
     await Promise.all(sideEffects);
   } finally {
-    clearTimeout(totalTimer);
+    if (!hardBackstopTimer) clearTimeout(totalTimer);
   }
 }
 
 async function main() {
-  installProcessBackstop();
+  const hardBackstopTimer = installProcessBackstop();
   const payload = await readStdinPayload();
-  await runSessionStartOrchestrator(payload, { totalBudgetMs: DEFAULT_TOTAL_BUDGET_MS });
+  await runSessionStartOrchestrator(payload, {
+    totalBudgetMs: DEFAULT_TOTAL_BUDGET_MS,
+    hardBackstopTimer,
+  });
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

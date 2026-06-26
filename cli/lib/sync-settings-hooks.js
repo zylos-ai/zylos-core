@@ -37,7 +37,12 @@ const SESSION_START_OLD_SCRIPTS = [
   'skills/activity-monitor/scripts/session-foreground.js',
   'skills/activity-monitor/scripts/session-start-prompt.js',
 ];
-const SESSION_START_OLD_TIMEOUTS = [10000, 10000, 5000, 5000];
+const SESSION_START_OLD_TIMEOUT_BY_SCRIPT = new Map([
+  ['skills/zylos-memory/scripts/session-start-inject.js', 10000],
+  ['skills/comm-bridge/scripts/c4-session-init.js', 10000],
+  ['skills/activity-monitor/scripts/session-foreground.js', 5000],
+  ['skills/activity-monitor/scripts/session-start-prompt.js', 5000],
+]);
 const SESSION_START_MATCHERS = ['startup', 'clear', 'compact'];
 
 function is1mModel(model) {
@@ -585,13 +590,15 @@ function isOrchestratorTemplate(templateSettings) {
 function isStandardOldSessionStartGroup(group) {
   const hooks = getCommandHooks(group);
   if (hooks.length !== SESSION_START_OLD_SCRIPTS.length) return false;
-  for (let i = 0; i < SESSION_START_OLD_SCRIPTS.length; i++) {
-    const hook = hooks[i];
+  const seen = new Set();
+  for (const hook of hooks) {
     if (hook.type !== 'command') return false;
-    if (!scriptPathEndsWith(hook.command, SESSION_START_OLD_SCRIPTS[i])) return false;
-    if (hook.timeout !== SESSION_START_OLD_TIMEOUTS[i]) return false;
+    const suffix = SESSION_START_OLD_SCRIPTS.find(script => scriptPathEndsWith(hook.command, script));
+    if (!suffix || seen.has(suffix)) return false;
+    if (hook.timeout !== SESSION_START_OLD_TIMEOUT_BY_SCRIPT.get(suffix)) return false;
+    seen.add(suffix);
   }
-  return true;
+  return seen.size === SESSION_START_OLD_SCRIPTS.length;
 }
 
 function containsOldSessionStartScript(groups) {
@@ -644,7 +651,7 @@ export function migrateSessionStartOrchestrator(installedSettings, templateSetti
   }
 
   log('  ↔ SessionStart: migrated standard 4-hook groups to orchestrator');
-  return { updated: SESSION_START_MATCHERS.length, skipped: 0, skipEvents: [] };
+  return { updated: SESSION_START_MATCHERS.length, skipped: 0, skipEvents: ['SessionStart'] };
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

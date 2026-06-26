@@ -483,6 +483,19 @@ function makeStandardOldSessionStartGroup(matcher) {
   };
 }
 
+function makeDriftedOldSessionStartGroup(matcher) {
+  const group = makeStandardOldSessionStartGroup(matcher);
+  return {
+    matcher,
+    hooks: [
+      group.hooks[0],
+      group.hooks[1],
+      group.hooks[3],
+      group.hooks[2],
+    ],
+  };
+}
+
 function makeOrchestratorTemplate() {
   return {
     hooks: {
@@ -512,6 +525,22 @@ describe('migrateSessionStartOrchestrator', () => {
       assert.equal(group.hooks.length, 1);
       assert.match(group.hooks[0].command, /session-start-orchestrator\.js/);
       assert.equal(group.hooks[0].timeout, 20000);
+    }
+  });
+
+  it('migrates real installed SessionStart groups with prompt and foreground order drift', () => {
+    const installed = {
+      hooks: {
+        SessionStart: ['startup', 'clear', 'compact'].map(makeDriftedOldSessionStartGroup),
+      },
+    };
+    const result = migrateSessionStartOrchestrator(installed, makeOrchestratorTemplate(), { log: noopLog });
+
+    assert.equal(result.updated, 3);
+    assert.deepEqual(result.skipEvents, ['SessionStart']);
+    for (const group of installed.hooks.SessionStart) {
+      assert.equal(group.hooks.length, 1);
+      assert.match(group.hooks[0].command, /session-start-orchestrator\.js/);
     }
   });
 
@@ -557,7 +586,35 @@ describe('migrateSessionStartOrchestrator', () => {
     const result = migrateSessionStartOrchestrator(installed, makeOrchestratorTemplate(), { dryRun: true, log: noopLog });
 
     assert.equal(result.updated, 3);
+    assert.deepEqual(result.skipEvents, ['SessionStart']);
     assert.match(installed.hooks.SessionStart[0].hooks[0].command, /session-start-inject\.js/);
+  });
+
+  it('skips and protects timeout-drifted old SessionStart hooks', () => {
+    const installed = {
+      hooks: {
+        SessionStart: ['startup', 'clear', 'compact'].map(makeStandardOldSessionStartGroup),
+      },
+    };
+    installed.hooks.SessionStart[0].hooks[0].timeout = 9000;
+    const logs = [];
+    const result = migrateSessionStartOrchestrator(installed, makeOrchestratorTemplate(), { log: line => logs.push(line) });
+
+    assert.equal(result.updated, 0);
+    assert.deepEqual(result.skipEvents, ['SessionStart']);
+    assert.ok(logs.some(line => line.includes('custom/non-standard')));
+    assert.match(installed.hooks.SessionStart[0].hooks[0].command, /session-start-inject\.js/);
+  });
+
+  it('syncHooks dry-run counts a standard SessionStart migration once', () => {
+    const installed = {
+      hooks: {
+        SessionStart: ['startup', 'clear', 'compact'].map(makeStandardOldSessionStartGroup),
+      },
+    };
+    const result = syncHooks(installed, makeOrchestratorTemplate(), { dryRun: true, log: noopLog });
+
+    assert.deepEqual(result, { added: 0, updated: 3, removed: 0 });
   });
 
   it('syncHooks preserves custom/non-standard SessionStart configs instead of removing old hooks', () => {

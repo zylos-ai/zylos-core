@@ -8,8 +8,10 @@ import { fileURLToPath } from 'node:url';
 
 import {
   installProcessBackstop,
+  readStdinPayload,
   runSessionStartOrchestrator,
   runStep,
+  writeAllSync,
 } from '../session-start-orchestrator.js';
 import { enqueueStartupPrompt } from '../session-start-prompt.js';
 
@@ -58,7 +60,7 @@ function actions(overrides = {}) {
   };
 }
 
-async function runWithActions(source, overrides = {}) {
+async function runWithActions(source, overrides = {}, options = {}) {
   const out = tempStdout();
   const harness = actions(overrides);
   try {
@@ -72,6 +74,7 @@ async function runWithActions(source, overrides = {}) {
         startupPrompt: 50,
       },
       actions: harness.actions,
+      ...options,
     });
     return { calls: harness.calls, stdout: out.read() };
   } finally {
@@ -150,6 +153,18 @@ describe('session-start-orchestrator', () => {
     assert.deepEqual(result.calls.map(([name]) => name), ['c4', 'foreground', 'prompt']);
   });
 
+  it('continues when a dynamic-import-style step fails before producing context', async () => {
+    const result = await runWithActions('startup', {
+      memoryInject: async () => {
+        const err = new Error('Cannot find module');
+        err.code = 'ERR_MODULE_NOT_FOUND';
+        throw err;
+      },
+    });
+    assert.equal(result.stdout, 'C4\n');
+    assert.deepEqual(result.calls.map(([name]) => name), ['c4', 'foreground', 'prompt']);
+  });
+
   it('runStep records successful stdout writes', async () => {
     const out = tempStdout();
     try {
@@ -168,6 +183,50 @@ describe('session-start-orchestrator', () => {
     }
   });
 
+  it('writeAllSync retries short writes and EAGAIN until the full buffer is written', () => {
+    const chunks = [];
+    let calls = 0;
+    const written = writeAllSync(1, 'abcdef', {
+      writeSync: (fd, buffer, offset, length) => {
+        assert.equal(fd, 1);
+        calls++;
+        if (calls === 2) {
+          const err = new Error('temporarily unavailable');
+          err.code = 'EAGAIN';
+          throw err;
+        }
+        const size = Math.min(2, length);
+        chunks.push(buffer.toString('utf8', offset, offset + size));
+        return size;
+      },
+    });
+
+    assert.equal(written, 6);
+    assert.equal(chunks.join(''), 'abcdef');
+    assert.equal(calls, 4);
+  });
+
+  it('writes payloads larger than pipe buffers without truncation', () => {
+    const payload = 'x'.repeat(150 * 1024);
+    const script = `
+      import { runStep } from ${JSON.stringify(path.resolve(SCRIPT_DIR, '../session-start-orchestrator.js'))};
+      await runStep({
+        name: 'large',
+        source: 'startup',
+        budgetMs: 1000,
+        action: async () => ${JSON.stringify(payload)},
+        writeStdout: true,
+      });
+    `;
+    const result = spawnSync(process.execPath, ['--input-type=module', '-e', script], {
+      encoding: 'utf8',
+      maxBuffer: payload.length + 64 * 1024,
+    });
+    assert.equal(result.status, 0);
+    assert.equal(result.stdout.length, payload.length);
+    assert.equal(result.stdout, payload);
+  });
+
   it('runStep reports timeout failures', async () => {
     const result = await runStep({
       name: 'unit-timeout',
@@ -177,6 +236,23 @@ describe('session-start-orchestrator', () => {
     });
     assert.equal(result.ok, false);
     assert.match(result.error.message, /timed out/);
+  });
+
+  it('readStdinPayload pauses and unrefs stdin when the read times out', async () => {
+    const calls = [];
+    const stdin = {
+      setEncoding: encoding => calls.push(['setEncoding', encoding]),
+      on: event => calls.push(['on', event]),
+      off: event => calls.push(['off', event]),
+      pause: () => calls.push(['pause']),
+      unref: () => calls.push(['unref']),
+    };
+
+    const payload = await readStdinPayload({ stdin, timeoutMs: 5 });
+
+    assert.deepEqual(payload, {});
+    assert.ok(calls.some(call => call[0] === 'pause'));
+    assert.ok(calls.some(call => call[0] === 'unref'));
   });
 
   it('passes a hard timeout and kill signal to prompt child process', () => {
@@ -226,6 +302,46 @@ describe('session-start-orchestrator', () => {
     });
     try {
       await new Promise(resolve => setTimeout(resolve, 25));
+      assert.equal(exitCode, 0);
+    } finally {
+      clearTimeout(timer);
+    }
+  });
+
+  it('runSessionStartOrchestrator can use a caller-owned hard backstop timer', async () => {
+    const timer = installProcessBackstop({
+      totalBudgetMs: 1000,
+      exit: () => { throw new Error('should not exit'); },
+    });
+    try {
+      const result = await runWithActions('startup', {}, { hardBackstopTimer: timer });
+      assert.equal(result.stdout, 'MEM\nC4\n');
+    } finally {
+      clearTimeout(timer);
+    }
+  });
+
+  it('caller-owned hard backstop can fire while orchestration is still running', async () => {
+    let exitCode = null;
+    const timer = installProcessBackstop({
+      totalBudgetMs: 5,
+      exit: (code) => { exitCode = code; },
+    });
+    try {
+      await runWithActions('startup', {
+        memoryInject: async () => {
+          await new Promise(resolve => setTimeout(resolve, 25));
+          return 'late';
+        },
+      }, {
+        hardBackstopTimer: timer,
+        budgets: {
+          memoryInject: 100,
+          c4SessionInit: 50,
+          foreground: 50,
+          startupPrompt: 50,
+        },
+      });
       assert.equal(exitCode, 0);
     } finally {
       clearTimeout(timer);
