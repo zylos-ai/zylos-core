@@ -7,10 +7,13 @@
  * not just given passive context.
  */
 
-import { execFileSync } from 'child_process';
+import { execFile } from 'child_process';
+import { promisify } from 'node:util';
 import path from 'path';
 import os from 'os';
 import { fileURLToPath } from 'node:url';
+
+const execFileAsync = promisify(execFile);
 
 const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
 const C4_CONTROL = path.join(ZYLOS_DIR, '.claude/skills/comm-bridge/scripts/c4-control.js');
@@ -79,18 +82,22 @@ const prompt = [
   'and do not query c4.db for recent conversations unless explicitly required.'
 ].join(' ');
 
-export function enqueueStartupPrompt(source, {
-  execFile = execFileSync,
+export async function enqueueStartupPrompt(source, {
+  execFile = execFileAsync,
   controlPath = C4_CONTROL,
   childTimeoutMs = DEFAULT_CHILD_TIMEOUT_MS,
 } = {}) {
-  execFile('node', [
+  // Async execFile (not execFileSync): keeps the event loop free so this step
+  // genuinely runs in parallel with the foreground step, and so the
+  // orchestrator's per-step withTimeout budget can actually preempt it.
+  // The child's own timeout + SIGKILL remains the hard backstop (bounds the
+  // #601-class enqueue hang even if the orchestrator budget is generous).
+  await execFile('node', [
     controlPath, 'enqueue',
     '--content', prompt,
     '--priority', '2',
     '--no-ack-suffix'
   ], {
-    stdio: 'pipe',
     timeout: childTimeoutMs,
     killSignal: 'SIGKILL',
   });
@@ -104,7 +111,7 @@ async function main() {
     : 'session-start-prompt';
 
   try {
-    enqueueStartupPrompt(source);
+    await enqueueStartupPrompt(source);
   } catch {
     // Silently fail — session still starts even if enqueue fails
   } finally {

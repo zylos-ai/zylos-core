@@ -270,6 +270,23 @@ describe('session-start-orchestrator', () => {
     assert.equal(calls[0][2].killSignal, 'SIGKILL');
   });
 
+  it('awaits the prompt child asynchronously (genuinely parallelizable)', async () => {
+    let resolveChild;
+    let settled = false;
+    const pending = enqueueStartupPrompt('startup', {
+      controlPath: '/tmp/c4-control.js',
+      execFile: () => new Promise((resolve) => { resolveChild = resolve; }),
+    }).then(() => { settled = true; });
+
+    // The async child has not resolved yet → enqueue must still be pending,
+    // proving it does not block synchronously like the old execFileSync.
+    await Promise.resolve();
+    assert.equal(settled, false);
+    resolveChild();
+    await pending;
+    assert.equal(settled, true);
+  });
+
   it('imports c4-session-init without CLI side effects', () => {
     const result = spawnSync(process.execPath, ['-e', `import(${JSON.stringify(C4_SESSION_INIT)})`], {
       env: { ...process.env, ZYLOS_DIR: fs.mkdtempSync(path.join(os.tmpdir(), 'c4-import-')) },

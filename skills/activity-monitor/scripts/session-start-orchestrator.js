@@ -162,7 +162,7 @@ async function runForeground(payload) {
 
 async function runStartupPrompt(payload) {
   const { enqueueStartupPrompt } = await import('./session-start-prompt.js');
-  enqueueStartupPrompt(payload?.source || null);
+  return enqueueStartupPrompt(payload?.source || null);
 }
 
 export async function runSessionStartOrchestrator(payload = {}, {

@@ -268,6 +268,49 @@ describe('persistInstalledSettingsAndSyncCoupledThreshold', () => {
     ]);
   });
 
+  it('prunes old .bak backups after a successful write, keeping the newest N', () => {
+    const unlinked = [];
+    persistInstalledSettingsAndSyncCoupledThreshold({
+      installedSettings: { hooks: {} },
+      settingsPath: '/tmp/zylos/.claude/settings.json',
+      maxBackups: 3,
+      mkdirSync: () => {},
+      existsSync: () => true,
+      copyFileSync: () => {},
+      writeFileSync: () => {},
+      readdirSync: () => [
+        'settings.json',
+        'settings.json.bak.100',
+        'settings.json.bak.500',
+        'settings.json.bak.300',
+        'settings.json.bak.200',
+        'settings.json.bak.400',
+        'other.json.bak.999',
+      ],
+      unlinkSync: (p) => unlinked.push(p),
+      syncThreshold: () => ({ changed: false }),
+    });
+
+    // newest 3 (500,400,300) kept; oldest 2 (200,100) removed; unrelated file untouched
+    assert.deepEqual(unlinked.sort(), [
+      '/tmp/zylos/.claude/settings.json.bak.100',
+      '/tmp/zylos/.claude/settings.json.bak.200',
+    ]);
+  });
+
+  it('does not fail the write when backup pruning throws', () => {
+    assert.doesNotThrow(() => persistInstalledSettingsAndSyncCoupledThreshold({
+      installedSettings: { hooks: {} },
+      settingsPath: '/tmp/zylos/.claude/settings.json',
+      mkdirSync: () => {},
+      existsSync: () => true,
+      copyFileSync: () => {},
+      writeFileSync: () => {},
+      readdirSync: () => { throw new Error('ENOENT'); },
+      syncThreshold: () => ({ changed: false }),
+    }));
+  });
+
   it('restores the backup when writing settings fails', () => {
     const calls = [];
     assert.throws(() => persistInstalledSettingsAndSyncCoupledThreshold({

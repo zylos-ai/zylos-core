@@ -122,14 +122,46 @@ export function syncModelCoupledNewSessionThreshold({
   return { changed: true };
 }
 
+const DEFAULT_MAX_SETTINGS_BACKUPS = 5;
+
+/**
+ * Prune `<settings>.bak.<ts>` backups, keeping only the most recent `keep`.
+ * Backups accumulate one-per-changed-sync and were never cleaned up. Best
+ * effort: any fs error here must never break the settings write, so the
+ * caller wraps this in a try/catch and we tolerate a missing directory.
+ */
+export function pruneOldBackups({
+  settingsPath,
+  keep = DEFAULT_MAX_SETTINGS_BACKUPS,
+  readdirSync = fs.readdirSync,
+  unlinkSync = fs.unlinkSync,
+} = {}) {
+  const dir = path.dirname(settingsPath);
+  const base = path.basename(settingsPath);
+  const backupRe = new RegExp(`^${base.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\.bak\\.(\\d+)$`);
+  const backups = readdirSync(dir)
+    .map((name) => {
+      const m = name.match(backupRe);
+      return m ? { name, ts: Number(m[1]) } : null;
+    })
+    .filter(Boolean)
+    .sort((a, b) => b.ts - a.ts); // newest first
+  for (const stale of backups.slice(keep)) {
+    unlinkSync(path.join(dir, stale.name));
+  }
+}
+
 export function persistInstalledSettingsAndSyncCoupledThreshold({
   installedSettings,
   settingsPath = INSTALLED_SETTINGS,
   modelBackfilled = false,
+  maxBackups = DEFAULT_MAX_SETTINGS_BACKUPS,
   mkdirSync = fs.mkdirSync,
   writeFileSync = fs.writeFileSync,
   existsSync = fs.existsSync,
   copyFileSync = fs.copyFileSync,
+  readdirSync = fs.readdirSync,
+  unlinkSync = fs.unlinkSync,
   syncThreshold = syncModelCoupledNewSessionThreshold,
 } = {}) {
   const dir = path.dirname(settingsPath);
@@ -146,6 +178,13 @@ export function persistInstalledSettingsAndSyncCoupledThreshold({
       try { copyFileSync(backupPath, settingsPath); } catch {}
     }
     throw err;
+  }
+  if (backupPath) {
+    try {
+      pruneOldBackups({ settingsPath, keep: maxBackups, readdirSync, unlinkSync });
+    } catch {
+      // best effort — never fail a successful settings write over cleanup
+    }
   }
   return syncThreshold({ modelBackfilled });
 }

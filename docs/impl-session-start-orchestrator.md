@@ -106,7 +106,7 @@ The orchestrator must preserve the current SessionStart behavior by source, exce
 - Dynamic import happens inside that `try/catch`; a missing or broken skill module skips only that step instead of crashing the whole orchestrator.
 - `AbortSignal.timeout()` is only a hard timeout for async, signal-aware work. It cannot interrupt synchronous JavaScript, synchronous filesystem calls, synchronous SQLite queries, or a synchronous infinite loop.
 - The total budget `setTimeout` is a last-resort backstop for async stalls and handle-leak hangs, including the known #601 class where the event loop is still alive. It does **not** protect against synchronous event-loop blocking.
-- `session-start-prompt.js` must not introduce a non-killable synchronous wait. If it shells out to `c4-control.js`, use `execFileSync` with a hard `timeout` and `killSignal`, or use async `execFile` / `spawn` with an explicit timer that kills the child process.
+- `session-start-prompt.js` must not introduce a non-killable synchronous wait. It shells out to `c4-control.js` via **async `execFile`** (promisified) with a hard `timeout` + `killSignal`, so the step yields the event loop (genuinely parallel with the foreground write) and the orchestrator's per-step budget can preempt it; the child's own `timeout`/`killSignal` is the hard backstop for an `execFile` that never returns.
 - Happy path must clear or `unref()` timers, remove stdin listeners, and reap any child process so the orchestrator exits naturally in under roughly 2-3 seconds instead of waiting for the 15s fallback.
 
 ### 4. Implementation Approach: Dynamic In-Process Import
@@ -131,7 +131,7 @@ This also requires refactoring the existing scripts to **export callable functio
 | `session-start-inject.js` | `main()` is internal, writes to stdout | Export `injectMemory()` that returns string |
 | `c4-session-init.js` | Top-level unconditional `main()` | Add CLI guard; export `initC4Session()` that returns string; move stdin/timer/main side effects into functions |
 | `session-foreground.js` | Already exports `handleSessionForeground()` | No change |
-| `session-start-prompt.js` | Top-level unconditional `main()`, calls `execFileSync` | Add CLI guard; export `enqueueStartupPrompt(source)`; move stdin/timer/main side effects into functions; add hard child-process timeout |
+| `session-start-prompt.js` | Top-level unconditional `main()`, calls `execFileSync` | Add CLI guard; export **async** `enqueueStartupPrompt(source)` using async `execFile` (not `execFileSync`); move stdin/timer/main side effects into functions; hard child-process `timeout` + `killSignal` |
 
 Each script retains its standalone CLI entry point using `if (process.argv[1] === fileURLToPath(import.meta.url))` for backward compatibility and testing. Importing any step module must be side-effect-free: no stdout writes, no control-queue enqueue, no timer registration, and no `main()` call at module load.
 
@@ -247,6 +247,8 @@ Issue #652 asks for Codex runtime to use the same SessionStart mechanism. This i
 
 2. **Settings migration**: `zylos upgrade` must migrate existing standard `settings.json` hooks from the 4-hook format to the 1-hook orchestrator format. Template-only updates are insufficient because existing installs would keep the old duplicated hooks. The migration should be conservative, idempotent, and rollback-safe under the normal upgrade failure handling.
 
-3. **Hang guarantee boundary**: the design does not claim to make startup impossible to hang. It bounds async stalls, leaked handles, and killable child-process hangs. It cannot stop synchronous event-loop blocking inside the orchestrator process; implementation should minimize synchronous work in step bodies and keep the prompt enqueue child process killable.
+3. **Hang guarantee boundary**: the design does not claim to make startup impossible to hang. It bounds async stalls, leaked handles, and killable child-process hangs. It cannot stop synchronous event-loop blocking inside the orchestrator process; implementation should minimize synchronous work in step bodies. The prompt enqueue — previously the one synchronous (`execFileSync`) step that the per-step budget could not preempt — now uses **async `execFile`**, so it both runs genuinely in parallel with the foreground write and is preemptible by the per-step budget, with the child's own `timeout`+`killSignal` as the hard backstop.
 
 4. **Budget margin**: implementation should not make the planned path equal the total fallback. Use a 17s backstop with 5.5s + 5.5s + 3s step budgets, leaving margin for natural exit and cleanup while still fitting under the 20s Claude hook harness timeout.
+
+5. **Settings backup retention**: each settings-changing sync writes a timestamped `settings.json.bak.<ts>`. These are pruned after a successful write, keeping only the most recent `maxBackups` (default 5); pruning is best-effort and never fails the write.
