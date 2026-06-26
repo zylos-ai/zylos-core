@@ -207,24 +207,24 @@ describe('session-start-orchestrator', () => {
   });
 
   it('writes payloads larger than pipe buffers without truncation', () => {
-    const payload = 'x'.repeat(150 * 1024);
+    const payloadLength = 150 * 1024;
     const script = `
       import { runStep } from ${JSON.stringify(path.resolve(SCRIPT_DIR, '../session-start-orchestrator.js'))};
       await runStep({
         name: 'large',
         source: 'startup',
         budgetMs: 1000,
-        action: async () => ${JSON.stringify(payload)},
+        action: async () => 'x'.repeat(${payloadLength}),
         writeStdout: true,
       });
     `;
     const result = spawnSync(process.execPath, ['--input-type=module', '-e', script], {
       encoding: 'utf8',
-      maxBuffer: payload.length + 64 * 1024,
+      maxBuffer: payloadLength + 64 * 1024,
     });
     assert.equal(result.status, 0);
-    assert.equal(result.stdout.length, payload.length);
-    assert.equal(result.stdout, payload);
+    assert.equal(result.stdout.length, payloadLength);
+    assert.equal(result.stdout, 'x'.repeat(payloadLength));
   });
 
   it('runStep reports timeout failures', async () => {
