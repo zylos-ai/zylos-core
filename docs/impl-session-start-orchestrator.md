@@ -67,16 +67,16 @@ The orchestrator must preserve the current SessionStart behavior by source, exce
 ┌─────────────────────────────────────────────────┐
 │              session-start-orchestrator.js        │
 │                                                   │
-│  Total budget: 15s (async/handle-leak backstop)   │
+│  Total budget: 17s (async/handle-leak backstop)   │
 │                                                   │
 │  Phase 1 — Context output (sequential, stdout)    │
 │  ┌───────────────────────────────────────────┐    │
-│  │ Step 1: memory-inject  (budget: 6s)       │    │
+│  │ Step 1: memory-inject  (budget: 5.5s)     │    │
 │  │   Read identity/state/references → stdout │    │
 │  │   On error: stderr only; stdout empty     │    │
 │  └───────────────────────────────────────────┘    │
 │  ┌───────────────────────────────────────────┐    │
-│  │ Step 2: c4-session-init  (budget: 6s)     │    │
+│  │ Step 2: c4-session-init  (budget: 5.5s)   │    │
 │  │   DB query → stdout                       │    │
 │  │   On error: stderr only; stdout empty     │    │
 │  └───────────────────────────────────────────┘    │
@@ -99,7 +99,7 @@ The orchestrator must preserve the current SessionStart behavior by source, exce
 - Phase 1 writes each successful step's bytes with `fs.writeSync(1, output)` as soon as the step completes. Errors go to stderr only; the orchestrator must not write placeholder text to stdout, because stdout is the injected context payload.
 - Steps 3 & 4 produce **no stdout** (only side effects: file write + control-queue enqueue). They can run in **parallel** after context output is done.
 - Step 4 is skipped when `source === 'compact'`. A compact happens mid-session; the new context still needs memory and C4 startup context, but it should not enqueue a fresh "startup / resume work" control prompt that can duplicate work or revive stale tasks.
-- Total budget (15s) covers the planned worst case: Phase 1 is 6s + 6s, then Phase 2 is up to 3s in parallel. The settings hook timeout must be higher than the internal budget (recommended: 20s) so Claude's hook harness does not kill the process before the orchestrator's own cleanup and diagnostics run.
+- Total budget (17s) leaves cleanup margin above the planned worst case: Phase 1 is 5.5s + 5.5s, then Phase 2 is up to 3s in parallel. The settings hook timeout must be higher than the internal budget (recommended: 20s) so Claude's hook harness does not kill the process before the orchestrator's own cleanup and diagnostics run.
 
 **Per-step isolation**:
 - Each step runs in a `try/catch` with its own budget.
@@ -204,7 +204,7 @@ Test cases:
 5. **Step 4 failure**: prompt enqueue throws → no effect on stdout or other steps.
 6. **Step timeout**: async, signal-aware step timeout is logged and remaining steps proceed.
 7. **Prompt child timeout**: a hung `c4-control.js` child is killed by the prompt step timeout.
-8. **Total timeout**: leaked handles / async stall are stopped by the 15s backstop, without corrupting stdout already flushed from completed Phase 1 steps.
+8. **Total timeout**: leaked handles / async stall are stopped by the 17s backstop, without corrupting stdout already flushed from completed Phase 1 steps.
 9. **Import guard**: importing `c4-session-init.js` and `session-start-prompt.js` has zero side effects.
 10. **Dynamic import failure**: missing/broken memory or C4 module skips only that step.
 11. **Compact source**: memory inject, C4 init, and foreground write run; prompt enqueue is not called.
@@ -248,3 +248,5 @@ Issue #652 asks for Codex runtime to use the same SessionStart mechanism. This i
 2. **Settings migration**: `zylos upgrade` must migrate existing standard `settings.json` hooks from the 4-hook format to the 1-hook orchestrator format. Template-only updates are insufficient because existing installs would keep the old duplicated hooks. The migration should be conservative, idempotent, and rollback-safe under the normal upgrade failure handling.
 
 3. **Hang guarantee boundary**: the design does not claim to make startup impossible to hang. It bounds async stalls, leaked handles, and killable child-process hangs. It cannot stop synchronous event-loop blocking inside the orchestrator process; implementation should minimize synchronous work in step bodies and keep the prompt enqueue child process killable.
+
+4. **Budget margin**: implementation should not make the planned path equal the total fallback. Use a 17s backstop with 5.5s + 5.5s + 3s step budgets, leaving margin for natural exit and cleanup while still fitting under the 20s Claude hook harness timeout.

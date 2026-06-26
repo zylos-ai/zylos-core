@@ -31,6 +31,14 @@ const TEMPLATE_SETTINGS = path.join(__dirname, '..', '..', 'templates', '.claude
 const INSTALLED_SETTINGS = path.join(ZYLOS_DIR, '.claude', 'settings.json');
 
 const MAX_SAFE_1M_THRESHOLD = 30;
+const SESSION_START_OLD_SCRIPTS = [
+  'skills/zylos-memory/scripts/session-start-inject.js',
+  'skills/comm-bridge/scripts/c4-session-init.js',
+  'skills/activity-monitor/scripts/session-foreground.js',
+  'skills/activity-monitor/scripts/session-start-prompt.js',
+];
+const SESSION_START_OLD_TIMEOUTS = [10000, 10000, 5000, 5000];
+const SESSION_START_MATCHERS = ['startup', 'clear', 'compact'];
 
 function is1mModel(model) {
   return typeof model === 'string' && model.includes('[1m]');
@@ -115,11 +123,25 @@ export function persistInstalledSettingsAndSyncCoupledThreshold({
   modelBackfilled = false,
   mkdirSync = fs.mkdirSync,
   writeFileSync = fs.writeFileSync,
+  existsSync = fs.existsSync,
+  copyFileSync = fs.copyFileSync,
   syncThreshold = syncModelCoupledNewSessionThreshold,
 } = {}) {
   const dir = path.dirname(settingsPath);
   mkdirSync(dir, { recursive: true });
-  writeFileSync(settingsPath, JSON.stringify(installedSettings, null, 2) + '\n');
+  let backupPath = null;
+  if (existsSync(settingsPath)) {
+    backupPath = `${settingsPath}.bak.${Date.now()}`;
+    copyFileSync(settingsPath, backupPath);
+  }
+  try {
+    writeFileSync(settingsPath, JSON.stringify(installedSettings, null, 2) + '\n');
+  } catch (err) {
+    if (backupPath) {
+      try { copyFileSync(backupPath, settingsPath); } catch {}
+    }
+    throw err;
+  }
   return syncThreshold({ modelBackfilled });
 }
 
@@ -228,12 +250,19 @@ export function syncHooks(installedSettings, templateSettings, { dryRun = false,
     updated += migrated;
   }
 
+  const sessionStartMigration = migrateSessionStartOrchestrator(installedSettings, templateSettings, { dryRun, log });
+  if (sessionStartMigration.updated > 0) {
+    updated += sessionStartMigration.updated;
+  }
+  const skipEvents = new Set(sessionStartMigration.skipEvents || []);
+
   // --- Forward pass: add missing matcher groups/hooks, update hooks in matched groups ---
   // Strategy: align by matcher group, not by individual hook across all groups.
   //   - If installed has a group with the same matcher → add missing template
   //     hooks and update existing hooks (command/timeout drift)
   //   - If installed has NO group with that matcher → add the whole group from template
   for (const [event, matchers] of Object.entries(templateHooks)) {
+    if (skipEvents.has(event)) continue;
     if (!Array.isArray(matchers)) continue;
     if (!Array.isArray(installedSettings.hooks[event])) {
       installedSettings.hooks[event] = [];
@@ -293,6 +322,7 @@ export function syncHooks(installedSettings, templateSettings, { dryRun = false,
   // A core hook is removed if it's not present in the matching template group,
   // even if it exists in other template groups for the same event.
   for (const [event, matchers] of Object.entries(installedSettings.hooks)) {
+    if (skipEvents.has(event)) continue;
     if (!Array.isArray(matchers)) continue;
 
     const templateMatchers = Array.isArray(templateHooks[event]) ? templateHooks[event] : [];
@@ -531,6 +561,90 @@ export function migrateMatcherSplit(installedSettings, templateSettings, { dryRu
   }
 
   return count;
+}
+
+function scriptPathEndsWith(command, suffix) {
+  const scriptPath = extractScriptPath(command).split(path.sep).join('/');
+  return scriptPath.endsWith(suffix);
+}
+
+function isOrchestratorTemplate(templateSettings) {
+  const groups = templateSettings?.hooks?.SessionStart;
+  if (!Array.isArray(groups)) return false;
+  const expected = new Set(SESSION_START_MATCHERS);
+  if (groups.length !== expected.size) return false;
+  for (const group of groups) {
+    if (!expected.has(group.matcher)) return false;
+    const hooks = getCommandHooks(group);
+    if (hooks.length !== 1) return false;
+    if (!scriptPathEndsWith(hooks[0].command, 'skills/activity-monitor/scripts/session-start-orchestrator.js')) return false;
+  }
+  return true;
+}
+
+function isStandardOldSessionStartGroup(group) {
+  const hooks = getCommandHooks(group);
+  if (hooks.length !== SESSION_START_OLD_SCRIPTS.length) return false;
+  for (let i = 0; i < SESSION_START_OLD_SCRIPTS.length; i++) {
+    const hook = hooks[i];
+    if (hook.type !== 'command') return false;
+    if (!scriptPathEndsWith(hook.command, SESSION_START_OLD_SCRIPTS[i])) return false;
+    if (hook.timeout !== SESSION_START_OLD_TIMEOUTS[i]) return false;
+  }
+  return true;
+}
+
+function containsOldSessionStartScript(groups) {
+  return groups.some(group => getCommandHooks(group).some(h =>
+    SESSION_START_OLD_SCRIPTS.some(suffix => scriptPathEndsWith(h.command, suffix))
+  ));
+}
+
+/**
+ * Migrate the standard old SessionStart shape:
+ *   startup/clear/compact × [inject, c4-init, foreground, prompt]
+ * to:
+ *   startup/clear/compact × [orchestrator]
+ *
+ * Non-standard SessionStart configs are skipped and protected from the generic
+ * forward/reverse sync pass, so user-customized running hooks are not silently
+ * overwritten during upgrade.
+ */
+export function migrateSessionStartOrchestrator(installedSettings, templateSettings, { dryRun = false, log = console.log } = {}) {
+  if (!isOrchestratorTemplate(templateSettings)) {
+    return { updated: 0, skipped: 0, skipEvents: [] };
+  }
+
+  const installedGroups = installedSettings?.hooks?.SessionStart;
+  if (!Array.isArray(installedGroups) || installedGroups.length === 0) {
+    return { updated: 0, skipped: 0, skipEvents: [] };
+  }
+
+  const groupsByMatcher = new Map(installedGroups.map(g => [g.matcher ?? '', g]));
+  const hasAllStandardGroups = SESSION_START_MATCHERS.every((matcher) =>
+    isStandardOldSessionStartGroup(groupsByMatcher.get(matcher))
+  );
+  const onlyStandardGroups = installedGroups.every(group =>
+    SESSION_START_MATCHERS.includes(group.matcher) && isStandardOldSessionStartGroup(group)
+  );
+
+  if (!hasAllStandardGroups || !onlyStandardGroups) {
+    if (containsOldSessionStartScript(installedGroups)) {
+      log('  ! SessionStart: custom/non-standard hooks detected; skipped orchestrator migration');
+      return { updated: 0, skipped: 1, skipEvents: ['SessionStart'] };
+    }
+    return { updated: 0, skipped: 0, skipEvents: [] };
+  }
+
+  if (!dryRun) {
+    installedSettings.hooks.SessionStart = templateSettings.hooks.SessionStart.map(group => ({
+      matcher: group.matcher,
+      hooks: getCommandHooks(group).map(h => ({ ...h })),
+    }));
+  }
+
+  log('  ↔ SessionStart: migrated standard 4-hook groups to orchestrator');
+  return { updated: SESSION_START_MATCHERS.length, skipped: 0, skipEvents: [] };
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

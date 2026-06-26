@@ -10,7 +10,6 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { MEMORY_DIR } from './shared.js';
 
-const startMs = Date.now();
 let diagnosticModule;
 let diagnosticLoadAttempted = false;
 
@@ -59,19 +58,20 @@ function section(label, filePath) {
   return lines.join('\n');
 }
 
-function main() {
+export function injectMemory() {
   const parts = [
     section('BOT IDENTITY', path.join(MEMORY_DIR, 'identity.md')),
     section('ACTIVE STATE', path.join(MEMORY_DIR, 'state.md')),
     section('REFERENCES', path.join(MEMORY_DIR, 'references.md'))
   ];
 
-  process.stdout.write(`${parts.join('\n\n')}\n`);
+  return `${parts.join('\n\n')}\n`;
 }
 
 async function runCli() {
+  const startMs = Date.now();
   try {
-    main();
+    process.stdout.write(injectMemory());
   } catch (err) {
     console.error(`session-start-inject error: ${err.message}`);
   } finally {

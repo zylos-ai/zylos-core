@@ -5,6 +5,7 @@ import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 const {
+  migrateSessionStartOrchestrator,
   migrateMatcherSplit,
   persistInstalledSettingsAndSyncCoupledThreshold,
   shouldSyncCodexConfig,
@@ -35,13 +36,15 @@ describe('Claude settings template', () => {
     assert.equal(template.autoDreamEnabled, false);
   });
 
-  it('includes session-foreground hooks for all SessionStart matchers', () => {
+  it('uses the SessionStart orchestrator for all SessionStart matchers', () => {
     const template = JSON.parse(fs.readFileSync(TEMPLATE_SETTINGS_PATH, 'utf8'));
     const groups = template.hooks.SessionStart;
     assert.equal(groups.length, 3);
     for (const group of groups) {
       const commands = group.hooks.map(h => h.command);
-      assert.ok(commands.some(cmd => cmd.includes('session-foreground.js')));
+      assert.equal(group.hooks.length, 1);
+      assert.ok(commands.some(cmd => cmd.includes('session-start-orchestrator.js')));
+      assert.equal(group.hooks[0].timeout, 20000);
     }
   });
 
@@ -222,6 +225,8 @@ describe('syncModelCoupledNewSessionThreshold', () => {
 });
 
 describe('persistInstalledSettingsAndSyncCoupledThreshold', () => {
+  const normalizeBackupPath = (filePath) => filePath.replace(/\.bak\.\d+$/, '.bak.<ts>');
+
   it('writes settings before syncing the paired threshold', () => {
     const calls = [];
     const result = persistInstalledSettingsAndSyncCoupledThreshold({
@@ -241,6 +246,43 @@ describe('persistInstalledSettingsAndSyncCoupledThreshold', () => {
       ['mkdir', '/tmp/zylos/.claude', { recursive: true }],
       ['writeSettings', '/tmp/zylos/.claude/settings.json', { model: 'opus[1m]' }],
       ['syncThreshold', true],
+    ]);
+  });
+
+  it('backs up existing settings before writing', () => {
+    const calls = [];
+    persistInstalledSettingsAndSyncCoupledThreshold({
+      installedSettings: { hooks: {} },
+      settingsPath: '/tmp/zylos/.claude/settings.json',
+      mkdirSync: (dir, opts) => calls.push(['mkdir', dir, opts]),
+      existsSync: () => true,
+      copyFileSync: (from, to) => calls.push(['copy', normalizeBackupPath(from), normalizeBackupPath(to)]),
+      writeFileSync: (filePath, content) => calls.push(['writeSettings', filePath, JSON.parse(content)]),
+      syncThreshold: () => ({ changed: false }),
+    });
+
+    assert.deepEqual(calls, [
+      ['mkdir', '/tmp/zylos/.claude', { recursive: true }],
+      ['copy', '/tmp/zylos/.claude/settings.json', '/tmp/zylos/.claude/settings.json.bak.<ts>'],
+      ['writeSettings', '/tmp/zylos/.claude/settings.json', { hooks: {} }],
+    ]);
+  });
+
+  it('restores the backup when writing settings fails', () => {
+    const calls = [];
+    assert.throws(() => persistInstalledSettingsAndSyncCoupledThreshold({
+      installedSettings: { hooks: {} },
+      settingsPath: '/tmp/zylos/.claude/settings.json',
+      mkdirSync: () => {},
+      existsSync: () => true,
+      copyFileSync: (from, to) => calls.push(['copy', normalizeBackupPath(from), normalizeBackupPath(to)]),
+      writeFileSync: () => { throw new Error('disk full'); },
+      syncThreshold: () => { throw new Error('should not sync threshold after failed write'); },
+    }), /disk full/);
+
+    assert.deepEqual(calls, [
+      ['copy', '/tmp/zylos/.claude/settings.json', '/tmp/zylos/.claude/settings.json.bak.<ts>'],
+      ['copy', '/tmp/zylos/.claude/settings.json.bak.<ts>', '/tmp/zylos/.claude/settings.json'],
     ]);
   });
 });
@@ -428,6 +470,121 @@ function makeMatcherGroup(matcher, scriptPaths) {
     hooks: scriptPaths.map(p => makeHook(p)),
   };
 }
+
+function makeStandardOldSessionStartGroup(matcher) {
+  return {
+    matcher,
+    hooks: [
+      makeHook('/Users/howard/zylos/.claude/skills/zylos-memory/scripts/session-start-inject.js', 10000),
+      makeHook('/Users/howard/zylos/.claude/skills/comm-bridge/scripts/c4-session-init.js', 10000),
+      makeHook('/Users/howard/zylos/.claude/skills/activity-monitor/scripts/session-foreground.js', 5000),
+      makeHook('/Users/howard/zylos/.claude/skills/activity-monitor/scripts/session-start-prompt.js', 5000),
+    ],
+  };
+}
+
+function makeOrchestratorTemplate() {
+  return {
+    hooks: {
+      SessionStart: ['startup', 'clear', 'compact'].map(matcher => ({
+        matcher,
+        hooks: [
+          makeHook('/Users/howard/zylos/.claude/skills/activity-monitor/scripts/session-start-orchestrator.js', 20000),
+        ],
+      })),
+    },
+  };
+}
+
+describe('migrateSessionStartOrchestrator', () => {
+  const noopLog = () => {};
+
+  it('migrates exact standard SessionStart groups to the orchestrator', () => {
+    const installed = {
+      hooks: {
+        SessionStart: ['startup', 'clear', 'compact'].map(makeStandardOldSessionStartGroup),
+      },
+    };
+    const result = migrateSessionStartOrchestrator(installed, makeOrchestratorTemplate(), { log: noopLog });
+
+    assert.equal(result.updated, 3);
+    for (const group of installed.hooks.SessionStart) {
+      assert.equal(group.hooks.length, 1);
+      assert.match(group.hooks[0].command, /session-start-orchestrator\.js/);
+      assert.equal(group.hooks[0].timeout, 20000);
+    }
+  });
+
+  it('is idempotent when SessionStart is already on the orchestrator', () => {
+    const installed = JSON.parse(JSON.stringify(makeOrchestratorTemplate()));
+    const result = migrateSessionStartOrchestrator(installed, makeOrchestratorTemplate(), { log: noopLog });
+
+    assert.equal(result.updated, 0);
+    assert.deepEqual(result.skipEvents, []);
+  });
+
+  it('skips and protects custom/non-standard old SessionStart hooks', () => {
+    const installed = {
+      hooks: {
+        SessionStart: [
+          {
+            ...makeStandardOldSessionStartGroup('startup'),
+            hooks: [
+              ...makeStandardOldSessionStartGroup('startup').hooks,
+              makeHook('/custom/my-session-start.js', 5000),
+            ],
+          },
+          makeStandardOldSessionStartGroup('clear'),
+          makeStandardOldSessionStartGroup('compact'),
+        ],
+      },
+    };
+    const logs = [];
+    const result = migrateSessionStartOrchestrator(installed, makeOrchestratorTemplate(), { log: line => logs.push(line) });
+
+    assert.equal(result.updated, 0);
+    assert.deepEqual(result.skipEvents, ['SessionStart']);
+    assert.ok(logs.some(line => line.includes('custom/non-standard')));
+    assert.equal(installed.hooks.SessionStart[0].hooks.length, 5);
+  });
+
+  it('dryRun reports migration without mutating installed settings', () => {
+    const installed = {
+      hooks: {
+        SessionStart: ['startup', 'clear', 'compact'].map(makeStandardOldSessionStartGroup),
+      },
+    };
+    const result = migrateSessionStartOrchestrator(installed, makeOrchestratorTemplate(), { dryRun: true, log: noopLog });
+
+    assert.equal(result.updated, 3);
+    assert.match(installed.hooks.SessionStart[0].hooks[0].command, /session-start-inject\.js/);
+  });
+
+  it('syncHooks preserves custom/non-standard SessionStart configs instead of removing old hooks', () => {
+    const installed = {
+      hooks: {
+        SessionStart: [
+          {
+            ...makeStandardOldSessionStartGroup('startup'),
+            hooks: [
+              ...makeStandardOldSessionStartGroup('startup').hooks,
+              makeHook('/custom/my-session-start.js', 5000),
+            ],
+          },
+          makeStandardOldSessionStartGroup('clear'),
+          makeStandardOldSessionStartGroup('compact'),
+        ],
+      },
+    };
+
+    const result = syncHooks(installed, makeOrchestratorTemplate(), { log: noopLog });
+
+    assert.equal(result.added, 0);
+    assert.equal(result.removed, 0);
+    assert.equal(installed.hooks.SessionStart[0].hooks.length, 5);
+    assert.ok(installed.hooks.SessionStart[0].hooks.some(h => h.command.includes('session-start-inject.js')));
+  });
+});
 
 // --- migrateMatcherSplit tests ---
 describe('migrateMatcherSplit', () => {
