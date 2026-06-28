@@ -8,11 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
-- **Unified session-start context format**: memory injection (`session-start-inject.js`) and C4 session init (`c4-session-init.js`) now share a single `formatSection()` helper, emitting consistent `=== LABEL ===` … `=== END LABEL ===` blocks instead of the previous mixed `=== LABEL ===` (header-only) / `[Bracket Label]` styles, so the combined injected context reads uniformly. (#651)
+- **Unified session-start context format**: memory injection (`session-start-inject.js`) and C4 session init (`c4-session-init.js`) now share a single `formatSection()` helper, emitting consistent `=== LABEL ===` … `=== END LABEL ===` blocks instead of the previous mixed `=== LABEL ===` (header-only) / `[Bracket Label]` styles, so the combined injected context reads uniformly. (#671)
 
 ### Fixed
-- **Visible session-start step failures**: the orchestrator now writes a visible `=== <STEP> UNAVAILABLE ===` notice to the injected stdout stream when a context-producing step fails or times out, instead of silently dropping the section. (#651)
-- **Checkpoint null-summary fallback**: the last-checkpoint block now renders a `(no summary — checkpoint #id, ts)` fallback when a checkpoint exists with a null summary, so the block never silently disappears. (#651)
+- **Visible session-start step failures**: the orchestrator now writes a visible `=== <STEP> UNAVAILABLE ===` notice to the injected stdout stream when a context-producing step fails or times out, instead of silently dropping the section. (#671)
+- **Checkpoint null-summary fallback**: the last-checkpoint block now renders a `(no summary — checkpoint #id, ts)` fallback when a checkpoint exists with a null summary, so the block never silently disappears. (#671)
 
 ## [0.5.3] - 2026-06-17
 
