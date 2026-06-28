@@ -113,19 +113,25 @@ describe('session-start-orchestrator', () => {
     assert.equal(result.stdout, 'AB');
   });
 
-  it('does not write stdout for failed memory step', async () => {
+  it('emits a visible failure notice for a failed memory step', async () => {
     const result = await runWithActions('startup', {
       memoryInject: async () => { throw new Error('memory failed'); },
     });
-    assert.equal(result.stdout, 'C4\n');
+    assert.match(result.stdout, /=== MEMORY-INJECT UNAVAILABLE ===/);
+    assert.match(result.stdout, /failed: memory failed/);
+    assert.match(result.stdout, /=== END MEMORY-INJECT UNAVAILABLE ===/);
+    // C4 context still follows the notice.
+    assert.ok(result.stdout.endsWith('C4\n'));
     assert.deepEqual(result.calls.map(([name]) => name), ['c4', 'foreground', 'prompt']);
   });
 
-  it('does not write stdout for failed C4 step', async () => {
+  it('emits a visible failure notice for a failed C4 step after the memory context', async () => {
     const result = await runWithActions('startup', {
       c4SessionInit: async () => { throw new Error('c4 failed'); },
     });
-    assert.equal(result.stdout, 'MEM\n');
+    assert.ok(result.stdout.startsWith('MEM\n'));
+    assert.match(result.stdout, /=== C4-SESSION-INIT UNAVAILABLE ===/);
+    assert.match(result.stdout, /failed: c4 failed/);
     assert.deepEqual(result.calls.map(([name]) => name), ['memory', 'foreground', 'prompt']);
   });
 
@@ -149,7 +155,9 @@ describe('session-start-orchestrator', () => {
     const result = await runWithActions('startup', {
       memoryInject: () => new Promise(() => {}),
     });
-    assert.equal(result.stdout, 'C4\n');
+    assert.match(result.stdout, /=== MEMORY-INJECT UNAVAILABLE ===/);
+    assert.match(result.stdout, /timed out/);
+    assert.ok(result.stdout.endsWith('C4\n'));
     assert.deepEqual(result.calls.map(([name]) => name), ['c4', 'foreground', 'prompt']);
   });
 
@@ -161,7 +169,9 @@ describe('session-start-orchestrator', () => {
         throw err;
       },
     });
-    assert.equal(result.stdout, 'C4\n');
+    assert.match(result.stdout, /=== MEMORY-INJECT UNAVAILABLE ===/);
+    assert.match(result.stdout, /Cannot find module/);
+    assert.ok(result.stdout.endsWith('C4\n'));
     assert.deepEqual(result.calls.map(([name]) => name), ['c4', 'foreground', 'prompt']);
   });
 
@@ -178,6 +188,45 @@ describe('session-start-orchestrator', () => {
       });
       assert.equal(result.ok, true);
       assert.equal(out.read(), 'payload');
+    } finally {
+      out.cleanup();
+    }
+  });
+
+  it('runStep writes a visible notice to stdout when a writeStdout step fails', async () => {
+    const out = tempStdout();
+    try {
+      const result = await runStep({
+        name: 'memory-inject',
+        source: 'startup',
+        budgetMs: 50,
+        action: async () => { throw new Error('boom'); },
+        writeStdout: true,
+        stdout: out.stdout,
+      });
+      assert.equal(result.ok, false);
+      const text = out.read();
+      assert.match(text, /=== MEMORY-INJECT UNAVAILABLE ===/);
+      assert.match(text, /failed: boom/);
+      assert.match(text, /=== END MEMORY-INJECT UNAVAILABLE ===/);
+    } finally {
+      out.cleanup();
+    }
+  });
+
+  it('runStep stays silent on stdout when a side-effect (non-writeStdout) step fails', async () => {
+    const out = tempStdout();
+    try {
+      const result = await runStep({
+        name: 'session-foreground',
+        source: 'startup',
+        budgetMs: 50,
+        action: async () => { throw new Error('boom'); },
+        writeStdout: false,
+        stdout: out.stdout,
+      });
+      assert.equal(result.ok, false);
+      assert.equal(out.read(), '');
     } finally {
       out.cleanup();
     }

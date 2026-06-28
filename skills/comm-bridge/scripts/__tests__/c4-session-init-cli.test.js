@@ -63,8 +63,27 @@ describe('c4-session-init', () => {
 
       const { stdout, status } = cli([], env);
       assert.equal(status, 0);
+      assert.ok(stdout.includes('=== LAST CHECKPOINT SUMMARY ==='));
+      assert.ok(stdout.includes('=== END LAST CHECKPOINT SUMMARY ==='));
       assert.ok(stdout.includes('Synced first batch'));
       assert.ok(stdout.includes('msg2'));
+    });
+  });
+
+  it('emits a fallback block when the last checkpoint has no summary', () => {
+    withTmpDir(({ env }) => {
+      receive(['--channel', 'system', '--no-reply', '--content', 'msg1'], env);
+      // Checkpoint created without --summary → summary is null.
+      checkpoint(['create', '1'], env);
+      receive(['--channel', 'system', '--no-reply', '--content', 'msg2'], env);
+
+      const { stdout, status } = cli([], env);
+      assert.equal(status, 0);
+      // The checkpoint block must still appear (not silently vanish).
+      assert.ok(stdout.includes('=== LAST CHECKPOINT ==='));
+      assert.ok(stdout.includes('no summary'));
+      // And it must NOT masquerade as a summary block.
+      assert.ok(!stdout.includes('=== LAST CHECKPOINT SUMMARY ==='));
     });
   });
 
@@ -76,11 +95,13 @@ describe('c4-session-init', () => {
 
       const { stdout, status } = cli([], env);
       assert.equal(status, 0);
+      assert.ok(stdout.includes('=== RECENT CONVERSATIONS ==='));
+      assert.ok(stdout.includes('=== END RECENT CONVERSATIONS ==='));
       assert.ok(stdout.includes('msg1'));
       assert.ok(stdout.includes('msg2'));
       assert.ok(stdout.includes('msg3'));
       // Should NOT trigger Memory Sync instruction
-      assert.ok(!stdout.includes('Action Required'));
+      assert.ok(!stdout.includes('ACTION REQUIRED'));
     });
   });
 
@@ -93,13 +114,13 @@ describe('c4-session-init', () => {
 
       const { stdout, status } = cli([], env);
       assert.equal(status, 0);
-      assert.ok(stdout.includes('Action Required'));
+      assert.ok(stdout.includes('=== ACTION REQUIRED ==='));
       assert.ok(stdout.includes('zylos-memory'));
       // Should show limited conversations (SESSION_INIT_RECENT_COUNT = 6)
       assert.ok(stdout.includes('msg31'));
       assert.ok(stdout.includes('msg26'));
       // msg1 should NOT be included (limited to recent)
-      assert.ok(!stdout.includes('[Recent Conversations]\nmsg1') && !stdout.match(/IN \(system\):\nmsg1\n/));
+      assert.ok(!stdout.match(/IN \(system\):\nmsg1\n/));
     });
   });
 });

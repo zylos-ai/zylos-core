@@ -8,6 +8,7 @@
 
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { formatSection } from '../../comm-bridge/scripts/session-format.js';
 
 export const DEFAULT_TOTAL_BUDGET_MS = 17_000;
 export const STEP_BUDGETS_MS = {
@@ -134,6 +135,16 @@ export async function runStep({
   } catch (error) {
     const timedOut = /timed out/.test(String(error?.message || error));
     console.error(`[session-start-orchestrator] step "${name}" ${timedOut ? 'timed out' : 'failed'} (${Date.now() - startMs}ms): ${error?.message || error}`);
+    // For context-producing steps, make the failure visible in the injected
+    // stream instead of silently dropping the section — otherwise a failed
+    // step reads as "this context simply doesn't exist".
+    if (writeStdout) {
+      const notice = formatSection(
+        `${name.toUpperCase()} UNAVAILABLE`,
+        `session-start step "${name}" ${timedOut ? 'timed out' : 'failed'}: ${error?.message || error}`,
+      );
+      writeAllSync(stdout.fd ?? 1, `${notice}\n`, { writeSync });
+    }
     await logStep({
       name,
       source,

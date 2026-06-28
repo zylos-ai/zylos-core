@@ -9,6 +9,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { MEMORY_DIR } from './shared.js';
+import { formatSection } from '../../comm-bridge/scripts/session-format.js';
 
 let diagnosticModule;
 let diagnosticLoadAttempted = false;
@@ -46,16 +47,8 @@ function readFileSafe(filePath) {
 
 function section(label, filePath) {
   const result = readFileSafe(filePath);
-  const lines = [`=== ${label} ===`];
-
-  if (result.ok) {
-    const text = (result.content || '').trim();
-    lines.push(text.length > 0 ? text : '(empty)');
-  } else {
-    lines.push(`(${result.reason})`);
-  }
-
-  return lines.join('\n');
+  const content = result.ok ? (result.content || '') : `(${result.reason})`;
+  return formatSection(label, content);
 }
 
 export function injectMemory() {

@@ -1,8 +1,12 @@
 #!/usr/bin/env node
 /**
  * C4 Communication Bridge - Session Init
- * Called by session start hook. Outputs context prompt for Claude Code:
- * - Last checkpoint summary (always)
+ * Called by session start hook. Outputs context prompt for Claude Code as
+ * uniform `=== LABEL ===` blocks (see session-format.js), shared with the
+ * memory injection step so the combined session-start context reads
+ * consistently:
+ * - Last checkpoint (summary if present, else a `(no summary …)` fallback so
+ *   the block never silently disappears when a checkpoint has a null summary)
  * - Unsummarized conversations (all if ≤ threshold, last N if > threshold)
  * - Memory Sync instruction (only if > threshold)
  *
@@ -10,6 +14,7 @@
  */
 
 import { logHookTiming } from './c4-diagnostic.js';
+import { formatSection } from './session-format.js';
 import { fileURLToPath } from 'node:url';
 
 export async function initC4Session() {
@@ -27,17 +32,24 @@ export async function initC4Session() {
 
     const checkpoint = getLastCheckpoint();
     const range = getUnsummarizedRange();
-    const lines = [];
+    const sections = [];
 
-    // Always output last checkpoint summary
-    if (checkpoint?.summary) {
-      lines.push(`[Last Checkpoint Summary] ${checkpoint.summary}`);
-      lines.push('');
+    // Always surface the last checkpoint. Summary present → show it; summary
+    // null → emit a fallback so the block never silently disappears.
+    if (checkpoint) {
+      if (checkpoint.summary) {
+        sections.push(formatSection('LAST CHECKPOINT SUMMARY', checkpoint.summary));
+      } else {
+        sections.push(formatSection(
+          'LAST CHECKPOINT',
+          `(no summary — checkpoint #${checkpoint.id}, ${checkpoint.timestamp})`,
+        ));
+      }
     }
 
     if (range.count === 0) {
-      lines.push('No new conversations since last checkpoint.');
-      return `${lines.join('\n')}\n`;
+      sections.push(formatSection('RECENT CONVERSATIONS', 'No new conversations since last checkpoint.'));
+      return `${sections.join('\n\n')}\n`;
     }
 
     const needsSync = range.count > CHECKPOINT_THRESHOLD;
@@ -47,15 +59,17 @@ export async function initC4Session() {
       ? getUnsummarizedConversations(SESSION_INIT_RECENT_COUNT)
       : getUnsummarizedConversations();
 
-    lines.push('[Recent Conversations]');
-    lines.push(formatConversations(conversations));
+    sections.push(formatSection('RECENT CONVERSATIONS', formatConversations(conversations)));
 
     // If over threshold, append Memory Sync instruction
     if (needsSync) {
-      lines.push(`[Action Required] There are ${range.count} unsummarized conversations (conversation id ${range.begin_id} ~ ${range.end_id}). Please use zylos-memory skill to process them.`);
+      sections.push(formatSection(
+        'ACTION REQUIRED',
+        `There are ${range.count} unsummarized conversations (conversation id ${range.begin_id} ~ ${range.end_id}). Please use zylos-memory skill to process them.`,
+      ));
     }
 
-    return `${lines.join('\n')}\n`;
+    return `${sections.join('\n\n')}\n`;
   } catch (err) {
     const wrapped = new Error(`Error in session init: ${err.message}`);
     wrapped.cause = err;
