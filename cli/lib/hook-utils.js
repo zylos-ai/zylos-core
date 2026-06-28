@@ -29,18 +29,15 @@ export function extractScriptPath(command) {
 }
 
 /**
- * Return the canonical key used to compare hook script identity. The key is a
- * normalized path suffix rooted at the zylos-owned skills directory when
- * possible, so equivalent absolute and ~/ commands compare equal.
+ * Return the canonical key used to compare hook script identity. Only hooks
+ * under the zylos-owned .claude directory are reduced to registry suffixes;
+ * other paths keep their full normalized path to avoid user hook collisions.
  */
 export function hookScriptKey(command) {
   const scriptPath = extractScriptPath(command).replaceAll('\\', '/').split(path.sep).join('/');
   const marker = '/.claude/';
   const markerIndex = scriptPath.indexOf(marker);
   if (markerIndex !== -1) return scriptPath.slice(markerIndex + marker.length);
-
-  const skillsIndex = scriptPath.indexOf('skills/');
-  if (skillsIndex !== -1) return scriptPath.slice(skillsIndex);
 
   return scriptPath;
 }

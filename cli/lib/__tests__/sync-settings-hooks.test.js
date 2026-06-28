@@ -576,6 +576,17 @@ describe('hookScriptKey', () => {
       'skills/activity-monitor/scripts/session-start-orchestrator.js'
     );
   });
+
+  it('keeps non-.claude paths as full normalized paths even when they contain skills suffixes', () => {
+    assert.equal(
+      hookScriptKey('node /opt/custom/skills/activity-monitor/scripts/session-start-orchestrator.js --mine'),
+      '/opt/custom/skills/activity-monitor/scripts/session-start-orchestrator.js'
+    );
+    assert.equal(
+      hookScriptKey('node /opt/custom/skills/zylos-memory/scripts/session-start-inject.js'),
+      '/opt/custom/skills/zylos-memory/scripts/session-start-inject.js'
+    );
+  });
 });
 
 describe('core hook registry', () => {
@@ -690,6 +701,36 @@ describe('syncHooks SessionStart orchestrator convergence', () => {
     assert.ok(startup.hooks.some(h => h.command?.includes('/custom/my-session-start.js')));
     assert.ok(startup.hooks.some(h => h.type === 'prompt'));
     assert.equal(startup.hooks.some(h => h.command?.includes('session-start-inject.js')), false);
+  });
+
+  it('does not claim non-.claude user hooks whose suffix collides with current or retired registry keys', () => {
+    const installed = {
+      hooks: {
+        SessionStart: [
+          {
+            matcher: 'startup',
+            hooks: [
+              makeHook('/opt/custom/skills/activity-monitor/scripts/session-start-orchestrator.js --mine', 9000),
+              makeHook('/opt/custom/skills/zylos-memory/scripts/session-start-inject.js', 7000),
+            ],
+          },
+        ],
+      },
+    };
+
+    const result = syncHooks(installed, makeOrchestratorTemplate(), { log: noopLog });
+
+    const startup = installed.hooks.SessionStart.find(group => group.matcher === 'startup');
+    assert.equal(result.updated, 0);
+    assert.equal(result.removed, 0);
+    assert.ok(startup.hooks.some(h =>
+      h.command === 'node /opt/custom/skills/activity-monitor/scripts/session-start-orchestrator.js --mine' &&
+      h.timeout === 9000
+    ));
+    assert.ok(startup.hooks.some(h =>
+      h.command === 'node /opt/custom/skills/zylos-memory/scripts/session-start-inject.js' &&
+      h.timeout === 7000
+    ));
   });
 
   it('is idempotent when installed hooks already match the template', () => {
