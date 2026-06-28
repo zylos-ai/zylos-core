@@ -7,13 +7,17 @@
  * not just given passive context.
  */
 
-import { execFileSync } from 'child_process';
+import { execFile } from 'child_process';
+import { promisify } from 'node:util';
 import path from 'path';
 import os from 'os';
+import { fileURLToPath } from 'node:url';
 
-const startMs = Date.now();
+const execFileAsync = promisify(execFile);
+
 const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
 const C4_CONTROL = path.join(ZYLOS_DIR, '.claude/skills/comm-bridge/scripts/c4-control.js');
+const DEFAULT_CHILD_TIMEOUT_MS = 2500;
 let diagnosticModule;
 let diagnosticLoadAttempted = false;
 
@@ -43,18 +47,32 @@ async function logHookTimingSafe(name, durationMs) {
 function readStdinSource() {
   return new Promise((resolve) => {
     let input = '';
-    process.stdin.setEncoding('utf8');
-    process.stdin.on('data', chunk => { input += chunk; });
-    process.stdin.on('end', () => {
+    let done = false;
+    const cleanup = () => {
+      clearTimeout(timer);
+      process.stdin.off('data', onData);
+      process.stdin.off('end', onEnd);
+    };
+    const finish = (value) => {
+      if (done) return;
+      done = true;
+      cleanup();
+      resolve(value);
+    };
+    const onData = chunk => { input += chunk; };
+    const onEnd = () => {
       try {
-        const data = JSON.parse(input);
-        resolve(data.source || null);
+        const data = JSON.parse(input || '{}');
+        finish(data.source || null);
       } catch {
-        resolve(null);
+        finish(null);
       }
-    });
-    // If stdin is already closed or empty, resolve after a short timeout
-    setTimeout(() => resolve(null), 500);
+    };
+    const timer = setTimeout(() => finish(null), 500);
+    timer.unref?.();
+    process.stdin.setEncoding('utf8');
+    process.stdin.on('data', onData);
+    process.stdin.on('end', onEnd);
   });
 }
 
@@ -64,19 +82,36 @@ const prompt = [
   'and do not query c4.db for recent conversations unless explicitly required.'
 ].join(' ');
 
+export async function enqueueStartupPrompt(source, {
+  execFile = execFileAsync,
+  controlPath = C4_CONTROL,
+  childTimeoutMs = DEFAULT_CHILD_TIMEOUT_MS,
+} = {}) {
+  // Async execFile (not execFileSync): keeps the event loop free so this step
+  // genuinely runs in parallel with the foreground step, and so the
+  // orchestrator's per-step withTimeout budget can actually preempt it.
+  // The child's own timeout + SIGKILL remains the hard backstop (bounds the
+  // #601-class enqueue hang even if the orchestrator budget is generous).
+  await execFile('node', [
+    controlPath, 'enqueue',
+    '--content', prompt,
+    '--priority', '2',
+    '--no-ack-suffix'
+  ], {
+    timeout: childTimeoutMs,
+    killSignal: 'SIGKILL',
+  });
+}
+
 async function main() {
+  const startMs = Date.now();
   const source = await readStdinSource();
   const hookName = source
     ? `session-start-prompt[${source}]`
     : 'session-start-prompt';
 
   try {
-    execFileSync('node', [
-      C4_CONTROL, 'enqueue',
-      '--content', prompt,
-      '--priority', '2',
-      '--no-ack-suffix'
-    ], { stdio: 'pipe' });
+    await enqueueStartupPrompt(source);
   } catch {
     // Silently fail — session still starts even if enqueue fails
   } finally {
@@ -84,6 +119,8 @@ async function main() {
   }
 }
 
-main().catch(() => {
-  // Best-effort.
-});
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  main().catch(() => {
+    // Best-effort.
+  });
+}

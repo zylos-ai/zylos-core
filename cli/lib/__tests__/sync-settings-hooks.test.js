@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 const {
-  migrateMatcherSplit,
+  CORE_MANAGED_HOOKS,
+  isCoreManaged,
   persistInstalledSettingsAndSyncCoupledThreshold,
   shouldSyncCodexConfig,
   syncCodexConfig,
@@ -14,6 +16,7 @@ const {
   syncTemplateSetting,
   syncTemplateModelSetting,
 } = await import('../sync-settings-hooks.js');
+const { extractScriptPath, getCommandHooks, hookScriptKey } = await import('../hook-utils.js');
 const {
   renderCodexGlobalConfig,
   renderCodexProjectConfig,
@@ -22,6 +25,14 @@ const {
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const TEMPLATE_SETTINGS_PATH = path.join(__dirname, '..', '..', '..', 'templates', '.claude', 'settings.json');
 const CONTEXT_MONITOR_PATH = path.join(__dirname, '..', '..', '..', 'skills', 'activity-monitor', 'scripts', 'context-monitor.js');
+
+function fixtureZylosDir() {
+  return path.resolve(process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos'));
+}
+
+function zylosHookPath(relativePath) {
+  return path.join(fixtureZylosDir(), '.claude', relativePath).replaceAll('\\', '/');
+}
 
 describe('Claude settings template', () => {
   it('defaults fresh installs to Opus with 1M context (opus[1m])', () => {
@@ -35,13 +46,15 @@ describe('Claude settings template', () => {
     assert.equal(template.autoDreamEnabled, false);
   });
 
-  it('includes session-foreground hooks for all SessionStart matchers', () => {
+  it('uses the SessionStart orchestrator for all SessionStart matchers', () => {
     const template = JSON.parse(fs.readFileSync(TEMPLATE_SETTINGS_PATH, 'utf8'));
     const groups = template.hooks.SessionStart;
     assert.equal(groups.length, 3);
     for (const group of groups) {
       const commands = group.hooks.map(h => h.command);
-      assert.ok(commands.some(cmd => cmd.includes('session-foreground.js')));
+      assert.equal(group.hooks.length, 1);
+      assert.ok(commands.some(cmd => cmd.includes('session-start-orchestrator.js')));
+      assert.equal(group.hooks[0].timeout, 20000);
     }
   });
 
@@ -222,6 +235,8 @@ describe('syncModelCoupledNewSessionThreshold', () => {
 });
 
 describe('persistInstalledSettingsAndSyncCoupledThreshold', () => {
+  const normalizeBackupPath = (filePath) => filePath.replace(/\.bak\.\d+$/, '.bak.<ts>');
+
   it('writes settings before syncing the paired threshold', () => {
     const calls = [];
     const result = persistInstalledSettingsAndSyncCoupledThreshold({
@@ -241,6 +256,86 @@ describe('persistInstalledSettingsAndSyncCoupledThreshold', () => {
       ['mkdir', '/tmp/zylos/.claude', { recursive: true }],
       ['writeSettings', '/tmp/zylos/.claude/settings.json', { model: 'opus[1m]' }],
       ['syncThreshold', true],
+    ]);
+  });
+
+  it('backs up existing settings before writing', () => {
+    const calls = [];
+    persistInstalledSettingsAndSyncCoupledThreshold({
+      installedSettings: { hooks: {} },
+      settingsPath: '/tmp/zylos/.claude/settings.json',
+      mkdirSync: (dir, opts) => calls.push(['mkdir', dir, opts]),
+      existsSync: () => true,
+      copyFileSync: (from, to) => calls.push(['copy', normalizeBackupPath(from), normalizeBackupPath(to)]),
+      writeFileSync: (filePath, content) => calls.push(['writeSettings', filePath, JSON.parse(content)]),
+      syncThreshold: () => ({ changed: false }),
+    });
+
+    assert.deepEqual(calls, [
+      ['mkdir', '/tmp/zylos/.claude', { recursive: true }],
+      ['copy', '/tmp/zylos/.claude/settings.json', '/tmp/zylos/.claude/settings.json.bak.<ts>'],
+      ['writeSettings', '/tmp/zylos/.claude/settings.json', { hooks: {} }],
+    ]);
+  });
+
+  it('prunes old .bak backups after a successful write, keeping the newest N', () => {
+    const unlinked = [];
+    persistInstalledSettingsAndSyncCoupledThreshold({
+      installedSettings: { hooks: {} },
+      settingsPath: '/tmp/zylos/.claude/settings.json',
+      maxBackups: 3,
+      mkdirSync: () => {},
+      existsSync: () => true,
+      copyFileSync: () => {},
+      writeFileSync: () => {},
+      readdirSync: () => [
+        'settings.json',
+        'settings.json.bak.100',
+        'settings.json.bak.500',
+        'settings.json.bak.300',
+        'settings.json.bak.200',
+        'settings.json.bak.400',
+        'other.json.bak.999',
+      ],
+      unlinkSync: (p) => unlinked.push(p),
+      syncThreshold: () => ({ changed: false }),
+    });
+
+    // newest 3 (500,400,300) kept; oldest 2 (200,100) removed; unrelated file untouched
+    assert.deepEqual(unlinked.sort(), [
+      '/tmp/zylos/.claude/settings.json.bak.100',
+      '/tmp/zylos/.claude/settings.json.bak.200',
+    ]);
+  });
+
+  it('does not fail the write when backup pruning throws', () => {
+    assert.doesNotThrow(() => persistInstalledSettingsAndSyncCoupledThreshold({
+      installedSettings: { hooks: {} },
+      settingsPath: '/tmp/zylos/.claude/settings.json',
+      mkdirSync: () => {},
+      existsSync: () => true,
+      copyFileSync: () => {},
+      writeFileSync: () => {},
+      readdirSync: () => { throw new Error('ENOENT'); },
+      syncThreshold: () => ({ changed: false }),
+    }));
+  });
+
+  it('restores the backup when writing settings fails', () => {
+    const calls = [];
+    assert.throws(() => persistInstalledSettingsAndSyncCoupledThreshold({
+      installedSettings: { hooks: {} },
+      settingsPath: '/tmp/zylos/.claude/settings.json',
+      mkdirSync: () => {},
+      existsSync: () => true,
+      copyFileSync: (from, to) => calls.push(['copy', normalizeBackupPath(from), normalizeBackupPath(to)]),
+      writeFileSync: () => { throw new Error('disk full'); },
+      syncThreshold: () => { throw new Error('should not sync threshold after failed write'); },
+    }), /disk full/);
+
+    assert.deepEqual(calls, [
+      ['copy', '/tmp/zylos/.claude/settings.json', '/tmp/zylos/.claude/settings.json.bak.<ts>'],
+      ['copy', '/tmp/zylos/.claude/settings.json.bak.<ts>', '/tmp/zylos/.claude/settings.json'],
     ]);
   });
 });
@@ -429,267 +524,297 @@ function makeMatcherGroup(matcher, scriptPaths) {
   };
 }
 
-// --- migrateMatcherSplit tests ---
-describe('migrateMatcherSplit', () => {
+function makeStandardOldSessionStartGroup(matcher) {
+  return {
+    matcher,
+    hooks: [
+      makeHook(zylosHookPath('skills/zylos-memory/scripts/session-start-inject.js'), 10000),
+      makeHook(zylosHookPath('skills/comm-bridge/scripts/c4-session-init.js'), 10000),
+      makeHook(zylosHookPath('skills/activity-monitor/scripts/session-foreground.js'), 5000),
+      makeHook(zylosHookPath('skills/activity-monitor/scripts/session-start-prompt.js'), 5000),
+    ],
+  };
+}
+
+function makeDriftedOldSessionStartGroup(matcher) {
+  const group = makeStandardOldSessionStartGroup(matcher);
+  return {
+    matcher,
+    hooks: [
+      group.hooks[0],
+      group.hooks[1],
+      group.hooks[3],
+      group.hooks[2],
+    ],
+  };
+}
+
+function makeOrchestratorTemplate() {
+  return {
+    hooks: {
+      SessionStart: ['startup', 'clear', 'compact'].map(matcher => ({
+        matcher,
+        hooks: [
+          makeHook(zylosHookPath('skills/activity-monitor/scripts/session-start-orchestrator.js'), 20000),
+        ],
+      })),
+    },
+  };
+}
+
+function assertSessionStartUsesOrchestrator(settings) {
+  assert.equal(settings.hooks.SessionStart.length, 3);
+  for (const group of settings.hooks.SessionStart) {
+    assert.equal(group.hooks.length, 1);
+    assert.match(group.hooks[0].command, /session-start-orchestrator\.js/);
+    assert.equal(group.hooks[0].timeout, 20000);
+  }
+}
+
+describe('extractScriptPath', () => {
+  it('takes the interpreter script argument instead of later path-like arguments', () => {
+    assert.equal(extractScriptPath('node x.js /tmp/y.js'), 'x.js');
+  });
+
+  it('uses the last shell segment so source prefixes do not win', () => {
+    assert.equal(
+      extractScriptPath('source ~/.nvm/nvm.sh && node ~/zylos/.claude/skills/a/scripts/b.js'),
+      path.join(os.homedir(), 'zylos/.claude/skills/a/scripts/b.js')
+    );
+  });
+
+  it('skips interpreter flags before the script argument', () => {
+    assert.equal(
+      extractScriptPath('node --trace-warnings ~/zylos/.claude/skills/a/scripts/b.js --mode startup'),
+      path.join(os.homedir(), 'zylos/.claude/skills/a/scripts/b.js')
+    );
+  });
+
+  it('keeps quoted paths with spaces as one script argument', () => {
+    const scriptPath = zylosHookPath('skills/a dir/scripts/b.js');
+    assert.equal(
+      extractScriptPath(`node "${scriptPath}" /tmp/y.js`),
+      scriptPath
+    );
+  });
+});
+
+describe('hookScriptKey', () => {
+  it('normalizes absolute, home-relative, and backslash zylos-root script paths to the same registry key', () => {
+    assert.equal(
+      hookScriptKey('node ~/zylos/.claude/skills/activity-monitor/scripts/session-start-orchestrator.js'),
+      'skills/activity-monitor/scripts/session-start-orchestrator.js'
+    );
+    assert.equal(
+      hookScriptKey(`node ${zylosHookPath('skills/activity-monitor/scripts/session-start-orchestrator.js')}`),
+      'skills/activity-monitor/scripts/session-start-orchestrator.js'
+    );
+    assert.equal(
+      hookScriptKey(`node ${zylosHookPath('skills/activity-monitor/scripts/session-start-orchestrator.js').replaceAll('/', '\\')}`),
+      'skills/activity-monitor/scripts/session-start-orchestrator.js'
+    );
+  });
+
+  it('keeps paths outside the zylos .claude root as full normalized paths even when suffixes collide', () => {
+    assert.equal(
+      hookScriptKey('node /opt/custom/skills/activity-monitor/scripts/session-start-orchestrator.js --mine'),
+      '/opt/custom/skills/activity-monitor/scripts/session-start-orchestrator.js'
+    );
+    assert.equal(
+      hookScriptKey('node /opt/custom/skills/zylos-memory/scripts/session-start-inject.js'),
+      '/opt/custom/skills/zylos-memory/scripts/session-start-inject.js'
+    );
+    assert.equal(
+      hookScriptKey('node ~/.claude/skills/activity-monitor/scripts/session-start-orchestrator.js'),
+      `${os.homedir()}/.claude/skills/activity-monitor/scripts/session-start-orchestrator.js`
+    );
+    assert.equal(
+      isCoreManaged({ type: 'command', command: 'node ~/.claude/skills/activity-monitor/scripts/session-start-orchestrator.js' }),
+      false
+    );
+  });
+
+  it('resolves relative ZYLOS_DIR before checking the zylos .claude root', () => {
+    const previousZylosDir = process.env.ZYLOS_DIR;
+    process.env.ZYLOS_DIR = 'relative-zylos';
+    try {
+      const absoluteCoreHook = path.resolve(
+        'relative-zylos/.claude/skills/activity-monitor/scripts/session-start-orchestrator.js'
+      );
+      assert.equal(
+        hookScriptKey(`node ${absoluteCoreHook}`),
+        'skills/activity-monitor/scripts/session-start-orchestrator.js'
+      );
+      assert.equal(
+        isCoreManaged({ type: 'command', command: `node ${absoluteCoreHook}` }),
+        true
+      );
+    } finally {
+      if (previousZylosDir === undefined) {
+        delete process.env.ZYLOS_DIR;
+      } else {
+        process.env.ZYLOS_DIR = previousZylosDir;
+      }
+    }
+  });
+});
+
+describe('core hook registry', () => {
+  it('includes every command hook in the settings template', () => {
+    const template = JSON.parse(fs.readFileSync(TEMPLATE_SETTINGS_PATH, 'utf8'));
+    const templateKeys = new Set();
+
+    for (const groups of Object.values(template.hooks || {})) {
+      if (!Array.isArray(groups)) continue;
+      for (const group of groups) {
+        for (const hook of getCommandHooks(group)) {
+          templateKeys.add(hookScriptKey(hook.command));
+        }
+      }
+    }
+
+    for (const key of templateKeys) {
+      assert.equal(CORE_MANAGED_HOOKS.has(key), true, `${key} missing from CORE_MANAGED_HOOKS`);
+    }
+  });
+});
+
+describe('syncHooks SessionStart orchestrator convergence', () => {
   const noopLog = () => {};
 
-  it('splits a catch-all into specific matchers', () => {
+  it('converges standard old SessionStart groups through generic sync', () => {
+    const installed = {
+      hooks: {
+        SessionStart: ['startup', 'clear', 'compact'].map(makeStandardOldSessionStartGroup),
+      },
+    };
+
+    const result = syncHooks(installed, makeOrchestratorTemplate(), { log: noopLog });
+
+    assert.deepEqual(result, { added: 3, updated: 0, removed: 12 });
+    assertSessionStartUsesOrchestrator(installed);
+  });
+
+  it('converges order-drifted old SessionStart groups', () => {
+    const installed = {
+      hooks: {
+        SessionStart: ['startup', 'clear', 'compact'].map(makeDriftedOldSessionStartGroup),
+      },
+    };
+
+    syncHooks(installed, makeOrchestratorTemplate(), { log: noopLog });
+
+    assertSessionStartUsesOrchestrator(installed);
+  });
+
+  it('converges timeout-drifted and partial old SessionStart groups', () => {
     const installed = {
       hooks: {
         SessionStart: [
-          makeMatcherGroup('', ['/skills/a/scripts/a.js', '/skills/b/scripts/b.js']),
-        ],
-      },
-    };
-    const template = {
-      hooks: {
-        SessionStart: [
-          makeMatcherGroup('startup', ['/skills/a/scripts/a.js', '/skills/b/scripts/b.js']),
-          makeMatcherGroup('clear', ['/skills/a/scripts/a.js', '/skills/b/scripts/b.js']),
-          makeMatcherGroup('compact', ['/skills/a/scripts/a.js', '/skills/b/scripts/b.js']),
+          {
+            matcher: 'startup',
+            hooks: [
+              makeHook(zylosHookPath('skills/zylos-memory/scripts/session-start-inject.js'), 9000),
+              makeHook(zylosHookPath('skills/comm-bridge/scripts/c4-session-init.js'), 10000),
+              makeHook(zylosHookPath('skills/activity-monitor/scripts/session-start-prompt.js'), 5000),
+            ],
+          },
+          makeStandardOldSessionStartGroup('clear'),
+          makeStandardOldSessionStartGroup('compact'),
         ],
       },
     };
 
-    const count = migrateMatcherSplit(installed, template, { log: noopLog });
+    syncHooks(installed, makeOrchestratorTemplate(), { log: noopLog });
 
-    assert.equal(count, 3);
-    assert.equal(installed.hooks.SessionStart.length, 3);
-    const matchers = installed.hooks.SessionStart.map(g => g.matcher).sort();
-    assert.deepEqual(matchers, ['clear', 'compact', 'startup']);
-    for (const group of installed.hooks.SessionStart) {
-      assert.equal(group.hooks.length, 2);
-    }
+    assertSessionStartUsesOrchestrator(installed);
   });
 
-  it('skips when no catch-all exists in installed config', () => {
+  it('converges old catch-all SessionStart group to specific orchestrator matchers', () => {
     const installed = {
       hooks: {
         SessionStart: [
-          makeMatcherGroup('startup', ['/skills/a/scripts/a.js']),
-        ],
-      },
-    };
-    const template = {
-      hooks: {
-        SessionStart: [
-          makeMatcherGroup('startup', ['/skills/a/scripts/a.js']),
-          makeMatcherGroup('clear', ['/skills/a/scripts/a.js']),
+          {
+            matcher: '',
+            hooks: makeStandardOldSessionStartGroup('').hooks,
+          },
         ],
       },
     };
 
-    const count = migrateMatcherSplit(installed, template, { log: noopLog });
-    assert.equal(count, 0);
-    assert.equal(installed.hooks.SessionStart.length, 1);
+    syncHooks(installed, makeOrchestratorTemplate(), { log: noopLog });
+
+    assertSessionStartUsesOrchestrator(installed);
+    assert.equal(installed.hooks.SessionStart.some(group => group.matcher === ''), false);
   });
 
-  it('skips when template also has a catch-all', () => {
+  it('preserves user command hooks and non-command hooks while removing retired core hooks', () => {
     const installed = {
       hooks: {
         SessionStart: [
-          makeMatcherGroup('', ['/skills/a/scripts/a.js']),
-        ],
-      },
-    };
-    const template = {
-      hooks: {
-        SessionStart: [
-          makeMatcherGroup('', ['/skills/a/scripts/a.js']),
+          {
+            matcher: 'startup',
+            hooks: [
+              ...makeStandardOldSessionStartGroup('startup').hooks,
+              makeHook('/custom/my-session-start.js', 5000),
+              { type: 'prompt', prompt: 'keep me' },
+            ],
+          },
         ],
       },
     };
 
-    const count = migrateMatcherSplit(installed, template, { log: noopLog });
-    assert.equal(count, 0);
+    syncHooks(installed, makeOrchestratorTemplate(), { log: noopLog });
+
+    const startup = installed.hooks.SessionStart.find(group => group.matcher === 'startup');
+    assert.ok(startup.hooks.some(h => h.command?.includes('session-start-orchestrator.js')));
+    assert.ok(startup.hooks.some(h => h.command?.includes('/custom/my-session-start.js')));
+    assert.ok(startup.hooks.some(h => h.type === 'prompt'));
+    assert.equal(startup.hooks.some(h => h.command?.includes('session-start-inject.js')), false);
   });
 
-  it('skips when catch-all has user hooks not in template', () => {
+  it('does not claim user hooks outside the zylos .claude root whose suffix collides with current or retired registry keys', () => {
     const installed = {
       hooks: {
         SessionStart: [
-          makeMatcherGroup('', ['/skills/a/scripts/a.js', '/custom/user-hook.js']),
-        ],
-      },
-    };
-    const template = {
-      hooks: {
-        SessionStart: [
-          makeMatcherGroup('startup', ['/skills/a/scripts/a.js']),
-          makeMatcherGroup('clear', ['/skills/a/scripts/a.js']),
+          {
+            matcher: 'startup',
+            hooks: [
+              makeHook('/opt/custom/skills/activity-monitor/scripts/session-start-orchestrator.js --mine', 9000),
+              makeHook('/opt/custom/skills/zylos-memory/scripts/session-start-inject.js', 7000),
+              { type: 'command', command: 'node ~/.claude/skills/activity-monitor/scripts/session-start-orchestrator.js --foreign', timeout: 6000 },
+            ],
+          },
         ],
       },
     };
 
-    const count = migrateMatcherSplit(installed, template, { log: noopLog });
-    assert.equal(count, 0);
-    assert.equal(installed.hooks.SessionStart.length, 1);
-    assert.equal(installed.hooks.SessionStart[0].matcher, '');
+    const result = syncHooks(installed, makeOrchestratorTemplate(), { log: noopLog });
+
+    const startup = installed.hooks.SessionStart.find(group => group.matcher === 'startup');
+    assert.equal(result.updated, 0);
+    assert.equal(result.removed, 0);
+    assert.ok(startup.hooks.some(h =>
+      h.command === 'node /opt/custom/skills/activity-monitor/scripts/session-start-orchestrator.js --mine' &&
+      h.timeout === 9000
+    ));
+    assert.ok(startup.hooks.some(h =>
+      h.command === 'node /opt/custom/skills/zylos-memory/scripts/session-start-inject.js' &&
+      h.timeout === 7000
+    ));
+    assert.ok(startup.hooks.some(h =>
+      h.command === 'node ~/.claude/skills/activity-monitor/scripts/session-start-orchestrator.js --foreign' &&
+      h.timeout === 6000
+    ));
   });
 
-  it('does not duplicate matchers that already exist', () => {
-    const installed = {
-      hooks: {
-        SessionStart: [
-          makeMatcherGroup('', ['/skills/a/scripts/a.js']),
-          makeMatcherGroup('startup', ['/skills/a/scripts/a.js']),
-        ],
-      },
-    };
-    const template = {
-      hooks: {
-        SessionStart: [
-          makeMatcherGroup('startup', ['/skills/a/scripts/a.js']),
-          makeMatcherGroup('clear', ['/skills/a/scripts/a.js']),
-          makeMatcherGroup('compact', ['/skills/a/scripts/a.js']),
-        ],
-      },
-    };
+  it('is idempotent when installed hooks already match the template', () => {
+    const installed = JSON.parse(JSON.stringify(makeOrchestratorTemplate()));
 
-    const count = migrateMatcherSplit(installed, template, { log: noopLog });
-    assert.equal(count, 3);
-    assert.equal(installed.hooks.SessionStart.length, 3);
-    const matchers = installed.hooks.SessionStart.map(g => g.matcher).sort();
-    assert.deepEqual(matchers, ['clear', 'compact', 'startup']);
-  });
+    const result = syncHooks(installed, makeOrchestratorTemplate(), { log: noopLog });
 
-  it('dryRun does not modify installed config', () => {
-    const installed = {
-      hooks: {
-        SessionStart: [
-          makeMatcherGroup('', ['/skills/a/scripts/a.js']),
-        ],
-      },
-    };
-    const template = {
-      hooks: {
-        SessionStart: [
-          makeMatcherGroup('startup', ['/skills/a/scripts/a.js']),
-          makeMatcherGroup('clear', ['/skills/a/scripts/a.js']),
-        ],
-      },
-    };
-
-    const count = migrateMatcherSplit(installed, template, { dryRun: true, log: noopLog });
-    assert.equal(count, 2);
-    assert.equal(installed.hooks.SessionStart.length, 1);
-    assert.equal(installed.hooks.SessionStart[0].matcher, '');
-  });
-
-  it('handles undefined matcher as catch-all', () => {
-    const installed = {
-      hooks: {
-        SessionStart: [
-          { hooks: [makeHook('/skills/a/scripts/a.js')] },
-        ],
-      },
-    };
-    const template = {
-      hooks: {
-        SessionStart: [
-          makeMatcherGroup('startup', ['/skills/a/scripts/a.js']),
-        ],
-      },
-    };
-
-    const count = migrateMatcherSplit(installed, template, { log: noopLog });
-    assert.equal(count, 1);
-    assert.equal(installed.hooks.SessionStart.length, 1);
-    assert.equal(installed.hooks.SessionStart[0].matcher, 'startup');
-  });
-
-  it('preserves hook content (command, timeout) during split', () => {
-    const installed = {
-      hooks: {
-        SessionStart: [{
-          matcher: '',
-          hooks: [
-            { type: 'command', command: 'node /skills/a/scripts/a.js', timeout: 5000 },
-            { type: 'command', command: 'node /skills/b/scripts/b.js', timeout: 15000 },
-          ],
-        }],
-      },
-    };
-    const template = {
-      hooks: {
-        SessionStart: [
-          makeMatcherGroup('startup', ['/skills/a/scripts/a.js', '/skills/b/scripts/b.js']),
-          makeMatcherGroup('clear', ['/skills/a/scripts/a.js', '/skills/b/scripts/b.js']),
-        ],
-      },
-    };
-
-    migrateMatcherSplit(installed, template, { log: noopLog });
-
-    for (const group of installed.hooks.SessionStart) {
-      assert.equal(group.hooks[0].timeout, 5000);
-      assert.equal(group.hooks[1].timeout, 15000);
-      assert.ok(group.hooks[0].command.includes('a.js'));
-      assert.ok(group.hooks[1].command.includes('b.js'));
-    }
-  });
-
-  it('handles empty hooks gracefully', () => {
-    const count1 = migrateMatcherSplit({}, {}, { log: noopLog });
-    assert.equal(count1, 0);
-
-    const count2 = migrateMatcherSplit({ hooks: {} }, { hooks: {} }, { log: noopLog });
-    assert.equal(count2, 0);
-  });
-
-  it('works across multiple events independently', () => {
-    const installed = {
-      hooks: {
-        SessionStart: [
-          makeMatcherGroup('', ['/skills/a/scripts/a.js']),
-        ],
-        Stop: [
-          makeMatcherGroup('', ['/skills/b/scripts/b.js']),
-        ],
-      },
-    };
-    const template = {
-      hooks: {
-        SessionStart: [
-          makeMatcherGroup('startup', ['/skills/a/scripts/a.js']),
-          makeMatcherGroup('clear', ['/skills/a/scripts/a.js']),
-        ],
-        Stop: [
-          makeMatcherGroup('success', ['/skills/b/scripts/b.js']),
-        ],
-      },
-    };
-
-    const count = migrateMatcherSplit(installed, template, { log: noopLog });
-    assert.equal(count, 3);
-    assert.equal(installed.hooks.SessionStart.length, 2);
-    assert.equal(installed.hooks.Stop.length, 1);
-    assert.equal(installed.hooks.Stop[0].matcher, 'success');
-  });
-
-  it('logs migration actions', () => {
-    const logs = [];
-    const installed = {
-      hooks: {
-        SessionStart: [
-          makeMatcherGroup('', ['/skills/a/scripts/a.js']),
-        ],
-      },
-    };
-    const template = {
-      hooks: {
-        SessionStart: [
-          makeMatcherGroup('startup', ['/skills/a/scripts/a.js']),
-          makeMatcherGroup('clear', ['/skills/a/scripts/a.js']),
-        ],
-      },
-    };
-
-    migrateMatcherSplit(installed, template, { log: (msg) => logs.push(msg) });
-    assert.equal(logs.length, 1);
-    assert.ok(logs[0].includes('SessionStart'));
-    assert.ok(logs[0].includes('startup'));
-    assert.ok(logs[0].includes('clear'));
+    assert.deepEqual(result, { added: 0, updated: 0, removed: 0 });
+    assertSessionStartUsesOrchestrator(installed);
   });
 });
 

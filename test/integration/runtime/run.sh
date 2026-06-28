@@ -12,6 +12,10 @@ REAL_CLAUDE_AUTH_FILE="$SCRIPT_DIR/real-claude-auth.local.env"
 # credential is provisioned as a gitignored seed file the operator copies from
 # their own ~/.codex/auth.json. Mounted into the container for real codex scenarios.
 REAL_CODEX_AUTH_FILE="$SCRIPT_DIR/real-codex-auth.local.json"
+# Claude Code authenticates from ~/.claude/.credentials.json (OAuth) or env vars.
+# For real-smoke scenarios that run `claude -p` (not just `zylos runtime`), the
+# OAuth credentials file must be mounted. Falls back to the operator's own file.
+REAL_CLAUDE_CREDS_FILE="${REAL_CLAUDE_CREDS_FILE:-$HOME/.claude/.credentials.json}"
 DEFAULT_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 FAKE_PATH="/runtime/bin:$DEFAULT_PATH"
 
@@ -58,6 +62,9 @@ has_claude_credentials() {
     grep -Eq '^(ANTHROPIC_API_KEY|CLAUDE_CODE_OAUTH_TOKEN)=.+' "$REAL_CLAUDE_AUTH_FILE"
     return $?
   fi
+
+  # OAuth credentials file (for scenarios that run `claude -p` directly)
+  [[ -f "$REAL_CLAUDE_CREDS_FILE" ]] && return 0
 
   [[ -n "${ANTHROPIC_API_KEY:-}" || -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]]
 }
@@ -162,6 +169,9 @@ run_one() {
   case "${RUNTIME_MODE:-fake}" in
     real)
       docker_args+=(-e "PATH=$DEFAULT_PATH")
+      # Use host networking so localhost-bound proxies (e.g. mihomo on
+      # 127.0.0.1:7890) are reachable from inside the container.
+      docker_args+=(--network host)
       # Forward host proxy settings so the in-container live probe reaches the
       # Anthropic API the same way the host does. The bare `-e NAME` form passes
       # the host value through when set and is a no-op when unset — so a host
@@ -191,6 +201,11 @@ run_one() {
       # genuine codex CLI then authenticates from it (apikey or chatgpt mode).
       if [[ -f "$REAL_CODEX_AUTH_FILE" ]]; then
         docker_args+=(-v "$REAL_CODEX_AUTH_FILE:/seed/codex-auth.json:ro")
+      fi
+      # Claude Code reads ~/.claude/.credentials.json for OAuth auth. Mount
+      # the operator's credentials so `claude -p` scenarios can authenticate.
+      if [[ -f "$REAL_CLAUDE_CREDS_FILE" ]]; then
+        docker_args+=(-v "$REAL_CLAUDE_CREDS_FILE:/seed/claude-credentials.json:ro")
       fi
       ;;
     fake|"")
@@ -226,6 +241,13 @@ mkdir -p "$HOME" "$ZYLOS_DIR/.zylos" "$ZYLOS_DIR/pm2"
 if [ -f /seed/codex-auth.json ]; then
   mkdir -p "$HOME/.codex"
   cp /seed/codex-auth.json "$HOME/.codex/auth.json"
+fi
+
+# Stage Claude Code OAuth credentials similarly. Claude reads
+# ~/.claude/.credentials.json for OAuth-based auth (claude.ai subscription).
+if [ -f /seed/claude-credentials.json ]; then
+  mkdir -p "$HOME/.claude"
+  cp /seed/claude-credentials.json "$HOME/.claude/.credentials.json"
 fi
 
 case "${SETUP:-minimal}" in

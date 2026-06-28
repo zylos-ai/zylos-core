@@ -3,6 +3,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { getClaudePid } from './claude-pid.js';
 
 const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
@@ -38,7 +39,7 @@ export function handleSessionForeground(payload, {
   return record;
 }
 
-if (process.env.SESSION_FOREGROUND_DISABLE_MAIN !== '1') {
+function runCli() {
   let input = '';
   process.stdin.setEncoding('utf8');
   process.stdin.on('data', (chunk) => {
@@ -52,4 +53,8 @@ if (process.env.SESSION_FOREGROUND_DISABLE_MAIN !== '1') {
       // Best-effort.
     }
   });
+}
+
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  runCli();
 }

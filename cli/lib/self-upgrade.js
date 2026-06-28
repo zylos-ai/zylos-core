@@ -13,7 +13,8 @@ import { downloadArchive, downloadBranch } from './download.js';
 import { generateManifest, saveManifest, saveOriginals } from './manifest.js';
 import { fetchRawFile, fetchLatestTag, compareSemverDesc, sanitizeError } from './github.js';
 import { copyTree, syncTree } from './fs-utils.js';
-import { extractScriptPath, extractSkillName, getCommandHooks } from './hook-utils.js';
+import { getCommandHooks, hookScriptKey } from './hook-utils.js';
+import { isCoreManaged } from './sync-settings-hooks.js';
 import { smartSync, formatMergeResult } from './smart-merge.js';
 import { getAllowedTmpRoots } from './upgrade.js';
 import { runMigrations } from './migrate.js';
@@ -426,18 +427,6 @@ export function generateMigrationHints(templatesDir, deps = {}) {
   const templateHooks = templateSettings.hooks || {};
   const installedHooks = installedSettings.hooks || {};
 
-  // Collect core skill names from template hooks (for removed_hook scoping)
-  const coreSkillNames = new Set();
-  for (const matchers of Object.values(templateHooks)) {
-    if (!Array.isArray(matchers)) continue;
-    for (const m of matchers) {
-      for (const h of getCommandHooks(m)) {
-        const name = extractSkillName(h.command);
-        if (name) coreSkillNames.add(name);
-      }
-    }
-  }
-
   // --- Forward pass: detect missing and modified hooks ---
   for (const [event, matchers] of Object.entries(templateHooks)) {
     if (!Array.isArray(matchers)) continue;
@@ -445,13 +434,13 @@ export function generateMigrationHints(templatesDir, deps = {}) {
 
     for (const matcher of matchers) {
       for (const templateCmd of getCommandHooks(matcher)) {
-        const templateKey = extractScriptPath(templateCmd.command);
+        const templateKey = hookScriptKey(templateCmd.command);
 
         // Find installed hook with the same script path
         let matched = null;
         for (const im of installedMatchers) {
           matched = getCommandHooks(im).find(
-            h => extractScriptPath(h.command) === templateKey
+            h => hookScriptKey(h.command) === templateKey
           );
           if (matched) break;
         }
@@ -528,15 +517,12 @@ export function generateMigrationHints(templatesDir, deps = {}) {
 
     for (const matcher of matchers) {
       for (const installedCmd of getCommandHooks(matcher)) {
-        // Only flag hooks from core skills to avoid false positives
-        // for optional component hooks
-        const skillName = extractSkillName(installedCmd.command);
-        if (!skillName || !coreSkillNames.has(skillName)) continue;
+        if (!isCoreManaged(installedCmd)) continue;
 
-        const installedKey = extractScriptPath(installedCmd.command);
+        const installedKey = hookScriptKey(installedCmd.command);
         const foundInTemplate = templateMatchers.some(tm =>
           getCommandHooks(tm).some(
-            h => extractScriptPath(h.command) === installedKey
+            h => hookScriptKey(h.command) === installedKey
           )
         );
 
@@ -952,14 +938,14 @@ export function applyMigrationHints(hints, deps = {}) {
         const matchers = settings.hooks[hint.event];
         if (!Array.isArray(matchers)) continue;
 
-        const oldScriptPath = extractScriptPath(hint.oldCommand);
+        const oldScriptKey = hookScriptKey(hint.oldCommand);
         let updated = false;
 
         for (const group of matchers) {
           if (!Array.isArray(group.hooks)) continue;
           for (let i = 0; i < group.hooks.length; i++) {
             const h = group.hooks[i];
-            if (h.type === 'command' && extractScriptPath(h.command) === oldScriptPath) {
+            if (h.type === 'command' && hookScriptKey(h.command) === oldScriptKey) {
               // Update command and timeout
               group.hooks[i].command = hint.command;
               if (hint.timeout !== undefined) {
@@ -1001,7 +987,7 @@ export function applyMigrationHints(hints, deps = {}) {
         const matchers = settings.hooks[hint.event];
         if (!Array.isArray(matchers)) continue;
 
-        const scriptPath = extractScriptPath(hint.command);
+        const scriptKey = hookScriptKey(hint.command);
         let removed = false;
 
         for (let gi = matchers.length - 1; gi >= 0; gi--) {
@@ -1009,7 +995,7 @@ export function applyMigrationHints(hints, deps = {}) {
           if (!Array.isArray(group.hooks)) continue;
 
           group.hooks = group.hooks.filter(h => {
-            if (h.type === 'command' && extractScriptPath(h.command) === scriptPath) {
+            if (h.type === 'command' && hookScriptKey(h.command) === scriptKey) {
               removed = true;
               return false;
             }

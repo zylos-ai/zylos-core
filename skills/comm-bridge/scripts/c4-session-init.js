@@ -9,20 +9,22 @@
  * Usage: node c4-session-init.js
  */
 
-import {
-  getLastCheckpoint,
-  getUnsummarizedRange,
-  getUnsummarizedConversations,
-  formatConversations,
-  close
-} from './c4-db.js';
-import { CHECKPOINT_THRESHOLD, SESSION_INIT_RECENT_COUNT } from './c4-config.js';
 import { logHookTiming } from './c4-diagnostic.js';
+import { fileURLToPath } from 'node:url';
 
-const startMs = Date.now();
-
-function main() {
+export async function initC4Session() {
+  let close = () => {};
   try {
+    const {
+      getLastCheckpoint,
+      getUnsummarizedRange,
+      getUnsummarizedConversations,
+      formatConversations,
+      close: closeDb,
+    } = await import('./c4-db.js');
+    close = closeDb;
+    const { CHECKPOINT_THRESHOLD, SESSION_INIT_RECENT_COUNT } = await import('./c4-config.js');
+
     const checkpoint = getLastCheckpoint();
     const range = getUnsummarizedRange();
     const lines = [];
@@ -35,8 +37,7 @@ function main() {
 
     if (range.count === 0) {
       lines.push('No new conversations since last checkpoint.');
-      console.log(lines.join('\n'));
-      return;
+      return `${lines.join('\n')}\n`;
     }
 
     const needsSync = range.count > CHECKPOINT_THRESHOLD;
@@ -54,14 +55,34 @@ function main() {
       lines.push(`[Action Required] There are ${range.count} unsummarized conversations (conversation id ${range.begin_id} ~ ${range.end_id}). Please use zylos-memory skill to process them.`);
     }
 
-    console.log(lines.join('\n'));
+    return `${lines.join('\n')}\n`;
   } catch (err) {
-    console.error(`Error in session init: ${err.stack}`);
-    process.exit(1);
+    const wrapped = new Error(`Error in session init: ${err.message}`);
+    wrapped.cause = err;
+    throw wrapped;
   } finally {
     close();
-    logHookTiming('c4-session-init', Date.now() - startMs);
   }
 }
 
-main();
+function main() {
+  const startMs = Date.now();
+  (async () => {
+    try {
+      process.stdout.write(await initC4Session());
+    } catch (err) {
+      console.error(err.cause?.stack || err.stack || err.message);
+      process.exitCode = 1;
+    } finally {
+      logHookTiming('c4-session-init', Date.now() - startMs);
+    }
+  })().catch((err) => {
+    console.error(err?.stack || err?.message || err);
+    process.exitCode = 1;
+    logHookTiming('c4-session-init', Date.now() - startMs);
+  });
+}
+
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  main();
+}
