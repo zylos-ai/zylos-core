@@ -6,6 +6,121 @@
 import path from 'node:path';
 import os from 'node:os';
 
+const SCRIPT_EXT_RE = /\.(?:[cm]?js|jsx|tsx?|sh|bash|zsh|py|rb|pl|php|lua)$/i;
+const INTERPRETERS = new Set(['node', 'nodejs', 'bun', 'deno']);
+
+function expandHome(scriptPath) {
+  return scriptPath.startsWith('~/') ? path.join(os.homedir(), scriptPath.slice(2)) : scriptPath;
+}
+
+function commandSegments(command) {
+  const segments = [];
+  let current = '';
+  let quote = null;
+  let escaped = false;
+
+  for (let i = 0; i < command.length; i += 1) {
+    const ch = command[i];
+    if (escaped) {
+      current += ch;
+      escaped = false;
+      continue;
+    }
+    if (ch === '\\') {
+      current += ch;
+      escaped = true;
+      continue;
+    }
+    if (quote) {
+      if (ch === quote) quote = null;
+      current += ch;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      current += ch;
+      continue;
+    }
+    if (ch === ';' || ch === '|') {
+      segments.push(current);
+      current = '';
+      continue;
+    }
+    if (ch === '&' && command[i + 1] === '&') {
+      segments.push(current);
+      current = '';
+      i += 1;
+      continue;
+    }
+    current += ch;
+  }
+
+  segments.push(current);
+  return segments.map(segment => segment.trim()).filter(Boolean);
+}
+
+function shellTokens(segment) {
+  const tokens = [];
+  let current = '';
+  let quote = null;
+  let escaped = false;
+
+  for (const ch of segment) {
+    if (escaped) {
+      current += ch;
+      escaped = false;
+      continue;
+    }
+    if (ch === '\\') {
+      current += ch;
+      escaped = true;
+      continue;
+    }
+    if (quote) {
+      if (ch === quote) {
+        quote = null;
+      } else {
+        current += ch;
+      }
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      continue;
+    }
+    if (/\s/.test(ch)) {
+      if (current) {
+        tokens.push(current);
+        current = '';
+      }
+      continue;
+    }
+    current += ch;
+  }
+
+  if (current) tokens.push(current);
+  return tokens;
+}
+
+function interpreterName(token) {
+  return path.basename(token.replaceAll('\\', '/'));
+}
+
+function looksLikeScript(token) {
+  return SCRIPT_EXT_RE.test(token);
+}
+
+function fallbackScriptPath(command) {
+  let result = null;
+  for (const raw of shellTokens(command)) {
+    const token = raw.replace(/^["']|["']$/g, '');
+    if (token.includes('/') && looksLikeScript(token)) {
+      result = token;
+    }
+  }
+  return result;
+}
+
 /**
  * Extract the script file path from a hook command.
  * e.g. "node ~/zylos/.claude/skills/foo/scripts/bar.js --flag"
@@ -14,18 +129,30 @@ import os from 'node:os';
  */
 export function extractScriptPath(command) {
   if (typeof command !== 'string') return '';
-  // Use the LAST path-like token so that shell prefixes
-  // (e.g. "source ~/.nvm/nvm.sh && node ~/path/script.js") are skipped
-  let result = null;
-  for (const raw of command.split(/\s+/)) {
-    const token = raw.replace(/^["']|["']$/g, '');
-    if (token.includes('/') && /\.\w+$/.test(token)) {
-      result = token;
+
+  const segments = commandSegments(command);
+  const lastSegment = segments.at(-1) || command;
+  const tokens = shellTokens(lastSegment);
+  const interpreterIndex = tokens.findIndex(token => INTERPRETERS.has(interpreterName(token)));
+  if (interpreterIndex !== -1) {
+    for (const token of tokens.slice(interpreterIndex + 1)) {
+      if (token.startsWith('-')) continue;
+      if (looksLikeScript(token)) return expandHome(token);
+      break;
     }
   }
-  if (!result) return command;
-  // Normalize ~ to absolute path for consistent comparison
-  return result.startsWith('~/') ? path.join(os.homedir(), result.slice(2)) : result;
+
+  const result = fallbackScriptPath(command);
+  return result ? expandHome(result) : command;
+}
+
+function zylosClaudeRoot() {
+  const zylosDir = path.resolve(process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos'));
+  return `${path.resolve(zylosDir, '.claude').replaceAll('\\', '/').replace(/\/+$/, '')}/`;
+}
+
+function normalizedAbsolutePath(scriptPath) {
+  return path.resolve(scriptPath).replaceAll('\\', '/');
 }
 
 /**
@@ -34,10 +161,11 @@ export function extractScriptPath(command) {
  * other paths keep their full normalized path to avoid user hook collisions.
  */
 export function hookScriptKey(command) {
-  const scriptPath = extractScriptPath(command).replaceAll('\\', '/').split(path.sep).join('/');
-  const marker = '/.claude/';
-  const markerIndex = scriptPath.indexOf(marker);
-  if (markerIndex !== -1) return scriptPath.slice(markerIndex + marker.length);
+  const scriptPath = normalizedAbsolutePath(
+    extractScriptPath(command).replaceAll('\\', '/').split(path.sep).join('/')
+  );
+  const root = zylosClaudeRoot();
+  if (scriptPath.startsWith(root)) return scriptPath.slice(root.length);
 
   return scriptPath;
 }

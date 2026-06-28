@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 const {
   CORE_MANAGED_HOOKS,
+  isCoreManaged,
   persistInstalledSettingsAndSyncCoupledThreshold,
   shouldSyncCodexConfig,
   syncCodexConfig,
@@ -14,7 +16,7 @@ const {
   syncTemplateSetting,
   syncTemplateModelSetting,
 } = await import('../sync-settings-hooks.js');
-const { getCommandHooks, hookScriptKey } = await import('../hook-utils.js');
+const { extractScriptPath, getCommandHooks, hookScriptKey } = await import('../hook-utils.js');
 const {
   renderCodexGlobalConfig,
   renderCodexProjectConfig,
@@ -561,8 +563,35 @@ function assertSessionStartUsesOrchestrator(settings) {
   }
 }
 
+describe('extractScriptPath', () => {
+  it('takes the interpreter script argument instead of later path-like arguments', () => {
+    assert.equal(extractScriptPath('node x.js /tmp/y.js'), 'x.js');
+  });
+
+  it('uses the last shell segment so source prefixes do not win', () => {
+    assert.equal(
+      extractScriptPath('source ~/.nvm/nvm.sh && node ~/zylos/.claude/skills/a/scripts/b.js'),
+      path.join(os.homedir(), 'zylos/.claude/skills/a/scripts/b.js')
+    );
+  });
+
+  it('skips interpreter flags before the script argument', () => {
+    assert.equal(
+      extractScriptPath('node --trace-warnings ~/zylos/.claude/skills/a/scripts/b.js --mode startup'),
+      path.join(os.homedir(), 'zylos/.claude/skills/a/scripts/b.js')
+    );
+  });
+
+  it('keeps quoted paths with spaces as one script argument', () => {
+    assert.equal(
+      extractScriptPath('node "/Users/howard/zylos/.claude/skills/a dir/scripts/b.js" /tmp/y.js'),
+      '/Users/howard/zylos/.claude/skills/a dir/scripts/b.js'
+    );
+  });
+});
+
 describe('hookScriptKey', () => {
-  it('normalizes absolute, home-relative, and backslash script paths to the same registry key', () => {
+  it('normalizes absolute, home-relative, and backslash zylos-root script paths to the same registry key', () => {
     assert.equal(
       hookScriptKey('node ~/zylos/.claude/skills/activity-monitor/scripts/session-start-orchestrator.js'),
       'skills/activity-monitor/scripts/session-start-orchestrator.js'
@@ -572,12 +601,12 @@ describe('hookScriptKey', () => {
       'skills/activity-monitor/scripts/session-start-orchestrator.js'
     );
     assert.equal(
-      hookScriptKey('node C:\\zylos\\.claude\\skills\\activity-monitor\\scripts\\session-start-orchestrator.js'),
+      hookScriptKey('node \\Users\\howard\\zylos\\.claude\\skills\\activity-monitor\\scripts\\session-start-orchestrator.js'),
       'skills/activity-monitor/scripts/session-start-orchestrator.js'
     );
   });
 
-  it('keeps non-.claude paths as full normalized paths even when they contain skills suffixes', () => {
+  it('keeps paths outside the zylos .claude root as full normalized paths even when suffixes collide', () => {
     assert.equal(
       hookScriptKey('node /opt/custom/skills/activity-monitor/scripts/session-start-orchestrator.js --mine'),
       '/opt/custom/skills/activity-monitor/scripts/session-start-orchestrator.js'
@@ -586,6 +615,38 @@ describe('hookScriptKey', () => {
       hookScriptKey('node /opt/custom/skills/zylos-memory/scripts/session-start-inject.js'),
       '/opt/custom/skills/zylos-memory/scripts/session-start-inject.js'
     );
+    assert.equal(
+      hookScriptKey('node ~/.claude/skills/activity-monitor/scripts/session-start-orchestrator.js'),
+      `${os.homedir()}/.claude/skills/activity-monitor/scripts/session-start-orchestrator.js`
+    );
+    assert.equal(
+      isCoreManaged({ type: 'command', command: 'node ~/.claude/skills/activity-monitor/scripts/session-start-orchestrator.js' }),
+      false
+    );
+  });
+
+  it('resolves relative ZYLOS_DIR before checking the zylos .claude root', () => {
+    const previousZylosDir = process.env.ZYLOS_DIR;
+    process.env.ZYLOS_DIR = 'relative-zylos';
+    try {
+      const absoluteCoreHook = path.resolve(
+        'relative-zylos/.claude/skills/activity-monitor/scripts/session-start-orchestrator.js'
+      );
+      assert.equal(
+        hookScriptKey(`node ${absoluteCoreHook}`),
+        'skills/activity-monitor/scripts/session-start-orchestrator.js'
+      );
+      assert.equal(
+        isCoreManaged({ type: 'command', command: `node ${absoluteCoreHook}` }),
+        true
+      );
+    } finally {
+      if (previousZylosDir === undefined) {
+        delete process.env.ZYLOS_DIR;
+      } else {
+        process.env.ZYLOS_DIR = previousZylosDir;
+      }
+    }
   });
 });
 
@@ -703,7 +764,7 @@ describe('syncHooks SessionStart orchestrator convergence', () => {
     assert.equal(startup.hooks.some(h => h.command?.includes('session-start-inject.js')), false);
   });
 
-  it('does not claim non-.claude user hooks whose suffix collides with current or retired registry keys', () => {
+  it('does not claim user hooks outside the zylos .claude root whose suffix collides with current or retired registry keys', () => {
     const installed = {
       hooks: {
         SessionStart: [
@@ -712,6 +773,7 @@ describe('syncHooks SessionStart orchestrator convergence', () => {
             hooks: [
               makeHook('/opt/custom/skills/activity-monitor/scripts/session-start-orchestrator.js --mine', 9000),
               makeHook('/opt/custom/skills/zylos-memory/scripts/session-start-inject.js', 7000),
+              { type: 'command', command: 'node ~/.claude/skills/activity-monitor/scripts/session-start-orchestrator.js --foreign', timeout: 6000 },
             ],
           },
         ],
@@ -730,6 +792,10 @@ describe('syncHooks SessionStart orchestrator convergence', () => {
     assert.ok(startup.hooks.some(h =>
       h.command === 'node /opt/custom/skills/zylos-memory/scripts/session-start-inject.js' &&
       h.timeout === 7000
+    ));
+    assert.ok(startup.hooks.some(h =>
+      h.command === 'node ~/.claude/skills/activity-monitor/scripts/session-start-orchestrator.js --foreign' &&
+      h.timeout === 6000
     ));
   });
 
