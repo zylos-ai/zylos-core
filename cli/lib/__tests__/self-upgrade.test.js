@@ -15,6 +15,14 @@ const {
 const { generateMigrationHints, applyMigrationHints } = await import('../self-upgrade.js');
 const { deployManifestTemplate } = await import('../runtime/tmux-env.js');
 
+function fixtureZylosDir() {
+  return path.resolve(process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos'));
+}
+
+function zylosHookPath(relativePath) {
+  return path.join(fixtureZylosDir(), '.claude', relativePath).replaceAll('\\', '/');
+}
+
 describe('self-upgrade finalizer handoff', () => {
   it('serializes the state needed by the newly installed finalizer', () => {
     assert.deepEqual(createFinalizeState({
@@ -464,7 +472,7 @@ describe('self-upgrade hook migration hints', () => {
             matcher: 'startup',
             hooks: [{
               type: 'command',
-              command: 'node /Users/howard/zylos/.claude/skills/zylos-memory/scripts/session-start-inject.js',
+              command: `node ${zylosHookPath('skills/zylos-memory/scripts/session-start-inject.js')}`,
               timeout: 10000,
             }],
           }],
@@ -534,7 +542,7 @@ describe('self-upgrade hook migration hints', () => {
             matcher: 'startup',
             hooks: [{
               type: 'command',
-              command: 'node /Users/howard/zylos/.claude/skills/activity-monitor/scripts/session-start-orchestrator.js',
+              command: `node ${zylosHookPath('skills/activity-monitor/scripts/session-start-orchestrator.js')}`,
               timeout: 10000,
             }],
           }],
@@ -569,7 +577,7 @@ describe('self-upgrade hook migration hints', () => {
           matcher: 'startup',
           hooks: [{
             type: 'command',
-            command: 'node /Users/howard/zylos/.claude/skills/zylos-memory/scripts/session-start-inject.js',
+            command: `node ${zylosHookPath('skills/zylos-memory/scripts/session-start-inject.js')}`,
             timeout: 10000,
           }],
         }],

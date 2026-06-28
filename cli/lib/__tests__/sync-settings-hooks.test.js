@@ -26,6 +26,14 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const TEMPLATE_SETTINGS_PATH = path.join(__dirname, '..', '..', '..', 'templates', '.claude', 'settings.json');
 const CONTEXT_MONITOR_PATH = path.join(__dirname, '..', '..', '..', 'skills', 'activity-monitor', 'scripts', 'context-monitor.js');
 
+function fixtureZylosDir() {
+  return path.resolve(process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos'));
+}
+
+function zylosHookPath(relativePath) {
+  return path.join(fixtureZylosDir(), '.claude', relativePath).replaceAll('\\', '/');
+}
+
 describe('Claude settings template', () => {
   it('defaults fresh installs to Opus with 1M context (opus[1m])', () => {
     const template = JSON.parse(fs.readFileSync(TEMPLATE_SETTINGS_PATH, 'utf8'));
@@ -520,10 +528,10 @@ function makeStandardOldSessionStartGroup(matcher) {
   return {
     matcher,
     hooks: [
-      makeHook('/Users/howard/zylos/.claude/skills/zylos-memory/scripts/session-start-inject.js', 10000),
-      makeHook('/Users/howard/zylos/.claude/skills/comm-bridge/scripts/c4-session-init.js', 10000),
-      makeHook('/Users/howard/zylos/.claude/skills/activity-monitor/scripts/session-foreground.js', 5000),
-      makeHook('/Users/howard/zylos/.claude/skills/activity-monitor/scripts/session-start-prompt.js', 5000),
+      makeHook(zylosHookPath('skills/zylos-memory/scripts/session-start-inject.js'), 10000),
+      makeHook(zylosHookPath('skills/comm-bridge/scripts/c4-session-init.js'), 10000),
+      makeHook(zylosHookPath('skills/activity-monitor/scripts/session-foreground.js'), 5000),
+      makeHook(zylosHookPath('skills/activity-monitor/scripts/session-start-prompt.js'), 5000),
     ],
   };
 }
@@ -547,7 +555,7 @@ function makeOrchestratorTemplate() {
       SessionStart: ['startup', 'clear', 'compact'].map(matcher => ({
         matcher,
         hooks: [
-          makeHook('/Users/howard/zylos/.claude/skills/activity-monitor/scripts/session-start-orchestrator.js', 20000),
+          makeHook(zylosHookPath('skills/activity-monitor/scripts/session-start-orchestrator.js'), 20000),
         ],
       })),
     },
@@ -583,9 +591,10 @@ describe('extractScriptPath', () => {
   });
 
   it('keeps quoted paths with spaces as one script argument', () => {
+    const scriptPath = zylosHookPath('skills/a dir/scripts/b.js');
     assert.equal(
-      extractScriptPath('node "/Users/howard/zylos/.claude/skills/a dir/scripts/b.js" /tmp/y.js'),
-      '/Users/howard/zylos/.claude/skills/a dir/scripts/b.js'
+      extractScriptPath(`node "${scriptPath}" /tmp/y.js`),
+      scriptPath
     );
   });
 });
@@ -597,11 +606,11 @@ describe('hookScriptKey', () => {
       'skills/activity-monitor/scripts/session-start-orchestrator.js'
     );
     assert.equal(
-      hookScriptKey('node /Users/howard/zylos/.claude/skills/activity-monitor/scripts/session-start-orchestrator.js'),
+      hookScriptKey(`node ${zylosHookPath('skills/activity-monitor/scripts/session-start-orchestrator.js')}`),
       'skills/activity-monitor/scripts/session-start-orchestrator.js'
     );
     assert.equal(
-      hookScriptKey('node \\Users\\howard\\zylos\\.claude\\skills\\activity-monitor\\scripts\\session-start-orchestrator.js'),
+      hookScriptKey(`node ${zylosHookPath('skills/activity-monitor/scripts/session-start-orchestrator.js').replaceAll('/', '\\')}`),
       'skills/activity-monitor/scripts/session-start-orchestrator.js'
     );
   });
@@ -705,9 +714,9 @@ describe('syncHooks SessionStart orchestrator convergence', () => {
           {
             matcher: 'startup',
             hooks: [
-              makeHook('/Users/howard/zylos/.claude/skills/zylos-memory/scripts/session-start-inject.js', 9000),
-              makeHook('/Users/howard/zylos/.claude/skills/comm-bridge/scripts/c4-session-init.js', 10000),
-              makeHook('/Users/howard/zylos/.claude/skills/activity-monitor/scripts/session-start-prompt.js', 5000),
+              makeHook(zylosHookPath('skills/zylos-memory/scripts/session-start-inject.js'), 9000),
+              makeHook(zylosHookPath('skills/comm-bridge/scripts/c4-session-init.js'), 10000),
+              makeHook(zylosHookPath('skills/activity-monitor/scripts/session-start-prompt.js'), 5000),
             ],
           },
           makeStandardOldSessionStartGroup('clear'),
