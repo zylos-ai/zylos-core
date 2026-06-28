@@ -29,9 +29,9 @@
 - [ ] **新增注册表** `CORE_MANAGED_HOOKS`（`cli/lib/sync-settings-hooks.js` 或拆到 `hook-utils.js`，由实现者定）：
   - 内容 = **当前 template 所有 event 下的全部 hook 脚本路径** ∪ **历史退役路径**（即现有 `SESSION_START_OLD_SCRIPTS` 的 4 条：`skills/zylos-memory/scripts/session-start-inject.js`、`skills/comm-bridge/scripts/c4-session-init.js`、`skills/activity-monitor/scripts/session-foreground.js`、`skills/activity-monitor/scripts/session-start-prompt.js`）
   - 当前 template SessionStart 已是单 orchestrator：`skills/activity-monitor/scripts/session-start-orchestrator.js`（startup/clear/compact 三组）
-  - 存**规范化后缀路径**（沿用现有 `extractScriptPath` + `scriptPathEndsWith` 的归一化口径，`split(path.sep).join('/')`）
+  - 键 = `hookScriptKey()` 输出的 canonical 后缀键（registry 内容用同一 helper 生成，禁止手写另一种口径）
   - **append-only 注释约定**：退役 hook 的路径**保留不删**，新增 core hook 时追加一行
-- [ ] **新增 `isCoreManaged(hook)`**：`CORE_MANAGED_HOOKS` 命中 `normalize(extractScriptPath(hook.command))` → bool。非 command 类型 hook（无 `command`）→ 取不到 path → 返回 false（默认保留）
+- [ ] **新增 `isCoreManaged(hook)`**：`CORE_MANAGED_HOOKS.has(hookScriptKey(hook.command))` → bool。非 command 类型 hook（无 `command`）→ `hookScriptKey` 取不到 path → 返回 false（默认保留）
 - [ ] **引擎 A reverse pass 切换所有权判断**（line ~387-388）：
   - 从 `const skillName = extractSkillName(h.command); if (!skillName || !coreSkillNames.has(skillName)) continue;`
   - 改为 `if (!isCoreManaged(h)) continue;`
