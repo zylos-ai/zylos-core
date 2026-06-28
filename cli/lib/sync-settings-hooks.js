@@ -21,7 +21,7 @@ import path from 'path';
 import os from 'os';
 import { execFileSync } from 'child_process';
 import { fileURLToPath } from 'url';
-import { extractScriptPath, extractSkillName, getCommandHooks } from './hook-utils.js';
+import { hookScriptKey, getCommandHooks } from './hook-utils.js';
 import { getZylosConfig, updateZylosConfig } from './config.js';
 import { renderCodexProjectConfig, renderCodexGlobalConfig, writeCodexConfig } from './runtime-setup.js';
 
@@ -31,19 +31,24 @@ const TEMPLATE_SETTINGS = path.join(__dirname, '..', '..', 'templates', '.claude
 const INSTALLED_SETTINGS = path.join(ZYLOS_DIR, '.claude', 'settings.json');
 
 const MAX_SAFE_1M_THRESHOLD = 30;
-const SESSION_START_OLD_SCRIPTS = [
+export const CORE_MANAGED_HOOKS = new Set([
+  // Current template hooks. Keep this append-only: when a core hook is retired,
+  // leave its path here so upgrades can still remove stale installed copies.
+  'skills/activity-monitor/scripts/context-monitor.js',
+  'skills/activity-monitor/scripts/hook-activity.js',
+  'skills/activity-monitor/scripts/hook-auth-prompt.js',
+  'skills/activity-monitor/scripts/session-start-orchestrator.js',
+  // Retired SessionStart hooks replaced by the orchestrator.
   'skills/zylos-memory/scripts/session-start-inject.js',
   'skills/comm-bridge/scripts/c4-session-init.js',
   'skills/activity-monitor/scripts/session-foreground.js',
   'skills/activity-monitor/scripts/session-start-prompt.js',
-];
-const SESSION_START_OLD_TIMEOUT_BY_SCRIPT = new Map([
-  ['skills/zylos-memory/scripts/session-start-inject.js', 10000],
-  ['skills/comm-bridge/scripts/c4-session-init.js', 10000],
-  ['skills/activity-monitor/scripts/session-foreground.js', 5000],
-  ['skills/activity-monitor/scripts/session-start-prompt.js', 5000],
 ]);
-const SESSION_START_MATCHERS = ['startup', 'clear', 'compact'];
+
+export function isCoreManaged(hook) {
+  if (!hook || hook.type !== 'command') return false;
+  return CORE_MANAGED_HOOKS.has(hookScriptKey(hook.command));
+}
 
 function is1mModel(model) {
   return typeof model === 'string' && model.includes('[1m]');
@@ -269,18 +274,6 @@ export function syncCodexConfig({
 export function syncHooks(installedSettings, templateSettings, { dryRun = false, log = console.log } = {}) {
   const templateHooks = templateSettings.hooks || {};
 
-  // Collect core skill names from template
-  const coreSkillNames = new Set();
-  for (const matchers of Object.values(templateHooks)) {
-    if (!Array.isArray(matchers)) continue;
-    for (const m of matchers) {
-      for (const h of getCommandHooks(m)) {
-        const name = extractSkillName(h.command);
-        if (name) coreSkillNames.add(name);
-      }
-    }
-  }
-
   let added = 0;
   let updated = 0;
   let removed = 0;
@@ -288,25 +281,12 @@ export function syncHooks(installedSettings, templateSettings, { dryRun = false,
   // Ensure hooks object exists
   if (!installedSettings.hooks) installedSettings.hooks = {};
 
-  // --- Pre-migration: split catch-all matchers into specific matchers ---
-  const migrated = migrateMatcherSplit(installedSettings, templateSettings, { dryRun, log });
-  if (migrated > 0) {
-    updated += migrated;
-  }
-
-  const sessionStartMigration = migrateSessionStartOrchestrator(installedSettings, templateSettings, { dryRun, log });
-  if (sessionStartMigration.updated > 0) {
-    updated += sessionStartMigration.updated;
-  }
-  const skipEvents = new Set(sessionStartMigration.skipEvents || []);
-
   // --- Forward pass: add missing matcher groups/hooks, update hooks in matched groups ---
   // Strategy: align by matcher group, not by individual hook across all groups.
   //   - If installed has a group with the same matcher → add missing template
   //     hooks and update existing hooks (command/timeout drift)
   //   - If installed has NO group with that matcher → add the whole group from template
   for (const [event, matchers] of Object.entries(templateHooks)) {
-    if (skipEvents.has(event)) continue;
     if (!Array.isArray(matchers)) continue;
     if (!Array.isArray(installedSettings.hooks[event])) {
       installedSettings.hooks[event] = [];
@@ -324,9 +304,9 @@ export function syncHooks(installedSettings, templateSettings, { dryRun = false,
         // (command/timeout drift). This is needed for upgrades where new core
         // hooks are added to an existing matcher group.
         for (const templateCmd of getCommandHooks(templateGroup)) {
-          const templateKey = extractScriptPath(templateCmd.command);
+          const templateKey = hookScriptKey(templateCmd.command);
           const existing = getCommandHooks(installedGroup).find(
-            h => extractScriptPath(h.command) === templateKey
+            h => hookScriptKey(h.command) === templateKey
           );
           if (!existing) {
             if (!dryRun) {
@@ -366,7 +346,6 @@ export function syncHooks(installedSettings, templateSettings, { dryRun = false,
   // A core hook is removed if it's not present in the matching template group,
   // even if it exists in other template groups for the same event.
   for (const [event, matchers] of Object.entries(installedSettings.hooks)) {
-    if (skipEvents.has(event)) continue;
     if (!Array.isArray(matchers)) continue;
 
     const templateMatchers = Array.isArray(templateHooks[event]) ? templateHooks[event] : [];
@@ -384,13 +363,12 @@ export function syncHooks(installedSettings, templateSettings, { dryRun = false,
         const h = group.hooks[hi];
         if (h.type !== 'command') continue;
 
-        const skillName = extractSkillName(h.command);
-        if (!skillName || !coreSkillNames.has(skillName)) continue;
+        if (!isCoreManaged(h)) continue;
 
-        const installedKey = extractScriptPath(h.command);
+        const installedKey = hookScriptKey(h.command);
         // Check only the corresponding template group, not all groups
         const foundInTemplate = correspondingTemplate
-          ? getCommandHooks(correspondingTemplate).some(th => extractScriptPath(th.command) === installedKey)
+          ? getCommandHooks(correspondingTemplate).some(th => hookScriptKey(th.command) === installedKey)
           : false;
 
         if (!foundInTemplate) {
@@ -536,161 +514,6 @@ export function main(argv = process.argv.slice(2)) {
   // package during upgrade (via resolveInstalledSyncScript), so it works even
   // when the calling component.js is an older version without restart logic.
   enqueueRestartIfNeeded();
-}
-
-/**
- * Pre-migration: when a template splits a catch-all matcher ("") into specific
- * matchers (e.g. "startup", "clear", "compact"), transform the installed config
- * to match before the forward/reverse passes run.
- *
- * Without this, the forward pass sees the script paths already exist (under "")
- * and skips adding the specific matchers; the reverse pass sees the script paths
- * in the template and keeps the old catch-all. Result: no migration happens.
- *
- * @returns {number} Number of hook entries migrated
- */
-export function migrateMatcherSplit(installedSettings, templateSettings, { dryRun = false, log = console.log } = {}) {
-  let count = 0;
-  const templateHooks = templateSettings.hooks || {};
-  const installedHooks = installedSettings.hooks || {};
-
-  for (const [event, templateMatchers] of Object.entries(templateHooks)) {
-    if (!Array.isArray(templateMatchers)) continue;
-    const installedMatchers = installedHooks[event];
-    if (!Array.isArray(installedMatchers)) continue;
-
-    // Find catch-all group in installed config
-    const catchAllIdx = installedMatchers.findIndex(g => g.matcher === '' || g.matcher === undefined);
-    if (catchAllIdx === -1) continue;
-
-    // Check if template has NO catch-all but has specific matchers
-    const templateHasCatchAll = templateMatchers.some(g => g.matcher === '' || g.matcher === undefined);
-    if (templateHasCatchAll) continue;
-
-    const templateSpecificMatchers = templateMatchers
-      .filter(g => g.matcher !== '' && g.matcher !== undefined)
-      .map(g => g.matcher);
-    if (templateSpecificMatchers.length === 0) continue;
-
-    // Verify the catch-all hooks match the template hooks (same script paths)
-    const catchAllGroup = installedMatchers[catchAllIdx];
-    const catchAllPaths = new Set(
-      getCommandHooks(catchAllGroup).map(h => extractScriptPath(h.command))
-    );
-    const templatePaths = new Set(
-      templateMatchers.flatMap(g => getCommandHooks(g).map(h => extractScriptPath(h.command)))
-    );
-
-    // Only migrate if all catch-all hooks exist in the template
-    const allCovered = [...catchAllPaths].every(p => templatePaths.has(p));
-    if (!allCovered) continue;
-
-    if (!dryRun) {
-      // Replace catch-all with specific matcher groups, preserving hook content
-      const hooks = catchAllGroup.hooks || [];
-      installedMatchers.splice(catchAllIdx, 1);
-      for (const matcher of templateSpecificMatchers) {
-        // Only add if this matcher doesn't already exist
-        if (!installedMatchers.some(g => g.matcher === matcher)) {
-          installedMatchers.push({
-            matcher,
-            hooks: hooks.map(h => ({ ...h })),
-          });
-        }
-      }
-    }
-
-    count += templateSpecificMatchers.length;
-    log(`  ↔ ${event}: split catch-all matcher into ${templateSpecificMatchers.join(', ')}`);
-  }
-
-  return count;
-}
-
-function scriptPathEndsWith(command, suffix) {
-  const scriptPath = extractScriptPath(command).split(path.sep).join('/');
-  return scriptPath.endsWith(suffix);
-}
-
-function isOrchestratorTemplate(templateSettings) {
-  const groups = templateSettings?.hooks?.SessionStart;
-  if (!Array.isArray(groups)) return false;
-  const expected = new Set(SESSION_START_MATCHERS);
-  if (groups.length !== expected.size) return false;
-  for (const group of groups) {
-    if (!expected.has(group.matcher)) return false;
-    const hooks = getCommandHooks(group);
-    if (hooks.length !== 1) return false;
-    if (!scriptPathEndsWith(hooks[0].command, 'skills/activity-monitor/scripts/session-start-orchestrator.js')) return false;
-  }
-  return true;
-}
-
-function isStandardOldSessionStartGroup(group) {
-  const hooks = getCommandHooks(group);
-  if (hooks.length !== SESSION_START_OLD_SCRIPTS.length) return false;
-  const seen = new Set();
-  for (const hook of hooks) {
-    if (hook.type !== 'command') return false;
-    const suffix = SESSION_START_OLD_SCRIPTS.find(script => scriptPathEndsWith(hook.command, script));
-    if (!suffix || seen.has(suffix)) return false;
-    if (hook.timeout !== SESSION_START_OLD_TIMEOUT_BY_SCRIPT.get(suffix)) return false;
-    seen.add(suffix);
-  }
-  return seen.size === SESSION_START_OLD_SCRIPTS.length;
-}
-
-function containsOldSessionStartScript(groups) {
-  return groups.some(group => getCommandHooks(group).some(h =>
-    SESSION_START_OLD_SCRIPTS.some(suffix => scriptPathEndsWith(h.command, suffix))
-  ));
-}
-
-/**
- * Migrate the standard old SessionStart shape:
- *   startup/clear/compact × [inject, c4-init, foreground, prompt]
- * to:
- *   startup/clear/compact × [orchestrator]
- *
- * Non-standard SessionStart configs are skipped and protected from the generic
- * forward/reverse sync pass, so user-customized running hooks are not silently
- * overwritten during upgrade.
- */
-export function migrateSessionStartOrchestrator(installedSettings, templateSettings, { dryRun = false, log = console.log } = {}) {
-  if (!isOrchestratorTemplate(templateSettings)) {
-    return { updated: 0, skipped: 0, skipEvents: [] };
-  }
-
-  const installedGroups = installedSettings?.hooks?.SessionStart;
-  if (!Array.isArray(installedGroups) || installedGroups.length === 0) {
-    return { updated: 0, skipped: 0, skipEvents: [] };
-  }
-
-  const groupsByMatcher = new Map(installedGroups.map(g => [g.matcher ?? '', g]));
-  const hasAllStandardGroups = SESSION_START_MATCHERS.every((matcher) =>
-    isStandardOldSessionStartGroup(groupsByMatcher.get(matcher))
-  );
-  const onlyStandardGroups = installedGroups.every(group =>
-    SESSION_START_MATCHERS.includes(group.matcher) && isStandardOldSessionStartGroup(group)
-  );
-
-  if (!hasAllStandardGroups || !onlyStandardGroups) {
-    if (containsOldSessionStartScript(installedGroups)) {
-      log('  ! SessionStart: custom/non-standard hooks detected; skipped orchestrator migration');
-      return { updated: 0, skipped: 1, skipEvents: ['SessionStart'] };
-    }
-    return { updated: 0, skipped: 0, skipEvents: [] };
-  }
-
-  if (!dryRun) {
-    installedSettings.hooks.SessionStart = templateSettings.hooks.SessionStart.map(group => ({
-      matcher: group.matcher,
-      hooks: getCommandHooks(group).map(h => ({ ...h })),
-    }));
-  }
-
-  log('  ↔ SessionStart: migrated standard 4-hook groups to orchestrator');
-  return { updated: SESSION_START_MATCHERS.length, skipped: 0, skipEvents: ['SessionStart'] };
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

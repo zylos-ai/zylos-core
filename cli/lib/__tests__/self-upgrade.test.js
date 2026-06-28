@@ -424,6 +424,172 @@ describe('Boolean setting migration hints (autoMemoryEnabled, autoDreamEnabled)'
   });
 });
 
+describe('self-upgrade hook migration hints', () => {
+  function writeSettingsPair({ templateSettings, installedSettings }) {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-hook-hints-'));
+    const templatesDir = path.join(tmpDir, 'templates');
+    const zylosDir = path.join(tmpDir, 'zylos');
+    fs.mkdirSync(path.join(templatesDir, '.claude'), { recursive: true });
+    fs.mkdirSync(path.join(zylosDir, '.claude'), { recursive: true });
+    fs.writeFileSync(
+      path.join(templatesDir, '.claude', 'settings.json'),
+      JSON.stringify(templateSettings),
+      'utf8'
+    );
+    fs.writeFileSync(
+      path.join(zylosDir, '.claude', 'settings.json'),
+      JSON.stringify(installedSettings),
+      'utf8'
+    );
+    return { tmpDir, templatesDir, zylosDir };
+  }
+
+  it('generates removed_hook for retired core SessionStart hooks absent from the template', () => {
+    const { tmpDir, templatesDir, zylosDir } = writeSettingsPair({
+      templateSettings: {
+        hooks: {
+          SessionStart: [{
+            matcher: 'startup',
+            hooks: [{
+              type: 'command',
+              command: 'node ~/zylos/.claude/skills/activity-monitor/scripts/session-start-orchestrator.js',
+              timeout: 20000,
+            }],
+          }],
+        },
+      },
+      installedSettings: {
+        hooks: {
+          SessionStart: [{
+            matcher: 'startup',
+            hooks: [{
+              type: 'command',
+              command: 'node /Users/howard/zylos/.claude/skills/zylos-memory/scripts/session-start-inject.js',
+              timeout: 10000,
+            }],
+          }],
+        },
+      },
+    });
+
+    const hints = generateMigrationHints(templatesDir, { zylosDir });
+
+    assert.ok(hints.some(hint =>
+      hint.type === 'removed_hook' &&
+      hint.command.includes('session-start-inject.js')
+    ));
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('does not generate removed_hook for custom or non-command hooks', () => {
+    const { tmpDir, templatesDir, zylosDir } = writeSettingsPair({
+      templateSettings: {
+        hooks: {
+          SessionStart: [{
+            matcher: 'startup',
+            hooks: [{
+              type: 'command',
+              command: 'node ~/zylos/.claude/skills/activity-monitor/scripts/session-start-orchestrator.js',
+              timeout: 20000,
+            }],
+          }],
+        },
+      },
+      installedSettings: {
+        hooks: {
+          SessionStart: [{
+            matcher: 'startup',
+            hooks: [
+              { type: 'command', command: 'node /custom/session-start.js', timeout: 5000 },
+              { type: 'prompt', prompt: 'keep me' },
+            ],
+          }],
+        },
+      },
+    });
+
+    const hints = generateMigrationHints(templatesDir, { zylosDir });
+
+    assert.equal(hints.some(hint => hint.type === 'removed_hook'), false);
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('matches modified hooks by canonical script key during hint generation and apply', () => {
+    const { tmpDir, templatesDir, zylosDir } = writeSettingsPair({
+      templateSettings: {
+        hooks: {
+          SessionStart: [{
+            matcher: 'startup',
+            hooks: [{
+              type: 'command',
+              command: 'node ~/zylos/.claude/skills/activity-monitor/scripts/session-start-orchestrator.js',
+              timeout: 20000,
+            }],
+          }],
+        },
+      },
+      installedSettings: {
+        hooks: {
+          SessionStart: [{
+            matcher: 'startup',
+            hooks: [{
+              type: 'command',
+              command: 'node /Users/howard/zylos/.claude/skills/activity-monitor/scripts/session-start-orchestrator.js',
+              timeout: 10000,
+            }],
+          }],
+        },
+      },
+    });
+
+    const hints = generateMigrationHints(templatesDir, { zylosDir });
+    const modified = hints.find(hint => hint.type === 'modified_hook');
+
+    assert.ok(modified);
+    assert.equal(modified.timeout, 20000);
+
+    const result = applyMigrationHints(hints, { zylosDir });
+    const updated = JSON.parse(fs.readFileSync(path.join(zylosDir, '.claude', 'settings.json'), 'utf8'));
+
+    assert.equal(result.errors.length, 0);
+    assert.equal(updated.hooks.SessionStart[0].hooks[0].command, 'node ~/zylos/.claude/skills/activity-monitor/scripts/session-start-orchestrator.js');
+    assert.equal(updated.hooks.SessionStart[0].hooks[0].timeout, 20000);
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('removes hooks by canonical script key during applyMigrationHints', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-hook-apply-'));
+    const zylosDir = path.join(tmpDir, 'zylos');
+    const settingsPath = path.join(zylosDir, '.claude', 'settings.json');
+
+    fs.mkdirSync(path.join(zylosDir, '.claude'), { recursive: true });
+    fs.writeFileSync(settingsPath, JSON.stringify({
+      hooks: {
+        SessionStart: [{
+          matcher: 'startup',
+          hooks: [{
+            type: 'command',
+            command: 'node /Users/howard/zylos/.claude/skills/zylos-memory/scripts/session-start-inject.js',
+            timeout: 10000,
+          }],
+        }],
+      },
+    }) + '\n', 'utf8');
+
+    const result = applyMigrationHints([{
+      type: 'removed_hook',
+      event: 'SessionStart',
+      command: 'node ~/zylos/.claude/skills/zylos-memory/scripts/session-start-inject.js',
+      timeout: 10000,
+    }], { zylosDir });
+    const updated = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+
+    assert.equal(result.applied, 1);
+    assert.equal(updated.hooks, undefined);
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+});
+
 describe('step7 manifest deploy (real step7_syncClaudeMd)', () => {
   it('creates manifest from tempDir template when missing, message includes manifest: created', () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-step7-'));

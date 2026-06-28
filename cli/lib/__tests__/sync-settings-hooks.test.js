@@ -5,8 +5,7 @@ import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 const {
-  migrateSessionStartOrchestrator,
-  migrateMatcherSplit,
+  CORE_MANAGED_HOOKS,
   persistInstalledSettingsAndSyncCoupledThreshold,
   shouldSyncCodexConfig,
   syncCodexConfig,
@@ -15,6 +14,7 @@ const {
   syncTemplateSetting,
   syncTemplateModelSetting,
 } = await import('../sync-settings-hooks.js');
+const { getCommandHooks, hookScriptKey } = await import('../hook-utils.js');
 const {
   renderCodexGlobalConfig,
   renderCodexProjectConfig,
@@ -552,401 +552,153 @@ function makeOrchestratorTemplate() {
   };
 }
 
-describe('migrateSessionStartOrchestrator', () => {
+function assertSessionStartUsesOrchestrator(settings) {
+  assert.equal(settings.hooks.SessionStart.length, 3);
+  for (const group of settings.hooks.SessionStart) {
+    assert.equal(group.hooks.length, 1);
+    assert.match(group.hooks[0].command, /session-start-orchestrator\.js/);
+    assert.equal(group.hooks[0].timeout, 20000);
+  }
+}
+
+describe('hookScriptKey', () => {
+  it('normalizes absolute, home-relative, and backslash script paths to the same registry key', () => {
+    assert.equal(
+      hookScriptKey('node ~/zylos/.claude/skills/activity-monitor/scripts/session-start-orchestrator.js'),
+      'skills/activity-monitor/scripts/session-start-orchestrator.js'
+    );
+    assert.equal(
+      hookScriptKey('node /Users/howard/zylos/.claude/skills/activity-monitor/scripts/session-start-orchestrator.js'),
+      'skills/activity-monitor/scripts/session-start-orchestrator.js'
+    );
+    assert.equal(
+      hookScriptKey('node C:\\zylos\\.claude\\skills\\activity-monitor\\scripts\\session-start-orchestrator.js'),
+      'skills/activity-monitor/scripts/session-start-orchestrator.js'
+    );
+  });
+});
+
+describe('core hook registry', () => {
+  it('includes every command hook in the settings template', () => {
+    const template = JSON.parse(fs.readFileSync(TEMPLATE_SETTINGS_PATH, 'utf8'));
+    const templateKeys = new Set();
+
+    for (const groups of Object.values(template.hooks || {})) {
+      if (!Array.isArray(groups)) continue;
+      for (const group of groups) {
+        for (const hook of getCommandHooks(group)) {
+          templateKeys.add(hookScriptKey(hook.command));
+        }
+      }
+    }
+
+    for (const key of templateKeys) {
+      assert.equal(CORE_MANAGED_HOOKS.has(key), true, `${key} missing from CORE_MANAGED_HOOKS`);
+    }
+  });
+});
+
+describe('syncHooks SessionStart orchestrator convergence', () => {
   const noopLog = () => {};
 
-  it('migrates exact standard SessionStart groups to the orchestrator', () => {
+  it('converges standard old SessionStart groups through generic sync', () => {
     const installed = {
       hooks: {
         SessionStart: ['startup', 'clear', 'compact'].map(makeStandardOldSessionStartGroup),
-      },
-    };
-    const result = migrateSessionStartOrchestrator(installed, makeOrchestratorTemplate(), { log: noopLog });
-
-    assert.equal(result.updated, 3);
-    for (const group of installed.hooks.SessionStart) {
-      assert.equal(group.hooks.length, 1);
-      assert.match(group.hooks[0].command, /session-start-orchestrator\.js/);
-      assert.equal(group.hooks[0].timeout, 20000);
-    }
-  });
-
-  it('migrates real installed SessionStart groups with prompt and foreground order drift', () => {
-    const installed = {
-      hooks: {
-        SessionStart: ['startup', 'clear', 'compact'].map(makeDriftedOldSessionStartGroup),
-      },
-    };
-    const result = migrateSessionStartOrchestrator(installed, makeOrchestratorTemplate(), { log: noopLog });
-
-    assert.equal(result.updated, 3);
-    assert.deepEqual(result.skipEvents, ['SessionStart']);
-    for (const group of installed.hooks.SessionStart) {
-      assert.equal(group.hooks.length, 1);
-      assert.match(group.hooks[0].command, /session-start-orchestrator\.js/);
-    }
-  });
-
-  it('is idempotent when SessionStart is already on the orchestrator', () => {
-    const installed = JSON.parse(JSON.stringify(makeOrchestratorTemplate()));
-    const result = migrateSessionStartOrchestrator(installed, makeOrchestratorTemplate(), { log: noopLog });
-
-    assert.equal(result.updated, 0);
-    assert.deepEqual(result.skipEvents, []);
-  });
-
-  it('skips and protects custom/non-standard old SessionStart hooks', () => {
-    const installed = {
-      hooks: {
-        SessionStart: [
-          {
-            ...makeStandardOldSessionStartGroup('startup'),
-            hooks: [
-              ...makeStandardOldSessionStartGroup('startup').hooks,
-              makeHook('/custom/my-session-start.js', 5000),
-            ],
-          },
-          makeStandardOldSessionStartGroup('clear'),
-          makeStandardOldSessionStartGroup('compact'),
-        ],
-      },
-    };
-    const logs = [];
-    const result = migrateSessionStartOrchestrator(installed, makeOrchestratorTemplate(), { log: line => logs.push(line) });
-
-    assert.equal(result.updated, 0);
-    assert.deepEqual(result.skipEvents, ['SessionStart']);
-    assert.ok(logs.some(line => line.includes('custom/non-standard')));
-    assert.equal(installed.hooks.SessionStart[0].hooks.length, 5);
-  });
-
-  it('dryRun reports migration without mutating installed settings', () => {
-    const installed = {
-      hooks: {
-        SessionStart: ['startup', 'clear', 'compact'].map(makeStandardOldSessionStartGroup),
-      },
-    };
-    const result = migrateSessionStartOrchestrator(installed, makeOrchestratorTemplate(), { dryRun: true, log: noopLog });
-
-    assert.equal(result.updated, 3);
-    assert.deepEqual(result.skipEvents, ['SessionStart']);
-    assert.match(installed.hooks.SessionStart[0].hooks[0].command, /session-start-inject\.js/);
-  });
-
-  it('skips and protects timeout-drifted old SessionStart hooks', () => {
-    const installed = {
-      hooks: {
-        SessionStart: ['startup', 'clear', 'compact'].map(makeStandardOldSessionStartGroup),
-      },
-    };
-    installed.hooks.SessionStart[0].hooks[0].timeout = 9000;
-    const logs = [];
-    const result = migrateSessionStartOrchestrator(installed, makeOrchestratorTemplate(), { log: line => logs.push(line) });
-
-    assert.equal(result.updated, 0);
-    assert.deepEqual(result.skipEvents, ['SessionStart']);
-    assert.ok(logs.some(line => line.includes('custom/non-standard')));
-    assert.match(installed.hooks.SessionStart[0].hooks[0].command, /session-start-inject\.js/);
-  });
-
-  it('syncHooks dry-run counts a standard SessionStart migration once', () => {
-    const installed = {
-      hooks: {
-        SessionStart: ['startup', 'clear', 'compact'].map(makeStandardOldSessionStartGroup),
-      },
-    };
-    const result = syncHooks(installed, makeOrchestratorTemplate(), { dryRun: true, log: noopLog });
-
-    assert.deepEqual(result, { added: 0, updated: 3, removed: 0 });
-  });
-
-  it('syncHooks preserves custom/non-standard SessionStart configs instead of removing old hooks', () => {
-    const installed = {
-      hooks: {
-        SessionStart: [
-          {
-            ...makeStandardOldSessionStartGroup('startup'),
-            hooks: [
-              ...makeStandardOldSessionStartGroup('startup').hooks,
-              makeHook('/custom/my-session-start.js', 5000),
-            ],
-          },
-          makeStandardOldSessionStartGroup('clear'),
-          makeStandardOldSessionStartGroup('compact'),
-        ],
       },
     };
 
     const result = syncHooks(installed, makeOrchestratorTemplate(), { log: noopLog });
 
-    assert.equal(result.added, 0);
-    assert.equal(result.removed, 0);
-    assert.equal(installed.hooks.SessionStart[0].hooks.length, 5);
-    assert.ok(installed.hooks.SessionStart[0].hooks.some(h => h.command.includes('session-start-inject.js')));
+    assert.deepEqual(result, { added: 3, updated: 0, removed: 12 });
+    assertSessionStartUsesOrchestrator(installed);
   });
-});
 
-// --- migrateMatcherSplit tests ---
-describe('migrateMatcherSplit', () => {
-  const noopLog = () => {};
+  it('converges order-drifted old SessionStart groups', () => {
+    const installed = {
+      hooks: {
+        SessionStart: ['startup', 'clear', 'compact'].map(makeDriftedOldSessionStartGroup),
+      },
+    };
 
-  it('splits a catch-all into specific matchers', () => {
+    syncHooks(installed, makeOrchestratorTemplate(), { log: noopLog });
+
+    assertSessionStartUsesOrchestrator(installed);
+  });
+
+  it('converges timeout-drifted and partial old SessionStart groups', () => {
     const installed = {
       hooks: {
         SessionStart: [
-          makeMatcherGroup('', ['/skills/a/scripts/a.js', '/skills/b/scripts/b.js']),
-        ],
-      },
-    };
-    const template = {
-      hooks: {
-        SessionStart: [
-          makeMatcherGroup('startup', ['/skills/a/scripts/a.js', '/skills/b/scripts/b.js']),
-          makeMatcherGroup('clear', ['/skills/a/scripts/a.js', '/skills/b/scripts/b.js']),
-          makeMatcherGroup('compact', ['/skills/a/scripts/a.js', '/skills/b/scripts/b.js']),
+          {
+            matcher: 'startup',
+            hooks: [
+              makeHook('/Users/howard/zylos/.claude/skills/zylos-memory/scripts/session-start-inject.js', 9000),
+              makeHook('/Users/howard/zylos/.claude/skills/comm-bridge/scripts/c4-session-init.js', 10000),
+              makeHook('/Users/howard/zylos/.claude/skills/activity-monitor/scripts/session-start-prompt.js', 5000),
+            ],
+          },
+          makeStandardOldSessionStartGroup('clear'),
+          makeStandardOldSessionStartGroup('compact'),
         ],
       },
     };
 
-    const count = migrateMatcherSplit(installed, template, { log: noopLog });
+    syncHooks(installed, makeOrchestratorTemplate(), { log: noopLog });
 
-    assert.equal(count, 3);
-    assert.equal(installed.hooks.SessionStart.length, 3);
-    const matchers = installed.hooks.SessionStart.map(g => g.matcher).sort();
-    assert.deepEqual(matchers, ['clear', 'compact', 'startup']);
-    for (const group of installed.hooks.SessionStart) {
-      assert.equal(group.hooks.length, 2);
-    }
+    assertSessionStartUsesOrchestrator(installed);
   });
 
-  it('skips when no catch-all exists in installed config', () => {
+  it('converges old catch-all SessionStart group to specific orchestrator matchers', () => {
     const installed = {
       hooks: {
         SessionStart: [
-          makeMatcherGroup('startup', ['/skills/a/scripts/a.js']),
-        ],
-      },
-    };
-    const template = {
-      hooks: {
-        SessionStart: [
-          makeMatcherGroup('startup', ['/skills/a/scripts/a.js']),
-          makeMatcherGroup('clear', ['/skills/a/scripts/a.js']),
+          {
+            matcher: '',
+            hooks: makeStandardOldSessionStartGroup('').hooks,
+          },
         ],
       },
     };
 
-    const count = migrateMatcherSplit(installed, template, { log: noopLog });
-    assert.equal(count, 0);
-    assert.equal(installed.hooks.SessionStart.length, 1);
+    syncHooks(installed, makeOrchestratorTemplate(), { log: noopLog });
+
+    assertSessionStartUsesOrchestrator(installed);
+    assert.equal(installed.hooks.SessionStart.some(group => group.matcher === ''), false);
   });
 
-  it('skips when template also has a catch-all', () => {
+  it('preserves user command hooks and non-command hooks while removing retired core hooks', () => {
     const installed = {
       hooks: {
         SessionStart: [
-          makeMatcherGroup('', ['/skills/a/scripts/a.js']),
-        ],
-      },
-    };
-    const template = {
-      hooks: {
-        SessionStart: [
-          makeMatcherGroup('', ['/skills/a/scripts/a.js']),
+          {
+            matcher: 'startup',
+            hooks: [
+              ...makeStandardOldSessionStartGroup('startup').hooks,
+              makeHook('/custom/my-session-start.js', 5000),
+              { type: 'prompt', prompt: 'keep me' },
+            ],
+          },
         ],
       },
     };
 
-    const count = migrateMatcherSplit(installed, template, { log: noopLog });
-    assert.equal(count, 0);
+    syncHooks(installed, makeOrchestratorTemplate(), { log: noopLog });
+
+    const startup = installed.hooks.SessionStart.find(group => group.matcher === 'startup');
+    assert.ok(startup.hooks.some(h => h.command?.includes('session-start-orchestrator.js')));
+    assert.ok(startup.hooks.some(h => h.command?.includes('/custom/my-session-start.js')));
+    assert.ok(startup.hooks.some(h => h.type === 'prompt'));
+    assert.equal(startup.hooks.some(h => h.command?.includes('session-start-inject.js')), false);
   });
 
-  it('skips when catch-all has user hooks not in template', () => {
-    const installed = {
-      hooks: {
-        SessionStart: [
-          makeMatcherGroup('', ['/skills/a/scripts/a.js', '/custom/user-hook.js']),
-        ],
-      },
-    };
-    const template = {
-      hooks: {
-        SessionStart: [
-          makeMatcherGroup('startup', ['/skills/a/scripts/a.js']),
-          makeMatcherGroup('clear', ['/skills/a/scripts/a.js']),
-        ],
-      },
-    };
+  it('is idempotent when installed hooks already match the template', () => {
+    const installed = JSON.parse(JSON.stringify(makeOrchestratorTemplate()));
 
-    const count = migrateMatcherSplit(installed, template, { log: noopLog });
-    assert.equal(count, 0);
-    assert.equal(installed.hooks.SessionStart.length, 1);
-    assert.equal(installed.hooks.SessionStart[0].matcher, '');
-  });
+    const result = syncHooks(installed, makeOrchestratorTemplate(), { log: noopLog });
 
-  it('does not duplicate matchers that already exist', () => {
-    const installed = {
-      hooks: {
-        SessionStart: [
-          makeMatcherGroup('', ['/skills/a/scripts/a.js']),
-          makeMatcherGroup('startup', ['/skills/a/scripts/a.js']),
-        ],
-      },
-    };
-    const template = {
-      hooks: {
-        SessionStart: [
-          makeMatcherGroup('startup', ['/skills/a/scripts/a.js']),
-          makeMatcherGroup('clear', ['/skills/a/scripts/a.js']),
-          makeMatcherGroup('compact', ['/skills/a/scripts/a.js']),
-        ],
-      },
-    };
-
-    const count = migrateMatcherSplit(installed, template, { log: noopLog });
-    assert.equal(count, 3);
-    assert.equal(installed.hooks.SessionStart.length, 3);
-    const matchers = installed.hooks.SessionStart.map(g => g.matcher).sort();
-    assert.deepEqual(matchers, ['clear', 'compact', 'startup']);
-  });
-
-  it('dryRun does not modify installed config', () => {
-    const installed = {
-      hooks: {
-        SessionStart: [
-          makeMatcherGroup('', ['/skills/a/scripts/a.js']),
-        ],
-      },
-    };
-    const template = {
-      hooks: {
-        SessionStart: [
-          makeMatcherGroup('startup', ['/skills/a/scripts/a.js']),
-          makeMatcherGroup('clear', ['/skills/a/scripts/a.js']),
-        ],
-      },
-    };
-
-    const count = migrateMatcherSplit(installed, template, { dryRun: true, log: noopLog });
-    assert.equal(count, 2);
-    assert.equal(installed.hooks.SessionStart.length, 1);
-    assert.equal(installed.hooks.SessionStart[0].matcher, '');
-  });
-
-  it('handles undefined matcher as catch-all', () => {
-    const installed = {
-      hooks: {
-        SessionStart: [
-          { hooks: [makeHook('/skills/a/scripts/a.js')] },
-        ],
-      },
-    };
-    const template = {
-      hooks: {
-        SessionStart: [
-          makeMatcherGroup('startup', ['/skills/a/scripts/a.js']),
-        ],
-      },
-    };
-
-    const count = migrateMatcherSplit(installed, template, { log: noopLog });
-    assert.equal(count, 1);
-    assert.equal(installed.hooks.SessionStart.length, 1);
-    assert.equal(installed.hooks.SessionStart[0].matcher, 'startup');
-  });
-
-  it('preserves hook content (command, timeout) during split', () => {
-    const installed = {
-      hooks: {
-        SessionStart: [{
-          matcher: '',
-          hooks: [
-            { type: 'command', command: 'node /skills/a/scripts/a.js', timeout: 5000 },
-            { type: 'command', command: 'node /skills/b/scripts/b.js', timeout: 15000 },
-          ],
-        }],
-      },
-    };
-    const template = {
-      hooks: {
-        SessionStart: [
-          makeMatcherGroup('startup', ['/skills/a/scripts/a.js', '/skills/b/scripts/b.js']),
-          makeMatcherGroup('clear', ['/skills/a/scripts/a.js', '/skills/b/scripts/b.js']),
-        ],
-      },
-    };
-
-    migrateMatcherSplit(installed, template, { log: noopLog });
-
-    for (const group of installed.hooks.SessionStart) {
-      assert.equal(group.hooks[0].timeout, 5000);
-      assert.equal(group.hooks[1].timeout, 15000);
-      assert.ok(group.hooks[0].command.includes('a.js'));
-      assert.ok(group.hooks[1].command.includes('b.js'));
-    }
-  });
-
-  it('handles empty hooks gracefully', () => {
-    const count1 = migrateMatcherSplit({}, {}, { log: noopLog });
-    assert.equal(count1, 0);
-
-    const count2 = migrateMatcherSplit({ hooks: {} }, { hooks: {} }, { log: noopLog });
-    assert.equal(count2, 0);
-  });
-
-  it('works across multiple events independently', () => {
-    const installed = {
-      hooks: {
-        SessionStart: [
-          makeMatcherGroup('', ['/skills/a/scripts/a.js']),
-        ],
-        Stop: [
-          makeMatcherGroup('', ['/skills/b/scripts/b.js']),
-        ],
-      },
-    };
-    const template = {
-      hooks: {
-        SessionStart: [
-          makeMatcherGroup('startup', ['/skills/a/scripts/a.js']),
-          makeMatcherGroup('clear', ['/skills/a/scripts/a.js']),
-        ],
-        Stop: [
-          makeMatcherGroup('success', ['/skills/b/scripts/b.js']),
-        ],
-      },
-    };
-
-    const count = migrateMatcherSplit(installed, template, { log: noopLog });
-    assert.equal(count, 3);
-    assert.equal(installed.hooks.SessionStart.length, 2);
-    assert.equal(installed.hooks.Stop.length, 1);
-    assert.equal(installed.hooks.Stop[0].matcher, 'success');
-  });
-
-  it('logs migration actions', () => {
-    const logs = [];
-    const installed = {
-      hooks: {
-        SessionStart: [
-          makeMatcherGroup('', ['/skills/a/scripts/a.js']),
-        ],
-      },
-    };
-    const template = {
-      hooks: {
-        SessionStart: [
-          makeMatcherGroup('startup', ['/skills/a/scripts/a.js']),
-          makeMatcherGroup('clear', ['/skills/a/scripts/a.js']),
-        ],
-      },
-    };
-
-    migrateMatcherSplit(installed, template, { log: (msg) => logs.push(msg) });
-    assert.equal(logs.length, 1);
-    assert.ok(logs[0].includes('SessionStart'));
-    assert.ok(logs[0].includes('startup'));
-    assert.ok(logs[0].includes('clear'));
+    assert.deepEqual(result, { added: 0, updated: 0, removed: 0 });
+    assertSessionStartUsesOrchestrator(installed);
   });
 });
 
