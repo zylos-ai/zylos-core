@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Codex native SessionStart bootstrap**: Codex now installs a core-managed SessionStart hook, enables `[features] hooks = true` in both project and global config, validates saved trust snapshots on launch, and fails closed if native hook trust cannot be rebuilt. The retired text-prompt bootstrap path was removed to prevent double startup context injection. (#652)
+
 ## [0.5.3] - 2026-06-17
 
 ### Added

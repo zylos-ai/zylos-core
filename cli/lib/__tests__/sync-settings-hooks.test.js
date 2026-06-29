@@ -477,7 +477,8 @@ describe('syncCodexConfig', () => {
     assert.equal(first.changed, true);
     assert.equal(second.changed, false);
     assert.match(files.get(projectConfigPath), /user_added = "keep"/);
-    assert.match(files.get(projectConfigPath), /\[features\][\s\S]*fast_mode = false[\s\S]*multi_agent = true/);
+    assert.match(files.get(projectConfigPath), /\[features\][\s\S]*fast_mode = false[\s\S]*multi_agent = true[\s\S]*hooks = true/);
+    assert.match(files.get(globalConfigPath), /\[features\][\s\S]*hooks = true/);
     assert.match(files.get(globalConfigPath), /model_reasoning_effort = "medium"/);
     assert.match(files.get(globalConfigPath), /\[profile\.fast\]/);
   });

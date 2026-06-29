@@ -41,7 +41,7 @@ describe('renderCodexProjectConfig', () => {
     assert.match(content, /model_availability_nux = "gpt-5\.4"/);
     assert.match(content, /^model = "gpt-5\.5"$/m);
     assert.match(content, /^model_reasoning_effort = "medium"$/m);
-    assert.match(content, /\[features\][\s\S]*multi_agent = true[\s\S]*fast_mode = false/);
+    assert.match(content, /\[features\][\s\S]*multi_agent = true[\s\S]*fast_mode = false[\s\S]*hooks = true/);
     assert.match(content, /\[notice\]/);
     assert.match(content, /hide_full_access_warning = true/);
     assert.match(content, /hide_rate_limit_model_nudge = true/);
@@ -77,7 +77,7 @@ describe('renderCodexProjectConfig', () => {
     assert.doesNotMatch(content, /# User comment/);
     assert.match(content, /check_for_update_on_startup = false/);
     assert.match(content, /model_availability_nux = "gpt-5\.4"/);
-    assert.match(content, /\[features\][\s\S]*fast_mode = false[\s\S]*multi_agent = true[\s\S]*custom_feature = true/);
+    assert.match(content, /\[features\][\s\S]*fast_mode = false[\s\S]*multi_agent = true[\s\S]*custom_feature = true[\s\S]*hooks = true/);
     assert.match(content, /\[profile\.fast\]\nmodel = "gpt-5\.4-mini"/);
   });
 
@@ -134,9 +134,9 @@ describe('renderCodexGlobalConfig', () => {
     assert.match(content, /\[projects\."\/home\/user\/zylos"\]/);
   });
 
-  it('does not include headless settings or features', () => {
+  it('includes only the hooks feature flag, not headless settings', () => {
     const content = renderCodexGlobalConfig('/home/user/zylos');
-    assert.doesNotMatch(content, /\[features\]/);
+    assert.match(content, /\[features\]\nhooks = true/);
     assert.doesNotMatch(content, /\[notice\]/);
     assert.doesNotMatch(content, /check_for_update_on_startup/);
   });
@@ -207,7 +207,7 @@ describe('writeCodexConfig', () => {
       globalContent,
       new RegExp(`\\[projects\\."${escapeRegExp(path.resolve(projectDir))}"\\]\\ntrust_level = "trusted"`)
     );
-    assert.doesNotMatch(globalContent, /\[features\]/);
+    assert.match(globalContent, /\[features\]\nhooks = true/);
     assert.doesNotMatch(globalContent, /\[notice\]/);
   });
 
@@ -270,7 +270,7 @@ describe('writeCodexConfig', () => {
 
     const projectContent = fs.readFileSync(projectConfigPath, 'utf8');
     assert.match(projectContent, /user_added = "keep"/);
-    assert.match(projectContent, /\[features\][\s\S]*fast_mode = false[\s\S]*multi_agent = true/);
+    assert.match(projectContent, /\[features\][\s\S]*fast_mode = false[\s\S]*multi_agent = true[\s\S]*hooks = true/);
   });
 });
 
