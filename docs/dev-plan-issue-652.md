@@ -10,7 +10,7 @@ LLM-instruction-driven path that depends on the model obediently running scripts
 
 ## Background / evidence (locked with Howard)
 
-- **Feasible now.** Installed Codex is `0.142.0`; native hooks are GA and already
+- **Feasible now.** Codex native hooks are GA and already
   live on this machine (dashboard telemetry uses them). No minimum-version gate —
   if a user's Codex is too old, they upgrade Codex.
 - **The orchestrator is already runtime-neutral.** Its two context steps
@@ -109,17 +109,29 @@ LLM-instruction-driven path that depends on the model obediently running scripts
         dashboard's `_enableCodexHookFeature` wrote both files.)
 - [ ] **(B) Core = universal trust backstop at session start** (the decided
       design — see "Cross-component coordination" below). In `CodexAdapter.launch()`,
-      **before** spawning codex:
-  - [ ] Compute a fingerprint (content hash) of `~/zylos/.codex/hooks.json`; if
-        unchanged since the last trust run (marker in core's data dir), **skip** —
-        keep the common case zero-cost.
-  - [ ] If changed (or first run): for **every** hook currently in `hooks.json`
-        (core's + any component's), (re)establish a valid `trusted_hash` at its
-        current `<file>:<event>:<groupIndex>:<hookIndex>` key via `codex app-server`
-        (replicate dashboard's `_trustCodexHooks` flow), then persist the new
-        fingerprint. This heals any index shift / new addition / staleness left by
-        any component's merge or uninstall — components never manage trust.
-  - [ ] Ensure `[features] hooks = true` here too (same backstop pass).
+      **before** spawning codex. The "is trust already valid?" check must verify the
+      ACTUAL invariants, **not** just a `hooks.json` content fingerprint (P2 —
+      a fingerprint misses states where `hooks.json` is unchanged but hooks still
+      won't run):
+  - [ ] **Cheap validity check each launch** (no app-server). Pass iff ALL of:
+        (a) `[features] hooks = true` in the relevant config(s);
+        (b) every hook currently in `hooks.json` has a matching `hooks.state` entry
+            (`enabled = true` + a `trusted_hash`) at its current
+            `<file>:<event>:<groupIndex>:<hookIndex>` key;
+        (c) the Codex binary version is unchanged since the last trust run (a version
+            change can change the hash algorithm → must re-trust).
+        Optimize with a marker = `hash(hooks.json content + codex version)`; the
+        steady state is then a tiny config read, not an app-server call.
+  - [ ] **If the check fails** (hooks.json changed, missing/stale/bad `hooks.state`,
+        feature flag off/missing, or Codex version change): re-establish trust for
+        **every** hook in `hooks.json` — `codex app-server hooks/list` to read each
+        current hash, then `config/batchWrite` to upsert `hooks.state`; set
+        `[features] hooks = true` idempotently; persist the new marker. Use a
+        ~12–15s hard timeout.
+  - [ ] **Fail closed**: if app-server re-trust fails, surface an actionable error
+        rather than silently launching with a broken/untrusted bootstrap.
+  - [ ] This heals any index shift / addition / removal / feature-flag flip / Codex
+        version change from any component — components never manage trust.
 - [ ] **Remove the bespoke bootstrap path** in `cli/lib/runtime/codex.js`:
   - [ ] New-session: drop `args.push(bootstrapPrompt)` (L332).
   - [ ] Existing-session: drop the `sendMessage` prompt injection (L311–318) — the
@@ -144,23 +156,31 @@ LLM-instruction-driven path that depends on the model obediently running scripts
 - [ ] Unit: feature flag set idempotently; uninstall removes only core's group.
 - [ ] Unit: `codex.js launch()` no longer injects a bootstrap prompt in either
       path (new-session args contain no prompt; existing-session cmd has no `$_p`).
-- [ ] Unit: trust backstop — when the `hooks.json` fingerprint changes, it
-      re-establishes trust for ALL hooks at their current indices; when unchanged it
-      skips (no app-server call). Mock the app-server boundary.
+- [ ] Unit: trust backstop validity check — passes (no app-server) only when feature
+      flag on + every hook has a valid `hooks.state` entry + codex version unchanged;
+      skips app-server in that steady state. Mock the app-server boundary.
+- [ ] Unit (P2): `hooks.json` unchanged but a `hooks.state` entry missing/stale →
+      backstop re-trusts.
+- [ ] Unit (P2): `[features] hooks` flipped to `false` / missing → backstop restores
+      it to `true`.
+- [ ] Unit (P2): Codex binary version changed since last trust → backstop re-trusts.
+- [ ] Unit (P2): app-server re-trust failure → **fail closed** with actionable error
+      (does not launch as if trusted).
 - [ ] Unit: backstop heals a simulated index shift (remove a leading group → a
       trailing hook's trust is re-keyed/re-hashed correctly on next run).
 - [ ] Full suite green: `npm test` (Jest + Node).
 - [ ] **Smoke test (HARD GATE — must pass before old path removal is final):**
-      with real Codex `0.142.0` in interactive tmux bypass mode —
+      with the **currently installed** Codex version (do not hardcode — record the
+      actual `codex --version` in the PR) in interactive tmux bypass mode —
   - [ ] SessionStart hook actually fires (ref Codex issue #17532: project-level
         hooks "may not fire" unless trusted — our trust step must make it fire).
   - [ ] Orchestrator runs; memory context + C4 context are injected into the
         session (agent can answer an identity/memory question on first turn).
-  - [ ] Capture the **current 0.142.0 SessionStart payload** from `dashboard.db`
+  - [ ] Capture the **current SessionStart payload** from `dashboard.db`
         and record whether `source` is present (closes the version-drift question).
   - [ ] Confirm **no double-bootstrap** (memory-inject / c4-init run exactly once).
-  - [ ] Confirm the startup follow-up prompt is delivered (Codex takes its first
-        proactive action).
+  - [ ] Confirm the startup follow-up prompt is delivered AND consumed/ack'd by the
+        Codex session (Codex takes its first proactive action).
 
 ## Assumptions
 
@@ -188,17 +208,19 @@ LLM-instruction-driven path that depends on the model obediently running scripts
 - [ ] **Trust can be established non-interactively via `codex app-server`** the way
       the dashboard does. Guaranteed by dashboard's working implementation.
 
-## Open questions for plan review (Jinglever / zylos0t)
+## Plan-review resolutions (Jinglever R1 — verdict: direction sound, continue after folding P2)
 
-1. **Trust code reuse.** Dashboard's trust logic lives in a separate component repo
-   — core must have its own copy. OK to replicate `codex app-server` driving in
-   `cli/lib/codex-hooks.js`, or is there a cleaner shared seam?
-2. **Backstop cost/timing.** Is fingerprint-gated re-trust in `launch()` acceptable,
-   and is driving `codex app-server` just before spawning interactive codex safe
-   (sequential)? Confirm the cheapest correct "is trust already valid?" check.
-3. **`enqueueStartupPrompt` for Codex.** Confirm the scheduler/comm-bridge startup
-   prompt is the right mechanism for Codex's "first proactive action," vs. anything
-   the old launch-arg prompt did that the orchestrator path doesn't cover.
+1. **Trust code reuse → RESOLVED.** Replicate a minimal `codex app-server` driver in
+   core (`cli/lib/codex-hooks.js`); do **not** import dashboard. Long-term dashboard
+   drops its trust code (zylos-dashboard#283) so core is the only trust module.
+2. **Backstop cost/timing → RESOLVED (folded into item B / P2).** Launch-time
+   re-trust is acceptable, but the skip check must verify real invariants (not a bare
+   fingerprint). Changed path: `codex app-server hooks/list` → currentHash, then
+   `config/batchWrite` to upsert `hooks.state`; ~12–15s hard timeout; fail-closed.
+3. **`enqueueStartupPrompt` → RESOLVED.** C4 control queue is the right mechanism: in
+   the native path stdout carries context, the `session-start-prompt` enqueue drives
+   the proactive continuation. Acceptance must assert the startup control is delivered
+   AND consumed/ack'd by the Codex session, and memory-inject / c4-init run once.
 
 ## Cross-component coordination with dashboard (DECIDED)
 
@@ -254,7 +276,8 @@ core's launch backstop already heals.
       the hook still fires.
 - [ ] Dashboard uninstalled while core stays → core's hook still bootstraps (backstop
       re-trusts after the index shift).
-- [ ] Smoke-test gate passed (all items above), with the captured 0.142.0 payload
+- [ ] Smoke-test gate passed (all items above), with the captured payload + actual
+      `codex --version`
       recorded in the PR.
 - [ ] No regressions on the Claude path (orchestrator unchanged; Claude tests green).
 - [ ] `npm test` green; lint clean.
