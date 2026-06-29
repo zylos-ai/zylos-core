@@ -54,7 +54,10 @@ export const PENDING_CHANNELS_FILE = path.join(ACTIVITY_MONITOR_DIR, 'pending-ch
 export const ATTACHMENTS_DIR = path.join(DATA_DIR, 'attachments');
 export const SKILLS_DIR = path.join(ZYLOS_DIR, '.claude', 'skills');
 
-export const CHECKPOINT_THRESHOLD = 30;      // unsummarized conversation count to trigger Memory Sync
+// Single source of truth for the Memory Sync checkpoint threshold (unsummarized
+// conversation count that triggers a sync). Imported by the activity-monitor
+// context-monitor / monitor scripts — do NOT re-declare it as a literal elsewhere.
+export const CHECKPOINT_THRESHOLD = 15;
 export const SESSION_INIT_RECENT_COUNT = 6;  // max conversations returned by session-init when above threshold
 
 export const STALE_STATUS_THRESHOLD = 5000; // ms

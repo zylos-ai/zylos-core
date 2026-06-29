@@ -19,6 +19,7 @@ import { execFileSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import { CHECKPOINT_THRESHOLD } from '../../comm-bridge/scripts/c4-config.js';
 
 const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
 const AM_DIR = path.join(ZYLOS_DIR, 'activity-monitor');
@@ -38,7 +39,7 @@ const COOLDOWN_SECONDS = 300;   // Re-trigger after 5 minutes if still above thr
 // completes in the background before new-session fires.
 const MEMORY_SYNC_RATIO = 0.8;
 const MEMORY_SYNC_THRESHOLD = Math.round(RESTART_THRESHOLD * MEMORY_SYNC_RATIO);
-const CHECKPOINT_THRESHOLD = 30;  // must match c4-config.js CHECKPOINT_THRESHOLD
+// CHECKPOINT_THRESHOLD imported from c4-config.js (single source of truth).
 const MEMORY_SYNC_COOLDOWN_SECONDS = 600;  // 10 min — prevent re-inject while sync is running
 
 function readThresholdFromConfig() {

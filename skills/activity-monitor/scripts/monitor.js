@@ -147,6 +147,7 @@ import {
 } from './adapters/runtime-components.js';
 import { createActivityMonitorTaskScheduler } from './tasks/activity-monitor-tasks.js';
 import { readTmuxInputState } from '../../comm-bridge/scripts/tmux-input-state.js';
+import { CHECKPOINT_THRESHOLD } from '../../comm-bridge/scripts/c4-config.js';
 // activity-monitor runs as a deployed skill at ~/zylos/.claude/skills/activity-monitor/scripts/.
 // A relative import to cli/lib/runtime/ resolves correctly in the repo (dev) but NOT from
 // the deployed path — the CLI lives in the globally installed zylos npm package.
@@ -565,7 +566,7 @@ function getTmuxActivity() {
   }
 }
 
-const CHECKPOINT_THRESHOLD = 30;  // must match c4-config.js CHECKPOINT_THRESHOLD
+// CHECKPOINT_THRESHOLD imported from c4-config.js (single source of truth).
 const MEMORY_SYNC_COOLDOWN_SECONDS = 600;  // 10 min — prevent re-inject while sync is running
 let lastMemorySyncTriggerAt = 0;
 

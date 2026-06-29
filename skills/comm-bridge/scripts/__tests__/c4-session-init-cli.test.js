@@ -107,7 +107,7 @@ describe('c4-session-init', () => {
 
   it('triggers Memory Sync instruction when over threshold', () => {
     withTmpDir(({ env }) => {
-      // CHECKPOINT_THRESHOLD is 30; insert 31 messages
+      // CHECKPOINT_THRESHOLD is 15; insert 31 messages (well over threshold)
       for (let i = 1; i <= 31; i++) {
         receive(['--channel', 'system', '--no-reply', '--content', `msg${i}`], env);
       }
