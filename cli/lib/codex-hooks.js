@@ -316,20 +316,6 @@ export function isCodexTrustValid({
   return { valid: true, reason: 'trusted' };
 }
 
-function trustStateFromHooksList(data = []) {
-  const state = {};
-  for (const entry of data || []) {
-    for (const hook of entry.hooks || []) {
-      if (!hook?.key || !hook?.currentHash || hook.isManaged) continue;
-      state[hook.key] = {
-        enabled: true,
-        trusted_hash: hook.currentHash,
-      };
-    }
-  }
-  return stable(state);
-}
-
 export function hookKeyFor({ zylosDir, event, groupIndex, hookIndex }) {
   return `${codexHooksPath(zylosDir)}:${eventKey(event)}:${groupIndex}:${hookIndex}`;
 }
@@ -527,6 +513,5 @@ export function ensureCodexHooksTrusted({
 export const _test = {
   sha256,
   stableJson,
-  trustStateFromHooksList,
   parseToml,
 };

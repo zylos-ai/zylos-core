@@ -331,4 +331,33 @@ describe('Codex hook trust backstop', () => {
       /Codex hook trust failed \(hooks_list_error\)/
     );
   });
+
+  it('fails closed when app-server succeeds but no matching trust snapshot is written', () => {
+    const { homeDir, zylosDir } = makeEnv();
+    installCoreCodexHook({ zylosDir });
+    const globalConfigPath = codexGlobalConfigPath(homeDir);
+
+    assert.throws(
+      () => ensureCodexHooksTrusted({
+        zylosDir,
+        projectDir: zylosDir,
+        homeDir,
+        execFileSyncImpl: () => 'codex-cli 0.142.2\n',
+        spawnSyncImpl: () => {
+          fs.mkdirSync(path.dirname(globalConfigPath), { recursive: true });
+          fs.writeFileSync(globalConfigPath, [
+            '[features]',
+            'hooks = true',
+            '',
+            '[hooks.state."/tmp/other-hooks.json:session_start:0:0"]',
+            'enabled = true',
+            'trusted_hash = "sha256:other"',
+            '',
+          ].join('\n'));
+          return { status: 0, stdout: JSON.stringify({ ok: true, trusted: 1 }) + '\n', stderr: '' };
+        },
+      }),
+      /Codex hook trust failed \(empty_trust_snapshot\)/
+    );
+  });
 });
