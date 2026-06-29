@@ -113,15 +113,21 @@ LLM-instruction-driven path that depends on the model obediently running scripts
       ACTUAL invariants, **not** just a `hooks.json` content fingerprint (P2 —
       a fingerprint misses states where `hooks.json` is unchanged but hooks still
       won't run):
-  - [ ] **Cheap validity check each launch** (no app-server). Pass iff ALL of:
+  - [ ] **Cheap validity check each launch** (no app-server). After each successful
+        re-trust, core saves a marker of what it authoritatively wrote:
+        `{ hash(hooks.json content), codex version, trustSnapshot }`, where
+        `trustSnapshot` = the sorted set of relevant `hooks.state` entries
+        (`key → {enabled, trusted_hash}`). The check passes iff ALL of:
         (a) `[features] hooks = true` in the relevant config(s);
-        (b) every hook currently in `hooks.json` has a matching `hooks.state` entry
-            (`enabled = true` + a `trusted_hash`) at its current
-            `<file>:<event>:<groupIndex>:<hookIndex>` key;
-        (c) the Codex binary version is unchanged since the last trust run (a version
-            change can change the hash algorithm → must re-trust).
-        Optimize with a marker = `hash(hooks.json content + codex version)`; the
-        steady state is then a tiny config read, not an app-server call.
+        (b) `hooks.json` content hash unchanged vs marker;
+        (c) Codex binary version unchanged vs marker (version change can change the
+            hash algorithm → must re-trust);
+        (d) the current `hooks.state` **exactly equals** the saved `trustSnapshot`.
+            This catches not just a missing entry but a `trusted_hash` **value** that
+            was corrupted / hand-edited / written by an old tool (P2-R2: a present-
+            but-wrong hash makes Codex skip the hook, yet a presence-only check would
+            wrongly pass).
+        Steady state is a tiny config read + compare — no app-server call.
   - [ ] **If the check fails** (hooks.json changed, missing/stale/bad `hooks.state`,
         feature flag off/missing, or Codex version change): re-establish trust for
         **every** hook in `hooks.json` — `codex app-server hooks/list` to read each
@@ -161,6 +167,9 @@ LLM-instruction-driven path that depends on the model obediently running scripts
       skips app-server in that steady state. Mock the app-server boundary.
 - [ ] Unit (P2): `hooks.json` unchanged but a `hooks.state` entry missing/stale →
       backstop re-trusts.
+- [ ] Unit (P2-R2): `hooks.json` + Codex version unchanged, a `hooks.state` entry
+      exists but its `trusted_hash` **value** differs from the saved snapshot
+      (corrupted/hand-edited) → backstop re-trusts (does **not** skip).
 - [ ] Unit (P2): `[features] hooks` flipped to `false` / missing → backstop restores
       it to `true`.
 - [ ] Unit (P2): Codex binary version changed since last trust → backstop re-trusts.
