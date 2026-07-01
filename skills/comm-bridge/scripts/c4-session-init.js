@@ -24,7 +24,7 @@ export async function initC4Session() {
       getLastCheckpoint,
       getUnsummarizedRange,
       getUnsummarizedConversations,
-      formatConversations,
+      formatConversationsForAgent,
       close: closeDb,
     } = await import('./c4-db.js');
     close = closeDb;
@@ -59,7 +59,7 @@ export async function initC4Session() {
       ? getUnsummarizedConversations(SESSION_INIT_RECENT_COUNT)
       : getUnsummarizedConversations();
 
-    sections.push(formatSection('RECENT CONVERSATIONS', formatConversations(conversations)));
+    sections.push(formatSection('RECENT CONVERSATIONS', formatConversationsForAgent(conversations)));
 
     // If over threshold, append Memory Sync instruction
     if (needsSync) {

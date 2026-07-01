@@ -105,6 +105,56 @@ describe('c4-session-init', () => {
     });
   });
 
+  it('adds reply routing for inbound endpoint messages', () => {
+    withTmpDir(({ tmpDir, env }) => {
+      fs.mkdirSync(path.join(tmpDir, '.claude', 'skills', 'telegram'), { recursive: true });
+      receive(['--channel', 'telegram', '--endpoint', '123', '--content', 'hello'], env);
+
+      const { stdout, status } = cli([], env);
+      assert.equal(status, 0);
+      assert.ok(stdout.includes('hello ---- reply via: node'));
+      assert.ok(stdout.includes('"telegram" "123"'));
+    });
+  });
+
+  it('does not add reply routing for no-reply messages', () => {
+    withTmpDir(({ env }) => {
+      receive(['--channel', 'system', '--no-reply', '--content', 'system note'], env);
+
+      const { stdout, status } = cli([], env);
+      assert.equal(status, 0);
+      assert.ok(stdout.includes('system note'));
+      assert.ok(!stdout.includes('reply via:'));
+    });
+  });
+
+  it('does not add reply routing for no-reply messages even when endpoint was provided', () => {
+    withTmpDir(({ tmpDir, env }) => {
+      fs.mkdirSync(path.join(tmpDir, '.claude', 'skills', 'telegram'), { recursive: true });
+      receive(['--channel', 'telegram', '--endpoint', '123', '--no-reply', '--content', 'no callback'], env);
+
+      const { stdout, status } = cli([], env);
+      assert.equal(status, 0);
+      assert.ok(stdout.includes('no callback'));
+      assert.ok(!stdout.includes('reply via:'));
+    });
+  });
+
+  it('does not duplicate legacy stored reply routing', () => {
+    withTmpDir(({ tmpDir, env }) => {
+      fs.mkdirSync(path.join(tmpDir, '.claude', 'skills', 'telegram'), { recursive: true });
+      receive([
+        '--channel', 'telegram',
+        '--endpoint', '123',
+        '--content', 'legacy ---- reply via: node /tmp/c4-send.js "telegram" "123"'
+      ], env);
+
+      const { stdout, status } = cli([], env);
+      assert.equal(status, 0);
+      assert.equal((stdout.match(/reply via:/g) || []).length, 1);
+    });
+  });
+
   it('triggers Memory Sync instruction when over threshold', () => {
     withTmpDir(({ env }) => {
       // CHECKPOINT_THRESHOLD is 15; insert 31 messages (well over threshold)

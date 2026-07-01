@@ -196,6 +196,7 @@ describe('formatConversations', () => {
     assert.ok(result.includes('IN'));
     assert.ok(result.includes('telegram:123'));
     assert.ok(result.includes('hello'));
+    assert.ok(!result.includes('reply via:'));
   });
 
   it('formats OUT conversation without endpoint', () => {
@@ -209,5 +210,74 @@ describe('formatConversations', () => {
     assert.ok(result.includes('OUT'));
     assert.ok(result.includes('(telegram)'));
     assert.ok(result.includes('reply'));
+  });
+});
+
+describe('formatConversationsForAgent', () => {
+  it('adds reply routing for IN conversation with endpoint', () => {
+    const result = mod.formatConversationsForAgent([{
+      timestamp: '2025-01-15 10:00:00',
+      direction: 'in',
+      channel: 'telegram',
+      endpoint_id: '123',
+      content: 'hello'
+    }]);
+
+    assert.ok(result.includes('hello ---- reply via: node'));
+    assert.ok(result.includes('"telegram" "123"'));
+  });
+
+  it('does not add reply routing for OUT conversation', () => {
+    const result = mod.formatConversationsForAgent([{
+      timestamp: '2025-01-15 10:00:00',
+      direction: 'out',
+      channel: 'telegram',
+      endpoint_id: '123',
+      content: 'reply'
+    }]);
+
+    assert.ok(result.includes('reply'));
+    assert.ok(!result.includes('reply via:'));
+  });
+
+  it('does not add reply routing when endpoint is missing', () => {
+    const result = mod.formatConversationsForAgent([{
+      timestamp: '2025-01-15 10:00:00',
+      direction: 'in',
+      channel: 'system',
+      endpoint_id: null,
+      content: 'notice'
+    }]);
+
+    assert.ok(result.includes('notice'));
+    assert.ok(!result.includes('reply via:'));
+  });
+
+  it('does not duplicate legacy stored reply routing', () => {
+    const legacy = 'hello ---- reply via: node /tmp/c4-send.js "telegram" "123"';
+    const result = mod.formatConversationsForAgent([{
+      timestamp: '2025-01-15 10:00:00',
+      direction: 'in',
+      channel: 'telegram',
+      endpoint_id: '123',
+      content: legacy
+    }]);
+
+    assert.equal((result.match(/reply via:/g) || []).length, 1);
+  });
+
+  it('adds reply routing when content only mentions the marker text', () => {
+    const content = 'Please inspect the literal marker ---- reply via: in this paragraph.';
+    const result = mod.formatConversationsForAgent([{
+      timestamp: '2025-01-15 10:00:00',
+      direction: 'in',
+      channel: 'telegram',
+      endpoint_id: '123',
+      content
+    }]);
+
+    assert.ok(result.includes(content));
+    assert.ok(result.includes('"telegram" "123"'));
+    assert.equal((result.match(/reply via:/g) || []).length, 2);
   });
 });
