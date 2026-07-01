@@ -265,4 +265,19 @@ describe('formatConversationsForAgent', () => {
 
     assert.equal((result.match(/reply via:/g) || []).length, 1);
   });
+
+  it('adds reply routing when content only mentions the marker text', () => {
+    const content = 'Please inspect the literal marker ---- reply via: in this paragraph.';
+    const result = mod.formatConversationsForAgent([{
+      timestamp: '2025-01-15 10:00:00',
+      direction: 'in',
+      channel: 'telegram',
+      endpoint_id: '123',
+      content
+    }]);
+
+    assert.ok(result.includes(content));
+    assert.ok(result.includes('"telegram" "123"'));
+    assert.equal((result.match(/reply via:/g) || []).length, 2);
+  });
 });

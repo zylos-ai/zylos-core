@@ -9,7 +9,7 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { DATA_DIR, DB_PATH, CONTROL_MAX_RETRIES } from './c4-config.js';
-import { buildReplyViaSuffix } from './c4-utils.js';
+import { buildReplyViaSuffix, hasLegacyReplyViaSuffix } from './c4-utils.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -746,7 +746,7 @@ export function formatConversationsForAgent(conversations) {
     const replyViaSuffix = (
       conv.direction === 'in' &&
       conv.endpoint_id &&
-      !content.includes('---- reply via:')
+      !hasLegacyReplyViaSuffix(content)
     ) ? buildReplyViaSuffix(conv.channel, conv.endpoint_id) : '';
     lines.push(`[${conv.timestamp}] ${dir} (${conv.channel}${endpoint}):`);
     lines.push(`${content}${replyViaSuffix}`);

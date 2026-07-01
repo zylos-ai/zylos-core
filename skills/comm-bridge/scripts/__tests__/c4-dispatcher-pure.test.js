@@ -447,6 +447,20 @@ describe('getDeliveryContent', () => {
     }), legacy);
   });
 
+  it('adds reply routing when ordinary content only mentions the marker text', () => {
+    const content = 'Please inspect the literal marker ---- reply via: in this paragraph.';
+    const result = getDeliveryContent({
+      type: 'conversation',
+      channel: 'telegram',
+      endpoint_id: '123',
+      content
+    });
+
+    assert.ok(result.startsWith(content));
+    assert.ok(result.includes(' ---- reply via: node'));
+    assert.equal((result.match(/reply via:/g) || []).length, 2);
+  });
+
   it('prefixes non-slash control messages', () => {
     assert.equal(getDeliveryContent({
       type: 'control',
