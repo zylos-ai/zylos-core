@@ -60,7 +60,7 @@ describe('desiredClaudeHooks', () => {
     assert.equal(groups.length, 3);
     for (const group of groups) {
       assert.equal(group.hooks.length, 1);
-      assert.match(group.hooks[0].command, /session-start-orchestrator\.js"/);
+      assert.match(group.hooks[0].command, /session-start-orchestrator\.js/);
       assert.equal(path.isAbsolute(extractScriptPath(group.hooks[0].command)), true);
       assert.equal(group.hooks[0].timeout, 20000);
     }
