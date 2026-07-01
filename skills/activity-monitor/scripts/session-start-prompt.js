@@ -9,6 +9,7 @@
 
 import { execFile } from 'child_process';
 import { promisify } from 'node:util';
+import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { fileURLToPath } from 'node:url';
@@ -17,6 +18,7 @@ const execFileAsync = promisify(execFile);
 
 const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
 const C4_CONTROL = path.join(ZYLOS_DIR, '.claude/skills/comm-bridge/scripts/c4-control.js');
+const STATE_PATH = path.join(ZYLOS_DIR, 'memory', 'state.md');
 const DEFAULT_CHILD_TIMEOUT_MS = 2500;
 let diagnosticModule;
 let diagnosticLoadAttempted = false;
@@ -82,11 +84,25 @@ const prompt = [
   'and do not query c4.db for recent conversations unless explicitly required.'
 ].join(' ');
 
+export function isOnboardingPending({
+  statePath = STATE_PATH,
+  readFileSync = fs.readFileSync,
+} = {}) {
+  try {
+    return /^-\s+Status:\s+pending\b/m.test(readFileSync(statePath, 'utf8'));
+  } catch {
+    return false;
+  }
+}
+
 export async function enqueueStartupPrompt(source, {
   execFile = execFileAsync,
   controlPath = C4_CONTROL,
   childTimeoutMs = DEFAULT_CHILD_TIMEOUT_MS,
+  onboardingPending = isOnboardingPending,
 } = {}) {
+  if (onboardingPending()) return { skipped: true, reason: 'onboarding_pending' };
+
   // Async execFile (not execFileSync): keeps the event loop free so this step
   // genuinely runs in parallel with the foreground step, and so the
   // orchestrator's per-step withTimeout budget can actually preempt it.
@@ -101,6 +117,7 @@ export async function enqueueStartupPrompt(source, {
     timeout: childTimeoutMs,
     killSignal: 'SIGKILL',
   });
+  return { skipped: false };
 }
 
 async function main() {

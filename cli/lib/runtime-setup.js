@@ -14,6 +14,7 @@ import { parse, stringify } from 'smol-toml';
 import { ZYLOS_DIR } from './config.js';
 import { commandExists } from './shell-utils.js';
 import { parseClaudeAuthStatus, parseCodexLoginStatus } from './auth-parsers.js';
+import { installCoreCodexHook } from './codex-hooks.js';
 
 function upsertEnvValue(content, key, value, comment = null) {
   const line = `${key}=${value}`;
@@ -372,6 +373,7 @@ export function renderCodexProjectConfig(existingContent = '') {
   obj.features = isTomlSectionValue(obj.features) ? obj.features : {};
   obj.features.multi_agent = true;
   obj.features.fast_mode = false;
+  obj.features.hooks = true;
 
   const existingNotice = isTomlSectionValue(obj.notice) ? obj.notice : {};
   const notice = { ...CODEX_NOTICE };
@@ -405,6 +407,8 @@ export function renderCodexGlobalConfig(projectDir, existingContent = '', opts =
   if (openaiBaseUrl) {
     obj.openai_base_url = openaiBaseUrl;
   }
+  obj.features = isTomlSectionValue(obj.features) ? obj.features : {};
+  obj.features.hooks = true;
   obj.projects = isTomlSectionValue(obj.projects) ? obj.projects : {};
   obj.projects[absProject] = { trust_level: 'trusted' };
   return tomlWithHeader(CODEX_GLOBAL_HEADER, obj);
@@ -453,6 +457,8 @@ export function writeCodexConfig(projectDir, opts = {}) {
       renderCodexGlobalConfig(projectDir, existing, opts),
       'utf8'
     );
+
+    installCoreCodexHook({ zylosDir: projectDir });
 
     return true;
   } catch {

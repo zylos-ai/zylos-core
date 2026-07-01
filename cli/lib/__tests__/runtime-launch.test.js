@@ -76,6 +76,26 @@ mock.module('node:child_process', {
       if (args?.includes('auth')) throw new Error('not logged in');
       return '';
     }),
+    spawnSync: mock.fn((file, args, opts) => {
+      const zylosDir = opts?.env?.ZYLOS_CODEX_TRUST_CWD || fakeZylosDir;
+      const key = `${path.join(zylosDir, '.codex', 'hooks.json')}:session_start:0:0`;
+      const configPath = path.join(fakeHome, '.codex', 'config.toml');
+      fs.mkdirSync(path.dirname(configPath), { recursive: true });
+      fs.writeFileSync(configPath, [
+        '[features]',
+        'hooks = true',
+        '',
+        `[hooks.state."${key}"]`,
+        'enabled = true',
+        'trusted_hash = "sha256:test"',
+        '',
+      ].join('\n'));
+      return {
+        status: 0,
+        stdout: JSON.stringify({ ok: true, trusted: 1 }) + '\n',
+        stderr: '',
+      };
+    }),
     execFile: mock.fn((...fnArgs) => {
       const cb = fnArgs.find(a => typeof a === 'function');
       if (cb) process.nextTick(() => cb(null, '', ''));
@@ -128,6 +148,19 @@ function readSpecEnv() {
   try {
     const spec = JSON.parse(fs.readFileSync(specMatch[1], 'utf8'));
     return spec.env;
+  } catch {
+    return null;
+  }
+}
+
+function readLaunchSpec() {
+  const tmux = findTmuxNewSession();
+  if (!tmux) return null;
+  const lastArg = tmux.args[tmux.args.length - 1];
+  const specMatch = lastArg.match(/"([^"]+\.json)"/);
+  if (!specMatch) return null;
+  try {
+    return JSON.parse(fs.readFileSync(specMatch[1], 'utf8'));
   } catch {
     return null;
   }
@@ -293,6 +326,16 @@ describe('Codex launch — new session', () => {
     const joined = tmux.args.join(' ');
     assert.ok(!joined.includes('sk-ant-'), 'tmux cmdline must not contain API key value');
   });
+
+  it('launch spec does not contain the retired text bootstrap prompt', async () => {
+    tmuxSessionExists = false;
+    await makeAdapter(CodexAdapter).launch({ bypassPermissions: false });
+
+    const spec = readLaunchSpec();
+    assert.ok(spec, 'spec should be written');
+    assert.deepEqual(spec.args, []);
+    assert.ok(!JSON.stringify(spec).includes('session-start-inject.js'));
+  });
 });
 
 describe('Codex launch — existing session', () => {
@@ -306,7 +349,7 @@ describe('Codex launch — existing session', () => {
     assert.equal(findTmuxNewSession(), undefined, 'must NOT call tmux new-session');
   });
 
-  it('preserves bootstrap prompt in sendMessage', async () => {
+  it('does not inject a bootstrap prompt in sendMessage', async () => {
     tmuxSessionExists = true;
     let sent = '';
     const adapter = makeAdapter(CodexAdapter);
@@ -316,9 +359,7 @@ describe('Codex launch — existing session', () => {
 
     assert.ok(sent.length > 0, 'sendMessage should be called');
     assert.ok(sent.includes('codex'), 'sent command should reference codex');
-    assert.ok(
-      sent.includes('_p=$(cat'),
-      'existing-session command should load bootstrap prompt via temp file'
-    );
+    assert.ok(!sent.includes('_p=$(cat'), 'existing-session command should not load bootstrap prompt');
+    assert.ok(!sent.includes('session-start-inject.js'), 'existing-session command should not run text bootstrap');
   });
 });

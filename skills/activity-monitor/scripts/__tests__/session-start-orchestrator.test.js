@@ -13,7 +13,7 @@ import {
   runStep,
   writeAllSync,
 } from '../session-start-orchestrator.js';
-import { enqueueStartupPrompt } from '../session-start-prompt.js';
+import { enqueueStartupPrompt, isOnboardingPending } from '../session-start-prompt.js';
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const C4_SESSION_INIT = path.resolve(SCRIPT_DIR, '../../../comm-bridge/scripts/c4-session-init.js');
@@ -317,6 +317,27 @@ describe('session-start-orchestrator', () => {
     assert.deepEqual(calls[0][1].slice(0, 2), ['/tmp/c4-control.js', 'enqueue']);
     assert.equal(calls[0][2].timeout, 1234);
     assert.equal(calls[0][2].killSignal, 'SIGKILL');
+  });
+
+  it('detects onboarding pending from state.md content', () => {
+    assert.equal(isOnboardingPending({
+      readFileSync: () => '# Active State\n\n## Onboarding\n- Status: pending\n',
+    }), true);
+    assert.equal(isOnboardingPending({
+      readFileSync: () => '# Active State\n\n## Onboarding\n- Status: completed\n',
+    }), false);
+  });
+
+  it('skips startup prompt enqueue while onboarding is pending', async () => {
+    const calls = [];
+    const result = await enqueueStartupPrompt('startup', {
+      controlPath: '/tmp/c4-control.js',
+      onboardingPending: () => true,
+      execFile: (...args) => calls.push(args),
+    });
+
+    assert.deepEqual(result, { skipped: true, reason: 'onboarding_pending' });
+    assert.equal(calls.length, 0);
   });
 
   it('awaits the prompt child asynchronously (genuinely parallelizable)', async () => {

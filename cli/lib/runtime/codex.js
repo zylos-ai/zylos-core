@@ -39,6 +39,7 @@ import {
 } from './tmux-helpers.js';
 import { buildCleanEnv, buildCompatEnv, loadRuntimeEnvManifest, writeLaunchSpec } from './tmux-env.js';
 import { classifyCodexLoginStatus } from '../auth-parsers.js';
+import { ensureCodexHooksTrusted } from '../codex-hooks.js';
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -64,49 +65,6 @@ function getCodexApiBaseUrl() {
   }
 
   return 'https://api.openai.com/v1';
-}
-
-export function isOnboardingPendingState(stateContent = '') {
-  return /^-\s+Status:\s+pending\b/m.test(stateContent);
-}
-
-export function buildCodexBootstrapPrompt(zylosDir = ZYLOS_DIR) {
-  const memInjectScript = path.join(zylosDir, '.claude', 'skills', 'zylos-memory', 'scripts', 'session-start-inject.js');
-  const sessionInitScript = path.join(zylosDir, '.claude', 'skills', 'comm-bridge', 'scripts', 'c4-session-init.js');
-  const startupPromptScript = path.join(zylosDir, '.claude', 'skills', 'activity-monitor', 'scripts', 'session-start-prompt.js');
-  const statePath = path.join(zylosDir, 'memory', 'state.md');
-
-  let onboardingPending = false;
-  try {
-    const stateContent = fs.readFileSync(statePath, 'utf8');
-    onboardingPending = isOnboardingPendingState(stateContent);
-  } catch {
-    onboardingPending = false;
-  }
-
-  const lines = [
-    'Codex session bootstrap: run the following startup steps in order before doing any other work.',
-    `1) node "${memInjectScript}"`,
-    '   Read its stdout as startup memory context (identity/state/references).',
-    `2) node "${sessionInitScript}"`,
-    '   Read its stdout as C4 startup context (checkpoint + recent conversations).',
-  ];
-
-  if (onboardingPending) {
-    lines.push(
-      '3) Do not run the startup follow-up trigger yet because onboarding is pending.',
-      '   Wait for the first real user message with a `reply via:` path before any proactive reply, onboarding notice, or ongoing-task continuation.',
-      'Then stop and wait for that user message.'
-    );
-  } else {
-    lines.push(
-      `3) node "${startupPromptScript}"`,
-      '   This enqueues the startup control message for active follow-up.',
-      'Then continue according to the latest control message and ongoing conversation context.'
-    );
-  }
-
-  return lines.join('\n');
 }
 
 // ── CodexAdapter ──────────────────────────────────────────────────────────────
@@ -257,7 +215,7 @@ export class CodexAdapter extends RuntimeAdapter {
   }
 
   enqueueStartupPrompt() {
-    // Codex receives the bootstrap prompt as the initial launch argument.
+    // Native SessionStart hook owns Codex startup context and follow-up.
   }
 
   // ── Launch ────────────────────────────────────────────────────────────────
@@ -266,7 +224,7 @@ export class CodexAdapter extends RuntimeAdapter {
    * Build the instruction file and start Codex in the tmux session.
    *
    * New session: builds env via launcher pipeline (clean or compat mode).
-   * Existing session: sends command via sendMessage with bootstrap prompt.
+   * Existing session: sends command via sendMessage; native SessionStart hook bootstraps.
    * Auth is handled by Codex internally (reads ~/.codex/auth.json via HOME).
    *
    * @param {object} [opts]
@@ -291,11 +249,12 @@ export class CodexAdapter extends RuntimeAdapter {
       } catch { /* non-fatal */ }
     }
 
-    // 2. Build the bootstrap prompt
-    let bootstrapPrompt = null;
-    try {
-      bootstrapPrompt = buildCodexBootstrapPrompt(ZYLOS_DIR);
-    } catch { /* prompt build failed — launch without initial prompt */ }
+    // 2. Native SessionStart hook trust is required for startup context.
+    ensureCodexHooksTrusted({
+      zylosDir: ZYLOS_DIR,
+      projectDir: ZYLOS_DIR,
+      codexBin: CODEX_BIN,
+    });
 
     // 3. Build the codex command
     const bypassFlag = bypassPermissions ? ' --dangerously-bypass-approvals-and-sandbox' : '';
@@ -306,15 +265,8 @@ export class CodexAdapter extends RuntimeAdapter {
     const exitLogSnippet = `_ec=$?; echo "[$(date -Iseconds)] exit_code=$_ec" >> "${exitLogFile}"`;
 
     if (tmuxHasSession(SESSION)) {
-      // Existing session — sendMessage with bootstrap prompt, no env rebuild
-      let cmd;
-      if (bootstrapPrompt) {
-        const tmpPrompt = path.join(os.tmpdir(), `.zylos-prompt-${process.pid}-${Date.now()}`);
-        fs.writeFileSync(tmpPrompt, bootstrapPrompt, { mode: 0o600 });
-        cmd = `cd "${ZYLOS_DIR}"; _p=$(cat "${tmpPrompt}"); rm -f "${tmpPrompt}"; ${codexCmd} "$_p"; ${exitLogSnippet}`;
-      } else {
-        cmd = `cd "${ZYLOS_DIR}"; ${codexCmd}; ${exitLogSnippet}`;
-      }
+      // Existing tmux session — start a fresh Codex process. SessionStart fires.
+      const cmd = `cd "${ZYLOS_DIR}"; ${codexCmd}; ${exitLogSnippet}`;
       await this.sendMessage(cmd);
     } else {
       // New session — launcher pipeline
@@ -329,7 +281,6 @@ export class CodexAdapter extends RuntimeAdapter {
       // Build launch spec — Codex reads auth from ~/.codex/auth.json via HOME
       const args = [];
       if (bypassPermissions) args.push('--dangerously-bypass-approvals-and-sandbox');
-      if (bootstrapPrompt) args.push(bootstrapPrompt);
 
       const launcherPath = path.join(path.dirname(import.meta.url.replace('file://', '')), 'tmux-launcher.js');
       const specPath = writeLaunchSpec({

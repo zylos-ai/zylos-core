@@ -12,6 +12,7 @@ model_availability_nux = "gpt-5.4"
 # Enable Codex features required by Zylos runtime workflows.
 [features]
 multi_agent = true
+hooks = true
 
 # Suppress all known interactive notice dialogs
 [notice]
