@@ -320,6 +320,18 @@ export class CodexAdapter extends RuntimeAdapter {
         }
       } catch { /* non-fatal */ }
     }, 8000);
+
+    // 5. Send kick message to trigger SessionStart hook (12s after launch).
+    // Codex's SessionStart hook is lazy — it only fires on the first user
+    // message, not on process start. Without this kick, a PM2-restarted
+    // Codex would sit uninitialized (no memory, no C4 context) until
+    // someone manually sends a message.
+    setTimeout(() => {
+      try {
+        if (!tmuxHasSession(SESSION)) return;
+        this.sendMessage('hello').catch(() => {});
+      } catch { /* non-fatal */ }
+    }, 12000);
   }
 
   // ── Heartbeat / context (Phase 5) ─────────────────────────────────────────
