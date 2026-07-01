@@ -264,9 +264,12 @@ export class CodexAdapter extends RuntimeAdapter {
     const exitLogFile = path.join(monitorDir, 'codex-exit.log');
     const exitLogSnippet = `_ec=$?; echo "[$(date -Iseconds)] exit_code=$_ec" >> "${exitLogFile}"`;
 
+    const kickPrompt = 'hello';
+
     if (tmuxHasSession(SESSION)) {
-      // Existing tmux session — start a fresh Codex process. SessionStart fires.
-      const cmd = `cd "${ZYLOS_DIR}"; ${codexCmd}; ${exitLogSnippet}`;
+      // Existing tmux session — start a fresh Codex process with kick prompt
+      // to trigger SessionStart hook immediately.
+      const cmd = `cd "${ZYLOS_DIR}"; ${codexCmd} "${kickPrompt}"; ${exitLogSnippet}`;
       await this.sendMessage(cmd);
     } else {
       // New session — launcher pipeline
@@ -281,6 +284,7 @@ export class CodexAdapter extends RuntimeAdapter {
       // Build launch spec — Codex reads auth from ~/.codex/auth.json via HOME
       const args = [];
       if (bypassPermissions) args.push('--dangerously-bypass-approvals-and-sandbox');
+      args.push(kickPrompt);
 
       const launcherPath = path.join(path.dirname(import.meta.url.replace('file://', '')), 'tmux-launcher.js');
       const specPath = writeLaunchSpec({
@@ -321,17 +325,6 @@ export class CodexAdapter extends RuntimeAdapter {
       } catch { /* non-fatal */ }
     }, 8000);
 
-    // 5. Send kick message to trigger SessionStart hook (12s after launch).
-    // Codex's SessionStart hook is lazy — it only fires on the first user
-    // message, not on process start. Without this kick, a PM2-restarted
-    // Codex would sit uninitialized (no memory, no C4 context) until
-    // someone manually sends a message.
-    setTimeout(() => {
-      try {
-        if (!tmuxHasSession(SESSION)) return;
-        this.sendMessage('hello').catch(() => {});
-      } catch { /* non-fatal */ }
-    }, 12000);
   }
 
   // ── Heartbeat / context (Phase 5) ─────────────────────────────────────────
