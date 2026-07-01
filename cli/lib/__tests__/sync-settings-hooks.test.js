@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 
 const {
   CORE_MANAGED_HOOKS,
+  desiredClaudeHooks,
   isCoreManaged,
   persistInstalledSettingsAndSyncCoupledThreshold,
   shouldSyncCodexConfig,
@@ -46,23 +47,30 @@ describe('Claude settings template', () => {
     assert.equal(template.autoDreamEnabled, false);
   });
 
-  it('uses the SessionStart orchestrator for all SessionStart matchers', () => {
+  it('does not carry runtime hooks in the template', () => {
     const template = JSON.parse(fs.readFileSync(TEMPLATE_SETTINGS_PATH, 'utf8'));
-    const groups = template.hooks.SessionStart;
+    assert.equal(Object.hasOwn(template, 'hooks'), false);
+  });
+});
+
+describe('desiredClaudeHooks', () => {
+  it('uses absolute SessionStart orchestrator commands for all matchers', () => {
+    const hooks = desiredClaudeHooks();
+    const groups = hooks.SessionStart;
     assert.equal(groups.length, 3);
     for (const group of groups) {
-      const commands = group.hooks.map(h => h.command);
       assert.equal(group.hooks.length, 1);
-      assert.ok(commands.some(cmd => cmd.includes('session-start-orchestrator.js')));
+      assert.match(group.hooks[0].command, /session-start-orchestrator\.js"/);
+      assert.equal(path.isAbsolute(extractScriptPath(group.hooks[0].command)), true);
       assert.equal(group.hooks[0].timeout, 20000);
     }
   });
 
   it('includes PostToolUseFailure activity hook', () => {
-    const template = JSON.parse(fs.readFileSync(TEMPLATE_SETTINGS_PATH, 'utf8'));
-    const groups = template.hooks.PostToolUseFailure || [];
+    const groups = desiredClaudeHooks().PostToolUseFailure || [];
     assert.equal(groups.length, 1);
     assert.ok(groups[0].hooks.some(h => h.command.includes('hook-activity.js')));
+    assert.equal(path.isAbsolute(extractScriptPath(groups[0].hooks[0].command)), true);
   });
 });
 
@@ -552,14 +560,7 @@ function makeDriftedOldSessionStartGroup(matcher) {
 
 function makeOrchestratorTemplate() {
   return {
-    hooks: {
-      SessionStart: ['startup', 'clear', 'compact'].map(matcher => ({
-        matcher,
-        hooks: [
-          makeHook(zylosHookPath('skills/activity-monitor/scripts/session-start-orchestrator.js'), 20000),
-        ],
-      })),
-    },
+    hooks: desiredClaudeHooks(),
   };
 }
 
@@ -661,11 +662,10 @@ describe('hookScriptKey', () => {
 });
 
 describe('core hook registry', () => {
-  it('includes every command hook in the settings template', () => {
-    const template = JSON.parse(fs.readFileSync(TEMPLATE_SETTINGS_PATH, 'utf8'));
+  it('includes every desired command hook', () => {
     const templateKeys = new Set();
 
-    for (const groups of Object.values(template.hooks || {})) {
+    for (const groups of Object.values(desiredClaudeHooks())) {
       if (!Array.isArray(groups)) continue;
       for (const group of groups) {
         for (const hook of getCommandHooks(group)) {
@@ -683,6 +683,24 @@ describe('core hook registry', () => {
 describe('syncHooks SessionStart orchestrator convergence', () => {
   const noopLog = () => {};
 
+  it('ignores templateSettings.hooks and uses runtime desired hooks by default', () => {
+    const installed = { hooks: {} };
+    const templateSettings = {
+      hooks: {
+        SessionStart: [
+          makeMatcherGroup('startup', ['/custom/template-only.js']),
+        ],
+      },
+    };
+
+    syncHooks(installed, templateSettings, { log: noopLog });
+
+    const startup = installed.hooks.SessionStart.find(group => group.matcher === 'startup');
+    assert.ok(startup.hooks.some(h => h.command.includes('session-start-orchestrator.js')));
+    assert.equal(startup.hooks.some(h => h.command.includes('template-only.js')), false);
+    assert.ok(installed.hooks.PostToolUseFailure[0].hooks.some(h => h.command.includes('hook-activity.js')));
+  });
+
   it('converges standard old SessionStart groups through generic sync', () => {
     const installed = {
       hooks: {
@@ -692,7 +710,7 @@ describe('syncHooks SessionStart orchestrator convergence', () => {
 
     const result = syncHooks(installed, makeOrchestratorTemplate(), { log: noopLog });
 
-    assert.deepEqual(result, { added: 3, updated: 0, removed: 12 });
+    assert.deepEqual(result, { added: 10, updated: 0, removed: 12 });
     assertSessionStartUsesOrchestrator(installed);
   });
 
@@ -857,7 +875,7 @@ describe('syncHooks forward pass', () => {
       },
     };
 
-    const result = syncHooks(installed, template, { log: noopLog });
+    const result = syncHooks(installed, template, { log: noopLog, desiredHooks: template.hooks });
 
     const startupGroup = installed.hooks.SessionStart.find(g => g.matcher === 'startup');
     assert.equal(startupGroup.hooks.length, 4);
@@ -925,7 +943,7 @@ describe('syncHooks forward pass', () => {
       },
     };
 
-    const result = syncHooks(installed, template, { log: noopLog });
+    const result = syncHooks(installed, template, { log: noopLog, desiredHooks: template.hooks });
 
     assert.equal(result.added, 4);
     for (const event of ['PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'Stop']) {
@@ -946,7 +964,7 @@ describe('syncHooks forward pass', () => {
       },
     };
 
-    const result = syncHooks(installed, template, { log: noopLog });
+    const result = syncHooks(installed, template, { log: noopLog, desiredHooks: template.hooks });
 
     assert.equal(result.added, 2);
     assert.equal(installed.hooks.SessionStart.length, 2);
@@ -972,7 +990,7 @@ describe('syncHooks forward pass', () => {
       },
     };
 
-    const result = syncHooks(installed, template, { log: noopLog });
+    const result = syncHooks(installed, template, { log: noopLog, desiredHooks: template.hooks });
 
     assert.equal(result.updated, 1);
     assert.equal(installed.hooks.SessionStart[0].hooks[0].timeout, 10000);
@@ -1012,7 +1030,7 @@ describe('syncHooks forward pass', () => {
       },
     };
 
-    syncHooks(installed, template, { log: noopLog });
+    syncHooks(installed, template, { log: noopLog, desiredHooks: template.hooks });
 
     assert.equal(installed.hooks.SessionStart.length, 3);
     const matchers = installed.hooks.SessionStart.map(g => g.matcher).sort();
@@ -1038,7 +1056,7 @@ describe('syncHooks forward pass', () => {
       },
     };
 
-    const result = syncHooks(installed, template, { log: noopLog });
+    const result = syncHooks(installed, template, { log: noopLog, desiredHooks: template.hooks });
 
     // old-skill is not a core skill (not in template), so it's preserved
     assert.equal(result.removed, 0);
@@ -1062,7 +1080,7 @@ describe('syncHooks forward pass', () => {
       },
     };
 
-    syncHooks(installed, template, { log: noopLog });
+    syncHooks(installed, template, { log: noopLog, desiredHooks: template.hooks });
 
     // User's custom hook should still be there, and the missing template hook
     // should be registered in the same matcher group.
@@ -1096,7 +1114,7 @@ describe('syncHooks forward pass', () => {
       },
     };
 
-    const result = syncHooks(installed, template, { log: noopLog });
+    const result = syncHooks(installed, template, { log: noopLog, desiredHooks: template.hooks });
 
     assert.equal(result.removed, 1);
     // startup should still have the hook
