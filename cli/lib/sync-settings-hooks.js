@@ -52,7 +52,7 @@ export function isCoreManaged(hook) {
 
 function zylosClaudeScript(relativePath) {
   const scriptPath = path.resolve(ZYLOS_DIR, '.claude', relativePath);
-  return `node ${JSON.stringify(scriptPath)}`;
+  return `node ${scriptPath}`;
 }
 
 function commandHook(relativePath, options = {}) {
