@@ -57,7 +57,7 @@ import {
   findPromptY as sharedFindPromptY,
   isUsageOverlayCapture as sharedIsUsageOverlayCapture
 } from './tmux-input-state.js';
-import { buildReplyViaSuffix, hasLegacyReplyViaSuffix } from './c4-utils.js';
+import { buildReplyViaSuffix, hasLegacyReplyViaSuffix, truncateForDelivery } from './c4-utils.js';
 
 let isShuttingDown = false;
 let pollInterval = POLL_INTERVAL_BASE;
@@ -512,7 +512,7 @@ export function getDeliveryContent(item) {
       item.endpoint_id &&
       !hasLegacyReplyViaSuffix(rawContent)
     ) ? buildReplyViaSuffix(item.channel, item.endpoint_id) : '';
-    return `${rawContent}${replyViaSuffix}`;
+    return truncateForDelivery(rawContent, replyViaSuffix);
   }
 
   const isSlashCommand = rawContent.startsWith('/');
