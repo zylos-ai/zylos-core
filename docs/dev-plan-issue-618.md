@@ -41,8 +41,8 @@ Reply via is only reconstructed when `direction === 'in'` AND `endpoint_id IS NO
 - [ ] **1. Extract `buildReplyViaSuffix()` as a shared utility**
   - Move the reply-via construction logic from `c4-receive.js buildFullMessage()` into a shared function (in `c4-config.js` or a new `c4-utils.js`)
   - Signature: `buildReplyViaSuffix(channel, endpointId)` → returns `" ---- reply via: node .../c4-send.js \"channel\" \"endpoint\""` or `""` if channel or endpointId is missing/null
-  - Include a legacy guard: if the content already contains `---- reply via:`, return `""` to avoid duplication
-  - Both c4-receive (removed usage) and the read-side consumers import this same function
+  - This function only builds the suffix from route fields. **Callers** are responsible for the legacy duplicate guard (checking if content already contains `---- reply via:` before appending)
+  - Read-side consumers (session-init, dispatcher) import this function
 
 - [ ] **2. Simplify `buildFullMessage()` in c4-receive.js**
   - Remove the `reply via` suffix construction (now in shared utility, but no longer used at write time)
@@ -51,10 +51,11 @@ Reply via is only reconstructed when `direction === 'in'` AND `endpoint_id IS NO
   - `buildFullMessage()` now simply returns `content` (the raw message from the channel)
   - The `noReply` parameter is kept for API compatibility but no longer affects `dbContent`
 
-- [ ] **3. Reconstruct reply via in `c4-session-init.js`**
-  - After `formatConversations()` returns clean output, post-process to append reply via suffixes for inbound messages
-  - Approach: either (a) iterate the conversations array and build a map of line-position → suffix to inject, or (b) use a dedicated `formatConversationsForAgent(conversations)` wrapper that calls `formatConversations()` then appends reply via per inbound record
-  - Only append when `direction === 'in'` AND `endpoint_id` is non-null AND content doesn't already have `---- reply via:`
+- [ ] **3. Add `formatConversationsForAgent()` for session-init**
+  - Create a new function `formatConversationsForAgent(conversations)` (in `c4-db.js` or a new utility) that iterates the original conversation records and appends reply via per-record **before/while formatting** — NOT as string post-processing after `formatConversations()` has flattened the records
+  - For each record: if `direction === 'in'` AND `endpoint_id` is non-null AND `content` does not already contain `---- reply via:`, append the reconstructed suffix to that record's content during formatting
+  - `c4-session-init.js` calls this instead of `formatConversations()`
+  - `formatConversations()` remains unchanged (clean, no reply via) for c4-fetch and other consumers
 
 - [ ] **4. Reconstruct reply via in dispatcher delivery (c4-dispatcher.js)**
   - In `processNextMessage()`, when delivering a conversation item (`item.type === 'conversation'`), reconstruct the reply via suffix using `buildReplyViaSuffix(item.channel, item.endpoint_id)` and append it to the delivery content
@@ -64,6 +65,10 @@ Reply via is only reconstructed when `direction === 'in'` AND `endpoint_id IS NO
 - [ ] **5. Clean up unused imports/exports in c4-receive.js**
   - Remove imports: `FILE_SIZE_THRESHOLD`, `ATTACHMENTS_DIR`, `CONTENT_PREVIEW_CHARS` (if no longer used anywhere in c4-receive.js)
   - Keep these exports in c4-config.js for now (other consumers might reference them) — only remove if confirmed unused across the codebase
+
+- [ ] **6. Update comm-bridge reference docs**
+  - Update `skills/comm-bridge/references/c4-receive.md`: remove documentation of long-message attachment storage (lines ~58-60) and the statement that c4-receive appends reply via into message content (lines ~90-96)
+  - Reflect the new behavior: content stored in full, reply via reconstructed at delivery time
 
 ## Test Checklist
 
