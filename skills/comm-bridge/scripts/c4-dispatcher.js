@@ -57,6 +57,7 @@ import {
   findPromptY as sharedFindPromptY,
   isUsageOverlayCapture as sharedIsUsageOverlayCapture
 } from './tmux-input-state.js';
+import { buildReplyViaSuffix } from './c4-utils.js';
 
 let isShuttingDown = false;
 let pollInterval = POLL_INTERVAL_BASE;
@@ -504,6 +505,20 @@ function hasAckSuffix(content = '') {
   return content.includes('---- ack via:');
 }
 
+export function getDeliveryContent(item) {
+  const rawContent = item.content || '';
+  if (item.type === 'conversation') {
+    const replyViaSuffix = (
+      item.endpoint_id &&
+      !rawContent.includes('---- reply via:')
+    ) ? buildReplyViaSuffix(item.channel, item.endpoint_id) : '';
+    return `${rawContent}${replyViaSuffix}`;
+  }
+
+  const isSlashCommand = rawContent.startsWith('/');
+  return (item.type === 'control' && !isSlashCommand) ? `Meanwhile, ${rawContent}` : rawContent;
+}
+
 async function handleConversationDeliveryFailure(msg) {
   const channelHealthy = isAgentStatusFresh();
 
@@ -689,11 +704,7 @@ async function processNextMessage() {
   }
 
   log(`Delivering ${item.type} id=${item.id}${item.type === 'control' ? ` priority=${item.priority}` : ` from ${item.channel}`}`);
-  // Prefix control messages with "Meanwhile, " so the agent treats them as
-  // concurrent background tasks that should not interrupt the user's active work.
-  // Skip for slash commands (e.g. /exit, /clear) which must be delivered verbatim.
-  const isSlashCommand = rawContent.startsWith('/');
-  const deliveryContent = (item.type === 'control' && !isSlashCommand) ? `Meanwhile, ${rawContent}` : rawContent;
+  const deliveryContent = getDeliveryContent(item);
   const result = await sendToTmux(deliveryContent, {
     strictVerify: item.type === 'conversation',
     acceptShutdownAfterSubmit: isCodexExitLifecycleControl(item)

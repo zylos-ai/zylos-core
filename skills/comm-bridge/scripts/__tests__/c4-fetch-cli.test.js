@@ -69,6 +69,18 @@ describe('c4-fetch --unsummarized', () => {
     });
   });
 
+  it('keeps inbound endpoint content clean without reply routing', () => {
+    withTmpDir(({ tmpDir, env }) => {
+      fs.mkdirSync(path.join(tmpDir, '.claude', 'skills', 'telegram'), { recursive: true });
+      receive(['--channel', 'telegram', '--endpoint', '123', '--content', 'clean msg'], env);
+
+      const { stdout, status } = cli(['--unsummarized'], env);
+      assert.equal(status, 0);
+      assert.ok(stdout.includes('clean msg'));
+      assert.ok(!stdout.includes('reply via:'));
+    });
+  });
+
   it('includes last checkpoint summary', () => {
     withTmpDir(({ env }) => {
       receive(['--channel', 'system', '--no-reply', '--content', 'old msg'], env);

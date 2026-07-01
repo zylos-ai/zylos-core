@@ -89,7 +89,7 @@ Lower number = higher priority. The dispatcher consumes control messages in `ORD
 
 ## Auto-Appended Ack Suffix
 
-By default, when a control message is enqueued, the C4 layer automatically appends an ack instruction to the content, similar to how `c4-receive` appends `---- reply via:` to conversation messages.
+By default, when a control message is enqueued, the C4 layer automatically appends an ack instruction to the stored queue content. Conversation reply routing is different: `reply via` is added only when conversation records are formatted for agent delivery.
 
 The stored content will include a suffix like:
 

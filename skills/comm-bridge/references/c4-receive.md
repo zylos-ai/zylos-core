@@ -19,7 +19,7 @@ Messages are written to DB with `status='pending'`. The c4-dispatcher daemon han
 | `--endpoint <id>` | Endpoint identifier. Can contain multiple space-separated parts (e.g., `"chat_id topic_id"` for Lark topics) |
 | `--content <text>` | Message content (required) |
 | `--priority <1-3>` | Priority level (default: 3) |
-| `--no-reply` | Omit `reply via` suffix; defaults channel to `system` |
+| `--no-reply` | Mark the message as having no reply target; defaults channel to `system` |
 | `--block-queue-until-idle` | Wait for sustained idle, then block later dispatch until execution settles |
 | `--json` | Output structured JSON instead of plain text |
 
@@ -55,9 +55,9 @@ Messages are written to DB with `status='pending'`. The c4-dispatcher daemon han
     --content '[Lark] user said: hello'
 ```
 
-## Large Message Handling
+## Message Storage
 
-Messages exceeding the configured size threshold are stored as files under `~/zylos/comm-bridge/attachments/`. The DB record contains a preview of the content plus the file path.
+Inbound content is stored in the conversations DB exactly as received. `c4-receive.js` does not append reply-routing text and does not replace large messages with attachment previews.
 
 ## Health Routing
 
@@ -89,7 +89,7 @@ If the status file is missing, unreadable, or contains malformed JSON, health de
 
 ## Reply Protocol
 
-Unless `--no-reply` is set, the message content is appended with a `reply via` suffix so Claude knows how to respond:
+When a queued message is delivered to the agent, c4-dispatcher adds a `reply via` suffix for inbound messages that have an endpoint. Session startup context uses the same agent-facing formatting. Stored DB content and `c4-fetch` output remain clean:
 
 ```
 [TG DM] user said: hello ---- reply via: node ~/zylos/.claude/skills/comm-bridge/scripts/c4-send.js "telegram" "8101553026"

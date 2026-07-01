@@ -35,7 +35,8 @@ const {
   getHeartbeatPhase,
   isRecoveryHeartbeatPhase,
   shouldAutoAckHeartbeat,
-  readJsonFileWithRetry
+  readJsonFileWithRetry,
+  getDeliveryContent
 } = mod;
 
 after(() => {
@@ -409,6 +410,55 @@ describe('readJsonFileWithRetry', () => {
     const file = path.join(tmpDir, 'broken.json');
     fs.writeFileSync(file, '{"health":');
     assert.throws(() => readJsonFileWithRetry(file, 2), /Unexpected end of JSON input|JSON/);
+  });
+});
+
+// ── getDeliveryContent ─────────────────────────────────────────────
+
+describe('getDeliveryContent', () => {
+  it('adds reply routing for conversation items with endpoints', () => {
+    const result = getDeliveryContent({
+      type: 'conversation',
+      channel: 'telegram',
+      endpoint_id: '123',
+      content: 'hello'
+    });
+
+    assert.ok(result.startsWith('hello ---- reply via: node'));
+    assert.ok(result.includes('"telegram" "123"'));
+  });
+
+  it('does not add reply routing for conversation items without endpoints', () => {
+    assert.equal(getDeliveryContent({
+      type: 'conversation',
+      channel: 'system',
+      endpoint_id: null,
+      content: 'system note'
+    }), 'system note');
+  });
+
+  it('does not duplicate legacy reply routing', () => {
+    const legacy = 'hello ---- reply via: node /tmp/c4-send.js "telegram" "123"';
+    assert.equal(getDeliveryContent({
+      type: 'conversation',
+      channel: 'telegram',
+      endpoint_id: '123',
+      content: legacy
+    }), legacy);
+  });
+
+  it('prefixes non-slash control messages', () => {
+    assert.equal(getDeliveryContent({
+      type: 'control',
+      content: 'Heartbeat check'
+    }), 'Meanwhile, Heartbeat check');
+  });
+
+  it('preserves slash control commands verbatim', () => {
+    assert.equal(getDeliveryContent({
+      type: 'control',
+      content: '/exit'
+    }), '/exit');
   });
 });
 

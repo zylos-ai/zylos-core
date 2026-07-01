@@ -204,6 +204,26 @@ describe('c4-receive basic intake', () => {
       const row = db.prepare('SELECT * FROM conversations WHERE id = ?').get(Number(out.id));
       db.close();
       assert.equal(row.channel, 'test-channel');
+      assert.equal(row.content, 'chan msg');
+      assert.ok(!row.content.includes('reply via'), 'stored content should not contain reply via suffix');
+    });
+  });
+
+  it('stores long inbound content in full without writing an attachment preview', () => {
+    withTmpDir(({ tmpDir, env }) => {
+      fs.mkdirSync(path.join(tmpDir, '.claude', 'skills', 'test-channel'), { recursive: true });
+      const longContent = 'x'.repeat(3000);
+      const r = cliRaw(['--channel', 'test-channel', '--endpoint', 'ep1', '--json', '--content', longContent], env);
+      assert.equal(r.status, 0);
+      const out = parseJsonStdout(r.stdout);
+
+      const db = openDb(tmpDir);
+      const row = db.prepare('SELECT content FROM conversations WHERE id = ?').get(Number(out.id));
+      db.close();
+
+      assert.equal(row.content, longContent);
+      assert.ok(!row.content.includes('[C4] Full message'));
+      assert.equal(fs.existsSync(path.join(tmpDir, 'comm-bridge', 'attachments')), false);
     });
   });
 
@@ -263,6 +283,28 @@ describe('c4-receive --no-reply', () => {
       const row = db.prepare('SELECT * FROM conversations WHERE id = ?').get(Number(out.id));
       db.close();
       assert.ok(!row.content.includes('reply via'), 'should not contain reply via suffix');
+    });
+  });
+
+  it('does not store endpoint when --no-reply is set', () => {
+    withTmpDir(({ tmpDir, env }) => {
+      fs.mkdirSync(path.join(tmpDir, '.claude', 'skills', 'test-channel'), { recursive: true });
+      const r = cliRaw([
+        '--channel', 'test-channel',
+        '--endpoint', 'ep1',
+        '--no-reply',
+        '--json',
+        '--content', 'no target'
+      ], env);
+      assert.equal(r.status, 0);
+      const out = parseJsonStdout(r.stdout);
+
+      const db = openDb(tmpDir);
+      const row = db.prepare('SELECT endpoint_id, content FROM conversations WHERE id = ?').get(Number(out.id));
+      db.close();
+
+      assert.equal(row.endpoint_id, null);
+      assert.equal(row.content, 'no target');
     });
   });
 });
@@ -371,7 +413,8 @@ describe('c4-receive health gating', () => {
       db.close();
 
       assert.equal(inbound.status, 'delivered');
-      assert.ok(inbound.content.includes('reply via'));
+      assert.ok(inbound.content.includes('down msg'));
+      assert.ok(!inbound.content.includes('reply via'));
       assert.ok(outbound.content.includes("I'm temporarily unavailable"));
     });
   });
@@ -541,7 +584,8 @@ describe('c4-receive MessageRouter IPC route', () => {
         const row = db.prepare('SELECT status, content FROM conversations WHERE id = ?').get(Number(out.id));
         db.close();
         assert.equal(row.status, 'pending');
-        assert.ok(row.content.includes('reply via'));
+        assert.equal(row.content, 'ok msg');
+        assert.ok(!row.content.includes('reply via'));
       });
     });
   });

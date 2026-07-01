@@ -17,9 +17,6 @@ import {
 } from './c4-db.js';
 import { validateChannel, validateEndpoint } from './c4-validate.js';
 import {
-  FILE_SIZE_THRESHOLD,
-  ATTACHMENTS_DIR,
-  CONTENT_PREVIEW_CHARS,
   AGENT_STATUS_FILE,
   ACTIVITY_MONITOR_DIR
 } from './c4-config.js';
@@ -34,7 +31,7 @@ function printUsage() {
   console.log('Usage: node c4-receive.js --channel <channel> [--endpoint <endpoint_id>] [--priority <1-3>] [--no-reply] [--block-queue-until-idle] [--json] --content "<message>"');
   console.log('');
   console.log('Options:');
-  console.log('  --no-reply       Do not append "reply via" suffix (use for system messages)');
+  console.log('  --no-reply       Mark as not needing a reply target (use for system messages)');
   console.log('  --block-queue-until-idle');
   console.log('                   Wait for sustained idle, then block subsequent dispatch until execution settles');
   console.log('                   Legacy alias: --require-idle');
@@ -306,34 +303,6 @@ function clearStatusNoticeCooldownReservationForRoute(key, reservedAt) {
   }
 }
 
-function buildFullMessage(content, channel, endpoint, noReply) {
-  let replyViaSuffix = '';
-  if (!noReply) {
-    const scriptDir = __dirname;
-    const replyViaBase = `reply via: node ${path.join(scriptDir, 'c4-send.js')} "${channel}"`;
-    replyViaSuffix = endpoint ? ` ---- ${replyViaBase} "${endpoint}"` : ` ---- ${replyViaBase}`;
-  }
-
-  const fullMessage = content + replyViaSuffix;
-  let dbContent = fullMessage;
-  const byteLength = Buffer.byteLength(fullMessage, 'utf8');
-
-  if (byteLength > FILE_SIZE_THRESHOLD) {
-    const msgId = `${Date.now()}-${process.pid}`;
-    const messageDir = path.join(ATTACHMENTS_DIR, msgId);
-    fs.mkdirSync(messageDir, { recursive: true });
-    const filePath = path.join(messageDir, 'message.txt');
-    fs.writeFileSync(filePath, fullMessage, 'utf8');
-
-    const preview = content.substring(0, CONTENT_PREVIEW_CHARS);
-    const ellipsis = preview.length < content.length ? '...' : '';
-    const sizeKB = (byteLength / 1024).toFixed(1);
-    dbContent = `${preview}${ellipsis}\n\n[C4] Full message (${sizeKB}KB) at: ${filePath}${replyViaSuffix}`;
-  }
-
-  return dbContent;
-}
-
 async function main() {
   const parsed = parseArgs(process.argv.slice(2));
   if (parsed.error) {
@@ -378,7 +347,8 @@ async function main() {
   }
 
   const route = await queryRoute(channel, endpoint, noReply);
-  let dbContent = buildFullMessage(content, channel, endpoint, noReply);
+  const replyEndpoint = noReply ? null : endpoint;
+  let dbContent = content;
   const dbStatus = route.recovered ? 'pending' : 'delivered';
   let cooldown = null;
 
@@ -391,7 +361,7 @@ async function main() {
     if (cooldown.suppressed) {
       dbContent += `\n\n[C4] Status notification suppressed by cooldown while health=${statusNoticeType(route)} reason=${statusNoticeReason(route)}.`;
       try {
-        const record = insertConversation('in', channel, endpoint, dbContent, dbStatus, priority, requireIdle, 'suppressed');
+        const record = insertConversation('in', channel, replyEndpoint, dbContent, dbStatus, priority, requireIdle, 'suppressed');
         emitSuccess(json, record.id, 'suppressed');
         return;
       } catch (err) {
@@ -403,7 +373,7 @@ async function main() {
   }
 
   try {
-    const record = insertConversation('in', channel, endpoint, dbContent, dbStatus, priority, requireIdle);
+    const record = insertConversation('in', channel, replyEndpoint, dbContent, dbStatus, priority, requireIdle);
     if (route.recovered || noReply) {
       emitSuccess(json, record.id, route.recovered ? 'queued' : 'delivered');
       return;
