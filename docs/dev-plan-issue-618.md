@@ -26,7 +26,7 @@ c4.db should be a complete canonical conversation log. Currently it has two prob
 
 Instead:
 - `formatConversations()` remains a clean history formatter (default, no reply via)
-- `c4-session-init.js` reconstructs reply via **after** calling `formatConversations()`, or uses a wrapper/option to add reply via to the output
+- `c4-session-init.js` uses a record-aware `formatConversationsForAgent(conversations)` that iterates original records and appends reply via per-record before/while formatting — it must NOT post-process the flattened `formatConversations()` string
 - `c4-dispatcher.js` reconstructs reply via independently at delivery time
 - `c4-fetch.js` calls `formatConversations()` directly and gets clean output — no change needed
 
