@@ -81,7 +81,7 @@ export function coreSessionStartCommand(zylosDir) {
     'scripts',
     'session-start-orchestrator.js'
   );
-  return `node ${JSON.stringify(script)}`;
+  return `node ${script}`;
 }
 
 export function isCoreCodexHook(command, zylosDir) {
