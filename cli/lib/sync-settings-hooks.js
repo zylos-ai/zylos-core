@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /**
- * Sync settings.json hooks from template to installed settings.
+ * Sync settings.json hooks to installed settings.
  *
- * Compares template hooks with installed hooks by script path:
+ * Compares desired runtime hooks with installed hooks by script path:
  * - Missing hooks → add
  * - Modified hooks → update (command, timeout)
  * - Removed hooks (core skills only) → remove
@@ -48,6 +48,81 @@ export const CORE_MANAGED_HOOKS = new Set([
 export function isCoreManaged(hook) {
   if (!hook || hook.type !== 'command') return false;
   return CORE_MANAGED_HOOKS.has(hookScriptKey(hook.command));
+}
+
+function zylosClaudeScript(relativePath) {
+  const scriptPath = path.resolve(ZYLOS_DIR, '.claude', relativePath);
+  return `node ${JSON.stringify(scriptPath)}`;
+}
+
+function commandHook(relativePath, options = {}) {
+  return {
+    type: 'command',
+    command: zylosClaudeScript(relativePath),
+    ...options,
+  };
+}
+
+export function desiredClaudeHooks() {
+  const sessionStartHook = commandHook(
+    'skills/activity-monitor/scripts/session-start-orchestrator.js',
+    { timeout: 20000 }
+  );
+  const activityHook = commandHook(
+    'skills/activity-monitor/scripts/hook-activity.js',
+    { async: true, timeout: 5 }
+  );
+
+  return {
+    SessionStart: ['startup', 'clear', 'compact'].map(matcher => ({
+      matcher,
+      hooks: [{ ...sessionStartHook }],
+    })),
+    UserPromptSubmit: [
+      {
+        hooks: [{ ...activityHook }],
+      },
+    ],
+    PreToolUse: [
+      {
+        matcher: '',
+        hooks: [{ ...activityHook }],
+      },
+    ],
+    PermissionRequest: [
+      {
+        hooks: [
+          commandHook(
+            'skills/activity-monitor/scripts/hook-auth-prompt.js',
+            { async: true, timeout: 5000 }
+          ),
+        ],
+      },
+    ],
+    PostToolUse: [
+      {
+        matcher: '',
+        hooks: [{ ...activityHook }],
+      },
+    ],
+    PostToolUseFailure: [
+      {
+        matcher: '',
+        hooks: [{ ...activityHook }],
+      },
+    ],
+    Stop: [
+      {
+        hooks: [{ ...activityHook }],
+      },
+    ],
+    Notification: [
+      {
+        matcher: 'idle_prompt',
+        hooks: [{ ...activityHook }],
+      },
+    ],
+  };
 }
 
 function is1mModel(model) {
@@ -271,8 +346,8 @@ export function syncCodexConfig({
  *
  * @returns {{ added: number, updated: number, removed: number }}
  */
-export function syncHooks(installedSettings, templateSettings, { dryRun = false, log = console.log } = {}) {
-  const templateHooks = templateSettings.hooks || {};
+export function syncHooks(installedSettings, _templateSettings, { dryRun = false, log = console.log, desiredHooks = desiredClaudeHooks() } = {}) {
+  const desiredHookGroups = desiredHooks || {};
 
   let added = 0;
   let updated = 0;
@@ -286,7 +361,7 @@ export function syncHooks(installedSettings, templateSettings, { dryRun = false,
   //   - If installed has a group with the same matcher → add missing template
   //     hooks and update existing hooks (command/timeout drift)
   //   - If installed has NO group with that matcher → add the whole group from template
-  for (const [event, matchers] of Object.entries(templateHooks)) {
+  for (const [event, matchers] of Object.entries(desiredHookGroups)) {
     if (!Array.isArray(matchers)) continue;
     if (!Array.isArray(installedSettings.hooks[event])) {
       installedSettings.hooks[event] = [];
@@ -348,7 +423,7 @@ export function syncHooks(installedSettings, templateSettings, { dryRun = false,
   for (const [event, matchers] of Object.entries(installedSettings.hooks)) {
     if (!Array.isArray(matchers)) continue;
 
-    const templateMatchers = Array.isArray(templateHooks[event]) ? templateHooks[event] : [];
+    const templateMatchers = Array.isArray(desiredHookGroups[event]) ? desiredHookGroups[event] : [];
 
     for (let gi = matchers.length - 1; gi >= 0; gi--) {
       const group = matchers[gi];
