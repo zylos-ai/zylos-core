@@ -42,7 +42,7 @@ after(() => {
 });
 
 describe('enqueueNewSession', () => {
-  it('tells Codex to send handoff summaries to the internal web console', () => {
+  it('tells Codex to send handoff summaries to the internal void channel', () => {
     const result = enqueueNewSession({
       ratio: 0.75,
       used: 75_000,
@@ -57,7 +57,8 @@ describe('enqueueNewSession', () => {
     const content = args[args.indexOf('--content') + 1];
 
     assert.match(content, /do not skip checklist steps/);
-    assert.match(content, /internal web-console channel/);
+    assert.match(content, /internal void channel/);
+    assert.match(content, /c4-send "void" "session-handoff"/);
     assert.match(content, /do not post it to the active external user channel/);
   });
 });

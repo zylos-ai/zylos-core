@@ -41,6 +41,7 @@ export function getDb() {
     ensureConversationsSchema(db);
     ensureControlQueueSchema(db);
     ensureStatusNoticeCooldownSchema(db);
+    ensureVoidChannelMigration(db);
   }
   return db;
 }
@@ -101,6 +102,21 @@ function ensureConversationsSchema(database) {
   if (!columnNames.has('delivery_action')) {
     database.exec('ALTER TABLE conversations ADD COLUMN delivery_action TEXT');
   }
+}
+
+/**
+ * #689: session-handoff summaries used to be piggybacked on the web-console
+ * channel (channel='web-console', endpoint_id='session-handoff'). They now
+ * live on the internal record-only 'void' channel; re-tag existing rows so
+ * display surfaces no longer need endpoint-name special cases. Idempotent —
+ * once re-tagged, no rows match.
+ */
+function ensureVoidChannelMigration(database) {
+  database.prepare(`
+    UPDATE conversations
+    SET channel = 'void'
+    WHERE channel = 'web-console' AND endpoint_id = 'session-handoff'
+  `).run();
 }
 
 function ensureStatusNoticeCooldownSchema(database) {
