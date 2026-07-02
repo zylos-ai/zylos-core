@@ -232,7 +232,7 @@ function getNewMessages(sinceId) {
     const stmt = db.prepare(`
       SELECT id, direction, channel, endpoint_id, content, timestamp
       FROM conversations
-      WHERE channel = 'web-console' AND id > ?
+      WHERE channel = 'web-console' AND id > ? AND endpoint_id IS NOT 'session-handoff'
       ORDER BY timestamp ASC
     `);
     return stmt.all(sinceId).map(cleanMessageForDisplay);
@@ -491,7 +491,7 @@ app.get('/api/conversations', (req, res) => {
     const stmt = db.prepare(`
       SELECT id, direction, channel, endpoint_id, content, timestamp
       FROM conversations
-      WHERE channel = ?
+      WHERE channel = ? AND endpoint_id IS NOT 'session-handoff'
       ORDER BY timestamp DESC
       LIMIT ?
     `);
@@ -513,7 +513,7 @@ app.get('/api/conversations/recent', (req, res) => {
     const stmt = db.prepare(`
       SELECT id, direction, channel, endpoint_id, content, timestamp
       FROM conversations
-      WHERE channel = 'web-console'
+      WHERE channel = 'web-console' AND endpoint_id IS NOT 'session-handoff'
       ORDER BY timestamp DESC
       LIMIT ?
     `);
