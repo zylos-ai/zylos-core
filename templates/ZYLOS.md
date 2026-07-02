@@ -109,7 +109,7 @@ Route user-specific preferences to the correct profile file. Bot identity stays 
 
 ### Memory Update Practices
 
-1. **At session start:** identity + state + references are auto-injected.
+1. **At session start:** memory context is auto-injected in priority order: identity → references → recent C4 conversations → state. The runtime may truncate long hook output to a short preview plus a notice like "Output too large... Full output saved to: <path>". When you see that notice, **read the saved file before acting on anything** — the preview is only the head of the context, and the active-state section is at the end of the file.
 2. **During work:** Update appropriate memory files immediately when you learn something important.
 3. **Memory Sync:** When triggered, launch a background subagent using the current runtime's supported subagent/task mechanism. The subagent's prompt must instruct it to follow the full sync flow in `~/zylos/.claude/skills/zylos-memory/SKILL.md`. This also applies in Codex and in `new-session` handoff flows: do not run Memory Sync inline in the main loop.
 4. **references.md is a pointer file.** Never duplicate .env values in it — point to the source config file instead.

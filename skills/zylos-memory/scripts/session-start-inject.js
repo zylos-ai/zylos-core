@@ -51,11 +51,31 @@ function section(label, filePath) {
   return formatSection(label, content);
 }
 
+/**
+ * #686: sections are emitted in priority order so that when the runtime
+ * truncates hook output to a short preview, the preview carries the
+ * highest-value content first. Identity and references lead; state (the
+ * largest, most volatile file) trails the C4 context, which the
+ * orchestrator injects between the two halves.
+ */
+export function injectMemoryCore() {
+  const parts = [
+    section('BOT IDENTITY', path.join(MEMORY_DIR, 'identity.md')),
+    section('REFERENCES', path.join(MEMORY_DIR, 'references.md'))
+  ];
+
+  return `${parts.join('\n\n')}\n`;
+}
+
+export function injectMemoryState() {
+  return `${section('ACTIVE STATE', path.join(MEMORY_DIR, 'state.md'))}\n`;
+}
+
 export function injectMemory() {
   const parts = [
     section('BOT IDENTITY', path.join(MEMORY_DIR, 'identity.md')),
-    section('ACTIVE STATE', path.join(MEMORY_DIR, 'state.md')),
-    section('REFERENCES', path.join(MEMORY_DIR, 'references.md'))
+    section('REFERENCES', path.join(MEMORY_DIR, 'references.md')),
+    section('ACTIVE STATE', path.join(MEMORY_DIR, 'state.md'))
   ];
 
   return `${parts.join('\n\n')}\n`;
