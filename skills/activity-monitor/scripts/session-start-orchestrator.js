@@ -12,8 +12,9 @@ import { formatSection } from '../../comm-bridge/scripts/session-format.js';
 
 export const DEFAULT_TOTAL_BUDGET_MS = 17_000;
 export const STEP_BUDGETS_MS = {
-  memoryInject: 5_500,
+  memoryInject: 4_000,
   c4SessionInit: 5_500,
+  memoryInjectState: 2_000,
   foreground: 3_000,
   startupPrompt: 3_000,
 };
@@ -157,8 +158,13 @@ export async function runStep({
 }
 
 async function runMemoryInject(payload) {
-  const { injectMemory } = await import('../../zylos-memory/scripts/session-start-inject.js');
-  return injectMemory(payload);
+  const { injectMemoryCore } = await import('../../zylos-memory/scripts/session-start-inject.js');
+  return injectMemoryCore(payload);
+}
+
+async function runMemoryInjectState(payload) {
+  const { injectMemoryState } = await import('../../zylos-memory/scripts/session-start-inject.js');
+  return injectMemoryState(payload);
 }
 
 async function runC4SessionInit(payload) {
@@ -184,6 +190,7 @@ export async function runSessionStartOrchestrator(payload = {}, {
   actions = {
     memoryInject: runMemoryInject,
     c4SessionInit: runC4SessionInit,
+    memoryInjectState: runMemoryInjectState,
     foreground: runForeground,
     startupPrompt: runStartupPrompt,
   },
@@ -206,6 +213,18 @@ export async function runSessionStartOrchestrator(payload = {}, {
       source,
       budgetMs: budgets.c4SessionInit,
       action: () => actions.c4SessionInit(payload),
+      writeStdout: true,
+      stdout,
+    });
+
+    // #686: state.md is the largest and most volatile memory file, so it is
+    // emitted last — after identity/references and the C4 context — to keep
+    // the highest-value content inside the runtime's truncation preview.
+    await runStep({
+      name: 'memory-inject-state',
+      source,
+      budgetMs: budgets.memoryInjectState,
+      action: () => actions.memoryInjectState(payload),
       writeStdout: true,
       stdout,
     });
