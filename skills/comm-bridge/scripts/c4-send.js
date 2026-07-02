@@ -14,6 +14,15 @@
  *
  * When no message argument is provided, the message is read from stdin.
  * This avoids shell escaping issues with quotes and special characters.
+ *
+ * Special channel 'void' (#689): internal-only messages (e.g. session
+ * handoffs). The message is recorded in c4.db like any other conversation
+ * row — so session-init context injection and Memory Sync pick it up — but
+ * it is never dispatched to a channel send script. The endpoint carries the
+ * purpose/topic and is mandatory, e.g.:
+ *   node c4-send.js void session-handoff <<'EOF'
+ *   ...handoff summary...
+ *   EOF
  */
 
 import path from 'path';
@@ -87,6 +96,37 @@ async function main() {
   if (!message) {
     console.error('Error: Message is required');
     process.exit(1);
+  }
+
+  // Virtual 'void' channel (#689): record-only, never dispatched.
+  // No skill directory exists for it, so skip channel-path validation and
+  // the channel send script entirely.
+  if (channel === 'void') {
+    if (!endpoint) {
+      console.error('Error: Endpoint is required for the void channel (e.g. c4-send.js void session-handoff)');
+      process.exit(1);
+    }
+
+    try {
+      validateEndpoint(endpoint);
+    } catch (err) {
+      console.error(`[C4] Invalid endpoint: ${err.stack}`);
+      process.exit(1);
+    }
+
+    try {
+      insertConversation('out', 'void', endpoint, message);
+    } catch (err) {
+      // Unlike real channels (where the DB row is an audit trail), the DB
+      // write IS the delivery for void — fail loudly.
+      console.error(`[C4] Failed to record void message: ${err.stack}`);
+      process.exit(1);
+    } finally {
+      close();
+    }
+
+    console.log('[C4] Message recorded on void channel (not dispatched)');
+    process.exit(0);
   }
 
   try {

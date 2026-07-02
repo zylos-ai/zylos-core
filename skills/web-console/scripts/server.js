@@ -232,7 +232,7 @@ function getNewMessages(sinceId) {
     const stmt = db.prepare(`
       SELECT id, direction, channel, endpoint_id, content, timestamp
       FROM conversations
-      WHERE channel = 'web-console' AND id > ? AND endpoint_id IS NOT 'session-handoff'
+      WHERE channel = 'web-console' AND id > ?
       ORDER BY timestamp ASC
     `);
     return stmt.all(sinceId).map(cleanMessageForDisplay);
@@ -488,10 +488,12 @@ app.get('/api/conversations', (req, res) => {
     const limit = parseInt(req.query.limit) || 50;
     const channel = req.query.channel || 'web-console';
 
+    // channel is caller-controlled; 'void' is the internal record-only
+    // channel (#689) and must never reach a display surface.
     const stmt = db.prepare(`
       SELECT id, direction, channel, endpoint_id, content, timestamp
       FROM conversations
-      WHERE channel = ? AND endpoint_id IS NOT 'session-handoff'
+      WHERE channel = ? AND channel != 'void'
       ORDER BY timestamp DESC
       LIMIT ?
     `);
@@ -513,7 +515,7 @@ app.get('/api/conversations/recent', (req, res) => {
     const stmt = db.prepare(`
       SELECT id, direction, channel, endpoint_id, content, timestamp
       FROM conversations
-      WHERE channel = 'web-console' AND endpoint_id IS NOT 'session-handoff'
+      WHERE channel = 'web-console'
       ORDER BY timestamp DESC
       LIMIT ?
     `);

@@ -7,14 +7,27 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const CLI_PATH = fileURLToPath(new URL('../c4-send.js', import.meta.url));
+const DB_CLI_PATH = fileURLToPath(new URL('../c4-db.js', import.meta.url));
 
-function cli(args, env = {}) {
+function cli(args, env = {}, input = undefined) {
   const result = spawnSync('node', [CLI_PATH, ...args], {
+    env: { ...process.env, ...env },
+    encoding: 'utf8',
+    timeout: 5000,
+    ...(input !== undefined ? { input } : {})
+  });
+  return { stdout: result.stdout, stderr: result.stderr, status: result.status };
+}
+
+function dbRecent(env, limit = 10) {
+  const result = spawnSync('node', [DB_CLI_PATH, 'recent', String(limit)], {
     env: { ...process.env, ...env },
     encoding: 'utf8',
     timeout: 5000
   });
-  return { stdout: result.stdout, stderr: result.stderr, status: result.status };
+  // Skip the "[C4-DB] Database initialized" banner printed on first open.
+  const json = result.stdout.split('\n').filter((line) => !line.startsWith('[C4-DB]')).join('\n');
+  return JSON.parse(json);
 }
 
 function withTmpDir(fn) {
@@ -105,6 +118,63 @@ describe('c4-send validation', () => {
       const { stderr, status } = cli(['fake-channel', 'Hello'], env);
       assert.equal(status, 1);
       assert.ok(stderr.includes('Channel script not found'));
+    });
+  });
+});
+
+// -- void channel (#689) --
+
+describe('c4-send void channel', () => {
+  it('records the message in c4.db and exits 0 without a skill directory', () => {
+    withTmpDir(({ env }) => {
+      const { stdout, status } = cli(['void', 'session-handoff', 'handoff summary'], env);
+      assert.equal(status, 0);
+      assert.ok(stdout.includes('recorded on void channel'));
+      assert.ok(!stdout.includes('Message sent via'));
+
+      const rows = dbRecent(env);
+      assert.equal(rows.length, 1);
+      assert.equal(rows[0].direction, 'out');
+      assert.equal(rows[0].channel, 'void');
+      assert.equal(rows[0].endpoint_id, 'session-handoff');
+      assert.equal(rows[0].content, 'handoff summary');
+      assert.equal(rows[0].status, 'delivered');
+    });
+  });
+
+  it('does not spawn a channel send script even if one exists', () => {
+    withTmpDir(({ tmpDir, env }) => {
+      const sentFile = setupMockChannel(tmpDir, 'void');
+
+      const { status } = cli(['void', 'session-handoff', 'handoff summary'], env);
+      assert.equal(status, 0);
+      assert.ok(!fs.existsSync(sentFile), 'void must never dispatch to a send script');
+    });
+  });
+
+  it('supports stdin/heredoc message input', () => {
+    withTmpDir(({ env }) => {
+      const message = 'multi-line handoff\nwith "quotes" and $vars';
+      const { stdout, status } = cli(['void', 'session-handoff'], env, message);
+      assert.equal(status, 0);
+      assert.ok(stdout.includes('recorded on void channel'));
+
+      const rows = dbRecent(env);
+      assert.equal(rows.length, 1);
+      assert.equal(rows[0].channel, 'void');
+      assert.equal(rows[0].content, message);
+    });
+  });
+
+  it('rejects a void send without an endpoint', () => {
+    withTmpDir(({ env }) => {
+      // --stdin with a single arg is the only reachable no-endpoint form
+      const { stderr, status } = cli(['void', '--stdin'], env, 'orphan message');
+      assert.equal(status, 1);
+      assert.ok(stderr.includes('Endpoint is required for the void channel'));
+
+      const rows = dbRecent(env);
+      assert.equal(rows.length, 0);
     });
   });
 });
