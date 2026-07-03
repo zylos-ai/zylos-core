@@ -7,22 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.5.4] - 2026-07-02
-
-### Added
-- **SessionStart hook orchestrator**: all SessionStart hooks consolidated into a single orchestrator script. (#651, #668)
-
-### Fixed
-- **Session-start context format**: unified context injection format across runtimes; hook failures and null checkpoint summaries are now surfaced instead of silently swallowed. (#671)
-- **Memory Sync checkpoint threshold**: lowered 30 → 15 with a single source of truth for the value. (#674)
-- **Codex bootstrap via native SessionStart hook**: Codex bootstrap migrated to the native SessionStart hook, and a kick message is sent after Codex launch to trigger it. (#652, #675, #680, #681)
-- **Claude hooks generated at runtime**: `sync-settings-hooks.js` is now the sole source of Claude hooks, generating them at runtime instead of from a static template; hook command format unified with unnecessary path quoting removed. (#676, #678, #679, #682, #684)
-- **C4 canonical message storage**: comm-bridge stores full inbound messages and strips `reply via:` routing metadata from DB content. (#618, #685)
-- **Web console session-handoff privacy**: session-handoff messages are excluded from console display queries with NULL-safe filtering. (#621, #687)
-- **Component upgrade PM2 persistence**: `pm2 dump` persisted after component upgrade restart so the process list survives reboot. (#669)
-- **Rate limit detection**: broadened rate-limit detection patterns and reset-time parsing. (#666, #667)
-- **opus[1m] model backfill guard**: backfill skipped when paired with an incompatible `new_session_threshold`. (#662)
-
 ## [0.5.3] - 2026-06-17
 
 ### Added
