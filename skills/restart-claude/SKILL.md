@@ -35,16 +35,18 @@ Write a brief message covering:
 
 ### 4. Send the handoff summary
 
-Send the full handoff summary to the internal web console channel via C4:
+Send the full handoff summary to the internal `void` channel via C4:
 
 ```bash
-cat <<'EOF' | node ~/zylos/.claude/skills/comm-bridge/scripts/c4-send.js "web-console" "session-handoff"
+cat <<'EOF' | node ~/zylos/.claude/skills/comm-bridge/scripts/c4-send.js "void" "session-handoff"
 <handoff summary>
 EOF
 ```
 
-This records the handoff in C4 conversation history so the restarted session's
-startup hook (`c4-session-init`) can include it in startup context.
+The `void` channel is record-only: the message is stored in C4 conversation
+history (so the restarted session's startup hook, `c4-session-init`, includes
+it in startup context) but is never delivered to any real channel or display
+surface.
 
 Do not send the full handoff summary to the active external user channel
 (Telegram, Lark, Feishu, HXA, etc.). Handoff summaries are operational context

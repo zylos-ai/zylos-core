@@ -315,6 +315,36 @@ describe('web-console attachment routes', () => {
     expect(traversal.status).toBe(404);
   });
 
+  test('display queries exclude void channel rows (#689)', async () => {
+    ctx = await startServer();
+
+    const db = new Database(ctx.dbPath);
+    const insert = db.prepare('INSERT INTO conversations (direction, channel, endpoint_id, content, timestamp) VALUES (?, ?, ?, ?, ?)');
+    insert.run('out', 'web-console', 'console', 'visible console message', new Date().toISOString());
+    insert.run('out', 'web-console', null, 'null endpoint stays visible', new Date().toISOString());
+    insert.run('out', 'void', 'session-handoff', 'internal handoff summary', new Date().toISOString());
+    db.close();
+
+    // /api/conversations/recent is scoped to web-console — void rows never appear.
+    const recentRes = await fetch(`${ctx.baseUrl}/api/conversations/recent?limit=50`);
+    expect(recentRes.status).toBe(200);
+    const recentContents = (await recentRes.json()).map((row) => row.content);
+    expect(recentContents).toContain('visible console message');
+    expect(recentContents).toContain('null endpoint stays visible');
+    expect(recentContents).not.toContain('internal handoff summary');
+
+    // The parameterized channel query must not expose void even when asked directly.
+    const voidRes = await fetch(`${ctx.baseUrl}/api/conversations?channel=void&limit=50`);
+    expect(voidRes.status).toBe(200);
+    expect(await voidRes.json()).toEqual([]);
+
+    // Default channel query still returns web-console traffic.
+    const defaultRes = await fetch(`${ctx.baseUrl}/api/conversations?limit=50`);
+    const defaultContents = (await defaultRes.json()).map((row) => row.content);
+    expect(defaultContents).toContain('visible console message');
+    expect(defaultContents).not.toContain('internal handoff summary');
+  });
+
   test('GET /api/conversations/recent includes inbound image href', async () => {
     ctx = await startServer();
     const mediaDir = path.join(ctx.root, 'web-console', 'media');

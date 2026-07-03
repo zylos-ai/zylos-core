@@ -53,6 +53,16 @@ C4MSG
 
 **Note**: Endpoint structure depends on the channel implementation. Some channels use multi-part endpoints with pipe-separated values. Always quote multi-part endpoints as a single argument.
 
+## The `void` Channel (internal-only messages)
+
+`void` is a virtual channel for internal memos (e.g. session handoffs). Messages sent to it are recorded in c4.db like any other conversation row — so session-start context injection and Memory Sync pick them up — but they are **never dispatched** to any channel send script, and display surfaces (web console, etc.) never show them. The endpoint carries the purpose/topic and is **mandatory**:
+
+```bash
+cat <<'EOF' | node ~/zylos/.claude/skills/comm-bridge/scripts/c4-send.js "void" "session-handoff"
+Handoff summary for the next session...
+EOF
+```
+
 ## Channel Interface Contract
 
 Channels are skills installed in `~/zylos/.claude/skills/`. Each channel must provide:

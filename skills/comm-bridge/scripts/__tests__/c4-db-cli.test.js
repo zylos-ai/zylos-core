@@ -51,3 +51,27 @@ describe('c4-db recent', () => {
     });
   });
 });
+
+describe('void channel migration (#689)', () => {
+  it('re-tags legacy web-console session-handoff rows to the void channel', () => {
+    withTmpDir(({ env }) => {
+      // Seed legacy rows. The migration runs when the DB is opened, so rows
+      // inserted here keep their legacy shape until the next invocation.
+      assert.equal(dbCli(['insert', 'out', 'web-console', 'session-handoff', 'handoff note'], env).status, 0);
+      assert.equal(dbCli(['insert', 'out', 'web-console', 'console', 'normal console message'], env).status, 0);
+      assert.equal(dbCli(['insert', 'out', 'telegram', 'session-handoff', 'not a web-console row'], env).status, 0);
+
+      // Any subsequent DB open runs the migration before reads.
+      const { stdout, status } = dbCli(['recent', '10'], env);
+      assert.equal(status, 0);
+
+      const rows = JSON.parse(stdout);
+      const byContent = (content) => rows.find((row) => row.content === content);
+
+      assert.equal(byContent('handoff note').channel, 'void');
+      assert.equal(byContent('handoff note').endpoint_id, 'session-handoff');
+      assert.equal(byContent('normal console message').channel, 'web-console');
+      assert.equal(byContent('not a web-console row').channel, 'telegram');
+    });
+  });
+});
