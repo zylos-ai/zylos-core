@@ -112,7 +112,10 @@ Route user-specific preferences to the correct profile file. Bot identity stays 
 1. **At session start:** identity + state + references are auto-injected.
 2. **During work:** Update appropriate memory files immediately when you learn something important.
 3. **Memory Sync:** When triggered, launch a background subagent using the current runtime's supported subagent/task mechanism. The subagent's prompt must instruct it to follow the full sync flow in `~/zylos/.claude/skills/zylos-memory/SKILL.md`. This also applies in Codex and in `new-session` handoff flows: do not run Memory Sync inline in the main loop.
-4. **references.md is a pointer file.** Never duplicate .env values in it — point to the source config file instead.
+4. **references.md is a pointer file with strict content rules.**
+   - **Allowed:** stable identifiers (bot/app/member IDs), endpoints and ports, key paths, active policy pointers ("dmPolicy=owner, see config.json"), pointers to source-of-truth files (.env, config.json).
+   - **Disallowed — route instead of appending:** version/upgrade history and breaking-change notes → `reference/decisions.md`; incident caveats and lessons → `reference/decisions.md`; entries for uninstalled/dead components → `archive/`; any value that already lives in a config file → replace with a pointer to that file.
+   - Keep entries terse. Target ≤8KB; Memory Sync audits this file against these rules (see zylos-memory skill).
 
 ### Classification Rules for reference/ Files
 

@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { dateInTimeZone, BUDGETS, ZYLOS_DIR, MEMORY_DIR, SESSIONS_DIR } from '../shared.js';
+import { dateInTimeZone, BUDGETS, WARN_THRESHOLDS, ZYLOS_DIR, MEMORY_DIR, SESSIONS_DIR } from '../shared.js';
 import path from 'path';
 
 // ---------------------------------------------------------------------------
@@ -90,6 +90,22 @@ describe('BUDGETS', () => {
     for (const [key, value] of Object.entries(BUDGETS)) {
       assert.equal(typeof value, 'number', `${key} should be a number`);
       assert.ok(value > 0, `${key} should be positive`);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// WARN_THRESHOLDS
+// ---------------------------------------------------------------------------
+describe('WARN_THRESHOLDS', () => {
+  it('warns for references.md at 8KB', () => {
+    assert.equal(WARN_THRESHOLDS['references.md'], 8 * 1024);
+  });
+
+  it('every warn threshold is below its hard budget', () => {
+    for (const [key, value] of Object.entries(WARN_THRESHOLDS)) {
+      assert.ok(BUDGETS[key] !== undefined, `${key} must also have a hard budget`);
+      assert.ok(value < BUDGETS[key], `${key} warn threshold must be below budget`);
     }
   });
 });

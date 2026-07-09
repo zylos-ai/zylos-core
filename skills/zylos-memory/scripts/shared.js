@@ -17,6 +17,13 @@ export const BUDGETS = {
   'references.md': 16 * 1024
 };
 
+// Early-warning thresholds below the hard budget: a file over its warn
+// threshold is still within budget, but must be audited on the next
+// Memory Sync before the always-loaded set bloats (#696).
+export const WARN_THRESHOLDS = {
+  'references.md': 8 * 1024
+};
+
 export const REFERENCE_FILES = [
   'reference/decisions.md',
   'reference/projects.md',
