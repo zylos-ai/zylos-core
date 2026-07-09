@@ -9,7 +9,7 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { MEMORY_DIR, SESSIONS_DIR, BUDGETS, REFERENCE_FILES, walkFiles, loadTimezoneFromEnv, dateInTimeZone } from './shared.js';
+import { MEMORY_DIR, SESSIONS_DIR, BUDGETS, WARN_THRESHOLDS, REFERENCE_FILES, walkFiles, loadTimezoneFromEnv, dateInTimeZone } from './shared.js';
 
 export function parseSessionDate(fileName) {
   const match = fileName.match(/^(\d{4}-\d{2}-\d{2})(?:-\d+)?\.md$/);
@@ -57,12 +57,15 @@ function coreBudgetChecks() {
     }
 
     const stat = fs.statSync(filePath);
+    const warnAt = WARN_THRESHOLDS[name] ?? null;
     checks.push({
       file: name,
       exists: true,
       sizeBytes: stat.size,
       budgetBytes: budget,
+      warnBytes: warnAt,
       overBudget: stat.size > budget,
+      nearBudget: warnAt !== null && stat.size > warnAt && stat.size <= budget,
       budgetUsagePct: Math.round((stat.size / budget) * 100),
       modifiedAt: stat.mtime.toISOString()
     });
@@ -114,6 +117,7 @@ function main() {
   const files = walkFiles(MEMORY_DIR);
   const budgetChecks = coreBudgetChecks();
   const overBudget = budgetChecks.filter((item) => item.overBudget).map((item) => item.file);
+  const nearBudget = budgetChecks.filter((item) => item.nearBudget).map((item) => item.file);
 
   const report = {
     timestamp: new Date().toISOString(),
@@ -124,8 +128,10 @@ function main() {
     },
     budgets: {
       rules: BUDGETS,
+      warnThresholds: WARN_THRESHOLDS,
       checks: budgetChecks,
-      overBudget
+      overBudget,
+      nearBudget
     },
     referenceFiles: referenceFileFreshness(),
     sessions: {

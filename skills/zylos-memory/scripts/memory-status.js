@@ -6,7 +6,7 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { MEMORY_DIR, BUDGETS, walkFiles } from './shared.js';
+import { MEMORY_DIR, BUDGETS, WARN_THRESHOLDS, walkFiles } from './shared.js';
 
 export function formatBytes(bytes) {
   if (bytes < 1024) {
@@ -33,6 +33,7 @@ function main() {
   lines.push('============');
 
   let overBudgetCount = 0;
+  let warnCount = 0;
   let missingCount = 0;
 
   for (const [name, budget] of Object.entries(BUDGETS)) {
@@ -44,9 +45,14 @@ function main() {
     }
 
     const pct = Math.round((info.sizeBytes / budget) * 100);
-    const status = info.sizeBytes > budget ? 'OVER' : 'OK';
-    if (status === 'OVER') {
+    const warnAt = WARN_THRESHOLDS[name];
+    let status = 'OK';
+    if (info.sizeBytes > budget) {
+      status = 'OVER';
       overBudgetCount += 1;
+    } else if (warnAt && info.sizeBytes > warnAt) {
+      status = 'WARN';
+      warnCount += 1;
     }
 
     const modified = info.modifiedAt.toISOString().slice(0, 16).replace('T', ' ');
@@ -63,6 +69,9 @@ function main() {
   const issues = [];
   if (overBudgetCount > 0) {
     issues.push(`${overBudgetCount} over budget`);
+  }
+  if (warnCount > 0) {
+    issues.push(`${warnCount} near budget (audit on next sync)`);
   }
   if (missingCount > 0) {
     issues.push(`${missingCount} missing`);

@@ -74,9 +74,15 @@ exist, report them as historical records and do not create a replacement.
 4. Extract and classify updates from conversations into the correct files.
 5. Write memory updates (always — even without new conversations,
    update `state.md` and `sessions/current.md` with current context).
-6. Create checkpoint (only if conversations were fetched in step 2):
+6. Audit `references.md` against its content rules
+   (`references/references-file-format.md`): relocate rule-violating
+   entries to their routed destination (`reference/decisions.md`,
+   `archive/`, or a pointer to the config file) instead of leaving or
+   appending them. If the file exceeds the 8KB warn threshold
+   (`memory-status.js` reports WARN), trim until it is back under.
+7. Create checkpoint (only if conversations were fetched in step 2):
    `node ~/zylos/.claude/skills/comm-bridge/scripts/c4-checkpoint.js create <end_id> --summary "SUMMARY"`
-7. Confirm completion.
+8. Confirm completion.
 
 ## Classification Rules
 
@@ -86,7 +92,9 @@ exist, report them as historical records and do not create a replacement.
 - `reference/ideas.md`: uncommitted proposals.
 - `users/<id>/profile.md`: user-specific preferences.
 - `state.md`: active focus and pending tasks.
-- `references.md`: pointers only; do not duplicate `.env` values.
+- `references.md`: pointers and stable identifiers only, per the content
+  rules in `references/references-file-format.md`; never duplicate config
+  values, never accumulate narrative history.
 
 ## File Formats and Examples
 
@@ -139,7 +147,9 @@ Review the report and apply these rules:
     Move completed or historical detail to `sessions/current.md` or
     `reference/`.
   - `references.md`: keep pointers and lookup facts only. Move prose,
-    project history, and detailed decisions to `reference/`.
+    project history, and detailed decisions to `reference/`. Apply the
+    content rules in `references/references-file-format.md`; the sync-time
+    audit (Sync Flow step 6) should keep it under the 8KB warn threshold.
 
 ### Session Logs
 - Logs in `archiveCandidatesOlderThan30Days`: move from `sessions/` to `archive/`.
