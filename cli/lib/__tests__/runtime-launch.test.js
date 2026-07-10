@@ -333,7 +333,9 @@ describe('Codex launch — new session', () => {
 
     const spec = readLaunchSpec();
     assert.ok(spec, 'spec should be written');
-    assert.deepEqual(spec.args, []);
+    // Since #681 the only launch arg is the kick prompt that triggers the
+    // SessionStart hook — never the retired text bootstrap payload.
+    assert.deepEqual(spec.args, ['hello']);
     assert.ok(!JSON.stringify(spec).includes('session-start-inject.js'));
   });
 });
