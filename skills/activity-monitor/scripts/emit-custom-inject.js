@@ -5,7 +5,10 @@
  * The content source is a plain directory the user (or an installing
  * platform) edits directly — no config file, no registration, no restart:
  *
- *   ~/zylos/custom-inject/*.md
+ *   ~/zylos/custom-hooks/session-start/*.md
+ *
+ * The hook-scoped layout (`custom-hooks/<hook-name>/`) leaves room for
+ * future hook types to get their own content subdirectory.
  *
  * - Files concatenate in lexicographic filename order (conf.d style:
  *   `10-rules.md`, `20-platform.md`, ... to control ordering).
@@ -27,7 +30,7 @@ import path from 'node:path';
 
 export function customInjectDir(env = process.env) {
   const zylosDir = path.resolve(env.ZYLOS_DIR || path.join(os.homedir(), 'zylos'));
-  return path.join(zylosDir, 'custom-inject');
+  return path.join(zylosDir, 'custom-hooks', 'session-start');
 }
 
 export function emitCustomInject({ env = process.env } = {}) {

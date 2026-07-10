@@ -64,8 +64,8 @@ export const CORE_SHARDS = Object.freeze([
   },
   {
     // Deployment/user-provided standing directives — reads
-    // ~/zylos/custom-inject/*.md at every session start. Sits right after
-    // identity so custom directives frame everything downstream.
+    // ~/zylos/custom-hooks/session-start/*.md at every session start. Sits right
+    // after identity so custom directives frame everything downstream.
     name: 'custom',
     order: 2,
     emit: async () =>

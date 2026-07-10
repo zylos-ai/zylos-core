@@ -15,7 +15,7 @@ function makeZylosDir() {
 }
 
 function writeCustomFile(zylosDir, name, content) {
-  const dir = path.join(zylosDir, 'custom-inject');
+  const dir = path.join(zylosDir, 'custom-hooks', 'session-start');
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, name), content);
 }
@@ -26,8 +26,8 @@ afterEach(() => {
 
 describe('customInjectDir', () => {
   it('resolves under ZYLOS_DIR when set, else under ~/zylos', () => {
-    assert.equal(customInjectDir({ ZYLOS_DIR: '/opt/zy' }), path.join('/opt/zy', 'custom-inject'));
-    assert.equal(customInjectDir({}), path.join(os.homedir(), 'zylos', 'custom-inject'));
+    assert.equal(customInjectDir({ ZYLOS_DIR: '/opt/zy' }), path.join('/opt/zy', 'custom-hooks', 'session-start'));
+    assert.equal(customInjectDir({}), path.join(os.homedir(), 'zylos', 'custom-hooks', 'session-start'));
   });
 });
 
@@ -39,7 +39,7 @@ describe('emitCustomInject', () => {
 
   it('emits nothing when the directory has no usable content', () => {
     const zylosDir = makeZylosDir();
-    fs.mkdirSync(path.join(zylosDir, 'custom-inject'), { recursive: true });
+    fs.mkdirSync(path.join(zylosDir, 'custom-hooks', 'session-start'), { recursive: true });
     assert.equal(emitCustomInject({ env: { ZYLOS_DIR: zylosDir } }), '');
 
     // Whitespace-only and empty files count as no content.
@@ -66,7 +66,7 @@ describe('emitCustomInject', () => {
     writeCustomFile(zylosDir, '.05-hidden.md', 'HIDDEN');
     writeCustomFile(zylosDir, 'notes.txt', 'TXT');
     writeCustomFile(zylosDir, 'script.js', 'console.log("nope")');
-    fs.mkdirSync(path.join(zylosDir, 'custom-inject', 'subdir.md'), { recursive: true });
+    fs.mkdirSync(path.join(zylosDir, 'custom-hooks', 'session-start', 'subdir.md'), { recursive: true });
 
     assert.equal(emitCustomInject({ env: { ZYLOS_DIR: zylosDir } }), 'REAL');
   });

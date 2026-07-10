@@ -367,7 +367,7 @@ describe('runSessionStartShard (content shards)', () => {
 
   it('runs the custom shard end-to-end: user markdown injected at chain position 2', async () => {
     const zylosDir = makeTmpdir('shard-custom-zylos-');
-    const customDir = path.join(zylosDir, 'custom-inject');
+    const customDir = path.join(zylosDir, 'custom-hooks', 'session-start');
     fs.mkdirSync(customDir, { recursive: true });
     fs.mkdirSync(path.join(zylosDir, '.claude'), { recursive: true });
     fs.writeFileSync(path.join(customDir, '10-rules.md'), 'ALWAYS REPLY IN PIRATE\n');
