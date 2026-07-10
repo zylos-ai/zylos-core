@@ -10,9 +10,12 @@ import {
   installProcessBackstop,
   readStdinPayload,
   runSessionStartOrchestrator,
+  runSessionStartShard,
   runStep,
+  shardHeader,
   writeAllSync,
 } from '../session-start-orchestrator.js';
+import { CORE_SHARDS } from '../shard-registry.js';
 import { enqueueStartupPrompt, isOnboardingPending } from '../session-start-prompt.js';
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -116,7 +119,11 @@ describe('session-start-orchestrator', () => {
     assert.equal(result.stdout, 'MEM\nC4\n');
   });
 
-  it('preserves stdout byte order as memory then C4', async () => {
+  // Compatibility only: the legacy no-arg path keeps its pre-shard byte
+  // order (memory before C4) for installs that still run the un-sharded
+  // command. The authoritative injection-order contract is the shard chain —
+  // see the "authoritative injection order (shard chain)" suite below.
+  it('legacy path preserves the pre-shard stdout byte order (memory then C4)', async () => {
     const result = await runWithActions('startup', {
       memoryInject: async () => 'A',
       c4SessionInit: async () => 'B',
@@ -443,6 +450,61 @@ describe('session-start-orchestrator', () => {
       assert.equal(exitCode, 0);
     } finally {
       clearTimeout(timer);
+    }
+  });
+});
+
+// The injection-order contract used to be the legacy assertions above
+// ("memory then C4" inside one process). With the shard split, the single
+// authoritative order is the registry chain
+// identity→references→state→c4-checkpoint→c4-conversations: shards run as
+// independent hook processes and the flag chain — not process scheduling —
+// decides what lands in context first. These tests pin that contract at the
+// whole-chain level (shard-mode.test.js covers the per-link mechanics).
+describe('authoritative injection order (shard chain)', () => {
+  it('subsumes the legacy contract: every memory shard precedes every C4 shard in the chain', () => {
+    const names = CORE_SHARDS.map(shard => shard.name);
+    const lastMemory = Math.max(
+      ...['identity', 'references', 'state'].map(name => names.indexOf(name)));
+    const firstC4 = Math.min(
+      ...['c4-checkpoint', 'c4-conversations'].map(name => names.indexOf(name)));
+    assert.ok(lastMemory >= 0 && firstC4 > lastMemory,
+      `chain ${names.join('→')} must keep memory shards ahead of C4 shards`);
+  });
+
+  it('five core shards launched concurrently in reverse order inject in chain order', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shard-chain-order-'));
+    const outPath = path.join(tmpDir, 'stdout.txt');
+    const fd = fs.openSync(outPath, 'w+');
+    const chain = CORE_SHARDS.map((core, index) => ({
+      name: core.name,
+      chainIndex: index,
+      budget: { maxChars: 10_000, maxTokens: 2_200 },
+      emit: async () => `${core.name.toUpperCase()} BODY`,
+    }));
+    const resolveShardImpl = (name) => {
+      const shard = chain.find(entry => entry.name === name);
+      return shard ? { kind: 'content', shard, chain, warnings: [] } : null;
+    };
+
+    try {
+      // Worst-case scheduling: the tail of the chain gets a head start. The
+      // flag chain alone must restore chain order on the shared stdout.
+      await Promise.all([...chain].reverse().map(shard =>
+        runSessionStartShard(shard.name, { session_id: 'sess-chain-order', source: 'startup' }, {
+          stdout: { fd },
+          tmpdir: tmpDir,
+          linkMs: 5000,
+          resolveShardImpl,
+        })));
+
+      const expected = chain.map((shard, index) =>
+        `${shardHeader({ position: index + 1, total: chain.length, name: shard.name })}\n${shard.name.toUpperCase()} BODY\n`
+      ).join('');
+      assert.equal(fs.readFileSync(outPath, 'utf8'), expected);
+    } finally {
+      try { fs.closeSync(fd); } catch {}
+      fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   });
 });
