@@ -21,9 +21,14 @@ import path from 'path';
 import os from 'os';
 import { execFileSync } from 'child_process';
 import { fileURLToPath } from 'url';
-import { hookScriptKey, getCommandHooks } from './hook-utils.js';
+import { hookScriptKey, hookScriptBaseKey, getCommandHooks } from './hook-utils.js';
 import { getZylosConfig, updateZylosConfig } from './config.js';
 import { renderCodexProjectConfig, renderCodexGlobalConfig, writeCodexConfig } from './runtime-setup.js';
+import {
+  SIDE_EFFECT_NAMES,
+  buildChain,
+  loadComponentShardDeclarations,
+} from '../../skills/activity-monitor/scripts/shard-registry.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ZYLOS_DIR = path.resolve(process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos'));
@@ -46,8 +51,11 @@ export const CORE_MANAGED_HOOKS = new Set([
 ]);
 
 export function isCoreManaged(hook) {
+  // Base key (shard-arg stripped): every --shard variant of a core-managed
+  // script is core-managed, and the retired no-arg orchestrator command keys
+  // to the same path so upgrades sweep it out.
   if (!hook || hook.type !== 'command') return false;
-  return CORE_MANAGED_HOOKS.has(hookScriptKey(hook.command));
+  return CORE_MANAGED_HOOKS.has(hookScriptBaseKey(hook.command));
 }
 
 function zylosClaudeScript(relativePath) {
@@ -63,11 +71,30 @@ function commandHook(relativePath, options = {}) {
   };
 }
 
-export function desiredClaudeHooks() {
-  const sessionStartHook = commandHook(
-    'skills/activity-monitor/scripts/session-start-orchestrator.js',
-    { timeout: 20000 }
-  );
+/**
+ * One SessionStart hook command per injection shard (plus the two
+ * side-effect steps), all running the orchestrator script with distinct
+ * `--shard` args. Chain membership and order come from the shard registry:
+ * 5 core shards followed by any component shards declared under
+ * ~/zylos/.zylos/shards.d/.
+ */
+export function desiredSessionStartHooks({ zylosDir = ZYLOS_DIR } = {}) {
+  const { chain } = buildChain({ zylosDir });
+  const names = [
+    ...chain.map(shard => shard.name),
+    SIDE_EFFECT_NAMES.foreground,
+    SIDE_EFFECT_NAMES.startPrompt,
+  ];
+  const orchestrator = zylosClaudeScript('skills/activity-monitor/scripts/session-start-orchestrator.js');
+  return names.map(name => ({
+    type: 'command',
+    command: `${orchestrator} --shard ${name}`,
+    timeout: 20000,
+  }));
+}
+
+export function desiredClaudeHooks({ zylosDir = ZYLOS_DIR } = {}) {
+  const sessionStartHooks = desiredSessionStartHooks({ zylosDir });
   const activityHook = commandHook(
     'skills/activity-monitor/scripts/hook-activity.js',
     { async: true, timeout: 5 }
@@ -76,7 +103,7 @@ export function desiredClaudeHooks() {
   return {
     SessionStart: ['startup', 'clear', 'compact'].map(matcher => ({
       matcher,
-      hooks: [{ ...sessionStartHook }],
+      hooks: sessionStartHooks.map(hook => ({ ...hook })),
     })),
     UserPromptSubmit: [
       {
@@ -341,12 +368,30 @@ export function syncCodexConfig({
 }
 
 /**
+ * Legacy SessionStart hook paths that component shard declarations claim for
+ * removal (shard-registry.js documents the declaration contract). This is the
+ * ONLY channel through which sync removes hooks it does not own: a component
+ * may claim its own old hook paths (relative to ~/zylos/.claude, enforced at
+ * declaration validation), and everything unclaimed — user hooks, undeclared
+ * component hooks, anything outside the zylos .claude root — is preserved.
+ */
+export function claimedHookBaseKeys({ zylosDir = ZYLOS_DIR } = {}) {
+  const { declarations } = loadComponentShardDeclarations({ zylosDir });
+  return new Set(declarations.flatMap(declaration => declaration.claimHooks));
+}
+
+/**
  * Sync hooks between template and installed settings (in-memory).
  * Exported for unit testing. Called by main() after loading files.
  *
  * @returns {{ added: number, updated: number, removed: number }}
  */
-export function syncHooks(installedSettings, _templateSettings, { dryRun = false, log = console.log, desiredHooks = desiredClaudeHooks() } = {}) {
+export function syncHooks(installedSettings, _templateSettings, {
+  dryRun = false,
+  log = console.log,
+  desiredHooks = desiredClaudeHooks(),
+  claimedKeys = claimedHookBaseKeys(),
+} = {}) {
   const desiredHookGroups = desiredHooks || {};
 
   let added = 0;
@@ -438,7 +483,13 @@ export function syncHooks(installedSettings, _templateSettings, { dryRun = false
         const h = group.hooks[hi];
         if (h.type !== 'command') continue;
 
-        if (!isCoreManaged(h)) continue;
+        // Claims only ever apply to SessionStart (the shard chain's event)
+        // and only via relative-to-.claude keys, so hooks outside the zylos
+        // root can never match a claim.
+        const claimed = event === 'SessionStart'
+          && claimedKeys.size > 0
+          && claimedKeys.has(hookScriptBaseKey(h.command));
+        if (!isCoreManaged(h) && !claimed) continue;
 
         const installedKey = hookScriptKey(h.command);
         // Check only the corresponding template group, not all groups
@@ -451,7 +502,7 @@ export function syncHooks(installedSettings, _templateSettings, { dryRun = false
             group.hooks.splice(hi, 1);
           }
           removed++;
-          log(`  - ${event}[${groupMatcher}]: ${h.command}`);
+          log(`  - ${event}[${groupMatcher}]: ${h.command}${claimed && !isCoreManaged(h) ? ' (claimed by component shard declaration)' : ''}`);
         }
       }
 

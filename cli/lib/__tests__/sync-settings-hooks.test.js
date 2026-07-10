@@ -17,7 +17,7 @@ const {
   syncTemplateSetting,
   syncTemplateModelSetting,
 } = await import('../sync-settings-hooks.js');
-const { extractScriptPath, getCommandHooks, hookScriptKey } = await import('../hook-utils.js');
+const { extractScriptPath, getCommandHooks, hookScriptKey, hookScriptBaseKey, extractShardArg } = await import('../hook-utils.js');
 const {
   renderCodexGlobalConfig,
   renderCodexProjectConfig,
@@ -53,16 +53,28 @@ describe('Claude settings template', () => {
   });
 });
 
+const CORE_SHARD_SEQUENCE = [
+  'identity',
+  'references',
+  'state',
+  'c4-checkpoint',
+  'c4-conversations',
+  'fg',
+  'start-prompt',
+];
+
 describe('desiredClaudeHooks', () => {
-  it('uses absolute SessionStart orchestrator commands for all matchers', () => {
+  it('uses absolute per-shard SessionStart orchestrator commands for all matchers', () => {
     const hooks = desiredClaudeHooks();
     const groups = hooks.SessionStart;
     assert.equal(groups.length, 3);
     for (const group of groups) {
-      assert.equal(group.hooks.length, 1);
-      assert.match(group.hooks[0].command, /session-start-orchestrator\.js/);
-      assert.equal(path.isAbsolute(extractScriptPath(group.hooks[0].command)), true);
-      assert.equal(group.hooks[0].timeout, 20000);
+      assert.deepEqual(group.hooks.map(h => extractShardArg(h.command)), CORE_SHARD_SEQUENCE);
+      for (const hook of group.hooks) {
+        assert.match(hook.command, /session-start-orchestrator\.js --shard /);
+        assert.equal(path.isAbsolute(extractScriptPath(hook.command)), true);
+        assert.equal(hook.timeout, 20000);
+      }
     }
   });
 
@@ -567,9 +579,11 @@ function makeOrchestratorTemplate() {
 function assertSessionStartUsesOrchestrator(settings) {
   assert.equal(settings.hooks.SessionStart.length, 3);
   for (const group of settings.hooks.SessionStart) {
-    assert.equal(group.hooks.length, 1);
-    assert.match(group.hooks[0].command, /session-start-orchestrator\.js/);
-    assert.equal(group.hooks[0].timeout, 20000);
+    const coreHooks = group.hooks.filter(h => h.command?.includes('session-start-orchestrator.js'));
+    assert.deepEqual(coreHooks.map(h => extractShardArg(h.command)), CORE_SHARD_SEQUENCE);
+    for (const hook of coreHooks) {
+      assert.equal(hook.timeout, 20000);
+    }
   }
 }
 
@@ -662,14 +676,16 @@ describe('hookScriptKey', () => {
 });
 
 describe('core hook registry', () => {
-  it('includes every desired command hook', () => {
+  it('includes every desired command hook by base script key', () => {
     const templateKeys = new Set();
 
     for (const groups of Object.values(desiredClaudeHooks())) {
       if (!Array.isArray(groups)) continue;
       for (const group of groups) {
         for (const hook of getCommandHooks(group)) {
-          templateKeys.add(hookScriptKey(hook.command));
+          // Base key: CORE_MANAGED_HOOKS lists bare script paths; every
+          // --shard variant of a core script must map onto one of them.
+          templateKeys.add(hookScriptBaseKey(hook.command));
         }
       }
     }
@@ -710,7 +726,9 @@ describe('syncHooks SessionStart orchestrator convergence', () => {
 
     const result = syncHooks(installed, makeOrchestratorTemplate(), { log: noopLog });
 
-    assert.deepEqual(result, { added: 10, updated: 0, removed: 12 });
+    // 7 shard/side-effect commands x 3 SessionStart matchers + 7 other-event
+    // hooks added; 4 retired per-step hooks x 3 matchers removed.
+    assert.deepEqual(result, { added: 28, updated: 0, removed: 12 });
     assertSessionStartUsesOrchestrator(installed);
   });
 

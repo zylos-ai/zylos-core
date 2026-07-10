@@ -156,11 +156,28 @@ function normalizedAbsolutePath(scriptPath) {
 }
 
 /**
- * Return the canonical key used to compare hook script identity. Only hooks
- * under the zylos-owned .claude directory are reduced to registry suffixes;
- * other paths keep their full normalized path to avoid user hook collisions.
+ * Extract the value of a `--shard <name>` argument from a hook command, or
+ * null when the command has none.
  */
-export function hookScriptKey(command) {
+export function extractShardArg(command) {
+  if (typeof command !== 'string') return null;
+  const lastSegment = commandSegments(command).at(-1) || command;
+  const tokens = shellTokens(lastSegment);
+  const index = tokens.indexOf('--shard');
+  if (index === -1) return null;
+  const value = tokens[index + 1];
+  return value && !value.startsWith('-') ? value : null;
+}
+
+/**
+ * Script-identity key without shard discrimination. This is the key used for
+ * "is this a zylos-core-managed script" checks (CORE_MANAGED_HOOKS lists bare
+ * script paths, and every `--shard` variant of a core script is core-managed).
+ * Only hooks under the zylos-owned .claude directory are reduced to registry
+ * suffixes; other paths keep their full normalized path to avoid user hook
+ * collisions.
+ */
+export function hookScriptBaseKey(command) {
   const scriptPath = normalizedAbsolutePath(
     extractScriptPath(command).replaceAll('\\', '/').split(path.sep).join('/')
   );
@@ -168,6 +185,18 @@ export function hookScriptKey(command) {
   if (scriptPath.startsWith(root)) return scriptPath.slice(root.length);
 
   return scriptPath;
+}
+
+/**
+ * Return the canonical key used to compare hook command identity. Shard-mode
+ * commands (`--shard <name>`) get a `#shard=<name>` suffix so the N shard
+ * commands of the same orchestrator script sync independently instead of
+ * colliding on one script-path key.
+ */
+export function hookScriptKey(command) {
+  const base = hookScriptBaseKey(command);
+  const shard = extractShardArg(command);
+  return shard ? `${base}#shard=${shard}` : base;
 }
 
 /**
