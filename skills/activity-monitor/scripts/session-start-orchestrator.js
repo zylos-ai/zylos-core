@@ -381,6 +381,7 @@ export async function runSessionStartShard(name, payload = {}, {
   resolveShardImpl = resolveShard,
   waitForFlagImpl = waitForFlag,
   writeFlagImpl = writeFlag,
+  registerExitFlagImpl = fn => process.once('exit', fn),
   actions = {
     foreground: runForeground,
     startupPrompt: runStartupPrompt,
@@ -474,12 +475,21 @@ export async function runSessionStartShard(name, payload = {}, {
 
   writeAllSync(stdout.fd ?? 1, composed.output);
 
-  // Flag goes down only after our bytes are out — it is the "injected"
-  // signal successors serialize on. An emitter failure still flags: the
-  // failure notice was emitted in this shard's slot, so successors must not
-  // burn their ladder deadline waiting for a shard that already spoke.
+  // The flag is the "injected" signal successors serialize on, and it must
+  // mark this PROCESS's completion, not its stdout write: the runtime
+  // attaches hook output in process-exit order, and after stdout there is
+  // still a tail (diagnostics below, event-loop drain of whatever the
+  // emitter imported). An ultra-cheap successor can detect an early flag,
+  // emit, and exit inside that tail, deterministically inverting the link
+  // (observed: the 3-line custom emitter overtaking identity in every
+  // sandbox run). Deferring the flag to the exit hook shrinks the
+  // predecessor's post-flag tail to ~0ms, while a successor's post-detect
+  // path always includes at least its emitter import + emit + diagnostics.
+  // An emitter failure still flags: the failure notice was emitted in this
+  // shard's slot, so successors must not burn their ladder deadline waiting
+  // for a shard that already spoke.
   if (sessionId) {
-    writeFlagImpl(sessionId, shard.name, sequencerOptions);
+    registerExitFlagImpl(() => writeFlagImpl(sessionId, shard.name, sequencerOptions));
   }
 
   await logStep({

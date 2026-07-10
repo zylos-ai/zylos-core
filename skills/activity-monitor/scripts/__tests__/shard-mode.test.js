@@ -197,10 +197,11 @@ describe('shard budget (dual limit)', () => {
 describe('runSessionStartShard (content shards)', () => {
   const basePayload = { session_id: 'sess-1', source: 'startup' };
 
-  it('emits the numbered header and body, then writes its completion flag', async () => {
+  it('emits the numbered header and body, then registers its completion flag for exit time', async () => {
     const tmpdir = makeTmpdir();
     const out = tempStdout();
     const flags = [];
+    const exitHooks = [];
     const chain = fakeChain([
       { name: 'identity', emit: async () => 'IDENTITY BODY' },
       { name: 'references', emit: async () => 'REFS BODY' },
@@ -211,9 +212,16 @@ describe('runSessionStartShard (content shards)', () => {
       tmpdir,
       resolveShardImpl: fakeResolver(chain),
       writeFlagImpl: (sessionId, name) => flags.push([sessionId, name]),
+      registerExitFlagImpl: fn => exitHooks.push(fn),
     });
 
     assert.equal(out.read(), '=== ZYLOS STARTUP CONTEXT [1/2] identity ===\nIDENTITY BODY\n');
+    // The flag is DEFERRED to process exit — the runtime attaches hook output
+    // in process-exit order, so flagging at stdout time lets a fast successor
+    // exit inside the predecessor's tail and invert the injected order.
+    assert.deepEqual(flags, [], 'flag must not be written before process exit');
+    assert.equal(exitHooks.length, 1);
+    exitHooks[0]();
     assert.deepEqual(flags, [['sess-1', 'identity']]);
   });
 
@@ -272,6 +280,7 @@ describe('runSessionStartShard (content shards)', () => {
       tmpdir,
       resolveShardImpl: fakeResolver(chain),
       writeFlagImpl: (sessionId, name) => flags.push(name),
+      registerExitFlagImpl: fn => fn(),
     });
 
     const text = out.read();
@@ -349,6 +358,7 @@ describe('runSessionStartShard (content shards)', () => {
       stdout: out.stdout,
       tmpdir,
       zylosDir,
+      registerExitFlagImpl: fn => fn(),
     });
 
     assert.equal(out.read(), '=== ZYLOS STARTUP CONTEXT [6/6] role-inject ===\nROLE CONTEXT\n');

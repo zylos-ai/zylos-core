@@ -496,6 +496,9 @@ describe('authoritative injection order (shard chain)', () => {
           tmpdir: tmpDir,
           linkMs: 5000,
           resolveShardImpl,
+          // In-process stand-in for the per-process exit hook: these shards
+          // share one process, so "exit" is the moment the shard's run ends.
+          registerExitFlagImpl: fn => fn(),
         })));
 
       const expected = chain.map((shard, index) =>
