@@ -171,13 +171,26 @@ function formatC4Reply(type, data) {
     }
     case 'check-all': {
       const { total, updatable, components } = data;
-      if (updatable === 0) return 'All components are up to date.';
-      let r = `${updatable} of ${total} component(s) have updates:`;
-      for (const c of components) {
-        if (c.hasUpdate) r += `\n  ${c.component}: ${c.current} -> ${c.latest}`;
+      const failed = components.filter(c => !c.success);
+      if (updatable === 0 && failed.length === 0) return 'All components are up to date.';
+
+      const sections = [];
+      if (failed.length > 0) {
+        let failures = `${failed.length} of ${total} component check(s) failed:`;
+        for (const c of failed) {
+          failures += `\n  ${c.component}: ${c.message || c.error || 'unknown error'}`;
+        }
+        sections.push(failures);
       }
-      r += '\n\nUse "check <name>" to see details, or "upgrade <name>" to preview.';
-      return r;
+      if (updatable > 0) {
+        let updates = `${updatable} of ${total} component(s) have updates:`;
+        for (const c of components) {
+          if (c.success && c.hasUpdate) updates += `\n  ${c.component}: ${c.current} -> ${c.latest}`;
+        }
+        updates += '\n\nUse "check <name>" to see details, or "upgrade <name>" to preview.';
+        sections.push(updates);
+      }
+      return sections.join('\n\n');
     }
     case 'info': {
       const { name, version, description, type: compType, repo, service } = data;
@@ -818,21 +831,28 @@ async function upgradeAllComponents({ checkOnly, jsonOutput, skipConfirm, skipEv
   }
 
   const updatable = results.filter(r => r.success && r.hasUpdate);
+  const failed = results.filter(r => !r.success);
 
   if (jsonOutput) {
     const output = {
       action: checkOnly ? 'check_all' : 'upgrade_all',
+      success: failed.length === 0,
       total: names.length,
       updatable: updatable.length,
+      failed: failed.length,
       components: results,
     };
     output.reply = formatC4Reply('check-all', { total: names.length, updatable: updatable.length, components: results });
+    if (failed.length > 0) {
+      output.error = 'component_checks_failed';
+      output.message = `${failed.length} component check(s) failed`;
+    }
     console.log(JSON.stringify(output, null, 2));
+    if (failed.length > 0) process.exit(1);
     return;
   }
 
   if (updatable.length === 0) {
-    const failed = results.filter(r => !r.success);
     if (failed.length > 0) {
       console.log(`\n${warn('No remotely updatable components found; see checks above.')}`);
     } else {

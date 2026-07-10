@@ -202,7 +202,7 @@ exec "${process.execPath}" "$(dirname "$0")/curl.mjs" "$@"
     assert.equal(JSON.parse(branchResult.stdout).error, 'local_source_upgrade_unsupported');
   });
 
-  it('reports and skips locally installed components during upgrade --all', () => {
+  it('fails the upgrade --all JSON aggregate for a local-only install', () => {
     const { root, zylosDir } = makeFixture();
     const sourceDir = path.join(root, 'local-upgrade-all-source');
     writeSkill(sourceDir, { name: 'local-upgrade-all-e2e', version: '1.0.0' });
@@ -219,12 +219,17 @@ exec "${process.execPath}" "$(dirname "$0")/curl.mjs" "$@"
       args: ['upgrade', '--all', '--yes', '--json'],
     });
 
-    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.status, 1, result.stderr);
     const output = JSON.parse(result.stdout);
+    assert.equal(output.success, false);
+    assert.equal(output.failed, 1);
+    assert.equal(output.error, 'component_checks_failed');
     assert.equal(output.updatable, 0);
     assert.equal(output.components.length, 1);
     assert.equal(output.components[0].component, 'local-upgrade-all-e2e');
     assert.equal(output.components[0].error, 'local_source_upgrade_unsupported');
+    assert.match(output.reply, /1 of 1 component check\(s\) failed/);
+    assert.doesNotMatch(output.reply, /All components are up to date/);
     assert.equal(
       fs.readFileSync(
         path.join(zylosDir, '.claude', 'skills', 'local-upgrade-all-e2e', 'payload.txt'),
@@ -232,5 +237,67 @@ exec "${process.execPath}" "$(dirname "$0")/curl.mjs" "$@"
       ),
       'local-upgrade-all-e2e payload\n'
     );
+  });
+
+  it('fails the upgrade --all JSON aggregate while preserving remote updates', () => {
+    const { root, zylosDir } = makeFixture();
+    const sourceDir = path.join(root, 'local-mixed-source');
+    writeSkill(sourceDir, { name: 'local-mixed-e2e', version: '1.0.0' });
+    runAdd({ cwd: root, zylosDir, target: './local-mixed-source' });
+
+    const remoteName = 'remote-mixed-e2e';
+    writeSkill(
+      path.join(zylosDir, '.claude', 'skills', remoteName),
+      { name: remoteName, version: '1.0.0' }
+    );
+    const componentsPath = path.join(zylosDir, '.zylos', 'components.json');
+    const components = JSON.parse(fs.readFileSync(componentsPath, 'utf8'));
+    components[remoteName] = {
+      version: '1.0.0',
+      repo: 'example/zylos-remote-mixed-e2e',
+      source: {
+        type: 'github-release',
+        repo: 'example/zylos-remote-mixed-e2e',
+        ref: '1.0.0',
+        refType: 'tag',
+      },
+    };
+    fs.writeFileSync(componentsPath, `${JSON.stringify(components, null, 2)}\n`, 'utf8');
+
+    const fakeBin = path.join(root, 'bin');
+    fs.mkdirSync(fakeBin, { recursive: true });
+    fs.writeFileSync(
+      path.join(fakeBin, 'curl'),
+      '#!/bin/sh\ncat >/dev/null\nprintf \'%s\\n\' \'[{"name":"v2.0.0"}]\'\n',
+      { mode: 0o755 }
+    );
+
+    const result = runCli({
+      cwd: root,
+      zylosDir,
+      args: ['upgrade', '--all', '--yes', '--json'],
+      env: {
+        PATH: `${fakeBin}${path.delimiter}${process.env.PATH}`,
+        GITHUB_TOKEN: 'test-token',
+        GH_TOKEN: '',
+      },
+    });
+
+    assert.equal(result.status, 1, result.stderr);
+    const output = JSON.parse(result.stdout);
+    assert.equal(output.success, false);
+    assert.equal(output.failed, 1);
+    assert.equal(output.updatable, 1);
+    assert.equal(output.error, 'component_checks_failed');
+    const local = output.components.find(c => c.component === 'local-mixed-e2e');
+    const remote = output.components.find(c => c.component === remoteName);
+    assert.equal(local.error, 'local_source_upgrade_unsupported');
+    assert.equal(remote.success, true);
+    assert.equal(remote.hasUpdate, true);
+    assert.equal(remote.current, '1.0.0');
+    assert.equal(remote.latest, '2.0.0');
+    assert.match(output.reply, /1 of 2 component check\(s\) failed/);
+    assert.match(output.reply, /1 of 2 component\(s\) have updates/);
+    assert.doesNotMatch(output.reply, /All components are up to date/);
   });
 });
