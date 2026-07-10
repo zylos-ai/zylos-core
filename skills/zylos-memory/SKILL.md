@@ -80,9 +80,16 @@ exist, report them as historical records and do not create a replacement.
    `archive/`, or a pointer to the config file) instead of leaving or
    appending them. If the file exceeds the 8KB warn threshold
    (`memory-status.js` reports WARN), trim until it is back under.
-7. Create checkpoint (only if conversations were fetched in step 2):
+7. Audit `state.md` against its content rules
+   (`references/state-format.md`): relocate rule-violating content to its
+   routed destination (`reference/projects.md`, `reference/decisions.md`,
+   `archive/`, or a pointer to the on-demand file that already holds it)
+   instead of leaving or appending it. If the file exceeds the 10KB warn
+   threshold (`memory-status.js` reports WARN), trim until it is back
+   under.
+8. Create checkpoint (only if conversations were fetched in step 2):
    `node ~/zylos/.claude/skills/comm-bridge/scripts/c4-checkpoint.js create <end_id> --summary "SUMMARY"`
-8. Confirm completion.
+9. Confirm completion.
 
 ## Classification Rules
 
@@ -91,7 +98,9 @@ exist, report them as historical records and do not create a replacement.
 - `reference/preferences.md`: standing team-wide preferences.
 - `reference/ideas.md`: uncommitted proposals.
 - `users/<id>/profile.md`: user-specific preferences.
-- `state.md`: active focus and pending tasks.
+- `state.md`: active focus, pending items, and blockers only, per the
+  content rules in `references/state-format.md`; completed-task narrative,
+  decisions, and run history are routed out, never accumulated.
 - `references.md`: pointers and stable identifiers only, per the content
   rules in `references/references-file-format.md`; never duplicate config
   values, never accumulate narrative history.
@@ -145,7 +154,9 @@ Review the report and apply these rules:
     and one-off lessons elsewhere.
   - `state.md`: keep active focus, pending tasks, and recent completions.
     Move completed or historical detail to `sessions/current.md` or
-    `reference/`.
+    `reference/`. Apply the content rules in `references/state-format.md`;
+    the sync-time audit (Sync Flow step 7) should keep it under the 10KB
+    warn threshold.
   - `references.md`: keep pointers and lookup facts only. Move prose,
     project history, and detailed decisions to `reference/`. Apply the
     content rules in `references/references-file-format.md`; the sync-time

@@ -116,6 +116,10 @@ Route user-specific preferences to the correct profile file. Bot identity stays 
    - **Allowed:** stable identifiers (bot/app/member IDs), endpoints and ports, key paths, active policy pointers ("dmPolicy=owner, see config.json"), pointers to source-of-truth files (.env, config.json).
    - **Disallowed — route instead of appending:** version/upgrade history and breaking-change notes → `reference/decisions.md`; incident caveats and lessons → `reference/decisions.md`; entries for uninstalled/dead components → `archive/`; any value that already lives in a config file → replace with a pointer to that file.
    - Keep entries terse. Target ≤8KB; Memory Sync audits this file against these rules (see zylos-memory skill).
+5. **state.md is an active-work file with strict content rules.**
+   - **Allowed:** current focus (status + next step + pointer to the detail file), genuinely pending items, blocker/waiting notes.
+   - **Disallowed — route instead of accumulating:** completed-task narrative → `reference/projects.md` (collapse to a one-line ✅ in state.md, or delete); decision records and rationale → `reference/decisions.md`; run history and superseded detail → `archive/`; anything already held in an on-demand file → replace with a pointer.
+   - Keep entries terse. Target ≤10KB; Memory Sync audits this file against these rules (see zylos-memory skill).
 
 ### Classification Rules for reference/ Files
 
