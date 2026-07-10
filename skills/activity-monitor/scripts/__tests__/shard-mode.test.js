@@ -152,9 +152,11 @@ describe('shard-registry chain', () => {
 });
 
 describe('shard budget (dual limit)', () => {
-  it('estimates ASCII at ~4 chars/token and non-ASCII at ~1.6 chars/token', () => {
+  it('estimates ASCII at ~4 chars/token and non-ASCII at ~1.3 chars/token', () => {
     assert.equal(estimateTokens('a'.repeat(4000)), 1000);
-    assert.equal(estimateTokens('中'.repeat(1600)), 1000);
+    // Codex measures common CJK at ~1.34 chars/token; 1.3 keeps the
+    // estimate erring high so a budget-fitted shard never gets elided.
+    assert.equal(estimateTokens('中'.repeat(1300)), 1000);
   });
 
   it('fits CJK-heavy text by the token limit even when well under the char limit', () => {

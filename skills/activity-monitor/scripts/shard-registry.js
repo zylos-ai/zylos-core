@@ -37,10 +37,13 @@ import { pathToFileURL } from 'node:url';
  * Per-shard output budget. Dual limit:
  * - maxChars: Claude Code persists hook stdout above 10,000 characters,
  *   leaving only a ~2KB preview in context.
- * - maxTokens: Codex elides hook output above ~2,500 tokens (measured), so
- *   the cap is token-denominated there; 2,200 leaves headroom. Estimated
- *   with the ascii/4 + non-ascii/1.6 heuristic calibrated in the Codex
- *   ordering experiment.
+ * - maxTokens: Codex elides hook output above its per-hook token cap
+ *   (keeps exactly 2,469 tokens on codex-cli 0.142.0, measured across
+ *   ASCII/CJK/mixed inputs); 2,200 leaves headroom. Estimated with the
+ *   ascii/4 + non-ascii/1.3 heuristic: 11,000 lorem chars measured as
+ *   2,750 tokens (4.0 chars/token) and 8,000 CJK chars as 5,970 tokens
+ *   (~1.34 chars/token), so 1.3 keeps the estimate on the safe side of
+ *   common CJK. Re-verify against the cap when codex-cli upgrades.
  */
 export const DEFAULT_SHARD_BUDGET = Object.freeze({ maxChars: 10_000, maxTokens: 2_200 });
 export const COMPONENT_ORDER_MIN = 10;
@@ -255,8 +258,10 @@ export function resolveShard(name, { zylosDir = defaultZylosDir() } = {}) {
 
 /**
  * Token estimate for budget enforcement, calibrated against Codex's
- * per-hook cap: ~4 chars/token for ASCII, ~1.6 chars/token otherwise
- * (8,000 CJK chars measured as 3,556 tokens).
+ * per-hook cap: ~4 chars/token for ASCII (11,000 chars measured as 2,750
+ * tokens) and ~1.34 chars/token for common CJK (8,000 chars measured as
+ * 5,970 tokens); 1.3 is used so the estimate errs high, never low —
+ * an underestimate here means Codex elides the shard mid-body.
  */
 export function estimateTokens(text) {
   let ascii = 0;
@@ -265,7 +270,7 @@ export function estimateTokens(text) {
     if (ch.codePointAt(0) <= 0x7f) ascii += 1;
     else other += 1;
   }
-  return Math.ceil(ascii / 4 + other / 1.6);
+  return Math.ceil(ascii / 4 + other / 1.3);
 }
 
 export function withinBudget(text, budget = DEFAULT_SHARD_BUDGET) {
