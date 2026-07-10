@@ -48,6 +48,11 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
 ```
 
+The job token is limited to 1,000 requests per hour per repository. That is
+lower than a normal authenticated user's quota and also applies when the job
+reads component repositories other than the workflow repository, so
+cross-repository component tests may still need a dedicated read-only token.
+
 For other CI systems, create a masked secret named `GITHUB_TOKEN` and expose it
 only to the install, upgrade, or E2E step. Avoid placing the token directly in a
 shell command, where tracing can reveal it.

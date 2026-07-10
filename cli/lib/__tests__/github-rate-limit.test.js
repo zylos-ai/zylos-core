@@ -197,21 +197,40 @@ echo "file-content"
 });
 
 describe('GitHub API authentication order (fake curl on PATH)', () => {
-  function installRecordingCommands({ failAuthenticated = false } = {}) {
+  function installRecordingCommands({
+    failAuthenticated = false,
+    authenticatedStatus = '403',
+    publicFailuresBeforeSuccess = 0,
+    publicStatus = '500',
+  } = {}) {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-github-order-'));
     tmpDirs.push(dir);
     const callsFile = path.join(dir, 'curl-calls');
+    const publicCallsFile = path.join(dir, 'public-calls');
     const curlScript = `#!/bin/sh
-printf '%s\\n' "$*" >> "${callsFile}"
-case "$*" in
+args="$*"
+input=""
+case "$args" in
+  *"-H @-"*) input=$(cat) ;;
+esac
+flat_input=$(printf '%s' "$input" | tr '\\n' '|')
+printf '%s\\t%s\\n' "$args" "$flat_input" >> "${callsFile}"
+case "$input" in
   *"Authorization: Bearer"*)
     if [ "${failAuthenticated ? 'yes' : 'no'}" = "yes" ]; then
-      echo "curl: (22) The requested URL returned error: 403" >&2
+      echo "curl: (22) The requested URL returned error: ${authenticatedStatus}" >&2
       exit 22
     fi
     ;;
 esac
-case "$*" in
+public_calls=$(cat "${publicCallsFile}" 2>/dev/null || echo 0)
+public_calls=$((public_calls+1))
+echo "$public_calls" > "${publicCallsFile}"
+if [ "$public_calls" -le "${publicFailuresBeforeSuccess}" ]; then
+  echo "curl: (22) The requested URL returned error: ${publicStatus}" >&2
+  exit 22
+fi
+case "$args" in
   *"/tags?per_page=100"*) printf '%s\\n' '[{"name":"v1.2.3"}]' ;;
   *) printf '%s\\n' 'file-content' ;;
 esac
@@ -222,7 +241,14 @@ esac
     return {
       calls() {
         if (!fs.existsSync(callsFile)) return [];
-        return fs.readFileSync(callsFile, 'utf8').trim().split('\n');
+        return fs.readFileSync(callsFile, 'utf8').trim().split('\n').map(line => {
+          const [args, input = ''] = line.split('\t');
+          return { args, input };
+        });
+      },
+      publicCalls() {
+        if (!fs.existsSync(publicCallsFile)) return 0;
+        return Number(fs.readFileSync(publicCallsFile, 'utf8').trim());
       },
     };
   }
@@ -238,8 +264,10 @@ esac
     const calls = fake.calls();
     assert.equal(calls.length, 2);
     for (const call of calls) {
-      assert.match(call, /Authorization: Bearer test-token/);
-      assert.match(call, /api\.github\.com\/repos\/org\/repo\/tags\?per_page=100/);
+      assert.doesNotMatch(call.args, /test-token/);
+      assert.match(call.args, /-H @-/);
+      assert.match(call.input, /Authorization: Bearer test-token/);
+      assert.match(call.args, /api\.github\.com\/repos\/org\/repo\/tags\?per_page=100/);
     }
   });
 
@@ -251,9 +279,10 @@ esac
     assert.equal(fetchRawFileFresh('org/repo', 'SKILL.md').trim(), 'file-content');
 
     const [call] = fake.calls();
-    assert.match(call, /Authorization: Bearer test-token/);
-    assert.match(call, /Accept: application\/vnd\.github\.raw\+json/);
-    assert.match(call, /api\.github\.com\/repos\/org\/repo\/contents\/SKILL\.md\?ref=main/);
+    assert.doesNotMatch(call.args, /test-token/);
+    assert.match(call.input, /Authorization: Bearer test-token/);
+    assert.match(call.input, /Accept: application\/vnd\.github\.raw\+json/);
+    assert.match(call.args, /api\.github\.com\/repos\/org\/repo\/contents\/SKILL\.md\?ref=main/);
   });
 
   it('falls back to public endpoints when an authenticated request fails', async () => {
@@ -268,15 +297,15 @@ esac
 
     const calls = fake.calls();
     assert.equal(calls.length, 6);
-    assert.match(calls[0], /Authorization: Bearer test-token/);
-    assert.doesNotMatch(calls[1], /Authorization:/);
-    assert.match(calls[1], /api\.github\.com\/repos\/org\/repo\/tags\?per_page=100/);
-    assert.match(calls[2], /Authorization: Bearer test-token/);
-    assert.doesNotMatch(calls[3], /Authorization:/);
-    assert.match(calls[3], /api\.github\.com\/repos\/org\/repo\/tags\?per_page=100/);
-    assert.match(calls[4], /Authorization: Bearer test-token/);
-    assert.doesNotMatch(calls[5], /Authorization:/);
-    assert.match(calls[5], /raw\.githubusercontent\.com\/org\/repo\/main\/SKILL\.md/);
+    assert.match(calls[0].input, /Authorization: Bearer test-token/);
+    assert.equal(calls[1].input, '');
+    assert.match(calls[1].args, /api\.github\.com\/repos\/org\/repo\/tags\?per_page=100/);
+    assert.match(calls[2].input, /Authorization: Bearer test-token/);
+    assert.equal(calls[3].input, '');
+    assert.match(calls[3].args, /api\.github\.com\/repos\/org\/repo\/tags\?per_page=100/);
+    assert.match(calls[4].input, /Authorization: Bearer test-token/);
+    assert.equal(calls[5].input, '');
+    assert.match(calls[5].args, /raw\.githubusercontent\.com\/org\/repo\/main\/SKILL\.md/);
   });
 
   it('uses public endpoints directly when no token is available', async () => {
@@ -292,11 +321,130 @@ esac
 
     const calls = fake.calls();
     assert.equal(calls.length, 3);
-    assert.doesNotMatch(calls[0], /Authorization:/);
-    assert.match(calls[0], /api\.github\.com\/repos\/org\/repo\/tags\?per_page=100/);
-    assert.doesNotMatch(calls[1], /Authorization:/);
-    assert.match(calls[1], /api\.github\.com\/repos\/org\/repo\/tags\?per_page=100/);
-    assert.doesNotMatch(calls[2], /Authorization:/);
-    assert.match(calls[2], /raw\.githubusercontent\.com\/org\/repo\/main\/SKILL\.md/);
+    assert.equal(calls[0].input, '');
+    assert.match(calls[0].args, /api\.github\.com\/repos\/org\/repo\/tags\?per_page=100/);
+    assert.equal(calls[1].input, '');
+    assert.match(calls[1].args, /api\.github\.com\/repos\/org\/repo\/tags\?per_page=100/);
+    assert.equal(calls[2].input, '');
+    assert.match(calls[2].args, /raw\.githubusercontent\.com\/org\/repo\/main\/SKILL\.md/);
+  });
+
+  it('keeps the legacy immediate public retry without a token', async () => {
+    delete process.env.GITHUB_TOKEN;
+    delete process.env.GH_TOKEN;
+    process.env.ZYLOS_GH_RETRY_DELAY_MS = '';
+
+    for (const operation of ['sync tags', 'async tags', 'raw file']) {
+      const fake = installRecordingCommands({
+        publicFailuresBeforeSuccess: 1,
+        publicStatus: '500',
+      });
+      const { fetchLatestTag, fetchLatestTagAsync, fetchRawFile: fetchRawFileFresh } =
+        await importFreshGitHub();
+
+      if (operation === 'sync tags') {
+        assert.equal(fetchLatestTag('org/repo'), '1.2.3');
+      } else if (operation === 'async tags') {
+        assert.equal(await fetchLatestTagAsync('org/repo'), '1.2.3');
+      } else {
+        assert.equal(fetchRawFileFresh('org/repo', 'SKILL.md').trim(), 'file-content');
+      }
+      assert.equal(fake.publicCalls(), 2, operation);
+    }
+  });
+
+  it('makes exactly two public calls per failed no-token attempt', async () => {
+    delete process.env.GITHUB_TOKEN;
+    delete process.env.GH_TOKEN;
+    process.env.ZYLOS_GH_RETRY_DELAY_MS = '';
+
+    for (const operation of ['sync tags', 'async tags', 'raw file']) {
+      const fake = installRecordingCommands({
+        publicFailuresBeforeSuccess: 99,
+        publicStatus: '500',
+      });
+      const { fetchLatestTag, fetchLatestTagAsync, fetchRawFile: fetchRawFileFresh } =
+        await importFreshGitHub();
+
+      if (operation === 'sync tags') {
+        assert.throws(() => fetchLatestTag('org/repo'));
+      } else if (operation === 'async tags') {
+        await assert.rejects(fetchLatestTagAsync('org/repo'));
+      } else {
+        assert.throws(() => fetchRawFileFresh('org/repo', 'SKILL.md'));
+      }
+      assert.equal(fake.publicCalls(), 2, operation);
+    }
+  });
+
+  it('makes six public calls when all three no-token rate-limit attempts fail', async () => {
+    delete process.env.GITHUB_TOKEN;
+    delete process.env.GH_TOKEN;
+    process.env.ZYLOS_GH_RETRY_DELAY_MS = '0,0';
+
+    for (const operation of ['sync tags', 'async tags', 'raw file']) {
+      const fake = installRecordingCommands({
+        publicFailuresBeforeSuccess: 99,
+        publicStatus: '403',
+      });
+      const { fetchLatestTag, fetchLatestTagAsync, fetchRawFile: fetchRawFileFresh } =
+        await importFreshGitHub();
+
+      if (operation === 'sync tags') {
+        assert.throws(() => fetchLatestTag('org/repo'));
+      } else if (operation === 'async tags') {
+        await assert.rejects(fetchLatestTagAsync('org/repo'));
+      } else {
+        assert.throws(() => fetchRawFileFresh('org/repo', 'SKILL.md'));
+      }
+      assert.equal(fake.publicCalls(), 6, operation);
+    }
+  });
+
+  async function assertPublicRateLimitWins({ operation, authenticatedStatus, publicStatus }) {
+    process.env.GITHUB_TOKEN = 'test-token';
+    process.env.ZYLOS_GH_RETRY_DELAY_MS = '0';
+    const fake = installRecordingCommands({
+      failAuthenticated: true,
+      authenticatedStatus,
+      publicFailuresBeforeSuccess: 1,
+      publicStatus,
+    });
+    const { fetchLatestTag, fetchLatestTagAsync, fetchRawFile: fetchRawFileFresh } =
+      await importFreshGitHub();
+
+    if (operation === 'sync tags') {
+      assert.equal(fetchLatestTag('org/repo'), '1.2.3');
+    } else if (operation === 'async tags') {
+      assert.equal(await fetchLatestTagAsync('org/repo'), '1.2.3');
+    } else {
+      assert.equal(fetchRawFileFresh('org/repo', 'SKILL.md').trim(), 'file-content');
+    }
+
+    assert.equal(fake.publicCalls(), 2);
+    const calls = fake.calls();
+    assert.equal(calls.length, 4);
+    assert.match(calls[0].input, /Authorization: Bearer test-token/);
+    assert.equal(calls[1].input, '');
+    assert.match(calls[2].input, /Authorization: Bearer test-token/);
+    assert.equal(calls[3].input, '');
+  }
+
+  it('retries sync tags when auth 401 is followed by public 403', async () => {
+    await assertPublicRateLimitWins({
+      operation: 'sync tags', authenticatedStatus: '401', publicStatus: '403',
+    });
+  });
+
+  it('retries async tags when auth 404 is followed by public 429', async () => {
+    await assertPublicRateLimitWins({
+      operation: 'async tags', authenticatedStatus: '404', publicStatus: '429',
+    });
+  });
+
+  it('retries raw files when auth 404 is followed by public 403', async () => {
+    await assertPublicRateLimitWins({
+      operation: 'raw file', authenticatedStatus: '404', publicStatus: '403',
+    });
   });
 });
