@@ -9,9 +9,15 @@ for (const key of ['ZYLOS_GH_RETRY_DELAY_MS', 'GITHUB_TOKEN', 'GH_TOKEN', 'PATH'
   origEnv[key] = process.env[key];
 }
 const tmpDirs = [];
+let freshImportId = 0;
 
 const { isRateLimitError, withRateLimitRetrySync, withRateLimitRetryAsync, fetchRawFile } =
   await import('../github.js');
+
+function importFreshGitHub() {
+  freshImportId += 1;
+  return import(`../github.js?token-order-test=${freshImportId}`);
+}
 
 beforeEach(() => {
   // Fast retries so tests don't sleep for real
@@ -171,8 +177,8 @@ echo "file-content"
   }
 
   it('recovers when rate limiting clears within the retry budget', () => {
-    // Token present: each operation attempt = public + authenticated call.
-    // Attempt 1 (calls 1-2) is fully rate limited; the retry's public
+    // Token present: each operation attempt = authenticated + public call.
+    // Attempt 1 (calls 1-2) is fully rate limited; the retry's authenticated
     // call (call 3) succeeds.
     process.env.GITHUB_TOKEN = 'test-token';
     const fake = installFakeCurl({ failuresBeforeSuccess: 2, status: '403' });
@@ -185,7 +191,112 @@ echo "file-content"
     process.env.GITHUB_TOKEN = 'test-token';
     const fake = installFakeCurl({ failuresBeforeSuccess: 99, status: '404' });
     assert.throws(() => fetchRawFile('org/repo', 'SKILL.md'));
-    // public + authenticated within the single attempt, no retries
+    // authenticated + public within the single attempt, no retries
     assert.equal(fake.calls(), 2);
+  });
+});
+
+describe('GitHub API authentication order (fake curl on PATH)', () => {
+  function installRecordingCommands({ failAuthenticated = false } = {}) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-github-order-'));
+    tmpDirs.push(dir);
+    const callsFile = path.join(dir, 'curl-calls');
+    const curlScript = `#!/bin/sh
+printf '%s\\n' "$*" >> "${callsFile}"
+case "$*" in
+  *"Authorization: Bearer"*)
+    if [ "${failAuthenticated ? 'yes' : 'no'}" = "yes" ]; then
+      echo "curl: (22) The requested URL returned error: 403" >&2
+      exit 22
+    fi
+    ;;
+esac
+case "$*" in
+  *"/tags?per_page=100"*) printf '%s\\n' '[{"name":"v1.2.3"}]' ;;
+  *) printf '%s\\n' 'file-content' ;;
+esac
+`;
+    fs.writeFileSync(path.join(dir, 'curl'), curlScript, { mode: 0o755 });
+    fs.writeFileSync(path.join(dir, 'gh'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+    process.env.PATH = `${dir}${path.delimiter}${process.env.PATH}`;
+    return {
+      calls() {
+        if (!fs.existsSync(callsFile)) return [];
+        return fs.readFileSync(callsFile, 'utf8').trim().split('\n');
+      },
+    };
+  }
+
+  it('uses authenticated API calls first for sync and async tag queries', async () => {
+    process.env.GITHUB_TOKEN = 'test-token';
+    const fake = installRecordingCommands();
+    const { fetchLatestTag, fetchLatestTagAsync } = await importFreshGitHub();
+
+    assert.equal(fetchLatestTag('org/repo'), '1.2.3');
+    assert.equal(await fetchLatestTagAsync('org/repo'), '1.2.3');
+
+    const calls = fake.calls();
+    assert.equal(calls.length, 2);
+    for (const call of calls) {
+      assert.match(call, /Authorization: Bearer test-token/);
+      assert.match(call, /api\.github\.com\/repos\/org\/repo\/tags\?per_page=100/);
+    }
+  });
+
+  it('uses the authenticated contents API first for raw files', async () => {
+    process.env.GITHUB_TOKEN = 'test-token';
+    const fake = installRecordingCommands();
+    const { fetchRawFile: fetchRawFileFresh } = await importFreshGitHub();
+
+    assert.equal(fetchRawFileFresh('org/repo', 'SKILL.md').trim(), 'file-content');
+
+    const [call] = fake.calls();
+    assert.match(call, /Authorization: Bearer test-token/);
+    assert.match(call, /Accept: application\/vnd\.github\.raw\+json/);
+    assert.match(call, /api\.github\.com\/repos\/org\/repo\/contents\/SKILL\.md\?ref=main/);
+  });
+
+  it('falls back to public endpoints when an authenticated request fails', async () => {
+    process.env.GITHUB_TOKEN = 'test-token';
+    const fake = installRecordingCommands({ failAuthenticated: true });
+    const { fetchLatestTag, fetchLatestTagAsync, fetchRawFile: fetchRawFileFresh } =
+      await importFreshGitHub();
+
+    assert.equal(fetchLatestTag('org/repo'), '1.2.3');
+    assert.equal(await fetchLatestTagAsync('org/repo'), '1.2.3');
+    assert.equal(fetchRawFileFresh('org/repo', 'SKILL.md').trim(), 'file-content');
+
+    const calls = fake.calls();
+    assert.equal(calls.length, 6);
+    assert.match(calls[0], /Authorization: Bearer test-token/);
+    assert.doesNotMatch(calls[1], /Authorization:/);
+    assert.match(calls[1], /api\.github\.com\/repos\/org\/repo\/tags\?per_page=100/);
+    assert.match(calls[2], /Authorization: Bearer test-token/);
+    assert.doesNotMatch(calls[3], /Authorization:/);
+    assert.match(calls[3], /api\.github\.com\/repos\/org\/repo\/tags\?per_page=100/);
+    assert.match(calls[4], /Authorization: Bearer test-token/);
+    assert.doesNotMatch(calls[5], /Authorization:/);
+    assert.match(calls[5], /raw\.githubusercontent\.com\/org\/repo\/main\/SKILL\.md/);
+  });
+
+  it('uses public endpoints directly when no token is available', async () => {
+    delete process.env.GITHUB_TOKEN;
+    delete process.env.GH_TOKEN;
+    const fake = installRecordingCommands();
+    const { fetchLatestTag, fetchLatestTagAsync, fetchRawFile: fetchRawFileFresh } =
+      await importFreshGitHub();
+
+    assert.equal(fetchLatestTag('org/repo'), '1.2.3');
+    assert.equal(await fetchLatestTagAsync('org/repo'), '1.2.3');
+    assert.equal(fetchRawFileFresh('org/repo', 'SKILL.md').trim(), 'file-content');
+
+    const calls = fake.calls();
+    assert.equal(calls.length, 3);
+    assert.doesNotMatch(calls[0], /Authorization:/);
+    assert.match(calls[0], /api\.github\.com\/repos\/org\/repo\/tags\?per_page=100/);
+    assert.doesNotMatch(calls[1], /Authorization:/);
+    assert.match(calls[1], /api\.github\.com\/repos\/org\/repo\/tags\?per_page=100/);
+    assert.doesNotMatch(calls[2], /Authorization:/);
+    assert.match(calls[2], /raw\.githubusercontent\.com\/org\/repo\/main\/SKILL\.md/);
   });
 });
