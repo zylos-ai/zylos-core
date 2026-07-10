@@ -8,7 +8,7 @@ import { spawnSync } from 'node:child_process';
 import { COMPONENTS_FILE } from './config.js';
 import { loadRegistry } from './registry.js';
 import { fetchLatestTag } from './github.js';
-import { inspectLocalSource } from './download.js';
+import { inspectLocalSource, resolveLocalPath } from './download.js';
 
 /**
  * Load installed components from components.json
@@ -48,14 +48,14 @@ export async function resolveTarget(nameOrUrl, { branch = null } = {}) {
       return {
         name: inspected.name,
         repo: null,
-        version: inspected.version || '0.0.0',
+        version: inspected.version,
         fetchError: null,
         isThirdParty: true,
         source: inspected.source,
         sourceLabel: inspected.source.path,
         sourceHeading: 'Source:',
         sourceReplyLabel: 'Source',
-        installTarget: nameOrUrl,
+        installTarget: inspected.source.path,
       };
     } catch (err) {
       return {
@@ -65,7 +65,7 @@ export async function resolveTarget(nameOrUrl, { branch = null } = {}) {
         fetchError: null,
         isThirdParty: true,
         source: null,
-        sourceLabel: path.resolve(expandHome(nameOrUrl)),
+        sourceLabel: resolveLocalPath(nameOrUrl),
         installTarget: nameOrUrl,
         resolutionError: err.message,
       };
@@ -174,10 +174,9 @@ function resolveGitHubTarget({
   };
 }
 
-function isLocalPathSpecifier(value) {
-  const resolvedPath = path.resolve(expandHome(value));
-  return fs.existsSync(resolvedPath)
-    || path.isAbsolute(value)
+export function isLocalPathSpecifier(value) {
+  if (/^[a-zA-Z][a-zA-Z\d+.-]*:\/\//.test(value)) return false;
+  return path.isAbsolute(value)
     || value === '.'
     || value === '..'
     || value.startsWith(`.${path.sep}`)
@@ -185,14 +184,7 @@ function isLocalPathSpecifier(value) {
     || value.startsWith('./')
     || value.startsWith('../')
     || value.startsWith('~/')
-    || value.endsWith('.tar.gz')
-    || value.endsWith('.tgz');
-}
-
-function expandHome(value) {
-  if (value === '~') return process.env.HOME || value;
-  if (value.startsWith('~/')) return path.join(process.env.HOME || '~', value.slice(2));
-  return value;
+    || /\.(?:tar\.gz|tgz)$/i.test(value);
 }
 
 function localFallbackName(value) {

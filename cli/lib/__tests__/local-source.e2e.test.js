@@ -45,6 +45,15 @@ function runAdd({ cwd, zylosDir, target, env = {} }) {
   return JSON.parse(result.stdout);
 }
 
+function runCli({ cwd, zylosDir, args, env = {} }) {
+  return spawnSync(process.execPath, [CLI, ...args], {
+    cwd,
+    env: { ...process.env, ZYLOS_DIR: zylosDir, ...env },
+    encoding: 'utf8',
+    timeout: 30000,
+  });
+}
+
 function readInstalled(zylosDir, name) {
   const components = JSON.parse(fs.readFileSync(path.join(zylosDir, '.zylos', 'components.json'), 'utf8'));
   const skillDir = path.join(zylosDir, '.claude', 'skills', name);
@@ -52,12 +61,12 @@ function readInstalled(zylosDir, name) {
 }
 
 describe('zylos add local source E2E', () => {
-  it('installs a bare relative directory through the complete add pipeline', () => {
+  it('installs an explicit relative directory through the complete add pipeline', () => {
     const { root, zylosDir } = makeFixture();
     const sourceName = 'relative-component';
     writeSkill(path.join(root, sourceName), { name: 'local-directory-e2e', version: '3.1.4' });
 
-    const output = runAdd({ cwd: root, zylosDir, target: sourceName });
+    const output = runAdd({ cwd: root, zylosDir, target: `./${sourceName}` });
     const { components, skillDir } = readInstalled(zylosDir, 'local-directory-e2e');
 
     assert.equal(output.success, true);
@@ -67,6 +76,33 @@ describe('zylos add local source E2E', () => {
     assert.equal(components['local-directory-e2e'].source.type, 'local-dir');
     assert.equal(fs.readFileSync(path.join(skillDir, 'payload.txt'), 'utf8'), 'local-directory-e2e payload\n');
     assert.equal(fs.existsSync(path.join(skillDir, '.zylos', 'manifest.json')), true);
+  });
+
+  it('uses an absolute local path in --check confirmation output', () => {
+    const { root, zylosDir } = makeFixture();
+    const sourceName = 'relative-component';
+    const sourceDir = path.join(root, sourceName);
+    writeSkill(sourceDir, { name: 'local-check-e2e', version: '4.5.6' });
+
+    const result = runCli({ cwd: root, zylosDir, args: ['add', `./${sourceName}`, '--check', '--json'] });
+
+    assert.equal(result.status, 0, result.stderr);
+    const output = JSON.parse(result.stdout);
+    const canonicalSourceDir = fs.realpathSync(sourceDir);
+    assert.equal(output.source.path, canonicalSourceDir);
+    assert.match(output.reply, new RegExp(canonicalSourceDir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  });
+
+  it('does not let a cwd directory hijack a bare component name', () => {
+    const { root, zylosDir } = makeFixture();
+    writeSkill(path.join(root, 'not-in-registry'), { name: 'hijacked-local', version: '1.0.0' });
+
+    const result = runCli({ cwd: root, zylosDir, args: ['add', 'not-in-registry', '--json'] });
+
+    assert.equal(result.status, 1);
+    const output = JSON.parse(result.stdout);
+    assert.equal(output.error, 'not_found');
+    assert.equal(fs.existsSync(path.join(zylosDir, '.claude', 'skills', 'hijacked-local')), false);
   });
 
   it('installs a local tarball and records its VERSION metadata', () => {
@@ -95,10 +131,11 @@ describe('zylos add local source E2E', () => {
     const tarball = path.join(root, 'github-release.tar.gz');
     const fakeBin = path.join(root, 'bin');
     const fakeCurl = path.join(fakeBin, 'curl');
+    const fakeCurlModule = path.join(fakeBin, 'curl.mjs');
     writeSkill(wrapper, { name: 'github-fixture', version: '9.9.9' });
     execFileSync('tar', ['czf', tarball, '-C', root, path.basename(wrapper)]);
     fs.mkdirSync(fakeBin, { recursive: true });
-    fs.writeFileSync(fakeCurl, `#!/usr/bin/env node
+    fs.writeFileSync(fakeCurlModule, `
 import fs from 'node:fs';
 const args = process.argv.slice(2);
 const outputIndex = args.indexOf('-o');
@@ -108,6 +145,9 @@ if (outputIndex !== -1 && url.includes('/archive/refs/tags/')) {
   process.exit(0);
 }
 process.exit(22);
+`, 'utf8');
+    fs.writeFileSync(fakeCurl, `#!/bin/sh
+exec "${process.execPath}" "$(dirname "$0")/curl.mjs" "$@"
 `, { mode: 0o755 });
 
     const output = runAdd({
@@ -133,5 +173,64 @@ process.exit(22);
       refType: 'tag',
     });
     assert.equal(fs.readFileSync(path.join(skillDir, 'payload.txt'), 'utf8'), 'github-fixture payload\n');
+  });
+
+  it('rejects upgrade checks for locally installed components with reinstall guidance', () => {
+    const { root, zylosDir } = makeFixture();
+    const sourceDir = path.join(root, 'local-upgrade-source');
+    writeSkill(sourceDir, { name: 'local-upgrade-e2e', version: '1.0.0' });
+    runAdd({ cwd: root, zylosDir, target: './local-upgrade-source' });
+
+    const result = runCli({
+      cwd: root,
+      zylosDir,
+      args: ['upgrade', 'local-upgrade-e2e', '--check', '--json'],
+    });
+
+    assert.equal(result.status, 1);
+    const output = JSON.parse(result.stdout);
+    assert.equal(output.error, 'local_source_upgrade_unsupported');
+    assert.equal(output.source.path, fs.realpathSync(sourceDir));
+    assert.match(output.message, /Reinstall it from/);
+
+    const branchResult = runCli({
+      cwd: root,
+      zylosDir,
+      args: ['upgrade', 'local-upgrade-e2e', '--check', '--branch', 'main', '--json'],
+    });
+    assert.equal(branchResult.status, 1);
+    assert.equal(JSON.parse(branchResult.stdout).error, 'local_source_upgrade_unsupported');
+  });
+
+  it('reports and skips locally installed components during upgrade --all', () => {
+    const { root, zylosDir } = makeFixture();
+    const sourceDir = path.join(root, 'local-upgrade-all-source');
+    writeSkill(sourceDir, { name: 'local-upgrade-all-e2e', version: '1.0.0' });
+    runAdd({ cwd: root, zylosDir, target: './local-upgrade-all-source' });
+
+    fs.writeFileSync(
+      path.join(sourceDir, 'payload.txt'),
+      'changed source must not overwrite the installed component\n',
+      'utf8'
+    );
+    const result = runCli({
+      cwd: root,
+      zylosDir,
+      args: ['upgrade', '--all', '--yes', '--json'],
+    });
+
+    assert.equal(result.status, 0, result.stderr);
+    const output = JSON.parse(result.stdout);
+    assert.equal(output.updatable, 0);
+    assert.equal(output.components.length, 1);
+    assert.equal(output.components[0].component, 'local-upgrade-all-e2e');
+    assert.equal(output.components[0].error, 'local_source_upgrade_unsupported');
+    assert.equal(
+      fs.readFileSync(
+        path.join(zylosDir, '.claude', 'skills', 'local-upgrade-all-e2e', 'payload.txt'),
+        'utf8'
+      ),
+      'local-upgrade-all-e2e payload\n'
+    );
   });
 });

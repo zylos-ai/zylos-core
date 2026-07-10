@@ -9,7 +9,7 @@ import { ZYLOS_DIR, SKILLS_DIR, COMPONENTS_DIR, getZylosConfig } from '../lib/co
 import { bold, dim, green, red, yellow, cyan, success, error, warn, heading } from '../lib/colors.js';
 import { loadRegistry } from '../lib/registry.js';
 import { loadComponents, saveComponents } from '../lib/components.js';
-import { checkForUpdates, getRepo, runUpgrade, downloadToTemp, readChangelog, filterChangelog, cleanupTemp } from '../lib/upgrade.js';
+import { checkForUpdates, getLocalSourceUpgradeError, getRepo, runUpgrade, downloadToTemp, readChangelog, filterChangelog, cleanupTemp } from '../lib/upgrade.js';
 import {
   checkForCoreUpdates, runSelfUpgrade,
   downloadCoreToTemp, readChangelog as readCoreChangelog,
@@ -338,6 +338,22 @@ export async function upgradeComponent(args) {
       console.log(JSON.stringify(result, null, 2));
     } else {
       console.error(`Error: ${result.message}`);
+    }
+    process.exit(1);
+  }
+
+  const localSourceError = getLocalSourceUpgradeError(target, components[target]);
+  if (localSourceError) {
+    const result = {
+      action: checkOnly ? 'check' : 'upgrade',
+      component: target,
+      ...localSourceError,
+      reply: localSourceError.message,
+    };
+    if (jsonOutput) {
+      console.log(JSON.stringify(result, null, 2));
+    } else {
+      console.error(`Error: ${localSourceError.message}`);
     }
     process.exit(1);
   }
@@ -796,6 +812,8 @@ async function upgradeAllComponents({ checkOnly, jsonOutput, skipConfirm, skipEv
 
     if (!jsonOutput && check.success && check.hasUpdate) {
       console.log(`  ${dim(check.current)} → ${bold(check.latest)}`);
+    } else if (!jsonOutput && !check.success) {
+      console.log(`  ${warn(check.message || check.error)}`);
     }
   }
 
@@ -814,7 +832,12 @@ async function upgradeAllComponents({ checkOnly, jsonOutput, skipConfirm, skipEv
   }
 
   if (updatable.length === 0) {
-    console.log(`\n${success('All components are up to date.')}`);
+    const failed = results.filter(r => !r.success);
+    if (failed.length > 0) {
+      console.log(`\n${warn('No remotely updatable components found; see checks above.')}`);
+    } else {
+      console.log(`\n${success('All components are up to date.')}`);
+    }
     return;
   }
 

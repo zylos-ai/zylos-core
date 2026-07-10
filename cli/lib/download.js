@@ -127,7 +127,7 @@ export function downloadArchive(repo, version, destDir) {
  * @returns {{ success: boolean, error?: string }}
  */
 export function copyLocal(localPath, destDir) {
-  const srcPath = path.resolve(localPath);
+  const srcPath = resolveLocalPath(localPath);
 
   if (!fs.existsSync(srcPath)) {
     return { success: false, error: `Source path not found: ${srcPath}` };
@@ -139,7 +139,7 @@ export function copyLocal(localPath, destDir) {
   }
 
   try {
-    copyTree(srcPath, destDir, { excludes: ['.git'] });
+    copyTree(srcPath, destDir, { excludes: ['.git', 'node_modules', '.zylos', '.backup'] });
     return { success: true };
   } catch (err) {
     return { success: false, error: `Failed to copy from ${srcPath}: ${err.message}` };
@@ -303,10 +303,10 @@ export function extractTarball(tarballPath, destDir) {
   }
 }
 
-function resolveLocalPath(localPath) {
-  if (localPath === '~') return fs.realpathSync(process.env.HOME);
+export function resolveLocalPath(localPath) {
+  if (localPath === '~') return fs.realpathSync(os.homedir());
   const expanded = localPath.startsWith('~/')
-    ? path.join(process.env.HOME, localPath.slice(2))
+    ? path.join(os.homedir(), localPath.slice(2))
     : localPath;
   return path.resolve(expanded);
 }
@@ -318,6 +318,14 @@ function readLocalMetadata(componentDir, fallbackName) {
   if (!version) {
     try {
       version = fs.readFileSync(path.join(componentDir, 'VERSION'), 'utf8').trim() || null;
+    } catch {
+      version = null;
+    }
+  }
+  if (!version) {
+    try {
+      const pkg = JSON.parse(fs.readFileSync(path.join(componentDir, 'package.json'), 'utf8'));
+      version = pkg.version == null ? null : String(pkg.version).trim() || null;
     } catch {
       version = null;
     }
@@ -335,7 +343,7 @@ function normalizeLocalComponentName(value) {
 
 function extractLocalTarball(tarballPath, destDir) {
   try {
-    const srcPath = path.resolve(tarballPath);
+    const srcPath = resolveLocalPath(tarballPath);
     if (!fs.existsSync(srcPath)) {
       return { success: false, extractedDir: null, error: `Local source not found: ${srcPath}` };
     }
@@ -352,6 +360,25 @@ function extractLocalTarball(tarballPath, destDir) {
     if (entries.length === 0) {
       return { success: false, extractedDir: null, error: 'Local tarball is empty' };
     }
+    if (entries.some(isUnsafeArchivePath)) {
+      return { success: false, extractedDir: null, error: 'Local tarball contains an unsafe path' };
+    }
+
+    const verboseListing = execFileSync('tar', ['tvzf', srcPath], {
+      timeout: 30000,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    const linkEntry = verboseListing
+      .split('\n')
+      .find(line => line.startsWith('l') || line.startsWith('h'));
+    if (linkEntry) {
+      return {
+        success: false,
+        extractedDir: null,
+        error: 'Local tarball contains a symbolic or hard link; links are not allowed',
+      };
+    }
 
     const firstParts = new Set(entries.map(entry => entry.split('/')[0]));
     const hasSingleWrapper = firstParts.size === 1 && entries.some(entry => entry.includes('/'));
@@ -367,4 +394,9 @@ function extractLocalTarball(tarballPath, destDir) {
       error: `Failed to extract local tarball: ${sanitizeError(err.message)}`,
     };
   }
+}
+
+function isUnsafeArchivePath(entry) {
+  if (path.posix.isAbsolute(entry) || path.win32.isAbsolute(entry)) return true;
+  return entry.split(/[\\/]+/).some(part => part === '..');
 }
