@@ -77,8 +77,16 @@ describe('Codex core hook installer', () => {
       group.hooks?.some(h => h.command.includes('session-start-orchestrator.js'))
     );
     assert.ok(coreGroup);
-    assert.equal(coreGroup.hooks[0].timeout, 25);
-    assert.equal(coreGroup.hooks[0].async, undefined);
+    // Codex injects in config order, so the shard commands must appear as
+    // one contiguous group in chain order.
+    assert.deepEqual(
+      coreGroup.hooks.map(h => h.command.match(/--shard (\S+)$/)?.[1]),
+      ['identity', 'references', 'state', 'c4-checkpoint', 'c4-conversations', 'fg', 'start-prompt']
+    );
+    for (const hook of coreGroup.hooks) {
+      assert.equal(hook.timeout, 25);
+      assert.equal(hook.async, undefined);
+    }
     assert.ok(config.hooks.SessionStart.some(group =>
       group.hooks?.some(h => h.command.includes('dashboard/hook-ingest.cjs'))
     ));
@@ -93,10 +101,17 @@ describe('Codex core hook installer', () => {
       { event: 'SessionStart', command: `node ${path.join(zylosDir, '.claude', 'skills', 'activity-monitor', 'scripts', 'session-start-orchestrator.js')}`, timeout: 10 },
     ], null, 2) + '\n');
 
-    installCoreCodexHook({ zylosDir });
+    const installed = installCoreCodexHook({ zylosDir });
+    // Install replaces the retired no-arg command with the shard command set.
+    assert.equal(installed.commands.length, 7);
+    const migrated = JSON.parse(fs.readFileSync(hooksPath, 'utf8'));
+    const migratedCommands = migrated.hooks.SessionStart.flatMap(group => group.hooks.map(h => h.command));
+    assert.equal(migratedCommands.filter(c => c.includes('session-start-orchestrator.js')).length, 7);
+    assert.equal(migratedCommands.some(c => c.includes('session-start-orchestrator.js') && !c.includes('--shard')), false);
+
     const removed = uninstallCoreCodexHook({ zylosDir });
 
-    assert.equal(removed.removed, 1);
+    assert.equal(removed.removed, 7);
     const config = JSON.parse(fs.readFileSync(hooksPath, 'utf8'));
     assert.equal(config.hooks.SessionStart.length, 1);
     assert.equal(config.hooks.SessionStart[0].hooks[0].command, 'node /tmp/other.js');

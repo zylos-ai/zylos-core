@@ -15,41 +15,70 @@
 
 import { logHookTiming } from './c4-diagnostic.js';
 import { formatSection } from './session-format.js';
+import { withinBudget } from '../../activity-monitor/scripts/shard-registry.js';
 import { fileURLToPath } from 'node:url';
 
-export async function initC4Session() {
+async function withC4Db(label, action) {
   let close = () => {};
   try {
-    const {
-      getLastCheckpoint,
-      getUnsummarizedRange,
-      getUnsummarizedConversations,
-      formatConversationsForAgent,
-      close: closeDb,
-    } = await import('./c4-db.js');
-    close = closeDb;
-    const { CHECKPOINT_THRESHOLD, SESSION_INIT_RECENT_COUNT } = await import('./c4-config.js');
+    const db = await import('./c4-db.js');
+    close = db.close;
+    return await action(db);
+  } catch (err) {
+    const wrapped = new Error(`Error in ${label}: ${err.message}`);
+    wrapped.cause = err;
+    throw wrapped;
+  } finally {
+    close();
+  }
+}
 
+/**
+ * Emit the last-checkpoint section, or '' when no checkpoint exists yet.
+ * Standalone emitter for the session-start shard orchestrator; also composed
+ * into initC4Session() for the legacy single-stdout path.
+ */
+export async function emitC4Checkpoint() {
+  return withC4Db('c4 checkpoint init', ({ getLastCheckpoint }) => {
     const checkpoint = getLastCheckpoint();
-    const range = getUnsummarizedRange();
-    const sections = [];
 
     // Always surface the last checkpoint. Summary present → show it; summary
     // null → emit a fallback so the block never silently disappears.
-    if (checkpoint) {
-      if (checkpoint.summary) {
-        sections.push(formatSection('LAST CHECKPOINT SUMMARY', checkpoint.summary));
-      } else {
-        sections.push(formatSection(
-          'LAST CHECKPOINT',
-          `(no summary — checkpoint #${checkpoint.id}, ${checkpoint.timestamp})`,
-        ));
-      }
+    if (!checkpoint) return '';
+    if (checkpoint.summary) {
+      return formatSection('LAST CHECKPOINT SUMMARY', checkpoint.summary);
     }
+    return formatSection(
+      'LAST CHECKPOINT',
+      `(no summary — checkpoint #${checkpoint.id}, ${checkpoint.timestamp})`,
+    );
+  });
+}
 
+/**
+ * Emit the unsummarized-conversations section (including the "no new
+ * conversations" fallback and, above threshold, the Memory Sync instruction).
+ *
+ * In shard mode the orchestrator passes the shard's budget, and over-budget
+ * output is packed at MESSAGE granularity: whole oldest messages are dropped
+ * until the newest ones fit inline. This shard must never rely on the generic
+ * tail-trim + spill fallback — that would cut the NEWEST messages (the text
+ * is chronological) and depend on the agent following a read-this-file
+ * pointer. Dropped messages are not lost: Memory Sync reads c4.db directly,
+ * so they are covered by the next checkpoint summary. Without a budget
+ * (legacy single-stdout path) the output is byte-identical to before.
+ */
+export async function emitC4Conversations(_payload, budget = null) {
+  return withC4Db('c4 conversations init', async ({
+    getUnsummarizedRange,
+    getUnsummarizedConversations,
+    formatConversationsForAgent,
+  }) => {
+    const { CHECKPOINT_THRESHOLD, SESSION_INIT_RECENT_COUNT } = await import('./c4-config.js');
+
+    const range = getUnsummarizedRange();
     if (range.count === 0) {
-      sections.push(formatSection('RECENT CONVERSATIONS', 'No new conversations since last checkpoint.'));
-      return `${sections.join('\n\n')}\n`;
+      return formatSection('RECENT CONVERSATIONS', 'No new conversations since last checkpoint.');
     }
 
     const needsSync = range.count > CHECKPOINT_THRESHOLD;
@@ -59,23 +88,51 @@ export async function initC4Session() {
       ? getUnsummarizedConversations(SESSION_INIT_RECENT_COUNT)
       : getUnsummarizedConversations();
 
-    sections.push(formatSection('RECENT CONVERSATIONS', formatConversationsForAgent(conversations)));
+    const assemble = kept => {
+      // Informational only — no file to read. Kept within the section so it
+      // survives exactly as long as the section does.
+      const note = kept.length < conversations.length
+        ? `(showing the newest ${kept.length} of ${range.count} unsummarized messages inline; older ones are covered by the next Memory Sync checkpoint)\n\n`
+        : '';
+      const sections = [formatSection('RECENT CONVERSATIONS', note + formatConversationsForAgent(kept))];
 
-    // If over threshold, append Memory Sync instruction
-    if (needsSync) {
-      sections.push(formatSection(
-        'ACTION REQUIRED',
-        `There are ${range.count} unsummarized conversations (conversation id ${range.begin_id} ~ ${range.end_id}). Please use zylos-memory skill to process them.`,
-      ));
+      // If over threshold, append Memory Sync instruction
+      if (needsSync) {
+        sections.push(formatSection(
+          'ACTION REQUIRED',
+          `There are ${range.count} unsummarized conversations (conversation id ${range.begin_id} ~ ${range.end_id}). Please use zylos-memory skill to process them.`,
+        ));
+      }
+
+      return sections.join('\n\n');
+    };
+
+    let kept = conversations;
+    let body = assemble(kept);
+    if (!budget) return body;
+
+    // Reserve room for the [k/N] shard header the orchestrator prepends.
+    const packBudget = {
+      maxChars: Math.max(0, budget.maxChars - 200),
+      maxTokens: Math.max(0, budget.maxTokens - 60),
+    };
+    while (kept.length > 1 && !withinBudget(body, packBudget)) {
+      kept = kept.slice(1); // drop the oldest whole message
+      body = assemble(kept);
     }
+    return body;
+  });
+}
 
+export async function initC4Session() {
+  try {
+    const sections = [await emitC4Checkpoint(), await emitC4Conversations()].filter(Boolean);
     return `${sections.join('\n\n')}\n`;
   } catch (err) {
+    if (err.cause) throw err;
     const wrapped = new Error(`Error in session init: ${err.message}`);
     wrapped.cause = err;
     throw wrapped;
-  } finally {
-    close();
   }
 }
 

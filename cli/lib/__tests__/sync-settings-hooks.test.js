@@ -17,7 +17,7 @@ const {
   syncTemplateSetting,
   syncTemplateModelSetting,
 } = await import('../sync-settings-hooks.js');
-const { extractScriptPath, getCommandHooks, hookScriptKey } = await import('../hook-utils.js');
+const { extractScriptPath, getCommandHooks, hookScriptKey, hookScriptBaseKey, extractShardArg } = await import('../hook-utils.js');
 const {
   renderCodexGlobalConfig,
   renderCodexProjectConfig,
@@ -53,16 +53,28 @@ describe('Claude settings template', () => {
   });
 });
 
+const CORE_SHARD_SEQUENCE = [
+  'identity',
+  'references',
+  'state',
+  'c4-checkpoint',
+  'c4-conversations',
+  'fg',
+  'start-prompt',
+];
+
 describe('desiredClaudeHooks', () => {
-  it('uses absolute SessionStart orchestrator commands for all matchers', () => {
+  it('uses absolute per-shard SessionStart orchestrator commands for all matchers', () => {
     const hooks = desiredClaudeHooks();
     const groups = hooks.SessionStart;
     assert.equal(groups.length, 3);
     for (const group of groups) {
-      assert.equal(group.hooks.length, 1);
-      assert.match(group.hooks[0].command, /session-start-orchestrator\.js/);
-      assert.equal(path.isAbsolute(extractScriptPath(group.hooks[0].command)), true);
-      assert.equal(group.hooks[0].timeout, 20000);
+      assert.deepEqual(group.hooks.map(h => extractShardArg(h.command)), CORE_SHARD_SEQUENCE);
+      for (const hook of group.hooks) {
+        assert.match(hook.command, /session-start-orchestrator\.js --shard /);
+        assert.equal(path.isAbsolute(extractScriptPath(hook.command)), true);
+        assert.equal(hook.timeout, 20000);
+      }
     }
   });
 
@@ -567,9 +579,11 @@ function makeOrchestratorTemplate() {
 function assertSessionStartUsesOrchestrator(settings) {
   assert.equal(settings.hooks.SessionStart.length, 3);
   for (const group of settings.hooks.SessionStart) {
-    assert.equal(group.hooks.length, 1);
-    assert.match(group.hooks[0].command, /session-start-orchestrator\.js/);
-    assert.equal(group.hooks[0].timeout, 20000);
+    const coreHooks = group.hooks.filter(h => h.command?.includes('session-start-orchestrator.js'));
+    assert.deepEqual(coreHooks.map(h => extractShardArg(h.command)), CORE_SHARD_SEQUENCE);
+    for (const hook of coreHooks) {
+      assert.equal(hook.timeout, 20000);
+    }
   }
 }
 
@@ -662,14 +676,16 @@ describe('hookScriptKey', () => {
 });
 
 describe('core hook registry', () => {
-  it('includes every desired command hook', () => {
+  it('includes every desired command hook by base script key', () => {
     const templateKeys = new Set();
 
     for (const groups of Object.values(desiredClaudeHooks())) {
       if (!Array.isArray(groups)) continue;
       for (const group of groups) {
         for (const hook of getCommandHooks(group)) {
-          templateKeys.add(hookScriptKey(hook.command));
+          // Base key: CORE_MANAGED_HOOKS lists bare script paths; every
+          // --shard variant of a core script must map onto one of them.
+          templateKeys.add(hookScriptBaseKey(hook.command));
         }
       }
     }
@@ -710,7 +726,9 @@ describe('syncHooks SessionStart orchestrator convergence', () => {
 
     const result = syncHooks(installed, makeOrchestratorTemplate(), { log: noopLog });
 
-    assert.deepEqual(result, { added: 10, updated: 0, removed: 12 });
+    // 7 shard/side-effect commands x 3 SessionStart matchers + 7 other-event
+    // hooks added; 4 retired per-step hooks x 3 matchers removed.
+    assert.deepEqual(result, { added: 28, updated: 0, removed: 12 });
     assertSessionStartUsesOrchestrator(installed);
   });
 
@@ -834,6 +852,128 @@ describe('syncHooks SessionStart orchestrator convergence', () => {
 
     assert.deepEqual(result, { added: 0, updated: 0, removed: 0 });
     assertSessionStartUsesOrchestrator(installed);
+  });
+});
+
+describe('component shard claim boundary (opt-in contract)', () => {
+  const noopLog = () => {};
+
+  function makeDeclaredZylosDir() {
+    const zylosDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shard-claim-test-'));
+    const emitterDir = path.join(zylosDir, '.claude', 'skills', 'role-manager');
+    fs.mkdirSync(emitterDir, { recursive: true });
+    fs.writeFileSync(path.join(emitterDir, 'emit-role.js'), 'export function emit() { return "ROLE"; }\n');
+    const shardsDir = path.join(zylosDir, '.zylos', 'shards.d');
+    fs.mkdirSync(shardsDir, { recursive: true });
+    fs.writeFileSync(path.join(shardsDir, 'role-inject.json'), JSON.stringify({
+      name: 'role-inject',
+      order: 10,
+      emitter: 'skills/role-manager/emit-role.js',
+      claimHooks: ['skills/role-manager/role-inject-hook.sh'],
+    }));
+    return zylosDir;
+  }
+
+  it('claims a declared legacy hook: old entry removed, --shard command generated, chain covers it', async () => {
+    const zylosDir = makeDeclaredZylosDir();
+    const { desiredClaudeHooks: desired, claimedHookBaseKeys } = await import('../sync-settings-hooks.js');
+    const { buildChain } = await import('../../../skills/activity-monitor/scripts/shard-registry.js');
+
+    const installed = {
+      hooks: {
+        SessionStart: [
+          {
+            matcher: 'startup',
+            hooks: [
+              // The component's declared legacy hook (claimed → removed).
+              makeHook(zylosHookPath('skills/role-manager/role-inject-hook.sh'), 10000),
+              // A user hook (never claimed → preserved).
+              makeHook('/custom/my-session-start.js', 5000),
+              // An UNDECLARED component-style hook (not claimed → preserved,
+              // keeps running outside the chain exactly as before).
+              makeHook(zylosHookPath('skills/other-component/scripts/other-hook.js'), 5000),
+            ],
+          },
+        ],
+      },
+    };
+
+    const result = syncHooks(installed, {}, {
+      log: noopLog,
+      desiredHooks: desired({ zylosDir }),
+      claimedKeys: claimedHookBaseKeys({ zylosDir }),
+    });
+
+    const startup = installed.hooks.SessionStart.find(g => g.matcher === 'startup');
+    // Old declared hook is gone.
+    assert.equal(startup.hooks.some(h => h.command?.includes('role-inject-hook.sh')), false);
+    assert.equal(result.removed, 1);
+    // The shard command replaced it, positioned after the core shards.
+    const shardArgs = startup.hooks
+      .filter(h => h.command?.includes('session-start-orchestrator.js'))
+      .map(h => extractShardArg(h.command));
+    assert.deepEqual(shardArgs, [
+      'identity', 'references', 'state', 'c4-checkpoint', 'c4-conversations', 'role-inject', 'fg', 'start-prompt',
+    ]);
+    // User and undeclared hooks are untouched.
+    assert.ok(startup.hooks.some(h => h.command?.includes('/custom/my-session-start.js')));
+    assert.ok(startup.hooks.some(h => h.command?.includes('other-component/scripts/other-hook.js')));
+    // The chain-tail wait covers the component shard (it is the last chain member).
+    const { chain } = buildChain({ zylosDir });
+    assert.equal(chain.at(-1).name, 'role-inject');
+
+    fs.rmSync(zylosDir, { recursive: true, force: true });
+  });
+
+  it('claims nothing when no declarations exist, even for shard-suffixed user paths', async () => {
+    const zylosDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shard-claim-empty-'));
+    const { desiredClaudeHooks: desired, claimedHookBaseKeys } = await import('../sync-settings-hooks.js');
+
+    const installed = {
+      hooks: {
+        SessionStart: [
+          {
+            matcher: 'startup',
+            hooks: [
+              makeHook(zylosHookPath('skills/role-manager/role-inject-hook.sh'), 10000),
+              makeHook('/custom/my-session-start.js --shard mine', 5000),
+            ],
+          },
+        ],
+      },
+    };
+
+    const result = syncHooks(installed, {}, {
+      log: noopLog,
+      desiredHooks: desired({ zylosDir }),
+      claimedKeys: claimedHookBaseKeys({ zylosDir }),
+    });
+
+    assert.equal(result.removed, 0);
+    const startup = installed.hooks.SessionStart.find(g => g.matcher === 'startup');
+    assert.ok(startup.hooks.some(h => h.command?.includes('role-inject-hook.sh')));
+    assert.ok(startup.hooks.some(h => h.command?.includes('/custom/my-session-start.js')));
+
+    fs.rmSync(zylosDir, { recursive: true, force: true });
+  });
+
+  it('rejects absolute claim paths at declaration time so user hooks can never be claimed', async () => {
+    const zylosDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shard-claim-abs-'));
+    const shardsDir = path.join(zylosDir, '.zylos', 'shards.d');
+    fs.mkdirSync(shardsDir, { recursive: true });
+    fs.mkdirSync(path.join(zylosDir, '.claude'), { recursive: true });
+    fs.writeFileSync(path.join(shardsDir, 'grabby.json'), JSON.stringify({
+      name: 'grabby',
+      order: 10,
+      emitter: 'skills/grabby/emit.js',
+      claimHooks: ['/custom/my-session-start.js'],
+    }));
+
+    const { claimedHookBaseKeys } = await import('../sync-settings-hooks.js');
+    const claimed = claimedHookBaseKeys({ zylosDir });
+    assert.equal(claimed.size, 0);
+
+    fs.rmSync(zylosDir, { recursive: true, force: true });
   });
 });
 
