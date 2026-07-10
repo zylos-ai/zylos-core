@@ -15,6 +15,7 @@
 
 import { logHookTiming } from './c4-diagnostic.js';
 import { formatSection } from './session-format.js';
+import { withinBudget } from '../../activity-monitor/scripts/shard-registry.js';
 import { fileURLToPath } from 'node:url';
 
 async function withC4Db(label, action) {
@@ -57,8 +58,17 @@ export async function emitC4Checkpoint() {
 /**
  * Emit the unsummarized-conversations section (including the "no new
  * conversations" fallback and, above threshold, the Memory Sync instruction).
+ *
+ * In shard mode the orchestrator passes the shard's budget, and over-budget
+ * output is packed at MESSAGE granularity: whole oldest messages are dropped
+ * until the newest ones fit inline. This shard must never rely on the generic
+ * tail-trim + spill fallback — that would cut the NEWEST messages (the text
+ * is chronological) and depend on the agent following a read-this-file
+ * pointer. Dropped messages are not lost: Memory Sync reads c4.db directly,
+ * so they are covered by the next checkpoint summary. Without a budget
+ * (legacy single-stdout path) the output is byte-identical to before.
  */
-export async function emitC4Conversations() {
+export async function emitC4Conversations(_payload, budget = null) {
   return withC4Db('c4 conversations init', async ({
     getUnsummarizedRange,
     getUnsummarizedConversations,
@@ -78,17 +88,39 @@ export async function emitC4Conversations() {
       ? getUnsummarizedConversations(SESSION_INIT_RECENT_COUNT)
       : getUnsummarizedConversations();
 
-    const sections = [formatSection('RECENT CONVERSATIONS', formatConversationsForAgent(conversations))];
+    const assemble = kept => {
+      // Informational only — no file to read. Kept within the section so it
+      // survives exactly as long as the section does.
+      const note = kept.length < conversations.length
+        ? `(showing the newest ${kept.length} of ${range.count} unsummarized messages inline; older ones are covered by the next Memory Sync checkpoint)\n\n`
+        : '';
+      const sections = [formatSection('RECENT CONVERSATIONS', note + formatConversationsForAgent(kept))];
 
-    // If over threshold, append Memory Sync instruction
-    if (needsSync) {
-      sections.push(formatSection(
-        'ACTION REQUIRED',
-        `There are ${range.count} unsummarized conversations (conversation id ${range.begin_id} ~ ${range.end_id}). Please use zylos-memory skill to process them.`,
-      ));
+      // If over threshold, append Memory Sync instruction
+      if (needsSync) {
+        sections.push(formatSection(
+          'ACTION REQUIRED',
+          `There are ${range.count} unsummarized conversations (conversation id ${range.begin_id} ~ ${range.end_id}). Please use zylos-memory skill to process them.`,
+        ));
+      }
+
+      return sections.join('\n\n');
+    };
+
+    let kept = conversations;
+    let body = assemble(kept);
+    if (!budget) return body;
+
+    // Reserve room for the [k/N] shard header the orchestrator prepends.
+    const packBudget = {
+      maxChars: Math.max(0, budget.maxChars - 200),
+      maxTokens: Math.max(0, budget.maxTokens - 60),
+    };
+    while (kept.length > 1 && !withinBudget(body, packBudget)) {
+      kept = kept.slice(1); // drop the oldest whole message
+      body = assemble(kept);
     }
-
-    return sections.join('\n\n');
+    return body;
   });
 }
 

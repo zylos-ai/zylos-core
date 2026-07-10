@@ -81,10 +81,13 @@ export const CORE_SHARDS = Object.freeze([
       (await import('../../comm-bridge/scripts/c4-session-init.js')).emitC4Checkpoint(payload),
   },
   {
+    // Passes the shard budget so the emitter packs whole messages
+    // newest-first instead of ever falling back to the generic tail-trim +
+    // spill (which would cut the newest messages of the chronological text).
     name: 'c4-conversations',
     order: 5,
     emit: async payload =>
-      (await import('../../comm-bridge/scripts/c4-session-init.js')).emitC4Conversations(payload),
+      (await import('../../comm-bridge/scripts/c4-session-init.js')).emitC4Conversations(payload, DEFAULT_SHARD_BUDGET),
   },
 ].map(Object.freeze));
 
