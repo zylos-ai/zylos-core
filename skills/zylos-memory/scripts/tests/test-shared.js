@@ -102,6 +102,10 @@ describe('WARN_THRESHOLDS', () => {
     assert.equal(WARN_THRESHOLDS['references.md'], 8 * 1024);
   });
 
+  it('warns for state.md at 10KB', () => {
+    assert.equal(WARN_THRESHOLDS['state.md'], 10 * 1024);
+  });
+
   it('every warn threshold is below its hard budget', () => {
     for (const [key, value] of Object.entries(WARN_THRESHOLDS)) {
       assert.ok(BUDGETS[key] !== undefined, `${key} must also have a hard budget`);
