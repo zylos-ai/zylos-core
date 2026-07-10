@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { describe, it } from 'node:test';
+import { after, before, describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import {
@@ -83,6 +83,17 @@ async function runWithActions(source, overrides = {}, options = {}) {
 }
 
 describe('session-start-orchestrator', () => {
+  // The orchestrator unrefs its budget timers on purpose (a hook process
+  // must never be kept alive by its own watchdogs). Tests that feed it
+  // never-settling promises therefore need SOMETHING ref'd on the event
+  // loop, or the loop drains before the unref'd timeout can fire and the
+  // runner cancels the remaining tests. A ref'd keep-alive interval
+  // restores deterministic timer delivery without touching production
+  // semantics.
+  let keepAlive;
+  before(() => { keepAlive = setInterval(() => {}, 1000); });
+  after(() => clearInterval(keepAlive));
+
   it('runs startup source with all four steps', async () => {
     const result = await runWithActions('startup');
     assert.deepEqual(result.calls, [

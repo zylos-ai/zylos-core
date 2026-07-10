@@ -322,6 +322,7 @@ async function runShardSideEffect(name, payload, {
   sessionId,
   linkMs,
   waitForFlagImpl,
+  sequencerOptions = {},
 }) {
   if (name === SIDE_EFFECT_NAMES.foreground) {
     await runStep({
@@ -347,6 +348,7 @@ async function runShardSideEffect(name, payload, {
   if (tail && sessionId) {
     const wait = await waitForFlagImpl(sessionId, tail.name, {
       deadlineMs: ladderDeadlineMs(chain.length, linkMs),
+      ...sequencerOptions,
     });
     waitExtra = `wait=${wait.ok ? 'ok' : 'timeout'}:${wait.waitedMs}`;
   }
@@ -407,6 +409,7 @@ export async function runSessionStartShard(name, payload = {}, {
       sessionId,
       linkMs,
       waitForFlagImpl,
+      sequencerOptions,
     });
     return;
   }
