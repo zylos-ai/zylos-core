@@ -51,11 +51,27 @@ function section(label, filePath) {
   return formatSection(label, content);
 }
 
+export const MEMORY_PARTS = Object.freeze({
+  identity: Object.freeze({ label: 'BOT IDENTITY', file: 'identity.md' }),
+  state: Object.freeze({ label: 'ACTIVE STATE', file: 'state.md' }),
+  references: Object.freeze({ label: 'REFERENCES', file: 'references.md' }),
+});
+
+/**
+ * Emit a single memory section. Used by the session-start shard orchestrator
+ * so each memory file gets its own hook stdout budget instead of sharing one.
+ */
+export function emitMemoryPart(part) {
+  const spec = MEMORY_PARTS[part];
+  if (!spec) throw new Error(`unknown memory part "${part}"`);
+  return section(spec.label, path.join(MEMORY_DIR, spec.file));
+}
+
 export function injectMemory() {
   const parts = [
-    section('BOT IDENTITY', path.join(MEMORY_DIR, 'identity.md')),
-    section('ACTIVE STATE', path.join(MEMORY_DIR, 'state.md')),
-    section('REFERENCES', path.join(MEMORY_DIR, 'references.md'))
+    emitMemoryPart('identity'),
+    emitMemoryPart('state'),
+    emitMemoryPart('references')
   ];
 
   return `${parts.join('\n\n')}\n`;

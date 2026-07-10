@@ -17,39 +17,58 @@ import { logHookTiming } from './c4-diagnostic.js';
 import { formatSection } from './session-format.js';
 import { fileURLToPath } from 'node:url';
 
-export async function initC4Session() {
+async function withC4Db(label, action) {
   let close = () => {};
   try {
-    const {
-      getLastCheckpoint,
-      getUnsummarizedRange,
-      getUnsummarizedConversations,
-      formatConversationsForAgent,
-      close: closeDb,
-    } = await import('./c4-db.js');
-    close = closeDb;
-    const { CHECKPOINT_THRESHOLD, SESSION_INIT_RECENT_COUNT } = await import('./c4-config.js');
+    const db = await import('./c4-db.js');
+    close = db.close;
+    return await action(db);
+  } catch (err) {
+    const wrapped = new Error(`Error in ${label}: ${err.message}`);
+    wrapped.cause = err;
+    throw wrapped;
+  } finally {
+    close();
+  }
+}
 
+/**
+ * Emit the last-checkpoint section, or '' when no checkpoint exists yet.
+ * Standalone emitter for the session-start shard orchestrator; also composed
+ * into initC4Session() for the legacy single-stdout path.
+ */
+export async function emitC4Checkpoint() {
+  return withC4Db('c4 checkpoint init', ({ getLastCheckpoint }) => {
     const checkpoint = getLastCheckpoint();
-    const range = getUnsummarizedRange();
-    const sections = [];
 
     // Always surface the last checkpoint. Summary present → show it; summary
     // null → emit a fallback so the block never silently disappears.
-    if (checkpoint) {
-      if (checkpoint.summary) {
-        sections.push(formatSection('LAST CHECKPOINT SUMMARY', checkpoint.summary));
-      } else {
-        sections.push(formatSection(
-          'LAST CHECKPOINT',
-          `(no summary — checkpoint #${checkpoint.id}, ${checkpoint.timestamp})`,
-        ));
-      }
+    if (!checkpoint) return '';
+    if (checkpoint.summary) {
+      return formatSection('LAST CHECKPOINT SUMMARY', checkpoint.summary);
     }
+    return formatSection(
+      'LAST CHECKPOINT',
+      `(no summary — checkpoint #${checkpoint.id}, ${checkpoint.timestamp})`,
+    );
+  });
+}
 
+/**
+ * Emit the unsummarized-conversations section (including the "no new
+ * conversations" fallback and, above threshold, the Memory Sync instruction).
+ */
+export async function emitC4Conversations() {
+  return withC4Db('c4 conversations init', async ({
+    getUnsummarizedRange,
+    getUnsummarizedConversations,
+    formatConversationsForAgent,
+  }) => {
+    const { CHECKPOINT_THRESHOLD, SESSION_INIT_RECENT_COUNT } = await import('./c4-config.js');
+
+    const range = getUnsummarizedRange();
     if (range.count === 0) {
-      sections.push(formatSection('RECENT CONVERSATIONS', 'No new conversations since last checkpoint.'));
-      return `${sections.join('\n\n')}\n`;
+      return formatSection('RECENT CONVERSATIONS', 'No new conversations since last checkpoint.');
     }
 
     const needsSync = range.count > CHECKPOINT_THRESHOLD;
@@ -59,7 +78,7 @@ export async function initC4Session() {
       ? getUnsummarizedConversations(SESSION_INIT_RECENT_COUNT)
       : getUnsummarizedConversations();
 
-    sections.push(formatSection('RECENT CONVERSATIONS', formatConversationsForAgent(conversations)));
+    const sections = [formatSection('RECENT CONVERSATIONS', formatConversationsForAgent(conversations))];
 
     // If over threshold, append Memory Sync instruction
     if (needsSync) {
@@ -69,13 +88,19 @@ export async function initC4Session() {
       ));
     }
 
+    return sections.join('\n\n');
+  });
+}
+
+export async function initC4Session() {
+  try {
+    const sections = [await emitC4Checkpoint(), await emitC4Conversations()].filter(Boolean);
     return `${sections.join('\n\n')}\n`;
   } catch (err) {
+    if (err.cause) throw err;
     const wrapped = new Error(`Error in session init: ${err.message}`);
     wrapped.cause = err;
     throw wrapped;
-  } finally {
-    close();
   }
 }
 
