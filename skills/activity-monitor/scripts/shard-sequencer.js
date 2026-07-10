@@ -33,7 +33,7 @@ import path from 'node:path';
 export const DEFAULT_T_LINK_MS = 1_000;
 export const DEFAULT_POLL_INTERVAL_MS = 25;
 export const DEFAULT_FLAG_TTL_MS = 6 * 60 * 60 * 1000;
-export const DEFAULT_FLAG_FRESH_TOLERANCE_MS = 5_000;
+export const DEFAULT_FLAG_FRESH_TOLERANCE_MS = 10_000;
 
 // True process start, not module-load time: shard processes call waitForFlag
 // almost immediately, but a slow require chain must not shift the cutoff.
