@@ -63,20 +63,29 @@ export const CORE_SHARDS = Object.freeze([
       (await import('../../zylos-memory/scripts/session-start-inject.js')).emitMemoryPart('identity', payload),
   },
   {
-    name: 'references',
+    // Deployment/user-provided standing directives — reads
+    // ~/zylos/custom-inject/*.md at every session start. Sits right after
+    // identity so custom directives frame everything downstream.
+    name: 'custom',
     order: 2,
+    emit: async () =>
+      (await import('./emit-custom-inject.js')).emitCustomInject(),
+  },
+  {
+    name: 'references',
+    order: 3,
     emit: async payload =>
       (await import('../../zylos-memory/scripts/session-start-inject.js')).emitMemoryPart('references', payload),
   },
   {
     name: 'state',
-    order: 3,
+    order: 4,
     emit: async payload =>
       (await import('../../zylos-memory/scripts/session-start-inject.js')).emitMemoryPart('state', payload),
   },
   {
     name: 'c4-checkpoint',
-    order: 4,
+    order: 5,
     emit: async payload =>
       (await import('../../comm-bridge/scripts/c4-session-init.js')).emitC4Checkpoint(payload),
   },
@@ -85,7 +94,7 @@ export const CORE_SHARDS = Object.freeze([
     // newest-first instead of ever falling back to the generic tail-trim +
     // spill (which would cut the newest messages of the chronological text).
     name: 'c4-conversations',
-    order: 5,
+    order: 6,
     emit: async payload =>
       (await import('../../comm-bridge/scripts/c4-session-init.js')).emitC4Conversations(payload, DEFAULT_SHARD_BUDGET),
   },
