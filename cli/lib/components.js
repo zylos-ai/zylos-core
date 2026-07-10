@@ -8,6 +8,7 @@ import { spawnSync } from 'node:child_process';
 import { COMPONENTS_FILE } from './config.js';
 import { loadRegistry } from './registry.js';
 import { fetchLatestTag } from './github.js';
+import { inspectLocalSource } from './download.js';
 
 /**
  * Load installed components from components.json
@@ -31,11 +32,46 @@ export function saveComponents(components) {
 }
 
 /**
- * Resolve component target from name or URL
- * Supports: name, name@version, org/repo, org/repo@version, github-url
- * @returns {object} { name, repo, version, fetchError, isThirdParty }
+ * Resolve component target from a registry name, GitHub reference, or local path.
+ *
+ * The returned `source` descriptor is intentionally independent from `add` so
+ * the same descriptor can be persisted and consumed by a future upgrade flow.
+ *
+ * @param {string} nameOrUrl
+ * @param {{ branch?: string | null }} [options]
+ * @returns {Promise<object>}
  */
-export async function resolveTarget(nameOrUrl) {
+export async function resolveTarget(nameOrUrl, { branch = null } = {}) {
+  if (isLocalPathSpecifier(nameOrUrl)) {
+    try {
+      const inspected = inspectLocalSource(nameOrUrl);
+      return {
+        name: inspected.name,
+        repo: null,
+        version: inspected.version || '0.0.0',
+        fetchError: null,
+        isThirdParty: true,
+        source: inspected.source,
+        sourceLabel: inspected.source.path,
+        sourceHeading: 'Source:',
+        sourceReplyLabel: 'Source',
+        installTarget: nameOrUrl,
+      };
+    } catch (err) {
+      return {
+        name: localFallbackName(nameOrUrl),
+        repo: null,
+        version: null,
+        fetchError: null,
+        isThirdParty: true,
+        source: null,
+        sourceLabel: path.resolve(expandHome(nameOrUrl)),
+        installTarget: nameOrUrl,
+        resolutionError: err.message,
+      };
+    }
+  }
+
   // Extract version if present (name@version or org/repo@version)
   let version = null;
   let target = nameOrUrl;
@@ -59,32 +95,108 @@ export async function resolveTarget(nameOrUrl) {
   if (githubMatch) {
     const repo = githubMatch[1].replace(/\.git$/, '');
     const name = repo.split('/')[1].replace(/^zylos-/, '');
-    const tag = version ? { version, fetchError: null } : tryFetchLatestTag(repo);
-    return { name, repo, version: tag.version, fetchError: tag.fetchError, isThirdParty: !repo.startsWith('zylos-ai/') };
+    return resolveGitHubTarget({ name, repo, version, branch, tryFetchLatestTag, installTarget: nameOrUrl });
   }
 
   // Check if it's in format org/repo
   if (target.includes('/')) {
     const name = target.split('/')[1].replace(/^zylos-/, '');
-    const tag = version ? { version, fetchError: null } : tryFetchLatestTag(target);
-    return { name, repo: target, version: tag.version, fetchError: tag.fetchError, isThirdParty: !target.startsWith('zylos-ai/') };
+    return resolveGitHubTarget({ name, repo: target, version, branch, tryFetchLatestTag, installTarget: nameOrUrl });
   }
 
   // Look up in registry
   const registry = await loadRegistry();
   if (registry[target]) {
-    const tag = version ? { version, fetchError: null } : tryFetchLatestTag(registry[target].repo);
-    return {
+    return resolveGitHubTarget({
       name: target,
       repo: registry[target].repo,
-      version: tag.version,
-      fetchError: tag.fetchError,
+      version,
+      branch,
+      tryFetchLatestTag,
+      installTarget: nameOrUrl,
       isThirdParty: false,
-    };
+    });
   }
 
   // Unknown - treat as third party
-  return { name: target, repo: null, version, fetchError: null, isThirdParty: true };
+  return {
+    name: target,
+    repo: null,
+    version,
+    fetchError: null,
+    isThirdParty: true,
+    source: null,
+    sourceLabel: null,
+    installTarget: nameOrUrl,
+  };
+}
+
+/**
+ * Registry metadata is presentation-only. Local sources must remain fully
+ * offline, so they never trigger the remote registry fallback chain.
+ */
+export async function loadTargetRegistryInfo(resolved) {
+  if (!resolved.repo) return {};
+  const registry = await loadRegistry();
+  return registry[resolved.name] || {};
+}
+
+function resolveGitHubTarget({
+  name,
+  repo,
+  version,
+  branch,
+  tryFetchLatestTag,
+  installTarget,
+  isThirdParty = !repo.startsWith('zylos-ai/'),
+}) {
+  const tag = branch
+    ? { version: null, fetchError: null }
+    : (version ? { version, fetchError: null } : tryFetchLatestTag(repo));
+  const resolvedVersion = tag.version;
+  const ref = branch || resolvedVersion;
+  return {
+    name,
+    repo,
+    version: resolvedVersion,
+    fetchError: tag.fetchError,
+    isThirdParty,
+    source: ref ? {
+      type: 'github-release',
+      repo,
+      ref,
+      refType: branch ? 'branch' : 'tag',
+    } : null,
+    sourceLabel: `https://github.com/${repo}`,
+    sourceHeading: 'Repository:',
+    sourceReplyLabel: 'Repo',
+    installTarget,
+  };
+}
+
+function isLocalPathSpecifier(value) {
+  const resolvedPath = path.resolve(expandHome(value));
+  return fs.existsSync(resolvedPath)
+    || path.isAbsolute(value)
+    || value === '.'
+    || value === '..'
+    || value.startsWith(`.${path.sep}`)
+    || value.startsWith(`..${path.sep}`)
+    || value.startsWith('./')
+    || value.startsWith('../')
+    || value.startsWith('~/')
+    || value.endsWith('.tar.gz')
+    || value.endsWith('.tgz');
+}
+
+function expandHome(value) {
+  if (value === '~') return process.env.HOME || value;
+  if (value.startsWith('~/')) return path.join(process.env.HOME || '~', value.slice(2));
+  return value;
+}
+
+function localFallbackName(value) {
+  return path.basename(value).replace(/\.(?:tar\.gz|tgz)$/i, '').replace(/^zylos-/, '') || 'local-component';
 }
 
 /**

@@ -106,7 +106,7 @@ Service Management:
 
 Component Management:
   add <target>        Add a component
-                      target: name[@ver] | org/repo[@ver] | url
+                      target: name[@ver] | org/repo[@ver] | url | local path
                       --branch <name>  Install from a git branch
                       --check   Show component info without installing
                       --yes/-y  Skip confirmation prompts

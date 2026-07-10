@@ -20,9 +20,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execSync } from 'node:child_process';
 import { SKILLS_DIR, COMPONENTS_DIR, BIN_DIR } from '../lib/config.js';
-import { loadRegistry } from '../lib/registry.js';
-import { loadComponents, saveComponents, resolveTarget, outputTask } from '../lib/components.js';
-import { downloadArchive, downloadBranch } from '../lib/download.js';
+import { loadComponents, saveComponents, resolveTarget, loadTargetRegistryInfo, outputTask } from '../lib/components.js';
+import { acquireSource } from '../lib/download.js';
 import { generateManifest, saveManifest } from '../lib/manifest.js';
 import { parseSkillMd, detectComponentType } from '../lib/skill.js';
 import { linkBins } from '../lib/bin.js';
@@ -85,7 +84,7 @@ export async function addComponent(args) {
   }
 
   // 1. Resolve target
-  const resolved = await resolveTarget(target);
+  const resolved = await resolveTarget(target, { branch });
 
   // Validate: --branch conflicts with explicit @version in target
   // (resolved.version may be auto-populated by fetchLatestTag for registry components)
@@ -103,16 +102,32 @@ export async function addComponent(args) {
     process.exit(1);
   }
 
-  if (!resolved.repo) {
+  if (branch && resolved.source?.type !== 'github-release') {
+    if (jsonOutput) {
+      console.log(JSON.stringify({
+        action: 'add', component: target, success: false,
+        error: 'conflict', message: '--branch can only be used with a GitHub source',
+        reply: 'Error: --branch can only be used with a GitHub source.',
+      }, null, 2));
+    } else {
+      console.error(error('--branch can only be used with a GitHub source.'));
+    }
+    process.exit(1);
+  }
+
+  if (!resolved.repo && !resolved.source) {
+    const message = resolved.resolutionError || `Unknown component: ${target}`;
     if (jsonOutput) {
       console.log(JSON.stringify({
         action: 'add_check', component: target, success: false,
-        error: 'not_found', message: `Unknown component: ${target}`,
-        reply: `Component "${target}" not found. Use "search <keyword>" to find available components.`,
+        error: resolved.resolutionError ? 'invalid_local_source' : 'not_found', message,
+        reply: resolved.resolutionError
+          ? message
+          : `Component "${target}" not found. Use "search <keyword>" to find available components.`,
       }, null, 2));
     } else {
-      console.error(error(`Unknown component: ${bold(target)}`));
-      console.log(dim('Use "zylos search <keyword>" to find available components.'));
+      console.error(error(message));
+      if (!resolved.resolutionError) console.log(dim('Use "zylos search <keyword>" to find available components.'));
     }
     process.exit(1);
   }
@@ -134,13 +149,12 @@ export async function addComponent(args) {
   }
 
   // 3. Gather component info from registry
-  const registry = await loadRegistry();
-  const regInfo = registry[resolved.name] || {};
+  const regInfo = await loadTargetRegistryInfo(resolved);
 
   // 4. Check-only mode: show component info without installing
   if (checkOnly) {
-    const noRelease = !branch && !resolved.version;
-    const fetchFailed = !branch && !resolved.version && resolved.fetchError;
+    const noRelease = !resolved.source;
+    const fetchFailed = noRelease && resolved.fetchError;
     if (jsonOutput) {
       const output = {
         action: 'add_check', component: resolved.name, success: !noRelease,
@@ -150,6 +164,7 @@ export async function addComponent(args) {
         description: regInfo.description || null,
         type: regInfo.type || null,
         repo: resolved.repo,
+        source: resolved.source,
         isThirdParty: resolved.isThirdParty || false,
       };
       let reply = `${resolved.name}`;
@@ -157,7 +172,7 @@ export async function addComponent(args) {
       else if (resolved.version) reply += ` (v${resolved.version})`;
       if (regInfo.description) reply += `\n${regInfo.description}`;
       reply += `\nType: ${regInfo.type || 'unknown'}`;
-      reply += `\nRepo: ${resolved.repo}`;
+      reply += `\n${resolved.sourceReplyLabel}: ${resolved.sourceLabel}`;
       if (resolved.isThirdParty) reply += '\nWarning: Third-party component';
       if (fetchFailed) {
         output.error = 'fetch_failed';
@@ -168,7 +183,9 @@ export async function addComponent(args) {
         output.message = `No release found for ${resolved.name}`;
         reply += `\n\nNo release found. Use "add ${resolved.name} --branch main" to install from branch.`;
       } else {
-        let confirmTarget = (!branch && resolved.version) ? `${resolved.name}@${resolved.version}` : resolved.name;
+        let confirmTarget = resolved.repo && !branch && resolved.version
+          ? `${resolved.name}@${resolved.version}`
+          : resolved.installTarget;
         if (branch) confirmTarget += ` --branch ${branch}`;
         reply += `\n\nReply "add ${confirmTarget} confirm" to install.`;
       }
@@ -177,7 +194,7 @@ export async function addComponent(args) {
     } else {
       const versionInfo = branch ? ` (branch: ${bold(branch)})` : (resolved.version ? `@${bold(resolved.version)}` : '');
       console.log(`\n${heading('Component:')} ${bold(resolved.name)}${versionInfo}`);
-      console.log(`${heading('Repository:')} ${dim('https://github.com/' + resolved.repo)}`);
+      console.log(`${heading(resolved.sourceHeading)} ${dim(resolved.sourceLabel)}`);
       if (resolved.isThirdParty) {
         console.log(warn('Third-party component — not verified by Zylos team.'));
       }
@@ -190,7 +207,9 @@ export async function addComponent(args) {
         console.log(`\n${warn('No release found for this component.')}`);
         console.log(dim(`Use "zylos add ${resolved.name} --branch main" to install from a branch.`));
       } else {
-        let installTarget = (!branch && resolved.version) ? `${resolved.name}@${resolved.version}` : resolved.name;
+        let installTarget = resolved.repo && !branch && resolved.version
+          ? `${resolved.name}@${resolved.version}`
+          : resolved.installTarget;
         if (branch) installTarget += ` --branch ${branch}`;
         console.log(`\n${dim(`Run "zylos add ${installTarget} --yes" to install.`)}`);
       }
@@ -202,7 +221,7 @@ export async function addComponent(args) {
   if (!jsonOutput) {
     const versionInfo = branch ? ` (branch: ${bold(branch)})` : (resolved.version ? `@${bold(resolved.version)}` : '');
     console.log(`\n${heading('Component:')} ${bold(resolved.name)}${versionInfo}`);
-    console.log(`${heading('Repository:')} ${dim('https://github.com/' + resolved.repo)}`);
+    console.log(`${heading(resolved.sourceHeading)} ${dim(resolved.sourceLabel)}`);
 
     if (resolved.isThirdParty) {
       console.log(warn('Third-party component — not verified by Zylos team.'));
@@ -243,11 +262,7 @@ export async function addComponent(args) {
   if (!jsonOutput) console.log(`\n${cyan('Downloading')} ${bold(downloadLabel)}...`);
 
   let downloadResult;
-  if (branch) {
-    downloadResult = downloadBranch(resolved.repo, branch, skillDir);
-  } else if (resolved.version) {
-    downloadResult = downloadArchive(resolved.repo, resolved.version, skillDir);
-  } else {
+  if (!resolved.source) {
     // No release tag found and no --branch specified
     const errType = resolved.fetchError ? 'fetch_failed' : 'no_release';
     const errMsg = resolved.fetchError
@@ -265,6 +280,7 @@ export async function addComponent(args) {
     }
     process.exit(1);
   }
+  downloadResult = acquireSource(resolved.source, skillDir);
 
   if (!downloadResult.success) {
     if (jsonOutput) {
@@ -321,6 +337,7 @@ async function installDeclarative(resolved, skillDir, skipConfirm, jsonOutput, b
   // by fetchLatestTag and doesn't reflect the actual branch code)
   const componentVersion = (branch ? null : resolved.version)
     || fm.version
+    || readVersionFile(skillDir)
     || (() => {
       try {
         const pkg = JSON.parse(fs.readFileSync(path.join(skillDir, 'package.json'), 'utf8'));
@@ -372,6 +389,7 @@ async function installDeclarative(resolved, skillDir, skipConfirm, jsonOutput, b
     installedAt: new Date().toISOString(),
     skillDir,
     dataDir,
+    source: resolved.source,
   };
   if (branch) componentEntry.branch = branch;
   components[resolved.name] = componentEntry;
@@ -567,6 +585,7 @@ function installAI(resolved, skillDir, branch) {
         return skill?.frontmatter?.version;
       } catch { return null; }
     })()
+    || readVersionFile(skillDir)
     || (() => {
       try {
         const pkg = JSON.parse(fs.readFileSync(path.join(skillDir, 'package.json'), 'utf8'));
@@ -585,6 +604,7 @@ function installAI(resolved, skillDir, branch) {
     installedAt: new Date().toISOString(),
     skillDir,
     setupComplete: false,
+    source: resolved.source,
   };
   if (branch) aiEntry.branch = branch;
   components[resolved.name] = aiEntry;
@@ -623,11 +643,19 @@ function cleanup(dir) {
   }
 }
 
+function readVersionFile(skillDir) {
+  try {
+    return fs.readFileSync(path.join(skillDir, 'VERSION'), 'utf8').trim() || null;
+  } catch {
+    return null;
+  }
+}
+
 function printUsage() {
   console.log(`Usage: zylos add <target> [options]
 
 Arguments:
-  target    Component name, org/repo, or GitHub URL
+  target    Component name, org/repo, GitHub URL, local directory, or .tar.gz
 
 Options:
   --branch <name>  Install from a specific git branch (for testing)
@@ -641,5 +669,7 @@ Examples:
   zylos add lark --branch main                  Install from branch
   zylos add lark --branch feature/new-thing     Install from PR branch
   zylos add user/my-component                   Third-party
-  zylos add https://github.com/user/zylos-my-component`);
+  zylos add https://github.com/user/zylos-my-component
+  zylos add ./my-component
+  zylos add ./my-component.tar.gz`);
 }
