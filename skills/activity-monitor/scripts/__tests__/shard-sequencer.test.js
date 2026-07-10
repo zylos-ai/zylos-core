@@ -5,7 +5,10 @@ import path from 'node:path';
 import { afterEach, describe, it } from 'node:test';
 
 import {
+  DEFAULT_FLAG_FRESH_TOLERANCE_MS,
   DEFAULT_T_LINK_MS,
+  defaultFreshAfterMs,
+  flagFreshToleranceMs,
   flagPath,
   flagRoot,
   ladderDeadlineMs,
@@ -122,6 +125,69 @@ describe('shard-sequencer session isolation (failure-mode case C/C\')', () => {
       flagPath('sess-a', 'identity', { tmpdir }),
       flagPath('sess-b', 'identity', { tmpdir })
     );
+  });
+});
+
+describe('shard-sequencer same-session re-trigger (compact keeps session_id)', () => {
+  // Compact fires SessionStart with the SAME session_id as startup (verified
+  // on a live Claude Code session, 2026-07-10), so per-session isolation does
+  // not protect a second trigger: the startup round's flags would satisfy
+  // every compact-round wait instantly and the chain would degrade to
+  // completion order. Freshness is what closes that hole.
+
+  function backdateFlag(sessionId, name, tmpdir, ageMs = 60 * 60 * 1000) {
+    const past = new Date(Date.now() - ageMs);
+    fs.utimesSync(flagPath(sessionId, name, { tmpdir }), past, past);
+  }
+
+  it('a previous round\'s full flag set in the SAME session does not satisfy waits', async () => {
+    const tmpdir = makeTmpdir();
+    // Round 1 (startup) completed: full flag set exists, aged past tolerance.
+    for (const name of ['identity', 'references', 'state', 'c4-checkpoint', 'c4-conversations']) {
+      writeFlag('sess-a', name, { tmpdir });
+      backdateFlag('sess-a', name, tmpdir);
+    }
+
+    // Round 2 (compact, same session id): old flags must read as absent.
+    const wait = await waitForFlag('sess-a', 'identity', { deadlineMs: 100, pollMs: 10, tmpdir });
+    assert.equal(wait.ok, false, 'stale same-session flags must not satisfy a re-trigger wait');
+  });
+
+  it('the predecessor\'s rewrite this round bumps mtime and unblocks the wait', async () => {
+    const tmpdir = makeTmpdir();
+    writeFlag('sess-a', 'identity', { tmpdir });
+    backdateFlag('sess-a', 'identity', tmpdir);
+
+    const pending = waitForFlag('sess-a', 'identity', { deadlineMs: 2000, pollMs: 10, tmpdir });
+    setTimeout(() => writeFlag('sess-a', 'identity', { tmpdir }), 60);
+    const result = await pending;
+    assert.equal(result.ok, true);
+    assert.ok(result.waitedMs >= 40, `waited ${result.waitedMs}ms, expected a real wait until the rewrite`);
+  });
+
+  it('an explicit freshAfterMs cutoff overrides the process-start default', async () => {
+    const tmpdir = makeTmpdir();
+    writeFlag('sess-a', 'identity', { tmpdir });
+    const future = Date.now() + 60_000;
+    const rejected = await waitForFlag('sess-a', 'identity', {
+      deadlineMs: 80, pollMs: 10, tmpdir, freshAfterMs: future,
+    });
+    assert.equal(rejected.ok, false, 'a flag older than the cutoff must not count');
+
+    const accepted = await waitForFlag('sess-a', 'identity', {
+      deadlineMs: 80, pollMs: 10, tmpdir, freshAfterMs: 0,
+    });
+    assert.equal(accepted.ok, true);
+  });
+
+  it('reads the freshness tolerance from the environment with a sane default', () => {
+    assert.equal(flagFreshToleranceMs({}), DEFAULT_FLAG_FRESH_TOLERANCE_MS);
+    assert.equal(flagFreshToleranceMs({ ZYLOS_SHARD_FLAG_FRESH_TOLERANCE_MS: '250' }), 250);
+    assert.equal(flagFreshToleranceMs({ ZYLOS_SHARD_FLAG_FRESH_TOLERANCE_MS: '0' }), 0);
+    assert.equal(flagFreshToleranceMs({ ZYLOS_SHARD_FLAG_FRESH_TOLERANCE_MS: 'nonsense' }), DEFAULT_FLAG_FRESH_TOLERANCE_MS);
+    assert.equal(flagFreshToleranceMs({ ZYLOS_SHARD_FLAG_FRESH_TOLERANCE_MS: '-5' }), DEFAULT_FLAG_FRESH_TOLERANCE_MS);
+    // The default cutoff sits at or before "now": process start minus tolerance.
+    assert.ok(defaultFreshAfterMs() <= Date.now());
   });
 });
 

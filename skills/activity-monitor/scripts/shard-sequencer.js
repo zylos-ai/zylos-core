@@ -12,6 +12,13 @@
  *   requirement, not hygiene: a shared flag directory poisoned by stale flags
  *   reverses the whole chain (all waits return instantly, output degrades to
  *   raw completion order).
+ * - Session isolation alone does not cover re-triggers WITHIN a session:
+ *   compact fires SessionStart with the SAME session_id as startup (verified
+ *   experimentally on Claude Code, 2026-07-10), so the startup round's flags
+ *   would satisfy every compact-round wait instantly. Waits therefore also
+ *   require the flag to be FRESH — written no earlier than this process's
+ *   start minus a skew tolerance. Old-round flags count as absent; the
+ *   predecessor's rewrite this round bumps the mtime and unblocks normally.
  * - Waits use a ladder deadline — shard k (1-based chain position) waits at
  *   most (k-1) x T_LINK. A flat deadline makes every shard downstream of a
  *   mid-chain failure expire simultaneously and race; the ladder keeps
@@ -26,6 +33,11 @@ import path from 'node:path';
 export const DEFAULT_T_LINK_MS = 1_000;
 export const DEFAULT_POLL_INTERVAL_MS = 25;
 export const DEFAULT_FLAG_TTL_MS = 6 * 60 * 60 * 1000;
+export const DEFAULT_FLAG_FRESH_TOLERANCE_MS = 5_000;
+
+// True process start, not module-load time: shard processes call waitForFlag
+// almost immediately, but a slow require chain must not shift the cutoff.
+const PROCESS_START_MS = Date.now() - Math.round(process.uptime() * 1000);
 
 /**
  * Per-user suffix for working-dir roots under the shared temp dir. A fixed
@@ -50,6 +62,24 @@ const FLAG_ROOT_NAME = `zylos-shard-flags-${perUserSuffix()}`;
 export function tLinkMs(env = process.env) {
   const raw = Number(env.ZYLOS_SHARD_T_LINK_MS);
   return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_T_LINK_MS;
+}
+
+export function flagFreshToleranceMs(env = process.env) {
+  const raw = Number(env.ZYLOS_SHARD_FLAG_FRESH_TOLERANCE_MS);
+  return Number.isFinite(raw) && raw >= 0 ? raw : DEFAULT_FLAG_FRESH_TOLERANCE_MS;
+}
+
+/**
+ * Freshness cutoff for flag acceptance: flags written before this instant are
+ * treated as leftovers from an earlier trigger of the same session (compact
+ * reuses the session_id) and ignored. The tolerance absorbs sibling spawn
+ * skew and coarse filesystem mtime granularity; its failure directions are
+ * asymmetric — too tight only costs a ladder wait (fail-open), too loose only
+ * risks old-round flags being honored when a re-trigger lands within the
+ * tolerance of the previous round, which a context-full compact cannot do.
+ */
+export function defaultFreshAfterMs() {
+  return PROCESS_START_MS - flagFreshToleranceMs();
 }
 
 /**
@@ -94,20 +124,29 @@ export function writeFlag(sessionId, shardName, options = {}) {
 
 /**
  * Poll for a predecessor's flag until it appears or `deadlineMs` elapses.
- * Resolves { ok, waitedMs }. `waitedMs` is kept for diagnostics: an abnormal
- * all-zeros pattern across shards is the fingerprint of broken session
- * isolation, and ok=false with the predecessor's content present is the
- * fingerprint of a flag-write bug.
+ * A flag only counts if its mtime is at or after `freshAfterMs` — flags left
+ * by an earlier trigger of the same session (compact keeps the session_id)
+ * are treated as absent. Resolves { ok, waitedMs }. `waitedMs` is kept for
+ * diagnostics: an abnormal all-zeros pattern across shards is the fingerprint
+ * of broken session isolation, and ok=false with the predecessor's content
+ * present is the fingerprint of a flag-write bug.
  */
 export async function waitForFlag(sessionId, shardName, {
   deadlineMs,
   pollMs = DEFAULT_POLL_INTERVAL_MS,
   tmpdir,
+  freshAfterMs = defaultFreshAfterMs(),
 } = {}) {
   const target = flagPath(sessionId, shardName, tmpdir ? { tmpdir } : {});
   const startMs = Date.now();
   for (;;) {
-    if (fs.existsSync(target)) {
+    let mtimeMs = null;
+    try {
+      mtimeMs = fs.statSync(target).mtimeMs;
+    } catch {
+      // Absent (or swept mid-poll) — keep waiting.
+    }
+    if (mtimeMs != null && mtimeMs >= freshAfterMs) {
       return { ok: true, waitedMs: Date.now() - startMs };
     }
     const elapsed = Date.now() - startMs;
