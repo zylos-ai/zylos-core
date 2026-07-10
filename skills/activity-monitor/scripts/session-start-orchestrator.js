@@ -28,6 +28,7 @@ import {
 } from './shard-registry.js';
 import {
   ladderDeadlineMs,
+  perUserSuffix,
   sweepStaleFlags,
   tLinkMs,
   waitForFlag,
@@ -42,7 +43,10 @@ export const STEP_BUDGETS_MS = {
   startupPrompt: 3_000,
 };
 export const SHARD_EMIT_BUDGET_MS = 5_500;
-const SPILL_ROOT_NAME = 'zylos-shard-spill';
+// Per-user root for the same reason as the flag root (see perUserSuffix in
+// shard-sequencer.js): a fixed name under shared /tmp is unwritable for the
+// second zylos user on a multi-user host.
+const SPILL_ROOT_NAME = `zylos-shard-spill-${perUserSuffix()}`;
 
 export function installProcessBackstop({
   totalBudgetMs = DEFAULT_TOTAL_BUDGET_MS,

@@ -7,7 +7,9 @@ import { afterEach, describe, it } from 'node:test';
 import {
   DEFAULT_T_LINK_MS,
   flagPath,
+  flagRoot,
   ladderDeadlineMs,
+  perUserSuffix,
   sessionFlagDir,
   sweepStaleFlags,
   tLinkMs,
@@ -65,7 +67,17 @@ describe('shard-sequencer flag chain', () => {
     const dir = sessionFlagDir('../../etc/passwd', { tmpdir });
     // Path separators are flattened, so the id cannot traverse out of the
     // flag root — it must resolve to a direct child directory.
-    assert.equal(path.dirname(dir), path.join(tmpdir, 'zylos-shard-flags'));
+    assert.equal(path.dirname(dir), flagRoot({ tmpdir }));
+  });
+
+  it('keys the flag root per user so multi-user hosts cannot collide on a shared /tmp root', () => {
+    // A fixed root name is created 0755 by the first user and is then
+    // unwritable for every other user — flag writes fail silently and the
+    // chain degrades to completion order. The suffix pins per-user roots.
+    const tmpdir = makeTmpdir();
+    const suffix = perUserSuffix();
+    assert.ok(suffix.length > 0 && !/[/\\]/.test(suffix));
+    assert.equal(flagRoot({ tmpdir }), path.join(tmpdir, `zylos-shard-flags-${suffix}`));
   });
 });
 

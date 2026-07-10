@@ -26,7 +26,26 @@ import path from 'node:path';
 export const DEFAULT_T_LINK_MS = 1_000;
 export const DEFAULT_POLL_INTERVAL_MS = 25;
 export const DEFAULT_FLAG_TTL_MS = 6 * 60 * 60 * 1000;
-const FLAG_ROOT_NAME = 'zylos-shard-flags';
+
+/**
+ * Per-user suffix for working-dir roots under the shared temp dir. A fixed
+ * root name breaks multi-user hosts: the first zylos user creates it 0755,
+ * every other user then gets EACCES on writes inside it — and because flag
+ * writes are best-effort, sequencing silently degrades to completion order
+ * (each shard burning its full ladder deadline) and spills become
+ * unwritable. uid keeps the name stable per user; username is the Windows
+ * fallback where getuid is unavailable.
+ */
+export function perUserSuffix() {
+  if (typeof process.getuid === 'function') return String(process.getuid());
+  try {
+    return String(os.userInfo().username).replace(/[^A-Za-z0-9._-]/g, '_') || 'nouser';
+  } catch {
+    return 'nouser';
+  }
+}
+
+const FLAG_ROOT_NAME = `zylos-shard-flags-${perUserSuffix()}`;
 
 export function tLinkMs(env = process.env) {
   const raw = Number(env.ZYLOS_SHARD_T_LINK_MS);

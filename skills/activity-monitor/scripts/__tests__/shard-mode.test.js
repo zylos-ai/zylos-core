@@ -299,7 +299,8 @@ describe('runSessionStartShard (content shards)', () => {
     const spillPath = text.match(/full section saved to: (\S+)\]/)?.[1];
     assert.ok(spillPath, 'truncation notice must name the spill file');
     assert.equal(fs.readFileSync(spillPath, 'utf8'), 'y'.repeat(15000));
-    assert.ok(spillPath.startsWith(path.join(tmpdir, 'zylos-shard-spill')));
+    // Spill root is per-user for the same multi-user /tmp reason as flags.
+    assert.match(spillPath, new RegExp(`^${tmpdir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/zylos-shard-spill-[^/]+/`));
   });
 
   it('emits without serialization and without flags when the payload has no session_id', async () => {
