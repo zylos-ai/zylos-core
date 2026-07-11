@@ -45,7 +45,42 @@ function withFrozenClock(fn) {
   }
 }
 
-describe('truncateForDelivery spill path collision', () => {
+describe('truncateForDelivery conv-id spill naming', () => {
+  it('spills with a conversation id land in a conv-<id> directory', () => {
+    const content = 'C'.repeat(FILE_SIZE_THRESHOLD + 100);
+    const p = spillPathOf(truncateForDelivery(content, '', 651));
+    assert.ok(p.includes(`${path.sep}conv-651${path.sep}`), `path should contain conv-651 dir, got: ${p}`);
+    assert.equal(fs.readFileSync(p, 'utf8'), content);
+  });
+
+  it('different conversation ids never share a path, even in the same millisecond', () => {
+    const contentA = 'A'.repeat(FILE_SIZE_THRESHOLD + 100);
+    const contentB = 'B'.repeat(FILE_SIZE_THRESHOLD + 100);
+    const [pathA, pathB] = withFrozenClock(() => [
+      spillPathOf(truncateForDelivery(contentA, '', 1001)),
+      spillPathOf(truncateForDelivery(contentB, '', 1002))
+    ]);
+    assert.notEqual(pathA, pathB);
+    assert.equal(fs.readFileSync(pathA, 'utf8'), contentA);
+    assert.equal(fs.readFileSync(pathB, 'utf8'), contentB);
+  });
+
+  it('re-spilling the same conversation id overwrites its own directory idempotently', () => {
+    const content = 'D'.repeat(FILE_SIZE_THRESHOLD + 100);
+    const p1 = spillPathOf(truncateForDelivery(content, '', 2001));
+    const p2 = spillPathOf(truncateForDelivery(content, '', 2001));
+    assert.equal(p1, p2, 'same conv id must reuse the same path');
+    assert.equal(fs.readFileSync(p2, 'utf8'), content, 'content intact after re-spill');
+  });
+
+  it('conv id 0 is treated as a valid id, not as missing', () => {
+    const content = 'E'.repeat(FILE_SIZE_THRESHOLD + 100);
+    const p = spillPathOf(truncateForDelivery(content, '', 0));
+    assert.ok(p.includes(`${path.sep}conv-0${path.sep}`), `expected conv-0 dir, got: ${p}`);
+  });
+});
+
+describe('truncateForDelivery fallback (no conv id) spill path collision', () => {
   it('same-millisecond spills in one process get distinct paths and both contents survive', () => {
     const contentA = 'A'.repeat(FILE_SIZE_THRESHOLD + 100);
     const contentB = 'B'.repeat(FILE_SIZE_THRESHOLD + 100);

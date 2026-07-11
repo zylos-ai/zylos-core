@@ -19,12 +19,12 @@ export function hasLegacyReplyViaSuffix(content = '') {
   return /---- reply via: node\b.*\bc4-send\.js\b/.test(content);
 }
 
-// In-process counter so two spills within the same millisecond (e.g. the
-// session-start renderer looping over several long conversations) never
-// resolve to the same directory and silently overwrite each other.
+// Fallback counter for spills without a conversation id: two spills within
+// the same millisecond (e.g. a renderer looping over several long messages)
+// must never resolve to the same directory and silently overwrite each other.
 let spillSeq = 0;
 
-export function truncateForDelivery(content, replyViaSuffix = '') {
+export function truncateForDelivery(content, replyViaSuffix = '', convId) {
   const fullMessage = content + replyViaSuffix;
   const byteLength = Buffer.byteLength(fullMessage, 'utf8');
 
@@ -32,7 +32,12 @@ export function truncateForDelivery(content, replyViaSuffix = '') {
     return fullMessage;
   }
 
-  const msgId = `${Date.now()}-${process.pid}-${spillSeq++}`;
+  // Prefer the conversation id: globally unique (DB primary key), directly
+  // traceable back to the row, and re-rendering the same message becomes an
+  // idempotent overwrite of one directory instead of piling up copies.
+  const msgId = (convId !== undefined && convId !== null)
+    ? `conv-${convId}`
+    : `${Date.now()}-${process.pid}-${spillSeq++}`;
   const messageDir = path.join(ATTACHMENTS_DIR, msgId);
   fs.mkdirSync(messageDir, { recursive: true });
   const filePath = path.join(messageDir, 'message.txt');
