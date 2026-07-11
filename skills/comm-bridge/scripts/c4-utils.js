@@ -19,6 +19,11 @@ export function hasLegacyReplyViaSuffix(content = '') {
   return /---- reply via: node\b.*\bc4-send\.js\b/.test(content);
 }
 
+// In-process counter so two spills within the same millisecond (e.g. the
+// session-start renderer looping over several long conversations) never
+// resolve to the same directory and silently overwrite each other.
+let spillSeq = 0;
+
 export function truncateForDelivery(content, replyViaSuffix = '') {
   const fullMessage = content + replyViaSuffix;
   const byteLength = Buffer.byteLength(fullMessage, 'utf8');
@@ -27,7 +32,7 @@ export function truncateForDelivery(content, replyViaSuffix = '') {
     return fullMessage;
   }
 
-  const msgId = `${Date.now()}-${process.pid}`;
+  const msgId = `${Date.now()}-${process.pid}-${spillSeq++}`;
   const messageDir = path.join(ATTACHMENTS_DIR, msgId);
   fs.mkdirSync(messageDir, { recursive: true });
   const filePath = path.join(messageDir, 'message.txt');
