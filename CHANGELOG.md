@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **⚠️ BEHAVIOR CHANGE — `zylos upgrade --all` exit code**: non-JSON mode now exits **1** when any component check fails, matching the `--json` contract (previously it printed warnings and exited 0). Shell scripts and CI that relied on exit 0 despite failed component checks must be updated (the standard `|| true` idiom opts out). Same failure scenario now yields the same exit code in both output modes; no `--no-fail` flag is provided by design. (#706)
+
 ## [0.5.3] - 2026-06-17
 
 ### Added
