@@ -17,7 +17,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { smartSync } from '../cli/lib/smart-merge.js';
-import { generateManifest, saveManifest, saveOriginals, loadManifest, hashFile } from '../cli/lib/manifest.js';
+import { generateManifest, saveManifest, saveOriginals, loadManifest, hashFile, snapshotMergeBaseline } from '../cli/lib/manifest.js';
 import { copyTree } from '../cli/lib/fs-utils.js';
 import { rollback } from '../cli/lib/upgrade.js';
 
@@ -48,6 +48,11 @@ function setupInstalledV1(dest) {
 function takeUpgradeBackup(dest) {
   const backupDir = path.join(mkTmp(), 'backup');
   copyTree(dest, backupDir, { excludes: ['node_modules', '.backup', '.zylos'] });
+  // Since the R5 rework, step2 also snapshots the (canonicalized) baseline
+  // into the backup's .zylos slot so rollback restores metadata together
+  // with the files; a snapshotless backup would make rollback remove the
+  // baseline as unknowable (see upgrade.js rollback()).
+  snapshotMergeBaseline(dest, path.join(backupDir, '.zylos'));
   return backupDir;
 }
 

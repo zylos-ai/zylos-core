@@ -275,6 +275,7 @@ describe('component upgrade rollback', () => {
     fs.writeFileSync(path.join(skillDir, 'SKILL.md'), 'broken\n', 'utf8');
     fs.writeFileSync(path.join(skillDir, 'new-file.txt'), 'remove\n', 'utf8');
     fs.writeFileSync(path.join(skillDir, '.zylos', 'manifest.json'), '{}\n', 'utf8');
+    fs.writeFileSync(path.join(skillDir, '.zylos', 'other-metadata.json'), 'keep\n', 'utf8');
     fs.writeFileSync(path.join(skillDir, 'node_modules', 'keep.txt'), 'deps\n', 'utf8');
 
     const results = rollback({
@@ -287,8 +288,16 @@ describe('component upgrade rollback', () => {
     assert.equal(fs.readFileSync(path.join(skillDir, 'SKILL.md'), 'utf8'), 'old\n');
     assert.equal(fs.existsSync(path.join(skillDir, 'new-file.txt')), false);
     assert.equal(fs.readFileSync(path.join(skillDir, '.backup', 'run-1', 'SKILL.md'), 'utf8'), 'old\n');
-    assert.equal(fs.readFileSync(path.join(skillDir, '.zylos', 'manifest.json'), 'utf8'), '{}\n');
     assert.equal(fs.readFileSync(path.join(skillDir, 'node_modules', 'keep.txt'), 'utf8'), 'deps\n');
+    // #715 R5: this backup carries no baseline snapshot, so the old baseline
+    // is unknowable — rollback removes baseline-owned artifacts (reported as
+    // its own restore_baseline action) instead of leaving a possibly-new
+    // manifest against restored old files. Non-baseline .zylos content stays.
+    const restoreBaseline = results.find((item) => item.action === 'restore_baseline');
+    assert.equal(restoreBaseline?.success, true);
+    assert.equal(restoreBaseline?.state, 'removed');
+    assert.equal(fs.existsSync(path.join(skillDir, '.zylos', 'manifest.json')), false);
+    assert.equal(fs.readFileSync(path.join(skillDir, '.zylos', 'other-metadata.json'), 'utf8'), 'keep\n');
 
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });

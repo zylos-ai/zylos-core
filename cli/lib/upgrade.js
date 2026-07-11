@@ -12,7 +12,13 @@ import { SKILLS_DIR, COMPONENTS_DIR } from './config.js';
 import { loadComponents } from './components.js';
 import { loadLocalRegistry } from './registry.js';
 import { parseSkillMd } from './skill.js';
-import { loadManifest } from './manifest.js';
+import {
+  loadManifest,
+  snapshotMergeBaseline,
+  restoreMergeBaseline,
+  removeMergeBaseline,
+  hasBaselineSnapshot,
+} from './manifest.js';
 import { downloadArchive, downloadBranch } from './download.js';
 import { fetchLatestTag, fetchRawFile, compareSemverDesc, sanitizeError } from './github.js';
 import { copyTree, syncTree } from './fs-utils.js';
@@ -408,6 +414,16 @@ function step2_backup(ctx) {
   try {
     copyTree(ctx.skillDir, backupDir, { excludes: ['node_modules', '.backup', '.zylos'] });
 
+    // Snapshot the merge baseline alongside the business files so a rollback
+    // can restore both together (#715: step3 commits the new baseline, but
+    // step4/step8 can still fail — restoring files without the baseline
+    // leaves files@old + metadata@new, and the retry "keeps" everything as
+    // phantom local modifications). The helper canonicalizes the site
+    // (recoverMergeBaseline) BEFORE copying; a recovery failure fails this
+    // step — no backup is accepted from an ambiguous site. The backup's
+    // .zylos slot is guaranteed free: copyTree excludes that name.
+    snapshotMergeBaseline(ctx.skillDir, path.join(backupDir, '.zylos'));
+
     ctx.backupDir = backupDir;
     return { step: 2, name: 'backup', status: 'done', message: path.basename(backupDir), duration: Date.now() - startTime };
   } catch (err) {
@@ -651,6 +667,31 @@ export function rollback(ctx, deps = {}) {
       results.push({ action: 'restore_files', success: true });
     } catch (err) {
       results.push({ action: 'restore_files', success: false, error: err.message });
+    }
+
+    // Restore the merge baseline together with the files (#715): step3 may
+    // have committed the new baseline before a later step failed. Reported as
+    // its own action — a baseline-restore failure must be visible, never
+    // masked by restore_files succeeding. Runs even if restore_files failed:
+    // an old baseline against half-restored files degrades to conservative
+    // conflict handling, while a new baseline against old files reports
+    // phantom success on retry.
+    const snapshotDir = path.join(ctx.backupDir, '.zylos');
+    try {
+      if (hasBaselineSnapshot(snapshotDir)) {
+        const { state } = restoreMergeBaseline(ctx.skillDir, snapshotDir);
+        results.push({ action: 'restore_baseline', success: true, state });
+      } else {
+        // Backup has no (complete) baseline snapshot — taken by a pre-#715
+        // version or torn mid-write. The old baseline is unknowable; leaving
+        // the newly committed one would recreate the files@old + metadata@new
+        // phantom-success setup, so remove baseline-owned artifacts and let
+        // the retry re-evaluate with no baseline (conservative path).
+        removeMergeBaseline(ctx.skillDir);
+        results.push({ action: 'restore_baseline', success: true, state: 'removed' });
+      }
+    } catch (err) {
+      results.push({ action: 'restore_baseline', success: false, error: err.message });
     }
 
     // Restore dependencies
