@@ -210,17 +210,10 @@ function fetchRawFileOnce(repo, filePath, branch) {
       stdio: ['pipe', 'pipe', 'pipe'],
     });
   } catch (publicError) {
-    if (!token) {
-      // Preserve the pre-auth-first behavior: without credentials, a failed
-      // public request gets one immediate re-attempt in the same retry cycle.
-      return execFileSync('curl', ['-fsSL', publicUrl], {
-        encoding: 'utf8',
-        timeout: 10000,
-        stdio: ['pipe', 'pipe', 'pipe'],
-      });
-    }
     // A rate-limited public fallback must reach the outer retry loop even when
     // the authenticated request failed first with a non-rate-limit status.
+    // Without a token this surfaces the public error as-is — retry semantics
+    // belong exclusively to the outer withRateLimitRetry* loop (#705).
     throw preferredFallbackError(authenticatedError, publicError);
   }
 }
@@ -294,11 +287,6 @@ function fetchTagsJsonSync(repo) {
       encoding: 'utf8', timeout: 10000, stdio: ['pipe', 'pipe', 'pipe'],
     });
   } catch (publicError) {
-    if (!token) {
-      return execFileSync('curl', ['-fsSL', url], {
-        encoding: 'utf8', timeout: 10000, stdio: ['pipe', 'pipe', 'pipe'],
-      });
-    }
     throw preferredFallbackError(authenticatedError, publicError);
   }
 }
@@ -327,12 +315,6 @@ async function fetchTagsJsonAsync(repo) {
     });
     return stdout;
   } catch (publicError) {
-    if (!token) {
-      const { stdout } = await execFileAsync('curl', ['-fsSL', url], {
-        encoding: 'utf8', timeout: 10000,
-      });
-      return stdout;
-    }
     throw preferredFallbackError(authenticatedError, publicError);
   }
 }
