@@ -175,6 +175,59 @@ describe('saveMergeBaseline', () => {
     expect(fs.existsSync(path.join(component, '.zylos', 'manifest.json.tmp'))).toBe(false);
     expect(fs.existsSync(path.join(component, '.zylos', 'originals.new'))).toBe(false);
   });
+
+  test('staging-failure cleanup interrupted midway keeps the transaction visibly uncommitted', () => {
+    const component = mkTmp();
+    const sourceV1 = mkTmp();
+    const sourceV2 = mkTmp();
+
+    // Previous baseline: manifest + originals v1
+    writeFile(sourceV1, 'a.js', 'v1');
+    saveManifest(component, generateManifest(sourceV1));
+    saveOriginals(component, sourceV1);
+    const manifestBefore = fs.readFileSync(path.join(component, '.zylos', 'manifest.json'), 'utf8');
+
+    writeFile(sourceV2, 'a.js', 'v2');
+    const manifestV2 = generateManifest(sourceV2);
+
+    // Fault injection: the commit rename fails (forcing the catch cleanup),
+    // and the cleanup itself is interrupted by an I/O error on its SECOND
+    // deletion — the window between the two cleanup steps
+    const realRename = fs.renameSync;
+    const realRm = fs.rmSync;
+    let rmCalls = 0;
+    fs.renameSync = () => {
+      const err = new Error('EIO: injected commit failure');
+      err.code = 'EIO';
+      throw err;
+    };
+    fs.rmSync = (...args) => {
+      rmCalls++;
+      if (rmCalls === 2) {
+        const err = new Error('EIO: injected cleanup interruption');
+        err.code = 'EIO';
+        throw err;
+      }
+      return realRm(...args);
+    };
+    try {
+      expect(() => saveMergeBaseline(component, sourceV2, manifestV2)).toThrow(/EIO/);
+    } finally {
+      fs.renameSync = realRename;
+      fs.rmSync = realRm;
+    }
+
+    // Whatever the interruption left behind, recovery must restore the OLD
+    // generation — the transaction never committed, so no staged artifact may
+    // ever surface as live. Double-run to pin idempotence.
+    for (let run = 0; run < 2; run++) {
+      recoverMergeBaseline(component);
+      expect(fs.readFileSync(path.join(component, '.zylos', 'manifest.json'), 'utf8')).toBe(manifestBefore);
+      expect(getOriginalContent(component, 'a.js')).toBe('v1');
+      expect(fs.existsSync(path.join(component, '.zylos', 'manifest.json.tmp'))).toBe(false);
+      expect(fs.existsSync(path.join(component, '.zylos', 'originals.new'))).toBe(false);
+    }
+  });
 });
 
 describe('recoverMergeBaseline', () => {
@@ -201,6 +254,48 @@ describe('recoverMergeBaseline', () => {
       expect(fs.existsSync(path.join(component, '.zylos', 'originals.new'))).toBe(false);
       expect(fs.readFileSync(path.join(component, '.zylos', 'manifest.json'), 'utf8')).toBe(manifestBefore);
       expect(getOriginalContent(component, 'a.js')).toBe('v1');
+    }
+  });
+
+  test('rollback interrupted between its two deletions cannot surface the uncommitted staging', () => {
+    const component = mkTmp();
+    setupBaseline(component);
+    const manifestBefore = fs.readFileSync(path.join(component, '.zylos', 'manifest.json'), 'utf8');
+
+    // Uncommitted transaction on disk: staged manifest (the transaction
+    // marker) + staged originals, as left by a crash during staging
+    writeFile(component, '.zylos/manifest.json.tmp', '{"files":{"a.js":"deadbeef"}}');
+    writeFile(component, '.zylos/originals.new/a.js', 'v2-staged-uncommitted');
+
+    // Fault injection: the SECOND deletion inside this recovery run fails
+    // (EIO) — an interruption in the window between the two cleanup steps
+    const realRm = fs.rmSync;
+    let rmCalls = 0;
+    fs.rmSync = (...args) => {
+      rmCalls++;
+      if (rmCalls === 2) {
+        const err = new Error('EIO: injected recovery interruption');
+        err.code = 'EIO';
+        throw err;
+      }
+      return realRm(...args);
+    };
+    try {
+      expect(() => recoverMergeBaseline(component)).toThrow(/EIO/);
+    } finally {
+      fs.rmSync = realRm;
+    }
+
+    // Re-run recovery (injection gone). The interrupted rollback must still
+    // converge to the OLD generation: the staged originals were never
+    // committed and must not be mistaken for a committed swap and rolled
+    // forward. Double-run to pin idempotence.
+    for (let run = 0; run < 2; run++) {
+      recoverMergeBaseline(component);
+      expect(fs.readFileSync(path.join(component, '.zylos', 'manifest.json'), 'utf8')).toBe(manifestBefore);
+      expect(getOriginalContent(component, 'a.js')).toBe('v1');
+      expect(fs.existsSync(path.join(component, '.zylos', 'manifest.json.tmp'))).toBe(false);
+      expect(fs.existsSync(path.join(component, '.zylos', 'originals.new'))).toBe(false);
     }
   });
 

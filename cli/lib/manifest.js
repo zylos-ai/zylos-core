@@ -207,9 +207,16 @@ export function recoverMergeBaseline(componentDir) {
   const legacyBackup = path.join(zylosDir, ORIGINALS_LEGACY_BAK);
 
   if (fs.existsSync(stagedManifest)) {
-    // Commit never happened — discard staging, live pair is the baseline
-    fs.rmSync(stagedManifest, { recursive: true, force: true });
+    // Commit never happened — discard staging, live pair is the baseline.
+    // Deletion order matters: staged originals first, marker last. The staged
+    // manifest is the uncommitted-transaction discriminator — were it deleted
+    // first and the second step interrupted, the surviving `originals.new`
+    // would be indistinguishable from a committed swap and a re-run would
+    // roll the uncommitted originals forward (R3 review P2). With this order
+    // an interruption leaves the marker behind and the re-run rolls back
+    // again.
     fs.rmSync(stagedOriginals, { recursive: true, force: true });
+    fs.rmSync(stagedManifest, { recursive: true, force: true });
   } else if (fs.existsSync(stagedOriginals)) {
     // Manifest committed but originals swap interrupted — roll forward
     fs.rmSync(originalsDir, { recursive: true, force: true });
@@ -248,8 +255,12 @@ export function recoverMergeBaseline(componentDir) {
  * After the commit, the originals swap is completed; if interrupted, the next
  * recoverMergeBaseline() rolls it forward.
  *
- * Upgrade rollback excludes .zylos, so nothing else repairs this metadata —
- * it has to protect itself (issue #715 review findings, R1+R2).
+ * Caller-visible contract: THROW ⟺ the live manifest did not advance (the
+ * transaction never committed and its staging was rolled back); RETURN ⟺ the
+ * new baseline is committed, even if the originals swap still needs the next
+ * recovery to complete. This keeps failure reporting consistent with the
+ * upgrade pipeline's rollback, which restores business files but excludes
+ * .zylos (issue #715 review findings, R1-R3).
  *
  * @param {string} componentDir - Installed component root directory
  * @param {string} sourceDir    - New version source directory
@@ -275,16 +286,35 @@ export function saveMergeBaseline(componentDir, sourceDir, manifest) {
     // Commit point (atomic)
     fs.renameSync(stagedManifest, manifestPath);
   } catch (err) {
-    // Discard staging; the live pair was never touched
-    try { fs.rmSync(stagedManifest, { recursive: true, force: true }); } catch { /* keep original error */ }
-    try { fs.rmSync(stagedOriginals, { recursive: true, force: true }); } catch { /* keep original error */ }
+    // Discard staging; the live pair was never touched. Same deletion order
+    // as recovery's rollback (staged originals first, marker last), same
+    // reason: if cleanup is interrupted midway the surviving marker keeps
+    // the transaction visibly uncommitted, so recovery rolls it back instead
+    // of mistaking the leftover `originals.new` for a committed swap. One
+    // try-block, not one per deletion: should the originals deletion fail,
+    // the marker must NOT be deleted.
+    try {
+      fs.rmSync(stagedOriginals, { recursive: true, force: true });
+      fs.rmSync(stagedManifest, { recursive: true, force: true });
+    } catch { /* keep original error; recovery finishes the rollback */ }
     throw err;
   }
 
-  // Post-commit: make the staged originals live. Any interruption here is
-  // rolled forward by the next recoverMergeBaseline().
-  fs.rmSync(originalsDir, { recursive: true, force: true });
-  fs.renameSync(stagedOriginals, originalsDir);
+  // Post-commit: make the staged originals live. The transaction committed
+  // the moment the staged manifest landed on the live path, so from the
+  // caller's perspective the save has succeeded regardless of what happens
+  // to the swap below — any interruption is rolled forward by the next
+  // recoverMergeBaseline() (smartSync runs it before reading the baseline).
+  // Surfacing a swap failure as an error would break the caller-visible
+  // contract (throw ⟺ live manifest unchanged): the upgrade pipeline would
+  // roll business files back while the manifest stayed advanced (.zylos is
+  // excluded from rollback), and the retry would misread every upstream
+  // change as a local modification and "keep" it — reporting success while
+  // never applying the new version (R3 review P2).
+  try {
+    fs.rmSync(originalsDir, { recursive: true, force: true });
+    fs.renameSync(stagedOriginals, originalsDir);
+  } catch { /* committed; roll-forward deferred to the next recovery */ }
 }
 
 /**
