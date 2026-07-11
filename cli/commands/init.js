@@ -13,7 +13,7 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import { execSync, execFileSync, spawnSync, spawn } from 'node:child_process';
 import { ZYLOS_DIR, SKILLS_DIR, CONFIG_DIR, COMPONENTS_DIR, LOCKS_DIR, COMPONENTS_FILE, BIN_DIR, HTTP_DIR, CADDYFILE, CADDY_BIN, getZylosConfig, updateZylosConfig } from '../lib/config.js';
-import { generateManifest, saveManifest } from '../lib/manifest.js';
+import { generateManifest, saveMergeBaseline } from '../lib/manifest.js';
 import { prompt, promptYesNo, promptChoice, promptSecret } from '../lib/prompts.js';
 import { bold, dim, green, red, yellow, cyan, bgGreen, success, error, warn, heading } from '../lib/colors.js';
 import { commandExists } from '../lib/shell-utils.js';
@@ -844,7 +844,7 @@ function syncCoreSkills() {
       // re-running init over an existing skill dir must not absorb local files
       // into the ownership record (issue #715).
       const manifest = generateManifest(srcDir);
-      saveManifest(destDir, manifest);
+      saveMergeBaseline(destDir, srcDir, manifest);
       (isNew ? installed : updated).push(entry.name);
     } catch {
       console.log(`  ${warn(`Failed to sync ${bold(entry.name)}`)}`);

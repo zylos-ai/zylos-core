@@ -111,7 +111,7 @@ Component Management:
                       --check   Show component info without installing
                       --yes/-y  Skip confirmation prompts
   info <name>         Show component details (--json)
-  upgrade <name>      Upgrade a component (8-step pipeline)
+  upgrade <name>      Upgrade a component (9-step pipeline)
   upgrade --all       Upgrade all components
   upgrade --self      Upgrade zylos-core itself
   uninstall <name>    Remove a component (--purge, --force)

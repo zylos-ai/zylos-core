@@ -56,6 +56,8 @@ describe('syncCoreSkills preserved aggregation (#715 review)', () => {
     // The skill must register as changed — previously this scenario
     // reported "no changes" while the manifest lost the file's ownership
     expect(result.synced).toContain('demo-skill');
+    expect(result.pendingBaselines).toHaveLength(1);
+    expect(result.pendingBaselines[0].destDir).toBe(destDir);
     // File kept in place with the user's content
     expect(fs.readFileSync(path.join(destDir, 'gone.js'), 'utf8')).toBe('user changes');
   });
@@ -75,6 +77,7 @@ describe('syncCoreSkills preserved aggregation (#715 review)', () => {
     expect(result.deleted).toContain('demo-skill/gone.js');
     expect(result.preserved).toEqual([]);
     expect(result.synced).toContain('demo-skill');
+    expect(result.pendingBaselines).toHaveLength(1);
     expect(fs.existsSync(path.join(destDir, 'gone.js'))).toBe(false);
   });
 });

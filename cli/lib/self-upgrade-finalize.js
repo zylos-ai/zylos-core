@@ -5,7 +5,7 @@
  *
  * The parent upgrader process runs steps 1-4 using the currently loaded code,
  * installs the new package, then invokes this script from the newly installed
- * package so steps 5-12 use the new implementation.
+ * package so steps 5-13 use the new implementation.
  */
 
 import fs from 'node:fs';

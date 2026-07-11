@@ -18,7 +18,6 @@ import {
   generateManifest,
   hashFile,
   loadManifest,
-  saveMergeBaseline,
   recoverMergeBaseline,
   getOriginalContent,
   hasOriginals,
@@ -49,6 +48,7 @@ function isBinaryFile(filePath) {
  * @property {string[]} deleted      - Files deleted (removed in new version)
  * @property {string[]} preserved    - Files removed upstream but kept locally (local modifications detected)
  * @property {string[]} errors       - Error descriptions
+ * @property {object|null} nextManifest - Authoritative source manifest to commit at the caller's transaction boundary
  */
 
 /**
@@ -80,6 +80,7 @@ export function smartSync(srcDir, destDir, opts = {}) {
     deleted: [],
     preserved: [],
     errors: [],
+    nextManifest: null,
   };
 
   // Repair any interrupted baseline transaction BEFORE reading the manifest
@@ -287,25 +288,17 @@ export function smartSync(srcDir, destDir, opts = {}) {
     }
   }
 
-  // Persist the merge baseline for the next upgrade — but only if this sync
-  // completed without errors. A partially-applied sync must keep the previous
-  // manifest/originals so the next run re-evaluates from the last known-good
-  // baseline instead of recording a half-synced state as "normal".
+  // Hand the authoritative next baseline to the transaction owner. smartSync
+  // changes business files, but it does not know whether later pipeline steps
+  // (npm install, hooks, service restart, etc.) will succeed. Persisting here
+  // would advance metadata before the outer operation commits and force the
+  // rollback layer to compensate by snapshotting/restoring the baseline.
   //
-  // The manifest saved is the NEW PACKAGE's (authoritative source), never a
-  // scan of destDir: the manifest is the package-ownership record. Scanning
-  // destDir absorbs user-added/runtime files (deleted as "upstream-removed"
-  // one upgrade later) and records kept/merged local hashes as baseline
-  // (silently rolled back one upgrade later). See issue #715.
-  //
-  // Manifest + originals are committed as one group: if either write fails,
-  // both are restored so the previous baseline stays internally consistent.
+  // A partially-applied sync or any recorded error keeps the previous
+  // baseline. On success, the caller commits this source-generated manifest
+  // together with source originals at its own final success boundary.
   if (result.errors.length === 0) {
-    try {
-      saveMergeBaseline(destDir, srcDir, newManifest);
-    } catch (err) {
-      result.errors.push(`update merge baseline: ${err.message}`);
-    }
+    result.nextManifest = newManifest;
   }
 
   return result;

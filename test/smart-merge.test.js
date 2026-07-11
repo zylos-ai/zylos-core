@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { smartSync, formatMergeResult } from '../cli/lib/smart-merge.js';
-import { generateManifest, saveManifest, saveOriginals, loadManifest, hashFile } from '../cli/lib/manifest.js';
+import { generateManifest, saveManifest, saveOriginals, saveMergeBaseline, loadManifest, hashFile } from '../cli/lib/manifest.js';
 
 let tmpRoot;
 
@@ -264,29 +264,28 @@ describe('smartSync', () => {
     expect(readFile(backupDir, 'b.js')).toBe('user version');
   });
 
-  test('updates manifest after sync', () => {
+  test('returns the next manifest without committing it', () => {
     const src = mkTmp();
     const dest = mkTmp();
 
     writeFile(src, 'a.js', 'new content');
 
-    smartSync(src, dest);
+    const result = smartSync(src, dest);
 
-    // Manifest should exist and reflect current state
+    // The transaction owner commits this candidate after later steps succeed.
     const manifestPath = path.join(dest, '.zylos', 'manifest.json');
-    expect(fs.existsSync(manifestPath)).toBe(true);
-
-    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-    expect(manifest.files['a.js']).toBeTruthy();
+    expect(fs.existsSync(manifestPath)).toBe(false);
+    expect(result.nextManifest.files['a.js']).toBeTruthy();
   });
 
-  test('saves originals after sync', () => {
+  test('outer baseline commit saves originals after sync', () => {
     const src = mkTmp();
     const dest = mkTmp();
 
     writeFile(src, 'a.js', 'source content');
 
-    smartSync(src, dest);
+    const result = smartSync(src, dest);
+    saveMergeBaseline(dest, src, result.nextManifest);
 
     // Originals should be saved
     const originalsPath = path.join(dest, '.zylos', 'originals', 'a.js');
@@ -311,7 +310,8 @@ describe('smartSync manifest authority (#715)', () => {
     writeFile(src, 'a.js', 'original');
 
     // Round 1: user file untouched and NOT absorbed into the manifest
-    smartSync(src, dest);
+    const first = smartSync(src, dest);
+    saveMergeBaseline(dest, src, first.nextManifest);
     expect(fileExists(dest, 'custom.js')).toBe(true);
     expect(loadManifest(dest).files['custom.js']).toBeUndefined();
 
@@ -338,7 +338,8 @@ describe('smartSync manifest authority (#715)', () => {
     // Sync 2: local kept, manifest must record the SOURCE hash, not the local hash
     const result2 = smartSync(src, dest);
     expect(result2.kept).toContain('a.js');
-    expect(loadManifest(dest).files['a.js']).toBe(hashFile(path.join(src, 'a.js')));
+    expect(result2.nextManifest.files['a.js']).toBe(hashFile(path.join(src, 'a.js')));
+    saveMergeBaseline(dest, src, result2.nextManifest);
 
     // Sync 3: with a dest-scan manifest the local mod would look unmodified and
     // the (unchanged) upstream would look new — silently rolling the user back
@@ -364,7 +365,8 @@ describe('smartSync manifest authority (#715)', () => {
     const result = smartSync(src, dest);
     expect(result.merged).toContain('a.js');
     // Manifest records the package hash, so the merged delta stays "local"
-    expect(loadManifest(dest).files['a.js']).toBe(hashFile(path.join(src, 'a.js')));
+    expect(result.nextManifest.files['a.js']).toBe(hashFile(path.join(src, 'a.js')));
+    saveMergeBaseline(dest, src, result.nextManifest);
 
     // Next sync with unchanged upstream must keep the merged content
     const result2 = smartSync(src, dest);
@@ -404,7 +406,7 @@ describe('smartSync manifest authority (#715)', () => {
     expect(fileExists(dest, 'clean-then-removed.js')).toBe(false);
 
     // Neither appears in the new manifest
-    const manifest = loadManifest(dest);
+    const manifest = result.nextManifest;
     expect(manifest.files['modified-then-removed.js']).toBeUndefined();
     expect(manifest.files['clean-then-removed.js']).toBeUndefined();
   });
@@ -427,6 +429,7 @@ describe('smartSync manifest authority (#715)', () => {
 
     const result = smartSync(src, dest);
     expect(result.errors).toEqual([]);
+    saveMergeBaseline(dest, src, result.nextManifest);
     expect(loadManifest(dest).files['a.js']).toBe(hashFile(path.join(src, 'a.js')));
     expect(readFile(dest, '.zylos/originals/a.js')).toBe('updated');
   });
@@ -448,9 +451,16 @@ describe('smartSync manifest authority (#715)', () => {
     fs.chmodSync(path.join(dest, '.zylos'), 0o555);
 
     const result = smartSync(src, dest);
+    let commitError;
+    try {
+      saveMergeBaseline(dest, src, result.nextManifest);
+    } catch (err) {
+      commitError = err;
+    }
     fs.chmodSync(path.join(dest, '.zylos'), 0o755);
 
-    expect(result.errors.length).toBeGreaterThan(0);
+    expect(result.errors).toEqual([]);
+    expect(commitError).toBeDefined();
     expect(fs.readFileSync(path.join(dest, '.zylos', 'manifest.json'), 'utf8')).toBe(manifestBefore);
     expect(readFile(dest, '.zylos/originals/a.js')).toBe('original');
   });
@@ -502,9 +512,9 @@ describe('smartSync manifest authority (#715)', () => {
     const result = smartSync(src, dest);
 
     expect(result.errors).toEqual([]);
-    // The bogus staged manifest never became live; the sync committed normally
+    // The bogus staged manifest never became live; recovery produced a clean candidate.
     expect(loadManifest(dest).files['bogus.js']).toBeUndefined();
-    expect(loadManifest(dest).files['a.js']).toBe(hashFile(path.join(src, 'a.js')));
+    expect(result.nextManifest.files['a.js']).toBe(hashFile(path.join(src, 'a.js')));
     // No stale transaction artifacts survive
     expect(fs.existsSync(path.join(dest, '.zylos', 'manifest.json.tmp'))).toBe(false);
     expect(fs.existsSync(path.join(dest, '.zylos', 'originals.new'))).toBe(false);

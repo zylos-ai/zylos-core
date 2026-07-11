@@ -195,10 +195,10 @@ export function readChangelog(dir) {
  * @param {string} [backupBase] - Base directory for conflict backups
  * @param {object} [opts]
  * @param {string} [opts.mode] - 'merge' (default) or 'overwrite'
- * @returns {{ synced: string[], added: string[], merged: string[], deleted: string[], preserved: string[], conflicts: { skill: string, file: string, backupPath: string }[], errors: string[] }}
+ * @returns {{ synced: string[], added: string[], merged: string[], deleted: string[], preserved: string[], conflicts: { skill: string, file: string, backupPath: string }[], errors: string[], pendingBaselines: { destDir: string, srcDir: string, manifest: object }[] }}
  */
 export function syncCoreSkills(newSkillsSrc, backupBase, opts = {}) {
-  const result = { synced: [], added: [], merged: [], deleted: [], preserved: [], conflicts: [], errors: [] };
+  const result = { synced: [], added: [], merged: [], deleted: [], preserved: [], conflicts: [], errors: [], pendingBaselines: [] };
 
   if (!fs.existsSync(newSkillsSrc)) {
     return result;
@@ -218,13 +218,13 @@ export function syncCoreSkills(newSkillsSrc, backupBase, opts = {}) {
     const destDir = path.join(SKILLS_DIR, skillName);
 
     if (!fs.existsSync(destDir)) {
-      // New skill — copy entirely + save originals and manifest.
+      // New skill — copy entirely and defer its baseline to the outer commit.
       // Manifest is generated from the SOURCE (authoritative package), never
       // from a destDir scan, so pre-existing local files are not absorbed
       // into the ownership record (issue #715).
       try {
         copyTree(srcDir, destDir);
-        saveMergeBaseline(destDir, srcDir, generateManifest(srcDir));
+        result.pendingBaselines.push({ destDir, srcDir, manifest: generateManifest(srcDir) });
         result.added.push(skillName);
       } catch (err) {
         result.errors.push(`${skillName}: ${err.message}`);
@@ -261,6 +261,8 @@ export function syncCoreSkills(newSkillsSrc, backupBase, opts = {}) {
       }
       if (mergeResult.errors.length) {
         result.errors.push(...mergeResult.errors.map(e => `${skillName}: ${e}`));
+      } else {
+        result.pendingBaselines.push({ destDir, srcDir, manifest: mergeResult.nextManifest });
       }
 
     } catch (err) {
@@ -748,6 +750,7 @@ function step5_syncCoreSkills(ctx) {
     // Store conflicts on ctx for the final result
     ctx.mergeConflicts = syncResult.conflicts;
     ctx.mergedFiles = syncResult.merged;
+    ctx.pendingBaselines = syncResult.pendingBaselines;
 
     if (syncResult.errors.length > 0) {
       return { step: 5, name: 'sync_core_skills', status: 'failed', error: syncResult.errors.join('; '), duration: Date.now() - startTime };
@@ -1311,6 +1314,25 @@ function step12_verifyServices(ctx) {
   return { step: 12, name: 'verify_services', status: 'failed', error: `Timed out after ${TIMEOUT_MS / 1000}s`, duration: Date.now() - startTime };
 }
 
+/** Commit every Core Skill baseline after the complete self-upgrade succeeds. */
+function step13_commitSkillBaselines(ctx) {
+  const startTime = Date.now();
+  try {
+    for (const baseline of ctx.pendingBaselines || []) {
+      saveMergeBaseline(baseline.destDir, baseline.srcDir, baseline.manifest);
+    }
+    return {
+      step: 13,
+      name: 'commit_skill_baselines',
+      status: 'done',
+      message: `${(ctx.pendingBaselines || []).length} committed`,
+      duration: Date.now() - startTime,
+    };
+  } catch (err) {
+    return { step: 13, name: 'commit_skill_baselines', status: 'failed', error: err.message, duration: Date.now() - startTime };
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Rollback
 // ---------------------------------------------------------------------------
@@ -1393,6 +1415,7 @@ const POST_INSTALL_STEPS = [
   step10_ensureCodexConfig,
   step11_startCoreServices,
   step12_verifyServices,
+  step13_commitSkillBaselines,
 ];
 
 function buildSelfUpgradeResult(ctx, failedStep, rollbackResults = null, rollbackPerformed = Boolean(rollbackResults)) {
@@ -1523,7 +1546,7 @@ export function runSelfUpgradeFinalize(state = {}, deps = {}) {
   ctx.to = state.to || state.newVersion || null;
 
   const steps = deps.steps || POST_INSTALL_STEPS;
-  const total = deps.total || 12;
+  const total = deps.total || 13;
   let failedStep = null;
 
   for (const stepFn of steps) {
@@ -1546,7 +1569,7 @@ export function runSelfUpgradeFinalize(state = {}, deps = {}) {
 }
 
 /**
- * Run the 12-step self-upgrade pipeline.
+ * Run the 13-step self-upgrade pipeline.
  * Template migration and Claude restart are handled by Claude after this completes.
  * Lock must be acquired by caller.
  *
@@ -1569,7 +1592,7 @@ export function runSelfUpgrade({ tempDir, newVersion, mode, onStep } = {}) {
     step4_npmInstallGlobal,
   ];
 
-  const total = 12;
+  const total = 13;
   let failedStep = null;
 
   for (const stepFn of preInstallSteps) {

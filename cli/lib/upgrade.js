@@ -13,11 +13,7 @@ import { loadComponents } from './components.js';
 import { loadLocalRegistry } from './registry.js';
 import { parseSkillMd } from './skill.js';
 import {
-  loadManifest,
-  snapshotMergeBaseline,
-  restoreMergeBaseline,
-  removeMergeBaseline,
-  hasBaselineSnapshot,
+  saveMergeBaseline,
 } from './manifest.js';
 import { downloadArchive, downloadBranch } from './download.js';
 import { fetchLatestTag, fetchRawFile, compareSemverDesc, sanitizeError } from './github.js';
@@ -414,16 +410,6 @@ function step2_backup(ctx) {
   try {
     copyTree(ctx.skillDir, backupDir, { excludes: ['node_modules', '.backup', '.zylos'] });
 
-    // Snapshot the merge baseline alongside the business files so a rollback
-    // can restore both together (#715: step3 commits the new baseline, but
-    // step4/step8 can still fail — restoring files without the baseline
-    // leaves files@old + metadata@new, and the retry "keeps" everything as
-    // phantom local modifications). The helper canonicalizes the site
-    // (recoverMergeBaseline) BEFORE copying; a recovery failure fails this
-    // step — no backup is accepted from an ambiguous site. The backup's
-    // .zylos slot is guaranteed free: copyTree excludes that name.
-    snapshotMergeBaseline(ctx.skillDir, path.join(backupDir, '.zylos'));
-
     ctx.backupDir = backupDir;
     return { step: 2, name: 'backup', status: 'done', message: path.basename(backupDir), duration: Date.now() - startTime };
   } catch (err) {
@@ -463,6 +449,8 @@ function step3_smartMerge(ctx) {
       return { step: 3, name: 'smart_merge', status: 'failed', error: mergeResult.errors.join('; '), duration: Date.now() - startTime };
     }
 
+    ctx.nextManifest = mergeResult.nextManifest;
+
     return { step: 3, name: 'smart_merge', status: 'done', message: msg, duration: Date.now() - startTime };
   } catch (err) {
     return { step: 3, name: 'smart_merge', status: 'failed', error: `Merge failed: ${err.message}`, duration: Date.now() - startTime };
@@ -493,21 +481,31 @@ function step4_npmInstall(ctx) {
 }
 
 /**
- * Step 5: verify manifest
- *
- * The manifest is saved by smartSync (step 3) from the authoritative new
- * package. Re-generating it here from skillDir — after npm install (step 4) —
- * would absorb non-package files (npm artifacts, user files) into the
- * ownership record, which the NEXT upgrade would then delete as
- * "removed upstream" (issue #715). So this step only verifies presence.
+ * Step 5: verify that smart merge produced an authoritative baseline
+ * candidate. It remains uncommitted until the outer transaction succeeds.
  */
 function step5_generateManifest(ctx) {
   const startTime = Date.now();
 
-  if (loadManifest(ctx.skillDir)) {
-    return { step: 5, name: 'generate_manifest', status: 'skipped', message: 'manifest saved by smart merge (authoritative source)', duration: Date.now() - startTime };
+  if (ctx.nextManifest) {
+    return { step: 5, name: 'generate_manifest', status: 'skipped', message: 'authoritative baseline pending outer commit', duration: Date.now() - startTime };
   }
-  return { step: 5, name: 'generate_manifest', status: 'failed', error: 'manifest missing after smart merge (sync reported errors?)', duration: Date.now() - startTime };
+  return { step: 5, name: 'generate_manifest', status: 'failed', error: 'baseline candidate missing after smart merge', duration: Date.now() - startTime };
+}
+
+/**
+ * Final step: commit manifest + originals only after every rollback-triggering
+ * operation has succeeded. A pre-commit failure leaves the previous baseline
+ * intact, so ordinary business-file rollback is sufficient.
+ */
+function step9_commitBaseline(ctx) {
+  const startTime = Date.now();
+  try {
+    saveMergeBaseline(ctx.skillDir, ctx.tempDir, ctx.nextManifest);
+    return { step: 9, name: 'commit_baseline', status: 'done', message: 'authoritative source baseline committed', duration: Date.now() - startTime };
+  } catch (err) {
+    return { step: 9, name: 'commit_baseline', status: 'failed', error: `Baseline commit failed: ${err.message}`, duration: Date.now() - startTime };
+  }
 }
 
 /**
@@ -669,31 +667,6 @@ export function rollback(ctx, deps = {}) {
       results.push({ action: 'restore_files', success: false, error: err.message });
     }
 
-    // Restore the merge baseline together with the files (#715): step3 may
-    // have committed the new baseline before a later step failed. Reported as
-    // its own action — a baseline-restore failure must be visible, never
-    // masked by restore_files succeeding. Runs even if restore_files failed:
-    // an old baseline against half-restored files degrades to conservative
-    // conflict handling, while a new baseline against old files reports
-    // phantom success on retry.
-    const snapshotDir = path.join(ctx.backupDir, '.zylos');
-    try {
-      if (hasBaselineSnapshot(snapshotDir)) {
-        const { state } = restoreMergeBaseline(ctx.skillDir, snapshotDir);
-        results.push({ action: 'restore_baseline', success: true, state });
-      } else {
-        // Backup has no (complete) baseline snapshot — taken by a pre-#715
-        // version or torn mid-write. The old baseline is unknowable; leaving
-        // the newly committed one would recreate the files@old + metadata@new
-        // phantom-success setup, so remove baseline-owned artifacts and let
-        // the retry re-evaluate with no baseline (conservative path).
-        removeMergeBaseline(ctx.skillDir);
-        results.push({ action: 'restore_baseline', success: true, state: 'removed' });
-      }
-    } catch (err) {
-      results.push({ action: 'restore_baseline', success: false, error: err.message });
-    }
-
     // Restore dependencies
     const packageJson = path.join(ctx.skillDir, 'package.json');
     if (fs.existsSync(packageJson)) {
@@ -734,7 +707,7 @@ export function rollback(ctx, deps = {}) {
 // ---------------------------------------------------------------------------
 
 /**
- * Run the 8-step upgrade pipeline (mechanical operations only).
+ * Run the 9-step upgrade pipeline (mechanical operations only).
  * Lock must be acquired by caller (component.js).
  *
  * @param {string} component
@@ -770,6 +743,7 @@ export function runUpgrade(component, { tempDir, newVersion, mode, jsonOutput, o
     step6_updateCaddyRoutes,
     step7_runPostUpgradeHook,
     step8_startService,
+    step9_commitBaseline,
   ];
 
   const total = steps.length;
