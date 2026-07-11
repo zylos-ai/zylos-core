@@ -19,6 +19,7 @@ import {
   hashFile,
   loadManifest,
   saveMergeBaseline,
+  recoverMergeBaseline,
   getOriginalContent,
   hasOriginals,
 } from './manifest.js';
@@ -80,6 +81,18 @@ export function smartSync(srcDir, destDir, opts = {}) {
     preserved: [],
     errors: [],
   };
+
+  // Repair any interrupted baseline transaction BEFORE reading the manifest
+  // or originals — a half-committed baseline read here would misclassify
+  // local modifications (e.g. degrade clean merges into conflicts).
+  try {
+    recoverMergeBaseline(destDir);
+  } catch (err) {
+    // Baseline is untrustworthy and was deliberately left untouched —
+    // merging against it could corrupt user files. Abort the sync.
+    result.errors.push(`baseline recovery failed: ${err.message}`);
+    return result;
+  }
 
   const savedManifest = loadManifest(destDir);
   const newManifest = generateManifest(srcDir);

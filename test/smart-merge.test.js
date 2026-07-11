@@ -409,7 +409,29 @@ describe('smartSync manifest authority (#715)', () => {
     expect(manifest.files['clean-then-removed.js']).toBeUndefined();
   });
 
-  test('failed baseline write restores both manifest and originals', () => {
+  test('read-only manifest file does not block the atomic baseline commit', () => {
+    const src = mkTmp();
+    const dest = mkTmp();
+
+    // Simulate previous install
+    writeFile(dest, 'a.js', 'original');
+    saveManifest(dest, generateManifest(dest));
+    saveOriginals(dest, dest);
+
+    writeFile(src, 'a.js', 'updated');
+
+    // The live manifest must never be written in place — the commit is a
+    // rename, which replaces a read-only file without opening it for write.
+    // An in-place write here could truncate the manifest on I/O failure.
+    fs.chmodSync(path.join(dest, '.zylos', 'manifest.json'), 0o444);
+
+    const result = smartSync(src, dest);
+    expect(result.errors).toEqual([]);
+    expect(loadManifest(dest).files['a.js']).toBe(hashFile(path.join(src, 'a.js')));
+    expect(readFile(dest, '.zylos/originals/a.js')).toBe('updated');
+  });
+
+  test('staging failure leaves the previous baseline pair untouched', () => {
     const src = mkTmp();
     const dest = mkTmp();
 
@@ -419,22 +441,74 @@ describe('smartSync manifest authority (#715)', () => {
     saveOriginals(dest, dest);
     const manifestBefore = fs.readFileSync(path.join(dest, '.zylos', 'manifest.json'), 'utf8');
 
-    // Upstream ships an update; the file sync itself will succeed
     writeFile(src, 'a.js', 'updated');
 
-    // Make the manifest file unwritable: originals update succeeds first,
-    // then the manifest write fails — the group commit must roll BOTH back
-    fs.chmodSync(path.join(dest, '.zylos', 'manifest.json'), 0o444);
+    // Read-only .zylos: no staging file can be created — the baseline commit
+    // must fail without touching either live piece
+    fs.chmodSync(path.join(dest, '.zylos'), 0o555);
 
     const result = smartSync(src, dest);
-    expect(result.errors.length).toBeGreaterThan(0);
+    fs.chmodSync(path.join(dest, '.zylos'), 0o755);
 
-    // Manifest unchanged AND originals restored to v1 (not the new package's)
-    fs.chmodSync(path.join(dest, '.zylos', 'manifest.json'), 0o644);
+    expect(result.errors.length).toBeGreaterThan(0);
     expect(fs.readFileSync(path.join(dest, '.zylos', 'manifest.json'), 'utf8')).toBe(manifestBefore);
     expect(readFile(dest, '.zylos/originals/a.js')).toBe('original');
-    // No stray staging directory left behind
+  });
+
+  test('crash after legacy originals staging: next sync recovers before merging', () => {
+    const src = mkTmp();
+    const dest = mkTmp();
+
+    // Previous install with originals v1 (three-way merge base)
+    writeFile(dest, 'a.js', 'line1\nline2\nline3\nline4\nline5\n');
+    saveManifest(dest, generateManifest(dest));
+    saveOriginals(dest, dest);
+
+    // Simulate a crash mid-transaction: originals were moved aside and never
+    // restored (the legacy .bak staging scheme)
+    fs.renameSync(
+      path.join(dest, '.zylos', 'originals'),
+      path.join(dest, '.zylos', 'originals.bak')
+    );
+
+    // User edit + upstream edit on different lines — clean-mergeable, but only
+    // if the originals are recovered before the merge logic reads them
+    writeFile(dest, 'a.js', 'line1\nuser-modified\nline3\nline4\nline5\n');
+    writeFile(src, 'a.js', 'line1\nline2\nline3\nline4\nupstream-modified\n');
+
+    const result = smartSync(src, dest);
+    expect(result.merged).toContain('a.js');
+    expect(result.conflicts).toEqual([]);
+    expect(readFile(dest, 'a.js')).toContain('user-modified');
+    expect(readFile(dest, 'a.js')).toContain('upstream-modified');
     expect(fs.existsSync(path.join(dest, '.zylos', 'originals.bak'))).toBe(false);
+  });
+
+  test('uncommitted staged transaction is rolled back, not absorbed', () => {
+    const src = mkTmp();
+    const dest = mkTmp();
+
+    // Previous install
+    writeFile(dest, 'a.js', 'original');
+    saveManifest(dest, generateManifest(dest));
+    saveOriginals(dest, dest);
+
+    // Simulate a crash before the commit point: a staged manifest (bogus
+    // content) and staged originals are still lying around
+    writeFile(dest, '.zylos/manifest.json.tmp', '{"files":{"bogus.js":"deadbeef"}}');
+    writeFile(dest, '.zylos/originals.new/bogus.js', 'staged junk');
+
+    writeFile(src, 'a.js', 'original');
+    const result = smartSync(src, dest);
+
+    expect(result.errors).toEqual([]);
+    // The bogus staged manifest never became live; the sync committed normally
+    expect(loadManifest(dest).files['bogus.js']).toBeUndefined();
+    expect(loadManifest(dest).files['a.js']).toBe(hashFile(path.join(src, 'a.js')));
+    // No stale transaction artifacts survive
+    expect(fs.existsSync(path.join(dest, '.zylos', 'manifest.json.tmp'))).toBe(false);
+    expect(fs.existsSync(path.join(dest, '.zylos', 'originals.new'))).toBe(false);
+    expect(readFile(dest, '.zylos/originals/a.js')).toBe('original');
   });
 
   test('sync with errors keeps the previous manifest and originals', () => {
