@@ -83,7 +83,7 @@ describe('base URL support', () => {
     try {
       const { writeCodexConfig } = await import('../runtime-setup.js');
 
-      assert.equal(writeCodexConfig('/tmp/zylos-project'), true);
+      assert.equal(writeCodexConfig(path.join(tmpRoot, 'zylos-project')), true);
 
       const configPath = path.join(tmpRoot, '.codex', 'config.toml');
       const config = fs.readFileSync(configPath, 'utf8');
@@ -111,7 +111,7 @@ describe('base URL support', () => {
       const { writeCodexConfig } = await import('../runtime-setup.js');
 
       assert.equal(
-        writeCodexConfig('/tmp/zylos-project', { openaiBaseUrl: 'https://explicit-proxy.example.com/v1' }),
+        writeCodexConfig(path.join(tmpRoot, 'zylos-project'), { openaiBaseUrl: 'https://explicit-proxy.example.com/v1' }),
         true
       );
 
