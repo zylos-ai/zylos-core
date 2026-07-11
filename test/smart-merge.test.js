@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { smartSync, formatMergeResult } from '../cli/lib/smart-merge.js';
-import { generateManifest, saveManifest, saveOriginals } from '../cli/lib/manifest.js';
+import { generateManifest, saveManifest, saveOriginals, loadManifest, hashFile } from '../cli/lib/manifest.js';
 
 let tmpRoot;
 
@@ -292,6 +292,142 @@ describe('smartSync', () => {
     const originalsPath = path.join(dest, '.zylos', 'originals', 'a.js');
     expect(fs.existsSync(originalsPath)).toBe(true);
     expect(fs.readFileSync(originalsPath, 'utf8')).toBe('source content');
+  });
+});
+
+describe('smartSync manifest authority (#715)', () => {
+  test('user-added file survives two sync rounds and never enters the manifest', () => {
+    const src = mkTmp();
+    const dest = mkTmp();
+
+    // Simulate previous install with only a.js
+    writeFile(dest, 'a.js', 'original');
+    saveManifest(dest, generateManifest(dest));
+
+    // User adds a file the package never shipped
+    writeFile(dest, 'custom.js', 'user data');
+
+    // Package still ships only a.js
+    writeFile(src, 'a.js', 'original');
+
+    // Round 1: user file untouched and NOT absorbed into the manifest
+    smartSync(src, dest);
+    expect(fileExists(dest, 'custom.js')).toBe(true);
+    expect(loadManifest(dest).files['custom.js']).toBeUndefined();
+
+    // Round 2: a dest-scan manifest would now list custom.js as "upstream-removed"
+    const result = smartSync(src, dest);
+    expect(result.deleted).not.toContain('custom.js');
+    expect(fileExists(dest, 'custom.js')).toBe(true);
+    expect(readFile(dest, 'custom.js')).toBe('user data');
+    expect(loadManifest(dest).files['custom.js']).toBeUndefined();
+  });
+
+  test('kept local modification is not rolled back by a later sync; manifest records source hash', () => {
+    const src = mkTmp();
+    const dest = mkTmp();
+
+    // Simulate previous install
+    writeFile(dest, 'a.js', 'original');
+    saveManifest(dest, generateManifest(dest));
+
+    // User modifies locally; upstream unchanged
+    writeFile(dest, 'a.js', 'user modified');
+    writeFile(src, 'a.js', 'original');
+
+    // Sync 2: local kept, manifest must record the SOURCE hash, not the local hash
+    const result2 = smartSync(src, dest);
+    expect(result2.kept).toContain('a.js');
+    expect(loadManifest(dest).files['a.js']).toBe(hashFile(path.join(src, 'a.js')));
+
+    // Sync 3: with a dest-scan manifest the local mod would look unmodified and
+    // the (unchanged) upstream would look new — silently rolling the user back
+    const result3 = smartSync(src, dest);
+    expect(result3.kept).toContain('a.js');
+    expect(result3.overwritten).not.toContain('a.js');
+    expect(readFile(dest, 'a.js')).toBe('user modified');
+  });
+
+  test('clean-merged local modification survives the next sync; manifest records source hash', () => {
+    const src = mkTmp();
+    const dest = mkTmp();
+
+    // Original version with saved originals for three-way merge
+    writeFile(dest, 'a.js', 'line1\nline2\nline3\nline4\nline5\n');
+    saveManifest(dest, generateManifest(dest));
+    saveOriginals(dest, dest);
+
+    // User modifies line 2; upstream modifies line 5
+    writeFile(dest, 'a.js', 'line1\nuser-modified\nline3\nline4\nline5\n');
+    writeFile(src, 'a.js', 'line1\nline2\nline3\nline4\nupstream-modified\n');
+
+    const result = smartSync(src, dest);
+    expect(result.merged).toContain('a.js');
+    // Manifest records the package hash, so the merged delta stays "local"
+    expect(loadManifest(dest).files['a.js']).toBe(hashFile(path.join(src, 'a.js')));
+
+    // Next sync with unchanged upstream must keep the merged content
+    const result2 = smartSync(src, dest);
+    expect(result2.kept).toContain('a.js');
+    expect(result2.overwritten).not.toContain('a.js');
+    expect(readFile(dest, 'a.js')).toContain('user-modified');
+    expect(readFile(dest, 'a.js')).toContain('upstream-modified');
+  });
+
+  test('upstream-deleted + locally-modified file is preserved and backed up; unmodified one still deleted', () => {
+    const src = mkTmp();
+    const dest = mkTmp();
+    const backupDir = mkTmp();
+
+    // Simulate previous install with three files
+    writeFile(dest, 'a.js', 'keep');
+    writeFile(dest, 'modified-then-removed.js', 'original');
+    writeFile(dest, 'clean-then-removed.js', 'untouched');
+    saveManifest(dest, generateManifest(dest));
+
+    // User modifies one of the files upstream is about to remove
+    writeFile(dest, 'modified-then-removed.js', 'user changes');
+
+    // New version only ships a.js
+    writeFile(src, 'a.js', 'keep');
+
+    const result = smartSync(src, dest, { backupDir });
+
+    // Locally-modified file: preserved in place + backed up, not deleted
+    expect(result.preserved).toContain('modified-then-removed.js');
+    expect(result.deleted).not.toContain('modified-then-removed.js');
+    expect(readFile(dest, 'modified-then-removed.js')).toBe('user changes');
+    expect(readFile(backupDir, 'modified-then-removed.js')).toBe('user changes');
+
+    // Unmodified file: still deleted as before
+    expect(result.deleted).toContain('clean-then-removed.js');
+    expect(fileExists(dest, 'clean-then-removed.js')).toBe(false);
+
+    // Neither appears in the new manifest
+    const manifest = loadManifest(dest);
+    expect(manifest.files['modified-then-removed.js']).toBeUndefined();
+    expect(manifest.files['clean-then-removed.js']).toBeUndefined();
+  });
+
+  test('sync with errors keeps the previous manifest and originals', () => {
+    const src = mkTmp();
+    const dest = mkTmp();
+
+    // Simulate previous install
+    writeFile(dest, 'a.js', 'original');
+    saveManifest(dest, generateManifest(dest));
+    const manifestBefore = JSON.stringify(loadManifest(dest));
+
+    // Make the destination file unwritable so the overwrite fails
+    fs.chmodSync(path.join(dest, 'a.js'), 0o444);
+    writeFile(src, 'a.js', 'updated');
+
+    const result = smartSync(src, dest);
+    expect(result.errors.length).toBeGreaterThan(0);
+
+    // Baseline untouched: manifest identical, no originals recorded
+    expect(JSON.stringify(loadManifest(dest))).toBe(manifestBefore);
+    expect(fs.existsSync(path.join(dest, '.zylos', 'originals'))).toBe(false);
   });
 });
 
