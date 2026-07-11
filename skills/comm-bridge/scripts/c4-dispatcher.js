@@ -512,7 +512,7 @@ export function getDeliveryContent(item) {
       item.endpoint_id &&
       !hasLegacyReplyViaSuffix(rawContent)
     ) ? buildReplyViaSuffix(item.channel, item.endpoint_id) : '';
-    return truncateForDelivery(rawContent, replyViaSuffix);
+    return truncateForDelivery(rawContent, replyViaSuffix, item.id);
   }
 
   const isSlashCommand = rawContent.startsWith('/');

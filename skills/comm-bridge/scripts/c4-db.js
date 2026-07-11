@@ -765,7 +765,7 @@ export function formatConversationsForAgent(conversations) {
       !hasLegacyReplyViaSuffix(content)
     ) ? buildReplyViaSuffix(conv.channel, conv.endpoint_id) : '';
     lines.push(`[${conv.timestamp}] ${dir} (${conv.channel}${endpoint}):`);
-    lines.push(truncateForDelivery(content, replyViaSuffix));
+    lines.push(truncateForDelivery(content, replyViaSuffix, conv.id));
     lines.push('');
   }
 
