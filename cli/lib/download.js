@@ -52,26 +52,24 @@ function curlDownloadOnce(repo, ref, refType, tarballPath) {
   const publicUrl = refType === 'tag'
     ? `https://github.com/${repo}/archive/refs/tags/${ref}.tar.gz`
     : `https://github.com/${repo}/archive/refs/heads/${ref}.tar.gz`;
+  let publicError;
   try {
     execFileSync('curl', ['-fsSL', '-o', tarballPath, publicUrl], {
       timeout: 60000,
       stdio: 'pipe',
     });
     return;
-  } catch {
+  } catch (err) {
     // Public download failed — repo may be private, try with auth
+    publicError = err;
   }
 
   // 2. Fall back to authenticated GitHub API (for private repos)
   const token = getGitHubToken();
   if (!token) {
-    // No token available — re-throw by attempting public download again
-    // (this gives the caller the original error message)
-    execFileSync('curl', ['-fsSL', '-o', tarballPath, publicUrl], {
-      timeout: 60000,
-      stdio: 'pipe',
-    });
-    return;
+    // No token available — surface the original public error; retry semantics
+    // belong exclusively to the outer withRateLimitRetrySync loop (#705)
+    throw publicError;
   }
 
   const apiUrl = `https://api.github.com/repos/${repo}/tarball/${ref}`;

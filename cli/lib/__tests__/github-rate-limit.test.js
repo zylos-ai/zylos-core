@@ -329,31 +329,7 @@ esac
     assert.match(calls[2].args, /raw\.githubusercontent\.com\/org\/repo\/main\/SKILL\.md/);
   });
 
-  it('keeps the legacy immediate public retry without a token', async () => {
-    delete process.env.GITHUB_TOKEN;
-    delete process.env.GH_TOKEN;
-    process.env.ZYLOS_GH_RETRY_DELAY_MS = '';
-
-    for (const operation of ['sync tags', 'async tags', 'raw file']) {
-      const fake = installRecordingCommands({
-        publicFailuresBeforeSuccess: 1,
-        publicStatus: '500',
-      });
-      const { fetchLatestTag, fetchLatestTagAsync, fetchRawFile: fetchRawFileFresh } =
-        await importFreshGitHub();
-
-      if (operation === 'sync tags') {
-        assert.equal(fetchLatestTag('org/repo'), '1.2.3');
-      } else if (operation === 'async tags') {
-        assert.equal(await fetchLatestTagAsync('org/repo'), '1.2.3');
-      } else {
-        assert.equal(fetchRawFileFresh('org/repo', 'SKILL.md').trim(), 'file-content');
-      }
-      assert.equal(fake.publicCalls(), 2, operation);
-    }
-  });
-
-  it('makes exactly two public calls per failed no-token attempt', async () => {
+  it('fails fast without a token on non-rate-limit errors (single public call, #705)', async () => {
     delete process.env.GITHUB_TOKEN;
     delete process.env.GH_TOKEN;
     process.env.ZYLOS_GH_RETRY_DELAY_MS = '';
@@ -367,17 +343,42 @@ esac
         await importFreshGitHub();
 
       if (operation === 'sync tags') {
-        assert.throws(() => fetchLatestTag('org/repo'));
+        assert.throws(() => fetchLatestTag('org/repo'), /500/);
       } else if (operation === 'async tags') {
-        await assert.rejects(fetchLatestTagAsync('org/repo'));
+        await assert.rejects(fetchLatestTagAsync('org/repo'), /500/);
       } else {
-        assert.throws(() => fetchRawFileFresh('org/repo', 'SKILL.md'));
+        assert.throws(() => fetchRawFileFresh('org/repo', 'SKILL.md'), /500/);
       }
+      assert.equal(fake.publicCalls(), 1, operation);
+    }
+  });
+
+  it('recovers from no-token rate limiting via the outer retry loop only (#705)', async () => {
+    delete process.env.GITHUB_TOKEN;
+    delete process.env.GH_TOKEN;
+    process.env.ZYLOS_GH_RETRY_DELAY_MS = '0';
+
+    for (const operation of ['sync tags', 'async tags', 'raw file']) {
+      const fake = installRecordingCommands({
+        publicFailuresBeforeSuccess: 1,
+        publicStatus: '403',
+      });
+      const { fetchLatestTag, fetchLatestTagAsync, fetchRawFile: fetchRawFileFresh } =
+        await importFreshGitHub();
+
+      if (operation === 'sync tags') {
+        assert.equal(fetchLatestTag('org/repo'), '1.2.3');
+      } else if (operation === 'async tags') {
+        assert.equal(await fetchLatestTagAsync('org/repo'), '1.2.3');
+      } else {
+        assert.equal(fetchRawFileFresh('org/repo', 'SKILL.md').trim(), 'file-content');
+      }
+      // 1 public call per retry round: round 1 rate-limited, round 2 succeeds
       assert.equal(fake.publicCalls(), 2, operation);
     }
   });
 
-  it('makes six public calls when all three no-token rate-limit attempts fail', async () => {
+  it('makes three public calls when all three no-token rate-limit attempts fail (#705)', async () => {
     delete process.env.GITHUB_TOKEN;
     delete process.env.GH_TOKEN;
     process.env.ZYLOS_GH_RETRY_DELAY_MS = '0,0';
@@ -397,7 +398,7 @@ esac
       } else {
         assert.throws(() => fetchRawFileFresh('org/repo', 'SKILL.md'));
       }
-      assert.equal(fake.publicCalls(), 6, operation);
+      assert.equal(fake.publicCalls(), 3, operation);
     }
   });
 
