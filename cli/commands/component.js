@@ -852,6 +852,12 @@ async function upgradeAllComponents({ checkOnly, jsonOutput, skipConfirm, skipEv
     return;
   }
 
+  // Unified exit-code contract (#706): component check failures fail the
+  // command in non-JSON mode too, matching --json. process.exitCode (not
+  // process.exit) so the remaining flow — prompts, upgrades, output — still
+  // runs; a later upgrade failure keeps the same non-zero exit.
+  if (failed.length > 0) process.exitCode = 1;
+
   if (updatable.length === 0) {
     if (failed.length > 0) {
       console.log(`\n${warn('No remotely updatable components found; see checks above.')}`);
