@@ -7,6 +7,7 @@ import {
   saveManifest,
   loadManifest,
   saveOriginals,
+  saveMergeBaseline,
   getOriginalContent,
   hasOriginals,
   detectChanges,
@@ -132,6 +133,45 @@ describe('originals', () => {
     saveOriginals(component, source2);
 
     expect(getOriginalContent(component, 'a.js')).toBe('v2');
+  });
+});
+
+describe('saveMergeBaseline', () => {
+  test('commits manifest and originals together on success', () => {
+    const component = mkTmp();
+    const source = mkTmp();
+
+    writeFile(source, 'a.js', 'new-content');
+    const manifest = generateManifest(source);
+
+    saveMergeBaseline(component, source, manifest);
+
+    expect(loadManifest(component).files['a.js']).toBe(manifest.files['a.js']);
+    expect(getOriginalContent(component, 'a.js')).toBe('new-content');
+    expect(fs.existsSync(path.join(component, '.zylos', 'originals.bak'))).toBe(false);
+  });
+
+  test('originals write failure restores both pieces to the previous baseline', () => {
+    const component = mkTmp();
+    const sourceV1 = mkTmp();
+
+    // Previous baseline: manifest + originals v1
+    writeFile(sourceV1, 'a.js', 'v1');
+    const manifestV1 = generateManifest(sourceV1);
+    saveManifest(component, manifestV1);
+    saveOriginals(component, sourceV1);
+    const manifestBefore = fs.readFileSync(path.join(component, '.zylos', 'manifest.json'), 'utf8');
+
+    // A nonexistent source makes saveOriginals fail AFTER the old originals
+    // were staged aside — the manifest write is never reached
+    const missingSource = path.join(tmpRoot, 'does-not-exist');
+    expect(() => saveMergeBaseline(component, missingSource, { files: {}, generated_at: 'x' }))
+      .toThrow();
+
+    // Both pieces still form the v1 baseline, no staging dir left behind
+    expect(fs.readFileSync(path.join(component, '.zylos', 'manifest.json'), 'utf8')).toBe(manifestBefore);
+    expect(getOriginalContent(component, 'a.js')).toBe('v1');
+    expect(fs.existsSync(path.join(component, '.zylos', 'originals.bak'))).toBe(false);
   });
 });
 
