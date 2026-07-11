@@ -16,6 +16,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {
   generateManifest,
+  hashFile,
   loadManifest,
   saveManifest,
   saveOriginals,
@@ -46,6 +47,7 @@ function isBinaryFile(filePath) {
  * @property {ConflictFile[]} conflicts - Files where local was backed up, new version written
  * @property {string[]} added        - New files added
  * @property {string[]} deleted      - Files deleted (removed in new version)
+ * @property {string[]} preserved    - Files removed upstream but kept locally (local modifications detected)
  * @property {string[]} errors       - Error descriptions
  */
 
@@ -76,6 +78,7 @@ export function smartSync(srcDir, destDir, opts = {}) {
     conflicts: [],
     added: [],
     deleted: [],
+    preserved: [],
     errors: [],
   };
 
@@ -232,12 +235,25 @@ export function smartSync(srcDir, destDir, opts = {}) {
 
   // Delete files that were in the old version but removed in the new version.
   // Only delete files tracked in the old manifest — user-added files are preserved.
+  // A tracked file with local modifications is never deleted silently: it is
+  // backed up (when possible) and kept in place, reported via result.preserved.
   if (savedManifest) {
     const newFiles = new Set(Object.keys(newManifest.files));
     for (const file of Object.keys(savedManifest.files)) {
       if (!newFiles.has(file)) {
         const destFile = path.join(destDir, file);
         try {
+          if (fs.existsSync(destFile) && hashFile(destFile) !== savedManifest.files[file]) {
+            // Upstream removed the file but the local copy was modified —
+            // preserve the local data instead of deleting it.
+            if (backupDir) {
+              const backupPath = path.join(backupDir, file);
+              fs.mkdirSync(path.dirname(backupPath), { recursive: true });
+              fs.copyFileSync(destFile, backupPath);
+            }
+            result.preserved.push(file);
+            continue;
+          }
           fs.unlinkSync(destFile);
           result.deleted.push(file);
           // Clean up empty parent directories
@@ -257,19 +273,30 @@ export function smartSync(srcDir, destDir, opts = {}) {
     }
   }
 
-  // Save originals from the new version (for next upgrade's three-way merge)
-  try {
-    saveOriginals(destDir, srcDir);
-  } catch (err) {
-    result.errors.push(`save originals: ${err.message}`);
-  }
+  // Persist the merge baseline for the next upgrade — but only if this sync
+  // completed without errors. A partially-applied sync must keep the previous
+  // manifest/originals so the next run re-evaluates from the last known-good
+  // baseline instead of recording a half-synced state as "normal".
+  if (result.errors.length === 0) {
+    // Save originals from the new version (for next upgrade's three-way merge)
+    try {
+      saveOriginals(destDir, srcDir);
+    } catch (err) {
+      result.errors.push(`save originals: ${err.message}`);
+    }
 
-  // Update manifest to reflect current state after sync
-  try {
-    const updatedManifest = generateManifest(destDir);
-    saveManifest(destDir, updatedManifest);
-  } catch (err) {
-    result.errors.push(`update manifest: ${err.message}`);
+    // Save the manifest of the NEW PACKAGE (authoritative source), never a scan
+    // of destDir: the manifest is the package-ownership record. Scanning destDir
+    // absorbs user-added/runtime files (deleted as "upstream-removed" one upgrade
+    // later) and records kept/merged local hashes as baseline (silently rolled
+    // back one upgrade later). See issue #715.
+    if (result.errors.length === 0) {
+      try {
+        saveManifest(destDir, newManifest);
+      } catch (err) {
+        result.errors.push(`update manifest: ${err.message}`);
+      }
+    }
   }
 
   return result;
@@ -289,6 +316,7 @@ export function formatMergeResult(result) {
   if (result.conflicts.length) parts.push(`${result.conflicts.length} conflicts`);
   if (result.added.length) parts.push(`${result.added.length} added`);
   if (result.deleted.length) parts.push(`${result.deleted.length} deleted`);
+  if (result.preserved?.length) parts.push(`${result.preserved.length} preserved`);
   if (result.errors.length) parts.push(`${result.errors.length} errors`);
   return parts.join(', ') || 'no changes';
 }

@@ -29,7 +29,7 @@ function assertWithinDir(resolved, baseDir, relPath) {
  * @param {string} filePath - Absolute path to file
  * @returns {string} Hex-encoded hash
  */
-function hashFile(filePath) {
+export function hashFile(filePath) {
   const content = fs.readFileSync(filePath);
   return crypto.createHash('sha256').update(content).digest('hex');
 }

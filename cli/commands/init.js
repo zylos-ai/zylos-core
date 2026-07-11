@@ -840,7 +840,10 @@ function syncCoreSkills() {
 
     try {
       copyTree(srcDir, destDir);
-      const manifest = generateManifest(destDir);
+      // Manifest from the SOURCE (authoritative package), never a destDir scan:
+      // re-running init over an existing skill dir must not absorb local files
+      // into the ownership record (issue #715).
+      const manifest = generateManifest(srcDir);
       saveManifest(destDir, manifest);
       (isNew ? installed : updated).push(entry.name);
     } catch {

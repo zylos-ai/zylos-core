@@ -218,10 +218,13 @@ export function syncCoreSkills(newSkillsSrc, backupBase, opts = {}) {
     const destDir = path.join(SKILLS_DIR, skillName);
 
     if (!fs.existsSync(destDir)) {
-      // New skill — copy entirely + save originals and manifest
+      // New skill — copy entirely + save originals and manifest.
+      // Manifest is generated from the SOURCE (authoritative package), never
+      // from a destDir scan, so pre-existing local files are not absorbed
+      // into the ownership record (issue #715).
       try {
         copyTree(srcDir, destDir);
-        const manifest = generateManifest(destDir);
+        const manifest = generateManifest(srcDir);
         saveManifest(destDir, manifest);
         saveOriginals(destDir, srcDir);
         result.added.push(skillName);

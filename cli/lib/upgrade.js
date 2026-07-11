@@ -12,7 +12,7 @@ import { SKILLS_DIR, COMPONENTS_DIR } from './config.js';
 import { loadComponents } from './components.js';
 import { loadLocalRegistry } from './registry.js';
 import { parseSkillMd } from './skill.js';
-import { generateManifest, saveManifest } from './manifest.js';
+import { loadManifest } from './manifest.js';
 import { downloadArchive, downloadBranch } from './download.js';
 import { fetchLatestTag, fetchRawFile, compareSemverDesc, sanitizeError } from './github.js';
 import { copyTree, syncTree } from './fs-utils.js';
@@ -477,18 +477,21 @@ function step4_npmInstall(ctx) {
 }
 
 /**
- * Step 5: generate manifest
+ * Step 5: verify manifest
+ *
+ * The manifest is saved by smartSync (step 3) from the authoritative new
+ * package. Re-generating it here from skillDir — after npm install (step 4) —
+ * would absorb non-package files (npm artifacts, user files) into the
+ * ownership record, which the NEXT upgrade would then delete as
+ * "removed upstream" (issue #715). So this step only verifies presence.
  */
 function step5_generateManifest(ctx) {
   const startTime = Date.now();
 
-  try {
-    const manifest = generateManifest(ctx.skillDir);
-    saveManifest(ctx.skillDir, manifest);
-    return { step: 5, name: 'generate_manifest', status: 'done', duration: Date.now() - startTime };
-  } catch (err) {
-    return { step: 5, name: 'generate_manifest', status: 'failed', error: err.message, duration: Date.now() - startTime };
+  if (loadManifest(ctx.skillDir)) {
+    return { step: 5, name: 'generate_manifest', status: 'skipped', message: 'manifest saved by smart merge (authoritative source)', duration: Date.now() - startTime };
   }
+  return { step: 5, name: 'generate_manifest', status: 'failed', error: 'manifest missing after smart merge (sync reported errors?)', duration: Date.now() - startTime };
 }
 
 /**
