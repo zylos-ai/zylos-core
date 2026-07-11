@@ -9,6 +9,31 @@ import { promisify } from 'node:util';
 const execFileAsync = promisify(execFileCb);
 let _cachedToken = undefined;
 
+function authenticationHeaders(token, additionalHeaders = []) {
+  return [`Authorization: Bearer ${token}`, ...additionalHeaders].join('\n') + '\n';
+}
+
+function execFileWithInput(file, args, options, input) {
+  return new Promise((resolve, reject) => {
+    const child = execFileCb(file, args, options, (err, stdout, stderr) => {
+      if (err) {
+        err.stdout = stdout;
+        err.stderr = stderr;
+        reject(err);
+        return;
+      }
+      resolve({ stdout, stderr });
+    });
+    child.stdin.end(input);
+  });
+}
+
+function preferredFallbackError(authenticatedError, publicError) {
+  // Public rate limiting is actionable by the outer retry loop. Otherwise the
+  // authenticated error is more useful for private-repository diagnostics.
+  return isRateLimitError(publicError) ? publicError : authenticatedError || publicError;
+}
+
 /**
  * Detect a GitHub token from the environment or gh CLI.
  * Result is cached for the process lifetime.
@@ -97,9 +122,8 @@ function sleepSync(ms) {
 
 /**
  * Run an operation, retrying when it fails with a GitHub rate-limit
- * signature. The operation should contain its full fallback chain
- * (public endpoint → authenticated API), so a rate-limited public call
- * still falls through to the authenticated endpoint before any sleep.
+ * signature. The operation should contain its full endpoint fallback chain,
+ * so retries only start after all usable endpoints have failed.
  * Non-rate-limit failures are rethrown immediately.
  *
  * @param {Function} fn - Operation to run
@@ -141,8 +165,9 @@ export async function withRateLimitRetryAsync(fn, label) {
 
 /**
  * Fetch raw file content from a GitHub repo.
- * Tries public endpoint first, falls back to authenticated GitHub API
- * for private repos. Retries with backoff on GitHub rate limiting.
+ * Uses the authenticated GitHub API first when a token is available, then
+ * falls back to the public raw endpoint. Without a token, uses only the
+ * public endpoint. Retries with backoff on GitHub rate limiting.
  *
  * @param {string} repo - GitHub repo in "org/name" format
  * @param {string} filePath - Path to file in the repo (e.g. "SKILL.md")
@@ -158,34 +183,46 @@ export function fetchRawFile(repo, filePath, branch = 'main') {
 }
 
 function fetchRawFileOnce(repo, filePath, branch) {
-  // 1. Try public endpoint first
   const publicUrl = `https://raw.githubusercontent.com/${repo}/${branch}/${filePath}`;
+  const token = getGitHubToken();
+  let authenticatedError;
+  if (token) {
+    const apiUrl = `https://api.github.com/repos/${repo}/contents/${filePath}?ref=${branch}`;
+    try {
+      return execFileSync('curl', [
+        '-fsSL', '-H', '@-', apiUrl,
+      ], {
+        encoding: 'utf8',
+        timeout: 10000,
+        stdio: ['pipe', 'pipe', 'pipe'],
+        input: authenticationHeaders(token, ['Accept: application/vnd.github.raw+json']),
+      });
+    } catch (err) {
+      // A token without access must not block public repositories.
+      authenticatedError = err;
+    }
+  }
+
   try {
     return execFileSync('curl', ['-fsSL', publicUrl], {
       encoding: 'utf8',
       timeout: 10000,
       stdio: ['pipe', 'pipe', 'pipe'],
     });
-  } catch {
-    // Public fetch failed — repo may be private
+  } catch (publicError) {
+    if (!token) {
+      // Preserve the pre-auth-first behavior: without credentials, a failed
+      // public request gets one immediate re-attempt in the same retry cycle.
+      return execFileSync('curl', ['-fsSL', publicUrl], {
+        encoding: 'utf8',
+        timeout: 10000,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+    }
+    // A rate-limited public fallback must reach the outer retry loop even when
+    // the authenticated request failed first with a non-rate-limit status.
+    throw preferredFallbackError(authenticatedError, publicError);
   }
-
-  // 2. Fall back to authenticated GitHub API
-  const token = getGitHubToken();
-  if (!token) {
-    // No token — re-attempt public to get the original error
-    return execFileSync('curl', ['-fsSL', publicUrl], {
-      encoding: 'utf8',
-      timeout: 10000,
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
-  }
-
-  const apiUrl = `https://api.github.com/repos/${repo}/contents/${filePath}?ref=${branch}`;
-  return execFileSync('curl', [
-    '-fsSL', '-H', `Authorization: Bearer ${token}`,
-    '-H', 'Accept: application/vnd.github.raw+json', apiUrl,
-  ], { encoding: 'utf8', timeout: 10000, stdio: ['pipe', 'pipe', 'pipe'] });
 }
 
 // ── Shared tag parsing ───────────────────────────────────────────
@@ -239,42 +276,64 @@ function parseTagsResponse(jsonStr, { includePrerelease = false } = {}) {
 
 function fetchTagsJsonSync(repo) {
   const url = `https://api.github.com/repos/${repo}/tags?per_page=100`;
+  const token = getGitHubToken();
+  let authenticatedError;
+  if (token) {
+    try {
+      return execFileSync('curl', ['-fsSL', '-H', '@-', url], {
+        encoding: 'utf8', timeout: 10000, stdio: ['pipe', 'pipe', 'pipe'],
+        input: authenticationHeaders(token),
+      });
+    } catch (err) {
+      // Preserve public-repository access when the token has insufficient scope.
+      authenticatedError = err;
+    }
+  }
   try {
     return execFileSync('curl', ['-fsSL', url], {
       encoding: 'utf8', timeout: 10000, stdio: ['pipe', 'pipe', 'pipe'],
     });
-  } catch {
-    const token = getGitHubToken();
+  } catch (publicError) {
     if (!token) {
       return execFileSync('curl', ['-fsSL', url], {
         encoding: 'utf8', timeout: 10000, stdio: ['pipe', 'pipe', 'pipe'],
       });
     }
-    return execFileSync('curl', ['-fsSL', '-H', `Authorization: Bearer ${token}`, url], {
-      encoding: 'utf8', timeout: 10000, stdio: ['pipe', 'pipe', 'pipe'],
-    });
+    throw preferredFallbackError(authenticatedError, publicError);
   }
 }
 
 async function fetchTagsJsonAsync(repo) {
   const url = `https://api.github.com/repos/${repo}/tags?per_page=100`;
+  const token = getGitHubToken();
+  let authenticatedError;
+  if (token) {
+    try {
+      const { stdout } = await execFileWithInput(
+        'curl',
+        ['-fsSL', '-H', '@-', url],
+        { encoding: 'utf8', timeout: 10000 },
+        authenticationHeaders(token)
+      );
+      return stdout;
+    } catch (err) {
+      // Preserve public-repository access when the token has insufficient scope.
+      authenticatedError = err;
+    }
+  }
   try {
     const { stdout } = await execFileAsync('curl', ['-fsSL', url], {
       encoding: 'utf8', timeout: 10000,
     });
     return stdout;
-  } catch {
-    const token = getGitHubToken();
+  } catch (publicError) {
     if (!token) {
       const { stdout } = await execFileAsync('curl', ['-fsSL', url], {
         encoding: 'utf8', timeout: 10000,
       });
       return stdout;
     }
-    const { stdout } = await execFileAsync('curl', ['-fsSL', '-H', `Authorization: Bearer ${token}`, url], {
-      encoding: 'utf8', timeout: 10000,
-    });
-    return stdout;
+    throw preferredFallbackError(authenticatedError, publicError);
   }
 }
 

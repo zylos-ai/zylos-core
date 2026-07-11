@@ -95,6 +95,12 @@ Flags can also be set via environment variables during `zylos init`. Resolution 
 | `ZYLOS_PROTOCOL` (`https` or `http`) | `--https` / `--no-https` |
 | `ZYLOS_WEB_PASSWORD` | `--web-password` |
 
+CI, Kubernetes, and shared E2E environments should also provide `GITHUB_TOKEN`
+so `zylos add` and `zylos upgrade` use GitHub's authenticated API quota instead
+of the shared unauthenticated quota. See the
+[GitHub authentication operations guide](docs/github-authentication.md) for
+configuration examples and fallback behavior.
+
 **Exit codes:** `0` = success, `1` = fatal error (e.g. invalid token), `2` = partial success (e.g. Caddy download failed but everything else succeeded).
 
 </details>
