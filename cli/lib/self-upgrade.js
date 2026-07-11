@@ -10,7 +10,7 @@ import os from 'node:os';
 import { execSync, spawnSync } from 'node:child_process';
 import { SKILLS_DIR, ZYLOS_DIR, getZylosConfig } from './config.js';
 import { downloadArchive, downloadBranch } from './download.js';
-import { generateManifest, saveManifest, saveOriginals } from './manifest.js';
+import { generateManifest, saveMergeBaseline } from './manifest.js';
 import { fetchRawFile, fetchLatestTag, compareSemverDesc, sanitizeError } from './github.js';
 import { copyTree, syncTree } from './fs-utils.js';
 import { getCommandHooks, hookScriptKey } from './hook-utils.js';
@@ -195,10 +195,10 @@ export function readChangelog(dir) {
  * @param {string} [backupBase] - Base directory for conflict backups
  * @param {object} [opts]
  * @param {string} [opts.mode] - 'merge' (default) or 'overwrite'
- * @returns {{ synced: string[], added: string[], merged: string[], conflicts: { skill: string, file: string, backupPath: string }[], errors: string[] }}
+ * @returns {{ synced: string[], added: string[], merged: string[], deleted: string[], preserved: string[], conflicts: { skill: string, file: string, backupPath: string }[], errors: string[] }}
  */
 export function syncCoreSkills(newSkillsSrc, backupBase, opts = {}) {
-  const result = { synced: [], added: [], merged: [], deleted: [], conflicts: [], errors: [] };
+  const result = { synced: [], added: [], merged: [], deleted: [], preserved: [], conflicts: [], errors: [] };
 
   if (!fs.existsSync(newSkillsSrc)) {
     return result;
@@ -224,9 +224,7 @@ export function syncCoreSkills(newSkillsSrc, backupBase, opts = {}) {
       // into the ownership record (issue #715).
       try {
         copyTree(srcDir, destDir);
-        const manifest = generateManifest(srcDir);
-        saveManifest(destDir, manifest);
-        saveOriginals(destDir, srcDir);
+        saveMergeBaseline(destDir, srcDir, generateManifest(srcDir));
         result.added.push(skillName);
       } catch (err) {
         result.errors.push(`${skillName}: ${err.message}`);
@@ -243,7 +241,8 @@ export function syncCoreSkills(newSkillsSrc, backupBase, opts = {}) {
       });
 
       // Aggregate results
-      if (mergeResult.overwritten.length || mergeResult.added.length || mergeResult.deleted.length) {
+      if (mergeResult.overwritten.length || mergeResult.added.length || mergeResult.deleted.length
+          || mergeResult.preserved.length) {
         result.synced.push(skillName);
       }
       if (mergeResult.merged.length) {
@@ -251,6 +250,9 @@ export function syncCoreSkills(newSkillsSrc, backupBase, opts = {}) {
       }
       if (mergeResult.deleted.length) {
         result.deleted.push(...mergeResult.deleted.map(f => `${skillName}/${f}`));
+      }
+      if (mergeResult.preserved.length) {
+        result.preserved.push(...mergeResult.preserved.map(f => `${skillName}/${f}`));
       }
       if (mergeResult.conflicts.length) {
         for (const c of mergeResult.conflicts) {
@@ -738,6 +740,7 @@ function step5_syncCoreSkills(ctx) {
     if (syncResult.added.length) parts.push(`${syncResult.added.length} added`);
     if (syncResult.merged.length) parts.push(`${syncResult.merged.length} merged`);
     if (syncResult.deleted.length) parts.push(`${syncResult.deleted.length} deleted`);
+    if (syncResult.preserved.length) parts.push(`${syncResult.preserved.length} preserved`);
     if (syncResult.conflicts.length) parts.push(`${syncResult.conflicts.length} conflicts`);
     if (syncResult.errors.length) parts.push(`${syncResult.errors.length} errors`);
     const msg = parts.join(', ') || 'no changes';

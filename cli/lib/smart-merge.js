@@ -18,8 +18,7 @@ import {
   generateManifest,
   hashFile,
   loadManifest,
-  saveManifest,
-  saveOriginals,
+  saveMergeBaseline,
   getOriginalContent,
   hasOriginals,
 } from './manifest.js';
@@ -235,15 +234,17 @@ export function smartSync(srcDir, destDir, opts = {}) {
 
   // Delete files that were in the old version but removed in the new version.
   // Only delete files tracked in the old manifest — user-added files are preserved.
-  // A tracked file with local modifications is never deleted silently: it is
-  // backed up (when possible) and kept in place, reported via result.preserved.
+  // In merge mode, a tracked file with local modifications is never deleted
+  // silently: it is backed up (when possible) and kept in place, reported via
+  // result.preserved. Overwrite mode deletes unconditionally — that is its
+  // contract: force the destination to match the new version exactly.
   if (savedManifest) {
     const newFiles = new Set(Object.keys(newManifest.files));
     for (const file of Object.keys(savedManifest.files)) {
       if (!newFiles.has(file)) {
         const destFile = path.join(destDir, file);
         try {
-          if (fs.existsSync(destFile) && hashFile(destFile) !== savedManifest.files[file]) {
+          if (mode !== 'overwrite' && fs.existsSync(destFile) && hashFile(destFile) !== savedManifest.files[file]) {
             // Upstream removed the file but the local copy was modified —
             // preserve the local data instead of deleting it.
             if (backupDir) {
@@ -277,25 +278,20 @@ export function smartSync(srcDir, destDir, opts = {}) {
   // completed without errors. A partially-applied sync must keep the previous
   // manifest/originals so the next run re-evaluates from the last known-good
   // baseline instead of recording a half-synced state as "normal".
+  //
+  // The manifest saved is the NEW PACKAGE's (authoritative source), never a
+  // scan of destDir: the manifest is the package-ownership record. Scanning
+  // destDir absorbs user-added/runtime files (deleted as "upstream-removed"
+  // one upgrade later) and records kept/merged local hashes as baseline
+  // (silently rolled back one upgrade later). See issue #715.
+  //
+  // Manifest + originals are committed as one group: if either write fails,
+  // both are restored so the previous baseline stays internally consistent.
   if (result.errors.length === 0) {
-    // Save originals from the new version (for next upgrade's three-way merge)
     try {
-      saveOriginals(destDir, srcDir);
+      saveMergeBaseline(destDir, srcDir, newManifest);
     } catch (err) {
-      result.errors.push(`save originals: ${err.message}`);
-    }
-
-    // Save the manifest of the NEW PACKAGE (authoritative source), never a scan
-    // of destDir: the manifest is the package-ownership record. Scanning destDir
-    // absorbs user-added/runtime files (deleted as "upstream-removed" one upgrade
-    // later) and records kept/merged local hashes as baseline (silently rolled
-    // back one upgrade later). See issue #715.
-    if (result.errors.length === 0) {
-      try {
-        saveManifest(destDir, newManifest);
-      } catch (err) {
-        result.errors.push(`update manifest: ${err.message}`);
-      }
+      result.errors.push(`update merge baseline: ${err.message}`);
     }
   }
 

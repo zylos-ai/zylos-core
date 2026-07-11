@@ -143,6 +143,60 @@ export function saveOriginals(componentDir, sourceDir) {
 }
 
 /**
+ * Save manifest + originals as one group: either both reflect the new
+ * package source, or both are restored to the previous baseline.
+ *
+ * saveOriginals() is destructive (it deletes the old originals dir first),
+ * and upgrade rollback excludes .zylos — so a partial write here would leave
+ * a mismatched manifest/originals pair that nothing later repairs, feeding
+ * diff3 a wrong merge base (issue #715 review finding).
+ *
+ * @param {string} componentDir - Installed component root directory
+ * @param {string} sourceDir    - New version source directory
+ * @param {Object} manifest     - Manifest generated from sourceDir
+ */
+export function saveMergeBaseline(componentDir, sourceDir, manifest) {
+  const manifestPath = path.join(componentDir, MANIFEST_DIR, MANIFEST_FILE);
+  const originalsDir = path.join(componentDir, MANIFEST_DIR, ORIGINALS_DIR);
+  const originalsBackup = originalsDir + '.bak';
+
+  const prevManifest = fs.existsSync(manifestPath) ? fs.readFileSync(manifestPath) : null;
+
+  // Stage: move current originals aside so they can be restored on failure
+  fs.rmSync(originalsBackup, { recursive: true, force: true });
+  const hadOriginals = fs.existsSync(originalsDir);
+  if (hadOriginals) {
+    fs.renameSync(originalsDir, originalsBackup);
+  }
+
+  try {
+    saveOriginals(componentDir, sourceDir);
+    saveManifest(componentDir, manifest);
+  } catch (err) {
+    // Best-effort restore of both pieces; the original error still propagates
+    try {
+      fs.rmSync(originalsDir, { recursive: true, force: true });
+      if (hadOriginals) {
+        fs.renameSync(originalsBackup, originalsDir);
+      }
+    } catch { /* keep the original error */ }
+    try {
+      if (prevManifest !== null) {
+        const current = fs.existsSync(manifestPath) ? fs.readFileSync(manifestPath) : null;
+        if (current === null || !current.equals(prevManifest)) {
+          fs.writeFileSync(manifestPath, prevManifest);
+        }
+      } else {
+        fs.rmSync(manifestPath, { force: true });
+      }
+    } catch { /* keep the original error */ }
+    throw err;
+  }
+
+  fs.rmSync(originalsBackup, { recursive: true, force: true });
+}
+
+/**
  * Read an original file's content (from a previous install).
  *
  * @param {string} componentDir - Installed component root directory

@@ -409,6 +409,34 @@ describe('smartSync manifest authority (#715)', () => {
     expect(manifest.files['clean-then-removed.js']).toBeUndefined();
   });
 
+  test('failed baseline write restores both manifest and originals', () => {
+    const src = mkTmp();
+    const dest = mkTmp();
+
+    // Simulate previous install with originals v1
+    writeFile(dest, 'a.js', 'original');
+    saveManifest(dest, generateManifest(dest));
+    saveOriginals(dest, dest);
+    const manifestBefore = fs.readFileSync(path.join(dest, '.zylos', 'manifest.json'), 'utf8');
+
+    // Upstream ships an update; the file sync itself will succeed
+    writeFile(src, 'a.js', 'updated');
+
+    // Make the manifest file unwritable: originals update succeeds first,
+    // then the manifest write fails — the group commit must roll BOTH back
+    fs.chmodSync(path.join(dest, '.zylos', 'manifest.json'), 0o444);
+
+    const result = smartSync(src, dest);
+    expect(result.errors.length).toBeGreaterThan(0);
+
+    // Manifest unchanged AND originals restored to v1 (not the new package's)
+    fs.chmodSync(path.join(dest, '.zylos', 'manifest.json'), 0o644);
+    expect(fs.readFileSync(path.join(dest, '.zylos', 'manifest.json'), 'utf8')).toBe(manifestBefore);
+    expect(readFile(dest, '.zylos/originals/a.js')).toBe('original');
+    // No stray staging directory left behind
+    expect(fs.existsSync(path.join(dest, '.zylos', 'originals.bak'))).toBe(false);
+  });
+
   test('sync with errors keeps the previous manifest and originals', () => {
     const src = mkTmp();
     const dest = mkTmp();
@@ -477,6 +505,28 @@ describe('smartSync mode: overwrite', () => {
 
     const result = smartSync(src, dest, { mode: 'overwrite' });
     expect(result.deleted).toContain('removed.js');
+    expect(fileExists(dest, 'removed.js')).toBe(false);
+  });
+
+  test('overwrite mode: deletes upstream-removed file even with local modifications', () => {
+    const src = mkTmp();
+    const dest = mkTmp();
+
+    // Simulate previous install with two files
+    writeFile(dest, 'a.js', 'keep');
+    writeFile(dest, 'removed.js', 'original');
+    saveManifest(dest, generateManifest(dest));
+
+    // User modifies the file upstream is about to remove
+    writeFile(dest, 'removed.js', 'user changes');
+
+    // New version only ships a.js
+    writeFile(src, 'a.js', 'keep');
+
+    const result = smartSync(src, dest, { mode: 'overwrite' });
+    // Overwrite-all contract: no merge-mode preservation
+    expect(result.deleted).toContain('removed.js');
+    expect(result.preserved.length).toBe(0);
     expect(fileExists(dest, 'removed.js')).toBe(false);
   });
 
