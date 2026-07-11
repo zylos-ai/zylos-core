@@ -425,6 +425,116 @@ describe('restoreMergeBaseline: fail-loud on bad snapshots (before touching the 
   });
 });
 
+describe('snapshotMergeBaseline: snapshot copy validated before the completeness marker (R6)', () => {
+  test('parseable-invalid live manifest (no files map) fails loud — no completeness marker, live baseline unchanged', () => {
+    const dest = mkTmp();
+    writeFile(dest, 'a.js', 'v1');
+    writeFile(dest, '.zylos/manifest.json', '{}');
+    writeFile(dest, '.zylos/originals/a.js', 'v1');
+
+    const snap = path.join(mkTmp(), 'snap');
+    expect(() => snapshotMergeBaseline(dest, snap)).toThrow(/files map/);
+    expect(hasBaselineSnapshot(snap)).toBe(false);
+    expect(readFile(dest, '.zylos/manifest.json')).toBe('{}');
+    expect(readFile(dest, '.zylos/originals/a.js')).toBe('v1');
+  });
+
+  test('manifest whose hashes are not sha256 hex fails loud — no completeness marker', () => {
+    const dest = mkTmp();
+    writeFile(dest, 'a.js', 'v1');
+    writeFile(dest, '.zylos/manifest.json', '{"files":{"a.js":"deadbeef"}}');
+    writeFile(dest, '.zylos/originals/a.js', 'v1');
+
+    const snap = path.join(mkTmp(), 'snap');
+    expect(() => snapshotMergeBaseline(dest, snap)).toThrow(/sha256/);
+    expect(hasBaselineSnapshot(snap)).toBe(false);
+    expect(readFile(dest, '.zylos/manifest.json')).toBe('{"files":{"a.js":"deadbeef"}}');
+  });
+
+  test('drifted originals (hash mismatch with manifest) fail loud — live site preserved for inspection', () => {
+    const dest = mkTmp();
+    setupPairV1(dest);
+    const manifestBytes = readFile(dest, '.zylos/manifest.json');
+    writeFile(dest, '.zylos/originals/a.js', 'drifted');
+
+    const snap = path.join(mkTmp(), 'snap');
+    expect(() => snapshotMergeBaseline(dest, snap)).toThrow(/originals do not match/);
+    expect(hasBaselineSnapshot(snap)).toBe(false);
+    expect(readFile(dest, '.zylos/manifest.json')).toBe(manifestBytes);
+    expect(readFile(dest, '.zylos/originals/a.js')).toBe('drifted');
+  });
+
+  test('originals with an extra member (membership mismatch) fail loud — no completeness marker', () => {
+    const dest = mkTmp();
+    setupPairV1(dest);
+    const manifestBytes = readFile(dest, '.zylos/manifest.json');
+    writeFile(dest, '.zylos/originals/extra.js', 'stray');
+
+    const snap = path.join(mkTmp(), 'snap');
+    expect(() => snapshotMergeBaseline(dest, snap)).toThrow(/originals do not match/);
+    expect(hasBaselineSnapshot(snap)).toBe(false);
+    expect(readFile(dest, '.zylos/manifest.json')).toBe(manifestBytes);
+  });
+});
+
+describe('restoreMergeBaseline: snapshot integrity validated before touching the live site (R6)', () => {
+  function committedV2WithBytes() {
+    const dest = mkTmp();
+    setupPairV1(dest);
+    commitV2(dest);
+    return { dest, manifestV2Bytes: readFile(dest, '.zylos/manifest.json') };
+  }
+
+  test('pair with parseable-invalid snapshot manifest (no files map) throws; live baseline untouched', () => {
+    const { dest, manifestV2Bytes } = committedV2WithBytes();
+    const snap = mkTmp();
+    writeFile(snap, 'baseline-state.json', '{"state":"pair"}');
+    writeFile(snap, 'manifest.json', '{}');
+    writeFile(snap, 'originals/a.js', 'v1');
+
+    expect(() => restoreMergeBaseline(dest, snap)).toThrow(/files map/);
+    expect(readFile(dest, '.zylos/manifest.json')).toBe(manifestV2Bytes);
+    expect(readFile(dest, '.zylos/originals/a.js')).toBe('v2');
+  });
+
+  test('pair with non-sha256 hash values in snapshot manifest throws; live baseline untouched', () => {
+    const { dest, manifestV2Bytes } = committedV2WithBytes();
+    const snap = mkTmp();
+    writeFile(snap, 'baseline-state.json', '{"state":"pair"}');
+    writeFile(snap, 'manifest.json', '{"files":{"a.js":"nothex"}}');
+    writeFile(snap, 'originals/a.js', 'v1');
+
+    expect(() => restoreMergeBaseline(dest, snap)).toThrow(/sha256/);
+    expect(readFile(dest, '.zylos/manifest.json')).toBe(manifestV2Bytes);
+    expect(readFile(dest, '.zylos/originals/a.js')).toBe('v2');
+  });
+
+  test('pair with mismatched snapshot originals (corrupted copy) throws; live baseline untouched', () => {
+    const { dest, manifestV2Bytes } = committedV2WithBytes();
+    // Legit v1 snapshot whose originals copy was later corrupted
+    const src = mkTmp();
+    setupPairV1(src);
+    const snap = path.join(mkTmp(), 'snap');
+    snapshotMergeBaseline(src, snap);
+    writeFile(snap, 'originals/a.js', 'tampered');
+
+    expect(() => restoreMergeBaseline(dest, snap)).toThrow(/originals do not match/);
+    expect(readFile(dest, '.zylos/manifest.json')).toBe(manifestV2Bytes);
+    expect(readFile(dest, '.zylos/originals/a.js')).toBe('v2');
+  });
+
+  test('manifest-only with parseable-invalid snapshot manifest throws; live baseline untouched', () => {
+    const { dest, manifestV2Bytes } = committedV2WithBytes();
+    const snap = mkTmp();
+    writeFile(snap, 'baseline-state.json', '{"state":"manifest-only"}');
+    writeFile(snap, 'manifest.json', '{}');
+
+    expect(() => restoreMergeBaseline(dest, snap)).toThrow(/files map/);
+    expect(readFile(dest, '.zylos/manifest.json')).toBe(manifestV2Bytes);
+    expect(readFile(dest, '.zylos/originals/a.js')).toBe('v2');
+  });
+});
+
 describe('removeMergeBaseline', () => {
   test('removes manifest, originals, staging and legacy leftovers; keeps other .zylos content; idempotent', () => {
     const dest = mkTmp();

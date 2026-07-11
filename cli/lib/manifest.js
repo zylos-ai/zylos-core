@@ -355,6 +355,45 @@ function readJsonStrict(filePath, what) {
   }
 }
 
+const SHA256_HEX_RE = /^[0-9a-f]{64}$/;
+
+/**
+ * Structural validation of a parsed manifest: parseable JSON is not enough —
+ * a manifest with no `files` map (e.g. `{}`) or with values that are not
+ * sha256 hex digests cannot describe a baseline, and letting one through the
+ * snapshot/restore path would commit a fabricated merge base. Fails loud.
+ */
+function assertManifestShape(manifest, what) {
+  const files = manifest?.files;
+  if (typeof manifest !== 'object' || manifest === null || Array.isArray(manifest)
+      || typeof files !== 'object' || files === null || Array.isArray(files)) {
+    throw new Error(
+      `${what}: manifest has no files map — structurally invalid, refusing to treat it as a baseline`
+    );
+  }
+  for (const [relPath, hash] of Object.entries(files)) {
+    if (typeof hash !== 'string' || !SHA256_HEX_RE.test(hash)) {
+      throw new Error(
+        `${what}: files[${JSON.stringify(relPath)}] is not a 64-char sha256 hex digest — manifest structurally invalid`
+      );
+    }
+  }
+}
+
+/**
+ * A 'pair' baseline is only complete when the originals are exactly the
+ * generation the manifest describes (same membership, every hash matching —
+ * dirMatchesManifest semantics). Fails loud on drift instead of letting a
+ * mismatched pair pass as a restorable baseline.
+ */
+function assertPairConsistent(originalsDir, manifest, what) {
+  if (!dirMatchesManifest(originalsDir, manifest)) {
+    throw new Error(
+      `${what}: originals do not match the manifest (file membership or hashes differ) — baseline pair inconsistent, refusing to proceed`
+    );
+  }
+}
+
 /**
  * Whether snapshotDir holds a complete baseline snapshot. The state
  * descriptor is written last by snapshotMergeBaseline(), so its presence
@@ -381,6 +420,13 @@ export function hasBaselineSnapshot(snapshotDir) {
  * it cannot be classified (and could not be restored through the typed
  * protocol), and silently treating it as 'absent' would delete the site's
  * baseline on rollback.
+ *
+ * Before the completeness marker is written, the snapshot COPY is validated
+ * (R6): the manifest must be structurally valid (a files map of sha256 hex
+ * digests) and, for 'pair', the originals must exactly match the manifest
+ * (dirMatchesManifest semantics). A drifted live pair therefore fails the
+ * snapshot — and with it the upgrade's backup step — instead of being
+ * captured as a restorable baseline.
  *
  * Layout written: snapshotDir/{manifest.json, originals/, baseline-state.json}
  * with the state descriptor LAST as the completeness marker.
@@ -414,6 +460,25 @@ export function snapshotMergeBaseline(componentDir, snapshotDir) {
   if (state === 'pair') {
     copyOriginalsTo(path.join(snapshotDir, ORIGINALS_DIR), originalsDir);
   }
+
+  // Validate the SNAPSHOT COPY before the completeness marker is written
+  // (R6): the copy is faithful, so this catches both a drifted live pair
+  // (originals not the generation the manifest describes — the site needs
+  // manual repair before an upgrade may proceed) and corruption introduced
+  // by the copy itself. A throw leaves the snapshot without its state
+  // descriptor — hasBaselineSnapshot() stays false, nothing restorable is
+  // ever produced from an inconsistent site.
+  if (state !== 'absent') {
+    const snapManifest = readJsonStrict(
+      path.join(snapshotDir, MANIFEST_FILE),
+      'baseline snapshot: snapshot manifest'
+    );
+    assertManifestShape(snapManifest, 'baseline snapshot: snapshot manifest');
+    if (state === 'pair') {
+      assertPairConsistent(path.join(snapshotDir, ORIGINALS_DIR), snapManifest, 'baseline snapshot');
+    }
+  }
+
   fs.writeFileSync(
     path.join(snapshotDir, BASELINE_STATE_FILE),
     JSON.stringify({ state }, null, 2)
@@ -429,8 +494,11 @@ export function snapshotMergeBaseline(componentDir, snapshotDir) {
  *
  * Fail-loud contract: a missing, torn, or corrupt snapshot throws before the
  * live site is touched — corruption is never downgraded to the 'absent'
- * branch (which deletes the live baseline). Every branch is re-runnable: an
- * interrupted restore converges when run again with the same snapshot.
+ * branch (which deletes the live baseline). "Corrupt" includes parseable but
+ * structurally invalid manifests and pair snapshots whose originals do not
+ * exactly match the manifest (R6) — not just unparseable JSON. Every branch
+ * is re-runnable: an interrupted restore converges when run again with the
+ * same snapshot.
  *
  * - 'pair': reuses saveMergeBaseline() wholesale (snapshot originals as the
  *   source, snapshot manifest as the payload), so the restore inherits the
@@ -464,15 +532,22 @@ export function restoreMergeBaseline(componentDir, snapshotDir) {
   const snapManifest = path.join(snapshotDir, MANIFEST_FILE);
   const snapOriginals = path.join(snapshotDir, ORIGINALS_DIR);
 
-  // Validate the snapshot BEFORE touching the live site.
+  // Validate the snapshot BEFORE touching the live site — parse, structural
+  // schema, and (for pair) exact manifest↔originals membership/hash match
+  // (R6): a parseable-but-invalid manifest or a drifted originals copy must
+  // never be committed as a merge base.
   let manifestObj = null;
   if (state === 'pair' || state === 'manifest-only') {
     manifestObj = readJsonStrict(snapManifest, 'baseline restore: snapshot manifest');
+    assertManifestShape(manifestObj, 'baseline restore: snapshot manifest');
   }
-  if (state === 'pair' && !fs.existsSync(snapOriginals)) {
-    throw new Error(
-      `baseline restore: snapshot claims 'pair' but has no originals — snapshot torn (${snapshotDir})`
-    );
+  if (state === 'pair') {
+    if (!fs.existsSync(snapOriginals)) {
+      throw new Error(
+        `baseline restore: snapshot claims 'pair' but has no originals — snapshot torn (${snapshotDir})`
+      );
+    }
+    assertPairConsistent(snapOriginals, manifestObj, 'baseline restore');
   }
 
   if (state === 'pair') {
