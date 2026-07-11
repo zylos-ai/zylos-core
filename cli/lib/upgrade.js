@@ -51,10 +51,22 @@ function getLocalVersion(skillDir) {
  */
 export function getRepo(component) {
   const components = loadComponents();
+  if (components[component]?.source?.type?.startsWith('local-')) return null;
   if (components[component]?.repo) return components[component].repo;
   const registry = loadLocalRegistry();
   if (registry[component]?.repo) return registry[component].repo;
   return null;
+}
+
+export function getLocalSourceUpgradeError(component, installed = loadComponents()[component]) {
+  if (!installed?.source?.type?.startsWith('local-')) return null;
+  const sourcePath = installed.source.path || 'the original local source';
+  return {
+    success: false,
+    error: 'local_source_upgrade_unsupported',
+    message: `Component '${component}' was installed from a local source. Reinstall it from ${sourcePath} to update it.`,
+    source: installed.source,
+  };
 }
 
 /**
@@ -122,6 +134,9 @@ export function checkForUpdates(component, { beta = false } = {}) {
       message: `Component '${component}' is not installed`,
     };
   }
+
+  const localSourceError = getLocalSourceUpgradeError(component);
+  if (localSourceError) return localSourceError;
 
   const localVersion = getLocalVersion(skillDir);
   if (!localVersion.success) {

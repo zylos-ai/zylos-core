@@ -9,6 +9,7 @@ import { execFileSync } from 'node:child_process';
 import os from 'node:os';
 import { getGitHubToken, sanitizeError, withRateLimitRetrySync } from './github.js';
 import { copyTree } from './fs-utils.js';
+import { parseSkillMd } from './skill.js';
 
 function getWritableTmpBase() {
   let base = os.tmpdir();
@@ -126,7 +127,7 @@ export function downloadArchive(repo, version, destDir) {
  * @returns {{ success: boolean, error?: string }}
  */
 export function copyLocal(localPath, destDir) {
-  const srcPath = path.resolve(localPath);
+  const srcPath = resolveLocalPath(localPath);
 
   if (!fs.existsSync(srcPath)) {
     return { success: false, error: `Source path not found: ${srcPath}` };
@@ -138,12 +139,102 @@ export function copyLocal(localPath, destDir) {
   }
 
   try {
-    copyTree(srcPath, destDir, { excludes: ['.git'] });
+    copyTree(srcPath, destDir, { excludes: ['.git', 'node_modules', '.zylos', '.backup'] });
     return { success: true };
   } catch (err) {
     return { success: false, error: `Failed to copy from ${srcPath}: ${err.message}` };
   }
 }
+
+/**
+ * Inspect a local source without coupling target resolution to the add command.
+ * Local tarballs are unpacked to a temporary directory for metadata discovery.
+ *
+ * @param {string} localPath
+ * @returns {{ name: string, version: string | null, source: object }}
+ */
+export function inspectLocalSource(localPath) {
+  const srcPath = resolveLocalPath(localPath);
+  if (!fs.existsSync(srcPath)) {
+    throw new Error(`Local source not found: ${srcPath}`);
+  }
+
+  const stat = fs.statSync(srcPath);
+  if (stat.isDirectory()) {
+    const metadata = readLocalMetadata(srcPath, path.basename(srcPath));
+    return { ...metadata, source: { type: 'local-dir', path: srcPath } };
+  }
+
+  if (!stat.isFile() || !/\.(?:tar\.gz|tgz)$/i.test(srcPath)) {
+    throw new Error(`Local source must be a directory or .tar.gz archive: ${srcPath}`);
+  }
+
+  const tmpDir = createDownloadTmpDir();
+  try {
+    const result = extractLocalTarball(srcPath, tmpDir);
+    if (!result.success) throw new Error(result.error);
+    const fallback = path.basename(srcPath).replace(/\.(?:tar\.gz|tgz)$/i, '');
+    const metadata = readLocalMetadata(tmpDir, fallback);
+    return { ...metadata, source: { type: 'local-tarball', path: srcPath } };
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Acquire a normalized component source into its installation directory.
+ * Resolver registration keeps source-specific behavior at the acquire boundary
+ * and leaves manifest, registration, hooks, PM2, and Caddy flows source-agnostic.
+ *
+ * @param {object} source
+ * @param {string} destDir
+ * @returns {{ success: boolean, extractedDir?: string, error?: string }}
+ */
+export function acquireSource(source, destDir) {
+  const resolver = SOURCE_RESOLVERS.get(source?.type);
+  if (!resolver) {
+    return { success: false, error: `Unsupported component source: ${source?.type || 'unknown'}` };
+  }
+  try {
+    return resolver.acquire(source, destDir);
+  } catch (err) {
+    return { success: false, error: sanitizeError(err.message) };
+  }
+}
+
+/**
+ * Register an additional source resolver. This is the upgrade/mirror extension
+ * seam; v1 ships only GitHub releases/branches and local filesystem sources.
+ */
+export function registerSourceResolver(type, resolver) {
+  if (!type || typeof resolver?.acquire !== 'function') {
+    throw new TypeError('A source resolver requires a type and acquire(source, destDir)');
+  }
+  SOURCE_RESOLVERS.set(type, resolver);
+}
+
+const SOURCE_RESOLVERS = new Map();
+
+registerSourceResolver('github-release', {
+  acquire(source, destDir) {
+    if (source.refType === 'branch') {
+      return downloadBranch(source.repo, source.ref, destDir);
+    }
+    return downloadArchive(source.repo, source.ref, destDir);
+  },
+});
+
+registerSourceResolver('local-dir', {
+  acquire(source, destDir) {
+    return copyLocal(source.path, destDir);
+  },
+});
+
+registerSourceResolver('local-tarball', {
+  acquire(source, destDir) {
+    return extractLocalTarball(source.path, destDir);
+  },
+});
 
 /**
  * Download a GitHub branch archive and extract it.
@@ -210,4 +301,102 @@ export function extractTarball(tarballPath, destDir) {
       error: `Failed to extract tarball: ${err.message}`,
     };
   }
+}
+
+export function resolveLocalPath(localPath) {
+  if (localPath === '~') return fs.realpathSync(os.homedir());
+  const expanded = localPath.startsWith('~/')
+    ? path.join(os.homedir(), localPath.slice(2))
+    : localPath;
+  return path.resolve(expanded);
+}
+
+function readLocalMetadata(componentDir, fallbackName) {
+  const frontmatter = parseSkillMd(componentDir)?.frontmatter || {};
+  const name = normalizeLocalComponentName(frontmatter.name || fallbackName);
+  let version = frontmatter.version == null ? null : String(frontmatter.version).trim();
+  if (!version) {
+    try {
+      version = fs.readFileSync(path.join(componentDir, 'VERSION'), 'utf8').trim() || null;
+    } catch {
+      version = null;
+    }
+  }
+  if (!version) {
+    try {
+      const pkg = JSON.parse(fs.readFileSync(path.join(componentDir, 'package.json'), 'utf8'));
+      version = pkg.version == null ? null : String(pkg.version).trim() || null;
+    } catch {
+      version = null;
+    }
+  }
+  return { name, version };
+}
+
+function normalizeLocalComponentName(value) {
+  const name = String(value).trim().replace(/^zylos-/, '');
+  if (!name || !/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(name) || name === '.' || name === '..') {
+    throw new Error(`Invalid local component name: ${value}`);
+  }
+  return name;
+}
+
+function extractLocalTarball(tarballPath, destDir) {
+  try {
+    const srcPath = resolveLocalPath(tarballPath);
+    if (!fs.existsSync(srcPath)) {
+      return { success: false, extractedDir: null, error: `Local source not found: ${srcPath}` };
+    }
+
+    const listing = execFileSync('tar', ['tzf', srcPath], {
+      timeout: 30000,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    const entries = listing
+      .split('\n')
+      .map(entry => entry.replace(/^\.\//, '').replace(/\/$/, ''))
+      .filter(Boolean);
+    if (entries.length === 0) {
+      return { success: false, extractedDir: null, error: 'Local tarball is empty' };
+    }
+    if (entries.some(isUnsafeArchivePath)) {
+      return { success: false, extractedDir: null, error: 'Local tarball contains an unsafe path' };
+    }
+
+    const verboseListing = execFileSync('tar', ['tvzf', srcPath], {
+      timeout: 30000,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    const linkEntry = verboseListing
+      .split('\n')
+      .find(line => line.startsWith('l') || line.startsWith('h'));
+    if (linkEntry) {
+      return {
+        success: false,
+        extractedDir: null,
+        error: 'Local tarball contains a symbolic or hard link; links are not allowed',
+      };
+    }
+
+    const firstParts = new Set(entries.map(entry => entry.split('/')[0]));
+    const hasSingleWrapper = firstParts.size === 1 && entries.some(entry => entry.includes('/'));
+    fs.mkdirSync(destDir, { recursive: true });
+    const args = ['xzf', srcPath, '-C', destDir];
+    if (hasSingleWrapper) args.push('--strip-components=1');
+    execFileSync('tar', args, { timeout: 30000, stdio: 'pipe' });
+    return { success: true, extractedDir: destDir };
+  } catch (err) {
+    return {
+      success: false,
+      extractedDir: null,
+      error: `Failed to extract local tarball: ${sanitizeError(err.message)}`,
+    };
+  }
+}
+
+function isUnsafeArchivePath(entry) {
+  if (path.posix.isAbsolute(entry) || path.win32.isAbsolute(entry)) return true;
+  return entry.split(/[\\/]+/).some(part => part === '..');
 }
