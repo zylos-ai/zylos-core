@@ -30,16 +30,30 @@ function spillPathOf(delivered) {
   return m[1];
 }
 
+/**
+ * Freeze Date.now() to a constant while fn runs, so every spill in fn
+ * resolves to the same millisecond deterministically — the collision is
+ * forced, not left to timing luck. Restores the real clock afterwards.
+ */
+function withFrozenClock(fn) {
+  const realNow = Date.now;
+  Date.now = () => 1700000000000;
+  try {
+    return fn();
+  } finally {
+    Date.now = realNow;
+  }
+}
+
 describe('truncateForDelivery spill path collision', () => {
   it('same-millisecond spills in one process get distinct paths and both contents survive', () => {
     const contentA = 'A'.repeat(FILE_SIZE_THRESHOLD + 100);
     const contentB = 'B'.repeat(FILE_SIZE_THRESHOLD + 100);
 
-    // Tight loop: both calls land in the same Date.now() millisecond with
-    // near-certainty; even if the clock ticks between them the assertions
-    // below must still hold.
-    const deliveredA = truncateForDelivery(contentA);
-    const deliveredB = truncateForDelivery(contentB);
+    const [deliveredA, deliveredB] = withFrozenClock(() => [
+      truncateForDelivery(contentA),
+      truncateForDelivery(contentB)
+    ]);
 
     const pathA = spillPathOf(deliveredA);
     const pathB = spillPathOf(deliveredB);
@@ -49,16 +63,18 @@ describe('truncateForDelivery spill path collision', () => {
     assert.equal(fs.readFileSync(pathB, 'utf8'), contentB, 'second spill content intact');
   });
 
-  it('a burst of spills yields unique paths for every message', () => {
+  it('a burst of same-millisecond spills yields unique paths for every message', () => {
     const N = 20;
     const paths = new Set();
-    for (let i = 0; i < N; i++) {
-      const content = `msg-${i}-` + 'x'.repeat(FILE_SIZE_THRESHOLD + 50);
-      const delivered = truncateForDelivery(content);
-      const p = spillPathOf(delivered);
-      paths.add(p);
-      assert.equal(fs.readFileSync(p, 'utf8'), content, `spill ${i} content intact`);
-    }
+    withFrozenClock(() => {
+      for (let i = 0; i < N; i++) {
+        const content = `msg-${i}-` + 'x'.repeat(FILE_SIZE_THRESHOLD + 50);
+        const delivered = truncateForDelivery(content);
+        const p = spillPathOf(delivered);
+        paths.add(p);
+        assert.equal(fs.readFileSync(p, 'utf8'), content, `spill ${i} content intact`);
+      }
+    });
     assert.equal(paths.size, N, 'every spill in the burst has its own path');
   });
 
