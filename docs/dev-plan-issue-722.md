@@ -37,7 +37,7 @@
 
 **流程收编**
 - [ ] `instruction-builder.js`：`buildInstructionFile()` 委托 canonical assembler；消灭 self-upgrade step7 / migrate.js / instruction-builder 三处重复拼接实现
-- [ ] self-upgrade step7 重写：从 `ctx.tempDir` 新包部署 → 用**新版**组装器原子重组装；step 备份/ownership 清单同步调整（现把三个 .md 全纳入 rollback 的列表要改）
+- [ ] self-upgrade step7 重写：从 `ctx.tempDir` 新包部署 → 用**新版**组装器原子重组装；step 备份/ownership 清单同步调整（现把三个 .md 全纳入 rollback 的列表要改）；pre-v0.4 机的 `runMigrations()` 失败从「静默 fallback 到 syncClaudeMd」改为**响亮失败**（fallback 路径已删）
 - [ ] `migrate.js` 独立重建逻辑统一到 canonical assembler
 - [ ] init：seed 一行版 ZYLOS.md（缺失时）+ 物化 + 组装；re-init 顺序差异（先 skill 后 migrate）由 leaf 设计免疫——加断言验证
 
@@ -57,13 +57,13 @@
 
 ## Assumptions
 
-- [ ] 历史模板语料可从 repo git history 完整枚举（released tags 的 templates/ZYLOS.md blobs）——P2 迁移 step-0 的前提，**需在 P1 期间验证**（若缺 tag 需补全语料来源）
+- [x] ~~历史模板语料可从 repo git history 完整枚举~~ **已验证（2026-07-12）**：44 个 v-tag 全部可枚举，语料极小——templates/ZYLOS.md 仅 **4 个 distinct blobs**（`d4538da2` v0.4.0-0.4.1 / `4c628339` v0.4.2-0.4.3 / `c8d66578` v0.4.4-0.4.10 / `960b9981` v0.4.11-0.5.3），templates/CLAUDE.md（pre-v0.4 机的 seed 源）5 个 distinct blobs。baseline 匹配按 blob-family 处理（同 blob 跨版本段视为一族）
 - [ ] v0.1.8–v0.3.6 为共享同一 blob 的模板家族（jinglever 实测），baseline 匹配按家族处理，无需唯一版本
 - [ ] Claude 2.1.207 SessionStart hook 同会话可见为**实测行为非文档契约** → Guardian 兜底必须保留（已定案，此处只记录依据）
 - [ ] Codex 0.137.0 活进程不重读 AGENTS.md（jinglever 实测）→ launch-only 触发充分
 - [ ] Guardian 现不传 memorySnapshot（预留 seam）——实现按「显式入参、默认不传」处理，不新增行为
 - [ ] `~/zylos/.zylos/` 在全部存量机上存在且系统属地（components.json 已在此）——若个别机缺失，物化时 mkdir -p 即可
-- [ ] pre-v0.4 机（无 ZYLOS.md）在 `zylos init` 迁移路径中处理，`syncClaudeMd()` 删除不致其失联——**需验证该路径覆盖**
+- [x] ~~pre-v0.4 机在迁移路径中处理~~ **已验证（2026-07-12，self-upgrade.js step7 阅读）**：pre-v0.4 机（无 ZYLOS.md）在 step7 里**先走 `runMigrations()`**（从其 CLAUDE.md 生成 ZYLOS.md）→ 成功即进 v0.4+ 重建路径；`syncClaudeMd()` 仅是 **migration 失败时的静默 fallback**。结论：删除它可行，但新 step7 必须把「migration 失败」改为**响亮失败**（报错出来），不能再静默降级到一条已删除的路径。此要求补进 Development Checklist 的 step7 重写项
 
 ## Acceptance Checklist
 
