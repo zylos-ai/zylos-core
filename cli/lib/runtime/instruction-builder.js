@@ -52,7 +52,12 @@ export function buildInstructionFile(runtime, { zylosDir = ZYLOS_DIR, force = fa
 
 export function assertInstructionReady(runtime, { zylosDir = ZYLOS_DIR } = {}) {
   const paths = instructionPaths(runtime, { zylosDir });
-  if (!fs.existsSync(paths.markerPath)) return true;
+  if (!fs.existsSync(paths.markerPath)) {
+    if (!fs.existsSync(paths.outputPath)) {
+      throw new Error(`${runtime} instruction file is missing while split instructions are pending migration: ${paths.outputPath}`);
+    }
+    return true;
+  }
   if (!fs.existsSync(paths.outputPath) || leafNeedsRebuild(paths)) {
     throw new Error(`${runtime} instruction file was not prepared before launch: ${paths.outputPath}`);
   }
@@ -95,16 +100,73 @@ export function deployInstructionAssets({
   return paths.instructionsDir;
 }
 
+function splitTransactionRoots(zylosDir) {
+  return [path.resolve(zylosDir), instructionPaths('claude', { zylosDir }).instructionsDir];
+}
+
+function hasSplitTransactionResidue(zylosDir) {
+  for (const root of splitTransactionRoots(zylosDir)) {
+    try {
+      if (fs.readdirSync(root).some(name => name.includes('.split-txn.'))) return true;
+    } catch { }
+  }
+  return false;
+}
+
 function cleanupSplitTemps(zylosDir) {
-  const roots = [path.resolve(zylosDir), instructionPaths('claude', { zylosDir }).instructionsDir];
-  for (const root of roots) {
+  for (const root of splitTransactionRoots(zylosDir)) {
     let names = [];
     try { names = fs.readdirSync(root); } catch { continue; }
     for (const name of names) {
       if (!name.includes('.split-txn.')) continue;
+      // Backups are recovery records, not disposable temporary files.
+      if (name.endsWith('.bak')) continue;
       try { fs.rmSync(path.join(root, name), { recursive: true, force: true }); } catch { }
     }
   }
+}
+
+function recoverSplitTransaction(zylosDir, faultInjector = () => {}) {
+  const markerPath = instructionPaths('claude', { zylosDir }).markerPath;
+  let committedTransactionId;
+  try {
+    committedTransactionId = JSON.parse(fs.readFileSync(markerPath, 'utf8')).transactionId;
+  } catch { }
+
+  const backups = [];
+  for (const root of splitTransactionRoots(zylosDir)) {
+    let names = [];
+    try { names = fs.readdirSync(root); } catch { continue; }
+    for (const name of names) {
+      const match = name.match(/^(.*)\.split-txn\.([^.]+\.[^.]+\.[^.]+)\.bak$/);
+      if (!match) continue;
+      backups.push({
+        backupPath: path.join(root, name),
+        path: path.join(root, match[1]),
+        token: match[2],
+        name: match[1],
+      });
+    }
+  }
+
+  const errors = [];
+  for (const backup of backups) {
+    try {
+      if (backup.token === committedTransactionId) {
+        faultInjector(`recover:discard:${backup.name}`);
+        fs.unlinkSync(backup.backupPath);
+      } else {
+        faultInjector(`recover:restore:${backup.name}`);
+        fs.renameSync(backup.backupPath, backup.path);
+      }
+    } catch (error) {
+      errors.push(error);
+    }
+  }
+  if (errors.length > 0) {
+    throw new AggregateError(errors, 'split instruction transaction recovery failed');
+  }
+  cleanupSplitTemps(zylosDir);
 }
 
 function commitEntries(entries, markerPath, markerContent, faultInjector = () => {}) {
@@ -112,8 +174,9 @@ function commitEntries(entries, markerPath, markerContent, faultInjector = () =>
   const staged = [];
   const backups = [];
   const applied = [];
-  let markerBackup;
+  let markerStage;
   let committed = false;
+  let rollbackFailed = false;
 
   try {
     for (const entry of entries) {
@@ -124,19 +187,16 @@ function commitEntries(entries, markerPath, markerContent, faultInjector = () =>
       staged.push({ ...entry, stagePath });
     }
     faultInjector('stage:marker');
-    const markerStage = `${markerPath}.split-txn.${token}`;
-    fs.writeFileSync(markerStage, markerContent, 'utf8');
-
-    if (fs.existsSync(markerPath)) {
-      markerBackup = `${markerPath}.split-txn.${token}.bak`;
-      fs.renameSync(markerPath, markerBackup);
-    }
+    markerStage = `${markerPath}.split-txn.${token}`;
+    const marker = JSON.parse(markerContent);
+    marker.transactionId = token;
+    fs.writeFileSync(markerStage, JSON.stringify(marker, null, 2) + '\n', 'utf8');
 
     for (const entry of staged) {
       if (fs.existsSync(entry.path)) {
         const backupPath = `${entry.path}.split-txn.${token}.bak`;
         fs.renameSync(entry.path, backupPath);
-        backups.push({ path: entry.path, backupPath });
+        backups.push({ name: entry.name, path: entry.path, backupPath });
       }
       faultInjector(`rename:${entry.name}`);
       fs.renameSync(entry.stagePath, entry.path);
@@ -146,22 +206,28 @@ function commitEntries(entries, markerPath, markerContent, faultInjector = () =>
     faultInjector('rename:marker');
     fs.renameSync(markerStage, markerPath);
     committed = true;
-    // Cleanup happens after the commit record is visible. A cleanup-only
-    // failure must not report the committed transaction as failed; retries
-    // sweep stale transaction files before doing any work.
-    try { faultInjector('cleanup'); } catch { }
   } catch (error) {
     if (!committed) {
+      const rollbackErrors = [];
       for (const entry of [...applied].reverse()) {
-        try { fs.unlinkSync(entry.path); } catch { }
+        try {
+          faultInjector(`rollback:remove:${entry.name}`);
+          fs.unlinkSync(entry.path);
+        } catch (rollbackError) {
+          rollbackErrors.push(rollbackError);
+        }
       }
       for (const backup of [...backups].reverse()) {
-        try { fs.renameSync(backup.backupPath, backup.path); } catch { }
+        try {
+          faultInjector(`rollback:restore:${backup.name}`);
+          fs.renameSync(backup.backupPath, backup.path);
+        } catch (rollbackError) {
+          rollbackErrors.push(rollbackError);
+        }
       }
-      if (markerBackup) {
-        try { fs.renameSync(markerBackup, markerPath); } catch { }
-      } else {
-        try { fs.unlinkSync(markerPath); } catch { }
+      if (rollbackErrors.length > 0) {
+        rollbackFailed = true;
+        throw new AggregateError(rollbackErrors, `split instruction rollback failed after: ${error.message}`, { cause: error });
       }
     }
     throw error;
@@ -169,11 +235,17 @@ function commitEntries(entries, markerPath, markerContent, faultInjector = () =>
     for (const entry of staged) {
       try { fs.unlinkSync(entry.stagePath); } catch { }
     }
-    for (const backup of backups) {
-      try { fs.unlinkSync(backup.backupPath); } catch { }
+    if (committed) {
+      for (const backup of backups) {
+        try {
+          faultInjector(`cleanup:backup:${backup.name}`);
+          fs.unlinkSync(backup.backupPath);
+        } catch { }
+      }
     }
-    try { fs.unlinkSync(`${markerPath}.split-txn.${token}`); } catch { }
-    try { if (markerBackup) fs.unlinkSync(markerBackup); } catch { }
+    if (!rollbackFailed) {
+      try { fs.unlinkSync(markerStage); } catch { }
+    }
   }
 }
 
@@ -183,10 +255,17 @@ export function activateFreshSplitInstructions({
   assemblerSource = ASSEMBLER_SOURCE,
   faultInjector,
 } = {}) {
-  cleanupSplitTemps(zylosDir);
+  const hadTransactionResidue = hasSplitTransactionResidue(zylosDir);
+  recoverSplitTransaction(zylosDir, faultInjector);
   const claude = instructionPaths('claude', { zylosDir });
   if (fs.existsSync(claude.markerPath)) {
     return refreshSplitInstructions({ zylosDir, templatesDir, assemblerSource, faultInjector });
+  }
+
+  const legacyArtifacts = [claude.userPath, claude.outputPath, instructionPaths('codex', { zylosDir }).outputPath];
+  if (!hadTransactionResidue && legacyArtifacts.some(filePath => fs.existsSync(filePath))) {
+    deployInstructionAssets({ zylosDir, templatesDir, assemblerSource });
+    return { active: false, pendingMigration: true, markerPath: claude.markerPath };
   }
 
   const userContent = fs.existsSync(claude.userPath)
@@ -237,7 +316,7 @@ export function refreshSplitInstructions({
   assemblerSource = ASSEMBLER_SOURCE,
   faultInjector,
 } = {}) {
-  cleanupSplitTemps(zylosDir);
+  recoverSplitTransaction(zylosDir, faultInjector);
   const claude = instructionPaths('claude', { zylosDir });
   if (!fs.existsSync(claude.markerPath)) {
     deployInstructionAssets({ zylosDir, templatesDir, assemblerSource });

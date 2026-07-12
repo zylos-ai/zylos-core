@@ -2,11 +2,11 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { execSync } from 'node:child_process';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 const {
-  CORE_MANAGED_HOOKS,
   desiredClaudeHooks,
   isCoreManaged,
   persistInstalledSettingsAndSyncCoupledThreshold,
@@ -22,6 +22,7 @@ const {
   renderCodexGlobalConfig,
   renderCodexProjectConfig,
 } = await import('../runtime-setup.js');
+const { activateFreshSplitInstructions, instructionPaths } = await import('../runtime/instruction-builder.js');
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const TEMPLATE_SETTINGS_PATH = path.join(__dirname, '..', '..', '..', 'templates', '.claude', 'settings.json');
@@ -65,6 +66,21 @@ const CORE_SHARD_SEQUENCE = [
 ];
 
 describe('desiredClaudeHooks', () => {
+  it('the real clear hook rebuilds changed user instructions in a sandbox', () => {
+    const zylosDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-clear-hook-smoke-'));
+    const templatesDir = path.join(__dirname, '..', '..', '..', 'templates');
+    activateFreshSplitInstructions({ zylosDir, templatesDir });
+    const paths = instructionPaths('claude', { zylosDir });
+    fs.appendFileSync(paths.userPath, '\nCLEAR_HOOK_SENTINEL\n');
+    const future = new Date(Date.now() + 5000);
+    fs.utimesSync(paths.userPath, future, future);
+    const clearGroup = desiredClaudeHooks({ zylosDir }).SessionStart.find(group => group.matcher === 'clear');
+    const assemblerHook = clearGroup.hooks.find(hook => hook.command.includes('assembler.mjs'));
+    execSync(assemblerHook.command, { stdio: 'pipe' });
+    assert.match(fs.readFileSync(paths.outputPath, 'utf8'), /CLEAR_HOOK_SENTINEL/);
+    fs.rmSync(zylosDir, { recursive: true, force: true });
+  });
+
   it('uses absolute per-shard SessionStart orchestrator commands for all matchers', () => {
     const hooks = desiredClaudeHooks();
     const groups = hooks.SessionStart;
@@ -679,22 +695,23 @@ describe('hookScriptKey', () => {
 });
 
 describe('core hook registry', () => {
-  it('includes every desired command hook by base script key', () => {
-    const templateKeys = new Set();
+  it('recognizes the materialized assembler under an injected zylos root', () => {
+    const zylosDir = path.join(os.tmpdir(), 'isolated-zylos-root');
+    const assembler = path.join(zylosDir, '.zylos', 'instructions', 'assembler.mjs');
+    assert.equal(
+      isCoreManaged({ type: 'command', command: `node ${assembler}` }, { zylosDir }),
+      true,
+    );
+  });
 
+  it('recognizes every desired command hook as core-managed', () => {
     for (const groups of Object.values(desiredClaudeHooks())) {
       if (!Array.isArray(groups)) continue;
       for (const group of groups) {
         for (const hook of getCommandHooks(group)) {
-          // Base key: CORE_MANAGED_HOOKS lists bare script paths; every
-          // --shard variant of a core script must map onto one of them.
-          templateKeys.add(hookScriptBaseKey(hook.command));
+          assert.equal(isCoreManaged(hook), true, `${hook.command} is not core-managed`);
         }
       }
-    }
-
-    for (const key of templateKeys) {
-      assert.equal(CORE_MANAGED_HOOKS.has(key), true, `${key} missing from CORE_MANAGED_HOOKS`);
     }
   });
 });

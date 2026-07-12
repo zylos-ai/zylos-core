@@ -15,7 +15,7 @@ import path from 'node:path';
 import { execSync } from 'node:child_process';
 import { getZylosConfig, updateZylosConfig, ZYLOS_DIR } from '../lib/config.js';
 import { getAdapter, SUPPORTED_RUNTIMES } from '../lib/runtime/index.js';
-import { buildInstructionFile } from '../lib/runtime/instruction-builder.js';
+import { buildInstructionFile, isSplitInstructionsActive } from '../lib/runtime/instruction-builder.js';
 import { commandExists } from '../lib/shell-utils.js';
 import { getCoreEcosystemPath, restartManagedProcess } from '../lib/pm2.js';
 import {
@@ -77,6 +77,14 @@ function showStatus() {
   const current = cfg.runtime ?? 'claude';
   const label = current === 'codex' ? 'Codex (OpenAI)' : 'Claude Code (Anthropic)';
   console.log(`Current runtime: ${bold(label)}`);
+}
+
+export function prepareRuntimeInstruction(target, { zylosDir = ZYLOS_DIR } = {}) {
+  const instructionPath = buildInstructionFile(target, { zylosDir });
+  return {
+    instructionPath,
+    pendingMigration: !isSplitInstructionsActive({ zylosDir }) && !fs.existsSync(instructionPath),
+  };
 }
 
 // ── Credential save helpers ───────────────────────────────────────────────
@@ -306,8 +314,13 @@ async function switchRuntime(target, flags) {
   // Step 5: Rebuild instruction file for the new runtime.
   console.log(`Rebuilding instruction file for ${bold(target)}...`);
   try {
-    buildInstructionFile(target);
-    console.log(`  ${green('✓')} done`);
+    const instruction = prepareRuntimeInstruction(target);
+    if (instruction.pendingMigration) {
+      console.error(`  ${yellow('PENDING MIGRATION: no instruction file exists for this runtime')}`);
+      console.error(`  ${dim('Run the split-instruction migration before launching this runtime.')}`);
+    } else {
+      console.log(`  ${green('✓')} done`);
+    }
   } catch (e) {
     console.error(`  ${yellow(`Warning: failed to rebuild instruction file — ${e.message}`)}`);
     console.error(`  ${dim('Check that ~/zylos/ZYLOS.md exists (run: zylos init --repair)')}`);

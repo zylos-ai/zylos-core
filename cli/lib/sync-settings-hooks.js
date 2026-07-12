@@ -48,17 +48,16 @@ export const CORE_MANAGED_HOOKS = new Set([
   'skills/comm-bridge/scripts/c4-session-init.js',
   'skills/activity-monitor/scripts/session-foreground.js',
   'skills/activity-monitor/scripts/session-start-prompt.js',
-  path.resolve(ZYLOS_DIR, '.zylos', 'instructions', 'assembler.mjs').replaceAll('\\', '/'),
 ]);
 
-export function isCoreManaged(hook) {
+export function isCoreManaged(hook, { zylosDir = ZYLOS_DIR } = {}) {
   // Base key (shard-arg stripped): every --shard variant of a core-managed
   // script is core-managed, and the retired no-arg orchestrator command keys
   // to the same path so upgrades sweep it out.
   if (!hook || hook.type !== 'command') return false;
   const key = hookScriptBaseKey(hook.command);
   return CORE_MANAGED_HOOKS.has(key)
-    || key === path.resolve(ZYLOS_DIR, '.zylos', 'instructions', 'assembler.mjs').replaceAll('\\', '/');
+    || key === path.resolve(zylosDir, '.zylos', 'instructions', 'assembler.mjs').replaceAll('\\', '/');
 }
 
 function zylosClaudeScript(relativePath) {
@@ -407,6 +406,7 @@ export function syncHooks(installedSettings, _templateSettings, {
   log = console.log,
   desiredHooks = desiredClaudeHooks(),
   claimedKeys = claimedHookBaseKeys(),
+  zylosDir = ZYLOS_DIR,
 } = {}) {
   const desiredHookGroups = desiredHooks || {};
 
@@ -505,7 +505,7 @@ export function syncHooks(installedSettings, _templateSettings, {
         const claimed = event === 'SessionStart'
           && claimedKeys.size > 0
           && claimedKeys.has(hookScriptBaseKey(h.command));
-        if (!isCoreManaged(h) && !claimed) continue;
+        if (!isCoreManaged(h, { zylosDir }) && !claimed) continue;
 
         const installedKey = hookScriptKey(h.command);
         // Check only the corresponding template group, not all groups
@@ -518,7 +518,7 @@ export function syncHooks(installedSettings, _templateSettings, {
             group.hooks.splice(hi, 1);
           }
           removed++;
-          log(`  - ${event}[${groupMatcher}]: ${h.command}${claimed && !isCoreManaged(h) ? ' (claimed by component shard declaration)' : ''}`);
+          log(`  - ${event}[${groupMatcher}]: ${h.command}${claimed && !isCoreManaged(h, { zylosDir }) ? ' (claimed by component shard declaration)' : ''}`);
         }
       }
 

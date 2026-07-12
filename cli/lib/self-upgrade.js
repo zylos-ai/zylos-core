@@ -721,7 +721,7 @@ export function step7_syncInstructions(ctx, deps = {}) {
 
   const templateDir = path.join(ctx.tempDir, 'templates');
   if (!fs.existsSync(templateDir)) {
-    return { step: 7, name: 'sync_claude_md', status: 'skipped', message: 'no templates in new version', duration: Date.now() - startTime };
+    return { step: 7, name: 'sync_instructions', status: 'skipped', message: 'no templates in new version', duration: Date.now() - startTime };
   }
 
   // runtime-env.manifest — create from template if missing (upgrade path)

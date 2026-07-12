@@ -610,6 +610,14 @@ describe('self-upgrade hook migration hints', () => {
 });
 
 describe('step7 manifest deploy (real step7_syncInstructions)', () => {
+  it('uses the split-era step name when the new package has no templates', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-step7-no-templates-'));
+    const result = step7_syncInstructions({ tempDir: tmpDir, zylosDir: path.join(tmpDir, 'zylos') });
+    assert.equal(result.status, 'skipped');
+    assert.equal(result.name, 'sync_instructions');
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
   it('fails loudly before asset deployment when a legacy migration fails', () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-step7-legacy-fail-'));
     const zylosDir = path.join(tmpDir, 'zylos');
