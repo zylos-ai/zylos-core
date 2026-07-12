@@ -636,9 +636,10 @@ function step2_preUpgradeHook(ctx) {
  *
  * @returns {{ name: string, status: string }[]} PM2 processes whose scripts are under SKILLS_DIR
  */
-function getSkillsServices() {
+function getSkillsServices(deps = {}) {
+  const execSyncFn = deps.execSync ?? execSync;
   try {
-    const output = execSync('pm2 jlist 2>/dev/null', { encoding: 'utf8' });
+    const output = execSyncFn('pm2 jlist 2>/dev/null', { encoding: 'utf8' });
     const processes = JSON.parse(output);
     const resolved = path.resolve(SKILLS_DIR);
 
@@ -656,11 +657,16 @@ function getSkillsServices() {
 /**
  * Step 3: stop core services
  */
-function step3_stopCoreServices(ctx) {
+function step3_stopCoreServices(ctx, deps = {}) {
   const startTime = Date.now();
+  const execSyncFn = deps.execSync ?? execSync;
+  const getServices = deps.getSkillsServices ?? (() => getSkillsServices(deps));
+  const stopService = deps.stopService ?? ((name) => {
+    execSyncFn(`pm2 stop ${name} 2>/dev/null`, { stdio: 'pipe' });
+  });
 
   // Find all PM2 services running from skills directory
-  const services = getSkillsServices();
+  const services = getServices();
   const onlineServices = services.filter(s => s.status === 'online');
 
   if (services.length === 0) {
@@ -674,7 +680,7 @@ function step3_stopCoreServices(ctx) {
   for (const svc of onlineServices) {
     ctx.servicesWereRunning.push(svc.name);
     try {
-      execSync(`pm2 stop ${svc.name} 2>/dev/null`, { stdio: 'pipe' });
+      stopService(svc.name);
       ctx.servicesStopped.push(svc.name);
     } catch {
       // Continue even if one service fails to stop
@@ -692,8 +698,9 @@ function step3_stopCoreServices(ctx) {
  * Since we install from a temp dir that gets cleaned up, the symlink breaks.
  * Instead: npm pack (creates a .tgz copy) → npm install -g <tgz> (copies files).
  */
-function step4_npmInstallGlobal(ctx) {
+function step4_npmInstallGlobal(ctx, deps = {}) {
   const startTime = Date.now();
+  const execSyncFn = deps.execSync ?? execSync;
 
   if (!ctx.tempDir || !fs.existsSync(ctx.tempDir)) {
     return { step: 4, name: 'npm_install_global', status: 'failed', error: 'Temp directory not available', duration: Date.now() - startTime };
@@ -701,7 +708,7 @@ function step4_npmInstallGlobal(ctx) {
 
   try {
     // Pack first — creates a .tgz tarball (copies, not symlinks)
-    const tarballName = execSync('npm pack --pack-destination .', {
+    const tarballName = execSyncFn('npm pack --pack-destination .', {
       cwd: ctx.tempDir,
       encoding: 'utf8',
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -710,7 +717,7 @@ function step4_npmInstallGlobal(ctx) {
     const tarballPath = path.join(ctx.tempDir, tarballName);
 
     // Install from tarball — npm copies files into global node_modules
-    execSync(`npm install -g "${tarballPath}"`, {
+    execSyncFn(`npm install -g "${tarballPath}"`, {
       encoding: 'utf8',
       stdio: ['pipe', 'pipe', 'pipe'],
       env: { ...process.env, ZYLOS_SKIP_POSTINSTALL: '1' },  // Skip postinstall — we sync skills ourselves
@@ -724,18 +731,24 @@ function step4_npmInstallGlobal(ctx) {
 /**
  * Step 5: sync Core Skills (smart merge — no preserve)
  */
-function step5_syncCoreSkills(ctx) {
+export function step5_syncCoreSkills(ctx, deps = {}) {
   const startTime = Date.now();
+  const fsApi = deps.fs ?? fs;
+  const zylosDir = deps.zylosDir ?? ZYLOS_DIR;
+  const syncCoreSkillsFn = deps.syncCoreSkills ?? syncCoreSkills;
 
   const newSkillsSrc = path.join(ctx.tempDir, 'skills');
-  if (!fs.existsSync(newSkillsSrc)) {
+  if (!fsApi.existsSync(newSkillsSrc)) {
     return { step: 5, name: 'sync_core_skills', status: 'skipped', message: 'no skills in new version', duration: Date.now() - startTime };
   }
 
   try {
-    // Use backup dir from step 1 as base for conflict backups
-    const conflictBackupDir = ctx.backupDir ? path.join(ctx.backupDir, 'conflicts') : null;
-    const syncResult = syncCoreSkills(newSkillsSrc, conflictBackupDir, { mode: ctx.mode });
+    // Conflict backups are durable user-recovery artifacts. Keep them outside
+    // the temporary transaction snapshot, which the non-JSON success path
+    // removes after the upgrade commits.
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const conflictBackupDir = path.join(zylosDir, '.backup', timestamp, 'conflicts');
+    const syncResult = syncCoreSkillsFn(newSkillsSrc, conflictBackupDir, { mode: ctx.mode });
 
     const parts = [];
     if (syncResult.synced.length) parts.push(`${syncResult.synced.length} synced`);
@@ -745,7 +758,13 @@ function step5_syncCoreSkills(ctx) {
     if (syncResult.preserved.length) parts.push(`${syncResult.preserved.length} preserved`);
     if (syncResult.conflicts.length) parts.push(`${syncResult.conflicts.length} conflicts`);
     if (syncResult.errors.length) parts.push(`${syncResult.errors.length} errors`);
-    const msg = parts.join(', ') || 'no changes';
+    const summary = parts.join(', ') || 'no changes';
+    const conflictPaths = syncResult.conflicts.map(({ skill, file, backupPath }) =>
+      `${skill}/${file} -> ${backupPath}`
+    );
+    const msg = conflictPaths.length > 0
+      ? `${summary}; backups: ${conflictPaths.join('; ')}`
+      : summary;
 
     // Store conflicts on ctx for the final result
     ctx.mergeConflicts = syncResult.conflicts;
@@ -1574,22 +1593,24 @@ export function runSelfUpgradeFinalize(state = {}, deps = {}) {
  * Lock must be acquired by caller.
  *
  * @param {{ tempDir: string, newVersion: string, onStep?: function }} opts
+ * @param {object} [deps] - Isolated self-upgrade seam for npm, PM2, version, rollback, and finalizer boundaries
  * @returns {object} Upgrade result
  */
-export function runSelfUpgrade({ tempDir, newVersion, mode, onStep } = {}) {
+export function runSelfUpgrade({ tempDir, newVersion, mode, onStep } = {}, deps = {}) {
   const ctx = createContext({ tempDir, newVersion, mode });
 
-  const current = getCurrentVersion();
+  const getCurrentVersionFn = deps.getCurrentVersion ?? getCurrentVersion;
+  const current = getCurrentVersionFn();
   if (current.success) {
     ctx.from = current.version;
   }
   ctx.to = newVersion || null;
 
-  const preInstallSteps = [
-    step1_backupCoreSkills,
+  const preInstallSteps = deps.preInstallSteps ?? [
+    (stepCtx) => step1_backupCoreSkills(stepCtx, deps.step1),
     step2_preUpgradeHook,
-    step3_stopCoreServices,
-    step4_npmInstallGlobal,
+    (stepCtx) => step3_stopCoreServices(stepCtx, deps.step3),
+    (stepCtx) => step4_npmInstallGlobal(stepCtx, deps.step4),
   ];
 
   const total = 13;
@@ -1609,12 +1630,14 @@ export function runSelfUpgrade({ tempDir, newVersion, mode, onStep } = {}) {
   }
 
   if (failedStep) {
-    const rollbackResults = rollbackSelf(ctx);
+    const rollbackFn = deps.rollbackSelf ?? rollbackSelf;
+    const rollbackResults = rollbackFn(ctx);
     return buildSelfUpgradeResult(ctx, failedStep, rollbackResults);
   }
 
   try {
-    const finalizeResult = runInstalledFinalizer(ctx);
+    const finalizerFn = deps.runInstalledFinalizer ?? runInstalledFinalizer;
+    const finalizeResult = finalizerFn(ctx);
     const finalizeSteps = Array.isArray(finalizeResult.steps) ? finalizeResult.steps : [];
     for (const step of finalizeSteps) {
       ctx.steps.push(step);

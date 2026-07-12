@@ -93,6 +93,21 @@ afterAll(() => {
 });
 
 describe('runUpgrade owns the final baseline commit (#715)', () => {
+  test('component upgrade does not report an identical file missing from the saved manifest as conflict', () => {
+    const name = 'identical-untracked-collision';
+    const dest = installV1(name);
+    const sourceV2 = makeV2(name);
+    writeFile(dest, 'same.js', 'byte-identical');
+    writeFile(sourceV2, 'same.js', 'byte-identical');
+    fs.rmSync(failFlag, { force: true });
+
+    const result = runUpgradeE2E(name, sourceV2);
+
+    expect(result.success).toBe(true);
+    expect(result.mergeConflicts).toBeNull();
+    expect(readFile(dest, 'same.js')).toBe('byte-identical');
+  });
+
   test('later npm failure rolls back files while the old baseline remains untouched; retry truly upgrades', () => {
     const name = 'commit-boundary-retry';
     const dest = installV1(name);

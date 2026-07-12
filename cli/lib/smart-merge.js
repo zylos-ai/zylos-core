@@ -150,6 +150,14 @@ export function smartSync(srcDir, destDir, opts = {}) {
     // File didn't exist in previous manifest — user may have added it.
     // Treat as conflict: backup the user's local version, write new version.
     if (!savedHash) {
+      // The file can be absent from an older manifest while already matching
+      // the incoming package byte-for-byte (for example after a previously
+      // interrupted baseline update). There is no user delta to preserve in
+      // that case, so leave the file untouched and do not report a conflict.
+      if (currentHash === newHash) {
+        continue;
+      }
+
       try {
         if (backupDir) {
           const backupPath = path.join(backupDir, relPath);
