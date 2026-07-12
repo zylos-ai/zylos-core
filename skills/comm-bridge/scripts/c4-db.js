@@ -747,9 +747,15 @@ export function formatConversations(conversations) {
  * formatConversations(), this adds reply routing only while each original
  * record is still available, never by post-processing the flattened output.
  * @param {array} conversations - array of conversation records
+ * @param {object} [options]
+ * @param {boolean} [options.spill=true] - when true, messages over the
+ *   per-message delivery threshold are replaced by a preview + attachment
+ *   pointer (dispatch-style). Pass false when a caller has its own size
+ *   control (e.g. the session-start shard's whole-message budget packer)
+ *   and wants original content inline (#724).
  * @returns {string} - formatted text for agent delivery/session init
  */
-export function formatConversationsForAgent(conversations) {
+export function formatConversationsForAgent(conversations, { spill = true } = {}) {
   if (!conversations || conversations.length === 0) {
     return '';
   }
@@ -765,7 +771,9 @@ export function formatConversationsForAgent(conversations) {
       !hasLegacyReplyViaSuffix(content)
     ) ? buildReplyViaSuffix(conv.channel, conv.endpoint_id) : '';
     lines.push(`[${conv.timestamp}] ${dir} (${conv.channel}${endpoint}):`);
-    lines.push(truncateForDelivery(content, replyViaSuffix, conv.id));
+    lines.push(spill
+      ? truncateForDelivery(content, replyViaSuffix, conv.id)
+      : content + replyViaSuffix);
     lines.push('');
   }
 
