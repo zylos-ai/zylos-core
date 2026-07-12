@@ -212,13 +212,28 @@ export class Guardian {
         this.deps.resetToolLifecycleState();
       } catch { }
 
-      this.adapter.launch().catch(err => {
+      const reportFailure = (err) => {
         this.deps.log(`Guardian: Failed to start ${this.adapter.displayName}: ${err.message}`);
-      });
-
+      };
+      const launchPrepared = () => {
+        try {
+          const launchResult = this.adapter.launch();
+          try { this.adapter.enqueueStartupPrompt?.(); } catch { }
+          Promise.resolve(launchResult).catch(reportFailure);
+        } catch (err) {
+          reportFailure(err);
+        }
+      };
       try {
-        this.adapter.enqueueStartupPrompt?.();
-      } catch { }
+        const preparation = this.adapter.buildInstructionFile?.();
+        if (preparation && typeof preparation.then === 'function') {
+          preparation.then(launchPrepared).catch(reportFailure);
+        } else {
+          launchPrepared();
+        }
+      } catch (err) {
+        reportFailure(err);
+      }
 
       return true;
     } finally {

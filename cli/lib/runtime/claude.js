@@ -20,7 +20,7 @@ import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
 import { RuntimeAdapter } from './base.js';
-import { buildInstructionFile } from './instruction-builder.js';
+import { assertInstructionReady, buildInstructionFile } from './instruction-builder.js';
 import { ClaudeContextMonitor } from './claude-context-monitor.js';
 import { createClaudeProbe } from '../heartbeat/claude-probe.js';
 import { ZYLOS_DIR } from '../config.js';
@@ -81,7 +81,7 @@ export class ClaudeAdapter extends RuntimeAdapter {
   // ── Instruction file ───────────────────────────────────────────────────────
 
   /**
-   * Build CLAUDE.md = ZYLOS.md + claude-addon.md.
+   * Build CLAUDE.md from the activated split instruction layers.
    * @returns {Promise<string>} Path to the generated CLAUDE.md
    */
   async buildInstructionFile() {
@@ -230,7 +230,7 @@ export class ClaudeAdapter extends RuntimeAdapter {
   // ── Launch ────────────────────────────────────────────────────────────────
 
   /**
-   * Build the instruction file and start Claude Code in the tmux session.
+   * Start Claude Code in the tmux session. Guardian prepares instructions first.
    *
    * New session: builds env via launcher pipeline (clean or compat mode).
    * Existing session: sends command via sendMessage (no env rebuild).
@@ -241,11 +241,9 @@ export class ClaudeAdapter extends RuntimeAdapter {
    */
   async launch(opts = {}) {
     const bypassPermissions = opts.bypassPermissions ?? DEFAULT_BYPASS;
+    assertInstructionReady('claude');
 
-    // 1. Build instruction file before launching
-    await this.buildInstructionFile();
-
-    // 2. Pre-accept onboarding/trust dialogs (all auth methods)
+    // 1. Pre-accept onboarding/trust dialogs (all auth methods)
     _ensureOnboardingComplete(ZYLOS_DIR);
 
     // 3. Detect auth method to avoid "Auth conflict" errors

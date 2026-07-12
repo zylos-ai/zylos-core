@@ -8,12 +8,13 @@ const {
   createFinalizeState,
   runSelfUpgradeFinalize,
   step1_backupCoreSkills,
-  step7_syncClaudeMd,
+  step7_syncInstructions,
   rollbackSelf,
   step10_ensureCodexConfig,
 } = await import('../self-upgrade.js');
 const { generateMigrationHints, applyMigrationHints } = await import('../self-upgrade.js');
 const { deployManifestTemplate } = await import('../runtime/tmux-env.js');
+const { activateFreshSplitInstructions } = await import('../runtime/instruction-builder.js');
 
 function fixtureZylosDir() {
   return path.resolve(process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos'));
@@ -21,6 +22,16 @@ function fixtureZylosDir() {
 
 function zylosHookPath(relativePath) {
   return path.join(fixtureZylosDir(), '.claude', relativePath).replaceAll('\\', '/');
+}
+
+function writeSplitPackage(pkgRoot) {
+  const templatesDir = path.join(pkgRoot, 'templates');
+  const runtimeDir = path.join(pkgRoot, 'cli', 'lib', 'runtime');
+  fs.mkdirSync(templatesDir, { recursive: true });
+  fs.mkdirSync(runtimeDir, { recursive: true });
+  fs.writeFileSync(path.join(templatesDir, 'claude-system.md'), '# Claude system\n');
+  fs.writeFileSync(path.join(templatesDir, 'codex-system.md'), '# Codex system\n');
+  fs.copyFileSync(path.resolve('cli/lib/runtime/assembler.mjs'), path.join(runtimeDir, 'assembler.mjs'));
 }
 
 describe('self-upgrade finalizer handoff', () => {
@@ -598,28 +609,67 @@ describe('self-upgrade hook migration hints', () => {
   });
 });
 
-describe('step7 manifest deploy (real step7_syncClaudeMd)', () => {
+describe('step7 manifest deploy (real step7_syncInstructions)', () => {
+  it('fails loudly before asset deployment when a legacy migration fails', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-step7-legacy-fail-'));
+    const zylosDir = path.join(tmpDir, 'zylos');
+    const pkgRoot = path.join(tmpDir, 'pkg');
+    writeSplitPackage(pkgRoot);
+    fs.mkdirSync(zylosDir, { recursive: true });
+    fs.writeFileSync(path.join(zylosDir, 'CLAUDE.md'), 'legacy bytes\n');
+    const result = step7_syncInstructions({ tempDir: pkgRoot, zylosDir, packageRoot: pkgRoot }, {
+      runMigrations() { throw new Error('injected migration failure'); },
+    });
+    assert.equal(result.status, 'failed');
+    assert.match(result.error, /injected migration failure/);
+    assert.equal(fs.readFileSync(path.join(zylosDir, 'CLAUDE.md'), 'utf8'), 'legacy bytes\n');
+    assert.equal(fs.existsSync(path.join(zylosDir, '.zylos', 'instructions')), false);
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('refreshes both generated files when split mode is already active', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-step7-active-'));
+    const zylosDir = path.join(tmpDir, 'zylos');
+    const pkgRoot = path.join(tmpDir, 'pkg');
+    writeSplitPackage(pkgRoot);
+    fs.writeFileSync(path.join(pkgRoot, 'templates', 'ZYLOS.md'), 'user seed\n');
+    activateFreshSplitInstructions({
+      zylosDir,
+      templatesDir: path.join(pkgRoot, 'templates'),
+      assemblerSource: path.join(pkgRoot, 'cli', 'lib', 'runtime', 'assembler.mjs'),
+    });
+    fs.writeFileSync(path.join(pkgRoot, 'templates', 'claude-system.md'), '# Claude system v2\n');
+    fs.writeFileSync(path.join(pkgRoot, 'templates', 'codex-system.md'), '# Codex system v2\n');
+
+    const result = step7_syncInstructions({ tempDir: pkgRoot, zylosDir, packageRoot: pkgRoot });
+    assert.equal(result.status, 'done');
+    assert.match(result.message, /refreshed atomically/);
+    assert.match(fs.readFileSync(path.join(zylosDir, 'CLAUDE.md'), 'utf8'), /Claude system v2/);
+    assert.match(fs.readFileSync(path.join(zylosDir, 'AGENTS.md'), 'utf8'), /Codex system v2/);
+    assert.ok(fs.existsSync(path.join(zylosDir, '.zylos', 'instructions', 'meta.json')));
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
   it('creates manifest from tempDir template when missing, message includes manifest: created', () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-step7-'));
     const zylosDir = path.join(tmpDir, 'zylos');
     const templatesDir = path.join(tmpDir, 'pkg', 'templates');
     fs.mkdirSync(path.join(zylosDir, '.zylos'), { recursive: true });
-    fs.mkdirSync(templatesDir, { recursive: true });
+    writeSplitPackage(path.join(tmpDir, 'pkg'));
     fs.writeFileSync(path.join(templatesDir, 'runtime-env.manifest.example'), 'env TZ\n');
     fs.writeFileSync(path.join(zylosDir, 'ZYLOS.md'), '# Core\n');
-    fs.writeFileSync(path.join(templatesDir, 'claude-addon.md'), '# Addon\n');
 
     const manifestDest = path.join(zylosDir, '.zylos', 'runtime-env.manifest');
     assert.ok(!fs.existsSync(manifestDest));
 
-    const result = step7_syncClaudeMd({
+    const result = step7_syncInstructions({
       tempDir: path.join(tmpDir, 'pkg'),
       zylosDir,
       packageRoot: path.join(tmpDir, 'no-fallback'),
     });
 
     assert.equal(result.step, 7);
-    assert.equal(result.name, 'sync_claude_md');
+    assert.equal(result.name, 'sync_instructions');
     assert.equal(result.status, 'done');
     assert.ok(result.message.includes('manifest: created'));
     assert.ok(fs.existsSync(manifestDest));
@@ -633,13 +683,12 @@ describe('step7 manifest deploy (real step7_syncClaudeMd)', () => {
     const zylosDir = path.join(tmpDir, 'zylos');
     const templatesDir = path.join(tmpDir, 'pkg', 'templates');
     fs.mkdirSync(path.join(zylosDir, '.zylos'), { recursive: true });
-    fs.mkdirSync(templatesDir, { recursive: true });
+    writeSplitPackage(path.join(tmpDir, 'pkg'));
     fs.writeFileSync(path.join(templatesDir, 'runtime-env.manifest.example'), 'env NEW\n');
     fs.writeFileSync(path.join(zylosDir, '.zylos', 'runtime-env.manifest'), 'env CUSTOM\n');
     fs.writeFileSync(path.join(zylosDir, 'ZYLOS.md'), '# Core\n');
-    fs.writeFileSync(path.join(templatesDir, 'claude-addon.md'), '# Addon\n');
 
-    const result = step7_syncClaudeMd({
+    const result = step7_syncInstructions({
       tempDir: path.join(tmpDir, 'pkg'),
       zylosDir,
       packageRoot: path.join(tmpDir, 'no-fallback'),
@@ -661,13 +710,12 @@ describe('step7 manifest deploy (real step7_syncClaudeMd)', () => {
     const pkgRoot = path.join(tmpDir, 'installed-pkg');
     const pkgTemplates = path.join(pkgRoot, 'templates');
     fs.mkdirSync(path.join(zylosDir, '.zylos'), { recursive: true });
-    fs.mkdirSync(templatesDir, { recursive: true });
+    writeSplitPackage(path.join(tmpDir, 'pkg'));
     fs.mkdirSync(pkgTemplates, { recursive: true });
     fs.writeFileSync(path.join(pkgTemplates, 'runtime-env.manifest.example'), 'env FALLBACK\n');
     fs.writeFileSync(path.join(zylosDir, 'ZYLOS.md'), '# Core\n');
-    fs.writeFileSync(path.join(templatesDir, 'claude-addon.md'), '# Addon\n');
 
-    const result = step7_syncClaudeMd({
+    const result = step7_syncInstructions({
       tempDir: path.join(tmpDir, 'pkg'),
       zylosDir,
       packageRoot: pkgRoot,
@@ -686,11 +734,10 @@ describe('step7 manifest deploy (real step7_syncClaudeMd)', () => {
     const zylosDir = path.join(tmpDir, 'zylos');
     const templatesDir = path.join(tmpDir, 'pkg', 'templates');
     fs.mkdirSync(path.join(zylosDir, '.zylos'), { recursive: true });
-    fs.mkdirSync(templatesDir, { recursive: true });
+    writeSplitPackage(path.join(tmpDir, 'pkg'));
     fs.writeFileSync(path.join(zylosDir, 'ZYLOS.md'), '# Core\n');
-    fs.writeFileSync(path.join(templatesDir, 'claude-addon.md'), '# Addon\n');
 
-    const result = step7_syncClaudeMd({
+    const result = step7_syncInstructions({
       tempDir: path.join(tmpDir, 'pkg'),
       zylosDir,
       packageRoot: path.join(tmpDir, 'no-such-pkg'),
@@ -707,12 +754,11 @@ describe('step7 manifest deploy (real step7_syncClaudeMd)', () => {
     const zylosDir = path.join(tmpDir, 'zylos');
     const templatesDir = path.join(tmpDir, 'pkg', 'templates');
     fs.mkdirSync(path.join(zylosDir, '.zylos'), { recursive: true });
-    fs.mkdirSync(templatesDir, { recursive: true });
+    writeSplitPackage(path.join(tmpDir, 'pkg'));
     fs.writeFileSync(path.join(templatesDir, 'runtime-env.manifest.example'), 'env TZ\n');
     fs.writeFileSync(path.join(zylosDir, 'ZYLOS.md'), '# Core\n');
-    fs.writeFileSync(path.join(templatesDir, 'claude-addon.md'), '# Addon\n');
 
-    const wrappedStep7 = (ctx) => step7_syncClaudeMd({ ...ctx, zylosDir, packageRoot: path.join(tmpDir, 'no-fallback') });
+    const wrappedStep7 = (ctx) => step7_syncInstructions({ ...ctx, zylosDir, packageRoot: path.join(tmpDir, 'no-fallback') });
 
     const result = runSelfUpgradeFinalize({
       schemaVersion: 1,
@@ -725,7 +771,7 @@ describe('step7 manifest deploy (real step7_syncClaudeMd)', () => {
     const step7Result = result.steps.find(s => s.step === 7);
     assert.ok(step7Result);
     assert.ok(step7Result.message.includes('manifest: created'));
-    assert.ok(step7Result.message.includes('rebuilt'));
+    assert.ok(step7Result.message.includes('PENDING MIGRATION'));
     assert.ok(fs.existsSync(path.join(zylosDir, '.zylos', 'runtime-env.manifest')));
 
     fs.rmSync(tmpDir, { recursive: true, force: true });

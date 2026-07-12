@@ -48,6 +48,7 @@ export const CORE_MANAGED_HOOKS = new Set([
   'skills/comm-bridge/scripts/c4-session-init.js',
   'skills/activity-monitor/scripts/session-foreground.js',
   'skills/activity-monitor/scripts/session-start-prompt.js',
+  path.resolve(ZYLOS_DIR, '.zylos', 'instructions', 'assembler.mjs').replaceAll('\\', '/'),
 ]);
 
 export function isCoreManaged(hook) {
@@ -55,7 +56,9 @@ export function isCoreManaged(hook) {
   // script is core-managed, and the retired no-arg orchestrator command keys
   // to the same path so upgrades sweep it out.
   if (!hook || hook.type !== 'command') return false;
-  return CORE_MANAGED_HOOKS.has(hookScriptBaseKey(hook.command));
+  const key = hookScriptBaseKey(hook.command);
+  return CORE_MANAGED_HOOKS.has(key)
+    || key === path.resolve(ZYLOS_DIR, '.zylos', 'instructions', 'assembler.mjs').replaceAll('\\', '/');
 }
 
 function zylosClaudeScript(relativePath) {
@@ -86,11 +89,24 @@ export function desiredSessionStartHooks({ zylosDir = ZYLOS_DIR } = {}) {
     SIDE_EFFECT_NAMES.startPrompt,
   ];
   const orchestrator = zylosClaudeScript('skills/activity-monitor/scripts/session-start-orchestrator.js');
-  return names.map(name => ({
+  const instructionsDir = path.resolve(zylosDir, '.zylos', 'instructions');
+  const assembler = path.join(instructionsDir, 'assembler.mjs');
+  const assemblerHook = {
+    type: 'command',
+    command: [
+      'node', JSON.stringify(assembler),
+      '--marker', JSON.stringify(path.join(instructionsDir, 'meta.json')),
+      '--system', JSON.stringify(path.join(instructionsDir, 'claude-system.md')),
+      '--user', JSON.stringify(path.resolve(zylosDir, 'ZYLOS.md')),
+      '--output', JSON.stringify(path.resolve(zylosDir, 'CLAUDE.md')),
+    ].join(' '),
+    timeout: 20000,
+  };
+  return [assemblerHook, ...names.map(name => ({
     type: 'command',
     command: `${orchestrator} --shard ${name}`,
     timeout: 20000,
-  }));
+  }))];
 }
 
 export function desiredClaudeHooks({ zylosDir = ZYLOS_DIR } = {}) {

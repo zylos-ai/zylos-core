@@ -70,8 +70,10 @@ describe('desiredClaudeHooks', () => {
     const groups = hooks.SessionStart;
     assert.equal(groups.length, 3);
     for (const group of groups) {
-      assert.deepEqual(group.hooks.map(h => extractShardArg(h.command)), CORE_SHARD_SEQUENCE);
-      for (const hook of group.hooks) {
+      assert.match(group.hooks[0].command, /\.zylos\/instructions\/assembler\.mjs/);
+      assert.equal(extractShardArg(group.hooks[0].command), null);
+      assert.deepEqual(group.hooks.slice(1).map(h => extractShardArg(h.command)), CORE_SHARD_SEQUENCE);
+      for (const hook of group.hooks.slice(1)) {
         assert.match(hook.command, /session-start-orchestrator\.js --shard /);
         assert.equal(path.isAbsolute(extractScriptPath(hook.command)), true);
         assert.equal(hook.timeout, 20000);
@@ -727,9 +729,9 @@ describe('syncHooks SessionStart orchestrator convergence', () => {
 
     const result = syncHooks(installed, makeOrchestratorTemplate(), { log: noopLog });
 
-    // 8 shard/side-effect commands x 3 SessionStart matchers + 7 other-event
+    // 1 assembler + 8 shard/side-effect commands x 3 matchers + 7 other-event
     // hooks added; 4 retired per-step hooks x 3 matchers removed.
-    assert.deepEqual(result, { added: 31, updated: 0, removed: 12 });
+    assert.deepEqual(result, { added: 34, updated: 0, removed: 12 });
     assertSessionStartUsesOrchestrator(installed);
   });
 
