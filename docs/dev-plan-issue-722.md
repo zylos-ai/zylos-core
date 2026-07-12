@@ -20,6 +20,11 @@
 
 ## Development Checklist (P1)
 
+**激活门控（R1 修订 — split assembly 与迁移同一事务边界）**
+- [ ] **split-v1 marker**：`~/zylos/.zylos/instructions/meta.json`（= seed 元数据文件）作为激活开关——**只有 marker 存在时才走 split assembly**。写入者仅两个：fresh init（seed 空 ZYLOS.md 时同时写 marker）与 P2 迁移工具（迁移成功的最后一步）
+- [ ] **无 marker 的存量机（P1 升级落地后）**：物化 system files + assembler，但**不重组装、不触碰既有 CLAUDE.md/AGENTS.md**（逐字节保持原样 = 保持旧行为），self-upgrade 输出醒目的 pending-migration 提示；用户改 ZYLOS.md 暂不生效（与 pre-#722 现状一致，严格保守）
+- [ ] 负面守卫：assembler/触发点在无 marker 时对存量生成物是严格 no-op；绝不允许「新 system + 旧 ZYLOS.md（含旧模板正文）」被拼出来（双重系统段）
+
 **组装器与模板**
 - [ ] `assembler.mjs`：dependency-free leaf（无 config.js/import 隐式依赖；显式入参 `{systemPath, userPath, outputPath, ephemeralContext?}`）；原子写（tmp + rename）；输出头注释写明三层来源（系统文件路径 / 用户 ZYLOS.md / 生成时间）
 - [ ] `needsRebuild()` 语义并入 leaf 或其薄封装：比较 system file + user ZYLOS.md mtime vs 生成物，常态开销 ≈ 两次 stat
@@ -31,22 +36,27 @@
 
 **物化与触发**
 - [ ] init / self-upgrade 部署 system files + assembler.mjs 到 `~/zylos/.zylos/instructions/`（升级覆盖；删 npm 包后组装照常）
-- [ ] Claude：SessionStart hook（startup + clear matcher）调物化组装器，入口先 `needsRebuild()`；Guardian launch 前组装保留为兜底（时序是实测行为非文档契约）
-- [ ] Codex：组装只挂 launch boundary（Guardian 调 adapter.launch 前）；adapters 自身不再拼文件，launch boundary 留窄断言防绕过
+- [ ] Claude：SessionStart 组装接入**现有 canonical hook 拓扑**（`session-start-orchestrator` / `sync-settings-hooks.js` 的 `buildChain()` 体系），以**显式 runtime gate（Claude-only）**挂载——**不得**作为 shared core shard/side-effect 进共享链（否则 `codex-hooks.js` 同源生成会让 Codex 进程启动后 late assemble），也不得另起一条不受 canonical reconciliation 管理的平行 hook。matcher 覆盖 startup + clear；**compact 策略：同样挂载，靠 `needsRebuild()` 门控（未变更时为纯 stat no-op）**。入口先 `needsRebuild()`；Guardian launch 前组装保留为兜底（时序是实测行为非文档契约）
+- [ ] Codex：组装只挂 launch boundary（Guardian 调 adapter.launch 前）；`codex-hooks.js` 生成的 SessionStart command list **必须不含 assembler**；adapters 自身不再拼文件，launch boundary 留窄断言防绕过
 - [ ] `memorySnapshot` 作组装器显式单次入参（ephemeral），永不持久化进稳定生成物；Guardian 现未传它（预留 seam），按需接线不扩scope
 
 **流程收编**
 - [ ] `instruction-builder.js`：`buildInstructionFile()` 委托 canonical assembler；消灭 self-upgrade step7 / migrate.js / instruction-builder 三处重复拼接实现
-- [ ] self-upgrade step7 重写：从 `ctx.tempDir` 新包部署 → 用**新版**组装器原子重组装；step 备份/ownership 清单同步调整（现把三个 .md 全纳入 rollback 的列表要改）；pre-v0.4 机的 `runMigrations()` 失败从「静默 fallback 到 syncClaudeMd」改为**响亮失败**（fallback 路径已删）
+- [ ] self-upgrade step7 重写：从 `ctx.tempDir` 新包部署 → **有 marker** 时用新版组装器原子重组装 / **无 marker** 时只物化+保持生成物原样+pending-migration 提示；step 备份/ownership 清单同步调整（现把三个 .md 全纳入 rollback 的列表要改）；pre-v0.4 机的 `runMigrations()` 失败从「静默 fallback 到 syncClaudeMd」改为**响亮失败**（fallback 路径已删），且 migration 自身必须原子：失败时原 CLAUDE.md 逐字节保持、不留部分 system files/seed metadata、可重试恢复（既定「post-install 不做 outer rollback」合同下，靠 migration 自身守恒而非外层回滚）
+- [ ] `migrate.js` 边界收编（R1）：迁移逻辑接收**显式 `zylosDir` / `templatesDir` 入参**，消灭 module-level `ZYLOS_DIR` 隐式绑定（step7 已有 `ctx.zylosDir`，两侧对齐）——否则隔离测试/非默认目录会误读写 live root
 - [ ] `migrate.js` 独立重建逻辑统一到 canonical assembler
 - [ ] init：seed 一行版 ZYLOS.md（缺失时）+ 物化 + 组装；re-init 顺序差异（先 skill 后 migrate）由 leaf 设计免疫——加断言验证
 
 ## Test Checklist (P1)
 
-- [ ] fresh init → CLAUDE.md/AGENTS.md 三层结构正确、头注释正确
-- [ ] re-init（已有用户 ZYLOS.md）→ 用户内容不被覆盖
+- [ ] fresh init → marker 写入 + CLAUDE.md/AGENTS.md 两层结构正确、头注释正确
+- [ ] re-init（已有用户 ZYLOS.md + marker）→ 用户内容不被覆盖
 - [ ] runtime switch（claude ↔ codex）→ 各自生成物正确
-- [ ] self-upgrade 跨版本 launcher-finalizer 路径 → step7 部署+重组装原子完成；rollback 清单正确
+- [ ] self-upgrade 跨版本 launcher-finalizer 路径 → 有 marker：step7 部署+重组装原子完成；rollback 清单正确
+- [ ] **激活门控负面 fixtures（R1 新增）**：无 marker 的 A/B/C 三类存量 fixture 上跑新版 upgrade + session 触发点 → 生成物**逐字节不变** + pending-migration 提示；断言绝不出现双重系统段/旧 core 被当 user 段拼装
+- [ ] **pre-v0.4 真实升级 gate ①（R1 新增）**：only-CLAUDE.md/无 ZYLOS.md fixture → runMigrations() 成功迁移，旧内容逐行守恒，结果符合激活门控（无 marker 不激活）
+- [ ] **pre-v0.4 真实升级 gate ②（R1 新增）**：注入 migration/rename 失败 → step7/finalizer **响亮失败**（非 skip/吞错）；原 CLAUDE.md 逐字节保持、无部分 system files/seed metadata 残留、重试可恢复
+- [ ] **hook 接线断言（R1 新增）**：Claude settings 中 assembler 于 startup/clear/compact 各恰好一次；**Codex SessionStart command list 不含 assembler**；hook sync 收敛幂等（重跑不重复）且保留 user hooks/custom shards
 - [ ] skill 缺失修复场景：物化 assembler 丢失时 registry/CLI 命令仍能加载包内同源副本修复
 - [ ] 删 npm 包实验：物化副本独立完成组装
 - [ ] Claude /clear 时序 smoke 断言（同会话可见——沙箱 tmux + marker，复用 triage 实验方法）
@@ -57,7 +67,8 @@
 
 ## Assumptions
 
-- [x] ~~历史模板语料可从 repo git history 完整枚举~~ **已验证（2026-07-12）**：44 个 v-tag 全部可枚举，语料极小——templates/ZYLOS.md 仅 **4 个 distinct blobs**（`d4538da2` v0.4.0-0.4.1 / `4c628339` v0.4.2-0.4.3 / `c8d66578` v0.4.4-0.4.10 / `960b9981` v0.4.11-0.5.3），templates/CLAUDE.md（pre-v0.4 机的 seed 源）5 个 distinct blobs。baseline 匹配按 blob-family 处理（同 blob 跨版本段视为一族）
+- [x] **baseline 语料（R1 修正后的事实）**：44 个 v-tag 内 templates/ZYLOS.md = 4 distinct blobs / templates/CLAUDE.md = 5 blobs（luna.coco 验证）；但 **branch install/upgrade 是正式支持路径**（README `install.sh --branch`、component.js branch self-upgrade），全 repo 可达历史 ZYLOS.md 实为 **22 个 distinct blobs**，且已删分支/不可达 commit 也可能 seed 过机器（jinglever R1 实证）。**结论：catalog = 全部可达历史 template blobs（`git rev-list --all` 枚举，ZYLOS.md + CLAUDE.md 两个 path），且 catalog 不承诺完备**
+- [ ] **B 类判定标准（R1 收紧）**：B 的条件是**可证的 clean delta**——baseline blob 与 catalog 某项**逐字节精确命中** 且 残差 hunks 全部为纯新增、与模板内容零纠缠；min-diff 只是候选排序手段，**「catalog 内 argmin」不构成 B 资格**。真实 baseline 不在 catalog / provenance 无法证明 / 多个 baseline 产生同残差 → 一律保守判 **C**
 - [ ] v0.1.8–v0.3.6 为共享同一 blob 的模板家族（jinglever 实测），baseline 匹配按家族处理，无需唯一版本
 - [ ] Claude 2.1.207 SessionStart hook 同会话可见为**实测行为非文档契约** → Guardian 兜底必须保留（已定案，此处只记录依据）
 - [ ] Codex 0.137.0 活进程不重读 AGENTS.md（jinglever 实测）→ launch-only 触发充分
@@ -67,10 +78,10 @@
 
 ## Acceptance Checklist
 
-- [ ] 沙箱 fresh install：生成物三层结构 + 头注释正确；系统文件无机外引用
-- [ ] 沙箱 v0.5.3 → 新版 upgrade：system files 落位、生成物重组装、用户 ZYLOS.md 未被动
-- [ ] 用户改 ZYLOS.md → 下一次 session（startup 与 /clear 两路径）生效，实机验证
+- [ ] 沙箱 fresh install：marker 写入、生成物两层结构 + 头注释正确；系统文件无机外引用
+- [ ] 沙箱 v0.5.3 → 新版 upgrade（无 marker）：system files 物化落位、**生成物逐字节未变** + pending-migration 提示、用户 ZYLOS.md 未被动（R1 修订：升级不激活）
+- [ ] 用户改 ZYLOS.md →（已激活机）下一次 session（startup 与 /clear 两路径）生效，实机验证
 - [ ] 删 npm 包 → session 边界组装照常（物化独立性）
-- [ ] luna.coco 本机 dogfood 全链路（P1 出口 gate，过后才开 P2）
+- [ ] luna.coco 本机 dogfood 全链路（P1 出口 gate，过后才开 P2）：升级落地 → 确认未激活时行为不变 → 执行本机 A 类迁移（原文件 #717 备份 + 置空 user 段 + 写 marker/seed 元数据）→ 激活后全链路验证（startup / clear / compact / 改 ZYLOS.md 生效）
 - [ ] 全量测试绿 + lint 干净 + CI 绿
 - [ ] 无回归：custom shard 注入、memory 注入、heartbeat 等 session-start 链路行为不变
