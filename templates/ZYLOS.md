@@ -95,12 +95,26 @@ Persistent memory stored in `~/zylos/memory/` with an Inside Out-inspired archit
 | Tier | Path | Purpose | Loading |
 |------|------|---------|---------|
 | **Identity** | `memory/identity.md` | Bot soul: personality, principles, digital assets | Always (session start) |
+| **Custom** | `custom-hooks/session-start/*.md` | Operator-placed standing directives (machine/deployment-local); not agent-managed | Always (session start) |
 | **State** | `memory/state.md` | Active work, pending tasks | Always (session start) |
 | **References** | `memory/references.md` | Pointers to config files, key paths | Always (session start) |
 | **User Profiles** | `memory/users/<id>/profile.md` | Per-user preferences | On demand |
 | **Reference** | `memory/reference/*.md` | Decisions, projects, shared prefs, ideas | On demand |
 | **Sessions** | `memory/sessions/current.md` | Today's event log | On demand |
 | **Archive** | `memory/archive/` | Cold storage for old data | Rarely |
+
+### Custom Standing Directives (`custom-hooks/session-start/`)
+
+`~/zylos/custom-hooks/session-start/*.md` holds **standing directives that must be in force from the first moment of every session** — machine- or deployment-local rules such as toolchain constraints, platform policies, or house rules. File content is injected at every session start (including after `/clear` and context compaction) — trimmed of leading/trailing whitespace and concatenated in filename order (`10-rules.md`, `20-platform.md`, ...), one blank line between files. No registration or service restart is needed; edits take effect at the next session start.
+
+Routing test: *"must this be active in every session, without anyone asking?"* → custom. Contrast with its neighbors:
+- `memory/identity.md` — who the agent **is** (agent-maintained, e.g. via reflection)
+- `custom-hooks/session-start/` — how this **deployment must operate** (placed by the operator, or by the agent when explicitly asked to make a rule permanent for every session)
+- `reference/preferences.md` — conventions consulted **on demand** while working
+
+Example: "always use the GVM-managed Go toolchain on this machine, never the system Go" → `custom-hooks/session-start/10-go-toolchain.md`. Writing it to `preferences.md` instead would leave it out of context until someone thinks to look.
+
+Keep this directory small — every line is a permanent per-session token cost. Never place explanatory/readme files with a `.md` extension inside it (every `.md` file there is injected into every session); non-`.md` files and dotfiles are ignored.
 
 ### Multi-User
 
@@ -125,7 +139,7 @@ Route user-specific preferences to the correct profile file. Bot identity stays 
 
 - **decisions.md:** Deliberate choices that close off alternatives
 - **projects.md:** Work efforts with defined scope and lifecycle
-- **preferences.md:** Standing instructions for how things should be done (shared across users)
+- **preferences.md:** Standing instructions for how things should be done (shared across users). Exception: an instruction that must be in effect from the start of **every** session (machine/deployment-local standing directive) goes to `custom-hooks/session-start/` instead — preferences.md is only read on demand
 - **ideas.md:** Uncommitted plans, explorations, hypotheses
 
 When in doubt, write to sessions/current.md.

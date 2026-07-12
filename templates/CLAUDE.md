@@ -75,6 +75,7 @@ Persistent memory stored in `~/zylos/memory/` with an Inside Out-inspired archit
 | Tier | Path | Purpose | Loading |
 |------|------|---------|---------|
 | **Identity** | `memory/identity.md` | Bot soul: personality, principles, digital assets | Always (session start) |
+| **Custom** | `custom-hooks/session-start/*.md` | Operator-placed standing directives (machine/deployment-local); not agent-managed | Always (session start) |
 | **State** | `memory/state.md` | Active work, pending tasks | Always (session start) |
 | **References** | `memory/references.md` | Pointers to config files, key paths | Always (session start) |
 | **User Profiles** | `memory/users/<id>/profile.md` | Per-user preferences | On demand |
@@ -98,7 +99,7 @@ Route user-specific preferences to the correct profile file. Bot identity stays 
 
 - **decisions.md:** Deliberate choices that close off alternatives
 - **projects.md:** Work efforts with defined scope and lifecycle
-- **preferences.md:** Standing instructions for how things should be done (shared across users)
+- **preferences.md:** Standing instructions for how things should be done (shared across users). Exception: an instruction that must be in effect from the start of **every** session (machine/deployment-local standing directive) goes to `custom-hooks/session-start/` instead — preferences.md is only read on demand
 - **ideas.md:** Uncommitted plans, explorations, hypotheses
 
 When in doubt, write to sessions/current.md.
