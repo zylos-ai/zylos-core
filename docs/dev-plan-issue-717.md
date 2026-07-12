@@ -1,6 +1,7 @@
-# Dev Plan: self-upgrade success path deletes conflict backups (#717) — v2
+# Dev Plan: self-upgrade success path deletes conflict backups (#717) — v3
 
-> v2 (post plan-review R1, jinglever): 吸收 2 个 P2（跨版本交接可见性、self-upgrade 测试 seam）与 4 项边界修正。R1 全部发现均接受，无 pushback。变更点见文末 Changelog。
+> v3 (post plan-review R2, jinglever): 修正 D4 失败语义与当前明确契约对齐（post-install finalizer 失败**不回滚**，`cb2350a` 主动决策 + 既有测试锁定）。
+> v2 (post plan-review R1, jinglever): 吸收 2 个 P2（跨版本交接可见性、self-upgrade 测试 seam）与 4 项边界修正。R1/R2 全部发现均接受，无 pushback。变更点见文末 Changelog。
 
 ## Summary
 
@@ -40,9 +41,13 @@
 
 `mergeConflicts[].backupPath` 已是 JSON、CLI 与 re-merge 的完整接口，无真实新消费者。冲突备份根路径只在 step5 局部 / ctx 内部使用，不加重复 public 字段。
 
-### D4 — 失败语义：持久冲突备份一经写入即保留（安全优先）
+### D4 — 失败语义：持久冲突备份一经写入即保留；post-install 失败不回滚（对齐现契约）
 
-冲突发生在 step5，step6-13 仍可能失败并回滚。disposition：**持久 conflict backup 即使外层失败/回滚也保留**——它是用户本地版的副本，回滚后本地文件虽恢复，多一份副本无害且防御后续重试再覆盖；临时事务 backupDir 继续独家负责 rollback。需一个 later-failure 测试证明两种目录不混淆（回滚只动临时备份，持久备份原样保留）。
+当前明确契约（非遗漏，`cb2350a` 主动决策 "avoid rollback after finalizer handoff"，`self-upgrade.js` finalizer 失败路径 `buildSelfUpgradeResult(..., null, false)` 不调 `rollbackSelf()`，既有测试 `self-upgrade.test.js` 锁定 `fails without rollback` / `{performed:false, steps:[]}`）：
+
+- **step6+（post-install finalizer 内）任一步失败 → 不做 rollback**；成功 cleanup 不运行 → **临时 backupDir 保留，持久 conflict backup 也原样保留**。本 PR 不改变该契约，不重新引入 post-install rollback。
+- 「临时事务 backupDir 负责 rollback」**仅限 pre-finalizer / pre-install 失败路径**（step1-4，旧 launcher 内 `rollbackSelf()`），不暗示 post-install 会回滚。
+- 持久 conflict backup 一经写入即保留（安全优先），任何失败模式下都不清理。
 
 ## Development Checklist
 
@@ -64,7 +69,7 @@
 - [ ] **负控**：以上 A 类测试在父提交 `81d10647` 上必须按预期失败，候选上通过
 - [ ] **问题 B 独立 discriminator**：`!savedHash + currentHash === newHash` → 不冲突、不备份、不改内容
 - [ ] B 的共享路径收益确认：component upgrade 路径上同构造同样不再报假冲突
-- [ ] later-failure 测试（D4）：step5 有冲突、step6+ 失败回滚 → 临时备份参与回滚，持久冲突备份原样保留
+- [ ] later-failure 测试（D4，按现契约断言）：step5 有冲突、step6+ 失败 → `result.rollback.performed === false`；临时 backupDir 与持久 conflict backup **两个目录均存在**；持久备份内容未变。不断言任何回滚行为
 - [ ] JSON 模式回归：`mergeConflicts[].backupPath` 指向新落点且文件存在；JSON 分支仍不清理（既有行为）
 - [ ] 全量：Jest + node 套件全绿（基线 141/141 + 687/687，允许新增测试增长）
 
@@ -86,6 +91,7 @@
 
 ## Changelog
 
+- **v3**（R2 修订，接受 jinglever 唯一 P2）：D4 与 later-failure 测试对齐现实契约——post-install finalizer 失败不回滚（`cb2350a` 主动设计，测试已锁定），失败时临时 backupDir 与持久 conflict backup 均保留；测试断言 `rollback.performed === false` + 双目录存在 + 持久备份内容未变；「临时备份负责 rollback」限定 pre-install 路径。不重新引入 post-install rollback、不扩大 #717 范围
 - **v2**（R1 修订，全部接受 jinglever 发现）：
   - P2-1 → 新增 D2：路径可见性改走 step5 message 兼容通道 + old-launcher→new-finalizer 契约测试（原计划只改新版 component.js，首次升级不生效）
   - P2-2 → Test Checklist 重写：专用 self-upgrade 测试 seam；A 用真正三方冲突（不与 B 共享 discriminator）；≥2 冲突文件含嵌套路径；负控绑定父提交 `81d10647`
