@@ -264,6 +264,28 @@ describe('smartSync', () => {
     expect(readFile(backupDir, 'b.js')).toBe('user version');
   });
 
+  test('untracked manifest collision with identical content is unchanged, not a conflict', () => {
+    const src = mkTmp();
+    const dest = mkTmp();
+    const backupDir = mkTmp();
+
+    writeFile(dest, 'a.js', 'tracked');
+    saveManifest(dest, generateManifest(dest));
+
+    writeFile(dest, 'same.js', 'byte-identical');
+    writeFile(src, 'a.js', 'tracked');
+    writeFile(src, 'same.js', 'byte-identical');
+
+    fs.utimesSync(path.join(dest, 'same.js'), new Date(1000), new Date(1000));
+    const before = fs.statSync(path.join(dest, 'same.js')).mtimeMs;
+    const result = smartSync(src, dest, { backupDir });
+
+    expect(result.conflicts).toEqual([]);
+    expect(fs.readdirSync(backupDir)).toEqual([]);
+    expect(readFile(dest, 'same.js')).toBe('byte-identical');
+    expect(fs.statSync(path.join(dest, 'same.js')).mtimeMs).toBe(before);
+  });
+
   test('returns the next manifest without committing it', () => {
     const src = mkTmp();
     const dest = mkTmp();

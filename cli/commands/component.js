@@ -28,7 +28,7 @@ import { evaluateUpgrade } from '../lib/claude-eval.js';
  * Print a single upgrade step result in real time.
  * Each step result includes { step, total, name, status, message?, error? }.
  */
-function printStep(step) {
+export function printStep(step) {
   const msg = step.message ? ` (${step.message})` : '';
   const label = `[${step.step}/${step.total}] ${step.name}${msg}`;
   if (step.status === 'done') {
@@ -1176,6 +1176,13 @@ async function upgradeSelfCore({ branch, beta = false, mode = 'merge' } = {}) {
           }
         }
         console.log(`\nUpdate hooks in ${bold('~/zylos/.claude/settings.json')} and restart Claude to apply.`);
+      }
+
+      if (result.mergeConflicts?.length > 0) {
+        console.log(`\n${warn(`${result.mergeConflicts.length} conflict backup(s) retained:`)}`);
+        for (const conflict of result.mergeConflicts) {
+          console.log(`  ${yellow(`${conflict.skill}/${conflict.file}`)} -> ${conflict.backupPath}`);
+        }
       }
 
       // Clean backup after successful upgrade
