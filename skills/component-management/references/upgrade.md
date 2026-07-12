@@ -17,7 +17,7 @@ Upgrades use **smart merge** — a three-way merge strategy that replaces the ol
 
 When a conflict occurs:
 1. The **new version** is written to the installed location (ensures upgrade completeness)
-2. The **local version** is backed up to `$ZYLOS_DIR/.backup/<timestamp>/conflicts/<skill>/<path>`
+2. The **local version** is backed up to `$ZYLOS_DIR/.backup/<timestamp>/conflicts/<skill>/<path>` for self-upgrade, or `<skillDir>/.backup/<timestamp>/conflicts/<path>` for component upgrade
 3. The upgrade result includes `mergeConflicts` listing each conflict with its backup path
 
 ### Merge Review (Conversation Mode)
