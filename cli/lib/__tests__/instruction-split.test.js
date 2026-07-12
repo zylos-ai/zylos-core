@@ -253,6 +253,45 @@ describe('fresh split activation transaction', () => {
     fs.rmSync(root, { recursive: true, force: true });
   });
 
+  it('discards a committed transaction backup without restoring stale assembler bytes', () => {
+    const root = fixture();
+    activateFreshSplitInstructions({ zylosDir: root, templatesDir: TEMPLATES_DIR });
+    const paths = instructionPaths('claude', { zylosDir: root });
+    const marker = JSON.parse(fs.readFileSync(paths.markerPath, 'utf8'));
+    const current = Buffer.from('committed assembler bytes\n');
+    fs.writeFileSync(paths.assemblerPath, current);
+    fs.writeFileSync(`${paths.assemblerPath}.split-txn.${marker.transactionId}.bak`, 'stale assembler bytes\n');
+
+    assert.throws(() => refreshSplitInstructions({
+      zylosDir: root,
+      templatesDir: TEMPLATES_DIR,
+      faultInjector(point) { if (point === 'stage:claude-system') throw new Error('stop after recovery'); },
+    }), /stop after recovery/);
+
+    assert.deepEqual(fs.readFileSync(paths.assemblerPath), current);
+    assert.deepEqual(leftovers(root), []);
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it('restores an uncommitted transaction backup before starting the next refresh', () => {
+    const root = fixture();
+    activateFreshSplitInstructions({ zylosDir: root, templatesDir: TEMPLATES_DIR });
+    const paths = instructionPaths('claude', { zylosDir: root });
+    const restored = Buffer.from('restored assembler bytes\n');
+    fs.writeFileSync(paths.assemblerPath, 'partial assembler bytes\n');
+    fs.writeFileSync(`${paths.assemblerPath}.split-txn.111.222.deadbeef.bak`, restored);
+
+    assert.throws(() => refreshSplitInstructions({
+      zylosDir: root,
+      templatesDir: TEMPLATES_DIR,
+      faultInjector(point) { if (point === 'stage:claude-system') throw new Error('stop after recovery'); },
+    }), /stop after recovery/);
+
+    assert.deepEqual(fs.readFileSync(paths.assemblerPath), restored);
+    assert.deepEqual(leftovers(root), []);
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
   it('refuses fresh activation when unmarked legacy instruction artifacts exist', () => {
     const root = fixture();
     const legacyUser = Buffer.from('## Behavioral Rules\nlegacy system plus user\n');

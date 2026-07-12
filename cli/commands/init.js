@@ -739,7 +739,17 @@ function copyMissingTree(src, dest) {
  * - ecosystem.config.cjs: always updated (managed by zylos-core)
  * - .env, CLAUDE.md, memory/*: only created if missing (user-managed)
  */
-function deployTemplates({ freshInstall = false } = {}) {
+export function syncSettingsHooksAfterTemplateDeploy({
+  zylosDir = ZYLOS_DIR,
+  syncScript = path.join(PACKAGE_ROOT, 'cli', 'lib', 'sync-settings-hooks.js'),
+} = {}) {
+  execFileSync(process.execPath, [syncScript], {
+    stdio: 'inherit',
+    env: { ...process.env, ZYLOS_DIR: zylosDir },
+  });
+}
+
+export function deployTemplates({ freshInstall = false } = {}) {
   if (!fs.existsSync(TEMPLATES_SRC)) return;
 
   // ecosystem.config.cjs — always update (source of truth for service definitions)
@@ -789,6 +799,11 @@ function deployTemplates({ freshInstall = false } = {}) {
   if (deployManifestTemplate(manifestSrc, ZYLOS_DIR) === 'created') {
     console.log(`  ${success('Created runtime-env.manifest from template')}`);
   }
+
+  // npm postinstall can only sync assembler hooks for an already-materialized
+  // installation. Fresh init creates the assembler above, so converge hooks
+  // here after both the instruction assets and settings template exist.
+  syncSettingsHooksAfterTemplateDeploy();
 }
 
 // ── Core Skills sync ────────────────────────────────────────────

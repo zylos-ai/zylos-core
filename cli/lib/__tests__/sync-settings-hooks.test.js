@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { execSync } from 'node:child_process';
+import { execFileSync, execSync } from 'node:child_process';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
@@ -27,6 +27,8 @@ const { activateFreshSplitInstructions, instructionPaths } = await import('../ru
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const TEMPLATE_SETTINGS_PATH = path.join(__dirname, '..', '..', '..', 'templates', '.claude', 'settings.json');
 const CONTEXT_MONITOR_PATH = path.join(__dirname, '..', '..', '..', 'skills', 'activity-monitor', 'scripts', 'context-monitor.js');
+const POSTINSTALL_PATH = path.join(__dirname, '..', '..', '..', 'scripts', 'postinstall.js');
+const INIT_MODULE_PATH = path.join(__dirname, '..', '..', 'commands', 'init.js');
 
 function fixtureZylosDir() {
   return path.resolve(process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos'));
@@ -66,6 +68,61 @@ const CORE_SHARD_SEQUENCE = [
 ];
 
 describe('desiredClaudeHooks', () => {
+  it('omits assembler hooks until the assembler is materialized', () => {
+    const zylosDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-unmaterialized-hooks-'));
+    const groups = desiredClaudeHooks({ zylosDir }).SessionStart;
+    assert.equal(groups.length, 3);
+    for (const group of groups) {
+      assert.equal(group.hooks.some(hook => hook.command.includes('assembler.mjs')), false);
+      assert.deepEqual(group.hooks.map(h => extractShardArg(h.command)), CORE_SHARD_SEQUENCE);
+    }
+    fs.rmSync(zylosDir, { recursive: true, force: true });
+  });
+
+  it('real postinstall does not publish dead assembler hooks before init', () => {
+    const zylosDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-postinstall-hooks-'));
+    fs.mkdirSync(path.join(zylosDir, '.claude'), { recursive: true });
+    fs.mkdirSync(path.join(zylosDir, '.zylos'), { recursive: true });
+    fs.writeFileSync(path.join(zylosDir, '.claude', 'settings.json'), JSON.stringify({ hooks: {} }));
+    fs.writeFileSync(path.join(zylosDir, '.zylos', 'config.json'), JSON.stringify({ runtime: 'claude' }));
+    execFileSync(process.execPath, [POSTINSTALL_PATH], {
+      stdio: 'pipe',
+      env: {
+        ...process.env,
+        CI: '',
+        HOME: path.dirname(zylosDir),
+        ZYLOS_DIR: zylosDir,
+        ZYLOS_SKIP_POSTINSTALL: '1',
+      },
+    });
+    const settings = JSON.parse(fs.readFileSync(path.join(zylosDir, '.claude', 'settings.json'), 'utf8'));
+    const installedHooks = Object.values(settings.hooks)
+      .flatMap(groups => groups.flatMap(group => getCommandHooks(group)));
+    assert.equal(installedHooks.some(hook => hook.command.includes('assembler.mjs')), false);
+    fs.rmSync(zylosDir, { recursive: true, force: true });
+  });
+
+  it('fresh init deploy syncs exactly one assembler hook for startup, clear, and compact', () => {
+    const zylosDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-init-hooks-'));
+    fs.mkdirSync(path.join(zylosDir, '.zylos'), { recursive: true });
+    fs.writeFileSync(path.join(zylosDir, '.zylos', 'config.json'), JSON.stringify({ runtime: 'claude' }));
+    execFileSync(process.execPath, [
+      '--input-type=module',
+      '--eval',
+      `import { deployTemplates } from ${JSON.stringify(INIT_MODULE_PATH)}; deployTemplates({ freshInstall: true });`,
+    ], {
+      stdio: 'pipe',
+      env: { ...process.env, HOME: path.dirname(zylosDir), ZYLOS_DIR: zylosDir },
+    });
+    const settings = JSON.parse(fs.readFileSync(path.join(zylosDir, '.claude', 'settings.json'), 'utf8'));
+    for (const matcher of ['startup', 'clear', 'compact']) {
+      const groups = settings.hooks.SessionStart.filter(group => group.matcher === matcher);
+      assert.equal(groups.length, 1);
+      assert.equal(groups[0].hooks.filter(hook => hook.command.includes('assembler.mjs')).length, 1);
+    }
+    fs.rmSync(zylosDir, { recursive: true, force: true });
+  });
+
   it('the real clear hook rebuilds changed user instructions in a sandbox', () => {
     const zylosDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-clear-hook-smoke-'));
     const templatesDir = path.join(__dirname, '..', '..', '..', 'templates');
@@ -82,7 +139,7 @@ describe('desiredClaudeHooks', () => {
   });
 
   it('uses absolute per-shard SessionStart orchestrator commands for all matchers', () => {
-    const hooks = desiredClaudeHooks();
+    const hooks = desiredClaudeHooks({ existsSync: () => true });
     const groups = hooks.SessionStart;
     assert.equal(groups.length, 3);
     for (const group of groups) {
@@ -591,7 +648,7 @@ function makeDriftedOldSessionStartGroup(matcher) {
 
 function makeOrchestratorTemplate() {
   return {
-    hooks: desiredClaudeHooks(),
+    hooks: desiredClaudeHooks({ existsSync: () => true }),
   };
 }
 
@@ -705,7 +762,7 @@ describe('core hook registry', () => {
   });
 
   it('recognizes every desired command hook as core-managed', () => {
-    for (const groups of Object.values(desiredClaudeHooks())) {
+    for (const groups of Object.values(desiredClaudeHooks({ existsSync: () => true }))) {
       if (!Array.isArray(groups)) continue;
       for (const group of groups) {
         for (const hook of getCommandHooks(group)) {
@@ -744,7 +801,10 @@ describe('syncHooks SessionStart orchestrator convergence', () => {
       },
     };
 
-    const result = syncHooks(installed, makeOrchestratorTemplate(), { log: noopLog });
+    const result = syncHooks(installed, makeOrchestratorTemplate(), {
+      log: noopLog,
+      desiredHooks: desiredClaudeHooks({ existsSync: () => true }),
+    });
 
     // 1 assembler + 8 shard/side-effect commands x 3 matchers + 7 other-event
     // hooks added; 4 retired per-step hooks x 3 matchers removed.
@@ -846,7 +906,10 @@ describe('syncHooks SessionStart orchestrator convergence', () => {
       },
     };
 
-    const result = syncHooks(installed, makeOrchestratorTemplate(), { log: noopLog });
+    const result = syncHooks(installed, makeOrchestratorTemplate(), {
+      log: noopLog,
+      desiredHooks: desiredClaudeHooks({ existsSync: () => true }),
+    });
 
     const startup = installed.hooks.SessionStart.find(group => group.matcher === 'startup');
     assert.equal(result.updated, 0);
@@ -868,7 +931,10 @@ describe('syncHooks SessionStart orchestrator convergence', () => {
   it('is idempotent when installed hooks already match the template', () => {
     const installed = JSON.parse(JSON.stringify(makeOrchestratorTemplate()));
 
-    const result = syncHooks(installed, makeOrchestratorTemplate(), { log: noopLog });
+    const result = syncHooks(installed, makeOrchestratorTemplate(), {
+      log: noopLog,
+      desiredHooks: desiredClaudeHooks({ existsSync: () => true }),
+    });
 
     assert.deepEqual(result, { added: 0, updated: 0, removed: 0 });
     assertSessionStartUsesOrchestrator(installed);

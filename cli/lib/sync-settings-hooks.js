@@ -80,7 +80,10 @@ function commandHook(relativePath, options = {}) {
  * 5 core shards followed by any component shards declared under
  * ~/zylos/.zylos/shards.d/.
  */
-export function desiredSessionStartHooks({ zylosDir = ZYLOS_DIR } = {}) {
+export function desiredSessionStartHooks({
+  zylosDir = ZYLOS_DIR,
+  existsSync = fs.existsSync,
+} = {}) {
   const { chain } = buildChain({ zylosDir });
   const names = [
     ...chain.map(shard => shard.name),
@@ -101,15 +104,21 @@ export function desiredSessionStartHooks({ zylosDir = ZYLOS_DIR } = {}) {
     ].join(' '),
     timeout: 20000,
   };
-  return [assemblerHook, ...names.map(name => ({
+  const hooks = names.map(name => ({
     type: 'command',
     command: `${orchestrator} --shard ${name}`,
     timeout: 20000,
-  }))];
+  }));
+  // postinstall can run before `zylos init` materializes the assembler.
+  // Do not publish a hook that cannot execute; init syncs again after deploy.
+  return existsSync(assembler) ? [assemblerHook, ...hooks] : hooks;
 }
 
-export function desiredClaudeHooks({ zylosDir = ZYLOS_DIR } = {}) {
-  const sessionStartHooks = desiredSessionStartHooks({ zylosDir });
+export function desiredClaudeHooks({
+  zylosDir = ZYLOS_DIR,
+  existsSync = fs.existsSync,
+} = {}) {
+  const sessionStartHooks = desiredSessionStartHooks({ zylosDir, existsSync });
   const activityHook = commandHook(
     'skills/activity-monitor/scripts/hook-activity.js',
     { async: true, timeout: 5 }
