@@ -114,7 +114,7 @@ Routing test: *"must this be active in every session, without anyone asking?"* �
 
 Example: "always use the GVM-managed Go toolchain on this machine, never the system Go" → `custom-hooks/session-start/10-go-toolchain.md`. Writing it to `preferences.md` instead would leave it out of context until someone thinks to look.
 
-Keep this directory small — every line is a permanent per-session token cost. Never place explanatory/readme files with a `.md` extension inside it (every `.md` file there is injected into every session); non-`.md` files and dotfiles are ignored. Full mechanics: `docs/custom-session-start.md` in the zylos-core repo.
+Keep this directory small — every line is a permanent per-session token cost. Never place explanatory/readme files with a `.md` extension inside it (every `.md` file there is injected into every session); non-`.md` files and dotfiles are ignored.
 
 ### Multi-User
 
