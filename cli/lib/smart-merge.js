@@ -16,9 +16,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {
   generateManifest,
+  hashFile,
   loadManifest,
-  saveManifest,
-  saveOriginals,
+  recoverMergeBaseline,
   getOriginalContent,
   hasOriginals,
 } from './manifest.js';
@@ -46,7 +46,9 @@ function isBinaryFile(filePath) {
  * @property {ConflictFile[]} conflicts - Files where local was backed up, new version written
  * @property {string[]} added        - New files added
  * @property {string[]} deleted      - Files deleted (removed in new version)
+ * @property {string[]} preserved    - Files removed upstream but kept locally (local modifications detected)
  * @property {string[]} errors       - Error descriptions
+ * @property {object|null} nextManifest - Authoritative source manifest to commit at the caller's transaction boundary
  */
 
 /**
@@ -76,8 +78,22 @@ export function smartSync(srcDir, destDir, opts = {}) {
     conflicts: [],
     added: [],
     deleted: [],
+    preserved: [],
     errors: [],
+    nextManifest: null,
   };
+
+  // Repair any interrupted baseline transaction BEFORE reading the manifest
+  // or originals — a half-committed baseline read here would misclassify
+  // local modifications (e.g. degrade clean merges into conflicts).
+  try {
+    recoverMergeBaseline(destDir);
+  } catch (err) {
+    // Baseline is untrustworthy and was deliberately left untouched —
+    // merging against it could corrupt user files. Abort the sync.
+    result.errors.push(`baseline recovery failed: ${err.message}`);
+    return result;
+  }
 
   const savedManifest = loadManifest(destDir);
   const newManifest = generateManifest(srcDir);
@@ -232,12 +248,27 @@ export function smartSync(srcDir, destDir, opts = {}) {
 
   // Delete files that were in the old version but removed in the new version.
   // Only delete files tracked in the old manifest — user-added files are preserved.
+  // In merge mode, a tracked file with local modifications is never deleted
+  // silently: it is backed up (when possible) and kept in place, reported via
+  // result.preserved. Overwrite mode deletes unconditionally — that is its
+  // contract: force the destination to match the new version exactly.
   if (savedManifest) {
     const newFiles = new Set(Object.keys(newManifest.files));
     for (const file of Object.keys(savedManifest.files)) {
       if (!newFiles.has(file)) {
         const destFile = path.join(destDir, file);
         try {
+          if (mode !== 'overwrite' && fs.existsSync(destFile) && hashFile(destFile) !== savedManifest.files[file]) {
+            // Upstream removed the file but the local copy was modified —
+            // preserve the local data instead of deleting it.
+            if (backupDir) {
+              const backupPath = path.join(backupDir, file);
+              fs.mkdirSync(path.dirname(backupPath), { recursive: true });
+              fs.copyFileSync(destFile, backupPath);
+            }
+            result.preserved.push(file);
+            continue;
+          }
           fs.unlinkSync(destFile);
           result.deleted.push(file);
           // Clean up empty parent directories
@@ -257,19 +288,17 @@ export function smartSync(srcDir, destDir, opts = {}) {
     }
   }
 
-  // Save originals from the new version (for next upgrade's three-way merge)
-  try {
-    saveOriginals(destDir, srcDir);
-  } catch (err) {
-    result.errors.push(`save originals: ${err.message}`);
-  }
-
-  // Update manifest to reflect current state after sync
-  try {
-    const updatedManifest = generateManifest(destDir);
-    saveManifest(destDir, updatedManifest);
-  } catch (err) {
-    result.errors.push(`update manifest: ${err.message}`);
+  // Hand the authoritative next baseline to the transaction owner. smartSync
+  // changes business files, but it does not know whether later pipeline steps
+  // (npm install, hooks, service restart, etc.) will succeed. Persisting here
+  // would advance metadata before the outer operation commits and force the
+  // rollback layer to compensate by snapshotting/restoring the baseline.
+  //
+  // A partially-applied sync or any recorded error keeps the previous
+  // baseline. On success, the caller commits this source-generated manifest
+  // together with source originals at its own final success boundary.
+  if (result.errors.length === 0) {
+    result.nextManifest = newManifest;
   }
 
   return result;
@@ -289,6 +318,7 @@ export function formatMergeResult(result) {
   if (result.conflicts.length) parts.push(`${result.conflicts.length} conflicts`);
   if (result.added.length) parts.push(`${result.added.length} added`);
   if (result.deleted.length) parts.push(`${result.deleted.length} deleted`);
+  if (result.preserved?.length) parts.push(`${result.preserved.length} preserved`);
   if (result.errors.length) parts.push(`${result.errors.length} errors`);
   return parts.join(', ') || 'no changes';
 }

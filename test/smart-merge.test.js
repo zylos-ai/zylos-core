@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { smartSync, formatMergeResult } from '../cli/lib/smart-merge.js';
-import { generateManifest, saveManifest, saveOriginals } from '../cli/lib/manifest.js';
+import { generateManifest, saveManifest, saveOriginals, saveMergeBaseline, loadManifest, hashFile } from '../cli/lib/manifest.js';
 
 let tmpRoot;
 
@@ -264,34 +264,282 @@ describe('smartSync', () => {
     expect(readFile(backupDir, 'b.js')).toBe('user version');
   });
 
-  test('updates manifest after sync', () => {
+  test('returns the next manifest without committing it', () => {
     const src = mkTmp();
     const dest = mkTmp();
 
     writeFile(src, 'a.js', 'new content');
 
-    smartSync(src, dest);
+    const result = smartSync(src, dest);
 
-    // Manifest should exist and reflect current state
+    // The transaction owner commits this candidate after later steps succeed.
     const manifestPath = path.join(dest, '.zylos', 'manifest.json');
-    expect(fs.existsSync(manifestPath)).toBe(true);
-
-    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-    expect(manifest.files['a.js']).toBeTruthy();
+    expect(fs.existsSync(manifestPath)).toBe(false);
+    expect(result.nextManifest.files['a.js']).toBeTruthy();
   });
 
-  test('saves originals after sync', () => {
+  test('outer baseline commit saves originals after sync', () => {
     const src = mkTmp();
     const dest = mkTmp();
 
     writeFile(src, 'a.js', 'source content');
 
-    smartSync(src, dest);
+    const result = smartSync(src, dest);
+    saveMergeBaseline(dest, src, result.nextManifest);
 
     // Originals should be saved
     const originalsPath = path.join(dest, '.zylos', 'originals', 'a.js');
     expect(fs.existsSync(originalsPath)).toBe(true);
     expect(fs.readFileSync(originalsPath, 'utf8')).toBe('source content');
+  });
+});
+
+describe('smartSync manifest authority (#715)', () => {
+  test('user-added file survives two sync rounds and never enters the manifest', () => {
+    const src = mkTmp();
+    const dest = mkTmp();
+
+    // Simulate previous install with only a.js
+    writeFile(dest, 'a.js', 'original');
+    saveManifest(dest, generateManifest(dest));
+
+    // User adds a file the package never shipped
+    writeFile(dest, 'custom.js', 'user data');
+
+    // Package still ships only a.js
+    writeFile(src, 'a.js', 'original');
+
+    // Round 1: user file untouched and NOT absorbed into the manifest
+    const first = smartSync(src, dest);
+    saveMergeBaseline(dest, src, first.nextManifest);
+    expect(fileExists(dest, 'custom.js')).toBe(true);
+    expect(loadManifest(dest).files['custom.js']).toBeUndefined();
+
+    // Round 2: a dest-scan manifest would now list custom.js as "upstream-removed"
+    const result = smartSync(src, dest);
+    expect(result.deleted).not.toContain('custom.js');
+    expect(fileExists(dest, 'custom.js')).toBe(true);
+    expect(readFile(dest, 'custom.js')).toBe('user data');
+    expect(loadManifest(dest).files['custom.js']).toBeUndefined();
+  });
+
+  test('kept local modification is not rolled back by a later sync; manifest records source hash', () => {
+    const src = mkTmp();
+    const dest = mkTmp();
+
+    // Simulate previous install
+    writeFile(dest, 'a.js', 'original');
+    saveManifest(dest, generateManifest(dest));
+
+    // User modifies locally; upstream unchanged
+    writeFile(dest, 'a.js', 'user modified');
+    writeFile(src, 'a.js', 'original');
+
+    // Sync 2: local kept, manifest must record the SOURCE hash, not the local hash
+    const result2 = smartSync(src, dest);
+    expect(result2.kept).toContain('a.js');
+    expect(result2.nextManifest.files['a.js']).toBe(hashFile(path.join(src, 'a.js')));
+    saveMergeBaseline(dest, src, result2.nextManifest);
+
+    // Sync 3: with a dest-scan manifest the local mod would look unmodified and
+    // the (unchanged) upstream would look new — silently rolling the user back
+    const result3 = smartSync(src, dest);
+    expect(result3.kept).toContain('a.js');
+    expect(result3.overwritten).not.toContain('a.js');
+    expect(readFile(dest, 'a.js')).toBe('user modified');
+  });
+
+  test('clean-merged local modification survives the next sync; manifest records source hash', () => {
+    const src = mkTmp();
+    const dest = mkTmp();
+
+    // Original version with saved originals for three-way merge
+    writeFile(dest, 'a.js', 'line1\nline2\nline3\nline4\nline5\n');
+    saveManifest(dest, generateManifest(dest));
+    saveOriginals(dest, dest);
+
+    // User modifies line 2; upstream modifies line 5
+    writeFile(dest, 'a.js', 'line1\nuser-modified\nline3\nline4\nline5\n');
+    writeFile(src, 'a.js', 'line1\nline2\nline3\nline4\nupstream-modified\n');
+
+    const result = smartSync(src, dest);
+    expect(result.merged).toContain('a.js');
+    // Manifest records the package hash, so the merged delta stays "local"
+    expect(result.nextManifest.files['a.js']).toBe(hashFile(path.join(src, 'a.js')));
+    saveMergeBaseline(dest, src, result.nextManifest);
+
+    // Next sync with unchanged upstream must keep the merged content
+    const result2 = smartSync(src, dest);
+    expect(result2.kept).toContain('a.js');
+    expect(result2.overwritten).not.toContain('a.js');
+    expect(readFile(dest, 'a.js')).toContain('user-modified');
+    expect(readFile(dest, 'a.js')).toContain('upstream-modified');
+  });
+
+  test('upstream-deleted + locally-modified file is preserved and backed up; unmodified one still deleted', () => {
+    const src = mkTmp();
+    const dest = mkTmp();
+    const backupDir = mkTmp();
+
+    // Simulate previous install with three files
+    writeFile(dest, 'a.js', 'keep');
+    writeFile(dest, 'modified-then-removed.js', 'original');
+    writeFile(dest, 'clean-then-removed.js', 'untouched');
+    saveManifest(dest, generateManifest(dest));
+
+    // User modifies one of the files upstream is about to remove
+    writeFile(dest, 'modified-then-removed.js', 'user changes');
+
+    // New version only ships a.js
+    writeFile(src, 'a.js', 'keep');
+
+    const result = smartSync(src, dest, { backupDir });
+
+    // Locally-modified file: preserved in place + backed up, not deleted
+    expect(result.preserved).toContain('modified-then-removed.js');
+    expect(result.deleted).not.toContain('modified-then-removed.js');
+    expect(readFile(dest, 'modified-then-removed.js')).toBe('user changes');
+    expect(readFile(backupDir, 'modified-then-removed.js')).toBe('user changes');
+
+    // Unmodified file: still deleted as before
+    expect(result.deleted).toContain('clean-then-removed.js');
+    expect(fileExists(dest, 'clean-then-removed.js')).toBe(false);
+
+    // Neither appears in the new manifest
+    const manifest = result.nextManifest;
+    expect(manifest.files['modified-then-removed.js']).toBeUndefined();
+    expect(manifest.files['clean-then-removed.js']).toBeUndefined();
+  });
+
+  test('read-only manifest file does not block the atomic baseline commit', () => {
+    const src = mkTmp();
+    const dest = mkTmp();
+
+    // Simulate previous install
+    writeFile(dest, 'a.js', 'original');
+    saveManifest(dest, generateManifest(dest));
+    saveOriginals(dest, dest);
+
+    writeFile(src, 'a.js', 'updated');
+
+    // The live manifest must never be written in place — the commit is a
+    // rename, which replaces a read-only file without opening it for write.
+    // An in-place write here could truncate the manifest on I/O failure.
+    fs.chmodSync(path.join(dest, '.zylos', 'manifest.json'), 0o444);
+
+    const result = smartSync(src, dest);
+    expect(result.errors).toEqual([]);
+    saveMergeBaseline(dest, src, result.nextManifest);
+    expect(loadManifest(dest).files['a.js']).toBe(hashFile(path.join(src, 'a.js')));
+    expect(readFile(dest, '.zylos/originals/a.js')).toBe('updated');
+  });
+
+  test('staging failure leaves the previous baseline pair untouched', () => {
+    const src = mkTmp();
+    const dest = mkTmp();
+
+    // Simulate previous install with originals v1
+    writeFile(dest, 'a.js', 'original');
+    saveManifest(dest, generateManifest(dest));
+    saveOriginals(dest, dest);
+    const manifestBefore = fs.readFileSync(path.join(dest, '.zylos', 'manifest.json'), 'utf8');
+
+    writeFile(src, 'a.js', 'updated');
+
+    // Read-only .zylos: no staging file can be created — the baseline commit
+    // must fail without touching either live piece
+    fs.chmodSync(path.join(dest, '.zylos'), 0o555);
+
+    const result = smartSync(src, dest);
+    let commitError;
+    try {
+      saveMergeBaseline(dest, src, result.nextManifest);
+    } catch (err) {
+      commitError = err;
+    }
+    fs.chmodSync(path.join(dest, '.zylos'), 0o755);
+
+    expect(result.errors).toEqual([]);
+    expect(commitError).toBeDefined();
+    expect(fs.readFileSync(path.join(dest, '.zylos', 'manifest.json'), 'utf8')).toBe(manifestBefore);
+    expect(readFile(dest, '.zylos/originals/a.js')).toBe('original');
+  });
+
+  test('crash after legacy originals staging: next sync recovers before merging', () => {
+    const src = mkTmp();
+    const dest = mkTmp();
+
+    // Previous install with originals v1 (three-way merge base)
+    writeFile(dest, 'a.js', 'line1\nline2\nline3\nline4\nline5\n');
+    saveManifest(dest, generateManifest(dest));
+    saveOriginals(dest, dest);
+
+    // Simulate a crash mid-transaction: originals were moved aside and never
+    // restored (the legacy .bak staging scheme)
+    fs.renameSync(
+      path.join(dest, '.zylos', 'originals'),
+      path.join(dest, '.zylos', 'originals.bak')
+    );
+
+    // User edit + upstream edit on different lines — clean-mergeable, but only
+    // if the originals are recovered before the merge logic reads them
+    writeFile(dest, 'a.js', 'line1\nuser-modified\nline3\nline4\nline5\n');
+    writeFile(src, 'a.js', 'line1\nline2\nline3\nline4\nupstream-modified\n');
+
+    const result = smartSync(src, dest);
+    expect(result.merged).toContain('a.js');
+    expect(result.conflicts).toEqual([]);
+    expect(readFile(dest, 'a.js')).toContain('user-modified');
+    expect(readFile(dest, 'a.js')).toContain('upstream-modified');
+    expect(fs.existsSync(path.join(dest, '.zylos', 'originals.bak'))).toBe(false);
+  });
+
+  test('uncommitted staged transaction is rolled back, not absorbed', () => {
+    const src = mkTmp();
+    const dest = mkTmp();
+
+    // Previous install
+    writeFile(dest, 'a.js', 'original');
+    saveManifest(dest, generateManifest(dest));
+    saveOriginals(dest, dest);
+
+    // Simulate a crash before the commit point: a staged manifest (bogus
+    // content) and staged originals are still lying around
+    writeFile(dest, '.zylos/manifest.json.tmp', '{"files":{"bogus.js":"deadbeef"}}');
+    writeFile(dest, '.zylos/originals.new/bogus.js', 'staged junk');
+
+    writeFile(src, 'a.js', 'original');
+    const result = smartSync(src, dest);
+
+    expect(result.errors).toEqual([]);
+    // The bogus staged manifest never became live; recovery produced a clean candidate.
+    expect(loadManifest(dest).files['bogus.js']).toBeUndefined();
+    expect(result.nextManifest.files['a.js']).toBe(hashFile(path.join(src, 'a.js')));
+    // No stale transaction artifacts survive
+    expect(fs.existsSync(path.join(dest, '.zylos', 'manifest.json.tmp'))).toBe(false);
+    expect(fs.existsSync(path.join(dest, '.zylos', 'originals.new'))).toBe(false);
+    expect(readFile(dest, '.zylos/originals/a.js')).toBe('original');
+  });
+
+  test('sync with errors keeps the previous manifest and originals', () => {
+    const src = mkTmp();
+    const dest = mkTmp();
+
+    // Simulate previous install
+    writeFile(dest, 'a.js', 'original');
+    saveManifest(dest, generateManifest(dest));
+    const manifestBefore = JSON.stringify(loadManifest(dest));
+
+    // Make the destination file unwritable so the overwrite fails
+    fs.chmodSync(path.join(dest, 'a.js'), 0o444);
+    writeFile(src, 'a.js', 'updated');
+
+    const result = smartSync(src, dest);
+    expect(result.errors.length).toBeGreaterThan(0);
+
+    // Baseline untouched: manifest identical, no originals recorded
+    expect(JSON.stringify(loadManifest(dest))).toBe(manifestBefore);
+    expect(fs.existsSync(path.join(dest, '.zylos', 'originals'))).toBe(false);
   });
 });
 
@@ -341,6 +589,28 @@ describe('smartSync mode: overwrite', () => {
 
     const result = smartSync(src, dest, { mode: 'overwrite' });
     expect(result.deleted).toContain('removed.js');
+    expect(fileExists(dest, 'removed.js')).toBe(false);
+  });
+
+  test('overwrite mode: deletes upstream-removed file even with local modifications', () => {
+    const src = mkTmp();
+    const dest = mkTmp();
+
+    // Simulate previous install with two files
+    writeFile(dest, 'a.js', 'keep');
+    writeFile(dest, 'removed.js', 'original');
+    saveManifest(dest, generateManifest(dest));
+
+    // User modifies the file upstream is about to remove
+    writeFile(dest, 'removed.js', 'user changes');
+
+    // New version only ships a.js
+    writeFile(src, 'a.js', 'keep');
+
+    const result = smartSync(src, dest, { mode: 'overwrite' });
+    // Overwrite-all contract: no merge-mode preservation
+    expect(result.deleted).toContain('removed.js');
+    expect(result.preserved.length).toBe(0);
     expect(fileExists(dest, 'removed.js')).toBe(false);
   });
 

@@ -22,7 +22,7 @@ import { execSync } from 'node:child_process';
 import { SKILLS_DIR, COMPONENTS_DIR, BIN_DIR } from '../lib/config.js';
 import { loadComponents, saveComponents, resolveTarget, loadTargetRegistryInfo, outputTask } from '../lib/components.js';
 import { acquireSource } from '../lib/download.js';
-import { generateManifest, saveManifest } from '../lib/manifest.js';
+import { generateManifest, saveMergeBaseline } from '../lib/manifest.js';
 import { parseSkillMd, detectComponentType } from '../lib/skill.js';
 import { linkBins } from '../lib/bin.js';
 import { applyCaddyRoutes } from '../lib/caddy.js';
@@ -298,12 +298,12 @@ export async function addComponent(args) {
 
   if (!jsonOutput) console.log(`  ${success('Download complete.')}`);
 
-  // 8. Generate manifest
+  // 8. Commit the authoritative install baseline (manifest + originals)
   try {
     const manifest = generateManifest(skillDir);
-    saveManifest(skillDir, manifest);
+    saveMergeBaseline(skillDir, skillDir, manifest);
   } catch (err) {
-    if (!jsonOutput) console.log(`  ${warn(`Could not generate manifest: ${err.message}`)}`);
+    if (!jsonOutput) console.log(`  ${warn(`Could not save install baseline: ${err.message}`)}`);
   }
 
   // 9. Detect component type and install accordingly

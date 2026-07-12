@@ -12,7 +12,9 @@ import { SKILLS_DIR, COMPONENTS_DIR } from './config.js';
 import { loadComponents } from './components.js';
 import { loadLocalRegistry } from './registry.js';
 import { parseSkillMd } from './skill.js';
-import { generateManifest, saveManifest } from './manifest.js';
+import {
+  saveMergeBaseline,
+} from './manifest.js';
 import { downloadArchive, downloadBranch } from './download.js';
 import { fetchLatestTag, fetchRawFile, compareSemverDesc, sanitizeError } from './github.js';
 import { copyTree, syncTree } from './fs-utils.js';
@@ -447,6 +449,8 @@ function step3_smartMerge(ctx) {
       return { step: 3, name: 'smart_merge', status: 'failed', error: mergeResult.errors.join('; '), duration: Date.now() - startTime };
     }
 
+    ctx.nextManifest = mergeResult.nextManifest;
+
     return { step: 3, name: 'smart_merge', status: 'done', message: msg, duration: Date.now() - startTime };
   } catch (err) {
     return { step: 3, name: 'smart_merge', status: 'failed', error: `Merge failed: ${err.message}`, duration: Date.now() - startTime };
@@ -477,17 +481,30 @@ function step4_npmInstall(ctx) {
 }
 
 /**
- * Step 5: generate manifest
+ * Step 5: verify that smart merge produced an authoritative baseline
+ * candidate. It remains uncommitted until the outer transaction succeeds.
  */
 function step5_generateManifest(ctx) {
   const startTime = Date.now();
 
+  if (ctx.nextManifest) {
+    return { step: 5, name: 'generate_manifest', status: 'skipped', message: 'authoritative baseline pending outer commit', duration: Date.now() - startTime };
+  }
+  return { step: 5, name: 'generate_manifest', status: 'failed', error: 'baseline candidate missing after smart merge', duration: Date.now() - startTime };
+}
+
+/**
+ * Final step: commit manifest + originals only after every rollback-triggering
+ * operation has succeeded. A pre-commit failure leaves the previous baseline
+ * intact, so ordinary business-file rollback is sufficient.
+ */
+function step9_commitBaseline(ctx) {
+  const startTime = Date.now();
   try {
-    const manifest = generateManifest(ctx.skillDir);
-    saveManifest(ctx.skillDir, manifest);
-    return { step: 5, name: 'generate_manifest', status: 'done', duration: Date.now() - startTime };
+    saveMergeBaseline(ctx.skillDir, ctx.tempDir, ctx.nextManifest);
+    return { step: 9, name: 'commit_baseline', status: 'done', message: 'authoritative source baseline committed', duration: Date.now() - startTime };
   } catch (err) {
-    return { step: 5, name: 'generate_manifest', status: 'failed', error: err.message, duration: Date.now() - startTime };
+    return { step: 9, name: 'commit_baseline', status: 'failed', error: `Baseline commit failed: ${err.message}`, duration: Date.now() - startTime };
   }
 }
 
@@ -690,7 +707,7 @@ export function rollback(ctx, deps = {}) {
 // ---------------------------------------------------------------------------
 
 /**
- * Run the 8-step upgrade pipeline (mechanical operations only).
+ * Run the 9-step upgrade pipeline (mechanical operations only).
  * Lock must be acquired by caller (component.js).
  *
  * @param {string} component
@@ -726,6 +743,7 @@ export function runUpgrade(component, { tempDir, newVersion, mode, jsonOutput, o
     step6_updateCaddyRoutes,
     step7_runPostUpgradeHook,
     step8_startService,
+    step9_commitBaseline,
   ];
 
   const total = steps.length;
