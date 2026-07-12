@@ -95,7 +95,7 @@ Persistent memory stored in `~/zylos/memory/` with an Inside Out-inspired archit
 | Tier | Path | Purpose | Loading |
 |------|------|---------|---------|
 | **Identity** | `memory/identity.md` | Bot soul: personality, principles, digital assets | Always (session start) |
-| **Custom** | `custom-hooks/session-start/*.md` | Operator-placed standing directives (machine/deployment-local); injected as-is, not agent-managed | Always (session start) |
+| **Custom** | `custom-hooks/session-start/*.md` | Operator-placed standing directives (machine/deployment-local); not agent-managed | Always (session start) |
 | **State** | `memory/state.md` | Active work, pending tasks | Always (session start) |
 | **References** | `memory/references.md` | Pointers to config files, key paths | Always (session start) |
 | **User Profiles** | `memory/users/<id>/profile.md` | Per-user preferences | On demand |
@@ -105,7 +105,7 @@ Persistent memory stored in `~/zylos/memory/` with an Inside Out-inspired archit
 
 ### Custom Standing Directives (`custom-hooks/session-start/`)
 
-`~/zylos/custom-hooks/session-start/*.md` holds **standing directives that must be in force from the first moment of every session** — machine- or deployment-local rules such as toolchain constraints, platform policies, or house rules. Files are injected verbatim at every session start (including after `/clear` and context compaction), concatenated in filename order (`10-rules.md`, `20-platform.md`, ...). No registration or service restart is needed; edits take effect at the next session start.
+`~/zylos/custom-hooks/session-start/*.md` holds **standing directives that must be in force from the first moment of every session** — machine- or deployment-local rules such as toolchain constraints, platform policies, or house rules. File content is injected at every session start (including after `/clear` and context compaction) — trimmed of leading/trailing whitespace and concatenated in filename order (`10-rules.md`, `20-platform.md`, ...), one blank line between files. No registration or service restart is needed; edits take effect at the next session start.
 
 Routing test: *"must this be active in every session, without anyone asking?"* → custom. Contrast with its neighbors:
 - `memory/identity.md` — who the agent **is** (agent-maintained, e.g. via reflection)

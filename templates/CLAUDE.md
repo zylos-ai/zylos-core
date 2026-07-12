@@ -75,7 +75,7 @@ Persistent memory stored in `~/zylos/memory/` with an Inside Out-inspired archit
 | Tier | Path | Purpose | Loading |
 |------|------|---------|---------|
 | **Identity** | `memory/identity.md` | Bot soul: personality, principles, digital assets | Always (session start) |
-| **Custom** | `custom-hooks/session-start/*.md` | Operator-placed standing directives (machine/deployment-local); injected as-is, not agent-managed | Always (session start) |
+| **Custom** | `custom-hooks/session-start/*.md` | Operator-placed standing directives (machine/deployment-local); not agent-managed | Always (session start) |
 | **State** | `memory/state.md` | Active work, pending tasks | Always (session start) |
 | **References** | `memory/references.md` | Pointers to config files, key paths | Always (session start) |
 | **User Profiles** | `memory/users/<id>/profile.md` | Per-user preferences | On demand |

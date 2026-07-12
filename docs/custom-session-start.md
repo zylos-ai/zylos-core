@@ -20,7 +20,8 @@ The hook-scoped layout (`custom-hooks/<hook-name>/`) leaves room for future hook
 - **When it fires:** at every session start — fresh startup, after `/clear`, and after context compaction. The content is (re)injected each time, so it survives context rotation.
 - **Where it lands:** as the numbered shard right after the identity shard (`=== ZYLOS STARTUP CONTEXT [2/N] custom ===`), so custom directives frame everything that follows (references, state, conversation context).
 - **Ordering:** files concatenate in lexicographic filename order, conf.d style — use numeric prefixes (`10-`, `20-`, ...) to control precedence.
-- **What is read:** regular `*.md` files only. Dotfiles and non-`.md` entries are ignored. An unreadable file is skipped (it never breaks session start).
+- **What is read:** entries whose **name** ends in `.md`; dotfiles and other extensions are ignored. The filter is name-based only — **a symlink named `*.md` is followed and its target's content is injected**, so only link to files you own and intend to inject, never to anything that may hold sensitive content. An unreadable file is skipped (it never breaks session start).
+- **How content lands:** each file's content is trimmed of leading/trailing whitespace; non-empty files are concatenated with one blank line between them (not byte-for-byte verbatim).
 - **Empty states:** a missing directory, no `.md` files, or all-empty content emits just the shard header — chain and numbering are unaffected.
 - **No lifecycle steps:** no registration, no config entry, no service restart. Create/edit/delete files; the next session start picks the change up.
 
@@ -43,7 +44,8 @@ Ownership boundary: `memory/` is agent-written and audited/trimmed/archived by M
 
 ## Pitfalls
 
-- **Never place explanatory/readme `*.md` files inside the directory.** Every `.md` file there is injected verbatim into every session — a readme becomes a permanent token tax. Put documentation outside the directory (like this file), or use a non-`.md` filename/dotfile, which the emitter ignores.
+- **Never place explanatory/readme `*.md` files inside the directory.** Every `.md` file there is injected into every session — a readme becomes a permanent token tax. Put documentation outside the directory (like this file), or use a non-`.md` filename/dotfile, which the emitter ignores.
+- **Symlinks are followed.** A `*.md` symlink injects its target's content into every session. This supports sharing directive files across deployments (conf.d style), but the effective security boundary is write access to the directory: never symlink files that may contain secrets or content you don't control.
 - Do not duplicate content that already lives in `memory/` or ZYLOS.md — the directory should hold only directives that genuinely need always-on injection.
 
 ## Example
