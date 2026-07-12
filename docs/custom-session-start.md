@@ -45,7 +45,7 @@ Ownership boundary: `memory/` is agent-written and audited/trimmed/archived by M
 ## Pitfalls
 
 - **Never place explanatory/readme `*.md` files inside the directory.** Every `.md` file there is injected into every session — a readme becomes a permanent token tax. Put documentation outside the directory (like this file), or use a non-`.md` filename/dotfile, which the emitter ignores.
-- **Symlinks are followed.** A `*.md` symlink injects its target's content into every session. This supports sharing directive files across deployments (conf.d style), but the effective security boundary is write access to the directory: never symlink files that may contain secrets or content you don't control.
+- **Symlinks are followed.** A `*.md` symlink injects its target's content into every session. This supports sharing directive files across deployments (conf.d style), but note what it does to the security boundary: injected content is controlled by write access to the directory **and to every reachable symlink target (and its path)** — anyone who can modify or replace a link target changes what the next session start injects. Only symlink files you own and control; never link anything that may contain secrets or content you don't control.
 - Do not duplicate content that already lives in `memory/` or ZYLOS.md — the directory should hold only directives that genuinely need always-on injection.
 
 ## Example
