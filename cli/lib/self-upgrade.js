@@ -751,7 +751,7 @@ export function step7_syncInstructions(ctx, deps = {}) {
       assemblerSource: path.join(ctx.tempDir, 'cli', 'lib', 'runtime', 'assembler.mjs'),
     });
     const message = result.pendingMigration
-      ? 'instruction assets deployed; PENDING MIGRATION — existing CLAUDE.md/AGENTS.md preserved byte-for-byte'
+      ? 'instruction assets deployed; PENDING MIGRATION — existing CLAUDE.md/AGENTS.md preserved byte-for-byte; run zylos migrate-instructions'
       : 'split instructions refreshed atomically';
     return { step: 7, name: 'sync_instructions', status: 'done', message: message + manifestNote, duration: Date.now() - startTime };
   } catch (err) {

@@ -22,6 +22,7 @@ import { attachCommand } from './commands/attach.js';
 import { doctorCommand } from './commands/doctor.js';
 import { shellCommand } from './commands/shell.js';
 import { runtimeCommand } from './commands/runtime.js';
+import { migrateInstructionsCommand } from './commands/migrate-instructions.js';
 
 const commands = {
   // Environment setup
@@ -31,6 +32,7 @@ const commands = {
   doctor: doctorCommand,
   shell: shellCommand,
   runtime: runtimeCommand,
+  'migrate-instructions': migrateInstructionsCommand,
   // Service management
   status: showStatus,
   logs: showLogs,
@@ -96,6 +98,9 @@ Setup:
   shell               Interactive CLI mode (REPL)
   runtime <name>      Switch agent runtime (claude|codex)
   runtime status      Show currently configured runtime
+  migrate-instructions  Analyze/migrate legacy mixed instructions (dry-run by default)
+                      --apply  Create durable backup and activate split instructions
+                      --user-content <file>  User-only content for conservative C-class migration
 
 Service Management:
   status              Show system status

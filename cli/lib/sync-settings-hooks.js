@@ -93,17 +93,7 @@ export function desiredSessionStartHooks({
   const orchestrator = zylosClaudeScript('skills/activity-monitor/scripts/session-start-orchestrator.js');
   const instructionsDir = path.resolve(zylosDir, '.zylos', 'instructions');
   const assembler = path.join(instructionsDir, 'assembler.mjs');
-  const assemblerHook = {
-    type: 'command',
-    command: [
-      'node', JSON.stringify(assembler),
-      '--marker', JSON.stringify(path.join(instructionsDir, 'meta.json')),
-      '--system', JSON.stringify(path.join(instructionsDir, 'claude-system.md')),
-      '--user', JSON.stringify(path.resolve(zylosDir, 'ZYLOS.md')),
-      '--output', JSON.stringify(path.resolve(zylosDir, 'CLAUDE.md')),
-    ].join(' '),
-    timeout: 20000,
-  };
+  const assemblerHook = canonicalAssemblerEntry({ zylosDir });
   const hooks = names.map(name => ({
     type: 'command',
     command: `${orchestrator} --shard ${name}`,
@@ -112,6 +102,64 @@ export function desiredSessionStartHooks({
   // postinstall can run before `zylos init` materializes the assembler.
   // Do not publish a hook that cannot execute; init syncs again after deploy.
   return existsSync(assembler) ? [assemblerHook, ...hooks] : hooks;
+}
+
+export function canonicalAssemblerEntry({ zylosDir = ZYLOS_DIR } = {}) {
+  const root = path.resolve(zylosDir);
+  const instructionsDir = path.join(root, '.zylos', 'instructions');
+  return {
+    type: 'command',
+    command: [
+      'node', JSON.stringify(path.join(instructionsDir, 'assembler.mjs')),
+      '--marker', JSON.stringify(path.join(instructionsDir, 'meta.json')),
+      '--system', JSON.stringify(path.join(instructionsDir, 'claude-system.md')),
+      '--user', JSON.stringify(path.join(root, 'ZYLOS.md')),
+      '--output', JSON.stringify(path.join(root, 'CLAUDE.md')),
+    ].join(' '),
+    timeout: 20000,
+  };
+}
+
+/**
+ * Pure in-memory seam owned by the canonical hook generator. It only creates
+ * or repairs the three assembler entries; callers own schema preflight,
+ * anomaly refusal, ordering and persistence.
+ */
+export function reconcileAssemblerEntries(settings, { zylosDir = ZYLOS_DIR } = {}) {
+  const canonical = canonicalAssemblerEntry({ zylosDir });
+  const canonicalKey = hookScriptKey(canonical.command);
+  if (!settings.hooks) settings.hooks = {};
+  if (!settings.hooks.SessionStart) settings.hooks.SessionStart = [];
+  let changed = false;
+  for (const matcher of ['startup', 'clear', 'compact']) {
+    let group = settings.hooks.SessionStart.find(item => (item.matcher ?? '') === matcher);
+    if (!group) {
+      group = { matcher, hooks: [] };
+      settings.hooks.SessionStart.push(group);
+      changed = true;
+    }
+    if (!group.hooks) {
+      group.hooks = [];
+      changed = true;
+    }
+    const entry = group.hooks.find(hook => (
+      typeof hook.command === 'string' && hookScriptKey(hook.command) === canonicalKey
+    ));
+    if (!entry) {
+      group.hooks.push({ ...canonical });
+      changed = true;
+      continue;
+    }
+    if (entry.command !== canonical.command) {
+      entry.command = canonical.command;
+      changed = true;
+    }
+    if (entry.timeout !== canonical.timeout) {
+      entry.timeout = canonical.timeout;
+      changed = true;
+    }
+  }
+  return { settings, changed };
 }
 
 export function desiredClaudeHooks({

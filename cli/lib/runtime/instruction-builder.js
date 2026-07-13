@@ -108,7 +108,7 @@ function splitTransactionRoots(zylosDir) {
   return [path.resolve(zylosDir), instructionPaths('claude', { zylosDir }).instructionsDir];
 }
 
-function hasSplitTransactionResidue(zylosDir) {
+export function hasSplitTransactionResidue(zylosDir) {
   for (const root of splitTransactionRoots(zylosDir)) {
     try {
       if (fs.readdirSync(root).some(name => name.includes('.split-txn.'))) return true;
@@ -130,7 +130,7 @@ function cleanupSplitTemps(zylosDir) {
   }
 }
 
-function recoverSplitTransaction(zylosDir, faultInjector = () => {}) {
+export function recoverSplitTransaction(zylosDir, faultInjector = () => {}) {
   const markerPath = instructionPaths('claude', { zylosDir }).markerPath;
   let committedTransactionId;
   try {
@@ -251,6 +251,86 @@ function commitEntries(entries, markerPath, markerContent, faultInjector = () =>
       try { fs.unlinkSync(markerStage); } catch { }
     }
   }
+}
+
+function migratedInstructionEntries({
+  zylosDir,
+  templatesDir,
+  assemblerSource,
+  userContent,
+  generatedAt,
+}) {
+  const claude = instructionPaths('claude', { zylosDir });
+  const systems = Object.fromEntries(['claude', 'codex'].map(runtime => [
+    runtime,
+    fs.readFileSync(path.join(templatesDir, `${runtime}-system.md`), 'utf8'),
+  ]));
+  const entries = [
+    { name: 'user', path: claude.userPath, content: userContent },
+    { name: 'claude-system', path: claude.systemPath, content: systems.claude },
+    { name: 'codex-system', path: instructionPaths('codex', { zylosDir }).systemPath, content: systems.codex },
+    { name: 'onboarding', path: claude.onboardingPath, content: fs.readFileSync(path.join(templatesDir, 'onboarding.md'), 'utf8') },
+    { name: 'assembler', path: claude.assemblerPath, content: fs.readFileSync(assemblerSource) },
+  ];
+  for (const runtime of ['claude', 'codex']) {
+    const paths = instructionPaths(runtime, { zylosDir });
+    const systemShadow = `${paths.systemPath}.split-render.${process.pid}`;
+    const userShadow = `${paths.userPath}.split-render.${process.pid}`;
+    fs.mkdirSync(path.dirname(systemShadow), { recursive: true });
+    fs.writeFileSync(systemShadow, systems[runtime], 'utf8');
+    fs.writeFileSync(userShadow, userContent, 'utf8');
+    try {
+      const content = renderInstruction({ systemPath: systemShadow, userPath: userShadow, generatedAt })
+        .replaceAll(path.resolve(systemShadow), path.resolve(paths.systemPath))
+        .replaceAll(path.resolve(userShadow), path.resolve(paths.userPath));
+      entries.push({ name: `${runtime}-output`, path: paths.outputPath, content });
+    } finally {
+      try { fs.unlinkSync(systemShadow); } catch { }
+      try { fs.unlinkSync(userShadow); } catch { }
+    }
+  }
+  return entries;
+}
+
+/**
+ * Activate split instructions for a legacy installation after the migration
+ * command has independently classified and conserved its user content.
+ * This is deliberately separate from activateFreshSplitInstructions: the
+ * fresh path must keep its legacy-artifact refusal gate.
+ */
+export function activateMigratedSplitInstructions({
+  zylosDir = ZYLOS_DIR,
+  templatesDir = DEFAULT_TEMPLATES_DIR,
+  assemblerSource = ASSEMBLER_SOURCE,
+  userContent,
+  migrationMeta,
+  faultInjector,
+  now = new Date(),
+} = {}) {
+  if (typeof userContent !== 'string') throw new TypeError('userContent must be a string');
+  if (!migrationMeta || typeof migrationMeta !== 'object' || Array.isArray(migrationMeta)) {
+    throw new TypeError('migrationMeta must be an object');
+  }
+  recoverSplitTransaction(zylosDir, faultInjector);
+  const claude = instructionPaths('claude', { zylosDir });
+  if (fs.existsSync(claude.markerPath)) {
+    return { active: true, alreadyActive: true, markerPath: claude.markerPath };
+  }
+  const entries = migratedInstructionEntries({
+    zylosDir,
+    templatesDir,
+    assemblerSource,
+    userContent,
+    generatedAt: now,
+  });
+  const marker = {
+    schemaVersion: SPLIT_MARKER_VERSION,
+    activatedAt: now.toISOString(),
+    seedSha256: crypto.createHash('sha256').update(userContent).digest('hex'),
+    migration: migrationMeta,
+  };
+  commitEntries(entries, claude.markerPath, JSON.stringify(marker, null, 2) + '\n', faultInjector);
+  return { active: true, markerPath: claude.markerPath };
 }
 
 export function activateFreshSplitInstructions({
