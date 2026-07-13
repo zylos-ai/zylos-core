@@ -43,11 +43,13 @@ function leftovers(root) {
 }
 
 describe('split instruction assembler', () => {
-  it('pins the system templates to the reviewed legacy core-plus-addon bytes', () => {
+  it('pins the system templates to the approved content-redraft bytes', () => {
+    // Reintroduction guard: any template edit must consciously update these
+    // pins alongside the reviewed content change (issue #722 content redraft).
     const managedHeader = '> **Zylos-managed system instructions.** This file is replaced during upgrades. Put all custom instructions in `~/zylos/ZYLOS.md`.\n\n';
     const expected = {
-      claude: '3d40c67f22ce06101a3433a1c461aca98d1672dfe0c2f42b732fd12c2b309052',
-      codex: '2eaa406ee0eeec7f70c785d496ea43fee2a375e2f949d899fa93e9ffd5e78596',
+      claude: '315bfeb41d4c453ee7a23cbe137a59597764e3422ce8da800cf576ddf075e040',
+      codex: '21d0bd079167be802b98bd6352ef648736a92b83de775f8a8f150a056180cd36',
     };
     for (const runtime of ['claude', 'codex']) {
       const content = fs.readFileSync(path.join(TEMPLATES_DIR, `${runtime}-system.md`), 'utf8');
@@ -98,9 +100,22 @@ describe('split instruction assembler', () => {
         assert.deepEqual(fs.readFileSync(path.join(root, name)), before[index]);
       });
       assert.ok(fs.existsSync(instructionPaths('claude', { zylosDir: root }).assemblerPath));
+      assert.ok(fs.existsSync(instructionPaths('claude', { zylosDir: root }).onboardingPath));
       fs.rmSync(root, { recursive: true, force: true });
     });
   }
+
+  it('materializes onboarding.md on activation and refresh', () => {
+    const root = fixture();
+    activateFreshSplitInstructions({ zylosDir: root, templatesDir: TEMPLATES_DIR });
+    const onboardingPath = instructionPaths('claude', { zylosDir: root }).onboardingPath;
+    const template = fs.readFileSync(path.join(TEMPLATES_DIR, 'onboarding.md'), 'utf8');
+    assert.equal(fs.readFileSync(onboardingPath, 'utf8'), template);
+    fs.writeFileSync(onboardingPath, 'stale local copy\n');
+    refreshSplitInstructions({ zylosDir: root, templatesDir: TEMPLATES_DIR });
+    assert.equal(fs.readFileSync(onboardingPath, 'utf8'), template);
+    fs.rmSync(root, { recursive: true, force: true });
+  });
 
   it('keeps an unknown-baseline pure-add candidate conservative and pending for P2 classification', () => {
     const root = fixture();
