@@ -183,7 +183,8 @@ The bot serves a team. Route user-specific preferences to
 3. **Memory Sync:** when triggered, read
    `~/zylos/.claude/skills/zylos-memory/SKILL.md` and launch the background
    subagent exactly as it specifies (runtime-appropriate launch mechanics are
-   documented there). Never run Memory Sync inline in the main loop.
+   documented there). Do not run Memory Sync inline when a background
+   mechanism is available.
 4. **references.md is a pointer file with strict content rules.** Allowed:
    stable identifiers, endpoints/ports, key paths, active policy pointers,
    pointers to source-of-truth files. Disallowed (route instead): version/

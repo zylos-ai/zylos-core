@@ -60,8 +60,8 @@ tool-call boundary and must never be used for sync. Never use PM2 for
 sync — do not create PM2 services, run `pm2 start ... codex exec ...`, or
 fork an extra `codex exec` sidecar: one-shot sync processes leave stopped
 services piling up in the PM2 list. If the session exposes no native
-background-agent capability, defer the sync and record the limitation in
-the handoff/status instead.
+background-agent capability, run the sync inline as a last resort and note
+that in the handoff/status.
 
 If historical `memory-sync-*` PM2 entries exist (created by older
 versions): while one is running, do not start another sync writer; stopped
