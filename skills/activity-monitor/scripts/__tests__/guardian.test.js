@@ -125,4 +125,53 @@ describe('Guardian', () => {
     assert.equal(guardian.getState().consecutiveRestarts, 0);
     assert.equal(guardian.getState().stableRunningSince, 0);
   });
+
+  it('prepares instructions before launch and does not launch on preparation failure', async () => {
+    const order = [];
+    let rejectPreparation;
+    const adapter = {
+      sessionName: 'test-main',
+      displayName: 'TestRuntime',
+      buildInstructionFile: () => new Promise((resolve, reject) => {
+        rejectPreparation = reject;
+        order.push('prepare');
+      }),
+      launch: async () => { order.push('launch'); },
+      clearStaleState: () => {},
+      enqueueStartupPrompt: () => { order.push('prompt'); },
+    };
+    const { deps, calls } = createDeps();
+    const guardian = new Guardian(adapter, deps);
+    assert.equal(guardian.startAgent(), true);
+    assert.deepEqual(order, ['prepare']);
+    rejectPreparation(new Error('assembly failed'));
+    await Promise.resolve();
+    await Promise.resolve();
+    assert.deepEqual(order, ['prepare']);
+    assert.ok(calls.log.some(message => message.includes('assembly failed')));
+  });
+
+  it('launches only after asynchronous instruction preparation resolves', async () => {
+    const order = [];
+    let resolvePreparation;
+    const adapter = {
+      sessionName: 'test-main',
+      displayName: 'TestRuntime',
+      buildInstructionFile: () => new Promise(resolve => {
+        resolvePreparation = resolve;
+        order.push('prepare');
+      }),
+      launch: async () => { order.push('launch'); },
+      clearStaleState: () => {},
+      enqueueStartupPrompt: () => { order.push('prompt'); },
+    };
+    const { deps } = createDeps();
+    const guardian = new Guardian(adapter, deps);
+    guardian.startAgent();
+    assert.deepEqual(order, ['prepare']);
+    resolvePreparation();
+    await Promise.resolve();
+    await Promise.resolve();
+    assert.deepEqual(order, ['prepare', 'launch', 'prompt']);
+  });
 });

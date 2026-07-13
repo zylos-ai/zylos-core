@@ -50,12 +50,14 @@ export const CORE_MANAGED_HOOKS = new Set([
   'skills/activity-monitor/scripts/session-start-prompt.js',
 ]);
 
-export function isCoreManaged(hook) {
+export function isCoreManaged(hook, { zylosDir = ZYLOS_DIR } = {}) {
   // Base key (shard-arg stripped): every --shard variant of a core-managed
   // script is core-managed, and the retired no-arg orchestrator command keys
   // to the same path so upgrades sweep it out.
   if (!hook || hook.type !== 'command') return false;
-  return CORE_MANAGED_HOOKS.has(hookScriptBaseKey(hook.command));
+  const key = hookScriptBaseKey(hook.command);
+  return CORE_MANAGED_HOOKS.has(key)
+    || key === path.resolve(zylosDir, '.zylos', 'instructions', 'assembler.mjs').replaceAll('\\', '/');
 }
 
 function zylosClaudeScript(relativePath) {
@@ -78,7 +80,10 @@ function commandHook(relativePath, options = {}) {
  * 5 core shards followed by any component shards declared under
  * ~/zylos/.zylos/shards.d/.
  */
-export function desiredSessionStartHooks({ zylosDir = ZYLOS_DIR } = {}) {
+export function desiredSessionStartHooks({
+  zylosDir = ZYLOS_DIR,
+  existsSync = fs.existsSync,
+} = {}) {
   const { chain } = buildChain({ zylosDir });
   const names = [
     ...chain.map(shard => shard.name),
@@ -86,15 +91,34 @@ export function desiredSessionStartHooks({ zylosDir = ZYLOS_DIR } = {}) {
     SIDE_EFFECT_NAMES.startPrompt,
   ];
   const orchestrator = zylosClaudeScript('skills/activity-monitor/scripts/session-start-orchestrator.js');
-  return names.map(name => ({
+  const instructionsDir = path.resolve(zylosDir, '.zylos', 'instructions');
+  const assembler = path.join(instructionsDir, 'assembler.mjs');
+  const assemblerHook = {
+    type: 'command',
+    command: [
+      'node', JSON.stringify(assembler),
+      '--marker', JSON.stringify(path.join(instructionsDir, 'meta.json')),
+      '--system', JSON.stringify(path.join(instructionsDir, 'claude-system.md')),
+      '--user', JSON.stringify(path.resolve(zylosDir, 'ZYLOS.md')),
+      '--output', JSON.stringify(path.resolve(zylosDir, 'CLAUDE.md')),
+    ].join(' '),
+    timeout: 20000,
+  };
+  const hooks = names.map(name => ({
     type: 'command',
     command: `${orchestrator} --shard ${name}`,
     timeout: 20000,
   }));
+  // postinstall can run before `zylos init` materializes the assembler.
+  // Do not publish a hook that cannot execute; init syncs again after deploy.
+  return existsSync(assembler) ? [assemblerHook, ...hooks] : hooks;
 }
 
-export function desiredClaudeHooks({ zylosDir = ZYLOS_DIR } = {}) {
-  const sessionStartHooks = desiredSessionStartHooks({ zylosDir });
+export function desiredClaudeHooks({
+  zylosDir = ZYLOS_DIR,
+  existsSync = fs.existsSync,
+} = {}) {
+  const sessionStartHooks = desiredSessionStartHooks({ zylosDir, existsSync });
   const activityHook = commandHook(
     'skills/activity-monitor/scripts/hook-activity.js',
     { async: true, timeout: 5 }
@@ -391,6 +415,7 @@ export function syncHooks(installedSettings, _templateSettings, {
   log = console.log,
   desiredHooks = desiredClaudeHooks(),
   claimedKeys = claimedHookBaseKeys(),
+  zylosDir = ZYLOS_DIR,
 } = {}) {
   const desiredHookGroups = desiredHooks || {};
 
@@ -489,7 +514,7 @@ export function syncHooks(installedSettings, _templateSettings, {
         const claimed = event === 'SessionStart'
           && claimedKeys.size > 0
           && claimedKeys.has(hookScriptBaseKey(h.command));
-        if (!isCoreManaged(h) && !claimed) continue;
+        if (!isCoreManaged(h, { zylosDir }) && !claimed) continue;
 
         const installedKey = hookScriptKey(h.command);
         // Check only the corresponding template group, not all groups
@@ -502,7 +527,7 @@ export function syncHooks(installedSettings, _templateSettings, {
             group.hooks.splice(hi, 1);
           }
           removed++;
-          log(`  - ${event}[${groupMatcher}]: ${h.command}${claimed && !isCoreManaged(h) ? ' (claimed by component shard declaration)' : ''}`);
+          log(`  - ${event}[${groupMatcher}]: ${h.command}${claimed && !isCoreManaged(h, { zylosDir }) ? ' (claimed by component shard declaration)' : ''}`);
         }
       }
 

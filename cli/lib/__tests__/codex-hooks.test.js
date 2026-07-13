@@ -10,6 +10,7 @@ import {
   codexHooksPath,
   codexProjectConfigPath,
   codexTrustMarkerPath,
+  coreSessionStartCommands,
   ensureCodexHooksTrusted,
   ensureHooksFeatureInToml,
   extractTrustSnapshot,
@@ -34,6 +35,16 @@ function makeEnv() {
 
 afterEach(() => {
   while (tmpDirs.length) fs.rmSync(tmpDirs.pop(), { recursive: true, force: true });
+});
+
+describe('Codex SessionStart boundary', () => {
+  it('never installs the split assembler as a SessionStart command', () => {
+    const { zylosDir } = makeEnv();
+    const commands = coreSessionStartCommands(zylosDir);
+    assert.ok(commands.length > 0);
+    assert.equal(commands.some(command => command.includes('assembler.mjs')), false);
+    assert.equal(commands.some(command => command.includes('.zylos/instructions')), false);
+  });
 });
 
 function writeTrustedState({ homeDir, zylosDir, hash = 'sha256:core' }) {

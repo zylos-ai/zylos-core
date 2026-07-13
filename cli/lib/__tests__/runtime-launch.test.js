@@ -43,6 +43,8 @@ fs.writeFileSync(path.join(fakeZylosDir, '.env'), [
 ].join('\n'));
 
 fs.writeFileSync(path.join(fakeZylosDir, 'memory', 'state.md'), '- Status: completed\n');
+fs.writeFileSync(path.join(fakeZylosDir, 'CLAUDE.md'), 'legacy claude instructions\n');
+fs.writeFileSync(path.join(fakeZylosDir, 'AGENTS.md'), 'legacy codex instructions\n');
 
 for (const script of [
   '.claude/skills/zylos-memory/scripts/session-start-inject.js',
@@ -295,6 +297,19 @@ describe('Claude launch — compat mode PATH dedupe', () => {
 // ── Codex launch tests ───────────────────────────────────────────────────────
 
 describe('Codex launch — new session', () => {
+  it('refuses to launch without instructions while split migration is pending', async () => {
+    const agentsPath = path.join(fakeZylosDir, 'AGENTS.md');
+    fs.unlinkSync(agentsPath);
+    try {
+      await assert.rejects(
+        () => makeAdapter(CodexAdapter).launch({ bypassPermissions: false }),
+        /missing while split instructions are pending migration/,
+      );
+    } finally {
+      fs.writeFileSync(agentsPath, 'legacy codex instructions\n');
+    }
+  });
+
   it('tmux new-session includes -E flag', async () => {
     tmuxSessionExists = false;
     await makeAdapter(CodexAdapter).launch({ bypassPermissions: false });

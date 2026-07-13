@@ -11,6 +11,17 @@ fs.mkdirSync(process.env.ZYLOS_DIR, { recursive: true });
 fs.writeFileSync(path.join(process.env.ZYLOS_DIR, '.env'), '', 'utf8');
 
 describe('runtime base URL support', () => {
+  test('reports pending migration when the selected runtime has no legacy output', async () => {
+    const { prepareRuntimeInstruction } = await import('../../commands/runtime.js');
+    const zylosDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-runtime-instructions-'));
+    const pending = prepareRuntimeInstruction('codex', { zylosDir });
+    assert.equal(pending.pendingMigration, true);
+    fs.writeFileSync(path.join(zylosDir, 'AGENTS.md'), 'legacy instructions\n');
+    const preserved = prepareRuntimeInstruction('codex', { zylosDir });
+    assert.equal(preserved.pendingMigration, false);
+    fs.rmSync(zylosDir, { recursive: true, force: true });
+  });
+
   test('runtime command exports helpers for base-url parsing and validation', async () => {
     const runtimeModule = await import('../../commands/runtime.js');
 

@@ -7,7 +7,7 @@
  * Usage:
  *   import { getActiveAdapter } from '../lib/runtime/index.js';
  *   const adapter = getActiveAdapter();
- *   await adapter.buildInstructionFile();
+ *   await adapter.buildInstructionFile(); // Guardian launch boundary
  *   await adapter.launch();
  */
 

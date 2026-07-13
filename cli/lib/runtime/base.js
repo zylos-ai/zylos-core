@@ -32,7 +32,7 @@ export class RuntimeAdapter {
 
   /**
    * Start the runtime agent in a tmux session.
-   * Calls buildInstructionFile() internally before launching.
+   * Guardian calls buildInstructionFile() before this boundary.
    *
    * @returns {Promise<void>}
    */

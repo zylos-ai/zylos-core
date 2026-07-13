@@ -18,7 +18,10 @@ import { prompt, promptYesNo, promptChoice, promptSecret } from '../lib/prompts.
 import { bold, dim, green, red, yellow, cyan, bgGreen, success, error, warn, heading } from '../lib/colors.js';
 import { commandExists } from '../lib/shell-utils.js';
 import { getActiveAdapter } from '../lib/runtime/index.js';
-import { buildInstructionFile } from '../lib/runtime/instruction-builder.js';
+import {
+  activateFreshSplitInstructions,
+  refreshSplitInstructions,
+} from '../lib/runtime/instruction-builder.js';
 import { deployManifestTemplate } from '../lib/runtime/tmux-env.js';
 import { runMigrations } from '../lib/migrate.js';
 import {
@@ -736,7 +739,17 @@ function copyMissingTree(src, dest) {
  * - ecosystem.config.cjs: always updated (managed by zylos-core)
  * - .env, CLAUDE.md, memory/*: only created if missing (user-managed)
  */
-function deployTemplates() {
+export function syncSettingsHooksAfterTemplateDeploy({
+  zylosDir = ZYLOS_DIR,
+  syncScript = path.join(PACKAGE_ROOT, 'cli', 'lib', 'sync-settings-hooks.js'),
+} = {}) {
+  execFileSync(process.execPath, [syncScript], {
+    stdio: 'inherit',
+    env: { ...process.env, ZYLOS_DIR: zylosDir },
+  });
+}
+
+export function deployTemplates({ freshInstall = false } = {}) {
   if (!fs.existsSync(TEMPLATES_SRC)) return;
 
   // ecosystem.config.cjs — always update (source of truth for service definitions)
@@ -758,21 +771,13 @@ function deployTemplates() {
   // Always save current shell PATH to .env (for PM2 services)
   saveSystemPath(envDest);
 
-  // ZYLOS.md — user-editable runtime-agnostic core; only create if missing
-  const zylosMdSrc = path.join(TEMPLATES_SRC, 'ZYLOS.md');
-  const zylosMdDest = path.join(ZYLOS_DIR, 'ZYLOS.md');
-  if (fs.existsSync(zylosMdSrc) && !fs.existsSync(zylosMdDest)) {
-    fs.copyFileSync(zylosMdSrc, zylosMdDest);
-    console.log(`  ${success('Created ZYLOS.md from template')}`);
-  }
-
-  // Instruction file — CLAUDE.md (claude) or AGENTS.md (codex); build if missing
-  const activeRuntime = getZylosConfig().runtime ?? 'claude';
-  const instrFileName = activeRuntime === 'codex' ? 'AGENTS.md' : 'CLAUDE.md';
-  const instrDest = path.join(ZYLOS_DIR, instrFileName);
-  if (!fs.existsSync(instrDest) && fs.existsSync(zylosMdSrc)) {
-    buildInstructionFile(activeRuntime);
-    console.log(`  ${success(`Generated ${instrFileName} from template layers`)}`);
+  const splitResult = freshInstall
+    ? activateFreshSplitInstructions({ zylosDir: ZYLOS_DIR, templatesDir: TEMPLATES_SRC })
+    : refreshSplitInstructions({ zylosDir: ZYLOS_DIR, templatesDir: TEMPLATES_SRC });
+  if (splitResult.pendingMigration) {
+    console.log(`  ${warn('PENDING MIGRATION: instruction assets deployed; existing CLAUDE.md/AGENTS.md preserved')}`);
+  } else {
+    console.log(`  ${success('Split instruction files ready')}`);
   }
 
   // memory/ templates — only create missing files
@@ -794,6 +799,11 @@ function deployTemplates() {
   if (deployManifestTemplate(manifestSrc, ZYLOS_DIR) === 'created') {
     console.log(`  ${success('Created runtime-env.manifest from template')}`);
   }
+
+  // npm postinstall can only sync assembler hooks for an already-materialized
+  // installation. Fresh init creates the assembler above, so converge hooks
+  // here after both the instruction assets and settings template exist.
+  syncSettingsHooksAfterTemplateDeploy();
 }
 
 // ── Core Skills sync ────────────────────────────────────────────
@@ -2309,7 +2319,7 @@ export async function initCommand(args) {
     ensureNewSessionThresholdDefaults();
 
     // Run data migrations before deploying templates (idempotent)
-    runMigrations();
+    runMigrations({ zylosDir: ZYLOS_DIR, templatesDir: TEMPLATES_SRC });
 
     if (!quiet) console.log(heading('Deploying templates...'));
     deployTemplates();
@@ -2419,8 +2429,8 @@ export async function initCommand(args) {
   seedFreshInstallNewSessionThresholdDefault();
 
   // Step 7: Run data migrations then deploy templates (both idempotent)
-  runMigrations();
-  deployTemplates();
+  runMigrations({ zylosDir: ZYLOS_DIR, templatesDir: TEMPLATES_SRC });
+  deployTemplates({ freshInstall: true });
   if (!quiet) console.log(`  ${success('Templates deployed')}`);
 
   // Migrate WEB_CONSOLE_PASSWORD → ZYLOS_WEB_PASSWORD

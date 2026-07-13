@@ -21,7 +21,7 @@ import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
 import { RuntimeAdapter } from './base.js';
-import { buildInstructionFile } from './instruction-builder.js';
+import { assertInstructionReady, buildInstructionFile } from './instruction-builder.js';
 import { CodexContextMonitor } from './codex-context-monitor.js';
 import { createCodexProbe } from '../heartbeat/codex-probe.js';
 import { ZYLOS_DIR, SKILLS_DIR, getZylosConfig } from '../config.js';
@@ -77,14 +77,11 @@ export class CodexAdapter extends RuntimeAdapter {
   // ── Instruction file ───────────────────────────────────────────────────────
 
   /**
-   * Build AGENTS.md = ZYLOS.md + codex-addon.md.
-   *
-   * @param {object} [opts]
-   * @param {string} [opts.memorySnapshot] - Memory content to append (e.g. on session rotation)
+   * Build AGENTS.md from the activated split instruction layers.
    * @returns {Promise<string>} Path to the generated AGENTS.md
    */
-  async buildInstructionFile(opts = {}) {
-    return buildInstructionFile('codex', opts);
+  async buildInstructionFile() {
+    return buildInstructionFile('codex');
   }
 
   // ── Auth ──────────────────────────────────────────────────────────────────
@@ -221,7 +218,7 @@ export class CodexAdapter extends RuntimeAdapter {
   // ── Launch ────────────────────────────────────────────────────────────────
 
   /**
-   * Build the instruction file and start Codex in the tmux session.
+   * Start Codex in the tmux session. Guardian prepares instructions first.
    *
    * New session: builds env via launcher pipeline (clean or compat mode).
    * Existing session: sends command via sendMessage; native SessionStart hook bootstraps.
@@ -233,11 +230,9 @@ export class CodexAdapter extends RuntimeAdapter {
    */
   async launch(opts = {}) {
     const bypassPermissions = opts.bypassPermissions ?? DEFAULT_BYPASS;
+    assertInstructionReady('codex');
 
-    // 1. Build AGENTS.md before launching (pass memorySnapshot for session rotation)
-    await this.buildInstructionFile({ memorySnapshot: opts.memorySnapshot });
-
-    // 1.5. Ensure .agents/skills → .claude/skills symlink for Codex skill discovery.
+    // 1. Ensure .agents/skills → .claude/skills symlink for Codex skill discovery.
     const agentsDir = path.join(ZYLOS_DIR, '.agents');
     const agentsSkillsPath = path.join(agentsDir, 'skills');
     let agentsSkillsExists = false;
