@@ -35,7 +35,7 @@ import {
   tmuxSendKeys,
   tmuxNewSession,
   getProcessName,
-  hasChildProcess,
+  isAgentInProcessTree,
 } from './tmux-helpers.js';
 import { buildCleanEnv, buildCompatEnv, loadRuntimeEnvManifest, writeLaunchSpec } from './tmux-env.js';
 import { classifyCodexLoginStatus } from '../auth-parsers.js';
@@ -169,10 +169,12 @@ export class CodexAdapter extends RuntimeAdapter {
     const panePid = tmuxGetPanePid(SESSION);
     if (!panePid) return false;
 
+    // Keep the legacy loose 'node' match for npm-shim installs where the pane
+    // process is the codex shim itself; the tree walk handles the rest.
     const name = getProcessName(panePid);
     if (name === 'codex' || name === 'node') return true;
 
-    return hasChildProcess(panePid, 'codex');
+    return isAgentInProcessTree(panePid, 'codex');
   }
 
   /**
