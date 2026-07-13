@@ -221,7 +221,8 @@ historical info → `archive/`.
 Under `~/zylos/`:
 - `memory/` — memory files
 - `components/<name>/` — component runtime data (config, databases, logs)
-- `<skill-name>/` — data dirs for a few enumerable system skills only
+- `comm-bridge/`, `scheduler/`, `http/`, `web-console/`,
+  `activity-monitor/` — data dirs of the built-in system skills
 - `workspace/` — cloned repos, experiments, temp documents
 - `vault/` — important content that must be kept long-term (create it if it
   does not exist)
