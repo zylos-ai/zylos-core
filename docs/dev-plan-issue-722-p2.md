@@ -1,9 +1,10 @@
 # Dev Plan: #722 P2 — 存量机迁移工具（migrate-instructions）+ A3 hook 位置归一
 
-> R1（task comment `f971e195`）4 阻塞 + R2（task comment `239dedec`）3 阻塞 + R3（task comment `4ca1f835`）3 阻塞全部采纳：
+> R1（task comment `f971e195`）4 阻塞 + R2（task comment `239dedec`）3 阻塞 + R3（task comment `4ca1f835`）3 阻塞 + R4（task comment `b1a32ae5`）4 阻塞全部采纳：
 > R1 = ①catalog 范围、②B 类判定、③守恒/丢弃矛盾、④A3 收敛（+4 项验证边界）；
 > R2 = ⑤dry-run 与 A3 收敛的写入门限、⑥A3 异常拓扑状态机、⑦recovery residue 两阶段语义；
-> R3 = ⑧CLI partial-success 结果矩阵、⑨按异常类别的真实 remediation（hook-sync 不修 duplicate，已实证）、⑩key-based 确定性判据（lookalike 类别溶解为 drift/foreign）。
+> R3 = ⑧CLI partial-success 结果矩阵、⑨按异常类别的真实 remediation、⑩key-based 确定性判据；
+> R4 = ⑪remediation 入口可达性（already-latest 不跑 step9 → 改为工具委托调用 owner 脚本）、⑫drift 收窄为 command/timeout 投影、⑬committed-cleanup-residue 入矩阵 + active `--apply` 先跑 recovery、⑭A3 settings 原子写入协议（+L104 旧拓扑假设修正）。
 
 ## Summary
 
@@ -38,17 +39,21 @@
 4. **持久备份契约（R1 验证边界落实；#717 是契约先例而非可复用 helper——现实现仅 `self-upgrade.js:641` 为 smart-merge conflicts 内联建 `.backup/<ts>/conflicts`）**：本工具自建布局 `~/zylos/.backup/<timestamp>/instruction-migration/`，内含原 ZYLOS.md / CLAUDE.md / AGENTS.md（存在者全备）+ `migration-report.md`（分类、归因表、候选清单）。**全部 copy 成功并校验后才允许任何 live mutation**；任一 copy 失败 → 零改动退出。备份在成功/失败/重试后都保留（不自动清理，同 #717 语义）；打印路径 = marker.backupPath = 实际目录；与事务临时件 `.split-txn.*.bak` 严格分离（路径与清理器都不相交）。
 5. **事务、marker 与故障语义（R1-④ + R2-⑦ 修订）**：所有 instruction 写入走 `commitEntries` 单事务（提交点 = marker rename，`instruction-builder.js:210`），marker 追加 `migration: {classification, matchedTemplate:{sha256, source}, originalSha256, backupPath, migratedAt}`。**Recovery residue 两阶段语义（对齐现行 commitEntries 合同）**：故障返回**当下**允许且必须保留可判别的恢复记录（rollback 自身失败保留 `.split-txn.*` 记录、cleanup 失败保留 committed `.bak`，交由下次重试恢复/清理——现有测试 instruction-split.test.js:209-267 的既定合同，实现者**不得**为“失败即无残留”而删除这些记录）；「原文件逐字节保留或完整提交 + 无残留」是**成功重试后的终态断言**，不是失败当下的断言。
 6. **A3 归一：写入门限与异常拓扑状态机（R2-⑤⑥ 修订）**：
-   - **写入门限**：无 `--apply` 时（含已激活机上的裸重跑）A3 **永远只报告 drift、零写入**（settings.json / .backup 均逐字节不动）；**只有 active + `--apply`** 才执行收敛。已激活机 `--apply` 重跑 = A3 收敛（幂等）→ 报告 already-active → 退出 0；marker 提交后 settings 失败/被杀 → 下次 `--apply` 重跑必然修复，修复后再跑零 diff。
+   - **写入门限**：无 `--apply` 时（含已激活机上的裸重跑）A3 **永远只报告 drift、零写入**（settings.json / .backup 均逐字节不动，事务 residue 只报告存在、不执行 recovery）；**只有 active + `--apply`** 才执行收敛。已激活机 `--apply` 重跑 = A3 收敛（幂等）→ 报告 already-active → 退出 0；marker 提交后 settings 失败/被杀 → 下次 `--apply` 重跑必然修复，修复后再跑零 diff。
+   - **recovery 前置门（R4-⑬）**：**所有 `--apply` 路径（含 active 机的 already-active 短路之前）必须先执行 `recoverSplitTransaction`**——committed cleanup residue（`commitEntries` 吞掉 cleanup error 的既定行为，`instruction-builder.js:238-248`、`instruction-split.test.js:239-253`）由此保证在任何 `--apply` 重跑时被清扫；dry-run 只报告 residue 存在与含义。
+   - **A3 settings 原子写入协议（R4-⑭）**：P2 自有的 A3 归一写入走 temp + fsync + rename 原子提交（复用 `atomicWrite` 模式）：rename 前被杀 = 原文件逐字节不动，rename 后被杀 = 新内容完整——无部分写状态，A2 的「settings 零改动或完整生效 + 可重试」由此机制支撑，无需 restore 路径。工具读 settings 一律**严格解析**：malformed JSON → A3 refusal + 人工修复引导（绝不降级 `{}`）。（sync-settings-hooks 自身的 `writeFileSync` 非原子是 step9 既有语义，超出 P2，记 #727 追加项。）
    - **确定性判据（R3-⑩：key-based，无模糊匹配）**：hook 身份 = `hookScriptKey()`（归一化脚本路径 + shard 后缀，`hook-utils.js:180-199`，与 canonical sync 同一机制）。对 startup/clear/compact 三个 canonical matcher（P1 合同：各恰好一次，`sync-settings-hooks.js:127-131` 生成器即如此），按「组内 assembler-key 条目计数 + 对象比对」分类；**不同 key 的条目一律 = foreign**（含不同路径同 basename 的“形似”条目），原样保留、不计数、不构成异常。原「lookalike」类别溶解为：同 key 但对象非 exact-canonical = **drift**；不同 key = **foreign**。
-   - **状态 → 动作 → remediation（R3-⑨：按类别给真实可行指引，已对照现实现验证）**：
-     | 状态（每组判定） | A3 动作 | remediation（工具输出原话） |
-     |---|---|---|
-     | canonical：三组各恰一条 assembler-key 条目且对象 exact-canonical | 归一 = 移到本组首位，其余条目相对次序不变；幂等，再跑零 diff | — |
-     | missing：某组无 assembler-key 条目（或组缺失） | loud refusal，settings 零改动 | 跑 `zylos upgrade --self`（step9 hook-sync 会补齐 missing，`sync-settings-hooks.js:452-462` 已验证），然后重跑 `--apply` |
-     | drift：同 key 恰一条但 command/timeout 对象漂移 | loud refusal，settings 零改动 | 同上（hook-sync 会更新同 key drift，L463-470 已验证） |
-     | duplicate-entry：某组内 assembler-key 条目 ≥2 | loud refusal，settings 零改动 | **人工删除多余条目**（工具打印 event/matcher/序号定位）。注意：hook-sync **不会**去重（forward pass 只取首个同 key 匹配，reverse pass 保留所有 template-key 条目——L441-470/L493-538 已实证 added=0/updated=0/removed=0），不得引导用户白跑 |
-     | duplicate-group：同 matcher 值出现于 ≥2 组 | loud refusal，settings 零改动 | 人工合并/删除多余组（同上定位输出）；hook-sync 同样不修 |
-   - **所有权事实**：insert（missing/drift 修复）所有权在 step9 hook-sync（已验证）；duplicate 类**当前没有任何自动 owner**——迁移工具不代行；若要给 canonical sync 增加 dedupe 能力，另立带 owner/scope/tests 的独立 issue，不在 P2。
+   - **状态 → 动作 → remediation（R3-⑨ + R4-⑪⑫ 修订：可修类由工具在 `--apply` 内委托 owner 脚本执行，入口必达）**：
+     | 状态（每组判定） | dry-run 输出 | `--apply` 动作 | 仍未收敛时的 remediation |
+     |---|---|---|---|
+     | canonical：三组各恰一条 assembler-key 条目且对象 exact-canonical | 报告拟归一 | 归一 = 移到本组首位，其余条目相对次序不变；幂等，再跑零 diff | — |
+     | missing：某组无 assembler-key 条目（或组缺失） | 报告 + 「`--apply` 将委托 hook-sync 补齐」 | **委托调用已安装包的 `cli/lib/sync-settings-hooks.js`**（与 step9 同一 shell-out 方式，`self-upgrade.js:1001-1006` 的解析路径）→ 严格重读 settings → 重新分类 → canonical 则继续归一 | 委托后仍非 canonical → refusal + 人工修复定位 |
+     | drift（**R4-⑫ 收窄**）：同 key 恰一条，且与 canonical 的差异**仅限 command/timeout 字段投影** | 同上 | 同上（hook-sync 仅更新 command/timeout，`sync-settings-hooks.js:463-467` 已实证——投影外差异它不修，故不归入 drift） | 同上 |
+     | same-key-manual（R4-⑫ 新增）：同 key 恰一条，但差异超出 command/timeout 投影（多字段如 `async:true`、缺字段、type 异常） | 报告 + 人工修复定位 | loud refusal，settings 零改动（hook-sync added=0/updated=0/removed=0 已实证，不得引导白跑） | 人工修复（打印 event/matcher/字段 diff） |
+     | duplicate-entry：某组内 assembler-key 条目 ≥2 | 同上 | loud refusal，settings 零改动（hook-sync 不去重：forward 首匹配 / reverse 保留 template-key，L441-470/L493-538 已实证） | 人工删除多余条目（打印 event/matcher/序号） |
+     | duplicate-group：同 matcher 值出现于 ≥2 组 | 同上 | loud refusal，settings 零改动 | 人工合并/删除多余组 |
+   - **入口可达性（R4-⑪ 事实修正）**：`zylos upgrade --self` 在 already-latest 时于 `component.js:1048-1056` 早退、**不会**执行 step9——原「引导用户跑 upgrade」的 remediation 不可达，已废弃。改为工具在 `--apply` 内直接委托调用 owner 脚本：不新增公开命令面，不自行改 hook（所有 hook 写入仍由 canonical sync 代码执行），reachability 由「工具与脚本同包」保证。委托调用的作用域 = 完整 canonical hook reconciliation（与每次升级 step9 相同的既有全局行为），其自身的非原子写入是 step9 既有语义，不在 P2 修（可作为 #727 追加项记录）；委托后工具**严格解析** settings 重验（解析失败 → refusal，绝不降级为 `{}`）。
+   - **所有权事实**：hook 写入所有权不变（canonical sync 代码）；工具仅编排调用 + 位置归一。duplicate/same-key-manual 类当前没有自动 owner——若要 dedupe/全字段归一能力，另立带 owner/scope/tests 的独立 issue，不在 P2。
    - 迁移本体（instruction 事务）的成败**不受 A3 影响**——激活已提交则按结果矩阵以 partial-success 结束，重跑持续重报，不静默跳过。
    - **保护合同**：所有 foreign（非 assembler-key）hook 条目在任何路径下深度相等 + 顺序不变。
 7. **CLI 结果矩阵（R3-⑧：partial-success contract 定案）**。exit code 约定：**0 = 完全成功 / 1 = 请求的动作未执行（fatal 或 refusal）/ 2 = partial success（迁移已提交但 A3 pending）**——2 的先例：`zylos runtime` 以 exit 2 表「可行动的非致命状态」。调用方语义：exit 1 → 本次零迁移（或故障 residue 可重试恢复）；exit 2 → 激活已完成，按 stderr 的 remediation 处理后重跑 `--apply` 收敛 A3。
@@ -57,14 +62,15 @@
    | D1 | dry-run（含 active 裸重跑），分析成功 | 不动 | 不动 | 完整报告（分类/A3 状态/拟动作/remediation） | — | 0 |
    | D2 | dry-run，fatal（pre-v0.4 无 ZYLOS.md / 文件不可读 / 状态损坏） | 不动 | 不动 | — | 错误 + 引导 | 1 |
    | A1 | `--apply`，A 类（或 `--user-content` 守恒通过），事务提交，A3 canonical → 已归一 | 提交，marker 含 migration 元数据 | 已写（归一） | 成功报告 + backupPath | — | 0 |
-   | A2 | `--apply`，事务已提交，A3 异常拒绝 **或** settings 写失败 | 已提交 | 零改动 | 迁移成功报告 + backupPath | A3-pending + 按类别 remediation | 2 |
+   | A1w | `--apply`，事务提交成功但 cleanup 失败（R4-⑬：committed `.split-txn.*.bak` residue，功能完整） | 已提交 + residue 保留 | 已写（归一） | 成功报告 + residue 提示「下次 `--apply` 自动清扫」 | — | 0 |
+   | A2 | `--apply`，事务已提交，A3 异常拒绝（same-key-manual/duplicate 类，或委托 sync 后仍非 canonical）**或** A3 原子写 rename 前失败/被杀 | 已提交 | 零改动（原子协议保证） | 迁移成功报告 + backupPath | A3-pending + 按类别 remediation | 2 |
    | A3r | active + `--apply`，canonical 位置漂移 → 收敛 | 已 active，不动 | 已写 | already-active + 已收敛 | — | 0 |
    | A4 | active + `--apply`，A3 异常 → 拒绝 | 不动 | 零改动 | already-active | A3-pending + remediation | 2 |
    | R1 | `--apply`，C 类且无 `--user-content` | 不动，无 marker | 不动 | 分析报告（候选 + 残差） | 拒绝理由 + `--user-content` 流程引导 | 1 |
    | R2 | `--apply` + `--user-content` 守恒不通过 | 不动，无 marker | 不动 | 归因表 | 违规行清单 | 1 |
    | F | `--apply` fatal（备份 copy 失败 → 零 mutation；事务中途故障 → 按 Design 5 两阶段 residue） | 按 residue 语义 | 零改动 | — | 错误 + 重试引导 | 1 |
-   报告文件（`migration-report.md`）仅在发生 live mutation 的路径（A1/A2）写入备份目录；D/R/F 路径零写入，报告只走 stdout/stderr。
-8. **前置状态要求**：机器须已有 P1 物化（无则先 `deployInstructionAssets` 从包内补齐）；pre-v0.4 机（无 ZYLOS.md）→ 明确报错引导先跑 `zylos upgrade --self`（step7 runMigrations 先生成 ZYLOS.md）——即矩阵行 D2/F 的一个具体案例。
+   报告文件（`migration-report.md`）仅在发生 live mutation 的路径（A1/A1w/A2）写入备份目录；D/R/F 路径零写入，报告只走 stdout/stderr。active `--apply` 行（A3r/A4）在 already-active 短路前先执行 recovery 前置门（Design 5），清扫到 residue 时 stdout 注明。
+8. **前置状态要求**：机器须已有 P1 物化（无则先 `deployInstructionAssets` 从包内补齐）；pre-v0.4 机（无 ZYLOS.md）→ 明确报错（矩阵行 D2/F 的具体案例），引导按其 CLI 状态走可达路径：有新版可升 → `zylos upgrade --self`（step7 runMigrations 生成 ZYLOS.md）；CLI 已最新 → `zylos init` re-init 迁移路径（同样调用 runMigrations，`init.js:2322`）——与 R4-⑪ 同理，不给出 already-latest 下不可达的指引。
 
 ## Development Checklist
 
@@ -89,9 +95,12 @@
 - [ ] `--apply` A 类：备份先落且逐字节可还原；新 CLAUDE.md/AGENTS.md = split 头 + system + 用户内容；marker migration 元数据完整；守恒归因表落报告。
 - [ ] 备份失败注入（copy 中途失败）→ 零 mutation、明确报错、可重试。
 - [ ] **事务故障矩阵（逐 entry 精确列举，不笼统写「复用 P1」）**：user ZYLOS / claude-system / codex-system / onboarding / assembler / claude-output / codex-output / marker 八项，覆盖 stage 后 kill、rename 中 kill（old→txn-backup 后、new→live 后）、rollback remove/restore 失败、commit 后 cleanup 失败。**两阶段断言（R2-⑦）**：fault 当下断言可判别 recovery residue / marker 状态被保留（不得被清）；成功重试后断言终态二态收敛（原文件逐字节保留或完整提交、无残留）。
-- [ ] **A3 写入门限与故障收敛（R2-⑤）**：active + A3-drift 状态下裸重跑 → 报告 drift 且 settings/.backup 逐字节零写入；同状态 `--apply` → 收敛 → 再跑零 diff；marker 提交成功 → settings 写失败/kill → `--apply` 重跑修复 → 再跑零 diff。
+- [ ] **A3 写入门限与故障收敛（R2-⑤ + R4-⑭）**：active + A3-drift 状态下裸重跑 → 报告 drift 且 settings/.backup 逐字节零写入；同状态 `--apply` → 收敛 → 再跑零 diff；A3 原子写 rename **前**被杀 → settings 逐字节原样 → `--apply` 重跑修复 → 再跑零 diff；rename **后**被杀 → 新内容完整无部分写；settings malformed JSON → A3 refusal + 人工引导（断言不降级 `{}`、不写入）。
+- [ ] **remediation 入口可达性（R4-⑪）**：already-latest 机 + missing/drift 拓扑 → `--apply` 内委托 sync 真实补齐/更新 settings → 同次运行重验为 canonical → 归一 → exit 0（断言全链无需第二条用户命令）；委托后仍非 canonical（构造 same-key-manual）→ refusal + exit 2。
+- [ ] **drift 投影边界（R4-⑫）**：同 key 仅 command 漂移 / 仅 timeout 漂移 → 判 drift 且委托后收敛；同 key 加 `async:true`（投影外多字段）→ 判 same-key-manual、委托不执行或执行后断言 added=0/updated=0/removed=0、refusal + 字段 diff 输出。
+- [ ] **committed cleanup residue（R4-⑬）**：注入 cleanup 失败 → 断言 commit 成功 + marker 完整 + `.bak` residue 保留 + exit 0 + stdout residue 提示（矩阵 A1w）；随后 active `--apply` 重跑 → recovery 前置门清扫 residue → 零残留 + A3 幂等；active 裸重跑 → 仅报告 residue、零写入。
 - [ ] **A3 异常拓扑（R2-⑥ + R3-⑨⑩，每例断言精确后置条件 + remediation 文案）**：duplicate-entry（同组两条 assembler-key）→ refusal + settings 逐字节不动 + stderr 含人工修复定位（不得引导 hook-sync）；missing（组内无 assembler-key / 组缺失）→ refusal + stderr 引导 hook-sync；drift（同 key 对象漂移）→ refusal + stderr 引导 hook-sync；duplicate-group（同 matcher 两组）→ refusal + 人工修复引导；foreign 同 basename 不同路径（key 不同）→ 判 foreign、不计数、不移动、不出现在异常报告；canonical 态 → 归一后所有 foreign hook 深度相等 + 顺序不变，重跑零 diff。
-- [ ] **CLI 结果矩阵全行覆盖（R3-⑧）**：真入口子进程逐行验证 Design 7 矩阵 D1/D2/A1/A2/A3r/A4/R1/R2/F 的 stdout 内容、stderr 内容、exit code、事务/marker/settings 后置状态；exit 2 行额外验证「remediation 后重跑 `--apply` → exit 0 收敛」链。
+- [ ] **CLI 结果矩阵全行覆盖（R3-⑧ + R4-⑬）**：真入口子进程逐行验证 Design 7 矩阵 D1/D2/A1/A1w/A2/A3r/A4/R1/R2/F 的 stdout 内容、stderr 内容、exit code、事务/marker/settings 后置状态；exit 2 行额外验证「remediation 后重跑 `--apply` → exit 0 收敛」链。
 - [ ] **CLI 真入口**：子进程执行 `cli/zylos.js migrate-instructions` 的 dispatch、flags 解析（未知 flag 拒绝）；结果矩阵行的详细断言见上条（现 bin.test.js 只测 component symlink，与命令路由无关，需新增）。
 - [ ] 回归：`activateFreshSplitInstructions` legacy 拒绝门、refresh 路径、P1 全部现有测试不动且全绿（Jest + Node）。
 
@@ -101,7 +110,7 @@
 - [ ] managed 块形态是有限集（migration marker / onboarding 块 / portability 补丁）——以 jinglever 机 Q2 考古为据；新形态落入 C 类兜底，不会误拆。
 - [ ] legacy 机不存在任何 seed provenance ledger → 自动 B 集合为空是**预期结果**，不是缺陷；工具与文档按此表述。
 - [ ] 存量机在 P1 升级后均已物化 system files（本机已验）；未物化者可由本工具从包内补齐，无需网络。
-- [ ] `settings.json` SessionStart 组内 3 条 assembler 条目可整体识别（以内容识别，不以位置识别）。
+- [ ] `settings.json` 中 assembler 条目的**唯一 oracle = Design 6 状态机**：以 `hookScriptKey` 识别身份（startup/clear/compact 三个 canonical matcher 组、canonical 态每组恰一条 exact-canonical 条目），不以位置、不以条数、不以模糊内容匹配识别。
 
 ## Acceptance Checklist
 
