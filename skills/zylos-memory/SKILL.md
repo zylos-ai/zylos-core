@@ -63,11 +63,6 @@ services piling up in the PM2 list. If the session exposes no native
 background-agent capability, run the sync inline as a last resort and note
 that in the handoff/status.
 
-If historical `memory-sync-*` PM2 entries exist (created by older
-versions): while one is running, do not start another sync writer; stopped
-entries are residue — remove them (`pm2 delete <name>`) and never create
-replacements.
-
 ### Sync Flow
 
 1. Rotate session log if needed:
