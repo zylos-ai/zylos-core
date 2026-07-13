@@ -51,19 +51,22 @@ Both launch a background subagent using the current runtime's supported subagent
 
 ### Codex Background Execution
 
-In Codex, prefer the session's native subagent tools: `spawn_agent` to
+In Codex, use the session's native subagent tools: `spawn_agent` to
 launch the sync subagent and `wait_agent` to collect its result. These are
 host session tools — they do not appear in `codex --help`. For a single
 long-running command, an async exec session (`exec_command` +
 `write_stdin`) also works. Bare `nohup ... &` does NOT survive the
-tool-call boundary and must never be used for sync. Do not create PM2
-services, run `pm2 start ... codex exec ...`, or fork an extra `codex exec`
-sidecar. PM2 is only a fallback when no native background-agent capability
-is available; if used, explicitly record the reason in the handoff/status.
+tool-call boundary and must never be used for sync. Never use PM2 for
+sync — do not create PM2 services, run `pm2 start ... codex exec ...`, or
+fork an extra `codex exec` sidecar: one-shot sync processes leave stopped
+services piling up in the PM2 list. If the session exposes no native
+background-agent capability, defer the sync and record the limitation in
+the handoff/status instead.
 
-Before starting Memory Sync, check for existing `memory-sync-*` PM2 entries.
-If one is running, do not start another sync writer. If only stopped entries
-exist, report them as historical records and do not create a replacement.
+If historical `memory-sync-*` PM2 entries exist (created by older
+versions): while one is running, do not start another sync writer; stopped
+entries are residue — remove them (`pm2 delete <name>`) and never create
+replacements.
 
 ### Sync Flow
 
