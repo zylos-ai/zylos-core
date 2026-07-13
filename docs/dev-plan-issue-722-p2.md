@@ -4,7 +4,9 @@
 > R1 = ①catalog 范围、②B 类判定、③守恒/丢弃矛盾、④A3 收敛（+4 项验证边界）；
 > R2 = ⑤dry-run 与 A3 收敛的写入门限、⑥A3 异常拓扑状态机、⑦recovery residue 两阶段语义；
 > R3 = ⑧CLI partial-success 结果矩阵、⑨按异常类别的真实 remediation、⑩key-based 确定性判据；
-> R4 = ⑪remediation 入口可达性（already-latest 不跑 step9 → 改为工具委托调用 owner 脚本）、⑫drift 收窄为 command/timeout 投影、⑬committed-cleanup-residue 入矩阵 + active `--apply` 先跑 recovery、⑭A3 settings 原子写入协议（+L104 旧拓扑假设修正）。
+> R4 = ⑪remediation 入口可达性（already-latest 不跑 step9 → 改为工具委托调用 owner 脚本）、⑫drift 收窄为 command/timeout 投影、⑬committed-cleanup-residue 入矩阵 + active `--apply` 先跑 recovery、⑭A3 settings 原子写入协议（+L104 旧拓扑假设修正）；
+> R5（task comment `67dcef3b`）3 阻塞 = R5-①整脚本委托收窄为 owner 模块窄 typed seam、R5-②manual-first 全局 preflight + 单次原子写、R5-③crash/SIGKILL 与 handled error 分离（+L102 旧引导修正）；
+> R6（task comment `b9e0af64`）3 阻塞 = R6-①canonical policy 所有权闭合（seam 不再由调用方传 canonicalEntries；「canonical 来自 template settings」系事实错误——template settings 无任何 hooks，真实来源为 owner generator 按 zylosDir 动态构造）、R6-②schema-malformed topology 结构 preflight（防止合法 JSON 异常形态被降级为 missing 后覆盖丢数据）、R6-③cleanup residue × A3 refusal/error 组合行 A2w + 优先级规则。
 
 ## Summary
 
@@ -43,17 +45,18 @@
    - **recovery 前置门（R4-⑬）**：**所有 `--apply` 路径（含 active 机的 already-active 短路之前）必须先执行 `recoverSplitTransaction`**——committed cleanup residue（`commitEntries` 吞掉 cleanup error 的既定行为，`instruction-builder.js:238-248`、`instruction-split.test.js:239-253`）由此保证在任何 `--apply` 重跑时被清扫；dry-run 只报告 residue 存在与含义。
    - **A3 settings 原子写入协议（R4-⑭ + R5-③ 修订：handled error 与 crash 分离）**：A3 的唯一 settings 写入（seam 补齐 + 归一合成后的单次写）走 temp + fsync + rename 原子提交：rename 前被杀 = 原文件逐字节不动，rename 后被杀 = 新内容完整——**文件二态**由机制保证。**结果语义分两类**：(a) **handled error**（工具捕获的 I/O 失败，如 temp 写失败、rename EACCES）→ 可正常报告，走矩阵 A2/A4（settings 零改动 + remediation「重跑 `--apply`」）；(b) **crash/SIGKILL** → 进程无法产出任何 stdout/stderr/exit code，**不建模为矩阵行**——crash contract 只承诺：settings 处于 old-or-new 二态、instruction 事务状态由 Design 5 residue 语义覆盖、下次 `--apply` 重跑必然收敛。工具读 settings 一律**严格解析**：malformed JSON → A3 refusal + 人工修复引导（绝不降级 `{}`）。（sync-settings-hooks 脚本自身的 `writeFileSync` 非原子是 step9 既有语义——P2 改走窄 seam + 自有原子写后已不在本工具链路上，仍记 #727 追加项。）
    - **确定性判据（R3-⑩：key-based，无模糊匹配）**：hook 身份 = `hookScriptKey()`（归一化脚本路径 + shard 后缀，`hook-utils.js:180-199`，与 canonical sync 同一机制）。对 startup/clear/compact 三个 canonical matcher（P1 合同：各恰好一次，`sync-settings-hooks.js:127-131` 生成器即如此），按「组内 assembler-key 条目计数 + 对象比对」分类；**不同 key 的条目一律 = foreign**（含不同路径同 basename 的“形似”条目），原样保留、不计数、不构成异常。原「lookalike」类别溶解为：同 key 但对象非 exact-canonical = **drift**；不同 key = **foreign**。
-   - **执行顺序（R5-② 修订：preflight 优先，单一状态机）**：`--apply` 的 A3 阶段 = ①严格读 settings → ②**对完整三组做 preflight 分类**（全量判定后才决定动作，不逐组边判边写）→ ③若**任一**组存在 same-key-manual / duplicate-entry / duplicate-group → **委托与写入一律不执行**，整体 refusal，settings 逐字节零改动（A2/A4 零改动承诺由此成立，混合拓扑如「startup missing + clear duplicate」也落在此格）→ ④否则（所有组 ∈ {canonical, missing, drift}）在**内存中**合成「seam 补齐/修正 + 位置归一」后的完整 settings → ⑤**单次原子写**提交。两步合一写 = 不存在「sync 已写、归一未写」的中间态。
+   - **执行顺序（R5-② + R6-② 修订：结构校验 → preflight 分类，单一状态机）**：`--apply` 的 A3 阶段 = ①严格读 settings（strict JSON parse，malformed JSON → refusal）→ ②**结构 preflight（R6-②，先于任何 key 分类）**：`hooks.SessionStart` 若 present 必须为数组；每个 group 必须为 object；`matcher` 必须为字符串；group 的 `hooks` 若 present 必须为数组；hook 元素必须为 object（command hook 以 `type:'command'` 识别，其余 type 原样保留为 foreign）。任何不满足 = **schema-malformed** → 整体 refusal、settings 逐字节零改动、输出精确 JSON 位置 + 期望类型。**分类实现不得复用 `getCommandHooks()` 的宽松归零语义**（`hook-utils.js:205-211` 把非对象 group / 非数组 `hooks` 静默映射为 `[]`——直接用于分类会把 `hooks:{legacy:"keep"}` 之类误判为 missing，写入时覆盖丢数据，违反 preflight 零改动与 foreign-preserve 合同）→ ③**对完整三组做 key 分类**（全量判定后才决定动作，不逐组边判边写）→ ④若**任一**组存在 same-key-manual / duplicate-entry / duplicate-group → **委托与写入一律不执行**，整体 refusal，settings 逐字节零改动（A2/A4 零改动承诺由此成立，混合拓扑如「startup missing + clear duplicate」也落在此格）→ ⑤否则（所有组 ∈ {canonical, missing, drift}）在**内存中**合成「seam 补齐/修正 + 位置归一」后的完整 settings → ⑥**单次原子写**提交。两步合一写 = 不存在「sync 已写、归一未写」的中间态。
    - **状态 → 动作 → remediation（R3-⑨ + R4-⑫ + R5-① 修订）**：
      | 状态（每组判定） | dry-run 输出 | `--apply` 动作（在上述 preflight 通过的前提下） | remediation |
      |---|---|---|---|
      | canonical：三组各恰一条 assembler-key 条目且对象 exact-canonical | 报告拟归一 | 归一 = 移到本组首位，其余条目相对次序不变；幂等，再跑零 diff | — |
-     | missing：某组无 assembler-key 条目（或组缺失） | 报告 + 「`--apply` 将补齐」 | 经 **owner 模块内的窄 typed seam**（见下）在内存中补齐 → 与归一合并为单次原子写 | （seam 后置校验失败 → refusal 零改动 + 人工定位） |
+     | schema-malformed（R6-②）：SessionStart 非数组 / group 非 object / matcher 非字符串 / group `hooks` 非数组 / hook 元素非 object | 报告精确 JSON 位置 + 期望类型 | **结构 preflight 整体 refusal**（先于任何 key 分类），零改动 | 人工修复（打印 JSON path + 期望类型；不得被降级为 missing） |
+     | missing：结构校验通过后，某组无 assembler-key 条目（或组缺失） | 报告 + 「`--apply` 将补齐」 | 经 **owner 模块内的窄 typed seam**（见下）在内存中补齐 → 与归一合并为单次原子写 | （seam 后置校验失败 → refusal 零改动 + 人工定位） |
      | drift（R4-⑫ 收窄）：同 key 恰一条，差异**仅限 command/timeout 投影** | 同上 | 同上（seam 仅投影内修正） | 同上 |
      | same-key-manual：同 key 恰一条，差异超出投影（如 `async:true`、缺字段、type 异常） | 报告 + 人工修复定位 | **preflight 整体 refusal**，零改动 | 人工修复（打印 event/matcher/字段 diff） |
      | duplicate-entry：某组内 assembler-key 条目 ≥2 | 同上 | 同上（hook-sync 与 seam 均不去重） | 人工删除多余条目（打印 event/matcher/序号） |
      | duplicate-group：同 matcher 值出现于 ≥2 组 | 同上 | 同上 | 人工合并/删除多余组 |
-   - **窄 seam（R5-① 修订，替代 R4 版的整脚本 shell-out）**：在 canonical sync **owner 模块** `sync-settings-hooks.js` 内新增导出的 typed 函数（如 `reconcileAssemblerEntries(settings, canonicalEntries)`）：纯内存、无 I/O，作用域**仅限三条 canonical assembler 条目**的补齐与 command/timeout 投影修正，canonical 条目来源 = step9 同一 template settings。**明确不做**：其他 core-managed/claimed hooks、statusLine、model/boolean settings、Codex global/project config、paired threshold、`/exit` enqueue（R4 版整脚本委托的实测副作用：修 startup missing 会连带把无关 activity hook timeout 999999→5——jinglever R5 复现，废弃该方案的直接依据）。迁移工具同包 ESM import 调用，reachability 由同包保证；hook 写入语义的所有权仍在 owner 模块（seam 是 owner 模块的导出，不是迁移工具的私有实现）。
+   - **窄 seam（R5-① + R6-① 修订，替代 R4 版的整脚本 shell-out）**：在 canonical sync **owner 模块** `sync-settings-hooks.js` 内新增导出的 typed 函数 `reconcileAssemblerEntries(settings, { zylosDir })`：纯内存、无 I/O，作用域**仅限三条 canonical assembler 条目**的补齐与 command/timeout 投影修正。**canonical policy 不由调用方提供（R6-①）**——template settings（`templates/.claude/settings.json`）实际不含任何 hooks，真实 canonical assembler 条目是 `desiredSessionStartHooks({zylosDir})`（`sync-settings-hooks.js:83-114`）按 zylosDir 动态构造并由 `desiredClaudeHooks()` 复制到三 matcher；因此从中抽出专用 typed builder `canonicalAssemblerEntry({ zylosDir })`（纯路径构造、无 I/O），**step9 生成器与 seam 共用同一 builder**——「canonical 是什么」及其随 owner 演进的漂移全部留在 owner 模块内；迁移工具只传 `zylosDir`，不重建、不筛选、不从任何 template 拼装 policy。前置：A3 阶段仅在 assembler 已物化后运行（激活事务本身写入 assembler；active 重跑机必然已物化）——与 owner generator 的 existsSync 门语义一致，seam 与 builder 自身保持纯函数。**明确不做**：其他 core-managed/claimed hooks、statusLine、model/boolean settings、Codex global/project config、paired threshold、`/exit` enqueue（R4 版整脚本委托的实测副作用：修 startup missing 会连带把无关 activity hook timeout 999999→5——jinglever R5 复现，废弃该方案的直接依据）。迁移工具同包 ESM import 调用，reachability 由同包保证；hook 写入语义的所有权仍在 owner 模块（seam 是 owner 模块的导出，不是迁移工具的私有实现）。
    - **所有权事实**：duplicate/same-key-manual 类当前没有自动 owner——若要 dedupe/全字段归一能力，另立带 owner/scope/tests 的独立 issue，不在 P2。
    - 迁移本体（instruction 事务）的成败**不受 A3 影响**——激活已提交则按结果矩阵以 partial-success 结束，重跑持续重报，不静默跳过。
    - **保护合同**：所有 foreign（非 assembler-key）hook 条目在任何路径下深度相等 + 顺序不变。
@@ -64,14 +67,16 @@
    | D2 | dry-run，fatal（pre-v0.4 无 ZYLOS.md / 文件不可读 / 状态损坏） | 不动 | 不动 | — | 错误 + 引导 | 1 |
    | A1 | `--apply`，A 类（或 `--user-content` 守恒通过），事务提交，A3 canonical → 已归一 | 提交，marker 含 migration 元数据 | 已写（归一） | 成功报告 + backupPath | — | 0 |
    | A1w | `--apply`，事务提交成功但 cleanup 失败（R4-⑬：committed `.split-txn.*.bak` residue，功能完整） | 已提交 + residue 保留 | 已写（归一） | 成功报告 + residue 提示「下次 `--apply` 自动清扫」 | — | 0 |
-   | A2 | `--apply`，事务已提交，A3 preflight refusal（任一组 same-key-manual/duplicate 类，含混合拓扑）**或** A3 原子写 handled I/O error | 已提交 | 零改动（preflight 先于一切写入；原子协议保证 error 路径无部分写） | 迁移成功报告 + backupPath | A3-pending + 按类别 remediation（error 路径 = 「重跑 `--apply`」） | 2 |
+   | A2 | `--apply`，事务已提交，A3 preflight refusal（schema-malformed 或任一组 same-key-manual/duplicate 类，含混合拓扑）**或** A3 原子写 handled I/O error | 已提交 | 零改动（结构校验与 preflight 先于一切写入；原子协议保证 error 路径无部分写） | 迁移成功报告 + backupPath | A3-pending + 按类别 remediation（error 路径 = 「重跑 `--apply`」） | 2 |
+   | A2w | `--apply`，事务提交成功**且** cleanup 失败（residue 保留）**且** 同次 A3 refusal / handled I/O error（R6-③ 组合行：`commitEntries` 吞掉 cleanup error 后正常返回（`instruction-builder.js:238-248`），A3 独立执行，两故障可同次发生） | 已提交 + residue 保留 | 零改动 | 迁移成功报告 + backupPath + residue 提示「下次 `--apply` 自动清扫」 | A3-pending + 按类别 remediation | 2 |
    | A3r | active + `--apply`，全组 ∈ {canonical, missing, drift} → seam 补齐/修正 + 归一，单次原子写 | 已 active，不动 | 已写（单次原子提交） | already-active + 已收敛 | — | 0 |
-   | A4 | active + `--apply`，A3 preflight refusal（同 A2 定义）或 handled I/O error | 不动 | 零改动 | already-active | A3-pending + remediation | 2 |
+   | A4 | active + `--apply`，A3 preflight refusal（同 A2 定义，含 schema-malformed）或 handled I/O error | 不动 | 零改动 | already-active | A3-pending + remediation | 2 |
+   **组合优先级（R6-③）**：exit code 由 A3 结果决定——存在 A3 refusal / handled error 时一律 exit 2（A1w 的 exit 0 仅适用于「residue 存在但 A3 成功收敛」）；residue 的存在必须在 stdout 显式报告，不因 A3 失败而省略。收敛链：下次 `--apply` 先经 recovery 前置门清扫 residue，待人工拓扑修复 / handled error 消失后收敛至 exit 0（A2w → A3r/A1 路径）。
    | （X） | crash/SIGKILL（任意 `--apply` 阶段）——**非矩阵行，无 CLI 输出合同** | 按 Design 5 residue 语义 | old-or-new 二态（原子协议） | 无保证 | 无保证 | 无（signal） |
    | R1 | `--apply`，C 类且无 `--user-content` | 不动，无 marker | 不动 | 分析报告（候选 + 残差） | 拒绝理由 + `--user-content` 流程引导 | 1 |
    | R2 | `--apply` + `--user-content` 守恒不通过 | 不动，无 marker | 不动 | 归因表 | 违规行清单 | 1 |
    | F | `--apply` fatal（备份 copy 失败 → 零 mutation；事务中途故障 → 按 Design 5 两阶段 residue） | 按 residue 语义 | 零改动 | — | 错误 + 重试引导 | 1 |
-   报告文件（`migration-report.md`）仅在发生 live mutation 的路径（A1/A1w/A2）写入备份目录；D/R/F 路径零写入，报告只走 stdout/stderr。active `--apply` 行（A3r/A4）在 already-active 短路前先执行 recovery 前置门（Design 5），清扫到 residue 时 stdout 注明。
+   报告文件（`migration-report.md`）仅在发生 live mutation 的路径（A1/A1w/A2/A2w）写入备份目录；D/R/F 路径零写入，报告只走 stdout/stderr。active `--apply` 行（A3r/A4）在 already-active 短路前先执行 recovery 前置门（Design 5），清扫到 residue 时 stdout 注明。
 8. **前置状态要求**：机器须已有 P1 物化（无则先 `deployInstructionAssets` 从包内补齐）；pre-v0.4 机（无 ZYLOS.md）→ 明确报错（矩阵行 D2/F 的具体案例），引导按其 CLI 状态走可达路径：有新版可升 → `zylos upgrade --self`（step7 runMigrations 生成 ZYLOS.md）；CLI 已最新 → `zylos init` re-init 迁移路径（同样调用 runMigrations，`init.js:2322`）——与 R4-⑪ 同理，不给出 already-latest 下不可达的指引。
 
 ## Development Checklist
@@ -83,8 +88,8 @@
 - [ ] 备份模块：`.backup/<ts>/instruction-migration/` 布局、先备份后改动、copy 校验、任一失败零 mutation、报告落盘。
 - [ ] `instruction-builder.js` 新增 `activateMigratedSplitInstructions({userContent, migrationMeta, ...})`：单事务写入（含新用户 ZYLOS.md）→ marker（P1 字段 + migration 元数据）。不触碰 `activateFreshSplitInstructions` 的 legacy 拒绝门。
 - [ ] CLI 命令 `zylos migrate-instructions`：dry-run 默认（零写入，A3 只报 drift）；`--apply`；`--user-content <file>`；已激活机 `--apply` 重跑 = A3 收敛 + already-active 退出 0，裸重跑 = 只报告。
-- [ ] **owner 模块窄 seam（R5-①）**：`sync-settings-hooks.js` 新增导出 `reconcileAssemblerEntries(settings, canonicalEntries)`——纯内存、无 I/O、仅 assembler 三条目补齐 + command/timeout 投影修正；单测含 blast-radius 负例（statusLine/model/Codex config/其他 hook——含 jinglever 复现的 activity timeout 999999——逐字节不动）。
-- [ ] A3 归一实现（Design 6 状态机：preflight 全组分类 → 整体 refusal 或 内存合成 seam+归一 → 单次原子写；激活后执行与 active-rerun 收敛共用同一幂等函数）。
+- [ ] **owner 模块窄 seam（R5-① + R6-①）**：`sync-settings-hooks.js` 新增导出 `canonicalAssemblerEntry({ zylosDir })`（从 `desiredSessionStartHooks` 抽出，step9 生成器改为复用同一 builder）+ `reconcileAssemblerEntries(settings, { zylosDir })`——纯内存、无 I/O、仅 assembler 三条目补齐 + command/timeout 投影修正，canonical policy 全部在 owner 模块内派生（调用方零 policy 输入）；单测含 blast-radius 负例（statusLine/model/Codex config/其他 hook——含 jinglever 复现的 activity timeout 999999——逐字节不动）+ **非默认 zylosDir 动态路径一致性**（seam 补齐产物与 `desiredSessionStartHooks({zylosDir})` 的 assembler 条目逐字段一致，startup/clear/compact 三组各一次）+ step9 回归（重构后 `desiredClaudeHooks` 输出与重构前逐字节一致）。
+- [ ] A3 归一实现（Design 6 状态机：严格读 → 结构 preflight（R6-②，不复用 `getCommandHooks` 宽松语义）→ 全组 key 分类 → 整体 refusal 或 内存合成 seam+归一 → 单次原子写；激活后执行与 active-rerun 收敛共用同一幂等函数）。
 - [ ] step7 PENDING MIGRATION 提示文案指名新命令。
 
 ## Test Checklist
@@ -103,8 +108,10 @@
 - [ ] **drift 投影边界（R4-⑫）**：同 key 仅 command 漂移 / 仅 timeout 漂移 → 判 drift 且 `--apply` 收敛；同 key 加 `async:true`（投影外多字段）→ 判 same-key-manual → preflight refusal + exit 2 + settings 零改动 + 字段 diff 输出。
 - [ ] **混合拓扑 preflight（R5-②）**：正交组合 fixtures（如 startup missing + clear duplicate-entry；startup drift + compact duplicate-group）→ 一律整体 refusal、settings 逐字节零改动、stderr 列全所有异常组；全组仅 missing/drift 混合 → 单次原子写一并收敛。
 - [ ] **committed cleanup residue（R4-⑬）**：注入 cleanup 失败 → 断言 commit 成功 + marker 完整 + `.bak` residue 保留 + exit 0 + stdout residue 提示（矩阵 A1w）；随后 active `--apply` 重跑 → recovery 前置门清扫 residue → 零残留 + A3 幂等；active 裸重跑 → 仅报告 residue、零写入。
+- [ ] **schema-malformed topology（R6-②）**：单类 fixtures（SessionStart 非数组 / group 非 object / matcher 非字符串 / group `hooks:{legacy:"keep"}` 非数组 / hook 元素非 object）+ 混合 fixtures（malformed 与 missing/drift/duplicate 并存）→ 一律整体 refusal + settings 逐字节零改动 + 精确 JSON 位置输出 + exit 2（A2/A4 行）；断言**不降级为 missing、不调用 seam、`hooks:{legacy:"keep"}` 原字节保留**；dry-run 同拓扑 → 报告同类异常预告、零写入。
+- [ ] **residue × A3 组合（R6-③，矩阵 A2w）**：真入口 fixtures ①cleanup-failure × A3 preflight-refusal（如 clear duplicate-entry）、②cleanup-failure × A3 handled-I/O-error（注入 temp 写失败）→ 断言全链：marker 已提交 + residue 保留且 stdout 显式报告 + settings 逐字节零改动 + stderr A3-remediation + exit 2；随后重跑 `--apply`：recovery 前置门先清扫 residue，拓扑修复 / 注入解除后 → exit 0 收敛、零残留、再跑零 diff。
 - [ ] **A3 异常拓扑（R2-⑥ + R3-⑨⑩ + R5-①② 修订，每例断言精确后置条件 + remediation 文案）**：duplicate-entry（同组两条 assembler-key）→ preflight refusal + settings 逐字节不动 + stderr 人工修复定位（不得引导 hook-sync——它不去重）；missing / drift → **`--apply` 同命令内 seam 收敛 + exit 0**（不再输出任何第二条命令引导；dry-run 输出「`--apply` 将补齐/修正」预告）；duplicate-group → preflight refusal + 人工修复引导；foreign 同 basename 不同路径（key 不同）→ 判 foreign、不计数、不移动、不出现在异常报告；canonical 态 → 归一后所有 foreign hook 深度相等 + 顺序不变，重跑零 diff。
-- [ ] **CLI 结果矩阵全行覆盖（R3-⑧ + R4-⑬）**：真入口子进程逐行验证 Design 7 矩阵 D1/D2/A1/A1w/A2/A3r/A4/R1/R2/F 的 stdout 内容、stderr 内容、exit code、事务/marker/settings 后置状态；exit 2 行额外验证「remediation 后重跑 `--apply` → exit 0 收敛」链。
+- [ ] **CLI 结果矩阵全行覆盖（R3-⑧ + R4-⑬ + R6-③）**：真入口子进程逐行验证 Design 7 矩阵 D1/D2/A1/A1w/A2/A2w/A3r/A4/R1/R2/F 的 stdout 内容、stderr 内容、exit code、事务/marker/settings 后置状态；exit 2 行额外验证「remediation 后重跑 `--apply` → exit 0 收敛」链。
 - [ ] **CLI 真入口**：子进程执行 `cli/zylos.js migrate-instructions` 的 dispatch、flags 解析（未知 flag 拒绝）；结果矩阵行的详细断言见上条（现 bin.test.js 只测 component symlink，与命令路由无关，需新增）。
 - [ ] 回归：`activateFreshSplitInstructions` legacy 拒绝门、refresh 路径、P1 全部现有测试不动且全绿（Jest + Node）。
 
