@@ -47,7 +47,9 @@ When triggered, run it before handling queued user messages.
 1. Session init: if C4 unsummarized count is over threshold, launch memory sync.
 2. Scheduled context check: if context usage is high, launch memory sync.
 
-Both launch a background subagent using the current runtime's supported subagent mechanism with this file's Sync Flow as the prompt.
+**Before spawning a new memory-sync subagent, check if one is already running** (use `TaskList` on Claude, or the equivalent on other runtimes). Look for any task whose description contains "memory sync" or "zylos-memory". If a memory-sync subagent is already in progress, do NOT spawn another one — let the existing one finish. Spawning duplicates risks a deadlock where the main loop and multiple subagents contend for resources.
+
+Both trigger paths launch a background subagent using the current runtime's supported subagent mechanism with this file's Sync Flow as the prompt.
 
 ### Codex Background Execution
 
