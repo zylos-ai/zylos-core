@@ -59,14 +59,22 @@ export async function emitC4Checkpoint() {
  * Emit the unsummarized-conversations section (including the "no new
  * conversations" fallback and, above threshold, the Memory Sync instruction).
  *
- * In shard mode the orchestrator passes the shard's budget, and over-budget
- * output is packed at MESSAGE granularity: whole oldest messages are dropped
- * until the newest ones fit inline. This shard must never rely on the generic
- * tail-trim + spill fallback — that would cut the NEWEST messages (the text
- * is chronological) and depend on the agent following a read-this-file
- * pointer. Dropped messages are not lost: Memory Sync reads c4.db directly,
- * so they are covered by the next checkpoint summary. Without a budget
- * (legacy single-stdout path) the output is byte-identical to before.
+ * In shard mode the orchestrator passes the shard's budget, and messages are
+ * emitted as ORIGINAL content — never the dispatch-style preview + attachment
+ * pointer (#724): the DB stores originals, and compressing them at session
+ * start would make the agent's own recent history lossy while budget room
+ * goes unused. Over-budget output is packed at MESSAGE granularity instead:
+ * whole oldest messages are dropped until the newest ones fit inline. This
+ * shard must never rely on the generic tail-trim + spill fallback — that
+ * would cut the NEWEST messages (the text is chronological) and depend on
+ * the agent following a read-this-file pointer. Dropped messages are not
+ * lost: Memory Sync reads c4.db directly, so they are covered by the next
+ * checkpoint summary. Only when a SINGLE message alone overflows the whole
+ * shard budget does that message fall back to the preview + pointer form —
+ * a compressed newest message plus intact section structure beats the
+ * orchestrator's blind tail-trim. Without a budget (legacy single-stdout
+ * path, no packer to bound the output) behavior is unchanged: per-message
+ * spill applies as before and the output is byte-identical to before.
  */
 export async function emitC4Conversations(_payload, budget = null) {
   return withC4Db('c4 conversations init', async ({
@@ -88,13 +96,13 @@ export async function emitC4Conversations(_payload, budget = null) {
       ? getUnsummarizedConversations(SESSION_INIT_RECENT_COUNT)
       : getUnsummarizedConversations();
 
-    const assemble = kept => {
+    const assemble = (kept, { spill = true } = {}) => {
       // Informational only — no file to read. Kept within the section so it
       // survives exactly as long as the section does.
       const note = kept.length < conversations.length
         ? `(showing the newest ${kept.length} of ${range.count} unsummarized messages inline; older ones are covered by the next Memory Sync checkpoint)\n\n`
         : '';
-      const sections = [formatSection('RECENT CONVERSATIONS', note + formatConversationsForAgent(kept))];
+      const sections = [formatSection('RECENT CONVERSATIONS', note + formatConversationsForAgent(kept, { spill }))];
 
       // If over threshold, append Memory Sync instruction
       if (needsSync) {
@@ -107,9 +115,13 @@ export async function emitC4Conversations(_payload, budget = null) {
       return sections.join('\n\n');
     };
 
+    // Legacy single-stdout path: no packer bounds the output, so keep the
+    // per-message spill exactly as before (byte-identical).
+    if (!budget) return assemble(conversations);
+
+    // Budgeted shard path: original content, whole-message packing.
     let kept = conversations;
-    let body = assemble(kept);
-    if (!budget) return body;
+    let body = assemble(kept, { spill: false });
 
     // Reserve room for the [k/N] shard header the orchestrator prepends.
     const packBudget = {
@@ -118,7 +130,13 @@ export async function emitC4Conversations(_payload, budget = null) {
     };
     while (kept.length > 1 && !withinBudget(body, packBudget)) {
       kept = kept.slice(1); // drop the oldest whole message
-      body = assemble(kept);
+      body = assemble(kept, { spill: false });
+    }
+    if (!withinBudget(body, packBudget)) {
+      // The single newest message alone overflows the shard budget: fall
+      // back to its preview + pointer form rather than handing the
+      // orchestrator an over-budget body to tail-trim blindly.
+      body = assemble(kept, { spill: true });
     }
     return body;
   });
