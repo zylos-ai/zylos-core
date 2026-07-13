@@ -91,6 +91,33 @@ describe('instruction migration classification and conservation', () => {
     }).ok, false);
   });
 
+  it('allows C content to use an empty baseline only when all occurrences remain user-owned', () => {
+    const catalog = [{ sha256: 'x', content: 'known system\n', sourceCommit: 'c' }];
+    const original = 'unreachable system edit\nowner line\ndup\ndup\n';
+    const accepted = verifyInstructionConservation({
+      strippedContent: original,
+      userContent: original,
+      catalog,
+      matched: null,
+    });
+    assert.equal(accepted.ok, true);
+    assert.equal(accepted.matched, null);
+    assert.equal(accepted.attributionBaseline.kind, 'owner-attributed-empty-baseline');
+    assert.ok(accepted.attribution.every(item => item.source === 'user'));
+    for (const userContent of [
+      'unreachable system edit\nowner line\ndup\n',
+      'owner line\nunreachable system edit\ndup\ndup\n',
+      'unreachable system edit\nowner line\ndup\ndup\ndup\n',
+    ]) {
+      assert.equal(verifyInstructionConservation({
+        strippedContent: original,
+        userContent,
+        catalog,
+        matched: null,
+      }).ok, false);
+    }
+  });
+
   it('uses authoritative provenance for B and never promotes the same pure-add candidate without it', () => {
     const catalog = [{ sha256: 'seed-hash', content: 'system\n', rawContent: 'system\n', sourceCommit: 'c' }];
     const withoutLedger = classifyInstructionBaseline({ original: 'system\nuser\n', catalog });
@@ -503,6 +530,39 @@ describe('migrate-instructions command', () => {
     fs.rmSync(root, { recursive: true, force: true });
   });
 
+  it('preserves a 0600 live instruction file through the migration transaction', async () => {
+    const root = fixture();
+    writeKnownBaseline(root);
+    const userPath = path.join(root, 'ZYLOS.md');
+    fs.chmodSync(userPath, 0o600);
+    const output = capture();
+    assert.equal((await migrateInstructionsCommand(['--apply'], {
+      zylosDir: root, templatesDir: TEMPLATES_DIR, ...output.deps,
+    })).exitCode, 0);
+    assert.equal(fs.statSync(userPath).mode & 0o777, 0o600);
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it('preserves a 0600 settings file through A3 atomic convergence', async () => {
+    const root = fixture();
+    writeKnownBaseline(root);
+    const migrated = capture();
+    assert.equal((await migrateInstructionsCommand(['--apply'], {
+      zylosDir: root, templatesDir: TEMPLATES_DIR, ...migrated.deps,
+    })).exitCode, 0);
+    const settingsPath = path.join(root, '.claude', 'settings.json');
+    const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+    settings.hooks.SessionStart.find(group => group.matcher === 'clear').hooks[0].timeout = 1;
+    fs.writeFileSync(settingsPath, JSON.stringify(settings));
+    fs.chmodSync(settingsPath, 0o600);
+    const converged = capture();
+    assert.equal((await migrateInstructionsCommand(['--apply'], {
+      zylosDir: root, templatesDir: TEMPLATES_DIR, ...converged.deps,
+    })).exitCode, 0);
+    assert.equal(fs.statSync(settingsPath).mode & 0o777, 0o600);
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
   it('dispatches the real CLI and rejects unknown flags', () => {
     const root = fixture();
     writeKnownBaseline(root);
@@ -569,6 +629,41 @@ describe('migrate-instructions command', () => {
         zylosDir: badRoot, templatesDir: TEMPLATES_DIR, ...rejected.deps,
       });
       assert.equal(badResult.exitCode, 1);
+      assert.deepEqual(treeSnapshot(badRoot), before);
+      fs.rmSync(badRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('migrates an unreachable mixed-edit C baseline only when the owner keeps every occurrence', async () => {
+    const original = 'unreachable legacy system line\nowner custom line\ndup\ndup\n';
+    const root = fixture();
+    fs.writeFileSync(path.join(root, 'ZYLOS.md'), original);
+    const userPath = path.join(root, 'user.md');
+    fs.writeFileSync(userPath, original);
+    const output = capture();
+    const result = await migrateInstructionsCommand(['--apply', '--user-content', userPath], {
+      zylosDir: root, templatesDir: TEMPLATES_DIR, ...output.deps,
+    });
+    assert.equal(result.exitCode, 0);
+    assert.equal(fs.readFileSync(path.join(root, 'ZYLOS.md'), 'utf8'), original);
+    const marker = JSON.parse(fs.readFileSync(instructionPaths('claude', { zylosDir: root }).markerPath, 'utf8'));
+    assert.equal(marker.migration.matchedTemplate, null);
+    assert.equal(marker.migration.attributionBaseline.kind, 'owner-attributed-empty-baseline');
+    fs.rmSync(root, { recursive: true, force: true });
+
+    for (const badUser of [
+      'unreachable legacy system line\nowner custom line\ndup\n',
+      'owner custom line\nunreachable legacy system line\ndup\ndup\n',
+    ]) {
+      const badRoot = fixture();
+      fs.writeFileSync(path.join(badRoot, 'ZYLOS.md'), original);
+      const badPath = path.join(badRoot, 'user.md');
+      fs.writeFileSync(badPath, badUser);
+      const before = treeSnapshot(badRoot);
+      const rejected = capture();
+      assert.equal((await migrateInstructionsCommand(['--apply', '--user-content', badPath], {
+        zylosDir: badRoot, templatesDir: TEMPLATES_DIR, ...rejected.deps,
+      })).exitCode, 1);
       assert.deepEqual(treeSnapshot(badRoot), before);
       fs.rmSync(badRoot, { recursive: true, force: true });
     }

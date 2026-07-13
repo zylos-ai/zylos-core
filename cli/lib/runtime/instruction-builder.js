@@ -77,8 +77,10 @@ export function getInstructionFilePath(runtime, options = {}) {
 function atomicWrite(filePath, content) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   const tmpPath = `${filePath}.tmp.${process.pid}.${Date.now()}`;
+  const existingMode = fs.existsSync(filePath) ? fs.statSync(filePath).mode & 0o777 : null;
   try {
     fs.writeFileSync(tmpPath, content);
+    if (existingMode !== null) fs.chmodSync(tmpPath, existingMode);
     fs.renameSync(tmpPath, filePath);
   } finally {
     try { fs.unlinkSync(tmpPath); } catch { }
@@ -187,14 +189,17 @@ function commitEntries(entries, markerPath, markerContent, faultInjector = () =>
       faultInjector(`stage:${entry.name}`);
       fs.mkdirSync(path.dirname(entry.path), { recursive: true });
       const stagePath = `${entry.path}.split-txn.${token}`;
+      const existingMode = fs.existsSync(entry.path) ? fs.statSync(entry.path).mode & 0o777 : null;
       fs.writeFileSync(stagePath, entry.content);
       staged.push({ ...entry, stagePath });
+      if (existingMode !== null) fs.chmodSync(stagePath, existingMode);
     }
     faultInjector('stage:marker');
     markerStage = `${markerPath}.split-txn.${token}`;
     const marker = JSON.parse(markerContent);
     marker.transactionId = token;
     fs.writeFileSync(markerStage, JSON.stringify(marker, null, 2) + '\n', 'utf8');
+    if (fs.existsSync(markerPath)) fs.chmodSync(markerStage, fs.statSync(markerPath).mode & 0o777);
 
     for (const entry of staged) {
       if (fs.existsSync(entry.path)) {

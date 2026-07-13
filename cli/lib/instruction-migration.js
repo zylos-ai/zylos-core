@@ -12,6 +12,11 @@ import {
 const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const DEFAULT_CATALOG_PATH = path.join(PACKAGE_ROOT, 'data', 'instruction-baselines', 'manifest.json');
 const CANONICAL_MATCHERS = ['startup', 'clear', 'compact'];
+const OWNER_ATTRIBUTED_EMPTY_BASELINE = Object.freeze({
+  sha256: crypto.createHash('sha256').update('').digest('hex'),
+  content: '',
+  kind: 'owner-attributed-empty-baseline',
+});
 
 export function sha256(content) {
   return crypto.createHash('sha256').update(content).digest('hex');
@@ -185,10 +190,25 @@ function orderedInterleaveAttribution(original, baseline, user) {
 }
 
 export function verifyInstructionConservation({ strippedContent, userContent, catalog, matched }) {
-  const candidates = matched ? [matched] : catalog;
+  // A known exact/proven baseline remains authoritative. For C-class content,
+  // the catalog is deliberately non-exhaustive, so an owner may instead
+  // attribute every non-managed occurrence to the user layer. The empty
+  // baseline can only pass when userContent preserves the entire stripped
+  // original byte-for-byte by ordered occurrence.
+  const candidates = matched ? [matched] : [...catalog, OWNER_ATTRIBUTED_EMPTY_BASELINE];
   for (const entry of candidates) {
     const attribution = orderedInterleaveAttribution(strippedContent, entry.content, userContent);
-    if (attribution) return { ok: true, matched: entry, attribution };
+    if (attribution) {
+      const ownerAttributed = entry === OWNER_ATTRIBUTED_EMPTY_BASELINE;
+      return {
+        ok: true,
+        matched: ownerAttributed ? null : entry,
+        attributionBaseline: ownerAttributed
+          ? { kind: entry.kind, sha256: entry.sha256 }
+          : { kind: 'catalog', sha256: entry.sha256, sourceCommit: entry.sourceCommit },
+        attribution,
+      };
+    }
   }
   return { ok: false, reason: 'original non-managed line occurrences are not an ordered interleave of baseline and user content' };
 }
@@ -196,6 +216,9 @@ export function verifyInstructionConservation({ strippedContent, userContent, ca
 function atomicWrite(filePath, content, {
   writeFileSync = fs.writeFileSync,
   renameSync = fs.renameSync,
+  existsSync = fs.existsSync,
+  statSync = fs.statSync,
+  chmodSync = fs.chmodSync,
   openSync = fs.openSync,
   fsyncSync = fs.fsyncSync,
   closeSync = fs.closeSync,
@@ -203,9 +226,11 @@ function atomicWrite(filePath, content, {
 } = {}) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   const tempPath = `${filePath}.tmp.${process.pid}.${Date.now()}`;
+  const existingMode = existsSync(filePath) ? statSync(filePath).mode & 0o777 : null;
   let fd;
   try {
     writeFileSync(tempPath, content, 'utf8');
+    if (existingMode !== null) chmodSync(tempPath, existingMode);
     fd = openSync(tempPath, 'r');
     fsyncSync(fd);
     closeSync(fd);
@@ -226,6 +251,7 @@ export function renderMigrationReport({
   managedBlocks = [],
   userContent,
   originalSha256,
+  attributionBaseline,
   attribution = [],
 }) {
   const lines = [
@@ -239,7 +265,8 @@ export function renderMigrationReport({
     `- User content SHA-256: ${typeof userContent === 'string' ? sha256(userContent) : '(not recorded)'}`,
   ];
   lines.push('', '## Attribution', '');
-  lines.push(`- System baseline: ${matched?.sha256 ?? '(unresolved)'}`);
+  lines.push(`- System baseline: ${attributionBaseline?.sha256 ?? matched?.sha256 ?? '(unresolved)'}`);
+  lines.push(`- Baseline kind: ${attributionBaseline?.kind ?? (matched ? 'catalog' : '(unresolved)')}`);
   lines.push(`- Managed blocks removed: ${managedBlocks.length}`);
   for (const block of managedBlocks) lines.push(`  - ${block.kind}: ${sha256(block.content)}`);
   lines.push(`- User content: ${typeof userContent === 'string' ? `${tokens(userContent).length} line occurrence(s)` : '(not recorded)'}`);

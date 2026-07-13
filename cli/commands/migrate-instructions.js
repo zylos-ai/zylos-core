@@ -217,6 +217,7 @@ export async function migrateInstructionsCommand(args, {
     managedBlocks: analysis.managedBlocks,
     userContent,
     originalSha256: digest(original),
+    attributionBaseline: conservation?.attributionBaseline,
     attribution: conservation?.attribution,
   };
   let backup;
@@ -243,10 +244,11 @@ export async function migrateInstructionsCommand(args, {
       faultInjector,
       migrationMeta: {
         classification: analysis.classification,
-        matchedTemplate: {
+        matchedTemplate: conservedMatch ? {
           sha256: conservedMatch.sha256,
           source: conservedMatch.sourceCommit,
-        },
+        } : null,
+        attributionBaseline: conservation?.attributionBaseline,
         originalSha256: digest(original),
         backupPath: backup.backupPath,
         migratedAt,
