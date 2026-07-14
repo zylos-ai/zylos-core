@@ -775,7 +775,7 @@ export function deployTemplates({ freshInstall = false } = {}) {
     ? activateFreshSplitInstructions({ zylosDir: ZYLOS_DIR, templatesDir: TEMPLATES_SRC })
     : refreshSplitInstructions({ zylosDir: ZYLOS_DIR, templatesDir: TEMPLATES_SRC });
   if (splitResult.pendingMigration) {
-    console.log(`  ${warn('PENDING MIGRATION: instruction assets deployed; existing CLAUDE.md/AGENTS.md preserved')}`);
+    console.log(`  ${warn('PENDING MIGRATION: instruction assets deployed; existing CLAUDE.md/AGENTS.md preserved; run zylos migrate-instructions')}`);
   } else {
     console.log(`  ${success('Split instruction files ready')}`);
   }

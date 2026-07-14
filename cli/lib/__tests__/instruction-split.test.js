@@ -11,6 +11,7 @@ import {
   activateFreshSplitInstructions,
   assertInstructionReady,
   buildInstructionFile,
+  deployInstructionAssets,
   instructionPaths,
   needsRebuild,
   refreshSplitInstructions,
@@ -114,6 +115,21 @@ describe('split instruction assembler', () => {
     fs.writeFileSync(onboardingPath, 'stale local copy\n');
     refreshSplitInstructions({ zylosDir: root, templatesDir: TEMPLATES_DIR });
     assert.equal(fs.readFileSync(onboardingPath, 'utf8'), template);
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it('preserves existing asset modes while leaving new asset defaults unchanged', () => {
+    const root = fixture();
+    const paths = instructionPaths('claude', { zylosDir: root });
+    fs.mkdirSync(paths.instructionsDir, { recursive: true });
+    fs.writeFileSync(paths.systemPath, 'old system\n');
+    fs.chmodSync(paths.systemPath, 0o600);
+    deployInstructionAssets({ zylosDir: root, templatesDir: TEMPLATES_DIR });
+    assert.equal(fs.statSync(paths.systemPath).mode & 0o777, 0o600);
+    assert.equal(
+      fs.statSync(paths.onboardingPath).mode & 0o777,
+      0o666 & ~process.umask(),
+    );
     fs.rmSync(root, { recursive: true, force: true });
   });
 
