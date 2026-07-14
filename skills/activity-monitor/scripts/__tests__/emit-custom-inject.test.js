@@ -71,6 +71,20 @@ describe('emitCustomInject', () => {
     assert.equal(emitCustomInject({ env: { ZYLOS_DIR: zylosDir } }), 'REAL');
   });
 
+  it('skips symlinked .md files while injecting regular .md files', () => {
+    const zylosDir = makeZylosDir();
+    writeCustomFile(zylosDir, '10-real.md', 'REAL');
+
+    const outsideFile = path.join(zylosDir, 'outside.md');
+    fs.writeFileSync(outsideFile, 'OUTSIDE');
+    fs.symlinkSync(
+      outsideFile,
+      path.join(zylosDir, 'custom-hooks', 'session-start', '20-linked.md')
+    );
+
+    assert.equal(emitCustomInject({ env: { ZYLOS_DIR: zylosDir } }), 'REAL');
+  });
+
   it('skips whitespace-only files but keeps the rest in order', () => {
     const zylosDir = makeZylosDir();
     writeCustomFile(zylosDir, '10-a.md', 'A');

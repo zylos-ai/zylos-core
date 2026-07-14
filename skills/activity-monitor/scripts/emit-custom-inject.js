@@ -12,7 +12,7 @@
  *
  * - Files concatenate in lexicographic filename order (conf.d style:
  *   `10-rules.md`, `20-platform.md`, ... to control ordering).
- * - Dotfiles and non-.md entries are ignored.
+ * - Dotfiles, non-.md entries, and symlinks are ignored.
  * - A missing directory, no .md files, or all-empty content emits nothing
  *   — the shard's [k/N] header still goes out, so the chain and numbering
  *   are unaffected (same empty semantics as the other content shards).
@@ -37,14 +37,17 @@ export function emitCustomInject({ env = process.env } = {}) {
   const dir = customInjectDir(env);
   let entries;
   try {
-    entries = fs.readdirSync(dir);
+    entries = fs.readdirSync(dir, { withFileTypes: true });
   } catch {
     // Directory absent (fresh installs have none) — nothing to inject.
     return '';
   }
 
   const files = entries
-    .filter(name => name.endsWith('.md') && !name.startsWith('.'))
+    .filter(
+      entry => entry.isFile() && entry.name.endsWith('.md') && !entry.name.startsWith('.')
+    )
+    .map(entry => entry.name)
     .sort();
 
   const parts = [];
