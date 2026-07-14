@@ -271,6 +271,10 @@ describe('shared migration apply engine and prompt', () => {
     const root = fixture();
     const analysis = { classification: 'C', candidates: [], managedBlocks: [] };
     const written = writeMigrationPrompt({ zylosDir: root, analysis, originalSha256: 'abc' });
+    assert.equal(
+      written.filePath,
+      path.join(root, 'custom-hooks', 'session-start', '90-migration-prompt.md')
+    );
     assert.match(fs.readFileSync(written.filePath, 'utf8'), /Original ZYLOS\.md SHA-256: abc/);
     fs.unlinkSync(written.filePath);
     assert.throws(() => writeMigrationPrompt({
@@ -458,6 +462,7 @@ describe('migrate-instructions command', () => {
     const versionPath = instructionFormatVersionPath({ zylosDir: root });
     const promptPath = migrationPromptPath({ zylosDir: root });
     fs.unlinkSync(versionPath);
+    fs.mkdirSync(path.dirname(promptPath), { recursive: true });
     fs.writeFileSync(promptPath, 'stale\n');
 
     const dry = capture();
@@ -483,7 +488,9 @@ describe('migrate-instructions command', () => {
     const root = fixture();
     activateFreshSplitInstructions({ zylosDir: root, templatesDir: TEMPLATES_DIR });
     writeInstructionFormatVersion({ zylosDir: root, version: 3 });
-    fs.writeFileSync(migrationPromptPath({ zylosDir: root }), 'future prompt bytes\n');
+    const promptPath = migrationPromptPath({ zylosDir: root });
+    fs.mkdirSync(path.dirname(promptPath), { recursive: true });
+    fs.writeFileSync(promptPath, 'future prompt bytes\n');
     fs.writeFileSync(path.join(root, 'future.split-txn.residue'), 'future residue bytes\n');
     const before = treeSnapshot(root);
     const output = capture();
@@ -524,7 +531,9 @@ describe('migrate-instructions command', () => {
     const root = fixture();
     activateFreshSplitInstructions({ zylosDir: root, templatesDir: TEMPLATES_DIR });
     fs.unlinkSync(instructionFormatVersionPath({ zylosDir: root }));
-    fs.writeFileSync(migrationPromptPath({ zylosDir: root }), 'stale\n');
+    const promptPath = migrationPromptPath({ zylosDir: root });
+    fs.mkdirSync(path.dirname(promptPath), { recursive: true });
+    fs.writeFileSync(promptPath, 'stale\n');
     const output = capture();
     const result = await migrateInstructionsCommand(['--apply'], {
       zylosDir: root,

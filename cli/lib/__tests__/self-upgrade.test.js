@@ -670,7 +670,8 @@ describe('step7 manifest deploy (real step7_syncInstructions)', () => {
     fs.writeFileSync(path.join(zylosDir, 'AGENTS.md'), 'future codex bytes\n');
     fs.writeFileSync(path.join(zylosDir, '.zylos', 'instructions', 'meta.json'), '{"version":99}\n');
     fs.writeFileSync(path.join(zylosDir, '.zylos', 'instructions', 'future.asset'), 'future asset bytes\n');
-    fs.writeFileSync(path.join(zylosDir, '.zylos', 'pending-migration-prompt.md'), 'future prompt bytes\n');
+    fs.mkdirSync(path.join(zylosDir, 'custom-hooks', 'session-start'), { recursive: true });
+    fs.writeFileSync(path.join(zylosDir, 'custom-hooks', 'session-start', '90-migration-prompt.md'), 'future prompt bytes\n');
     fs.writeFileSync(path.join(zylosDir, '.zylos', 'instruction-format-version'), '3\n');
     const instructionFiles = [
       'ZYLOS.md',
@@ -678,7 +679,7 @@ describe('step7 manifest deploy (real step7_syncInstructions)', () => {
       'AGENTS.md',
       '.zylos/instructions/meta.json',
       '.zylos/instructions/future.asset',
-      '.zylos/pending-migration-prompt.md',
+      'custom-hooks/session-start/90-migration-prompt.md',
       '.zylos/instruction-format-version',
     ];
     const before = new Map(instructionFiles.map(file => [file, fs.readFileSync(path.join(zylosDir, file))]));
@@ -728,7 +729,8 @@ describe('step7 manifest deploy (real step7_syncInstructions)', () => {
     writeSplitPackage(pkgRoot);
     fs.mkdirSync(path.join(zylosDir, '.zylos'), { recursive: true });
     fs.writeFileSync(path.join(zylosDir, 'ZYLOS.md'), 'legacy\n');
-    const promptPath = path.join(zylosDir, '.zylos', 'pending-migration-prompt.md');
+    const promptPath = path.join(zylosDir, 'custom-hooks', 'session-start', '90-migration-prompt.md');
+    fs.mkdirSync(path.dirname(promptPath), { recursive: true });
     fs.writeFileSync(promptPath, 'stale prompt\n');
     let versionWrites = 0;
 
@@ -752,7 +754,8 @@ describe('step7 manifest deploy (real step7_syncInstructions)', () => {
     fs.mkdirSync(path.join(zylosDir, '.zylos'), { recursive: true });
     fs.writeFileSync(path.join(zylosDir, 'ZYLOS.md'), 'legacy\n');
     fs.writeFileSync(path.join(zylosDir, '.zylos', 'instruction-format-version'), '2\n');
-    fs.writeFileSync(path.join(zylosDir, '.zylos', 'pending-migration-prompt.md'), 'stale\n');
+    fs.mkdirSync(path.join(zylosDir, 'custom-hooks', 'session-start'), { recursive: true });
+    fs.writeFileSync(path.join(zylosDir, 'custom-hooks', 'session-start', '90-migration-prompt.md'), 'stale\n');
     const warnings = [];
 
     const result = step7_syncInstructions({ tempDir: pkgRoot, zylosDir, packageRoot: pkgRoot }, {
@@ -774,7 +777,7 @@ describe('step7 manifest deploy (real step7_syncInstructions)', () => {
     writeSplitPackage(pkgRoot);
     fs.mkdirSync(zylosDir, { recursive: true });
     fs.writeFileSync(path.join(zylosDir, 'ZYLOS.md'), 'custom legacy\n');
-    const promptPath = path.join(zylosDir, '.zylos', 'pending-migration-prompt.md');
+    const promptPath = path.join(zylosDir, 'custom-hooks', 'session-start', '90-migration-prompt.md');
     let promptArgs;
 
     const result = step7_syncInstructions({ tempDir: pkgRoot, zylosDir, packageRoot: pkgRoot }, {

@@ -87,7 +87,7 @@ function fakeResolver(chain) {
 }
 
 describe('shard-registry chain', () => {
-  it('builds the 7 core shards in the agreed order', () => {
+  it('builds the 6 core shards in the agreed order', () => {
     const { chain } = buildChain({ zylosDir: makeTmpdir() });
     assert.deepEqual(
       chain.map(s => [s.name, s.chainIndex]),
@@ -96,9 +96,8 @@ describe('shard-registry chain', () => {
         ['custom', 1],
         ['references', 2],
         ['state', 3],
-        ['migration-prompt', 4],
-        ['c4-checkpoint', 5],
-        ['c4-conversations', 6],
+        ['c4-checkpoint', 4],
+        ['c4-conversations', 5],
       ]
     );
     assert.ok(chain.every(s => s.budget.maxChars === DEFAULT_SHARD_BUDGET.maxChars));
@@ -110,7 +109,7 @@ describe('shard-registry chain', () => {
     assert.deepEqual(warnings, []);
     assert.equal(chain.length, CORE_SHARDS.length + 1);
     assert.equal(chain.at(-1).name, 'role-inject');
-    assert.equal(chain.at(-1).chainIndex, 7);
+    assert.equal(chain.at(-1).chainIndex, 6);
   });
 
   it('rejects invalid declarations without breaking the chain', () => {
@@ -352,7 +351,7 @@ describe('runSessionStartShard (content shards)', () => {
     const tmpdir = makeTmpdir();
     const out = tempStdout();
 
-    // Pre-flag the whole core chain so the component shard (position 8)
+    // Pre-flag the whole core chain so the component shard (position 7)
     // does not sit through its ladder deadline.
     for (const shard of CORE_SHARDS) writeFlag('sess-1', shard.name, { tmpdir });
 
@@ -363,7 +362,7 @@ describe('runSessionStartShard (content shards)', () => {
       registerExitFlagImpl: fn => fn(),
     });
 
-    assert.equal(out.read(), '=== ZYLOS STARTUP CONTEXT [8/8] role-inject ===\nROLE CONTEXT\n');
+    assert.equal(out.read(), '=== ZYLOS STARTUP CONTEXT [7/7] role-inject ===\nROLE CONTEXT\n');
   });
 
   it('runs the custom shard end-to-end: user markdown injected at chain position 2', async () => {
@@ -393,7 +392,7 @@ describe('runSessionStartShard (content shards)', () => {
       else process.env.ZYLOS_DIR = savedZylosDir;
     }
 
-    assert.equal(out.read(), '=== ZYLOS STARTUP CONTEXT [2/7] custom ===\nALWAYS REPLY IN PIRATE\n');
+    assert.equal(out.read(), '=== ZYLOS STARTUP CONTEXT [2/6] custom ===\nALWAYS REPLY IN PIRATE\n');
   });
 
   it('custom shard with no content still emits its numbered header (chain numbering intact)', async () => {
@@ -417,7 +416,7 @@ describe('runSessionStartShard (content shards)', () => {
       else process.env.ZYLOS_DIR = savedZylosDir;
     }
 
-    assert.equal(out.read(), '=== ZYLOS STARTUP CONTEXT [2/7] custom ===\n');
+    assert.equal(out.read(), '=== ZYLOS STARTUP CONTEXT [2/6] custom ===\n');
   });
 });
 

@@ -29,6 +29,7 @@ import {
   cleanupMigrationPrompt,
   executeMigrationApply,
   loadInstructionCatalog,
+  migrationPromptPath,
   sha256,
   verifyInstructionConservation,
   writeMigrationPrompt,
@@ -859,7 +860,7 @@ export function step7_syncInstructions(ctx, deps = {}) {
         originalSha256: sha256(original),
       });
       const promptPath = promptResult?.filePath ?? promptResult?.promptPath
-        ?? path.join(zylosDir, '.zylos', 'pending-migration-prompt.md');
+        ?? migrationPromptPath({ zylosDir });
       return step7Result(startTime, {
         message: `PENDING MIGRATION — classification ${analysis.classification}; agent prompt: ${promptPath}${versionWarning ? `; ${versionWarning}` : ''}${manifestNote}`,
       });

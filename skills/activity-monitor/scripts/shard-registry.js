@@ -8,7 +8,7 @@
  * - cli/lib/sync-settings-hooks.js (Claude settings hook generation)
  * - cli/lib/codex-hooks.js (Codex hooks.json generation)
  *
- * Core shards occupy chain orders 1-7. Components join the chain via opt-in
+ * Core shards occupy chain orders 1-6. Components join the chain via opt-in
  * declaration files in ~/zylos/.zylos/shards.d/<name>.json:
  *
  *   {
@@ -84,14 +84,8 @@ export const CORE_SHARDS = Object.freeze([
       (await import('../../zylos-memory/scripts/session-start-inject.js')).emitMemoryPart('state', payload),
   },
   {
-    name: 'migration-prompt',
-    order: 5,
-    emit: async () =>
-      (await import('./emit-migration-prompt.js')).emitMigrationPrompt(),
-  },
-  {
     name: 'c4-checkpoint',
-    order: 6,
+    order: 5,
     emit: async payload =>
       (await import('../../comm-bridge/scripts/c4-session-init.js')).emitC4Checkpoint(payload),
   },
@@ -100,7 +94,7 @@ export const CORE_SHARDS = Object.freeze([
     // newest-first instead of ever falling back to the generic tail-trim +
     // spill (which would cut the newest messages of the chronological text).
     name: 'c4-conversations',
-    order: 7,
+    order: 6,
     emit: async payload =>
       (await import('../../comm-bridge/scripts/c4-session-init.js')).emitC4Conversations(payload, DEFAULT_SHARD_BUDGET),
   },

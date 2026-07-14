@@ -28,7 +28,7 @@ export function sha256(content) {
 }
 
 export function migrationPromptPath({ zylosDir } = {}) {
-  return path.join(path.resolve(zylosDir), '.zylos', 'pending-migration-prompt.md');
+  return path.join(path.resolve(zylosDir), 'custom-hooks', 'session-start', '90-migration-prompt.md');
 }
 
 export function cleanupMigrationPrompt({ zylosDir, io = {} } = {}) {
@@ -46,6 +46,8 @@ export function cleanupMigrationPrompt({ zylosDir, io = {} } = {}) {
 
 export function writeMigrationPrompt({ zylosDir, analysis, originalSha256, io = {} } = {}) {
   const filePath = migrationPromptPath({ zylosDir });
+  const mkdirSync = io.mkdirSync ?? fs.mkdirSync;
+  mkdirSync(path.dirname(filePath), { recursive: true });
   const candidates = (analysis?.candidates ?? []).slice(0, 5);
   const lines = [
     '# Pending instruction migration',
@@ -263,6 +265,7 @@ export function verifyInstructionConservation({ strippedContent, userContent, ca
 }
 
 function atomicWrite(filePath, content, {
+  mkdirSync = fs.mkdirSync,
   writeFileSync = fs.writeFileSync,
   renameSync = fs.renameSync,
   existsSync = fs.existsSync,
@@ -273,7 +276,7 @@ function atomicWrite(filePath, content, {
   closeSync = fs.closeSync,
   unlinkSync = fs.unlinkSync,
 } = {}) {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  mkdirSync(path.dirname(filePath), { recursive: true });
   const tempPath = `${filePath}.tmp.${process.pid}.${Date.now()}`;
   const existingMode = existsSync(filePath) ? statSync(filePath).mode & 0o777 : null;
   let fd;
