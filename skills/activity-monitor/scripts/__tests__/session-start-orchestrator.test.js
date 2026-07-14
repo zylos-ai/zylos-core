@@ -457,7 +457,7 @@ describe('session-start-orchestrator', () => {
 // The injection-order contract used to be the legacy assertions above
 // ("memory then C4" inside one process). With the shard split, the single
 // authoritative order is the registry chain
-// identity→references→state→c4-checkpoint→c4-conversations: shards run as
+// identity→custom→references→state→c4-checkpoint→c4-conversations: shards run as
 // independent hook processes and the flag chain — not process scheduling —
 // decides what lands in context first. These tests pin that contract at the
 // whole-chain level (shard-mode.test.js covers the per-link mechanics).
@@ -472,7 +472,7 @@ describe('authoritative injection order (shard chain)', () => {
       `chain ${names.join('→')} must keep memory shards ahead of C4 shards`);
   });
 
-  it('five core shards launched concurrently in reverse order inject in chain order', async () => {
+  it('six core shards launched concurrently in reverse order inject in chain order', async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shard-chain-order-'));
     const outPath = path.join(tmpDir, 'stdout.txt');
     const fd = fs.openSync(outPath, 'w+');

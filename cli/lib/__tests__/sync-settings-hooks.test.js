@@ -806,8 +806,8 @@ describe('syncHooks SessionStart orchestrator convergence', () => {
       desiredHooks: desiredClaudeHooks({ existsSync: () => true }),
     });
 
-    // 1 assembler + 8 shard/side-effect commands x 3 matchers + 7 other-event
-    // hooks added; 4 retired per-step hooks x 3 matchers removed.
+    // Removing migration-prompt subtracts one command from each of the three
+    // SessionStart matchers; retired per-step hooks remain unchanged.
     assert.deepEqual(result, { added: 34, updated: 0, removed: 12 });
     assertSessionStartUsesOrchestrator(installed);
   });

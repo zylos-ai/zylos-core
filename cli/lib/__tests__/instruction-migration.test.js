@@ -10,12 +10,21 @@ import { migrateInstructionsCommand } from '../../commands/migrate-instructions.
 import {
   classifyInstructionBaseline,
   convergeAssemblerTopology,
+  executeMigrationApply,
   inspectAssemblerTopology,
   loadInstructionCatalog,
+  migrationPromptPath,
   stripManagedBlocks,
   verifyInstructionConservation,
+  writeMigrationPrompt,
 } from '../instruction-migration.js';
-import { instructionPaths } from '../runtime/instruction-builder.js';
+import {
+  activateFreshSplitInstructions,
+  instructionFormatVersionPath,
+  instructionPaths,
+  readInstructionFormatVersion,
+  writeInstructionFormatVersion,
+} from '../runtime/instruction-builder.js';
 import { canonicalAssemblerEntry } from '../sync-settings-hooks.js';
 import { exportInstructionBaselines } from '../../../scripts/export-instruction-baselines.js';
 
@@ -158,6 +167,132 @@ describe('instruction migration classification and conservation', () => {
       '',
     ].join('\n');
     assert.equal(stripManagedBlocks(betweenLines).content, 'before\nafter\n');
+  });
+});
+
+describe('shared migration apply engine and prompt', () => {
+  function aClassInput(root) {
+    const baseline = writeKnownBaseline(root);
+    const original = fs.readFileSync(path.join(root, 'ZYLOS.md'), 'utf8');
+    const catalog = loadInstructionCatalog();
+    const analysis = classifyInstructionBaseline({ original, catalog });
+    const conservation = verifyInstructionConservation({
+      strippedContent: analysis.strippedContent,
+      userContent: '',
+      catalog,
+      matched: analysis.matched,
+    });
+    return { baseline, original, analysis, conservation };
+  }
+
+  it('uses the conservation match, closes the prompt, writes v2 before A3 and returns structured success', () => {
+    const root = fixture();
+    const input = aClassInput(root);
+    const promptPath = migrationPromptPath({ zylosDir: root });
+    fs.mkdirSync(path.dirname(promptPath), { recursive: true });
+    fs.writeFileSync(promptPath, 'stale prompt\n');
+    const result = executeMigrationApply({
+      zylosDir: root,
+      templatesDir: TEMPLATES_DIR,
+      original: input.original,
+      analysis: input.analysis,
+      userContent: fs.readFileSync(path.join(TEMPLATES_DIR, 'ZYLOS.md'), 'utf8'),
+      conservation: input.conservation,
+    });
+    assert.equal(result.migrated, true);
+    assert.equal(result.fatal, false);
+    assert.equal(result.versionWritten, true);
+    assert.equal(result.a3Pending, false);
+    assert.equal(fs.existsSync(promptPath), false);
+    assert.equal(readInstructionFormatVersion({ zylosDir: root }).version, 2);
+    const marker = JSON.parse(fs.readFileSync(instructionPaths('claude', { zylosDir: root }).markerPath));
+    assert.equal(marker.migration.matchedTemplate.sha256, input.conservation.matched.sha256);
+    assert.match(fs.readFileSync(path.join(result.backupPath, 'migration-report.md'), 'utf8'), new RegExp(input.conservation.matched.sha256));
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it('keeps F1 fatal and F2 nonfatal while preserving F2 evidence', () => {
+    for (const phase of ['backup', 'transaction']) {
+      const root = fixture();
+      const input = aClassInput(root);
+      const result = executeMigrationApply({
+        zylosDir: root,
+        templatesDir: TEMPLATES_DIR,
+        original: input.original,
+        analysis: input.analysis,
+        userContent: fs.readFileSync(path.join(TEMPLATES_DIR, 'ZYLOS.md'), 'utf8'),
+        conservation: input.conservation,
+        backupFaultInjector(point) { if (phase === 'backup' && point.startsWith('backup:copy:')) throw new Error('F1'); },
+        faultInjector(point) { if (phase === 'transaction' && point === 'rename:codex-system') throw new Error('F2'); },
+      });
+      assert.equal(result.migrated, false);
+      assert.equal(result.fatal, phase === 'backup');
+      if (phase === 'backup') assert.equal(result.backupPath, null);
+      else {
+        assert.ok(result.backupPath);
+        assert.match(fs.readFileSync(path.join(result.backupPath, 'migration-report.md'), 'utf8'), /Primary error: F2/);
+      }
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('treats prompt cleanup, version write and A3 faults as post-commit pending work', () => {
+    const root = fixture();
+    const input = aClassInput(root);
+    const promptPath = migrationPromptPath({ zylosDir: root });
+    fs.mkdirSync(path.dirname(promptPath), { recursive: true });
+    fs.writeFileSync(promptPath, 'stale\n');
+    const warnings = [];
+    const result = executeMigrationApply({
+      zylosDir: root,
+      templatesDir: TEMPLATES_DIR,
+      original: input.original,
+      analysis: input.analysis,
+      userContent: fs.readFileSync(path.join(TEMPLATES_DIR, 'ZYLOS.md'), 'utf8'),
+      conservation: input.conservation,
+      promptIo: { unlinkSync() { throw new Error('unlink fault'); } },
+      versionIo: { writeFileSync() { throw new Error('version fault'); } },
+      settingsIo: {
+        existsSync() { return true; },
+        readFileSync() { throw new Error('settings fault'); },
+      },
+      warn: message => warnings.push(message),
+    });
+    assert.equal(result.migrated, true);
+    assert.equal(result.versionWritten, false);
+    assert.match(result.versionWriteError.message, /version fault/);
+    assert.equal(result.a3Pending, true);
+    assert.equal(fs.existsSync(promptPath), true);
+    assert.equal(warnings.length, 2);
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it('writes the C prompt atomically and leaves no partial temp on failure', () => {
+    const root = fixture();
+    const analysis = { classification: 'C', candidates: [], managedBlocks: [] };
+    const written = writeMigrationPrompt({ zylosDir: root, analysis, originalSha256: 'abc' });
+    assert.equal(
+      written.filePath,
+      path.join(root, 'custom-hooks', 'session-start', '90-migration-prompt.md')
+    );
+    const prompt = fs.readFileSync(written.filePath, 'utf8');
+    assert.match(prompt, /Original ZYLOS\.md SHA-256: abc/);
+    assert.ok(prompt.includes([
+      '## Required action',
+      '',
+      '**Do NOT edit ZYLOS.md directly.** Always use the CLI tool below — it handles backup, conservation verification, and atomic activation. Manual edits bypass these safety guarantees.',
+      '',
+      '1. Read `~/zylos/ZYLOS.md` and compare it with the candidate baselines above.',
+    ].join('\n')));
+    fs.unlinkSync(written.filePath);
+    assert.throws(() => writeMigrationPrompt({
+      zylosDir: root,
+      analysis,
+      io: { renameSync() { throw new Error('prompt rename fault'); } },
+    }), /prompt rename fault/);
+    assert.equal(fs.existsSync(written.filePath), false);
+    assert.deepEqual(fs.readdirSync(path.dirname(written.filePath)), []);
+    fs.rmSync(root, { recursive: true, force: true });
   });
 });
 
@@ -329,6 +464,101 @@ describe('assembler A3 topology', () => {
 });
 
 describe('migrate-instructions command', () => {
+  it('backfills active v2 metadata and cleans stale prompts only on --apply', async () => {
+    const root = fixture();
+    activateFreshSplitInstructions({ zylosDir: root, templatesDir: TEMPLATES_DIR });
+    const versionPath = instructionFormatVersionPath({ zylosDir: root });
+    const promptPath = migrationPromptPath({ zylosDir: root });
+    fs.unlinkSync(versionPath);
+    fs.mkdirSync(path.dirname(promptPath), { recursive: true });
+    fs.writeFileSync(promptPath, 'stale\n');
+
+    const dry = capture();
+    assert.equal((await migrateInstructionsCommand([], {
+      zylosDir: root, templatesDir: TEMPLATES_DIR, ...dry.deps,
+    })).exitCode, 0);
+    assert.equal(fs.existsSync(versionPath), false);
+    assert.equal(fs.existsSync(promptPath), true);
+
+    const apply = capture();
+    const applied = await migrateInstructionsCommand(['--apply'], {
+      zylosDir: root, templatesDir: TEMPLATES_DIR, ...apply.deps,
+    });
+    assert.equal(applied.exitCode, 0);
+    assert.equal(applied.versionBackfilled, true);
+    assert.equal(readInstructionFormatVersion({ zylosDir: root }).version, 2);
+    assert.equal(fs.existsSync(promptPath), false);
+
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it('leaves an active future-format tree byte-identical before residue recovery or cleanup', async () => {
+    const root = fixture();
+    activateFreshSplitInstructions({ zylosDir: root, templatesDir: TEMPLATES_DIR });
+    writeInstructionFormatVersion({ zylosDir: root, version: 3 });
+    const promptPath = migrationPromptPath({ zylosDir: root });
+    fs.mkdirSync(path.dirname(promptPath), { recursive: true });
+    fs.writeFileSync(promptPath, 'future prompt bytes\n');
+    fs.writeFileSync(path.join(root, 'future.split-txn.residue'), 'future residue bytes\n');
+    const before = treeSnapshot(root);
+    const output = capture();
+
+    const result = await migrateInstructionsCommand(['--apply'], {
+      zylosDir: root, templatesDir: TEMPLATES_DIR, ...output.deps,
+    });
+
+    assert.equal(result.exitCode, 0);
+    assert.equal(result.futureFormat, true);
+    assert.equal(result.version, 3);
+    assert.deepEqual(treeSnapshot(root), before);
+    assert.ok(output.stdout.some(line => line.includes('Future instruction format version 3')));
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it('leaves an inactive A-class future-format tree byte-identical before migration apply', async () => {
+    const root = fixture();
+    writeKnownBaseline(root);
+    writeInstructionFormatVersion({ zylosDir: root, version: 3 });
+    const before = treeSnapshot(root);
+    const output = capture();
+
+    const result = await migrateInstructionsCommand(['--apply'], {
+      zylosDir: root, templatesDir: TEMPLATES_DIR, ...output.deps,
+    });
+
+    assert.equal(result.exitCode, 0);
+    assert.equal(result.futureFormat, true);
+    assert.equal(result.version, 3);
+    assert.deepEqual(treeSnapshot(root), before);
+    assert.equal(readInstructionFormatVersion({ zylosDir: root }).version, 3);
+    assert.ok(output.stdout.some(line => line.includes('Future instruction format version 3')));
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it('continues A3 when active version backfill and prompt cleanup fail', async () => {
+    const root = fixture();
+    activateFreshSplitInstructions({ zylosDir: root, templatesDir: TEMPLATES_DIR });
+    fs.unlinkSync(instructionFormatVersionPath({ zylosDir: root }));
+    const promptPath = migrationPromptPath({ zylosDir: root });
+    fs.mkdirSync(path.dirname(promptPath), { recursive: true });
+    fs.writeFileSync(promptPath, 'stale\n');
+    const output = capture();
+    const result = await migrateInstructionsCommand(['--apply'], {
+      zylosDir: root,
+      templatesDir: TEMPLATES_DIR,
+      versionIo: { writeFileSync() { throw new Error('backfill fault'); } },
+      promptIo: { unlinkSync() { throw new Error('cleanup fault'); } },
+      ...output.deps,
+    });
+    assert.equal(result.exitCode, 0);
+    assert.match(result.versionWriteError.message, /backfill fault/);
+    assert.equal(result.a3.ok, true);
+    assert.equal(fs.existsSync(migrationPromptPath({ zylosDir: root })), true);
+    assert.ok(output.stderr.some(line => line.includes('backfill')));
+    assert.ok(output.stderr.some(line => line.includes('pending migration prompt')));
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
   it('keeps C-class dry-run byte-identical and returns a reportable success', async () => {
     const root = fixture();
     fs.writeFileSync(path.join(root, 'ZYLOS.md'), 'unknown baseline\ncustom\n');

@@ -11,10 +11,14 @@ import {
   activateFreshSplitInstructions,
   assertInstructionReady,
   buildInstructionFile,
+  CURRENT_INSTRUCTION_FORMAT_VERSION,
   deployInstructionAssets,
+  instructionFormatVersionPath,
   instructionPaths,
   needsRebuild,
+  readInstructionFormatVersion,
   refreshSplitInstructions,
+  writeInstructionFormatVersion,
 } from '../runtime/instruction-builder.js';
 import {
   assembleInstruction,
@@ -42,6 +46,39 @@ function leftovers(root) {
   walk(root);
   return found;
 }
+
+describe('instruction format version protocol', () => {
+  it('distinguishes missing, valid and invalid values and round-trips atomically', () => {
+    const root = fixture();
+    assert.deepEqual(
+      readInstructionFormatVersion({ zylosDir: root }),
+      { version: null, valid: true, exists: false, filePath: instructionFormatVersionPath({ zylosDir: root }) },
+    );
+    for (const version of [1, 2, 3]) {
+      writeInstructionFormatVersion({ zylosDir: root, version });
+      assert.equal(fs.readFileSync(instructionFormatVersionPath({ zylosDir: root }), 'utf8'), `${version}\n`);
+      assert.equal(readInstructionFormatVersion({ zylosDir: root }).version, version);
+    }
+    for (const invalid of ['', '0\n', '-1\n', '2.5\n', ' 2\n', `${Number.MAX_SAFE_INTEGER}0\n`, 'wat\n']) {
+      fs.writeFileSync(instructionFormatVersionPath({ zylosDir: root }), invalid);
+      const state = readInstructionFormatVersion({ zylosDir: root });
+      assert.equal(state.valid, false);
+      assert.equal(state.version, null);
+    }
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it('cleans the temp file when the atomic rename fails', () => {
+    const root = fixture();
+    assert.throws(() => writeInstructionFormatVersion({
+      zylosDir: root,
+      io: { renameSync() { throw new Error('rename fault'); } },
+    }), /rename fault/);
+    assert.equal(fs.existsSync(instructionFormatVersionPath({ zylosDir: root })), false);
+    assert.deepEqual(fs.readdirSync(path.join(root, '.zylos')), []);
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+});
 
 describe('split instruction assembler', () => {
   it('pins the system templates to the approved content-redraft bytes', () => {
@@ -193,6 +230,41 @@ describe('split instruction assembler', () => {
 });
 
 describe('fresh split activation transaction', () => {
+  it('commits the marker before writing v2 and treats a version write fault as non-fatal', () => {
+    const root = fixture();
+    const result = activateFreshSplitInstructions({ zylosDir: root, templatesDir: TEMPLATES_DIR });
+    assert.equal(result.versionWritten, true);
+    assert.equal(readInstructionFormatVersion({ zylosDir: root }).version, CURRENT_INSTRUCTION_FORMAT_VERSION);
+    fs.rmSync(root, { recursive: true, force: true });
+
+    const failedRoot = fixture();
+    const failed = activateFreshSplitInstructions({
+      zylosDir: failedRoot,
+      templatesDir: TEMPLATES_DIR,
+      versionIo: { writeFileSync() { throw new Error('version fault'); } },
+    });
+    assert.equal(failed.active, true);
+    assert.equal(failed.versionWritten, false);
+    assert.match(failed.versionWriteError.message, /version fault/);
+    assert.equal(fs.existsSync(instructionPaths('claude', { zylosDir: failedRoot }).markerPath), true);
+    assert.equal(fs.existsSync(instructionFormatVersionPath({ zylosDir: failedRoot })), false);
+    assert.equal(fs.readdirSync(path.join(failedRoot, '.zylos')).some(name => name.includes('.tmp.')), false);
+    fs.rmSync(failedRoot, { recursive: true, force: true });
+  });
+
+  it('never attempts the version write before marker commit', () => {
+    const root = fixture();
+    let versionWrites = 0;
+    assert.throws(() => activateFreshSplitInstructions({
+      zylosDir: root,
+      templatesDir: TEMPLATES_DIR,
+      faultInjector(point) { if (point === 'rename:marker') throw new Error('marker fault'); },
+      versionIo: { writeFileSync() { versionWrites++; } },
+    }), /marker fault/);
+    assert.equal(versionWrites, 0);
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
   const faultPoints = [
     'stage:claude-system', 'stage:codex-system', 'stage:assembler', 'stage:seed',
     'stage:claude-output', 'stage:codex-output', 'stage:marker',

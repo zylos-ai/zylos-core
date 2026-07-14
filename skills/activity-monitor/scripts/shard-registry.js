@@ -8,7 +8,7 @@
  * - cli/lib/sync-settings-hooks.js (Claude settings hook generation)
  * - cli/lib/codex-hooks.js (Codex hooks.json generation)
  *
- * Core shards occupy chain orders 1-5. Components join the chain via opt-in
+ * Core shards occupy chain orders 1-6. Components join the chain via opt-in
  * declaration files in ~/zylos/.zylos/shards.d/<name>.json:
  *
  *   {

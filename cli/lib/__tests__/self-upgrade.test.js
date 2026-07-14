@@ -659,6 +659,247 @@ describe('step7 manifest deploy (real step7_syncInstructions)', () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
+  it('returns before all v2 instruction work for a future format version', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-step7-future-'));
+    const zylosDir = path.join(tmpDir, 'zylos');
+    const pkgRoot = path.join(tmpDir, 'pkg');
+    writeSplitPackage(pkgRoot);
+    fs.mkdirSync(path.join(zylosDir, '.zylos', 'instructions'), { recursive: true });
+    fs.writeFileSync(path.join(zylosDir, 'ZYLOS.md'), 'future user bytes\n');
+    fs.writeFileSync(path.join(zylosDir, 'CLAUDE.md'), 'future claude bytes\n');
+    fs.writeFileSync(path.join(zylosDir, 'AGENTS.md'), 'future codex bytes\n');
+    fs.writeFileSync(path.join(zylosDir, '.zylos', 'instructions', 'meta.json'), '{"version":99}\n');
+    fs.writeFileSync(path.join(zylosDir, '.zylos', 'instructions', 'future.asset'), 'future asset bytes\n');
+    fs.mkdirSync(path.join(zylosDir, 'custom-hooks', 'session-start'), { recursive: true });
+    fs.writeFileSync(path.join(zylosDir, 'custom-hooks', 'session-start', '90-migration-prompt.md'), 'future prompt bytes\n');
+    fs.writeFileSync(path.join(zylosDir, '.zylos', 'instruction-format-version'), '3\n');
+    const instructionFiles = [
+      'ZYLOS.md',
+      'CLAUDE.md',
+      'AGENTS.md',
+      '.zylos/instructions/meta.json',
+      '.zylos/instructions/future.asset',
+      'custom-hooks/session-start/90-migration-prompt.md',
+      '.zylos/instruction-format-version',
+    ];
+    const before = new Map(instructionFiles.map(file => [file, fs.readFileSync(path.join(zylosDir, file))]));
+    let refreshed = false;
+
+    const result = step7_syncInstructions({ tempDir: pkgRoot, zylosDir, packageRoot: pkgRoot }, {
+      refreshSplitInstructions() { refreshed = true; throw new Error('must not run'); },
+    });
+
+    assert.equal(result.status, 'done');
+    assert.match(result.message, /future instruction format version 3/);
+    assert.equal(refreshed, false);
+    for (const [file, bytes] of before) {
+      assert.deepEqual(fs.readFileSync(path.join(zylosDir, file)), bytes, file);
+    }
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('returns before legacy instruction migration when a future format omits ZYLOS.md', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-step7-future-no-zylos-'));
+    const zylosDir = path.join(tmpDir, 'zylos');
+    const pkgRoot = path.join(tmpDir, 'pkg');
+    writeSplitPackage(pkgRoot);
+    fs.mkdirSync(path.join(zylosDir, '.zylos'), { recursive: true });
+    fs.writeFileSync(path.join(zylosDir, 'CLAUDE.md'), 'future-owned instruction bytes\n');
+    fs.writeFileSync(path.join(zylosDir, '.zylos', 'instruction-format-version'), '3\n');
+    const before = fs.readFileSync(path.join(zylosDir, 'CLAUDE.md'));
+    let legacyMigrationRan = false;
+
+    const result = step7_syncInstructions({ tempDir: pkgRoot, zylosDir, packageRoot: pkgRoot }, {
+      runMigrations() { legacyMigrationRan = true; throw new Error('must not run'); },
+      refreshSplitInstructions() { throw new Error('must not run'); },
+    });
+
+    assert.equal(result.status, 'done');
+    assert.match(result.message, /future instruction format version 3/);
+    assert.equal(legacyMigrationRan, false);
+    assert.equal(fs.existsSync(path.join(zylosDir, 'ZYLOS.md')), false);
+    assert.deepEqual(fs.readFileSync(path.join(zylosDir, 'CLAUDE.md')), before);
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('backfills version and removes a stale prompt for active split instructions', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-step7-backfill-'));
+    const zylosDir = path.join(tmpDir, 'zylos');
+    const pkgRoot = path.join(tmpDir, 'pkg');
+    writeSplitPackage(pkgRoot);
+    fs.mkdirSync(path.join(zylosDir, '.zylos'), { recursive: true });
+    fs.writeFileSync(path.join(zylosDir, 'ZYLOS.md'), 'legacy\n');
+    const promptPath = path.join(zylosDir, 'custom-hooks', 'session-start', '90-migration-prompt.md');
+    fs.mkdirSync(path.dirname(promptPath), { recursive: true });
+    fs.writeFileSync(promptPath, 'stale prompt\n');
+    let versionWrites = 0;
+
+    const result = step7_syncInstructions({ tempDir: pkgRoot, zylosDir, packageRoot: pkgRoot }, {
+      refreshSplitInstructions: () => ({ active: true, pendingMigration: false }),
+      writeInstructionFormatVersion: () => { versionWrites++; },
+    });
+
+    assert.equal(result.status, 'done');
+    assert.equal(versionWrites, 1);
+    assert.match(result.message, /backfilled to 2/);
+    assert.equal(fs.existsSync(promptPath), false);
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('keeps active refresh successful when stale prompt cleanup fails', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-step7-cleanup-fail-'));
+    const zylosDir = path.join(tmpDir, 'zylos');
+    const pkgRoot = path.join(tmpDir, 'pkg');
+    writeSplitPackage(pkgRoot);
+    fs.mkdirSync(path.join(zylosDir, '.zylos'), { recursive: true });
+    fs.writeFileSync(path.join(zylosDir, 'ZYLOS.md'), 'legacy\n');
+    fs.writeFileSync(path.join(zylosDir, '.zylos', 'instruction-format-version'), '2\n');
+    fs.mkdirSync(path.join(zylosDir, 'custom-hooks', 'session-start'), { recursive: true });
+    fs.writeFileSync(path.join(zylosDir, 'custom-hooks', 'session-start', '90-migration-prompt.md'), 'stale\n');
+    const warnings = [];
+
+    const result = step7_syncInstructions({ tempDir: pkgRoot, zylosDir, packageRoot: pkgRoot }, {
+      refreshSplitInstructions: () => ({ active: true, pendingMigration: false }),
+      cleanupMigrationPrompt: () => ({ removed: false, error: new Error('unlink fault') }),
+      warn: warning => warnings.push(warning),
+    });
+
+    assert.equal(result.status, 'done');
+    assert.match(result.message, /cleanup pending/);
+    assert.equal(warnings.length, 1);
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('writes a C-class prompt and reports its path', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-step7-c-'));
+    const zylosDir = path.join(tmpDir, 'zylos');
+    const pkgRoot = path.join(tmpDir, 'pkg');
+    writeSplitPackage(pkgRoot);
+    fs.mkdirSync(zylosDir, { recursive: true });
+    fs.writeFileSync(path.join(zylosDir, 'ZYLOS.md'), 'custom legacy\n');
+    const promptPath = path.join(zylosDir, 'custom-hooks', 'session-start', '90-migration-prompt.md');
+    let promptArgs;
+
+    const result = step7_syncInstructions({ tempDir: pkgRoot, zylosDir, packageRoot: pkgRoot }, {
+      refreshSplitInstructions: () => ({ active: false, pendingMigration: true }),
+      loadInstructionCatalog: () => [],
+      classifyInstructionBaseline: () => ({ classification: 'C', candidates: [] }),
+      writeMigrationPrompt: args => { promptArgs = args; return { filePath: promptPath }; },
+    });
+
+    assert.equal(result.status, 'done');
+    assert.match(result.message, /classification C/);
+    assert.match(result.message, new RegExp(promptPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+    assert.match(promptArgs.originalSha256, /^[a-f0-9]{64}$/);
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('returns manual C-class guidance when the prompt write fails', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-step7-c-fail-'));
+    const zylosDir = path.join(tmpDir, 'zylos');
+    const pkgRoot = path.join(tmpDir, 'pkg');
+    writeSplitPackage(pkgRoot);
+    fs.mkdirSync(zylosDir, { recursive: true });
+    fs.writeFileSync(path.join(zylosDir, 'ZYLOS.md'), 'custom legacy\n');
+
+    const result = step7_syncInstructions({ tempDir: pkgRoot, zylosDir, packageRoot: pkgRoot }, {
+      refreshSplitInstructions: () => ({ active: false, pendingMigration: true }),
+      loadInstructionCatalog: () => [],
+      classifyInstructionBaseline: () => ({ classification: 'C', candidates: [] }),
+      writeMigrationPrompt: () => { throw new Error('rename fault'); },
+      warn: () => {},
+    });
+
+    assert.equal(result.status, 'done');
+    assert.match(result.message, /PENDING MIGRATION/);
+    assert.match(result.message, /prompt write failed/);
+    assert.doesNotMatch(result.message, /agent prompt:/);
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('separates A verification from seed materialization and branches on migrated', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-step7-a-'));
+    const zylosDir = path.join(tmpDir, 'zylos');
+    const pkgRoot = path.join(tmpDir, 'pkg');
+    writeSplitPackage(pkgRoot);
+    fs.writeFileSync(path.join(pkgRoot, 'templates', 'ZYLOS.md'), 'new seed\n');
+    fs.mkdirSync(zylosDir, { recursive: true });
+    fs.writeFileSync(path.join(zylosDir, 'ZYLOS.md'), 'known baseline\n');
+    const analysis = { classification: 'A', strippedContent: 'known baseline\n', matched: { sha256: 'known' } };
+    const conservation = { ok: true, matched: analysis.matched };
+    let verifyArgs;
+    let engineArgs;
+
+    const result = step7_syncInstructions({ tempDir: pkgRoot, zylosDir, packageRoot: pkgRoot }, {
+      readInstructionFormatVersion: () => ({ valid: true, exists: true, version: 2 }),
+      refreshSplitInstructions: () => ({ active: false, pendingMigration: true }),
+      loadInstructionCatalog: () => [analysis.matched],
+      classifyInstructionBaseline: () => analysis,
+      verifyInstructionConservation: args => { verifyArgs = args; return conservation; },
+      executeMigrationApply: args => {
+        engineArgs = args;
+        return { migrated: false, fatal: false, backupPath: '/backup/path', error: new Error('transaction fault') };
+      },
+    });
+
+    assert.equal(verifyArgs.userContent, '');
+    assert.equal(engineArgs.userContent, 'new seed\n');
+    assert.equal(engineArgs.conservation, conservation);
+    assert.match(result.message, /PENDING MIGRATION/);
+    assert.match(result.message, /transaction fault/);
+    assert.match(result.message, /backup: \/backup\/path/);
+    assert.match(result.message, /version 2 exists but split marker is missing/);
+
+    const success = step7_syncInstructions({ tempDir: pkgRoot, zylosDir, packageRoot: pkgRoot }, {
+      readInstructionFormatVersion: () => ({ valid: true, exists: true, version: 2 }),
+      refreshSplitInstructions: () => ({ active: false, pendingMigration: true }),
+      loadInstructionCatalog: () => [analysis.matched],
+      classifyInstructionBaseline: () => analysis,
+      verifyInstructionConservation: () => conservation,
+      executeMigrationApply: () => ({ migrated: true, backupPath: '/backup/path', versionWritten: true, a3Pending: false }),
+    });
+    assert.equal(success.status, 'done');
+    assert.match(success.message, /migrated automatically/);
+    assert.doesNotMatch(success.message, /PENDING MIGRATION/);
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('auto-migrates an A-class fixture end-to-end with the new package catalog', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-step7-a-real-'));
+    const zylosDir = path.join(tmpDir, 'zylos');
+    const pkgRoot = path.join(tmpDir, 'pkg');
+    fs.mkdirSync(path.join(pkgRoot, 'cli', 'lib', 'runtime'), { recursive: true });
+    fs.mkdirSync(path.join(pkgRoot, 'data', 'instruction-baselines'), { recursive: true });
+    fs.cpSync(path.resolve('templates'), path.join(pkgRoot, 'templates'), { recursive: true });
+    fs.copyFileSync(
+      path.resolve('cli/lib/runtime/assembler.mjs'),
+      path.join(pkgRoot, 'cli', 'lib', 'runtime', 'assembler.mjs'),
+    );
+    fs.copyFileSync(
+      path.resolve('data/instruction-baselines/manifest.json'),
+      path.join(pkgRoot, 'data', 'instruction-baselines', 'manifest.json'),
+    );
+    const catalog = JSON.parse(fs.readFileSync(path.resolve('data/instruction-baselines/manifest.json'), 'utf8'));
+    const legacyBaseline = Buffer.from(catalog.entries[0].contentBase64, 'base64').toString('utf8');
+    fs.mkdirSync(zylosDir, { recursive: true });
+    fs.writeFileSync(path.join(zylosDir, 'ZYLOS.md'), legacyBaseline);
+    fs.writeFileSync(path.join(zylosDir, 'CLAUDE.md'), legacyBaseline);
+    fs.writeFileSync(path.join(zylosDir, 'AGENTS.md'), legacyBaseline);
+
+    const result = step7_syncInstructions({ tempDir: pkgRoot, zylosDir, packageRoot: pkgRoot });
+
+    assert.equal(result.status, 'done');
+    assert.match(result.message, /migrated automatically \(classification A\)/);
+    assert.equal(
+      fs.readFileSync(path.join(zylosDir, 'ZYLOS.md'), 'utf8'),
+      fs.readFileSync(path.join(pkgRoot, 'templates', 'ZYLOS.md'), 'utf8'),
+    );
+    assert.equal(fs.readFileSync(path.join(zylosDir, '.zylos', 'instruction-format-version'), 'utf8'), '2\n');
+    assert.ok(fs.existsSync(path.join(zylosDir, '.zylos', 'instructions', 'meta.json')));
+    assert.match(result.message, /backup:/);
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
   it('creates manifest from tempDir template when missing, message includes manifest: created', () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-step7-'));
     const zylosDir = path.join(tmpDir, 'zylos');

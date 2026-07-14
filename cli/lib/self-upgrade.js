@@ -18,7 +18,22 @@ import { isCoreManaged } from './sync-settings-hooks.js';
 import { smartSync, formatMergeResult } from './smart-merge.js';
 import { getAllowedTmpRoots } from './upgrade.js';
 import { runMigrations } from './migrate.js';
-import { refreshSplitInstructions } from './runtime/instruction-builder.js';
+import {
+  CURRENT_INSTRUCTION_FORMAT_VERSION,
+  readInstructionFormatVersion,
+  refreshSplitInstructions,
+  writeInstructionFormatVersion,
+} from './runtime/instruction-builder.js';
+import {
+  classifyInstructionBaseline,
+  cleanupMigrationPrompt,
+  executeMigrationApply,
+  loadInstructionCatalog,
+  migrationPromptPath,
+  sha256,
+  verifyInstructionConservation,
+  writeMigrationPrompt,
+} from './instruction-migration.js';
 import { deployManifestTemplate } from './runtime/tmux-env.js';
 import { writeCodexConfig } from './runtime-setup.js';
 import { getCoreEcosystemPath, restartManagedProcess } from './pm2.js';
@@ -713,7 +728,34 @@ function step6_installSkillDeps(ctx) {
   return { step: 6, name: 'install_skill_deps', status: 'done', message: msg, duration: Date.now() - startTime };
 }
 
-/** Step 7: deploy and, when activated, atomically refresh split instructions. */
+function step7Result(startTime, { status = 'done', message, error }) {
+  return {
+    step: 7,
+    name: 'sync_instructions',
+    status,
+    ...(message ? { message } : {}),
+    ...(error ? { error } : {}),
+    duration: Date.now() - startTime,
+  };
+}
+
+function cleanupPendingMigrationPrompt(zylosDir, deps) {
+  try {
+    const result = (deps.cleanupMigrationPrompt ?? cleanupMigrationPrompt)({ zylosDir });
+    if (result.error) throw result.error;
+    return { cleaned: true, promptPath: result.filePath };
+  } catch (error) {
+    (deps.warn ?? console.warn)(`Warning: could not remove stale migration prompt: ${error.message}`);
+    return { cleaned: false, error };
+  }
+}
+
+function pendingMigrationMessage(reason, { backupPath = null } = {}) {
+  const backupNote = backupPath ? `; backup: ${backupPath}` : '';
+  return `PENDING MIGRATION — ${reason}; run zylos migrate-instructions${backupNote}`;
+}
+
+/** Step 7: deploy, refresh, and migrate legacy instructions when safe. */
 export function step7_syncInstructions(ctx, deps = {}) {
   const startTime = Date.now();
   const zylosDir = ctx.zylosDir || ZYLOS_DIR;
@@ -721,7 +763,7 @@ export function step7_syncInstructions(ctx, deps = {}) {
 
   const templateDir = path.join(ctx.tempDir, 'templates');
   if (!fs.existsSync(templateDir)) {
-    return { step: 7, name: 'sync_instructions', status: 'skipped', message: 'no templates in new version', duration: Date.now() - startTime };
+    return step7Result(startTime, { status: 'skipped', message: 'no templates in new version' });
   }
 
   // runtime-env.manifest — create from template if missing (upgrade path)
@@ -734,29 +776,134 @@ export function step7_syncInstructions(ctx, deps = {}) {
   }
   const manifestNote = `; manifest: ${manifestStatus}`;
 
+  const readVersion = deps.readInstructionFormatVersion ?? readInstructionFormatVersion;
+  const versionState = readVersion({ zylosDir });
+  if (versionState.valid && versionState.version > CURRENT_INSTRUCTION_FORMAT_VERSION) {
+    return step7Result(startTime, {
+      message: `future instruction format version ${versionState.version}; current v2 migration code does not apply${manifestNote}`,
+    });
+  }
+
   // Legacy migration must preserve the old generated file and fail loudly.
   const zylosMd = path.join(zylosDir, 'ZYLOS.md');
   if (!fs.existsSync(zylosMd)) {
     try {
       (deps.runMigrations ?? runMigrations)({ zylosDir, templatesDir: templateDir });
     } catch (err) {
-      return { step: 7, name: 'sync_instructions', status: 'failed', error: err.message + manifestNote, duration: Date.now() - startTime };
+      return step7Result(startTime, { status: 'failed', error: err.message + manifestNote });
     }
   }
 
+  let refreshResult;
   try {
-    const result = (deps.refreshSplitInstructions ?? refreshSplitInstructions)({
+    refreshResult = (deps.refreshSplitInstructions ?? refreshSplitInstructions)({
       zylosDir,
       templatesDir: templateDir,
       assemblerSource: path.join(ctx.tempDir, 'cli', 'lib', 'runtime', 'assembler.mjs'),
     });
-    const message = result.pendingMigration
-      ? 'instruction assets deployed; PENDING MIGRATION — existing CLAUDE.md/AGENTS.md preserved byte-for-byte; run zylos migrate-instructions'
-      : 'split instructions refreshed atomically';
-    return { step: 7, name: 'sync_instructions', status: 'done', message: message + manifestNote, duration: Date.now() - startTime };
   } catch (err) {
-    return { step: 7, name: 'sync_instructions', status: 'failed', error: err.message + manifestNote, duration: Date.now() - startTime };
+    return step7Result(startTime, { status: 'failed', error: err.message + manifestNote });
   }
+
+  if (refreshResult.active) {
+    const notes = [];
+    if (!versionState.valid) notes.push('invalid instruction format version treated as legacy');
+    if (versionState.version !== CURRENT_INSTRUCTION_FORMAT_VERSION) {
+      try {
+        (deps.writeInstructionFormatVersion ?? writeInstructionFormatVersion)({ zylosDir });
+        notes.push('instruction format version backfilled to 2');
+      } catch (error) {
+        (deps.warn ?? console.warn)(`Warning: could not backfill instruction format version: ${error.message}`);
+        notes.push('instruction format version backfill pending');
+      }
+    }
+    const cleanup = cleanupPendingMigrationPrompt(zylosDir, deps);
+    if (!cleanup.cleaned) notes.push('stale prompt cleanup pending');
+    const suffix = notes.length ? `; ${notes.join('; ')}` : '';
+    return step7Result(startTime, { message: `split instructions refreshed atomically${suffix}${manifestNote}` });
+  }
+
+  if (!refreshResult.pendingMigration) {
+    return step7Result(startTime, {
+      message: `instruction assets refreshed; migration state unchanged${manifestNote}`,
+    });
+  }
+
+  const anomaly = versionState.valid && versionState.version === CURRENT_INSTRUCTION_FORMAT_VERSION;
+  const versionWarning = anomaly
+    ? 'warning: version 2 exists but split marker is missing'
+    : !versionState.valid
+      ? 'warning: invalid instruction format version treated as legacy'
+      : null;
+  const fallback = (reason, options) => step7Result(startTime, {
+    message: `${pendingMigrationMessage(reason, options)}${versionWarning ? `; ${versionWarning}` : ''}${manifestNote}`,
+  });
+
+  let catalog;
+  let original;
+  let analysis;
+  try {
+    catalog = (deps.loadInstructionCatalog ?? loadInstructionCatalog)({
+      catalogPath: path.join(ctx.tempDir, 'data', 'instruction-baselines', 'manifest.json'),
+    });
+    original = (deps.readFileSync ?? fs.readFileSync)(zylosMd, 'utf8');
+    analysis = (deps.classifyInstructionBaseline ?? classifyInstructionBaseline)({ original, catalog });
+  } catch (error) {
+    return fallback(`automatic classification failed: ${error.message}`);
+  }
+
+  if (analysis.classification !== 'A') {
+    try {
+      const promptResult = (deps.writeMigrationPrompt ?? writeMigrationPrompt)({
+        zylosDir,
+        analysis,
+        originalSha256: sha256(original),
+      });
+      const promptPath = promptResult?.filePath ?? promptResult?.promptPath
+        ?? migrationPromptPath({ zylosDir });
+      return step7Result(startTime, {
+        message: `PENDING MIGRATION — classification ${analysis.classification}; agent prompt: ${promptPath}${versionWarning ? `; ${versionWarning}` : ''}${manifestNote}`,
+      });
+    } catch (error) {
+      (deps.warn ?? console.warn)(`Warning: could not write migration prompt: ${error.message}`);
+      return fallback(`classification ${analysis.classification}; prompt write failed: ${error.message}`);
+    }
+  }
+
+  let conservation;
+  let userContent;
+  try {
+    conservation = (deps.verifyInstructionConservation ?? verifyInstructionConservation)({
+      strippedContent: analysis.strippedContent,
+      userContent: '',
+      catalog,
+      matched: analysis.matched,
+    });
+    if (!conservation.ok) return fallback(`automatic conservation check refused: ${conservation.reason}`);
+    userContent = (deps.readFileSync ?? fs.readFileSync)(path.join(templateDir, 'ZYLOS.md'), 'utf8');
+  } catch (error) {
+    return fallback(`automatic conservation preparation failed: ${error.message}`);
+  }
+
+  const migration = (deps.executeMigrationApply ?? executeMigrationApply)({
+    zylosDir,
+    templatesDir: templateDir,
+    assemblerSource: path.join(ctx.tempDir, 'cli', 'lib', 'runtime', 'assembler.mjs'),
+    original,
+    analysis,
+    userContent,
+    conservation,
+  });
+  if (!migration.migrated) {
+    return fallback(`automatic migration failed${migration.error?.message ? `: ${migration.error.message}` : ''}`, {
+      backupPath: migration.backupPath,
+    });
+  }
+  const versionNote = migration.versionWritten === false ? '; instruction format version backfill pending' : '';
+  const a3Note = migration.a3Pending ? '; assembler settings reconciliation pending' : '';
+  return step7Result(startTime, {
+    message: `split instructions migrated automatically (classification A); backup: ${migration.backupPath}${versionNote}${a3Note}${versionWarning ? `; ${versionWarning}` : ''}${manifestNote}`,
+  });
 }
 
 /**
