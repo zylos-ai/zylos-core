@@ -61,6 +61,7 @@ const CORE_SHARD_SEQUENCE = [
   'custom',
   'references',
   'state',
+  'migration-prompt',
   'c4-checkpoint',
   'c4-conversations',
   'fg',
@@ -806,9 +807,9 @@ describe('syncHooks SessionStart orchestrator convergence', () => {
       desiredHooks: desiredClaudeHooks({ existsSync: () => true }),
     });
 
-    // 1 assembler + 8 shard/side-effect commands x 3 matchers + 7 other-event
-    // hooks added; 4 retired per-step hooks x 3 matchers removed.
-    assert.deepEqual(result, { added: 34, updated: 0, removed: 12 });
+    // The migration-prompt shard adds one command to each of the three
+    // SessionStart matchers; retired per-step hooks remain unchanged.
+    assert.deepEqual(result, { added: 37, updated: 0, removed: 12 });
     assertSessionStartUsesOrchestrator(installed);
   });
 
@@ -999,7 +1000,7 @@ describe('component shard claim boundary (opt-in contract)', () => {
       .filter(h => h.command?.includes('session-start-orchestrator.js'))
       .map(h => extractShardArg(h.command));
     assert.deepEqual(shardArgs, [
-      'identity', 'custom', 'references', 'state', 'c4-checkpoint', 'c4-conversations', 'role-inject', 'fg', 'start-prompt',
+      'identity', 'custom', 'references', 'state', 'migration-prompt', 'c4-checkpoint', 'c4-conversations', 'role-inject', 'fg', 'start-prompt',
     ]);
     // User and undeclared hooks are untouched.
     assert.ok(startup.hooks.some(h => h.command?.includes('/custom/my-session-start.js')));

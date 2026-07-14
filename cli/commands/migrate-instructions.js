@@ -1,22 +1,22 @@
-import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 
 import { ZYLOS_DIR } from '../lib/config.js';
 import {
-  activateMigratedSplitInstructions,
+  CURRENT_INSTRUCTION_FORMAT_VERSION,
   hasSplitTransactionResidue,
   instructionPaths,
   isSplitInstructionsActive,
+  readInstructionFormatVersion,
   recoverSplitTransaction,
+  writeInstructionFormatVersion,
 } from '../lib/runtime/instruction-builder.js';
 import {
   classifyInstructionBaseline,
-  createMigrationBackup,
+  cleanupMigrationPrompt,
+  executeMigrationApply,
   loadInstructionCatalog,
   reconcileAssemblerSettingsFile,
-  renderMigrationReport,
-  updateFailureReport,
   verifyInstructionConservation,
 } from '../lib/instruction-migration.js';
 
@@ -45,10 +45,6 @@ export function parseMigrateInstructionArgs(args) {
   return result;
 }
 
-function digest(content) {
-  return crypto.createHash('sha256').update(content).digest('hex');
-}
-
 function formatA3Problems(result) {
   return (result.anomalies ?? []).map(item => JSON.stringify(item)).join('\n');
 }
@@ -63,6 +59,8 @@ export async function migrateInstructionsCommand(args, {
   backupFaultInjector,
   reportIo,
   settingsIo,
+  versionIo,
+  promptIo,
   provenance = null,
 } = {}) {
   let flags;
@@ -95,6 +93,22 @@ export async function migrateInstructionsCommand(args, {
 
   const active = isSplitInstructionsActive({ zylosDir: root });
   if (active) {
+    let versionBackfilled = false;
+    let versionWriteError = null;
+    if (flags.apply) {
+      const versionState = readInstructionFormatVersion({ zylosDir: root });
+      if (!versionState.valid || versionState.version === null || versionState.version < CURRENT_INSTRUCTION_FORMAT_VERSION) {
+        try {
+          writeInstructionFormatVersion({ zylosDir: root, io: versionIo });
+          versionBackfilled = true;
+        } catch (writeError) {
+          versionWriteError = writeError;
+          error(`Warning: could not backfill instruction format version: ${writeError.message}`);
+        }
+      }
+      const promptCleanup = cleanupMigrationPrompt({ zylosDir: root, io: promptIo });
+      if (promptCleanup.error) error(`Warning: could not remove pending migration prompt: ${promptCleanup.error.message}`);
+    }
     const a3 = reconcileAssemblerSettingsFile({ zylosDir: root, apply: flags.apply, faultInjector, io: settingsIo });
     log('Split instructions are already active.');
     if (!a3.ok) {
@@ -102,16 +116,16 @@ export async function migrateInstructionsCommand(args, {
         log(`Dry run: A3 pending: ${a3.handledError ? a3.error.message : formatA3Problems(a3)}`);
         log(a3.handledError ? 'Resolve the I/O error, then rerun with --apply.' : 'Repair the reported settings topology, then rerun with --apply.');
         log('Dry run complete: no files were changed.');
-        return { exitCode: 0, active: true, dryRun: true, a3 };
+        return { exitCode: 0, active: true, dryRun: true, a3, versionBackfilled, versionWriteError };
       }
       error(`A3 pending: ${a3.handledError ? a3.error.message : formatA3Problems(a3)}`);
       error(a3.handledError ? 'Rerun --apply after the I/O error is resolved.' : 'Repair the reported settings topology, then rerun --apply.');
       setExitCode(2);
-      return { exitCode: 2, active: true, a3 };
+      return { exitCode: 2, active: true, a3, versionBackfilled, versionWriteError };
     }
     if (flags.apply) log(a3.changed ? 'Assembler hooks converged.' : 'Assembler hooks already canonical.');
     else log(a3.changed ? 'Dry run: assembler hooks need convergence; --apply will repair them.' : 'Dry run: assembler hooks are canonical.');
-    return { exitCode: 0, active: true, a3 };
+    return { exitCode: 0, active: true, a3, versionBackfilled, versionWriteError };
   }
 
   const originalPath = path.join(root, 'ZYLOS.md');
@@ -210,94 +224,48 @@ export async function migrateInstructionsCommand(args, {
     return { exitCode: 0, dryRun: true, analysis, matched: conservedMatch };
   }
 
-  const baseReport = {
-    classification: analysis.classification,
-    matched: conservedMatch,
-    candidates: analysis.candidates,
-    managedBlocks: analysis.managedBlocks,
+  const migration = executeMigrationApply({
+    zylosDir: root,
+    templatesDir,
+    original,
+    analysis,
     userContent,
-    originalSha256: digest(original),
-    attributionBaseline: conservation?.attributionBaseline,
-    attribution: conservation?.attribution,
-  };
-  let backup;
-  try {
-    backup = createMigrationBackup({
-      zylosDir: root,
-      report: renderMigrationReport({ ...baseReport, backupPath: '__BACKUP_PATH__' }),
-      faultInjector: backupFaultInjector,
-    });
-  } catch (backupError) {
-    error(`Backup failed before live mutation: ${backupError.message}`);
-    if (backupError.partialBackupPath) error(`Partial backup cleanup failed; inspect: ${backupError.partialBackupPath}`);
-    setExitCode(1);
-    return { exitCode: 1, fatal: true, error: backupError };
-  }
-
-  log(`Backup: ${backup.backupPath}`);
-  const migratedAt = new Date().toISOString();
-  try {
-    activateMigratedSplitInstructions({
-      zylosDir: root,
-      templatesDir,
-      userContent,
-      faultInjector,
-      migrationMeta: {
-        classification: analysis.classification,
-        matchedTemplate: conservedMatch ? {
-          sha256: conservedMatch.sha256,
-          source: conservedMatch.sourceCommit,
-        } : null,
-        attributionBaseline: conservation?.attributionBaseline,
-        originalSha256: digest(original),
-        backupPath: backup.backupPath,
-        migratedAt,
-      },
-    });
-  } catch (transactionError) {
-    let reportError;
-    let reportFallbackError;
-    try {
-      transactionError.residuePresent = hasSplitTransactionResidue(root);
-      updateFailureReport({ backupPath: backup.backupPath, baseReport, failure: transactionError, io: reportIo });
-    } catch (secondary) {
-      reportError = secondary;
-      error(`Warning: could not enrich failure report: ${secondary.message}`);
-      try {
-        fs.writeFileSync(
-          path.join(backup.backupPath, 'migration-failure-fallback.md'),
-          renderMigrationReport({ ...baseReport, backupPath: backup.backupPath, failure: transactionError }),
-          { flag: 'wx' },
-        );
-      } catch (fallbackError) {
-        reportFallbackError = fallbackError;
-        error(`Warning: could not write fallback failure report: ${fallbackError.message}`);
-      }
+    conservation,
+    faultInjector,
+    backupFaultInjector,
+    reportIo,
+    settingsIo,
+    versionIo,
+    promptIo,
+    warn: error,
+  });
+  if (!migration.migrated) {
+    if (migration.fatal) {
+      error(`Backup failed before live mutation: ${migration.error.message}`);
+      if (migration.error.partialBackupPath) error(`Partial backup cleanup failed; inspect: ${migration.error.partialBackupPath}`);
+    } else {
+      log(`Backup: ${migration.backupPath}`);
+      if (migration.reportError) error(`Warning: could not enrich failure report: ${migration.reportError.message}`);
+      if (migration.reportFallbackError) error(`Warning: could not write fallback failure report: ${migration.reportFallbackError.message}`);
+      error(`Instruction transaction failed: ${migration.error.message}`);
+      error(`Durable backup preserved: ${migration.backupPath}`);
+      error('Rerun `zylos migrate-instructions --apply` to recover and converge.');
     }
-    error(`Instruction transaction failed: ${transactionError.message}`);
-    error(`Durable backup preserved: ${backup.backupPath}`);
-    error('Rerun `zylos migrate-instructions --apply` to recover and converge.');
     setExitCode(1);
-    return {
-      exitCode: 1,
-      fatal: true,
-      error: transactionError,
-      reportError,
-      reportFallbackError,
-      backupPath: backup.backupPath,
-    };
+    return { exitCode: 1, ...migration };
   }
 
+  log(`Backup: ${migration.backupPath}`);
   log(`Instruction migration committed. Marker: ${instructionPaths('claude', { zylosDir: root }).markerPath}`);
-  const cleanupResidue = hasSplitTransactionResidue(root);
+  const cleanupResidue = migration.cleanupResidue;
   if (cleanupResidue) log('Committed transaction cleanup residue preserved; the next --apply will recover it.');
-  const a3 = reconcileAssemblerSettingsFile({ zylosDir: root, apply: true, faultInjector, io: settingsIo });
+  const a3 = migration.a3;
   if (!a3.ok) {
     error(`A3 pending: ${a3.handledError ? a3.error.message : formatA3Problems(a3)}`);
     error(a3.handledError ? 'Rerun --apply after the I/O error is resolved.' : 'Repair the reported settings topology, then rerun --apply.');
     setExitCode(2);
-    return { exitCode: 2, active: true, backupPath: backup.backupPath, cleanupResidue, a3 };
+    return { exitCode: 2, active: true, backupPath: migration.backupPath, cleanupResidue, a3, migration };
   }
   log(a3.changed ? 'Assembler hooks converged.' : 'Assembler hooks already canonical.');
-  return { exitCode: 0, active: true, backupPath: backup.backupPath, cleanupResidue, a3 };
+  return { exitCode: 0, active: true, backupPath: migration.backupPath, cleanupResidue, a3, migration };
 }

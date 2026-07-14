@@ -77,7 +77,7 @@ function commandHook(relativePath, options = {}) {
  * One SessionStart hook command per injection shard (plus the two
  * side-effect steps), all running the orchestrator script with distinct
  * `--shard` args. Chain membership and order come from the shard registry:
- * 5 core shards followed by any component shards declared under
+ * 7 core shards followed by any component shards declared under
  * ~/zylos/.zylos/shards.d/.
  */
 export function desiredSessionStartHooks({

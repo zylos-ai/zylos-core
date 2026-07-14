@@ -182,18 +182,22 @@ One sequence, no contradictions:
 ```
 Step 7 entry:
   1. (existing) Deploy manifest template
-  2. (existing) Legacy migration if ZYLOS.md missing
-  3. Read instruction-format-version → versionState
+  2. Read instruction-format-version → versionState
 
-  4. FUTURE-FORMAT GATE (before any v2 code runs):
+  3. FUTURE-FORMAT GATE (before any legacy/v2 instruction code runs):
      If version > 2 → EARLY RETURN. Do not run refreshSplitInstructions, do not
-     touch any instruction files/marker/assets. Return informational message:
+     run the legacy ZYLOS.md migration, or touch any instruction files/marker/assets.
+     Return informational message:
      "future format version N; current v2 migration code does not apply".
      Rationale: refreshSplitInstructions runs v2 transaction recovery, parses
      v2 marker, and rewrites v2 assets/output — all of which would modify a
-     future-format machine's state before the skip could take effect.
+     future-format machine's state before the skip could take effect. The legacy
+     migration must also remain behind this gate because a future format may
+     legitimately omit ZYLOS.md.
 
-  5. Run refreshSplitInstructions (v2 code — safe because step 4 already
+  4. (existing) Legacy migration if ZYLOS.md missing
+
+  5. Run refreshSplitInstructions (v2 code — safe because step 3 already
      excluded future formats)
      → refreshResult: { active, pendingMigration }
 
@@ -330,18 +334,18 @@ This closes the remediation loop: version-write failure during migration → use
 - [ ] **F1: Backup failure:** `createMigrationBackup` fault → `{migrated:false, fatal:true}`, step 7 PENDING MIGRATION fallback. Partial backup best-effort removed.
 - [ ] **F2: Clean rollback:** activation fault, rollback succeeds → `{migrated:false, fatal:false, backupPath}`, no `.split-txn.*` residue, backup + failure report preserved. Step 7 PENDING MIGRATION fallback.
 - [ ] **F2: Rollback failure:** rollback fault → `{migrated:false, fatal:false, backupPath}`, `.split-txn.*` residue preserved. **Retry convergence:** `--apply` → recovery front-gate → migration succeeds.
-- [ ] **Post-commit: prompt cleanup failure:** prompt unlink fault → `{migrated:true}`, warning logged, shard re-emits next session.
+- [ ] **Post-commit: prompt cleanup failure:** prompt unlink fault → `{migrated:true}`, warning logged; active-marker shard suppresses emission and retries cleanup next session.
 - [ ] **Post-commit: cleanup residue:** committed `.bak` cleanup fault → `{migrated:true, cleanupResidue:true}`, version written. **Retry convergence:** `--apply` recovery cleans.
 - [ ] **Post-commit: version-write failure:** version write fault → `{migrated:true, versionWritten:false}`, step 7 success with warning. CLI `--apply` → backfills. Next upgrade → case (b).
 - [ ] **Post-commit: A3 failure:** A3 fault → `{migrated:true, a3Pending:true}`, version written. CLI `--apply` → converges A3.
 - [ ] **Step 7 result branching:** engine returns `{migrated:false}` → step 7 emits PENDING MIGRATION (not success). Engine returns `{migrated:true}` → step 7 emits success. Verify at the step 7 caller seam, not just engine unit tests.
-- [ ] **Prompt cleanup (cases a/b):** active + version ≥ 2 + stale prompt → deleted.
+- [ ] **Prompt cleanup (cases a/b):** active + current/stale/missing v2-era version + stale prompt → deleted; future versions return before cleanup.
 - [ ] **Prompt cleanup failure (non-fatal):** unlink fault → step 7 succeeds.
 - [ ] **Idempotency:** step 7 twice on A-class → first migrates, second hits case (a).
 
 ## Assumptions
 
-- [ ] `refreshSplitInstructions` is called ALWAYS in step 7 (Design §5, step 4) — handles asset deploy, recovery, refresh. Already the case (`self-upgrade.js:748`).
+- [ ] `refreshSplitInstructions` is called for current/stale/missing/invalid v2-era versions after the future-format gate; version > 2 returns before any v2 refresh/recovery/assets work.
 - [ ] `ctx.tempDir/templates` contains the new version's templates. Already the case (`self-upgrade.js:722`).
 - [ ] The instruction catalog path from the new version is relative to `ctx.tempDir` (package root for the new version).
 - [ ] B-class auto-migration is an empty set in the upgrade context. Authoritative P2 position (`docs/dev-plan-issue-722-p2.md:43,137`).
@@ -351,7 +355,7 @@ This closes the remediation loop: version-write failure during migration → use
 
 - [ ] A-class fixture: conservation with `userContent: ''` → full migration with seed materialization → backup, marker, prompt cleanup, version `2`, A3.
 - [ ] C-class fixture: prompt file written (atomic), shard emits at session start (marker not active), CLI `--apply --user-content` cleans prompt, shard silent after (marker active → suppress).
-- [ ] Case (a): version ≥ 2 + active → skip, refresh.
+- [ ] Case (a): version === 2 + active → skip migration and refresh; version > 2 returns before refresh.
 - [ ] Case (b): active + version missing → backfill.
 - [ ] Step 4 gate: version > 2 → early return before refresh, byte-for-byte unchanged files.
 - [ ] CLI `--apply` on active: backfills version if missing, A3 converges.

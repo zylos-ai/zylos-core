@@ -8,6 +8,11 @@ import {
   canonicalAssemblerEntry,
   reconcileAssemblerEntries,
 } from './sync-settings-hooks.js';
+import {
+  activateMigratedSplitInstructions,
+  hasSplitTransactionResidue,
+  writeInstructionFormatVersion,
+} from './runtime/instruction-builder.js';
 
 const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const DEFAULT_CATALOG_PATH = path.join(PACKAGE_ROOT, 'data', 'instruction-baselines', 'manifest.json');
@@ -20,6 +25,50 @@ const OWNER_ATTRIBUTED_EMPTY_BASELINE = Object.freeze({
 
 export function sha256(content) {
   return crypto.createHash('sha256').update(content).digest('hex');
+}
+
+export function migrationPromptPath({ zylosDir } = {}) {
+  return path.join(path.resolve(zylosDir), '.zylos', 'pending-migration-prompt.md');
+}
+
+export function cleanupMigrationPrompt({ zylosDir, io = {} } = {}) {
+  const filePath = migrationPromptPath({ zylosDir });
+  const existsSync = io.existsSync ?? fs.existsSync;
+  const unlinkSync = io.unlinkSync ?? fs.unlinkSync;
+  if (!existsSync(filePath)) return { removed: false, filePath, error: null };
+  try {
+    unlinkSync(filePath);
+    return { removed: true, filePath, error: null };
+  } catch (error) {
+    return { removed: false, filePath, error };
+  }
+}
+
+export function writeMigrationPrompt({ zylosDir, analysis, originalSha256, io = {} } = {}) {
+  const filePath = migrationPromptPath({ zylosDir });
+  const candidates = (analysis?.candidates ?? []).slice(0, 5);
+  const lines = [
+    '# Pending instruction migration',
+    '',
+    `- Classification: ${analysis?.classification ?? 'C'}`,
+    `- Original ZYLOS.md SHA-256: ${originalSha256 ?? '(unknown)'}`,
+    '',
+    '## Candidate baselines',
+    '',
+    ...(candidates.length
+      ? candidates.map(item => `- ${item.sha256} score=${Number(item.score).toFixed(4)} source=${item.sourceCommit}`)
+      : ['- No reachable baseline candidates were found.']),
+    '',
+    '## Required action',
+    '',
+    '1. Read `~/zylos/ZYLOS.md` and compare it with the candidate baselines above.',
+    '2. Separate Zylos-managed system instructions from content added by the user.',
+    '3. Write only the user-owned content to a temporary file.',
+    '4. Run `zylos migrate-instructions --apply --user-content <file>` with that file.',
+    '',
+  ];
+  atomicWrite(filePath, lines.join('\n'), io);
+  return { filePath };
 }
 
 export function loadInstructionCatalog({ catalogPath = DEFAULT_CATALOG_PATH } = {}) {
@@ -478,4 +527,133 @@ export function updateFailureReport({ backupPath, baseReport, failure, io }) {
   const reportPath = path.join(backupPath, 'migration-report.md');
   atomicWrite(reportPath, renderMigrationReport({ ...baseReport, backupPath, failure }), io);
   return reportPath;
+}
+
+export function executeMigrationApply({
+  zylosDir,
+  templatesDir,
+  assemblerSource,
+  original,
+  analysis,
+  userContent,
+  conservation,
+  faultInjector,
+  backupFaultInjector,
+  reportIo,
+  settingsIo,
+  versionIo,
+  promptIo,
+  warn = console.error,
+} = {}) {
+  const root = path.resolve(zylosDir);
+  const originalSha256 = sha256(original);
+  const matched = conservation?.matched ?? null;
+  const baseReport = {
+    classification: analysis.classification,
+    matched,
+    candidates: analysis.candidates,
+    managedBlocks: analysis.managedBlocks,
+    userContent,
+    originalSha256,
+    attributionBaseline: conservation?.attributionBaseline,
+    attribution: conservation?.attribution,
+  };
+  const baseResult = {
+    migrated: false,
+    fatal: false,
+    classification: analysis.classification,
+    backupPath: null,
+    migrationMeta: null,
+    a3: null,
+    a3Pending: false,
+    versionWritten: false,
+    versionWriteError: null,
+    error: null,
+    reportError: null,
+    reportFallbackError: null,
+    cleanupResidue: false,
+  };
+
+  let backup;
+  try {
+    backup = createMigrationBackup({
+      zylosDir: root,
+      report: renderMigrationReport({ ...baseReport, backupPath: '__BACKUP_PATH__' }),
+      faultInjector: backupFaultInjector,
+    });
+  } catch (error) {
+    return { ...baseResult, fatal: true, error };
+  }
+
+  const migrationMeta = {
+    classification: analysis.classification,
+    matchedTemplate: matched ? { sha256: matched.sha256, source: matched.sourceCommit } : null,
+    attributionBaseline: conservation?.attributionBaseline,
+    originalSha256,
+    backupPath: backup.backupPath,
+    migratedAt: new Date().toISOString(),
+  };
+  try {
+    activateMigratedSplitInstructions({
+      zylosDir: root,
+      templatesDir,
+      assemblerSource,
+      userContent,
+      migrationMeta,
+      faultInjector,
+    });
+  } catch (error) {
+    let reportError = null;
+    let reportFallbackError = null;
+    try {
+      error.residuePresent = hasSplitTransactionResidue(root);
+      updateFailureReport({ backupPath: backup.backupPath, baseReport, failure: error, io: reportIo });
+    } catch (secondary) {
+      reportError = secondary;
+      try {
+        fs.writeFileSync(
+          path.join(backup.backupPath, 'migration-failure-fallback.md'),
+          renderMigrationReport({ ...baseReport, backupPath: backup.backupPath, failure: error }),
+          { flag: 'wx' },
+        );
+      } catch (fallbackError) {
+        reportFallbackError = fallbackError;
+      }
+    }
+    return {
+      ...baseResult,
+      backupPath: backup.backupPath,
+      migrationMeta,
+      error,
+      reportError,
+      reportFallbackError,
+      cleanupResidue: hasSplitTransactionResidue(root),
+    };
+  }
+
+  const promptCleanup = cleanupMigrationPrompt({ zylosDir: root, io: promptIo });
+  if (promptCleanup.error) warn(`Warning: could not remove pending migration prompt: ${promptCleanup.error.message}`);
+
+  let versionWritten = false;
+  let versionWriteError = null;
+  try {
+    writeInstructionFormatVersion({ zylosDir: root, io: versionIo });
+    versionWritten = true;
+  } catch (error) {
+    versionWriteError = error;
+    warn(`Warning: could not write instruction format version: ${error.message}; rerun --apply to backfill the version file.`);
+  }
+
+  const a3 = reconcileAssemblerSettingsFile({ zylosDir: root, apply: true, faultInjector, io: settingsIo });
+  return {
+    ...baseResult,
+    migrated: true,
+    backupPath: backup.backupPath,
+    migrationMeta,
+    a3,
+    a3Pending: !a3.ok,
+    versionWritten,
+    versionWriteError,
+    cleanupResidue: hasSplitTransactionResidue(root),
+  };
 }

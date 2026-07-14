@@ -12,6 +12,63 @@ const PACKAGE_ROOT = path.join(import.meta.dirname, '..', '..', '..');
 const DEFAULT_TEMPLATES_DIR = path.join(PACKAGE_ROOT, 'templates');
 const ASSEMBLER_SOURCE = path.join(import.meta.dirname, 'assembler.mjs');
 export const SPLIT_MARKER_VERSION = 1;
+export const CURRENT_INSTRUCTION_FORMAT_VERSION = 2;
+
+export function instructionFormatVersionPath({ zylosDir = ZYLOS_DIR } = {}) {
+  return path.join(path.resolve(zylosDir), '.zylos', 'instruction-format-version');
+}
+
+export function readInstructionFormatVersion({ zylosDir = ZYLOS_DIR, io = {} } = {}) {
+  const filePath = instructionFormatVersionPath({ zylosDir });
+  const existsSync = io.existsSync ?? fs.existsSync;
+  const readFileSync = io.readFileSync ?? fs.readFileSync;
+  if (!existsSync(filePath)) return { version: null, valid: true, exists: false, filePath };
+  try {
+    const raw = readFileSync(filePath, 'utf8');
+    if (!/^[1-9]\d*\n?$/.test(raw)) {
+      return { version: null, valid: false, exists: true, filePath };
+    }
+    const version = Number(raw.trim());
+    if (!Number.isSafeInteger(version)) {
+      return { version: null, valid: false, exists: true, filePath };
+    }
+    return { version, valid: true, exists: true, filePath };
+  } catch (error) {
+    return { version: null, valid: false, exists: true, filePath, error };
+  }
+}
+
+export function writeInstructionFormatVersion({
+  zylosDir = ZYLOS_DIR,
+  version = CURRENT_INSTRUCTION_FORMAT_VERSION,
+  io = {},
+} = {}) {
+  if (!Number.isSafeInteger(version) || version < 1) {
+    throw new TypeError('instruction format version must be a positive integer');
+  }
+  const filePath = instructionFormatVersionPath({ zylosDir });
+  const writeFileSync = io.writeFileSync ?? fs.writeFileSync;
+  const renameSync = io.renameSync ?? fs.renameSync;
+  const openSync = io.openSync ?? fs.openSync;
+  const fsyncSync = io.fsyncSync ?? fs.fsyncSync;
+  const closeSync = io.closeSync ?? fs.closeSync;
+  const unlinkSync = io.unlinkSync ?? fs.unlinkSync;
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  const tempPath = `${filePath}.tmp.${process.pid}.${Date.now()}`;
+  let fd;
+  try {
+    writeFileSync(tempPath, `${version}\n`, 'utf8');
+    fd = openSync(tempPath, 'r');
+    fsyncSync(fd);
+    closeSync(fd);
+    fd = undefined;
+    renameSync(tempPath, filePath);
+  } finally {
+    if (fd !== undefined) try { closeSync(fd); } catch { }
+    try { unlinkSync(tempPath); } catch { }
+  }
+  return { version, filePath };
+}
 
 function assertRuntime(runtime) {
   if (runtime !== 'claude' && runtime !== 'codex') {
@@ -343,6 +400,7 @@ export function activateFreshSplitInstructions({
   templatesDir = DEFAULT_TEMPLATES_DIR,
   assemblerSource = ASSEMBLER_SOURCE,
   faultInjector,
+  versionIo,
 } = {}) {
   const hadTransactionResidue = hasSplitTransactionResidue(zylosDir);
   recoverSplitTransaction(zylosDir, faultInjector);
@@ -397,7 +455,12 @@ export function activateFreshSplitInstructions({
     seedSha256: crypto.createHash('sha256').update(userContent).digest('hex'),
   };
   commitEntries(entries, claude.markerPath, JSON.stringify(marker, null, 2) + '\n', faultInjector);
-  return { active: true, markerPath: claude.markerPath };
+  try {
+    writeInstructionFormatVersion({ zylosDir, io: versionIo });
+    return { active: true, markerPath: claude.markerPath, versionWritten: true, versionWriteError: null };
+  } catch (versionWriteError) {
+    return { active: true, markerPath: claude.markerPath, versionWritten: false, versionWriteError };
+  }
 }
 
 export function refreshSplitInstructions({
