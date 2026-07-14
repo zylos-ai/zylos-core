@@ -78,6 +78,13 @@ export async function migrateInstructionsCommand(args, {
   }
 
   const root = path.resolve(zylosDir);
+  const versionState = readInstructionFormatVersion({ zylosDir: root });
+  if (versionState.valid && versionState.version > CURRENT_INSTRUCTION_FORMAT_VERSION) {
+    const message = `Future instruction format version ${versionState.version}; current v2 migration code does not apply.`;
+    log(message);
+    return { exitCode: 0, futureFormat: true, version: versionState.version, message };
+  }
+
   const residue = hasSplitTransactionResidue(root);
   if (!flags.apply && residue) log('Transaction recovery residue detected; --apply will recover it before migration.');
   if (flags.apply) {
@@ -96,7 +103,6 @@ export async function migrateInstructionsCommand(args, {
     let versionBackfilled = false;
     let versionWriteError = null;
     if (flags.apply) {
-      const versionState = readInstructionFormatVersion({ zylosDir: root });
       if (!versionState.valid || versionState.version === null || versionState.version < CURRENT_INSTRUCTION_FORMAT_VERSION) {
         try {
           writeInstructionFormatVersion({ zylosDir: root, io: versionIo });

@@ -476,12 +476,47 @@ describe('migrate-instructions command', () => {
     assert.equal(readInstructionFormatVersion({ zylosDir: root }).version, 2);
     assert.equal(fs.existsSync(promptPath), false);
 
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it('leaves an active future-format tree byte-identical before residue recovery or cleanup', async () => {
+    const root = fixture();
+    activateFreshSplitInstructions({ zylosDir: root, templatesDir: TEMPLATES_DIR });
     writeInstructionFormatVersion({ zylosDir: root, version: 3 });
-    const future = capture();
-    assert.equal((await migrateInstructionsCommand(['--apply'], {
-      zylosDir: root, templatesDir: TEMPLATES_DIR, ...future.deps,
-    })).exitCode, 0);
+    fs.writeFileSync(migrationPromptPath({ zylosDir: root }), 'future prompt bytes\n');
+    fs.writeFileSync(path.join(root, 'future.split-txn.residue'), 'future residue bytes\n');
+    const before = treeSnapshot(root);
+    const output = capture();
+
+    const result = await migrateInstructionsCommand(['--apply'], {
+      zylosDir: root, templatesDir: TEMPLATES_DIR, ...output.deps,
+    });
+
+    assert.equal(result.exitCode, 0);
+    assert.equal(result.futureFormat, true);
+    assert.equal(result.version, 3);
+    assert.deepEqual(treeSnapshot(root), before);
+    assert.ok(output.stdout.some(line => line.includes('Future instruction format version 3')));
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it('leaves an inactive A-class future-format tree byte-identical before migration apply', async () => {
+    const root = fixture();
+    writeKnownBaseline(root);
+    writeInstructionFormatVersion({ zylosDir: root, version: 3 });
+    const before = treeSnapshot(root);
+    const output = capture();
+
+    const result = await migrateInstructionsCommand(['--apply'], {
+      zylosDir: root, templatesDir: TEMPLATES_DIR, ...output.deps,
+    });
+
+    assert.equal(result.exitCode, 0);
+    assert.equal(result.futureFormat, true);
+    assert.equal(result.version, 3);
+    assert.deepEqual(treeSnapshot(root), before);
     assert.equal(readInstructionFormatVersion({ zylosDir: root }).version, 3);
+    assert.ok(output.stdout.some(line => line.includes('Future instruction format version 3')));
     fs.rmSync(root, { recursive: true, force: true });
   });
 
