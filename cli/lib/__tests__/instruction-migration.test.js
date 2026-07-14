@@ -294,6 +294,20 @@ describe('shared migration apply engine and prompt', () => {
     assert.deepEqual(fs.readdirSync(path.dirname(written.filePath)), []);
     fs.rmSync(root, { recursive: true, force: true });
   });
+
+  it('includes system template path in prompt when provided', () => {
+    const root = fixture();
+    const analysis = { classification: 'C', candidates: [], managedBlocks: [] };
+    const templatePath = '/home/test/.zylos/instructions/claude-system.md';
+    const written = writeMigrationPrompt({
+      zylosDir: root, analysis, originalSha256: 'def', systemTemplatePath: templatePath,
+    });
+    const prompt = fs.readFileSync(written.filePath, 'utf8');
+    assert.match(prompt, /System template: `\/home\/test\/.zylos\/instructions\/claude-system\.md`/);
+    assert.ok(prompt.includes(`1. Read the system instruction template at \`${templatePath}\``));
+    assert.ok(!prompt.includes('compare it with the candidate baselines above'));
+    fs.rmSync(root, { recursive: true, force: true });
+  });
 });
 
 describe('instruction baseline exporter', () => {
