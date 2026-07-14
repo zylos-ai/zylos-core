@@ -267,27 +267,27 @@ describe('shared migration apply engine and prompt', () => {
     fs.rmSync(root, { recursive: true, force: true });
   });
 
-  it('writes the C prompt atomically and leaves no partial temp on failure', () => {
+  it('writes the C prompt atomically with system template path and leaves no partial temp on failure', () => {
     const root = fixture();
     const analysis = { classification: 'C', candidates: [], managedBlocks: [] };
-    const written = writeMigrationPrompt({ zylosDir: root, analysis, originalSha256: 'abc' });
+    const templatePath = '/home/test/.zylos/instructions/claude-system.md';
+    const written = writeMigrationPrompt({
+      zylosDir: root, analysis, originalSha256: 'abc', systemTemplatePath: templatePath,
+    });
     assert.equal(
       written.filePath,
       path.join(root, 'custom-hooks', 'session-start', '90-migration-prompt.md')
     );
     const prompt = fs.readFileSync(written.filePath, 'utf8');
     assert.match(prompt, /Original ZYLOS\.md SHA-256: abc/);
-    assert.ok(prompt.includes([
-      '## Required action',
-      '',
-      '**Do NOT edit ZYLOS.md directly.** Always use the CLI tool below — it handles backup, conservation verification, and atomic activation. Manual edits bypass these safety guarantees.',
-      '',
-      '1. Read `~/zylos/ZYLOS.md` and compare it with the candidate baselines above.',
-    ].join('\n')));
+    assert.match(prompt, /System template: `\/home\/test\/.zylos\/instructions\/claude-system\.md`/);
+    assert.ok(prompt.includes(`1. Read the system instruction template at \`${templatePath}\``));
+    assert.ok(!prompt.includes('compare it with the candidate baselines above'));
     fs.unlinkSync(written.filePath);
     assert.throws(() => writeMigrationPrompt({
       zylosDir: root,
       analysis,
+      systemTemplatePath: templatePath,
       io: { renameSync() { throw new Error('prompt rename fault'); } },
     }), /prompt rename fault/);
     assert.equal(fs.existsSync(written.filePath), false);
@@ -295,17 +295,12 @@ describe('shared migration apply engine and prompt', () => {
     fs.rmSync(root, { recursive: true, force: true });
   });
 
-  it('includes system template path in prompt when provided', () => {
+  it('throws when systemTemplatePath is missing', () => {
     const root = fixture();
     const analysis = { classification: 'C', candidates: [], managedBlocks: [] };
-    const templatePath = '/home/test/.zylos/instructions/claude-system.md';
-    const written = writeMigrationPrompt({
-      zylosDir: root, analysis, originalSha256: 'def', systemTemplatePath: templatePath,
-    });
-    const prompt = fs.readFileSync(written.filePath, 'utf8');
-    assert.match(prompt, /System template: `\/home\/test\/.zylos\/instructions\/claude-system\.md`/);
-    assert.ok(prompt.includes(`1. Read the system instruction template at \`${templatePath}\``));
-    assert.ok(!prompt.includes('compare it with the candidate baselines above'));
+    assert.throws(() => writeMigrationPrompt({
+      zylosDir: root, analysis, originalSha256: 'abc',
+    }), /systemTemplatePath is required/);
     fs.rmSync(root, { recursive: true, force: true });
   });
 });
