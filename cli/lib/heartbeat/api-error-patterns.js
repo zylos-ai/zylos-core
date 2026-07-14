@@ -2,10 +2,11 @@
 // Keep these specific to CLI/runtime error displays to avoid matching normal
 // conversation text.
 const API_ERROR_PATTERNS = [
-  /APIError:\s*\d{3}/,                                    // "APIError: 400 ..."
-  /\b(400|422)\b.*(?:bad request|invalid request)/i,      // "400 Bad Request"
-  /invalid_request_error/,                                 // Anthropic error type
-  /overloaded_error/,                                      // Anthropic overloaded
+  /API\s*Error:\s*\d{3}/,                                  // "APIError: 400 ..." or "API Error: 400 ..."
+  /\b(400|422)\b.*(?:bad request|invalid request)/i,       // "400 Bad Request"
+  /invalid_request_error/,                                  // Anthropic error type
+  /overloaded_error/,                                       // Anthropic overloaded
+  /output blocked by content filtering policy/i,            // content filter block (needs session restart)
   /an image in the conversation exceeds the dimension limit for many-image requests/i,
   /dimension limit for many-image requests\s*\(\s*2000px\s*\)/i,
 ];

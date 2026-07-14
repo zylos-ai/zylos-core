@@ -23,6 +23,20 @@ describe('heartbeat API error patterns', () => {
     assert.equal(result.pattern, 'APIError: 400');
   });
 
+  it('detects API Error with space (content filtering)', () => {
+    const result = detectApiErrorText('API Error: 400 Output blocked by content filtering policy');
+
+    assert.equal(result.detected, true);
+    assert.equal(result.pattern, 'API Error: 400');
+  });
+
+  it('detects content filtering policy text standalone', () => {
+    const result = detectApiErrorText('Output blocked by content filtering policy');
+
+    assert.equal(result.detected, true);
+    assert.match(result.pattern, /content filtering policy/i);
+  });
+
   it('does not match ordinary image discussion text', () => {
     const result = detectApiErrorText('Please resize this image to 2000px before sending it.');
 
