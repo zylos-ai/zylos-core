@@ -44,7 +44,8 @@ export function cleanupMigrationPrompt({ zylosDir, io = {} } = {}) {
   }
 }
 
-export function writeMigrationPrompt({ zylosDir, analysis, originalSha256, io = {} } = {}) {
+export function writeMigrationPrompt({ zylosDir, analysis, originalSha256, systemTemplatePath, io = {} } = {}) {
+  if (!systemTemplatePath) throw new Error('systemTemplatePath is required');
   const filePath = migrationPromptPath({ zylosDir });
   const mkdirSync = io.mkdirSync ?? fs.mkdirSync;
   mkdirSync(path.dirname(filePath), { recursive: true });
@@ -54,6 +55,7 @@ export function writeMigrationPrompt({ zylosDir, analysis, originalSha256, io = 
     '',
     `- Classification: ${analysis?.classification ?? 'C'}`,
     `- Original ZYLOS.md SHA-256: ${originalSha256 ?? '(unknown)'}`,
+    `- System template: \`${systemTemplatePath}\``,
     '',
     '## Candidate baselines',
     '',
@@ -65,10 +67,13 @@ export function writeMigrationPrompt({ zylosDir, analysis, originalSha256, io = 
     '',
     '**Do NOT edit ZYLOS.md directly.** Always use the CLI tool below — it handles backup, conservation verification, and atomic activation. Manual edits bypass these safety guarantees.',
     '',
-    '1. Read `~/zylos/ZYLOS.md` and compare it with the candidate baselines above.',
-    '2. Separate Zylos-managed system instructions from content added by the user.',
-    '3. Write only the user-owned content to a temporary file.',
-    '4. Run `zylos migrate-instructions --apply --user-content <file>` with that file.',
+    `1. Read the system instruction template at \`${systemTemplatePath}\` — this contains all Zylos-managed system instructions.`,
+    '2. Read your current `~/zylos/ZYLOS.md`.',
+    '3. Compare the two: any content in ZYLOS.md that also appears in the system template is system-managed and should NOT be included as user content.',
+    '4. Extract only content from ZYLOS.md that is NOT present in the system template — this is user-customized content.',
+    '5. If there is no user-customized content (the file matches the system template entirely), submit an empty string.',
+    '6. Write the user-only content to a temporary file.',
+    '7. Run `zylos migrate-instructions --apply --user-content <file>` with that file.',
     '',
   ];
   atomicWrite(filePath, lines.join('\n'), io);

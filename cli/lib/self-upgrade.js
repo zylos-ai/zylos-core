@@ -20,6 +20,7 @@ import { getAllowedTmpRoots } from './upgrade.js';
 import { runMigrations } from './migrate.js';
 import {
   CURRENT_INSTRUCTION_FORMAT_VERSION,
+  instructionPaths,
   readInstructionFormatVersion,
   refreshSplitInstructions,
   writeInstructionFormatVersion,
@@ -854,10 +855,12 @@ export function step7_syncInstructions(ctx, deps = {}) {
 
   if (analysis.classification !== 'A') {
     try {
+      const systemTemplatePath = instructionPaths('claude', { zylosDir }).systemPath;
       const promptResult = (deps.writeMigrationPrompt ?? writeMigrationPrompt)({
         zylosDir,
         analysis,
         originalSha256: sha256(original),
+        systemTemplatePath,
       });
       const promptPath = promptResult?.filePath ?? promptResult?.promptPath
         ?? migrationPromptPath({ zylosDir });
