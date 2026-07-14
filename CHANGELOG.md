@@ -7,8 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-07-14
+
+### Added
+- **Split-layer instruction architecture**: `ZYLOS.md` (runtime-agnostic core) + runtime-specific addon (`CLAUDE.md` / `AGENTS.md`) replace the monolithic generated instruction file. Assembler hooks in `settings.json` rebuild the output file on every session start. (#722, #723)
+- **Template content redraft**: ZYLOS.md template rewritten for the split-layer architecture with restructured behavioral rules, memory system documentation, and communication guidelines. (#726)
+- **Instruction migration tool** (`zylos migrate-instructions`): classifies existing instruction files as A (byte-identical to known template), B (template + separable edits), or C (cannot auto-separate). Conservation verification ensures no user content is lost. SHA-256 verified backup before any mutation. A3 hook normalization reconciles assembler settings. (#722 P2, #728)
+- **Upgrade-path auto-migration**: `zylos upgrade --self` (step 7) automatically migrates A-class machines during upgrade. C-class machines receive a migration prompt written to `custom-hooks/session-start/90-migration-prompt.md` for agent-guided migration on next startup. Shared engine (`executeMigrationApply`) guarantees backup-first execution for both paths. Instruction format version marker (`.zylos/instruction-format-version`) tracks migration state; future format versions are protected by early-return gates in both engine and CLI. (#729, #732)
+- **Auto-trigger pending migration on session start**: `session-start-prompt.js` now detects when a C-class migration prompt exists and sends a migration-specific prompt that instructs the agent to execute the migration immediately, rather than the generic startup prompt. The migration prompt file is cleaned up on success and retained on failure for automatic retry. (#736)
+- **Session-start shard injection**: monolithic session-start orchestrator replaced by an ordered shard chain — each shard runs as an independent hook process, with a flag-chain mechanism ensuring deterministic injection order. Component shards register via `shards.d/*.json` declarations. (#686, #698, #651, #668)
+- **Custom session-start injection**: operator-placed `.md` files in `~/zylos/custom-hooks/session-start/` are injected at every session start (chain position 2, after identity). Filename-ordered (conf.d style), no registration needed. (#703, #719, #721)
+- **Local component installation**: `zylos add --from <path>` installs components from a local directory while preserving the GitHub upgrade path. (#700)
+- **C4 void channel**: first-class internal message channel for system-generated messages (scheduler events, health checks) that don't originate from an external platform. (#689, #690)
+- **Memory content rules**: sync-time audit enforcement for `state.md` and `references.md` — structural validation, size budgets, and classification rules checked during Memory Sync. (#697, #702, #704)
+
+### Fixed
+- **Content filtering API error detection**: activity monitor now detects "API Error: 400 Output blocked by content filtering policy" and triggers automatic session restart. Widened the `APIError:` regex to also match `API Error:` (with space) and added a dedicated content filtering pattern. (#737)
+- **C-class migration prompt includes system template path**: the migration prompt now passes the installed `claude-system.md` path so the agent can read the actual system template and accurately separate system-managed content from user additions. Empty user content is accepted for C-class migrations where the old file contains no customizations. (#735)
+- **Session-start emits full original messages**: the c4-conversations shard now injects full original message content instead of compressed preview+pointer form. Messages are packed whole-message newest-first into the shard budget; only a lone message exceeding the entire budget falls back to preview. (#724, #725)
+- **Self-upgrade conflict backup preservation**: conflict backups are no longer silently deleted after a successful upgrade; identical-content conflicts are short-circuited without generating backup noise. (#717, #718)
+- **Manifest generation from authoritative source**: upgrade manifests are now generated from the package source directory, not destination-dir scans that could include stale or user-modified files. (#715, #716)
+- **Spill-file path collision**: `truncateForDelivery` now uses unique directory names per message to prevent concurrent spill-file overwrites. (#713, #714)
+- **Duplicate public API requests**: removed same-round duplicate unauthenticated GitHub API requests in the no-token fallback path. (#705, #711)
+- **Prefer authenticated GitHub API**: all GitHub API requests now prefer authenticated mode when a token is available, reducing rate-limit exposure. (#699)
+- **Comm-bridge full message storage**: inbound messages are stored in full in `c4.db`; the `reply-via` routing directive is stripped from the stored content. (#618)
+- **Web console session-handoff messages hidden**: internal session-handoff messages no longer appear in the web console UI. (#687)
+- **Claude hooks generated at runtime**: hook commands are now generated dynamically instead of being hardcoded, eliminating path-quoting mismatches across platforms. (#682, #678, #679, #684)
+- **Codex native SessionStart hook**: Codex bootstrap migrated from a custom mechanism to the native SessionStart hook with a kick message to trigger it. (#675, #681)
+- **Memory Sync checkpoint threshold**: lowered from 30 to 15 unsummarized conversations as the single source of truth. (#674)
+- **Session-start context format**: unified format across memory and C4 shards; failures and null summaries are now surfaced instead of silently swallowed. (#671)
+- **PM2 dump persistence**: `pm2 save` is now called after component upgrade restarts to ensure the updated process list survives reboots. (#669)
+- **Rate limit detection**: broadened detection patterns and reset-time parsing to handle additional rate-limit response formats. (#666, #667)
+- **Opus[1m] model backfill guard**: prevents incompatible `new_session_threshold` values from being applied during model backfill. (#662)
+
 ### Changed
-- **⚠️ BEHAVIOR CHANGE — `zylos upgrade --all` exit code**: non-JSON mode now exits **1** when any component check fails, matching the `--json` contract (previously it printed warnings and exited 0). Shell scripts and CI that relied on exit 0 despite failed component checks must be updated (the standard `|| true` idiom opts out). Same failure scenario now yields the same exit code in both output modes; no `--no-fail` flag is provided by design. (#706)
+- **⚠️ BEHAVIOR CHANGE — `zylos upgrade --all` exit code**: non-JSON mode now exits **1** when any component check fails, matching the `--json` contract (previously it printed warnings and exited 0). Shell scripts and CI that relied on exit 0 despite failed component checks must be updated (the standard `|| true` idiom opts out). (#706)
+- **Session-start orchestrator consolidated**: all session-start hooks consolidated into a single orchestrator with per-shard hooks replacing the previous per-section approach. (#651, #668)
 
 ## [0.5.3] - 2026-06-17
 
