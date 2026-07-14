@@ -24,6 +24,7 @@
 - 历史模板语料库随包内置（**全部可达历史 blob**，非 tag-only，见 Design 1）+ 已知 managed 块识别器。
 - `instruction-builder.js` 新增迁移激活入口（复用 `commitEntries` 事务，marker 最后原子落盘）。
 - A3：激活时归一 assembler hook 位置；已激活机重跑必须检测 A3（裸跑只报告，`--apply` 收敛，见 Design 6）。
+- **指令架构版本标记**：`--apply` 成功后写 `.zylos/instruction-format-version`（内容 = `2`，代表分层拼接架构）。用于后续 upgrade 流程快速判定是否需要迁移（P3 消费方）。幂等：重跑写入同值。
 - self-upgrade step7 的 PENDING MIGRATION 提示文案更新为指名 `zylos migrate-instructions`。
 
 **Out（明确不做）：**
@@ -43,7 +44,7 @@
    - **C 类**（其余全部）：工具**拒绝自动拆分**，输出分析报告（候选 baseline 排名 + 残差清单，仅供参考）；agent 辅助整理出用户内容文件后，用 `--user-content <file>` 重跑，工具重新做守恒验证再激活。
 3. **逐行守恒检查（R1-③ 修订：删除丢弃豁免）**：激活硬门。基于 **occurrence/edit-script**（保序、计数），不是 line-membership 并集。原文件每一行（含重复行的每次出现）必须可归因于「匹配/候选模板 ∪ managed 块 ∪ 新用户内容」；**没有任何丢弃豁免**——非 managed 且不归因于模板的内容必须落入用户内容（`--user-content` 只提供用户目的地，不提供销毁能力）。不想要的行，迁移后由 owner 在自己的 ZYLOS.md 里正常编辑删除（用户文件用户主权，工具不代行销毁）。守恒不满足 → 拒绝激活、不写 marker、不动任何现有文件。边界明确处理：CRLF、无末行换行、managed marker 截断/嵌套/形似（lookalike）不误吞。
 4. **持久备份契约（R1 验证边界落实；#717 是契约先例而非可复用 helper——现实现仅 `self-upgrade.js:641` 为 smart-merge conflicts 内联建 `.backup/<ts>/conflicts`）**：本工具自建布局 `~/zylos/.backup/<timestamp>/instruction-migration/`，内含原 ZYLOS.md / CLAUDE.md / AGENTS.md（存在者全备）+ `migration-report.md`（分类、归因表、候选清单）。**全部 copy 成功并校验后才允许任何 live mutation**；任一 copy 失败 → 零 live mutation 退出（矩阵 F1：partial backup 目录 best-effort 移除——其中仅为未动原件的副本；移除失败 → 警告 + 打印路径）。**备份完整校验后**的事务中途故障 = 矩阵 F2：备份目录 + failure `migration-report.md`（故障点、residue 状态、重试语义）**必须保留**（durable evidence，#717 合同；重试的 recovery 不得清理持久备份目录）（R7-② 拆分）。备份在成功/失败（F2）/重试后都保留（不自动清理，同 #717 语义）；打印路径 = marker.backupPath = 实际目录；与事务临时件 `.split-txn.*.bak` 严格分离（路径与清理器都不相交）。
-5. **事务、marker 与故障语义（R1-④ + R2-⑦ 修订）**：所有 instruction 写入走 `commitEntries` 单事务（提交点 = marker rename，`instruction-builder.js:210`），marker 追加 `migration: {classification, matchedTemplate:{sha256, source}, originalSha256, backupPath, migratedAt}`。**Recovery residue 两阶段语义（对齐现行 commitEntries 合同）**：故障返回**当下**允许且必须保留可判别的恢复记录（rollback 自身失败保留 `.split-txn.*` 记录、cleanup 失败保留 committed `.bak`，交由下次重试恢复/清理——现有测试 instruction-split.test.js:209-267 的既定合同，实现者**不得**为“失败即无残留”而删除这些记录）；「原文件逐字节保留或完整提交 + 无残留」是**成功重试后的终态断言**，不是失败当下的断言。
+5. **事务、marker 与故障语义（R1-④ + R2-⑦ 修订）**：所有 instruction 写入走 `commitEntries` 单事务（提交点 = marker rename，`instruction-builder.js:210`），marker 追加 `migration: {classification, matchedTemplate:{sha256, source}, originalSha256, backupPath, migratedAt}`。**事务提交成功后（marker 已落盘），写 `.zylos/instruction-format-version`（内容 = `2\n`，无 JSON）**——用于 P3 upgrade 流程快速判定「是否需要迁移」（读一个纯文本文件比解析 marker JSON 便宜且不耦合 marker schema）；`fresh init` 路径也写同值（activateFreshSplitInstructions 末尾追加，保证所有新架构机一致标记）。该文件写入在 marker 之后、A3 之前；写入失败不影响迁移成功判定（marker 是 source of truth），但需 stderr 警告 + remediation「重跑 `--apply` 补写」。**Recovery residue 两阶段语义（对齐现行 commitEntries 合同）**：故障返回**当下**允许且必须保留可判别的恢复记录（rollback 自身失败保留 `.split-txn.*` 记录、cleanup 失败保留 committed `.bak`，交由下次重试恢复/清理——现有测试 instruction-split.test.js:209-267 的既定合同，实现者**不得**为“失败即无残留”而删除这些记录）；「原文件逐字节保留或完整提交 + 无残留」是**成功重试后的终态断言**，不是失败当下的断言。
 6. **A3 归一：写入门限与异常拓扑状态机（R2-⑤⑥ 修订）**：
    - **写入门限**：无 `--apply` 时（含已激活机上的裸重跑）A3 **永远只报告 drift、零写入**（settings.json / .backup 均逐字节不动，事务 residue 只报告存在、不执行 recovery）；**只有 active + `--apply`** 才执行收敛。已激活机 `--apply` 重跑 = A3 收敛（幂等）→ 报告 already-active → 退出 0；marker 提交后 settings 失败/被杀 → 下次 `--apply` 重跑必然修复，修复后再跑零 diff。
    - **recovery 前置门（R4-⑬）**：**所有 `--apply` 路径（含 active 机的 already-active 短路之前）必须先执行 `recoverSplitTransaction`**——committed cleanup residue（`commitEntries` 吞掉 cleanup error 的既定行为，`instruction-builder.js:238-248`、`instruction-split.test.js:239-253`）由此保证在任何 `--apply` 重跑时被清扫；dry-run 只报告 residue 存在与含义。
@@ -96,6 +97,7 @@
 - [ ] CLI 命令 `zylos migrate-instructions`：dry-run 默认（零写入，A3 只报 drift）；`--apply`；`--user-content <file>`；已激活机 `--apply` 重跑 = A3 收敛 + already-active 退出 0，裸重跑 = 只报告。
 - [ ] **owner 模块窄 seam（R5-① + R6-①）**：`sync-settings-hooks.js` 新增导出 `canonicalAssemblerEntry({ zylosDir })`（从 `desiredSessionStartHooks` 抽出，step9 生成器改为复用同一 builder）+ `reconcileAssemblerEntries(settings, { zylosDir })`——纯内存、无 I/O、仅 assembler 三条目补齐 + command/timeout 投影修正，canonical policy 全部在 owner 模块内派生（调用方零 policy 输入）；单测含 blast-radius 负例（statusLine/model/Codex config/其他 hook——含 jinglever 复现的 activity timeout 999999——逐字节不动）+ **非默认 zylosDir 动态路径一致性**（seam 补齐产物与 `desiredSessionStartHooks({zylosDir})` 的 assembler 条目逐字段一致，startup/clear/compact 三组各一次）+ step9 回归（重构后 `desiredClaudeHooks` 输出与重构前逐字节一致）。
 - [ ] A3 归一实现（Design 6 状态机：严格读 → 结构 preflight（R6-②，不复用 `getCommandHooks` 宽松语义）→ 全组 key 分类 → 整体 refusal 或 内存合成 seam+归一 → 单次原子写；激活后执行与 active-rerun 收敛共用同一幂等函数）。
+- [ ] **指令架构版本标记**：`--apply` 成功后写 `.zylos/instruction-format-version`（`2\n`）；`activateFreshSplitInstructions` 末尾同步追加；写入失败 stderr 警告 + remediation 但不影响 exit code（marker 已提交）。
 - [ ] step7 PENDING MIGRATION 提示文案指名新命令。
 
 ## Test Checklist
@@ -125,6 +127,7 @@
 - [ ] **A3 异常拓扑（R2-⑥ + R3-⑨⑩ + R5-①② 修订，每例断言精确后置条件 + remediation 文案）**：duplicate-entry（同组两条 assembler-key）→ preflight refusal + settings 逐字节不动 + stderr 人工修复定位（不得引导 hook-sync——它不去重）；missing / drift → **`--apply` 同命令内 seam 收敛 + exit 0**（不再输出任何第二条命令引导；dry-run 输出「`--apply` 将补齐/修正」预告）；duplicate-group → preflight refusal + 人工修复引导；foreign 同 basename 不同路径（key 不同）→ 判 foreign、不计数、不移动、不出现在异常报告；canonical 态 → 归一后所有 foreign hook 深度相等 + 顺序不变，重跑零 diff。
 - [ ] **CLI 结果矩阵全行覆盖（R3-⑧ + R4-⑬ + R6-③ + R7-②）**：真入口子进程逐行验证 Design 7 矩阵 D1/D2/A1/A1w/A2/A2w/A3r/A4/R1/R2/F1/F2 的 stdout 内容、stderr 内容、exit code、事务/marker/settings 后置状态；exit 2 行额外验证「remediation 后重跑 `--apply` → exit 0 收敛」链。
 - [ ] **CLI 真入口**：子进程执行 `cli/zylos.js migrate-instructions` 的 dispatch、flags 解析（未知 flag 拒绝）；结果矩阵行的详细断言见上条（现 bin.test.js 只测 component symlink，与命令路由无关，需新增）。
+- [ ] **指令架构版本标记**：`--apply` A 类成功 → `.zylos/instruction-format-version` 存在且内容 = `2\n`；`activateFreshSplitInstructions` → 同值；写入失败注入 → marker 已提交 + stderr 警告 + exit 0（不降级）+ 重跑补写；幂等重跑 → 同值不变。
 - [ ] 回归：`activateFreshSplitInstructions` legacy 拒绝门、refresh 路径、P1 全部现有测试不动且全绿（Jest + Node）。
 
 ## Assumptions
