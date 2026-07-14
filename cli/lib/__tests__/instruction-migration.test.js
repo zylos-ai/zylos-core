@@ -275,7 +275,15 @@ describe('shared migration apply engine and prompt', () => {
       written.filePath,
       path.join(root, 'custom-hooks', 'session-start', '90-migration-prompt.md')
     );
-    assert.match(fs.readFileSync(written.filePath, 'utf8'), /Original ZYLOS\.md SHA-256: abc/);
+    const prompt = fs.readFileSync(written.filePath, 'utf8');
+    assert.match(prompt, /Original ZYLOS\.md SHA-256: abc/);
+    assert.ok(prompt.includes([
+      '## Required action',
+      '',
+      '**Do NOT edit ZYLOS.md directly.** Always use the CLI tool below — it handles backup, conservation verification, and atomic activation. Manual edits bypass these safety guarantees.',
+      '',
+      '1. Read `~/zylos/ZYLOS.md` and compare it with the candidate baselines above.',
+    ].join('\n')));
     fs.unlinkSync(written.filePath);
     assert.throws(() => writeMigrationPrompt({
       zylosDir: root,

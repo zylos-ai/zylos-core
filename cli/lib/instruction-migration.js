@@ -63,6 +63,8 @@ export function writeMigrationPrompt({ zylosDir, analysis, originalSha256, io = 
     '',
     '## Required action',
     '',
+    '**Do NOT edit ZYLOS.md directly.** Always use the CLI tool below — it handles backup, conservation verification, and atomic activation. Manual edits bypass these safety guarantees.',
+    '',
     '1. Read `~/zylos/ZYLOS.md` and compare it with the candidate baselines above.',
     '2. Separate Zylos-managed system instructions from content added by the user.',
     '3. Write only the user-owned content to a temporary file.',
