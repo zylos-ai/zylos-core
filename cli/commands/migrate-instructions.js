@@ -191,16 +191,20 @@ export async function migrateInstructionsCommand(args, {
       setExitCode(1);
       return { exitCode: 1, fatal: true, analysis };
     }
-    conservation = verifyInstructionConservation({
-      strippedContent: analysis.strippedContent,
-      userContent,
-      catalog,
-      matched: analysis.matched,
-    });
-    if (!conservation.ok) {
-      error(`Conservation refusal: ${conservation.reason}`);
-      setExitCode(1);
-      return { exitCode: 1, refusal: true, analysis, conservation };
+    if (userContent === '' && analysis.classification === 'C') {
+      conservation = { ok: true, matched: null, emptyUserContentBypass: true };
+    } else {
+      conservation = verifyInstructionConservation({
+        strippedContent: analysis.strippedContent,
+        userContent,
+        catalog,
+        matched: analysis.matched,
+      });
+      if (!conservation.ok) {
+        error(`Conservation refusal: ${conservation.reason}`);
+        setExitCode(1);
+        return { exitCode: 1, refusal: true, analysis, conservation };
+      }
     }
     conservedMatch = conservation.matched;
   } else if (analysis.classification === 'A') {

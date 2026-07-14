@@ -580,6 +580,21 @@ describe('migrate-instructions command', () => {
     fs.rmSync(root, { recursive: true, force: true });
   });
 
+  it('accepts empty user content for C-class without conservation refusal', async () => {
+    const root = fixture();
+    fs.writeFileSync(path.join(root, 'ZYLOS.md'), 'unknown baseline\ncustom\n');
+    const emptyFile = path.join(root, 'empty-user.txt');
+    fs.writeFileSync(emptyFile, '');
+    const output = capture();
+    const result = await migrateInstructionsCommand(['--apply', '--user-content', emptyFile], {
+      zylosDir: root, templatesDir: TEMPLATES_DIR, ...output.deps,
+    });
+    assert.equal(result.exitCode, 0);
+    assert.ok(fs.existsSync(instructionPaths('claude', { zylosDir: root }).markerPath));
+    assert.ok(!output.stderr.some(line => line.includes('Conservation refusal')));
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
   it('migrates a known A baseline, writes durable backup and converges A3 in one command', async () => {
     const root = fixture();
     const baseline = writeKnownBaseline(root);
