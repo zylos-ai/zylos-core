@@ -153,17 +153,27 @@ Add a new core shard `migration-prompt` to the `CORE_SHARDS` array in `shard-reg
 
 Core shard chain order is determined by array position in `CORE_SHARDS` (`shard-registry.js:58-101`), not by sorting the numeric `order` field. Both the array position AND the `order` value must be updated. Registry comment (`shard-registry.js:11`) must be updated from "five" to seven. `cli/lib/sync-settings-hooks.js:76-81` shard count reference must also be updated. Both Claude and Codex chain tests must be updated to expect the 7-item chain.
 
-Emitter behavior:
-- If `.zylos/pending-migration-prompt.md` does NOT exist → emit nothing (zero cost for migrated machines).
-- If it exists → read and emit content wrapped in `=== PENDING MIGRATION ===` header.
+Emitter behavior (state-based, not file-based):
+1. Check `isSplitInstructionsActive()` — if **active**: suppress emission. If prompt file exists, delete it (defense-in-depth cleanup, non-fatal). Emit nothing.
+2. If marker NOT active AND `.zylos/pending-migration-prompt.md` exists → read and emit content wrapped in `=== PENDING MIGRATION ===` header.
+3. If marker NOT active AND file does NOT exist → emit nothing.
 
-**Lifecycle closure (three cleanup paths):**
+This closes the stale loop: even if all other cleanup paths fail, the shard itself suppresses and cleans up once the marker is active. The CLI active `--apply` gate returning early without consuming `--user-content` is no longer a problem — the shard won't re-emit regardless of file existence.
 
-1. **Engine cleanup (primary):** `executeMigrationApply` step 5 deletes the prompt file immediately after successful activation (marker committed), before version write and A3. This covers the C-class agent's CLI `--apply --user-content` path. Non-fatal, log warning on unlink failure.
-2. **Step 7 cleanup (upgrade path):** cases (a) and (b) — active + version ≥ 2 → delete stale prompt if exists. Non-fatal.
-3. **Shard suppression (defense-in-depth):** NOT implemented — the shard emits based purely on file existence. Cleanup in paths 1 and 2 is sufficient. If both fail, the shard correctly re-emits (the prompt is still actionable until the file is removed).
+**Prompt write contract:** Atomic (temp + rename), same pattern as version file. Write failure → non-fatal, step 7 returns C-class message without prompt file (agent can still run `zylos migrate-instructions` manually). Partial write → impossible (atomic). Include in failure matrix and tests.
 
-**Test:** C prompt written → CLI `--apply --user-content` succeeds → prompt file deleted → next session shard emits nothing.
+**Lifecycle closure (four cleanup paths, any one sufficient):**
+
+1. **Engine cleanup (primary):** `executeMigrationApply` step 5 deletes the prompt file immediately after successful activation (marker committed). Covers CLI `--apply --user-content` path. Non-fatal.
+2. **Step 7 cleanup (upgrade path):** cases (a) and (b) — active → delete stale prompt if exists. Non-fatal.
+3. **CLI active `--apply` gate cleanup:** when marker active, delete prompt file if exists before A3. Non-fatal.
+4. **Shard suppression + cleanup (defense-in-depth):** shard checks marker active → suppresses emission and deletes file. Non-fatal. This is the final safety net — if paths 1-3 all fail, the shard catches it at next session start.
+
+**Tests:**
+- C prompt written → CLI `--apply --user-content` succeeds → prompt deleted → shard silent.
+- C prompt written → activation succeeds BUT unlink fails → shard checks marker active → suppresses + cleans → shard silent.
+- Prompt atomic write failure → step 7 returns C-class message without prompt path, no partial file.
+- Prompt unlink failure in engine → non-fatal, shard catches at next session.
 
 ### 5. step7_syncInstructions — singular executable sequence
 
@@ -174,17 +184,23 @@ Step 7 entry:
   1. (existing) Deploy manifest template
   2. (existing) Legacy migration if ZYLOS.md missing
   3. Read instruction-format-version → versionState
-  4. Run refreshSplitInstructions (ALWAYS — handles asset deploy, transaction recovery, refresh)
+
+  4. FUTURE-FORMAT GATE (before any v2 code runs):
+     If version > 2 → EARLY RETURN. Do not run refreshSplitInstructions, do not
+     touch any instruction files/marker/assets. Return informational message:
+     "future format version N; current v2 migration code does not apply".
+     Rationale: refreshSplitInstructions runs v2 transaction recovery, parses
+     v2 marker, and rewrites v2 assets/output — all of which would modify a
+     future-format machine's state before the skip could take effect.
+
+  5. Run refreshSplitInstructions (v2 code — safe because step 4 already
+     excluded future formats)
      → refreshResult: { active, pendingMigration }
-  5. Decision matrix (versionState × refreshResult):
+
+  6. Decision matrix (version ≤ 2 / missing / invalid × refreshResult):
 
      ┌─────────────────────────┬────────────────────────┬──────────────────────────────────┐
      │                         │ refreshResult.active   │ refreshResult.pendingMigration   │
-     ├─────────────────────────┼────────────────────────┼──────────────────────────────────┤
-     │ version > 2             │ (a) Normal refresh.    │ (e) Future format. Do NOT run    │
-     │                         │ Clean up stale prompt. │ v2 migration. Log warning:       │
-     │                         │ Done.                  │ "version >2 but marker absent".  │
-     │                         │                        │ Return informational message.    │
      ├─────────────────────────┼────────────────────────┼──────────────────────────────────┤
      │ version === 2           │ (a) Normal refresh.    │ (d) Anomaly: v2 version file     │
      │                         │ Clean up stale prompt. │ but marker missing (corruption). │
@@ -197,7 +213,7 @@ Step 7 entry:
      │                         │ Done.                  │                                  │
      └─────────────────────────┴────────────────────────┴──────────────────────────────────┘
 
-  6. Case (c) / (d) migration:
+  7. Case (c) / (d) migration:
      a. loadInstructionCatalog({ catalogPath: <new version's catalog> })
      b. Read original ZYLOS.md content
      c. classifyInstructionBaseline({ original, catalog }) — no provenance supplied
@@ -216,14 +232,17 @@ Step 7 entry:
           * true → return success message with classification + backupPath
           * false → return PENDING MIGRATION fallback (+ backupPath if available)
      e. If classification C:
-        - writeMigrationPrompt({ zylosDir, analysis })
-        - return C-class message with prompt file path
-  7. Case (e): return informational message ("future format version N, no migration attempted").
-  8. Clean up stale prompt file: cases (a) and (b) — active + version known-good →
+        - writeMigrationPrompt({ zylosDir, analysis }) — atomic write (temp+rename)
+        - If write fails → return C-class message without prompt path (agent can
+          still run `zylos migrate-instructions` manually), log warning
+        - If write succeeds → return C-class message with prompt file path
+  8. Clean up stale prompt file: cases (a) and (b) — active →
      delete .zylos/pending-migration-prompt.md if exists. try/catch, non-fatal.
 ```
 
-**Step 7 result branching (Finding R3-2 fix):** Step 7 does NOT use try/catch around the engine call. It calls `executeMigrationApply` and branches on the returned `result.migrated` boolean. `true` → success message. `false` → PENDING MIGRATION fallback with `result.backupPath` if available. The engine never throws for expected failures (backup/transaction) — it returns structured results.
+**Future-format byte-for-byte guarantee:** Test with a fixture where version=3 and instruction files have non-v2 content → step 7 returns informational message → all fixture files byte-for-byte unchanged (no recovery, no asset rewrite, no marker modification).
+
+**Step 7 result branching:** Step 7 does NOT use try/catch around the engine call. It calls `executeMigrationApply` and branches on the returned `result.migrated` boolean. `true` → success message. `false` → PENDING MIGRATION fallback with `result.backupPath` if available. The engine never throws for expected failures (backup/transaction) — it returns structured results.
 
 ### 6. Failure matrix (aligned with P2 F1/F2 + residue two-phase semantics)
 
@@ -235,7 +254,8 @@ Step 7 entry:
 | **F1: Backup** | `createMigrationBackup` fails | Zero live mutation | Partial backup best-effort removed | `{migrated:false, fatal:true}` | PENDING MIGRATION fallback |
 | **F2: Transaction** (clean rollback) | Activation throws, rollback succeeds | Files restored | No `.split-txn.*` residue; durable backup + failure report preserved | `{migrated:false, fatal:false, backupPath}` | PENDING MIGRATION fallback + backupPath |
 | **F2: Transaction** (rollback failure) | Rollback itself fails | Indeterminate | `.split-txn.*` residue preserved | `{migrated:false, fatal:false, backupPath}` | PENDING MIGRATION fallback + backupPath |
-| **Post-commit: prompt cleanup** | Prompt file unlink fails | Migration committed, prompt file remains | None | `{migrated:true}` (warning logged) | Success (shard re-emits until next cleanup) |
+| **Post-commit: prompt cleanup** | Prompt file unlink fails | Migration committed, prompt file remains | None | `{migrated:true}` (warning logged) | Success (shard suppresses at next session — marker active) |
+| **C-class prompt write** | Atomic write fails | No prompt file, no migration | None | (not engine) | C-class message without prompt path; agent uses manual CLI |
 | **Post-commit: version write** | Atomic write fails | Migration committed, version missing | None | `{migrated:true, versionWritten:false}` | Success with warning; next upgrade → backfill (case b) or CLI `--apply` backfills |
 | **Post-commit: A3** | `reconcileAssemblerSettingsFile` fails | Migration committed, hooks not converged | None | `{migrated:true, a3Pending:true}` | Success with warning; `zylos migrate-instructions --apply` converges |
 | **Post-commit: cleanup residue** | `commitEntries` bak cleanup fails | Committed `.bak` residue | `.split-txn.*.bak` preserved | `{migrated:true, cleanupResidue:true}` | Success; next `--apply` recovery front-gate cleans |
@@ -276,10 +296,10 @@ This closes the remediation loop: version-write failure during migration → use
 - [ ] Write version file in `activateFreshSplitInstructions` after `commitEntries` returns (fresh install path).
 - [ ] Extract `executeMigrationApply()` from CLI command into `instruction-migration.js` with the exact signature, contract, and return type defined in Design §2. Include prompt file cleanup (step 5) inside the engine.
 - [ ] Refactor CLI `migrateInstructionsCommand` to call `executeMigrationApply` — verify zero behavior change via existing CLI test suite.
-- [ ] Extend CLI active `--apply` front gate to backfill version file before A3 (Design §8).
-- [ ] Add `writeMigrationPrompt({ zylosDir, analysis })` function.
+- [ ] Extend CLI active `--apply` front gate to: backfill version file if missing + delete stale prompt file if exists, both before A3 (Design §8, lifecycle path 3).
+- [ ] Add `writeMigrationPrompt({ zylosDir, analysis })` function with atomic write (temp+rename).
 - [ ] Add `migration-prompt` core shard at array position [4] in `CORE_SHARDS` (`shard-registry.js`). Update `order` values for c4-checkpoint (5→6) and c4-conversations (6→7). Update registry comment (shard count). Update `cli/lib/sync-settings-hooks.js` shard count reference. Update both Claude and Codex chain tests.
-- [ ] Add shard emitter script for `migration-prompt` (check file existence, emit or no-op).
+- [ ] Add shard emitter script for `migration-prompt` (check marker active → suppress + cleanup; check file existence → emit or no-op).
 - [ ] Modify `step7_syncInstructions` per Design §5: read version → refresh → 5-cell decision matrix → migration/backfill/cleanup. Step 7 branches on `result.migrated`, NOT try/catch.
 - [ ] Prompt cleanup in step 7 cases (a)/(b): delete stale prompt file, non-fatal.
 - [ ] Backfill in step 7 case (b): write version = 2 for marker-active + version-missing machines.
@@ -294,12 +314,17 @@ This closes the remediation loop: version-write failure during migration → use
 - [ ] **A-class conservation correctness:** verify that A-class conservation passes with `userContent: ''` and fails with `userContent: templateSeed` on a real catalog A fixture.
 - [ ] **C-class prompt output (step 7 case c):** C-class ZYLOS.md → no migration, `.zylos/pending-migration-prompt.md` written, step 7 message references prompt path.
 - [ ] **C-class prompt lifecycle:** C prompt exists → CLI `--apply --user-content` succeeds → prompt file deleted by engine → next session shard emits nothing.
-- [ ] **C-class shard consumer:** prompt file exists → shard emits content. File absent → shard emits nothing.
+- [ ] **C-class prompt lifecycle (unlink failure):** engine unlink fails → prompt file remains → shard checks `isSplitInstructionsActive()` → active → shard suppresses emission AND deletes file → shard silent.
+- [ ] **C-class prompt atomic write:** writeMigrationPrompt uses atomic temp+rename. Write failure → no partial file, step 7 returns C-class message without prompt path.
+- [ ] **C-class shard consumer (pending):** marker NOT active + prompt file exists → shard emits content.
+- [ ] **C-class shard consumer (active):** marker active + prompt file exists → shard suppresses, deletes file, emits nothing.
+- [ ] **C-class shard consumer (clean):** marker active + no prompt file → shard emits nothing (zero cost).
 - [ ] **Shard chain integrity:** 7-item chain in correct order: identity, custom, references, state, migration-prompt, c4-checkpoint, c4-conversations. Both Claude and Codex chain tests pass.
 - [ ] **Already-migrated skip — version 2 (case a):** version `2` + active → no migration, normal refresh.
 - [ ] **Backfill (case b):** active + version missing → version `2` written, normal refresh.
-- [ ] **Forward-compat active (case a):** version `3` + active → skip migration.
-- [ ] **Forward-compat pending (case e):** version `3` + pendingMigration → do NOT migrate, log warning, return informational message.
+- [ ] **Forward-compat active (case a):** version `3` + active → skip migration (step 4 early return, refresh does NOT run).
+- [ ] **Forward-compat pending (step 4 gate):** version `3` + no marker → early return BEFORE refresh, return informational message. No v2 code runs.
+- [ ] **Future-format byte-for-byte:** version `3` fixture with non-v2 instruction files → step 7 early return → all files byte-for-byte unchanged (no recovery, no asset rewrite, no marker modification).
 - [ ] **Anomaly (case d):** version `2` + pendingMigration → attempt migration with warning.
 - [ ] **Pre-mutation failure:** inject fault before backup → step 7 PENDING MIGRATION fallback, zero live changes.
 - [ ] **F1: Backup failure:** `createMigrationBackup` fault → `{migrated:false, fatal:true}`, step 7 PENDING MIGRATION fallback. Partial backup best-effort removed.
@@ -325,10 +350,10 @@ This closes the remediation loop: version-write failure during migration → use
 ## Acceptance Checklist
 
 - [ ] A-class fixture: conservation with `userContent: ''` → full migration with seed materialization → backup, marker, prompt cleanup, version `2`, A3.
-- [ ] C-class fixture: prompt file written, shard emits at session start, CLI `--apply --user-content` cleans prompt, shard silent after.
+- [ ] C-class fixture: prompt file written (atomic), shard emits at session start (marker not active), CLI `--apply --user-content` cleans prompt, shard silent after (marker active → suppress).
 - [ ] Case (a): version ≥ 2 + active → skip, refresh.
 - [ ] Case (b): active + version missing → backfill.
-- [ ] Case (e): version > 2 + pendingMigration → no v2 migration, informational message.
+- [ ] Step 4 gate: version > 2 → early return before refresh, byte-for-byte unchanged files.
 - [ ] CLI `--apply` on active: backfills version if missing, A3 converges.
 - [ ] F1 fault: zero live mutation, PENDING MIGRATION.
 - [ ] F2 faults: backup preserved, result branching at step 7 caller seam.
