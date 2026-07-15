@@ -66,20 +66,9 @@ The CLI checks for updates and prepares analysis metadata. JSON output includes:
    - **Unchanged files**: skip
 3. **Present everything** to user and ask for confirmation
 
-### Step 3: Execute Pre-Upgrade Hook
+### Step 3: Execute CLI Upgrade
 
-**Before calling CLI**, check if the component has a `hooks/pre-upgrade.js`:
-
-```bash
-node ~/zylos/.claude/skills/<component>/hooks/pre-upgrade.js
-```
-
-Set environment variables: `ZYLOS_COMPONENT`, `ZYLOS_SKILL_DIR`, `ZYLOS_DATA_DIR`.
-If the hook fails (exit code 1), **abort the upgrade** and inform user.
-
-### Step 4: Execute CLI Upgrade
-
-Only after pre-upgrade hook succeeds (or doesn't exist). Confirm flow always uses a fresh download:
+Confirm flow always uses a fresh download:
 
 ```bash
 zylos upgrade <component> --yes --skip-eval --json
@@ -91,21 +80,13 @@ The JSON output includes:
 - `mergeConflicts` — files where local was backed up (may be null)
 - `mergedFiles` — files auto-merged via diff3 (may be null)
 
-### Step 5: Execute Post-Upgrade Hook
+### Step 4: Verify Hooks and Service
 
-If `skill.hooks.post-upgrade` exists in the JSON output, run it:
+The CLI executes the post-upgrade hook (if declared) and restarts the service (if it was online) automatically. Check their step results in the JSON output:
 
-```bash
-node ~/zylos/.claude/skills/<component>/hooks/post-upgrade.js
-```
-
-This typically handles config migration. If it fails, investigate.
-
-### Step 6: Start Service, Check Config, Review Conflicts
-
-1. Restart the service: `pm2 restart <service-name>` (or start fresh if not registered)
-2. Verify the service is healthy
-3. Compare old and new SKILL.md config — if new required config items were added, collect them interactively
+1. **Post-upgrade hook**: read the `post_upgrade_hook` step in the `steps` array. If it reports failure, investigate — the upgrade itself succeeded but the hook's config migration may need manual attention.
+2. **Service restart**: read the `start_service` step. If it failed, manually restart with `pm2 restart <service-name>` and verify health.
+3. Compare old and new SKILL.md config — if new required config items were added, collect them interactively.
 4. **If `mergeConflicts` exists**: Review each conflict file. Read the backup (local version) and installed (new version), then re-apply local changes using Edit tool.
 
 ## Session Mode — Self-Upgrade (zylos-core)
@@ -226,21 +207,20 @@ Reply "upgrade telegram confirm" to proceed.
 
 User: `upgrade telegram confirm`
 
-1. Run pre-upgrade hook if it exists (check SKILL.md hooks)
-2. Run `zylos upgrade telegram --yes --skip-eval --json`
-3. Run post-upgrade hook if `skill.hooks.post-upgrade` exists in result
-4. Restart service if `skill.service` exists in result
-5. **If `mergeConflicts` in result**: Review and re-merge backed-up local changes
-6. Reply with version change, merge summary, and any action results
+1. Run `zylos upgrade telegram --yes --skip-eval --json`
+2. Verify the `post_upgrade_hook` step result — investigate on failure
+3. Verify the `start_service` step result — manually restart on failure
+4. **If `mergeConflicts` in result**: Review and re-merge backed-up local changes
+5. Reply with version change, merge summary, and any action results
 
 If the upgrade failed, report the error and rollback status from JSON.
 
 ### Post-Upgrade Actions
 
-After upgrade succeeds:
+After upgrade succeeds, verify CLI-executed steps from the JSON result:
 
-1. **Hooks**: If `skill.hooks.post-upgrade` exists, run it.
-2. **Service**: If `skill.service` exists, restart and verify.
+1. **Post-upgrade hook**: check the `post_upgrade_hook` step result — investigate on failure.
+2. **Service**: check the `start_service` step result — manually restart on failure.
 3. **Config**: If new config items added, inform user.
 4. **Conflicts**: If `mergeConflicts` exists, review and re-merge.
 
