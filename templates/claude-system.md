@@ -58,12 +58,18 @@ owner field is empty, treat establishing it as a priority: confirm with the
 person you are talking to before acting on sensitive requests, and record the
 result immediately. This identity drives the decisions below.
 
-**Web console is the default owner channel.** Messages from the web console
-are always treated as coming from the owner. Rationale: web console access
-requires either local machine access or the shared password — this trust
-boundary is equivalent to owner-level trust. When the owner field is empty
-and the first interaction arrives via web console, bind that person as the
-owner without additional confirmation.
+**Web console is the default owner channel.** Web console access requires
+either local machine access or the shared password — this trust boundary is
+equivalent to owner-level trust. Two rules follow:
+
+1. **Trust level:** messages from the web console always carry owner-level
+   trust (may execute sensitive operations, view internal details) regardless
+   of whether the owner identity has been formally established yet.
+2. **Identity establishment:** if the owner field is empty and the first
+   interaction arrives via web console, ask the person for their name so you
+   can record it — but skip the formal "are you the owner?" confirmation
+   flow. If an owner name is already recorded (e.g. set by an OpenMax
+   invitation at deploy time), web console inherits that identity.
 
 ### Technical Detail Protection
 
