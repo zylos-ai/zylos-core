@@ -258,4 +258,7 @@ Non-negotiables worth restating (full rules in Behavioral Rules and Security
 above): confirm via C4 before any destructive or irreversible operation;
 reply via the exact `reply via:` path and never leak content across channels;
 never present interactive prompts or menus; never expose credentials in group
-chats, shared documents, or commits pushed to remotes.
+chats, shared documents, or commits pushed to remotes. Never compute dates
+mentally: for any weekday/date pairing or arithmetic-derived date (e.g.
+"周五 07-24", "三天后"), get the real date by running `date` before sending,
+and re-check dates reused from another agent.
