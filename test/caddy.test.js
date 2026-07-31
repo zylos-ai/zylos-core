@@ -181,26 +181,55 @@ describe('applyCaddyRoutes', () => {
 });
 
 describe('X-Robots-Tag parity across all Caddyfile generation sources', () => {
-  const NOINDEX_HEADER = 'header X-Robots-Tag "noindex, nofollow"';
+  const NOINDEX_DIRECTIVE = '    header X-Robots-Tag "noindex, nofollow"';
 
-  test('cli/commands/init.js generateCaddyfile includes X-Robots-Tag', () => {
-    const initSrc = fs.readFileSync(
+  function extractTemplateLiterals(source) {
+    const literals = [];
+    let i = 0;
+    while (i < source.length) {
+      if (source[i] === '`') {
+        const start = i + 1;
+        i++;
+        let depth = 1;
+        while (i < source.length && depth > 0) {
+          if (source[i] === '\\') { i += 2; continue; }
+          if (source[i] === '`') { depth--; break; }
+          i++;
+        }
+        literals.push(source.slice(start, i));
+        i++;
+      } else {
+        i++;
+      }
+    }
+    return literals;
+  }
+
+  test('cli/commands/init.js embeds X-Robots-Tag in its Caddyfile template literal', () => {
+    const src = fs.readFileSync(
       path.join(__dirname, '..', 'cli', 'commands', 'init.js'), 'utf8'
     );
-    expect(initSrc).toContain(NOINDEX_HEADER);
+    const literals = extractTemplateLiterals(src);
+    const caddyLiterals = literals.filter(l => l.includes('Zylos Caddyfile'));
+    expect(caddyLiterals.length).toBeGreaterThan(0);
+    expect(caddyLiterals[0]).toContain(NOINDEX_DIRECTIVE);
   });
 
-  test('skills/http/Caddyfile.template includes X-Robots-Tag', () => {
+  test('skills/http/Caddyfile.template contains X-Robots-Tag as a Caddy directive', () => {
     const template = fs.readFileSync(
       path.join(__dirname, '..', 'skills', 'http', 'Caddyfile.template'), 'utf8'
     );
-    expect(template).toContain(NOINDEX_HEADER);
+    const lines = template.split('\n').filter(l => !l.trim().startsWith('#'));
+    expect(lines.some(l => l.includes('header X-Robots-Tag "noindex, nofollow"'))).toBe(true);
   });
 
-  test('skills/http/scripts/setup-caddy.js includes X-Robots-Tag', () => {
-    const standalone = fs.readFileSync(
+  test('skills/http/scripts/setup-caddy.js embeds X-Robots-Tag in its Caddyfile template literal', () => {
+    const src = fs.readFileSync(
       path.join(__dirname, '..', 'skills', 'http', 'scripts', 'setup-caddy.js'), 'utf8'
     );
-    expect(standalone).toContain(NOINDEX_HEADER);
+    const literals = extractTemplateLiterals(src);
+    const caddyLiterals = literals.filter(l => l.includes('Zylos Caddyfile'));
+    expect(caddyLiterals.length).toBeGreaterThan(0);
+    expect(caddyLiterals[0]).toContain(NOINDEX_DIRECTIVE);
   });
 });
