@@ -1,6 +1,11 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, test, expect } from '@jest/globals';
 import { isLocalAddress } from '../cli/commands/init.js';
 import { applyCaddyRoutes, generateManualRouteSnippet, generateRouteBlocks } from '../cli/lib/caddy.js';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 describe('isLocalAddress', () => {
   // Positive cases — should return true
@@ -172,5 +177,30 @@ describe('applyCaddyRoutes', () => {
     });
 
     expect(result).toEqual({ success: true, action: 'skipped' });
+  });
+});
+
+describe('X-Robots-Tag parity across all Caddyfile generation sources', () => {
+  const NOINDEX_HEADER = 'header X-Robots-Tag "noindex, nofollow"';
+
+  test('cli/commands/init.js generateCaddyfile includes X-Robots-Tag', () => {
+    const initSrc = fs.readFileSync(
+      path.join(__dirname, '..', 'cli', 'commands', 'init.js'), 'utf8'
+    );
+    expect(initSrc).toContain(NOINDEX_HEADER);
+  });
+
+  test('skills/http/Caddyfile.template includes X-Robots-Tag', () => {
+    const template = fs.readFileSync(
+      path.join(__dirname, '..', 'skills', 'http', 'Caddyfile.template'), 'utf8'
+    );
+    expect(template).toContain(NOINDEX_HEADER);
+  });
+
+  test('skills/http/scripts/setup-caddy.js includes X-Robots-Tag', () => {
+    const standalone = fs.readFileSync(
+      path.join(__dirname, '..', 'skills', 'http', 'scripts', 'setup-caddy.js'), 'utf8'
+    );
+    expect(standalone).toContain(NOINDEX_HEADER);
   });
 });
