@@ -1472,6 +1472,8 @@ function generateCaddyfile(domain, protocol = 'https', port) {
 # Protocol: ${protocol}
 
 ${siteAddress} {
+    header X-Robots-Tag "noindex, nofollow"
+
     root * ${publicDir}
 
     file_server {

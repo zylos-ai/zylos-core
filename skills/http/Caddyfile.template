@@ -3,6 +3,8 @@
 # Replace {DOMAIN} and {ZYLOS_DIR} with actual values
 
 {DOMAIN} {
+    header X-Robots-Tag "noindex, nofollow"
+
     root * {ZYLOS_DIR}/http/public
 
     file_server {
