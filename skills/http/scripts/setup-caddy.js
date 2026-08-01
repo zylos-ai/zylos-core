@@ -98,7 +98,7 @@ async function main() {
 # Domain: ${domain}
 
 ${domain} {
-    header X-Robots-Tag "noindex, nofollow"
+    header >X-Robots-Tag "noindex, nofollow"
 
     root * ${publicDir}
 

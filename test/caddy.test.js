@@ -181,7 +181,7 @@ describe('applyCaddyRoutes', () => {
 });
 
 describe('X-Robots-Tag parity across all Caddyfile generation sources', () => {
-  const NOINDEX_DIRECTIVE = '    header X-Robots-Tag "noindex, nofollow"';
+  const NOINDEX_DIRECTIVE = '    header >X-Robots-Tag "noindex, nofollow"';
 
   function extractTemplateLiterals(source) {
     const literals = [];
@@ -220,7 +220,7 @@ describe('X-Robots-Tag parity across all Caddyfile generation sources', () => {
       path.join(__dirname, '..', 'skills', 'http', 'Caddyfile.template'), 'utf8'
     );
     const lines = template.split('\n').filter(l => !l.trim().startsWith('#'));
-    expect(lines.some(l => l.includes('header X-Robots-Tag "noindex, nofollow"'))).toBe(true);
+    expect(lines.some(l => l.includes('header >X-Robots-Tag "noindex, nofollow"'))).toBe(true);
   });
 
   test('skills/http/scripts/setup-caddy.js embeds X-Robots-Tag in its Caddyfile template literal', () => {
