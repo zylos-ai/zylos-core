@@ -21,6 +21,10 @@ export function registerService({ name, entry, skillDir, type }) {
     return { success: false, error: `Unsupported service type: ${type}. Only "pm2" is supported.` };
   }
 
+  if (!/^[a-zA-Z0-9_-]+$/.test(name)) {
+    return { success: false, error: `Invalid service name: "${name}". Only alphanumeric characters, hyphens, and underscores are allowed.` };
+  }
+
   const serviceName = `zylos-${name}`;
   const scriptPath = path.resolve(skillDir, entry);
 
