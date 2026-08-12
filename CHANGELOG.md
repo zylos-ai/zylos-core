@@ -7,9 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
-- **C4 truncation notice is now imperative**: when a long message is spilled to disk, the delivered text ends with an explicit warning that the text above is only a preview (with preview/full sizes) and an instruction that the agent MUST read the complete message file before acting — previously the notice was descriptive metadata that weaker models ignored, replying from the preview alone. (#748)
-
 ## [0.6.0] - 2026-07-14
 
 ### Added
