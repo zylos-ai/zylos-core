@@ -147,7 +147,7 @@ describe('emitC4Conversations budget packing (message-boundary, newest-first)', 
 
       assert.ok(out.includes(marker(2)), 'the newest message is always kept');
       assert.ok(!out.includes(marker(1)));
-      assert.ok(out.includes('[C4] Full message'), 'lone over-budget message must use the pointer form');
+      assert.ok(out.includes('[C4] ⚠️ TRUNCATED'), 'lone over-budget message must use the pointer form');
       assert.ok(!out.includes('x'.repeat(3000)), 'lone over-budget message must not be emitted in full');
     });
   });
@@ -164,7 +164,7 @@ describe('emitC4Conversations budget packing (message-boundary, newest-first)', 
       const out = emitConversations(env, { maxChars: 300, maxTokens: 50 });
 
       assert.ok(out.includes(`${marker(1)} ${'x'.repeat(1800)}`), 'sub-threshold message stays original');
-      assert.ok(!out.includes('[C4] Full message'));
+      assert.ok(!out.includes('[C4] ⚠️ TRUNCATED'));
     });
   });
 
@@ -178,7 +178,7 @@ describe('emitC4Conversations budget packing (message-boundary, newest-first)', 
       const out = emitConversations(env, DEFAULT_SHARD_BUDGET);
 
       assert.ok(out.includes(body), 'original content must be emitted inline, not a preview');
-      assert.ok(!out.includes('[C4] Full message'), 'no attachment pointer when the budget fits the original');
+      assert.ok(!out.includes('[C4] ⚠️ TRUNCATED'), 'no attachment pointer when the budget fits the original');
       const attachmentsDir = path.join(tmpDir, 'comm-bridge', 'attachments');
       assert.ok(
         !fs.existsSync(attachmentsDir) || fs.readdirSync(attachmentsDir).length === 0,
@@ -197,7 +197,7 @@ describe('emitC4Conversations budget packing (message-boundary, newest-first)', 
 
       assert.ok(out.includes(`${marker(4)} ${'z'.repeat(3000)}`), 'newest long message must survive in full');
       assert.ok(!out.includes(marker(1)), 'oldest message must be dropped whole');
-      assert.ok(!out.includes('[C4] Full message'), 'kept messages must be originals, not previews');
+      assert.ok(!out.includes('[C4] ⚠️ TRUNCATED'), 'kept messages must be originals, not previews');
       assert.match(out, /showing the newest \d+ of 4 unsummarized messages/);
       assert.ok(out.length <= 10000, `packed output must fit the char budget (got ${out.length})`);
     });
@@ -210,7 +210,7 @@ describe('emitC4Conversations budget packing (message-boundary, newest-first)', 
 
       const out = emitConversations(env, null);
 
-      assert.ok(out.includes('[C4] Full message'), 'legacy path must keep the preview + pointer form');
+      assert.ok(out.includes('[C4] ⚠️ TRUNCATED'), 'legacy path must keep the preview + pointer form');
       assert.ok(!out.includes(body), 'legacy path must not emit the full over-threshold message');
       assert.ok(out.includes(marker(1)), 'preview must still lead with the message head');
     });

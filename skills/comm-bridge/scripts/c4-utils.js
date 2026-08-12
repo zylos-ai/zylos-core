@@ -46,5 +46,8 @@ export function truncateForDelivery(content, replyViaSuffix = '', convId) {
   const preview = content.substring(0, CONTENT_PREVIEW_CHARS);
   const ellipsis = preview.length < content.length ? '...' : '';
   const sizeKB = (byteLength / 1024).toFixed(1);
-  return `${preview}${ellipsis}\n\n[C4] Full message (${sizeKB}KB) at: ${filePath}${replyViaSuffix}`;
+  const previewKB = (Buffer.byteLength(preview, 'utf8') / 1024).toFixed(1);
+  // The notice must be an instruction, not metadata: weaker models otherwise
+  // reply from the preview alone while claiming to have read everything (#748).
+  return `${preview}${ellipsis}\n\n[C4] ⚠️ TRUNCATED — the text above is only a preview (${previewKB}KB of ${sizeKB}KB). Before acting or replying you MUST read the complete message file: ${filePath}${replyViaSuffix}`;
 }

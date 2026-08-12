@@ -25,7 +25,7 @@ process.on('exit', () => {
 
 /** Extract the spill file path from a truncated delivery string. */
 function spillPathOf(delivered) {
-  const m = delivered.match(/\[C4\] Full message \([\d.]+KB\) at: (\S+)/);
+  const m = delivered.match(/\[C4\] ⚠️ TRUNCATED — .* you MUST read the complete message file: (\S+)/);
   assert.ok(m, `expected truncated delivery with spill path, got: ${delivered.slice(0, 120)}`);
   return m[1];
 }
@@ -117,6 +117,30 @@ describe('truncateForDelivery fallback (no conv id) spill path collision', () =>
     const content = 'short message';
     const delivered = truncateForDelivery(content);
     assert.equal(delivered, content);
-    assert.ok(!delivered.includes('[C4] Full message'));
+    assert.ok(!delivered.includes('[C4] ⚠️ TRUNCATED'));
+  });
+});
+
+describe('truncation notice wording (#748)', () => {
+  it('states incompleteness, gives an imperative, and reports preview/full sizes', () => {
+    const content = 'F'.repeat(FILE_SIZE_THRESHOLD + 500);
+    const delivered = truncateForDelivery(content, '', 3001);
+
+    assert.ok(delivered.includes('only a preview'), 'must state the text above is incomplete');
+    assert.ok(
+      delivered.includes('you MUST read the complete message file:'),
+      'must carry an imperative naming the concrete action',
+    );
+    assert.match(delivered, /\([\d.]+KB of [\d.]+KB\)/, 'must report preview and full sizes');
+  });
+
+  it('keeps the reply-via suffix after the notice so routing survives truncation', () => {
+    const content = 'G'.repeat(FILE_SIZE_THRESHOLD + 500);
+    const suffix = ' ---- reply via: node /x/c4-send.js "telegram" "42"';
+    const delivered = truncateForDelivery(content, suffix, 3002);
+
+    assert.ok(delivered.endsWith(suffix), 'reply-via suffix must terminate the delivery');
+    const noticeIdx = delivered.indexOf('[C4] ⚠️ TRUNCATED');
+    assert.ok(noticeIdx !== -1 && noticeIdx < delivered.indexOf(suffix), 'notice precedes reply-via');
   });
 });

@@ -222,7 +222,7 @@ describe('c4-receive basic intake', () => {
       db.close();
 
       assert.equal(row.content, longContent);
-      assert.ok(!row.content.includes('[C4] Full message'));
+      assert.ok(!row.content.includes('[C4] ⚠️ TRUNCATED'));
       assert.equal(fs.existsSync(path.join(tmpDir, 'comm-bridge', 'attachments')), false);
     });
   });

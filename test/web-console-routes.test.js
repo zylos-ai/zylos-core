@@ -69,7 +69,7 @@ if (Buffer.byteLength(fullMessage, 'utf8') > 2048) {
   fs.mkdirSync(dir, { recursive: true });
   const filePath = path.join(dir, 'message.txt');
   fs.writeFileSync(filePath, fullMessage, 'utf8');
-  dbContent = content.substring(0, 100) + '\\n\\n[C4] Full message at: ' + filePath + suffix;
+  dbContent = content.substring(0, 100) + '\\n\\n[C4] ⚠️ TRUNCATED — the text above is only a preview. Before acting or replying you MUST read the complete message file: ' + filePath + suffix;
 }
 const db = new Database(${JSON.stringify(dbPath)});
 db.prepare('INSERT INTO conversations (direction, channel, endpoint_id, content, timestamp) VALUES (?, ?, ?, ?, ?)')
@@ -202,7 +202,7 @@ describe('web-console attachment routes', () => {
     expect(latest.content).toContain('[attachment:file ');
     expect(latest.content).toContain('name="report.txt" 3B]');
     expect(latest.content).toContain(' ---- reply via: node ');
-    expect(latest.content).not.toContain('[C4] Full message');
+    expect(latest.content).not.toContain('[C4] ⚠️ TRUNCATED');
   });
 
   test('WS attachment-only send queues verbatim annotation content', async () => {
