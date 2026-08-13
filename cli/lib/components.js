@@ -138,9 +138,14 @@ export async function resolveTarget(nameOrUrl, { branch = null, file = null } = 
 /**
  * Registry metadata is presentation-only. Local sources must remain fully
  * offline, so they never trigger the remote registry fallback chain.
+ * File-delivered targets keep their repo identity but are equally offline,
+ * so they read the built-in/local registry only.
  */
 export async function loadTargetRegistryInfo(resolved) {
   if (!resolved.repo) return {};
+  if (resolved.acquisition) {
+    return loadLocalRegistry()[resolved.name] || {};
+  }
   const registry = await loadRegistry();
   return registry[resolved.name] || {};
 }

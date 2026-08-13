@@ -53,17 +53,30 @@ function sha256(filePath) {
 }
 
 /**
- * A curl that always fails: any network attempt during a --file install
- * breaks the test, proving the flow is fully offline.
+ * A curl that records every invocation to a marker file and fails.
+ * Failing alone only proves offline *tolerance* (fallback chains may swallow
+ * the error); the marker lets tests assert curl was NEVER invoked at all.
  */
 function poisonNetwork(root) {
   const fakeBin = path.join(root, 'bin');
+  const marker = path.join(root, 'curl-invoked.marker');
   fs.mkdirSync(fakeBin, { recursive: true });
-  fs.writeFileSync(path.join(fakeBin, 'curl'), '#!/bin/sh\nexit 7\n', { mode: 0o755 });
+  fs.writeFileSync(
+    path.join(fakeBin, 'curl'),
+    `#!/bin/sh\necho "$@" >> "${marker}"\nexit 7\n`,
+    { mode: 0o755 }
+  );
   return {
-    PATH: `${fakeBin}${path.delimiter}${process.env.PATH}`,
-    GITHUB_TOKEN: '',
-    GH_TOKEN: '',
+    env: {
+      PATH: `${fakeBin}${path.delimiter}${process.env.PATH}`,
+      GITHUB_TOKEN: '',
+      GH_TOKEN: '',
+    },
+    assertNoNetwork() {
+      if (fs.existsSync(marker)) {
+        assert.fail(`curl was invoked during an offline --file flow:\n${fs.readFileSync(marker, 'utf8')}`);
+      }
+    },
   };
 }
 
@@ -89,14 +102,15 @@ describe('zylos add --file official delivery E2E', () => {
   it('installs an official component from a verified tarball with zero network', () => {
     const { root, zylosDir } = makeFixture();
     const tarball = makeTarball(root);
-    const env = poisonNetwork(root);
+    const net = poisonNetwork(root);
 
     const result = runCli({
-      cwd: root, zylosDir, env,
+      cwd: root, zylosDir, env: net.env,
       args: ['add', `${COMPONENT}@1.0.0`, '--file', tarball, '--sha256', sha256(tarball), '--json'],
     });
 
     assert.equal(result.status, 0, `add failed\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+    net.assertNoNetwork();
     const output = JSON.parse(result.stdout);
     assert.equal(output.success, true);
     assert.equal(output.component, COMPONENT);
@@ -125,9 +139,10 @@ describe('zylos add --file official delivery E2E', () => {
   it('fails closed with no residue when the target version mismatches the archive', () => {
     const { root, zylosDir } = makeFixture();
     const tarball = makeTarball(root, { version: '1.0.0' });
+    const net = poisonNetwork(root);
 
     const result = runCli({
-      cwd: root, zylosDir, env: poisonNetwork(root),
+      cwd: root, zylosDir, env: net.env,
       args: ['add', `${COMPONENT}@2.0.0`, '--file', tarball, '--sha256', sha256(tarball), '--json'],
     });
 
@@ -136,14 +151,16 @@ describe('zylos add --file official delivery E2E', () => {
     assert.equal(output.success, false);
     assert.match(output.message, /Version mismatch/);
     assertNoResidue(zylosDir);
+    net.assertNoNetwork();
   });
 
   it('fails closed before unpacking when the sha256 does not match', () => {
     const { root, zylosDir } = makeFixture();
     const tarball = makeTarball(root);
+    const net = poisonNetwork(root);
 
     const result = runCli({
-      cwd: root, zylosDir, env: poisonNetwork(root),
+      cwd: root, zylosDir, env: net.env,
       args: ['add', `${COMPONENT}@1.0.0`, '--file', tarball, '--sha256', 'a'.repeat(64), '--json'],
     });
 
@@ -151,17 +168,20 @@ describe('zylos add --file official delivery E2E', () => {
     const output = JSON.parse(result.stdout);
     assert.equal(output.error, 'checksum_mismatch');
     assertNoResidue(zylosDir);
+    net.assertNoNetwork();
   });
 
   it('leaves the installed component on the normal upgrade path', () => {
     const { root, zylosDir } = makeFixture();
     const tarball = makeTarball(root);
+    const net = poisonNetwork(root);
 
     const install = runCli({
-      cwd: root, zylosDir, env: poisonNetwork(root),
+      cwd: root, zylosDir, env: net.env,
       args: ['add', COMPONENT, '--file', tarball, '--sha256', sha256(tarball), '--json'],
     });
     assert.equal(install.status, 0, install.stdout);
+    net.assertNoNetwork();
 
     // Fake GitHub tag listing: the official repo has a newer release
     const fakeBin = path.join(root, 'upgrade-bin');
@@ -195,13 +215,15 @@ describe('zylos add --file official delivery E2E', () => {
   it('records an unverified install with --trust-file and warns in list output', () => {
     const { root, zylosDir } = makeFixture();
     const tarball = makeTarball(root);
+    const net = poisonNetwork(root);
 
     const result = runCli({
-      cwd: root, zylosDir, env: poisonNetwork(root),
+      cwd: root, zylosDir, env: net.env,
       args: ['add', COMPONENT, '--file', tarball, '--trust-file', '--json'],
     });
 
     assert.equal(result.status, 0, result.stdout);
+    net.assertNoNetwork();
     const entry = readComponents(zylosDir)[COMPONENT];
     assert.equal(entry.deliveredVia.verified, false);
     assert.equal(entry.deliveredVia.sha256, null);
@@ -214,55 +236,63 @@ describe('zylos add --file official delivery E2E', () => {
   it('rejects --file without --sha256 or --trust-file', () => {
     const { root, zylosDir } = makeFixture();
     const tarball = makeTarball(root);
+    const net = poisonNetwork(root);
 
     const result = runCli({
-      cwd: root, zylosDir, env: poisonNetwork(root),
+      cwd: root, zylosDir, env: net.env,
       args: ['add', COMPONENT, '--file', tarball, '--json'],
     });
 
     assert.equal(result.status, 1);
     assert.equal(JSON.parse(result.stdout).error, 'checksum_required');
     assertNoResidue(zylosDir);
+    net.assertNoNetwork();
   });
 
   it('rejects --file combined with --branch', () => {
     const { root, zylosDir } = makeFixture();
     const tarball = makeTarball(root);
+    const net = poisonNetwork(root);
 
     const result = runCli({
-      cwd: root, zylosDir, env: poisonNetwork(root),
+      cwd: root, zylosDir, env: net.env,
       args: ['add', COMPONENT, '--file', tarball, '--trust-file', '--branch', 'main', '--json'],
     });
 
     assert.equal(result.status, 1);
     assert.equal(JSON.parse(result.stdout).error, 'conflict');
     assertNoResidue(zylosDir);
+    net.assertNoNetwork();
   });
 
   it('rejects a component name missing from the offline registry', () => {
     const { root, zylosDir } = makeFixture();
     const tarball = makeTarball(root, { name: 'unknown-component' });
+    const net = poisonNetwork(root);
 
     const result = runCli({
-      cwd: root, zylosDir, env: poisonNetwork(root),
+      cwd: root, zylosDir, env: net.env,
       args: ['add', 'unknown-component', '--file', tarball, '--sha256', sha256(tarball), '--json'],
     });
 
     assert.equal(result.status, 1);
     assert.match(JSON.parse(result.stdout).message, /not in the offline registry/);
     assertNoResidue(zylosDir);
+    net.assertNoNetwork();
   });
 
   it('shows offline component info with verification status in --check mode', () => {
     const { root, zylosDir } = makeFixture();
     const tarball = makeTarball(root);
+    const net = poisonNetwork(root);
 
     const result = runCli({
-      cwd: root, zylosDir, env: poisonNetwork(root),
+      cwd: root, zylosDir, env: net.env,
       args: ['add', `${COMPONENT}@1.0.0`, '--file', tarball, '--sha256', sha256(tarball), '--check', '--json'],
     });
 
     assert.equal(result.status, 0, result.stdout);
+    net.assertNoNetwork();
     const output = JSON.parse(result.stdout);
     assert.equal(output.success, true);
     assert.equal(output.version, '1.0.0');
