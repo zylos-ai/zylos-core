@@ -1659,6 +1659,9 @@ export async function listComponents() {
     console.log(`  Type: ${comp.type || 'unknown'}`);
     console.log(`  Repo: ${dim(comp.repo)}`);
     console.log(`  Installed: ${dim(comp.installedAt || 'unknown')}`);
+    if (comp.deliveredVia?.type === 'file' && !comp.deliveredVia.verified) {
+      console.log(`  ${yellow('Delivered via file — checksum NOT verified (--trust-file)')}`);
+    }
     console.log('');
   }
 }

@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Official component file delivery**: `zylos add <name>[@<version>] --file <tar.gz>` installs an official (registry) component from a local tarball, fully offline. The tarball is transport only — the persisted `source` keeps the `github-release` identity, so `zylos upgrade` works unchanged. Verification is mandatory and fail-closed: `--sha256 <hex>` verifies the archive before any unpacking (mismatch leaves no residue), or `--trust-file` explicitly skips verification and is recorded (and flagged by `zylos list`) as unverified. Name/version consistency between the command, the archive metadata, and the offline registry is enforced fail-closed. Delivery details are recorded in `components.json` under audit-only `deliveredVia`. (#707)
+
 ## [0.6.0] - 2026-07-14
 
 ### Added

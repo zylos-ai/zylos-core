@@ -21,7 +21,8 @@ import path from 'node:path';
 import { execSync } from 'node:child_process';
 import { SKILLS_DIR, COMPONENTS_DIR, BIN_DIR } from '../lib/config.js';
 import { loadComponents, saveComponents, resolveTarget, loadTargetRegistryInfo, outputTask } from '../lib/components.js';
-import { acquireSource } from '../lib/download.js';
+import { acquireSource, resolveLocalPath } from '../lib/download.js';
+import { sha256File, isValidSha256Hex } from '../lib/checksum.js';
 import { generateManifest, saveMergeBaseline } from '../lib/manifest.js';
 import { parseSkillMd, detectComponentType } from '../lib/skill.js';
 import { linkBins } from '../lib/bin.js';
@@ -69,8 +70,72 @@ export async function addComponent(args) {
     process.exit(1);
   }
 
+  // Parse --file <path.tar.gz> [--sha256 <hex> | --trust-file] (#707)
+  // Official component delivered as a local tarball: the tarball is only the
+  // transport; the component keeps its github-release identity so upgrades
+  // work unchanged.
+  const fileIndex = args.indexOf('--file');
+  const fileArg = fileIndex !== -1 ? args[fileIndex + 1] : null;
+  const sha256Index = args.indexOf('--sha256');
+  const sha256Arg = sha256Index !== -1 ? args[sha256Index + 1] : null;
+  const trustFile = args.includes('--trust-file');
+
+  const fileFlagError = (code, message) => {
+    if (jsonOutput) {
+      console.log(JSON.stringify({
+        action: 'add', success: false, error: code, message,
+        reply: `Error: ${message}`,
+      }, null, 2));
+    } else {
+      console.error(error(message));
+    }
+    process.exit(1);
+  };
+
+  if (fileIndex !== -1 && !fileArg) {
+    fileFlagError('missing_file', '--file requires a path to a .tar.gz archive');
+  }
+  if (sha256Index !== -1 && !sha256Arg) {
+    fileFlagError('missing_sha256', '--sha256 requires a hex digest');
+  }
+  if (!fileArg && (sha256Arg || trustFile)) {
+    fileFlagError('conflict', '--sha256 and --trust-file can only be used together with --file');
+  }
+
+  let file = null;
+  let fileSha256 = null;
+  if (fileArg) {
+    if (branch) {
+      fileFlagError('conflict', 'Cannot use both --file and --branch. Use one or the other.');
+    }
+    if (sha256Arg && trustFile) {
+      fileFlagError('conflict', 'Use either --sha256 or --trust-file, not both.');
+    }
+    if (!sha256Arg && !trustFile) {
+      fileFlagError('checksum_required', 'Installing from --file requires --sha256 <hex>, or --trust-file to explicitly skip verification.');
+    }
+    file = resolveLocalPath(fileArg);
+    if (!fs.existsSync(file) || !fs.statSync(file).isFile()) {
+      fileFlagError('file_not_found', `File not found: ${file}`);
+    }
+    if (!/\.(?:tar\.gz|tgz)$/i.test(file)) {
+      fileFlagError('invalid_file', `--file requires a .tar.gz archive: ${file}`);
+    }
+    if (sha256Arg) {
+      if (!isValidSha256Hex(sha256Arg)) {
+        fileFlagError('invalid_sha256', '--sha256 must be a 64-character hex digest.');
+      }
+      // Verified before anything is unpacked or written — a mismatch leaves no residue
+      fileSha256 = sha256Arg.toLowerCase();
+      const actual = sha256File(file);
+      if (actual !== fileSha256) {
+        fileFlagError('checksum_mismatch', `sha256 mismatch for ${file}\n  expected: ${fileSha256}\n  actual:   ${actual}`);
+      }
+    }
+  }
+
   // Find target (skip flags and their values)
-  const flagsWithValues = new Set(['--branch']);
+  const flagsWithValues = new Set(['--branch', '--file', '--sha256']);
   const skipNext = new Set();
   const target = args.find((a, i) => {
     if (skipNext.has(i)) return false;
@@ -84,7 +149,7 @@ export async function addComponent(args) {
   }
 
   // 1. Resolve target
-  const resolved = await resolveTarget(target, { branch });
+  const resolved = await resolveTarget(target, { branch, file });
 
   // Validate: --branch conflicts with explicit @version in target
   // (resolved.version may be auto-populated by fetchLatestTag for registry components)
@@ -132,6 +197,18 @@ export async function addComponent(args) {
     process.exit(1);
   }
 
+  // File delivery is audit-only metadata: recorded in components.json but
+  // never consulted by add/upgrade decisions.
+  if (resolved.acquisition) {
+    resolved.deliveredVia = {
+      type: 'file',
+      path: resolved.acquisition.path,
+      sha256: fileSha256,
+      verified: Boolean(fileSha256),
+      at: new Date().toISOString(),
+    };
+  }
+
   // 2. Check if already installed
   const components = loadComponents();
   if (components[resolved.name]) {
@@ -165,6 +242,7 @@ export async function addComponent(args) {
         type: regInfo.type || null,
         repo: resolved.repo,
         source: resolved.source,
+        deliveredVia: resolved.deliveredVia || null,
         isThirdParty: resolved.isThirdParty || false,
       };
       let reply = `${resolved.name}`;
@@ -173,6 +251,10 @@ export async function addComponent(args) {
       if (regInfo.description) reply += `\n${regInfo.description}`;
       reply += `\nType: ${regInfo.type || 'unknown'}`;
       reply += `\n${resolved.sourceReplyLabel}: ${resolved.sourceLabel}`;
+      if (resolved.deliveredVia) {
+        reply += `\nFile: ${resolved.deliveredVia.path}`;
+        reply += `\nChecksum: ${resolved.deliveredVia.verified ? 'sha256 verified' : 'NOT VERIFIED (--trust-file)'}`;
+      }
       if (resolved.isThirdParty) reply += '\nWarning: Third-party component';
       if (fetchFailed) {
         output.error = 'fetch_failed';
@@ -187,6 +269,10 @@ export async function addComponent(args) {
           ? `${resolved.name}@${resolved.version}`
           : resolved.installTarget;
         if (branch) confirmTarget += ` --branch ${branch}`;
+        if (resolved.deliveredVia) {
+          confirmTarget += ` --file ${resolved.deliveredVia.path}`;
+          confirmTarget += resolved.deliveredVia.verified ? ` --sha256 ${resolved.deliveredVia.sha256}` : ' --trust-file';
+        }
         reply += `\n\nReply "add ${confirmTarget} confirm" to install.`;
       }
       output.reply = reply;
@@ -195,6 +281,10 @@ export async function addComponent(args) {
       const versionInfo = branch ? ` (branch: ${bold(branch)})` : (resolved.version ? `@${bold(resolved.version)}` : '');
       console.log(`\n${heading('Component:')} ${bold(resolved.name)}${versionInfo}`);
       console.log(`${heading(resolved.sourceHeading)} ${dim(resolved.sourceLabel)}`);
+      if (resolved.deliveredVia) {
+        console.log(`${heading('File:')} ${dim(resolved.deliveredVia.path)}`);
+        console.log(`${heading('Checksum:')} ${resolved.deliveredVia.verified ? green('sha256 verified') : warn('NOT VERIFIED (--trust-file)')}`);
+      }
       if (resolved.isThirdParty) {
         console.log(warn('Third-party component — not verified by Zylos team.'));
       }
@@ -211,6 +301,10 @@ export async function addComponent(args) {
           ? `${resolved.name}@${resolved.version}`
           : resolved.installTarget;
         if (branch) installTarget += ` --branch ${branch}`;
+        if (resolved.deliveredVia) {
+          installTarget += ` --file ${resolved.deliveredVia.path}`;
+          installTarget += resolved.deliveredVia.verified ? ` --sha256 ${resolved.deliveredVia.sha256}` : ' --trust-file';
+        }
         console.log(`\n${dim(`Run "zylos add ${installTarget} --yes" to install.`)}`);
       }
     }
@@ -222,6 +316,11 @@ export async function addComponent(args) {
     const versionInfo = branch ? ` (branch: ${bold(branch)})` : (resolved.version ? `@${bold(resolved.version)}` : '');
     console.log(`\n${heading('Component:')} ${bold(resolved.name)}${versionInfo}`);
     console.log(`${heading(resolved.sourceHeading)} ${dim(resolved.sourceLabel)}`);
+
+    if (resolved.deliveredVia) {
+      console.log(`${heading('File:')} ${dim(resolved.deliveredVia.path)}`);
+      console.log(`${heading('Checksum:')} ${resolved.deliveredVia.verified ? green('sha256 verified') : warn('NOT VERIFIED (--trust-file)')}`);
+    }
 
     if (resolved.isThirdParty) {
       console.log(warn('Third-party component — not verified by Zylos team.'));
@@ -280,7 +379,9 @@ export async function addComponent(args) {
     }
     process.exit(1);
   }
-  downloadResult = acquireSource(resolved.source, skillDir);
+  // Identity/transport split: acquisition (when present) says where the bytes
+  // come from this once; resolved.source stays the persisted identity.
+  downloadResult = acquireSource(resolved.acquisition || resolved.source, skillDir);
 
   if (!downloadResult.success) {
     if (jsonOutput) {
@@ -392,6 +493,7 @@ async function installDeclarative(resolved, skillDir, skipConfirm, jsonOutput, b
     source: resolved.source,
   };
   if (branch) componentEntry.branch = branch;
+  if (resolved.deliveredVia) componentEntry.deliveredVia = resolved.deliveredVia;
   components[resolved.name] = componentEntry;
   saveComponents(components);
 
@@ -607,6 +709,7 @@ function installAI(resolved, skillDir, branch) {
     source: resolved.source,
   };
   if (branch) aiEntry.branch = branch;
+  if (resolved.deliveredVia) aiEntry.deliveredVia = resolved.deliveredVia;
   components[resolved.name] = aiEntry;
   saveComponents(components);
 
@@ -659,6 +762,10 @@ Arguments:
 
 Options:
   --branch <name>  Install from a specific git branch (for testing)
+  --file <path>    Install an official component from a local .tar.gz (offline);
+                   requires --sha256 or --trust-file
+  --sha256 <hex>   Verify the --file archive against this sha256 digest
+  --trust-file     Skip --file checksum verification (recorded as unverified)
   --check          Show component info without installing
   --yes, -y        Skip confirmation prompts
   --json           Output in JSON format (for programmatic use)
@@ -668,6 +775,7 @@ Examples:
   zylos add telegram@0.2.0                      Specific version
   zylos add lark --branch main                  Install from branch
   zylos add lark --branch feature/new-thing     Install from PR branch
+  zylos add telegram@0.2.0 --file ./zylos-telegram-0.2.0.tar.gz --sha256 <hex>
   zylos add user/my-component                   Third-party
   zylos add https://github.com/user/zylos-my-component
   zylos add ./my-component

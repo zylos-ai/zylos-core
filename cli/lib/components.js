@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { COMPONENTS_FILE } from './config.js';
-import { loadRegistry } from './registry.js';
+import { loadRegistry, loadLocalRegistry } from './registry.js';
 import { fetchLatestTag } from './github.js';
 import { inspectLocalSource, resolveLocalPath } from './download.js';
 
@@ -38,10 +38,14 @@ export function saveComponents(components) {
  * the same descriptor can be persisted and consumed by a future upgrade flow.
  *
  * @param {string} nameOrUrl
- * @param {{ branch?: string | null }} [options]
+ * @param {{ branch?: string | null, file?: string | null }} [options]
  * @returns {Promise<object>}
  */
-export async function resolveTarget(nameOrUrl, { branch = null } = {}) {
+export async function resolveTarget(nameOrUrl, { branch = null, file = null } = {}) {
+  if (file) {
+    return resolveFileTarget(nameOrUrl, file);
+  }
+
   if (isLocalPathSpecifier(nameOrUrl)) {
     try {
       const inspected = inspectLocalSource(nameOrUrl);
@@ -172,6 +176,90 @@ function resolveGitHubTarget({
     sourceReplyLabel: 'Repo',
     installTarget,
   };
+}
+
+/**
+ * Resolve a file-delivered official component (`zylos add <name>[@<ver>] --file <tar.gz>`).
+ *
+ * Identity and transport are deliberately split: the persisted `source` records
+ * the official github-release identity (so upgrades work unchanged), while the
+ * one-shot `acquisition` descriptor points at the local tarball used for this
+ * install. Resolution is fully offline — only the built-in/local registry is
+ * consulted, and version/name checks fail closed.
+ */
+function resolveFileTarget(nameOrUrl, file) {
+  let version = null;
+  let name = nameOrUrl;
+  if (nameOrUrl.includes('@')) {
+    const atIndex = nameOrUrl.lastIndexOf('@');
+    name = nameOrUrl.substring(0, atIndex);
+    version = nameOrUrl.substring(atIndex + 1);
+  }
+
+  const fail = (message) => ({
+    name,
+    repo: null,
+    version: null,
+    fetchError: null,
+    isThirdParty: false,
+    source: null,
+    sourceLabel: resolveLocalPath(file),
+    installTarget: nameOrUrl,
+    resolutionError: message,
+  });
+
+  if (isLocalPathSpecifier(name)) {
+    return fail(`--file requires a component name, not a path: ${name}`);
+  }
+
+  const registry = loadLocalRegistry();
+  const repo = registry[name]?.repo;
+  if (!repo) {
+    return fail(`Component "${name}" is not in the offline registry. --file installs are limited to known official components.`);
+  }
+
+  let inspected;
+  try {
+    inspected = inspectLocalSource(file);
+  } catch (err) {
+    return fail(err.message);
+  }
+  if (inspected.source.type !== 'local-tarball') {
+    return fail(`--file requires a .tar.gz archive: ${resolveLocalPath(file)}`);
+  }
+
+  if (inspected.name !== name) {
+    return fail(`Component name mismatch: command says "${name}" but the archive says "${inspected.name}".`);
+  }
+
+  const explicitVersion = normalizeVersion(version);
+  const metadataVersion = normalizeVersion(inspected.version);
+  if (explicitVersion && metadataVersion && explicitVersion !== metadataVersion) {
+    return fail(`Version mismatch: command says "${explicitVersion}" but the archive metadata says "${metadataVersion}".`);
+  }
+  const resolvedVersion = explicitVersion || metadataVersion;
+  if (!resolvedVersion) {
+    return fail(`The archive has no version metadata (SKILL.md, VERSION, or package.json). Specify one explicitly: zylos add ${name}@<version> --file ...`);
+  }
+
+  return {
+    ...resolveGitHubTarget({
+      name,
+      repo,
+      version: resolvedVersion,
+      branch: null,
+      tryFetchLatestTag: null,
+      installTarget: nameOrUrl,
+      isThirdParty: false,
+    }),
+    acquisition: { type: 'local-tarball', path: resolveLocalPath(file) },
+  };
+}
+
+function normalizeVersion(value) {
+  if (value == null) return null;
+  const version = String(value).trim().replace(/^v/, '');
+  return version || null;
 }
 
 export function isLocalPathSpecifier(value) {
