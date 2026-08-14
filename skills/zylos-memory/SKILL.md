@@ -70,9 +70,7 @@ that in the handoff/status.
 
 Before starting Memory Sync, check for existing in-flight sync work: if the
 runtime exposes background-agent status, check it for a running sync subagent
-and do not start another sync writer while one is in flight. If a PM2-based
-sync was ever created by older instructions, treat stopped `memory-sync-*`
-entries as historical records and do not create replacements.
+and do not start another sync writer while one is in flight.
 
 ### Sync Flow
 
