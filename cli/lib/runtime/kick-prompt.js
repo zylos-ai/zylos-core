@@ -18,11 +18,8 @@
 // The prompt is interpolated into a double-quoted shell string in one launch
 // branch, so its text must stay free of `"`, `$`, backslash, and backtick.
 
-export const SENTINEL_PREFIX = '[ZYLOS_INTERNAL_SESSION_START]';
-
 const KICK_PROMPT =
-  `${SENTINEL_PREFIX} System startup trigger, not a user message. ` +
-  'Continue with startup context.';
+  'System startup trigger, not a user message. Continue with startup context.';
 
 export function buildKickPrompt() {
   return KICK_PROMPT;

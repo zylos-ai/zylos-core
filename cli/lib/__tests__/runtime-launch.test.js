@@ -353,7 +353,7 @@ describe('Codex launch — new session', () => {
     // #743/#745 that prompt is a stateless internal lifecycle sentinel,
     // never a human-looking greeting that could be mistaken for a user turn.
     assert.equal(spec.args.length, 1);
-    assert.ok(spec.args[0].startsWith('[ZYLOS_INTERNAL_SESSION_START]'));
+    assert.ok(spec.args[0].startsWith('System startup trigger, not a user message'));
     assert.doesNotMatch(spec.args[0], /\bhello\b/i);
     assert.doesNotMatch(spec.args[0], /welcome back/i);
     assert.ok(!JSON.stringify(spec).includes('session-start-inject.js'));

@@ -1,17 +1,15 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { SENTINEL_PREFIX, buildKickPrompt } from '../kick-prompt.js';
+import { buildKickPrompt } from '../kick-prompt.js';
 
 describe('kick-prompt (#743/#745 stateless internal sentinel)', () => {
   it('is a stable constant — no state, no per-launch variance', () => {
     assert.equal(buildKickPrompt(), buildKickPrompt());
   });
 
-  it('starts with the internal sentinel prefix and self-identifies as non-human', () => {
-    const prompt = buildKickPrompt();
-    assert.ok(prompt.startsWith(SENTINEL_PREFIX));
-    assert.match(prompt, /not a user message/);
+  it('self-identifies as non-human', () => {
+    assert.match(buildKickPrompt(), /not a user message/);
   });
 
   it('stays one short sentence and claims no lifecycle knowledge (#743)', () => {
