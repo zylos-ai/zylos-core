@@ -5,10 +5,25 @@ All notable changes to zylos-core will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.7.0] - 2026-08-14
 
 ### Added
-- **Official component file delivery**: `zylos add <name>[@<version>] --file <tar.gz>` installs an official (registry) component from a local tarball, fully offline. The tarball is transport only — the persisted `source` keeps the `github-release` identity, so `zylos upgrade` works unchanged. Verification is mandatory and fail-closed: `--sha256 <hex>` verifies the archive before any unpacking (mismatch leaves no residue), or `--trust-file` explicitly skips verification and is recorded (and flagged by `zylos list`) as unverified. Name/version consistency between the command, the archive metadata, and the offline registry is enforced fail-closed. Delivery details are recorded in `components.json` under audit-only `deliveredVia`. (#707)
+- **Official component file delivery**: `zylos add <name>[@<version>] --file <tar.gz>` installs an official (registry) component from a local tarball, fully offline. The tarball is transport only — the persisted `source` keeps the `github-release` identity, so `zylos upgrade` works unchanged. Verification is mandatory and fail-closed: `--sha256 <hex>` verifies the archive before any unpacking (mismatch leaves no residue), or `--trust-file` explicitly skips verification and is recorded (and flagged by `zylos list`) as unverified. Name/version consistency between the command, the archive metadata, and the offline registry is enforced fail-closed. Delivery details are recorded in `components.json` under audit-only `deliveredVia`. (#707, #751)
+- **Web console as default owner channel**: the built-in web console is now treated as the default owner channel, giving every install an owner communication path with no external platform setup. (#740)
+- **Search engine isolation by default**: the generated Caddyfile now sends `X-Robots-Tag: noindex` on all responses by default, keeping agent-hosted pages out of search indexes unless explicitly opted in. (#744)
+
+### Fixed
+- **Duplicate early Memory Sync triggers**: context-monitor now persists Memory Sync request state durably and gates re-triggering behind three checks — cooldown, in-flight TTL (30 min), and threshold clearance — so monitor restarts no longer re-fire a sync that is already requested or running. Applies to both the Claude statusLine path and the Codex polling path; legacy state files are migrated on first read. Port of #628 by Daniel. (#756, #628)
+- **C4 truncation notice made imperative**: the truncated-message notice now instructs agents to read the spilled file, preventing decisions based on partial message content. (#750)
+- **System-template hash pins**: test pins updated for template changes missed by #742. (#749, #755)
+- **Post-upgrade hook double-run**: eliminated the double execution of post-upgrade hooks and the redundant manual-restart instruction. (#738)
+
+### Changed
+- **Codex kick prompt is now a stateless internal startup sentinel**: the synthetic first message that fires `SessionStart` no longer reads as a human `hello` — it is now the constant one-liner "System startup trigger, not a user message. Continue with startup context.", which self-identifies as non-human (removing the route-misattribution hazard tracked in #745 at its source) and reads coherently across fresh starts, restarts, context rotations, and runtime switches. Codex-only. (#743, #757)
+- **Date-verification rule in system template**: outbound weekday/date pairings and date arithmetic must be verified with the `date` command; added to Critical Reminders in the system instruction template. (#742)
+
+### Security
+- **js-yaml upgraded to 4.3.1 / 3.15.1** (GHSA-5p4m-2wfm-xmqj, HIGH — quadratic CPU in `!!omap` resolution): direct dependency bumped to 4.3.1; the dev transitive `@istanbuljs/load-nyc-config → js-yaml` forced to 3.15.1 via npm `overrides`. Contributed by @anupamme. (#753)
 
 ## [0.6.0] - 2026-07-14
 
