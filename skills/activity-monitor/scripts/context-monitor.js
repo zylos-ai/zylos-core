@@ -46,7 +46,7 @@ const MEMORY_SYNC_RATIO = 0.8;
 const MEMORY_SYNC_THRESHOLD = Math.round(RESTART_THRESHOLD * MEMORY_SYNC_RATIO);
 // CHECKPOINT_THRESHOLD imported from c4-config.js (single source of truth).
 const MEMORY_SYNC_COOLDOWN_SECONDS = 600;  // 10 min — prevent re-inject while sync is running
-const MEMORY_SYNC_IN_FLIGHT_TTL_SECONDS = 3600;  // 1 hour safety TTL for delivered-but-unacked sync prompts
+const MEMORY_SYNC_IN_FLIGHT_TTL_SECONDS = 1800;  // 30 min safety TTL for delivered-but-unacked sync prompts
 
 function readThresholdFromConfig() {
   try {

@@ -568,7 +568,7 @@ function getTmuxActivity() {
 
 // CHECKPOINT_THRESHOLD imported from c4-config.js (single source of truth).
 const MEMORY_SYNC_COOLDOWN_SECONDS = 600;  // 10 min — prevent re-inject while sync is running
-const MEMORY_SYNC_IN_FLIGHT_TTL_SECONDS = 3600;  // 1 hour safety TTL for delivered-but-unacked sync prompts
+const MEMORY_SYNC_IN_FLIGHT_TTL_SECONDS = 1800;  // 30 min safety TTL for delivered-but-unacked sync prompts
 const CONTEXT_MONITOR_STATE_FILE = path.join(MONITOR_DIR, 'context-monitor-state.json');
 
 function getUnsummarizedCount() {

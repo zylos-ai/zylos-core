@@ -28,7 +28,7 @@ describe('memory sync gate', () => {
 
   it('suppresses repeated requests during cooldown', () => {
     const state = {
-      memory_sync: { status: 'requested', requested_at: 1000, expires_at: 4600 },
+      memory_sync: { status: 'requested', requested_at: 1000, expires_at: 2800 },
     };
 
     const result = shouldTriggerMemorySync({
@@ -59,7 +59,7 @@ describe('memory sync gate', () => {
 
   it('suppresses in-flight requests after cooldown until the TTL expires', () => {
     const state = {
-      memory_sync: { status: 'requested', requested_at: 1000, expires_at: 4600 },
+      memory_sync: { status: 'requested', requested_at: 1000, expires_at: 2800 },
     };
 
     const result = shouldTriggerMemorySync({
@@ -68,7 +68,7 @@ describe('memory sync gate', () => {
       unsummarizedCount: 45,
       checkpointThreshold: 30,
       cooldownSeconds: 600,
-      inFlightTtlSeconds: 3600,
+      inFlightTtlSeconds: 1800,
     });
 
     assert.equal(result.shouldEnqueue, false);
@@ -78,13 +78,13 @@ describe('memory sync gate', () => {
   it('allows a new request after the in-flight TTL expires', () => {
     const result = shouldTriggerMemorySync({
       state: {
-        memory_sync: { status: 'requested', requested_at: 1000, expires_at: 4600 },
+        memory_sync: { status: 'requested', requested_at: 1000, expires_at: 2800 },
       },
       now: 5000,
       unsummarizedCount: 45,
       checkpointThreshold: 30,
       cooldownSeconds: 600,
-      inFlightTtlSeconds: 3600,
+      inFlightTtlSeconds: 1800,
     });
 
     assert.equal(result.shouldEnqueue, true);
@@ -98,7 +98,7 @@ describe('memory sync gate', () => {
       unsummarizedCount: 45,
       pct: 61,
       thresholdPct: 75,
-      inFlightTtlSeconds: 3600,
+      inFlightTtlSeconds: 1800,
     });
 
     assert.equal(nextState.session_id, 'abc');
@@ -106,7 +106,7 @@ describe('memory sync gate', () => {
     assert.deepEqual(nextState.memory_sync, {
       status: 'requested',
       requested_at: 1000,
-      expires_at: 4600,
+      expires_at: 2800,
       unsummarized_count: 45,
       context_pct: 61,
       session_switch_threshold_pct: 75,

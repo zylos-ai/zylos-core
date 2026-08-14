@@ -1,4 +1,4 @@
-const DEFAULT_IN_FLIGHT_TTL_SECONDS = 3600;
+const DEFAULT_IN_FLIGHT_TTL_SECONDS = 1800;
 
 export function createMemorySyncControlPrompt({ pct, thresholdPct }) {
   return `Context usage at ${pct}% (approaching ${thresholdPct}% session-switch threshold). Run Memory Sync now as a background maintenance task so it completes before the session switch.
