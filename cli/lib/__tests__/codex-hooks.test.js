@@ -445,6 +445,12 @@ describe('Codex hook trust backstop', () => {
       ...(withHash ? { currentHash: `sha256:hash-${i}` } : {}),
     });
 
+    // Non-candidates: managed and keyless hooks must be excluded from every count.
+    const makeNonCandidates = (withHash) => [
+      { ...makeHook(90, withHash), isManaged: true },
+      (({ key, ...rest }) => rest)(makeHook(91, withHash)),
+    ];
+
     const writeFakeCodexBin = (name, hooks) => {
       const stubPath = path.join(root, name);
       fs.writeFileSync(stubPath, [
@@ -474,8 +480,14 @@ describe('Codex hook trust backstop', () => {
       return stubPath;
     };
 
-    const hashlessBin = writeFakeCodexBin('fake-codex-no-hash.js', [0, 1, 2].map(i => makeHook(i, false)));
-    const hashedBin = writeFakeCodexBin('fake-codex-with-hash.js', [0, 1, 2].map(i => makeHook(i, true)));
+    const hashlessBin = writeFakeCodexBin('fake-codex-no-hash.js', [
+      ...[0, 1, 2].map(i => makeHook(i, false)),
+      ...makeNonCandidates(false),
+    ]);
+    const hashedBin = writeFakeCodexBin('fake-codex-with-hash.js', [
+      ...[0, 1, 2].map(i => makeHook(i, true)),
+      ...makeNonCandidates(true),
+    ]);
 
     const missing = trustCodexHooksWithAppServer({ zylosDir, codexBin: hashlessBin });
     assert.equal(missing.ok, true);
