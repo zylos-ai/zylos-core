@@ -18,6 +18,7 @@ import {
   installCoreCodexHook,
   isCodexTrustValid,
   readHooksState,
+  trustCodexHooksWithAppServer,
   uninstallCoreCodexHook,
 } from '../codex-hooks.js';
 
@@ -385,5 +386,107 @@ describe('Codex hook trust backstop', () => {
       }),
       /Codex hook trust failed \(empty_trust_snapshot\)/
     );
+  });
+
+  it('reports actionable version guidance when hooks/list omits currentHash (issue #752)', () => {
+    const { homeDir, zylosDir } = makeEnv();
+    installCoreCodexHook({ zylosDir });
+
+    assert.throws(
+      () => ensureCodexHooksTrusted({
+        zylosDir,
+        projectDir: zylosDir,
+        homeDir,
+        execFileSyncImpl: () => 'codex-cli 0.128.0\n',
+        spawnSyncImpl: () => ({
+          status: 0,
+          stdout: JSON.stringify({ ok: true, trusted: 0, candidates: 14, missingHash: 14 }) + '\n',
+          stderr: '',
+        }),
+      }),
+      (error) => {
+        assert.match(error.message, /missing_current_hash/);
+        assert.match(error.message, /0\.128\.0/);
+        assert.match(error.message, /0\.129\.0/);
+        return true;
+      }
+    );
+  });
+
+  it('keeps empty_trust_snapshot for zero-candidate results without missing hashes', () => {
+    const { homeDir, zylosDir } = makeEnv();
+    installCoreCodexHook({ zylosDir });
+
+    assert.throws(
+      () => ensureCodexHooksTrusted({
+        zylosDir,
+        projectDir: zylosDir,
+        homeDir,
+        execFileSyncImpl: () => 'codex-cli 0.142.2\n',
+        spawnSyncImpl: () => ({
+          status: 0,
+          stdout: JSON.stringify({ ok: true, trusted: 0, candidates: 0, missingHash: 0 }) + '\n',
+          stderr: '',
+        }),
+      }),
+      /Codex hook trust failed \(empty_trust_snapshot\)/
+    );
+  });
+
+  it('counts candidates and missing currentHash through the real trust helper against a stub app-server', () => {
+    const { root, zylosDir } = makeEnv();
+
+    const makeHook = (i, withHash) => ({
+      key: `/tmp/hooks.json:session_start:0:${i}`,
+      eventName: 'SessionStart',
+      command: ['node', `/tmp/hook-${i}.js`],
+      enabled: true,
+      isManaged: false,
+      ...(withHash ? { currentHash: `sha256:hash-${i}` } : {}),
+    });
+
+    const writeFakeCodexBin = (name, hooks) => {
+      const stubPath = path.join(root, name);
+      fs.writeFileSync(stubPath, [
+        '#!/usr/bin/env node',
+        `const HOOKS = ${JSON.stringify(hooks)};`,
+        "let buf = '';",
+        'process.stdin.on(\'data\', chunk => {',
+        '  buf += chunk.toString();',
+        "  const lines = buf.split('\\n');",
+        '  buf = lines.pop();',
+        '  for (const line of lines) {',
+        '    if (!line.trim()) continue;',
+        '    let msg;',
+        '    try { msg = JSON.parse(line); } catch { continue; }',
+        '    if (msg.id === undefined) continue;',
+        "    if (msg.method === 'initialize') {",
+        "      process.stdout.write(JSON.stringify({ id: msg.id, result: {} }) + '\\n');",
+        "    } else if (msg.method === 'hooks/list') {",
+        "      process.stdout.write(JSON.stringify({ id: msg.id, result: { data: [{ hooks: HOOKS }] } }) + '\\n');",
+        "    } else if (msg.method === 'config/batchWrite') {",
+        "      process.stdout.write(JSON.stringify({ id: msg.id, result: { status: 'ok' } }) + '\\n');",
+        '    }',
+        '  }',
+        '});',
+        '',
+      ].join('\n'), { mode: 0o755 });
+      return stubPath;
+    };
+
+    const hashlessBin = writeFakeCodexBin('fake-codex-no-hash.js', [0, 1, 2].map(i => makeHook(i, false)));
+    const hashedBin = writeFakeCodexBin('fake-codex-with-hash.js', [0, 1, 2].map(i => makeHook(i, true)));
+
+    const missing = trustCodexHooksWithAppServer({ zylosDir, codexBin: hashlessBin });
+    assert.equal(missing.ok, true);
+    assert.equal(missing.trusted, 0);
+    assert.equal(missing.candidates, 3);
+    assert.equal(missing.missingHash, 3);
+
+    const present = trustCodexHooksWithAppServer({ zylosDir, codexBin: hashedBin });
+    assert.equal(present.ok, true);
+    assert.equal(present.trusted, 3);
+    assert.equal(present.candidates, 3);
+    assert.equal(present.missingHash, 0);
   });
 });

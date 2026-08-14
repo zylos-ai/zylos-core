@@ -356,6 +356,8 @@ let stderr = '';
 let nextId = 0;
 let finished = false;
 let trustedCount = 0;
+let candidateCount = 0;
+let missingHashCount = 0;
 
 function send(method, params) {
   const id = nextId++;
@@ -415,7 +417,12 @@ app.stdout.on('data', chunk => {
       const state = {};
       for (const entry of msg.result?.data || []) {
         for (const hook of entry.hooks || []) {
-          if (hook.isManaged || !hook.key || !hook.currentHash) continue;
+          if (hook.isManaged || !hook.key) continue;
+          candidateCount++;
+          if (!hook.currentHash) {
+            missingHashCount++;
+            continue;
+          }
           state[hook.key] = { enabled: true, trusted_hash: hook.currentHash };
         }
       }
@@ -437,7 +444,13 @@ app.stdout.on('data', chunk => {
       if (msg.error) {
         finish({ ok: false, reason: 'config_batch_write_error', error: msg.error });
       } else {
-        finish({ ok: true, trusted: trustedCount, status: msg.result?.status || 'ok' });
+        finish({
+          ok: true,
+          trusted: trustedCount,
+          candidates: candidateCount,
+          missingHash: missingHashCount,
+          status: msg.result?.status || 'ok'
+        });
       }
     }
   }
@@ -501,6 +514,13 @@ export function ensureCodexHooksTrusted({
   const trust = trustCodexHooksWithAppServer({ zylosDir, codexBin, spawnSyncImpl });
   if (!trust.ok) {
     throw new Error(`Codex hook trust failed (${trust.reason || 'unknown'}). Native SessionStart bootstrap may not run.`);
+  }
+  if (trust.trusted === 0 && trust.missingHash > 0) {
+    throw new Error(
+      `Codex hook trust failed (missing_current_hash): Codex CLI "${codexVersion}" does not report currentHash in hooks/list ` +
+      '(field added in Codex CLI 0.129.0). Upgrade Codex CLI to 0.129.0 or later (0.146+ recommended). ' +
+      'Native SessionStart bootstrap may not run.'
+    );
   }
 
   const hooksPath = codexHooksPath(zylosDir);
