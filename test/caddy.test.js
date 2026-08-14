@@ -1,6 +1,6 @@
 import { describe, test, expect } from '@jest/globals';
 import { isLocalAddress } from '../cli/commands/init.js';
-import { applyCaddyRoutes, generateManualRouteSnippet, generateRouteBlocks } from '../cli/lib/caddy.js';
+import { applyCaddyRoutes, generateCaddyfileWithComponentRoutes, generateManualRouteSnippet, generateRouteBlocks } from '../cli/lib/caddy.js';
 
 describe('isLocalAddress', () => {
   // Positive cases — should return true
@@ -172,5 +172,24 @@ describe('applyCaddyRoutes', () => {
     });
 
     expect(result).toEqual({ success: true, action: 'skipped' });
+  });
+});
+
+describe('generateCaddyfileWithComponentRoutes', () => {
+  test('upgrades stale stripped route markers to include X-Forwarded-Prefix', () => {
+    const original = `# Zylos Caddyfile\nexample.com {\n    reverse_proxy /console/* localhost:3456\n\n    # BEGIN zylos-component:dashboard\n    redir /dashboard /dashboard/ permanent\n    handle /dashboard/* {\n        uri strip_prefix /dashboard\n        reverse_proxy 127.0.0.1:3470\n    }\n    # END zylos-component:dashboard\n}\n`;
+
+    const result = generateCaddyfileWithComponentRoutes(original, 'dashboard', [{
+      path: '/dashboard/*',
+      type: 'reverse_proxy',
+      target: '127.0.0.1:3470',
+      strip_prefix: '/dashboard',
+    }]);
+
+    expect(result.success).toBe(true);
+    expect(result.content).toContain('        reverse_proxy 127.0.0.1:3470 {');
+    expect(result.content).toContain('            header_up X-Forwarded-Prefix /dashboard');
+    expect(result.content).not.toContain('        reverse_proxy 127.0.0.1:3470\n    }');
+    expect(result.content.match(/BEGIN zylos-component:dashboard/g)).toHaveLength(1);
   });
 });
