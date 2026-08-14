@@ -342,16 +342,36 @@ describe('Codex launch — new session', () => {
     assert.ok(!joined.includes('sk-ant-'), 'tmux cmdline must not contain API key value');
   });
 
-  it('launch spec does not contain the retired text bootstrap prompt', async () => {
+  it('launch spec carries the internal kick sentinel, not a human-looking prompt', async () => {
     tmuxSessionExists = false;
     await makeAdapter(CodexAdapter).launch({ bypassPermissions: false });
 
     const spec = readLaunchSpec();
     assert.ok(spec, 'spec should be written');
     // Since #681 the only launch arg is the kick prompt that triggers the
-    // SessionStart hook — never the retired text bootstrap payload.
-    assert.deepEqual(spec.args, ['hello']);
+    // SessionStart hook — never the retired text bootstrap payload. Since
+    // #743/#745 that prompt is an internal lifecycle sentinel, never a
+    // human-looking greeting that could be mistaken for a user turn.
+    assert.equal(spec.args.length, 1);
+    assert.ok(spec.args[0].startsWith('[ZYLOS_INTERNAL_SESSION_START]'));
+    assert.match(spec.args[0], /lifecycle=(first_boot|resume)/);
+    assert.doesNotMatch(spec.args[0], /\bhello\b/i);
+    assert.doesNotMatch(spec.args[0], /welcome back/i);
     assert.ok(!JSON.stringify(spec).includes('session-start-inject.js'));
+  });
+
+  it('kick sentinel distinguishes first boot from resume via the .zylos marker (#743)', async () => {
+    const marker = path.join(fakeZylosDir, '.zylos', 'first-start-done');
+    fs.rmSync(marker, { force: true });
+
+    tmuxSessionExists = false;
+    await makeAdapter(CodexAdapter).launch({ bypassPermissions: false });
+    assert.match(readLaunchSpec().args[0], /lifecycle=first_boot/);
+    assert.ok(fs.existsSync(marker), 'first successful launch must write the marker');
+
+    calls.execFileSync.length = 0;
+    await makeAdapter(CodexAdapter).launch({ bypassPermissions: false });
+    assert.match(readLaunchSpec().args[0], /lifecycle=resume/);
   });
 });
 

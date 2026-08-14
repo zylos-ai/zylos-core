@@ -40,6 +40,7 @@ import {
 import { buildCleanEnv, buildCompatEnv, loadRuntimeEnvManifest, writeLaunchSpec } from './tmux-env.js';
 import { classifyCodexLoginStatus } from '../auth-parsers.js';
 import { ensureCodexHooksTrusted } from '../codex-hooks.js';
+import { buildKickPrompt, markFirstStartDone } from './kick-prompt.js';
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -259,7 +260,10 @@ export class CodexAdapter extends RuntimeAdapter {
     const exitLogFile = path.join(monitorDir, 'codex-exit.log');
     const exitLogSnippet = `_ec=$?; echo "[$(date -Iseconds)] exit_code=$_ec" >> "${exitLogFile}"`;
 
-    const kickPrompt = 'hello';
+    // Internal lifecycle sentinel — first_boot vs resume via marker file
+    // (#743); sentinel form so the kick is never mistaken for a human turn
+    // (#745). See kick-prompt.js.
+    const kickPrompt = buildKickPrompt(ZYLOS_DIR);
 
     if (tmuxHasSession(SESSION)) {
       // Existing tmux session — start a fresh Codex process with kick prompt
@@ -306,6 +310,9 @@ export class CodexAdapter extends RuntimeAdapter {
         throw new Error(`Failed to create tmux session: ${e.message}`);
       }
     }
+
+    // Launch succeeded — subsequent starts read as resume (#743).
+    markFirstStartDone(ZYLOS_DIR);
 
     // 4. Schedule startup dialog check (8s after launch)
     setTimeout(() => {
