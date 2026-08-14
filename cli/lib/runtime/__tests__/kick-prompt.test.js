@@ -4,6 +4,15 @@ import { describe, it } from 'node:test';
 import { buildKickPrompt } from '../kick-prompt.js';
 
 describe('kick-prompt (#743/#745 stateless internal sentinel)', () => {
+  // The exact contract string, duplicated deliberately: changing the kick
+  // wording must be a conscious act that edits this test too.
+  const EXACT_KICK =
+    'System startup trigger, not a user message. Continue with startup context.';
+
+  it('is exactly the agreed one-sentence contract text', () => {
+    assert.equal(buildKickPrompt(), EXACT_KICK);
+  });
+
   it('is a stable constant — no state, no per-launch variance', () => {
     assert.equal(buildKickPrompt(), buildKickPrompt());
   });

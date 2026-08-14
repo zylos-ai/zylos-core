@@ -353,7 +353,10 @@ describe('Codex launch — new session', () => {
     // #743/#745 that prompt is a stateless internal lifecycle sentinel,
     // never a human-looking greeting that could be mistaken for a user turn.
     assert.equal(spec.args.length, 1);
-    assert.ok(spec.args[0].startsWith('System startup trigger, not a user message'));
+    // Exact-string lock: the full contract text, not a prefix — a mutated
+    // second sentence must fail here.
+    assert.equal(spec.args[0],
+      'System startup trigger, not a user message. Continue with startup context.');
     assert.doesNotMatch(spec.args[0], /\bhello\b/i);
     assert.doesNotMatch(spec.args[0], /welcome back/i);
     assert.ok(!JSON.stringify(spec).includes('session-start-inject.js'));
@@ -395,6 +398,11 @@ describe('Codex launch — existing session', () => {
 
     assert.ok(sent.length > 0, 'sendMessage should be called');
     assert.ok(sent.includes('codex'), 'sent command should reference codex');
+    // Exact-string lock for the paste path: the kick must ride as one
+    // double-quoted argv carrying the full contract text.
+    assert.ok(sent.includes(
+      '"System startup trigger, not a user message. Continue with startup context."'),
+    'existing-session command must carry the exact kick as one quoted argv');
     assert.ok(!sent.includes('_p=$(cat'), 'existing-session command should not load bootstrap prompt');
     assert.ok(!sent.includes('session-start-inject.js'), 'existing-session command should not run text bootstrap');
   });
