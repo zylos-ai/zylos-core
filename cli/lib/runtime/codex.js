@@ -40,8 +40,7 @@ import {
 import { buildCleanEnv, buildCompatEnv, loadRuntimeEnvManifest, writeLaunchSpec } from './tmux-env.js';
 import { classifyCodexLoginStatus } from '../auth-parsers.js';
 import { ensureCodexHooksTrusted } from '../codex-hooks.js';
-import { buildKickPrompt, markFirstStartDone } from './kick-prompt.js';
-import { createKickVerifier } from './kick-verify.js';
+import { buildKickPrompt } from './kick-prompt.js';
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -75,10 +74,6 @@ export class CodexAdapter extends RuntimeAdapter {
   get displayName() { return 'Codex'; }
   get runtimeId() { return 'codex'; }
   get sessionName()  { return 'codex-main'; }
-
-  // Confirms the kick-carrying Codex child is alive before the first-start
-  // marker is committed (#743). Instance field so tests can substitute it.
-  _waitForKickProcess = createKickVerifier();
 
   // ── Instruction file ───────────────────────────────────────────────────────
 
@@ -265,10 +260,10 @@ export class CodexAdapter extends RuntimeAdapter {
     const exitLogFile = path.join(monitorDir, 'codex-exit.log');
     const exitLogSnippet = `_ec=$?; echo "[$(date -Iseconds)] exit_code=$_ec" >> "${exitLogFile}"`;
 
-    // Internal lifecycle sentinel — first_boot vs resume via marker file
-    // (#743); sentinel form so the kick is never mistaken for a human turn
-    // (#745). See kick-prompt.js.
-    const kickPrompt = buildKickPrompt(ZYLOS_DIR);
+    // Internal lifecycle sentinel — stateless, covers both first start and
+    // resume; sentinel form so the kick is never mistaken for a human turn
+    // (#743/#745). See kick-prompt.js.
+    const kickPrompt = buildKickPrompt();
 
     if (tmuxHasSession(SESSION)) {
       // Existing tmux session — start a fresh Codex process with kick prompt
@@ -314,19 +309,6 @@ export class CodexAdapter extends RuntimeAdapter {
         try { fs.unlinkSync(specPath); } catch { }
         throw new Error(`Failed to create tmux session: ${e.message}`);
       }
-    }
-
-    // Commit the first-start marker only after the Codex child carrying this
-    // launch's sentinel argv is confirmed alive in the target pane — issuing
-    // the launch command (paste / tmux new-session rc=0) does not prove the
-    // spawn happened, and a marker committed on a failed launch would
-    // mislabel the next real first boot as a resume (#743).
-    if (await this._waitForKickProcess({ session: SESSION, kickPrompt })) {
-      markFirstStartDone(ZYLOS_DIR);
-    } else {
-      process.stderr.write(
-        '[codex] kick process not confirmed after launch; first-start marker not committed\n'
-      );
     }
 
     // 4. Schedule startup dialog check (8s after launch)
