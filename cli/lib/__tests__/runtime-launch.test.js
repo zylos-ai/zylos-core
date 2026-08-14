@@ -138,6 +138,13 @@ function findTmuxNewSession() {
 function makeAdapter(Cls) {
   const adapter = new Cls({});
   adapter.buildInstructionFile = async () => '/fake/instruction.md';
+  // Mocked tmux cannot start a real child, so the kick-process confirmation
+  // (#743) is stubbed as successful; tests that exercise the failure side
+  // override this per-test. The verifier itself is covered by
+  // kick-verify.test.js and kick-verify.real-tmux.test.js.
+  if (adapter._waitForKickProcess) {
+    adapter._waitForKickProcess = async () => true;
+  }
   return adapter;
 }
 
@@ -372,6 +379,54 @@ describe('Codex launch — new session', () => {
     calls.execFileSync.length = 0;
     await makeAdapter(CodexAdapter).launch({ bypassPermissions: false });
     assert.match(readLaunchSpec().args[0], /lifecycle=resume/);
+  });
+
+  it('passes this launch\'s session and sentinel to the kick verifier (#743)', async () => {
+    fs.rmSync(path.join(fakeZylosDir, '.zylos', 'first-start-done'), { force: true });
+    tmuxSessionExists = false;
+    const adapter = makeAdapter(CodexAdapter);
+    let captured = null;
+    adapter._waitForKickProcess = async (opts) => { captured = opts; return true; };
+
+    await adapter.launch({ bypassPermissions: false });
+
+    assert.ok(captured, 'verifier must be consulted');
+    assert.equal(captured.session, 'codex-main');
+    assert.ok(captured.kickPrompt.startsWith('[ZYLOS_INTERNAL_SESSION_START]'));
+    assert.equal(captured.kickPrompt, readLaunchSpec().args[0],
+      'verifier must receive exactly the argv this launch delivered');
+  });
+
+  it('does not commit the marker when the kick process is never confirmed — new-session path (#757 review)', async () => {
+    const marker = path.join(fakeZylosDir, '.zylos', 'first-start-done');
+    fs.rmSync(marker, { force: true });
+
+    tmuxSessionExists = false;
+    const adapter = makeAdapter(CodexAdapter);
+    adapter._waitForKickProcess = async () => false; // spawn never proven
+    await adapter.launch({ bypassPermissions: false });
+
+    assert.ok(!fs.existsSync(marker), 'failed first launch must NOT write the marker');
+
+    // The next launch must still read as a first boot, not a resume.
+    calls.execFileSync.length = 0;
+    const second = makeAdapter(CodexAdapter);
+    second._waitForKickProcess = async () => false;
+    await second.launch({ bypassPermissions: false });
+    assert.match(readLaunchSpec().args[0], /lifecycle=first_boot/);
+  });
+
+  it('does not commit the marker when the kick process is never confirmed — existing-session path (#757 review)', async () => {
+    const marker = path.join(fakeZylosDir, '.zylos', 'first-start-done');
+    fs.rmSync(marker, { force: true });
+
+    tmuxSessionExists = true;
+    const adapter = makeAdapter(CodexAdapter);
+    adapter.sendMessage = async () => {}; // paste succeeded, spawn unproven
+    adapter._waitForKickProcess = async () => false;
+    await adapter.launch({ bypassPermissions: false });
+
+    assert.ok(!fs.existsSync(marker), 'paste success alone must NOT commit the marker');
   });
 });
 

@@ -41,6 +41,7 @@ import { buildCleanEnv, buildCompatEnv, loadRuntimeEnvManifest, writeLaunchSpec 
 import { classifyCodexLoginStatus } from '../auth-parsers.js';
 import { ensureCodexHooksTrusted } from '../codex-hooks.js';
 import { buildKickPrompt, markFirstStartDone } from './kick-prompt.js';
+import { createKickVerifier } from './kick-verify.js';
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -74,6 +75,10 @@ export class CodexAdapter extends RuntimeAdapter {
   get displayName() { return 'Codex'; }
   get runtimeId() { return 'codex'; }
   get sessionName()  { return 'codex-main'; }
+
+  // Confirms the kick-carrying Codex child is alive before the first-start
+  // marker is committed (#743). Instance field so tests can substitute it.
+  _waitForKickProcess = createKickVerifier();
 
   // ── Instruction file ───────────────────────────────────────────────────────
 
@@ -311,8 +316,18 @@ export class CodexAdapter extends RuntimeAdapter {
       }
     }
 
-    // Launch succeeded — subsequent starts read as resume (#743).
-    markFirstStartDone(ZYLOS_DIR);
+    // Commit the first-start marker only after the Codex child carrying this
+    // launch's sentinel argv is confirmed alive in the target pane — issuing
+    // the launch command (paste / tmux new-session rc=0) does not prove the
+    // spawn happened, and a marker committed on a failed launch would
+    // mislabel the next real first boot as a resume (#743).
+    if (await this._waitForKickProcess({ session: SESSION, kickPrompt })) {
+      markFirstStartDone(ZYLOS_DIR);
+    } else {
+      process.stderr.write(
+        '[codex] kick process not confirmed after launch; first-start marker not committed\n'
+      );
+    }
 
     // 4. Schedule startup dialog check (8s after launch)
     setTimeout(() => {
