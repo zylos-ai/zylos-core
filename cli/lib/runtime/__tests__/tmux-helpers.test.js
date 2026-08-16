@@ -13,6 +13,9 @@ import {
   tmuxKillSession,
   tmuxCapturePaneText,
   getProcessName,
+  getProcessCommand,
+  getChildPids,
+  isAgentInProcessTree,
   hasChildProcess,
   isTimeoutError,
 } from '../tmux-helpers.js';
@@ -45,6 +48,42 @@ describe('tmux-helpers integration (live calls to nonexistent sessions)', () => 
 
   it('hasChildProcess returns false for nonexistent parent', () => {
     assert.equal(hasChildProcess(999999999, 'nope'), false);
+  });
+
+  it('getProcessCommand returns null for nonexistent PID', () => {
+    assert.equal(getProcessCommand(999999999), null);
+  });
+
+  it('getProcessCommand returns the full command line for the current process', () => {
+    const cmd = getProcessCommand(process.pid);
+    assert.ok(cmd && cmd.includes('node'), `expected node in command line, got: ${cmd}`);
+  });
+
+  it('getChildPids returns [] for nonexistent parent', () => {
+    assert.deepEqual(getChildPids(999999999), []);
+  });
+
+  it('isAgentInProcessTree finds the current node process by command line', () => {
+    // The test runner itself is "node <script>", which the command-line
+    // layer must match even though comm may differ (e.g. MainThread).
+    assert.equal(isAgentInProcessTree(process.pid, 'node'), true);
+  });
+
+  it('isAgentInProcessTree returns false for a name not in the tree', () => {
+    assert.equal(isAgentInProcessTree(process.pid, '__no_such_agent__'), false);
+  });
+
+  it('isAgentInProcessTree returns false for nonexistent PID', () => {
+    assert.equal(isAgentInProcessTree(999999999, 'claude'), false);
+  });
+
+  it('isAgentInProcessTree does not match the name as a bare substring', () => {
+    // "claudette" or "/home/x/.claude/foo" must not match agent "claude".
+    const re = /(^|[/\s])claude(\s|$)/;
+    assert.equal(re.test('node /usr/bin/claudette --flag'), false);
+    assert.equal(re.test('node /home/x/.claude/local/tool.js'), false);
+    assert.equal(re.test('node /usr/local/bin/claude --dangerously-skip-permissions'), true);
+    assert.equal(re.test('claude --dangerously-skip-permissions'), true);
   });
 });
 
