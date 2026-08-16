@@ -74,7 +74,7 @@ Confirm flow always uses a fresh download:
 zylos upgrade <component> --yes --skip-eval --json
 ```
 
-The CLI handles: stop service, backup, smart merge, npm install, manifest, cleanup.
+The CLI handles: pre-upgrade hook (abort on failure), stop service, backup, smart merge, npm install, manifest, post-upgrade hook, service restart.
 The JSON output includes:
 - `skill` field with updated hooks, config, and service info
 - `mergeConflicts` — files where local was backed up (may be null)
@@ -82,9 +82,10 @@ The JSON output includes:
 
 ### Step 4: Verify Hooks and Service
 
-The CLI executes the post-upgrade hook (if declared) and restarts the service (if it was online) automatically. Check their step results in the JSON output:
+The CLI executes pre-upgrade hook (abort on failure), post-upgrade hook (non-fatal), and service restart automatically. Check their step results in the JSON output:
 
-1. **Post-upgrade hook**: read the `post_upgrade_hook` step in the `steps` array. If it reports failure, investigate — the upgrade itself succeeded but the hook's config migration may need manual attention.
+1. **Pre-upgrade hook**: if the `pre_upgrade_hook` step reports `failed`, the upgrade was aborted before any mutation — nothing to roll back. Fix the issue and retry.
+2. **Post-upgrade hook**: read the `post_upgrade_hook` step in the `steps` array. If it reports failure, investigate — the upgrade itself succeeded but the hook's config migration may need manual attention.
 2. **Service restart**: read the `start_service` step. If it failed, manually restart with `pm2 restart <service-name>` and verify health.
 3. Compare old and new SKILL.md config — if new required config items were added, collect them interactively.
 4. **If `mergeConflicts` exists**: Review each conflict file. Read the backup (local version) and installed (new version), then re-apply local changes using Edit tool.

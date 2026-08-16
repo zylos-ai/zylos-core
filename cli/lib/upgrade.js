@@ -362,8 +362,81 @@ function createContext(component, { tempDir, newVersion, mode, jsonOutput } = {}
 }
 
 // ---------------------------------------------------------------------------
-// 7-step upgrade pipeline
+// upgrade pipeline
 // ---------------------------------------------------------------------------
+
+/**
+ * Step 0: run pre-upgrade hook (fatal on failure — aborts before any mutation).
+ *
+ * Resolves the hook from the CURRENTLY INSTALLED version's SKILL.md, because
+ * pre-upgrade guards the old install; the new files are not on disk yet.
+ * Failure returns status 'failed' which aborts the pipeline — nothing has been
+ * stopped or modified at this point, so no rollback is needed.
+ */
+export function step0_runPreUpgradeHook(ctx, deps = {}) {
+  const startTime = Date.now();
+  const spawn = deps.spawnSync ?? spawnSync;
+  const exists = deps.existsSync ?? fs.existsSync;
+  const stdout = deps.stdout ?? process.stdout;
+  const stderr = deps.stderr ?? process.stderr;
+
+  const parsed = parseSkillMd(ctx.skillDir);
+  const hookRel = parsed?.frontmatter?.lifecycle?.hooks?.['pre-upgrade'];
+  if (!hookRel) {
+    return { step: 0, name: 'pre_upgrade_hook', status: 'not_declared', message: 'no pre-upgrade hook declared', duration: Date.now() - startTime };
+  }
+
+  const hookPath = path.resolve(ctx.skillDir, hookRel);
+  const hookRelativePath = path.relative(ctx.skillDir, hookPath);
+  if (hookRelativePath.startsWith('..') || path.isAbsolute(hookRelativePath)) {
+    return { step: 0, name: 'pre_upgrade_hook', status: 'failed', error: `hook path escapes skill directory: ${hookRel}`, duration: Date.now() - startTime };
+  }
+  if (!exists(hookPath)) {
+    return { step: 0, name: 'pre_upgrade_hook', status: 'failed', error: `hook declared but not found: ${hookRel}`, duration: Date.now() - startTime };
+  }
+
+  const realSkillDir = fs.realpathSync(ctx.skillDir);
+  const realHookPath = fs.realpathSync(hookPath);
+  const realHookRelativePath = path.relative(realSkillDir, realHookPath);
+  if (realHookRelativePath.startsWith('..') || path.isAbsolute(realHookRelativePath)) {
+    return { step: 0, name: 'pre_upgrade_hook', status: 'failed', error: `hook path escapes skill directory: ${hookRel}`, duration: Date.now() - startTime };
+  }
+
+  const env = {
+    ...process.env,
+    ZYLOS_COMPONENT: ctx.component,
+    ZYLOS_SKILL_DIR: ctx.skillDir,
+    ZYLOS_DATA_DIR: ctx.dataDir,
+  };
+
+  const child = spawn(process.execPath, [hookPath], {
+    cwd: ctx.skillDir,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    env,
+  });
+
+  const hookStdout = child.stdout || '';
+  const hookStderr = child.stderr || '';
+  if (!ctx.jsonOutput) {
+    if (hookStdout) stdout.write(hookStdout);
+    if (hookStderr) stderr.write(hookStderr);
+  }
+
+  const output = {
+    stdout: truncateHookOutput(hookStdout),
+    stderr: truncateHookOutput(hookStderr),
+  };
+
+  if (child.error) {
+    return { step: 0, name: 'pre_upgrade_hook', status: 'failed', error: `pre-upgrade hook failed: ${child.error.message}`, output, duration: Date.now() - startTime };
+  }
+  if (child.status !== 0) {
+    const detail = hookStderr.trim() || hookStdout.trim() || `exit code ${child.status}`;
+    return { step: 0, name: 'pre_upgrade_hook', status: 'failed', error: `pre-upgrade hook failed: ${truncateHookOutput(detail)}`, output, duration: Date.now() - startTime };
+  }
+  return { step: 0, name: 'pre_upgrade_hook', status: 'executed', message: hookRel, output, duration: Date.now() - startTime };
+}
 
 /**
  * Step 1: stop PM2 service
@@ -555,23 +628,23 @@ export function step7_runPostUpgradeHook(ctx, deps = {}) {
   const parsed = parseSkillMd(ctx.skillDir);
   const hookRel = parsed?.frontmatter?.lifecycle?.hooks?.['post-upgrade'];
   if (!hookRel) {
-    return { step: 7, name: 'post_upgrade_hook', status: 'skipped', message: 'no post-upgrade hook', duration: Date.now() - startTime };
+    return { step: 7, name: 'post_upgrade_hook', status: 'not_declared', message: 'no post-upgrade hook declared', duration: Date.now() - startTime };
   }
 
   const hookPath = path.resolve(ctx.skillDir, hookRel);
   const hookRelativePath = path.relative(ctx.skillDir, hookPath);
   if (hookRelativePath.startsWith('..') || path.isAbsolute(hookRelativePath)) {
-    return { step: 7, name: 'post_upgrade_hook', status: 'skipped', message: `hook path escapes skill directory: ${hookRel}`, duration: Date.now() - startTime };
+    return { step: 7, name: 'post_upgrade_hook', status: 'failed_nonfatal', message: `hook path escapes skill directory: ${hookRel}`, duration: Date.now() - startTime };
   }
   if (!exists(hookPath)) {
-    return { step: 7, name: 'post_upgrade_hook', status: 'skipped', message: `hook not found: ${hookRel}`, duration: Date.now() - startTime };
+    return { step: 7, name: 'post_upgrade_hook', status: 'failed_nonfatal', message: `hook declared but not found: ${hookRel}`, duration: Date.now() - startTime };
   }
 
   const realSkillDir = fs.realpathSync(ctx.skillDir);
   const realHookPath = fs.realpathSync(hookPath);
   const realHookRelativePath = path.relative(realSkillDir, realHookPath);
   if (realHookRelativePath.startsWith('..') || path.isAbsolute(realHookRelativePath)) {
-    return { step: 7, name: 'post_upgrade_hook', status: 'skipped', message: `hook path escapes skill directory: ${hookRel}`, duration: Date.now() - startTime };
+    return { step: 7, name: 'post_upgrade_hook', status: 'failed_nonfatal', message: `hook path escapes skill directory: ${hookRel}`, duration: Date.now() - startTime };
   }
 
   const child = spawn(process.execPath, [hookPath], {
@@ -593,13 +666,13 @@ export function step7_runPostUpgradeHook(ctx, deps = {}) {
   };
 
   if (child.error) {
-    return { step: 7, name: 'post_upgrade_hook', status: 'skipped', message: `hook had issues (non-fatal): ${child.error.message}`, output, duration: Date.now() - startTime };
+    return { step: 7, name: 'post_upgrade_hook', status: 'failed_nonfatal', message: `hook had issues (non-fatal): ${child.error.message}`, output, duration: Date.now() - startTime };
   }
   if (child.status !== 0) {
     const detail = hookStderr.trim() || hookStdout.trim() || `exit code ${child.status}`;
-    return { step: 7, name: 'post_upgrade_hook', status: 'skipped', message: `hook had issues (non-fatal): ${truncateHookOutput(detail)}`, output, duration: Date.now() - startTime };
+    return { step: 7, name: 'post_upgrade_hook', status: 'failed_nonfatal', message: `hook had issues (non-fatal): ${truncateHookOutput(detail)}`, output, duration: Date.now() - startTime };
   }
-  return { step: 7, name: 'post_upgrade_hook', status: 'done', message: hookRel, output, duration: Date.now() - startTime };
+  return { step: 7, name: 'post_upgrade_hook', status: 'executed', message: hookRel, output, duration: Date.now() - startTime };
 }
 
 function truncateHookOutput(value, maxLength = 1000) {
@@ -735,6 +808,7 @@ export function runUpgrade(component, { tempDir, newVersion, mode, jsonOutput, o
   ctx.to = newVersion || null;
 
   const steps = [
+    step0_runPreUpgradeHook,
     step1_stopService,
     step2_backup,
     step3_smartMerge,
