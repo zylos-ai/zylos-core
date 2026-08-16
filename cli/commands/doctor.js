@@ -19,7 +19,7 @@ import { readEnvFile } from '../lib/env.js';
 import { loadComponents } from '../lib/components.js';
 import { fetchLatestTagAsync, compareSemverDesc } from '../lib/github.js';
 import { getCurrentVersion } from '../lib/self-upgrade.js';
-import { commandExists } from '../lib/shell-utils.js';
+import { commandExists, testBwrapSandbox, isAppArmorRestrictingUserns, isBwrapAppArmorProfileLoaded } from '../lib/shell-utils.js';
 import { parseSkillMd } from '../lib/skill.js';
 import { bold, dim, green, red, yellow, heading } from '../lib/colors.js';
 import { getActiveAdapter } from '../lib/runtime/index.js';
@@ -68,6 +68,7 @@ const BULLET_OFF = (label) => `  ${dim('○')} ${label}`;
 function groupHeader(name, status) {
   const icon = status === 'pass' ? green('✓')
     : status === 'fail' ? red('✗')
+    : status === 'warn' ? yellow('⚠')
     : status === 'skip' ? dim('⊘')
     : dim('…');
   return `\n${icon} ${bold(name)}`;
@@ -132,6 +133,22 @@ function checkPm2Installed() {
     if (match) version = match[1];
   } catch {}
   return { installed: true, version };
+}
+
+function checkSandbox() {
+  if (process.platform !== 'linux') return { skip: true, reason: 'non-linux' };
+  const installed = commandExists('bwrap');
+  if (!installed) return { installed: false, functional: false };
+  const test = testBwrapSandbox();
+  const apparmorRestricting = !test.ok && isAppArmorRestrictingUserns();
+  const profileLoaded = apparmorRestricting ? isBwrapAppArmorProfileLoaded() : false;
+  return {
+    installed: true,
+    functional: test.ok,
+    apparmorRestricting,
+    profileLoaded,
+    error: test.error,
+  };
 }
 
 async function checkNetwork(env) {
@@ -287,6 +304,7 @@ async function collectDiagnostics(env) {
 
   const tmux = checkTmuxInstalled();
   const pm2 = checkPm2Installed();
+  const sandbox = checkSandbox();
   const net = await networkPromise;
 
   // Runtime-specific CLI/auth checks.
@@ -310,7 +328,7 @@ async function collectDiagnostics(env) {
   const session = tmux.installed ? checkTmuxSession() : false;
 
   return {
-    system: { tmux, pm2, network: net },
+    system: { tmux, pm2, sandbox, network: net },
     ai: { cli, auth, authStatus, autonomous, networkSkipped: !net.reachable },
     services: { ...services, session },
   };
@@ -326,6 +344,16 @@ function buildDiagnosticJson(diag, coreVersion) {
   }
   if (!diag.system.pm2.installed) {
     issues.push({ id: 'pm2_missing', label: 'PM2 not installed', hint: 'Run zylos init' });
+  }
+  const sb = diag.system.sandbox;
+  if (sb && !sb.skip && !sb.functional) {
+    if (!sb.installed) {
+      issues.push({ id: 'bwrap_missing', label: 'bwrap not installed', hint: 'Run: apt install bubblewrap && zylos init' });
+    } else if (sb.apparmorRestricting && !sb.profileLoaded) {
+      issues.push({ id: 'bwrap_apparmor', label: 'bwrap blocked by AppArmor', hint: 'Run zylos init to auto-configure, or see: zylos doctor --json' });
+    } else {
+      issues.push({ id: 'bwrap_broken', label: 'bwrap sandbox not functional', hint: sb.error || 'Check dmesg for details' });
+    }
   }
   if (!diag.system.network.reachable) {
     const net = diag.system.network;
@@ -418,6 +446,19 @@ function displaySystemGroup(diag, jsonGroup) {
     checks.push(red('PM2 not installed'));
   }
 
+  const sbx = diag.system.sandbox;
+  if (sbx && !sbx.skip) {
+    if (sbx.functional) {
+      checks.push('bwrap sandbox working');
+    } else if (!sbx.installed) {
+      checks.push(yellow('bwrap not installed (sandbox unavailable)'));
+    } else if (sbx.apparmorRestricting) {
+      checks.push(yellow('bwrap blocked by AppArmor — run zylos init to fix'));
+    } else {
+      checks.push(yellow('bwrap sandbox not functional'));
+    }
+  }
+
   if (net.reachable) {
     let label = `network: ${API_HOST} reachable`;
     if (net.proxy) label += dim(' (via proxy)');
@@ -430,7 +471,8 @@ function displaySystemGroup(diag, jsonGroup) {
     }
   }
 
-  displayCheckGroup('System', jsonGroup.passed ? 'pass' : 'fail', checks);
+  const sandboxIssue = sbx && !sbx.skip && !sbx.functional;
+  displayCheckGroup('System', jsonGroup.passed && !sandboxIssue ? 'pass' : sandboxIssue ? 'warn' : 'fail', checks);
   logToFile(`check: system — ${jsonGroup.passed ? 'passed' : 'failed'}`);
 }
 
