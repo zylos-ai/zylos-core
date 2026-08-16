@@ -39,6 +39,21 @@ const ENHANCED_PATH = [...new Set([
   ...(process.env.PATH || '').split(':').filter(Boolean),
 ])].join(':');
 
+function resolveManagedNode() {
+  try {
+    const { execSync } = require('child_process');
+    const nodePath = execSync(
+      'command -v node 2>/dev/null || true',
+      { encoding: 'utf8', env: { ...process.env, PATH: ENHANCED_PATH }, stdio: ['pipe', 'pipe', 'pipe'] }
+    ).trim();
+    return nodePath || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+const MANAGED_NODE = resolveManagedNode();
+
 // Whether Claude should run with --dangerously-skip-permissions
 const CLAUDE_BYPASS_PERMISSIONS = readEnvValue('CLAUDE_BYPASS_PERMISSIONS', 'true');
 // Whether Codex should run with --dangerously-bypass-approvals-and-sandbox
@@ -141,7 +156,11 @@ function loadComponentServices() {
                 continue;
               }
               // Copy app to avoid mutating the require() cached object
-              const safeApp = { ...app, env: { ...app.env, PATH: ENHANCED_PATH } };
+              const safeApp = {
+                ...app,
+                ...(app.interpreter ? {} : (MANAGED_NODE ? { interpreter: MANAGED_NODE } : {})),
+                env: { ...app.env, PATH: ENHANCED_PATH },
+              };
               usedNames.add(safeApp.name);
               apps.push(safeApp);
             }
@@ -166,6 +185,7 @@ function loadComponentServices() {
           name: service.name,
           script: service.entry,
           cwd: skillDir,
+          ...(MANAGED_NODE ? { interpreter: MANAGED_NODE } : {}),
           env: {
             PATH: ENHANCED_PATH,
             NODE_ENV: 'production',
@@ -194,6 +214,7 @@ module.exports = {
       name: 'scheduler',
       script: path.join(SKILLS_DIR, 'scheduler', 'scripts', 'daemon.js'),
       cwd: ZYLOS_DIR,
+      ...(MANAGED_NODE ? { interpreter: MANAGED_NODE } : {}),
       env: {
         PATH: ENHANCED_PATH,
         NODE_ENV: 'production'
@@ -206,6 +227,7 @@ module.exports = {
       name: 'web-console',
       script: path.join(SKILLS_DIR, 'web-console', 'scripts', 'server.js'),
       cwd: HOME,
+      ...(MANAGED_NODE ? { interpreter: MANAGED_NODE } : {}),
       env: {
         PATH: ENHANCED_PATH,
         NODE_ENV: 'production'
@@ -218,6 +240,7 @@ module.exports = {
       name: 'c4-dispatcher',
       script: path.join(SKILLS_DIR, 'comm-bridge', 'scripts', 'c4-dispatcher.js'),
       cwd: path.join(SKILLS_DIR, 'comm-bridge', 'scripts'),
+      ...(MANAGED_NODE ? { interpreter: MANAGED_NODE } : {}),
       env: {
         PATH: ENHANCED_PATH,
         NODE_ENV: 'production'
@@ -230,6 +253,7 @@ module.exports = {
       name: 'activity-monitor',
       script: path.join(SKILLS_DIR, 'activity-monitor', 'scripts', 'activity-monitor.js'),
       cwd: HOME,
+      ...(MANAGED_NODE ? { interpreter: MANAGED_NODE } : {}),
       env: {
         PATH: ENHANCED_PATH,
         NODE_ENV: 'production',
