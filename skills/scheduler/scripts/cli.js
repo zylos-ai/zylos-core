@@ -27,7 +27,7 @@ Task CLI - Scheduler V2
 Usage: ~/zylos/.claude/skills/scheduler/scripts/cli.js <command> [options]
 
 Commands:
-  list                    List all tasks
+  list [options]          List all tasks
   add <prompt> [options]  Add a new task
   update <task-id> [options]  Update an existing task
   remove <task-id>        Remove a task
@@ -37,6 +37,12 @@ Commands:
   history [task-id]       Show execution history
   next                    Show upcoming tasks
   running                 Show currently running tasks
+
+List Options:
+  --json                  Machine-readable output: JSON array of full task rows
+                          (untruncated id, type, status, last_error, reply_channel,
+                          reply_endpoint, next_run_at, ...)
+  --reply-channel "<ch>"  Only tasks with this reply channel (works with or without --json)
 
 Add Options:
   --in "<duration>"       One-time: run in X time (e.g., "30 minutes")
@@ -83,7 +89,8 @@ function parseArgs(args) {
     'no-block-queue-until-idle',
     'require-idle',
     'no-require-idle',
-    'clear-reply'
+    'clear-reply',
+    'json'
   ]);
 
   let i = 1;
@@ -114,13 +121,24 @@ function parseArgs(args) {
 
 // ===== Commands =====
 
-function cmdList() {
+function cmdList(options = {}) {
   // Show all active tasks including failed ones (so user can see what timed out)
-  const tasks = db.prepare(`
+  let sql = `
     SELECT * FROM tasks
-    WHERE status != 'completed' OR type != 'one-time'
-    ORDER BY priority ASC, next_run_at ASC
-  `).all();
+    WHERE (status != 'completed' OR type != 'one-time')
+  `;
+  const params = [];
+  if (options['reply-channel']) {
+    sql += ` AND reply_channel = ?`;
+    params.push(options['reply-channel']);
+  }
+  sql += ` ORDER BY priority ASC, next_run_at ASC`;
+  const tasks = db.prepare(sql).all(...params);
+
+  if (options.json) {
+    console.log(JSON.stringify(tasks, null, 2));
+    return;
+  }
 
   if (tasks.length === 0) {
     console.log('No tasks scheduled.');
@@ -688,7 +706,7 @@ function main() {
 
   switch (command) {
     case 'list':
-      cmdList();
+      cmdList(options);
       break;
     case 'add':
       cmdAdd(args, options);

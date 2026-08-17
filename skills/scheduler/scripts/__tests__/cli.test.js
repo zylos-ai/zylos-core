@@ -197,6 +197,65 @@ describe('cli list', () => {
       assert.ok(output.includes('task one'));
     });
   });
+
+  it('--json outputs full task rows as a JSON array', () => {
+    withTmpDir(({ env }) => {
+      cli(['add', 'json task', '--in', '30 minutes', '--reply-channel', 'multica', '--reply-endpoint', 'task-abc-123'], env);
+      const output = cli(['list', '--json'], env);
+      const rows = JSON.parse(output);
+      assert.equal(rows.length, 1);
+      const row = rows[0];
+      // Full untruncated id plus every field the machine contract requires
+      assert.match(row.id, /^task-/);
+      assert.ok(row.id.length > 14);
+      assert.equal(row.type, 'one-time');
+      assert.equal(row.status, 'pending');
+      assert.equal(row.reply_channel, 'multica');
+      assert.equal(row.reply_endpoint, 'task-abc-123');
+      assert.equal(typeof row.next_run_at, 'number');
+      assert.ok('last_error' in row);
+    });
+  });
+
+  it('--json outputs [] when no tasks match', () => {
+    withTmpDir(({ env }) => {
+      const rows = JSON.parse(cli(['list', '--json'], env));
+      assert.deepEqual(rows, []);
+    });
+  });
+
+  it('--reply-channel filters rows in both output modes', () => {
+    withTmpDir(({ env }) => {
+      cli(['add', 'multica task', '--in', '30 minutes', '--reply-channel', 'multica', '--reply-endpoint', 'task-1'], env);
+      cli(['add', 'telegram task', '--in', '30 minutes', '--reply-channel', 'telegram', '--reply-endpoint', '123'], env);
+      cli(['add', 'no channel task', '--in', '30 minutes'], env);
+
+      const rows = JSON.parse(cli(['list', '--json', '--reply-channel', 'multica'], env));
+      assert.equal(rows.length, 1);
+      assert.equal(rows[0].reply_channel, 'multica');
+
+      const human = cli(['list', '--reply-channel', 'multica'], env);
+      assert.ok(human.includes('multica task'));
+      assert.ok(!human.includes('telegram task'));
+      assert.ok(!human.includes('no channel task'));
+    });
+  });
+
+  it('--json still includes failed one-time tasks', () => {
+    withTmpDir(({ dbPath, env }) => {
+      cli(['add', 'will fail', '--in', '30 minutes', '--reply-channel', 'multica', '--reply-endpoint', 'task-9'], env);
+      const db = new Database(dbPath);
+      try {
+        db.prepare(`UPDATE tasks SET status = 'failed', last_error = 'Missed execution window'`).run();
+      } finally {
+        db.close();
+      }
+      const rows = JSON.parse(cli(['list', '--json', '--reply-channel', 'multica'], env));
+      assert.equal(rows.length, 1);
+      assert.equal(rows[0].status, 'failed');
+      assert.equal(rows[0].last_error, 'Missed execution window');
+    });
+  });
 });
 
 describe('cli done', () => {

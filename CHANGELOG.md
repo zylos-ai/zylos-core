@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Structured scheduler CLI output**: `scheduler cli.js list --json` emits a JSON array of full task rows (untruncated `id`, `type`, `status`, `last_error`, `reply_channel`, `reply_endpoint`, `next_run_at`, ...), and `--reply-channel <ch>` filters rows in both human and JSON modes. Human output is unchanged by default. Gives components a supported machine-readable interface to the scheduler ledger instead of parsing human tables or reading the DB. (#761)
+
 ### Fixed
 - **Actionable error for Codex CLI versions without `currentHash`**: on Codex CLI ≤ 0.128.0, `hooks/list` does not report `currentHash` (field added in 0.129.0), so the hook trust gate found zero trustable hooks and failed with an opaque `empty_trust_snapshot` error. The trust helper now counts candidate hooks and missing hashes, and the gate reports a clear `missing_current_hash` error naming the detected Codex version and the minimum supported one (0.129.0+, 0.146+ recommended). Behavior stays fail-closed: no hash-less trust downgrade. (#752)
 
