@@ -199,15 +199,22 @@ describe('cli list', () => {
   });
 
   it('--json outputs full task rows as a JSON array', () => {
-    withTmpDir(({ env }) => {
+    withTmpDir(({ dbPath, env }) => {
       cli(['add', 'json task', '--in', '30 minutes', '--reply-channel', 'multica', '--reply-endpoint', 'task-abc-123'], env);
+      const db = new Database(dbPath);
+      let expectedId;
+      try {
+        expectedId = db.prepare('SELECT id FROM tasks LIMIT 1').get().id;
+      } finally {
+        db.close();
+      }
       const output = cli(['list', '--json'], env);
       const rows = JSON.parse(output);
       assert.equal(rows.length, 1);
       const row = rows[0];
       // Full untruncated id plus every field the machine contract requires
-      assert.match(row.id, /^task-/);
-      assert.ok(row.id.length > 14);
+      assert.match(expectedId, /^task-/);
+      assert.equal(row.id, expectedId);
       assert.equal(row.type, 'one-time');
       assert.equal(row.status, 'pending');
       assert.equal(row.reply_channel, 'multica');

@@ -2,9 +2,12 @@
 
 ## list
 
-`cli.js list`
+`cli.js list [--json] [--reply-channel "<ch>"]`
 
-Shows all active tasks (excluding completed one-time tasks). Displays TZ header, sorted by priority then next run time.
+Shows all active tasks (excluding completed one-time tasks; failed one-time tasks remain visible). Displays TZ header, sorted by priority then next run time.
+
+- `--json` — machine-readable output: a JSON array of full task rows (untruncated `id`, `type`, `status`, `last_error`, `reply_channel`, `reply_endpoint`, `next_run_at`, and all other columns). Outputs `[]` when no tasks match.
+- `--reply-channel "<ch>"` — only tasks whose reply channel equals `<ch>` exactly. Works with or without `--json`.
 
 ## next
 
@@ -26,6 +29,8 @@ Shows the 20 most recent execution history entries. Optionally filter by task ID
 
 ```bash
 cli.js list
+cli.js list --json
+cli.js list --json --reply-channel multica
 cli.js next
 cli.js running
 cli.js history
