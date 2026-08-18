@@ -5,7 +5,7 @@ All notable changes to zylos-core will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.7.1] - 2026-08-18
 
 ### Added
 - **Structured scheduler CLI output**: `scheduler cli.js list --json` emits a JSON array of full task rows (untruncated `id`, `type`, `status`, `last_error`, `reply_channel`, `reply_endpoint`, `next_run_at`, ...), and `--reply-channel <ch>` filters rows in both human and JSON modes. Human output is unchanged by default. Gives components a supported machine-readable interface to the scheduler ledger instead of parsing human tables or reading the DB. (#761)
