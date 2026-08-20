@@ -20,6 +20,7 @@ import { initCommand } from './commands/init.js';
 import { configCommand } from './commands/config.js';
 import { attachCommand } from './commands/attach.js';
 import { doctorCommand } from './commands/doctor.js';
+import { securityCommand } from './commands/security.js';
 import { shellCommand } from './commands/shell.js';
 import { runtimeCommand } from './commands/runtime.js';
 import { migrateInstructionsCommand } from './commands/migrate-instructions.js';
@@ -30,6 +31,7 @@ const commands = {
   config: configCommand,
   attach: attachCommand,
   doctor: doctorCommand,
+  security: securityCommand,
   shell: shellCommand,
   runtime: runtimeCommand,
   'migrate-instructions': migrateInstructionsCommand,
@@ -95,6 +97,8 @@ Setup:
   attach              Attach to the Claude tmux session
   doctor              Diagnose and repair Zylos installation
                       --check   Diagnose only, no repairs
+  security audit      Audit the local install for common security risks
+                      --json    Emit machine-readable JSON
   shell               Interactive CLI mode (REPL)
   runtime <name>      Switch agent runtime (claude|codex)
   runtime status      Show currently configured runtime
@@ -134,6 +138,8 @@ Examples:
   zylos config set protocol http
   zylos status
   zylos logs activity
+  zylos security audit
+  zylos security audit --json
 
   zylos add telegram
   zylos add telegram@0.2.0
