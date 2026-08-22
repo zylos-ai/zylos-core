@@ -445,14 +445,21 @@ function verifyApiKey(apiKey) {
 
 /**
  * Verify an OpenAI API key by making a lightweight GET request to /v1/models.
+ * Uses the configured Codex base URL when provided (e.g. an OpenAI-compatible
+ * gateway preset), so a key is verified against the endpoint it will actually
+ * be used with.
  * @param {string} apiKey - The OpenAI API key (sk-...)
+ * @param {string} baseUrl - Codex base URL override (optional, default api.openai.com)
  * @returns {Promise<true|false|null>} true=valid (200), false=invalid (401), null=network error
  */
-function verifyCodexApiKey(apiKey) {
+function verifyCodexApiKey(apiKey, baseUrl) {
+  const url = new URL('/v1/models', baseUrl || 'https://api.openai.com');
+  const hostname = url.hostname;
+  const pathWithQuery = url.pathname + url.search;
   return new Promise((resolve) => {
     const req = https.request({
-      hostname: 'api.openai.com',
-      path: '/v1/models',
+      hostname,
+      path: pathWithQuery,
       method: 'GET',
       headers: { 'Authorization': `Bearer ${apiKey}` },
       timeout: 10000,
@@ -1636,6 +1643,7 @@ export function parseInitFlags(args) {
     setupToken: null,
     apiKey: null,
     codexApiKey: null,
+    codexProvider: null, // named provider preset for Codex runtime (e.g. 'orcarouter')
     baseUrl: null,
     codexBaseUrl: null,
     domain: null,
@@ -1666,6 +1674,7 @@ export function parseInitFlags(args) {
       case '--setup-token':
       case '--api-key':
       case '--codex-api-key':
+      case '--codex-provider':
       case '--base-url':
       case '--codex-base-url':
       case '--domain':
@@ -1680,6 +1689,7 @@ export function parseInitFlags(args) {
         else if (arg === '--setup-token') opts.setupToken = val;
         else if (arg === '--api-key') opts.apiKey = val;
         else if (arg === '--codex-api-key') opts.codexApiKey = val;
+        else if (arg === '--codex-provider') opts.codexProvider = val;
         else if (arg === '--base-url') opts.baseUrl = val;
         else if (arg === '--codex-base-url') opts.codexBaseUrl = val;
         else if (arg === '--domain') opts.domain = val;
@@ -1733,6 +1743,9 @@ export function resolveFromEnv(opts) {
   if (opts.codexApiKey === null && (process.env.OPENAI_API_KEY || process.env.CODEX_API_KEY)) {
     opts.codexApiKey = process.env.OPENAI_API_KEY || process.env.CODEX_API_KEY;
   }
+  if (opts.codexProvider === null && process.env.CODEX_PROVIDER) {
+    opts.codexProvider = process.env.CODEX_PROVIDER;
+  }
   if (opts.baseUrl === null && process.env.ANTHROPIC_BASE_URL) {
     opts.baseUrl = process.env.ANTHROPIC_BASE_URL;
   }
@@ -1743,6 +1756,44 @@ export function resolveFromEnv(opts) {
   // Docker containers often have TZ=UTC set by default, which would silently
   // overwrite user-configured timezones on re-init. Only --timezone flag applies.
   // The auto-detect in configureTimezone() will handle the default case.
+}
+
+/**
+ * Named Codex provider presets.
+ *
+ * A preset is a curated OpenAI-compatible gateway that users can opt into by
+ * name instead of hand-wiring `--codex-base-url` + an API key. Selecting a
+ * preset resolves the gateway base URL and its API key source so the rest of
+ * the Codex setup path works unchanged.
+ *
+ * @type {Record<string, { name: string, baseUrl: string, apiKeyEnv: string }>}
+ */
+export const CODEX_PROVIDER_PRESETS = {
+  orcarouter: {
+    name: 'OrcaRouter',
+    baseUrl: 'https://api.orcarouter.ai/v1',
+    apiKeyEnv: 'ORCAROUTER_API_KEY',
+  },
+};
+
+/**
+ * Apply a named Codex provider preset, resolving its base URL and API key.
+ *
+ * Mutates `opts` in place. Explicit flags always win over the preset — a preset
+ * only fills base URL / API key that the user did not already provide.
+ *
+ * @param {object} opts - Parsed init options (mutated in place)
+ */
+export function resolveProviderPresets(opts) {
+  if (!opts.codexProvider) return;
+  const preset = CODEX_PROVIDER_PRESETS[opts.codexProvider];
+  if (!preset) return;
+  if (opts.codexBaseUrl === null) {
+    opts.codexBaseUrl = preset.baseUrl;
+  }
+  if (opts.codexApiKey === null && process.env[preset.apiKeyEnv]) {
+    opts.codexApiKey = process.env[preset.apiKeyEnv];
+  }
 }
 
 export function validateInitOptions(opts) {
@@ -1767,6 +1818,12 @@ export function validateInitOptions(opts) {
   // Runtime validation
   if (opts.runtime && !['claude', 'codex'].includes(opts.runtime)) {
     return `Invalid runtime: "${opts.runtime}".\n  Supported: claude, codex\n  Example: zylos init --runtime codex`;
+  }
+
+  // Named Codex provider preset validation
+  if (opts.codexProvider && !CODEX_PROVIDER_PRESETS[opts.codexProvider]) {
+    const available = Object.keys(CODEX_PROVIDER_PRESETS).join(', ');
+    return `Invalid Codex provider: "${opts.codexProvider}".\n  Available: ${available}\n  Example: zylos init --runtime codex --codex-provider orcarouter`;
   }
 
   // Timezone validation
@@ -1813,6 +1870,7 @@ Options:
   --setup-token <token>      Authenticate with Claude setup token
   --api-key <key>            Authenticate with Anthropic API key
   --codex-api-key <key>      Authenticate Codex with OpenAI API key (sk-...)
+  --codex-provider <name>    Named Codex provider preset (orcarouter)
   --base-url <url>           Custom API base URL for Claude Code
   --codex-base-url <url>     Custom API base URL for Codex
   --domain <domain>          Configure Caddy with this domain
@@ -1827,7 +1885,8 @@ Non-interactive mode:
 
 Environment variables:
   CLAUDE_CODE_OAUTH_TOKEN, ANTHROPIC_API_KEY, ZYLOS_RUNTIME,
-  OPENAI_API_KEY (or CODEX_API_KEY), ZYLOS_DOMAIN, ZYLOS_PROTOCOL, ZYLOS_WEB_PASSWORD
+  OPENAI_API_KEY (or CODEX_API_KEY), ORCAROUTER_API_KEY, ZYLOS_DOMAIN,
+  ZYLOS_PROTOCOL, ZYLOS_WEB_PASSWORD
 
   Resolution: CLI flag > env var > .env/config.json > interactive prompt
 
@@ -1850,6 +1909,11 @@ export async function initCommand(args) {
 
   // Resolve from environment variables
   resolveFromEnv(opts);
+
+  // Apply named provider presets (e.g. --codex-provider orcarouter) before
+  // validation so a preset's base URL / API key flow through the same path
+  // as explicit flags.
+  resolveProviderPresets(opts);
 
   // Validate options
   const validationErr = validateInitOptions(opts);
@@ -2033,7 +2097,7 @@ export async function initCommand(args) {
         // Do NOT save before verifying: a bad key in process.env causes isCodexAuthenticated()
         // to report "authenticated" even when the key is invalid (path 1 check is existence-only).
         if (!quiet) console.log(`  ${dim('Verifying Codex API key...')}`);
-        const verifyResult = await verifyCodexApiKey(opts.codexApiKey);
+        const verifyResult = await verifyCodexApiKey(opts.codexApiKey, pendingCodexBaseUrl || undefined);
         if (verifyResult === true) {
           if (saveCodexApiKey(opts.codexApiKey)) {
             codexAuthenticated = true;

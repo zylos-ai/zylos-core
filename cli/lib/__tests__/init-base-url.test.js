@@ -155,6 +155,104 @@ describe('base URL support', () => {
   });
 });
 
+describe('named Codex provider presets', () => {
+  test('parseInitFlags accepts --codex-provider and printInitHelp shows it', async () => {
+    const initModule = await import('../../commands/init.js');
+    const opts = initModule.parseInitFlags([
+      '--runtime', 'codex',
+      '--codex-provider', 'orcarouter',
+    ]);
+
+    assert.equal(opts.runtime, 'codex');
+    assert.equal(opts.codexProvider, 'orcarouter');
+
+    const originalLog = console.log;
+    let output = '';
+    console.log = (line = '') => {
+      output += `${line}\n`;
+    };
+
+    try {
+      initModule.printInitHelp();
+    } finally {
+      console.log = originalLog;
+    }
+
+    assert.match(output, /--codex-provider <name>/);
+  });
+
+  test('CODEX_PROVIDER_PRESETS maps orcarouter to base URL and key env', async () => {
+    const { CODEX_PROVIDER_PRESETS } = await import('../../commands/init.js');
+    assert.equal(CODEX_PROVIDER_PRESETS.orcarouter.baseUrl, 'https://api.orcarouter.ai/v1');
+    assert.equal(CODEX_PROVIDER_PRESETS.orcarouter.apiKeyEnv, 'ORCAROUTER_API_KEY');
+  });
+
+  test('resolveProviderPresets fills base URL and API key from the preset', async () => {
+    const { resolveProviderPresets, CODEX_PROVIDER_PRESETS } = await import('../../commands/init.js');
+    const originalKey = process.env.ORCAROUTER_API_KEY;
+    process.env.ORCAROUTER_API_KEY = 'sk-orca-test';
+
+    try {
+      const opts = {
+        codexProvider: 'orcarouter',
+        codexBaseUrl: null,
+        codexApiKey: null,
+      };
+      resolveProviderPresets(opts);
+      assert.equal(opts.codexBaseUrl, CODEX_PROVIDER_PRESETS.orcarouter.baseUrl);
+      assert.equal(opts.codexApiKey, 'sk-orca-test');
+    } finally {
+      if (originalKey === undefined) delete process.env.ORCAROUTER_API_KEY;
+      else process.env.ORCAROUTER_API_KEY = originalKey;
+    }
+  });
+
+  test('resolveProviderPresets does not override explicit flags', async () => {
+    const { resolveProviderPresets, CODEX_PROVIDER_PRESETS } = await import('../../commands/init.js');
+    const originalKey = process.env.ORCAROUTER_API_KEY;
+    process.env.ORCAROUTER_API_KEY = 'sk-orca-test';
+
+    try {
+      const opts = {
+        codexProvider: 'orcarouter',
+        codexBaseUrl: 'https://user-proxy.example.com/v1',
+        codexApiKey: 'sk-user',
+      };
+      resolveProviderPresets(opts);
+      assert.equal(opts.codexBaseUrl, 'https://user-proxy.example.com/v1');
+      assert.equal(opts.codexApiKey, 'sk-user');
+    } finally {
+      if (originalKey === undefined) delete process.env.ORCAROUTER_API_KEY;
+      else process.env.ORCAROUTER_API_KEY = originalKey;
+    }
+  });
+
+  test('resolveProviderPresets is a no-op without a codexProvider', async () => {
+    const { resolveProviderPresets } = await import('../../commands/init.js');
+    const opts = { codexProvider: null, codexBaseUrl: null, codexApiKey: null };
+    resolveProviderPresets(opts);
+    assert.equal(opts.codexBaseUrl, null);
+    assert.equal(opts.codexApiKey, null);
+  });
+
+  test('validateInitOptions rejects unknown provider names', async () => {
+    const { validateInitOptions } = await import('../../commands/init.js');
+    const error = validateInitOptions({
+      setupToken: null,
+      apiKey: null,
+      runtime: 'codex',
+      timezone: null,
+      domain: null,
+      baseUrl: null,
+      codexBaseUrl: null,
+      codexProvider: 'not-a-provider',
+    });
+
+    assert.match(error, /Invalid Codex provider/);
+    assert.match(error, /orcarouter/);
+  });
+});
+
 describe('fresh install new-session threshold default', () => {
   test('seeds 30 when fresh install config has no Claude threshold', async () => {
     const { seedFreshInstallNewSessionThresholdDefault } = await import('../../commands/init.js');

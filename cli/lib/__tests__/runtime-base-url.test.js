@@ -58,6 +58,31 @@ describe('runtime base URL support', () => {
     assert.match(output, /--no-validate/);
   });
 
+  test('parseRuntimeFlags accepts --provider and validateRuntimeFlags accepts a known provider', async () => {
+    const runtimeModule = await import('../../commands/runtime.js');
+    const flags = runtimeModule.parseRuntimeFlags([
+      '--save-apikey', 'sk-orca-test',
+      '--provider', 'orcarouter',
+    ]);
+
+    assert.equal(flags.apiKey, 'sk-orca-test');
+    assert.equal(flags.provider, 'orcarouter');
+    assert.equal(flags.hasProvider, true);
+
+    assert.equal(runtimeModule.validateRuntimeFlags('codex', flags), null);
+  });
+
+  test('validateRuntimeFlags rejects unknown providers and --provider on claude', async () => {
+    const runtimeModule = await import('../../commands/runtime.js');
+
+    const unknown = runtimeModule.validateRuntimeFlags('codex', { provider: 'not-a-provider', hasProvider: true });
+    assert.match(unknown.error, /Unknown provider/);
+    assert.match(unknown.example, /orcarouter/);
+
+    const wrongRuntime = runtimeModule.validateRuntimeFlags('claude', { provider: 'orcarouter', hasProvider: true });
+    assert.match(wrongRuntime.error, /only supported for the codex runtime/);
+  });
+
   test('checkRuntimeAuthGate skips adapter probe for standalone --no-validate', async () => {
     const { checkRuntimeAuthGate, parseRuntimeFlags } = await import('../../commands/runtime.js');
     let checkAuthCalls = 0;

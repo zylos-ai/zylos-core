@@ -36,8 +36,8 @@ step 1 "Checking authentication..."
 if [ -z "${ANTHROPIC_API_KEY:-}" ] && [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] && \
    [ -z "${OPENAI_API_KEY:-}" ] && [ -z "${CODEX_API_KEY:-}" ]; then
   # Check mounted .env as fallback
-  if ! grep -qE '^(ANTHROPIC_API_KEY|CLAUDE_CODE_OAUTH_TOKEN|OPENAI_API_KEY|CODEX_API_KEY)=' "${ENV_FILE}" 2>/dev/null; then
-    error "No auth configured. Set ANTHROPIC_API_KEY / CLAUDE_CODE_OAUTH_TOKEN (Claude) or OPENAI_API_KEY / CODEX_API_KEY (Codex)."
+  if ! grep -qE '^(ANTHROPIC_API_KEY|CLAUDE_CODE_OAUTH_TOKEN|OPENAI_API_KEY|CODEX_API_KEY|ORCAROUTER_API_KEY)=' "${ENV_FILE}" 2>/dev/null; then
+    error "No auth configured. Set ANTHROPIC_API_KEY / CLAUDE_CODE_OAUTH_TOKEN (Claude) or OPENAI_API_KEY / CODEX_API_KEY / ORCAROUTER_API_KEY (Codex)."
     exit 1
   fi
 fi
@@ -68,7 +68,7 @@ if [ -z "${ZYLOS_RUNTIME:-}" ]; then
   HAS_CLAUDE_AUTH=false
   HAS_CODEX_AUTH=false
   [ -n "${ANTHROPIC_API_KEY:-}" ] || [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] && HAS_CLAUDE_AUTH=true
-  [ -n "${OPENAI_API_KEY:-}" ] || [ -n "${CODEX_API_KEY:-}" ] && HAS_CODEX_AUTH=true
+  [ -n "${OPENAI_API_KEY:-}" ] || [ -n "${CODEX_API_KEY:-}" ] || [ -n "${ORCAROUTER_API_KEY:-}" ] && HAS_CODEX_AUTH=true
   if [ "${HAS_CODEX_AUTH}" = true ] && [ "${HAS_CLAUDE_AUTH}" = false ]; then
     RUNTIME_FLAG="--runtime codex"
   fi
@@ -79,6 +79,16 @@ INIT_ARGS="--yes --quiet"
 [ -n "${TZ:-}" ] && INIT_ARGS="${INIT_ARGS} --timezone ${TZ}"
 [ -n "${AUTH_FLAG}" ] && INIT_ARGS="${INIT_ARGS} ${AUTH_FLAG}"
 [ -n "${RUNTIME_FLAG}" ] && INIT_ARGS="${INIT_ARGS} ${RUNTIME_FLAG}"
+
+# OrcaRouter — named Codex provider preset. When only an OrcaRouter key is
+# present, select the preset (resolves base URL https://api.orcarouter.ai/v1)
+# and pass the key through the Codex auth path. Runtime defaulting to codex is
+# already handled by RUNTIME_FLAG above (ORCAROUTER_API_KEY counts as Codex auth).
+ORCA_FLAG=""
+if [ -n "${ORCAROUTER_API_KEY:-}" ]; then
+  ORCA_FLAG="--codex-provider orcarouter --codex-api-key ${ORCAROUTER_API_KEY}"
+  INIT_ARGS="${INIT_ARGS} ${ORCA_FLAG}"
+fi
 
 # shellcheck disable=SC2086
 if ! zylos init ${INIT_ARGS}; then
@@ -112,6 +122,10 @@ upsert_env "CODEX_BYPASS_PERMISSIONS" "${CODEX_BYPASS_PERMISSIONS:-true}"
 # on subsequent restarts without relying on Docker's environment re-injection.
 upsert_env "OPENAI_API_KEY" "${OPENAI_API_KEY:-}"
 upsert_env "CODEX_API_KEY" "${CODEX_API_KEY:-}"
+# OrcaRouter — named Codex provider preset key. Persisted to .env so the tmux
+# session and PM2 services can resolve it on restarts without relying on Docker
+# re-injecting the environment variable.
+upsert_env "ORCAROUTER_API_KEY" "${ORCAROUTER_API_KEY:-}"
 
 # Save current PATH so PM2 services can find claude and node
 upsert_env "SYSTEM_PATH" "${PATH}"
