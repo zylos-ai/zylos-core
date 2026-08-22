@@ -22,6 +22,10 @@ services:
       CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
       # Option B: Anthropic API key (usage-based billing)
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      # Option C: Codex runtime — OpenAI API key, or OrcaRouter gateway preset
+      # (use --codex-provider orcarouter to wire the Codex runtime to OrcaRouter)
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ORCAROUTER_API_KEY: ${ORCAROUTER_API_KEY:-}
 
       # ── Core config ───────────────────────────────────────────────────────
       TZ: ${TZ:-UTC}
