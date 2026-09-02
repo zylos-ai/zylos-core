@@ -9,7 +9,8 @@ import { ZYLOS_DIR, SKILLS_DIR, COMPONENTS_DIR, getZylosConfig } from '../lib/co
 import { bold, dim, green, red, yellow, cyan, success, error, warn, heading } from '../lib/colors.js';
 import { loadRegistry } from '../lib/registry.js';
 import { loadComponents, saveComponents } from '../lib/components.js';
-import { checkForUpdates, getLocalSourceUpgradeError, getRepo, runUpgrade, downloadToTemp, readChangelog, filterChangelog, cleanupTemp } from '../lib/upgrade.js';
+import { checkForUpdates, getLocalSourceUpgradeError, getRepo, runUpgrade, downloadToTemp, readChangelog, filterChangelog, cleanupTemp, getLocalVersion, checkDowngradeSchemaCompatibility } from '../lib/upgrade.js';
+import { compareSemverDesc } from '../lib/github.js';
 import {
   checkForCoreUpdates, runSelfUpgrade,
   downloadCoreToTemp, readChangelog as readCoreChangelog,
@@ -299,6 +300,31 @@ export async function upgradeComponent(args) {
     return true;
   });
 
+  // Parse "<component>@<version>" pin syntax: a positional version pin that
+  // performs a version-pinned upgrade OR downgrade of an already-installed
+  // component (bidirectional — unlike `zylos add <c>@<v>`, which is a no-op
+  // once installed). See handlePinnedUpgrade() below.
+  let component = target;
+  let pinnedVersion = null;
+  if (target && target.includes('@')) {
+    const atIndex = target.indexOf('@');
+    component = target.slice(0, atIndex);
+    pinnedVersion = target.slice(atIndex + 1);
+    if (!component || !pinnedVersion) {
+      console.error('Error: invalid "<component>@<version>" syntax. Expected e.g. "lark@1.2.3".');
+      process.exit(1);
+    }
+  }
+
+  if (pinnedVersion && (branch || upgradeSelf || upgradeAll || beta)) {
+    console.error('Error: a pinned version ("<component>@<version>") cannot be combined with --branch, --self, --all, or --beta.');
+    process.exit(1);
+  }
+  if (pinnedVersion && modeIndex !== -1) {
+    console.error('Error: --mode is not applicable with a pinned version — a pinned upgrade always performs a clean reinstall.');
+    process.exit(1);
+  }
+
   // Handle --self: upgrade zylos-core itself
   if (upgradeSelf) {
     if (checkOnly) {
@@ -317,6 +343,7 @@ export async function upgradeComponent(args) {
   // Validate target
   if (!target) {
     console.error('Usage: zylos upgrade <name> [options]');
+    console.error('       zylos upgrade <name>@<version>');
     console.error('       zylos upgrade --all');
     console.error('       zylos upgrade --self');
     console.log('\nOptions:');
@@ -332,20 +359,21 @@ export async function upgradeComponent(args) {
     console.log('  zylos upgrade --self --check --beta');
     console.log('  zylos upgrade telegram --yes');
     console.log('  zylos upgrade telegram --mode overwrite');
+    console.log('  zylos upgrade telegram@1.2.3   Pin to an exact version (upgrade OR downgrade)');
     process.exit(1);
   }
 
   // Verify component is installed (both in components.json and skill directory)
   const components = loadComponents();
-  const skillDir = path.join(SKILLS_DIR, target);
+  const skillDir = path.join(SKILLS_DIR, component);
 
-  if (!components[target]) {
+  if (!components[component]) {
     const result = {
       action: 'check',
-      component: target,
+      component,
       error: 'component_not_registered',
-      message: `Component '${target}' is not registered in components.json`,
-      reply: `Component '${target}' is not installed.`,
+      message: `Component '${component}' is not registered in components.json`,
+      reply: `Component '${component}' is not installed.`,
     };
     if (jsonOutput) {
       console.log(JSON.stringify(result, null, 2));
@@ -355,11 +383,11 @@ export async function upgradeComponent(args) {
     process.exit(1);
   }
 
-  const localSourceError = getLocalSourceUpgradeError(target, components[target]);
+  const localSourceError = getLocalSourceUpgradeError(component, components[component]);
   if (localSourceError) {
     const result = {
       action: checkOnly ? 'check' : 'upgrade',
-      component: target,
+      component,
       ...localSourceError,
       reply: localSourceError.message,
     };
@@ -371,13 +399,17 @@ export async function upgradeComponent(args) {
     process.exit(1);
   }
 
-  if (!fs.existsSync(skillDir)) {
+  // A pinned upgrade is explicitly designed to recover a component whose
+  // skill directory is missing entirely (half-installed / previously wiped —
+  // requirement: "independent of running state"), so this guard is skipped
+  // for the pinned path. handlePinnedUpgrade()/runUpgrade() self-heal it.
+  if (!fs.existsSync(skillDir) && !pinnedVersion) {
     const result = {
       action: 'check',
-      component: target,
+      component,
       error: 'skill_dir_not_found',
       message: `Component directory not found: ${skillDir}`,
-      reply: `Component '${target}' directory not found.`,
+      reply: `Component '${component}' directory not found.`,
     };
     if (jsonOutput) {
       console.log(JSON.stringify(result, null, 2));
@@ -387,13 +419,35 @@ export async function upgradeComponent(args) {
     process.exit(1);
   }
 
+  // Pinned version path: zylos upgrade <component>@<version>
+  if (pinnedVersion) {
+    if (checkOnly) {
+      const current = components[component]?.version || null;
+      // compareSemverDesc(a, b) > 0 means b is higher than a (see checkForUpdates).
+      // a = pinnedVersion (target), b = current: cmp > 0 ⇒ current > target ⇒ downgrade.
+      const cmp = current ? compareSemverDesc(pinnedVersion, current) : null;
+      const direction = cmp === null ? 'unknown' : cmp > 0 ? 'downgrade' : cmp < 0 ? 'upgrade' : 'reinstall';
+      const result = { action: 'check', component, success: true, current, target: pinnedVersion, direction };
+      if (jsonOutput) {
+        result.reply = `${component}: ${current || 'unknown'} -> ${pinnedVersion} (${direction})`;
+        console.log(JSON.stringify(result, null, 2));
+      } else {
+        console.log(`${bold(component)}: ${dim(current || 'unknown')} -> ${bold(pinnedVersion)} (${direction})`);
+      }
+      return;
+    }
+    const ok = await handlePinnedUpgrade(component, pinnedVersion, { jsonOutput, skipConfirm: skipConfirm || explicitConfirm });
+    if (!ok) process.exit(1);
+    return;
+  }
+
   // Mode 1: Check only (--check) — no lock, downloads to temp for file comparison
   if (checkOnly) {
-    return handleCheckOnly(target, { jsonOutput, branch, beta });
+    return handleCheckOnly(component, { jsonOutput, branch, beta });
   }
 
   // Mode 2 & 3: Full upgrade flow (lock-first)
-  const ok = await handleUpgradeFlow(target, { jsonOutput, skipConfirm: skipConfirm || explicitConfirm, skipEval, branch, beta, mode });
+  const ok = await handleUpgradeFlow(component, { jsonOutput, skipConfirm: skipConfirm || explicitConfirm, skipEval, branch, beta, mode });
   if (!ok) process.exit(1);
 }
 
@@ -771,6 +825,216 @@ async function handleUpgradeFlow(component, { jsonOutput, skipConfirm, skipEval,
     return result.success;
   } finally {
     // Always: cleanup temp + release lock
+    cleanupTemp(tempDir);
+    releaseLock(component);
+  }
+}
+
+/**
+ * Handle a version-pinned upgrade or downgrade: `zylos upgrade <component>@<version>`.
+ *
+ * Unlike the ordinary upgrade flow, this is NOT a "check for updates and stop
+ * if already current" operation — it is "ensure <component> is materialized
+ * at exactly <version>", so it always runs the full download + clean
+ * reinstall + restart pipeline, even if the currently-recorded version
+ * already matches the target (that idempotent re-materialize is what makes
+ * it usable as a recovery path for a crashed/half-installed component: see
+ * runUpgrade's `pinned: true` mode in cli/lib/upgrade.js).
+ *
+ * Success is judged ONLY by a post-condition read-back — the installed
+ * version is re-read from components.json (the exact same source `zylos
+ * list` reads) AND independently confirmed on disk (SKILL.md/package.json)
+ * after the pipeline reports success. A pipeline-success that doesn't hold up
+ * under read-back is reported as a failure (`version_readback_mismatch`),
+ * never as exit 0.
+ *
+ * Does NOT call process.exit() — caller decides exit behavior.
+ */
+async function handlePinnedUpgrade(component, version, { jsonOutput, skipConfirm }) {
+  const skillDir = path.join(SKILLS_DIR, component);
+
+  const lockResult = acquireLock(component);
+  if (!lockResult.success) {
+    if (jsonOutput) {
+      const errOutput = { action: 'upgrade', component, success: false, error: lockResult.error };
+      errOutput.reply = formatC4Reply('error', { message: lockResult.error });
+      console.log(JSON.stringify(errOutput, null, 2));
+    } else {
+      console.error(`Error: ${lockResult.error}`);
+    }
+    return false;
+  }
+
+  let tempDir = null;
+  try {
+    const repo = getRepo(component);
+    if (!repo) {
+      const msg = 'No repo configured for this component';
+      if (jsonOutput) {
+        const errOutput = { action: 'upgrade', component, success: false, error: 'no_repo_configured', message: msg };
+        errOutput.reply = formatC4Reply('error', { message: msg });
+        console.log(JSON.stringify(errOutput, null, 2));
+      } else {
+        console.error(`Error: ${msg}`);
+      }
+      return false;
+    }
+
+    const registeredVersion = loadComponents()[component]?.version || null;
+
+    if (!jsonOutput) {
+      console.log(`\nDownloading ${bold(`${component}@${version}`)}...`);
+    }
+
+    // Pinned installs must never silently substitute a different ref (e.g.
+    // the `main` branch fallback used by the ordinary upgrade flow) when the
+    // exact requested tag doesn't exist — that would materialize the wrong
+    // version while still looking like a success.
+    let dlResult;
+    try {
+      dlResult = downloadToTemp(repo, version, null, { allowFallback: false });
+    } catch (err) {
+      dlResult = { success: false, error: err.message };
+    }
+    if (!dlResult.success) {
+      const msg = `Could not download ${component}@${version}: ${dlResult.error}`;
+      if (jsonOutput) {
+        const errOutput = { action: 'upgrade', component, success: false, error: 'version_download_failed', message: msg };
+        errOutput.reply = formatC4Reply('error', { message: msg });
+        console.log(JSON.stringify(errOutput, null, 2));
+      } else {
+        console.error(`Error: ${msg}`);
+      }
+      return false;
+    }
+    tempDir = dlResult.tempDir;
+
+    // Refuse a downgrade that would leave forward-incompatible data on disk.
+    // Direction is judged against the registered version (components.json) —
+    // available even when skillDir/SKILL.md is missing (half-installed case).
+    // compareSemverDesc(a, b) > 0 means b is higher than a: a = version
+    // (target), b = registeredVersion (current) ⇒ cmp > 0 ⇒ current > target
+    // ⇒ downgrade.
+    const isDowngrade = registeredVersion ? compareSemverDesc(version, registeredVersion) > 0 : false;
+    if (isDowngrade) {
+      const compat = checkDowngradeSchemaCompatibility(skillDir, tempDir);
+      if (!compat.compatible) {
+        if (jsonOutput) {
+          const errOutput = { action: 'upgrade', component, success: false, error: 'downgrade_incompatible_schema', message: compat.error };
+          errOutput.reply = formatC4Reply('error', { message: compat.error });
+          console.log(JSON.stringify(errOutput, null, 2));
+        } else {
+          console.error(`Error: ${compat.error}`);
+        }
+        return false;
+      }
+    }
+
+    if (!skipConfirm) {
+      const label = registeredVersion ? `${registeredVersion} -> ${version}` : `-> ${version}`;
+      const confirmed = await promptYesNo(`Pin ${component} to version ${version} (${label}, clean reinstall)? [y/N]: `);
+      if (!confirmed) {
+        console.log('Upgrade cancelled.');
+        return true; // Not an error — user chose to cancel
+      }
+    } else if (!jsonOutput) {
+      console.log(`Installing ${bold(component)}@${version} (clean reinstall)...`);
+    }
+
+    // Clean, tree-mirroring reinstall — independent of current process
+    // health/registration, and force-ensures the service ends up running.
+    const result = runUpgrade(component, {
+      tempDir,
+      newVersion: version,
+      pinned: true,
+      jsonOutput,
+      onStep: !jsonOutput ? printStep : undefined,
+    });
+
+    if (result.success) {
+      const components = loadComponents();
+      if (components[component]) {
+        components[component].version = result.to || version;
+        components[component].upgradedAt = new Date().toISOString();
+
+        const oldBin = components[component].bin;
+        if (oldBin) unlinkBins(oldBin);
+        const updatedSkill = parseSkillMd(skillDir);
+        const newBin = linkBins(skillDir, updatedSkill?.frontmatter?.bin);
+        if (newBin) {
+          components[component].bin = newBin;
+        } else {
+          delete components[component].bin;
+        }
+
+        saveComponents(components);
+      }
+
+      cleanOldBackups(skillDir);
+    }
+
+    // Post-condition read-back (the actual success criterion): re-read the
+    // installed version from components.json — freshly reloaded from disk,
+    // the same source `zylos list` uses — AND independently from the
+    // installed SKILL.md/package.json. Exit 0 is never returned unless both
+    // agree with the requested target version.
+    //
+    // Version equality alone is NOT sufficient (daniel round-3 finding): an
+    // unrelated, previously-broken tree — left behind by the old,
+    // non-pinned upgrade path's best-effort rollback, which tolerates a
+    // failed restore (cli/lib/upgrade.js rollback()'s restore_files is
+    // caught, not thrown) — can coincidentally already show metadata equal
+    // to `version` (same-version retry, or a `latest` dispatch that happens
+    // to equal a stale target) even though THIS attempt never got far enough
+    // to touch it (e.g. it failed during download, before runUpgrade ever
+    // ran). `result.pinnedSwapCompleted` is the defense against exactly
+    // that: it is set by runUpgrade only when step3_pinnedCleanReinstall's
+    // atomic swap-in genuinely completed during THIS invocation, so `ready`
+    // here means "version == target (necessary, not sufficient) AND this
+    // attempt actually performed the swap" — never version-equality by
+    // itself. An unreadable disk version (diskCheck.success === false)
+    // yields diskVersion === null, which never equals `version`, so it is
+    // always judged failed here, never "indeterminate".
+    let finalResult = result;
+    if (result.success) {
+      const freshComponents = loadComponents();
+      const registryVersion = freshComponents[component]?.version || null;
+      const diskCheck = getLocalVersion(skillDir);
+      const diskVersion = diskCheck.success ? diskCheck.version : null;
+      const swapCompletedThisAttempt = result.pinnedSwapCompleted === true;
+
+      if (registryVersion !== version || diskVersion !== version || !swapCompletedThisAttempt) {
+        finalResult = {
+          ...result,
+          success: false,
+          error: 'version_readback_mismatch',
+          message: swapCompletedThisAttempt
+            ? `Upgrade pipeline reported success but the installed version could not be verified: components.json=${registryVersion ?? 'unknown'}, on-disk=${diskVersion ?? 'unknown'}, target=${version}.`
+            : `Upgrade pipeline reported success but this attempt never completed the clean-reinstall swap-in — on-disk version (${diskVersion ?? 'unknown'}) cannot be trusted as this attempt's result, target=${version}.`,
+        };
+      }
+    }
+
+    if (jsonOutput) {
+      const output = { ...finalResult };
+      output.reply = formatC4Reply('upgrade', { component, ...finalResult });
+      console.log(JSON.stringify(output, null, 2));
+    } else if (finalResult.success) {
+      console.log(`\n${success(`${bold(component)} pinned to version ${bold(finalResult.to)}`)}`);
+    } else if (result.success && !finalResult.success) {
+      console.log(`\n${error(`Upgrade completed but version verification failed: ${finalResult.message}`)}`);
+    } else {
+      console.log(`\n${error(`Upgrade failed (step ${result.failedStep}): ${result.error}`)}`);
+      if (result.rollback?.performed) {
+        console.log(`\n${bold('Auto-rollback performed:')}`);
+        for (const r of result.rollback.steps) {
+          console.log(`  ${r.success ? success(r.action) : error(r.action)}`);
+        }
+      }
+    }
+
+    return finalResult.success;
+  } finally {
     cleanupTemp(tempDir);
     releaseLock(component);
   }

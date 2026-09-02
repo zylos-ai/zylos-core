@@ -11,6 +11,7 @@ import { runUpgrade } from '../../cli/lib/upgrade.js';
 import fs from 'node:fs';
 
 const [component, tempDir, newVersion] = process.argv.slice(2);
+const pinned = process.env.ZYLOS_TEST_PINNED === '1';
 const realRename = fs.renameSync;
 if (process.env.ZYLOS_TEST_BASELINE_COMMIT_FAIL === '1') {
   fs.renameSync = (src, dest) => {
@@ -22,7 +23,7 @@ if (process.env.ZYLOS_TEST_BASELINE_COMMIT_FAIL === '1') {
 }
 let result;
 try {
-  result = runUpgrade(component, { tempDir, newVersion, jsonOutput: true });
+  result = runUpgrade(component, { tempDir, newVersion, jsonOutput: true, pinned });
 } finally {
   fs.renameSync = realRename;
 }
