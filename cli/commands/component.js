@@ -427,14 +427,72 @@ export async function upgradeComponent(args) {
       // a = pinnedVersion (target), b = current: cmp > 0 ⇒ current > target ⇒ downgrade.
       const cmp = current ? compareSemverDesc(pinnedVersion, current) : null;
       const direction = cmp === null ? 'unknown' : cmp > 0 ? 'downgrade' : cmp < 0 ? 'upgrade' : 'reinstall';
-      const result = { action: 'check', component, success: true, current, target: pinnedVersion, direction };
-      if (jsonOutput) {
-        result.reply = `${component}: ${current || 'unknown'} -> ${pinnedVersion} (${direction})`;
-        console.log(JSON.stringify(result, null, 2));
-      } else {
-        console.log(`${bold(component)}: ${dim(current || 'unknown')} -> ${bold(pinnedVersion)} (${direction})`);
+
+      // A real pre-check, not just a components.json diff: confirm the
+      // requested tag actually exists (download it to temp, exactly like the
+      // non-pinned --check path below does), and — when the direction is a
+      // downgrade — run the same schema-compatibility precheck the actual
+      // pinned upgrade would run, so `--check` surfaces a would-be refusal
+      // before the user attempts it for real.
+      const repo = getRepo(component);
+      if (!repo) {
+        const msg = 'No repo configured for this component';
+        if (jsonOutput) {
+          const errOutput = { action: 'check', component, success: false, error: 'no_repo_configured', message: msg };
+          errOutput.reply = formatC4Reply('error', { message: msg });
+          console.log(JSON.stringify(errOutput, null, 2));
+        } else {
+          console.error(`Error: ${msg}`);
+        }
+        process.exit(1);
       }
-      return;
+
+      let tempDir = null;
+      try {
+        let dlResult;
+        try {
+          dlResult = downloadToTemp(repo, pinnedVersion, null, { allowFallback: false });
+        } catch (err) {
+          dlResult = { success: false, error: err.message };
+        }
+        if (!dlResult.success) {
+          const msg = `Could not resolve ${component}@${pinnedVersion}: ${dlResult.error}`;
+          if (jsonOutput) {
+            const errOutput = { action: 'check', component, success: false, error: 'version_download_failed', message: msg };
+            errOutput.reply = formatC4Reply('error', { message: msg });
+            console.log(JSON.stringify(errOutput, null, 2));
+          } else {
+            console.error(`Error: ${msg}`);
+          }
+          process.exit(1);
+        }
+        tempDir = dlResult.tempDir;
+
+        if (direction === 'downgrade') {
+          const compat = checkDowngradeSchemaCompatibility(skillDir, tempDir);
+          if (!compat.compatible) {
+            if (jsonOutput) {
+              const errOutput = { action: 'check', component, success: false, error: 'downgrade_incompatible_schema', message: compat.error };
+              errOutput.reply = formatC4Reply('error', { message: compat.error });
+              console.log(JSON.stringify(errOutput, null, 2));
+            } else {
+              console.error(`Error: ${compat.error}`);
+            }
+            process.exit(1);
+          }
+        }
+
+        const result = { action: 'check', component, success: true, current, target: pinnedVersion, direction };
+        if (jsonOutput) {
+          result.reply = `${component}: ${current || 'unknown'} -> ${pinnedVersion} (${direction})`;
+          console.log(JSON.stringify(result, null, 2));
+        } else {
+          console.log(`${bold(component)}: ${dim(current || 'unknown')} -> ${bold(pinnedVersion)} (${direction})`);
+        }
+        return;
+      } finally {
+        cleanupTemp(tempDir);
+      }
     }
     const ok = await handlePinnedUpgrade(component, pinnedVersion, { jsonOutput, skipConfirm: skipConfirm || explicitConfirm });
     if (!ok) process.exit(1);
@@ -841,12 +899,19 @@ async function handleUpgradeFlow(component, { jsonOutput, skipConfirm, skipEval,
  * it usable as a recovery path for a crashed/half-installed component: see
  * runUpgrade's `pinned: true` mode in cli/lib/upgrade.js).
  *
- * Success is judged ONLY by a post-condition read-back — the installed
- * version is re-read from components.json (the exact same source `zylos
- * list` reads) AND independently confirmed on disk (SKILL.md/package.json)
- * after the pipeline reports success. A pipeline-success that doesn't hold up
- * under read-back is reported as a failure (`version_readback_mismatch`),
- * never as exit 0.
+ * Success is judged ONLY by a post-condition read-back, and — per
+ * fail-before-mutate (design doc §3.4, zylos0t review #771) — the registry
+ * (components.json) is never written until the disk swap has already been
+ * independently confirmed: the downloaded package's own metadata is
+ * validated against `version` BEFORE runUpgrade() ever touches disk; then,
+ * after the pipeline reports success, the on-disk version is re-read
+ * (SKILL.md/package.json) and confirmed FIRST; only then is the registry
+ * written; then the registry is itself re-read (the exact same source
+ * `zylos list` reads) to confirm the write stuck. A pipeline-success that
+ * doesn't hold up under either read-back is reported as a failure
+ * (`version_download_mismatch` pre-swap, `version_readback_mismatch`
+ * post-swap), never as exit 0 — and in every failure case, no partial state
+ * (disk swap without registry write, or vice versa) is left behind.
  *
  * Does NOT call process.exit() — caller decides exit behavior.
  */
@@ -930,6 +995,30 @@ async function handlePinnedUpgrade(component, version, { jsonOutput, skipConfirm
       }
     }
 
+    // Pre-swap metadata validation (fail-before-mutate, zylos0t review #771):
+    // confirm the downloaded package actually IS the requested version before
+    // any disk swap or registry write happens. tempDir is the same skill-tree
+    // root already passed to checkDowngradeSchemaCompatibility() above, so
+    // this reads the same tree runUpgrade()'s step3 would stage from. Without
+    // this check, a tag that resolves but whose contents don't match (bad
+    // release asset, mislabeled tag, etc.) would only be caught AFTER the
+    // swap + registry write, via the post-condition read-back below — which
+    // is too late for fail-before-mutate.
+    const downloadedVersion = getLocalVersion(tempDir);
+    if (downloadedVersion.version !== version) {
+      const msg = downloadedVersion.success
+        ? `Downloaded package for ${component} reports version ${downloadedVersion.version}, but ${version} was requested. Refusing to install — no files were changed.`
+        : `Could not verify the downloaded package version for ${component}@${version}: ${downloadedVersion.error}. Refusing to install — no files were changed.`;
+      if (jsonOutput) {
+        const errOutput = { action: 'upgrade', component, success: false, error: 'version_download_mismatch', message: msg };
+        errOutput.reply = formatC4Reply('error', { message: msg });
+        console.log(JSON.stringify(errOutput, null, 2));
+      } else {
+        console.error(`Error: ${msg}`);
+      }
+      return false;
+    }
+
     if (!skipConfirm) {
       const label = registeredVersion ? `${registeredVersion} -> ${version}` : `-> ${version}`;
       const confirmed = await promptYesNo(`Pin ${component} to version ${version} (${label}, clean reinstall)? [y/N]: `);
@@ -951,33 +1040,16 @@ async function handlePinnedUpgrade(component, version, { jsonOutput, skipConfirm
       onStep: !jsonOutput ? printStep : undefined,
     });
 
-    if (result.success) {
-      const components = loadComponents();
-      if (components[component]) {
-        components[component].version = result.to || version;
-        components[component].upgradedAt = new Date().toISOString();
-
-        const oldBin = components[component].bin;
-        if (oldBin) unlinkBins(oldBin);
-        const updatedSkill = parseSkillMd(skillDir);
-        const newBin = linkBins(skillDir, updatedSkill?.frontmatter?.bin);
-        if (newBin) {
-          components[component].bin = newBin;
-        } else {
-          delete components[component].bin;
-        }
-
-        saveComponents(components);
-      }
-
-      cleanOldBackups(skillDir);
-    }
-
-    // Post-condition read-back (the actual success criterion): re-read the
-    // installed version from components.json — freshly reloaded from disk,
-    // the same source `zylos list` uses — AND independently from the
-    // installed SKILL.md/package.json. Exit 0 is never returned unless both
-    // agree with the requested target version.
+    // Post-condition read-back (the actual success criterion) — restructured
+    // per fail-before-mutate (zylos0t review #771, design doc §3.4): a
+    // pinned/downgrade install either fully succeeds or leaves NO partial
+    // state. The registry (components.json + bin symlinks) is therefore only
+    // ever written AFTER the on-disk swap has been independently confirmed —
+    // never before. Order:
+    //   1. runUpgrade() already ran above (the swap).
+    //   2. Disk read-back FIRST, before any registry mutation.
+    //   3. Only if disk read-back passes: write the registry.
+    //   4. Registry read-back, to confirm the write itself stuck.
     //
     // Version equality alone is NOT sufficient (daniel round-3 finding): an
     // unrelated, previously-broken tree — left behind by the old,
@@ -989,7 +1061,7 @@ async function handlePinnedUpgrade(component, version, { jsonOutput, skipConfirm
     // to touch it (e.g. it failed during download, before runUpgrade ever
     // ran). `result.pinnedSwapCompleted` is the defense against exactly
     // that: it is set by runUpgrade only when step3_pinnedCleanReinstall's
-    // atomic swap-in genuinely completed during THIS invocation, so `ready`
+    // atomic swap-in genuinely completed during THIS invocation, so "ready"
     // here means "version == target (necessary, not sufficient) AND this
     // attempt actually performed the swap" — never version-equality by
     // itself. An unreadable disk version (diskCheck.success === false)
@@ -997,21 +1069,64 @@ async function handlePinnedUpgrade(component, version, { jsonOutput, skipConfirm
     // always judged failed here, never "indeterminate".
     let finalResult = result;
     if (result.success) {
-      const freshComponents = loadComponents();
-      const registryVersion = freshComponents[component]?.version || null;
       const diskCheck = getLocalVersion(skillDir);
       const diskVersion = diskCheck.success ? diskCheck.version : null;
       const swapCompletedThisAttempt = result.pinnedSwapCompleted === true;
 
-      if (registryVersion !== version || diskVersion !== version || !swapCompletedThisAttempt) {
+      if (diskVersion !== version || !swapCompletedThisAttempt) {
+        // Disk read-back failed: do NOT write the registry. components.json
+        // is left exactly as it was before this attempt.
         finalResult = {
           ...result,
           success: false,
           error: 'version_readback_mismatch',
           message: swapCompletedThisAttempt
-            ? `Upgrade pipeline reported success but the installed version could not be verified: components.json=${registryVersion ?? 'unknown'}, on-disk=${diskVersion ?? 'unknown'}, target=${version}.`
-            : `Upgrade pipeline reported success but this attempt never completed the clean-reinstall swap-in — on-disk version (${diskVersion ?? 'unknown'}) cannot be trusted as this attempt's result, target=${version}.`,
+            ? `Upgrade pipeline reported success but the on-disk version could not be verified: on-disk=${diskVersion ?? 'unknown'}, target=${version}. Registry left unchanged.`
+            : `Upgrade pipeline reported success but this attempt never completed the clean-reinstall swap-in — on-disk version (${diskVersion ?? 'unknown'}) cannot be trusted as this attempt's result, target=${version}. Registry left unchanged.`,
         };
+      } else {
+        // Disk read-back passed — safe to write the registry now.
+        const components = loadComponents();
+        if (components[component]) {
+          components[component].version = result.to || version;
+          components[component].upgradedAt = new Date().toISOString();
+          // Fix 3 (zylos0t review #771): persist the exact release tag used
+          // for this pin, matching the `source` shape resolveGitHubTarget()
+          // produces on install (cli/lib/components.js) — never a branch ref,
+          // since the pinned path always downloads by tag (allowFallback:
+          // false, no branch). This prevents a stale `source` (e.g. from an
+          // earlier branch/local install) from surviving a pin.
+          components[component].source = { type: 'github-release', repo, ref: version, refType: 'tag' };
+
+          const oldBin = components[component].bin;
+          if (oldBin) unlinkBins(oldBin);
+          const updatedSkill = parseSkillMd(skillDir);
+          const newBin = linkBins(skillDir, updatedSkill?.frontmatter?.bin);
+          if (newBin) {
+            components[component].bin = newBin;
+          } else {
+            delete components[component].bin;
+          }
+
+          saveComponents(components);
+        }
+
+        // Registry read-back: confirm the write itself stuck (freshly
+        // reloaded from disk, the same source `zylos list` reads).
+        const freshComponents = loadComponents();
+        const registryVersion = freshComponents[component]?.version || null;
+
+        if (registryVersion !== version) {
+          finalResult = {
+            ...result,
+            success: false,
+            error: 'version_readback_mismatch',
+            message: `Upgrade pipeline reported success and the on-disk version was verified (${version}), but components.json could not be verified after the registry write: components.json=${registryVersion ?? 'unknown'}, target=${version}.`,
+          };
+        } else {
+          // Fully successful: disk swap AND registry write both verified.
+          cleanOldBackups(skillDir);
+        }
       }
     }
 
