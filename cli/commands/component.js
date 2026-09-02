@@ -482,6 +482,16 @@ export async function upgradeComponent(args) {
           }
         }
 
+        // P2 (zylos0t review #771): run the SAME downloaded-metadata validation
+        // the real pinned upgrade runs pre-swap, so `--check` predicts the real
+        // outcome. A tag that resolves but whose package metadata != the
+        // requested version is rejected by the real upgrade
+        // (`version_download_mismatch`); without this, `--check` would report
+        // green while the actual upgrade refuses — a false pre-check.
+        if (!checkDownloadedVersionMatches(component, pinnedVersion, tempDir, { action: 'check', jsonOutput })) {
+          process.exit(1);
+        }
+
         const result = { action: 'check', component, success: true, current, target: pinnedVersion, direction };
         if (jsonOutput) {
           result.reply = `${component}: ${current || 'unknown'} -> ${pinnedVersion} (${direction})`;
@@ -889,6 +899,40 @@ async function handleUpgradeFlow(component, { jsonOutput, skipConfirm, skipEval,
 }
 
 /**
+ * Shared downloaded-package metadata validation (zylos0t review #771, P2).
+ * Confirms the tree downloaded to `tempDir` actually reports the requested
+ * `version` (SKILL.md/package.json), emitting the standard
+ * `version_download_mismatch` output on failure. Used by BOTH the real pinned
+ * upgrade (before any disk swap) AND pinned `--check`, so `--check` is a true
+ * pre-check: a tag that resolves but whose contents don't match the requested
+ * version is rejected identically in both paths (no more `--check`-green /
+ * real-upgrade-reject false green). Returns true when the metadata matches;
+ * on mismatch it prints the error (json or plain per `jsonOutput`) and returns
+ * false. Never mutates disk/registry. `action` tags the JSON output
+ * ('upgrade' | 'check').
+ */
+function checkDownloadedVersionMatches(component, version, tempDir, { action, jsonOutput }) {
+  const downloadedVersion = getLocalVersion(tempDir);
+  if (downloadedVersion.version === version) return true;
+
+  const detail = downloadedVersion.success
+    ? `Downloaded package for ${component} reports version ${downloadedVersion.version}, but ${version} was requested.`
+    : `Could not verify the downloaded package version for ${component}@${version}: ${downloadedVersion.error}.`;
+  const tail = action === 'check'
+    ? ' The real upgrade would refuse this — no files were changed.'
+    : ' Refusing to install — no files were changed.';
+  const msg = detail + tail;
+  if (jsonOutput) {
+    const errOutput = { action, component, success: false, error: 'version_download_mismatch', message: msg };
+    errOutput.reply = formatC4Reply('error', { message: msg });
+    console.log(JSON.stringify(errOutput, null, 2));
+  } else {
+    console.error(`Error: ${msg}`);
+  }
+  return false;
+}
+
+/**
  * Handle a version-pinned upgrade or downgrade: `zylos upgrade <component>@<version>`.
  *
  * Unlike the ordinary upgrade flow, this is NOT a "check for updates and stop
@@ -1004,18 +1048,7 @@ async function handlePinnedUpgrade(component, version, { jsonOutput, skipConfirm
     // release asset, mislabeled tag, etc.) would only be caught AFTER the
     // swap + registry write, via the post-condition read-back below — which
     // is too late for fail-before-mutate.
-    const downloadedVersion = getLocalVersion(tempDir);
-    if (downloadedVersion.version !== version) {
-      const msg = downloadedVersion.success
-        ? `Downloaded package for ${component} reports version ${downloadedVersion.version}, but ${version} was requested. Refusing to install — no files were changed.`
-        : `Could not verify the downloaded package version for ${component}@${version}: ${downloadedVersion.error}. Refusing to install — no files were changed.`;
-      if (jsonOutput) {
-        const errOutput = { action: 'upgrade', component, success: false, error: 'version_download_mismatch', message: msg };
-        errOutput.reply = formatC4Reply('error', { message: msg });
-        console.log(JSON.stringify(errOutput, null, 2));
-      } else {
-        console.error(`Error: ${msg}`);
-      }
+    if (!checkDownloadedVersionMatches(component, version, tempDir, { action: 'upgrade', jsonOutput })) {
       return false;
     }
 

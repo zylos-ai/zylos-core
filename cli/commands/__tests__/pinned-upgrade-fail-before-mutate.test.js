@@ -309,13 +309,16 @@ test('Fix 2: pinned --check surfaces a downgrade schema-incompatibility precheck
   assert.match(output.message, /Refusing downgrade/);
 });
 
-test('Fix 2: pinned --check succeeds (direction=upgrade) when the tag resolves cleanly', async (t) => {
+test('Fix 2: pinned --check succeeds (direction=upgrade) when the tag resolves cleanly AND its metadata matches', async (t) => {
   const name = 'pin-check-ok';
   makeSkillDir(name, '1.0.0');
   writeComponentsJson({ [name]: { version: '1.0.0', repo: 'org/demo' } });
   const tempDir = '/tmp/fake-tempdir-check-ok';
 
   scenario.downloadToTemp = () => ({ success: true, tempDir });
+  // The downloaded package's own metadata must match the requested version —
+  // --check now runs the same pre-swap validation the real upgrade does (P2).
+  scenario.getLocalVersion = () => ({ success: true, version: '2.0.0' });
 
   const { exitCode, output } = await runUpgradeCli(t, [`${name}@2.0.0`, '--check', '--json']);
 
@@ -323,6 +326,27 @@ test('Fix 2: pinned --check succeeds (direction=upgrade) when the tag resolves c
   assert.equal(output.success, true);
   assert.equal(output.direction, 'upgrade');
   assert.equal(output.target, '2.0.0');
+});
+
+test('Fix 2/P2 (zylos0t re-review): pinned --check FAILS (parity with real upgrade) when the tag resolves but its package metadata != requested version', async (t) => {
+  const name = 'pin-check-metadata-mismatch';
+  makeSkillDir(name, '1.0.0');
+  writeComponentsJson({ [name]: { version: '1.0.0', repo: 'org/demo' } });
+  const before = readComponentsJson();
+  const tempDir = '/tmp/fake-tempdir-check-mismatch';
+
+  scenario.downloadToTemp = () => ({ success: true, tempDir });
+  // Tag downloads fine, but the package inside reports a DIFFERENT version than
+  // requested — the real `zylos upgrade x@2.0.0` would reject this pre-swap, so
+  // `--check` must reject it too (no false green).
+  scenario.getLocalVersion = (dir) => (dir === tempDir ? { success: true, version: '2.0.0-oops' } : { success: true, version: '1.0.0' });
+
+  const { exitCode, output } = await runUpgradeCli(t, [`${name}@2.0.0`, '--check', '--json']);
+
+  assert.equal(exitCode, 1, '--check must surface the would-be refusal, not report success');
+  assert.equal(output.error, 'version_download_mismatch');
+  assert.equal(output.action, 'check');
+  assert.deepStrictEqual(readComponentsJson(), before, '--check must never mutate the registry');
 });
 
 // ---------------------------------------------------------------------------
