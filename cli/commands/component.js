@@ -1088,7 +1088,17 @@ async function handlePinnedUpgrade(component, version, { jsonOutput, skipConfirm
         // Disk read-back passed — safe to write the registry now.
         const components = loadComponents();
         if (components[component]) {
-          components[component].version = result.to || version;
+          // P1 (zylos0t re-review #771): write the VALIDATED request version,
+          // never `result.to`. The guard above already proved
+          // `diskVersion === version`, so `version` is the authoritative,
+          // disk-verified truth. Using `result.to || version` could write a
+          // value that diverges from the validated target (e.g. runUpgrade
+          // reporting `to: "2.0.0+wrong"` when the request/disk are `2.0.0`),
+          // which the registry read-back below would then reject AFTER having
+          // already mutated components.json — a fail-with-mutation that
+          // violates §3.4 fail-before-mutate. Pinning `version` (never
+          // `result.to`) removes that divergence source entirely.
+          components[component].version = version;
           components[component].upgradedAt = new Date().toISOString();
           // Fix 3 (zylos0t review #771): persist the exact release tag used
           // for this pin, matching the `source` shape resolveGitHubTarget()
@@ -1125,6 +1135,11 @@ async function handlePinnedUpgrade(component, version, { jsonOutput, skipConfirm
           };
         } else {
           // Fully successful: disk swap AND registry write both verified.
+          // Report the validated request version as the installed version —
+          // it is the disk- and registry-verified truth. `result.to` is never
+          // used as the source of truth (see the registry write above), so it
+          // must not leak into the JSON output / success message either.
+          finalResult = { ...result, to: version };
           cleanOldBackups(skillDir);
         }
       }

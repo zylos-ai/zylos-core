@@ -246,6 +246,30 @@ test('Fix 1(B): registry write ordering — a fully successful pin writes the re
   assert.equal(readComponentsJson()[name].version, '2.0.0');
 });
 
+test('Fix 1(B)/P1 (zylos0t re-review): a divergent runUpgrade result.to never mutates the registry nor leaks into the result — the validated request version is pinned', async (t) => {
+  const name = 'pin-divergent-resultto';
+  makeSkillDir(name, '1.0.0');
+  writeComponentsJson({ [name]: { version: '1.0.0', repo: 'org/demo' } });
+  const tempDir = '/tmp/fake-tempdir-divergent';
+
+  scenario.downloadToTemp = () => ({ success: true, tempDir });
+  // Both the downloaded package AND the on-disk tree agree on the requested target.
+  scenario.getLocalVersion = () => ({ success: true, version: '2.0.0' });
+  // ...but the pipeline REPORTS a divergent `to` (e.g. a build-metadata suffix).
+  // Old code wrote `result.to || version` -> components.json would become
+  // "2.0.0+wrong", then the registry read-back (=== version) would fail and the
+  // command would exit non-zero WITH the mutation already persisted.
+  scenario.runUpgrade = () => ({ success: true, to: '2.0.0+wrong', pinnedSwapCompleted: true, steps: [] });
+
+  const { exitCode, output } = await runUpgradeCli(t, [`${name}@2.0.0`, '--yes', '--json']);
+
+  assert.equal(exitCode, null, 'must succeed: request and disk both === target, so there is no real mismatch');
+  assert.equal(output.success, true);
+  assert.equal(output.error, undefined, 'must NOT be a version_readback_mismatch');
+  assert.equal(readComponentsJson()[name].version, '2.0.0', 'registry must hold the validated request version, never result.to');
+  assert.equal(output.to, '2.0.0', 'the reported installed version must be the validated version, not the divergent result.to');
+});
+
 // ---------------------------------------------------------------------------
 // Fix 2: pinned `@version --check` is a real pre-check
 // ---------------------------------------------------------------------------
