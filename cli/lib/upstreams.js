@@ -1,9 +1,10 @@
-/** Operation-scoped GitHub routing. Profile retrieval uses only Node built-ins. */
+/** Operation-scoped GitHub routing. Profile retrieval uses the existing curl dependency. */
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { spawn } from 'node:child_process';
 
 export const DIRECT_GITHUB = Object.freeze({
   apiBase: 'https://api.github.com/',
@@ -206,41 +207,103 @@ async function lockCache(selection, timeoutMs) {
     }
   }
 }
+function profileConnectionError() {
+  // Never attach curl stderr or spawn errors: they may contain URLs or proxy credentials.
+  return Object.assign(new Error('Profile connection failed'), { code: 'UPSTREAM_PROFILE_CONNECTION' });
+}
+function curlProfileRequest(target, etag, selection, deadline) {
+  return new Promise((resolve, reject) => {
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) { reject(profileConnectionError()); return; }
+    // -q must be first: local curlrc must not add credentials, redirects or output files.
+    // CONNECT headers are suppressed so a proxy's 200 is not mistaken for the origin.
+    const args = ['-q', '--silent', '--globoff', '--include', '--suppress-connect-headers',
+      '--proto', selection.allowHttp ? '=https,http' : '=https',
+      '--max-time', String(remainingMs / 1000)];
+    if (etag) args.push('--header', `If-None-Match: ${etag}`);
+    args.push('--url', target);
+    let child;
+    try { child = spawn('curl', args, { stdio: ['ignore', 'pipe', 'ignore'] }); }
+    catch { reject(profileConnectionError()); return; }
+    let pending = Buffer.alloc(0), headerBytes = 0, bodyBytes = 0;
+    let response, failure, stopped = false;
+    const chunks = [];
+    const stop = error => {
+      if (stopped) return;
+      stopped = true;
+      failure = error;
+      child.kill('SIGKILL');
+    };
+    const timer = setTimeout(() => stop(profileConnectionError()), remainingMs);
+    child.on('error', () => { failure = profileConnectionError(); });
+    child.stdout.on('error', () => stop(profileConnectionError()));
+    child.stdout.on('data', chunk => {
+      if (stopped) return;
+      if (!response) {
+        pending = Buffer.concat([pending, chunk]);
+        while (!response) {
+          const end = pending.indexOf('\r\n\r\n');
+          if (end < 0) {
+            if (headerBytes + pending.length > 64 * 1024) stop(new Error('Upstream profile headers exceed 64 KiB'));
+            return;
+          }
+          headerBytes += end + 4;
+          if (headerBytes > 64 * 1024) { stop(new Error('Upstream profile headers exceed 64 KiB')); return; }
+          const lines = pending.subarray(0, end).toString('latin1').split('\r\n');
+          pending = pending.subarray(end + 4);
+          const status = /^HTTP\/(?:1\.[01]|2|3) ([0-9]{3})(?: |$)/.exec(lines.shift());
+          if (!status) { stop(new Error('Invalid upstream profile HTTP response')); return; }
+          const headers = new Map();
+          for (const line of lines) {
+            const field = /^([!#$%&'*+.^_`|~0-9A-Za-z-]+):[ \t]*(.*)$/.exec(line);
+            if (!field || /[\x00-\x08\x0a-\x1f\x7f]/.test(field[2])) {
+              stop(new Error('Invalid upstream profile HTTP headers')); return;
+            }
+            const name = field[1].toLowerCase();
+            headers.set(name, headers.has(name) ? `${headers.get(name)}, ${field[2].trim()}` : field[2].trim());
+          }
+          const code = Number(status[1]);
+          if (code >= 100 && code < 200 && code !== 101) continue;
+          response = { status: code, headers };
+        }
+        chunk = pending;
+        pending = Buffer.alloc(0);
+        // Redirects, 304 and errors need only headers; never download an unbounded error body.
+        if (response.status !== 200) { stop(); return; }
+      }
+      bodyBytes += chunk.length;
+      if (bodyBytes > MAX_PROFILE_BYTES) { stop(new Error('Upstream profile exceeds 1 MiB')); return; }
+      chunks.push(chunk);
+    });
+    child.on('close', code => {
+      clearTimeout(timer);
+      if (failure) { reject(failure); return; }
+      if (!response || (!stopped && code !== 0)) { reject(profileConnectionError()); return; }
+      resolve({ ...response, body: Buffer.concat(chunks) });
+    });
+  });
+}
 async function fetchProfile(url, cache, selection, timeoutMs) {
-  const abort = AbortSignal.timeout(timeoutMs);
+  const deadline = Date.now() + timeoutMs;
   let target = url;
   for (let hop = 0; hop <= 5; hop++) {
-    let response;
-    try {
-      response = await fetch(target, {
-        signal: abort, redirect: 'manual', headers: cache?.etag ? { 'If-None-Match': cache.etag } : {},
-      });
-    } catch {
-      // Avoid exposing proxy credentials or remote URLs from transport errors.
-      throw Object.assign(new Error('Profile connection failed'), { code: 'UPSTREAM_PROFILE_CONNECTION' });
-    }
+    const response = await curlProfileRequest(target, cache?.etag, selection, deadline);
     if ([301, 302, 303, 307, 308].includes(response.status)) {
       const location = response.headers.get('location');
-      await response.body?.cancel();
       if (!location) throw new Error('Profile redirect has no location');
-      target = secureUrl(new URL(location, target).href, selection);
+      let redirected;
+      try { redirected = new URL(location, target).href; }
+      catch { throw new Error('Invalid upstream profile redirect'); }
+      target = secureUrl(redirected, selection);
       continue;
     }
     if (response.status === 304) {
-      await response.body?.cancel();
       if (!cache) throw new Error('Profile returned 304 without a valid same-source cache');
       return { profile: cache.profile, etag: cache.etag };
     }
-    if (response.status !== 200) { await response.body?.cancel(); throw new Error(`Profile returned HTTP ${response.status}`); }
-    let bytes = 0;
-    const chunks = [];
-    for await (const chunk of response.body) {
-      bytes += chunk.length;
-      if (bytes > MAX_PROFILE_BYTES) throw new Error('Upstream profile exceeds 1 MiB');
-      chunks.push(chunk);
-    }
+    if (response.status !== 200) throw new Error(`Profile returned HTTP ${response.status}`);
     let profile;
-    try { profile = validateProfile(JSON.parse(Buffer.concat(chunks).toString('utf8')), selection); }
+    try { profile = validateProfile(JSON.parse(response.body.toString('utf8')), selection); }
     catch { throw new Error('Invalid upstream profile response'); }
     const etag = response.headers.get('etag');
     return { profile, ...(etag ? { etag } : {}) };
@@ -295,7 +358,7 @@ export async function prepareUpstreams(options = {}) {
       }
     } catch (err) {
       if (err.code === 'UPSTREAM_SOURCE_CHANGED') throw err;
-      const connectionHint = err.code === 'UPSTREAM_PROFILE_CONNECTION' ? '; profile retrieval uses Node fetch, not curl proxy settings by default. On proxy-only networks use --upstream-config with a downloaded local file, or enable NODE_USE_ENV_PROXY=1 before startup on a supported Node version (see README)' : '';
+      const connectionHint = err.code === 'UPSTREAM_PROFILE_CONNECTION' ? '; profile retrieval uses curl and its proxy environment (HTTPS_PROXY/ALL_PROXY/NO_PROXY). Check proxy connectivity or use --upstream-config with a downloaded local file (see README)' : '';
       const lockHint = err.code === 'UPSTREAM_LOCK_TIMEOUT' ? `; timed out waiting for refresh lock: ${err.lockPath} (check its owner before removing it)` : '';
       if (options.force || !cache) throw new Error('Upstream refresh failed; no new snapshot saved' + (cache ? ' (previous cache preserved)' : ' and no valid same-source cache is available') + lockHint + connectionHint);
       (options.warn || console.error)('Upstream refresh failed; continuing with the last valid same-source cache' + lockHint + connectionHint + '.');

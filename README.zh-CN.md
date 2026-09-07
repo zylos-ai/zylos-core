@@ -402,12 +402,11 @@ zylos upstream refresh            # 主动刷新远程配置
 或配置服务中。本地文件可以叫 `cn.json`，core 不赋予文件名特殊含义。
 `--upstream-profile direct` 用于显式选择官方默认源；自定义端点通过本地文件或 URL 提供。
 
-配置抓取使用 Node 内置 `fetch`，默认不沿用 curl 的代理配置。只能通过代理联网时，
-可先用已配置代理的下载工具获取并检查 profile，再通过 `--upstream-config` 指定本地文件。
-也可在 Node 22.21+ 或 24+ 上，**启动 Zylos 前**在环境中设置 `NODE_USE_ENV_PROXY=1`，
-配合 `HTTPS_PROXY`/`HTTP_PROXY`、`NO_PROXY` 使用；Node 20 不支持此开关。
-详见 [Node 代理文档](https://nodejs.org/en/learn/http/enterprise-network-configuration)。
-Zylos 不安装代理模块，也不自行启用这一进程级设置。
+配置抓取与 GitHub 下载一样使用 curl，继承 curl 的代理环境（`HTTPS_PROXY`、
+`https_proxy`、`ALL_PROXY`、`NO_PROXY` 等）。将变量设置在启动 Zylos 的环境中，
+无需 `NODE_USE_ENV_PROXY`。JSON 与 schema 校验仍由 Node 完成；配置请求不会携带
+GitHub token，每次跳转仍检查 HTTPS 与目标 URL。配置下载禁用 `.curlrc` 自动加载，
+避免其中的选项注入鉴权或绕过检查。通过 `--upstream-config` 指定本地文件则不请求配置服务。
 
 来源优先级为 CLI > 进程环境 > 保存的选择 > direct 默认。对应环境变量是
 `ZYLOS_UPSTREAM_PROFILE`、`ZYLOS_UPSTREAM_CONFIG_URL`、`ZYLOS_UPSTREAM_CONFIG`，

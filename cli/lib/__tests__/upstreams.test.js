@@ -287,9 +287,14 @@ test('saved source changed while waiting resolves the new source instead of over
 });
 test('profile connection errors explain local-file fallback without leaking transport details', async t => {
   const f = await remote(t), warnings = [];
-  t.mock.method(globalThis, 'fetch', async () => { throw new Error('https://secret:password@proxy.test/?token=private'); });
+  const bin = path.join(f.dir, 'bin');
+  fs.mkdirSync(bin);
+  fs.writeFileSync(path.join(bin, 'curl'), '#!/bin/sh\necho "https://secret:password@proxy.test/?token=private" >&2\nexit 7\n', { mode: 0o755 });
+  const originalPath = process.env.PATH;
+  process.env.PATH = bin + path.delimiter + originalPath;
+  t.after(() => { process.env.PATH = originalPath; });
   const safeDiagnostic = message => {
-    assert.match(message, /Node fetch/);
+    assert.match(message, /curl/);
     assert.match(message, /--upstream-config/);
     assert.doesNotMatch(message, /secret|password|proxy\.test|private/);
   };
@@ -350,9 +355,9 @@ test('connection failure gives proxy alternatives without exposing transport det
   const f = await remote(t);
   f.setHandler((req) => req.socket.destroy());
   await assert.rejects(prepareUpstreams(f.opts), err => {
-    assert.match(err.message, /Node fetch/);
+    assert.match(err.message, /curl/);
     assert.match(err.message, /--upstream-config/);
-    assert.match(err.message, /NODE_USE_ENV_PROXY=1/);
+    assert.doesNotMatch(err.message, /NODE_USE_ENV_PROXY/);
     assert(!err.message.includes(f.url));
     return true;
   });
@@ -370,4 +375,45 @@ test('official template supports a deployment-owned cn.json without a named pres
   assert.equal(prepared.snapshot.github.rawBase, DIRECT_GITHUB.rawBase);
   persistUpstreamSelection(prepared);
   assert.equal((await prepareUpstreams(f.opts)).snapshot.github.apiBase, template.providers.github.apiBase);
+});
+
+test('profile curl ignores user curlrc authentication and enforces chunked body limit', async t => {
+  const f = await remote(t);
+  fs.writeFileSync(path.join(f.dir, '.curlrc'), 'header = "Authorization: Bearer curlrc-secret"\nlocation\ninsecure\n');
+  const oldCurlHome = process.env.CURL_HOME;
+  process.env.CURL_HOME = f.dir;
+  t.after(() => { if (oldCurlHome === undefined) delete process.env.CURL_HOME; else process.env.CURL_HOME = oldCurlHome; });
+  await prepareUpstreams(f.opts);
+  assert.equal(f.requests[0].headers.authorization, undefined);
+  const before = fs.readFileSync(f.cache, 'utf8');
+  f.setHandler((_req, res) => {
+    res.writeHead(200, { 'Transfer-Encoding': 'chunked' });
+    res.write('a'.repeat(600 * 1024));
+    res.end('b'.repeat(600 * 1024));
+  });
+  await assert.rejects(prepareUpstreams({ ...f.opts, force: true }), /previous cache preserved/);
+  assert.equal(fs.readFileSync(f.cache, 'utf8'), before);
+});
+
+test('curl profile parses interim headers and bounds final headers', async t => {
+  const f = await remote(t);
+  f.setHandler((_req, res) => { res.writeContinue(); res.end(JSON.stringify(profile())); });
+  assert.equal((await prepareUpstreams(f.opts)).snapshot.revision, 'r1');
+  const before = fs.readFileSync(f.cache, 'utf8');
+  f.setHandler((_req, res) => { res.setHeader('X-Large', 'x'.repeat(70 * 1024)); res.end(JSON.stringify(profile())); });
+  await assert.rejects(prepareUpstreams({ ...f.opts, force: true }), /previous cache preserved/);
+  assert.equal(fs.readFileSync(f.cache, 'utf8'), before);
+});
+
+test('curl profile redirect hops share one total timeout', async t => {
+  const f = await remote(t);
+  f.setHandler((req, res) => {
+    setTimeout(() => {
+      if (req.url.startsWith('/config')) { res.writeHead(302, { Location: '/final' }); res.end(); }
+      else res.end(JSON.stringify(profile()));
+    }, 160);
+  });
+  await assert.rejects(prepareUpstreams({ ...f.opts, timeoutMs: 250 }), /no valid same-source cache/);
+  assert.equal(fs.existsSync(f.cache), false);
+  assert.equal((await prepareUpstreams({ ...f.opts, timeoutMs: 2000 })).snapshot.revision, 'r1');
 });

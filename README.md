@@ -412,14 +412,14 @@ the open-source repository. A local file may be named `cn.json`; its filename
 has no special meaning to core. `--upstream-profile direct` explicitly selects
 the official defaults; custom endpoints use a local file or explicit URL.
 
-Profile retrieval uses Node's built-in `fetch`, which does not use curl's proxy
-configuration by default. On a proxy-only network, fetch the profile with your
-configured download tool, validate its contents, and pass the saved file with
-`--upstream-config`. Alternatively, on Node 22.21+ or 24+, set
-`NODE_USE_ENV_PROXY=1` together with `HTTPS_PROXY`/`HTTP_PROXY` and `NO_PROXY`
-in the environment **before starting Zylos**. Node 20 does not support this
-opt-in. See [Node's proxy documentation](https://nodejs.org/en/learn/http/enterprise-network-configuration).
-Zylos does not install a proxy agent or enable this process-wide setting itself.
+Profile retrieval uses curl, like the GitHub downloads, and inherits curl's
+proxy environment (`HTTPS_PROXY`, `https_proxy`, `ALL_PROXY`, `NO_PROXY`, etc.).
+Set these in the environment that launches Zylos. No `NODE_USE_ENV_PROXY`
+setting is needed. JSON and schema validation remain in Node. Profiles never
+receive the GitHub token, and HTTPS and redirect checks still apply at every
+hop. The profile downloader disables `.curlrc` loading so local curl options
+cannot inject authentication or bypass those checks. A local profile file
+selected with `--upstream-config` avoids the configuration-service request.
 
 Source selection is CLI > process environment > saved settings > direct.
 The corresponding environment variables are `ZYLOS_UPSTREAM_PROFILE`,
