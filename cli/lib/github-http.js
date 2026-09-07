@@ -35,7 +35,8 @@ function* request(url, { token, headers = [], output, timeout = 10000, snapshot 
       const sendToken = token && (direct || canForwardGitHubToken(url, snapshot));
       const lines = [...(sendToken ? [`Authorization: Bearer ${token}`] : []), ...headers];
       if (lines.some(line => /[\r\n]/.test(line))) throw new Error('Invalid GitHub request header');
-      const args = [direct ? '-fsSL' : '-fsS'];
+      // Custom routes must retain manual redirect and credential control.
+      const args = direct ? ['-fsSL'] : ['-q', '-fsS'];
       if (lines.length) args.push('-H', '@-');
       if (output) args.push('-o', output);
       const headerPath = temp && path.join(temp, 'headers');

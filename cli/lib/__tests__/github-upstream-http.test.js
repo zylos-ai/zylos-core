@@ -3,6 +3,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
+import http from 'node:http';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { githubRequestSync, githubRequestAsync } from '../github-http.js';
 
 function fixture(t, routes) {
@@ -58,7 +61,7 @@ for (const [name, request] of [['sync', githubRequestSync], ['async', githubRequ
     assert.match(calls()[0].input, /secret/);
     assert.match(calls()[1].input, /secret/);
     assert.equal(calls()[2].input, '');
-    assert(calls().every(call => !call.args.includes('-fsSL')));
+    assert(calls().every(call => call.args[0] === '-q' && !call.args.includes('-fsSL')));
   });
 
   test(`${name}: custom-to-official redirects require explicit token permission`, async t => {
@@ -73,7 +76,7 @@ for (const [name, request] of [['sync', githubRequestSync], ['async', githubRequ
     }
     assert.equal(calls()[1].input, '');
     assert.match(calls()[3].input, /Authorization: Bearer secret/);
-    assert(calls().every(call => !call.args.includes('-fsSL')));
+    assert(calls().every(call => call.args[0] === '-q' && !call.args.includes('-fsSL')));
   });
 
   test(`${name}: public requests never acquire token; plaintext never receives token`, async t => {
@@ -155,4 +158,33 @@ test('HTTPS mirror cannot redirect to plaintext loopback without explicit test o
   assert.equal(calls().length, 1);
   assert.equal(githubRequestSync('https://mirror.test/start', { snapshot: { allowHttp: true } }), 'ok');
   assert.equal(calls().at(-1).url, 'http://127.0.0.1:1234/end');
+});
+
+test('real custom-route curl ignores curlrc auto-follow and injected authorization', async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'github-curlrc-'));
+  const original = process.env.CURL_HOME;
+  process.env.CURL_HOME = dir;
+  fs.writeFileSync(path.join(dir, '.curlrc'), 'location\nheader = "Authorization: Bearer curlrc-secret"\n');
+  const requests = [];
+  const server = http.createServer((req, res) => {
+    requests.push({ url: req.url, authorization: req.headers.authorization });
+    if (req.url === '/start') {
+      res.writeHead(302, { Location: `http://user:pass@127.0.0.1:${server.address().port}/final` });
+      res.end();
+    } else res.end('followed');
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(async () => {
+    if (original === undefined) delete process.env.CURL_HOME; else process.env.CURL_HOME = original;
+    await new Promise(resolve => server.close(resolve));
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+  const url = `http://127.0.0.1:${server.address().port}/start`;
+  // Positive control proves this curlrc actually enables bypass on ordinary curl.
+  assert.equal((await promisify(execFile)('curl', ['-fsS', url], { timeout: 5000 })).stdout, 'followed');
+  assert.equal(requests.length, 2);
+  assert.equal(requests[0].authorization, 'Bearer curlrc-secret');
+  requests.length = 0;
+  await assert.rejects(githubRequestAsync(url, { snapshot: { allowHttp: true } }), /Unsafe GitHub upstream redirect/);
+  assert.deepEqual(requests, [{ url: '/start', authorization: undefined }]);
 });

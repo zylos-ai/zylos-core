@@ -449,7 +449,9 @@ starts at a custom endpoint retains this rule throughout its redirect chain,
 even when redirected to an official GitHub host. For private downloads, include
 each host that needs authentication in `allowedHosts` (including official
 redirect destinations), and set `forwardGitHubToken: true`. Redirecting does
-not grant token permission automatically.
+not grant token permission automatically. Custom GitHub routes also disable
+`.curlrc` loading so its auto-follow or authentication options cannot bypass
+these checks. The legacy official direct transport retains its existing behavior.
 
 Persist the two npm variables in the environment that starts your supervisor,
 including after a reboot. The default runtime manifest inherits both names.

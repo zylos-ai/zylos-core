@@ -429,6 +429,8 @@ GitHub token，每次跳转仍检查 HTTPS 与目标 URL。配置下载禁用 `.
 重定向都检查授权。从自定义入口开始的请求，整条重定向链都遵循此规则，
 即使跳回官方 GitHub host 也一样。私有下载需要将每个须鉴权的 host（含官方跳转目标）
 写入 `allowedHosts`，并设置 `forwardGitHubToken: true`；重定向本身不授予 token 权限。
+自定义 GitHub 路由同样禁用 `.curlrc` 自动加载，防止其自动跳转或鉴权选项绕过检查；
+原有官方直连传输保持既有行为。
 
 两项 npm 变量须保存在启动 supervisor 的持久环境中，确保机器重启后仍存在。
 新装默认 runtime 清单会继承这两个变量名；已有安装保留自定义的
