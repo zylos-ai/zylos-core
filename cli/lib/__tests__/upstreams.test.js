@@ -285,6 +285,54 @@ test('saved source changed while waiting resolves the new source instead of over
   assert.equal(result.snapshot.source.url, newUrl);
   assert.equal(f.requests.length, 0);
 });
+test('profile connection errors explain local-file fallback without leaking transport details', async t => {
+  const f = await remote(t), warnings = [];
+  t.mock.method(globalThis, 'fetch', async () => { throw new Error('https://secret:password@proxy.test/?token=private'); });
+  const safeDiagnostic = message => {
+    assert.match(message, /Node fetch/);
+    assert.match(message, /--upstream-config/);
+    assert.doesNotMatch(message, /secret|password|proxy\.test|private/);
+  };
+  await assert.rejects(prepareUpstreams(f.opts), err => { safeDiagnostic(err.message); return true; });
+  assert.equal(fs.existsSync(f.cache), false);
+  f.write(f.cache, { schemaVersion: 1, sourceUrl: f.url, profile: profile('cached'), checkedAt: 100 });
+  const before = fs.readFileSync(f.cache, 'utf8');
+  const result = await prepareUpstreams({ ...f.opts, now: 100 + DEFAULT_TTL_MS, warn: message => warnings.push(message) });
+  assert.equal(result.snapshot.revision, 'cached');
+  assert.equal(warnings.length, 1);
+  safeDiagnostic(warnings[0]);
+  await assert.rejects(prepareUpstreams({ ...f.opts, force: true }), err => { safeDiagnostic(err.message); return true; });
+  assert.equal(fs.readFileSync(f.cache, 'utf8'), before);
+});
+test('unverifiable refresh lock reports its path without reclaiming it or changing cache', async t => {
+  const f = await remote(t), lock = path.join(f.dir, '.zylos/upstreams-cache.lock');
+  fs.mkdirSync(path.dirname(lock), { recursive: true });
+  fs.writeFileSync(lock, '{broken');
+  const reportsLock = err => {
+    assert.ok(err.message.includes(lock), err.message);
+    assert.match(err.message, /check its owner before removing/);
+    return true;
+  };
+  await assert.rejects(prepareUpstreams({ ...f.opts, timeoutMs: 1 }), reportsLock);
+  assert.equal(fs.readFileSync(lock, 'utf8'), '{broken');
+  assert.equal(fs.existsSync(f.cache), false);
+  assert.equal(f.requests.length, 0);
+
+  f.write(f.cache, { schemaVersion: 1, sourceUrl: f.url, profile: profile('cached'), checkedAt: 100 });
+  const before = fs.readFileSync(f.cache, 'utf8'), warnings = [];
+  const result = await prepareUpstreams({ ...f.opts, timeoutMs: 1, now: 100 + DEFAULT_TTL_MS, warn: message => warnings.push(message) });
+  assert.equal(result.snapshot.revision, 'cached');
+  assert.equal(warnings.length, 1);
+  assert.ok(warnings[0].includes(lock));
+  assert.equal(fs.readFileSync(f.cache, 'utf8'), before);
+
+  const badOwner = { pid: 'invalid', nonce: 'unknown-owner' };
+  f.write(lock, badOwner);
+  await assert.rejects(prepareUpstreams({ ...f.opts, timeoutMs: 1, force: true }), reportsLock);
+  assert.deepEqual(JSON.parse(fs.readFileSync(lock, 'utf8')), badOwner);
+  assert.equal(fs.readFileSync(f.cache, 'utf8'), before);
+  assert.equal(f.requests.length, 0);
+});
 test('older explicit source waiter cannot overwrite another source newly cached during the wait', async t => {
   const f = await remote(t), lock = path.join(f.dir, '.zylos/upstreams-cache.lock');
   f.write(lock, { pid: process.pid, nonce: 'another-operation' });
@@ -296,4 +344,17 @@ test('older explicit source waiter cannot overwrite another source newly cached 
   await assert.rejects(waiting, /source changed/);
   assert.equal(JSON.parse(fs.readFileSync(f.cache)).sourceUrl, newUrl);
   assert.equal(f.requests.length, 0);
+});
+
+test('connection failure gives proxy alternatives without exposing transport details', async t => {
+  const f = await remote(t);
+  f.setHandler((req) => req.socket.destroy());
+  await assert.rejects(prepareUpstreams(f.opts), err => {
+    assert.match(err.message, /Node fetch/);
+    assert.match(err.message, /--upstream-config/);
+    assert.match(err.message, /NODE_USE_ENV_PROXY=1/);
+    assert(!err.message.includes(f.url));
+    return true;
+  });
+  assert.equal(fs.existsSync(f.cache), false);
 });

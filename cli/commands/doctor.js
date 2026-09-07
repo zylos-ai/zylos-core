@@ -820,7 +820,13 @@ export async function doctorCommand(args, upstreamSource) {
         targets.push({ name, repo: info.repo, current: info.version });
       }
 
-      const prepared = await prepareUpstreams({ source: upstreamSource });
+      let prepared;
+      try {
+        prepared = await prepareUpstreams({ source: upstreamSource });
+      } catch (err) {
+        console.error(`Upstream version check unavailable: ${err.message}`);
+        throw err;
+      }
       const results = await withUpstreamSnapshot(prepared, () => concurrentMap(targets, async (target) => {
         try {
           const latest = await fetchLatestTagAsync(target.repo);
@@ -842,9 +848,7 @@ export async function doctorCommand(args, upstreamSource) {
         }
         console.log(`\n  ${dim("Run")} ${bold('zylos upgrade --all')} ${dim('to update.')}`);
       }
-    } catch (err) {
-      console.error(`Upstream version check unavailable: ${err.message}`);
-    }
+    } catch {} // Optional version checks remain silent; profile setup errors are reported above.
   }
 
   // ── Phase 6: Handle issues ────────────────────────────────────

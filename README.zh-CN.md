@@ -400,6 +400,13 @@ zylos upstream refresh            # 主动刷新远程配置
 `cn` 预设尚待运营方确认实际 URL，当前请显式指定 URL 或本地文件；不会自动绑定
 第三方服务。
 
+配置抓取使用 Node 内置 `fetch`，默认不沿用 curl 的代理配置。只能通过代理联网时，
+可先用已配置代理的下载工具获取并检查 profile，再通过 `--upstream-config` 指定本地文件。
+也可在 Node 22.21+ 或 24+ 上，**启动 Zylos 前**在环境中设置 `NODE_USE_ENV_PROXY=1`，
+配合 `HTTPS_PROXY`/`HTTP_PROXY`、`NO_PROXY` 使用；Node 20 不支持此开关。
+详见 [Node 代理文档](https://nodejs.org/en/learn/http/enterprise-network-configuration)。
+Zylos 不安装代理模块，也不自行启用这一进程级设置。
+
 来源优先级为 CLI > 进程环境 > 保存的选择 > direct 默认。对应环境变量是
 `ZYLOS_UPSTREAM_PROFILE`、`ZYLOS_UPSTREAM_CONFIG_URL`、`ZYLOS_UPSTREAM_CONFIG`，
 同一层只能选择一种来源，不提供逐端点的 env 覆盖。init 成功后将选择保存到
@@ -414,7 +421,9 @@ zylos upstream refresh            # 主动刷新远程配置
 
 自定义 host 默认收不到 GitHub token。显式授权应写入本地设置的 `trust` 对象
 （`forwardGitHubToken` 与 `allowedHosts`），不能由远程 profile 提供；每次
-重定向都检查授权。
+重定向都检查授权。从自定义入口开始的请求，整条重定向链都遵循此规则，
+即使跳回官方 GitHub host 也一样。私有下载需要将每个须鉴权的 host（含官方跳转目标）
+写入 `allowedHosts`，并设置 `forwardGitHubToken: true`；重定向本身不授予 token 权限。
 
 两项 npm 变量须保存在启动 supervisor 的持久环境中，确保机器重启后仍存在。
 新装默认 runtime 清单会继承这两个变量名；已有安装保留自定义的

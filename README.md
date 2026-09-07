@@ -408,6 +408,15 @@ The `cn` preset is reserved until its operator-confirmed URL is published; use
 an explicit URL or local file meanwhile. No third-party service is selected
 automatically.
 
+Profile retrieval uses Node's built-in `fetch`, which does not use curl's proxy
+configuration by default. On a proxy-only network, fetch the profile with your
+configured download tool, validate its contents, and pass the saved file with
+`--upstream-config`. Alternatively, on Node 22.21+ or 24+, set
+`NODE_USE_ENV_PROXY=1` together with `HTTPS_PROXY`/`HTTP_PROXY` and `NO_PROXY`
+in the environment **before starting Zylos**. Node 20 does not support this
+opt-in. See [Node's proxy documentation](https://nodejs.org/en/learn/http/enterprise-network-configuration).
+Zylos does not install a proxy agent or enable this process-wide setting itself.
+
 Source selection is CLI > process environment > saved settings > direct.
 The corresponding environment variables are `ZYLOS_UPSTREAM_PROFILE`,
 `ZYLOS_UPSTREAM_CONFIG_URL` and `ZYLOS_UPSTREAM_CONFIG`; select only one source
@@ -426,7 +435,12 @@ the effective routes, cache state and token policy.
 
 Custom hosts do not receive GitHub tokens by default. Any opt-in belongs in
 the local settings' `trust` object (`forwardGitHubToken` and `allowedHosts`),
-never in a remote profile; redirects are checked at each hop.
+never in a remote profile; redirects are checked at each hop. A request that
+starts at a custom endpoint retains this rule throughout its redirect chain,
+even when redirected to an official GitHub host. For private downloads, include
+each host that needs authentication in `allowedHosts` (including official
+redirect destinations), and set `forwardGitHubToken: true`. Redirecting does
+not grant token permission automatically.
 
 Persist the two npm variables in the environment that starts your supervisor,
 including after a reboot. The default runtime manifest inherits both names.

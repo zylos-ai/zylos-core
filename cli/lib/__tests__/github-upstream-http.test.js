@@ -61,6 +61,21 @@ for (const [name, request] of [['sync', githubRequestSync], ['async', githubRequ
     assert(calls().every(call => !call.args.includes('-fsSL')));
   });
 
+  test(`${name}: custom-to-official redirects require explicit token permission`, async t => {
+    const calls = fixture(t, {
+      'https://mirror.test/private': { status: 302, location: 'https://github.com/owner/private/archive/main.tar.gz' },
+      'https://github.com/owner/private/archive/main.tar.gz': { body: 'archive' },
+    });
+    for (const allowedHosts of [['mirror.test'], ['mirror.test', 'github.com']]) {
+      assert.equal(await request('https://mirror.test/private', {
+        token: 'secret', snapshot: { trust: { forwardGitHubToken: true, allowedHosts } },
+      }), 'archive');
+    }
+    assert.equal(calls()[1].input, '');
+    assert.match(calls()[3].input, /Authorization: Bearer secret/);
+    assert(calls().every(call => !call.args.includes('-fsSL')));
+  });
+
   test(`${name}: public requests never acquire token; plaintext never receives token`, async t => {
     const calls = fixture(t, {
       'https://mirror.test/file': { body: 'ok' }, 'http://127.0.0.1:1234/file': { body: 'local' },
