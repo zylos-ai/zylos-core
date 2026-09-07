@@ -307,7 +307,7 @@ export async function prepareUpstreams(options = {}) {
       const connectionHint = err.code === 'UPSTREAM_PROFILE_CONNECTION' ? '; profile retrieval uses Node fetch, not curl proxy settings by default. On proxy-only networks use --upstream-config with a downloaded local file, or enable NODE_USE_ENV_PROXY=1 before startup on a supported Node version (see README)' : '';
       const lockHint = err.code === 'UPSTREAM_LOCK_TIMEOUT' ? `; timed out waiting for refresh lock: ${err.lockPath} (check its owner before removing it)` : '';
       if (options.force || !cache) throw new Error('Upstream refresh failed; no new snapshot saved' + (cache ? ' (previous cache preserved)' : ' and no valid same-source cache is available') + lockHint + connectionHint);
-      (options.warn || console.error)('Upstream refresh failed; continuing with the last valid same-source cache.' + lockHint + connectionHint);
+      (options.warn || console.error)('Upstream refresh failed; continuing with the last valid same-source cache' + lockHint + connectionHint + '.');
     } finally { unlock?.(); }
   }
   if (reselect) return prepareUpstreams(options);
