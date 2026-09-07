@@ -402,6 +402,10 @@ zylos upstream refresh            # 主动刷新远程配置
 或配置服务中。本地文件可以叫 `cn.json`，core 不赋予文件名特殊含义。
 `--upstream-profile direct` 用于显式选择官方默认源；自定义端点通过本地文件或 URL 提供。
 
+远程配置抓取要求 **curl 7.54.0 或更高版本**，以支持 `--suppress-connect-headers`；
+可用 `curl --version` 检查。旧版 curl 环境可通过 `--upstream-config` 使用本地文件，
+或由部署管理员准备支持的 curl 后再选择远程配置。
+
 配置抓取与 GitHub 下载一样使用 curl，继承 curl 的代理环境（`HTTPS_PROXY`、
 `https_proxy`、`ALL_PROXY`、`NO_PROXY` 等）。将变量设置在启动 Zylos 的环境中，
 无需 `NODE_USE_ENV_PROXY`。JSON 与 schema 校验仍由 Node 完成；配置请求不会携带

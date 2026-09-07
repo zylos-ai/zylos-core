@@ -412,6 +412,11 @@ the open-source repository. A local file may be named `cn.json`; its filename
 has no special meaning to core. `--upstream-profile direct` explicitly selects
 the official defaults; custom endpoints use a local file or explicit URL.
 
+Remote profile retrieval requires **curl 7.54.0 or newer** for
+`--suppress-connect-headers`; check with `curl --version`. On older curl, use a
+local profile via `--upstream-config` or have the deployment administrator
+provide a supported curl before selecting a remote profile.
+
 Profile retrieval uses curl, like the GitHub downloads, and inherits curl's
 proxy environment (`HTTPS_PROXY`, `https_proxy`, `ALL_PROXY`, `NO_PROXY`, etc.).
 Set these in the environment that launches Zylos. No `NODE_USE_ENV_PROXY`
