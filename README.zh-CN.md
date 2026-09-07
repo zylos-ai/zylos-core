@@ -361,6 +361,74 @@ zylos search [keyword]        # 搜索组件注册表
 
 ---
 
+### 上游路由
+
+通过现有官方方式安装 Zylos 后，可以为 core 的 GitHub API、raw 文件和下载请求
+配置部署方提供的入口；Caddy 复用相同路由。npm 配置由部署环境管理，LLM 端点
+和 Claude 官方安装器保持原有行为。
+
+```bash
+# 替换为部署管理员提供的实际地址。
+export npm_config_registry=https://registry.example.cn
+export npm_config_better_sqlite3_binary_host_mirror=https://binary.example.cn/better-sqlite3
+zylos init --upstream-config-url https://config.example.cn/profile.json
+
+# 或选用固定的本地配置快照：
+zylos init --upstream-config /absolute/path/profile.json
+zylos upstream status --resolved  # 只读查看，不联网
+zylos upstream refresh            # 主动刷新远程配置
+```
+
+配置示例（示例域名需替换）：
+
+```json
+{
+  "schemaVersion": 1,
+  "revision": "cn-1",
+  "providers": {
+    "github": {
+      "apiBase": "https://api.example.cn/",
+      "rawBase": "https://raw.example.cn/",
+      "downloadBase": "https://download.example.cn/"
+    }
+  }
+}
+```
+
+入口允许固定路径前缀，不接受内嵌凭据、query 或 fragment。远程配置只提供端点，
+不能下发秘密、npm 配置或信任授权；必须使用 HTTPS，本地回环 HTTP 仅用于测试。
+`cn` 预设尚待运营方确认实际 URL，当前请显式指定 URL 或本地文件；不会自动绑定
+第三方服务。
+
+来源优先级为 CLI > 进程环境 > 保存的选择 > direct 默认。对应环境变量是
+`ZYLOS_UPSTREAM_PROFILE`、`ZYLOS_UPSTREAM_CONFIG_URL`、`ZYLOS_UPSTREAM_CONFIG`，
+同一层只能选择一种来源，不提供逐端点的 env 覆盖。init 成功后将选择保存到
+`$ZYLOS_DIR/.zylos/upstreams.json`，后续命令不必重复传参。全新无配置 init 不创建
+该文件或缓存，继续使用内置官方入口。
+
+远程快照独立保存在 `.zylos/upstreams-cache.json`，默认有效 24 小时。需要上游的
+操作开始时检查过期并刷新，整个操作及回滚固定使用同一快照；普通 agent 启动
+不刷新配置。自动刷新失败时提示并使用同来源有效旧缓存，首次无缓存则失败；
+手动刷新失败返回非零。`upstream status --resolved` 只读展示来源、缓存、实际
+路由和 token 策略。
+
+自定义 host 默认收不到 GitHub token。显式授权应写入本地设置的 `trust` 对象
+（`forwardGitHubToken` 与 `allowedHosts`），不能由远程 profile 提供；每次
+重定向都检查授权。
+
+两项 npm 变量须保存在启动 supervisor 的持久环境中，确保机器重启后仍存在。
+新装默认 runtime 清单会继承这两个变量名；已有安装保留自定义的
+`.zylos/runtime-env.manifest`，缺少时应加入 `inherit npm_config_registry` 和
+`inherit npm_config_better_sqlite3_binary_host_mirror`。如果变量值保存在 `.env`，
+则加入对应的 `env NAME` 指令。仅在当前 shell export 不会更新已运行 supervisor
+的环境。init 与升级应使用同一普通用户和可写的 npm 全局目录；`sudo npm` 需另验
+变量传递和目录权限。
+
+npm registry 不覆盖 git 依赖或任意安装脚本下载；binary-host 变量只覆盖
+better-sqlite3 受支持的 prebuild-install 路径，不覆盖回退编译所需 Node headers。
+预编译验证须空缓存、无编译器。中国网络与国际回归应在隔离环境验收；官方首装、
+OS 准备、Claude 官方安装及 LLM 请求不属于本期零回源保证。
+
 ## 卸载
 
 ```bash

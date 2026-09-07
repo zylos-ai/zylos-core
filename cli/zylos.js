@@ -6,6 +6,8 @@
  */
 
 import os from 'node:os';
+import { parseUpstreamArgs, prepareUpstreams, withUpstreamSnapshot, persistUpstreamSelection, upstreamStatus } from './lib/upstreams.js';
+import { commandExists } from './lib/shell-utils.js';
 import path from 'node:path';
 import { showStatus, showLogs, startServices, stopServices, restartServices } from './commands/service.js';
 
@@ -27,6 +29,7 @@ import { migrateInstructionsCommand } from './commands/migrate-instructions.js';
 const commands = {
   // Environment setup
   init: initCommand,
+  upstream: upstreamCommand,
   config: configCommand,
   attach: attachCommand,
   doctor: doctorCommand,
@@ -70,12 +73,38 @@ async function main() {
   }
 
   if (commands[command]) {
-    await commands[command](args.slice(1));
+    const parsed = parseUpstreamArgs(args.slice(1));
+    const help = parsed.args.some(arg => ['--help', '-h'].includes(arg));
+    const runtimeInstall = command === 'runtime' && ['claude', 'codex'].includes(parsed.args[0]) && !commandExists(parsed.args[0]);
+    const consumesUpstream = ['init', 'add', 'upgrade', 'search'].includes(command) || runtimeInstall;
+    if (consumesUpstream && !help) {
+      const prepared = await prepareUpstreams({ source: parsed.source });
+      await withUpstreamSnapshot(prepared, () => commands[command](parsed.args));
+      if (command === 'init' && !process.exitCode) persistUpstreamSelection(prepared);
+    } else if (command === 'doctor') {
+      await commands[command](parsed.args, parsed.source);
+    } else if (command === 'upstream') {
+      await upstreamCommand(parsed.args, parsed.source);
+    } else {
+      if (parsed.source && !help) throw new Error('Upstream source flags require an upstream-consuming command');
+      await commands[command](parsed.args);
+    }
   } else {
     console.error(`Unknown command: ${command}`);
     showHelp();
     process.exit(1);
   }
+}
+
+async function upstreamCommand(args, source) {
+  if (args.some(arg => ['--help', '-h'].includes(arg))) {
+    console.log('Usage: zylos upstream status [--resolved] | refresh\nSource: --upstream-profile <name> | --upstream-config-url <https-url> | --upstream-config <file>');
+    return;
+  }
+  const sub = args[0] || 'status';
+  if (!['status', 'refresh'].includes(sub) || args.slice(1).some(arg => arg !== '--resolved')) throw new Error('Usage: zylos upstream status [--resolved] | refresh');
+  const prepared = await prepareUpstreams({ source, readOnly: sub === 'status', force: sub === 'refresh' });
+  console.log(JSON.stringify(upstreamStatus(prepared, { resolved: args.includes('--resolved') }), null, 2));
 }
 
 function showHelp() {
@@ -89,6 +118,12 @@ Setup:
                       --yes/-y  Non-interactive mode
                       --quiet/-q  Minimal output
                       Run "zylos init --help" for all options
+  upstream status     Show profile/cache state without network (--resolved)
+  upstream refresh    Refresh the selected remote profile
+                      Source flags (mutually exclusive):
+                      --upstream-profile <name>
+                      --upstream-config-url <https-url>
+                      --upstream-config <file>
   config              Show all configuration
   config get <key>    Get a config value
   config set <key> <value>  Set a config value

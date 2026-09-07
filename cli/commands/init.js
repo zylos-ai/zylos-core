@@ -1,3 +1,5 @@
+import { githubUrl } from '../lib/upstreams.js';
+import { githubRequestSync } from '../lib/github-http.js';
 /**
  * zylos init - Initialize Zylos environment
  *
@@ -1320,13 +1322,10 @@ function detectPlatform() {
  * Falls back to a known stable version on failure.
  * @returns {string} Version string without 'v' prefix (e.g. "2.10.2")
  */
-function getLatestCaddyVersion() {
+export function getLatestCaddyVersion() {
   const FALLBACK_VERSION = '2.10.2';
   try {
-    const output = execSync(
-      'curl -fsSL https://api.github.com/repos/caddyserver/caddy/releases/latest',
-      { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 15000 }
-    );
+    const output = githubRequestSync(githubUrl('releaseLatest', 'caddyserver/caddy'), { timeout: 15000 });
     const data = JSON.parse(output);
     return (data.tag_name || '').replace(/^v/, '') || FALLBACK_VERSION;
   } catch {
@@ -1338,7 +1337,7 @@ function getLatestCaddyVersion() {
  * Download Caddy binary to ~/zylos/bin/caddy.
  * @returns {boolean} true if download succeeded
  */
-function downloadCaddy() {
+export function downloadCaddy() {
   if (fs.existsSync(CADDY_BIN)) {
     console.log(`  ${success('Caddy binary already installed')}`);
     return true;
@@ -1351,19 +1350,16 @@ function downloadCaddy() {
   console.log(`  ${dim(`Latest Caddy version: v${version}`)}`);
 
   const filename = `caddy_${version}_${platform}_${arch}.tar.gz`;
-  const url = `https://github.com/caddyserver/caddy/releases/download/v${version}/${filename}`;
+  const url = githubUrl('releaseAsset', 'caddyserver/caddy', { ref: `v${version}`, asset: filename });
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-caddy-'));
   const tarballPath = path.join(tmpDir, filename);
 
   try {
     console.log(`  ${cyan('Downloading Caddy...')}`);
-    execSync(`curl -fsSL -o "${tarballPath}" "${url}"`, {
-      stdio: 'pipe',
-      timeout: 120000,
-    });
+    githubRequestSync(url, { output: tarballPath, timeout: 120000 });
 
     // Extract just the caddy binary
-    execSync(`tar xzf "${tarballPath}" -C "${tmpDir}" caddy`, {
+    execFileSync('tar', ['xzf', tarballPath, '-C', tmpDir, 'caddy'], {
       stdio: 'pipe',
       timeout: 30000,
     });
@@ -1806,6 +1802,10 @@ export function printInitHelp() {
 Usage: zylos init [options]
 
 Options:
+  --upstream-profile <name>    Select a named upstream profile (direct is built-in)
+  --upstream-config-url <url>  Fetch a remote HTTPS profile before downloads
+  --upstream-config <file>     Use a local profile snapshot
+  Source flags are mutually exclusive; CLI > environment > saved > direct.
   -y, --yes                  Force non-interactive mode (even with a TTY)
   -q, --quiet                Minimal output
   --runtime <name>           Agent runtime: claude (default) or codex
@@ -1826,6 +1826,8 @@ Non-interactive mode:
   provide values; unfilled fields use sensible defaults.
 
 Environment variables:
+  ZYLOS_UPSTREAM_PROFILE, ZYLOS_UPSTREAM_CONFIG_URL, ZYLOS_UPSTREAM_CONFIG
+  (mutually exclusive source selectors; no per-endpoint environment overrides)
   CLAUDE_CODE_OAUTH_TOKEN, ANTHROPIC_API_KEY, ZYLOS_RUNTIME,
   OPENAI_API_KEY (or CODEX_API_KEY), ZYLOS_DOMAIN, ZYLOS_PROTOCOL, ZYLOS_WEB_PASSWORD
 

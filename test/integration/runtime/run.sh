@@ -77,8 +77,12 @@ has_codex_credentials() {
 
 network_available() {
   command -v curl >/dev/null 2>&1 || return 1
+  # Respect npm's effective registry (environment and npmrc), including mirrors.
+  # This probe must not gate China tests on the official npm registry.
+  local registry
+  registry="$(npm config get registry 2>/dev/null)" || return 1
   curl -sS -I --connect-timeout 5 --max-time 8 https://api.anthropic.com >/dev/null 2>&1 &&
-    curl -sS -I --connect-timeout 5 --max-time 8 'https://registry.npmjs.org/@anthropic-ai%2fclaude-code' >/dev/null 2>&1
+    curl -sS -I --connect-timeout 5 --max-time 8 "${registry%/}/@anthropic-ai%2fclaude-code" >/dev/null 2>&1
 }
 
 preflight_real_smoke() {

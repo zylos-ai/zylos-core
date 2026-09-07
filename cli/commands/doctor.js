@@ -1,3 +1,4 @@
+import { prepareUpstreams, withUpstreamSnapshot } from '../lib/upstreams.js';
 /**
  * zylos doctor — diagnose installation health and auto-fix via Claude.
  *
@@ -709,7 +710,7 @@ function runClaudeFix(diagnosticJson) {
 
 // ── Main doctor flow ─────────────────────────────────────────────
 
-export async function doctorCommand(args) {
+export async function doctorCommand(args, upstreamSource) {
   const jsonMode = args.includes('--json');
 
   const coreVersion = getCurrentVersion();
@@ -819,7 +820,8 @@ export async function doctorCommand(args) {
         targets.push({ name, repo: info.repo, current: info.version });
       }
 
-      const results = await concurrentMap(targets, async (target) => {
+      const prepared = await prepareUpstreams({ source: upstreamSource });
+      const results = await withUpstreamSnapshot(prepared, () => concurrentMap(targets, async (target) => {
         try {
           const latest = await fetchLatestTagAsync(target.repo);
           if (latest && compareSemverDesc(target.current, latest) > 0) {
@@ -829,7 +831,7 @@ export async function doctorCommand(args) {
           logToFile(`warn: version check failed for ${target.name}: ${err.message}`);
         }
         return null;
-      }, VERSION_CHECK_CONCURRENCY);
+      }, VERSION_CHECK_CONCURRENCY));
 
       const updates = results.filter(Boolean);
 
@@ -840,7 +842,9 @@ export async function doctorCommand(args) {
         }
         console.log(`\n  ${dim("Run")} ${bold('zylos upgrade --all')} ${dim('to update.')}`);
       }
-    } catch {}
+    } catch (err) {
+      console.error(`Upstream version check unavailable: ${err.message}`);
+    }
   }
 
   // ── Phase 6: Handle issues ────────────────────────────────────

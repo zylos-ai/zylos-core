@@ -5,6 +5,14 @@ All notable changes to zylos-core will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **GitHub upstream profiles**: select remote HTTPS or local profiles with CLI flags or environment variables; successful init persists the source. Three endpoint builders cover API, raw files, archives and Caddy releases. Remote snapshots refresh after 24 hours, remain fixed through an operation and rollback, and preserve a valid same-source cache on automatic refresh failure. `zylos upstream status --resolved` is read-only; `zylos upstream refresh` checks immediately. Custom hosts require local consent and an allowlist to receive GitHub tokens. The `cn` preset awaits an operator-confirmed endpoint. (#776)
+
+### Fixed
+- **npm mirror environment in new agent sessions**: the default runtime manifest inherits deployment-provided registry and better-sqlite3 binary-host variables. Existing customized manifests remain intact; setup guidance describes adding the declarations and persisting the supervisor environment. Runtime integration preflight probes the effective npm registry instead of requiring the official host. (#776)
+
 ## [0.7.1] - 2026-08-18
 
 ### Added

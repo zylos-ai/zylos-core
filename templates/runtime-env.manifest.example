@@ -40,6 +40,10 @@ env TZ
 # env OTEL_LOGS_EXPORTER
 
 # ── Inherit from supervisor environment ───────────────────────────────────────
+# Deployment-owned npm settings; no values or registry defaults are set here.
+# Keep these in the supervisor's persistent environment across restarts.
+inherit npm_config_registry
+inherit npm_config_better_sqlite3_binary_host_mirror
 # inherit SSH_AUTH_SOCK
 # inherit ZYLOS_PACKAGE_ROOT
 # inherit NVM_DIR

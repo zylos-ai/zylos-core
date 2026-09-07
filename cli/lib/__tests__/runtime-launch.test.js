@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { deployManifestTemplate } from '../runtime/tmux-env.js';
 
 // ── Fake filesystem ──────────────────────────────────────────────────────────
 
@@ -167,6 +168,47 @@ function readLaunchSpec() {
     return null;
   }
 }
+
+describe('npm mirror environment through runtime launch', () => {
+  for (const Cls of [ClaudeAdapter, CodexAdapter]) {
+    it(`${Cls.name} preserves deployment mirrors on initial launch and new sessions`, async () => {
+      const names = ['npm_config_registry', 'npm_config_better_sqlite3_binary_host_mirror'];
+      const previous = Object.fromEntries(names.map(name => [name, process.env[name]]));
+      const dotenvPath = path.join(fakeZylosDir, '.env');
+      const dotenvBefore = fs.readFileSync(dotenvPath);
+      const manifestPath = path.join(fakeZylosDir, '.zylos', 'runtime-env.manifest');
+      const manifestBefore = fs.existsSync(manifestPath) ? fs.readFileSync(manifestPath) : null;
+      const template = path.resolve(import.meta.dirname, '../../../templates/runtime-env.manifest.example');
+      try {
+        fs.writeFileSync(dotenvPath, 'ZYLOS_CLEAN_ENV=true\n');
+        fs.mkdirSync(path.dirname(manifestPath), { recursive: true });
+        if (fs.existsSync(manifestPath)) fs.unlinkSync(manifestPath);
+        deployManifestTemplate(template, fakeZylosDir);
+        process.env.npm_config_registry = 'https://registry.example.test/';
+        process.env.npm_config_better_sqlite3_binary_host_mirror = 'https://binary.example.test/better-sqlite3';
+        // Exercise the adapters again with no existing session, as after a
+        // restart/rotation. This checks launch-spec wiring, not a live PM2 host.
+        for (const cycle of ['initial', 'restart', 'rotation']) {
+          calls.execFileSync.length = 0;
+          calls.execSync.length = 0;
+          tmuxSessionExists = false;
+          await makeAdapter(Cls).launch({ bypassPermissions: false });
+          const spec = readLaunchSpec();
+          assert.ok(spec, `${cycle}: launch spec missing`);
+          for (const name of names) assert.equal(spec.env[name], process.env[name], `${cycle}: ${name}`);
+        }
+      } finally {
+        fs.writeFileSync(dotenvPath, dotenvBefore);
+        if (manifestBefore) fs.writeFileSync(manifestPath, manifestBefore);
+        else if (fs.existsSync(manifestPath)) fs.unlinkSync(manifestPath);
+        for (const [name, value] of Object.entries(previous)) {
+          if (value === undefined) delete process.env[name];
+          else process.env[name] = value;
+        }
+      }
+    });
+  }
+});
 
 // ── Claude launch tests ──────────────────────────────────────────────────────
 

@@ -8,6 +8,8 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import os from 'node:os';
 import { getGitHubToken, sanitizeError, withRateLimitRetrySync } from './github.js';
+import { githubUrl, getUpstreamSnapshot } from './upstreams.js';
+import { githubRequestSync } from './github-http.js';
 import { copyTree } from './fs-utils.js';
 import { parseSkillMd } from './skill.js';
 
@@ -41,23 +43,19 @@ function createDownloadTmpDir() {
  * @param {string} tarballPath - Destination file path for the tarball
  */
 function curlDownload(repo, ref, refType, tarballPath) {
+  const snapshot = getUpstreamSnapshot();
   withRateLimitRetrySync(
-    () => curlDownloadOnce(repo, ref, refType, tarballPath),
+    () => curlDownloadOnce(repo, ref, refType, tarballPath, snapshot),
     `${repo}@${ref}`
   );
 }
 
-function curlDownloadOnce(repo, ref, refType, tarballPath) {
+function curlDownloadOnce(repo, ref, refType, tarballPath, snapshot) {
   // 1. Try public endpoint first (no auth needed for public repos)
-  const publicUrl = refType === 'tag'
-    ? `https://github.com/${repo}/archive/refs/tags/${ref}.tar.gz`
-    : `https://github.com/${repo}/archive/refs/heads/${ref}.tar.gz`;
+  const publicUrl = githubUrl('archive', repo, { ref, refType }, snapshot);
   let publicError;
   try {
-    execFileSync('curl', ['-fsSL', '-o', tarballPath, publicUrl], {
-      timeout: 60000,
-      stdio: 'pipe',
-    });
+    githubRequestSync(publicUrl, { output: tarballPath, timeout: 60000, snapshot });
     return;
   } catch (err) {
     // Public download failed — repo may be private, try with auth
@@ -72,11 +70,8 @@ function curlDownloadOnce(repo, ref, refType, tarballPath) {
     throw publicError;
   }
 
-  const apiUrl = `https://api.github.com/repos/${repo}/tarball/${ref}`;
-  execFileSync('curl', ['-fsSL', '-H', `Authorization: Bearer ${token}`, '-o', tarballPath, apiUrl], {
-    timeout: 60000,
-    stdio: 'pipe',
-  });
+  const apiUrl = githubUrl('tarball', repo, { ref }, snapshot);
+  githubRequestSync(apiUrl, { token, output: tarballPath, timeout: 60000, snapshot });
 }
 
 /**

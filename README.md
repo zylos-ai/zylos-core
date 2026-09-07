@@ -364,7 +364,86 @@ zylos upgrade --self --beta   # Check for beta/prerelease versions
 zylos uninstall --self        # Uninstall zylos entirely
 zylos list                    # List installed components
 zylos search [keyword]        # Search component registry
+zylos upstream status --resolved # Inspect upstream configuration without networking
+zylos upstream refresh       # Refresh the selected remote profile now
 ```
+
+### Upstream routing
+
+After installing Zylos through the official installation method, you can route
+core's GitHub requests through your deployment's API, raw-file and download
+endpoints. Caddy uses the same routes. npm settings remain deployment-owned;
+LLM endpoints and the official Claude installer keep their existing behavior.
+
+```bash
+# Use the URLs supplied by your deployment administrator.
+export npm_config_registry=https://registry.example.cn
+export npm_config_better_sqlite3_binary_host_mirror=https://binary.example.cn/better-sqlite3
+zylos init --upstream-config-url https://config.example.cn/profile.json
+
+# Or select a fixed local profile:
+zylos init --upstream-config /absolute/path/profile.json
+```
+
+Example profile (replace the example endpoints):
+
+```json
+{
+  "schemaVersion": 1,
+  "revision": "cn-1",
+  "providers": {
+    "github": {
+      "apiBase": "https://api.example.cn/",
+      "rawBase": "https://raw.example.cn/",
+      "downloadBase": "https://download.example.cn/"
+    }
+  }
+}
+```
+
+Bases may include a fixed path prefix, but must not include credentials, query
+parameters or fragments. Profiles cannot supply secrets, npm settings or trust
+permissions. Remote profiles require HTTPS; loopback HTTP is for local tests.
+The `cn` preset is reserved until its operator-confirmed URL is published; use
+an explicit URL or local file meanwhile. No third-party service is selected
+automatically.
+
+Source selection is CLI > process environment > saved settings > direct.
+The corresponding environment variables are `ZYLOS_UPSTREAM_PROFILE`,
+`ZYLOS_UPSTREAM_CONFIG_URL` and `ZYLOS_UPSTREAM_CONFIG`; select only one source
+within each layer. There are no per-endpoint environment overrides.
+Successful init saves the selection in `$ZYLOS_DIR/.zylos/upstreams.json`.
+Later commands reuse it without flags. An unconfigured init creates neither
+that file nor an upstream cache and continues using the official endpoints.
+
+Remote snapshots are cached separately in `.zylos/upstreams-cache.json` for
+24 hours. Upstream-consuming operations refresh expired snapshots, then keep
+one snapshot through the operation and rollback. Ordinary agent startup does
+not refresh profiles. Failed automatic refresh warns and uses a valid cache
+from the same source; first use without a valid cache fails. Explicit refresh
+failure returns nonzero. `upstream status --resolved` is read-only and shows
+the effective routes, cache state and token policy.
+
+Custom hosts do not receive GitHub tokens by default. Any opt-in belongs in
+the local settings' `trust` object (`forwardGitHubToken` and `allowedHosts`),
+never in a remote profile; redirects are checked at each hop.
+
+Persist the two npm variables in the environment that starts your supervisor,
+including after a reboot. The default runtime manifest inherits both names.
+Existing installations retain their customized `.zylos/runtime-env.manifest`:
+add `inherit npm_config_registry` and
+`inherit npm_config_better_sqlite3_binary_host_mirror` there if absent. If you
+store the values in `.env` instead, add the corresponding `env NAME` directives.
+A shell export alone does not update an already-running supervisor. Use the
+same ordinary user and writable npm global prefix for init and upgrades;
+`sudo npm` requires separate environment/permission verification.
+
+The npm registry does not redirect git dependencies or arbitrary installer
+downloads. The binary-host variable covers better-sqlite3's supported
+prebuild-install path, not source-build Node headers; validate prebuilds with
+empty caches and no compiler. China-network and international acceptance must
+run in isolated environments. Official first install, OS setup, Claude's
+official installer and LLM traffic are outside the zero-direct-request claim.
 
 ---
 

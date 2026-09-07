@@ -3,30 +3,11 @@
  * Detects available credentials and provides authenticated HTTP helpers.
  */
 
-import { execSync, execFileSync, execFile as execFileCb } from 'node:child_process';
-import { promisify } from 'node:util';
+import { execSync } from 'node:child_process';
+import { githubUrl, getUpstreamSnapshot } from './upstreams.js';
+import { githubRequestSync, githubRequestAsync } from './github-http.js';
 
-const execFileAsync = promisify(execFileCb);
 let _cachedToken = undefined;
-
-function authenticationHeaders(token, additionalHeaders = []) {
-  return [`Authorization: Bearer ${token}`, ...additionalHeaders].join('\n') + '\n';
-}
-
-function execFileWithInput(file, args, options, input) {
-  return new Promise((resolve, reject) => {
-    const child = execFileCb(file, args, options, (err, stdout, stderr) => {
-      if (err) {
-        err.stdout = stdout;
-        err.stderr = stderr;
-        reject(err);
-        return;
-      }
-      resolve({ stdout, stderr });
-    });
-    child.stdin.end(input);
-  });
-}
 
 function preferredFallbackError(authenticatedError, publicError) {
   // Public rate limiting is actionable by the outer retry loop. Otherwise the
@@ -176,26 +157,22 @@ export async function withRateLimitRetryAsync(fn, label) {
  * @throws {Error} If fetch fails
  */
 export function fetchRawFile(repo, filePath, branch = 'main') {
+  const snapshot = getUpstreamSnapshot();
   return withRateLimitRetrySync(
-    () => fetchRawFileOnce(repo, filePath, branch),
+    () => fetchRawFileOnce(repo, filePath, branch, snapshot),
     `${repo}/${filePath}`
   );
 }
 
-function fetchRawFileOnce(repo, filePath, branch) {
-  const publicUrl = `https://raw.githubusercontent.com/${repo}/${branch}/${filePath}`;
+function fetchRawFileOnce(repo, filePath, branch, snapshot) {
+  const publicUrl = githubUrl('raw', repo, { ref: branch, path: filePath }, snapshot);
   const token = getGitHubToken();
   let authenticatedError;
   if (token) {
-    const apiUrl = `https://api.github.com/repos/${repo}/contents/${filePath}?ref=${branch}`;
+    const apiUrl = githubUrl('contents', repo, { ref: branch, path: filePath }, snapshot);
     try {
-      return execFileSync('curl', [
-        '-fsSL', '-H', '@-', apiUrl,
-      ], {
-        encoding: 'utf8',
-        timeout: 10000,
-        stdio: ['pipe', 'pipe', 'pipe'],
-        input: authenticationHeaders(token, ['Accept: application/vnd.github.raw+json']),
+      return githubRequestSync(apiUrl, {
+        token, headers: ['Accept: application/vnd.github.raw+json'], snapshot,
       });
     } catch (err) {
       // A token without access must not block public repositories.
@@ -204,11 +181,7 @@ function fetchRawFileOnce(repo, filePath, branch) {
   }
 
   try {
-    return execFileSync('curl', ['-fsSL', publicUrl], {
-      encoding: 'utf8',
-      timeout: 10000,
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
+    return githubRequestSync(publicUrl, { snapshot });
   } catch (publicError) {
     // A rate-limited public fallback must reach the outer retry loop even when
     // the authenticated request failed first with a non-rate-limit status.
@@ -267,53 +240,37 @@ function parseTagsResponse(jsonStr, { includePrerelease = false } = {}) {
   return versions[0] || null;
 }
 
-function fetchTagsJsonSync(repo) {
-  const url = `https://api.github.com/repos/${repo}/tags?per_page=100`;
+function fetchTagsJsonSync(repo, snapshot) {
+  const url = githubUrl('tags', repo, {}, snapshot);
   const token = getGitHubToken();
   let authenticatedError;
   if (token) {
     try {
-      return execFileSync('curl', ['-fsSL', '-H', '@-', url], {
-        encoding: 'utf8', timeout: 10000, stdio: ['pipe', 'pipe', 'pipe'],
-        input: authenticationHeaders(token),
-      });
+      return githubRequestSync(url, { token, snapshot });
     } catch (err) {
-      // Preserve public-repository access when the token has insufficient scope.
       authenticatedError = err;
     }
   }
   try {
-    return execFileSync('curl', ['-fsSL', url], {
-      encoding: 'utf8', timeout: 10000, stdio: ['pipe', 'pipe', 'pipe'],
-    });
+    return githubRequestSync(url, { snapshot });
   } catch (publicError) {
     throw preferredFallbackError(authenticatedError, publicError);
   }
 }
 
-async function fetchTagsJsonAsync(repo) {
-  const url = `https://api.github.com/repos/${repo}/tags?per_page=100`;
+async function fetchTagsJsonAsync(repo, snapshot) {
+  const url = githubUrl('tags', repo, {}, snapshot);
   const token = getGitHubToken();
   let authenticatedError;
   if (token) {
     try {
-      const { stdout } = await execFileWithInput(
-        'curl',
-        ['-fsSL', '-H', '@-', url],
-        { encoding: 'utf8', timeout: 10000 },
-        authenticationHeaders(token)
-      );
-      return stdout;
+      return await githubRequestAsync(url, { token, snapshot });
     } catch (err) {
-      // Preserve public-repository access when the token has insufficient scope.
       authenticatedError = err;
     }
   }
   try {
-    const { stdout } = await execFileAsync('curl', ['-fsSL', url], {
-      encoding: 'utf8', timeout: 10000,
-    });
-    return stdout;
+    return await githubRequestAsync(url, { snapshot });
   } catch (publicError) {
     throw preferredFallbackError(authenticatedError, publicError);
   }
@@ -332,8 +289,9 @@ async function fetchTagsJsonAsync(repo) {
  * @throws {Error} On network/API failures (callers should catch and handle)
  */
 export function fetchLatestTag(repo, { includePrerelease = false } = {}) {
+  const snapshot = getUpstreamSnapshot();
   try {
-    const json = withRateLimitRetrySync(() => fetchTagsJsonSync(repo), `${repo} tags`);
+    const json = withRateLimitRetrySync(() => fetchTagsJsonSync(repo, snapshot), `${repo} tags`);
     return parseTagsResponse(json, { includePrerelease });
   } catch (err) {
     const msg = err.stderr?.toString().trim() || err.message || 'unknown error';
@@ -353,8 +311,9 @@ export function fetchLatestTag(repo, { includePrerelease = false } = {}) {
  * @throws {Error} On network/API failures
  */
 export async function fetchLatestTagAsync(repo, { includePrerelease = false } = {}) {
+  const snapshot = getUpstreamSnapshot();
   try {
-    const json = await withRateLimitRetryAsync(() => fetchTagsJsonAsync(repo), `${repo} tags`);
+    const json = await withRateLimitRetryAsync(() => fetchTagsJsonAsync(repo, snapshot), `${repo} tags`);
     return parseTagsResponse(json, { includePrerelease });
   } catch (err) {
     const msg = err.stderr?.toString().trim() || err.message || 'unknown error';

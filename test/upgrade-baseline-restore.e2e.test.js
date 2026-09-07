@@ -22,6 +22,7 @@ let zylosDir;
 let skillsDir;
 let shimDir;
 let failFlag;
+let npmLog;
 
 function mkTmp() {
   return fs.mkdtempSync(path.join(tmpRoot, 'test-'));
@@ -63,6 +64,9 @@ function runUpgradeE2E(name, tempDir, { failBaselineCommit = false } = {}) {
       ZYLOS_DIR: zylosDir,
       PATH: shimDir + path.delimiter + process.env.PATH,
       ZYLOS_TEST_BASELINE_COMMIT_FAIL: failBaselineCommit ? '1' : '0',
+      npm_config_registry: 'https://registry.example.test/',
+      npm_config_better_sqlite3_binary_host_mirror: 'https://binary.example.test/better-sqlite3',
+      ZYLOS_TEST_NPM_LOG: npmLog,
     },
     timeout: 60000,
   });
@@ -80,8 +84,10 @@ beforeAll(() => {
   shimDir = path.join(tmpRoot, 'shim-bin');
   fs.mkdirSync(shimDir, { recursive: true });
   failFlag = path.join(shimDir, 'npm-fail');
+  npmLog = path.join(tmpRoot, 'npm-env.log');
   fs.writeFileSync(path.join(shimDir, 'npm'), [
     '#!/bin/sh',
+    'printf "%s|%s|%s|%s\\n" "$PWD" "$*" "$npm_config_registry" "$npm_config_better_sqlite3_binary_host_mirror" >> "$ZYLOS_TEST_NPM_LOG"',
     `if [ -e "${failFlag}" ]; then exit 1; fi`,
     'exit 0',
     '',
@@ -93,6 +99,25 @@ afterAll(() => {
 });
 
 describe('runUpgrade owns the final baseline commit (#715)', () => {
+  test('upgrade and rollback npm children both inherit deployment mirror settings', () => {
+    const name = 'mirror-env-rollback';
+    const dest = installV1(name);
+    const sourceV2 = makeV2(name);
+    fs.rmSync(failFlag, { force: true });
+    const result = runUpgradeE2E(name, sourceV2, { failBaselineCommit: true });
+    expect(result.success).toBe(false);
+    expect(result.rollback.performed).toBe(true);
+    const calls = fs.readFileSync(npmLog, 'utf8').trim().split('\n')
+      .filter(line => fs.realpathSync(line.split('|')[0]) === fs.realpathSync(dest));
+    expect(calls).toHaveLength(2);
+    for (const call of calls) {
+      expect(call.split('|').slice(1)).toEqual([
+        'install --omit=dev', 'https://registry.example.test/',
+        'https://binary.example.test/better-sqlite3',
+      ]);
+    }
+  });
+
   test('component upgrade does not report an identical file missing from the saved manifest as conflict', () => {
     const name = 'identical-untracked-collision';
     const dest = installV1(name);
