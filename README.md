@@ -377,9 +377,9 @@ LLM endpoints and the official Claude installer keep their existing behavior.
 
 ```bash
 # Use the URLs supplied by your deployment administrator.
-export npm_config_registry=https://registry.example.cn
-export npm_config_better_sqlite3_binary_host_mirror=https://binary.example.cn/better-sqlite3
-zylos init --upstream-config-url https://config.example.cn/profile.json
+export npm_config_registry=https://registry.example.com
+export npm_config_better_sqlite3_binary_host_mirror=https://binary.example.com/better-sqlite3
+zylos init --upstream-config-url https://config.example.com/profile.json
 
 # Or select a fixed local profile:
 zylos init --upstream-config /absolute/path/profile.json

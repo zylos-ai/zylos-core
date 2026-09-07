@@ -369,9 +369,9 @@ zylos search [keyword]        # 搜索组件注册表
 
 ```bash
 # 替换为部署管理员提供的实际地址。
-export npm_config_registry=https://registry.example.cn
-export npm_config_better_sqlite3_binary_host_mirror=https://binary.example.cn/better-sqlite3
-zylos init --upstream-config-url https://config.example.cn/profile.json
+export npm_config_registry=https://registry.example.com
+export npm_config_better_sqlite3_binary_host_mirror=https://binary.example.com/better-sqlite3
+zylos init --upstream-config-url https://config.example.com/profile.json
 
 # 或选用固定的本地配置快照：
 zylos init --upstream-config /absolute/path/profile.json
