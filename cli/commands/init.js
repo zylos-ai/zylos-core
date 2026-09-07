@@ -1802,7 +1802,7 @@ export function printInitHelp() {
 Usage: zylos init [options]
 
 Options:
-  --upstream-profile <name>    Select a named upstream profile (direct is built-in)
+  --upstream-profile direct    Select the official upstream defaults
   --upstream-config-url <url>  Fetch a remote HTTPS profile before downloads
   --upstream-config <file>     Use a local profile snapshot
   Source flags are mutually exclusive; CLI > environment > saved > direct.

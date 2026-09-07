@@ -385,17 +385,19 @@ zylos init --upstream-config-url https://config.example.cn/profile.json
 zylos init --upstream-config /absolute/path/profile.json
 ```
 
-Example profile (replace the example endpoints):
+Editable profile template: [templates/upstreams.example.json](templates/upstreams.example.json).
+It starts with the official endpoints; copy it outside the repository and edit
+your private deployment copy before selecting it with `--upstream-config`:
 
 ```json
 {
   "schemaVersion": 1,
-  "revision": "cn-1",
+  "revision": "official-1",
   "providers": {
     "github": {
-      "apiBase": "https://api.example.cn/",
-      "rawBase": "https://raw.example.cn/",
-      "downloadBase": "https://download.example.cn/"
+      "apiBase": "https://api.github.com/",
+      "rawBase": "https://raw.githubusercontent.com/",
+      "downloadBase": "https://github.com/"
     }
   }
 }
@@ -404,9 +406,11 @@ Example profile (replace the example endpoints):
 Bases may include a fixed path prefix, but must not include credentials, query
 parameters or fragments. Profiles cannot supply secrets, npm settings or trust
 permissions. Remote profiles require HTTPS; loopback HTTP is for local tests.
-The `cn` preset is reserved until its operator-confirmed URL is published; use
-an explicit URL or local file meanwhile. No third-party service is selected
-automatically.
+There is no built-in regional preset or public proxy service. Private proxy
+addresses belong in deployment-owned files or configuration services, outside
+the open-source repository. A local file may be named `cn.json`; its filename
+has no special meaning to core. `--upstream-profile direct` explicitly selects
+the official defaults; custom endpoints use a local file or explicit URL.
 
 Profile retrieval uses Node's built-in `fetch`, which does not use curl's proxy
 configuration by default. On a proxy-only network, fetch the profile with your

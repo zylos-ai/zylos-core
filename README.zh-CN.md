@@ -379,17 +379,18 @@ zylos upstream status --resolved  # 只读查看，不联网
 zylos upstream refresh            # 主动刷新远程配置
 ```
 
-配置示例（示例域名需替换）：
+可编辑模板见 [templates/upstreams.example.json](templates/upstreams.example.json)。
+模板默认填写官方地址；复制到仓库之外，修改为自己的端点，再通过 `--upstream-config` 指定。
 
 ```json
 {
   "schemaVersion": 1,
-  "revision": "cn-1",
+  "revision": "official-1",
   "providers": {
     "github": {
-      "apiBase": "https://api.example.cn/",
-      "rawBase": "https://raw.example.cn/",
-      "downloadBase": "https://download.example.cn/"
+      "apiBase": "https://api.github.com/",
+      "rawBase": "https://raw.githubusercontent.com/",
+      "downloadBase": "https://github.com/"
     }
   }
 }
@@ -397,8 +398,9 @@ zylos upstream refresh            # 主动刷新远程配置
 
 入口允许固定路径前缀，不接受内嵌凭据、query 或 fragment。远程配置只提供端点，
 不能下发秘密、npm 配置或信任授权；必须使用 HTTPS，本地回环 HTTP 仅用于测试。
-`cn` 预设尚待运营方确认实际 URL，当前请显式指定 URL 或本地文件；不会自动绑定
-第三方服务。
+不提供内置地区预设或公共代理服务。私有代理地址应保存在开源仓库之外的部署配置文件
+或配置服务中。本地文件可以叫 `cn.json`，core 不赋予文件名特殊含义。
+`--upstream-profile direct` 用于显式选择官方默认源；自定义端点通过本地文件或 URL 提供。
 
 配置抓取使用 Node 内置 `fetch`，默认不沿用 curl 的代理配置。只能通过代理联网时，
 可先用已配置代理的下载工具获取并检查 profile，再通过 `--upstream-config` 指定本地文件。

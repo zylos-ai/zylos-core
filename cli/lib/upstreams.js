@@ -15,8 +15,6 @@ const MAX_PROFILE_BYTES = 1024 * 1024;
 const operation = new AsyncLocalStorage();
 const DEFAULT_TRUST = Object.freeze({ forwardGitHubToken: false, allowedHosts: Object.freeze([]) });
 const DIRECT_SNAPSHOT = Object.freeze({ github: DIRECT_GITHUB, trust: DEFAULT_TRUST });
-// Publish a name only after its real configuration endpoint has been validated.
-export const NAMED_PROFILES = Object.freeze({});
 const flags = { '--upstream-profile': 'profile', '--upstream-config-url': 'remote', '--upstream-config': 'local' };
 const envNames = { ZYLOS_UPSTREAM_PROFILE: 'profile', ZYLOS_UPSTREAM_CONFIG_URL: 'remote', ZYLOS_UPSTREAM_CONFIG: 'local' };
 
@@ -73,7 +71,7 @@ function validateTrust(value = {}) {
   if (!Array.isArray(hosts) || hosts.some(host => typeof host !== 'string' || !/^[a-z0-9.-]+(?::[0-9]+)?$/i.test(host) || host.startsWith('.') || host.includes('..'))) throw new Error('Invalid local allowedHosts');
   return { forwardGitHubToken: value.forwardGitHubToken ?? false, allowedHosts: hosts.map(host => host.toLowerCase()) };
 }
-function validateSource(value, allowHttp, namedProfiles) {
+function validateSource(value, allowHttp) {
   object(value, 'source');
   if (value.type === 'direct') { keys(value, ['type'], 'direct source'); return { type: 'direct' }; }
   if (value.type === 'remote') {
@@ -88,10 +86,7 @@ function validateSource(value, allowHttp, namedProfiles) {
   if (value.type === 'profile') {
     keys(value, ['type', 'name'], 'named source');
     if (value.name === 'direct') return { type: 'direct' };
-    if (typeof value.name !== 'string' || !Object.hasOwn(namedProfiles, value.name)) throw new Error('Upstream profile name is not configured; use --upstream-config-url or --upstream-config');
-    // Keep the name in settings. Cache identity always uses its canonical URL.
-    secureUrl(namedProfiles[value.name], { allowHttp });
-    return { type: 'profile', name: value.name };
+    throw new Error('Only the direct preset is supported; use --upstream-config-url or --upstream-config for custom endpoints');
   }
   throw new Error('Invalid upstream source type');
 }
@@ -120,27 +115,27 @@ function configPaths(zylosDir) {
   const dir = path.join(zylosDir, '.zylos');
   return { dir, settings: path.join(dir, 'upstreams.json'), cache: path.join(dir, 'upstreams-cache.json'), lock: path.join(dir, 'upstreams-cache.lock') };
 }
-function settingsValue(value, allowHttp, namedProfiles) {
+function settingsValue(value, allowHttp) {
   keys(value, ['schemaVersion', 'source', 'overrides', 'trust'], 'local settings');
   if (value.schemaVersion !== 1) throw new Error('Unsupported upstream settings schemaVersion');
   const overrides = value.overrides ?? {};
   keys(overrides, ['providers'], 'local overrides');
   return {
     schemaVersion: 1,
-    source: validateSource(value.source, allowHttp, namedProfiles),
+    source: validateSource(value.source, allowHttp),
     overrides: overrides.providers ? { providers: validateProviders(overrides.providers, allowHttp) } : {},
     trust: validateTrust(value.trust),
   };
 }
-export function resolveSelection({ source, env = process.env, zylosDir = env.ZYLOS_DIR || path.join(os.homedir(), 'zylos'), allowHttp = false, namedProfiles = NAMED_PROFILES } = {}) {
+export function resolveSelection({ source, env = process.env, zylosDir = env.ZYLOS_DIR || path.join(os.homedir(), 'zylos'), allowHttp = false } = {}) {
   const files = configPaths(zylosDir);
   const savedValue = readJson(files.settings, true);
-  const saved = savedValue === undefined ? undefined : settingsValue(savedValue, allowHttp, namedProfiles);
+  const saved = savedValue === undefined ? undefined : settingsValue(savedValue, allowHttp);
   const envSelected = source ? [] : Object.entries(envNames).filter(([key]) => env[key] !== undefined).map(([key, type]) => sourceFromValue(type, env[key]));
   if (envSelected.length > 1) throw new Error('Upstream source environment variables are mutually exclusive');
-  const chosen = validateSource(source || envSelected[0] || saved?.source || { type: 'direct' }, allowHttp, namedProfiles);
-  const url = chosen.type === 'remote' ? chosen.url : chosen.type === 'profile' ? secureUrl(namedProfiles[chosen.name], { allowHttp }) : undefined;
-  return { source: chosen, url, files, allowHttp, namedProfiles, settings: saved, explicit: Boolean(source || envSelected.length), selectedBy: source ? 'cli' : envSelected.length ? 'environment' : saved ? 'saved' : 'default' };
+  const chosen = validateSource(source || envSelected[0] || saved?.source || { type: 'direct' }, allowHttp);
+  const url = chosen.type === 'remote' ? chosen.url : undefined;
+  return { source: chosen, url, files, allowHttp, settings: saved, explicit: Boolean(source || envSelected.length), selectedBy: source ? 'cli' : envSelected.length ? 'environment' : saved ? 'saved' : 'default' };
 }
 function readCache(selection) {
   try {
@@ -148,13 +143,9 @@ function readCache(selection) {
     if (!cache || cache.schemaVersion !== 1 || cache.sourceUrl !== selection.url) return null;
     keys(cache, ['schemaVersion', 'sourceUrl', 'profile', 'etag', 'checkedAt'], 'cache');
     const profile = validateProfile(cache.profile, selection);
-    requireNamedCoverage(selection, profile);
     if (typeof cache.checkedAt !== 'number' || !Number.isFinite(cache.checkedAt) || cache.checkedAt < 0 || cache.checkedAt > 8640000000000000 || (cache.etag !== undefined && (typeof cache.etag !== 'string' || /[\r\n]/.test(cache.etag)))) return null;
     return { ...cache, profile };
   } catch { return null; }
-}
-function requireNamedCoverage(selection, profile) {
-  if (selection.source.type === 'profile' && selection.source.name === 'cn' && Object.keys(DIRECT_GITHUB).some(key => !profile.providers.github?.[key])) throw new Error('The cn profile must cover all GitHub routes');
 }
 function fresh(cache, now, ttlMs) { return cache && cache.checkedAt <= now && now - cache.checkedAt < ttlMs; }
 function atomicJson(file, data) {
@@ -249,7 +240,7 @@ async function fetchProfile(url, cache, selection, timeoutMs) {
       chunks.push(chunk);
     }
     let profile;
-    try { profile = validateProfile(JSON.parse(Buffer.concat(chunks).toString('utf8')), selection); requireNamedCoverage(selection, profile); }
+    try { profile = validateProfile(JSON.parse(Buffer.concat(chunks).toString('utf8')), selection); }
     catch { throw new Error('Invalid upstream profile response'); }
     const etag = response.headers.get('etag');
     return { profile, ...(etag ? { etag } : {}) };

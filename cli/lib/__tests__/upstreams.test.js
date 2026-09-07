@@ -51,7 +51,7 @@ test('selection precedence is CLI > env > saved > default without lower-layer mi
   assert.equal(resolveSelection({ ...f.opts, env: { ZYLOS_UPSTREAM_CONFIG_URL: 'https://env.test/profile' } }).url, 'https://env.test/profile');
   assert.equal(resolveSelection({ ...f.opts, env: { ZYLOS_UPSTREAM_CONFIG_URL: 'invalid', ZYLOS_UPSTREAM_PROFILE: 'cn' }, source: { type: 'direct' } }).source.type, 'direct');
   assert.throws(() => resolveSelection({ ...f.opts, env: { ZYLOS_UPSTREAM_CONFIG_URL: 'https://env.test/', ZYLOS_UPSTREAM_PROFILE: 'direct' } }), /mutually exclusive/);
-  assert.throws(() => resolveSelection({ ...f.opts, source: { type: 'profile', name: 'cn' } }), /not configured/);
+  assert.throws(() => resolveSelection({ ...f.opts, source: { type: 'profile', name: 'cn' } }), /Only the direct preset/);
   assert.equal(resolveSelection({ ...f.opts, env: { ZYLOS_UPSTREAM_API_BASE: 'https://ignored.test/' } }).url, 'https://saved.test/profile');
 });
 test('schema and local trust reject unsupported capabilities and unsafe URL forms', t => {
@@ -357,4 +357,17 @@ test('connection failure gives proxy alternatives without exposing transport det
     return true;
   });
   assert.equal(fs.existsSync(f.cache), false);
+});
+
+test('official template supports a deployment-owned cn.json without a named preset', async t => {
+  const f = fixture(t), file = path.join(f.dir, 'cn.json');
+  const template = JSON.parse(fs.readFileSync(new URL('../../../templates/upstreams.example.json', import.meta.url), 'utf8'));
+  assert.deepEqual(validateProfile(template).providers.github, DIRECT_GITHUB);
+  template.providers.github.apiBase = 'https://private.example.test/api/';
+  f.write(file, template);
+  const prepared = await prepareUpstreams({ ...f.opts, source: { type: 'local', path: file } });
+  assert.equal(prepared.snapshot.github.apiBase, template.providers.github.apiBase);
+  assert.equal(prepared.snapshot.github.rawBase, DIRECT_GITHUB.rawBase);
+  persistUpstreamSelection(prepared);
+  assert.equal((await prepareUpstreams(f.opts)).snapshot.github.apiBase, template.providers.github.apiBase);
 });

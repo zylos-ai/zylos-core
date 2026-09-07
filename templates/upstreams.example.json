@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "revision": "official-1",
+  "providers": {
+    "github": {
+      "apiBase": "https://api.github.com/",
+      "rawBase": "https://raw.githubusercontent.com/",
+      "downloadBase": "https://github.com/"
+    }
+  }
+}
