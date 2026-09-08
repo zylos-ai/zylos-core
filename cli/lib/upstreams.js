@@ -376,7 +376,8 @@ export function withUpstreamSnapshot(prepared, fn) {
 }
 export function persistUpstreamSelection(prepared) {
   const selection = prepared.selection;
-  if (!selection.explicit) return;
+  // Environment overrides are process-scoped, even during init.
+  if (selection.selectedBy !== 'cli') return;
   const saved = { schemaVersion: 1, source: selection.source, overrides: selection.settings?.overrides ?? {}, trust: selection.settings?.trust ?? DEFAULT_TRUST };
   try { atomicJson(selection.files.settings, saved); }
   catch { throw new Error('Initialization finished but upstream source could not be saved; retry before using add or upgrade'); }

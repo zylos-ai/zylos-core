@@ -414,8 +414,10 @@ GitHub token，每次跳转仍检查 HTTPS 与目标 URL。配置下载禁用 `.
 
 来源优先级为 CLI > 进程环境 > 保存的选择 > direct 默认。对应环境变量是
 `ZYLOS_UPSTREAM_PROFILE`、`ZYLOS_UPSTREAM_CONFIG_URL`、`ZYLOS_UPSTREAM_CONFIG`，
-同一层只能选择一种来源，不提供逐端点的 env 覆盖。init 成功后将选择保存到
-`$ZYLOS_DIR/.zylos/upstreams.json`，后续命令不必重复传参。全新无配置 init 不创建
+同一层只能选择一种来源，不提供逐端点的 env 覆盖。init 成功后仅将显式 CLI 来源
+保存到 `$ZYLOS_DIR/.zylos/upstreams.json`，后续命令不必重复传参。
+env 来源始终只覆盖当前进程，包括 init；不会覆盖本机已保存的设置。长期使用需由
+部署环境持续提供该变量；撤掉后恢复已保存来源或官方默认值。远程响应缓存不代表保存来源选择。全新无配置 init 不创建
 该文件或缓存，继续使用内置官方入口。
 
 远程快照独立保存在 `.zylos/upstreams-cache.json`，默认有效 24 小时。需要上游的

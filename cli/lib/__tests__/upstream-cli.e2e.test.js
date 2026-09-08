@@ -148,7 +148,7 @@ test('successful CLI init persists explicit selection while unconfigured init st
     fs.writeFileSync(path.join(f.bin, 'claude'), '#!/bin/sh\nprintf \'{"loggedIn":true}\\n\'\n', { mode: 0o755 });
     const args = ['init', '--yes', '--quiet', '--runtime', 'claude', '--timezone', 'UTC', '--no-caddy'];
     if (configured) args.push('--upstream-config', f.profilePath);
-    f.success(f.run(args));
+    f.success(f.run(args, configured ? { ZYLOS_UPSTREAM_PROFILE: 'direct' } : {}));
     const settings = path.join(f.configDir, 'upstreams.json');
     assert.equal(fs.existsSync(settings), configured);
     assert.equal(fs.existsSync(path.join(f.configDir, 'upstreams-cache.json')), false);
@@ -156,5 +156,29 @@ test('successful CLI init persists explicit selection while unconfigured init st
       assert.deepEqual(JSON.parse(fs.readFileSync(settings, 'utf8')).source, { type: 'local', path: f.profilePath });
       assert.equal(JSON.parse(f.success(f.run(['upstream', 'status', '--resolved'])).stdout).selectedBy, 'saved');
     }
+  }
+});
+
+test('init environment source applies only to that process and preserves saved settings', t => {
+  for (const saved of [false, true]) {
+    const f = fixture(t);
+    for (const name of ['tmux', 'npm']) {
+      fs.writeFileSync(path.join(f.bin, name), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+    }
+    fs.writeFileSync(path.join(f.bin, 'claude'), '#!/bin/sh\nprintf \'{"loggedIn":true}\\n\'\n', { mode: 0o755 });
+    const settings = path.join(f.configDir, 'upstreams.json');
+    const previous = JSON.stringify({ schemaVersion: 1, source: { type: 'direct' }, trust: { forwardGitHubToken: true, allowedHosts: ['saved.example.test'] } });
+    if (saved) fs.writeFileSync(settings, previous);
+    const env = { ZYLOS_UPSTREAM_CONFIG: f.profilePath };
+    const active = JSON.parse(f.success(f.run(['upstream', 'status', '--resolved'], env)).stdout);
+    assert.equal(active.selectedBy, 'environment');
+    assert.equal(active.endpoints.apiBase.url, 'https://mirror.example.test/api/');
+    f.success(f.run(['init', '--yes', '--quiet', '--runtime', 'claude', '--timezone', 'UTC', '--no-caddy'], env));
+    assert.equal(fs.existsSync(settings), saved);
+    if (saved) assert.equal(fs.readFileSync(settings, 'utf8'), previous);
+    const next = JSON.parse(f.success(f.run(['upstream', 'status', '--resolved'])).stdout);
+    assert.equal(next.selectedBy, saved ? 'saved' : 'default');
+    assert.equal(next.endpoints.apiBase.url, 'https://api.github.com/');
+    if (saved) assert.deepEqual(next.trust.allowedHosts, ['saved.example.test']);
   }
 });

@@ -417,3 +417,14 @@ test('curl profile redirect hops share one total timeout', async t => {
   assert.equal(fs.existsSync(f.cache), false);
   assert.equal((await prepareUpstreams({ ...f.opts, timeoutMs: 2000 })).snapshot.revision, 'r1');
 });
+
+test('remote environment override may cache a response but never persists its source', async t => {
+  const f = await remote(t);
+  const prepared = await prepareUpstreams({ ...f.opts, source: undefined, env: { ZYLOS_UPSTREAM_CONFIG_URL: f.url } });
+  assert.equal(prepared.selection.selectedBy, 'environment');
+  assert.equal(prepared.snapshot.revision, 'r1');
+  persistUpstreamSelection(prepared);
+  assert.equal(fs.existsSync(f.cache), true);
+  assert.equal(fs.existsSync(f.settings), false);
+  assert.deepEqual((await prepareUpstreams({ ...f.opts, source: undefined, env: {} })).snapshot.github, DIRECT_GITHUB);
+});

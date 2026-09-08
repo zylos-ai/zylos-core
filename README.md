@@ -430,8 +430,12 @@ Source selection is CLI > process environment > saved settings > direct.
 The corresponding environment variables are `ZYLOS_UPSTREAM_PROFILE`,
 `ZYLOS_UPSTREAM_CONFIG_URL` and `ZYLOS_UPSTREAM_CONFIG`; select only one source
 within each layer. There are no per-endpoint environment overrides.
-Successful init saves the selection in `$ZYLOS_DIR/.zylos/upstreams.json`.
-Later commands reuse it without flags. An unconfigured init creates neither
+Successful init saves an explicit CLI source selection in
+`$ZYLOS_DIR/.zylos/upstreams.json`; later commands reuse it without flags.
+Environment source overrides apply only to the current process, including init,
+and never overwrite saved settings. For continued use, the deployment must
+keep providing the environment variable. Removing it restores the saved source
+or the official default. Remote response caching does not persist source selection. An unconfigured init creates neither
 that file nor an upstream cache and continues using the official endpoints.
 
 Remote snapshots are cached separately in `.zylos/upstreams-cache.json` for
