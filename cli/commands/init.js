@@ -1802,10 +1802,8 @@ export function printInitHelp() {
 Usage: zylos init [options]
 
 Options:
-  --upstream-profile direct    Select the official upstream defaults
-  --upstream-config-url <url>  Fetch a remote HTTPS profile before downloads
-  --upstream-config <file>     Use a local profile snapshot
-  Source flags are mutually exclusive; CLI > environment > saved > direct.
+  --upstream-config <source>  Local file, HTTPS profile URL, or direct
+  Source priority: CLI > environment > saved > direct.
   -y, --yes                  Force non-interactive mode (even with a TTY)
   -q, --quiet                Minimal output
   --runtime <name>           Agent runtime: claude (default) or codex
@@ -1826,8 +1824,7 @@ Non-interactive mode:
   provide values; unfilled fields use sensible defaults.
 
 Environment variables:
-  ZYLOS_UPSTREAM_PROFILE, ZYLOS_UPSTREAM_CONFIG_URL, ZYLOS_UPSTREAM_CONFIG
-  (mutually exclusive source selectors; no per-endpoint environment overrides)
+  ZYLOS_UPSTREAM_CONFIG (local file, HTTPS profile URL, or direct)
   CLAUDE_CODE_OAUTH_TOKEN, ANTHROPIC_API_KEY, ZYLOS_RUNTIME,
   OPENAI_API_KEY (or CODEX_API_KEY), ZYLOS_DOMAIN, ZYLOS_PROTOCOL, ZYLOS_WEB_PASSWORD
 

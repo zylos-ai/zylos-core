@@ -16,8 +16,6 @@ const MAX_PROFILE_BYTES = 1024 * 1024;
 const operation = new AsyncLocalStorage();
 const DEFAULT_TRUST = Object.freeze({ forwardGitHubToken: false, allowedHosts: Object.freeze([]) });
 const DIRECT_SNAPSHOT = Object.freeze({ github: DIRECT_GITHUB, trust: DEFAULT_TRUST });
-const flags = { '--upstream-profile': 'profile', '--upstream-config-url': 'remote', '--upstream-config': 'local' };
-const envNames = { ZYLOS_UPSTREAM_PROFILE: 'profile', ZYLOS_UPSTREAM_CONFIG_URL: 'remote', ZYLOS_UPSTREAM_CONFIG: 'local' };
 
 function object(value, label) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`Invalid ${label}: expected object`);
@@ -84,29 +82,31 @@ function validateSource(value, allowHttp) {
     if (typeof value.path !== 'string' || !path.isAbsolute(value.path)) throw new Error('Local upstream config requires an absolute path');
     return { type: 'local', path: path.resolve(value.path) };
   }
-  if (value.type === 'profile') {
-    keys(value, ['type', 'name'], 'named source');
-    if (value.name === 'direct') return { type: 'direct' };
-    throw new Error('Only the direct preset is supported; use --upstream-config-url or --upstream-config for custom endpoints');
-  }
   throw new Error('Invalid upstream source type');
 }
-function sourceFromValue(type, value) {
+function sourceFromValue(value) {
   if (typeof value !== 'string' || !value) throw new Error('Upstream source selection requires a value');
-  return type === 'profile' ? { type, name: value } : type === 'remote' ? { type, url: value } : { type, path: path.resolve(value) };
+  if (value === 'direct') return { type: 'direct' };
+  // URL-shaped inputs must pass URL validation; never reinterpret them as files.
+  if (/^[a-z][a-z0-9+.-]*:/i.test(value) || value.startsWith('//')) return { type: 'remote', url: value };
+  return { type: 'local', path: path.resolve(value) };
 }
 export function parseUpstreamArgs(args) {
-  const remaining = [], selected = [];
+  const remaining = [];
+  let source;
   for (let i = 0; i < args.length; i++) {
     const equal = args[i].indexOf('=');
     const flag = equal < 0 ? args[i] : args[i].slice(0, equal);
-    if (!Object.hasOwn(flags, flag)) { remaining.push(args[i]); continue; }
+    if (flag !== '--upstream-config') {
+      if (flag.startsWith('--upstream-')) throw new Error(`Unknown upstream option: ${flag}; use --upstream-config <file|https-url|direct>`);
+      remaining.push(args[i]); continue;
+    }
     const value = equal < 0 ? args[++i] : args[i].slice(equal + 1);
     if (!value || value.startsWith('--')) throw new Error(`${flag} requires a value`);
-    selected.push(sourceFromValue(flags[flag], value));
+    if (source) throw new Error('--upstream-config may only be specified once');
+    source = sourceFromValue(value);
   }
-  if (selected.length > 1) throw new Error('Upstream source flags are mutually exclusive');
-  return { args: remaining, source: selected[0] };
+  return { args: remaining, source };
 }
 function readJson(file, optional = false) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); }
@@ -117,26 +117,26 @@ function configPaths(zylosDir) {
   return { dir, settings: path.join(dir, 'upstreams.json'), cache: path.join(dir, 'upstreams-cache.json'), lock: path.join(dir, 'upstreams-cache.lock') };
 }
 function settingsValue(value, allowHttp) {
-  keys(value, ['schemaVersion', 'source', 'overrides', 'trust'], 'local settings');
+  if (value && Object.hasOwn(value, 'overrides')) throw new Error('Upstream settings overrides are not supported; select a local profile with --upstream-config instead');
+  keys(value, ['schemaVersion', 'source', 'trust'], 'local settings');
   if (value.schemaVersion !== 1) throw new Error('Unsupported upstream settings schemaVersion');
-  const overrides = value.overrides ?? {};
-  keys(overrides, ['providers'], 'local overrides');
   return {
     schemaVersion: 1,
     source: validateSource(value.source, allowHttp),
-    overrides: overrides.providers ? { providers: validateProviders(overrides.providers, allowHttp) } : {},
     trust: validateTrust(value.trust),
   };
 }
 export function resolveSelection({ source, env = process.env, zylosDir = env.ZYLOS_DIR || path.join(os.homedir(), 'zylos'), allowHttp = false } = {}) {
+  for (const name of ['ZYLOS_UPSTREAM_PROFILE', 'ZYLOS_UPSTREAM_CONFIG_URL']) {
+    if (env[name] !== undefined) throw new Error(`${name} has been removed; use ZYLOS_UPSTREAM_CONFIG instead`);
+  }
   const files = configPaths(zylosDir);
   const savedValue = readJson(files.settings, true);
   const saved = savedValue === undefined ? undefined : settingsValue(savedValue, allowHttp);
-  const envSelected = source ? [] : Object.entries(envNames).filter(([key]) => env[key] !== undefined).map(([key, type]) => sourceFromValue(type, env[key]));
-  if (envSelected.length > 1) throw new Error('Upstream source environment variables are mutually exclusive');
-  const chosen = validateSource(source || envSelected[0] || saved?.source || { type: 'direct' }, allowHttp);
+  const envSource = !source && env.ZYLOS_UPSTREAM_CONFIG !== undefined ? sourceFromValue(env.ZYLOS_UPSTREAM_CONFIG) : undefined;
+  const chosen = validateSource(source || envSource || saved?.source || { type: 'direct' }, allowHttp);
   const url = chosen.type === 'remote' ? chosen.url : undefined;
-  return { source: chosen, url, files, allowHttp, settings: saved, explicit: Boolean(source || envSelected.length), selectedBy: source ? 'cli' : envSelected.length ? 'environment' : saved ? 'saved' : 'default' };
+  return { source: chosen, url, files, allowHttp, settings: saved, explicit: Boolean(source || envSource), selectedBy: source ? 'cli' : envSource ? 'environment' : saved ? 'saved' : 'default' };
 }
 function readCache(selection) {
   try {
@@ -316,7 +316,7 @@ function freeze(value) {
 }
 function snapshot(selection, profile, cache) {
   return freeze({
-    github: { ...DIRECT_GITHUB, ...profile?.providers.github, ...selection.settings?.overrides.providers?.github },
+    github: { ...DIRECT_GITHUB, ...profile?.providers.github },
     trust: structuredClone(selection.settings?.trust || DEFAULT_TRUST),
     revision: profile?.revision ?? 'direct',
     allowHttp: selection.allowHttp,
@@ -378,7 +378,7 @@ export function persistUpstreamSelection(prepared) {
   const selection = prepared.selection;
   // Environment overrides are process-scoped, even during init.
   if (selection.selectedBy !== 'cli') return;
-  const saved = { schemaVersion: 1, source: selection.source, overrides: selection.settings?.overrides ?? {}, trust: selection.settings?.trust ?? DEFAULT_TRUST };
+  const saved = { schemaVersion: 1, source: selection.source, trust: selection.settings?.trust ?? DEFAULT_TRUST };
   try { atomicJson(selection.files.settings, saved); }
   catch { throw new Error('Initialization finished but upstream source could not be saved; retry before using add or upgrade'); }
 }

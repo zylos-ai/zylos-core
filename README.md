@@ -379,7 +379,7 @@ LLM endpoints and the official Claude installer keep their existing behavior.
 # Use the URLs supplied by your deployment administrator.
 export npm_config_registry=https://registry.example.com
 export npm_config_better_sqlite3_binary_host_mirror=https://binary.example.com/better-sqlite3
-zylos init --upstream-config-url https://config.example.com/profile.json
+zylos init --upstream-config https://config.example.com/profile.json
 
 # Or select a fixed local profile:
 zylos init --upstream-config /absolute/path/profile.json
@@ -405,12 +405,14 @@ your private deployment copy before selecting it with `--upstream-config`:
 
 Bases may include a fixed path prefix, but must not include credentials, query
 parameters or fragments. Profiles cannot supply secrets, npm settings or trust
-permissions. Remote profiles require HTTPS; loopback HTTP is for local tests.
+permissions. Remote profiles require HTTPS.
 There is no built-in regional preset or public proxy service. Private proxy
 addresses belong in deployment-owned files or configuration services, outside
 the open-source repository. A local file may be named `cn.json`; its filename
-has no special meaning to core. `--upstream-profile direct` explicitly selects
-the official defaults; custom endpoints use a local file or explicit URL.
+has no special meaning to core. `--upstream-config direct` explicitly selects
+the official endpoints. The same option accepts a local file or HTTPS URL.
+The exact value `direct` is reserved; use `./direct` for a file with that name.
+Other URL schemes are rejected; ordinary paths select local files.
 
 Remote profile retrieval requires **curl 7.54.0 or newer** for
 `--suppress-connect-headers`; check with `curl --version`. On older curl, use a
@@ -427,9 +429,14 @@ cannot inject authentication or bypass those checks. A local profile file
 selected with `--upstream-config` avoids the configuration-service request.
 
 Source selection is CLI > process environment > saved settings > direct.
-The corresponding environment variables are `ZYLOS_UPSTREAM_PROFILE`,
-`ZYLOS_UPSTREAM_CONFIG_URL` and `ZYLOS_UPSTREAM_CONFIG`; select only one source
-within each layer. There are no per-endpoint environment overrides.
+The sole source environment variable is `ZYLOS_UPSTREAM_CONFIG`, accepting
+the same file, HTTPS URL or `direct` values as `--upstream-config`.
+An empty selected value is an error; unset the variable to use the saved/default source.
+Endpoints combine official defaults with the selected profile; local settings
+do not contain endpoint overrides. `direct` always uses the official endpoints,
+while the local token trust policy remains independent. Unknown or removed
+source inputs and invalid local settings fail explicitly; a valid CLI source
+does not bypass validation of removed environment inputs.
 Successful init saves an explicit CLI source selection in
 `$ZYLOS_DIR/.zylos/upstreams.json`; later commands reuse it without flags.
 Environment source overrides apply only to the current process, including init,

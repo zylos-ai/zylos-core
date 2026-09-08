@@ -98,7 +98,7 @@ async function main() {
 
 async function upstreamCommand(args, source) {
   if (args.some(arg => ['--help', '-h'].includes(arg))) {
-    console.log('Usage: zylos upstream status [--resolved] | refresh\nSource: --upstream-profile direct | --upstream-config-url <https-url> | --upstream-config <file>');
+    console.log('Usage: zylos upstream status [--resolved] | refresh\nSource: --upstream-config <file|https-url|direct>');
     return;
   }
   const sub = args[0] || 'status';
@@ -120,10 +120,7 @@ Setup:
                       Run "zylos init --help" for all options
   upstream status     Show profile/cache state without network (--resolved)
   upstream refresh    Refresh the selected remote profile
-                      Source flags (mutually exclusive):
-                      --upstream-profile direct
-                      --upstream-config-url <https-url>
-                      --upstream-config <file>
+                      --upstream-config <file|https-url|direct>
   config              Show all configuration
   config get <key>    Get a config value
   config set <key> <value>  Set a config value

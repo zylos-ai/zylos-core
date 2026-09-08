@@ -40,19 +40,45 @@ test('fresh direct selection is diskless and matches legacy URLs', async t => {
   assert.equal(githubUrl('raw', 'org/repo', { ref: 'main', path: 'dir/file.md' }), 'https://raw.githubusercontent.com/org/repo/main/dir/file.md');
   assert.equal(githubUrl('archive', 'org/repo', { ref: 'v1.0.0', refType: 'tag' }), 'https://github.com/org/repo/archive/refs/tags/v1.0.0.tar.gz');
 });
-test('source flags parse both forms and reject conflicts/missing values', () => {
-  assert.deepEqual(parseUpstreamArgs(['a', '--upstream-profile=direct', '--yes']), { args: ['a', '--yes'], source: { type: 'profile', name: 'direct' } });
-  for (const args of [['--upstream-profile'], ['--upstream-profile', '--yes'], ['--upstream-profile', 'direct', '--upstream-config', '/tmp/p'], ['--upstream-profile=']]) assert.throws(() => parseUpstreamArgs(args));
+test('one source flag accepts direct, HTTPS URL and local paths in both forms', () => {
+  for (const [value, source] of [
+    ['direct', { type: 'direct' }],
+    ['https://config.test/p.json?q=1', { type: 'remote', url: 'https://config.test/p.json?q=1' }],
+    ['./direct', { type: 'local', path: path.resolve('./direct') }],
+    ['./config/profile.json', { type: 'local', path: path.resolve('./config/profile.json') }],
+  ]) {
+    for (const input of [['--upstream-config', value], [`--upstream-config=${value}`]]) {
+      assert.deepEqual(parseUpstreamArgs(['a', ...input, '--yes']), { args: ['a', '--yes'], source });
+    }
+  }
+  for (const args of [['--upstream-config'], ['--upstream-config', '--yes'], ['--upstream-config='], ['--upstream-config', 'direct', '--upstream-config=direct'], ['--upstream-profile', 'direct'], ['--upstream-config-url=https://config.test/p']]) assert.throws(() => parseUpstreamArgs(args));
 });
 test('selection precedence is CLI > env > saved > default without lower-layer mixing', t => {
   const f = fixture(t);
   f.write(f.settings, { schemaVersion: 1, source: { type: 'remote', url: 'https://saved.test/profile' } });
   assert.equal(resolveSelection(f.opts).url, 'https://saved.test/profile');
-  assert.equal(resolveSelection({ ...f.opts, env: { ZYLOS_UPSTREAM_CONFIG_URL: 'https://env.test/profile' } }).url, 'https://env.test/profile');
-  assert.equal(resolveSelection({ ...f.opts, env: { ZYLOS_UPSTREAM_CONFIG_URL: 'invalid', ZYLOS_UPSTREAM_PROFILE: 'cn' }, source: { type: 'direct' } }).source.type, 'direct');
-  assert.throws(() => resolveSelection({ ...f.opts, env: { ZYLOS_UPSTREAM_CONFIG_URL: 'https://env.test/', ZYLOS_UPSTREAM_PROFILE: 'direct' } }), /mutually exclusive/);
-  assert.throws(() => resolveSelection({ ...f.opts, source: { type: 'profile', name: 'cn' } }), /Only the direct preset/);
+  assert.equal(resolveSelection({ ...f.opts, env: { ZYLOS_UPSTREAM_CONFIG: 'https://env.test/profile' } }).url, 'https://env.test/profile');
+  assert.equal(resolveSelection({ ...f.opts, env: { ZYLOS_UPSTREAM_CONFIG: 'http://invalid.test' }, source: { type: 'direct' } }).source.type, 'direct');
+  assert.equal(resolveSelection({ ...f.opts, env: { ZYLOS_UPSTREAM_CONFIG: 'direct' } }).source.type, 'direct');
+  assert.deepEqual(resolveSelection({ ...f.opts, env: { ZYLOS_UPSTREAM_CONFIG: './direct' } }).source, { type: 'local', path: path.resolve('./direct') });
   assert.equal(resolveSelection({ ...f.opts, env: { ZYLOS_UPSTREAM_API_BASE: 'https://ignored.test/' } }).url, 'https://saved.test/profile');
+});
+test('removed environment selectors fail explicitly even beside a current selector', t => {
+  const f = fixture(t);
+  for (const name of ['ZYLOS_UPSTREAM_PROFILE', 'ZYLOS_UPSTREAM_CONFIG_URL']) {
+    for (const value of ['', 'direct', 'https://config.test/profile']) {
+      assert.throws(() => resolveSelection({ ...f.opts, env: { [name]: value } }), /has been removed; use ZYLOS_UPSTREAM_CONFIG/);
+      assert.throws(() => resolveSelection({ ...f.opts, source: { type: 'direct' }, env: { [name]: value, ZYLOS_UPSTREAM_CONFIG: 'direct' } }), /has been removed/);
+    }
+  }
+});
+test('invalid URL-shaped sources fail for CLI and environment instead of becoming files', t => {
+  const f = fixture(t);
+  for (const value of ['http://config.test/p', 'ftp://config.test/p', 'file:///tmp/p', 'https:', 'https://', '//config.test/p', 'https://user:pass@config.test/p', 'https://config.test/p#fragment']) {
+    assert.throws(() => resolveSelection({ ...f.opts, source: parseUpstreamArgs(['--upstream-config', value]).source }));
+    assert.throws(() => resolveSelection({ ...f.opts, env: { ZYLOS_UPSTREAM_CONFIG: value } }));
+  }
+  assert.throws(() => resolveSelection({ ...f.opts, env: { ZYLOS_UPSTREAM_CONFIG: '' } }), /requires a value/);
 });
 test('schema and local trust reject unsupported capabilities and unsafe URL forms', t => {
   const f = fixture(t);
@@ -64,6 +90,11 @@ test('schema and local trust reject unsupported capabilities and unsafe URL form
     f.write(f.settings, { schemaVersion: 1, source: { type: 'direct' }, trust });
     assert.throws(() => resolveSelection(f.opts));
   }
+});
+test('local endpoint overrides are rejected rather than shadowing the selected profile', async t => {
+  const f = fixture(t);
+  f.write(f.settings, { schemaVersion: 1, source: { type: 'direct' }, overrides: { providers: { github: { rawBase: 'https://shadow.test/' } } } });
+  await assert.rejects(prepareUpstreams(f.opts), /overrides are not supported.*local profile/);
 });
 test('corrupt persistent selection never silently becomes direct', async t => {
   const f = fixture(t);
@@ -158,16 +189,19 @@ test('future check timestamp is rechecked; successful new profile replaces old g
   assert.equal(next.snapshot.github.rawBase, DIRECT_GITHUB.rawBase);
   assert.equal(next.snapshot.github.downloadBase, DIRECT_GITHUB.downloadBase);
 });
-test('local overrides and trust survive remote replacement and source persistence', async t => {
+test('trust survives remote replacement and direct persistence without endpoint layering', async t => {
   const f = await remote(t);
-  f.write(f.settings, { schemaVersion: 1, source: f.opts.source, overrides: { providers: { github: { rawBase: 'https://local.test/' } } }, trust: { forwardGitHubToken: true, allowedHosts: ['local.test'] } });
+  f.write(f.settings, { schemaVersion: 1, source: f.opts.source, trust: { forwardGitHubToken: true, allowedHosts: ['local.test'] } });
   const first = await prepareUpstreams(f.opts);
   f.setHandler((_req, res) => res.end(JSON.stringify(profile('r2', {}))));
   const next = await prepareUpstreams({ ...f.opts, force: true });
-  assert.equal(next.snapshot.github.rawBase, 'https://local.test/');
+  assert.deepEqual(next.snapshot.github, DIRECT_GITHUB);
   assert.deepEqual(next.snapshot.trust, first.snapshot.trust);
-  const before = fs.readFileSync(f.settings, 'utf8');
-  assert.equal(fs.readFileSync(f.settings, 'utf8'), before);
+  const direct = await prepareUpstreams({ ...f.opts, source: { type: 'direct' } });
+  assert.deepEqual(direct.snapshot.github, DIRECT_GITHUB);
+  assert.deepEqual(direct.snapshot.trust, first.snapshot.trust);
+  persistUpstreamSelection(direct);
+  assert.deepEqual(JSON.parse(fs.readFileSync(f.settings)), { schemaVersion: 1, source: { type: 'direct' }, trust: first.snapshot.trust });
   assert.throws(() => { next.snapshot.trust.allowedHosts.push('attacker.test'); }, TypeError);
 });
 test('operation snapshot stays fixed through refresh, failure and rollback; concurrent scopes remain isolated', async t => {
@@ -420,7 +454,7 @@ test('curl profile redirect hops share one total timeout', async t => {
 
 test('remote environment override may cache a response but never persists its source', async t => {
   const f = await remote(t);
-  const prepared = await prepareUpstreams({ ...f.opts, source: undefined, env: { ZYLOS_UPSTREAM_CONFIG_URL: f.url } });
+  const prepared = await prepareUpstreams({ ...f.opts, source: undefined, env: { ZYLOS_UPSTREAM_CONFIG: f.url } });
   assert.equal(prepared.selection.selectedBy, 'environment');
   assert.equal(prepared.snapshot.revision, 'r1');
   persistUpstreamSelection(prepared);

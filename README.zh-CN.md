@@ -371,7 +371,7 @@ zylos search [keyword]        # 搜索组件注册表
 # 替换为部署管理员提供的实际地址。
 export npm_config_registry=https://registry.example.com
 export npm_config_better_sqlite3_binary_host_mirror=https://binary.example.com/better-sqlite3
-zylos init --upstream-config-url https://config.example.com/profile.json
+zylos init --upstream-config https://config.example.com/profile.json
 
 # 或选用固定的本地配置快照：
 zylos init --upstream-config /absolute/path/profile.json
@@ -397,10 +397,12 @@ zylos upstream refresh            # 主动刷新远程配置
 ```
 
 入口允许固定路径前缀，不接受内嵌凭据、query 或 fragment。远程配置只提供端点，
-不能下发秘密、npm 配置或信任授权；必须使用 HTTPS，本地回环 HTTP 仅用于测试。
+不能下发秘密、npm 配置或信任授权；必须使用 HTTPS。
 不提供内置地区预设或公共代理服务。私有代理地址应保存在开源仓库之外的部署配置文件
 或配置服务中。本地文件可以叫 `cn.json`，core 不赋予文件名特殊含义。
-`--upstream-profile direct` 用于显式选择官方默认源；自定义端点通过本地文件或 URL 提供。
+`--upstream-config` 统一接受本地文件、HTTPS URL 或 `direct`。
+`direct` 精确值为保留字，显式使用官方端点；同名本地文件请写 `./direct`。
+其他 URL 协议明确报错，普通路径按本地文件处理。
 
 远程配置抓取要求 **curl 7.54.0 或更高版本**，以支持 `--suppress-connect-headers`；
 可用 `curl --version` 检查。旧版 curl 环境可通过 `--upstream-config` 使用本地文件，
@@ -412,9 +414,13 @@ zylos upstream refresh            # 主动刷新远程配置
 GitHub token，每次跳转仍检查 HTTPS 与目标 URL。配置下载禁用 `.curlrc` 自动加载，
 避免其中的选项注入鉴权或绕过检查。通过 `--upstream-config` 指定本地文件则不请求配置服务。
 
-来源优先级为 CLI > 进程环境 > 保存的选择 > direct 默认。对应环境变量是
-`ZYLOS_UPSTREAM_PROFILE`、`ZYLOS_UPSTREAM_CONFIG_URL`、`ZYLOS_UPSTREAM_CONFIG`，
-同一层只能选择一种来源，不提供逐端点的 env 覆盖。init 成功后仅将显式 CLI 来源
+来源优先级为 CLI > 进程环境 > 保存的选择 > direct 默认。唯一来源环境变量是
+`ZYLOS_UPSTREAM_CONFIG`，与 `--upstream-config` 接受相同的文件、HTTPS URL 或 `direct` 值。
+选中的值为空字符串时明确报错；要恢复保存值或默认值，请撤掉变量。
+端点仅由官方默认值与所选 profile 合成，本机设置不再提供端点覆盖层；
+`direct` 始终使用官方端点，本机 token trust 独立保留。未知或废弃的来源入口、
+无效本机设置明确报错；有效 CLI 来源不会跳过对废弃环境变量的检查。
+init 成功后仅将显式 CLI 来源
 保存到 `$ZYLOS_DIR/.zylos/upstreams.json`，后续命令不必重复传参。
 env 来源始终只覆盖当前进程，包括 init；不会覆盖本机已保存的设置。长期使用需由
 部署环境持续提供该变量；撤掉后恢复已保存来源或官方默认值。远程响应缓存不代表保存来源选择。全新无配置 init 不创建

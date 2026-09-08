@@ -33,6 +33,9 @@ function fixture(t) {
     const args = process.argv.slice(2), url = new URL(args.at(-1));
     const input = args.includes('@-') ? fs.readFileSync(0, 'utf8') : '';
     fs.appendFileSync(process.env.ROUTING_LOG, JSON.stringify({url: url.href, input}) + '\\n');
+    if (url.href === 'https://config.example.test/profile.json') {
+      process.stdout.write('HTTP/1.1 200 OK\\r\\nETag: fixture-profile\\r\\n\\r\\n' + fs.readFileSync(process.env.ROUTING_PROFILE)); process.exit(0);
+    }
     const official = ['api.github.com', 'github.com', 'raw.githubusercontent.com'].includes(url.hostname);
     if (official && process.env.ALLOW_OFFICIAL !== '1') process.exit(22);
     if (!official && !['mirror.example.test', 'next.example.test'].includes(url.hostname)) process.exit(22);
@@ -63,7 +66,7 @@ function fixture(t) {
     HOME: home, ZYLOS_DIR: zylosDir, PATH: `${bin}:${process.env.PATH}`,
     GITHUB_TOKEN: 'fixture-token-never-forward-to-custom-hosts', GH_TOKEN: '',
     ZYLOS_GH_RETRY_DELAY_MS: '', ROUTING_LOG: log, ROUTING_TARBALL: tarball,
-    ROUTING_SKILL: path.join(packageRoot, 'SKILL.md'),
+    ROUTING_SKILL: path.join(packageRoot, 'SKILL.md'), ROUTING_PROFILE: profilePath,
   };
   const run = (args, extraEnv = {}) => spawnSync(process.execPath, [cli, ...args], {
     cwd: root, env: { ...env, ...extraEnv }, encoding: 'utf8', timeout: 30000,
@@ -148,7 +151,7 @@ test('successful CLI init persists explicit selection while unconfigured init st
     fs.writeFileSync(path.join(f.bin, 'claude'), '#!/bin/sh\nprintf \'{"loggedIn":true}\\n\'\n', { mode: 0o755 });
     const args = ['init', '--yes', '--quiet', '--runtime', 'claude', '--timezone', 'UTC', '--no-caddy'];
     if (configured) args.push('--upstream-config', f.profilePath);
-    f.success(f.run(args, configured ? { ZYLOS_UPSTREAM_PROFILE: 'direct' } : {}));
+    f.success(f.run(args, configured ? { ZYLOS_UPSTREAM_CONFIG: 'direct' } : {}));
     const settings = path.join(f.configDir, 'upstreams.json');
     assert.equal(fs.existsSync(settings), configured);
     assert.equal(fs.existsSync(path.join(f.configDir, 'upstreams-cache.json')), false);
@@ -181,4 +184,58 @@ test('init environment source applies only to that process and preserves saved s
     assert.equal(next.endpoints.apiBase.url, 'https://api.github.com/');
     if (saved) assert.deepEqual(next.trust.allowedHosts, ['saved.example.test']);
   }
+});
+
+
+test('CLI unified source selects URL, file and direct and preserves local trust', t => {
+  for (const inputMode of ['cli', 'environment']) {
+    const f = fixture(t);
+    const trust = { forwardGitHubToken: true, allowedHosts: ['mirror.example.test'] };
+    const saved = JSON.stringify({ schemaVersion: 1, source: { type: 'local', path: f.profilePath }, trust });
+    const settings = path.join(f.configDir, 'upstreams.json');
+    fs.writeFileSync(settings, saved);
+    fs.copyFileSync(f.profilePath, path.join(f.root, 'direct'));
+    const run = (args, value) => inputMode === 'cli'
+      ? f.run([...args, '--upstream-config', value], { ZYLOS_UPSTREAM_CONFIG: 'http://ignored.test/invalid' })
+      : f.run(args, { ZYLOS_UPSTREAM_CONFIG: value });
+    const local = JSON.parse(f.success(run(['upstream', 'status', '--resolved'], './direct')).stdout);
+    assert.equal(local.endpoints.rawBase.url, 'https://mirror.example.test/raw/');
+    const direct = JSON.parse(f.success(run(['upstream', 'status', '--resolved'], 'direct')).stdout);
+    assert.deepEqual(Object.values(direct.endpoints).map(endpoint => endpoint.url), ['https://api.github.com/', 'https://raw.githubusercontent.com/', 'https://github.com/']);
+    assert.deepEqual(direct.trust, trust);
+    const url = 'https://config.example.test/profile.json';
+    const remote = JSON.parse(f.success(run(['upstream', 'refresh', '--resolved'], url)).stdout);
+    assert.equal(remote.source, 'remote: config.example.test');
+    assert.equal(remote.endpoints.rawBase.url, local.endpoints.rawBase.url);
+    assert.equal(remote.cacheStatus, 'fresh');
+    assert.deepEqual(remote.trust, trust);
+    assert.equal(fs.readFileSync(settings, 'utf8'), saved);
+    assert.equal(f.readLog().length, 1);
+    assert.equal(f.readLog()[0].input, '', 'profile request must never carry GitHub credentials');
+  }
+});
+
+test('CLI rejects invalid and removed sources before doing any network work', t => {
+  const f = fixture(t);
+  for (const value of ['http://config.test/p', 'ftp://config.test/p', 'file:///tmp/p', 'https://', '']) {
+    for (const result of [f.run(['upstream', 'status', '--upstream-config', value]), f.run(['upstream', 'status'], { ZYLOS_UPSTREAM_CONFIG: value })]) {
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, /require|Invalid upstream URL/);
+    }
+  }
+  for (const flag of ['--upstream-profile', '--upstream-config-url']) {
+    const result = f.run(['upstream', 'status', flag, 'direct']);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /Unknown upstream option/);
+  }
+  for (const key of ['ZYLOS_UPSTREAM_PROFILE', 'ZYLOS_UPSTREAM_CONFIG_URL']) {
+    const result = f.run(['upstream', 'status'], { [key]: '' });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /has been removed/);
+  }
+  fs.writeFileSync(path.join(f.configDir, 'upstreams.json'), JSON.stringify({ schemaVersion: 1, source: { type: 'direct' }, overrides: {} }));
+  const stale = f.run(['upstream', 'status', '--upstream-config', 'direct']);
+  assert.notEqual(stale.status, 0);
+  assert.match(stale.stderr, /overrides are not supported.*local profile/);
+  assert.deepEqual(f.readLog(), []);
 });
