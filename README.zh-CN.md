@@ -404,6 +404,15 @@ zylos upstream refresh            # 主动刷新远程配置
 `direct` 精确值为保留字，显式使用官方端点；同名本地文件请写 `./direct`。
 其他 URL 协议明确报错，普通路径按本地文件处理。
 
+**跳转职责：**profile 只替换首次 GitHub 请求入口。Zylos 对自定义路由继续按
+`Location` 跟随跳转并检查 HTTPS/token 授权，不会再把每一跳按 profile 改写。
+镜像服务须负责完整的 archive/release 下载链，包括 codeload 和文件存储域名：
+可以在服务端跟随跳转并流式返回文件，也可以返回镜像自己的 URL，由明确路由恢复
+真实目标。须保留目标路径、完整 query 和签名 URL 语义。承诺全程镜像的服务遇到
+不支持的目标应明确失败，不能把客户端重定向回不可达的官方域名。客户端 trust
+不约束镜像内部的凭据转发，服务端须另行控制。实际验收应阻断客户端直连官方域名、
+清空下载缓存，再完整下载源码包和 release 文件；首跳成功不等于镜像可用。
+
 远程配置抓取要求 **curl 7.54.0 或更高版本**，以支持 `--suppress-connect-headers`；
 可用 `curl --version` 检查。旧版 curl 环境可通过 `--upstream-config` 使用本地文件，
 或由部署管理员准备支持的 curl 后再选择远程配置。

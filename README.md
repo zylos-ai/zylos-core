@@ -414,6 +414,20 @@ the official endpoints. The same option accepts a local file or HTTPS URL.
 The exact value `direct` is reserved; use `./direct` for a file with that name.
 Other URL schemes are rejected; ordinary paths select local files.
 
+**Redirect ownership:** the profile replaces only the initial GitHub request
+entry. Zylos follows subsequent `Location` URLs with HTTPS and token checks for
+custom routes; it does not rewrite each redirect through the profile again.
+The mirror service must handle the complete archive/release download chain,
+including codeload and asset hosts: either follow redirects server-side and
+stream the file, or return mirror URLs with explicit routes to the original
+targets. Preserve target paths, query strings and signed URL semantics. A mirror
+that promises full coverage must fail explicitly on unsupported targets instead
+of sending clients back to an unreachable official host. Client token trust does
+not control the mirror's internal credential forwarding; the service must enforce
+that separately. Validate the deployed mirror with cold-cache archive and release
+downloads while client access to official hosts is blocked. A successful first
+request alone does not establish mirror compatibility.
+
 Remote profile retrieval requires **curl 7.54.0 or newer** for
 `--suppress-connect-headers`; check with `curl --version`. On older curl, use a
 local profile via `--upstream-config` or have the deployment administrator
