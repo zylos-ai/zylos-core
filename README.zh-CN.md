@@ -420,11 +420,24 @@ GitHub token，每次跳转仍检查 HTTPS 与目标 URL。配置下载禁用 `.
 端点仅由官方默认值与所选 profile 合成，本机设置不再提供端点覆盖层；
 `direct` 始终使用官方端点，本机 token trust 独立保留。未知或废弃的来源入口、
 无效本机设置明确报错；有效 CLI 来源不会跳过对废弃环境变量的检查。
-init 成功后仅将显式 CLI 来源
-保存到 `$ZYLOS_DIR/.zylos/upstreams.json`，后续命令不必重复传参。
-env 来源始终只覆盖当前进程，包括 init；不会覆盖本机已保存的设置。长期使用需由
-部署环境持续提供该变量；撤掉后恢复已保存来源或官方默认值。远程响应缓存不代表保存来源选择。全新无配置 init 不创建
-该文件或缓存，继续使用内置官方入口。
+CLI flag 和 env 来源都只覆盖当前进程，成功的 init 也不例外，都不改已保存的默认来源。
+长期默认来源需要显式配置：
+
+```bash
+zylos upstream set ./cn.json     # 校验本地 profile，保存绝对路径
+zylos upstream set https://config.example.com/upstream.json  # 保存 URL，不发网络请求
+zylos upstream set direct        # 保存显式官方默认值
+zylos upstream clear             # 只撤销保存的来源
+zylos upstream                   # 只读状态，含来源及 selectedBy
+```
+
+仅 `upstream set/clear` 写入 `$ZYLOS_DIR/.zylos/upstreams.json` 中的默认来源。
+set 先校验本地 profile 内容或 HTTPS URL 语法再保存；远程 URL 在下一次需要上游的命令中获取。
+这两个配置命令忽略 `ZYLOS_UPSTREAM_CONFIG`，拒绝 `--upstream-config` flag，只按显式参数配置。
+clear 保留 trust、缓存和用户的 profile 文件；设置文件不存在时不创建。
+`set direct` 和 `clear` 在没有覆盖时都使用官方端点，但前者状态为 `saved`，后者为 `default`；
+两者都可被 CLI/env 覆盖。长期用 env 需由部署环境持续提供变量；撤掉后恢复已保存来源或官方默认值。
+远程响应缓存不能自行决定来源。全新无配置 init 不创建上游设置文件或缓存。
 
 远程快照独立保存在 `.zylos/upstreams-cache.json`，默认有效 24 小时。需要上游的
 操作开始时检查过期并刷新，整个操作及回滚固定使用同一快照；普通 agent 启动
@@ -440,9 +453,9 @@ env 来源始终只覆盖当前进程，包括 init；不会覆盖本机已保�
 自定义 GitHub 路由同样禁用 `.curlrc` 自动加载，防止其自动跳转或鉴权选项绕过检查；
 原有官方直连传输保持既有行为。
 
-两项 npm 变量须保存在启动 supervisor 的持久环境中，确保机器重启后仍存在。
-新装默认 runtime 清单会继承这两个变量名；已有安装保留自定义的
-`.zylos/runtime-env.manifest`，缺少时应加入 `inherit npm_config_registry` 和
+两项 npm 变量，以及使用时的 `ZYLOS_UPSTREAM_CONFIG`，须保存在启动 supervisor 的持久环境中，
+确保机器重启后仍存在。新装默认 runtime 清单继承这三个变量名；已有安装保留自定义的
+`.zylos/runtime-env.manifest`，缺少时应加入 `inherit ZYLOS_UPSTREAM_CONFIG`、`inherit npm_config_registry` 和
 `inherit npm_config_better_sqlite3_binary_host_mirror`。如果变量值保存在 `.env`，
 则加入对应的 `env NAME` 指令。仅在当前 shell export 不会更新已运行 supervisor
 的环境。init 与升级应使用同一普通用户和可写的 npm 全局目录；`sudo npm` 需另验

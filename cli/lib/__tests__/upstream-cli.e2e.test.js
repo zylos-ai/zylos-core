@@ -139,25 +139,22 @@ test('CLI direct baseline keeps official URLs and creates no upstream files; blo
   assert.ok(f.readLog().every(r => ['github.com', 'api.github.com', 'raw.githubusercontent.com'].includes(new URL(r.url).hostname)));
 });
 
-test('successful CLI init persists explicit selection while unconfigured init stays diskless', t => {
-  for (const configured of [false, true]) {
-    const f = fixture(t);
-    // Run actual init orchestration in a disposable HOME. External install,
-    // runtime and service executables are inert; this is persistence wiring,
-    // not deployment/runtime acceptance.
-    for (const name of ['tmux', 'npm']) {
-      fs.writeFileSync(path.join(f.bin, name), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
-    }
-    fs.writeFileSync(path.join(f.bin, 'claude'), '#!/bin/sh\nprintf \'{"loggedIn":true}\\n\'\n', { mode: 0o755 });
-    const args = ['init', '--yes', '--quiet', '--runtime', 'claude', '--timezone', 'UTC', '--no-caddy'];
-    if (configured) args.push('--upstream-config', f.profilePath);
-    f.success(f.run(args, configured ? { ZYLOS_UPSTREAM_CONFIG: 'direct' } : {}));
-    const settings = path.join(f.configDir, 'upstreams.json');
-    assert.equal(fs.existsSync(settings), configured);
-    assert.equal(fs.existsSync(path.join(f.configDir, 'upstreams-cache.json')), false);
-    if (configured) {
-      assert.deepEqual(JSON.parse(fs.readFileSync(settings, 'utf8')).source, { type: 'local', path: f.profilePath });
-      assert.equal(JSON.parse(f.success(f.run(['upstream', 'status', '--resolved'])).stdout).selectedBy, 'saved');
+test('successful CLI init source flags are temporary with absent or existing settings', t => {
+  for (const saved of [false, true]) {
+    for (const value of ['local', 'direct', 'https://config.example.test/profile.json']) {
+      const f = fixture(t);
+      for (const name of ['tmux', 'npm']) fs.writeFileSync(path.join(f.bin, name), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+      fs.writeFileSync(path.join(f.bin, 'claude'), '#!/bin/sh\nprintf \'{"loggedIn":true}\\n\'\n', { mode: 0o755 });
+      const settings = path.join(f.configDir, 'upstreams.json');
+      const previous = JSON.stringify({ schemaVersion: 1, source: { type: 'local', path: f.profilePath }, trust: { forwardGitHubToken: true, allowedHosts: ['saved.example.test'] } });
+      if (saved) fs.writeFileSync(settings, previous);
+      const args = ['init', '--yes', '--quiet', '--runtime', 'claude', '--timezone', 'UTC', '--no-caddy', '--upstream-config', value === 'local' ? f.profilePath : value];
+      f.success(f.run(args, { ZYLOS_UPSTREAM_CONFIG: '' }));
+      assert.equal(fs.existsSync(settings), saved);
+      if (saved) assert.equal(fs.readFileSync(settings, 'utf8'), previous);
+      const next = JSON.parse(f.success(f.run(['upstream', 'status', '--resolved'])).stdout);
+      assert.equal(next.selectedBy, saved ? 'saved' : 'default');
+      assert.equal(next.endpoints.apiBase.url, saved ? 'https://mirror.example.test/api/' : 'https://api.github.com/');
     }
   }
 });
@@ -238,4 +235,42 @@ test('CLI rejects invalid and removed sources before doing any network work', t 
   assert.notEqual(stale.status, 0);
   assert.match(stale.stderr, /overrides are not supported.*local profile/);
   assert.deepEqual(f.readLog(), []);
+});
+
+
+test('CLI explicit set/clear and temporary overrides round-trip without deleting owned artifacts', t => {
+  const f = fixture(t), settings = path.join(f.configDir, 'upstreams.json');
+  f.success(f.run(['upstream', 'clear'], { ZYLOS_UPSTREAM_CONFIG: '' }));
+  assert.equal(fs.existsSync(settings), false);
+  const trust = { forwardGitHubToken: true, allowedHosts: ['mirror.example.test'] };
+  fs.writeFileSync(settings, JSON.stringify({ schemaVersion: 1, trust }));
+  const cache = path.join(f.configDir, 'upstreams-cache.json');
+  fs.writeFileSync(cache, 'retained cache bytes');
+  const profileBefore = fs.readFileSync(f.profilePath, 'utf8');
+  const status = (env = {}, flags = []) => JSON.parse(f.success(f.run(['upstream', 'status', '--resolved', ...flags], env)).stdout);
+  for (let cycle = 0; cycle < 2; cycle++) {
+    f.success(f.run(['upstream', 'set', f.profilePath], { ZYLOS_UPSTREAM_CONFIG: '' }));
+    assert.equal(status().selectedBy, 'saved');
+    assert.equal(status().endpoints.rawBase.url, 'https://mirror.example.test/raw/');
+    assert.equal(status({ ZYLOS_UPSTREAM_CONFIG: 'direct' }).selectedBy, 'environment');
+    assert.equal(status({ ZYLOS_UPSTREAM_CONFIG: '' }, ['--upstream-config', 'direct']).selectedBy, 'cli');
+    const before = fs.readFileSync(settings, 'utf8');
+    for (const args of [['set'], ['set', ''], ['set', 'http://bad.test/p'], ['set', 'absent.json'], ['set', 'direct', 'extra'], ['clear', 'extra'], ['clear', '--resolved'], ['set', 'direct', '--upstream-config', 'direct'], ['clear', '--upstream-config', 'direct']]) {
+      assert.notEqual(f.run(['upstream', ...args]).status, 0, args.join(' '));
+      assert.equal(fs.readFileSync(settings, 'utf8'), before);
+    }
+    f.success(f.run(['upstream', 'set', 'direct']));
+    assert.equal(status().selectedBy, 'saved');
+    f.success(f.run(['upstream', 'clear']));
+    assert.equal(status().selectedBy, 'default');
+    assert.equal(JSON.parse(f.success(f.run(['upstream'])).stdout).selectedBy, 'default');
+    assert.equal(status({ ZYLOS_UPSTREAM_CONFIG: f.profilePath }).selectedBy, 'environment');
+    assert.deepEqual(JSON.parse(fs.readFileSync(settings)), { schemaVersion: 1, trust });
+    assert.equal(fs.readFileSync(cache, 'utf8'), 'retained cache bytes');
+    assert.equal(fs.readFileSync(f.profilePath, 'utf8'), profileBefore);
+  }
+  f.success(f.run(['upstream', 'set', 'https://config.example.test/profile.json']));
+  assert.deepEqual(f.readLog(), [], 'set and clear never fetch');
+  f.success(f.run(['upstream', 'refresh']));
+  assert.equal(f.readLog().length, 1, 'next consuming operation fetches saved URL');
 });

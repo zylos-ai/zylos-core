@@ -7,7 +7,7 @@ import http from 'node:http';
 import { execFileSync } from 'node:child_process';
 import {
   DIRECT_GITHUB, DEFAULT_TTL_MS, parseUpstreamArgs, resolveSelection, validateProfile,
-  prepareUpstreams, persistUpstreamSelection, withUpstreamSnapshot, getUpstreamSnapshot,
+  prepareUpstreams, setUpstreamSource, clearUpstreamSource, withUpstreamSnapshot, getUpstreamSnapshot,
   githubUrl, upstreamStatus,
 } from '../upstreams.js';
 
@@ -34,7 +34,6 @@ async function remote(t) {
 test('fresh direct selection is diskless and matches legacy URLs', async t => {
   const f = fixture(t), prepared = await prepareUpstreams(f.opts);
   assert.deepEqual(prepared.snapshot.github, DIRECT_GITHUB);
-  persistUpstreamSelection(prepared);
   assert.equal(fs.existsSync(path.join(f.dir, '.zylos')), false);
   assert.equal(githubUrl('tags', 'zylos-ai/zylos-core'), 'https://api.github.com/repos/zylos-ai/zylos-core/tags?per_page=100');
   assert.equal(githubUrl('raw', 'org/repo', { ref: 'main', path: 'dir/file.md' }), 'https://raw.githubusercontent.com/org/repo/main/dir/file.md');
@@ -103,13 +102,13 @@ test('corrupt persistent selection never silently becomes direct', async t => {
   fs.writeFileSync(f.settings, '{broken');
   await assert.rejects(prepareUpstreams(f.opts), /Cannot read valid/);
 });
-test('local source persists only on success, has no remote cache, and reloads in a fresh process', async t => {
+test('explicit local source configuration has no remote cache and reloads in a fresh process', async t => {
   const f = fixture(t), file = path.join(f.dir, 'local.json');
   f.write(file, profile());
   const prepared = await prepareUpstreams({ ...f.opts, source: { type: 'local', path: file } });
   assert.equal(fs.existsSync(f.settings), false);
-  persistUpstreamSelection(prepared);
   assert.equal(fs.existsSync(f.cache), false);
+  setUpstreamSource(file, f.opts);
   const loaded = await prepareUpstreams(f.opts);
   assert.equal(loaded.snapshot.github.apiBase, 'https://mirror.test/api/');
   const result = execFileSync(process.execPath, ['--input-type=module', '-e', `import {prepareUpstreams} from ${JSON.stringify(new URL('../upstreams.js', import.meta.url).href)}; console.log((await prepareUpstreams({zylosDir:process.argv[1],env:{}})).snapshot.github.rawBase)`, f.dir], { encoding: 'utf8' }).trim();
@@ -149,7 +148,7 @@ test('status is read-only even when expired/missing and redacts source query and
 test('missing cache retains saved remote source and refetches; switching URL never reuses other source', async t => {
   const f = await remote(t);
   const first = await prepareUpstreams(f.opts);
-  persistUpstreamSelection(first);
+  setUpstreamSource(f.url, f.opts);
   fs.unlinkSync(f.cache);
   const loaded = await prepareUpstreams({ ...f.opts, source: undefined });
   assert.equal(loaded.snapshot.source.type, 'remote');
@@ -200,7 +199,7 @@ test('trust survives remote replacement and direct persistence without endpoint 
   const direct = await prepareUpstreams({ ...f.opts, source: { type: 'direct' } });
   assert.deepEqual(direct.snapshot.github, DIRECT_GITHUB);
   assert.deepEqual(direct.snapshot.trust, first.snapshot.trust);
-  persistUpstreamSelection(direct);
+  setUpstreamSource('direct', f.opts);
   assert.deepEqual(JSON.parse(fs.readFileSync(f.settings)), { schemaVersion: 1, source: { type: 'direct' }, trust: first.snapshot.trust });
   assert.throws(() => { next.snapshot.trust.allowedHosts.push('attacker.test'); }, TypeError);
 });
@@ -235,7 +234,7 @@ test('interrupted cache rename preserves exact old bytes; failed settings save i
     const fallback = await prepareUpstreams({ ...f.opts, now: DEFAULT_TTL_MS + 1, warn: () => {} });
     assert.equal(fallback.snapshot.revision, 'r1');
     assert.equal(fs.readFileSync(f.cache, 'utf8'), before);
-    assert.throws(() => persistUpstreamSelection(fallback), /could not be saved/);
+    assert.throws(() => setUpstreamSource(f.url, f.opts), /could not be saved/);
   } finally { fs.renameSync = rename; }
   assert.deepEqual(fs.readdirSync(path.dirname(f.cache)), ['upstreams-cache.json']);
 });
@@ -407,7 +406,7 @@ test('official template supports a deployment-owned cn.json without a named pres
   const prepared = await prepareUpstreams({ ...f.opts, source: { type: 'local', path: file } });
   assert.equal(prepared.snapshot.github.apiBase, template.providers.github.apiBase);
   assert.equal(prepared.snapshot.github.rawBase, DIRECT_GITHUB.rawBase);
-  persistUpstreamSelection(prepared);
+  setUpstreamSource(file, f.opts);
   assert.equal((await prepareUpstreams(f.opts)).snapshot.github.apiBase, template.providers.github.apiBase);
 });
 
@@ -457,8 +456,86 @@ test('remote environment override may cache a response but never persists its so
   const prepared = await prepareUpstreams({ ...f.opts, source: undefined, env: { ZYLOS_UPSTREAM_CONFIG: f.url } });
   assert.equal(prepared.selection.selectedBy, 'environment');
   assert.equal(prepared.snapshot.revision, 'r1');
-  persistUpstreamSelection(prepared);
   assert.equal(fs.existsSync(f.cache), true);
   assert.equal(fs.existsSync(f.settings), false);
   assert.deepEqual((await prepareUpstreams({ ...f.opts, source: undefined, env: {} })).snapshot.github, DIRECT_GITHUB);
+});
+
+
+test('clear removes only source, preserves trust/cache/profile and leaves absent settings diskless', async t => {
+  const f = fixture(t), file = path.join(f.dir, 'local.json');
+  clearUpstreamSource(f.opts);
+  assert.equal(fs.existsSync(path.dirname(f.settings)), false);
+  f.write(file, profile());
+  const trust = { forwardGitHubToken: true, allowedHosts: ['mirror.test'] };
+  f.write(f.settings, { schemaVersion: 1, source: { type: 'local', path: file }, trust });
+  f.write(f.cache, { deliberately: 'preserve these exact bytes' });
+  const cacheBefore = fs.readFileSync(f.cache, 'utf8'), profileBefore = fs.readFileSync(file, 'utf8');
+  for (let cycle = 0; cycle < 3; cycle++) {
+    setUpstreamSource(file, f.opts);
+    assert.equal(resolveSelection(f.opts).selectedBy, 'saved');
+    clearUpstreamSource({ ...f.opts, env: { ZYLOS_UPSTREAM_CONFIG: '' } });
+    assert.deepEqual(JSON.parse(fs.readFileSync(f.settings)), { schemaVersion: 1, trust });
+    const cleared = await prepareUpstreams(f.opts);
+    assert.equal(cleared.selection.selectedBy, 'default');
+    assert.deepEqual(cleared.snapshot.github, DIRECT_GITHUB);
+    assert.deepEqual(cleared.snapshot.trust, trust);
+    assert.equal(fs.readFileSync(f.cache, 'utf8'), cacheBefore);
+    assert.equal(fs.readFileSync(file, 'utf8'), profileBefore);
+    assert.equal(resolveSelection({ ...f.opts, env: { ZYLOS_UPSTREAM_CONFIG: file } }).selectedBy, 'environment');
+    setUpstreamSource('direct', f.opts);
+    assert.equal(resolveSelection(f.opts).selectedBy, 'saved');
+    assert.deepEqual((await prepareUpstreams(f.opts)).snapshot.github, DIRECT_GITHUB);
+  }
+});
+
+test('set validates before writing, ignores ambient current selector and failed clear preserves settings', t => {
+  const f = fixture(t), file = path.join(f.dir, 'bad.json');
+  setUpstreamSource('https://config.test/profile?q=one', { ...f.opts, env: { ZYLOS_UPSTREAM_CONFIG: '' } });
+  const before = fs.readFileSync(f.settings, 'utf8');
+  f.write(file, { bad: 'profile' });
+  for (const value of ['', 'http://config.test/p', 'https://u:p@config.test/p', 'https://config.test/p#frag', file, path.join(f.dir, 'missing.json')]) {
+    assert.throws(() => setUpstreamSource(value, f.opts));
+    assert.equal(fs.readFileSync(f.settings, 'utf8'), before);
+  }
+  const rename = fs.renameSync;
+  fs.renameSync = () => { throw new Error('injected failure'); };
+  try { assert.throws(() => clearUpstreamSource(f.opts), /could not be saved/); }
+  finally { fs.renameSync = rename; }
+  assert.equal(fs.readFileSync(f.settings, 'utf8'), before);
+  assert.deepEqual(fs.readdirSync(path.dirname(f.settings)), ['upstreams.json']);
+});
+
+
+test('explicit set and clear cannot change an active operation or its rollback snapshot', async t => {
+  const f = fixture(t), file = path.join(f.dir, 'local.json');
+  f.write(file, profile());
+  setUpstreamSource(file, f.opts);
+  const initial = await prepareUpstreams(f.opts);
+  await withUpstreamSnapshot(initial, async () => {
+    const before = githubUrl('raw', 'a/b', { ref: 'main', path: 'file' });
+    setUpstreamSource('direct', f.opts);
+    assert.deepEqual((await prepareUpstreams(f.opts)).snapshot.github, DIRECT_GITHUB);
+    clearUpstreamSource(f.opts);
+    try { throw new Error('operation failed'); }
+    catch { assert.equal(githubUrl('raw', 'a/b', { ref: 'main', path: 'file' }), before); }
+  });
+  assert.equal(resolveSelection(f.opts).selectedBy, 'default');
+});
+
+test('saved remote cleared while waiting reselects direct without using or rewriting old cache', async t => {
+  const f = await remote(t), lock = path.join(f.dir, '.zylos/upstreams-cache.lock');
+  f.write(f.settings, { schemaVersion: 1, source: f.opts.source });
+  f.write(f.cache, { schemaVersion: 1, sourceUrl: f.url, profile: profile(), checkedAt: 1 });
+  const before = fs.readFileSync(f.cache, 'utf8');
+  f.write(lock, { pid: process.pid, nonce: 'other-operation' });
+  const waiting = prepareUpstreams({ ...f.opts, source: undefined });
+  await new Promise(resolve => setTimeout(resolve, 20));
+  clearUpstreamSource(f.opts);
+  fs.unlinkSync(lock);
+  const result = await waiting;
+  assert.equal(result.selection.selectedBy, 'default');
+  assert.deepEqual(result.snapshot.github, DIRECT_GITHUB);
+  assert.equal(fs.readFileSync(f.cache, 'utf8'), before);
+  assert.equal(f.requests.length, 0);
 });

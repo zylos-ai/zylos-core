@@ -437,13 +437,31 @@ do not contain endpoint overrides. `direct` always uses the official endpoints,
 while the local token trust policy remains independent. Unknown or removed
 source inputs and invalid local settings fail explicitly; a valid CLI source
 does not bypass validation of removed environment inputs.
-Successful init saves an explicit CLI source selection in
-`$ZYLOS_DIR/.zylos/upstreams.json`; later commands reuse it without flags.
-Environment source overrides apply only to the current process, including init,
-and never overwrite saved settings. For continued use, the deployment must
-keep providing the environment variable. Removing it restores the saved source
-or the official default. Remote response caching does not persist source selection. An unconfigured init creates neither
-that file nor an upstream cache and continues using the official endpoints.
+Both CLI flags and environment source overrides apply only to the current process,
+including successful init; neither changes the saved default source. To configure
+later commands explicitly:
+
+```bash
+zylos upstream set ./cn.json     # validate a local profile and save its absolute path
+zylos upstream set https://config.example.com/upstream.json  # save URL without fetching
+zylos upstream set direct        # save an explicit official default
+zylos upstream clear             # remove only the saved source
+zylos upstream                   # read-only status, including source and selectedBy
+```
+
+Only `upstream set/clear` writes the saved source in
+`$ZYLOS_DIR/.zylos/upstreams.json`. Set validates local profile content or HTTPS
+URL syntax before writing; the next consuming command fetches a saved URL.
+These configuration commands ignore `ZYLOS_UPSTREAM_CONFIG` and reject the
+`--upstream-config` flag: the positional value is what gets saved.
+Clear preserves trust, remote cache and user profile files, and creates no
+settings file if absent. `set direct` and `clear` choose the same endpoints
+without overrides, but status reports `saved` for the former and `default` for
+the latter. Both are still overridden by CLI/environment selections.
+For continued ENV use, the deployment must keep providing the variable.
+Removing it restores the saved source or official default; response caching
+never selects a source by itself. An unconfigured init creates neither an
+upstream settings file nor an upstream cache.
 
 Remote snapshots are cached separately in `.zylos/upstreams-cache.json` for
 24 hours. Upstream-consuming operations refresh expired snapshots, then keep
@@ -464,10 +482,11 @@ not grant token permission automatically. Custom GitHub routes also disable
 `.curlrc` loading so its auto-follow or authentication options cannot bypass
 these checks. The legacy official direct transport retains its existing behavior.
 
-Persist the two npm variables in the environment that starts your supervisor,
-including after a reboot. The default runtime manifest inherits both names.
+Persist the two npm variables, and `ZYLOS_UPSTREAM_CONFIG` if used, in the
+environment that starts your supervisor, including after a reboot. The default
+runtime manifest inherits all three names.
 Existing installations retain their customized `.zylos/runtime-env.manifest`:
-add `inherit npm_config_registry` and
+add `inherit ZYLOS_UPSTREAM_CONFIG`, `inherit npm_config_registry` and
 `inherit npm_config_better_sqlite3_binary_host_mirror` there if absent. If you
 store the values in `.env` instead, add the corresponding `env NAME` directives.
 A shell export alone does not update an already-running supervisor. Use the

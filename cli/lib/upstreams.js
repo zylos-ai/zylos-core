@@ -122,7 +122,7 @@ function settingsValue(value, allowHttp) {
   if (value.schemaVersion !== 1) throw new Error('Unsupported upstream settings schemaVersion');
   return {
     schemaVersion: 1,
-    source: validateSource(value.source, allowHttp),
+    ...(value.source !== undefined ? { source: validateSource(value.source, allowHttp) } : {}),
     trust: validateTrust(value.trust),
   };
 }
@@ -136,7 +136,7 @@ export function resolveSelection({ source, env = process.env, zylosDir = env.ZYL
   const envSource = !source && env.ZYLOS_UPSTREAM_CONFIG !== undefined ? sourceFromValue(env.ZYLOS_UPSTREAM_CONFIG) : undefined;
   const chosen = validateSource(source || envSource || saved?.source || { type: 'direct' }, allowHttp);
   const url = chosen.type === 'remote' ? chosen.url : undefined;
-  return { source: chosen, url, files, allowHttp, settings: saved, explicit: Boolean(source || envSource), selectedBy: source ? 'cli' : envSource ? 'environment' : saved ? 'saved' : 'default' };
+  return { source: chosen, url, files, allowHttp, settings: saved, explicit: Boolean(source || envSource), selectedBy: source ? 'cli' : envSource ? 'environment' : saved?.source ? 'saved' : 'default' };
 }
 function readCache(selection) {
   try {
@@ -374,13 +374,23 @@ export function withUpstreamSnapshot(prepared, fn) {
   if (!prepared.snapshot) throw new Error('No valid upstream snapshot');
   return operation.run(prepared, fn);
 }
-export function persistUpstreamSelection(prepared) {
-  const selection = prepared.selection;
-  // Environment overrides are process-scoped, even during init.
-  if (selection.selectedBy !== 'cli') return;
-  const saved = { schemaVersion: 1, source: selection.source, trust: selection.settings?.trust ?? DEFAULT_TRUST };
-  try { atomicJson(selection.files.settings, saved); }
-  catch { throw new Error('Initialization finished but upstream source could not be saved; retry before using add or upgrade'); }
+/** Explicit configuration is the only source writer; operational flag/env inputs never save. */
+export function setUpstreamSource(value, options = {}) {
+  const selection = resolveSelection({ ...options, source: sourceFromValue(value) });
+  // Local profiles must exist and be valid now; remote URLs are fetched by the
+  // next consuming operation, so configuring a source needs no network access.
+  if (selection.source.type === 'local') validateProfile(readJson(selection.source.path), selection);
+  saveSourceSettings(selection, { schemaVersion: 1, source: selection.source, trust: selection.settings?.trust ?? DEFAULT_TRUST });
+}
+export function clearUpstreamSource(options = {}) {
+  // Explicit clear is independent of ambient source overrides (including empty values).
+  const selection = resolveSelection({ ...options, source: { type: 'direct' } });
+  if (!selection.settings?.source) return;
+  saveSourceSettings(selection, { schemaVersion: 1, trust: selection.settings.trust });
+}
+function saveSourceSettings(selection, settings) {
+  try { atomicJson(selection.files.settings, settings); }
+  catch { throw new Error('Upstream source settings could not be saved; previous settings preserved'); }
 }
 export function githubUrl(action, repo, params = {}, selected = getUpstreamSnapshot()) {
   safePath(repo, 'GitHub repository');

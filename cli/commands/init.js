@@ -1802,8 +1802,9 @@ export function printInitHelp() {
 Usage: zylos init [options]
 
 Options:
-  --upstream-config <source>  Local file, HTTPS profile URL, or direct
+  --upstream-config <source>  Local file, HTTPS profile URL, or direct (this run only)
   Source priority: CLI > environment > saved > direct.
+  Save a default explicitly: zylos upstream set <source>; remove it: zylos upstream clear.
   -y, --yes                  Force non-interactive mode (even with a TTY)
   -q, --quiet                Minimal output
   --runtime <name>           Agent runtime: claude (default) or codex

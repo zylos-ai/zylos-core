@@ -13,7 +13,7 @@ const templatePath = path.resolve(import.meta.dirname, '../../../templates/runti
 const launcher = path.resolve(import.meta.dirname, '../runtime/tmux-launcher.js');
 const registry = 'https://registry.example.test/';
 const binaryHost = 'https://binary.example.test/better-sqlite3';
-const names = ['npm_config_registry', 'npm_config_better_sqlite3_binary_host_mirror'];
+const names = ['ZYLOS_UPSTREAM_CONFIG', 'npm_config_registry', 'npm_config_better_sqlite3_binary_host_mirror'];
 
 test('persistent deployment environment reaches real npm lifecycle through clean launch specs', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-npm-env-'));
@@ -55,9 +55,9 @@ test('persistent deployment environment reaches real npm lifecycle through clean
   }
 });
 
-test('removing either inherit directive is detected, absent npm values stay absent', () => {
+test('removing any upstream inherit directive is detected, absent values stay absent', () => {
   const template = fs.readFileSync(templatePath, 'utf8');
-  const processEnv = { npm_config_registry: registry, npm_config_better_sqlite3_binary_host_mirror: binaryHost };
+  const processEnv = { ZYLOS_UPSTREAM_CONFIG: 'https://config.example.test/profile', npm_config_registry: registry, npm_config_better_sqlite3_binary_host_mirror: binaryHost };
   const build = content => buildCleanEnv({ processEnv, dotenvVars: {}, manifest: parseRuntimeEnvManifest(content) }).env;
   const check = env => {
     for (const name of names) assert.equal(env[name], processEnv[name], name);
@@ -98,4 +98,36 @@ test('runtime preflight probes the configured npm registry when official npm is 
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+
+test('persistent source environment reaches CLI through real clean launcher across fresh sessions', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-source-env-'));
+  try {
+    const file = path.join(dir, 'profile.json');
+    fs.writeFileSync(file, JSON.stringify({ schemaVersion: 1, revision: 'env-probe', providers: { github: { rawBase: 'https://env.example.test/raw/' } } }));
+    const deployment = path.join(dir, 'deployment-env.json');
+    fs.writeFileSync(deployment, JSON.stringify({ HOME: dir, PATH: path.dirname(process.execPath), ZYLOS_UPSTREAM_CONFIG: file }));
+    deployManifestTemplate(templatePath, dir);
+    const manifest = loadRuntimeEnvManifest(dir);
+    const cli = path.resolve(import.meta.dirname, '../../zylos.js');
+    const launch = (processEnv, selectedManifest = manifest, dotenvVars = {}) => {
+      const { env } = buildCleanEnv({ processEnv, dotenvVars, manifest: selectedManifest });
+      const spec = writeLaunchSpec({ command: process.execPath, args: [cli, 'upstream', 'status', '--resolved'], env, cwd: dir });
+      return JSON.parse(execFileSync(process.execPath, [launcher, spec], { env: { PATH: path.dirname(process.execPath) }, encoding: 'utf8', timeout: 15000 }));
+    };
+    const assertSource = observed => {
+      assert.equal(observed.selectedBy, 'environment');
+      assert.equal(observed.endpoints.rawBase.url, 'https://env.example.test/raw/');
+    };
+    for (const cycle of ['initial', 'supervisor-reload', 'rotation']) {
+      assertSource(launch(JSON.parse(fs.readFileSync(deployment, 'utf8'))));
+      assert.equal(fs.existsSync(path.join(dir, 'zylos/.zylos/upstreams.json')), false, cycle);
+    }
+    const absent = { HOME: dir, PATH: path.dirname(process.execPath) };
+    assert.equal(launch(absent).selectedBy, 'default');
+    const withoutSource = parseRuntimeEnvManifest(fs.readFileSync(templatePath, 'utf8').replace('inherit ZYLOS_UPSTREAM_CONFIG\n', ''));
+    assert.throws(() => assertSource(launch(JSON.parse(fs.readFileSync(deployment, 'utf8')), withoutSource)), assert.AssertionError);
+    assertSource(launch(absent, parseRuntimeEnvManifest('env ZYLOS_UPSTREAM_CONFIG\n'), { ZYLOS_UPSTREAM_CONFIG: file }));
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
