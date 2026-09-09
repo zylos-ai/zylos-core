@@ -5,10 +5,10 @@ All notable changes to zylos-core will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.8.1] - 2026-09-09
 
 ### Added
-- **Upstream token trust from the deployment environment**: `ZYLOS_UPSTREAM_TRUST_HOSTS` supplies the GitHub token trust for the current process as a comma-separated list of exact hosts (`host[:port]`; listing a host is the consent), or the reserved value `none` to disable token forwarding to custom hosts for the process (official GitHub hosts keep their existing authentication). Trust precedence is environment > saved `upstreams.json` `trust` > default (no forwarding); the variable is process-scoped and never persisted, `zylos upstream set/clear` still preserve the saved trust, an empty or invalid value fails explicitly, and `zylos upstream status` reports `trustSelectedBy`. The default runtime manifest inherits the variable so agent sessions see the same trust as the supervisor. Closes the #776 gap where trust could only be edited in the settings file.
+- **Upstream token trust from the deployment environment**: `ZYLOS_UPSTREAM_TRUST_HOSTS` supplies the GitHub token trust for the current process as a comma-separated list of exact hosts (`host[:port]`; listing a host is the consent), or the reserved value `none` to disable token forwarding to custom hosts for the process (official GitHub hosts keep their existing authentication). Trust precedence is environment > saved `upstreams.json` `trust` > default (no forwarding); the variable is process-scoped and never persisted, `zylos upstream set/clear` still preserve the saved trust, an empty or invalid value fails explicitly, and `zylos upstream status` reports `trustSelectedBy`. The default runtime manifest inherits the variable so agent sessions see the same trust as the supervisor. Closes the #776 gap where trust could only be edited in the settings file. (#781, #786)
 
 ## [0.8.0] - 2026-09-09
 
