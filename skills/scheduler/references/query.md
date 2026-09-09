@@ -9,6 +9,8 @@ Shows all active tasks (excluding completed one-time tasks; failed one-time task
 - `--json` — machine-readable output: a JSON array of full task rows (untruncated `id`, `type`, `status`, `last_error`, `reply_channel`, `reply_endpoint`, `next_run_at`, and all other columns). Outputs `[]` when no tasks match.
 - `--reply-channel "<ch>"` — only tasks whose reply channel equals `<ch>` exactly. Works with or without `--json`.
 
+`failed_at` and `last_error` describe the latest run failure that has not yet been recovered by a successful exact-run completion. They are execution-outcome fields, separate from lifecycle `status`, so a recurring task can be `pending` or `running` while they remain populated. For legacy rows migrated into this model, `failed_at` is the best timestamp available from existing task and history data and may not be the exact original failure time.
+
 ## next
 
 `cli.js next`
@@ -19,7 +21,7 @@ Shows the 5 nearest pending tasks with relative time.
 
 `cli.js running`
 
-Shows tasks currently in `running` status. Useful to check before session compaction.
+Shows tasks currently in `running` status, their active history IDs, and exact `done ... --run-id ...` commands. Useful before session compaction or a scheduler upgrade.
 
 ## history
 

@@ -8,6 +8,7 @@ import { getDb, generateId, now } from './database.js';
 import { getNextRun, isValidCron, describeCron, getDefaultTimezone } from './cron-utils.js';
 import { parseTime, parseDuration, formatTime, getRelativeTime } from './time-utils.js';
 import { loadTimezone } from './tz.js';
+import { completeTaskRun } from './task-runs.js';
 
 const db = getDb();
 
@@ -31,7 +32,8 @@ Commands:
   add <prompt> [options]  Add a new task
   update <task-id> [options]  Update an existing task
   remove <task-id>        Remove a task
-  done <task-id>          Mark task as completed
+  done <task-id> --run-id <history-id>
+                          Complete one exact active run
   pause <task-id>         Pause a task
   resume <task-id>        Resume a paused task
   history [task-id]       Show execution history
@@ -65,13 +67,16 @@ Update Options (same as Add, plus):
                           Legacy alias: --no-require-idle
   --clear-reply           Clear reply configuration
 
+Done Options:
+  --run-id <history-id>   Required identity emitted in the scheduled task prompt
+
 Examples:
   ~/zylos/.claude/skills/scheduler/scripts/cli.js add "Say hello" --in "30 minutes"
   ~/zylos/.claude/skills/scheduler/scripts/cli.js add "Health check" --cron "0 8 * * *"
   ~/zylos/.claude/skills/scheduler/scripts/cli.js add "Check updates" --every "1 hour"
   ~/zylos/.claude/skills/scheduler/scripts/cli.js update task-abc --priority 1
   ~/zylos/.claude/skills/scheduler/scripts/cli.js update task-abc --block-queue-until-idle
-  ~/zylos/.claude/skills/scheduler/scripts/cli.js done task-abc123
+  ~/zylos/.claude/skills/scheduler/scripts/cli.js done task-abc123 --run-id 42
 `;
 
 function parseArgs(args) {
@@ -306,9 +311,10 @@ function cmdRemove(taskId) {
   console.log(`Removed task: ${tasks[0].id}`);
 }
 
-function cmdDone(taskId) {
+function cmdDone(taskId, options = {}) {
   if (!taskId) {
     console.error('Error: Task ID is required');
+    process.exitCode = 1;
     return;
   }
 
@@ -319,6 +325,7 @@ function cmdDone(taskId) {
 
   if (tasks.length === 0) {
     console.error(`Error: Task not found: ${taskId}`);
+    process.exitCode = 1;
     return;
   }
 
@@ -326,34 +333,30 @@ function cmdDone(taskId) {
     console.error(`Error: Ambiguous task ID prefix '${taskId}' matches multiple tasks:`);
     tasks.forEach(t => console.error(`  - ${t.id}`));
     console.error('Please provide a more specific prefix.');
+    process.exitCode = 1;
     return;
   }
 
   const task = tasks[0];
 
+  if (!options['run-id']) {
+    console.error('Error: Run ID is required (--run-id <history-id>)');
+    process.exitCode = 1;
+    return;
+  }
+
+  const runId = Number(options['run-id']);
+  if (!Number.isSafeInteger(runId) || runId <= 0) {
+    console.error(`Error: Invalid run ID: ${options['run-id']}`);
+    process.exitCode = 1;
+    return;
+  }
+
   const currentTime = now();
-
-  // Update task status
-  db.prepare(`
-    UPDATE tasks
-    SET status = 'completed', last_run_at = ?, updated_at = ?
-    WHERE id = ?
-  `).run(currentTime, currentTime, task.id);
-
-  // Update history entry
-  const historyEntry = db.prepare(`
-    SELECT id, executed_at FROM task_history
-    WHERE task_id = ? AND status = 'started'
-    ORDER BY executed_at DESC LIMIT 1
-  `).get(task.id);
-
-  if (historyEntry) {
-    const durationMs = (currentTime - historyEntry.executed_at) * 1000;
-    db.prepare(`
-      UPDATE task_history
-      SET status = 'success', completed_at = ?, duration_ms = ?
-      WHERE id = ?
-    `).run(currentTime, durationMs, historyEntry.id);
+  if (!completeTaskRun(db, { taskId: task.id, runId, completedAt: currentTime })) {
+    console.error(`Error: Run ${runId} is not the active run for task ${task.id}`);
+    process.exitCode = 1;
+    return;
   }
 
   console.log(`Completed task: ${task.id}`);
@@ -495,7 +498,13 @@ function cmdNext() {
 
 function cmdRunning() {
   const tasks = db.prepare(`
-    SELECT * FROM tasks
+    SELECT tasks.*,
+      (
+        SELECT id FROM task_history
+        WHERE task_id = tasks.id AND status = 'started'
+        ORDER BY id DESC LIMIT 1
+      ) AS active_run_id
+    FROM tasks
     WHERE status = 'running'
     ORDER BY updated_at ASC
   `).all();
@@ -506,18 +515,29 @@ function cmdRunning() {
   }
 
   console.log('\n  ⚠️  Running Tasks (complete these before compacting!):\n');
-  console.log('  ID              | Started            | Name');
-  console.log('  ' + '-'.repeat(60));
+  console.log('  ID              | Run ID   | Started            | Name');
+  console.log('  ' + '-'.repeat(72));
 
   for (const task of tasks) {
     const id = task.id.substring(0, 14).padEnd(14);
+    const runId = String(task.active_run_id ?? '-').padEnd(8);
     const started = formatTime(task.updated_at).padEnd(18);
     const name = task.name || task.prompt.substring(0, 30);
 
-    console.log(`  ${id} | ${started} | ${name}`);
+    console.log(`  ${id} | ${runId} | ${started} | ${name}`);
   }
 
-  console.log('\n  Run "cli.js done <task-id>" to complete them before /compact\n');
+  const completable = tasks.filter(task => task.active_run_id != null);
+  if (completable.length > 0) {
+    console.log('\n  Completion commands:');
+    for (const task of completable) {
+      console.log(`  cli.js done ${task.id} --run-id ${task.active_run_id}`);
+    }
+  }
+  if (completable.length !== tasks.length) {
+    console.log('\n  Running tasks without a run ID are legacy orphans and cannot be completed manually.');
+  }
+  console.log();
 }
 
 function cmdUpdate(taskId, options) {
@@ -721,7 +741,7 @@ function main() {
       break;
     case 'done':
     case 'complete':
-      cmdDone(args[0]);
+      cmdDone(args[0], options);
       break;
     case 'pause':
       cmdPause(args[0]);

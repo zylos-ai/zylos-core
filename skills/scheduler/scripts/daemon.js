@@ -5,11 +5,15 @@
  */
 
 import { getDb, cleanupHistory, now } from './database.js';
-import { getNextRun } from './cron-utils.js';
 import { sendViaC4, readStatusFile } from './runtime.js';
-import { formatTime } from './time-utils.js';
 import { loadTimezone } from './tz.js';
-import { updateNextRunTime as _updateNextRunTime, processCompletedTasks as _processCompletedTasks, handleStaleRunningTasks as _handleStaleRunningTasks, TASK_TIMEOUT } from './daemon-tasks.js';
+import {
+  failMissedOneTimeTask as _failMissedOneTimeTask,
+  updateNextRunTime as _updateNextRunTime,
+  processCompletedTasks as _processCompletedTasks,
+  handleStaleRunningTasks as _handleStaleRunningTasks
+} from './daemon-tasks.js';
+import { dispatchTaskRun } from './task-dispatch.js';
 
 const CHECK_INTERVAL = 5000;  // 5 seconds
 const CLEANUP_INTERVAL = 3600000;  // 1 hour
@@ -57,64 +61,17 @@ function isRuntimeAlive() {
 function dispatchTask(task) {
   console.log(`[${new Date().toISOString()}] Dispatching task: ${task.id} (${task.name})`);
 
-  // Atomically claim the task (only if still pending)
-  const claim = db.prepare(`
-    UPDATE tasks
-    SET status = 'running', updated_at = ?
-    WHERE id = ? AND status = 'pending'
-  `).run(now(), task.id);
-
-  if (claim.changes === 0) {
+  const result = dispatchTaskRun(db, task, sendViaC4);
+  if (result.reason === 'not-pending') {
     console.log(`[${new Date().toISOString()}] Task ${task.id} already claimed/modified, skipping`);
     return false;
   }
 
-  // Create history entry
-  db.prepare(`
-    INSERT INTO task_history (task_id, executed_at, status)
-    VALUES (?, ?, 'started')
-  `).run(task.id, now());
-
-  // Build prompt with completion instruction
-  const prompt = `[Scheduled Task: ${task.id}] ${task.prompt}
-
----- After completing this task, run: ~/zylos/.claude/skills/scheduler/scripts/cli.js done ${task.id}`;
-
-  // Send via C4 Communication Bridge
-  const success = sendViaC4(prompt, {
-    priority: task.priority,
-    requireIdle: task.require_idle === 1,
-    replyChannel: task.reply_channel,
-    replyEndpoint: task.reply_endpoint
-  });
-
-  if (!success) {
+  if (!result.success) {
     console.error(`Failed to dispatch task ${task.id}`);
-
-    // Revert to pending
-    db.prepare(`
-      UPDATE tasks
-      SET status = 'pending', last_error = 'Failed to dispatch message', updated_at = ?
-      WHERE id = ?
-    `).run(now(), task.id);
-
-    // Mark task_history as failed (latest entry only)
-    const historyEntry = db.prepare(`
-      SELECT id FROM task_history
-      WHERE task_id = ? AND status = 'started'
-      ORDER BY executed_at DESC LIMIT 1
-    `).get(task.id);
-
-    if (historyEntry) {
-      db.prepare(`
-        UPDATE task_history
-        SET status = 'failed', completed_at = ?
-        WHERE id = ?
-      `).run(now(), historyEntry.id);
-    }
   }
 
-  return success;
+  return result.success;
 }
 
 function updateNextRunTime(task) {
@@ -144,15 +101,12 @@ function handleMissedTasks() {
 
   for (const task of missedTasks) {
     const overdueSeconds = currentTime - task.next_run_at;
-    const threshold = task.miss_threshold || 300;  // Default 5 minutes
+    const threshold = task.miss_threshold ?? 300;  // Default 5 minutes
 
     if (overdueSeconds > threshold) {
       // Overdue beyond threshold: skip to next schedule
       console.log(`[${new Date().toISOString()}] Task ${task.id} (${task.name}) missed by ${overdueSeconds}s (threshold: ${threshold}s), skipping to next schedule`);
-      updateNextRunTime({
-        ...task,
-        status: 'completed'
-      });
+      updateNextRunTime(task);
     } else {
       // Within threshold: try to dispatch if runtime is alive
       if (isRuntimeAlive()) {
@@ -208,7 +162,7 @@ async function mainLoop() {
       if (task) {
         const currentTime = now();
         const overdueSeconds = currentTime - task.next_run_at;
-        const threshold = task.miss_threshold || 300;
+        const threshold = task.miss_threshold ?? 300;
 
         // Check if task is overdue beyond its miss_threshold
         if (overdueSeconds > threshold) {
@@ -216,12 +170,7 @@ async function mainLoop() {
           console.log(`[${new Date().toISOString()}] Task ${task.id} (${task.name}) overdue by ${overdueSeconds}s (threshold: ${threshold}s), skipping`);
 
           if (task.type === 'one-time') {
-            // One-time tasks: mark as failed
-            db.prepare(`
-              UPDATE tasks
-              SET status = 'failed', last_error = 'Missed execution window', updated_at = ?
-              WHERE id = ?
-            `).run(currentTime, task.id);
+            _failMissedOneTimeTask(db, { taskId: task.id, currentTime });
           } else {
             // Recurring/interval tasks: schedule next run
             updateNextRunTime(task);
