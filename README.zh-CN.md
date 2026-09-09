@@ -462,10 +462,26 @@ clear 保留 trust、缓存和用户的 profile 文件；设置文件不存在�
 自定义 GitHub 路由同样禁用 `.curlrc` 自动加载，防止其自动跳转或鉴权选项绕过检查；
 原有官方直连传输保持既有行为。
 
-两项 npm 变量，以及使用时的 `ZYLOS_UPSTREAM_CONFIG`，须保存在启动 supervisor 的持久环境中，
-确保机器重启后仍存在。新装默认 runtime 清单继承这三个变量名；已有安装保留自定义的
-`.zylos/runtime-env.manifest`，缺少时应加入 `inherit ZYLOS_UPSTREAM_CONFIG`、`inherit npm_config_registry` 和
-`inherit npm_config_better_sqlite3_binary_host_mirror`。如果变量值保存在 `.env`，
+部署方也可以用环境变量提供这份授权，而不必编辑设置文件：`ZYLOS_UPSTREAM_TRUST_HOSTS`
+接受逗号分隔的精确 host 列表（`host[:port]`，不支持通配符）；列出 host 即视为授权，
+等价于 `forwardGitHubToken: true` 加上这些 `allowedHosts`。保留值 `none` 表示本进程
+关闭对自定义上游 host 的 token 转发（遮蔽已保存的授权）；官方 GitHub host 的既有鉴权不受影响。trust 的优先级是 环境变量 > 本机保存的 `trust` > 默认（不转发），
+与来源选择相互独立。与 `ZYLOS_UPSTREAM_CONFIG` 一样，该变量只影响当前进程，
+不会写入 `upstreams.json`；`zylos upstream set/clear` 不改动已保存的 trust。
+空值或非法 host 明确报错；撤掉变量即回到已保存的 trust。`zylos upstream status`
+会显示 `trustSelectedBy`（`environment` / `saved` / `default`），`--resolved` 显示
+由此得到的各端点 token 策略。
+
+```bash
+export ZYLOS_UPSTREAM_CONFIG=/etc/zylos/cn.json
+export ZYLOS_UPSTREAM_TRUST_HOSTS=ghmirror.example.com
+zylos upstream status --resolved   # trustSelectedBy: environment
+```
+
+两项 npm 变量，以及使用时的 `ZYLOS_UPSTREAM_CONFIG` 和 `ZYLOS_UPSTREAM_TRUST_HOSTS`，须保存在启动 supervisor 的持久环境中，
+确保机器重启后仍存在。新装默认 runtime 清单继承这四个变量名；已有安装保留自定义的
+`.zylos/runtime-env.manifest`，缺少时应加入 `inherit ZYLOS_UPSTREAM_CONFIG`、`inherit ZYLOS_UPSTREAM_TRUST_HOSTS`、
+`inherit npm_config_registry` 和 `inherit npm_config_better_sqlite3_binary_host_mirror`。如果变量值保存在 `.env`，
 则加入对应的 `env NAME` 指令。仅在当前 shell export 不会更新已运行 supervisor
 的环境。init 与升级应使用同一普通用户和可写的 npm 全局目录；`sudo npm` 需另验
 变量传递和目录权限。

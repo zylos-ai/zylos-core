@@ -70,6 +70,20 @@ function validateTrust(value = {}) {
   if (!Array.isArray(hosts) || hosts.some(host => typeof host !== 'string' || !/^[a-z0-9.-]+(?::[0-9]+)?$/i.test(host) || host.startsWith('.') || host.includes('..'))) throw new Error('Invalid local allowedHosts');
   return { forwardGitHubToken: value.forwardGitHubToken ?? false, allowedHosts: hosts.map(host => host.toLowerCase()) };
 }
+export const TRUST_ENV = 'ZYLOS_UPSTREAM_TRUST_HOSTS';
+/** Deployment-provided token trust: exact hosts imply consent; `none` shadows saved trust so no custom host receives the token. */
+function trustFromValue(value) {
+  const text = typeof value === 'string' ? value.trim() : '';
+  if (!text) throw new Error(`${TRUST_ENV} requires a comma-separated host list or none; unset it to use saved trust`);
+  if (text === 'none') return { forwardGitHubToken: false, allowedHosts: [] };
+  const hosts = text.split(',').map(host => host.trim()).filter(Boolean);
+  if (hosts.some(host => host.toLowerCase() === 'none')) throw new Error(`${TRUST_ENV} value none is reserved and cannot be combined with hosts`);
+  let trust;
+  try { trust = validateTrust({ forwardGitHubToken: true, allowedHosts: hosts }); }
+  catch { throw new Error(`${TRUST_ENV} contains an invalid host; use exact host[:port] entries separated by commas`); }
+  if (!trust.allowedHosts.length) throw new Error(`${TRUST_ENV} requires at least one host or none`);
+  return { forwardGitHubToken: true, allowedHosts: [...new Set(trust.allowedHosts)] };
+}
 function validateSource(value, allowHttp) {
   object(value, 'source');
   if (value.type === 'direct') { keys(value, ['type'], 'direct source'); return { type: 'direct' }; }
@@ -136,7 +150,14 @@ export function resolveSelection({ source, env = process.env, zylosDir = env.ZYL
   const envSource = !source && env.ZYLOS_UPSTREAM_CONFIG !== undefined ? sourceFromValue(env.ZYLOS_UPSTREAM_CONFIG) : undefined;
   const chosen = validateSource(source || envSource || saved?.source || { type: 'direct' }, allowHttp);
   const url = chosen.type === 'remote' ? chosen.url : undefined;
-  return { source: chosen, url, files, allowHttp, settings: saved, explicit: Boolean(source || envSource), selectedBy: source ? 'cli' : envSource ? 'environment' : saved?.source ? 'saved' : 'default' };
+  // Trust is selected independently of the source: environment > saved settings > default (no forwarding).
+  const envTrust = env[TRUST_ENV] !== undefined ? trustFromValue(env[TRUST_ENV]) : undefined;
+  const trust = envTrust || saved?.trust || DEFAULT_TRUST;
+  return {
+    source: chosen, url, files, allowHttp, settings: saved, explicit: Boolean(source || envSource),
+    selectedBy: source ? 'cli' : envSource ? 'environment' : saved?.source ? 'saved' : 'default',
+    trust, trustSelectedBy: envTrust ? 'environment' : saved ? 'saved' : 'default',
+  };
 }
 function readCache(selection) {
   try {
@@ -317,7 +338,7 @@ function freeze(value) {
 function snapshot(selection, profile, cache) {
   return freeze({
     github: { ...DIRECT_GITHUB, ...profile?.providers.github },
-    trust: structuredClone(selection.settings?.trust || DEFAULT_TRUST),
+    trust: structuredClone(selection.trust),
     revision: profile?.revision ?? 'direct',
     allowHttp: selection.allowHttp,
     source: { ...selection.source },
@@ -418,7 +439,7 @@ export function upstreamStatus(prepared, { resolved = false, env = process.env }
   const { selection, snapshot: current, cacheStatus } = prepared;
   const source = selection.url ? `${selection.source.type}: ${new URL(selection.url).host}` : selection.source.type;
   return {
-    source, selectedBy: selection.selectedBy, revision: current?.revision ?? null,
+    source, selectedBy: selection.selectedBy, trustSelectedBy: selection.trustSelectedBy, revision: current?.revision ?? null,
     checkedAt: current?.checkedAt ? new Date(current.checkedAt).toISOString() : null, cacheStatus,
     ...(resolved && current ? { endpoints: Object.fromEntries(Object.entries(current.github).map(([key, url]) => [key, { url, direct: url === DIRECT_GITHUB[key], tokenPolicy: ['api.github.com', 'raw.githubusercontent.com', 'github.com'].includes(new URL(url).host) ? 'existing GitHub authentication' : current.trust.forwardGitHubToken && current.trust.allowedHosts.includes(new URL(url).host) ? 'locally authorized when requested; redirects rechecked' : 'no token forwarding' }])), trust: current.trust } : {}),
     npm: Object.fromEntries(['npm_config_registry', 'npm_config_better_sqlite3_binary_host_mirror'].map(key => [key, env[key] === undefined ? 'unset (npm defaults/config apply)' : 'set'])),

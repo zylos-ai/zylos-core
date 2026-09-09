@@ -10,6 +10,7 @@ import {
   prepareUpstreams, setUpstreamSource, clearUpstreamSource, withUpstreamSnapshot, getUpstreamSnapshot,
   githubUrl, upstreamStatus,
 } from '../upstreams.js';
+import { canForwardGitHubToken } from '../github-http.js';
 
 const profile = (revision = 'r1', github = { apiBase: 'https://mirror.test/api/', rawBase: 'https://mirror.test/raw/', downloadBase: 'https://mirror.test/download/' }) => ({ schemaVersion: 1, revision, providers: { github } });
 function fixture(t) {
@@ -538,4 +539,50 @@ test('saved remote cleared while waiting reselects direct without using or rewri
   assert.deepEqual(result.snapshot.github, DIRECT_GITHUB);
   assert.equal(fs.readFileSync(f.cache, 'utf8'), before);
   assert.equal(f.requests.length, 0);
+});
+
+test('trust environment overrides saved trust per process, validates strictly and never persists', async t => {
+  const f = fixture(t);
+  const saved = { forwardGitHubToken: true, allowedHosts: ['saved.test'] };
+  f.write(f.settings, { schemaVersion: 1, source: { type: 'direct' }, trust: saved });
+  const envTrust = { forwardGitHubToken: true, allowedHosts: ['mirror.example.test', 'proxy.test:8443'] };
+  const env = { ZYLOS_UPSTREAM_TRUST_HOSTS: ' Mirror.Example.Test, proxy.test:8443 ,mirror.example.test,' };
+  const selected = resolveSelection({ ...f.opts, env });
+  assert.deepEqual(selected.trust, envTrust);
+  assert.equal(selected.trustSelectedBy, 'environment');
+  assert.equal(selected.selectedBy, 'saved', 'trust selection is independent of source selection');
+  assert.deepEqual(resolveSelection({ ...f.opts, env: { ZYLOS_UPSTREAM_TRUST_HOSTS: 'none' } }).trust, { forwardGitHubToken: false, allowedHosts: [] });
+  assert.deepEqual(resolveSelection(f.opts).trust, saved);
+  assert.equal(resolveSelection(f.opts).trustSelectedBy, 'saved');
+  for (const value of ['', '  ', ',', '*.test', 'bad host', 'https://mirror.test', 'user@mirror.test', '.mirror.test', 'a..b', 'none,mirror.test']) {
+    assert.throws(() => resolveSelection({ ...f.opts, env: { ZYLOS_UPSTREAM_TRUST_HOSTS: value } }), /ZYLOS_UPSTREAM_TRUST_HOSTS/, JSON.stringify(value));
+  }
+  // Environment trust applies beside a CLI source, and an invalid value is not bypassed by a valid CLI source.
+  assert.deepEqual(resolveSelection({ ...f.opts, env, source: { type: 'direct' } }).trust, envTrust);
+  assert.throws(() => resolveSelection({ ...f.opts, env: { ZYLOS_UPSTREAM_TRUST_HOSTS: '' }, source: { type: 'direct' } }));
+  // The operation snapshot and the transport decision follow the environment trust; unlisted and non-HTTPS hosts stay denied.
+  const prepared = await prepareUpstreams({ ...f.opts, env, source: { type: 'direct' } });
+  assert.deepEqual(prepared.snapshot.trust, envTrust);
+  assert.equal(canForwardGitHubToken('https://mirror.example.test/repos/x', prepared.snapshot), true);
+  assert.equal(canForwardGitHubToken('https://proxy.test:8443/x', prepared.snapshot), true);
+  assert.equal(canForwardGitHubToken('https://saved.test/x', prepared.snapshot), false);
+  assert.equal(canForwardGitHubToken('http://mirror.example.test/x', prepared.snapshot), false);
+  assert.throws(() => { prepared.snapshot.trust.allowedHosts.push('attacker.test'); }, TypeError);
+  const status = upstreamStatus(prepared, { resolved: true, env });
+  assert.equal(status.trustSelectedBy, 'environment');
+  assert.deepEqual(status.trust, envTrust);
+  const none = await prepareUpstreams({ ...f.opts, env: { ZYLOS_UPSTREAM_TRUST_HOSTS: 'none' }, source: { type: 'direct' } });
+  assert.equal(canForwardGitHubToken('https://saved.test/x', none.snapshot), false, 'none disables saved trust for the process');
+  // Explicit configuration writes keep the saved trust and never persist the environment trust.
+  setUpstreamSource('direct', { ...f.opts, env });
+  assert.deepEqual(JSON.parse(fs.readFileSync(f.settings)).trust, saved);
+  clearUpstreamSource({ ...f.opts, env });
+  assert.deepEqual(JSON.parse(fs.readFileSync(f.settings)), { schemaVersion: 1, trust: saved });
+  assert.throws(() => setUpstreamSource('direct', { ...f.opts, env: { ZYLOS_UPSTREAM_TRUST_HOSTS: '' } }));
+  assert.deepEqual(JSON.parse(fs.readFileSync(f.settings)), { schemaVersion: 1, trust: saved }, 'failed set leaves settings untouched');
+  // Without a settings file: default trust, the environment still wins, and nothing is created on disk.
+  fs.rmSync(f.settings);
+  assert.equal(resolveSelection(f.opts).trustSelectedBy, 'default');
+  assert.deepEqual(resolveSelection({ ...f.opts, env }).trust, envTrust);
+  assert.equal(fs.existsSync(f.settings), false);
 });

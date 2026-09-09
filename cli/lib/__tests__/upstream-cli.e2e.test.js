@@ -169,17 +169,20 @@ test('init environment source applies only to that process and preserves saved s
     const settings = path.join(f.configDir, 'upstreams.json');
     const previous = JSON.stringify({ schemaVersion: 1, source: { type: 'direct' }, trust: { forwardGitHubToken: true, allowedHosts: ['saved.example.test'] } });
     if (saved) fs.writeFileSync(settings, previous);
-    const env = { ZYLOS_UPSTREAM_CONFIG: f.profilePath };
+    const env = { ZYLOS_UPSTREAM_CONFIG: f.profilePath, ZYLOS_UPSTREAM_TRUST_HOSTS: 'mirror.example.test' };
     const active = JSON.parse(f.success(f.run(['upstream', 'status', '--resolved'], env)).stdout);
     assert.equal(active.selectedBy, 'environment');
     assert.equal(active.endpoints.apiBase.url, 'https://mirror.example.test/api/');
+    assert.equal(active.trustSelectedBy, 'environment');
+    assert.equal(active.endpoints.apiBase.tokenPolicy, 'locally authorized when requested; redirects rechecked');
     f.success(f.run(['init', '--yes', '--quiet', '--runtime', 'claude', '--timezone', 'UTC', '--no-caddy'], env));
     assert.equal(fs.existsSync(settings), saved);
     if (saved) assert.equal(fs.readFileSync(settings, 'utf8'), previous);
     const next = JSON.parse(f.success(f.run(['upstream', 'status', '--resolved'])).stdout);
     assert.equal(next.selectedBy, saved ? 'saved' : 'default');
     assert.equal(next.endpoints.apiBase.url, 'https://api.github.com/');
-    if (saved) assert.deepEqual(next.trust.allowedHosts, ['saved.example.test']);
+    assert.equal(next.trustSelectedBy, saved ? 'saved' : 'default');
+    assert.deepEqual(next.trust.allowedHosts, saved ? ['saved.example.test'] : []);
   }
 });
 
@@ -254,14 +257,24 @@ test('CLI explicit set/clear and temporary overrides round-trip without deleting
     assert.equal(status().endpoints.rawBase.url, 'https://mirror.example.test/raw/');
     assert.equal(status({ ZYLOS_UPSTREAM_CONFIG: 'direct' }).selectedBy, 'environment');
     assert.equal(status({ ZYLOS_UPSTREAM_CONFIG: '' }, ['--upstream-config', 'direct']).selectedBy, 'cli');
+    assert.equal(status().trustSelectedBy, 'saved');
+    assert.equal(status().endpoints.rawBase.tokenPolicy, 'locally authorized when requested; redirects rechecked');
+    const envTrust = status({ ZYLOS_UPSTREAM_TRUST_HOSTS: 'env.example.test' });
+    assert.equal(envTrust.trustSelectedBy, 'environment');
+    assert.deepEqual(envTrust.trust, { forwardGitHubToken: true, allowedHosts: ['env.example.test'] });
+    assert.equal(envTrust.endpoints.rawBase.tokenPolicy, 'no token forwarding', 'environment trust replaces saved trust instead of merging');
+    assert.equal(status({ ZYLOS_UPSTREAM_TRUST_HOSTS: 'none' }).endpoints.rawBase.tokenPolicy, 'no token forwarding');
+    assert.notEqual(f.run(['upstream', 'status'], { ZYLOS_UPSTREAM_TRUST_HOSTS: '' }).status, 0);
+    assert.notEqual(f.run(['upstream', 'status'], { ZYLOS_UPSTREAM_TRUST_HOSTS: '*.example.test' }).status, 0);
     const before = fs.readFileSync(settings, 'utf8');
     for (const args of [['set'], ['set', ''], ['set', 'http://bad.test/p'], ['set', 'absent.json'], ['set', 'direct', 'extra'], ['clear', 'extra'], ['clear', '--resolved'], ['set', 'direct', '--upstream-config', 'direct'], ['clear', '--upstream-config', 'direct']]) {
       assert.notEqual(f.run(['upstream', ...args]).status, 0, args.join(' '));
       assert.equal(fs.readFileSync(settings, 'utf8'), before);
     }
-    f.success(f.run(['upstream', 'set', 'direct']));
+    f.success(f.run(['upstream', 'set', 'direct'], { ZYLOS_UPSTREAM_TRUST_HOSTS: 'env.example.test' }));
     assert.equal(status().selectedBy, 'saved');
-    f.success(f.run(['upstream', 'clear']));
+    assert.deepEqual(JSON.parse(fs.readFileSync(settings)).trust, trust, 'set never persists environment trust');
+    f.success(f.run(['upstream', 'clear'], { ZYLOS_UPSTREAM_TRUST_HOSTS: 'none' }));
     assert.equal(status().selectedBy, 'default');
     assert.equal(JSON.parse(f.success(f.run(['upstream'])).stdout).selectedBy, 'default');
     assert.equal(status({ ZYLOS_UPSTREAM_CONFIG: f.profilePath }).selectedBy, 'environment');

@@ -13,7 +13,7 @@ const templatePath = path.resolve(import.meta.dirname, '../../../templates/runti
 const launcher = path.resolve(import.meta.dirname, '../runtime/tmux-launcher.js');
 const registry = 'https://registry.example.test/';
 const binaryHost = 'https://binary.example.test/better-sqlite3';
-const names = ['ZYLOS_UPSTREAM_CONFIG', 'npm_config_registry', 'npm_config_better_sqlite3_binary_host_mirror'];
+const names = ['ZYLOS_UPSTREAM_CONFIG', 'ZYLOS_UPSTREAM_TRUST_HOSTS', 'npm_config_registry', 'npm_config_better_sqlite3_binary_host_mirror'];
 
 test('persistent deployment environment reaches real npm lifecycle through clean launch specs', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-npm-env-'));
@@ -57,7 +57,7 @@ test('persistent deployment environment reaches real npm lifecycle through clean
 
 test('removing any upstream inherit directive is detected, absent values stay absent', () => {
   const template = fs.readFileSync(templatePath, 'utf8');
-  const processEnv = { ZYLOS_UPSTREAM_CONFIG: 'https://config.example.test/profile', npm_config_registry: registry, npm_config_better_sqlite3_binary_host_mirror: binaryHost };
+  const processEnv = { ZYLOS_UPSTREAM_CONFIG: 'https://config.example.test/profile', ZYLOS_UPSTREAM_TRUST_HOSTS: 'env-trust.example.test', npm_config_registry: registry, npm_config_better_sqlite3_binary_host_mirror: binaryHost };
   const build = content => buildCleanEnv({ processEnv, dotenvVars: {}, manifest: parseRuntimeEnvManifest(content) }).env;
   const check = env => {
     for (const name of names) assert.equal(env[name], processEnv[name], name);
@@ -107,7 +107,7 @@ test('persistent source environment reaches CLI through real clean launcher acro
     const file = path.join(dir, 'profile.json');
     fs.writeFileSync(file, JSON.stringify({ schemaVersion: 1, revision: 'env-probe', providers: { github: { rawBase: 'https://env.example.test/raw/' } } }));
     const deployment = path.join(dir, 'deployment-env.json');
-    fs.writeFileSync(deployment, JSON.stringify({ HOME: dir, PATH: path.dirname(process.execPath), ZYLOS_UPSTREAM_CONFIG: file }));
+    fs.writeFileSync(deployment, JSON.stringify({ HOME: dir, PATH: path.dirname(process.execPath), ZYLOS_UPSTREAM_CONFIG: file, ZYLOS_UPSTREAM_TRUST_HOSTS: 'env-trust.example.test' }));
     deployManifestTemplate(templatePath, dir);
     const manifest = loadRuntimeEnvManifest(dir);
     const cli = path.resolve(import.meta.dirname, '../../zylos.js');
@@ -119,6 +119,8 @@ test('persistent source environment reaches CLI through real clean launcher acro
     const assertSource = observed => {
       assert.equal(observed.selectedBy, 'environment');
       assert.equal(observed.endpoints.rawBase.url, 'https://env.example.test/raw/');
+      assert.equal(observed.trustSelectedBy, 'environment');
+      assert.deepEqual(observed.trust, { forwardGitHubToken: true, allowedHosts: ['env-trust.example.test'] });
     };
     for (const cycle of ['initial', 'supervisor-reload', 'rotation']) {
       assertSource(launch(JSON.parse(fs.readFileSync(deployment, 'utf8'))));
@@ -126,8 +128,13 @@ test('persistent source environment reaches CLI through real clean launcher acro
     }
     const absent = { HOME: dir, PATH: path.dirname(process.execPath) };
     assert.equal(launch(absent).selectedBy, 'default');
+    assert.equal(launch(absent).trustSelectedBy, 'default');
+    const withoutTrust = parseRuntimeEnvManifest(fs.readFileSync(templatePath, 'utf8').replace('inherit ZYLOS_UPSTREAM_TRUST_HOSTS\n', ''));
+    const trustDropped = launch(JSON.parse(fs.readFileSync(deployment, 'utf8')), withoutTrust);
+    assert.equal(trustDropped.selectedBy, 'environment');
+    assert.equal(trustDropped.trustSelectedBy, 'default', 'missing trust inherit is observable');
     const withoutSource = parseRuntimeEnvManifest(fs.readFileSync(templatePath, 'utf8').replace('inherit ZYLOS_UPSTREAM_CONFIG\n', ''));
     assert.throws(() => assertSource(launch(JSON.parse(fs.readFileSync(deployment, 'utf8')), withoutSource)), assert.AssertionError);
-    assertSource(launch(absent, parseRuntimeEnvManifest('env ZYLOS_UPSTREAM_CONFIG\n'), { ZYLOS_UPSTREAM_CONFIG: file }));
+    assertSource(launch(absent, parseRuntimeEnvManifest('env ZYLOS_UPSTREAM_CONFIG\nenv ZYLOS_UPSTREAM_TRUST_HOSTS\n'), { ZYLOS_UPSTREAM_CONFIG: file, ZYLOS_UPSTREAM_TRUST_HOSTS: 'env-trust.example.test' }));
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });

@@ -43,6 +43,7 @@ env TZ
 # Deployment-owned upstream settings; no values or endpoint defaults are set here.
 # Keep these in the supervisor's persistent environment across restarts.
 inherit ZYLOS_UPSTREAM_CONFIG
+inherit ZYLOS_UPSTREAM_TRUST_HOSTS
 inherit npm_config_registry
 inherit npm_config_better_sqlite3_binary_host_mirror
 # inherit SSH_AUTH_SOCK

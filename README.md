@@ -496,12 +496,35 @@ not grant token permission automatically. Custom GitHub routes also disable
 `.curlrc` loading so its auto-follow or authentication options cannot bypass
 these checks. The legacy official direct transport retains its existing behavior.
 
-Persist the two npm variables, and `ZYLOS_UPSTREAM_CONFIG` if used, in the
-environment that starts your supervisor, including after a reboot. The default
-runtime manifest inherits all three names.
+Deployments can supply that trust through the environment instead of editing
+the settings file: `ZYLOS_UPSTREAM_TRUST_HOSTS` takes a comma-separated list of
+exact hosts (`host[:port]`, no wildcards); listing a host is the consent, so the
+variable is equivalent to `forwardGitHubToken: true` with those `allowedHosts`.
+The reserved value `none` disables token forwarding to custom hosts for the
+current process, shadowing any saved trust; official GitHub hosts keep their
+existing authentication either way. Trust
+precedence is environment > saved `trust` > default (no forwarding), selected
+independently of the source. Like `ZYLOS_UPSTREAM_CONFIG`, the variable applies
+only to the current process and is never written to `upstreams.json`;
+`zylos upstream set/clear` keep the saved trust unchanged. An empty or invalid
+value fails explicitly; unset it to fall back to the saved trust.
+`zylos upstream status` reports `trustSelectedBy` (`environment`, `saved` or
+`default`), and `--resolved` shows the resulting per-endpoint token policy.
+
+```bash
+export ZYLOS_UPSTREAM_CONFIG=/etc/zylos/cn.json
+export ZYLOS_UPSTREAM_TRUST_HOSTS=ghmirror.example.com
+zylos upstream status --resolved   # trustSelectedBy: environment
+```
+
+Persist the two npm variables, and `ZYLOS_UPSTREAM_CONFIG` and
+`ZYLOS_UPSTREAM_TRUST_HOSTS` if used, in the environment that starts your
+supervisor, including after a reboot. The default runtime manifest inherits all
+four names.
 Existing installations retain their customized `.zylos/runtime-env.manifest`:
-add `inherit ZYLOS_UPSTREAM_CONFIG`, `inherit npm_config_registry` and
-`inherit npm_config_better_sqlite3_binary_host_mirror` there if absent. If you
+add `inherit ZYLOS_UPSTREAM_CONFIG`, `inherit ZYLOS_UPSTREAM_TRUST_HOSTS`,
+`inherit npm_config_registry` and `inherit npm_config_better_sqlite3_binary_host_mirror`
+there if absent. If you
 store the values in `.env` instead, add the corresponding `env NAME` directives.
 A shell export alone does not update an already-running supervisor. Use the
 same ordinary user and writable npm global prefix for init and upgrades;
