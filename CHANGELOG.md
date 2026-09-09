@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+- **Dependency updates for Dependabot alerts**: web-console runtime deps `multer` 2.1.1 → 2.3.0 (GHSA-72gw-mp4g-v24j, GHSA-3p4h-7m6x-2hcm), `body-parser` 1.20.4 → 1.20.8 (GHSA-v422-hmwv-36x6), `express` ^4.18.2 → ^4.22.2 with a `qs` ^6.16.0 override (GHSA-x5fp-wj9c-mxmx, GHSA-4mjr-xmp4-gh2g; Express 4.x still pins an older `qs`); root dev-only lockfile bumps `brace-expansion` 1.1.18 / 2.1.4, `browserslist` 4.28.9, `@babel/core` 7.29.7. `npm audit` reports 0 vulnerabilities in both lockfiles; no API changes.
+
 ### Added
 - **GitHub upstream profiles**: select a local file, HTTPS URL or `direct` with the single `--upstream-config` option or `ZYLOS_UPSTREAM_CONFIG` environment variable; endpoints combine official defaults with the selected profile, with no local endpoint override layer, and `direct` always uses official endpoints while retaining independent local token trust; CLI and environment source overrides remain process-scoped even during init; only explicit `zylos upstream set/clear` changes the saved source, preserving independent trust and cache. Three endpoint builders cover API, raw files, archives and Caddy releases. Remote snapshots refresh after 24 hours, remain fixed through an operation and rollback, and preserve a valid same-source cache on automatic refresh failure. `zylos upstream status --resolved` is read-only; `zylos upstream refresh` checks immediately. Custom hosts require local consent and an allowlist to receive GitHub tokens. An editable official-endpoint template is provided; private endpoints remain deployment-owned, with no built-in regional preset. (#776)
 
