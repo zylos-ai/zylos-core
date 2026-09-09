@@ -5,7 +5,7 @@ All notable changes to zylos-core will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.8.0] - 2026-09-09
 
 ### Security
 - **Dependency updates for Dependabot alerts**: web-console runtime deps `multer` 2.1.1 → 2.3.0 (GHSA-72gw-mp4g-v24j, GHSA-3p4h-7m6x-2hcm), `body-parser` 1.20.4 → 1.20.8 (GHSA-v422-hmwv-36x6), `express` ^4.18.2 → ^4.22.2 with a `qs` ^6.16.0 override (GHSA-x5fp-wj9c-mxmx, GHSA-4mjr-xmp4-gh2g; Express 4.x still pins an older `qs`); root dev-only lockfile bumps `brace-expansion` 1.1.18 / 2.1.4, `browserslist` 4.28.9, `@babel/core` 7.29.7. `npm audit` reports 0 vulnerabilities in both lockfiles; no API changes.
