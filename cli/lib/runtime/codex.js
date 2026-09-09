@@ -38,6 +38,7 @@ import {
   hasChildProcess,
 } from './tmux-helpers.js';
 import { buildCleanEnv, buildCompatEnv, loadRuntimeEnvManifest, writeLaunchSpec } from './tmux-env.js';
+import { loadRuntimeSecrets } from './secret-store.js';
 import { classifyCodexLoginStatus } from '../auth-parsers.js';
 import { ensureCodexHooksTrusted } from '../codex-hooks.js';
 import { buildKickPrompt } from './kick-prompt.js';
@@ -276,9 +277,17 @@ export class CodexAdapter extends RuntimeAdapter {
       const useCleanEnv = dotenvVars.ZYLOS_CLEAN_ENV !== 'false';
       const manifest = useCleanEnv ? loadRuntimeEnvManifest(ZYLOS_DIR) : undefined;
 
-      const { env } = useCleanEnv
-        ? buildCleanEnv({ processEnv: process.env, dotenvVars, manifest, uid: process.getuid?.() })
-        : buildCompatEnv({ processEnv: process.env, dotenvVars });
+      // Control-plane credentials: values become env vars of the agent process so
+      // only their NAMES ever reach the model context (see secret-store.js).
+      const { secrets, warnings: secretWarnings } = loadRuntimeSecrets({ zylosDir: ZYLOS_DIR });
+      for (const w of secretWarnings) console.warn(`[runtime] ${w}`);
+
+      const { env, secretNames } = useCleanEnv
+        ? buildCleanEnv({ processEnv: process.env, dotenvVars, manifest, uid: process.getuid?.(), secrets })
+        : buildCompatEnv({ processEnv: process.env, dotenvVars, secrets });
+
+      // Names only — never the values.
+      if (secretNames?.length) console.log(`[runtime] injected ${secretNames.length} credential(s): ${secretNames.join(', ')}`);
 
       // Build launch spec — Codex reads auth from ~/.codex/auth.json via HOME
       const args = [];

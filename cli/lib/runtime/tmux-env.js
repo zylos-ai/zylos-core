@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { applySecrets } from './secret-store.js';
 
 const VALID_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
@@ -193,9 +194,12 @@ function _buildPath(processEnv, platform, pathPrepend, pathAppend, execPath) {
  * @param {string} [opts.platform] - os.platform() value, defaults to current
  * @param {number} [opts.uid] - Process UID; when 0, IS_SANDBOX is set for root/Docker safety
  * @param {string} [opts.execPath] - process.execPath of the running node; defaults to process.execPath
- * @returns {{ env: object, warnings: string[] }}
+ * @param {object} [opts.secrets] - Control-plane credentials (see secret-store.js). Applied
+ *   last so a delivered credential wins over a same-named .env value, but never
+ *   over the protected base vars — `applySecrets` enforces that.
+ * @returns {{ env: object, warnings: string[], secretNames: string[] }}
  */
-export function buildCleanEnv({ processEnv, dotenvVars, manifest, platform, uid, execPath }) {
+export function buildCleanEnv({ processEnv, dotenvVars, manifest, platform, uid, execPath, secrets }) {
   const plat = platform || os.platform();
   const m = manifest || EMPTY_MANIFEST;
   const warnings = [];
@@ -258,7 +262,15 @@ export function buildCleanEnv({ processEnv, dotenvVars, manifest, platform, uid,
     }
   }
 
-  return { env, warnings };
+  // 7. Control-plane credentials — last, so they win over a same-named .env
+  // value (the secret store is the managed source of truth). Protected base
+  // vars are refused inside applySecrets, so this cannot hijack PATH.
+  const { applied, skipped } = applySecrets(env, secrets);
+  for (const name of skipped) {
+    warnings.push(`secret "${name}" refused: protected variable`);
+  }
+
+  return { env, warnings, secretNames: applied };
 }
 
 /**
@@ -274,7 +286,7 @@ export function buildCleanEnv({ processEnv, dotenvVars, manifest, platform, uid,
  * @param {object} opts.dotenvVars
  * @returns {{ env: object }}
  */
-export function buildCompatEnv({ processEnv, dotenvVars }) {
+export function buildCompatEnv({ processEnv, dotenvVars, secrets }) {
   const env = { ...processEnv };
 
   // Deduplicate PATH to prevent bloat across restarts (PR #499 defense)
@@ -291,7 +303,12 @@ export function buildCompatEnv({ processEnv, dotenvVars }) {
     }
   }
 
-  return { env };
+  // Credentials apply in compat mode too — otherwise ZYLOS_CLEAN_ENV=false would
+  // silently opt a host out of credential delivery and the agent would report
+  // tools as unconfigured for no visible reason.
+  const { applied } = applySecrets(env, secrets);
+
+  return { env, secretNames: applied };
 }
 
 /**
