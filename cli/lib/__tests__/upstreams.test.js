@@ -546,7 +546,7 @@ test('trust environment overrides saved trust per process, validates strictly an
   const saved = { forwardGitHubToken: true, allowedHosts: ['saved.test'] };
   f.write(f.settings, { schemaVersion: 1, source: { type: 'direct' }, trust: saved });
   const envTrust = { forwardGitHubToken: true, allowedHosts: ['mirror.example.test', 'proxy.test:8443'] };
-  const env = { ZYLOS_UPSTREAM_TRUST_HOSTS: ' Mirror.Example.Test, proxy.test:8443 ,mirror.example.test,' };
+  const env = { ZYLOS_UPSTREAM_TRUST_HOSTS: ' Mirror.Example.Test, proxy.test:8443 ,mirror.example.test' };
   const selected = resolveSelection({ ...f.opts, env });
   assert.deepEqual(selected.trust, envTrust);
   assert.equal(selected.trustSelectedBy, 'environment');
@@ -554,7 +554,7 @@ test('trust environment overrides saved trust per process, validates strictly an
   assert.deepEqual(resolveSelection({ ...f.opts, env: { ZYLOS_UPSTREAM_TRUST_HOSTS: 'none' } }).trust, { forwardGitHubToken: false, allowedHosts: [] });
   assert.deepEqual(resolveSelection(f.opts).trust, saved);
   assert.equal(resolveSelection(f.opts).trustSelectedBy, 'saved');
-  for (const value of ['', '  ', ',', '*.test', 'bad host', 'https://mirror.test', 'user@mirror.test', '.mirror.test', 'a..b', 'none,mirror.test']) {
+  for (const value of ['', '  ', ',', 'a.test,', ',a.test', 'a.test,,b.test', 'a.test, ,b.test', '*.test', 'bad host', 'https://mirror.test', 'user@mirror.test', '.mirror.test', 'a..b', 'none,mirror.test']) {
     assert.throws(() => resolveSelection({ ...f.opts, env: { ZYLOS_UPSTREAM_TRUST_HOSTS: value } }), /ZYLOS_UPSTREAM_TRUST_HOSTS/, JSON.stringify(value));
   }
   // Environment trust applies beside a CLI source, and an invalid value is not bypassed by a valid CLI source.

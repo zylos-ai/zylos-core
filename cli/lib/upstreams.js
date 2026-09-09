@@ -76,12 +76,14 @@ function trustFromValue(value) {
   const text = typeof value === 'string' ? value.trim() : '';
   if (!text) throw new Error(`${TRUST_ENV} requires a comma-separated host list or none; unset it to use saved trust`);
   if (text === 'none') return { forwardGitHubToken: false, allowedHosts: [] };
-  const hosts = text.split(',').map(host => host.trim()).filter(Boolean);
+  // Strict list: every comma-separated item must be a host. Empty items (leading,
+  // trailing or doubled commas) are rejected as likely misconfiguration rather than ignored.
+  const hosts = text.split(',').map(host => host.trim());
+  if (hosts.some(host => !host)) throw new Error(`${TRUST_ENV} contains an empty list item; separate exact host[:port] entries with single commas`);
   if (hosts.some(host => host.toLowerCase() === 'none')) throw new Error(`${TRUST_ENV} value none is reserved and cannot be combined with hosts`);
   let trust;
   try { trust = validateTrust({ forwardGitHubToken: true, allowedHosts: hosts }); }
   catch { throw new Error(`${TRUST_ENV} contains an invalid host; use exact host[:port] entries separated by commas`); }
-  if (!trust.allowedHosts.length) throw new Error(`${TRUST_ENV} requires at least one host or none`);
   return { forwardGitHubToken: true, allowedHosts: [...new Set(trust.allowedHosts)] };
 }
 function validateSource(value, allowHttp) {
