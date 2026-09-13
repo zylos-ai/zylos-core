@@ -36,10 +36,10 @@ describe('restartServicesWithDeps', () => {
         fallbackToPlainRestartOnError: true,
       },
     }]);
-    assert.deepStrictEqual(execCalls, [{
-      cmd: 'pm2 save 2>/dev/null',
-      opts: { stdio: 'inherit' },
-    }]);
+    assert.equal(execCalls.length, 1);
+    assert.equal(execCalls[0].cmd, 'pm2 save 2>/dev/null');
+    assert.equal(execCalls[0].opts.stdio, 'inherit');
+    assert.equal(typeof execCalls[0].opts.env.PATH, 'string');
     assert.equal(messages.some((msg) => String(msg).includes('scheduler')), true);
   });
 
@@ -65,10 +65,10 @@ describe('restartServicesWithDeps', () => {
     });
 
     assert.equal(ok, false);
-    assert.deepStrictEqual(execCalls, [{
-      cmd: 'pm2 save 2>/dev/null',
-      opts: { stdio: 'inherit' },
-    }]);
+    assert.equal(execCalls.length, 1);
+    assert.equal(execCalls[0].cmd, 'pm2 save 2>/dev/null');
+    assert.equal(execCalls[0].opts.stdio, 'inherit');
+    assert.equal(typeof execCalls[0].opts.env.PATH, 'string');
     assert.equal(messages.some((msg) => String(msg).includes('Failed to restart services')), true);
   });
 });

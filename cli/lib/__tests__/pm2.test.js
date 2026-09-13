@@ -9,6 +9,7 @@ describe('PM2 ecosystem restart helpers', () => {
     const { restartFromEcosystem } = createPm2Helpers({
       exists: (file) => file === '/tmp/ecosystem.config.cjs',
       exec: (cmd, opts) => calls.push({ cmd, opts }),
+      execOptions: (stdio) => ({ stdio }),
     });
 
     restartFromEcosystem(['activity-monitor', 'c4-dispatcher'], {
@@ -36,6 +37,7 @@ describe('PM2 ecosystem restart helpers', () => {
   it('throws when ecosystem restart is requested without a valid config file', () => {
     const { restartFromEcosystem } = createPm2Helpers({
       exists: () => false,
+      execOptions: (stdio) => ({ stdio }),
       exec: () => {
         throw new Error('should not execute');
       },
@@ -52,6 +54,7 @@ describe('PM2 ecosystem restart helpers', () => {
     const { restartManagedProcess } = createPm2Helpers({
       exists: (file) => file === '/tmp/component-ecosystem.config.cjs',
       exec: (cmd, opts) => calls.push({ cmd, opts }),
+      execOptions: (stdio) => ({ stdio }),
     });
 
     restartManagedProcess('zylos-wecom', {
@@ -72,6 +75,7 @@ describe('PM2 ecosystem restart helpers', () => {
     const { restartManagedProcess } = createPm2Helpers({
       exists: () => false,
       exec: (cmd, opts) => calls.push({ cmd, opts }),
+      execOptions: (stdio) => ({ stdio }),
     });
 
     restartManagedProcess('zylos-custom', {
@@ -106,6 +110,7 @@ describe('PM2 ecosystem restart helpers', () => {
           throw new Error('bad ecosystem');
         }
       },
+      execOptions: (stdio) => ({ stdio }),
     });
 
     restartManagedProcess('activity-monitor', {
@@ -128,5 +133,22 @@ describe('PM2 ecosystem restart helpers', () => {
         opts: { stdio: 'inherit' },
       },
     ]);
+  });
+
+  it('executes pm2 commands with the managed environment by default', () => {
+    const calls = [];
+    const { restartFromEcosystem } = createPm2Helpers({
+      exists: (file) => file === '/tmp/ecosystem.config.cjs',
+      exec: (cmd, opts) => calls.push({ cmd, opts }),
+    });
+
+    restartFromEcosystem(['zylos-dashboard'], {
+      ecosystemPath: '/tmp/ecosystem.config.cjs',
+    });
+
+    assert.equal(calls.length, 1);
+    assert.match(calls[0].cmd, /pm2 start/);
+    assert.equal(calls[0].opts.stdio, 'pipe');
+    assert.equal(typeof calls[0].opts.env.PATH, 'string');
   });
 });

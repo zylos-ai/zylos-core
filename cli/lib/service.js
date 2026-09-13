@@ -5,6 +5,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execSync } from 'node:child_process';
+import { buildManagedPm2Env } from './pm2-env.js';
 
 /**
  * Register and start a PM2 service for a component.
@@ -31,7 +32,7 @@ export function registerService({ name, entry, skillDir, type }) {
   try {
     // Stop existing service if running (ignore errors)
     try {
-      execSync(`pm2 delete "${serviceName}" 2>/dev/null`, { stdio: 'pipe' });
+      execSync(`pm2 delete "${serviceName}" 2>/dev/null`, { stdio: 'pipe', env: buildManagedPm2Env() });
     } catch {
       // Not running — fine
     }
@@ -42,16 +43,18 @@ export function registerService({ name, entry, skillDir, type }) {
       execSync(`pm2 start "${ecosystemPath}"`, {
         stdio: 'pipe',
         timeout: 30000,
+        env: buildManagedPm2Env(),
       });
     } else {
       execSync(`pm2 start "${scriptPath}" --name "${serviceName}"`, {
         stdio: 'pipe',
         timeout: 30000,
+        env: buildManagedPm2Env(),
       });
     }
 
     // Save PM2 process list
-    execSync('pm2 save 2>/dev/null', { stdio: 'pipe' });
+    execSync('pm2 save 2>/dev/null', { stdio: 'pipe', env: buildManagedPm2Env() });
 
     return { success: true };
   } catch (err) {

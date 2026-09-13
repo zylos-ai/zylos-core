@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execSync } from 'node:child_process';
 import { ZYLOS_DIR } from './config.js';
+import { buildManagedPm2Env } from './pm2-env.js';
 
 export function getCoreEcosystemPath() {
   return path.join(ZYLOS_DIR, 'pm2', 'ecosystem.config.cjs');
@@ -10,6 +11,7 @@ export function getCoreEcosystemPath() {
 export function createPm2Helpers({
   exec = execSync,
   exists = fs.existsSync,
+  execOptions = (stdio) => ({ stdio, env: buildManagedPm2Env() }),
 } = {}) {
   function restartFromEcosystem(names, {
     ecosystemPath = getCoreEcosystemPath(),
@@ -21,13 +23,13 @@ export function createPm2Helpers({
     }
 
     for (const name of names) {
-      exec(`pm2 start "${ecosystemPath}" --only "${name}" --update-env 2>/dev/null`, { stdio });
+      exec(`pm2 start "${ecosystemPath}" --only "${name}" --update-env 2>/dev/null`, execOptions(stdio));
     }
 
     // Persist only after every restart succeeded so callers don't save a
     // partially-updated PM2 process list.
     if (save) {
-      exec('pm2 save 2>/dev/null', { stdio });
+      exec('pm2 save 2>/dev/null', execOptions(stdio));
     }
   }
 
@@ -45,16 +47,16 @@ export function createPm2Helpers({
         if (!fallbackToPlainRestartOnError) {
           throw err;
         }
-        try { exec(`pm2 delete "${name}" 2>/dev/null`, { stdio }); } catch {}
+        try { exec(`pm2 delete "${name}" 2>/dev/null`, execOptions(stdio)); } catch {}
         restartFromEcosystem([name], { ecosystemPath, stdio, save });
         return;
       }
     }
 
-    exec(`pm2 restart "${name}" 2>/dev/null`, { stdio });
+    exec(`pm2 restart "${name}" 2>/dev/null`, execOptions(stdio));
 
     if (save) {
-      exec('pm2 save 2>/dev/null', { stdio });
+      exec('pm2 save 2>/dev/null', execOptions(stdio));
     }
   }
 
