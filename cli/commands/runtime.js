@@ -6,6 +6,7 @@
  *   zylos runtime status                        Show the currently configured runtime
  *   zylos runtime <name> --save-apikey <key>    Save API key and switch (all runtimes)
  *   zylos runtime <name> --save-base-url <url>  Save base URL and switch
+ *   zylos runtime codex --provider <name>       Apply a named provider preset (e.g. orcarouter)
  *   zylos runtime claude --save-setup-token <t> Save Claude setup token and switch
  *   zylos runtime <name> --no-validate          Skip switch-time auth probe
  */
@@ -32,6 +33,7 @@ import {
   saveCodexApiKeyToEnv,
   writeCodexConfig,
 } from '../lib/runtime-setup.js';
+import { CODEX_PROVIDER_PRESETS } from './init.js';
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -132,14 +134,17 @@ export function parseRuntimeFlags(flags) {
   const apiKeyIdx = flags.indexOf('--save-apikey');
   const setupTokenIdx = flags.indexOf('--save-setup-token');
   const baseUrlIdx = flags.indexOf('--save-base-url');
+  const providerIdx = flags.indexOf('--provider');
 
   return {
     apiKey: apiKeyIdx >= 0 ? flags[apiKeyIdx + 1] : null,
     setupToken: setupTokenIdx >= 0 ? flags[setupTokenIdx + 1] : null,
     baseUrl: baseUrlIdx >= 0 ? flags[baseUrlIdx + 1] : null,
+    provider: providerIdx >= 0 ? flags[providerIdx + 1] : null,
     hasApiKey: apiKeyIdx >= 0,
     hasSetupToken: setupTokenIdx >= 0,
     hasBaseUrl: baseUrlIdx >= 0,
+    hasProvider: providerIdx >= 0,
     noValidate: flags.includes('--no-validate'),
   };
 }
@@ -173,6 +178,25 @@ export function validateRuntimeFlags(target, parsed) {
       example: target === 'codex'
         ? 'zylos runtime codex --save-base-url https://proxy.example.com/v1'
         : 'zylos runtime claude --save-base-url https://claude-proxy.example.com',
+    };
+  }
+  if (parsed.hasProvider && (!parsed.provider || parsed.provider.startsWith('--'))) {
+    return {
+      error: 'Missing value for --provider.',
+      example: 'zylos runtime codex --provider orcarouter',
+    };
+  }
+  if (parsed.provider && !CODEX_PROVIDER_PRESETS[parsed.provider]) {
+    const available = Object.keys(CODEX_PROVIDER_PRESETS).join(', ');
+    return {
+      error: `Unknown provider: "${parsed.provider}".`,
+      example: `Available providers: ${available}`,
+    };
+  }
+  if (parsed.provider && target !== 'codex') {
+    return {
+      error: '--provider is only supported for the codex runtime.',
+      example: 'zylos runtime codex --provider orcarouter',
     };
   }
   return null;
@@ -255,11 +279,25 @@ async function switchRuntime(target, flags) {
     process.exit(1);
   }
 
-  const { apiKey, setupToken, baseUrl } = parsed;
+  const { apiKey, setupToken, baseUrl, provider } = parsed;
 
-  if (current === target && !apiKey && !setupToken && !baseUrl) {
+  if (current === target && !apiKey && !setupToken && !baseUrl && !provider) {
     console.log(`Already on ${bold(target)} runtime.`);
     return;
+  }
+
+  // Resolve a named provider preset (e.g. --provider orcarouter) into the
+  // gateway base URL and API key before the rest of the switch flow.
+  let resolvedBaseUrl = baseUrl;
+  let resolvedApiKey = apiKey;
+  if (provider) {
+    const preset = CODEX_PROVIDER_PRESETS[provider];
+    if (preset) {
+      if (!resolvedBaseUrl) resolvedBaseUrl = preset.baseUrl;
+      if (!resolvedApiKey && process.env[preset.apiKeyEnv]) {
+        resolvedApiKey = process.env[preset.apiKeyEnv];
+      }
+    }
   }
 
   // Step 1: Ensure target runtime CLI is installed.
@@ -279,18 +317,18 @@ async function switchRuntime(target, flags) {
   }
 
   // Step 2: Apply credentials if provided via flags.
-  if (apiKey || setupToken) {
+  if (resolvedApiKey || setupToken) {
     console.log(`Saving credentials for ${bold(target)}...`);
-    if (!applyCredentials(target, { apiKey, setupToken })) {
+    if (!applyCredentials(target, { apiKey: resolvedApiKey, setupToken })) {
       console.error(red(`\nFailed to save credentials.`));
       process.exit(1);
     }
     console.log(`  ${green('✓')} credentials saved`);
   }
 
-  if (baseUrl) {
+  if (resolvedBaseUrl) {
     console.log(`Saving base URL for ${bold(target)}...`);
-    if (!applyBaseUrl(target, baseUrl)) {
+    if (!applyBaseUrl(target, resolvedBaseUrl)) {
       console.error(red(`\nFailed to save base URL.`));
       process.exit(1);
     }
@@ -373,6 +411,7 @@ Authentication options (if not already authenticated):
            claude auth login               Browser OAuth (then retry)
   Codex:   --save-apikey <sk-...>          OpenAI API key
            --save-base-url <url>           Codex base URL
+           --provider <name>               Named Codex provider preset (orcarouter)
            codex login --device-auth       Device auth (headless)
            codex login                     Browser login (then retry)
 
@@ -393,6 +432,7 @@ Examples:
   zylos runtime claude --save-setup-token sk-ant-oat-xxx
   zylos runtime codex --save-apikey sk-proj-xxx
   zylos runtime codex --save-base-url https://proxy.example.com/v1
+  zylos runtime codex --provider orcarouter
   zylos runtime codex --no-validate
 `);
 }

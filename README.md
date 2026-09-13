@@ -71,6 +71,7 @@ Automatically when no TTY is available — e.g. Docker containers (without `-it`
 | `--setup-token <token>` | Claude [setup token](https://code.claude.com/docs/en/authentication) (starts with `sk-ant-oat`) | — |
 | `--api-key <key>` | Anthropic API key (starts with `sk-ant-`) | — |
 | `--codex-api-key <key>` | OpenAI API key for Codex runtime (starts with `sk-`) | — |
+| `--codex-provider <name>` | Named Codex provider preset: `orcarouter` | — |
 | `--base-url <url>` | Custom API base URL for Claude Code | — |
 | `--codex-base-url <url>` | Custom API base URL for Codex | — |
 | `--timezone <tz>` | [IANA timezone](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones), e.g. `Asia/Shanghai`, `America/New_York`, `Europe/London` | System default |
@@ -91,6 +92,7 @@ Flags can also be set via environment variables during `zylos init`. Resolution 
 | `ANTHROPIC_BASE_URL` | `--base-url` |
 | `OPENAI_API_KEY` | `--codex-api-key` |
 | `OPENAI_BASE_URL` | `--codex-base-url` |
+| `ORCAROUTER_API_KEY` | `--codex-provider orcarouter` (API key) |
 | `ZYLOS_DOMAIN` | `--domain` |
 | `ZYLOS_PROTOCOL` (`https` or `http`) | `--https` / `--no-https` |
 | `ZYLOS_WEB_PASSWORD` | `--web-password` |
@@ -286,6 +288,22 @@ Other frameworks charge per API token. Community reports show monthly bills of $
 ### Powered by Best-in-Class AI Runtimes
 
 Zylos supports Claude Code (Anthropic) and Codex (OpenAI) as interchangeable AI runtimes. Start with one, switch to the other anytime with `zylos runtime codex` — your memory, skills, and channels are preserved. When AI providers ship new capabilities, your agent benefits automatically. And because both runtimes can program, your AI writes new skills, integrates services, and evolves with your needs.
+
+### Codex Runtime on [OrcaRouter](https://www.orcarouter.ai)
+
+The Codex runtime can also be pointed at [OrcaRouter](https://www.orcarouter.ai), an OpenAI-compatible AI gateway. Pass a single named provider flag and your OrcaRouter API key — Zylos wires the Codex runtime to `https://api.orcarouter.ai/v1` and verifies the key against it.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/zylos-ai/zylos-core/main/scripts/install.sh | bash -s -- -y --runtime codex --codex-provider orcarouter --codex-api-key sk-orca-...
+```
+
+Or via environment variables:
+
+```bash
+ORCAROUTER_API_KEY=sk-orca-... zylos init --runtime codex --codex-provider orcarouter
+```
+
+The gateway supports a single endpoint with multiple model families (OpenAI, Anthropic, Google, DeepSeek and more), so the Codex runtime can switch models without changing configuration.
 
 ---
 

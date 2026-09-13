@@ -119,6 +119,8 @@ Set variables in `docker-compose.yml`, a `.env` file alongside `docker-compose.y
 |---|---|
 | `CLAUDE_CODE_OAUTH_TOKEN` | Claude Code token (Pro/Max subscription) |
 | `ANTHROPIC_API_KEY` | Anthropic API key (usage-based billing) |
+| `OPENAI_API_KEY` / `CODEX_API_KEY` | Codex runtime — OpenAI API key |
+| `ORCAROUTER_API_KEY` | Codex runtime — [OrcaRouter](https://www.orcarouter.ai) gateway key (`--codex-provider orcarouter`) |
 
 ### Optional
 
@@ -126,6 +128,7 @@ Set variables in `docker-compose.yml`, a `.env` file alongside `docker-compose.y
 |---|---|---|
 | `TZ` | `UTC` | Timezone for scheduler (IANA format, e.g. `Asia/Singapore`) |
 | `CLAUDE_BYPASS_PERMISSIONS` | `true` | Run Claude with `--dangerously-skip-permissions` |
+| `CODEX_BYPASS_PERMISSIONS` | `true` | Run Codex with `--dangerously-bypass-approvals-and-sandbox` |
 | `TELEGRAM_BOT_TOKEN` | — | Telegram channel token |
 | `LARK_APP_ID` / `LARK_APP_SECRET` | — | Lark/Feishu app credentials |
 | `ZYLOS_WEB_PASSWORD` | — | Web console password (auto-generated if not set) |
