@@ -1,0 +1,10 @@
+#!/bin/sh
+
+case "$PM2_TEST_MODE" in
+  valid)
+    printf '[{"name":"scheduler","pid":123,"pm2_env":{"status":"online","restart_time":2,"env":{"TOKEN":"%s"}}}]\n' "$PM2_TEST_SENTINEL"
+    ;;
+  *)
+    printf '{invalid-json:%s}\n' "$PM2_TEST_SENTINEL"
+    ;;
+esac
