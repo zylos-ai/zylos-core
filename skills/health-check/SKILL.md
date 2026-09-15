@@ -22,10 +22,13 @@ Periodic system health check delivered via the C4 Control queue.
 ### 1. Check PM2 Services
 
 ```bash
-pm2 jlist
+node ~/zylos/.claude/skills/health-check/scripts/pm2-snapshot.js
 ```
 
-Parse the JSON output. Every service should have `status: "online"`.
+The helper parses `pm2 jlist` internally and prints only the allowlisted health
+fields (`name`, `status`, `pid`, and `restart_time`). Never run or print raw
+`pm2 jlist` output because it contains each process's inherited environment.
+Every service should have `status: "online"`.
 Record which services are stopped or errored.
 
 ### 2. Check Disk Space

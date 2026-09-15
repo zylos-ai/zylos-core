@@ -139,12 +139,15 @@ The activity monitor periodically enqueues system health checks via the C4 contr
 - **Gated by agent**: Only enqueued when the agent process is running
 
 The health check control message instructs Claude to:
-1. Check PM2 services via `pm2 jlist`
+1. Check PM2 services via the health-check skill's sanitized PM2 snapshot helper
 2. Check disk space via `df -h`
 3. Check memory via `free -m`
 4. If issues found, notify the most recent communication channel
 5. Log results to `~/zylos/logs/health.log`
 6. Acknowledge the control message
+
+Raw `pm2 jlist` output must never enter an agent/tool transcript because it
+contains each process's inherited environment.
 
 ## Daily Upgrade
 

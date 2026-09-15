@@ -726,7 +726,7 @@ function writeHealthCheckState(lastCheckAt) {
 
 function enqueueHealthCheck() {
   const content = [
-    'System health check. Check PM2 services (pm2 jlist), disk space (df -h), and memory (free -m).',
+    'System health check. Use the health-check skill sanitized helper for PM2 services; never run or print raw pm2 jlist output. Check disk space (df -h) and memory (free -m).',
     'If any issues found, use your judgment to notify whoever is most likely to help — check your memory for a designated owner or ops person, otherwise pick the person you normally work with.',
     'Log results to ~/zylos/logs/health.log.'
   ].join(' ');
