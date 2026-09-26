@@ -3,7 +3,12 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, test, expect } from '@jest/globals';
 import { isLocalAddress } from '../cli/commands/init.js';
-import { applyCaddyRoutes, generateManualRouteSnippet, generateRouteBlocks } from '../cli/lib/caddy.js';
+import {
+  applyCaddyRoutes,
+  generateCookieAllowlistDirectives,
+  generateManualRouteSnippet,
+  generateRouteBlocks,
+} from '../cli/lib/caddy.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -127,6 +132,63 @@ describe('generateRouteBlocks', () => {
     expect(block).toContain('        reverse_proxy localhost:3000');
     expect(block).not.toContain('header_up X-Forwarded-Prefix');
     expect(block).not.toContain('reverse_proxy localhost:3000 {');
+  });
+
+  test('generates a declarative cookie allowlist before the reverse proxy', () => {
+    const block = generateRouteBlocks([{
+      path: '/pages/*',
+      type: 'reverse_proxy',
+      target: 'localhost:3462',
+      strip_prefix: '/pages',
+      cookie_allowlist: {
+        exact: ['__Secure-zylos_pages_session', '__Secure-share_access'],
+        patterns: ['^__Secure-share_access\\.[a-f0-9]{32}$'],
+      },
+    }]);
+
+    expect(block).toContain('map {http.request.header.Cookie} {zylos_cookie_0_name_1}');
+    expect(block).toContain('__Secure-zylos_pages_session "1"');
+    expect(block).toContain('~^(__Secure-share_access\\.[a-f0-9]{32})$ "1"');
+    expect(block).toContain('1 "{zylos_cookie_0_name_1}={zylos_cookie_0_value_1}; "');
+    expect(block).toContain('request_header Cookie "{zylos_cookie_0_pair_1}{zylos_cookie_0_pair_2}');
+    expect(block.indexOf('request_header Cookie')).toBeLessThan(block.indexOf('reverse_proxy localhost:3462'));
+    expect(block).not.toContain('__Host-zylos_dashboard_session');
+  });
+
+  test('uses route-scoped placeholders and deterministic output across reinstall/upgrade', () => {
+    const routes = [{
+      path: '/pages/*', type: 'reverse_proxy', target: 'localhost:3462',
+      cookie_allowlist: { exact: ['session'], patterns: ['^grant\\.[a-f0-9]{32}$'] },
+    }];
+    expect(generateRouteBlocks(routes)).toBe(generateRouteBlocks(routes));
+    expect(generateRouteBlocks([...routes, ...routes])).toContain('{zylos_cookie_1_name_1}');
+  });
+
+  test('preserves declared matching semantics for duplicates, order, and prefix collisions', () => {
+    const block = generateRouteBlocks([{
+      path: '/pages/*', type: 'reverse_proxy', target: 'localhost:3462',
+      cookie_allowlist: {
+        exact: ['session'],
+        patterns: ['^grant\\.[a-f0-9]{32}$'],
+      },
+    }]);
+    expect(block).toContain('session "1"');
+    expect(block).toContain('~^(grant\\.[a-f0-9]{32})$ "1"');
+    expect(block).not.toContain('session_backup "1"');
+    expect(new Set(block.match(/\{zylos_cookie_0_pair_\d+\}/g)).size).toBe(32);
+  });
+
+  test('rejects empty, unanchored, and prefix-like cookie declarations', () => {
+    expect(() => generateCookieAllowlistDirectives({ exact: [] })).toThrow(/non-empty/);
+    expect(() => generateCookieAllowlistDirectives({ patterns: ['share_access'] })).toThrow(/anchored/);
+    expect(() => generateCookieAllowlistDirectives({ exact: ['session*'] })).toThrow(/invalid exact/);
+    expect(() => generateCookieAllowlistDirectives({ patterns: ['^safe$\nheader_up X-Test injected'] })).toThrow(/anchored/);
+  });
+
+  test('keeps every declared pattern alternative inside full-name anchors', () => {
+    const block = generateCookieAllowlistDirectives({ patterns: ['^first|second$'] }).join('\n');
+    expect(block).toContain('~^(first|second)$ "1"');
+    expect(block).not.toContain('~^first|second$ "1"');
   });
 });
 

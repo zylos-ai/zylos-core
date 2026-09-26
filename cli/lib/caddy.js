@@ -33,12 +33,12 @@ export function isCaddyAvailable() {
  * Supported route types:
  *   - reverse_proxy: proxies to a target, optionally stripping a prefix
  *
- * @param {Array} httpRoutes - Array of { path, type, target, strip_prefix? }
+ * @param {Array} httpRoutes - Array of { path, type, target, strip_prefix?, cookie_allowlist? }
  * @returns {string} Caddy configuration block (indented for domain block)
  */
 export function generateRouteBlocks(httpRoutes) {
   const lines = [];
-  for (const route of httpRoutes) {
+  for (const [routeIndex, route] of httpRoutes.entries()) {
     if (route.type === 'reverse_proxy') {
       // For wildcard paths like /foo/*, redirect bare /foo to /foo/
       if (route.path.endsWith('/*')) {
@@ -48,6 +48,9 @@ export function generateRouteBlocks(httpRoutes) {
       lines.push(`    handle ${route.path} {`);
       if (route.strip_prefix) {
         lines.push(`        uri strip_prefix ${route.strip_prefix}`);
+      }
+      if (route.cookie_allowlist) {
+        lines.push(...generateCookieAllowlistDirectives(route.cookie_allowlist, routeIndex));
       }
       if (route.strip_prefix) {
         lines.push(`        reverse_proxy ${route.target} {`);
@@ -60,6 +63,85 @@ export function generateRouteBlocks(httpRoutes) {
     }
   }
   return lines.join('\n');
+}
+
+const COOKIE_CAPTURE_SLOTS = 32;
+// Manifest declarations are configuration tokens, not arbitrary RFC cookie
+// names. Keep the exact form deliberately narrow so wildcard-looking values
+// cannot be mistaken for patterns and cannot alter generated Caddy syntax.
+const COOKIE_NAME_RE = /^[0-9A-Za-z_.-]+$/;
+const SAFE_COOKIE_PATTERN_RE = /^\^[0-9A-Za-z_.\\[\]{}()+?*|$-]+\$$/;
+
+function normalizeCookieAllowlist(input) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    throw new TypeError('cookie_allowlist must be an object with exact and/or patterns arrays');
+  }
+  const exact = input.exact ?? [];
+  const patterns = input.patterns ?? [];
+  if (!Array.isArray(exact) || !Array.isArray(patterns) || exact.length + patterns.length === 0) {
+    throw new TypeError('cookie_allowlist requires a non-empty exact or patterns array');
+  }
+  for (const name of exact) {
+    if (typeof name !== 'string' || !COOKIE_NAME_RE.test(name)) {
+      throw new TypeError(`invalid exact cookie name in cookie_allowlist: ${String(name)}`);
+    }
+  }
+  for (const pattern of patterns) {
+    if (typeof pattern !== 'string' || !SAFE_COOKIE_PATTERN_RE.test(pattern)) {
+      throw new TypeError(`cookie_allowlist patterns must be anchored: ${String(pattern)}`);
+    }
+  }
+  return { exact, patterns };
+}
+
+/**
+ * Caddy has no native cookie allowlist operation. Split a bounded Cookie
+ * header into ordered name/value slots, map each slot independently, then
+ * rebuild it from only allowlisted pairs. More than COOKIE_CAPTURE_SLOTS pairs
+ * fail the anchored split and therefore produce an empty upstream Cookie.
+ */
+export function generateCookieAllowlistDirectives(input, routeIndex = 0) {
+  const { exact, patterns } = normalizeCookieAllowlist(input);
+  const prefix = `zylos_cookie_${routeIndex}`;
+  const destinations = [];
+  const captures = [];
+  for (let slot = 1; slot <= COOKIE_CAPTURE_SLOTS; slot++) {
+    destinations.push(`{${prefix}_name_${slot}}`, `{${prefix}_value_${slot}}`);
+    const pair = `\\s*([^=;\\s]+)\\s*=\\s*([^;]*?)\\s*`;
+    captures.push(slot === 1 ? pair : `(?:;${pair})?`);
+  }
+
+  const lines = [
+    `        map {http.request.header.Cookie} ${destinations.join(' ')} {`,
+    `            ~^${captures.join('')}$ ${Array.from({ length: COOKIE_CAPTURE_SLOTS * 2 }, (_, index) => `\${${index + 1}}`).join(' ')}`,
+    '            default ""',
+    '        }',
+  ];
+
+  const filtered = [];
+  for (let slot = 1; slot <= COOKIE_CAPTURE_SLOTS; slot++) {
+    const output = `{${prefix}_pair_${slot}}`;
+    const allowed = `{${prefix}_allowed_${slot}}`;
+    filtered.push(output);
+    lines.push(`        map {${prefix}_name_${slot}} ${allowed} {`);
+    for (const name of exact) {
+      lines.push(`            ${name} "1"`);
+    }
+    for (const pattern of patterns) {
+      // Keep every alternative inside hard outer anchors. Merely requiring
+      // the declaration to start with ^ and end with $ is insufficient for
+      // inputs such as ^foo|bar$, whose branches are not both fully anchored.
+      lines.push(`            ~^(${pattern.slice(1, -1)})$ "1"`);
+    }
+    lines.push('            default ""');
+    lines.push('        }');
+    lines.push(`        map ${allowed} ${output} {`);
+    lines.push(`            1 "{${prefix}_name_${slot}}={${prefix}_value_${slot}}; "`);
+    lines.push('            default ""');
+    lines.push('        }');
+  }
+  lines.push(`        request_header Cookie "${filtered.join('')}"`);
+  return lines;
 }
 
 /**
