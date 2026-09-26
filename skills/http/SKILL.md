@@ -71,6 +71,12 @@ Only `reverse_proxy` routes are supported. `path` must start with `/`; `path`, `
 
 Invalid declarations fail closed: `zylos add` rejects them before installation mutations, component upgrades roll back, and Core self-upgrade reports per-component reconciliation warnings without stopping other components.
 
+At request time, Cookie filtering is also fail-closed. A malformed Cookie
+header or one containing more than 32 pairs is forwarded upstream as an empty
+Cookie header, even if it contains an allowlisted name. Valid duplicate
+allowlisted names are preserved in their original order; applications that
+require unique security cookies must continue to reject duplicates themselves.
+
 ## Troubleshooting
 
 ```bash
@@ -86,6 +92,12 @@ pm2 reload caddy
 # Access logs
 tail -f ~/zylos/http/caddy-access.log
 ```
+
+When an upstream application unexpectedly receives no session Cookie, first
+inspect the incoming header for a cookie without `=`, invalid semicolon
+structure, or more than 32 pairs. Reduce the header to a well-formed bounded
+set and retry. Do not widen `cookie_allowlist` with a match-all pattern; Core
+rejects universal variants such as `^.*$`, `^(.*)$`, and `^.{0,}$`.
 
 ## Port Binding
 

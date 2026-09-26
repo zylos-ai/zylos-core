@@ -5,6 +5,35 @@ All notable changes to zylos-core will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.2] - 2026-09-26
+
+### Added
+
+- **Declarative reverse-proxy Cookie allowlists.** Components can declare exact
+  cookie names and bounded anchored patterns per `http_routes` entry. Generated
+  Caddy routes preserve allowed pairs in order, drop all other cookies, and
+  forward an empty Cookie header for malformed or over-budget input.
+
+### Changed
+
+- **HTTP route declarations are validated before installation mutations.** Only
+  the supported `reverse_proxy` schema is accepted; third-party components with
+  absent, null, or empty `http_routes` remain compatible and install normally.
+- **Core self-upgrade reconciles managed component routes.** Route blocks are
+  rebuilt from each installed component's current declaration. Manual edits
+  inside `# BEGIN/END zylos-component:*` blocks are managed state and are
+  overwritten during reconciliation; per-component failures are reported and
+  do not stop reconciliation of other components.
+
+### Fixed
+
+- **Component upgrades roll back invalid route declarations.** Failed route
+  validation or Caddy application restores the prior component and managed
+  route state instead of leaving a partially upgraded installation.
+- **Universal Cookie patterns are rejected across equivalent forms.** Match-all
+  declarations using grouping or unbounded dot quantifiers cannot bypass the
+  route validator, while bounded patterns such as `^.{1,32}$` remain valid.
+
 ## [0.8.1] - 2026-09-09
 
 ### Added

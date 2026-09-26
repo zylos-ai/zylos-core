@@ -90,6 +90,30 @@ http_routes:
     assert.equal(fs.existsSync(path.join(zylosDir, 'components', 'invalid-routes-e2e')), false);
   });
 
+  for (const [label, declaration] of [
+    ['null', 'http_routes:'],
+    ['empty array', 'http_routes: []'],
+  ]) {
+    it(`treats a ${label} http_routes declaration as no routes`, () => {
+      const { root, zylosDir } = makeFixture();
+      const componentName = `no-routes-${label.replaceAll(' ', '-')}`;
+      const sourceDir = path.join(root, componentName);
+      writeSkill(sourceDir, { name: componentName, version: '1.0.0' });
+      fs.writeFileSync(path.join(sourceDir, 'SKILL.md'), `---
+name: ${componentName}
+version: 1.0.0
+description: Empty routes fixture
+${declaration}
+---
+`, 'utf8');
+
+      const output = runAdd({ cwd: root, zylosDir, target: sourceDir });
+
+      assert.equal(output.success, true);
+      assert.equal(readInstalled(zylosDir, componentName).components[componentName].version, '1.0.0');
+    });
+  }
+
   it('installs an explicit relative directory through the complete add pipeline', () => {
     const { root, zylosDir } = makeFixture();
     const sourceName = 'relative-component';

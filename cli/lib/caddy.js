@@ -71,7 +71,7 @@ const COOKIE_CAPTURE_SLOTS = 32;
 // cannot be mistaken for patterns and cannot alter generated Caddy syntax.
 const COOKIE_NAME_RE = /^[0-9A-Za-z_.-]+$/;
 const SAFE_COOKIE_PATTERN_RE = /^\^[0-9A-Za-z_.,\\[\]{}()+?*|$-]+\$$/;
-const UNIVERSAL_COOKIE_PATTERNS = new Set(['^.*$', '^.+$']);
+const UNIVERSAL_COOKIE_PATTERN_RE = /^\^\(*\.(?:\*|\+|\{0,\}|\{1,\})\)*\$$/;
 
 function containsCaddyPlaceholder(pattern) {
   return /\{(?!\d+(?:,\d*)?\})/.test(pattern);
@@ -95,7 +95,7 @@ function normalizeCookieAllowlist(input) {
     if (typeof pattern !== 'string' || !SAFE_COOKIE_PATTERN_RE.test(pattern)) {
       throw new TypeError(`cookie_allowlist patterns must be anchored: ${String(pattern)}`);
     }
-    if (UNIVERSAL_COOKIE_PATTERNS.has(pattern)) {
+    if (UNIVERSAL_COOKIE_PATTERN_RE.test(pattern)) {
       throw new TypeError(`cookie_allowlist pattern must not match every cookie name: ${pattern}`);
     }
     if (containsCaddyPlaceholder(pattern)) {

@@ -404,7 +404,7 @@ export async function addComponent(args) {
   if (detectComponentType(skillDir) === 'declarative') {
     const parsed = parseSkillMd(skillDir);
     const httpRoutes = parsed?.frontmatter?.http_routes;
-    if (httpRoutes !== undefined) {
+    if (httpRoutes != null && !(Array.isArray(httpRoutes) && httpRoutes.length === 0)) {
       const validation = validateHttpRoutes(httpRoutes);
       if (!validation.valid) {
         if (jsonOutput) {

@@ -4,7 +4,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { describe, it } from 'node:test';
 
-const { rollback, step7_runPostUpgradeHook, step8_startService } = await import('../upgrade.js');
+const {
+  rollback,
+  step6_updateCaddyRoutes,
+  step7_runPostUpgradeHook,
+  step8_startService,
+} = await import('../upgrade.js');
 const { step11_startCoreServices } = await import('../self-upgrade.js');
 const { restartRuntimeServices } = await import('../../commands/runtime.js');
 
@@ -15,6 +20,30 @@ function makeSkillDir(frontmatter) {
   fs.writeFileSync(path.join(skillDir, 'SKILL.md'), `---\nname: demo\n${frontmatter}---\n`, 'utf8');
   return { tmpDir, skillDir };
 }
+
+describe('step6_updateCaddyRoutes', () => {
+  for (const [label, declaration] of [
+    ['null', 'http_routes:\n'],
+    ['empty array', 'http_routes: []\n'],
+  ]) {
+    it(`treats a ${label} declaration as no routes`, () => {
+      const { tmpDir, skillDir } = makeSkillDir(declaration);
+
+      try {
+        const result = step6_updateCaddyRoutes({ component: 'demo', skillDir }, {
+          applyCaddyRoutes: () => {
+            throw new Error('should not apply routes');
+          },
+        });
+
+        assert.equal(result.status, 'skipped');
+        assert.equal(result.message, 'no http_routes');
+      } finally {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+  }
+});
 
 describe('step7_runPostUpgradeHook', () => {
   it('skips when no post-upgrade hook is declared', () => {

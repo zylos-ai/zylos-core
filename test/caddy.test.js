@@ -207,10 +207,20 @@ describe('validateHttpRoutes', () => {
     }])).toEqual({ valid: true });
   });
 
+  test('accepts a bounded dot pattern that is not universal', () => {
+    expect(validateHttpRoutes([{
+      path: '/pages/*', type: 'reverse_proxy', target: 'localhost:3462',
+      cookie_allowlist: { patterns: ['^.{1,32}$'] },
+    }])).toEqual({ valid: true });
+  });
+
   test.each([
     [{ type: 'reverse_proxy', path: 'pages/*', target: 'localhost:3462' }, /path must start/],
     [{ type: 'file_server', path: '/pages/*', target: 'localhost:3462' }, /type must be reverse_proxy/],
     [{ type: 'reverse_proxy', path: '/pages/*', target: 'localhost:3462', cookie_allowlist: { patterns: ['^.*$'] } }, /must not match every/],
+    [{ type: 'reverse_proxy', path: '/pages/*', target: 'localhost:3462', cookie_allowlist: { patterns: ['^(.*)$'] } }, /must not match every/],
+    [{ type: 'reverse_proxy', path: '/pages/*', target: 'localhost:3462', cookie_allowlist: { patterns: ['^.{0,}$'] } }, /must not match every/],
+    [{ type: 'reverse_proxy', path: '/pages/*', target: 'localhost:3462', cookie_allowlist: { patterns: ['^(.{1,})$'] } }, /must not match every/],
     [{ type: 'reverse_proxy', path: '/pages/*', target: 'localhost:3462', cookie_allowlist: { patterns: ['^{$COOKIE}$'] } }, /placeholders/],
     [{ type: 'reverse_proxy', path: '/pages/*', target: 'localhost:3462', cookie_allowlist: { patterns: ['^{http.request.header.Cookie}$'] } }, /placeholders/],
   ])('rejects invalid route declarations without throwing', (route, expected) => {
