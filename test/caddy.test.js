@@ -8,6 +8,7 @@ import {
   generateCookieAllowlistDirectives,
   generateManualRouteSnippet,
   generateRouteBlocks,
+  validateHttpRoutes,
 } from '../cli/lib/caddy.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -183,12 +184,37 @@ describe('generateRouteBlocks', () => {
     expect(() => generateCookieAllowlistDirectives({ patterns: ['share_access'] })).toThrow(/anchored/);
     expect(() => generateCookieAllowlistDirectives({ exact: ['session*'] })).toThrow(/invalid exact/);
     expect(() => generateCookieAllowlistDirectives({ patterns: ['^safe$\nheader_up X-Test injected'] })).toThrow(/anchored/);
+    expect(() => generateCookieAllowlistDirectives({ patterns: ['^.*$'] })).toThrow(/must not match every/);
+    expect(() => generateCookieAllowlistDirectives({ patterns: ['^.+$'] })).toThrow(/must not match every/);
+    expect(() => generateCookieAllowlistDirectives({ patterns: ['^{$COOKIE}$'] })).toThrow(/placeholders/);
+    expect(() => generateCookieAllowlistDirectives({ patterns: ['^{http.request.header.Cookie}$'] })).toThrow(/placeholders/);
+    expect(() => generateCookieAllowlistDirectives({ patterns: ['^grant\\.[a-f0-9]{1,32}$'] })).not.toThrow();
   });
 
   test('keeps every declared pattern alternative inside full-name anchors', () => {
     const block = generateCookieAllowlistDirectives({ patterns: ['^first|second$'] }).join('\n');
     expect(block).toContain('~^(first|second)$ "1"');
     expect(block).not.toContain('~^first|second$ "1"');
+  });
+});
+
+describe('validateHttpRoutes', () => {
+  test('accepts the supported reverse proxy schema and bounded cookie patterns', () => {
+    expect(validateHttpRoutes([{
+      path: '/pages/*', type: 'reverse_proxy', target: 'localhost:3462',
+      strip_prefix: '/pages',
+      cookie_allowlist: { exact: ['session'], patterns: ['^grant\\.[a-f0-9]{32}$'] },
+    }])).toEqual({ valid: true });
+  });
+
+  test.each([
+    [{ type: 'reverse_proxy', path: 'pages/*', target: 'localhost:3462' }, /path must start/],
+    [{ type: 'file_server', path: '/pages/*', target: 'localhost:3462' }, /type must be reverse_proxy/],
+    [{ type: 'reverse_proxy', path: '/pages/*', target: 'localhost:3462', cookie_allowlist: { patterns: ['^.*$'] } }, /must not match every/],
+    [{ type: 'reverse_proxy', path: '/pages/*', target: 'localhost:3462', cookie_allowlist: { patterns: ['^{$COOKIE}$'] } }, /placeholders/],
+    [{ type: 'reverse_proxy', path: '/pages/*', target: 'localhost:3462', cookie_allowlist: { patterns: ['^{http.request.header.Cookie}$'] } }, /placeholders/],
+  ])('rejects invalid route declarations without throwing', (route, expected) => {
+    expect(validateHttpRoutes([route])).toEqual({ valid: false, error: expect.stringMatching(expected) });
   });
 });
 
@@ -211,6 +237,29 @@ describe('generateManualRouteSnippet', () => {
 });
 
 describe('applyCaddyRoutes', () => {
+  test('rejects invalid declarations before checking Caddy availability', () => {
+    const result = applyCaddyRoutes('dashboard', [{
+      path: '/dashboard/*', type: 'reverse_proxy', target: 'localhost:3000',
+      cookie_allowlist: { patterns: ['^.*$'] },
+    }], { isCaddyAvailable: () => false });
+
+    expect(result.success).toBe(false);
+    expect(result.action).toBe('invalid');
+    expect(result.error).toMatch(/must not match every/);
+  });
+
+  test('rejects a non-array declaration instead of treating it as absent', () => {
+    const result = applyCaddyRoutes('dashboard', { path: '/dashboard/*' }, {
+      isCaddyAvailable: () => false,
+    });
+
+    expect(result).toEqual({
+      success: false,
+      action: 'invalid',
+      error: 'http_routes must be an array',
+    });
+  });
+
   test('returns manual configuration details when zylos-managed Caddy is unavailable', () => {
     const result = applyCaddyRoutes('dashboard', [{
       path: '/dashboard/*',

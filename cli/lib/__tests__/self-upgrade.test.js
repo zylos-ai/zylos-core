@@ -11,6 +11,7 @@ const {
   step7_syncInstructions,
   rollbackSelf,
   step10_ensureCodexConfig,
+  step13_reconcileComponentRoutes,
 } = await import('../self-upgrade.js');
 const { generateMigrationHints, applyMigrationHints } = await import('../self-upgrade.js');
 const { deployManifestTemplate } = await import('../runtime/tmux-env.js');
@@ -153,6 +154,35 @@ describe('step10_ensureCodexConfig', () => {
 
     assert.equal(result.status, 'failed');
     assert.equal(result.error, 'failed to write codex config');
+  });
+});
+
+describe('step13_reconcileComponentRoutes', () => {
+  it('reconciles every routed component and reports named warnings without failing', () => {
+    const calls = [];
+    const result = step13_reconcileComponentRoutes({}, {
+      loadComponents: () => ({
+        pages: { skillDir: '/skills/pages' },
+        dashboard: { skillDir: '/skills/dashboard' },
+        quiet: { skillDir: '/skills/quiet' },
+      }),
+      parseSkillMd: (skillDir) => ({
+        frontmatter: skillDir.endsWith('/quiet') ? {} : {
+          http_routes: [{ path: '/x/*', type: 'reverse_proxy', target: 'localhost:3000' }],
+        },
+      }),
+      applyCaddyRoutes: (name) => {
+        calls.push(name);
+        if (name === 'dashboard') return { success: false, action: 'invalid', error: 'bad route' };
+        return { success: true, action: 'updated' };
+      },
+    });
+
+    assert.equal(result.status, 'done');
+    assert.deepEqual(calls, ['pages', 'dashboard']);
+    assert.deepEqual(result.reconciled, ['pages']);
+    assert.deepEqual(result.warnings, ['dashboard: bad route']);
+    assert.match(result.message, /1 reconciled; warnings: dashboard: bad route/);
   });
 });
 

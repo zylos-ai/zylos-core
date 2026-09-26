@@ -54,6 +54,23 @@ cp document.md ~/zylos/http/public/
 
 Components declare `http_routes` in SKILL.md frontmatter. Routes are auto-managed via marker blocks in the Caddyfile by `zylos add/upgrade/remove`.
 
+```yaml
+http_routes:
+  - path: /example/*
+    type: reverse_proxy
+    target: localhost:3000
+    strip_prefix: /example
+    cookie_allowlist:
+      exact:
+        - __Secure-example_session
+      patterns:
+        - ^__Secure-example_share\.[a-f0-9]{32}$
+```
+
+Only `reverse_proxy` routes are supported. `path` must start with `/`; `path`, `target`, and optional `strip_prefix` are single tokens without whitespace or braces. A `cookie_allowlist` must contain a non-empty `exact` or `patterns` array. Exact names use only letters, digits, `_`, `.`, and `-`. Patterns must be fully anchored (`^...$`), may use braces only for numeric regex quantifiers, may not contain Caddy placeholders, and may not match every cookie name.
+
+Invalid declarations fail closed: `zylos add` rejects them before installation mutations, component upgrades roll back, and Core self-upgrade reports per-component reconciliation warnings without stopping other components.
+
 ## Troubleshooting
 
 ```bash

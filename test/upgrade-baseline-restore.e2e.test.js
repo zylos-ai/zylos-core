@@ -160,6 +160,34 @@ describe('runUpgrade owns the final baseline commit (#715)', () => {
     expect(readFile(dest, '.zylos/originals/a.js')).toBe('v2');
   });
 
+  test('invalid upgraded http_routes fail without throwing and roll business files back', () => {
+    const name = 'invalid-routes-rollback';
+    const dest = installV1(name);
+    const sourceV2 = makeV2(name);
+    writeFile(sourceV2, 'SKILL.md', `---
+name: ${name}
+version: 2.0.0
+http_routes:
+  - path: /invalid/*
+    type: reverse_proxy
+    target: localhost:3000
+    cookie_allowlist:
+      patterns:
+        - ^.*$
+---
+`);
+    fs.rmSync(failFlag, { force: true });
+
+    const result = runUpgradeE2E(name, sourceV2);
+
+    expect(result.success).toBe(false);
+    expect(result.failedStep).toBe(6);
+    expect(result.error).toMatch(/must not match every/);
+    expect(result.rollback.performed).toBe(true);
+    expect(readFile(dest, 'a.js')).toBe('v1');
+    expect(fs.existsSync(path.join(dest, 'SKILL.md'))).toBe(false);
+  });
+
   test('successful pipeline exposes the baseline commit as its final step', () => {
     const name = 'commit-boundary-success';
     const dest = installV1(name);

@@ -61,6 +61,35 @@ function readInstalled(zylosDir, name) {
 }
 
 describe('zylos add local source E2E', () => {
+  it('rejects invalid http_routes before persisting install state', () => {
+    const { root, zylosDir } = makeFixture();
+    const sourceDir = path.join(root, 'invalid-routes');
+    writeSkill(sourceDir, { name: 'invalid-routes-e2e', version: '1.0.0' });
+    fs.writeFileSync(path.join(sourceDir, 'SKILL.md'), `---
+name: invalid-routes-e2e
+version: 1.0.0
+description: Invalid routes fixture
+http_routes:
+  - path: /invalid/*
+    type: reverse_proxy
+    target: localhost:3000
+    cookie_allowlist:
+      patterns:
+        - ^.*$
+---
+`, 'utf8');
+
+    const result = runCli({ cwd: root, zylosDir, args: ['add', './invalid-routes', '--json'] });
+
+    assert.equal(result.status, 1, result.stderr);
+    const output = JSON.parse(result.stdout);
+    assert.equal(output.error, 'invalid_http_routes');
+    assert.match(output.message, /must not match every/);
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(zylosDir, '.zylos', 'components.json'), 'utf8')), {});
+    assert.equal(fs.existsSync(path.join(zylosDir, '.claude', 'skills', 'invalid-routes-e2e')), false);
+    assert.equal(fs.existsSync(path.join(zylosDir, 'components', 'invalid-routes-e2e')), false);
+  });
+
   it('installs an explicit relative directory through the complete add pipeline', () => {
     const { root, zylosDir } = makeFixture();
     const sourceName = 'relative-component';

@@ -38,6 +38,9 @@ import {
 import { deployManifestTemplate } from './runtime/tmux-env.js';
 import { writeCodexConfig } from './runtime-setup.js';
 import { getCoreEcosystemPath, restartManagedProcess } from './pm2.js';
+import { loadComponents } from './components.js';
+import { parseSkillMd } from './skill.js';
+import { applyCaddyRoutes } from './caddy.js';
 
 const REPO = 'zylos-ai/zylos-core';
 
@@ -468,7 +471,7 @@ export function generateMigrationHints(templatesDir, deps = {}) {
 }
 
 // ---------------------------------------------------------------------------
-// 11-step self-upgrade pipeline
+// 14-step self-upgrade pipeline
 // ---------------------------------------------------------------------------
 
 /**
@@ -1344,22 +1347,63 @@ function step12_verifyServices(ctx) {
   return { step: 12, name: 'verify_services', status: 'failed', error: `Timed out after ${TIMEOUT_MS / 1000}s`, duration: Date.now() - startTime };
 }
 
+/** Rebuild installed component routes with the newly installed Core logic. */
+export function step13_reconcileComponentRoutes(ctx, deps = {}) {
+  const startTime = Date.now();
+  const load = deps.loadComponents ?? loadComponents;
+  const parse = deps.parseSkillMd ?? parseSkillMd;
+  const applyRoutes = deps.applyCaddyRoutes ?? applyCaddyRoutes;
+  const reconciled = [];
+  const warnings = [];
+
+  let components;
+  try {
+    components = load();
+  } catch (err) {
+    return {
+      step: 13, name: 'reconcile_component_routes', status: 'done',
+      message: `0 reconciled; warning: components: ${err.message}`,
+      reconciled, warnings: [`components: ${err.message}`], duration: Date.now() - startTime,
+    };
+  }
+
+  for (const [name, component] of Object.entries(components || {})) {
+    try {
+      if (!component?.skillDir) continue;
+      const routes = parse(component.skillDir)?.frontmatter?.http_routes;
+      if (routes == null || (Array.isArray(routes) && routes.length === 0)) continue;
+      const result = applyRoutes(name, routes);
+      if (result.success) reconciled.push(name);
+      else warnings.push(`${name}: ${result.error || result.action}`);
+    } catch (err) {
+      warnings.push(`${name}: ${err.message}`);
+    }
+  }
+
+  const warningText = warnings.length ? `; warnings: ${warnings.join('; ')}` : '';
+  return {
+    step: 13, name: 'reconcile_component_routes', status: 'done',
+    message: `${reconciled.length} reconciled${warningText}`,
+    reconciled, warnings, duration: Date.now() - startTime,
+  };
+}
+
 /** Commit every Core Skill baseline after the complete self-upgrade succeeds. */
-function step13_commitSkillBaselines(ctx) {
+function step14_commitSkillBaselines(ctx) {
   const startTime = Date.now();
   try {
     for (const baseline of ctx.pendingBaselines || []) {
       saveMergeBaseline(baseline.destDir, baseline.srcDir, baseline.manifest);
     }
     return {
-      step: 13,
+      step: 14,
       name: 'commit_skill_baselines',
       status: 'done',
       message: `${(ctx.pendingBaselines || []).length} committed`,
       duration: Date.now() - startTime,
     };
   } catch (err) {
-    return { step: 13, name: 'commit_skill_baselines', status: 'failed', error: err.message, duration: Date.now() - startTime };
+    return { step: 14, name: 'commit_skill_baselines', status: 'failed', error: err.message, duration: Date.now() - startTime };
   }
 }
 
@@ -1432,7 +1476,8 @@ const POST_INSTALL_STEPS = [
   step10_ensureCodexConfig,
   step11_startCoreServices,
   step12_verifyServices,
-  step13_commitSkillBaselines,
+  step13_reconcileComponentRoutes,
+  step14_commitSkillBaselines,
 ];
 
 function buildSelfUpgradeResult(ctx, failedStep, rollbackResults = null, rollbackPerformed = Boolean(rollbackResults)) {
@@ -1563,7 +1608,7 @@ export function runSelfUpgradeFinalize(state = {}, deps = {}) {
   ctx.to = state.to || state.newVersion || null;
 
   const steps = deps.steps || POST_INSTALL_STEPS;
-  const total = deps.total || 13;
+  const total = deps.total || 14;
   let failedStep = null;
 
   for (const stepFn of steps) {
@@ -1586,7 +1631,7 @@ export function runSelfUpgradeFinalize(state = {}, deps = {}) {
 }
 
 /**
- * Run the 13-step self-upgrade pipeline.
+ * Run the 14-step self-upgrade pipeline.
  * Template migration and Claude restart are handled by Claude after this completes.
  * Lock must be acquired by caller.
  *
@@ -1611,7 +1656,7 @@ export function runSelfUpgrade({ tempDir, newVersion, mode, onStep } = {}, deps 
     (stepCtx) => step4_npmInstallGlobal(stepCtx, deps.step4),
   ];
 
-  const total = 13;
+  const total = 14;
   let failedStep = null;
 
   for (const stepFn of preInstallSteps) {

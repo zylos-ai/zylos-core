@@ -26,7 +26,7 @@ import { sha256File, isValidSha256Hex } from '../lib/checksum.js';
 import { generateManifest, saveMergeBaseline } from '../lib/manifest.js';
 import { parseSkillMd, detectComponentType } from '../lib/skill.js';
 import { linkBins } from '../lib/bin.js';
-import { applyCaddyRoutes } from '../lib/caddy.js';
+import { applyCaddyRoutes, validateHttpRoutes } from '../lib/caddy.js';
 import { promptYesNo, prompt, promptSecret } from '../lib/prompts.js';
 import { writeEnvEntries } from '../lib/env.js';
 import { hasConfigureHook, runConfigureHook } from '../lib/configure-hook.js';
@@ -398,6 +398,29 @@ export async function addComponent(args) {
   }
 
   if (!jsonOutput) console.log(`  ${success('Download complete.')}`);
+
+  // Reject malformed route declarations before npm, data, registry, bin, or
+  // baseline mutations. Validation is independent of local Caddy availability.
+  if (detectComponentType(skillDir) === 'declarative') {
+    const parsed = parseSkillMd(skillDir);
+    const httpRoutes = parsed?.frontmatter?.http_routes;
+    if (httpRoutes !== undefined) {
+      const validation = validateHttpRoutes(httpRoutes);
+      if (!validation.valid) {
+        if (jsonOutput) {
+          console.log(JSON.stringify({
+            action: 'add', component: resolved.name, success: false,
+            error: 'invalid_http_routes', message: validation.error,
+            reply: `Failed to install ${resolved.name}: invalid http_routes declaration.`,
+          }, null, 2));
+        } else {
+          console.error(error(`Invalid http_routes declaration: ${validation.error}`));
+        }
+        cleanup(skillDir);
+        process.exit(1);
+      }
+    }
+  }
 
   // 8. Commit the authoritative install baseline (manifest + originals)
   try {

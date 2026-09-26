@@ -70,7 +70,12 @@ const COOKIE_CAPTURE_SLOTS = 32;
 // names. Keep the exact form deliberately narrow so wildcard-looking values
 // cannot be mistaken for patterns and cannot alter generated Caddy syntax.
 const COOKIE_NAME_RE = /^[0-9A-Za-z_.-]+$/;
-const SAFE_COOKIE_PATTERN_RE = /^\^[0-9A-Za-z_.\\[\]{}()+?*|$-]+\$$/;
+const SAFE_COOKIE_PATTERN_RE = /^\^[0-9A-Za-z_.,\\[\]{}()+?*|$-]+\$$/;
+const UNIVERSAL_COOKIE_PATTERNS = new Set(['^.*$', '^.+$']);
+
+function containsCaddyPlaceholder(pattern) {
+  return /\{(?!\d+(?:,\d*)?\})/.test(pattern);
+}
 
 function normalizeCookieAllowlist(input) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) {
@@ -90,8 +95,54 @@ function normalizeCookieAllowlist(input) {
     if (typeof pattern !== 'string' || !SAFE_COOKIE_PATTERN_RE.test(pattern)) {
       throw new TypeError(`cookie_allowlist patterns must be anchored: ${String(pattern)}`);
     }
+    if (UNIVERSAL_COOKIE_PATTERNS.has(pattern)) {
+      throw new TypeError(`cookie_allowlist pattern must not match every cookie name: ${pattern}`);
+    }
+    if (containsCaddyPlaceholder(pattern)) {
+      throw new TypeError(`cookie_allowlist pattern must not contain Caddy placeholders: ${pattern}`);
+    }
   }
   return { exact, patterns };
+}
+
+/** Validate declarative HTTP routes without reading or changing local state. */
+export function validateHttpRoutes(httpRoutes) {
+  if (!Array.isArray(httpRoutes)) {
+    return { valid: false, error: 'http_routes must be an array' };
+  }
+
+  try {
+    for (const [index, route] of httpRoutes.entries()) {
+      const label = `http_routes[${index}]`;
+      if (!route || typeof route !== 'object' || Array.isArray(route)) {
+        throw new TypeError(`${label} must be an object`);
+      }
+      if (route.type !== 'reverse_proxy') {
+        throw new TypeError(`${label}.type must be reverse_proxy`);
+      }
+      for (const key of ['path', 'target']) {
+        if (typeof route[key] !== 'string' || route[key].length === 0 || /[\s{}]/.test(route[key])) {
+          throw new TypeError(`${label}.${key} must be a non-empty token without whitespace or braces`);
+        }
+      }
+      if (!route.path.startsWith('/')) {
+        throw new TypeError(`${label}.path must start with /`);
+      }
+      if (route.strip_prefix !== undefined
+          && (typeof route.strip_prefix !== 'string'
+            || !route.strip_prefix.startsWith('/')
+            || /[\s{}]/.test(route.strip_prefix))) {
+        throw new TypeError(`${label}.strip_prefix must start with / and contain no whitespace or braces`);
+      }
+      if (route.cookie_allowlist !== undefined) {
+        normalizeCookieAllowlist(route.cookie_allowlist);
+      }
+    }
+  } catch (err) {
+    return { valid: false, error: err.message };
+  }
+
+  return { valid: true };
 }
 
 /**
@@ -306,8 +357,13 @@ function findPrimaryBlockEnd(content) {
  * @returns {{ success: boolean, action: string, error?: string }}
  */
 export function applyCaddyRoutes(componentName, httpRoutes, deps = {}) {
-  if (!httpRoutes || !Array.isArray(httpRoutes) || httpRoutes.length === 0) {
+  if (httpRoutes == null || (Array.isArray(httpRoutes) && httpRoutes.length === 0)) {
     return { success: true, action: 'skipped' };
+  }
+
+  const validation = validateHttpRoutes(httpRoutes);
+  if (!validation.valid) {
+    return { success: false, action: 'invalid', error: validation.error };
   }
 
   const isAvailable = deps.isCaddyAvailable || isCaddyAvailable;

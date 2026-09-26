@@ -511,16 +511,17 @@ function step9_commitBaseline(ctx) {
 /**
  * Step 6: update Caddy routes (if http_routes declared in SKILL.md)
  */
-function step6_updateCaddyRoutes(ctx) {
+export function step6_updateCaddyRoutes(ctx, deps = {}) {
   const startTime = Date.now();
   const parsed = parseSkillMd(ctx.skillDir);
   const httpRoutes = parsed?.frontmatter?.http_routes;
 
-  if (!httpRoutes || !Array.isArray(httpRoutes) || httpRoutes.length === 0) {
+  if (httpRoutes == null || (Array.isArray(httpRoutes) && httpRoutes.length === 0)) {
     return { step: 6, name: 'caddy_routes', status: 'skipped', message: 'no http_routes', duration: Date.now() - startTime };
   }
 
-  const result = applyCaddyRoutes(ctx.component, httpRoutes);
+  const applyRoutes = deps.applyCaddyRoutes ?? applyCaddyRoutes;
+  const result = applyRoutes(ctx.component, httpRoutes);
   if (result.success) {
     return { step: 6, name: 'caddy_routes', status: 'done', message: result.action, caddy: result, duration: Date.now() - startTime };
   }
@@ -533,6 +534,9 @@ function step6_updateCaddyRoutes(ctx) {
       caddy: result,
       duration: Date.now() - startTime,
     };
+  }
+  if (result.action === 'invalid') {
+    return { step: 6, name: 'caddy_routes', status: 'failed', error: result.error, caddy: result, duration: Date.now() - startTime };
   }
   // Caddy failures are non-fatal for upgrades
   return { step: 6, name: 'caddy_routes', status: 'skipped', message: result.error, caddy: result, duration: Date.now() - startTime };
