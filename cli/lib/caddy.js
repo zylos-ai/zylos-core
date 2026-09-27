@@ -328,9 +328,13 @@ export function removeCaddyRoutes(componentName) {
  *
  * @param {string} newContent - New Caddyfile content
  * @param {string} originalContent - Original content for rollback
+ * @param {object} [deps] - Test seam: { caddyfile, caddyBin, execSync }
  * @returns {{ success: boolean, error?: string }}
  */
-function validateAndDeploy(newContent, originalContent) {
+export function validateAndDeploy(newContent, originalContent, deps = {}) {
+  const caddyfile = deps.caddyfile || CADDYFILE;
+  const caddyBin = deps.caddyBin || CADDY_BIN;
+  const exec = deps.execSync || execSync;
   const tmpFile = `/tmp/Caddyfile.zylos-${Date.now()}`;
 
   try {
@@ -338,7 +342,7 @@ function validateAndDeploy(newContent, originalContent) {
 
     // Validate using our own caddy binary
     try {
-      execSync(`"${CADDY_BIN}" validate --config "${tmpFile}" --adapter caddyfile`, {
+      exec(`"${caddyBin}" validate --config "${tmpFile}" --adapter caddyfile`, {
         stdio: 'pipe',
         timeout: 10000,
       });
@@ -351,7 +355,7 @@ function validateAndDeploy(newContent, originalContent) {
 
     // Deploy: write directly (user-space, no sudo)
     try {
-      fs.writeFileSync(CADDYFILE, newContent);
+      fs.writeFileSync(caddyfile, newContent);
     } catch (err) {
       try { fs.unlinkSync(tmpFile); } catch { /* ignore */ }
       return { success: false, error: `Failed to write Caddyfile: ${err.message}` };
@@ -359,15 +363,15 @@ function validateAndDeploy(newContent, originalContent) {
 
     // Reload Caddy via PM2
     try {
-      execSync('pm2 reload caddy', {
+      exec('pm2 reload caddy', {
         stdio: 'pipe',
         timeout: 10000,
       });
     } catch (err) {
       // Reload failed — rollback
       try {
-        fs.writeFileSync(CADDYFILE, originalContent);
-        execSync('pm2 reload caddy', { stdio: 'pipe', timeout: 10000 });
+        fs.writeFileSync(caddyfile, originalContent);
+        exec('pm2 reload caddy', { stdio: 'pipe', timeout: 10000 });
       } catch { /* rollback best-effort */ }
       try { fs.unlinkSync(tmpFile); } catch { /* ignore */ }
       return { success: false, error: `Caddy reload failed (rolled back): ${err.message}` };

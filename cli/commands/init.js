@@ -1485,12 +1485,16 @@ ${siteAddress} {
         respond "OK" 200
     }
 
+    # BEGIN zylos-core:web-console
     # Web Console (core built-in)
     redir /console /console/ permanent
     handle /console/* {
         uri strip_prefix /console
-        reverse_proxy localhost:3456
+        reverse_proxy localhost:3456 {
+            header_up X-Forwarded-Prefix /console
+        }
     }
+    # END zylos-core:web-console
 
     log {
         output file ${HTTP_DIR}/caddy-access.log {
