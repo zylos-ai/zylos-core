@@ -5,6 +5,14 @@ All notable changes to zylos-core will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Security
+- **Web Console session cookie scoped to `/console`**: `wc_session` was issued with `Path=/`, so browsers sent it to every component on the same host (for example `/pages` and `/dashboard`). Caddy now forwards the mount path as `X-Forwarded-Prefix /console`, and Web Console issues the cookie with that `Path` (validated: `/`-prefixed, `[A-Za-z0-9/_-]`, no `//`, at most 64 characters), plus `Secure` when the browser reached it over HTTPS. Without a valid prefix (direct `localhost:3456` access, or a Caddyfile that has not been migrated) the cookie keeps `Path=/`, so no setup is locked out. Logout clears the cookie at its own path and at `/`. **Users signed in through `/console` sign in once more after this upgrade**: the old `Path=/` session is revoked and cleared on the first visit, so it cannot keep travelling to other components. (#797)
+
+### Added
+- **Upgrade step: forward the `/console` prefix in Caddy** (`[14/14] web_console_caddy_prefix`): `zylos upgrade --self` checks the Caddyfile's `/console` route by its current state. A route that already forwards the prefix is left alone silently; the unmodified route written by `zylos init` is rewritten into a marked block (`# BEGIN/END zylos-core:web-console`), validated, reloaded and rolled back on failure; anything else (edited, duplicated or missing route, failed validation/reload) leaves the Caddyfile byte-identical and reports a warning with the exact lines to add and how to verify. Instances without Caddy are skipped. Fresh `zylos init` writes the new block directly. (#797)
+
 ## [0.8.1] - 2026-09-09
 
 ### Added

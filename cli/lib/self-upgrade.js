@@ -38,6 +38,7 @@ import {
 import { deployManifestTemplate } from './runtime/tmux-env.js';
 import { writeCodexConfig } from './runtime-setup.js';
 import { getCoreEcosystemPath, restartManagedProcess } from './pm2.js';
+import { ensureWebConsolePrefix } from './web-console-caddy.js';
 
 const REPO = 'zylos-ai/zylos-core';
 
@@ -1363,6 +1364,22 @@ function step13_commitSkillBaselines(ctx) {
   }
 }
 
+/**
+ * Step 14: make Caddy forward the /console prefix to Web Console
+ *
+ * Never fails the upgrade: an unexpected Caddyfile is left untouched and the
+ * step reports a warning with manual instructions instead.
+ */
+function step14_webConsoleCaddyPrefix(ctx, deps = {}) {
+  const startTime = Date.now();
+  try {
+    const result = ensureWebConsolePrefix(deps);
+    return { step: 14, name: 'web_console_caddy_prefix', ...result, duration: Date.now() - startTime };
+  } catch (err) {
+    return { step: 14, name: 'web_console_caddy_prefix', status: 'warning', message: `Could not check the /console Caddy route: ${err.message}`, duration: Date.now() - startTime };
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Rollback
 // ---------------------------------------------------------------------------
@@ -1433,6 +1450,7 @@ const POST_INSTALL_STEPS = [
   step11_startCoreServices,
   step12_verifyServices,
   step13_commitSkillBaselines,
+  step14_webConsoleCaddyPrefix,
 ];
 
 function buildSelfUpgradeResult(ctx, failedStep, rollbackResults = null, rollbackPerformed = Boolean(rollbackResults)) {
@@ -1563,7 +1581,7 @@ export function runSelfUpgradeFinalize(state = {}, deps = {}) {
   ctx.to = state.to || state.newVersion || null;
 
   const steps = deps.steps || POST_INSTALL_STEPS;
-  const total = deps.total || 13;
+  const total = deps.total || 14;
   let failedStep = null;
 
   for (const stepFn of steps) {
@@ -1586,7 +1604,7 @@ export function runSelfUpgradeFinalize(state = {}, deps = {}) {
 }
 
 /**
- * Run the 13-step self-upgrade pipeline.
+ * Run the 14-step self-upgrade pipeline.
  * Template migration and Claude restart are handled by Claude after this completes.
  * Lock must be acquired by caller.
  *
@@ -1611,7 +1629,7 @@ export function runSelfUpgrade({ tempDir, newVersion, mode, onStep } = {}, deps 
     (stepCtx) => step4_npmInstallGlobal(stepCtx, deps.step4),
   ];
 
-  const total = 13;
+  const total = 14;
   let failedStep = null;
 
   for (const stepFn of preInstallSteps) {

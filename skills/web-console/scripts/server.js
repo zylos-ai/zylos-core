@@ -32,6 +32,16 @@ import {
   uploadKind
 } from './attachment-utils.js';
 import { openDb, SessionStore, PersistentUploadRegistry } from './db.js';
+import {
+  appendSetCookie,
+  clearSessionCookie,
+  cookiePathFromRequest,
+  createSessionToken,
+  isSecureRequest,
+  readSessionTokens,
+  resolveSessionTokens,
+  sessionCookie,
+} from './session-cookie.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -83,34 +93,50 @@ const uploadRegistry = new PersistentUploadRegistry(wcDb);
 
 fs.mkdirSync(MEDIA_DIR, { recursive: true });
 
-function parseCookies(cookieHeader) {
-  const cookies = {};
-  if (!cookieHeader) return cookies;
-  for (const pair of cookieHeader.split(';')) {
-    const [name, ...rest] = pair.trim().split('=');
-    if (name) cookies[name] = rest.join('=');
+/**
+ * Resolve the session for this request. Our sessions whose cookie was issued
+ * for another path (for example the pre-scoping Path=/ cookie once Caddy
+ * forwards /console) are revoked and, when a response is available, cleared at
+ * their own path. Unknown tokens are left alone: they may belong to another
+ * service on the same host.
+ */
+function resolveSession(req, res = null) {
+  const cookiePath = cookiePathFromRequest(req);
+  const { token, retire } = resolveSessionTokens(
+    readSessionTokens(req.headers.cookie),
+    cookiePath,
+    (candidate) => sessionStore.has(candidate)
+  );
+  if (retire.length > 0) {
+    const secure = isSecureRequest(req);
+    const clears = new Set();
+    for (const stale of retire) {
+      if (!sessionStore.has(stale.token)) continue;
+      sessionStore.delete(stale.token);
+      if (stale.path) clears.add(clearSessionCookie(stale.path, { secure }));
+    }
+    if (res && clears.size > 0) appendSetCookie(res, [...clears]);
   }
-  return cookies;
+  return token;
 }
 
-function isAuthenticated(req) {
+function isAuthenticated(req, res = null) {
   if (!AUTH_ENABLED) return true;
-  const cookies = parseCookies(req.headers.cookie);
-  if (!cookies.wc_session || !sessionStore.has(cookies.wc_session)) return false;
-  sessionStore.touch(cookies.wc_session);
+  const token = resolveSession(req, res);
+  if (!token) return false;
+  sessionStore.touch(token);
   return true;
 }
 
 function getSessionId(req) {
   if (!AUTH_ENABLED) return 'local';
-  const cookies = parseCookies(req.headers.cookie);
-  return cookies.wc_session || null;
+  return resolveSession(req);
 }
 
 function authMiddleware(req, res, next) {
   // Auth endpoints are always accessible
   if (req.path === '/auth') return next();
-  if (!isAuthenticated(req)) {
+  if (!isAuthenticated(req, res)) {
     return res.status(401).json({ error: 'Authentication required' });
   }
   next();
@@ -418,12 +444,12 @@ try {
 wss.on('connection', (ws, req) => {
   // Check auth for WebSocket connections
   if (AUTH_ENABLED) {
-    const cookies = parseCookies(req.headers.cookie);
-    if (!cookies.wc_session || !sessionStore.has(cookies.wc_session)) {
+    const token = resolveSession(req);
+    if (!token) {
       ws.close(4001, 'Authentication required');
       return;
     }
-    sessionStore.touch(cookies.wc_session);
+    sessionStore.touch(token);
   }
 
   clients.add(ws);
@@ -678,7 +704,7 @@ app.get('/api/poll', (req, res) => {
 app.get('/api/auth', (req, res) => {
   res.json({
     required: AUTH_ENABLED,
-    authenticated: isAuthenticated(req),
+    authenticated: isAuthenticated(req, res),
     timezone: ENV.TZ || null
   });
 });
@@ -696,9 +722,18 @@ app.post('/api/auth', (req, res) => {
     return res.status(401).json({ success: false, error: 'Wrong password' });
   }
 
-  const token = sessionStore.create();
-  const maxAge = remember !== false ? `; Max-Age=${sessionStore.maxAgeSec}` : '';
-  res.setHeader('Set-Cookie', `wc_session=${token}; Path=/; HttpOnly; SameSite=Strict${maxAge}`);
+  // Retire cookies left at another path (e.g. the pre-scoping Path=/ one).
+  resolveSession(req, res);
+  const cookiePath = cookiePathFromRequest(req);
+  const secure = isSecureRequest(req);
+  const token = createSessionToken(cookiePath);
+  sessionStore.add(token);
+  const cookies = [sessionCookie(token, cookiePath, {
+    secure,
+    maxAgeSec: remember !== false ? sessionStore.maxAgeSec : null,
+  })];
+  if (cookiePath !== '/') cookies.push(clearSessionCookie('/', { secure }));
+  appendSetCookie(res, cookies);
   res.json({ success: true, timezone: ENV.TZ || null });
 });
 
@@ -706,9 +741,13 @@ app.post('/api/auth', (req, res) => {
  * Logout
  */
 app.post('/api/logout', (req, res) => {
-  const cookies = parseCookies(req.headers.cookie);
-  if (cookies.wc_session) sessionStore.delete(cookies.wc_session);
-  res.setHeader('Set-Cookie', 'wc_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0');
+  const cookiePath = cookiePathFromRequest(req);
+  const secure = isSecureRequest(req);
+  const token = resolveSession(req, res);
+  if (token) sessionStore.delete(token);
+  const cookies = [clearSessionCookie(cookiePath, { secure })];
+  if (cookiePath !== '/') cookies.push(clearSessionCookie('/', { secure }));
+  appendSetCookie(res, cookies);
   res.json({ success: true });
 });
 

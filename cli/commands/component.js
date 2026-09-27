@@ -29,12 +29,17 @@ import { evaluateUpgrade } from '../lib/claude-eval.js';
  * Each step result includes { step, total, name, status, message?, error? }.
  */
 export function printStep(step) {
-  const msg = step.message ? ` (${step.message})` : '';
+  const msg = step.message && step.status !== 'warning' ? ` (${step.message})` : '';
   const label = `[${step.step}/${step.total}] ${step.name}${msg}`;
   if (step.status === 'done') {
     console.log(`  ${success(label)}`);
   } else if (step.status === 'skipped') {
     console.log(`  ${dim('○')} ${dim(label)}`);
+  } else if (step.status === 'warning') {
+    console.log(`  ${warn(label)}`);
+    for (const line of (step.message || '').split('\n')) {
+      console.log(`       ${yellow(line)}`);
+    }
   } else {
     console.log(`  ${error(label)}`);
   }
@@ -132,6 +137,9 @@ function formatC4Reply(type, data) {
       }
       let r = `zylos-core upgraded: ${from} -> ${to}`;
       if (changelog) r += `\n\nChangelog:\n${changelog}`;
+      for (const step of (data.steps || []).filter(s => s.status === 'warning')) {
+        r += `\n\nACTION REQUIRED (${step.name}):\n${step.message}`;
+      }
       if (mergedFiles?.length > 0) {
         r += `\n\nAuto-merged files: ${mergedFiles.join(', ')}`;
       }

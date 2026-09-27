@@ -79,12 +79,12 @@ db.close();
   fs.writeFileSync(path.join(scriptDir, 'c4-send.js'), '');
 }
 
-async function startServer({ maxUploadMb = 20 } = {}) {
+async function startServer({ maxUploadMb = 20, password = '' } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wc-routes-'));
   const dbPath = path.join(root, 'comm-bridge', 'c4.db');
   const skillsDir = path.join(root, 'skills');
   fs.mkdirSync(path.join(root, 'activity-monitor'), { recursive: true });
-  fs.writeFileSync(path.join(root, '.env'), '');
+  fs.writeFileSync(path.join(root, '.env'), password ? `WEB_CONSOLE_PASSWORD=${password}\n` : '');
   fs.writeFileSync(path.join(root, 'activity-monitor', 'agent-status.json'), '{"state":"idle"}');
   createDb(dbPath);
   createFakeC4Receive(skillsDir, dbPath);
@@ -112,8 +112,9 @@ async function startServer({ maxUploadMb = 20 } = {}) {
   while (Date.now() < deadline) {
     if (child.exitCode !== null) throw new Error(`server exited early: ${output}`);
     try {
+      // /api/health sits behind auth when a password is set; any HTTP answer means it is listening.
       const res = await fetch(`${baseUrl}/api/health`);
-      if (res.ok) return { root, dbPath, skillsDir, port, baseUrl, child };
+      if (res.ok || (password && res.status === 401)) return { root, dbPath, skillsDir, port, baseUrl, child };
     } catch {
       // Retry until server is listening.
     }
@@ -366,5 +367,150 @@ describe('web-console attachment routes', () => {
     expect(last.attachments).toHaveLength(1);
     expect(last.attachments[0].kind).toBe('image');
     expect(last.attachments[0].href).toBe('/api/inbound-media/wc-uploaded.png');
+  });
+});
+
+describe('web-console session cookie scoping (#797)', () => {
+  const PASSWORD = 'test-pass';
+  const PREFIX = { 'X-Forwarded-Prefix': '/console' };
+
+  async function login(active, { headers = {}, remember } = {}) {
+    const res = await fetch(`${active.baseUrl}/api/auth`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...headers },
+      body: JSON.stringify({ password: PASSWORD, ...(remember === undefined ? {} : { remember }) })
+    });
+    return res;
+  }
+
+  function sessionCookies(res) {
+    return res.headers.getSetCookie().filter((c) => c.startsWith('wc_session='));
+  }
+
+  function tokenOf(setCookie) {
+    return setCookie.split(';')[0].slice('wc_session='.length);
+  }
+
+  async function authState(active, cookie, headers = {}) {
+    const res = await fetch(`${active.baseUrl}/api/auth`, { headers: { Cookie: cookie, ...headers } });
+    return { authenticated: (await res.json()).authenticated, setCookies: sessionCookies(res) };
+  }
+
+  test('login behind Caddy scopes the cookie to the forwarded prefix and expires the Path=/ one', async () => {
+    ctx = await startServer({ password: PASSWORD });
+    const res = await login(ctx, { headers: PREFIX });
+    expect(res.status).toBe(200);
+    const [issued, legacyClear, ...rest] = sessionCookies(res);
+    expect(rest).toEqual([]);
+    expect(issued).toMatch(/^wc_session=[0-9a-f]{64}:\/console; Path=\/console; HttpOnly; SameSite=Strict; Max-Age=\d+$/);
+    expect(legacyClear).toBe('wc_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0');
+
+    const state = await authState(ctx, `wc_session=${tokenOf(issued)}`, PREFIX);
+    expect(state).toEqual({ authenticated: true, setCookies: [] });
+  });
+
+  test('direct access without a prefix keeps Path=/', async () => {
+    ctx = await startServer({ password: PASSWORD });
+    const res = await login(ctx);
+    const cookies = sessionCookies(res);
+    expect(cookies).toHaveLength(1);
+    expect(cookies[0]).toMatch(/^wc_session=[0-9a-f]{64}; Path=\/; HttpOnly; SameSite=Strict; Max-Age=\d+$/);
+    expect((await authState(ctx, `wc_session=${tokenOf(cookies[0])}`)).authenticated).toBe(true);
+  });
+
+  test('remember=false issues a browser-session cookie', async () => {
+    ctx = await startServer({ password: PASSWORD });
+    const [issued] = sessionCookies(await login(ctx, { headers: PREFIX, remember: false }));
+    expect(issued).toMatch(/; Path=\/console; HttpOnly; SameSite=Strict$/);
+  });
+
+  test.each([
+    ['X-Forwarded-Proto', 'https', true],
+    ['Origin', 'https://zylos.example.com', true],
+    ['X-Forwarded-Proto', 'http', false],
+  ])('%s: %s → Secure=%s', async (header, value, secure) => {
+    ctx = await startServer({ password: PASSWORD });
+    const cookies = sessionCookies(await login(ctx, { headers: { ...PREFIX, [header]: value } }));
+    for (const cookie of cookies) {
+      expect(cookie.endsWith('; Secure') || cookie.includes('; Secure;')).toBe(secure);
+    }
+  });
+
+  test.each([
+    '/console; Domain=evil.example',
+    '/console,/other',
+    '/a/../b',
+    '//evil',
+    'console',
+    '/console path',
+    `/${'a'.repeat(64)}`,
+  ])('invalid prefix %j falls back to Path=/', async (prefix) => {
+    ctx = await startServer({ password: PASSWORD });
+    const cookies = sessionCookies(await login(ctx, { headers: { 'X-Forwarded-Prefix': prefix } }));
+    expect(cookies).toHaveLength(1);
+    expect(cookies[0]).toMatch(/^wc_session=[0-9a-f]{64}; Path=\/; /);
+  });
+
+  test('a pre-scoping Path=/ session is revoked and cleared once the prefix is forwarded', async () => {
+    ctx = await startServer({ password: PASSWORD });
+    const legacy = tokenOf(sessionCookies(await login(ctx))[0]);
+
+    const state = await authState(ctx, `wc_session=${legacy}`, PREFIX);
+    expect(state.authenticated).toBe(false);
+    expect(state.setCookies).toEqual(['wc_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0']);
+    // Revoked server-side too, not just cleared in this browser.
+    expect((await authState(ctx, `wc_session=${legacy}`)).authenticated).toBe(false);
+  });
+
+  test('a Path=/ cookie this server did not issue is not cleared', async () => {
+    ctx = await startServer({ password: PASSWORD });
+    const state = await authState(ctx, `wc_session=${'f'.repeat(64)}`, PREFIX);
+    expect(state).toEqual({ authenticated: false, setCookies: [] });
+  });
+
+  test('with both cookies present the scoped one wins and the legacy one is retired', async () => {
+    ctx = await startServer({ password: PASSWORD });
+    const legacy = tokenOf(sessionCookies(await login(ctx))[0]);
+    const scoped = tokenOf(sessionCookies(await login(ctx, { headers: PREFIX }))[0]);
+
+    // Browsers send the more specific path first; order must not matter.
+    for (const cookie of [`wc_session=${scoped}; wc_session=${legacy}`, `wc_session=${legacy}; wc_session=${scoped}`]) {
+      const state = await authState(ctx, cookie, PREFIX);
+      expect(state.authenticated).toBe(true);
+    }
+    expect((await authState(ctx, `wc_session=${legacy}`)).authenticated).toBe(false);
+  });
+
+  test('logout clears the scoped cookie and the Path=/ one, and revokes the session', async () => {
+    ctx = await startServer({ password: PASSWORD });
+    const scoped = tokenOf(sessionCookies(await login(ctx, { headers: PREFIX }))[0]);
+    const res = await fetch(`${ctx.baseUrl}/api/logout`, {
+      method: 'POST',
+      headers: { Cookie: `wc_session=${scoped}`, ...PREFIX }
+    });
+    expect(sessionCookies(res)).toEqual([
+      'wc_session=; Path=/console; HttpOnly; SameSite=Strict; Max-Age=0',
+      'wc_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0',
+    ]);
+    expect((await authState(ctx, `wc_session=${scoped}`, PREFIX)).authenticated).toBe(false);
+  });
+
+  test('WebSocket accepts the scoped session and rejects a retired one', async () => {
+    ctx = await startServer({ password: PASSWORD });
+    const legacy = tokenOf(sessionCookies(await login(ctx))[0]);
+    const scoped = tokenOf(sessionCookies(await login(ctx, { headers: PREFIX }))[0]);
+    const wsUrl = ctx.baseUrl.replace('http', 'ws') + '/';
+
+    function connect(cookie) {
+      return new Promise((resolve, reject) => {
+        const ws = new WebSocket(wsUrl, { headers: { Cookie: cookie, ...PREFIX } });
+        const timer = setTimeout(() => { ws.terminate(); resolve('open'); }, 500);
+        ws.on('close', (code) => { clearTimeout(timer); resolve(code); });
+        ws.on('error', reject);
+      });
+    }
+
+    expect(await connect(`wc_session=${scoped}`)).toBe('open');
+    expect(await connect(`wc_session=${legacy}`)).toBe(4001);
   });
 });
