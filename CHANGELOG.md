@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Bracketed terminal paste**: C4 uses `tmux paste-buffer -p` before the existing Enter submission path, improving multiline submission and preserving pasted text in tested Claude and Codex inputs. (#799)
 
 ### Added
-- **Bounded periodic Enter fallback**: opt-in recovery supplements Enter after a configurable interval (default 60 seconds), up to three attempts per eligible paste. It runs serially with normal delivery, accepts busy/unhealthy runtime states, and verifies the live target identity. It does not change delivered status or provide submission acknowledgement; the original false-empty trigger remains under investigation. (#795, #799)
+- **Pinned C4 delivery target**: resolve the runtime pane before pasting and keep paste, Enter, retry, Escape and verification on that pane; stop if the runtime identity changes. Automatic periodic Enter recovery is deferred until draft ownership and safe UI state can be established. (#795, #799)
 - **Delivery diagnostics**: metadata events for paste, Enter and detector decisions, plus opt-in private visible-pane captures with a fixed capacity and no evidence overwrite. (#799)
 
 ## [0.8.1] - 2026-09-09

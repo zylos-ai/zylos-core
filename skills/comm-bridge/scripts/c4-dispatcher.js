@@ -9,7 +9,6 @@ import { readFileSync, existsSync, statSync } from 'fs';
 import net from 'net';
 import path from 'path';
 import { logDeliveryFailure, saveEnterCapture } from './c4-diagnostic.js';
-import { PeriodicEnter } from './periodic-enter.js';
 import {
   getNextPending,
   claimConversation,
@@ -41,9 +40,6 @@ import {
   CONTROL_CLEANUP_INTERVAL_MS,
   ENTER_VERIFY_MAX_RETRIES,
   ENTER_VERIFY_WAIT_MS,
-  PERIODIC_ENTER_ENABLED,
-  PERIODIC_ENTER_INTERVAL_MS,
-  PERIODIC_ENTER_MAX_ATTEMPTS,
   ENTER_CAPTURE_ENABLED,
   readActiveRuntime,
   REQUIRE_IDLE_MIN_SECONDS,
@@ -88,18 +84,11 @@ function trace(event, metadata = {}) {
   log(JSON.stringify({ event, at: new Date().toISOString(), runtime: ACTIVE_RUNTIME, ...deliveryTrace, ...metadata }));
 }
 
-const periodicEnter = new PeriodicEnter({
-  enabled: PERIODIC_ENTER_ENABLED,
-  intervalMs: PERIODIC_ENTER_INTERVAL_MS,
-  maxAttempts: PERIODIC_ENTER_MAX_ATTEMPTS,
-  emit: trace
-});
-
-function periodicTarget() {
+function resolveDeliveryTarget(target = TMUX_SESSION) {
   try {
     if (readActiveRuntime() !== ACTIVE_RUNTIME) return null;
     // Resolve and pin the pane, so a later target selection cannot redirect a key.
-    const [pane, panePid, dead] = execFileSync('tmux', ['display-message', '-p', '-t', TMUX_SESSION, '#{pane_id} #{pane_pid} #{pane_dead}'], {
+    const [pane, panePid, dead] = execFileSync('tmux', ['display-message', '-p', '-t', target, '#{pane_id} #{pane_pid} #{pane_dead}'], {
       encoding: 'utf8', stdio: 'pipe', timeout: 5000
     }).trim().split(/\s+/);
     if (!/^%\d+$/.test(pane) || !/^[1-9]\d*$/.test(panePid) || dead !== '0') return null;
@@ -117,7 +106,7 @@ function periodicTarget() {
         const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
         const fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
         if (['Z', 'X'].includes(fields[0]) || !/^\d+$/.test(fields[19])) continue;
-        return { pane, identity: `${ACTIVE_RUNTIME}:${pane}:${pid}:${fields[19]}` };
+        return { pane, pid, identity: `${ACTIVE_RUNTIME}:${pane}:${pid}:${fields[19]}` };
       } catch { /* A process can exit during discovery. */ }
     }
     return null;
@@ -141,37 +130,25 @@ function captureEnter(phase, target, metadata) {
   } catch { trace('capture_failed', { phase }); }
 }
 
-function sendEnter(kind, target = TMUX_SESSION) {
-  trace('enter_attempt', { kind });
-  try {
-    execFileSync('tmux', ['send-keys', '-t', target, 'Enter'], { stdio: 'pipe', timeout: 5000 });
-    periodicEnter.entered();
-    trace('enter_sent', { kind });
-  } catch (error) {
-    trace('enter_failed', { kind });
+function assertDeliveryTarget(target) {
+  if (!target || isShuttingDown || resolveDeliveryTarget(target.pane)?.identity !== target.identity) {
+    trace('delivery_target_changed', { pane: target?.pane });
+    const error = new Error('Delivery target changed or unavailable');
+    error.code = 'DELIVERY_TARGET_CHANGED';
     throw error;
   }
 }
 
-async function maybePeriodicEnter() {
-  if (!PERIODIC_ENTER_ENABLED || !periodicEnter.pending || periodicEnter.pending.attempts >= PERIODIC_ENTER_MAX_ATTEMPTS) return;
-  const target = periodicTarget();
-  await periodicEnter.tick({
-    identity: target?.identity,
-    eligible: !isShuttingDown,
-    send: async () => {
-      const itemId = periodicEnter.pending?.itemId;
-      captureEnter('before', target.pane, { kind: 'periodic', itemId });
-      // Recheck after diagnostics, immediately before the irreversible key event.
-      if (periodicTarget()?.identity !== target.identity || isShuttingDown) {
-        periodicEnter.reset('target_changed_or_shutdown');
-        throw new Error('Target changed');
-      }
-      sendEnter('periodic', target.pane);
-      await sleep(ENTER_VERIFY_WAIT_MS);
-      captureEnter('after', target.pane, { kind: 'periodic', itemId });
-    }
-  });
+function sendEnter(kind, target) {
+  trace('enter_attempt', { kind, pane: target?.pane });
+  try {
+    assertDeliveryTarget(target);
+    execFileSync('tmux', ['send-keys', '-t', target.pane, 'Enter'], { stdio: 'pipe', timeout: 5000 });
+    trace('enter_sent', { kind, pane: target.pane });
+  } catch (error) {
+    trace('enter_failed', { kind, pane: target?.pane });
+    throw error;
+  }
 }
 
 export function notifyMessageDelivered({ conversationId, channel, deliveredAt = Date.now() } = {}) {
@@ -396,19 +373,19 @@ export function checkClaudeFallbackInputBox(capture) {
 /**
  * Cursor-based detector: primary signal for all runtimes.
  */
-export function checkInputBoxByCursor() {
-  const cursorX = getCursorX();
+export function checkInputBoxByCursor(target = TMUX_SESSION) {
+  const cursorX = getCursorX(target);
   if (cursorX < 0) return 'indeterminate';
   if (cursorX > CURSOR_EMPTY_THRESHOLD) return 'has_content';
 
   // cursor_x ≤ threshold — could be truly empty or multi-line wrapped input.
   // Capture the pane and compare prompt line Y with cursor Y.
-  const cursorY = getCursorY();
+  const cursorY = getCursorY(target);
   if (cursorY < 0) return 'indeterminate';
 
   let capture;
   try {
-    capture = execFileSync('tmux', ['capture-pane', '-p', '-t', TMUX_SESSION], {
+    capture = execFileSync('tmux', ['capture-pane', '-p', '-t', target], {
       encoding: 'utf8', stdio: 'pipe', timeout: 5000
     });
   } catch {
@@ -428,30 +405,30 @@ export function checkInputBoxByCursor() {
  * - Codex: cursor-only.
  * - Claude: cursor-first; if it reports has_content, fallback to text parser.
  */
-export function checkInputBox() {
-  const cursorState = checkInputBoxByCursor();
+export function checkInputBox(target = TMUX_SESSION) {
+  const cursorState = checkInputBoxByCursor(target);
   if (cursorState !== 'has_content') {
-    trace('input_check', { cursorState, verdict: cursorState, detector: 'cursor' });
+    trace('input_check', { pane: target, cursorState, verdict: cursorState, detector: 'cursor' });
     return cursorState;
   }
 
   if (ACTIVE_RUNTIME !== 'claude') {
-    trace('input_check', { cursorState, verdict: cursorState, detector: 'cursor' });
+    trace('input_check', { pane: target, cursorState, verdict: cursorState, detector: 'cursor' });
     return cursorState;
   }
 
   let capture;
   try {
-    capture = execFileSync('tmux', ['capture-pane', '-p', '-t', TMUX_SESSION], {
+    capture = execFileSync('tmux', ['capture-pane', '-p', '-t', target], {
       encoding: 'utf8', stdio: 'pipe', timeout: 5000
     });
   } catch {
-    trace('input_check', { cursorState, verdict: cursorState, detector: 'capture_failed' });
+    trace('input_check', { pane: target, cursorState, verdict: cursorState, detector: 'capture_failed' });
     return cursorState;
   }
 
   const fallbackState = checkClaudeFallbackInputBox(capture);
-  trace('input_check', { cursorState, fallbackState, verdict: fallbackState === 'indeterminate' ? cursorState : fallbackState, detector: 'claude_fallback' });
+  trace('input_check', { pane: target, cursorState, fallbackState, verdict: fallbackState === 'indeterminate' ? cursorState : fallbackState, detector: 'claude_fallback' });
   return fallbackState === 'indeterminate' ? cursorState : fallbackState;
 }
 
@@ -463,9 +440,9 @@ export function isUsageOverlayCapture(capture) {
 // is empty (cursor sits right after the prompt char, e.g. "❯ " = column 2).
 const CURSOR_EMPTY_THRESHOLD = 2;
 
-export function getCursorX() {
+export function getCursorX(target = TMUX_SESSION) {
   try {
-    const out = execFileSync('tmux', ['display-message', '-p', '-t', TMUX_SESSION, '#{cursor_x}'], {
+    const out = execFileSync('tmux', ['display-message', '-p', '-t', target, '#{cursor_x}'], {
       encoding: 'utf8',
       stdio: 'pipe',
       timeout: 5000
@@ -476,9 +453,9 @@ export function getCursorX() {
   }
 }
 
-export function getCursorY() {
+export function getCursorY(target = TMUX_SESSION) {
   try {
-    const out = execFileSync('tmux', ['display-message', '-p', '-t', TMUX_SESSION, '#{cursor_y}'], {
+    const out = execFileSync('tmux', ['display-message', '-p', '-t', target, '#{cursor_y}'], {
       encoding: 'utf8',
       stdio: 'pipe',
       timeout: 5000
@@ -489,13 +466,20 @@ export function getCursorY() {
   }
 }
 
-async function submitAndVerify() {
-  sendEnter('initial');
+async function submitAndVerify(target, acceptShutdownAfterSubmit = false) {
+  sendEnter('initial', target);
 
   for (let attempt = 0; attempt < ENTER_VERIFY_MAX_RETRIES; attempt++) {
     await sleep(ENTER_VERIFY_WAIT_MS);
-    captureEnter('after', TMUX_SESSION, { kind: 'normal_verify', attempt: attempt + 1 });
-    const state = checkInputBox();
+    if (acceptShutdownAfterSubmit && readActiveRuntime() === ACTIVE_RUNTIME &&
+        !existsSync(`/proc/${target.pid}`) && !resolveDeliveryTarget(target.pane)) {
+      trace('lifecycle_shutdown_after_enter', { pane: target.pane });
+      return { verified: true, state: 'lifecycle_shutdown' };
+    }
+    assertDeliveryTarget(target);
+    captureEnter('after', target.pane, { kind: 'normal_verify', attempt: attempt + 1 });
+    const state = checkInputBox(target.pane);
+    assertDeliveryTarget(target);
 
     if (state === 'empty') {
       return { verified: true, state: 'empty' };
@@ -504,20 +488,24 @@ async function submitAndVerify() {
     if (state === 'indeterminate') {
       log(`Enter verify attempt ${attempt + 1}: indeterminate state, checking for overlay`);
       try {
-        const capture = execFileSync('tmux', ['capture-pane', '-p', '-t', TMUX_SESSION], {
+        const capture = execFileSync('tmux', ['capture-pane', '-p', '-t', target.pane], {
           encoding: 'utf8', stdio: 'pipe', timeout: 5000
         });
         if (isUsageOverlayCapture(capture)) {
           log(`Enter verify attempt ${attempt + 1}: /usage overlay detected, sending Escape`);
-          execFileSync('tmux', ['send-keys', '-t', TMUX_SESSION, 'Escape'], { stdio: 'pipe', timeout: 5000 });
+          assertDeliveryTarget(target);
+          execFileSync('tmux', ['send-keys', '-t', target.pane, 'Escape'], { stdio: 'pipe', timeout: 5000 });
         }
-      } catch { /* capture failed, continue retry loop */ }
+      } catch (error) {
+        if (error.code === 'DELIVERY_TARGET_CHANGED') throw error;
+        // Capture failure alone can be retried.
+      }
       continue;
     }
 
     // state === 'has_content' — message wasn't submitted, retry Enter
     log(`Enter verify attempt ${attempt + 1}: input has content, retrying Enter`);
-    sendEnter('verify_retry');
+    sendEnter('verify_retry', target);
   }
 
   return { verified: false, state: 'has_content' };
@@ -529,16 +517,17 @@ async function sendToTmux(message, options = {}) {
   const bufferName = `c4-msg-${process.pid}-${Date.now()}`;
   const sanitized = sanitizeMessage(message);
   const delayMs = getDeliveryDelay(Buffer.byteLength(sanitized, 'utf8'));
-  periodicEnter.reset('normal_paste');
-  trace('paste_attempt', { itemId: options.itemId, itemType: options.itemType, bytes: Buffer.byteLength(sanitized, 'utf8'), delayMs });
+  const target = resolveDeliveryTarget();
+  trace('paste_attempt', { itemId: options.itemId, itemType: options.itemType, pane: target?.pane, bytes: Buffer.byteLength(sanitized, 'utf8'), delayMs });
 
   try {
+    assertDeliveryTarget(target);
     execFileSync('tmux', ['set-buffer', '-b', bufferName, '--', sanitized], { stdio: 'pipe', timeout: 5000 });
-    execFileSync('tmux', ['paste-buffer', '-p', '-b', bufferName, '-t', TMUX_SESSION], { stdio: 'pipe', timeout: 5000 });
-    trace('paste_sent', { itemId: options.itemId, itemType: options.itemType });
-    if (PERIODIC_ENTER_ENABLED && (options.itemType === 'conversation' || options.periodicTextControl)) periodicEnter.arm(periodicTarget()?.identity, options.itemId);
+    assertDeliveryTarget(target);
+    execFileSync('tmux', ['paste-buffer', '-p', '-b', bufferName, '-t', target.pane], { stdio: 'pipe', timeout: 5000 });
+    trace('paste_sent', { itemId: options.itemId, itemType: options.itemType, pane: target.pane });
   } catch (err) {
-    trace('paste_failed', { itemId: options.itemId, itemType: options.itemType });
+    trace('paste_failed', { itemId: options.itemId, itemType: options.itemType, pane: target?.pane });
     logDeliveryFailure('tmux_paste', 0, 'PASTE_ERROR');
     return 'paste_error';
   } finally {
@@ -553,9 +542,10 @@ async function sendToTmux(message, options = {}) {
 
   let verifyResult = { verified: false, state: 'indeterminate' };
   try {
-    verifyResult = await submitAndVerify();
+    verifyResult = await submitAndVerify(target, acceptShutdownAfterSubmit);
   } catch (err) {
     trace('enter_verification_error', { itemId: options.itemId });
+    if (err.code === 'DELIVERY_TARGET_CHANGED') return 'verify_failed';
   }
 
   // Conversation delivery must be strict: if we cannot verify submission,
@@ -796,11 +786,12 @@ async function processNextMessage() {
   // without buffer paste or "Meanwhile" prefix. Used for auto-approve permission prompts.
   const rawContent = item.content || '';
   if (isKeystrokeControl(item)) {
-    periodicEnter.reset('keystroke_control');
     const key = parseKeystrokeKey(rawContent);
     log(`Delivering keystroke key=${key} (control id=${item.id} priority=${item.priority})`);
     try {
-      execFileSync('tmux', ['send-keys', '-t', TMUX_SESSION, key], { stdio: 'pipe', timeout: 5000 });
+      const target = resolveDeliveryTarget();
+      assertDeliveryTarget(target);
+      execFileSync('tmux', ['send-keys', '-t', target.pane, key], { stdio: 'pipe', timeout: 5000 });
       ackControl(item.id);
       log(`Keystroke delivered: key=${key} (control id=${item.id})`);
       return { delivered: true, state: agentState.state };
@@ -819,7 +810,6 @@ async function processNextMessage() {
     result = await sendToTmux(deliveryContent, {
       itemId: item.id,
       itemType: item.type,
-      periodicTextControl: item.type === 'control' && !rawContent.startsWith('/'),
       strictVerify: item.type === 'conversation',
       acceptShutdownAfterSubmit: isCodexExitLifecycleControl(item)
     });
@@ -862,8 +852,6 @@ async function dispatcherLoop() {
   while (!isShuttingDown) {
     try {
       const { delivered, state } = await processNextMessage();
-      // Awaited after all paste/verify work: periodic keys cannot interleave it.
-      await maybePeriodicEnter();
 
       if (delivered) {
         pollInterval = POLL_INTERVAL_BASE;
@@ -897,7 +885,7 @@ process.on('SIGTERM', shutdown);
 async function main() {
   log('=== C4 Dispatcher Started ===');
   log(`Tmux session: ${TMUX_SESSION}`);
-  trace('periodic_config', { enabled: PERIODIC_ENTER_ENABLED, intervalMs: PERIODIC_ENTER_INTERVAL_MS, maxAttempts: PERIODIC_ENTER_MAX_ATTEMPTS, captureEnabled: ENTER_CAPTURE_ENABLED });
+  trace('delivery_config', { captureEnabled: ENTER_CAPTURE_ENABLED });
   log(`Poll interval: ${POLL_INTERVAL_BASE}ms (adaptive up to ${POLL_INTERVAL_MAX}ms)`);
 
   const pendingControl = getPendingControlCount();
