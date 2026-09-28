@@ -9,6 +9,7 @@ import { readFileSync, existsSync, statSync } from 'fs';
 import net from 'net';
 import path from 'path';
 import { logDeliveryFailure, saveEnterCapture } from './c4-diagnostic.js';
+import { PeriodicEnter } from './periodic-enter.js';
 import {
   getNextPending,
   claimConversation,
@@ -40,6 +41,9 @@ import {
   CONTROL_CLEANUP_INTERVAL_MS,
   ENTER_VERIFY_MAX_RETRIES,
   ENTER_VERIFY_WAIT_MS,
+  PERIODIC_ENTER_ENABLED,
+  PERIODIC_ENTER_INTERVAL_MS,
+  PERIODIC_ENTER_MAX_ATTEMPTS,
   ENTER_CAPTURE_ENABLED,
   readActiveRuntime,
   REQUIRE_IDLE_MIN_SECONDS,
@@ -113,6 +117,13 @@ function resolveDeliveryTarget(target = TMUX_SESSION) {
   } catch { return null; }
 }
 
+const periodicEnter = new PeriodicEnter({
+  enabled: PERIODIC_ENTER_ENABLED,
+  intervalMs: PERIODIC_ENTER_INTERVAL_MS,
+  maxAttempts: PERIODIC_ENTER_MAX_ATTEMPTS,
+  emit: trace
+});
+
 function captureEnter(phase, target, metadata) {
   if (!ENTER_CAPTURE_ENABLED) return;
   try {
@@ -140,15 +151,39 @@ function assertDeliveryTarget(target) {
 }
 
 function sendEnter(kind, target) {
-  trace('enter_attempt', { kind, pane: target?.pane });
+  const metadata = { kind, pane: target?.pane, ...(kind === 'periodic' ? { itemId: target?.itemId, itemType: target?.itemType } : {}) };
+  trace('enter_attempt', metadata);
   try {
     assertDeliveryTarget(target);
     execFileSync('tmux', ['send-keys', '-t', target.pane, 'Enter'], { stdio: 'pipe', timeout: 5000 });
-    trace('enter_sent', { kind, pane: target.pane });
+    periodicEnter.entered();
+    trace('enter_sent', metadata);
   } catch (error) {
-    trace('enter_failed', { kind, pane: target?.pane });
+    trace('enter_failed', metadata);
     throw error;
   }
+}
+
+async function maybePeriodicEnter() {
+  const pending = periodicEnter.pending;
+  if (!PERIODIC_ENTER_ENABLED || !pending || pending.attempts >= PERIODIC_ENTER_MAX_ATTEMPTS) return;
+  const target = resolveDeliveryTarget(pending.pane);
+  await periodicEnter.tick({
+    identity: target?.identity,
+    eligible: !isShuttingDown,
+    send: async () => {
+      const metadata = { kind: 'periodic', itemId: pending.itemId, itemType: pending.itemType, pane: pending.pane, attempt: pending.attempts };
+      captureEnter('before', pending.pane, metadata);
+      try {
+        sendEnter('periodic', pending);
+      } catch (error) {
+        if (error.code === 'DELIVERY_TARGET_CHANGED') periodicEnter.reset('target_changed_or_shutdown');
+        throw error;
+      }
+      await sleep(ENTER_VERIFY_WAIT_MS);
+      captureEnter('after', pending.pane, metadata);
+    }
+  });
 }
 
 export function notifyMessageDelivered({ conversationId, channel, deliveredAt = Date.now() } = {}) {
@@ -517,6 +552,7 @@ async function sendToTmux(message, options = {}) {
   const bufferName = `c4-msg-${process.pid}-${Date.now()}`;
   const sanitized = sanitizeMessage(message);
   const delayMs = getDeliveryDelay(Buffer.byteLength(sanitized, 'utf8'));
+  periodicEnter.reset('normal_paste');
   const target = resolveDeliveryTarget();
   trace('paste_attempt', { itemId: options.itemId, itemType: options.itemType, pane: target?.pane, bytes: Buffer.byteLength(sanitized, 'utf8'), delayMs });
 
@@ -526,6 +562,9 @@ async function sendToTmux(message, options = {}) {
     assertDeliveryTarget(target);
     execFileSync('tmux', ['paste-buffer', '-p', '-b', bufferName, '-t', target.pane], { stdio: 'pipe', timeout: 5000 });
     trace('paste_sent', { itemId: options.itemId, itemType: options.itemType, pane: target.pane });
+    if (options.itemType === 'conversation' || options.periodicTextControl) {
+      periodicEnter.arm(target, options.itemId, options.itemType);
+    }
   } catch (err) {
     trace('paste_failed', { itemId: options.itemId, itemType: options.itemType, pane: target?.pane });
     logDeliveryFailure('tmux_paste', 0, 'PASTE_ERROR');
@@ -786,6 +825,7 @@ async function processNextMessage() {
   // without buffer paste or "Meanwhile" prefix. Used for auto-approve permission prompts.
   const rawContent = item.content || '';
   if (isKeystrokeControl(item)) {
+    periodicEnter.reset('keystroke_control');
     const key = parseKeystrokeKey(rawContent);
     log(`Delivering keystroke key=${key} (control id=${item.id} priority=${item.priority})`);
     try {
@@ -810,6 +850,7 @@ async function processNextMessage() {
     result = await sendToTmux(deliveryContent, {
       itemId: item.id,
       itemType: item.type,
+      periodicTextControl: item.type === 'control' && !rawContent.startsWith('/'),
       strictVerify: item.type === 'conversation',
       acceptShutdownAfterSubmit: isCodexExitLifecycleControl(item)
     });
@@ -852,6 +893,8 @@ async function dispatcherLoop() {
   while (!isShuttingDown) {
     try {
       const { delivered, state } = await processNextMessage();
+      // One awaited loop serializes periodic keys with all paste/verify work.
+      await maybePeriodicEnter();
 
       if (delivered) {
         pollInterval = POLL_INTERVAL_BASE;
@@ -886,6 +929,7 @@ async function main() {
   log('=== C4 Dispatcher Started ===');
   log(`Tmux session: ${TMUX_SESSION}`);
   trace('delivery_config', { captureEnabled: ENTER_CAPTURE_ENABLED });
+  trace('periodic_config', { enabled: PERIODIC_ENTER_ENABLED, intervalMs: PERIODIC_ENTER_INTERVAL_MS, maxAttempts: PERIODIC_ENTER_MAX_ATTEMPTS });
   log(`Poll interval: ${POLL_INTERVAL_BASE}ms (adaptive up to ${POLL_INTERVAL_MAX}ms)`);
 
   const pendingControl = getPendingControlCount();

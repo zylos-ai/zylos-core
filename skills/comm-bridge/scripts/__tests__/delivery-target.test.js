@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import fs from 'node:fs';
 import vm from 'node:vm';
 import path from 'node:path';
+import { PeriodicEnter } from '../periodic-enter.js';
 
 const source = fs.readFileSync(new URL('../c4-dispatcher.js', import.meta.url), 'utf8');
 function extract(start, end) {
@@ -10,11 +11,13 @@ function extract(start, end) {
 }
 
 function harness() {
-  const state = { selected: '%7', pid: 123, start: 777, alive: true, checks: [], commands: [], verdict: 'empty', waits: 0 };
+  const state = { selected: '%7', pid: 123, start: 777, alive: true, checks: [], captures: [], events: [], commands: [], verdict: 'empty', waits: 0, time: 0 };
   const context = vm.createContext({
     Buffer, process, Date, Error, path,
     ACTIVE_RUNTIME: 'claude', TMUX_SESSION: 'isolated',
     ENTER_VERIFY_MAX_RETRIES: 3, ENTER_VERIFY_WAIT_MS: 500, isShuttingDown: false,
+    PERIODIC_ENTER_ENABLED: true, PERIODIC_ENTER_INTERVAL_MS: 60000, PERIODIC_ENTER_MAX_ATTEMPTS: 3,
+    PeriodicEnter: class extends PeriodicEnter { constructor(options) { super({ ...options, now: () => state.time }); } },
     readActiveRuntime: () => 'claude', existsSync: () => state.alive,
     readFileSync: file => {
       if (file.endsWith('cmdline')) return file.includes('/100/') ? '/bin/bash\0' : '/bin/claude\0';
@@ -33,7 +36,8 @@ function harness() {
       return '';
     },
     sanitizeMessage: value => value, getDeliveryDelay: () => 200,
-    trace: () => {}, captureEnter: (phase, target) => state.checks.push(target),
+    trace: (event, metadata) => state.events.push({ event, ...metadata }),
+    captureEnter: (phase, target, metadata) => { state.checks.push(target); state.captures.push({ phase, target, ...metadata }); },
     checkInputBox: target => { state.checks.push(target); return state.verdict; },
     isUsageOverlayCapture: () => true,
     log: () => {}, logDeliveryFailure: () => {},
@@ -45,7 +49,7 @@ function harness() {
     extract('function assertDeliveryTarget(', 'export function notifyMessageDelivered('),
     extract('async function submitAndVerify(', 'export function isBypassState(')
   ].join('\n'), context);
-  return { state, context, deliver: options => context.sendToTmux('private multiline\ninput', { itemId: 42, strictVerify: true, ...options }) };
+  return { state, context, timer: vm.runInContext('periodicEnter', context), deliver: options => context.sendToTmux('private multiline\ninput', { itemId: 42, itemType: 'conversation', strictVerify: true, ...options }) };
 }
 
 test('normal delivery pins paste, Enter and verification despite selected-pane switch', async () => {
@@ -138,7 +142,87 @@ test('lifecycle cannot turn unavailable identity into success while original PID
   assert.equal(await deliver({ acceptShutdownAfterSubmit: true }), 'verify_failed');
 });
 
-test('shipped dispatcher has no autonomous periodic Enter path', () => {
-  assert.equal(source.includes('maybePeriodicEnter'), false);
-  assert.equal(source.includes('PeriodicEnter'), false);
+test('verified-empty delivery retains budget, supplements target original pane after selection switch', async () => {
+  const { state, context, timer, deliver } = harness();
+  state.onCommand = args => { if (args[0] === 'paste-buffer') state.selected = '%8'; };
+  assert.equal(await deliver(), 'submitted');
+  assert.equal(timer.pending.pane, '%7');
+  assert.equal(timer.pending.itemId, 42);
+  context.getAgentState = context.readProcState = context.checkInputBox = () => { throw new Error('no health, idle or empty gate allowed'); };
+  state.time = 60000;
+  await context.maybePeriodicEnter();
+  assert.equal(timer.pending.attempts, 1);
+  const keys = state.commands.filter(command => command.args[0] === 'send-keys');
+  assert.equal(keys.length, 2);
+  assert.ok(keys.every(command => command.args[2] === '%7'));
+  assert.equal(state.captures.at(-1).itemId, 42);
+  assert.equal(state.captures.at(-1).itemType, 'conversation');
+});
+
+test('periodic supplementation cancels runtime replacement, including same PID new start', async () => {
+  for (const field of ['pid', 'start']) {
+    const { state, context, timer, deliver } = harness();
+    await deliver();
+    state[field]++;
+    state.time = 60000;
+    await context.maybePeriodicEnter();
+    assert.equal(timer.pending, null);
+    assert.equal(state.commands.filter(command => command.args[0] === 'send-keys').length, 1);
+  }
+});
+
+test('replacement during periodic capture cancels before sending a key', async () => {
+  const { state, context, timer, deliver } = harness();
+  await deliver();
+  context.captureEnter = () => { state.pid++; };
+  state.time = 60000;
+  await context.maybePeriodicEnter();
+  assert.equal(timer.pending, null);
+  assert.equal(state.commands.filter(command => command.args[0] === 'send-keys').length, 1);
+});
+
+test('periodic send failure is bounded and preserves original item diagnostics', async () => {
+  const { state, context, timer, deliver } = harness();
+  await deliver();
+  state.onCommand = args => { if (args[0] === 'send-keys') throw new Error('private input'); };
+  for (let i = 0; i < 5; i++) {
+    state.time += 60000;
+    await context.maybePeriodicEnter();
+    await context.maybePeriodicEnter();
+  }
+  assert.equal(timer.pending.attempts, 3);
+  const failures = state.events.filter(event => event.event === 'enter_failed');
+  assert.equal(failures.length, 3);
+  assert.ok(failures.every(event => event.itemId === 42 && event.itemType === 'conversation' && event.pane === '%7'));
+  assert.equal(JSON.stringify(state.events).includes('private input'), false);
+});
+
+test('text probes arm while slash controls clear budget', async () => {
+  const { context, timer, deliver } = harness();
+  await deliver({ itemType: 'control', periodicTextControl: true, itemId: 43 });
+  assert.equal(timer.pending.itemId, 43);
+  assert.equal(timer.pending.itemType, 'control');
+  await deliver({ itemType: 'control', periodicTextControl: false, itemId: 44 });
+  assert.equal(timer.pending, null);
+  const keyBranch = extract('if (isKeystrokeControl(item))', "log(`Delivering ${item.type}");
+  assert.ok(keyBranch.includes("periodicEnter.reset('keystroke_control')"));
+});
+
+test('actual loop awaits complete delivery before periodic supplementation', async () => {
+  const { state, context } = harness();
+  const order = [];
+  Object.assign(context, {
+    pollInterval: 1000, POLL_INTERVAL_BASE: 1000, POLL_INTERVAL_MAX: 3000,
+    processNextMessage: async () => {
+      order.push('delivery-start');
+      await context.sendToTmux('message', { itemType: 'conversation', itemId: 4 });
+      order.push('delivery-end');
+      return { delivered: true, state: 'busy' };
+    },
+    maybePeriodicEnter: async () => { order.push('timer'); context.isShuttingDown = true; }
+  });
+  vm.runInContext(extract('async function dispatcherLoop(', 'function shutdown('), context);
+  await context.dispatcherLoop();
+  assert.deepEqual(order, ['delivery-start', 'delivery-end', 'timer']);
+  assert.ok(state.commands.some(command => command.args[0] === 'paste-buffer'));
 });
