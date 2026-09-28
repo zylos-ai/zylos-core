@@ -53,8 +53,22 @@ function _readConfig() {
 }
 const _cfg = _readConfig();
 export function readActiveRuntime() {
-  const config = _readConfig();
-  return config.runtime === 'codex' ? 'codex' : 'claude';
+  let content;
+  try {
+    content = fs.readFileSync(path.join(ZYLOS_DIR, '.zylos', 'config.json'), 'utf8');
+  } catch (error) {
+    if (error.code === 'ENOENT') return 'claude';
+    // Live identity checks must not mistake inaccessible config for a default.
+    throw error;
+  }
+  let config;
+  try {
+    config = JSON.parse(content);
+  } catch (error) {
+    if (error instanceof SyntaxError) return 'claude';
+    throw error;
+  }
+  return config?.runtime === 'codex' ? 'codex' : 'claude';
 }
 export const ACTIVE_RUNTIME = _cfg.runtime === 'codex' ? 'codex' : 'claude';
 export const TMUX_SESSION = ACTIVE_RUNTIME === 'codex' ? 'codex-main' : 'claude-main';

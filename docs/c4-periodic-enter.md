@@ -25,7 +25,9 @@ non-ENOENT process read failures remain errors. Lifecycle completion additionall
 requires ENOENT for the original process stat; permission/read errors cannot
 masquerade as absence. Configuration reads use the same Claude fallback at
 startup and during verification when config is absent or malformed; valid runtime
-changes are observed immediately and invalidate the old target.
+changes are observed immediately and invalidate the old target. Live permission,
+disk I/O and other non-ENOENT filesystem errors fail target lookup instead of
+selecting Claude. The startup reader retains its legacy permissive fallback.
 
 `tmux paste-buffer -p` adds bracketed-paste markers when the application enables
 the mode. This is an unconditional behavior change; a separate Enter is still

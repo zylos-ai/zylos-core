@@ -167,6 +167,22 @@ test('lifecycle rejects tmux, pgrep and proc lookup failures even when original 
   }
 });
 
+test('one config I/O failure fails non-strict lifecycle delivery without a shutdown success log', async () => {
+  const { state, context, deliver } = harness();
+  state.onWait = count => {
+    if (count !== 2) return;
+    state.alive = false;
+    let first = true;
+    context.readActiveRuntime = () => {
+      if (first) { first = false; throw Object.assign(new Error('config I/O'), { code: 'EIO' }); }
+      return 'claude';
+    };
+  };
+  assert.equal(await deliver({ strictVerify: false, acceptShutdownAfterSubmit: true }), 'verify_failed');
+  assert.equal(state.events.some(event => event.event === 'lifecycle_shutdown_after_enter'), false);
+  assert.equal(state.events.some(event => event.event === 'delivery_target_changed'), true);
+});
+
 test('resolver distinguishes absence from malformed state and lookup errors', () => {
   const { state, context } = harness();
   assert.equal(context.resolveDeliveryTarget('%7').state, 'present');

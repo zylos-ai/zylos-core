@@ -20,6 +20,7 @@ test('actual config module uses the same missing/malformed fallback at startup a
     ['missing', undefined, 'claude'],
     ['malformed', '{bad json', 'claude'],
     ['unset', '{}', 'claude'],
+    ['unknown', '{"runtime":"other"}', 'claude'],
     ['claude', '{"runtime":"claude"}', 'claude'],
     ['codex', '{"runtime":"codex"}', 'codex']
   ]) {
@@ -40,4 +41,21 @@ test('actual config module uses the same missing/malformed fallback at startup a
     assert.equal(config.readActiveRuntime(), 'claude');
     assert.equal(config.ACTIVE_RUNTIME, expected);
   }
+
+  const config = await import(new URL(`../c4-config.js?errors=${Date.now()}`, import.meta.url));
+  const originalRead = fs.readFileSync;
+  try {
+    for (const code of ['EACCES', 'EIO']) {
+      fs.readFileSync = (file, ...args) => {
+        if (file === configFile) throw Object.assign(new Error('config unavailable'), { code });
+        return originalRead(file, ...args);
+      };
+      assert.throws(() => config.readActiveRuntime(), error => error.code === code, code);
+    }
+  } finally {
+    fs.readFileSync = originalRead;
+  }
+  // A real non-file path supplies an OS read error without privilege assumptions.
+  fs.mkdirSync(configFile);
+  assert.throws(() => config.readActiveRuntime(), error => error.code === 'EISDIR');
 });
