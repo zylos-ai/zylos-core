@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import fs from 'node:fs';
 import vm from 'node:vm';
+import path from 'node:path';
 import { PeriodicEnter } from '../periodic-enter.js';
 
 const source = fs.readFileSync(new URL('../c4-dispatcher.js', import.meta.url), 'utf8');
@@ -47,23 +48,58 @@ test('actual delivery uses bracketed paste before unconditional Enter; loop awai
   assert.equal(timer.pending.itemId, 42);
   assert.ok(events.some(event => event.event === 'paste_sent' && event.itemId === 42));
   assert.equal(JSON.stringify(events).includes('private input'), false);
+  await context.sendToTmux('Meanwhile, health-check', { itemId: 43, itemType: 'control', periodicTextControl: true });
+  assert.equal(timer.pending.itemId, 43);
+  await context.sendToTmux('/exit', { itemId: 44, itemType: 'control', periodicTextControl: false });
+  assert.equal(timer.pending, null);
 });
 
-test('actual periodic target rejects runtime changes, missing/stale process, and replacement PID', () => {
+test('actual periodic target uses live pane/process identity despite stale monitor, rejects replacements and dead panes', () => {
   let runtime = 'claude';
-  let proc = { alive: true, pid: 123 };
+  let pid = 123;
+  let dead = '0';
+  let command = 'claude';
   const context = vm.createContext({
-    ACTIVE_RUNTIME: 'claude', TMUX_SESSION: 'isolated',
-    readActiveRuntime: () => runtime, readProcState: () => proc,
-    execFileSync: () => '%7', readFileSync: () => `123 (runtime) ${Array(19).fill('0').join(' ')} 777 0`
+    path, ACTIVE_RUNTIME: 'claude', TMUX_SESSION: 'isolated',
+    readActiveRuntime: () => runtime, readProcState: () => { throw new Error('monitor must not be consulted'); },
+    execFileSync: binary => binary === 'tmux' ? `%7 100 ${dead}` : String(pid),
+    readFileSync: file => file.endsWith('cmdline') ? (file.includes('/100/') ? '/bin/bash\0' : `/bin/${command}\0`) : `123 (runtime) ${Array(19).fill('0').join(' ')} 777 0`
   });
   vm.runInContext(extract('function periodicTarget(', 'function captureEnter('), context);
   const first = context.periodicTarget().identity;
-  proc = { alive: true, pid: 456 };
+  pid = 456;
   assert.notEqual(context.periodicTarget().identity, first);
-  proc = null;
+  dead = '1';
   assert.equal(context.periodicTarget(), null);
-  proc = { alive: true, pid: 123 };
+  dead = '0';
+  command = 'bash';
+  assert.equal(context.periodicTarget(), null);
+  command = 'claude';
   runtime = 'codex';
   assert.equal(context.periodicTarget(), null);
+});
+
+test('periodic Enter ignores busy, unhealthy and frozen/stale monitor state but cancels changed target', async () => {
+  let time = 0;
+  let identity = 'claude:%7:123:777';
+  let sent = 0;
+  const timer = new PeriodicEnter({ enabled: true, now: () => time });
+  const context = vm.createContext({
+    PERIODIC_ENTER_ENABLED: true, PERIODIC_ENTER_MAX_ATTEMPTS: 3, ENTER_VERIFY_WAIT_MS: 500,
+    periodicEnter: timer, isShuttingDown: false,
+    periodicTarget: () => ({ pane: '%7', identity }),
+    getAgentState: () => { throw new Error('busy/unhealthy monitor must not gate'); },
+    readProcState: () => { throw new Error('frozen/stale monitor must not gate'); },
+    captureEnter: () => {}, sleep: async () => {}, sendEnter: () => { sent++; }
+  });
+  vm.runInContext(extract('async function maybePeriodicEnter(', 'export function notifyMessageDelivered('), context);
+  timer.arm(identity, 42);
+  time = 60000;
+  await context.maybePeriodicEnter();
+  assert.equal(sent, 1);
+  identity = 'claude:%7:456:888';
+  time += 60000;
+  await context.maybePeriodicEnter();
+  assert.equal(sent, 1);
+  assert.equal(timer.pending, null);
 });

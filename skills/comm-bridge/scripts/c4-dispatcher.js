@@ -98,16 +98,29 @@ const periodicEnter = new PeriodicEnter({
 function periodicTarget() {
   try {
     if (readActiveRuntime() !== ACTIVE_RUNTIME) return null;
-    const proc = readProcState();
-    if (!proc?.alive || !Number.isInteger(proc.pid)) return null;
     // Resolve and pin the pane, so a later target selection cannot redirect a key.
-    const pane = execFileSync('tmux', ['display-message', '-p', '-t', TMUX_SESSION, '#{pane_id}'], {
+    const [pane, panePid, dead] = execFileSync('tmux', ['display-message', '-p', '-t', TMUX_SESSION, '#{pane_id} #{pane_pid} #{pane_dead}'], {
       encoding: 'utf8', stdio: 'pipe', timeout: 5000
-    }).trim();
-    if (!/^%\d+$/.test(pane)) return null;
-    const stat = readFileSync(`/proc/${proc.pid}/stat`, 'utf8');
-    const startTime = stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19];
-    return { pane, identity: `${ACTIVE_RUNTIME}:${pane}:${proc.pid}:${startTime}` };
+    }).trim().split(/\s+/);
+    if (!/^%\d+$/.test(pane) || !/^[1-9]\d*$/.test(panePid) || dead !== '0') return null;
+    // Read live processes, not monitor snapshots: stale/unhealthy state must not
+    // block a probe. Include the pane PID for runtimes launched without a shell.
+    let children = '';
+    try {
+      children = execFileSync('pgrep', ['-P', panePid], { encoding: 'utf8', stdio: 'pipe', timeout: 1000 });
+    } catch (error) { if (error.status !== 1) return null; }
+    for (const pid of [panePid, ...children.trim().split(/\s+/)]) {
+      if (!/^[1-9]\d*$/.test(pid)) continue;
+      try {
+        const args = readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0');
+        if (!args.slice(0, 2).some(arg => path.basename(arg) === ACTIVE_RUNTIME)) continue;
+        const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+        const fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
+        if (['Z', 'X'].includes(fields[0]) || !/^\d+$/.test(fields[19])) continue;
+        return { pane, identity: `${ACTIVE_RUNTIME}:${pane}:${pid}:${fields[19]}` };
+      } catch { /* A process can exit during discovery. */ }
+    }
+    return null;
   } catch { return null; }
 }
 
@@ -143,17 +156,17 @@ function sendEnter(kind, target = TMUX_SESSION) {
 async function maybePeriodicEnter() {
   if (!PERIODIC_ENTER_ENABLED || !periodicEnter.pending || periodicEnter.pending.attempts >= PERIODIC_ENTER_MAX_ATTEMPTS) return;
   const target = periodicTarget();
-  const state = getAgentState();
-  const proc = readProcState();
-  const eligible = (status, processState) => !isShuttingDown && status.healthy && status.health === 'ok' && status.state === 'idle' && processState?.alive === true && processState.frozen !== true;
   await periodicEnter.tick({
     identity: target?.identity,
-    eligible: eligible(state, proc),
+    eligible: !isShuttingDown,
     send: async () => {
       const itemId = periodicEnter.pending?.itemId;
       captureEnter('before', target.pane, { kind: 'periodic', itemId });
       // Recheck after diagnostics, immediately before the irreversible key event.
-      if (periodicTarget()?.identity !== target.identity || !eligible(getAgentState(), readProcState())) throw new Error('Target changed');
+      if (periodicTarget()?.identity !== target.identity || isShuttingDown) {
+        periodicEnter.reset('target_changed_or_shutdown');
+        throw new Error('Target changed');
+      }
       sendEnter('periodic', target.pane);
       await sleep(ENTER_VERIFY_WAIT_MS);
       captureEnter('after', target.pane, { kind: 'periodic', itemId });
@@ -523,7 +536,7 @@ async function sendToTmux(message, options = {}) {
     execFileSync('tmux', ['set-buffer', '-b', bufferName, '--', sanitized], { stdio: 'pipe', timeout: 5000 });
     execFileSync('tmux', ['paste-buffer', '-p', '-b', bufferName, '-t', TMUX_SESSION], { stdio: 'pipe', timeout: 5000 });
     trace('paste_sent', { itemId: options.itemId, itemType: options.itemType });
-    if (PERIODIC_ENTER_ENABLED && options.itemType === 'conversation') periodicEnter.arm(periodicTarget()?.identity, options.itemId);
+    if (PERIODIC_ENTER_ENABLED && (options.itemType === 'conversation' || options.periodicTextControl)) periodicEnter.arm(periodicTarget()?.identity, options.itemId);
   } catch (err) {
     trace('paste_failed', { itemId: options.itemId, itemType: options.itemType });
     logDeliveryFailure('tmux_paste', 0, 'PASTE_ERROR');
@@ -806,6 +819,7 @@ async function processNextMessage() {
     result = await sendToTmux(deliveryContent, {
       itemId: item.id,
       itemType: item.type,
+      periodicTextControl: item.type === 'control' && !rawContent.startsWith('/'),
       strictVerify: item.type === 'conversation',
       acceptShutdownAfterSubmit: isCodexExitLifecycleControl(item)
     });

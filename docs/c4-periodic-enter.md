@@ -14,25 +14,33 @@ Dispatcher environment settings (no live settings changed):
 | `C4_PERIODIC_ENTER_MAX_ATTEMPTS` | 3 | Positive integer, capped at 10 |
 | `C4_ENTER_CAPTURE_ENABLED` | off | Set `1` for sensitive local pane captures |
 
-A successful conversation paste arms a fresh attempt budget. Startup has no
+A successful conversation or ordinary text-control paste (including a probe)
+arms a fresh attempt budget. Startup has no
 armed state and cannot recover a draft left before dispatcher restart. Initial
 and verification Enter success reset the timer. Each periodic attempt consumes
 budget, including failed sends; successful sends reset the interval but never
 reset that budget. Exhaustion logs once, then stops until another actual
-conversation paste. Controls disarm; auto-acked heartbeats do not arm or reset.
+eligible paste. Slash controls (including /exit and /clear) and raw keystrokes
+disarm; auto-acked heartbeats do not arm or reset.
 
 The awaited dispatcher loop serializes paste, verification, and periodic Enter.
 No second timer writes keys. Polling and long delivery waits can delay a due
-attempt. New messages can postpone it indefinitely. Only fresh healthy idle
-status and a fresh live nonfrozen process allow a supplement. Busy waits until
-idle. Runtime configuration, pane ID, process PID and Linux process start time
+attempt. New messages can postpone it indefinitely. Busy, unhealthy, frozen or
+stale monitor snapshots do not gate supplements. Runtime configuration, pane ID,
+live runtime process PID and Linux process start time
 pin the target; missing/changed identity disarms rather than targeting a new
 session. Configuration/runtime switching should restart the dispatcher as usual.
+Discovery checks tmux's live pane PID/dead flag, then the pane process and its
+direct children for the active runtime command. It reads Linux /proc directly;
+the monitor's process snapshot is not consulted. Dispatcher shutdown prevents
+sends, and identity is rechecked after optional capture immediately before Enter.
+This does not change normal new-message admission or heartbeat auto-ack rules;
+only a message actually pasted can arm a budget.
 
 The fallback does not inspect draft content, repaste, requeue, or change any
 delivered state. A successful tmux command is evidence of key injection, not
 application submission. Existing normal delivery verification remains unchanged.
-This is for agent-only terminals: idle does not prove absence of a dialog or a
+This is for agent-only terminals: live process identity does not exclude a dialog or a
 human draft. A supplement can submit either, or create an empty turn. Enable
 only after checking the intended runtime's idle, busy, and modal behavior.
 
