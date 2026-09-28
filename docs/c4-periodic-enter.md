@@ -1,6 +1,6 @@
 # C4 delivery hardening and bounded recovery
 
-PR #799 ships bracketed paste, pinned normal delivery, opt-in bounded periodic
+PR #799 ships bracketed paste, pinned normal delivery, default-on bounded periodic
 Enter and diagnostic logging. There are no hooks. Periodic recovery remains
 default-on and is distinct from a reliable submission acknowledgement.
 
