@@ -5,7 +5,7 @@ All notable changes to zylos-core will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.8.2] - 2026-09-28
+## [Unreleased]
 
 ### Fixed
 - **Bracketed terminal paste**: C4 uses `tmux paste-buffer -p` before the existing Enter submission path, improving multiline submission and preserving pasted text in tested Claude and Codex inputs. (#799)
