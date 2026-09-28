@@ -53,7 +53,7 @@ function _readConfig() {
 }
 const _cfg = _readConfig();
 export function readActiveRuntime() {
-  const config = JSON.parse(fs.readFileSync(path.join(ZYLOS_DIR, '.zylos', 'config.json'), 'utf8'));
+  const config = _readConfig();
   return config.runtime === 'codex' ? 'codex' : 'claude';
 }
 export const ACTIVE_RUNTIME = _cfg.runtime === 'codex' ? 'codex' : 'claude';

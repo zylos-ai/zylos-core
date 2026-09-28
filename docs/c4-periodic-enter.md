@@ -17,6 +17,16 @@ normal queue retry policy applies. Lifecycle exit controls accept disappearance
 after the initial Enter, but do not accept a replacement runtime. Explicit raw
 keystroke controls resolve and validate a target immediately before sending.
 
+Target discovery distinguishes present, authoritatively absent and lookup error.
+A failed tmux command is not proof of exit: pane removal needs a successful
+pane listing, while a successful dead-pane lookup or runtime search can confirm
+absence. `pgrep` exit 1 means no children; other errors, malformed output and
+non-ENOENT process read failures remain errors. Lifecycle completion additionally
+requires ENOENT for the original process stat; permission/read errors cannot
+masquerade as absence. Configuration reads use the same Claude fallback at
+startup and during verification when config is absent or malformed; valid runtime
+changes are observed immediately and invalidate the old target.
+
 `tmux paste-buffer -p` adds bracketed-paste markers when the application enables
 the mode. This is an unconditional behavior change; a separate Enter is still
 required. Successful tmux commands prove injection, not application submission.

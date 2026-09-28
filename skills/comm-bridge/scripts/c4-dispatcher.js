@@ -90,31 +90,67 @@ function trace(event, metadata = {}) {
 
 function resolveDeliveryTarget(target = TMUX_SESSION) {
   try {
-    if (readActiveRuntime() !== ACTIVE_RUNTIME) return null;
+    if (readActiveRuntime() !== ACTIVE_RUNTIME) return { state: 'lookup_error', reason: 'runtime_changed' };
     // Resolve and pin the pane, so a later target selection cannot redirect a key.
-    const [pane, panePid, dead] = execFileSync('tmux', ['display-message', '-p', '-t', target, '#{pane_id} #{pane_pid} #{pane_dead}'], {
-      encoding: 'utf8', stdio: 'pipe', timeout: 5000
-    }).trim().split(/\s+/);
-    if (!/^%\d+$/.test(pane) || !/^[1-9]\d*$/.test(panePid) || dead !== '0') return null;
+    let paneState;
+    try {
+      paneState = execFileSync('tmux', ['display-message', '-p', '-t', target, '#{pane_id} #{pane_pid} #{pane_dead}'], {
+        encoding: 'utf8', stdio: 'pipe', timeout: 5000
+      }).trim();
+    } catch {
+      // A failed lookup alone cannot distinguish a missing pane from a broken
+      // tmux connection. Only a successful listing can confirm pane removal.
+      if (/^%\d+$/.test(target)) {
+        const panes = execFileSync('tmux', ['list-panes', '-a', '-F', '#{pane_id}'], {
+          encoding: 'utf8', stdio: 'pipe', timeout: 5000
+        }).trim().split(/\s+/).filter(Boolean);
+        if (panes.some(pane => !/^%\d+$/.test(pane))) return { state: 'lookup_error', reason: 'pane_list_malformed' };
+        if (!panes.includes(target)) return { state: 'authoritative_absent', reason: 'pane_removed' };
+      }
+      return { state: 'lookup_error', reason: 'pane_lookup_failed' };
+    }
+    const [pane, panePid, dead, extra] = paneState.split(/\s+/);
+    if (!/^%\d+$/.test(pane) || !/^[1-9]\d*$/.test(panePid) || !['0', '1'].includes(dead) || extra !== undefined) {
+      return { state: 'lookup_error', reason: 'pane_state_malformed' };
+    }
+    if (dead === '1') return { state: 'authoritative_absent', reason: 'pane_dead' };
     // Read live processes, not monitor snapshots: stale/unhealthy state must not
     // block a probe. Include the pane PID for runtimes launched without a shell.
     let children = '';
     try {
       children = execFileSync('pgrep', ['-P', panePid], { encoding: 'utf8', stdio: 'pipe', timeout: 1000 });
-    } catch (error) { if (error.status !== 1) return null; }
-    for (const pid of [panePid, ...children.trim().split(/\s+/)]) {
-      if (!/^[1-9]\d*$/.test(pid)) continue;
+    } catch (error) { if (error.status !== 1) return { state: 'lookup_error', reason: 'process_listing_failed' }; }
+    const childPids = children.trim().split(/\s+/).filter(Boolean);
+    if (childPids.some(pid => !/^[1-9]\d*$/.test(pid))) return { state: 'lookup_error', reason: 'process_listing_malformed' };
+    let processReadFailed = false;
+    for (const pid of [panePid, ...childPids]) {
       try {
         const args = readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0');
+        if (!args[0]) { processReadFailed = true; continue; }
         if (!args.slice(0, 2).some(arg => path.basename(arg) === ACTIVE_RUNTIME)) continue;
         const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+        if (stat.lastIndexOf(')') < 0) { processReadFailed = true; continue; }
         const fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
-        if (['Z', 'X'].includes(fields[0]) || !/^\d+$/.test(fields[19])) continue;
-        return { pane, pid, identity: `${ACTIVE_RUNTIME}:${pane}:${pid}:${fields[19]}` };
-      } catch { /* A process can exit during discovery. */ }
+        if (!/^[A-Z]$/.test(fields[0]) || !/^\d+$/.test(fields[19])) { processReadFailed = true; continue; }
+        if (['Z', 'X'].includes(fields[0])) continue;
+        return { state: 'present', target: { pane, pid, identity: `${ACTIVE_RUNTIME}:${pane}:${pid}:${fields[19]}` } };
+      } catch (error) {
+        if (error.code !== 'ENOENT') processReadFailed = true;
+      }
     }
-    return null;
-  } catch { return null; }
+    return processReadFailed
+      ? { state: 'lookup_error', reason: 'process_read_failed' }
+      : { state: 'authoritative_absent', reason: 'runtime_absent' };
+  } catch { return { state: 'lookup_error', reason: 'target_lookup_failed' }; }
+}
+
+function originalProcessAbsent(target) {
+  try {
+    readFileSync(`/proc/${target.pid}/stat`, 'utf8');
+    return false;
+  } catch (error) {
+    return error.code === 'ENOENT';
+  }
 }
 
 const periodicEnter = new PeriodicEnter({
@@ -141,8 +177,9 @@ function captureEnter(phase, target, metadata) {
   } catch { trace('capture_failed', { phase }); }
 }
 
-function assertDeliveryTarget(target) {
-  if (!target || isShuttingDown || resolveDeliveryTarget(target.pane)?.identity !== target.identity) {
+function assertDeliveryTarget(target, resolution) {
+  const resolved = resolution || (target && resolveDeliveryTarget(target.pane));
+  if (!target || isShuttingDown || resolved.target?.identity !== target.identity) {
     trace('delivery_target_changed', { pane: target?.pane });
     const error = new Error('Delivery target changed or unavailable');
     error.code = 'DELIVERY_TARGET_CHANGED';
@@ -167,7 +204,7 @@ function sendEnter(kind, target) {
 async function maybePeriodicEnter() {
   const pending = periodicEnter.pending;
   if (!PERIODIC_ENTER_ENABLED || !pending || pending.attempts >= PERIODIC_ENTER_MAX_ATTEMPTS) return;
-  const target = resolveDeliveryTarget(pending.pane);
+  const target = resolveDeliveryTarget(pending.pane).target;
   await periodicEnter.tick({
     identity: target?.identity,
     eligible: !isShuttingDown,
@@ -506,10 +543,13 @@ async function submitAndVerify(target, acceptShutdownAfterSubmit = false) {
 
   for (let attempt = 0; attempt < ENTER_VERIFY_MAX_RETRIES; attempt++) {
     await sleep(ENTER_VERIFY_WAIT_MS);
-    if (acceptShutdownAfterSubmit && readActiveRuntime() === ACTIVE_RUNTIME &&
-        !existsSync(`/proc/${target.pid}`) && !resolveDeliveryTarget(target.pane)) {
-      trace('lifecycle_shutdown_after_enter', { pane: target.pane });
-      return { verified: true, state: 'lifecycle_shutdown' };
+    if (acceptShutdownAfterSubmit) {
+      const resolution = resolveDeliveryTarget(target.pane);
+      if (resolution.state === 'authoritative_absent' && originalProcessAbsent(target)) {
+        trace('lifecycle_shutdown_after_enter', { pane: target.pane });
+        return { verified: true, state: 'lifecycle_shutdown' };
+      }
+      assertDeliveryTarget(target, resolution);
     }
     assertDeliveryTarget(target);
     captureEnter('after', target.pane, { kind: 'normal_verify', attempt: attempt + 1 });
@@ -553,7 +593,7 @@ async function sendToTmux(message, options = {}) {
   const sanitized = sanitizeMessage(message);
   const delayMs = getDeliveryDelay(Buffer.byteLength(sanitized, 'utf8'));
   periodicEnter.reset('normal_paste');
-  const target = resolveDeliveryTarget();
+  const target = resolveDeliveryTarget().target;
   trace('paste_attempt', { itemId: options.itemId, itemType: options.itemType, pane: target?.pane, bytes: Buffer.byteLength(sanitized, 'utf8'), delayMs });
 
   try {
@@ -829,7 +869,7 @@ async function processNextMessage() {
     const key = parseKeystrokeKey(rawContent);
     log(`Delivering keystroke key=${key} (control id=${item.id} priority=${item.priority})`);
     try {
-      const target = resolveDeliveryTarget();
+      const target = resolveDeliveryTarget().target;
       assertDeliveryTarget(target);
       execFileSync('tmux', ['send-keys', '-t', target.pane, key], { stdio: 'pipe', timeout: 5000 });
       ackControl(item.id);

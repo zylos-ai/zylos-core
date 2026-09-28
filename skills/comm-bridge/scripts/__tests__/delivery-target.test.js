@@ -20,13 +20,18 @@ function harness() {
     PeriodicEnter: class extends PeriodicEnter { constructor(options) { super({ ...options, now: () => state.time }); } },
     readActiveRuntime: () => 'claude', existsSync: () => state.alive,
     readFileSync: file => {
+      if (state.readError) throw state.readError;
+      if (file.includes('/123/') && file.endsWith('stat') && !state.alive) throw Object.assign(new Error('gone'), { code: 'ENOENT' });
       if (file.endsWith('cmdline')) return file.includes('/100/') ? '/bin/bash\0' : '/bin/claude\0';
-      return `123 (runtime) ${Array(19).fill('0').join(' ')} ${state.start} 0`;
+      return `123 (runtime) S ${Array(18).fill('0').join(' ')} ${state.start} 0`;
     },
     execFileSync: (binary, args) => {
       state.commands.push({ binary, args });
-      if (binary === 'pgrep') return String(state.pid);
+      if (binary === 'pgrep') { if (state.pgrepError) throw state.pgrepError; return String(state.pid); }
+      if (state.tmuxError) throw state.tmuxError;
+      if (args[0] === 'list-panes') return state.paneList ?? '%7';
       if (args[0] === 'display-message') {
+        if (state.displayError) throw state.displayError;
         const target = args[args.indexOf('-t') + 1];
         const pane = target === 'isolated' ? state.selected : target;
         return `${pane} 100 ${state.alive ? 0 : 1}`;
@@ -137,9 +142,59 @@ test('lifecycle accepts disappearance after Enter but never replacement', async 
 
 test('lifecycle cannot turn unavailable identity into success while original PID exists', async () => {
   const { state, context, deliver } = harness();
-  context.existsSync = () => true;
+  const read = context.readFileSync;
+  context.readFileSync = file => file === '/proc/123/stat' && !state.alive ? 'present' : read(file);
   state.onWait = count => { if (count === 2) state.alive = false; };
   assert.equal(await deliver({ acceptShutdownAfterSubmit: true }), 'verify_failed');
+});
+
+test('lifecycle rejects tmux, pgrep and proc lookup failures even when original PID is gone', async () => {
+  for (const failure of ['tmux', 'pgrep', 'proc']) {
+    const { state, context, deliver } = harness();
+    const originalRead = context.readFileSync;
+    context.readFileSync = file => {
+      if (state.waits >= 2 && file === '/proc/123/stat') throw Object.assign(new Error('gone'), { code: 'ENOENT' });
+      return originalRead(file);
+    };
+    state.onWait = count => {
+      if (count !== 2) return;
+      if (failure === 'tmux') state.tmuxError = new Error('tmux timeout');
+      if (failure === 'pgrep') state.pgrepError = Object.assign(new Error('pgrep failed'), { status: 2 });
+      if (failure === 'proc') state.readError = Object.assign(new Error('denied'), { code: 'EACCES' });
+    };
+    assert.equal(await deliver({ acceptShutdownAfterSubmit: true }), 'verify_failed', failure);
+    assert.equal(state.events.some(event => event.event === 'lifecycle_shutdown_after_enter'), false, failure);
+  }
+});
+
+test('resolver distinguishes absence from malformed state and lookup errors', () => {
+  const { state, context } = harness();
+  assert.equal(context.resolveDeliveryTarget('%7').state, 'present');
+  state.pgrepError = Object.assign(new Error('no children'), { status: 1 });
+  assert.equal(context.resolveDeliveryTarget('%7').state, 'authoritative_absent');
+  state.pgrepError = Object.assign(new Error('failed'), { status: 2 });
+  assert.equal(context.resolveDeliveryTarget('%7').state, 'lookup_error');
+  state.pgrepError = null;
+  state.readError = Object.assign(new Error('missing'), { code: 'ENOENT' });
+  assert.equal(context.resolveDeliveryTarget('%7').state, 'authoritative_absent');
+  state.readError = Object.assign(new Error('permissions'), { code: 'EACCES' });
+  assert.equal(context.resolveDeliveryTarget('%7').state, 'lookup_error');
+  state.readError = null;
+  // A non-runtime cmdline is legitimate, but a matching runtime with bad stat is not.
+  context.readFileSync = file => file.endsWith('cmdline') ? '/bin/claude\0' : 'malformed';
+  assert.equal(context.resolveDeliveryTarget('%7').state, 'lookup_error');
+});
+
+test('failed pane lookup needs successful pane listing to confirm removal', () => {
+  const { state, context } = harness();
+  state.displayError = new Error('cannot find pane');
+  assert.equal(context.resolveDeliveryTarget('%7').state, 'lookup_error');
+  state.paneList = '%8';
+  assert.equal(context.resolveDeliveryTarget('%7').state, 'authoritative_absent');
+  state.paneList = 'invalid-output';
+  assert.equal(context.resolveDeliveryTarget('%7').state, 'lookup_error');
+  state.tmuxError = new Error('connection failed');
+  assert.equal(context.resolveDeliveryTarget('%7').state, 'lookup_error');
 });
 
 test('verified-empty delivery retains budget, supplements target original pane after selection switch', async () => {
