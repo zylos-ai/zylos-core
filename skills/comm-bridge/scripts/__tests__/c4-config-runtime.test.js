@@ -4,6 +4,25 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
+test('periodic recovery defaults on while explicit opt-out and capture defaults remain intact', async t => {
+  const keys = ['C4_PERIODIC_ENTER_ENABLED', 'C4_ENTER_CAPTURE_ENABLED'];
+  const previous = keys.map(key => process.env[key]);
+  t.after(() => keys.forEach((key, i) => {
+    if (previous[i] === undefined) delete process.env[key];
+    else process.env[key] = previous[i];
+  }));
+  delete process.env.C4_ENTER_CAPTURE_ENABLED;
+  for (const [index, [value, enabled]] of [
+    [undefined, true], ['1', true], ['0', false], ['', false], ['false', false], ['invalid', false]
+  ].entries()) {
+    if (value === undefined) delete process.env.C4_PERIODIC_ENTER_ENABLED;
+    else process.env.C4_PERIODIC_ENTER_ENABLED = value;
+    const config = await import(new URL(`../c4-config.js?default=${index}-${Date.now()}`, import.meta.url));
+    assert.equal(config.PERIODIC_ENTER_ENABLED, enabled);
+    assert.equal(config.ENTER_CAPTURE_ENABLED, false);
+  }
+});
+
 test('actual config module uses the same missing/malformed fallback at startup and on live reads', async t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'c4-runtime-config-'));
   const previous = process.env.ZYLOS_DIR;

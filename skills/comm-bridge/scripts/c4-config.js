@@ -22,7 +22,7 @@ function positiveInteger(value, fallback) {
   const number = Number(value);
   return Number.isSafeInteger(number) && number > 0 ? number : fallback;
 }
-export const PERIODIC_ENTER_ENABLED = process.env.C4_PERIODIC_ENTER_ENABLED === '1';
+export const PERIODIC_ENTER_ENABLED = (process.env.C4_PERIODIC_ENTER_ENABLED ?? '1') === '1';
 export const PERIODIC_ENTER_INTERVAL_MS = Math.max(1000, positiveInteger(process.env.C4_PERIODIC_ENTER_INTERVAL_MS, 60000));
 export const PERIODIC_ENTER_MAX_ATTEMPTS = Math.min(10, positiveInteger(process.env.C4_PERIODIC_ENTER_MAX_ATTEMPTS, 3));
 

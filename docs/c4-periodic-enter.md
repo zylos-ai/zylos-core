@@ -2,7 +2,7 @@
 
 PR #799 ships bracketed paste, pinned normal delivery, opt-in bounded periodic
 Enter and diagnostic logging. There are no hooks. Periodic recovery remains
-default-off and is distinct from a reliable submission acknowledgement.
+default-on and is distinct from a reliable submission acknowledgement.
 
 ## Delivery target
 
@@ -39,7 +39,7 @@ remains unproven.
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
-| `C4_PERIODIC_ENTER_ENABLED` | off | Set `1` to enable |
+| `C4_PERIODIC_ENTER_ENABLED` | on | Unset or `1` enables; set `0` to disable (other explicit values also disable) |
 | `C4_PERIODIC_ENTER_INTERVAL_MS` | 60000 | Minimum 1000; monotonic elapsed time |
 | `C4_PERIODIC_ENTER_MAX_ATTEMPTS` | 3 | Positive integer, capped at 10 |
 | `C4_ENTER_CAPTURE_ENABLED` | off | Set `1` for sensitive local pane captures |
