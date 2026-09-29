@@ -63,7 +63,7 @@ import {
   findPromptY as sharedFindPromptY,
   isUsageOverlayCapture as sharedIsUsageOverlayCapture
 } from './tmux-input-state.js';
-import { buildReplyViaSuffix, hasLegacyReplyViaSuffix, truncateForDelivery } from './c4-utils.js';
+import { buildReplyViaSuffix, hasLegacyReplyViaSuffix, sanitizeMessage, truncateForDelivery } from './c4-utils.js';
 
 let isShuttingDown = false;
 let pollInterval = POLL_INTERVAL_BASE;
@@ -304,9 +304,7 @@ export function shouldAutoAckHeartbeat({ item, agentState, procState, confirmedA
   );
 }
 
-export function sanitizeMessage(message) {
-  return message.replace(/[\x00-\x08\x0B-\x1F]/g, '');
-}
+export { sanitizeMessage };
 
 export function getDeliveryDelay(byteLength) {
   const extra = Math.floor(byteLength / 1024) * DELIVERY_DELAY_PER_KB;
