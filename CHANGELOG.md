@@ -7,12 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
-- **Bracketed terminal paste**: C4 uses `tmux paste-buffer -p` before the existing Enter submission path, improving multiline submission and preserving pasted text in tested Claude and Codex inputs. (#799)
-
 ### Added
-- **Pinned C4 delivery target**: resolve the runtime pane before pasting and keep paste, Enter, retry, Escape and verification on that pane; stop if the runtime identity changes. (#795, #799)
-- **Bounded periodic Enter**: default-on recovery supplements Enter after 60 seconds by default, with up to three cumulative attempts per eligible paste. Set `C4_PERIODIC_ENTER_ENABLED=0` to disable. It retains the pre-paste pane/runtime identity, runs serially with delivery, and does not depend on idle, health or the empty-input heuristic. Blind-key dialog/draft risks remain; this is not a submission acknowledgement or a confirmed root-cause fix. (#795, #799)
+- **Optional bracketed terminal paste**: set `C4_BRACKETED_PASTE_ENABLED=1` to use `tmux paste-buffer -p`; default paste behavior remains unchanged. Delivery continues to target the configured tmux session by name. (#799)
+- **Bounded periodic Enter**: default-on recovery supplements Enter after 60 seconds by default, with up to three cumulative attempts per eligible paste. Set `C4_PERIODIC_ENTER_ENABLED=0` to disable. It runs serially with delivery, without idle, health, input-content or runtime-identity gates; runtime restarts do not invalidate the budget. Blind-key dialog/draft effects are accepted operating boundaries for agent-dedicated terminals, not a submission acknowledgement or a confirmed root-cause fix. (#795, #799)
 - **Delivery diagnostics**: metadata events for paste, Enter and detector decisions, plus opt-in private visible-pane captures with a fixed capacity and no evidence overwrite. (#799)
 
 ## [0.8.1] - 2026-09-09

@@ -27,6 +27,7 @@ export const PERIODIC_ENTER_INTERVAL_MS = Math.max(1000, positiveInteger(process
 export const PERIODIC_ENTER_MAX_ATTEMPTS = Math.min(10, positiveInteger(process.env.C4_PERIODIC_ENTER_MAX_ATTEMPTS, 3));
 
 export const ENTER_CAPTURE_ENABLED = process.env.C4_ENTER_CAPTURE_ENABLED === '1';
+export const BRACKETED_PASTE_ENABLED = process.env.C4_BRACKETED_PASTE_ENABLED === '1';
 
 // For legacy require_idle / external block_queue_until_idle messages:
 // minimum sustained idle seconds before delivery.
@@ -52,24 +53,6 @@ function _readConfig() {
   }
 }
 const _cfg = _readConfig();
-export function readActiveRuntime() {
-  let content;
-  try {
-    content = fs.readFileSync(path.join(ZYLOS_DIR, '.zylos', 'config.json'), 'utf8');
-  } catch (error) {
-    if (error.code === 'ENOENT') return 'claude';
-    // Live identity checks must not mistake inaccessible config for a default.
-    throw error;
-  }
-  let config;
-  try {
-    config = JSON.parse(content);
-  } catch (error) {
-    if (error instanceof SyntaxError) return 'claude';
-    throw error;
-  }
-  return config?.runtime === 'codex' ? 'codex' : 'claude';
-}
 export const ACTIVE_RUNTIME = _cfg.runtime === 'codex' ? 'codex' : 'claude';
 export const TMUX_SESSION = ACTIVE_RUNTIME === 'codex' ? 'codex-main' : 'claude-main';
 export const DATA_DIR = path.join(ZYLOS_DIR, 'comm-bridge');

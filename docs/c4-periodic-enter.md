@@ -1,105 +1,95 @@
-# C4 delivery hardening and bounded recovery
+# C4 bounded periodic Enter and optional bracketed paste
 
-PR #799 ships bracketed paste, pinned normal delivery, default-on bounded periodic
-Enter and diagnostic logging. There are no hooks. Periodic recovery remains
-default-on and is distinct from a reliable submission acknowledgement.
+PR #799 adds default-on bounded periodic Enter and delivery diagnostics.
+Bracketed paste is opt-in; the default paste command remains unchanged.
+All delivery operations target the configured `TMUX_SESSION`. No pane or
+process identity is pinned and no Linux /proc inspection is required.
 
-## Delivery target
+## Paste mode
 
-Before paste, resolve a concrete tmux pane ID, runtime PID and Linux process
-start time. Discovery checks the pane process and direct children; unavailable
-identity fails without pasting. Arbitrary process wrapper trees are unsupported.
-Paste, initial Enter, retries, Escape and checks all use that pane. Changing the
-selected pane cannot redirect delivery. Before paste and each key, revalidate
-the runtime in the pinned pane. Checks around verification prevent accepting a
-replacement runtime's empty prompt. Identity changes stop delivery and the
-normal queue retry policy applies. Lifecycle exit controls accept disappearance
-after the initial Enter, but do not accept a replacement runtime. Explicit raw
-keystroke controls resolve and validate a target immediately before sending.
+`C4_BRACKETED_PASTE_ENABLED=1` enables `tmux paste-buffer -p`. Unset or
+any other value uses the existing `paste-buffer` command without `-p`.
+Both modes still send a separate Enter. Bracketed paste may change how Claude
+Code treats forwarded instructions, so enabling it requires deployment-specific
+validation. Negative isolated tests used disabled feature-flag fetching and
+cannot rule out that semantic change; removing that variable alone also did
+not enable wrapping in the synthetic-identity/local-interface fixture.
 
-Target discovery distinguishes present, authoritatively absent and lookup error.
-A failed tmux command is not proof of exit: pane removal needs a successful
-pane listing, while a successful dead-pane lookup or runtime search can confirm
-absence. `pgrep` exit 1 means no children; other errors, malformed output and
-non-ENOENT process read failures remain errors. Lifecycle completion additionally
-requires ENOENT for the original process stat; permission/read errors cannot
-masquerade as absence. Configuration reads use the same Claude fallback at
-startup and during verification when config is absent or malformed; valid runtime
-changes are observed immediately and invalidate the old target. Live permission,
-disk I/O and other non-ENOENT filesystem errors fail target lookup instead of
-selecting Claude. The startup reader retains its legacy permissive fallback.
-
-`tmux paste-buffer -p` adds bracketed-paste markers when the application enables
-the mode. This is an unconditional behavior change; a separate Enter is still
-required. Successful tmux commands prove injection, not application submission.
-The existing input heuristic is not a receipt; the natural false-empty trigger
-remains unproven.
+Successful tmux commands prove injection, not application submission. The
+existing input heuristic is not a receipt. This PR does not redesign submission
+verification or claim to establish the natural false-empty root cause.
 
 ## Bounded periodic recovery
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
-| `C4_PERIODIC_ENTER_ENABLED` | on | Unset or `1` enables; set `0` to disable (other explicit values also disable) |
-| `C4_PERIODIC_ENTER_INTERVAL_MS` | 60000 | Minimum 1000; monotonic elapsed time |
+| `C4_BRACKETED_PASTE_ENABLED` | off | Only `1` enables bracketed paste |
+| `C4_PERIODIC_ENTER_ENABLED` | on | Unset or `1` enables; any other value disables |
+| `C4_PERIODIC_ENTER_INTERVAL_MS` | 60000 | Positive integer, minimum 1000; monotonic elapsed time |
 | `C4_PERIODIC_ENTER_MAX_ATTEMPTS` | 3 | Positive integer, capped at 10 |
-| `C4_ENTER_CAPTURE_ENABLED` | off | Set `1` for sensitive local pane captures |
+| `C4_ENTER_CAPTURE_ENABLED` | off | Only `1` enables sensitive local captures |
 
 A new actual paste clears the old budget. A successfully pasted conversation
-or ordinary non-slash text control arms the budget using the exact target
-captured BEFORE paste. Slash controls and raw keystrokes clear it. Queue admission
-and heartbeat auto-ack behavior are unchanged. No idle, health or empty-input
-condition gates a periodic attempt. In particular, an ordinary verification
-returning empty or marking delivered does not cancel the budget.
+or ordinary non-slash text control arms a new budget. Slash controls and raw
+keystrokes clear it. Queue admission and heartbeat auto-ack behavior are
+unchanged. No idle, health, input-content or Codex-specific condition gates a
+periodic attempt. An empty verdict or delivered status does not cancel it.
 
 Initial and retry Enter commands reset the elapsed-time anchor on successful
-command return, not on confirmed application submission. At least 60 seconds
-after the last Enter, the awaited dispatcher loop attempts one Enter on the
-original pane and retains the cumulative maximum of three attempts. Failed
-commands consume budget and reset the attempt anchor so they cannot spin.
-Successful commands reset elapsed time but do not restore attempts. Exhaustion
-stops until another eligible paste; new messages may defer recovery indefinitely.
-Startup has no budget for pre-existing drafts. Shutdown prevents sends.
+command return, not on confirmed application submission. After at least 60
+seconds, the awaited dispatcher loop attempts another Enter against
+`TMUX_SESSION`, up to three cumulative attempts per eligible paste. With the
+normal 1-3 second polling interval and an otherwise free loop, the first attempt
+is about 60-63 seconds after the last normal Enter. Work already occupying the
+loop may delay it further. The timer cannot interleave with normal delivery.
 
-The timer resolves the original pinned pane, never the currently selected pane,
-and checks runtime PID/start time before sending. A missing or replaced runtime
-cancels the budget. This prevents selection drift but cannot prove draft
-ownership. The single awaited loop prevents the timer from interleaving with
-normal paste/verification; external writers are outside that guarantee. Linux
-process inspection and tmux sending are not an atomic transaction.
+Failed sends consume budget and reset the attempt anchor, preventing tight
+retries. Successful sends reset elapsed time without restoring attempts.
+Exhaustion stops until another eligible paste; frequent new messages can defer
+recovery indefinitely. A runtime/session restart does not cancel an existing
+budget: the next attempt targets the session then available. Restarting the
+dispatcher itself loses its in-memory budget. Dispatcher shutdown prevents sends.
 
-## Accepted operating boundary, unresolved risk
+## Accepted operating boundary
 
-Pane/PID identity cannot distinguish a prompt from a dialog or human draft.
-The existing screen parser cannot establish ownership of the original C4 input.
-Blind periodic Enter may confirm dialogs, submit unrelated drafts or combine
-messages. Disarming on the existing empty heuristic would recreate the original
-false negative. The owner has explicitly chosen to retain this bounded blind
-recovery behavior for the agent terminal, without adding those gates. This is an
-accepted operating tradeoff, not proof these risks are fixed. Dialogs, menus,
-manual drafts and external writers remain unsupported safety assumptions for
-broad enablement. Empty/busy-input tests do not establish safety for all UI states.
-The original false-empty root cause is not declared solved.
+The owner has accepted blind, bounded recovery for an agent-dedicated terminal.
+In the intended deployment, authorization menus are suppressed at startup or
+handled by the existing automatic-selection hook. Claude Code directory trust
+dialogs concern previously untrusted directories; the established agent working
+directory is already trusted. These are deployment assumptions, not UI checks
+introduced by this PR, and isolated test directories can still show dialogs.
+
+A person manually attaching and typing a partial draft is outside the dedicated
+agent-terminal convention: a scheduled Enter may submit that draft. Existing
+isolated tests also showed Enter selecting menu items. These effects remain
+possible if the operating assumptions are violated. The timer does not identify
+draft ownership or dialog state, and can send to a replacement runtime or a newly
+selected pane. It never changes a message's recorded delivery status.
 
 ## Diagnostics
 
-Structured logs include item ID/type, timestamps, paste bytes, Enter results,
-detector branches and identity failures, without message text or tmux command
-errors containing input. `C4_ENTER_CAPTURE_ENABLED=1` enables local snapshots
-before normal verification and before/after periodic Enter; default off.
-Periodic events/captures include the original item ID/type, pane and attempt.
-These may contain secrets. The directory
-is mode 0700, files 0600, capped at 100 files and 8192 capture characters per file.
-Capacity stops collection without deleting old evidence. No scrollback or upload.
-Geometry collection adds up to two 500ms command timeouts per observation.
+Structured logs include item ID/type, timestamps, paste byte counts, Enter
+results and detector branches. They omit message text, pane/process identity
+fields and tmux errors that could contain input.
+`C4_ENTER_CAPTURE_ENABLED=1` enables private snapshots around verification and
+periodic Enter; it remains off by default. Periodic records retain the original
+item ID/type and attempt count.
+
+Captures may contain secrets. The directory is mode 0700, files 0600, with a
+100-file cap and 8192 capture characters per file. Capacity stops collection
+without deleting old evidence. No scrollback or upload. Geometry collection adds
+up to two 500ms command timeouts per observation. General dispatcher log rotation
+is outside this PR.
 
 ## Verification
 
-Run `node --test skills/comm-bridge/scripts/__tests__/delivery-target.test.js skills/comm-bridge/scripts/__tests__/periodic-enter.test.js`
-and existing dispatcher/capture tests. Wiring tests execute actual dispatcher
-functions with controlled tmux/process responses for pane switches, replacements,
-missing identity, retries and lifecycle exit. Historical CC/Codex live tests
-cover bracketed paste. Timer tests cover exact interval, cumulative cap, failed
-command rate limiting, original-pane recovery after selection changes, replaced
-runtime cancellation, and recovery despite an empty verdict or unhealthy/busy
-monitor. These tests do not establish UI/draft ownership. No natural reproduction
-of issue #795 is claimed.
+Run the dispatcher, session-delivery, periodic-enter, configuration and capture
+tests under `skills/comm-bridge/scripts/__tests__/`. Controlled tests cover
+default/opt-in paste arguments, session-name routing, normal verification,
+interval/cumulative budgets, failed-send throttling, retention across runtime
+replacement and recovery after an empty verdict.
+
+Historical isolated runtime tests demonstrate retained-draft recovery and
+manual-draft/menu side effects, but are not acceptance of the final revised
+head. Full Lark-to-runtime-to-reply acceptance and a confirmed natural #795 root
+cause remain outstanding.

@@ -6,33 +6,27 @@ export class PeriodicEnter {
   }
 
   reset(reason = 'reset') {
-    if (this.pending) this.emit('periodic_disarmed', { itemId: this.pending.itemId, itemType: this.pending.itemType, pane: this.pending.pane, reason });
+    if (this.pending) this.emit('periodic_disarmed', { itemId: this.pending.itemId, itemType: this.pending.itemType, reason });
     this.pending = null;
   }
 
-  arm(target, itemId, itemType) {
+  arm(itemId, itemType) {
     if (!this.enabled) return this.reset('disabled');
-    if (!target?.identity || !target.pane) {
-      this.reset('identity_unavailable');
-      this.emit('periodic_arm_skipped', { itemId, itemType, reason: 'identity_unavailable' });
-      return;
-    }
-    this.pending = { ...target, itemId, itemType, attempts: 0, lastAt: this.now() };
-    this.emit('periodic_armed', { itemId, itemType, pane: target.pane });
+    this.pending = { itemId, itemType, attempts: 0, lastAt: this.now() };
+    this.emit('periodic_armed', { itemId, itemType });
   }
 
   entered() {
     if (this.pending) this.pending.lastAt = this.now();
   }
 
-  async tick({ identity, eligible, send }) {
+  async tick({ eligible, send }) {
     const pending = this.pending;
     if (!pending) return;
-    if (!identity || identity !== pending.identity) return this.reset('target_changed_or_unavailable');
     if (!eligible || pending.attempts >= this.maxAttempts || this.now() - pending.lastAt < this.intervalMs) return;
     pending.attempts++;
     pending.lastAt = this.now();
-    const metadata = { itemId: pending.itemId, itemType: pending.itemType, pane: pending.pane, attempt: pending.attempts, maxAttempts: this.maxAttempts };
+    const metadata = { itemId: pending.itemId, itemType: pending.itemType, attempt: pending.attempts, maxAttempts: this.maxAttempts };
     this.emit('periodic_attempt', metadata);
     try {
       await send();
