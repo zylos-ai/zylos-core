@@ -18,6 +18,17 @@ export const CONTROL_CLEANUP_INTERVAL_MS = 24 * 60 * 60 * 1000;
 export const ENTER_VERIFY_MAX_RETRIES = 3;
 export const ENTER_VERIFY_WAIT_MS = 500;
 
+function positiveInteger(value, fallback) {
+  const number = Number(value);
+  return Number.isSafeInteger(number) && number > 0 ? number : fallback;
+}
+export const PERIODIC_ENTER_ENABLED = (process.env.C4_PERIODIC_ENTER_ENABLED ?? '1') === '1';
+export const PERIODIC_ENTER_INTERVAL_MS = Math.max(1000, positiveInteger(process.env.C4_PERIODIC_ENTER_INTERVAL_MS, 60000));
+export const PERIODIC_ENTER_MAX_ATTEMPTS = Math.min(10, positiveInteger(process.env.C4_PERIODIC_ENTER_MAX_ATTEMPTS, 3));
+
+export const ENTER_CAPTURE_ENABLED = process.env.C4_ENTER_CAPTURE_ENABLED === '1';
+export const BRACKETED_PASTE_ENABLED = process.env.C4_BRACKETED_PASTE_ENABLED === '1';
+
 // For legacy require_idle / external block_queue_until_idle messages:
 // minimum sustained idle seconds before delivery.
 export const REQUIRE_IDLE_MIN_SECONDS = 3;

@@ -15,6 +15,23 @@ const DIAG_DIR = path.join(ZYLOS_DIR, 'activity-monitor');
 const MAX_LOG_SIZE = 100 * 1024; // 100KB — rotate when exceeded
 const KEEP_RATIO = 0.5;          // Keep last 50% of lines after rotation
 
+// Opt-in captures are sensitive. Stop at capacity; never remove old evidence.
+export function saveEnterCapture(capture, phase, metadata = {}) {
+  try {
+    const directory = path.join(DIAG_DIR, 'enter-captures');
+    fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+    fs.chmodSync(directory, 0o700);
+    if (fs.readdirSync(directory).length >= 100) return 'capacity';
+    const file = path.join(directory, `${Date.now()}-${process.pid}-${Math.random().toString(16).slice(2)}.json`);
+    const fd = fs.openSync(file, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600);
+    try {
+      fs.fchmodSync(fd, 0o600);
+      fs.writeFileSync(fd, JSON.stringify({ at: new Date().toISOString(), phase, ...metadata, capture: capture.slice(-8192) }));
+    } finally { fs.closeSync(fd); }
+    return 'saved';
+  } catch { return 'failed'; }
+}
+
 /**
  * Ensure diagnostic directory exists.
  */
