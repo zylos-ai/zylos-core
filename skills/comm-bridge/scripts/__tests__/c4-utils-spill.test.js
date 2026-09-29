@@ -12,7 +12,7 @@ process.env.ZYLOS_DIR = TMP_DIR;
 
 // Dynamic import so the env var is set before c4-config.js evaluates.
 const { truncateForDelivery } = await import(new URL('../c4-utils.js', import.meta.url));
-const { FILE_SIZE_THRESHOLD } = await import(new URL('../c4-config.js', import.meta.url));
+const { FILE_SIZE_THRESHOLD, PASTE_CHAR_THRESHOLD } = await import(new URL('../c4-config.js', import.meta.url));
 
 // Restore env after module load.
 if (ORIG_ZYLOS_DIR === undefined) delete process.env.ZYLOS_DIR;
@@ -142,5 +142,48 @@ describe('truncation notice wording (#748)', () => {
     assert.ok(delivered.endsWith(suffix), 'reply-via suffix must terminate the delivery');
     const noticeIdx = delivered.indexOf('[C4] ⚠️ TRUNCATED');
     assert.ok(noticeIdx !== -1 && noticeIdx < delivered.indexOf(suffix), 'notice precedes reply-via');
+  });
+});
+
+describe('truncateForDelivery paste-wrap char threshold', () => {
+  const SUFFIX = ' ---- reply via: node c4-send.js "lark" "oc_x|type:p2p"';
+  const body = (total) => 'a'.repeat(total - SUFFIX.length);
+
+  it('delivers inline at 750 and exactly at the threshold', () => {
+    for (const total of [750, PASTE_CHAR_THRESHOLD]) {
+      const out = truncateForDelivery(body(total), SUFFIX, 7000 + total);
+      assert.equal(out.length, total);
+      assert.ok(!out.includes('[C4] ⚠️ TRUNCATED'));
+    }
+  });
+
+  it('spills one char over the threshold and at 850, with a notice that stays under it', () => {
+    for (const total of [PASTE_CHAR_THRESHOLD + 1, 850]) {
+      const content = body(total);
+      const out = truncateForDelivery(content, SUFFIX, 8000 + total);
+      assert.equal(fs.readFileSync(spillPathOf(out), 'utf8'), content + SUFFIX);
+      assert.ok(out.length <= PASTE_CHAR_THRESHOLD, `notice too long: ${out.length}`);
+      assert.ok(out.endsWith(SUFFIX));
+    }
+  });
+
+  it('keeps the notice under the threshold even with a long thread reply-via', () => {
+    const longSuffix = ` ---- reply via: node /home/user/zylos/.claude/skills/comm-bridge/scripts/c4-send.js "lark" "oc_${'0'.repeat(32)}|type:p2p|root:om_${'1'.repeat(32)}|parent:om_${'1'.repeat(32)}|msg:om_${'2'.repeat(32)}"`;
+    const out = truncateForDelivery('汉'.repeat(3000), longSuffix, 8500);
+    assert.ok(out.length <= PASTE_CHAR_THRESHOLD, `notice too long: ${out.length}`);
+  });
+
+  it('counts UTF-16 code units like Claude Code, not bytes', () => {
+    const emoji = '😀'.repeat(401); // 802 units, 1604 bytes
+    assert.ok(truncateForDelivery(emoji, '', 9001).includes('[C4] ⚠️ TRUNCATED'));
+    const cjk = '汉'.repeat(600); // 600 units, 1800 bytes
+    assert.equal(truncateForDelivery(cjk, '', 9002), cjk);
+  });
+
+  it('measures the sanitized text that is actually pasted', () => {
+    // 790 visible chars + 20 CRs: 810 raw, but 790 after the dispatcher strips \r.
+    const content = 'a\r\n'.repeat(20) + 'b'.repeat(750);
+    assert.equal(content.length, 810);
+    assert.equal(truncateForDelivery(content, '', 9003), content);
   });
 });

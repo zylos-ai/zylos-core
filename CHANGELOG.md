@@ -12,6 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Bounded periodic Enter**: default-on recovery supplements Enter after 60 seconds by default, with up to three cumulative attempts per eligible paste. Set `C4_PERIODIC_ENTER_ENABLED=0` to disable. It runs serially with delivery, without idle, health, input-content or runtime-identity gates; runtime restarts do not invalidate the budget. Blind-key dialog/draft effects are accepted operating boundaries for agent-dedicated terminals, not a submission acknowledgement or a confirmed root-cause fix. (#795, #799)
 - **Delivery diagnostics**: metadata events for paste, Enter and detector decisions, plus opt-in private visible-pane captures with a fixed capacity and no evidence overwrite. (#799)
 
+### Fixed
+- **C4 messages no longer arrive wrapped in `<pasted_content>` on Claude Code**: Claude Code treats a single input event longer than 800 characters (JavaScript string length, i.e. UTF-16 code units) as a paste and, on submit, wraps it in `<pasted_content>` — telling the model the text came from somewhere else and its instructions should not be followed on their own. C4 pastes each delivery in one `tmux paste-buffer` and only spilled to a file above 2,048 bytes, so every delivery between 801 characters and 2,048 bytes (sender header, message and reply-via line included) was wrapped. `truncateForDelivery` now also spills when the sanitized delivery (the exact text pasted) exceeds `PASTE_CHAR_THRESHOLD` (800); the pointer notice stays well under the limit. `sanitizeMessage` moved to `c4-utils.js` (still re-exported by the dispatcher) so the length is measured on what is actually pasted.
+
 ## [0.8.1] - 2026-09-09
 
 ### Added

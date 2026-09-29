@@ -3,6 +3,7 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 import {
   FILE_SIZE_THRESHOLD,
+  PASTE_CHAR_THRESHOLD,
   ATTACHMENTS_DIR,
   CONTENT_PREVIEW_CHARS
 } from './c4-config.js';
@@ -24,11 +25,19 @@ export function hasLegacyReplyViaSuffix(content = '') {
 // must never resolve to the same directory and silently overwrite each other.
 let spillSeq = 0;
 
+// Strip control chars tmux paste-buffer can't carry cleanly (keeps \t and \n).
+export function sanitizeMessage(message) {
+  return message.replace(/[\x00-\x08\x0B-\x1F]/g, '');
+}
+
 export function truncateForDelivery(content, replyViaSuffix = '', convId) {
   const fullMessage = content + replyViaSuffix;
   const byteLength = Buffer.byteLength(fullMessage, 'utf8');
+  // Measure what actually reaches the input box (the dispatcher sanitizes
+  // before pasting), the same way Claude Code does: String length > 800.
+  const pasteLength = sanitizeMessage(fullMessage).length;
 
-  if (byteLength <= FILE_SIZE_THRESHOLD) {
+  if (byteLength <= FILE_SIZE_THRESHOLD && pasteLength <= PASTE_CHAR_THRESHOLD) {
     return fullMessage;
   }
 

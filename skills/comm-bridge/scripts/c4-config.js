@@ -39,6 +39,11 @@ export const REQUIRE_IDLE_EXECUTION_MAX_WAIT_MS = 120000;
 export const REQUIRE_IDLE_EXECUTION_POLL_MS = 1000;
 
 export const FILE_SIZE_THRESHOLD = 2048; // bytes
+// Claude Code treats a single input event whose text is longer than this
+// (String.prototype.length, i.e. UTF-16 code units, strictly greater) as a
+// paste and wraps it in <pasted_content> on submit. Deliveries above it are
+// spilled to a file so C4 messages keep arriving as typed input.
+export const PASTE_CHAR_THRESHOLD = 800;
 export const CONTENT_PREVIEW_CHARS = 100;
 
 const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');

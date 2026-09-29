@@ -154,16 +154,16 @@ describe('emitC4Conversations budget packing (message-boundary, newest-first)', 
 
   it('emits a sub-threshold message in full even when it alone overflows a tiny budget', () => {
     withTmpDir(({ env }) => {
-      // Under the 2,048-byte spill threshold there is no pointer form to
+      // Under the spill thresholds (2,048 bytes / 800 chars) there is no pointer form to
       // fall back to; the emitter keeps the original and the orchestrator's
       // generic trim stays the last resort. Unreachable with the real shard
       // budget (a sub-threshold message can never exceed 10K chars) — this
       // pins the synthetic edge so the fallback never mangles small messages.
-      receive(`${marker(1)} ${'x'.repeat(1800)}`, env);
+      receive(`${marker(1)} ${'x'.repeat(700)}`, env);
 
       const out = emitConversations(env, { maxChars: 300, maxTokens: 50 });
 
-      assert.ok(out.includes(`${marker(1)} ${'x'.repeat(1800)}`), 'sub-threshold message stays original');
+      assert.ok(out.includes(`${marker(1)} ${'x'.repeat(700)}`), 'sub-threshold message stays original');
       assert.ok(!out.includes('[C4] ⚠️ TRUNCATED'));
     });
   });
