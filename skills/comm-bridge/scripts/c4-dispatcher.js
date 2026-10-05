@@ -9,6 +9,7 @@ import { readFileSync, existsSync, statSync } from 'fs';
 import net from 'net';
 import path from 'path';
 import { logDeliveryFailure, saveEnterCapture } from './c4-diagnostic.js';
+import { sendTmuxKeys, tmuxFailureDetails } from './tmux-send-keys.js';
 import { PeriodicEnter } from './periodic-enter.js';
 import {
   getNextPending,
@@ -116,11 +117,12 @@ function sendEnter(kind, details = {}) {
   const metadata = { kind, ...details };
   trace('enter_attempt', metadata);
   try {
-    execFileSync('tmux', ['send-keys', '-t', TMUX_SESSION, 'Enter'], { stdio: 'pipe', timeout: 5000 });
+    sendTmuxKeys(TMUX_SESSION, ['Enter'], { stdio: 'pipe', timeout: 5000 });
     periodicEnter.entered();
     trace('enter_sent', metadata);
   } catch (error) {
-    trace('enter_failed', metadata);
+    trace('enter_failed', { ...metadata, ...tmuxFailureDetails(error) });
+    log(`tmux send-keys failed action=enter: ${JSON.stringify(tmuxFailureDetails(error))}`);
     throw error;
   }
 }
@@ -464,7 +466,11 @@ async function submitAndVerify() {
         });
         if (isUsageOverlayCapture(capture)) {
           log(`Enter verify attempt ${attempt + 1}: /usage overlay detected, sending Escape`);
-          execFileSync('tmux', ['send-keys', '-t', TMUX_SESSION, 'Escape'], { stdio: 'pipe', timeout: 5000 });
+          try {
+            sendTmuxKeys(TMUX_SESSION, ['Escape'], { stdio: 'pipe', timeout: 5000 });
+          } catch (error) {
+            log(`tmux send-keys failed action=escape: ${JSON.stringify(tmuxFailureDetails(error))}`);
+          }
         }
       } catch { /* capture failed, continue retry loop */ }
       continue;
@@ -757,13 +763,14 @@ async function processNextMessage() {
     const key = parseKeystrokeKey(rawContent);
     log(`Delivering keystroke key=${key} (control id=${item.id} priority=${item.priority})`);
     try {
-      execFileSync('tmux', ['send-keys', '-t', TMUX_SESSION, key], { stdio: 'pipe', timeout: 5000 });
+      sendTmuxKeys(TMUX_SESSION, [key], { stdio: 'pipe', timeout: 5000 });
       ackControl(item.id);
       log(`Keystroke delivered: key=${key} (control id=${item.id})`);
       return { delivered: true, state: agentState.state };
     } catch (err) {
-      log(`Keystroke delivery error: ${err.message}`);
-      await handleControlDeliveryFailure(item, `KEYSTROKE_ERROR: ${err.message}`);
+      const failure = JSON.stringify(tmuxFailureDetails(err));
+      log(`tmux send-keys failed action=keystroke: ${failure}`);
+      await handleControlDeliveryFailure(item, `KEYSTROKE_ERROR: ${failure}`);
       return { delivered: false, state: agentState.state };
     }
   }

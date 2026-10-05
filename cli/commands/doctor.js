@@ -23,6 +23,7 @@ import { getCurrentVersion } from '../lib/self-upgrade.js';
 import { commandExists } from '../lib/shell-utils.js';
 import { parseSkillMd } from '../lib/skill.js';
 import { bold, dim, green, red, yellow, heading } from '../lib/colors.js';
+import { getTmuxCapability, describeTmuxSendKeys } from '../lib/tmux-send-keys.js';
 import { getActiveAdapter } from '../lib/runtime/index.js';
 
 // Resolve active runtime session name and display name at startup.
@@ -109,16 +110,7 @@ async function concurrentMap(items, fn, limit = 3) {
 
 function checkTmuxInstalled() {
   if (!commandExists('tmux')) return { installed: false };
-  let version = '';
-  try {
-    const output = execFileSync('tmux', ['-V'], {
-      encoding: 'utf8', timeout: 10000, stdio: ['pipe', 'pipe', 'pipe'],
-    }).trim();
-    // "tmux 3.4" → "3.4"
-    const match = output.match(/(\d+\.\d+\w*)/);
-    if (match) version = match[1];
-  } catch {}
-  return { installed: true, version };
+  return { installed: true, ...getTmuxCapability() };
 }
 
 function checkPm2Installed() {
@@ -376,7 +368,9 @@ function buildDiagnosticJson(diag, coreVersion) {
       system: {
         passed: diag.system.tmux.installed && diag.system.pm2.installed && diag.system.network.reachable,
         checks: {
-          tmux: { ok: diag.system.tmux.installed, version: diag.system.tmux.version || null },
+          tmux: { ok: diag.system.tmux.installed, version: diag.system.tmux.version || null,
+            sendKeysClientFlag: diag.system.tmux.useClientFlag ?? false,
+            versionReason: diag.system.tmux.reason ?? null },
           pm2: { ok: diag.system.pm2.installed, version: diag.system.pm2.version || null },
           network: { ok: diag.system.network.reachable, host: API_HOST, proxy: diag.system.network.proxy || null },
         },
@@ -408,7 +402,7 @@ function displaySystemGroup(diag, jsonGroup) {
   const { tmux, pm2: pm2Info, network: net } = diag.system;
 
   if (tmux.installed) {
-    checks.push(tmux.version ? `tmux ${dim(tmux.version)}` : 'tmux installed');
+    checks.push(describeTmuxSendKeys(tmux));
   } else {
     checks.push(red('tmux not installed'));
   }
