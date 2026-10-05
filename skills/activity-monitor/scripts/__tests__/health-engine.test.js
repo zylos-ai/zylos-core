@@ -36,21 +36,19 @@ describe('HealthEngine', () => {
     it('starts an internal maintenance loop and stop clears it', async () => {
       const { deps, calls } = createMockDeps();
       const engine = new HeartbeatEngine(deps, {
-        heartbeatInterval: 1,
         maintenanceIntervalMs: 5,
         now: () => Date.now()
       });
-      engine.lastHeartbeatAt = 0;
 
       engine.setAgentRunning(true);
       engine.start();
       await new Promise(resolve => setTimeout(resolve, 20));
       engine.stop();
-      const countAfterStop = calls.enqueueHeartbeat.length;
+      const countAfterStop = calls.readHeartbeatPending.length;
       await new Promise(resolve => setTimeout(resolve, 15));
 
       assert.ok(countAfterStop >= 1);
-      assert.equal(calls.enqueueHeartbeat.length, countAfterStop);
+      assert.equal(calls.readHeartbeatPending.length, countAfterStop);
       assert.equal(engine.maintenanceTimer, null);
     });
 
@@ -77,70 +75,66 @@ describe('HealthEngine', () => {
 
     it('keeps processHeartbeat as a compatibility alias for runMaintenanceCycle', () => {
       const { deps, calls } = createMockDeps();
-      const engine = new HealthEngine(deps, { heartbeatInterval: 1 });
-      engine.lastHeartbeatAt = 0;
+      const engine = new HealthEngine(deps, { initialHealth: 'recovering' });
 
       engine.processHeartbeat(true, 10);
 
-      assert.deepEqual(calls.enqueueHeartbeat, ['primary']);
+      assert.deepEqual(calls.enqueueHeartbeat, ['recovery']);
     });
   });
 
-  describe('primary heartbeat', () => {
-    it('enqueues after HEARTBEAT_INTERVAL elapsed', () => {
+  describe('maintenance without periodic primary probes', () => {
+    for (const agentRunning of [true, false]) {
+      it(`does not enqueue during 30 days of healthy maintenance (running=${agentRunning})`, () => {
+        const { deps, calls } = createMockDeps();
+        const engine = new HealthEngine(deps);
+        const start = Math.floor(Date.now() / 1000);
+
+        // Exercise every maintenance second across 1,440 former 30-minute periods.
+        // Keep the recorder bounded while still exercising the real dependency call.
+        let reads = 0;
+        let enqueueAttempts = 0;
+        deps.enqueueHeartbeat = () => { enqueueAttempts++; return true; };
+        deps.readHeartbeatPending = () => { reads++; return null; };
+        for (let elapsed = 0; elapsed <= 30 * 86400; elapsed++) {
+          engine.runMaintenanceCycle(agentRunning, start + elapsed);
+        }
+
+        assert.equal(reads, 30 * 86400 + 1);
+        assert.equal(enqueueAttempts, 0);
+        assert.equal(calls.killTmuxSession, 0);
+        assert.equal(engine.health, 'ok');
+      });
+    }
+
+    for (const [health, phase] of [['recovering', 'recovery'], ['unavailable', 'recovery'], ['down', 'down-check']]) {
+      it(`still enqueues ${phase} after prolonged healthy maintenance then ${health}`, () => {
+        const { deps, calls } = createMockDeps();
+        const engine = new HealthEngine(deps);
+        const later = Math.floor(Date.now() / 1000) + 30 * 86400;
+        engine.runMaintenanceCycle(true, later);
+        assert.deepEqual(calls.enqueueHeartbeat, []);
+
+        engine.setHealth(health);
+        engine.runMaintenanceCycle(true, later + 1);
+
+        assert.deepEqual(calls.enqueueHeartbeat, [phase]);
+      });
+    }
+
+    it('still enqueues post_restart after prolonged healthy maintenance and a process restart', () => {
       const { deps, calls } = createMockDeps();
-      const engine = new HeartbeatEngine(deps, { heartbeatInterval: 7200 });
-      const currentTime = Math.floor(Date.now() / 1000);
-      engine.lastHeartbeatAt = currentTime - 7201;
+      const engine = new HealthEngine(deps);
+      const later = Math.floor(Date.now() / 1000) + 30 * 86400;
+      engine.runMaintenanceCycle(true, later);
+      assert.deepEqual(calls.enqueueHeartbeat, []);
 
-      engine.processHeartbeat(true, currentTime);
+      engine.setHealth('unavailable');
+      engine.runMaintenanceCycle(false, later + 1);
+      engine.setAgentRunning(true, later + 2);
+      engine.runMaintenanceCycle(true, later + 32);
 
-      assert.deepStrictEqual(calls.enqueueHeartbeat, ['primary']);
-    });
-
-    it('does not enqueue before interval', () => {
-      const { deps, calls } = createMockDeps();
-      const engine = new HeartbeatEngine(deps, { heartbeatInterval: 7200 });
-      const currentTime = Math.floor(Date.now() / 1000);
-      engine.lastHeartbeatAt = currentTime - 100;
-
-      engine.processHeartbeat(true, currentTime);
-
-      assert.deepStrictEqual(calls.enqueueHeartbeat, []);
-    });
-
-    it('does not enqueue when agent is not running', () => {
-      const { deps, calls } = createMockDeps();
-      const engine = new HeartbeatEngine(deps, { heartbeatInterval: 7200 });
-      const currentTime = Math.floor(Date.now() / 1000);
-      engine.lastHeartbeatAt = currentTime - 7201;
-
-      engine.processHeartbeat(false, currentTime);
-
-      assert.deepStrictEqual(calls.enqueueHeartbeat, []);
-    });
-
-    it('updates lastHeartbeatAt on primary enqueue', () => {
-      const { deps } = createMockDeps();
-      const engine = new HeartbeatEngine(deps, { heartbeatInterval: 7200 });
-      const currentTime = Math.floor(Date.now() / 1000);
-      engine.lastHeartbeatAt = currentTime - 7201;
-
-      engine.processHeartbeat(true, currentTime);
-
-      const diff = Math.abs(engine.lastHeartbeatAt - Math.floor(Date.now() / 1000));
-      assert.ok(diff <= 1, `lastHeartbeatAt should be updated to current time, diff=${diff}`);
-    });
-
-    it('does not enqueue primary heartbeat when disabled', () => {
-      const { deps, calls } = createMockDeps();
-      const engine = new HeartbeatEngine(deps, { heartbeatInterval: 7200, heartbeatEnabled: false });
-      const currentTime = Math.floor(Date.now() / 1000);
-      engine.lastHeartbeatAt = currentTime - 7201;
-
-      engine.processHeartbeat(true, currentTime);
-
-      assert.deepStrictEqual(calls.enqueueHeartbeat, []);
+      assert.deepEqual(calls.enqueueHeartbeat, ['post_restart']);
     });
   });
 
@@ -178,18 +172,6 @@ describe('HealthEngine', () => {
       engine.processHeartbeat(true, Math.floor(Date.now() / 1000));
 
       assert.equal(engine.health, 'ok');
-    });
-
-    it('updates lastHeartbeatAt for non-primary success', () => {
-      const { deps } = createMockDeps();
-      deps._pending = { control_id: 1, phase: 'recovery' };
-      deps._heartbeatStatus = 'done';
-      const engine = new HeartbeatEngine(deps, { initialHealth: 'recovering' });
-      engine.lastHeartbeatAt = 0;
-
-      engine.processHeartbeat(true, Math.floor(Date.now() / 1000));
-
-      assert.ok(engine.lastHeartbeatAt > 0);
     });
 
     it('resets recoveringStartedAt on success', () => {
@@ -745,12 +727,12 @@ describe('HealthEngine', () => {
   });
 
   describe('in-flight heartbeat handling', () => {
-    it('processes stale pending normally even when primary heartbeat is disabled', () => {
+    it('processes stale pending normally without periodic probes', () => {
       const { deps, calls } = createMockDeps();
       const now = Math.floor(Date.now() / 1000);
       deps._pending = { control_id: 1, phase: 'primary', created_at: now - 700 };
       deps._heartbeatStatus = 'timeout';
-      const engine = new HeartbeatEngine(deps, { heartbeatEnabled: false });
+      const engine = new HeartbeatEngine(deps);
 
       engine.processHeartbeat(true, now);
 
@@ -822,9 +804,9 @@ describe('HealthEngine', () => {
       assert.deepStrictEqual(calls.enqueueHeartbeat, ['recovery']);
     });
 
-    it('still enqueues recovery heartbeat when primary heartbeat is disabled', () => {
+    it('still enqueues recovery heartbeat from maintenance', () => {
       const { deps, calls } = createMockDeps();
-      const engine = new HeartbeatEngine(deps, { initialHealth: 'recovering', heartbeatEnabled: false });
+      const engine = new HeartbeatEngine(deps, { initialHealth: 'recovering' });
 
       engine.processHeartbeat(true, Math.floor(Date.now() / 1000));
 

@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+- **Periodic primary heartbeats**: remove the HealthEngine's 30-minute `primary` probe, its enable/interval/timestamp state, and C4's idle-primary auto-ack path. AM v3 (#545) removed the config gate but unintentionally retained periodic dispatch with an enabled default; this removal completes that intent without a replacement switch. Pending-result handling, recovery, post-restart and legacy down-state probes, rate-limit cooldown, user-message recovery, API-error fast scanning, and confirmed-active busy auto-ack for non-recovery phases remain unchanged. (#807)
+
 ## [0.8.2] - 2026-09-29
 
 ### Added
@@ -191,7 +194,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Unified input box detection**: cursor_x fast path with cursor_y/prompt_y fallback replaces previous detection logic, improving accuracy for multi-line edge cases (#473)
 - **Memory sync decoupled from new-session**: faster session switching by running memory sync independently (#449)
 - **autoMemory and autoDream disabled by default**: both features now opt-in to reduce unnecessary background processing (#476)
-- **Periodic heartbeat disabled by default for Claude runtime**: reduces unnecessary heartbeat traffic when not needed (#472)
+- **Periodic heartbeat disabled by default for Claude runtime (at this release)**: the config default reduced unnecessary heartbeat traffic (#472). AM v3 (#545) later removed the gate but retained an enabled periodic primary path; #807 removes that path.
 - **Usage sidecar probes removed**: simplified architecture by removing the dedicated usage sidecar probe flow (#471)
 - **check-context hidden from user menu**: skill remains available to Claude but not shown in user-facing skill list (#453)
 - **c4 require-idle flag renamed**: external flag name updated for clarity (#409)
@@ -199,7 +202,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - **block-queue-until-idle removed from non-exit messages**: context threshold, startup fallback, usage notification, and session handoff messages no longer wait for idle state before delivery — only `/exit` commands retain the flag (#478)
 - **heartbeatEnabled scope corrected**: `heartbeatEnabled=false` now only disables primary polling dispatch — recovery, detection, and immediate probe paths remain active for both Claude and Codex runtimes (#477)
-- **Periodic probe gated behind heartbeatEnabled**: 30-min periodic health probe now respects the `heartbeat_enabled` config flag — disabled by default along with primary heartbeat (#479)
+- **Periodic probe gated behind heartbeatEnabled**: at this release, the 30-min periodic health probe respected the `heartbeat_enabled` config flag and defaulted off (#479). This gate did not survive AM v3 (#545); the remaining periodic path is removed in #807.
 - **PM2 restart semantics**: ecosystem-managed services now restart correctly with proper fallback paths for runtime recovery (#450, closes #443)
 - **Self-upgrade settings.json restart**: Claude auto-restarts after settings.json changes during upgrade (#463)
 - **SessionStart hook matcher split**: matchers correctly exclude resume events, preventing duplicate hook execution (#458)

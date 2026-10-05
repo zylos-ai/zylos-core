@@ -292,16 +292,7 @@ export function shouldAutoAckHeartbeat({ item, agentState, procState, confirmedA
     return true;
   }
 
-  // Idle path: only auto-ack the periodic primary probe. Recovery/stuck/down
-  // probes must still be delivered end-to-end so the heartbeat engine can
-  // observe real failures while the session is idle.
-  return (
-    phase === 'primary' &&
-    agentState?.health === 'ok' &&
-    agentState?.state === 'idle' &&
-    agentState?.idleSeconds >= REQUIRE_IDLE_MIN_SECONDS &&
-    procState.frozen !== true
-  );
+  return false;
 }
 
 export { sanitizeMessage };

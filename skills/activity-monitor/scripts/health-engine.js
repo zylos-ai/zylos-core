@@ -59,14 +59,12 @@ export class HealthEngine {
    * @param {() => Promise<{status: 'success'|'failure'|'uncertain', reason?: string}>|{status: 'success'|'failure'|'uncertain', reason?: string}} [deps.checkAuth]
    * @param {(ms: number) => Promise<void>} [deps.sleep]
    * @param {object} [options]
-   * @param {number} [options.heartbeatInterval=1800]
    * @param {number} [options.downDegradeThreshold=3600] - Seconds of continuous failure before entering DOWN
    * @param {number} [options.downRetryInterval=3600] - Seconds between DOWN-state probes
    * @param {number} [options.signalGracePeriod=30] - Seconds to wait after agentRunning transitions before probing
    * @param {number} [options.rateLimitDefaultCooldown=3600] - Default cooldown when reset time can't be parsed
    * @param {number} [options.userMessageRecoveryCooldown=60] - Min seconds between user-message-triggered recoveries
    * @param {string} [options.initialHealth='ok']
-   * @param {boolean} [options.heartbeatEnabled=true]
    * @param {number} [options.maintenanceIntervalMs=1000]
    * @param {number} [options.postRestartProbeDelayMs=5000]
    * @param {number} [options.userMessageCheckDelayMs=5000]
@@ -74,13 +72,11 @@ export class HealthEngine {
    */
   constructor(deps, options = {}) {
     this.deps = deps;
-    this.heartbeatInterval = options.heartbeatInterval ?? 1800;
     this.downDegradeThreshold = options.downDegradeThreshold ?? 3600; // 1 hour
     this.downRetryInterval = options.downRetryInterval ?? 3600; // 1 hour
     this.signalGracePeriod = options.signalGracePeriod ?? 30;
     this.rateLimitDefaultCooldown = options.rateLimitDefaultCooldown ?? 3600; // 1 hour
     this.userMessageRecoveryCooldown = options.userMessageRecoveryCooldown ?? 60; // 1 min
-    this.heartbeatEnabled = options.heartbeatEnabled ?? true;
     this.userMessageCheckDelayMs = options.userMessageCheckDelayMs ?? USER_MESSAGE_CHECK_DELAY_MS;
     this.maintenanceIntervalMs = options.maintenanceIntervalMs ?? 1000;
     this.postRestartProbeDelayMs = options.postRestartProbeDelayMs ?? USER_MESSAGE_CHECK_DELAY_MS;
@@ -90,7 +86,6 @@ export class HealthEngine {
     this.healthState = options.initialHealth ?? 'ok';
     this.healthReason = options.initialReason ?? '';
     this.restartFailureCount = 0;
-    this.lastHeartbeatAt = Math.floor(Date.now() / 1000);
     this.lastRecoveryAt = 0;
     this.lastDownCheckAt = 0;
     // If resuming in recovering state (e.g., PM2 restart mid-recovery),
@@ -379,15 +374,6 @@ export class HealthEngine {
       }
       return;
     }
-
-    // heartbeatEnabled only gates primary periodic polling — all other paths
-    // (pending result processing, rate_limited recovery, signal acceleration,
-    // recovering backoff, down-check) remain active regardless of this flag.
-    if (!this.heartbeatEnabled) return;
-
-    if ((currentTime - this.lastHeartbeatAt) >= this.heartbeatInterval) {
-      this.enqueueHeartbeat('primary');
-    }
   }
 
   processHeartbeat(agentRunning, currentTime) {
@@ -406,9 +392,6 @@ export class HealthEngine {
     this.lastUserMessageRecoveryAt = 0;
     if (this.healthState !== 'ok') {
       this.setHealth('ok', `heartbeat_ack phase=${phase}`);
-    }
-    if (phase !== 'primary') {
-      this.lastHeartbeatAt = Math.floor(Date.now() / 1000);
     }
   }
 
@@ -555,13 +538,8 @@ export class HealthEngine {
     this.lastStickyErrorHitAt = 0;
   }
 
-  /** Wrapper that updates lastHeartbeatAt on successful primary enqueue. */
   enqueueHeartbeat(phase) {
-    const ok = this.deps.enqueueHeartbeat(phase);
-    if (ok && phase === 'primary') {
-      this.lastHeartbeatAt = Math.floor(Date.now() / 1000);
-    }
-    return ok;
+    return this.deps.enqueueHeartbeat(phase);
   }
 
   async runRecoveryProbe({ phase = 'recovery', timeoutMs = 25000, pollIntervalMs = 1000 } = {}) {
