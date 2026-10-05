@@ -22,7 +22,6 @@ describe('HeartbeatEngine — rate_limited recovery', () => {
     engine = new HeartbeatEngine(makeDeps({
       killTmuxSession: () => { killed++; },
     }), {
-      heartbeatInterval: 1800,
       signalGracePeriod: 30,
     });
   });
@@ -124,7 +123,7 @@ describe('HeartbeatEngine — user message recovery across all states', () => {
     const phases = [];
     const engine = new HeartbeatEngine(makeDeps({
       enqueueHeartbeat: (phase) => { phases.push(phase); return true; },
-    }), { heartbeatInterval: 1800 });
+    }));
 
     // Enter unavailable with high failure count (long backoff)
     engine.triggerRecovery('test_fail');
@@ -204,21 +203,17 @@ describe('HeartbeatEngine — user message recovery across all states', () => {
 });
 
 describe('HeartbeatEngine — basic health transitions', () => {
-  it('sends primary heartbeat when interval elapses', () => {
+  it('does not send periodic heartbeats while healthy', () => {
     const phases = [];
     const engine = new HeartbeatEngine(makeDeps({
       enqueueHeartbeat: (phase) => { phases.push(phase); return true; },
-    }), {
-      heartbeatInterval: 60,
-    });
+    }));
+    const now = Math.floor(Date.now() / 1000);
 
-    // Not enough time elapsed
-    engine.processHeartbeat(true, engine.lastHeartbeatAt + 30);
+    engine.processHeartbeat(true, now + 1800);
+    engine.processHeartbeat(true, now + 30 * 86400);
+
     expect(phases).toEqual([]);
-
-    // Interval elapsed
-    engine.processHeartbeat(true, engine.lastHeartbeatAt + 60);
-    expect(phases).toEqual(['primary']);
   });
 
   it('enters unavailable on heartbeat failure from ok state', () => {

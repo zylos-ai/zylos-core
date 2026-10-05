@@ -317,14 +317,16 @@ describe('shouldAutoAckHeartbeat', () => {
   const heartbeatItem = { content: 'Heartbeat check. [phase=primary]' };
   const aliveProc = { alive: true, frozen: false, lastDelta: 1 };
 
-  it('keeps the existing busy-path auto-ack for non-recovery heartbeats when activity hooks confirm work is running', () => {
-    assert.equal(shouldAutoAckHeartbeat({
-      item: { content: 'Heartbeat check. [phase=primary]' },
-      agentState: { state: 'busy', health: 'ok', idleSeconds: 0, healthy: true },
-      procState: aliveProc,
-      confirmedActive: true
-    }), true);
-  });
+  for (const phase of ['primary', 'stuck', 'down-check', 'unknown']) {
+    it(`keeps busy-path auto-ack for ${phase} when activity hooks confirm work`, () => {
+      assert.equal(shouldAutoAckHeartbeat({
+        item: { content: `Heartbeat check. [phase=${phase}]` },
+        agentState: { state: 'busy', health: 'ok', idleSeconds: 0, healthy: true },
+        procState: aliveProc,
+        confirmedActive: true
+      }), true);
+    });
+  }
 
   it('does not auto-ack recovery heartbeat even when activity hooks confirm work is running', () => {
     assert.equal(shouldAutoAckHeartbeat({
@@ -344,14 +346,16 @@ describe('shouldAutoAckHeartbeat', () => {
     }), false);
   });
 
-  it('auto-acks on the idle path when the session is healthy and stably idle', () => {
-    assert.equal(shouldAutoAckHeartbeat({
-      item: heartbeatItem,
-      agentState: { state: 'idle', health: 'ok', idleSeconds: 3, healthy: true },
-      procState: aliveProc,
-      confirmedActive: false
-    }), true);
-  });
+  for (const phase of ['primary', 'recovery', 'post_restart', 'stuck', 'down-check', 'unknown']) {
+    it(`does not auto-ack ${phase} when healthy and stably idle`, () => {
+      assert.equal(shouldAutoAckHeartbeat({
+        item: { content: `Heartbeat check. [phase=${phase}]` },
+        agentState: { state: 'idle', health: 'ok', idleSeconds: 3600, healthy: true },
+        procState: aliveProc,
+        confirmedActive: false
+      }), false);
+    });
+  }
 
   it('does not auto-ack recovery idle heartbeats', () => {
     assert.equal(shouldAutoAckHeartbeat({

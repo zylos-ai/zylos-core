@@ -18,7 +18,7 @@ This is a **PM2 service** (not directly invoked by Claude). It runs continuously
 2. **Status File**: Writes `~/zylos/activity-monitor/agent-status.json` with current state (busy/idle, idle_seconds, health)
 3. **Guardian Mode**: Automatically restarts the agent if it stops or crashes
 4. **Maintenance Awareness**: Waits for restart/upgrade scripts to complete before starting the agent
-5. **Heartbeat Liveness Detection**: Periodically sends heartbeat probes via the C4 control queue to verify the agent is responsive, triggering recovery when probes fail
+5. **Recovery Liveness Detection**: Sends C4 heartbeat probes during recovery and after restarts; healthy sessions have no periodic primary heartbeat
 6. **Health Check**: Periodically enqueues system health checks (PM2, disk, memory) via the C4 control queue
 7. **Daily Upgrade**: Enqueues a Claude Code upgrade via the C4 control queue at 5:00 AM local time daily (disabled by default; enable with `zylos config set daily_upgrade_enabled true`)
 8. **Context Monitoring**: Receives context usage data after every turn; triggers early memory sync and new-session handoff at thresholds read from `config.json` (`new_session_threshold` for Claude, `codex_new_session_threshold` for Codex), each with a built-in runtime fallback if the key is unset
@@ -41,7 +41,7 @@ This is a **PM2 service** (not directly invoked by Claude). It runs continuously
 - `state`: "busy" | "idle" | "stopped" | "offline"
 - `idle_seconds`: Time since entering idle state (0 when busy)
 - `source`: "conv_file" (reliable) | "tmux_activity" (fallback)
-- `health`: "ok" | "recovering" | "down" — liveness health from the heartbeat engine
+- `health`: "ok" | "unavailable" | "rate_limited" | "auth_failed" — current public health; legacy `recovering` / `down` states remain readable
 
 ## PM2 Management
 
@@ -87,41 +87,21 @@ pm2 list
 
 ## Heartbeat Liveness Detection
 
-The heartbeat engine runs inside the activity monitor and uses the C4 control queue to verify Claude is actually responsive (not just process-alive).
+The health engine uses the C4 control queue to verify runtime responsiveness during recovery. Healthy sessions do not receive periodic `primary` probes, and there is no heartbeat enable/interval setting. The internal maintenance timer still processes pending probe results and recovery scheduling.
 
-### State Machine
-
-```
-          heartbeat interval elapsed
-  ┌─────────────────────────────────────┐
-  │                                     ▼
-  │  ok ──[primary fails]──► ok (verify phase)
-  │  ▲                              │
-  │  │                     [verify fails]
-  │  │                              ▼
-  │  │                         recovering ──[recovery fails]──► recovering
-  │  │                              │                               │
-  │  │                    [ack received]              [max failures reached]
-  │  │                              │                               │
-  │  └──────────────────────────────┘                               ▼
-  │                                                               down
-  │                                                                 │
-  │                                          [ack received after manual fix]
-  └─────────────────────────────────────────────────────────────────┘
-```
-
-### Phases
+### Recovery Probes
 
 | Phase | Trigger | On Success | On Failure |
 |-------|---------|------------|------------|
-| **Primary** | Heartbeat interval elapsed (default 30min) | Reset timer, stay `ok` | Enter verify phase |
-| **Verify** | Primary probe failed | Return to `ok` | Kill tmux, enter `recovering` |
-| **Recovery** | In `recovering` state, Claude restarted | Return to `ok` | Kill tmux, retry (up to max) |
-| **Down** | Max restart failures reached (default 3) | Return to `ok` | Stay `down`, wait for manual fix |
+| `recovery` | Unavailable/recovering maintenance retry or user-message recovery | Return to `ok` | Apply existing rate-limit detection or recovery handling |
+| `post_restart` | Restart notification or process-running signal after its grace period | Return to `ok` | Apply existing recovery handling |
+| `down-check` | Legacy `down` state retry interval | Return to `ok` | Stay `down` and retry later |
 
-### Ack Deadline
+Retries in unavailable/recovering use exponential backoff (1m, 5m, 25m, then 60m). Rate-limit cooldown expiry only clears the wait; a later recovery trigger verifies responsiveness. Failed or expired pending probes still run their existing failure handling, including API-error fast scanning while waiting.
 
-Each heartbeat probe is enqueued with an ack deadline. If Claude does not acknowledge the probe before the deadline expires, the control record transitions to `timeout` status and the engine treats it as a failure.
+Recovery and post-restart probes require end-to-end acknowledgement. The dispatcher retains confirmed-active busy auto-ack for other heartbeat phases; idle heartbeat auto-ack has been removed.
+
+See [Recovery and maintenance behavior](references/health-engine.md) for timing and compatibility details.
 
 ### Unhealthy Message Routing
 
