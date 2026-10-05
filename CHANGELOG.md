@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **tmux read-only observers blocking input**: all core key sends use `-c zylos-no-client` on tmux ≥ 3.4, preventing attached read-only clients from rejecting Enter or Escape on tmux ≥ 3.7. Older or unknown versions retain the existing argv; unknown detection logs once. Doctor reports the detected version and selected path, and dispatcher failures retain tmux stderr/status without logging command arguments. (#809)
+
 ### Removed
 - **Periodic primary heartbeats**: remove the HealthEngine's 30-minute `primary` probe, its enable/interval/timestamp state, and C4's idle-primary auto-ack path. AM v3 (#545) removed the config gate but unintentionally retained periodic dispatch with an enabled default; this removal completes that intent without a replacement switch. Pending-result handling, recovery, post-restart and legacy down-state probes, rate-limit cooldown, user-message recovery, API-error fast scanning, and confirmed-active busy auto-ack for non-recovery phases remain unchanged. (#807)
 

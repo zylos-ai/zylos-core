@@ -6,6 +6,7 @@
  */
 
 import { execFileSync } from 'node:child_process';
+import { sendTmuxKeys } from '../tmux-send-keys.js';
 
 const CMD_TIMEOUT = 3000;
 const LAUNCH_TIMEOUT = 10_000;
@@ -79,7 +80,7 @@ export function tmuxPasteBuffer(session, tmpFile, bufferName) {
     timeout: CMD_TIMEOUT,
     stdio: 'ignore',
   });
-  execFileSync('tmux', ['send-keys', '-t', session, 'Enter'], {
+  sendTmuxKeys(session, ['Enter'], {
     timeout: CMD_TIMEOUT,
     stdio: 'ignore',
   });
@@ -122,7 +123,7 @@ export function tmuxCapturePaneText(session) {
  * @param {...string} keys
  */
 export function tmuxSendKeys(session, ...keys) {
-  execFileSync('tmux', ['send-keys', '-t', session, ...keys], {
+  sendTmuxKeys(session, keys, {
     timeout: CMD_TIMEOUT,
     stdio: 'ignore',
   });

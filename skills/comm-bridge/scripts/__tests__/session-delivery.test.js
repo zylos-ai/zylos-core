@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import fs from 'node:fs';
 import vm from 'node:vm';
+import { createTmuxSender, tmuxFailureDetails } from '../tmux-send-keys.js';
 import { PeriodicEnter } from '../periodic-enter.js';
 
 const source = fs.readFileSync(new URL('../c4-dispatcher.js', import.meta.url), 'utf8');
@@ -39,6 +40,9 @@ function harness(bracketed = false) {
     readProcState: () => ({ alive: true }), getAgentState: () => ({ state: 'idle' }),
     sleep: async () => { state.waits++; state.onWait?.(state.waits); }
   });
+  context.tmuxFailureDetails = tmuxFailureDetails;
+  context.sendTmuxKeys = createTmuxSender({ exec: (binary, args, options) =>
+    args[0] === '-V' ? 'tmux 3.7c' : context.execFileSync(binary, args, options) }).sendKeys;
   vm.runInContext([
     extract('const periodicEnter =', 'export function notifyMessageDelivered('),
     extract('async function submitAndVerify(', 'export function isBypassState(')
@@ -52,6 +56,7 @@ test('normal delivery uses the session and enables bracketed paste only when con
     assert.equal(await deliver(), 'submitted');
     const writes = state.commands.filter(command => ['paste-buffer', 'send-keys'].includes(command.args[0]));
     assert.equal(writes.length, 2);
+    assert.deepEqual(Array.from(writes[1].args.slice(0, 3)), ['send-keys', '-c', 'zylos-no-client']);
     for (const { args } of writes) assert.equal(args[args.indexOf('-t') + 1], 'isolated');
     assert.equal(writes[0].args.includes('-p'), enabled);
     assert.ok(state.checks.every(target => target === undefined || target === 'isolated'));
@@ -95,8 +100,8 @@ test('verification retries and overlay Escape use the session', async () => {
     assert.equal(await deliver(), 'submitted');
     const keys = state.commands.filter(command => command.args[0] === 'send-keys');
     assert.equal(keys.length, 2);
-    assert.ok(keys.every(command => command.args[2] === 'isolated'));
-    assert.equal(keys[1].args[3], verdict === 'has_content' ? 'Enter' : 'Escape');
+    assert.ok(keys.every(command => command.args[command.args.indexOf('-t') + 1] === 'isolated'));
+    assert.equal(keys[1].args.at(-1), verdict === 'has_content' ? 'Enter' : 'Escape');
   }
 });
 
@@ -113,7 +118,7 @@ test('verified-empty delivery retains three blind attempts without consulting ru
   assert.equal(timer.pending.attempts, 3);
   const keys = state.commands.filter(command => command.args[0] === 'send-keys');
   assert.equal(keys.length, 4);
-  assert.ok(keys.every(command => command.args[2] === 'isolated'));
+  assert.ok(keys.every(command => command.args[command.args.indexOf('-t') + 1] === 'isolated'));
   assert.equal(state.captures.at(-1).itemId, 42);
 });
 
