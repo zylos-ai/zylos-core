@@ -14,7 +14,7 @@ async function until(check, label) {
   assert.fail(`Timed out waiting for ${label}`);
 }
 
-test('tmux >= 3.7 delivers Enter and Escape alongside a read-only client', { timeout: 20000 }, async t => {
+test('tmux >= 3.4 delivers Enter and Escape alongside a read-only client', { timeout: 20000 }, async t => {
   let version;
   try { version = parseTmuxVersion(execFileSync(binary, ['-V'], { encoding: 'utf8', timeout: 3000 })); }
   catch (error) {
@@ -22,10 +22,12 @@ test('tmux >= 3.7 delivers Enter and Escape alongside a read-only client', { tim
     throw error;
   }
   if (version.version === 'unknown') assert.fail(`Cannot parse ${binary} -V`);
-  if (version.major < 3 || (version.major === 3 && version.minor < 7)) return t.skip(`requires tmux >= 3.7; found ${version.version}`);
-  if (process.platform !== 'linux') return t.skip('read-only PTY setup requires Linux util-linux script');
-  const scriptVersion = execFileSync('script', ['--version'], { encoding: 'utf8', timeout: 3000 });
-  assert.match(scriptVersion, /util-linux/, 'requires util-linux script on Linux');
+  if (version.major < 3 || (version.major === 3 && version.minor < 4)) return t.skip(`requires tmux >= 3.4; found ${version.version}`);
+  if (!['linux', 'darwin'].includes(process.platform)) return t.skip('read-only PTY setup requires Linux or macOS script');
+  if (process.platform === 'linux') {
+    const scriptVersion = execFileSync('script', ['--version'], { encoding: 'utf8', timeout: 3000 });
+    assert.match(scriptVersion, /util-linux/, 'requires util-linux script on Linux');
+  }
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-tmux-readonly-'));
   const prefix = ['-L', `zylos-test-${process.pid}-${Date.now()}`, '-f', '/dev/null'];
   const run = args => execFileSync(binary, [...prefix, ...args], { encoding: 'utf8', timeout: 3000, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -37,19 +39,26 @@ test('tmux >= 3.7 delivers Enter and Escape alongside a read-only client', { tim
   try {
     run(['new-session', '-d', '-s', 'target', `${quote(process.execPath)} ${quote(receiver)}`]);
     await until(() => fs.existsSync(ready), 'raw pane receiver');
-    client = spawn('script', ['-q', '-c', [binary, ...prefix, 'attach-session', '-r', '-t', 'target'].map(quote).join(' '), '/dev/null'], {
-      env: { ...process.env, TERM: 'xterm', TMUX: '' }, stdio: ['pipe', 'ignore', 'pipe']
+    const attach = [binary, ...prefix, 'attach-session', '-r', '-t', 'target'];
+    const scriptArgs = process.platform === 'darwin'
+      ? ['-q', '/dev/null', ...attach]
+      : ['-q', '-c', attach.map(quote).join(' '), '/dev/null'];
+    // BSD script rejects terminal ioctls on Node's socket-backed stdin pipes.
+    client = spawn('script', scriptArgs, {
+      env: { ...process.env, TERM: 'xterm', TMUX: '' }, stdio: [process.platform === 'darwin' ? 'ignore' : 'pipe', 'ignore', 'pipe']
     });
     let setupError = ''; client.stderr.on('data', b => { setupError += b; });
     await until(() => {
       assert.equal(client.exitCode, null, `read-only attach exited: ${setupError}`);
       return run(['list-clients', '-F', '#{client_readonly}']).trim().split('\n').includes('1');
     }, 'read-only client');
-    // Negative control uses exactly the old argv and must fail before any bytes arrive.
-    for (const key of ['Enter', 'Escape']) {
-      assert.throws(() => run(['send-keys', '-t', 'target', key]), error => error.status === 1 && /client is read-only/.test(String(error.stderr)));
+    // tmux 3.7 introduced rejection; earlier supported versions only prove delivery.
+    if (version.major > 3 || version.minor >= 7) {
+      for (const key of ['Enter', 'Escape']) {
+        assert.throws(() => run(['send-keys', '-t', 'target', key]), error => error.status === 1 && /client is read-only/.test(String(error.stderr)));
+      }
+      assert.equal(fs.existsSync(sink) ? fs.readFileSync(sink).length : 0, 0);
     }
-    assert.equal(fs.existsSync(sink) ? fs.readFileSync(sink).length : 0, 0);
     const sender = createTmuxSender({ binary, prefix });
     sender.sendKeys('target', ['Enter'], { timeout: 3000, stdio: 'pipe' });
     sender.sendKeys('target', ['Escape'], { timeout: 3000, stdio: 'pipe' });
@@ -57,7 +66,7 @@ test('tmux >= 3.7 delivers Enter and Escape alongside a read-only client', { tim
     assert.deepEqual(fs.readFileSync(sink), Buffer.from([0x0d, 0x1b]));
   } finally {
     try { run(['kill-server']); } catch { /* isolated server may already be gone */ }
-    if (client) { client.stdin.destroy(); client.kill('SIGTERM'); }
+    if (client) { client.stdin?.destroy(); client.kill('SIGTERM'); }
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
