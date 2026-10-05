@@ -4,13 +4,14 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 import { createTmuxSender, parseTmuxVersion, describeTmuxSendKeys, tmuxFailureDetails } from '../../../skills/comm-bridge/scripts/tmux-send-keys.js';
 
-for (const [version, enabled] of [['3.2a', false], ['3.3a', false], ['3.4', true], ['3.6a', true], ['3.7c', true], ['3.10', true], ['4.0', true]]) {
+for (const [version, enabled] of [['3.2a', false], ['3.3a', false], ['3.4', true], ['3.6a', true], ['3.7c', true], ['3.10', true], ['4.0', true], ['next-3.8', true], ['next-3.9', true]]) {
   test(`tmux ${version} version gate and cached execution`, () => {
     const calls = [];
     const sender = createTmuxSender({ binary: '/test/tmux', exec: (bin, args, opts) => {
       calls.push({ bin, args, opts }); return `tmux ${version}`;
     } });
     assert.equal(calls.length, 0);
+    assert.equal(parseTmuxVersion(`tmux ${version}`).version, version);
     const options = { timeout: 5000, stdio: 'pipe' };
     sender.sendKeys('agent', ['Enter'], options);
     sender.sendKeys('agent', ['Escape'], options);
@@ -23,11 +24,11 @@ for (const [version, enabled] of [['3.2a', false], ['3.3a', false], ['3.4', true
     assert.match(describeTmuxSendKeys(sender.getCapability()), enabled ? /-c enabled/ : /-c disabled/);
   });
 }
-for (const failure of ['unparseable', 'error']) {
+for (const failure of ['unparseable', 'error', 'openbsd-7.6']) {
   test(`unknown ${failure} warns once and preserves legacy argv`, () => {
     let probes = 0; const warnings = []; const sends = [];
     const sender = createTmuxSender({ warn: s => warnings.push(s), exec: (bin, args) => {
-      if (args[0] === '-V') { probes++; if (failure === 'error') throw Object.assign(new Error('private'), { code: 'ENOENT' }); return 'unexpected'; }
+      if (args[0] === '-V') { probes++; if (failure === 'error') throw Object.assign(new Error('private'), { code: 'ENOENT' }); return failure === 'openbsd-7.6' ? 'tmux openbsd-7.6' : 'unexpected'; }
       sends.push(args);
     } });
     sender.sendKeys('s', ['Enter']); sender.sendKeys('s', ['Escape']);

@@ -4,11 +4,11 @@ import { execFileSync } from 'node:child_process';
 export const NO_CLIENT = 'zylos-no-client';
 
 export function parseTmuxVersion(output) {
-  const match = String(output).trim().match(/^tmux (\d+)\.(\d+)([a-z]*)(?:[-\s].*)?$/i);
+  const match = String(output).trim().match(/^tmux ((?:next-)?(\d+)\.(\d+)[a-z]*)(?:[-\s].*)?$/i);
   if (!match) return { version: 'unknown', useClientFlag: false, reason: 'unrecognized tmux -V output' };
-  const major = Number(match[1]);
-  const minor = Number(match[2]);
-  return { version: `${match[1]}.${match[2]}${match[3]}`, major, minor,
+  const major = Number(match[2]);
+  const minor = Number(match[3]);
+  return { version: match[1], major, minor,
     useClientFlag: major > 3 || (major === 3 && minor >= 4), reason: null };
 }
 
