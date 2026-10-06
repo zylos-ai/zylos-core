@@ -292,7 +292,9 @@ Zylos supports Claude Code (Anthropic) and Codex (OpenAI) as interchangeable AI 
 Zylos backfills `approval_policy = "never"` and `sandbox_mode = "danger-full-access"`
 in its project `.codex/config.toml` during init, runtime setup, configuration sync,
 self-upgrade, and launch. This lets Codex's own backend restart/resume load the
-same defaults even when its reconnect request carries only a thread ID. The AM
+same defaults even when its reconnect request carries only a thread ID. Project
+configuration updates use a temporary file and atomic replacement, preserving
+existing file modes and symlinks. The AM
 launch flag remains in place. Global permission settings for other projects are
 not changed; Zylos's existing setup creates the project trust entry required for
 Codex to load project configuration.

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { after, before, describe, it } from 'node:test';
+import { after, before, describe, it, mock } from 'node:test';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -180,6 +180,54 @@ describe('Codex persistent permission defaults', () => {
     const disabled = parse(renderCodexProjectConfig(content, { bypassPermissions: false }));
     assert.equal(disabled.approval_policy, 'never');
     assert.equal(disabled.sandbox_mode, 'danger-full-access');
+  });
+
+  it('keeps the original bytes after partial temporary writes or rename failure', () => {
+    for (const failure of ['writeFileSync', 'renameSync']) {
+      const project = path.join(tmpRoot, `atomic-${failure}`);
+      const file = path.join(project, '.codex', 'config.toml');
+      const original = 'user_setting = "keep"\n';
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, original);
+      const realWrite = fs.writeFileSync;
+      const fault = mock.method(fs, failure, (...args) => {
+        if (failure === 'writeFileSync') realWrite(args[0], 'partial');
+        throw new Error('injected write failure');
+      });
+      try { assert.throws(() => writeCodexProjectConfig(project), /injected write failure/); }
+      finally { fault.mock.restore(); }
+      assert.equal(fs.readFileSync(file, 'utf8'), original);
+      assert.deepEqual(fs.readdirSync(path.dirname(file)), ['config.toml']);
+    }
+  });
+
+  it('preserves symlinks and original mode before writing replacement contents', () => {
+    const project = path.join(tmpRoot, 'atomic-symlink');
+    const file = path.join(project, '.codex', 'config.toml');
+    const target = path.join(tmpRoot, 'linked-config.toml');
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(target, 'user_setting = "keep"\n');
+    fs.chmodSync(target, 0o640);
+    fs.symlinkSync(target, file);
+    const realWrite = fs.writeFileSync;
+    let observedMode;
+    const inspect = mock.method(fs, 'writeFileSync', (fd, ...args) => {
+      observedMode = fs.fstatSync(fd).mode & 0o777;
+      return realWrite(fd, ...args);
+    });
+    const oldMask = process.umask(0o077);
+    try { writeCodexProjectConfig(project); }
+    finally { process.umask(oldMask); inspect.mock.restore(); }
+    assert.equal(observedMode, 0o640);
+    assert.equal(fs.statSync(target).mode & 0o777, 0o640);
+    assert.ok(fs.lstatSync(file).isSymbolicLink());
+    assert.equal(parse(fs.readFileSync(target, 'utf8')).sandbox_mode, 'danger-full-access');
+  });
+
+  it('creates new project configuration privately', () => {
+    const project = path.join(tmpRoot, 'atomic-new');
+    writeCodexProjectConfig(project);
+    assert.equal(fs.statSync(path.join(project, '.codex', 'config.toml')).mode & 0o777, 0o600);
   });
 
   it('rejects malformed project TOML without overwriting the original', () => {

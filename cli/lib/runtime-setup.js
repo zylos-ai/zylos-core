@@ -9,6 +9,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { execSync, execFileSync, spawnSync } from 'node:child_process';
 import { parse, stringify } from 'smol-toml';
 import { ZYLOS_DIR } from './config.js';
@@ -385,6 +386,36 @@ export function resolveCodexBypassPermissions(projectDir, opts = {}) {
   return true;
 }
 
+function writeCodexProjectConfigAtomically(configPath, content) {
+  // Preserve a user-managed symlink instead of replacing the link itself.
+  let target = configPath;
+  let mode = 0o600;
+  let existing;
+  try { existing = fs.lstatSync(configPath); }
+  catch (err) { if (err.code !== 'ENOENT') throw err; }
+  if (existing) {
+    if (existing.isSymbolicLink()) target = fs.realpathSync(configPath);
+    mode = fs.statSync(target).mode & 0o777;
+  }
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  const temporary = `${target}.tmp.${randomUUID()}`;
+  let fd;
+  let created = false;
+  try {
+    fd = fs.openSync(temporary, 'wx', mode);
+    created = true;
+    fs.fchmodSync(fd, mode); // Preserve existing mode even under a stricter umask.
+    fs.writeFileSync(fd, content, 'utf8');
+    fs.fsyncSync(fd);
+    fs.closeSync(fd);
+    fd = undefined;
+    fs.renameSync(temporary, target);
+  } finally {
+    if (fd !== undefined) try { fs.closeSync(fd); } catch { /* best effort */ }
+    if (created) try { fs.unlinkSync(temporary); } catch { /* renamed or already absent */ }
+  }
+}
+
 export function writeCodexProjectConfig(projectDir, opts = {}) {
   const configPath = path.join(path.resolve(projectDir), '.codex', 'config.toml');
   let existing = '';
@@ -402,8 +433,7 @@ export function writeCodexProjectConfig(projectDir, opts = {}) {
     }
   }
   if (content !== existing) {
-    fs.mkdirSync(path.dirname(configPath), { recursive: true });
-    fs.writeFileSync(configPath, content, 'utf8');
+    writeCodexProjectConfigAtomically(configPath, content);
   }
 }
 
