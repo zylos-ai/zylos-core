@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { parse } from 'smol-toml';
 import { deployManifestTemplate } from '../runtime/tmux-env.js';
 
 // ── Fake filesystem ──────────────────────────────────────────────────────────
@@ -417,6 +418,29 @@ describe('Codex launch — new session', () => {
     assert.ok(!fs.existsSync(path.join(fakeZylosDir, '.zylos', 'first-start-done')),
       'stateless sentinel must not persist launch state');
   });
+});
+
+describe('Codex launch — persistent permissions', () => {
+  for (const exists of [false, true]) {
+    it(`applies explicit bypass opt-in and withdrawal (existing tmux: ${exists})`, async () => {
+      tmuxSessionExists = exists;
+      const adapter = makeAdapter(CodexAdapter);
+      let sent = '';
+      adapter.sendMessage = async text => { sent = text; };
+      const file = path.join(fakeZylosDir, '.codex', 'config.toml');
+      await adapter.launch({ bypassPermissions: true });
+      assert.equal(parse(fs.readFileSync(file, 'utf8')).approval_policy, 'never');
+      assert.equal(parse(fs.readFileSync(file, 'utf8')).sandbox_mode, 'danger-full-access');
+      if (exists) assert.match(sent, /--dangerously-bypass-approvals-and-sandbox/);
+      else assert.ok(readLaunchSpec().args.includes('--dangerously-bypass-approvals-and-sandbox'));
+      calls.execFileSync.length = 0;
+      await adapter.launch({ bypassPermissions: false });
+      assert.equal(parse(fs.readFileSync(file, 'utf8')).approval_policy, undefined);
+      assert.equal(parse(fs.readFileSync(file, 'utf8')).sandbox_mode, undefined);
+      if (exists) assert.doesNotMatch(sent, /--dangerously-bypass-approvals-and-sandbox/);
+      else assert.ok(!readLaunchSpec().args.includes('--dangerously-bypass-approvals-and-sandbox'));
+    });
+  }
 });
 
 describe('Codex launch — existing session', () => {

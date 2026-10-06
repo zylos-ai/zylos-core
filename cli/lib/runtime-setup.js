@@ -9,6 +9,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { execSync, execFileSync, spawnSync } from 'node:child_process';
 import { parse, stringify } from 'smol-toml';
 import { ZYLOS_DIR } from './config.js';
@@ -347,6 +348,95 @@ function isTomlSectionValue(value) {
   return value && typeof value === 'object' && !Array.isArray(value);
 }
 
+// This comment records only keys inserted by Zylos, never user values/secrets.
+// Keeping it in the same file makes config + ownership one write. If another
+// TOML writer strips it, the values become user-owned and are not auto-removed.
+const PERMISSION_MARKER = '# zylos-managed-permission-defaults: ';
+const PERMISSION_DEFAULTS = { approval_policy: 'never', sandbox_mode: 'danger-full-access' };
+
+function applyCodexPermissionDefaults(obj, content, bypass) {
+  const marker = content.split('\n').find(line => line.startsWith(PERMISSION_MARKER));
+  const previous = new Set(marker?.slice(PERMISSION_MARKER.length).split(',') ?? []);
+  const owned = [];
+  for (const [key, value] of Object.entries(PERMISSION_DEFAULTS)) {
+    const stillOwned = previous.has(key) && obj[key] === value;
+    // Explicit named or workspace configuration takes over sandbox ownership.
+    const sandboxConfigured = obj.default_permissions !== undefined || obj.sandbox_workspace_write !== undefined;
+    const enabled = bypass && !(key === 'sandbox_mode' && sandboxConfigured);
+    if (!enabled) {
+      if (stillOwned) delete obj[key];
+    } else if (obj[key] === undefined || stillOwned) {
+      obj[key] = value;
+      owned.push(key);
+    }
+  }
+  return owned.length ? PERMISSION_MARKER + owned.join(',') : '';
+}
+
+export function resolveCodexBypassPermissions(projectDir, opts = {}) {
+  if (opts.bypassPermissions != null) return opts.bypassPermissions;
+  if (process.env.CODEX_BYPASS_PERMISSIONS !== undefined) {
+    return process.env.CODEX_BYPASS_PERMISSIONS !== 'false';
+  }
+  try {
+    const env = fs.readFileSync(path.join(projectDir, '.env'), 'utf8');
+    const match = env.match(/^\s*CODEX_BYPASS_PERMISSIONS\s*=\s*(.+)$/m);
+    if (match) return match[1].trim().replace(/^(['"])(.*)\1$/, '$2') !== 'false';
+  } catch (err) { if (err.code !== 'ENOENT') throw err; }
+  return true;
+}
+
+function writeCodexProjectConfigAtomically(configPath, content) {
+  // Preserve a user-managed symlink instead of replacing the link itself.
+  let target = configPath;
+  let mode = 0o600;
+  let existing;
+  try { existing = fs.lstatSync(configPath); }
+  catch (err) { if (err.code !== 'ENOENT') throw err; }
+  if (existing) {
+    if (existing.isSymbolicLink()) target = fs.realpathSync(configPath);
+    mode = fs.statSync(target).mode & 0o777;
+  }
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  const temporary = `${target}.tmp.${randomUUID()}`;
+  let fd;
+  let created = false;
+  try {
+    fd = fs.openSync(temporary, 'wx', mode);
+    created = true;
+    fs.fchmodSync(fd, mode); // Preserve existing mode even under a stricter umask.
+    fs.writeFileSync(fd, content, 'utf8');
+    fs.fsyncSync(fd);
+    fs.closeSync(fd);
+    fd = undefined;
+    fs.renameSync(temporary, target);
+  } finally {
+    if (fd !== undefined) try { fs.closeSync(fd); } catch { /* best effort */ }
+    if (created) try { fs.unlinkSync(temporary); } catch { /* renamed or already absent */ }
+  }
+}
+
+export function writeCodexProjectConfig(projectDir, opts = {}) {
+  const configPath = path.join(path.resolve(projectDir), '.codex', 'config.toml');
+  let existing = '';
+  try { existing = fs.readFileSync(configPath, 'utf8'); }
+  catch (err) { if (err.code !== 'ENOENT') throw err; }
+  const bypassPermissions = resolveCodexBypassPermissions(projectDir, opts);
+  const content = renderCodexProjectConfig(existing, { bypassPermissions });
+  if (bypassPermissions) {
+    const config = parse(content);
+    if (config.approval_policy !== 'never'
+      || (config.default_permissions !== undefined
+        ? config.default_permissions !== ':danger-full-access'
+        : config.sandbox_mode !== 'danger-full-access')) {
+      console.warn('Warning: explicit Codex project permissions are preserved; unattended resume may be restricted or require approval.');
+    }
+  }
+  if (content !== existing) {
+    writeCodexProjectConfigAtomically(configPath, content);
+  }
+}
+
 /**
  * Render project-level .codex/config.toml with headless configuration.
  *
@@ -357,10 +447,13 @@ function isTomlSectionValue(value) {
  * Written to <projectDir>/.codex/config.toml (Codex project-level config).
  *
  * @param {string} existingContent - Existing project config.toml contents (optional)
+ * @param {{ bypassPermissions?: boolean }} opts - Whether to backfill unattended permissions
  * @returns {string}
  */
-export function renderCodexProjectConfig(existingContent = '') {
-  const obj = parseCodexToml(existingContent);
+export function renderCodexProjectConfig(existingContent = '', opts = {}) {
+  // Do not turn malformed user configuration into unattended full access.
+  const obj = existingContent.trim() ? parse(existingContent) : {};
+  const permissionHeader = applyCodexPermissionDefaults(obj, existingContent, opts.bypassPermissions ?? true);
 
   // Always overwrite: these values are required for unattended Zylos runtime behavior.
   obj.check_for_update_on_startup = false;
@@ -385,7 +478,7 @@ export function renderCodexProjectConfig(existingContent = '') {
   notice.model_migrations = { ...CODEX_MODEL_MIGRATIONS };
   obj.notice = notice;
 
-  return tomlWithHeader(CODEX_PROJECT_HEADER, obj);
+  return tomlWithHeader([CODEX_PROJECT_HEADER, permissionHeader].filter(Boolean).join('\n'), obj);
 }
 
 /**
@@ -430,19 +523,7 @@ export function renderCodexGlobalConfig(projectDir, existingContent = '', opts =
  */
 export function writeCodexConfig(projectDir, opts = {}) {
   try {
-    // Write project-level config
-    const projectCodexDir = path.join(path.resolve(projectDir), '.codex');
-    fs.mkdirSync(projectCodexDir, { recursive: true });
-    const projectConfigPath = path.join(projectCodexDir, 'config.toml');
-    let existingProject = '';
-    try {
-      existingProject = fs.readFileSync(projectConfigPath, 'utf8');
-    } catch { /* new file — nothing to preserve */ }
-    fs.writeFileSync(
-      projectConfigPath,
-      renderCodexProjectConfig(existingProject),
-      'utf8'
-    );
+    writeCodexProjectConfig(projectDir, opts);
 
     // Write global config
     const globalCodexDir = path.join(os.homedir(), '.codex');

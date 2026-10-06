@@ -23,7 +23,7 @@ import { execFileSync } from 'child_process';
 import { fileURLToPath } from 'url';
 import { hookScriptKey, hookScriptBaseKey, getCommandHooks } from './hook-utils.js';
 import { getZylosConfig, updateZylosConfig } from './config.js';
-import { renderCodexProjectConfig, renderCodexGlobalConfig, writeCodexConfig } from './runtime-setup.js';
+import { renderCodexProjectConfig, renderCodexGlobalConfig, writeCodexConfig, resolveCodexBypassPermissions } from './runtime-setup.js';
 import {
   SIDE_EFFECT_NAMES,
   buildChain,
@@ -409,7 +409,15 @@ export function syncCodexConfig({
   let existingProject = '';
   try { existingProject = readFileSync(state.projectConfigPath, 'utf8'); } catch {}
 
-  const desiredProject = renderCodexProjectConfig(existingProject);
+  let desiredProject;
+  try {
+    const bypassPermissions = resolveCodexBypassPermissions(projectDir);
+    desiredProject = renderCodexProjectConfig(existingProject, { bypassPermissions });
+  } catch {
+    const error = 'Failed to refresh Codex project config: check TOML syntax and deployment environment.';
+    log(`  Warning: ${error}`);
+    return { attempted: true, changed: false, fatal: cfg.runtime === 'codex', error };
+  }
   const desiredGlobal = renderCodexGlobalConfig(projectDir, existingGlobal);
   if (existingProject === desiredProject && existingGlobal === desiredGlobal) {
     return { attempted: true, changed: false, fatal: false };
