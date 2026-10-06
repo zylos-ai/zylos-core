@@ -2,6 +2,11 @@
 # Re-generated on each `zylos init` / `zylos runtime codex`.
 # Headless operation: suppress all interactive prompts.
 
+# Defaults for unattended resume; generated ownership supports bypass opt-out.
+# zylos-managed-permission-defaults: approval_policy,sandbox_mode
+approval_policy = "never"
+sandbox_mode = "danger-full-access"
+
 # Disable startup checks
 check_for_update_on_startup = false
 

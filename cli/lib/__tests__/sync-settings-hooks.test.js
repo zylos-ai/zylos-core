@@ -491,6 +491,17 @@ describe('shouldSyncCodexConfig', () => {
 });
 
 describe('syncCodexConfig', () => {
+  it('does not overwrite malformed permission configuration', () => {
+    let writes = 0;
+    const result = syncCodexConfig({
+      cfg: { runtime: 'codex' }, homeDir: '/tmp/home', projectDir: '/tmp/zylos',
+      existsSync: () => true, readFileSync: () => '[broken',
+      writeConfig: () => { writes++; return true; }, log: () => {},
+    });
+    assert.equal(result.fatal, true);
+    assert.equal(writes, 0);
+  });
+
   it('refreshes stale codex config when codex state exists outside codex runtime', () => {
     const writes = [];
     const logs = [];
@@ -502,7 +513,7 @@ describe('syncCodexConfig', () => {
       projectDir: '/tmp/zylos',
       existsSync: (filePath) => filePath === globalConfigPath,
       // Return stale content so drift is detected
-      readFileSync: () => 'stale-content\n',
+      readFileSync: () => 'stale_setting = true\n',
       writeConfig: (projectDir) => {
         writes.push(projectDir);
         return true;
@@ -522,7 +533,7 @@ describe('syncCodexConfig', () => {
       projectDir: '/tmp/zylos',
       existsSync: () => true,
       // Return stale content so drift is detected
-      readFileSync: () => 'stale-content\n',
+      readFileSync: () => 'stale_setting = true\n',
       writeConfig: () => false,
       log: () => {},
     });

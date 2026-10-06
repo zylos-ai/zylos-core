@@ -41,15 +41,12 @@ import { buildCleanEnv, buildCompatEnv, loadRuntimeEnvManifest, writeLaunchSpec 
 import { classifyCodexLoginStatus } from '../auth-parsers.js';
 import { ensureCodexHooksTrusted } from '../codex-hooks.js';
 import { buildKickPrompt } from './kick-prompt.js';
+import { resolveCodexBypassPermissions, writeCodexProjectConfig } from '../runtime-setup.js';
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
 const SESSION = 'codex-main';
 const CODEX_BIN = process.env.CODEX_BIN || 'codex';
-
-// When CODEX_BYPASS_PERMISSIONS=false, skip --dangerously-bypass-approvals-and-sandbox.
-// Defaults to enabled for unattended server operation.
-const DEFAULT_BYPASS = process.env.CODEX_BYPASS_PERMISSIONS !== 'false';
 
 function getCodexApiBaseUrl() {
   try {
@@ -230,8 +227,10 @@ export class CodexAdapter extends RuntimeAdapter {
    * @returns {Promise<void>}
    */
   async launch(opts = {}) {
-    const bypassPermissions = opts.bypassPermissions ?? DEFAULT_BYPASS;
+    const bypassPermissions = resolveCodexBypassPermissions(ZYLOS_DIR, opts);
     assertInstructionReady('codex');
+    // Cover already-installed runtimes and explicit per-launch opt-outs too.
+    writeCodexProjectConfig(ZYLOS_DIR, { bypassPermissions });
 
     // 1. Ensure .agents/skills → .claude/skills symlink for Codex skill discovery.
     const agentsDir = path.join(ZYLOS_DIR, '.agents');

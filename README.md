@@ -287,6 +287,35 @@ Other frameworks charge per API token. Community reports show monthly bills of $
 
 Zylos supports Claude Code (Anthropic) and Codex (OpenAI) as interchangeable AI runtimes. Start with one, switch to the other anytime with `zylos runtime codex` — your memory, skills, and channels are preserved. When AI providers ship new capabilities, your agent benefits automatically. And because both runtimes can program, your AI writes new skills, integrates services, and evolves with your needs.
 
+#### Codex unattended permission defaults
+
+Zylos backfills `approval_policy = "never"` and `sandbox_mode = "danger-full-access"`
+in its project `.codex/config.toml` during init, runtime setup, configuration sync,
+self-upgrade, and launch. This lets Codex's own backend restart/resume load the
+same defaults even when its reconnect request carries only a thread ID. The AM
+launch flag remains in place. Global permission settings for other projects are
+not changed; Zylos's existing setup creates the project trust entry required for
+Codex to load project configuration.
+
+Existing project permission choices are preserved, including `default_permissions`
+named profiles and workspace-write options. If those settings restrict unattended resume or require approval,
+setup/upgrade/launch emits a warning rather than silently replacing them. A project
+permission default overrides a lower-priority global default while inside Zylos.
+
+Set `CODEX_BYPASS_PERMISSIONS=false` in the deployment `.env` to opt out. Explicit
+launch options take precedence, then the process environment, then `.env`. On the
+next setup/sync/launch, Zylos retracts only the permission defaults it inserted
+whose values remain unchanged; user-edited values stay. A comment in the TOML
+tracks those inserted keys. Preserve that comment: if another editor removes it,
+the values are treated as user-owned and must be adjusted manually. A manual edit
+to the exact same value cannot be distinguished from an unchanged generated value.
+
+Opt-out omits the bypass launch flag and returns to the user's Codex settings; it
+does not enforce a specific restricted policy. It does not reconfigure an already
+running thread. Stored thread approval choices can also survive resume, so check
+the effective settings when reusing an older thread. This configuration addresses
+default resolution; it is not a guarantee against every TUI reconnect defect.
+
 ---
 
 ## Communication Channels

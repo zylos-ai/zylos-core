@@ -3,6 +3,7 @@ import { after, before, describe, it } from 'node:test';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { parse } from 'smol-toml';
 
 const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-runtime-setup-test-'));
 const fakeHome = path.join(tmpRoot, 'home');
@@ -17,7 +18,7 @@ process.env.ZYLOS_DIR = fakeZylosDir;
 fs.mkdirSync(fakeHome, { recursive: true });
 fs.mkdirSync(fakeZylosDir, { recursive: true });
 
-const { writeCodexConfig, renderCodexProjectConfig, renderCodexGlobalConfig } = await import('../runtime-setup.js');
+const { writeCodexConfig, renderCodexProjectConfig, renderCodexGlobalConfig, writeCodexProjectConfig, resolveCodexBypassPermissions } = await import('../runtime-setup.js');
 const { parseClaudeAuthStatus, parseCodexLoginStatus, classifyCodexLoginStatus } = await import('../auth-parsers.js');
 
 before(() => {
@@ -114,6 +115,115 @@ describe('renderCodexProjectConfig', () => {
     assert.doesNotMatch(content, /"old-model"/);
     assert.match(content, /\[notice\.experimental\]\nfuture_key = true/);
     assert.match(content, /\[notice\.model_migrations\]\n"gpt-5\.3-codex" = "gpt-5\.4"/);
+  });
+});
+
+describe('Codex persistent permission defaults', () => {
+  it('supports repeatable true → false → true without claiming user settings', () => {
+    const first = renderCodexProjectConfig('user_setting = "keep"\n');
+    assert.equal(parse(first).approval_policy, 'never');
+    assert.equal(parse(first).sandbox_mode, 'danger-full-access');
+    assert.equal(renderCodexProjectConfig(first), first);
+    const disabled = renderCodexProjectConfig(first, { bypassPermissions: false });
+    assert.equal(parse(disabled).approval_policy, undefined);
+    assert.equal(parse(disabled).sandbox_mode, undefined);
+    assert.equal(parse(disabled).user_setting, 'keep');
+    assert.deepEqual(parse(renderCodexProjectConfig(disabled)), parse(first));
+  });
+
+  it('preserves explicit legacy and named user selections', () => {
+    for (const input of [
+      'approval_policy = "on-request"\nsandbox_mode = "read-only"\n',
+      'approval_policy = "never"\ndefault_permissions = ":read-only"\n',
+    ]) {
+      const first = renderCodexProjectConfig(input);
+      const disabled = parse(renderCodexProjectConfig(first, { bypassPermissions: false }));
+      for (const [key, value] of Object.entries(parse(input))) assert.equal(disabled[key], value);
+      if (disabled.default_permissions) assert.equal(parse(first).sandbox_mode, undefined);
+    }
+  });
+
+  it('does not overwrite an edited permission or remove it on opt-out', () => {
+    for (const [key, from, to] of [
+      ['approval_policy', 'never', 'on-request'],
+      ['sandbox_mode', 'danger-full-access', 'read-only'],
+    ]) {
+      const edited = renderCodexProjectConfig().replace(`${key} = "${from}"`, `${key} = "${to}"`);
+      const enabled = renderCodexProjectConfig(edited);
+      assert.equal(parse(enabled)[key], to);
+      const disabled = parse(renderCodexProjectConfig(enabled, { bypassPermissions: false }));
+      assert.equal(disabled[key], to);
+      const other = key === 'approval_policy' ? 'sandbox_mode' : 'approval_policy';
+      assert.equal(disabled[other], undefined);
+    }
+  });
+
+  it('removes only the owned sandbox when a named profile is selected', () => {
+    const content = renderCodexProjectConfig();
+    const named = renderCodexProjectConfig('default_permissions = ":read-only"\n' + content);
+    assert.equal(parse(named).default_permissions, ':read-only');
+    assert.equal(parse(named).sandbox_mode, undefined);
+    assert.equal(parse(named).approval_policy, 'never');
+  });
+
+  it('preserves explicit workspace-write options rather than bypassing them', () => {
+    const existing = '[sandbox_workspace_write]\nnetwork_access = false\n';
+    const config = parse(renderCodexProjectConfig(existing));
+    assert.equal(config.sandbox_mode, undefined);
+    assert.equal(config.sandbox_workspace_write.network_access, false);
+    const edited = renderCodexProjectConfig() + existing;
+    assert.equal(parse(renderCodexProjectConfig(edited)).sandbox_mode, undefined);
+  });
+
+  it('treats lost ownership comments as user-owned configuration', () => {
+    const content = renderCodexProjectConfig().replace(/^# zylos-managed-permission-defaults:.*\n/m, '');
+    const disabled = parse(renderCodexProjectConfig(content, { bypassPermissions: false }));
+    assert.equal(disabled.approval_policy, 'never');
+    assert.equal(disabled.sandbox_mode, 'danger-full-access');
+  });
+
+  it('rejects malformed project TOML without overwriting the original', () => {
+    const project = path.join(tmpRoot, 'malformed');
+    const file = path.join(project, '.codex', 'config.toml');
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, '[broken');
+    assert.throws(() => writeCodexProjectConfig(project));
+    assert.equal(fs.readFileSync(file, 'utf8'), '[broken');
+  });
+
+  it('resolves explicit launch options, process env, then deployment .env', () => {
+    const previous = process.env.CODEX_BYPASS_PERMISSIONS;
+    const project = path.join(tmpRoot, 'bypass-source');
+    fs.mkdirSync(project, { recursive: true });
+    fs.writeFileSync(path.join(project, '.env'), 'CODEX_BYPASS_PERMISSIONS="false"\n');
+    try {
+      delete process.env.CODEX_BYPASS_PERMISSIONS;
+      assert.equal(resolveCodexBypassPermissions(project), false);
+      assert.equal(resolveCodexBypassPermissions(project, { bypassPermissions: true }), true);
+      process.env.CODEX_BYPASS_PERMISSIONS = 'true';
+      assert.equal(resolveCodexBypassPermissions(project), true);
+      assert.equal(resolveCodexBypassPermissions(project, { bypassPermissions: false }), false);
+      writeCodexProjectConfig(project);
+      assert.equal(parse(fs.readFileSync(path.join(project, '.codex', 'config.toml'), 'utf8')).sandbox_mode, 'danger-full-access');
+      delete process.env.CODEX_BYPASS_PERMISSIONS;
+      writeCodexProjectConfig(project);
+      assert.equal(parse(fs.readFileSync(path.join(project, '.codex', 'config.toml'), 'utf8')).sandbox_mode, undefined);
+    } finally {
+      if (previous === undefined) delete process.env.CODEX_BYPASS_PERMISSIONS;
+      else process.env.CODEX_BYPASS_PERMISSIONS = previous;
+    }
+  });
+
+  it('warns when preserved user settings can restrict unattended resume', () => {
+    const project = path.join(tmpRoot, 'warn-permissions');
+    fs.mkdirSync(path.join(project, '.codex'), { recursive: true });
+    fs.writeFileSync(path.join(project, '.codex', 'config.toml'), 'approval_policy = "on-request"\n');
+    const old = console.warn; const warnings = [];
+    console.warn = message => warnings.push(message);
+    try { writeCodexProjectConfig(project, { bypassPermissions: true }); }
+    finally { console.warn = old; }
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0], /unattended resume may be restricted or require approval/);
   });
 });
 
