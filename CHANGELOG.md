@@ -7,7 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.3] - 2026-10-08
+
 ### Fixed
+- **Codex unattended permissions lost on resume**: Zylos now persists missing `approval_policy = "never"` and `sandbox_mode = "danger-full-access"` defaults in the trusted project Codex config (init, runtime setup, sync, self-upgrade and every launch), so a backend reconnect that resumes a thread by ID alone keeps unattended permissions instead of dropping the original bypass flag. User-defined project permissions (legacy keys, named profiles, workspace options) are preserved, with a warning when they may restrict unattended resume; disabling bypass removes only unchanged Zylos-inserted defaults. Ownership is tracked by a TOML comment. Malformed project TOML is rejected rather than overwritten; writes are atomic and new files use mode 0600. Affects Codex-runtime instances only. (#811)
 - **tmux read-only observers blocking input**: all core key sends use `-c zylos-no-client` on tmux ≥ 3.4, preventing attached read-only clients from rejecting Enter or Escape on tmux ≥ 3.7. Older or unknown versions retain the existing argv; unknown detection logs once. Doctor reports the detected version and selected path, and dispatcher failures retain tmux stderr/status without logging command arguments. (#809)
 
 ### Removed
