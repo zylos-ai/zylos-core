@@ -60,6 +60,9 @@ for (const script of [
 
 const calls = { execSync: [], execFileSync: [] };
 let tmuxSessionExists = false;
+const resolvedCodex = "/selected codex/it's/bin/codex";
+let codexHelp = '  --no-daemon  Run without the shared background server';
+let codexHelpError = null;
 
 mock.module('node:child_process', {
   namedExports: {
@@ -75,6 +78,11 @@ mock.module('node:child_process', {
       if (file === 'tmux' && args?.[0] === 'has-session') {
         if (!tmuxSessionExists) throw new Error('no session');
         return '';
+      }
+      if (file === 'which' && args?.[0] === 'codex') return resolvedCodex + '\n';
+      if (file === resolvedCodex && args?.[0] === '--help') {
+        if (codexHelpError) throw codexHelpError;
+        return codexHelp;
       }
       if (args?.[0] === '--version') return '2.1.137';
       if (args?.includes('auth')) throw new Error('not logged in');
@@ -127,6 +135,8 @@ beforeEach(() => {
   calls.execSync.length = 0;
   calls.execFileSync.length = 0;
   tmuxSessionExists = false;
+  codexHelp = '  --no-daemon  Run without the shared background server';
+  codexHelpError = null;
 });
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -391,28 +401,28 @@ describe('Codex launch — new session', () => {
 
     const spec = readLaunchSpec();
     assert.ok(spec, 'spec should be written');
-    // Since #681 the only launch arg is the kick prompt that triggers the
+    // Since #681 the positional launch arg is the kick prompt that triggers the
     // SessionStart hook — never the retired text bootstrap payload. Since
     // #743/#745 that prompt is a stateless internal lifecycle sentinel,
     // never a human-looking greeting that could be mistaken for a user turn.
-    assert.equal(spec.args.length, 1);
+    assert.deepEqual(spec.args.slice(0, -1), ['--no-daemon']);
     // Exact-string lock: the full contract text, not a prefix — a mutated
     // second sentence must fail here.
-    assert.equal(spec.args[0],
+    assert.equal(spec.args.at(-1),
       'System startup trigger, not a user message. Continue with startup context.');
-    assert.doesNotMatch(spec.args[0], /\bhello\b/i);
-    assert.doesNotMatch(spec.args[0], /welcome back/i);
+    assert.doesNotMatch(spec.args.at(-1), /\bhello\b/i);
+    assert.doesNotMatch(spec.args.at(-1), /welcome back/i);
     assert.ok(!JSON.stringify(spec).includes('session-start-inject.js'));
   });
 
   it('kick sentinel is stateless — identical argv on every launch, no marker files (#743)', async () => {
     tmuxSessionExists = false;
     await makeAdapter(CodexAdapter).launch({ bypassPermissions: false });
-    const first = readLaunchSpec().args[0];
+    const first = readLaunchSpec().args.at(-1);
 
     calls.execFileSync.length = 0;
     await makeAdapter(CodexAdapter).launch({ bypassPermissions: false });
-    const second = readLaunchSpec().args[0];
+    const second = readLaunchSpec().args.at(-1);
 
     assert.equal(first, second, 'kick must not vary across launches');
     assert.ok(!fs.existsSync(path.join(fakeZylosDir, '.zylos', 'first-start-done')),
@@ -472,4 +482,45 @@ describe('Codex launch — existing session', () => {
     assert.ok(!sent.includes('_p=$(cat'), 'existing-session command should not load bootstrap prompt');
     assert.ok(!sent.includes('session-start-inject.js'), 'existing-session command should not run text bootstrap');
   });
+});
+
+// Exercise actual adapter wiring, including both command construction paths.
+describe('Codex launch — daemon isolation', () => {
+  for (const exists of [false, true]) {
+    for (const supported of [false, true]) {
+      it(`selects compatible daemon options (existing tmux: ${exists}, supported: ${supported})`, async () => {
+        tmuxSessionExists = exists;
+        codexHelp = supported ? '  --no-daemon  Run without the shared background server' : 'Options:\n  --help  Print help';
+        const adapter = makeAdapter(CodexAdapter);
+        let sent = '';
+        adapter.sendMessage = async text => { sent = text; };
+        for (const bypassPermissions of [false, true]) {
+          calls.execFileSync.length = 0;
+          await adapter.launch({ bypassPermissions });
+          const command = exists ? sent : readLaunchSpec().args.join(' ');
+          if (exists) assert.ok(sent.includes("'/selected codex/it'\\''s/bin/codex'"));
+          else {
+            assert.equal(readLaunchSpec().command, resolvedCodex);
+            assert.notEqual(readLaunchSpec().env.PATH, process.env.PATH);
+          }
+          assert.equal(command.includes('--no-daemon'), supported);
+          assert.equal(command.includes('--dangerously-bypass-approvals-and-sandbox'), bypassPermissions);
+          assert.ok(command.includes('System startup trigger, not a user message. Continue with startup context.'));
+        }
+        const probes = calls.execFileSync.filter(c => c.file === resolvedCodex && c.args[0] === '--help');
+        assert.equal(probes.length, 1, 'recheck installed CLI capabilities on each launch');
+        assert.equal(probes[0].opts.timeout, 10_000);
+      });
+    }
+    it(`does not launch when capability detection fails (existing tmux: ${exists})`, async () => {
+      tmuxSessionExists = exists;
+      codexHelpError = new Error('help timed out');
+      const adapter = makeAdapter(CodexAdapter);
+      let sent = false;
+      adapter.sendMessage = async () => { sent = true; };
+      await assert.rejects(() => adapter.launch(), /Cannot determine Codex launch options: help timed out/);
+      assert.equal(findTmuxNewSession(), undefined);
+      assert.equal(sent, false);
+    });
+  }
 });

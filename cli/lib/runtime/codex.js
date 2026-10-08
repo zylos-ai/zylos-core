@@ -5,7 +5,8 @@
  *   - tmux session management (session: 'codex-main')
  *   - Auth detection via `codex login --status`
  *   - Instruction file generation (AGENTS.md)
- *   - Launch with --dangerously-bypass-approvals-and-sandbox flag
+ *   - Isolated launches with --no-daemon when supported by the installed CLI
+ *   - Optional --dangerously-bypass-approvals-and-sandbox flag
  *
  * Codex reads AGENTS.md from the working directory as its instruction file.
  * Interactive prompts are suppressed via project-level .codex/config.toml (headless
@@ -229,6 +230,30 @@ export class CodexAdapter extends RuntimeAdapter {
   async launch(opts = {}) {
     const bypassPermissions = resolveCodexBypassPermissions(ZYLOS_DIR, opts);
     assertInstructionReady('codex');
+    // Keep managed sessions independent of shared daemon feature settings.
+    // Older supported CLIs predate --no-daemon, so inspect capabilities instead
+    // of guessing a version cutoff. A failed probe must not silently opt into
+    // the shared daemon; report the startup error before launching anything.
+    let help;
+    let codexBin;
+    try {
+      // Pin discovery and both launch paths to the same executable: clean
+      // launcher PATH and an existing tmux shell PATH can select other versions.
+      codexBin = execFileSync('which', [CODEX_BIN], {
+        encoding: 'utf8', stdio: 'pipe', timeout: 10_000,
+      }).trim();
+      if (!path.isAbsolute(codexBin)) throw new Error('Codex executable path is not absolute');
+      help = execFileSync(codexBin, ['--help'], {
+        encoding: 'utf8', stdio: 'pipe', timeout: 10_000,
+      });
+    } catch (e) {
+      throw new Error(`Cannot determine Codex launch options: ${e.message}`);
+    }
+    const launchArgs = /(?:^|\s)--no-daemon(?:\s|$)/m.test(help) ? ['--no-daemon'] : [];
+    if (bypassPermissions) launchArgs.push('--dangerously-bypass-approvals-and-sandbox');
+    const quotedBin = `'${codexBin.replace(/'/g, "'\\''")}'`;
+    const codexCmd = [quotedBin, ...launchArgs].join(' ');
+
     // Cover already-installed runtimes and explicit per-launch opt-outs too.
     writeCodexProjectConfig(ZYLOS_DIR, { bypassPermissions });
 
@@ -248,12 +273,8 @@ export class CodexAdapter extends RuntimeAdapter {
     ensureCodexHooksTrusted({
       zylosDir: ZYLOS_DIR,
       projectDir: ZYLOS_DIR,
-      codexBin: CODEX_BIN,
+      codexBin,
     });
-
-    // 3. Build the codex command
-    const bypassFlag = bypassPermissions ? ' --dangerously-bypass-approvals-and-sandbox' : '';
-    const codexCmd = `${CODEX_BIN}${bypassFlag}`;
 
     const monitorDir = path.join(ZYLOS_DIR, 'activity-monitor');
     const exitLogFile = path.join(monitorDir, 'codex-exit.log');
@@ -280,13 +301,11 @@ export class CodexAdapter extends RuntimeAdapter {
         : buildCompatEnv({ processEnv: process.env, dotenvVars });
 
       // Build launch spec — Codex reads auth from ~/.codex/auth.json via HOME
-      const args = [];
-      if (bypassPermissions) args.push('--dangerously-bypass-approvals-and-sandbox');
-      args.push(kickPrompt);
+      const args = [...launchArgs, kickPrompt];
 
       const launcherPath = path.join(path.dirname(import.meta.url.replace('file://', '')), 'tmux-launcher.js');
       const specPath = writeLaunchSpec({
-        command: CODEX_BIN,
+        command: codexBin,
         args,
         env,
         cwd: ZYLOS_DIR,
