@@ -230,6 +230,30 @@ export class CodexAdapter extends RuntimeAdapter {
   async launch(opts = {}) {
     const bypassPermissions = resolveCodexBypassPermissions(ZYLOS_DIR, opts);
     assertInstructionReady('codex');
+    // Keep managed sessions independent of shared daemon feature settings.
+    // Older supported CLIs predate --no-daemon, so inspect capabilities instead
+    // of guessing a version cutoff. A failed probe must not silently opt into
+    // the shared daemon; report the startup error before launching anything.
+    let help;
+    let codexBin;
+    try {
+      // Pin discovery and both launch paths to the same executable: clean
+      // launcher PATH and an existing tmux shell PATH can select other versions.
+      codexBin = execFileSync('which', [CODEX_BIN], {
+        encoding: 'utf8', stdio: 'pipe', timeout: 10_000,
+      }).trim();
+      if (!path.isAbsolute(codexBin)) throw new Error('Codex executable path is not absolute');
+      help = execFileSync(codexBin, ['--help'], {
+        encoding: 'utf8', stdio: 'pipe', timeout: 10_000,
+      });
+    } catch (e) {
+      throw new Error(`Cannot determine Codex launch options: ${e.message}`);
+    }
+    const launchArgs = /(?:^|\s)--no-daemon(?:\s|$)/m.test(help) ? ['--no-daemon'] : [];
+    if (bypassPermissions) launchArgs.push('--dangerously-bypass-approvals-and-sandbox');
+    const quotedBin = `'${codexBin.replace(/'/g, "'\\''")}'`;
+    const codexCmd = [quotedBin, ...launchArgs].join(' ');
+
     // Cover already-installed runtimes and explicit per-launch opt-outs too.
     writeCodexProjectConfig(ZYLOS_DIR, { bypassPermissions });
 
@@ -249,24 +273,8 @@ export class CodexAdapter extends RuntimeAdapter {
     ensureCodexHooksTrusted({
       zylosDir: ZYLOS_DIR,
       projectDir: ZYLOS_DIR,
-      codexBin: CODEX_BIN,
+      codexBin,
     });
-
-    // 3. Keep managed sessions independent of shared daemon feature settings.
-    // Older supported CLIs predate --no-daemon, so inspect capabilities instead
-    // of guessing a version cutoff. A failed probe must not silently opt into
-    // the shared daemon; report the startup error before launching anything.
-    let help;
-    try {
-      help = execFileSync(CODEX_BIN, ['--help'], {
-        encoding: 'utf8', stdio: 'pipe', timeout: 10_000,
-      });
-    } catch (e) {
-      throw new Error(`Cannot determine Codex launch options: ${e.message}`);
-    }
-    const launchArgs = /(?:^|\s)--no-daemon(?:\s|$)/m.test(help) ? ['--no-daemon'] : [];
-    if (bypassPermissions) launchArgs.push('--dangerously-bypass-approvals-and-sandbox');
-    const codexCmd = [CODEX_BIN, ...launchArgs].join(' ');
 
     const monitorDir = path.join(ZYLOS_DIR, 'activity-monitor');
     const exitLogFile = path.join(monitorDir, 'codex-exit.log');
@@ -297,7 +305,7 @@ export class CodexAdapter extends RuntimeAdapter {
 
       const launcherPath = path.join(path.dirname(import.meta.url.replace('file://', '')), 'tmux-launcher.js');
       const specPath = writeLaunchSpec({
-        command: CODEX_BIN,
+        command: codexBin,
         args,
         env,
         cwd: ZYLOS_DIR,

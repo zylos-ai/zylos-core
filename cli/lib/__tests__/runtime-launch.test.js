@@ -60,6 +60,7 @@ for (const script of [
 
 const calls = { execSync: [], execFileSync: [] };
 let tmuxSessionExists = false;
+const resolvedCodex = "/selected codex/it's/bin/codex";
 let codexHelp = '  --no-daemon  Run without the shared background server';
 let codexHelpError = null;
 
@@ -78,7 +79,8 @@ mock.module('node:child_process', {
         if (!tmuxSessionExists) throw new Error('no session');
         return '';
       }
-      if (file === 'codex' && args?.[0] === '--help') {
+      if (file === 'which' && args?.[0] === 'codex') return resolvedCodex + '\n';
+      if (file === resolvedCodex && args?.[0] === '--help') {
         if (codexHelpError) throw codexHelpError;
         return codexHelp;
       }
@@ -496,11 +498,16 @@ describe('Codex launch — daemon isolation', () => {
           calls.execFileSync.length = 0;
           await adapter.launch({ bypassPermissions });
           const command = exists ? sent : readLaunchSpec().args.join(' ');
+          if (exists) assert.ok(sent.includes("'/selected codex/it'\\''s/bin/codex'"));
+          else {
+            assert.equal(readLaunchSpec().command, resolvedCodex);
+            assert.notEqual(readLaunchSpec().env.PATH, process.env.PATH);
+          }
           assert.equal(command.includes('--no-daemon'), supported);
           assert.equal(command.includes('--dangerously-bypass-approvals-and-sandbox'), bypassPermissions);
           assert.ok(command.includes('System startup trigger, not a user message. Continue with startup context.'));
         }
-        const probes = calls.execFileSync.filter(c => c.file === 'codex' && c.args[0] === '--help');
+        const probes = calls.execFileSync.filter(c => c.file === resolvedCodex && c.args[0] === '--help');
         assert.equal(probes.length, 1, 'recheck installed CLI capabilities on each launch');
         assert.equal(probes[0].opts.timeout, 10_000);
       });
