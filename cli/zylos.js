@@ -23,6 +23,7 @@ import { configCommand } from './commands/config.js';
 import { attachCommand } from './commands/attach.js';
 import { doctorCommand } from './commands/doctor.js';
 import { shellCommand } from './commands/shell.js';
+import { recoveryCommand } from './commands/recovery.js';
 import { runtimeCommand } from './commands/runtime.js';
 import { migrateInstructionsCommand } from './commands/migrate-instructions.js';
 
@@ -35,6 +36,7 @@ const commands = {
   doctor: doctorCommand,
   shell: shellCommand,
   runtime: runtimeCommand,
+  recovery: recoveryCommand,
   'migrate-instructions': migrateInstructionsCommand,
   // Service management
   status: showStatus,

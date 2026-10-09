@@ -31,7 +31,11 @@ import {
   splitContentAndAttachments,
   uploadKind
 } from './attachment-utils.js';
-import { openDb, SessionStore, PersistentUploadRegistry } from './db.js';
+import { openDb, DB_PATH as WC_DB_PATH, SessionStore, PersistentUploadRegistry } from './db.js';
+import * as wcSchema from './schema.js';
+import * as c4Schema from '../../comm-bridge/scripts/c4-schema.js';
+import { getDb as getC4Db } from '../../comm-bridge/scripts/c4-db.js';
+import { preflightDatabase, assertCoreDatabaseAvailable } from '../../comm-bridge/scripts/sqlite-schema.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -77,6 +81,11 @@ function readEnvPassword() {
 const AUTH_PASSWORD = readEnvPassword();
 const AUTH_ENABLED = AUTH_PASSWORD.length > 0;
 
+assertCoreDatabaseAvailable(ZYLOS_DIR);
+preflightDatabase(Database, WC_DB_PATH, wcSchema, { allowMissing: true });
+preflightDatabase(Database, DB_PATH, c4Schema);
+// Both actual connections pass their guards before stores can clean up data.
+const db = getC4Db();
 const wcDb = openDb();
 const sessionStore = new SessionStore(wcDb);
 const uploadRegistry = new PersistentUploadRegistry(wcDb);
@@ -131,31 +140,6 @@ const upload = multer({
     files: 1
   }
 });
-
-// Initialize database connection
-let db;
-try {
-  // Verify database file exists
-  if (!fs.existsSync(DB_PATH)) {
-    console.error(`Database not found: ${DB_PATH}`);
-    console.error('Make sure comm-bridge is initialized first (run c4-db.js init)');
-    process.exit(1);
-  }
-
-  db = new Database(DB_PATH, { readonly: false });
-
-  // Verify schema exists
-  const tableCheck = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='conversations'").get();
-  if (!tableCheck) {
-    console.error('Database schema not initialized');
-    console.error('Run: node ~/zylos/.claude/skills/comm-bridge/scripts/c4-db.js init');
-    process.exit(1);
-  }
-} catch (err) {
-  console.error(`Failed to open database: ${err.message}`);
-  console.error('Make sure comm-bridge is initialized first');
-  process.exit(1);
-}
 
 // Track connected WebSocket clients
 const clients = new Set();

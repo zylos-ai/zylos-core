@@ -5,6 +5,8 @@
  */
 
 import Database from 'better-sqlite3';
+import * as schema from './c4-schema.js';
+import { guardDatabase, assertCoreDatabaseAvailable } from './sqlite-schema.js';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
@@ -22,37 +24,28 @@ let db = null;
  * Get database connection, initializing if needed
  */
 export function getDb() {
+  assertCoreDatabaseAvailable(path.dirname(DATA_DIR));
   if (!db) {
-    // Ensure data directory exists
-    if (!fs.existsSync(DATA_DIR)) {
-      fs.mkdirSync(DATA_DIR, { recursive: true });
-    }
-
     const isNew = !fs.existsSync(DB_PATH);
-    db = new Database(DB_PATH);
-    db.pragma('journal_mode = WAL');  // Better concurrent access
-    db.pragma('busy_timeout = 5000');
-    db.pragma('foreign_keys = ON');
-
-    if (isNew) {
-      initSchema();
-    }
-
-    ensureConversationsSchema(db);
-    ensureControlQueueSchema(db);
-    ensureStatusNoticeCooldownSchema(db);
-    ensureVoidChannelMigration(db);
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+    const connection = new Database(DB_PATH);
+    try {
+      guardDatabase(connection, { ...schema, migrate: migrateSchema }, { isNew });
+      connection.pragma('journal_mode = WAL');
+      connection.pragma('busy_timeout = 5000');
+      connection.pragma('foreign_keys = ON');
+      db = connection;
+    } catch (error) { connection.close(); throw error; }
   }
   return db;
 }
 
-/**
- * Initialize database schema from init-db.sql
- */
-function initSchema() {
-  const initSql = fs.readFileSync(INIT_SQL_PATH, 'utf8');
-  db.exec(initSql);
-  console.log('[C4-DB] Database initialized');
+export function migrateSchema(database, { isNew }) {
+  if (isNew) database.exec(fs.readFileSync(INIT_SQL_PATH, 'utf8'));
+  ensureConversationsSchema(database);
+  ensureControlQueueSchema(database);
+  ensureStatusNoticeCooldownSchema(database);
+  ensureVoidChannelMigration(database);
 }
 
 export function stripTrailingAckSuffix(content) {

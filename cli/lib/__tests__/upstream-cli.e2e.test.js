@@ -16,7 +16,7 @@ function fixture(t) {
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const home = path.join(root, 'home'), zylosDir = path.join(home, 'zylos'), bin = path.join(root, 'bin');
   const configDir = path.join(zylosDir, '.zylos');
-  fs.mkdirSync(configDir, { recursive: true });
+  fs.mkdirSync(configDir, { recursive: true, mode: 0o700 });
   fs.mkdirSync(bin);
   fs.writeFileSync(path.join(configDir, 'components.json'), '{}');
   const profilePath = path.join(root, 'profile.json');

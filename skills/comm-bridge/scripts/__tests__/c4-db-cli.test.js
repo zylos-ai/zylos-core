@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import Database from 'better-sqlite3';
 import { spawnSync } from 'node:child_process';
 import { describe, it } from 'node:test';
 import fs from 'node:fs';
@@ -54,14 +55,16 @@ describe('c4-db recent', () => {
 
 describe('void channel migration (#689)', () => {
   it('re-tags legacy web-console session-handoff rows to the void channel', () => {
-    withTmpDir(({ env }) => {
-      // Seed legacy rows. The migration runs when the DB is opened, so rows
-      // inserted here keep their legacy shape until the next invocation.
+    withTmpDir(({ tmpDir, env }) => {
+      // Seed rows, then model a known legacy version-0 fixture.
       assert.equal(dbCli(['insert', 'out', 'web-console', 'session-handoff', 'handoff note'], env).status, 0);
       assert.equal(dbCli(['insert', 'out', 'web-console', 'console', 'normal console message'], env).status, 0);
       assert.equal(dbCli(['insert', 'out', 'telegram', 'session-handoff', 'not a web-console row'], env).status, 0);
 
-      // Any subsequent DB open runs the migration before reads.
+      const legacy = new Database(path.join(tmpDir, 'comm-bridge', 'c4.db'));
+      legacy.pragma('user_version = 0');
+      legacy.close();
+      // The explicit 0→1 migration runs once before reads.
       const { stdout, status } = dbCli(['recent', '10'], env);
       assert.equal(status, 0);
 

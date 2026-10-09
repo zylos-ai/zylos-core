@@ -25,10 +25,14 @@ const {
   runSelfUpgrade,
   runSelfUpgradeFinalize,
   step5_syncCoreSkills,
+  step1_backupCoreSkills,
+  step2_preUpgradeHook,
+  step3_stopCoreServices,
+  step4_npmInstallGlobal,
 } = await import('../../cli/lib/self-upgrade.js');
 const { printStep } = await import('../../cli/commands/component.js');
 
-const transactionBackupDir = path.join(zylosDir, 'transaction-backup');
+const transactionBackupDir = path.join(zylosDir, 'zylos-core-backup-717-transaction');
 const npmCommands = [];
 const stoppedServices = [];
 const launcherOutput = [];
@@ -43,6 +47,13 @@ try {
     mode: 'merge',
     onStep: scenario === 'json' ? undefined : printStep,
   }, {
+    // Explicitly exercise the legacy #717 seam; default runs use v2 protection.
+    preInstallSteps: [
+      ctx=>step1_backupCoreSkills(ctx,{zylosDir,skillsDir:path.join(zylosDir,'.claude','skills'),backupDir:transactionBackupDir}),
+      step2_preUpgradeHook,
+      ctx=>step3_stopCoreServices(ctx,{getSkillsServices:()=>[{name:'fixture-service',status:'online'}],stopService:name=>stoppedServices.push(name)}),
+      ctx=>step4_npmInstallGlobal(ctx,{execSync:command=>{npmCommands.push(command);return command.startsWith('npm pack')?'zylos-fixture.tgz\n':'';}}),
+    ],
     getCurrentVersion: () => ({ success: true, version: '0.5.3' }),
     step1: {
       zylosDir,
@@ -75,9 +86,8 @@ try {
     },
   });
 
-  // Match component.js ownership: only the non-JSON successful launcher
-  // removes the temporary transaction backup.
-  if (scenario !== 'json' && result.success && result.backupDir) {
+  // Match component.js: legacy success cleanup applies to both output modes.
+  if (result.success && !result.preInstallProtection && result.backupDir) {
     cleanupBackup(result.backupDir);
   }
 } finally {

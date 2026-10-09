@@ -475,9 +475,9 @@ describe('Codex launch — existing session', () => {
     assert.ok(sent.length > 0, 'sendMessage should be called');
     assert.ok(sent.includes('codex'), 'sent command should reference codex');
     // Exact-string lock for the paste path: the kick must ride as one
-    // double-quoted argv carrying the full contract text.
+    // shell-quoted argv carrying the full contract text.
     assert.ok(sent.includes(
-      '"System startup trigger, not a user message. Continue with startup context."'),
+      "'System startup trigger, not a user message. Continue with startup context.'"),
     'existing-session command must carry the exact kick as one quoted argv');
     assert.ok(!sent.includes('_p=$(cat'), 'existing-session command should not load bootstrap prompt');
     assert.ok(!sent.includes('session-start-inject.js'), 'existing-session command should not run text bootstrap');

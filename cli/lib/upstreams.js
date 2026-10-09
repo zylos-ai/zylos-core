@@ -173,7 +173,7 @@ function readCache(selection) {
 }
 function fresh(cache, now, ttlMs) { return cache && cache.checkedAt <= now && now - cache.checkedAt < ttlMs; }
 function atomicJson(file, data) {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   const tmp = `${file}.${process.pid}.${randomUUID()}.tmp`;
   try {
     const fd = fs.openSync(tmp, 'wx', 0o600);
@@ -200,7 +200,7 @@ function publishLock(file, owner) {
   } finally { try { fs.unlinkSync(tmp); } catch {} }
 }
 async function lockCache(selection, timeoutMs) {
-  fs.mkdirSync(selection.files.dir, { recursive: true });
+  fs.mkdirSync(selection.files.dir, { recursive: true, mode: 0o700 });
   const started = Date.now(), owner = { pid: process.pid, nonce: randomUUID() };
   while (true) {
     try {

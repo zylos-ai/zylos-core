@@ -13,14 +13,29 @@
  * Usage: node c4-session-init.js
  */
 
-import { logHookTiming } from './c4-diagnostic.js';
-import { formatSection } from './session-format.js';
-import { withinBudget } from '../../activity-monitor/scripts/shard-registry.js';
+let logHookTiming=()=>{},formatSection,withinBudget;
+async function normalHelpers(){
+ if(formatSection)return;
+ const [diagnostic,format,registry]=await Promise.all([import('./c4-diagnostic.js'),import('./session-format.js'),import('../../activity-monitor/scripts/shard-registry.js')]);
+ logHookTiming=diagnostic.logHookTiming;formatSection=format.formatSection;withinBudget=registry.withinBudget;
+}
 import { fileURLToPath } from 'node:url';
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
+import { createRequire } from 'node:module';
+const require=createRequire(import.meta.url);
+function recoveryContext(){
+  const root=process.env.ZYLOS_DIR || path.join(os.homedir(),'zylos'),stable=path.join(root,'.zylos','upgrade','bootstrap.cjs');
+  if(!fs.existsSync(stable))return null;
+  const result=require(stable).bootstrap(root);return result.active?`=== UPGRADE RECOVERY TASK ===\n${result.prompt}\n=== END UPGRADE RECOVERY TASK ===`:null;
+}
 
 async function withC4Db(label, action) {
+  const recovery=recoveryContext();if(recovery)return recovery;
   let close = () => {};
   try {
+    await normalHelpers();
     const db = await import('./c4-db.js');
     close = db.close;
     return await action(db);
@@ -144,6 +159,7 @@ export async function emitC4Conversations(_payload, budget = null) {
 
 export async function initC4Session() {
   try {
+    const recovery=recoveryContext();if(recovery)return recovery+'\n';
     const sections = [await emitC4Checkpoint(), await emitC4Conversations()].filter(Boolean);
     return `${sections.join('\n\n')}\n`;
   } catch (err) {

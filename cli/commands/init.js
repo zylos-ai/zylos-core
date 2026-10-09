@@ -1,3 +1,4 @@
+import { deployUpgradeBootstrap } from '../lib/upgrade-protection.js';
 import { githubUrl } from '../lib/upstreams.js';
 import { githubRequestSync } from '../lib/github-http.js';
 /**
@@ -709,7 +710,7 @@ function createDirectoryStructure() {
   ];
 
   for (const dir of dirs) {
-    fs.mkdirSync(dir, { recursive: true });
+    fs.mkdirSync(dir, { recursive: true, ...(dir === CONFIG_DIR ? { mode: 0o700 } : {}) });
   }
 
   if (!fs.existsSync(COMPONENTS_FILE)) {
@@ -2302,6 +2303,7 @@ export async function initCommand(args) {
     }
 
     const syncResult = syncCoreSkills();
+    deployUpgradeBootstrap(ZYLOS_DIR);
     if (!quiet) {
       if (syncResult.updated.length > 0) {
         console.log(`${success('Core Skills updated:')} ${syncResult.updated.join(', ')}`);
@@ -2461,6 +2463,7 @@ export async function initCommand(args) {
 
   // Step 9: Sync Core Skills
   const syncResult = syncCoreSkills();
+  deployUpgradeBootstrap(ZYLOS_DIR);
   if (!quiet) {
     if (syncResult.error) {
       console.log(`  ${warn(syncResult.error)}`);

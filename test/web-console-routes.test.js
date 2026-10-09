@@ -26,16 +26,7 @@ function freePort() {
 function createDb(dbPath) {
   fs.mkdirSync(path.dirname(dbPath), { recursive: true });
   const db = new Database(dbPath);
-  db.exec(`
-    CREATE TABLE conversations (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      direction TEXT,
-      channel TEXT,
-      endpoint_id TEXT,
-      content TEXT,
-      timestamp TEXT
-    );
-  `);
+  db.exec(fs.readFileSync(path.resolve('skills/comm-bridge/init-db.sql'), 'utf8'));
   db.close();
 }
 

@@ -1,6 +1,10 @@
-import { execSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
+import { createRequire } from 'node:module';
+import * as c4Schema from '../../comm-bridge/scripts/c4-schema.js';
+import { guardDatabase, assertCoreDatabaseAvailable } from '../../comm-bridge/scripts/sqlite-schema.js';
+const coreRequire = createRequire(new URL('../../comm-bridge/package.json', import.meta.url));
+const Database = coreRequire('better-sqlite3');
 import { shouldStartUsageCheck } from './usage-check-engine.js';
 import { readCodexUsageFromActiveRollout } from './usage-codex-rollout-reader.js';
 import {
@@ -244,19 +248,22 @@ export class UsageMonitor {
   }
 
   getPendingWorkCount() {
+    let db;
     try {
+      assertCoreDatabaseAvailable(this.options.zylosDir);
       const dbPath = path.join(this.options.zylosDir, 'comm-bridge', 'c4.db');
-      if (!fs.existsSync(dbPath)) return 0;
-
-      const out = execSync(
-        `sqlite3 "${dbPath}" "SELECT ((SELECT COUNT(*) FROM control_queue WHERE status='pending') + (SELECT COUNT(*) FROM conversations WHERE direction='in' AND status='pending'))" 2>/dev/null`,
-        { encoding: 'utf8', timeout: 3000 }
-      ).trim();
-
-      return parseInt(out || '0', 10) || 0;
-    } catch {
-      return 0;
-    }
+      if (!fs.existsSync(dbPath)) {
+        if (['-wal', '-shm', '-journal'].some(suffix => fs.existsSync(dbPath + suffix))) throw new Error('Orphan C4 database sidecar');
+        return 0;
+      }
+      db = new Database(dbPath, { readonly: true, fileMustExist: true });
+      guardDatabase(db, c4Schema, { readonly: true });
+      return db.prepare("SELECT ((SELECT COUNT(*) FROM control_queue WHERE status='pending') + (SELECT COUNT(*) FROM conversations WHERE direction='in' AND status='pending')) AS count").get().count;
+    } catch (error) {
+      this.options.log?.(`Usage monitor: cannot inspect pending work (${error.message})`);
+      // Fail closed: unknown pending work prevents starting an idle usage check.
+      return Number.POSITIVE_INFINITY;
+    } finally { db?.close(); }
   }
 
   getUsageTier(weeklyPercent) {

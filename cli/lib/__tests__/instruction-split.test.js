@@ -221,7 +221,9 @@ describe('split instruction assembler', () => {
     const future = new Date(Date.now() + 5000);
     fs.utimesSync(userPath, future, future);
     assert.throws(() => assertInstructionReady('codex', { zylosDir: root }), /not prepared before launch/);
-    const current = new Date();
+    // Keep the restored source timestamp strictly behind the regenerated
+    // output, avoiding filesystem/Date millisecond rounding at this boundary.
+    const current = new Date(Date.now() - 1000);
     fs.utimesSync(userPath, current, current);
     buildInstructionFile('codex', { zylosDir: root });
     assert.equal(assertInstructionReady('codex', { zylosDir: root }), true);

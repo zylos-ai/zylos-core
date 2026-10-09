@@ -7,6 +7,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import crypto from 'node:crypto';
 import { execSync, spawnSync } from 'node:child_process';
 import { SKILLS_DIR, ZYLOS_DIR, getZylosConfig } from './config.js';
 import { downloadArchive, downloadBranch } from './download.js';
@@ -38,6 +39,12 @@ import {
 import { deployManifestTemplate } from './runtime/tmux-env.js';
 import { writeCodexConfig } from './runtime-setup.js';
 import { getCoreEcosystemPath, restartManagedProcess } from './pm2.js';
+
+import { createRequire as createFinalizerRequire } from 'node:module';
+const finalizerRequire=createFinalizerRequire(import.meta.url);
+function requireFinalizerExit(dir,j,terminate){return finalizerRequire(path.join(dir,'finalizer.cjs')).quiesce(dir,j,{terminate});}
+
+import { beginUpgrade, saveProtectedCode, prepareProtectedInstall, markInstallationIntent, recovery, protectedDataReady, protectedSuccess, maintenance } from './upgrade-protection.js';
 
 const REPO = 'zylos-ai/zylos-core';
 
@@ -240,7 +247,24 @@ export function syncCoreSkills(newSkillsSrc, backupBase, opts = {}) {
       // from a destDir scan, so pre-existing local files are not absorbed
       // into the ownership record (issue #715).
       try {
-        copyTree(srcDir, destDir);
+        if (opts.transactionId) {
+          if(!opts.transactionDir)throw Error('protected new core deployment requires transaction directory');
+          const journal=maintenance.read(path.join(opts.transactionDir,'journal.json'));
+          const staging=path.join(opts.transactionDir,'new-core',skillName);
+          journal.coreCreation ||= {};
+          journal.coreCreation[skillName]={staging,target:destDir,published:false};
+          maintenance.update(opts.transactionDir,journal);
+          if(fs.existsSync(staging))throw Error('new core staging already exists');
+          fs.cpSync(srcDir,staging,{recursive:true,verbatimSymlinks:true});
+          const metadata=path.join(staging,'.zylos');
+          let metadataStat;try{metadataStat=fs.lstatSync(metadata);}catch(error){if(error.code!=='ENOENT')throw error;}
+          if(metadataStat)maintenance.privatePath(metadata,{directory:true});
+          maintenance.durable(path.join(metadata,'upgrade-owner.json'),{transactionId:opts.transactionId});
+          maintenance.fsyncTree(staging);
+          fs.renameSync(staging,destDir);
+          maintenance.fsyncDir(path.dirname(staging));maintenance.fsyncDir(path.dirname(destDir));
+          journal.coreCreation[skillName].published=true;maintenance.update(opts.transactionDir,journal);
+        } else copyTree(srcDir, destDir);
         result.pendingBaselines.push({ destDir, srcDir, manifest: generateManifest(srcDir) });
         result.added.push(skillName);
       } catch (err) {
@@ -502,6 +526,10 @@ function createContext({ tempDir, newVersion, mode } = {}) {
  */
 export function step1_backupCoreSkills(ctx, deps = {}) {
   const startTime = Date.now();
+  if (ctx.preInstallProtection) {
+    try { saveProtectedCode(ctx); return {step:1,name:'backup_core_skills',status:'done',duration:Date.now()-startTime}; }
+    catch(error) { return {step:1,name:'backup_core_skills',status:'failed',error:error.message,duration:Date.now()-startTime}; }
+  }
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
   const backupDir = deps.backupDir
     ?? path.join(getWritableTmpBase('zylos-core-backup-probe-'), `zylos-core-backup-${timestamp}`);
@@ -535,7 +563,7 @@ export function step1_backupCoreSkills(ctx, deps = {}) {
 /**
  * Step 2: pre-upgrade hook (placeholder for future use)
  */
-function step2_preUpgradeHook(ctx) {
+export function step2_preUpgradeHook(ctx) {
   const startTime = Date.now();
   // No core pre-upgrade hook yet — reserved for future
   return { step: 2, name: 'pre_upgrade_hook', status: 'skipped', duration: Date.now() - startTime };
@@ -568,8 +596,9 @@ function getSkillsServices(deps = {}) {
 /**
  * Step 3: stop core services
  */
-function step3_stopCoreServices(ctx, deps = {}) {
+export function step3_stopCoreServices(ctx, deps = {}) {
   const startTime = Date.now();
+  if (ctx.preInstallProtection) {try {prepareProtectedInstall(ctx,deps);return {step:3,name:'protect_databases_and_stop_services',status:'done',duration:Date.now()-startTime};}catch(error){return {step:3,name:'protect_databases_and_stop_services',status:'failed',error:error.message,duration:Date.now()-startTime};}}
   const execSyncFn = deps.execSync ?? execSync;
   const getServices = deps.getSkillsServices ?? (() => getSkillsServices(deps));
   const stopService = deps.stopService ?? ((name) => {
@@ -609,7 +638,29 @@ function step3_stopCoreServices(ctx, deps = {}) {
  * Since we install from a temp dir that gets cleaned up, the symlink breaks.
  * Instead: npm pack (creates a .tgz copy) → npm install -g <tgz> (copies files).
  */
-function step4_npmInstallGlobal(ctx, deps = {}) {
+export function resolveProtectedNpmCli() {
+  for(const directory of String(process.env.PATH||'').split(path.delimiter)){
+    if(!path.isAbsolute(directory))continue;
+    try{const file=fs.realpathSync(path.join(directory,'npm')),st=fs.statSync(file);if(path.basename(file)==='npm-cli.js'&&st.isFile()&&!(st.mode&0o022)&&[0,process.getuid?.()].includes(st.uid))return file;}catch{}
+  }
+  throw Error('trusted npm-cli.js entry is unavailable');
+}
+export function runProtectedInstaller(ctx,{stage,npmCli,args,cwd,timeout=180000}) {
+  const dir=ctx.transactionDir,j=maintenance.read(path.join(dir,'journal.json')),nonce=crypto.randomBytes(16).toString('hex');
+  maintenance.validateDescriptor(dir,j,maintenance.read(path.join(dir,'descriptor.json')));
+  j.installerHistory ||= [];
+  if(j.installerLaunchIntent&&j.installerExitConfirmed)j.installerHistory.push({launch:j.installerLaunchIntent,execution:j.installerExecution,exitConfirmed:true});
+  maintenance.update(dir,j,{installerLaunchIntent:{nonce,parent:maintenance.identity(),stage,nodePath:process.execPath,npmCli,npmCliHash:maintenance.hash(npmCli),args,cwd},installerExecution:null,installerExitConfirmed:false,installerExitUnconfirmed:false});
+  ctx.journal=j;
+  const result=spawnSync(process.execPath,[path.join(dir,'finalizer.cjs'),'--installer',npmCli,JSON.stringify(args),dir,nonce],{cwd,env:{...process.env,ZYLOS_SKIP_POSTINSTALL:'1'},encoding:'utf8',stdio:['ignore','pipe','pipe'],detached:true,timeout,killSignal:'SIGKILL',maxBuffer:4*1024*1024});
+  const saved=maintenance.read(path.join(dir,'journal.json'));
+  let verified;try{verified=finalizerRequire(path.join(dir,'finalizer.cjs')).quiesce(dir,saved,{terminate:true,kind:'installer'});}catch(error){verified={confirmed:false,error:error.message};}
+  maintenance.update(dir,saved,{installerExitConfirmed:verified.confirmed,installerExitUnconfirmed:!verified.confirmed});ctx.journal=saved;
+  if(!verified.confirmed)throw Error(verified.error||'installer process exit unconfirmed');
+  if(result.error||result.status!==0){const error=Error(result.error?.message||String(result.stderr||'').trim()||'npm '+stage+' exited '+result.status);error.stderr=String(result.stderr||'');throw error;}
+  return String(result.stdout||'');
+}
+export function step4_npmInstallGlobal(ctx, deps = {}) {
   const startTime = Date.now();
   const execSyncFn = deps.execSync ?? execSync;
 
@@ -619,6 +670,15 @@ function step4_npmInstallGlobal(ctx, deps = {}) {
 
   try {
     // Pack first — creates a .tgz tarball (copies, not symlinks)
+    if (ctx.preInstallProtection) markInstallationIntent(ctx);
+    if(ctx.preInstallProtection&&!deps.execSync){
+      const npmCli=resolveProtectedNpmCli();
+      const packed=runProtectedInstaller(ctx,{stage:'pack',npmCli,args:['pack','--pack-destination','.'],cwd:ctx.tempDir});
+      const tarballName=packed.trim().split(/\r?\n/).at(-1);
+      if(!tarballName||path.basename(tarballName)!==tarballName||!tarballName.endsWith('.tgz'))throw Error('npm pack returned an invalid tarball filename');
+      runProtectedInstaller(ctx,{stage:'install',npmCli,args:['install','-g',path.join(ctx.tempDir,tarballName)],cwd:ctx.tempDir});
+      return {step:4,name:'npm_install_global',status:'done',duration:Date.now()-startTime};
+    }
     const tarballName = execSyncFn('npm pack --pack-destination .', {
       cwd: ctx.tempDir,
       encoding: 'utf8',
@@ -659,7 +719,7 @@ export function step5_syncCoreSkills(ctx, deps = {}) {
     // removes after the upgrade commits.
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
     const conflictBackupDir = path.join(zylosDir, '.backup', timestamp, 'conflicts');
-    const syncResult = syncCoreSkillsFn(newSkillsSrc, conflictBackupDir, { mode: ctx.mode });
+    const syncResult = syncCoreSkillsFn(newSkillsSrc, conflictBackupDir, { mode: ctx.mode, transactionId: ctx.transactionId, transactionDir:ctx.transactionDir });
 
     const parts = [];
     if (syncResult.synced.length) parts.push(`${syncResult.synced.length} synced`);
@@ -695,15 +755,18 @@ export function step5_syncCoreSkills(ctx, deps = {}) {
 /**
  * Step 6: install/update skill dependencies
  */
-function step6_installSkillDeps(ctx) {
+export function step6_installSkillDeps(ctx, deps = {}) {
   const startTime = Date.now();
-  const entries = fs.readdirSync(SKILLS_DIR, { withFileTypes: true });
+  const skillsRoot=deps.skillsDir || SKILLS_DIR;
+  const execSyncFn=deps.execSync || execSync;
+  const entries = fs.readdirSync(skillsRoot, { withFileTypes: true });
+  const allowed=ctx.preInstallProtection ? new Set(ctx.coreManifest.map(entry=>entry.name)) : null;
   let installed = 0;
   const failed = [];
 
   for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
-    const skillDir = path.join(SKILLS_DIR, entry.name);
+    if (!entry.isDirectory() || (allowed&&!allowed.has(entry.name))) continue;
+    const skillDir = path.join(skillsRoot, entry.name);
     const pkgPath = path.join(skillDir, 'package.json');
     if (!fs.existsSync(pkgPath)) continue;
 
@@ -711,7 +774,7 @@ function step6_installSkillDeps(ctx) {
       const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
       if (!pkg.dependencies || Object.keys(pkg.dependencies).length === 0) continue;
 
-      execSync('npm install --omit=dev', {
+      execSyncFn('npm install --omit=dev', {
         cwd: skillDir,
         stdio: 'pipe',
         timeout: 120000,
@@ -1237,9 +1300,20 @@ export function step11_startCoreServices(ctx, deps = {}) {
   if (ecosystemTemplateSrc && fsApi.existsSync(ecosystemTemplateSrc)) {
     try {
       fsApi.mkdirSync(pm2Dir, { recursive: true });
-      fsApi.copyFileSync(ecosystemTemplateSrc, ecosystemDest);
+      if(ctx.preInstallProtection&&!ctx.journal.initialIdentity.ecosystemHash){
+        if(fsApi.existsSync(ecosystemDest))throw Error('originally missing ecosystem appeared without provenance');
+        const staging=path.join(ctx.transactionDir,'new-ecosystem.cjs'),intendedHash=maintenance.hash(ecosystemTemplateSrc);
+        maintenance.update(ctx.transactionDir,ctx.journal,{ecosystemCreationIntent:{target:ecosystemDest,originalMissing:true,intendedHash,staging}});
+        fsApi.copyFileSync(ecosystemTemplateSrc,staging);
+        const fd=fs.openSync(staging,'r');try{fs.fsyncSync(fd);}finally{fs.closeSync(fd);}
+        maintenance.fsyncDir(ctx.transactionDir);
+        // link publishes only into an absent destination; a concurrent file
+        // cannot be overwritten or absorbed into this transaction's provenance.
+        fs.linkSync(staging,ecosystemDest);maintenance.fsyncDir(path.dirname(ecosystemDest));
+      }else fsApi.copyFileSync(ecosystemTemplateSrc, ecosystemDest);
       ecosystemPath = ecosystemDest;
-    } catch {
+    } catch(error) {
+      if(ctx.preInstallProtection)return {step:11,name:'start_core_services',status:'failed',error:error.message,duration:Date.now()-startTime};
       // Non-fatal — if copy fails, we can still use an already-deployed ecosystem file below.
     }
   } else if (fsApi.existsSync(ecosystemDest)) {
@@ -1475,6 +1549,12 @@ function buildSelfUpgradeResult(ctx, failedStep, rollbackResults = null, rollbac
     to: ctx.to,
     steps: ctx.steps,
     backupDir: ctx.backupDir,
+    dbBackupDir: ctx.dbBackupDir || null,
+    databases: ctx.dbManifest?.databases || null,
+    preInstallProtection: Boolean(ctx.preInstallProtection),
+    transactionDir: ctx.transactionDir || null,
+    archiveDir: ctx.archiveDir || null,
+    cleanupWarnings: ctx.cleanupWarnings || [],
     templates,
     migrationHints,
     instructionFilesRebuilt,
@@ -1486,7 +1566,15 @@ function buildSelfUpgradeResult(ctx, failedStep, rollbackResults = null, rollbac
 
 export function createFinalizeState(ctx) {
   return {
-    schemaVersion: 1,
+    schemaVersion: ctx.preInstallProtection ? 2 : 1,
+    ...(ctx.preInstallProtection ? {
+      preInstallProtection: true,
+      transactionDir: ctx.transactionDir,
+      transactionId: ctx.transactionId,
+      coreManifest: ctx.coreManifest,
+      dbBackupDir: ctx.dbBackupDir,
+      dbManifest:ctx.dbManifest,
+    } : {}),
     tempDir: ctx.tempDir,
     backupDir: ctx.backupDir,
     servicesWereRunning: ctx.servicesWereRunning,
@@ -1513,15 +1601,34 @@ function runInstalledFinalizer(ctx) {
   }
 
   const statePath = writeFinalizeState(ctx);
-  const result = spawnSync(process.execPath, [finalizeScript, statePath], {
+  let finalizerArgs=[finalizeScript,statePath];
+  if(ctx.preInstallProtection){
+    const nonce=crypto.randomBytes(16).toString('hex');
+    maintenance.update(ctx.transactionDir,ctx.journal,{finalizerLaunchIntent:{nonce,parent:maintenance.identity()}});
+    finalizerArgs=[path.join(ctx.transactionDir,'finalizer.cjs'),finalizeScript,statePath,ctx.transactionDir,nonce];
+  }
+  const result = spawnSync(process.execPath, finalizerArgs, {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
     timeout: 180000,
+    ...(ctx.preInstallProtection ? {detached:true,killSignal:'SIGKILL'} : {}),
   });
 
-  if (result.error) {
-    throw result.error;
+  if(ctx.preInstallProtection){
+    const dir=fs.existsSync(ctx.transactionDir)?ctx.transactionDir:path.join(ctx.journal.zylosDir,'.backup','self-upgrade-archive',ctx.transactionId);
+    const saved=maintenance.read(path.join(dir,'journal.json'));
+    const verified=requireFinalizerExit(dir,saved,true);
+    ctx.finalizerExitUnconfirmed=!verified.confirmed;
+    if(verified.confirmed){
+      maintenance.update(dir,saved,{finalizerExitConfirmed:true,finalizerExitUnconfirmed:false});
+      if(maintenance.terminalValid(saved)){const cleanup=maintenance.finishTerminal(dir,saved);ctx.archiveDir=cleanup.archiveDir;ctx.cleanupWarnings=cleanup.warnings;}
+    }
+    else {
+      maintenance.update(dir,saved,{finalizerExitUnconfirmed:true});
+      throw Error(verified.error || 'finalizer process exit unconfirmed');
+    }
   }
+  if(result.error)throw result.error;
 
   const output = String(result.stdout || '').trim();
   if (!output) {
@@ -1535,11 +1642,11 @@ function runInstalledFinalizer(ctx) {
     throw new Error(err);
   }
 
-  return parsed;
+  return ctx.preInstallProtection ? {...parsed,archiveDir:ctx.archiveDir||parsed.archiveDir,cleanupWarnings:ctx.cleanupWarnings||parsed.cleanupWarnings||[]} : parsed;
 }
 
 export function runSelfUpgradeFinalize(state = {}, deps = {}) {
-  if (state.schemaVersion !== undefined && state.schemaVersion !== 1) {
+  if (state.schemaVersion !== undefined && ![1, 2].includes(state.schemaVersion)) {
     return {
       action: 'self_upgrade',
       success: false,
@@ -1557,6 +1664,12 @@ export function runSelfUpgradeFinalize(state = {}, deps = {}) {
     newVersion: state.newVersion || state.to,
     mode: state.mode,
   });
+  ctx.preInstallProtection = state.schemaVersion===2 && state.preInstallProtection===true;
+  ctx.transactionDir=state.transactionDir;ctx.transactionId=state.transactionId;ctx.coreManifest=state.coreManifest;ctx.dbBackupDir=state.dbBackupDir;ctx.dbManifest=state.dbManifest;
+  if(ctx.preInstallProtection){
+    try {ctx.journal=maintenance.transaction(ZYLOS_DIR,ctx.transactionDir);if(!ctx.journal.installationIntent)throw Error('finalizer without durable installation intent');}
+    catch(error){return {success:false,error:error.message,rollback:{attempted:false,completed:false,performed:false},recovery_required:true};}
+  }
   ctx.backupDir = state.backupDir || null;
   ctx.servicesWereRunning = Array.isArray(state.servicesWereRunning) ? [...state.servicesWereRunning] : [];
   ctx.from = state.from || null;
@@ -1567,7 +1680,9 @@ export function runSelfUpgradeFinalize(state = {}, deps = {}) {
   let failedStep = null;
 
   for (const stepFn of steps) {
-    const result = stepFn(ctx);
+    let result;
+    try {if(ctx.preInstallProtection && stepFn===step11_startCoreServices)protectedDataReady(ctx);result=stepFn(ctx);}
+    catch(error){result={step:11,name:'offline_preflight',status:'failed',error:error.message};}
     result.total = total;
     ctx.steps.push(result);
 
@@ -1582,6 +1697,7 @@ export function runSelfUpgradeFinalize(state = {}, deps = {}) {
     return buildSelfUpgradeResult(ctx, failedStep, null, false);
   }
 
+  if(ctx.preInstallProtection)protectedSuccess(ctx);
   return buildSelfUpgradeResult(ctx, null);
 }
 
@@ -1603,6 +1719,10 @@ export function runSelfUpgrade({ tempDir, newVersion, mode, onStep } = {}, deps 
     ctx.from = current.version;
   }
   ctx.to = newVersion || null;
+  if(!deps.preInstallSteps) {
+    try {beginUpgrade(ctx,{zylosDir:deps.zylosDir ?? ZYLOS_DIR,skillsDir:deps.skillsDir ?? SKILLS_DIR});}
+    catch(error){return {action:'self_upgrade',success:false,error:error.message,preInstallProtection:false,rollback:{attempted:false,completed:false,performed:false},recovery_required:true};}
+  }
 
   const preInstallSteps = deps.preInstallSteps ?? [
     (stepCtx) => step1_backupCoreSkills(stepCtx, deps.step1),
@@ -1628,6 +1748,7 @@ export function runSelfUpgrade({ tempDir, newVersion, mode, onStep } = {}, deps 
   }
 
   if (failedStep) {
+    if(ctx.preInstallProtection) {const rb=recovery(ctx);return {...buildSelfUpgradeResult(ctx,failedStep),backupDir:ctx.backupDir,dbBackupDir:ctx.dbBackupDir,preInstallProtection:true,transactionDir:ctx.transactionDir,rollback:{...rb,performed:rb.attempted},recovery_required:rb.recovery_required};}
     const rollbackFn = deps.rollbackSelf ?? rollbackSelf;
     const rollbackResults = rollbackFn(ctx);
     return buildSelfUpgradeResult(ctx, failedStep, rollbackResults);
@@ -1641,11 +1762,15 @@ export function runSelfUpgrade({ tempDir, newVersion, mode, onStep } = {}, deps 
       ctx.steps.push(step);
       if (onStep) onStep(step);
     }
+    if(ctx.preInstallProtection && finalizeResult.success===false){const rb=recovery(ctx);return {...finalizeResult,from:ctx.from,steps:ctx.steps,dbBackupDir:ctx.dbBackupDir,transactionDir:ctx.transactionDir,rollback:{...rb,performed:rb.attempted},recovery_required:rb.recovery_required};}
+    ctx.releaseControl?.();ctx.releaseControl=null;
     return {
       ...finalizeResult,
       from: ctx.from,
       steps: ctx.steps,
       backupDir: finalizeResult.backupDir || ctx.backupDir,
+      dbBackupDir:finalizeResult.dbBackupDir || ctx.dbBackupDir || null,
+      databases:finalizeResult.databases || ctx.dbManifest?.databases || null,
     };
   } catch (err) {
     const error = err.stderr?.toString().trim() || err.message;
@@ -1659,6 +1784,7 @@ export function runSelfUpgrade({ tempDir, newVersion, mode, onStep } = {}, deps 
     };
     ctx.steps.push(failedStep);
     if (onStep) onStep(failedStep);
+    if(ctx.preInstallProtection){const rb=recovery(ctx);return {...buildSelfUpgradeResult(ctx,failedStep),transactionDir:ctx.transactionDir,dbBackupDir:ctx.dbBackupDir,rollback:{...rb,performed:rb.attempted},recovery_required:rb.recovery_required};}
     return buildSelfUpgradeResult(ctx, failedStep, null, false);
   }
 }
@@ -1685,7 +1811,12 @@ export function cleanupTemp(tempDir) {
 
 // Also clean up backup dirs after successful upgrade
 export function cleanupBackup(backupDir) {
-  if (backupDir && fs.existsSync(backupDir)) {
-    fs.rmSync(backupDir, { recursive: true, force: true });
+  if(!backupDir||!fs.existsSync(backupDir))return;
+  const resolved=fs.realpathSync(backupDir);
+  const roots=getAllowedTmpRoots();
+  if(!roots.some(root=>resolved.startsWith(root+path.sep)&&path.basename(resolved).startsWith('zylos-core-backup-'))) {
+    // Protected code cleanup is performed only by the verified transaction success path.
+    return;
   }
+  fs.rmSync(resolved,{recursive:true,force:true});
 }

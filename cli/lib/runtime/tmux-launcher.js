@@ -12,6 +12,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import { applyUpgradePrompt } from './upgrade-context.js';
+import { createRequire } from 'node:module';
+const require=createRequire(import.meta.url);
 
 const SIGNAL_NUMBERS = {
   SIGHUP: 1, SIGINT: 2, SIGQUIT: 3, SIGTERM: 15, SIGKILL: 9,
@@ -34,6 +37,15 @@ try {
   process.stderr.write(`Failed to read/parse spec: ${err.message}\n`);
   process.exit(1);
 }
+
+// File-only recovery must precede normal runtime SessionStart/C4 imports.
+try {
+  const stable=path.join(spec.cwd || process.cwd(),'.zylos','upgrade','bootstrap.cjs');
+  if(fs.existsSync(stable)){const recovery=require(stable).bootstrap(spec.cwd || process.cwd());if(recovery.active){
+    if(recovery.recovery_required)process.stderr.write(recovery.error+'\n');
+    spec.args=applyUpgradePrompt(spec.args || [],recovery.prompt,spec.promptIndex);
+  }}
+}catch(error){process.stderr.write('Upgrade recovery discovery failed: '+error.message+'\n');process.exit(1);}
 
 // 3. Spawn child
 const child = spawn(spec.command, spec.args || [], {
