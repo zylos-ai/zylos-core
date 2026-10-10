@@ -34,7 +34,7 @@ The review disposition and regression evidence are recorded in [review-round1.md
 
 ## Review round 2 simplification
 
-The second review accepts B2–B4, M1–M9 and the original minor fixes. This revision narrows recovery validation to existing materials; removes terminal archive/cleanup pointers, launch wrappers and per-row database hashes; normalizes private snapshots to DELETE mode; and copies/probe-loads the independent native closure without per-file closure hashing. Runner-file hashes and snapshot SHA-256 remain. Linux controller serialization remains a kernel lock because a stale PID-file unlink can delete a successor lock. Unsupported environments retain the original upgrade path and explicitly report no preinstall protection.
+The second review accepts B2–B4, M1–M9 and the original minor fixes. This revision narrows recovery validation to existing materials; removes terminal archive/cleanup pointers, launch wrappers and per-row database hashes; normalizes private snapshots to DELETE mode; and copies/probe-loads the independent native closure without per-file closure hashing. Runner-file hashes and snapshot SHA-256 remain. Linux controller serialization remains a kernel lock because a stale PID-file unlink can delete a successor lock. The original revision retained the legacy path on unsupported environments; the Mac extension below stops before installation when its native protection prerequisite is unavailable.
 
 A crashed launch without a durably known PID retains isolation and needs exit evidence. This smaller containment protocol does not promise autonomous recovery for that gap. Original A18 boot evidence is historical only, and the reviewed simplifications require new validation.
 
@@ -105,9 +105,20 @@ This is an evidence map, not a claim that every environmental fault permutation 
 | A29 | Initial journal without descriptor/snapshot, committed WAL/checkpoint, changed CLI tree/link, and abort-write/cleanup interruption exercised; durable intent and initial publication ordering reviewed. Not every preinstall phase has a distinct real-machine crash run. |
 | A30 | 100 verified terminals plus real active transaction contract; incomplete/forged terminal shape and provisional abort regressions; residual marker continuation; 32-active bounded-memory fixture and exhausted scan budget fail closed. |
 
+## macOS protected recovery extension
+
+The Mac extension is based on PR #817 head `285d518fc506161780d7e75537659465cc300ede`.
+It shares the existing recovery state machine and adds a packaged native helper,
+frozen parent/controller bindings, file-before-rename strong synchronization,
+and canonical entry checks for the SQLite worker and C4 startup hook.
+See [Mac validation and limits](evidence/core803/macos-validation.md) for the exact
+host, executed suites, negative controls, artifact hashes, and untested boundaries.
+This extends the synthetic recovery evidence; it does not certify a real Mac
+self-upgrade, logout/reboot, unattended pre-login startup, or physical power loss.
+
 ## Supported limits and trust boundary
 
-- Protected baseline, stable file discovery, trusted Linux Node/flock/ps/PM2 and actual native owner dependencies are prerequisites. Automatic restart depends on the existing configured machine startup chain and available runtime credentials; no dedicated supervisor is installed.
+- Protected baseline, stable file discovery, trusted Node/ps/PM2, Linux flock or the frozen macOS native helper, and actual native owner dependencies are prerequisites. Automatic restart depends on the existing configured machine startup chain and available runtime credentials; no dedicated supervisor is installed.
 - Private owner-written material is the provenance trust root. Structural/path/ownership/hash checks detect damaged, redirected, incomplete or inconsistent records; hashes are not signatures against an owner deliberately forging all coherent records and hashes.
 - Strict managed-service isolation and identified-CLI waiting do not control arbitrary external sqlite3 clients, a program bypassing core entrypoints, or lifecycle scripts deliberately creating a new session. This limitation is already part of the simplified contract; no occupancy scan was authorized.
 - Three DB snapshots/replacement are not cross-database atomic; accepted window data may be lost on compensation. Snapshot/rescue sources are retained.

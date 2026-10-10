@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { createRequire } from 'node:module';
+import { spawnSync } from 'node:child_process';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 
 const DATABASES = [
@@ -9,6 +10,14 @@ const DATABASES = [
   {source:'scheduler/scheduler.db',owner:'scheduler',schema:'scripts/schema.js'},
   {source:'web-console/web-console.db',owner:'web-console',schema:'scripts/schema.js'},
 ];
+function syncSnapshot(fd, input) {
+  if (process.platform !== 'darwin') { fs.fsyncSync(fd); return; }
+  if (!input.nativeHelperPath) throw new Error('Mac snapshot synchronization helper unavailable');
+  const result = spawnSync(input.nativeHelperPath, ['fullsync', '3'], {
+    encoding: 'utf8', timeout: 10000, stdio: ['ignore', 'pipe', 'pipe', fd]
+  });
+  if (result.error || result.status !== 0) throw new Error(`Mac snapshot synchronization failed: ${result.error?.message || result.stderr || `exit ${result.status}`}`);
+}
 const hash = file => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 function driver(input, item) {
   const root=input.schemaRoot || path.join(input.zylosDir,'.claude','skills');
@@ -127,12 +136,17 @@ export async function execute(input) {
       if (snapshot.pragma('journal_mode=DELETE', {simple:true}) !== 'delete') throw new Error('Snapshot journal mode normalization failed');
     } finally { snapshot.close(); }
     const state=inspect(Database,target);
-    const fd=fs.openSync(target,'r');try{fs.fsyncSync(fd);}finally{fs.closeSync(fd);}
+    const fd=fs.openSync(target,'r');try{syncSnapshot(fd,input);}finally{fs.closeSync(fd);}
     rows.push({source:item.source,status:'backed_up',...state,file,bytes:fs.statSync(target).size,sha256:hash(target)});
   }
   return {databases:rows};
 }
-if(process.argv[1]&&path.resolve(process.argv[1])===path.resolve(fileURLToPath(import.meta.url))) {
+// Node resolves module URLs through symlinks; argv may retain the alias.
+function isMainModule() {
+  try { return !!process.argv[1] && fs.realpathSync(process.argv[1]) === fs.realpathSync(fileURLToPath(import.meta.url)); }
+  catch { return false; }
+}
+if(isMainModule()) {
   const timer=setTimeout(()=>{process.stderr.write('SQLite worker deadline exceeded\n');process.exit(1);},90000);
   try {process.stdout.write(JSON.stringify(await execute(JSON.parse(process.argv[2]))));}
   catch(error){process.stderr.write(error.stack+'\n');process.exitCode=1;}

@@ -3,15 +3,17 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
+const maintenance = createRequire(import.meta.url)('./upgrade-maintenance.cjs');
 export const CORE_DATABASES=Object.freeze([
   {source:'comm-bridge/c4.db',owner:'comm-bridge',schema:'scripts/c4-schema.js'},
   {source:'scheduler/scheduler.db',owner:'scheduler',schema:'scripts/schema.js'},
   {source:'web-console/web-console.db',owner:'web-console',schema:'scripts/schema.js'},
 ]);
 const WORKER=fileURLToPath(new URL('./core-db-backup-worker.js',import.meta.url));
-function syncDir(dir){const fd=fs.openSync(dir,'r');try{fs.fsyncSync(fd);}finally{fs.closeSync(fd);}}
-function durableJson(file,value){const fd=fs.openSync(file,'wx',0o600);try{fs.writeFileSync(fd,JSON.stringify(value,null,2)+'\n');fs.fsyncSync(fd);}finally{fs.closeSync(fd);}syncDir(path.dirname(file));}
+function syncDir(dir){const fd=fs.openSync(dir,'r');try{maintenance.fsyncFd(fd);}finally{fs.closeSync(fd);}}
+function durableJson(file,value){const fd=fs.openSync(file,'wx',0o600);try{fs.writeFileSync(fd,JSON.stringify(value,null,2)+'\n');maintenance.fsyncFd(fd);}finally{fs.closeSync(fd);}syncDir(path.dirname(file));}
 export function runCoreDbWorker(payload,{workerPath=WORKER,nodePath=process.execPath,timeout=120000}={}) {
+  if(process.platform==='darwin') payload={nativeHelperPath:maintenance.nativeHelper(),...payload};
   const result=spawnSync(nodePath,[workerPath,JSON.stringify(payload)],{encoding:'utf8',timeout,maxBuffer:4*1024*1024,windowsHide:true});
   if(result.error||result.status!==0) throw new Error(`SQLite ${payload.action} failed: ${result.error?.message || result.stderr || `exit ${result.status}`}`);
   try{return JSON.parse(result.stdout);}catch{throw new Error('Invalid SQLite worker response');}
@@ -81,7 +83,7 @@ export function prepareRecoveryDependencies(transactionDir,zylosDir) {
     for(const entry of fs.readdirSync(dir,{withFileTypes:true})) {
       const file=path.join(dir,entry.name);
       if(entry.isDirectory()) syncTree(file);
-      else {fs.chmodSync(file,0o600);const fd=fs.openSync(file,'r');try{fs.fsyncSync(fd);}finally{fs.closeSync(fd);}}
+      else {fs.chmodSync(file,0o600);const fd=fs.openSync(file,'r');try{maintenance.fsyncFd(fd);}finally{fs.closeSync(fd);}}
     }
     fs.chmodSync(dir,0o700);syncDir(dir);
   }

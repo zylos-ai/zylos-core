@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {createRequire} from 'node:module';
+import {fileURLToPath} from 'node:url';
 import {CORE_DATABASES,createCoreDbSnapshot,prepareRecoveryDependencies,runCoreDbWorker} from '../core-db-backup.js';
 const installed=process.env.CORE_DB_TEST_SKILL || path.join(os.homedir(),'zylos','.claude','skills','comm-bridge');
 let Database;try{Database=createRequire(path.join(installed,'package.json'))('better-sqlite3');}catch{}
@@ -90,4 +91,14 @@ test('copied closure is probe-loaded and remains independent of owner installati
 test('old owner without pure schema module fails explicit compatibility preflight',t=>{
  const dir=fixture(t);const schemaRoot=path.join(dir,'old-skills');
  assert.throws(()=>runCoreDbWorker({action:'offline-preflight',zylosDir:dir,schemaRoot}),/Incompatible owner schema code comm-bridge/);
+});
+
+test('worker executes through a directory alias without skipping its CLI entry',t=>{
+ const dir=fixture(t);
+ const alias=path.join(dir,'worker-alias');
+ const worker=fileURLToPath(new URL('../core-db-backup-worker.js',import.meta.url));
+ fs.symlinkSync(path.dirname(worker),alias,'dir');
+ const result=runCoreDbWorker({action:'snapshot',zylosDir:dir,stagingDir:dir},{workerPath:path.join(alias,path.basename(worker))});
+ assert.equal(result.databases.length,3);
+ assert.ok(result.databases.every(row=>row.status==='missing'));
 });

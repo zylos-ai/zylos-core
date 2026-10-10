@@ -45,11 +45,33 @@ launch discovers the retained transaction. Once recovery is running, it restarts
 all recorded original services independently of dump status, verifies them
 online, then saves the list. `status` only inspects; `resume` performs recovery.
 
-Protected upgrades require Linux `/proc` and a trusted `flock`. Other platforms
-(including macOS) retain the original self-upgrade/rollback path and explicitly
-report `preInstallProtection=false` with the unsupported-environment reason.
-They do not create a protected transaction. No optional `/proc` or `lsof`
-database occupancy scan is performed. The `recovery configure` and `verify`
+Protected upgrades use Linux `/proc` and a trusted `flock`, or the packaged
+macOS native helper for descriptor locks, boot/PID/start-time identity and
+`F_FULLFSYNC`. macOS uses the same preinstall three-database snapshot, schema
+checks, recovery state machine and service isolation. If its helper or capability
+check is unavailable, the upgrade stops before installation; it does not silently
+fall back to an unprotected Mac upgrade. Other unsupported platforms retain the
+legacy path and report `preInstallProtection=false`.
+
+The Mac helper and its hash are frozen with the stable bootstrap and transaction
+materials before installation. The live updater binds its maintenance operations
+and controller-release callback to the stable frozen copy before taking control;
+it can still record installer exit when npm has replaced or damaged its package.
+Recovery uses the frozen copies, not a helper loaded from the newly installed package. A process-identity query failure is not proof
+that the old controller died. The kernel guard file is retained, with acquisition
+bounded by a timeout; controller death remains separate from confirming that
+installer/finalizer process groups have exited. Full synchronization failures
+propagate instead of being reported as durable publication.
+
+The shipped executable contains arm64 and x86_64 slices with a macOS 11.0 build
+target. Build target and available slices are not runtime certification: see the
+validation report for tested hosts. End users need no compiler or Node addon.
+A user LaunchAgent starts on login; it does not establish unattended recovery
+before login. The existing PM2/activity-monitor/runtime startup chain and database
+gates must be configured and usable. This feature does not install a LaunchDaemon
+or change the operator's startup configuration.
+
+No optional `/proc` or `lsof` database occupancy scan is performed. The `recovery configure` and `verify`
 supervisor commands are retired; status and resume remain file-only operations.
 
 ## Status and recovery

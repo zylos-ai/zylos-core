@@ -1,0 +1,36 @@
+{
+  "base": "285d518fc506161780d7e75537659465cc300ede",
+  "host": {
+    "arch": "arm64",
+    "macOS": "26.6.2",
+    "build": "25G83",
+    "node": "24.14.0"
+  },
+  "results": {
+    "upgrade": {
+      "tests": 268,
+      "passed": 268,
+      "failed": 0,
+      "skipped": 0
+    },
+    "owner_startup_schema": {
+      "tests": 42,
+      "passed": 42,
+      "failed": 0,
+      "skipped": 0
+    }
+  },
+  "sha256": {
+    "cli/lib/core-db-backup-worker.js": "eed01b37cd456eb151ce48b4cfb0f1db46477a5a096b7f0103b27bf0fbfd0a7e",
+    "cli/lib/core-db-backup.js": "bd7b4689a507a30d0b35a6edb85b337b809b105cb431a2ee93c9d5635c9d9782",
+    "cli/lib/self-upgrade.js": "e08e308737b199ea52acb999a2f4d405f34dddbde5997f3cce427dc2ae609474",
+    "cli/lib/upgrade-maintenance.cjs": "1fa7cc6552031a4145fefa1786483f40d71f487142c1b2ce519f664f17486f69",
+    "cli/lib/upgrade-protection.js": "1e4c1b641857a60920fdfc0fa889afaf2706dd4a9e43a2bb40bf7ed32c810b80",
+    "cli/lib/upgrade-recovery.cjs": "e494ab1155e6a8bfe6ccde67899eef8ee73d7a155f05d830c962ae498749e691",
+    "skills/comm-bridge/scripts/c4-session-init.js": "47c97cc984d35085e9cb9a4f3bf050e9b0b5155960d7f3ee9277d736a2cb4bd4",
+    "cli/native/macos-recovery-helper": "ddc65a3584f7286c15e4eb2d61a6397daa318f263d88b140df1d1cbebffe4fda",
+    "cli/native/macos-recovery-helper.c": "7657263bed42017bb75e6f0bf5132028d54c779f1eabc01267e2463e250e3b41",
+    "cli/native/macos-recovery-helper.sha256": "e19417cd47c37ac45be1679b0ce9547201abf41ad819822c452ccc6e7a2d699a",
+    "scripts/build-macos-recovery-helper.sh": "00fc303d4e86867fca950febfbf83799d08ad94830e0e1fb1a5e78dcd7777e68"
+  }
+}

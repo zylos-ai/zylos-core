@@ -3,10 +3,10 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { beginUpgrade, maintenance as m, protectedDataReady } from '../upgrade-protection.js';
+import { beginUpgrade, maintenance as m, maintenanceFor, protectedDataReady } from '../upgrade-protection.js';
 
 function fixture(t) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'upgrade-publication-'));
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'upgrade-publication-')));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const coreDir = path.join(root, 'old-package');
   const tempDir = path.join(root, 'new-package');
@@ -83,9 +83,9 @@ test('data-ready publication refreshes parent context before later durable write
   const f = fixture(t);
   beginUpgrade(f.ctx, { zylosDir: f.root, skillsDir: f.skillsDir });
   t.after(() => f.ctx.releaseControl());
-  const preflight = m.preflight;
-  m.preflight = () => ({ success: true });
-  try { protectedDataReady(f.ctx); } finally { m.preflight = preflight; }
+  const active = maintenanceFor(f.ctx), preflight = active.preflight;
+  active.preflight = () => ({ success: true });
+  try { protectedDataReady(f.ctx); } finally { active.preflight = preflight; }
   assert.equal(f.ctx.journal.phase, 'new_data_ready');
   m.update(f.ctx.transactionDir, f.ctx.journal, { ecosystemCreationIntent: { test: true } });
   assert.equal(m.read(path.join(f.ctx.transactionDir, 'journal.json')).phase, 'new_data_ready');
@@ -96,11 +96,14 @@ test('controller acquisition failure removes only its unpublished staging attemp
   fs.mkdirSync(stagingRoot, {recursive:true, mode:0o700});
   const unrelated = path.join(stagingRoot, 'prior-attempt');
   fs.mkdirSync(unrelated, {mode:0o700});fs.writeFileSync(path.join(unrelated, 'note'), 'keep');
-  const acquire = m.acquire;
-  m.acquire = () => {throw Error('injected controller failure');};
+  const open = fs.openSync;
+  fs.openSync = (file, ...args) => {
+    if (String(file).endsWith('/controller.guard')) throw Error('injected controller failure');
+    return open(file, ...args);
+  };
   try {
     assert.throws(() => beginUpgrade(f.ctx, {zylosDir:f.root, skillsDir:f.skillsDir}), /injected controller failure/);
-  } finally {m.acquire = acquire;}
+  } finally {fs.openSync = open;}
   assert.deepEqual(fs.readdirSync(stagingRoot), ['prior-attempt']);
   assert.equal(fs.readFileSync(path.join(unrelated, 'note'), 'utf8'), 'keep');
   assert.deepEqual(fs.readdirSync(path.join(f.root, '.backup/self-upgrade')), []);

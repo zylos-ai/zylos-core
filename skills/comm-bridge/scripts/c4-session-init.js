@@ -288,6 +288,12 @@ function main() {
   });
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+// The module URL is canonicalized by Node, while argv may retain a macOS
+// /var alias (or another directory symlink). Recovery cues must still run.
+function isMainModule() {
+  try { return !!process.argv[1] && fs.realpathSync(process.argv[1]) === fs.realpathSync(fileURLToPath(import.meta.url)); }
+  catch { return false; }
+}
+if (isMainModule()) {
   main();
 }

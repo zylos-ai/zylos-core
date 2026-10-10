@@ -9,11 +9,13 @@ import {pathToFileURL} from 'node:url';
 import {runProtectedInstaller,resolveProtectedNpmCli} from '../self-upgrade.js';
 const require=createRequire(import.meta.url),m=require('../upgrade-maintenance.cjs');
 function fixture(t,body){
- const root=fs.mkdtempSync(path.join(os.tmpdir(),'upgrade-installer-')),dir=path.join(root,'.backup/self-upgrade/tx');fs.mkdirSync(dir,{recursive:true,mode:0o700});
+ const root=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'upgrade-installer-'))),dir=path.join(root,'.backup/self-upgrade/tx');fs.mkdirSync(dir,{recursive:true,mode:0o700});
  for(const [src,dest] of [['upgrade-maintenance.cjs','maintenance.cjs'],['upgrade-finalizer.cjs','finalizer.cjs']]){fs.copyFileSync(path.resolve('cli/lib',src),path.join(dir,dest));fs.chmodSync(path.join(dir,dest),0o600);}fs.writeFileSync(path.join(dir,'runner.cjs'),'// fixture',{mode:0o600});
+ const materialNames=['maintenance.cjs','finalizer.cjs','runner.cjs'];
+ if(process.platform==='darwin') for(const name of ['macos-recovery-helper','macos-recovery-helper.sha256']) {fs.copyFileSync(path.resolve('cli/native',name),path.join(dir,name));fs.chmodSync(path.join(dir,name),name.endsWith('.sha256')?0o600:0o700);materialNames.push(name);}
  const closure=path.join(dir,'sqlite-runtime'),files=['package.json','core-db-backup-worker.js','node_modules/better-sqlite3/lib/index.js'];
  const driverClosureHashes=files.map(file=>{const p=path.join(closure,file);fs.mkdirSync(path.dirname(p),{recursive:true,mode:0o700});fs.writeFileSync(p,'fixture',{mode:0o600});return {file,bytes:fs.statSync(p).size,sha256:m.hash(p)};});
- const d={formatVersion:1,transactionId:'tx',nodePath:process.execPath,runnerPath:path.join(dir,'runner.cjs'),workerPath:path.join(closure,'core-db-backup-worker.js'),driverPath:path.join(closure,'node_modules/better-sqlite3/lib/index.js'),driverClosureRoot:closure,driverClosureHashes,hashes:Object.fromEntries(['maintenance.cjs','finalizer.cjs','runner.cjs'].map(file=>[file,m.hash(path.join(dir,file))]))};m.durable(path.join(dir,'descriptor.json'),d);
+ const d={formatVersion:1,transactionId:'tx',nodePath:process.execPath,runnerPath:path.join(dir,'runner.cjs'),workerPath:path.join(closure,'core-db-backup-worker.js'),driverPath:path.join(closure,'node_modules/better-sqlite3/lib/index.js'),driverClosureRoot:closure,driverClosureHashes,hashes:Object.fromEntries(materialNames.map(file=>[file,m.hash(path.join(dir,file))]))};m.durable(path.join(dir,'descriptor.json'),d);
  const j={formatVersion:1,transactionId:'tx',zylosDir:root,nodePath:process.execPath,initialIdentity:{nodePath:process.execPath},phase:'installing',installationIntent:true};m.update(dir,j);
  const npmCli=path.join(root,'npm-cli.js');fs.writeFileSync(npmCli,body,{mode:0o600});const helper=require(path.join(dir,'finalizer.cjs'));
  t.after(()=>{try{const saved=m.read(path.join(dir,'journal.json'));if(saved.installerPid)process.kill(-saved.installerPid,'SIGKILL');}catch{}fs.rmSync(root,{recursive:true,force:true});});

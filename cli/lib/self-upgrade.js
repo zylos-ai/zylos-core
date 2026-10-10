@@ -43,7 +43,7 @@ import { createRequire as createFinalizerRequire } from 'node:module';
 const finalizerRequire=createFinalizerRequire(import.meta.url);
 function requireFinalizerExit(dir,j,terminate){return finalizerRequire(path.join(dir,'finalizer.cjs')).quiesce(dir,j,{terminate});}
 
-import { beginUpgrade, saveProtectedCode, prepareProtectedInstall, markInstallationIntent, recovery, protectedDataReady, protectedSuccess, maintenance } from './upgrade-protection.js';
+import { beginUpgrade, saveProtectedCode, prepareProtectedInstall, markInstallationIntent, recovery, protectedDataReady, protectedSuccess, maintenance, maintenanceFor } from './upgrade-protection.js';
 
 const REPO = 'zylos-ai/zylos-core';
 
@@ -645,6 +645,7 @@ export function resolveProtectedNpmCli() {
   throw Error('trusted npm-cli.js entry is unavailable');
 }
 export function runProtectedInstaller(ctx,{stage,npmCli,args,cwd,timeout=180000}) {
+  const maintenance = maintenanceFor(ctx);
   cwd=fs.realpathSync(cwd);
   const dir=ctx.transactionDir,j=maintenance.read(path.join(dir,'journal.json'));
   maintenance.validateDescriptor(dir,j,maintenance.read(path.join(dir,'descriptor.json')));
@@ -1309,7 +1310,7 @@ export function step11_startCoreServices(ctx, deps = {}) {
         const staging=path.join(ctx.transactionDir,'new-ecosystem.cjs'),intendedHash=maintenance.hash(ecosystemTemplateSrc);
         maintenance.update(ctx.transactionDir,ctx.journal,{ecosystemCreationIntent:{target:ecosystemDest,originalMissing:true,intendedHash,staging}});
         fsApi.copyFileSync(ecosystemTemplateSrc,staging);
-        const fd=fs.openSync(staging,'r');try{fs.fsyncSync(fd);}finally{fs.closeSync(fd);}
+        const fd=fs.openSync(staging,'r');try{maintenance.fsyncFd(fd);}finally{fs.closeSync(fd);}
         maintenance.fsyncDir(ctx.transactionDir);
         // link publishes only into an absent destination; a concurrent file
         // cannot be overwritten or absorbed into this transaction's provenance.
@@ -1600,6 +1601,7 @@ function writeFinalizeState(ctx) {
 }
 
 function runInstalledFinalizer(ctx) {
+  const maintenance = maintenanceFor(ctx);
   const finalizeScript = resolveInstalledPackageScript('cli', 'lib', 'self-upgrade-finalize.js');
   if (!finalizeScript) {
     throw new Error('newly installed self-upgrade finalizer not found');
@@ -1719,17 +1721,13 @@ export function runSelfUpgrade({ tempDir, newVersion, mode, onStep } = {}, deps 
   }
   ctx.to = newVersion || null;
   const platform = deps.platform ?? process.platform;
-  const protectionSupported = deps.protectionSupported ?? (() => {
-    if(platform !== 'linux' || maintenance.identity().unsupported) return false;
-    return ['/usr/bin/flock','/bin/flock'].some(file => {
-      try { const st=fs.statSync(file); return st.isFile() && !!(st.mode & 0o111) && !(st.mode & 0o022); }
-      catch { return false; }
-    });
-  });
+  const protectionSupported = deps.protectionSupported ?? (() => maintenance.platformSupported(platform));
   const eligible = protectionSupported();
   if(!deps.preInstallSteps && eligible) {
     try {beginUpgrade(ctx,{zylosDir:deps.zylosDir ?? ZYLOS_DIR,skillsDir:deps.skillsDir ?? SKILLS_DIR},deps.step3);}
     catch(error){return {action:'self_upgrade',success:false,error:error.message,preInstallProtection:false,rollback:{attempted:false,completed:false,performed:false},recovery_required:!!ctx.transactionDir};}
+  } else if (!eligible && platform === 'darwin') {
+    return {action:'self_upgrade',success:false,error:'macOS protected upgrade capabilities unavailable; installation was not started',preInstallProtection:false,rollback:{attempted:false,completed:false,performed:false}};
   } else if (!eligible) {
     ctx.preInstallProtection=false;
     ctx.protectionUnavailableReason='protected upgrade unsupported in this environment; using the legacy self-upgrade path';

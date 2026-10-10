@@ -1,7 +1,7 @@
 'use strict';
 
 // Copied to .zylos/upgrade before protection is enabled. Node builtins only;
-// controller serialization additionally requires trusted util-linux flock.
+// controller serialization uses util-linux flock or the frozen macOS helper.
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
@@ -14,10 +14,42 @@ const ID = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,95}$/;
 function hash(file) {
   return crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 }
+function nativeHelper() {
+  // Frozen controllers must never fall back to the mutable installed package.
+  const file = path.basename(__filename) === 'maintenance.cjs'
+    ? path.join(__dirname, 'macos-recovery-helper')
+    : path.join(__dirname, '..', 'native', 'macos-recovery-helper');
+  for (const candidate of [file, file + '.sha256']) {
+    const st = fs.lstatSync(candidate);
+    const allowedOwners = path.basename(__filename) === 'maintenance.cjs' ? [process.getuid?.()] : [0, process.getuid?.()];
+    if (!st.isFile() || st.isSymbolicLink() || st.mode & 0o022 || process.getuid && !allowedOwners.includes(st.uid)) throw Error('unsafe macOS recovery helper: ' + candidate);
+  }
+  const st = fs.statSync(file);
+  if (!(st.mode & 0o111)) throw Error('macOS recovery helper is not executable');
+  const expected = fs.readFileSync(file + '.sha256', 'utf8').trim();
+  if (!/^[a-f0-9]{64}$/.test(expected) || hash(file) !== expected) throw Error('macOS recovery helper hash mismatch');
+  return file;
+}
+function fsyncFd(fd) {
+  if (process.platform !== 'darwin') return fs.fsyncSync(fd);
+  const result = cp.spawnSync(nativeHelper(), ['fullsync', '3'], {
+    encoding: 'utf8', timeout: 10000, stdio: ['ignore', 'pipe', 'pipe', fd]
+  });
+  if (result.error || result.status !== 0) throw Error(result.error?.message || result.stderr?.trim() || 'macOS full sync failed');
+}
+function platformSupported(platform = process.platform) {
+  try {
+    if (platform !== process.platform || !['linux', 'darwin'].includes(platform)) return false;
+    if (identity().unsupported) return false;
+    if (platform === 'linux') { controllerFlock(); return true; }
+    const result = cp.spawnSync(nativeHelper(), ['probe'], {encoding:'utf8', timeout:10000});
+    return !result.error && result.status === 0 && JSON.parse(result.stdout).protocol === 1;
+  } catch { return false; }
+}
 function fsyncDir(dir) {
   const fd = fs.openSync(dir, 'r');
   try {
-    fs.fsyncSync(fd);
+    fsyncFd(fd);
   } finally {
     fs.closeSync(fd);
   }
@@ -31,7 +63,7 @@ function durable(file, value) {
   const fd = fs.openSync(tmp, 'wx', 0o600);
   try {
     fs.writeFileSync(fd, JSON.stringify(value, null, 2) + '\n');
-    fs.fsyncSync(fd);
+    fsyncFd(fd);
   } finally {
     fs.closeSync(fd);
   }
@@ -276,24 +308,36 @@ function assertCoreDatabaseAvailable(root) {
   }
 }
 function identity(pid = process.pid) {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return {pid, unsupported:true};
   try {
-    const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
-    return {
-      pid,
-      boot: fs.readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim(),
-      start: stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19]
-    };
+    if (process.platform === 'darwin') {
+      const result = cp.spawnSync(nativeHelper(), ['identity', String(pid)], {encoding:'utf8', timeout:10000});
+      if (result.error || result.status !== 0) return {pid, unsupported:true};
+      const data = JSON.parse(result.stdout);
+      if (data.pid !== pid) return {pid, unsupported:true};
+      if (data.status === 'absent') return {pid, absent:true};
+      if (data.status !== 'present' || typeof data.boot !== 'string' || !data.boot || !/^\d+:\d+$/.test(data.start)) return {pid, unsupported:true};
+      return {pid, boot:data.boot, start:data.start};
+    }
+    let stat;
+    try { stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8'); }
+    catch (error) {
+      if (error.code === 'ENOENT' && process.platform === 'linux') return {pid, absent:true};
+      throw error;
+    }
+    const start = stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19];
+    const boot = fs.readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim();
+    if (!/^\d+$/.test(start) || !boot) throw Error('invalid process identity');
+    return {pid, boot, start};
   } catch {
-    return {
-      pid,
-      unsupported: true
-    };
+    return {pid, unsupported:true};
   }
 }
 function alive(owner) {
-  if (!owner || owner.unsupported) return false;
+  if (!owner || owner.unsupported || !owner.boot || !owner.start) throw Error('controller process identity unavailable');
   const now = identity(owner.pid);
-  return now.boot === owner.boot && now.start === owner.start;
+  if (now.unsupported) throw Error('controller process identity query failed');
+  return !now.absent && now.boot === owner.boot && now.start === owner.start;
 }
 // The guard inode is retained for the lifetime of the transaction. Kernel flock
 // serializes the entire read/check/replace operation and releases on process
@@ -334,14 +378,16 @@ function serializedController(dir, operation, value) {
   try {
     const s = fs.fstatSync(fd);
     if (!s.isFile() || process.getuid && s.uid !== process.getuid() || s.mode & 0o077) throw Error('unsafe controller guard');
-    fs.fsyncSync(fd);
+    fsyncFd(fd);
     fsyncDir(dir);
     // /proc/self/fd/3 refers to the already validated inode, not a path that can
     // be swapped between validation and flock. The child has no runtime deps.
     const savedHelper = path.join(dir, 'maintenance.cjs');
     const helper = fs.existsSync(savedHelper) && hash(savedHelper) === SELF_HASH ? savedHelper : __filename;
     if (!fs.existsSync(helper) || hash(helper) !== SELF_HASH) throw Error('serialized controller helper unavailable or changed');
-    const r = cp.spawnSync(controllerFlock(), ['--exclusive', '--no-fork', '--timeout', '5', '/proc/self/fd/3', process.execPath, helper, '--controller-lock', operation, path.resolve(dir)], {
+    const binary = process.platform === 'darwin' ? nativeHelper() : controllerFlock();
+    const args = process.platform === 'darwin' ? ['lock-exec', '5000', process.execPath, helper] : ['--exclusive', '--no-fork', '--timeout', '5', '/proc/self/fd/3', process.execPath, helper];
+    const r = cp.spawnSync(binary, [...args, '--controller-lock', operation, path.resolve(dir)], {
       input: JSON.stringify(value),
       encoding: 'utf8',
       timeout: 10000,
@@ -529,7 +575,7 @@ function fsyncTree(dir) {
     if (st.isDirectory()) fsyncTree(file);else if (st.isFile()) {
       const fd = fs.openSync(file, 'r');
       try {
-        fs.fsyncSync(fd);
+        fsyncFd(fd);
       } finally {
         fs.closeSync(fd);
       }
@@ -571,7 +617,8 @@ function worker(dir, j, payload) {
   validateDescriptor(dir, j, d);
   return JSON.parse(command(d.nodePath, [d.workerPath, JSON.stringify({
     ...payload,
-    driverPath: d.driverPath
+    driverPath: d.driverPath,
+    ...(process.platform === 'darwin' ? {nativeHelperPath: path.join(dir, 'macos-recovery-helper')} : {})
   })], {
     timeout: 120000
   }));
@@ -594,6 +641,7 @@ function validateDescriptor(dir, j, d) {
   };
   for (const [key, value] of Object.entries(fixed)) if (d[key] !== value) throw Error('recovery material outside fixed layout: ' + key);
   const names = ['finalizer.cjs', 'maintenance.cjs', 'runner.cjs'];
+  if (process.platform === 'darwin') names.push('macos-recovery-helper', 'macos-recovery-helper.sha256');
   if (!d.hashes || Array.isArray(d.hashes) || Object.keys(d.hashes).length !== names.length || names.some(name => !Object.hasOwn(d.hashes, name))) throw Error('missing required recovery material hashes');
   for (const name of names) {
     privatePath(path.join(dir, name));
@@ -639,7 +687,7 @@ function renameIntent(dir, j, key, source, dest, expectedHash) {
     fs.renameSync(source, dest);
     const fd = fs.openSync(dest, 'r');
     try {
-      fs.fsyncSync(fd);
+      fsyncFd(fd);
     } finally {
       fs.closeSync(fd);
     }
@@ -660,6 +708,9 @@ function finishTerminal(dir, j) {
   return {complete:true, warnings:[]};
 }
 module.exports = {
+  nativeHelper,
+  fsyncFd,
+  platformSupported,
   transaction,
   DB_PATHS,
   READY,

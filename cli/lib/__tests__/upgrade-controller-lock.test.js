@@ -105,11 +105,16 @@ test('kernel guard releases on guard-holder crash',async t=>{
   const guard=path.join(dir,'controller.guard');
   const script=path.join(dir,'guard-holder.cjs');
   fs.writeFileSync(script,`const cp=require('node:child_process');
-    const child=cp.spawn('flock',['--exclusive','--no-fork',process.env.GUARD,process.execPath,'-e',
-      "require('node:fs').writeFileSync(process.env.READY,'ready');setInterval(()=>{},1000)"],{env:process.env,stdio:'ignore'});
+    const fs=require('node:fs'),m=require(process.env.LOCK_MODULE);
+    const fd=fs.openSync(process.env.GUARD,'r+');
+    const target=require('node:path').join(require('node:path').dirname(process.env.GUARD),'hold.cjs');
+    fs.writeFileSync(target,"require('node:fs').writeFileSync(process.env.READY,'ready');setInterval(()=>{},1000)");
+    const args=process.platform==='darwin'?['lock-exec','5000',process.execPath,target]:['--exclusive','--no-fork',process.env.GUARD,process.execPath,target];
+    const child=cp.spawn(process.platform==='darwin'?m.nativeHelper():'flock',args,{env:process.env,stdio:['ignore','ignore','ignore',fd]});
+    fs.closeSync(fd);
     process.send(child.pid);`);
   const ready=path.join(dir,'guard-held');
-  const holder=fork(script,[],{env:{...process.env,GUARD:guard,READY:ready},stdio:['ignore','ignore','ignore','ipc']});
+  const holder=fork(script,[],{env:{...process.env,GUARD:guard,READY:ready,LOCK_MODULE:modulePath},stdio:['ignore','ignore','ignore','ipc']});
   const pid=await new Promise(resolve=>holder.once('message',resolve));
   t.after(()=>{try{process.kill(pid,'SIGKILL');}catch{}});
   await waitFor(ready);
@@ -133,7 +138,7 @@ test('missing flock and unsafe guard fail closed without replacing controller',t
   const result=spawnSync(process.execPath,['-e',`
     const cp=require('node:child_process'),spawn=cp.spawnSync;
     cp.spawnSync=function(binary,...args){
-      if(binary.endsWith('/flock'))return {error:Error('ENOENT flock unavailable')};
+      if(binary.endsWith('/flock') || binary.endsWith('/macos-recovery-helper') && args[0][0] === 'lock-exec')return {error:Error('ENOENT flock unavailable')};
       return spawn.call(this,binary,...args);
     };
     require(${JSON.stringify(modulePath)}).acquire(${JSON.stringify(dir)});
@@ -157,4 +162,28 @@ test('terminal transaction keeps its controller path and releases the captured t
   release();
   assert.equal(fs.existsSync(path.join(dir,'controller.json')),false);
   const next=m.acquire(dir); next();
+});
+
+test('unknown identity cannot authorize controller takeover',t=>{
+  const dir=fixture(t),lock=path.join(dir,'controller.json');
+  m.durable(lock,{pid:process.pid,unsupported:true});
+  const before=fs.readFileSync(lock,'utf8');
+  assert.throws(()=>m.acquire(dir),/identity unavailable/);
+  assert.equal(fs.readFileSync(lock,'utf8'),before);
+});
+
+test('missing Linux boot identity is unknown, never evidence that the process is absent',()=>{
+  const result=spawnSync(process.execPath,['-e',`
+    const fs=require('node:fs'),read=fs.readFileSync;
+    const m=require(${JSON.stringify(modulePath)});
+    Object.defineProperty(process,'platform',{value:'linux'});
+    fs.readFileSync=(file,...args)=>{
+      if(file==='/proc/123/stat') return '123 (fixture) S '+Array(18).fill('0').join(' ')+' 456';
+      if(file==='/proc/sys/kernel/random/boot_id') throw Object.assign(Error('boot identity unavailable'),{code:'ENOENT'});
+      return read(file,...args);
+    };
+    process.stdout.write(JSON.stringify(m.identity(123)));
+  `],{encoding:'utf8'});
+  assert.equal(result.status,0,result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout),{pid:123,unsupported:true});
 });

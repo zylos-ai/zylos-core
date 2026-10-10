@@ -154,7 +154,7 @@ function rescue(dir, j) {
         if (!fs.existsSync(staging)) fs.copyFileSync(p, staging);
         const fd = fs.openSync(staging, 'r');
         try {
-          fs.fsyncSync(fd);
+          m.fsyncFd(fd);
         } finally {
           fs.closeSync(fd);
         }
@@ -205,7 +205,7 @@ function restoreCore(dir, j) {
       fs.copyFileSync(backup, dest);
       const fd = fs.openSync(dest, 'r');
       try {
-        fs.fsyncSync(fd);
+        m.fsyncFd(fd);
       } finally {
         fs.closeSync(fd);
       }
@@ -272,7 +272,7 @@ function replaceDatabases(dir, j, manifest) {
         if (!fs.existsSync(staging)) fs.copyFileSync(path.join(j.dbBackupDir, d.file), staging);
         const fd = fs.openSync(staging, 'r');
         try {
-          fs.fsyncSync(fd);
+          m.fsyncFd(fd);
         } finally {
           fs.closeSync(fd);
         }

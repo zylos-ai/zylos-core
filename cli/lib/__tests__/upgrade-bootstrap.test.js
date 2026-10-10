@@ -6,13 +6,17 @@ import {createRequire} from 'node:module';
 import {spawnSync} from 'node:child_process';
 import {test} from 'node:test';
 function fixture(t) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'core803-bootstrap-'));
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'core803-bootstrap-')));
   t.after(() => fs.rmSync(root, {recursive: true, force: true}));
   const stable = path.join(root, '.zylos/upgrade');
   fs.mkdirSync(stable, {recursive: true, mode: 0o700});
   for (const [source, target] of [['upgrade-bootstrap.cjs', 'bootstrap.cjs'], ['upgrade-maintenance.cjs', 'maintenance.cjs']]) {
     fs.copyFileSync(new URL('../' + source, import.meta.url), path.join(stable, target));
     fs.chmodSync(path.join(stable, target), 0o600);
+  }
+  if (process.platform === 'darwin') for (const name of ['macos-recovery-helper', 'macos-recovery-helper.sha256']) {
+    fs.copyFileSync(new URL('../../native/' + name, import.meta.url), path.join(stable, name));
+    fs.chmodSync(path.join(stable, name), name.endsWith('.sha256') ? 0o600 : 0o700);
   }
   const api = createRequire(import.meta.url)(path.join(stable, 'bootstrap.cjs'));
   function journal(id = 'tx', extra = {}) {

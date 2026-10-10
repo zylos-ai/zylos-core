@@ -6,10 +6,10 @@ import path from 'node:path';
 import {createRequire} from 'node:module';
 const require=createRequire(import.meta.url),m=require('../upgrade-maintenance.cjs');
 function fixture(t) {
-  const root=fs.mkdtempSync(path.join(os.tmpdir(),'upgrade-material-'));
+  const root=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'upgrade-material-')));
   t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
   const dir=path.join(root,'tx'),closure=path.join(dir,'sqlite-runtime');fs.mkdirSync(closure,{recursive:true,mode:0o700});
-  const hashes={};for(const name of ['runner.cjs','maintenance.cjs','finalizer.cjs']){const file=path.join(dir,name);fs.writeFileSync(file,'// trusted fixture '+name,{mode:0o600});hashes[name]=m.hash(file);}
+  const hashes={};for(const name of ['runner.cjs','maintenance.cjs','finalizer.cjs',...(process.platform==='darwin'?['macos-recovery-helper','macos-recovery-helper.sha256']:[])]){const file=path.join(dir,name);fs.writeFileSync(file,'// trusted fixture '+name,{mode:0o600});hashes[name]=m.hash(file);}
   const closureFiles=['package.json','core-db-backup-worker.js','node_modules/better-sqlite3/lib/index.js'];
   for(const file of closureFiles){const p=path.join(closure,file);fs.mkdirSync(path.dirname(p),{recursive:true,mode:0o700});fs.writeFileSync(p,'fixture '+file,{mode:0o600});}
   const j={transactionId:'tx',nodePath:process.execPath,initialIdentity:{nodePath:process.execPath}};
@@ -55,7 +55,7 @@ test('legal skills-root symlink resolves while dangling individual target symlin
   assert.equal(fs.existsSync(path.join(f.dir,'unrelated-missing-directory')),false);
 });
 for(const relative of ['.zylos/upgrade/active.json','.backup/self-upgrade','.zylos/upgrade','.zylos','.backup'])test(`dangling ${relative} cannot silently disable maintenance isolation`,t=>{
-  const root=fs.mkdtempSync(path.join(os.tmpdir(),'upgrade-discovery-link-'));
+  const root=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'upgrade-discovery-link-')));
   t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
   const file=path.join(root,relative);fs.mkdirSync(path.dirname(file),{recursive:true,mode:0o700});fs.symlinkSync(path.join(root,'missing-target'),file);
   const result=m.discover(root);assert.equal(result.blocked,true);assert.match(result.diagnostics.join(' '),/unsafe recovery path/);
@@ -63,11 +63,11 @@ for(const relative of ['.zylos/upgrade/active.json','.backup/self-upgrade','.zyl
   assert.equal(fs.lstatSync(file).isSymbolicLink(),true);assert.equal(fs.existsSync(path.join(root,'missing-target')),false);
 });
 test('absent recovery directories permit ordinary database access',t=>{
-  const root=fs.mkdtempSync(path.join(os.tmpdir(),'upgrade-discovery-absent-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+  const root=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'upgrade-discovery-absent-')));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
   assert.deepEqual(m.discover(root),{marker:null,candidates:[],diagnostics:[],blocked:false});assert.doesNotThrow(()=>m.assertCoreDatabaseAvailable(root));
 });
 function readyFixture(t){
-  const root=fs.mkdtempSync(path.join(os.tmpdir(),'upgrade-ready-identity-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+  const root=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'upgrade-ready-identity-')));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
   const dir=path.join(root,'.backup/self-upgrade/tx');fs.mkdirSync(dir,{recursive:true,mode:0o700});
   const j={formatVersion:1,transactionId:'tx',zylosDir:root,phase:'new_data_ready',installationIntent:true,nodePath:process.execPath,skillsDir:path.join(root,'.claude/skills'),dbBackupDir:path.join(root,'.backup/db/tx'),snapshotManifestHash:'a'.repeat(64),coreManifest:[{name:'core',existedBefore:true,backedUp:true,originalHash:'b'.repeat(64)}],originalServices:[],initialIdentity:{nodePath:process.execPath,packageJson:path.join(root,'package.json'),packageHash:'c'.repeat(64),cliRoot:path.join(root,'original-cli'),cliHash:'d'.repeat(64),workerPath:path.join(root,'original-cli/lib/worker.js'),workerHash:'e'.repeat(64),ecosystemHash:null,databases:m.DB_PATHS.map(source=>({source,exists:true}))}};
   return {root,dir,j,save:()=>m.durable(path.join(dir,'journal.json'),j)};
@@ -196,4 +196,11 @@ for (const blocker of ['installer', 'finalizer', 'services']) test(`terminal mar
   assert.equal(fs.existsSync(path.join(f.root, '.zylos/upgrade/active.json')), false);
   assert.equal(fs.existsSync(f.dir), true);
   assert.equal(m.discover(f.root).candidates.length, 0);
+});
+
+test('macOS frozen helper bytes are included in required descriptor hashes',{skip:process.platform!=='darwin'},t=>{
+ const f=fixture(t);delete f.d.hashes['macos-recovery-helper'];
+ assert.throws(()=>m.validateDescriptor(f.dir,f.j,f.d),/required recovery material hashes/);
+ const g=fixture(t);fs.appendFileSync(path.join(g.dir,'macos-recovery-helper'),'tamper');
+ assert.throws(()=>m.validateDescriptor(g.dir,g.j,g.d),/material hash mismatch/);
 });

@@ -5,25 +5,24 @@ import os from 'node:os';
 import path from 'node:path';
 import {runSelfUpgrade} from '../self-upgrade.js';
 
-test('darwin retains the legacy upgrade pipeline and advertises protection unavailable',t=>{
+test('darwin missing native capability fails before installation or finalization',t=>{
  const root=fs.mkdtempSync(path.join(os.tmpdir(),'upgrade-darwin-'));
  t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
  const calls=[];
  const result=runSelfUpgrade({newVersion:'2.0.0'},{
-  platform:'darwin',zylosDir:root,getCurrentVersion:()=>({success:true,version:'1.0.0'}),
-  preInstallSteps:[ctx=>{calls.push('legacy');assert.equal(ctx.preInstallProtection,false);return {step:1,status:'done'};}],
-  runInstalledFinalizer:ctx=>{assert.equal(ctx.transactionDir,undefined);calls.push('finalizer');return {success:true,steps:[]};}
+  platform:'darwin',protectionSupported:()=>false,zylosDir:root,getCurrentVersion:()=>({success:true,version:'1.0.0'}),
+  preInstallSteps:[()=>{calls.push('install');return {step:1,status:'done'};}],
+  runInstalledFinalizer:()=>{calls.push('finalizer');return {success:true,steps:[]};}
  });
- assert.equal(result.success,true);assert.equal(result.preInstallProtection,false);
- assert.match(result.protectionUnavailableReason,/unsupported/);assert.deepEqual(calls,['legacy','finalizer']);
- assert.equal(fs.existsSync(path.join(root,'.backup/self-upgrade')),false);
- assert.equal(fs.existsSync(path.join(root,'.zylos/upgrade/active.json')),false);
+ assert.equal(result.success,false);assert.equal(result.preInstallProtection,false);
+ assert.match(result.error,/installation was not started/);assert.deepEqual(calls,[]);
+ assert.equal(fs.existsSync(path.join(root,'.backup')),false);
 });
 
 test('begin failure before publication reports no recovery requirement',t=>{
  const root=fs.mkdtempSync(path.join(os.tmpdir(),'upgrade-prebegin-'));
  t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
- const result=runSelfUpgrade({newVersion:'2.0.0'},{platform:'linux',zylosDir:root,skillsDir:path.join(root,'missing-skills'),getCurrentVersion:()=>({success:true,version:'1.0.0'})});
+ const result=runSelfUpgrade({newVersion:'2.0.0'},{platform:process.platform,protectionSupported:()=>true,zylosDir:root,skillsDir:path.join(root,'missing-skills'),getCurrentVersion:()=>({success:true,version:'1.0.0'})});
  assert.equal(result.success,false);assert.equal(result.preInstallProtection,false);assert.equal(result.recovery_required,false);
  assert.equal(fs.existsSync(path.join(root,'.zylos/upgrade/active.json')),false);
 });

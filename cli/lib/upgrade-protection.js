@@ -6,7 +6,18 @@ import { spawnSync } from 'node:child_process';
 import { createCoreDbSnapshot, prepareRecoveryDependencies, runCoreDbWorker } from './core-db-backup.js';
 const require = createRequire(import.meta.url);
 export const maintenance = require('./upgrade-maintenance.cjs');
+// A live updater must survive replacement of its own installed package too.
+export function maintenanceFor(ctx) { return ctx.maintenance || maintenance; }
 const library = import.meta.dirname;
+function recoveryFiles(runnerName = 'runner.cjs') {
+  const files = [['upgrade-maintenance.cjs', 'maintenance.cjs'], ['upgrade-recovery.cjs', runnerName], ['upgrade-finalizer.cjs', 'finalizer.cjs']];
+  if (process.platform === 'darwin') {
+    // Verify the shipped artifact before copying any executable recovery material.
+    maintenance.nativeHelper();
+    files.unshift(['../native/macos-recovery-helper', 'macos-recovery-helper'], ['../native/macos-recovery-helper.sha256', 'macos-recovery-helper.sha256']);
+  }
+  return files;
+}
 export function deployUpgradeBootstrap(root) {
   const prior = maintenance.discover(root);
   if (prior.candidates.length || prior.diagnostics.length || prior.marker) throw Error('cannot replace stable bootstrap during an unresolved upgrade');
@@ -27,14 +38,14 @@ export function deployUpgradeBootstrap(root) {
     directory: true
   });
   maintenance.fsyncDir(meta);
-  for (const [src, name] of [['upgrade-maintenance.cjs', 'maintenance.cjs'], ['upgrade-recovery.cjs', 'recovery.cjs'], ['upgrade-bootstrap.cjs', 'bootstrap.cjs'], ['upgrade-finalizer.cjs', 'finalizer.cjs']]) {
+  for (const [src, name] of [...recoveryFiles('recovery.cjs'), ['upgrade-bootstrap.cjs', 'bootstrap.cjs']]) {
     const target = path.join(dest, name),
       staging = target + '.' + crypto.randomBytes(8).toString('hex') + '.staging';
     fs.copyFileSync(path.join(library, src), staging, fs.constants.COPYFILE_EXCL);
-    fs.chmodSync(staging, 0o600);
+    fs.chmodSync(staging, name === 'macos-recovery-helper' ? 0o700 : 0o600);
     const fd = fs.openSync(staging, 'r');
     try {
-      fs.fsyncSync(fd);
+      maintenance.fsyncFd(fd);
     } finally {
       fs.closeSync(fd);
     }
@@ -118,6 +129,15 @@ export function beginUpgrade(ctx, {
   // The existing machine startup chain launches the runtime; this entry only
   // supplies durable file discovery before normal C4/session imports.
   deployUpgradeBootstrap(zylosDir);
+  let controllerMaintenance = maintenance;
+  if (process.platform === 'darwin') {
+    const frozen = path.join(zylosDir, '.zylos', 'upgrade', 'maintenance.cjs');
+    maintenance.privatePath(frozen);
+    if (maintenance.hash(frozen) !== maintenance.hash(path.join(library, 'upgrade-maintenance.cjs'))) throw Error('frozen maintenance source mismatch');
+    controllerMaintenance = require(frozen);
+    controllerMaintenance.nativeHelper();
+    ctx.maintenance = controllerMaintenance;
+  }
   const activeRoot = path.dirname(dir);
   const stagingRoot = path.join(zylosDir, '.backup', 'self-upgrade-staging');
   for (const base of [activeRoot, stagingRoot]) {
@@ -140,7 +160,7 @@ export function beginUpgrade(ctx, {
   let release;
   try {
     maintenance.update(staging, j);
-    release = maintenance.acquire(staging, {publishedDir: dir});
+    release = controllerMaintenance.acquire(staging, {publishedDir: dir});
     fs.renameSync(staging, dir);
     maintenance.fsyncDir(activeRoot);
     maintenance.fsyncDir(stagingRoot);
@@ -167,6 +187,7 @@ export function beginUpgrade(ctx, {
   return j;
 }
 export function saveProtectedCode(ctx) {
+  const maintenance = maintenanceFor(ctx);
   const j = ctx.journal,
     dir = ctx.transactionDir;
   fs.mkdirSync(ctx.backupDir, {
@@ -203,6 +224,7 @@ export function saveProtectedCode(ctx) {
   });
 }
 export function prepareProtectedInstall(ctx) {
+  const maintenance = maintenanceFor(ctx);
   const j = ctx.journal,
     dir = ctx.transactionDir;
   maintenance.marker(j.zylosDir, dir, j);
@@ -228,13 +250,13 @@ export function prepareProtectedInstall(ctx) {
     snapshotManifestHash: maintenance.hash(path.join(snapshot.dbBackupDir, 'manifest.json'))
   });
   const deps = prepareRecoveryDependencies(dir, j.zylosDir);
-  for (const [src, name] of [['upgrade-maintenance.cjs', 'maintenance.cjs'], ['upgrade-recovery.cjs', 'runner.cjs'], ['upgrade-finalizer.cjs', 'finalizer.cjs']]) {
+  for (const [src, name] of recoveryFiles()) {
     const file = path.join(dir, name);
     fs.copyFileSync(path.join(library, src), file);
-    fs.chmodSync(file, 0o600);
+    fs.chmodSync(file, name === 'macos-recovery-helper' ? 0o700 : 0o600);
     const fd = fs.openSync(file, 'r');
     try {
-      fs.fsyncSync(fd);
+      maintenance.fsyncFd(fd);
     } finally {
       fs.closeSync(fd);
     }
@@ -251,7 +273,8 @@ export function prepareProtectedInstall(ctx) {
     hashes: {
       'finalizer.cjs': maintenance.hash(path.join(dir, 'finalizer.cjs')),
       'maintenance.cjs': maintenance.hash(path.join(dir, 'maintenance.cjs')),
-      'runner.cjs': maintenance.hash(path.join(dir, 'runner.cjs'))
+      'runner.cjs': maintenance.hash(path.join(dir, 'runner.cjs')),
+      ...(process.platform === 'darwin' ? Object.fromEntries(['macos-recovery-helper', 'macos-recovery-helper.sha256'].map(name => [name, maintenance.hash(path.join(dir, name))])) : {})
     }
   };
   maintenance.durable(path.join(dir, 'descriptor.json'), descriptor);
@@ -266,12 +289,14 @@ export function prepareProtectedInstall(ctx) {
   });
 }
 export function markInstallationIntent(ctx) {
+  const maintenance = maintenanceFor(ctx);
   maintenance.update(ctx.transactionDir, ctx.journal, {
     phase: 'installing',
     installationIntent: true
   });
 }
 export function recovery(ctx) {
+  const maintenance = maintenanceFor(ctx);
   const release = () => {
     try {
       ctx.releaseControl?.();
@@ -380,6 +405,7 @@ export function recovery(ctx) {
   }
 }
 export function protectedDataReady(ctx) {
+  const maintenance = maintenanceFor(ctx);
   const dir = ctx.transactionDir,
     j = maintenance.read(path.join(dir, 'journal.json'));
   const checked = maintenance.preflight(dir, j, null);
@@ -391,6 +417,7 @@ export function protectedDataReady(ctx) {
   // READY permits normal access; retain the marker until verified terminal exit.
 }
 export function protectedSuccess(ctx) {
+  const maintenance = maintenanceFor(ctx);
   const dir = ctx.transactionDir,
     j = maintenance.read(path.join(dir, 'journal.json'));
   maintenance.update(dir, j, {

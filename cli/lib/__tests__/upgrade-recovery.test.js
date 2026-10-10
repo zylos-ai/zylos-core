@@ -5,20 +5,32 @@ import os from 'node:os';
 import path from 'node:path';
 import {createRequire} from 'node:module';
 import {pathToFileURL} from 'node:url';
-import {spawn,spawnSync} from 'node:child_process';
+import cp,{spawn,spawnSync} from 'node:child_process';
 import {CORE_DATABASES,createCoreDbSnapshot,prepareRecoveryDependencies} from '../core-db-backup.js';
 import {upgradeStartupPrompt} from '../runtime/upgrade-context.js';
 
 const require=createRequire(import.meta.url);
 const Database=require(path.resolve('skills/comm-bridge/node_modules/better-sqlite3'));
+const nativeNames=process.platform==='darwin'?['macos-recovery-helper','macos-recovery-helper.sha256']:[];
+function freezeNativeHelper(dir) {
+ for(const name of nativeNames){fs.copyFileSync(path.resolve('cli/native',name),path.join(dir,name));fs.chmodSync(path.join(dir,name),name.endsWith('.sha256')?0o600:0o700);}
+}
+// Fault the real platform sync boundary; preserve actual sync for every other FD.
+function interceptSync(check) {
+ const sync=fs.fsyncSync,spawn=cp.spawnSync;
+ if(process.platform!=='darwin')fs.fsyncSync=fd=>{check(fd);return sync(fd);};
+ cp.spawnSync=(file,args,options)=>{if(args?.[0]==='fullsync')check(options.stdio[Number(args[1])]);return spawn(file,args,options);};
+ return ()=>{fs.fsyncSync=sync;cp.spawnSync=spawn;};
+}
 // Each test loads private copies of the real recovery and maintenance modules.
 // Only service calls are replaced: database/native worker, hashes, journal,
 // rescue, rename intents, isolation discovery, and terminal marker removal are real.
 async function fixture(t,{missing=false,wal=false}={}) {
- const root=fs.mkdtempSync(path.join(os.tmpdir(),'upgrade-recovery-'));
+ const root=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'upgrade-recovery-')));
  t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
  const stable=path.join(root,'.zylos/upgrade');fs.mkdirSync(stable,{recursive:true,mode:0o700});
  for(const [src,dst] of [['upgrade-maintenance.cjs','maintenance.cjs'],['upgrade-recovery.cjs','recovery.cjs']])fs.copyFileSync(path.resolve('cli/lib',src),path.join(stable,dst));
+ freezeNativeHelper(stable);
  const m=require(path.join(stable,'maintenance.cjs')),r=require(path.join(stable,'recovery.cjs'));
  const skillsDir=path.join(root,'.claude/skills');
  for(const item of CORE_DATABASES){const owner=path.join(skillsDir,item.owner);fs.mkdirSync(path.join(owner,'scripts'),{recursive:true});fs.writeFileSync(path.join(owner,'package.json'),'{"type":"module"}');fs.symlinkSync(path.resolve('skills',item.owner,'node_modules'),path.join(owner,'node_modules'));
@@ -33,11 +45,12 @@ async function fixture(t,{missing=false,wal=false}={}) {
  const snapshot=createCoreDbSnapshot({zylosDir:root,transactionId:'tx'}),closure=prepareRecoveryDependencies(dir,root);
  fs.copyFileSync(path.join(stable,'recovery.cjs'),path.join(dir,'runner.cjs'));fs.chmodSync(path.join(dir,'runner.cjs'),0o600);
  for(const [src,dst] of [['upgrade-maintenance.cjs','maintenance.cjs'],['upgrade-finalizer.cjs','finalizer.cjs']]){fs.copyFileSync(path.resolve('cli/lib',src),path.join(dir,dst));fs.chmodSync(path.join(dir,dst),0o600);}
+ freezeNativeHelper(dir);
  const coreManifest=CORE_DATABASES.map(item=>({name:item.owner,existedBefore:true,backedUp:true,originalHash:m.treeHash(path.join(skillsDir,item.owner))}));
  for(const e of coreManifest)fs.cpSync(path.join(skillsDir,e.name),path.join(dir,'code/skills',e.name),{recursive:true,filter:p=>!p.split(path.sep).includes('node_modules')});
  const packageJson=path.join(root,'package.json');fs.writeFileSync(packageJson,'{}');const originalCli=path.join(root,'baseline-cli');fs.mkdirSync(originalCli,{mode:0o700});
  const j={formatVersion:1,transactionId:'tx',zylosDir:root,skillsDir,nodePath:process.execPath,phase:'installing',installationIntent:true,dbBackupDir:snapshot.dbBackupDir,snapshotManifestHash:m.hash(path.join(snapshot.dbBackupDir,'manifest.json')),coreManifest,originalServices:[],initialIdentity:{nodePath:process.execPath,packageJson,packageHash:m.hash(packageJson),cliRoot:originalCli,cliHash:m.treeHash(originalCli),workerPath:closure.workerPath,workerHash:m.hash(closure.workerPath),ecosystemHash:null,databases:snapshot.manifest.databases.map(d=>({source:d.source,exists:d.status!=='missing'}))}};
- const descriptor={formatVersion:1,transactionId:'tx',...closure,runnerPath:path.join(dir,'runner.cjs'),hashes:Object.fromEntries(['runner.cjs','maintenance.cjs','finalizer.cjs'].map(name=>[name,m.hash(path.join(dir,name))]))};m.durable(path.join(dir,'descriptor.json'),descriptor);m.update(dir,j);m.marker(root,dir,j);
+ const descriptor={formatVersion:1,transactionId:'tx',...closure,runnerPath:path.join(dir,'runner.cjs'),hashes:Object.fromEntries(['runner.cjs','maintenance.cjs','finalizer.cjs',...nativeNames].map(name=>[name,m.hash(path.join(dir,name))]))};m.durable(path.join(dir,'descriptor.json'),descriptor);m.update(dir,j);m.marker(root,dir,j);
  const calls=[];m.stop=()=>calls.push('stop');m.start=()=>calls.push('start');m.verifyServices=()=>calls.push('verify');
  return {root,dir,j,m,r,calls,snapshot,load:()=>m.read(path.join(dir,'journal.json')),db:p=>path.join(root,p)};
 }
@@ -85,6 +98,38 @@ test('A12/A14/A15: complete compensation restores old code/data, preserves rescu
  const f=await fixture(t,{missing:true});change(f);fs.mkdirSync(path.dirname(f.db('scheduler/scheduler.db')),{recursive:true});fs.writeFileSync(f.db('scheduler/scheduler.db'),'new-db');
  const original=fs.readFileSync(f.db('comm-bridge/c4.db'));const result=f.r.resume(f.dir);assert.equal(result.completed,true);assert.equal(result.stage,'restored_complete');assert.ok(!fs.existsSync(f.db('scheduler/scheduler.db')));assert.ok(!fs.existsSync(f.db('comm-bridge/c4.db-wal')));
  const archived=path.join(f.root,'.backup/self-upgrade/tx');assert.deepEqual(fs.readFileSync(path.join(archived,'rescue/comm-bridge_c4.db')),original);assert.equal(f.m.discover(f.root).blocked,false);assert.deepEqual(f.calls,['stop','start','verify']);
+});
+for(const phase of ['rescue','restore'])test(`${phase} staging platform sync failure prevents publication and preserves retry evidence`,async t=>{
+ const f=await fixture(t);change(f);
+ const source=f.db('comm-bridge/c4.db'),originalHash=f.m.hash(source);
+ const rescue=path.join(f.dir,'rescue/comm-bridge_c4.db');
+ const staging=phase==='rescue'?rescue+'.staging':source+'.tx.restore';
+ const snapshot=f.snapshot.manifest.databases.find(d=>d.source==='comm-bridge/c4.db');
+ if(phase==='restore'){f.r.rescue(f.dir,f.j);f.r.restoreCore(f.dir,f.j);}
+ let hit=false;
+ const restoreSync=interceptSync(fd=>{
+  if(!fs.existsSync(staging))return;
+  const expected=fs.statSync(staging),actual=fs.fstatSync(fd);
+  if(expected.dev===actual.dev&&expected.ino===actual.ino){hit=true;throw Error('staging platform sync failed');}
+ });
+ try{assert.throws(()=>phase==='rescue'?f.r.rescue(f.dir,f.j):f.r.replaceDatabases(f.dir,f.j,f.snapshot.manifest),/staging platform sync failed/);}finally{restoreSync();}
+ assert.equal(hit,true);
+ const saved=f.load();
+ if(phase==='rescue'){
+  assert.equal(fs.existsSync(rescue),false);assert.equal(f.m.hash(source),originalHash);
+  assert.equal(f.m.hash(staging),originalHash);assert.equal(saved.rescue['comm-bridge/c4.db'].complete,false);
+  assert.equal(saved.actions?.['rescue_comm-bridge_c4.db'],undefined);
+ }else{
+  // Replacement first displaces the failed generation; sync failure must leave
+  // that retained generation intact without publishing the staged old snapshot.
+  assert.equal(fs.existsSync(source),false);assert.equal(f.m.hash(rescue),originalHash);
+  assert.equal(f.m.hash(path.join(f.dir,'rescue/displaced_comm-bridge_c4.db')),originalHash);
+  assert.equal(f.m.hash(staging),snapshot.sha256);assert.notEqual(saved.dbRestore?.['comm-bridge/c4.db']?.complete,true);
+  assert.equal(saved.actions?.['install_comm-bridge_c4.db'],undefined);
+ }
+ assert.ok(!f.calls.includes('start'));
+ const result=f.r.resume(f.dir);assert.equal(result.stage,'restored_complete',JSON.stringify(result));assert.equal(result.completed,true);
+ assert.equal(f.m.hash(source),snapshot.sha256);assert.equal(f.m.hash(rescue),originalHash);
 });
 test('A14/A28: damaged snapshot is rejected before rescue or replacement',async t=>{
  const f=await fixture(t);change(f);const before=fs.readFileSync(f.db('comm-bridge/c4.db'));fs.appendFileSync(path.join(f.snapshot.dbBackupDir,f.snapshot.manifest.databases[0].file),'bad');
@@ -167,8 +212,8 @@ for(const installationIntent of [true,false])test(`unknown phase with installati
 test('ecosystem copy fsync failure cannot publish completed restore and retry is durable',async t=>{
  const f=await fixture(t),dest=path.join(f.root,'pm2/ecosystem.config.cjs'),backup=path.join(f.dir,'code/pm2/ecosystem.config.cjs');
  fs.mkdirSync(path.dirname(dest),{recursive:true});fs.mkdirSync(path.dirname(backup),{recursive:true});fs.writeFileSync(dest,'new ecosystem');fs.writeFileSync(backup,'original ecosystem');f.j.initialIdentity.ecosystemHash=f.m.hash(backup);f.m.update(f.dir,f.j);
- const sync=fs.fsyncSync;let hit=false;fs.fsyncSync=function(fd){if(fs.readlinkSync('/proc/self/fd/'+fd)===dest){hit=true;throw Error('ecosystem file fsync failed');}return sync.call(this,fd);};
- try{assert.throws(()=>f.r.restoreCore(f.dir,f.j),/ecosystem file fsync failed/);}finally{fs.fsyncSync=sync;}
+ const target=fs.statSync(dest);let hit=false;const restoreSync=interceptSync(fd=>{const stat=fs.fstatSync(fd);if(stat.dev===target.dev&&stat.ino===target.ino){hit=true;throw Error('ecosystem file fsync failed');}});
+ try{assert.throws(()=>f.r.restoreCore(f.dir,f.j),/ecosystem file fsync failed/);}finally{restoreSync();}
  assert.equal(hit,true);assert.notEqual(f.load().codeRestore.ecosystem?.complete,true);
  f.r.restoreCore(f.dir,f.j);assert.equal(f.load().codeRestore.ecosystem.complete,true);assert.equal(fs.readFileSync(dest,'utf8'),'original ecosystem');
 });
@@ -307,10 +352,10 @@ for(const phase of ['new_data_ready','restored_data_ready']) test(`${phase}: ter
  assert.equal(f.m.discover(f.root).candidates.length,0);
 });
 test('terminal marker unlink followed by fsync interruption recreates the marker and resumes in place', async t => {
- const f=await fixture(t);f.m.update(f.dir,f.j,{phase:'restored_data_ready'});const unlink=fs.unlinkSync,sync=fs.fsyncSync;let removed=false,first=true;
- t.after(()=>{fs.unlinkSync=unlink;fs.fsyncSync=sync;});
+ const f=await fixture(t);f.m.update(f.dir,f.j,{phase:'restored_data_ready'});const unlink=fs.unlinkSync;let removed=false,first=true;
+ const restoreSync=interceptSync(()=>{if(removed&&first){first=false;throw Error('marker directory fsync interrupted');}});
+ t.after(()=>{fs.unlinkSync=unlink;restoreSync();});
  fs.unlinkSync=file=>{const value=unlink(file);if(file===path.join(f.root,'.zylos/upgrade/active.json'))removed=true;return value;};
- fs.fsyncSync=fd=>{if(removed&&first){first=false;throw Error('marker directory fsync interrupted');}return sync(fd);};
  assert.equal(f.r.resume(f.dir).recovery_required,true);assert.equal(f.m.discover(f.root).blocked,false);
  assert.equal(fs.existsSync(path.join(f.root,'.zylos/upgrade/active.json')),true);
  f.calls.length=0;assert.equal(f.r.resume(f.dir).complete,true);assert.deepEqual(f.calls,[]);assert.ok(fs.existsSync(f.dir));
