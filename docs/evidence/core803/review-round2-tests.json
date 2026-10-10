@@ -1,0 +1,30 @@
+{
+  "base": "092f51cc08668aa44e5d50ae18cdde69e8f53335",
+  "main": {
+    "jest": {
+      "passed": 160,
+      "total": 160
+    },
+    "node": {
+      "passed": 1155,
+      "total": 1155
+    }
+  },
+  "c4": {
+    "passed": 314,
+    "total": 317,
+    "baselineFailures": [
+      "stdin broadcast",
+      "stdin missing channel",
+      "stdin failed channel"
+    ]
+  },
+  "scheduler": {
+    "passed": 99,
+    "total": 100,
+    "baselineFailure": "uses task timezone for cron calculation"
+  },
+  "nativeEvidence": "historical 6a7fc19 only; no current-source complete machine reboot certification",
+  "reviewerPm2": "isolated prior source 092f51cc PM2 7.0.3; SIGTERM stopped-dump limitation retained",
+  "noProductionMutation": true
+}

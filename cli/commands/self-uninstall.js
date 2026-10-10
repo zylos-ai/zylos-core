@@ -9,6 +9,7 @@
  * Phase 4: Optional cleanup (PM2, Claude CLI) — interactive, skipped with --force
  */
 
+import { savePm2ProcessList } from '../lib/pm2-save.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -228,7 +229,7 @@ function stopZylosPm2Services() {
   // Save so pm2 resurrect won't restore them.
   // --force is needed because pm2 refuses to save an empty process list by default.
   try {
-    execFileSync('pm2', ['save', '--force'], { stdio: 'pipe' });
+    savePm2ProcessList({save: () => execFileSync('pm2', ['save', '--force'], { stdio: 'pipe' })});
   } catch {
     // non-fatal
   }

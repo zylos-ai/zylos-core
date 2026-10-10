@@ -1,6 +1,5 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import os from 'node:os';
 import crypto from 'node:crypto';
 import { createRequire } from 'node:module';
 import { pathToFileURL, fileURLToPath } from 'node:url';
@@ -23,42 +22,14 @@ function missing(file) {
   if (['-wal','-shm'].some(s => fs.existsSync(file+s))) throw new Error(`Orphan SQLite sidecar: ${file}`);
   return true;
 }
-function quote(name) {return '"'+name.replaceAll('"','""')+'"';}
-function encode(value) {
-  if(value===null) return ['null'];
-  if(Buffer.isBuffer(value)) return ['blob',value.toString('hex')];
-  if(typeof value==='bigint') return ['integer',value.toString()];
-  if(typeof value==='number') return ['real',Object.is(value,-0)?'-0':String(value)];
-  return ['text',value];
-}
-// Hash SQLite values, not DB/WAL/SHM bytes. A readonly transaction fixes the
-// committed snapshot while schema, rows, integrity and version are inspected.
-export function logicalHash(db) {
-  const digest=crypto.createHash('sha256');
-  digest.update(JSON.stringify({userVersion:db.pragma('user_version',{simple:true}),applicationId:db.pragma('application_id',{simple:true})})+'\n');
-  const schema=db.prepare('SELECT type,name,tbl_name,sql FROM sqlite_schema ORDER BY type,name').raw().all();
-  digest.update(JSON.stringify(schema)+'\n');
-  for(const row of schema.filter(row=>row[0]==='table')) {
-    const name=row[1];
-    const columns=db.prepare(`PRAGMA table_info(${quote(name)})`).all().map(column=>column.name.toLowerCase());
-    const alias=['rowid','_rowid_','oid'].find(value=>!columns.includes(value));
-    const hasRowid=alias&&!/WITHOUT\s+ROWID/i.test(row[3]||'');
-    const query=`SELECT ${hasRowid?quote(alias)+', ':''}* FROM ${quote(name)}`;
-    const data=db.prepare(query).safeIntegers(true).raw().all().map(values=>JSON.stringify(values.map(encode))).sort();
-    digest.update(JSON.stringify(name)+'\n');
-    for(const encoded of data) digest.update(encoded+'\n');
-  }
-  return digest.digest('hex');
-}
 function inspectConnection(db) {
   const checks=db.pragma('integrity_check');
   if(checks.length!==1 || Object.values(checks[0])[0]!=='ok') throw new Error('integrity_check failed');
-  return {userVersion:db.pragma('user_version',{simple:true}),integrityCheck:'ok',logicalHash:logicalHash(db)};
+  return {userVersion:db.pragma('user_version',{simple:true}),integrityCheck:'ok'};
 }
 function withStandaloneReadonly(Database, file, expectedHash, inspect) {
-  // This driver does not support SQLite immutable URI opens. A readonly open
-  // of a WAL-header database can create WAL/SHM files. Inspect a private copy
-  // of verified standalone bytes so retries leave the source sidecar-free.
+  // Private snapshots are normalized to DELETE before their hash is recorded.
+  // Read them directly; no disposable database copy or WAL sidecar is needed.
   const stat = fs.lstatSync(file);
   if (!stat.isFile() || stat.isSymbolicLink()) throw new Error(`Invalid standalone database: ${file}`);
   for (const suffix of ['-wal', '-shm']) {
@@ -67,31 +38,22 @@ function withStandaloneReadonly(Database, file, expectedHash, inspect) {
     throw new Error(`Unexpected standalone SQLite sidecar: ${file + suffix}`);
   }
   if (hash(file) !== expectedHash) throw new Error(`Standalone database hash mismatch: ${file}`);
-  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-standalone-inspect-'));
-  let db, primaryError;
+  // Reject a WAL header before opening: the driver could create sidecars even
+  // through a readonly connection to an older, non-normalized snapshot.
+  const header = Buffer.alloc(20), fd = fs.openSync(file, 'r');
+  try { fs.readSync(fd, header, 0, header.length, 0); }
+  finally { fs.closeSync(fd); }
+  if (header[18] !== 1 || header[19] !== 1) throw new Error(`Standalone database is not normalized: ${file}`);
+  const db = new Database(file, {readonly:true, fileMustExist:true, timeout:5000});
   try {
-    fs.chmodSync(temporary, 0o700);
-    const copied = path.join(temporary, 'database.db');
-    fs.copyFileSync(file, copied);
-    fs.chmodSync(copied, 0o600);
-    if (hash(copied) !== expectedHash) throw new Error(`Standalone database copy changed: ${file}`);
-    db = new Database(copied, {readonly:true, fileMustExist:true, timeout:5000});
     db.exec('BEGIN');
     return inspect(db);
-  } catch (error) {
-    primaryError = error;
-    throw error;
   } finally {
-    let cleanupError;
-    try { if (db?.inTransaction) db.exec('ROLLBACK'); }
-    catch (error) { cleanupError = error; }
-    try { if (db) db.close(); }
-    catch (error) { cleanupError ||= error; }
-    try { fs.rmSync(temporary, {recursive:true, force:true}); }
-    catch (error) { cleanupError ||= error; }
-    if (cleanupError && !primaryError) throw cleanupError;
+    try { if (db.inTransaction) db.exec('ROLLBACK'); }
+    finally { db.close(); }
   }
 }
+
 function inspect(Database, file, expectedHash=hash(file)) {
   return withStandaloneReadonly(Database, file, expectedHash, inspectConnection);
 }
@@ -158,6 +120,12 @@ export async function execute(input) {
     const db=new Database(source,{readonly:true,fileMustExist:true,timeout:5000});
     try {if(typeof db.backup!=='function') throw new Error('SQLite backup API unavailable');await db.backup(target);}finally{db.close();}
     fs.chmodSync(target,0o600);
+    // db.backup preserves the source WAL header. Normalize only our private
+    // snapshot, leaving the original database and its committed WAL untouched.
+    const snapshot = new Database(target, {fileMustExist:true, timeout:5000});
+    try {
+      if (snapshot.pragma('journal_mode=DELETE', {simple:true}) !== 'delete') throw new Error('Snapshot journal mode normalization failed');
+    } finally { snapshot.close(); }
     const state=inspect(Database,target);
     const fd=fs.openSync(target,'r');try{fs.fsyncSync(fd);}finally{fs.closeSync(fd);}
     rows.push({source:item.source,status:'backed_up',...state,file,bytes:fs.statSync(target).size,sha256:hash(target)});

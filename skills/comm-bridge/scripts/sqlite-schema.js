@@ -3,7 +3,33 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 
+// Legacy runtime directories need no recovery validation until materials exist.
+// Damaged recovery links count as materials so absence cannot hide a transaction.
+function hasRecoveryMaterials(root) {
+  const present = file => {
+    try { return fs.lstatSync(file); }
+    catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+  };
+  try {
+    for (const relative of ['.zylos', '.zylos/upgrade', '.backup', '.backup/self-upgrade']) {
+      const file = path.join(root, relative), stat = present(file);
+      if (!stat) continue;
+      if (stat.isSymbolicLink()) {
+        if (relative !== '.zylos' && relative !== '.backup' || !fs.statSync(file).isDirectory()) return true;
+      } else if (!stat.isDirectory()) return true;
+    }
+    for (const relative of ['.zylos/upgrade/active.json']) {
+      if (present(path.join(root, relative))) return true;
+    }
+    const active = path.join(root, '.backup/self-upgrade');
+    return !!present(active) && fs.readdirSync(active).length > 0;
+  } catch {
+    return true;
+  }
+}
+
 export function assertCoreDatabaseAvailable(root) {
+  if (!hasRecoveryMaterials(root)) return;
   const present = file => {
     try { return fs.lstatSync(file); }
     catch (error) { if (error.code === 'ENOENT') return null; throw error; }
@@ -21,7 +47,7 @@ export function assertCoreDatabaseAvailable(root) {
   // Legacy/first-adoption deployments may have no stable recovery entry yet.
   // An existing transaction cannot be safely classified by weaker duplicate
   // rules during partial deployment: keep it isolated until stability returns.
-  for (const relative of ['.zylos/upgrade/active.json', '.zylos/upgrade/cleanup.json']) {
+  for (const relative of ['.zylos/upgrade/active.json']) {
     if (present(path.join(root, relative))) throw new Error('Core databases unavailable: stable maintenance entry missing with recovery materials');
   }
   const base = path.join(root, '.backup/self-upgrade');

@@ -4,8 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {createRequire} from 'node:module';
-import {CORE_DATABASES,createCoreDbSnapshot,prepareRecoveryDependencies,runCoreDbWorker,verifyRecoveryDependencies} from '../core-db-backup.js';
-import {logicalHash} from '../core-db-backup-worker.js';
+import {CORE_DATABASES,createCoreDbSnapshot,prepareRecoveryDependencies,runCoreDbWorker} from '../core-db-backup.js';
 const installed=process.env.CORE_DB_TEST_SKILL || path.join(os.homedir(),'zylos','.claude','skills','comm-bridge');
 let Database;try{Database=createRequire(path.join(installed,'package.json'))('better-sqlite3');}catch{}
 function fixture(t){const dir=fs.mkdtempSync(path.join(os.tmpdir(),'core-db-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));return dir;}
@@ -31,9 +30,9 @@ test('readonly WAL backup includes latest committed rows and independent frozen 
  const second=new Database(source);second.prepare('INSERT INTO messages(message) VALUES (?)').run('second-connection');second.close();
  const snapshot=createCoreDbSnapshot({zylosDir:dir,transactionId:'wal'});
  const row=snapshot.manifest.databases[0];assert.equal(row.userVersion,7);
- // Inspect a disposable copy: even a readonly WAL-header open creates sidecars.
- const inspectedCopy=path.join(dir,'inspect-snapshot.db');fs.copyFileSync(path.join(snapshot.dbBackupDir,row.file),inspectedCopy);
- const db=new Database(inspectedCopy,{readonly:true});assert.equal(db.prepare('SELECT message FROM messages').get().message,'committed');assert.equal(db.prepare('SELECT count(*) AS count FROM messages').get().count,2);db.close();assert.equal(writer.pragma('user_version',{simple:true}),7);
+ const snapshotFile=path.join(snapshot.dbBackupDir,row.file);
+ const db=new Database(snapshotFile,{readonly:true});assert.equal(db.pragma('journal_mode',{simple:true}),'delete');assert.equal(db.prepare('SELECT message FROM messages').get().message,'committed');assert.equal(db.prepare('SELECT count(*) AS count FROM messages').get().count,2);db.close();assert.equal(writer.pragma('user_version',{simple:true}),7);assert.equal(writer.pragma('journal_mode',{simple:true}),'wal');
+ for(const suffix of ['-wal','-shm'])assert.equal(fs.existsSync(snapshotFile+suffix),false);
  const transaction=path.join(dir,'transaction');const closure=prepareRecoveryDependencies(transaction,dir);
  for(const item of CORE_DATABASES)fs.unlinkSync(path.join(dir,'.claude/skills',item.owner,'node_modules'));
  assert.equal(runCoreDbWorker({action:'verify',zylosDir:dir,driverPath:closure.driverPath,dbBackupDir:snapshot.dbBackupDir,manifest:snapshot.manifest},closure).databases[0].integrityCheck,'ok');
@@ -55,20 +54,38 @@ test('offline-preflight loads only pure owner inspectors through maintenance mar
  assert.deepEqual(fs.readFileSync(source),before);
 });
 
-test('logical evidence survives checkpoint but detects committed SQLite values including blobs and wide integers', {skip:!Database},t=>{
+test('normalized snapshots inspect directly with no temporary database and preserve live WAL bytes', {skip:!Database},t=>{
  const dir=fixture(t);skills(dir);fs.mkdirSync(path.join(dir,'comm-bridge'));
  const source=path.join(dir,'comm-bridge/c4.db');const writer=new Database(source);t.after(()=>writer.close());
  writer.pragma('journal_mode=WAL');writer.exec('CREATE TABLE entries(id INTEGER PRIMARY KEY,value BLOB)');
  writer.prepare('INSERT INTO entries VALUES (?,?)').run(9007199254740993n,Buffer.from([0,255,2]));
- const snapshot=createCoreDbSnapshot({zylosDir:dir,transactionId:'logical'});const expected=snapshot.manifest.databases[0].logicalHash;
- assert.equal(logicalHash(writer),expected);writer.pragma('wal_checkpoint(TRUNCATE)');assert.equal(logicalHash(writer),expected);
- writer.prepare('UPDATE entries SET value=?').run(Buffer.from([0,255,3]));assert.notEqual(logicalHash(writer),expected);
+ const before=[source,source+'-wal'].map(file=>fs.readFileSync(file));
+ const snapshot=createCoreDbSnapshot({zylosDir:dir,transactionId:'normalized'});
+ assert.deepEqual([source,source+'-wal'].map(file=>fs.readFileSync(file)),before);
+ assert.equal(writer.pragma('journal_mode',{simple:true}),'wal');
+ const row=snapshot.manifest.databases[0],file=path.join(snapshot.dbBackupDir,row.file);
+ assert.equal(Object.hasOwn(row,'logicalHash'),false);
+ const readonly=new Database(file,{readonly:true,fileMustExist:true});
+ try {
+  assert.equal(readonly.pragma('journal_mode',{simple:true}),'delete');
+  const value=readonly.prepare('SELECT * FROM entries').safeIntegers(true).get();
+  assert.equal(value.id,9007199254740993n);assert.deepEqual(value.value,Buffer.from([0,255,2]));
+ }finally{readonly.close();}
+ const tmpdir=process.env.TMPDIR;
+ try {
+  process.env.TMPDIR=path.join(dir,'unavailable-temp-directory');
+  const verified=runCoreDbWorker({action:'verify',zylosDir:dir,dbBackupDir:snapshot.dbBackupDir,manifest:snapshot.manifest});
+  assert.equal(verified.databases[0].integrityCheck,'ok');
+ }finally{if(tmpdir===undefined)delete process.env.TMPDIR;else process.env.TMPDIR=tmpdir;}
+ for(const suffix of ['-wal','-shm'])assert.equal(fs.existsSync(file+suffix),false);
 });
-test('frozen dependency hashes reject modified native/module code before worker execution', {skip:!Database},t=>{
+test('copied closure is probe-loaded and remains independent of owner installations', {skip:!Database},t=>{
  const dir=fixture(t);skills(dir);const closure=prepareRecoveryDependencies(path.join(dir,'transaction'),dir);
- assert.ok(closure.driverClosureHashes.some(row=>row.file.endsWith('.node')));assert.ok(verifyRecoveryDependencies(closure));
- fs.appendFileSync(closure.driverPath,'\n// changed');
- assert.throws(()=>runCoreDbWorker({action:'probe',driverPath:closure.driverPath},closure),/Recovery dependency changed/);
+ assert.equal(Object.hasOwn(closure,'driverClosureHashes'),false);
+ for(const item of CORE_DATABASES)fs.unlinkSync(path.join(dir,'.claude/skills',item.owner,'node_modules'));
+ assert.deepEqual(runCoreDbWorker({action:'probe',driverPath:closure.driverPath},closure),{ok:true});
+ fs.writeFileSync(closure.driverPath,'throw Error("broken copied driver");');
+ assert.throws(()=>runCoreDbWorker({action:'probe',driverPath:closure.driverPath},closure),/broken copied driver/);
 });
 test('old owner without pure schema module fails explicit compatibility preflight',t=>{
  const dir=fixture(t);const schemaRoot=path.join(dir,'old-skills');

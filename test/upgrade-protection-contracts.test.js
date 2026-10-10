@@ -38,21 +38,28 @@ test('malformed journal and malformed marker remain isolated',()=>{
  fs.rmSync(dir,{recursive:true});m.durable(path.join(root,'.zylos/upgrade/active.json'),{formatVersion:1,transactionId:'missing',transactionDir:path.join(root,'.backup/self-upgrade/missing')});
  expect(m.discover(root).blocked).toBe(true);expect(m.discover(root).diagnostics.join(' ')).toMatch(/marker has no valid transaction/);
 });
-test('residual terminal marker stays blocked until archive cleanup',()=>{
+test('verified terminal marker permits DB access and clears while retaining its journal',()=>{
  const {dir,journal}=terminal('done');m.marker(root,dir,journal);
- expect(m.discover(root).blocked).toBe(true);
- const archived=m.archive(dir,journal);expect(fs.existsSync(archived)).toBe(true);expect(m.discover(root).blocked).toBe(false);expect(m.discover(root).candidates).toEqual([]);
+ expect(m.discover(root).blocked).toBe(false);expect(m.discover(root).candidates).toHaveLength(1);
+ expect(()=>m.assertCoreDatabaseAvailable(root)).not.toThrow();
+ expect(m.finishTerminal(dir,journal).complete).toBe(true);
+ expect(fs.existsSync(path.join(dir,'journal.json'))).toBe(true);
+ expect(fs.existsSync(path.join(root,'.zylos/upgrade/active.json'))).toBe(false);
+ expect(m.discover(root).candidates).toEqual([]);
 });
-test('interrupted archive rename resolves verified residual marker and resumes cleanup',()=>{
- const {dir,journal}=terminal('renamed');m.marker(root,dir,journal);
- const parent=path.join(root,'.backup/self-upgrade-archive');fs.mkdirSync(parent,{mode:0o700});const archived=path.join(parent,'renamed');fs.renameSync(dir,archived);
- const discovered=m.discover(root);expect(discovered.blocked).toBe(true);expect(discovered.diagnostics).toEqual([]);expect(discovered.candidates[0].archived).toBe(true);
- m.archive(archived,journal);expect(m.discover(root).blocked).toBe(false);
+test('terminal marker remains isolated until durable child exit confirmation',()=>{
+ const {dir,journal}=terminal('child');m.update(dir,journal,{finalizerStarted:true,finalizerExitConfirmed:false});m.marker(root,dir,journal);
+ expect(m.discover(root).blocked).toBe(true);expect(m.finishTerminal(dir,journal).complete).toBe(false);
+ expect(fs.existsSync(path.join(root,'.zylos/upgrade/active.json'))).toBe(true);
+ // A caller's in-memory confirmation cannot substitute for durable evidence.
+ journal.finalizerExitConfirmed=true;expect(m.finishTerminal(dir,journal).complete).toBe(false);
+ m.update(dir,journal);expect(m.finishTerminal(dir,journal).complete).toBe(true);
+ expect(fs.existsSync(path.join(dir,'journal.json'))).toBe(true);
 });
-test('unverified archive is never treated as a terminal cleanup candidate',()=>{
- const {dir,journal}=transaction('unknown','restored_complete');m.marker(root,dir,journal);
- const parent=path.join(root,'.backup/self-upgrade-archive');fs.mkdirSync(parent,{mode:0o700});fs.renameSync(dir,path.join(parent,'unknown'));
- expect(m.discover(root).blocked).toBe(true);expect(m.discover(root).diagnostics.join(' ')).toMatch(/not verified/);
+test('terminal marker with a missing transaction stays isolated',()=>{
+ const {dir,journal}=terminal('missing');m.marker(root,dir,journal);
+ fs.renameSync(dir,path.join(root,'.backup','moved-terminal'));
+ expect(m.discover(root).blocked).toBe(true);expect(m.discover(root).diagnostics.join(' ')).toMatch(/marker has no valid transaction/);
 });
 test('live controller rejects duplicate; PID reuse identity allows stale takeover',()=>{
  const {dir}=transaction('lock','offline');const first=m.acquire(dir);

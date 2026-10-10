@@ -1,6 +1,5 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import crypto from 'node:crypto';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
@@ -12,8 +11,7 @@ export const CORE_DATABASES=Object.freeze([
 const WORKER=fileURLToPath(new URL('./core-db-backup-worker.js',import.meta.url));
 function syncDir(dir){const fd=fs.openSync(dir,'r');try{fs.fsyncSync(fd);}finally{fs.closeSync(fd);}}
 function durableJson(file,value){const fd=fs.openSync(file,'wx',0o600);try{fs.writeFileSync(fd,JSON.stringify(value,null,2)+'\n');fs.fsyncSync(fd);}finally{fs.closeSync(fd);}syncDir(path.dirname(file));}
-export function runCoreDbWorker(payload,{workerPath=WORKER,nodePath=process.execPath,timeout=120000,driverClosureRoot,driverClosureHashes}={}) {
-  if(driverClosureHashes) verifyRecoveryDependencies({driverClosureRoot,driverClosureHashes});
+export function runCoreDbWorker(payload,{workerPath=WORKER,nodePath=process.execPath,timeout=120000}={}) {
   const result=spawnSync(nodePath,[workerPath,JSON.stringify(payload)],{encoding:'utf8',timeout,maxBuffer:4*1024*1024,windowsHide:true});
   if(result.error||result.status!==0) throw new Error(`SQLite ${payload.action} failed: ${result.error?.message || result.stderr || `exit ${result.status}`}`);
   try{return JSON.parse(result.stdout);}catch{throw new Error('Invalid SQLite worker response');}
@@ -55,27 +53,6 @@ export function createCoreDbSnapshot({zylosDir,transactionId,fromVersion,toVersi
     error.stagingDir=staging;throw error;
   }
 }
-export function verifyRecoveryDependencies({driverClosureRoot,driverClosureHashes}) {
-  if(!driverClosureRoot||!Array.isArray(driverClosureHashes)||driverClosureHashes.length===0) throw new Error('Missing SQLite recovery dependency evidence');
-  const root=path.resolve(driverClosureRoot);
-  const expectedFiles=new Set(driverClosureHashes.map(entry=>entry.file));
-  if(expectedFiles.size!==driverClosureHashes.length) throw new Error('Duplicate recovery dependency evidence');
-  function checkTree(dir) {
-    for(const entry of fs.readdirSync(dir,{withFileTypes:true})) {
-      const file=path.join(dir,entry.name);
-      if(entry.isSymbolicLink()) throw new Error(`Recovery dependency symlink: ${file}`);
-      if(entry.isDirectory()) checkTree(file);
-      else if(!entry.isFile()||!expectedFiles.has(path.relative(root,file))) throw new Error(`Unexpected recovery dependency: ${file}`);
-    }
-  }
-  checkTree(root);
-  for(const entry of driverClosureHashes) {
-    if(typeof entry.file!=='string'||path.isAbsolute(entry.file)||entry.file.split(/[\\/]/).includes('..')) throw new Error('Unsafe recovery dependency path');
-    const file=path.join(root,entry.file);
-    if(!fs.lstatSync(file).isFile()||fs.realpathSync(file)!==file||fs.statSync(file).size!==entry.bytes||crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex')!==entry.sha256) throw new Error(`Recovery dependency changed: ${entry.file}`);
-  }
-  return true;
-}
 // Freeze the native driver and its runtime dependency closure before npm changes.
 export function prepareRecoveryDependencies(transactionDir,zylosDir) {
   const target=path.join(transactionDir,'sqlite-runtime');fs.mkdirSync(target,{recursive:true,mode:0o700});
@@ -109,14 +86,5 @@ export function prepareRecoveryDependencies(transactionDir,zylosDir) {
     fs.chmodSync(dir,0o700);syncDir(dir);
   }
   syncTree(target);syncDir(transactionDir);
-  const driverClosureHashes=[];
-  function hashTree(dir) {
-    for(const entry of fs.readdirSync(dir,{withFileTypes:true}).sort((a,b)=>a.name.localeCompare(b.name))) {
-      const file=path.join(dir,entry.name);
-      if(entry.isDirectory()) hashTree(file);
-      else driverClosureHashes.push({file:path.relative(target,file),bytes:fs.statSync(file).size,sha256:crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex')});
-    }
-  }
-  hashTree(target);
-  return {workerPath,driverPath,nodePath:process.execPath,driverClosureRoot:target,driverClosureHashes};
+  return {workerPath,driverPath,nodePath:process.execPath,driverClosureRoot:target};
 }

@@ -1,3 +1,4 @@
+import { savePm2ProcessList } from '../lib/pm2-save.js';
 import { deployUpgradeBootstrap } from '../lib/upgrade-protection.js';
 import { githubUrl } from '../lib/upstreams.js';
 import { githubRequestSync } from '../lib/github-http.js';
@@ -1094,7 +1095,7 @@ function startCoreServices(webPassword = null) {
       try { execSync(`pm2 delete "${name}"`, { stdio: 'pipe' }); } catch {}
     }
     execSync(`pm2 start "${ecosystemPath}"`, { stdio: 'pipe', timeout: 30000 });
-    execSync('pm2 save', { stdio: 'pipe' });
+    savePm2ProcessList({save: () => execSync('pm2 save', { stdio: 'pipe' })});
   } catch (err) {
     console.log(`  ${warn(`Failed to start services: ${err.message}`)}`);
     return 0;

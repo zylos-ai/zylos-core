@@ -33,7 +33,10 @@ function fixture(t, {ecosystem=false}={}) {
 test('originally missing ecosystem restarts verified saved PM2 names without invoking journal script paths', t => {
   const f = fixture(t);
   m.start(f.j);
-  assert.deepEqual(f.commands, [['pm2','jlist'], ['pm2','restart','scheduler','--update-env'], ['pm2','save']]);
+  assert.deepEqual(f.commands, [['pm2','jlist'], ['pm2','restart','scheduler','--update-env']]);
+  f.records([{name:'scheduler',pid:123,pm2_env:{status:'online',pm_exec_path:f.j.originalServices[0].script}}]);
+  m.verifyServices(f.j);
+  assert.deepEqual(f.commands.slice(-2),[['pm2','jlist'],['pm2','save']]);
   assert.equal(fs.existsSync(f.file), false);
 });
 for (const changed of ['missing', 'outside', 'changed', 'journal-script']) test(`missing ecosystem restart refuses ${changed} PM2 provenance before starting any service`, t => {
@@ -58,7 +61,7 @@ for (const defect of ['missing', 'changed', 'symlink']) test(`originally present
 test('present verified original ecosystem retains startOrRestart behavior', t => {
   const f = fixture(t, {ecosystem:true});
   m.start(f.j);
-  assert.deepEqual(f.commands, [['pm2','startOrRestart',f.file,'--only','scheduler','--update-env'], ['pm2','save']]);
+  assert.deepEqual(f.commands, [['pm2','startOrRestart',f.file,'--only','scheduler','--update-env']]);
 });
 test('new-code ready verification allows intentional regenerated ecosystem bytes', t => {
   const f = fixture(t, {ecosystem:true});

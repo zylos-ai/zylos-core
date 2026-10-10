@@ -70,7 +70,7 @@ for(const phase of ['new_data_ready','restored_complete','aborted_before_install
  assert.throws(()=>assertCoreDatabaseAvailable(root),/stable maintenance entry missing/);
  run(root, `import assert from 'node:assert/strict';import fs from 'node:fs';import {getDb} from './skills/comm-bridge/scripts/c4-db.js';import {getDb as scheduler} from './skills/scheduler/scripts/database.js';import {openDb} from './skills/web-console/scripts/db.js';for(const open of [getDb,scheduler,openDb])assert.throws(open,/stable maintenance entry missing/);for(const source of ['comm-bridge/c4.db','scheduler/scheduler.db','web-console/web-console.db'])assert.equal(fs.existsSync(process.env.ZYLOS_DIR+'/'+source),false);`);
 });
-for(const relative of ['.zylos/upgrade/active.json','.zylos/upgrade/cleanup.json','.zylos/upgrade/maintenance.cjs','.backup/self-upgrade','.zylos/upgrade','.zylos','.backup'])test(`missing stable maintenance rejects dangling ${relative}`,t=>{
+for(const relative of ['.zylos/upgrade/active.json','.backup/self-upgrade','.zylos/upgrade','.zylos','.backup'])test(`missing stable maintenance rejects dangling ${relative}`,t=>{
  const root=fixture(t),file=path.join(root,relative);fs.mkdirSync(path.dirname(file),{recursive:true,mode:0o700});fs.symlinkSync(path.join(root,'absent'),file);assert.throws(()=>assertCoreDatabaseAvailable(root),/unavailable/);assert.equal(fs.lstatSync(file).isSymbolicLink(),true);
 });
 test('first-adoption absence and empty active root permit schema initialization without fabricated protection',t=>{
@@ -147,4 +147,28 @@ test('invalid schema versions are distinguished from future supported-range vers
  const db=new Database(':memory:');db.pragma('user_version = -1');assert.throws(()=>wc.inspectSchema(db),/invalid schema version -1/);db.close();
  for(const version of [1.5,undefined,NaN])assert.throws(()=>wc.inspectSchema({pragma(){return version;}}),/invalid schema version/);
  const future=new Database(':memory:');future.pragma('user_version = 2');assert.throws(()=>wc.inspectSchema(future),/schema version 2 exceeds supported 1/);future.close();
+});
+
+for (const layout of ['symlink .zylos', 'symlink .backup', 'group writable', 'partial stable deployment', 'dangling stable helper', 'empty0775']) test(`ordinary owner openers permit ${layout} without recovery materials`, t => {
+ const root=fixture(t);
+ if(layout.startsWith('symlink')) {
+  const target=path.join(root,'legacy-parent');fs.mkdirSync(target);fs.symlinkSync(target,path.join(root,layout.split(' ')[1]));
+ }
+ const stable=path.join(root,'.zylos/upgrade');fs.mkdirSync(stable,{recursive:true});
+ if(layout==='dangling stable helper') fs.symlinkSync(path.join(root,'missing'),path.join(stable,'maintenance.cjs'));
+ else fs.writeFileSync(path.join(stable,'maintenance.cjs'),"throw Error('partial deployment must not load');");
+ const active=path.join(root,'.backup/self-upgrade');fs.mkdirSync(active,{recursive:true});
+ if(layout==='group writable' || layout==='empty0775') {
+  for(const directory of [path.join(root,'.zylos'),stable,path.join(root,'.backup'),active])fs.chmodSync(directory,0o775);
+  if(layout==='group writable')fs.chmodSync(path.join(stable,'maintenance.cjs'),0o664);
+ }
+ assert.doesNotThrow(()=>assertCoreDatabaseAvailable(root));
+ run(root, `import {getDb,close} from './skills/comm-bridge/scripts/c4-db.js';import {getDb as scheduler} from './skills/scheduler/scripts/database.js';import {openDb} from './skills/web-console/scripts/db.js';getDb();close();scheduler().close();openDb().close();`);
+ for(const [relative,owner] of [['comm-bridge/c4.db',c4],['scheduler/scheduler.db',scheduler],['web-console/web-console.db',wc]]) {
+  const db=new Database(path.join(root,relative),{readonly:true});assert.equal(owner.inspectSchema(db).version,1);db.close();
+ }
+});
+test('dangling stable helper with actual materials still blocks ordinary owners', t => {
+ const root=fixture(t),stable=path.join(root,'.zylos/upgrade');fs.mkdirSync(stable,{recursive:true});fs.symlinkSync(path.join(root,'missing'),path.join(stable,'maintenance.cjs'));fs.writeFileSync(path.join(stable,'active.json'),'{}');
+ assert.throws(()=>assertCoreDatabaseAvailable(root),/unsafe stable maintenance entry/);
 });

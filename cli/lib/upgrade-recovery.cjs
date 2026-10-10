@@ -28,9 +28,8 @@ function originalVerified(dir, j) {
   if (j.initialIdentity.nodePath !== j.nodePath || m.hash(j.initialIdentity.packageJson) !== j.initialIdentity.packageHash) throw Error('original installed package identity changed');
   if (j.initialIdentity.cliRoot || j.initialIdentity.cliHash) {
     if (typeof j.initialIdentity.cliRoot !== 'string' || !path.isAbsolute(j.initialIdentity.cliRoot) || typeof j.initialIdentity.cliHash !== 'string') throw Error('original installed CLI evidence incomplete');
-    m.privatePath(j.initialIdentity.cliRoot, {
-      directory: true
-    });
+    const cliStat = fs.lstatSync(j.initialIdentity.cliRoot);
+    if (!cliStat.isDirectory() || cliStat.isSymbolicLink()) throw Error('original installed CLI directory rejected');
     const inspect = current => {
       for (const name of fs.readdirSync(current)) {
         const file = path.join(current, name),
@@ -74,8 +73,6 @@ function originalVerified(dir, j) {
     result = JSON.parse(r.stdout);
   }
   if (result.success === false) throw Error(result.error || 'original readonly preflight failed');
-  // SQLite logical evidence includes committed WAL, not raw database/backup byte equality.
-  if (j.stableDataEvidence && JSON.stringify(result.databases?.map(d => d.logicalHash)) !== JSON.stringify(j.stableDataEvidence)) throw Error('original committed data state changed');
 }
 function abort(dir, j) {
   if (m.terminalValid(j)) {
@@ -97,9 +94,6 @@ function abort(dir, j) {
     },
     cleanup: j.cleanup || {}
   });
-  m.unmark(j.zylosDir, j);
-  j.cleanup.markerRemoved = true;
-  m.update(dir, j);
   m.start(j);
   m.verifyServices(j);
   j.cleanup.servicesRestored = true;
@@ -291,10 +285,17 @@ function replaceDatabases(dir, j, manifest) {
     m.update(dir, j);
   }
 }
+function terminalPending(dir, j, error) {
+  // A failed final marker removal must never replay database compensation.
+  // Recreate the pointer if unlink succeeded but its directory fsync failed.
+  try { m.marker(j.zylosDir, dir, j); }
+  catch (isolation) { error += '; maintenance marker: ' + isolation.message; }
+  return {attempted:false, completed:false, stage:j.phase, error, recovery_required:true};
+}
 function validateReady(dir, j) {
   const restored = j.phase.startsWith('restored');
+  let verified = false;
   try {
-    m.unmark(j.zylosDir, j);
     m.update(dir, j, {
       phase: restored ? 'restored_verifying' : 'new_verifying'
     });
@@ -303,6 +304,7 @@ function validateReady(dir, j) {
     // Normal startup may create missing DBs/write data: use current compatibility, never old hashes.
     const checked = m.preflight(dir, j, null);
     if (checked.success === false) throw Error(checked.error || 'started code/data incompatible');
+    verified = true;
     m.update(dir, j, {
       phase: restored ? 'restored_complete' : 'upgrade_complete',
       terminalEvidence: {
@@ -311,8 +313,7 @@ function validateReady(dir, j) {
       },
       cleanup: {
         complete: true,
-        servicesRestored: true,
-        markerRemoved: true
+        servicesRestored: true
       }
     });
     const cleanup = m.finishTerminal(dir, j);
@@ -324,6 +325,9 @@ function validateReady(dir, j) {
       ...cleanup
     };
   } catch (e) {
+    const saved = m.transaction(j.zylosDir, dir);
+    if (m.terminalValid(saved)) return terminalPending(dir, saved, e.message);
+    if (verified) return fail(dir, saved, e.message);
     m.marker(j.zylosDir, dir, j);
     m.stop(j);
     if (restored) return fail(dir, j, e.message);
@@ -334,46 +338,24 @@ function validateReady(dir, j) {
     return null;
   }
 }
-function finalizerDescriptor(dir, j, archived) {
-  let d = m.read(path.join(dir, 'descriptor.json'));
-  if (archived) {
-    // Archive rename moves trusted bytes; only the original fixed layout may
-    // be rebased. Never accept arbitrary material paths from the descriptor.
-    const original = path.join(j.zylosDir, '.backup', 'self-upgrade', j.transactionId);
-    const fixed = {
-      runnerPath: 'runner.cjs',
-      workerPath: 'sqlite-runtime/core-db-backup-worker.js',
-      driverPath: 'sqlite-runtime/node_modules/better-sqlite3/lib/index.js',
-      driverClosureRoot: 'sqlite-runtime'
-    };
-    d = {
-      ...d
-    };
-    for (const [key, relative] of Object.entries(fixed)) {
-      if (d[key] !== path.join(original, relative)) throw Error('archived recovery material outside original fixed layout: ' + key);
-      d[key] = path.join(dir, relative);
-    }
-  }
+function finalizerDescriptor(dir, j) {
+  const d = m.read(path.join(dir, 'descriptor.json'));
   m.validateDescriptor(dir, j, d);
   return d;
 }
-function verifyFinalizerExit(dir, j, {
-  archived = false
-} = {}) {
+function verifyFinalizerExit(dir, j) {
   for (const kind of ['installer', 'finalizer']) {
-    const intent = kind + 'LaunchIntent',
-      execution = kind + 'Execution',
+    const started = kind + 'Started',
       confirmed = kind + 'ExitConfirmed',
       unconfirmed = kind + 'ExitUnconfirmed';
-    if (j[unconfirmed] || j[intent] && !j[confirmed]) {
-      const d = finalizerDescriptor(dir, j, archived);
+    if (j[unconfirmed] || j[started] && !j[confirmed]) {
+      const d = finalizerDescriptor(dir, j);
       for (const name of ['finalizer.cjs', 'maintenance.cjs']) {
         if (!d.hashes?.[name]) throw Error('missing trusted finalizer exit verification material: ' + name);
         m.privatePath(path.join(dir, name));
       }
-      if (!j[intent] && !j[execution]) throw Error(kind + ' exit requires verification: unknown launch identity');
       const result = require(path.join(dir, 'finalizer.cjs')).quiesce(dir, j, {
-        terminate: true,
+        terminate: false,
         kind
       });
       if (!result.confirmed) throw Error(result.error || kind + ' exit requires verification before resume');
@@ -405,47 +387,20 @@ function resume(dir, {
     directory: true
   });
   dir = fs.realpathSync(dir);
-  const archived = path.dirname(dir) === path.join(root, '.backup', 'self-upgrade-archive');
-  if (!archived && path.dirname(dir) !== path.join(root, '.backup', 'self-upgrade')) throw Error('invalid transaction directory');
+  if (path.dirname(dir) !== path.join(root, '.backup', 'self-upgrade')) throw Error('invalid transaction directory');
   const release = m.acquire(dir);
-  let j, terminal;
+  let j;
   try {
     // Journal identity and phase are authoritative only while holding the
     // controller. Never restore using the pre-lock snapshot.
-    j = archived ? m.read(path.join(dir, 'journal.json')) : m.transaction(root, dir);
-    if (archived && (j.formatVersion !== 1 || j.transactionId !== path.basename(dir) || j.zylosDir !== root || !m.terminalValid(j))) throw Error('unverified archived transaction');
-    terminal = m.terminalValid(j);
-    const terminalBlocked = terminal && (j.installerExitUnconfirmed || j.finalizerExitUnconfirmed || j.archiveServicesStopped || j.archiveRecoveryRequired);
-    verifyFinalizerExit(dir, j, {
-      archived
-    });
-    if (terminalBlocked) {
-      const d = finalizerDescriptor(dir, j, archived);
-      m.update(dir, j, {
-        archiveRecoveryRequired: false
-      });
-      m.unmark(root, j);
-      m.start(j);
-      m.verifyServices(j);
-      const cp = require('node:child_process');
-      const checked = cp.spawnSync(d.nodePath, [d.workerPath, JSON.stringify({
-        action: 'offline-preflight',
-        zylosDir: root,
-        schemaRoot: j.skillsDir,
-        driverPath: d.driverPath
-      })], {
-        encoding: 'utf8',
-        timeout: 120000
-      });
-      if (checked.error || checked.status !== 0) throw Error(checked.error?.message || checked.stderr || 'archived code/data preflight failed');
-      const result = JSON.parse(checked.stdout);
-      if (result.success === false) throw Error(result.error || 'archived code/data preflight failed');
-      m.update(dir, j, {
-        archiveServicesStopped: false,
-        archiveRecoveryRequired: false
-      });
-    }
+    j = m.transaction(root, dir);
+    verifyFinalizerExit(dir, j);
     if (m.terminalValid(j)) {
+      if (j.terminalServicesStopped) {
+        m.start(j);
+        m.verifyServices(j);
+        m.update(dir, j, {terminalServicesStopped:false});
+      }
       const cleanup = m.finishTerminal(dir, j);
       return {
         attempted: j.phase === 'restored_complete',
@@ -485,34 +440,8 @@ function resume(dir, {
     return validateReady(dir, j);
   } catch (e) {
     // Invalid identity under the lock must not write through untrusted paths.
-    if (!j || j.zylosDir !== root || j.transactionId !== path.basename(dir) || archived && !terminal) throw e;
-    if (terminal) {
-      let error = e.message;
-      try {
-        m.marker(root, path.join(root, '.backup', 'self-upgrade', j.transactionId), j);
-        m.stop(j);
-      } catch (isolation) {
-        error += '; isolation: ' + isolation.message;
-      }
-      // A terminal archive never becomes a restore input or loses its evidence.
-      m.durable(path.join(root, '.zylos', 'upgrade', 'cleanup.json'), {
-        formatVersion: 1,
-        transactionId: j.transactionId
-      });
-      m.update(dir, j, {
-        archiveServicesStopped: true,
-        archiveRecoveryRequired: true,
-        cleanupPending: true,
-        recoveryError: error
-      });
-      return {
-        attempted: false,
-        completed: false,
-        stage: 'finalizer_exit',
-        error,
-        recovery_required: true
-      };
-    }
+    if (!j || j.zylosDir !== root || j.transactionId !== path.basename(dir)) throw e;
+    if (m.terminalValid(j)) return terminalPending(dir, j, e.message);
     return fail(dir, j, e.message);
   } finally {
     release();

@@ -29,7 +29,7 @@ test('ordinary unconfigured adoption deploys bootstrap and atomically publishes 
   beginUpgrade(f.ctx, { zylosDir: f.root, skillsDir: f.skillsDir });
   t.after(() => f.ctx.releaseControl());
   assert.equal(fs.existsSync(path.join(f.root, '.zylos/upgrade/bootstrap.cjs')), true);
-  assert.deepEqual(f.ctx.bootCapability, { declared: false, verified: false });
+  assert.equal(f.ctx.bootCapability, undefined);
   const current = m.transaction(f.root, f.ctx.transactionDir);
   assert.equal(current.phase, 'preparing');
   assert.equal(current.installationIntent, false);
@@ -56,24 +56,16 @@ test('journal write failure stays outside discovery and cannot poison normal dat
   assert.deepEqual(m.discover(f.root).diagnostics, []);
   assert.equal(m.discover(f.root).blocked, false);
   assert.equal(fs.readdirSync(path.join(f.root, '.backup/self-upgrade')).length, 0);
+  assert.equal(fs.readdirSync(path.join(f.root, '.backup/self-upgrade-staging')).length, 0);
 });
 
-test('declared invalid boot capability fails before transaction publication or stopping services', t => {
+test('retired capability configuration does not gate protected publication', t => {
   const f = fixture(t);
   fs.mkdirSync(path.join(f.root, '.zylos/upgrade'), { mode: 0o700 });
   m.durable(path.join(f.root, '.zylos/upgrade/capability.json'), { formatVersion: 1 });
-  let checked = false;
-  assert.throws(() => beginUpgrade(f.ctx, { zylosDir: f.root, skillsDir: f.skillsDir }, {
-    verifyBoot: ({ bootstrapPath }) => {
-      checked = true;
-      assert.equal(fs.existsSync(bootstrapPath), true);
-      assert.equal(m.discover(f.root).candidates.length, 0);
-      throw Error('injected boot prerequisite failure');
-    }
-  }), /boot prerequisite failure/);
-  assert.equal(checked, true);
-  assert.equal(m.discover(f.root).blocked, false);
-  assert.equal(f.ctx.preInstallProtection, undefined);
+  beginUpgrade(f.ctx, { zylosDir: f.root, skillsDir: f.skillsDir });
+  t.after(() => f.ctx.releaseControl());
+  assert.equal(f.ctx.preInstallProtection, true);
 });
 
 test('symlink deployment root records canonical transaction identities', t => {
@@ -97,4 +89,23 @@ test('data-ready publication refreshes parent context before later durable write
   assert.equal(f.ctx.journal.phase, 'new_data_ready');
   m.update(f.ctx.transactionDir, f.ctx.journal, { ecosystemCreationIntent: { test: true } });
   assert.equal(m.read(path.join(f.ctx.transactionDir, 'journal.json')).phase, 'new_data_ready');
+});
+
+test('controller acquisition failure removes only its unpublished staging attempt', t => {
+  const f = fixture(t), stagingRoot = path.join(f.root, '.backup/self-upgrade-staging');
+  fs.mkdirSync(stagingRoot, {recursive:true, mode:0o700});
+  const unrelated = path.join(stagingRoot, 'prior-attempt');
+  fs.mkdirSync(unrelated, {mode:0o700});fs.writeFileSync(path.join(unrelated, 'note'), 'keep');
+  const acquire = m.acquire;
+  m.acquire = () => {throw Error('injected controller failure');};
+  try {
+    assert.throws(() => beginUpgrade(f.ctx, {zylosDir:f.root, skillsDir:f.skillsDir}), /injected controller failure/);
+  } finally {m.acquire = acquire;}
+  assert.deepEqual(fs.readdirSync(stagingRoot), ['prior-attempt']);
+  assert.equal(fs.readFileSync(path.join(unrelated, 'note'), 'utf8'), 'keep');
+  assert.deepEqual(fs.readdirSync(path.join(f.root, '.backup/self-upgrade')), []);
+  assert.equal(m.discover(f.root).blocked, false);
+  beginUpgrade(f.ctx, {zylosDir:f.root, skillsDir:f.skillsDir});
+  t.after(() => f.ctx.releaseControl());
+  assert.equal(f.ctx.preInstallProtection, true);
 });

@@ -7,13 +7,12 @@ import {createRequire} from 'node:module';
 import {pathToFileURL} from 'node:url';
 import {spawn,spawnSync} from 'node:child_process';
 import {CORE_DATABASES,createCoreDbSnapshot,prepareRecoveryDependencies} from '../core-db-backup.js';
-import {logicalHash} from '../core-db-backup-worker.js';
 
 const require=createRequire(import.meta.url);
 const Database=require(path.resolve('skills/comm-bridge/node_modules/better-sqlite3'));
 // Each test loads private copies of the real recovery and maintenance modules.
 // Only service calls are replaced: database/native worker, hashes, journal,
-// rescue, rename intents, isolation discovery, and archive are real.
+// rescue, rename intents, isolation discovery, and terminal marker removal are real.
 async function fixture(t,{missing=false,wal=false}={}) {
  const root=fs.mkdtempSync(path.join(os.tmpdir(),'upgrade-recovery-'));
  t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
@@ -43,10 +42,10 @@ async function fixture(t,{missing=false,wal=false}={}) {
 }
 function change(f){const p=f.db('comm-bridge/c4.db'),db=new Database(p);db.prepare('INSERT INTO checkpoints(id,summary) VALUES (?,?)').run(1,'new-generation');db.close();fs.writeFileSync(p+'-wal','old-wal');fs.writeFileSync(p+'-shm','old-shm');fs.appendFileSync(path.join(f.j.skillsDir,'comm-bridge/package.json'),'\n');}
 
-test('A12/A14/A15: complete compensation restores old code/data, preserves rescue, removes sidecars and archives',async t=>{
+test('A12/A14/A15: complete compensation restores old code/data, preserves rescue, removes sidecars and retains terminal materials',async t=>{
  const f=await fixture(t,{missing:true});change(f);fs.mkdirSync(path.dirname(f.db('scheduler/scheduler.db')),{recursive:true});fs.writeFileSync(f.db('scheduler/scheduler.db'),'new-db');
  const original=fs.readFileSync(f.db('comm-bridge/c4.db'));const result=f.r.resume(f.dir);assert.equal(result.completed,true);assert.equal(result.stage,'restored_complete');assert.ok(!fs.existsSync(f.db('scheduler/scheduler.db')));assert.ok(!fs.existsSync(f.db('comm-bridge/c4.db-wal')));
- const archived=path.join(f.root,'.backup/self-upgrade-archive/tx');assert.deepEqual(fs.readFileSync(path.join(archived,'rescue/comm-bridge_c4.db')),original);assert.equal(f.m.discover(f.root).blocked,false);assert.deepEqual(f.calls,['stop','start','verify']);
+ const archived=path.join(f.root,'.backup/self-upgrade/tx');assert.deepEqual(fs.readFileSync(path.join(archived,'rescue/comm-bridge_c4.db')),original);assert.equal(f.m.discover(f.root).blocked,false);assert.deepEqual(f.calls,['stop','start','verify']);
 });
 test('A14/A28: damaged snapshot is rejected before rescue or replacement',async t=>{
  const f=await fixture(t);change(f);const before=fs.readFileSync(f.db('comm-bridge/c4.db'));fs.appendFileSync(path.join(f.snapshot.dbBackupDir,f.snapshot.manifest.databases[0].file),'bad');
@@ -56,7 +55,7 @@ test('A26: crash after physical DB rename but before done journal resumes existi
  const f=await fixture(t);change(f);f.r.rescue(f.dir,f.j);f.r.restoreCore(f.dir,f.j);
  const real=f.m.renameIntent;let crashed=false;f.m.renameIntent=(dir,j,key,...args)=>{const result=real(dir,j,key,...args);if(!crashed&&key==='install_comm-bridge_c4.db'){crashed=true;j.actions[key].done=false;f.m.update(dir,j);throw Error('simulated power loss after install rename');}return result;};
  assert.throws(()=>f.r.replaceDatabases(f.dir,f.j,f.snapshot.manifest),/power loss/);const rescueHash=f.m.hash(path.join(f.dir,'rescue/comm-bridge_c4.db'));f.m.renameIntent=real;
- const result=f.r.resume(f.dir);assert.equal(result.completed,true);assert.equal(f.m.hash(path.join(f.root,'.backup/self-upgrade-archive/tx/rescue/comm-bridge_c4.db')),rescueHash);
+ const result=f.r.resume(f.dir);assert.equal(result.completed,true);assert.equal(f.m.hash(path.join(f.root,'.backup/self-upgrade/tx/rescue/comm-bridge_c4.db')),rescueHash);
 });
 test('A26: partial rescue resumes recorded generation and refuses changed rescue evidence',async t=>{
  const f=await fixture(t);change(f);const real=f.m.renameIntent;let crashed=false;f.m.renameIntent=(dir,j,key,...args)=>{const result=real(dir,j,key,...args);if(!crashed&&key==='rescue_comm-bridge_c4.db'){crashed=true;throw Error('simulated crash');}return result;};assert.throws(()=>f.r.rescue(f.dir,f.j),/crash/);f.m.renameIntent=real;
@@ -64,28 +63,26 @@ test('A26: partial rescue resumes recorded generation and refuses changed rescue
 });
 for(const phase of ['new_data_ready','restored_data_ready','new_verifying','restored_verifying'])test(`A16/A27: ${phase} resumes validation and retains valid normal writes`,async t=>{
  const f=await fixture(t);const db=new Database(f.db('comm-bridge/c4.db'));db.prepare('INSERT INTO checkpoints(id,summary) VALUES (?,?)').run(7,'normal-write');db.close();f.m.update(f.dir,f.j,{phase});
- const result=f.r.resume(f.dir);assert.equal(result.recovery_required,false);assert.ok(!f.calls.includes('stop'));const read=new Database(f.db('comm-bridge/c4.db'),{readonly:true});assert.equal(read.prepare('SELECT summary FROM checkpoints WHERE id=7').get().summary,'normal-write');read.close();assert.ok(!fs.existsSync(path.join(f.root,'.backup/self-upgrade-archive/tx/rescue')));
+ const result=f.r.resume(f.dir);assert.equal(result.recovery_required,false);assert.ok(!f.calls.includes('stop'));const read=new Database(f.db('comm-bridge/c4.db'),{readonly:true});assert.equal(read.prepare('SELECT summary FROM checkpoints WHERE id=7').get().summary,'normal-write');read.close();assert.ok(!fs.existsSync(path.join(f.root,'.backup/self-upgrade/tx/rescue')));
 });
 test('A27: restored verification failure isolates without a second database replacement',async t=>{
  const f=await fixture(t);f.m.update(f.dir,f.j,{phase:'restored_data_ready'});const before=fs.readFileSync(f.db('comm-bridge/c4.db'));f.m.verifyServices=()=>{throw Error('service failed');};
  const result=f.r.resume(f.dir);assert.equal(result.recovery_required,true);assert.equal(f.load().resumePhase,'restored_verifying');assert.deepEqual(fs.readFileSync(f.db('comm-bridge/c4.db')),before);assert.ok(!fs.existsSync(path.join(f.dir,'rescue')));assert.equal(f.m.discover(f.root).blocked,true);
 });
 test('A28: unconfirmed finalizer exit keeps current generation isolated',async t=>{
- const f=await fixture(t);change(f);f.m.update(f.dir,f.j,{finalizerExitUnconfirmed:true});const before=fs.readFileSync(f.db('comm-bridge/c4.db'));const result=f.r.resume(f.dir);assert.equal(result.recovery_required,true);assert.match(result.error,/exit requires verification/);assert.deepEqual(fs.readFileSync(f.db('comm-bridge/c4.db')),before);assert.ok(!f.calls.includes('start'));
+ const f=await fixture(t);change(f);f.m.update(f.dir,f.j,{finalizerExitUnconfirmed:true});const before=fs.readFileSync(f.db('comm-bridge/c4.db'));const result=f.r.resume(f.dir);assert.equal(result.recovery_required,true);assert.match(result.error,/interrupted launch/);assert.deepEqual(fs.readFileSync(f.db('comm-bridge/c4.db')),before);assert.ok(!f.calls.includes('start'));
 });
 test('A24/A29: trusted preinstall abort verifies original data without snapshot restore',async t=>{
- const f=await fixture(t);f.m.update(f.dir,f.j,{installationIntent:false,phase:'preparing'});const before=fs.readFileSync(f.db('comm-bridge/c4.db'));const result=f.r.resume(f.dir);assert.equal(result.stage,'aborted_before_install',JSON.stringify(result));assert.equal(result.attempted,false);assert.deepEqual(fs.readFileSync(f.db('comm-bridge/c4.db')),before);assert.ok(!fs.existsSync(path.join(f.root,'.backup/self-upgrade-archive/tx/rescue')));assert.equal(f.m.discover(f.root).blocked,false);
+ const f=await fixture(t);f.m.update(f.dir,f.j,{installationIntent:false,phase:'preparing'});const before=fs.readFileSync(f.db('comm-bridge/c4.db'));const result=f.r.resume(f.dir);assert.equal(result.stage,'aborted_before_install',JSON.stringify(result));assert.equal(result.attempted,false);assert.deepEqual(fs.readFileSync(f.db('comm-bridge/c4.db')),before);assert.ok(!fs.existsSync(path.join(f.root,'.backup/self-upgrade/tx/rescue')));assert.equal(f.m.discover(f.root).blocked,false);
+});
+test('R3: group-writable original npm CLI root permits verified preinstall abort',async t=>{
+ const f=await fixture(t);fs.chmodSync(f.j.initialIdentity.cliRoot,0o775);f.m.update(f.dir,f.j,{installationIntent:false,phase:'preparing'});
+ const before=fs.readFileSync(f.db('comm-bridge/c4.db'));const result=f.r.resume(f.dir);
+ assert.equal(result.stage,'aborted_before_install',JSON.stringify(result));assert.equal(result.recovery_required,false);assert.deepEqual(fs.readFileSync(f.db('comm-bridge/c4.db')),before);assert.equal(f.m.discover(f.root).blocked,false);
 });
 test('A25: interrupted original service restart only resumes verified abort cleanup',async t=>{
  const f=await fixture(t);f.m.update(f.dir,f.j,{installationIntent:false,phase:'preparing'});let first=true;f.m.start=()=>{f.calls.push('start');if(first){first=false;throw Error('start interrupted');}};
  const before=fs.readFileSync(f.db('comm-bridge/c4.db'));assert.equal(f.r.resume(f.dir).recovery_required,true);assert.equal(f.load().resumePhase,'aborted_before_install');assert.equal(f.m.discover(f.root).blocked,true);assert.equal(f.r.resume(f.dir).stage,'aborted_before_install');assert.deepEqual(fs.readFileSync(f.db('comm-bridge/c4.db')),before);
-});
-for(const phase of ['new_data_ready','restored_data_ready'])test(`${phase}: archive failure preserves verified terminal and retries cleanup without compensation`,async t=>{
- const f=await fixture(t);f.m.update(f.dir,f.j,{phase});const before=fs.readFileSync(f.db('comm-bridge/c4.db'));const rename=fs.renameSync;
- fs.renameSync=(src,dest)=>{if(src===f.dir)throw Error('injected archive failure');return rename(src,dest);};
- let result;try{result=f.r.resume(f.dir);}finally{fs.renameSync=rename;}
- assert.equal(result.recovery_required,false);assert.equal(result.complete,false);assert.match(result.warnings.join(' '),/archive failure/);assert.equal(f.load().phase,phase.startsWith('restored')?'restored_complete':'upgrade_complete');assert.equal(f.load().cleanupPending,true);assert.ok(!f.calls.includes('stop'));assert.deepEqual(fs.readFileSync(f.db('comm-bridge/c4.db')),before);
- f.calls.length=0;const resumed=f.r.resume(f.dir);assert.equal(resumed.complete,true);assert.deepEqual(f.calls,[]);assert.deepEqual(fs.readFileSync(f.db('comm-bridge/c4.db')),before);
 });
 test('A13: failed stop verification refuses physical replacement and service start',async t=>{
  const f=await fixture(t);change(f);const before=fs.readFileSync(f.db('comm-bridge/c4.db'));f.m.stop=()=>{f.calls.push('stop');throw Error('PM2 stop not confirmed');};const result=f.r.resume(f.dir);assert.equal(result.recovery_required,true);assert.match(result.error,/not confirmed/);assert.deepEqual(fs.readFileSync(f.db('comm-bridge/c4.db')),before);assert.ok(!fs.existsSync(path.join(f.dir,'rescue')));assert.ok(!f.calls.includes('start'));
@@ -98,8 +95,8 @@ test('A29: initial journal without descriptor or snapshots aborts through truste
 for(const action of ['terminal-write','marker-remove'])test(`A25: abort ${action} interruption stays isolated then continues without replacement`,async t=>{
  const f=await fixture(t);f.m.update(f.dir,f.j,{installationIntent:false,phase:'preparing'});let first=true;const before=fs.readFileSync(f.db('comm-bridge/c4.db'));
  if(action==='terminal-write'){const real=f.m.update;f.m.update=(dir,j,changes={})=>{if(first&&changes.phase==='aborted_before_install'){first=false;throw Error('terminal fsync failed');}return real(dir,j,changes);};}
- else{const real=f.m.unmark;f.m.unmark=(...args)=>{if(first){first=false;throw Error('marker remove failed');}return real(...args);};}
- assert.equal(f.r.resume(f.dir).recovery_required,true);assert.equal(f.m.discover(f.root).blocked,true);assert.ok(!f.calls.includes('start'));assert.equal(f.r.resume(f.dir).stage,'aborted_before_install');assert.deepEqual(fs.readFileSync(f.db('comm-bridge/c4.db')),before);assert.ok(!fs.existsSync(path.join(f.root,'.backup/self-upgrade-archive/tx/rescue')));
+ else{const real=fs.unlinkSync;t.after(()=>{fs.unlinkSync=real;});fs.unlinkSync=file=>{if(first&&file===path.join(f.root,'.zylos/upgrade/active.json')){first=false;throw Error('marker remove failed');}return real(file);};}
+ assert.equal(f.r.resume(f.dir).recovery_required,true);assert.equal(f.m.discover(f.root).blocked,action==='terminal-write');if(action==='terminal-write')assert.ok(!f.calls.includes('start'));else assert.ok(f.calls.includes('start'));assert.equal(f.r.resume(f.dir).stage,'aborted_before_install');assert.deepEqual(fs.readFileSync(f.db('comm-bridge/c4.db')),before);assert.ok(!fs.existsSync(path.join(f.root,'.backup/self-upgrade/tx/rescue')));
 });
 test('A26: partial core restore skips verified completed members after interruption',async t=>{
  const f=await fixture(t);change(f);f.r.rescue(f.dir,f.j);const real=f.m.sync,seen=[];let crash=true;f.m.sync=(src,dest)=>{seen.push(path.basename(dest));real(src,dest);if(crash&&path.basename(dest)==='scheduler'){crash=false;throw Error('core-copy crash');}};
@@ -107,20 +104,22 @@ test('A26: partial core restore skips verified completed members after interrupt
 });
 test('A27: failed new-code validation isolates then compensates once',async t=>{
  const f=await fixture(t);const db=new Database(f.db('comm-bridge/c4.db'));db.prepare('INSERT INTO checkpoints(id,summary) VALUES (?,?)').run(8,'new-runtime-write');db.close();f.m.update(f.dir,f.j,{phase:'new_data_ready'});let first=true;f.m.verifyServices=()=>{f.calls.push('verify');if(first){first=false;throw Error('new runtime verification failed');}};
- const before=fs.readFileSync(f.db('comm-bridge/c4.db')),result=f.r.resume(f.dir);assert.equal(result.stage,'restored_complete');assert.equal(result.completed,true);assert.equal(f.calls.filter(c=>c==='stop').length,2);assert.deepEqual(fs.readFileSync(path.join(f.root,'.backup/self-upgrade-archive/tx/rescue/comm-bridge_c4.db')),before);const read=new Database(f.db('comm-bridge/c4.db'),{readonly:true});assert.equal(read.prepare('SELECT count(*) AS n FROM checkpoints').get().n,0);read.close();
+ const before=fs.readFileSync(f.db('comm-bridge/c4.db')),result=f.r.resume(f.dir);assert.equal(result.stage,'restored_complete');assert.equal(result.completed,true);assert.equal(f.calls.filter(c=>c==='stop').length,2);assert.deepEqual(fs.readFileSync(path.join(f.root,'.backup/self-upgrade/tx/rescue/comm-bridge_c4.db')),before);const read=new Database(f.db('comm-bridge/c4.db'),{readonly:true});assert.equal(read.prepare('SELECT count(*) AS n FROM checkpoints').get().n,0);read.close();
 });
-test('A28: verified live finalizer group is terminated before compensation and blocker clears durably',async t=>{
+test('A28: live finalizer blocks compensation until the process group has exited',async t=>{
  const f=await fixture(t);change(f);const child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{detached:true,stdio:'ignore'});await new Promise((resolve,reject)=>{child.once('spawn',resolve);child.once('error',reject);});t.after(()=>{try{process.kill(-child.pid,'SIGKILL');}catch{}});
- const execution={...f.m.identity(child.pid),nonce:'test-nonce'};f.m.update(f.dir,f.j,{finalizerLaunchIntent:{nonce:'test-nonce'},finalizerExecution:execution,finalizerExitUnconfirmed:true});
- const result=f.r.resume(f.dir);assert.equal(result.completed,true);const saved=f.m.read(path.join(f.root,'.backup/self-upgrade-archive/tx/journal.json'));assert.equal(saved.finalizerExitConfirmed,true);assert.equal(saved.finalizerExitUnconfirmed,false);assert.equal(require(path.join(f.root,'.backup/self-upgrade-archive/tx/finalizer.cjs')).members(child.pid).length,0);
+ f.m.update(f.dir,f.j,{finalizerStarted:true,finalizerPid:child.pid,finalizerExitUnconfirmed:true});
+ const before=fs.readFileSync(f.db('comm-bridge/c4.db'));const blocked=f.r.resume(f.dir);
+ assert.equal(blocked.recovery_required,true);assert.match(blocked.error,/still active/);assert.deepEqual(fs.readFileSync(f.db('comm-bridge/c4.db')),before);assert.ok(!f.calls.includes('start'));
+ const exited=new Promise(resolve=>child.once('exit',resolve));process.kill(-child.pid,'SIGKILL');await exited;
+ const result=f.r.resume(f.dir);assert.equal(result.completed,true);const saved=f.load();assert.equal(saved.finalizerExitConfirmed,true);assert.equal(saved.finalizerExitUnconfirmed,false);
 });
-test('A28: live group with conflicting leader identity is never signalled or restored',async t=>{
- const f=await fixture(t);change(f);const child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{detached:true,stdio:'ignore'});await new Promise((resolve,reject)=>{child.once('spawn',resolve);child.once('error',reject);});t.after(()=>{try{process.kill(-child.pid,'SIGKILL');}catch{}});
- f.m.update(f.dir,f.j,{finalizerLaunchIntent:{nonce:'test-nonce'},finalizerExecution:{...f.m.identity(child.pid),start:'wrong-start',nonce:'test-nonce'},finalizerExitUnconfirmed:true});const before=fs.readFileSync(f.db('comm-bridge/c4.db'));
- const result=f.r.resume(f.dir);assert.equal(result.recovery_required,true);assert.match(result.error,/identity conflict/);assert.equal(f.m.alive(f.m.identity(child.pid)),true);assert.deepEqual(fs.readFileSync(f.db('comm-bridge/c4.db')),before);assert.equal(f.load().finalizerExitUnconfirmed,true);
+test('A28: interrupted finalizer launch without a PID preserves current data',async t=>{
+ const f=await fixture(t);change(f);f.m.update(f.dir,f.j,{finalizerStarted:true,finalizerPid:null,finalizerExitUnconfirmed:true});const before=fs.readFileSync(f.db('comm-bridge/c4.db'));
+ const result=f.r.resume(f.dir);assert.equal(result.recovery_required,true);assert.match(result.error,/interrupted launch/);assert.deepEqual(fs.readFileSync(f.db('comm-bridge/c4.db')),before);assert.equal(f.load().finalizerExitUnconfirmed,true);
 });
 test('A28: missing trusted finalizer helper preserves isolation and current data',async t=>{
- const f=await fixture(t);change(f);f.m.update(f.dir,f.j,{finalizerLaunchIntent:{nonce:'test-nonce'},finalizerExitUnconfirmed:true});fs.unlinkSync(path.join(f.dir,'finalizer.cjs'));const before=fs.readFileSync(f.db('comm-bridge/c4.db'));const result=f.r.resume(f.dir);assert.equal(result.recovery_required,true);assert.deepEqual(fs.readFileSync(f.db('comm-bridge/c4.db')),before);assert.ok(!f.calls.includes('start'));
+ const f=await fixture(t);change(f);f.m.update(f.dir,f.j,{finalizerStarted:true,finalizerPid:null,finalizerExitUnconfirmed:true});fs.unlinkSync(path.join(f.dir,'finalizer.cjs'));const before=fs.readFileSync(f.db('comm-bridge/c4.db'));const result=f.r.resume(f.dir);assert.equal(result.recovery_required,true);assert.deepEqual(fs.readFileSync(f.db('comm-bridge/c4.db')),before);assert.ok(!f.calls.includes('start'));
 });
 for(const installationIntent of [true,false])test(`unknown phase with installationIntent=${installationIntent} never restores or aborts`,async t=>{
  const f=await fixture(t);f.m.update(f.dir,f.j,{phase:'unknown-future-stage',installationIntent});const before=fs.readFileSync(f.db('comm-bridge/c4.db'));
@@ -139,7 +138,7 @@ test('verified abort reentry allows legitimate original-service writes after par
  let first=true;f.m.start=()=>{f.calls.push('start');if(first){first=false;const db=new Database(f.db('comm-bridge/c4.db'));db.prepare('INSERT INTO checkpoints(id,summary) VALUES (?,?)').run(11,'legitimate partially restarted service write');db.close();throw Error('another original service failed to restart');}};
  const interrupted=f.r.resume(f.dir);assert.equal(interrupted.recovery_required,true);assert.equal(f.load().resumePhase,'aborted_before_install');
  const result=f.r.resume(f.dir);assert.equal(result.stage,'aborted_before_install');assert.equal(result.recovery_required,false);assert.equal(result.attempted,false);
- const read=new Database(f.db('comm-bridge/c4.db'),{readonly:true});assert.equal(read.prepare('SELECT summary FROM checkpoints WHERE id=11').get().summary,'legitimate partially restarted service write');read.close();assert.ok(!fs.existsSync(path.join(f.root,'.backup/self-upgrade-archive/tx/rescue')));
+ const read=new Database(f.db('comm-bridge/c4.db'),{readonly:true});assert.equal(read.prepare('SELECT summary FROM checkpoints WHERE id=11').get().summary,'legitimate partially restarted service write');read.close();assert.ok(!fs.existsSync(path.join(f.root,'.backup/self-upgrade/tx/rescue')));
 });
 test('originally missing ecosystem is removed only with durable matching creation provenance',async t=>{
  const f=await fixture(t),dest=path.join(f.root,'pm2/ecosystem.config.cjs');fs.mkdirSync(path.dirname(dest),{recursive:true});fs.writeFileSync(dest,'failed upgrade created ecosystem',{mode:0o600});
@@ -158,44 +157,19 @@ for(const postReady of [false,true])test(postReady?'explicit new-finalizer failu
  const bin=path.join(f.root,'fixture-bin');fs.mkdirSync(bin);const pm2=path.join(bin,'pm2');fs.writeFileSync(pm2,'#!/bin/sh\nif [ "$1" = "jlist" ]; then printf "[]\\n"; fi\n',{mode:0o700});
  const old=path.join(f.root,'old-finalizer.cjs');fs.writeFileSync(old,postReady?`const fs=require('node:fs'),path=require('node:path');const s=JSON.parse(fs.readFileSync(process.argv[2]));const m=require(path.join(${JSON.stringify(path.join(f.root,'.zylos/upgrade'))},'maintenance.cjs'));const j=m.read(path.join(s.transactionDir,'journal.json'));m.update(s.transactionDir,j,{phase:'new_data_ready'});m.unmark(j.zylosDir,j);process.stdout.write(JSON.stringify({success:false,failedStep:11,error:'old finalizer rejects schemaVersion=2 after data-ready',steps:[]}));process.exitCode=1;`:"const fs=require('node:fs');const s=JSON.parse(fs.readFileSync(process.argv[2]));if(s.schemaVersion!==1){process.stdout.write(JSON.stringify({success:false,failedStep:5,error:'old finalizer rejects schemaVersion='+s.schemaVersion,steps:[]}));process.exitCode=1;}else process.exitCode=2;\n");
  const priorPath=process.env.PATH,priorRoot=process.env.ZYLOS_DIR;process.env.PATH=bin+path.delimiter+priorPath;process.env.ZYLOS_DIR=f.root;
- let npmStarted=false,result;const originalDb=new Database(f.db('comm-bridge/c4.db'),{readonly:true}),before=logicalHash(originalDb);originalDb.close();
+ let npmStarted=false,result;const originalDb=new Database(f.db('comm-bridge/c4.db'),{readonly:true}),before=originalDb.prepare('SELECT * FROM checkpoints ORDER BY id').all();originalDb.close();
  try{const {runSelfUpgrade,createFinalizeState}=await import('../self-upgrade.js');result=runSelfUpgrade({tempDir:incoming,newVersion:'2.0.0'},{zylosDir:f.root,skillsDir:f.j.skillsDir,getCurrentVersion:()=>({success:true,version:'1.0.0'}),step3:{verifyBoot:()=>({verified:true,fixture:true})},step4:{execSync:command=>{npmStarted=true;if(command.startsWith('npm pack'))return 'fixture.tgz\n';const db=new Database(f.db('comm-bridge/c4.db'));db.prepare('INSERT INTO checkpoints(id,summary) VALUES (?,?)').run(99,'new-install-generation');db.close();return '';}},runInstalledFinalizer:ctx=>{const state=createFinalizeState(ctx);assert.equal(state.schemaVersion,2);assert.equal(ctx.journal.installationIntent,true);const stateFile=path.join(f.root,'old-state.json');fs.writeFileSync(stateFile,JSON.stringify(state));const child=spawnSync(process.execPath,[old,stateFile],{encoding:'utf8'});assert.equal(child.status,1);return JSON.parse(child.stdout);}});}finally{process.env.PATH=priorPath;if(priorRoot===undefined)delete process.env.ZYLOS_DIR;else process.env.ZYLOS_DIR=priorRoot;}
- assert.equal(npmStarted,true);assert.equal(result.success,false);assert.match(result.error,/old finalizer rejects schemaVersion=2/);assert.equal(result.rollback.attempted,true,JSON.stringify(result.rollback));assert.equal(result.rollback.completed,true,JSON.stringify(result.rollback));assert.equal(result.rollback.stage,'restored_complete');assert.equal(result.recovery_required,false);const restoredDb=new Database(f.db('comm-bridge/c4.db'),{readonly:true});assert.equal(logicalHash(restoredDb),before);restoredDb.close();const archive=path.join(f.root,'.backup/self-upgrade-archive');assert.equal(fs.readdirSync(archive).length,1);const saved=f.m.read(path.join(archive,fs.readdirSync(archive)[0],'journal.json'));assert.equal(saved.installationIntent,true);assert.equal(saved.phase,'restored_complete');
-});
-test('terminal archive rename followed by fsync failure is rediscovered through cleanup pointer and resumed',async t=>{
- const f=await fixture(t);f.m.update(f.dir,f.j,{phase:'restored_data_ready'});const rename=fs.renameSync,sync=fs.fsyncSync;let renamed=false,failed=false;
- fs.renameSync=(src,dest)=>{const out=rename(src,dest);if(src===f.dir)renamed=true;return out;};fs.fsyncSync=fd=>{if(renamed&&!failed&&fs.readlinkSync('/proc/self/fd/'+fd)===path.dirname(f.dir)){failed=true;throw Error('archive parent fsync interruption');}return sync(fd);};
- let result;try{result=f.r.resume(f.dir);}finally{fs.renameSync=rename;fs.fsyncSync=sync;}
- assert.equal(result.recovery_required,false);assert.equal(result.complete,false);assert.match(result.warnings.join(' '),/fsync interruption/);const found=f.m.discover(f.root);assert.equal(found.diagnostics.length,0);assert.equal(found.candidates.length,1);assert.equal(found.candidates[0].archived,true);f.calls.length=0;assert.equal(f.r.resume(found.candidates[0].dir).complete,true);assert.deepEqual(f.calls,[]);assert.ok(!fs.existsSync(path.join(f.root,'.zylos/upgrade/cleanup.json')));assert.equal(f.m.discover(f.root).candidates.length,0);
-});
-for(const archived of [false,true])test(`${archived?'archived':'active'} verified terminal finalizer blocker is checked before cleanup; confirmed reentry resumes services without DB replacement`,async t=>{
- const f=await fixture(t);f.m.update(f.dir,f.j,{phase:'restored_complete',terminalEvidence:{verified:true,kind:'code_data_services'},cleanup:{complete:true,markerRemoved:true,servicesRestored:true}});f.m.unmark(f.root,f.j);
- const dir=archived?f.m.archive(f.dir,f.j):f.dir,child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{detached:true,stdio:'ignore'});await new Promise((resolve,reject)=>{child.once('spawn',resolve);child.once('error',reject);});t.after(()=>{try{process.kill(-child.pid,'SIGKILL');}catch{}});
- const identity=f.m.identity(child.pid);f.m.update(dir,f.j,{finalizerLaunchIntent:{nonce:'test-nonce'},finalizerExecution:{...identity,start:'conflicting-start',nonce:'test-nonce'},finalizerExitUnconfirmed:true,archiveServicesStopped:true});f.m.durable(path.join(f.root,'.zylos/upgrade/cleanup.json'),{formatVersion:1,transactionId:'tx'});const before=fs.readFileSync(f.db('comm-bridge/c4.db'));
- assert.equal(f.m.discover(f.root).blocked,true);const blocked=f.r.resume(dir);assert.equal(blocked.recovery_required,true);assert.equal(f.m.read(path.join(dir,'journal.json')).phase,'restored_complete');assert.deepEqual(fs.readFileSync(f.db('comm-bridge/c4.db')),before);assert.ok(!f.calls.includes('start'));assert.equal(f.m.alive(identity),true);assert.equal(f.m.discover(f.root).candidates.length,1);
- const saved=f.m.read(path.join(dir,'journal.json'));f.m.update(dir,saved,{finalizerExecution:{...identity,nonce:'test-nonce'}});f.calls.length=0;const resumed=f.r.resume(dir);assert.equal(resumed.completed,true);assert.equal(resumed.recovery_required,false);assert.deepEqual(f.calls,['start','verify']);assert.deepEqual(fs.readFileSync(f.db('comm-bridge/c4.db')),before);assert.ok(!fs.existsSync(path.join(f.root,'.backup/self-upgrade-archive/tx/rescue')));assert.equal(f.m.discover(f.root).blocked,false);assert.ok(!fs.existsSync(path.join(f.root,'.zylos/upgrade/cleanup.json')));
-});
-test('archived nonterminal cannot become restore input even with a valid copied descriptor',async t=>{
- const f=await fixture(t),dest=path.join(f.root,'.backup/self-upgrade-archive/tx');fs.mkdirSync(path.dirname(dest),{recursive:true,mode:0o700});fs.renameSync(f.dir,dest);const before=fs.readFileSync(f.db('comm-bridge/c4.db'));assert.throws(()=>f.r.resume(dest),/unverified archived transaction/);assert.deepEqual(fs.readFileSync(f.db('comm-bridge/c4.db')),before);assert.deepEqual(f.calls,[]);
-});
-test('archived terminal service validation failure retains normal writes and retries verification without compensation',async t=>{
- const f=await fixture(t);f.m.update(f.dir,f.j,{phase:'restored_complete',terminalEvidence:{verified:true,kind:'code_data_services'},cleanup:{complete:true,markerRemoved:true,servicesRestored:true}});f.m.unmark(f.root,f.j);const dir=f.m.archive(f.dir,f.j);f.m.update(dir,f.j,{archiveServicesStopped:true});f.m.durable(path.join(f.root,'.zylos/upgrade/cleanup.json'),{formatVersion:1,transactionId:'tx'});
- let first=true;f.m.start=()=>{f.calls.push('start');if(first){const db=new Database(f.db('comm-bridge/c4.db'));db.prepare('INSERT INTO checkpoints(id,summary) VALUES (?,?)').run(73,'restarted-original-service-write');db.close();}};f.m.verifyServices=()=>{f.calls.push('verify');if(first){first=false;throw Error('archive service validation failed');}};
- const blocked=f.r.resume(dir);assert.equal(blocked.recovery_required,true);assert.equal(f.m.read(path.join(dir,'journal.json')).phase,'restored_complete');assert.equal(f.m.discover(f.root).blocked,true);assert.ok(!fs.existsSync(path.join(dir,'rescue')));assert.equal(f.r.resume(dir).completed,true);const read=new Database(f.db('comm-bridge/c4.db'),{readonly:true});assert.equal(read.prepare('SELECT summary FROM checkpoints WHERE id=73').get().summary,'restarted-original-service-write');read.close();assert.equal(f.m.discover(f.root).blocked,false);
+ assert.equal(npmStarted,true);assert.equal(result.success,false);assert.match(result.error,/old finalizer rejects schemaVersion=2/);assert.equal(result.rollback.attempted,true,JSON.stringify(result.rollback));assert.equal(result.rollback.completed,true,JSON.stringify(result.rollback));assert.equal(result.rollback.stage,'restored_complete');assert.equal(result.recovery_required,false);const restoredDb=new Database(f.db('comm-bridge/c4.db'),{readonly:true});assert.deepEqual(restoredDb.prepare('SELECT * FROM checkpoints ORDER BY id').all(),before);restoredDb.close();const archive=path.join(f.root,'.backup/self-upgrade');assert.equal(fs.readdirSync(archive).length,1);const saved=f.m.read(path.join(archive,fs.readdirSync(archive)[0],'journal.json'));assert.equal(saved.installationIntent,true);assert.equal(saved.phase,'restored_complete');
 });
 test('early abort refuses altered original CLI tree before service restart or database writes',async t=>{
  const f=await fixture(t),cli=path.join(f.root,'original-cli');fs.mkdirSync(cli,{mode:0o700});fs.writeFileSync(path.join(cli,'command.js'),'original',{mode:0o600});f.j.initialIdentity.cliRoot=cli;f.j.initialIdentity.cliHash=f.m.treeHash(cli);f.m.update(f.dir,f.j,{installationIntent:false,phase:'preparing'});fs.writeFileSync(path.join(cli,'command.js'),'changed',{mode:0o600});const before=fs.readFileSync(f.db('comm-bridge/c4.db'));const result=f.r.resume(f.dir);assert.equal(result.recovery_required,true);assert.match(result.error,/original installed CLI identity changed/);assert.ok(!f.calls.includes('start'));assert.deepEqual(fs.readFileSync(f.db('comm-bridge/c4.db')),before);
 });
-for(const conflict of [false,true])test(`orphan installer group ${conflict?'conflict preserves current data':'is terminated before compensation'}`,async t=>{
- const f=await fixture(t);change(f);const child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{detached:true,stdio:'ignore'});await new Promise((resolve,reject)=>{child.once('spawn',resolve);child.once('error',reject);});t.after(()=>{try{process.kill(-child.pid,'SIGKILL');}catch{}});const execution=f.m.identity(child.pid);
- f.m.update(f.dir,f.j,{installerLaunchIntent:{nonce:'installer-test-nonce'},installerExecution:{...execution,...(conflict?{start:'conflicting-start'}:{}),nonce:'installer-test-nonce'},installerExitUnconfirmed:true});const before=fs.readFileSync(f.db('comm-bridge/c4.db')),result=f.r.resume(f.dir);
- if(conflict){assert.equal(result.recovery_required,true);assert.match(result.error,/identity conflict/);assert.equal(f.m.alive(execution),true);assert.deepEqual(fs.readFileSync(f.db('comm-bridge/c4.db')),before);assert.ok(!f.calls.includes('start'));assert.equal(f.load().installerExitUnconfirmed,true);}
- else{assert.equal(result.completed,true);const saved=f.m.read(path.join(f.root,'.backup/self-upgrade-archive/tx/journal.json'));assert.equal(saved.installerExitConfirmed,true);assert.equal(saved.installerExitUnconfirmed,false);assert.equal(require(path.join(f.root,'.backup/self-upgrade-archive/tx/finalizer.cjs')).members(child.pid).length,0);}
-});
-test('archived installer blocker cannot bypass process containment through terminal cleanup',async t=>{
- const f=await fixture(t);f.m.update(f.dir,f.j,{phase:'restored_complete',terminalEvidence:{verified:true,kind:'code_data_services'},cleanup:{complete:true,markerRemoved:true,servicesRestored:true}});f.m.unmark(f.root,f.j);const dir=f.m.archive(f.dir,f.j),child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{detached:true,stdio:'ignore'});await new Promise((resolve,reject)=>{child.once('spawn',resolve);child.once('error',reject);});t.after(()=>{try{process.kill(-child.pid,'SIGKILL');}catch{}});const execution=f.m.identity(child.pid);
- f.m.update(dir,f.j,{installerLaunchIntent:{nonce:'installer-test-nonce'},installerExecution:{...execution,start:'conflicting-start',nonce:'installer-test-nonce'},installerExitUnconfirmed:true});f.m.durable(path.join(f.root,'.zylos/upgrade/cleanup.json'),{formatVersion:1,transactionId:'tx'});const before=fs.readFileSync(f.db('comm-bridge/c4.db'));assert.equal(f.m.discover(f.root).blocked,true);assert.equal(f.r.resume(dir).recovery_required,true);assert.equal(f.m.alive(execution),true);assert.deepEqual(fs.readFileSync(f.db('comm-bridge/c4.db')),before);assert.equal(f.m.read(path.join(dir,'journal.json')).phase,'restored_complete');
- const saved=f.m.read(path.join(dir,'journal.json'));f.m.update(dir,saved,{installerExecution:{...execution,nonce:'installer-test-nonce'}});assert.equal(f.r.resume(dir).completed,true);assert.deepEqual(fs.readFileSync(f.db('comm-bridge/c4.db')),before);assert.equal(f.m.discover(f.root).blocked,false);assert.ok(!fs.existsSync(path.join(dir,'rescue')));
+test('orphan installer blocks compensation until its process group has exited',async t=>{
+ const f=await fixture(t);change(f);const child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{detached:true,stdio:'ignore'});await new Promise((resolve,reject)=>{child.once('spawn',resolve);child.once('error',reject);});t.after(()=>{try{process.kill(-child.pid,'SIGKILL');}catch{}});
+ f.m.update(f.dir,f.j,{installerStarted:true,installerPid:child.pid,installerExitUnconfirmed:true});const before=fs.readFileSync(f.db('comm-bridge/c4.db')),result=f.r.resume(f.dir);
+ assert.equal(result.recovery_required,true);assert.match(result.error,/still active/);assert.deepEqual(fs.readFileSync(f.db('comm-bridge/c4.db')),before);assert.ok(!f.calls.includes('start'));assert.equal(f.load().installerExitUnconfirmed,true);
+ const exited=new Promise(resolve=>child.once('exit',resolve));process.kill(-child.pid,'SIGKILL');await exited;
+ assert.equal(f.r.resume(f.dir).completed,true);assert.equal(f.load().installerExitConfirmed,true);assert.equal(f.load().installerExitUnconfirmed,false);
 });
 for(const dangling of [false,true])test(`original CLI ${dangling?'dangling':'live'} symlink prevents preinstall abort provenance`,async t=>{
  const f=await fixture(t),cli=path.join(f.root,'original-cli'),outside=path.join(f.root,'outside.js');fs.mkdirSync(cli,{mode:0o700});if(!dangling)fs.writeFileSync(outside,'fixture',{mode:0o600});fs.symlinkSync(outside,path.join(cli,'linked.js'));f.j.initialIdentity.cliRoot=cli;f.j.initialIdentity.cliHash=f.m.treeHash(cli);f.m.update(f.dir,f.j,{installationIntent:false,phase:'preparing'});const before=fs.readFileSync(f.db('comm-bridge/c4.db')),result=f.r.resume(f.dir);assert.equal(result.recovery_required,true);assert.match(result.error,/CLI symlink rejected/);assert.deepEqual(fs.readFileSync(f.db('comm-bridge/c4.db')),before);assert.ok(!f.calls.includes('start'));
@@ -218,7 +192,7 @@ test('resume uses phase durably changed before controller acquisition instead of
   assert.equal(result.recovery_required, false);
   assert.deepEqual(fs.readFileSync(f.db('comm-bridge/c4.db')), before);
   assert.deepEqual(f.calls, ['start', 'verify']);
-  assert.equal(fs.existsSync(path.join(f.root, '.backup/self-upgrade-archive/tx/rescue')), false);
+  assert.equal(fs.existsSync(path.join(f.root, '.backup/self-upgrade/tx/rescue')), false);
 });
 test('journal deployment identity changed before acquisition is rejected without writing or starting services', async t => {
   const f = await fixture(t);
@@ -273,14 +247,63 @@ test('preinstall readonly verification still includes committed uncheckpointed o
   writer.pragma('wal_autocheckpoint=0');
   writer.prepare('INSERT INTO checkpoints(id,summary) VALUES (?,?)').run(82, 'committed-live-WAL');
   assert.ok(fs.statSync(f.db('comm-bridge/c4.db-wal')).size > 0);
-  f.j.stableDataEvidence = f.m.DB_PATHS.map(source => {
-    const readonly = new Database(f.db(source), {readonly:true});
-    try {return logicalHash(readonly);}
-    finally {readonly.close();}
-  });
   f.m.update(f.dir, f.j, {installationIntent:false, phase:'preparing'});
   const result = f.r.resume(f.dir);
   assert.equal(result.stage, 'aborted_before_install', JSON.stringify(result));
   assert.equal(result.recovery_required, false);
   assert.equal(writer.prepare('SELECT summary FROM checkpoints WHERE id=82').get().summary, 'committed-live-WAL');
+});
+
+for(const phase of ['new_data_ready','restored_data_ready']) test(`${phase}: terminal marker clear failure retries without replacing committed data`, async t => {
+ const f=await fixture(t);f.m.update(f.dir,f.j,{phase});const before=fs.readFileSync(f.db('comm-bridge/c4.db'));
+ const unlink=fs.unlinkSync;let first=true;t.after(()=>{fs.unlinkSync=unlink;});
+ fs.unlinkSync=file=>{if(first&&file===path.join(f.root,'.zylos/upgrade/active.json')){first=false;throw Error('terminal marker clear failed');}return unlink(file);};
+ const result=f.r.resume(f.dir);assert.equal(result.recovery_required,true);assert.match(result.error,/marker clear failed/);
+ assert.equal(f.load().phase,phase.startsWith('restored')?'restored_complete':'upgrade_complete');
+ assert.equal(f.m.discover(f.root).blocked,false);assert.equal(f.m.discover(f.root).candidates.length,1);assert.ok(!f.calls.includes('stop'));
+ f.calls.length=0;assert.equal(f.r.resume(f.dir).complete,true);assert.deepEqual(f.calls,[]);
+ assert.deepEqual(fs.readFileSync(f.db('comm-bridge/c4.db')),before);assert.ok(fs.existsSync(f.dir));
+ assert.equal(fs.existsSync(path.join(f.root,'.backup/self-upgrade-archive')),false);
+ assert.equal(fs.existsSync(path.join(f.root,'.zylos/upgrade/cleanup.json')),false);
+ assert.equal(f.m.discover(f.root).candidates.length,0);
+});
+test('terminal marker unlink followed by fsync interruption recreates the marker and resumes in place', async t => {
+ const f=await fixture(t);f.m.update(f.dir,f.j,{phase:'restored_data_ready'});const unlink=fs.unlinkSync,sync=fs.fsyncSync;let removed=false,first=true;
+ t.after(()=>{fs.unlinkSync=unlink;fs.fsyncSync=sync;});
+ fs.unlinkSync=file=>{const value=unlink(file);if(file===path.join(f.root,'.zylos/upgrade/active.json'))removed=true;return value;};
+ fs.fsyncSync=fd=>{if(removed&&first){first=false;throw Error('marker directory fsync interrupted');}return sync(fd);};
+ assert.equal(f.r.resume(f.dir).recovery_required,true);assert.equal(f.m.discover(f.root).blocked,false);
+ assert.equal(fs.existsSync(path.join(f.root,'.zylos/upgrade/active.json')),true);
+ f.calls.length=0;assert.equal(f.r.resume(f.dir).complete,true);assert.deepEqual(f.calls,[]);assert.ok(fs.existsSync(f.dir));
+});
+for(const phase of ['new_data_ready','restored_data_ready']) test(`${phase}: terminal journal write failure resumes verification without compensation`, async t => {
+ const f=await fixture(t);f.m.update(f.dir,f.j,{phase});const update=f.m.update;let first=true;
+ f.m.update=(dir,j,changes={})=>{if(first&&changes.phase?.endsWith('_complete')){first=false;throw Error('terminal journal fsync failed');}return update(dir,j,changes);};
+ const before=fs.readFileSync(f.db('comm-bridge/c4.db'));assert.equal(f.r.resume(f.dir).recovery_required,true);
+ assert.equal(f.load().resumePhase,phase.startsWith('restored')?'restored_verifying':'new_verifying');
+ assert.equal(f.m.discover(f.root).blocked,true);assert.equal(f.r.resume(f.dir).recovery_required,false);
+ assert.deepEqual(fs.readFileSync(f.db('comm-bridge/c4.db')),before);assert.equal(fs.existsSync(path.join(f.dir,'rescue')),false);
+});
+test('terminal marker is removed only after original services and durable terminal journal validate', async t => {
+ const f=await fixture(t);f.m.update(f.dir,f.j,{installationIntent:false,phase:'preparing'});const start=f.m.start,verify=f.m.verifyServices,unlink=fs.unlinkSync;t.after(()=>{fs.unlinkSync=unlink;});
+ f.m.start=j=>{assert.ok(fs.existsSync(path.join(f.root,'.zylos/upgrade/active.json')));assert.equal(f.m.discover(f.root).blocked,false);return start(j);};
+ f.m.verifyServices=j=>{assert.ok(fs.existsSync(path.join(f.root,'.zylos/upgrade/active.json')));return verify(j);};
+ fs.unlinkSync=file=>{if(file===path.join(f.root,'.zylos/upgrade/active.json')){assert.equal(f.m.terminalValid(f.load()),true);assert.deepEqual(f.calls,['start','verify']);}return unlink(file);};
+ assert.equal(f.r.resume(f.dir).recovery_required,false);assert.ok(fs.existsSync(f.dir));assert.equal(f.m.discover(f.root).candidates.length,0);
+});
+test('terminal directory remains in place and explicit repeat resume performs no service or DB work', async t => {
+ const f=await fixture(t);f.m.update(f.dir,f.j,{phase:'restored_data_ready'});assert.equal(f.r.resume(f.dir).completed,true);
+ const before=fs.readFileSync(f.db('comm-bridge/c4.db'));f.calls.length=0;
+ assert.equal(f.r.resume(f.dir).completed,true);assert.deepEqual(f.calls,[]);assert.deepEqual(fs.readFileSync(f.db('comm-bridge/c4.db')),before);
+ assert.equal(f.m.discover(f.root).candidates.length,0);assert.ok(fs.existsSync(path.join(f.dir,'descriptor.json')));
+});
+
+test('verified terminal with stopped services retries startup without database compensation', async t => {
+ const f=await fixture(t);f.m.update(f.dir,f.j,{phase:'restored_data_ready'});assert.equal(f.r.resume(f.dir).completed,true);
+ const terminal=f.load();f.m.update(f.dir,terminal,{terminalServicesStopped:true});f.m.marker(f.root,f.dir,terminal);
+ const start=f.m.start;let first=true;f.m.start=j=>{start(j);if(first){first=false;const db=new Database(f.db('comm-bridge/c4.db'));db.prepare('INSERT INTO checkpoints(id,summary) VALUES (?,?)').run(74,'partially restarted service write');db.close();throw Error('terminal startup interrupted');}};
+ f.calls.length=0;assert.equal(f.r.resume(f.dir).recovery_required,true);assert.equal(f.load().phase,'restored_complete');assert.equal(f.load().terminalServicesStopped,true);
+ assert.equal(f.m.discover(f.root).blocked,false);assert.equal(f.m.discover(f.root).candidates.length,1);
+ f.calls.length=0;assert.equal(f.r.resume(f.dir).completed,true);assert.deepEqual(f.calls,['start','verify']);assert.equal(f.load().terminalServicesStopped,false);
+ const db=new Database(f.db('comm-bridge/c4.db'),{readonly:true});assert.equal(db.prepare('SELECT summary FROM checkpoints WHERE id=74').get().summary,'partially restarted service write');db.close();assert.equal(fs.existsSync(path.join(f.dir,'rescue')),false);
 });

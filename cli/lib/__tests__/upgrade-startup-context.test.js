@@ -18,10 +18,28 @@ test('partial skill deployment does not import diagnostics, formatting, registry
  const stable=path.join(root,'.zylos/upgrade'),hook=path.join(root,'hook/c4-session-init.js');fs.mkdirSync(stable,{recursive:true,mode:0o700});fs.mkdirSync(path.dirname(hook));
  fs.writeFileSync(path.join(root,'package.json'),'{"type":"module"}');
  fs.copyFileSync(path.resolve('skills/comm-bridge/scripts/c4-session-init.js'),hook);
- for(const [source,target] of [['upgrade-bootstrap.cjs','bootstrap.cjs'],['upgrade-maintenance.cjs','maintenance.cjs'],['upgrade-runtime-args.cjs','runtime-args.cjs']]){fs.copyFileSync(path.resolve('cli/lib',source),path.join(stable,target));fs.chmodSync(path.join(stable,target),0o600);}
+ for(const [source,target] of [['upgrade-bootstrap.cjs','bootstrap.cjs'],['upgrade-maintenance.cjs','maintenance.cjs']]){fs.copyFileSync(path.resolve('cli/lib',source),path.join(stable,target));fs.chmodSync(path.join(stable,target),0o600);}
  const dir=path.join(root,'.backup/self-upgrade/tx');fs.mkdirSync(dir,{recursive:true,mode:0o700});fs.writeFileSync(path.join(dir,'journal.json'),'{broken',{mode:0o600});
  const result=spawnSync(process.execPath,[hook],{encoding:'utf8',env:{HOME:root,ZYLOS_DIR:root,PATH:process.env.PATH}});
  assert.equal(result.status,0,result.stderr);assert.match(result.stdout,/UPGRADE RECOVERY TASK/);assert.match(result.stdout,/SYSTEM RECOVERY TASK/);assert.match(result.stdout,/diagnostics/);
+});
+
+test('lost stable directories with transaction materials cue recovery before normal runtime or C4 imports', t => {
+ for (const missing of ['.zylos', '.zylos/upgrade']) {
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'upgrade-lost-stable-'));
+  t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+  fs.mkdirSync(path.join(root,'.backup/self-upgrade/tx'),{recursive:true,mode:0o700});
+  if (missing === '.zylos/upgrade') fs.mkdirSync(path.join(root,'.zylos'),{mode:0o700});
+  assert.match(upgradeStartupPrompt(root), /Upgrade discovery failed/, missing);
+  const hook=path.join(root,'hook/c4-session-init.js');fs.mkdirSync(path.dirname(hook));
+  fs.writeFileSync(path.join(root,'package.json'),'{"type":"module"}');
+  fs.copyFileSync(path.resolve('skills/comm-bridge/scripts/c4-session-init.js'),hook);
+  const result=spawnSync(process.execPath,[hook],{encoding:'utf8',env:{ZYLOS_DIR:root,PATH:process.env.PATH}});
+  assert.equal(result.status,0,result.stderr);
+  assert.match(result.stdout,/UPGRADE RECOVERY TASK/);
+  assert.match(result.stdout,/Upgrade discovery failed/);
+  assert.match(result.stdout,/Do not query C4/);
+ }
 });
 
  test('nonblocking recovery cue remains available alongside normal context', t => {
@@ -30,7 +48,8 @@ test('partial skill deployment does not import diagnostics, formatting, registry
   const stable = path.join(root, '.zylos/upgrade');
   fs.mkdirSync(stable, { recursive: true });
   fs.chmodSync(stable, 0o700);
-  for (const file of ['maintenance.cjs', 'runtime-args.cjs']) fs.writeFileSync(path.join(stable, file), '// fixture dependency\n', {mode: 0o600});
+  fs.writeFileSync(path.join(stable, 'active.json'), '{}', {mode: 0o600});
+  for (const file of ['maintenance.cjs']) fs.writeFileSync(path.join(stable, file), '// fixture dependency\n', {mode: 0o600});
   fs.writeFileSync(path.join(stable, 'bootstrap.cjs'), "exports.bootstrap = () => ({ active: true, blocked: false, prompt: 'cleanup task' });\n");
   fs.chmodSync(path.join(stable, 'bootstrap.cjs'), 0o600);
   assert.equal(upgradeStartupPrompt(root), 'cleanup task');
@@ -42,7 +61,8 @@ test('tmux launcher preserves ordinary prompt for available databases and replac
   const stable = path.join(root, '.zylos/upgrade');
   fs.mkdirSync(stable, { recursive: true });
   fs.chmodSync(stable, 0o700);
-  for (const file of ['maintenance.cjs', 'runtime-args.cjs']) fs.writeFileSync(path.join(stable, file), '// fixture dependency\n', {mode: 0o600});
+  fs.writeFileSync(path.join(stable, 'active.json'), '{}', {mode: 0o600});
+  for (const file of ['maintenance.cjs']) fs.writeFileSync(path.join(stable, file), '// fixture dependency\n', {mode: 0o600});
   for (const blocked of [false, true]) {
     fs.writeFileSync(path.join(stable, 'bootstrap.cjs'), `exports.bootstrap = () => ({ active: true, blocked: ${blocked}, prompt: 'recovery prompt' });\n`);
     fs.chmodSync(path.join(stable, 'bootstrap.cjs'), 0o600);
@@ -68,7 +88,8 @@ test('C4 checkpoint hook reads normal context after READY but isolates blocked r
   const registry = path.join(root, 'skills/activity-monitor/scripts');
   for (const dir of [stable, scripts, registry]) fs.mkdirSync(dir, { recursive: true });
   fs.chmodSync(stable, 0o700);
-  for (const file of ['maintenance.cjs', 'runtime-args.cjs']) fs.writeFileSync(path.join(stable, file), '// fixture dependency\n', {mode: 0o600});
+  fs.writeFileSync(path.join(stable, 'active.json'), '{}', {mode: 0o600});
+  for (const file of ['maintenance.cjs']) fs.writeFileSync(path.join(stable, file), '// fixture dependency\n', {mode: 0o600});
   fs.writeFileSync(path.join(root, 'package.json'), '{"type":"module"}');
   fs.copyFileSync(path.resolve('skills/comm-bridge/scripts/c4-session-init.js'), path.join(scripts, 'c4-session-init.js'));
   fs.writeFileSync(path.join(scripts, 'c4-diagnostic.js'), 'export function logHookTiming() {}\n');
@@ -93,7 +114,8 @@ function stableFixture(t, body) {
   t.after(() => fs.rmSync(root, {recursive: true, force: true}));
   const stable = path.join(root, '.zylos/upgrade');
   fs.mkdirSync(stable, {recursive: true, mode: 0o700});
-  for (const file of ['maintenance.cjs', 'runtime-args.cjs']) {
+  fs.writeFileSync(path.join(stable, 'active.json'), '{}', {mode: 0o600});
+  for (const file of ['maintenance.cjs']) {
     fs.writeFileSync(path.join(stable, file), '// fixture dependency\n', {mode: 0o600});
   }
   const entry = path.join(stable, 'bootstrap.cjs');
@@ -128,7 +150,7 @@ test('throwing trusted discovery still launches runtime with isolated prompt ins
   const spec = path.join(f.root, 'spec.json');
   fs.writeFileSync(spec, JSON.stringify({
     command: process.execPath,
-    args: ['-e', 'console.log(process.argv[1]); console.log(process.env.ZYLOS_UPGRADE_PROMPT_DELIVERED)', 'ordinary prompt'],
+    args: ['-e', 'console.log(process.argv[1]); console.log(process.env.ZYLOS_UPGRADE_PROMPT_DELIVERED || "unset")', 'ordinary prompt'],
     promptIndex: 2,
     cwd: f.root,
     env: {PATH: process.env.PATH},
@@ -137,11 +159,11 @@ test('throwing trusted discovery still launches runtime with isolated prompt ins
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /Upgrade discovery failed/);
   assert.match(result.stdout, /Do not query C4/);
-  assert.match(result.stdout, /\n1\n$/);
+  assert.match(result.stdout, /\nunset\n$/);
   assert.doesNotMatch(result.stdout, /ordinary prompt/);
 });
 
-test('recovery cue appears once across C4 shards and is omitted when already delivered at runtime launch', t => {
+test('each new session receives one recovery cue across C4 shards despite a stale runtime flag', t => {
   const f = stableFixture(t, 'exports.bootstrap = () => {throw Error("discovery unavailable");};\n');
   const scripts = path.join(f.root, 'hook');
   fs.mkdirSync(scripts);
@@ -155,11 +177,21 @@ test('recovery cue appears once across C4 shards and is omitted when already del
       ...(delivered ? {ZYLOS_UPGRADE_PROMPT_DELIVERED: '1'} : {}),
     }});
     assert.equal(result.status, 0, result.stderr);
-    assert.equal((result.stdout.match(/SYSTEM RECOVERY TASK/g) || []).length, delivered ? 0 : 1);
+    assert.equal((result.stdout.match(/SYSTEM RECOVERY TASK/g) || []).length, 1);
   }
 });
 
 test('nonblocking cue append preserves original prompt and avoids duplicate adapter cue', () => {
   const original = 'ordinary\n\nrecovery cue';
   assert.deepEqual(applyUpgradePrompt([original], 'recovery cue', 0, {append: true}), [original]);
+});
+
+ test('ordinary deployment skips incomplete or group-writable stable runtime discovery without upgrade materials', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'upgrade-normal-context-'));
+  t.after(() => fs.rmSync(root, {recursive: true, force: true}));
+  const stable = path.join(root, '.zylos/upgrade');
+  fs.mkdirSync(stable, {recursive: true});
+  fs.chmodSync(stable, 0o775);
+  fs.writeFileSync(path.join(stable, 'bootstrap.cjs'), 'throw Error("ordinary startup must not load this");', {mode:0o664});
+  assert.equal(upgradeStartupPrompt(root), null);
 });

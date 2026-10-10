@@ -4,7 +4,6 @@ import crypto from 'node:crypto';
 import { createRequire } from 'node:module';
 import { spawnSync } from 'node:child_process';
 import { createCoreDbSnapshot, prepareRecoveryDependencies, runCoreDbWorker } from './core-db-backup.js';
-import { verifyUpgradeBootCapability } from './upgrade-boot-capability.js';
 const require = createRequire(import.meta.url);
 export const maintenance = require('./upgrade-maintenance.cjs');
 const library = import.meta.dirname;
@@ -28,7 +27,7 @@ export function deployUpgradeBootstrap(root) {
     directory: true
   });
   maintenance.fsyncDir(meta);
-  for (const [src, name] of [['upgrade-maintenance.cjs', 'maintenance.cjs'], ['upgrade-recovery.cjs', 'recovery.cjs'], ['upgrade-bootstrap.cjs', 'bootstrap.cjs'], ['upgrade-finalizer.cjs', 'finalizer.cjs'], ['upgrade-runtime-args.cjs', 'runtime-args.cjs']]) {
+  for (const [src, name] of [['upgrade-maintenance.cjs', 'maintenance.cjs'], ['upgrade-recovery.cjs', 'recovery.cjs'], ['upgrade-bootstrap.cjs', 'bootstrap.cjs'], ['upgrade-finalizer.cjs', 'finalizer.cjs']]) {
     const target = path.join(dest, name),
       staging = target + '.' + crypto.randomBytes(8).toString('hex') + '.staging';
     fs.copyFileSync(path.join(library, src), staging, fs.constants.COPYFILE_EXCL);
@@ -54,9 +53,7 @@ function declared(dir) {
 export function beginUpgrade(ctx, {
   zylosDir,
   skillsDir
-}, {
-  verifyBoot = verifyUpgradeBootCapability
-} = {}) {
+}) {
   zylosDir = fs.realpathSync(zylosDir);
   // Canonical deployment roots make recovery identities independent of aliases.
   const expectedSkills = path.join(zylosDir, ".claude", "skills");
@@ -118,29 +115,9 @@ export function beginUpgrade(ctx, {
       complete: false
     }
   };
-  // Install the stable file-only entry before publishing a discoverable transaction.
-  // Merely adopting the baseline does not declare automatic boot supervision.
-  const bootstrapPath = deployUpgradeBootstrap(zylosDir);
-  const capabilityPath = path.join(zylosDir, '.zylos', 'upgrade', 'capability.json');
-  let capabilityPresent = false;
-  try {
-    fs.lstatSync(capabilityPath);
-    capabilityPresent = true;
-  } catch (error) {
-    if (error.code !== 'ENOENT') throw error;
-  }
-  ctx.bootCapability = capabilityPresent ? {
-    ...verifyBoot({
-      zylosDir,
-      nodePath: process.execPath,
-      bootstrapPath
-    }),
-    declared: true
-  } : {
-    declared: false,
-    verified: false
-  };
-  j.bootCapability = ctx.bootCapability;
+  // The existing machine startup chain launches the runtime; this entry only
+  // supplies durable file discovery before normal C4/session imports.
+  deployUpgradeBootstrap(zylosDir);
   const activeRoot = path.dirname(dir);
   const stagingRoot = path.join(zylosDir, '.backup', 'self-upgrade-staging');
   for (const base of [activeRoot, stagingRoot]) {
@@ -159,18 +136,24 @@ export function beginUpgrade(ctx, {
   fs.mkdirSync(staging, {
     mode: 0o700
   });
-  // Nothing is visible to discovery until a complete durable journal and live
-  // controller exist. Interrupted staging remains outside the active scan root.
-  maintenance.update(staging, j);
-  const release = maintenance.acquire(staging, {
-    publishedDir: dir
-  });
+  // Publish only after a complete durable journal and live controller exist.
+  let release;
   try {
+    maintenance.update(staging, j);
+    release = maintenance.acquire(staging, {publishedDir: dir});
     fs.renameSync(staging, dir);
     maintenance.fsyncDir(activeRoot);
     maintenance.fsyncDir(stagingRoot);
   } catch (error) {
-    release();
+    try { release?.(); } catch (cleanupError) { error.controllerReleaseError = cleanupError.message; }
+    // Only our unpublished attempt is disposable. If rename succeeded, retain
+    // the active journal for file-only recovery even when directory fsync fails.
+    try {
+      if (fs.existsSync(staging)) {
+        fs.rmSync(staging, {recursive: true});
+        maintenance.fsyncDir(stagingRoot);
+      }
+    } catch (cleanupError) { error.stagingCleanupError = cleanupError.message; }
     throw error;
   }
   ctx.releaseControl = release;
@@ -265,7 +248,6 @@ export function prepareProtectedInstall(ctx) {
     driverPath: deps.driverPath,
     runnerPath: path.join(dir, 'runner.cjs'),
     driverClosureRoot: deps.driverClosureRoot,
-    driverClosureHashes: deps.driverClosureHashes,
     hashes: {
       'finalizer.cjs': maintenance.hash(path.join(dir, 'finalizer.cjs')),
       'maintenance.cjs': maintenance.hash(path.join(dir, 'maintenance.cjs')),
@@ -278,12 +260,9 @@ export function prepareProtectedInstall(ctx) {
   });
   maintenance.validateDescriptor(dir, j, descriptor);
   const checked = maintenance.preflight(dir, j, snapshot.manifest);
-  j.stableDataEvidence = checked.databases?.map(d => d.logicalHash);
-  maintenance.update(dir, j);
   if (checked.success === false) throw Error(checked.error || 'saved readonly worker self-check failed');
   maintenance.update(dir, j, {
     phase: 'prepared',
-    bootCapability: ctx.bootCapability
   });
 }
 export function markInstallationIntent(ctx) {
@@ -305,20 +284,8 @@ export function recovery(ctx) {
     const root = path.resolve(ctx.journal.zylosDir),
       id = ctx.transactionId || ctx.journal.transactionId;
     if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,95}$/.test(id)) throw Error('invalid recovery transaction identity');
-    const active = path.join(root, '.backup', 'self-upgrade', id),
-      archived = path.join(root, '.backup', 'self-upgrade-archive', id);
-    const hasActive = fs.existsSync(active),
-      hasArchived = fs.existsSync(archived);
-    if (hasActive && hasArchived) throw Error('ambiguous active and archived recovery material');
-    if (!hasActive && !hasArchived) throw Error('recovery transaction material is missing');
-    const dir = hasActive ? active : archived;
-    if (hasActive) saved = maintenance.transaction(root, dir);else {
-      maintenance.privatePath(dir, {
-        directory: true
-      });
-      saved = maintenance.read(path.join(dir, 'journal.json'));
-      if (saved.formatVersion !== 1 || saved.transactionId !== id || saved.zylosDir !== root || !maintenance.terminalValid(saved)) throw Error('unverified archived recovery transaction');
-    }
+    const dir = path.join(root, '.backup', 'self-upgrade', id);
+    saved = maintenance.transaction(root, dir);
     ctx.journal = saved;
     ctx.transactionDir = dir;
     // This entry is the parent's explicit failed-upgrade path, whereas direct
@@ -330,11 +297,10 @@ export function recovery(ctx) {
       // The child may have persisted ready/terminal state and new identities.
       // Never overwrite those with the old parent's in-memory journal.
       const terminal = maintenance.terminalValid(saved);
-      maintenance.marker(root, active, saved);
+      maintenance.marker(root, dir, saved);
       maintenance.update(dir, saved, {
         ...(terminal ? {
-          archiveRecoveryRequired: true,
-          archiveServicesStopped: true
+          terminalServicesStopped: true
         } : {
           resumePhase: failedNewReady ? 'restoring' : saved.phase === 'recovery_required' ? saved.resumePhase : saved.phase,
           phase: 'recovery_required'
@@ -361,7 +327,7 @@ export function recovery(ctx) {
       };
     }
     if (failedNewReady) {
-      maintenance.marker(root, active, saved);
+      maintenance.marker(root, dir, saved);
       maintenance.update(dir, saved, {
         phase: 'recovery_required',
         resumePhase: 'restoring',
@@ -422,7 +388,7 @@ export function protectedDataReady(ctx) {
     phase: 'new_data_ready'
   });
   ctx.journal = j;
-  maintenance.unmark(j.zylosDir, j);
+  // READY permits normal access; retain the marker until verified terminal exit.
 }
 export function protectedSuccess(ctx) {
   const dir = ctx.transactionDir,
@@ -435,19 +401,9 @@ export function protectedSuccess(ctx) {
     },
     cleanup: {
       complete: true,
-      markerRemoved: true,
       servicesRestored: true
-    },
-    cleanupPending: true
+    }
   });
-  // The parent owns finalizer exit verification. Keep cleanup discoverable
-  // until it confirms the entire process group is gone, then archives it.
-  maintenance.durable(path.join(j.zylosDir, '.zylos', 'upgrade', 'cleanup.json'), {
-    formatVersion: 1,
-    transactionId: j.transactionId
-  });
-  return {
-    complete: false,
-    warnings: []
-  };
+  // The parent confirms finalizer exit before finishTerminal removes the marker.
+  return maintenance.finishTerminal(dir,j);
 }

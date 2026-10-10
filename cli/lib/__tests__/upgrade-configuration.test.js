@@ -3,23 +3,39 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import {spawnSync} from 'node:child_process';
-import {recoveryConfiguration} from '../../commands/recovery.js';
-import {deployUpgradeBootstrap,maintenance} from '../upgrade-protection.js';
-import {verifyUpgradeBootCapability} from '../upgrade-boot-capability.js';
-test('generated user unit and capability satisfy boot gate with persisted native auth and no transient keys',t=>{
- const root=fs.mkdtempSync(path.join(os.tmpdir(),'upgrade-config-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
- const command=path.join(root,'codex');fs.writeFileSync(command,"#!/bin/sh\n[ -z \"$OPENAI_API_KEY\" ] || exit 2\nprintf 'Logged in using fixture-native-auth\\n'\n",{mode:0o700});
- const config=recoveryConfiguration({root,home:root,runtime:'codex',command});
- assert.equal(fs.existsSync(config.unitPath),false);assert.equal(fs.existsSync(config.capabilityPath),false);
- const bootstrapPath=deployUpgradeBootstrap(root);maintenance.durable(config.capabilityPath,config.capability);
- fs.mkdirSync(path.dirname(config.unitPath),{recursive:true});fs.writeFileSync(config.unitPath,config.unit,{mode:0o600});
- const result=verifyUpgradeBootCapability({zylosDir:root,nodePath:process.execPath,bootstrapPath},{home:root,unitDirectories:[path.dirname(config.unitPath)],spawnSync:(program,args,options)=>{
-  if(program==='systemctl')return {status:0,stdout:args.includes('is-enabled')?'enabled\n':`LoadState=loaded\nFragmentPath=${config.unitPath}\nDropInPaths=\n`};
-  if(program==='loginctl')return {status:0,stdout:'yes\n'};
-  return spawnSync(program,args,options);
- }});
- assert.equal(result.authenticated,true);assert.equal(result.verified,true);
- const dir=path.join(root,'.backup/self-upgrade/tx');fs.mkdirSync(dir,{recursive:true,mode:0o700});fs.writeFileSync(path.join(dir,'journal.json'),'bad',{mode:0o600});
- assert.throws(()=>deployUpgradeBootstrap(root),/unresolved upgrade/);
+import {recoveryCommand} from '../../commands/recovery.js';
+
+test('recovery CLI retires supervisor configuration and verification without creating files', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'upgrade-cli-'));
+  t.after(() => fs.rmSync(root, {recursive: true, force: true}));
+  for (const sub of ['configure', 'verify']) {
+    await assert.rejects(recoveryCommand([sub, '--write'], {root}), /supervisor configuration and verification have been removed/);
+  }
+  assert.deepEqual(fs.readdirSync(root), []);
+});
+
+test('status and resume on an ordinary deployment do not require stable deployment', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'upgrade-cli-idle-'));
+  t.after(() => fs.rmSync(root, {recursive: true, force: true}));
+  for (const sub of ['status', 'resume']) await assert.doesNotReject(recoveryCommand([sub], {root}));
+  assert.deepEqual(fs.readdirSync(root), []);
+});
+
+
+test('CLI status uses file status and resume enters the same trusted bootstrap once', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'upgrade-cli-active-'));
+  t.after(() => fs.rmSync(root, {recursive: true, force: true}));
+  const stable = path.join(root, '.zylos/upgrade');
+  fs.mkdirSync(stable, {recursive: true, mode: 0o700});
+  fs.writeFileSync(path.join(stable, 'active.json'), '{}', {mode: 0o600});
+  fs.writeFileSync(path.join(stable, 'maintenance.cjs'), '// fixture', {mode: 0o600});
+  const log = path.join(root, 'calls.jsonl');
+  fs.writeFileSync(path.join(stable, 'bootstrap.cjs'), `exports.bootstrap = (root, options = {}) => {
+    require('node:fs').appendFileSync(${JSON.stringify(log)}, JSON.stringify(options) + '\\n');
+    return {active: true, blocked: true, prompt: 'recovery task'};
+  };`, {mode: 0o600});
+  await recoveryCommand(['status'], {root});
+  await recoveryCommand(['resume'], {root});
+  const calls = fs.readFileSync(log, 'utf8').trim().split('\n').map(JSON.parse);
+  assert.deepEqual(calls, [{}, {status: true, once: false}, {}, {status: false, once: true}]);
 });

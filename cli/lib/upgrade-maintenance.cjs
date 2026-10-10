@@ -97,7 +97,7 @@ function validateReadyJournal(j) {
   });
 }
 function terminalValid(j) {
-  if (!TERMINAL.has(j.phase) || j.cleanup?.complete !== true || j.cleanup.markerRemoved !== true || j.cleanup.servicesRestored !== true || j.terminalEvidence?.verified !== true) return false;
+  if (!TERMINAL.has(j.phase) || j.cleanup?.complete !== true || j.cleanup.servicesRestored !== true || j.terminalEvidence?.verified !== true) return false;
   try {
     if (j.phase === 'aborted_before_install') validateOriginalJournal(j);else validateReadyJournal(j);
   } catch {
@@ -113,10 +113,35 @@ function provisionalAbortValid(j) {
     return false;
   }
 }
+// Legacy runtime directories need no recovery validation until materials exist.
+// Damaged recovery links count as materials so absence cannot hide a transaction.
+function hasRecoveryMaterials(root) {
+  const present = file => {
+    try { return fs.lstatSync(file); }
+    catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+  };
+  try {
+    for (const relative of ['.zylos', '.zylos/upgrade', '.backup', '.backup/self-upgrade']) {
+      const file = path.join(root, relative), stat = present(file);
+      if (!stat) continue;
+      if (stat.isSymbolicLink()) {
+        if (relative !== '.zylos' && relative !== '.backup' || !fs.statSync(file).isDirectory()) return true;
+      } else if (!stat.isDirectory()) return true;
+    }
+    for (const relative of ['.zylos/upgrade/active.json']) {
+      if (present(path.join(root, relative))) return true;
+    }
+    const active = path.join(root, '.backup/self-upgrade');
+    return !!present(active) && fs.readdirSync(active).length > 0;
+  } catch {
+    return true;
+  }
+}
 function discover(root, {
   budget = 10000
 } = {}) {
   root = fs.realpathSync(root);
+  if (!hasRecoveryMaterials(root)) return {marker:null, candidates:[], diagnostics:[], blocked:false};
   const active = path.join(root, '.backup', 'self-upgrade');
   const markerFile = path.join(root, '.zylos', 'upgrade', 'active.json');
   let marker = null,
@@ -141,7 +166,7 @@ function discover(root, {
   // These pre-existing parents also hold ordinary runtime data. Their legacy
   // group-writable mode alone is not evidence of a recovery transaction.
   // Recovery-owned subdirectories and files retain the strict mode checks.
-  for (const relative of ['.zylos', '.zylos/upgrade', '.backup', '.backup/self-upgrade-archive']) {
+  for (const relative of ['.zylos', '.zylos/upgrade', '.backup']) {
     const directory = path.join(root, relative);
     try {
       if (present(directory)) privatePath(directory, {
@@ -158,6 +183,7 @@ function discover(root, {
       if (marker.formatVersion !== 1 || !ID.test(marker.transactionId) || marker.transactionDir !== path.join(active, marker.transactionId)) throw Error('invalid marker');
     }
   } catch (error) {
+    marker = null;
     diagnostics.push(error.message);
   }
   let hasActive = false;
@@ -183,7 +209,7 @@ function discover(root, {
         const dir = path.join(active, ent.name);
         try {
           const j = transaction(root, dir);
-          if (!terminalValid(j) || j.cleanupPending || j.archiveRecoveryRequired || j.installerExitUnconfirmed || j.finalizerExitUnconfirmed || j.finalizerLaunchIntent && !j.finalizerExitConfirmed || j.installerLaunchIntent && !j.installerExitConfirmed || marker?.transactionId === j.transactionId) addCandidate({
+          if (!terminalValid(j) || j.installerExitUnconfirmed || j.finalizerExitUnconfirmed || j.finalizerStarted && !j.finalizerExitConfirmed || j.installerStarted && !j.installerExitConfirmed || j.terminalServicesStopped || marker?.transactionId === j.transactionId) addCandidate({
             dir,
             journal: j
           });
@@ -195,60 +221,15 @@ function discover(root, {
       diagnostics.push(e.message);
     }
   }
-  // Archival interrupted after rename: a residual marker must resolve only to a verified terminal.
-  if (marker && !candidates.some(c => c.journal.transactionId === marker.transactionId)) {
-    const archived = path.join(root, '.backup', 'self-upgrade-archive', marker.transactionId);
-    try {
-      privatePath(path.dirname(archived), {
-        directory: true
-      });
-      privatePath(archived, {
-        directory: true
-      });
-      const j = read(path.join(archived, 'journal.json'));
-      if (j.transactionId !== marker.transactionId || !terminalValid(j)) throw Error('residual marker archive is not verified');
-      addCandidate({
-        dir: archived,
-        journal: j,
-        archived: true
-      });
-    } catch (e) {
-      diagnostics.push('marker has no valid transaction: ' + e.message);
-    }
-  }
-  const cleanupFile = path.join(root, '.zylos', 'upgrade', 'cleanup.json');
-  try {
-    if (present(cleanupFile)) {
-      const pointer = read(cleanupFile);
-      if (pointer.formatVersion !== 1 || !ID.test(pointer.transactionId)) throw Error('invalid terminal cleanup pointer');
-      if (!candidates.some(c => c.journal.transactionId === pointer.transactionId)) {
-        const activeDir = path.join(active, pointer.transactionId),
-          archivedDir = path.join(root, '.backup', 'self-upgrade-archive', pointer.transactionId);
-        const dir = present(activeDir) ? activeDir : archivedDir;
-        privatePath(path.dirname(dir), {
-          directory: true
-        });
-        privatePath(dir, {
-          directory: true
-        });
-        const j = read(path.join(dir, 'journal.json'));
-        if (j.transactionId !== pointer.transactionId || j.zylosDir !== root || !terminalValid(j)) throw Error('cleanup pointer has no verified terminal');
-        addCandidate({
-          dir,
-          journal: j,
-          archived: dir === archivedDir
-        });
-      }
-    }
-  } catch (error) {
-    diagnostics.push(error.message);
-  }
+  if (marker && !candidates.some(c => c.journal.transactionId === marker.transactionId)) diagnostics.push('marker has no valid transaction');
   if (activeCount > 8) diagnostics.push('active transaction limit exceeded');
   return {
     marker,
     candidates,
     diagnostics,
-    blocked: diagnostics.length > 0 || candidates.some(c => c.journal.archiveRecoveryRequired || c.journal.installerExitUnconfirmed || c.journal.finalizerExitUnconfirmed || TERMINAL.has(c.journal.phase) && (c.journal.finalizerLaunchIntent && !c.journal.finalizerExitConfirmed || c.journal.installerLaunchIntent && !c.journal.installerExitConfirmed) || !READY.has(c.journal.phase) && (!terminalValid(c.journal) || !!marker) && !(provisionalAbortValid(c.journal) && !marker))
+    // Verified terminal data is available even while its final marker remains.
+    // Unconfirmed children still isolate it; invalid terminal labels never do.
+    blocked: diagnostics.length > 0 || candidates.some(c => c.journal.installerExitUnconfirmed || c.journal.finalizerExitUnconfirmed || TERMINAL.has(c.journal.phase) && (c.journal.finalizerStarted && !c.journal.finalizerExitConfirmed || c.journal.installerStarted && !c.journal.installerExitConfirmed) || !READY.has(c.journal.phase) && !terminalValid(c.journal) && !provisionalAbortValid(c.journal))
   };
 }
 function assertCoreDatabaseAvailable(root) {
@@ -309,8 +290,6 @@ function controllerFlock() {
   throw Error('trusted Linux flock executable unavailable');
 }
 function serializedController(dir, operation, value) {
-  // Verified terminal archival renames the whole directory while the owner
-  // still holds its controller. No active lock remains at the original path.
   if (operation === 'release' && !fs.existsSync(dir)) return;
   privatePath(dir, {
     directory: true
@@ -347,7 +326,7 @@ function acquire(dir, {
   };
   if (value.unsupported) throw Error('process identity verification unsupported');
   dir = path.resolve(dir);
-  let archiveIdentity = null;
+  let publicationIdentity = null;
   if (fs.existsSync(path.join(dir, 'journal.json'))) {
     const j = read(path.join(dir, 'journal.json'));
     const valid = j.formatVersion === 1 && ID.test(j.transactionId) && j.transactionId === path.basename(dir) && typeof j.zylosDir === 'string' && path.isAbsolute(j.zylosDir) && fs.realpathSync(j.zylosDir) === j.zylosDir;
@@ -363,14 +342,11 @@ function acquire(dir, {
       privatePath(path.dirname(publishedDir), {
         directory: true
       });
-      archiveIdentity = {
+      publicationIdentity = {
         root: j.zylosDir,
         id: j.transactionId
       };
-    } else if (valid && dir === path.join(j.zylosDir, '.backup', 'self-upgrade', j.transactionId)) archiveIdentity = {
-      root: j.zylosDir,
-      id: j.transactionId
-    };
+    }
   } else if (publishedDir !== undefined) throw Error('publication requires trusted initial journal');
   serializedController(dir, 'acquire', value);
   return () => {
@@ -381,21 +357,10 @@ function acquire(dir, {
           directory: true
         });
         const saved = read(path.join(publishedDir, 'journal.json'));
-        if (saved.transactionId !== archiveIdentity.id || saved.zylosDir !== archiveIdentity.root) throw Error('cannot release unverified published controller');
+        if (saved.transactionId !== publicationIdentity.id || saved.zylosDir !== publicationIdentity.root) throw Error('cannot release unverified published controller');
         location = publishedDir;
       } catch (error) {
         if (error.code !== 'ENOENT') throw error;
-      }
-    }
-    if (!fs.existsSync(location) && archiveIdentity) {
-      const candidate = path.join(archiveIdentity.root, '.backup', 'self-upgrade-archive', archiveIdentity.id);
-      if (fs.existsSync(candidate)) {
-        privatePath(candidate, {
-          directory: true
-        });
-        const j = read(path.join(candidate, 'journal.json'));
-        if (j.transactionId !== archiveIdentity.id || j.zylosDir !== archiveIdentity.root || !terminalValid(j)) throw Error('cannot release unverified archived controller');
-        location = candidate;
       }
     }
     serializedController(location, 'release', value);
@@ -409,9 +374,8 @@ function update(dir, j, changes = {}) {
   return j;
 }
 function marker(root, dir, j) {
-  const active = path.join(root, '.backup', 'self-upgrade', j.transactionId),
-    archived = path.join(root, '.backup', 'self-upgrade-archive', j.transactionId);
-  if (!ID.test(j.transactionId) || dir !== active && dir !== archived) throw Error('invalid maintenance marker transaction path');
+  const active = path.join(root, '.backup', 'self-upgrade', j.transactionId);
+  if (!ID.test(j.transactionId) || dir !== active) throw Error('invalid maintenance marker transaction path');
   durable(path.join(root, '.zylos', 'upgrade', 'active.json'), {
     formatVersion: 1,
     transactionId: j.transactionId,
@@ -437,7 +401,11 @@ function command(bin, args, options = {}) {
   return r.stdout;
 }
 function services(j) {
-  const list = JSON.parse(command('pm2', ['jlist']));
+  const output = command('pm2', ['jlist']);
+  // A cold PM2 daemon prints startup banners before the JSON array.
+  const arrayStart = output.search(/(?:^|\n)\s*\[(?:\s*\{|\s*\])/);
+  if (arrayStart < 0) throw Error('invalid PM2 list');
+  const list = JSON.parse(output.slice(arrayStart).trim());
   if (!Array.isArray(list)) throw Error('invalid PM2 list');
   const roots = [j.skillsDir, path.resolve(j.skillsDir)];
   try {
@@ -488,13 +456,15 @@ function start(j) {
     if (!['new_data_ready', 'new_verifying', 'upgrade_complete'].includes(j.phase) && hash(ecosystem) !== originalHash) throw Error('original ecosystem identity changed');
     for (const saved of original) command('pm2', ['startOrRestart', ecosystem, '--only', saved.name, '--update-env']);
   }
-  command('pm2', ['save']);
 }
 function verifyServices(j) {
   const deadline = Date.now() + 30000;
   do {
     const all = services(j);
-    if ((j.originalServices || []).every(p => all.some(a => a.name === p.name && a.status === 'online' && a.pid > 0))) return;
+    if ((j.originalServices || []).every(p => all.some(a => a.name === p.name && a.status === 'online' && a.pid > 0))) {
+      if ((j.originalServices || []).length) command('pm2', ['save']);
+      return;
+    }
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 200);
   } while (Date.now() < deadline);
   throw Error('original services did not become online');
@@ -594,33 +564,14 @@ function validateDescriptor(dir, j, d) {
     privatePath(path.join(dir, name));
     if (!/^[a-f0-9]{64}$/.test(d.hashes[name]) || hash(path.join(dir, name)) !== d.hashes[name]) throw Error('recovery material hash mismatch: ' + name);
   }
-  if (!Array.isArray(d.driverClosureHashes) || !d.driverClosureHashes.length || d.driverClosureHashes.length > 10000) throw Error('missing independent driver closure hashes');
-  const expected = new Map();
-  for (const entry of d.driverClosureHashes) {
-    if (typeof entry.file !== 'string' || !entry.file || path.isAbsolute(entry.file) || entry.file.split(/[\\/]/).some(part => !part || part === '.' || part === '..') || expected.has(entry.file) || !Number.isSafeInteger(entry.bytes) || entry.bytes < 0 || !/^[a-f0-9]{64}$/.test(entry.sha256)) throw Error('invalid driver closure evidence');
-    expected.set(entry.file, entry);
+  // The independent closure is copied and probe-loaded before installation.
+  // Its fixed entry paths must remain real files; runner hashes above protect
+  // the three recovery controllers without re-hashing the native dependency tree.
+  for (const file of [fixed.workerPath, fixed.driverPath, path.join(closure, 'package.json')]) {
+    const stat = fs.lstatSync(file);
+    if (!stat.isFile() || stat.isSymbolicLink() || fs.realpathSync(file) !== file) throw Error('invalid driver closure entry: ' + file);
   }
-  for (const file of [fixed.workerPath, fixed.driverPath, path.join(closure, 'package.json')]) if (!expected.has(path.relative(closure, file))) throw Error('missing required driver closure file');
-  let count = 0;
-  function checkTree(current) {
-    privatePath(current, {
-      directory: true
-    });
-    for (const name of fs.readdirSync(current)) {
-      const p = path.join(current, name),
-        s = fs.lstatSync(p);
-      if (s.isSymbolicLink()) throw Error('driver closure symlink');
-      if (s.isDirectory()) checkTree(p);else {
-        privatePath(p);
-        const rel = path.relative(closure, p),
-          e = expected.get(rel);
-        if (!e || e.bytes !== s.size || e.sha256 !== hash(p)) throw Error('driver closure hash mismatch: ' + rel);
-        count++;
-      }
-    }
-  }
-  checkTree(closure);
-  if (count !== expected.size) throw Error('driver closure missing files');
+
 }
 function preflight(dir, j, expected) {
   return worker(dir, j, {
@@ -663,77 +614,15 @@ function renameIntent(dir, j, key, source, dest, expectedHash) {
   a.done = true;
   update(dir, j);
 }
-function archive(dir, j) {
-  if (!terminalValid(j)) throw Error('cannot archive unverified terminal');
-  const root = j.zylosDir,
-    archiveRoot = path.join(root, '.backup', 'self-upgrade-archive'),
-    dest = path.join(archiveRoot, j.transactionId);
-  fs.mkdirSync(archiveRoot, {
-    recursive: true,
-    mode: 0o700
-  });
-  j.archiveIntent = {
-    dest
-  };
-  update(dir, j);
-  if (dir !== dest) {
-    if (fs.existsSync(dest)) throw Error('archive destination conflict');
-    fs.renameSync(dir, dest);
-    fsyncDir(path.dirname(dir));
-    fsyncDir(archiveRoot);
-  }
-  // Pointer removal only after archived evidence has been revalidated.
-  const saved = read(path.join(dest, 'journal.json'));
-  if (!terminalValid(saved)) throw Error('invalid archived terminal');
-  unmark(root, j);
-  return dest;
-}
 function finishTerminal(dir, j) {
-  if (!terminalValid(j)) throw Error('cannot clean unverified terminal');
-  const warnings = [];
-  try {
-    durable(path.join(j.zylosDir, '.zylos', 'upgrade', 'cleanup.json'), {
-      formatVersion: 1,
-      transactionId: j.transactionId
-    });
-    j.cleanupPending = true;
-    update(dir, j);
-    if (j.phase === 'upgrade_complete' && fs.existsSync(path.join(dir, 'code'))) {
-      fs.rmSync(path.join(dir, 'code'), {
-        recursive: true
-      });
-      fsyncDir(dir);
-    }
-    j.cleanupPending = false;
-    update(dir, j);
-  } catch (error) {
-    warnings.push('terminal cleanup: ' + error.message);
-  }
-  let archiveDir = null;
-  if (!warnings.length) try {
-    archiveDir = archive(dir, j);
-  } catch (error) {
-    warnings.push('terminal archive: ' + error.message);
-    try {
-      j.cleanupPending = true;
-      update(fs.existsSync(dir) ? dir : path.join(j.zylosDir, '.backup', 'self-upgrade-archive', j.transactionId), j);
-    } catch {}
-  }
-  if (!warnings.length) try {
-    const pointer = path.join(j.zylosDir, '.zylos', 'upgrade', 'cleanup.json');
-    if (fs.existsSync(pointer)) {
-      if (read(pointer).transactionId !== j.transactionId) throw Error('terminal cleanup pointer conflict');
-      fs.unlinkSync(pointer);
-      fsyncDir(path.dirname(pointer));
-    }
-  } catch (error) {
-    warnings.push('terminal cleanup pointer: ' + error.message);
-  }
-  return {
-    archiveDir,
-    warnings,
-    complete: !warnings.length
-  };
+  if (!terminalValid(j)) throw Error('cannot finish unverified terminal');
+  // The terminal journal is durable before the final marker removal. Keep all
+  // recovery evidence in its original directory; reentry only retries this step.
+  const saved = transaction(j.zylosDir, dir);
+  if (!terminalValid(saved)) throw Error('terminal journal is not durable');
+  if (saved.terminalServicesStopped || saved.installerExitUnconfirmed || saved.finalizerExitUnconfirmed || saved.installerStarted && !saved.installerExitConfirmed || saved.finalizerStarted && !saved.finalizerExitConfirmed) return {complete:false, warnings:[]};
+  unmark(j.zylosDir, saved);
+  return {complete:true, warnings:[]};
 }
 module.exports = {
   transaction,
@@ -748,6 +637,7 @@ module.exports = {
   read,
   privatePath,
   discover,
+  hasRecoveryMaterials,
   assertCoreDatabaseAvailable,
   identity,
   alive,
@@ -765,7 +655,6 @@ module.exports = {
   preflight,
   validateDescriptor,
   renameIntent,
-  archive,
   terminalValid,
   finishTerminal
 };

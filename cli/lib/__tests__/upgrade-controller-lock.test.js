@@ -152,9 +152,9 @@ test('release after terminal directory archival leaves no active lock path',t=>{
   assert.doesNotThrow(release);
   assert.equal(fs.existsSync(dir),false);
 });
-test('release follows a verified transaction archive and clears only its captured owner token',t=>{
-  const root=fixture(t),dir=path.join(root,'.backup/self-upgrade/tx'),archived=path.join(root,'.backup/self-upgrade-archive/tx');fs.mkdirSync(dir,{recursive:true,mode:0o700});
-  const j={formatVersion:1,transactionId:'tx',zylosDir:root,nodePath:process.execPath,skillsDir:path.join(root,'.claude/skills'),dbBackupDir:path.join(root,'.backup/db/tx'),snapshotManifestHash:'a'.repeat(64),coreManifest:[{name:'core',existedBefore:true,backedUp:true,originalHash:'b'.repeat(64)}],originalServices:[],initialIdentity:{nodePath:process.execPath,packageJson:path.join(root,'package.json'),packageHash:'c'.repeat(64),cliRoot:path.join(root,'original-cli'),cliHash:'d'.repeat(64),workerPath:path.join(root,'original-cli/lib/worker.js'),workerHash:'e'.repeat(64),ecosystemHash:null,databases:m.DB_PATHS.map(source=>({source,exists:true}))},phase:'upgrade_complete',installationIntent:true,cleanup:{complete:true,markerRemoved:true,servicesRestored:true},terminalEvidence:{verified:true,kind:'code_data_services'}};
-  m.durable(path.join(dir,'journal.json'),j);const release=m.acquire(dir);fs.mkdirSync(path.dirname(archived),{recursive:true,mode:0o700});fs.renameSync(dir,archived);release();
-  assert.equal(fs.existsSync(path.join(archived,'controller.json')),false);const next=m.acquire(archived);next();
+test('terminal transaction keeps its controller path and releases the captured token',t=>{
+  const dir=fixture(t), release=m.acquire(dir);
+  release();
+  assert.equal(fs.existsSync(path.join(dir,'controller.json')),false);
+  const next=m.acquire(dir); next();
 });

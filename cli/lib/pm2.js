@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execSync } from 'node:child_process';
 import { ZYLOS_DIR } from './config.js';
+import { savePm2ProcessList } from './pm2-save.js';
 
 export function getCoreEcosystemPath() {
   return path.join(ZYLOS_DIR, 'pm2', 'ecosystem.config.cjs');
@@ -27,7 +28,7 @@ export function createPm2Helpers({
     // Persist only after every restart succeeded so callers don't save a
     // partially-updated PM2 process list.
     if (save) {
-      exec('pm2 save 2>/dev/null', { stdio });
+      savePm2ProcessList({save: () => exec('pm2 save 2>/dev/null', { stdio })});
     }
   }
 
@@ -54,7 +55,7 @@ export function createPm2Helpers({
     exec(`pm2 restart "${name}" 2>/dev/null`, { stdio });
 
     if (save) {
-      exec('pm2 save 2>/dev/null', { stdio });
+      savePm2ProcessList({save: () => exec('pm2 save 2>/dev/null', { stdio })});
     }
   }
 

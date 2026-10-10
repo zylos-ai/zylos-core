@@ -2,106 +2,27 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { createRequire } from 'node:module';
-import { once } from 'node:events';
-import { test } from 'node:test';
-function fixture() {
-  const root=fs.mkdtempSync(path.join(os.tmpdir(),'core803-bootstrap-'));
-  const stable=path.join(root,'.zylos/upgrade');
-  fs.mkdirSync(stable,{recursive:true,mode:0o700});
-  for(const [source,target] of [['upgrade-bootstrap.cjs','bootstrap.cjs'],['upgrade-maintenance.cjs','maintenance.cjs'],['upgrade-runtime-args.cjs','runtime-args.cjs']])
-    fs.copyFileSync(new URL('../'+source,import.meta.url),path.join(stable,target));
-  const output=path.join(root,'runtime-argv.jsonl'),report=path.join(root,'runtime-report.json'),input=path.join(root,'runtime-input.txt'),command=path.join(root,'codex'),delay=path.join(root,'delay');fs.writeFileSync(delay,'0');
-  fs.writeFileSync(command,`#!${process.execPath}\nconst fs=require('node:fs');process.stdin.setRawMode(true);process.stdin.on('data',data=>fs.appendFileSync(${JSON.stringify(input)},data));const fd=fs.openSync('/dev/tty','r');fs.closeSync(fd);fs.writeFileSync(${JSON.stringify(report)},JSON.stringify({tty:process.stdin.isTTY,columns:process.stdout.columns,rows:process.stdout.rows,HOME:process.env.HOME,apiPresent:'OPENAI_API_KEY' in process.env,alternateHomePresent:'CODEX_HOME' in process.env}));fs.appendFileSync(${JSON.stringify(output)},JSON.stringify(process.argv.slice(2))+'\\n');setTimeout(()=>process.exit(0),Number(fs.readFileSync(${JSON.stringify(delay)},'utf8')));\n`,{mode:0o700});
-  const config={formatVersion:1,runtime:{kind:'codex',command,args:[],cwd:root,path:process.env.PATH}};
-  const configPath=path.join(stable,'capability.json');fs.writeFileSync(configPath,JSON.stringify(config),{mode:0o600});
-  const api=createRequire(import.meta.url)(path.join(stable,'bootstrap.cjs'));
-  function journal(id='tx',extra={}) {
-    const dir=path.join(root,'.backup/self-upgrade',id);fs.mkdirSync(dir,{recursive:true,mode:0o700});
-    fs.writeFileSync(path.join(dir,'journal.json'),JSON.stringify({formatVersion:1,transactionId:id,zylosDir:root,phase:'prepared',initialIdentity:{},...extra}),{mode:0o600});return dir;
+import {createRequire} from 'node:module';
+import {spawnSync} from 'node:child_process';
+import {test} from 'node:test';
+function fixture(t) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'core803-bootstrap-'));
+  t.after(() => fs.rmSync(root, {recursive: true, force: true}));
+  const stable = path.join(root, '.zylos/upgrade');
+  fs.mkdirSync(stable, {recursive: true, mode: 0o700});
+  for (const [source, target] of [['upgrade-bootstrap.cjs', 'bootstrap.cjs'], ['upgrade-maintenance.cjs', 'maintenance.cjs']]) {
+    fs.copyFileSync(new URL('../' + source, import.meta.url), path.join(stable, target));
+    fs.chmodSync(path.join(stable, target), 0o600);
   }
-  function rows(){return fs.existsSync(output)?fs.readFileSync(output,'utf8').trim().split('\n').filter(Boolean).map(JSON.parse):[];}
-  return {root,api,journal,rows,output,config,configPath,delay,report,input};
-}
-async function until(predicate) {
-  const deadline=Date.now()+5000;
-  while(!predicate()){if(Date.now()>deadline)throw Error('fixture deadline exceeded');await new Promise(r=>setTimeout(r,20));}
-}
-async function launch(f) {
-  let child;const result=f.api.bootstrap(f.root,{launchRuntime:true,onChild:c=>{child=c;}});
-  await once(child,'exit');return result;
-}
-test('malformed journal actively launches isolated runtime with diagnostic status entry',async()=>{
-  const f=fixture(),dir=f.journal();fs.writeFileSync(path.join(dir,'journal.json'),'{broken');
-  const result=await launch(f);assert.equal(result.recovery_required,true);assert.equal(result.launched,true);
-  const prompt=f.rows()[0].at(-1);assert.match(prompt,/SYSTEM RECOVERY TASK/);assert.match(prompt,/diagnostics/);assert.match(prompt,/--status/);assert.match(prompt,/Do not query C4/);
-  assert.equal(f.api.bootstrap(f.root,{once:true}).recovery_required,true);assert.equal(f.rows().length,1);
-});
-test('ambiguous transactions launch agent but never execute automatic recovery',async()=>{
-  const f=fixture();f.journal('one');f.journal('two');
-  const result=await launch(f);assert.equal(result.recovery_required,true);assert.match(result.error,/not unique/);
-  const prompt=f.rows()[0].at(-1);assert.match(prompt,/one/);assert.match(prompt,/two/);assert.match(prompt,/preserve isolation/);
-  assert.equal(f.api.bootstrap(f.root,{once:true}).recovery_required,true);
-});
-test('invalid controller material remains visible in active runtime prompt',async()=>{
-  const f=fixture(),dir=f.journal();fs.writeFileSync(path.join(dir,'controller.json'),'{broken',{mode:0o600});
-  const result=await launch(f);assert.equal(result.launched,true);assert.match(f.rows()[0].at(-1),/controller identity unavailable/);
-});
-test('unsafe or malformed runtime capability refuses subprocess execution',()=>{
-  const f=fixture();f.journal();f.config.runtime.args=[{injected:'command'}];fs.writeFileSync(f.configPath,JSON.stringify(f.config));
-  assert.throws(()=>f.api.bootstrap(f.root,{launchRuntime:true}),/invalid saved runtime/);assert.deepEqual(f.rows(),[]);
-  f.config.runtime.args=[];fs.writeFileSync(f.configPath,JSON.stringify(f.config));fs.chmodSync(f.configPath,0o644);
-  assert.throws(()=>f.api.bootstrap(f.root,{launchRuntime:true}),/private/);assert.deepEqual(f.rows(),[]);
-});
-test('supervisor discovers transaction created after idle boot and deduplicates live child',async()=>{
-  const f=fixture();fs.writeFileSync(f.delay,'250');
-  const outputs=[];const stop=f.api.supervise(f.root,{intervalMs:20,write:out=>outputs.push(out)});
-  try {
-    assert.equal(outputs[0].active,false);f.journal();await until(()=>f.rows().length===1);fs.writeFileSync(f.delay,'5000');
-    await new Promise(r=>setTimeout(r,80));assert.equal(f.rows().length,1);
-    await until(()=>f.rows().length===2);assert.equal(outputs.filter(o=>o.launched).length,2);assert.match(f.rows()[1].at(-1),/tx/);
-  }finally{stop();}
-});
-test('status is file-only and does not spawn even with damaged capability',()=>{
-  const f=fixture();f.journal();fs.writeFileSync(f.configPath,'{broken');
-  assert.equal(f.api.bootstrap(f.root,{status:true}).active,true);assert.deepEqual(f.rows(),[]);
-});
-
-
-test('boot transport provides real terminal, owner login environment and literal recovery prompt',async()=>{
-  const f=fixture();const sentinel=path.join(f.root,'shell-must-not-run');
-  const phase="bad'$(touch "+sentinel+")";f.journal('tx',{phase});
-  const previous={api:process.env.OPENAI_API_KEY,home:process.env.CODEX_HOME};
-  process.env.OPENAI_API_KEY='fixture-must-not-inherit';process.env.CODEX_HOME='/fixture/must-not-inherit';
-  try{await launch(f);}finally{
-    if(previous.api===undefined)delete process.env.OPENAI_API_KEY;else process.env.OPENAI_API_KEY=previous.api;
-    if(previous.home===undefined)delete process.env.CODEX_HOME;else process.env.CODEX_HOME=previous.home;
+  const api = createRequire(import.meta.url)(path.join(stable, 'bootstrap.cjs'));
+  function journal(id = 'tx', extra = {}) {
+    const dir = path.join(root, '.backup/self-upgrade', id);
+    fs.mkdirSync(dir, {recursive: true, mode: 0o700});
+    fs.writeFileSync(path.join(dir, 'journal.json'), JSON.stringify({formatVersion: 1, transactionId: id, zylosDir: root, phase: 'prepared', initialIdentity: {}, ...extra}), {mode: 0o600});
+    return dir;
   }
-  const report=JSON.parse(fs.readFileSync(f.report,'utf8'));
-  assert.equal(report.tty,true);assert.equal(report.HOME,os.userInfo().homedir);
-  assert.equal(report.columns,120);assert.equal(report.rows,40);
-  assert.equal(report.apiPresent,false);assert.equal(report.alternateHomePresent,false);
-  assert.equal(fs.existsSync(sentinel),false);assert.ok(f.rows()[0].at(-1).includes(phase));
-});
-
-
-test('same live runtime receives changed attribution once and bootstrap restart preserves deduplication',async()=>{
-  const f=fixture();fs.writeFileSync(f.delay,'2000');f.journal('one');
-  const outputs=[];const stop=f.api.supervise(f.root,{intervalMs:30,write:out=>outputs.push(out)});
-  try{
-    await until(()=>f.rows().length===1);await new Promise(r=>setTimeout(r,80));
-    assert.equal(fs.existsSync(f.input),false);
-    // Existing runtime/session keeps the signature in tmux across observers.
-    assert.equal(f.api.bootstrap(f.root,{launchRuntime:true}).reprompted,undefined);
-    f.journal('two');await until(()=>fs.existsSync(f.input));
-    const initial=fs.readFileSync(f.input,'utf8');assert.match(initial,/two/);
-    const before=initial.length;await new Promise(r=>setTimeout(r,100));assert.equal(fs.readFileSync(f.input,'utf8').length,before);
-    assert.equal(f.api.bootstrap(f.root,{launchRuntime:true}).reprompted,undefined);
-    assert.equal(f.rows().length,1);assert.equal(outputs.filter(out=>out.reprompted).length,1);
-    const dir=path.join(f.root,'.backup/self-upgrade/one'),j=JSON.parse(fs.readFileSync(path.join(dir,'journal.json'),'utf8'));j.phase='restoring';j.updatedAt='later';fs.writeFileSync(path.join(dir,'journal.json'),JSON.stringify(j));
-    await new Promise(r=>setTimeout(r,100));assert.equal(fs.readFileSync(f.input,'utf8').length,before);
-  }finally{stop();}
-});
+  return {root, stable, api, journal};
+}
 
 function readyJournal(f, phase = 'new_data_ready', extra = {}) {
   const digest = 'a'.repeat(64);
@@ -126,79 +47,96 @@ function readyJournal(f, phase = 'new_data_ready', extra = {}) {
   });
 }
 
-test('live upgrade controller never launches or resumes another recovery runtime', () => {
-  const f = fixture();
-  const dir = f.journal();
-  const maintenance = createRequire(import.meta.url)(path.join(f.root, '.zylos/upgrade/maintenance.cjs'));
-  maintenance.durable(path.join(dir, 'controller.json'), maintenance.identity());
-  // Missing capability and recovery module prove both paths stop at ownership.
-  fs.unlinkSync(f.configPath);
-  for (const options of [{ launchRuntime: true }, { once: true }]) {
-    const result = f.api.bootstrap(f.root, options);
-    assert.equal(result.controllerAlive, true);
-    assert.equal(result.observing, true);
-    assert.equal(result.launched, undefined);
+
+test('malformed journals expose a fixed diagnostic cue and never resume', t => {
+  const f = fixture(t), dir = f.journal();
+  fs.writeFileSync(path.join(dir, 'journal.json'), '{broken');
+  const out = f.api.bootstrap(f.root);
+  assert.equal(out.recovery_required, true);
+  assert.equal(out.blocked, true);
+  assert.match(out.prompt, /SYSTEM RECOVERY TASK/);
+  assert.match(out.prompt, /--status/);
+  assert.match(out.prompt, /Do not query C4/);
+  assert.equal(f.api.bootstrap(f.root, {once: true}).recovery_required, true);
+});
+
+test('ambiguous transactions remain visible but cannot authorize recovery', t => {
+  const f = fixture(t); f.journal('one'); f.journal('two');
+  const out = f.api.bootstrap(f.root, {once: true});
+  assert.equal(out.recovery_required, true);
+  assert.match(out.error, /not unique/);
+  assert.match(out.prompt, /one/); assert.match(out.prompt, /two/);
+});
+
+test('status and discovery do not depend on runtime capability or recovery module', t => {
+  const f = fixture(t); f.journal();
+  fs.writeFileSync(path.join(f.stable, 'capability.json'), '{broken');
+  const out = f.api.bootstrap(f.root, {status: true});
+  assert.equal(out.active, true);
+  assert.match(out.prompt, /Normal C4\/database access is unavailable/);
+  assert.equal(f.api.supervise, undefined);
+  assert.equal(f.api.runtimeCapability, undefined);
+});
+
+test('live controller is observed without entering resume', t => {
+  const f = fixture(t), dir = f.journal();
+  const m = createRequire(import.meta.url)(path.join(f.stable, 'maintenance.cjs'));
+  m.durable(path.join(dir, 'controller.json'), m.identity());
+  const out = f.api.bootstrap(f.root, {once: true});
+  assert.equal(out.controllerAlive, true);
+  assert.equal(out.observing, true);
+});
+
+test('once resumes exactly the attributed transaction and does not launch a runtime', t => {
+  const f = fixture(t), dir = f.journal();
+  fs.writeFileSync(path.join(f.stable, 'recovery.cjs'), 'exports.resume = dir => ({resumed: dir});');
+  const out = f.api.bootstrap(f.root, {once: true});
+  assert.equal(out.resumed, dir);
+  assert.equal(out.launched, undefined);
+});
+
+test('stale or invalid controller material leaves an isolated recovery cue', t => {
+  for (const controller of ['{broken', JSON.stringify({pid: process.pid, boot: 'prior-boot', start: '0'})]) {
+    const f = fixture(t), dir = f.journal();
+    fs.writeFileSync(path.join(dir, 'controller.json'), controller, {mode: 0o600});
+    const out = f.api.bootstrap(f.root);
+    assert.equal(out.active, true); assert.equal(out.blocked, true);
+    assert.match(out.prompt, /SYSTEM RECOVERY TASK/);
   }
-  assert.deepEqual(f.rows(), []);
 });
 
-test('stale controller still delivers interrupted recovery to an isolated runtime', async () => {
-  const f = fixture();
-  const dir = f.journal();
-  fs.writeFileSync(path.join(dir, 'controller.json'), JSON.stringify({ pid: process.pid, boot: 'prior-boot', start: '0' }), { mode: 0o600 });
-  const result = await launch(f);
-  assert.equal(result.launched, true);
-  assert.equal(result.blocked, true);
-});
-
-test('READY validation and verified terminal cleanup provide nonblocking cues without launching another runtime', () => {
+test('READY provides a nonblocking recovery cue and terminal evidence ends discovery', t => {
   for (const phase of ['new_data_ready', 'new_verifying', 'restored_data_ready', 'restored_verifying', 'upgrade_complete']) {
-    const f = fixture();
+    const f = fixture(t);
     readyJournal(f, phase, phase === 'upgrade_complete' ? {
       cleanupPending: true,
-      cleanup: { complete: true, markerRemoved: true, servicesRestored: true },
-      terminalEvidence: { verified: true, kind: 'code_data_services' },
+      cleanup: {complete: true, markerRemoved: true, servicesRestored: true},
+      terminalEvidence: {verified: true, kind: 'code_data_services'},
     } : {});
-    const result = f.api.bootstrap(f.root, {launchRuntime: true});
-    assert.equal(result.active, true, phase);
-    assert.equal(result.blocked, false, phase);
-    assert.equal(result.launched, undefined, phase);
-    assert.deepEqual(f.rows(), []);
-    assert.match(result.prompt, /Core database access is available/);
-    assert.doesNotMatch(result.prompt, /Normal C4\/database access is unavailable/);
+    const out = f.api.bootstrap(f.root);
+    assert.equal(out.active, phase !== 'upgrade_complete', phase);
+    if (!out.active) continue;
+    assert.equal(out.blocked, false);
+    assert.match(out.prompt, /Core database access is available/);
   }
 });
 
-test('supervisor tears down its recovery runtime when discovery becomes inactive', async () => {
-  const f = fixture();
-  fs.writeFileSync(f.delay, '5000');
-  const dir = f.journal();
-  const outputs = [];
-  const stop = f.api.supervise(f.root, { intervalMs: 20, write: out => outputs.push(out) });
+test('unexpected discovery exceptions preserve isolation without exposing exception text', t => {
+  const f = fixture(t);
+  const m = createRequire(import.meta.url)(path.join(f.stable, 'maintenance.cjs'));
+  const discover = m.discover;
+  m.discover = () => {throw Error('untrusted exception text');};
   try {
-    await until(() => f.rows().length === 1);
-    const socket = path.join(f.root, '.zylos/upgrade/runtime.sock');
-    const { spawnSync } = await import('node:child_process');
-    const alive = () => spawnSync('/usr/bin/tmux', ['-S', socket, 'has-session', '-t', 'upgrade-recovery'], {stdio: 'ignore'}).status === 0;
-    assert.equal(alive(), true);
-    fs.rmSync(dir, {recursive: true});
-    await until(() => outputs.some(out => out.active === false));
-    assert.equal(alive(), false);
-    assert.equal(f.rows().length, 1);
-  } finally { stop(); }
+    const out = f.api.bootstrap(f.root, {once: true});
+    assert.equal(out.recovery_required, true); assert.equal(out.blocked, true);
+    assert.match(out.prompt, /file-only upgrade discovery unavailable/);
+    assert.doesNotMatch(out.prompt, /untrusted exception text/);
+  } finally {m.discover = discover;}
 });
 
-test('unexpected file discovery exception actively launches fixed isolated diagnostic runtime', async () => {
-  const f = fixture();
-  const maintenance = createRequire(import.meta.url)(path.join(f.root, '.zylos/upgrade/maintenance.cjs'));
-  const discover = maintenance.discover;
-  maintenance.discover = () => { throw Error('untrusted exception text'); };
-  try {
-    const result = await launch(f);
-    assert.equal(result.launched, true);
-    assert.equal(result.recovery_required, true);
-    assert.equal(result.blocked, true);
-    assert.match(f.rows()[0].at(-1), /file-only upgrade discovery unavailable/);
-    assert.doesNotMatch(f.rows()[0].at(-1), /untrusted exception text/);
-  } finally { maintenance.discover = discover; }
+test('retired runtime-launch option fails clearly and cannot run a supervisor', t => {
+  const f = fixture(t);
+  const out = spawnSync(process.execPath, [path.join(f.stable, 'bootstrap.cjs'), '--root', f.root, '--launch-runtime'], {encoding: 'utf8'});
+  assert.equal(out.status, 1);
+  assert.match(JSON.parse(out.stdout).error, /existing boot chain/);
 });

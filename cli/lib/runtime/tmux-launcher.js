@@ -44,7 +44,6 @@ if (recovery.blocked || (recovery.active && !recovery.controllerAlive)) {
   spec.args = applyUpgradePrompt(spec.args || [], recovery.prompt, spec.promptIndex, {
     append: !recovery.blocked,
   });
-  spec.env = { ...spec.env, ZYLOS_UPGRADE_PROMPT_DELIVERED: '1' };
 }
 
 // 3. Spawn child

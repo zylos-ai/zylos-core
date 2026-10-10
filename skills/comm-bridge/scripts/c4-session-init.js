@@ -25,17 +25,37 @@ import path from 'node:path';
 import os from 'node:os';
 import { createRequire } from 'node:module';
 const require=createRequire(import.meta.url);
+
+function hasRecoveryMaterials(root) {
+  const present = file => {
+    try { return fs.lstatSync(file); }
+    catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+  };
+  try {
+    for (const relative of ['.zylos', '.zylos/upgrade', '.backup', '.backup/self-upgrade']) {
+      const file = path.join(root, relative), stat = present(file);
+      if (!stat) continue;
+      if (stat.isSymbolicLink()) {
+        if (relative !== '.zylos' && relative !== '.backup' || !fs.statSync(file).isDirectory()) return true;
+      } else if (!stat.isDirectory()) return true;
+    }
+    for (const relative of ['.zylos/upgrade/active.json']) {
+      if (present(path.join(root, relative))) return true;
+    }
+    const active = path.join(root, '.backup/self-upgrade');
+    return !!present(active) && fs.readdirSync(active).length > 0;
+  } catch {
+    return true;
+  }
+}
 function recoveryContext() {
   try {
     const root = fs.realpathSync(process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos'));
+    if (!hasRecoveryMaterials(root)) return null;
     const directory = path.join(root, '.zylos', 'upgrade');
     const entry = path.join(directory, 'bootstrap.cjs');
     for (const [parent, shared] of [[path.join(root, '.zylos'), true], [directory, false]]) {
-      let stat;
-      try { stat = fs.lstatSync(parent); } catch (error) {
-        if (error.code === 'ENOENT') return null;
-        throw error;
-      }
+      const stat = fs.lstatSync(parent);
       if (!stat.isDirectory() || stat.isSymbolicLink() ||
           (process.getuid && stat.uid !== process.getuid()) || (!shared && (stat.mode & 0o022))) {
         throw Error('untrusted stable upgrade discovery directory');
@@ -43,7 +63,7 @@ function recoveryContext() {
     }
     for (const [file, isDirectory] of [
       [directory, true],
-      ...['bootstrap.cjs', 'maintenance.cjs', 'runtime-args.cjs'].map(name => [path.join(directory, name), false]),
+      ...['bootstrap.cjs', 'maintenance.cjs'].map(name => [path.join(directory, name), false]),
     ]) {
       const stat = fs.lstatSync(file);
       if (stat.isSymbolicLink() || (isDirectory ? !stat.isDirectory() : !stat.isFile()) ||
@@ -66,7 +86,7 @@ function recoveryBlock(context) {
 }
 
 function needsRecoveryCue(context) {
-  return context && !context.controllerAlive && process.env.ZYLOS_UPGRADE_PROMPT_DELIVERED !== '1';
+  return context && (context.blocked || !context.controllerAlive);
 }
 
 async function withC4Db(label, action) {

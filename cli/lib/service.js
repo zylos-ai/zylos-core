@@ -2,6 +2,7 @@
  * PM2 service management for components
  */
 
+import { savePm2ProcessList } from './pm2-save.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { execSync } from 'node:child_process';
@@ -51,7 +52,7 @@ export function registerService({ name, entry, skillDir, type }) {
     }
 
     // Save PM2 process list
-    execSync('pm2 save 2>/dev/null', { stdio: 'pipe' });
+    savePm2ProcessList({save: () => execSync('pm2 save 2>/dev/null', { stdio: 'pipe' })});
 
     return { success: true };
   } catch (err) {
