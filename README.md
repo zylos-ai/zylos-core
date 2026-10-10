@@ -35,6 +35,8 @@ Supports Claude Code (Anthropic) and Codex (OpenAI). Fully compatible with the [
 
 Zylos-managed Codex sessions use `--no-daemon` when the installed CLI advertises it, isolating startup from shared background-server settings. Older CLIs without this option keep their existing launch behavior. This does not change the shared daemon or your standalone Codex configuration.
 
+Codex startup checks leave model migration prompts and other choices untouched and log an operator warning without pane content. Model selection stays with the deployment/operator. Only a standalone Press Enter to continue prompt receives Enter automatically. Prompts with surrounding text need operator input.
+
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/zylos-ai/zylos-core/main/scripts/install.sh | bash

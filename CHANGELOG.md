@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Codex startup choices**: stop automatically selecting option 1. Leave model migration prompts and other choices to the deployment/operator, with a warning that excludes pane content. Send only Enter for a standalone acknowledgement prompt. (#804)
+
 ## [0.8.3] - 2026-10-08
 
 ### Fixed

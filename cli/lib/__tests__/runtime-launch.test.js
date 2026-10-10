@@ -1,4 +1,4 @@
-import { describe, it, mock, after, beforeEach } from 'node:test';
+import { describe, it, mock, after, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -63,6 +63,10 @@ let tmuxSessionExists = false;
 const resolvedCodex = "/selected codex/it's/bin/codex";
 let codexHelp = '  --no-daemon  Run without the shared background server';
 let codexHelpError = null;
+let paneText = '';
+let sendKeysError = null;
+let startupTimers = [];
+let timeoutMock;
 
 mock.module('node:child_process', {
   namedExports: {
@@ -79,6 +83,8 @@ mock.module('node:child_process', {
         if (!tmuxSessionExists) throw new Error('no session');
         return '';
       }
+      if (file === 'tmux' && args?.[0] === 'capture-pane') return paneText;
+      if (file === 'tmux' && args?.[0] === 'send-keys' && sendKeysError) throw sendKeysError;
       if (file === 'which' && args?.[0] === 'codex') return resolvedCodex + '\n';
       if (file === resolvedCodex && args?.[0] === '--help') {
         if (codexHelpError) throw codexHelpError;
@@ -137,6 +143,21 @@ beforeEach(() => {
   tmuxSessionExists = false;
   codexHelp = '  --no-daemon  Run without the shared background server';
   codexHelpError = null;
+  paneText = '';
+  sendKeysError = null;
+  startupTimers = [];
+  const originalSetTimeout = globalThis.setTimeout;
+  timeoutMock = mock.method(globalThis, 'setTimeout', (callback, delay, ...args) => {
+    if (delay === 8000) {
+      startupTimers.push(() => callback(...args));
+      return { unref() {} };
+    }
+    return originalSetTimeout(callback, delay, ...args);
+  });
+});
+
+afterEach(() => {
+  timeoutMock.mock.restore();
 });
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -482,6 +503,98 @@ describe('Codex launch — existing session', () => {
     assert.ok(!sent.includes('_p=$(cat'), 'existing-session command should not load bootstrap prompt');
     assert.ok(!sent.includes('session-start-inject.js'), 'existing-session command should not run text bootstrap');
   });
+});
+
+describe('Codex startup dialogs', () => {
+  const choices = [
+    ['migration with first option selected', 'Choose a model\n› 1. Try new model\n  2. Use existing model'],
+    ['migration with second option selected', 'Choose a model\n  1. Try new model\n› 2. Use existing model'],
+    ['numbered menu without a selection arrow', '1. Continue with new settings\n2. Keep settings'],
+    ['unknown numbered menu', '› 1. Enable experimental settings\n  2. Cancel'],
+    ['numbered menu with Enter hint', '1. Enable experimental settings\n2. Cancel\nPress Enter to continue'],
+    ['migration prose without numbers', 'Try new model or Use existing model\nPress Enter to continue'],
+    ['new model prose only', 'Try new model\nPress Enter to continue'],
+    ['existing model prose only', 'Use existing model\nPress Enter to continue'],
+    ['unknown confirmation prose', 'Apply updated settings?\nPress Enter to continue'],
+    ['unknown startup output', 'Waiting for an operator decision'],
+  ];
+
+  for (const exists of [false, true]) {
+    async function launchAndCheck(t, pane) {
+      tmuxSessionExists = exists;
+      paneText = pane;
+      const warnings = t.mock.method(console, 'warn', () => {});
+      const adapter = makeAdapter(CodexAdapter);
+      const sent = [];
+      adapter.sendMessage = async text => { sent.push(text); };
+      await adapter.launch({ bypassPermissions: false });
+      assert.equal(Boolean(findTmuxNewSession()), !exists);
+      assert.equal(sent.length, exists ? 1 : 0);
+      assert.equal(startupTimers.length, 1, 'launch must schedule the actual 8-second callback');
+      assert.equal(calls.execFileSync.filter(c => c.args[0] === 'capture-pane').length, 0);
+      // Snapshot after launch: hook trust/config setup is separate from the timer.
+      const configPaths = [
+        path.join(fakeHome, '.codex', 'config.toml'),
+        path.join(fakeZylosDir, '.codex', 'config.toml'),
+      ];
+      const before = configPaths.map(file => fs.readFileSync(file));
+      warnings.mock.resetCalls();
+      startupTimers[0]();
+      assert.equal(calls.execFileSync.filter(c => c.args[0] === 'capture-pane').length, 1);
+      for (const [i, file] of configPaths.entries()) {
+        assert.deepEqual(fs.readFileSync(file), before[i], 'dialog check must not rewrite configuration');
+      }
+      return {
+        keys: calls.execFileSync.filter(c => c.file === 'tmux' && c.args[0] === 'send-keys'),
+        warnings: warnings.mock.calls.map(call => call.arguments),
+      };
+    }
+
+    for (const [name, pane] of choices) {
+      it(`leaves ${name} to the operator (existing tmux: ${exists})`, async t => {
+        const result = await launchAndCheck(t, pane);
+        assert.deepEqual(result.keys, [], 'startup must not accept or change a choice');
+        assert.equal(result.warnings.length, 1, 'operator needs a warning');
+        const warning = result.warnings[0].join(' ');
+        assert.match(warning, /Codex.*startup.*operator/i);
+        assert.match(warning, /model.*deployment|deployment.*model/i);
+        assert.ok(!warning.includes(pane), 'warning must not include pane content');
+        assert.ok(!warning.includes('experimental settings'), 'warning must not include menu options');
+      });
+    }
+
+    for (const pane of ['Press Enter to continue', '  press enter to continue\n']) {
+      it(`acknowledges only a standalone Enter prompt ${JSON.stringify(pane)} (existing tmux: ${exists})`, async t => {
+        const result = await launchAndCheck(t, pane);
+        assert.equal(result.keys.length, 1);
+        assert.deepEqual(result.keys[0].args.slice(-1), ['Enter']);
+        assert.ok(!result.keys[0].args.includes('1'), 'acknowledgement must never select option 1');
+        assert.deepEqual(result.warnings, []);
+      });
+    }
+
+    for (const [name, pane] of [
+      ['empty pane', ''],
+      ['unavailable pane', null],
+      ['ready status', '›\n100% left · ? for shortcuts'],
+      ['ready status with old menu text', '› 1. Try new model\n2. Use existing model\nPress Enter to continue\n100% left · ? for shortcuts'],
+    ]) {
+      it(`does not send startup keys for ${name} (existing tmux: ${exists})`, async t => {
+        const result = await launchAndCheck(t, pane);
+        assert.deepEqual(result.keys, []);
+        assert.deepEqual(result.warnings, []);
+      });
+    }
+
+    it(`warns without private error details when Enter fails (existing tmux: ${exists})`, async t => {
+      sendKeysError = new Error('synthetic-private-error');
+      const result = await launchAndCheck(t, 'Press Enter to continue');
+      assert.equal(result.keys.length, 1);
+      assert.equal(result.warnings.length, 1);
+      assert.match(result.warnings[0].join(' '), /Codex.*startup.*operator/i);
+      assert.ok(!result.warnings[0].join(' ').includes('synthetic-private-error'));
+    });
+  }
 });
 
 // Exercise actual adapter wiring, including both command construction paths.

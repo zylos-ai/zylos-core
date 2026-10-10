@@ -334,12 +334,18 @@ export class CodexAdapter extends RuntimeAdapter {
       try {
         const pane = tmuxCapturePaneText(SESSION);
         if (!pane) return;
-        const hasMenu = /›\s+\d+\./m.test(pane) || /press enter to continue/i.test(pane);
         const hasStatusBar = /\d+%\s+left\s+·/.test(pane);
-        if (hasMenu && !hasStatusBar) {
-          tmuxSendKeys(SESSION, '1', 'Enter');
+        if (hasStatusBar) return;
+        // Only a standalone acknowledgement is safe. Any surrounding text
+        // could describe a choice, even without numbered options.
+        if (/^press enter to continue$/i.test(pane.trim())) {
+          tmuxSendKeys(SESSION, 'Enter');
+        } else {
+          console.warn('[Codex] Unrecognized startup dialog left untouched; operator action required. Model selection belongs to the deployment/operator.');
         }
-      } catch { /* non-fatal */ }
+      } catch {
+        console.warn('[Codex] Could not acknowledge startup dialog; operator action required.');
+      }
     }, 8000);
 
   }
