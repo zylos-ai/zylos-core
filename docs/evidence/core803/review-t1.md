@@ -1,0 +1,11 @@
+# PR817 terminal-history follow-up (T1)
+
+Review `5477418745` of `3e79b522785c24faf69e6a9bfe672c664aab8b3a` reproduced Jest160/160 and Node1155/1155 and verified R1–R4, PM2 fixes, simplification1/2/4/6 and supervisor removal. It found a remaining ordinary-access bug: retained terminal directories kept the material probe true forever, so later group-write permissions or a `.backup` alias relocked all three core databases after a completed upgrade.
+
+The four standalone file-only probes now read bounded journal JSON without owner/mode validation. An unmarked terminal is history only when its durable shape includes complete original identities, core/snapshot evidence, verified terminal/cleanup/service records and confirmed exits for every started child. A marker is checked before and after scanning. Nonterminal, incomplete, unreadable/malformed or unsafe path records, unknown child exit and interrupted service restoration still count as recovery material and trigger strict validation. No historical journal is executed by this probe. Transaction folders remain in place.
+
+Real recovery fixtures run READY→upgrade_complete and remove the marker before either recursively adding group write or moving `.backup` and symlinking it back. They then verify discover is unblocked, all three actual owner openers retain schema1 access through canonical and symlinked deployment roots, and runtime/C4 startup produce no recovery cue. A contract compares the complete four probe bodies to prevent classification drift. Focused recovery+parity passed 51/51; final targeted aliases/parity passed3/3; material/startup/PM2 guard checks passed66/66.
+
+Final main totals: Jest **160/160**, Node **1158/1158**, no failures. Complete C4 **314/317** retains its three baseline stdin failures; scheduler source is unchanged from the documented99/100 baseline-qualified result. `git diff --check` passes.
+
+This changes ordinary file classification only. Linux/unsupported-platform behavior, PID-not-published fail-closed gap, PM2 SIGTERM/manual-save handoff limits, historical A18 scope, and no-production-adoption boundary remain as stated in [round2](review-round2.md). LGTM and Howard's owner acceptance are pending. No merge, release or production upgrade is performed.

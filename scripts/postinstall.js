@@ -20,6 +20,7 @@ import { execFileSync } from 'node:child_process';
 import { smartSync, formatMergeResult } from '../cli/lib/smart-merge.js';
 import { copyTree } from '../cli/lib/fs-utils.js';
 import { generateManifest, saveManifest, saveOriginals } from '../cli/lib/manifest.js';
+import { deployUpgradeBootstrap } from '../cli/lib/upgrade-protection.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(process.env.HOME, 'zylos');
@@ -123,6 +124,8 @@ function main() {
     // Fresh install or manual `npm install -g` — sync skills
     // During self-upgrade, step 5 handles skill sync with smart merge
     syncSkills();
+    try { deployUpgradeBootstrap(ZYLOS_DIR); }
+    catch (error) { console.warn('Warning: file-only upgrade recovery bootstrap unavailable: ' + error.message); }
   }
 
   // Settings sync ALWAYS runs when zylos is initialized.

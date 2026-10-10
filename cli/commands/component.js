@@ -56,7 +56,7 @@ export function printStep(step) {
  * Generate a pre-formatted C4 (IM channel) reply from command output.
  * Claude can use this reply directly, independent of SKILL.md version.
  */
-function formatC4Reply(type, data) {
+export function formatC4Reply(type, data) {
   switch (type) {
     case 'check': {
       const { component, hasUpdate, current, latest, changelog, localChanges, evaluation } = data;
@@ -98,7 +98,7 @@ function formatC4Reply(type, data) {
       if (!success) {
         let r = `${component} upgrade failed (step ${failedStep}): ${error}`;
         if (rollback?.performed) {
-          r += '\nRollback: ' + rollback.steps.map(s => `${s.success ? 'OK' : 'FAIL'}: ${s.action}`).join(', ');
+          r += '\nRollback: ' + (rollback.steps || []).map(s => `${s.success ? 'OK' : 'FAIL'}: ${s.action}`).join(', ');
         }
         return r;
       }
@@ -124,10 +124,9 @@ function formatC4Reply(type, data) {
     case 'self-upgrade': {
       const { success, from, to, changelog, failedStep, error, rollback, migrationHints, mergeConflicts, mergedFiles, instructionFilesRebuilt, settingsChanged } = data;
       if (!success) {
-        let r = `zylos-core upgrade failed (step ${failedStep}): ${error}`;
-        if (rollback?.performed) {
-          r += '\nRollback: ' + rollback.steps.map(s => `${s.success ? 'OK' : 'FAIL'}: ${s.action}`).join(', ');
-        }
+        let r = `zylos-core upgrade failed${failedStep==null?'':` (step ${failedStep})`}: ${error}`;
+        if (rollback?.steps?.length) r += '\nRollback: ' + rollback.steps.map(s => `${s.success ? 'OK' : 'FAIL'}: ${s.action}`).join(', ');
+        const protection=formatSelfUpgradeProtection(data);if(protection)r+='\n'+protection;
         return r;
       }
       let r = `zylos-core upgraded: ${from} -> ${to}`;
@@ -167,6 +166,7 @@ function formatC4Reply(type, data) {
         ].filter(Boolean).join(' and ');
         r += `\n\n${what.charAt(0).toUpperCase() + what.slice(1)} updated — Claude will restart automatically to load the new configuration. No action needed.`;
       }
+      const protection=formatSelfUpgradeProtection(data);if(protection)r+='\n'+protection;
       return r;
     }
     case 'check-all': {
@@ -237,6 +237,44 @@ function formatC4Reply(type, data) {
     default:
       return null;
   }
+}
+
+// Shared human/C4 details preserve the independent upgrade and recovery outcomes.
+export function formatSelfUpgradeProtection(data) {
+  const lines=[];
+  if(data.backupOnly){
+    lines.push(`Database snapshot: ${data.dbSnapshotVerified?'verified':'not verified; installation not started'}`);
+    lines.push('Automatic database recovery: disabled; recovery is manual');
+    if(data.protectionUnavailableReason)lines.push(data.protectionUnavailableReason);
+    if(data.backupDir)lines.push(`Code backup: ${data.backupDir}`);
+    lines.push(`Manual recovery required: ${data.manualRecovery?.required?'yes':'no'}`);
+    if(data.manualRecovery?.instructions)lines.push(data.manualRecovery.instructions);
+    for(const warning of data.backupWarnings||[])lines.push(`Backup warning: ${warning}`);
+  }
+  if(typeof data.preInstallProtection==='boolean')lines.push(`Pre-install protection: ${data.preInstallProtection?'enabled':'unavailable'}`);
+  if(data.automaticCompensation===true)lines.push('Automatic compensation: available for observed failures after writer exit is confirmed');
+  if(data.automaticResume===false)lines.push('Interrupted upgrade: manual recovery required; automatic takeover is disabled');
+  if(data.dbBackupDir)lines.push(`Database snapshots: ${data.dbBackupDir}`);
+  const databases=data.databases||data.dbManifest?.databases;
+  if(Array.isArray(databases))for(const db of databases)lines.push(`  ${db.source}: ${db.status}${db.userVersion!=null?` (schema ${db.userVersion})`:''}`);
+  if(data.transactionDir)lines.push(`Recovery materials: ${data.transactionDir}`);
+  if(data.archiveDir)lines.push(`Archived recovery materials: ${data.archiveDir}`);
+  const rb=data.rollback;
+  if(rb){
+    const attempted=rb.attempted??rb.performed;
+    const completed=rb.completed??(rb.steps?.length?rb.steps.every(step=>step.success===true):undefined);
+    const boolean=value=>typeof value==='boolean'?String(value):'unknown';
+    lines.push(`Rollback attempted=${boolean(attempted)} completed=${boolean(completed)} stage=${rb.stage||'unknown'}${rb.error?': '+rb.error:''}`);
+  }else if(data.preInstallProtection&&data.success)lines.push('Rollback attempted=false completed=false stage=upgrade_complete');
+  const required=data.recovery_required??rb?.recovery_required??(data.preInstallProtection&&data.success?false:undefined);
+  if(typeof required==='boolean')lines.push(`Recovery required: ${required?'yes; maintenance remains active':'no'}`);
+  const warnings=[...(data.cleanupWarnings||[]),...(rb?.warnings||[])];
+  for(const warning of new Set(warnings))lines.push(`Cleanup warning: ${warning}`);
+  return lines.join('\n');
+}
+
+export function printSelfUpgradeProtection(data) {
+  const text=formatSelfUpgradeProtection(data);if(text)console.log(text);
 }
 
 export async function upgradeComponent(args) {
@@ -758,7 +796,7 @@ async function handleUpgradeFlow(component, { jsonOutput, skipConfirm, skipEval,
 
       if (result.rollback?.performed) {
         console.log(`\n${bold('Auto-rollback performed:')}`);
-        for (const r of result.rollback.steps) {
+        for (const r of result.rollback.steps || []) {
           if (r.success) {
             console.log(`  ${success(r.action)}`);
           } else {
@@ -1130,6 +1168,10 @@ async function upgradeSelfCore({ branch, beta = false, mode = 'merge' } = {}) {
       onStep: !jsonOutput ? printStep : undefined,
     });
 
+    // Protected transactions own their checked cleanup and retained materials.
+    // Legacy success cleanup is common to JSON and human output.
+    if(result.success && !result.preInstallProtection && !result.backupOnly && result.backupDir)cleanupBackup(result.backupDir);
+
     // Output result
     if (jsonOutput) {
       const output = { ...result };
@@ -1185,16 +1227,12 @@ async function upgradeSelfCore({ branch, beta = false, mode = 'merge' } = {}) {
         }
       }
 
-      // Clean backup after successful upgrade
-      if (result.backupDir) {
-        cleanupBackup(result.backupDir);
-      }
     } else {
-      console.log(`\n${error(`Self-upgrade failed (step ${result.failedStep}): ${result.error}`)}`);
+      console.log(`\n${error(`Self-upgrade failed${result.failedStep==null?'':` (step ${result.failedStep})`}: ${result.error}`)}`);
 
       if (result.rollback?.performed) {
         console.log(`\n${bold('Auto-rollback performed:')}`);
-        for (const r of result.rollback.steps) {
+        for (const r of result.rollback.steps || []) {
           if (r.success) {
             console.log(`  ${success(r.action)}`);
           } else {
@@ -1203,6 +1241,8 @@ async function upgradeSelfCore({ branch, beta = false, mode = 'merge' } = {}) {
         }
       }
     }
+
+    if(!jsonOutput)printSelfUpgradeProtection(result);
 
     return result.success;
   } finally {

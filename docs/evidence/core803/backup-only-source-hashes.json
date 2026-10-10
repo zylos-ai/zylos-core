@@ -1,0 +1,7 @@
+{
+  "cli/commands/component.js": "00f5716558620bdfa5873f980fa88389e8758d9786024a20e1c7c6094ec20a83",
+  "cli/lib/core-db-backup.js": "d7609fe4d63a41a6c88fffe1eb714540994098777e883276e3fc83b476397580",
+  "cli/lib/self-upgrade.js": "0752d0a414741a37543d1fb2d7fb136292f12c2245cb9a159ca14513901002eb",
+  "cli/lib/upgrade-maintenance.cjs": "9c2251775c40e5a46c7032b1dc6c80ab4cf582db3a72a3897105f55590cb239f",
+  "cli/lib/upgrade-protection.js": "0a68c1ec8974eb4150501477df1050920e752bfa9ab4afb69a9c7b2568e5835d"
+}

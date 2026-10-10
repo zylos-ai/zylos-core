@@ -41,6 +41,6 @@ export function getZylosConfig() {
 export function updateZylosConfig(updates) {
   const config = getZylosConfig();
   Object.assign(config, updates);
-  fs.mkdirSync(CONFIG_DIR, { recursive: true });
+  fs.mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
   fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2) + '\n');
 }

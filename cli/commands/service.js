@@ -2,6 +2,7 @@
  * Service management commands
  */
 
+import { savePm2ProcessList } from '../lib/pm2-save.js';
 import { execSync, spawnSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -53,7 +54,7 @@ export function restartServicesWithDeps({
         saveNeeded = true;
       } catch {
         if (saveNeeded) {
-          execSyncFn('pm2 save 2>/dev/null', { stdio: 'inherit' });
+          savePm2ProcessList({save: () => execSyncFn('pm2 save 2>/dev/null', { stdio: 'inherit' })});
         }
         logError(error('Failed to restart services'));
         return false;
@@ -62,7 +63,7 @@ export function restartServicesWithDeps({
   }
 
   if (saveNeeded) {
-    execSyncFn('pm2 save 2>/dev/null', { stdio: 'inherit' });
+    savePm2ProcessList({save: () => execSyncFn('pm2 save 2>/dev/null', { stdio: 'inherit' })});
   }
   if (fallbackServices.length > 0) {
     logSuccess(success(`Services restarted. Plain PM2 fallback used for: ${fallbackServices.join(', ')}.`));
@@ -232,7 +233,7 @@ export function startServices() {
   if (fs.existsSync(ecosystemPath)) {
     try {
       execSync(`pm2 start "${ecosystemPath}"`, { stdio: 'pipe' });
-      execSync('pm2 save 2>/dev/null', { stdio: 'pipe' });
+      savePm2ProcessList({save: () => execSync('pm2 save 2>/dev/null', { stdio: 'pipe' })});
       console.log(`  ${success('Started services from ecosystem.config.cjs')}`);
       console.log(`\n${green('Services started.')} Run ${dim('"zylos status"')} to check.`);
       return;
@@ -274,7 +275,7 @@ export function startServices() {
   }
 
   if (started > 0) {
-    execSync('pm2 save 2>/dev/null', { stdio: 'pipe' });
+    savePm2ProcessList({save: () => execSync('pm2 save 2>/dev/null', { stdio: 'pipe' })});
     console.log(`\n${green(started + ' services started.')} Run ${dim('"zylos status"')} to check.`);
   } else {
     console.log('\n' + warn('No services started.'));

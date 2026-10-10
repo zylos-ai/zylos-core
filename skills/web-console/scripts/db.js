@@ -1,4 +1,6 @@
 import Database from 'better-sqlite3';
+import * as schema from './schema.js';
+import { guardDatabase, assertCoreDatabaseAvailable } from '../../comm-bridge/scripts/sqlite-schema.js';
 import crypto from 'node:crypto';
 import path from 'node:path';
 import fs from 'node:fs';
@@ -12,9 +14,17 @@ const SESSION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const UPLOAD_TTL_MS = 30 * 60 * 1000;
 
 function openDb(dbPath = DB_PATH) {
+  assertCoreDatabaseAvailable(ZYLOS_DIR);
   fs.mkdirSync(path.dirname(dbPath), { recursive: true });
   const db = new Database(dbPath);
-  db.pragma('journal_mode = WAL');
+  try {
+    guardDatabase(db, { ...schema, migrate: initSchema });
+    db.pragma('journal_mode = WAL');
+    return db;
+  } catch (error) { db.close(); throw error; }
+}
+
+function initSchema(db) {
   db.exec(`
     CREATE TABLE IF NOT EXISTS sessions (
       token TEXT PRIMARY KEY,
@@ -34,8 +44,8 @@ function openDb(dbPath = DB_PATH) {
       consumed INTEGER NOT NULL DEFAULT 0
     );
   `);
-  return db;
 }
+
 
 export class SessionStore {
   constructor(db, { maxAgeMs = SESSION_MAX_AGE_MS } = {}) {

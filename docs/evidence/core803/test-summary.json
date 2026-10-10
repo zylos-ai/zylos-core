@@ -1,0 +1,54 @@
+{
+  "baselineCommit": "fc66226e537d37ca35f108b940eecba6ce2bca86",
+  "main": {
+    "command": "npm test --ignore-scripts",
+    "jest": {
+      "passed": 160,
+      "failed": 0
+    },
+    "node": {
+      "passed": 1108,
+      "failed": 0
+    }
+  },
+  "owners": {
+    "c4": {
+      "passed": 302,
+      "failed": 3,
+      "total": 305
+    },
+    "baselineC4": {
+      "passed": 281,
+      "failed": 3,
+      "total": 284
+    },
+    "scheduler": {
+      "passed": 100,
+      "failed": 0
+    },
+    "webConsole": {
+      "passed": 30,
+      "failed": 0
+    },
+    "sharedSchema": {
+      "passed": 21,
+      "failed": 0
+    }
+  },
+  "baselineFailures": [
+    "c4-send-cli.test.js:79 broadcast two-argument",
+    "c4-send-cli.test.js:112 missing channel two-argument",
+    "c4-send-cli.test.js:185 failing channel two-argument"
+  ],
+  "baselineAssessment": "The same three tests fail at the pinned base; c4-send.js and its CLI test are unchanged.",
+  "nativeRecoveryEvidence": "native-recovery.json",
+  "sourceHashes": {
+    "cli/lib/upgrade-maintenance.cjs": "6d043557c3938f306c5efb857f41c085ee272727964e93f5062c519421b941d1",
+    "cli/lib/upgrade-recovery.cjs": "d74ea984b534121b65b2005355032d5ebc14ec63ddf1cf4b63d8bf6f180472b6",
+    "cli/lib/upgrade-finalizer.cjs": "56dd0ebddd95cb23b05684c7f33328770deed932135014496d937792765fb701",
+    "cli/lib/upgrade-bootstrap.cjs": "59c4f6f4c3f6262e6b215b2b549e084f66c7d608eb2f4dc6db1593117c1b1fb2",
+    "cli/lib/upgrade-runtime-args.cjs": "a98885fa4c4ca0e88319054726926e03297ef833807168eca363535263b32d76",
+    "cli/lib/upgrade-protection.js": "8f6877c5d9f7fb3e899e1cad4c88fd6d02e0e28a603b21b4cdd1cba5a40862b3",
+    "skills/comm-bridge/scripts/sqlite-schema.js": "1731245661a5ebddbdf77edacd41cdd12473e714e094548fed84f6900e2a85da"
+  }
+}

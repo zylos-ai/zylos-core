@@ -1,3 +1,5 @@
+import { savePm2ProcessList } from '../lib/pm2-save.js';
+import { deployUpgradeBootstrap } from '../lib/upgrade-protection.js';
 import { githubUrl } from '../lib/upstreams.js';
 import { githubRequestSync } from '../lib/github-http.js';
 /**
@@ -709,7 +711,7 @@ function createDirectoryStructure() {
   ];
 
   for (const dir of dirs) {
-    fs.mkdirSync(dir, { recursive: true });
+    fs.mkdirSync(dir, { recursive: true, ...(dir === CONFIG_DIR ? { mode: 0o700 } : {}) });
   }
 
   if (!fs.existsSync(COMPONENTS_FILE)) {
@@ -1093,7 +1095,7 @@ function startCoreServices(webPassword = null) {
       try { execSync(`pm2 delete "${name}"`, { stdio: 'pipe' }); } catch {}
     }
     execSync(`pm2 start "${ecosystemPath}"`, { stdio: 'pipe', timeout: 30000 });
-    execSync('pm2 save', { stdio: 'pipe' });
+    savePm2ProcessList({save: () => execSync('pm2 save', { stdio: 'pipe' })});
   } catch (err) {
     console.log(`  ${warn(`Failed to start services: ${err.message}`)}`);
     return 0;
@@ -2302,6 +2304,8 @@ export async function initCommand(args) {
     }
 
     const syncResult = syncCoreSkills();
+    try { deployUpgradeBootstrap(ZYLOS_DIR); }
+    catch (error) { console.warn('Warning: file-only upgrade recovery bootstrap unavailable: ' + error.message); }
     if (!quiet) {
       if (syncResult.updated.length > 0) {
         console.log(`${success('Core Skills updated:')} ${syncResult.updated.join(', ')}`);
@@ -2461,6 +2465,8 @@ export async function initCommand(args) {
 
   // Step 9: Sync Core Skills
   const syncResult = syncCoreSkills();
+  try { deployUpgradeBootstrap(ZYLOS_DIR); }
+    catch (error) { console.warn('Warning: file-only upgrade recovery bootstrap unavailable: ' + error.message); }
   if (!quiet) {
     if (syncResult.error) {
       console.log(`  ${warn(syncResult.error)}`);

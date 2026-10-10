@@ -36,6 +36,8 @@ import {
 } from './tmux-helpers.js';
 import { buildCleanEnv, buildCompatEnv, loadRuntimeEnvManifest, writeLaunchSpec } from './tmux-env.js';
 
+import { upgradeStartupPrompt, shellArgument } from './upgrade-context.js';
+
 // ── Constants ────────────────────────────────────────────────────────────────
 
 const SESSION = 'claude-main';
@@ -290,7 +292,8 @@ export class ClaudeAdapter extends RuntimeAdapter {
 
     if (tmuxHasSession(SESSION)) {
       // Existing session — send command via sendMessage, no env rebuild
-      const cmd = `cd "${ZYLOS_DIR}"; ${claudeCmd}; ${exitLogSnippet}`;
+      const recoveryPrompt = upgradeStartupPrompt(ZYLOS_DIR);
+      const cmd = `cd "${ZYLOS_DIR}"; ${claudeCmd}${recoveryPrompt ? " " + shellArgument(recoveryPrompt) : ""}; ${exitLogSnippet}`;
       await this.sendMessage(cmd);
     } else {
       // New session — launcher pipeline

@@ -12,6 +12,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import { applyUpgradePrompt, discoverUpgradeContext } from './upgrade-context.js';
+import { createRequire } from 'node:module';
+const require=createRequire(import.meta.url);
 
 const SIGNAL_NUMBERS = {
   SIGHUP: 1, SIGINT: 2, SIGQUIT: 3, SIGTERM: 15, SIGKILL: 9,
@@ -33,6 +36,14 @@ try {
 } catch (err) {
   process.stderr.write(`Failed to read/parse spec: ${err.message}\n`);
   process.exit(1);
+}
+
+// File-only recovery must precede normal runtime SessionStart/C4 imports.
+const recovery = discoverUpgradeContext(spec.cwd || process.cwd());
+if (recovery.blocked || (recovery.active && !recovery.controllerAlive)) {
+  spec.args = applyUpgradePrompt(spec.args || [], recovery.prompt, spec.promptIndex, {
+    append: !recovery.blocked,
+  });
 }
 
 // 3. Spawn child

@@ -84,14 +84,14 @@ describe('self-upgrade durable conflict backups (#717)', () => {
     expect(readFile(result.mergeConflicts.find(({ file }) => file === 'SKILL.md').backupPath)).toContain('value=local');
   });
 
-  test('JSON result exposes durable backup paths without running success cleanup', () => {
+  test('JSON success cleanup removes transaction backup and retains durable conflict paths', () => {
     prepareThreeWayConflictFixture();
 
     const { result, launcherOutput, transactionBackupDir } = runScenario('json');
 
     expect(result.success).toBe(true);
     expect(launcherOutput).toEqual([]);
-    expect(fs.existsSync(transactionBackupDir)).toBe(true);
+    expect(fs.existsSync(transactionBackupDir)).toBe(false);
     expect(result.mergeConflicts).toHaveLength(2);
     for (const conflict of result.mergeConflicts) {
       expect(fs.existsSync(conflict.backupPath)).toBe(true);

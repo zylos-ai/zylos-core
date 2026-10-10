@@ -394,6 +394,7 @@ zylos logs [service]          # View service logs
 zylos add <component>         # Install a channel or capability
 zylos upgrade <component>     # Upgrade a component
 zylos upgrade --self          # Upgrade zylos-core itself
+zylos recovery status         # Inspect file-only self-upgrade recovery
 zylos upgrade --self --beta   # Check for beta/prerelease versions
 zylos uninstall --self        # Uninstall zylos entirely
 zylos list                    # List installed components
@@ -598,3 +599,5 @@ Want a managed experience? [Coco](https://coco.xyz) gives you a ready-to-work AI
 ## License
 
 [MIT](./LICENSE)
+
+See [protected self-upgrade and recovery](docs/self-upgrade-recovery.md) for first adoption, boot prerequisites, retained evidence, and recovery commands, and [implementation validation](docs/self-upgrade-validation.md) for tests and reboot evidence.
