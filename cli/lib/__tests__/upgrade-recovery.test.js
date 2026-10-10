@@ -7,6 +7,7 @@ import {createRequire} from 'node:module';
 import {pathToFileURL} from 'node:url';
 import {spawn,spawnSync} from 'node:child_process';
 import {CORE_DATABASES,createCoreDbSnapshot,prepareRecoveryDependencies} from '../core-db-backup.js';
+import {upgradeStartupPrompt} from '../runtime/upgrade-context.js';
 
 const require=createRequire(import.meta.url);
 const Database=require(path.resolve('skills/comm-bridge/node_modules/better-sqlite3'));
@@ -41,6 +42,44 @@ async function fixture(t,{missing=false,wal=false}={}) {
  return {root,dir,j,m,r,calls,snapshot,load:()=>m.read(path.join(dir,'journal.json')),db:p=>path.join(root,p)};
 }
 function change(f){const p=f.db('comm-bridge/c4.db'),db=new Database(p);db.prepare('INSERT INTO checkpoints(id,summary) VALUES (?,?)').run(1,'new-generation');db.close();fs.writeFileSync(p+'-wal','old-wal');fs.writeFileSync(p+'-shm','old-shm');fs.appendFileSync(path.join(f.j.skillsDir,'comm-bridge/package.json'),'\n');}
+
+for(const legacy of ['group-writable','backup-alias'])test(`completed upgrade permits ordinary owners after retained materials become ${legacy}`,async t=>{
+ const f=await fixture(t);
+ f.m.update(f.dir,f.j,{phase:'new_data_ready'});
+ const result=f.r.resume(f.dir);
+ assert.equal(result.stage,'upgrade_complete',JSON.stringify(result));
+ assert.equal(fs.existsSync(path.join(f.root,'.zylos/upgrade/active.json')),false);
+ assert.equal(f.load().terminalEvidence.verified,true);
+ // Deploy the actual owner openers only after code verification has finished.
+ for(const item of CORE_DATABASES)fs.cpSync(path.resolve('skills',item.owner,'scripts'),path.join(f.j.skillsDir,item.owner,'scripts'),{recursive:true});
+ const monitor=path.join(f.j.skillsDir,'activity-monitor');fs.mkdirSync(path.join(monitor,'scripts'),{recursive:true});
+ fs.writeFileSync(path.join(monitor,'package.json'),'{"type":"module"}');
+ fs.copyFileSync(path.resolve('skills/activity-monitor/scripts/shard-registry.js'),path.join(monitor,'scripts/shard-registry.js'));
+ if(legacy==='group-writable') {
+  const shared=file=>{const stat=fs.lstatSync(file);if(stat.isSymbolicLink())return;fs.chmodSync(file,stat.mode|0o020);if(stat.isDirectory())for(const name of fs.readdirSync(file))shared(path.join(file,name));};
+  shared(path.join(f.root,'.zylos'));shared(path.join(f.root,'.backup'));
+ } else {
+  fs.renameSync(path.join(f.root,'.backup'),path.join(f.root,'retained-backup'));
+  fs.symlinkSync(path.join(f.root,'retained-backup'),path.join(f.root,'.backup'));
+ }
+ const discovery=f.m.discover(f.root);assert.equal(discovery.blocked,false);assert.deepEqual(discovery.diagnostics,[]);assert.deepEqual(discovery.candidates,[]);
+ assert.equal(upgradeStartupPrompt(f.root),null);
+ const runner=path.join(f.root,'open-owners.mjs');
+ fs.writeFileSync(runner,`import assert from 'node:assert/strict';
+ import {getDb,close} from './.claude/skills/comm-bridge/scripts/c4-db.js';
+ import {getDb as scheduler} from './.claude/skills/scheduler/scripts/database.js';
+ import {openDb} from './.claude/skills/web-console/scripts/db.js';
+ for(const open of [getDb,scheduler,openDb]){const db=open();assert.equal(db.pragma('user_version',{simple:true}),1);db.close();}
+ close();`);
+ const alias=path.join(f.root,'deployment-alias');fs.symlinkSync(f.root,alias);
+ for(const deploymentRoot of [f.root,alias]) {
+  const opened=spawnSync(process.execPath,[runner],{encoding:'utf8',env:{...process.env,ZYLOS_DIR:deploymentRoot}});
+  assert.equal(opened.status,0,opened.stderr);
+ }
+ const hook=path.join(f.j.skillsDir,'comm-bridge/scripts/c4-session-init.js');
+ const checkpoint=spawnSync(process.execPath,[hook],{encoding:'utf8',env:{...process.env,ZYLOS_DIR:f.root}});
+ assert.equal(checkpoint.status,0,checkpoint.stderr);assert.doesNotMatch(checkpoint.stdout,/UPGRADE RECOVERY TASK/);
+});
 
 test('A12/A14/A15: complete compensation restores old code/data, preserves rescue, removes sidecars and retains terminal materials',async t=>{
  const f=await fixture(t,{missing:true});change(f);fs.mkdirSync(path.dirname(f.db('scheduler/scheduler.db')),{recursive:true});fs.writeFileSync(f.db('scheduler/scheduler.db'),'new-db');

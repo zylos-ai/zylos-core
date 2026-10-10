@@ -102,7 +102,12 @@ do not turn a verified terminal success into a compensation request.
 
 Successful cleanup removes only temporary code copies. Complete transaction
 directories remain in `.backup/self-upgrade/<transactionId>`. Discovery skips a
-verified terminal once its maintenance marker is removed; no terminal archive or
+clean terminal once its maintenance marker is removed. The file-only probe reads
+bounded journal JSON without owner/mode validation to classify retained clean
+terminals as history; marker, unfinished/incomplete records, unconfirmed children
+and unreadable material still trigger strict recovery validation. Later shared
+permissions or a supported `.backup` alias do not relock ordinary databases.
+No terminal archive or
 cleanup pointer is created. Snapshots, rescue material and journals remain.
 Snapshot retention keeps the newest complete feature-owned group (N=1); cleanup
 failures leave warnings and paths. Private database snapshots are normalized to

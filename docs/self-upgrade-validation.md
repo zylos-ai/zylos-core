@@ -40,6 +40,10 @@ A crashed launch without a durably known PID retains isolation and needs exit ev
 
 Howard subsequently approved replacing the dedicated C08 supervisor/capability gate with the existing PM2 → activity-monitor → normal runtime startup chain. File discovery and status/resume remain; without configured autostart, the next runtime startup resumes the task. The original A18 result used the retired dedicated supervisor and is historical evidence, not certification of this revised chain.
 
+## Terminal-history follow-up (T1)
+
+Review `5477418745` reproduced the round-2 totals and verified its other fixes, then found that retained terminal directories permanently forced strict recovery validation. After a completed upgrade, shared permissions or a `.backup` alias relocked ordinary owners. The follow-up classifies unmarked, structurally complete clean terminals as history using bounded raw JSON and no owner/mode checks. Marker presence, interrupted or incomplete cleanup, unknown child exit, nonterminal journals and unreadable material remain recovery material. Four standalone probes share an exact-content contract; real completed-upgrade regressions cover shared permissions and backup/root aliases across discover, all three owner openers and startup context. See [T1 evidence](evidence/core803/review-t1.md). Prior round-2 results below are historical for `3e79b522`.
+
 ## Current round-2 evidence
 
 Current regression totals and disposition are recorded in [review-round2.md](evidence/core803/review-round2.md). This source retains validated terminal directories and clears the marker last; READY access and final marker removal have separate durable child-exit requirements. Original readonly abort checks integrity/schema/existence and code identity without row-level hashes.
