@@ -366,9 +366,14 @@ function verifyFinalizerExit(dir, j) {
     }
   }
 }
-function resume(dir, {
-  hooks = {}
-} = {}) {
+function resume(dir, {hooks = {}, ownership} = {}) {
+  if (process.platform === 'darwin') {
+    if (typeof ownership !== 'function') throw Error('interrupted macOS upgrade requires manual recovery; automatic resume is unavailable');
+    return ownership(path.resolve(dir), () => resumeWithControl(dir, {hooks}, () => () => {}));
+  }
+  return resumeWithControl(dir, {hooks}, transactionDir => m.acquire(transactionDir));
+}
+function resumeWithControl(dir, {hooks}, acquireControl) {
   dir = path.resolve(dir);
   // Only use the first read to locate the deployment. Another controller may
   // complete or change the transaction before we acquire ownership.
@@ -388,7 +393,7 @@ function resume(dir, {
   });
   dir = fs.realpathSync(dir);
   if (path.dirname(dir) !== path.join(root, '.backup', 'self-upgrade')) throw Error('invalid transaction directory');
-  const release = m.acquire(dir);
+  const release = acquireControl(dir);
   let j;
   try {
     // Journal identity and phase are authoritative only while holding the

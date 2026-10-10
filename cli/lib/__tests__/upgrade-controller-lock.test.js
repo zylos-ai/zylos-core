@@ -1,4 +1,6 @@
-import test from 'node:test';
+import nativeTest from 'node:test';
+// Linux retains automatic stale-owner takeover and kernel guard semantics.
+const test=(name,fn)=>nativeTest(name,{skip:process.platform!=='linux'},fn);
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';

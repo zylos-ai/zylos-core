@@ -11,11 +11,7 @@ export function maintenanceFor(ctx) { return ctx.maintenance || maintenance; }
 const library = import.meta.dirname;
 function recoveryFiles(runnerName = 'runner.cjs') {
   const files = [['upgrade-maintenance.cjs', 'maintenance.cjs'], ['upgrade-recovery.cjs', runnerName], ['upgrade-finalizer.cjs', 'finalizer.cjs']];
-  if (process.platform === 'darwin') {
-    // Verify the shipped artifact before copying any executable recovery material.
-    maintenance.nativeHelper();
-    files.unshift(['../native/macos-recovery-helper', 'macos-recovery-helper'], ['../native/macos-recovery-helper.sha256', 'macos-recovery-helper.sha256']);
-  }
+
   return files;
 }
 export function deployUpgradeBootstrap(root) {
@@ -42,7 +38,7 @@ export function deployUpgradeBootstrap(root) {
     const target = path.join(dest, name),
       staging = target + '.' + crypto.randomBytes(8).toString('hex') + '.staging';
     fs.copyFileSync(path.join(library, src), staging, fs.constants.COPYFILE_EXCL);
-    fs.chmodSync(staging, name === 'macos-recovery-helper' ? 0o700 : 0o600);
+    fs.chmodSync(staging, 0o600);
     const fd = fs.openSync(staging, 'r');
     try {
       maintenance.fsyncFd(fd);
@@ -51,6 +47,11 @@ export function deployUpgradeBootstrap(root) {
     }
     fs.renameSync(staging, target);
     maintenance.fsyncDir(dest);
+  }
+  // Stable paths are reused by later attempts in a long-lived process. Drop
+  // the previous generation only after every replacement is durable.
+  for (const name of ['maintenance.cjs', 'recovery.cjs', 'finalizer.cjs', 'bootstrap.cjs']) {
+    delete require.cache[path.join(dest, name)];
   }
   return path.join(dest, 'bootstrap.cjs');
 }
@@ -103,6 +104,8 @@ export function beginUpgrade(ctx, {
     to: ctx.to,
     phase: 'preparing',
     installationIntent: false,
+    automaticCompensation: true,
+    automaticResume: process.platform !== 'darwin',
     coreManifest: manifest,
     originalServices: maintenance.services({
       skillsDir
@@ -129,13 +132,14 @@ export function beginUpgrade(ctx, {
   // The existing machine startup chain launches the runtime; this entry only
   // supplies durable file discovery before normal C4/session imports.
   deployUpgradeBootstrap(zylosDir);
+  ctx.frozenRecoveryPath = path.join(zylosDir, '.zylos', 'upgrade', 'recovery.cjs');
+  ctx.frozenRecoveryHash = maintenance.hash(ctx.frozenRecoveryPath);
   let controllerMaintenance = maintenance;
   if (process.platform === 'darwin') {
     const frozen = path.join(zylosDir, '.zylos', 'upgrade', 'maintenance.cjs');
     maintenance.privatePath(frozen);
     if (maintenance.hash(frozen) !== maintenance.hash(path.join(library, 'upgrade-maintenance.cjs'))) throw Error('frozen maintenance source mismatch');
     controllerMaintenance = require(frozen);
-    controllerMaintenance.nativeHelper();
     ctx.maintenance = controllerMaintenance;
   }
   const activeRoot = path.dirname(dir);
@@ -283,7 +287,7 @@ export function prepareProtectedInstall(ctx) {
   for (const [src, name] of recoveryFiles()) {
     const file = path.join(dir, name);
     fs.copyFileSync(path.join(library, src), file);
-    fs.chmodSync(file, name === 'macos-recovery-helper' ? 0o700 : 0o600);
+    fs.chmodSync(file, 0o600);
     const fd = fs.openSync(file, 'r');
     try {
       maintenance.fsyncFd(fd);
@@ -303,8 +307,7 @@ export function prepareProtectedInstall(ctx) {
     hashes: {
       'finalizer.cjs': maintenance.hash(path.join(dir, 'finalizer.cjs')),
       'maintenance.cjs': maintenance.hash(path.join(dir, 'maintenance.cjs')),
-      'runner.cjs': maintenance.hash(path.join(dir, 'runner.cjs')),
-      ...(process.platform === 'darwin' ? Object.fromEntries(['macos-recovery-helper', 'macos-recovery-helper.sha256'].map(name => [name, maintenance.hash(path.join(dir, name))])) : {})
+      'runner.cjs': maintenance.hash(path.join(dir, 'runner.cjs'))
     }
   };
   maintenance.durable(path.join(dir, 'descriptor.json'), descriptor);
@@ -372,7 +375,7 @@ export function recovery(ctx) {
           error
         });
       }
-      release();
+      if (process.platform !== 'darwin') release();
       return {
         attempted: false,
         completed: false,
@@ -390,7 +393,7 @@ export function recovery(ctx) {
       });
       maintenance.stop(saved);
     }
-    release();
+    if (process.platform !== 'darwin') release();
     // A lost finalizer response cannot authorize compensation of an already
     // verified terminal. Resume its saved runner for cleanup/exit verification.
     let runner = path.join(root, '.zylos', 'upgrade', 'recovery.cjs');
@@ -398,6 +401,16 @@ export function recovery(ctx) {
       const descriptor = maintenance.read(path.join(dir, 'descriptor.json'));
       maintenance.validateDescriptor(dir, saved, descriptor);
       runner = descriptor.runnerPath;
+    }
+    if (process.platform === 'darwin') {
+      if (typeof ctx.releaseControl?.withOwnership !== 'function') throw Error('live controller ownership unavailable; manual recovery required');
+      maintenance.privatePath(runner);
+      if (runner === path.join(root, '.zylos', 'upgrade', 'recovery.cjs') && (runner !== ctx.frozenRecoveryPath || maintenance.hash(runner) !== ctx.frozenRecoveryHash)) throw Error('frozen recovery runner changed');
+      // Frozen runner/maintenance are loaded from retained recovery material,
+      // never the npm-replaced package. No parent/child ownership gap exists.
+      const result = require(runner).resume(dir, {ownership: ctx.releaseControl.withOwnership});
+      if (!result.recovery_required) release();
+      return result;
     }
     const child = spawnSync(process.execPath, [runner, 'resume', '--transaction-dir', dir, '--json'], {
       encoding: 'utf8',
@@ -423,7 +436,7 @@ export function recovery(ctx) {
     }
   } catch (error) {
     try {
-      release();
+      if (process.platform !== 'darwin') release();
     } catch {}
     return {
       attempted: false,

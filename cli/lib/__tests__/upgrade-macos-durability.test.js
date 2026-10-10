@@ -5,54 +5,37 @@ import os from 'node:os';
 import path from 'node:path';
 import {createRequire} from 'node:module';
 import {spawnSync} from 'node:child_process';
-const require=createRequire(import.meta.url),modulePath=require.resolve('../upgrade-maintenance.cjs'),m=require(modulePath);
-const mac={skip:process.platform!=='darwin'};
-function fixture(t){const dir=fs.mkdtempSync(path.join(os.tmpdir(),'mac-durability-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));return dir;}
-test('macOS fullsync failure cannot publish a new journal',mac,t=>{
+const require=createRequire(import.meta.url),modulePath=require.resolve('../upgrade-maintenance.cjs');
+function fixture(t){const dir=fs.mkdtempSync(path.join(os.tmpdir(),'node-durability-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));return dir;}
+test('Node file sync failure cannot publish a new journal',t=>{
  const dir=fixture(t),file=path.join(dir,'journal.json');fs.writeFileSync(file,'original');
  const result=spawnSync(process.execPath,['-e',`
- const cp=require('node:child_process'),spawn=cp.spawnSync;
- cp.spawnSync=(bin,args,...rest)=>args[0]==='fullsync'?{status:1,stderr:'injected fullsync failure'}:spawn(bin,args,...rest);
+ const fs=require('node:fs');
+ fs.fsyncSync=()=>{throw Error('injected file sync failure');};
  require(${JSON.stringify(modulePath)}).durable(${JSON.stringify(file)},{phase:'installed'});
  `],{encoding:'utf8'});
- assert.notEqual(result.status,0);assert.match(result.stderr,/injected fullsync failure/);assert.equal(fs.readFileSync(file,'utf8'),'original');
+ assert.notEqual(result.status,0);assert.match(result.stderr,/injected file sync failure/);assert.equal(fs.readFileSync(file,'utf8'),'original');
 });
-test('macOS directory publication sync failure propagates after rename',mac,t=>{
+test('Node directory publication sync failure propagates after rename',t=>{
  const dir=fixture(t),file=path.join(dir,'journal.json');
  const result=spawnSync(process.execPath,['-e',`
- const cp=require('node:child_process'),spawn=cp.spawnSync;let calls=0;
- cp.spawnSync=(bin,args,...rest)=>args[0]==='fullsync'&&++calls===2?{status:1,stderr:'injected directory sync failure'}:spawn(bin,args,...rest);
+ const fs=require('node:fs'),sync=fs.fsyncSync;
+ fs.fsyncSync=fd=>{if(fs.fstatSync(fd).isDirectory())throw Error('injected directory sync failure');return sync(fd);};
  require(${JSON.stringify(modulePath)}).durable(${JSON.stringify(file)},{phase:'prepared'});
  `],{encoding:'utf8'});
  assert.notEqual(result.status,0);assert.match(result.stderr,/injected directory sync failure/);
  assert.equal(JSON.parse(fs.readFileSync(file)).phase,'prepared');
 });
-test('frozen maintenance never falls back to the installed native helper',mac,t=>{
- const dir=fixture(t),saved=path.join(dir,'maintenance.cjs');fs.copyFileSync(modulePath,saved);
- const result=spawnSync(process.execPath,['-e',`require(${JSON.stringify(saved)}).fsyncDir(${JSON.stringify(dir)});`],{encoding:'utf8'});
- assert.notEqual(result.status,0);assert.match(result.stderr,/ENOENT/);
-});
-test('macOS native identity query failure cannot authorize takeover',mac,t=>{
- const dir=fixture(t),lock=path.join(dir,'controller.json');m.durable(lock,m.identity());const before=fs.readFileSync(lock,'utf8');
+test('frozen maintenance publishes file then directory using only Node sync',t=>{
+ const dir=fixture(t),saved=path.join(dir,'maintenance.cjs'),file=path.join(dir,'journal.json');fs.copyFileSync(modulePath,saved);
  const result=spawnSync(process.execPath,['-e',`
- const cp=require('node:child_process'),spawn=cp.spawnSync;
- cp.spawnSync=(bin,args,...rest)=>args[0]==='identity'?{status:1,stderr:'query denied'}:spawn(bin,args,...rest);
- require(${JSON.stringify(modulePath)}).acquire(${JSON.stringify(dir)});
+ const fs=require('node:fs'),cp=require('node:child_process'),sync=fs.fsyncSync,events=[];
+ cp.spawnSync=()=>{throw Error('unexpected external helper');};
+ fs.fsyncSync=fd=>{events.push({kind:fs.fstatSync(fd).isDirectory()?'directory':'file',published:fs.existsSync(${JSON.stringify(file)})});return sync(fd);};
+ require(${JSON.stringify(saved)}).durable(${JSON.stringify(file)},{phase:'prepared'});
+ process.stdout.write(JSON.stringify(events));
  `],{encoding:'utf8'});
- assert.notEqual(result.status,0);assert.match(result.stderr,/identity verification unsupported/);assert.equal(fs.readFileSync(lock,'utf8'),before);
-});
-
-test('macOS old-owner query failure under the kernel lock cannot replace its controller',mac,t=>{
- const dir=fixture(t),lock=path.join(dir,'controller.json');m.durable(lock,m.identity());
- const before=fs.readFileSync(lock,'utf8'),hook=path.join(dir,'query-fault.cjs');
- fs.writeFileSync(hook,`
- const cp=require('node:child_process'),spawn=cp.spawnSync;
- cp.spawnSync=(bin,args,...rest)=>args[0]==='identity'&&args[1]===${JSON.stringify(String(process.pid))}
-   ?{status:1,stderr:'old owner query denied'}:spawn(bin,args,...rest);
- `);
- const result=spawnSync(process.execPath,['-e',`require(${JSON.stringify(modulePath)}).acquire(${JSON.stringify(dir)});`],{
-   encoding:'utf8',env:{...process.env,NODE_OPTIONS:`--require=${hook}`}
- });
- assert.notEqual(result.status,0);assert.match(result.stderr,/controller process identity query failed/);
- assert.equal(fs.readFileSync(lock,'utf8'),before);
+ assert.equal(result.status,0,result.stderr);
+ assert.deepEqual(JSON.parse(result.stdout),[{kind:'file',published:false},{kind:'directory',published:true}]);
+ assert.equal(JSON.parse(fs.readFileSync(file)).phase,'prepared');
 });

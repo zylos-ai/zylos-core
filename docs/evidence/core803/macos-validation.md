@@ -1,5 +1,7 @@
 # macOS protected recovery validation
 
+> Historical validation of the superseded native-helper implementation. For the current Node-only macOS contract and validation, see [node-only-validation.md](node-only-validation.md). The results below do not validate the current source.
+
 Validated on 2026-10-10 against the Mac extension of PR #817 base
 `285d518fc506161780d7e75537659465cc300ede`. Exact tested production-file hashes
 are recorded in [macos-source-hashes.json](macos-source-hashes.json).

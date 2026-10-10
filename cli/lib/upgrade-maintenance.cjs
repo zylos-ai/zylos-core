@@ -1,7 +1,7 @@
 'use strict';
 
 // Copied to .zylos/upgrade before protection is enabled. Node builtins only;
-// controller serialization uses util-linux flock or the frozen macOS helper.
+// Linux uses util-linux flock; macOS retains exclusive admission until release.
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
@@ -14,37 +14,19 @@ const ID = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,95}$/;
 function hash(file) {
   return crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 }
-function nativeHelper() {
-  // Frozen controllers must never fall back to the mutable installed package.
-  const file = path.basename(__filename) === 'maintenance.cjs'
-    ? path.join(__dirname, 'macos-recovery-helper')
-    : path.join(__dirname, '..', 'native', 'macos-recovery-helper');
-  for (const candidate of [file, file + '.sha256']) {
-    const st = fs.lstatSync(candidate);
-    const allowedOwners = path.basename(__filename) === 'maintenance.cjs' ? [process.getuid?.()] : [0, process.getuid?.()];
-    if (!st.isFile() || st.isSymbolicLink() || st.mode & 0o022 || process.getuid && !allowedOwners.includes(st.uid)) throw Error('unsafe macOS recovery helper: ' + candidate);
-  }
-  const st = fs.statSync(file);
-  if (!(st.mode & 0o111)) throw Error('macOS recovery helper is not executable');
-  const expected = fs.readFileSync(file + '.sha256', 'utf8').trim();
-  if (!/^[a-f0-9]{64}$/.test(expected) || hash(file) !== expected) throw Error('macOS recovery helper hash mismatch');
-  return file;
-}
 function fsyncFd(fd) {
-  if (process.platform !== 'darwin') return fs.fsyncSync(fd);
-  const result = cp.spawnSync(nativeHelper(), ['fullsync', '3'], {
-    encoding: 'utf8', timeout: 10000, stdio: ['ignore', 'pipe', 'pipe', fd]
-  });
-  if (result.error || result.status !== 0) throw Error(result.error?.message || result.stderr?.trim() || 'macOS full sync failed');
+  // Use Node's platform synchronization contract. On macOS libuv attempts
+  // F_FULLFSYNC but may fall back; success does not identify the sync level.
+  return fs.fsyncSync(fd);
 }
 function platformSupported(platform = process.platform) {
   try {
     if (platform !== process.platform || !['linux', 'darwin'].includes(platform)) return false;
+    if (platform === 'darwin') return true; // Node admission; no crash takeover.
     const owner = identity();
     if (owner.unsupported || owner.absent || !owner.boot || !owner.start) return false;
-    if (platform === 'linux') { controllerFlock(); return true; }
-    const result = cp.spawnSync(nativeHelper(), ['probe'], {encoding:'utf8', timeout:10000});
-    return !result.error && result.status === 0 && JSON.parse(result.stdout).protocol === 1;
+    controllerFlock();
+    return true;
   } catch { return false; }
 }
 function fsyncDir(dir) {
@@ -311,15 +293,7 @@ function assertCoreDatabaseAvailable(root) {
 function identity(pid = process.pid) {
   if (!Number.isSafeInteger(pid) || pid <= 0) return {pid, unsupported:true};
   try {
-    if (process.platform === 'darwin') {
-      const result = cp.spawnSync(nativeHelper(), ['identity', String(pid)], {encoding:'utf8', timeout:10000});
-      if (result.error || result.status !== 0) return {pid, unsupported:true};
-      const data = JSON.parse(result.stdout);
-      if (data.pid !== pid) return {pid, unsupported:true};
-      if (data.status === 'absent') return {pid, absent:true};
-      if (data.status !== 'present' || typeof data.boot !== 'string' || !data.boot || !/^\d+:\d+$/.test(data.start)) return {pid, unsupported:true};
-      return {pid, boot:data.boot, start:data.start};
-    }
+    if (process.platform === 'darwin') return {pid, unsupported:true};
     let stat;
     try { stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8'); }
     catch (error) {
@@ -386,8 +360,8 @@ function serializedController(dir, operation, value) {
     const savedHelper = path.join(dir, 'maintenance.cjs');
     const helper = fs.existsSync(savedHelper) && hash(savedHelper) === SELF_HASH ? savedHelper : __filename;
     if (!fs.existsSync(helper) || hash(helper) !== SELF_HASH) throw Error('serialized controller helper unavailable or changed');
-    const binary = process.platform === 'darwin' ? nativeHelper() : controllerFlock();
-    const args = process.platform === 'darwin' ? ['lock-exec', '5000', process.execPath, helper] : ['--exclusive', '--no-fork', '--timeout', '5', '/proc/self/fd/3', process.execPath, helper];
+    const binary = controllerFlock();
+    const args = ['--exclusive', '--no-fork', '--timeout', '5', '/proc/self/fd/3', process.execPath, helper];
     const r = cp.spawnSync(binary, [...args, '--controller-lock', operation, path.resolve(dir)], {
       input: JSON.stringify(value),
       encoding: 'utf8',
@@ -399,9 +373,57 @@ function serializedController(dir, operation, value) {
     fs.closeSync(fd);
   }
 }
+// Mac admission is never reclaimed by PID, age, or parseability. The live
+// closure is the only ordinary-failure continuation capability; disk/CLI input
+// cannot reconstruct it after interruption.
+function acquireMac(dir, {publishedDir} = {}) {
+  dir = path.resolve(dir);
+  privatePath(dir, {directory:true});
+  if (publishedDir !== undefined) {
+    const j = read(path.join(dir, 'journal.json'));
+    if (!ID.test(j.transactionId) || dir !== path.join(j.zylosDir, '.backup', 'self-upgrade-staging', j.transactionId) || publishedDir !== path.join(j.zylosDir, '.backup', 'self-upgrade', j.transactionId)) throw Error('invalid controller publication path');
+  }
+  const value = {mode:'live-owner', pid:process.pid, token:crypto.randomBytes(16).toString('hex')};
+  const file = path.join(dir, 'controller.json');
+  let fd;
+  try { fd = fs.openSync(file, 'wx', 0o600); }
+  catch (error) {
+    if (error.code === 'EEXIST') throw Error('controller admission retained; interrupted macOS upgrade requires manual recovery');
+    throw error;
+  }
+  try { fs.writeFileSync(fd, JSON.stringify(value)); fsyncFd(fd); fsyncDir(dir); }
+  finally { fs.closeSync(fd); }
+  let held = true, active = false;
+  function location() { return fs.existsSync(dir) ? dir : publishedDir || dir; }
+  function verify(expectedDir) {
+    if (!held) throw Error('controller ownership already released');
+    const currentDir = location();
+    if (expectedDir !== undefined && fs.realpathSync(expectedDir) !== fs.realpathSync(currentDir)) throw Error('controller ownership belongs to another transaction');
+    privatePath(currentDir, {directory:true});
+    const current = read(path.join(currentDir, 'controller.json'));
+    if (current.token !== value.token || current.pid !== value.pid || current.mode !== value.mode) throw Error('controller ownership changed');
+    return currentDir;
+  }
+  function release() {
+    if (!held) return;
+    if (active) throw Error('cannot release controller during recovery');
+    const currentDir = verify();
+    fs.unlinkSync(path.join(currentDir, 'controller.json'));
+    held = false;
+    fsyncDir(currentDir);
+  }
+  release.withOwnership = (expectedDir, run) => {
+    verify(expectedDir);
+    if (active) throw Error('recovery already active');
+    active = true;
+    try { return run(); } finally { active = false; }
+  };
+  return release;
+}
 function acquire(dir, {
   publishedDir
 } = {}) {
+  if (process.platform === 'darwin') return acquireMac(dir, {publishedDir});
   const value = {
     ...identity(),
     token: crypto.randomBytes(16).toString('hex')
@@ -501,6 +523,7 @@ function services(j) {
   }));
 }
 function stop(j) {
+  if (process.platform === 'darwin') return stopBackupOnly(j);
   for (const p of services(j)) if (!['stopped', 'errored'].includes(p.status)) command('pm2', ['stop', p.name]);
   if (services(j).some(p => !['stopped', 'errored'].includes(p.status) || p.pid > 0)) throw Error('managed services not confirmed stopped');
   const knownNames = /\/(?:c4-(?:send|db|control|enqueue|queue)|scheduler|database|usage-monitor|core-db-backup-worker)\.(?:js|mjs)(?:\s|$)/;
@@ -635,8 +658,7 @@ function worker(dir, j, payload) {
   validateDescriptor(dir, j, d);
   return JSON.parse(command(d.nodePath, [d.workerPath, JSON.stringify({
     ...payload,
-    driverPath: d.driverPath,
-    ...(process.platform === 'darwin' ? {nativeHelperPath: path.join(dir, 'macos-recovery-helper')} : {})
+    driverPath: d.driverPath
   })], {
     timeout: 120000
   }));
@@ -659,7 +681,6 @@ function validateDescriptor(dir, j, d) {
   };
   for (const [key, value] of Object.entries(fixed)) if (d[key] !== value) throw Error('recovery material outside fixed layout: ' + key);
   const names = ['finalizer.cjs', 'maintenance.cjs', 'runner.cjs'];
-  if (process.platform === 'darwin') names.push('macos-recovery-helper', 'macos-recovery-helper.sha256');
   if (!d.hashes || Array.isArray(d.hashes) || Object.keys(d.hashes).length !== names.length || names.some(name => !Object.hasOwn(d.hashes, name))) throw Error('missing required recovery material hashes');
   for (const name of names) {
     privatePath(path.join(dir, name));
@@ -726,7 +747,6 @@ function finishTerminal(dir, j) {
   return {complete:true, warnings:[]};
 }
 module.exports = {
-  nativeHelper,
   fsyncFd,
   platformSupported,
   transaction,

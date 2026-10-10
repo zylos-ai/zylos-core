@@ -96,6 +96,10 @@ export function discoverUpgradeContext(root) {
         throw Error('untrusted stable upgrade discovery material');
       }
     }
+    // Revalidate and load the current stable generation on each discovery.
+    // These paths can be replaced between upgrades in the same process.
+    delete require.cache[entry];
+    delete require.cache[path.join(directory, 'maintenance.cjs')];
     return require(entry).bootstrap(root);
   } catch {
     return upgradeDiscoveryFailure();

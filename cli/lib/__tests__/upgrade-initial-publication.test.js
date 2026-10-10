@@ -7,7 +7,11 @@ import { beginUpgrade, maintenance as m, maintenanceFor, protectedDataReady } fr
 
 function fixture(t) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'upgrade-publication-')));
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  let ctx;
+  t.after(() => {
+    try { ctx?.releaseControl?.(); }
+    finally { fs.rmSync(root, { recursive: true, force: true }); }
+  });
   const coreDir = path.join(root, 'old-package');
   const tempDir = path.join(root, 'new-package');
   const skillsDir = path.join(root, '.claude', 'skills');
@@ -21,19 +25,22 @@ function fixture(t) {
   const services = m.services;
   m.services = () => [];
   t.after(() => { m.services = services; });
-  return { root, skillsDir, ctx: { coreDir, tempDir, from: 'old', to: 'new' } };
+  ctx = { coreDir, tempDir, from: 'old', to: 'new' };
+  return { root, skillsDir, ctx };
 }
 
 test('ordinary unconfigured adoption deploys bootstrap and atomically publishes a live controller', t => {
   const f = fixture(t);
   beginUpgrade(f.ctx, { zylosDir: f.root, skillsDir: f.skillsDir });
-  t.after(() => f.ctx.releaseControl());
   assert.equal(fs.existsSync(path.join(f.root, '.zylos/upgrade/bootstrap.cjs')), true);
   assert.equal(f.ctx.bootCapability, undefined);
   const current = m.transaction(f.root, f.ctx.transactionDir);
   assert.equal(current.phase, 'preparing');
   assert.equal(current.installationIntent, false);
-  assert.equal(m.alive(m.read(path.join(f.ctx.transactionDir, 'controller.json'))), true);
+  if (process.platform === 'darwin') {
+    assert.equal(f.ctx.releaseControl.withOwnership(f.ctx.transactionDir, () => 'owned'), 'owned');
+    assert.throws(() => m.acquire(f.ctx.transactionDir), /admission retained/);
+  } else assert.equal(m.alive(m.read(path.join(f.ctx.transactionDir, 'controller.json'))), true);
   assert.equal(fs.readdirSync(path.join(f.root, '.backup/self-upgrade-staging')).length, 0);
 });
 
@@ -64,7 +71,6 @@ test('retired capability configuration does not gate protected publication', t =
   fs.mkdirSync(path.join(f.root, '.zylos/upgrade'), { mode: 0o700 });
   m.durable(path.join(f.root, '.zylos/upgrade/capability.json'), { formatVersion: 1 });
   beginUpgrade(f.ctx, { zylosDir: f.root, skillsDir: f.skillsDir });
-  t.after(() => f.ctx.releaseControl());
   assert.equal(f.ctx.preInstallProtection, true);
 });
 
@@ -73,7 +79,6 @@ test('symlink deployment root records canonical transaction identities', t => {
   fs.symlinkSync(f.root, alias);
   t.after(() => fs.unlinkSync(alias));
   beginUpgrade(f.ctx, { zylosDir: alias, skillsDir: path.join(alias, '.claude/skills') });
-  t.after(() => f.ctx.releaseControl());
   assert.equal(f.ctx.journal.zylosDir, f.root);
   assert.equal(f.ctx.journal.skillsDir, f.skillsDir);
   assert.equal(m.discover(alias).diagnostics.length, 0);
@@ -82,7 +87,6 @@ test('symlink deployment root records canonical transaction identities', t => {
 test('data-ready publication refreshes parent context before later durable writes', t => {
   const f = fixture(t);
   beginUpgrade(f.ctx, { zylosDir: f.root, skillsDir: f.skillsDir });
-  t.after(() => f.ctx.releaseControl());
   const active = maintenanceFor(f.ctx), preflight = active.preflight;
   active.preflight = () => ({ success: true });
   try { protectedDataReady(f.ctx); } finally { active.preflight = preflight; }
@@ -98,7 +102,8 @@ test('controller acquisition failure removes only its unpublished staging attemp
   fs.mkdirSync(unrelated, {mode:0o700});fs.writeFileSync(path.join(unrelated, 'note'), 'keep');
   const open = fs.openSync;
   fs.openSync = (file, ...args) => {
-    if (String(file).endsWith('/controller.guard')) throw Error('injected controller failure');
+    const admission = process.platform === 'darwin' ? '/controller.json' : '/controller.guard';
+    if (String(file).endsWith(admission)) throw Error('injected controller failure');
     return open(file, ...args);
   };
   try {
@@ -109,6 +114,5 @@ test('controller acquisition failure removes only its unpublished staging attemp
   assert.deepEqual(fs.readdirSync(path.join(f.root, '.backup/self-upgrade')), []);
   assert.equal(m.discover(f.root).blocked, false);
   beginUpgrade(f.ctx, {zylosDir:f.root, skillsDir:f.skillsDir});
-  t.after(() => f.ctx.releaseControl());
   assert.equal(f.ctx.preInstallProtection, true);
 });

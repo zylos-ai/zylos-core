@@ -1,4 +1,13 @@
-# macOS recovery primitive helper
+# Superseded macOS recovery primitive helper
+
+This directory records the earlier native-helper implementation. It is excluded
+from the npm package and is not used by the current upgrade or recovery paths.
+The build script and native protocol tests are historical development evidence.
+Current macOS behavior uses Node synchronization and same-attempt compensation;
+interrupted ownership requires manual recovery. See
+[the current recovery guide](../../docs/self-upgrade-recovery.md).
+
+The following describes the superseded implementation.
 
 `macos-recovery-helper` is a checked-in universal Mach-O executable (arm64 and
 x86_64), independent of the Node ABI. End users do not compile it. It is not

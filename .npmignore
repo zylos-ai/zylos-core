@@ -11,3 +11,8 @@
 
 # Environment
 .env
+
+# Superseded macOS helper retained as development evidence, not a runtime dependency
+cli/native/
+scripts/build-macos-recovery-helper.sh
+cli/lib/__tests__/macos-recovery-native.test.js

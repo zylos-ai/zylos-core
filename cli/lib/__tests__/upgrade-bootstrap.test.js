@@ -14,10 +14,6 @@ function fixture(t) {
     fs.copyFileSync(new URL('../' + source, import.meta.url), path.join(stable, target));
     fs.chmodSync(path.join(stable, target), 0o600);
   }
-  if (process.platform === 'darwin') for (const name of ['macos-recovery-helper', 'macos-recovery-helper.sha256']) {
-    fs.copyFileSync(new URL('../../native/' + name, import.meta.url), path.join(stable, name));
-    fs.chmodSync(path.join(stable, name), name.endsWith('.sha256') ? 0o600 : 0o700);
-  }
   const api = createRequire(import.meta.url)(path.join(stable, 'bootstrap.cjs'));
   function journal(id = 'tx', extra = {}) {
     const dir = path.join(root, '.backup/self-upgrade', id);
@@ -82,7 +78,7 @@ test('status and discovery do not depend on runtime capability or recovery modul
   assert.equal(f.api.runtimeCapability, undefined);
 });
 
-test('live controller is observed without entering resume', t => {
+test('live controller is observed without entering resume', {skip:process.platform==='darwin'}, t => {
   const f = fixture(t), dir = f.journal();
   const m = createRequire(import.meta.url)(path.join(f.stable, 'maintenance.cjs'));
   m.durable(path.join(dir, 'controller.json'), m.identity());
@@ -91,7 +87,7 @@ test('live controller is observed without entering resume', t => {
   assert.equal(out.observing, true);
 });
 
-test('once resumes exactly the attributed transaction and does not launch a runtime', t => {
+test('once resumes exactly the attributed transaction and does not launch a runtime', {skip:process.platform==='darwin'}, t => {
   const f = fixture(t), dir = f.journal();
   fs.writeFileSync(path.join(f.stable, 'recovery.cjs'), 'exports.resume = dir => ({resumed: dir});');
   const out = f.api.bootstrap(f.root, {once: true});
@@ -144,3 +140,13 @@ test('retired runtime-launch option fails clearly and cannot run a supervisor', 
   assert.equal(out.status, 1);
   assert.match(JSON.parse(out.stdout).error, /existing boot chain/);
 });
+
+ test('Mac discovery only offers status/manual recovery and once cannot invoke runner', {skip:process.platform!=='darwin'}, t=>{
+ const f=fixture(t);f.journal();
+ fs.writeFileSync(path.join(f.stable,'recovery.cjs'),"throw Error('runner must not load')");
+ const out=f.api.bootstrap(f.root,{once:true});
+ assert.equal(out.recovery_required,true);assert.equal(out.automaticResume,false);
+ assert.match(out.error,/manual recovery/);assert.doesNotMatch(out.prompt,/--once/);
+ assert.match(out.prompt,/"controllerAlive": null/);
+ assert.match(out.prompt,/do not run automatic resume/);
+ });

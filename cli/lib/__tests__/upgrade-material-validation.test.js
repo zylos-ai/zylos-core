@@ -9,7 +9,7 @@ function fixture(t) {
   const root=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'upgrade-material-')));
   t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
   const dir=path.join(root,'tx'),closure=path.join(dir,'sqlite-runtime');fs.mkdirSync(closure,{recursive:true,mode:0o700});
-  const hashes={};for(const name of ['runner.cjs','maintenance.cjs','finalizer.cjs',...(process.platform==='darwin'?['macos-recovery-helper','macos-recovery-helper.sha256']:[])]){const file=path.join(dir,name);fs.writeFileSync(file,'// trusted fixture '+name,{mode:0o600});hashes[name]=m.hash(file);}
+  const hashes={};for(const name of ['runner.cjs','maintenance.cjs','finalizer.cjs']){const file=path.join(dir,name);fs.writeFileSync(file,'// trusted fixture '+name,{mode:0o600});hashes[name]=m.hash(file);}
   const closureFiles=['package.json','core-db-backup-worker.js','node_modules/better-sqlite3/lib/index.js'];
   for(const file of closureFiles){const p=path.join(closure,file);fs.mkdirSync(path.dirname(p),{recursive:true,mode:0o700});fs.writeFileSync(p,'fixture '+file,{mode:0o600});}
   const j={transactionId:'tx',nodePath:process.execPath,initialIdentity:{nodePath:process.execPath}};
@@ -146,7 +146,7 @@ test('staged initial journal controller follows atomic active publication', t =>
   m.durable(path.join(staged, 'journal.json'), f.j);
   const release = m.acquire(staged, {publishedDir:f.dir});
   fs.renameSync(staged, f.dir);
-  assert.throws(() => m.acquire(f.dir), /still alive/);
+  assert.throws(() => m.acquire(f.dir), /still alive|manual recovery/);
   release();
   assert.equal(fs.existsSync(path.join(f.dir, 'controller.json')), false);
 });
@@ -198,9 +198,9 @@ for (const blocker of ['installer', 'finalizer', 'services']) test(`terminal mar
   assert.equal(m.discover(f.root).candidates.length, 0);
 });
 
-test('macOS frozen helper bytes are included in required descriptor hashes',{skip:process.platform!=='darwin'},t=>{
- const f=fixture(t);delete f.d.hashes['macos-recovery-helper'];
- assert.throws(()=>m.validateDescriptor(f.dir,f.j,f.d),/required recovery material hashes/);
- const g=fixture(t);fs.appendFileSync(path.join(g.dir,'macos-recovery-helper'),'tamper');
- assert.throws(()=>m.validateDescriptor(g.dir,g.j,g.d),/material hash mismatch/);
+test('macOS descriptor needs only frozen JavaScript controllers and existing SQLite closure',{skip:process.platform!=='darwin'},t=>{
+ const f=fixture(t);
+ assert.deepEqual(Object.keys(f.d.hashes).sort(),['finalizer.cjs','maintenance.cjs','runner.cjs']);
+ assert.equal(fs.existsSync(path.join(f.dir,'macos-recovery-helper')),false);
+ assert.doesNotThrow(()=>m.validateDescriptor(f.dir,f.j,f.d));
 });

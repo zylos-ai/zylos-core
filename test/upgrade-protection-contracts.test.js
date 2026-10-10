@@ -5,7 +5,7 @@ import { createRequire } from 'node:module';
 import { beforeEach, afterEach, test, expect } from '@jest/globals';
 let root, m;
 beforeEach(() => {
-  root=fs.mkdtempSync(path.join(os.tmpdir(),'upgrade-contracts-'));
+  root=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'upgrade-contracts-')));
   const stable=path.join(root,'.zylos','upgrade');fs.mkdirSync(stable,{recursive:true,mode:0o700});
   fs.copyFileSync(path.resolve('cli/lib/upgrade-maintenance.cjs'),path.join(stable,'maintenance.cjs'));
   fs.chmodSync(path.join(stable,'maintenance.cjs'),0o600);
@@ -61,7 +61,7 @@ test('terminal marker with a missing transaction stays isolated',()=>{
  fs.renameSync(dir,path.join(root,'.backup','moved-terminal'));
  expect(m.discover(root).blocked).toBe(true);expect(m.discover(root).diagnostics.join(' ')).toMatch(/marker has no valid transaction/);
 });
-test('live controller rejects duplicate; PID reuse identity allows stale takeover',()=>{
+(process.platform === 'linux' ? test : test.skip)('live controller rejects duplicate; PID reuse identity allows stale takeover',()=>{
  const {dir}=transaction('lock','offline');const first=m.acquire(dir);
  expect(()=>m.acquire(dir)).toThrow(/still alive/);first();
  const stale={...m.identity(),start:'not-the-current-start'};expect(m.alive(stale)).toBe(false);m.durable(path.join(dir,'controller.json'),stale);

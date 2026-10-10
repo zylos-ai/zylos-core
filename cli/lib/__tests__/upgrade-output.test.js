@@ -40,3 +40,12 @@ test('failed backup-only snapshot never reports a verified backup',()=>{
  const text=formatSelfUpgradeProtection({success:false,preInstallProtection:false,backupOnly:true,automaticRecovery:false,dbSnapshotVerified:false,manualRecovery:{required:false,dbBackupDir:null,instructions:'Snapshot unavailable; installation did not start.'}});
  assert.match(text,/snapshot.*(unavailable|not verified|failed)/i);assert.doesNotMatch(text,/snapshots?: verified/i);
 });
+
+
+test('Mac compensation output distinguishes observed failure from interrupted takeover',()=>{
+ const text=formatC4Reply('self-upgrade',{success:false,error:'npm failed',preInstallProtection:true,automaticCompensation:true,automaticResume:false,rollback:{attempted:true,completed:true,stage:'restored_complete'},recovery_required:false});
+ assert.match(text,/Automatic compensation: available for observed failures after writer exit is confirmed/);
+ assert.match(text,/Interrupted upgrade: manual recovery required; automatic takeover is disabled/);
+ assert.match(text,/Rollback attempted=true completed=true stage=restored_complete/);
+ assert.match(text,/Recovery required: no/);
+});

@@ -199,3 +199,28 @@ test('nonblocking cue append preserves original prompt and avoids duplicate adap
   fs.writeFileSync(path.join(stable, 'bootstrap.cjs'), 'throw Error("ordinary startup must not load this");', {mode:0o664});
   assert.equal(upgradeStartupPrompt(root), null);
 });
+
+
+test('same-process startup discovery uses the current bootstrap and maintenance generation',t=>{
+ const root=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'upgrade-context-generation-')));
+ t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+ const stable=path.join(root,'.zylos/upgrade');fs.mkdirSync(stable,{recursive:true,mode:0o700});
+ fs.writeFileSync(path.join(stable,'active.json'),'{}',{mode:0o600});
+ const entry=path.join(stable,'bootstrap.cjs'),dependency=path.join(stable,'maintenance.cjs');
+ fs.writeFileSync(entry,"const m=require('./maintenance.cjs');exports.bootstrap=()=>({active:true,blocked:true,prompt:'old '+m.prompt});",{mode:0o600});
+ fs.writeFileSync(dependency,"exports.prompt='generation';",{mode:0o600});
+ assert.equal(upgradeStartupPrompt(root),'old generation');
+ fs.writeFileSync(entry,"const m=require('./maintenance.cjs');exports.bootstrap=()=>({active:true,blocked:true,prompt:'new '+m.prompt});");
+ fs.writeFileSync(dependency,"exports.prompt='manual recovery';");
+ assert.equal(upgradeStartupPrompt(root),'new manual recovery');
+});
+
+test('Mac runtime startup recovery prompt permits status and manual recovery only',{skip:process.platform!=='darwin'},t=>{
+ const root=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'upgrade-context-mac-')));
+ t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+ const stable=path.join(root,'.zylos/upgrade');fs.mkdirSync(stable,{recursive:true,mode:0o700});
+ for(const [source,target] of [['upgrade-bootstrap.cjs','bootstrap.cjs'],['upgrade-maintenance.cjs','maintenance.cjs']]){fs.copyFileSync(path.resolve('cli/lib',source),path.join(stable,target));fs.chmodSync(path.join(stable,target),0o600);}
+ fs.writeFileSync(path.join(stable,'active.json'),'{broken',{mode:0o600});
+ const prompt=upgradeStartupPrompt(root);
+ assert.match(prompt,/manual recovery/);assert.match(prompt,/--status/);assert.match(prompt,/do not run automatic resume/);assert.doesNotMatch(prompt,/--once/);
+});

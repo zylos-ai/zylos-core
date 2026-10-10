@@ -102,3 +102,19 @@ test('worker executes through a directory alias without skipping its CLI entry',
  assert.equal(result.databases.length,3);
  assert.ok(result.databases.every(row=>row.status==='missing'));
 });
+
+test('worker snapshot sync failure aborts publication and retains the previous verified group', {skip:!Database},t=>{
+ const dir=fixture(t);skills(dir);fs.mkdirSync(path.join(dir,'comm-bridge'));
+ const source=path.join(dir,'comm-bridge/c4.db'),db=new Database(source);
+ db.exec("CREATE TABLE entries(value TEXT); INSERT INTO entries VALUES ('original')");db.close();
+ const previous=createCoreDbSnapshot({zylosDir:dir,transactionId:'previous'});
+ const hook=path.join(dir,'sync-failure.cjs');
+ fs.writeFileSync(hook,"const fs=require('node:fs');fs.fsyncSync=()=>{throw Error('injected snapshot sync failure');};");
+ const options=process.env.NODE_OPTIONS;
+ try {
+  process.env.NODE_OPTIONS=`--require=${hook}`;
+  assert.throws(()=>createCoreDbSnapshot({zylosDir:dir,transactionId:'failed-sync'}),/injected snapshot sync failure/);
+ } finally {if(options===undefined)delete process.env.NODE_OPTIONS;else process.env.NODE_OPTIONS=options;}
+ assert.equal(fs.existsSync(path.join(dir,'.backup/db/failed-sync')),false);
+ assert.equal(runCoreDbWorker({action:'verify',zylosDir:dir,dbBackupDir:previous.dbBackupDir,manifest:previous.manifest}).databases[0].integrityCheck,'ok');
+});

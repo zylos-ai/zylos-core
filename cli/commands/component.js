@@ -252,6 +252,8 @@ export function formatSelfUpgradeProtection(data) {
     for(const warning of data.backupWarnings||[])lines.push(`Backup warning: ${warning}`);
   }
   if(typeof data.preInstallProtection==='boolean')lines.push(`Pre-install protection: ${data.preInstallProtection?'enabled':'unavailable'}`);
+  if(data.automaticCompensation===true)lines.push('Automatic compensation: available for observed failures after writer exit is confirmed');
+  if(data.automaticResume===false)lines.push('Interrupted upgrade: manual recovery required; automatic takeover is disabled');
   if(data.dbBackupDir)lines.push(`Database snapshots: ${data.dbBackupDir}`);
   const databases=data.databases||data.dbManifest?.databases;
   if(Array.isArray(databases))for(const db of databases)lines.push(`  ${db.source}: ${db.status}${db.userVersion!=null?` (schema ${db.userVersion})`:''}`);

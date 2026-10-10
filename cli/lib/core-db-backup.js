@@ -13,7 +13,6 @@ const WORKER=fileURLToPath(new URL('./core-db-backup-worker.js',import.meta.url)
 function syncDir(dir){const fd=fs.openSync(dir,'r');try{maintenance.fsyncFd(fd);}finally{fs.closeSync(fd);}}
 function durableJson(file,value){const fd=fs.openSync(file,'wx',0o600);try{fs.writeFileSync(fd,JSON.stringify(value,null,2)+'\n');maintenance.fsyncFd(fd);}finally{fs.closeSync(fd);}syncDir(path.dirname(file));}
 export function runCoreDbWorker(payload,{workerPath=WORKER,nodePath=process.execPath,timeout=120000}={}) {
-  if(process.platform==='darwin') payload={nativeHelperPath:maintenance.nativeHelper(),...payload};
   const result=spawnSync(nodePath,[workerPath,JSON.stringify(payload)],{encoding:'utf8',timeout,maxBuffer:4*1024*1024,windowsHide:true});
   if(result.error||result.status!==0) throw new Error(`SQLite ${payload.action} failed: ${result.error?.message || result.stderr || `exit ${result.status}`}`);
   try{return JSON.parse(result.stdout);}catch{throw new Error('Invalid SQLite worker response');}
@@ -22,7 +21,7 @@ function validComplete(manifest) {
   return manifest?.formatVersion===1&&manifest.function==='core-self-upgrade-db'&&manifest.status==='complete'&&typeof manifest.id==='string'&&Array.isArray(manifest.databases)&&manifest.databases.length===3&&CORE_DATABASES.every(item=>manifest.databases.filter(row=>row.source===item.source).length===1)&&manifest.databases.every(row=>row.status==='missing'||(row.status==='backed_up'&&row.integrityCheck==='ok'&&typeof row.file==='string'&&path.basename(row.file)===row.file&&/^[a-f0-9]{64}$/.test(row.sha256)));
 }
 // Probe only snapshot durability, independently of recovery locks and process
-// identity. Mac fullsync remains mandatory; fsync alone is not a substitute.
+// identity. All platforms use Node synchronization and propagate its errors.
 export function probeCoreDbSnapshotSync(zylosDir) {
   let probe;
   try {

@@ -1,5 +1,7 @@
 # Backup-only capability split validation
 
+> Historical validation of the superseded native-helper implementation. For the current Node-only macOS contract and validation, see [node-only-validation.md](node-only-validation.md). The results below do not validate the current source.
+
 Validated on 2026-10-10, extending PR #817 baseline
 `e49cd4dbcf7afe3b80a974500662b9c89932a8d5`. Production hashes are recorded in
 [backup-only-source-hashes.json](backup-only-source-hashes.json). This supplements,

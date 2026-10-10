@@ -96,7 +96,7 @@ for(const fault of ['installer','finalizer-result','finalizer-throw'])test(`back
 
 // Exercise the actual capability implementation with narrowly simulated Linux
 // OS boundaries. This is not a native Linux execution on the macOS test host.
-function capabilityModule({missingProc=false,missingFlock=false,platform='linux',macFault=null}={}) {
+function capabilityModule({missingProc=false,missingFlock=false,platform='linux'}={}) {
  const filename=path.resolve('cli/lib/upgrade-maintenance.cjs');
  const source=fs.readFileSync(filename,'utf8'),module={exports:{}};
  const fakeFs={...fs,
@@ -124,9 +124,7 @@ function capabilityModule({missingProc=false,missingFlock=false,platform='linux'
   process:{...process,platform},require:id=>{
    if(id==='node:fs')return fakeFs;
    if(id==='node:child_process' && platform==='darwin')return {...require(id),spawnSync(file,args,opts){
-    if(args[0]==='identity')return {status:0,stdout:JSON.stringify(macFault==='identity'?{pid:process.pid,status:'absent'}:{pid:process.pid,status:'present',boot:'fixture-boot',start:'123:456'})};
-    if(args[0]==='probe')return {status:macFault==='probe'?1:0,stdout:JSON.stringify({protocol:1})};
-    throw Error('unexpected mock helper command '+args[0]);
+    assert.fail('Mac capability must not invoke a native helper: '+file+' '+args[0]);
    }};
    return require(id);
   }});
@@ -170,13 +168,8 @@ for(const fail of [false,true])test(`backup-only serialized finalizer state pres
  assert.notEqual(result.rollback?.performed,true);f.untouchedMaintenance();
 });
 
-for(const macFault of ['identity','probe'])test(`macOS ${macFault} capability failure permits real native fullsync snapshots before installation`,{skip:process.platform!=='darwin'},t=>{
- const positive=capabilityModule({platform:'darwin'});
- assert.equal(positive.platformSupported('darwin'),true);
- const capability=capabilityModule({platform:'darwin',macFault});
- assert.equal(capability.platformSupported('darwin'),false);
- const f=fixture(t);f.deps.platform='darwin';f.deps.protectionSupported=()=>capability.platformSupported('darwin');
- const result=f.run();assert.equal(result.success,true,JSON.stringify(result));
- assert.equal(result.backupOnly,true);assert.equal(result.dbSnapshotVerified,true);
- assert.equal(result.dbBackupDir,f.snapshots());assert.equal(f.calls.length,2);f.untouchedMaintenance();
+test('Mac protected compensation is available without a native helper or process identity',()=>{
+ const capability=capabilityModule({platform:'darwin'});
+ assert.equal(capability.platformSupported('darwin'),true);
+ assert.equal(capability.identity().unsupported,true);
 });

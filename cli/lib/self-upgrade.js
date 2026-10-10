@@ -1517,7 +1517,7 @@ const POST_INSTALL_STEPS = [
 ];
 
 function backupOnlyResult(ctx, failed) {
-  if (!ctx.backupOnly) return {};
+  if (!ctx.backupOnly) return ctx.preInstallProtection ? {automaticCompensation:true, automaticResume:process.platform !== 'darwin'} : {};
   return {
     backupOnly: true,
     backupDir: ctx.backupDir || null,
@@ -1800,7 +1800,7 @@ export function runSelfUpgrade({ tempDir, newVersion, mode, onStep } = {}, deps 
       ctx.steps.push(step);
       if (onStep) onStep(step);
     }
-    if(ctx.preInstallProtection && finalizeResult.success===false){const rb=recovery(ctx);return {...finalizeResult,from:ctx.from,steps:ctx.steps,dbBackupDir:ctx.dbBackupDir,transactionDir:ctx.transactionDir,rollback:{...rb,performed:rb.attempted},recovery_required:rb.recovery_required};}
+    if(ctx.preInstallProtection && finalizeResult.success===false){const rb=recovery(ctx);return {...finalizeResult,...backupOnlyResult(ctx,true),from:ctx.from,steps:ctx.steps,dbBackupDir:ctx.dbBackupDir,transactionDir:ctx.transactionDir,rollback:{...rb,performed:rb.attempted},recovery_required:rb.recovery_required};}
     ctx.releaseControl?.();ctx.releaseControl=null;
     return {
       ...finalizeResult,

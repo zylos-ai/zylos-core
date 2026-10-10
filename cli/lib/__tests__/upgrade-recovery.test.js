@@ -11,16 +11,10 @@ import {upgradeStartupPrompt} from '../runtime/upgrade-context.js';
 
 const require=createRequire(import.meta.url);
 const Database=require(path.resolve('skills/comm-bridge/node_modules/better-sqlite3'));
-const nativeNames=process.platform==='darwin'?['macos-recovery-helper','macos-recovery-helper.sha256']:[];
-function freezeNativeHelper(dir) {
- for(const name of nativeNames){fs.copyFileSync(path.resolve('cli/native',name),path.join(dir,name));fs.chmodSync(path.join(dir,name),name.endsWith('.sha256')?0o600:0o700);}
-}
-// Fault the real platform sync boundary; preserve actual sync for every other FD.
 function interceptSync(check) {
- const sync=fs.fsyncSync,spawn=cp.spawnSync;
- if(process.platform!=='darwin')fs.fsyncSync=fd=>{check(fd);return sync(fd);};
- cp.spawnSync=(file,args,options)=>{if(args?.[0]==='fullsync')check(options.stdio[Number(args[1])]);return spawn(file,args,options);};
- return ()=>{fs.fsyncSync=sync;cp.spawnSync=spawn;};
+ const sync=fs.fsyncSync;
+ fs.fsyncSync=fd=>{check(fd);return sync(fd);};
+ return ()=>{fs.fsyncSync=sync;};
 }
 // Each test loads private copies of the real recovery and maintenance modules.
 // Only service calls are replaced: database/native worker, hashes, journal,
@@ -30,7 +24,6 @@ async function fixture(t,{missing=false,wal=false}={}) {
  t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
  const stable=path.join(root,'.zylos/upgrade');fs.mkdirSync(stable,{recursive:true,mode:0o700});
  for(const [src,dst] of [['upgrade-maintenance.cjs','maintenance.cjs'],['upgrade-recovery.cjs','recovery.cjs']])fs.copyFileSync(path.resolve('cli/lib',src),path.join(stable,dst));
- freezeNativeHelper(stable);
  const m=require(path.join(stable,'maintenance.cjs')),r=require(path.join(stable,'recovery.cjs'));
  const skillsDir=path.join(root,'.claude/skills');
  for(const item of CORE_DATABASES){const owner=path.join(skillsDir,item.owner);fs.mkdirSync(path.join(owner,'scripts'),{recursive:true});fs.writeFileSync(path.join(owner,'package.json'),'{"type":"module"}');fs.symlinkSync(path.resolve('skills',item.owner,'node_modules'),path.join(owner,'node_modules'));
@@ -45,13 +38,24 @@ async function fixture(t,{missing=false,wal=false}={}) {
  const snapshot=createCoreDbSnapshot({zylosDir:root,transactionId:'tx'}),closure=prepareRecoveryDependencies(dir,root);
  fs.copyFileSync(path.join(stable,'recovery.cjs'),path.join(dir,'runner.cjs'));fs.chmodSync(path.join(dir,'runner.cjs'),0o600);
  for(const [src,dst] of [['upgrade-maintenance.cjs','maintenance.cjs'],['upgrade-finalizer.cjs','finalizer.cjs']]){fs.copyFileSync(path.resolve('cli/lib',src),path.join(dir,dst));fs.chmodSync(path.join(dir,dst),0o600);}
- freezeNativeHelper(dir);
  const coreManifest=CORE_DATABASES.map(item=>({name:item.owner,existedBefore:true,backedUp:true,originalHash:m.treeHash(path.join(skillsDir,item.owner))}));
  for(const e of coreManifest)fs.cpSync(path.join(skillsDir,e.name),path.join(dir,'code/skills',e.name),{recursive:true,filter:p=>!p.split(path.sep).includes('node_modules')});
  const packageJson=path.join(root,'package.json');fs.writeFileSync(packageJson,'{}');const originalCli=path.join(root,'baseline-cli');fs.mkdirSync(originalCli,{mode:0o700});
  const j={formatVersion:1,transactionId:'tx',zylosDir:root,skillsDir,nodePath:process.execPath,phase:'installing',installationIntent:true,dbBackupDir:snapshot.dbBackupDir,snapshotManifestHash:m.hash(path.join(snapshot.dbBackupDir,'manifest.json')),coreManifest,originalServices:[],initialIdentity:{nodePath:process.execPath,packageJson,packageHash:m.hash(packageJson),cliRoot:originalCli,cliHash:m.treeHash(originalCli),workerPath:closure.workerPath,workerHash:m.hash(closure.workerPath),ecosystemHash:null,databases:snapshot.manifest.databases.map(d=>({source:d.source,exists:d.status!=='missing'}))}};
- const descriptor={formatVersion:1,transactionId:'tx',...closure,runnerPath:path.join(dir,'runner.cjs'),hashes:Object.fromEntries(['runner.cjs','maintenance.cjs','finalizer.cjs',...nativeNames].map(name=>[name,m.hash(path.join(dir,name))]))};m.durable(path.join(dir,'descriptor.json'),descriptor);m.update(dir,j);m.marker(root,dir,j);
+ const descriptor={formatVersion:1,transactionId:'tx',...closure,runnerPath:path.join(dir,'runner.cjs'),hashes:Object.fromEntries(['runner.cjs','maintenance.cjs','finalizer.cjs'].map(name=>[name,m.hash(path.join(dir,name))]))};m.durable(path.join(dir,'descriptor.json'),descriptor);m.update(dir,j);m.marker(root,dir,j);
  const calls=[];m.stop=()=>calls.push('stop');m.start=()=>calls.push('start');m.verifyServices=()=>calls.push('verify');
+ // These state-machine tests exercise same-owner retries on Mac, not crash
+ // takeover. Dedicated admission tests prove standalone resume is refused.
+ if(process.platform==='darwin') {
+  const resume=r.resume;let owner;
+  r.resume=(target,options={})=>{
+   owner ||= m.acquire(dir);
+   const result=resume(target,{...options,ownership:owner.withOwnership});
+   if(!result.recovery_required){owner();owner=null;}
+   return result;
+  };
+ }
+
  return {root,dir,j,m,r,calls,snapshot,load:()=>m.read(path.join(dir,'journal.json')),db:p=>path.join(root,p)};
 }
 function change(f){const p=f.db('comm-bridge/c4.db'),db=new Database(p);db.prepare('INSERT INTO checkpoints(id,summary) VALUES (?,?)').run(1,'new-generation');db.close();fs.writeFileSync(p+'-wal','old-wal');fs.writeFileSync(p+'-shm','old-shm');fs.appendFileSync(path.join(f.j.skillsDir,'comm-bridge/package.json'),'\n');}
@@ -278,7 +282,7 @@ test('resume uses phase durably changed before controller acquisition instead of
   assert.deepEqual(f.calls, ['start', 'verify']);
   assert.equal(fs.existsSync(path.join(f.root, '.backup/self-upgrade/tx/rescue')), false);
 });
-test('journal deployment identity changed before acquisition is rejected without writing or starting services', async t => {
+test('journal deployment identity changed before acquisition is rejected without writing or starting services', {skip:process.platform==='darwin'}, async t => {
   const f = await fixture(t);
   const acquire = f.m.acquire;
   f.m.acquire = (dir, ...args) => {
@@ -390,4 +394,19 @@ test('verified terminal with stopped services retries startup without database c
  assert.equal(f.m.discover(f.root).blocked,false);assert.equal(f.m.discover(f.root).candidates.length,1);
  f.calls.length=0;assert.equal(f.r.resume(f.dir).completed,true);assert.deepEqual(f.calls,['start','verify']);assert.equal(f.load().terminalServicesStopped,false);
  const db=new Database(f.db('comm-bridge/c4.db'),{readonly:true});assert.equal(db.prepare('SELECT summary FROM checkpoints WHERE id=74').get().summary,'partially restarted service write');db.close();assert.equal(fs.existsSync(path.join(f.dir,'rescue')),false);
+});
+
+test('Mac production recovery aborts preinstall failure through held frozen ownership', {skip:process.platform!=='darwin'}, async t=>{
+ const f=await fixture(t),runner=path.join(f.root,'.zylos/upgrade/recovery.cjs');
+ f.m.update(f.dir,f.j,{installationIntent:false,phase:'preparing'});
+ delete require.cache[runner]; // fixture wrapper is not the production entry.
+ const {recovery}=await import('../upgrade-protection.js');
+ const ctx={maintenance:f.m,journal:f.load(),transactionId:'tx',transactionDir:f.dir,releaseControl:f.m.acquire(f.dir),frozenRecoveryPath:runner,frozenRecoveryHash:f.m.hash(runner)};
+ const before=fs.readFileSync(f.db('comm-bridge/c4.db'));
+ const result=recovery(ctx);
+ assert.equal(result.recovery_required,false,JSON.stringify(result));
+ assert.equal(result.stage,'aborted_before_install');assert.equal(result.attempted,false);
+ assert.deepEqual(fs.readFileSync(f.db('comm-bridge/c4.db')),before);
+ assert.equal(fs.existsSync(path.join(f.dir,'controller.json')),false);
+ assert.equal(ctx.releaseControl,null);
 });
