@@ -43,7 +43,7 @@ import { createRequire as createFinalizerRequire } from 'node:module';
 const finalizerRequire=createFinalizerRequire(import.meta.url);
 function requireFinalizerExit(dir,j,terminate){return finalizerRequire(path.join(dir,'finalizer.cjs')).quiesce(dir,j,{terminate});}
 
-import { beginUpgrade, saveProtectedCode, prepareProtectedInstall, markInstallationIntent, recovery, protectedDataReady, protectedSuccess, maintenance, maintenanceFor } from './upgrade-protection.js';
+import { beginUpgrade, beginBackupOnly, prepareBackupOnlyInstall, saveProtectedCode, prepareProtectedInstall, markInstallationIntent, recovery, protectedDataReady, protectedSuccess, maintenance, maintenanceFor } from './upgrade-protection.js';
 
 const REPO = 'zylos-ai/zylos-core';
 
@@ -598,6 +598,7 @@ function getSkillsServices(deps = {}) {
 export function step3_stopCoreServices(ctx, deps = {}) {
   const startTime = Date.now();
   if (ctx.preInstallProtection) {try {prepareProtectedInstall(ctx,deps);return {step:3,name:'protect_databases_and_stop_services',status:'done',duration:Date.now()-startTime};}catch(error){return {step:3,name:'protect_databases_and_stop_services',status:'failed',error:error.message,duration:Date.now()-startTime};}}
+  if (ctx.backupOnly) {try {prepareBackupOnlyInstall(ctx,deps);return {step:3,name:'backup_databases_and_stop_services',status:'done',dbBackupDir:ctx.dbBackupDir,message:`Verified database snapshot: ${ctx.dbBackupDir}. Automatic recovery disabled; failure requires manual recovery.`,duration:Date.now()-startTime};}catch(error){return {step:3,name:'backup_databases_and_stop_services',status:'failed',error:error.message,duration:Date.now()-startTime};}}
   const execSyncFn = deps.execSync ?? execSync;
   const getServices = deps.getSkillsServices ?? (() => getSkillsServices(deps));
   const stopService = deps.stopService ?? ((name) => {
@@ -673,6 +674,7 @@ export function step4_npmInstallGlobal(ctx, deps = {}) {
   }
 
   try {
+    if (ctx.backupOnly && !ctx.dbSnapshotVerified) throw Error('verified preinstall database snapshot required before installation');
     // Pack first — creates a .tgz tarball (copies, not symlinks)
     if (ctx.preInstallProtection) markInstallationIntent(ctx);
     if(ctx.preInstallProtection&&!deps.execSync){
@@ -1514,11 +1516,32 @@ const POST_INSTALL_STEPS = [
   step13_commitSkillBaselines,
 ];
 
+function backupOnlyResult(ctx, failed) {
+  if (!ctx.backupOnly) return {};
+  return {
+    backupOnly: true,
+    backupDir: ctx.backupDir || null,
+    automaticRecovery: false,
+    protectionUnavailableReason: ctx.protectionUnavailableReason,
+    dbBackupDir: ctx.dbBackupDir || null,
+    databases: ctx.dbManifest?.databases || null,
+    dbSnapshotVerified: Boolean(ctx.dbSnapshotVerified),
+    backupWarnings: ctx.backupWarnings || [],
+    manualRecovery: {
+      required: Boolean(failed),
+      dbBackupDir: ctx.dbBackupDir || null,
+      instructions: ctx.dbSnapshotVerified
+        ? 'Database recovery is manual. Preserve this snapshot; stop writers and verify code/schema compatibility before restoring databases or restarting services.'
+        : 'No verified database snapshot is available. Installation was not started; inspect the failure before restarting stopped services.'
+    }
+  };
+}
 function buildSelfUpgradeResult(ctx, failedStep, rollbackResults = null, rollbackPerformed = Boolean(rollbackResults)) {
   if (failedStep) {
     return {
       action: 'self_upgrade',
       success: false,
+      ...backupOnlyResult(ctx, true),
       preInstallProtection:!!ctx.preInstallProtection,
       ...(ctx.protectionUnavailableReason ? {protectionUnavailableReason:ctx.protectionUnavailableReason} : {}),
       from: ctx.from,
@@ -1552,6 +1575,7 @@ function buildSelfUpgradeResult(ctx, failedStep, rollbackResults = null, rollbac
   return {
     action: 'self_upgrade',
     success: true,
+    ...backupOnlyResult(ctx, false),
     from: ctx.from,
     to: ctx.to,
     steps: ctx.steps,
@@ -1573,6 +1597,8 @@ function buildSelfUpgradeResult(ctx, failedStep, rollbackResults = null, rollbac
 export function createFinalizeState(ctx) {
   return {
     schemaVersion: ctx.preInstallProtection ? 2 : 1,
+    ...backupOnlyResult(ctx, false),
+    ...(ctx.backupOnly ? {dbManifest:ctx.dbManifest} : {}),
     ...(ctx.preInstallProtection ? {
       preInstallProtection: true,
       transactionDir: ctx.transactionDir,
@@ -1665,6 +1691,10 @@ export function runSelfUpgradeFinalize(state = {}, deps = {}) {
     newVersion: state.newVersion || state.to,
     mode: state.mode,
   });
+  ctx.backupOnly = state.backupOnly === true;
+  ctx.protectionUnavailableReason = state.protectionUnavailableReason;
+  ctx.dbSnapshotVerified = state.dbSnapshotVerified === true;
+  ctx.backupWarnings = state.backupWarnings;
   ctx.preInstallProtection = state.schemaVersion===2 && state.preInstallProtection===true;
   ctx.transactionDir=state.transactionDir;ctx.transactionId=state.transactionId;ctx.coreManifest=state.coreManifest;ctx.dbBackupDir=state.dbBackupDir;ctx.dbManifest=state.dbManifest;
   if(ctx.preInstallProtection){
@@ -1726,11 +1756,9 @@ export function runSelfUpgrade({ tempDir, newVersion, mode, onStep } = {}, deps 
   if(!deps.preInstallSteps && eligible) {
     try {beginUpgrade(ctx,{zylosDir:deps.zylosDir ?? ZYLOS_DIR,skillsDir:deps.skillsDir ?? SKILLS_DIR},deps.step3);}
     catch(error){return {action:'self_upgrade',success:false,error:error.message,preInstallProtection:false,rollback:{attempted:false,completed:false,performed:false},recovery_required:!!ctx.transactionDir};}
-  } else if (!eligible && platform === 'darwin') {
-    return {action:'self_upgrade',success:false,error:'macOS protected upgrade capabilities unavailable; installation was not started',preInstallProtection:false,rollback:{attempted:false,completed:false,performed:false}};
-  } else if (!eligible) {
-    ctx.preInstallProtection=false;
-    ctx.protectionUnavailableReason='protected upgrade unsupported in this environment; using the legacy self-upgrade path';
+  } else if (!eligible && !deps.preInstallSteps) {
+    try {beginBackupOnly(ctx,{zylosDir:deps.zylosDir ?? ZYLOS_DIR,skillsDir:deps.skillsDir ?? SKILLS_DIR});}
+    catch(error){return {action:'self_upgrade',success:false,error:error.message,preInstallProtection:false,rollback:{attempted:false,completed:false,performed:false}};}
   }
 
   const preInstallSteps = deps.preInstallSteps ?? [
@@ -1758,6 +1786,7 @@ export function runSelfUpgrade({ tempDir, newVersion, mode, onStep } = {}, deps 
 
   if (failedStep) {
     if(ctx.preInstallProtection) {const rb=recovery(ctx);return {...buildSelfUpgradeResult(ctx,failedStep),backupDir:ctx.backupDir,dbBackupDir:ctx.dbBackupDir,preInstallProtection:true,transactionDir:ctx.transactionDir,rollback:{...rb,performed:rb.attempted},recovery_required:rb.recovery_required};}
+    if(ctx.backupOnly) return buildSelfUpgradeResult(ctx, failedStep, null, false);
     const rollbackFn = deps.rollbackSelf ?? rollbackSelf;
     const rollbackResults = rollbackFn(ctx);
     return buildSelfUpgradeResult(ctx, failedStep, rollbackResults);
@@ -1775,6 +1804,7 @@ export function runSelfUpgrade({ tempDir, newVersion, mode, onStep } = {}, deps 
     ctx.releaseControl?.();ctx.releaseControl=null;
     return {
       ...finalizeResult,
+      ...backupOnlyResult(ctx, finalizeResult.success === false),
       preInstallProtection:!!ctx.preInstallProtection,
       ...(ctx.protectionUnavailableReason ? {protectionUnavailableReason:ctx.protectionUnavailableReason} : {}),
       from: ctx.from,

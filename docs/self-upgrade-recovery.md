@@ -6,6 +6,48 @@ installation or finalizer restores declared core skill directories, the original
 PM2 ecosystem, and these databases using a saved independent runner. The command
 still reports that the upgrade failed; compensation has its own result.
 
+## Backup and automatic recovery are separate capabilities
+
+Every supported self-upgrade path requires a verified preinstall snapshot of the
+three core databases. Automatic recovery additionally requires reliable locks,
+process identity and recovery publication. The command selects one of two modes:
+
+- **Protected upgrade:** `preInstallProtection=true`. The saved runner can
+  compensate for installation/finalizer failures and resume interrupted recovery.
+- **Backup-only upgrade:** `backupOnly=true`, `preInstallProtection=false`,
+  `automaticRecovery=false`. Installation can proceed only after services and
+  known writers have stopped and the database snapshot has been created and
+  verified. Database and code recovery after failure are manual.
+
+On Linux, missing trusted `flock` or usable `/proc` process identity disables
+automatic recovery, not the required database backup. On macOS, unavailable
+recovery locking or process identity likewise permits backup-only mode if the
+snapshot durability checks succeed. Snapshot synchronization is tested separately
+from automatic recovery: macOS still requires the trusted native helper's
+`F_FULLFSYNC`; an absent or unusable helper or a full-sync failure aborts before
+installation. Ordinary `fsync` is not a fallback for Mac snapshot files.
+
+Backup-only checks for an unresolved prior recovery transaction and refuses to
+start if one exists. It creates no new recovery transaction, maintenance marker,
+or bootstrap recovery task. It therefore does not automatically restore databases
+or leave a transaction that permanently isolates normal database access. It also
+does not provide protection against another process starting a writer after the
+stop checks, or automatic recovery from an interrupted upgrade. Avoid concurrent
+administrative writers during the operation.
+
+Backup-only service-stop, writer-drain, snapshot or snapshot-verification failures
+abort before installation. Some services may already have stopped; the command
+does not automatically roll them back or restart them on this failure path.
+Inspect the error and service state before restarting. After an installation or
+finalizer failure, preserve both the database snapshot and retained code backup,
+stop all writers, and check code/schema compatibility before manually restoring
+anything. A snapshot path by itself does not establish successful verification;
+check `dbSnapshotVerified`. `zylos recovery resume` does not recover backup-only
+attempts, because they have no recovery transaction.
+
+The remaining transaction, isolation and automatic compensation behavior below
+applies to protected upgrades unless explicitly stated otherwise.
+
 ## First adoption
 
 Protection requires a baseline containing this updater, the database guards,
@@ -24,7 +66,7 @@ deployed stable helpers and empty group-writable recovery roots. Recovery subdir
 journals, descriptors, and executable materials must remain owned, real paths
 without group/world write access. New recovery directories use mode 0700.
 
-Self-upgrade deploys the stable file-only bootstrap before publishing its first
+Protected self-upgrade deploys the stable file-only bootstrap before publishing its first
 transaction. Initial journals and controller ownership are staged outside the
 active discovery root, then published together by durable directory rename. A
 prepublication failure leaves no incomplete active transaction.
@@ -48,10 +90,11 @@ online, then saves the list. `status` only inspects; `resume` performs recovery.
 Protected upgrades use Linux `/proc` and a trusted `flock`, or the packaged
 macOS native helper for descriptor locks, boot/PID/start-time identity and
 `F_FULLFSYNC`. macOS uses the same preinstall three-database snapshot, schema
-checks, recovery state machine and service isolation. If its helper or capability
-check is unavailable, the upgrade stops before installation; it does not silently
-fall back to an unprotected Mac upgrade. Other unsupported platforms retain the
-legacy path and report `preInstallProtection=false`.
+checks, recovery state machine and service isolation. When automatic recovery
+capability checks fail, the updater selects the backup-only path described above;
+it never skips the required preinstall database snapshot. Failures while setting
+up an already selected protected transaction abort that attempt rather than
+silently switching modes.
 
 The Mac helper and its hash are frozen with the stable bootstrap and transaction
 materials before installation. The live updater binds its maintenance operations
@@ -118,11 +161,19 @@ remains isolated instead of restoring the same databases again.
 ## Retained evidence and output
 
 JSON, human output, and C4 replies expose snapshot paths, per-database missing or
-backed-up states, schema versions, protection status, transaction paths,
-and separate recovery attempted/completed/stage/error values. Cleanup warnings
+backed-up states, schema versions and protection status. Backup-only output
+explicitly identifies disabled automatic recovery, snapshot verification status,
+and manual recovery instructions. A failed attempt requires manual inspection;
+this is not a claim that a database restore is always necessary. Protected output
+also exposes transaction paths and separate recovery
+attempted/completed/stage/error values. Cleanup warnings
 do not turn a verified terminal success into a compensation request.
 
-Successful cleanup removes only temporary code copies. Complete transaction
+Backup-only attempts retain database snapshots and code backup material for
+manual recovery, including after successful installation. They do not have the
+transaction journals or rescue runner described below.
+
+Successful protected-upgrade cleanup removes only temporary code copies. Complete transaction
 directories remain in `.backup/self-upgrade/<transactionId>`. Discovery skips a
 clean terminal once its maintenance marker is removed. The file-only probe reads
 bounded journal JSON without owner/mode validation to classify retained clean

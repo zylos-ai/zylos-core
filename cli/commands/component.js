@@ -242,6 +242,15 @@ export function formatC4Reply(type, data) {
 // Shared human/C4 details preserve the independent upgrade and recovery outcomes.
 export function formatSelfUpgradeProtection(data) {
   const lines=[];
+  if(data.backupOnly){
+    lines.push(`Database snapshot: ${data.dbSnapshotVerified?'verified':'not verified; installation not started'}`);
+    lines.push('Automatic database recovery: disabled; recovery is manual');
+    if(data.protectionUnavailableReason)lines.push(data.protectionUnavailableReason);
+    if(data.backupDir)lines.push(`Code backup: ${data.backupDir}`);
+    lines.push(`Manual recovery required: ${data.manualRecovery?.required?'yes':'no'}`);
+    if(data.manualRecovery?.instructions)lines.push(data.manualRecovery.instructions);
+    for(const warning of data.backupWarnings||[])lines.push(`Backup warning: ${warning}`);
+  }
   if(typeof data.preInstallProtection==='boolean')lines.push(`Pre-install protection: ${data.preInstallProtection?'enabled':'unavailable'}`);
   if(data.dbBackupDir)lines.push(`Database snapshots: ${data.dbBackupDir}`);
   const databases=data.databases||data.dbManifest?.databases;
@@ -1159,7 +1168,7 @@ async function upgradeSelfCore({ branch, beta = false, mode = 'merge' } = {}) {
 
     // Protected transactions own their checked cleanup and retained materials.
     // Legacy success cleanup is common to JSON and human output.
-    if(result.success && !result.preInstallProtection && result.backupDir)cleanupBackup(result.backupDir);
+    if(result.success && !result.preInstallProtection && !result.backupOnly && result.backupDir)cleanupBackup(result.backupDir);
 
     // Output result
     if (jsonOutput) {

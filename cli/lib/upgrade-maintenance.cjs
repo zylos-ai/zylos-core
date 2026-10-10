@@ -40,7 +40,8 @@ function fsyncFd(fd) {
 function platformSupported(platform = process.platform) {
   try {
     if (platform !== process.platform || !['linux', 'darwin'].includes(platform)) return false;
-    if (identity().unsupported) return false;
+    const owner = identity();
+    if (owner.unsupported || owner.absent || !owner.boot || !owner.start) return false;
     if (platform === 'linux') { controllerFlock(); return true; }
     const result = cp.spawnSync(nativeHelper(), ['probe'], {encoding:'utf8', timeout:10000});
     return !result.error && result.status === 0 && JSON.parse(result.stdout).protocol === 1;
@@ -512,6 +513,23 @@ function stop(j) {
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
   }
 }
+// Backup-only never makes PID ownership decisions or kills processes. PM2
+// confirms its managed writers stopped; ps drains known one-shot writers by
+// observation, without requiring /proc or the Mac identity capability.
+function stopBackupOnly(j) {
+  for (const p of services(j)) if (!['stopped', 'errored'].includes(p.status)) command('pm2', ['stop', p.name]);
+  if (services(j).some(p => !['stopped', 'errored'].includes(p.status) || p.pid > 0)) throw Error('managed services not confirmed stopped');
+  const knownNames = /\/(?:c4-(?:send|db|control|enqueue|queue)|scheduler|database|usage-monitor|core-db-backup-worker)\.(?:js|mjs)(?:\s|$)/;
+  const deadline = Date.now() + 10000;
+  for (;;) {
+    const writers = command('ps', ['-eo', 'pid=,args=']).split('\n')
+      .map(row => row.trim().match(/^(\d+)\s+(.*)$/)).filter(Boolean)
+      .filter(row => ![process.pid, process.ppid].includes(Number(row[1])) && knownNames.test(row[2]) && (row[2].includes(j.skillsDir) || row[2].includes(j.zylosDir)));
+    if (!writers.length) return;
+    if (Date.now() >= deadline) throw Error('known CLI/worker exit grace exhausted');
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
+  }
+}
 function start(j) {
   const original = j.originalServices || [];
   if (!original.length) return;
@@ -733,6 +751,7 @@ module.exports = {
   unmark,
   services,
   stop,
+  stopBackupOnly,
   start,
   verifyServices,
   target,

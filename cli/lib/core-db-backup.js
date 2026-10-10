@@ -21,9 +21,26 @@ export function runCoreDbWorker(payload,{workerPath=WORKER,nodePath=process.exec
 function validComplete(manifest) {
   return manifest?.formatVersion===1&&manifest.function==='core-self-upgrade-db'&&manifest.status==='complete'&&typeof manifest.id==='string'&&Array.isArray(manifest.databases)&&manifest.databases.length===3&&CORE_DATABASES.every(item=>manifest.databases.filter(row=>row.source===item.source).length===1)&&manifest.databases.every(row=>row.status==='missing'||(row.status==='backed_up'&&row.integrityCheck==='ok'&&typeof row.file==='string'&&path.basename(row.file)===row.file&&/^[a-f0-9]{64}$/.test(row.sha256)));
 }
+// Probe only snapshot durability, independently of recovery locks and process
+// identity. Mac fullsync remains mandatory; fsync alone is not a substitute.
+export function probeCoreDbSnapshotSync(zylosDir) {
+  let probe;
+  try {
+    probe=fs.mkdtempSync(path.join(zylosDir,'.snapshot-sync-'));
+    const file=path.join(probe,'probe');
+    const fd=fs.openSync(file,'wx',0o600);
+    try {fs.writeFileSync(fd,'snapshot durability probe\n');maintenance.fsyncFd(fd);} finally {fs.closeSync(fd);}
+    syncDir(probe);syncDir(zylosDir);
+  } catch(error) {
+    throw new Error(`Reliable database snapshot synchronization unavailable; installation was not started: ${error.message}`);
+  } finally {
+    if(probe) fs.rmSync(probe,{recursive:true,force:true});
+  }
+}
 export function createCoreDbSnapshot({zylosDir,transactionId,fromVersion,toVersion,onProgress}) {
   if(!/^[a-zA-Z0-9_-]+$/.test(transactionId)) throw new Error('Invalid snapshot transaction ID');
   const root=path.join(zylosDir,'.backup','db');fs.mkdirSync(root,{recursive:true,mode:0o700});
+  syncDir(path.dirname(root));syncDir(zylosDir);
   const staging=fs.mkdtempSync(path.join(root,'.staging-'));fs.chmodSync(staging,0o700);syncDir(root);
   let manifest;
   try {

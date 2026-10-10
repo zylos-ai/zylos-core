@@ -3,7 +3,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { createRequire } from 'node:module';
 import { spawnSync } from 'node:child_process';
-import { createCoreDbSnapshot, prepareRecoveryDependencies, runCoreDbWorker } from './core-db-backup.js';
+import { createCoreDbSnapshot, prepareRecoveryDependencies, runCoreDbWorker, probeCoreDbSnapshotSync } from './core-db-backup.js';
 const require = createRequire(import.meta.url);
 export const maintenance = require('./upgrade-maintenance.cjs');
 // A live updater must survive replacement of its own installed package too.
@@ -185,6 +185,36 @@ export function beginUpgrade(ctx, {
   ctx.servicesWereRunning = j.originalServices.map(s => s.name);
   ctx.preInstallProtection = true;
   return j;
+}
+export function beginBackupOnly(ctx, {zylosDir, skillsDir}) {
+  zylosDir = fs.realpathSync(zylosDir);
+  const expectedSkills = path.join(zylosDir, '.claude', 'skills');
+  if (fs.realpathSync(skillsDir) !== fs.realpathSync(expectedSkills)) throw Error('skills directory is outside deployment layout');
+  const found = maintenance.discover(zylosDir);
+  if (found.candidates.length || found.diagnostics.length || found.marker) throw Error('unresolved prior upgrade transaction');
+  ctx.backupOnly = true;
+  ctx.backupOnlyRoot = zylosDir;
+  ctx.backupOnlySkillsDir = expectedSkills;
+  ctx.preInstallProtection = false;
+  ctx.protectionUnavailableReason = 'automatic recovery unavailable; a verified preinstall database snapshot is required; database recovery is manual';
+}
+export function prepareBackupOnlyInstall(ctx, deps = {}) {
+  const zylosDir = ctx.backupOnlyRoot, skillsDir = ctx.backupOnlySkillsDir;
+  (deps.probeSnapshotSync ?? probeCoreDbSnapshotSync)(zylosDir);
+  const j = {zylosDir, skillsDir};
+  const services = (deps.services ?? maintenance.services)(j);
+  ctx.servicesWereRunning = services.filter(s => s.status === 'online').map(s => s.name);
+  (deps.stop ?? maintenance.stopBackupOnly)(j);
+  ctx.servicesStopped = [...ctx.servicesWereRunning];
+  const snapshot = (deps.snapshot ?? createCoreDbSnapshot)({
+    zylosDir, transactionId: 'backup-' + Date.now() + '-' + crypto.randomBytes(6).toString('hex'),
+    fromVersion: ctx.from, toVersion: ctx.to
+  });
+  ctx.dbBackupDir = snapshot.dbBackupDir;
+  ctx.dbManifest = snapshot.manifest;
+  ctx.backupWarnings = snapshot.warnings;
+  (deps.verifySnapshot ?? runCoreDbWorker)({action:'verify', zylosDir, dbBackupDir:snapshot.dbBackupDir, manifest:snapshot.manifest});
+  ctx.dbSnapshotVerified = true;
 }
 export function saveProtectedCode(ctx) {
   const maintenance = maintenanceFor(ctx);

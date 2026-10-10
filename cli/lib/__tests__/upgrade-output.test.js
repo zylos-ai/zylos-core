@@ -27,3 +27,16 @@ test('verified preinstall abort and unknown legacy completion do not claim datab
  const unknown=formatSelfUpgradeProtection({rollback:{performed:true}});assert.match(unknown,/attempted=true completed=unknown stage=unknown/);
  const legacy=formatC4Reply('self-upgrade',{success:false,error:'legacy failure',rollback:{performed:true,steps:[{success:true,action:'restore skills'}]}});assert.match(legacy,/Rollback: OK: restore skills/);assert.match(legacy,/completed=true/);
 });
+test('backup-only success reports verified snapshots and unavailable automatic recovery',()=>{
+ const text=formatSelfUpgradeProtection({success:true,preInstallProtection:false,backupOnly:true,automaticRecovery:false,dbSnapshotVerified:true,dbBackupDir:'/fixture/manual/db',manualRecovery:{required:false,dbBackupDir:'/fixture/manual/db',instructions:'Automatic database recovery unavailable; restore manually if upgrade fails.'}});
+ assert.match(text,/verified/i);assert.match(text,/automatic.*(unavailable|disabled)/i);assert.match(text,/manual/i);assert.match(text,/\/fixture\/manual\/db/);
+ assert.doesNotMatch(text,/maintenance remains active/);
+});
+test('backup-only failure reports manual recovery without claiming automatic maintenance isolation',()=>{
+ const text=formatC4Reply('self-upgrade',{success:false,error:'npm failed',preInstallProtection:false,backupOnly:true,automaticRecovery:false,dbSnapshotVerified:true,dbBackupDir:'/fixture/manual/db',manualRecovery:{required:true,dbBackupDir:'/fixture/manual/db',instructions:'Manual recovery required; automatic database recovery is unavailable.'}});
+ assert.match(text,/manual recovery.*(required|yes)/i);assert.match(text,/\/fixture\/manual\/db/);assert.doesNotMatch(text,/maintenance remains active/);
+});
+test('failed backup-only snapshot never reports a verified backup',()=>{
+ const text=formatSelfUpgradeProtection({success:false,preInstallProtection:false,backupOnly:true,automaticRecovery:false,dbSnapshotVerified:false,manualRecovery:{required:false,dbBackupDir:null,instructions:'Snapshot unavailable; installation did not start.'}});
+ assert.match(text,/snapshot.*(unavailable|not verified|failed)/i);assert.doesNotMatch(text,/snapshots?: verified/i);
+});
