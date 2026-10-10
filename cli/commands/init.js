@@ -2303,7 +2303,8 @@ export async function initCommand(args) {
     }
 
     const syncResult = syncCoreSkills();
-    deployUpgradeBootstrap(ZYLOS_DIR);
+    try { deployUpgradeBootstrap(ZYLOS_DIR); }
+    catch (error) { console.warn('Warning: file-only upgrade recovery bootstrap unavailable: ' + error.message); }
     if (!quiet) {
       if (syncResult.updated.length > 0) {
         console.log(`${success('Core Skills updated:')} ${syncResult.updated.join(', ')}`);
@@ -2463,7 +2464,8 @@ export async function initCommand(args) {
 
   // Step 9: Sync Core Skills
   const syncResult = syncCoreSkills();
-  deployUpgradeBootstrap(ZYLOS_DIR);
+  try { deployUpgradeBootstrap(ZYLOS_DIR); }
+    catch (error) { console.warn('Warning: file-only upgrade recovery bootstrap unavailable: ' + error.message); }
   if (!quiet) {
     if (syncResult.error) {
       console.log(`  ${warn(syncResult.error)}`);

@@ -55,7 +55,7 @@ test('legal skills-root symlink resolves while dangling individual target symlin
   assert.equal(fs.lstatSync(path.join(skills,'core')).isSymbolicLink(),true);
   assert.equal(fs.existsSync(path.join(f.dir,'unrelated-missing-directory')),false);
 });
-for(const relative of ['.zylos/upgrade/active.json','.zylos/upgrade/cleanup.json','.backup/self-upgrade','.zylos/upgrade','.zylos','.backup'])test(`dangling ${relative} cannot silently disable maintenance isolation`,t=>{
+for(const relative of ['.zylos/upgrade/active.json','.zylos/upgrade/cleanup.json','.backup/self-upgrade','.backup/self-upgrade-archive','.zylos/upgrade','.zylos','.backup'])test(`dangling ${relative} cannot silently disable maintenance isolation`,t=>{
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'upgrade-discovery-link-'));
   t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
   const file=path.join(root,relative);fs.mkdirSync(path.dirname(file),{recursive:true,mode:0o700});fs.symlinkSync(path.join(root,'missing-target'),file);
@@ -106,4 +106,69 @@ test('active overflow retains bounded candidate records and fails closed after t
   const f=readyFixture(t);for(let n=0;n<32;n++){const id='active-'+n,dir=path.join(f.root,'.backup/self-upgrade',id);fs.mkdirSync(dir,{mode:0o700});m.durable(path.join(dir,'journal.json'),{...f.j,transactionId:id,phase:'restoring'});}
   const found=m.discover(f.root);assert.equal(found.candidates.length,8);assert.equal(found.blocked,true);assert.match(found.diagnostics.join(' '),/active transaction limit exceeded/);assert.throws(()=>m.assertCoreDatabaseAvailable(f.root),/maintenance/);
   const budget=m.discover(f.root,{budget:8});assert.equal(budget.blocked,true);assert.match(budget.diagnostics.join(' '),/scan budget exhausted/);
+});
+
+for (const relative of ['.zylos', '.backup']) test(`legacy ${relative} mode0775 permits DB access without recovery materials`, t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'upgrade-legacy-parent-'));
+  t.after(() => fs.rmSync(root, {recursive:true, force:true}));
+  const parent = path.join(root, relative);
+  fs.mkdirSync(parent, {mode:0o775});
+  fs.chmodSync(parent, 0o775);
+  assert.equal(m.discover(root).blocked, false);
+  assert.doesNotThrow(() => m.assertCoreDatabaseAvailable(root));
+  assert.equal(fs.statSync(parent).mode & 0o777, 0o775);
+});
+for (const relative of ['.zylos/upgrade', '.backup/self-upgrade', '.backup/self-upgrade-archive']) test(`writable recovery ${relative} remains fail closed`, t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'upgrade-writable-material-'));
+  t.after(() => fs.rmSync(root, {recursive:true, force:true}));
+  const material = path.join(root, relative);
+  fs.mkdirSync(material, {recursive:true, mode:0o700});
+  fs.chmodSync(material, 0o775);
+  assert.equal(m.discover(root).blocked, true);
+  assert.throws(() => m.assertCoreDatabaseAvailable(root), /maintenance/);
+});
+test('deployment root alias discovers canonical transaction and marker consistently', t => {
+  const f = readyFixture(t);
+  f.save();
+  m.marker(f.root, f.dir, f.j);
+  const alias = f.root + '-alias';
+  fs.symlinkSync(f.root, alias);
+  t.after(() => fs.unlinkSync(alias));
+  const canonical = m.discover(f.root);
+  assert.deepEqual(m.discover(alias), canonical);
+  assert.doesNotThrow(() => m.assertCoreDatabaseAvailable(alias));
+});
+test('staged initial journal controller follows atomic active publication', t => {
+  const f = readyFixture(t);
+  const staged = path.join(f.root, '.backup/self-upgrade-staging/tx');
+  fs.mkdirSync(path.dirname(staged), {mode:0o700});
+  fs.renameSync(f.dir, staged);
+  m.durable(path.join(staged, 'journal.json'), f.j);
+  const release = m.acquire(staged, {publishedDir:f.dir});
+  fs.renameSync(staged, f.dir);
+  assert.throws(() => m.acquire(f.dir), /still alive/);
+  release();
+  assert.equal(fs.existsSync(path.join(f.dir, 'controller.json')), false);
+});
+test('staged controller rejects publication outside the fixed transaction identity', t => {
+  const f = readyFixture(t);
+  const staged = path.join(f.root, '.backup/self-upgrade-staging/tx');
+  fs.mkdirSync(path.dirname(staged), {mode:0o700});
+  fs.renameSync(f.dir, staged);
+  m.durable(path.join(staged, 'journal.json'), f.j);
+  assert.throws(() => m.acquire(staged, {publishedDir:path.join(f.root, '.backup/self-upgrade/other')}), /invalid controller publication path/);
+  assert.equal(fs.existsSync(path.join(staged, 'controller.json')), false);
+});
+test('staged controller also follows publication completed through verified terminal archival', t => {
+  const f = readyFixture(t);
+  Object.assign(f.j, {phase:'restored_complete', cleanup:{complete:true, markerRemoved:true, servicesRestored:true}, terminalEvidence:{verified:true, kind:'code_data_services'}});
+  const staged = path.join(f.root, '.backup/self-upgrade-staging/tx');
+  fs.mkdirSync(path.dirname(staged), {mode:0o700});
+  fs.renameSync(f.dir, staged);
+  m.durable(path.join(staged, 'journal.json'), f.j);
+  const release = m.acquire(staged, {publishedDir:f.dir});
+  fs.renameSync(staged, f.dir);
+  const archived = m.archive(f.dir, f.j);
+  release();
+  assert.equal(fs.existsSync(path.join(archived, 'controller.json')), false);
 });

@@ -31,7 +31,9 @@ test('readonly WAL backup includes latest committed rows and independent frozen 
  const second=new Database(source);second.prepare('INSERT INTO messages(message) VALUES (?)').run('second-connection');second.close();
  const snapshot=createCoreDbSnapshot({zylosDir:dir,transactionId:'wal'});
  const row=snapshot.manifest.databases[0];assert.equal(row.userVersion,7);
- const db=new Database(path.join(snapshot.dbBackupDir,row.file),{readonly:true});assert.equal(db.prepare('SELECT message FROM messages').get().message,'committed');assert.equal(db.prepare('SELECT count(*) AS count FROM messages').get().count,2);db.close();assert.equal(writer.pragma('user_version',{simple:true}),7);
+ // Inspect a disposable copy: even a readonly WAL-header open creates sidecars.
+ const inspectedCopy=path.join(dir,'inspect-snapshot.db');fs.copyFileSync(path.join(snapshot.dbBackupDir,row.file),inspectedCopy);
+ const db=new Database(inspectedCopy,{readonly:true});assert.equal(db.prepare('SELECT message FROM messages').get().message,'committed');assert.equal(db.prepare('SELECT count(*) AS count FROM messages').get().count,2);db.close();assert.equal(writer.pragma('user_version',{simple:true}),7);
  const transaction=path.join(dir,'transaction');const closure=prepareRecoveryDependencies(transaction,dir);
  for(const item of CORE_DATABASES)fs.unlinkSync(path.join(dir,'.claude/skills',item.owner,'node_modules'));
  assert.equal(runCoreDbWorker({action:'verify',zylosDir:dir,driverPath:closure.driverPath,dbBackupDir:snapshot.dbBackupDir,manifest:snapshot.manifest},closure).databases[0].integrityCheck,'ok');

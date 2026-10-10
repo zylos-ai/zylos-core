@@ -30,11 +30,19 @@ export function assertCoreDatabaseAvailable(root) {
 
 export function inspectLayout(db, name, supported, tables, { allowNew = false, legacyOptional = {}, definitions = {} } = {}) {
   const version = db.pragma('user_version', { simple: true });
-  if (!Number.isInteger(version) || version < 0 || version > supported) {
+  if (!Number.isInteger(version) || version < 0) {
+    throw new Error(`${name}: invalid schema version ${version}; restore compatible code/data`);
+  }
+  if (version > supported) {
     throw new Error(`${name}: schema version ${version} exceeds supported ${supported}; restore compatible code/data`);
   }
-  const names = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all().map(row => row.name);
-  if (!names.length && version === 0 && allowNew) return { version, empty: true };
+  const objects = db.prepare("SELECT name, type FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'").all();
+  const names = objects.filter(row => row.type === 'table').map(row => row.name);
+  if (!names.length && version === 0 && allowNew) {
+    // No user tables does not imply an empty schema (e.g. an unknown view).
+    if (objects.length) throw new Error(`${name}: unsupported objects in empty schema`);
+    return { version, empty: true };
+  }
   for (const [table, columns] of Object.entries(tables)) {
     if (version === 0 && legacyOptional[table] === true && !names.includes(table)) continue;
     const info = db.prepare(`PRAGMA table_info(${table})`).all();
@@ -52,13 +60,22 @@ export function inspectLayout(db, name, supported, tables, { allowNew = false, l
   return { version, empty: false };
 }
 
-export function guardDatabase(db, owner, { isNew = false, readonly = false } = {}) {
-  const initial = owner.inspectSchema(db, { allowNew: isNew });
+export function guardDatabase(db, owner, { readonly = false } = {}) {
+  readonly ||= db.readonly;
+  // Creation can be interrupted after SQLite opens the file, or another
+  // initializer can create it first. The current contents, not existsSync
+  // before opening, determine whether the owner may initialize it.
+  const allowNew = !readonly && owner.supportsNewDatabase === true;
+  const initial = owner.inspectSchema(db, { allowNew });
+  if (initial.empty && db.name !== ':memory:' && db.name !== '') {
+    const stat = fs.lstatSync(db.name);
+    if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('Unsafe empty database file');
+  }
   if (readonly || initial.version === owner.SUPPORTED_SCHEMA_VERSION) return initial;
   db.pragma('busy_timeout = 5000');
   db.exec('BEGIN IMMEDIATE');
   try {
-    const current = owner.inspectSchema(db, { allowNew: isNew });
+    const current = owner.inspectSchema(db, { allowNew });
     if (current.version !== owner.SUPPORTED_SCHEMA_VERSION) {
       owner.migrate(db, { isNew: current.empty });
       owner.inspectSchema(db);
@@ -67,7 +84,10 @@ export function guardDatabase(db, owner, { isNew = false, readonly = false } = {
     }
     db.exec('COMMIT');
   } catch (error) {
-    db.exec('ROLLBACK');
+    if (db.inTransaction) {
+      try { db.exec('ROLLBACK'); }
+      catch (rollbackError) { error.rollbackError = rollbackError; }
+    }
     throw error;
   }
   return owner.inspectSchema(db);

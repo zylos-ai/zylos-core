@@ -39,3 +39,11 @@ test('launch intent without execution only clears after launcher death and absen
  j.finalizerLaunchIntent.parent={pid:2147483647,boot:'old-boot',start:'0'};
  assert.equal(f.quiesce(dir,j).confirmed,true);
 });
+
+test('returned launcher can confirm its own failed child launch without treating itself as a live child', t => {
+  const {dir,m,f}=fixture(t),j={installerLaunchIntent:{nonce:'e'.repeat(32),parent:m.identity()}};
+  assert.equal(f.quiesce(dir,j,{kind:'installer'}).confirmed,false);
+  assert.equal(f.quiesce(dir,j,{kind:'installer',launcherReturned:true}).confirmed,true);
+  j.installerLaunchIntent.parent={...m.identity(),start:'not-the-caller'};
+  assert.equal(f.quiesce(dir,j,{kind:'installer',launcherReturned:true}).confirmed,true);
+});

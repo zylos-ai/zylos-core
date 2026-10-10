@@ -4,7 +4,7 @@ import Database from 'better-sqlite3';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { guardDatabase, preflightDatabase, assertCoreDatabaseAvailable } from '../sqlite-schema.js';
 import * as c4 from '../c4-schema.js';
@@ -40,8 +40,8 @@ test('future versions are rejected before write pragmas and migration',t=>{
  const root=fixture(t),file=path.join(root,'future.db');const db=new Database(file);db.exec(sql);db.pragma('user_version=2');db.close();const before=fs.readFileSync(file);
  const actual=new Database(file);assert.throws(()=>guardDatabase(actual,{...c4,migrate(){assert.fail('migration');}}),/version 2/);actual.close();assert.deepEqual(fs.readFileSync(file),before);assert.equal(fs.existsSync(file+'-wal'),false);
 });
-test('unknown and empty existing layouts never receive a stamp',()=>{
- const db=new Database(':memory:');assert.throws(()=>guardDatabase(db,{...wc,migrate(){assert.fail('migration');}}),/missing/);db.exec('CREATE TABLE unknown(x)');assert.throws(()=>wc.inspectSchema(db),/missing/);assert.equal(db.pragma('user_version',{simple:true}),0);db.close();
+test('unknown layouts and readonly empty layouts never receive a stamp',()=>{
+ const db=new Database(':memory:');assert.throws(()=>guardDatabase(db,{...wc,migrate(){assert.fail('migration');}},{readonly:true}),/missing/);db.exec('CREATE TABLE unknown(x)');assert.throws(()=>wc.inspectSchema(db),/missing/);assert.equal(db.pragma('user_version',{simple:true}),0);db.close();
 });
 test('failure rolls back schema, data and version; readonly inspection never migrates',()=>{
  const db=new Database(':memory:');db.exec(sql);
@@ -87,4 +87,64 @@ test('web-console rejects future C4 before stale session cleanup',t=>{
  const c4db=new Database(path.join(root,'comm-bridge/c4.db'));c4db.pragma('user_version=2');c4db.close();
  const child=spawnSync(process.execPath,['skills/web-console/scripts/server.js'],{cwd:repo,env:{...process.env,ZYLOS_DIR:root},encoding:'utf8',timeout:5000});assert.notEqual(child.status,0);assert.match(child.stderr,/schema version 2/);
  const wcdb=new Database(path.join(root,'web-console/web-console.db'),{readonly:true});assert.equal(wcdb.prepare('SELECT COUNT(*) AS n FROM sessions').get().n,1);wcdb.close();
+});
+
+function childModule(root, code) {
+ const child=spawn(process.execPath,['--input-type=module','-e',code],{cwd:repo,env:{...process.env,ZYLOS_DIR:root},stdio:['ignore','pipe','pipe']});
+ let stderr='';child.stderr.on('data',data=>stderr+=data);
+ const done=new Promise(resolve=>child.on('exit',(code,signal)=>resolve({code,signal,stderr})));
+ return {child,done};
+}
+async function waitFile(file) {
+ const deadline=Date.now()+5000;
+ while(!fs.existsSync(file)) { assert.ok(Date.now()<deadline,`Timed out waiting for ${file}`);await new Promise(resolve=>setTimeout(resolve,10)); }
+}
+test('all deployed owners recover existing zero-byte and initialized empty version-zero files',t=>{
+ for(const header of [false,true]) {
+  const root=fixture(t);
+  for(const relative of ['comm-bridge/c4.db','scheduler/scheduler.db','web-console/web-console.db']) {
+   const file=path.join(root,relative);fs.mkdirSync(path.dirname(file),{recursive:true});
+   if(header) {const db=new Database(file);db.exec('VACUUM');db.close();assert.ok(fs.statSync(file).size>0);} else fs.writeFileSync(file,'');
+  }
+  run(root, `import {getDb,close} from './skills/comm-bridge/scripts/c4-db.js';import {getDb as scheduler} from './skills/scheduler/scripts/database.js';import {openDb} from './skills/web-console/scripts/db.js';getDb();close();scheduler().close();openDb().close();`);
+  const db=new Database(path.join(root,'comm-bridge/c4.db'));assert.equal(c4.inspectSchema(db).version,1);assert.equal(db.prepare('SELECT COUNT(*) AS n FROM checkpoints').get().n,1);db.close();
+ }
+});
+test('process death during initial migration leaves an empty database recoverable by the real owner',async t=>{
+ const root=fixture(t),file=path.join(root,'comm-bridge/c4.db'),ready=path.join(root,'ready');fs.mkdirSync(path.dirname(file));
+ const running=childModule(root, `import fs from 'node:fs';import Database from './skills/comm-bridge/node_modules/better-sqlite3/lib/index.js';import * as owner from './skills/comm-bridge/scripts/c4-schema.js';import {guardDatabase} from './skills/comm-bridge/scripts/sqlite-schema.js';import {migrateSchema} from './skills/comm-bridge/scripts/c4-db.js';const db=new Database(${JSON.stringify(file)});guardDatabase(db,{...owner,migrate(connection,options){migrateSchema(connection,options);fs.writeFileSync(${JSON.stringify(ready)},'ready');Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0);}});`);
+ t.after(()=>running.child.kill('SIGKILL'));await waitFile(ready);running.child.kill('SIGKILL');assert.equal((await running.done).signal,'SIGKILL');
+ const interrupted=new Database(file);assert.equal(interrupted.pragma('user_version',{simple:true}),0);assert.equal(interrupted.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE type='table'").get().n,0);interrupted.close();
+ run(root, `import {getDb,close} from './skills/comm-bridge/scripts/c4-db.js';getDb();close();`);
+ const recovered=new Database(file);assert.equal(c4.inspectSchema(recovered).version,1);assert.equal(recovered.prepare('SELECT COUNT(*) AS n FROM checkpoints').get().n,1);recovered.close();
+});
+test('two processes initialize the same existing empty database under one writer lock',async t=>{
+ const root=fixture(t),file=path.join(root,'db'),firstReady=path.join(root,'first'),secondReady=path.join(root,'second'),release=path.join(root,'release'),migrations=path.join(root,'migrations');fs.writeFileSync(file,'');
+ const imports=`import fs from 'node:fs';import Database from './skills/comm-bridge/node_modules/better-sqlite3/lib/index.js';import * as owner from './skills/comm-bridge/scripts/c4-schema.js';import {guardDatabase} from './skills/comm-bridge/scripts/sqlite-schema.js';import {migrateSchema} from './skills/comm-bridge/scripts/c4-db.js';const db=new Database(${JSON.stringify(file)});`;
+ const first=childModule(root,imports+`guardDatabase(db,{...owner,migrate(connection,options){fs.writeFileSync(${JSON.stringify(firstReady)},'ready');while(!fs.existsSync(${JSON.stringify(release)}))Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,10);fs.appendFileSync(${JSON.stringify(migrations)},'1');migrateSchema(connection,options);}});db.close();`);
+ t.after(()=>first.child.kill('SIGKILL'));await waitFile(firstReady);
+ const second=childModule(root,imports+`let inspections=0;guardDatabase(db,{...owner,inspectSchema(connection,options){const result=owner.inspectSchema(connection,options);if(++inspections===1){if(!result.empty)throw Error('expected empty schema before lock');fs.writeFileSync(${JSON.stringify(secondReady)},'ready');}return result;},migrate(connection,options){fs.appendFileSync(${JSON.stringify(migrations)},'2');migrateSchema(connection,options);}});db.close();`);
+ t.after(()=>second.child.kill('SIGKILL'));await waitFile(secondReady);fs.writeFileSync(release,'go');
+ for(const result of await Promise.all([first.done,second.done]))assert.equal(result.code,0,result.stderr);
+ assert.equal(fs.readFileSync(migrations,'utf8'),'1');const db=new Database(file);assert.equal(c4.inspectSchema(db).version,1);assert.equal(db.prepare('SELECT COUNT(*) AS n FROM checkpoints').get().n,1);db.close();
+});
+test('empty-schema allowance rejects views and readonly preflight never initializes existing empty files',t=>{
+ const root=fixture(t),file=path.join(root,'empty');fs.writeFileSync(file,'');const before=fs.readFileSync(file);
+ assert.throws(()=>preflightDatabase(Database,file,wc,{allowMissing:true}),/missing/);assert.deepEqual(fs.readFileSync(file),before);assert.equal(fs.existsSync(file+'-wal'),false);
+ const db=new Database(':memory:');db.exec('CREATE VIEW unknown AS SELECT 1 AS x');assert.throws(()=>guardDatabase(db,{...wc,migrate(){assert.fail('migration');}}),/unsupported objects/);assert.equal(db.pragma('user_version',{simple:true}),0);db.close();
+});
+test('empty initialization requires owner capability and a regular file; malformed files remain unchanged',t=>{
+ const db=new Database(':memory:');assert.throws(()=>guardDatabase(db,{...wc,supportsNewDatabase:false,migrate(){assert.fail('migration');}}),/missing/);db.close();
+ const root=fixture(t),target=path.join(root,'target'),link=path.join(root,'link');fs.writeFileSync(target,'');fs.symlinkSync(target,link);const linked=new Database(link);assert.throws(()=>guardDatabase(linked,{...wc,migrate(){assert.fail('migration');}}),/Unsafe empty database/);linked.close();assert.equal(fs.statSync(target).size,0);
+ const file=path.join(root,'malformed');fs.writeFileSync(file,'not a SQLite database');const before=fs.readFileSync(file);const malformed=new Database(file);assert.throws(()=>guardDatabase(malformed,{...wc,migrate(){assert.fail('migration');}}),/not a database/);malformed.close();assert.deepEqual(fs.readFileSync(file),before);
+});
+test('SQLite automatic transaction rollback preserves the original migration error',()=>{
+ const db=new Database(':memory:');db.exec(sql);
+ assert.throws(()=>guardDatabase(db,{...c4,migrate(connection){connection.exec('CREATE TABLE unique_migration(x INTEGER UNIQUE); INSERT INTO unique_migration VALUES(1); INSERT OR ROLLBACK INTO unique_migration VALUES(1);');}}),error=>error.code==='SQLITE_CONSTRAINT_UNIQUE' && /UNIQUE constraint failed/.test(error.message));
+ assert.equal(db.inTransaction,false);assert.equal(db.prepare("SELECT name FROM sqlite_master WHERE name='unique_migration'").get(),undefined);assert.equal(db.pragma('user_version',{simple:true}),0);db.close();
+});
+test('invalid schema versions are distinguished from future supported-range versions',()=>{
+ const db=new Database(':memory:');db.pragma('user_version = -1');assert.throws(()=>wc.inspectSchema(db),/invalid schema version -1/);db.close();
+ for(const version of [1.5,undefined,NaN])assert.throws(()=>wc.inspectSchema({pragma(){return version;}}),/invalid schema version/);
+ const future=new Database(':memory:');future.pragma('user_version = 2');assert.throws(()=>wc.inspectSchema(future),/schema version 2 exceeds supported 1/);future.close();
 });

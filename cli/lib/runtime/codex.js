@@ -284,12 +284,13 @@ export class CodexAdapter extends RuntimeAdapter {
     // Internal lifecycle sentinel — stateless, covers both first start and
     // resume; sentinel form so the kick is never mistaken for a human turn
     // (#743/#745). See kick-prompt.js.
-    const kickPrompt = upgradeStartupPrompt(ZYLOS_DIR) || buildKickPrompt();
+    const recoveryPrompt = upgradeStartupPrompt(ZYLOS_DIR);
+    const kickPrompt = recoveryPrompt || buildKickPrompt();
 
     if (tmuxHasSession(SESSION)) {
       // Existing tmux session — start a fresh Codex process with kick prompt
       // to trigger SessionStart hook immediately.
-      const cmd = `cd "${ZYLOS_DIR}"; ${codexCmd} ${shellArgument(kickPrompt)}; ${exitLogSnippet}`;
+      const cmd = `cd "${ZYLOS_DIR}"; ${recoveryPrompt ? 'ZYLOS_UPGRADE_PROMPT_DELIVERED=1 ' : ''}${codexCmd} ${shellArgument(kickPrompt)}; ${exitLogSnippet}`;
       await this.sendMessage(cmd);
     } else {
       // New session — launcher pipeline

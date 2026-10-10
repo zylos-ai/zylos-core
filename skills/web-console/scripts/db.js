@@ -15,11 +15,10 @@ const UPLOAD_TTL_MS = 30 * 60 * 1000;
 
 function openDb(dbPath = DB_PATH) {
   assertCoreDatabaseAvailable(ZYLOS_DIR);
-  const isNew = !fs.existsSync(dbPath);
   fs.mkdirSync(path.dirname(dbPath), { recursive: true });
   const db = new Database(dbPath);
   try {
-    guardDatabase(db, { ...schema, migrate: initSchema }, { isNew });
+    guardDatabase(db, { ...schema, migrate: initSchema });
     db.pragma('journal_mode = WAL');
     return db;
   } catch (error) { db.close(); throw error; }

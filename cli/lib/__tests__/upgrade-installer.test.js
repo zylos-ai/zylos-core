@@ -42,3 +42,13 @@ test('runtime-only launcher death leaves installer identifiable and blocks until
 test('trusted npm resolver rejects a writable or arbitrary shell wrapper',t=>{
  const f=fixture(t,'// fixture'),bin=path.join(f.root,'bin');fs.mkdirSync(bin);fs.writeFileSync(path.join(bin,'npm'),'#!/bin/sh\nexit 0\n',{mode:0o700});const prior=process.env.PATH;try{process.env.PATH=bin;assert.throws(resolveProtectedNpmCli,/trusted npm-cli/);fs.unlinkSync(path.join(bin,'npm'));fs.symlinkSync(f.npmCli,path.join(bin,'npm'));assert.equal(resolveProtectedNpmCli(),f.npmCli);fs.chmodSync(f.npmCli,0o666);assert.throws(resolveProtectedNpmCli,/trusted npm-cli/);}finally{process.env.PATH=prior;}
 });
+
+test('protected installer canonicalizes a symlinked work directory before launch intent', t => {
+  const f=fixture(t,"process.stdout.write(process.cwd());"),alias=f.root+'-alias';
+  fs.symlinkSync(f.root,alias);
+  t.after(()=>fs.unlinkSync(alias));
+  const output=runProtectedInstaller(f.ctx,{stage:'pack',npmCli:f.npmCli,args:[],cwd:alias});
+  assert.equal(output,f.root);
+  assert.equal(f.read().installerLaunchIntent.cwd,f.root);
+  assert.equal(f.read().installerExitConfirmed,true);
+});

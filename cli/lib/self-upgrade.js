@@ -42,7 +42,7 @@ import { getCoreEcosystemPath, restartManagedProcess } from './pm2.js';
 
 import { createRequire as createFinalizerRequire } from 'node:module';
 const finalizerRequire=createFinalizerRequire(import.meta.url);
-function requireFinalizerExit(dir,j,terminate){return finalizerRequire(path.join(dir,'finalizer.cjs')).quiesce(dir,j,{terminate});}
+function requireFinalizerExit(dir,j,terminate){return finalizerRequire(path.join(dir,'finalizer.cjs')).quiesce(dir,j,{terminate,launcherReturned:true});}
 
 import { beginUpgrade, saveProtectedCode, prepareProtectedInstall, markInstallationIntent, recovery, protectedDataReady, protectedSuccess, maintenance } from './upgrade-protection.js';
 
@@ -503,7 +503,7 @@ function createContext({ tempDir, newVersion, mode } = {}) {
 
   return {
     coreDir,
-    tempDir: tempDir || null,
+    tempDir: tempDir && fs.existsSync(tempDir) ? fs.realpathSync(tempDir) : tempDir || null,
     newVersion: newVersion || null,
     mode: mode || 'merge',
     // State tracking
@@ -646,6 +646,7 @@ export function resolveProtectedNpmCli() {
   throw Error('trusted npm-cli.js entry is unavailable');
 }
 export function runProtectedInstaller(ctx,{stage,npmCli,args,cwd,timeout=180000}) {
+  cwd=fs.realpathSync(cwd);
   const dir=ctx.transactionDir,j=maintenance.read(path.join(dir,'journal.json')),nonce=crypto.randomBytes(16).toString('hex');
   maintenance.validateDescriptor(dir,j,maintenance.read(path.join(dir,'descriptor.json')));
   j.installerHistory ||= [];
@@ -654,7 +655,7 @@ export function runProtectedInstaller(ctx,{stage,npmCli,args,cwd,timeout=180000}
   ctx.journal=j;
   const result=spawnSync(process.execPath,[path.join(dir,'finalizer.cjs'),'--installer',npmCli,JSON.stringify(args),dir,nonce],{cwd,env:{...process.env,ZYLOS_SKIP_POSTINSTALL:'1'},encoding:'utf8',stdio:['ignore','pipe','pipe'],detached:true,timeout,killSignal:'SIGKILL',maxBuffer:4*1024*1024});
   const saved=maintenance.read(path.join(dir,'journal.json'));
-  let verified;try{verified=finalizerRequire(path.join(dir,'finalizer.cjs')).quiesce(dir,saved,{terminate:true,kind:'installer'});}catch(error){verified={confirmed:false,error:error.message};}
+  let verified;try{verified=finalizerRequire(path.join(dir,'finalizer.cjs')).quiesce(dir,saved,{terminate:true,kind:'installer',launcherReturned:true});}catch(error){verified={confirmed:false,error:error.message};}
   maintenance.update(dir,saved,{installerExitConfirmed:verified.confirmed,installerExitUnconfirmed:!verified.confirmed});ctx.journal=saved;
   if(!verified.confirmed)throw Error(verified.error||'installer process exit unconfirmed');
   if(result.error||result.status!==0){const error=Error(result.error?.message||String(result.stderr||'').trim()||'npm '+stage+' exited '+result.status);error.stderr=String(result.stderr||'');throw error;}
@@ -1300,6 +1301,7 @@ export function step11_startCoreServices(ctx, deps = {}) {
   if (ecosystemTemplateSrc && fsApi.existsSync(ecosystemTemplateSrc)) {
     try {
       fsApi.mkdirSync(pm2Dir, { recursive: true });
+      if(ctx.preInstallProtection)ctx.journal=maintenance.read(path.join(ctx.transactionDir,'journal.json'));
       if(ctx.preInstallProtection&&!ctx.journal.initialIdentity.ecosystemHash){
         if(fsApi.existsSync(ecosystemDest))throw Error('originally missing ecosystem appeared without provenance');
         const staging=path.join(ctx.transactionDir,'new-ecosystem.cjs'),intendedHash=maintenance.hash(ecosystemTemplateSrc);
@@ -1552,6 +1554,7 @@ function buildSelfUpgradeResult(ctx, failedStep, rollbackResults = null, rollbac
     dbBackupDir: ctx.dbBackupDir || null,
     databases: ctx.dbManifest?.databases || null,
     preInstallProtection: Boolean(ctx.preInstallProtection),
+    bootCapability: ctx.bootCapability || ctx.journal?.bootCapability || null,
     transactionDir: ctx.transactionDir || null,
     archiveDir: ctx.archiveDir || null,
     cleanupWarnings: ctx.cleanupWarnings || [],
@@ -1574,6 +1577,7 @@ export function createFinalizeState(ctx) {
       coreManifest: ctx.coreManifest,
       dbBackupDir: ctx.dbBackupDir,
       dbManifest:ctx.dbManifest,
+      bootCapability:ctx.bootCapability,
     } : {}),
     tempDir: ctx.tempDir,
     backupDir: ctx.backupDir,
@@ -1604,6 +1608,7 @@ function runInstalledFinalizer(ctx) {
   let finalizerArgs=[finalizeScript,statePath];
   if(ctx.preInstallProtection){
     const nonce=crypto.randomBytes(16).toString('hex');
+    ctx.journal=maintenance.read(path.join(ctx.transactionDir,'journal.json'));
     maintenance.update(ctx.transactionDir,ctx.journal,{finalizerLaunchIntent:{nonce,parent:maintenance.identity()}});
     finalizerArgs=[path.join(ctx.transactionDir,'finalizer.cjs'),finalizeScript,statePath,ctx.transactionDir,nonce];
   }
@@ -1665,7 +1670,7 @@ export function runSelfUpgradeFinalize(state = {}, deps = {}) {
     mode: state.mode,
   });
   ctx.preInstallProtection = state.schemaVersion===2 && state.preInstallProtection===true;
-  ctx.transactionDir=state.transactionDir;ctx.transactionId=state.transactionId;ctx.coreManifest=state.coreManifest;ctx.dbBackupDir=state.dbBackupDir;ctx.dbManifest=state.dbManifest;
+  ctx.transactionDir=state.transactionDir;ctx.transactionId=state.transactionId;ctx.coreManifest=state.coreManifest;ctx.dbBackupDir=state.dbBackupDir;ctx.dbManifest=state.dbManifest;ctx.bootCapability=state.bootCapability;
   if(ctx.preInstallProtection){
     try {ctx.journal=maintenance.transaction(ZYLOS_DIR,ctx.transactionDir);if(!ctx.journal.installationIntent)throw Error('finalizer without durable installation intent');}
     catch(error){return {success:false,error:error.message,rollback:{attempted:false,completed:false,performed:false},recovery_required:true};}
@@ -1682,7 +1687,7 @@ export function runSelfUpgradeFinalize(state = {}, deps = {}) {
   for (const stepFn of steps) {
     let result;
     try {if(ctx.preInstallProtection && stepFn===step11_startCoreServices)protectedDataReady(ctx);result=stepFn(ctx);}
-    catch(error){result={step:11,name:'offline_preflight',status:'failed',error:error.message};}
+    catch(error){const ordinal=POST_INSTALL_STEPS.indexOf(stepFn);result={step:ordinal>=0?ordinal+5:null,name:stepFn.name||'finalizer_step',status:'failed',error:error.message};}
     result.total = total;
     ctx.steps.push(result);
 
@@ -1720,7 +1725,7 @@ export function runSelfUpgrade({ tempDir, newVersion, mode, onStep } = {}, deps 
   }
   ctx.to = newVersion || null;
   if(!deps.preInstallSteps) {
-    try {beginUpgrade(ctx,{zylosDir:deps.zylosDir ?? ZYLOS_DIR,skillsDir:deps.skillsDir ?? SKILLS_DIR});}
+    try {beginUpgrade(ctx,{zylosDir:deps.zylosDir ?? ZYLOS_DIR,skillsDir:deps.skillsDir ?? SKILLS_DIR},deps.step3);}
     catch(error){return {action:'self_upgrade',success:false,error:error.message,preInstallProtection:false,rollback:{attempted:false,completed:false,performed:false},recovery_required:true};}
   }
 

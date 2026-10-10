@@ -5,7 +5,7 @@ import {execFileSync} from 'node:child_process';
 import {createRequire} from 'node:module';
 import {ZYLOS_DIR} from '../lib/config.js';
 import {deployUpgradeBootstrap,maintenance} from '../lib/upgrade-protection.js';
-import {verifyUpgradeBootCapability,validateRuntimeNetworkEnv} from '../lib/upgrade-boot-capability.js';
+import {verifyUpgradeBootCapability,validateRuntimeNetworkEnv,validateUpgradeRuntimePath} from '../lib/upgrade-boot-capability.js';
 const require=createRequire(import.meta.url);
 function literal(value){
  if(/[\0\r\n$%\\"]/.test(value))throw Error('unsupported literal systemd path');
@@ -17,7 +17,7 @@ export function recoveryConfiguration({root=ZYLOS_DIR,runtime,command,home=os.ho
  const st=fs.statSync(fs.realpathSync(command));
  if(!st.isFile()||!(st.mode&0o111)||(st.mode&0o022)||![0,process.getuid?.()].includes(st.uid))throw Error('unsafe runtime executable');
  const bootstrap=path.join(root,'.zylos','upgrade','bootstrap.cjs');
- const capability={formatVersion:1,supervisor:{kind:'systemd',scope:'user',unit:'zylos-upgrade-recovery.service'},runtime:{kind:runtime,command,cwd:root,args:runtime==='codex'?['--dangerously-bypass-approvals-and-sandbox']:['--dangerously-skip-permissions'],...(networkEnv?{networkEnv:validateRuntimeNetworkEnv(networkEnv)}:{})}};
+ const capability={formatVersion:1,supervisor:{kind:'systemd',scope:'user',unit:'zylos-upgrade-recovery.service'},runtime:{kind:runtime,command,cwd:root,path:validateUpgradeRuntimePath(process.env.PATH || '/usr/local/bin:/usr/bin:/bin'),args:runtime==='codex'?['--dangerously-bypass-approvals-and-sandbox']:['--dangerously-skip-permissions'],...(networkEnv?{networkEnv:validateRuntimeNetworkEnv(networkEnv)}:{})}};
  const unit='[Unit]\nDescription=Zylos file-only upgrade recovery\n\n[Service]\nType=simple\nExecStart='+[nodePath,bootstrap,'--root',root,'--launch-runtime'].map(literal).join(' ')+'\nRestart=always\nRestartSec=2\n\n[Install]\nWantedBy=default.target\n';
  return {capability,unit,unitPath:path.join(home,'.config','systemd','user','zylos-upgrade-recovery.service'),capabilityPath:path.join(root,'.zylos','upgrade','capability.json'),root};
 }

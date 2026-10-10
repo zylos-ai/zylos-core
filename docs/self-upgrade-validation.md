@@ -1,8 +1,8 @@
 # Core #803 implementation validation
 
-The final implementation was checked against [the approved C01–C09/A01–A30 plan](https://github.com/zylos-ai/zylos-internal-docs/blob/764bee7d8a98025bea3ff7d54f0c76e0a985fbae/core/self-upgrade/self-upgrade-protection-plan.md), based on core commit `fc66226e537d37ca35f108b940eecba6ce2bca86`. An independent pass covered maintenance, recovery, snapshots, schema guards, boot/runtime handoff, child-process containment, output and adoption.
+The final implementation was checked against [the approved C01–C09/A01–A30 plan](https://github.com/zylos-ai/zylos-internal-docs/blob/764bee7d8a98025bea3ff7d54f0c76e0a985fbae/core/self-upgrade/self-upgrade-protection-plan.md). The approved content revision is `db6eadac` (merged without content changes at internal-docs `764bee7d`). Validation is based on core commit `fc66226e537d37ca35f108b940eecba6ce2bca86`. An independent pass covered maintenance, recovery, snapshots, schema guards, boot/runtime handoff, child-process containment, output and adoption.
 
-Final regression results are recorded in [test-summary.json](evidence/core803/test-summary.json):
+Original delivery regression results are recorded in [test-summary.json](evidence/core803/test-summary.json):
 
 | Suite | Result |
 |---|---|
@@ -13,7 +13,7 @@ Final regression results are recorded in [test-summary.json](evidence/core803/te
 | Web-console owner | 30/30 passed |
 | Shared schema and actual owner entries | 21/21 passed |
 
-`npm test --ignore-scripts` skips installation lifecycle hooks. Tests use isolated temporary databases and service fixtures. The unchanged C4 send CLI and its tests have the same three two-argument stdin failures at baseline. `git diff --check` passed. The [native reboot evidence](evidence/core803/native-recovery.json) pins all six tested recovery-module hashes to this source.
+`npm test --ignore-scripts` skips installation lifecycle hooks. Tests use isolated temporary databases and service fixtures. The unchanged C4 send CLI and its tests have the same three two-argument stdin failures at baseline. `git diff --check` passed. The [native reboot evidence](evidence/core803/native-recovery.json) pins the six tested module hashes to the original PR head `6a7fc19`. The subsequent review revision changes those modules; the historical real-boot result remains evidence for that earlier source and is not an exact-source reboot certification of the review revision.
 
 ## Findings and disposition
 
@@ -26,7 +26,11 @@ All concrete findings identified in this final pass are fixed, with focused regr
 5. **Shared owner fallback used weaker phase rules when stable maintenance was absent.** The duplicated permissive classifier was removed. Missing stable maintenance plus any active marker/cleanup/transaction materials fails closed, including dangling paths and apparent completed terminals. First adoption with no materials (or an empty active root) still permits initialization. Actual C4, scheduler and web-console openers are exercised and create no DB on denial.
 6. **Explicit new-finalizer failure after READY could retry into upgrade success instead of compensating.** Parent `recovery(ctx)` is the explicit failed-upgrade path. It now records isolation and a restoring continuation before strict stop; an unconfirmed finalizer exit preserves that restoring destination. Direct bootstrap interruption resume remains validation-only, and restored READY/verified terminals never compensate again. An actual child publishes READY and removes its marker, returns failure, and the real saved runner restores the original SQLite logical hash with `restored_complete`.
 
-The last fix touches `upgrade-protection.js`, not the six independently saved VM modules. The coordinator subsequently completed the exact final repository regression after that fix. No unresolved concrete code blocker was found in this bounded audit.
+The original delivery audit did not find these additional normal-installation and startup defects. The review revision records and fixes them separately below; the original audit conclusion is historical and does not close the later review.
+
+## Review round 1 revision
+
+The review disposition and regression evidence are recorded in [review-round1.md](evidence/core803/review-round1.md). This revision fixes B1–B4 and M1–M9, including ordinary installations with shared metadata parents, zero-byte databases, and no declared boot supervisor. Existing recovery-owned materials still fail closed on unsafe ownership, permissions, links or inconsistent identity.
 
 ## Focused validation
 
@@ -60,7 +64,7 @@ This is an evidence map, not a claim that every environmental fault permutation 
 | A06 | Legal skills-root alias, live/dangling individual skill links, nested metadata links and provenance rejection exercised. Recovery never invokes legacy whole-root restoration. |
 | A07 | Output tests cover JSON/human/C4 format/status/compensation warnings; actual terminal cleanup/reentry fixtures preserve snapshot/rescue/journal and retain cleanup failures. |
 | A08 | Actual deployed three-owner initialization/reopen tests and known C4 legacy migration confirm one stamp/migration and preserved records. |
-| A09 | Future versions/unknown or empty existing layout reject; injected DDL/data/version failure rolls back atomically. |
+| A09 | Future versions/unknown nonempty layouts reject; empty schema-0 databases initialize under a write transaction; injected DDL/data/version failure rolls back atomically. |
 | A10 | Connection re-read/concurrent-initializer simulation, monitor fail-closed pending work, and actual web-console future-C4-before-session-cleanup test. Actual daemon/CLI/owner shared helper imports inspected. |
 | A11 | v1 serialization/legacy failure contracts remain; v2 actual old child receives schema2/DB/core state. Honest first-adoption behavior and docs reviewed. |
 | A12 | Actual three-DB/code/ecosystem compensation fixtures; actual old-child rejection and new-child post-READY failure run through parent and saved runner. Upgrade still reports failure independently of completed compensation. |
@@ -69,7 +73,7 @@ This is an evidence map, not a claim that every environmental fault permutation 
 | A15 | Actual restored owner schema/native dependencies checked before data-ready and service validation. Old owner lacking pure inspector fails explicitly; CLI remains newer by design. |
 | A16 | All four READY phases resume validation; restored failure isolates without another replacement; new failure isolates and compensates. Last parent explicit failure now also compensates. |
 | A17 | Partial-skill startup hook imports no normal C4/registry/formatter; builtin file prompts actively launch despite malformed journal. Isolated native boots observe C4 denial; normal-channel notification continuity is not promised. |
-| A18 | Sanitized [native-recovery.json](evidence/core803/native-recovery.json): actual persisted-auth Codex/model, systemd PID1, same disk/two distinct boots, automatic status/resume, poweroff after physical C4 rename before intent completion, all three DB/core/rescue hashes restored, no half-start. The evidence verifies exact final six source hashes. Guest originalServices is empty; this does not prove nonempty production PM2 restart behavior. |
+| A18 | Sanitized [native-recovery.json](evidence/core803/native-recovery.json): actual persisted-auth Codex/model, systemd PID1, same disk/two distinct boots, automatic status/resume, poweroff after physical C4 rename before intent completion, all three DB/core/rescue hashes restored, no half-start. The evidence verifies six source hashes at the original head `6a7fc19`; it does not certify the later review revision. Guest originalServices is empty; this does not prove nonempty production PM2 restart behavior. |
 | A19 | Descriptor/layout/hash/Node redirects and closure tampering reject; malformed journals/markers, missing marker, conflicting/multiple materials and dangling fixed paths retain diagnostics/isolation. Genuine native malformed-journal boot evidence is separate. |
 | A20 | Actual controller race/crash/flock tests reject duplicate ownership/PID reuse and support archived release; bootstrap live-runtime signature deduplication and partial-skill file-first prompt tests. |
 | A21 | Actual child rejects schema2 after contained installation begins; parent independent runner restores original SQLite state, returns upgrade failure with completed compensation. |

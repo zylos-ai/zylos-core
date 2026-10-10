@@ -124,7 +124,8 @@ function main() {
     // Fresh install or manual `npm install -g` — sync skills
     // During self-upgrade, step 5 handles skill sync with smart merge
     syncSkills();
-    deployUpgradeBootstrap(ZYLOS_DIR);
+    try { deployUpgradeBootstrap(ZYLOS_DIR); }
+    catch (error) { console.warn('Warning: file-only upgrade recovery bootstrap unavailable: ' + error.message); }
   }
 
   // Settings sync ALWAYS runs when zylos is initialized.

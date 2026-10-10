@@ -15,7 +15,7 @@ function fixture() {
   fs.writeFileSync(bootstrapPath, '// fixture bootstrap\n', { mode: 0o600 });
   const command = path.join(root, 'codex');
   fs.symlinkSync(process.execPath, command);
-  const config = { formatVersion: 1, supervisor: { kind: 'systemd', unit: 'zylos-upgrade-recovery.service', scope: 'system' }, runtime: { kind: 'codex', command, args: [], cwd: root } };
+  const config = { formatVersion: 1, supervisor: { kind: 'systemd', unit: 'zylos-upgrade-recovery.service', scope: 'system' }, runtime: { kind: 'codex', command, args: [], cwd: root, path: process.env.PATH } };
   const configPath = path.join(stable, 'capability.json');
   fs.writeFileSync(configPath, JSON.stringify(config), { mode: 0o600 });
   const unitPath = path.join(units, config.supervisor.unit);
@@ -139,4 +139,12 @@ test('saved boot network environment is restricted and values never enter capabi
   for(const value of [{OPENAI_API_KEY:'must-deny'},{CODEX_HOME:'/other'},{HTTPS_PROXY:'file:///etc/passwd'},{HTTPS_PROXY:'http://user:password@localhost:12345'},{NO_PROXY:'one\ntwo'}]){
     f.config.runtime.networkEnv=value;fs.writeFileSync(f.configPath,JSON.stringify(f.config));assert.throws(f.verify);
   }
+});
+
+test('boot authentication probe uses saved PATH rather than interactive PATH', () => {
+  const f = fixture();
+  f.config.runtime.path = '/opt/saved-node/bin:/usr/bin:/bin';
+  fs.writeFileSync(f.configPath, JSON.stringify(f.config));
+  f.verify();
+  assert.equal(f.calls.at(-1).opts.env.PATH, f.config.runtime.path);
 });

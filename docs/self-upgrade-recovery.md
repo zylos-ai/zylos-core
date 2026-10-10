@@ -17,10 +17,22 @@ updater's guarantees; installation-time or later snapshots do not retroactively
 provide preinstall protection. Installing this package alone
 does not enable a boot service or establish persisted runtime authentication.
 
-The deployment metadata directory must be owned by the operator and must not be
-writable by other users. New installations create `.zylos` with mode 0700.
-An existing writable directory is rejected; review its ownership and contents
-before tightening permissions and adopting protection.
+Existing operator-owned `.zylos` and `.backup` parent directories may retain
+legacy group-writable permissions. Ordinary installations are not put into
+maintenance merely because those parents use mode 0775. Recovery subdirectories,
+journals, descriptors, and executable materials must remain owned, real paths
+without group/world write access. New recovery directories use mode 0700.
+
+Self-upgrade deploys the stable file-only bootstrap before publishing its first
+transaction. Initial journals and controller ownership are staged outside the
+active discovery root, then published together by durable directory rename. A
+prepublication failure leaves no incomplete active transaction.
+
+Automatic boot/runtime relay is declared by an existing private `capability.json`.
+Without that declaration, upgrades still snapshot and compensate using saved
+materials, but report boot capability as unverified and do not claim automatic
+restart recovery. Once configured, invalid or unavailable boot capability fails
+before transaction publication, service shutdown, snapshots, or npm changes.
 
 Configure a Linux systemd **user** recovery service from the installed baseline:
 
@@ -38,7 +50,9 @@ Use `--runtime claude` for Claude. `--command /absolute/path/to/codex` (or
 file and unit. `--write` saves those files and deploys the stable bootstrap; it
 does not enable/start services or replace differing existing configuration.
 If the deployment needs an HTTP/SOCKS proxy, add `--inherit-proxy` to both
-configure commands. This saves only supported proxy environment variables in the
+configure commands. The runtime PATH is always saved and used identically for the authentication
+probe and supervised runtime launch, including nvm Node directories. This option
+also saves only supported proxy environment variables in the
 private capability file; transient API keys remain excluded. Preview output
 redacts proxy values. Review the preview before applying configuration. Enabling a service and linger
 changes machine behavior and may require administrator privileges.
@@ -53,9 +67,9 @@ the supplied recovery prompt reaches an active interactive session even without
 an interactive login.
 
 Linux prerequisites are a trusted Node executable, systemd, `/proc`, util-linux
-`flock` supporting `--no-fork`/`--timeout`, trusted `/usr/bin/tmux` or `/bin/tmux`, `ps`, PM2, and
-working native runtime credentials. Unsupported or unverifiable prerequisites
-fail before npm installation. No optional `/proc` or `lsof` database occupancy
+`flock` supporting `--no-fork`/`--timeout`, trusted `/usr/bin/tmux`, `ps`, PM2, and
+working native runtime credentials. Unsupported or unverifiable prerequisites for declared automatic relay
+fail before service shutdown and npm installation. No optional `/proc` or `lsof` database occupancy
 scan is performed.
 
 ## Status and recovery
@@ -74,7 +88,10 @@ node "$HOME/zylos/.zylos/upgrade/bootstrap.cjs" --root "$HOME/zylos" --once
 ```
 
 Substitute the actual deployment root. The supervised `--launch-runtime` entry
-keeps checking after an idle boot or runtime exit. Startup discovers unfinished
+keeps checking after an idle boot or runtime exit. A live verified controller
+suppresses a second runtime or resume operation; READY phases keep ordinary
+startup/database context available while interrupted verification can still be
+continued. Startup discovers unfinished
 transactions before normal C4 access. Ambiguous or damaged materials still
 produce a recovery prompt, but cannot authorize automatic database replacement.
 The runtime receives fixed status/resume argv, never executable journal strings.

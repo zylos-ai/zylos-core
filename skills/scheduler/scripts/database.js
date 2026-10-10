@@ -21,11 +21,10 @@ let db = null;
 export function getDb() {
   assertCoreDatabaseAvailable(ZYLOS_DIR);
   if (!db) {
-    const isNew = !fs.existsSync(DB_PATH);
     fs.mkdirSync(DATA_DIR, { recursive: true });
     const connection = new Database(DB_PATH);
     try {
-      guardDatabase(connection, { ...schema, migrate: initSchema }, { isNew });
+      guardDatabase(connection, { ...schema, migrate: initSchema });
       connection.pragma('journal_mode = WAL');
       db = connection;
     } catch (error) { connection.close(); throw error; }

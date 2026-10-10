@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import crypto from 'node:crypto';
 import { createRequire } from 'node:module';
 import { pathToFileURL, fileURLToPath } from 'node:url';
@@ -54,10 +55,45 @@ function inspectConnection(db) {
   if(checks.length!==1 || Object.values(checks[0])[0]!=='ok') throw new Error('integrity_check failed');
   return {userVersion:db.pragma('user_version',{simple:true}),integrityCheck:'ok',logicalHash:logicalHash(db)};
 }
-function inspect(Database,file) {
-  const db = new Database(file,{readonly:true,fileMustExist:true,timeout:5000});
-  try {db.exec('BEGIN');return inspectConnection(db);}
-  finally {if(db.inTransaction)db.exec('ROLLBACK');db.close();}
+function withStandaloneReadonly(Database, file, expectedHash, inspect) {
+  // This driver does not support SQLite immutable URI opens. A readonly open
+  // of a WAL-header database can create WAL/SHM files. Inspect a private copy
+  // of verified standalone bytes so retries leave the source sidecar-free.
+  const stat = fs.lstatSync(file);
+  if (!stat.isFile() || stat.isSymbolicLink()) throw new Error(`Invalid standalone database: ${file}`);
+  for (const suffix of ['-wal', '-shm']) {
+    try { fs.lstatSync(file + suffix); }
+    catch (error) { if (error.code === 'ENOENT') continue; throw error; }
+    throw new Error(`Unexpected standalone SQLite sidecar: ${file + suffix}`);
+  }
+  if (hash(file) !== expectedHash) throw new Error(`Standalone database hash mismatch: ${file}`);
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-standalone-inspect-'));
+  let db, primaryError;
+  try {
+    fs.chmodSync(temporary, 0o700);
+    const copied = path.join(temporary, 'database.db');
+    fs.copyFileSync(file, copied);
+    fs.chmodSync(copied, 0o600);
+    if (hash(copied) !== expectedHash) throw new Error(`Standalone database copy changed: ${file}`);
+    db = new Database(copied, {readonly:true, fileMustExist:true, timeout:5000});
+    db.exec('BEGIN');
+    return inspect(db);
+  } catch (error) {
+    primaryError = error;
+    throw error;
+  } finally {
+    let cleanupError;
+    try { if (db?.inTransaction) db.exec('ROLLBACK'); }
+    catch (error) { cleanupError = error; }
+    try { if (db) db.close(); }
+    catch (error) { cleanupError ||= error; }
+    try { fs.rmSync(temporary, {recursive:true, force:true}); }
+    catch (error) { cleanupError ||= error; }
+    if (cleanupError && !primaryError) throw cleanupError;
+  }
+}
+function inspect(Database, file, expectedHash=hash(file)) {
+  return withStandaloneReadonly(Database, file, expectedHash, inspectConnection);
 }
 async function ownerSchema(input,item) {
   const schemaPath=path.join(input.schemaRoot || path.join(input.zylosDir,'.claude','skills'),item.owner,item.schema);
@@ -84,7 +120,7 @@ export async function execute(input) {
       if(expected.status!=='backed_up'||path.basename(expected.file)!==expected.file) throw new Error('Invalid snapshot entry');
       const file=path.join(input.dbBackupDir,expected.file);
       if(fs.statSync(file).size!==expected.bytes||hash(file)!==expected.sha256) throw new Error(`Snapshot hash mismatch: ${file}`);
-      const state=inspect(driver(input,item),file);
+      const state=inspect(driver(input,item),file,expected.sha256);
       if(state.userVersion!==expected.userVersion) throw new Error('Snapshot user_version mismatch');
       rows.push({...expected,...state});continue;
     }
@@ -104,10 +140,17 @@ export async function execute(input) {
     const Database=driver(input,item);
     if(input.action==='offline-preflight') {
       const mod=await ownerSchema(input,item);
-      const db=new Database(source,{readonly:true,fileMustExist:true,timeout:5000});
       let state;
-      try {db.exec('BEGIN');mod.inspectSchema(db);state=inspectConnection(db);}
-      finally {if(db.inTransaction)db.exec('ROLLBACK');db.close();}
+      if (input.standaloneRestored === true) {
+        if (input.manifest?.status !== 'complete' || expected?.status !== 'backed_up' || typeof expected.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(expected.sha256)) throw new Error('Missing standalone restored snapshot evidence');
+        state = withStandaloneReadonly(Database, source, expected.sha256, db => {mod.inspectSchema(db); return inspectConnection(db);});
+      } else {
+        // Original/preinstall and active READY verification must see committed
+        // live WAL data. Never treat those databases as standalone snapshots.
+        const db=new Database(source,{readonly:true,fileMustExist:true,timeout:5000});
+        try {db.exec('BEGIN');mod.inspectSchema(db);state=inspectConnection(db);}
+        finally {if(db.inTransaction)db.exec('ROLLBACK');db.close();}
+      }
       rows.push({source:item.source,status:'present',...state});continue;
     }
     if(input.action!=='snapshot') throw new Error(`Unknown action: ${input.action}`);

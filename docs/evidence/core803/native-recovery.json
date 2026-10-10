@@ -60,5 +60,8 @@
     "VM-only network provides native model API access; no host production mounts or services.",
     "Credentials, native session logs, rootfs and disk remain private; only this compact evidence is reviewable."
   ],
-  "allVmProcessesExited": true
+  "allVmProcessesExited": true,
+  "evidenceSourceHead": "6a7fc19d15274c92c3d21b004e9063428da3843d",
+  "supervisorScopeNote": "This historical native fixture used an enabled system unit. The production configure command generates a user unit and separately verifies linger; it is not the same tested unit scope.",
+  "reviewRevisionNote": "Subsequent review revisions change recovery source. Recorded hashes and real-boot observations certify only the source pinned in this artifact, not later source."
 }

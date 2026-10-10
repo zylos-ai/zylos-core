@@ -14,7 +14,7 @@ const Database=require(path.resolve('skills/comm-bridge/node_modules/better-sqli
 // Each test loads private copies of the real recovery and maintenance modules.
 // Only service calls are replaced: database/native worker, hashes, journal,
 // rescue, rename intents, isolation discovery, and archive are real.
-async function fixture(t,{missing=false}={}) {
+async function fixture(t,{missing=false,wal=false}={}) {
  const root=fs.mkdtempSync(path.join(os.tmpdir(),'upgrade-recovery-'));
  t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
  const stable=path.join(root,'.zylos/upgrade');fs.mkdirSync(stable,{recursive:true,mode:0o700});
@@ -27,7 +27,7 @@ async function fixture(t,{missing=false}={}) {
  fs.copyFileSync(path.resolve('skills/comm-bridge/scripts/sqlite-schema.js'),path.join(skillsDir,'comm-bridge/scripts/sqlite-schema.js'));
  for(const item of CORE_DATABASES){if(missing&&item.owner==='scheduler')continue;const mod=await import(pathToFileURL(path.join(skillsDir,item.owner,item.schema)));const p=path.join(root,item.source);fs.mkdirSync(path.dirname(p),{recursive:true});const db=new Database(p);
   for(const [name,columns] of Object.entries(mod.TABLES)){const defs=mod.COLUMN_DEFINITIONS?.[name]||{};db.exec(`CREATE TABLE "${name}" (${columns.map(c=>`"${c}" ${defs[c]?.type||'TEXT'}${defs[c]?.pk?' PRIMARY KEY':''}`).join(',')})`);}
-  db.pragma('user_version=1');db.close();
+  db.pragma('user_version=1');if(wal)db.pragma('journal_mode=WAL');db.close();
  }
  const dir=path.join(root,'.backup/self-upgrade','tx');fs.mkdirSync(dir,{recursive:true,mode:0o700});
  const snapshot=createCoreDbSnapshot({zylosDir:root,transactionId:'tx'}),closure=prepareRecoveryDependencies(dir,root);
@@ -199,4 +199,88 @@ test('archived installer blocker cannot bypass process containment through termi
 });
 for(const dangling of [false,true])test(`original CLI ${dangling?'dangling':'live'} symlink prevents preinstall abort provenance`,async t=>{
  const f=await fixture(t),cli=path.join(f.root,'original-cli'),outside=path.join(f.root,'outside.js');fs.mkdirSync(cli,{mode:0o700});if(!dangling)fs.writeFileSync(outside,'fixture',{mode:0o600});fs.symlinkSync(outside,path.join(cli,'linked.js'));f.j.initialIdentity.cliRoot=cli;f.j.initialIdentity.cliHash=f.m.treeHash(cli);f.m.update(f.dir,f.j,{installationIntent:false,phase:'preparing'});const before=fs.readFileSync(f.db('comm-bridge/c4.db')),result=f.r.resume(f.dir);assert.equal(result.recovery_required,true);assert.match(result.error,/CLI symlink rejected/);assert.deepEqual(fs.readFileSync(f.db('comm-bridge/c4.db')),before);assert.ok(!f.calls.includes('start'));
+});
+
+test('resume uses phase durably changed before controller acquisition instead of stale pre-lock journal', async t => {
+  const f = await fixture(t);
+  change(f);
+  const before = fs.readFileSync(f.db('comm-bridge/c4.db'));
+  const acquire = f.m.acquire;
+  f.m.acquire = (dir, ...args) => {
+    // Model another controller finishing data restoration before ownership is
+    // acquired. The new ready phase must validate normal writes, not restore.
+    const latest = f.m.read(path.join(dir, 'journal.json'));
+    f.m.update(dir, latest, {phase:'restored_data_ready'});
+    return acquire(dir, ...args);
+  };
+  const result = f.r.resume(f.dir);
+  assert.equal(result.stage, 'restored_complete');
+  assert.equal(result.recovery_required, false);
+  assert.deepEqual(fs.readFileSync(f.db('comm-bridge/c4.db')), before);
+  assert.deepEqual(f.calls, ['start', 'verify']);
+  assert.equal(fs.existsSync(path.join(f.root, '.backup/self-upgrade-archive/tx/rescue')), false);
+});
+test('journal deployment identity changed before acquisition is rejected without writing or starting services', async t => {
+  const f = await fixture(t);
+  const acquire = f.m.acquire;
+  f.m.acquire = (dir, ...args) => {
+    const release = acquire(dir, ...args);
+    const latest = f.m.read(path.join(dir, 'journal.json'));
+    f.m.update(dir, latest, {zylosDir:path.join(f.root, 'redirected')});
+    return release;
+  };
+  assert.throws(() => f.r.resume(f.dir), /invalid journal identity/);
+  assert.deepEqual(f.calls, []);
+  assert.equal(f.load().phase, 'installing');
+  assert.equal(fs.existsSync(path.join(f.root, 'redirected')), false);
+  assert.equal(fs.existsSync(path.join(f.dir, 'controller.json')), false);
+});
+test('resume through deployment root alias validates canonical journal identity under lock', async t => {
+  const f = await fixture(t);
+  f.m.update(f.dir, f.j, {phase:'restored_data_ready'});
+  const alias = f.root + '-alias';
+  fs.symlinkSync(f.root, alias);
+  t.after(() => fs.unlinkSync(alias));
+  const result = f.r.resume(path.join(alias, '.backup/self-upgrade/tx'));
+  assert.equal(result.stage, 'restored_complete');
+  assert.equal(result.recovery_required, false);
+  assert.deepEqual(f.calls, ['start', 'verify']);
+});
+test('restored WAL-mode snapshot remains resumable after readonly preflight and interrupted READY publication', async t => {
+  const f = await fixture(t, {wal:true});
+  change(f);
+  let interrupted = false;
+  const update = f.m.update;
+  f.m.update = (dir, j, changes={}) => {
+    if (!interrupted && changes.phase==='restored_data_ready') {
+      interrupted=true;
+      throw Error('READY publication interrupted after readonly preflight');
+    }
+    return update(dir, j, changes);
+  };
+  const first = f.r.resume(f.dir);
+  assert.equal(first.recovery_required, true);
+  assert.match(first.error, /READY publication interrupted/);
+  assert.equal(f.load().resumePhase, 'installing');
+  const second = f.r.resume(f.dir);
+  assert.equal(second.stage, 'restored_complete', JSON.stringify(second));
+  assert.equal(second.recovery_required, false);
+});
+test('preinstall readonly verification still includes committed uncheckpointed original WAL data', async t => {
+  const f = await fixture(t, {wal:true});
+  const writer = new Database(f.db('comm-bridge/c4.db'));
+  t.after(() => {if(writer.open)writer.close();});
+  writer.pragma('wal_autocheckpoint=0');
+  writer.prepare('INSERT INTO checkpoints(id,summary) VALUES (?,?)').run(82, 'committed-live-WAL');
+  assert.ok(fs.statSync(f.db('comm-bridge/c4.db-wal')).size > 0);
+  f.j.stableDataEvidence = f.m.DB_PATHS.map(source => {
+    const readonly = new Database(f.db(source), {readonly:true});
+    try {return logicalHash(readonly);}
+    finally {readonly.close();}
+  });
+  f.m.update(f.dir, f.j, {installationIntent:false, phase:'preparing'});
+  const result = f.r.resume(f.dir);
+  assert.equal(result.stage, 'aborted_before_install', JSON.stringify(result));
+  assert.equal(result.recovery_required, false);
+  assert.equal(writer.prepare('SELECT summary FROM checkpoints WHERE id=82').get().summary, 'committed-live-WAL');
 });
