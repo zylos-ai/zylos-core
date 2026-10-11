@@ -400,7 +400,26 @@ function step1_stopService(ctx) {
 }
 
 /**
+ * Collect data:// preserve entries from one or more SKILL.md sources (union, deduplicated).
+ */
+function collectDataPreserveEntries(...dirs) {
+  const entries = new Set();
+  for (const dir of dirs) {
+    if (!dir) continue;
+    const parsed = parseSkillMd(dir);
+    const preserve = parsed?.frontmatter?.lifecycle?.preserve || [];
+    for (const entry of preserve) {
+      if (typeof entry === 'string' && entry.startsWith('data://')) {
+        entries.add(entry.slice('data://'.length));
+      }
+    }
+  }
+  return [...entries];
+}
+
+/**
  * Step 2: filesystem backup to .backup/<timestamp>/
+ * Backs up skillDir (source code) and preserve-declared dataDir files (runtime data).
  */
 function step2_backup(ctx) {
   const startTime = Date.now();
@@ -410,8 +429,35 @@ function step2_backup(ctx) {
   try {
     copyTree(ctx.skillDir, backupDir, { excludes: ['node_modules', '.backup', '.zylos'] });
 
+    // Back up dataDir files declared in preserve with data:// prefix.
+    // Read from both old (skillDir) and new (tempDir) SKILL.md so that the
+    // first release introducing data:// entries is also protected.
+    const dataEntries = collectDataPreserveEntries(ctx.skillDir, ctx.tempDir);
+    const resolvedDataDir = path.resolve(ctx.dataDir || '');
+
+    let backedUp = 0;
+    if (dataEntries.length > 0 && ctx.dataDir && fs.existsSync(ctx.dataDir)) {
+      const dataBackupDir = path.join(backupDir, '_datadir');
+      fs.mkdirSync(dataBackupDir, { recursive: true });
+      for (const entry of dataEntries) {
+        const srcPath = path.resolve(ctx.dataDir, entry);
+        // Path traversal guard: resolved path must stay within dataDir
+        if (!srcPath.startsWith(resolvedDataDir + path.sep)) continue;
+        // Use lstatSync to reject symlinks (prevents symlink-based traversal escape)
+        if (fs.existsSync(srcPath) && fs.lstatSync(srcPath).isFile()) {
+          const destPath = path.join(dataBackupDir, entry);
+          fs.mkdirSync(path.dirname(destPath), { recursive: true });
+          fs.copyFileSync(srcPath, destPath);
+          backedUp++;
+        }
+      }
+    }
+
     ctx.backupDir = backupDir;
-    return { step: 2, name: 'backup', status: 'done', message: path.basename(backupDir), duration: Date.now() - startTime };
+    const msg = backedUp > 0
+      ? `${path.basename(backupDir)} (+${backedUp} data files)`
+      : path.basename(backupDir);
+    return { step: 2, name: 'backup', status: 'done', message: msg, duration: Date.now() - startTime };
   } catch (err) {
     return { step: 2, name: 'backup', status: 'failed', error: `Backup failed: ${err.message}`, duration: Date.now() - startTime };
   }
@@ -661,10 +707,21 @@ export function rollback(ctx, deps = {}) {
   // Restore files from backup (--delete removes files added by the failed upgrade)
   if (ctx.backupDir && fs.existsSync(ctx.backupDir)) {
     try {
-      syncTree(ctx.backupDir, ctx.skillDir, { excludes: ['node_modules', '.backup', '.zylos'] });
+      syncTree(ctx.backupDir, ctx.skillDir, { excludes: ['node_modules', '.backup', '.zylos', '_datadir'] });
       results.push({ action: 'restore_files', success: true });
     } catch (err) {
       results.push({ action: 'restore_files', success: false, error: err.message });
+    }
+
+    // Restore dataDir files from backup (recursive to handle nested paths)
+    const dataBackupDir = path.join(ctx.backupDir, '_datadir');
+    if (ctx.dataDir && fs.existsSync(dataBackupDir)) {
+      try {
+        fs.cpSync(dataBackupDir, ctx.dataDir, { recursive: true, force: true });
+        results.push({ action: 'restore_data', success: true });
+      } catch (err) {
+        results.push({ action: 'restore_data', success: false, error: err.message });
+      }
     }
 
     // Restore dependencies
