@@ -7,15 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-10-12
+
 ### Upgrade notice
 
-**Before your first upgrade to the release containing the SQLite upgrade protection (#803, #817), manually back up all three core databases.** The older updater cannot automatically perform this new preinstall backup step. Before starting the upgrade, ask the Agent to:
+**Before your first upgrade to 0.9.0 from a version without SQLite upgrade protection (#803, #817), manually back up all three core databases.** The older updater cannot automatically perform this new preinstall backup step. Before starting the upgrade, ask the Agent to:
 
 - Pause all writers to `comm-bridge/c4.db`, `scheduler/scheduler.db`, and `web-console/web-console.db` under the Zylos data directory, and back them up to a separate directory outside package installation and temporary cleanup.
 - Use the SQLite backup API to preserve committed WAL data, or make a complete offline backup only after confirming all database users have stopped. Do not copy only the `.db` files if committed data may still be in WAL files. Record originally absent databases as missing instead of creating them.
 - Verify that each backup is readable, record the original Zylos version and backup location, and continue the upgrade only after all three backup results have been verified. Keep writes paused between backup and upgrade. **If any backup or verification fails, do not start the upgrade.**
 
 See [First adoption](docs/self-upgrade-recovery.md#first-adoption) for the backup and recovery boundary. This is an explicit pre-upgrade instruction, not an automatic backup step added to an already installed older updater.
+
+
+### Added
+- **Protected self-upgrades with SQLite snapshots and recovery**: snapshot the three core databases with committed WAL data before installation, verify snapshot integrity, and retain the latest successful snapshot group. Protected upgrades isolate managed database writers and can compensate declared core skill directories, the PM2 ecosystem, and databases after an observed installation or finalization failure. Durable recovery state supports Linux crash resume; macOS supports compensation by the original process after observed failures, with manual recovery required after interruption or ambiguous ownership. First adoption still runs the older updater, so the manual backup notice above applies. (#803, #817)
+- **Explicit database migration chains**: each core database registers its 0→1 migration. Upgrade preflight validates compatibility and the migration path before stopping services; the installed worker migrates while ordinary database owners remain blocked and publishes READY only after all three databases reach their targets. Each database's complete chain commits atomically, but there is no cross-database transaction. (#817)
+
+### Fixed
+- **Protected-upgrade cleanup and recovery boundaries**: successful upgrades remove the transaction's code copies after service verification and confirmed installer/finalizer exit, while retaining database snapshots, logs and recovery evidence. Failed cleanup can be retried without rolling back post-READY writes; restored and pre-install-aborted transactions retain their code copies. Daily database guards use the explicit active transaction, preparation failures restore originally online services, and PM2 save remains suppressed during an active transaction. Global npm CLI/dependencies are not fully downgraded by compensation; external SQLite writers are outside managed isolation. (#817)
+- **Optional usage-monitor dependency loading**: load SQLite inside the guarded usage query so a missing dependency does not prevent the activity-monitor entrypoint from loading when usage checks are disabled; a dependency or query failure skips that optional check. (#817)
+- **Codex managed launch isolation**: use `--no-daemon` for fresh and existing tmux launches when the installed Codex CLI advertises it, avoiding shared-daemon feature conflicts that can stop startup at an interactive recovery picker. Resolve and probe one absolute executable for launch and hook trust; older supported CLIs without the option retain their previous arguments, while a failed capability probe reports a startup error. Existing permission flags and SessionStart behavior are preserved. (#815, #816)
+
+### Removed
+- **Unused macOS native recovery helper**: remove the superseded binary, C source, checksum, documentation, build script and protocol test; protected recovery uses the existing Node-based implementation. (#817)
 
 ## [0.8.3] - 2026-10-08
 
