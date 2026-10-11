@@ -78,6 +78,183 @@ describe('getDb', () => {
       }
     }
   });
+
+  it('migrates legacy run outcomes once without rewriting history', async () => {
+    const originalZylosDir = process.env.ZYLOS_DIR;
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'scheduler-migration-'));
+    const dbPath = path.join(tmpDir, 'scheduler', 'scheduler.db');
+    try {
+      process.env.ZYLOS_DIR = tmpDir;
+      const cacheBuster = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      const setup = await import(new URL(`../database.js?setup-${cacheBuster}`, import.meta.url));
+      setup.getDb().close();
+
+      const seed = new Database(dbPath);
+      const currentTime = Math.floor(Date.now() / 1000);
+      const addTask = (id, status, lastError, updatedAt = currentTime, failedAt = null) => {
+        seed.prepare(`
+          INSERT INTO tasks (
+            id, name, prompt, type, next_run_at, status,
+            created_at, updated_at, last_error, failed_at
+          ) VALUES (?, ?, 'test', 'recurring', ?, ?, ?, ?, ?, ?)
+        `).run(id, id, currentTime + 3600, status, currentTime, updatedAt, lastError, failedAt);
+      };
+      addTask('task-recovered', 'pending', 'stale error');
+      addTask('task-timeout', 'pending', 'Task timed out');
+      addTask('task-failed-no-history', 'failed', 'dispatch failed', currentTime - 20);
+      addTask('task-failed-after-success', 'failed', 'Invalid cron expression', currentTime - 15);
+      addTask('task-failed-without-error', 'failed', null, currentTime - 10);
+      addTask('task-unknown-error', 'pending', 'legacy uncertain', currentTime - 10);
+      addTask('task-clock-rollback', 'pending', null);
+      addTask('task-newer-task-failure', 'failed', 'Missed execution window', currentTime - 200);
+      addTask('task-retrying-after-failure', 'running', 'newer unproven error', currentTime);
+      addTask('task-retrying-after-success', 'running', 'stale recovered error', currentTime);
+      addTask('task-pending-started-after-success', 'pending', 'unproven current error', currentTime - 10);
+      addTask(
+        'task-existing-failure-timestamp',
+        'pending',
+        'legacy uncertain',
+        currentTime,
+        currentTime - 500
+      );
+      seed.prepare(`
+        INSERT INTO task_history (task_id, executed_at, completed_at, status)
+        VALUES ('task-recovered', ?, ?, 'success')
+      `).run(currentTime - 200, currentTime - 190);
+      seed.prepare(`
+        INSERT INTO task_history (task_id, executed_at, completed_at, status, error)
+        VALUES ('task-timeout', ?, ?, 'timeout', 'Task timed out')
+      `).run(currentTime - 100, currentTime - 90);
+      seed.prepare(`
+        INSERT INTO task_history (task_id, executed_at, completed_at, status)
+        VALUES ('task-failed-after-success', ?, ?, 'success')
+      `).run(currentTime - 30, currentTime - 20);
+      seed.prepare(`
+        INSERT INTO task_history (task_id, executed_at, completed_at, status)
+        VALUES ('task-clock-rollback', ?, ?, 'success')
+      `).run(currentTime - 100, currentTime - 90);
+      seed.prepare(`
+        INSERT INTO task_history (task_id, executed_at, completed_at, status, error)
+        VALUES ('task-clock-rollback', ?, ?, 'failed', 'failed after clock rollback')
+      `).run(currentTime - 200, currentTime - 190);
+      seed.prepare(`
+        INSERT INTO task_history (task_id, executed_at, completed_at, status, error)
+        VALUES ('task-newer-task-failure', ?, ?, 'failed', 'Failed to dispatch message')
+      `).run(currentTime - 110, currentTime - 100);
+      seed.prepare(`
+        INSERT INTO task_history (task_id, executed_at, completed_at, status, error)
+        VALUES ('task-retrying-after-failure', ?, ?, 'timeout', 'Task timed out')
+      `).run(currentTime - 110, currentTime - 100);
+      seed.prepare(`
+        INSERT INTO task_history (task_id, executed_at, status)
+        VALUES ('task-retrying-after-failure', ?, 'started')
+      `).run(currentTime);
+      seed.prepare(`
+        INSERT INTO task_history (task_id, executed_at, completed_at, status, error)
+        VALUES ('task-retrying-after-success', ?, ?, 'failed', 'old failure')
+      `).run(currentTime - 310, currentTime - 300);
+      seed.prepare(`
+        INSERT INTO task_history (task_id, executed_at, completed_at, status)
+        VALUES ('task-retrying-after-success', ?, ?, 'success')
+      `).run(currentTime - 210, currentTime - 200);
+      seed.prepare(`
+        INSERT INTO task_history (task_id, executed_at, status)
+        VALUES ('task-retrying-after-success', ?, 'started')
+      `).run(currentTime);
+      seed.prepare(`
+        INSERT INTO task_history (task_id, executed_at, completed_at, status)
+        VALUES ('task-pending-started-after-success', ?, ?, 'success')
+      `).run(currentTime - 210, currentTime - 200);
+      seed.prepare(`
+        INSERT INTO task_history (task_id, executed_at, status)
+        VALUES ('task-pending-started-after-success', ?, 'started')
+      `).run(currentTime - 5);
+      seed.prepare("DELETE FROM system_state WHERE key = 'scheduler_run_outcome_v1'").run();
+      const historyBefore = seed.prepare(`
+        SELECT id, task_id, executed_at, completed_at, status, duration_ms, error
+        FROM task_history ORDER BY id
+      `).all();
+      seed.close();
+
+      const migrated = await import(new URL(`../database.js?migrate-${cacheBuster}`, import.meta.url));
+      const db = migrated.getDb();
+      assert.deepEqual(
+        db.prepare('SELECT failed_at, last_error FROM tasks WHERE id = ?').get('task-recovered'),
+        { failed_at: null, last_error: null }
+      );
+      assert.deepEqual(
+        db.prepare('SELECT failed_at, last_error FROM tasks WHERE id = ?').get('task-timeout'),
+        { failed_at: currentTime - 90, last_error: 'Task timed out' }
+      );
+      assert.equal(
+        db.prepare('SELECT failed_at FROM tasks WHERE id = ?').get('task-failed-no-history').failed_at,
+        currentTime - 20
+      );
+      assert.equal(
+        db.prepare('SELECT failed_at FROM tasks WHERE id = ?').get('task-unknown-error').failed_at,
+        currentTime - 10
+      );
+      assert.deepEqual(
+        db.prepare('SELECT failed_at, last_error FROM tasks WHERE id = ?').get('task-failed-after-success'),
+        { failed_at: currentTime - 15, last_error: 'Invalid cron expression' }
+      );
+      assert.deepEqual(
+        db.prepare('SELECT failed_at, last_error FROM tasks WHERE id = ?').get('task-failed-without-error'),
+        { failed_at: currentTime - 10, last_error: 'Task failed' }
+      );
+      assert.deepEqual(
+        db.prepare('SELECT failed_at, last_error FROM tasks WHERE id = ?').get('task-clock-rollback'),
+        { failed_at: currentTime - 190, last_error: 'failed after clock rollback' }
+      );
+      assert.deepEqual(
+        db.prepare('SELECT failed_at, last_error FROM tasks WHERE id = ?').get('task-newer-task-failure'),
+        { failed_at: currentTime - 200, last_error: 'Missed execution window' }
+      );
+      assert.deepEqual(
+        db.prepare('SELECT failed_at, last_error FROM tasks WHERE id = ?').get('task-retrying-after-failure'),
+        { failed_at: currentTime, last_error: 'newer unproven error' }
+      );
+      assert.deepEqual(
+        db.prepare('SELECT failed_at, last_error FROM tasks WHERE id = ?').get('task-retrying-after-success'),
+        { failed_at: currentTime, last_error: 'stale recovered error' }
+      );
+      assert.deepEqual(
+        db.prepare('SELECT failed_at, last_error FROM tasks WHERE id = ?').get('task-pending-started-after-success'),
+        { failed_at: currentTime - 10, last_error: 'unproven current error' }
+      );
+      assert.deepEqual(
+        db.prepare('SELECT failed_at, last_error FROM tasks WHERE id = ?').get('task-existing-failure-timestamp'),
+        { failed_at: currentTime - 500, last_error: 'legacy uncertain' }
+      );
+      assert.deepEqual(
+        db.prepare(`
+          SELECT id, task_id, executed_at, completed_at, status, duration_ms, error
+          FROM task_history ORDER BY id
+        `).all(),
+        historyBefore
+      );
+      assert.equal(
+        db.prepare("SELECT COUNT(*) AS count FROM system_state WHERE key = 'scheduler_run_outcome_v1'").get().count,
+        1
+      );
+      const snapshot = db.prepare(`
+        SELECT id, failed_at, last_error FROM tasks ORDER BY id
+      `).all();
+      db.close();
+
+      const second = await import(new URL(`../database.js?second-${cacheBuster}`, import.meta.url));
+      const reopened = second.getDb();
+      assert.deepEqual(
+        reopened.prepare('SELECT id, failed_at, last_error FROM tasks ORDER BY id').all(),
+        snapshot
+      );
+      reopened.close();
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+      if (originalZylosDir === undefined) delete process.env.ZYLOS_DIR;
+      else process.env.ZYLOS_DIR = originalZylosDir;
+    }
+  });
 });
 
 describe('cleanupHistory', () => {

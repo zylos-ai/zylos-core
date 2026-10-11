@@ -266,15 +266,119 @@ describe('cli list', () => {
 });
 
 describe('cli done', () => {
-  it('completes a task and updates history', () => {
+  it('rejects completion without a run ID and leaves the active run unchanged', () => {
+    withTmpDir(({ dbPath, env }) => {
+      cli(['add', 'identity required', '--cron', '0 9 * * *'], env);
+      const db = new Database(dbPath);
+      try {
+        const task = db.prepare('SELECT id FROM tasks LIMIT 1').get();
+        const currentTime = Math.floor(Date.now() / 1000);
+        db.prepare("UPDATE tasks SET status = 'running', updated_at = ? WHERE id = ?")
+          .run(currentTime, task.id);
+        const run = db.prepare(`
+          INSERT INTO task_history (task_id, executed_at, status)
+          VALUES (?, ?, 'started')
+        `).run(task.id, currentTime);
+        const before = {
+          task: db.prepare('SELECT * FROM tasks WHERE id = ?').get(task.id),
+          history: db.prepare('SELECT * FROM task_history WHERE task_id = ? ORDER BY id').all(task.id)
+        };
+
+        const result = cliRaw(['done', task.id], env);
+
+        assert.notEqual(result.status, 0);
+        assert.match(result.stderr, /run ID/i);
+        assert.deepEqual(
+          {
+            task: db.prepare('SELECT * FROM tasks WHERE id = ?').get(task.id),
+            history: db.prepare('SELECT * FROM task_history WHERE task_id = ? ORDER BY id').all(task.id)
+          },
+          before
+        );
+        assert.equal(before.history[0].id, run.lastInsertRowid);
+      } finally {
+        db.close();
+      }
+    });
+  });
+
+  it('completes the exact active run and clears its failure outcome', () => {
     withTmpDir(({ dbPath, env }) => {
       cli(['add', 'complete me', '--cron', '0 9 * * *'], env);
       const db = new Database(dbPath);
       try {
         const task = db.prepare('SELECT id FROM tasks LIMIT 1').get();
-        cli(['done', task.id], env);
-        const updated = db.prepare('SELECT status FROM tasks WHERE id = ?').get(task.id);
+        const currentTime = Math.floor(Date.now() / 1000);
+        db.prepare(`
+          UPDATE tasks
+          SET status = 'running', failed_at = ?, last_error = 'prior timeout', updated_at = ?
+          WHERE id = ?
+        `).run(currentTime - 60, currentTime, task.id);
+        const run = db.prepare(`
+          INSERT INTO task_history (task_id, executed_at, status)
+          VALUES (?, ?, 'started')
+        `).run(task.id, currentTime);
+
+        cli(['done', task.id, '--run-id', String(run.lastInsertRowid)], env);
+
+        const updated = db.prepare('SELECT status, failed_at, last_error FROM tasks WHERE id = ?').get(task.id);
         assert.equal(updated.status, 'completed');
+        assert.equal(updated.failed_at, null);
+        assert.equal(updated.last_error, null);
+        assert.equal(db.prepare('SELECT status FROM task_history WHERE id = ?').get(run.lastInsertRowid).status, 'success');
+
+        const snapshot = {
+          task: db.prepare('SELECT status, failed_at, last_error, last_run_at FROM tasks WHERE id = ?').get(task.id),
+          history: db.prepare('SELECT status, completed_at, duration_ms FROM task_history WHERE id = ?').get(run.lastInsertRowid)
+        };
+        const duplicate = cliRaw(['done', task.id, '--run-id', String(run.lastInsertRowid)], env);
+        assert.notEqual(duplicate.status, 0);
+        assert.deepEqual(
+          {
+            task: db.prepare('SELECT status, failed_at, last_error, last_run_at FROM tasks WHERE id = ?').get(task.id),
+            history: db.prepare('SELECT status, completed_at, duration_ms FROM task_history WHERE id = ?').get(run.lastInsertRowid)
+          },
+          snapshot
+        );
+      } finally {
+        db.close();
+      }
+    });
+  });
+
+  it('rejects an older timed-out run while a newer run is active', () => {
+    withTmpDir(({ dbPath, env }) => {
+      cli(['add', 'generation safe', '--every', '1 hour'], env);
+      const db = new Database(dbPath);
+      try {
+        const task = db.prepare('SELECT id FROM tasks LIMIT 1').get();
+        const currentTime = Math.floor(Date.now() / 1000);
+        const oldRun = db.prepare(`
+          INSERT INTO task_history (task_id, executed_at, completed_at, status, error)
+          VALUES (?, ?, ?, 'timeout', 'Task timed out')
+        `).run(task.id, currentTime - 7200, currentTime - 3600);
+        const activeRun = db.prepare(`
+          INSERT INTO task_history (task_id, executed_at, status)
+          VALUES (?, ?, 'started')
+        `).run(task.id, currentTime);
+        db.prepare(`
+          UPDATE tasks
+          SET status = 'running', failed_at = ?, last_error = 'Task timed out', updated_at = ?
+          WHERE id = ?
+        `).run(currentTime - 3600, currentTime, task.id);
+
+        const late = cliRaw(['done', task.id, '--run-id', String(oldRun.lastInsertRowid)], env);
+
+        assert.notEqual(late.status, 0);
+        assert.deepEqual(
+          db.prepare('SELECT status, failed_at, last_error FROM tasks WHERE id = ?').get(task.id),
+          { status: 'running', failed_at: currentTime - 3600, last_error: 'Task timed out' }
+        );
+        assert.equal(db.prepare('SELECT status FROM task_history WHERE id = ?').get(oldRun.lastInsertRowid).status, 'timeout');
+        assert.equal(db.prepare('SELECT status FROM task_history WHERE id = ?').get(activeRun.lastInsertRowid).status, 'started');
+
+        cli(['done', task.id, '--run-id', String(activeRun.lastInsertRowid)], env);
+        assert.equal(db.prepare('SELECT status FROM tasks WHERE id = ?').get(task.id).status, 'completed');
       } finally {
         db.close();
       }
@@ -477,6 +581,31 @@ describe('cli running', () => {
       assert.ok(output.includes('No running') || output.includes('Safe to compact'));
     });
   });
+
+  it('shows the exact completion command for each active run', () => {
+    withTmpDir(({ dbPath, env }) => {
+      cli(['add', 'running task', '--cron', '0 9 * * *'], env);
+      const db = new Database(dbPath);
+      let task;
+      let run;
+      try {
+        task = db.prepare('SELECT id FROM tasks LIMIT 1').get();
+        const currentTime = Math.floor(Date.now() / 1000);
+        db.prepare("UPDATE tasks SET status = 'running', updated_at = ? WHERE id = ?")
+          .run(currentTime, task.id);
+        run = db.prepare(`
+          INSERT INTO task_history (task_id, executed_at, status)
+          VALUES (?, ?, 'started')
+        `).run(task.id, currentTime);
+      } finally {
+        db.close();
+      }
+
+      const output = cli(['running'], env);
+
+      assert.match(output, new RegExp(`done ${task.id} --run-id ${run.lastInsertRowid}`));
+    });
+  });
 });
 
 describe('cli help', () => {
@@ -511,8 +640,15 @@ describe('cli partial ID match', () => {
       const db = new Database(dbPath);
       try {
         const task = db.prepare('SELECT id FROM tasks LIMIT 1').get();
+        const currentTime = Math.floor(Date.now() / 1000);
+        db.prepare("UPDATE tasks SET status = 'running', updated_at = ? WHERE id = ?")
+          .run(currentTime, task.id);
+        const run = db.prepare(`
+          INSERT INTO task_history (task_id, executed_at, status)
+          VALUES (?, ?, 'started')
+        `).run(task.id, currentTime);
         const prefix = task.id.substring(0, 10);
-        cli(['done', prefix], env);
+        cli(['done', prefix, '--run-id', String(run.lastInsertRowid)], env);
         const updated = db.prepare('SELECT status FROM tasks WHERE id = ?').get(task.id);
         assert.equal(updated.status, 'completed');
       } finally {

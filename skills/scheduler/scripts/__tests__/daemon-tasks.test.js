@@ -4,7 +4,13 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { updateNextRunTime, processCompletedTasks, handleStaleRunningTasks, TASK_TIMEOUT } from '../daemon-tasks.js';
+import {
+  failMissedOneTimeTask,
+  updateNextRunTime,
+  processCompletedTasks,
+  handleStaleRunningTasks,
+  TASK_TIMEOUT
+} from '../daemon-tasks.js';
 import { now } from '../database.js';
 
 async function withDb(fn) {
@@ -121,13 +127,136 @@ describe('updateNextRunTime', () => {
         const utcRow = db.prepare('SELECT next_run_at FROM tasks WHERE id = ?').get('task-utc');
         const shRow = db.prepare('SELECT next_run_at FROM tasks WHERE id = ?').get('task-sh');
 
-        // Shanghai 9am is 8 hours earlier in UTC than UTC 9am
-        assert.ok(shRow.next_run_at < utcRow.next_run_at,
-          `Shanghai 9am (${shRow.next_run_at}) should be before UTC 9am (${utcRow.next_run_at})`);
+        const wallClock = (timestamp, timeZone) => {
+          const parts = new Intl.DateTimeFormat('en-GB', {
+            timeZone,
+            hour: '2-digit',
+            minute: '2-digit',
+            hourCycle: 'h23'
+          }).formatToParts(new Date(timestamp * 1000));
+          const value = Object.fromEntries(parts.map(part => [part.type, part.value]));
+          return `${value.hour}:${value.minute}`;
+        };
+
+        assert.equal(wallClock(utcRow.next_run_at, 'UTC'), '09:00');
+        assert.equal(wallClock(shRow.next_run_at, 'Asia/Shanghai'), '09:00');
+        assert.ok(utcRow.next_run_at > now());
+        assert.ok(shRow.next_run_at > now());
       });
     } finally {
       if (originalTz === undefined) { delete process.env.TZ; } else { process.env.TZ = originalTz; }
     }
+  });
+
+  it('uses the current schedule when a completed task was edited after selection', async () => {
+    await withDb((db) => {
+      insertTask(db, {
+        id: 'task-edited',
+        type: 'recurring',
+        cron_expression: '0 9 * * *',
+        timezone: 'UTC',
+        status: 'completed'
+      });
+      const staleTask = db.prepare('SELECT * FROM tasks WHERE id = ?').get('task-edited');
+      db.prepare(`
+        UPDATE tasks SET cron_expression = '0 10 * * *', updated_at = updated_at + 1
+        WHERE id = ?
+      `).run('task-edited');
+
+      updateNextRunTime(db, staleTask);
+
+      const updated = db.prepare('SELECT status, cron_expression, next_run_at FROM tasks WHERE id = ?')
+        .get('task-edited');
+      const utcHour = new Date(updated.next_run_at * 1000).getUTCHours();
+      assert.equal(updated.status, 'pending');
+      assert.equal(updated.cron_expression, '0 10 * * *');
+      assert.equal(utcHour, 10);
+    });
+  });
+
+  it('does not advance a pending task that is no longer overdue', async () => {
+    await withDb((db) => {
+      const futureRun = now() + 7200;
+      const staleTask = insertTask(db, {
+        id: 'task-no-longer-overdue',
+        type: 'interval',
+        cron_expression: null,
+        interval_seconds: 3600,
+        next_run_at: futureRun,
+        status: 'pending'
+      });
+
+      assert.equal(updateNextRunTime(db, staleTask), false);
+      assert.deepEqual(
+        db.prepare('SELECT status, next_run_at FROM tasks WHERE id = ?').get(staleTask.id),
+        { status: 'pending', next_run_at: futureRun }
+      );
+    });
+  });
+
+  it('advances the same overdue pending task only once', async () => {
+    await withDb((db) => {
+      const currentTime = now();
+      const staleTask = insertTask(db, {
+        id: 'task-repeated-missed-run',
+        type: 'interval',
+        cron_expression: null,
+        interval_seconds: 3600,
+        next_run_at: currentTime - 600,
+        status: 'pending'
+      });
+
+      assert.equal(updateNextRunTime(db, staleTask), true);
+      const firstTransition = db.prepare('SELECT status, next_run_at FROM tasks WHERE id = ?')
+        .get(staleTask.id);
+
+      assert.equal(updateNextRunTime(db, staleTask), false);
+      assert.deepEqual(
+        db.prepare('SELECT status, next_run_at FROM tasks WHERE id = ?').get(staleTask.id),
+        firstTransition
+      );
+    });
+  });
+});
+
+describe('failMissedOneTimeTask', () => {
+  it('does not fail a one-time task that was postponed after selection', async () => {
+    await withDb((db) => {
+      const currentTime = now();
+      const task = insertTask(db, {
+        type: 'one-time',
+        cron_expression: null,
+        next_run_at: currentTime - 600,
+        status: 'pending'
+      });
+      db.prepare('UPDATE tasks SET next_run_at = ?, updated_at = ? WHERE id = ?')
+        .run(currentTime + 3600, currentTime, task.id);
+
+      assert.equal(failMissedOneTimeTask(db, { taskId: task.id, currentTime }), false);
+      assert.deepEqual(
+        db.prepare('SELECT status, failed_at, last_error FROM tasks WHERE id = ?').get(task.id),
+        { status: 'pending', failed_at: null, last_error: null }
+      );
+    });
+  });
+
+  it('fails only a currently overdue one-time task', async () => {
+    await withDb((db) => {
+      const currentTime = now();
+      const task = insertTask(db, {
+        type: 'one-time',
+        cron_expression: null,
+        next_run_at: currentTime - 1,
+        miss_threshold: 0,
+        status: 'pending'
+      });
+
+      assert.equal(failMissedOneTimeTask(db, { taskId: task.id, currentTime }), true);
+      assert.deepEqual(
+        db.prepare('SELECT status, failed_at, last_error FROM tasks WHERE id = ?').get(task.id),
+        { status: 'failed', failed_at: currentTime, last_error: 'Missed execution window' }
+      );
+    });
   });
 });
 
@@ -170,9 +299,10 @@ describe('processCompletedTasks', () => {
       insertTask(db, { type: 'recurring', cron_expression: 'invalid cron expr', status: 'completed' });
       processCompletedTasks(db);
 
-      const task = db.prepare('SELECT status, last_error FROM tasks LIMIT 1').get();
+      const task = db.prepare('SELECT status, last_error, failed_at FROM tasks LIMIT 1').get();
       assert.equal(task.status, 'failed');
       assert.ok(task.last_error.includes('Invalid cron'));
+      assert.ok(Number.isSafeInteger(task.failed_at));
     });
   });
 
@@ -198,6 +328,21 @@ describe('processCompletedTasks', () => {
 // ---- handleStaleRunningTasks ----
 
 describe('handleStaleRunningTasks', () => {
+  it('leaves a stale task unchanged when its run identity is missing', async () => {
+    await withDb((db) => {
+      const staleTime = now() - TASK_TIMEOUT - 60;
+      insertTask(db, { type: 'one-time', cron_expression: null, status: 'running', updated_at: staleTime });
+
+      handleStaleRunningTasks(db);
+
+      assert.deepEqual(
+        db.prepare('SELECT status, failed_at, last_error FROM tasks LIMIT 1').get(),
+        { status: 'running', failed_at: null, last_error: null }
+      );
+      assert.equal(db.prepare('SELECT COUNT(*) AS count FROM task_history').get().count, 0);
+    });
+  });
+
   it('marks stale one-time task as failed', async () => {
     await withDb((db) => {
       const staleTime = now() - TASK_TIMEOUT - 60;
@@ -210,9 +355,10 @@ describe('handleStaleRunningTasks', () => {
 
       handleStaleRunningTasks(db);
 
-      const updated = db.prepare('SELECT status, last_error FROM tasks WHERE id = ?').get(task.id);
+      const updated = db.prepare('SELECT status, last_error, failed_at FROM tasks WHERE id = ?').get(task.id);
       assert.equal(updated.status, 'failed');
       assert.equal(updated.last_error, 'Task timed out');
+      assert.ok(updated.failed_at >= staleTime);
 
       const history = db.prepare('SELECT status FROM task_history WHERE task_id = ?').get(task.id);
       assert.equal(history.status, 'timeout');
@@ -230,9 +376,20 @@ describe('handleStaleRunningTasks', () => {
 
       handleStaleRunningTasks(db);
 
-      const updated = db.prepare('SELECT status, last_error FROM tasks WHERE id = ?').get(task.id);
+      const updated = db.prepare('SELECT status, last_error, failed_at FROM tasks WHERE id = ?').get(task.id);
       assert.equal(updated.status, 'completed');
       assert.equal(updated.last_error, 'Task timed out');
+      assert.ok(updated.failed_at >= staleTime, 'timeout must remain machine-visible while the task is retryable');
+      assert.equal(db.prepare('SELECT status FROM task_history WHERE task_id = ?').get(task.id).status, 'timeout');
+
+      processCompletedTasks(db);
+      const rescheduled = db.prepare(`
+        SELECT status, failed_at, last_error, next_run_at FROM tasks WHERE id = ?
+      `).get(task.id);
+      assert.equal(rescheduled.status, 'pending');
+      assert.equal(rescheduled.failed_at, updated.failed_at);
+      assert.equal(rescheduled.last_error, 'Task timed out');
+      assert.ok(rescheduled.next_run_at > now());
     });
   });
 
@@ -265,6 +422,12 @@ describe('handleStaleRunningTasks', () => {
       insertTask(db, { id: 'task-ot', type: 'one-time', cron_expression: null, status: 'running', updated_at: staleTime });
       insertTask(db, { id: 'task-rc', type: 'recurring', cron_expression: '0 9 * * *', status: 'running', updated_at: staleTime });
       insertTask(db, { id: 'task-iv', type: 'interval', cron_expression: null, interval_seconds: 3600, status: 'running', updated_at: staleTime });
+      for (const taskId of ['task-ot', 'task-rc', 'task-iv']) {
+        db.prepare(`
+          INSERT INTO task_history (task_id, executed_at, status)
+          VALUES (?, ?, 'started')
+        `).run(taskId, staleTime);
+      }
 
       handleStaleRunningTasks(db);
 
