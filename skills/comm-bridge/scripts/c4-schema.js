@@ -1,13 +1,9 @@
 import { migrateSchema } from './c4-migrations.js';
 import { inspectLayout } from './sqlite-schema.js';
-export const SUPPORTED_SCHEMA_VERSION = 2;
+export const SUPPORTED_SCHEMA_VERSION = 1;
 export const supportsNewDatabase = true;
 // Unmarked released layouts enter the explicit schema migration chain at 0.
-// TEMPORARY PR817 real-host rollback probe: a version-only committed migration.
-export const MIGRATIONS = Object.freeze({
-  0: Object.freeze({ to: 1, migrate: migrateSchema }),
-  1: Object.freeze({ to: 2, migrate() {} })
-});
+export const MIGRATIONS = Object.freeze({ 0: Object.freeze({ to: 1, migrate: migrateSchema }) });
 export const TABLES = {
   "checkpoints": [
     "id",
