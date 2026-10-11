@@ -1,0 +1,55 @@
+{
+  "scope": "Representative source layouts from local release tags only; not execution of every historical release. Multi-step version chains are synthetic mechanism fixtures and are not these historical fixtures.",
+  "fixtures": [
+    {
+      "fixture": "c4-v0.1.0.sql",
+      "tag": "v0.1.0",
+      "commit": "d350d73ea1ae5b97902bc5e6dbba5e12e09df746",
+      "source": "skills/comm-bridge/init-db.sql",
+      "sourceBlobSha": "1429feb50899a22eeac7bf1e6f82e1208b3e3a87",
+      "sourceSha256": "d0f1c405cf80531d0f43dee9c5a4e3a020a3dbd7b29a061ab4b241ccd4bc829a",
+      "extraction": "complete source SQL, unmodified",
+      "fixtureSha256": "d0f1c405cf80531d0f43dee9c5a4e3a020a3dbd7b29a061ab4b241ccd4bc829a"
+    },
+    {
+      "fixture": "c4-v0.4.11.sql",
+      "tag": "v0.4.11",
+      "commit": "1345d45ae7e978b360694eedfa32d2836dc2aa18",
+      "source": "skills/comm-bridge/init-db.sql",
+      "sourceBlobSha": "edbf72da10c9ac9b20f14a3b8a1f61f0535957eb",
+      "sourceSha256": "ccb225a3d1ab2a2398efef2cefc43eff75d5e1f7887be46229702acac8ed2f79",
+      "extraction": "complete source SQL, unmodified",
+      "fixtureSha256": "ccb225a3d1ab2a2398efef2cefc43eff75d5e1f7887be46229702acac8ed2f79"
+    },
+    {
+      "fixture": "c4-v0.5.2.sql",
+      "tag": "v0.5.2",
+      "commit": "8ee9bd9007edab46f766f3574e0ad56cf69268c2",
+      "source": "skills/comm-bridge/init-db.sql",
+      "sourceBlobSha": "797b65f2247753b5258a7580f7f7d518fdc98a14",
+      "sourceSha256": "54faef85854a67d9ed04bf932f0383f30ba8feb467e597c7d1bbf82ead3b1f8e",
+      "extraction": "complete source SQL, unmodified",
+      "fixtureSha256": "54faef85854a67d9ed04bf932f0383f30ba8feb467e597c7d1bbf82ead3b1f8e"
+    },
+    {
+      "fixture": "scheduler-v0.1.0.sql",
+      "tag": "v0.1.0",
+      "commit": "d350d73ea1ae5b97902bc5e6dbba5e12e09df746",
+      "source": "skills/scheduler/scripts/database.js",
+      "sourceBlobSha": "1e9ab8d7fb8194923ee4ea1f594d1ffa32dfda4e",
+      "sourceSha256": "e13c319341c3674e7f809e3fab8b00a0f9e719963ea57360386cf0c83c997a21",
+      "extraction": "initSchema db.exec template literal",
+      "fixtureSha256": "906090ce797039af06d1b28a67d55c5b9975fbe370e04e5ddd87e0f1aa5d0d7c"
+    },
+    {
+      "fixture": "web-console-v0.5.3.sql",
+      "tag": "v0.5.3",
+      "commit": "6be3db26d628d957df3244a66dc643651197430e",
+      "source": "skills/web-console/scripts/db.js",
+      "sourceBlobSha": "1c8dcfb201223f6fe7e206acc664cb82d2f5dd42",
+      "sourceSha256": "702ecd4a6ffed1489db07c3846857e97893b083cac17d8ed7011662f43499592",
+      "extraction": "openDb db.exec template literal",
+      "fixtureSha256": "dd3ab3be53dc91e861f44bb20c0a63b7a3045b83e3b099fc252a86f418389156"
+    }
+  ]
+}

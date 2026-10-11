@@ -18,33 +18,13 @@ function openDb(dbPath = DB_PATH) {
   fs.mkdirSync(path.dirname(dbPath), { recursive: true });
   const db = new Database(dbPath);
   try {
-    guardDatabase(db, { ...schema, migrate: initSchema });
+    guardDatabase(db, schema);
     db.pragma('journal_mode = WAL');
     return db;
   } catch (error) { db.close(); throw error; }
 }
 
-function initSchema(db) {
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS sessions (
-      token TEXT PRIMARY KEY,
-      created_at INTEGER NOT NULL,
-      last_seen_at INTEGER NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS uploads (
-      id TEXT PRIMARY KEY,
-      session_token TEXT,
-      path TEXT NOT NULL,
-      name TEXT NOT NULL,
-      size INTEGER NOT NULL,
-      size_label TEXT,
-      mime TEXT,
-      kind TEXT NOT NULL,
-      created_at INTEGER NOT NULL,
-      consumed INTEGER NOT NULL DEFAULT 0
-    );
-  `);
-}
+
 
 
 export class SessionStore {

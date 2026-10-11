@@ -1,6 +1,9 @@
+import { migrateSchema } from './migrations.js';
 import { inspectLayout } from '../../comm-bridge/scripts/sqlite-schema.js';
 export const SUPPORTED_SCHEMA_VERSION = 1;
 export const supportsNewDatabase = true;
+// Unmarked released layouts enter the explicit schema migration chain at 0.
+export const MIGRATIONS = Object.freeze({ 0: Object.freeze({ to: 1, migrate: migrateSchema }) });
 export const TABLES = {
   "sessions": [
     "token",

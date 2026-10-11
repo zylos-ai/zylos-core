@@ -51,7 +51,8 @@ administrative writers during the operation.
 Before either upgrade mode publishes a transaction or stops services, it checks
 for unresolved recovery work, then probes the snapshot destination and Node sync,
 loads each owner's SQLite driver, and checks existing databases read-only against
-the full supported schema. Failure rejects the upgrade while original services
+the recognized starting schema and complete registered migration path. This check
+does not run migrations or stamp versions. Failure rejects the upgrade while original services
 remain running. Protected upgrades also freeze recovery dependencies before stop.
 
 Backup-only service-stop, writer-drain, snapshot or snapshot-verification failures
@@ -262,6 +263,27 @@ migration. Missing required fields, invalid/future versions and incompatible req
 definitions are still rejected. The pure owner `inspectSchema()` API remains strict
 by default; upgrade/recovery workers use that strict path. An extension may therefore
 continue to work daily while preventing this updater from safely upgrading it.
+
+Each owner registers explicit adjacent transitions (`MIGRATIONS`), currently 0→1
+for all three databases; the supported target remains 1. Unmarked historical
+schemas start at 0. The planner recognizes that starting version's layout and
+resolves the entire path before changing anything. After taking the SQLite writer
+lock it plans again, then runs all steps and validates each resulting version in
+one transaction per database. A failed step or target check rolls back structure,
+data and `user_version` together. There is no cross-database atomic transaction.
+A database already at the target is inspected without rerunning migration callbacks.
+
+After installation, before READY, a dedicated worker loads the installed owners'
+registries and performs the migration while the active installing journal still
+blocks ordinary owner openers. This path does not use an environment-variable
+bypass or call ordinary openers. A failed migration keeps isolation and follows
+the existing snapshot compensation boundaries. Recovery inspection remains read-only.
+
+Historical fixture tests cover representative C4 source layouts from v0.1.0,
+v0.4.11 and v0.5.2, scheduler v0.1.0, web-console v0.5.3, and absent web-console
+storage. Exact source hashes and extraction rules accompany the SQL fixtures.
+The separate 0→1→2 tests are synthetic engine tests; no released schema version 2
+is implied, and source comparison is not execution of every historical release.
 
 The active marker is durable before service stop, installation or database replacement.
 Only the referenced journal's validated data-ready, verified provisional abort or

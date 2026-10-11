@@ -465,16 +465,24 @@ export function recovery(ctx) {
     };
   }
 }
-export function protectedDataReady(ctx) {
+export function protectedDataReady(ctx, overrides = {}) {
   const maintenance = maintenanceFor(ctx);
   const dir = ctx.transactionDir,
     j = maintenance.read(path.join(dir, 'journal.json'));
+  if(j.phase!=='installing' || j.installationIntent!==true || j.transactionId!==ctx.transactionId) throw Error('data-ready requires own installing transaction');
+  // This function runs in the newly installed finalizer. Use its worker, not
+  // the frozen snapshot worker whose code predates the installed migrations.
+  (overrides.migrate ?? runCoreDbWorker)({action:'upgrade-migrate',zylosDir:j.zylosDir,schemaRoot:j.skillsDir,transactionDir:dir,transactionId:j.transactionId});
+  (overrides.verify ?? runCoreDbWorker)({action:'offline-preflight',zylosDir:j.zylosDir,schemaRoot:j.skillsDir,requireCurrent:true});
   const checked = maintenance.preflight(dir, j, null);
   if (checked.success === false) throw Error(checked.error || 'new code offline preflight failed');
-  maintenance.update(dir, j, {
+  const current=maintenance.transaction(j.zylosDir,dir);
+  const marker=maintenance.read(path.join(j.zylosDir,'.zylos/upgrade/active.json'));
+  if(current.phase!=='installing' || current.installationIntent!==true || current.transactionId!==j.transactionId || marker.transactionId!==j.transactionId || marker.transactionDir!==dir) throw Error('active migration transaction changed before data-ready');
+  maintenance.update(dir, current, {
     phase: 'new_data_ready'
   });
-  ctx.journal = j;
+  ctx.journal = current;
   // READY permits normal access; retain the marker until verified terminal exit.
 }
 export function protectedSuccess(ctx) {

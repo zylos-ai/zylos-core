@@ -20,6 +20,7 @@ function fixture(t) {
   fs.writeFileSync(path.join(owner,'package.json'),'{"type":"module"}');
   fs.mkdirSync(path.join(owner,'scripts'));
   fs.writeFileSync(path.join(owner,item.schema),`export const supportsNewDatabase=true;export function inspectSchema(db){db.prepare('SELECT value FROM preserved').all();}`);
+  fs.writeFileSync(path.join(owner,'scripts/sqlite-schema.js'),'export {}; // pre-chain compatibility fixture');
   fs.symlinkSync(path.resolve('skills',item.owner,'node_modules'),path.join(owner,'node_modules'));
   const file=path.join(root,item.source);fs.mkdirSync(path.dirname(file),{recursive:true});
   const db=new Database(file);db.exec('CREATE TABLE preserved(value TEXT)');

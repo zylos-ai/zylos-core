@@ -15,7 +15,7 @@ function driver(input, item) {
   const req = createRequire(path.join(root,item.owner,'package.json'));
   // Snapshot verification uses the frozen independent closure. Compatibility
   // preflight must load the actual owner's native dependency under this Node.
-  return req(input.action==='offline-preflight' ? 'better-sqlite3' : (input.driverPath || 'better-sqlite3'));
+  return req(['offline-preflight','upgrade-migrate'].includes(input.action) ? 'better-sqlite3' : (input.driverPath || 'better-sqlite3'));
 }
 function missing(file) {
   if (fs.existsSync(file)) return false;
@@ -65,13 +65,42 @@ async function ownerSchema(input,item) {
     return mod;
   }catch(error){throw new Error(`Incompatible owner schema code ${item.owner}: ${error.message}`);}
 }
+async function migrationEngine(input) {
+  const root=input.schemaRoot || path.join(input.zylosDir,'.claude','skills');
+  try {return await import(pathToFileURL(path.join(root,'comm-bridge/scripts/sqlite-schema.js')));}
+  catch(error) {throw Error('Incompatible owner schema code comm-bridge: '+error.message);}
+}
+function authorizeMigration(input) {
+  const root=fs.realpathSync(input.zylosDir);
+  // This module is retained outside the replaced package and sqlite closure.
+  const m=createRequire(import.meta.url)(path.join(root,'.zylos/upgrade/maintenance.cjs'));
+  const marker=m.read(path.join(root,'.zylos/upgrade/active.json'));
+  const dir=input.transactionDir;
+  if(marker.formatVersion!==1 || marker.transactionDir!==dir || marker.transactionId!==input.transactionId) throw Error('controlled migration active identity mismatch');
+  const j=m.transaction(root,dir);
+  if(j.transactionId!==input.transactionId || j.phase!=='installing' || j.installationIntent!==true || j.skillsDir!==path.join(root,'.claude/skills') || input.schemaRoot && input.schemaRoot!==j.skillsDir) throw Error('controlled migration requires active installing transaction');
+  if(j.dbBackupDir!==path.join(root,'.backup/db',j.transactionId) || m.hash(path.join(j.dbBackupDir,'manifest.json'))!==j.snapshotManifestHash) throw Error('controlled migration snapshot identity mismatch');
+  return j;
+}
 export async function execute(input) {
-  if(!['probe','snapshot','verify','offline-preflight'].includes(input.action)) throw new Error(`Unknown action: ${input.action}`);
+  if(!['probe','snapshot','verify','offline-preflight','upgrade-migrate'].includes(input.action)) throw new Error(`Unknown action: ${input.action}`);
   if(input.action==='probe') {
     const Database=createRequire(import.meta.url)(input.driverPath); const db=new Database(':memory:');
     try {if(typeof db.backup!=='function') throw new Error('SQLite backup API unavailable');}finally{db.close();}
     return {ok:true};
   }
+  if(input.action==='upgrade-migrate') authorizeMigration(input);
+  const engine=['offline-preflight','upgrade-migrate'].includes(input.action) ? await migrationEngine(input) : null;
+  const plan=(db,mod,options={}) => {
+    // A restored pre-chain owner still supplies its original readonly contract.
+    if(typeof engine.planDatabaseMigration==='function') {
+      const result=engine.planDatabaseMigration(db,mod,{...options,strict:true});
+      if(input.requireCurrent && (result.steps.length || result.empty)) throw Error('Database migrations remain before data-ready');
+      return result;
+    }
+    if(input.requireCurrent) throw Error('Installed migration planner unavailable');
+    return mod.inspectSchema(db,{...options,strict:true});
+  };
   const rows=[];
   for(const item of DATABASES) {
     const expected=input.manifest?.databases?.find(r=>r.source===item.source);
@@ -86,6 +115,22 @@ export async function execute(input) {
       if(state.userVersion!==expected.userVersion) throw new Error('Snapshot user_version mismatch');
       rows.push({...expected,...state});continue;
     }
+    if(input.action==='upgrade-migrate') {
+      // Recheck the durable capability before each owner. Ordinary openers keep
+      // rejecting this same installing marker throughout all three migrations.
+      authorizeMigration(input);
+      const absent=missing(source), mod=await ownerSchema(input,item);
+      if(absent&&!mod.supportsNewDatabase) throw Error(`Owner cannot initialize missing database: ${item.owner}`);
+      if(typeof engine.migrateDatabase!=='function') throw Error('Installed migration engine unavailable');
+      const Database=driver(input,item);
+      // Validate creation before creating even an empty business file.
+      if(absent) {const memory=new Database(':memory:');try {plan(memory,mod,{allowNew:true});}finally{memory.close();}}
+      fs.mkdirSync(path.dirname(source),{recursive:true});
+      const db=new Database(source,{fileMustExist:!absent,timeout:5000});
+      try {engine.migrateDatabase(db,mod,{allowNew:absent,strict:true});rows.push({source:item.source,status:'present',...inspectConnection(db)});}
+      finally {db.close();}
+      continue;
+    }
     if(missing(source)) {
       if(expected&&expected.status!=='missing') throw new Error(`Expected database absent: ${source}`);
       if(input.action==='offline-preflight') {
@@ -94,7 +139,7 @@ export async function execute(input) {
         // Loading a pure module alone does not prove the actual Node/native
         // driver combination can perform the owner's first database creation.
         const Database=driver(input,item), memory=new Database(':memory:');
-        try {mod.inspectSchema(memory,{allowNew:true});}finally{memory.close();}
+        try {plan(memory,mod,{allowNew:true});}finally{memory.close();}
       }
       rows.push({source:item.source,status:'missing',userVersion:null,file:null,bytes:0,sha256:null,integrityCheck:null});continue;
     }
@@ -105,12 +150,12 @@ export async function execute(input) {
       let state;
       if (input.standaloneRestored === true) {
         if (input.manifest?.status !== 'complete' || expected?.status !== 'backed_up' || typeof expected.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(expected.sha256)) throw new Error('Missing standalone restored snapshot evidence');
-        state = withStandaloneReadonly(Database, source, expected.sha256, db => {mod.inspectSchema(db); return inspectConnection(db);});
+        state = withStandaloneReadonly(Database, source, expected.sha256, db => {plan(db,mod); return inspectConnection(db);});
       } else {
         // Original/preinstall and active READY verification must see committed
         // live WAL data. Never treat those databases as standalone snapshots.
         const db=new Database(source,{readonly:true,fileMustExist:true,timeout:5000});
-        try {db.exec('BEGIN');mod.inspectSchema(db);state=inspectConnection(db);}
+        try {db.exec('BEGIN');plan(db,mod);state=inspectConnection(db);}
         finally {if(db.inTransaction)db.exec('ROLLBACK');db.close();}
       }
       rows.push({source:item.source,status:'present',...state});continue;

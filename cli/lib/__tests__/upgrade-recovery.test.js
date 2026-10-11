@@ -28,6 +28,8 @@ async function fixture(t,{missing=false,wal=false}={}) {
  const skillsDir=path.join(root,'.claude/skills');
  for(const item of CORE_DATABASES){const owner=path.join(skillsDir,item.owner);fs.mkdirSync(path.join(owner,'scripts'),{recursive:true});fs.writeFileSync(path.join(owner,'package.json'),'{"type":"module"}');fs.symlinkSync(path.resolve('skills',item.owner,'node_modules'),path.join(owner,'node_modules'));
   fs.copyFileSync(path.resolve('skills',item.owner,item.schema),path.join(owner,item.schema));
+  const migration=item.owner==='comm-bridge'?'c4-migrations.js':'migrations.js';
+  fs.copyFileSync(path.resolve('skills',item.owner,'scripts',migration),path.join(owner,'scripts',migration));
  }
  fs.copyFileSync(path.resolve('skills/comm-bridge/scripts/sqlite-schema.js'),path.join(skillsDir,'comm-bridge/scripts/sqlite-schema.js'));
  for(const item of CORE_DATABASES){if(missing&&item.owner==='scheduler')continue;const mod=await import(pathToFileURL(path.join(skillsDir,item.owner,item.schema)));const p=path.join(root,item.source);fs.mkdirSync(path.dirname(p),{recursive:true});const db=new Database(p);

@@ -4,6 +4,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {createRequire} from 'node:module';
+import {spawnSync} from 'node:child_process';
+import {protectedDataReady} from '../upgrade-protection.js';
 import {fileURLToPath} from 'node:url';
 import {CORE_DATABASES,createCoreDbSnapshot,prepareRecoveryDependencies,runCoreDbWorker} from '../core-db-backup.js';
 const installed=process.env.CORE_DB_TEST_SKILL || path.join(os.homedir(),'zylos','.claude','skills','comm-bridge');
@@ -117,4 +119,60 @@ test('worker snapshot sync failure aborts publication and retains the previous v
  } finally {if(options===undefined)delete process.env.NODE_OPTIONS;else process.env.NODE_OPTIONS=options;}
  assert.equal(fs.existsSync(path.join(dir,'.backup/db/failed-sync')),false);
  assert.equal(runCoreDbWorker({action:'verify',zylosDir:dir,dbBackupDir:previous.dbBackupDir,manifest:previous.manifest}).databases[0].integrityCheck,'ok');
+});
+
+test('controlled installed migration requires installing identity, preserves snapshots and initializes historical absent web DB', {skip:!Database},t=>{
+ const dir=fixture(t),schemaRoot=path.join(dir,'.claude/skills');
+ for(const item of CORE_DATABASES) {
+  fs.cpSync(path.resolve('skills',item.owner),path.join(schemaRoot,item.owner),{recursive:true,filter:p=>!p.split(path.sep).includes('node_modules')});
+  fs.symlinkSync(path.join(installed,'node_modules'),path.join(schemaRoot,item.owner,'node_modules'));
+ }
+ for(const [source,sql] of [['comm-bridge/c4.db','skills/comm-bridge/scripts/__tests__/fixtures/migration-history/c4-v0.1.0.sql'],['scheduler/scheduler.db',null]]) {
+  fs.mkdirSync(path.dirname(path.join(dir,source)),{recursive:true});
+  const db=new Database(path.join(dir,source));
+  if(sql)db.exec(fs.readFileSync(sql,'utf8'));
+  else db.exec(fs.readFileSync(path.resolve('skills/comm-bridge/scripts/__tests__/fixtures/migration-history/scheduler-v0.1.0.sql'),'utf8'));
+  db.close();
+ }
+ const before=fs.readFileSync(path.join(dir,'comm-bridge/c4.db'));
+ const schedulerBefore=fs.readFileSync(path.join(dir,'scheduler/scheduler.db'));
+ assert.equal(runCoreDbWorker({action:'offline-preflight',zylosDir:dir,schemaRoot}).databases.length,3);
+ assert.deepEqual(fs.readFileSync(path.join(dir,'comm-bridge/c4.db')),before);
+ assert.deepEqual(fs.readFileSync(path.join(dir,'scheduler/scheduler.db')),schedulerBefore);
+ assert.throws(()=>runCoreDbWorker({action:'offline-preflight',zylosDir:dir,schemaRoot,requireCurrent:true}),/migrations remain/);
+ const transactionId='controlled',transactionDir=path.join(dir,'.backup/self-upgrade',transactionId);
+ const payload={action:'upgrade-migrate',zylosDir:dir,schemaRoot,transactionId,transactionDir};
+ assert.throws(()=>runCoreDbWorker(payload));
+ const snapshot=createCoreDbSnapshot({zylosDir:dir,transactionId});
+ const m=createRequire(import.meta.url)('../upgrade-maintenance.cjs');
+ fs.mkdirSync(transactionDir,{recursive:true,mode:0o700});
+ fs.mkdirSync(path.join(dir,'.zylos/upgrade'),{recursive:true,mode:0o700});
+ fs.copyFileSync(path.resolve('cli/lib/upgrade-maintenance.cjs'),path.join(dir,'.zylos/upgrade/maintenance.cjs'));
+ fs.chmodSync(path.join(dir,'.zylos/upgrade/maintenance.cjs'),0o600);
+ const j={formatVersion:1,transactionId,zylosDir:dir,skillsDir:schemaRoot,phase:'installing',installationIntent:true,initialIdentity:{},dbBackupDir:snapshot.dbBackupDir,snapshotManifestHash:m.hash(path.join(snapshot.dbBackupDir,'manifest.json'))};
+ const digest='a'.repeat(64);
+ Object.assign(j,{nodePath:process.execPath,coreManifest:[{name:'comm-bridge',existedBefore:true,backedUp:true,originalHash:digest}],originalServices:[]});
+ j.initialIdentity={nodePath:process.execPath,cliRoot:path.join(dir,'package/cli'),cliHash:digest,packageJson:path.join(dir,'package/package.json'),packageHash:digest,workerPath:path.join(dir,'package/cli/lib/core-db-backup-worker.js'),workerHash:digest,ecosystemHash:null,databases:CORE_DATABASES.map(item=>({source:item.source,exists:item.owner!=='web-console'}))};
+ const ordinary=[['comm-bridge/scripts/c4-db.js','getDb',"INSERT INTO conversations(direction,channel,content) VALUES ('in','fixture','after-ready')"],['scheduler/scripts/database.js','getDb',"INSERT INTO tasks(id,name,prompt,type,next_run_at,created_at,updated_at) VALUES ('after-ready','fixture','fixture','one-time',1,1,1)"],['web-console/scripts/db.js','openDb',"INSERT INTO sessions(token,created_at,last_seen_at) VALUES ('after-ready',1,1)"]];
+ const open=(item)=>spawnSync(process.execPath,['--input-type=module','-e',`const mod=await import(${JSON.stringify(path.join(schemaRoot,item[0]))});const db=mod[${JSON.stringify(item[1])}]();db.exec(${JSON.stringify(item[2])});db.close();`],{encoding:'utf8',env:{...process.env,HOME:dir,ZYLOS_DIR:dir,PM2_HOME:path.join(dir,'pm2-home')}});
+ m.durable(path.join(transactionDir,'journal.json'),j);m.marker(dir,transactionDir,j);
+ for(const item of ordinary){const result=open(item);assert.notEqual(result.status,0);assert.match(result.stderr,/unavailable|maintenance|upgrade/i);}
+
+ assert.throws(()=>m.assertCoreDatabaseAvailable(dir),/maintenance|upgrade|blocked/i);
+ assert.throws(()=>runCoreDbWorker({...payload,transactionId:'other'}),/identity mismatch/);
+ const result=runCoreDbWorker(payload);
+ assert.equal(result.databases.length,3);assert.ok(result.databases.every(row=>row.userVersion===1));
+ assert.throws(()=>m.assertCoreDatabaseAvailable(dir),/maintenance|upgrade|blocked/i);
+ assert.equal(runCoreDbWorker({action:'offline-preflight',zylosDir:dir,schemaRoot,requireCurrent:true}).databases.length,3);
+ assert.equal(runCoreDbWorker({action:'verify',zylosDir:dir,dbBackupDir:snapshot.dbBackupDir,manifest:snapshot.manifest}).databases[0].userVersion,0);
+ assert.equal(runCoreDbWorker(payload).databases[0].userVersion,1);
+ for(const item of ordinary)assert.notEqual(open(item).status,0);
+ const preflight=m.preflight;m.preflight=()=>({success:true});
+ try {protectedDataReady({transactionDir,transactionId});}finally{m.preflight=preflight;}
+ for(const item of ordinary){const result=open(item);assert.equal(result.status,0,result.stderr);}
+ for(const [index,table] of ['conversations','tasks','sessions'].entries()) {
+  const db=new Database(path.join(dir,CORE_DATABASES[index].source),{readonly:true});
+  try {assert.equal(db.prepare(`SELECT count(*) AS n FROM ${table}`).get().n,1);}finally{db.close();}
+ }
+ assert.throws(()=>runCoreDbWorker(payload),/active installing/);
 });

@@ -21,6 +21,7 @@ function fixture(t, fault) {
     fs.writeFileSync(path.join(dest,'package.json'),'{"type":"module"}');
     fs.symlinkSync(path.resolve('skills',owner,'node_modules'),path.join(dest,'node_modules'));
     fs.writeFileSync(path.join(dest,'scripts',schema),`export const supportsNewDatabase=true;export function inspectSchema(db){db.prepare('SELECT value FROM preserved').all();}`);
+  fs.writeFileSync(path.join(dest,'scripts/sqlite-schema.js'),'export {}; // pre-chain compatibility fixture');
   }
   const original=new Map();
   for(const source of m.DB_PATHS) {

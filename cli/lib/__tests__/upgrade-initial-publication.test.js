@@ -89,7 +89,9 @@ test('data-ready publication refreshes parent context before later durable write
   beginUpgrade(f.ctx, { zylosDir: f.root, skillsDir: f.skillsDir });
   const active = maintenanceFor(f.ctx), preflight = active.preflight;
   active.preflight = () => ({ success: true });
-  try { protectedDataReady(f.ctx); } finally { active.preflight = preflight; }
+  m.update(f.ctx.transactionDir,f.ctx.journal,{phase:'installing',installationIntent:true});
+  m.marker(f.root,f.ctx.transactionDir,f.ctx.journal);
+  try { protectedDataReady(f.ctx,{migrate:()=>({databases:[]}),verify:()=>({databases:[]})}); } finally { active.preflight = preflight; }
   assert.equal(f.ctx.journal.phase, 'new_data_ready');
   m.update(f.ctx.transactionDir, f.ctx.journal, { ecosystemCreationIntent: { test: true } });
   assert.equal(m.read(path.join(f.ctx.transactionDir, 'journal.json')).phase, 'new_data_ready');
@@ -115,4 +117,31 @@ test('controller acquisition failure removes only its unpublished staging attemp
   assert.equal(m.discover(f.root).blocked, false);
   beginUpgrade(f.ctx, {zylosDir:f.root, skillsDir:f.skillsDir});
   assert.equal(f.ctx.preInstallProtection, true);
+});
+
+test('migration failure retains installing isolation and never reaches READY', t => {
+  const f=fixture(t);
+  beginUpgrade(f.ctx,{zylosDir:f.root,skillsDir:f.skillsDir});
+  m.update(f.ctx.transactionDir,f.ctx.journal,{phase:'installing',installationIntent:true});
+  m.marker(f.root,f.ctx.transactionDir,f.ctx.journal);
+  let verified=false;
+  assert.throws(()=>protectedDataReady(f.ctx,{migrate:()=>{throw Error('injected owner migration failure');},verify:()=>{verified=true;}}),/owner migration failure/);
+  assert.equal(verified,false);
+  assert.equal(m.transaction(f.root,f.ctx.transactionDir).phase,'installing');
+  assert.throws(()=>m.assertCoreDatabaseAvailable(f.root),/maintenance|upgrade|blocked/i);
+});
+
+test('changed active identity after migration prevents READY publication', t => {
+  const f=fixture(t);
+  beginUpgrade(f.ctx,{zylosDir:f.root,skillsDir:f.skillsDir});
+  m.update(f.ctx.transactionDir,f.ctx.journal,{phase:'installing',installationIntent:true});
+  m.marker(f.root,f.ctx.transactionDir,f.ctx.journal);
+  const active=maintenanceFor(f.ctx),preflight=active.preflight;
+  active.preflight=()=>({success:true});
+  try {
+    assert.throws(()=>protectedDataReady(f.ctx,{migrate:()=>{},verify:()=>{
+      m.durable(path.join(f.root,'.zylos/upgrade/active.json'),{formatVersion:1,transactionId:'other',transactionDir:f.ctx.transactionDir});
+    }}),/changed before data-ready/);
+  } finally {active.preflight=preflight;}
+  assert.equal(m.transaction(f.root,f.ctx.transactionDir).phase,'installing');
 });

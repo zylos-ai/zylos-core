@@ -80,27 +80,45 @@ export function inspectLayout(db, name, supported, tables, { allowNew = false, s
   return { version, empty: false };
 }
 
-export function guardDatabase(db, owner, { readonly = false } = {}) {
-  readonly ||= db.readonly;
-  // Creation can be interrupted after SQLite opens the file, or another
-  // initializer can create it first. The current contents, not existsSync
-  // before opening, determine whether the owner may initialize it.
-  const allowNew = !readonly && owner.supportsNewDatabase === true;
-  const initial = owner.inspectSchema(db, { allowNew, strict: false });
+// Planning is read-only: recognize the starting layout, then resolve every step
+// before any migration runs. Owners inspect the layout for the actual version,
+// rather than requiring the target version's columns at an earlier step.
+export function planDatabaseMigration(db, owner, { allowNew = false, strict = true } = {}) {
+  const current = owner.inspectSchema(db, { allowNew, strict });
+  const target = owner.SUPPORTED_SCHEMA_VERSION;
+  if (!Number.isInteger(target) || target < 0 || !Number.isInteger(current.version) || current.version < 0 || current.version > target) {
+    throw new Error('Invalid or unsupported schema migration version');
+  }
+  const steps = [];
+  for (let version = current.version; version < target; version++) {
+    const step = Object.hasOwn(owner.MIGRATIONS || {}, version) && owner.MIGRATIONS[version];
+    if (!step || step.to !== version + 1 || typeof step.migrate !== 'function') {
+      throw new Error(`Missing or invalid schema migration path ${version}→${version + 1}`);
+    }
+    steps.push({ from: version, to: step.to, migrate: step.migrate });
+  }
+  return { ...current, target, steps };
+}
+
+// One writer lock and one transaction cover the entire per-database chain.
+// Migration callbacks must keep all changes on this SQLite connection.
+export function migrateDatabase(db, owner, { allowNew = false, strict = true } = {}) {
+  if (db.readonly) throw new Error('Cannot migrate a readonly database');
+  const initial = planDatabaseMigration(db, owner, { allowNew, strict });
   if (initial.empty && db.name !== ':memory:' && db.name !== '') {
     const stat = fs.lstatSync(db.name);
     if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('Unsafe empty database file');
   }
-  if (readonly || initial.version === owner.SUPPORTED_SCHEMA_VERSION) return initial;
+  if (!initial.steps.length) return owner.inspectSchema(db, { strict });
   db.pragma('busy_timeout = 5000');
   db.exec('BEGIN IMMEDIATE');
   try {
-    const current = owner.inspectSchema(db, { allowNew, strict: false });
-    if (current.version !== owner.SUPPORTED_SCHEMA_VERSION) {
-      owner.migrate(db, { isNew: current.empty });
-      owner.inspectSchema(db, { strict: false });
-      db.pragma(`user_version = ${owner.SUPPORTED_SCHEMA_VERSION}`);
-      owner.inspectSchema(db, { strict: false });
+    // Another initializer may have completed while this connection waited.
+    const current = planDatabaseMigration(db, owner, { allowNew, strict });
+    for (const step of current.steps) {
+      step.migrate(db, { isNew: current.empty && step.from === current.version, from: step.from, to: step.to });
+      db.pragma(`user_version = ${step.to}`);
+      owner.inspectSchema(db, { strict });
     }
     db.exec('COMMIT');
   } catch (error) {
@@ -110,15 +128,31 @@ export function guardDatabase(db, owner, { readonly = false } = {}) {
     }
     throw error;
   }
-  return owner.inspectSchema(db, { strict: false });
+  return owner.inspectSchema(db, { strict });
+}
+
+export function guardDatabase(db, owner, { readonly = false } = {}) {
+  readonly ||= db.readonly;
+  if (readonly) {
+    const { steps, target, ...current } = planDatabaseMigration(db, owner, { strict: false });
+    return current;
+  }
+  return migrateDatabase(db, owner, { allowNew: owner.supportsNewDatabase === true, strict: false });
 }
 
 export function preflightDatabase(Database, dbPath, owner, { allowMissing = false } = {}) {
   if (!fs.existsSync(dbPath)) {
     if (['-wal', '-shm', '-journal'].some(suffix => fs.existsSync(dbPath + suffix))) throw new Error(`Orphan database sidecar: ${dbPath}`);
-    if (allowMissing && owner.supportsNewDatabase) return { missing: true };
+    if (allowMissing && owner.supportsNewDatabase) {
+      const empty = new Database(':memory:');
+      try { planDatabaseMigration(empty, owner, { allowNew: true, strict: false }); } finally { empty.close(); }
+      return { missing: true };
+    }
     throw new Error(`Database not found: ${dbPath}`);
   }
   const db = new Database(dbPath, { readonly: true, fileMustExist: true });
-  try { return owner.inspectSchema(db, { strict: false }); } finally { db.close(); }
+  try {
+    const { steps, target, ...current } = planDatabaseMigration(db, owner, { strict: false });
+    return current;
+  } finally { db.close(); }
 }

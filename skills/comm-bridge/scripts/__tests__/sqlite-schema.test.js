@@ -6,10 +6,14 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { guardDatabase, preflightDatabase, assertCoreDatabaseAvailable } from '../sqlite-schema.js';
+import { guardDatabase as registeredGuardDatabase, preflightDatabase, assertCoreDatabaseAvailable } from '../sqlite-schema.js';
 import * as c4 from '../c4-schema.js';
 import * as scheduler from '../../../scheduler/scripts/schema.js';
 import * as wc from '../../../web-console/scripts/schema.js';
+// Existing fault/concurrency probes replace the registered 0→1 callback.
+function guardDatabase(db, owner, options) {
+  return registeredGuardDatabase(db, owner.migrate ? { ...owner, MIGRATIONS: { 0: { to: 1, migrate: owner.migrate } } } : owner, options);
+}
 const repo = fileURLToPath(new URL('../../../../', import.meta.url));
 const sql = fs.readFileSync(new URL('../../init-db.sql', import.meta.url), 'utf8');
 function fixture(t) { const root=fs.mkdtempSync(path.join(os.tmpdir(),'core-schema-')); t.after(()=>fs.rmSync(root,{recursive:true,force:true}));return root; }
@@ -112,7 +116,7 @@ test('all deployed owners recover existing zero-byte and initialized empty versi
 });
 test('process death during initial migration leaves an empty database recoverable by the real owner',async t=>{
  const root=fixture(t),file=path.join(root,'comm-bridge/c4.db'),ready=path.join(root,'ready');fs.mkdirSync(path.dirname(file));
- const running=childModule(root, `import fs from 'node:fs';import Database from './skills/comm-bridge/node_modules/better-sqlite3/lib/index.js';import * as owner from './skills/comm-bridge/scripts/c4-schema.js';import {guardDatabase} from './skills/comm-bridge/scripts/sqlite-schema.js';import {migrateSchema} from './skills/comm-bridge/scripts/c4-db.js';const db=new Database(${JSON.stringify(file)});guardDatabase(db,{...owner,migrate(connection,options){migrateSchema(connection,options);fs.writeFileSync(${JSON.stringify(ready)},'ready');Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0);}});`);
+ const running=childModule(root, `import fs from 'node:fs';import Database from './skills/comm-bridge/node_modules/better-sqlite3/lib/index.js';import * as owner from './skills/comm-bridge/scripts/c4-schema.js';import {guardDatabase as registeredGuardDatabase} from './skills/comm-bridge/scripts/sqlite-schema.js';const guardDatabase=(db,owner)=>registeredGuardDatabase(db,{...owner,MIGRATIONS:{0:{to:1,migrate:owner.migrate}}});import {migrateSchema} from './skills/comm-bridge/scripts/c4-db.js';const db=new Database(${JSON.stringify(file)});guardDatabase(db,{...owner,migrate(connection,options){migrateSchema(connection,options);fs.writeFileSync(${JSON.stringify(ready)},'ready');Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0);}});`);
  t.after(()=>running.child.kill('SIGKILL'));await waitFile(ready);running.child.kill('SIGKILL');assert.equal((await running.done).signal,'SIGKILL');
  const interrupted=new Database(file);assert.equal(interrupted.pragma('user_version',{simple:true}),0);assert.equal(interrupted.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE type='table'").get().n,0);interrupted.close();
  run(root, `import {getDb,close} from './skills/comm-bridge/scripts/c4-db.js';getDb();close();`);
@@ -120,7 +124,7 @@ test('process death during initial migration leaves an empty database recoverabl
 });
 test('two processes initialize the same existing empty database under one writer lock',async t=>{
  const root=fixture(t),file=path.join(root,'db'),firstReady=path.join(root,'first'),secondReady=path.join(root,'second'),release=path.join(root,'release'),migrations=path.join(root,'migrations');fs.writeFileSync(file,'');
- const imports=`import fs from 'node:fs';import Database from './skills/comm-bridge/node_modules/better-sqlite3/lib/index.js';import * as owner from './skills/comm-bridge/scripts/c4-schema.js';import {guardDatabase} from './skills/comm-bridge/scripts/sqlite-schema.js';import {migrateSchema} from './skills/comm-bridge/scripts/c4-db.js';const db=new Database(${JSON.stringify(file)});`;
+ const imports=`import fs from 'node:fs';import Database from './skills/comm-bridge/node_modules/better-sqlite3/lib/index.js';import * as owner from './skills/comm-bridge/scripts/c4-schema.js';import {guardDatabase as registeredGuardDatabase} from './skills/comm-bridge/scripts/sqlite-schema.js';const guardDatabase=(db,owner)=>registeredGuardDatabase(db,{...owner,MIGRATIONS:{0:{to:1,migrate:owner.migrate}}});import {migrateSchema} from './skills/comm-bridge/scripts/c4-db.js';const db=new Database(${JSON.stringify(file)});`;
  const first=childModule(root,imports+`guardDatabase(db,{...owner,migrate(connection,options){fs.writeFileSync(${JSON.stringify(firstReady)},'ready');while(!fs.existsSync(${JSON.stringify(release)}))Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,10);fs.appendFileSync(${JSON.stringify(migrations)},'1');migrateSchema(connection,options);}});db.close();`);
  t.after(()=>first.child.kill('SIGKILL'));await waitFile(firstReady);
  const second=childModule(root,imports+`let inspections=0;guardDatabase(db,{...owner,inspectSchema(connection,options){const result=owner.inspectSchema(connection,options);if(++inspections===1){if(!result.empty)throw Error('expected empty schema before lock');fs.writeFileSync(${JSON.stringify(secondReady)},'ready');}return result;},migrate(connection,options){fs.appendFileSync(${JSON.stringify(migrations)},'2');migrateSchema(connection,options);}});db.close();`);
