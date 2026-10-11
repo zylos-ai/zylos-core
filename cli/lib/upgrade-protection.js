@@ -472,7 +472,19 @@ export function protectedDataReady(ctx, overrides = {}) {
   if(j.phase!=='installing' || j.installationIntent!==true || j.transactionId!==ctx.transactionId) throw Error('data-ready requires own installing transaction');
   // This function runs in the newly installed finalizer. Use its worker, not
   // the frozen snapshot worker whose code predates the installed migrations.
-  (overrides.migrate ?? runCoreDbWorker)({action:'upgrade-migrate',zylosDir:j.zylosDir,schemaRoot:j.skillsDir,transactionDir:dir,transactionId:j.transactionId});
+  const migrated = (overrides.migrate ?? runCoreDbWorker)({action:'upgrade-migrate',zylosDir:j.zylosDir,schemaRoot:j.skillsDir,transactionDir:dir,transactionId:j.transactionId});
+  // TEMPORARY PR817 rollback experiment: remove this block after the host test.
+  // Each worker connection has COMMITted and closed before this result returns.
+  if (migrated?.databases?.length !== 3 ||
+      migrated.databases.some(database => database.status !== 'present' || database.userVersion !== 2 || database.integrityCheck !== 'ok')) {
+    throw Error('PR817 fault probe did not observe three committed version-2 databases');
+  }
+  maintenance.durable(path.join(dir, 'pr817-fault-after-migration.json'), {
+    transactionId: j.transactionId,
+    failurePoint: 'after-three-committed-migrations-before-data-ready',
+    databases: migrated.databases
+  });
+  throw Error('PR817 intentional failure after all three databases committed schema version 2');
   (overrides.verify ?? runCoreDbWorker)({action:'offline-preflight',zylosDir:j.zylosDir,schemaRoot:j.skillsDir,requireCurrent:true});
   const checked = maintenance.preflight(dir, j, null);
   if (checked.success === false) throw Error(checked.error || 'new code offline preflight failed');

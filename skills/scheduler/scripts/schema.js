@@ -1,9 +1,13 @@
 import { migrateSchema } from './migrations.js';
 import { inspectLayout } from '../../comm-bridge/scripts/sqlite-schema.js';
-export const SUPPORTED_SCHEMA_VERSION = 1;
+export const SUPPORTED_SCHEMA_VERSION = 2;
 export const supportsNewDatabase = true;
 // Unmarked released layouts enter the explicit schema migration chain at 0.
-export const MIGRATIONS = Object.freeze({ 0: Object.freeze({ to: 1, migrate: migrateSchema }) });
+// TEMPORARY PR817 real-host rollback probe: a version-only committed migration.
+export const MIGRATIONS = Object.freeze({
+  0: Object.freeze({ to: 1, migrate: migrateSchema }),
+  1: Object.freeze({ to: 2, migrate() {} })
+});
 export const TABLES = {
   "tasks": [
     "id",
