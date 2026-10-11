@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Upgrade notice
+
+**Before your first upgrade to the release containing the SQLite upgrade protection (#803, #817), manually back up all three core databases.** The older updater cannot automatically perform this new preinstall backup step. Before starting the upgrade, ask the Agent to:
+
+- Pause all writers to `comm-bridge/c4.db`, `scheduler/scheduler.db`, and `web-console/web-console.db` under the Zylos data directory, and back them up to a separate directory outside package installation and temporary cleanup.
+- Use the SQLite backup API to preserve committed WAL data, or make a complete offline backup only after confirming all database users have stopped. Do not copy only the `.db` files if committed data may still be in WAL files. Record originally absent databases as missing instead of creating them.
+- Verify that each backup is readable, record the original Zylos version and backup location, and continue the upgrade only after all three backup results have been verified. Keep writes paused between backup and upgrade. **If any backup or verification fails, do not start the upgrade.**
+
+See [First adoption](docs/self-upgrade-recovery.md#first-adoption) for the backup and recovery boundary. This is an explicit pre-upgrade instruction, not an automatic backup step added to an already installed older updater.
+
 ## [0.8.3] - 2026-10-08
 
 ### Fixed

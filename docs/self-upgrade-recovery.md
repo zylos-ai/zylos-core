@@ -74,13 +74,33 @@ applies to protected upgrades unless explicitly stated otherwise.
 ## First adoption
 
 Protection requires a baseline containing this updater, the database guards,
-stable bootstrap, and pure schema inspectors. Before first deploying this baseline, take a separate consistent snapshot of
-the three databases and obtain the operator's confirmation. Stop managed readers
-and writers for that snapshot, and retain it outside package installation or
-temporary cleanup. The last upgrade initiated by an older updater has that older
-updater's guarantees; installation-time or later snapshots do not retroactively
-provide preinstall protection. Installing this package alone
-does not enable a boot service or establish persisted runtime authentication.
+stable bootstrap, and pure schema inspectors. **Before the first upgrade to this
+baseline, manually complete and verify a separate backup of all three databases.**
+The Agent should read the release note / CHANGELOG and perform this prerequisite
+in the existing environment before starting the old updater:
+
+1. Locate `comm-bridge/c4.db`, `scheduler/scheduler.db`, and
+   `web-console/web-console.db` relative to the Zylos data directory. Pause their
+   writers and retain backups in an independent directory outside package
+   installation and temporary cleanup.
+2. Use the SQLite backup API to include committed WAL data. Alternatively,
+   confirm that all database users (readers and writers) have stopped before
+   taking a complete offline backup, including any required WAL/journal files.
+   Copying only a `.db` file while committed data remains in its WAL is not a
+   complete backup. Record each originally absent database as missing; do not
+   create a database just to back it up.
+3. Verify that each backup is readable, record the original Zylos version and
+   backup location, and obtain the operator's confirmation. Keep writes paused
+   through the subsequent upgrade so the backup remains the pre-upgrade state.
+   **If any backup or verification fails, do not start the upgrade.**
+
+This release-note instruction does not make an already installed older updater
+execute the backup automatically. The last upgrade initiated by that updater
+still has its older guarantees; installation-time or later snapshots do not
+retroactively provide preinstall protection. Preserve the separate backup for
+manual recovery if this first upgrade fails; it does not give the old updater
+automatic restoration. Installing this package alone does not enable a boot
+service or establish persisted runtime authentication.
 
 Existing operator-owned `.zylos` and `.backup` parent directories may retain
 legacy permissions and supported directory aliases. Without an explicit active
