@@ -19,7 +19,7 @@ test('partial skill deployment does not import diagnostics, formatting, registry
  fs.writeFileSync(path.join(root,'package.json'),'{"type":"module"}');
  fs.copyFileSync(path.resolve('skills/comm-bridge/scripts/c4-session-init.js'),hook);
  for(const [source,target] of [['upgrade-bootstrap.cjs','bootstrap.cjs'],['upgrade-maintenance.cjs','maintenance.cjs']]){fs.copyFileSync(path.resolve('cli/lib',source),path.join(stable,target));fs.chmodSync(path.join(stable,target),0o600);}
- const dir=path.join(root,'.backup/self-upgrade/tx');fs.mkdirSync(dir,{recursive:true,mode:0o700});fs.writeFileSync(path.join(dir,'journal.json'),'{broken',{mode:0o600});
+ const dir=path.join(root,'.backup/self-upgrade/tx');fs.mkdirSync(dir,{recursive:true,mode:0o700});fs.writeFileSync(path.join(dir,'journal.json'),'{broken',{mode:0o600});fs.writeFileSync(path.join(stable,'active.json'),'{}',{mode:0o600});
  // An explicit directory alias exercises this entry-point boundary on Linux too.
  const alias=path.join(root,'hook-alias');fs.symlinkSync(path.dirname(hook),alias,'dir');
  for(const entry of [hook,path.join(alias,'c4-session-init.js')]) {
@@ -28,21 +28,13 @@ test('partial skill deployment does not import diagnostics, formatting, registry
  }
 });
 
-test('lost stable directories with transaction materials cue recovery before normal runtime or C4 imports', t => {
+test('unmarked historical transactions do not require stable startup helpers', t => {
  for (const missing of ['.zylos', '.zylos/upgrade']) {
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'upgrade-lost-stable-'));
   t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
   fs.mkdirSync(path.join(root,'.backup/self-upgrade/tx'),{recursive:true,mode:0o700});
   if (missing === '.zylos/upgrade') fs.mkdirSync(path.join(root,'.zylos'),{mode:0o700});
-  assert.match(upgradeStartupPrompt(root), /Upgrade discovery failed/, missing);
-  const hook=path.join(root,'hook/c4-session-init.js');fs.mkdirSync(path.dirname(hook));
-  fs.writeFileSync(path.join(root,'package.json'),'{"type":"module"}');
-  fs.copyFileSync(path.resolve('skills/comm-bridge/scripts/c4-session-init.js'),hook);
-  const result=spawnSync(process.execPath,[hook],{encoding:'utf8',env:{ZYLOS_DIR:root,PATH:process.env.PATH}});
-  assert.equal(result.status,0,result.stderr);
-  assert.match(result.stdout,/UPGRADE RECOVERY TASK/);
-  assert.match(result.stdout,/Upgrade discovery failed/);
-  assert.match(result.stdout,/Do not query C4/);
+  assert.equal(upgradeStartupPrompt(root), null);
  }
 });
 

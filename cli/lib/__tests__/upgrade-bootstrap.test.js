@@ -19,6 +19,7 @@ function fixture(t) {
     const dir = path.join(root, '.backup/self-upgrade', id);
     fs.mkdirSync(dir, {recursive: true, mode: 0o700});
     fs.writeFileSync(path.join(dir, 'journal.json'), JSON.stringify({formatVersion: 1, transactionId: id, zylosDir: root, phase: 'prepared', initialIdentity: {}, ...extra}), {mode: 0o600});
+    if(extra.phase!=='upgrade_complete') fs.writeFileSync(path.join(stable,'active.json'),JSON.stringify({formatVersion:1,transactionId:id,transactionDir:dir}),{mode:0o600});
     return dir;
   }
   return {root, stable, api, journal};

@@ -59,7 +59,8 @@ for(const relative of ['.zylos/upgrade/active.json','.backup/self-upgrade','.zyl
   t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
   const file=path.join(root,relative);fs.mkdirSync(path.dirname(file),{recursive:true,mode:0o700});fs.symlinkSync(path.join(root,'missing-target'),file);
   const result=m.discover(root);assert.equal(result.blocked,true);assert.match(result.diagnostics.join(' '),/unsafe recovery path/);
-  assert.throws(()=>m.assertCoreDatabaseAvailable(root),/core database maintenance/);
+  if(relative.startsWith('.backup'))assert.doesNotThrow(()=>m.assertCoreDatabaseAvailable(root));
+  else assert.throws(()=>m.assertCoreDatabaseAvailable(root),/core database maintenance/);
   assert.equal(fs.lstatSync(file).isSymbolicLink(),true);assert.equal(fs.existsSync(path.join(root,'missing-target')),false);
 });
 test('absent recovery directories permit ordinary database access',t=>{
@@ -86,7 +87,7 @@ const badReadyRecords={
   'missing original service set':j=>delete j.originalServices,
 };
 for(const [label,alter] of Object.entries(badReadyRecords))test(`data-ready ${label} stays isolated without touching business files`,t=>{
-  const f=readyFixture(t);alter(f.j);f.save();const business=path.join(f.root,'ordinary-business-file');fs.writeFileSync(business,'normal writes');
+  const f=readyFixture(t);alter(f.j);f.save();m.marker(f.root,f.dir,f.j);const business=path.join(f.root,'ordinary-business-file');fs.writeFileSync(business,'normal writes');
   const result=m.discover(f.root);assert.equal(result.blocked,true);assert.match(result.diagnostics.join(' '),/data-ready/);assert.throws(()=>m.assertCoreDatabaseAvailable(f.root),/maintenance/);assert.equal(fs.readFileSync(business,'utf8'),'normal writes');
 });
 test('complete data-ready records allow subsequent legitimate writes without frozen hash revalidation',t=>{
@@ -98,12 +99,12 @@ for(const phase of ['upgrade_complete','restored_complete','aborted_before_insta
   for(const field of ['initialIdentity','coreManifest','originalServices']){const damaged={...f.j};delete damaged[field];m.durable(path.join(f.dir,'journal.json'),damaged);assert.equal(m.terminalValid(damaged),false);assert.equal(m.discover(f.root).blocked,true);}
 });
 test('verified preinstall abort before any completed backup requires original identity but no snapshot',t=>{
-  const f=readyFixture(t);Object.assign(f.j,{phase:'aborted_before_install',installationIntent:false,cleanup:{complete:false},terminalEvidence:{verified:true,kind:'original_deployment_and_readonly_data'}});f.j.coreManifest[0].backedUp=false;delete f.j.dbBackupDir;delete f.j.snapshotManifestHash;f.save();assert.equal(m.discover(f.root).blocked,false);
+  const f=readyFixture(t);Object.assign(f.j,{phase:'aborted_before_install',installationIntent:false,cleanup:{complete:false},terminalEvidence:{verified:true,kind:'original_deployment_and_readonly_data'}});f.j.coreManifest[0].backedUp=false;delete f.j.dbBackupDir;delete f.j.snapshotManifestHash;f.save();m.marker(f.root,f.dir,f.j);assert.equal(m.discover(f.root).blocked,false);
   f.j.initialIdentity={};f.save();assert.equal(m.discover(f.root).blocked,true);assert.throws(()=>m.assertCoreDatabaseAvailable(f.root),/maintenance/);
 });
 test('active overflow retains bounded candidate records and fails closed after the full scan',t=>{
   const f=readyFixture(t);for(let n=0;n<32;n++){const id='active-'+n,dir=path.join(f.root,'.backup/self-upgrade',id);fs.mkdirSync(dir,{mode:0o700});m.durable(path.join(dir,'journal.json'),{...f.j,transactionId:id,phase:'restoring'});}
-  const found=m.discover(f.root);assert.equal(found.candidates.length,8);assert.equal(found.blocked,true);assert.match(found.diagnostics.join(' '),/active transaction limit exceeded/);assert.throws(()=>m.assertCoreDatabaseAvailable(f.root),/maintenance/);
+  const found=m.discover(f.root);assert.equal(found.candidates.length,8);assert.equal(found.blocked,true);assert.match(found.diagnostics.join(' '),/active transaction limit exceeded/);assert.doesNotThrow(()=>m.assertCoreDatabaseAvailable(f.root));
   const budget=m.discover(f.root,{budget:8});assert.equal(budget.blocked,true);assert.match(budget.diagnostics.join(' '),/scan budget exhausted/);
 });
 

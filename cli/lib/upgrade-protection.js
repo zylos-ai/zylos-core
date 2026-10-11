@@ -197,6 +197,7 @@ export function beginBackupOnly(ctx, {zylosDir, skillsDir}) {
   const found = maintenance.discover(zylosDir);
   if (found.candidates.length || found.diagnostics.length || found.marker) throw Error('unresolved prior upgrade transaction');
   ctx.backupOnly = true;
+  ctx.preInstallServicesRestored = true; // No service stop or installation has occurred.
   ctx.backupOnlyRoot = zylosDir;
   ctx.backupOnlySkillsDir = expectedSkills;
   ctx.preInstallProtection = false;
@@ -205,20 +206,37 @@ export function beginBackupOnly(ctx, {zylosDir, skillsDir}) {
 export function prepareBackupOnlyInstall(ctx, deps = {}) {
   const zylosDir = ctx.backupOnlyRoot, skillsDir = ctx.backupOnlySkillsDir;
   (deps.probeSnapshotSync ?? probeCoreDbSnapshotSync)(zylosDir);
-  const j = {zylosDir, skillsDir};
+  const j = {zylosDir, skillsDir, initialIdentity: {ecosystemHash: null}};
   const services = (deps.services ?? maintenance.services)(j);
-  ctx.servicesWereRunning = services.filter(s => s.status === 'online').map(s => s.name);
-  (deps.stop ?? maintenance.stopBackupOnly)(j);
-  ctx.servicesStopped = [...ctx.servicesWereRunning];
-  const snapshot = (deps.snapshot ?? createCoreDbSnapshot)({
-    zylosDir, transactionId: 'backup-' + Date.now() + '-' + crypto.randomBytes(6).toString('hex'),
-    fromVersion: ctx.from, toVersion: ctx.to
-  });
-  ctx.dbBackupDir = snapshot.dbBackupDir;
-  ctx.dbManifest = snapshot.manifest;
-  ctx.backupWarnings = snapshot.warnings;
-  (deps.verifySnapshot ?? runCoreDbWorker)({action:'verify', zylosDir, dbBackupDir:snapshot.dbBackupDir, manifest:snapshot.manifest});
-  ctx.dbSnapshotVerified = true;
+  j.originalServices = services.filter(s => s.status === 'online');
+  ctx.servicesWereRunning = j.originalServices.map(s => s.name);
+  try {
+    ctx.preInstallServicesRestored = false;
+    // stop may partially succeed before throwing; the cleanup covers it too.
+    (deps.stop ?? maintenance.stopBackupOnly)(j);
+    ctx.servicesStopped = [...ctx.servicesWereRunning];
+    const snapshot = (deps.snapshot ?? createCoreDbSnapshot)({
+      zylosDir, transactionId: 'backup-' + Date.now() + '-' + crypto.randomBytes(6).toString('hex'),
+      fromVersion: ctx.from, toVersion: ctx.to
+    });
+    ctx.dbBackupDir = snapshot.dbBackupDir;
+    ctx.dbManifest = snapshot.manifest;
+    ctx.backupWarnings = snapshot.warnings;
+    (deps.verifySnapshot ?? runCoreDbWorker)({action:'verify', zylosDir, dbBackupDir:snapshot.dbBackupDir, manifest:snapshot.manifest});
+    ctx.dbSnapshotVerified = true;
+  } catch (error) {
+    // This boundary precedes npm and only reads business databases. Restore
+    // exactly the previously online records, never a service already stopped.
+    try {
+      (deps.start ?? maintenance.start)(j);
+      (deps.verifyServices ?? maintenance.verifyServices)(j);
+      ctx.preInstallServicesRestored = true;
+    } catch (cleanupError) {
+      ctx.preInstallServicesRestored = false;
+      error.message += '; original service restart failed: ' + cleanupError.message;
+    }
+    throw error;
+  }
 }
 export function saveProtectedCode(ctx) {
   const maintenance = maintenanceFor(ctx);
@@ -257,10 +275,11 @@ export function saveProtectedCode(ctx) {
     phase: 'code_saved'
   });
 }
-export function prepareProtectedInstall(ctx) {
+export function prepareProtectedInstall(ctx, overrides = {}) {
   const maintenance = maintenanceFor(ctx);
   const j = ctx.journal,
     dir = ctx.transactionDir;
+  const deps = prepareRecoveryDependencies(dir, j.zylosDir);
   maintenance.marker(j.zylosDir, dir, j);
   maintenance.update(dir, j, {
     phase: 'stopping'
@@ -269,7 +288,7 @@ export function prepareProtectedInstall(ctx) {
   maintenance.update(dir, j, {
     phase: 'offline'
   });
-  const snapshot = createCoreDbSnapshot({
+  const snapshot = (overrides.snapshot ?? createCoreDbSnapshot)({
     zylosDir: j.zylosDir,
     transactionId: j.transactionId,
     fromVersion: j.from,
@@ -283,7 +302,6 @@ export function prepareProtectedInstall(ctx) {
     dbBackupDir: snapshot.dbBackupDir,
     snapshotManifestHash: maintenance.hash(path.join(snapshot.dbBackupDir, 'manifest.json'))
   });
-  const deps = prepareRecoveryDependencies(dir, j.zylosDir);
   for (const [src, name] of recoveryFiles()) {
     const file = path.join(dir, name);
     fs.copyFileSync(path.join(library, src), file);

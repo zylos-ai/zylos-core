@@ -62,16 +62,16 @@ test('preflight is raw readonly, supports expected missing and rejects orphan si
  fs.writeFileSync(file+'-wal','orphan');assert.throws(()=>preflightDatabase(Database,file,wc,{allowMissing:true}),/Orphan/);
 });
 test('maintenance and malformed discovery blocks normal openers without initializing',t=>{
- const root=fixture(t);const dir=path.join(root,'.backup/self-upgrade/tx');fs.mkdirSync(dir,{recursive:true});fs.writeFileSync(path.join(dir,'journal.json'),JSON.stringify({formatVersion:1,transactionId:'tx',phase:'restoring'}));assert.throws(()=>assertCoreDatabaseAvailable(root),/unavailable/);
+ const root=fixture(t);const dir=path.join(root,'.backup/self-upgrade/tx');fs.mkdirSync(dir,{recursive:true});fs.mkdirSync(path.join(root,'.zylos/upgrade'),{recursive:true});fs.writeFileSync(path.join(root,'.zylos/upgrade/active.json'),'{}');fs.writeFileSync(path.join(dir,'journal.json'),JSON.stringify({formatVersion:1,transactionId:'tx',phase:'restoring'}));assert.throws(()=>assertCoreDatabaseAvailable(root),/unavailable/);
  fs.writeFileSync(path.join(dir,'journal.json'),'{');assert.throws(()=>assertCoreDatabaseAvailable(root));
 });
 for(const phase of ['new_data_ready','restored_complete','aborted_before_install'])test(`missing stable maintenance cannot trust ${phase} labels to release normal owner openers`,t=>{
- const root=fixture(t),dir=path.join(root,'.backup/self-upgrade/tx');fs.mkdirSync(dir,{recursive:true,mode:0o700});fs.writeFileSync(path.join(dir,'journal.json'),JSON.stringify({formatVersion:1,transactionId:'tx',phase,cleanup:{complete:true},terminalEvidence:{verified:true}}),{mode:0o600});
+ const root=fixture(t),dir=path.join(root,'.backup/self-upgrade/tx');fs.mkdirSync(dir,{recursive:true,mode:0o700});fs.mkdirSync(path.join(root,'.zylos/upgrade'),{recursive:true});fs.writeFileSync(path.join(root,'.zylos/upgrade/active.json'),'{}');fs.writeFileSync(path.join(dir,'journal.json'),JSON.stringify({formatVersion:1,transactionId:'tx',phase,cleanup:{complete:true},terminalEvidence:{verified:true}}),{mode:0o600});
  assert.throws(()=>assertCoreDatabaseAvailable(root),/stable maintenance entry missing/);
  run(root, `import assert from 'node:assert/strict';import fs from 'node:fs';import {getDb} from './skills/comm-bridge/scripts/c4-db.js';import {getDb as scheduler} from './skills/scheduler/scripts/database.js';import {openDb} from './skills/web-console/scripts/db.js';for(const open of [getDb,scheduler,openDb])assert.throws(open,/stable maintenance entry missing/);for(const source of ['comm-bridge/c4.db','scheduler/scheduler.db','web-console/web-console.db'])assert.equal(fs.existsSync(process.env.ZYLOS_DIR+'/'+source),false);`);
 });
 for(const relative of ['.zylos/upgrade/active.json','.backup/self-upgrade','.zylos/upgrade','.zylos','.backup'])test(`missing stable maintenance rejects dangling ${relative}`,t=>{
- const root=fixture(t),file=path.join(root,relative);fs.mkdirSync(path.dirname(file),{recursive:true,mode:0o700});fs.symlinkSync(path.join(root,'absent'),file);assert.throws(()=>assertCoreDatabaseAvailable(root),/unavailable/);assert.equal(fs.lstatSync(file).isSymbolicLink(),true);
+ const root=fixture(t),file=path.join(root,relative);fs.mkdirSync(path.dirname(file),{recursive:true,mode:0o700});fs.symlinkSync(path.join(root,'absent'),file);if(relative.startsWith('.backup'))assert.doesNotThrow(()=>assertCoreDatabaseAvailable(root));else assert.throws(()=>assertCoreDatabaseAvailable(root),/unavailable/);assert.equal(fs.lstatSync(file).isSymbolicLink(),true);
 });
 test('first-adoption absence and empty active root permit schema initialization without fabricated protection',t=>{
  const root=fixture(t);assert.doesNotThrow(()=>assertCoreDatabaseAvailable(root));fs.mkdirSync(path.join(root,'.backup/self-upgrade'),{recursive:true,mode:0o700});assert.doesNotThrow(()=>assertCoreDatabaseAvailable(root));
@@ -171,4 +171,22 @@ for (const layout of ['symlink .zylos', 'symlink .backup', 'group writable', 'pa
 test('dangling stable helper with actual materials still blocks ordinary owners', t => {
  const root=fixture(t),stable=path.join(root,'.zylos/upgrade');fs.mkdirSync(stable,{recursive:true});fs.symlinkSync(path.join(root,'missing'),path.join(stable,'maintenance.cjs'));fs.writeFileSync(path.join(stable,'active.json'),'{}');
  assert.throws(()=>assertCoreDatabaseAvailable(root),/unsafe stable maintenance entry/);
+});
+
+test('ordinary owners accept additional tables and columns while upgrade inspection stays strict', t => {
+ const root=fixture(t);
+ const openers=`import {getDb,close} from './skills/comm-bridge/scripts/c4-db.js';import {getDb as scheduler} from './skills/scheduler/scripts/database.js';import {openDb} from './skills/web-console/scripts/db.js';`;
+ run(root,openers+`getDb();close();scheduler().close();openDb().close();`);
+ for(const [relative,owner,table] of [['comm-bridge/c4.db',c4,'checkpoints'],['scheduler/scheduler.db',scheduler,'tasks'],['web-console/web-console.db',wc,'sessions']]) {
+  const db=new Database(path.join(root,relative));
+  db.exec(`CREATE TABLE extension_state(value TEXT); ALTER TABLE ${table} ADD COLUMN extension_value TEXT`);
+  assert.doesNotThrow(()=>guardDatabase(db,owner));
+  assert.throws(()=>owner.inspectSchema(db),/unsupported columns|unsupported tables/);
+  db.close();
+  assert.doesNotThrow(()=>preflightDatabase(Database,path.join(root,relative),owner));
+ }
+ run(root,openers+`for(const db of [getDb(),scheduler(),openDb()]){db.prepare('INSERT INTO extension_state VALUES (?)').run('daily-write');}close();`);
+ for(const relative of ['comm-bridge/c4.db','scheduler/scheduler.db','web-console/web-console.db']) {
+  const db=new Database(path.join(root,relative),{readonly:true});assert.equal(db.prepare('SELECT value FROM extension_state').get().value,'daily-write');db.close();
+ }
 });

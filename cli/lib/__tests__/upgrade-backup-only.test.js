@@ -18,6 +18,8 @@ function fixture(t) {
  for(const item of CORE_DATABASES) {
   const owner=path.join(skillsDir,item.owner);fs.mkdirSync(owner,{recursive:true});
   fs.writeFileSync(path.join(owner,'package.json'),'{"type":"module"}');
+  fs.mkdirSync(path.join(owner,'scripts'));
+  fs.writeFileSync(path.join(owner,item.schema),`export const supportsNewDatabase=true;export function inspectSchema(db){db.prepare('SELECT value FROM preserved').all();}`);
   fs.symlinkSync(path.resolve('skills',item.owner,'node_modules'),path.join(owner,'node_modules'));
   const file=path.join(root,item.source);fs.mkdirSync(path.dirname(file),{recursive:true});
   const db=new Database(file);db.exec('CREATE TABLE preserved(value TEXT)');
@@ -29,9 +31,10 @@ function fixture(t) {
  fs.writeFileSync(path.join(bin,'pm2'),`#!${process.execPath}
  const fs=require('node:fs'),args=process.argv.slice(2),state=${JSON.stringify(state)};
  fs.appendFileSync(${JSON.stringify(pm2Calls)},JSON.stringify(args)+'\\n');
- if(args[0]==='jlist')console.log(JSON.stringify([{name:'fixture-service',pid:0,pm2_env:{status:fs.readFileSync(state,'utf8'),pm_exec_path:${JSON.stringify(path.join(skillsDir,'comm-bridge/service.js'))}}}]));
+ if(args[0]==='jlist')console.log(JSON.stringify([{name:'fixture-service',pid:fs.readFileSync(state,'utf8')==='online'?process.pid:0,pm2_env:{status:fs.readFileSync(state,'utf8'),pm_exec_path:${JSON.stringify(path.join(skillsDir,'comm-bridge/service.js'))}}},{name:'previously-stopped',pid:0,pm2_env:{status:'stopped',pm_exec_path:${JSON.stringify(path.join(skillsDir,'comm-bridge/stopped.js'))}}}]));
  else if(args[0]==='stop')fs.writeFileSync(state,'stopped');
- else {console.error('unexpected PM2 boundary '+args[0]);process.exit(19);}
+ else if(args[0]==='restart'){if(args[1]!=='fixture-service')throw Error('must not restart previously stopped service');fs.writeFileSync(state,'online');}
+ else if(args[0]!=='save'){console.error('unexpected PM2 boundary '+args[0]);process.exit(19);}
  `,{mode:0o700});
  const prior=process.env.PATH;process.env.PATH=bin+path.delimiter+prior;t.after(()=>{process.env.PATH=prior;});
  function snapshots() {
@@ -71,13 +74,13 @@ for(const platform of ['linux','darwin'])test(`${platform} without automatic rec
 for(const fault of ['stop','snapshot','verify','sync'])test(`backup-only ${fault} failure prevents npm and finalizer without publishing a recovery transaction`,t=>{
  const f=fixture(t);let finalized=false;
  f.deps.runInstalledFinalizer=()=>{finalized=true;throw Error('finalizer must not run');};
- if(fault==='snapshot') {fs.mkdirSync(path.join(f.root,'.backup'),{recursive:true});fs.writeFileSync(path.join(f.root,'.backup/db'),'blocked');}
- if(fault==='stop')f.deps.step3={stop:()=>{throw Error('injected stop failure');}};
+ if(fault==='snapshot') f.deps.step3={snapshot:()=>{throw Error('injected snapshot failure');}};
+ if(fault==='stop')f.deps.step3={stop:()=>{fs.writeFileSync(f.state,'stopped');throw Error('injected partial stop failure');}};
  if(fault==='verify')f.deps.step3={verifySnapshot:()=>{throw Error('injected snapshot verification failure');}};
  if(fault==='sync')f.deps.step3={probeSnapshotSync:()=>{throw Error('injected snapshot sync unavailable');}};
  const result=f.run();assert.equal(result.success,false,JSON.stringify(result));assert.equal(result.backupOnly,true);
  assert.equal(f.calls.length,0);assert.equal(finalized,false);assert.notEqual(result.rollback?.performed,true);
- assert.match(result.error,/injected|EEXIST|ENOTDIR/);f.untouchedMaintenance();
+ assert.match(result.error,/injected|EEXIST|ENOTDIR/);assert.equal(fs.readFileSync(f.state,'utf8'),'online');if(fault!=='sync'){assert.equal(result.preInstallServicesRestored,true);assert.equal(result.manualRecovery.required,false);assert.equal(fs.readFileSync(f.pm2Calls,'utf8').includes('["restart","previously-stopped"'),false);}f.untouchedMaintenance();
 });
 
 for(const fault of ['installer','finalizer-result','finalizer-throw'])test(`backup-only ${fault} failure retains snapshots and never restores live databases`,t=>{
@@ -172,4 +175,21 @@ test('Mac protected compensation is available without a native helper or process
  const capability=capabilityModule({platform:'darwin'});
  assert.equal(capability.platformSupported('darwin'),true);
  assert.equal(capability.identity().unsupported,true);
+});
+
+for (const protectedMode of [false,true]) for (const fault of ['driver','schema','destination']) test(`${protectedMode?'protected':'backup-only'} pre-stop ${fault} rejection leaves services running without a transaction`, t => {
+ const f=fixture(t);f.deps.protectionSupported=()=>protectedMode;
+ if(fault==='driver') fs.unlinkSync(path.join(f.skillsDir,'scheduler/node_modules'));
+ if(fault==='schema') fs.writeFileSync(path.join(f.skillsDir,'scheduler/scripts/schema.js'),`export const supportsNewDatabase=true;export function inspectSchema(){throw Error('unsupported schema fixture');}`);
+ if(fault==='destination'){fs.mkdirSync(path.join(f.root,'.backup'));fs.writeFileSync(path.join(f.root,'.backup/db'),'blocked');}
+ const result=f.run();assert.equal(result.success,false);assert.equal(result.recovery_required,false);
+ assert.equal(fs.readFileSync(f.state,'utf8'),'online');assert.equal(f.calls.length,0);
+ assert.equal(fs.existsSync(f.pm2Calls),false,'preflight must precede even PM2 discovery');f.untouchedMaintenance();
+});
+
+test('backup-only restart failure remains explicit and never claims services restored', t => {
+ const f=fixture(t);f.deps.step3={snapshot:()=>{throw Error('snapshot fault');},start:()=>{throw Error('restart fault');}};
+ const result=f.run();assert.equal(result.success,false);assert.equal(result.preInstallServicesRestored,false);
+ assert.equal(result.manualRecovery.required,true);assert.match(result.error,/snapshot fault.*restart fault/);
+ assert.equal(fs.readFileSync(f.state,'utf8'),'stopped');assert.equal(f.calls.length,0);
 });

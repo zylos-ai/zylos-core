@@ -14,7 +14,7 @@ export function savePm2ProcessList({
   let active = false;
   try {
     if (maintenance.hasRecoveryMaterials(root)) {
-      const discovery = maintenance.discover(root);
+      const discovery = maintenance.discoverActive(root);
       active = !!discovery.marker || discovery.candidates.length > 0 || discovery.diagnostics.length > 0;
     }
   } catch { active = true; }

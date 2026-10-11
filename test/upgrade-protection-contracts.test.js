@@ -29,8 +29,8 @@ test('full data ready allows normal DB access while recovery remains discoverabl
   expect(m.discover(root).blocked).toBe(false);expect(()=>m.assertCoreDatabaseAvailable(root)).not.toThrow();
  }
 });
-test('missing marker does not hide unfinished transaction',()=>{
- transaction('interrupted','offline');expect(m.discover(root).blocked).toBe(true);expect(()=>m.assertCoreDatabaseAvailable(root)).toThrow(/maintenance/);
+test('unmarked preparation stays visible to explicit discovery without gating ordinary writes',()=>{
+ transaction('interrupted','preparing',{installationIntent:false});expect(m.discover(root).blocked).toBe(true);expect(()=>m.assertCoreDatabaseAvailable(root)).not.toThrow();
 });
 test('malformed journal and malformed marker remain isolated',()=>{
  const {dir}=transaction('broken','restoring');fs.writeFileSync(path.join(dir,'journal.json'),'{',{mode:0o600});

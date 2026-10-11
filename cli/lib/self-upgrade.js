@@ -43,6 +43,7 @@ import { createRequire as createFinalizerRequire } from 'node:module';
 const finalizerRequire=createFinalizerRequire(import.meta.url);
 function requireFinalizerExit(dir,j,terminate){return finalizerRequire(path.join(dir,'finalizer.cjs')).quiesce(dir,j,{terminate});}
 
+import { preflightCoreDbUpgrade } from './core-db-backup.js';
 import { beginUpgrade, beginBackupOnly, prepareBackupOnlyInstall, saveProtectedCode, prepareProtectedInstall, markInstallationIntent, recovery, protectedDataReady, protectedSuccess, maintenance, maintenanceFor } from './upgrade-protection.js';
 
 const REPO = 'zylos-ai/zylos-core';
@@ -1527,10 +1528,13 @@ function backupOnlyResult(ctx, failed) {
     databases: ctx.dbManifest?.databases || null,
     dbSnapshotVerified: Boolean(ctx.dbSnapshotVerified),
     backupWarnings: ctx.backupWarnings || [],
+    preInstallServicesRestored: ctx.preInstallServicesRestored === true,
     manualRecovery: {
-      required: Boolean(failed),
+      required: Boolean(failed) && ctx.preInstallServicesRestored !== true,
       dbBackupDir: ctx.dbBackupDir || null,
-      instructions: ctx.dbSnapshotVerified
+      instructions: ctx.preInstallServicesRestored === true
+        ? 'Installation was not started. The previously running services were left running or restored; no database restoration was performed.'
+        : ctx.dbSnapshotVerified
         ? 'Database recovery is manual. Preserve this snapshot; stop writers and verify code/schema compatibility before restoring databases or restarting services.'
         : 'No verified database snapshot is available. Installation was not started; inspect the failure before restarting stopped services.'
     }
@@ -1753,6 +1757,15 @@ export function runSelfUpgrade({ tempDir, newVersion, mode, onStep } = {}, deps 
   const platform = deps.platform ?? process.platform;
   const protectionSupported = deps.protectionSupported ?? (() => maintenance.platformSupported(platform));
   const eligible = protectionSupported();
+  if (!deps.preInstallSteps) {
+    try {
+      const root = deps.zylosDir ?? ZYLOS_DIR;
+      const prior = maintenance.discover(root);
+      if (prior.candidates.length || prior.diagnostics.length || prior.marker) return {action:'self_upgrade',success:false,error:'unresolved prior upgrade transaction',preInstallProtection:false,rollback:{attempted:false,completed:false,performed:false},recovery_required:true};
+      (deps.preflightCoreDbUpgrade ?? preflightCoreDbUpgrade)(root);
+    }
+    catch (error) { return {action:'self_upgrade',success:false,error:error.message,preInstallProtection:false,rollback:{attempted:false,completed:false,performed:false},recovery_required:false}; }
+  }
   if(!deps.preInstallSteps && eligible) {
     try {beginUpgrade(ctx,{zylosDir:deps.zylosDir ?? ZYLOS_DIR,skillsDir:deps.skillsDir ?? SKILLS_DIR},deps.step3);}
     catch(error){return {action:'self_upgrade',success:false,error:error.message,preInstallProtection:false,rollback:{attempted:false,completed:false,performed:false},recovery_required:!!ctx.transactionDir};}

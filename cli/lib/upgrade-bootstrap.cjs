@@ -52,7 +52,7 @@ function bootstrap(root, {
   root = path.resolve(root);
   let d;
   try {
-    d = m.discover(root);
+    d = once || status ? m.discover(root) : m.discoverActive(root);
   } catch {
     // File discovery failures preserve isolation and still reach an agent.
     // Do not interpolate exception text from untrusted material into a cue.

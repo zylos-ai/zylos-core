@@ -128,9 +128,26 @@ function provisionalAbortValid(j) {
     return false;
   }
 }
-// Legacy runtime directories need no recovery validation until materials exist.
-// Damaged recovery links count as materials so absence cannot hide a transaction.
+// Ordinary entrypoints only consult the explicit active marker. Historical
+// transactions are inspected by upgrade admission and explicit recovery tools.
 function hasRecoveryMaterials(root) {
+  const present = file => {
+    try { return fs.lstatSync(file); }
+    catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+  };
+  try {
+    for (const relative of ['.zylos', '.zylos/upgrade']) {
+      const file = path.join(root, relative), stat = present(file);
+      if (!stat) continue;
+      if (stat.isSymbolicLink()) {
+        if (relative !== '.zylos' || !fs.statSync(file).isDirectory()) return true;
+      } else if (!stat.isDirectory()) return true;
+    }
+    return !!present(path.join(root, '.zylos/upgrade/active.json'));
+  } catch { return true; }
+}
+
+function hasRecoveryHistory(root) {
   const present = file => {
     try { return fs.lstatSync(file); }
     catch (error) { if (error.code === 'ENOENT') return null; throw error; }
@@ -191,7 +208,7 @@ function discover(root, {
   budget = 10000
 } = {}) {
   root = fs.realpathSync(root);
-  if (!hasRecoveryMaterials(root)) return {marker:null, candidates:[], diagnostics:[], blocked:false};
+  if (!hasRecoveryHistory(root)) return {marker:null, candidates:[], diagnostics:[], blocked:false};
   const active = path.join(root, '.backup', 'self-upgrade');
   const markerFile = path.join(root, '.zylos', 'upgrade', 'active.json');
   let marker = null,
@@ -282,8 +299,29 @@ function discover(root, {
     blocked: diagnostics.length > 0 || candidates.some(c => c.journal.installerExitUnconfirmed || c.journal.finalizerExitUnconfirmed || TERMINAL.has(c.journal.phase) && (c.journal.finalizerStarted && !c.journal.finalizerExitConfirmed || c.journal.installerStarted && !c.journal.installerExitConfirmed) || !READY.has(c.journal.phase) && !terminalValid(c.journal) && !provisionalAbortValid(c.journal))
   };
 }
+// The active marker is published before stopping writers and retained until
+// terminal cleanup. Daily checks read only its one referenced journal; old
+// backups and unrelated transaction damage cannot change availability.
+function discoverActive(root) {
+  if (!hasRecoveryMaterials(root)) return {marker:null, candidates:[], diagnostics:[], blocked:false};
+  const candidates = [], diagnostics = [];
+  let marker = null;
+  try {
+    root = fs.realpathSync(root);
+    for (const relative of ['.zylos', '.zylos/upgrade']) privatePath(path.join(root, relative), {directory:true, sharedParent:relative === '.zylos'});
+    marker = read(path.join(root, '.zylos/upgrade/active.json'));
+    const dir = path.join(root, '.backup/self-upgrade', marker.transactionId || '');
+    if (marker.formatVersion !== 1 || !ID.test(marker.transactionId) || marker.transactionDir !== dir) throw Error('invalid active marker');
+    candidates.push({dir, journal:transaction(root, dir)});
+  } catch (error) { diagnostics.push(error.message); }
+  return {marker, candidates, diagnostics,
+    blocked: diagnostics.length > 0 || candidates.some(({journal:j}) =>
+      j.installerExitUnconfirmed || j.finalizerExitUnconfirmed ||
+      TERMINAL.has(j.phase) && (j.finalizerStarted && !j.finalizerExitConfirmed || j.installerStarted && !j.installerExitConfirmed) ||
+      !READY.has(j.phase) && !terminalValid(j) && !provisionalAbortValid(j))};
+}
 function assertCoreDatabaseAvailable(root) {
-  const d = discover(root);
+  const d = discoverActive(root);
   if (d.blocked) {
     const e = Error('core database maintenance: ' + (d.diagnostics.join('; ') || d.candidates.map(c => `${c.journal.transactionId}:${c.journal.phase}`).join('; ')));
     e.code = 'ZYLOS_MAINTENANCE';
@@ -761,6 +799,7 @@ module.exports = {
   read,
   privatePath,
   discover,
+  discoverActive,
   hasRecoveryMaterials,
   assertCoreDatabaseAvailable,
   identity,

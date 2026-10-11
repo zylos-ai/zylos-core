@@ -48,11 +48,20 @@ does not provide protection against another process starting a writer after the
 stop checks, or automatic recovery from an interrupted upgrade. Avoid concurrent
 administrative writers during the operation.
 
+Before either upgrade mode publishes a transaction or stops services, it checks
+for unresolved recovery work, then probes the snapshot destination and Node sync,
+loads each owner's SQLite driver, and checks existing databases read-only against
+the full supported schema. Failure rejects the upgrade while original services
+remain running. Protected upgrades also freeze recovery dependencies before stop.
+
 Backup-only service-stop, writer-drain, snapshot or snapshot-verification failures
-abort before installation. Some services may already have stopped; the command
-does not automatically roll them back or restart them on this failure path.
-Inspect the error and service state before restarting. After an installation or
-finalizer failure, preserve both the database snapshot and retained code backup,
+abort before installation. The command restarts only the service records that
+were online before its stop attempt and verifies them. It never restores a
+database on this path. A partial stop is covered; a missing/changed service record
+or restart failure is reported, with `preInstallServicesRestored: false` and
+manual intervention still required. `preInstallServicesRestored: true` identifies
+a failed attempt that left or restored the original service set before install.
+After an installation or finalizer failure, preserve both the database snapshot and retained code backup,
 stop all writers, and check code/schema compatibility before manually restoring
 anything. A snapshot path by itself does not establish successful verification;
 check `dbSnapshotVerified`. `zylos recovery resume` does not recover backup-only
@@ -73,9 +82,12 @@ provide preinstall protection. Installing this package alone
 does not enable a boot service or establish persisted runtime authentication.
 
 Existing operator-owned `.zylos` and `.backup` parent directories may retain
-legacy permissions and supported directory aliases. Without marker or transaction
-materials, ordinary installations skip recovery validation, including partially
-deployed stable helpers and empty group-writable recovery roots. Recovery subdirectories,
+legacy permissions and supported directory aliases. Without an explicit active
+marker, ordinary database openers, runtime startup, C4 context and PM2-save guards
+do not scan historical transactions or validate retained backups/helpers. Broken
+history can reject a later upgrade or explicit recovery operation, but does not
+by itself stop daily work. An unsafe/unreadable active-marker location still
+fails closed. Recovery subdirectories,
 journals, descriptors, and executable materials must remain owned, real paths
 without group/world write access. New recovery directories use mode 0700.
 
@@ -217,13 +229,13 @@ transaction journals or rescue runner described below.
 
 Successful protected-upgrade cleanup removes only temporary code copies. Complete transaction
 directories remain in `.backup/self-upgrade/<transactionId>`. Discovery skips a
-clean terminal once its maintenance marker is removed. The file-only probe reads
-bounded journal JSON without owner/mode validation to classify retained clean
-terminals as history; marker, unfinished/incomplete records, unconfirmed children
-and unreadable material still trigger strict recovery validation. Later shared
-permissions or a supported `.backup` alias do not relock ordinary databases.
-No terminal archive or
-cleanup pointer is created. Snapshots, rescue material and journals remain.
+clean terminal once its maintenance marker is removed. Daily checks consult only
+`active.json` and its one referenced transaction journal, including bounded
+identity/readiness checks; unrelated damaged history is ignored. Upgrade admission
+and explicit `--status`/`--once` retain detailed discovery and refuse unresolved
+or damaged material. A journal abandoned before marker publication has not stopped
+services or installed code; it does not isolate daily use, but must be resolved
+before another upgrade. No terminal archive or cleanup pointer is created. Snapshots, rescue material and journals remain.
 Snapshot retention keeps the newest complete feature-owned group (N=1); cleanup
 failures leave warnings and paths. Private database snapshots are normalized to
 SQLite DELETE journal mode before their SHA-256 is recorded, so readonly snapshot
@@ -240,3 +252,23 @@ dependency installation. Existing core `node_modules` are retained, and actual
 owner native dependencies are checked during compatibility preflight. The
 globally installed CLI may remain the newer version; recovery is not a full npm
 package downgrade.
+
+
+## Daily compatibility and active isolation
+
+Normal owner openers check supported versions and required table/column definitions.
+Additional tables or columns are permitted, including during a supported legacy
+migration. Missing required fields, invalid/future versions and incompatible required
+definitions are still rejected. The pure owner `inspectSchema()` API remains strict
+by default; upgrade/recovery workers use that strict path. An extension may therefore
+continue to work daily while preventing this updater from safely upgrading it.
+
+The active marker is durable before service stop, installation or database replacement.
+Only the referenced journal's validated data-ready, verified provisional abort or
+verified terminal state permits business writers. The marker remains throughout service
+restart/verification and is removed only after durable terminal cleanup and confirmed
+child exits. PM2-save stays suppressed whenever the marker exists, including READY.
+Compensation/error paths republish blocked state before stopping writers or replacing
+data; no new duplicate availability record is introduced. Detailed descriptor,
+snapshot and executable validation remains in upgrade/recovery operations. This
+protocol does not protect against external deletion of its active marker.

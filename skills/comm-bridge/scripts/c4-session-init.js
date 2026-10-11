@@ -26,63 +26,25 @@ import os from 'node:os';
 import { createRequire } from 'node:module';
 const require=createRequire(import.meta.url);
 
+// Ordinary entrypoints only consult the explicit active marker. Historical
+// transactions are inspected by upgrade admission and explicit recovery tools.
 function hasRecoveryMaterials(root) {
   const present = file => {
     try { return fs.lstatSync(file); }
     catch (error) { if (error.code === 'ENOENT') return null; throw error; }
   };
-  // Unmarked clean terminals are history, not authority to execute recovery.
-  // Inspect only bounded JSON/structure here, without owner/mode checks or code.
-  const cleanTerminal = (j, id) => {
-    const digest = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
-    const absolute = value => typeof value === 'string' && path.isAbsolute(value) && path.resolve(value) === value;
-    const dbs = ['comm-bridge/c4.db', 'scheduler/scheduler.db', 'web-console/web-console.db'];
-    if (!j || j.formatVersion !== 1 || j.transactionId !== id || j.zylosDir !== fs.realpathSync(root) ||
-        !['upgrade_complete', 'restored_complete', 'aborted_before_install'].includes(j.phase) ||
-        j.cleanup?.complete !== true || j.cleanup.servicesRestored !== true || j.terminalEvidence?.verified !== true ||
-        j.terminalServicesStopped || j.installerExitUnconfirmed || j.finalizerExitUnconfirmed ||
-        j.installerStarted && !j.installerExitConfirmed || j.finalizerStarted && !j.finalizerExitConfirmed) return false;
-    const aborted = j.phase === 'aborted_before_install', i = j.initialIdentity;
-    if (j.installationIntent !== !aborted || j.terminalEvidence.kind !== (aborted ? 'original_deployment_and_readonly_data' : 'code_data_services') ||
-        !i || Array.isArray(i) || !absolute(j.nodePath) || i.nodePath !== j.nodePath || j.skillsDir !== path.join(j.zylosDir, '.claude', 'skills') ||
-        !absolute(i.packageJson) || !digest(i.packageHash) || !absolute(i.cliRoot) || !digest(i.cliHash) ||
-        !absolute(i.workerPath) || !digest(i.workerHash) || i.ecosystemHash !== null && !digest(i.ecosystemHash) ||
-        !Array.isArray(i.databases) || i.databases.length !== dbs.length || i.databases.some((d, index) => !d || d.source !== dbs[index] || typeof d.exists !== 'boolean') ||
-        !Array.isArray(j.coreManifest) || !j.coreManifest.length || j.coreManifest.length > 256 ||
-        !Array.isArray(j.originalServices) || j.originalServices.some(s => !s || typeof s.name !== 'string' || !s.name || !absolute(s.script))) return false;
-    const members = new Set();
-    for (const e of j.coreManifest) {
-      if (!e || !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,95}$/.test(e.name) || members.has(e.name) || typeof e.existedBefore !== 'boolean' ||
-          typeof e.backedUp !== 'boolean' || (e.existedBefore ? !aborted && !e.backedUp || !digest(e.originalHash) : e.originalHash !== null)) return false;
-      members.add(e.name);
-    }
-    return aborted || j.dbBackupDir === path.join(j.zylosDir, '.backup', 'db', id) && digest(j.snapshotManifestHash);
-  };
   try {
-    if (present(path.join(root, '.zylos/upgrade/active.json'))) return true;
-    for (const relative of ['.zylos', '.zylos/upgrade', '.backup', '.backup/self-upgrade']) {
+    for (const relative of ['.zylos', '.zylos/upgrade']) {
       const file = path.join(root, relative), stat = present(file);
       if (!stat) continue;
       if (stat.isSymbolicLink()) {
-        if (relative !== '.zylos' && relative !== '.backup' || !fs.statSync(file).isDirectory()) return true;
+        if (relative !== '.zylos' || !fs.statSync(file).isDirectory()) return true;
       } else if (!stat.isDirectory()) return true;
     }
-    const active = path.join(root, '.backup/self-upgrade');
-    if (!present(active)) return false;
-    const entries = fs.readdirSync(active, {withFileTypes:true});
-    if (entries.length > 10000) return true;
-    for (const entry of entries) {
-      if (!entry.isDirectory() || entry.isSymbolicLink() || !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,95}$/.test(entry.name)) return true;
-      const file = path.join(active, entry.name, 'journal.json'), stat = present(file);
-      if (!stat || !stat.isFile() || stat.isSymbolicLink() || stat.size > 1024 * 1024 ||
-          !cleanTerminal(JSON.parse(fs.readFileSync(file, 'utf8')), entry.name)) return true;
-    }
-    // A marker published during the scan takes precedence over clean history.
     return !!present(path.join(root, '.zylos/upgrade/active.json'));
-  } catch {
-    return true;
-  }
+  } catch { return true; }
 }
+
 function recoveryContext() {
   try {
     const root = fs.realpathSync(process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos'));

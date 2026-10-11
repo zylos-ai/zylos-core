@@ -16,18 +16,18 @@ function fixture(t, fault) {
   const skillsDir=path.join(root,'.claude/skills'),tempDir=path.join(root,'new-package');
   fs.mkdirSync(path.join(skillsDir,'comm-bridge'),{recursive:true});
   fs.mkdirSync(path.join(tempDir,'skills/comm-bridge'),{recursive:true});
-  fs.writeFileSync(path.join(skillsDir,'comm-bridge/package.json'),'{}');
+  for (const [owner,schema] of [['comm-bridge','c4-schema.js'],['scheduler','schema.js'],['web-console','schema.js']]) {
+    const dest=path.join(skillsDir,owner);fs.mkdirSync(path.join(dest,'scripts'),{recursive:true});
+    fs.writeFileSync(path.join(dest,'package.json'),'{"type":"module"}');
+    fs.symlinkSync(path.resolve('skills',owner,'node_modules'),path.join(dest,'node_modules'));
+    fs.writeFileSync(path.join(dest,'scripts',schema),`export const supportsNewDatabase=true;export function inspectSchema(db){db.prepare('SELECT value FROM preserved').all();}`);
+  }
   const original=new Map();
   for(const source of m.DB_PATHS) {
     const file=path.join(root,source);fs.mkdirSync(path.dirname(file),{recursive:true});
     const db=new Database(file);db.exec('CREATE TABLE preserved (value TEXT)');
     db.prepare('INSERT INTO preserved VALUES (?)').run(source);db.close();
     original.set(file,fs.readFileSync(file));
-  }
-  if(fault==='snapshot') {
-    fs.mkdirSync(path.join(root,'.backup'));
-    // A real filesystem failure at the snapshot destination, before publication.
-    fs.writeFileSync(path.join(root,'.backup/db'),'snapshot destination unavailable');
   }
   const bin=path.join(root,'bin'),calls=path.join(root,'pm2-calls'),state=path.join(root,'service-state');
   fs.mkdirSync(bin);fs.writeFileSync(state,'online');
@@ -36,14 +36,14 @@ function fixture(t, fault) {
 const fs=require('node:fs');const args=process.argv.slice(2);
 fs.appendFileSync(${JSON.stringify(calls)},JSON.stringify(args)+'\\n');
 const state=${JSON.stringify(state)};
-if(args[0]==='jlist') {console.log(JSON.stringify([{name:'fixture-service',pid:0,pm2_env:{status:fs.readFileSync(state,'utf8'),pm_exec_path:${JSON.stringify(path.join(skillsDir,'comm-bridge/service.js'))}}}]));}
+if(args[0]==='jlist') {console.log(JSON.stringify([{name:'fixture-service',pid:fs.readFileSync(state,'utf8')==='online'?process.pid:0,pm2_env:{status:fs.readFileSync(state,'utf8'),pm_exec_path:${JSON.stringify(path.join(skillsDir,'comm-bridge/service.js'))}}}]));}
 else if(args[0]==='stop') {if(${JSON.stringify(fault)}==='stop'){console.error('injected PM2 stop failure');process.exit(1);}fs.writeFileSync(state,'stopped');}
 else if(args[0]==='restart'||args[0]==='startOrRestart') fs.writeFileSync(state,'online');
 else if(args[0]!=='save') {console.error('unexpected fake PM2 command');process.exit(2);}
 `,{mode:0o700});
   const prior=process.env.PATH;process.env.PATH=bin+path.delimiter+prior;
   t.after(()=>{process.env.PATH=prior;});
-  return {root,skillsDir,tempDir,original,calls};
+  return {root,skillsDir,tempDir,original,calls,state};
 }
 
 for(const fault of ['stop','snapshot']) test(`${fault} failure in default protected pipeline prevents installation and finalizer`,t=>{
@@ -51,6 +51,7 @@ for(const fault of ['stop','snapshot']) test(`${fault} failure in default protec
   const result=runSelfUpgrade({tempDir:f.tempDir,newVersion:'fixture-new'},{
     zylosDir:f.root,skillsDir:f.skillsDir,
     getCurrentVersion:()=>({success:true,version:'fixture-old'}),
+    step3: fault==='snapshot' ? {snapshot:()=>{throw Error('injected snapshot failure');}} : {},
     step4:{execSync:()=>{installerCalls++;throw Error('installer must not run');}},
     runInstalledFinalizer:()=>{finalizerCalls++;throw Error('finalizer must not run');},
   });
@@ -58,8 +59,9 @@ for(const fault of ['stop','snapshot']) test(`${fault} failure in default protec
   assert.equal(result.success,false);
   assert.deepEqual(result.steps.map(step=>step.step),[1,2,3]);
   assert.equal(result.steps.at(-1).status,'failed');
-  assert.match(result.steps.at(-1).error,fault==='stop'?/injected PM2 stop failure/:/EEXIST|ENOTDIR/);
+  assert.match(result.steps.at(-1).error,fault==='stop'?/injected PM2 stop failure/:/injected snapshot failure/);
   assert.equal(installerCalls,0);assert.equal(finalizerCalls,0);
+  assert.equal(result.recovery_required,false,JSON.stringify(result));assert.equal(fs.readFileSync(f.state,'utf8'),'online');
   const journal=m.read(path.join(result.transactionDir,'journal.json'));
   assert.equal(journal.installationIntent,false);
   assert.notEqual(journal.installerStarted,true);assert.notEqual(journal.finalizerStarted,true);
