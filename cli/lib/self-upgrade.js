@@ -1649,6 +1649,7 @@ function runInstalledFinalizer(ctx) {
     ...(ctx.preInstallProtection ? {detached:true,killSignal:'SIGKILL'} : {}),
   });
 
+  let terminalCleanup;
   if(ctx.preInstallProtection){
     const dir=ctx.transactionDir;
     const saved=maintenance.read(path.join(dir,'journal.json'));
@@ -1657,7 +1658,7 @@ function runInstalledFinalizer(ctx) {
     ctx.finalizerExitUnconfirmed=!verified.confirmed;
     maintenance.update(dir,saved,{finalizerExitConfirmed:verified.confirmed,finalizerExitUnconfirmed:!verified.confirmed});
     if(!verified.confirmed) throw Error(verified.error || 'finalizer process exit unconfirmed');
-    if(maintenance.terminalValid(saved)) maintenance.finishTerminal(dir,saved);
+    if(maintenance.terminalValid(saved)) terminalCleanup=maintenance.finishTerminal(dir,saved);
   }
   if(result.error)throw result.error;
 
@@ -1668,6 +1669,10 @@ function runInstalledFinalizer(ctx) {
   }
 
   const parsed = JSON.parse(output);
+  if (terminalCleanup) {
+    parsed.cleanupComplete = terminalCleanup.complete;
+    parsed.cleanupWarnings = [...(parsed.cleanupWarnings || []), ...terminalCleanup.warnings];
+  }
   if (result.status !== 0 && parsed?.success !== false) {
     const err = String(result.stderr || '').trim() || `finalizer exited ${result.status}`;
     throw new Error(err);

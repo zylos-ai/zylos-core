@@ -42,6 +42,8 @@ async function fixture(t,{missing=false,wal=false}={}) {
  for(const [src,dst] of [['upgrade-maintenance.cjs','maintenance.cjs'],['upgrade-finalizer.cjs','finalizer.cjs']]){fs.copyFileSync(path.resolve('cli/lib',src),path.join(dir,dst));fs.chmodSync(path.join(dir,dst),0o600);}
  const coreManifest=CORE_DATABASES.map(item=>({name:item.owner,existedBefore:true,backedUp:true,originalHash:m.treeHash(path.join(skillsDir,item.owner))}));
  for(const e of coreManifest)fs.cpSync(path.join(skillsDir,e.name),path.join(dir,'code/skills',e.name),{recursive:true,filter:p=>!p.split(path.sep).includes('node_modules')});
+ // Match saveProtectedCode: the disposable code root is private.
+ fs.chmodSync(path.join(dir,'code'),0o700);
  const packageJson=path.join(root,'package.json');fs.writeFileSync(packageJson,'{}');const originalCli=path.join(root,'baseline-cli');fs.mkdirSync(originalCli,{mode:0o700});
  const j={formatVersion:1,transactionId:'tx',zylosDir:root,skillsDir,nodePath:process.execPath,phase:'installing',installationIntent:true,dbBackupDir:snapshot.dbBackupDir,snapshotManifestHash:m.hash(path.join(snapshot.dbBackupDir,'manifest.json')),coreManifest,originalServices:[],initialIdentity:{nodePath:process.execPath,packageJson,packageHash:m.hash(packageJson),cliRoot:originalCli,cliHash:m.treeHash(originalCli),workerPath:closure.workerPath,workerHash:m.hash(closure.workerPath),ecosystemHash:null,databases:snapshot.manifest.databases.map(d=>({source:d.source,exists:d.status!=='missing'}))}};
  const descriptor={formatVersion:1,transactionId:'tx',...closure,runnerPath:path.join(dir,'runner.cjs'),hashes:Object.fromEntries(['runner.cjs','maintenance.cjs','finalizer.cjs'].map(name=>[name,m.hash(path.join(dir,name))]))};m.durable(path.join(dir,'descriptor.json'),descriptor);m.update(dir,j);m.marker(root,dir,j);
@@ -411,4 +413,83 @@ test('Mac production recovery aborts preinstall failure through held frozen owne
  assert.deepEqual(fs.readFileSync(f.db('comm-bridge/c4.db')),before);
  assert.equal(fs.existsSync(path.join(f.dir,'controller.json')),false);
  assert.equal(ctx.releaseControl,null);
+});
+
+test('successful cleanup deletes only code copies and unlinks nested symlinks without following them', async t => {
+ const f=await fixture(t),code=path.join(f.dir,'code');
+ const outside=path.join(f.root,'external.txt');fs.writeFileSync(outside,'external data');
+ fs.symlinkSync(outside,path.join(code,'external-link'));
+ for(const name of ['install.log','recovery.log','rescue/evidence']){const file=path.join(f.dir,name);fs.mkdirSync(path.dirname(file),{recursive:true});fs.writeFileSync(file,name);}
+ const retained=['descriptor.json','runner.cjs','maintenance.cjs','finalizer.cjs','install.log','recovery.log','rescue/evidence'];
+ const hashes=Object.fromEntries(retained.map(name=>[name,f.m.hash(path.join(f.dir,name))]));
+ const snapshotHash=f.m.treeHash(f.snapshot.dbBackupDir);
+ f.m.update(f.dir,f.j,{phase:'new_data_ready'});
+ const result=f.r.resume(f.dir);
+ assert.equal(result.complete,true,JSON.stringify(result));assert.equal(fs.existsSync(code),false);
+ assert.equal(f.load().cleanup.codeRemoved,true);assert.equal(f.load().cleanup.complete,true);
+ for(const name of retained)assert.equal(f.m.hash(path.join(f.dir,name)),hashes[name]);
+ assert.equal(f.m.treeHash(f.snapshot.dbBackupDir),snapshotHash);assert.equal(fs.readFileSync(outside,'utf8'),'external data');
+ assert.equal(fs.existsSync(path.join(f.dir,'sqlite-runtime')),true);
+ f.calls.length=0;assert.equal(f.r.resume(f.dir).complete,true);assert.deepEqual(f.calls,[]);
+});
+
+for(const phase of ['restored_data_ready','preparing'])test(`${phase} terminal retains code copies`,async t=>{
+ const f=await fixture(t),code=path.join(f.dir,'code'),hash=f.m.treeHash(code);
+ f.m.update(f.dir,f.j,{phase,...(phase==='preparing'?{installationIntent:false}:{})});
+ const result=f.r.resume(f.dir);assert.equal(result.complete,true,JSON.stringify(result));
+ assert.equal(f.m.treeHash(code),hash);assert.notEqual(f.load().cleanup.codeRemoved,true);
+});
+
+for(const gate of ['installerExitUnconfirmed','finalizerExitUnconfirmed','terminalServicesStopped','installerStarted','finalizerStarted'])test(`durable ${gate} prevents cleanup despite stale caller`,async t=>{
+ const f=await fixture(t),code=path.join(f.dir,'code');
+ const terminal={phase:'upgrade_complete',terminalEvidence:{verified:true,kind:'code_data_services'},cleanup:{complete:false,codeRemoved:false,servicesRestored:true}};
+ f.m.update(f.dir,f.j,terminal);const stale=structuredClone(f.j);
+ f.m.update(f.dir,f.j,{[gate]:true});
+ assert.equal(f.m.finishTerminal(f.dir,stale).complete,false);
+ assert.equal(fs.existsSync(code),true);assert.equal(f.load().cleanup.complete,false);
+ assert.equal(fs.existsSync(path.join(f.root,'.zylos/upgrade/active.json')),true);
+});
+
+test('partial code removal failure retries without compensation or service restart and preserves new writes',async t=>{
+ const f=await fixture(t),code=path.join(f.dir,'code'),rm=fs.rmSync;let fail=true;
+ t.after(()=>{fs.rmSync=rm;});
+ fs.rmSync=(file,options)=>{if(file===code&&fail){fail=false;rm(path.join(code,'skills/comm-bridge'),{recursive:true});throw Error('partial code removal failed');}return rm(file,options);};
+ f.m.update(f.dir,f.j,{phase:'new_data_ready'});
+ const first=f.r.resume(f.dir);assert.equal(first.complete,false);assert.match(first.warnings.join('\n'),/partial code removal failed/);
+ assert.equal(f.load().phase,'upgrade_complete');assert.equal(f.load().cleanup.complete,false);assert.equal(f.load().cleanup.codeRemoved,false);
+ const db=new Database(f.db('comm-bridge/c4.db'));db.prepare('INSERT INTO checkpoints(id,summary) VALUES (?,?)').run(99,'post-ready write');db.close();
+ // Missing marker must not hide pending cleanup from admission discovery.
+ fs.unlinkSync(path.join(f.root,'.zylos/upgrade/active.json'));
+ assert.equal(f.m.discover(f.root).candidates.length,1);
+ f.calls.length=0;assert.equal(f.r.resume(f.dir).complete,true);assert.deepEqual(f.calls,[]);
+ const check=new Database(f.db('comm-bridge/c4.db'));assert.equal(check.prepare('SELECT summary FROM checkpoints WHERE id=99').get().summary,'post-ready write');check.close();
+ assert.equal(fs.existsSync(code),false);assert.equal(f.m.discover(f.root).candidates.length,0);
+});
+
+for(const targetExists of [true,false])test(`code root symlink is refused (target exists=${targetExists})`,async t=>{
+ const f=await fixture(t),code=path.join(f.dir,'code'),target=path.join(f.root,'other-code');
+ fs.renameSync(code,target);fs.symlinkSync(targetExists?target:path.join(f.root,'absent'),code);
+ const before=f.m.treeHash(target);f.m.update(f.dir,f.j,{phase:'new_data_ready'});
+ const result=f.r.resume(f.dir);assert.equal(result.complete,false);assert.match(result.warnings.join('\n'),/unsafe recovery path/);
+ assert.equal(fs.lstatSync(code).isSymbolicLink(),true);assert.equal(f.m.treeHash(target),before);
+ assert.equal(f.load().cleanup.complete,false);assert.equal(f.load().cleanup.codeRemoved,false);
+});
+
+for(const failure of ['directory-sync','completion-journal'])test(`code cleanup resumes after ${failure} failure with code already absent`,async t=>{
+ const f=await fixture(t),code=path.join(f.dir,'code'),rename=fs.renameSync;let hit=false;
+ const restoreSync=interceptSync(fd=>{
+  if(failure!=='directory-sync'||hit||fs.existsSync(code))return;
+  const actual=fs.fstatSync(fd),expected=fs.statSync(f.dir);
+  if(actual.dev===expected.dev&&actual.ino===expected.ino){hit=true;throw Error('cleanup directory sync failed');}
+ });
+ fs.renameSync=(source,target)=>{
+  if(failure==='completion-journal'&&!hit&&!fs.existsSync(code)&&target===path.join(f.dir,'journal.json')){hit=true;throw Error('cleanup completion journal failed');}
+  return rename(source,target);
+ };
+ t.after(()=>{restoreSync();fs.renameSync=rename;});
+ f.m.update(f.dir,f.j,{phase:'new_data_ready'});const first=f.r.resume(f.dir);
+ assert.equal(hit,true);assert.equal(first.complete,false);assert.equal(fs.existsSync(code),false);
+ assert.equal(f.load().cleanup.complete,false);assert.equal(f.load().cleanup.codeRemoved,false);
+ f.calls.length=0;const retry=f.r.resume(f.dir);assert.equal(retry.complete,true,JSON.stringify(retry));assert.deepEqual(f.calls,[]);
+ assert.equal(f.load().cleanup.codeRemoved,true);assert.equal(f.load().cleanup.complete,true);
 });

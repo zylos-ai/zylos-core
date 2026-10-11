@@ -496,7 +496,8 @@ export function protectedSuccess(ctx) {
       kind: 'code_data_services'
     },
     cleanup: {
-      complete: true,
+      complete: false,
+      codeRemoved: false,
       servicesRestored: true
     }
   });

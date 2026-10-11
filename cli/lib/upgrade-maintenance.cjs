@@ -112,7 +112,11 @@ function validateReadyJournal(j) {
   });
 }
 function terminalValid(j) {
-  if (!TERMINAL.has(j.phase) || j.cleanup?.complete !== true || j.cleanup.servicesRestored !== true || j.terminalEvidence?.verified !== true) return false;
+  // A verified success awaiting code cleanup must never authorize compensation.
+  // Legacy complete terminals remain readable; only this explicit new shape
+  // permits incomplete cleanup to retain terminal authority.
+  const cleanupPending = j.phase === 'upgrade_complete' && j.cleanup?.complete === false && j.cleanup.codeRemoved === false;
+  if (!TERMINAL.has(j.phase) || !cleanupPending && j.cleanup?.complete !== true || j.cleanup?.servicesRestored !== true || j.terminalEvidence?.verified !== true) return false;
   try {
     if (j.phase === 'aborted_before_install') validateOriginalJournal(j);else validateReadyJournal(j);
   } catch {
@@ -276,7 +280,7 @@ function discover(root, {
         const dir = path.join(active, ent.name);
         try {
           const j = transaction(root, dir);
-          if (!terminalValid(j) || j.installerExitUnconfirmed || j.finalizerExitUnconfirmed || j.finalizerStarted && !j.finalizerExitConfirmed || j.installerStarted && !j.installerExitConfirmed || j.terminalServicesStopped || marker?.transactionId === j.transactionId) addCandidate({
+          if (!terminalValid(j) || j.cleanup.complete !== true || j.installerExitUnconfirmed || j.finalizerExitUnconfirmed || j.finalizerStarted && !j.finalizerExitConfirmed || j.installerStarted && !j.installerExitConfirmed || j.terminalServicesStopped || marker?.transactionId === j.transactionId) addCandidate({
             dir,
             journal: j
           });
@@ -776,14 +780,40 @@ function renameIntent(dir, j, key, source, dest, expectedHash) {
 }
 function finishTerminal(dir, j) {
   if (!terminalValid(j)) throw Error('cannot finish unverified terminal');
-  // The terminal journal is durable before the final marker removal. Keep all
-  // recovery evidence in its original directory; reentry only retries this step.
+  // Re-read durable authority: the caller may still hold the child's old state.
   const saved = transaction(j.zylosDir, dir);
   if (!terminalValid(saved)) throw Error('terminal journal is not durable');
   if (saved.terminalServicesStopped || saved.installerExitUnconfirmed || saved.finalizerExitUnconfirmed || saved.installerStarted && !saved.installerExitConfirmed || saved.finalizerStarted && !saved.finalizerExitConfirmed) return {complete:false, warnings:[]};
+  if (saved.phase === 'upgrade_complete') {
+    // Only the transaction's fixed code copy is disposable. Recovery programs,
+    // snapshots, rescue files, logs and journals retain their original paths.
+    const code = path.join(dir, 'code');
+    try {
+      if (fs.realpathSync(dir) !== path.resolve(dir)) throw Error('noncanonical transaction cleanup path');
+      if (saved.cleanup.codeRemoved !== false || saved.cleanup.complete !== false) {
+        update(dir, saved, {cleanup:{...saved.cleanup, complete:false, codeRemoved:false}});
+      }
+      let stat;
+      try { stat = fs.lstatSync(code); }
+      catch (error) { if (error.code !== 'ENOENT') throw error; }
+      if (stat) {
+        privatePath(code, {directory:true});
+        // Recursive rm unlinks nested symlinks; it never follows their targets.
+        fs.rmSync(code, {recursive:true});
+      }
+      // Also sync on ENOENT: a prior attempt may have removed code but failed
+      // before syncing the directory or recording completion.
+      fsyncDir(dir);
+      update(dir, saved, {cleanup:{...saved.cleanup, codeRemoved:true, complete:true}});
+    } catch (error) {
+      return {complete:false, warnings:[`Code cleanup pending at ${code}: ${error.message}`]};
+    }
+  }
+  // Terminal evidence stays durable before removing the final active pointer.
   unmark(j.zylosDir, saved);
   return {complete:true, warnings:[]};
 }
+
 module.exports = {
   fsyncFd,
   platformSupported,

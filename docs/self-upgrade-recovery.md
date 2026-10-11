@@ -248,7 +248,14 @@ Backup-only attempts retain database snapshots and code backup material for
 manual recovery, including after successful installation. They do not have the
 transaction journals or rescue runner described below.
 
-Successful protected-upgrade cleanup removes only temporary code copies. Complete transaction
+Successful protected-upgrade cleanup removes only the fixed transaction `code/` copy,
+after service verification and durable confirmation that installer/finalizer processes
+have exited. The journal stays a verified terminal while `cleanup.complete=false`
+and `cleanup.codeRemoved=false`; only deletion and directory synchronization set both
+completion flags true. Cleanup failure retains the active marker and reports the
+path for retry. Reentry retries cleanup only, never database compensation, so
+legitimate writes after READY are preserved. Marker removal follows the durable
+completion record. Restored/aborted transactions retain their code evidence. Complete transaction
 directories remain in `.backup/self-upgrade/<transactionId>`. Discovery skips a
 clean terminal once its maintenance marker is removed. Daily checks consult only
 `active.json` and its one referenced transaction journal, including bounded

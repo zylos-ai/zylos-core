@@ -312,7 +312,8 @@ function validateReady(dir, j) {
         kind: 'code_data_services'
       },
       cleanup: {
-        complete: true,
+        complete: restored,
+        ...(restored ? {} : {codeRemoved:false}),
         servicesRestored: true
       }
     });

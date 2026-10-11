@@ -140,7 +140,7 @@ test('missing flock and unsafe guard fail closed without replacing controller',t
   const result=spawnSync(process.execPath,['-e',`
     const cp=require('node:child_process'),spawn=cp.spawnSync;
     cp.spawnSync=function(binary,...args){
-      if(binary.endsWith('/flock') || binary.endsWith('/macos-recovery-helper') && args[0][0] === 'lock-exec')return {error:Error('ENOENT flock unavailable')};
+      if(binary.endsWith('/flock'))return {error:Error('ENOENT flock unavailable')};
       return spawn.call(this,binary,...args);
     };
     require(${JSON.stringify(modulePath)}).acquire(${JSON.stringify(dir)});

@@ -43,7 +43,7 @@ npm pack --dry-run --ignore-scripts --json
 git diff --check
 ```
 
-The historical `macos-recovery-native.test.js` suite does not exercise this runtime and is excluded. Final package dry-run: 468 files, with no `cli/native/`, helper build script, historical native protocol test, or `node_modules` paths. The native source/binary remain in the repository as historical evidence and are excluded from the package.
+The historical `macos-recovery-native.test.js` suite does not exercise this runtime and is excluded. Final package dry-run: 468 files, with no `cli/native/`, helper build script, historical native protocol test, or `node_modules` paths. The obsolete native source/binary, README, checksum, build script and native test were subsequently removed from the product tree. The package count above describes this historical validation, not the current package.
 
 Author-side raw logs are retained under `workspace/pr817-helper-necessity/`: `upgrade-suite-green.log`, `owner-startup-schema.log`, `startup-cli.log`, `jest-upgrade-existing-deps.log` (the three unchanged passing suites), `jest-contracts-final.log`, `finish-backup-recovery.log`, `finish-focused.log`, `finish-mutations.json`, `finish-mutations/*.log`, and `sync-mutations.json`. The author selfreview inspected source, controls and failures and found no production blocker; it is not independent approval.
 

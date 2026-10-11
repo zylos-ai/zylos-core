@@ -4,7 +4,6 @@ import { createRequire } from 'node:module';
 import * as c4Schema from '../../comm-bridge/scripts/c4-schema.js';
 import { guardDatabase, assertCoreDatabaseAvailable } from '../../comm-bridge/scripts/sqlite-schema.js';
 const coreRequire = createRequire(new URL('../../comm-bridge/package.json', import.meta.url));
-const Database = coreRequire('better-sqlite3');
 import { shouldStartUsageCheck } from './usage-check-engine.js';
 import { readCodexUsageFromActiveRollout } from './usage-codex-rollout-reader.js';
 import {
@@ -256,6 +255,9 @@ export class UsageMonitor {
         if (['-wal', '-shm', '-journal'].some(suffix => fs.existsSync(dbPath + suffix))) throw new Error('Orphan C4 database sidecar');
         return 0;
       }
+      // Usage checks are optional: a missing native dependency must not prevent
+      // the activity monitor (including its guardian) from loading.
+      const Database = coreRequire('better-sqlite3');
       db = new Database(dbPath, { readonly: true, fileMustExist: true });
       guardDatabase(db, c4Schema, { readonly: true });
       return db.prepare("SELECT ((SELECT COUNT(*) FROM control_queue WHERE status='pending') + (SELECT COUNT(*) FROM conversations WHERE direction='in' AND status='pending')) AS count").get().count;
