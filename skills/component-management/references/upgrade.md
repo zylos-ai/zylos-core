@@ -119,7 +119,7 @@ needs no schema exception; follow the ordinary upgrade approval flow.
 An installed older updater runs preflight before the target release is installed.
 It may reject extra tables and cannot use a flag introduced by the target release.
 If this blocks first adoption, follow
-[First adoption](../../../docs/self-upgrade-recovery.md#first-adoption): verify a
+[First adoption](https://github.com/zylos-ai/zylos-core/blob/main/docs/self-upgrade-recovery.md#first-adoption): verify a
 complete backup and row accounting, then use an operator-approved temporary
 relocation plan before running the old CLI. Do not discard the extension data.
 

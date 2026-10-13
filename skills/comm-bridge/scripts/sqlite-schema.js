@@ -78,7 +78,7 @@ export function inspectLayout(db, name, supported, tables, { allowNew = false, s
     for (const column of info) if (!columns.includes(column.name)) extraColumns.push({ table, column: column.name });
   }
   const extraTables = names.filter(table => !Object.hasOwn(tables, table));
-  if (extraColumns.length && !allowExtraColumns) throw new Error(`${name}: unsupported columns ${extraColumns.map(({table,column}) => `${table}.${column}`).join(', ')}; review them, then use zylos upgrade --self --allow-schema-extensions`);
+  if (extraColumns.length && !allowExtraColumns) throw new Error(`${name}: unsupported columns ${extraColumns.map(({table,column}) => `${table}.${column}`).join(', ')}`);
   if (extraTables.length && !allowExtraTables) throw new Error(`${name}: unsupported tables in schema ${version}: ${extraTables.join(', ')}`);
   return { version, empty: false, extensions: { tables: extraTables, columns: extraColumns } };
 }

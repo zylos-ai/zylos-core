@@ -205,7 +205,7 @@ test('upgrade inspection allows extra tables independently of extra columns for 
    assert.throws(()=>owner.inspectSchema(db,{strict:true}),/archive_records/);
    assert.deepEqual(owner.inspectSchema(db,{strict:true,allowExtraTables:true}).extensions,{tables:['archive_records'],columns:[]});
    db.exec(`ALTER TABLE ${table} ADD COLUMN extension_value TEXT`);
-   assert.throws(()=>owner.inspectSchema(db,{strict:true,allowExtraTables:true}),error=>error.message.includes(`${table}.extension_value`) && error.message.includes('--allow-schema-extensions'));
+   assert.throws(()=>owner.inspectSchema(db,{strict:true,allowExtraTables:true}),error=>error.message.includes(`${table}.extension_value`) && !error.message.includes('--allow-schema-extensions'));
    const accepted=owner.inspectSchema(db,{strict:true,allowExtraTables:true,allowExtraColumns:true});
    assert.deepEqual(accepted.extensions,{tables:['archive_records'],columns:[{table,column:'extension_value'}]});
    db.exec(`DROP TABLE ${table}`);
