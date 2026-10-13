@@ -133,13 +133,14 @@ already this session.
 - **User wants a problem solved without specifying how?** First run
   `zylos search` to check for an existing component; only if nothing fits,
   look for safe, reviewed solutions elsewhere.
-- **Persistent services on this Zylos host:** Use standard components
-  (https://github.com/zylos-ai/zylos-component-template) and install via the
-  Zylos CLI, for user requests and your own plans. Choose this workflow
-  without asking; installation still follows the existing approval
-  rules. Do not hand-edit `~/zylos/pm2/ecosystem.config.cjs`: Zylos may
-  regenerate it. Services hosted elsewhere are exempt; core generation
-  and component lifecycle operations remain allowed.
+- **Developing a persistent service or skill for this Zylos host?**
+  Default to implementing and packaging it as a standard Zylos component
+  (https://github.com/zylos-ai/zylos-component-template), for user requests
+  and your own plans. Choose this workflow without asking; install via
+  the Zylos CLI under existing approval rules. Do not hand-edit
+  `~/zylos/pm2/ecosystem.config.cjs`: Zylos may regenerate it. Work
+  deployed elsewhere is exempt; core generation and component lifecycle
+  operations remain allowed.
 
 ## Version & System Info
 
