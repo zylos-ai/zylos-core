@@ -161,6 +161,18 @@ test('CLI runs through a symbolic link and emits a sanitized snapshot', () => {
   }
 });
 
+test('import with a missing argv path does not run the CLI or throw', () => {
+  const result = spawnSync(process.execPath, [
+    '--input-type=module',
+    '-e',
+    `process.argv[1] = '/definitely-missing-pm2-snapshot-entry'; await import(${JSON.stringify(new URL('../pm2-snapshot.js', import.meta.url).href)});`,
+  ], { encoding: 'utf8' });
+
+  assert.equal(result.status, 0);
+  assert.equal(result.stdout, '');
+  assert.equal(result.stderr, '');
+});
+
 test('health-check instructions route PM2 inspection through the sanitizer', () => {
   const healthSkill = readFileSync(new URL('../../SKILL.md', import.meta.url), 'utf8');
   const monitor = readFileSync(
