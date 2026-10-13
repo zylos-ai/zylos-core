@@ -88,7 +88,7 @@ The CLI executes the post-upgrade hook (if declared) and restarts the service (i
 2. **Service restart**: read the `start_service` step. If it failed, manually restart with `pm2 restart <service-name>` and verify health.
 3. Compare old and new SKILL.md config — if new required config items were added, collect them interactively.
 4. **If `mergeConflicts` exists**: Review each conflict file. Read the backup (local version) and installed (new version), then re-apply local changes using Edit tool.
-5. **If the Caddy route result has `notice`**: Include its text in the user-facing report. It may say that an existing port could not be determined and the new default target was used; check the deployed route when that matters for access.
+5. **If the Caddy route result has `notice`**: Include its text in the user-facing report. It may say that an existing port could not be determined and the new default target was used, or that routes removed from the new manifest caused old managed blocks to be deleted. If Caddy is unavailable, the notice calls for manual removal of old blocks. Check the deployed route when that matters for access.
 
 ## Session Mode — Self-Upgrade (zylos-core)
 

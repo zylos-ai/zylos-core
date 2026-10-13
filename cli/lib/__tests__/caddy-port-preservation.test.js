@@ -226,6 +226,135 @@ test('old generated formats and consecutive upgrades retain the same port', () =
   }
 });
 
+test('upgrade without declared routes removes only the component’s old managed blocks', () => {
+  let content = site(
+    block('retired', [route('/retired/*', 3471)]),
+    block('other', [route('/other/*', 3472)]),
+    block('retired', [route('/retired/*', 3471)]),
+  );
+  const otherBlock = block('other', [route('/other/*', 3472)]);
+  const ctx = { component: 'retired', skillDir: '/unused' };
+  const deps = {
+    parseSkillMd: () => ({ frontmatter: {} }),
+    checkCaddyRouteMarkers: () => inspectCaddyRouteMarkers(content, 'retired'),
+    isCaddyAvailable: () => true,
+    removeCaddyRoutes: () => removeCaddyRoutes('retired', {
+      isCaddyAvailable: () => true,
+      readFileSync: () => content,
+      validateAndDeploy: next => { content = next; return { success: true }; },
+    }),
+  };
+  const first = step6_updateCaddyRoutes(ctx, deps);
+  assert.equal(first.status, 'done');
+  assert.equal(first.caddy.action, 'removed');
+  assert.match(first.notice, /New version declares no HTTP routes/);
+  assert.match(content, /respond \/health 200/);
+  assert.ok(content.includes(otherBlock));
+  assert.equal(content, site(otherBlock));
+  assert.equal(parsed('retired', content).length, 0);
+  assert.equal(parsed('other', content).length, 1);
+  assert.doesNotMatch(content, /\n{3,}/);
+
+  const unchanged = content;
+  const second = step6_updateCaddyRoutes(ctx, deps);
+  assert.equal(second.status, 'skipped');
+  assert.equal(second.notice, undefined);
+  assert.equal(content, unchanged);
+});
+
+test('upgrade without declared routes asks for manual removal when Caddy is unavailable', () => {
+  const content = site(block('retired', [route('/retired/*', 3471)]));
+  const result = step6_updateCaddyRoutes({ component: 'retired', skillDir: '/unused' }, {
+    parseSkillMd: () => ({ frontmatter: { http_routes: [] } }),
+    checkCaddyRouteMarkers: () => inspectCaddyRouteMarkers(content, 'retired'),
+    isCaddyAvailable: () => false,
+    removeCaddyRoutes: () => { throw new Error('removal must not run'); },
+  });
+  assert.equal(result.status, 'skipped');
+  assert.equal(result.caddy.action, 'skipped');
+  assert.match(result.notice, /remove the old managed routes.*manually/);
+  assert.equal(parsed('retired', content).length, 1);
+});
+
+test('invalid new route metadata does not delete existing managed routes', () => {
+  const ctx = { component: 'retired', skillDir: '/unused' };
+  for (const metadata of [null, { frontmatter: { http_routes: 'invalid' } }]) {
+    const result = step6_updateCaddyRoutes(ctx, {
+      parseSkillMd: () => metadata,
+      removeCaddyRoutes: () => { throw new Error('removal must not run'); },
+    });
+    assert.equal(result.status, 'skipped');
+  }
+});
+
+test('route removal validation failure leaves the Caddyfile intact and is non-fatal', () => {
+  const content = site(block('retired', [route('/retired/*', 3471)]));
+  let attempted = false;
+  const result = step6_updateCaddyRoutes({ component: 'retired', skillDir: '/unused' }, {
+    parseSkillMd: () => ({ frontmatter: {} }),
+    checkCaddyRouteMarkers: () => inspectCaddyRouteMarkers(content, 'retired'),
+    isCaddyAvailable: () => true,
+    removeCaddyRoutes: () => removeCaddyRoutes('retired', {
+      isCaddyAvailable: () => true,
+      readFileSync: () => content,
+      validateAndDeploy: () => { attempted = true; return { success: false, error: 'validation failed' }; },
+    }),
+  });
+  assert.equal(attempted, true);
+  assert.equal(result.status, 'skipped');
+  assert.match(result.notice, /validation failed/);
+  assert.equal(parsed('retired', content).length, 1);
+});
+
+test('a Caddyfile read failure after inspection is reported during route retirement', () => {
+  const content = site(block('retired', [route('/retired/*', 3471)]));
+  const result = step6_updateCaddyRoutes({ component: 'retired', skillDir: '/unused' }, {
+    parseSkillMd: () => ({ frontmatter: {} }),
+    checkCaddyRouteMarkers: () => inspectCaddyRouteMarkers(content, 'retired'),
+    isCaddyAvailable: () => true,
+    removeCaddyRoutes: () => ({ success: false, action: 'not_found', error: 'Cannot read Caddyfile' }),
+  });
+  assert.equal(result.status, 'skipped');
+  assert.match(result.notice, /Cannot read Caddyfile/);
+});
+
+test('validation failure while retiring routes does not fail the upgrade or stop its service', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-805-retire-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const home = path.join(root, 'home');
+  const installed = path.join(home, '.claude/skills/example');
+  const oldSource = path.join(root, 'old');
+  const nextSource = path.join(root, 'next');
+  const bin = path.join(home, 'bin');
+  const http = path.join(home, 'http');
+  for (const dir of [installed, oldSource, nextSource, bin, http]) fs.mkdirSync(dir, { recursive: true });
+  const oldSkill = '---\nname: example\nversion: 1.0.0\nlifecycle:\n  service:\n    name: zylos-example\nhttp_routes:\n  - path: /example/*\n    type: reverse_proxy\n    target: 127.0.0.1:3471\n---\n';
+  const nextSkill = '---\nname: example\nversion: 2.0.0\nlifecycle:\n  service:\n    name: zylos-example\n---\n';
+  for (const dir of [installed, oldSource]) fs.writeFileSync(path.join(dir, 'SKILL.md'), oldSkill);
+  fs.writeFileSync(path.join(nextSource, 'SKILL.md'), nextSkill);
+  saveMergeBaseline(installed, oldSource, generateManifest(oldSource));
+  const originalCaddy = site(block('example', [route('/example/*', 3471)]));
+  const caddyfile = path.join(http, 'Caddyfile');
+  fs.writeFileSync(caddyfile, originalCaddy);
+  fs.writeFileSync(path.join(bin, 'caddy'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+  const log = path.join(root, 'pm2.log');
+  fs.writeFileSync(path.join(bin, 'pm2'), `#!/bin/sh\nprintf '%s\\n' "$*" >> "$ZYLOS_TEST_PM2_LOG"\nif [ "$1" = jlist ]; then printf '[{"name":"zylos-example","pm2_env":{"status":"online"}}]\\n'; fi\n`, { mode: 0o755 });
+  const driver = new URL('../../../test/helpers/run-upgrade-driver.mjs', import.meta.url);
+  const child = spawnSync(process.execPath, [driver.pathname, 'example', nextSource, '2.0.0'], {
+    env: { ...process.env, ZYLOS_DIR: home, PATH: `${bin}${path.delimiter}${process.env.PATH}`, ZYLOS_TEST_PM2_LOG: log },
+    encoding: 'utf8', timeout: 15000,
+  });
+  assert.equal(child.status, 0, child.stderr);
+  const result = JSON.parse(child.stdout);
+  assert.equal(result.success, true, JSON.stringify(result));
+  assert.equal(result.steps.find(s => s.name === 'caddy_routes').status, 'skipped');
+  assert.match(result.steps.find(s => s.name === 'caddy_routes').notice, /Caddy validation failed/);
+  assert.equal(result.steps.find(s => s.name === 'start_service').status, 'done');
+  assert.equal(fs.readFileSync(caddyfile, 'utf8'), originalCaddy);
+  assert.match(fs.readFileSync(log, 'utf8'), /stop zylos-example/);
+  assert.match(fs.readFileSync(log, 'utf8'), /restart zylos-example/);
+});
+
 test('upgrade route step catches parser and application exceptions without returning failed', () => {
   const ctx = { component: 'x', skillDir: '/unused' };
   const parsed = { frontmatter: { http_routes: [route('/x/*', 3470)] } };
