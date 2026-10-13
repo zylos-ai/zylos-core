@@ -99,7 +99,8 @@ export function formatC4Reply(type, data) {
     case 'upgrade': {
       const { component, success, from, to, changelog, failedStep, error, rollback, mergeConflicts, mergedFiles, skill } = data;
       if (!success) {
-        let r = `${component} upgrade failed (step ${failedStep}): ${error}`;
+        const failureLabel = failedStep === 0 ? 'upgrade preflight failed' : `upgrade failed (step ${failedStep})`;
+        let r = `${component} ${failureLabel}: ${error}`;
         if (rollback?.performed) {
           r += '\nRollback: ' + (rollback.steps || []).map(s => `${s.success ? 'OK' : 'FAIL'}: ${s.action}`).join(', ');
         }
