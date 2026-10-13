@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Custom persistent services steer to standard components**: both system instruction templates now tell the agent that the PM2 ecosystem file is Zylos-managed and may be regenerated, and to build any persistent service that runs on the Zylos host as a standard component (zylos-component-template) installed through the Zylos CLI by default, without first asking the user, instead of editing the ecosystem file directly. Only services that run outside the Zylos environment are exempt. Applies to user requests and the agent's own plans; core and component lifecycle operations are unaffected. (#822)
+
 ### Fixed
 - **Dependency security updates**: web-console `multer` 2.3.0 → 2.4.0 (GHSA-3pph-fpjx-jg34) and `proxy-addr` 2.0.7 → 2.0.8 via express (GHSA-jqcg-44mw-7w3h); dev-only `brace-expansion` 1.1.18 → 1.1.21 and 2.1.4 → 2.1.7 (GHSA-qhr7-859c-m2p7, GHSA-6j4f-fj2g-mc7p, GHSA-q2hr-2g5m-vwhr); scoped override pins `argparse` ^2 for js-yaml 3 under jest's coverage tooling, removing dev-only `sprintf-js` (GHSA-hp3w-g68c-fv3c, no patched release).
 - **PM2 health snapshot execution and version notices**: run the sanitized snapshot when invoked through a symbolic link, and accept a PM2 version-mismatch notice before the JSON response without exposing raw process output. Follow-up to #793.
