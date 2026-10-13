@@ -129,7 +129,8 @@ already this session.
 
 - **Sedimenting a reusable workflow for the user** (a repeatable capability,
   not a one-off task)? Read `~/zylos/.claude/skills/create-skill/SKILL.md`
-  first if you have not already this session.
+  first if you have not already this session. Use it for skill content;
+  follow the component workflow below for packaging and installation.
 - **User wants a problem solved without specifying how?** First run
   `zylos search` to check for an existing component; only if nothing fits,
   look for safe, reviewed solutions elsewhere.
