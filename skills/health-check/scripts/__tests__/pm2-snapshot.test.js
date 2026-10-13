@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, symlinkSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
@@ -79,6 +81,19 @@ test('collectPm2Snapshot rejects malformed JSON without echoing it', () => {
   );
 });
 
+test('collectPm2Snapshot ignores a PM2 notice before JSON without echoing it', () => {
+  const sentinel = 'NOTICE_SECRET_SHOULD_NOT_ESCAPE';
+  const run = () => ({
+    status: 0,
+    stdout: `[PM2] Version mismatch: ${sentinel}\n[{"name":"scheduler","pid":123,"pm2_env":{"status":"online","restart_time":2}}]\n`,
+    stderr: '',
+  });
+
+  const snapshot = collectPm2Snapshot(run);
+  assert.equal(snapshot.online, 1);
+  assert.equal(JSON.stringify(snapshot).includes(sentinel), false);
+});
+
 test('CLI failure keeps raw PM2 output out of stdout and stderr', () => {
   const sentinel = 'CLI_SECRET_SHOULD_NOT_ESCAPE';
   const result = spawnSync(process.execPath, [SCRIPT_PATH], {
@@ -120,6 +135,30 @@ test('CLI success emits sanitized JSON without inherited environment values', ()
   });
   assert.equal(result.stdout.includes(sentinel), false);
   assert.equal(result.stdout.includes('pm2_env'), false);
+});
+
+test('CLI runs through a symbolic link and emits a sanitized snapshot', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'pm2-snapshot-'));
+  const link = join(directory, 'pm2-snapshot.js');
+  symlinkSync(SCRIPT_PATH, link);
+  try {
+    const result = spawnSync(process.execPath, [link], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        PATH: `${FIXTURE_BIN}:${process.env.PATH}`,
+        PM2_TEST_MODE: 'valid',
+        PM2_TEST_SENTINEL: 'SYMLINK_SECRET_SHOULD_NOT_ESCAPE',
+      },
+    });
+
+    assert.equal(result.status, 0);
+    assert.equal(result.stderr, '');
+    assert.equal(JSON.parse(result.stdout).online, 1);
+    assert.equal(result.stdout.includes('SYMLINK_SECRET_SHOULD_NOT_ESCAPE'), false);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test('health-check instructions route PM2 inspection through the sanitizer', () => {

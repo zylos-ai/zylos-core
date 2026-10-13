@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **PM2 health snapshot execution and version notices**: run the sanitized snapshot when invoked through a symbolic link, and accept a PM2 version-mismatch notice before the JSON response without exposing raw process output. Follow-up to #793.
+
 ## [0.9.0] - 2026-10-12
 
 ### Upgrade notice

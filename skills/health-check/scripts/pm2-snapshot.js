@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 
 import { spawnSync } from 'node:child_process';
-import { pathToFileURL } from 'node:url';
+import { realpathSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 const PM2_TIMEOUT_MS = 30_000;
 const PM2_MAX_BUFFER = 50 * 1024 * 1024;
@@ -54,7 +55,12 @@ export function collectPm2Snapshot(run = spawnSync) {
 
   let processes;
   try {
-    processes = JSON.parse(result.stdout);
+    // PM2 can print a version-mismatch notice before its JSON array.
+    // Ignore notice lines without ever echoing their contents.
+    const lines = result.stdout.split(/\r?\n/);
+    const start = lines.findIndex((line) => /^\s*\[\s*(?:\{|\]|$)/.test(line));
+    if (start < 0) throw new Error('No PM2 JSON array');
+    processes = JSON.parse(lines.slice(start).join('\n'));
   } catch {
     throw new Pm2SnapshotError('PM2 returned invalid JSON');
   }
@@ -74,6 +80,7 @@ function main() {
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (process.argv[1]
+  && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))) {
   main();
 }
