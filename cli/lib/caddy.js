@@ -82,21 +82,22 @@ export function generateManualRouteSnippet(componentName, httpRoutes) {
 export function inspectCaddyRouteMarkers(content, componentName) {
   const begin = `# BEGIN zylos-component:${componentName}`;
   const end = `# END zylos-component:${componentName}`;
+  const unpairedError = `Unpaired Caddy route markers for ${componentName}; repair the Caddyfile before continuing`;
   const lines = content.split('\n');
   const blocks = [];
   let start = -1;
   for (let i = 0; i < lines.length; i++) {
     const marker = lines[i].trim(); // Also accepts indentation, trailing spaces and CRLF.
     if (marker === begin) {
-      if (start !== -1) return { success: false, error: `Caddyfile 中 ${componentName} 的路由标记不成对，请先修复` };
+      if (start !== -1) return { success: false, error: unpairedError };
       start = i;
     } else if (marker === end) {
-      if (start === -1) return { success: false, error: `Caddyfile 中 ${componentName} 的路由标记不成对，请先修复` };
+      if (start === -1) return { success: false, error: unpairedError };
       blocks.push({ start, end: i, lines: lines.slice(start + 1, i) });
       start = -1;
     }
   }
-  if (start !== -1) return { success: false, error: `Caddyfile 中 ${componentName} 的路由标记不成对，请先修复` };
+  if (start !== -1) return { success: false, error: unpairedError };
   return { success: true, blocks };
 }
 
@@ -121,7 +122,9 @@ function stripMarkerBlocks(content, blocks) {
   for (const block of blocks) {
     for (let i = block.start; i <= block.end; i++) removed.add(i);
   }
-  return lines.filter((_, i) => !removed.has(i)).join('\n');
+  // Removing a block between other routes can leave an extra blank line on
+  // every upgrade. Keep the original two-newline limit for stable output.
+  return lines.filter((_, i) => !removed.has(i)).join('\n').replace(/\n{3,}/g, '\n\n');
 }
 
 function parseTargetPort(target) {
@@ -158,13 +161,13 @@ function readBlockPorts(blocks) {
         const previous = paths.get(current.path);
         if (seenInBlock.has(current.path)) {
           paths.set(current.path, null);
-          reasons.set(current.path, '路径重复');
+          reasons.set(current.path, 'duplicate path');
         } else if (previous === undefined) {
           paths.set(current.path, port);
-          if (port === null) reasons.set(current.path, current.targets.length === 1 ? '目标不是有效的主机:端口' : 'reverse_proxy 目标数量不是 1');
+          if (port === null) reasons.set(current.path, current.targets.length === 1 ? 'target is not a valid host:port' : 'reverse_proxy target count is not 1');
         } else if (previous !== port) {
           paths.set(current.path, null);
-          reasons.set(current.path, '重复路由块的端口不一致或格式无法识别');
+          reasons.set(current.path, 'duplicate blocks have different ports or an unrecognized format');
         }
         seenInBlock.add(current.path);
         current = null;
@@ -175,10 +178,10 @@ function readBlockPorts(blocks) {
   const ports = [...paths.values()];
   const singlePort = !malformed && ports.length > 0 && ports.every(port => port !== null && port === ports[0])
     ? ports[0] : null;
-  const globalReason = malformed ? 'handle 结构不完整'
-    : ports.length === 0 ? '没有可识别的 handle 路由'
-      : new Set(ports.filter(port => port !== null)).size > 1 ? '旧块存在多个不同端口'
-        : '旧块的端口无法唯一确定';
+  const globalReason = malformed ? 'incomplete handle block'
+    : ports.length === 0 ? 'no recognizable handle routes'
+      : new Set(ports.filter(port => port !== null)).size > 1 ? 'existing blocks use different ports'
+        : 'existing port cannot be determined uniquely';
   return { paths, reasons, singlePort, globalReason };
 }
 
@@ -200,15 +203,15 @@ export function resolveCaddyRoutePorts(componentName, httpRoutes, blocks) {
     } else {
       routes.push(route);
       const reason = matched ? old.reasons.get(route.path) || old.globalReason : old.globalReason;
-      fallbackReasons.push(`${route.path || '(unknown path)'}：${target ? reason : '新版目标格式无法安全替换端口'}`);
+      fallbackReasons.push(`${route.path || '(unknown path)'}: ${target ? reason : 'new target format does not allow safe port replacement'}`);
     }
   }
   const notices = [];
-  if (blocks.length > 1) notices.push('发现重复的路由块');
+  if (blocks.length > 1) notices.push('Duplicate route blocks found');
   if (fallbackReasons.length) {
-    notices.push(`未能确定 ${componentName} 现有路由的端口（${fallbackReasons.join('；')}），已按新版默认目标生成。如果此前按部署环境调整过端口，请重新设置。`);
+    notices.push(`Could not determine the existing port for ${componentName} (${fallbackReasons.join('; ')}); used the new default target. If the port was customized for this deployment, set it again.`);
   }
-  return { routes, portSource: usedCaddy && !fallbackReasons.length ? 'caddy' : 'default', notice: notices.join('；') || undefined, duplicateBlocks: blocks.length > 1 };
+  return { routes, portSource: usedCaddy && !fallbackReasons.length ? 'caddy' : 'default', notice: notices.join('; ') || undefined, duplicateBlocks: blocks.length > 1 };
 }
 
 /**
@@ -355,11 +358,11 @@ export function applyCaddyRoutes(componentName, httpRoutes, deps = {}) {
     resolved = {
       routes: httpRoutes,
       portSource: 'default',
-      notice: `未能确定 ${componentName} 现有路由的端口（原因：${err.message}），已按新版默认目标生成。`,
+      notice: `Could not determine the existing port for ${componentName} (${err.message}); used the new default target.`,
     };
   }
-  if (readError && !isAvailable()) {
-    resolved.notice = `未能读取 Caddyfile（${readError.message}），已按新版默认目标生成。`;
+  if (readError && readError.code !== 'ENOENT' && !isAvailable()) {
+    resolved.notice = `Could not read Caddyfile (${readError.message}); used the new default target.`;
   }
 
   try {
@@ -409,8 +412,8 @@ export function applyCaddyRoutes(componentName, httpRoutes, deps = {}) {
 
 function routeNotice(resolved, outcome) {
   if (!resolved.duplicateBlocks) return resolved.notice;
-  const detail = outcome === 'merged' ? '已合并为一个' : outcome === 'manual' ? '手动片段已按一块生成' : '未完成合并';
-  return resolved.notice.replace('发现重复的路由块', `发现重复的路由块，${detail}`);
+  const detail = outcome === 'merged' ? 'merged into one' : outcome === 'manual' ? 'manual snippet generated as one block' : 'not merged';
+  return resolved.notice.replace('Duplicate route blocks found', `Duplicate route blocks found; ${detail}`);
 }
 
 function resolvedMetadata(resolved, outcome) {
@@ -448,7 +451,7 @@ export function removeCaddyRoutes(componentName, deps = {}) {
     return { success: false, action: 'removed', error: result.error };
   }
 
-  return { success: true, action: 'removed', notice: inspection.blocks.length > 1 ? '发现重复的路由块，已全部清理' : undefined };
+  return { success: true, action: 'removed', notice: inspection.blocks.length > 1 ? 'Duplicate route blocks found; removed all of them' : undefined };
 }
 
 /**

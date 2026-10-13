@@ -797,7 +797,8 @@ async function handleUpgradeFlow(component, { jsonOutput, skipConfirm, skipEval,
         console.log(`\n${heading('Changelog:')}\n${changelog}`);
       }
     } else {
-      console.log(`\n${error(`Upgrade failed (step ${result.failedStep}): ${result.error}`)}`);
+      const failureLabel = result.failedStep === 0 ? 'Upgrade preflight failed' : `Upgrade failed (step ${result.failedStep})`;
+      console.log(`\n${error(`${failureLabel}: ${result.error}`)}`);
 
       if (result.rollback?.performed) {
         console.log(`\n${bold('Auto-rollback performed:')}`);

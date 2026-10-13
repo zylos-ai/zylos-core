@@ -52,7 +52,7 @@ test('invalid ports, ambiguous paths, and unsupported targets use declared defau
     const old = site(`    # BEGIN zylos-component:x\n    handle /x/* {\n        reverse_proxy ${target}\n    }\n    # END zylos-component:x`);
     const result = resolveCaddyRoutePorts('x', [route('/x/*', 3480)], parsed('x', old));
     assert.equal(result.routes[0].target, '127.0.0.1:3480');
-    assert.match(result.notice, /未能确定/);
+    assert.match(result.notice, /Could not determine the existing port/);
   }
   const duplicate = site(`    # BEGIN zylos-component:x\n    handle /x/* {\n        reverse_proxy 127.0.0.1:3471\n    }\n    handle /x/* {\n        reverse_proxy 127.0.0.1:3471\n    }\n    # END zylos-component:x`);
   assert.equal(resolveCaddyRoutePorts('x', [route('/x/*', 3480)], parsed('x', duplicate)).routes[0].target, '127.0.0.1:3480');
@@ -79,7 +79,7 @@ test('preflight is independent of Caddy availability and does not mutate the fil
   });
   assert.equal(checked.success, false);
   assert.equal(reads, 1);
-  assert.match(checked.error, /标记不成对/);
+  assert.match(checked.error, /Unpaired Caddy route markers/);
   assert.equal(checkCaddyRouteMarkers('x', { existsSync: () => false }).success, true);
 });
 
@@ -134,7 +134,7 @@ test('install and uninstall reject malformed markers before changing component f
   fs.writeFileSync(path.join(home, '.zylos/components.json'), JSON.stringify({ example: { version: '1.0.0' } }));
   const remove = run(['uninstall', 'example', '--yes', '--json']);
   assert.equal(remove.status, 1, remove.stderr);
-  assert.match(remove.stdout, /标记不成对/);
+  assert.match(remove.stdout, /Unpaired Caddy route markers/);
   assert.equal(fs.existsSync(skillDir), true);
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(home, '.zylos/components.json'), 'utf8')), { example: { version: '1.0.0' } });
   assert.equal(fs.readFileSync(path.join(home, 'http/Caddyfile'), 'utf8'), caddy);
@@ -151,7 +151,7 @@ test('paired duplicate blocks merge, conflicting ports fall back, removal clears
   const result = applyCaddyRoutes('dash', [route('/dash/*', 3480)], deps);
   assert.equal(result.success, true);
   assert.equal(result.portSource, 'default');
-  assert.match(result.notice, /重复的路由块，已合并为一个/);
+  assert.match(result.notice, /Duplicate route blocks found; merged into one/);
   assert.equal(parsed('dash', deployed).length, 1);
   assert.equal(parsed('dashboard', deployed).length, 1);
   assert.match(deployed, /reverse_proxy 127\.0\.0\.1:3480/);
@@ -160,7 +160,24 @@ test('paired duplicate blocks merge, conflicting ports fall back, removal clears
   assert.equal(removal.success, true);
   assert.equal(parsed('dash', deployed).length, 0);
   assert.equal(parsed('dashboard', deployed).length, 1);
-  assert.match(removal.notice, /重复/);
+  assert.match(removal.notice, /Duplicate route blocks found/);
+});
+
+test('alternating component upgrades do not accumulate blank lines', () => {
+  let content = site(block('first', [route('/first/*', 3471)]), block('second', [route('/second/*', 3472)]));
+  for (let i = 0; i < 10; i++) {
+    for (const [name, port] of [['first', 3471], ['second', 3472]]) {
+      const result = applyCaddyRoutes(name, [route(`/${name}/*`, port)], {
+        isCaddyAvailable: () => true,
+        readFileSync: () => content,
+        validateAndDeploy: next => { content = next; return { success: true }; },
+      });
+      assert.equal(result.success, true);
+      assert.doesNotMatch(content, /\n{3,}/);
+    }
+  }
+  assert.equal(parsed('first', content).length, 1);
+  assert.equal(parsed('second', content).length, 1);
 });
 
 test('unavailable Caddy still gives a manual snippet with the old port', () => {
@@ -172,6 +189,27 @@ test('unavailable Caddy still gives a manual snippet with the old port', () => {
   assert.equal(result.action, 'manual_required');
   assert.equal(result.portSource, 'caddy');
   assert.match(result.manualConfig, /127\.0\.0\.1:3471/);
+});
+
+test('missing Caddyfile gives a manual snippet without a misleading read warning', () => {
+  const missing = new Error('ENOENT: no such file or directory');
+  missing.code = 'ENOENT';
+  const result = applyCaddyRoutes('dashboard', [route('/dashboard/*', 3470)], {
+    isCaddyAvailable: () => false,
+    readFileSync: () => { throw missing; },
+  });
+  assert.equal(result.action, 'manual_required');
+  assert.equal(result.portSource, 'default');
+  assert.equal(result.notice, undefined);
+  assert.match(result.manualConfig, /127\.0\.0\.1:3470/);
+
+  const unreadable = new Error('EACCES: permission denied');
+  unreadable.code = 'EACCES';
+  const warning = applyCaddyRoutes('dashboard', [route('/dashboard/*', 3470)], {
+    isCaddyAvailable: () => false,
+    readFileSync: () => { throw unreadable; },
+  });
+  assert.match(warning.notice, /Could not read Caddyfile/);
 });
 
 test('old generated formats and consecutive upgrades retain the same port', () => {
