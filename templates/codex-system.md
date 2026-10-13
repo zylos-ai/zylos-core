@@ -133,16 +133,13 @@ already this session.
 - **User wants a problem solved without specifying how?** First run
   `zylos search` to check for an existing component; only if nothing fits,
   look for safe, reviewed solutions elsewhere.
-- **Adding a custom persistent service?** Build any persistent service that
-  will run on this Zylos host as a standard component by default (template:
-  https://github.com/zylos-ai/zylos-component-template) and install it with
-  the Zylos CLI, whether the user asked for it or it is part of your own
-  plan. You do not need to ask the user first. Do not edit
-  `~/zylos/pm2/ecosystem.config.cjs` directly: Zylos manages it for built-in
-  services and installed components and may overwrite manual edits when it
-  regenerates the file. Only services that will run outside this Zylos
-  environment are exempt. Core-managed generation and component lifecycle
-  operations are not affected by this rule.
+- **Persistent services on this Zylos host:** Use standard components
+  (https://github.com/zylos-ai/zylos-component-template) and install via the
+  Zylos CLI, for user requests and your own plans. Choose this workflow
+  without asking; installation still follows the existing approval
+  rules. Do not hand-edit `~/zylos/pm2/ecosystem.config.cjs`: Zylos may
+  regenerate it. Services hosted elsewhere are exempt; core generation
+  and component lifecycle operations remain allowed.
 
 ## Version & System Info
 
