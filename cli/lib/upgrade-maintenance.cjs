@@ -83,7 +83,7 @@ function transaction(root, dir) {
     directory: true
   });
   const j = read(path.join(dir, 'journal.json'));
-  if (j.formatVersion !== 1 || j.transactionId !== path.basename(dir) || j.zylosDir !== path.resolve(root) || !j.phase || !j.initialIdentity || j.allowSchemaExtensions !== undefined && typeof j.allowSchemaExtensions !== 'boolean') throw Error('invalid journal identity');
+  if (j.formatVersion !== 1 || j.transactionId !== path.basename(dir) || j.zylosDir !== path.resolve(root) || !j.phase || !j.initialIdentity) throw Error('invalid journal identity');
   if (READY.has(j.phase)) validateReadyJournal(j);
   return j;
 }
@@ -742,7 +742,6 @@ function preflight(dir, j, expected) {
     action: 'offline-preflight',
     zylosDir: j.zylosDir,
     schemaRoot: j.skillsDir,
-    allowSchemaExtensions: j.allowSchemaExtensions === true,
     manifest: expected,
     standaloneRestored: j.installationIntent === true && ['installing', 'restoring'].includes(j.phase) && expected?.status === 'complete' && expected.databases.every(database => j.dbRestore?.[database.source]?.complete === true)
   });

@@ -11,7 +11,7 @@ const DATABASES = [
 ];
 const hash = file => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 function driver(input, item) {
-  const root=input.schemaRoot || path.join(input.zylosDir,'.claude','skills');
+  const root=input.driverRoot || input.schemaRoot || path.join(input.zylosDir,'.claude','skills');
   const req = createRequire(path.join(root,item.owner,'package.json'));
   // Snapshot verification uses the frozen independent closure. Compatibility
   // preflight must load the actual owner's native dependency under this Node.
@@ -63,27 +63,14 @@ async function ownerSchema(input,item) {
     const mod=await import(pathToFileURL(schemaPath));
     if(typeof mod.inspectSchema!=='function'||typeof mod.supportsNewDatabase!=='boolean') throw new Error('missing pure schema inspection contract');
     if (!mod.TABLES || typeof mod.TABLES !== 'object') throw new Error('missing schema table contract');
-    // The currently installed owner may predate the split policy. Its
-    // permissive inspection still validates required fields and definitions;
-    // this adapter independently classifies extensions for both old and new
-    // owner modules throughout one transaction.
+    // Owners classify extensions against their own current layout. Older
+    // versions have no latest-layout comparison until their migration runs.
     return {
       ...mod,
       inspectSchema(db, options = {}) {
         const result = mod.inspectSchema(db, {...options, strict:false});
-        if (result.empty) return {...result, extensions:{tables:[],columns:[]}};
-        const names = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'").all().map(row => row.name);
-        const tables = names.filter(name => !Object.hasOwn(mod.TABLES, name));
-        const columns = [];
-        for (const [table, expected] of Object.entries(mod.TABLES)) {
-          for (const found of db.prepare(`PRAGMA table_info(${table})`).all()) {
-            if (!expected.includes(found.name)) columns.push({table,column:found.name});
-          }
-        }
-        if (columns.length && input.allowSchemaExtensions !== true) {
-          throw new Error(`${item.source}: unsupported columns ${columns.map(({table,column}) => `${table}.${column}`).join(', ')}; review them, then use zylos upgrade --self --allow-schema-extensions`);
-        }
-        return {...result, extensions:{tables,columns}};
+        if (!result.extensions || !Array.isArray(result.extensions.tables) || !Array.isArray(result.extensions.columns)) throw new Error('missing schema extension report');
+        return result;
       }
     };
   }catch(error){throw new Error(`Incompatible owner schema code ${item.owner}: ${error.message}`);}
@@ -106,14 +93,42 @@ function authorizeMigration(input) {
   return j;
 }
 export async function execute(input) {
-  if(!['probe','snapshot','verify','offline-preflight','upgrade-migrate'].includes(input.action)) throw new Error(`Unknown action: ${input.action}`);
+  if(!['probe','snapshot','verify','offline-preflight','upgrade-migrate','rehearse'].includes(input.action)) throw new Error(`Unknown action: ${input.action}`);
   if(input.action==='probe') {
     const Database=createRequire(import.meta.url)(input.driverPath); const db=new Database(':memory:');
     try {if(typeof db.backup!=='function') throw new Error('SQLite backup API unavailable');}finally{db.close();}
     return {ok:true};
   }
-  if(input.action==='upgrade-migrate') input.allowSchemaExtensions = authorizeMigration(input).allowSchemaExtensions === true;
-  const engine=['offline-preflight','upgrade-migrate'].includes(input.action) ? await migrationEngine(input) : null;
+  if(input.action==='upgrade-migrate') authorizeMigration(input);
+  const engine=['offline-preflight','upgrade-migrate','rehearse'].includes(input.action) ? await migrationEngine(input) : null;
+  if(input.action==='rehearse') {
+    if (!input.schemaRoot || !input.driverRoot || !input.rehearsalDir) throw Error('Rehearsal requires target schema, installed driver, and private copy roots');
+    const directory=input.rehearsalDir;
+    const stat=fs.lstatSync(directory);
+    if (!stat.isDirectory() || stat.isSymbolicLink() || (stat.mode & 0o077) || (process.getuid && stat.uid!==process.getuid())) throw Error('Unsafe private rehearsal directory');
+    const reports=[];
+    try {
+      for(const item of DATABASES) {
+        const source=path.join(input.zylosDir,item.source);
+        const mod=await ownerSchema(input,item),Database=driver(input,item);
+        const absent=missing(source);
+        if(absent && !mod.supportsNewDatabase) throw Error(`Owner cannot initialize missing database: ${item.owner}`);
+        const target=path.join(directory,`${item.owner}.db`);
+        if(!absent) {
+          const live=new Database(source,{readonly:true,fileMustExist:true,timeout:5000});
+          try {await live.backup(target);} finally {live.close();}
+        }
+        const copy=new Database(target,{fileMustExist:!absent,timeout:5000});
+        try {
+          inspectConnection(copy);
+          const start=copy.pragma('user_version',{simple:true});
+          const result=engine.migrateDatabase(copy,mod,{allowNew:absent,strict:false});
+          reports.push({source:item.source,status:absent?'missing':'present',fromVersion:start,toVersion:result.version,extensions:result.extensions});
+        } catch(error) {throw Error(`${item.source}: rehearsal failed: ${error.message}`);} finally {copy.close();}
+      }
+      return {databases:reports};
+    } finally {fs.rmSync(directory,{recursive:true,force:true});}
+  }
   const plan=(db,mod,options={}) => {
     // A restored pre-chain owner still supplies its original readonly contract.
     if(typeof engine.planDatabaseMigration==='function') {
@@ -141,7 +156,7 @@ export async function execute(input) {
     if(input.action==='upgrade-migrate') {
       // Recheck the durable capability before each owner. Ordinary openers keep
       // rejecting this same installing marker throughout all three migrations.
-      if ((authorizeMigration(input).allowSchemaExtensions === true) !== input.allowSchemaExtensions) throw Error('controlled migration schema extension policy changed');
+      authorizeMigration(input);
       const absent=missing(source), mod=await ownerSchema(input,item);
       if(absent&&!mod.supportsNewDatabase) throw Error(`Owner cannot initialize missing database: ${item.owner}`);
       if(typeof engine.migrateDatabase!=='function') throw Error('Installed migration engine unavailable');

@@ -105,7 +105,6 @@ export function beginUpgrade(ctx, {
     phase: 'preparing',
     installationIntent: false,
     automaticCompensation: true,
-    allowSchemaExtensions: ctx.allowSchemaExtensions === true,
     automaticResume: process.platform !== 'darwin',
     coreManifest: manifest,
     originalServices: maintenance.services({
@@ -474,7 +473,7 @@ export function protectedDataReady(ctx, overrides = {}) {
   // This function runs in the newly installed finalizer. Use its worker, not
   // the frozen snapshot worker whose code predates the installed migrations.
   (overrides.migrate ?? runCoreDbWorker)({action:'upgrade-migrate',zylosDir:j.zylosDir,schemaRoot:j.skillsDir,transactionDir:dir,transactionId:j.transactionId});
-  const verified=(overrides.verify ?? runCoreDbWorker)({action:'offline-preflight',zylosDir:j.zylosDir,schemaRoot:j.skillsDir,requireCurrent:true,allowSchemaExtensions:j.allowSchemaExtensions===true});
+  const verified=(overrides.verify ?? runCoreDbWorker)({action:'offline-preflight',zylosDir:j.zylosDir,schemaRoot:j.skillsDir,requireCurrent:true});
   ctx.databases=verified?.databases || null;
   const checked = maintenance.preflight(dir, j, null);
   if (checked.success === false) throw Error(checked.error || 'new code offline preflight failed');

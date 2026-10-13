@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
@@ -38,7 +39,7 @@ export function probeCoreDbSnapshotSync(zylosDir) {
 }
 // Run before any service is stopped or maintenance marker is published. This
 // opens existing databases read-only and exercises each owner's native driver.
-export function preflightCoreDbUpgrade(zylosDir, {allowSchemaExtensions = false} = {}) {
+export function preflightCoreDbUpgrade(zylosDir) {
   for (const relative of ['.backup', '.backup/db']) {
     const file = path.join(zylosDir, relative);
     try { const stat = fs.lstatSync(file); if (!stat.isDirectory() || stat.isSymbolicLink()) throw Error('Unsafe database snapshot destination: ' + file); }
@@ -50,7 +51,23 @@ export function preflightCoreDbUpgrade(zylosDir, {allowSchemaExtensions = false}
   const stat = fs.lstatSync(destination);
   if (!stat.isDirectory() || stat.isSymbolicLink()) throw Error('Unsafe database snapshot destination');
   probeCoreDbSnapshotSync(destination);
-  return runCoreDbWorker({action: 'offline-preflight', zylosDir, allowSchemaExtensions});
+  return runCoreDbWorker({action: 'offline-preflight', zylosDir});
+}
+// Run the downloaded release's real migration code against SQLite online
+// backup copies while services are still running. This is an early warning;
+// the stopped, snapshotted databases are migrated and checked again later.
+export function rehearseCoreDbUpgrade(zylosDir, tempDir, {driverRoot=path.join(zylosDir,'.claude','skills')}={}) {
+  const schemaRoot=path.join(tempDir,'skills');
+  const workerPath=path.join(tempDir,'cli','lib','core-db-backup-worker.js');
+  if (!fs.existsSync(workerPath) || !fs.existsSync(path.join(schemaRoot,'comm-bridge','scripts','sqlite-schema.js'))) {
+    throw new Error('Target release does not provide database rehearsal code');
+  }
+  // Keep the directory under the caller's control so even a killed worker
+  // cannot strand private database copies in the system temporary directory.
+  const rehearsalDir=fs.mkdtempSync(path.join(os.tmpdir(),'zylos-db-rehearsal-'));
+  fs.chmodSync(rehearsalDir,0o700);
+  try {return runCoreDbWorker({action:'rehearse',zylosDir,schemaRoot,driverRoot,rehearsalDir},{workerPath});}
+  finally {fs.rmSync(rehearsalDir,{recursive:true,force:true});}
 }
 export function createCoreDbSnapshot({zylosDir,transactionId,fromVersion,toVersion,onProgress}) {
   if(!/^[a-zA-Z0-9_-]+$/.test(transactionId)) throw new Error('Invalid snapshot transaction ID');

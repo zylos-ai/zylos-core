@@ -20,7 +20,7 @@ function fixture(t, fault) {
     const dest=path.join(skillsDir,owner);fs.mkdirSync(path.join(dest,'scripts'),{recursive:true});
     fs.writeFileSync(path.join(dest,'package.json'),'{"type":"module"}');
     fs.symlinkSync(path.resolve('skills',owner,'node_modules'),path.join(dest,'node_modules'));
-    fs.writeFileSync(path.join(dest,'scripts',schema),`export const supportsNewDatabase=true;export function inspectSchema(db){db.prepare('SELECT value FROM preserved').all();}`);
+    fs.writeFileSync(path.join(dest,'scripts',schema),`export const supportsNewDatabase=true;export const TABLES={preserved:['value']};export function inspectSchema(db){db.prepare('SELECT value FROM preserved').all();return {version:0,empty:false,extensions:{tables:[],columns:[]}};}`);
   fs.writeFileSync(path.join(dest,'scripts/sqlite-schema.js'),'export {}; // pre-chain compatibility fixture');
   }
   const original=new Map();
@@ -52,6 +52,8 @@ for(const fault of ['stop','snapshot']) test(`${fault} failure in default protec
   const result=runSelfUpgrade({tempDir:f.tempDir,newVersion:'fixture-new'},{
     zylosDir:f.root,skillsDir:f.skillsDir,
     getCurrentVersion:()=>({success:true,version:'fixture-old'}),
+    preflightCoreDbUpgrade:()=>({databases:[]}),
+    rehearseCoreDbUpgrade:()=>({databases:[]}),
     step3: fault==='snapshot' ? {snapshot:()=>{throw Error('injected snapshot failure');}} : {},
     step4:{execSync:()=>{installerCalls++;throw Error('installer must not run');}},
     runInstalledFinalizer:()=>{finalizerCalls++;throw Error('finalizer must not run');},

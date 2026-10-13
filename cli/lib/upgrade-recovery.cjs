@@ -62,7 +62,6 @@ function originalVerified(dir, j) {
       action: 'offline-preflight',
       zylosDir: j.zylosDir,
       schemaRoot: j.skillsDir,
-      allowSchemaExtensions: j.allowSchemaExtensions === true,
       manifest: {
         databases: expected
       }

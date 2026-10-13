@@ -43,7 +43,7 @@ import { createRequire as createFinalizerRequire } from 'node:module';
 const finalizerRequire=createFinalizerRequire(import.meta.url);
 function requireFinalizerExit(dir,j,terminate){return finalizerRequire(path.join(dir,'finalizer.cjs')).quiesce(dir,j,{terminate});}
 
-import { preflightCoreDbUpgrade } from './core-db-backup.js';
+import { preflightCoreDbUpgrade, rehearseCoreDbUpgrade } from './core-db-backup.js';
 import { beginUpgrade, beginBackupOnly, prepareBackupOnlyInstall, saveProtectedCode, prepareProtectedInstall, markInstallationIntent, recovery, protectedDataReady, protectedSuccess, maintenance, maintenanceFor } from './upgrade-protection.js';
 
 const REPO = 'zylos-ai/zylos-core';
@@ -498,7 +498,7 @@ export function generateMigrationHints(templatesDir, deps = {}) {
 /**
  * Create self-upgrade context.
  */
-function createContext({ tempDir, newVersion, mode, allowSchemaExtensions = false } = {}) {
+function createContext({ tempDir, newVersion, mode } = {}) {
   const coreDir = path.join(import.meta.dirname, '..', '..');
 
   return {
@@ -506,7 +506,6 @@ function createContext({ tempDir, newVersion, mode, allowSchemaExtensions = fals
     tempDir: tempDir && fs.existsSync(tempDir) ? fs.realpathSync(tempDir) : tempDir || null,
     newVersion: newVersion || null,
     mode: mode || 'merge',
-    allowSchemaExtensions: allowSchemaExtensions === true,
     // State tracking
     backupDir: null,
     servicesStopped: [],
@@ -1708,7 +1707,7 @@ export function runSelfUpgradeFinalize(state = {}, deps = {}) {
   ctx.preInstallProtection = state.schemaVersion===2 && state.preInstallProtection===true;
   ctx.transactionDir=state.transactionDir;ctx.transactionId=state.transactionId;ctx.coreManifest=state.coreManifest;ctx.dbBackupDir=state.dbBackupDir;ctx.dbManifest=state.dbManifest;ctx.databases=state.databases || null;
   if(ctx.preInstallProtection){
-    try {ctx.journal=maintenance.transaction(ZYLOS_DIR,ctx.transactionDir);if(!ctx.journal.installationIntent)throw Error('finalizer without durable installation intent');ctx.allowSchemaExtensions=ctx.journal.allowSchemaExtensions===true;}
+    try {ctx.journal=maintenance.transaction(ZYLOS_DIR,ctx.transactionDir);if(!ctx.journal.installationIntent)throw Error('finalizer without durable installation intent');}
     catch(error){return {success:false,error:error.message,rollback:{attempted:false,completed:false,performed:false},recovery_required:true};}
   }
   ctx.backupDir = state.backupDir || null;
@@ -1751,8 +1750,8 @@ export function runSelfUpgradeFinalize(state = {}, deps = {}) {
  * @param {object} [deps] - Isolated self-upgrade seam for npm, PM2, version, rollback, and finalizer boundaries
  * @returns {object} Upgrade result
  */
-export function runSelfUpgrade({ tempDir, newVersion, mode, allowSchemaExtensions = false, onStep } = {}, deps = {}) {
-  const ctx = createContext({ tempDir, newVersion, mode, allowSchemaExtensions });
+export function runSelfUpgrade({ tempDir, newVersion, mode, onStep } = {}, deps = {}) {
+  const ctx = createContext({ tempDir, newVersion, mode });
 
   const getCurrentVersionFn = deps.getCurrentVersion ?? getCurrentVersion;
   const current = getCurrentVersionFn();
@@ -1768,7 +1767,8 @@ export function runSelfUpgrade({ tempDir, newVersion, mode, allowSchemaExtension
       const root = deps.zylosDir ?? ZYLOS_DIR;
       const prior = maintenance.discover(root);
       if (prior.candidates.length || prior.diagnostics.length || prior.marker) return {action:'self_upgrade',success:false,error:'unresolved prior upgrade transaction',preInstallProtection:false,rollback:{attempted:false,completed:false,performed:false},recovery_required:true};
-      ctx.databasePreflight=(deps.preflightCoreDbUpgrade ?? preflightCoreDbUpgrade)(root,{allowSchemaExtensions:ctx.allowSchemaExtensions});
+      ctx.databasePreflight=(deps.preflightCoreDbUpgrade ?? preflightCoreDbUpgrade)(root);
+      ctx.databaseRehearsal=(deps.rehearseCoreDbUpgrade ?? rehearseCoreDbUpgrade)(root,ctx.tempDir,{driverRoot:deps.skillsDir ?? SKILLS_DIR});
     }
     catch (error) { return {action:'self_upgrade',success:false,error:error.message,preInstallProtection:false,rollback:{attempted:false,completed:false,performed:false},recovery_required:false}; }
   }

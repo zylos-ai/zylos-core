@@ -50,31 +50,34 @@ administrative writers during the operation.
 
 Before either upgrade mode publishes a transaction or stops services, it checks
 for unresolved recovery work, then probes the snapshot destination and Node sync,
-loads each owner's SQLite driver, and checks existing databases read-only against
-the recognized starting schema and complete registered migration path. This check
-does not run migrations or stamp versions. Failure rejects the upgrade while original services
-remain running. Protected upgrades also freeze recovery dependencies before stop.
+loads each owner's SQLite driver, and checks existing databases read-only for
+supported versions, SQLite integrity and a complete registered migration path.
+This first check does not mutate the live databases. Both modes then rehearse
+the target migration chain on isolated copies made with the SQLite backup API
+while services remain running. A failed rehearsal rejects the upgrade before
+service stop. A passed rehearsal is an early warning check, not authorization
+to skip any later check: live databases may change during it. Protected upgrades
+also freeze recovery dependencies before stop.
 
 ### Local schema extensions
 
-The schema check allows additional tables in all three core databases by
-default. These tables are included in the database snapshots and remain in place
-during a successful migration. Additional columns in a core-owned table require
-an explicit `zylos upgrade --self --allow-schema-extensions` invocation. Without
-that option, preflight reports the database, table, and extra columns and stops
-before services are taken down. The option is saved in the protected upgrade
-journal so migration, final verification, and recovery use the same decision.
-It does not turn an already started transaction into an opt-in transaction.
+Additional tables and columns in all three core databases are accepted and
+reported by database, table, and column. They are included in the rehearsal
+copies and verified snapshots. The `--allow-schema-extensions` option has been
+removed; the ordinary upgrade approval covers the reported changes. Starting
+with schema version 1→2, declared steps check that existing table and column
+names survive unless the step declares their removal. A declared deletion of a
+core table is rejected if that table has undeclared columns; the operator must
+resolve that conflict outside the upgrade. A new core table or column name
+already occupied by user data is also rejected. The legacy 0→1 transition has
+no per-step change declaration or collision and preservation checks. Its result
+must satisfy the required v1 core schema.
 
-Neither the default table allowance nor the option permits a missing or changed
-required core table or column, an unsupported schema version or migration path,
-failed SQLite integrity checks, or a missing, corrupt, or hash-mismatched backup.
-The option relaxes only the extra-column check; it cannot make an incompatible
-migration succeed. Review the reported database, table, and column names before
-authorizing it. An Agent should show the owner the extension and the effect of
-the option, then obtain explicit approval before retrying an upgrade with the
-option. Recovery follows the saved transaction policy rather than a new CLI
-choice.
+The allowance does not bypass an unsupported schema version, a missing
+migration step, a failed SQLite integrity check, a missing/corrupt/hash-mismatched
+backup, or the applicable per-step and final schema checks. Show the owner the
+reported extensions and any conflict as part of the ordinary upgrade review. A failed
+check stops or rolls back the upgrade under the recovery rules below.
 
 Backup-only service-stop, writer-drain, snapshot or snapshot-verification failures
 abort before installation. The command restarts only the service records that
@@ -124,9 +127,9 @@ automatic restoration. Installing this package alone does not enable a boot
 service or establish persisted runtime authentication.
 
 The same first-adoption limit applies to the schema-extension policy: an
-installed updater without this change still rejects additional tables and does
-not recognize `--allow-schema-extensions`, even if the target release contains
-the change. If that updater blocks on extension tables, first make and verify
+installed updater without this change may still reject additional tables or
+columns before it installs the target release. No option in the new release can
+change that old preflight. If it blocks on extension tables, first make and verify
 complete backups, account for every row in those tables, and arrange a temporary
 relocation outside the three core databases under an operator-approved plan.
 Run the existing protected upgrade only after the old preflight passes; decide
@@ -275,8 +278,9 @@ this is not a claim that a database restore is always necessary. Protected outpu
 also exposes transaction paths and separate recovery
 attempted/completed/stage/error values. Cleanup warnings
 do not turn a verified terminal success into a compensation request.
-Schema-extension reports identify the affected database, table, and extra
-columns; when extra columns block an upgrade, they give the opt-in command.
+Schema-extension reports identify each affected database, table, and extra
+column. A name collision or undeclared loss reports the affected object and
+blocks the upgrade; there is no schema-extension opt-in command.
 
 Backup-only attempts retain database snapshots and code backup material for
 manual recovery, including after successful installation. They do not have the
@@ -318,20 +322,34 @@ package downgrade.
 
 ## Daily compatibility and active isolation
 
-Normal owner openers check supported versions and required table/column definitions.
-Additional tables or columns are permitted, including during a supported legacy
-migration. Missing required fields, invalid/future versions and incompatible required
-definitions are still rejected. The pure owner `inspectSchema()` API remains strict
-by default; upgrade/recovery workers use that strict path. An extension may therefore
-continue to work daily while preventing this updater from safely upgrading it.
+Normal owner openers check supported versions and, at the current version,
+required table/column definitions. Additional tables or columns are permitted.
+Invalid or future versions are rejected; missing or incompatible required v1
+fields are rejected after the legacy migration. The pure owner `inspectSchema()`
+API remains strict by default for extra tables and columns at the current
+version. Upgrade and recovery workers use migration-step checks from version 1
+onward; normal opening alone does not prove migration compatibility.
 
 Each owner registers explicit adjacent transitions (`MIGRATIONS`), currently 0→1
 for all three databases; the supported target remains 1. Unmarked historical
-schemas start at 0. The planner recognizes that starting version's layout and
-resolves the entire path before changing anything. After taking the SQLite writer
-lock it plans again, then runs all steps and validates each resulting version in
-one transaction per database. A failed step or target check rolls back structure,
-data and `user_version` together. There is no cross-database atomic transaction.
+schemas start at 0. Code retains the latest complete core schema. The legacy
+0→1 callback has no change declaration or per-step collision, structure, or
+row-count checks; its result must satisfy the required v1 schema. Beginning
+with 1→2, each callback must declare its added, deleted, and renamed table and
+column names and any tables whose row counts may change. Complete historical
+schema copies are not required in production code. The planner resolves a
+continuous path from the current version to the target before changing
+anything. After taking the SQLite writer lock it plans again, then runs every
+step in one transaction per database. For declared steps from 1→2 onward, it
+rejects occupied new core names before the step and checks afterward that
+undeclared table and column names remain and undeclared row counts are
+unchanged. It checks the latest required core schema before commit. A failed
+step or target check rolls back structure, rows and `user_version` together.
+There is no cross-database atomic
+transaction. If a later database fails after an earlier one committed, protected
+upgrade compensation restores all three databases from the verified preinstall
+snapshot and restores the protected code; backup-only mode requires manual
+recovery. The global npm CLI may remain newer after protected compensation.
 A database already at the target is inspected without rerunning migration callbacks.
 
 After installation, before READY, a dedicated worker loads the installed owners'
@@ -343,8 +361,16 @@ the existing snapshot compensation boundaries. Recovery inspection remains read-
 Historical fixture tests cover representative C4 source layouts from v0.1.0,
 v0.4.11 and v0.5.2, scheduler v0.1.0, web-console v0.5.3, and absent web-console
 storage. Exact source hashes and extraction rules accompany the SQL fixtures.
-The separate 0→1→2 tests are synthetic engine tests; no released schema version 2
-is implied, and source comparison is not execution of every historical release.
+Multi-version chain tests are synthetic engine tests; no released schema version
+2 or later is implied. The historical samples come from selected release source
+layouts, not every evolved database on a deployed host. For each future released
+database version, retain a sample database and content assertions. Until CI is
+configured, the implementer runs these tests before merge, the reviewer reruns
+them, and the release checklist requires them to pass and adds samples for the
+new release. Table and column name and row-count checks cannot detect an
+incorrect `UPDATE` that preserves the row count, or every change to a column's
+definition. Sample assertions can catch known regressions; verified snapshots
+allow recovery if a problem is found.
 
 The active marker is durable before service stop, installation or database replacement.
 Only the referenced journal's validated data-ready, verified provisional abort or

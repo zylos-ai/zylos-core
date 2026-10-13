@@ -25,5 +25,5 @@ export const TABLES = {
 };
 export const COLUMN_DEFINITIONS = {"sessions": {"token": {"type": "TEXT", "pk": true}, "created_at": {"type": "INTEGER", "pk": false}, "last_seen_at": {"type": "INTEGER", "pk": false}}, "uploads": {"id": {"type": "TEXT", "pk": true}, "session_token": {"type": "TEXT", "pk": false}, "path": {"type": "TEXT", "pk": false}, "name": {"type": "TEXT", "pk": false}, "size": {"type": "INTEGER", "pk": false}, "size_label": {"type": "TEXT", "pk": false}, "mime": {"type": "TEXT", "pk": false}, "kind": {"type": "TEXT", "pk": false}, "created_at": {"type": "INTEGER", "pk": false}, "consumed": {"type": "INTEGER", "pk": false}}};
 export function inspectSchema(db, { allowNew = false, strict = true, allowExtraTables, allowExtraColumns } = {}) {
-  return inspectLayout(db, 'web-console', SUPPORTED_SCHEMA_VERSION, TABLES, { allowNew, strict, allowExtraTables, allowExtraColumns, definitions: COLUMN_DEFINITIONS, legacyOptional: {} });
+  return inspectLayout(db, 'web-console', SUPPORTED_SCHEMA_VERSION, TABLES, { allowNew, strict, allowExtraTables, allowExtraColumns, definitions: COLUMN_DEFINITIONS, migrateFromOlder: true });
 }
