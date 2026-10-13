@@ -106,6 +106,14 @@ deletion would remove user-added structure, the upgrade is blocked until the
 operator resolves the conflict outside the upgrade. Unsupported schema versions,
 an incomplete migration chain, SQLite integrity failures, missing or invalid
 backups, and failed applicable per-step or final checks also block the upgrade.
+Declared steps also verify retained column type, `NOT NULL`, default,
+primary-key position, and generated/hidden metadata. Intentional core column
+definition changes must be declared with `alterColumns`; an incompatible
+user-added `NOT NULL` column without a default blocks a table rebuild. The
+checks cover table and column names, retained column metadata, and row counts.
+They do not inspect indexes, triggers, or views, and a core table rebuild can
+lose user-created indexes or triggers. A same-count edit can change row meaning
+without being detected, so review dependent objects and relevant content.
 
 Both protected and backup-only self-upgrades rehearse the target migration chain
 on isolated SQLite backup copies before service stop. A passed rehearsal is only
@@ -114,6 +122,13 @@ authoritative snapshots and reruns the full checks and migrations against the
 actual databases. Each database's chain is atomic. If a later database fails,
 protected recovery restores all three from the verified snapshots and
 compensates protected code. Backup-only mode requires manual recovery.
+The downloaded target must include rehearsal code or the upgrade is rejected
+before service stop; this applies to `--branch` targets that point at older
+releases. Rehearsal copies live under private `.backup/db/.rehearsal-*`
+directories (0700). Normal exit or worker timeout removes them, but an abrupt
+updater kill can leave one. Identify it by its path and timestamp and compare
+it with snapshot groups containing `manifest.json`; preserve uncertain material
+for recovery review.
 
 An installed older updater runs preflight before the target release is installed.
 It may reject extra tables or columns and cannot use the new release's rules.

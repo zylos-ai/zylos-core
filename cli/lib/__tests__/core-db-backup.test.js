@@ -109,6 +109,29 @@ test('target rehearsal migrates private copies before stop and leaves live datab
  assert.deepEqual(fs.readFileSync(source),before);
  assert.equal(fs.existsSync(path.join(dir,'scheduler/scheduler.db')),false);
  assert.equal(fs.existsSync(path.join(dir,'web-console/web-console.db')),false);
+ assert.deepEqual(fs.readdirSync(path.join(dir,'.backup/db')).filter(name=>name.startsWith('.rehearsal-')),[]);
+});
+
+test('rehearsal worker receives a private backup path and parent removes it on failure',t=>{
+ const dir=fixture(t),target=path.join(dir,'target'),observed=path.join(dir,'observed.json');
+ fs.mkdirSync(path.join(target,'cli/lib'),{recursive:true});
+ fs.mkdirSync(path.join(target,'skills/comm-bridge/scripts'),{recursive:true});
+ fs.writeFileSync(path.join(target,'skills/comm-bridge/scripts/sqlite-schema.js'),'');
+ fs.writeFileSync(path.join(target,'cli/lib/core-db-backup-worker.js'),`
+  const fs=require('node:fs');
+  const payload=JSON.parse(process.argv[2]);
+  const stat=fs.lstatSync(payload.rehearsalDir);
+  fs.writeFileSync(${JSON.stringify(observed)},JSON.stringify({path:payload.rehearsalDir,mode:stat.mode&0o777,isDirectory:stat.isDirectory()}));
+  process.stderr.write('injected rehearsal failure');
+  process.exit(1);
+ `);
+ assert.throws(()=>rehearseCoreDbUpgrade(dir,target),/injected rehearsal failure/);
+ const result=JSON.parse(fs.readFileSync(observed,'utf8'));
+ assert.ok(result.path.startsWith(path.join(dir,'.backup/db/.rehearsal-')));
+ assert.equal(result.mode,0o700);
+ assert.equal(result.isDirectory,true);
+ assert.equal(fs.existsSync(result.path),false);
+ assert.deepEqual(fs.readdirSync(path.join(dir,'.backup/db')).filter(name=>name.startsWith('.rehearsal-')),[]);
 });
 
 test('normalized snapshots inspect directly with no temporary database and preserve live WAL bytes', {skip:!Database},t=>{

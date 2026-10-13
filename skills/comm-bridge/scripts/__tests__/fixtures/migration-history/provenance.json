@@ -1,5 +1,5 @@
 {
-  "scope": "Representative source layouts from local release tags only; not execution of every historical release. Multi-step version chains are synthetic mechanism fixtures and are not these historical fixtures.",
+  "scope": "Representative tagged release layouts. v0.9.0 v1 fixtures were generated from unchanged tagged migration callbacks with synthetic rows; no deployed database data. Synthetic v1→v2 chains are mechanism tests, not released migrations.",
   "fixtures": [
     {
       "fixture": "c4-v0.1.0.sql",
@@ -50,6 +50,53 @@
       "sourceSha256": "702ecd4a6ffed1489db07c3846857e97893b083cac17d8ed7011662f43499592",
       "extraction": "openDb db.exec template literal",
       "fixtureSha256": "dd3ab3be53dc91e861f44bb20c0a63b7a3045b83e3b099fc252a86f418389156"
+    },
+    {
+      "fixture": "c4-v0.9.0-v1.sql",
+      "tag": "v0.9.0",
+      "commit": "95b5850e2654fdc48b333c02b158acda2d536466",
+      "sources": [
+        {
+          "source": "skills/comm-bridge/scripts/c4-migrations.js",
+          "sourceBlobSha": "2affe90651552dbd9c4ca137e7faaef08ac819d5",
+          "sourceSha256": "70479e12e95e8095600de6e115cd8ea50225485c87ce1c7b477848d845a57a9c"
+        },
+        {
+          "source": "skills/comm-bridge/init-db.sql",
+          "sourceBlobSha": "797b65f2247753b5258a7580f7f7d518fdc98a14",
+          "sourceSha256": "54faef85854a67d9ed04bf932f0383f30ba8feb467e597c7d1bbf82ead3b1f8e"
+        }
+      ],
+      "extraction": "Execute the unchanged tagged migration callback on an empty SQLite database, add fixed synthetic rows, then serialize sqlite_master and table rows with user_version=1",
+      "fixtureSha256": "d830f396134e99d1f4bcccb27bbb5a3be9c229f4a8e9a22d544b129f74307801"
+    },
+    {
+      "fixture": "scheduler-v0.9.0-v1.sql",
+      "tag": "v0.9.0",
+      "commit": "95b5850e2654fdc48b333c02b158acda2d536466",
+      "sources": [
+        {
+          "source": "skills/scheduler/scripts/migrations.js",
+          "sourceBlobSha": "f7c35a3e7af6b239defb74812a831eb4fe5f9c9b",
+          "sourceSha256": "e99d2750aa33f0d6200c18424032ca083a66c91f0a641e8d061587a7893b037f"
+        }
+      ],
+      "extraction": "Execute the unchanged tagged migration callback on an empty SQLite database, add fixed synthetic rows, then serialize sqlite_master and table rows with user_version=1",
+      "fixtureSha256": "1ab9d599884853f3a6ddafa4221d941993a0ab11d418aec4b100fce210d883dc"
+    },
+    {
+      "fixture": "web-console-v0.9.0-v1.sql",
+      "tag": "v0.9.0",
+      "commit": "95b5850e2654fdc48b333c02b158acda2d536466",
+      "sources": [
+        {
+          "source": "skills/web-console/scripts/migrations.js",
+          "sourceBlobSha": "e7fb75690413180508270ad1bc6f606bfe56f2a4",
+          "sourceSha256": "f6a713f2ecd3e8ef265de20d96ef7750e4be458758f2e030d77a1ce762eabe75"
+        }
+      ],
+      "extraction": "Execute the unchanged tagged migration callback on an empty SQLite database, add fixed synthetic rows, then serialize sqlite_master and table rows with user_version=1",
+      "fixtureSha256": "9a0f635e5a1b0cbc7c411c0640b1db67b32966c69a36c937cd0a735e27875312"
     }
   ]
 }

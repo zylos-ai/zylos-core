@@ -76,7 +76,15 @@ export function inspectLayout(db, name, supported, tables, { allowNew = false, s
       const found = actual.get(column);
       if (expected && (found.type.toUpperCase() !== expected.type || Boolean(found.pk) !== expected.pk || found.hidden !== 0)) throw new Error(`${name}: unsupported definition for ${table}.${column}`);
     }
-    for (const column of info) if (!columns.includes(column.name)) extraColumns.push({ table, column: column.name });
+    for (const column of info) if (!columns.includes(column.name)) {
+      // Core INSERT statements do not name locally added columns. An ordinary
+      // NOT NULL column without a usable default would make those writes fail.
+      const defaultSql = column.dflt_value?.trim();
+      if (column.hidden === 0 && column.notnull && (defaultSql == null || /^\(*\s*NULL\s*\)*$/i.test(defaultSql))) {
+        throw new Error(`${name}: unsafe extension column ${table}.${column.name}: NOT NULL without a usable default`);
+      }
+      extraColumns.push({ table, column: column.name });
+    }
   }
   const extraTables = names.filter(table => !Object.hasOwn(tables, table));
   if (extraColumns.length && !allowExtraColumns) throw new Error(`${name}: unsupported columns ${extraColumns.map(({table,column}) => `${table}.${column}`).join(', ')}`);
@@ -84,7 +92,7 @@ export function inspectLayout(db, name, supported, tables, { allowNew = false, s
   return { version, empty: false, extensions: { tables: extraTables, columns: extraColumns } };
 }
 
-const emptyChanges = () => ({ addTables: {}, maybeTables: {}, dropTables: {}, renameTables: [], rebuildTables: [], addColumns: {}, maybeColumns: {}, dropColumns: {}, renameColumns: [], rowChanges: [] });
+const emptyChanges = () => ({ addTables: {}, maybeTables: {}, dropTables: {}, renameTables: [], rebuildTables: [], addColumns: {}, maybeColumns: {}, dropColumns: {}, renameColumns: [], alterColumns: {}, rowChanges: [] });
 const own = (object, key) => Object.hasOwn(object, key);
 const quote = name => `"${name.replaceAll('"', '""')}"`;
 function schemaSnapshot(db) {
@@ -103,7 +111,7 @@ function validateChanges(step) {
   if (!step.changes || typeof step.changes !== 'object') throw new Error(`Missing schema change declaration ${step.from}→${step.to}`);
   for (const key of Object.keys(step.changes)) if (!own(emptyChanges(),key)) throw new Error(`Unknown ${key} declaration ${step.from}→${step.to}`);
   const result = { ...emptyChanges(), ...step.changes };
-  for (const key of ['addTables', 'maybeTables', 'dropTables', 'addColumns', 'maybeColumns', 'dropColumns']) {
+  for (const key of ['addTables', 'maybeTables', 'dropTables', 'addColumns', 'maybeColumns', 'dropColumns', 'alterColumns']) {
     if (!result[key] || typeof result[key] !== 'object' || Array.isArray(result[key])) throw new Error(`Invalid ${key} declaration ${step.from}→${step.to}`);
   }
   for (const key of ['renameTables', 'renameColumns', 'rebuildTables', 'rowChanges']) {
@@ -131,6 +139,17 @@ function validateChanges(step) {
       }
     }
   }
+  for (const [table, columns] of Object.entries(result.alterColumns)) {
+    if (!validName(table) || !columns || typeof columns !== 'object' || Array.isArray(columns)) throw new Error(`Invalid alterColumns table ${step.from}→${step.to}`);
+    for (const [column, definition] of Object.entries(columns)) {
+      if (!validName(column) || !definition || typeof definition !== 'object' || Array.isArray(definition) ||
+          typeof definition.type !== 'string' || !definition.type || typeof definition.pk !== 'boolean' ||
+          typeof definition.notnull !== 'boolean' || !(definition.default === null || typeof definition.default === 'string') ||
+          Object.keys(definition).some(key => !['type','pk','notnull','default'].includes(key))) {
+        throw new Error(`Invalid alterColumns definition ${table}.${column} ${step.from}→${step.to}`);
+      }
+    }
+  }
   return result;
 }
 function assertDefinition(name, table, column, found, expected) {
@@ -141,7 +160,36 @@ function assertDefinition(name, table, column, found, expected) {
 function sameColumnDefinition(left, right) {
   return ['type','notnull','dflt_value','pk','hidden'].every(key => left[key] === right[key]);
 }
-function beforeStep(name, before, changes) {
+function assertAlteredDefinition(name, table, column, found, expected) {
+  if (!found || found.type.toUpperCase() !== expected.type.toUpperCase() || Boolean(found.pk) !== expected.pk ||
+      Boolean(found.notnull) !== expected.notnull || found.dflt_value !== expected.default || found.hidden !== 0) {
+    throw new Error(`${name}: declared core definition not reached for ${table}.${column}`);
+  }
+}
+function coreColumnsBySourceVersion(owner, steps) {
+  if (!steps.some(step => Object.keys(step.changes?.alterColumns || {}).length)) return new Map();
+  if (!owner.TABLES || typeof owner.TABLES !== 'object') throw new Error('Core table contract required for alterColumns');
+  let core = new Map(Object.entries(owner.TABLES).map(([table, columns]) => [table, new Set(columns)]));
+  const byVersion = new Map();
+  for (const step of [...steps].reverse()) {
+    if (step.from === 0) continue;
+    const prior = new Map([...core].map(([table, columns]) => [table, new Set(columns)]));
+    const changes = step.changes;
+    for (const table of [...names(changes.addTables), ...names(changes.maybeTables)]) prior.delete(table);
+    for (const {from,to} of changes.renameTables) {
+      if (prior.has(to)) {prior.set(from,prior.get(to));prior.delete(to);}
+    }
+    for (const [table, columns] of Object.entries(changes.dropTables)) prior.set(table,new Set(columns));
+    for (const [table, columns] of Object.entries(changes.addColumns)) for (const column of names(columns)) prior.get(table)?.delete(column);
+    for (const [table, columns] of Object.entries(changes.maybeColumns)) for (const column of names(columns)) prior.get(table)?.delete(column);
+    for (const {table,from,to} of changes.renameColumns) if (prior.get(table)?.has(to)) {prior.get(table).delete(to);prior.get(table).add(from);}
+    for (const [table, columns] of Object.entries(changes.dropColumns)) for (const column of columns) prior.get(table)?.add(column);
+    byVersion.set(step.from,prior);
+    core=prior;
+  }
+  return byVersion;
+}
+function beforeStep(name, before, changes, coreColumns) {
   for (const table of changes.rebuildTables) if (!own(before, table)) throw new Error(`${name}: declared rebuilt table ${table} missing`);
   for (const table of names(changes.addTables)) if (own(before, table)) throw new Error(`${name}: new core table ${table} collides with existing table`);
   for (const [table, definitions] of Object.entries(changes.maybeTables)) if (own(before, table)) {
@@ -172,6 +220,18 @@ function beforeStep(name, before, changes) {
     if (!own(before, table)) throw new Error(`${name}: missing table for removed columns ${table}`);
     for (const column of columns) if (!before[table].columns.has(column)) throw new Error(`${name}: declared removed column ${table}.${column} missing`);
   }
+  for (const [table, columns] of Object.entries(changes.alterColumns)) {
+    for (const column of names(columns)) {
+      if (!before[table]?.columns.has(column) || before[table].columns.get(column).hidden !== 0 ||
+          !coreColumns?.get(table)?.has(column)) {
+        throw new Error(`${name}: cannot alter non-core column ${table}.${column}`);
+      }
+      if ((changes.dropColumns[table] || []).includes(column) || own(changes.addColumns[table] || {},column) ||
+          own(changes.maybeColumns[table] || {},column) || changes.renameColumns.some(item => item.table === table && (item.from === column || item.to === column))) {
+        throw new Error(`${name}: conflicting core column change ${table}.${column}`);
+      }
+    }
+  }
 }
 function afterStep(name, before, after, changes) {
   const expectedTables = new Map(Object.entries(before));
@@ -201,8 +261,12 @@ function afterStep(name, before, after, changes) {
     for (const [column, definition] of Object.entries(changes.maybeColumns[source] || {})) {
       assertDefinition(name, table, column, after[table].columns.get(column), definition);
     }
+    for (const [column, definition] of Object.entries(changes.alterColumns[source] || {})) {
+      assertAlteredDefinition(name, table, column, after[table].columns.get(column), definition);
+    }
     if (previous) for (const [column, definition] of old) {
       if ((changes.dropColumns[source] || []).includes(column)) continue;
+      if (own(changes.alterColumns[source] || {},column)) continue;
       const target = changes.renameColumns.find(item => item.table === source && item.from === column)?.to || column;
       const retained = after[table].columns.get(target);
       if (retained && !sameColumnDefinition(definition, retained)) throw new Error(`${name}: undeclared definition change in ${table}.${target}`);
@@ -249,9 +313,10 @@ export function migrateDatabase(db, owner, { allowNew = false, strict = true, al
   try {
     // Another initializer may have completed while this connection waited.
     const current = planDatabaseMigration(db, owner, options);
+    const coreColumns = coreColumnsBySourceVersion(owner,current.steps);
     for (const step of current.steps) {
       const before = step.from === 0 ? null : schemaSnapshot(db);
-      if (before) beforeStep(owner.name || 'database', before, step.changes);
+      if (before) beforeStep(owner.name || 'database', before, step.changes, coreColumns.get(step.from));
       step.migrate(db, { isNew: current.empty && step.from === current.version, from: step.from, to: step.to });
       if (before) afterStep(owner.name || 'database', before, schemaSnapshot(db), step.changes);
       db.pragma(`user_version = ${step.to}`);

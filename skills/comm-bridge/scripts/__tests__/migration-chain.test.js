@@ -194,6 +194,128 @@ test('v1+ rebuild cannot change a retained column definition without declaration
  }finally{db.close();}
 });
 
+function alteredCoreOwner({declareChange=true,changeExtension=false,declareExtension=false,incomplete=false,wrongTarget=false}={}) {
+ const coreDefinition={type:wrongTarget?'REAL':'INTEGER',pk:false,notnull:true,default:'7'};
+ const alterColumns={items:{value:incomplete?{type:'INTEGER',pk:false}:coreDefinition}};
+ if(declareExtension)alterColumns.items.external={type:'TEXT',pk:false,notnull:false,default:"'changed'"};
+ const changes={rebuildTables:['items']};
+ if(declareChange || declareExtension)changes.alterColumns=alterColumns;
+ return {
+  name:'alter-core',SUPPORTED_SCHEMA_VERSION:2,supportsNewDatabase:false,TABLES:{items:['id','value']},
+  inspectSchema(db,options){
+   const version=db.pragma('user_version',{simple:true});
+   return inspectLayout(db,'alter-core',2,{items:['id','value']},{...options,definitions:{items:{id:{type:'INTEGER',pk:true},value:{type:version===1?'TEXT':'INTEGER',pk:false}}}});
+  },
+  MIGRATIONS:{1:{to:2,changes,migrate(db){
+   db.exec(`CREATE TABLE replacement(id INTEGER PRIMARY KEY,value INTEGER NOT NULL DEFAULT 7,external TEXT DEFAULT '${changeExtension?'changed':'user'}');
+     INSERT INTO replacement(id,value,external) SELECT id,value,external FROM items;
+     DROP TABLE items; ALTER TABLE replacement RENAME TO items`);
+  }}},
+ };
+}
+function seedAlterCore(db) {
+ db.exec("CREATE TABLE items(id INTEGER PRIMARY KEY,value TEXT DEFAULT 'before',external TEXT DEFAULT 'user'); INSERT INTO items(id,value,external) VALUES(1,'17','retained'); PRAGMA user_version=1");
+}
+test('declared v1+ core type, NOT NULL and default changes preserve extension definition and data',()=>{
+ const db=new Database(':memory:');try{
+  seedAlterCore(db);
+  const result=migrateDatabase(db,alteredCoreOwner(),extensionOptions);
+  assert.deepEqual(result.extensions,{tables:[],columns:[{table:'items',column:'external'}]});
+  assert.deepEqual(db.prepare('SELECT id,value,external FROM items').all(),[{id:1,value:17,external:'retained'}]);
+  const columns=Object.fromEntries(db.pragma('table_xinfo(items)').map(row=>[row.name,row]));
+  assert.deepEqual([columns.value.type,columns.value.notnull,columns.value.dflt_value],['INTEGER',1,'7']);
+  assert.deepEqual([columns.external.type,columns.external.notnull,columns.external.dflt_value],['TEXT',0,"'user'"]);
+ }finally{db.close();}
+});
+test('a name scheduled to become core later remains an extension in earlier steps',()=>{
+ const db=new Database(':memory:');try{
+  db.exec("CREATE TABLE items(id INTEGER PRIMARY KEY,future TEXT DEFAULT 'user'); INSERT INTO items(id,future) VALUES(1,'retained'); PRAGMA user_version=1");
+  let callbackRan=false;
+  const owner={name:'future-core',SUPPORTED_SCHEMA_VERSION:3,supportsNewDatabase:false,TABLES:{items:['id','future']},
+   inspectSchema(connection,options){
+    const version=connection.pragma('user_version',{simple:true});
+    return inspectLayout(connection,'future-core',3,{items:version===3?['id','future']:['id']},options);
+   },
+   MIGRATIONS:{
+    1:{to:2,changes:{alterColumns:{items:{future:{type:'INTEGER',pk:false,notnull:false,default:'0'}}}},migrate(){callbackRan=true;}},
+    2:{to:3,changes:{addColumns:{items:{future:{type:'TEXT',pk:false}}}},migrate(){callbackRan=true;}},
+   },
+  };
+  const before=alterCoreState(db);
+  assert.throws(()=>migrateDatabase(db,owner,extensionOptions),/cannot alter non-core column items\.future/);
+  assert.equal(callbackRan,false);
+  assert.deepEqual(alterCoreState(db),before);
+ }finally{db.close();}
+});
+for(const [name,options,pattern] of [
+ ['undeclared core definition change',{declareChange:false},/undeclared definition change in items\.value/],
+ ['incomplete core declaration',{incomplete:true},/alterColumns|definition/],
+ ['incorrect declared target definition',{wrongTarget:true},/alterColumns|definition/],
+ ['extension definition change',{changeExtension:true},/undeclared definition change in items\.external/],
+ ['declaration for extension column',{declareExtension:true},/alterColumns|extension|core column/],
+])test(`v1+ ${name} rolls back the rebuild`,()=>{
+ const db=new Database(':memory:');try{
+  seedAlterCore(db);
+  const before=alterCoreState(db);
+  assert.throws(()=>migrateDatabase(db,alteredCoreOwner(options),extensionOptions),pattern);
+  assert.deepEqual(alterCoreState(db),before);
+ }finally{db.close();}
+});
+function alterCoreState(db) {
+ return {schema:db.prepare("SELECT name,sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY name").all(),rows:db.prepare('SELECT * FROM items').all(),version:db.pragma('user_version',{simple:true})};
+}
+
+for(const [definition,usable] of [
+ ['NOT NULL',false],['NOT NULL DEFAULT NULL',false],
+ ["NOT NULL DEFAULT 'safe'",true],['NOT NULL DEFAULT 0',true],
+])test(`core table extension ${definition} ${usable?'has':'lacks'} a usable default`,()=>{
+ const db=new Database(':memory:');try{
+  db.exec(`CREATE TABLE items(id INTEGER PRIMARY KEY,value TEXT,external TEXT ${definition}); PRAGMA user_version=1`);
+  const inspect=()=>inspectLayout(db,'extension-default',1,{items:['id','value']},extensionOptions);
+  if(usable)assert.deepEqual(inspect().extensions.columns,[{table:'items',column:'external'}]);
+  else assert.throws(inspect,/external.*default|default.*external/);
+ }finally{db.close();}
+});
+
+for(const [name,base,table,query,marker] of [
+ ['c4',c4,'checkpoints','SELECT id,summary FROM checkpoints ORDER BY id','synthetic c4 v1 checkpoint'],
+ ['scheduler',scheduler,'system_state','SELECT key,value FROM system_state','synthetic scheduler v1 state'],
+ ['web-console',web,'sessions','SELECT token FROM sessions','fixture-web-v1'],
+])test(`tagged ${name} v1 fixture migrates to a synthetic v2 with rows and extensions retained`,()=>{
+ const db=new Database(':memory:');try{
+  db.exec(fs.readFileSync(new URL(`${name}-v0.9.0-v1.sql`,fixtures),'utf8'));
+  assert.equal(db.pragma('user_version',{simple:true}),1);
+  assert.equal(base.inspectSchema(db).version,1);
+  const reference=new Database(':memory:');
+  try{
+   migrateDatabase(reference,base,{allowNew:true});
+   const schema=connection=>connection.prepare("SELECT type,name,sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY type,name").all();
+   assert.deepEqual(schema(db),schema(reference));
+  }finally{reference.close();}
+  db.exec(`CREATE TABLE archive_records(id INTEGER PRIMARY KEY, value TEXT);
+    INSERT INTO archive_records VALUES(1,'retained');
+    ALTER TABLE ${table} ADD COLUMN external TEXT;
+    UPDATE ${table} SET external='retained core extension'`);
+  const before=db.prepare(query).all();
+  assert.ok(before.some(row=>Object.values(row).includes(marker)));
+  const tables={...base.TABLES,[table]:[...base.TABLES[table],'fixture_v2']};
+  const definitions={...base.COLUMN_DEFINITIONS,[table]:{...base.COLUMN_DEFINITIONS[table],fixture_v2:{type:'TEXT',pk:false}}};
+  const owner={...base,name:`${name}-future`,SUPPORTED_SCHEMA_VERSION:2,TABLES:tables,
+   inspectSchema(connection,options){
+    const version=connection.pragma('user_version',{simple:true});
+    return inspectLayout(connection,`${name}-future`,2,version===1?base.TABLES:tables,{...options,definitions:version===1?base.COLUMN_DEFINITIONS:definitions});
+   },
+   MIGRATIONS:{...base.MIGRATIONS,1:{to:2,changes:{addColumns:{[table]:{fixture_v2:{type:'TEXT',pk:false}}}},migrate(connection){connection.exec(`ALTER TABLE ${table} ADD COLUMN fixture_v2 TEXT`);}}},
+  };
+  const result=migrateDatabase(db,owner,extensionOptions);
+  assert.equal(result.version,2);
+  assert.deepEqual(result.extensions,{tables:['archive_records'],columns:[{table,column:'external'}]});
+  assert.deepEqual(db.prepare(query).all(),before);
+  assert.ok(db.prepare(`SELECT external FROM ${table}`).all().every(row=>row.external==='retained core extension'));
+  assert.equal(db.prepare('SELECT value FROM archive_records').get().value,'retained');
+ }finally{db.close();}
+});
+
 test('v1+ drop-table declaration must match every existing column exactly',()=>{
  const db=new Database(':memory:');try{
   db.exec("CREATE TABLE labels(id INTEGER PRIMARY KEY,name TEXT); INSERT INTO labels VALUES(1,'kept'); PRAGMA user_version=1");
@@ -234,5 +356,13 @@ for(const [name,options,pattern] of [
 
 test('historical fixture bytes match recorded immutable provenance',()=>{
  const provenance=JSON.parse(fs.readFileSync(new URL('provenance.json',fixtures),'utf8'));
- for(const entry of provenance.fixtures)assert.equal(crypto.createHash('sha256').update(fs.readFileSync(new URL(entry.fixture,fixtures))).digest('hex'),entry.fixtureSha256,entry.fixture);
+ const repo=new URL('../../../../',import.meta.url);
+ for(const entry of provenance.fixtures){
+  assert.equal(crypto.createHash('sha256').update(fs.readFileSync(new URL(entry.fixture,fixtures))).digest('hex'),entry.fixtureSha256,entry.fixture);
+  for(const source of entry.sources || []){
+   const bytes=fs.readFileSync(new URL(source.source,repo));
+   assert.equal(crypto.createHash('sha256').update(bytes).digest('hex'),source.sourceSha256,source.source);
+   assert.equal(crypto.createHash('sha1').update(Buffer.from(`blob ${bytes.length}\0`)).update(bytes).digest('hex'),source.sourceBlobSha,source.source);
+  }
+ }
 });

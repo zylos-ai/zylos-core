@@ -1,6 +1,5 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import os from 'node:os';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
@@ -62,9 +61,20 @@ export function rehearseCoreDbUpgrade(zylosDir, tempDir, {driverRoot=path.join(z
   if (!fs.existsSync(workerPath) || !fs.existsSync(path.join(schemaRoot,'comm-bridge','scripts','sqlite-schema.js'))) {
     throw new Error('Target release does not provide database rehearsal code');
   }
-  // Keep the directory under the caller's control so even a killed worker
-  // cannot strand private database copies in the system temporary directory.
-  const rehearsalDir=fs.mkdtempSync(path.join(os.tmpdir(),'zylos-db-rehearsal-'));
+  // Keep complete chat/database copies under Zylos's private backup tree.
+  // Parent cleanup also covers a worker timeout; an abrupt parent kill leaves
+  // the copies in this known local directory rather than the system temp area.
+  for (const relative of ['.backup','.backup/db']) {
+    const directory=path.join(zylosDir,relative);
+    try {
+      const stat=fs.lstatSync(directory);
+      if (!stat.isDirectory() || stat.isSymbolicLink()) throw Error('Unsafe database rehearsal destination: '+directory);
+    } catch(error) {
+      if (error.code!=='ENOENT') throw error;
+      fs.mkdirSync(directory,{mode:0o700});
+    }
+  }
+  const rehearsalDir=fs.mkdtempSync(path.join(zylosDir,'.backup','db','.rehearsal-'));
   fs.chmodSync(rehearsalDir,0o700);
   try {return runCoreDbWorker({action:'rehearse',zylosDir,schemaRoot,driverRoot,rehearsalDir},{workerPath});}
   finally {fs.rmSync(rehearsalDir,{recursive:true,force:true});}

@@ -59,6 +59,16 @@ service stop. A passed rehearsal is an early warning check, not authorization
 to skip any later check: live databases may change during it. Protected upgrades
 also freeze recovery dependencies before stop.
 
+The downloaded target must contain the rehearsal worker and schema code. A
+target without them is rejected before service stop, including when selected
+with `--branch` to test an older release. Rehearsal copies are kept in a private
+0700 directory at `.backup/db/.rehearsal-*` under the Zylos data directory.
+The updater removes that directory on normal exit or worker timeout. An abrupt
+kill of the updater can leave a copy behind. To identify one, inspect the
+`.rehearsal-*` entries under that exact `.backup/db` path and compare their
+timestamps with the interrupted upgrade; distinguish them from snapshot groups
+that contain `manifest.json`. Preserve uncertain material for recovery review.
+
 ### Local schema extensions
 
 Additional tables and columns in all three core databases are accepted and
@@ -72,6 +82,17 @@ resolve that conflict outside the upgrade. A new core table or column name
 already occupied by user data is also rejected. The legacy 0→1 transition has
 no per-step change declaration or collision and preservation checks. Its result
 must satisfy the required v1 core schema.
+
+For declared steps, retained columns keep their SQLite type, `NOT NULL`,
+default, primary-key position, and generated/hidden metadata unless a core
+definition change is declared in `alterColumns`. A rebuild that would put a
+user-added `NOT NULL` column with no default into an incompatible destination
+is rejected before it can discard that column's data. These checks cover table
+and column names, retained column metadata, and row counts. They do not inspect
+indexes, triggers, or views; rebuilding a core table can lose user-created
+indexes or triggers. They also cannot detect a semantic change to rows when
+the count stays the same. Review dependent objects and meaningful row content
+when planning a schema migration.
 
 The allowance does not bypass an unsupported schema version, a missing
 migration step, a failed SQLite integrity check, a missing/corrupt/hash-mismatched
@@ -335,15 +356,22 @@ for all three databases; the supported target remains 1. Unmarked historical
 schemas start at 0. Code retains the latest complete core schema. The legacy
 0→1 callback has no change declaration or per-step collision, structure, or
 row-count checks; its result must satisfy the required v1 schema. Beginning
-with 1→2, each callback must declare its added, deleted, and renamed table and
-column names and any tables whose row counts may change. Complete historical
-schema copies are not required in production code. The planner resolves a
+with 1→2, each callback must declare added, deleted, and renamed tables and
+columns, altered core column definitions, and any tables whose row counts may
+change.
+An `alterColumns` entry permits an intentional change to a retained core column
+definition. Its value is keyed by table and column, with the complete resulting
+`{type, pk, notnull, default}` definition (`default` is the SQLite SQL expression,
+or `null` for no default). The column must belong to the core schema at the
+source version; unlisted retained columns must keep their SQLite metadata. Complete
+historical schema copies are not required in production code. The planner resolves a
 continuous path from the current version to the target before changing
 anything. After taking the SQLite writer lock it plans again, then runs every
 step in one transaction per database. For declared steps from 1→2 onward, it
 rejects occupied new core names before the step and checks afterward that
-undeclared table and column names remain and undeclared row counts are
-unchanged. It checks the latest required core schema before commit. A failed
+undeclared table and column names remain, retained column metadata matches,
+and undeclared row counts are unchanged. It checks the latest required core
+schema before commit. A failed
 step or target check rolls back structure, rows and `user_version` together.
 There is no cross-database atomic
 transaction. If a later database fails after an earlier one committed, protected
@@ -360,17 +388,19 @@ the existing snapshot compensation boundaries. Recovery inspection remains read-
 
 Historical fixture tests cover representative C4 source layouts from v0.1.0,
 v0.4.11 and v0.5.2, scheduler v0.1.0, web-console v0.5.3, and absent web-console
-storage. Exact source hashes and extraction rules accompany the SQL fixtures.
+storage. They also cover all three v1 databases produced by the v0.9.0 tagged
+migration callbacks, seeded with synthetic rows and exercised through a
+synthetic v1→v2 step. Exact source hashes and extraction rules accompany the SQL fixtures.
 Multi-version chain tests are synthetic engine tests; no released schema version
 2 or later is implied. The historical samples come from selected release source
 layouts, not every evolved database on a deployed host. For each future released
 database version, retain a sample database and content assertions. Until CI is
 configured, the implementer runs these tests before merge, the reviewer reruns
 them, and the release checklist requires them to pass and adds samples for the
-new release. Table and column name and row-count checks cannot detect an
-incorrect `UPDATE` that preserves the row count, or every change to a column's
-definition. Sample assertions can catch known regressions; verified snapshots
-allow recovery if a problem is found.
+new release. These checks do not cover indexes, triggers, or views; a core table
+rebuild can lose user-created indexes or triggers. They also cannot detect an
+incorrect `UPDATE` that preserves the row count. Sample assertions can catch
+known regressions; verified snapshots allow recovery if a problem is found.
 
 The active marker is durable before service stop, installation or database replacement.
 Only the referenced journal's validated data-ready, verified provisional abort or
