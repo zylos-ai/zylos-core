@@ -62,7 +62,30 @@ async function ownerSchema(input,item) {
   try {
     const mod=await import(pathToFileURL(schemaPath));
     if(typeof mod.inspectSchema!=='function'||typeof mod.supportsNewDatabase!=='boolean') throw new Error('missing pure schema inspection contract');
-    return mod;
+    if (!mod.TABLES || typeof mod.TABLES !== 'object') throw new Error('missing schema table contract');
+    // The currently installed owner may predate the split policy. Its
+    // permissive inspection still validates required fields and definitions;
+    // this adapter independently classifies extensions for both old and new
+    // owner modules throughout one transaction.
+    return {
+      ...mod,
+      inspectSchema(db, options = {}) {
+        const result = mod.inspectSchema(db, {...options, strict:false});
+        if (result.empty) return {...result, extensions:{tables:[],columns:[]}};
+        const names = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'").all().map(row => row.name);
+        const tables = names.filter(name => !Object.hasOwn(mod.TABLES, name));
+        const columns = [];
+        for (const [table, expected] of Object.entries(mod.TABLES)) {
+          for (const found of db.prepare(`PRAGMA table_info(${table})`).all()) {
+            if (!expected.includes(found.name)) columns.push({table,column:found.name});
+          }
+        }
+        if (columns.length && input.allowSchemaExtensions !== true) {
+          throw new Error(`${item.source}: unsupported columns ${columns.map(({table,column}) => `${table}.${column}`).join(', ')}; review them, then use zylos upgrade --self --allow-schema-extensions`);
+        }
+        return {...result, extensions:{tables,columns}};
+      }
+    };
   }catch(error){throw new Error(`Incompatible owner schema code ${item.owner}: ${error.message}`);}
 }
 async function migrationEngine(input) {
@@ -89,7 +112,7 @@ export async function execute(input) {
     try {if(typeof db.backup!=='function') throw new Error('SQLite backup API unavailable');}finally{db.close();}
     return {ok:true};
   }
-  if(input.action==='upgrade-migrate') authorizeMigration(input);
+  if(input.action==='upgrade-migrate') input.allowSchemaExtensions = authorizeMigration(input).allowSchemaExtensions === true;
   const engine=['offline-preflight','upgrade-migrate'].includes(input.action) ? await migrationEngine(input) : null;
   const plan=(db,mod,options={}) => {
     // A restored pre-chain owner still supplies its original readonly contract.
@@ -118,7 +141,7 @@ export async function execute(input) {
     if(input.action==='upgrade-migrate') {
       // Recheck the durable capability before each owner. Ordinary openers keep
       // rejecting this same installing marker throughout all three migrations.
-      authorizeMigration(input);
+      if ((authorizeMigration(input).allowSchemaExtensions === true) !== input.allowSchemaExtensions) throw Error('controlled migration schema extension policy changed');
       const absent=missing(source), mod=await ownerSchema(input,item);
       if(absent&&!mod.supportsNewDatabase) throw Error(`Owner cannot initialize missing database: ${item.owner}`);
       if(typeof engine.migrateDatabase!=='function') throw Error('Installed migration engine unavailable');
@@ -127,7 +150,7 @@ export async function execute(input) {
       if(absent) {const memory=new Database(':memory:');try {plan(memory,mod,{allowNew:true});}finally{memory.close();}}
       fs.mkdirSync(path.dirname(source),{recursive:true});
       const db=new Database(source,{fileMustExist:!absent,timeout:5000});
-      try {engine.migrateDatabase(db,mod,{allowNew:absent,strict:true});rows.push({source:item.source,status:'present',...inspectConnection(db)});}
+      try {const layout=engine.migrateDatabase(db,mod,{allowNew:absent,strict:true});rows.push({source:item.source,status:'present',...inspectConnection(db),extensions:layout.extensions});}
       finally {db.close();}
       continue;
     }
@@ -150,12 +173,12 @@ export async function execute(input) {
       let state;
       if (input.standaloneRestored === true) {
         if (input.manifest?.status !== 'complete' || expected?.status !== 'backed_up' || typeof expected.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(expected.sha256)) throw new Error('Missing standalone restored snapshot evidence');
-        state = withStandaloneReadonly(Database, source, expected.sha256, db => {plan(db,mod); return inspectConnection(db);});
+        state = withStandaloneReadonly(Database, source, expected.sha256, db => {const layout=plan(db,mod); return {...inspectConnection(db),extensions:layout.extensions};});
       } else {
         // Original/preinstall and active READY verification must see committed
         // live WAL data. Never treat those databases as standalone snapshots.
         const db=new Database(source,{readonly:true,fileMustExist:true,timeout:5000});
-        try {db.exec('BEGIN');plan(db,mod);state=inspectConnection(db);}
+        try {db.exec('BEGIN');const layout=plan(db,mod);state={...inspectConnection(db),extensions:layout.extensions};}
         finally {if(db.inTransaction)db.exec('ROLLBACK');db.close();}
       }
       rows.push({source:item.source,status:'present',...state});continue;

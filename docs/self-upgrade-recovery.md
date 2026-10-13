@@ -55,6 +55,27 @@ the recognized starting schema and complete registered migration path. This chec
 does not run migrations or stamp versions. Failure rejects the upgrade while original services
 remain running. Protected upgrades also freeze recovery dependencies before stop.
 
+### Local schema extensions
+
+The schema check allows additional tables in all three core databases by
+default. These tables are included in the database snapshots and remain in place
+during a successful migration. Additional columns in a core-owned table require
+an explicit `zylos upgrade --self --allow-schema-extensions` invocation. Without
+that option, preflight reports the database, table, and extra columns and stops
+before services are taken down. The option is saved in the protected upgrade
+journal so migration, final verification, and recovery use the same decision.
+It does not turn an already started transaction into an opt-in transaction.
+
+Neither the default table allowance nor the option permits a missing or changed
+required core table or column, an unsupported schema version or migration path,
+failed SQLite integrity checks, or a missing, corrupt, or hash-mismatched backup.
+The option relaxes only the extra-column check; it cannot make an incompatible
+migration succeed. Review the reported database, table, and column names before
+authorizing it. An Agent should show the owner the extension and the effect of
+the option, then obtain explicit approval before retrying an upgrade with the
+option. Recovery follows the saved transaction policy rather than a new CLI
+choice.
+
 Backup-only service-stop, writer-drain, snapshot or snapshot-verification failures
 abort before installation. The command restarts only the service records that
 were online before its stop attempt and verifies them. It never restores a
@@ -101,6 +122,17 @@ retroactively provide preinstall protection. Preserve the separate backup for
 manual recovery if this first upgrade fails; it does not give the old updater
 automatic restoration. Installing this package alone does not enable a boot
 service or establish persisted runtime authentication.
+
+The same first-adoption limit applies to the schema-extension policy: an
+installed updater without this change still rejects additional tables and does
+not recognize `--allow-schema-extensions`, even if the target release contains
+the change. If that updater blocks on extension tables, first make and verify
+complete backups, account for every row in those tables, and arrange a temporary
+relocation outside the three core databases under an operator-approved plan.
+Run the existing protected upgrade only after the old preflight passes; decide
+whether to restore the extension tables after the new code is installed. Do not
+delete or discard extension data merely to pass preflight. Extra columns require
+a separately reviewed plan because relocating a table can affect core data.
 
 Existing operator-owned `.zylos` and `.backup` parent directories may retain
 legacy permissions and supported directory aliases. Without an explicit active
@@ -243,6 +275,8 @@ this is not a claim that a database restore is always necessary. Protected outpu
 also exposes transaction paths and separate recovery
 attempted/completed/stage/error values. Cleanup warnings
 do not turn a verified terminal success into a compensation request.
+Schema-extension reports identify the affected database, table, and extra
+columns; when extra columns block an upgrade, they give the opt-in command.
 
 Backup-only attempts retain database snapshots and code backup material for
 manual recovery, including after successful installation. They do not have the

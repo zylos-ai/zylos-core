@@ -48,7 +48,7 @@ export function assertCoreDatabaseAvailable(root) {
 
 // Strict inspection is the upgrade/recovery default; ordinary owners opt out
 // only of the extra-table/column whitelist, retaining required-field checks.
-export function inspectLayout(db, name, supported, tables, { allowNew = false, strict = true, legacyOptional = {}, definitions = {} } = {}) {
+export function inspectLayout(db, name, supported, tables, { allowNew = false, strict = true, allowExtraTables = !strict, allowExtraColumns = !strict, legacyOptional = {}, definitions = {} } = {}) {
   const version = db.pragma('user_version', { simple: true });
   if (!Number.isInteger(version) || version < 0) {
     throw new Error(`${name}: invalid schema version ${version}; restore compatible code/data`);
@@ -61,8 +61,9 @@ export function inspectLayout(db, name, supported, tables, { allowNew = false, s
   if (!names.length && version === 0 && allowNew) {
     // No user tables does not imply an empty schema (e.g. an unknown view).
     if (objects.length) throw new Error(`${name}: unsupported objects in empty schema`);
-    return { version, empty: true };
+    return { version, empty: true, extensions: { tables: [], columns: [] } };
   }
+  const extraColumns = [];
   for (const [table, columns] of Object.entries(tables)) {
     if (version === 0 && legacyOptional[table] === true && !names.includes(table)) continue;
     const info = db.prepare(`PRAGMA table_info(${table})`).all();
@@ -74,17 +75,19 @@ export function inspectLayout(db, name, supported, tables, { allowNew = false, s
       const found = actual.get(column);
       if (expected && (found.type.toUpperCase() !== expected.type || Boolean(found.pk) !== expected.pk)) throw new Error(`${name}: unsupported definition for ${table}.${column}`);
     }
-    if (strict && info.some(column => !columns.includes(column.name))) throw new Error(`${name}: unsupported columns in ${table}`);
+    for (const column of info) if (!columns.includes(column.name)) extraColumns.push({ table, column: column.name });
   }
-  if (strict && names.some(name => !Object.hasOwn(tables, name))) throw new Error(`${name}: unsupported tables in schema ${version}`);
-  return { version, empty: false };
+  const extraTables = names.filter(table => !Object.hasOwn(tables, table));
+  if (extraColumns.length && !allowExtraColumns) throw new Error(`${name}: unsupported columns ${extraColumns.map(({table,column}) => `${table}.${column}`).join(', ')}; review them, then use zylos upgrade --self --allow-schema-extensions`);
+  if (extraTables.length && !allowExtraTables) throw new Error(`${name}: unsupported tables in schema ${version}: ${extraTables.join(', ')}`);
+  return { version, empty: false, extensions: { tables: extraTables, columns: extraColumns } };
 }
 
 // Planning is read-only: recognize the starting layout, then resolve every step
 // before any migration runs. Owners inspect the layout for the actual version,
 // rather than requiring the target version's columns at an earlier step.
-export function planDatabaseMigration(db, owner, { allowNew = false, strict = true } = {}) {
-  const current = owner.inspectSchema(db, { allowNew, strict });
+export function planDatabaseMigration(db, owner, { allowNew = false, strict = true, allowExtraTables, allowExtraColumns } = {}) {
+  const current = owner.inspectSchema(db, { allowNew, strict, allowExtraTables, allowExtraColumns });
   const target = owner.SUPPORTED_SCHEMA_VERSION;
   if (!Number.isInteger(target) || target < 0 || !Number.isInteger(current.version) || current.version < 0 || current.version > target) {
     throw new Error('Invalid or unsupported schema migration version');
@@ -102,23 +105,24 @@ export function planDatabaseMigration(db, owner, { allowNew = false, strict = tr
 
 // One writer lock and one transaction cover the entire per-database chain.
 // Migration callbacks must keep all changes on this SQLite connection.
-export function migrateDatabase(db, owner, { allowNew = false, strict = true } = {}) {
+export function migrateDatabase(db, owner, { allowNew = false, strict = true, allowExtraTables, allowExtraColumns } = {}) {
   if (db.readonly) throw new Error('Cannot migrate a readonly database');
-  const initial = planDatabaseMigration(db, owner, { allowNew, strict });
+  const options = { allowNew, strict, allowExtraTables, allowExtraColumns };
+  const initial = planDatabaseMigration(db, owner, options);
   if (initial.empty && db.name !== ':memory:' && db.name !== '') {
     const stat = fs.lstatSync(db.name);
     if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('Unsafe empty database file');
   }
-  if (!initial.steps.length) return owner.inspectSchema(db, { strict });
+  if (!initial.steps.length) return owner.inspectSchema(db, options);
   db.pragma('busy_timeout = 5000');
   db.exec('BEGIN IMMEDIATE');
   try {
     // Another initializer may have completed while this connection waited.
-    const current = planDatabaseMigration(db, owner, { allowNew, strict });
+    const current = planDatabaseMigration(db, owner, options);
     for (const step of current.steps) {
       step.migrate(db, { isNew: current.empty && step.from === current.version, from: step.from, to: step.to });
       db.pragma(`user_version = ${step.to}`);
-      owner.inspectSchema(db, { strict });
+      owner.inspectSchema(db, options);
     }
     db.exec('COMMIT');
   } catch (error) {
@@ -128,7 +132,7 @@ export function migrateDatabase(db, owner, { allowNew = false, strict = true } =
     }
     throw error;
   }
-  return owner.inspectSchema(db, { strict });
+  return owner.inspectSchema(db, options);
 }
 
 export function guardDatabase(db, owner, { readonly = false } = {}) {

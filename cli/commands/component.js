@@ -262,7 +262,11 @@ export function formatSelfUpgradeProtection(data) {
   if(data.automaticResume===false)lines.push('Interrupted upgrade: manual recovery required; automatic takeover is disabled');
   if(data.dbBackupDir)lines.push(`Database snapshots: ${data.dbBackupDir}`);
   const databases=data.databases||data.dbManifest?.databases;
-  if(Array.isArray(databases))for(const db of databases)lines.push(`  ${db.source}: ${db.status}${db.userVersion!=null?` (schema ${db.userVersion})`:''}`);
+  if(Array.isArray(databases))for(const db of databases){
+    lines.push(`  ${db.source}: ${db.status}${db.userVersion!=null?` (schema ${db.userVersion})`:''}`);
+    for(const table of db.extensions?.tables || [])lines.push(`    Accepted extra table: ${table}`);
+    for(const {table,column} of db.extensions?.columns || [])lines.push(`    Accepted extra column: ${table}.${column}`);
+  }
   if(data.transactionDir)lines.push(`Recovery materials: ${data.transactionDir}`);
   if(data.archiveDir)lines.push(`Archived recovery materials: ${data.archiveDir}`);
   const rb=data.rollback;
@@ -290,10 +294,18 @@ export async function upgradeComponent(args) {
   const skipConfirm = args.includes('--yes') || args.includes('-y');
   const explicitConfirm = args.includes('confirm');
   const upgradeSelf = args.includes('--self');
+  const allowSchemaExtensions = args.includes('--allow-schema-extensions');
   const upgradeAll = args.includes('--all');
   const skipEval = args.includes('--skip-eval');
   const beta = args.includes('--beta');
   const hasTempDirFlag = args.includes('--temp-dir');
+
+  if (allowSchemaExtensions && (!upgradeSelf || checkOnly)) {
+    const msg = '--allow-schema-extensions requires zylos upgrade --self without --check.';
+    if (jsonOutput) console.log(JSON.stringify({action:'upgrade',success:false,error:msg,reply:msg},null,2));
+    else console.error(`Error: ${msg}`);
+    process.exit(1);
+  }
 
   if (hasTempDirFlag) {
     const msg = '--temp-dir is not supported.';
@@ -348,7 +360,7 @@ export async function upgradeComponent(args) {
     if (checkOnly) {
       return handleSelfCheckOnly({ jsonOutput, branch, beta });
     }
-    const ok = await upgradeSelfCore({ branch, beta, mode });
+    const ok = await upgradeSelfCore({ branch, beta, mode, allowSchemaExtensions });
     if (!ok) process.exit(1);
     return;
   }
@@ -371,6 +383,7 @@ export async function upgradeComponent(args) {
     console.log('  --beta         Include prerelease (beta) versions');
     console.log('  --branch <b>   Upgrade from a specific branch (e.g. feat/xxx)');
     console.log('  --mode <m>     Merge mode: "merge" (default, smart three-way) or "overwrite"');
+    console.log('  --allow-schema-extensions  Allow extra columns in core databases during --self upgrade');
     console.log('\nExamples:');
     console.log('  zylos upgrade telegram --check --json');
     console.log('  zylos upgrade --self --check --beta');
@@ -1057,7 +1070,7 @@ function handleSelfCheckOnly({ jsonOutput, branch, beta = false }) {
  * Returns true on success, false on failure.
  * Does NOT call process.exit() — caller decides exit behavior.
  */
-async function upgradeSelfCore({ branch, beta = false, mode = 'merge' } = {}) {
+async function upgradeSelfCore({ branch, beta = false, mode = 'merge', allowSchemaExtensions = false } = {}) {
   const jsonOutput = process.argv.includes('--json');
   const skipConfirm = process.argv.includes('--yes') || process.argv.includes('-y');
   let tempDir = null;
@@ -1172,6 +1185,7 @@ async function upgradeSelfCore({ branch, beta = false, mode = 'merge' } = {}) {
       tempDir,
       newVersion: check.latest,
       mode,
+      allowSchemaExtensions,
       onStep: !jsonOutput ? printStep : undefined,
     });
 

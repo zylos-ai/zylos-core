@@ -57,6 +57,44 @@ test('offline-preflight loads only pure owner inspectors through maintenance mar
  assert.deepEqual(fs.readFileSync(source),before);
 });
 
+test('offline preflight accepts archive tables by default and requires an explicit column opt-in', {skip:!Database},async t=>{
+ const dir=fixture(t);skills(dir);
+ const schemaRoot=path.resolve('skills');
+ const {migrateDatabase}=await import('../../../skills/comm-bridge/scripts/sqlite-schema.js');
+ const owners=await Promise.all([
+  import('../../../skills/comm-bridge/scripts/c4-schema.js'),
+  import('../../../skills/scheduler/scripts/schema.js'),
+  import('../../../skills/web-console/scripts/schema.js'),
+ ]);
+ const requiredTables=['checkpoints','tasks','sessions'];
+ for(const [index,item] of CORE_DATABASES.entries()) {
+  const file=path.join(dir,item.source);fs.mkdirSync(path.dirname(file),{recursive:true});
+  const db=new Database(file);
+  try {
+   migrateDatabase(db,owners[index],{allowNew:true,strict:false});
+   db.exec('CREATE TABLE archive_records(id INTEGER PRIMARY KEY, value TEXT)');
+  } finally {db.close();}
+ }
+ const preflight=()=>runCoreDbWorker({action:'offline-preflight',zylosDir:dir,schemaRoot});
+ const tables=preflight().databases;
+ assert.equal(tables.length,3);
+ for(const [index,row] of tables.entries()) {
+  assert.equal(row.source,CORE_DATABASES[index].source);
+  assert.deepEqual(row.extensions,{tables:['archive_records'],columns:[]});
+ }
+ for(const [index,item] of CORE_DATABASES.entries()) {
+  const db=new Database(path.join(dir,item.source));
+  try {db.exec(`ALTER TABLE ${requiredTables[index]} ADD COLUMN extension_value TEXT`);} finally {db.close();}
+ }
+ const before=CORE_DATABASES.map(item=>fs.readFileSync(path.join(dir,item.source)));
+ assert.throws(preflight,error=>error.message.includes('checkpoints.extension_value') && error.message.includes('--allow-schema-extensions'));
+ const accepted=runCoreDbWorker({action:'offline-preflight',zylosDir:dir,schemaRoot,allowSchemaExtensions:true}).databases;
+ for(const [index,row] of accepted.entries()) {
+  assert.deepEqual(row.extensions,{tables:['archive_records'],columns:[{table:requiredTables[index],column:'extension_value'}]});
+ }
+ assert.deepEqual(CORE_DATABASES.map(item=>fs.readFileSync(path.join(dir,item.source))),before);
+});
+
 test('normalized snapshots inspect directly with no temporary database and preserve live WAL bytes', {skip:!Database},t=>{
  const dir=fixture(t);skills(dir);fs.mkdirSync(path.join(dir,'comm-bridge'));
  const source=path.join(dir,'comm-bridge/c4.db');const writer=new Database(source);t.after(()=>writer.close());
@@ -134,12 +172,16 @@ test('controlled installed migration requires installing identity, preserves sna
   else db.exec(fs.readFileSync(path.resolve('skills/comm-bridge/scripts/__tests__/fixtures/migration-history/scheduler-v0.1.0.sql'),'utf8'));
   db.close();
  }
+ const extended=new Database(path.join(dir,'comm-bridge/c4.db'));
+ extended.exec("CREATE TABLE archive_records(id INTEGER PRIMARY KEY, value TEXT); INSERT INTO archive_records VALUES (1, 'retained'); ALTER TABLE conversations ADD COLUMN extension_value TEXT");
+ extended.close();
  const before=fs.readFileSync(path.join(dir,'comm-bridge/c4.db'));
  const schedulerBefore=fs.readFileSync(path.join(dir,'scheduler/scheduler.db'));
- assert.equal(runCoreDbWorker({action:'offline-preflight',zylosDir:dir,schemaRoot}).databases.length,3);
+ assert.throws(()=>runCoreDbWorker({action:'offline-preflight',zylosDir:dir,schemaRoot}),/conversations\.extension_value/);
+ assert.equal(runCoreDbWorker({action:'offline-preflight',zylosDir:dir,schemaRoot,allowSchemaExtensions:true}).databases.length,3);
  assert.deepEqual(fs.readFileSync(path.join(dir,'comm-bridge/c4.db')),before);
  assert.deepEqual(fs.readFileSync(path.join(dir,'scheduler/scheduler.db')),schedulerBefore);
- assert.throws(()=>runCoreDbWorker({action:'offline-preflight',zylosDir:dir,schemaRoot,requireCurrent:true}),/migrations remain/);
+ assert.throws(()=>runCoreDbWorker({action:'offline-preflight',zylosDir:dir,schemaRoot,requireCurrent:true,allowSchemaExtensions:true}),/migrations remain/);
  const transactionId='controlled',transactionDir=path.join(dir,'.backup/self-upgrade',transactionId);
  const payload={action:'upgrade-migrate',zylosDir:dir,schemaRoot,transactionId,transactionDir};
  assert.throws(()=>runCoreDbWorker(payload));
@@ -149,7 +191,7 @@ test('controlled installed migration requires installing identity, preserves sna
  fs.mkdirSync(path.join(dir,'.zylos/upgrade'),{recursive:true,mode:0o700});
  fs.copyFileSync(path.resolve('cli/lib/upgrade-maintenance.cjs'),path.join(dir,'.zylos/upgrade/maintenance.cjs'));
  fs.chmodSync(path.join(dir,'.zylos/upgrade/maintenance.cjs'),0o600);
- const j={formatVersion:1,transactionId,zylosDir:dir,skillsDir:schemaRoot,phase:'installing',installationIntent:true,initialIdentity:{},dbBackupDir:snapshot.dbBackupDir,snapshotManifestHash:m.hash(path.join(snapshot.dbBackupDir,'manifest.json'))};
+ const j={formatVersion:1,transactionId,zylosDir:dir,skillsDir:schemaRoot,phase:'installing',installationIntent:true,allowSchemaExtensions:true,initialIdentity:{},dbBackupDir:snapshot.dbBackupDir,snapshotManifestHash:m.hash(path.join(snapshot.dbBackupDir,'manifest.json'))};
  const digest='a'.repeat(64);
  Object.assign(j,{nodePath:process.execPath,coreManifest:[{name:'comm-bridge',existedBefore:true,backedUp:true,originalHash:digest}],originalServices:[]});
  j.initialIdentity={nodePath:process.execPath,cliRoot:path.join(dir,'package/cli'),cliHash:digest,packageJson:path.join(dir,'package/package.json'),packageHash:digest,workerPath:path.join(dir,'package/cli/lib/core-db-backup-worker.js'),workerHash:digest,ecosystemHash:null,databases:CORE_DATABASES.map(item=>({source:item.source,exists:item.owner!=='web-console'}))};
@@ -160,12 +202,18 @@ test('controlled installed migration requires installing identity, preserves sna
 
  assert.throws(()=>m.assertCoreDatabaseAvailable(dir),/maintenance|upgrade|blocked/i);
  assert.throws(()=>runCoreDbWorker({...payload,transactionId:'other'}),/identity mismatch/);
+ j.allowSchemaExtensions=false;m.durable(path.join(transactionDir,'journal.json'),j);
+ assert.throws(()=>runCoreDbWorker({...payload,allowSchemaExtensions:true}),/conversations\.extension_value/);
+ j.allowSchemaExtensions=true;m.durable(path.join(transactionDir,'journal.json'),j);
  const result=runCoreDbWorker(payload);
  assert.equal(result.databases.length,3);assert.ok(result.databases.every(row=>row.userVersion===1));
+ assert.deepEqual(result.databases[0].extensions,{tables:['archive_records'],columns:[{table:'conversations',column:'extension_value'}]});
  assert.throws(()=>m.assertCoreDatabaseAvailable(dir),/maintenance|upgrade|blocked/i);
- assert.equal(runCoreDbWorker({action:'offline-preflight',zylosDir:dir,schemaRoot,requireCurrent:true}).databases.length,3);
+ assert.equal(runCoreDbWorker({action:'offline-preflight',zylosDir:dir,schemaRoot,requireCurrent:true,allowSchemaExtensions:true}).databases.length,3);
  assert.equal(runCoreDbWorker({action:'verify',zylosDir:dir,dbBackupDir:snapshot.dbBackupDir,manifest:snapshot.manifest}).databases[0].userVersion,0);
  assert.equal(runCoreDbWorker(payload).databases[0].userVersion,1);
+ const retained=new Database(path.join(dir,'comm-bridge/c4.db'),{readonly:true});
+ assert.equal(retained.prepare('SELECT value FROM archive_records WHERE id=1').get().value,'retained');retained.close();
  for(const item of ordinary)assert.notEqual(open(item).status,0);
  const preflight=m.preflight;m.preflight=()=>({success:true});
  try {protectedDataReady({transactionDir,transactionId});}finally{m.preflight=preflight;}

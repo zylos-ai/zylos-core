@@ -92,6 +92,37 @@ The CLI executes the post-upgrade hook (if declared) and restarts the service (i
 
 ## Session Mode — Self-Upgrade (zylos-core)
 
+### Core database schema extensions
+
+Protected self-upgrade checks the C4, scheduler, and web-console databases
+before stopping their services. Additional tables are allowed by default and
+included in the verified database snapshots. Additional columns in a core-owned
+table require `--allow-schema-extensions` on the execution command. A missing
+or changed required core table or column, unsupported schema version or
+migration path, failed SQLite integrity check, and failed backup or backup hash
+verification still block the upgrade. The choice is saved with the protected
+transaction and used through migration, final verification, and recovery.
+
+If preflight reports extra columns, show the user the reported database, table,
+and column names. Explain that the flag permits those additional columns but
+does not guarantee migration compatibility. Obtain explicit approval for this
+choice before retrying with:
+
+```bash
+zylos upgrade --self --yes --allow-schema-extensions --json
+```
+
+Do not silently add the flag to an existing approval. In C4, include the same
+details and flag choice in the plain-text approval request. An extra table alone
+needs no schema exception; follow the ordinary upgrade approval flow.
+
+An installed older updater runs preflight before the target release is installed.
+It may reject extra tables and cannot use a flag introduced by the target release.
+If this blocks first adoption, follow
+[First adoption](../../../docs/self-upgrade-recovery.md#first-adoption): verify a
+complete backup and row accounting, then use an operator-approved temporary
+relocation plan before running the old CLI. Do not discard the extension data.
+
 ### Step 1: Check + Download to Temp
 
 ```bash
@@ -124,6 +155,11 @@ After user confirms (with full knowledge of all changes). Confirm flow always us
 ```bash
 zylos upgrade --self --yes --json
 ```
+
+Add `--allow-schema-extensions` only when the user has expressly approved the
+reported extra columns. If preflight rejects a required schema, version,
+integrity, or backup check, investigate that failure; this flag does not bypass
+it.
 
 The CLI handles: backup, npm install -g from downloaded package, smart merge Core Skills, sync CLAUDE.md, sync settings hooks, restart PM2 services, verify.
 
@@ -267,6 +303,8 @@ If already up to date, reply: `zylos-core is up to date (v0.1.0)`
 User: `upgrade zylos confirm`
 
 1. Run `zylos upgrade --self --yes --json`
+   If the user also explicitly approved reported extra columns, add
+   `--allow-schema-extensions` to this command.
 2. Deploy templates per user's decisions from Step 1 (new files: copy, changed: follow user choice, unchanged: skip)
 3. **If `mergeConflicts` in result**: Review and re-merge backed-up local changes
 4. If hooks/skills changed, execute restart-claude

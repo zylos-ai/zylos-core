@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { guardDatabase as registeredGuardDatabase, preflightDatabase, assertCoreDatabaseAvailable } from '../sqlite-schema.js';
+import { guardDatabase as registeredGuardDatabase, preflightDatabase, assertCoreDatabaseAvailable, inspectLayout, planDatabaseMigration, migrateDatabase } from '../sqlite-schema.js';
 import * as c4 from '../c4-schema.js';
 import * as scheduler from '../../../scheduler/scripts/schema.js';
 import * as wc from '../../../web-console/scripts/schema.js';
@@ -193,4 +193,71 @@ test('ordinary owners accept additional tables and columns while upgrade inspect
  for(const relative of ['comm-bridge/c4.db','scheduler/scheduler.db','web-console/web-console.db']) {
   const db=new Database(path.join(root,relative),{readonly:true});assert.equal(db.prepare('SELECT value FROM extension_state').get().value,'daily-write');db.close();
  }
+});
+
+test('upgrade inspection allows extra tables independently of extra columns for every core owner', t => {
+ const root=fixture(t);
+ run(root, `import {getDb,close} from './skills/comm-bridge/scripts/c4-db.js';import {getDb as scheduler} from './skills/scheduler/scripts/database.js';import {openDb} from './skills/web-console/scripts/db.js';getDb();close();scheduler().close();openDb().close();`);
+ for(const [relative,owner,table] of [['comm-bridge/c4.db',c4,'checkpoints'],['scheduler/scheduler.db',scheduler,'tasks'],['web-console/web-console.db',wc,'sessions']]) {
+  const file=path.join(root,relative),db=new Database(file);
+  try {
+   db.exec('CREATE TABLE archive_records(id INTEGER PRIMARY KEY)');
+   assert.throws(()=>owner.inspectSchema(db,{strict:true}),/archive_records/);
+   assert.deepEqual(owner.inspectSchema(db,{strict:true,allowExtraTables:true}).extensions,{tables:['archive_records'],columns:[]});
+   db.exec(`ALTER TABLE ${table} ADD COLUMN extension_value TEXT`);
+   assert.throws(()=>owner.inspectSchema(db,{strict:true,allowExtraTables:true}),error=>error.message.includes(`${table}.extension_value`) && error.message.includes('--allow-schema-extensions'));
+   const accepted=owner.inspectSchema(db,{strict:true,allowExtraTables:true,allowExtraColumns:true});
+   assert.deepEqual(accepted.extensions,{tables:['archive_records'],columns:[{table,column:'extension_value'}]});
+   db.exec(`DROP TABLE ${table}`);
+   assert.throws(()=>owner.inspectSchema(db,{strict:true,allowExtraTables:true,allowExtraColumns:true}),new RegExp(`missing ${table}\\.`));
+  } finally {db.close();}
+ }
+});
+
+test('migration planning and post-migration inspection preserve extension policy',()=>{
+ const db=new Database(':memory:');
+ db.exec('CREATE TABLE required(id INTEGER PRIMARY KEY, extra TEXT); CREATE TABLE archive_records(id INTEGER);');
+ const owner={SUPPORTED_SCHEMA_VERSION:1,supportsNewDatabase:false,MIGRATIONS:{0:{to:1,migrate(connection){connection.exec('ALTER TABLE required ADD COLUMN label TEXT');}}},inspectSchema(connection,options){
+  const version=connection.pragma('user_version',{simple:true});
+  const columns=version===0?['id']:['id','label'];
+  return inspectLayout(connection,'fixture',1,{required:columns},options);
+ }};
+ assert.throws(()=>planDatabaseMigration(db,owner,{allowExtraTables:true}),/required\.extra/);
+ const options={allowExtraTables:true,allowExtraColumns:true};
+ assert.deepEqual(planDatabaseMigration(db,owner,options).extensions,{tables:['archive_records'],columns:[{table:'required',column:'extra'}]});
+ assert.equal(migrateDatabase(db,owner,options).version,1);
+ assert.deepEqual(owner.inspectSchema(db,{strict:true,...options}).extensions,{tables:['archive_records'],columns:[{table:'required',column:'extra'}]});
+ assert.equal(db.prepare("SELECT name FROM sqlite_master WHERE name='archive_records'").get().name,'archive_records');
+ db.close();
+});
+
+test('each core owner migrates a legacy version while retaining extra table rows',()=>{
+ for(const owner of [c4,scheduler,wc]) {
+  const db=new Database(':memory:');
+  try {
+   migrateDatabase(db,owner,{allowNew:true,strict:false});
+   db.pragma('user_version=0');
+   db.exec("CREATE TABLE archive_records(id INTEGER PRIMARY KEY, value TEXT); INSERT INTO archive_records VALUES (1, 'retained')");
+   const result=migrateDatabase(db,owner,{strict:true,allowExtraTables:true});
+   assert.equal(result.version,owner.SUPPORTED_SCHEMA_VERSION);
+   assert.deepEqual(result.extensions.tables,['archive_records']);
+   assert.equal(db.prepare('SELECT value FROM archive_records WHERE id=1').get().value,'retained');
+  } finally {db.close();}
+ }
+});
+
+test('extension allowance never bypasses required schema definitions or versions',()=>{
+ const db=new Database(':memory:');
+ const inspect=()=>inspectLayout(db,'fixture',1,{required:['id','name']},{allowExtraTables:true,allowExtraColumns:true,definitions:{required:{id:{type:'INTEGER',pk:true},name:{type:'TEXT',pk:false}}}});
+ try {
+  db.pragma('user_version=1');
+  assert.throws(inspect,/missing required\.id/);
+  db.exec('CREATE TABLE required(id INTEGER PRIMARY KEY)');
+  assert.throws(inspect,/missing required\.name/);
+  db.exec('ALTER TABLE required ADD COLUMN name INTEGER');
+  assert.throws(inspect,/unsupported definition for required\.name/);
+  db.exec('DROP TABLE required; CREATE TABLE required(id INTEGER PRIMARY KEY, name TEXT, extra TEXT)');
+  db.pragma('user_version=2');
+  assert.throws(inspect,/exceeds supported/);
+ } finally {db.close();}
 });

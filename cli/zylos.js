@@ -167,6 +167,7 @@ Component Management:
   upgrade <name>      Upgrade a component (9-step pipeline)
   upgrade --all       Upgrade all components
   upgrade --self      Upgrade zylos-core itself
+                      --allow-schema-extensions  Permit extra core database columns
   uninstall <name>    Remove a component (--purge, --force)
   uninstall --self    Uninstall zylos entirely (--force to skip prompts)
   remove <name>       Alias for uninstall

@@ -38,7 +38,7 @@ export function probeCoreDbSnapshotSync(zylosDir) {
 }
 // Run before any service is stopped or maintenance marker is published. This
 // opens existing databases read-only and exercises each owner's native driver.
-export function preflightCoreDbUpgrade(zylosDir) {
+export function preflightCoreDbUpgrade(zylosDir, {allowSchemaExtensions = false} = {}) {
   for (const relative of ['.backup', '.backup/db']) {
     const file = path.join(zylosDir, relative);
     try { const stat = fs.lstatSync(file); if (!stat.isDirectory() || stat.isSymbolicLink()) throw Error('Unsafe database snapshot destination: ' + file); }
@@ -50,7 +50,7 @@ export function preflightCoreDbUpgrade(zylosDir) {
   const stat = fs.lstatSync(destination);
   if (!stat.isDirectory() || stat.isSymbolicLink()) throw Error('Unsafe database snapshot destination');
   probeCoreDbSnapshotSync(destination);
-  return runCoreDbWorker({action: 'offline-preflight', zylosDir});
+  return runCoreDbWorker({action: 'offline-preflight', zylosDir, allowSchemaExtensions});
 }
 export function createCoreDbSnapshot({zylosDir,transactionId,fromVersion,toVersion,onProgress}) {
   if(!/^[a-zA-Z0-9_-]+$/.test(transactionId)) throw new Error('Invalid snapshot transaction ID');
