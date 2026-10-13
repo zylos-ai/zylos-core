@@ -78,31 +78,137 @@ export function generateManualRouteSnippet(componentName, httpRoutes) {
   ].join('\n');
 }
 
-/**
- * Remove a marker block (BEGIN to END, inclusive) from content.
- * Handles leading whitespace on marker lines and cleans up blank lines.
- */
-function stripMarkerBlock(content, beginMarker, endMarker) {
+/** Inspect exact marker lines before any operation can remove a route block. */
+export function inspectCaddyRouteMarkers(content, componentName) {
+  const begin = `# BEGIN zylos-component:${componentName}`;
+  const end = `# END zylos-component:${componentName}`;
   const lines = content.split('\n');
-  const result = [];
-  let skipping = false;
-
-  for (const line of lines) {
-    if (line.includes(beginMarker)) {
-      skipping = true;
-      continue;
-    }
-    if (skipping && line.includes(endMarker)) {
-      skipping = false;
-      continue;
-    }
-    if (!skipping) {
-      result.push(line);
+  const blocks = [];
+  let start = -1;
+  for (let i = 0; i < lines.length; i++) {
+    const marker = lines[i].trim(); // Also accepts indentation, trailing spaces and CRLF.
+    if (marker === begin) {
+      if (start !== -1) return { success: false, error: `Caddyfile 中 ${componentName} 的路由标记不成对，请先修复` };
+      start = i;
+    } else if (marker === end) {
+      if (start === -1) return { success: false, error: `Caddyfile 中 ${componentName} 的路由标记不成对，请先修复` };
+      blocks.push({ start, end: i, lines: lines.slice(start + 1, i) });
+      start = -1;
     }
   }
+  if (start !== -1) return { success: false, error: `Caddyfile 中 ${componentName} 的路由标记不成对，请先修复` };
+  return { success: true, blocks };
+}
 
-  // Clean up consecutive blank lines (max 2 newlines in a row)
-  return result.join('\n').replace(/\n{3,}/g, '\n\n');
+/** Check an existing Caddyfile even when the Caddy binary is unavailable. */
+export function checkCaddyRouteMarkers(componentName, deps = {}) {
+  const exists = deps.existsSync || fs.existsSync;
+  const read = deps.readFileSync || fs.readFileSync;
+  if (!exists(CADDYFILE)) return { success: true, blocks: [] };
+  try {
+    return inspectCaddyRouteMarkers(read(CADDYFILE, 'utf8'), componentName);
+  } catch (err) {
+    // An unreadable Caddyfile cannot be changed by the route step. Preserve
+    // the existing non-fatal behavior; that step reports the read error.
+    return { success: true, blocks: [], readError: err.message };
+  }
+}
+
+function stripMarkerBlocks(content, blocks) {
+  if (!blocks.length) return content;
+  const lines = content.split('\n');
+  const removed = new Set();
+  for (const block of blocks) {
+    for (let i = block.start; i <= block.end; i++) removed.add(i);
+  }
+  return lines.filter((_, i) => !removed.has(i)).join('\n');
+}
+
+function parseTargetPort(target) {
+  const match = /^(?:\[[0-9a-fA-F:.]+\]|[a-zA-Z0-9._-]+):([0-9]+)$/.exec(target);
+  if (!match) return null;
+  const port = Number(match[1]);
+  return Number.isInteger(port) && port >= 1 && port <= 65535 ? port : null;
+}
+
+/** Read only the handle/reverse_proxy structure within this component's blocks. */
+function readBlockPorts(blocks) {
+  const paths = new Map();
+  const reasons = new Map();
+  let malformed = false;
+  for (const block of blocks) {
+    const seenInBlock = new Set();
+    let current = null;
+    let depth = 0;
+    for (const line of block.lines) {
+      const text = line.trim();
+      if (text.startsWith('#')) continue;
+      if (!current) {
+        const match = /^handle\s+(\S+)\s*\{$/.exec(text);
+        if (!match) continue;
+        current = { path: match[1], targets: [] };
+        depth = 1;
+        continue;
+      }
+      const proxy = /^reverse_proxy\s+(\S+)(?:\s*\{)?$/.exec(text);
+      if (proxy) current.targets.push(proxy[1]);
+      depth += (text.match(/\{/g) || []).length - (text.match(/\}/g) || []).length;
+      if (depth === 0) {
+        const port = current.targets.length === 1 ? parseTargetPort(current.targets[0]) : null;
+        const previous = paths.get(current.path);
+        if (seenInBlock.has(current.path)) {
+          paths.set(current.path, null);
+          reasons.set(current.path, '路径重复');
+        } else if (previous === undefined) {
+          paths.set(current.path, port);
+          if (port === null) reasons.set(current.path, current.targets.length === 1 ? '目标不是有效的主机:端口' : 'reverse_proxy 目标数量不是 1');
+        } else if (previous !== port) {
+          paths.set(current.path, null);
+          reasons.set(current.path, '重复路由块的端口不一致或格式无法识别');
+        }
+        seenInBlock.add(current.path);
+        current = null;
+      }
+    }
+    if (current) malformed = true;
+  }
+  const ports = [...paths.values()];
+  const singlePort = !malformed && ports.length > 0 && ports.every(port => port !== null && port === ports[0])
+    ? ports[0] : null;
+  const globalReason = malformed ? 'handle 结构不完整'
+    : ports.length === 0 ? '没有可识别的 handle 路由'
+      : new Set(ports.filter(port => port !== null)).size > 1 ? '旧块存在多个不同端口'
+        : '旧块的端口无法唯一确定';
+  return { paths, reasons, singlePort, globalReason };
+}
+
+/** Generate routes from the new manifest, substituting only known old ports. */
+export function resolveCaddyRoutePorts(componentName, httpRoutes, blocks) {
+  if (!blocks.length) return { routes: httpRoutes, portSource: 'default' };
+  const old = readBlockPorts(blocks);
+  const routes = [];
+  const fallbackReasons = [];
+  let usedCaddy = false;
+  for (const route of httpRoutes) {
+    if (route.type !== 'reverse_proxy') { routes.push(route); continue; }
+    const matched = old.paths.has(route.path);
+    const port = matched ? old.paths.get(route.path) : old.singlePort;
+    const target = typeof route.target === 'string' ? /^(.*):([0-9]+)$/.exec(route.target) : null;
+    if (port !== null && port !== undefined && target) {
+      routes.push({ ...route, target: `${target[1]}:${port}` });
+      usedCaddy = true;
+    } else {
+      routes.push(route);
+      const reason = matched ? old.reasons.get(route.path) || old.globalReason : old.globalReason;
+      fallbackReasons.push(`${route.path || '(unknown path)'}：${target ? reason : '新版目标格式无法安全替换端口'}`);
+    }
+  }
+  const notices = [];
+  if (blocks.length > 1) notices.push('发现重复的路由块');
+  if (fallbackReasons.length) {
+    notices.push(`未能确定 ${componentName} 现有路由的端口（${fallbackReasons.join('；')}），已按新版默认目标生成。如果此前按部署环境调整过端口，请重新设置。`);
+  }
+  return { routes, portSource: usedCaddy && !fallbackReasons.length ? 'caddy' : 'default', notice: notices.join('；') || undefined, duplicateBlocks: blocks.length > 1 };
 }
 
 /**
@@ -229,60 +335,86 @@ export function applyCaddyRoutes(componentName, httpRoutes, deps = {}) {
   }
 
   const isAvailable = deps.isCaddyAvailable || isCaddyAvailable;
-  if (!isAvailable()) {
-    return {
-      success: false,
-      action: 'manual_required',
-      error: 'caddy_not_available',
-      caddyfile: CADDYFILE,
-      caddyBin: CADDY_BIN,
-      manualConfig: generateManualRouteSnippet(componentName, httpRoutes),
-      manualConfigPlacement: 'inside_primary_site_block',
-      message: 'Zylos-managed Caddy is not available. HTTP routes were not configured automatically.',
+  let original;
+  let readError;
+  try {
+    original = (deps.readFileSync || fs.readFileSync)(CADDYFILE, 'utf8');
+  } catch (err) {
+    readError = err;
+  }
+
+  const inspection = original === undefined
+    ? { success: true, blocks: [] }
+    : inspectCaddyRouteMarkers(original, componentName);
+  if (!inspection.success) return { success: false, action: 'skipped', error: inspection.error };
+
+  let resolved;
+  try {
+    resolved = resolveCaddyRoutePorts(componentName, httpRoutes, inspection.blocks);
+  } catch (err) {
+    resolved = {
+      routes: httpRoutes,
+      portSource: 'default',
+      notice: `未能确定 ${componentName} 现有路由的端口（原因：${err.message}），已按新版默认目标生成。`,
     };
   }
+  if (readError && !isAvailable()) {
+    resolved.notice = `未能读取 Caddyfile（${readError.message}），已按新版默认目标生成。`;
+  }
 
-  const beginMarker = `# BEGIN zylos-component:${componentName}`;
-  const endMarker = `# END zylos-component:${componentName}`;
-
-  let original;
   try {
-    original = fs.readFileSync(CADDYFILE, 'utf8');
+    if (!isAvailable()) {
+      return {
+        success: false,
+        action: 'manual_required',
+        error: 'caddy_not_available',
+        caddyfile: CADDYFILE,
+        caddyBin: CADDY_BIN,
+        manualConfig: generateManualRouteSnippet(componentName, resolved.routes),
+        manualConfigPlacement: 'inside_primary_site_block',
+        message: 'Zylos-managed Caddy is not available. HTTP routes were not configured automatically.',
+        notice: routeNotice(resolved, 'manual'),
+        portSource: resolved.portSource,
+      };
+    }
+    if (readError) {
+      return { success: false, action: 'skipped', error: `Cannot read Caddyfile: ${readError.message}` };
+    }
+
+    // All ranges are known before removal; malformed markers can never remove
+    // content through EOF or touch another component's marker prefix.
+    const content = stripMarkerBlocks(original, inspection.blocks);
+    const isUpdate = inspection.blocks.length > 0;
+    const markedBlock = generateManualRouteSnippet(componentName, resolved.routes);
+
+    // Insert into the first (Zylos-managed) site block.
+    const primaryBrace = findPrimaryBlockEnd(content);
+    if (primaryBrace === -1) {
+      return { success: false, action: 'skipped', error: 'Cannot find domain block in Caddyfile' };
+    }
+
+    const before = content.slice(0, primaryBrace).trimEnd();
+    const after = content.slice(primaryBrace);
+    const newContent = `${before}\n\n${markedBlock}\n${after}`;
+    const result = (deps.validateAndDeploy || validateAndDeploy)(newContent, original);
+    if (!result.success) {
+      return { success: false, action: isUpdate ? 'updated' : 'added', error: result.error, ...resolvedMetadata(resolved, 'unmerged') };
+    }
+
+    return { success: true, action: isUpdate ? 'updated' : 'added', ...resolvedMetadata(resolved, 'merged') };
   } catch (err) {
-    return { success: false, action: 'skipped', error: `Cannot read Caddyfile: ${err.message}` };
+    return { success: false, action: 'skipped', error: `Caddy route generation failed: ${err.message}`, ...resolvedMetadata(resolved, 'unmerged') };
   }
+}
 
-  // Remove existing marker block for this component (if any)
-  let content = original;
-  const isUpdate = content.includes(beginMarker);
-  if (isUpdate) {
-    content = stripMarkerBlock(content, beginMarker, endMarker);
-  }
+function routeNotice(resolved, outcome) {
+  if (!resolved.duplicateBlocks) return resolved.notice;
+  const detail = outcome === 'merged' ? '已合并为一个' : outcome === 'manual' ? '手动片段已按一块生成' : '未完成合并';
+  return resolved.notice.replace('发现重复的路由块', `发现重复的路由块，${detail}`);
+}
 
-  // Generate new route block with component markers.
-  const markedBlock = generateManualRouteSnippet(componentName, httpRoutes);
-
-  // Find the closing `}` of the primary (first) server block.
-  // The Caddyfile may contain multiple server blocks (e.g. user-added
-  // reverse proxies for other services). Component routes must be
-  // inserted into the first block, which is always the zylos-managed one.
-  const primaryBrace = findPrimaryBlockEnd(content);
-  if (primaryBrace === -1) {
-    return { success: false, action: 'skipped', error: 'Cannot find domain block in Caddyfile' };
-  }
-
-  // Insert marked block before the closing brace, with proper spacing
-  const before = content.slice(0, primaryBrace).trimEnd();
-  const after = content.slice(primaryBrace);
-  const newContent = `${before}\n\n${markedBlock}\n${after}`;
-
-  // Write to temp file, validate, then deploy
-  const result = validateAndDeploy(newContent, original);
-  if (!result.success) {
-    return { success: false, action: isUpdate ? 'updated' : 'added', error: result.error };
-  }
-
-  return { success: true, action: isUpdate ? 'updated' : 'added' };
+function resolvedMetadata(resolved, outcome) {
+  return { notice: routeNotice(resolved, outcome), portSource: resolved.portSource };
 }
 
 /**
@@ -291,34 +423,32 @@ export function applyCaddyRoutes(componentName, httpRoutes, deps = {}) {
  * @param {string} componentName
  * @returns {{ success: boolean, action: string, error?: string }}
  */
-export function removeCaddyRoutes(componentName) {
-  if (!isCaddyAvailable()) {
+export function removeCaddyRoutes(componentName, deps = {}) {
+  if (!(deps.isCaddyAvailable || isCaddyAvailable)()) {
     return { success: true, action: 'not_found' };
   }
 
-  const beginMarker = `# BEGIN zylos-component:${componentName}`;
-  const endMarker = `# END zylos-component:${componentName}`;
-
   let original;
   try {
-    original = fs.readFileSync(CADDYFILE, 'utf8');
+    original = (deps.readFileSync || fs.readFileSync)(CADDYFILE, 'utf8');
   } catch (err) {
     return { success: false, action: 'not_found', error: `Cannot read Caddyfile: ${err.message}` };
   }
 
-  if (!original.includes(beginMarker)) {
+  const inspection = inspectCaddyRouteMarkers(original, componentName);
+  if (!inspection.success) return { success: false, action: 'skipped', error: inspection.error };
+  if (!inspection.blocks.length) {
     return { success: true, action: 'not_found' };
   }
 
-  // Remove the marker block
-  const newContent = stripMarkerBlock(original, beginMarker, endMarker);
+  const newContent = stripMarkerBlocks(original, inspection.blocks);
 
-  const result = validateAndDeploy(newContent, original);
+  const result = (deps.validateAndDeploy || validateAndDeploy)(newContent, original);
   if (!result.success) {
     return { success: false, action: 'removed', error: result.error };
   }
 
-  return { success: true, action: 'removed' };
+  return { success: true, action: 'removed', notice: inspection.blocks.length > 1 ? '发现重复的路由块，已全部清理' : undefined };
 }
 
 /**

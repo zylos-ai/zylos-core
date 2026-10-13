@@ -26,7 +26,7 @@ import { sha256File, isValidSha256Hex } from '../lib/checksum.js';
 import { generateManifest, saveMergeBaseline } from '../lib/manifest.js';
 import { parseSkillMd, detectComponentType } from '../lib/skill.js';
 import { linkBins } from '../lib/bin.js';
-import { applyCaddyRoutes } from '../lib/caddy.js';
+import { applyCaddyRoutes, checkCaddyRouteMarkers } from '../lib/caddy.js';
 import { promptYesNo, prompt, promptSecret } from '../lib/prompts.js';
 import { writeEnvEntries } from '../lib/env.js';
 import { hasConfigureHook, runConfigureHook } from '../lib/configure-hook.js';
@@ -36,6 +36,7 @@ import { bold, dim, green, red, yellow, cyan, success, error, warn, heading } fr
 function printManualCaddyRoutes(result) {
   console.log(`  ${warn('Caddy routes: manual configuration required')}`);
   console.log(`    ${dim(result.message || 'HTTP routes were not configured automatically.')}`);
+  if (result.notice) console.log(`    ${warn(result.notice)}`);
   if (result.caddyBin) console.log(`    ${dim(`Binary: ${result.caddyBin}`)}`);
   if (result.caddyfile) console.log(`    ${dim(`Caddyfile: ${result.caddyfile}`)}`);
   console.log('');
@@ -340,6 +341,22 @@ export async function addComponent(args) {
     }
   }
 
+  // Check before acquiring the package or placing any installation files.
+  // The check applies even when the new package declares no HTTP routes.
+  const markerCheck = checkCaddyRouteMarkers(resolved.name);
+  if (!markerCheck.success) {
+    if (jsonOutput) {
+      console.log(JSON.stringify({
+        action: 'add', component: resolved.name, success: false,
+        error: 'invalid_caddy_markers', message: markerCheck.error,
+        reply: `Cannot install ${resolved.name}: ${markerCheck.error}`,
+      }, null, 2));
+    } else {
+      console.error(error(`Cannot install ${resolved.name}: ${markerCheck.error}`));
+    }
+    process.exit(1);
+  }
+
   // 7. Download
   const skillDir = path.join(SKILLS_DIR, resolved.name);
 
@@ -518,15 +535,22 @@ async function installDeclarative(resolved, skillDir, skipConfirm, jsonOutput, b
   const httpRoutes = fm.http_routes || fm['http_routes'];
   let caddyResult = null;
   if (httpRoutes && Array.isArray(httpRoutes) && httpRoutes.length > 0) {
-    caddyResult = applyCaddyRoutes(resolved.name, httpRoutes);
+    try {
+      caddyResult = applyCaddyRoutes(resolved.name, httpRoutes);
+    } catch (err) {
+      caddyResult = { success: false, action: 'skipped', error: `Caddy route step skipped: ${err.message}`, portSource: 'default' };
+    }
     if (!jsonOutput) {
       if (caddyResult.success) {
         console.log(`  ${success(`Caddy routes: ${caddyResult.action}`)}`);
       } else if (caddyResult.action === 'manual_required') {
         printManualCaddyRoutes(caddyResult);
+      } else if (caddyResult.action === 'skipped') {
+        console.log(`  ${warn(`Caddy routes: skipped (${caddyResult.error})`)}`);
       } else {
         console.log(`  ${error(`Caddy routes: failed (${caddyResult.error})`)}`);
       }
+      if (caddyResult.notice && caddyResult.action !== 'manual_required') console.log(`  ${warn(caddyResult.notice)}`);
     }
   }
 
@@ -543,6 +567,7 @@ async function installDeclarative(resolved, skillDir, skipConfirm, jsonOutput, b
     if (fm['next-steps'] || fm.nextSteps) {
       reply += `\nNext: ${fm['next-steps'] || fm.nextSteps}`;
     }
+    if (caddyResult?.notice) reply += `\nCaddy routes: ${caddyResult.notice}`;
     const output = {
       action: 'add',
       component: resolved.name,

@@ -157,6 +157,7 @@ describe('applyCaddyRoutes', () => {
       strip_prefix: '/dashboard',
     }], {
       isCaddyAvailable: () => false,
+      readFileSync: () => { throw new Error('Caddyfile unavailable'); },
     });
 
     expect(result.success).toBe(false);
