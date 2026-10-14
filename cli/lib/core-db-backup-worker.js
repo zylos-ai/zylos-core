@@ -15,7 +15,7 @@ function driver(input, item) {
   const req = createRequire(path.join(root,item.owner,'package.json'));
   // Snapshot verification uses the frozen independent closure. Compatibility
   // preflight must load the actual owner's native dependency under this Node.
-  return req(['offline-preflight','upgrade-migrate'].includes(input.action) ? 'better-sqlite3' : (input.driverPath || 'better-sqlite3'));
+  return req(['offline-preflight','upgrade-migrate','version-probe'].includes(input.action) ? 'better-sqlite3' : (input.driverPath || 'better-sqlite3'));
 }
 function missing(file) {
   if (fs.existsSync(file)) return false;
@@ -93,11 +93,33 @@ function authorizeMigration(input) {
   return j;
 }
 export async function execute(input) {
-  if(!['probe','snapshot','verify','offline-preflight','upgrade-migrate','rehearse'].includes(input.action)) throw new Error(`Unknown action: ${input.action}`);
+  if(!['probe','snapshot','verify','offline-preflight','upgrade-migrate','rehearse','version-probe'].includes(input.action)) throw new Error(`Unknown action: ${input.action}`);
   if(input.action==='probe') {
     const Database=createRequire(import.meta.url)(input.driverPath); const db=new Database(':memory:');
     try {if(typeof db.backup!=='function') throw new Error('SQLite backup API unavailable');}finally{db.close();}
     return {ok:true};
+  }
+  if(input.action==='version-probe') {
+    if (!input.schemaRoot || !input.driverRoot) throw Error('Version probe requires target schema and installed driver roots');
+    const rows=[];
+    for(const item of DATABASES) {
+      const mod=await ownerSchema(input,item);
+      const target=mod.SUPPORTED_SCHEMA_VERSION;
+      if(!Number.isInteger(target)||target<0) throw Error(`Invalid target schema version: ${item.owner}`);
+      const source=path.join(input.zylosDir,item.source);
+      if(missing(source)) {
+        rows.push({source:item.source,status:'missing',fromVersion:null,toVersion:target,needsMigration:true});
+        continue;
+      }
+      const Database=driver(input,item);
+      const db=new Database(source,{readonly:true,fileMustExist:true,timeout:5000});
+      let current;
+      try {current=db.pragma('user_version',{simple:true});} finally {db.close();}
+      if(!Number.isInteger(current)||current<0) throw Error(`${item.source}: invalid schema version ${current}`);
+      if(current>target) throw Error(`${item.source}: schema version ${current} exceeds supported ${target}; restore compatible code/data`);
+      rows.push({source:item.source,status:'present',fromVersion:current,toVersion:target,needsMigration:current<target});
+    }
+    return {databases:rows,needsMigration:rows.some(row=>row.needsMigration)};
   }
   if(input.action==='upgrade-migrate') authorizeMigration(input);
   const engine=['offline-preflight','upgrade-migrate','rehearse'].includes(input.action) ? await migrationEngine(input) : null;

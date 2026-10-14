@@ -249,7 +249,7 @@ export function formatC4Reply(type, data) {
 export function formatSelfUpgradeProtection(data) {
   const lines=[];
   if(data.backupOnly){
-    lines.push(`Database snapshot: ${data.dbSnapshotVerified?'verified':'not verified; installation not started'}`);
+    lines.push(data.databaseMode==='unchanged' ? 'Database snapshot: skipped; schema versions unchanged' : `Database snapshot: ${data.dbSnapshotVerified?'verified':'not verified; installation not started'}`);
     lines.push('Automatic database recovery: disabled; recovery is manual');
     if(data.protectionUnavailableReason)lines.push(data.protectionUnavailableReason);
     if(data.backupDir)lines.push(`Code backup: ${data.backupDir}`);

@@ -57,12 +57,57 @@ function fixture(t) {
   for(const item of CORE_DATABASES)assert.doesNotThrow(()=>m.assertCoreDatabaseAvailable(root,path.join(root,item.source)));
  }
  const deps={zylosDir:root,skillsDir,protectionSupported:()=>false,getCurrentVersion:()=>({success:true,version:'old'}),
+  probeCoreDbVersions:()=>({needsMigration:true,databases:CORE_DATABASES.map((item,index)=>({source:item.source,status:'present',fromVersion:index?1:0,toVersion:1,needsMigration:index===0}))}),
   rehearseCoreDbUpgrade:()=>({databases:[]}),
   step1:{zylosDir:root,skillsDir,backupDir:path.join(root,'code-backup')},
   step4:{execSync:command=>{snapshots();assert.equal(fs.readFileSync(state,'utf8'),'stopped');calls.push(command);return command.startsWith('npm pack')?'fixture.tgz':'';}},
   runInstalledFinalizer:ctx=>{assert.equal(ctx.backupOnly,true);assert.equal(ctx.preInstallProtection,false);return {success:true,steps:[]};}};
  return {root,skillsDir,tempDir,calls,deps,snapshots,untouchedMaintenance,state,pm2Calls,run:()=>runSelfUpgrade({tempDir,newVersion:'new'},deps)};
 }
+
+test('matching versions install code without rehearsal, database preflight, or snapshot', t => {
+ const f=fixture(t);
+ fs.mkdirSync(path.join(f.tempDir,'cli/lib'),{recursive:true});
+ fs.writeFileSync(path.join(f.tempDir,'cli/lib/core-db-upgrade-protocol.json'),'{"codeOnlyVersion":1}');
+ const before=CORE_DATABASES.map(item=>fs.readFileSync(path.join(f.root,item.source)));
+ f.deps.probeCoreDbVersions=()=>({needsMigration:false,databases:CORE_DATABASES.map(item=>({source:item.source,status:'present',fromVersion:1,toVersion:1,needsMigration:false}))});
+ f.deps.preflightCoreDbUpgrade=()=>assert.fail('database preflight must be skipped');
+ f.deps.rehearseCoreDbUpgrade=()=>assert.fail('rehearsal must be skipped');
+ f.deps.step3={snapshot:()=>assert.fail('database snapshot must be skipped')};
+ f.deps.step4={execSync:command=>{assert.equal(fs.readFileSync(f.state,'utf8'),'stopped');f.calls.push(command);return command.startsWith('npm pack')?'fixture.tgz':'';}};
+ const result=f.run();
+ assert.equal(result.success,true,JSON.stringify(result));
+ assert.equal(result.dbBackupDir,null);
+ assert.equal(result.dbSnapshotVerified,false);
+ assert.equal(f.calls.length,2);
+ assert.equal(fs.existsSync(path.join(f.root,'.backup/db')),false,'no rehearsal or database snapshot directory');
+ assert.deepEqual(CORE_DATABASES.map(item=>fs.readFileSync(path.join(f.root,item.source))),before);
+ f.untouchedMaintenance();
+});
+
+test('matching versions reject a target without the code-only finalizer protocol before stop', t => {
+ const f=fixture(t);
+ f.deps.probeCoreDbVersions=()=>({needsMigration:false,databases:CORE_DATABASES.map(item=>({source:item.source,status:'present',fromVersion:1,toVersion:1,needsMigration:false}))});
+ const result=f.run();
+ assert.equal(result.success,false);
+ assert.match(result.error,/code-only database upgrade/);
+ assert.equal(fs.readFileSync(f.state,'utf8'),'online');
+ assert.equal(f.calls.length,0);
+ f.untouchedMaintenance();
+});
+
+test('one database needing migration retains preflight, rehearsal, and snapshot', t => {
+ const f=fixture(t);
+ let preflight=0,rehearsal=0;
+ f.deps.preflightCoreDbUpgrade=()=>{preflight++;return {databases:[]};};
+ f.deps.rehearseCoreDbUpgrade=()=>{rehearsal++;return {databases:[]};};
+ const result=f.run();
+ assert.equal(result.success,true,JSON.stringify(result));
+ assert.equal(preflight,1);
+ assert.equal(rehearsal,1);
+ assert.equal(result.dbBackupDir,f.snapshots());
+ assert.equal(f.calls.length,2);
+});
 
 test('real pre-stop rehearsal sees committed source WAL and rejects before service stop', t => {
  const f=fixture(t);

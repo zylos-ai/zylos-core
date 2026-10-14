@@ -7,6 +7,7 @@ import {createRequire} from 'node:module';
 import {pathToFileURL} from 'node:url';
 import cp,{spawn,spawnSync} from 'node:child_process';
 import {CORE_DATABASES,createCoreDbSnapshot,prepareRecoveryDependencies} from '../core-db-backup.js';
+import {protectedDataReady,protectedSuccess} from '../upgrade-protection.js';
 import {upgradeStartupPrompt} from '../runtime/upgrade-context.js';
 
 const require=createRequire(import.meta.url);
@@ -63,6 +64,109 @@ async function fixture(t,{missing=false,wal=false}={}) {
  return {root,dir,j,m,r,calls,snapshot,load:()=>m.read(path.join(dir,'journal.json')),db:p=>path.join(root,p)};
 }
 function change(f){const p=f.db('comm-bridge/c4.db'),db=new Database(p);db.prepare('INSERT INTO checkpoints(id,summary) VALUES (?,?)').run(1,'new-generation');db.close();fs.writeFileSync(p+'-wal','old-wal');fs.writeFileSync(p+'-shm','old-shm');fs.appendFileSync(path.join(f.j.skillsDir,'comm-bridge/package.json'),'\n');}
+function unchanged(f) {
+ f.j.databaseMode='unchanged';
+ delete f.j.dbBackupDir;
+ delete f.j.snapshotManifestHash;
+ f.m.update(f.dir,f.j);
+ fs.rmSync(f.snapshot.dbBackupDir,{recursive:true});
+ f.m.preflight=()=>{throw Error('database preflight must not run');};
+ f.m.worker=()=>{throw Error('database worker must not run');};
+}
+
+test('unchanged database transaction resumes installed code without database inspection or snapshot',async t=>{
+ const f=await fixture(t);unchanged(f);
+ f.m.update(f.dir,f.j,{phase:'new_data_ready'});
+ const result=f.r.resume(f.dir);
+ assert.equal(result.recovery_required,false,JSON.stringify(result));
+ assert.equal(result.stage,'upgrade_complete');
+ assert.equal(f.m.discover(f.root).blocked,false);
+ assert.ok(!fs.existsSync(path.join(f.dir,'rescue')));
+});
+
+test('unchanged database transaction restores code and preserves live database files',async t=>{
+ const f=await fixture(t);unchanged(f);
+ const source=f.db('comm-bridge/c4.db');
+ const db=new Database(source);db.prepare('INSERT INTO checkpoints(id,summary) VALUES (?,?)').run(31,'keep');db.close();
+ const before=fs.readFileSync(source);
+ fs.appendFileSync(path.join(f.j.skillsDir,'comm-bridge/package.json'),'\nchanged');
+ const result=f.r.resume(f.dir);
+ assert.equal(result.stage,'restored_complete',JSON.stringify(result));
+ assert.equal(result.recovery_required,false);
+ assert.deepEqual(fs.readFileSync(source),before);
+ assert.ok(!fs.existsSync(path.join(f.dir,'rescue')));
+ assert.equal(f.load().codeRestore['comm-bridge'].complete,true);
+ assert.equal(f.m.discover(f.root).blocked,false);
+});
+
+test('unchanged database transaction aborts before install without database inspection',async t=>{
+ const f=await fixture(t);unchanged(f);
+ f.m.update(f.dir,f.j,{phase:'prepared',installationIntent:false});
+ const result=f.r.resume(f.dir);
+ assert.equal(result.stage,'aborted_before_install',JSON.stringify(result));
+ assert.equal(result.recovery_required,false);
+ assert.equal(f.m.discover(f.root).blocked,false);
+});
+
+test('ready journal permits absent snapshot only for explicit unchanged mode',async t=>{
+ const f=await fixture(t);
+ f.m.update(f.dir,f.j,{phase:'new_data_ready'});
+ assert.doesNotThrow(()=>f.m.transaction(f.root,f.dir));
+ f.j.databaseMode='unchanged';
+ f.m.update(f.dir,f.j);
+ assert.throws(()=>f.m.transaction(f.root,f.dir),/must not claim a snapshot/);
+ delete f.j.dbBackupDir;
+ delete f.j.snapshotManifestHash;
+ f.m.update(f.dir,f.j);
+ assert.doesNotThrow(()=>f.m.transaction(f.root,f.dir));
+ f.j.databaseMode='migrate';
+ f.m.update(f.dir,f.j);
+ assert.throws(()=>f.m.transaction(f.root,f.dir),/invalid data-ready installation\/material identity/);
+});
+
+test('protected code-only upgrade skips every database upgrade phase and completes code recovery journal',async t=>{
+ const f=await fixture(t);
+ f.m.unmark(f.root,f.j);fs.rmSync(f.dir,{recursive:true});fs.rmSync(path.join(f.root,'.backup/db'),{recursive:true});
+ const incoming=path.join(f.root,'incoming-package');
+ fs.mkdirSync(path.join(incoming,'cli/lib'),{recursive:true});
+ fs.mkdirSync(path.join(incoming,'skills'),{recursive:true});
+ fs.writeFileSync(path.join(incoming,'package.json'),'{"version":"2.0.0"}');
+ fs.copyFileSync(path.resolve('cli/lib/core-db-upgrade-protocol.json'),path.join(incoming,'cli/lib/core-db-upgrade-protocol.json'));
+ for(const item of CORE_DATABASES)fs.mkdirSync(path.join(incoming,'skills',item.owner),{recursive:true});
+ const bin=path.join(f.root,'fixture-bin');fs.mkdirSync(bin);
+ fs.writeFileSync(path.join(bin,'pm2'),'#!/bin/sh\nif [ "$1" = "jlist" ]; then printf "[]\\n"; fi\n',{mode:0o700});
+ const before=CORE_DATABASES.map(item=>fs.readFileSync(f.db(item.source)));
+ const priorPath=process.env.PATH,priorRoot=process.env.ZYLOS_DIR;
+ process.env.PATH=bin+path.delimiter+priorPath;process.env.ZYLOS_DIR=f.root;
+ let installed=0,result;
+ try {
+  const {runSelfUpgrade}=await import('../self-upgrade.js');
+  result=runSelfUpgrade({tempDir:incoming,newVersion:'2.0.0'},{
+   zylosDir:f.root,skillsDir:f.j.skillsDir,getCurrentVersion:()=>({success:true,version:'1.0.0'}),
+   probeCoreDbVersions:()=>({needsMigration:false,databases:CORE_DATABASES.map(item=>({source:item.source,status:'present',fromVersion:1,toVersion:1,needsMigration:false}))}),
+   preflightCoreDbUpgrade:()=>assert.fail('database preflight must be skipped'),
+   rehearseCoreDbUpgrade:()=>assert.fail('rehearsal must be skipped'),
+   step3:{snapshot:()=>assert.fail('database snapshot must be skipped')},
+   step4:{execSync:command=>{installed++;return command.startsWith('npm pack')?'fixture.tgz\n':'';}},
+   runInstalledFinalizer:ctx=>{
+    assert.equal(ctx.databaseMode,'unchanged');
+    protectedDataReady(ctx,{migrate:()=>assert.fail('migration must be skipped'),verify:()=>assert.fail('database verification must be skipped')});
+    protectedSuccess(ctx);
+    return {success:true,steps:[]};
+   }
+  });
+ } finally {
+  process.env.PATH=priorPath;
+  if(priorRoot===undefined)delete process.env.ZYLOS_DIR;else process.env.ZYLOS_DIR=priorRoot;
+ }
+ assert.equal(result.success,true,JSON.stringify(result));
+ assert.equal(result.databaseMode,'unchanged');
+ assert.equal(result.dbBackupDir,null);
+ assert.equal(installed,2);
+ assert.equal(fs.existsSync(path.join(f.root,'.backup/db')),false);
+ assert.deepEqual(CORE_DATABASES.map(item=>fs.readFileSync(f.db(item.source))),before);
+ assert.equal(f.m.discover(f.root).blocked,false);
+});
 
 for(const legacy of ['group-writable','backup-alias'])test(`completed upgrade permits ordinary owners after retained materials become ${legacy}`,async t=>{
  const f=await fixture(t);
@@ -263,7 +367,7 @@ for(const postReady of [false,true])test(postReady?'explicit new-finalizer failu
  const old=path.join(f.root,'old-finalizer.cjs');fs.writeFileSync(old,postReady?`const fs=require('node:fs'),path=require('node:path');const s=JSON.parse(fs.readFileSync(process.argv[2]));const m=require(path.join(${JSON.stringify(path.join(f.root,'.zylos/upgrade'))},'maintenance.cjs'));const j=m.read(path.join(s.transactionDir,'journal.json'));m.update(s.transactionDir,j,{phase:'new_data_ready'});m.unmark(j.zylosDir,j);process.stdout.write(JSON.stringify({success:false,failedStep:11,error:'old finalizer rejects schemaVersion=2 after data-ready',steps:[]}));process.exitCode=1;`:"const fs=require('node:fs');const s=JSON.parse(fs.readFileSync(process.argv[2]));if(s.schemaVersion!==1){process.stdout.write(JSON.stringify({success:false,failedStep:5,error:'old finalizer rejects schemaVersion='+s.schemaVersion,steps:[]}));process.exitCode=1;}else process.exitCode=2;\n");
  const priorPath=process.env.PATH,priorRoot=process.env.ZYLOS_DIR;process.env.PATH=bin+path.delimiter+priorPath;process.env.ZYLOS_DIR=f.root;
  let npmStarted=false,result;const originalDb=new Database(f.db('comm-bridge/c4.db'),{readonly:true}),before=originalDb.prepare('SELECT * FROM checkpoints ORDER BY id').all();originalDb.close();
- try{const {runSelfUpgrade,createFinalizeState}=await import('../self-upgrade.js');result=runSelfUpgrade({tempDir:incoming,newVersion:'2.0.0'},{zylosDir:f.root,skillsDir:f.j.skillsDir,getCurrentVersion:()=>({success:true,version:'1.0.0'}),rehearseCoreDbUpgrade:()=>({databases:[]}),step3:{verifyBoot:()=>({verified:true,fixture:true})},step4:{execSync:command=>{npmStarted=true;if(command.startsWith('npm pack'))return 'fixture.tgz\n';const db=new Database(f.db('comm-bridge/c4.db'));db.prepare('INSERT INTO checkpoints(id,summary) VALUES (?,?)').run(99,'new-install-generation');db.close();return '';}},runInstalledFinalizer:ctx=>{const state=createFinalizeState(ctx);assert.equal(state.schemaVersion,2);assert.equal(ctx.journal.installationIntent,true);const stateFile=path.join(f.root,'old-state.json');fs.writeFileSync(stateFile,JSON.stringify(state));const child=spawnSync(process.execPath,[old,stateFile],{encoding:'utf8'});assert.equal(child.status,1);return JSON.parse(child.stdout);}});}finally{process.env.PATH=priorPath;if(priorRoot===undefined)delete process.env.ZYLOS_DIR;else process.env.ZYLOS_DIR=priorRoot;}
+ try{const {runSelfUpgrade,createFinalizeState}=await import('../self-upgrade.js');result=runSelfUpgrade({tempDir:incoming,newVersion:'2.0.0'},{zylosDir:f.root,skillsDir:f.j.skillsDir,getCurrentVersion:()=>({success:true,version:'1.0.0'}),probeCoreDbVersions:()=>({needsMigration:true,databases:CORE_DATABASES}),rehearseCoreDbUpgrade:()=>({databases:[]}),step3:{verifyBoot:()=>({verified:true,fixture:true})},step4:{execSync:command=>{npmStarted=true;if(command.startsWith('npm pack'))return 'fixture.tgz\n';const db=new Database(f.db('comm-bridge/c4.db'));db.prepare('INSERT INTO checkpoints(id,summary) VALUES (?,?)').run(99,'new-install-generation');db.close();return '';}},runInstalledFinalizer:ctx=>{const state=createFinalizeState(ctx);assert.equal(state.schemaVersion,2);assert.equal(ctx.journal.installationIntent,true);const stateFile=path.join(f.root,'old-state.json');fs.writeFileSync(stateFile,JSON.stringify(state));const child=spawnSync(process.execPath,[old,stateFile],{encoding:'utf8'});assert.equal(child.status,1);return JSON.parse(child.stdout);}});}finally{process.env.PATH=priorPath;if(priorRoot===undefined)delete process.env.ZYLOS_DIR;else process.env.ZYLOS_DIR=priorRoot;}
  assert.equal(npmStarted,true);assert.equal(result.success,false);assert.match(result.error,/old finalizer rejects schemaVersion=2/);assert.equal(result.rollback.attempted,true,JSON.stringify(result.rollback));assert.equal(result.rollback.completed,true,JSON.stringify(result.rollback));assert.equal(result.rollback.stage,'restored_complete');assert.equal(result.recovery_required,false);const restoredDb=new Database(f.db('comm-bridge/c4.db'),{readonly:true});assert.deepEqual(restoredDb.prepare('SELECT * FROM checkpoints ORDER BY id').all(),before);restoredDb.close();const archive=path.join(f.root,'.backup/self-upgrade');assert.equal(fs.readdirSync(archive).length,1);const saved=f.m.read(path.join(archive,fs.readdirSync(archive)[0],'journal.json'));assert.equal(saved.installationIntent,true);assert.equal(saved.phase,'restored_complete');
 });
 test('protected upgrade restores all three databases after C4 migration succeeds and scheduler migration fails',async t=>{
@@ -276,7 +380,7 @@ test('protected upgrade restores all three databases after C4 migration succeeds
  let installed=false,c4Migrated=false,result;
  try{
   const {runSelfUpgrade}=await import('../self-upgrade.js');
-  result=runSelfUpgrade({tempDir:incoming,newVersion:'2.0.0'},{zylosDir:f.root,skillsDir:f.j.skillsDir,getCurrentVersion:()=>({success:true,version:'1.0.0'}),rehearseCoreDbUpgrade:()=>({databases:[]}),step3:{verifyBoot:()=>({verified:true,fixture:true})},step4:{execSync:command=>{
+  result=runSelfUpgrade({tempDir:incoming,newVersion:'2.0.0'},{zylosDir:f.root,skillsDir:f.j.skillsDir,getCurrentVersion:()=>({success:true,version:'1.0.0'}),probeCoreDbVersions:()=>({needsMigration:true,databases:CORE_DATABASES}),rehearseCoreDbUpgrade:()=>({databases:[]}),step3:{verifyBoot:()=>({verified:true,fixture:true})},step4:{execSync:command=>{
    if(command.startsWith('npm pack'))return 'fixture.tgz\n';
    if(!installed){for(const [source,sql] of inserts){const db=new Database(f.db(source));try{db.exec(sql);}finally{db.close();}}installed=true;}
    return '';

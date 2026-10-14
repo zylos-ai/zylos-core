@@ -52,6 +52,7 @@ for(const fault of ['stop','snapshot']) test(`${fault} failure in default protec
   const result=runSelfUpgrade({tempDir:f.tempDir,newVersion:'fixture-new'},{
     zylosDir:f.root,skillsDir:f.skillsDir,
     getCurrentVersion:()=>({success:true,version:'fixture-old'}),
+    probeCoreDbVersions:()=>({needsMigration:true,databases:m.DB_PATHS.map((source,index)=>({source,status:'present',fromVersion:index?1:0,toVersion:1,needsMigration:index===0}))}),
     preflightCoreDbUpgrade:()=>({databases:[]}),
     rehearseCoreDbUpgrade:()=>({databases:[]}),
     step3: fault==='snapshot' ? {snapshot:()=>{throw Error('injected snapshot failure');}} : {},

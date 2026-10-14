@@ -1,15 +1,19 @@
 # Protected self-upgrade and file-only recovery
 
-Protected upgrades snapshot `comm-bridge/c4.db`, `scheduler/scheduler.db`, and
-`web-console/web-console.db` before npm installation. A failed protected
-installation or finalizer restores declared core skill directories, the original
-PM2 ecosystem, and these databases using a saved independent runner. The command
-still reports that the upgrade failed; compensation has its own result.
+When any core database needs a schema migration, protected upgrades snapshot
+`comm-bridge/c4.db`, `scheduler/scheduler.db`, and `web-console/web-console.db`
+before npm installation. A failed protected installation or finalizer restores
+declared core skill directories, the original PM2 ecosystem, and these databases
+using a saved independent runner. If all three database versions already match
+the target release, the upgrade reads their versions once and leaves the
+databases outside the upgrade transaction. Code and service recovery still use
+the saved runner. The command still reports a failed upgrade if compensation runs.
 
 ## Backup and automatic recovery are separate capabilities
 
-Every supported self-upgrade path requires a verified preinstall snapshot of the
-three core databases. Automatic recovery additionally requires controller
+Every self-upgrade that changes a core database version requires a verified
+preinstall snapshot of all three databases. A code-only upgrade does not create
+one. Automatic recovery additionally requires controller
 ownership and recovery publication; Linux crash takeover also requires process
 identity. The command selects one of two modes:
 
@@ -18,9 +22,10 @@ identity. The command selects one of two modes:
   interrupted recovery; macOS requires the original upgrade controller to remain
   alive and treats interrupted ownership as manual recovery.
 - **Backup-only upgrade:** `backupOnly=true`, `preInstallProtection=false`,
-  `automaticRecovery=false`. Installation can proceed only after services and
-  known writers have stopped and the database snapshot has been created and
-  verified. Database and code recovery after failure are manual.
+  `automaticRecovery=false`. When migration is needed, installation can proceed
+  only after services and known writers have stopped and the database snapshot
+  has been created and verified. Database and code recovery after failure are
+  manual. A code-only upgrade stops services but makes no database snapshot.
 
 On Linux, missing trusted `flock` or usable `/proc` process identity disables
 automatic recovery, not the required database backup. macOS uses the existing
@@ -49,19 +54,26 @@ stop checks, or automatic recovery from an interrupted upgrade. Avoid concurrent
 administrative writers during the operation.
 
 Before either upgrade mode publishes a transaction or stops services, it checks
-for unresolved recovery work, then probes the snapshot destination and Node sync,
-loads each owner's SQLite driver, and checks existing databases read-only for
-supported versions, SQLite integrity and a complete registered migration path.
-This first check does not mutate the live databases. Both modes then rehearse
-the target migration chain on isolated copies made with the SQLite backup API
-while services remain running. A failed rehearsal rejects the upgrade before
-service stop. A passed rehearsal is an early warning check, not authorization
-to skip any later check: live databases may change during it. Protected upgrades
+for unresolved recovery work and reads each existing database's SQLite
+`user_version` through a readonly connection. It compares those values with
+the downloaded release's declared schema versions. A missing database counts as
+needing migration; a version newer than the target is rejected. If all three
+versions match, the upgrade skips database preflight, rehearsal, snapshot,
+migration and structural checks. It requires a target release that supports
+this code-only path. No database backup is available for a code-only upgrade.
+
+If any database needs migration, both upgrade modes probe the snapshot
+destination and Node sync, load each owner's SQLite driver, and check existing
+databases read-only for supported versions, SQLite integrity and a complete
+registered migration path. They rehearse the target migration chain on isolated
+copies made with the SQLite backup API while services remain running. A failed
+rehearsal rejects the upgrade before service stop. A passed rehearsal is an
+early warning check; live databases may change during it. Protected upgrades
 also freeze recovery dependencies before stop.
 
-The downloaded target must contain the rehearsal worker and schema code. A
-target without them is rejected before service stop, including when selected
-with `--branch` to test an older release. Rehearsal copies are kept in a private
+When migration is needed, the downloaded target must contain the rehearsal
+worker and schema code. A target without them is rejected before service stop,
+including when selected with `--branch` to test an older release. Rehearsal copies are kept in a private
 0700 directory at `.backup/db/.rehearsal-*` under the Zylos data directory.
 The updater removes that directory on normal exit or worker timeout. An abrupt
 kill of the updater can leave a copy behind. To identify one, inspect the

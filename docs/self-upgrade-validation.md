@@ -103,6 +103,7 @@ This is an evidence map, not a claim that every environmental fault permutation 
 | A27 | All READY phases preserve committed normal writes; restored verification failure keeps current DB generation; new-code verification failure isolates then compensates once. |
 | A28 | Direct detached installer/finalizer tests cover timeout/failure/success with descendants. Live caller kills and checks its process group; interruption before PID publication remains isolated, and recovery never kills a potentially reused saved PID. Unknown phases/hash/material conflicts never restore. No deliberately escaped sessions guarantee. |
 | A29 | Initial journal without descriptor/snapshot, committed WAL/checkpoint, changed CLI tree/link, and abort-write/cleanup interruption exercised; durable intent and initial publication ordering reviewed. Not every preinstall phase has a distinct real-machine crash run. |
+| A30 | Version-only readonly probe compares all three live `user_version` values with target schema versions. Equal versions skip rehearsal, snapshot, migration and upgrade DB checks while preserving code recovery; one older or missing database takes the full protected path; a newer version rejects before service stop. |
 | A30 | 100 verified terminals plus real active transaction contract; incomplete/forged terminal shape and provisional abort regressions; residual marker continuation; 32-active bounded-memory fixture and exhausted scan budget fail closed. |
 
 ## macOS protected recovery extension

@@ -43,7 +43,7 @@ import { createRequire as createFinalizerRequire } from 'node:module';
 const finalizerRequire=createFinalizerRequire(import.meta.url);
 function requireFinalizerExit(dir,j,terminate){return finalizerRequire(path.join(dir,'finalizer.cjs')).quiesce(dir,j,{terminate});}
 
-import { preflightCoreDbUpgrade, rehearseCoreDbUpgrade } from './core-db-backup.js';
+import { preflightCoreDbUpgrade, probeCoreDbVersions, rehearseCoreDbUpgrade } from './core-db-backup.js';
 import { beginUpgrade, beginBackupOnly, prepareBackupOnlyInstall, saveProtectedCode, prepareProtectedInstall, markInstallationIntent, recovery, protectedDataReady, protectedSuccess, maintenance, maintenanceFor } from './upgrade-protection.js';
 
 const REPO = 'zylos-ai/zylos-core';
@@ -599,7 +599,7 @@ function getSkillsServices(deps = {}) {
 export function step3_stopCoreServices(ctx, deps = {}) {
   const startTime = Date.now();
   if (ctx.preInstallProtection) {try {prepareProtectedInstall(ctx,deps);return {step:3,name:'protect_databases_and_stop_services',status:'done',duration:Date.now()-startTime};}catch(error){return {step:3,name:'protect_databases_and_stop_services',status:'failed',error:error.message,duration:Date.now()-startTime};}}
-  if (ctx.backupOnly) {try {prepareBackupOnlyInstall(ctx,deps);return {step:3,name:'backup_databases_and_stop_services',status:'done',dbBackupDir:ctx.dbBackupDir,message:`Verified database snapshot: ${ctx.dbBackupDir}. Automatic recovery disabled; failure requires manual recovery.`,duration:Date.now()-startTime};}catch(error){return {step:3,name:'backup_databases_and_stop_services',status:'failed',error:error.message,duration:Date.now()-startTime};}}
+  if (ctx.backupOnly) {try {prepareBackupOnlyInstall(ctx,deps);return {step:3,name:ctx.databaseMode==='unchanged'?'stop_core_services':'backup_databases_and_stop_services',status:'done',dbBackupDir:ctx.dbBackupDir,message:ctx.databaseMode==='unchanged'?'Database versions unchanged; no database snapshot made. Automatic code recovery disabled.':`Verified database snapshot: ${ctx.dbBackupDir}. Automatic recovery disabled; failure requires manual recovery.`,duration:Date.now()-startTime};}catch(error){return {step:3,name:'backup_databases_and_stop_services',status:'failed',error:error.message,duration:Date.now()-startTime};}}
   const execSyncFn = deps.execSync ?? execSync;
   const getServices = deps.getSkillsServices ?? (() => getSkillsServices(deps));
   const stopService = deps.stopService ?? ((name) => {
@@ -675,7 +675,7 @@ export function step4_npmInstallGlobal(ctx, deps = {}) {
   }
 
   try {
-    if (ctx.backupOnly && !ctx.dbSnapshotVerified) throw Error('verified preinstall database snapshot required before installation');
+    if (ctx.backupOnly && ctx.databaseMode !== 'unchanged' && !ctx.dbSnapshotVerified) throw Error('verified preinstall database snapshot required before installation');
     // Pack first — creates a .tgz tarball (copies, not symlinks)
     if (ctx.preInstallProtection) markInstallationIntent(ctx);
     if(ctx.preInstallProtection&&!deps.execSync){
@@ -1518,9 +1518,10 @@ const POST_INSTALL_STEPS = [
 ];
 
 function backupOnlyResult(ctx, failed) {
-  if (!ctx.backupOnly) return ctx.preInstallProtection ? {automaticCompensation:true, automaticResume:process.platform !== 'darwin', databases:ctx.databases || ctx.databasePreflight?.databases || null} : {};
+  if (!ctx.backupOnly) return ctx.preInstallProtection ? {automaticCompensation:true, automaticResume:process.platform !== 'darwin', databaseMode:ctx.databaseMode || 'migrate', databases:ctx.databases || ctx.databasePreflight?.databases || null} : {};
   return {
     backupOnly: true,
+    databaseMode: ctx.databaseMode || 'migrate',
     backupDir: ctx.backupDir || null,
     automaticRecovery: false,
     protectionUnavailableReason: ctx.protectionUnavailableReason,
@@ -1534,6 +1535,8 @@ function backupOnlyResult(ctx, failed) {
       dbBackupDir: ctx.dbBackupDir || null,
       instructions: ctx.preInstallServicesRestored === true
         ? 'Installation was not started. The previously running services were left running or restored; no database restoration was performed.'
+        : ctx.databaseMode === 'unchanged'
+        ? 'Database versions were unchanged; no database snapshot was made. Inspect code and service state before restarting stopped services.'
         : ctx.dbSnapshotVerified
         ? 'Database recovery is manual. Preserve this snapshot; stop writers and verify code/schema compatibility before restoring databases or restarting services.'
         : 'No verified database snapshot is available. Installation was not started; inspect the failure before restarting stopped services.'
@@ -1601,6 +1604,7 @@ function buildSelfUpgradeResult(ctx, failedStep, rollbackResults = null, rollbac
 export function createFinalizeState(ctx) {
   return {
     schemaVersion: ctx.preInstallProtection ? 2 : 1,
+    ...(ctx.databaseMode ? {databaseMode:ctx.databaseMode} : {}),
     ...backupOnlyResult(ctx, false),
     ...(ctx.backupOnly ? {dbManifest:ctx.dbManifest} : {}),
     ...(ctx.preInstallProtection ? {
@@ -1701,6 +1705,7 @@ export function runSelfUpgradeFinalize(state = {}, deps = {}) {
     mode: state.mode,
   });
   ctx.backupOnly = state.backupOnly === true;
+  ctx.databaseMode = state.databaseMode === 'unchanged' ? 'unchanged' : 'migrate';
   ctx.protectionUnavailableReason = state.protectionUnavailableReason;
   ctx.dbSnapshotVerified = state.dbSnapshotVerified === true;
   ctx.backupWarnings = state.backupWarnings;
@@ -1767,8 +1772,20 @@ export function runSelfUpgrade({ tempDir, newVersion, mode, onStep } = {}, deps 
       const root = deps.zylosDir ?? ZYLOS_DIR;
       const prior = maintenance.discover(root);
       if (prior.candidates.length || prior.diagnostics.length || prior.marker) return {action:'self_upgrade',success:false,error:'unresolved prior upgrade transaction',preInstallProtection:false,rollback:{attempted:false,completed:false,performed:false},recovery_required:true};
-      ctx.databasePreflight=(deps.preflightCoreDbUpgrade ?? preflightCoreDbUpgrade)(root);
-      ctx.databaseRehearsal=(deps.rehearseCoreDbUpgrade ?? rehearseCoreDbUpgrade)(root,ctx.tempDir,{driverRoot:deps.skillsDir ?? SKILLS_DIR});
+      ctx.databaseVersions=(deps.probeCoreDbVersions ?? probeCoreDbVersions)(root,ctx.tempDir,{driverRoot:deps.skillsDir ?? SKILLS_DIR});
+      if (!ctx.databaseVersions || typeof ctx.databaseVersions.needsMigration !== 'boolean' || !Array.isArray(ctx.databaseVersions.databases) || ctx.databaseVersions.databases.length !== 3) throw Error('Invalid database version probe result');
+      ctx.databaseMode=ctx.databaseVersions.needsMigration?'migrate':'unchanged';
+      if (ctx.databaseMode === 'unchanged') {
+        const protocolFile=path.join(ctx.tempDir,'cli','lib','core-db-upgrade-protocol.json');
+        let protocol;
+        try {protocol=JSON.parse(fs.readFileSync(protocolFile,'utf8'));}
+        catch {throw Error('Target release does not support code-only database upgrade');}
+        if (protocol?.codeOnlyVersion!==1) throw Error('Target release does not support code-only database upgrade');
+      }
+      if (ctx.databaseMode === 'migrate') {
+        ctx.databasePreflight=(deps.preflightCoreDbUpgrade ?? preflightCoreDbUpgrade)(root);
+        ctx.databaseRehearsal=(deps.rehearseCoreDbUpgrade ?? rehearseCoreDbUpgrade)(root,ctx.tempDir,{driverRoot:deps.skillsDir ?? SKILLS_DIR});
+      }
     }
     catch (error) { return {action:'self_upgrade',success:false,error:error.message,preInstallProtection:false,rollback:{attempted:false,completed:false,performed:false},recovery_required:false}; }
   }

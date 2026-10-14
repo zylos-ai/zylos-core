@@ -7,11 +7,37 @@ import {createRequire} from 'node:module';
 import {spawnSync} from 'node:child_process';
 import {protectedDataReady} from '../upgrade-protection.js';
 import {fileURLToPath} from 'node:url';
-import {CORE_DATABASES,createCoreDbSnapshot,prepareRecoveryDependencies,rehearseCoreDbUpgrade,runCoreDbWorker} from '../core-db-backup.js';
+import {CORE_DATABASES,createCoreDbSnapshot,prepareRecoveryDependencies,probeCoreDbVersions,rehearseCoreDbUpgrade,runCoreDbWorker} from '../core-db-backup.js';
 const installed=process.env.CORE_DB_TEST_SKILL || path.join(os.homedir(),'zylos','.claude','skills','comm-bridge');
 let Database;try{Database=createRequire(path.join(installed,'package.json'))('better-sqlite3');}catch{}
 function fixture(t){const dir=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'core-db-')));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));return dir;}
 function skills(dir){for(const item of CORE_DATABASES){const owner=path.join(dir,'.claude','skills',item.owner);fs.mkdirSync(owner,{recursive:true});fs.writeFileSync(path.join(owner,'package.json'),'{}');fs.symlinkSync(path.join(installed,'node_modules'),path.join(owner,'node_modules'));}}
+test('version probe reads only user_version, detects a missing or older database, and rejects a newer one', {skip:!Database}, t => {
+ const dir=fixture(t);skills(dir);
+ for(const item of CORE_DATABASES){
+  const file=path.join(dir,item.source);fs.mkdirSync(path.dirname(file),{recursive:true});
+  const db=new Database(file);try{db.pragma('user_version=1');}finally{db.close();}
+ }
+ const probe=()=>probeCoreDbVersions(dir,path.resolve('.'),{driverRoot:path.join(dir,'.claude','skills')});
+ const current=probe();
+ assert.equal(current.needsMigration,false);
+ assert.equal(current.databases.length,3);
+ assert.ok(current.databases.every(row=>row.fromVersion===1&&row.toVersion===1&&!row.needsMigration));
+ assert.equal(fs.existsSync(path.join(dir,'.backup/db')),false);
+ const scheduler=path.join(dir,'scheduler/scheduler.db'),db=new Database(scheduler);
+ try{db.pragma('user_version=0');}finally{db.close();}
+ const older=probe();
+ assert.equal(older.needsMigration,true);
+ assert.equal(older.databases.filter(row=>row.needsMigration).length,1);
+ fs.unlinkSync(scheduler);
+ const missing=probe();
+ assert.equal(missing.needsMigration,true);
+ assert.equal(missing.databases.find(row=>row.source==='scheduler/scheduler.db').status,'missing');
+ const c4=new Database(path.join(dir,'comm-bridge/c4.db'));
+ try{c4.pragma('user_version=99');}finally{c4.close();}
+ assert.throws(probe,/exceeds supported 1/);
+ assert.equal(fs.existsSync(path.join(dir,'.backup/db')),false);
+});
 test('missing DBs do not create files; orphan sidecars stop and preserve prior group',t=>{
  const dir=fixture(t);const first=createCoreDbSnapshot({zylosDir:dir,transactionId:'one',fromVersion:'1',toVersion:'2'});
  assert.equal(first.manifest.databases.filter(d=>d.status==='missing').length,3);

@@ -47,6 +47,7 @@ function originalVerified(dir, j) {
   }
   const ecosystem = path.join(j.zylosDir, 'pm2', 'ecosystem.config.cjs');
   if (j.initialIdentity.ecosystemHash ? !fs.existsSync(ecosystem) || m.hash(ecosystem) !== j.initialIdentity.ecosystemHash : fs.existsSync(ecosystem)) throw Error('original ecosystem changed');
+  if (j.databaseMode === 'unchanged') return;
   // Uses original deployed pure schema contracts and readonly worker; never a normal opener.
   const expected = j.initialIdentity.databases.map(d => ({
     source: d.source,
@@ -301,9 +302,11 @@ function validateReady(dir, j) {
     });
     m.start(j);
     m.verifyServices(j);
-    // Normal startup may create missing DBs/write data: use current compatibility, never old hashes.
-    const checked = m.preflight(dir, j, null);
-    if (checked.success === false) throw Error(checked.error || 'started code/data incompatible');
+    if (j.databaseMode !== 'unchanged') {
+      // Normal startup may create missing DBs/write data: use current compatibility, never old hashes.
+      const checked = m.preflight(dir, j, null);
+      if (checked.success === false) throw Error(checked.error || 'started code/data incompatible');
+    }
     verified = true;
     m.update(dir, j, {
       phase: restored ? 'restored_complete' : 'upgrade_complete',
@@ -434,12 +437,16 @@ function resumeWithControl(dir, {hooks}, acquireControl) {
     m.stop(j);
     const d = m.read(path.join(dir, 'descriptor.json'));
     m.validateDescriptor(dir, j, d);
-    const snapshot = validateSnapshot(dir, j);
-    rescue(dir, j);
-    restoreCore(dir, j);
-    replaceDatabases(dir, j, snapshot);
-    const checked = m.preflight(dir, j, snapshot);
-    if (checked.success === false) throw Error(checked.error || 'restored preflight failed');
+    if (j.databaseMode === 'unchanged') {
+      restoreCore(dir, j);
+    } else {
+      const snapshot = validateSnapshot(dir, j);
+      rescue(dir, j);
+      restoreCore(dir, j);
+      replaceDatabases(dir, j, snapshot);
+      const checked = m.preflight(dir, j, snapshot);
+      if (checked.success === false) throw Error(checked.error || 'restored preflight failed');
+    }
     m.update(dir, j, {
       phase: 'restored_data_ready'
     });

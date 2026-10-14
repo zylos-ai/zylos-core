@@ -52,6 +52,12 @@ export function preflightCoreDbUpgrade(zylosDir) {
   probeCoreDbSnapshotSync(destination);
   return runCoreDbWorker({action: 'offline-preflight', zylosDir});
 }
+// Compare only SQLite user_version with the downloaded release's declared
+// versions. This is the sole live-database read on a code-only upgrade.
+export function probeCoreDbVersions(zylosDir, tempDir, {driverRoot=path.join(zylosDir,'.claude','skills')}={}) {
+  const schemaRoot=path.join(tempDir,'skills');
+  return runCoreDbWorker({action:'version-probe',zylosDir,schemaRoot,driverRoot});
+}
 // Run the downloaded release's real migration code against SQLite online
 // backup copies while services are still running. This is an early warning;
 // the stopped, snapshotted databases are migrated and checked again later.
