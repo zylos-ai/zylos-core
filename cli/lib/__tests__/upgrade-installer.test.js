@@ -6,7 +6,7 @@ import path from 'node:path';
 import {createRequire} from 'node:module';
 import {spawn} from 'node:child_process';
 import {pathToFileURL} from 'node:url';
-import {runProtectedInstaller,resolveProtectedNpmCli} from '../self-upgrade.js';
+import {runProtectedInstaller,resolveProtectedNpmCli,step4_npmInstallGlobal} from '../self-upgrade.js';
 const require=createRequire(import.meta.url),m=require('../upgrade-maintenance.cjs');
 function fixture(t,body){
  const root=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'upgrade-installer-'))),dir=path.join(root,'.backup/self-upgrade/tx');fs.mkdirSync(dir,{recursive:true,mode:0o700});
@@ -44,14 +44,14 @@ test('runtime-only launcher death never proves direct npm exited',async t=>{
  assert.equal(f.helper.quiesce(f.dir,saved,{kind:'installer',terminate:true}).confirmed,false);
  assert.ok(f.helper.members(npmPid).length);
 });
-test('trusted npm resolver accepts mode 775 but rejects wrappers, non-executable, unreadable and non-files',t=>{
+test('trusted npm resolver accepts readable modes 775 and 644 but rejects wrappers, unreadable and non-files',t=>{
  const f=fixture(t,'// fixture'),bin=path.join(f.root,'bin');fs.mkdirSync(bin);fs.writeFileSync(path.join(bin,'npm'),'#!/bin/sh\nexit 0\n',{mode:0o700});const prior=process.env.PATH;
  try{
   process.env.PATH=bin;
   assert.throws(resolveProtectedNpmCli,/trusted npm-cli/);
   fs.unlinkSync(path.join(bin,'npm'));fs.symlinkSync(f.npmCli,path.join(bin,'npm'));
   fs.chmodSync(f.npmCli,0o775);assert.equal(resolveProtectedNpmCli(),f.npmCli);
-  fs.chmodSync(f.npmCli,0o644);assert.throws(resolveProtectedNpmCli,/trusted npm-cli/);
+  fs.chmodSync(f.npmCli,0o644);assert.equal(resolveProtectedNpmCli(),f.npmCli);
   fs.chmodSync(f.npmCli,0o000);
   if(process.geteuid?.()!==0)assert.throws(resolveProtectedNpmCli,/trusted npm-cli/);
   fs.unlinkSync(f.npmCli);fs.mkdirSync(f.npmCli);
@@ -64,6 +64,19 @@ test('npm resolver accepts a readable executable owned by another user',t=>{
  const prior=process.env.PATH,statSync=fs.statSync;
  t.mock.method(fs,'statSync',(file,...args)=>{const stat=statSync(file,...args);if(file===f.npmCli)stat.uid=-1;return stat;});
  try{process.env.PATH=bin;assert.equal(resolveProtectedNpmCli(),f.npmCli);}finally{process.env.PATH=prior;}
+});
+
+test('protected installation uses the preflight npm path after its PATH entry changes',t=>{
+ const f=fixture(t,"if(process.argv[2]==='pack')process.stdout.write('fixture.tgz\\n');");
+ const bin=path.join(f.root,'bin');fs.mkdirSync(bin);fs.symlinkSync(f.npmCli,path.join(bin,'npm'));fs.chmodSync(f.npmCli,0o644);
+ const prior=process.env.PATH;
+ try{
+  process.env.PATH=bin+path.delimiter+prior;
+  f.ctx.protectedNpmCli=resolveProtectedNpmCli();
+  fs.unlinkSync(path.join(bin,'npm'));fs.writeFileSync(path.join(bin,'npm'),'#!/bin/sh\nexit 1\n',{mode:0o700});
+  f.ctx.tempDir=f.root;f.ctx.preInstallProtection=true;
+  const result=step4_npmInstallGlobal(f.ctx);assert.equal(result.status,'done',JSON.stringify(result));
+ }finally{process.env.PATH=prior;}
 });
 
 test('protected installer canonicalizes a symlinked work directory before direct launch', t => {
