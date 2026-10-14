@@ -66,15 +66,12 @@ async function fixture(t,{missing=false,wal=false}={}) {
 function change(f){const p=f.db('comm-bridge/c4.db'),db=new Database(p);db.prepare('INSERT INTO checkpoints(id,summary) VALUES (?,?)').run(1,'new-generation');db.close();fs.writeFileSync(p+'-wal','old-wal');fs.writeFileSync(p+'-shm','old-shm');fs.appendFileSync(path.join(f.j.skillsDir,'comm-bridge/package.json'),'\n');}
 function unchanged(f) {
  f.j.databaseMode='unchanged';
- delete f.j.dbBackupDir;
- delete f.j.snapshotManifestHash;
  f.m.update(f.dir,f.j);
- fs.rmSync(f.snapshot.dbBackupDir,{recursive:true});
  f.m.preflight=()=>{throw Error('database preflight must not run');};
  f.m.worker=()=>{throw Error('database worker must not run');};
 }
 
-test('unchanged database transaction resumes installed code without database inspection or snapshot',async t=>{
+test('unchanged database transaction resumes installed code without database inspection',async t=>{
  const f=await fixture(t);unchanged(f);
  f.m.update(f.dir,f.j,{phase:'new_data_ready'});
  const result=f.r.resume(f.dir);
@@ -108,23 +105,17 @@ test('unchanged database transaction aborts before install without database insp
  assert.equal(f.m.discover(f.root).blocked,false);
 });
 
-test('ready journal requires snapshots for new transactions and reads legacy unchanged journals',async t=>{
+test('ready journal requires snapshot identity even with unchanged database versions',async t=>{
  const f=await fixture(t);
  f.m.update(f.dir,f.j,{phase:'new_data_ready'});
  assert.doesNotThrow(()=>f.m.transaction(f.root,f.dir));
  f.j.databaseMode='unchanged';
  f.m.update(f.dir,f.j);
  assert.doesNotThrow(()=>f.m.transaction(f.root,f.dir));
- f.j.snapshotRequired=true;
- f.m.update(f.dir,f.j);
- assert.doesNotThrow(()=>f.m.transaction(f.root,f.dir));
  delete f.j.dbBackupDir;
  delete f.j.snapshotManifestHash;
  f.m.update(f.dir,f.j);
  assert.throws(()=>f.m.transaction(f.root,f.dir),/invalid data-ready installation\/material identity/);
- delete f.j.snapshotRequired;
- f.m.update(f.dir,f.j);
- assert.doesNotThrow(()=>f.m.transaction(f.root,f.dir));
  f.j.databaseMode='migrate';
  f.m.update(f.dir,f.j);
  assert.throws(()=>f.m.transaction(f.root,f.dir),/invalid data-ready installation\/material identity/);
@@ -137,7 +128,6 @@ for(const verificationFails of [false,true])test(`protected same-version snapsho
  fs.mkdirSync(path.join(incoming,'cli/lib'),{recursive:true});
  fs.mkdirSync(path.join(incoming,'skills'),{recursive:true});
  fs.writeFileSync(path.join(incoming,'package.json'),'{"version":"2.0.0"}');
- fs.copyFileSync(path.resolve('cli/lib/core-db-upgrade-protocol.json'),path.join(incoming,'cli/lib/core-db-upgrade-protocol.json'));
  for(const item of CORE_DATABASES)fs.mkdirSync(path.join(incoming,'skills',item.owner),{recursive:true});
  const bin=path.join(f.root,'fixture-bin');fs.mkdirSync(bin);
  fs.writeFileSync(path.join(bin,'pm2'),'#!/bin/sh\nif [ "$1" = "jlist" ]; then printf "[]\\n"; fi\n',{mode:0o700});
@@ -168,10 +158,11 @@ for(const verificationFails of [false,true])test(`protected same-version snapsho
  }
  assert.equal(result.success,!verificationFails,JSON.stringify(result));
  assert.equal(result.databaseMode,'unchanged');
- assert.ok(result.dbBackupDir);
+ if(verificationFails)assert.equal(result.dbBackupDir,undefined);
+ else assert.ok(result.dbBackupDir);
  assert.equal(result.dbSnapshotVerified,!verificationFails);
  assert.equal(installed,verificationFails?0:2);
- assert.equal(fs.existsSync(path.join(result.dbBackupDir,'manifest.json')),true);
+ if(!verificationFails)assert.equal(fs.existsSync(path.join(result.dbBackupDir,'manifest.json')),true);
  assert.deepEqual(CORE_DATABASES.map(item=>fs.readFileSync(f.db(item.source))),before);
  assert.equal(f.m.discover(f.root).blocked,false);
 });

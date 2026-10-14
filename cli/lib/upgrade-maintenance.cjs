@@ -107,9 +107,7 @@ function validateReadyJournal(j) {
   // data_ready releases normal business writers. Check durable records, never
   // current DB hashes: legitimate writes after data_ready must remain valid.
   if (j.installationIntent !== true) throw Error('invalid data-ready installation identity');
-  if (j.databaseMode === 'unchanged' && j.snapshotRequired !== true && j.dbBackupDir == null && j.snapshotManifestHash == null) {
-    // Journals from the earlier code-only release have no database snapshot.
-  } else if (j.dbBackupDir !== path.join(j.zylosDir, '.backup', 'db', j.transactionId) || typeof j.snapshotManifestHash !== 'string' || !/^[a-f0-9]{64}$/.test(j.snapshotManifestHash)) throw Error('invalid data-ready installation/material identity');
+  if (j.dbBackupDir !== path.join(j.zylosDir, '.backup', 'db', j.transactionId) || typeof j.snapshotManifestHash !== 'string' || !/^[a-f0-9]{64}$/.test(j.snapshotManifestHash)) throw Error('invalid data-ready installation/material identity');
   validateOriginalJournal(j, {
     completeBackups: true
   });
@@ -184,7 +182,7 @@ function hasRecoveryHistory(root) {
           typeof e.backedUp !== 'boolean' || (e.existedBefore ? !aborted && !e.backedUp || !digest(e.originalHash) : e.originalHash !== null)) return false;
       members.add(e.name);
     }
-    return aborted || j.databaseMode === 'unchanged' && j.snapshotRequired !== true && j.dbBackupDir == null && j.snapshotManifestHash == null || j.dbBackupDir === path.join(j.zylosDir, '.backup', 'db', id) && digest(j.snapshotManifestHash);
+    return aborted || j.dbBackupDir === path.join(j.zylosDir, '.backup', 'db', id) && digest(j.snapshotManifestHash);
   };
   try {
     if (present(path.join(root, '.zylos/upgrade/active.json'))) return true;

@@ -115,7 +115,7 @@ export function rehearseCoreDbUpgrade(zylosDir, tempDir, {driverRoot=path.join(z
   try {return runCoreDbWorker({action:'rehearse',zylosDir,schemaRoot,driverRoot,rehearsalDir},{workerPath});}
   finally {fs.rmSync(rehearsalDir,{recursive:true,force:true});}
 }
-export function createCoreDbSnapshot({zylosDir,transactionId,fromVersion,toVersion,onProgress}) {
+export function createCoreDbSnapshot({zylosDir,transactionId,fromVersion,toVersion,onProgress,verifySnapshot=runCoreDbWorker}) {
   if(!/^[a-zA-Z0-9_-]+$/.test(transactionId)) throw new Error('Invalid snapshot transaction ID');
   const root=path.join(zylosDir,'.backup','db');fs.mkdirSync(root,{recursive:true,mode:0o700});
   syncDir(path.dirname(root));syncDir(zylosDir);
@@ -128,6 +128,8 @@ export function createCoreDbSnapshot({zylosDir,transactionId,fromVersion,toVersi
     durableJson(path.join(staging,'manifest.json'),manifest);
     const destination=path.join(root,transactionId);if(fs.existsSync(destination)) throw new Error(`Snapshot already exists: ${destination}`);
     fs.renameSync(staging,destination);syncDir(root);
+    // Verify the published group before retiring a previously verified one.
+    verifySnapshot({action:'verify',zylosDir,dbBackupDir:destination,manifest});
     const warnings=[];
     for(const entry of fs.readdirSync(root,{withFileTypes:true})) {
       if(!entry.isDirectory()||entry.name===transactionId||entry.name.startsWith('.')) continue;

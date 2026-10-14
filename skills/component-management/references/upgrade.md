@@ -99,7 +99,9 @@ scheduler, and web-console databases. If all three versions match the target
 release, it skips database preflight, rehearsal copies, migrations,
 and upgrade structure/integrity checks. It still stops services, then creates
 and verifies all three database snapshots before installation. Protected mode retains code recovery;
-backup-only mode requires manual recovery.
+on same-version failure it leaves the live databases in place and retains the
+verified snapshots for manual database recovery. Backup-only mode requires
+manual recovery.
 If any database is older or missing, the full database path below applies. A
 version newer than the target is rejected before service stop.
 

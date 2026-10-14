@@ -258,6 +258,14 @@ test('worker snapshot sync failure aborts publication and retains the previous v
  assert.equal(runCoreDbWorker({action:'verify',zylosDir:dir,dbBackupDir:previous.dbBackupDir,manifest:previous.manifest}).databases[0].integrityCheck,'ok');
 });
 
+test('failed verification of a published snapshot keeps the prior verified group', {skip:!Database},t=>{
+ const dir=fixture(t);skills(dir);
+ const previous=createCoreDbSnapshot({zylosDir:dir,transactionId:'previous'});
+ assert.throws(()=>createCoreDbSnapshot({zylosDir:dir,transactionId:'failed-verify',verifySnapshot:()=>{throw Error('injected verification failure');}}),/injected verification failure/);
+ assert.equal(fs.existsSync(path.join(previous.dbBackupDir,'manifest.json')),true);
+ assert.equal(runCoreDbWorker({action:'verify',zylosDir:dir,dbBackupDir:previous.dbBackupDir,manifest:previous.manifest}).databases.length,3);
+});
+
 test('controlled installed migration requires installing identity, preserves snapshots and initializes historical absent web DB', {skip:!Database},t=>{
  const dir=fixture(t),schemaRoot=path.join(dir,'.claude/skills');
  for(const item of CORE_DATABASES) {

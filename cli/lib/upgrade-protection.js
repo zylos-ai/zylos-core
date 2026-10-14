@@ -104,7 +104,6 @@ export function beginUpgrade(ctx, {
     to: ctx.to,
     phase: 'preparing',
     databaseMode: ctx.databaseMode === 'unchanged' ? 'unchanged' : 'migrate',
-    snapshotRequired: true,
     installationIntent: false,
     automaticCompensation: true,
     automaticResume: process.platform !== 'darwin',
@@ -217,14 +216,15 @@ export function prepareBackupOnlyInstall(ctx, deps = {}) {
     // stop may partially succeed before throwing; the cleanup covers it too.
     (deps.stop ?? maintenance.stopBackupOnly)(j);
     ctx.servicesStopped = [...ctx.servicesWereRunning];
+    const verifySnapshot=deps.verifySnapshot ?? runCoreDbWorker;
     const snapshot = (deps.snapshot ?? createCoreDbSnapshot)({
       zylosDir, transactionId: 'backup-' + Date.now() + '-' + crypto.randomBytes(6).toString('hex'),
-      fromVersion: ctx.from, toVersion: ctx.to
+      fromVersion: ctx.from, toVersion: ctx.to, verifySnapshot
     });
     ctx.dbBackupDir = snapshot.dbBackupDir;
     ctx.dbManifest = snapshot.manifest;
     ctx.backupWarnings = snapshot.warnings;
-    (deps.verifySnapshot ?? runCoreDbWorker)({action:'verify', zylosDir, dbBackupDir:snapshot.dbBackupDir, manifest:snapshot.manifest});
+    if (deps.snapshot) verifySnapshot({action:'verify', zylosDir, dbBackupDir:snapshot.dbBackupDir, manifest:snapshot.manifest});
     ctx.dbSnapshotVerified = true;
   } catch (error) {
     // This boundary precedes npm and only reads business databases. Restore
@@ -290,16 +290,18 @@ export function prepareProtectedInstall(ctx, overrides = {}) {
   maintenance.update(dir, j, {
     phase: 'offline'
   });
+  const verifySnapshot=overrides.verifySnapshot ?? runCoreDbWorker;
   const snapshot = (overrides.snapshot ?? createCoreDbSnapshot)({
     zylosDir: j.zylosDir,
     transactionId: j.transactionId,
     fromVersion: j.from,
-    toVersion: j.to
+    toVersion: j.to,
+    verifySnapshot
   });
   ctx.dbBackupDir = snapshot.dbBackupDir;
   ctx.dbManifest = snapshot.manifest;
   ctx.backupWarnings = snapshot.warnings;
-  (overrides.verifySnapshot ?? runCoreDbWorker)({action:'verify',zylosDir:j.zylosDir,dbBackupDir:snapshot.dbBackupDir,manifest:snapshot.manifest});
+  if (overrides.snapshot) verifySnapshot({action:'verify',zylosDir:j.zylosDir,dbBackupDir:snapshot.dbBackupDir,manifest:snapshot.manifest});
   ctx.dbSnapshotVerified = true;
   maintenance.update(dir, j, {
     phase: 'snapshot_saved',

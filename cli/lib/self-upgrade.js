@@ -1776,13 +1776,6 @@ export function runSelfUpgrade({ tempDir, newVersion, mode, onStep } = {}, deps 
       ctx.databaseVersions=(deps.probeCoreDbVersions ?? probeCoreDbVersions)(root,ctx.tempDir,{driverRoot:deps.skillsDir ?? SKILLS_DIR});
       if (!ctx.databaseVersions || typeof ctx.databaseVersions.needsMigration !== 'boolean' || !Array.isArray(ctx.databaseVersions.databases) || ctx.databaseVersions.databases.length !== 3) throw Error('Invalid database version probe result');
       ctx.databaseMode=ctx.databaseVersions.needsMigration?'migrate':'unchanged';
-      if (ctx.databaseMode === 'unchanged') {
-        const protocolFile=path.join(ctx.tempDir,'cli','lib','core-db-upgrade-protocol.json');
-        let protocol;
-        try {protocol=JSON.parse(fs.readFileSync(protocolFile,'utf8'));}
-        catch {throw Error('Target release does not support code-only database upgrade');}
-        if (protocol?.codeOnlyVersion!==1) throw Error('Target release does not support code-only database upgrade');
-      }
       if (ctx.databaseMode === 'migrate') {
         ctx.databasePreflight=(deps.preflightCoreDbUpgrade ?? preflightCoreDbUpgrade)(root);
         ctx.databaseRehearsal=(deps.rehearseCoreDbUpgrade ?? rehearseCoreDbUpgrade)(root,ctx.tempDir,{driverRoot:deps.skillsDir ?? SKILLS_DIR,onCleanup:cleanup=>ctx.rehearsalCleanup.removed.push(...cleanup.removed)});

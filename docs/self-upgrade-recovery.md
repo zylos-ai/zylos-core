@@ -7,9 +7,10 @@ a failed protected installation or finalizer restores
 declared core skill directories, the original PM2 ecosystem, and these databases
 using a saved independent runner. If all three database versions already match
 the target release, the upgrade skips rehearsal, migration, and upgrade database checks.
-It still creates and verifies the database snapshots before installation. The
-same-version recovery path currently restores code and services; the retained
-snapshot is available for manual database recovery. The command still reports
+It still creates and verifies the database snapshots before installation. On
+same-version failure, automatic recovery restores code and services but does
+not restore the databases. The retained snapshot is available for manual
+database recovery. The command still reports
 a failed upgrade if compensation runs.
 
 ## Backup and automatic recovery are separate capabilities
@@ -61,8 +62,12 @@ for unresolved recovery work and reads each existing database's SQLite
 the downloaded release's declared schema versions. A missing database counts as
 needing migration; a version newer than the target is rejected. If all three
 versions match, the upgrade skips database preflight, rehearsal, migration and
-structural checks. It requires a target release that supports this path. After
-service stop, it creates and verifies all three database snapshots before install.
+structural checks. After service stop, it creates and verifies all three
+database snapshots before install. A target release without this fast path
+runs its own finalizer after installation. The 0.9.0 protected finalizer runs
+its own migration and database checks; 0.8.x finalizers reject the newer
+protected handoff state before those checks. Either failure triggers protected
+compensation. Backup-only failures require manual recovery.
 
 If any database needs migration, both upgrade modes probe the snapshot
 destination and Node sync, load each owner's SQLite driver, and check existing
@@ -340,7 +345,8 @@ and explicit `--status`/`--once` retain detailed discovery and refuse unresolved
 or damaged material. A journal abandoned before marker publication has not stopped
 services or installed code; it does not isolate daily use, but must be resolved
 before another upgrade. No terminal archive or cleanup pointer is created. Snapshots, rescue material and journals remain.
-Snapshot retention keeps the newest complete feature-owned group (N=1); cleanup
+Snapshot retention verifies the newly published group before retiring an older
+verified group, then keeps the newest complete feature-owned group (N=1); cleanup
 failures leave warnings and paths. Private database snapshots are normalized to
 SQLite DELETE journal mode before their SHA-256 is recorded, so readonly snapshot
 inspection needs no temporary copy and creates no WAL sidecars.
