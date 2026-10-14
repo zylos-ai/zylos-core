@@ -51,7 +51,8 @@ test('trusted npm resolver accepts mode 775 but rejects wrappers, unreadable and
   assert.throws(resolveProtectedNpmCli,/trusted npm-cli/);
   fs.unlinkSync(path.join(bin,'npm'));fs.symlinkSync(f.npmCli,path.join(bin,'npm'));
   fs.chmodSync(f.npmCli,0o775);assert.equal(resolveProtectedNpmCli(),f.npmCli);
-  fs.chmodSync(f.npmCli,0o000);assert.throws(resolveProtectedNpmCli,/trusted npm-cli/);
+  fs.chmodSync(f.npmCli,0o000);
+  if(process.geteuid?.()!==0)assert.throws(resolveProtectedNpmCli,/trusted npm-cli/);
   fs.unlinkSync(f.npmCli);fs.mkdirSync(f.npmCli);
   assert.throws(resolveProtectedNpmCli,/trusted npm-cli/);
  }finally{process.env.PATH=prior;}
