@@ -108,10 +108,12 @@ an incomplete migration chain, SQLite integrity failures, missing or invalid
 backups, and failed applicable per-step or final checks also block the upgrade.
 Declared steps also verify retained column type, `NOT NULL`, default,
 primary-key position, and generated/hidden metadata. Intentional core column
-definition changes must be declared with `alterColumns`. A user-added ordinary
-`NOT NULL` column without a usable default is rejected during normal database
-open as well as upgrade preflight; the affected service may fail to start until
-the column is corrected. These checks cover table and column names, retained
+definition changes must be declared with `alterColumns`. Upgrade preflight and
+rehearsal reject a user-added ordinary `NOT NULL` column without a usable
+default in a core table. Ordinary database open still succeeds; writes to that
+table may fail with SQLite's `NOT NULL constraint failed` error, naming the
+column. Repair by adding a usable default, allowing `NULL`, or moving the data
+to a separate table. These checks cover table and column names, retained
 column metadata, and row counts.
 They do not inspect indexes, triggers, or views, and a core table rebuild can
 lose user-created indexes or triggers. A same-count edit can change row meaning

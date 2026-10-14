@@ -85,9 +85,11 @@ must satisfy the required v1 core schema.
 
 For declared steps, retained columns keep their SQLite type, `NOT NULL`,
 default, primary-key position, and generated/hidden metadata unless a core
-definition change is declared in `alterColumns`. A rebuild that would put a
-user-added `NOT NULL` column with no default into an incompatible destination
-is rejected before it can discard that column's data. These checks cover table
+definition change is declared in `alterColumns`. Upgrade preflight and rehearsal
+reject a user-added ordinary `NOT NULL` column without a usable default in a
+core table before service stop. Ordinary database open permits it so an agent
+can help repair the schema, though writes to that table may fail with SQLite's
+column-specific `NOT NULL constraint failed` error. These checks cover table
 and column names, retained column metadata, and row counts. They do not inspect
 indexes, triggers, or views; rebuilding a core table can lose user-created
 indexes or triggers. They also cannot detect a semantic change to rows when

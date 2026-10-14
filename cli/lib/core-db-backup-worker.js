@@ -68,7 +68,7 @@ async function ownerSchema(input,item) {
     return {
       ...mod,
       inspectSchema(db, options = {}) {
-        const result = mod.inspectSchema(db, {...options, strict:false});
+        const result = mod.inspectSchema(db, {...options, strict:false, rejectUnsafeExtensions:true});
         if (!result.extensions || !Array.isArray(result.extensions.tables) || !Array.isArray(result.extensions.columns)) throw new Error('missing schema extension report');
         return result;
       }

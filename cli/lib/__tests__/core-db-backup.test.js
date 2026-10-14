@@ -94,6 +94,24 @@ test('offline preflight accepts and reports archive tables and extra columns', {
  assert.deepEqual(CORE_DATABASES.map(item=>fs.readFileSync(path.join(dir,item.source))),before);
 });
 
+test('upgrade preflight and rehearsal reject an unsafe extension before service stop', {skip:!Database},async t=>{
+ const dir=fixture(t);skills(dir);
+ const schemaRoot=path.resolve('skills');
+ const {migrateDatabase,guardDatabase}=await import('../../../skills/comm-bridge/scripts/sqlite-schema.js');
+ const owner=await import('../../../skills/comm-bridge/scripts/c4-schema.js');
+ const source=path.join(dir,'comm-bridge/c4.db');fs.mkdirSync(path.dirname(source),{recursive:true});
+ const db=new Database(source);
+ try {
+  migrateDatabase(db,owner,{allowNew:true,strict:false});
+  db.exec('ALTER TABLE conversations ADD COLUMN my_tag TEXT NOT NULL');
+  assert.equal(guardDatabase(db,owner).version,1);
+ }finally{db.close();}
+ const before=fs.readFileSync(source);
+ assert.throws(()=>runCoreDbWorker({action:'offline-preflight',zylosDir:dir,schemaRoot}),/conversations\.my_tag.*default/);
+ assert.throws(()=>rehearseCoreDbUpgrade(dir,path.resolve('.'),{driverRoot:path.join(os.homedir(),'zylos','.claude','skills')}),/conversations\.my_tag.*default/);
+ assert.deepEqual(fs.readFileSync(source),before);
+});
+
 test('target rehearsal migrates private copies before stop and leaves live databases unchanged', {skip:!Database},t=>{
  const dir=fixture(t),source=path.join(dir,'comm-bridge/c4.db');
  fs.mkdirSync(path.dirname(source),{recursive:true});

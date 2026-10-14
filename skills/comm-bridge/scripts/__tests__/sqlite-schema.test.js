@@ -209,6 +209,20 @@ test('ordinary owners accept additional tables and columns while upgrade inspect
  }
 });
 
+test('ordinary owners reopen with an unsafe NOT NULL extension while upgrade inspection rejects it', t => {
+ const root=fixture(t);
+ const openers=`import {getDb,close} from './skills/comm-bridge/scripts/c4-db.js';import {getDb as scheduler} from './skills/scheduler/scripts/database.js';import {openDb} from './skills/web-console/scripts/db.js';getDb();close();scheduler().close();openDb().close();`;
+ run(root,openers);
+ for(const [relative,owner,table] of [['comm-bridge/c4.db',c4,'conversations'],['scheduler/scheduler.db',scheduler,'tasks'],['web-console/web-console.db',wc,'sessions']]) {
+  const db=new Database(path.join(root,relative));
+  db.exec(`ALTER TABLE ${table} ADD COLUMN my_tag TEXT NOT NULL`);
+  assert.equal(guardDatabase(db,owner).version,1);
+  assert.throws(()=>owner.inspectSchema(db,{strict:false,rejectUnsafeExtensions:true}),new RegExp(`${table}\\.my_tag.*default`));
+  db.close();
+ }
+ run(root,openers);
+});
+
 test('upgrade inspection allows extra tables independently of extra columns for every core owner', t => {
  const root=fixture(t);
  run(root, `import {getDb,close} from './skills/comm-bridge/scripts/c4-db.js';import {getDb as scheduler} from './skills/scheduler/scripts/database.js';import {openDb} from './skills/web-console/scripts/db.js';getDb();close();scheduler().close();openDb().close();`);

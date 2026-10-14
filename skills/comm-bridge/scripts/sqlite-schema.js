@@ -46,9 +46,9 @@ export function assertCoreDatabaseAvailable(root) {
   }
 }
 
-// Strict inspection is the upgrade/recovery default; ordinary owners opt out
-// only of the extra-table/column whitelist, retaining required-field checks.
-export function inspectLayout(db, name, supported, tables, { allowNew = false, strict = true, allowExtraTables = !strict, allowExtraColumns = !strict, definitions = {}, migrateFromOlder = false } = {}) {
+// Strict inspection is the upgrade/recovery default. Ordinary owners keep
+// required-field checks but must remain openable for repair of bad extensions.
+export function inspectLayout(db, name, supported, tables, { allowNew = false, strict = true, allowExtraTables = !strict, allowExtraColumns = !strict, rejectUnsafeExtensions = strict, definitions = {}, migrateFromOlder = false } = {}) {
   const version = db.pragma('user_version', { simple: true });
   if (!Number.isInteger(version) || version < 0) {
     throw new Error(`${name}: invalid schema version ${version}; restore compatible code/data`);
@@ -80,7 +80,7 @@ export function inspectLayout(db, name, supported, tables, { allowNew = false, s
       // Core INSERT statements do not name locally added columns. An ordinary
       // NOT NULL column without a usable default would make those writes fail.
       const defaultSql = column.dflt_value?.trim();
-      if (column.hidden === 0 && column.notnull && (defaultSql == null || /^\(*\s*NULL\s*\)*$/i.test(defaultSql))) {
+      if (rejectUnsafeExtensions && column.hidden === 0 && column.notnull && (defaultSql == null || /^\(*\s*NULL\s*\)*$/i.test(defaultSql))) {
         throw new Error(`${name}: unsafe extension column ${table}.${column.name}: NOT NULL without a usable default`);
       }
       extraColumns.push({ table, column: column.name });
@@ -280,8 +280,8 @@ function afterStep(name, before, after, changes) {
 // Planning is read-only: recognize the starting layout, then resolve every step
 // before any migration runs. Owners inspect the layout for the actual version,
 // rather than requiring the target version's columns at an earlier step.
-export function planDatabaseMigration(db, owner, { allowNew = false, strict = true, allowExtraTables, allowExtraColumns } = {}) {
-  const current = owner.inspectSchema(db, { allowNew, strict, allowExtraTables, allowExtraColumns });
+export function planDatabaseMigration(db, owner, { allowNew = false, strict = true, allowExtraTables, allowExtraColumns, rejectUnsafeExtensions = strict } = {}) {
+  const current = owner.inspectSchema(db, { allowNew, strict, allowExtraTables, allowExtraColumns, rejectUnsafeExtensions });
   const target = owner.SUPPORTED_SCHEMA_VERSION;
   if (!Number.isInteger(target) || target < 0 || !Number.isInteger(current.version) || current.version < 0 || current.version > target) {
     throw new Error('Invalid or unsupported schema migration version');
@@ -299,9 +299,9 @@ export function planDatabaseMigration(db, owner, { allowNew = false, strict = tr
 
 // One writer lock and one transaction cover the entire per-database chain.
 // Migration callbacks must keep all changes on this SQLite connection.
-export function migrateDatabase(db, owner, { allowNew = false, strict = true, allowExtraTables, allowExtraColumns } = {}) {
+export function migrateDatabase(db, owner, { allowNew = false, strict = true, allowExtraTables, allowExtraColumns, rejectUnsafeExtensions = strict } = {}) {
   if (db.readonly) throw new Error('Cannot migrate a readonly database');
-  const options = { allowNew, strict, allowExtraTables, allowExtraColumns };
+  const options = { allowNew, strict, allowExtraTables, allowExtraColumns, rejectUnsafeExtensions };
   const initial = planDatabaseMigration(db, owner, options);
   if (initial.empty && db.name !== ':memory:' && db.name !== '') {
     const stat = fs.lstatSync(db.name);
