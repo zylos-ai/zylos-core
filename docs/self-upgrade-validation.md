@@ -68,9 +68,9 @@ The initial independent pass observed 97 passing maintenance/material/recovery/r
 | C08 | Stable builtin file discovery and normal-runtime initial recovery prompt; existing PM2/activity-monitor startup chain reused after owner-approved C08 simplification. Bad materials cue diagnostics but cannot execute untrusted paths. Historical dedicated-supervisor boot evidence does not certify this new startup chain. |
 | C09 | Shared JSON/human/C4 outputs, separate upgrade/compensation results, code-only success cleanup, retained snapshots/rescue/journals; terminal directories stay in place and marker-clear failures continue without compensation. First adoption explicitly requires a separate consistent snapshot and operator confirmation. |
 
-## A01–A30 acceptance coverage map
+## A01–A30 acceptance coverage map and #828 follow-up
 
-This is an evidence map, not a claim that every environmental fault permutation was injected. “Fixture” denotes real SQLite/files/processes with isolated service adapters unless noted. “Reviewed” denotes the implementation branch and ordering were inspected; do not relabel it as a separate fault-injection test.
+This is an evidence map, not a claim that every environmental fault permutation was injected. “Fixture” denotes real SQLite/files/processes with isolated service adapters unless noted. “Reviewed” denotes the implementation branch and ordering were inspected; do not relabel it as a separate fault-injection test. F01 records the later #828 version-probe follow-up outside the original A01–A30 plan.
 
 | ID | Evidence and practical coverage |
 |---|---|
@@ -103,8 +103,8 @@ This is an evidence map, not a claim that every environmental fault permutation 
 | A27 | All READY phases preserve committed normal writes; restored verification failure keeps current DB generation; new-code verification failure isolates then compensates once. |
 | A28 | Direct detached installer/finalizer tests cover timeout/failure/success with descendants. Live caller kills and checks its process group; interruption before PID publication remains isolated, and recovery never kills a potentially reused saved PID. Unknown phases/hash/material conflicts never restore. No deliberately escaped sessions guarantee. |
 | A29 | Initial journal without descriptor/snapshot, committed WAL/checkpoint, changed CLI tree/link, and abort-write/cleanup interruption exercised; durable intent and initial publication ordering reviewed. Not every preinstall phase has a distinct real-machine crash run. |
-| A30 | Version-only readonly probe compares all three live `user_version` values with target schema versions. Equal versions skip rehearsal, snapshot, migration and upgrade DB checks while preserving code recovery; one older or missing database takes the full protected path; a newer version rejects before service stop. |
 | A30 | 100 verified terminals plus real active transaction contract; incomplete/forged terminal shape and provisional abort regressions; residual marker continuation; 32-active bounded-memory fixture and exhausted scan budget fail closed. |
+| F01 | Version-only readonly probe compares all three live `user_version` values with target schema versions. Equal versions skip rehearsal, snapshot, migration and upgrade DB checks while preserving code recovery; one older or missing database takes the full protected path; a newer version rejects before service stop. |
 
 ## macOS protected recovery extension
 
