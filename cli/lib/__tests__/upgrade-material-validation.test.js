@@ -17,6 +17,21 @@ function fixture(t) {
   return {dir,closure,j,d};
 }
 test('complete fixed recovery layout validates',t=>{const f=fixture(t);assert.doesNotThrow(()=>m.validateDescriptor(f.dir,f.j,f.d));});
+test('group-writable recovery Node is accepted',t=>{
+  const f=fixture(t),node=fs.realpathSync(process.execPath),statSync=fs.statSync;
+  t.mock.method(fs,'statSync',(file,...args)=>{const result=statSync(file,...args);if(file===node)result.mode=(result.mode&~0o777)|0o775;return result;});
+  assert.doesNotThrow(()=>m.validateDescriptor(f.dir,f.j,f.d));
+});
+test('non-executable recovery Node is rejected',t=>{
+  const f=fixture(t),node=fs.realpathSync(process.execPath),statSync=fs.statSync;
+  t.mock.method(fs,'statSync',(file,...args)=>{const result=statSync(file,...args);if(file===node)result.mode=(result.mode&~0o777)|0o664;return result;});
+  assert.throws(()=>m.validateDescriptor(f.dir,f.j,f.d),/untrusted recovery Node/);
+});
+test('non-file recovery Node is rejected',t=>{
+  const f=fixture(t),node=fs.realpathSync(process.execPath),statSync=fs.statSync;
+  t.mock.method(fs,'statSync',(file,...args)=>{const result=statSync(file,...args);if(file===node)result.isFile=()=>false;return result;});
+  assert.throws(()=>m.validateDescriptor(f.dir,f.j,f.d),/untrusted recovery Node/);
+});
 test('omitted hash set never executes an unverified runner',t=>{
   const f=fixture(t);f.d.hashes={};assert.throws(()=>m.validateDescriptor(f.dir,f.j,f.d),/required recovery material hashes/);
 });

@@ -714,7 +714,7 @@ function validateDescriptor(dir, j, d) {
   if (d.formatVersion !== 1 || d.transactionId !== j.transactionId || d.nodePath !== j.nodePath || d.nodePath !== j.initialIdentity?.nodePath || typeof d.nodePath !== 'string' || !path.isAbsolute(d.nodePath)) throw Error('invalid recovery descriptor');
   const node = fs.realpathSync(d.nodePath),
     ns = fs.statSync(node);
-  if (node !== fs.realpathSync(process.execPath) || !ns.isFile() || !(ns.mode & 0o111) || ns.mode & 0o022 || process.getuid && ![0, process.getuid()].includes(ns.uid)) throw Error('untrusted recovery Node executable');
+  if (node !== fs.realpathSync(process.execPath) || !ns.isFile() || !(ns.mode & 0o111) || process.getuid && ![0, process.getuid()].includes(ns.uid)) throw Error('untrusted recovery Node executable');
   const closure = path.join(dir, 'sqlite-runtime');
   const fixed = {
     runnerPath: path.join(dir, 'runner.cjs'),

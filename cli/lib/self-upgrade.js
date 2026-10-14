@@ -642,7 +642,7 @@ export function step3_stopCoreServices(ctx, deps = {}) {
 export function resolveProtectedNpmCli() {
   for(const directory of String(process.env.PATH||'').split(path.delimiter)){
     if(!path.isAbsolute(directory))continue;
-    try{const file=fs.realpathSync(path.join(directory,'npm')),st=fs.statSync(file);if(path.basename(file)==='npm-cli.js'&&st.isFile()&&!(st.mode&0o022)&&[0,process.getuid?.()].includes(st.uid))return file;}catch{}
+    try{const file=fs.realpathSync(path.join(directory,'npm')),st=fs.statSync(file);if(path.basename(file)==='npm-cli.js'&&st.isFile()&&[0,process.getuid?.()].includes(st.uid)){fs.accessSync(file,fs.constants.R_OK);return file;}}catch{}
   }
   throw Error('trusted npm-cli.js entry is unavailable');
 }
