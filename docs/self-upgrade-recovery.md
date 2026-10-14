@@ -216,10 +216,11 @@ frozen recovery code within the same attempt. A child-process exit alone is not
 proof that all detached descendants have exited; the existing process-group
 checks remain required.
 
-Both platforms retain preinstall three-database snapshots, schema checks, service
-isolation and frozen recovery materials. macOS does not provide unattended
-crash/reboot takeover. When backup-only mode is selected, the required snapshot
-still precedes installation. Failures while setting up an already selected
+When migration is needed, both platforms retain preinstall three-database
+snapshots and schema checks. Service isolation and frozen protected-recovery
+materials apply to both migration and code-only upgrades. macOS does not provide unattended
+crash/reboot takeover. In backup-only mode, a migration still requires a
+verified snapshot before installation. Failures while setting up an already selected
 protected transaction abort that attempt rather than silently changing modes.
 
 The new Mac path requires no compiler, native recovery binary or new Node addon.
@@ -305,9 +306,9 @@ Protected results distinguish `automaticCompensation` from `automaticResume`.
 On macOS the former is true and the latter false: a completed ordinary failure
 compensation does not imply that a new process can take over after interruption.
 
-JSON, human output, and C4 replies expose snapshot paths, per-database missing or
-backed-up states, schema versions and protection status. Backup-only output
-explicitly identifies disabled automatic recovery, snapshot verification status,
+JSON, human output, and C4 replies expose snapshot paths and per-database
+states when snapshots exist; code-only upgrades report the skipped snapshot.
+Backup-only output explicitly identifies disabled automatic recovery, snapshot verification status,
 and manual recovery instructions. A failed attempt requires manual inspection;
 this is not a claim that a database restore is always necessary. Protected output
 also exposes transaction paths and separate recovery
@@ -317,8 +318,9 @@ Schema-extension reports identify each affected database, table, and extra
 column. A name collision or undeclared loss reports the affected object and
 blocks the upgrade; there is no schema-extension opt-in command.
 
-Backup-only attempts retain database snapshots and code backup material for
-manual recovery, including after successful installation. They do not have the
+Backup-only migration attempts retain database snapshots and code backup material
+for manual recovery, including after successful installation. Code-only attempts
+retain code backup material without a database snapshot. They do not have the
 transaction journals or rescue runner described below.
 
 Successful protected-upgrade cleanup removes only the fixed transaction `code/` copy,
@@ -392,7 +394,9 @@ transaction. If a later database fails after an earlier one committed, protected
 upgrade compensation restores all three databases from the verified preinstall
 snapshot and restores the protected code; backup-only mode requires manual
 recovery. The global npm CLI may remain newer after protected compensation.
-A database already at the target is inspected without rerunning migration callbacks.
+When another database needs migration, a database already at the target is
+inspected without rerunning migration callbacks. If all three are current,
+the upgrade skips this worker entirely.
 
 After installation, before READY, a dedicated worker loads the installed owners'
 registries and performs the migration while the active installing journal still
