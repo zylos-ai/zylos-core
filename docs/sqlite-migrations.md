@@ -6,7 +6,7 @@ Rules for changing the schema of the three core databases: C4
 [self-upgrade-recovery.md](self-upgrade-recovery.md)) rehearses, runs and
 checks these migrations; this page is the contract a schema change must meet.
 
-### When a migration step is required
+## When a migration step is required
 
 Any change to a core table or column requires a new schema version and one
 migration step. That covers adding, removing, renaming or rebuilding a table;
@@ -18,7 +18,7 @@ Indexes, triggers and views are not checked by the engine (see
 [Not checked](#not-checked)), but changing them in an upgrade still belongs in
 a migration step.
 
-### Files touched by a schema change
+## Files touched by a schema change
 
 For the owner moving from version N to N+1:
 
@@ -44,7 +44,7 @@ Rules:
   argument. The engine wraps the whole chain for that database in one
   transaction, so a callback must not `BEGIN`/`COMMIT` itself.
 
-### The change declaration
+## The change declaration
 
 From 1→2 onward every step must carry `changes`. Only the 11 keys below are
 accepted; an unknown key, a wrong type, or a missing `changes` fails planning
@@ -74,7 +74,7 @@ appear or disappear, retained columns keep type, `NOT NULL`, default,
 primary-key position and hidden/generated flags, and undeclared tables keep
 their row counts. A failed check rolls back the whole chain for that database.
 
-### Example: C4 1→2
+## Example: C4 1→2
 
 This example is illustrative; C4's released target is still version 1. Suppose
 the next release adds nullable `conversations.priority_reason` and backfills
@@ -116,7 +116,7 @@ The `UPDATE` changes values, not the row count, so no `rowChanges` entry is
 needed. A step that inserts or deletes rows in `conversations` would add
 `rowChanges: ['conversations']`.
 
-### Unsafe patterns
+## Unsafe patterns
 
 - **New `NOT NULL` column without a default.** SQLite rejects
   `ADD COLUMN ... NOT NULL` without a default on a non-empty table. Add it
@@ -130,7 +130,7 @@ needed. A step that inserts or deletes rows in `conversations` would add
 - **Using `maybeTables` / `maybeColumns` to skip checks.** Use them only when
   some released deployments may legitimately already have the object.
 
-### Not checked
+## Not checked
 
 The engine checks table and column names, column definitions and row counts.
 It does not check indexes, triggers or views (a rebuild can lose user-created
@@ -140,7 +140,7 @@ same. Review these by hand.
 The legacy 0→1 step has no declaration and none of the per-step checks; only
 the final v1 layout check applies.
 
-### Tests
+## Tests
 
 A schema change must add or extend tests that:
 
@@ -153,9 +153,17 @@ A schema change must add or extend tests that:
 See `skills/comm-bridge/scripts/__tests__/migration-chain.test.js` for engine
 examples of every declaration type.
 
-### Adding a fourth core database
+## Adding a fourth core database
 
-The core database list is fixed at three in several places (see
-[self-upgrade-recovery.md](self-upgrade-recovery.md)). A new core database
-needs all of them changed together, plus tests; otherwise it is neither backed
-up nor checked during upgrades.
+The core database list is fixed at three in several places:
+
+- `cli/lib/core-db-backup.js:7` defines `CORE_DATABASES`; line 21 validates
+  snapshot manifests against its size and entries.
+- `cli/lib/core-db-backup-worker.js:7` has its own `DATABASES` list.
+- `cli/lib/self-upgrade.js:1777` expects three version-probe results.
+- `cli/lib/upgrade-recovery.cjs:116` checks snapshot manifest length against three.
+- `cli/lib/upgrade-maintenance.cjs:12` has `DB_PATHS`; line 165 has another
+  database list for recovery history checks.
+
+Update these together, inspect other database-count assumptions, and extend
+the tests. Otherwise the new database may be omitted from snapshots or checks.

@@ -354,6 +354,89 @@ for(const [name,options,pattern] of [
  }finally{db.close();}
 });
 
+test('maybeColumns creates a missing column, accepts a matching one, and rejects a mismatched one',()=>{
+ for(const state of ['missing','matching','mismatched']) {
+  const db=new Database(':memory:');try {
+   db.exec(`CREATE TABLE items(id INTEGER PRIMARY KEY,value TEXT${state==='missing'?'':`,optional ${state==='matching'?'TEXT':'INTEGER'}`});
+     INSERT INTO items(id,value) VALUES(1,'kept'); PRAGMA user_version=1`);
+   if(state==='matching')db.exec("UPDATE items SET optional='extension-value'");
+   let ran=false;
+   const owner={name:'optional-column',SUPPORTED_SCHEMA_VERSION:2,supportsNewDatabase:false,
+    inspectSchema(connection,options){
+     const tables={items:connection.pragma('user_version',{simple:true})===1?['id','value']:['id','value','optional']};
+     return inspectLayout(connection,'optional-column',2,tables,options);
+    },
+    MIGRATIONS:{1:{to:2,changes:{maybeColumns:{items:{optional:{type:'TEXT',pk:false}}}},migrate(connection){
+     ran=true;
+     if(!connection.prepare('PRAGMA table_xinfo(items)').all().some(column=>column.name==='optional'))
+      connection.exec('ALTER TABLE items ADD COLUMN optional TEXT');
+    }}},
+   };
+   if(state==='mismatched') {
+    assert.throws(()=>migrateDatabase(db,owner,{strict:false}),/unsupported definition for items\.optional/);
+    assert.equal(ran,false);assert.equal(db.pragma('user_version',{simple:true}),1);
+   } else {
+    migrateDatabase(db,owner,{strict:false});
+    assert.equal(db.pragma('user_version',{simple:true}),2);
+    assert.deepEqual(db.prepare('SELECT id,value,optional FROM items').all(),
+     [{id:1,value:'kept',optional:state==='matching'?'extension-value':null}]);
+   }
+  }finally{db.close();}
+ }
+});
+
+test('maybeTables creates a missing table, accepts a matching one, and rejects a mismatched one',()=>{
+ for(const state of ['missing','matching','mismatched']) {
+  const db=new Database(':memory:');try {
+   db.exec("CREATE TABLE items(id INTEGER PRIMARY KEY,value TEXT); INSERT INTO items VALUES(1,'kept'); PRAGMA user_version=1");
+   if(state!=='missing')db.exec(`CREATE TABLE metadata(id INTEGER PRIMARY KEY,label ${state==='matching'?'TEXT':'INTEGER'}); INSERT INTO metadata VALUES(7,${state==='matching'?"'extension-value'":'42'})`);
+   let ran=false;
+   const owner={name:'optional-table',SUPPORTED_SCHEMA_VERSION:2,supportsNewDatabase:false,
+    inspectSchema(connection,options){
+     const tables={items:['id','value']};
+     if(connection.pragma('user_version',{simple:true})===2)tables.metadata=['id','label'];
+     return inspectLayout(connection,'optional-table',2,tables,options);
+    },
+    MIGRATIONS:{1:{to:2,changes:{maybeTables:{metadata:{id:{type:'INTEGER',pk:true},label:{type:'TEXT',pk:false}}}},migrate(connection){
+     ran=true;connection.exec('CREATE TABLE IF NOT EXISTS metadata(id INTEGER PRIMARY KEY,label TEXT)');
+    }}},
+   };
+   if(state==='mismatched') {
+    assert.throws(()=>migrateDatabase(db,owner,{strict:false}),/unsupported definition for metadata\.label/);
+    assert.equal(ran,false);assert.equal(db.pragma('user_version',{simple:true}),1);
+    assert.equal(db.prepare('SELECT label FROM metadata').get().label,42);
+   } else {
+    migrateDatabase(db,owner,{strict:false});
+    assert.equal(db.pragma('user_version',{simple:true}),2);
+    assert.equal(db.prepare('SELECT value FROM items').get().value,'kept');
+    assert.deepEqual(db.prepare('SELECT id,label FROM metadata').all(),
+     state==='matching'?[{id:7,label:'extension-value'}]:[]);
+   }
+  }finally{db.close();}
+ }
+});
+
+test('rowChanges must declare an intentional row-count change',()=>{
+ for(const declared of [false,true]) {
+  const db=new Database(':memory:');try {
+   db.exec("CREATE TABLE items(id INTEGER PRIMARY KEY,value TEXT); INSERT INTO items VALUES(1,'kept'); PRAGMA user_version=1");
+   const owner={name:'row-change',SUPPORTED_SCHEMA_VERSION:2,supportsNewDatabase:false,
+    inspectSchema(connection,options){return inspectLayout(connection,'row-change',2,{items:['id','value']},options);},
+    MIGRATIONS:{1:{to:2,changes:declared?{rowChanges:['items']}:{},migrate(connection){connection.exec("INSERT INTO items VALUES(2,'new')");}}},
+   };
+   if(declared) {
+    migrateDatabase(db,owner);
+    assert.equal(db.pragma('user_version',{simple:true}),2);
+    assert.deepEqual(db.prepare('SELECT value FROM items ORDER BY id').all(),[{value:'kept'},{value:'new'}]);
+   } else {
+    assert.throws(()=>migrateDatabase(db,owner),/undeclared row-count change in items/);
+    assert.equal(db.pragma('user_version',{simple:true}),1);
+    assert.deepEqual(db.prepare('SELECT value FROM items').all(),[{value:'kept'}]);
+   }
+  }finally{db.close();}
+ }
+});
+
 test('historical fixture bytes match recorded immutable provenance',()=>{
  const provenance=JSON.parse(fs.readFileSync(new URL('provenance.json',fixtures),'utf8'));
  const repo=new URL('../../../../',import.meta.url);
