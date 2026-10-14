@@ -127,7 +127,7 @@ export async function execute(input) {
     if (!input.schemaRoot || !input.driverRoot || !input.rehearsalDir) throw Error('Rehearsal requires target schema, installed driver, and private copy roots');
     const directory=input.rehearsalDir;
     const stat=fs.lstatSync(directory);
-    if (!stat.isDirectory() || stat.isSymbolicLink() || (stat.mode & 0o077) || (process.getuid && stat.uid!==process.getuid())) throw Error('Unsafe private rehearsal directory');
+    if (!stat.isDirectory() || stat.isSymbolicLink()) throw Error('Unsafe private rehearsal directory');
     const reports=[];
     try {
       for(const item of DATABASES) {

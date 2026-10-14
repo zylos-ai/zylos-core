@@ -225,12 +225,32 @@ function capabilityModule({missingProc=false,missingFlock=false,platform='linux'
 test('Linux capability probe distinguishes trusted flock and present identity from each missing capability',()=>{
  assert.equal(capabilityModule().platformSupported('linux'),true,'positive control requires both capabilities');
  assert.equal(capabilityModule({missingFlock:true}).platformSupported('linux'),false);
+ assert.throws(()=>capabilityModule({missingFlock:true}).preflightExternalTools('linux'),/flock executable unavailable/);
  assert.equal(capabilityModule({missingProc:true}).identity().absent,true);
  assert.equal(capabilityModule({missingProc:true}).platformSupported('linux'),false);
 });
 
-for(const missing of ['missingFlock','missingProc'])test(`actual capability decision for Linux ${missing} still requires verified snapshots before installation`,t=>{
- const f=fixture(t),capability=capabilityModule({[missing]:true});
+test('missing Linux flock rejects before stopping services',t=>{
+ const f=fixture(t),capability=capabilityModule({missingFlock:true});
+ t.mock.method(m,'preflightExternalTools',()=>capability.preflightExternalTools('linux'));
+ f.deps.platform='linux';f.deps.protectionSupported=()=>capability.platformSupported('linux');
+ const result=f.run();assert.equal(result.success,false);assert.match(result.error,/flock executable unavailable/);
+ assert.equal(fs.readFileSync(f.state,'utf8'),'online');assert.equal(f.calls.length,0);
+ assert.equal(fs.existsSync(f.pm2Calls),false);
+});
+
+test('missing npm entry rejects before stopping services',t=>{
+ const f=fixture(t);
+ process.env.PATH=path.join(f.root,'bin');
+ delete f.deps.step4;
+ f.deps.probeCoreDbVersions=()=>({needsMigration:false,databases:CORE_DATABASES.map(item=>({source:item.source,status:'present',fromVersion:1,toVersion:1,needsMigration:false}))});
+ const result=f.run();assert.equal(result.success,false);assert.match(result.error,/npm-cli.js entry is unavailable/);
+ assert.equal(fs.readFileSync(f.state,'utf8'),'online');assert.equal(f.calls.length,0);
+ assert.equal(fs.existsSync(f.pm2Calls),false);
+});
+
+test('missing Linux process identity still requires verified snapshots before installation',t=>{
+ const f=fixture(t),capability=capabilityModule({missingProc:true});
  f.deps.platform='linux';f.deps.protectionSupported=()=>capability.platformSupported('linux');
  const result=f.run();assert.equal(result.success,true,JSON.stringify(result));
  assert.equal(result.backupOnly,true);assert.equal(result.dbSnapshotVerified,true);

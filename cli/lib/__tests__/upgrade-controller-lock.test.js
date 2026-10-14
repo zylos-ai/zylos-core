@@ -133,7 +133,7 @@ test('a stale release callback cannot release a newer owner in the same process'
   assert.throws(()=>m.acquire(dir),/still alive/);second();
 });
 
-test('missing flock and unsafe guard fail closed without replacing controller',t=>{
+test('missing flock and non-file guard fail closed; writable guard remains usable',t=>{
   const dir=fixture(t),lock=path.join(dir,'controller.json');
   m.durable(lock,{pid:2147483647,boot:'dead-boot',start:'0'});
   const before=fs.readFileSync(lock,'utf8');
@@ -148,8 +148,11 @@ test('missing flock and unsafe guard fail closed without replacing controller',t
   assert.notEqual(result.status,0);assert.match(result.stderr,/ENOENT/);
   assert.equal(fs.readFileSync(lock,'utf8'),before);
   fs.chmodSync(path.join(dir,'controller.guard'),0o666);
-  assert.throws(()=>m.acquire(dir),/unsafe controller guard/);
-  assert.equal(fs.readFileSync(lock,'utf8'),before);
+  const release=m.acquire(dir);release();
+  fs.rmSync(path.join(dir,'controller.guard'));
+  fs.mkdirSync(path.join(dir,'controller.guard'));
+  assert.throws(()=>m.acquire(dir),/EISDIR|unsafe controller guard/);
+  assert.equal(fs.existsSync(lock),false);
 });
 
 test('release after terminal directory archival leaves no active lock path',t=>{

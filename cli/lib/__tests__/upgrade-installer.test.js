@@ -44,18 +44,26 @@ test('runtime-only launcher death never proves direct npm exited',async t=>{
  assert.equal(f.helper.quiesce(f.dir,saved,{kind:'installer',terminate:true}).confirmed,false);
  assert.ok(f.helper.members(npmPid).length);
 });
-test('trusted npm resolver accepts mode 775 but rejects wrappers, unreadable and non-files',t=>{
+test('trusted npm resolver accepts mode 775 but rejects wrappers, non-executable, unreadable and non-files',t=>{
  const f=fixture(t,'// fixture'),bin=path.join(f.root,'bin');fs.mkdirSync(bin);fs.writeFileSync(path.join(bin,'npm'),'#!/bin/sh\nexit 0\n',{mode:0o700});const prior=process.env.PATH;
  try{
   process.env.PATH=bin;
   assert.throws(resolveProtectedNpmCli,/trusted npm-cli/);
   fs.unlinkSync(path.join(bin,'npm'));fs.symlinkSync(f.npmCli,path.join(bin,'npm'));
   fs.chmodSync(f.npmCli,0o775);assert.equal(resolveProtectedNpmCli(),f.npmCli);
+  fs.chmodSync(f.npmCli,0o644);assert.throws(resolveProtectedNpmCli,/trusted npm-cli/);
   fs.chmodSync(f.npmCli,0o000);
   if(process.geteuid?.()!==0)assert.throws(resolveProtectedNpmCli,/trusted npm-cli/);
   fs.unlinkSync(f.npmCli);fs.mkdirSync(f.npmCli);
   assert.throws(resolveProtectedNpmCli,/trusted npm-cli/);
  }finally{process.env.PATH=prior;}
+});
+
+test('npm resolver accepts a readable executable owned by another user',t=>{
+ const f=fixture(t,'// fixture'),bin=path.join(f.root,'bin');fs.mkdirSync(bin);fs.symlinkSync(f.npmCli,path.join(bin,'npm'));fs.chmodSync(f.npmCli,0o755);
+ const prior=process.env.PATH,statSync=fs.statSync;
+ t.mock.method(fs,'statSync',(file,...args)=>{const stat=statSync(file,...args);if(file===f.npmCli)stat.uid=-1;return stat;});
+ try{process.env.PATH=bin;assert.equal(resolveProtectedNpmCli(),f.npmCli);}finally{process.env.PATH=prior;}
 });
 
 test('protected installer canonicalizes a symlinked work directory before direct launch', t => {

@@ -22,6 +22,13 @@ test('group-writable recovery Node is accepted',t=>{
   t.mock.method(fs,'statSync',(file,...args)=>{const result=statSync(file,...args);if(file===node)result.mode=(result.mode&~0o777)|0o775;return result;});
   assert.doesNotThrow(()=>m.validateDescriptor(f.dir,f.j,f.d));
 });
+test('different Node owner and writable recovery files remain valid',t=>{
+  const f=fixture(t),node=fs.realpathSync(process.execPath),statSync=fs.statSync;
+  t.mock.method(fs,'statSync',(file,...args)=>{const result=statSync(file,...args);if(file===node)result.uid=-1;return result;});
+  fs.chmodSync(f.dir,0o775);
+  fs.chmodSync(path.join(f.dir,'runner.cjs'),0o666);
+  assert.doesNotThrow(()=>m.validateDescriptor(f.dir,f.j,f.d));
+});
 test('non-executable recovery Node is rejected',t=>{
   const f=fixture(t),node=fs.realpathSync(process.execPath),statSync=fs.statSync;
   t.mock.method(fs,'statSync',(file,...args)=>{const result=statSync(file,...args);if(file===node)result.mode=(result.mode&~0o777)|0o664;return result;});
@@ -133,15 +140,14 @@ for (const relative of ['.zylos', '.backup']) test(`legacy ${relative} mode0775 
   assert.doesNotThrow(() => m.assertCoreDatabaseAvailable(root));
   assert.equal(fs.statSync(parent).mode & 0o777, 0o775);
 });
-for (const relative of ['.zylos/upgrade', '.backup/self-upgrade', '.backup/self-upgrade-archive']) test(`writable recovery ${relative} remains fail closed when materials exist`, t => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'upgrade-writable-material-'));
-  t.after(() => fs.rmSync(root, {recursive:true, force:true}));
-  const material = path.join(root, relative);
+for (const relative of ['.zylos/upgrade', '.backup/self-upgrade', '.backup/self-upgrade-archive']) test(`writable recovery ${relative} accepts valid materials`, t => {
+  const f = readyFixture(t);
+  f.save();m.marker(f.root,f.dir,f.j);
+  const material = path.join(f.root, relative);
   fs.mkdirSync(material, {recursive:true, mode:0o700});
   fs.chmodSync(material, 0o775);
-  m.durable(path.join(root, '.zylos/upgrade/active.json'), {});
-  assert.equal(m.discover(root).blocked, true);
-  assert.throws(() => m.assertCoreDatabaseAvailable(root), /maintenance/);
+  assert.equal(m.discover(f.root).blocked, false);
+  assert.doesNotThrow(() => m.assertCoreDatabaseAvailable(f.root));
 });
 test('deployment root alias discovers canonical transaction and marker consistently', t => {
   const f = readyFixture(t);

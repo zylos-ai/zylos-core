@@ -119,7 +119,7 @@ function stableFixture(t, body) {
   return {root, stable, entry};
 }
 
-test('untrusted stable module or directory never executes before fixed isolated fallback', t => {
+test('writable stable modules load while symlinked modules remain isolated', t => {
   for (const attack of ['entry-writable', 'dependency-writable', 'entry-link', 'directory-link']) {
     const f = stableFixture(t, 'throw Error("must never execute");\n');
     const sentinel = path.join(f.root, 'executed');
@@ -136,8 +136,13 @@ test('untrusted stable module or directory never executes before fixed isolated 
       fs.renameSync(f.stable, target);
       fs.symlinkSync(target, f.stable);
     }
-    assert.match(upgradeStartupPrompt(f.root), /Upgrade discovery failed/);
-    assert.equal(fs.existsSync(sentinel), false, attack);
+    if (attack.endsWith('-writable')) {
+      assert.equal(upgradeStartupPrompt(f.root), null);
+      assert.equal(fs.existsSync(sentinel), true, attack);
+    } else {
+      assert.match(upgradeStartupPrompt(f.root), /Upgrade discovery failed/);
+      assert.equal(fs.existsSync(sentinel), false, attack);
+    }
   }
 });
 
@@ -182,7 +187,7 @@ test('nonblocking cue append preserves original prompt and avoids duplicate adap
   assert.deepEqual(applyUpgradePrompt([original], 'recovery cue', 0, {append: true}), [original]);
 });
 
- test('ordinary deployment skips incomplete or group-writable stable runtime discovery without upgrade materials', t => {
+ test('ordinary deployment skips incomplete stable runtime discovery without upgrade materials', t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'upgrade-normal-context-'));
   t.after(() => fs.rmSync(root, {recursive: true, force: true}));
   const stable = path.join(root, '.zylos/upgrade');

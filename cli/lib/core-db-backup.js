@@ -62,20 +62,18 @@ export function probeCoreDbVersions(zylosDir, tempDir, {driverRoot=path.join(zyl
 // random-name copies. Refuse ambiguous paths before stopping services.
 export function cleanupCoreDbRehearsals(zylosDir) {
   const removed=[];
-  const owner=process.getuid?.();
-  if(owner===undefined) throw Error('Cannot verify rehearsal directory ownership on this platform');
   const root=path.join(zylosDir,'.backup','db');
   for(const dir of [path.join(zylosDir,'.backup'),root]) {
     let stat;
     try {stat=fs.lstatSync(dir);} catch(error) {if(error.code==='ENOENT') return {removed};throw error;}
-    if(!stat.isDirectory()||stat.isSymbolicLink()||stat.uid!==owner) throw Error(`Unsafe rehearsal cleanup directory: ${dir}`);
+    if(!stat.isDirectory()||stat.isSymbolicLink()) throw Error(`Unsafe rehearsal cleanup directory: ${dir}`);
   }
   const candidates=[];
   for(const name of fs.readdirSync(root)) {
     if(name!=='.rehearsal'&&!/^\.rehearsal-[A-Za-z0-9_-]+$/.test(name)) continue;
     const dir=path.join(root,name);
     const stat=fs.lstatSync(dir);
-    if(!stat.isDirectory()||stat.isSymbolicLink()||stat.uid!==owner) throw Error(`Unsafe rehearsal copy: ${dir}`);
+    if(!stat.isDirectory()||stat.isSymbolicLink()) throw Error(`Unsafe rehearsal copy: ${dir}`);
     candidates.push(dir);
   }
   for(const dir of candidates) {

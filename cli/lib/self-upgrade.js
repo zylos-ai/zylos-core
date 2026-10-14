@@ -642,7 +642,7 @@ export function step3_stopCoreServices(ctx, deps = {}) {
 export function resolveProtectedNpmCli() {
   for(const directory of String(process.env.PATH||'').split(path.delimiter)){
     if(!path.isAbsolute(directory))continue;
-    try{const file=fs.realpathSync(path.join(directory,'npm')),st=fs.statSync(file);if(path.basename(file)==='npm-cli.js'&&st.isFile()&&[0,process.getuid?.()].includes(st.uid)){fs.accessSync(file,fs.constants.R_OK);return file;}}catch{}
+    try{const entry=path.join(directory,'npm');fs.accessSync(entry,fs.constants.X_OK);const file=fs.realpathSync(entry),st=fs.statSync(file);if(path.basename(file)==='npm-cli.js'&&st.isFile()){fs.accessSync(file,fs.constants.R_OK);return file;}}catch{}
   }
   throw Error('trusted npm-cli.js entry is unavailable');
 }
@@ -680,6 +680,7 @@ export function step4_npmInstallGlobal(ctx, deps = {}) {
     if (ctx.preInstallProtection) markInstallationIntent(ctx);
     if(ctx.preInstallProtection&&!deps.execSync){
       const npmCli=resolveProtectedNpmCli();
+      if(ctx.protectedNpmCli && npmCli!==ctx.protectedNpmCli)throw Error('npm-cli.js entry changed since preflight');
       const packed=runProtectedInstaller(ctx,{stage:'pack',npmCli,args:['pack','--pack-destination','.'],cwd:ctx.tempDir});
       const tarballName=packed.trim().split(/\r?\n/).at(-1);
       if(!tarballName||path.basename(tarballName)!==tarballName||!tarballName.endsWith('.tgz'))throw Error('npm pack returned an invalid tarball filename');
@@ -1782,6 +1783,14 @@ export function runSelfUpgrade({ tempDir, newVersion, mode, onStep } = {}, deps 
       }
     }
     catch (error) { return {action:'self_upgrade',success:false,error:error.message,rehearsalCleanup:ctx.rehearsalCleanup || {removed:error.removedRehearsals || []},preInstallProtection:false,rollback:{attempted:false,completed:false,performed:false},recovery_required:false}; }
+  }
+  if (!deps.preInstallSteps) {
+    try {
+      maintenance.preflightExternalTools(platform);
+      if (!deps.step4?.execSync) ctx.protectedNpmCli = resolveProtectedNpmCli();
+    } catch (error) {
+      return {action:'self_upgrade',success:false,error:error.message,rehearsalCleanup:ctx.rehearsalCleanup,preInstallProtection:false,rollback:{attempted:false,completed:false,performed:false},recovery_required:false};
+    }
   }
   if(!deps.preInstallSteps && eligible) {
     try {beginUpgrade(ctx,{zylosDir:deps.zylosDir ?? ZYLOS_DIR,skillsDir:deps.skillsDir ?? SKILLS_DIR},deps.step3);}

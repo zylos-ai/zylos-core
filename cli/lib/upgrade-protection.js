@@ -23,7 +23,7 @@ export function deployUpgradeBootstrap(root) {
     mode: 0o700
   });
   const metaStat = fs.lstatSync(meta);
-  if (!metaStat.isDirectory() || metaStat.isSymbolicLink() || process.getuid && metaStat.uid !== process.getuid()) throw Error('unsafe deployment metadata directory');
+  if (!metaStat.isDirectory() || metaStat.isSymbolicLink()) throw Error('unsafe deployment metadata directory');
   maintenance.fsyncDir(root);
   const dest = path.join(meta, 'upgrade');
   fs.mkdirSync(dest, {

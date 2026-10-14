@@ -51,10 +51,9 @@ function recoveryContext() {
     if (!hasRecoveryMaterials(root)) return null;
     const directory = path.join(root, '.zylos', 'upgrade');
     const entry = path.join(directory, 'bootstrap.cjs');
-    for (const [parent, shared] of [[path.join(root, '.zylos'), true], [directory, false]]) {
+    for (const parent of [path.join(root, '.zylos'), directory]) {
       const stat = fs.lstatSync(parent);
-      if (!stat.isDirectory() || stat.isSymbolicLink() ||
-          (process.getuid && stat.uid !== process.getuid()) || (!shared && (stat.mode & 0o022))) {
+      if (!stat.isDirectory() || stat.isSymbolicLink()) {
         throw Error('untrusted stable upgrade discovery directory');
       }
     }
@@ -63,8 +62,7 @@ function recoveryContext() {
       ...['bootstrap.cjs', 'maintenance.cjs'].map(name => [path.join(directory, name), false]),
     ]) {
       const stat = fs.lstatSync(file);
-      if (stat.isSymbolicLink() || (isDirectory ? !stat.isDirectory() : !stat.isFile()) ||
-          (process.getuid && stat.uid !== process.getuid()) || (stat.mode & 0o022)) {
+      if (stat.isSymbolicLink() || (isDirectory ? !stat.isDirectory() : !stat.isFile())) {
         throw Error('untrusted stable upgrade discovery material');
       }
     }

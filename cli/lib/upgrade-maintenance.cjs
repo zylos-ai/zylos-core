@@ -53,14 +53,9 @@ function durable(file, value) {
   fs.renameSync(tmp, file);
   fsyncDir(path.dirname(file));
 }
-function privatePath(file, {
-  directory = false,
-  sharedParent = false
-} = {}) {
+function privatePath(file, {directory = false} = {}) {
   const s = fs.lstatSync(file);
   if (s.isSymbolicLink() || (directory ? !s.isDirectory() : !s.isFile())) throw Error('unsafe recovery path: ' + file);
-  if (process.getuid && s.uid !== process.getuid()) throw Error('recovery owner mismatch: ' + file);
-  if (!sharedParent && s.mode & 0o022) throw Error('recovery path writable by other users: ' + file);
   return s;
 }
 function read(file) {
@@ -71,10 +66,7 @@ function read(file) {
 function transaction(root, dir) {
   root = fs.realpathSync(root);
   const active = path.join(root, '.backup', 'self-upgrade');
-  privatePath(path.join(root, '.backup'), {
-    directory: true,
-    sharedParent: true
-  });
+  privatePath(path.join(root, '.backup'), {directory: true});
   if (path.dirname(path.resolve(dir)) !== path.resolve(active) || !ID.test(path.basename(dir))) throw Error('invalid transaction directory');
   privatePath(active, {
     directory: true
@@ -235,16 +227,11 @@ function discover(root, {
       throw error;
     }
   };
-  // These pre-existing parents also hold ordinary runtime data. Their legacy
-  // group-writable mode alone is not evidence of a recovery transaction.
-  // Recovery-owned subdirectories and files retain the strict mode checks.
+  // These pre-existing parents also hold ordinary runtime data.
   for (const relative of ['.zylos', '.zylos/upgrade', '.backup']) {
     const directory = path.join(root, relative);
     try {
-      if (present(directory)) privatePath(directory, {
-        directory: true,
-        sharedParent: relative === '.zylos' || relative === '.backup'
-      });
+      if (present(directory)) privatePath(directory, {directory: true});
     } catch (error) {
       diagnostics.push(error.message);
     }
@@ -313,7 +300,7 @@ function discoverActive(root) {
   let marker = null;
   try {
     root = fs.realpathSync(root);
-    for (const relative of ['.zylos', '.zylos/upgrade']) privatePath(path.join(root, relative), {directory:true, sharedParent:relative === '.zylos'});
+    for (const relative of ['.zylos', '.zylos/upgrade']) privatePath(path.join(root, relative), {directory:true});
     marker = read(path.join(root, '.zylos/upgrade/active.json'));
     const dir = path.join(root, '.backup/self-upgrade', marker.transactionId || '');
     if (marker.formatVersion !== 1 || !ID.test(marker.transactionId) || marker.transactionDir !== dir) throw Error('invalid active marker');
@@ -381,10 +368,15 @@ function controllerFlock() {
     try {
       const executable = fs.realpathSync(candidate),
         s = fs.statSync(executable);
-      if (s.isFile() && s.mode & 0o111 && !(s.mode & 0o022) && (s.uid === 0 || s.uid === process.getuid?.())) return executable;
+      if (s.isFile() && s.mode & 0o111) return executable;
     } catch {}
   }
   throw Error('trusted Linux flock executable unavailable');
+}
+function preflightExternalTools(platform = process.platform) {
+  const node = fs.realpathSync(process.execPath), stat = fs.statSync(node);
+  if (!stat.isFile() || !(stat.mode & 0o111)) throw Error('untrusted recovery Node executable');
+  if (platform === 'linux') controllerFlock();
 }
 function serializedController(dir, operation, value) {
   if (operation === 'release' && !fs.existsSync(dir)) return;
@@ -395,7 +387,7 @@ function serializedController(dir, operation, value) {
   const fd = fs.openSync(guard, fs.constants.O_CREAT | fs.constants.O_RDWR | fs.constants.O_NOFOLLOW, 0o600);
   try {
     const s = fs.fstatSync(fd);
-    if (!s.isFile() || process.getuid && s.uid !== process.getuid() || s.mode & 0o077) throw Error('unsafe controller guard');
+    if (!s.isFile()) throw Error('unsafe controller guard');
     fsyncFd(fd);
     fsyncDir(dir);
     // /proc/self/fd/3 refers to the already validated inode, not a path that can
@@ -479,10 +471,7 @@ function acquire(dir, {
     const valid = j.formatVersion === 1 && ID.test(j.transactionId) && j.transactionId === path.basename(dir) && typeof j.zylosDir === 'string' && path.isAbsolute(j.zylosDir) && fs.realpathSync(j.zylosDir) === j.zylosDir;
     if (publishedDir !== undefined) {
       if (!valid || dir !== path.join(j.zylosDir, '.backup', 'self-upgrade-staging', j.transactionId) || publishedDir !== path.join(j.zylosDir, '.backup', 'self-upgrade', j.transactionId)) throw Error('invalid controller publication path');
-      privatePath(path.join(j.zylosDir, '.backup'), {
-        directory: true,
-        sharedParent: true
-      });
+      privatePath(path.join(j.zylosDir, '.backup'), {directory: true});
       privatePath(path.dirname(dir), {
         directory: true
       });
@@ -714,7 +703,7 @@ function validateDescriptor(dir, j, d) {
   if (d.formatVersion !== 1 || d.transactionId !== j.transactionId || d.nodePath !== j.nodePath || d.nodePath !== j.initialIdentity?.nodePath || typeof d.nodePath !== 'string' || !path.isAbsolute(d.nodePath)) throw Error('invalid recovery descriptor');
   const node = fs.realpathSync(d.nodePath),
     ns = fs.statSync(node);
-  if (node !== fs.realpathSync(process.execPath) || !ns.isFile() || !(ns.mode & 0o111) || process.getuid && ![0, process.getuid()].includes(ns.uid)) throw Error('untrusted recovery Node executable');
+  if (node !== fs.realpathSync(process.execPath) || !ns.isFile() || !(ns.mode & 0o111)) throw Error('untrusted recovery Node executable');
   const closure = path.join(dir, 'sqlite-runtime');
   const fixed = {
     runnerPath: path.join(dir, 'runner.cjs'),
@@ -818,6 +807,7 @@ function finishTerminal(dir, j) {
 module.exports = {
   fsyncFd,
   platformSupported,
+  preflightExternalTools,
   transaction,
   DB_PATHS,
   READY,

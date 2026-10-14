@@ -35,7 +35,7 @@ export function assertCoreDatabaseAvailable(root) {
   const stable = path.join(root, '.zylos/upgrade/maintenance.cjs');
   const stat = present(stable);
   if (stat) {
-    if (!stat.isFile() || stat.isSymbolicLink() || (stat.mode & 0o022) || (process.getuid && stat.uid !== process.getuid())) throw new Error('Core databases unavailable: unsafe stable maintenance entry');
+    if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('Core databases unavailable: unsafe stable maintenance entry');
     return require(stable).assertCoreDatabaseAvailable(root);
   }
   // Legacy/first-adoption deployments may have no stable recovery entry yet.
