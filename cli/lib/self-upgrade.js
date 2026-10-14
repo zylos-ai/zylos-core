@@ -1784,7 +1784,7 @@ export function runSelfUpgrade({ tempDir, newVersion, mode, onStep } = {}, deps 
     }
     catch (error) { return {action:'self_upgrade',success:false,error:error.message,rehearsalCleanup:ctx.rehearsalCleanup || {removed:error.removedRehearsals || []},preInstallProtection:false,rollback:{attempted:false,completed:false,performed:false},recovery_required:false}; }
   }
-  if (!deps.preInstallSteps) {
+  if (!deps.preInstallSteps && eligible) {
     try {
       maintenance.preflightExternalTools(platform);
       if (!deps.step4?.execSync) ctx.protectedNpmCli = resolveProtectedNpmCli();
