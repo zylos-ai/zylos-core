@@ -84,6 +84,18 @@ Runtime data (logs, databases, config) goes in `~/zylos/<skill-name>/`, NOT in t
 
 This keeps code (in `skills/`) separate from runtime data (in `~/zylos/`).
 
+### Core Database Schema Changes
+
+The C4 (`comm-bridge`), scheduler and web-console SQLite schemas are versioned.
+**Any change to a core table or column** — add, remove, rename, rebuild, change a
+column definition, or change existing rows as part of an upgrade — MUST:
+
+1. Bump that owner's `SUPPORTED_SCHEMA_VERSION` and update `TABLES` / `COLUMN_DEFINITIONS` to the new layout.
+2. Register one new adjacent step `MIGRATIONS[N] = { to: N+1, changes, migrate }` with a complete change declaration. Never edit released steps, `init-db.sql` or the 0→1 callback to reach the new layout.
+3. Add migration tests from the historical fixtures and from a v1 database with user-added tables/columns.
+
+Rules, declaration keys and a worked example: `docs/sqlite-migrations.md`. Undeclared changes fail the migration; upgrade rehearsal catches them before services stop.
+
 ## PM2 Process Management
 
 ### Ecosystem Configuration
