@@ -248,8 +248,10 @@ export function formatC4Reply(type, data) {
 // Shared human/C4 details preserve the independent upgrade and recovery outcomes.
 export function formatSelfUpgradeProtection(data) {
   const lines=[];
+  for(const dir of data.rehearsalCleanup?.removed || [])lines.push(`Removed rehearsal copy: ${dir}`);
+  for(const warning of data.rehearsalCleanup?.warnings || [])lines.push(`Rehearsal cleanup warning: ${warning}`);
   if(data.backupOnly){
-    lines.push(data.databaseMode==='unchanged' ? 'Database snapshot: skipped; schema versions unchanged' : `Database snapshot: ${data.dbSnapshotVerified?'verified':'not verified; installation not started'}`);
+    lines.push(`Database snapshot: ${data.dbSnapshotVerified?'verified':'not verified; installation not started'}`);
     lines.push('Automatic database recovery: disabled; recovery is manual');
     if(data.protectionUnavailableReason)lines.push(data.protectionUnavailableReason);
     if(data.backupDir)lines.push(`Code backup: ${data.backupDir}`);
@@ -258,6 +260,7 @@ export function formatSelfUpgradeProtection(data) {
     for(const warning of data.backupWarnings||[])lines.push(`Backup warning: ${warning}`);
   }
   if(typeof data.preInstallProtection==='boolean')lines.push(`Pre-install protection: ${data.preInstallProtection?'enabled':'unavailable'}`);
+  if(data.preInstallProtection && data.dbSnapshotVerified)lines.push('Database snapshot: verified');
   if(data.automaticCompensation===true)lines.push('Automatic compensation: available for observed failures after writer exit is confirmed');
   if(data.automaticResume===false)lines.push('Interrupted upgrade: manual recovery required; automatic takeover is disabled');
   if(data.dbBackupDir)lines.push(`Database snapshots: ${data.dbBackupDir}`);

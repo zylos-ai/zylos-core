@@ -65,24 +65,35 @@ function fixture(t) {
  return {root,skillsDir,tempDir,calls,deps,snapshots,untouchedMaintenance,state,pm2Calls,run:()=>runSelfUpgrade({tempDir,newVersion:'new'},deps)};
 }
 
-test('matching versions install code without rehearsal, database preflight, or snapshot', t => {
+test('matching versions clean old rehearsals and snapshot databases without rehearsal or migration', t => {
  const f=fixture(t);
  fs.mkdirSync(path.join(f.tempDir,'cli/lib'),{recursive:true});
  fs.writeFileSync(path.join(f.tempDir,'cli/lib/core-db-upgrade-protocol.json'),'{"codeOnlyVersion":1}');
+ const rehearsalRoot=path.join(f.root,'.backup/db');fs.mkdirSync(rehearsalRoot,{recursive:true});
+ const fixed=path.join(rehearsalRoot,'.rehearsal'),legacy=path.join(rehearsalRoot,'.rehearsal-old');
+ fs.mkdirSync(fixed);fs.mkdirSync(legacy);
  const before=CORE_DATABASES.map(item=>fs.readFileSync(path.join(f.root,item.source)));
  f.deps.probeCoreDbVersions=()=>({needsMigration:false,databases:CORE_DATABASES.map(item=>({source:item.source,status:'present',fromVersion:1,toVersion:1,needsMigration:false}))});
  f.deps.preflightCoreDbUpgrade=()=>assert.fail('database preflight must be skipped');
  f.deps.rehearseCoreDbUpgrade=()=>assert.fail('rehearsal must be skipped');
- f.deps.step3={snapshot:()=>assert.fail('database snapshot must be skipped')};
- f.deps.step4={execSync:command=>{assert.equal(fs.readFileSync(f.state,'utf8'),'stopped');f.calls.push(command);return command.startsWith('npm pack')?'fixture.tgz':'';}};
+ f.deps.step4={execSync:command=>{f.snapshots();assert.equal(fs.readFileSync(f.state,'utf8'),'stopped');f.calls.push(command);return command.startsWith('npm pack')?'fixture.tgz':'';}};
  const result=f.run();
  assert.equal(result.success,true,JSON.stringify(result));
- assert.equal(result.dbBackupDir,null);
- assert.equal(result.dbSnapshotVerified,false);
+ assert.equal(result.dbBackupDir,f.snapshots());
+ assert.equal(result.dbSnapshotVerified,true);
  assert.equal(f.calls.length,2);
- assert.equal(fs.existsSync(path.join(f.root,'.backup/db')),false,'no rehearsal or database snapshot directory');
+ assert.deepEqual(result.rehearsalCleanup.removed.sort(),[fixed,legacy].sort());
+ assert.equal(fs.existsSync(fixed),false);assert.equal(fs.existsSync(legacy),false);
  assert.deepEqual(CORE_DATABASES.map(item=>fs.readFileSync(path.join(f.root,item.source))),before);
  f.untouchedMaintenance();
+});
+test('an unsafe leftover rehearsal link rejects before service stop', t => {
+ const f=fixture(t),root=path.join(f.root,'.backup/db');fs.mkdirSync(root,{recursive:true});
+ const outside=path.join(f.root,'outside');fs.mkdirSync(outside);fs.symlinkSync(outside,path.join(root,'.rehearsal'));
+ const result=f.run();
+ assert.equal(result.success,false);assert.match(result.error,/Unsafe rehearsal copy/);
+ assert.equal(fs.readFileSync(f.state,'utf8'),'online');assert.equal(f.calls.length,0);
+ assert.equal(fs.lstatSync(path.join(root,'.rehearsal')).isSymbolicLink(),true);
 });
 
 test('matching versions reject a target without the code-only finalizer protocol before stop', t => {

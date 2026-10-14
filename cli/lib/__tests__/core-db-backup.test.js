@@ -7,7 +7,7 @@ import {createRequire} from 'node:module';
 import {spawnSync} from 'node:child_process';
 import {protectedDataReady} from '../upgrade-protection.js';
 import {fileURLToPath} from 'node:url';
-import {CORE_DATABASES,createCoreDbSnapshot,prepareRecoveryDependencies,probeCoreDbVersions,rehearseCoreDbUpgrade,runCoreDbWorker} from '../core-db-backup.js';
+import {CORE_DATABASES,cleanupCoreDbRehearsals,createCoreDbSnapshot,prepareRecoveryDependencies,probeCoreDbVersions,rehearseCoreDbUpgrade,runCoreDbWorker} from '../core-db-backup.js';
 const installed=process.env.CORE_DB_TEST_SKILL || path.join(os.homedir(),'zylos','.claude','skills','comm-bridge');
 let Database;try{Database=createRequire(path.join(installed,'package.json'))('better-sqlite3');}catch{}
 function fixture(t){const dir=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'core-db-')));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));return dir;}
@@ -37,6 +37,22 @@ test('version probe reads only user_version, detects a missing or older database
  try{c4.pragma('user_version=99');}finally{c4.close();}
  assert.throws(probe,/exceeds supported 1/);
  assert.equal(fs.existsSync(path.join(dir,'.backup/db')),false);
+});
+test('next upgrade removes fixed and legacy rehearsal copies but preserves snapshot groups', t => {
+ const dir=fixture(t),root=path.join(dir,'.backup/db');fs.mkdirSync(root,{recursive:true});
+ const fixed=path.join(root,'.rehearsal'),legacy=path.join(root,'.rehearsal-old123'),snapshot=path.join(root,'snapshot-1');
+ for(const target of [fixed,legacy,snapshot]){fs.mkdirSync(target);fs.writeFileSync(path.join(target,'copy.db'),'fixture');}
+ const result=cleanupCoreDbRehearsals(dir);
+ assert.deepEqual(result.removed.sort(),[fixed,legacy].sort());
+ assert.equal(fs.existsSync(fixed),false);assert.equal(fs.existsSync(legacy),false);
+ assert.equal(fs.existsSync(path.join(snapshot,'copy.db')),true);
+});
+test('unsafe rehearsal links reject before deleting any copy', t => {
+ const dir=fixture(t),root=path.join(dir,'.backup/db');fs.mkdirSync(root,{recursive:true});
+ const fixed=path.join(root,'.rehearsal'),outside=path.join(dir,'outside');fs.mkdirSync(fixed);fs.mkdirSync(outside);
+ fs.symlinkSync(outside,path.join(root,'.rehearsal-legacy'));
+ assert.throws(()=>cleanupCoreDbRehearsals(dir),/Unsafe rehearsal copy/);
+ assert.equal(fs.existsSync(fixed),true);assert.equal(fs.existsSync(outside),true);
 });
 test('missing DBs do not create files; orphan sidecars stop and preserve prior group',t=>{
  const dir=fixture(t);const first=createCoreDbSnapshot({zylosDir:dir,transactionId:'one',fromVersion:'1',toVersion:'2'});
@@ -153,7 +169,7 @@ test('target rehearsal migrates private copies before stop and leaves live datab
  assert.deepEqual(fs.readFileSync(source),before);
  assert.equal(fs.existsSync(path.join(dir,'scheduler/scheduler.db')),false);
  assert.equal(fs.existsSync(path.join(dir,'web-console/web-console.db')),false);
- assert.deepEqual(fs.readdirSync(path.join(dir,'.backup/db')).filter(name=>name.startsWith('.rehearsal-')),[]);
+ assert.deepEqual(fs.readdirSync(path.join(dir,'.backup/db')).filter(name=>name.startsWith('.rehearsal')),[]);
 });
 
 test('rehearsal worker receives a private backup path and parent removes it on failure',t=>{
@@ -171,11 +187,11 @@ test('rehearsal worker receives a private backup path and parent removes it on f
  `);
  assert.throws(()=>rehearseCoreDbUpgrade(dir,target),/injected rehearsal failure/);
  const result=JSON.parse(fs.readFileSync(observed,'utf8'));
- assert.ok(result.path.startsWith(path.join(dir,'.backup/db/.rehearsal-')));
+ assert.equal(result.path,path.join(dir,'.backup/db/.rehearsal'));
  assert.equal(result.mode,0o700);
  assert.equal(result.isDirectory,true);
  assert.equal(fs.existsSync(result.path),false);
- assert.deepEqual(fs.readdirSync(path.join(dir,'.backup/db')).filter(name=>name.startsWith('.rehearsal-')),[]);
+ assert.deepEqual(fs.readdirSync(path.join(dir,'.backup/db')).filter(name=>name.startsWith('.rehearsal')),[]);
 });
 
 test('normalized snapshots inspect directly with no temporary database and preserve live WAL bytes', {skip:!Database},t=>{

@@ -43,7 +43,7 @@ import { createRequire as createFinalizerRequire } from 'node:module';
 const finalizerRequire=createFinalizerRequire(import.meta.url);
 function requireFinalizerExit(dir,j,terminate){return finalizerRequire(path.join(dir,'finalizer.cjs')).quiesce(dir,j,{terminate});}
 
-import { preflightCoreDbUpgrade, probeCoreDbVersions, rehearseCoreDbUpgrade } from './core-db-backup.js';
+import { cleanupCoreDbRehearsals, preflightCoreDbUpgrade, probeCoreDbVersions, rehearseCoreDbUpgrade } from './core-db-backup.js';
 import { beginUpgrade, beginBackupOnly, prepareBackupOnlyInstall, saveProtectedCode, prepareProtectedInstall, markInstallationIntent, recovery, protectedDataReady, protectedSuccess, maintenance, maintenanceFor } from './upgrade-protection.js';
 
 const REPO = 'zylos-ai/zylos-core';
@@ -599,7 +599,7 @@ function getSkillsServices(deps = {}) {
 export function step3_stopCoreServices(ctx, deps = {}) {
   const startTime = Date.now();
   if (ctx.preInstallProtection) {try {prepareProtectedInstall(ctx,deps);return {step:3,name:'protect_databases_and_stop_services',status:'done',duration:Date.now()-startTime};}catch(error){return {step:3,name:'protect_databases_and_stop_services',status:'failed',error:error.message,duration:Date.now()-startTime};}}
-  if (ctx.backupOnly) {try {prepareBackupOnlyInstall(ctx,deps);return {step:3,name:ctx.databaseMode==='unchanged'?'stop_core_services':'backup_databases_and_stop_services',status:'done',dbBackupDir:ctx.dbBackupDir,message:ctx.databaseMode==='unchanged'?'Database versions unchanged; no database snapshot made. Automatic code recovery disabled.':`Verified database snapshot: ${ctx.dbBackupDir}. Automatic recovery disabled; failure requires manual recovery.`,duration:Date.now()-startTime};}catch(error){return {step:3,name:'backup_databases_and_stop_services',status:'failed',error:error.message,duration:Date.now()-startTime};}}
+  if (ctx.backupOnly) {try {prepareBackupOnlyInstall(ctx,deps);return {step:3,name:'backup_databases_and_stop_services',status:'done',dbBackupDir:ctx.dbBackupDir,message:`Verified database snapshot: ${ctx.dbBackupDir}. Automatic recovery disabled; failure requires manual recovery.`,duration:Date.now()-startTime};}catch(error){return {step:3,name:'backup_databases_and_stop_services',status:'failed',error:error.message,duration:Date.now()-startTime};}}
   const execSyncFn = deps.execSync ?? execSync;
   const getServices = deps.getSkillsServices ?? (() => getSkillsServices(deps));
   const stopService = deps.stopService ?? ((name) => {
@@ -675,7 +675,7 @@ export function step4_npmInstallGlobal(ctx, deps = {}) {
   }
 
   try {
-    if (ctx.backupOnly && ctx.databaseMode !== 'unchanged' && !ctx.dbSnapshotVerified) throw Error('verified preinstall database snapshot required before installation');
+    if (ctx.backupOnly && !ctx.dbSnapshotVerified) throw Error('verified preinstall database snapshot required before installation');
     // Pack first — creates a .tgz tarball (copies, not symlinks)
     if (ctx.preInstallProtection) markInstallationIntent(ctx);
     if(ctx.preInstallProtection&&!deps.execSync){
@@ -1518,9 +1518,10 @@ const POST_INSTALL_STEPS = [
 ];
 
 function backupOnlyResult(ctx, failed) {
-  if (!ctx.backupOnly) return ctx.preInstallProtection ? {automaticCompensation:true, automaticResume:process.platform !== 'darwin', databaseMode:ctx.databaseMode || 'migrate', databases:ctx.databases || ctx.databasePreflight?.databases || null} : {};
+  if (!ctx.backupOnly) return ctx.preInstallProtection ? {automaticCompensation:true, automaticResume:process.platform !== 'darwin', databaseMode:ctx.databaseMode || 'migrate', dbSnapshotVerified:ctx.dbSnapshotVerified===true, databases:ctx.databases || ctx.databasePreflight?.databases || null,...(ctx.rehearsalCleanup ? {rehearsalCleanup:ctx.rehearsalCleanup} : {})} : ctx.rehearsalCleanup ? {rehearsalCleanup:ctx.rehearsalCleanup} : {};
   return {
     backupOnly: true,
+    ...(ctx.rehearsalCleanup ? {rehearsalCleanup:ctx.rehearsalCleanup} : {}),
     databaseMode: ctx.databaseMode || 'migrate',
     backupDir: ctx.backupDir || null,
     automaticRecovery: false,
@@ -1535,8 +1536,6 @@ function backupOnlyResult(ctx, failed) {
       dbBackupDir: ctx.dbBackupDir || null,
       instructions: ctx.preInstallServicesRestored === true
         ? 'Installation was not started. The previously running services were left running or restored; no database restoration was performed.'
-        : ctx.databaseMode === 'unchanged'
-        ? 'Database versions were unchanged; no database snapshot was made. Inspect code and service state before restarting stopped services.'
         : ctx.dbSnapshotVerified
         ? 'Database recovery is manual. Preserve this snapshot; stop writers and verify code/schema compatibility before restoring databases or restarting services.'
         : 'No verified database snapshot is available. Installation was not started; inspect the failure before restarting stopped services.'
@@ -1709,6 +1708,7 @@ export function runSelfUpgradeFinalize(state = {}, deps = {}) {
   ctx.protectionUnavailableReason = state.protectionUnavailableReason;
   ctx.dbSnapshotVerified = state.dbSnapshotVerified === true;
   ctx.backupWarnings = state.backupWarnings;
+  ctx.rehearsalCleanup = state.rehearsalCleanup;
   ctx.preInstallProtection = state.schemaVersion===2 && state.preInstallProtection===true;
   ctx.transactionDir=state.transactionDir;ctx.transactionId=state.transactionId;ctx.coreManifest=state.coreManifest;ctx.dbBackupDir=state.dbBackupDir;ctx.dbManifest=state.dbManifest;ctx.databases=state.databases || null;
   if(ctx.preInstallProtection){
@@ -1772,6 +1772,7 @@ export function runSelfUpgrade({ tempDir, newVersion, mode, onStep } = {}, deps 
       const root = deps.zylosDir ?? ZYLOS_DIR;
       const prior = maintenance.discover(root);
       if (prior.candidates.length || prior.diagnostics.length || prior.marker) return {action:'self_upgrade',success:false,error:'unresolved prior upgrade transaction',preInstallProtection:false,rollback:{attempted:false,completed:false,performed:false},recovery_required:true};
+      ctx.rehearsalCleanup=(deps.cleanupCoreDbRehearsals ?? cleanupCoreDbRehearsals)(root);
       ctx.databaseVersions=(deps.probeCoreDbVersions ?? probeCoreDbVersions)(root,ctx.tempDir,{driverRoot:deps.skillsDir ?? SKILLS_DIR});
       if (!ctx.databaseVersions || typeof ctx.databaseVersions.needsMigration !== 'boolean' || !Array.isArray(ctx.databaseVersions.databases) || ctx.databaseVersions.databases.length !== 3) throw Error('Invalid database version probe result');
       ctx.databaseMode=ctx.databaseVersions.needsMigration?'migrate':'unchanged';
@@ -1784,17 +1785,17 @@ export function runSelfUpgrade({ tempDir, newVersion, mode, onStep } = {}, deps 
       }
       if (ctx.databaseMode === 'migrate') {
         ctx.databasePreflight=(deps.preflightCoreDbUpgrade ?? preflightCoreDbUpgrade)(root);
-        ctx.databaseRehearsal=(deps.rehearseCoreDbUpgrade ?? rehearseCoreDbUpgrade)(root,ctx.tempDir,{driverRoot:deps.skillsDir ?? SKILLS_DIR});
+        ctx.databaseRehearsal=(deps.rehearseCoreDbUpgrade ?? rehearseCoreDbUpgrade)(root,ctx.tempDir,{driverRoot:deps.skillsDir ?? SKILLS_DIR,onCleanup:cleanup=>ctx.rehearsalCleanup.removed.push(...cleanup.removed)});
       }
     }
-    catch (error) { return {action:'self_upgrade',success:false,error:error.message,preInstallProtection:false,rollback:{attempted:false,completed:false,performed:false},recovery_required:false}; }
+    catch (error) { return {action:'self_upgrade',success:false,error:error.message,rehearsalCleanup:ctx.rehearsalCleanup || {removed:error.removedRehearsals || []},preInstallProtection:false,rollback:{attempted:false,completed:false,performed:false},recovery_required:false}; }
   }
   if(!deps.preInstallSteps && eligible) {
     try {beginUpgrade(ctx,{zylosDir:deps.zylosDir ?? ZYLOS_DIR,skillsDir:deps.skillsDir ?? SKILLS_DIR},deps.step3);}
-    catch(error){return {action:'self_upgrade',success:false,error:error.message,preInstallProtection:false,rollback:{attempted:false,completed:false,performed:false},recovery_required:!!ctx.transactionDir};}
+    catch(error){return {action:'self_upgrade',success:false,error:error.message,rehearsalCleanup:ctx.rehearsalCleanup,preInstallProtection:false,rollback:{attempted:false,completed:false,performed:false},recovery_required:!!ctx.transactionDir};}
   } else if (!eligible && !deps.preInstallSteps) {
     try {beginBackupOnly(ctx,{zylosDir:deps.zylosDir ?? ZYLOS_DIR,skillsDir:deps.skillsDir ?? SKILLS_DIR});}
-    catch(error){return {action:'self_upgrade',success:false,error:error.message,preInstallProtection:false,rollback:{attempted:false,completed:false,performed:false}};}
+    catch(error){return {action:'self_upgrade',success:false,error:error.message,rehearsalCleanup:ctx.rehearsalCleanup,preInstallProtection:false,rollback:{attempted:false,completed:false,performed:false}};}
   }
 
   const preInstallSteps = deps.preInstallSteps ?? [
@@ -1848,6 +1849,7 @@ export function runSelfUpgrade({ tempDir, newVersion, mode, onStep } = {}, deps 
       backupDir: finalizeResult.backupDir || ctx.backupDir,
       dbBackupDir:finalizeResult.dbBackupDir || ctx.dbBackupDir || null,
       databases:finalizeResult.databases || ctx.databasePreflight?.databases || ctx.dbManifest?.databases || null,
+      ...(ctx.rehearsalCleanup ? {rehearsalCleanup:ctx.rehearsalCleanup} : {}),
     };
   } catch (err) {
     const error = err.stderr?.toString().trim() || err.message;

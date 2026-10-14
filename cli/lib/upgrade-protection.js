@@ -104,6 +104,7 @@ export function beginUpgrade(ctx, {
     to: ctx.to,
     phase: 'preparing',
     databaseMode: ctx.databaseMode === 'unchanged' ? 'unchanged' : 'migrate',
+    snapshotRequired: true,
     installationIntent: false,
     automaticCompensation: true,
     automaticResume: process.platform !== 'darwin',
@@ -202,13 +203,11 @@ export function beginBackupOnly(ctx, {zylosDir, skillsDir}) {
   ctx.backupOnlyRoot = zylosDir;
   ctx.backupOnlySkillsDir = expectedSkills;
   ctx.preInstallProtection = false;
-  ctx.protectionUnavailableReason = ctx.databaseMode === 'unchanged'
-    ? 'automatic code recovery unavailable; database versions are unchanged and no database snapshot is made'
-    : 'automatic recovery unavailable; a verified preinstall database snapshot is required; database recovery is manual';
+  ctx.protectionUnavailableReason = 'automatic recovery unavailable; a verified preinstall database snapshot is required; database recovery is manual';
 }
 export function prepareBackupOnlyInstall(ctx, deps = {}) {
   const zylosDir = ctx.backupOnlyRoot, skillsDir = ctx.backupOnlySkillsDir;
-  if (ctx.databaseMode !== 'unchanged') (deps.probeSnapshotSync ?? probeCoreDbSnapshotSync)(zylosDir);
+  (deps.probeSnapshotSync ?? probeCoreDbSnapshotSync)(zylosDir);
   const j = {zylosDir, skillsDir, initialIdentity: {ecosystemHash: null}};
   const services = (deps.services ?? maintenance.services)(j);
   j.originalServices = services.filter(s => s.status === 'online');
@@ -218,7 +217,6 @@ export function prepareBackupOnlyInstall(ctx, deps = {}) {
     // stop may partially succeed before throwing; the cleanup covers it too.
     (deps.stop ?? maintenance.stopBackupOnly)(j);
     ctx.servicesStopped = [...ctx.servicesWereRunning];
-    if (ctx.databaseMode === 'unchanged') return;
     const snapshot = (deps.snapshot ?? createCoreDbSnapshot)({
       zylosDir, transactionId: 'backup-' + Date.now() + '-' + crypto.randomBytes(6).toString('hex'),
       fromVersion: ctx.from, toVersion: ctx.to
@@ -292,23 +290,22 @@ export function prepareProtectedInstall(ctx, overrides = {}) {
   maintenance.update(dir, j, {
     phase: 'offline'
   });
-  let snapshot;
-  if (j.databaseMode !== 'unchanged') {
-    snapshot = (overrides.snapshot ?? createCoreDbSnapshot)({
-      zylosDir: j.zylosDir,
-      transactionId: j.transactionId,
-      fromVersion: j.from,
-      toVersion: j.to
-    });
-    ctx.dbBackupDir = snapshot.dbBackupDir;
-    ctx.dbManifest = snapshot.manifest;
-    ctx.backupWarnings = snapshot.warnings;
-    maintenance.update(dir, j, {
-      phase: 'snapshot_saved',
-      dbBackupDir: snapshot.dbBackupDir,
-      snapshotManifestHash: maintenance.hash(path.join(snapshot.dbBackupDir, 'manifest.json'))
-    });
-  }
+  const snapshot = (overrides.snapshot ?? createCoreDbSnapshot)({
+    zylosDir: j.zylosDir,
+    transactionId: j.transactionId,
+    fromVersion: j.from,
+    toVersion: j.to
+  });
+  ctx.dbBackupDir = snapshot.dbBackupDir;
+  ctx.dbManifest = snapshot.manifest;
+  ctx.backupWarnings = snapshot.warnings;
+  (overrides.verifySnapshot ?? runCoreDbWorker)({action:'verify',zylosDir:j.zylosDir,dbBackupDir:snapshot.dbBackupDir,manifest:snapshot.manifest});
+  ctx.dbSnapshotVerified = true;
+  maintenance.update(dir, j, {
+    phase: 'snapshot_saved',
+    dbBackupDir: snapshot.dbBackupDir,
+    snapshotManifestHash: maintenance.hash(path.join(snapshot.dbBackupDir, 'manifest.json'))
+  });
   for (const [src, name] of recoveryFiles()) {
     const file = path.join(dir, name);
     fs.copyFileSync(path.join(library, src), file);
@@ -340,7 +337,7 @@ export function prepareProtectedInstall(ctx, overrides = {}) {
     phase: 'runner_saved'
   });
   maintenance.validateDescriptor(dir, j, descriptor);
-  if (snapshot) {
+  if (j.databaseMode !== 'unchanged') {
     const checked = maintenance.preflight(dir, j, snapshot.manifest);
     if (checked.success === false) throw Error(checked.error || 'saved readonly worker self-check failed');
   }

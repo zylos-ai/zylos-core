@@ -53,15 +53,42 @@ export function preflightCoreDbUpgrade(zylosDir) {
   return runCoreDbWorker({action: 'offline-preflight', zylosDir});
 }
 // Compare only SQLite user_version with the downloaded release's declared
-// versions. This is the sole live-database read on a code-only upgrade.
+// versions. This is the sole pre-stop live-database read when versions match.
 export function probeCoreDbVersions(zylosDir, tempDir, {driverRoot=path.join(zylosDir,'.claude','skills')}={}) {
   const schemaRoot=path.join(tempDir,'skills');
   return runCoreDbWorker({action:'version-probe',zylosDir,schemaRoot,driverRoot});
 }
+// Clear a fixed-name rehearsal left by an interrupted upgrade, plus older
+// random-name copies. Refuse ambiguous paths before stopping services.
+export function cleanupCoreDbRehearsals(zylosDir) {
+  const removed=[];
+  const owner=process.getuid?.();
+  if(owner===undefined) throw Error('Cannot verify rehearsal directory ownership on this platform');
+  const root=path.join(zylosDir,'.backup','db');
+  for(const dir of [path.join(zylosDir,'.backup'),root]) {
+    let stat;
+    try {stat=fs.lstatSync(dir);} catch(error) {if(error.code==='ENOENT') return {removed};throw error;}
+    if(!stat.isDirectory()||stat.isSymbolicLink()||stat.uid!==owner) throw Error(`Unsafe rehearsal cleanup directory: ${dir}`);
+  }
+  const candidates=[];
+  for(const name of fs.readdirSync(root)) {
+    if(name!=='.rehearsal'&&!/^\.rehearsal-[A-Za-z0-9_-]+$/.test(name)) continue;
+    const dir=path.join(root,name);
+    const stat=fs.lstatSync(dir);
+    if(!stat.isDirectory()||stat.isSymbolicLink()||stat.uid!==owner) throw Error(`Unsafe rehearsal copy: ${dir}`);
+    candidates.push(dir);
+  }
+  for(const dir of candidates) {
+    try {fs.rmSync(dir,{recursive:true});}
+    catch(error) {error.removedRehearsals=removed;throw error;}
+    removed.push(dir);
+  }
+  return {removed};
+}
 // Run the downloaded release's real migration code against SQLite online
 // backup copies while services are still running. This is an early warning;
 // the stopped, snapshotted databases are migrated and checked again later.
-export function rehearseCoreDbUpgrade(zylosDir, tempDir, {driverRoot=path.join(zylosDir,'.claude','skills')}={}) {
+export function rehearseCoreDbUpgrade(zylosDir, tempDir, {driverRoot=path.join(zylosDir,'.claude','skills'),onCleanup}={}) {
   const schemaRoot=path.join(tempDir,'skills');
   const workerPath=path.join(tempDir,'cli','lib','core-db-backup-worker.js');
   if (!fs.existsSync(workerPath) || !fs.existsSync(path.join(schemaRoot,'comm-bridge','scripts','sqlite-schema.js'))) {
@@ -80,7 +107,10 @@ export function rehearseCoreDbUpgrade(zylosDir, tempDir, {driverRoot=path.join(z
       fs.mkdirSync(directory,{mode:0o700});
     }
   }
-  const rehearsalDir=fs.mkdtempSync(path.join(zylosDir,'.backup','db','.rehearsal-'));
+  const cleanup=cleanupCoreDbRehearsals(zylosDir);
+  onCleanup?.(cleanup);
+  const rehearsalDir=path.join(zylosDir,'.backup','db','.rehearsal');
+  fs.mkdirSync(rehearsalDir,{mode:0o700});
   fs.chmodSync(rehearsalDir,0o700);
   try {return runCoreDbWorker({action:'rehearse',zylosDir,schemaRoot,driverRoot,rehearsalDir},{workerPath});}
   finally {fs.rmSync(rehearsalDir,{recursive:true,force:true});}

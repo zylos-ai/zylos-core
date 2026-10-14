@@ -1,19 +1,21 @@
 # Protected self-upgrade and file-only recovery
 
-When any core database needs a schema migration, protected upgrades snapshot
+Every Core upgrade snapshots
 `comm-bridge/c4.db`, `scheduler/scheduler.db`, and `web-console/web-console.db`
-before npm installation. A failed protected installation or finalizer restores
+after stopping services and before npm installation. When migration is needed,
+a failed protected installation or finalizer restores
 declared core skill directories, the original PM2 ecosystem, and these databases
 using a saved independent runner. If all three database versions already match
-the target release, the upgrade reads their versions once and leaves the
-databases outside the upgrade transaction. Code and service recovery still use
-the saved runner. The command still reports a failed upgrade if compensation runs.
+the target release, the upgrade skips rehearsal, migration, and upgrade database checks.
+It still creates and verifies the database snapshots before installation. The
+same-version recovery path currently restores code and services; the retained
+snapshot is available for manual database recovery. The command still reports
+a failed upgrade if compensation runs.
 
 ## Backup and automatic recovery are separate capabilities
 
-Every self-upgrade that changes a core database version requires a verified
-preinstall snapshot of all three databases. A code-only upgrade does not create
-one. Automatic recovery additionally requires controller
+Every self-upgrade requires a verified preinstall snapshot of all three
+databases, including when schema versions match. Automatic recovery additionally requires controller
 ownership and recovery publication; Linux crash takeover also requires process
 identity. The command selects one of two modes:
 
@@ -22,10 +24,10 @@ identity. The command selects one of two modes:
   interrupted recovery; macOS requires the original upgrade controller to remain
   alive and treats interrupted ownership as manual recovery.
 - **Backup-only upgrade:** `backupOnly=true`, `preInstallProtection=false`,
-  `automaticRecovery=false`. When migration is needed, installation can proceed
+  `automaticRecovery=false`. Installation can proceed
   only after services and known writers have stopped and the database snapshot
   has been created and verified. Database and code recovery after failure are
-  manual. A code-only upgrade stops services but makes no database snapshot.
+  manual.
 
 On Linux, missing trusted `flock` or usable `/proc` process identity disables
 automatic recovery, not the required database backup. macOS uses the existing
@@ -58,9 +60,9 @@ for unresolved recovery work and reads each existing database's SQLite
 `user_version` through a readonly connection. It compares those values with
 the downloaded release's declared schema versions. A missing database counts as
 needing migration; a version newer than the target is rejected. If all three
-versions match, the upgrade skips database preflight, rehearsal, snapshot,
-migration and structural checks. It requires a target release that supports
-this code-only path. No database backup is available for a code-only upgrade.
+versions match, the upgrade skips database preflight, rehearsal, migration and
+structural checks. It requires a target release that supports this path. After
+service stop, it creates and verifies all three database snapshots before install.
 
 If any database needs migration, both upgrade modes probe the snapshot
 destination and Node sync, load each owner's SQLite driver, and check existing
@@ -73,13 +75,13 @@ also freeze recovery dependencies before stop.
 
 When migration is needed, the downloaded target must contain the rehearsal
 worker and schema code. A target without them is rejected before service stop,
-including when selected with `--branch` to test an older release. Rehearsal copies are kept in a private
-0700 directory at `.backup/db/.rehearsal-*` under the Zylos data directory.
-The updater removes that directory on normal exit or worker timeout. An abrupt
-kill of the updater can leave a copy behind. To identify one, inspect the
-`.rehearsal-*` entries under that exact `.backup/db` path and compare their
-timestamps with the interrupted upgrade; distinguish them from snapshot groups
-that contain `manifest.json`. Preserve uncertain material for recovery review.
+including when selected with `--branch` to test an older release. Rehearsal copies use the private
+0700 directory `.backup/db/.rehearsal` under the Zylos data directory.
+The updater removes it on normal exit or worker timeout. An abrupt kill can
+leave it behind. Before each subsequent upgrade, the updater checks that this
+directory and legacy `.rehearsal-*` copies are real directories owned by the
+current user, then removes them before stopping services. Unsafe entries block
+the upgrade. Formal snapshot groups are outside this rehearsal cleanup.
 
 ### Local schema extensions
 
@@ -216,10 +218,10 @@ frozen recovery code within the same attempt. A child-process exit alone is not
 proof that all detached descendants have exited; the existing process-group
 checks remain required.
 
-When migration is needed, both platforms retain preinstall three-database
-snapshots and schema checks. Service isolation and frozen protected-recovery
+Both platforms retain preinstall three-database snapshots; migration paths also
+run schema checks. Service isolation and frozen protected-recovery
 materials apply to both migration and code-only upgrades. macOS does not provide unattended
-crash/reboot takeover. In backup-only mode, a migration still requires a
+crash/reboot takeover. In backup-only mode, every upgrade requires a
 verified snapshot before installation. Failures while setting up an already selected
 protected transaction abort that attempt rather than silently changing modes.
 
@@ -306,8 +308,8 @@ Protected results distinguish `automaticCompensation` from `automaticResume`.
 On macOS the former is true and the latter false: a completed ordinary failure
 compensation does not imply that a new process can take over after interruption.
 
-JSON, human output, and C4 replies expose snapshot paths and per-database
-states when snapshots exist; code-only upgrades report the skipped snapshot.
+JSON, human output, and C4 replies expose snapshot paths, verification status,
+rehearsal cleanup, and per-database states when available.
 Backup-only output explicitly identifies disabled automatic recovery, snapshot verification status,
 and manual recovery instructions. A failed attempt requires manual inspection;
 this is not a claim that a database restore is always necessary. Protected output
@@ -318,9 +320,8 @@ Schema-extension reports identify each affected database, table, and extra
 column. A name collision or undeclared loss reports the affected object and
 blocks the upgrade; there is no schema-extension opt-in command.
 
-Backup-only migration attempts retain database snapshots and code backup material
-for manual recovery, including after successful installation. Code-only attempts
-retain code backup material without a database snapshot. They do not have the
+Backup-only attempts retain database snapshots and code backup material
+for manual recovery, including after successful installation. They do not have the
 transaction journals or rescue runner described below.
 
 Successful protected-upgrade cleanup removes only the fixed transaction `code/` copy,

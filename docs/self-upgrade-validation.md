@@ -104,7 +104,7 @@ This is an evidence map, not a claim that every environmental fault permutation 
 | A28 | Direct detached installer/finalizer tests cover timeout/failure/success with descendants. Live caller kills and checks its process group; interruption before PID publication remains isolated, and recovery never kills a potentially reused saved PID. Unknown phases/hash/material conflicts never restore. No deliberately escaped sessions guarantee. |
 | A29 | Initial journal without descriptor/snapshot, committed WAL/checkpoint, changed CLI tree/link, and abort-write/cleanup interruption exercised; durable intent and initial publication ordering reviewed. Not every preinstall phase has a distinct real-machine crash run. |
 | A30 | 100 verified terminals plus real active transaction contract; incomplete/forged terminal shape and provisional abort regressions; residual marker continuation; 32-active bounded-memory fixture and exhausted scan budget fail closed. |
-| F01 | Version-only readonly probe compares all three live `user_version` values with target schema versions. Equal versions skip rehearsal, snapshot, migration and upgrade DB checks while preserving code recovery; one older or missing database takes the full protected path; a newer version rejects before service stop. |
+| F01 | Version-only readonly probe compares all three live `user_version` values with target schema versions. Equal versions skip rehearsal, migration and upgrade DB checks while retaining a verified three-database snapshot and code recovery; one older or missing database takes the full protected path; a newer version rejects before service stop. |
 
 ## macOS protected recovery extension
 

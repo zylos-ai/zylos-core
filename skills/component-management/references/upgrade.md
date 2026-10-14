@@ -96,9 +96,9 @@ The CLI executes the post-upgrade hook (if declared) and restarts the service (i
 
 Self-upgrade first reads only the SQLite `user_version` of the C4,
 scheduler, and web-console databases. If all three versions match the target
-release, it skips database preflight, rehearsal copies, snapshots, migrations,
-and upgrade structure/integrity checks. It still stops services for installation
-and has no database snapshot to restore. Protected mode retains code recovery;
+release, it skips database preflight, rehearsal copies, migrations,
+and upgrade structure/integrity checks. It still stops services, then creates
+and verifies all three database snapshots before installation. Protected mode retains code recovery;
 backup-only mode requires manual recovery.
 If any database is older or missing, the full database path below applies. A
 version newer than the target is rejected before service stop.
@@ -137,11 +137,10 @@ the verified snapshots and compensates protected code. Backup-only mode
 requires manual recovery. The downloaded target must include rehearsal code on
 this path or the upgrade is rejected before service stop; this applies to
 `--branch` targets that point at older releases. Rehearsal copies live under
-private `.backup/db/.rehearsal-*` directories (0700). Normal exit or worker
-timeout removes them, but an abrupt
-updater kill can leave one. Identify it by its path and timestamp and compare
-it with snapshot groups containing `manifest.json`; preserve uncertain material
-for recovery review.
+private `.backup/db/.rehearsal` (0700). Normal exit or worker timeout removes
+it. The next upgrade checks and removes that directory and legacy
+`.rehearsal-*` copies before stopping services; a symlink, non-directory, or
+wrong-owner entry blocks cleanup. Formal snapshot groups are unaffected.
 
 An installed older updater runs preflight before the target release is installed.
 It may reject extra tables or columns and cannot use the new release's rules.

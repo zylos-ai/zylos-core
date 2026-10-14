@@ -108,15 +108,21 @@ test('unchanged database transaction aborts before install without database insp
  assert.equal(f.m.discover(f.root).blocked,false);
 });
 
-test('ready journal permits absent snapshot only for explicit unchanged mode',async t=>{
+test('ready journal requires snapshots for new transactions and reads legacy unchanged journals',async t=>{
  const f=await fixture(t);
  f.m.update(f.dir,f.j,{phase:'new_data_ready'});
  assert.doesNotThrow(()=>f.m.transaction(f.root,f.dir));
  f.j.databaseMode='unchanged';
  f.m.update(f.dir,f.j);
- assert.throws(()=>f.m.transaction(f.root,f.dir),/must not claim a snapshot/);
+ assert.doesNotThrow(()=>f.m.transaction(f.root,f.dir));
+ f.j.snapshotRequired=true;
+ f.m.update(f.dir,f.j);
+ assert.doesNotThrow(()=>f.m.transaction(f.root,f.dir));
  delete f.j.dbBackupDir;
  delete f.j.snapshotManifestHash;
+ f.m.update(f.dir,f.j);
+ assert.throws(()=>f.m.transaction(f.root,f.dir),/invalid data-ready installation\/material identity/);
+ delete f.j.snapshotRequired;
  f.m.update(f.dir,f.j);
  assert.doesNotThrow(()=>f.m.transaction(f.root,f.dir));
  f.j.databaseMode='migrate';
@@ -124,7 +130,7 @@ test('ready journal permits absent snapshot only for explicit unchanged mode',as
  assert.throws(()=>f.m.transaction(f.root,f.dir),/invalid data-ready installation\/material identity/);
 });
 
-test('protected code-only upgrade skips every database upgrade phase and completes code recovery journal',async t=>{
+for(const verificationFails of [false,true])test(`protected same-version snapshot ${verificationFails?'verification failure aborts before install':'is verified before install'}`,async t=>{
  const f=await fixture(t);
  f.m.unmark(f.root,f.j);fs.rmSync(f.dir,{recursive:true});fs.rmSync(path.join(f.root,'.backup/db'),{recursive:true});
  const incoming=path.join(f.root,'incoming-package');
@@ -146,9 +152,10 @@ test('protected code-only upgrade skips every database upgrade phase and complet
    probeCoreDbVersions:()=>({needsMigration:false,databases:CORE_DATABASES.map(item=>({source:item.source,status:'present',fromVersion:1,toVersion:1,needsMigration:false}))}),
    preflightCoreDbUpgrade:()=>assert.fail('database preflight must be skipped'),
    rehearseCoreDbUpgrade:()=>assert.fail('rehearsal must be skipped'),
-   step3:{snapshot:()=>assert.fail('database snapshot must be skipped')},
+   step3:verificationFails?{verifySnapshot:()=>{throw Error('injected snapshot verification failure');}}:{},
    step4:{execSync:command=>{installed++;return command.startsWith('npm pack')?'fixture.tgz\n':'';}},
    runInstalledFinalizer:ctx=>{
+    if(verificationFails)assert.fail('finalizer must not run after snapshot verification failure');
     assert.equal(ctx.databaseMode,'unchanged');
     protectedDataReady(ctx,{migrate:()=>assert.fail('migration must be skipped'),verify:()=>assert.fail('database verification must be skipped')});
     protectedSuccess(ctx);
@@ -159,11 +166,12 @@ test('protected code-only upgrade skips every database upgrade phase and complet
   process.env.PATH=priorPath;
   if(priorRoot===undefined)delete process.env.ZYLOS_DIR;else process.env.ZYLOS_DIR=priorRoot;
  }
- assert.equal(result.success,true,JSON.stringify(result));
+ assert.equal(result.success,!verificationFails,JSON.stringify(result));
  assert.equal(result.databaseMode,'unchanged');
- assert.equal(result.dbBackupDir,null);
- assert.equal(installed,2);
- assert.equal(fs.existsSync(path.join(f.root,'.backup/db')),false);
+ assert.ok(result.dbBackupDir);
+ assert.equal(result.dbSnapshotVerified,!verificationFails);
+ assert.equal(installed,verificationFails?0:2);
+ assert.equal(fs.existsSync(path.join(result.dbBackupDir,'manifest.json')),true);
  assert.deepEqual(CORE_DATABASES.map(item=>fs.readFileSync(f.db(item.source))),before);
  assert.equal(f.m.discover(f.root).blocked,false);
 });

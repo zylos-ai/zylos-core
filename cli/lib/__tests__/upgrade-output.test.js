@@ -53,9 +53,9 @@ test('backup-only success reports verified snapshots and unavailable automatic r
  assert.match(text,/verified/i);assert.match(text,/automatic.*(unavailable|disabled)/i);assert.match(text,/manual/i);assert.match(text,/\/fixture\/manual\/db/);
  assert.doesNotMatch(text,/maintenance remains active/);
 });
-test('code-only upgrade output reports a deliberately skipped database snapshot',()=>{
- const text=formatSelfUpgradeProtection({success:true,preInstallProtection:false,backupOnly:true,databaseMode:'unchanged',dbSnapshotVerified:false,manualRecovery:{required:false,instructions:'Database versions were unchanged.'}});
- assert.match(text,/Database snapshot: skipped; schema versions unchanged/);
+test('same-version upgrade output reports its verified database snapshot',()=>{
+ const text=formatSelfUpgradeProtection({success:true,preInstallProtection:false,backupOnly:true,databaseMode:'unchanged',dbSnapshotVerified:true,dbBackupDir:'/fixture/manual/db',manualRecovery:{required:false,instructions:'Database versions were unchanged.'}});
+ assert.match(text,/Database snapshot: verified/);
  assert.doesNotMatch(text,/installation not started/);
 });
 test('backup-only failure reports manual recovery without claiming automatic maintenance isolation',()=>{
