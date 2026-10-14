@@ -94,8 +94,16 @@ The CLI executes the post-upgrade hook (if declared) and restarts the service (i
 
 ### Core database schema extensions
 
-Protected self-upgrade checks the C4, scheduler, and web-console databases
-before stopping their services. It accepts and reports additional tables and
+Self-upgrade first reads only the SQLite `user_version` of the C4,
+scheduler, and web-console databases. If all three versions match the target
+release, it skips database preflight, rehearsal copies, snapshots, migrations,
+and upgrade structure/integrity checks. It still stops services for installation
+and has no database snapshot to restore. Protected mode retains code recovery;
+backup-only mode requires manual recovery.
+If any database is older or missing, the full database path below applies. A
+version newer than the target is rejected before service stop.
+
+On the migration path, the upgrade accepts and reports additional tables and
 columns, copies them into the verified database snapshots, and preserves them
 through declared migration steps starting at schema version 1→2. The released
 legacy 0→1 step has no per-step change checks; its result must satisfy the v1
@@ -119,17 +127,18 @@ They do not inspect indexes, triggers, or views, and a core table rebuild can
 lose user-created indexes or triggers. A same-count edit can change row meaning
 without being detected, so review dependent objects and relevant content.
 
-Both protected and backup-only self-upgrades rehearse the target migration chain
-on isolated SQLite backup copies before service stop. A passed rehearsal is only
-an early warning check. After service stop, the updater takes and verifies the
-authoritative snapshots and reruns the full checks and migrations against the
-actual databases. Each database's chain is atomic. If a later database fails,
-protected recovery restores all three from the verified snapshots and
-compensates protected code. Backup-only mode requires manual recovery.
-The downloaded target must include rehearsal code or the upgrade is rejected
-before service stop; this applies to `--branch` targets that point at older
-releases. Rehearsal copies live under private `.backup/db/.rehearsal-*`
-directories (0700). Normal exit or worker timeout removes them, but an abrupt
+When migration is needed, both protected and backup-only self-upgrades rehearse
+the target migration chain on isolated SQLite backup copies before service stop.
+A passed rehearsal is only an early warning check. After service stop, the
+updater takes and verifies the authoritative snapshots and reruns the full
+checks and migrations against the actual databases. Each database's chain is
+atomic. If a later database fails, protected recovery restores all three from
+the verified snapshots and compensates protected code. Backup-only mode
+requires manual recovery. The downloaded target must include rehearsal code on
+this path or the upgrade is rejected before service stop; this applies to
+`--branch` targets that point at older releases. Rehearsal copies live under
+private `.backup/db/.rehearsal-*` directories (0700). Normal exit or worker
+timeout removes them, but an abrupt
 updater kill can leave one. Identify it by its path and timestamp and compare
 it with snapshot groups containing `manifest.json`; preserve uncertain material
 for recovery review.
