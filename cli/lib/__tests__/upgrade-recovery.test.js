@@ -102,15 +102,14 @@ for(const legacy of ['group-writable','backup-alias'])test(`completed upgrade pe
  assert.equal(checkpoint.status,0,checkpoint.stderr);assert.doesNotMatch(checkpoint.stdout,/UPGRADE RECOVERY TASK/);
 });
 
-test('interrupted data-ready upgrade resumes with its journal-approved extra column',async t=>{
+test('interrupted data-ready upgrade resumes while retaining an extra column',async t=>{
  const f=await fixture(t);
  const db=new Database(f.db('comm-bridge/c4.db'));
  try {db.exec('ALTER TABLE conversations ADD COLUMN extension_value TEXT');}
  finally {db.close();}
- f.m.update(f.dir,f.j,{phase:'new_data_ready',allowSchemaExtensions:true});
+ f.m.update(f.dir,f.j,{phase:'new_data_ready'});
  const result=f.r.resume(f.dir);
  assert.equal(result.recovery_required,false,JSON.stringify(result));
- assert.equal(f.load().allowSchemaExtensions,true);
  const retained=new Database(f.db('comm-bridge/c4.db'),{readonly:true});
  try {assert.ok(retained.prepare('PRAGMA table_info(conversations)').all().some(column=>column.name==='extension_value'));}
  finally {retained.close();}
