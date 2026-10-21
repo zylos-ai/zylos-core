@@ -1,0 +1,69 @@
+import { createHash } from 'node:crypto';
+
+export const HOOK_ERRORS = new Set(['rate_limit', 'authentication_failed', 'billing_error', 'overloaded', 'server_error', 'model_not_found']);
+const id = value => typeof value === 'string' && /^[A-Za-z0-9._:-]{1,200}$/.test(value);
+const uuid = value => typeof value === 'string' && /^[0-9a-f-]{36}$/i.test(value);
+export const HEALTH_EVENT_MAX_AGE_MS = 300000;
+export const QUOTA_MAX_AGE_MS = 60000;
+
+export function sanitizeHealthEvent(raw, fallbackId) {
+  if (!raw || raw.schema_version !== 1 || raw.source !== 'hook' || raw.runtime !== 'claude' || !uuid(raw.event_id) || !uuid(raw.runtime_generation) || !id(raw.session_id) || (raw.prompt_id !== null && !id(raw.prompt_id)) || !['session_start','prompt_submit','stop_failure','stop'].includes(raw.event) || !Number.isSafeInteger(raw.received_at) || !Number.isSafeInteger(raw.claude_pid) || raw.claude_pid <= 0 || (raw.process_start !== null && !(typeof raw.process_start === 'string' && /^[0-9a-f-]{36}:\d+$/.test(raw.process_start))) || (raw.event === 'stop_failure' && !id(raw.error))) {
+    return { event_id: `invalid:${createHash('sha256').update(String(fallbackId)).digest('hex')}`, source: 'invalid', received_at: 0 };
+  }
+  const event = Object.fromEntries(['schema_version','event_id','source','runtime','runtime_generation','session_id','prompt_id','event','received_at','claude_pid','process_start'].map(key => [key,raw[key]]));
+  event.error = raw.event === 'stop_failure' ? (HOOK_ERRORS.has(raw.error) ? raw.error : 'unknown') : null;
+  if (event.event === 'stop_failure' && event.prompt_id) {
+    event.event_id = `failure:${createHash('sha256').update(JSON.stringify([event.runtime_generation,event.session_id,event.prompt_id,event.error])).digest('hex')}`;
+  }
+  return event;
+}
+
+export function quotaClassification(snapshot, event, now, maxAgeMs = QUOTA_MAX_AGE_MS) {
+  if (!snapshot || snapshot.runtime_generation !== event.runtime_generation || snapshot.session_id !== event.session_id || !Number.isSafeInteger(snapshot.observed_at) || now-snapshot.observed_at < 0 || now-snapshot.observed_at > maxAgeMs) return 'rate_limit_unclassified';
+  const full = window => window && typeof window.used_percentage === 'number' && Number.isFinite(window.used_percentage) && window.used_percentage >= 0 && window.used_percentage <= 100 && window.used_percentage === 100;
+  if (full(snapshot.rate_limits?.seven_day)) return 'rate_limit_seven_day';
+  if (full(snapshot.rate_limits?.five_hour)) return 'rate_limit_five_hour';
+  return 'rate_limit_unclassified';
+}
+
+export function initialHealthEvidence(health = 'ok', reason = '') {
+  return { version: 1, revision: 0, health, reason: safeHealthReason(health,reason), runtime_generation: null, session_id: null, source: 'legacy', episode: 0, evidence_id: null, hook_prompt: null, recovered: null };
+}
+
+export function safeHealthReason(health, reason) {
+  const allowed = new Set(['rate_limit_unclassified','rate_limit_five_hour','rate_limit_seven_day','authentication_failed','billing_error','overloaded','server_error','model_not_found','hook_evidence_unordered','health_storage_unavailable']);
+  if (allowed.has(reason)) return reason;
+  if (health === 'ok') return '';
+  if (health === 'rate_limited') return 'rate_limit_unclassified';
+  if (health === 'auth_failed') return 'authentication_failed';
+  return 'runtime_unavailable';
+}
+
+export function reduceHealthEvidence(state, event, { identity, now, quota = null, maxAgeMs = HEALTH_EVENT_MAX_AGE_MS } = {}) {
+  const ignored = reason => ({ state, status: 'ignored', reason });
+  if (event.source === 'invalid') return ignored('invalid_event');
+  if (!identity || !identity.runtime_generation || !identity.session_id || !identity.process_start || identity.runtime !== 'claude') return ignored('missing_runtime_proof');
+  if (event.runtime_generation !== identity.runtime_generation || event.session_id !== identity.session_id || event.claude_pid !== identity.claude_pid || event.process_start !== identity.process_start) return ignored('foreign_runtime_or_session');
+  if (now-event.received_at < 0 || now-event.received_at > maxAgeMs) return ignored('stale_event');
+  let next = state;
+  if (state.runtime_generation !== identity.runtime_generation || state.session_id !== identity.session_id) {
+    next = { ...state, runtime_generation: identity.runtime_generation, session_id: identity.session_id, hook_prompt: null, recovered: null, source: 'legacy' };
+  }
+  if (event.event === 'stop') {
+    // Stop proves a completed response, not ordering against an existing outage.
+    // It establishes authority while already OK, but never clears a failure.
+    if (next.health !== 'ok' || !event.prompt_id) return {state:next,status:'processed',reason:'unproven_success_order'};
+    return {state:{...next,source:'hook',evidence_id:event.event_id,hook_ok:true,hook_process_start:event.process_start,hook_pid:event.claude_pid},status:'processed',reason:'hook_ok'};
+  }
+  if (event.event !== 'stop_failure') return { state: next, status: 'processed', reason: 'identity_observed' };
+  // Hook payloads do not prove execution order across prompt IDs. Recovery cannot
+  // be undone by a delayed event, even when its collector ran after recovery.
+  if (next.recovered || (next.hook_prompt && next.hook_prompt !== event.prompt_id)) {
+    return { state: next, status: 'processed', reason: 'unordered_failure', verify: true };
+  }
+  if (!event.prompt_id) return { state: next, status: 'processed', reason: 'missing_prompt', verify: true };
+  const classification = event.error === 'rate_limit' ? quotaClassification(quota,event,now) : event.error;
+  const health = event.error === 'rate_limit' ? 'rate_limited' : event.error === 'authentication_failed' ? 'auth_failed' : null;
+  if (!health) return { state: next, status: 'processed', reason: classification === 'unknown' ? 'unmapped_error' : classification };
+  return { state: { ...next, health, reason: classification, source: 'hook', hook_ok:false, hook_process_start:event.process_start,hook_pid:event.claude_pid, hook_prompt: event.prompt_id, evidence_id: event.event_id, episode: next.health === 'ok' ? next.episode+1 : next.episode }, status: 'processed', reason: 'hook_failure' };
+}

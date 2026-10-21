@@ -182,6 +182,24 @@ function readLaunchSpec() {
 
 describe('npm mirror environment through runtime launch', () => {
   for (const Cls of [ClaudeAdapter, CodexAdapter]) {
+    it(`${Cls.name} passes a fresh generation in both launch paths`, async () => {
+      tmuxSessionExists = false;
+      const adapter = makeAdapter(Cls);
+      await adapter.launch();
+      const first = JSON.parse(fs.readFileSync(path.join(fakeZylosDir, 'activity-monitor/runtime-generation.json'), 'utf8'));
+      assert.equal(readLaunchSpec().env.ZYLOS_RUNTIME_GENERATION, first.runtime_generation);
+      assert.equal(readLaunchSpec().env.ZYLOS_RUNTIME_ID, adapter.runtimeId);
+      tmuxSessionExists = true;
+      let sent;
+      adapter.sendMessage = async command => { sent = command; };
+      await adapter.launch();
+      const second = JSON.parse(fs.readFileSync(path.join(fakeZylosDir, 'activity-monitor/runtime-generation.json'), 'utf8'));
+      assert.notEqual(first.runtime_generation, second.runtime_generation);
+      assert.ok(sent.includes(`ZYLOS_RUNTIME_GENERATION='${second.runtime_generation}'`));
+      assert.ok(sent.includes(`ZYLOS_RUNTIME_ID='${adapter.runtimeId}'`));
+    });
+  }
+  for (const Cls of [ClaudeAdapter, CodexAdapter]) {
     it(`${Cls.name} preserves deployment mirrors on initial launch and new sessions`, async () => {
       const names = ['npm_config_registry', 'npm_config_better_sqlite3_binary_host_mirror'];
       const previous = Object.fromEntries(names.map(name => [name, process.env[name]]));

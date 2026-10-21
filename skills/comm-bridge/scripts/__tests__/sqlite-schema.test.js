@@ -12,7 +12,7 @@ import * as scheduler from '../../../scheduler/scripts/schema.js';
 import * as wc from '../../../web-console/scripts/schema.js';
 // Existing fault/concurrency probes replace the registered 0→1 callback.
 function guardDatabase(db, owner, options) {
-  return registeredGuardDatabase(db, owner.migrate ? { ...owner, MIGRATIONS: { 0: { ...owner.MIGRATIONS[0], migrate: owner.migrate } } } : owner, options);
+  return registeredGuardDatabase(db, owner.migrate ? { ...owner, MIGRATIONS: { ...owner.MIGRATIONS, 0: { ...owner.MIGRATIONS[0], migrate: owner.migrate } } } : owner, options);
 }
 const repo = fileURLToPath(new URL('../../../../', import.meta.url));
 const sql = fs.readFileSync(new URL('../../init-db.sql', import.meta.url), 'utf8');
@@ -25,7 +25,7 @@ test('actual deployed owner openers initialize and reopen known schemas without 
  const root=fixture(t);
  run(root, `import {getDb,close} from './skills/comm-bridge/scripts/c4-db.js';import {getDb as scheduler} from './skills/scheduler/scripts/database.js';import {openDb} from './skills/web-console/scripts/db.js';getDb();close();getDb();close();scheduler().close();openDb().close();`);
  for(const [dir,name,owner] of [['comm-bridge','c4',c4],['scheduler','scheduler',scheduler],['web-console','web-console',wc]]){
-  const db=new Database(path.join(root,dir,name+'.db'),{readonly:true}); assert.equal(owner.inspectSchema(db).version,1);db.close();
+  const db=new Database(path.join(root,dir,name+'.db'),{readonly:true}); assert.equal(owner.inspectSchema(db).version,owner.SUPPORTED_SCHEMA_VERSION);db.close();
  }
  const db=new Database(path.join(root,'comm-bridge/c4.db'));assert.equal(db.prepare('SELECT COUNT(*) AS n FROM checkpoints').get().n,1);db.close();
 });
@@ -36,13 +36,13 @@ test('known C4 legacy fields/backfill/retag migrate together and only once',t=>{
  db.prepare("INSERT INTO conversations(direction,channel,endpoint_id,content) VALUES('in','web-console','session-handoff','history')").run();
  db.prepare("INSERT INTO control_queue(content,created_at,updated_at) VALUES(?,1,1)").run('work ---- ack via: node example ack --id 1');db.close();
  run(root, `import {getDb,close} from './skills/comm-bridge/scripts/c4-db.js';getDb();close();`);
- const check=new Database(path.join(root,'comm-bridge/c4.db'));assert.equal(check.pragma('user_version',{simple:true}),1);assert.equal(check.prepare('SELECT raw_content FROM control_queue').get().raw_content,'work');assert.equal(check.prepare('SELECT channel FROM conversations').get().channel,'void');check.prepare("UPDATE control_queue SET raw_content=NULL").run();check.close();
+ const check=new Database(path.join(root,'comm-bridge/c4.db'));assert.equal(check.pragma('user_version',{simple:true}),c4.SUPPORTED_SCHEMA_VERSION);assert.equal(check.prepare('SELECT raw_content FROM control_queue').get().raw_content,'work');assert.equal(check.prepare('SELECT channel FROM conversations').get().channel,'void');check.prepare("UPDATE control_queue SET raw_content=NULL").run();check.close();
  run(root, `import {getDb,close} from './skills/comm-bridge/scripts/c4-db.js';getDb();close();`);
  const reopened=new Database(path.join(root,'comm-bridge/c4.db'));assert.equal(reopened.prepare('SELECT raw_content FROM control_queue').get().raw_content,null);reopened.close();
 });
 test('future versions are rejected before write pragmas and migration',t=>{
- const root=fixture(t),file=path.join(root,'future.db');const db=new Database(file);db.exec(sql);db.pragma('user_version=2');db.close();const before=fs.readFileSync(file);
- const actual=new Database(file);assert.throws(()=>guardDatabase(actual,{...c4,migrate(){assert.fail('migration');}}),/version 2/);actual.close();assert.deepEqual(fs.readFileSync(file),before);assert.equal(fs.existsSync(file+'-wal'),false);
+ const root=fixture(t),file=path.join(root,'future.db');const db=new Database(file);db.exec(sql);db.pragma('user_version=3');db.close();const before=fs.readFileSync(file);
+ const actual=new Database(file);assert.throws(()=>guardDatabase(actual,{...c4,migrate(){assert.fail('migration');}}),/version 3/);actual.close();assert.deepEqual(fs.readFileSync(file),before);assert.equal(fs.existsSync(file+'-wal'),false);
 });
 test('version-zero adoption preserves an unknown legacy table while building the required baseline',()=>{
  const db=new Database(':memory:');assert.throws(()=>guardDatabase(db,{...wc,migrate(){assert.fail('migration');}},{readonly:true}),/missing/);
@@ -59,10 +59,10 @@ test('failure rolls back schema, data and version; readonly inspection never mig
  guardDatabase(db,{...c4,migrate(){assert.fail('readonly migration');}},{readonly:true});assert.equal(db.pragma('user_version',{simple:true}),0);db.close();
 });
 test('lock re-read honors another initializer and rejects a newly future database',()=>{
- for(const nextVersion of [1,2]) {
-  const db=new Database(':memory:');db.exec(sql);let inspected=0;let migrated=false;
+ for(const nextVersion of [2,3]) {
+  const db=new Database(':memory:');guardDatabase(db,c4);db.pragma('user_version=0');let inspected=0;let migrated=false;
   const owner={...c4,inspectSchema(connection,options){if(++inspected===2) connection.pragma(`user_version=${nextVersion}`);return c4.inspectSchema(connection,options);},migrate(){migrated=true;}};
-  if(nextVersion===2)assert.throws(()=>guardDatabase(db,owner),/version 2/);else guardDatabase(db,owner);
+  if(nextVersion===3)assert.throws(()=>guardDatabase(db,owner),/version 3/);else guardDatabase(db,owner);
   assert.equal(migrated,false);db.close();
  }
 });
@@ -86,15 +86,15 @@ test('first-adoption absence and empty active root permit schema initialization 
  const root=fixture(t);assert.doesNotThrow(()=>assertCoreDatabaseAvailable(root));fs.mkdirSync(path.join(root,'.backup/self-upgrade'),{recursive:true,mode:0o700});assert.doesNotThrow(()=>assertCoreDatabaseAvailable(root));
 });
 test('monitor reports schema incompatibility and fail-closes pending work',t=>{
- const root=fixture(t);fs.mkdirSync(path.join(root,'comm-bridge'));const db=new Database(path.join(root,'comm-bridge/c4.db'));db.exec(sql);db.pragma('user_version=2');db.close();
- run(root, `import assert from 'node:assert/strict';import {UsageMonitor} from './skills/activity-monitor/scripts/usage-monitor.js';const logs=[];const monitor=new UsageMonitor({}, {zylosDir:process.env.ZYLOS_DIR,log:line=>logs.push(line)});assert.equal(monitor.getPendingWorkCount(),Infinity);assert.match(logs[0],/schema version 2/);`);
+ const root=fixture(t);fs.mkdirSync(path.join(root,'comm-bridge'));const db=new Database(path.join(root,'comm-bridge/c4.db'));db.exec(sql);db.pragma('user_version=3');db.close();
+ run(root, `import assert from 'node:assert/strict';import {UsageMonitor} from './skills/activity-monitor/scripts/usage-monitor.js';const logs=[];const monitor=new UsageMonitor({}, {zylosDir:process.env.ZYLOS_DIR,log:line=>logs.push(line)});assert.equal(monitor.getPendingWorkCount(),Infinity);assert.match(logs[0],/schema version 3/);`);
 });
 
 test('web-console rejects future C4 before stale session cleanup',t=>{
  const root=fixture(t);
  run(root, `import {getDb,close} from './skills/comm-bridge/scripts/c4-db.js';import {openDb} from './skills/web-console/scripts/db.js';getDb();close();const wc=openDb();wc.prepare('INSERT INTO sessions VALUES(?,?,?)').run('stale',1,1);wc.close();`);
- const c4db=new Database(path.join(root,'comm-bridge/c4.db'));c4db.pragma('user_version=2');c4db.close();
- const child=spawnSync(process.execPath,['skills/web-console/scripts/server.js'],{cwd:repo,env:{...process.env,ZYLOS_DIR:root},encoding:'utf8',timeout:5000});assert.notEqual(child.status,0);assert.match(child.stderr,/schema version 2/);
+ const c4db=new Database(path.join(root,'comm-bridge/c4.db'));c4db.pragma('user_version=3');c4db.close();
+ const child=spawnSync(process.execPath,['skills/web-console/scripts/server.js'],{cwd:repo,env:{...process.env,ZYLOS_DIR:root},encoding:'utf8',timeout:5000});assert.notEqual(child.status,0);assert.match(child.stderr,/schema version 3/);
  const wcdb=new Database(path.join(root,'web-console/web-console.db'),{readonly:true});assert.equal(wcdb.prepare('SELECT COUNT(*) AS n FROM sessions').get().n,1);wcdb.close();
 });
 
@@ -116,26 +116,26 @@ test('all deployed owners recover existing zero-byte and initialized empty versi
    if(header) {const db=new Database(file);db.exec('VACUUM');db.close();assert.ok(fs.statSync(file).size>0);} else fs.writeFileSync(file,'');
   }
   run(root, `import {getDb,close} from './skills/comm-bridge/scripts/c4-db.js';import {getDb as scheduler} from './skills/scheduler/scripts/database.js';import {openDb} from './skills/web-console/scripts/db.js';getDb();close();scheduler().close();openDb().close();`);
-  const db=new Database(path.join(root,'comm-bridge/c4.db'));assert.equal(c4.inspectSchema(db).version,1);assert.equal(db.prepare('SELECT COUNT(*) AS n FROM checkpoints').get().n,1);db.close();
+  const db=new Database(path.join(root,'comm-bridge/c4.db'));assert.equal(c4.inspectSchema(db).version,c4.SUPPORTED_SCHEMA_VERSION);assert.equal(db.prepare('SELECT COUNT(*) AS n FROM checkpoints').get().n,1);db.close();
  }
 });
 test('process death during initial migration leaves an empty database recoverable by the real owner',async t=>{
  const root=fixture(t),file=path.join(root,'comm-bridge/c4.db'),ready=path.join(root,'ready');fs.mkdirSync(path.dirname(file));
- const running=childModule(root, `import fs from 'node:fs';import Database from './skills/comm-bridge/node_modules/better-sqlite3/lib/index.js';import * as owner from './skills/comm-bridge/scripts/c4-schema.js';import {guardDatabase as registeredGuardDatabase} from './skills/comm-bridge/scripts/sqlite-schema.js';const guardDatabase=(db,owner)=>registeredGuardDatabase(db,{...owner,MIGRATIONS:{0:{...owner.MIGRATIONS[0],migrate:owner.migrate}}});import {migrateSchema} from './skills/comm-bridge/scripts/c4-db.js';const db=new Database(${JSON.stringify(file)});guardDatabase(db,{...owner,migrate(connection,options){migrateSchema(connection,options);fs.writeFileSync(${JSON.stringify(ready)},'ready');Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0);}});`);
+ const running=childModule(root, `import fs from 'node:fs';import Database from './skills/comm-bridge/node_modules/better-sqlite3/lib/index.js';import * as owner from './skills/comm-bridge/scripts/c4-schema.js';import {guardDatabase as registeredGuardDatabase} from './skills/comm-bridge/scripts/sqlite-schema.js';const guardDatabase=(db,owner)=>registeredGuardDatabase(db,{...owner,MIGRATIONS:{...owner.MIGRATIONS,0:{...owner.MIGRATIONS[0],migrate:owner.migrate}}});import {migrateSchema} from './skills/comm-bridge/scripts/c4-db.js';const db=new Database(${JSON.stringify(file)});guardDatabase(db,{...owner,migrate(connection,options){migrateSchema(connection,options);fs.writeFileSync(${JSON.stringify(ready)},'ready');Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0);}});`);
  t.after(()=>running.child.kill('SIGKILL'));await waitFile(ready);running.child.kill('SIGKILL');assert.equal((await running.done).signal,'SIGKILL');
  const interrupted=new Database(file);assert.equal(interrupted.pragma('user_version',{simple:true}),0);assert.equal(interrupted.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE type='table'").get().n,0);interrupted.close();
  run(root, `import {getDb,close} from './skills/comm-bridge/scripts/c4-db.js';getDb();close();`);
- const recovered=new Database(file);assert.equal(c4.inspectSchema(recovered).version,1);assert.equal(recovered.prepare('SELECT COUNT(*) AS n FROM checkpoints').get().n,1);recovered.close();
+ const recovered=new Database(file);assert.equal(c4.inspectSchema(recovered).version,c4.SUPPORTED_SCHEMA_VERSION);assert.equal(recovered.prepare('SELECT COUNT(*) AS n FROM checkpoints').get().n,1);recovered.close();
 });
 test('two processes initialize the same existing empty database under one writer lock',async t=>{
  const root=fixture(t),file=path.join(root,'db'),firstReady=path.join(root,'first'),secondReady=path.join(root,'second'),release=path.join(root,'release'),migrations=path.join(root,'migrations');fs.writeFileSync(file,'');
- const imports=`import fs from 'node:fs';import Database from './skills/comm-bridge/node_modules/better-sqlite3/lib/index.js';import * as owner from './skills/comm-bridge/scripts/c4-schema.js';import {guardDatabase as registeredGuardDatabase} from './skills/comm-bridge/scripts/sqlite-schema.js';const guardDatabase=(db,owner)=>registeredGuardDatabase(db,{...owner,MIGRATIONS:{0:{...owner.MIGRATIONS[0],migrate:owner.migrate}}});import {migrateSchema} from './skills/comm-bridge/scripts/c4-db.js';const db=new Database(${JSON.stringify(file)});`;
+ const imports=`import fs from 'node:fs';import Database from './skills/comm-bridge/node_modules/better-sqlite3/lib/index.js';import * as owner from './skills/comm-bridge/scripts/c4-schema.js';import {guardDatabase as registeredGuardDatabase} from './skills/comm-bridge/scripts/sqlite-schema.js';const guardDatabase=(db,owner)=>registeredGuardDatabase(db,{...owner,MIGRATIONS:{...owner.MIGRATIONS,0:{...owner.MIGRATIONS[0],migrate:owner.migrate}}});import {migrateSchema} from './skills/comm-bridge/scripts/c4-db.js';const db=new Database(${JSON.stringify(file)});`;
  const first=childModule(root,imports+`guardDatabase(db,{...owner,migrate(connection,options){fs.writeFileSync(${JSON.stringify(firstReady)},'ready');while(!fs.existsSync(${JSON.stringify(release)}))Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,10);fs.appendFileSync(${JSON.stringify(migrations)},'1');migrateSchema(connection,options);}});db.close();`);
  t.after(()=>first.child.kill('SIGKILL'));await waitFile(firstReady);
  const second=childModule(root,imports+`let inspections=0;guardDatabase(db,{...owner,inspectSchema(connection,options){const result=owner.inspectSchema(connection,options);if(++inspections===1){if(!result.empty)throw Error('expected empty schema before lock');fs.writeFileSync(${JSON.stringify(secondReady)},'ready');}return result;},migrate(connection,options){fs.appendFileSync(${JSON.stringify(migrations)},'2');migrateSchema(connection,options);}});db.close();`);
  t.after(()=>second.child.kill('SIGKILL'));await waitFile(secondReady);fs.writeFileSync(release,'go');
  for(const result of await Promise.all([first.done,second.done]))assert.equal(result.code,0,result.stderr);
- assert.equal(fs.readFileSync(migrations,'utf8'),'1');const db=new Database(file);assert.equal(c4.inspectSchema(db).version,1);assert.equal(db.prepare('SELECT COUNT(*) AS n FROM checkpoints').get().n,1);db.close();
+ assert.equal(fs.readFileSync(migrations,'utf8'),'1');const db=new Database(file);assert.equal(c4.inspectSchema(db).version,c4.SUPPORTED_SCHEMA_VERSION);assert.equal(db.prepare('SELECT COUNT(*) AS n FROM checkpoints').get().n,1);db.close();
 });
 test('version-zero view reaches migration callback while readonly preflight never initializes empty files',t=>{
  const root=fixture(t),file=path.join(root,'empty');fs.writeFileSync(file,'');const before=fs.readFileSync(file);
@@ -147,7 +147,7 @@ test('version-zero view reaches migration callback while readonly preflight neve
 test('version-zero migration needs no changes declaration and validates the complete v1 layout before commit',()=>{
  const owner={SUPPORTED_SCHEMA_VERSION:1,supportsNewDatabase:true,MIGRATIONS:{0:{to:1,migrate(db){db.exec('CREATE TABLE required(id INTEGER PRIMARY KEY, name TEXT)');}}},inspectSchema(db,options){return inspectLayout(db,'fixture',1,{required:['id','name']},{...options,migrateFromOlder:true,definitions:{required:{id:{type:'INTEGER',pk:true},name:{type:'TEXT',pk:false}}}});}};
  const valid=new Database(':memory:');assert.equal(migrateDatabase(valid,owner,{allowNew:true}).version,1);assert.deepEqual(valid.pragma('table_info(required)').map(row=>row.name),['id','name']);valid.close();
- const invalid=new Database(':memory:');const broken={...owner,MIGRATIONS:{0:{to:1,migrate(db){db.exec('CREATE TABLE required(id INTEGER PRIMARY KEY)');}}}};
+ const invalid=new Database(':memory:');const broken={...owner,MIGRATIONS:{...owner.MIGRATIONS,0:{to:1,migrate(db){db.exec('CREATE TABLE required(id INTEGER PRIMARY KEY)');}}}};
  assert.throws(()=>migrateDatabase(invalid,broken,{allowNew:true}),/missing required\.name/);
  assert.equal(invalid.pragma('user_version',{simple:true}),0);assert.equal(invalid.prepare("SELECT name FROM sqlite_master WHERE name='required'").get(),undefined);invalid.close();
 });
@@ -183,7 +183,7 @@ for (const layout of ['symlink .zylos', 'symlink .backup', 'group writable', 'pa
  assert.doesNotThrow(()=>assertCoreDatabaseAvailable(root));
  run(root, `import {getDb,close} from './skills/comm-bridge/scripts/c4-db.js';import {getDb as scheduler} from './skills/scheduler/scripts/database.js';import {openDb} from './skills/web-console/scripts/db.js';getDb();close();scheduler().close();openDb().close();`);
  for(const [relative,owner] of [['comm-bridge/c4.db',c4],['scheduler/scheduler.db',scheduler],['web-console/web-console.db',wc]]) {
-  const db=new Database(path.join(root,relative),{readonly:true});assert.equal(owner.inspectSchema(db).version,1);db.close();
+  const db=new Database(path.join(root,relative),{readonly:true});assert.equal(owner.inspectSchema(db).version,owner.SUPPORTED_SCHEMA_VERSION);db.close();
  }
 });
 test('dangling stable helper with actual materials still blocks ordinary owners', t => {
@@ -216,7 +216,7 @@ test('ordinary owners reopen with an unsafe NOT NULL extension while upgrade ins
  for(const [relative,owner,table] of [['comm-bridge/c4.db',c4,'conversations'],['scheduler/scheduler.db',scheduler,'tasks'],['web-console/web-console.db',wc,'sessions']]) {
   const db=new Database(path.join(root,relative));
   db.exec(`ALTER TABLE ${table} ADD COLUMN my_tag TEXT NOT NULL`);
-  assert.equal(guardDatabase(db,owner).version,1);
+  assert.equal(guardDatabase(db,owner).version,owner.SUPPORTED_SCHEMA_VERSION);
   assert.throws(()=>owner.inspectSchema(db,{strict:false,rejectUnsafeExtensions:true}),new RegExp(`${table}\\.my_tag.*default`));
   db.close();
  }
@@ -263,7 +263,7 @@ test('each core owner migrates a legacy version while retaining extra table rows
  for(const owner of [c4,scheduler,wc]) {
   const db=new Database(':memory:');
   try {
-   migrateDatabase(db,owner,{allowNew:true,strict:false});
+   owner.MIGRATIONS[0].migrate(db, { isNew: true, from: 0, to: 1 });
    db.pragma('user_version=0');
    db.exec("CREATE TABLE archive_records(id INTEGER PRIMARY KEY, value TEXT); INSERT INTO archive_records VALUES (1, 'retained')");
    const result=migrateDatabase(db,owner,{strict:true,allowExtraTables:true});

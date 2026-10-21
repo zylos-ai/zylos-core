@@ -1,31 +1,9 @@
 import fs from 'fs';
 import path from 'path';
+import { messageForStatus } from '../../comm-bridge/scripts/status-notice-templates.js';
 
 export const PROBE_CACHE_TTL_MS = 30000;
 export const ROUTE_PROBE_TIMEOUT_MS = 25000;
-
-const USER_MESSAGE_CATALOG = {
-  rate_limit_detected:
-    'I am currently being rate-limited by the upstream service and will recover automatically. Your message has been received but will not enter the processing queue for now.',
-  rate_limit_cooldown_expired:
-    'I am recovering from rate-limiting, please try again later.',
-  auth_still_failed:
-    'Authentication is currently unavailable. An administrator needs to resolve this before I can continue.',
-  auth_check_failed:
-    'Authentication is currently unavailable. An administrator needs to resolve this before I can continue.',
-  heartbeat_timeout:
-    'I am temporarily unresponsive and attempting to recover. Please resend your message shortly.',
-  heartbeat_failed:
-    'I am temporarily unresponsive and attempting to recover. Please resend your message shortly.',
-  sticky_context_restart:
-    'I detected an issue with the current session context and am switching to a new session to recover. Please resend your message shortly.',
-  tool_timeout:
-    'A tool execution got stuck. I am restarting the session to recover. Please resend your message shortly.',
-  unavailable:
-    'I am temporarily unavailable and attempting to recover. Please resend your message shortly.',
-  unknown:
-    'I am temporarily unavailable and attempting to recover. Please resend your message shortly.',
-};
 
 function nowMs() {
   return Date.now();
@@ -44,12 +22,7 @@ export function normalizeHealth(health) {
 }
 
 export function messageForRoute({ health, reason }) {
-  if (reason?.startsWith('tool_timeout_')) return USER_MESSAGE_CATALOG.tool_timeout;
-  if (reason?.startsWith('sticky_')) return USER_MESSAGE_CATALOG.sticky_context_restart;
-  if (reason && USER_MESSAGE_CATALOG[reason]) return USER_MESSAGE_CATALOG[reason];
-  if (health === 'rate_limited') return USER_MESSAGE_CATALOG.rate_limit_detected;
-  if (health === 'auth_failed') return USER_MESSAGE_CATALOG.auth_still_failed;
-  return USER_MESSAGE_CATALOG.unknown;
+  return messageForStatus({ health, reason });
 }
 
 export class MessageRouter {
@@ -68,6 +41,7 @@ export class MessageRouter {
     if (!request || request.version !== 1 || request.type !== 'route') {
       throw new Error('invalid route request');
     }
+    this.healthEngine.evidence?.refresh();
 
     const rawHealth = this.healthEngine.health ?? 'ok';
     const health = normalizeHealth(rawHealth);
@@ -91,7 +65,7 @@ export class MessageRouter {
           recovered: false,
           health,
           reason,
-          userMessage: request.noReply ? undefined : cached.userMessage,
+          userMessage: request.noReply ? undefined : messageForRoute({ health, reason }),
           cacheHit: true,
         });
       }
@@ -108,7 +82,7 @@ export class MessageRouter {
     }
 
     const probeResult = await this._joinOrStartProbe(rawHealth, reason);
-    if (probeResult?.recovered || normalizeHealth(this.healthEngine.health ?? 'ok') === 'ok') {
+    if (normalizeHealth(this.healthEngine.health ?? 'ok') === 'ok') {
       this._clearCache();
       return this._decision(request, { recovered: true, health: 'ok', probeStarted: probeResult?.probeStarted });
     }
@@ -128,9 +102,11 @@ export class MessageRouter {
   }
 
   _decision(request, decision) {
+    const evidence=this.healthEngine.evidence?.store.read();
     return {
       version: 1,
       requestId: request.requestId,
+      ...(evidence ? {healthEpisode:`${this.healthEngine.evidence.store.runtime}:${evidence.episode}`,healthRevision:evidence.revision} : {}),
       ...decision,
     };
   }
@@ -151,7 +127,8 @@ export class MessageRouter {
   }
 
   async _joinOrStartProbe(rawHealth, reason) {
-    const key = `${rawHealth}:${reason || ''}`;
+    const fence=this.healthEngine.captureFence?.();
+    const key = `${rawHealth}:${reason || ''}:${JSON.stringify(fence || null)}`;
     if (this.inFlightProbe?.key === key) {
       return this._awaitWithBudget(this.inFlightProbe.promise);
     }

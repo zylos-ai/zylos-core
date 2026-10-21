@@ -41,6 +41,7 @@ export const CORE_MANAGED_HOOKS = new Set([
   // leave its path here so upgrades can still remove stale installed copies.
   'skills/activity-monitor/scripts/context-monitor.js',
   'skills/activity-monitor/scripts/hook-activity.js',
+  'skills/activity-monitor/scripts/hook-health.js',
   'skills/activity-monitor/scripts/hook-auth-prompt.js',
   'skills/activity-monitor/scripts/session-start-orchestrator.js',
   // Retired SessionStart hooks replaced by the orchestrator.
@@ -162,24 +163,78 @@ export function reconcileAssemblerEntries(settings, { zylosDir = ZYLOS_DIR } = {
   return { settings, changed };
 }
 
+export function supportsStopFailureVersion(version) {
+  const match = /^(\d+)\.(\d+)\.(\d+)(?: \(Claude Code\))?$/.exec(String(version).trim());
+  if (!match) return false;
+  const [major, minor, patch] = match.slice(1).map(Number);
+  // Conservative compatibility floor: this is the version verified in our
+  // isolated hook tests, not a claim about the event's earliest introduction.
+  return major === 2 && (minor > 1 || (minor === 1 && patch >= 301));
+}
+
+export function detectStopFailureSupport({ execFileSyncImpl = execFileSync, binary = process.env.CLAUDE_BIN || 'claude' } = {}) {
+  try {
+    return supportsStopFailureVersion(execFileSyncImpl(binary, ['--version'], { encoding: 'utf8', stdio: 'pipe', timeout: 2000 }));
+  } catch { return false; }
+}
+
+export function syncHealthHooksBeforeLaunch({ zylosDir = ZYLOS_DIR, binary, supported,
+  existsSync = fs.existsSync, readFileSync = fs.readFileSync,
+  persist = persistInstalledSettingsAndSyncCoupledThreshold,
+} = {}) {
+  const script = path.join(zylosDir, '.claude', 'skills', 'activity-monitor', 'scripts', 'hook-health.js');
+  if (!existsSync(script)) return { changed: false };
+  const settingsPath = path.join(zylosDir, '.claude', 'settings.json');
+  const settings = existsSync(settingsPath) ? JSON.parse(readFileSync(settingsPath, 'utf8')) : {};
+  const before = JSON.stringify(settings);
+  const enabled = supported ?? detectStopFailureSupport({ binary });
+  const key = hookScriptKey(`node ${JSON.stringify(script)}`);
+  settings.hooks ??= {};
+  for (const [event, groups] of Object.entries(settings.hooks)) {
+    if (!Array.isArray(groups)) continue;
+    settings.hooks[event] = groups.map(group => ({ ...group, hooks: getCommandHooks(group).length
+      ? (group.hooks || []).filter(hook => hook.type !== 'command' || hookScriptKey(hook.command) !== key)
+      : group.hooks,
+    })).filter(group => !Array.isArray(group.hooks) || group.hooks.length > 0);
+    if (!settings.hooks[event].length) delete settings.hooks[event];
+  }
+  if (enabled) {
+    const hook = { type: 'command', command: `node ${JSON.stringify(script)}`, async: false, timeout: 5 };
+    for (const [event, matchers] of [['SessionStart', ['startup', 'clear', 'compact']], ['UserPromptSubmit', ['']], ['Stop', ['']], ['StopFailure', ['']]]) {
+      settings.hooks[event] ??= [];
+      for (const matcher of matchers) {
+        let group = settings.hooks[event].find(item => (item.matcher ?? '') === matcher);
+        if (!group) { group = { ...(matcher ? { matcher } : {}), hooks: [] }; settings.hooks[event].push(group); }
+        group.hooks ??= [];
+        group.hooks.push({ ...hook });
+      }
+    }
+  }
+  if (JSON.stringify(settings) === before) return { changed: false, supported: enabled };
+  persist({ installedSettings: settings, settingsPath, syncThreshold: () => ({ changed: false }) });
+  return { changed: true, supported: enabled };
+}
+
 export function desiredClaudeHooks({
   zylosDir = ZYLOS_DIR,
   existsSync = fs.existsSync,
+  stopFailureSupported = false,
 } = {}) {
   const sessionStartHooks = desiredSessionStartHooks({ zylosDir, existsSync });
   const activityHook = commandHook(
     'skills/activity-monitor/scripts/hook-activity.js',
     { async: true, timeout: 5 }
   );
+  const healthHook = commandHook('skills/activity-monitor/scripts/hook-health.js', { async: false, timeout: 5 });
 
   return {
     SessionStart: ['startup', 'clear', 'compact'].map(matcher => ({
       matcher,
-      hooks: sessionStartHooks.map(hook => ({ ...hook })),
+      hooks: [...(stopFailureSupported ? [{ ...healthHook }] : []), ...sessionStartHooks.map(hook => ({ ...hook }))],
     })),
     UserPromptSubmit: [
       {
-        hooks: [{ ...activityHook }],
+        hooks: [...(stopFailureSupported ? [{ ...healthHook }] : []), { ...activityHook }],
       },
     ],
     PreToolUse: [
@@ -212,9 +267,10 @@ export function desiredClaudeHooks({
     ],
     Stop: [
       {
-        hooks: [{ ...activityHook }],
+        hooks: [...(stopFailureSupported ? [{ ...healthHook }] : []), { ...activityHook }],
       },
     ],
+    ...(stopFailureSupported ? { StopFailure: [{ hooks: [{ ...healthHook }] }] } : {}),
     Notification: [
       {
         matcher: 'idle_prompt',
@@ -516,10 +572,12 @@ export function syncHooks(installedSettings, _templateSettings, {
             }
             added++;
             log(`  + ${event}[${matcherValue}]: ${templateCmd.command}`);
-          } else if (existing.command !== templateCmd.command || existing.timeout !== templateCmd.timeout) {
+          } else if (existing.command !== templateCmd.command || existing.timeout !== templateCmd.timeout ||
+            (Object.hasOwn(templateCmd, 'async') && existing.async !== templateCmd.async)) {
             if (!dryRun) {
               existing.command = templateCmd.command;
               if (templateCmd.timeout !== undefined) existing.timeout = templateCmd.timeout;
+              if (Object.hasOwn(templateCmd, 'async')) existing.async = templateCmd.async;
             }
             updated++;
             log(`  ~ ${event}[${matcherValue}]: ${templateCmd.command}`);
@@ -644,7 +702,11 @@ export function main(argv = process.argv.slice(2)) {
     installedSettings = {};
   }
 
-  const { added, updated, removed } = syncHooks(installedSettings, templateSettings, { dryRun });
+  const stopFailureSupported = detectStopFailureSupport();
+  const { added, updated, removed } = syncHooks(installedSettings, templateSettings, {
+    dryRun, desiredHooks: desiredClaudeHooks({ stopFailureSupported }),
+  });
+  if (!stopFailureSupported) console.log('Health hooks: StopFailure unavailable or unverified; retaining screen-based fallback.');
 
   // --- Sync top-level statusLine from template ---
   let statusLineChanged = false;

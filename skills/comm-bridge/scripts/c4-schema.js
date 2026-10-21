@@ -1,9 +1,11 @@
 import { migrateSchema } from './c4-migrations.js';
 import { inspectLayout } from './sqlite-schema.js';
-export const SUPPORTED_SCHEMA_VERSION = 1;
+import { HEALTH_TABLES, migrateHealthNotices } from './c4-health-migration.js';
+export const SUPPORTED_SCHEMA_VERSION = 2;
 export const supportsNewDatabase = true;
 // Unmarked released layouts enter the explicit schema migration chain at 0.
 export const TABLES = {
+  ...Object.fromEntries(Object.entries(HEALTH_TABLES).map(([table, columns]) => [table, Object.keys(columns)])),
   "checkpoints": [
     "id",
     "timestamp",
@@ -51,7 +53,11 @@ export const TABLES = {
   ]
 };
 export const COLUMN_DEFINITIONS = {"checkpoints": {"id": {"type": "INTEGER", "pk": true}, "timestamp": {"type": "DATETIME", "pk": false}, "summary": {"type": "TEXT", "pk": false}, "start_conversation_id": {"type": "INTEGER", "pk": false}, "end_conversation_id": {"type": "INTEGER", "pk": false}}, "conversations": {"id": {"type": "INTEGER", "pk": true}, "timestamp": {"type": "DATETIME", "pk": false}, "direction": {"type": "TEXT", "pk": false}, "channel": {"type": "TEXT", "pk": false}, "endpoint_id": {"type": "TEXT", "pk": false}, "content": {"type": "TEXT", "pk": false}, "status": {"type": "TEXT", "pk": false}, "delivery_action": {"type": "TEXT", "pk": false}, "priority": {"type": "INTEGER", "pk": false}, "require_idle": {"type": "INTEGER", "pk": false}, "retry_count": {"type": "INTEGER", "pk": false}}, "control_queue": {"id": {"type": "INTEGER", "pk": true}, "raw_content": {"type": "TEXT", "pk": false}, "content": {"type": "TEXT", "pk": false}, "priority": {"type": "INTEGER", "pk": false}, "require_idle": {"type": "INTEGER", "pk": false}, "bypass_state": {"type": "INTEGER", "pk": false}, "ack_deadline_at": {"type": "INTEGER", "pk": false}, "status": {"type": "TEXT", "pk": false}, "retry_count": {"type": "INTEGER", "pk": false}, "available_at": {"type": "INTEGER", "pk": false}, "last_error": {"type": "TEXT", "pk": false}, "created_at": {"type": "INTEGER", "pk": false}, "updated_at": {"type": "INTEGER", "pk": false}}, "status_notice_cooldowns": {"cooldown_key": {"type": "TEXT", "pk": true}, "channel": {"type": "TEXT", "pk": false}, "endpoint": {"type": "TEXT", "pk": false}, "status_type": {"type": "TEXT", "pk": false}, "reason": {"type": "TEXT", "pk": false}, "last_notified_at": {"type": "INTEGER", "pk": false}, "expires_at": {"type": "INTEGER", "pk": false}, "updated_at": {"type": "INTEGER", "pk": false}}};
-export const MIGRATIONS = Object.freeze({ 0: Object.freeze({ to: 1, migrate: migrateSchema }) });
+Object.assign(COLUMN_DEFINITIONS, HEALTH_TABLES);
+export const MIGRATIONS = Object.freeze({
+  0: Object.freeze({ to: 1, migrate: migrateSchema }),
+  1: Object.freeze({ to: 2, changes: { addTables: HEALTH_TABLES }, migrate: migrateHealthNotices }),
+});
 export function inspectSchema(db, { allowNew = false, strict = true, allowExtraTables, allowExtraColumns, rejectUnsafeExtensions = strict } = {}) {
   return inspectLayout(db, 'c4', SUPPORTED_SCHEMA_VERSION, TABLES, { allowNew, strict, allowExtraTables, allowExtraColumns, rejectUnsafeExtensions, definitions: COLUMN_DEFINITIONS, migrateFromOlder: true });
 }

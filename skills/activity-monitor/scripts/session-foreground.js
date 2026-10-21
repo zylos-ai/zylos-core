@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getClaudePid } from './claude-pid.js';
+import { readRuntimeGeneration, readProcessStart } from './runtime-generation.js';
 
 const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
 const MONITOR_DIR = path.join(ZYLOS_DIR, 'activity-monitor');
@@ -18,10 +19,16 @@ function atomicWriteJson(filePath, value) {
 
 export function handleSessionForeground(payload, {
   observedAt = Date.now(),
-  claudePid = getClaudePid()
+  claudePid = getClaudePid(),
+  env = process.env,
+  processStart = readProcessStart(claudePid),
 } = {}) {
   const sessionId = payload?.session_id || process.env.CLAUDE_SESSION_ID || null;
   if (!sessionId) return null;
+  const inherited = env.ZYLOS_RUNTIME_GENERATION;
+  const identity = readRuntimeGeneration(ZYLOS_DIR);
+  if (identity && !inherited) return null;
+  if (inherited && (!identity || identity.runtime !== env.ZYLOS_RUNTIME_ID || identity.runtime_generation !== inherited)) return null;
 
   if (!fs.existsSync(MONITOR_DIR)) {
     fs.mkdirSync(MONITOR_DIR, { recursive: true });
@@ -35,6 +42,11 @@ export function handleSessionForeground(payload, {
     session_start_source: payload?.source || null,
     observed_at: observedAt
   };
+  if (inherited) {
+    record.runtime = identity.runtime;
+    record.runtime_generation = inherited;
+    record.process_start = processStart;
+  }
   atomicWriteJson(FOREGROUND_SESSION_FILE, record);
   return record;
 }

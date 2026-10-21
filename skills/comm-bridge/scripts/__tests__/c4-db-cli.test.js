@@ -56,13 +56,15 @@ describe('c4-db recent', () => {
 describe('void channel migration (#689)', () => {
   it('re-tags legacy web-console session-handoff rows to the void channel', () => {
     withTmpDir(({ tmpDir, env }) => {
-      // Seed rows, then model a known legacy version-0 fixture.
-      assert.equal(dbCli(['insert', 'out', 'web-console', 'session-handoff', 'handoff note'], env).status, 0);
-      assert.equal(dbCli(['insert', 'out', 'web-console', 'console', 'normal console message'], env).status, 0);
-      assert.equal(dbCli(['insert', 'out', 'telegram', 'session-handoff', 'not a web-console row'], env).status, 0);
-
+      // Use the released initial layout rather than downgrading the version tag
+      // of a database that already contains later migration tables.
+      fs.mkdirSync(path.join(tmpDir, 'comm-bridge'), { recursive: true });
       const legacy = new Database(path.join(tmpDir, 'comm-bridge', 'c4.db'));
-      legacy.pragma('user_version = 0');
+      legacy.exec(fs.readFileSync(new URL('../../init-db.sql', import.meta.url), 'utf8'));
+      const insert = legacy.prepare('INSERT INTO conversations(direction,channel,endpoint_id,content) VALUES (?,?,?,?)');
+      insert.run('out', 'web-console', 'session-handoff', 'handoff note');
+      insert.run('out', 'web-console', 'console', 'normal console message');
+      insert.run('out', 'telegram', 'session-handoff', 'not a web-console row');
       legacy.close();
       // The explicit 0→1 migration runs once before reads.
       const { stdout, status } = dbCli(['recent', '10'], env);

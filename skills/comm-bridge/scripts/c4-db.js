@@ -11,6 +11,7 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { DATA_DIR, DB_PATH, CONTROL_MAX_RETRIES } from './c4-config.js';
+import { normalizeStatusEndpoint } from './status-endpoint.js';
 import { buildReplyViaSuffix, hasLegacyReplyViaSuffix, truncateForDelivery } from './c4-utils.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -140,6 +141,64 @@ export function getStatusNoticeCooldowns() {
     FROM status_notice_cooldowns
     ORDER BY cooldown_key ASC
   `).all();
+}
+
+// A claim is not a successful notification. Once sending begins, an expired
+// lease is uncertain and must not be recycled into another send.
+export function claimStatusNotice({ key, episode = 'legacy:unverified', attemptId, channel, endpoint, normalizedEndpoint, now = nowSeconds(), leaseSeconds = 60 }, database = getDb()) {
+  const attemptKey = JSON.stringify([key, episode]);
+  return database.transaction(() => {
+    database.prepare('DELETE FROM status_notice_cooldowns WHERE expires_at <= ?').run(now);
+    // Legacy endpoint metadata retained insertion order. Honor its remaining
+    // suppression window without rewriting or extending historical rows.
+    const success = database.prepare('SELECT * FROM status_notice_cooldowns WHERE channel = ? AND expires_at > ?')
+      .all(channel, now).find(row => normalizeStatusEndpoint(row.endpoint) === normalizedEndpoint);
+    if (success) return { suppressed: true, reason: 'cooldown', previous: success };
+    const previous = database.prepare('SELECT * FROM status_notice_attempts WHERE notice_key = ?').get(attemptKey);
+    if (previous?.status === 'sending' && previous.lease_until <= now) {
+      database.prepare("UPDATE status_notice_attempts SET status = 'uncertain', updated_at = ? WHERE notice_key = ?").run(now, attemptKey);
+      return { suppressed: true, reason: 'uncertain' };
+    }
+    if (previous?.status === 'uncertain' || previous?.status === 'sending' || (previous?.status === 'claimed' && previous.lease_until > now))
+      return { suppressed: true, reason: previous.status };
+    const active = database.prepare("SELECT notice_key FROM status_notice_attempts WHERE channel=? AND normalized_endpoint=? AND status IN ('claimed','sending') AND lease_until>? LIMIT 1")
+      .get(channel, normalizedEndpoint, now);
+    if (active) return { suppressed: true, reason: 'sending' };
+    database.prepare(`INSERT INTO status_notice_attempts
+      (notice_key, attempt_id, channel, endpoint, normalized_endpoint, status, claimed_at, lease_until, updated_at)
+      VALUES (?, ?, ?, ?, ?, 'claimed', ?, ?, ?)
+      ON CONFLICT(notice_key) DO UPDATE SET attempt_id=excluded.attempt_id, channel=excluded.channel,
+      endpoint=excluded.endpoint, normalized_endpoint=excluded.normalized_endpoint, status='claimed',
+      claimed_at=excluded.claimed_at, lease_until=excluded.lease_until, updated_at=excluded.updated_at`)
+      .run(attemptKey, attemptId, channel, endpoint || '', normalizedEndpoint, now, now + leaseSeconds, now);
+    return { suppressed: false, key: attemptKey, cooldownKey: key, attemptId, channel, endpoint, normalizedEndpoint };
+  }).immediate();
+}
+
+export function startStatusNotice(claim, now = nowSeconds(), database = getDb()) {
+  return database.prepare(`UPDATE status_notice_attempts SET status='sending', updated_at=?
+    WHERE notice_key=? AND attempt_id=? AND status='claimed' AND lease_until>?`)
+    .run(now, claim.key, claim.attemptId, now).changes === 1;
+}
+
+export function finishStatusNotice(claim, outcome, { now = nowSeconds(), ttl = 600, health = 'unavailable', reason = 'unavailable' } = {}, database = getDb()) {
+  if (!['sent', 'failed', 'uncertain'].includes(outcome)) throw new Error('Invalid notice outcome');
+  return database.transaction(() => {
+    const changed = database.prepare(`UPDATE status_notice_attempts SET status=?, updated_at=?
+      WHERE notice_key=? AND attempt_id=? AND status IN ('claimed','sending')`)
+      .run(outcome, now, claim.key, claim.attemptId).changes;
+    if (!changed) return false;
+    if (claim.intentEventId) database.prepare(`UPDATE runtime_notice_intents SET status=?,updated_at=?
+      WHERE event_id=? AND claim_key=? AND attempt_id=? AND status='pending'`)
+      .run(outcome,now * 1000,claim.intentEventId,claim.key,claim.attemptId);
+    if (outcome === 'sent') database.prepare(`INSERT INTO status_notice_cooldowns
+      (cooldown_key, channel, endpoint, status_type, reason, last_notified_at, expires_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(cooldown_key) DO UPDATE SET status_type=excluded.status_type, reason=excluded.reason,
+      last_notified_at=excluded.last_notified_at, expires_at=excluded.expires_at, updated_at=excluded.updated_at`)
+      .run(claim.cooldownKey, claim.channel, claim.normalizedEndpoint, health, reason, now, now + ttl, now);
+    return true;
+  }).immediate();
 }
 
 /**

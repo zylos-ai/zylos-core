@@ -335,3 +335,35 @@ Reviewed via BotsHub on 2026-02-20. Key feedback incorporated:
 - [Automate Workflows with Hooks Guide](https://code.claude.com/docs/en/hooks-guide)
 - [Claude Code Monitoring (OTel)](https://code.claude.com/docs/en/monitoring-usage)
 - [disler/claude-code-hooks-multi-agent-observability](https://github.com/disler/claude-code-hooks-multi-agent-observability) — community reference implementation
+# Durable Health Events
+
+StopFailure health evidence uses a separate synchronous `hook-health.js`
+collector, not the best-effort activity stream described above. Core registers
+it only for stable Claude Code 2.x versions at or above 2.1.301, the conservative
+version verified by the isolated tests. Earlier, future-major and unknown
+versions keep screen-based fallback. Core sync and each managed Claude launch
+reconcile only managed health hooks; a CLI-only upgrade/downgrade therefore takes
+effect without modifying custom hooks or enqueueing another restart.
+
+Each managed Claude or Codex launch creates a new generation UUID, including
+restarts in an existing tmux shell. The runtime inherits that UUID. Health hooks
+reject absent or superseded generations, ignore subagents, and persist only
+session/prompt identifiers, an allowlisted error category, receive time and
+process identity. Unknown error identifiers become `unknown`; prompt text,
+error details and assistant text are not persisted. Prompt identifiers remain
+opaque and do not establish execution order or a unique delivery binding.
+
+Events are written as unique mode-0600 files under
+`activity-monitor/health-inbox/`, using file sync, rename and directory sync.
+Only after saving does the hook attempt a bounded wake on the existing AM
+socket. A lost wake leaves the event available for startup/periodic scans.
+AM acknowledges a spool file only after its database transaction commits.
+Write failures emit a fixed diagnostic rather than claiming delivery.
+
+Linux process proof consists of boot ID plus `/proc` process start ticks.
+Unavailable process proof is represented by null and cannot establish strong
+hook ownership; existing screen fallback remains available. These records do
+do not contain reply addresses. C4 separately records actual dispatcher delivery
+provenance and applies the latest-delivery policy described in
+[Runtime status notices](status-notices.md). The same document covers Stop
+authority, bounded storage, reporting, and send uncertainty.

@@ -40,9 +40,9 @@ function routeRequest(overrides = {}) {
 }
 
 describe('messageForRoute', () => {
-  it('maps reason prefixes and health fallbacks', () => {
-    assert.match(messageForRoute({ health: 'unavailable', reason: 'tool_timeout_exec' }), /tool execution got stuck/i);
-    assert.match(messageForRoute({ health: 'unavailable', reason: 'sticky_context_restart' }), /session context/i);
+  it('maps public health without exposing internal recovery details', () => {
+    assert.match(messageForRoute({ health: 'unavailable', reason: 'tool_timeout_exec' }), /temporarily unavailable/i);
+    assert.match(messageForRoute({ health: 'unavailable', reason: 'sticky_context_restart' }), /temporarily unavailable/i);
     assert.match(messageForRoute({ health: 'rate_limited', reason: '' }), /rate-limited/i);
     assert.match(messageForRoute({ health: 'auth_failed', reason: '' }), /authentication/i);
   });
@@ -99,7 +99,7 @@ describe('MessageRouter route', () => {
     assert.match(decision.userMessage, /rate-limited/i);
   });
 
-  it('returns cached negative decisions without probing', async () => {
+  it('returns cached negative decisions with current templates without probing', async () => {
     await withTmpDir(async (tmpDir) => {
       let probeCalls = 0;
       const cacheFile = path.join(tmpDir, 'cache.json');
@@ -131,7 +131,7 @@ describe('MessageRouter route', () => {
 
       assert.equal(probeCalls, 0);
       assert.equal(decision.cacheHit, true);
-      assert.equal(decision.userMessage, 'cached message');
+      assert.equal(decision.userMessage, messageForRoute({ health: 'unavailable', reason: 'heartbeat_timeout' }));
     });
   });
 

@@ -44,6 +44,7 @@ import { ensureCodexHooksTrusted } from '../codex-hooks.js';
 import { discoverUpgradeContext, shellArgument } from './upgrade-context.js';
 import { buildKickPrompt } from './kick-prompt.js';
 import { resolveCodexBypassPermissions, writeCodexProjectConfig } from '../runtime-setup.js';
+import { createRuntimeGeneration, runtimeGenerationEnv } from '../../../skills/activity-monitor/scripts/runtime-generation.js';
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -288,11 +289,14 @@ export class CodexAdapter extends RuntimeAdapter {
     const kick = buildKickPrompt();
     const kickPrompt = recovery.blocked ? recovery.prompt
       : recovery.active && !recovery.controllerAlive ? kick + "\n\n" + recovery.prompt : kick;
+    const identity = createRuntimeGeneration('codex', { zylosDir: ZYLOS_DIR });
+    const generationEnv = runtimeGenerationEnv(identity);
+    const identityAssignments = Object.entries(generationEnv).map(([key, value]) => `${key}=${shellArgument(value)}`).join(' ');
 
     if (tmuxHasSession(SESSION)) {
       // Existing tmux session — start a fresh Codex process with kick prompt
       // to trigger SessionStart hook immediately.
-      const cmd = `cd "${ZYLOS_DIR}"; ${codexCmd} ${shellArgument(kickPrompt)}; ${exitLogSnippet}`;
+      const cmd = `cd "${ZYLOS_DIR}"; env ${identityAssignments} ${codexCmd} ${shellArgument(kickPrompt)}; ${exitLogSnippet}`;
       await this.sendMessage(cmd);
     } else {
       // New session — launcher pipeline
@@ -303,6 +307,7 @@ export class CodexAdapter extends RuntimeAdapter {
       const { env } = useCleanEnv
         ? buildCleanEnv({ processEnv: process.env, dotenvVars, manifest, uid: process.getuid?.() })
         : buildCompatEnv({ processEnv: process.env, dotenvVars });
+      Object.assign(env, generationEnv);
 
       // Build launch spec — Codex reads auth from ~/.codex/auth.json via HOME
       const args = [...launchArgs, kickPrompt];

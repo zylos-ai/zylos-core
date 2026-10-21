@@ -113,6 +113,8 @@ export class HealthEngine {
     this.rateLimitConsecutiveHits = 0;
     this.stickyErrorConsecutiveHits = 0;
     this.lastStickyErrorHitAt = 0;
+    this.healthRevision = 0;
+    this.probeFences = new Map();
   }
 
   get health() {
@@ -151,13 +153,23 @@ export class HealthEngine {
     this._trackAgentRunning(this.agentRunning, currentTime);
   }
 
-  setHealth(nextHealth, reason = '') {
+  captureFence() {
+    return this.evidence ? this.evidence.captureFence() : { revision:this.healthRevision };
+  }
+
+  validFence(fence) {
+    return this.evidence ? this.evidence.validFence(fence) : fence?.revision===this.healthRevision;
+  }
+
+  setHealth(nextHealth, reason = '', kind = 'screen') {
+    if(this.evidence && !this.evidence.transition(nextHealth,reason,kind))return false;
+    this.healthRevision++;
     if (this.healthState === nextHealth) {
       if (reason && nextHealth !== 'ok') this.healthReason = reason;
       if (isPublicUnavailableState(nextHealth) && this.unavailableSince === 0) {
         this.unavailableSince = Math.floor(Date.now() / 1000);
       }
-      return;
+      return true;
     }
     const suffix = reason ? ` (${reason})` : '';
     const prevHealth = this.healthState;
@@ -177,6 +189,7 @@ export class HealthEngine {
     if (nextHealth === 'ok' || nextHealth === 'rate_limited') {
       this._clearPostRestartProbeTimer();
     }
+    return true;
   }
 
   /**
@@ -200,6 +213,7 @@ export class HealthEngine {
     if (this.healthState === 'rate_limited') {
       // Already rate-limited; update cooldown if the new one is later
       if (cooldownUntil > this.cooldownUntil) {
+        if (!this.setHealth('rate_limited', this.healthReason)) return false;
         this.cooldownUntil = cooldownUntil;
         this.rateLimitResetTime = resetTime || this.rateLimitResetTime;
         this.deps.log(`Rate limit cooldown extended to ${cooldownUntil} (${resetTime || 'unknown'})`);
@@ -208,12 +222,12 @@ export class HealthEngine {
       return;
     }
 
+    if (!this.setHealth('rate_limited', resetTime ? `resets at ${resetTime}` : `cooldown ${cooldownUntil - Math.floor(Date.now() / 1000)}s`)) return false;
     this.cooldownUntil = cooldownUntil;
     this.rateLimitResetTime = resetTime;
     this.restartFailureCount = 0;
     this.recoveringStartedAt = 0;
     this.signalDetectedAt = 0;
-    this.setHealth('rate_limited', resetTime ? `resets at ${resetTime}` : `cooldown ${cooldownUntil - Math.floor(Date.now() / 1000)}s`);
     this._scheduleRateLimitCooldown();
   }
 
@@ -267,12 +281,18 @@ export class HealthEngine {
   }
 
   runMaintenanceCycle(agentRunning, currentTime) {
+    this.evidence?.drain();
     // Track agentRunning transitions for process signal acceleration
     this._trackAgentRunning(agentRunning, currentTime);
 
     const pending = this.deps.readHeartbeatPending();
 
     if (pending) {
+      if(this.evidence && !this.validFence(this.probeFences.get(pending.control_id))) {
+        this.deps.clearHeartbeatPending();
+        this.probeFences.delete(pending.control_id);
+        return;
+      }
       const status = this.deps.getHeartbeatStatus(pending.control_id);
 
       // Guard against stuck pending: if created_at is too old, treat as timeout
@@ -302,7 +322,7 @@ export class HealthEngine {
       }
 
       if (status === 'done') {
-        this.onHeartbeatSuccess(pending.phase || 'unknown');
+        this.onHeartbeatSuccess(pending.phase || 'unknown',pending);
         return;
       }
 
@@ -380,7 +400,9 @@ export class HealthEngine {
     return this.runMaintenanceCycle(agentRunning, currentTime);
   }
 
-  onHeartbeatSuccess(phase) {
+  onHeartbeatSuccess(phase,pending) {
+    if(this.evidence && (!pending || !this.validFence(this.probeFences.get(pending.control_id))))return false;
+    if(!this.setHealth('ok',`heartbeat_ack phase=${phase}`,'recovery'))return false;
     this.deps.clearHeartbeatPending();
     this.restartFailureCount = 0;
     this.recoveringStartedAt = 0;
@@ -390,9 +412,8 @@ export class HealthEngine {
     this._clearRateLimitCooldownTimer();
     this._clearPostRestartProbeTimer();
     this.lastUserMessageRecoveryAt = 0;
-    if (this.healthState !== 'ok') {
-      this.setHealth('ok', `heartbeat_ack phase=${phase}`);
-    }
+    if(pending)this.probeFences.delete(pending.control_id);
+    return true;
   }
 
   triggerRecovery(reason) {
@@ -409,12 +430,15 @@ export class HealthEngine {
     const now = Math.floor(Date.now() / 1000);
 
     if (this.healthState === 'ok') {
-      this.setHealth('unavailable', reason);
+      if(!this.setHealth('unavailable', reason,'probe-failure'))return;
       this.recoveringStartedAt = now;
+    } else if (!this.setHealth(this.healthState, this.healthReason, 'probe-failure')) {
+      return;
     }
 
     this.restartFailureCount += 1;
     this.lastRecoveryAt = now;
+    this.evidence?.persistScheduling();
     this.deps.log(`Heartbeat recovery attempt ${this.restartFailureCount} (${reason}), next backoff ${this.getBackoffDelay()}s`);
     this.deps.killTmuxSession();
 
@@ -427,6 +451,8 @@ export class HealthEngine {
   }
 
   onHeartbeatFailure(pending, status) {
+    if(this.evidence && !this.validFence(this.probeFences.get(pending.control_id)))return;
+    this.probeFences.delete(pending.control_id);
     const phase = pending.phase || 'primary';
     const now = Math.floor(Date.now() / 1000);
     this.deps.clearHeartbeatPending();
@@ -444,9 +470,9 @@ export class HealthEngine {
     }
 
     if (this.healthState === 'rate_limited') {
+      if (!this.setHealth('unavailable', `${phase}_${status}`, 'probe-failure')) return;
       this.restartFailureCount += 1;
       this.lastRecoveryAt = now;
-      this.setHealth('unavailable', `${phase}_${status}`);
       this.deps.log(`Rate limit recovery failed without active rate-limit signal (${status}); transitioning to unavailable`);
       return;
     }
@@ -478,11 +504,12 @@ export class HealthEngine {
    */
   async onUserMessageDelivered() {
     if (this.healthState !== 'ok') return;
+    const fence=this.captureFence();
 
     if (this.userMessageCheckDelayMs > 0) {
       await this._sleep(this.userMessageCheckDelayMs);
     }
-    if (this.healthState !== 'ok') return;
+    if (this.healthState !== 'ok' || !this.validFence(fence)) return;
 
     const rateLimit = this.deps.detectRateLimit ? this.deps.detectRateLimit() : { detected: false };
     if (rateLimit.detected) {
@@ -500,6 +527,7 @@ export class HealthEngine {
     const authFailure = this.deps.detectAuthFailure ? this.deps.detectAuthFailure() : { detected: false };
     if (authFailure.detected) {
       const authResult = await this._checkAuth();
+      if(!this.validFence(fence))return;
       if (authResult && authResult.status === 'failure') {
         this.rateLimitConsecutiveHits = 0;
         this.stickyErrorConsecutiveHits = 0;
@@ -527,7 +555,7 @@ export class HealthEngine {
         this.stickyErrorConsecutiveHits = 0;
         this.lastStickyErrorHitAt = 0;
         this.deps.log(`sticky error 2x: ${stickyError.pattern || 'unknown'}, killing session`);
-        this.setHealth('unavailable', 'sticky_context_restart');
+        if(!this.setHealth('unavailable', 'sticky_context_restart'))return;
         this.deps.killTmuxSession();
       }
       return;
@@ -539,7 +567,10 @@ export class HealthEngine {
   }
 
   enqueueHeartbeat(phase) {
-    return this.deps.enqueueHeartbeat(phase);
+    const fence=this.captureFence();
+    const result=this.deps.enqueueHeartbeat(phase);
+    if(result){const pending=this.deps.readHeartbeatPending();if(pending)this.probeFences.set(pending.control_id,fence);}
+    return result;
   }
 
   async runRecoveryProbe({ phase = 'recovery', timeoutMs = 25000, pollIntervalMs = 1000 } = {}) {
@@ -550,19 +581,21 @@ export class HealthEngine {
     this.lastRecoveryAt = Math.floor(Date.now() / 1000);
 
     if (this.healthState === 'auth_failed') {
+      const fence=this.captureFence();
       const authResult = await this._checkAuth();
+      if(!this.validFence(fence))return {recovered:false,reason:'stale_probe'};
       if (authResult.status === 'success') {
         const now = Math.floor(Date.now() / 1000);
         this.deps.log('Auth probe recovered; restarting session before marking healthy');
         this.restartFailureCount = 0;
         this.lastRecoveryAt = now;
         this.recoveringStartedAt = now;
-        this.setHealth('unavailable', 'auth_recovered_restart');
+        if(!this.setHealth('unavailable', 'auth_recovered_restart','auth-probe'))return {recovered:false,reason:'stale_probe'};
         this.deps.killTmuxSession();
         return { recovered: false, health: 'unavailable', restartTriggered: true };
       }
       const reason = authResult.reason || 'auth_still_failed';
-      this.setHealth('auth_failed', reason);
+      this.setHealth('auth_failed', reason,'auth-probe');
       return { recovered: false, health: 'auth_failed', reason };
     }
 
@@ -581,10 +614,10 @@ export class HealthEngine {
 
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
+      if(this.evidence && !this.validFence(this.probeFences.get(pending.control_id)))return {recovered:false,reason:'stale_probe'};
       const status = this.deps.getHeartbeatStatus(pending.control_id);
       if (status === 'done') {
-        this.onHeartbeatSuccess(pending.phase || 'recovery');
-        return { recovered: true };
+        return { recovered: this.onHeartbeatSuccess(pending.phase || 'recovery',pending) !== false };
       }
       if (status === 'failed' || status === 'timeout' || status === 'not_found') {
         this.onHeartbeatFailure(pending, status);

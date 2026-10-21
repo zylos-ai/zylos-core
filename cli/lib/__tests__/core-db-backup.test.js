@@ -7,8 +7,12 @@ import {createRequire} from 'node:module';
 import {spawnSync} from 'node:child_process';
 import {protectedDataReady} from '../upgrade-protection.js';
 import {fileURLToPath} from 'node:url';
+import {SUPPORTED_SCHEMA_VERSION as C4_VERSION} from '../../../skills/comm-bridge/scripts/c4-schema.js';
+import {SUPPORTED_SCHEMA_VERSION as SCHEDULER_VERSION} from '../../../skills/scheduler/scripts/schema.js';
+import {SUPPORTED_SCHEMA_VERSION as WEB_VERSION} from '../../../skills/web-console/scripts/schema.js';
 import {CORE_DATABASES,cleanupCoreDbRehearsals,createCoreDbSnapshot,prepareRecoveryDependencies,probeCoreDbVersions,rehearseCoreDbUpgrade,runCoreDbWorker} from '../core-db-backup.js';
 const installed=process.env.CORE_DB_TEST_SKILL || path.join(os.homedir(),'zylos','.claude','skills','comm-bridge');
+const currentVersions=[C4_VERSION,SCHEDULER_VERSION,WEB_VERSION];
 let Database;try{Database=createRequire(path.join(installed,'package.json'))('better-sqlite3');}catch{}
 function fixture(t){const dir=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'core-db-')));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));return dir;}
 function skills(dir){for(const item of CORE_DATABASES){const owner=path.join(dir,'.claude','skills',item.owner);fs.mkdirSync(owner,{recursive:true});fs.writeFileSync(path.join(owner,'package.json'),'{}');fs.symlinkSync(path.join(installed,'node_modules'),path.join(owner,'node_modules'));}}
@@ -16,13 +20,13 @@ test('version probe reads only user_version, detects a missing or older database
  const dir=fixture(t);skills(dir);
  for(const item of CORE_DATABASES){
   const file=path.join(dir,item.source);fs.mkdirSync(path.dirname(file),{recursive:true});
-  const db=new Database(file);try{db.pragma('user_version=1');}finally{db.close();}
+  const db=new Database(file);try{db.pragma(`user_version=${currentVersions[CORE_DATABASES.indexOf(item)]}`);}finally{db.close();}
  }
  const probe=()=>probeCoreDbVersions(dir,path.resolve('.'),{driverRoot:path.join(dir,'.claude','skills')});
  const current=probe();
  assert.equal(current.needsMigration,false);
  assert.equal(current.databases.length,3);
- assert.ok(current.databases.every(row=>row.fromVersion===1&&row.toVersion===1&&!row.needsMigration));
+ assert.ok(current.databases.every((row,index)=>row.fromVersion===currentVersions[index]&&row.toVersion===currentVersions[index]&&!row.needsMigration));
  assert.equal(fs.existsSync(path.join(dir,'.backup/db')),false);
  const scheduler=path.join(dir,'scheduler/scheduler.db'),db=new Database(scheduler);
  try{db.pragma('user_version=0');}finally{db.close();}
@@ -35,7 +39,7 @@ test('version probe reads only user_version, detects a missing or older database
  assert.equal(missing.databases.find(row=>row.source==='scheduler/scheduler.db').status,'missing');
  const c4=new Database(path.join(dir,'comm-bridge/c4.db'));
  try{c4.pragma('user_version=99');}finally{c4.close();}
- assert.throws(probe,/exceeds supported 1/);
+ assert.throws(probe,new RegExp(`exceeds supported ${C4_VERSION}`));
  assert.equal(fs.existsSync(path.join(dir,'.backup/db')),false);
 });
 test('next upgrade removes fixed and legacy rehearsal copies but preserves snapshot groups', t => {
@@ -146,7 +150,7 @@ test('upgrade preflight and rehearsal reject an unsafe extension before service 
  try {
   migrateDatabase(db,owner,{allowNew:true,strict:false});
   db.exec('ALTER TABLE conversations ADD COLUMN my_tag TEXT NOT NULL');
-  assert.equal(guardDatabase(db,owner).version,1);
+  assert.equal(guardDatabase(db,owner).version,owner.SUPPORTED_SCHEMA_VERSION);
  }finally{db.close();}
  const before=fs.readFileSync(source);
  assert.throws(()=>runCoreDbWorker({action:'offline-preflight',zylosDir:dir,schemaRoot}),/conversations\.my_tag.*default/);
@@ -164,7 +168,7 @@ test('target rehearsal migrates private copies before stop and leaves live datab
  } finally {db.close();}
  const before=fs.readFileSync(source);
  const result=rehearseCoreDbUpgrade(dir,path.resolve('.'),{driverRoot:path.join(os.homedir(),'zylos','.claude','skills')});
- assert.deepEqual(result.databases.map(row=>row.toVersion),[1,1,1]);
+ assert.deepEqual(result.databases.map(row=>row.toVersion),currentVersions);
  assert.equal(result.databases[0].fromVersion,0);
  assert.deepEqual(fs.readFileSync(source),before);
  assert.equal(fs.existsSync(path.join(dir,'scheduler/scheduler.db')),false);
@@ -309,12 +313,12 @@ test('controlled installed migration requires installing identity, preserves sna
  assert.throws(()=>m.assertCoreDatabaseAvailable(dir),/maintenance|upgrade|blocked/i);
  assert.throws(()=>runCoreDbWorker({...payload,transactionId:'other'}),/identity mismatch/);
  const result=runCoreDbWorker(payload);
- assert.equal(result.databases.length,3);assert.ok(result.databases.every(row=>row.userVersion===1));
+ assert.equal(result.databases.length,3);assert.deepEqual(result.databases.map(row=>row.userVersion),currentVersions);
  assert.deepEqual(result.databases[0].extensions,{tables:['archive_records'],columns:[{table:'conversations',column:'extension_value'}]});
  assert.throws(()=>m.assertCoreDatabaseAvailable(dir),/maintenance|upgrade|blocked/i);
  assert.equal(runCoreDbWorker({action:'offline-preflight',zylosDir:dir,schemaRoot,requireCurrent:true}).databases.length,3);
  assert.equal(runCoreDbWorker({action:'verify',zylosDir:dir,dbBackupDir:snapshot.dbBackupDir,manifest:snapshot.manifest}).databases[0].userVersion,0);
- assert.equal(runCoreDbWorker(payload).databases[0].userVersion,1);
+ assert.equal(runCoreDbWorker(payload).databases[0].userVersion,C4_VERSION);
  const retained=new Database(path.join(dir,'comm-bridge/c4.db'),{readonly:true});
  assert.equal(retained.prepare('SELECT value FROM archive_records WHERE id=1').get().value,'retained');retained.close();
  for(const item of ordinary)assert.notEqual(open(item).status,0);

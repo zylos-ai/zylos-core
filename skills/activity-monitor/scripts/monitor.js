@@ -131,8 +131,14 @@ import fs from 'fs';
 import net from 'net';
 import path from 'path';
 import os from 'os';
+import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'url';
 import { MessageRouter } from './message-router.js';
+import { HealthStore } from './health-store.js';
+import { HealthController } from './health-controller.js';
+import { readRuntimeGeneration, readProcessStart } from './runtime-generation.js';
+import { drainFirstFailureNotices } from '../../comm-bridge/scripts/first-failure-notice.js';
+import { getDb as getHealthDatabase } from '../../comm-bridge/scripts/c4-db.js';
 import { MonitorOrchestrator } from './monitor-orchestrator.js';
 import { canTreatPaneAsRecovered } from './tool-pipeline.js';
 import { readInitialStatus, writeStatus } from './status-writer.js';
@@ -500,6 +506,11 @@ function startMessageRouterServer(activeEngine) {
       data = data.slice(newlineIndex + 1);
       try {
         const request = JSON.parse(raw);
+        if(request.type==='health_events_ready') {
+          activeEngine.evidence?.drain();
+          socket.end(`${JSON.stringify({version:1,type:'ack',requestId:request.requestId})}\n`);
+          return;
+        }
         if (request.type === 'notify_delivered') {
           activeEngine.onUserMessageDelivered().catch((err) => {
             log(`HealthEngine onUserMessageDelivered error: ${err.message}`);
@@ -983,11 +994,42 @@ function createToolPipeline(activeAdapter, config) {
 }
 
 function createHealthEngine(activeAdapter, initialStatus) {
-  return createRuntimeHealthEngine(activeAdapter, initialStatus, {
+  const activeEngine = createRuntimeHealthEngine(activeAdapter, initialStatus, {
     log,
     rateLimitDefaultCooldown: RATE_LIMIT_DEFAULT_COOLDOWN,
     userMessageRecoveryCooldown: USER_MESSAGE_RECOVERY_COOLDOWN,
   });
+  if(activeAdapter.runtimeId==='claude') {
+    const identity=()=>{
+      const generation=readRuntimeGeneration(ZYLOS_DIR);
+      if(!generation || generation.runtime!==activeAdapter.runtimeId)return null;
+      const foreground=readJsonFileSafe(FOREGROUND_SESSION_FILE);
+      const pid=getTmuxClaudePid(activeAdapter.sessionName);
+      const processStart=readProcessStart(pid);
+      const valid=foreground?.runtime_generation===generation.runtime_generation && foreground.claude_pid===pid && foreground.process_start===processStart && processStart;
+      return {...generation,session_id:valid?foreground.session_id:null,claude_pid:pid,process_start:processStart};
+    };
+    const fingerprint=()=>{
+      try {
+        const text=execFileSync('tmux',['capture-pane','-p','-t',activeAdapter.sessionName],{encoding:'utf8',timeout:3000,maxBuffer:1024*1024});
+        return createHash('sha256').update(text).digest('hex');
+      } catch{return null;}
+    };
+    const controller = new HealthController({
+      store: new HealthStore(getHealthDatabase(), {
+        runtime: activeAdapter.runtimeId,
+        initialHealth: initialStatus.health,
+        initialReason: initialStatus.unavailable_reason,
+      }),
+      engine: activeEngine, identity, fingerprint, zylosDir: ZYLOS_DIR, log,
+      onDrained: () => {
+        drainFirstFailureNotices({ identity: identity(), zylosDir: ZYLOS_DIR })
+          .catch(() => log('Health notice worker unavailable; pending notices retained'));
+      },
+    });
+    controller.drain();
+  }
+  return activeEngine;
 }
 
 function createGuardian(activeAdapter, activeToolPipeline, initialRuntimeLaunchAtMs) {

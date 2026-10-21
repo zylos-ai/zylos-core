@@ -37,6 +37,8 @@ import {
 import { buildCleanEnv, buildCompatEnv, loadRuntimeEnvManifest, writeLaunchSpec } from './tmux-env.js';
 
 import { upgradeStartupPrompt, shellArgument } from './upgrade-context.js';
+import { createRuntimeGeneration, runtimeGenerationEnv } from '../../../skills/activity-monitor/scripts/runtime-generation.js';
+import { syncHealthHooksBeforeLaunch } from '../sync-settings-hooks.js';
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -244,6 +246,9 @@ export class ClaudeAdapter extends RuntimeAdapter {
   async launch(opts = {}) {
     const bypassPermissions = opts.bypassPermissions ?? DEFAULT_BYPASS;
     assertInstructionReady('claude');
+    // A CLI-only upgrade may introduce or remove StopFailure support. Refresh
+    // only our health hooks before launch; never enqueue a recursive restart.
+    syncHealthHooksBeforeLaunch({ zylosDir: ZYLOS_DIR, binary: CLAUDE_BIN });
 
     // 1. Pre-accept onboarding/trust dialogs (all auth methods)
     _ensureOnboardingComplete(ZYLOS_DIR);
@@ -284,7 +289,10 @@ export class ClaudeAdapter extends RuntimeAdapter {
     const envStripFlags = hasNativeAuth
       ? ' -u CLAUDE_CODE_OAUTH_TOKEN -u ANTHROPIC_API_KEY'
       : '';
-    const claudeCmd = `${ENV_CLEAN_PREFIX}${envStripFlags} ${CLAUDE_BIN}${bypassFlag}`;
+    const identity = createRuntimeGeneration('claude', { zylosDir: ZYLOS_DIR });
+    const generationEnv = runtimeGenerationEnv(identity);
+    const identityAssignments = Object.entries(generationEnv).map(([key, value]) => `${key}=${shellArgument(value)}`).join(' ');
+    const claudeCmd = `${ENV_CLEAN_PREFIX}${envStripFlags} ${identityAssignments} ${CLAUDE_BIN}${bypassFlag}`;
 
     const monitorDir = path.join(ZYLOS_DIR, 'activity-monitor');
     const exitLogFile = path.join(monitorDir, 'claude-exit.log');
@@ -304,6 +312,7 @@ export class ClaudeAdapter extends RuntimeAdapter {
       const { env } = useCleanEnv
         ? buildCleanEnv({ processEnv: process.env, dotenvVars, manifest, uid: process.getuid?.() })
         : buildCompatEnv({ processEnv: process.env, dotenvVars });
+      Object.assign(env, generationEnv);
 
       // Strip vars that cause Claude to refuse startup ("already running" detection)
       for (const v of ENV_VARS_TO_STRIP) delete env[v];
