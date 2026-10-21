@@ -11,6 +11,7 @@ import { beginRuntimeDelivery, finishRuntimeDelivery, readDeliveryIdentity } fro
 import { enqueueFirstFailureNotice, processFirstFailureNotices, cleanupFailureNoticeHistory } from '../first-failure-notice.js';
 import { claimStatusNotice, startStatusNotice, finishStatusNotice } from '../c4-db.js';
 import { statusNoticeKey, normalizeStatusEndpoint } from '../status-notice.js';
+import { classifyHealthNotice } from '../../../activity-monitor/scripts/health-notice-classification.js';
 
 const identity = { runtime:'claude', runtime_generation:'generation', session_id:'session', process_start:'process', claude_pid:123 };
 test('delivery identity requires current generation, process incarnation and tmux ancestry', () => {
@@ -42,7 +43,7 @@ function enqueue(db, { id = 'event', at = 150, scope = identity, reason = 'hook_
   const event = { event_id:id,event:'stop_failure',runtime_generation:scope.runtime_generation,
     session_id:scope.session_id,process_start:scope.process_start,received_at:at,error };
   return enqueueFirstFailureNotice(db,{ runtime:'claude',state,identity:scope,event,
-    result:{ status:'processed',reason,verify } });
+    result:{ status:'processed',reason,verify,notice:classifyHealthNotice(event,at) } });
 }
 function processor(db, { scope = identity, now = 200000, outcome = 'sent', sent = [] } = {}) {
   let sequence = 0;
@@ -131,11 +132,11 @@ test('submission identity changes cannot produce verified provenance', t => {
   assert.equal(enqueue(db),false);
 });
 
-test('terminal billing/server/unknown errors create first replies without persistent unhealthy state', t => {
+test('unproven billing and nonquota terminal errors do not create new first replies', t => {
   for (const error of ['billing_error','server_error','unknown']) {
     const db=fixture(t);delivery(db,1);
-    assert.equal(enqueue(db,{error,reason:error,state:{health:'ok',episode:1}}),true);
-    assert.equal(db.prepare('SELECT health FROM runtime_notice_intents').get().health,'unavailable');
+    assert.equal(enqueue(db,{error,reason:error,state:{health:'ok',episode:1}}),false);
+    assert.equal(db.prepare('SELECT COUNT(*) n FROM runtime_notice_intents').get().n,0);
   }
 });
 

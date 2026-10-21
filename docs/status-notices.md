@@ -2,7 +2,7 @@
 
 ## Failure replies
 
-For a valid current-runtime StopFailure, AM records a reply intent in the same
+For an eligible current-runtime quota StopFailure, AM records a reply intent in the same
 transaction as its health evidence. C4 chooses the latest eligible dispatcher
 delivery in that runtime generation, session and process. This is a latest
 delivery policy, not proof that a shared Claude prompt belongs to only one
@@ -19,8 +19,9 @@ then waits up to 60 seconds for that exact delivery record. Uncertain, failed or
 late verification suppresses the notice; it never falls back to an older input.
 Missing scope proof defers sending. A confirmed scope change cancels the intent.
 Old, malformed, missing-prompt and unordered post-recovery failures do not create
-new first-failure intents. Nonpersistent errors can produce a generic failure
-reply without locking normal input delivery.
+new first-failure intents. Billing errors require a verified full quota window
+or an explicit quota-related diagnostic match. Other errors remain diagnostic;
+they do not gain new first-failure notices from the historical 33-case table.
 
 AM starts a bounded child worker for external sends, so channel I/O does not
 block the AM event loop. First-failure and subsequent inbound replies share the
@@ -71,9 +72,25 @@ Old Hook authority does not carry into another generation, session or process.
 
 Only rate_limit and authentication_failed directly establish corresponding
 persistent states. Other error categories remain diagnostic unless the existing
-recovery policy establishes unavailability. No producer currently supplies a
-trusted quota snapshot, so runtime replies do not infer a five-hour/seven-day
-quota window or display a reset estimate.
+recovery policy establishes unavailability. The status-line producer separately
+captures sanitized quota snapshots with inherited generation, session, process
+proof and receipt time. Hook collection freezes a matching snapshot no older
+than 60 seconds into its event; AM never classifies an old failure using a newer
+snapshot. Missing, stale or mismatched snapshots retain neutral wording.
+
+Classification first excludes explicit warnings, temporary request limits and
+nonquota diagnostics. Otherwise a proven exhausted five-hour/seven-day window
+takes precedence over text refinement. Both full windows use the later valid
+reset; if either full window has no reset, no time is claimed. Expired reset
+values are not displayed. Windows below 100% do not prove a model quota.
+
+The 33 source cases are matched only against bounded Hook diagnostic fields in
+memory. Exact rule ID/kind, rather than raw diagnostic or assistant text, is
+saved. Error details take precedence; unknown/oversized details do not cause
+the matcher to mine unrelated assistant prose. Positive model/credits/cap text
+refines only structured rate_limit or billing_error failures. Unmatched rate
+limits remain neutral; an unproven billing error does not claim quota exhaustion.
+See [matching rules](health-notice-matching.md) for all diagnostic cases.
 
 The collector uses a Linux `flock` admission guard, file sync and atomic rename.
 Exact pending duplicates coalesce. The spool admits at most 1000 unique records;
@@ -112,10 +129,11 @@ data over the network from the collector is deliberately avoided.
 
 ## Message configuration
 
-AM routing and the C4 fallback use the same templates. The default is Chinese
-and English, prefixed with `Zylos`. A first-failure reply says the delivered
+AM routing and the C4 fallback use the same templates. Every notice contains
+Chinese followed by English, prefixed with `Zylos`. A first-failure reply says the delivered
 request could not complete; an inbound rejection says the new message did not
-enter the queue. Neither promises automatic recovery or a quota reset time.
+enter the queue. A reset time is an estimate from validated quota data, formatted
+in UTC; it never clears health or promises automatic task replay.
 
 Operators can configure `.zylos/config.json` and restart the affected processes
 through the normal deployment workflow:
@@ -123,11 +141,10 @@ through the normal deployment workflow:
 ```json
 {
   "statusNotices": {
-    "language": "bilingual",
     "brand": "Zylos",
     "templates": {
       "failure": {
-        "rate_limited": {
+        "quota_exhausted": {
           "zh": "当前服务暂时受限，本次请求未能完成，请稍后重新发送。",
           "en": "The service is rate-limited. This request could not complete. Please resend it later."
         }
@@ -137,9 +154,17 @@ through the normal deployment workflow:
 }
 ```
 
-`language` accepts `zh`, `en`, or `bilingual`. The two template contexts are
-`inbound` and `failure`; each supports `rate_limited`, `auth_failed`, and
-`unavailable`, with `zh` and `en` text. Overrides are complete message bodies;
+The two template contexts are `inbound` and `failure`, each with `zh` and `en`
+text. Stable quota IDs are `quota_exhausted`, `quota_exhausted_reset`,
+`model_quota_exhausted`, `usage_credits_required`, `usage_credits_exhausted`,
+and `quota_allocation_unavailable`. These are Core template IDs; the source's
+numbered 1-33 entries identify diagnostic rules, not templates. The reset template
+supports `{resetAt}`, a validated epoch-millisecond time formatted in UTC.
+Missing/expired/invalid reset values select `quota_exhausted` instead.
+
+Existing `rate_limited`, `auth_failed` and `unavailable` category overrides remain
+fallbacks. The earlier `language` switch is ignored: notices always include both
+languages, with no sender identity or language detection. Overrides are complete message bodies;
 the brand prefix is added separately. Missing or invalid values use defaults.
 Brand text is limited to 80 characters and each localized body to 2000.
 Runtime diagnostic text is never interpolated into messages. Product-specific

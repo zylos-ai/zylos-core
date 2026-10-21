@@ -121,7 +121,8 @@ function publicHealth(health) {
 }
 
 function buildFallbackMessage(status) {
-  return messageForStatus({ health: publicHealth(status.health), reason: status.unavailable_reason });
+  return messageForStatus({ health: publicHealth(status.health), reason: status.unavailable_reason,
+    noticeCode:status.health_notice?.noticeCode, resetAt:status.health_notice?.resetAt });
 }
 
 function fallbackFileRoute() {

@@ -1,4 +1,5 @@
 import { STATUS_NOTICE_CONFIG } from './c4-config.js';
+import { NOTICE_TEMPLATES } from './status-notice-catalog.js';
 
 const DEFAULTS = {
   rate_limited: {
@@ -45,17 +46,24 @@ function validText(value, maximum) {
 }
 
 // Configuration is trusted operator input. Runtime error text is never rendered.
-export function messageForStatus({ health, context = 'inbound' } = {}, config = STATUS_NOTICE_CONFIG) {
+export function messageForStatus({ health, reason, noticeCode, resetAt, context = 'inbound' } = {}, config = STATUS_NOTICE_CONFIG) {
   config = config && typeof config === 'object' ? config : {};
   const category = Object.hasOwn(DEFAULTS, health) ? health : 'unavailable';
   const mode = context === 'failure' ? 'failure' : 'inbound';
-  const language = ['zh', 'en', 'bilingual'].includes(config.language) ? config.language : 'bilingual';
   const brand = validText(config.brand, 80) && !/[\r\n]/.test(config.brand) ? config.brand.trim() : 'Zylos';
-  const languages = language === 'bilingual' ? ['zh', 'en'] : [language];
-  return languages.map(locale => {
-    const override = config.templates?.[mode]?.[category]?.[locale];
-    const reason = (mode === 'failure' ? FAILURE_REASONS : DEFAULTS)[category][locale];
-    const body = validText(override, 2000) ? override.trim() : `${reason}${locale === 'en' ? ' ' : ''}${SUFFIXES[mode][locale]}`;
-    return `[${brand}] ${body}`;
+  const now = Date.now();
+  const validReset = Number.isSafeInteger(resetAt) && resetAt > now && resetAt - now <= 8 * 86400000;
+  const resetText = validReset ? new Date(resetAt).toISOString().slice(0,16).replace('T',' ') + ' UTC' : null;
+  let code = Object.hasOwn(NOTICE_TEMPLATES,noticeCode) ? noticeCode : null;
+  if (code === 'quota_exhausted_reset' && !resetText) code = 'quota_exhausted';
+  // Codes and times come from structured, trusted classification. Free-form
+  // reason text is never used as content or interpreted as a template ID.
+  return ['zh','en'].map(locale => {
+    const override = config.templates?.[mode]?.[code || category]?.[locale] ?? config.templates?.[mode]?.[category]?.[locale];
+    const description = code ? NOTICE_TEMPLATES[code][locale] : (mode === 'failure' ? FAILURE_REASONS : DEFAULTS)[category][locale];
+    const safeOverride = validText(override,2000) && (!override.includes('{resetAt}') || (code === 'quota_exhausted_reset' && resetText));
+    const body = safeOverride ? override.trim() : `${description}${locale === 'en' ? ' ' : ''}${SUFFIXES[mode][locale]}`;
+    const rendered = code === 'quota_exhausted_reset' ? body.replaceAll('{resetAt}',resetText) : body;
+    return `[${brand}] ${rendered}`;
   }).join('\n');
 }

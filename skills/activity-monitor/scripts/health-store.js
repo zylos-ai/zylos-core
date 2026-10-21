@@ -77,6 +77,7 @@ export class HealthStore {
       const generation = identity?.runtime_generation ?? prior.runtime_generation;
       const session = identity?.session_id ?? prior.session_id;
       const next = { ...prior, health, reason:safeHealthReason(health,reason), runtime_generation:generation,session_id:session,source:kind,evidence_id:eventId,revision:prior.revision+1 };
+      delete next.notice;
       if (health !== prior.health) delete next.scheduling;
       if (health !== 'ok' && prior.health === 'ok') next.episode++;
       if (kind === 'recovery') {

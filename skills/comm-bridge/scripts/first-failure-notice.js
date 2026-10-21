@@ -15,6 +15,9 @@ export function enqueueFirstFailureNotice(database, { runtime, state, identity, 
       !identity?.runtime_generation || !identity.session_id || !identity.process_start ||
       event.runtime_generation !== identity.runtime_generation || event.session_id !== identity.session_id ||
       event.process_start !== identity.process_start) return false;
+  // This feature's first-reply scope is quota failures. Other Hook categories
+  // remain diagnostic and retain the established inbound health handling.
+  if (!result.notice?.eligible) return false;
   const delivery = database.prepare(`SELECT * FROM runtime_deliveries WHERE runtime_id=?
     AND runtime_generation=? AND session_id=? AND process_start=? AND started_at<=?
     ORDER BY id DESC LIMIT 1`).get(runtime,identity.runtime_generation,identity.session_id,identity.process_start,event.received_at);
@@ -25,9 +28,9 @@ export function enqueueFirstFailureNotice(database, { runtime, state, identity, 
   const episode = state.health !== 'ok' ? `${runtime}:${state.episode}` : `failure:${event.event_id}`;
   return database.prepare(`INSERT OR IGNORE INTO runtime_notice_intents
     (event_id,runtime_id,runtime_generation,session_id,process_start,conversation_id,delivery_id,channel,endpoint,
-     health,reason,health_episode,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+     health,reason,health_episode,created_at,updated_at,notice_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
     .run(event.event_id,runtime,identity.runtime_generation,identity.session_id,identity.process_start,
-      delivery.conversation_id,delivery.id,delivery.channel,delivery.endpoint,health,event.error,episode,event.received_at,event.received_at).changes === 1;
+      delivery.conversation_id,delivery.id,delivery.channel,delivery.endpoint,health,event.error,episode,event.received_at,event.received_at,JSON.stringify(result.notice)).changes === 1;
 }
 
 function sameScope(intent, identity) {
@@ -61,7 +64,10 @@ export function processFirstFailureNotices({ database = getDb(), identity = read
         finish(intent,previous.status); continue;
       }
     }
-    const route = { health:intent.health, reason:intent.reason, healthEpisode:intent.health_episode, context:'failure' };
+    let notice = {};
+    try { notice = JSON.parse(intent.notice_json || '{}'); } catch { /* Neutral template on malformed metadata. */ }
+    const route = { health:intent.health, reason:intent.reason, healthEpisode:intent.health_episode, context:'failure',
+      noticeCode:notice?.noticeCode, resetAt:notice?.resetAt };
     let claim;
     try { claim = reserve(intent.channel,intent.endpoint,route); }
     catch { finish(intent,'failed'); continue; }

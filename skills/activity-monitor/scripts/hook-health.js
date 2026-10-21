@@ -6,6 +6,9 @@ import { randomUUID, createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { getClaudePid } from './claude-pid.js';
+import { readHealthQuota, sanitizeHealthQuota } from './health-quota.js';
+import { matchHealthNoticeText } from './health-notice-match.js';
+import { sanitizeNoticeMatch } from './health-notice-classification.js';
 import { durableJson, readRuntimeGeneration, readProcessStart, runtimeRoot, syncDirectory } from './runtime-generation.js';
 
 const EVENTS = { SessionStart: 'session_start', UserPromptSubmit: 'prompt_submit', StopFailure: 'stop_failure', Stop: 'stop' };
@@ -15,7 +18,7 @@ const identifier = (value) => typeof value === 'string' && /^[A-Za-z0-9._:-]{1,2
 function recoverInterruptedWrites(directory, limit) {
   const names=fs.readdirSync(directory);
   let count=names.filter(name=>/^[0-9a-f-]{36}\.json$/.test(name)).length;
-  const keys=new Set(['schema_version','event_id','source','runtime','runtime_generation','session_id','prompt_id','event','error','received_at','claude_pid','process_start']);
+  const keys=new Set(['schema_version','event_id','source','runtime','runtime_generation','session_id','prompt_id','event','error','received_at','claude_pid','process_start','notice_match','quota']);
   for(const name of names) {
     const match=name.match(/^([0-9a-f-]{36})(?:\.json\.[0-9a-f-]{36}\.tmp|\.[0-9a-f-]{36}\.staged(?:\.[0-9a-f-]{36}\.tmp)?)$/);
     if(!match)continue;
@@ -26,6 +29,8 @@ function recoverInterruptedWrites(directory, limit) {
       if(stat.isFile()&&stat.size<=8192) {
         const value=JSON.parse(fs.readFileSync(orphan,'utf8'));
         valid=value?.schema_version===1&&value.event_id===match[1]&&value.source==='hook'&&value.runtime==='claude'&&Object.keys(value).every(key=>keys.has(key));
+        if(valid&&value.notice_match!==undefined)valid=JSON.stringify(value.notice_match)===JSON.stringify(sanitizeNoticeMatch(value.notice_match));
+        if(valid&&value.quota!==undefined)valid=JSON.stringify(value.quota)===JSON.stringify(sanitizeHealthQuota(value.quota,{identity:value,nowMs:value.received_at}));
       }
     } catch { /* An incomplete writer-owned temporary is not an event. */ }
     const final=path.join(directory,`${match[1]}.json`);
@@ -57,6 +62,12 @@ export function collectHealthHook(payload, {
     prompt_id: identifier(payload.prompt_id), event: EVENTS[payload.hook_event_name],
     error, received_at: nowMs, claude_pid: pid, process_start: processStart,
   };
+  if (event.event === 'stop_failure') {
+    const match = matchHealthNoticeText(payload);
+    if (match) event.notice_match = match;
+    const quota = readHealthQuota({ identity:event, zylosDir, nowMs });
+    if (quota) event.quota = quota;
+  }
   const directory = path.join(zylosDir, 'activity-monitor', 'health-inbox');
   if(fs.mkdirSync(directory, { recursive: true, mode: 0o700 }))syncDirectory(path.dirname(directory));
   // Equal terminal identities coalesce without replacing an earlier pending copy.

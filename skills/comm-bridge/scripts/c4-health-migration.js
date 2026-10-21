@@ -14,6 +14,7 @@ export const HEALTH_TABLES = {
     delivery_id: { type: 'INTEGER', pk: false },
     channel: { type: 'TEXT', pk: false }, endpoint: { type: 'TEXT', pk: false },
     health: { type: 'TEXT', pk: false }, reason: { type: 'TEXT', pk: false },
+    notice_json: { type: 'TEXT', pk: false },
     health_episode: { type: 'TEXT', pk: false }, status: { type: 'TEXT', pk: false },
     claim_key: { type: 'TEXT', pk: false }, attempt_id: { type: 'TEXT', pk: false },
     created_at: { type: 'INTEGER', pk: false }, updated_at: { type: 'INTEGER', pk: false },
@@ -51,7 +52,7 @@ export function migrateHealthNotices(database) {
     CREATE TABLE runtime_notice_intents (
       event_id TEXT PRIMARY KEY, runtime_id TEXT NOT NULL, runtime_generation TEXT NOT NULL,
       session_id TEXT NOT NULL, process_start TEXT NOT NULL, conversation_id INTEGER NOT NULL, delivery_id INTEGER NOT NULL,
-      channel TEXT NOT NULL, endpoint TEXT NOT NULL, health TEXT NOT NULL, reason TEXT NOT NULL,
+      channel TEXT NOT NULL, endpoint TEXT NOT NULL, health TEXT NOT NULL, reason TEXT NOT NULL, notice_json TEXT,
       health_episode TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending',
       claim_key TEXT, attempt_id TEXT,
       created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL

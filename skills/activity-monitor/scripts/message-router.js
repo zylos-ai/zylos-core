@@ -103,11 +103,15 @@ export class MessageRouter {
 
   _decision(request, decision) {
     const evidence=this.healthEngine.evidence?.store.read();
+    const notice = evidence?.health === decision.health ? evidence?.notice : null;
     return {
       version: 1,
       requestId: request.requestId,
       ...(evidence ? {healthEpisode:`${this.healthEngine.evidence.store.runtime}:${evidence.episode}`,healthRevision:evidence.revision} : {}),
       ...decision,
+      ...(!decision.recovered && !request.noReply && notice ? {
+        userMessage: messageForStatus({ health:decision.health, reason:decision.reason, noticeCode:notice.noticeCode, resetAt:notice.resetAt }),
+      } : {}),
     };
   }
 

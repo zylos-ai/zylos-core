@@ -1,4 +1,6 @@
 import { createHash } from 'node:crypto';
+import { sanitizeHealthQuota } from './health-quota.js';
+import { classifyHealthNotice, sanitizeNoticeMatch } from './health-notice-classification.js';
 
 export const HOOK_ERRORS = new Set(['rate_limit', 'authentication_failed', 'billing_error', 'overloaded', 'server_error', 'model_not_found']);
 const id = value => typeof value === 'string' && /^[A-Za-z0-9._:-]{1,200}$/.test(value);
@@ -12,6 +14,12 @@ export function sanitizeHealthEvent(raw, fallbackId) {
   }
   const event = Object.fromEntries(['schema_version','event_id','source','runtime','runtime_generation','session_id','prompt_id','event','received_at','claude_pid','process_start'].map(key => [key,raw[key]]));
   event.error = raw.event === 'stop_failure' ? (HOOK_ERRORS.has(raw.error) ? raw.error : 'unknown') : null;
+  if (event.event === 'stop_failure') {
+    const match = sanitizeNoticeMatch(raw.notice_match);
+    if (match) event.notice_match = match;
+    const quota = sanitizeHealthQuota(raw.quota, { identity:event, nowMs:event.received_at });
+    if (quota) event.quota = quota;
+  }
   if (event.event === 'stop_failure' && event.prompt_id) {
     event.event_id = `failure:${createHash('sha256').update(JSON.stringify([event.runtime_generation,event.session_id,event.prompt_id,event.error])).digest('hex')}`;
   }
@@ -62,8 +70,9 @@ export function reduceHealthEvidence(state, event, { identity, now, quota = null
     return { state: next, status: 'processed', reason: 'unordered_failure', verify: true };
   }
   if (!event.prompt_id) return { state: next, status: 'processed', reason: 'missing_prompt', verify: true };
-  const classification = event.error === 'rate_limit' ? quotaClassification(quota,event,now) : event.error;
+  const notice = classifyHealthNotice(event, now);
+  const classification = notice.eligible ? notice.reason : event.error;
   const health = event.error === 'rate_limit' ? 'rate_limited' : event.error === 'authentication_failed' ? 'auth_failed' : null;
-  if (!health) return { state: next, status: 'processed', reason: classification === 'unknown' ? 'unmapped_error' : classification };
-  return { state: { ...next, health, reason: classification, source: 'hook', hook_ok:false, hook_process_start:event.process_start,hook_pid:event.claude_pid, hook_prompt: event.prompt_id, evidence_id: event.event_id, episode: next.health === 'ok' ? next.episode+1 : next.episode }, status: 'processed', reason: 'hook_failure' };
+  if (!health) return { state: next, status: 'processed', notice, reason: classification === 'unknown' ? 'unmapped_error' : classification };
+  return { state: { ...next, health, reason: classification, notice, source: 'hook', hook_ok:false, hook_process_start:event.process_start,hook_pid:event.claude_pid, hook_prompt: event.prompt_id, evidence_id: event.event_id, episode: next.health === 'ok' ? next.episode+1 : next.episode }, status: 'processed', notice, reason: 'hook_failure' };
 }

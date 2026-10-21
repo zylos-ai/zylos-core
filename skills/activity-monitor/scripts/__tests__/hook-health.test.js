@@ -7,6 +7,7 @@ import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { collectHealthHook, readHealthInbox, acknowledgeHealthEvent, wakeHealthMonitor } from '../hook-health.js';
 import { createRuntimeGeneration, readRuntimeGeneration, runtimeGenerationEnv, readProcessStart } from '../runtime-generation.js';
+import {writeHealthQuota} from '../health-quota.js';
 
 function fixture(t) {
   const zylosDir = fs.mkdtempSync(path.join(os.tmpdir(), 'health-hook-'));
@@ -119,9 +120,12 @@ test('kernel admission lock releases when owner crashes', async t => {
   assert.ok(collectHealthHook(failure,options));
 });
 test('crash after temporary fsync recovers original event before admitting new records', async t=>{
-  const options={...fixture(t),inboxLimit:1};
+  const options={...fixture(t),inboxLimit:1,pid:process.pid,processStart:readProcessStart(process.pid)};
+  fs.writeFileSync(path.join(options.zylosDir,'activity-monitor','foreground-session.json'),JSON.stringify({runtime_generation:options.identity.runtime_generation,session_id:failure.session_id,claude_pid:options.pid,process_start:options.processStart}));
+  writeHealthQuota({session_id:failure.session_id,rate_limits:{five_hour:{used_percentage:100}}},options);
+  const failureWithMatch={...failure,last_assistant_message:"You've hit your session limit"};
   const script=new URL('../hook-health.js',import.meta.url).href;
-  const source=`import fs from 'node:fs';import{collectHealthHook}from ${JSON.stringify(script)};const rename=fs.renameSync;fs.renameSync=(from,to)=>{if(to.includes('/health-inbox/')&&to.endsWith('.json'))process.kill(process.pid,'SIGKILL');return rename(from,to);};collectHealthHook(${JSON.stringify(failure)},${JSON.stringify(options)});`;
+  const source=`import fs from 'node:fs';import{collectHealthHook}from ${JSON.stringify(script)};const rename=fs.renameSync;fs.renameSync=(from,to)=>{if(to.includes('/health-inbox/')&&to.endsWith('.json'))process.kill(process.pid,'SIGKILL');return rename(from,to);};collectHealthHook(${JSON.stringify(failureWithMatch)},${JSON.stringify(options)});`;
   const child=spawn(process.execPath,['--input-type=module','-e',source],{stdio:'ignore'});
   const [,signal]=await once(child,'exit');assert.equal(signal,'SIGKILL');
   const directory=path.join(options.zylosDir,'activity-monitor','health-inbox');
@@ -130,6 +134,8 @@ test('crash after temporary fsync recovers original event before admitting new r
   assert.throws(()=>collectHealthHook({...failure,prompt_id:'new'},options),/capacity/);
   const recovered=collectHealthHook(failure,{...options,nowMs:9999});
   assert.equal(recovered.received_at,options.nowMs);
+  assert.equal(recovered.quota.rate_limits.five_hour.used_percentage,100);
+  assert.equal(recovered.notice_match.kind,'quota');
   assert.equal(readHealthInbox(options).length,1);
   assert.equal(fs.readdirSync(directory).filter(n=>n.endsWith('.tmp')||n.endsWith('.staged')).length,0);
 });

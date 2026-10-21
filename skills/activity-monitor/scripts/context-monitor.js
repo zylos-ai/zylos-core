@@ -20,6 +20,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { CHECKPOINT_THRESHOLD } from '../../comm-bridge/scripts/c4-config.js';
+import { writeHealthQuota } from './health-quota.js';
 import {
   createMemorySyncControlPrompt,
   markMemorySyncRequested,
@@ -75,8 +76,7 @@ process.stdin.on('end', () => {
   } catch (err) {
     // Silent failure — statusLine errors must not break Claude
     try {
-      const preview = input.substring(0, 200).replace(/\n/g, '\\n');
-      log(`ERROR: ${err.message} (input length: ${input.length}, preview: ${preview})`);
+      log(`ERROR: statusLine processing failed (input length: ${input.length})`);
     } catch {}
   }
 });
@@ -86,6 +86,9 @@ function main(raw) {
 
   // Parse status JSON
   const status = JSON.parse(raw);
+  try { writeHealthQuota(status); } catch {
+    log('Health quota snapshot unavailable');
+  }
 
   // Ensure data directory exists
   ensureDirOnce();
