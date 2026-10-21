@@ -12,7 +12,7 @@ test('peer disappears during blocking durable drain: real Unix write error does 
   const socketPath=path.join(directory,'am.sock');
   const helper=new URL('../router-socket.js',import.meta.url).href;
   const source=`import net from 'node:net';import{createRouterReply}from ${JSON.stringify(helper)};
-    let requests=0;const server=net.createServer(socket=>{const reply=createRouterReply(socket,()=>console.log('PEER_ERROR'));socket.on('error',error=>console.log('CODE:'+error.code));
+    let requests=0;const server=net.createServer(socket=>{const emit=socket.emit;socket.emit=function(type,...args){if(type==='error')console.log('CODE:'+args[0].code);return emit.call(this,type,...args);};const reply=createRouterReply(socket,()=>console.log('PEER_ERROR'));
     socket.once('data',()=>{requests++;if(requests===1){console.log('DRAINING');Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,250);}reply({type:'ack',requests});});});
     server.listen(${JSON.stringify(socketPath)},()=>console.log('READY'));`;
   const child=spawn(process.execPath,['--input-type=module','-e',source],{stdio:['ignore','pipe','pipe']});
