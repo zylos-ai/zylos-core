@@ -137,6 +137,7 @@ import { MessageRouter } from './message-router.js';
 import { HealthStore } from './health-store.js';
 import { HealthController } from './health-controller.js';
 import { readRuntimeGeneration, readProcessStart } from './runtime-generation.js';
+import { createRouterReply } from './router-socket.js';
 import { drainFirstFailureNotices } from '../../comm-bridge/scripts/first-failure-notice.js';
 import { getDb as getHealthDatabase } from '../../comm-bridge/scripts/c4-db.js';
 import { MonitorOrchestrator } from './monitor-orchestrator.js';
@@ -496,6 +497,7 @@ function startMessageRouterServer(activeEngine) {
   } catch { /* best-effort */ }
 
   messageRouterServer = net.createServer((socket) => {
+    const reply = createRouterReply(socket, log);
     let data = '';
     socket.on('data', async (chunk) => {
       data += chunk;
@@ -508,30 +510,30 @@ function startMessageRouterServer(activeEngine) {
         const request = JSON.parse(raw);
         if(request.type==='health_events_ready') {
           activeEngine.evidence?.drain();
-          socket.end(`${JSON.stringify({version:1,type:'ack',requestId:request.requestId})}\n`);
+          reply({version:1,type:'ack',requestId:request.requestId});
           return;
         }
         if (request.type === 'notify_delivered') {
           activeEngine.onUserMessageDelivered().catch((err) => {
             log(`HealthEngine onUserMessageDelivered error: ${err.message}`);
           });
-          socket.end(`${JSON.stringify({ version: 1, type: 'ack', requestId: request.requestId })}\n`);
+          reply({ version: 1, type: 'ack', requestId: request.requestId });
           return;
         }
         if (request.type !== 'route') {
           throw new Error(`unsupported request type: ${request.type}`);
         }
         const decision = await router.route(request);
-        socket.end(`${JSON.stringify(decision)}\n`);
+        reply(decision);
       } catch (err) {
-        socket.end(`${JSON.stringify({
+        reply({
           version: 1,
           recovered: false,
           health: 'unavailable',
           reason: 'message_router_error',
           userMessage: 'I am temporarily unavailable and attempting to recover. Please resend your message shortly.',
           error: err.message
-        })}\n`);
+        });
       }
     });
   });
