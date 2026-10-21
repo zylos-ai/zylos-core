@@ -7,7 +7,9 @@ A match cannot establish delivery ownership, health, recovery or quota proof.
 
 Source: https://mia.opencoco.site/review/818-v4.html (v7.9). The collapsed
 33-case catalog is historical. Its diagnostic IDs are retained for traceability,
-not authorization to enable its old notices, Owner routing or state changes.
+not authorization to enable its old Owner routing or state changes. Factual
+first-failure replies for nonquota errors follow the primary Core design's
+structured error mapping, independently of the historical text rules.
 
 | Source IDs | Kind | Meaning |
 | --- | --- | --- |
@@ -33,6 +35,8 @@ accepts one optional API Error/status prefix. All rules start at the diagnostic
 prefix, so quoted or explanatory prose containing a signature does not match.
 This reduces accidental matches; text itself is not trusted provenance.
 
-Warning/capacity rules precede quota rules. The result contains only a numeric
+Within text matching, warning/capacity rules precede quota text rules. The caller
+checks valid full quota windows before using any text result, so even a temporary
+text match cannot suppress a proven full-window notice. The result contains only a numeric
 source ID and an enum. Raw Hook text must not be persisted or included in a
 notice by this matcher. Platform wording overrides belong to the template layer.

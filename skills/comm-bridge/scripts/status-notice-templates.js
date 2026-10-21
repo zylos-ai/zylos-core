@@ -45,21 +45,31 @@ function validText(value, maximum) {
     !/[\x00-\x08\x0b-\x1f\x7f]/.test(value);
 }
 
+function formatResetTime(resetAt, requestedZone) {
+  let timeZone = typeof requestedZone === 'string' && requestedZone ? requestedZone : Intl.DateTimeFormat().resolvedOptions().timeZone;
+  let formatter;
+  const options = { year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23' };
+  try { formatter = new Intl.DateTimeFormat('en-GB',{...options,timeZone}); }
+  catch { timeZone = 'UTC'; formatter = new Intl.DateTimeFormat('en-GB',{...options,timeZone}); }
+  const parts = Object.fromEntries(formatter.formatToParts(resetAt).map(part=>[part.type,part.value]));
+  return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute} ${timeZone}`;
+}
+
 // Configuration is trusted operator input. Runtime error text is never rendered.
 export function messageForStatus({ health, reason, noticeCode, resetAt, context = 'inbound' } = {}, config = STATUS_NOTICE_CONFIG) {
   config = config && typeof config === 'object' ? config : {};
-  const category = Object.hasOwn(DEFAULTS, health) ? health : 'unavailable';
+  const category = Object.hasOwn(DEFAULTS, noticeCode) ? noticeCode : Object.hasOwn(DEFAULTS, health) ? health : 'unavailable';
   const mode = context === 'failure' ? 'failure' : 'inbound';
   const brand = validText(config.brand, 80) && !/[\r\n]/.test(config.brand) ? config.brand.trim() : 'Zylos';
   const now = Date.now();
   const validReset = Number.isSafeInteger(resetAt) && resetAt > now && resetAt - now <= 8 * 86400000;
-  const resetText = validReset ? new Date(resetAt).toISOString().slice(0,16).replace('T',' ') + ' UTC' : null;
+  const resetText = validReset ? formatResetTime(resetAt,config.timeZone) : null;
   let code = Object.hasOwn(NOTICE_TEMPLATES,noticeCode) ? noticeCode : null;
   if (code === 'quota_exhausted_reset' && !resetText) code = 'quota_exhausted';
   // Codes and times come from structured, trusted classification. Free-form
   // reason text is never used as content or interpreted as a template ID.
   return ['zh','en'].map(locale => {
-    const override = config.templates?.[mode]?.[code || category]?.[locale] ?? config.templates?.[mode]?.[category]?.[locale];
+    const override = config.templates?.[mode]?.[code || category]?.[locale];
     const description = code ? NOTICE_TEMPLATES[code][locale] : (mode === 'failure' ? FAILURE_REASONS : DEFAULTS)[category][locale];
     const safeOverride = validText(override,2000) && (!override.includes('{resetAt}') || (code === 'quota_exhausted_reset' && resetText));
     const body = safeOverride ? override.trim() : `${description}${locale === 'en' ? ' ' : ''}${SUFFIXES[mode][locale]}`;

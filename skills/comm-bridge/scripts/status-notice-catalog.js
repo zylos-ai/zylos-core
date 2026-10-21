@@ -1,6 +1,18 @@
 // Stable Core IDs. The source review's #1-33 are diagnostic rule IDs, not
 // template IDs; historical Owner-specific K templates are intentionally absent.
 export const NOTICE_TEMPLATES = Object.freeze({
+  model_unavailable: Object.freeze({
+    zh: '当前模型不可用，请检查模型配置或切换模型后重试。',
+    en: 'The current model is unavailable. Please check the model configuration or switch models, then try again.',
+  }),
+  billing_error: Object.freeze({
+    zh: '服务返回了计费错误，请联系该 Agent 的负责人检查账户计费状态后重试。',
+    en: 'The service reported a billing error. Please contact the Agent owner to check the account billing status, then try again.',
+  }),
+  service_error: Object.freeze({
+    zh: '服务返回了服务端错误或过载，请稍后重试。',
+    en: 'The service reported a server error or overload. Please try again later.',
+  }),
   quota_exhausted: Object.freeze({
     zh: '该 Agent 的使用额度已用完，请稍后重试；如需帮助，请联系该 Agent 的负责人。',
     en: 'This Agent has exhausted its usage quota. Please try again later, or contact the Agent owner for help.',
@@ -38,7 +50,7 @@ const cases = [
   [8,'quota_exhausted','quota','channel_cap'],
   [9,'quota_exhausted','quota','shared_budget'],
   [10,'usage_credits_exhausted','conditional','usage_credits_or_platform_billing'],
-  [11,'quota_exhausted','conditional','session_weekly_or_model_limit'],
+  [11,null,'conditional','session_weekly_or_model_limit'],
   [12,null,'diagnostic','approaching_quota_warning'],
   [13,'quota_allocation_unavailable','conditional','seat_allocation_or_zero_cap'],
   [14,null,'diagnostic','api_credit_balance'],

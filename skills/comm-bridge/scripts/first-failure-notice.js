@@ -15,8 +15,7 @@ export function enqueueFirstFailureNotice(database, { runtime, state, identity, 
       !identity?.runtime_generation || !identity.session_id || !identity.process_start ||
       event.runtime_generation !== identity.runtime_generation || event.session_id !== identity.session_id ||
       event.process_start !== identity.process_start) return false;
-  // This feature's first-reply scope is quota failures. Other Hook categories
-  // remain diagnostic and retain the established inbound health handling.
+  // A factual failure reply is separate from persistent runtime health.
   if (!result.notice?.eligible) return false;
   const delivery = database.prepare(`SELECT * FROM runtime_deliveries WHERE runtime_id=?
     AND runtime_generation=? AND session_id=? AND process_start=? AND started_at<=?

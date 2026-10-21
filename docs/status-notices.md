@@ -1,8 +1,11 @@
 # Runtime status notices
 
+Complete scenario and bilingual-message reference:
+[Current notice behavior](current-notice-behavior.md).
+
 ## Failure replies
 
-For an eligible current-runtime quota StopFailure, AM records a reply intent in the same
+For an eligible current-runtime StopFailure, AM records a reply intent in the same
 transaction as its health evidence. C4 chooses the latest eligible dispatcher
 delivery in that runtime generation, session and process. This is a latest
 delivery policy, not proof that a shared Claude prompt belongs to only one
@@ -20,8 +23,10 @@ late verification suppresses the notice; it never falls back to an older input.
 Missing scope proof defers sending. A confirmed scope change cancels the intent.
 Old, malformed, missing-prompt and unordered post-recovery failures do not create
 new first-failure intents. Billing errors require a verified full quota window
-or an explicit quota-related diagnostic match. Other errors remain diagnostic;
-they do not gain new first-failure notices from the historical 33-case table.
+or an explicit quota diagnostic before claiming exhausted quota; otherwise they
+get factual billing-error copy. Authentication, model, service and unknown
+failures receive their corresponding factual first reply. These replies do not
+by themselves establish persistent unavailability.
 
 AM starts a bounded child worker for external sends, so channel I/O does not
 block the AM event loop. First-failure and subsequent inbound replies share the
@@ -78,9 +83,9 @@ proof and receipt time. Hook collection freezes a matching snapshot no older
 than 60 seconds into its event; AM never classifies an old failure using a newer
 snapshot. Missing, stale or mismatched snapshots retain neutral wording.
 
-Classification first excludes explicit warnings, temporary request limits and
-nonquota diagnostics. Otherwise a proven exhausted five-hour/seven-day window
-takes precedence over text refinement. Both full windows use the later valid
+Classification checks structured error type and proven exhausted five-hour/seven-day
+windows before text refinement, including warning/temporary/excluded diagnostic
+matches. Both full windows use the later valid
 reset; if either full window has no reset, no time is claimed. Expired reset
 values are not displayed. Windows below 100% do not prove a model quota.
 
@@ -89,7 +94,9 @@ memory. Exact rule ID/kind, rather than raw diagnostic or assistant text, is
 saved. Error details take precedence; unknown/oversized details do not cause
 the matcher to mine unrelated assistant prose. Positive model/credits/cap text
 refines only structured rate_limit or billing_error failures. Unmatched rate
-limits remain neutral; an unproven billing error does not claim quota exhaustion.
+limits remain neutral; an unproven billing error receives billing-error wording
+without claiming quota exhaustion. Other structured errors select their factual
+template independently of the historical quota text rules.
 See [matching rules](health-notice-matching.md) for all diagnostic cases.
 
 The collector uses a Linux `flock` admission guard, file sync and atomic rename.
@@ -133,7 +140,7 @@ AM routing and the C4 fallback use the same templates. Every notice contains
 Chinese followed by English, prefixed with `Zylos`. A first-failure reply says the delivered
 request could not complete; an inbound rejection says the new message did not
 enter the queue. A reset time is an estimate from validated quota data, formatted
-in UTC; it never clears health or promises automatic task replay.
+in the configured time zone; it never clears health or promises automatic task replay.
 
 Operators can configure `.zylos/config.json` and restart the affected processes
 through the normal deployment workflow:
@@ -142,6 +149,7 @@ through the normal deployment workflow:
 {
   "statusNotices": {
     "brand": "Zylos",
+    "timeZone": "Asia/Shanghai",
     "templates": {
       "failure": {
         "quota_exhausted": {
@@ -157,13 +165,17 @@ through the normal deployment workflow:
 The two template contexts are `inbound` and `failure`, each with `zh` and `en`
 text. Stable quota IDs are `quota_exhausted`, `quota_exhausted_reset`,
 `model_quota_exhausted`, `usage_credits_required`, `usage_credits_exhausted`,
-and `quota_allocation_unavailable`. These are Core template IDs; the source's
+and `quota_allocation_unavailable`. Factual nonquota IDs are `model_unavailable`,
+`billing_error`, and `service_error`; baseline IDs are `auth_failed`,
+`rate_limited`, and `unavailable`. These are Core template IDs; the source's
 numbered 1-33 entries identify diagnostic rules, not templates. The reset template
-supports `{resetAt}`, a validated epoch-millisecond time formatted in UTC.
+supports `{resetAt}`, a validated epoch-millisecond time formatted with an explicit
+IANA time-zone label. `timeZone` defaults to the host zone; invalid zones use UTC.
 Missing/expired/invalid reset values select `quota_exhausted` instead.
 
-Existing `rate_limited`, `auth_failed` and `unavailable` category overrides remain
-fallbacks. The earlier `language` switch is ignored: notices always include both
+Overrides use only the selected ID. A generic `rate_limited` override cannot
+replace an identified `quota_exhausted_reset` message. The earlier `language`
+switch is ignored: notices always include both
 languages, with no sender identity or language detection. Overrides are complete message bodies;
 the brand prefix is added separately. Missing or invalid values use defaults.
 Brand text is limited to 80 characters and each localized body to 2000.

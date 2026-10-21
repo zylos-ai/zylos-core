@@ -39,7 +39,7 @@ test('catalog covers all 33 diagnostic cases without enabling out-of-scope cases
     const row=SOURCE_NOTICE_CASES.find(row=>row.id===id);
     assert.equal(row.eligibility,'diagnostic');assert.equal(row.noticeCode,null);
   }
-  assert.equal(Object.keys(NOTICE_TEMPLATES).length,6);
+  assert.equal(Object.keys(NOTICE_TEMPLATES).length,9);
 });
 
 test('all active IDs render Chinese then English with correct context and no platform claims', () => {
@@ -57,12 +57,37 @@ test('reset uses bounded future epoch milliseconds and deterministic explicit UT
   const resetAt=Date.now()+3600000;
   const input={health:'rate_limited',noticeCode:'quota_exhausted_reset',context:'failure'};
   const expected=new Date(resetAt).toISOString().slice(0,16).replace('T',' ')+' UTC';
-  assert.ok(messageForStatus({...input,resetAt},{}).includes(expected));
+  assert.ok(messageForStatus({...input,resetAt},{timeZone:'UTC'}).includes(expected));
   for(const value of [undefined,NaN,Infinity,Date.now()-1,Date.now()+9*86400000,Math.floor(resetAt/1000),String(resetAt)]) {
     const text=messageForStatus({...input,resetAt:value},{});
     assert.doesNotMatch(text,/UTC|预计于|expected to reset|\{resetAt\}/);
     assert.equal(text,messageForStatus({...input,noticeCode:'quota_exhausted'},{}));
   }
+});
+
+test('known code overrides never fall back to a different category', () => {
+  const resetAt=Date.now()+3600000;
+  const config={timeZone:'UTC',templates:{failure:{rate_limited:{zh:'错误类别覆盖',en:'Wrong category override'}}}};
+  const text=messageForStatus({health:'rate_limited',noticeCode:'quota_exhausted_reset',resetAt,context:'failure'},config);
+  assert.match(text,/UTC/);assert.doesNotMatch(text,/错误类别覆盖|Wrong category override/);
+});
+
+test('reset time uses configured zone or host zone with explicit label and invalid-zone UTC fallback', () => {
+  const input={noticeCode:'quota_exhausted_reset',resetAt:Date.now()+3600000,context:'failure'};
+  assert.match(messageForStatus(input,{timeZone:'Asia/Singapore'}),/Asia\/Singapore/);
+  assert.ok(messageForStatus(input,{}).includes(Intl.DateTimeFormat().resolvedOptions().timeZone));
+  assert.equal(messageForStatus(input,{timeZone:'Not/AZone'}),messageForStatus(input,{timeZone:'UTC'}));
+});
+
+test('structured nonquota errors render factual notices without guessing account cause', () => {
+  for(const noticeCode of ['model_unavailable','billing_error','service_error','auth_failed','unavailable']) {
+    const text=messageForStatus({health:'ok',noticeCode,context:'failure'},{});
+    assert.match(text,/本次请求未能完成/);
+    assert.doesNotMatch(text,/已用完|余额不足|撤销|exhausted|balance|revoked|informed|automatically/);
+  }
+  assert.match(messageForStatus({noticeCode:'auth_failed',context:'failure'},{}),/authentication error/);
+  assert.match(messageForStatus({noticeCode:'billing_error',context:'failure'},{}),/billing error/);
+  assert.match(messageForStatus({noticeCode:'model_unavailable',context:'failure'},{}),/model is unavailable/);
 });
 
 test('stable IDs support per-locale overrides and fallback without leaking reason text', () => {

@@ -38,21 +38,49 @@ test('expired, foreign and stale quota cannot invent exhaustion or reset time', 
   assert.equal(result.noticeCode,'rate_limited');
 });
 
-test('negative diagnostics cannot turn a rate limit or full snapshot into quota wording', () => {
-  for (const text of ['API Error: Server is temporarily limiting requests (not your usage limit)', "You've used 90% of your weekly limit", 'API Error: Repeated 529 Overloaded errors.']) {
+test('trusted full windows precede negative text; without proof terminal failures remain neutral', () => {
+  for (const text of ['API Error: Server is temporarily limiting requests (not your usage limit)', 'API Error: 429 Rate limit exceeded', "You've used 90% of your weekly limit", 'API Error: Repeated 529 Overloaded errors.', 'Invalid API key']) {
     const notice_match=matchHealthNoticeText({error_details:text});
     assert.ok(notice_match,text);
     const result=classifyHealthNotice({...base,notice_match,quota:snapshot({five_hour:{used_percentage:100}})},now);
-    assert.equal(result.eligible,false); assert.equal(result.noticeCode,'rate_limited');
+    assert.equal(result.eligible,true); assert.equal(result.noticeCode,'quota_exhausted');
+    const neutral=classifyHealthNotice({...base,notice_match},now);
+    assert.equal(neutral.eligible,true);assert.equal(neutral.noticeCode,'rate_limited');assert.equal(neutral.resetAt,null);
   }
 });
 
 test('billing requires positive quota evidence; other error categories cannot activate quota copy', () => {
-  assert.equal(classifyHealthNotice({...base,error:'billing_error'},now).eligible,false);
+  assert.equal(classifyHealthNotice({...base,error:'billing_error'},now).noticeCode,'billing_error');
   const notice_match={sourceId:4,kind:'credits_required'};
   assert.equal(classifyHealthNotice({...base,error:'billing_error',notice_match},now).noticeCode,'usage_credits_required');
-  assert.equal(classifyHealthNotice({...base,error:'server_error',notice_match},now).eligible,false);
+  assert.equal(classifyHealthNotice({...base,error:'server_error',notice_match},now).noticeCode,'service_error');
   assert.equal(classifyHealthNotice({...base,quota:snapshot({five_hour:{used_percentage:20},seven_day:{used_percentage:30}})},now).noticeCode,'rate_limited');
+});
+
+test('factual first failure notices are independent of persistent health transitions', () => {
+  for (const [error,noticeCode,health] of [
+    ['authentication_failed','auth_failed','auth_failed'],
+    ['model_not_found','model_unavailable','ok'],
+    ['billing_error','billing_error','ok'],
+    ['overloaded','service_error','ok'],
+    ['server_error','service_error','ok'],
+    ['unknown','unavailable','ok'],
+  ]) {
+    const db=new Database(':memory:');migrateHealthNotices(db);
+    try {
+      db.prepare(`INSERT INTO runtime_deliveries(conversation_id,runtime_id,runtime_generation,session_id,process_start,channel,endpoint,status,started_at,submitted_at)
+        VALUES(1,'claude',?,?,?,'fake','group','delivered',?,?)`).run(generation,'session',identity.process_start,now-2000,now-1500);
+      const store=new HealthStore(db,{now:()=>now});
+      const evidence=error==='billing_error'?{}:{notice_match:{sourceId:1,kind:'model_quota'},quota:snapshot({five_hour:{used_percentage:100}})};
+      const result=store.consume({...base,error,...evidence}, {identity});
+      // Billing is tested without supporting quota; the other classes must
+      // never adopt quota wording even when unrelated quota evidence exists.
+      assert.equal(result.notice.noticeCode,noticeCode);assert.equal(result.notice.eligible,true);
+      const intent=db.prepare('SELECT notice_json FROM runtime_notice_intents').get();
+      assert.equal(JSON.parse(intent.notice_json).noticeCode,noticeCode);
+      assert.equal(store.read().health,health);
+    } finally {db.close();}
+  }
 });
 
 test('matched evidence flows transactionally to first reply and identical inbound/fallback messages', async t => {
@@ -70,7 +98,7 @@ test('matched evidence flows transactionally to first reply and identical inboun
   const route=await router.route({version:1,type:'route',requestId:'test'});
   const status=buildStatusPayload({statusObj:{},healthEngine:engine});
   assert.equal(route.userMessage,messageForStatus({health:status.health,...status.health_notice}));
-  assert.match(route.userMessage,/UTC/);
+  assert.match(route.userMessage,/\d{4}-\d{2}-\d{2} \d{2}:\d{2} (?:UTC|[A-Za-z_]+\/[A-Za-z_]+)/);
   const revision=store.read().revision;
   store.transition('ok','',{identity,kind:'recovery',expectedRevision:revision});
   assert.equal(store.read().notice,undefined);

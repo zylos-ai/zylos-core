@@ -132,11 +132,16 @@ test('submission identity changes cannot produce verified provenance', t => {
   assert.equal(enqueue(db),false);
 });
 
-test('unproven billing and nonquota terminal errors do not create new first replies', t => {
-  for (const error of ['billing_error','server_error','unknown']) {
+test('billing and nonquota terminal errors create factual first replies without claiming quota exhaustion', t => {
+  for (const error of ['billing_error','server_error','unknown','model_not_found','authentication_failed']) {
     const db=fixture(t);delivery(db,1);
-    assert.equal(enqueue(db,{error,reason:error,state:{health:'ok',episode:1}}),false);
-    assert.equal(db.prepare('SELECT COUNT(*) n FROM runtime_notice_intents').get().n,0);
+    assert.equal(enqueue(db,{error,reason:error,state:{health:'ok',episode:1}}),true);
+    const intent = db.prepare('SELECT * FROM runtime_notice_intents').get();
+    assert.doesNotMatch(JSON.parse(intent.notice_json).noticeCode,/quota|credits/);
+    const sent=[];
+    processFirstFailureNotices(processor(db,{sent}));
+    assert.equal(sent.length,1);
+    assert.match(sent[0].message,/本次请求未能完成/);
   }
 });
 
