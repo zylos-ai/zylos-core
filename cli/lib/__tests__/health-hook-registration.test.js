@@ -5,11 +5,24 @@ import path from 'node:path';
 import { test } from 'node:test';
 import { desiredClaudeHooks, syncHooks, supportsStopFailureVersion, detectStopFailureSupport, syncHealthHooksBeforeLaunch } from '../sync-settings-hooks.js';
 
-test('only tested stable Claude versions enable StopFailure; unknown and older versions use fallback', () => {
-  for (const version of ['2.1.301', '2.1.301 (Claude Code)', '2.2.0']) assert.equal(supportsStopFailureVersion(version), true);
-  for (const version of ['', 'garbage 2.1.301', '2.1.300', '2.1.301-beta', '3.0.0', '1.9.999']) assert.equal(supportsStopFailureVersion(version), false);
+test('stable Claude versions since StopFailure introduction enable health hooks; unknown and older versions use fallback', () => {
+  for (const version of ['2.1.78', '2.1.78 (Claude Code)', '2.1.284', '2.1.300', '2.1.301', '2.1.301 (Claude Code)', '2.2.0']) assert.equal(supportsStopFailureVersion(version), true);
+  for (const version of ['', 'garbage 2.1.78', '2.0.999', '2.1.77', '2.1.78-beta', '2.1.301-beta', '3.0.0', '1.9.999']) assert.equal(supportsStopFailureVersion(version), false);
   assert.equal(detectStopFailureSupport({ execFileSyncImpl: () => { throw new Error('missing'); } }), false);
   assert.equal(detectStopFailureSupport({ execFileSyncImpl: (_bin, args, opts) => { assert.deepEqual(args, ['--version']); assert.equal(opts.timeout, 2000); return '2.1.301'; } }), true);
+});
+test('version detection drives all four health registrations during settings sync', () => {
+  const custom = { type: 'command', command: 'node /custom/activity.js' };
+  const settings = { hooks: { Stop: [{ hooks: [custom] }] } };
+  for (const version of ['2.1.77', '2.1.78', '2.1.284', '2.1.77']) {
+    const supported = detectStopFailureSupport({ execFileSyncImpl: () => `${version} (Claude Code)` });
+    syncHooks(settings, {}, { desiredHooks: desiredClaudeHooks({ stopFailureSupported: supported }), log: () => {} });
+    for (const event of ['SessionStart', 'UserPromptSubmit', 'Stop', 'StopFailure']) {
+      const registered = (settings.hooks[event] || []).some(group => (group.hooks || []).some(hook => hook.command?.includes('hook-health.js')));
+      assert.equal(registered, version !== '2.1.77', `${version}: ${event}`);
+    }
+    assert.ok(settings.hooks.Stop.some(group => group.hooks.includes(custom)));
+  }
 });
 test('managed synchronous health hooks converge without replacing custom hooks', () => {
   const custom = { type: 'command', command: 'node /custom/failure.js', timeout: 20 };

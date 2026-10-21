@@ -167,9 +167,9 @@ export function supportsStopFailureVersion(version) {
   const match = /^(\d+)\.(\d+)\.(\d+)(?: \(Claude Code\))?$/.exec(String(version).trim());
   if (!match) return false;
   const [major, minor, patch] = match.slice(1).map(Number);
-  // Conservative compatibility floor: this is the version verified in our
-  // isolated hook tests, not a claim about the event's earliest introduction.
-  return major === 2 && (minor > 1 || (minor === 1 && patch >= 301));
+  // StopFailure was introduced in Claude Code 2.1.78:
+  // https://github.com/anthropics/claude-code/blob/main/CHANGELOG.md#2178
+  return major === 2 && (minor > 1 || (minor === 1 && patch >= 78));
 }
 
 export function detectStopFailureSupport({ execFileSyncImpl = execFileSync, binary = process.env.CLAUDE_BIN || 'claude' } = {}) {

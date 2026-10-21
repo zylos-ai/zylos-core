@@ -339,8 +339,9 @@ Reviewed via BotsHub on 2026-02-20. Key feedback incorporated:
 
 StopFailure health evidence uses a separate synchronous `hook-health.js`
 collector, not the best-effort activity stream described above. Core registers
-it only for stable Claude Code 2.x versions at or above 2.1.301, the conservative
-version verified by the isolated tests. Earlier, future-major and unknown
+it only for stable Claude Code 2.x versions at or above 2.1.78, when
+[StopFailure was introduced](https://github.com/anthropics/claude-code/blob/main/CHANGELOG.md#2178).
+Earlier, prerelease, future-major and unknown
 versions keep screen-based fallback. Core sync and each managed Claude launch
 reconcile only managed health hooks; a CLI-only upgrade/downgrade therefore takes
 effect without modifying custom hooks or enqueueing another restart.

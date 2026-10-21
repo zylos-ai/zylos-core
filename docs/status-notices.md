@@ -117,8 +117,9 @@ health events/state, notice intents and send attempts. Historical databases and
 user-added columns/tables are preserved. Older Core code cannot open the newer
 schema; use the supported upgrade recovery workflow for rollback.
 
-Hook registration is enabled for verified-compatible stable Claude 2.x versions
-at or above 2.1.301. Unverified/older versions retain screen fallback. Managed
+Hook registration is enabled for stable Claude 2.x versions at or above 2.1.78,
+the [official introduction of StopFailure](https://github.com/anthropics/claude-code/blob/main/CHANGELOG.md#2178).
+Older, prerelease, unknown and future-major versions retain screen fallback. Managed
 hooks converge on launch and settings sync, preserving custom hooks. Strong
 Hook evidence currently requires Linux process proof and `flock`; unsupported
 platforms do not gain that evidence path.
