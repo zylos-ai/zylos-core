@@ -143,62 +143,37 @@ export function getStatusNoticeCooldowns() {
   `).all();
 }
 
-// A claim is not a successful notification. Once sending begins, an expired
-// lease is uncertain and must not be recycled into another send.
-export function claimStatusNotice({ key, episode = 'legacy:unverified', attemptId, channel, endpoint, normalizedEndpoint, now = nowSeconds(), leaseSeconds = 60 }, database = getDb()) {
-  const attemptKey = JSON.stringify([key, episode]);
+// Reservation is the only resend authority. Unknown outcomes keep it until expiry.
+export function claimStatusNotice({ key, channel, endpoint, normalizedEndpoint,
+  health = 'unavailable', reason = 'unavailable', now = nowSeconds(), ttl = 600 }, database = getDb()) {
   return database.transaction(() => {
     database.prepare('DELETE FROM status_notice_cooldowns WHERE expires_at <= ?').run(now);
-    // Legacy endpoint metadata retained insertion order. Honor its remaining
-    // suppression window without rewriting or extending historical rows.
-    const success = database.prepare('SELECT * FROM status_notice_cooldowns WHERE channel = ? AND expires_at > ?')
-      .all(channel, now).find(row => normalizeStatusEndpoint(row.endpoint) === normalizedEndpoint);
-    if (success) return { suppressed: true, reason: 'cooldown', previous: success };
-    const previous = database.prepare('SELECT * FROM status_notice_attempts WHERE notice_key = ?').get(attemptKey);
-    if (previous?.status === 'sending' && previous.lease_until <= now) {
-      database.prepare("UPDATE status_notice_attempts SET status = 'uncertain', updated_at = ? WHERE notice_key = ?").run(now, attemptKey);
-      return { suppressed: true, reason: 'uncertain' };
-    }
-    if (previous?.status === 'uncertain' || previous?.status === 'sending' || (previous?.status === 'claimed' && previous.lease_until > now))
-      return { suppressed: true, reason: previous.status };
-    const active = database.prepare("SELECT notice_key FROM status_notice_attempts WHERE channel=? AND normalized_endpoint=? AND status IN ('claimed','sending') AND lease_until>? LIMIT 1")
-      .get(channel, normalizedEndpoint, now);
-    if (active) return { suppressed: true, reason: 'sending' };
-    database.prepare(`INSERT INTO status_notice_attempts
-      (notice_key, attempt_id, channel, endpoint, normalized_endpoint, status, claimed_at, lease_until, updated_at)
-      VALUES (?, ?, ?, ?, ?, 'claimed', ?, ?, ?)
-      ON CONFLICT(notice_key) DO UPDATE SET attempt_id=excluded.attempt_id, channel=excluded.channel,
-      endpoint=excluded.endpoint, normalized_endpoint=excluded.normalized_endpoint, status='claimed',
-      claimed_at=excluded.claimed_at, lease_until=excluded.lease_until, updated_at=excluded.updated_at`)
-      .run(attemptKey, attemptId, channel, endpoint || '', normalizedEndpoint, now, now + leaseSeconds, now);
-    return { suppressed: false, key: attemptKey, cooldownKey: key, attemptId, channel, endpoint, normalizedEndpoint };
+    const previous = database.prepare('SELECT * FROM status_notice_cooldowns WHERE channel=? AND status_type=? AND reason=? AND expires_at>?')
+      .all(channel, health, reason, now).find(row => normalizeStatusEndpoint(row.endpoint) === normalizedEndpoint);
+    if (previous) return { suppressed: true, reason: 'cooldown', previous };
+    // Fractional timestamp distinguishes replacement reservations created in the same second.
+    const reservedAt = now + Math.random() / 1000;
+    database.prepare(`INSERT INTO status_notice_cooldowns
+      (cooldown_key,channel,endpoint,status_type,reason,last_notified_at,expires_at,updated_at)
+      VALUES (?,?,?,?,?,?,?,?)`).run(key, channel, normalizedEndpoint, health, reason, reservedAt, now + ttl, now);
+    return { suppressed: false, key, channel, endpoint, normalizedEndpoint, health, reason,
+      reservedAt, expiresAt: now + ttl };
   }).immediate();
 }
 
 export function startStatusNotice(claim, now = nowSeconds(), database = getDb()) {
-  return database.prepare(`UPDATE status_notice_attempts SET status='sending', updated_at=?
-    WHERE notice_key=? AND attempt_id=? AND status='claimed' AND lease_until>?`)
-    .run(now, claim.key, claim.attemptId, now).changes === 1;
+  return Boolean(database.prepare(`SELECT 1 FROM status_notice_cooldowns
+    WHERE cooldown_key=? AND last_notified_at=? AND expires_at>?`).get(claim.key, claim.reservedAt, now));
 }
 
-export function finishStatusNotice(claim, outcome, { now = nowSeconds(), ttl = 600, health = 'unavailable', reason = 'unavailable' } = {}, database = getDb()) {
+export function finishStatusNotice(claim, outcome, { now = nowSeconds(), ttl = 600 } = {}, database = getDb()) {
   if (!['sent', 'failed', 'uncertain'].includes(outcome)) throw new Error('Invalid notice outcome');
-  return database.transaction(() => {
-    const changed = database.prepare(`UPDATE status_notice_attempts SET status=?, updated_at=?
-      WHERE notice_key=? AND attempt_id=? AND status IN ('claimed','sending')`)
-      .run(outcome, now, claim.key, claim.attemptId).changes;
-    if (!changed) return false;
-    if (claim.intentEventId) database.prepare(`UPDATE runtime_notice_intents SET status=?,updated_at=?
-      WHERE event_id=? AND claim_key=? AND attempt_id=? AND status='pending'`)
-      .run(outcome,now * 1000,claim.intentEventId,claim.key,claim.attemptId);
-    if (outcome === 'sent') database.prepare(`INSERT INTO status_notice_cooldowns
-      (cooldown_key, channel, endpoint, status_type, reason, last_notified_at, expires_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(cooldown_key) DO UPDATE SET status_type=excluded.status_type, reason=excluded.reason,
-      last_notified_at=excluded.last_notified_at, expires_at=excluded.expires_at, updated_at=excluded.updated_at`)
-      .run(claim.cooldownKey, claim.channel, claim.normalizedEndpoint, health, reason, now, now + ttl, now);
-    return true;
-  }).immediate();
+  if (outcome === 'failed') return database.prepare(`DELETE FROM status_notice_cooldowns
+    WHERE cooldown_key=? AND last_notified_at=?`).run(claim.key, claim.reservedAt).changes === 1;
+  if (outcome === 'uncertain') return database.prepare(`UPDATE status_notice_cooldowns SET updated_at=?
+    WHERE cooldown_key=? AND last_notified_at=?`).run(now, claim.key, claim.reservedAt).changes === 1;
+  return database.prepare(`UPDATE status_notice_cooldowns SET expires_at=MAX(expires_at,?),updated_at=?
+    WHERE cooldown_key=? AND last_notified_at=?`).run(now + ttl, now, claim.key, claim.reservedAt).changes === 1;
 }
 
 /**

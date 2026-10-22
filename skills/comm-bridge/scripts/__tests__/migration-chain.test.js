@@ -21,7 +21,7 @@ for (const [name, owner, seed, query] of [
     const before=db.prepare(query).all();
     const schemaBefore=db.prepare('SELECT sql FROM sqlite_master ORDER BY name').all();
     const plan=planDatabaseMigration(db,owner);
-    assert.deepEqual(plan.steps.map(({from,to})=>[from,to]),owner===c4?[[0,1],[1,2]]:[[0,1]]);
+    assert.deepEqual(plan.steps.map(({from,to})=>[from,to]),[[0,1]]);
     assert.equal(db.pragma('user_version',{simple:true}),0);
     assert.deepEqual(db.prepare('SELECT sql FROM sqlite_master ORDER BY name').all(),schemaBefore);
     let calls=0;
@@ -277,18 +277,18 @@ for(const [definition,usable] of [
  }finally{db.close();}
 });
 
-test('C4 v1 upgrades to health v2 while retaining rows and user extensions', () => {
+test('C4 v1 needs no health migration and retains rows and user extensions', () => {
  const db=new Database(':memory:');try {
   db.exec(fs.readFileSync(new URL('c4-v0.9.0-v1.sql',fixtures),'utf8'));
   db.exec("CREATE TABLE archive_records(id INTEGER PRIMARY KEY,value TEXT); INSERT INTO archive_records VALUES(1,'retained'); ALTER TABLE checkpoints ADD COLUMN external TEXT; UPDATE checkpoints SET external='kept'");
   const before=db.prepare('SELECT * FROM checkpoints ORDER BY id').all();
-  assert.deepEqual(planDatabaseMigration(db,c4,extensionOptions).steps.map(({from,to})=>[from,to]),[[1,2]]);
+  assert.deepEqual(planDatabaseMigration(db,c4,extensionOptions).steps,[]);
   const result=migrateDatabase(db,c4,extensionOptions);
-  assert.equal(result.version,2);
+  assert.equal(result.version,1);
   assert.deepEqual(db.prepare('SELECT * FROM checkpoints ORDER BY id').all(),before);
   assert.equal(db.prepare('SELECT value FROM archive_records').get().value,'retained');
   for(const name of ['status_notice_attempts','runtime_health_events','runtime_health_state'])
-    assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM ${name}`).get().n,0);
+    assert.equal(db.prepare('SELECT name FROM sqlite_master WHERE name=?').get(name),undefined);
   assert.equal(planDatabaseMigration(db,c4,extensionOptions).steps.length,0);
  }finally{db.close();}
 });

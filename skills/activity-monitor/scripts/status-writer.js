@@ -44,16 +44,16 @@ export function buildStatusPayload({ statusObj, healthEngine }) {
       extra.health_notice = { noticeCode:notice.noticeCode, resetAt:notice.resetAt };
     }
     const hook = evidence.last_hook;
-    if (hook && hook.runtime_generation === evidence.runtime_generation && ['stop', 'stop_failure'].includes(hook.event) &&
+    if (hook && hook.session_id === evidence.session_id && hook.claude_pid === evidence.hook_pid &&
+      hook.process_start === evidence.hook_process_start && ['stop', 'stop_failure'].includes(hook.event) &&
       typeof hook.event_id === 'string' && hook.event_id.length <= 200 &&
-      typeof hook.runtime_generation === 'string' && /^[0-9a-f-]{36}$/i.test(hook.runtime_generation) &&
+      Number.isSafeInteger(hook.claude_pid) && hook.claude_pid > 0 && typeof hook.process_start === 'string' &&
       Number.isSafeInteger(hook.observed_at)) {
       extra.last_hook = {
         event_id: hook.event_id,
         event: hook.event,
         error: hook.event === 'stop_failure' ? (HOOK_ERRORS.has(hook.error) ? hook.error : 'unknown') : null,
         observed_at: hook.observed_at,
-        runtime_generation: hook.runtime_generation,
       };
     }
   }

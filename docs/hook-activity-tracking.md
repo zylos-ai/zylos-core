@@ -338,33 +338,34 @@ Reviewed via BotsHub on 2026-02-20. Key feedback incorporated:
 # Durable Health Events
 
 StopFailure health evidence uses a separate synchronous `hook-health.js`
-collector, not the best-effort activity stream described above. Core registers
-it only for stable Claude Code 2.x versions at or above 2.1.78, when
+collector that appends sanitized events to the same tool event stream. Core registers
+it for stable Claude Code versions at or above 2.1.78, when
 [StopFailure was introduced](https://github.com/anthropics/claude-code/blob/main/CHANGELOG.md#2178).
-Earlier, prerelease, future-major and unknown
-versions keep screen-based fallback. Core sync and each managed Claude launch
-reconcile only managed health hooks; a CLI-only upgrade/downgrade therefore takes
-effect without modifying custom hooks or enqueueing another restart.
+Earlier, prerelease and unknown versions keep screen-based fallback. Future
+major versions satisfy the minimum version comparison. Init/upgrade hook sync
+reconciles managed entries while preserving custom hooks; launches do not rewrite
+settings. A CLI-only upgrade/downgrade requires an explicit hooks sync.
 
-Each managed Claude or Codex launch creates a new generation UUID, including
-restarts in an existing tmux shell. The runtime inherits that UUID. Health hooks
-reject absent or superseded generations, ignore subagents, and persist only
+Health hooks verify the Claude PID and process start against the managed tmux
+pane, ignore subagents, and persist only
 session/prompt identifiers, an allowlisted error category, receive time and
 process identity. Unknown error identifiers become `unknown`; prompt text,
 error details and assistant text are not persisted. Prompt identifiers remain
 opaque and do not establish execution order or a unique delivery binding.
 
-Events are written as unique mode-0600 files under
-`activity-monitor/health-inbox/`, using file sync, rename and directory sync.
-Only after saving does the hook attempt a bounded wake on the existing AM
-socket. A lost wake leaves the event available for startup/periodic scans.
-AM acknowledges a spool file only after its database transaction commits.
-Write failures emit a fixed diagnostic rather than claiming delivery.
+Events use new event types in `activity-monitor/tool-events.jsonl`; there is no
+separate inbox directory. AM commits health and pending notice atomically to
+`activity-monitor/runtime-health/<runtime>.json` before checkpointing the stream
+cursor. A single last-processed Stop/StopFailure `received_at` rejects events
+that are not strictly newer; event IDs are diagnostic only. Nonterminal hooks do
+not advance the marker. Replay, restart and rotation are covered by this marker,
+the five-minute freshness check and process identity verification. A clock step
+backward can suppress a new event; screen detection remains the fallback.
 
 Linux process proof consists of boot ID plus `/proc` process start ticks.
 Unavailable process proof is represented by null and cannot establish strong
 hook ownership; existing screen fallback remains available. These records do
-do not contain reply addresses. C4 separately records actual dispatcher delivery
-provenance and applies the latest-delivery policy described in
+not contain reply addresses. C4 uses the frozen latest running/delivered inbound
+row policy described in
 [Runtime status notices](status-notices.md). The same document covers Stop
 authority, bounded storage, reporting, and send uncertainty.

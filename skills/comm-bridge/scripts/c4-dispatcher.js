@@ -11,7 +11,6 @@ import path from 'path';
 import { logDeliveryFailure, saveEnterCapture } from './c4-diagnostic.js';
 import { sendTmuxKeys, tmuxFailureDetails } from './tmux-send-keys.js';
 import { PeriodicEnter } from './periodic-enter.js';
-import { readDeliveryIdentity, beginRuntimeDelivery, finishRuntimeDelivery } from './runtime-delivery.js';
 import {
   getNextPending,
   claimConversation,
@@ -21,6 +20,7 @@ import {
   close,
   incrementRetryCount,
   markFailed,
+  markDelivered,
   getNextPendingControl,
   claimControl,
   requeueControl,
@@ -777,7 +777,6 @@ async function processNextMessage() {
 
   log(`Delivering ${item.type} id=${item.id}${item.type === 'control' ? ` priority=${item.priority}` : ` from ${item.channel}`}`);
   const deliveryContent = getDeliveryContent(item);
-  const delivery = item.type === 'conversation' ? beginRuntimeDelivery(item, readDeliveryIdentity()) : null;
   let result;
   deliveryTrace = { itemId: item.id, itemType: item.type };
   try {
@@ -790,10 +789,9 @@ async function processNextMessage() {
     });
   } finally { deliveryTrace = {}; }
 
-  if (item.type === 'conversation') finishRuntimeDelivery(delivery, item, result, readDeliveryIdentity());
-
   if (result === 'submitted') {
     if (item.type === 'conversation') {
+      markDelivered(item.id);
       log(`Conversation id=${item.id} delivered`);
       notifyMessageDelivered({ conversationId: item.id, channel: item.channel }).catch((err) => {
         log(`Warning: failed to notify AM of message delivery: ${err.message}`);

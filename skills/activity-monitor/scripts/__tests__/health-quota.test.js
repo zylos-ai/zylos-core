@@ -5,16 +5,15 @@ import path from 'node:path';
 import {test} from 'node:test';
 import {spawnSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
-import {createRuntimeGeneration,runtimeGenerationEnv} from '../runtime-generation.js';
 import {writeHealthQuota,readHealthQuota,sanitizeHealthQuota} from '../health-quota.js';
 
 function fixture(t) {
   const zylosDir=fs.mkdtempSync(path.join(os.tmpdir(),'health-quota-'));
   t.after(()=>fs.rmSync(zylosDir,{recursive:true,force:true}));
-  const generation=createRuntimeGeneration('claude',{zylosDir});
-  const identity={runtime:'claude',runtime_generation:generation.runtime_generation,session_id:'session',claude_pid:123,process_start:'00000000-0000-0000-0000-000000000001:42'};
+  fs.mkdirSync(path.join(zylosDir,'activity-monitor'));
+  const identity={runtime:'claude',session_id:'session',claude_pid:123,process_start:'00000000-0000-0000-0000-000000000001:42'};
   fs.writeFileSync(path.join(zylosDir,'activity-monitor','foreground-session.json'),JSON.stringify(identity));
-  const options={zylosDir,env:runtimeGenerationEnv(generation),nowMs:1000000,pid:123,processStart:identity.process_start};
+  const options={zylosDir,managedIdentity:()=>identity,nowMs:1000000,pid:123,processStart:identity.process_start};
   return {identity,options,read:(extra={})=>readHealthQuota({identity,zylosDir,nowMs:1000000,processStart:()=>identity.process_start,...extra})};
 }
 const status={session_id:'session',rate_limits:{five_hour:{used_percentage:100,resets_at:2000},seven_day:{used_percentage:40,resets_at:3000}}};
@@ -27,9 +26,9 @@ test('producer and reader preserve only bounded official quota fields with exact
   assert.equal(read({processStart:()=>identity.process_start+'0'}),null);
   assert.equal(read({nowMs:1060001}),null);assert.equal(read({nowMs:999999}),null);
 });
-test('producer rejects missing generation, foreground/session mismatch, missing process proof',t=>{
+test('producer rejects unmanaged process, foreground/session mismatch, missing process proof',t=>{
   const {options}=fixture(t);
-  for(const change of [{env:{}},{pid:999},{processStart:null}])assert.equal(writeHealthQuota(status,{...options,...change}),null);
+  for(const change of [{managedIdentity:()=>null},{pid:999},{processStart:null}])assert.equal(writeHealthQuota(status,{...options,...change}),null);
   assert.equal(writeHealthQuota({...status,session_id:'other'},options),null);
   assert.equal(fs.existsSync(path.join(options.zylosDir,'activity-monitor','health-quota')),false);
 });
@@ -54,29 +53,24 @@ test('captured snapshot validation rejects newer observations and expired resets
   assert.equal(sanitizeHealthQuota({...snapshot,rate_limits:{five_hour:{used_percentage:100,resets_at:1001}}},{identity,nowMs:1001000}),null);
   assert.equal(sanitizeHealthQuota({...snapshot,source:'mtime'},{identity,nowMs:options.nowMs}),null);
 });
-test('generation changes isolate late producer and old snapshots; retention touches only exact files',t=>{
-  const {options,read}=fixture(t);writeHealthQuota(status,options);
+test('process replacement rejects late producer and old snapshots without deleting legacy files',t=>{
+  const {identity,options,read}=fixture(t);writeHealthQuota(status,options);
   const directory=path.join(options.zylosDir,'activity-monitor','health-quota');
   fs.writeFileSync(path.join(directory,'unrelated.json'),'retain');
-  const temp=path.join(directory,'00000000-0000-0000-0000-000000000001.json.00000000-0000-0000-0000-000000000002.tmp');
-  fs.writeFileSync(temp,'partial');fs.utimesSync(temp,new Date(0),new Date(0));
-  for(let i=1;i<7;i++)fs.writeFileSync(path.join(directory,`00000000-0000-0000-0000-${String(i).padStart(12,'0')}.json`),'{}');
-  writeHealthQuota(status,options);
-  assert.equal(fs.readdirSync(directory).length,5);
-  assert.equal(fs.existsSync(temp),false);
+  const replacement={...identity,process_start:identity.process_start+'1'};
+  assert.equal(writeHealthQuota(status,{...options,managedIdentity:()=>replacement}),null);
+  assert.equal(read({identity:replacement,processStart:()=>replacement.process_start}),null);
   assert.equal(fs.readFileSync(path.join(directory,'unrelated.json'),'utf8'),'retain');
-  createRuntimeGeneration('claude',{zylosDir:options.zylosDir});
-  assert.equal(writeHealthQuota(status,options),null);assert.equal(read(),null);
 });
 test('reader rejects malformed, oversized, or nonregular snapshot files',t=>{
   const {options,read}=fixture(t);const snapshot=writeHealthQuota(status,options);
-  const file=path.join(options.zylosDir,'activity-monitor','health-quota',`${snapshot.runtime_generation}.json`);
+  const file=path.join(options.zylosDir,'activity-monitor','health-quota','claude.json');
   for(const content of ['{',JSON.stringify({...snapshot,padding:'x'.repeat(3000)})]) {fs.writeFileSync(file,content);assert.equal(read(),null);}
 });
 test('context monitor preserves legacy status output and excludes raw failed input from logs',t=>{
   const {options}=fixture(t);
   const script=fileURLToPath(new URL('../context-monitor.js',import.meta.url));
-  const env={...process.env,ZYLOS_DIR:options.zylosDir,ZYLOS_RUNTIME_GENERATION:'',ZYLOS_RUNTIME_ID:''};
+  const env={...process.env,ZYLOS_DIR:options.zylosDir};
   const payload={...status,custom_field:'legacy consumer value',context_window:{used_percentage:0}};
   const result=spawnSync(process.execPath,[script],{env,input:JSON.stringify(payload),encoding:'utf8'});
   assert.equal(result.status,0);assert.equal(result.stdout,'');

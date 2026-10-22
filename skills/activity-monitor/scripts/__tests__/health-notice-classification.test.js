@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import Database from '../../../comm-bridge/node_modules/better-sqlite3/lib/index.js';
-import { migrateHealthNotices } from '../../../comm-bridge/scripts/c4-health-migration.js';
+import { guardDatabase } from '../../../comm-bridge/scripts/sqlite-schema.js';
+import * as schema from '../../../comm-bridge/scripts/c4-schema.js';
+import { freezeFirstFailureNotice } from '../../../comm-bridge/scripts/first-failure-notice.js';
 import { classifyHealthNotice } from '../health-notice-classification.js';
 import { matchHealthNoticeText } from '../health-notice-match.js';
 import { HealthStore } from '../health-store.js';
@@ -11,12 +16,19 @@ import { messageForStatus } from '../../../comm-bridge/scripts/status-notice-tem
 
 const now = Date.now();
 const generation = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
-const identity = { runtime:'claude', runtime_generation:generation, session_id:'session', claude_pid:123, process_start:`${generation}:123` };
+const identity = { runtime:'claude', session_id:'session', claude_pid:123, process_start:`${generation}:123` };
 const base = { ...identity, schema_version:1, source:'hook', event_id:'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
   event:'stop_failure', prompt_id:'prompt', error:'rate_limit', received_at:now };
 const snapshot = windows => ({ ...identity, schema_version:1, source:'statusline', observed_at:now-1000, rate_limits:windows });
 const reset1 = Math.floor(now/1000)+3600;
 const reset2 = reset1+3600;
+function fixture(t) {
+  const zylosDir=fs.mkdtempSync(path.join(os.tmpdir(),'notice-classification-'));
+  const db=new Database(':memory:');guardDatabase(db,schema);
+  t.after(()=>{db.close();fs.rmSync(zylosDir,{recursive:true,force:true});});
+  db.prepare("INSERT INTO conversations(direction,channel,endpoint_id,content,status) VALUES('in','fake','group','test','delivered')").run();
+  return new HealthStore({zylosDir,now:()=>now,freezeNotice:input=>freezeFirstFailureNotice(db,input)});
+}
 
 test('verified exhausted windows outrank model prose, and both full windows use later reset', () => {
   const event = { ...base, notice_match:{sourceId:1,kind:'model_quota'}, quota:snapshot({
@@ -57,7 +69,7 @@ test('billing requires positive quota evidence; other error categories cannot ac
   assert.equal(classifyHealthNotice({...base,quota:snapshot({five_hour:{used_percentage:20},seven_day:{used_percentage:30}})},now).noticeCode,'rate_limited');
 });
 
-test('factual first failure notices are independent of persistent health transitions', () => {
+test('factual first failure notices are independent of persistent health transitions', t => {
   for (const [error,noticeCode,health] of [
     ['authentication_failed','auth_failed','auth_failed'],
     ['model_not_found','model_unavailable','ok'],
@@ -66,32 +78,24 @@ test('factual first failure notices are independent of persistent health transit
     ['server_error','service_error','ok'],
     ['unknown','unavailable','ok'],
   ]) {
-    const db=new Database(':memory:');migrateHealthNotices(db);
-    try {
-      db.prepare(`INSERT INTO runtime_deliveries(conversation_id,runtime_id,runtime_generation,session_id,process_start,channel,endpoint,status,started_at,submitted_at)
-        VALUES(1,'claude',?,?,?,'fake','group','delivered',?,?)`).run(generation,'session',identity.process_start,now-2000,now-1500);
-      const store=new HealthStore(db,{now:()=>now});
+      const store=fixture(t);
       const evidence=error==='billing_error'?{}:{notice_match:{sourceId:1,kind:'model_quota'},quota:snapshot({five_hour:{used_percentage:100}})};
       const result=store.consume({...base,error,...evidence}, {identity});
       // Billing is tested without supporting quota; the other classes must
       // never adopt quota wording even when unrelated quota evidence exists.
       assert.equal(result.notice.noticeCode,noticeCode);assert.equal(result.notice.eligible,true);
-      const intent=db.prepare('SELECT notice_json FROM runtime_notice_intents').get();
-      assert.equal(JSON.parse(intent.notice_json).noticeCode,noticeCode);
+      const intent=store.read().pending_notice;
+      assert.equal(intent.notice.noticeCode,noticeCode);
       assert.equal(store.read().health,health);
-    } finally {db.close();}
   }
 });
 
 test('matched evidence flows transactionally to first reply and identical inbound/fallback messages', async t => {
-  const db=new Database(':memory:'); migrateHealthNotices(db); t.after(()=>db.close());
-  db.prepare(`INSERT INTO runtime_deliveries(conversation_id,runtime_id,runtime_generation,session_id,process_start,channel,endpoint,status,started_at,submitted_at)
-    VALUES(1,'claude',?,?,?,'fake','group','delivered',?,?)`).run(generation,'session',identity.process_start,now-2000,now-1500);
-  const store=new HealthStore(db,{now:()=>now});
+  const store=fixture(t);
   const result=store.consume({...base,quota:snapshot({five_hour:{used_percentage:100,resets_at:reset1}}),error_details:'PRIVATE'}, {identity});
-  const intent=db.prepare('SELECT * FROM runtime_notice_intents').get();
-  assert.equal(JSON.parse(intent.notice_json).noticeCode,'quota_exhausted_reset');
-  assert.doesNotMatch(JSON.stringify(db.prepare('SELECT * FROM runtime_health_events').all()),/PRIVATE/);
+  const intent=store.read().pending_notice;
+  assert.equal(intent.notice.noticeCode,'quota_exhausted_reset');
+  assert.doesNotMatch(fs.readFileSync(store.file,'utf8'),/PRIVATE/);
   const engine={health:'rate_limited',healthReason:result.state.reason,evidence:{store,refresh(){}},
     runRecoveryProbe:async()=>({recovered:false})};
   const router=new MessageRouter({healthEngine:engine,now:()=>now});

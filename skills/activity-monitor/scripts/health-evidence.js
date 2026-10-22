@@ -9,10 +9,10 @@ export const HEALTH_EVENT_MAX_AGE_MS = 300000;
 export const QUOTA_MAX_AGE_MS = 60000;
 
 export function sanitizeHealthEvent(raw, fallbackId) {
-  if (!raw || raw.schema_version !== 1 || raw.source !== 'hook' || raw.runtime !== 'claude' || !uuid(raw.event_id) || !uuid(raw.runtime_generation) || !id(raw.session_id) || (raw.prompt_id !== null && !id(raw.prompt_id)) || !['session_start','prompt_submit','stop_failure','stop'].includes(raw.event) || !Number.isSafeInteger(raw.received_at) || !Number.isSafeInteger(raw.claude_pid) || raw.claude_pid <= 0 || (raw.process_start !== null && !(typeof raw.process_start === 'string' && /^[0-9a-f-]{36}:\d+$/.test(raw.process_start))) || (raw.event === 'stop_failure' && !id(raw.error))) {
+  if (!raw || raw.schema_version !== 1 || raw.source !== 'hook' || raw.runtime !== 'claude' || !uuid(raw.event_id) || !id(raw.session_id) || (raw.prompt_id !== null && !id(raw.prompt_id)) || !['session_start','prompt_submit','stop_failure','stop'].includes(raw.event) || !Number.isSafeInteger(raw.received_at) || !Number.isSafeInteger(raw.claude_pid) || raw.claude_pid <= 0 || (raw.process_start !== null && !(typeof raw.process_start === 'string' && /^[0-9a-f-]{36}:\d+$/.test(raw.process_start))) || (raw.event === 'stop_failure' && !id(raw.error))) {
     return { event_id: `invalid:${createHash('sha256').update(String(fallbackId)).digest('hex')}`, source: 'invalid', received_at: 0 };
   }
-  const event = Object.fromEntries(['schema_version','event_id','source','runtime','runtime_generation','session_id','prompt_id','event','received_at','claude_pid','process_start'].map(key => [key,raw[key]]));
+  const event = Object.fromEntries(['schema_version','event_id','source','runtime','session_id','prompt_id','event','received_at','claude_pid','process_start'].map(key => [key,raw[key]]));
   event.error = raw.event === 'stop_failure' ? (HOOK_ERRORS.has(raw.error) ? raw.error : 'unknown') : null;
   if (event.event === 'stop_failure') {
     const match = sanitizeNoticeMatch(raw.notice_match);
@@ -20,14 +20,11 @@ export function sanitizeHealthEvent(raw, fallbackId) {
     const quota = sanitizeHealthQuota(raw.quota, { identity:event, nowMs:event.received_at });
     if (quota) event.quota = quota;
   }
-  if (event.event === 'stop_failure' && event.prompt_id) {
-    event.event_id = `failure:${createHash('sha256').update(JSON.stringify([event.runtime_generation,event.session_id,event.prompt_id,event.error])).digest('hex')}`;
-  }
   return event;
 }
 
 export function quotaClassification(snapshot, event, now, maxAgeMs = QUOTA_MAX_AGE_MS) {
-  if (!snapshot || snapshot.runtime_generation !== event.runtime_generation || snapshot.session_id !== event.session_id || !Number.isSafeInteger(snapshot.observed_at) || now-snapshot.observed_at < 0 || now-snapshot.observed_at > maxAgeMs) return 'rate_limit_unclassified';
+  if (!snapshot || snapshot.process_start !== event.process_start || snapshot.claude_pid !== event.claude_pid || snapshot.session_id !== event.session_id || !Number.isSafeInteger(snapshot.observed_at) || now-snapshot.observed_at < 0 || now-snapshot.observed_at > maxAgeMs) return 'rate_limit_unclassified';
   const full = window => window && typeof window.used_percentage === 'number' && Number.isFinite(window.used_percentage) && window.used_percentage >= 0 && window.used_percentage <= 100 && window.used_percentage === 100;
   if (full(snapshot.rate_limits?.seven_day)) return 'rate_limit_seven_day';
   if (full(snapshot.rate_limits?.five_hour)) return 'rate_limit_five_hour';
@@ -35,7 +32,7 @@ export function quotaClassification(snapshot, event, now, maxAgeMs = QUOTA_MAX_A
 }
 
 export function initialHealthEvidence(health = 'ok', reason = '') {
-  return { version: 1, revision: 0, health, reason: safeHealthReason(health,reason), runtime_generation: null, session_id: null, source: 'legacy', episode: 0, evidence_id: null, hook_prompt: null, recovered: null };
+  return { version: 1, revision: 0, health, reason: safeHealthReason(health,reason), session_id: null, source: 'legacy', episode: 0, evidence_id: null, hook_prompt: null, recovered: null };
 }
 
 export function safeHealthReason(health, reason) {
@@ -50,12 +47,12 @@ export function safeHealthReason(health, reason) {
 export function reduceHealthEvidence(state, event, { identity, now, quota = null, maxAgeMs = HEALTH_EVENT_MAX_AGE_MS } = {}) {
   const ignored = reason => ({ state, status: 'ignored', reason });
   if (event.source === 'invalid') return ignored('invalid_event');
-  if (!identity || !identity.runtime_generation || !identity.session_id || !identity.process_start || identity.runtime !== 'claude') return ignored('missing_runtime_proof');
-  if (event.runtime_generation !== identity.runtime_generation || event.session_id !== identity.session_id || event.claude_pid !== identity.claude_pid || event.process_start !== identity.process_start) return ignored('foreign_runtime_or_session');
+  if (!identity || !identity.session_id || !identity.process_start || identity.runtime !== 'claude') return ignored('missing_runtime_proof');
+  if (event.session_id !== identity.session_id || event.claude_pid !== identity.claude_pid || event.process_start !== identity.process_start) return ignored('foreign_runtime_or_session');
   if (now-event.received_at < 0 || now-event.received_at > maxAgeMs) return ignored('stale_event');
   let next = state;
-  if (state.runtime_generation !== identity.runtime_generation || state.session_id !== identity.session_id) {
-    next = { ...state, runtime_generation: identity.runtime_generation, session_id: identity.session_id, hook_prompt: null, recovered: null, source: 'legacy' };
+  if (state.hook_process_start !== identity.process_start || state.hook_pid !== identity.claude_pid || state.session_id !== identity.session_id) {
+    next = { ...state, session_id: identity.session_id, hook_process_start:identity.process_start, hook_pid:identity.claude_pid, hook_prompt: null, recovered: null, source: 'legacy' };
   }
   if (event.event === 'stop') {
     // Stop proves a completed response, not ordering against an existing outage.

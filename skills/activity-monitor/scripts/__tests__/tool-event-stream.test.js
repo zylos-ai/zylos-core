@@ -90,7 +90,7 @@ describe('tool-event-stream', () => {
     assert.equal(secondRead.streamState.rotated_drain.path, `${eventsFile}.old`);
   });
 
-  it('removes the rotated drain file after a quiet period with no further growth', () => {
+  it('finishes the quiet drain but retains its file until the next rotation', () => {
     appendEvent(eventsFile, { ts: 1000, event: 'pre_tool', session_id: 's1' });
 
     let streamState = rotateToolEventStream({
@@ -121,7 +121,7 @@ describe('tool-event-stream', () => {
       drainQuietMs: 2000,
     });
 
-    assert.equal(fs.existsSync(`${eventsFile}.old`), false);
+    assert.equal(fs.existsSync(`${eventsFile}.old`), true);
     assert.equal(result.streamState.rotated_drain, null);
   });
 });

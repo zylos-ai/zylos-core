@@ -5,23 +5,17 @@ Complete scenario and bilingual-message reference:
 
 ## Failure replies
 
-For an eligible current-runtime StopFailure, AM records a reply intent in the same
-transaction as its health evidence. C4 chooses the latest eligible dispatcher
-delivery in that runtime generation, session and process. This is a latest
-delivery policy, not proof that a shared Claude prompt belongs to only one
-request. Multiple inputs can share a prompt. It does not fan out to every input.
+For an eligible current-runtime StopFailure, AM stores health and a pending
+first-failure reply in one atomic per-runtime file. At failure receipt it freezes
+the latest inbound conversation in `running` or `delivered` with a reply endpoint.
+This is the reviewer-selected latest-row policy, not proof that one prompt belongs
+to one message or that a `running` input has already been submitted.
+Unhealthy intake writes `failed`, including cooldown-suppressed and no-reply input.
+The dispatcher remains the writer of `delivered` through `markDelivered()`.
+Control messages and inputs without reply endpoints are excluded. Sending never
+retargets the frozen original channel and endpoint. No delivery table is created.
 
-The dispatcher records submission provenance separately from conversation
-`delivered` bookkeeping. A message rejected at unhealthy intake cannot become a
-first-failure target. Control messages and inputs without a reply endpoint are
-also excluded. The exact original channel and endpoint are frozen; the sender
-never selects a newer message while sending or retrying.
-
-A fast failure can arrive before submission verification finishes. The intent
-then waits up to 60 seconds for that exact delivery record. Uncertain, failed or
-late verification suppresses the notice; it never falls back to an older input.
-Missing scope proof defers sending. A confirmed scope change cancels the intent.
-Old, malformed, missing-prompt and unordered post-recovery failures do not create
+Old, malformed and unordered post-recovery failures do not create
 new first-failure intents. Billing errors require a verified full quota window
 or an explicit quota diagnostic before claiming exhausted quota; otherwise they
 get factual billing-error copy. Authentication, model, service and unknown
@@ -30,28 +24,30 @@ by themselves establish persistent unavailability.
 
 AM starts a bounded child worker for external sends, so channel I/O does not
 block the AM event loop. First-failure and subsequent inbound replies share the
-same conversation cooldown. The worker persists the claim reference before
-sending, so a crash after a successful send does not cause replay after the
-cooldown expires.
+same channel, normalized endpoint, health and reason cooldown. AM owns the
+pending reply state; channel I/O stays outside its event loop. A pending first
+reply may be lost in a crash; the next inbound message still receives the
+unavailable response while the runtime remains unhealthy.
 
 ## Inbound replies
 
 C4 rejects new input while the activity monitor reports an unavailable runtime.
 It sends a fixed status message to the incoming channel and endpoint. The
 endpoint key retains the conversation root and thread but omits individual
-message, parent and request identifiers. Status reasons share one cooldown.
+message, parent and request identifiers. Distinct health/reason pairs have
+separate cooldowns so changed failures can be reported immediately.
 
-A durable claim precedes each send. Only a confirmed successful send starts a
-600-second cooldown, measured from completion. A failure known to occur before
-starting a sender permits a later input to try again. There is no retry loop.
+A durable 600-second reservation precedes each send. Confirmed success retains
+600 seconds measured from completion. A failure known to occur before starting
+a sender releases the reservation so a later input can try again. There is no retry loop.
 
 A timeout, sender failure after launch, or process death during sending leaves
-the result uncertain. C4 suppresses another attempt for that conversation and
-health episode, including after restart. A verified new outage episode may
-attempt again, subject to the shared success cooldown. This avoids replay when
-the channel may already have delivered the message. It can also suppress a
-notice that was never delivered. An expired claim that never started sending
-can be reclaimed.
+the result uncertain. C4 retains the existing cooldown reservation instead of
+clearing it. A new inbound request may produce a notice after that reservation
+expires; there is no permanent per-episode suppression. A first-reply send is
+not automatically retried. Diagnostic attempts are appended to
+`activity-monitor/status-notices.log`, rotated at 100 KB. This log does not
+participate in resend decisions. No attempt table is created.
 
 Legacy cooldown rows retain their original expiration. Their remaining window
 is honored even when endpoint metadata was stored in a different order. These
@@ -63,22 +59,22 @@ second send. Rejected user work is not replayed automatically.
 
 ## Health evidence
 
-Managed runtime launches carry a fresh generation ID. Supported Claude hooks
-persist sanitized events and wake AM. Session, generation and Linux process
-start proof must match before AM changes health. UUIDs and receipt timestamps
-are not runtime turn sequence numbers. Ambiguous failures after verified
+Supported Claude hooks append sanitized health events to the existing
+`tool-events.jsonl` stream. AM validates the managed tmux pane's Claude PID,
+Linux process start proof and session. There is no generation file or launch
+environment token. Ambiguous failures after verified
 recovery request a controlled check instead of undoing recovery immediately.
 
 A valid Stop while health is already OK establishes Hook authority. A conflicting
 screen-only rate-limit observation is recorded but does not change health. Stop
 does not clear an existing outage: it cannot prove ordering against a delayed
 failure. SessionStart, UserPromptSubmit and tool completion do not prove recovery.
-Old Hook authority does not carry into another generation, session or process.
+Old Hook authority does not carry into another session or process.
 
 Only rate_limit and authentication_failed directly establish corresponding
 persistent states. Other error categories remain diagnostic unless the existing
 recovery policy establishes unavailability. The status-line producer separately
-captures sanitized quota snapshots with inherited generation, session, process
+captures sanitized quota snapshots with verified session and process
 proof and receipt time. Hook collection freezes a matching snapshot no older
 than 60 seconds into its event; AM never classifies an old failure using a newer
 snapshot. Missing, stale or mismatched snapshots retain neutral wording.
@@ -99,34 +95,39 @@ without claiming quota exhaustion. Other structured errors select their factual
 template independently of the historical quota text rules.
 See [matching rules](health-notice-matching.md) for all diagnostic cases.
 
-The collector uses a Linux `flock` admission guard, file sync and atomic rename.
-Exact pending duplicates coalesce. The spool admits at most 1000 unique records;
-capacity exhaustion or admission failure leaves existing records intact and
-emits a fixed diagnostic with `event_lost: true`. It cannot promise delivery
-when storage is full. AM removes a spool only after database commit. A crashed
-publication's complete temporary event is recovered under the admission lock.
-Processed event rows expire after the five-minute replay window plus one minute;
-pending rows and current evidence remain. Cleanup is bounded to 500 rows per
-transaction. Terminal delivery/notice history is retained for seven days;
-pending notice targets and the latest current delivery are protected.
+Health and pending reply state live in
+`activity-monitor/runtime-health/<runtime>.json`, atomically published using
+temp-file, fsync and rename. Stop/StopFailure processing saves a single
+`received_at` high-water mark in the same write. Only strictly newer terminal
+events can be processed; event IDs are diagnostic only. SessionStart and
+UserPromptSubmit do not advance this marker. No event-ID set is retained.
+The five-minute freshness and process checks still apply. Equal timestamps,
+replays and sufficiently backward clock steps can suppress an event; this is
+an accepted simplicity tradeoff, with screen detection remaining the fallback.
+Health is committed before the event-stream cursor advances so a restart,
+cursor reset or rotation replay is handled by the durable time marker.
 
 ## Compatibility and reporting
 
-C4 schema version 2 adds formal adjacent migration tables for runtime deliveries,
-health events/state, notice intents and send attempts. Historical databases and
-user-added columns/tables are preserved. Older Core code cannot open the newer
-schema; use the supported upgrade recovery workflow for rollback.
+This change does not alter C4 schema version 1 or create health, delivery or
+notice tables. Instances that installed an earlier experimental revision of
+this PR may already have schema 2. They must not be silently downgraded or have
+their tables deleted. Treat adoption on such an instance as a separate protected
+recovery/migration operation; preserve backups and existing data. The normal
+schema-version guard remains in force.
 
-Hook registration is enabled for stable Claude 2.x versions at or above 2.1.78,
+Hook registration is enabled for stable Claude versions at or above 2.1.78,
 the [official introduction of StopFailure](https://github.com/anthropics/claude-code/blob/main/CHANGELOG.md#2178).
-Older, prerelease, unknown and future-major versions retain screen fallback. Managed
-hooks converge on launch and settings sync, preserving custom hooks. Strong
-Hook evidence currently requires Linux process proof and `flock`; unsupported
+Older, prerelease and unknown versions retain screen fallback; 3.x is supported.
+Managed hooks are registered during settings synchronization, not every launch.
+After independently changing the Claude CLI version, run the hooks sync step
+before starting the next session. Custom hooks are preserved. Strong
+Hook evidence currently requires Linux process proof; unsupported
 platforms do not gain that evidence path.
 
 AM's atomic status file includes `health_episode`, `health_revision` and a
 sanitized `last_hook` snapshot: event ID, event kind, allowlisted error, receipt
-time and runtime generation. It never exports prompt/session text, diagnostics,
+time. It never exports prompt/session text, diagnostics,
 reply addresses or screen content. The snapshot is an observation, not a new
 health authority or a guaranteed complete event stream.
 
@@ -138,7 +139,7 @@ data over the network from the collector is deliberately avoided.
 ## Message configuration
 
 AM routing and the C4 fallback use the same templates. Every notice contains
-Chinese followed by English, prefixed with `Zylos`. A first-failure reply says the delivered
+Chinese followed by English, prefixed with `Zylos`. A first-failure reply says the selected
 request could not complete; an inbound rejection says the new message did not
 enter the queue. A reset time is an estimate from validated quota data, formatted
 in the configured time zone; it never clears health or promises automatic task replay.

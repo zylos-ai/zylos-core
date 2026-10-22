@@ -136,9 +136,9 @@ import { fileURLToPath } from 'url';
 import { MessageRouter } from './message-router.js';
 import { HealthStore } from './health-store.js';
 import { HealthController } from './health-controller.js';
-import { readRuntimeGeneration, readProcessStart } from './runtime-generation.js';
+import { readProcessStart } from './runtime-generation.js';
 import { createRouterReply } from './router-socket.js';
-import { drainFirstFailureNotices } from '../../comm-bridge/scripts/first-failure-notice.js';
+import { drainFirstFailureNotices, freezeFirstFailureNotice } from '../../comm-bridge/scripts/first-failure-notice.js';
 import { getDb as getHealthDatabase } from '../../comm-bridge/scripts/c4-db.js';
 import { MonitorOrchestrator } from './monitor-orchestrator.js';
 import { canTreatPaneAsRecovered } from './tool-pipeline.js';
@@ -992,6 +992,11 @@ function createToolPipeline(activeAdapter, config) {
     getRuntimeLaunchAtMs: () => runtimeLaunchAtMs,
     isPidAlive,
     log,
+    onHealthEvent: event => {
+      if (activeAdapter.runtimeId !== 'claude') return;
+      if (!engine?.evidence) throw new Error('Health consumer not ready');
+      engine.evidence.consume(event);
+    },
   });
 }
 
@@ -1003,13 +1008,11 @@ function createHealthEngine(activeAdapter, initialStatus) {
   });
   if(activeAdapter.runtimeId==='claude') {
     const identity=()=>{
-      const generation=readRuntimeGeneration(ZYLOS_DIR);
-      if(!generation || generation.runtime!==activeAdapter.runtimeId)return null;
       const foreground=readJsonFileSafe(FOREGROUND_SESSION_FILE);
       const pid=getTmuxClaudePid(activeAdapter.sessionName);
       const processStart=readProcessStart(pid);
-      const valid=foreground?.runtime_generation===generation.runtime_generation && foreground.claude_pid===pid && foreground.process_start===processStart && processStart;
-      return {...generation,session_id:valid?foreground.session_id:null,claude_pid:pid,process_start:processStart};
+      const valid=foreground?.claude_pid===pid && foreground.process_start===processStart && processStart;
+      return {runtime:'claude',session_id:valid?foreground.session_id:null,claude_pid:pid,process_start:processStart};
     };
     const fingerprint=()=>{
       try {
@@ -1018,14 +1021,17 @@ function createHealthEngine(activeAdapter, initialStatus) {
       } catch{return null;}
     };
     const controller = new HealthController({
-      store: new HealthStore(getHealthDatabase(), {
+      store: new HealthStore({
+        zylosDir: ZYLOS_DIR,
+        freezeNotice: input => freezeFirstFailureNotice(getHealthDatabase(), input),
         runtime: activeAdapter.runtimeId,
         initialHealth: initialStatus.health,
         initialReason: initialStatus.unavailable_reason,
       }),
       engine: activeEngine, identity, fingerprint, zylosDir: ZYLOS_DIR, log,
+      drainEvents: () => toolPipeline?.processToolLifecycle(Date.now(), getTmuxClaudePid(activeAdapter.sessionName), null),
       onDrained: () => {
-        drainFirstFailureNotices({ identity: identity(), zylosDir: ZYLOS_DIR })
+        drainFirstFailureNotices({ store:controller.store, identity, zylosDir: ZYLOS_DIR })
           .catch(() => log('Health notice worker unavailable; pending notices retained'));
       },
     });

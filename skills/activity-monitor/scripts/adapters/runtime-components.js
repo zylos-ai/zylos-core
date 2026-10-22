@@ -25,6 +25,7 @@ export function createToolPipeline(activeAdapter, config, {
   getRuntimeLaunchAtMs,
   isPidAlive,
   log,
+  onHealthEvent,
 }) {
   const rules = getToolRules({ runtimeId: activeAdapter.runtimeId, config });
   return {
@@ -34,6 +35,7 @@ export function createToolPipeline(activeAdapter, config, {
       runtimeLaunchAtMs: getRuntimeLaunchAtMs,
       isPidAlive,
       log,
+      onHealthEvent,
     }),
     toolRules: rules,
   };

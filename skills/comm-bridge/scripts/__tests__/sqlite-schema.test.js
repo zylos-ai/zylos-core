@@ -59,10 +59,10 @@ test('failure rolls back schema, data and version; readonly inspection never mig
  guardDatabase(db,{...c4,migrate(){assert.fail('readonly migration');}},{readonly:true});assert.equal(db.pragma('user_version',{simple:true}),0);db.close();
 });
 test('lock re-read honors another initializer and rejects a newly future database',()=>{
- for(const nextVersion of [2,3]) {
+ for(const nextVersion of [c4.SUPPORTED_SCHEMA_VERSION,c4.SUPPORTED_SCHEMA_VERSION+1]) {
   const db=new Database(':memory:');guardDatabase(db,c4);db.pragma('user_version=0');let inspected=0;let migrated=false;
   const owner={...c4,inspectSchema(connection,options){if(++inspected===2) connection.pragma(`user_version=${nextVersion}`);return c4.inspectSchema(connection,options);},migrate(){migrated=true;}};
-  if(nextVersion===3)assert.throws(()=>guardDatabase(db,owner),/version 3/);else guardDatabase(db,owner);
+  if(nextVersion>c4.SUPPORTED_SCHEMA_VERSION)assert.throws(()=>guardDatabase(db,owner),/exceeds supported/);else guardDatabase(db,owner);
   assert.equal(migrated,false);db.close();
  }
 });

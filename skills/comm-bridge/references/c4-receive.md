@@ -61,7 +61,7 @@ Inbound content is stored in the conversations DB exactly as received. `c4-recei
 
 ## Health Routing
 
-Before queuing a message, `c4-receive.js` asks the activity monitor MessageRouter how the current message should be routed. If health is `ok` or the router reports recovery, the message is queued normally. If health is unavailable, rate limited, or authentication failed, the message is recorded as delivered and the current channel receives an immediate status reply when replies are enabled. `--no-reply` messages are recorded as delivered without sending a status reply.
+Before queuing a message, `c4-receive.js` asks the activity monitor MessageRouter how the current message should be routed. If health is `ok` or the router reports recovery, the message is queued normally. If health is unavailable, rate limited, or authentication failed, the rejected inbound message is recorded as failed and the current channel receives an immediate status reply when replies are enabled. Cooldown-suppressed and `--no-reply` messages are also recorded as failed. A CLI action of `delivered` describes the status reply, not delivery of the inbound work to the runtime.
 
 If the MessageRouter IPC is unavailable, `c4-receive.js` reads `~/zylos/activity-monitor/agent-status.json` and applies the same fallback behavior. Missing, unreadable, or malformed status files fail open as `ok`.
 

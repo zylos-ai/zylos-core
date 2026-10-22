@@ -1,137 +1,132 @@
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { getDb, close, finishStatusNotice } from './c4-db.js';
-import { reserveStatusNotice, sendStatusNotice } from './status-notice.js';
+import { reserveStatusNotice, sendStatusNotice, logStatusNotice } from './status-notice.js';
 import { messageForStatus } from './status-notice-templates.js';
-import { readDeliveryIdentity, cleanupFailureNoticeHistory } from './runtime-delivery.js';
-export { cleanupFailureNoticeHistory } from './runtime-delivery.js';
+import { readDeliveryIdentity } from './runtime-delivery.js';
 import { runtimeRoot } from '../../activity-monitor/scripts/runtime-generation.js';
 import { readHealthQuota } from '../../activity-monitor/scripts/health-quota.js';
-import { currentOutageNotice, restoreOutageAnchor } from '../../activity-monitor/scripts/outage-notice.js';
+import { currentOutageNotice } from '../../activity-monitor/scripts/outage-notice.js';
 
 export const FIRST_NOTICE_QUOTA_WAIT_MS = 750;
 
-// Called by AM inside the same transaction that consumes the terminal event.
-// Selection is frozen at event consumption; future deliveries cannot retarget it.
-export function enqueueFirstFailureNotice(database, { runtime, state, identity, event, result }) {
-  if (event?.event !== 'stop_failure' || result?.status !== 'processed' || result.verify ||
-      ['unordered_failure','missing_prompt','duplicate'].includes(result.reason) ||
-      !identity?.runtime_generation || !identity.session_id || !identity.process_start ||
-      event.runtime_generation !== identity.runtime_generation || event.session_id !== identity.session_id ||
-      event.process_start !== identity.process_start) return false;
-  // A factual failure reply is separate from persistent runtime health.
-  if (!result.notice?.eligible) return false;
-  const delivery = database.prepare(`SELECT * FROM runtime_deliveries WHERE runtime_id=?
-    AND runtime_generation=? AND session_id=? AND process_start=? AND started_at<=?
-    ORDER BY id DESC LIMIT 1`).get(runtime,identity.runtime_generation,identity.session_id,identity.process_start,event.received_at);
-  // Freeze an in-flight candidate too: a fast failure can arrive before the
-  // dispatcher's verification finishes. Never fall back to an older message.
-  if (!delivery || !['delivered','submitting'].includes(delivery.status)) return false;
-  const health = event.error === 'rate_limit' ? 'rate_limited' : event.error === 'authentication_failed' ? 'auth_failed' : 'unavailable';
-  const episode = state.health !== 'ok' ? `${runtime}:${state.episode}` : `failure:${event.event_id}`;
-  return database.prepare(`INSERT OR IGNORE INTO runtime_notice_intents
-    (event_id,runtime_id,runtime_generation,session_id,process_start,conversation_id,delivery_id,channel,endpoint,
-     health,reason,health_episode,created_at,updated_at,notice_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
-    .run(event.event_id,runtime,identity.runtime_generation,identity.session_id,identity.process_start,
-      delivery.conversation_id,delivery.id,delivery.channel,delivery.endpoint,health,event.error,episode,event.received_at,event.received_at,JSON.stringify(result.notice)).changes === 1;
+// Called before the atomic health write; this endpoint cannot change afterwards.
+export function freezeFirstFailureNotice(database, { runtime, identity, event, result }) {
+  if (event.event !== 'stop_failure' || result.status !== 'processed' || result.verify || !result.notice?.eligible ||
+      !identity?.session_id || !identity.process_start) return null;
+  const target = database.prepare(`SELECT id, channel, endpoint_id FROM conversations
+    WHERE direction='in' AND status IN ('running','delivered') AND endpoint_id IS NOT NULL AND endpoint_id!=''
+    AND channel NOT IN ('void','system','control','scheduler') ORDER BY id DESC LIMIT 1`).get();
+  if (!target) return null;
+  return { event_id:event.event_id, runtime, session_id:identity.session_id, process_start:identity.process_start,
+    claude_pid:identity.claude_pid, conversation_id:target.id, channel:target.channel, endpoint:target.endpoint_id,
+    health:event.error === 'rate_limit' ? 'rate_limited' : event.error === 'authentication_failed' ? 'auth_failed' : 'unavailable',
+    reason:result.notice.reason || event.error, error:event.error, created_at:event.received_at, notice:result.notice, status:'pending' };
 }
 
 function sameScope(intent, identity) {
-  return !!identity && intent.runtime_id === identity.runtime && intent.runtime_generation === identity.runtime_generation &&
-    intent.session_id === identity.session_id && intent.process_start === identity.process_start;
+  return !!identity && intent.runtime === identity.runtime && intent.session_id === identity.session_id &&
+    intent.process_start === identity.process_start && intent.claude_pid === identity.claude_pid;
 }
 
-export function processFirstFailureNotices({ database = getDb(), identity = readDeliveryIdentity,
-  reserve = reserveStatusNotice, send = sendStatusNotice, now = Date.now, limit = 8,
-  quota = current => readHealthQuota({identity:current,nowMs:now()}), quotaWaitMs = 0 } = {}) {
-  const intents = database.prepare("SELECT * FROM runtime_notice_intents WHERE status='pending' ORDER BY created_at,event_id LIMIT ?").all(limit);
-  const finish = (intent,status) => database.prepare("UPDATE runtime_notice_intents SET status=?,updated_at=? WHERE event_id=? AND status='pending'")
-    .run(status,now(),intent.event_id);
-  for (const intent of intents) {
-    const current = identity();
-    if (!current?.session_id || !current.process_start) continue;
-    if (!sameScope(intent,current)) { finish(intent,'stale'); continue; }
-    const delivery = database.prepare('SELECT * FROM runtime_deliveries WHERE id=?').get(intent.delivery_id);
-    if (!delivery || delivery.runtime_generation !== intent.runtime_generation || delivery.session_id !== intent.session_id ||
-        delivery.process_start !== intent.process_start || delivery.started_at > intent.created_at || delivery.status === 'uncertain') {
-      finish(intent,'suppressed'); continue;
+// Only the child performs blocking channel I/O; AM remains the sole state writer.
+export function sendNoticeWorker(claim, message, route, { zylosDir = runtimeRoot(), spawnWorker = spawn } = {}) {
+  return new Promise(resolve => {
+    let done = false;
+    const finish = (result, workerExitCode = null, workerSignal = null) => {
+      if (done) return;
+      done = true;
+      logStatusNotice(claim, route, result.outcome, { status:result.exitCode, signal:result.signal,
+        workerExitCode, workerSignal }, {zylosDir});
+      resolve(result);
+    };
+    let child;
+    try { child = spawnWorker(process.execPath, [fileURLToPath(import.meta.url), '--send'], {
+      env:{...process.env, ZYLOS_DIR:zylosDir}, stdio:['pipe','pipe','ignore'], timeout:35000, killSignal:'SIGKILL',
+    }); } catch (error) {
+      finish({outcome:['ENOENT','EACCES'].includes(error.code)?'failed':'uncertain'});
+      return;
     }
-    if (delivery.status === 'submitting') {
-      if (now() - intent.created_at > 60000) finish(intent,'suppressed');
-      continue;
-    }
-    if (delivery.submitted_at > intent.created_at + 60000) { finish(intent,'suppressed'); continue; }
-    if (intent.claim_key && intent.attempt_id) {
-      const previous = database.prepare('SELECT status FROM status_notice_attempts WHERE notice_key=? AND attempt_id=?')
-        .get(intent.claim_key,intent.attempt_id);
-      if (previous && ['sent','failed','uncertain'].includes(previous.status)) {
-        finish(intent,previous.status); continue;
+    let output = '';
+    let workerError;
+    child.stdout.on('data', chunk => { if (output.length < 8192) output += chunk; });
+    child.stdin.on('error', () => {});
+    child.once('error', error => { workerError = error; });
+    child.once('close', (code, signal) => {
+      if (workerError) {
+        finish({outcome:['ENOENT','EACCES'].includes(workerError.code) && !child.pid ? 'failed':'uncertain'},code,signal);
+        return;
       }
-    }
-    let notice = {};
-    try { notice = JSON.parse(intent.notice_json || '{}'); } catch { /* Neutral template on malformed metadata. */ }
-    if (intent.reason === 'rate_limit') {
-      const row = database.prepare('SELECT state_json FROM runtime_health_state WHERE runtime_id=?').get(intent.runtime_id);
-      const state = row ? restoreOutageAnchor(JSON.parse(row.state_json),database) : null;
-      if (state?.evidence_id === intent.event_id && state.health === 'rate_limited') {
-        const enriched = currentOutageNotice(state,current,quota(current),now());
-        if (enriched.annotation) notice = enriched.notice;
-        // Only the isolated sender waits, never the monitor or Hook collector.
-        if (!enriched.annotation && notice?.noticeCode !== 'quota_exhausted_reset' &&
-            now() - intent.created_at < Math.min(quotaWaitMs,FIRST_NOTICE_QUOTA_WAIT_MS)) continue;
-      }
-    }
-    const route = { health:intent.health, reason:intent.reason, healthEpisode:intent.health_episode, context:'failure',
-      noticeCode:notice?.noticeCode, resetAt:notice?.resetAt };
-    let claim;
-    try { claim = reserve(intent.channel,intent.endpoint,route); }
-    catch { finish(intent,'failed'); continue; }
-    if (claim.suppressed) {
-      // A concurrent worker or a crashed worker's live lease still owns this
-      // intent. Let its outcome, or the durable lease expiry, decide the result.
-      if (!['claimed','sending'].includes(claim.reason)) finish(intent,claim.reason === 'uncertain'?'uncertain':'suppressed');
-      continue;
-    }
-    database.prepare("UPDATE runtime_notice_intents SET claim_key=?,attempt_id=?,updated_at=? WHERE event_id=? AND status='pending'")
-      .run(claim.key,claim.attemptId,now(),intent.event_id);
-    if (!sameScope(intent,identity())) {
-      finishStatusNotice(claim,'failed',{now:Math.floor(now()/1000)},database);
-      finish(intent,'stale'); continue;
-    }
-    claim.intentEventId = intent.event_id;
-    try { finish(intent,send(claim,messageForStatus(route),route).outcome); }
-    catch {
-      finishStatusNotice(claim,'uncertain',{now:Math.floor(now()/1000)},database);
-      finish(intent,'uncertain');
+      try {
+        const result = code === 0 && !signal ? JSON.parse(output) : null;
+        if (!['sent','failed','uncertain'].includes(result?.outcome)) throw new Error('Invalid worker result');
+        finish(result,code,signal);
+      } catch { finish({outcome:'uncertain'},code,signal); }
+    });
+    child.stdin.end(JSON.stringify({claim,message,route}));
+  });
+}
+
+export async function processFirstFailureNotices({ store, database = getDb(), identity = readDeliveryIdentity,
+  reserve = reserveStatusNotice, send = sendNoticeWorker, now = Date.now,
+  quota = current => readHealthQuota({identity:current,nowMs:now()}), quotaWaitMs = 0, zylosDir = runtimeRoot() } = {}) {
+  const intent = store.read().pending_notice;
+  if (!intent || intent.status !== 'pending') return 0;
+  const finish = status => store.updatePending(intent.event_id, {status, updated_at:now()});
+  const current = identity();
+  if (!sameScope(intent,current)) { finish('stale'); return 1; }
+  const target = database.prepare('SELECT status FROM conversations WHERE id=?').get(intent.conversation_id);
+  if (!['running','delivered'].includes(target?.status)) { finish('suppressed'); return 1; }
+  let notice = intent.notice;
+  if (intent.error === 'rate_limit') {
+    const state = store.read();
+    if (state.evidence_id === intent.event_id && state.health === 'rate_limited') {
+      const enriched = currentOutageNotice(state,current,quota(current),now());
+      if (enriched.annotation) notice = enriched.notice;
+      if (!enriched.annotation && notice?.noticeCode !== 'quota_exhausted_reset' && now()-intent.created_at < Math.min(quotaWaitMs,FIRST_NOTICE_QUOTA_WAIT_MS)) return 0;
     }
   }
-  cleanupFailureNoticeHistory(database,identity(),now());
-  return intents.length;
+  const route = {health:intent.health, reason:intent.reason, context:'failure',noticeKind:'first-failure',noticeCode:notice?.noticeCode,resetAt:notice?.resetAt};
+  let claim;
+  try { claim = reserve(intent.channel,intent.endpoint,route); }
+  catch { finish('failed'); return 1; }
+  if (claim.suppressed) { finish('suppressed'); return 1; }
+  if (!sameScope(intent,identity())) {
+    finishStatusNotice(claim,'failed',{now:Math.floor(now()/1000)},database);
+    finish('stale'); return 1;
+  }
+  // A restart after this point must never resend this same pending intent.
+  if (!store.updatePending(intent.event_id,{status:'sending',updated_at:now()})) {
+    finishStatusNotice(claim,'failed',{now:Math.floor(now()/1000)},database);
+    return 0;
+  }
+  let outcome = 'uncertain';
+  try { outcome = (await send(claim,messageForStatus(route),route,{zylosDir})).outcome; }
+  catch { /* The channel might have accepted the send. Keep its reservation. */ }
+  finishStatusNotice(claim,outcome,{now:Math.floor(now()/1000)},database);
+  finish(outcome);
+  return 1;
 }
 
 let draining = null;
-// Keep the AM event loop responsive while a channel sender waits on I/O.
-// A killed worker leaves the durable send claim to resolve as uncertain.
-export function drainFirstFailureNotices({ identity, zylosDir = runtimeRoot() } = {}) {
+export function drainFirstFailureNotices(options = {}) {
   if (draining) return draining;
-  if (!identity?.runtime_generation || !identity.session_id || !identity.process_start) return Promise.resolve();
-  if (!getDb().prepare("SELECT 1 FROM runtime_notice_intents WHERE status='pending' LIMIT 1").get()) return Promise.resolve();
-  draining = new Promise((resolve,reject) => {
-    const child = spawn(process.execPath,[fileURLToPath(import.meta.url),'--drain'], {
-      env:{...process.env,ZYLOS_DIR:zylosDir}, stdio:'ignore', timeout:35000, killSignal:'SIGKILL',
-    });
-    child.once('error',reject);
-    child.once('exit',(code,signal) => code === 0 ? resolve() : reject(new Error(`Notice worker stopped (${signal || code})`)));
-  }).finally(() => { draining = null; });
+  if (options.store?.read().pending_notice?.status !== 'pending') return Promise.resolve();
+  draining = (async () => {
+    await processFirstFailureNotices({...options,quotaWaitMs:FIRST_NOTICE_QUOTA_WAIT_MS});
+    if (options.store.read().pending_notice?.status === 'pending') {
+      await new Promise(resolve => setTimeout(resolve,FIRST_NOTICE_QUOTA_WAIT_MS));
+      await processFirstFailureNotices(options);
+    }
+  })().finally(() => { draining = null; });
   return draining;
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url) && process.argv[2] === '--drain') {
+if (process.argv[1] === fileURLToPath(import.meta.url) && process.argv[2] === '--send') {
+  let input = '';
+  for await (const chunk of process.stdin) input += chunk;
   try {
-    processFirstFailureNotices({quotaWaitMs:FIRST_NOTICE_QUOTA_WAIT_MS});
-    if (getDb().prepare("SELECT 1 FROM runtime_notice_intents WHERE status='pending' LIMIT 1").get()) {
-      await new Promise(resolve => setTimeout(resolve,FIRST_NOTICE_QUOTA_WAIT_MS));
-      processFirstFailureNotices();
-    }
+    const {claim,message,route} = JSON.parse(input);
+    process.stdout.write(JSON.stringify(sendStatusNotice(claim,message,route,{diagnostic:false})));
   } finally { close(); }
 }

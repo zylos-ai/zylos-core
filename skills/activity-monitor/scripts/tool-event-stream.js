@@ -76,7 +76,9 @@ function readJsonlDelta(filePath, offset, tail, arrivalSeq, log) {
     fs.closeSync(fd);
   }
 
-  const parsed = parseJsonlChunk(tail + chunk, arrivalSeq, log);
+  // offset points before an unfinished line, so the next read already includes
+  // its previous tail. Prepending tail again would corrupt that JSON record.
+  const parsed = parseJsonlChunk(chunk, arrivalSeq, log);
   return {
     exists: true,
     inode,
@@ -152,7 +154,8 @@ export function readToolEventsIncrementalFromStream({
         nextRotatedTail === '' &&
         quietForMs >= drainQuietMs
       ) {
-        safeUnlink(drain.path);
+        // Keep the drained file until the next rotation so a failed consumer
+        // commit can retry from its previous cursor.
         nextState.rotated_drain = null;
         nextRotatedTail = '';
       }

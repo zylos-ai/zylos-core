@@ -2,28 +2,25 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { after, beforeEach, describe, it } from 'node:test';
-import { createRuntimeGeneration, runtimeGenerationEnv } from '../runtime-generation.js';
+import { after, describe, it } from 'node:test';
 
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'session-foreground-test-'));
-beforeEach(() => fs.rmSync(path.join(tmpDir, 'activity-monitor/runtime-generation.json'), { force: true }));
 
 after(() => {
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
 describe('session-foreground hook', () => {
-  it('binds inherited generation and refuses late SessionStart from a superseded launch', async () => {
+  it('binds managed process and refuses unmanaged or subagent SessionStart', async () => {
     process.env.ZYLOS_DIR = tmpDir;
-    const { handleSessionForeground } = await import(`../session-foreground.js?generation=${Date.now()}`);
-    const identity = createRuntimeGeneration('claude', { zylosDir: tmpDir });
-    const options = { claudePid: 4242, processStart: 'boot:123', env: runtimeGenerationEnv(identity) };
+    const { handleSessionForeground } = await import(`../session-foreground.js?identity=${Date.now()}`);
+    const options = { claudePid: 4242, processStart: 'boot:123', managedProcess:(pid,opts)=>pid===4242&&opts.expectedStart==='boot:123' };
     const record = handleSessionForeground({ session_id: 'new-session' }, options);
-    assert.equal(record.runtime_generation, identity.runtime_generation);
+    assert.equal(record.runtime, 'claude');
     assert.equal(record.process_start, 'boot:123');
-    createRuntimeGeneration('codex', { zylosDir: tmpDir });
-    assert.equal(handleSessionForeground({ session_id: 'late-session' }, options), null);
-    assert.equal(handleSessionForeground({ session_id: 'unmanaged-session' }, { ...options, env: {} }), null);
+    assert.equal(handleSessionForeground({ session_id: 'late-session' }, {...options,processStart:'boot:124'}), null);
+    assert.equal(handleSessionForeground({ session_id: 'unmanaged-session' }, { ...options, managedProcess:()=>false }), null);
+    assert.equal(handleSessionForeground({ session_id: 'child-session',agent_id:'child' }, options), null);
     assert.equal(JSON.parse(fs.readFileSync(path.join(tmpDir, 'activity-monitor/foreground-session.json'), 'utf8')).session_id, 'new-session');
   });
   it('writes foreground-session.json from SessionStart input', async () => {
@@ -39,7 +36,9 @@ describe('session-foreground hook', () => {
       source: 'startup'
     }, {
       observedAt: 1234,
-      claudePid: 4242
+      claudePid: 4242,
+      processStart: 'boot:123',
+      managedProcess: () => true
     });
 
     const written = JSON.parse(

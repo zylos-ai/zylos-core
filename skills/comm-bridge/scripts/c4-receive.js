@@ -289,7 +289,7 @@ async function main() {
   const route = await queryRoute(channel, endpoint, noReply);
   const replyEndpoint = noReply ? null : endpoint;
   let dbContent = content;
-  const dbStatus = route.recovered ? 'pending' : 'delivered';
+  const dbStatus = route.recovered ? 'pending' : 'failed';
   let cooldown = null;
 
   if (!route.recovered && !noReply) {

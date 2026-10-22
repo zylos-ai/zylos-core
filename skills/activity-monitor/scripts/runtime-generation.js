@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 
 export const runtimeRoot = () => process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
 export function syncDirectory(directory) {
@@ -28,22 +29,6 @@ export function durableJson(file, value) {
     throw error;
   }
 }
-export function createRuntimeGeneration(runtime, { zylosDir = runtimeRoot(), nowMs = Date.now() } = {}) {
-  if (!['claude', 'codex'].includes(runtime)) throw new Error('Unsupported runtime identity');
-  const record = { schema_version: 1, runtime, runtime_generation: randomUUID(), created_at: nowMs };
-  durableJson(path.join(zylosDir, 'activity-monitor', 'runtime-generation.json'), record);
-  return record;
-}
-export function readRuntimeGeneration(zylosDir = runtimeRoot()) {
-  try {
-    const record = JSON.parse(fs.readFileSync(path.join(zylosDir, 'activity-monitor', 'runtime-generation.json'), 'utf8'));
-    if (record?.schema_version !== 1 || !['claude', 'codex'].includes(record.runtime) || !/^[0-9a-f-]{36}$/.test(record.runtime_generation) || !Number.isFinite(record.created_at)) return null;
-    return record;
-  } catch { return null; }
-}
-export function runtimeGenerationEnv(record) {
-  return { ZYLOS_RUNTIME_ID: record.runtime, ZYLOS_RUNTIME_GENERATION: record.runtime_generation };
-}
 export function readProcessStart(pid, { platform = process.platform, readFileSync = fs.readFileSync } = {}) {
   if (!Number.isSafeInteger(pid) || pid <= 0 || platform !== 'linux') return null;
   try {
@@ -52,4 +37,23 @@ export function readProcessStart(pid, { platform = process.platform, readFileSyn
     const boot = readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim();
     return /^\d+$/.test(ticks) && /^[0-9a-f-]{36}$/.test(boot) ? `${boot}:${ticks}` : null;
   } catch { return null; }
+}
+
+export function isManagedClaudeProcess(pid, { session = 'claude-main', expectedStart,
+  processStart = readProcessStart, read = fs.readFileSync, run = execFileSync } = {}) {
+  if (!Number.isSafeInteger(pid) || pid <= 1) return false;
+  const start = processStart(pid);
+  if (!start || (expectedStart !== undefined && expectedStart !== start)) return false;
+  try {
+    const pane = Number(run('tmux', ['display-message', '-p', '-t', session, '#{pane_pid}'], {
+      encoding: 'utf8', timeout: 2000, stdio: 'pipe',
+    }).trim());
+    let ancestor = pid;
+    for (let depth = 0; depth < 8 && ancestor > 1; depth++) {
+      if (ancestor === pane) return processStart(pid) === start;
+      const stat = read(`/proc/${ancestor}/stat`, 'utf8');
+      ancestor = Number(stat.slice(stat.lastIndexOf(')') + 2).trim().split(/\s+/)[1]);
+    }
+  } catch { /* Missing process evidence cannot authorize a health event. */ }
+  return false;
 }

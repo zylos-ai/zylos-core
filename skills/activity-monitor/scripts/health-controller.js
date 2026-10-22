@@ -1,11 +1,10 @@
-import { readHealthInbox, acknowledgeHealthEvent } from './hook-health.js';
 import { readHealthQuota } from './health-quota.js';
 
 const SCHEDULING_FIELDS = ['cooldownUntil','restartFailureCount','lastRecoveryAt','recoveringStartedAt','unavailableSince','lastDownCheckAt','lastUserMessageRecoveryAt'];
 
 export class HealthController {
-  constructor({ store, engine, identity, fingerprint = () => null, quota = () => readHealthQuota({identity:identity(),zylosDir}), zylosDir, log = () => {}, onDrained = () => {} }) {
-    Object.assign(this,{store,engine,identity,fingerprint,quota,zylosDir,log,onDrained});
+  constructor({ store, engine, identity, fingerprint = () => null, quota = () => readHealthQuota({identity:identity(),zylosDir}), zylosDir, log = () => {}, onDrained = () => {}, drainEvents = () => {} }) {
+    Object.assign(this,{store,engine,identity,fingerprint,quota,zylosDir,log,onDrained,drainEvents});
     this.reading = false;
     this.lastScreen = null;
     this.lastVerificationAt = 0;
@@ -49,7 +48,7 @@ export class HealthController {
   }
   captureFence() {
     const identity = this.identity();
-    return { revision:this.store.read().revision, generation:identity?.runtime_generation??null,session:identity?.session_id??null,process:identity?.process_start??null };
+    return { revision:this.store.read().revision, pid:identity?.claude_pid??null,session:identity?.session_id??null,process:identity?.process_start??null };
   }
   notice() {
     try { return this.store.currentNotice({identity:this.identity(),quota:this.quota()}); }
@@ -85,22 +84,22 @@ export class HealthController {
     else if(result.state.revision!==this.revision)this.apply(result.state);
     return result.accepted;
   }
+  consume(event) {
+    const result=this.store.consume(event,{identity:this.identity(),quota:this.quota()});
+    this.apply(result.state);
+    if(result.verify && this.engine.now()-this.lastVerificationAt>=60000) {
+      this.lastVerificationAt=this.engine.now();
+      if(!this.engine.deps.readHeartbeatPending())this.engine.enqueueHeartbeat('hook_evidence_unordered');
+    }
+    return result;
+  }
   drain() {
     if(this.reading)return;
     this.reading=true;
     try {
-      for(const record of readHealthInbox({zylosDir:this.zylosDir})) {
-        const result=this.store.consume(record.event,{identity:this.identity(),quota:this.quota(),fallbackId:record.file});
-        this.apply(result.state);
-        acknowledgeHealthEvent(record.file,{zylosDir:this.zylosDir});
-        if(result.verify && this.engine.now()-this.lastVerificationAt>=60000) {
-          this.lastVerificationAt=this.engine.now();
-          if(!this.engine.deps.readHeartbeatPending())this.engine.enqueueHeartbeat('hook_evidence_unordered');
-        }
-      }
+      this.drainEvents();
     } catch {
-      // Do not consume spool files or advertise success when durable state failed.
-      this.log('Health evidence storage unavailable; pending events retained');
+      this.log('Health evidence storage unavailable; stream cursor retained');
     } finally {
       this.reading = false;
       try { this.onDrained(); }

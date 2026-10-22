@@ -169,50 +169,13 @@ export function supportsStopFailureVersion(version) {
   const [major, minor, patch] = match.slice(1).map(Number);
   // StopFailure was introduced in Claude Code 2.1.78:
   // https://github.com/anthropics/claude-code/blob/main/CHANGELOG.md#2178
-  return major === 2 && (minor > 1 || (minor === 1 && patch >= 78));
+  return major > 2 || (major === 2 && (minor > 1 || (minor === 1 && patch >= 78)));
 }
 
 export function detectStopFailureSupport({ execFileSyncImpl = execFileSync, binary = process.env.CLAUDE_BIN || 'claude' } = {}) {
   try {
     return supportsStopFailureVersion(execFileSyncImpl(binary, ['--version'], { encoding: 'utf8', stdio: 'pipe', timeout: 2000 }));
   } catch { return false; }
-}
-
-export function syncHealthHooksBeforeLaunch({ zylosDir = ZYLOS_DIR, binary, supported,
-  existsSync = fs.existsSync, readFileSync = fs.readFileSync,
-  persist = persistInstalledSettingsAndSyncCoupledThreshold,
-} = {}) {
-  const script = path.join(zylosDir, '.claude', 'skills', 'activity-monitor', 'scripts', 'hook-health.js');
-  if (!existsSync(script)) return { changed: false };
-  const settingsPath = path.join(zylosDir, '.claude', 'settings.json');
-  const settings = existsSync(settingsPath) ? JSON.parse(readFileSync(settingsPath, 'utf8')) : {};
-  const before = JSON.stringify(settings);
-  const enabled = supported ?? detectStopFailureSupport({ binary });
-  const key = hookScriptKey(`node ${JSON.stringify(script)}`);
-  settings.hooks ??= {};
-  for (const [event, groups] of Object.entries(settings.hooks)) {
-    if (!Array.isArray(groups)) continue;
-    settings.hooks[event] = groups.map(group => ({ ...group, hooks: getCommandHooks(group).length
-      ? (group.hooks || []).filter(hook => hook.type !== 'command' || hookScriptKey(hook.command) !== key)
-      : group.hooks,
-    })).filter(group => !Array.isArray(group.hooks) || group.hooks.length > 0);
-    if (!settings.hooks[event].length) delete settings.hooks[event];
-  }
-  if (enabled) {
-    const hook = { type: 'command', command: `node ${JSON.stringify(script)}`, async: false, timeout: 5 };
-    for (const [event, matchers] of [['SessionStart', ['startup', 'clear', 'compact']], ['UserPromptSubmit', ['']], ['Stop', ['']], ['StopFailure', ['']]]) {
-      settings.hooks[event] ??= [];
-      for (const matcher of matchers) {
-        let group = settings.hooks[event].find(item => (item.matcher ?? '') === matcher);
-        if (!group) { group = { ...(matcher ? { matcher } : {}), hooks: [] }; settings.hooks[event].push(group); }
-        group.hooks ??= [];
-        group.hooks.push({ ...hook });
-      }
-    }
-  }
-  if (JSON.stringify(settings) === before) return { changed: false, supported: enabled };
-  persist({ installedSettings: settings, settingsPath, syncThreshold: () => ({ changed: false }) });
-  return { changed: true, supported: enabled };
 }
 
 export function desiredClaudeHooks({
