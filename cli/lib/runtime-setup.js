@@ -460,7 +460,7 @@ export function renderCodexProjectConfig(existingContent = '', opts = {}) {
   obj.model_availability_nux = 'gpt-5.4';
 
   // Backfill: default only when the user has not configured a value.
-  if (obj.model === undefined) obj.model = 'gpt-5.5';
+  if (obj.model === undefined) obj.model = 'gpt-6-sol';
   if (obj.model_reasoning_effort === undefined) obj.model_reasoning_effort = 'medium';
 
   obj.features = isTomlSectionValue(obj.features) ? obj.features : {};
