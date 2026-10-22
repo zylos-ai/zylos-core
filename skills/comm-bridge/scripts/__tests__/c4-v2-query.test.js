@@ -204,3 +204,19 @@ test('short empty body fixture fits one page independent of 800 quoted endpoint 
   assert.equal(Buffer.byteLength(query.absorbed({ runId, after: 0, group: 'telegram:g-100123', json: true, maxBytes: 2048 })) <= 2048, true);
   assert.equal(Buffer.byteLength(query.absorbed({ runId, after: 0, group: 'telegram:g-100123', maxBytes: 2048 })) <= 2048, true);
 });
+
+test('single-target summary counts legal constructor namespace in JSON and text', t => {
+  const { store, query } = fixture(t);
+  const rows = ['constructor', 'chat', 'constructor'].map(group =>
+    store.insertConversation('in', group, 'e', 'x'));
+  const runId = absorb(store, 'multi', 'single');
+  const options = { runId, summary: true };
+  const item = JSON.parse(query.absorbed({ ...options, json: true })).data.items[0];
+  assert.deepEqual(item.bySourceGroup, { constructor: 2, chat: 1 });
+  assert.equal(item.count, 3);
+  assert.equal(item.firstId, rows[0].id);
+  assert.equal(item.lastId, rows[2].id);
+  const text = query.absorbed(options);
+  assert.match(text, /bySourceGroup=constructor:2,chat:1\n/);
+  assert.ok(!text.includes('[native code]'));
+});

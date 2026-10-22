@@ -90,7 +90,7 @@ export function formatAbsorbedSummary({ transition, rows }, { scopeAfter, maxByt
   for (const scope of pending) {
     const messages = byScope.get(scope), item = { scope, count: messages.length, firstId: messages[0].id, lastId: messages.at(-1).id };
     if (transition.target_mode === 'single') {
-      item.bySourceGroup = {};
+      item.bySourceGroup = Object.create(null);
       for (const row of messages) item.bySourceGroup[row.session_group] = (item.bySourceGroup[row.session_group] ?? 0) + 1;
       if (bytes(encode([...items, item])) > max) item.bySourceGroup = null;
     }
