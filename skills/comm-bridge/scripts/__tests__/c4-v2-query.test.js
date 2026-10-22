@@ -5,7 +5,7 @@ import { guardDatabase } from '../sqlite-schema.js';
 import * as owner from '../c4-schema.js';
 import { createStore } from '../c4-v2-store.js';
 import { createQueryHandlers, runAbsorbedQuery } from '../c4-v2-cli.js';
-import { escapeText, formatQueryError, replyVia } from '../c4-query-format.js';
+import { escapeText, formatQueryError, formatAbsorbedPage, replyVia } from '../c4-query-format.js';
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -24,6 +24,34 @@ test('E uses exact reversible control encodings and one physical line', () => {
   const original = '\\n\n\r\t\0\x1f\x7f\u0085\u2028\u2029中文';
   assert.equal(escapeText(original), '\\\\n\\n\\r\\t\\x00\\x1f\\x7f\\u0085\\u2028\\u2029中文');
   assert.equal(decodeE(escapeText(original)), original);
+});
+test('omitted-page metadata bounds retain 19-digit decimal widths in both encodings', () => {
+  const group = 'n'.repeat(32) + ':' + 'g'.repeat(95);
+  const runId = 'ffffffff-ffff-ffff-ffff-ffffffffffff';
+  const snapshot = {
+    transition: { run_id: runId, target_mode: 'multi' },
+    rows: [1, 2].map(id => ({ id, session_group: group, timestamp: '2026-01-01 00:00:00', content: 'x'.repeat(65536) })),
+  };
+  for (const json of [false, true]) {
+    const output = formatAbsorbedPage(snapshot, { group, json, maxBytes: 2048 });
+    // Start with the production encoder, then widen bounded decimal metadata
+    // for the analytical upper-bound fixture. This is not a 64-bit DB-id test.
+    const wide = '9'.repeat(19);
+    let bound;
+    if (json) {
+      assert.equal(JSON.parse(output).data.items[0].textOmitted, true);
+      bound = output.replace(/"(id|total|after|textBytes|next)":\d+/g, (_, key) => `"${key}":${wide}`)
+        .replace(/ --absorbed-reply ([a-f0-9-]+) \d+/g, ` --absorbed-reply $1 ${wide}`)
+        .replace('"maxBytes":2048', '"maxBytes":16384');
+    } else {
+      assert.match(output, /<省略/);
+      bound = output.replace(/(total=|after=|textBytes=|next=|#|--id )\d+/g, (_, prefix) => prefix + wide)
+        .replace(/ --absorbed-reply ([a-f0-9-]+) \d+/g, ` --absorbed-reply $1 ${wide}`)
+        .replace(/原文 \d+ B/, `原文 ${wide} B`).replace('maxBytes=2048', 'maxBytes=16384');
+    }
+    assert.ok(Buffer.byteLength(bound) <= (json ? 705 : 726));
+    assert.ok(bound.includes(wide));
+  }
 });
 test('absorbed pages advance across oversized first item and 1000 subsequent rows, without routes', t => {
   const { store, query } = fixture(t);
