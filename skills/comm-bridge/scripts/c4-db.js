@@ -246,7 +246,8 @@ export function getControlById(id) {
   const database = getDb();
   return database.prepare(`
     SELECT id, raw_content, content, priority, require_idle, bypass_state, ack_deadline_at,
-           status, retry_count, available_at, last_error, created_at, updated_at
+           status, retry_count, available_at, last_error, created_at, updated_at,
+           session_group, target_binding
     FROM control_queue
     WHERE id = ?
   `).get(id) || null;
