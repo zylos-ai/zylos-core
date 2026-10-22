@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.10.0] - 2026-10-22
+## [0.9.2] - 2026-10-22
 
 ### Added
 - **Structured Claude runtime health and first-failure replies**: supported Claude Code hooks feed sanitized evidence into the existing activity-monitor event stream. The monitor persists health, a terminal-event replay marker, and a pending reply in one atomic per-runtime file. An eligible failure freezes the latest inbound conversation in `running` or `delivered` with a reply endpoint; this is a latest-row policy, not proof that one prompt belongs to that message. Billing, authentication, model, service and unknown errors receive factual replies, while only rate-limit and authentication failures directly establish persistent unhealthy states. (#835)
