@@ -154,12 +154,12 @@ test('upgrade preflight and rehearsal reject an unsafe extension before service 
  }finally{db.close();}
  const before=fs.readFileSync(source);
  assert.throws(()=>runCoreDbWorker({action:'offline-preflight',zylosDir:dir,schemaRoot}),/conversations\.my_tag.*default/);
- assert.throws(()=>rehearseCoreDbUpgrade(dir,path.resolve('.'),{driverRoot:path.join(os.homedir(),'zylos','.claude','skills')}),/conversations\.my_tag.*default/);
+ assert.throws(()=>rehearseCoreDbUpgrade(dir,path.resolve('.'),{driverRoot:path.join(dir,'.claude','skills')}),/conversations\.my_tag.*default/);
  assert.deepEqual(fs.readFileSync(source),before);
 });
 
 test('target rehearsal migrates private copies before stop and leaves live databases unchanged', {skip:!Database},t=>{
- const dir=fixture(t),source=path.join(dir,'comm-bridge/c4.db');
+ const dir=fixture(t),source=path.join(dir,'comm-bridge/c4.db');skills(dir);
  fs.mkdirSync(path.dirname(source),{recursive:true});
  const db=new Database(source);
  try {
@@ -167,7 +167,7 @@ test('target rehearsal migrates private copies before stop and leaves live datab
   db.exec("INSERT INTO conversations(direction,channel,endpoint_id,content) VALUES('in','web-console','session-handoff','retained')");
  } finally {db.close();}
  const before=fs.readFileSync(source);
- const result=rehearseCoreDbUpgrade(dir,path.resolve('.'),{driverRoot:path.join(os.homedir(),'zylos','.claude','skills')});
+ const result=rehearseCoreDbUpgrade(dir,path.resolve('.'),{driverRoot:path.join(dir,'.claude','skills')});
  assert.deepEqual(result.databases.map(row=>row.toVersion),currentVersions);
  assert.equal(result.databases[0].fromVersion,0);
  assert.deepEqual(fs.readFileSync(source),before);
