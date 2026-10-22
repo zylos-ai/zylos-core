@@ -103,7 +103,8 @@ export class MessageRouter {
 
   _decision(request, decision) {
     const evidence=this.healthEngine.evidence?.store.read();
-    const notice = evidence?.health === decision.health ? evidence?.notice : null;
+    const notice = evidence?.health === decision.health
+      ? (this.healthEngine.evidence.notice?.() ?? evidence?.notice) : null;
     return {
       version: 1,
       requestId: request.requestId,

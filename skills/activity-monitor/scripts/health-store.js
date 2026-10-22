@@ -1,6 +1,7 @@
 import { initialHealthEvidence, reduceHealthEvidence, sanitizeHealthEvent, safeHealthReason, HEALTH_EVENT_MAX_AGE_MS } from './health-evidence.js';
 import { randomUUID } from 'node:crypto';
 import { enqueueFirstFailureNotice } from '../../comm-bridge/scripts/first-failure-notice.js';
+import { currentOutageNotice } from './outage-notice.js';
 
 /** All state and inbox writes are synchronous SQLite transactions owned by AM. */
 export class HealthStore {
@@ -12,6 +13,17 @@ export class HealthStore {
   read() {
     const row = this.db.prepare('SELECT state_json FROM runtime_health_state WHERE runtime_id=?').get(this.runtime);
     return row ? JSON.parse(row.state_json) : structuredClone(this.initial);
+  }
+  currentNotice({identity,quota} = {}) {
+    return this.db.transaction(() => {
+      const state = this.read();
+      const result = currentOutageNotice(state,identity,quota,this.now());
+      if (result.annotation && JSON.stringify(result.annotation) !== JSON.stringify(state.outage_quota)) {
+        const owned = this.claim(state);
+        this.write({...owned,outage_quota:result.annotation});
+      }
+      return result.notice;
+    }).immediate();
   }
   write(state) {
     this.db.prepare('INSERT INTO runtime_health_state(runtime_id,revision,state_json,updated_at) VALUES(?,?,?,?) ON CONFLICT(runtime_id) DO UPDATE SET revision=excluded.revision,state_json=excluded.state_json,updated_at=excluded.updated_at').run(this.runtime,state.revision,JSON.stringify(state),this.now());

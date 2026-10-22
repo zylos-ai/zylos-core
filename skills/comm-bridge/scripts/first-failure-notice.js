@@ -6,6 +6,10 @@ import { messageForStatus } from './status-notice-templates.js';
 import { readDeliveryIdentity, cleanupFailureNoticeHistory } from './runtime-delivery.js';
 export { cleanupFailureNoticeHistory } from './runtime-delivery.js';
 import { runtimeRoot } from '../../activity-monitor/scripts/runtime-generation.js';
+import { readHealthQuota } from '../../activity-monitor/scripts/health-quota.js';
+import { currentOutageNotice } from '../../activity-monitor/scripts/outage-notice.js';
+
+export const FIRST_NOTICE_QUOTA_WAIT_MS = 750;
 
 // Called by AM inside the same transaction that consumes the terminal event.
 // Selection is frozen at event consumption; future deliveries cannot retarget it.
@@ -38,7 +42,8 @@ function sameScope(intent, identity) {
 }
 
 export function processFirstFailureNotices({ database = getDb(), identity = readDeliveryIdentity,
-  reserve = reserveStatusNotice, send = sendStatusNotice, now = Date.now, limit = 8 } = {}) {
+  reserve = reserveStatusNotice, send = sendStatusNotice, now = Date.now, limit = 8,
+  quota = current => readHealthQuota({identity:current,nowMs:now()}), quotaWaitMs = 0 } = {}) {
   const intents = database.prepare("SELECT * FROM runtime_notice_intents WHERE status='pending' ORDER BY created_at,event_id LIMIT ?").all(limit);
   const finish = (intent,status) => database.prepare("UPDATE runtime_notice_intents SET status=?,updated_at=? WHERE event_id=? AND status='pending'")
     .run(status,now(),intent.event_id);
@@ -65,6 +70,17 @@ export function processFirstFailureNotices({ database = getDb(), identity = read
     }
     let notice = {};
     try { notice = JSON.parse(intent.notice_json || '{}'); } catch { /* Neutral template on malformed metadata. */ }
+    if (intent.reason === 'rate_limit') {
+      const row = database.prepare('SELECT state_json FROM runtime_health_state WHERE runtime_id=?').get(intent.runtime_id);
+      const state = row ? JSON.parse(row.state_json) : null;
+      if (state?.evidence_id === intent.event_id && state.health === 'rate_limited') {
+        const enriched = currentOutageNotice(state,current,quota(current),now());
+        if (enriched.annotation) notice = enriched.notice;
+        // Only the isolated sender waits, never the monitor or Hook collector.
+        if (!enriched.annotation && notice?.noticeCode !== 'quota_exhausted_reset' &&
+            now() - intent.created_at < Math.min(quotaWaitMs,FIRST_NOTICE_QUOTA_WAIT_MS)) continue;
+      }
+    }
     const route = { health:intent.health, reason:intent.reason, healthEpisode:intent.health_episode, context:'failure',
       noticeCode:notice?.noticeCode, resetAt:notice?.resetAt };
     let claim;
@@ -111,5 +127,11 @@ export function drainFirstFailureNotices({ identity, zylosDir = runtimeRoot() } 
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url) && process.argv[2] === '--drain') {
-  try { processFirstFailureNotices(); } finally { close(); }
+  try {
+    processFirstFailureNotices({quotaWaitMs:FIRST_NOTICE_QUOTA_WAIT_MS});
+    if (getDb().prepare("SELECT 1 FROM runtime_notice_intents WHERE status='pending' LIMIT 1").get()) {
+      await new Promise(resolve => setTimeout(resolve,FIRST_NOTICE_QUOTA_WAIT_MS));
+      processFirstFailureNotices();
+    }
+  } finally { close(); }
 }

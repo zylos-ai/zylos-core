@@ -1,9 +1,10 @@
 import { readHealthInbox, acknowledgeHealthEvent } from './hook-health.js';
+import { readHealthQuota } from './health-quota.js';
 
 const SCHEDULING_FIELDS = ['cooldownUntil','restartFailureCount','lastRecoveryAt','recoveringStartedAt','unavailableSince','lastDownCheckAt','lastUserMessageRecoveryAt'];
 
 export class HealthController {
-  constructor({ store, engine, identity, fingerprint = () => null, quota = () => null, zylosDir, log = () => {}, onDrained = () => {} }) {
+  constructor({ store, engine, identity, fingerprint = () => null, quota = () => readHealthQuota({identity:identity(),zylosDir}), zylosDir, log = () => {}, onDrained = () => {} }) {
     Object.assign(this,{store,engine,identity,fingerprint,quota,zylosDir,log,onDrained});
     this.reading = false;
     this.lastScreen = null;
@@ -49,6 +50,13 @@ export class HealthController {
   captureFence() {
     const identity = this.identity();
     return { revision:this.store.read().revision, generation:identity?.runtime_generation??null,session:identity?.session_id??null,process:identity?.process_start??null };
+  }
+  notice() {
+    try { return this.store.currentNotice({identity:this.identity(),quota:this.quota()}); }
+    catch {
+      this.log('Current quota unavailable; original failure notice retained');
+      return this.store.read().notice;
+    }
   }
   refresh() {
     const state=this.store.read();

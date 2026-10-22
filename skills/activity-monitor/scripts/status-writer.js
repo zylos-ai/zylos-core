@@ -39,8 +39,9 @@ export function buildStatusPayload({ statusObj, healthEngine }) {
   if (evidence) {
     extra.health_episode = `${healthEngine.evidence.store.runtime}:${evidence.episode}`;
     extra.health_revision = evidence.revision;
-    if (evidence.notice && evidence.health === health) {
-      extra.health_notice = { noticeCode:evidence.notice.noticeCode, resetAt:evidence.notice.resetAt };
+    const notice = healthEngine.evidence.notice?.() ?? evidence.notice;
+    if (notice && evidence.health === health) {
+      extra.health_notice = { noticeCode:notice.noticeCode, resetAt:notice.resetAt };
     }
     const hook = evidence.last_hook;
     if (hook && hook.runtime_generation === evidence.runtime_generation && ['stop', 'stop_failure'].includes(hook.event) &&
