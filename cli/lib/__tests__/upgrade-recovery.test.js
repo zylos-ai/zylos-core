@@ -36,9 +36,15 @@ async function fixture(t,{missing=false,wal=false}={}) {
   const migration=item.owner==='comm-bridge'?'c4-migrations.js':'migrations.js';
   fs.copyFileSync(path.resolve('skills',item.owner,'scripts',migration),path.join(owner,'scripts',migration));
  }
- fs.copyFileSync(path.resolve('skills/comm-bridge/scripts/sqlite-schema.js'),path.join(skillsDir,'comm-bridge/scripts/sqlite-schema.js'));
+ for(const file of ['sqlite-schema.js','c4-migrations-v2.js']) fs.copyFileSync(path.resolve('skills/comm-bridge/scripts',file),path.join(skillsDir,'comm-bridge/scripts',file));
  for(const item of CORE_DATABASES){if(missing&&item.owner==='scheduler')continue;const mod=await import(pathToFileURL(path.join(skillsDir,item.owner,item.schema)));const p=path.join(root,item.source);fs.mkdirSync(path.dirname(p),{recursive:true});const db=new Database(p);
-  for(const [name,columns] of Object.entries(mod.TABLES)){const defs=mod.COLUMN_DEFINITIONS?.[name]||{};db.exec(`CREATE TABLE "${name}" (${columns.map(c=>`"${c}" ${defs[c]?.type||'TEXT'}${defs[c]?.pk?' PRIMARY KEY':''}`).join(',')})`);}
+  for(const [name,columns] of Object.entries(mod.TABLES)) {
+   const defs=mod.COLUMN_DEFINITIONS?.[name]||{};
+   const primary=columns.filter(c=>defs[c]?.pk);
+   const declarations=columns.map(c=>`"${c}" ${defs[c]?.type||'TEXT'}`);
+   if(primary.length) declarations.push(`PRIMARY KEY (${primary.map(c=>`"${c}"`).join(',')})`);
+   db.exec(`CREATE TABLE "${name}" (${declarations.join(',')})`);
+  }
   db.pragma(`user_version=${mod.SUPPORTED_SCHEMA_VERSION}`);if(wal)db.pragma('journal_mode=WAL');db.close();
  }
  const dir=path.join(root,'.backup/self-upgrade','tx');fs.mkdirSync(dir,{recursive:true,mode:0o700});

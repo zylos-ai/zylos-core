@@ -182,10 +182,10 @@ test('diagnostic log rotates at 100 KB and preserves normalized target and notic
   assert.equal(last.exitCode,0);assert.equal(last.signal,null);
 });
 
-test('an installed experimental schema2 is rejected without changing its data', t => {
+test('an experimental schema2 lacking the current layout is rejected without changing its data', t => {
   const db=new Database(':memory:');t.after(()=>db.close());
   db.exec("CREATE TABLE retained(value TEXT); INSERT INTO retained VALUES('history'); PRAGMA user_version=2");
-  assert.throws(()=>guardDatabase(db,schema),/version 2 exceeds supported 1/);
+  assert.throws(()=>guardDatabase(db,schema),/missing/);
   assert.equal(db.pragma('user_version',{simple:true}),2);
   assert.equal(db.prepare('SELECT value FROM retained').get().value,'history');
 });
