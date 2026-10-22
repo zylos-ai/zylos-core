@@ -58,6 +58,7 @@ function _readConfig() {
   }
 }
 const _cfg = _readConfig();
+export const STATUS_NOTICE_CONFIG = _cfg.statusNotices ?? {};
 export const ACTIVE_RUNTIME = _cfg.runtime === 'codex' ? 'codex' : 'claude';
 export const TMUX_SESSION = ACTIVE_RUNTIME === 'codex' ? 'codex-main' : 'claude-main';
 export const DATA_DIR = path.join(ZYLOS_DIR, 'comm-bridge');

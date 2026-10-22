@@ -373,7 +373,7 @@ describe('c4-receive health gating', () => {
     });
   });
 
-  it('fallback marks no-reply unhealthy messages delivered without error', () => {
+  it('fallback records rejected no-reply unhealthy messages failed without error', () => {
     withTmpDir(({ tmpDir, env }) => {
       fs.writeFileSync(path.join(tmpDir, 'activity-monitor', 'agent-status.json'), JSON.stringify({ health: 'recovering' }));
 
@@ -387,7 +387,7 @@ describe('c4-receive health gating', () => {
       const row = db.prepare('SELECT status, content FROM conversations WHERE id = ?').get(Number(out.id));
       db.close();
 
-      assert.equal(row.status, 'delivered');
+      assert.equal(row.status, 'failed');
       assert.ok(row.content.includes('recovering msg'));
     });
   });
@@ -405,17 +405,17 @@ describe('c4-receive health gating', () => {
 
       const sent = JSON.parse(fs.readFileSync(path.join(tmpDir, 'test-chan-send.json'), 'utf8'));
       assert.equal(sent.args[0], 'ep1');
-      assert.match(sent.args[1], /temporarily unavailable/i);
+      assert.match(sent.args[1], /当前服务暂时不可用/);
 
       const db = openDb(tmpDir);
       const inbound = db.prepare("SELECT status, content FROM conversations WHERE direction = 'in'").get();
       const outbound = db.prepare("SELECT status, content FROM conversations WHERE direction = 'out'").get();
       db.close();
 
-      assert.equal(inbound.status, 'delivered');
+      assert.equal(inbound.status, 'failed');
       assert.ok(inbound.content.includes('down msg'));
       assert.ok(!inbound.content.includes('reply via'));
-      assert.ok(outbound.content.includes("I'm temporarily unavailable"));
+      assert.ok(outbound.content.includes('当前服务暂时不可用'));
     });
   });
 
@@ -428,7 +428,7 @@ describe('c4-receive health gating', () => {
       assert.equal(r.status, 1);
       const out = parseJsonStdout(r.stdout);
       assert.equal(out.ok, false);
-      assert.equal(out.error.code, 'UNHEALTHY_NOTIFY_FAILED');
+      assert.equal(out.error.code, 'UNHEALTHY_NOTIFY_UNCERTAIN');
     });
   });
 
@@ -469,7 +469,7 @@ describe('c4-receive health gating', () => {
 
       const entries = readCooldownRows(tmpDir);
       assert.equal(entries.length, 1);
-      assert.equal(entries[0].endpoint, 'oc_123|type:group|root:om_root');
+      assert.equal(entries[0].endpoint, 'oc_123|root:om_root|type:group');
       assert.equal(entries[0].status_type, 'unavailable');
       assert.equal(entries[0].reason, 'unavailable');
       assert.equal(fs.existsSync(path.join(tmpDir, 'activity-monitor', 'status-notice-cooldowns.json')), false);
@@ -559,7 +559,7 @@ describe('c4-receive health gating', () => {
       const cooldowns = readCooldownRows(tmpDir);
       assert.equal(cooldowns.some((row) => row.cooldown_key === 'old::ep::unavailable::old'), false);
       assert.equal(cooldowns.some((row) => row.cooldown_key === 'recent::ep::unavailable::recent'), true);
-      assert.equal(cooldowns.some((row) => row.cooldown_key === 'test-chan::ep1::unavailable::unavailable'), true);
+      assert.equal(cooldowns.some((row) => row.channel === 'test-chan' && row.endpoint === 'ep1' && row.status_type === 'unavailable'), true);
       assert.equal(fs.existsSync(path.join(tmpDir, 'activity-monitor', 'status-notice-cooldowns.json')), false);
     });
   });
@@ -612,7 +612,7 @@ describe('c4-receive MessageRouter IPC route', () => {
         const db = openDb(tmpDir);
         const inbound = db.prepare("SELECT status, content FROM conversations WHERE direction = 'in'").get();
         db.close();
-        assert.equal(inbound.status, 'delivered');
+        assert.equal(inbound.status, 'failed');
         assert.ok(inbound.content.includes('blocked msg'));
       });
     });
@@ -650,7 +650,7 @@ describe('c4-receive MessageRouter IPC route', () => {
 
         const entries = readCooldownRows(tmpDir);
         assert.equal(entries.length, 1);
-        assert.equal(entries[0].endpoint, 'oc_123|type:group|root:om_root');
+        assert.equal(entries[0].endpoint, 'oc_123|root:om_root|type:group');
         assert.equal(entries[0].status_type, 'unavailable');
         assert.equal(entries[0].reason, 'heartbeat_timeout');
 
@@ -684,7 +684,7 @@ describe('c4-receive MessageRouter IPC route', () => {
         const inbound = db.prepare("SELECT status, content FROM conversations WHERE direction = 'in'").get();
         const outboundCount = db.prepare("SELECT count(*) AS count FROM conversations WHERE direction = 'out'").get();
         db.close();
-        assert.equal(inbound.status, 'delivered');
+        assert.equal(inbound.status, 'failed');
         assert.equal(outboundCount.count, 0);
       });
     });

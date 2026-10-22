@@ -1,0 +1,30 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import net from 'node:net';
+import {spawn} from 'node:child_process';
+import {once} from 'node:events';
+import {test} from 'node:test';
+
+test('peer disappears during blocking durable drain: real Unix write error does not kill server', {timeout:10000}, async t=>{
+  const directory=fs.mkdtempSync(path.join(os.tmpdir(),'router-socket-process-'));
+  const socketPath=path.join(directory,'am.sock');
+  const helper=new URL('../router-socket.js',import.meta.url).href;
+  const source=`import net from 'node:net';import{createRouterReply}from ${JSON.stringify(helper)};
+    let requests=0;const server=net.createServer(socket=>{const emit=socket.emit;socket.emit=function(type,...args){if(type==='error')console.log('CODE:'+args[0].code);return emit.call(this,type,...args);};const reply=createRouterReply(socket,()=>console.log('PEER_ERROR'));
+    socket.once('data',()=>{requests++;if(requests===1){console.log('DRAINING');Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,250);}reply({type:'ack',requests});});});
+    server.listen(${JSON.stringify(socketPath)},()=>console.log('READY'));`;
+  const child=spawn(process.execPath,['--input-type=module','-e',source],{stdio:['ignore','pipe','pipe']});
+  let stdout='',stderr='';child.stdout.on('data',chunk=>stdout+=chunk);child.stderr.on('data',chunk=>stderr+=chunk);
+  t.after(async()=>{if(child.exitCode===null&&child.signalCode===null){const exit=once(child,'exit');child.kill('SIGKILL');await exit;}fs.rmSync(directory,{recursive:true,force:true});});
+  const waitFor=async marker=>{for(let i=0;i<200&&!stdout.includes(marker);i++){assert.equal(child.exitCode,null,stderr);await new Promise(resolve=>setTimeout(resolve,10));}assert.ok(stdout.includes(marker),`${marker} missing: ${stdout} ${stderr}`);};
+  await waitFor('READY');
+  const first=net.connect(socketPath);first.on('error',()=>{});await once(first,'connect');first.write('wake\n');
+  await waitFor('DRAINING');first.destroy();
+  await waitFor('PEER_ERROR');
+  assert.match(stdout,/CODE:EPIPE/);
+  const second=net.connect(socketPath);let output='';second.on('data',chunk=>output+=chunk);second.on('error',()=>{});await once(second,'connect');second.end('route\n');await once(second,'close');
+  assert.deepEqual(JSON.parse(output),{type:'ack',requests:2});
+  assert.equal(child.exitCode,null);assert.equal(stderr,'');
+});

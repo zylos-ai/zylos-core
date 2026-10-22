@@ -11,6 +11,7 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { DATA_DIR, DB_PATH, CONTROL_MAX_RETRIES } from './c4-config.js';
+import { normalizeStatusEndpoint } from './status-endpoint.js';
 import { buildReplyViaSuffix, hasLegacyReplyViaSuffix, truncateForDelivery } from './c4-utils.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -140,6 +141,39 @@ export function getStatusNoticeCooldowns() {
     FROM status_notice_cooldowns
     ORDER BY cooldown_key ASC
   `).all();
+}
+
+// Reservation is the only resend authority. Unknown outcomes keep it until expiry.
+export function claimStatusNotice({ key, channel, endpoint, normalizedEndpoint,
+  health = 'unavailable', reason = 'unavailable', now = nowSeconds(), ttl = 600 }, database = getDb()) {
+  return database.transaction(() => {
+    database.prepare('DELETE FROM status_notice_cooldowns WHERE expires_at <= ?').run(now);
+    const previous = database.prepare('SELECT * FROM status_notice_cooldowns WHERE channel=? AND status_type=? AND reason=? AND expires_at>?')
+      .all(channel, health, reason, now).find(row => normalizeStatusEndpoint(row.endpoint) === normalizedEndpoint);
+    if (previous) return { suppressed: true, reason: 'cooldown', previous };
+    // Fractional timestamp distinguishes replacement reservations created in the same second.
+    const reservedAt = now + Math.random() / 1000;
+    database.prepare(`INSERT INTO status_notice_cooldowns
+      (cooldown_key,channel,endpoint,status_type,reason,last_notified_at,expires_at,updated_at)
+      VALUES (?,?,?,?,?,?,?,?)`).run(key, channel, normalizedEndpoint, health, reason, reservedAt, now + ttl, now);
+    return { suppressed: false, key, channel, endpoint, normalizedEndpoint, health, reason,
+      reservedAt, expiresAt: now + ttl };
+  }).immediate();
+}
+
+export function startStatusNotice(claim, now = nowSeconds(), database = getDb()) {
+  return Boolean(database.prepare(`SELECT 1 FROM status_notice_cooldowns
+    WHERE cooldown_key=? AND last_notified_at=? AND expires_at>?`).get(claim.key, claim.reservedAt, now));
+}
+
+export function finishStatusNotice(claim, outcome, { now = nowSeconds(), ttl = 600 } = {}, database = getDb()) {
+  if (!['sent', 'failed', 'uncertain'].includes(outcome)) throw new Error('Invalid notice outcome');
+  if (outcome === 'failed') return database.prepare(`DELETE FROM status_notice_cooldowns
+    WHERE cooldown_key=? AND last_notified_at=?`).run(claim.key, claim.reservedAt).changes === 1;
+  if (outcome === 'uncertain') return database.prepare(`UPDATE status_notice_cooldowns SET updated_at=?
+    WHERE cooldown_key=? AND last_notified_at=?`).run(now, claim.key, claim.reservedAt).changes === 1;
+  return database.prepare(`UPDATE status_notice_cooldowns SET expires_at=MAX(expires_at,?),updated_at=?
+    WHERE cooldown_key=? AND last_notified_at=?`).run(now + ttl, now, claim.key, claim.reservedAt).changes === 1;
 }
 
 /**

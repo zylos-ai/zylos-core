@@ -9,9 +9,13 @@ import cp,{spawn,spawnSync} from 'node:child_process';
 import {CORE_DATABASES,createCoreDbSnapshot,prepareRecoveryDependencies} from '../core-db-backup.js';
 import {protectedDataReady,protectedSuccess} from '../upgrade-protection.js';
 import {upgradeStartupPrompt} from '../runtime/upgrade-context.js';
+import {SUPPORTED_SCHEMA_VERSION as C4_VERSION} from '../../../skills/comm-bridge/scripts/c4-schema.js';
+import {SUPPORTED_SCHEMA_VERSION as SCHEDULER_VERSION} from '../../../skills/scheduler/scripts/schema.js';
+import {SUPPORTED_SCHEMA_VERSION as WEB_VERSION} from '../../../skills/web-console/scripts/schema.js';
 
 const require=createRequire(import.meta.url);
 const Database=require(path.resolve('skills/comm-bridge/node_modules/better-sqlite3'));
+const currentVersions=[C4_VERSION,SCHEDULER_VERSION,WEB_VERSION];
 function interceptSync(check) {
  const sync=fs.fsyncSync;
  fs.fsyncSync=fd=>{check(fd);return sync(fd);};
@@ -35,7 +39,7 @@ async function fixture(t,{missing=false,wal=false}={}) {
  fs.copyFileSync(path.resolve('skills/comm-bridge/scripts/sqlite-schema.js'),path.join(skillsDir,'comm-bridge/scripts/sqlite-schema.js'));
  for(const item of CORE_DATABASES){if(missing&&item.owner==='scheduler')continue;const mod=await import(pathToFileURL(path.join(skillsDir,item.owner,item.schema)));const p=path.join(root,item.source);fs.mkdirSync(path.dirname(p),{recursive:true});const db=new Database(p);
   for(const [name,columns] of Object.entries(mod.TABLES)){const defs=mod.COLUMN_DEFINITIONS?.[name]||{};db.exec(`CREATE TABLE "${name}" (${columns.map(c=>`"${c}" ${defs[c]?.type||'TEXT'}${defs[c]?.pk?' PRIMARY KEY':''}`).join(',')})`);}
-  db.pragma('user_version=1');if(wal)db.pragma('journal_mode=WAL');db.close();
+  db.pragma(`user_version=${mod.SUPPORTED_SCHEMA_VERSION}`);if(wal)db.pragma('journal_mode=WAL');db.close();
  }
  const dir=path.join(root,'.backup/self-upgrade','tx');fs.mkdirSync(dir,{recursive:true,mode:0o700});
  const snapshot=createCoreDbSnapshot({zylosDir:root,transactionId:'tx'}),closure=prepareRecoveryDependencies(dir,root);
@@ -193,7 +197,7 @@ for(const legacy of ['group-writable','backup-alias'])test(`completed upgrade pe
  import {getDb,close} from './.claude/skills/comm-bridge/scripts/c4-db.js';
  import {getDb as scheduler} from './.claude/skills/scheduler/scripts/database.js';
  import {openDb} from './.claude/skills/web-console/scripts/db.js';
- for(const open of [getDb,scheduler,openDb]){const db=open();assert.equal(db.pragma('user_version',{simple:true}),1);db.close();}
+ for(const [index,open] of [getDb,scheduler,openDb].entries()){const db=open();assert.equal(db.pragma('user_version',{simple:true}),${JSON.stringify(currentVersions)}[index]);db.close();}
  close();`);
  const alias=path.join(f.root,'deployment-alias');fs.symlinkSync(f.root,alias);
  for(const deploymentRoot of [f.root,alias]) {
@@ -393,7 +397,7 @@ test('protected upgrade restores all three databases after C4 migration succeeds
  assert.equal(result.rollback.stage,'restored_complete',JSON.stringify(result.rollback));assert.equal(result.rollback.completed,true);
  for(const [source] of inserts){
   const db=new Database(f.db(source),{readonly:true});try{
-   assert.equal(db.pragma('user_version',{simple:true}),1);
+   assert.equal(db.pragma('user_version',{simple:true}),currentVersions[CORE_DATABASES.findIndex(item=>item.source===source)]);
    if(source.startsWith('comm-bridge')){assert.equal(db.prepare('SELECT count(*) AS n FROM checkpoints').get().n,0);assert.equal(db.pragma('table_info(checkpoints)').some(col=>col.name==='migration_two'),false);}
    if(source.startsWith('scheduler'))assert.equal(db.prepare('SELECT count(*) AS n FROM system_state').get().n,0);
    if(source.startsWith('web-console'))assert.equal(db.prepare('SELECT count(*) AS n FROM sessions').get().n,0);

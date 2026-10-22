@@ -16,6 +16,33 @@ function tempStatusFile() {
 }
 
 describe('status-writer', () => {
+  it('projects only sanitized terminal Hook metadata for ops consumers', () => {
+    const hook = { event_id: 'failure:abc', event: 'stop_failure', error: 'rate_limit',
+      observed_at: 1234, claude_pid: 123,
+      session_id: 'PRIVATE_SESSION', prompt: 'PRIVATE_PROMPT', error_details: 'PRIVATE_ERROR' };
+    const payload = buildStatusPayload({ statusObj: { state: 'busy' }, healthEngine: {
+      health: 'rate_limited', evidence: { store: { runtime: 'claude', read: () => ({ episode: 2, revision: 4, session_id:hook.session_id, hook_pid:123, last_hook: hook }) } },
+    } });
+    assert.equal(payload.health_episode, 'claude:2');
+    assert.equal(payload.health_revision, 4);
+    assert.deepEqual(payload.last_hook, { event_id: hook.event_id, event: 'stop_failure',
+      error: 'rate_limit', observed_at: 1234 });
+    assert.doesNotMatch(JSON.stringify(payload), /PRIVATE/);
+    hook.error = 'PRIVATE_TOKEN';
+    assert.equal(buildStatusPayload({ statusObj: {}, healthEngine: {
+      health: 'ok', evidence: { store: { runtime: 'claude', read: () => ({ session_id:hook.session_id, hook_pid:123, last_hook: hook }) } },
+    } }).last_hook.error, 'unknown');
+    assert.equal(buildStatusPayload({ statusObj: {}, healthEngine: {
+      health: 'ok', evidence: { store: { runtime: 'claude', read: () => ({ session_id:hook.session_id, hook_pid:999, last_hook: hook }) } },
+    } }).last_hook, undefined);
+    assert.equal(buildStatusPayload({statusObj:{},healthEngine:{health:'ok',evidence:{store:{runtime:'claude',
+      read:()=>({session_id:'foreign',hook_pid:123,last_hook:hook})}}}}).last_hook,undefined);
+    hook.process_start='old-ignored';
+    const legacy=buildStatusPayload({statusObj:{},healthEngine:{health:'ok',evidence:{store:{runtime:'claude',
+      read:()=>({session_id:hook.session_id,hook_pid:123,hook_process_start:'new-ignored',last_hook:hook})}}}});
+    assert.equal(legacy.last_hook.error,'unknown');
+    assert.equal(Object.hasOwn(legacy.last_hook,'process_start'),false);
+  });
   it('fails open to ok health when status file is missing or invalid', () => {
     const missingFile = tempStatusFile();
     assert.deepEqual(readInitialStatus({ statusFile: missingFile }), { health: 'ok' });

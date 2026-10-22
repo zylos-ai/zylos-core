@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { HOOK_ERRORS } from './health-evidence.js';
 
 function ensureParentDir(filePath) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -34,12 +35,34 @@ export function publicHealth(health) {
 export function buildStatusPayload({ statusObj, healthEngine }) {
   const health = publicHealth(healthEngine.health);
   const extra = {};
+  const evidence=healthEngine.evidence?.store.read();
+  if (evidence) {
+    extra.health_episode = `${healthEngine.evidence.store.runtime}:${evidence.episode}`;
+    extra.health_revision = evidence.revision;
+    const notice = healthEngine.evidence.notice?.() ?? evidence.notice;
+    if (notice && evidence.health === health) {
+      extra.health_notice = { noticeCode:notice.noticeCode, resetAt:notice.resetAt };
+    }
+    const hook = evidence.last_hook;
+    if (hook && hook.session_id === evidence.session_id && hook.claude_pid === evidence.hook_pid &&
+      typeof hook.session_id === 'string' && hook.session_id.length > 0 && ['stop', 'stop_failure'].includes(hook.event) &&
+      typeof hook.event_id === 'string' && hook.event_id.length <= 200 &&
+      Number.isSafeInteger(hook.claude_pid) && hook.claude_pid > 0 &&
+      Number.isSafeInteger(hook.observed_at)) {
+      extra.last_hook = {
+        event_id: hook.event_id,
+        event: hook.event,
+        error: hook.event === 'stop_failure' ? (HOOK_ERRORS.has(hook.error) ? hook.error : 'unknown') : null,
+        observed_at: hook.observed_at,
+      };
+    }
+  }
   if (health === 'rate_limited') {
     extra.rate_limit_reset = healthEngine.rateLimitResetTime || null;
     extra.cooldown_until = healthEngine.cooldownUntil || null;
   }
   if (healthEngine.healthReason) {
-    extra.unavailable_reason = healthEngine.healthReason;
+    extra.unavailable_reason = evidence?.reason ?? healthEngine.healthReason;
   }
   if (health === 'unavailable' && healthEngine.unavailableSince) {
     extra.unavailable_since = healthEngine.unavailableSince;

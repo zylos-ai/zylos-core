@@ -79,12 +79,14 @@ export class ToolPipeline {
     runtimeLaunchAtMs = () => 0,
     isPidAlive = () => false,
     log = () => {},
+    onHealthEvent,
   } = {}) {
     this.files = files;
     this.toolRules = toolRules;
     this.runtimeLaunchAtMs = runtimeLaunchAtMs;
     this.isPidAlive = isPidAlive;
     this.log = log;
+    this.onHealthEvent = onHealthEvent;
     this.reset();
   }
 
@@ -403,7 +405,20 @@ export class ToolPipeline {
   }
 
   processToolLifecycle(nowMs, currentTmuxClaudePid, interactiveState) {
-    const newEvents = this.readToolEventsIncremental(nowMs);
+    const checkpoint = { streamState: structuredClone(this.streamState), activeTail:this.activeTail, rotatedTail:this.rotatedTail, arrivalSeq:this.arrivalSeq };
+    let newEvents;
+    try {
+      newEvents = this.readToolEventsIncremental(nowMs);
+      // Health commits precede the shared stream cursor. A crash can replay,
+      // but cannot acknowledge a terminal event before its state is durable.
+      for (const event of newEvents) {
+        if (event.type === 'runtime_health' && this.onHealthEvent) this.onHealthEvent(event);
+      }
+      newEvents = newEvents.filter(event => event.type !== 'runtime_health');
+    } catch (error) {
+      Object.assign(this, checkpoint);
+      throw error;
+    }
     const syntheticClear = this.maybeBuildStatuslineClearHint(currentTmuxClaudePid, interactiveState);
     if (syntheticClear) newEvents.push(syntheticClear);
     if (newEvents.length > 0) {

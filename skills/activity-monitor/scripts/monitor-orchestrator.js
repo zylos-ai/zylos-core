@@ -46,14 +46,14 @@ export class MonitorOrchestrator {
     const watchdogState = readWatchdogState();
     const procSampler = createProcSampler(adapter);
 
-    const initialStatus = loadInitialHealth();
+    const initialStatus = loadInitialHealth(adapter);
     const initialHealth = initialStatus.health;
     const runtimeLaunchAtMs = Number(initialStatus.runtime_launch_at) || nowMs();
 
     const engine = createHealthEngine(adapter, initialStatus);
     const guardian = createGuardian(adapter, toolPipeline, runtimeLaunchAtMs);
 
-    if (initialHealth === 'rate_limited' && initialStatus.cooldown_until) {
+    if (!engine.evidence?.store && initialHealth === 'rate_limited' && initialStatus.cooldown_until) {
       engine.enterRateLimited(initialStatus.cooldown_until, initialStatus.rate_limit_reset || '');
     }
     engine.start();

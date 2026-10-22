@@ -25,9 +25,9 @@ for (const [name, owner, seed, query] of [
     assert.equal(db.pragma('user_version',{simple:true}),0);
     assert.deepEqual(db.prepare('SELECT sql FROM sqlite_master ORDER BY name').all(),schemaBefore);
     let calls=0;
-    const counted={...owner,MIGRATIONS:{0:{...owner.MIGRATIONS[0],migrate(connection,options){calls++;owner.MIGRATIONS[0].migrate(connection,options);}}}};
+    const counted={...owner,MIGRATIONS:{...owner.MIGRATIONS,0:{...owner.MIGRATIONS[0],migrate(connection,options){calls++;owner.MIGRATIONS[0].migrate(connection,options);}}}};
     migrateDatabase(db,counted);
-    assert.equal(db.pragma('user_version',{simple:true}),1);
+    assert.equal(db.pragma('user_version',{simple:true}),owner.SUPPORTED_SCHEMA_VERSION);
     assert.deepEqual(db.prepare(query).all(),before);
     if(owner===c4) assert.equal(db.prepare('SELECT channel FROM conversations').get().channel,'void');
     guardDatabase(db,counted);guardDatabase(db,counted);
@@ -277,8 +277,23 @@ for(const [definition,usable] of [
  }finally{db.close();}
 });
 
+test('C4 v1 needs no health migration and retains rows and user extensions', () => {
+ const db=new Database(':memory:');try {
+  db.exec(fs.readFileSync(new URL('c4-v0.9.0-v1.sql',fixtures),'utf8'));
+  db.exec("CREATE TABLE archive_records(id INTEGER PRIMARY KEY,value TEXT); INSERT INTO archive_records VALUES(1,'retained'); ALTER TABLE checkpoints ADD COLUMN external TEXT; UPDATE checkpoints SET external='kept'");
+  const before=db.prepare('SELECT * FROM checkpoints ORDER BY id').all();
+  assert.deepEqual(planDatabaseMigration(db,c4,extensionOptions).steps,[]);
+  const result=migrateDatabase(db,c4,extensionOptions);
+  assert.equal(result.version,1);
+  assert.deepEqual(db.prepare('SELECT * FROM checkpoints ORDER BY id').all(),before);
+  assert.equal(db.prepare('SELECT value FROM archive_records').get().value,'retained');
+  for(const name of ['status_notice_attempts','runtime_health_events','runtime_health_state'])
+    assert.equal(db.prepare('SELECT name FROM sqlite_master WHERE name=?').get(name),undefined);
+  assert.equal(planDatabaseMigration(db,c4,extensionOptions).steps.length,0);
+ }finally{db.close();}
+});
+
 for(const [name,base,table,query,marker] of [
- ['c4',c4,'checkpoints','SELECT id,summary FROM checkpoints ORDER BY id','synthetic c4 v1 checkpoint'],
  ['scheduler',scheduler,'system_state','SELECT key,value FROM system_state','synthetic scheduler v1 state'],
  ['web-console',web,'sessions','SELECT token FROM sessions','fixture-web-v1'],
 ])test(`tagged ${name} v1 fixture migrates to a synthetic v2 with rows and extensions retained`,()=>{

@@ -335,3 +335,39 @@ Reviewed via BotsHub on 2026-02-20. Key feedback incorporated:
 - [Automate Workflows with Hooks Guide](https://code.claude.com/docs/en/hooks-guide)
 - [Claude Code Monitoring (OTel)](https://code.claude.com/docs/en/monitoring-usage)
 - [disler/claude-code-hooks-multi-agent-observability](https://github.com/disler/claude-code-hooks-multi-agent-observability) — community reference implementation
+# Durable Health Events
+
+StopFailure health evidence uses a separate synchronous `hook-health.js`
+collector that appends sanitized events to the same tool event stream. Core registers
+it for stable Claude Code versions at or above 2.1.78, when
+[StopFailure was introduced](https://github.com/anthropics/claude-code/blob/main/CHANGELOG.md#2178).
+Earlier, prerelease and unknown versions keep screen-based fallback. Future
+major versions satisfy the minimum version comparison. Init/upgrade hook sync
+reconciles managed entries while preserving custom hooks; launches do not rewrite
+settings. A CLI-only upgrade/downgrade requires an explicit hooks sync.
+
+Health hooks verify the Claude PID against the managed tmux
+pane, ignore subagents, and persist only
+session/prompt identifiers, an allowlisted error category, receive time and
+process identity. Unknown error identifiers become `unknown`; prompt text,
+error details and assistant text are not persisted. Prompt identifiers remain
+opaque and do not establish execution order or a unique delivery binding.
+
+Events use new event types in `activity-monitor/tool-events.jsonl`; there is no
+separate inbox directory. AM commits health and pending notice atomically to
+`activity-monitor/runtime-health/<runtime>.json` before checkpointing the stream
+cursor. A single last-processed Stop/StopFailure `received_at` rejects events
+that are not strictly newer; event IDs are diagnostic only. Nonterminal hooks do
+not advance the marker. Replay, restart and rotation are covered by this marker,
+the five-minute freshness check and process identity verification. A clock step
+backward can suppress a new event; screen detection remains the fallback.
+
+Linux and macOS both use managed-pane PID ancestry and the current session ID.
+Parent lookup uses `/proc` where available and the platform `ps` fallback.
+No process-start token is read. PID reuse together with the same resumed session
+is an accepted identity limitation; unavailable managed identity still rejects
+health events and retains screen fallback. These records do
+not contain reply addresses. C4 uses the frozen latest running/delivered inbound
+row policy described in
+[Runtime status notices](status-notices.md). The same document covers Stop
+authority, bounded storage, reporting, and send uncertainty.

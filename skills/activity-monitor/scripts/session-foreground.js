@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getClaudePid } from './claude-pid.js';
+import { isManagedClaudeProcess } from './runtime-generation.js';
 
 const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
 const MONITOR_DIR = path.join(ZYLOS_DIR, 'activity-monitor');
@@ -18,10 +19,13 @@ function atomicWriteJson(filePath, value) {
 
 export function handleSessionForeground(payload, {
   observedAt = Date.now(),
-  claudePid = getClaudePid()
+  claudePid = getClaudePid(),
+  managedProcess = isManagedClaudeProcess,
+  platform = process.platform,
 } = {}) {
   const sessionId = payload?.session_id || process.env.CLAUDE_SESSION_ID || null;
   if (!sessionId) return null;
+  if (payload?.agent_id || !managedProcess(claudePid, { platform })) return null;
 
   if (!fs.existsSync(MONITOR_DIR)) {
     fs.mkdirSync(MONITOR_DIR, { recursive: true });
@@ -31,6 +35,7 @@ export function handleSessionForeground(payload, {
     version: 1,
     session_id: sessionId,
     claude_pid: claudePid,
+    runtime: 'claude',
     source: 'session_start',
     session_start_source: payload?.source || null,
     observed_at: observedAt

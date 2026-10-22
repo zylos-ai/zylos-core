@@ -7,14 +7,13 @@
 import path from 'path';
 import fs from 'fs';
 import net from 'net';
-import { spawnSync } from 'child_process';
 import { fileURLToPath } from 'url';
 import {
-  clearStatusNoticeCooldownReservation,
   insertConversation,
   close,
-  reserveStatusNoticeCooldown
 } from './c4-db.js';
+import { reserveStatusNotice, sendStatusNotice } from './status-notice.js';
+import { messageForStatus } from './status-notice-templates.js';
 import { validateChannel, validateEndpoint } from './c4-validate.js';
 import {
   AGENT_STATUS_FILE,
@@ -25,7 +24,6 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const AM_SOCKET_PATH = path.join(ACTIVITY_MONITOR_DIR, 'am.sock');
 const ROUTER_IPC_TIMEOUT_MS = 30000;
-const STATUS_NOTICE_COOLDOWN_SECONDS = Number.parseInt(process.env.C4_STATUS_NOTICE_COOLDOWN_SECONDS || '600', 10);
 
 function printUsage() {
   console.log('Usage: node c4-receive.js --channel <channel> [--endpoint <endpoint_id>] [--priority <1-3>] [--no-reply] [--block-queue-until-idle] [--json] --content "<message>"');
@@ -123,15 +121,8 @@ function publicHealth(health) {
 }
 
 function buildFallbackMessage(status) {
-  const health = publicHealth(status.health);
-  if (health === 'rate_limited') {
-    const resetInfo = status.rate_limit_reset ? ` I should be back around ${status.rate_limit_reset}.` : ' I should be back within an hour.';
-    return `I've hit my usage limit.${resetInfo} Please send your message again after I'm back!`;
-  }
-  if (health === 'auth_failed') {
-    return "I'm having authentication issues — please check the API credentials.";
-  }
-  return "I'm temporarily unavailable but should be back shortly. Please try again in a moment!";
+  return messageForStatus({ health: publicHealth(status.health), reason: status.unavailable_reason,
+    noticeCode:status.health_notice?.noticeCode, resetAt:status.health_notice?.resetAt });
 }
 
 function fallbackFileRoute() {
@@ -144,6 +135,7 @@ function fallbackFileRoute() {
     recovered: false,
     health,
     reason: status.unavailable_reason || health,
+    healthEpisode: status.health_episode,
     userMessage: buildFallbackMessage(status),
     fallback: true
   };
@@ -243,64 +235,12 @@ function emitError(json, code, message, exitCode = 1) {
   process.exit(exitCode);
 }
 
-function sendUnhealthyMessage(channel, endpoint, message) {
-  const args = [path.join(__dirname, 'c4-send.js'), channel];
-  if (endpoint) args.push(endpoint);
-  const result = spawnSync('node', args, {
-    input: message,
-    encoding: 'utf8',
-    stdio: ['pipe', 'pipe', 'pipe']
-  });
-  return result;
-}
-
-function normalizeStatusEndpoint(endpoint) {
-  if (!endpoint) return '';
-  // Group status-notice cooldowns by stable conversation root, not by each
-  // incoming message/request id. This keeps thread-specific cooldowns while
-  // suppressing repeated notices within the same root conversation.
-  return endpoint.replace(/\|(msg|req|parent):[^|]+/g, '');
-}
-
 function statusNoticeType(route) {
   return publicHealth(route?.health);
 }
 
 function statusNoticeReason(route) {
   return String(route?.reason || statusNoticeType(route) || 'default');
-}
-
-function statusNoticeCooldownKey(channel, endpoint, route) {
-  return [
-    channel || 'unknown',
-    normalizeStatusEndpoint(endpoint),
-    statusNoticeType(route),
-    statusNoticeReason(route)
-  ].join('::');
-}
-
-function reserveStatusNoticeCooldownForRoute(channel, endpoint, route, now = Math.floor(Date.now() / 1000)) {
-  const key = statusNoticeCooldownKey(channel, endpoint, route);
-  const ttl = Number.isFinite(STATUS_NOTICE_COOLDOWN_SECONDS) && STATUS_NOTICE_COOLDOWN_SECONDS > 0
-    ? STATUS_NOTICE_COOLDOWN_SECONDS
-    : 600;
-  return reserveStatusNoticeCooldown({
-    cooldownKey: key,
-    channel,
-    endpoint: normalizeStatusEndpoint(endpoint),
-    statusType: statusNoticeType(route),
-    reason: statusNoticeReason(route),
-    ttl,
-    now
-  });
-}
-
-function clearStatusNoticeCooldownReservationForRoute(key, reservedAt) {
-  try {
-    clearStatusNoticeCooldownReservation(key, reservedAt);
-  } catch (err) {
-    console.error(`[C4] Warning: failed to clear status cooldown reservation (${err.message})`);
-  }
 }
 
 async function main() {
@@ -349,17 +289,17 @@ async function main() {
   const route = await queryRoute(channel, endpoint, noReply);
   const replyEndpoint = noReply ? null : endpoint;
   let dbContent = content;
-  const dbStatus = route.recovered ? 'pending' : 'delivered';
+  const dbStatus = route.recovered ? 'pending' : 'failed';
   let cooldown = null;
 
   if (!route.recovered && !noReply) {
     try {
-      cooldown = reserveStatusNoticeCooldownForRoute(channel, endpoint, route);
+      cooldown = reserveStatusNotice(channel, endpoint, route);
     } catch (err) {
       emitError(json, 'INTERNAL_ERROR', `failed to reserve status cooldown: ${err.message}`);
     }
     if (cooldown.suppressed) {
-      dbContent += `\n\n[C4] Status notification suppressed by cooldown while health=${statusNoticeType(route)} reason=${statusNoticeReason(route)}.`;
+      dbContent += `\n\n[C4] Status notification suppressed by cooldown or pending send (${cooldown.reason}) while health=${statusNoticeType(route)} reason=${statusNoticeReason(route)}.`;
       try {
         const record = insertConversation('in', channel, replyEndpoint, dbContent, dbStatus, priority, requireIdle, 'suppressed');
         emitSuccess(json, record.id, 'suppressed');
@@ -379,16 +319,13 @@ async function main() {
       return;
     }
 
-    const sendResult = sendUnhealthyMessage(channel, endpoint, route.userMessage);
-    if (sendResult.status === 0) {
+    const sendResult = sendStatusNotice(cooldown, route.userMessage, route);
+    if (sendResult.outcome === 'sent') {
       emitSuccess(json, record.id, 'delivered');
       return;
     }
-    if (cooldown?.key && Number.isFinite(cooldown.reservedAt)) {
-      clearStatusNoticeCooldownReservationForRoute(cooldown.key, cooldown.reservedAt);
-    }
-    const detail = sendResult.stderr || sendResult.stdout || `exit ${sendResult.status}`;
-    emitError(json, 'UNHEALTHY_NOTIFY_FAILED', `failed to send unhealthy status message: ${detail.trim()}`);
+    emitError(json, sendResult.outcome === 'uncertain' ? 'UNHEALTHY_NOTIFY_UNCERTAIN' : 'UNHEALTHY_NOTIFY_FAILED',
+      `Status notification ${sendResult.outcome}; no automatic resend (${sendResult.code}).`);
   } catch (err) {
     emitError(json, 'INTERNAL_ERROR', `failed to queue message: ${err.message}`);
   } finally {
