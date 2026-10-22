@@ -117,11 +117,11 @@ test('raw SQLite ordinary five-second wait qualification', async t => {
   const elapsed = performance.now() - start;
   t.diagnostic(`raw native busy_timeout=5000: ${elapsed.toFixed(1)}ms`);
   nativeWaitQualified = elapsed >= 4900 && elapsed < 6500;
-  assert.ok(nativeWaitQualified, 'ENV: native SQLite busy_timeout wait does not qualify on this host');
+  assert.ok(nativeWaitQualified, 'QUALIFICATION: native SQLite busy_timeout exceeded the expected timing bound; cause requires diagnosis');
 });
 
 test('WAL exclusive lock qualifies as blocking and consumes one-second budget', async t => {
-  if (!nativeWaitQualified) { t.skip('ENV: native busy_timeout qualification failed'); return; }
+  if (!nativeWaitQualified) { t.skip('QUALIFICATION: native busy_timeout timing failed; see independent native probe'); return; }
   const filename = fixture(t); await lock(t, filename, true);
   const tracker = trackedOpen();
   const result = timedCall(filename, 1000, read, tracker);
@@ -139,7 +139,7 @@ test('ordinary WAL writer qualifies as nonblocking and returns committed snapsho
 });
 
 test('exclusive lock stops at ordinary five-second cap while deadline remains', async t => {
-  if (!nativeWaitQualified) { t.skip('ENV: native busy_timeout qualification failed'); return; }
+  if (!nativeWaitQualified) { t.skip('QUALIFICATION: native busy_timeout timing failed; see independent native probe'); return; }
   const filename = fixture(t); await lock(t, filename, true);
   const result = timedCall(filename, 7000);
   t.diagnostic(`ordinary cap: ${result.elapsed.toFixed(1)}ms; ${result.error?.code}`);
@@ -148,7 +148,7 @@ test('exclusive lock stops at ordinary five-second cap while deadline remains', 
 });
 
 test('exclusive lock released after two seconds returns complete result within long budget', async t => {
-  if (!nativeWaitQualified) { t.skip('ENV: native busy_timeout qualification failed'); return; }
+  if (!nativeWaitQualified) { t.skip('QUALIFICATION: native busy_timeout timing failed; see independent native probe'); return; }
   const filename = fixture(t); await lock(t, filename, true, 2000);
   const result = timedCall(filename, 10000);
   t.diagnostic(`released lock: ${result.elapsed.toFixed(1)}ms`);
