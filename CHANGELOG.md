@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Hook registration and portable identity checks**: settings synchronization registers health hooks for stable Claude Code versions at or above 2.1.78, including later major versions, without rewriting settings on every launch. Evidence is scoped to the managed tmux pane's Claude PID and session ID; parent-process checks use procfs or `ps` on Linux and `ps` on macOS. Reuse of the same PID and session is an accepted identity limit. (#835)
 
 ### Fixed
+- **Codex default model**: use `gpt-5.6-sol` instead of `gpt-5.5` when no project model is configured. Preserve explicit model selections, providers and reasoning effort; existing projects pinned to `gpt-5.5` are not automatically migrated. (#838)
 - **Failures after recovery**: a later failure in the same process/session is recognized after recovery, including across monitor restarts. Persisted terminal-event times reject replay, and a recovery timestamp rejects already-written failures that arrive late. Equal timestamps and backward clock steps can still suppress an event under the accepted time-ordering contract. (#835)
 - **SessionStart and monitor resilience**: remove the Linux-only process-start requirement that blocked macOS foreground tracking, and handle closed router connections without crashing the monitor on `EPIPE`. Missing health files start from `ok`; invalid files are quarantined with a warning. (#835)
 
