@@ -2,7 +2,7 @@
  * CodexAdapter — RuntimeAdapter implementation for OpenAI Codex CLI.
  *
  * Encapsulates all Codex-specific logic:
- *   - tmux session management (session: 'codex-main')
+ *   - Explicit session lifecycle through SessionAdapter
  *   - Auth detection via `codex login --status`
  *   - Instruction file generation (AGENTS.md)
  *   - Isolated launches with --no-daemon when supported by the installed CLI
@@ -17,42 +17,19 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { execFileSync, execFile } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
-import { RuntimeAdapter } from './base.js';
-import { assertInstructionReady, buildInstructionFile } from './instruction-builder.js';
-import { CodexContextMonitor } from './codex-context-monitor.js';
-import { createCodexProbe } from '../heartbeat/codex-probe.js';
-import { ZYLOS_DIR, SKILLS_DIR, getZylosConfig } from '../config.js';
-import {
-  tmuxHasSession,
-  tmuxGetPanePid,
-  tmuxKillSession,
-  tmuxPasteBuffer,
-  tmuxDeleteBuffer,
-  tmuxCapturePaneText,
-  tmuxSendKeys,
-  tmuxNewSession,
-  getProcessName,
-  hasChildProcess,
-} from './tmux-helpers.js';
-import { buildCleanEnv, buildCompatEnv, loadRuntimeEnvManifest, writeLaunchSpec } from './tmux-env.js';
+import { SessionAdapter } from './session-adapter.js';
+import { buildInstructionFile } from './instruction-builder.js';
 import { classifyCodexLoginStatus } from '../auth-parsers.js';
-import { ensureCodexHooksTrusted } from '../codex-hooks.js';
-import { discoverUpgradeContext, shellArgument } from './upgrade-context.js';
-import { buildKickPrompt } from './kick-prompt.js';
-import { resolveCodexBypassPermissions, writeCodexProjectConfig } from '../runtime-setup.js';
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
-const SESSION = 'codex-main';
-const CODEX_BIN = process.env.CODEX_BIN || 'codex';
-
-function getCodexApiBaseUrl() {
+function getCodexApiBaseUrl(env) {
   try {
-    const configPath = path.join(os.homedir(), '.codex', 'config.toml');
+    const configPath = path.join(env.CODEX_HOME || path.join(env.HOME || os.homedir(), '.codex'), 'config.toml');
     const config = fs.readFileSync(configPath, 'utf8');
     const match = config.match(/^\s*openai_base_url\s*=\s*"([^"]+)"\s*$/m);
     if (match?.[1]) {
@@ -60,8 +37,8 @@ function getCodexApiBaseUrl() {
     }
   } catch { /* ignore missing config */ }
 
-  if (process.env.OPENAI_BASE_URL) {
-    return process.env.OPENAI_BASE_URL.replace(/\/+$/, '');
+  if (env.OPENAI_BASE_URL) {
+    return env.OPENAI_BASE_URL.replace(/\/+$/, '');
   }
 
   return 'https://api.openai.com/v1';
@@ -69,10 +46,9 @@ function getCodexApiBaseUrl() {
 
 // ── CodexAdapter ──────────────────────────────────────────────────────────────
 
-export class CodexAdapter extends RuntimeAdapter {
+export class CodexAdapter extends SessionAdapter {
   get displayName() { return 'Codex'; }
   get runtimeId() { return 'codex'; }
-  get sessionName()  { return 'codex-main'; }
 
   // ── Instruction file ───────────────────────────────────────────────────────
 
@@ -105,12 +81,13 @@ export class CodexAdapter extends RuntimeAdapter {
    * @returns {Promise<{status: 'success'|'failure'|'uncertain', reason: string}>}
    */
   async checkAuth() {
+    const env = this.options.env || process.env;
     // Read auth.json to determine the auth mode.
     let authMode = null;
     let apiKey = '';
     try {
       const authJson = JSON.parse(fs.readFileSync(
-        path.join(os.homedir(), '.codex', 'auth.json'), 'utf8'
+        path.join(env.CODEX_HOME || path.join(env.HOME || os.homedir(), '.codex'), 'auth.json'), 'utf8'
       ));
       authMode = authJson?.auth_mode || null;
       // Only extract the API key when the mode is explicitly "apikey".
@@ -127,8 +104,8 @@ export class CodexAdapter extends RuntimeAdapter {
       // OAuth session straight through the runtime-switch / health-probe auth gate.
       // The status line is written to STDERR (stdout is empty), so combine streams.
       try {
-        const { stdout, stderr } = await execFileAsync(CODEX_BIN, ['login', 'status'], {
-          stdio: 'pipe', encoding: 'utf8', timeout: 10_000,
+        const { stdout, stderr } = await (this.options.execFile || execFileAsync)(env.CODEX_BIN || 'codex', ['login', 'status'], {
+          env, stdio: 'pipe', encoding: 'utf8', timeout: 10_000,
         });
         const status = classifyCodexLoginStatus((stdout || '') + (stderr || ''));
         if (status === 'success') return { status: 'success', reason: 'codex_login_status' };
@@ -142,8 +119,8 @@ export class CodexAdapter extends RuntimeAdapter {
     // Guard against corrupted auth.json (mode set to "apikey" but key missing).
     if (!apiKey) return { status: 'failure', reason: 'apikey_mode_but_no_key' };
     try {
-      const baseUrl = getCodexApiBaseUrl();
-      const res = await fetch(`${baseUrl}/models`, {
+      const baseUrl = getCodexApiBaseUrl(env);
+      const res = await (this.options.fetch || fetch)(`${baseUrl}/models`, {
         headers: { Authorization: `Bearer ${apiKey}` },
         signal: AbortSignal.timeout(10_000),
       });
@@ -155,245 +132,5 @@ export class CodexAdapter extends RuntimeAdapter {
     }
   }
 
-  // ── Process / tmux ────────────────────────────────────────────────────────
-
-  /**
-   * @returns {Promise<boolean>}
-   */
-  async isRunning() {
-    if (!tmuxHasSession(SESSION)) return false;
-
-    const panePid = tmuxGetPanePid(SESSION);
-    if (!panePid) return false;
-
-    const name = getProcessName(panePid);
-    if (name === 'codex' || name === 'node') return true;
-
-    return hasChildProcess(panePid, 'codex');
-  }
-
-  /**
-   * Kill the tmux session for this runtime.
-   * Synchronous — HeartbeatEngine calls this without await.
-   */
-  stop() {
-    tmuxKillSession(SESSION);
-  }
-
-  /**
-   * Inject a message into the running Codex session via tmux.
-   * Uses the buffer paste technique to handle special characters safely.
-   * Validated to work with `codex --dangerously-bypass-approvals-and-sandbox`.
-   *
-   * @param {string} text
-   * @returns {Promise<void>}
-   */
-  async sendMessage(text) {
-    const msgId = `${Date.now()}-${process.pid}`;
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-'));
-    const tmpFile = path.join(tmpDir, 'msg.txt');
-    const bufferName = `zylos-${msgId}`;
-
-    try {
-      fs.writeFileSync(tmpFile, text);
-      tmuxPasteBuffer(SESSION, tmpFile, bufferName);
-    } finally {
-      try { fs.unlinkSync(tmpFile); fs.rmdirSync(tmpDir); } catch { }
-      tmuxDeleteBuffer(bufferName);
-    }
-  }
-
-  clearStaleState() {
-    try {
-      this.getHeartbeatDeps()?.clearHeartbeatPending?.();
-    } catch { }
-    try { fs.unlinkSync('/tmp/context-alert-cooldown'); } catch { }
-    try { fs.unlinkSync('/tmp/context-compact-scheduled'); } catch { }
-  }
-
-  enqueueStartupPrompt() {
-    // Native SessionStart hook owns Codex startup context and follow-up.
-  }
-
-  // ── Launch ────────────────────────────────────────────────────────────────
-
-  /**
-   * Start Codex in the tmux session. Guardian prepares instructions first.
-   *
-   * New session: builds env via launcher pipeline (clean or compat mode).
-   * Existing session: sends command via sendMessage; native SessionStart hook bootstraps.
-   * Auth is handled by Codex internally (reads ~/.codex/auth.json via HOME).
-   *
-   * @param {object} [opts]
-   * @param {boolean} [opts.bypassPermissions] - Override default bypass setting
-   * @returns {Promise<void>}
-   */
-  async launch(opts = {}) {
-    const bypassPermissions = resolveCodexBypassPermissions(ZYLOS_DIR, opts);
-    assertInstructionReady('codex');
-    // Keep managed sessions independent of shared daemon feature settings.
-    // Older supported CLIs predate --no-daemon, so inspect capabilities instead
-    // of guessing a version cutoff. A failed probe must not silently opt into
-    // the shared daemon; report the startup error before launching anything.
-    let help;
-    let codexBin;
-    try {
-      // Pin discovery and both launch paths to the same executable: clean
-      // launcher PATH and an existing tmux shell PATH can select other versions.
-      codexBin = execFileSync('which', [CODEX_BIN], {
-        encoding: 'utf8', stdio: 'pipe', timeout: 10_000,
-      }).trim();
-      if (!path.isAbsolute(codexBin)) throw new Error('Codex executable path is not absolute');
-      help = execFileSync(codexBin, ['--help'], {
-        encoding: 'utf8', stdio: 'pipe', timeout: 10_000,
-      });
-    } catch (e) {
-      throw new Error(`Cannot determine Codex launch options: ${e.message}`);
-    }
-    const launchArgs = /(?:^|\s)--no-daemon(?:\s|$)/m.test(help) ? ['--no-daemon'] : [];
-    if (bypassPermissions) launchArgs.push('--dangerously-bypass-approvals-and-sandbox');
-    const quotedBin = `'${codexBin.replace(/'/g, "'\\''")}'`;
-    const codexCmd = [quotedBin, ...launchArgs].join(' ');
-
-    // Cover already-installed runtimes and explicit per-launch opt-outs too.
-    writeCodexProjectConfig(ZYLOS_DIR, { bypassPermissions });
-
-    // 1. Ensure .agents/skills → .claude/skills symlink for Codex skill discovery.
-    const agentsDir = path.join(ZYLOS_DIR, '.agents');
-    const agentsSkillsPath = path.join(agentsDir, 'skills');
-    let agentsSkillsExists = false;
-    try { fs.lstatSync(agentsSkillsPath); agentsSkillsExists = true; } catch { /* not present */ }
-    if (!agentsSkillsExists) {
-      try {
-        fs.mkdirSync(agentsDir, { recursive: true });
-        fs.symlinkSync(SKILLS_DIR, agentsSkillsPath);
-      } catch { /* non-fatal */ }
-    }
-
-    // 2. Native SessionStart hook trust is required for startup context.
-    ensureCodexHooksTrusted({
-      zylosDir: ZYLOS_DIR,
-      projectDir: ZYLOS_DIR,
-      codexBin,
-    });
-
-    const monitorDir = path.join(ZYLOS_DIR, 'activity-monitor');
-    const exitLogFile = path.join(monitorDir, 'codex-exit.log');
-    const exitLogSnippet = `_ec=$?; echo "[$(date -Iseconds)] exit_code=$_ec" >> "${exitLogFile}"`;
-
-    // Internal lifecycle sentinel — stateless, covers both first start and
-    // resume; sentinel form so the kick is never mistaken for a human turn
-    // (#743/#745). See kick-prompt.js.
-    const recovery = discoverUpgradeContext(ZYLOS_DIR);
-    const kick = buildKickPrompt();
-    const kickPrompt = recovery.blocked ? recovery.prompt
-      : recovery.active && !recovery.controllerAlive ? kick + "\n\n" + recovery.prompt : kick;
-
-    if (tmuxHasSession(SESSION)) {
-      // Existing tmux session — start a fresh Codex process with kick prompt
-      // to trigger SessionStart hook immediately.
-      const cmd = `cd "${ZYLOS_DIR}"; ${codexCmd} ${shellArgument(kickPrompt)}; ${exitLogSnippet}`;
-      await this.sendMessage(cmd);
-    } else {
-      // New session — launcher pipeline
-      const dotenvVars = _readDotenvVars();
-      const useCleanEnv = dotenvVars.ZYLOS_CLEAN_ENV !== 'false';
-      const manifest = useCleanEnv ? loadRuntimeEnvManifest(ZYLOS_DIR) : undefined;
-
-      const { env } = useCleanEnv
-        ? buildCleanEnv({ processEnv: process.env, dotenvVars, manifest, uid: process.getuid?.() })
-        : buildCompatEnv({ processEnv: process.env, dotenvVars });
-
-      // Build launch spec — Codex reads auth from ~/.codex/auth.json via HOME
-      const args = [...launchArgs, kickPrompt];
-
-      const launcherPath = path.join(path.dirname(import.meta.url.replace('file://', '')), 'tmux-launcher.js');
-      const specPath = writeLaunchSpec({
-        command: codexBin,
-        args,
-        promptIndex: args.length - 1,
-        env,
-        cwd: ZYLOS_DIR,
-        exitLogFile,
-      });
-
-      // tmux args — minimal env for launcher to start
-      const tmuxArgs = [
-        'new-session', '-d', '-E', '-s', SESSION,
-        '-e', `PATH=${env.PATH}`,
-        '-e', `HOME=${env.HOME}`,
-        '-e', `TERM=${env.TERM || 'xterm-256color'}`,
-        '--', `"${process.execPath}" "${launcherPath}" "${specPath}"`,
-      ];
-
-      try {
-        tmuxNewSession(tmuxArgs);
-      } catch (e) {
-        try { fs.unlinkSync(specPath); } catch { }
-        throw new Error(`Failed to create tmux session: ${e.message}`);
-      }
-    }
-
-    // 4. Schedule startup dialog check (8s after launch)
-    setTimeout(() => {
-      try {
-        const pane = tmuxCapturePaneText(SESSION);
-        if (!pane) return;
-        const hasMenu = /›\s+\d+\./m.test(pane) || /press enter to continue/i.test(pane);
-        const hasStatusBar = /\d+%\s+left\s+·/.test(pane);
-        if (hasMenu && !hasStatusBar) {
-          tmuxSendKeys(SESSION, '1', 'Enter');
-        }
-      } catch { /* non-fatal */ }
-    }, 8000);
-
-  }
-
-  // ── Heartbeat / context (Phase 5) ─────────────────────────────────────────
-
-  /**
-   * Returns runtime-specific HeartbeatEngine deps for Codex CLI.
-   * Dual-signal probe: rollout JSONL mtime + tmux pane line count.
-   *
-   * Includes: enqueueHeartbeat, getHeartbeatStatus, detectRateLimit,
-   *           readHeartbeatPending, clearHeartbeatPending.
-   *
-   * @returns {object}
-   */
-  getHeartbeatDeps() {
-    const pendingFile = path.join(ZYLOS_DIR, 'activity-monitor', 'codex-heartbeat-pending.json');
-    return createCodexProbe({ pendingFile, tmuxSession: SESSION });
-  }
-
-  /**
-   * Returns a CodexContextMonitor instance for this runtime.
-   * Reads threshold from config.json `codex_new_session_threshold` (default 75%).
-   * @returns {CodexContextMonitor}
-   */
-  getContextMonitor() {
-    const config = getZylosConfig();
-    const val = parseInt(config.codex_new_session_threshold, 10);
-    const threshold = (!isNaN(val) && val > 0 && val <= 100) ? val / 100 : 0.75;
-    return new CodexContextMonitor({ threshold });
-  }
 }
 
-
-// ── Private helpers ────────────────────────────────────────────────────────
-
-function _readDotenvVars() {
-  const vars = {};
-  try {
-    const content = fs.readFileSync(path.join(ZYLOS_DIR, '.env'), 'utf8');
-    for (const line of content.split('\n')) {
-      const trimmed = line.trim();
-      if (!trimmed || trimmed.startsWith('#')) continue;
-      const eqIdx = trimmed.indexOf('=');
-      if (eqIdx < 1) continue;
-      const key = trimmed.slice(0, eqIdx).trim();
-      const val = trimmed.slice(eqIdx + 1).trim().replace(/^(['"])(.*)\1$/, '$2');
-      vars[key] = val;
-    }
-  } catch { /* .env absent */ }
-  return vars;
-}
