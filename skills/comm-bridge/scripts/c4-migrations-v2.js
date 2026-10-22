@@ -47,13 +47,14 @@ export function migrateToV2(db) {
       PRIMARY KEY (session_group, runtime)
     );
 
-    CREATE INDEX IF NOT EXISTS idx_conv_group_id ON conversations(session_group, id);
-    CREATE INDEX IF NOT EXISTS idx_conv_group_status ON conversations(session_group, direction, status);
-    CREATE INDEX IF NOT EXISTS idx_conv_channel_endpoint ON conversations(channel, endpoint_id, id);
-    CREATE INDEX IF NOT EXISTS idx_conv_loadable_id ON conversations(id)
+    -- Index names are database-wide: collisions must abort, never skip constraints.
+    CREATE INDEX idx_conv_group_id ON conversations(session_group, id);
+    CREATE INDEX idx_conv_group_status ON conversations(session_group, direction, status);
+    CREATE INDEX idx_conv_channel_endpoint ON conversations(channel, endpoint_id, id);
+    CREATE INDEX idx_conv_loadable_id ON conversations(id)
       WHERE (direction = 'in' AND status = 'delivered') OR direction = 'out';
-    CREATE INDEX IF NOT EXISTS idx_ckpt_group_id ON checkpoints(session_group, id);
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_mode_transitions_open
+    CREATE INDEX idx_ckpt_group_id ON checkpoints(session_group, id);
+    CREATE UNIQUE INDEX idx_mode_transitions_open
       ON mode_transitions((0)) WHERE phase <> 'complete';
   `);
 }

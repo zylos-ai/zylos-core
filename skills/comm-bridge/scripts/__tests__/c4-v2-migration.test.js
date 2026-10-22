@@ -223,3 +223,26 @@ test('DM-06 negative control: maybeTables plus IF NOT EXISTS wrongly accepts a m
   assert.throws(() => assert.throws(() => guardDatabase(db, mutant), /collid/), assert.AssertionError);
   assert.equal(db.pragma('user_version', { simple: true }), 2);
 });
+
+for (const name of [...Object.keys(indexSql), 'IDX_MODE_TRANSITIONS_OPEN']) {
+  test(`DM-03/06: existing index ${name} rejects migration and preserves the entire v1 database`, t => {
+    const db = database(t);
+    db.exec(`CREATE TABLE user_extra(x); INSERT INTO user_extra VALUES('preserved'); CREATE INDEX ${name} ON user_extra(x)`);
+    const before = snapshot(db);
+    assert.throws(() => guardDatabase(db, owner), /index .* already exists/i);
+    assert.deepEqual(snapshot(db), before);
+    assert.equal(db.inTransaction, false);
+  });
+}
+test('DM-03/06 negative control: IF NOT EXISTS hides user index collision and loses open-transition uniqueness', t => {
+  const db = database(t);
+  db.exec('CREATE TABLE user_extra(x); CREATE INDEX idx_mode_transitions_open ON user_extra(x)');
+  const unsafe = changedOwner(connection => migrateToV2({ exec(sql) {
+    connection.exec(sql.replace(/CREATE (UNIQUE )?INDEX (?!IF NOT EXISTS)/g, 'CREATE $1INDEX IF NOT EXISTS '));
+  } }));
+  assert.throws(() => assert.throws(() => guardDatabase(db, unsafe), /already exists/), assert.AssertionError);
+  assert.equal(db.pragma('user_version', { simple: true }), 2);
+  assert.equal(db.prepare("SELECT tbl_name FROM sqlite_master WHERE name='idx_mode_transitions_open'").get().tbl_name, 'user_extra');
+  transition(db, 'first');
+  assert.throws(() => assert.throws(() => transition(db, 'second'), /UNIQUE/), assert.AssertionError);
+});
