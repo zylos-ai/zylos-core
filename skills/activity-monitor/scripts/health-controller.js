@@ -1,6 +1,7 @@
 import { readHealthQuota } from './health-quota.js';
+import { ENGINE_DEFAULTS } from './health-store.js';
 
-const SCHEDULING_FIELDS = ['cooldownUntil','restartFailureCount','lastRecoveryAt','recoveringStartedAt','unavailableSince','lastDownCheckAt','lastUserMessageRecoveryAt'];
+const SCHEDULING_FIELDS = Object.keys(ENGINE_DEFAULTS);
 
 export class HealthController {
   constructor({ store, engine, identity, fingerprint = () => null, quota = () => readHealthQuota({identity:identity(),zylosDir}), zylosDir, log = () => {}, onDrained = () => {}, drainEvents = () => {} }) {
@@ -13,7 +14,7 @@ export class HealthController {
     const scheduling = store.read().scheduling;
     if (scheduling) {
       for (const name of SCHEDULING_FIELDS) {
-        if (Number.isFinite(scheduling[name]) && scheduling[name] >= 0) engine[name] = scheduling[name];
+        if (name==='rateLimitResetTime' ? typeof scheduling[name]==='string' : Number.isFinite(scheduling[name]) && scheduling[name]>=0) engine[name] = scheduling[name];
       }
     }
     // Persist synchronous scheduling changes without turning timer updates into

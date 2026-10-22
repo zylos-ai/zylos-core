@@ -399,8 +399,17 @@ function enqueueContextRotationHandoff({ ratio = 0, used = 0, ceiling = 0 } = {}
   return false;
 }
 
-function loadInitialHealth() {
-  return readInitialStatus({ statusFile: STATUS_FILE });
+function loadInitialHealth(activeAdapter) {
+  const projection = readInitialStatus({ statusFile: STATUS_FILE });
+  if (activeAdapter?.runtimeId !== 'claude') return projection;
+  const state = new HealthStore({ runtime: activeAdapter.runtimeId, zylosDir: ZYLOS_DIR, log }).read();
+  return {
+    health: state.health,
+    unavailable_reason: state.reason,
+    cooldown_until: state.scheduling?.cooldownUntil ?? 0,
+    rate_limit_reset: state.scheduling?.rateLimitResetTime ?? '',
+    runtime_launch_at: projection.runtime_launch_at,
+  };
 }
 
 function atomicWriteJson(filePath, value) {

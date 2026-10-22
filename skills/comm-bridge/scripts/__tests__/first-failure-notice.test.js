@@ -82,7 +82,8 @@ test('health and latest target commit together; failed intake excluded and targe
   const sent=[];await processFirstFailureNotices(options(f,{sent}));
   assert.equal(sent.length,1);assert.equal(sent[0].claim.endpoint,intent.endpoint);
   assert.equal(sent[0].route.noticeKind,'first-failure');
-  assert.equal(f.store.read().pending_notice.status,'sent');
+  assert.equal(f.store.read().pending_notice,undefined);
+  assert.equal(f.store.read().last_notice_outcome.status,'sent');
 });
 test('no eligible inbound, no reply endpoint, and control channel create no target', t => {
   const f=fixture(t);
@@ -100,19 +101,22 @@ for (const status of ['pending','failed']) test('ineligible target '+status+' ca
   const f=fixture(t);inbound(f.db,1,{status:'running'});consume(f.store);
   f.db.prepare('UPDATE conversations SET status=? WHERE id=1').run(status);
   const sent=[];await processFirstFailureNotices(options(f,{sent,now:161001}));
-  assert.equal(sent.length,0);assert.equal(f.store.read().pending_notice.status,'suppressed');
+  assert.equal(sent.length,0);assert.equal(f.store.read().pending_notice,undefined);
+  assert.equal(f.store.read().last_notice_outcome.status,'suppressed');
 });
 test('changed process identity cancels frozen notice', async t => {
   const f=fixture(t);inbound(f.db,1);consume(f.store);
   const sent=[];await processFirstFailureNotices(options(f,{sent,scope:{...identity,process_start:identity.process_start+'1'}}));
-  assert.equal(sent.length,0);assert.equal(f.store.read().pending_notice.status,'stale');
+  assert.equal(sent.length,0);assert.equal(f.store.read().pending_notice,undefined);
+  assert.equal(f.store.read().last_notice_outcome.status,'stale');
 });
 test('inbound and first-failure share per-reason cooldown', async t => {
   const f=fixture(t);inbound(f.db,1);const intent=consume(f.store);
   const sent=[];const op=options(f,{sent});
   op.reserve('fake','group|thread:t|msg:new',{health:intent.health,reason:intent.reason});
   await processFirstFailureNotices(op);
-  assert.equal(sent.length,0);assert.equal(f.store.read().pending_notice.status,'suppressed');
+  assert.equal(sent.length,0);assert.equal(f.store.read().pending_notice,undefined);
+  assert.equal(f.store.read().last_notice_outcome.status,'suppressed');
   assert.equal(op.reserve('fake',intent.endpoint,{health:'auth_failed',reason:'authentication_failed'}).suppressed,false);
 });
 test('late matching quota enriches reply inside bounded wait', async t => {
@@ -143,6 +147,7 @@ test('restart with sending, sent or uncertain intent never resends after cooldow
 test('sender exception retains cooldown and records uncertain result', async t => {
   const f=fixture(t);inbound(f.db,1);consume(f.store);
   await processFirstFailureNotices(options(f,{send:async()=>{throw Error('timeout');}}));
-  assert.equal(f.store.read().pending_notice.status,'uncertain');
+  assert.equal(f.store.read().pending_notice,undefined);
+  assert.equal(f.store.read().last_notice_outcome.status,'uncertain');
   assert.equal(f.db.prepare('SELECT count(*) n FROM status_notice_cooldowns').get().n,1);
 });

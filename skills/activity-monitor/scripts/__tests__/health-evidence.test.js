@@ -82,10 +82,12 @@ test('atomic write failure leaves health and marker unchanged',t=>{
 });
 test('controller consumes committed health and restores scheduling without touching unrelated state',t=>{
   const f=fixture(t);let current=identity;const engine=new HealthEngine({}, {now:f.now});
+  f.store.saveScheduling({...f.store.read().scheduling,rateLimitResetTime:'14:30'},0);
   t.after(()=>engine.destroy());
   let pending=f.event();
   const controller=new HealthController({store:f.store,engine,identity:()=>current,zylosDir:f.zylosDir,quota:()=>null,
     drainEvents:()=>{if(pending){controller.consume(pending);pending=null;}}});
+  assert.equal(engine.rateLimitResetTime,'14:30');
   const fence=controller.captureFence();controller.drain();assert.equal(engine.health,'rate_limited');assert.equal(controller.validFence(fence),false);
   const stable=controller.captureFence();current={...identity,claude_pid:124};assert.equal(controller.validFence(stable),false);
 });

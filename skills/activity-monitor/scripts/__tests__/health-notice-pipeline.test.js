@@ -131,7 +131,8 @@ test('real isolated sender child captures one bilingual notice without writing t
   const options={store:f.store,database:f.db,identity:()=>f.identity,now:f.now,zylosDir:f.zylosDir,send:sendNoticeWorker,
     reserve:(channel,endpoint,route)=>claimStatusNotice({key:statusNoticeKey(channel,endpoint,route.health,route.reason),channel,endpoint,normalizedEndpoint:endpoint,...route,now:Math.floor(f.now()/1000)},f.db)};
   await processFirstFailureNotices(options);
-  assert.equal(f.store.read().pending_notice.status,'sent');
+  assert.equal(f.store.read().pending_notice,undefined);
+  assert.equal(f.store.read().last_notice_outcome.status,'sent');
   const sent=JSON.parse(fs.readFileSync(capture,'utf8'));
   assert.match(sent.args.join('\n')+sent.body,/Zylos/);
   assert.match(sent.args.join('\n')+sent.body,/[\u4e00-\u9fff]/);

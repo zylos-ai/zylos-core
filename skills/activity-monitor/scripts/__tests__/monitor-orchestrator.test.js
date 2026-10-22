@@ -102,6 +102,15 @@ describe('MonitorOrchestrator', () => {
     };
   }
 
+  it('does not overwrite restored canonical health with legacy projection cooldown', () => {
+    let enters=0;
+    const engine={health:'ok',evidence:{store:{}},enterRateLimited:()=>{enters++;},start:()=>{}};
+    const {orchestrator}=createHarness({adapter:{runtimeId:'claude',displayName:'Claude',sessionName:'claude-main'},engine});
+    orchestrator.start();
+    assert.equal(enters,0);
+    assert.equal(engine.health,'ok');
+  });
+
   it('assembles startup components and preserves startup side effects', () => {
     const {
       adapter,

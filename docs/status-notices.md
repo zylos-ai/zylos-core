@@ -107,6 +107,32 @@ an accepted simplicity tradeoff, with screen detection remaining the fallback.
 Health is committed before the event-stream cursor advances so a restart,
 cursor reset or rotation replay is handled by the durable time marker.
 
+### Health file contract
+
+The persisted format is `v: 1` with a `runtime` matching the file name. Its
+top-level engine fields use camelCase: `health`, `reason`, `cooldownUntil`,
+`rateLimitResetTime`, `unavailableSince`, `recoveringStartedAt`,
+`restartFailureCount`, `lastRecoveryAt`, `lastDownCheckAt`,
+`lastUserMessageRecoveryAt`, and `updatedAt`. Engine timestamps are Unix seconds;
+`updatedAt` is milliseconds. `rateLimitResetTime` is display text only.
+The internal states `recovering` and `down` remain valid here; readers derive
+public health from `health` rather than storing another authority.
+
+Hook evidence and other bookkeeping live under `hook`, also in camelCase.
+`hook.lastProcessedAt` is the terminal event's `received_at` in milliseconds;
+`hook.lastProcessedEventId` is diagnostic only. `lastFailure`, process/session
+identity, revision, episode and quota annotations do not become top-level fields.
+
+`pendingNotice` is absent when there is no pending reply. Its fields are
+`eventId`, `conversationId`, `channel`, `endpoint`, `health`, `reason`, `notice`
+and millisecond `createdAt`. Recording a sent, failed or uncertain outcome removes
+that pending object atomically with the state update. `agent-status.json` remains
+the existing public projection, not this persistence format.
+
+A missing file starts at `ok`. Unparseable JSON, unknown `v` or a mismatched
+`runtime` is renamed to `<runtime>.json.corrupt-<ms>`, with a warning, before
+starting at `ok`. The invalid source is retained for diagnosis.
+
 ## Compatibility and reporting
 
 This change does not alter C4 schema version 1 or create health, delivery or
