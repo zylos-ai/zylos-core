@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.2] - 2026-10-22
+
+### Added
+- **Structured Claude runtime health and first-failure replies**: supported Claude Code hooks feed sanitized evidence into the existing activity-monitor event stream. The monitor persists health, a terminal-event replay marker, and a pending reply in one atomic per-runtime file. An eligible failure freezes the latest inbound conversation in `running` or `delivered` with a reply endpoint; this is a latest-row policy, not proof that one prompt belongs to that message. Billing, authentication, model, service and unknown errors receive factual replies, while only rate-limit and authentication failures directly establish persistent unhealthy states. (#835)
+- **Configurable bilingual status notices and quota details**: first-failure and unavailable-intake replies use shared Chinese/English templates with configurable copy and time zone. Verified exhausted five-hour/seven-day quota windows can provide an estimated reset time; a bounded 750 ms first-reply wait and later notice enrichment support late status-line snapshots. Missing or unverified quota data retains neutral wording, and a reset estimate does not automatically clear health or replay rejected work. (#835)
+
+### Changed
+- **Notice delivery and intake accounting**: rejected unhealthy input is recorded as `failed`, including suppressed and no-reply input; the dispatcher records actual submission as `delivered`. First-failure and inbound notices share the existing 600-second cooldown per channel, normalized conversation/thread, health and reason. Uncertain sends retain their reservation until expiry, with no automatic first-reply resend. Attempts are recorded in a size-bounded diagnostic log. C4 schema remains version 1, with no new health or delivery tables. (#835)
+- **Hook registration and portable identity checks**: settings synchronization registers health hooks for stable Claude Code versions at or above 2.1.78, including later major versions, without rewriting settings on every launch. Evidence is scoped to the managed tmux pane's Claude PID and session ID; parent-process checks use procfs or `ps` on Linux and `ps` on macOS. Reuse of the same PID and session is an accepted identity limit. (#835)
+
+### Fixed
+- **Codex default model**: use `gpt-5.6-sol` instead of `gpt-5.5` when no project model is configured. Preserve explicit model selections, providers and reasoning effort; existing projects pinned to `gpt-5.5` are not automatically migrated. (#838)
+- **Failures after recovery**: a later failure in the same process/session is recognized after recovery, including across monitor restarts. Persisted terminal-event times reject replay, and a recovery timestamp rejects already-written failures that arrive late. Equal timestamps and backward clock steps can still suppress an event under the accepted time-ordering contract. (#835)
+- **SessionStart and monitor resilience**: remove the Linux-only process-start requirement that blocked macOS foreground tracking, and handle closed router connections without crashing the monitor on `EPIPE`. Missing health files start from `ok`; invalid files are quarantined with a warning. (#835)
+
+### Upgrade notice
+- **Released 0.9.1 databases require no new schema migration.** Hosts that installed an earlier experimental PR835 revision may instead have C4 schema 2; this release rejects that newer schema rather than silently downgrading or deleting data. Preserve backups and handle those experimental installations separately. After independently changing the Claude CLI version, synchronize hooks before starting the next session. See [runtime status notices](docs/status-notices.md) for behavior and compatibility limits. (#835)
+
 ## [0.9.1] - 2026-10-14
 
 ### Upgrade notice
