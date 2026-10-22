@@ -108,4 +108,37 @@ test('query work remains bounded when terminal history doubles; unfiltered negat
   for (const name of Object.keys(first)) {
     t.diagnostic(`${name}: ${first[name].steps} → ${second[name].steps} VM steps`);
   }
+
+  // Three candidates, including a group with only a new summary. Silent heads
+  // may grow the candidate scan, but must not cause per-group detail queries.
+  const head = db.prepare('INSERT INTO group_heads(session_group,head_id) VALUES(?,?)');
+  const cursor = db.prepare('INSERT INTO origin_sync_cursors(session_group,synced_id,checkpoint_id,updated_at) VALUES(?,?,0,1)');
+  function silentHeads(start, end) {
+    db.transaction(() => {
+      for (let id = start; id <= end; id++) {
+        head.run('silent' + id, id);
+        cursor.run('silent' + id, id);
+      }
+    })();
+  }
+  silentHeads(1, 500);
+  head.run('active', 1000020);
+  seed.run(1000021, 'delivered', 'fresh');
+  head.run('fresh', 1000021);
+  seed.run(1000022, 'delivered', 'summary');
+  head.run('summary', 1000022);
+  cursor.run('summary', 1000022);
+  db.prepare("INSERT INTO checkpoints(summary,end_conversation_id,session_group) VALUES('new',1000022,'summary')").run();
+  function originCost() {
+    trace = [];
+    const result = store.getOriginSyncBacklog();
+    const details = trace.filter(item => !item.sql.includes('FROM group_heads h'));
+    return { result, steps: details.reduce((n, item) => n + item.steps, 0), statements: details.length };
+  }
+  const originFirst = originCost();
+  silentHeads(501, 1000);
+  const originSecond = originCost();
+  assert.deepEqual(originFirst.result.groups.map(group => group.sessionGroup), ['active', 'fresh', 'summary']);
+  assert.deepEqual(originSecond, originFirst);
+  t.diagnostic(`Origin details excluding candidate-head scan: ${originFirst.steps} → ${originSecond.steps} VM steps`);
 });

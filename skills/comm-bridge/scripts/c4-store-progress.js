@@ -77,7 +77,12 @@ export function progressFunctions({ read, write, snapshot, get, all, run, second
     }),
     getOriginSyncBacklog: () => snapshot(c => {
       const base = baseline(c), groups = [];
-      for (const head of all(c, 'SELECT h.*,s.synced_id,s.checkpoint_id,s.updated_at FROM group_heads h LEFT JOIN origin_sync_cursors s USING(session_group) ORDER BY h.session_group COLLATE BINARY')) {
+      for (const head of all(c, `SELECT h.*,s.synced_id,s.checkpoint_id,s.updated_at
+        FROM group_heads h LEFT JOIN origin_sync_cursors s USING(session_group)
+        WHERE h.head_id > MAX(COALESCE(s.synced_id,0),?) OR EXISTS(
+          SELECT 1 FROM checkpoints p WHERE p.session_group=h.session_group
+          AND p.id>COALESCE(s.checkpoint_id,0) AND p.end_conversation_id>? AND p.no_content=0)
+        ORDER BY h.session_group COLLATE BINARY`, base, base)) {
         const group = head.session_group, cursorFrom = Math.max(head.synced_id ?? 0, base), checkpointFrom = head.checkpoint_id ?? 0;
         const summaries = get(c, 'SELECT COUNT(*) AS n,MIN(id) AS first FROM checkpoints WHERE session_group=? AND id>? AND end_conversation_id>? AND no_content=0', group, checkpointFrom, base);
         if (head.head_id <= cursorFrom && !summaries.n) continue;
