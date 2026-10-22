@@ -40,7 +40,7 @@ describe('renderCodexProjectConfig', () => {
     const content = renderCodexProjectConfig();
     assert.match(content, /check_for_update_on_startup = false/);
     assert.match(content, /model_availability_nux = "gpt-5\.4"/);
-    assert.match(content, /^model = "gpt-6-sol"$/m);
+    assert.match(content, /^model = "gpt-5\.6-sol"$/m);
     assert.match(content, /^model_reasoning_effort = "medium"$/m);
     assert.match(content, /\[features\][\s\S]*multi_agent = true[\s\S]*fast_mode = false[\s\S]*hooks = true/);
     assert.match(content, /\[notice\]/);
@@ -91,13 +91,13 @@ describe('renderCodexProjectConfig', () => {
 
     assert.match(content, /^model = "gpt-5\.4"$/m);
     assert.match(content, /^model_reasoning_effort = "high"$/m);
-    assert.doesNotMatch(content, /^model = "gpt-6-sol"$/m);
+    assert.doesNotMatch(content, /^model = "gpt-5\.6-sol"$/m);
     assert.doesNotMatch(content, /^model_reasoning_effort = "medium"$/m);
   });
 
   it('backfills an existing config with no model and preserves reasoning effort', () => {
     const content = renderCodexProjectConfig('model_reasoning_effort = "high"\n');
-    assert.equal(parse(content).model, 'gpt-6-sol');
+    assert.equal(parse(content).model, 'gpt-5.6-sol');
     assert.equal(parse(content).model_reasoning_effort, 'high');
     assert.equal(renderCodexProjectConfig(content), content);
   });
