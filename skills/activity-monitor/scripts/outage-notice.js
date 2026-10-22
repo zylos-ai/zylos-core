@@ -7,7 +7,6 @@ export function currentOutageNotice(state, identity, quota, now = Date.now()) {
   if (state.health !== 'rate_limited' || state.source !== 'hook' || state.recovered ||
       identity?.runtime !== 'claude' ||
       state.session_id !== identity.session_id || state.hook_pid !== identity.claude_pid ||
-      state.hook_process_start !== identity.process_start ||
       state.hook_failure?.event_id !== state.evidence_id || state.hook_failure.error !== 'rate_limit') return fallback;
   const observed = state.hook_failure.observed_at;
   if (!Number.isSafeInteger(observed) || observed > now) return fallback;

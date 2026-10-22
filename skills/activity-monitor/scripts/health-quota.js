@@ -1,15 +1,14 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { getClaudePid } from './claude-pid.js';
-import { durableJson, readProcessStart, runtimeRoot } from './runtime-generation.js';
+import { durableJson, runtimeRoot } from './runtime-generation.js';
 import { readDeliveryIdentity } from '../../comm-bridge/scripts/runtime-delivery.js';
 
 export const HEALTH_QUOTA_MAX_AGE_MS = 60000;
 const id=value=>typeof value==='string'&&/^[A-Za-z0-9._:-]{1,200}$/.test(value);
-const proof=value=>typeof value==='string'&&/^[0-9a-f-]{36}:\d+$/.test(value);
-const scopeKeys=['runtime','session_id','claude_pid','process_start'];
+const scopeKeys=['runtime','session_id','claude_pid'];
 function validIdentity(identity) {
-  return identity?.runtime==='claude'&&id(identity.session_id)&&Number.isSafeInteger(identity.claude_pid)&&identity.claude_pid>0&&proof(identity.process_start);
+  return identity?.runtime==='claude'&&id(identity.session_id)&&Number.isSafeInteger(identity.claude_pid)&&identity.claude_pid>0;
 }
 function windows(raw, nowMs) {
   const result={};
@@ -32,8 +31,8 @@ export function sanitizeHealthQuota(snapshot,{identity,nowMs=Date.now(),maxAgeMs
   return {schema_version:1,source:'statusline',...Object.fromEntries(scopeKeys.map(key=>[key,identity[key]])),observed_at:snapshot.observed_at,rate_limits};
 }
 
-export function writeHealthQuota(status,{zylosDir=runtimeRoot(),nowMs=Date.now(),pid=getClaudePid(),processStart=readProcessStart(pid),managedIdentity=()=>readDeliveryIdentity({zylosDir})}={}) {
-  const identity={runtime:'claude',session_id:status?.session_id,claude_pid:pid,process_start:processStart};
+export function writeHealthQuota(status,{zylosDir=runtimeRoot(),nowMs=Date.now(),pid=getClaudePid(),managedIdentity=()=>readDeliveryIdentity({zylosDir})}={}) {
+  const identity={runtime:'claude',session_id:status?.session_id,claude_pid:pid};
   if(!validIdentity(identity)||!Number.isSafeInteger(nowMs))return null;
   const foreground=managedIdentity();
   if(!foreground||!scopeKeys.every(key=>foreground[key]===identity[key]))return null;
@@ -43,9 +42,8 @@ export function writeHealthQuota(status,{zylosDir=runtimeRoot(),nowMs=Date.now()
   return snapshot;
 }
 
-export function readHealthQuota({identity,zylosDir=runtimeRoot(),nowMs=Date.now(),maxAgeMs=HEALTH_QUOTA_MAX_AGE_MS,processStart=readProcessStart}={}) {
+export function readHealthQuota({identity,zylosDir=runtimeRoot(),nowMs=Date.now(),maxAgeMs=HEALTH_QUOTA_MAX_AGE_MS}={}) {
   if(!validIdentity(identity))return null;
-  if(processStart(identity.claude_pid)!==identity.process_start)return null;
   try {
     const file=path.join(zylosDir,'activity-monitor','health-quota','claude.json');
     const stat=fs.lstatSync(file);

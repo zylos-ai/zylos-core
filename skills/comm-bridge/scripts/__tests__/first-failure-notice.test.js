@@ -12,8 +12,7 @@ import { claimStatusNotice } from '../c4-db.js';
 import { statusNoticeKey, normalizeStatusEndpoint } from '../status-notice.js';
 import { HealthStore } from '../../../activity-monitor/scripts/health-store.js';
 
-const identity = { runtime:'claude', session_id:'session', claude_pid:123,
-  process_start:'00000000-0000-0000-0000-000000000000:100' };
+const identity = { runtime:'claude', session_id:'session', claude_pid:123 };
 const event = { schema_version:1, source:'hook', ...identity,
   event_id:'11111111-1111-1111-1111-111111111111', prompt_id:'prompt',
   event:'stop_failure', error:'rate_limit', received_at:100000 };
@@ -106,7 +105,7 @@ for (const status of ['pending','failed']) test('ineligible target '+status+' ca
 });
 test('changed process identity cancels frozen notice', async t => {
   const f=fixture(t);inbound(f.db,1);consume(f.store);
-  const sent=[];await processFirstFailureNotices(options(f,{sent,scope:{...identity,process_start:identity.process_start+'1'}}));
+  const sent=[];await processFirstFailureNotices(options(f,{sent,scope:{...identity,claude_pid:124}}));
   assert.equal(sent.length,0);assert.equal(f.store.read().pending_notice,undefined);
   assert.equal(f.store.read().last_notice_outcome.status,'stale');
 });

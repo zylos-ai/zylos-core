@@ -7,21 +7,21 @@ import { fileURLToPath } from 'node:url';
 import { getClaudePid } from './claude-pid.js';
 import { readHealthQuota } from './health-quota.js';
 import { matchHealthNoticeText } from './health-notice-match.js';
-import { readProcessStart, runtimeRoot } from './runtime-generation.js';
+import { runtimeRoot } from './runtime-generation.js';
 
 const EVENTS = { SessionStart: 'session_start', UserPromptSubmit: 'prompt_submit', StopFailure: 'stop_failure', Stop: 'stop' };
 const ERRORS = new Set(['rate_limit', 'authentication_failed', 'billing_error', 'overloaded', 'server_error', 'model_not_found']);
 const identifier = value => typeof value === 'string' && /^[A-Za-z0-9._:-]{1,200}$/.test(value) ? value : null;
 
-export function collectHealthHook(payload, { zylosDir = runtimeRoot(), nowMs = Date.now(), pid = getClaudePid(), processStart = readProcessStart(pid) } = {}) {
+export function collectHealthHook(payload, { zylosDir = runtimeRoot(), nowMs = Date.now(), pid = getClaudePid() } = {}) {
   if (!payload || payload.agent_id || !EVENTS[payload.hook_event_name]) return null;
   const session = identifier(payload.session_id);
-  if (!session || !Number.isSafeInteger(pid) || pid <= 0 || !processStart) return null;
+  if (!session || !Number.isSafeInteger(pid) || pid <= 0) return null;
   if (payload.hook_event_name === 'StopFailure' && !identifier(payload.error)) return null;
   const event = { schema_version: 1, event_id: randomUUID(), source: 'hook', runtime: 'claude',
     type: 'runtime_health', session_id: session, prompt_id: identifier(payload.prompt_id),
     event: EVENTS[payload.hook_event_name], error: payload.hook_event_name === 'StopFailure' ? (ERRORS.has(payload.error) ? payload.error : 'unknown') : null,
-    received_at: nowMs, ts: nowMs, claude_pid: pid, process_start: processStart };
+    received_at: nowMs, ts: nowMs, claude_pid: pid };
   if (event.event === 'stop_failure') {
     const match = matchHealthNoticeText(payload);
     if (match) event.notice_match = match;

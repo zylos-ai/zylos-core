@@ -136,9 +136,9 @@ import { fileURLToPath } from 'url';
 import { MessageRouter } from './message-router.js';
 import { HealthStore } from './health-store.js';
 import { HealthController } from './health-controller.js';
-import { readProcessStart } from './runtime-generation.js';
 import { createRouterReply } from './router-socket.js';
 import { drainFirstFailureNotices, freezeFirstFailureNotice } from '../../comm-bridge/scripts/first-failure-notice.js';
+import { readDeliveryIdentity } from '../../comm-bridge/scripts/runtime-delivery.js';
 import { getDb as getHealthDatabase } from '../../comm-bridge/scripts/c4-db.js';
 import { MonitorOrchestrator } from './monitor-orchestrator.js';
 import { canTreatPaneAsRecovered } from './tool-pipeline.js';
@@ -1016,13 +1016,7 @@ function createHealthEngine(activeAdapter, initialStatus) {
     userMessageRecoveryCooldown: USER_MESSAGE_RECOVERY_COOLDOWN,
   });
   if(activeAdapter.runtimeId==='claude') {
-    const identity=()=>{
-      const foreground=readJsonFileSafe(FOREGROUND_SESSION_FILE);
-      const pid=getTmuxClaudePid(activeAdapter.sessionName);
-      const processStart=readProcessStart(pid);
-      const valid=foreground?.claude_pid===pid && foreground.process_start===processStart && processStart;
-      return {runtime:'claude',session_id:valid?foreground.session_id:null,claude_pid:pid,process_start:processStart};
-    };
+    const identity=()=>readDeliveryIdentity({zylosDir:ZYLOS_DIR,session:activeAdapter.sessionName});
     const fingerprint=()=>{
       try {
         const text=execFileSync('tmux',['capture-pane','-p','-t',activeAdapter.sessionName],{encoding:'utf8',timeout:3000,maxBuffer:1024*1024});

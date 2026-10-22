@@ -49,7 +49,7 @@ export class HealthController {
   }
   captureFence() {
     const identity = this.identity();
-    return { revision:this.store.read().revision, pid:identity?.claude_pid??null,session:identity?.session_id??null,process:identity?.process_start??null };
+    return { revision:this.store.read().revision, pid:identity?.claude_pid??null,session:identity?.session_id??null };
   }
   notice() {
     try { return this.store.currentNotice({identity:this.identity(),quota:this.quota()}); }

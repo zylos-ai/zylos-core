@@ -45,9 +45,9 @@ export function buildStatusPayload({ statusObj, healthEngine }) {
     }
     const hook = evidence.last_hook;
     if (hook && hook.session_id === evidence.session_id && hook.claude_pid === evidence.hook_pid &&
-      hook.process_start === evidence.hook_process_start && ['stop', 'stop_failure'].includes(hook.event) &&
+      typeof hook.session_id === 'string' && hook.session_id.length > 0 && ['stop', 'stop_failure'].includes(hook.event) &&
       typeof hook.event_id === 'string' && hook.event_id.length <= 200 &&
-      Number.isSafeInteger(hook.claude_pid) && hook.claude_pid > 0 && typeof hook.process_start === 'string' &&
+      Number.isSafeInteger(hook.claude_pid) && hook.claude_pid > 0 &&
       Number.isSafeInteger(hook.observed_at)) {
       extra.last_hook = {
         event_id: hook.event_id,

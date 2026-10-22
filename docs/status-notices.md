@@ -15,7 +15,7 @@ The dispatcher remains the writer of `delivered` through `markDelivered()`.
 Control messages and inputs without reply endpoints are excluded. Sending never
 retargets the frozen original channel and endpoint. No delivery table is created.
 
-Old, malformed and unordered post-recovery failures do not create
+Old, malformed and pre-recovery failures do not create
 new first-failure intents. Billing errors require a verified full quota window
 or an explicit quota diagnostic before claiming exhausted quota; otherwise they
 get factual billing-error copy. Authentication, model, service and unknown
@@ -60,15 +60,17 @@ second send. Rejected user work is not replayed automatically.
 ## Health evidence
 
 Supported Claude hooks append sanitized health events to the existing
-`tool-events.jsonl` stream. AM validates the managed tmux pane's Claude PID,
-Linux process start proof and session. There is no generation file or launch
-environment token. Ambiguous failures after verified
-recovery request a controlled check instead of undoing recovery immediately.
+`tool-events.jsonl` stream. AM validates the managed tmux pane's Claude PID
+and session ID. There is no process-start, generation-file or launch
+environment token. The synchronous terminal-event timestamp contract determines
+ordering: events at or before verified recovery are rejected; a strictly newer
+failure in the same process/session can establish a new outage. A previous prompt
+ID or recovery record must not permanently suppress subsequent turns.
 
 A valid Stop while health is already OK establishes Hook authority. A conflicting
 screen-only rate-limit observation is recorded but does not change health. Stop
-does not clear an existing outage: it cannot prove ordering against a delayed
-failure. SessionStart, UserPromptSubmit and tool completion do not prove recovery.
+does not itself clear an existing outage. SessionStart, UserPromptSubmit and
+tool completion do not prove recovery.
 Old Hook authority does not carry into another session or process.
 
 Only rate_limit and authentication_failed directly establish corresponding
@@ -148,8 +150,12 @@ Older, prerelease and unknown versions retain screen fallback; 3.x is supported.
 Managed hooks are registered during settings synchronization, not every launch.
 After independently changing the Claude CLI version, run the hooks sync step
 before starting the next session. Custom hooks are preserved. Strong
-Hook evidence currently requires Linux process proof; unsupported
-platforms do not gain that evidence path.
+Linux and macOS use the same PID/session evidence contract. Process ancestry
+uses the platform's parent-process lookup (`/proc` or `ps`); missing managed-pane
+identity still rejects health evidence. Process start times are not required.
+If a PID is reused while the same session ID is resumed, this identity contract
+cannot distinguish both process lifetimes; the owner accepted that boundary.
+Event freshness and the durable terminal-time marker remain enforced.
 
 AM's atomic status file includes `health_episode`, `health_revision` and a
 sanitized `last_hook` snapshot: event ID, event kind, allowlisted error, receipt

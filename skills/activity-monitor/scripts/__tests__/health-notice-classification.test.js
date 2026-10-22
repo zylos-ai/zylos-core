@@ -15,8 +15,7 @@ import { buildStatusPayload } from '../status-writer.js';
 import { messageForStatus } from '../../../comm-bridge/scripts/status-notice-templates.js';
 
 const now = Date.now();
-const generation = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
-const identity = { runtime:'claude', session_id:'session', claude_pid:123, process_start:`${generation}:123` };
+const identity = { runtime:'claude', session_id:'session', claude_pid:123 };
 const base = { ...identity, schema_version:1, source:'hook', event_id:'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
   event:'stop_failure', prompt_id:'prompt', error:'rate_limit', received_at:now };
 const snapshot = windows => ({ ...identity, schema_version:1, source:'statusline', observed_at:now-1000, rate_limits:windows });
@@ -42,12 +41,18 @@ test('verified exhausted windows outrank model prose, and both full windows use 
 });
 
 test('expired, foreign and stale quota cannot invent exhaustion or reset time', () => {
-  for (const override of [{observed_at:now-60001},{session_id:'foreign'},{process_start:`${generation}:999`},{observed_at:now+1}]) {
+  for (const override of [{observed_at:now-60001},{session_id:'foreign'},{claude_pid:999},{observed_at:now+1}]) {
     const result = classifyHealthNotice({...base,quota:{...snapshot({five_hour:{used_percentage:100,resets_at:reset1}}),...override}},now);
     assert.equal(result.noticeCode,'rate_limited'); assert.equal(result.resetAt,null);
   }
   const result=classifyHealthNotice({...base,quota:snapshot({five_hour:{used_percentage:100,resets_at:reset1}})},reset1*1000+1);
   assert.equal(result.noticeCode,'rate_limited');
+});
+
+test('legacy process-start differences do not override matching PID and session quota',()=>{
+  const result=classifyHealthNotice({...base,process_start:'new-ignored',quota:{
+    ...snapshot({five_hour:{used_percentage:100,resets_at:reset1}}),process_start:'old-ignored'}},now);
+  assert.equal(result.noticeCode,'quota_exhausted_reset');assert.equal(result.resetAt,reset1*1000);
 });
 
 test('trusted full windows precede negative text; without proof terminal failures remain neutral', () => {

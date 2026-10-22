@@ -5,8 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { HealthStore } from '../health-store.js';
 
-const identity={runtime:'claude',session_id:'session',claude_pid:123,
-  process_start:'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa:123'};
+const identity={runtime:'claude',session_id:'session',claude_pid:123};
 const event={schema_version:1,source:'hook',...identity,event_id:'11111111-1111-1111-1111-111111111111',
   prompt_id:'prompt',event:'stop_failure',error:'rate_limit',received_at:100000};
 const pendingFields=['eventId','conversationId','channel','endpoint','health','reason','notice','createdAt'].sort();
@@ -54,13 +53,13 @@ test('disk has exact engine fields, nested camelCase evidence and exact pending 
   for(const [key,value] of Object.entries(scheduling))assert.equal(raw[key],value,key);
   assert.equal(raw.hook.lastProcessedAt,100000);assert.equal(raw.hook.lastProcessedEventId,event.event_id);
   assert.deepEqual(raw.hook.lastFailure,{eventId:event.event_id,error:'rate_limit',observedAt:100000});
-  assert.equal(raw.hook.pid,123);assert.equal(raw.hook.processStart,identity.process_start);
+  assert.equal(raw.hook.pid,123);assert.equal(raw.hook.processStart,undefined);
   assert.equal(raw.pendingNotice.conversationId,12);assert.equal(raw.pendingNotice.createdAt,100000);
   camelKeys(raw);
   assert.deepEqual(fs.readdirSync(path.dirname(f.file)),['claude.json']);
   const reopened=new HealthStore({zylosDir:f.root,now:()=>100000});
   assert.equal(reopened.read().pending_notice.status,'pending');
-  assert.equal(reopened.read().pending_notice.process_start,identity.process_start);
+  assert.equal(reopened.read().pending_notice.claude_pid,identity.claude_pid);
   assert.deepEqual(reopened.read().scheduling,scheduling);
   assert.deepEqual(reopened.read().outage_quota,evidence.outage_quota);
   assert.deepEqual(reopened.read().recovered,evidence.recovered);

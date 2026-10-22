@@ -13,12 +13,12 @@ export const FIRST_NOTICE_QUOTA_WAIT_MS = 750;
 // Called before the atomic health write; this endpoint cannot change afterwards.
 export function freezeFirstFailureNotice(database, { runtime, identity, event, result }) {
   if (event.event !== 'stop_failure' || result.status !== 'processed' || result.verify || !result.notice?.eligible ||
-      !identity?.session_id || !identity.process_start) return null;
+      !identity?.session_id || !Number.isSafeInteger(identity.claude_pid) || identity.claude_pid<=0) return null;
   const target = database.prepare(`SELECT id, channel, endpoint_id FROM conversations
     WHERE direction='in' AND status IN ('running','delivered') AND endpoint_id IS NOT NULL AND endpoint_id!=''
     AND channel NOT IN ('void','system','control','scheduler') ORDER BY id DESC LIMIT 1`).get();
   if (!target) return null;
-  return { event_id:event.event_id, runtime, session_id:identity.session_id, process_start:identity.process_start,
+  return { event_id:event.event_id, runtime, session_id:identity.session_id,
     claude_pid:identity.claude_pid, conversation_id:target.id, channel:target.channel, endpoint:target.endpoint_id,
     health:event.error === 'rate_limit' ? 'rate_limited' : event.error === 'authentication_failed' ? 'auth_failed' : 'unavailable',
     reason:result.notice.reason || event.error, error:event.error, created_at:event.received_at, notice:result.notice, status:'pending' };
@@ -26,7 +26,7 @@ export function freezeFirstFailureNotice(database, { runtime, identity, event, r
 
 function sameScope(intent, identity) {
   return !!identity && intent.runtime === identity.runtime && intent.session_id === identity.session_id &&
-    intent.process_start === identity.process_start && intent.claude_pid === identity.claude_pid;
+    intent.claude_pid === identity.claude_pid;
 }
 
 // Only the child performs blocking channel I/O; AM remains the sole state writer.

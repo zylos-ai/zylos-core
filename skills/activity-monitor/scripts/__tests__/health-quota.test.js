@@ -11,24 +11,25 @@ function fixture(t) {
   const zylosDir=fs.mkdtempSync(path.join(os.tmpdir(),'health-quota-'));
   t.after(()=>fs.rmSync(zylosDir,{recursive:true,force:true}));
   fs.mkdirSync(path.join(zylosDir,'activity-monitor'));
-  const identity={runtime:'claude',session_id:'session',claude_pid:123,process_start:'00000000-0000-0000-0000-000000000001:42'};
+  const identity={runtime:'claude',session_id:'session',claude_pid:123};
   fs.writeFileSync(path.join(zylosDir,'activity-monitor','foreground-session.json'),JSON.stringify(identity));
-  const options={zylosDir,managedIdentity:()=>identity,nowMs:1000000,pid:123,processStart:identity.process_start};
-  return {identity,options,read:(extra={})=>readHealthQuota({identity,zylosDir,nowMs:1000000,processStart:()=>identity.process_start,...extra})};
+  const options={zylosDir,managedIdentity:()=>identity,nowMs:1000000,pid:123};
+  return {identity,options,read:(extra={})=>readHealthQuota({identity,zylosDir,nowMs:1000000,...extra})};
 }
 const status={session_id:'session',rate_limits:{five_hour:{used_percentage:100,resets_at:2000},seven_day:{used_percentage:40,resets_at:3000}}};
-test('producer and reader preserve only bounded official quota fields with exact process identity',t=>{
+test('producer and reader preserve bounded quota fields with matching PID and session',t=>{
   const {identity,options,read}=fixture(t);
   const saved=writeHealthQuota({...status,prompt:'SECRET',rate_limits:{...status.rate_limits,spend_limit:{secret:'SECRET'},five_hour:{...status.rate_limits.five_hour,secret:'SECRET'}}},options);
   assert.deepEqual(read(),saved);assert.equal(JSON.stringify(saved).includes('SECRET'),false);
   assert.deepEqual(saved.rate_limits,status.rate_limits);
   assert.equal(read({identity:{...identity,session_id:'other'}}),null);
-  assert.equal(read({processStart:()=>identity.process_start+'0'}),null);
+  assert.equal(read({identity:{...identity,claude_pid:999}}),null);
+  assert.equal(Object.hasOwn(saved,'process_start'),false);
   assert.equal(read({nowMs:1060001}),null);assert.equal(read({nowMs:999999}),null);
 });
-test('producer rejects unmanaged process, foreground/session mismatch, missing process proof',t=>{
+test('producer rejects unmanaged process and foreground PID or session mismatch',t=>{
   const {options}=fixture(t);
-  for(const change of [{managedIdentity:()=>null},{pid:999},{processStart:null}])assert.equal(writeHealthQuota(status,{...options,...change}),null);
+  for(const change of [{managedIdentity:()=>null},{pid:999},{pid:null},{pid:0}])assert.equal(writeHealthQuota(status,{...options,...change}),null);
   assert.equal(writeHealthQuota({...status,session_id:'other'},options),null);
   assert.equal(fs.existsSync(path.join(options.zylosDir,'activity-monitor','health-quota')),false);
 });
@@ -57,10 +58,20 @@ test('process replacement rejects late producer and old snapshots without deleti
   const {identity,options,read}=fixture(t);writeHealthQuota(status,options);
   const directory=path.join(options.zylosDir,'activity-monitor','health-quota');
   fs.writeFileSync(path.join(directory,'unrelated.json'),'retain');
-  const replacement={...identity,process_start:identity.process_start+'1'};
+  const replacement={...identity,claude_pid:999};
   assert.equal(writeHealthQuota(status,{...options,managedIdentity:()=>replacement}),null);
-  assert.equal(read({identity:replacement,processStart:()=>replacement.process_start}),null);
+  assert.equal(read({identity:replacement}),null);
   assert.equal(fs.readFileSync(path.join(directory,'unrelated.json'),'utf8'),'retain');
+});
+test('legacy process-start metadata is ignored and stripped when PID and session match',t=>{
+  const {identity,options,read}=fixture(t);
+  const saved=writeHealthQuota(status,{...options,processStart:null});
+  const legacy={...saved,process_start:'old-process-incarnation'};
+  fs.writeFileSync(path.join(options.zylosDir,'activity-monitor/health-quota/claude.json'),JSON.stringify(legacy));
+  const current={...identity,process_start:'new-process-incarnation'};
+  assert.deepEqual(read({identity:current,processStart:()=>{throw Error('must not read proc');}}),saved);
+  assert.deepEqual(sanitizeHealthQuota(legacy,{identity:current,nowMs:options.nowMs}),saved);
+  assert.equal(Object.hasOwn(saved,'process_start'),false);
 });
 test('reader rejects malformed, oversized, or nonregular snapshot files',t=>{
   const {options,read}=fixture(t);const snapshot=writeHealthQuota(status,options);

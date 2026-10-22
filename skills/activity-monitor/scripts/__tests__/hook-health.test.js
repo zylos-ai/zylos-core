@@ -6,11 +6,10 @@ import {test} from 'node:test';
 import {spawnSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {collectHealthHook,wakeHealthMonitor} from '../hook-health.js';
-import {readProcessStart} from '../runtime-generation.js';
 function fixture(t) {
   const zylosDir=fs.mkdtempSync(path.join(os.tmpdir(),'health-hook-stream-'));
   t.after(()=>fs.rmSync(zylosDir,{recursive:true,force:true}));
-  return {zylosDir,pid:process.pid,processStart:readProcessStart(process.pid)};
+  return {zylosDir,pid:process.pid};
 }
 const payload={hook_event_name:'StopFailure',session_id:'session',prompt_id:'prompt',error:'rate_limit'};
 test('collector appends bounded structured evidence without private prompt or error text',t=>{
@@ -32,7 +31,7 @@ test('invalid identity, subagent and unsupported event are rejected without writ
   const options=fixture(t);
   for(const change of [{session_id:''},{agent_id:'subagent'},{hook_event_name:'PostToolUse'},{error:''}]) assert.equal(collectHealthHook({...payload,...change},options),null);
   assert.equal(collectHealthHook(payload,{...options,pid:0}),null);
-  assert.equal(collectHealthHook(payload,{...options,processStart:null}),null);
+  assert.equal(collectHealthHook(payload,{...options,pid:null}),null);
   assert.equal(fs.existsSync(path.join(options.zylosDir,'activity-monitor/tool-events.jsonl')),false);
 });
 test('unknown error is neutral and raw category is not persisted',t=>{

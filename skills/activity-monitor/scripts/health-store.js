@@ -27,7 +27,6 @@ function toFile(state, runtime, updatedAt) {
   if(last_processed) { hook.lastProcessedAt=last_processed.received_at; hook.lastProcessedEventId=last_processed.event_id; }
   if(hook_failure)hook.lastFailure=encode(hook_failure);
   if(hook_pid!==undefined)hook.pid=hook_pid;
-  if(hook_process_start!==undefined)hook.processStart=hook_process_start;
   if(hook_prompt!==undefined)hook.promptId=hook_prompt;
   const record={v:1,runtime,health,reason:safeHealthReason(health,reason),...Object.fromEntries(Object.entries(ENGINE_DEFAULTS)
     .map(([key,fallback])=>[key,scheduling?.[key]??fallback])),updatedAt,hook};
@@ -35,7 +34,7 @@ function toFile(state, runtime, updatedAt) {
     const p=pending_notice;
     record.pendingNotice={eventId:p.event_id,conversationId:p.conversation_id,channel:p.channel,endpoint:p.endpoint,
       health:p.health,reason:p.reason,notice:encode(p.notice),createdAt:p.created_at};
-    hook.pendingAttempt={sessionId:p.session_id,processStart:p.process_start,pid:p.claude_pid,error:p.error,
+    hook.pendingAttempt={sessionId:p.session_id,pid:p.claude_pid,error:p.error,
       status:p.status,...(p.updated_at===undefined?{}:{updatedAt:p.updated_at})};
   }
   return record;
@@ -57,13 +56,12 @@ function fromFile(record,runtime) {
   if(lastProcessedAt!==undefined)state.last_processed={received_at:lastProcessedAt,event_id:lastProcessedEventId};
   if(lastFailure)state.hook_failure=decode(lastFailure);
   if(pid!==undefined)state.hook_pid=pid;
-  if(processStart!==undefined)state.hook_process_start=processStart;
   if(promptId!==undefined)state.hook_prompt=promptId;
   if(record.pendingNotice) {
     const p=record.pendingNotice;
     state.pending_notice={event_id:p.eventId,conversation_id:p.conversationId,channel:p.channel,endpoint:p.endpoint,
       health:p.health,reason:p.reason,notice:decode(p.notice),created_at:p.createdAt,runtime,
-      session_id:pendingAttempt?.sessionId,process_start:pendingAttempt?.processStart,claude_pid:pendingAttempt?.pid,
+      session_id:pendingAttempt?.sessionId,claude_pid:pendingAttempt?.pid,
       error:pendingAttempt?.error,status:pendingAttempt?.status||'pending',
       ...(pendingAttempt?.updatedAt===undefined?{}:{updated_at:pendingAttempt.updatedAt})};
   }
@@ -129,14 +127,14 @@ export class HealthStore {
     const event = sanitizeHealthEvent(raw, fallbackId);
     const prior = this.read();
     if (!['stop', 'stop_failure'].includes(event.event)) return { state: prior, status: 'ignored', reason: 'nonterminal_event' };
+    if (event.received_at <= (prior.last_processed?.received_at ?? 0)) return { state: prior, status: 'ignored', reason: 'replay' };
     const result = reduceHealthEvidence(prior, event, { identity, quota, now: this.now() });
     if (result.status !== 'processed') return result;
-    if (event.received_at <= (prior.last_processed?.received_at ?? 0)) return { state: prior, status: 'ignored', reason: 'replay' };
     const healthChanged = result.state !== prior;
     result.state = { ...result.state, revision: prior.revision + (healthChanged ? 1 : 0),
       last_processed: { received_at: event.received_at, event_id: event.event_id },
       last_hook: { event_id: event.event_id, event: event.event, error: event.error, observed_at: event.received_at,
-        session_id:event.session_id, claude_pid:event.claude_pid, process_start:event.process_start } };
+        session_id:event.session_id, claude_pid:event.claude_pid } };
     const pending = this.freezeNotice({ runtime: this.runtime, state: result.state, identity, event, result });
     if (pending) result.state.pending_notice = pending;
     this.write(result.state);
@@ -145,15 +143,15 @@ export class HealthStore {
   transition(health, reason, { identity, kind = 'screen', expectedRevision, screenFingerprint = null } = {}) {
     const prior = this.read();
     if (expectedRevision !== undefined && expectedRevision !== prior.revision) return { accepted: false, state: prior };
-    const currentHook = prior.source === 'hook' && prior.session_id === identity?.session_id && prior.hook_process_start === identity?.process_start && prior.hook_pid === identity?.claude_pid;
+    const currentHook = prior.source === 'hook' && prior.session_id === identity?.session_id && prior.hook_pid === identity?.claude_pid;
     if (kind === 'screen' && currentHook && (!prior.hook_ok || health === 'rate_limited')) return { accepted: false, state: prior };
     const next = { ...prior, health, reason: safeHealthReason(health, reason), session_id: identity?.session_id ?? prior.session_id,
-      hook_process_start:identity?.process_start ?? prior.hook_process_start, hook_pid:identity?.claude_pid ?? prior.hook_pid,
+      hook_pid:identity?.claude_pid ?? prior.hook_pid,
       source: kind, evidence_id: randomUUID(), revision: prior.revision + 1 };
     delete next.notice;
     if (health !== prior.health) delete next.scheduling;
     if (health !== 'ok' && prior.health === 'ok') next.episode++;
-    if (kind === 'recovery') next.recovered = { session_id: next.session_id, revision: next.revision, evidence_id: prior.evidence_id, screen_fingerprint: screenFingerprint };
+    if (kind === 'recovery') next.recovered = { session_id: next.session_id, revision: next.revision, evidence_id: prior.evidence_id, screen_fingerprint: screenFingerprint, observed_at:this.now() };
     this.write(next);
     return { accepted: true, state: next };
   }

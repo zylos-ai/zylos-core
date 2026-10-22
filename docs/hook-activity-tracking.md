@@ -346,7 +346,7 @@ major versions satisfy the minimum version comparison. Init/upgrade hook sync
 reconciles managed entries while preserving custom hooks; launches do not rewrite
 settings. A CLI-only upgrade/downgrade requires an explicit hooks sync.
 
-Health hooks verify the Claude PID and process start against the managed tmux
+Health hooks verify the Claude PID against the managed tmux
 pane, ignore subagents, and persist only
 session/prompt identifiers, an allowlisted error category, receive time and
 process identity. Unknown error identifiers become `unknown`; prompt text,
@@ -362,9 +362,11 @@ not advance the marker. Replay, restart and rotation are covered by this marker,
 the five-minute freshness check and process identity verification. A clock step
 backward can suppress a new event; screen detection remains the fallback.
 
-Linux process proof consists of boot ID plus `/proc` process start ticks.
-Unavailable process proof is represented by null and cannot establish strong
-hook ownership; existing screen fallback remains available. These records do
+Linux and macOS both use managed-pane PID ancestry and the current session ID.
+Parent lookup uses `/proc` where available and the platform `ps` fallback.
+No process-start token is read. PID reuse together with the same resumed session
+is an accepted identity limitation; unavailable managed identity still rejects
+health events and retains screen fallback. These records do
 not contain reply addresses. C4 uses the frozen latest running/delivered inbound
 row policy described in
 [Runtime status notices](status-notices.md). The same document covers Stop
