@@ -13,7 +13,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execSync } from 'node:child_process';
-import { getZylosConfig, updateZylosConfig, ZYLOS_DIR } from '../lib/config.js';
+import { readZylosConfigStrict, updateZylosConfigLocked, ZYLOS_DIR } from '../lib/config.js';
 import { getAdapter, SUPPORTED_RUNTIMES } from '../lib/runtime/index.js';
 import { buildInstructionFile, isSplitInstructionsActive } from '../lib/runtime/instruction-builder.js';
 import { commandExists } from '../lib/shell-utils.js';
@@ -73,7 +73,7 @@ export async function runtimeCommand(args) {
 // ── Status ────────────────────────────────────────────────────────────────
 
 function showStatus() {
-  const cfg = getZylosConfig();
+  const cfg = readRuntimeConfig();
   const current = cfg.runtime ?? 'claude';
   const label = current === 'codex' ? 'Codex (OpenAI)' : 'Claude Code (Anthropic)';
   console.log(`Current runtime: ${bold(label)}`);
@@ -244,7 +244,7 @@ export async function checkRuntimeAuthGate(target, adapter, parsed, {
 // ── Switch ────────────────────────────────────────────────────────────────
 
 async function switchRuntime(target, flags) {
-  const cfg = getZylosConfig();
+  const cfg = readRuntimeConfig();
   const current = cfg.runtime ?? 'claude';
   const monitorDir = path.join(ZYLOS_DIR, 'activity-monitor');
   const parsed = parseRuntimeFlags(flags);
@@ -309,7 +309,7 @@ async function switchRuntime(target, flags) {
   await checkRuntimeAuthGate(target, adapter, parsed);
 
   // Step 4: Persist new runtime in config.
-  updateZylosConfig({ runtime: target });
+  updateZylosConfigLocked({ set: { runtime: target } });
 
   // Step 5: Rebuild instruction file for the new runtime.
   console.log(`Rebuilding instruction file for ${bold(target)}...`);
@@ -346,6 +346,17 @@ async function switchRuntime(target, flags) {
   const targetLabel = target === 'codex' ? 'Codex (OpenAI)' : 'Claude Code (Anthropic)';
   console.log(`\n${green(`Switched to ${bold(targetLabel)}.`)}`);
   console.log(dim('The new runtime session will be ready in ~10 seconds.'));
+}
+
+function readRuntimeConfig() {
+  const result = readZylosConfigStrict();
+  if (result.state === 'error') {
+    const error = new Error(`Zylos configuration is unreadable: ${result.error.message}`);
+    error.code = 'CONFIG_UNREADABLE';
+    error.cause = result.error;
+    throw error;
+  }
+  return result.state === 'ok' ? result.config : {};
 }
 
 // ── Help ──────────────────────────────────────────────────────────────────

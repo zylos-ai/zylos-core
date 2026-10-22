@@ -18,10 +18,9 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import readline from 'readline';
+import { loadCoreConfig } from '../../comm-bridge/scripts/core-config-loader.js';
 
 const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
-const CONFIG_DIR = path.join(ZYLOS_DIR, '.zylos');
-const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
 const HTTP_DIR = path.join(ZYLOS_DIR, 'http');
 const CADDYFILE = path.join(HTTP_DIR, 'Caddyfile');
 const CADDY_BIN = path.join(ZYLOS_DIR, 'bin', 'caddy');
@@ -49,18 +48,19 @@ function prompt(question) {
 }
 
 function readConfig() {
-  try {
-    return JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
-  } catch {
-    return {};
+  const result = readZylosConfigStrict();
+  if (result.state === 'error') {
+    const error = new Error(`Zylos configuration is unreadable: ${result.error.message}`);
+    error.code = 'CONFIG_UNREADABLE';
+    throw error;
   }
+  return result.state === 'ok' ? result.config : {};
 }
 
+const { readZylosConfigStrict, updateZylosConfigLocked } = await loadCoreConfig();
+
 function saveConfig(updates) {
-  const config = readConfig();
-  Object.assign(config, updates);
-  fs.mkdirSync(CONFIG_DIR, { recursive: true });
-  fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2) + '\n');
+  return updateZylosConfigLocked({ set: updates });
 }
 
 async function main() {

@@ -16,7 +16,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { execSync, execFileSync, spawnSync, spawn } from 'node:child_process';
-import { ZYLOS_DIR, SKILLS_DIR, CONFIG_DIR, COMPONENTS_DIR, LOCKS_DIR, COMPONENTS_FILE, BIN_DIR, HTTP_DIR, CADDYFILE, CADDY_BIN, getZylosConfig, updateZylosConfig } from '../lib/config.js';
+import { ZYLOS_DIR, SKILLS_DIR, CONFIG_DIR, COMPONENTS_DIR, LOCKS_DIR, COMPONENTS_FILE, BIN_DIR, HTTP_DIR, CADDYFILE, CADDY_BIN, getZylosConfig, readZylosConfigStrict, updateZylosConfigLocked } from '../lib/config.js';
 import { generateManifest, saveMergeBaseline } from '../lib/manifest.js';
 import { prompt, promptYesNo, promptChoice, promptSecret } from '../lib/prompts.js';
 import { bold, dim, green, red, yellow, cyan, bgGreen, success, error, warn, heading } from '../lib/colors.js';
@@ -951,20 +951,16 @@ function ensureWebConsolePassword(explicitPassword = null) {
  * Idempotent — only writes keys that are missing.
  */
 function ensureNewSessionThresholdDefaults() {
-  const config = getZylosConfig();
-  const updates = {};
-  if (config.new_session_threshold === undefined) updates.new_session_threshold = 70;
-  if (config.codex_new_session_threshold === undefined) updates.codex_new_session_threshold = 75;
-  if (Object.keys(updates).length > 0) updateZylosConfig(updates);
+  updateZylosConfigLocked({
+    setIfAbsent: { new_session_threshold: 70, codex_new_session_threshold: 75 },
+  });
 }
 
 export function seedFreshInstallNewSessionThresholdDefault({
-  config = getZylosConfig(),
-  updateConfig = updateZylosConfig,
+  updateConfig = updateZylosConfigLocked,
 } = {}) {
-  if (config.new_session_threshold !== undefined) return false;
-  updateConfig({ new_session_threshold: 30 });
-  return true;
+  const result = updateConfig({ setIfAbsent: { new_session_threshold: 30 } });
+  return result.changed;
 }
 
 function migrateWebConsolePassword() {
@@ -1588,7 +1584,7 @@ async function setupCaddy(skipConfirm, opts = {}) {
   }
 
   // Save domain and protocol to config.json
-  updateZylosConfig({ domain, protocol, ...(localPort != null ? { port: localPort } : {}) });
+  updateZylosConfigLocked({ set: { domain, protocol, ...(localPort != null ? { port: localPort } : {}) } });
   if (!quiet) {
     if (localPort) {
       console.log(`  ${dim('Address:')} ${bold(`http://${domain}:${localPort}`)}`);
@@ -1968,7 +1964,14 @@ export async function initCommand(args) {
 
   // Step 4.5: Select agent runtime
   // Resolution: --runtime flag > ZYLOS_RUNTIME env > existing config > interactive prompt
-  const existingRuntime = getZylosConfig().runtime;
+  const runtimeConfigResult = readZylosConfigStrict();
+  if (runtimeConfigResult.state === 'error') {
+    const configError = new Error(`Zylos configuration is unreadable: ${runtimeConfigResult.error.message}`);
+    configError.code = 'CONFIG_UNREADABLE';
+    configError.cause = runtimeConfigResult.error;
+    throw configError;
+  }
+  const existingRuntime = runtimeConfigResult.state === 'ok' ? runtimeConfigResult.config.runtime : undefined;
   let selectedRuntime = opts.runtime || existingRuntime || null;
   if (!selectedRuntime) {
     if (!skipConfirm) {
@@ -2318,7 +2321,7 @@ export async function initCommand(args) {
     // Persist runtime selection before deploying templates so deployTemplates()
     // generates the correct instruction file for the new runtime.
     if (!existingRuntime || existingRuntime !== selectedRuntime) {
-      updateZylosConfig({ runtime: selectedRuntime });
+      updateZylosConfigLocked({ set: { runtime: selectedRuntime } });
     }
 
     // Ensure new-session thresholds are explicitly set in config (idempotent)
@@ -2427,12 +2430,13 @@ export async function initCommand(args) {
 
   // Persist runtime selection after successful install (guard: only on change)
   if (!existingRuntime || existingRuntime !== selectedRuntime) {
-    updateZylosConfig({ runtime: selectedRuntime });
+    updateZylosConfigLocked({ set: { runtime: selectedRuntime } });
   }
 
   // Fresh installs pair the opus[1m] default model with an explicit lower
   // Claude new-session threshold. This is intentionally not used by re-init.
   seedFreshInstallNewSessionThresholdDefault();
+  updateZylosConfigLocked({ setIfAbsent: { session_mode: 'multi' } });
 
   // Step 7: Run data migrations then deploy templates (both idempotent)
   runMigrations({ zylosDir: ZYLOS_DIR, templatesDir: TEMPLATES_SRC });

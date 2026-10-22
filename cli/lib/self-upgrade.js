@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { execSync, spawnSync } from 'node:child_process';
-import { SKILLS_DIR, ZYLOS_DIR, getZylosConfig } from './config.js';
+import { SKILLS_DIR, ZYLOS_DIR, getZylosConfig, readZylosConfigStrict } from './config.js';
 import { downloadArchive, downloadBranch } from './download.js';
 import { generateManifest, saveMergeBaseline } from './manifest.js';
 import { fetchRawFile, fetchLatestTag, compareSemverDesc, sanitizeError } from './github.js';
@@ -1254,7 +1254,14 @@ function resolveInstalledPackageScript(...parts) {
  */
 export function step10_ensureCodexConfig(deps = {}) {
   const startTime = Date.now();
-  const cfg = deps.cfg ?? getZylosConfig();
+  let cfg = deps.cfg;
+  if (cfg === undefined) {
+    const result = readZylosConfigStrict();
+    if (result.state === 'error') {
+      return { step: 10, name: 'ensure_codex_config', status: 'failed', error: `config unreadable: ${result.error.message}`, duration: Date.now() - startTime };
+    }
+    cfg = result.state === 'ok' ? result.config : {};
+  }
   const codexDir = deps.codexDir ?? path.join(os.homedir(), '.codex');
   const writeConfig = deps.writeConfig ?? writeCodexConfig;
   const existsSync = deps.existsSync ?? fs.existsSync;
