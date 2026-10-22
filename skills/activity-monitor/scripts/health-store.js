@@ -1,7 +1,7 @@
 import { initialHealthEvidence, reduceHealthEvidence, sanitizeHealthEvent, safeHealthReason, HEALTH_EVENT_MAX_AGE_MS } from './health-evidence.js';
 import { randomUUID } from 'node:crypto';
 import { enqueueFirstFailureNotice } from '../../comm-bridge/scripts/first-failure-notice.js';
-import { currentOutageNotice } from './outage-notice.js';
+import { currentOutageNotice, restoreOutageAnchor } from './outage-notice.js';
 
 /** All state and inbox writes are synchronous SQLite transactions owned by AM. */
 export class HealthStore {
@@ -12,7 +12,7 @@ export class HealthStore {
   }
   read() {
     const row = this.db.prepare('SELECT state_json FROM runtime_health_state WHERE runtime_id=?').get(this.runtime);
-    return row ? JSON.parse(row.state_json) : structuredClone(this.initial);
+    return row ? restoreOutageAnchor(JSON.parse(row.state_json),this.db) : structuredClone(this.initial);
   }
   currentNotice({identity,quota} = {}) {
     return this.db.transaction(() => {

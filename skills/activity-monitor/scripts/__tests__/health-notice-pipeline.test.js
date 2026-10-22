@@ -14,7 +14,7 @@ import {createRuntimeGeneration,runtimeGenerationEnv,readProcessStart} from '../
 import {writeHealthQuota,readHealthQuota} from '../health-quota.js';
 import {collectHealthHook} from '../hook-health.js';
 import {HealthStore} from '../health-store.js';
-import {currentOutageNotice} from '../outage-notice.js';
+import {currentOutageNotice,restoreOutageAnchor} from '../outage-notice.js';
 import {MessageRouter} from '../message-router.js';
 import {buildStatusPayload} from '../status-writer.js';
 import {claimStatusNotice,finishStatusNotice,startStatusNotice} from '../../../comm-bridge/scripts/c4-db.js';
@@ -199,4 +199,67 @@ test('production --drain subprocess waits for late quota and sends only to local
   assert.match(sent.args.join('\n')+sent.body,/expected to reset at/);
   assert.ok(sent.args.includes(item.endpoint_id));
   assert.equal(f.db.prepare('SELECT status FROM runtime_notice_intents').get().status,'sent');
+});
+
+for (const hook of ['Stop','StopFailure']) for (const timing of ['before','after']) {
+  test(`${hook} telemetry ${timing} quota admission cannot hide authoritative outage details`,t=>{
+    const f=fixture(t);const at=Date.now();let clock=at;const reset=Math.floor(at/1000)+3600;
+    const store=new HealthStore(f.db,{now:()=>clock});
+    const failure=collectHealthHook({hook_event_name:'StopFailure',session_id:'session',prompt_id:'authoritative',error:'rate_limit'}, {...f.options,nowMs:at});
+    store.consume(failure,{identity:f.identity});
+    const before=store.read();
+    const snapshot={schema_version:1,source:'statusline',...f.identity,observed_at:at+336,
+      rate_limits:{five_hour:{used_percentage:100,resets_at:reset}}};
+    clock=at+750;
+    if(timing==='after')assert.equal(store.currentNotice({identity:f.identity,quota:snapshot}).resetAt,reset*1000);
+    const telemetry=collectHealthHook({hook_event_name:hook,session_id:'session',prompt_id:'unrelated',error:'rate_limit'},
+      {...f.options,nowMs:at-100});
+    const result=store.consume(telemetry,{identity:f.identity});
+    assert.equal(result.reason,hook==='Stop'?'unproven_success_order':'unordered_failure');
+    const changed=store.read();
+    assert.notEqual(changed.last_hook.event_id,changed.evidence_id);
+    assert.equal(changed.evidence_id,before.evidence_id);assert.equal(changed.revision,before.revision);
+    assert.equal(changed.health,'rate_limited');assert.deepEqual(changed.hook_failure,before.hook_failure);
+    assert.equal(store.currentNotice({identity:f.identity,quota:snapshot}).resetAt,reset*1000);
+    assert.equal(store.currentNotice({identity:f.identity,quota:null}).resetAt,reset*1000);
+    const newer={...snapshot,observed_at:clock,rate_limits:{five_hour:{used_percentage:100,resets_at:reset+60}}};
+    assert.equal(store.currentNotice({identity:f.identity,quota:newer}).resetAt,(reset+60)*1000);
+    assert.equal(store.transition('ok','',{identity:f.identity,kind:'recovery',expectedRevision:before.revision}).accepted,true);
+    assert.equal(store.currentNotice({identity:f.identity,quota:newer}),undefined);
+    assert.equal(store.read().health,'ok');
+  });
+}
+
+test('legacy outage anchor restores from authoritative row and persists independently of telemetry and cleanup',t=>{
+  const f=fixture(t);const at=Date.now();let clock=at;const reset=Math.floor(at/1000)+3600;
+  const store=new HealthStore(f.db,{now:()=>clock});
+  const event=collectHealthHook({hook_event_name:'StopFailure',session_id:'session',prompt_id:'authoritative',error:'rate_limit'}, {...f.options,nowMs:at});
+  store.consume(event,{identity:f.identity});
+  const legacy=store.read();delete legacy.hook_failure;
+  legacy.last_hook={event_id:'telemetry',event:'stop',error:null,observed_at:at-100,runtime_generation:f.identity.runtime_generation};
+  store.write(legacy);
+  const row=f.db.prepare('SELECT payload_json FROM runtime_health_events WHERE event_id=?').get(legacy.evidence_id);
+  for(const status of ['pending','ignored']) {
+    f.db.prepare('UPDATE runtime_health_events SET status=? WHERE event_id=?').run(status,legacy.evidence_id);
+    assert.equal(restoreOutageAnchor(legacy,f.db).hook_failure,undefined);
+  }
+  f.db.prepare("UPDATE runtime_health_events SET status='processed' WHERE event_id=?").run(legacy.evidence_id);
+  const original=JSON.parse(row.payload_json);
+  for(const change of [{source:'screen'},{event:'stop'},{error:'authentication_failed'},{runtime_generation:'foreign'},
+    {session_id:'foreign'},{claude_pid:process.pid+1},{process_start:'foreign'},{event_id:'foreign'}]) {
+    f.db.prepare('UPDATE runtime_health_events SET payload_json=? WHERE event_id=?').run(JSON.stringify({...original,...change}),legacy.evidence_id);
+    assert.equal(restoreOutageAnchor(legacy,f.db).hook_failure,undefined);
+  }
+  f.db.prepare('UPDATE runtime_health_events SET payload_json=? WHERE event_id=?').run(row.payload_json,legacy.evidence_id);
+  clock=at+750;
+  const snapshot={schema_version:1,source:'statusline',...f.identity,observed_at:at+336,rate_limits:{five_hour:{used_percentage:100,resets_at:reset}}};
+  assert.equal(store.currentNotice({identity:f.identity,quota:snapshot}).resetAt,reset*1000);
+  const saved=JSON.parse(f.db.prepare('SELECT state_json FROM runtime_health_state').get().state_json);
+  assert.equal(saved.hook_failure.event_id,legacy.evidence_id);assert.equal(saved.hook_failure.observed_at,at);
+  // The persisted anchor itself remains sufficient even without its event row.
+  f.db.prepare('DELETE FROM runtime_health_events').run();
+  clock=at+120000;
+  const restarted=new HealthStore(f.db,{now:()=>clock});
+  assert.equal(restarted.currentNotice({identity:f.identity,quota:null}).resetAt,reset*1000);
+  assert.equal(restarted.read().revision,legacy.revision);
 });

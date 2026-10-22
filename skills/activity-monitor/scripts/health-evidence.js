@@ -74,5 +74,7 @@ export function reduceHealthEvidence(state, event, { identity, now, quota = null
   const classification = notice.eligible ? notice.reason : event.error;
   const health = event.error === 'rate_limit' ? 'rate_limited' : event.error === 'authentication_failed' ? 'auth_failed' : null;
   if (!health) return { state: next, status: 'processed', notice, reason: classification === 'unknown' ? 'unmapped_error' : classification };
-  return { state: { ...next, health, reason: classification, notice, source: 'hook', hook_ok:false, hook_process_start:event.process_start,hook_pid:event.claude_pid, hook_prompt: event.prompt_id, evidence_id: event.event_id, episode: next.health === 'ok' ? next.episode+1 : next.episode }, status: 'processed', notice, reason: 'hook_failure' };
+  return { state: { ...next, health, reason: classification, notice, source: 'hook', hook_ok:false, hook_process_start:event.process_start,hook_pid:event.claude_pid, hook_prompt: event.prompt_id, evidence_id: event.event_id,
+    hook_failure:{event_id:event.event_id,error:event.error,observed_at:event.received_at},
+    episode: next.health === 'ok' ? next.episode+1 : next.episode }, status: 'processed', notice, reason: 'hook_failure' };
 }

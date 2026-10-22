@@ -7,7 +7,7 @@ import { readDeliveryIdentity, cleanupFailureNoticeHistory } from './runtime-del
 export { cleanupFailureNoticeHistory } from './runtime-delivery.js';
 import { runtimeRoot } from '../../activity-monitor/scripts/runtime-generation.js';
 import { readHealthQuota } from '../../activity-monitor/scripts/health-quota.js';
-import { currentOutageNotice } from '../../activity-monitor/scripts/outage-notice.js';
+import { currentOutageNotice, restoreOutageAnchor } from '../../activity-monitor/scripts/outage-notice.js';
 
 export const FIRST_NOTICE_QUOTA_WAIT_MS = 750;
 
@@ -72,7 +72,7 @@ export function processFirstFailureNotices({ database = getDb(), identity = read
     try { notice = JSON.parse(intent.notice_json || '{}'); } catch { /* Neutral template on malformed metadata. */ }
     if (intent.reason === 'rate_limit') {
       const row = database.prepare('SELECT state_json FROM runtime_health_state WHERE runtime_id=?').get(intent.runtime_id);
-      const state = row ? JSON.parse(row.state_json) : null;
+      const state = row ? restoreOutageAnchor(JSON.parse(row.state_json),database) : null;
       if (state?.evidence_id === intent.event_id && state.health === 'rate_limited') {
         const enriched = currentOutageNotice(state,current,quota(current),now());
         if (enriched.annotation) notice = enriched.notice;
