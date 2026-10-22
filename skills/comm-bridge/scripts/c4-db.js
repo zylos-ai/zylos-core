@@ -22,16 +22,14 @@ let db = null;
 import { createStore } from './c4-v2-store.js';
 import { withDeadlineRead } from './c4-deadline-read.js';
 import { validateChannel } from './c4-validate.js';
-import * as instanceConfig from '../../../cli/lib/config.js';
-import { SUPPORTED_RUNTIMES } from '../../../cli/lib/runtime/index.js';
 export { composeSessionGroup, parseSessionGroup } from './c4-session-group.js';
 
 const store = createStore(getDb, {
-  supportedRuntimes: SUPPORTED_RUNTIMES,
   validateComponent: name => validateChannel(name, true),
   readConfig: () => {
-    if (typeof instanceConfig.readZylosConfigStrict !== 'function') throw new Error('Strict F1 reader has not been connected');
-    return instanceConfig.readZylosConfigStrict();
+    // P01-C supplies the strict P03 reader through this dependency boundary.
+    // A deployed skill is not adjacent to the npm package's cli directory.
+    throw new Error('Strict F1 reader has not been connected');
   },
 });
 
