@@ -79,8 +79,11 @@ test('adapter launch consumes real A/P01 paths and observers with script runtime
 });
 
 test('lost original client cannot bind to replacement server at the same socket',async t=>{
-  const f=await setup(t);process.kill(f.server,'SIGSTOP');let settled=false;
-  const pending=f.launch().then(()=>{settled=true;},()=>{settled=true;});
+  const f=await setup(t);process.kill(f.server,'SIGSTOP');let settled=false,outcome='pending';
+  for(let i=0;i<100;i++){const stat=await fs.readFile(`/proc/${f.server}/stat`,'utf8');if(stat.slice(stat.lastIndexOf(')')+2).split(' ')[0]==='T')break;await delay(5);}
+  const stoppedStat=await fs.readFile(`/proc/${f.server}/stat`,'utf8');
+  assert.equal(stoppedStat.slice(stoppedStat.lastIndexOf(')')+2).split(' ')[0],'T');
+  const pending=f.launch().then(value=>{settled=true;outcome=JSON.stringify(value);},error=>{settled=true;outcome=`${error.code}:${error.message}`;});
   await delay(100);
   const children=(await fs.readFile(`/proc/${process.pid}/task/${process.pid}/children`,'utf8')).trim().split(/\s+/);
   let killed=false;
@@ -95,8 +98,15 @@ test('lost original client cannot bind to replacement server at the same socket'
   process.kill(f.server,'SIGCONT');await delay(100);
   f.tmux('kill-server');await delay(50);
   f.tmux('-f','/dev/null','new-session','-d','-s','target','sleep 30');
-  await delay(100);assert.equal(settled,false);
-  void pending; // Deliberately unresolved; no client/retry/poll timer survives pre-ack loss.
+  const replacement=f.tmux('list-panes','-t','=target','-F','#{session_id}:#{pane_id}:#{pane_pid}:#{session_created}').trim();
+  await delay(100);
+  // Killing the client PID can leave the server's passed stdout descriptor alive:
+  // a late authentic create ACK permits failure once the original pane exits.
+  // The separate proxy matrix exercises an actually severed output transport.
+  assert.ok(outcome==='pending'||outcome.startsWith('LAUNCH_FAILED:'),`Unexpected settlement: ${outcome}`);
+  assert.equal(f.tmux('list-panes','-t','=target','-F','#{session_id}:#{pane_id}:#{pane_pid}:#{session_created}').trim(),replacement);
+  t.diagnostic(`Original-client loss outcome: ${outcome}; replacement retained: ${replacement}`);
+  void pending;
 });
 
 test('first creation on isolated socket confirms original new server',async t=>{
