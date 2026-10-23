@@ -45,7 +45,7 @@ reader and the Core package's runtime implementation. A copied skill locates its
 Core package through `ZYLOS_PACKAGE_ROOT`, the source-tree location, or the
 global npm package location. A broken explicit package root is an error.
 
-- `c4-control.js enqueue --content TEXT [--group GROUP] --target-run RUN_ID [--expected-runtime RUNTIME] [--expected-session SESSION_ID]`
+- `c4-control.js enqueue --content TEXT [--group GROUP] --target-run RUN_ID [--expected-runtime RUNTIME] [--expected-session SESSION_ID] [--json]`
 - `c4-runtime-config.js get|set|reset --group GROUP [--runtime RUNTIME] [--json]`
 - `c4-model-config.js get|set|reset --group GROUP --runtime RUNTIME [--model MODEL --effort EFFORT] [--json]`
 
@@ -53,7 +53,12 @@ Runtime/model selectors also accept `--channel COMPONENT [--session-group NAME]`
 instead of `--group`. Targeted controls with acknowledgement require
 `--ack-deadline SECONDS`; `--no-ack-suffix` omits acknowledgement. Single mode
 uses no group selector for controls. Expected runtime/session flags require
-`--target-run`. Enqueue success proves the database commit, not delivery.
+`--target-run`. Enqueue success proves the database commit, not delivery. With `--json`, enqueue
+returns one line containing `{ok:true,data:{id,supersededCount}}`; targeted
+success also includes the committed `targetBinding` object. Refusals return
+`{ok:false,error:{code,message,persisted,...}}` on stdout with a nonzero exit,
+including the observed `runId` for a target mismatch. Without `--json`, the
+existing text output is retained.
 
 Target bindings preserve the synchronous library API. A short-lived worker
 observes and revalidates the original tmux object over one connection. No
