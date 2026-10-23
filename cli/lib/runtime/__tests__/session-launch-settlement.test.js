@@ -79,11 +79,21 @@ test('adapter launch consumes real A/P01 paths and observers with script runtime
 });
 
 test('lost original client cannot bind to replacement server at the same socket',async t=>{
-  const f=await setup(t);process.kill(f.server,'SIGSTOP');let settled=false,outcome='pending';
+  const f=await setup(t);let settled=false,outcome='pending';
+  // Hold the original pane before exec independently of control-frame timing.
+  // A late authentic ACK must never let the original launch succeed before we
+  // destroy its server; the replacement is the only sleep image in this test.
+  const gate=path.join(f.dir,'release-original'),execMarker=path.join(f.dir,'original-exec');
+  const scriptFile=path.join(f.dir,'gated-launch.sh');
+  await fs.writeFile(scriptFile,`#!/bin/sh\nwhile [ ! -f '${gate}' ]; do sleep 0.02; done\nprintf exec > '${execMarker}'\nexec /bin/sleep 30\n`,{mode:0o700});
+  const identity=await executableIdentity('/bin/sleep',process.env);
+  process.kill(f.server,'SIGSTOP');
   for(let i=0;i<100;i++){const stat=await fs.readFile(`/proc/${f.server}/stat`,'utf8');if(stat.slice(stat.lastIndexOf(')')+2).split(' ')[0]==='T')break;await delay(5);}
   const stoppedStat=await fs.readFile(`/proc/${f.server}/stat`,'utf8');
   assert.equal(stoppedStat.slice(stoppedStat.lastIndexOf(')')+2).split(' ')[0],'T');
-  const pending=f.launch().then(value=>{settled=true;outcome=JSON.stringify(value);},error=>{settled=true;outcome=`${error.code}:${error.message}`;});
+  const pending=settleLaunch({tmuxName:'target',runId:'isolated-run',launchConfig:{runtime:'claude',mode:'default'},sessionGroup:null,root:f.dir,
+    script:{file:scriptFile,cleanup(){}},identity,args:['30'],tmux:{binary,socketPath:path.join(f.dir,'socket'),configFile:'/dev/null'},noticeMs:50,onNotice(){}})
+    .then(value=>{settled=true;outcome=JSON.stringify(value);},error=>{settled=true;outcome=`${error.code}:${error.message}`;});
   await delay(100);
   const children=(await fs.readFile(`/proc/${process.pid}/task/${process.pid}/children`,'utf8')).trim().split(/\s+/);
   let killed=false;
@@ -96,6 +106,12 @@ test('lost original client cannot bind to replacement server at the same socket'
   }
   assert.equal(killed,true);await delay(50);assert.equal(settled,false);
   process.kill(f.server,'SIGCONT');await delay(100);
+  const original=f.tmux('list-panes','-a','-F','#{session_name}:#{pane_pid}').trim().split('\n').find(row=>row.startsWith('target:'));
+  const originalPid=original ? Number(original.slice('target:'.length)) : null;
+  const originalExe=originalPid ? await fs.readlink(`/proc/${originalPid}/exe`) : null;
+  if(originalPid)assert.equal(originalExe,await fs.realpath('/bin/sh'),'original pane remains gated before runtime exec');
+  await assert.rejects(fs.access(execMarker),{code:'ENOENT'});
+  assert.equal(outcome,'pending','original launch cannot succeed while exec is gated');
   f.tmux('kill-server');await delay(50);
   f.tmux('-f','/dev/null','new-session','-d','-s','target','sleep 30');
   const replacement=f.tmux('list-panes','-t','=target','-F','#{session_id}:#{pane_id}:#{pane_pid}:#{session_created}').trim();
@@ -105,7 +121,8 @@ test('lost original client cannot bind to replacement server at the same socket'
   // The separate proxy matrix exercises an actually severed output transport.
   assert.ok(outcome==='pending'||outcome.startsWith('LAUNCH_FAILED:'),`Unexpected settlement: ${outcome}`);
   assert.equal(f.tmux('list-panes','-t','=target','-F','#{session_id}:#{pane_id}:#{pane_pid}:#{session_created}').trim(),replacement);
-  t.diagnostic(`Original-client loss outcome: ${outcome}; replacement retained: ${replacement}`);
+  await assert.rejects(fs.access(execMarker),{code:'ENOENT'});
+  t.diagnostic(JSON.stringify({outcome,originalPid,originalExe,originalExecBlocked:true,replacementRetained:replacement}));
   void pending;
 });
 

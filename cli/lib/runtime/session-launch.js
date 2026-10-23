@@ -29,7 +29,8 @@ export function settleLaunch({tmuxName,runId,launchConfig,sessionGroup,root,scri
   if (tmux.socketPath && tmux.socketName) { script.cleanup(); throw new TypeError('Choose one tmux socket'); }
   // Observe F2 in the creation command itself. A second control reply can be
   // lost after creation has already committed, leaving a live launch pending.
-  const equal = (key,value) => `#{==:#{${key}},${formatLiteral(value)}}`;
+  // The literal modifier also bypasses tmux style handling for #[...].
+  const equal = (key,value) => `#{==:#{${key}},#{l:${formatLiteral(value)}}}`;
   const format = ['#{session_id}','#{pane_id}','#{pane_pid}','#{session_created}',
     equal('ZYLOS_RUN_ID',runId),equal('ZYLOS_MODEL_CONFIG',JSON.stringify(launchConfig)),
     equal('ZYLOS_SESSION_GROUP',sessionGroup ?? '')].join('\t');
