@@ -10,7 +10,7 @@ const driver=fileURLToPath(new URL('../../../test/helpers/public-reader-driver.j
 async function fixture(t,{server=true}={}) {
   const dir=await fs.mkdtemp(path.join(os.tmpdir(),'p02-public-reader-'));
   const socket=path.join(dir,'private.sock');
-  const env={...process.env,TMUX_TMPDIR:dir,TMUX:`${socket},0,0`,ZYLOS_DIR:dir,P02_PARSER_FIXTURE:'1'};
+  const env={...process.env,TMUX_TMPDIR:dir,TMUX:`${socket},0,0`,ZYLOS_DIR:dir};
   const tmux=(...args)=>execFileSync('tmux',['-S',socket,...args],{encoding:'utf8',stdio:['ignore','pipe','pipe'],env}).trim();
   if(server) tmux('-f','/dev/null','new-session','-d','-s','zylos-group-origin','-e','ZYLOS_RUN_ID=r1','-e','ZYLOS_MODEL_CONFIG={"runtime":"claude","mode":"default"}','sleep','120');
   t.after(async()=>{if(server) try{tmux('kill-server');}catch{} await fs.rm(dir,{recursive:true,force:true});});
@@ -36,7 +36,10 @@ test('public no-server observation is absent and status not_running without serv
   const state=call('readSessionState',[null,{freshnessMs:5000}]); assert.equal(state.value.status.reason,'not_running');
   assert.equal(state.value.usage.reason,'not_running');
   assert.equal((await fs.readdir(dir)).some(name=>name.startsWith('tmux-')),false);
-  assert.equal(call('resolveTargetRuntime',[null]).error.code,'DEPENDENCY_UNAVAILABLE');
+  // The explicit parser-only fixture has no resolver; the real provider fails
+  // closed while its strict F1 reader has not been connected.
+  assert.equal(call('resolveTargetRuntime',[null]).error.code,
+    process.env.P02_PARSER_FIXTURE === '1' ? 'DEPENDENCY_UNAVAILABLE' : 'CONFIG_UNREADABLE');
 });
 test('public errors cross worker boundary without promises',async t=>{
   const {call}=await fixture(t,{server:false});
