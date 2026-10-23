@@ -61,7 +61,7 @@ test('adapter launch consumes real A/P01 paths and observers with script runtime
   const {SessionAdapter}=await import('../session-adapter.js');
   class Adapter extends SessionAdapter {get runtimeId(){return 'claude';}}
   const command=path.join(f.dir,'runtime');
-  await fs.writeFile(command,`#!${process.execPath}\nif(process.argv.includes('--help')) { console.log(' --model MODEL --effort EFFORT '); } else { setInterval(()=>{},1000); }\n`,{mode:0o700});
+  await fs.writeFile(command,`#!${process.execPath}\nif(process.argv.includes('--help')) { console.log(' --model MODEL --effort EFFORT '); } else if(process.argv[2]==='auth' && process.argv[3]==='status') { console.log('{\"loggedIn\":false}'); } else { setInterval(()=>{},1000); }\n`,{mode:0o700});
   const adapter=new Adapter({root:f.dir,paths,dependencies:deps,env:{...process.env,CLAUDE_BIN:command},tmux:{binary,socketPath:path.join(f.dir,'socket'),configFile:'/dev/null'}});
   const input={sessionGroup:'telegram:g-123',runId:'actual-adapter-run',sessionMode:'multi',launchConfig:{runtime:'claude',mode:'override',model:'model with spaces',effort:'high'}};
   const result=await adapter.launch(input);

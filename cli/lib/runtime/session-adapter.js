@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { RuntimeAdapter } from './base.js';
-import { adapterError, runtimeExecutable, runtimeHelp, validateLaunchConfig, buildRuntimeArgs, launchEnvironment, writeSessionLaunchScript } from './session-command.js';
+import { adapterError, runtimeExecutable, runtimeHelp, validateLaunchConfig, buildRuntimeArgs, launchEnvironment, writeSessionLaunchScript, hasNativeClaudeAuth } from './session-command.js';
 import { settleLaunch, executableIdentity } from './session-launch.js';
 import { ZYLOS_DIR } from '../config.js';
 
@@ -133,11 +133,15 @@ export class SessionAdapter extends RuntimeAdapter {
       } catch (error) { if (error.code !== 'TMUX_NO_SERVER') throw error; }
       const env = this.options.env || process.env;
       const command = (this.options.runtimeExecutable || runtimeExecutable)(this.runtimeId,env);
-      const help = launchConfig?.mode === 'override' ? (this.options.runtimeHelp || runtimeHelp)(command,env) : '';
+      const help = (this.runtimeId === 'codex' || launchConfig?.mode === 'override') ? (this.options.runtimeHelp || runtimeHelp)(command,env) : '';
       validateLaunchConfig(this.runtimeId,launchConfig,help);
       if (!runId || !['single','multi'].includes(sessionMode) || (sessionMode === 'single') !== (sessionGroup === null)) throw adapterError('MODEL_CONFIG_REJECTED');
       const root = await fs.realpath(this.options.root || ZYLOS_DIR);
       const cleanEnv = launchEnvironment(root,env);
+      if (this.runtimeId === 'claude' && hasNativeClaudeAuth(command, cleanEnv)) {
+        delete cleanEnv.ANTHROPIC_API_KEY;
+        delete cleanEnv.CLAUDE_CODE_OAUTH_TOKEN;
+      }
       const identity = await executableIdentity(command, cleanEnv);
       const args = buildRuntimeArgs(this.runtimeId, launchConfig, {root, help});
       const script = writeSessionLaunchScript({command,args,env:cleanEnv,root,multi:sessionMode === 'multi'});

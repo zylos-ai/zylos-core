@@ -44,6 +44,24 @@ export function buildRuntimeArgs(runtime, config, {root, help = '', bypassPermis
   }
   return args;
 }
+/** Preserve native Claude auth precedence using the launch's isolated HOME. */
+export function hasNativeClaudeAuth(command, env) {
+  if (env.HOME && !env.CLAUDE_CONFIG_DIR) {
+    try {
+      const data = JSON.parse(fs.readFileSync(path.join(env.HOME, '.claude', '.credentials.json'), 'utf8'));
+      if (data?.claudeAiOauth?.refreshToken) return true;
+    } catch { /* Missing/unreadable credentials may still use native status. */ }
+  }
+  try {
+    const nativeEnv = { ...env };
+    delete nativeEnv.ANTHROPIC_API_KEY;
+    delete nativeEnv.CLAUDE_CODE_OAUTH_TOKEN;
+    const status = JSON.parse(execFileSync(command, ['auth', 'status'], {
+      env:nativeEnv, cwd:env.ZYLOS_DIR, encoding:'utf8', timeout:10000, killSignal:'SIGKILL', stdio:'pipe',
+    }));
+    return status?.loggedIn === true && status?.authMethod === 'claude.ai';
+  } catch { return false; }
+}
 export function launchEnvironment(root, processEnv = process.env) {
   const dotenvVars = {};
   try {
