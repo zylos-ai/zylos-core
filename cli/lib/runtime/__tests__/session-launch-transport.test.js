@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {spawn, execFileSync} from 'node:child_process';
-import {settleLaunch, executableIdentity} from '../session-launch.js';
+const {settleLaunch, executableIdentity}=await import(process.env.P02_LAUNCH_MODULE || '../session-launch.js');
 
 const delay=ms=>new Promise(r=>setTimeout(r,ms));
 const binary=process.env.TEST_TMUX_BIN || 'tmux';
@@ -29,15 +29,16 @@ fs.appendFileSync(${JSON.stringify(path.join(dir,'invocations'))},'launch\\n');
 const argv=process.argv.slice(2);if(${JSON.stringify(scenario)}==='wrong-f2'){const i=argv.indexOf('ZYLOS_RUN_ID=transport-run');argv[i]='ZYLOS_RUN_ID=incorrect';}
 const child=spawn(${JSON.stringify(binary)},argv,{stdio:['pipe','pipe','pipe']});
 let requests=[];process.stdin.on('data',data=>{requests.push(data.toString());child.stdin.write(data);});child.stdin.on('error',()=>{});child.stderr.resume();
-let buffer='',frame=[],inside=false,count=0,cut=false,panePid,execAtCut=null;
-function stop(){if(cut)return;cut=true;fs.writeFileSync(${JSON.stringify(marker)},JSON.stringify({pid:child.pid,count,requests,execAtCut}));child.kill('SIGKILL');setTimeout(()=>process.exit(0),30);}
+let buffer='',frame=[],inside=false,count=0,cut=false,panePid,execAtCut=null,forwarded=[];
+function stop(){if(cut)return;cut=true;fs.writeFileSync(${JSON.stringify(marker)},JSON.stringify({pid:child.pid,count,requests,execAtCut,forwarded}));child.kill('SIGKILL');setTimeout(()=>process.exit(0),30);}
 child.stdout.setEncoding('utf8');child.stdout.on('data',data=>{buffer+=data;let i;while((i=buffer.indexOf('\\n'))>=0){let line=buffer.slice(0,i);buffer=buffer.slice(i+1);if(cut)continue;
 if(line.startsWith('%begin ')){inside=true;frame=[line];continue;}if(inside){frame.push(line);if(!line.startsWith('%end ')&&!line.startsWith('%error '))continue;inside=false;count++;
 const s=${JSON.stringify(scenario)};if(count===1){const m=frame.join('\\n').match(/\\$(?:[0-9]+)\\t%(?:[0-9]+)\\t([0-9]+)/);if(m)panePid=Number(m[1]);}
 if(count===1&&['before-create-ack','before-ack-server-exit','before-ack-replacement'].includes(s)){stop();continue;}
 if(count===1&&s==='malformed-create-ack'){process.stdout.write(frame.map((v,j)=>j>0&&j<frame.length-1?'malformed target':v).join('\\n')+'\\n');stop();continue;}
-if(count===1&&s==='after-exec-before-env'){(async()=>{for(let n=0;n<200;n++){try{execAtCut=fs.readlinkSync('/proc/'+panePid+'/exe');if(execAtCut===${JSON.stringify(await fs.realpath('/bin/sleep'))})break;}catch{}await new Promise(r=>setTimeout(r,5));}process.stdout.write(frame.join('\\n')+'\\n');stop();})();continue;}\n
-process.stdout.write(frame.join('\\n')+'\\n');if(count===1&&s!=='after-header-before-exec'||count===2&&s==='after-header-before-exec')stop();
+if(count===1&&s==='after-exec-before-env'){const createFrame=[...frame];(async()=>{for(let n=0;n<200;n++){try{execAtCut=fs.readlinkSync('/proc/'+panePid+'/exe');if(execAtCut===${JSON.stringify(await fs.realpath('/bin/sleep'))})break;}catch{}await new Promise(r=>setTimeout(r,5));}forwarded.push(createFrame.slice(1,-1).join('\\n'));process.stdout.write(createFrame.join('\\n')+'\\n');stop();})();continue;}\n
+if(s==='after-exec-before-env')continue;
+forwarded.push(frame.slice(1,-1).join('\\n'));process.stdout.write(frame.join('\\n')+'\\n');if(count===1&&s!=='after-header-before-exec'||count===2&&s==='after-header-before-exec')stop();
 }else process.stdout.write(line+'\\n');}});child.on('close',()=>{if(!cut)process.exit(0)});
 `,{mode:0o700});
     const scriptFile=path.join(dir,'launch.sh');
@@ -50,16 +51,21 @@ process.stdout.write(frame.join('\\n')+'\\n');if(count===1&&s!=='after-header-be
     await delay(120);
     result.cutFrame=cut.count;result.initial=outcome;result.commands=cut.requests;result.execAtCut=cut.execAtCut;
     assert.ok(cut.requests.every(v=>!v.includes('new-session')&&!v.includes('set-environment')),'followups only read the original connection');
-    if(scenario==='after-exec-before-env')assert.equal(cut.execAtCut,await fs.realpath('/bin/sleep'));
+    if(scenario==='after-exec-before-env'){
+      assert.equal(cut.execAtCut,await fs.realpath('/bin/sleep'));
+      assert.equal(cut.forwarded.length,1,'exactly the creation ACK reached the caller before EOF');
+      assert.match(cut.forwarded[0],/^\$\d+\t%\d+\t/);
+      assert.doesNotMatch(cut.forwarded.join('\n'),/launch-header:/);
+    }
     result.panePid=Number(command('list-panes','-t','=target','-F','#{pane_pid}').trim());
     result.serverPid=server;
     result.sessionEnv=command('show-environment','-t','=target').split('\n').filter(v=>v.startsWith('ZYLOS_'));
     result.initialExe=await fs.readlink(`/proc/${result.panePid}/exe`);
-    assert.equal(outcome,'pending','creation ACK alone cannot replace the completion header');
+    assert.equal(outcome,scenario==='after-exec-before-env'?'success':'pending','multi completes from its creation ACK/F2 and original exec observation');
     if(['after-header-before-exec','after-create-before-env'].includes(scenario)) {
       await fs.writeFile(gate,'go');
       for(let i=0;i<100&&outcome==='pending';i++)await delay(20);
-      assert.equal(outcome,scenario==='after-header-before-exec'?'success':'pending');
+      assert.equal(outcome,'success','original ACK/F2 plus exec completes even when EOF precedes the optional header');
       result.finalExe=await fs.readlink(`/proc/${result.panePid}/exe`);
       assert.equal(result.finalExe,await fs.realpath('/bin/sleep'));
     } else if(scenario==='replacement-session') {
@@ -70,8 +76,8 @@ process.stdout.write(frame.join('\\n')+'\\n');if(count===1&&s!=='after-header-be
       assert.equal(command('list-panes','-t','=target','-F','#{pane_id}:#{pane_pid}').trim(),replacement);
       result.replacement=replacement;
     } else if(scenario==='after-exec-before-env') {
-      assert.equal(outcome,'pending');
-      await delay(150);assert.equal(outcome,'pending');
+      assert.equal(outcome,'success');
+      await delay(150);assert.equal(outcome,'success');
     } else if(['original-server-exit','replacement-server','before-ack-server-exit','before-ack-replacement'].includes(scenario)) {
       command('kill-server');await delay(80);
       if(scenario.endsWith('replacement')||scenario==='replacement-server')command('-f','/dev/null','new-session','-d','-s','target','sleep 30');
@@ -110,7 +116,7 @@ if(process.env.P02_TRANSPORT_WORKER) {
     const timer=setTimeout(()=>child.kill('SIGKILL'),10000);
     const code=await new Promise(resolve=>child.on('close',resolve));clearTimeout(timer);
     assert.equal(code,0,stderr);const record=JSON.parse(stdout.trim());t.diagnostic(JSON.stringify(record));
-    // True EOF before the completion header retains pending even with a live
-    // runtime; a delivered header plus original ACK can complete after EOF.
+    // Multi-mode needs its complete creation ACK/F2 and original exec proof.
+    // EOF or a missing optional header cannot add a new success requirement.
   });
 }

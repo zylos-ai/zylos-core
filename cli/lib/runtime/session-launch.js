@@ -76,7 +76,7 @@ export function settleLaunch({tmuxName,runId,launchConfig,sessionGroup,root,scri
         if (image.uncertain) return;
         const wanted=[identity.command,...args];
         const actual=image.argv.slice(-wanted.length);
-        if (!poisoned && headerConfirmed && environmentConfirmed && image.cwd === root && image.env.includes(`ZYLOS_RUN_ID=${runId}`) && image.env.includes(`ZYLOS_MODEL_CONFIG=${JSON.stringify(launchConfig)}`) && (sessionGroup === null ? !image.env.some(v=>v.startsWith('ZYLOS_SESSION_GROUP=')) : image.env.includes(`ZYLOS_SESSION_GROUP=${sessionGroup}`)) && image.exe === identity.executable && actual.length === wanted.length && actual.every((v,i)=>v===wanted[i])) finish();
+        if (!poisoned && (sessionGroup!==null || headerConfirmed) && environmentConfirmed && image.cwd === root && image.env.includes(`ZYLOS_RUN_ID=${runId}`) && image.env.includes(`ZYLOS_MODEL_CONFIG=${JSON.stringify(launchConfig)}`) && (sessionGroup === null ? !image.env.some(v=>v.startsWith('ZYLOS_SESSION_GROUP=')) : image.env.includes(`ZYLOS_SESSION_GROUP=${sessionGroup}`)) && image.exe === identity.executable && actual.length === wanted.length && actual.every((v,i)=>v===wanted[i])) finish();
       } finally {checking=false;}
     }
     function bind(m) {
@@ -101,7 +101,9 @@ export function settleLaunch({tmuxName,runId,launchConfig,sessionGroup,root,scri
       send(['display-message','-p',roundEnd]);
     }
     // The post-creation header travels on the original held connection. It
-    // gates success, not mutation admission, and does not authorize reconnect.
+    // gates single-mode proof completion, not mutation admission. Multi-mode
+    // already has complete F2 in its creation ACK and needs no extra header.
+    // Neither mode reconnects.
     // Missing creation output cannot be recovered merely by searching a path:
     // another session can copy the same F2 and command, even with the same file.
     send(['display-message','-p',header+'#{pid}:#{start_time}']);
