@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { matchClaudeScreen } from '../cli/lib/heartbeat/claude-probe.js';
-import { matchCodexScreen } from '../cli/lib/heartbeat/codex-probe.js';
+import { matchClaudeScreen } from '../heartbeat/claude-probe.js';
+import { matchCodexScreen } from '../heartbeat/codex-probe.js';
 
 test('Claude reports simultaneous independent screen facts without recovery choice',()=> {
   const result=matchClaudeScreen('usage limit reached\nauthentication_error\nAPI Error: 500');

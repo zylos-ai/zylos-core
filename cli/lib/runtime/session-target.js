@@ -52,16 +52,21 @@ export async function readTargetRuntime({ connection, paneId, rawF2, readProcess
     const parsed = JSON.parse(rawF2?.ZYLOS_MODEL_CONFIG);
     if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) launchConfig = parsed;
   } catch { /* Missing or malformed F2 is deliberately not a default config. */ }
-  if (known.has(launchConfig?.runtime)) return { runtime: launchConfig.runtime, launchConfig };
-  let runtime = 'unknown';
+  if (known.has(launchConfig?.runtime)) return { runtime: launchConfig.runtime, launchConfig, runtimeObservation: 'configured' };
+  let runtime = 'unknown', runtimeObservation = 'unavailable';
   try {
     const pid = Number((await connection.command(['display-message', '-p', '-t', paneId, '#{pane_pid}'])).trim());
     const rows = await getTree();
     let layer = rows.filter(row => row.pid === pid);
     const seen = new Set();
+    if (Number.isInteger(pid) && pid > 0 && layer.length) runtimeObservation = 'absent';
     while (layer.length) {
       const matches = new Set(layer.map(row => row.name.replace(/\.exe$/, '')).filter(name => known.has(name)));
-      if (matches.size) { if (matches.size === 1) runtime = [...matches][0]; break; }
+      if (matches.size) {
+        runtimeObservation = matches.size === 1 ? 'present' : 'ambiguous';
+        if (matches.size === 1) runtime = [...matches][0];
+        break;
+      }
       const parents = new Set(layer.map(row => row.pid));
       for (const id of parents) seen.add(id);
       layer = rows.filter(row => parents.has(row.ppid) && !seen.has(row.pid));
@@ -69,8 +74,10 @@ export async function readTargetRuntime({ connection, paneId, rawF2, readProcess
   } catch (error) {
     if (error.code?.startsWith('TMUX_')) throw error;
     // An unreadable process tree is unknown, not permission to infer from config.
+    runtime = 'unknown';
+    runtimeObservation = 'unavailable';
   }
-  return { runtime, launchConfig };
+  return { runtime, launchConfig, runtimeObservation };
 }
 
 async function environment(connection, sessionId) {

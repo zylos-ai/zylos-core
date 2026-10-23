@@ -38,6 +38,6 @@ export function readRuntimeHealth(runtime) {
   if (seconds.some(key => !Number.isSafeInteger(record[key]) || record[key] < 0) || typeof record.rateLimitResetTime !== 'string' ||
       (record.rateLimitActive !== undefined && typeof record.rateLimitActive !== 'boolean')) return { unreadable: true };
   // Preserve historical evidence verbatim; only the current reason is normalized.
-  return { ...record, reason: record.health === 'ok' ? '' : safeHealthReason(record.health, record.reason),
+  return { ...record, rateLimitActive: record.rateLimitActive ?? (record.health === 'rate_limited'), reason: record.health === 'ok' ? '' : safeHealthReason(record.health, record.reason),
     publicHealth: ['recovering','down'].includes(record.health) ? 'unavailable' : record.health };
 }

@@ -4,10 +4,10 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { installParserFixture } from './helpers/p02-parser-fixture.js';
+import { installParserFixture } from '../../../../test/helpers/p02-parser-fixture.js';
 installParserFixture(['origin']);
-const { openTmuxConnection, serverGeneration } = await import('../cli/lib/runtime/tmux-connection.js');
-const { observeSessionTarget, resolveSessionTarget, revalidateSessionTarget, readTargetRuntime } = await import('../cli/lib/runtime/session-target.js');
+const { openTmuxConnection, serverGeneration } = await import('../tmux-connection.js');
+const { observeSessionTarget, resolveSessionTarget, revalidateSessionTarget, readTargetRuntime } = await import('../session-target.js');
 const ready = async () => ({ runId: 'r1', sessionId: 's1', ts: 1, startupControlIds: [] });
 async function fixture(t) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'p02-target-'));
@@ -21,7 +21,9 @@ async function fixture(t) {
 test('real control framing, exact quoting, queue, and one retained client', async t => {
   const {connection, tmux} = await fixture(t);
   const payload = "hello ' $X \\ ; end";
-  assert.equal(await connection.command(['display-message','-p',payload]), payload);
+  await connection.command(['set-buffer', '-b', 'quoting-fixture', payload]);
+  assert.equal(await connection.command(['show-buffer', '-b', 'quoting-fixture']), payload);
+  assert.equal(tmux('show-buffer', '-b', 'quoting-fixture'), payload);
   assert.deepEqual(await Promise.all(['a','b','c'].map(x => connection.command(['display-message','-p',x]))), ['a','b','c']);
   assert.match(await serverGeneration(connection), /^\d+:\d+$/);
   assert.equal(tmux('list-clients','-F','#{client_pid}').split('\n').length, 1);
@@ -73,7 +75,7 @@ test('absent server differs from unexecutable transport; missing generation reje
 test('runtime fallback uses unique shallowest name and never invents config', async () => {
   const connection={command:async()=> '10'};
   const rows=[{pid:10,ppid:1,name:'node'},{pid:11,ppid:10,name:'codex.exe'},{pid:12,ppid:11,name:'claude'}];
-  assert.deepEqual(await readTargetRuntime({connection,paneId:'%1',rawF2:{},readProcessTree:async()=> rows}),{runtime:'codex',launchConfig:null});
+  assert.deepEqual(await readTargetRuntime({connection,paneId:'%1',rawF2:{},readProcessTree:async()=> rows}),{runtime:'codex',launchConfig:null,runtimeObservation:'present'});
   rows.push({pid:13,ppid:10,name:'claude'});
   assert.equal((await readTargetRuntime({connection,paneId:'%1',rawF2:{},readProcessTree:async()=> rows})).runtime,'unknown');
   assert.equal((await readTargetRuntime({connection,paneId:'%1',rawF2:{ZYLOS_MODEL_CONFIG:'{"runtime":"claude"}'},readProcessTree:async()=> {throw Error('must not run');}})).runtime,'claude');
@@ -120,4 +122,31 @@ test('command timeout closes held client and never accepts a retry', async t => 
   await assert.rejects(connection.command(['display-message','-p','blocked']),{code:'TMUX_UNAVAILABLE',cause:'timeout'});
   assert.equal(connection.closed,true);
   await assert.rejects(connection.command(['display-message','-p','must not replay']),{code:'TMUX_UNAVAILABLE'});
+});
+
+test('process observation distinguishes absence from ambiguity and unavailable scans', async () => {
+  const connection = {command:async()=> '10'};
+  const read = readProcessTree => readTargetRuntime({connection,paneId:'%1',rawF2:{},readProcessTree});
+  assert.equal((await read(async()=> [{pid:10,ppid:1,name:'sh'}])).runtimeObservation, 'absent');
+  assert.equal((await read(async()=> [])).runtimeObservation, 'unavailable');
+  assert.equal((await read(async()=> {throw Error('denied');})).runtimeObservation, 'unavailable');
+  assert.equal((await read(async()=> [{pid:10,ppid:1,name:'sh'},{pid:11,ppid:10,name:'claude'},{pid:12,ppid:10,name:'codex'}])).runtimeObservation, 'ambiguous');
+});
+test('last-session kill records exact acknowledged removal before connection close', async t => {
+  const {connection,options} = await fixture(t);
+  const target = await resolveSessionTarget(options);
+  assert.equal(connection.didAcknowledgeSessionKill(target.tmuxSessionId), false);
+  await assert.rejects(connection.command(['kill-session','-t','$999999']), {code:'TMUX_COMMAND_FAILED'});
+  assert.equal(connection.didAcknowledgeSessionKill('$999999'), false);
+  await connection.command(['kill-session','-t',target.tmuxSessionId]);
+  assert.equal(connection.didAcknowledgeSessionKill(target.tmuxSessionId), true);
+  await new Promise(resolve=>setTimeout(resolve,50));
+  assert.equal(connection.closed,true);
+  assert.equal(connection.didAcknowledgeSessionKill(target.tmuxSessionId),true);
+});
+test('generic disconnect never implies acknowledged session removal', async t => {
+  const {connection,options} = await fixture(t);
+  const target = await resolveSessionTarget(options);
+  connection.close();
+  assert.equal(connection.didAcknowledgeSessionKill(target.tmuxSessionId), false);
 });

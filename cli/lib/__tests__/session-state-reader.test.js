@@ -69,12 +69,17 @@ test('F10 projection retains historical evidence and never rewrites input',()=>{
  try{
   assert.deepEqual(readRuntimeHealth('claude'),{missing:true});
   const base={v:1,runtime:'claude',health:'recovering',reason:'historical-private-diagnostic',updatedAt:100,hook:{lastError:'old reason'},groups:{'lark:x':{reason:'old reason'}},pendingNotice:{reason:'old reason'},unavailableSince:0,cooldownUntil:0,recoveringStartedAt:0,lastUserMessageRecoveryAt:0,restartFailureCount:0,lastRecoveryAt:0,lastDownCheckAt:0,rateLimitResetTime:''};
-  for(const health of ['recovering','down','ok']){
+  for(const health of ['recovering','down','ok','rate_limited','auth_failed','unavailable']){
    put(file,{...base,health});const bytes=fs.readFileSync(file);const result=readRuntimeHealth('claude');
-   assert.equal(result.publicHealth,health==='ok'?'ok':'unavailable');assert.equal(result.health,health);
+   assert.equal(result.publicHealth,['recovering','down'].includes(health)?'unavailable':health);assert.equal(result.health,health);assert.equal(result.rateLimitActive,health==='rate_limited');
    assert.deepEqual(result.hook,base.hook);assert.deepEqual(result.groups,base.groups);assert.deepEqual(result.pendingNotice,base.pendingNotice);
    assert.deepEqual(fs.readFileSync(file),bytes);if(health==='ok')assert.equal(result.reason,'');
   }
+  for(const rateLimitActive of [true,false]) {
+   put(file,{...base,health:'auth_failed',rateLimitActive});const bytes=fs.readFileSync(file);
+   assert.equal(readRuntimeHealth('claude').rateLimitActive,rateLimitActive);assert.deepEqual(fs.readFileSync(file),bytes);
+  }
+  put(file,{...base,rateLimitActive:'true'});assert.deepEqual(readRuntimeHealth('claude'),{unreadable:true});
   put(file,{...base,v:2});assert.deepEqual(readRuntimeHealth('claude'),{unreadable:true});
   put(file,'{broken');assert.deepEqual(readRuntimeHealth('claude'),{unreadable:true});
  }finally{if(old===undefined)delete process.env.ZYLOS_DIR;else process.env.ZYLOS_DIR=old;f.clean();}

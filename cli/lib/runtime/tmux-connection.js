@@ -19,6 +19,7 @@ export async function openTmuxConnection({ socketPath, socketName, sessionName, 
   let initialResolve, initialReject;
   const initial = new Promise((resolve, reject) => { initialResolve = resolve; initialReject = reject; });
   let startupTimer;
+  const acknowledgedSessionKills = new Set();
   const fatal = (error) => {
     if (dead) return;
     dead = true;
@@ -54,7 +55,13 @@ export async function openTmuxConnection({ socketPath, socketName, sessionName, 
           } else initialResolve();
           initialResolve = null;
         } else if (pending) {
-          const p = pending; pending = null; clearTimeout(p.timer); error ? p.reject(error) : p.resolve(result);
+          const p = pending; pending = null; clearTimeout(p.timer);
+          // A successful kill of an exact object ID is positive removal evidence,
+          // even when killing the final session immediately closes this client.
+          if (!error && p.argv.length === 3 && p.argv[0] === 'kill-session' && p.argv[1] === '-t' && /^\$\d+$/.test(p.argv[2])) {
+            acknowledgedSessionKills.add(p.argv[2]);
+          }
+          error ? p.reject(error) : p.resolve(result);
         }
         continue;
       }
@@ -64,16 +71,18 @@ export async function openTmuxConnection({ socketPath, socketName, sessionName, 
   });
   const connection = {
     get closed() { return dead; },
+    didAcknowledgeSessionKill(sessionId) { return acknowledgedSessionKills.has(sessionId); },
     command(argv) {
-      let command;
+      let command, commandArgv;
       try {
         if (!Array.isArray(argv) || !argv.length) throw new TypeError('Expected tmux argv');
-        command = argv.map(quote).join(' ') + '\n';
+        commandArgv = [...argv];
+        command = commandArgv.map(quote).join(' ') + '\n';
       } catch (error) { return Promise.reject(error); }
       const result = queue.then(() => {
         if (dead) throw tmuxError('TMUX_UNAVAILABLE', 'tmux connection is closed', 'error');
         return new Promise((resolve, reject) => {
-          pending = { resolve, reject, timer: setTimeout(() => fatal(tmuxError('TMUX_UNAVAILABLE', 'tmux command timed out', 'timeout')), timeoutMs) };
+          pending = { argv: commandArgv, resolve, reject, timer: setTimeout(() => fatal(tmuxError('TMUX_UNAVAILABLE', 'tmux command timed out', 'timeout')), timeoutMs) };
           child.stdin.write(command);
         });
       });

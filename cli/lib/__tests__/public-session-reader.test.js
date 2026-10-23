@@ -5,8 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-const bootstrap=fileURLToPath(new URL('./helpers/public-reader-bootstrap.js',import.meta.url));
-const driver=fileURLToPath(new URL('./helpers/public-reader-driver.js',import.meta.url));
+const bootstrap=fileURLToPath(new URL('../../../test/helpers/public-reader-bootstrap.js',import.meta.url));
+const driver=fileURLToPath(new URL('../../../test/helpers/public-reader-driver.js',import.meta.url));
 async function fixture(t,{server=true}={}) {
   const dir=await fs.mkdtemp(path.join(os.tmpdir(),'p02-public-reader-'));
   const socket=path.join(dir,'private.sock');
