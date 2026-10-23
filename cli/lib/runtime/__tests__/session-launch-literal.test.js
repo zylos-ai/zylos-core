@@ -22,7 +22,7 @@ for (const sessionGroup of [null,'telegram:literal']) for (const model of models
       assert.equal(validateLaunchConfig('claude',config,' --model MODEL --effort EFFORT '),true);
       const actual=mismatch?{...config,model:model+'-different'}:config;
       const proxy=path.join(dir,'proxy.mjs'),calls=path.join(dir,'calls');
-      await fs.writeFile(proxy,`#!${process.execPath}\nimport {spawn} from 'node:child_process';import fs from 'node:fs';\nconst args=process.argv.slice(2);const i=args.findIndex(v=>v.startsWith('ZYLOS_MODEL_CONFIG='));args[i]=${JSON.stringify('ZYLOS_MODEL_CONFIG='+JSON.stringify(actual))};fs.appendFileSync(${JSON.stringify(calls)},'create\\n');const child=spawn(${JSON.stringify(binary)},args,{stdio:['pipe','inherit','inherit']});process.stdin.on('data',d=>{fs.appendFileSync(${JSON.stringify(calls)},'extra-request\\n');child.stdin.write(d)});child.stdin.on('error',()=>{});child.on('close',()=>process.exit(0));\n`,{mode:0o700});
+      await fs.writeFile(proxy,`#!${process.execPath}\nimport {spawn} from 'node:child_process';import fs from 'node:fs';\nconst args=process.argv.slice(2);const i=args.findIndex(v=>v.startsWith('ZYLOS_MODEL_CONFIG='));args[i]=${JSON.stringify('ZYLOS_MODEL_CONFIG='+JSON.stringify(actual))};fs.appendFileSync(${JSON.stringify(calls)},'create\\n');const child=spawn(${JSON.stringify(binary)},args,{stdio:['pipe','inherit','inherit']});process.stdin.on('data',d=>{fs.appendFileSync(${JSON.stringify(calls)},JSON.stringify({request:d.toString()})+'\\n');child.stdin.write(d)});child.stdin.on('error',()=>{});child.on('close',()=>process.exit(0));\n`,{mode:0o700});
       script=writeSessionLaunchScript({command:'/bin/sleep',args:['20'],env:{PATH:'/usr/bin:/bin'},root:dir,multi:sessionGroup!==null});
       // Isolate session F2 rejection: keep the runtime image exactly as requested
       // even when the proxy corrupts only the tmux session environment.
@@ -46,8 +46,12 @@ for (const sessionGroup of [null,'telegram:literal']) for (const model of models
         await delay(100);assert.equal(Number(tmux('list-panes','-t','=target','-F','#{pane_pid}').trim()),pid);
       }
       assert.equal(tmux('list-panes','-t','=keeper','-F','#{pane_id}:#{pane_pid}').trim(),origin);
-      const followups=sessionGroup===null ? (mismatch ? 2 : 3) : 0;
-      assert.equal(await fs.readFile(calls,'utf8'),'create\n'+'extra-request\n'.repeat(followups));
+      const records=(await fs.readFile(calls,'utf8')).trim().split('\n');
+      assert.equal(records.filter(v=>v==='create').length,1);
+      const requests=records.filter(v=>v!=='create').map(v=>JSON.parse(v).request).join('');
+      const followups=requests.split('\n').filter(Boolean).length;
+      assert.doesNotMatch(requests,/new-session|send-keys/);
+      assert.match(requests,/launch-header:/);
       t.diagnostic(JSON.stringify({model,mismatch,sessionGroup,configValidated:true,sessionF2Exact:true,processMatchesRequested:true,outcome,oneCreation:true,followups,originUnchanged:true}));
     } finally {
       try{tmux('kill-server')}catch{}

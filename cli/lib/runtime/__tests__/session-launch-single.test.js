@@ -24,14 +24,13 @@ async function worker(scenario){
     if(scenario==='replace-hook')tmux('set-hook','-g','after-new-session','switch-client -t keeper ; kill-session -t =target ; new-session -d -s target "sleep 30"');
     if(scenario==='rename-hook')tmux('set-hook','-g','after-new-session','rename-session -t =target renamed ; new-session -d -s target "sleep 30"');
     if(scenario==='empty-after-cleanup')tmux('set-hook','-g','after-set-environment','set-environment -t =target ZYLOS_SESSION_GROUP "" ; display-message -p -- "-ZYLOS_SESSION_GROUP"');
-    const cutAt={'lost-cleanup-ack':1,'lost-target-ack':2,'lost-absence-ack':3}[scenario] || 0;
     const proxy=path.join(dir,'proxy.mjs');
     await fs.writeFile(proxy,`#!${process.execPath}\nimport {spawn} from 'node:child_process';import fs from 'node:fs';
 const child=spawn(${JSON.stringify(binary)},process.argv.slice(2),{stdio:['pipe','pipe','pipe']});
 const record=v=>fs.appendFileSync(${JSON.stringify(events)},JSON.stringify(v)+'\\n');
 record({create:true});process.stdin.on('data',d=>{record({request:d.toString()});child.stdin.write(d)});child.stdin.on('error',()=>{});child.stderr.resume();
 let buffer='',frame=[],inside=false,count=0,cut=false;
-child.stdout.setEncoding('utf8');child.stdout.on('data',data=>{buffer+=data;let i;while((i=buffer.indexOf('\\n'))>=0){const line=buffer.slice(0,i);buffer=buffer.slice(i+1);if(cut)continue;if(line.startsWith('%begin ')){frame=[line];inside=true;continue;}if(inside){frame.push(line);if(!line.startsWith('%end ')&&!line.startsWith('%error '))continue;inside=false;const control=frame[0].split(' ').at(-1)==='1';if(control)count++;record({frame,control,count});if(control&&count===${cutAt}){cut=true;child.kill('SIGKILL');setTimeout(()=>process.exit(0),20);continue;}process.stdout.write(frame.join('\\n')+'\\n');}else process.stdout.write(line+'\\n');}});child.on('close',()=>{if(!cut)process.exit(0)});
+child.stdout.setEncoding('utf8');child.stdout.on('data',data=>{buffer+=data;let i;while((i=buffer.indexOf('\\n'))>=0){const line=buffer.slice(0,i);buffer=buffer.slice(i+1);if(cut)continue;if(line.startsWith('%begin ')){frame=[line];inside=true;continue;}if(inside){frame.push(line);if(!line.startsWith('%end ')&&!line.startsWith('%error '))continue;inside=false;const control=frame[0].split(' ').at(-1)==='1';if(control)count++;record({frame,control,count});if(control&&${JSON.stringify(scenario)}==='lost-cleanup-ack'&&frame.slice(1,-1).join('\\n')==='' || control&&${JSON.stringify(scenario)}==='lost-target-ack'&&frame[1]?.startsWith('launch-proof:') || control&&${JSON.stringify(scenario)}==='lost-absence-ack'&&frame[1]==='-ZYLOS_SESSION_GROUP'){cut=true;child.kill('SIGKILL');setTimeout(()=>process.exit(0),20);continue;}process.stdout.write(frame.join('\\n')+'\\n');}else process.stdout.write(line+'\\n');}});child.on('close',()=>{if(!cut)process.exit(0)});
 `,{mode:0o700});
     script=writeSessionLaunchScript({command:'/bin/sleep',args:['20'],env:{PATH:'/usr/bin:/bin'},root:dir,multi:false});
     let outcome='pending';
@@ -75,7 +74,9 @@ child.stdout.setEncoding('utf8');child.stdout.on('data',data=>{buffer+=data;let 
     const requests=records.filter(r=>r.request).map(r=>r.request);
     assert.equal(records.filter(r=>r.create).length,1);
     assert.ok(requests.every(r=>!r.includes('new-session')&&!r.includes("'=target'")));
-    if(requests[0])assert.ok(requests[0].includes(`'${originalSession}'`));
+    const mutations=requests.join('').split('\n').filter(r=>r.includes('set-environment'));
+    assert.ok(mutations.every(r=>r.includes(`'${originalSession}'`)));
+    assert.ok(mutations.length<=1);
     console.log(JSON.stringify({scenario,outcome,originalSession,originalPane,originalRuntimeClean,replacement,requests,originUnchanged:true,globalUnchanged:true}));
   }finally{try{tmux('kill-server')}catch{}script?.cleanup();await fs.rm(dir,{recursive:true,force:true});}
 }

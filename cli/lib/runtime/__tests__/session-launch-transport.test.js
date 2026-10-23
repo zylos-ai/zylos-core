@@ -9,7 +9,7 @@ import {settleLaunch, executableIdentity} from '../session-launch.js';
 
 const delay=ms=>new Promise(r=>setTimeout(r,ms));
 const binary=process.env.TEST_TMUX_BIN || 'tmux';
-const scenarios=['before-create-ack','after-create-before-env','after-env-before-exec','after-exec-before-env','malformed-create-ack','original-server-exit','replacement-server','before-ack-server-exit','before-ack-replacement','wrong-f2','replacement-session'];
+const scenarios=['before-create-ack','after-create-before-env','after-header-before-exec','after-exec-before-env','malformed-create-ack','original-server-exit','replacement-server','before-ack-server-exit','before-ack-replacement','wrong-f2','replacement-session'];
 
 // Multi-mode needs no single-mode tombstone commands. Every worker has a private socket and controlled sleep image. A proxy transports
 // real tmux control frames, dropping only the selected reply boundary. It neither
@@ -37,7 +37,7 @@ const s=${JSON.stringify(scenario)};if(count===1){const m=frame.join('\\n').matc
 if(count===1&&['before-create-ack','before-ack-server-exit','before-ack-replacement'].includes(s)){stop();continue;}
 if(count===1&&s==='malformed-create-ack'){process.stdout.write(frame.map((v,j)=>j>0&&j<frame.length-1?'malformed target':v).join('\\n')+'\\n');stop();continue;}
 if(count===1&&s==='after-exec-before-env'){(async()=>{for(let n=0;n<200;n++){try{execAtCut=fs.readlinkSync('/proc/'+panePid+'/exe');if(execAtCut===${JSON.stringify(await fs.realpath('/bin/sleep'))})break;}catch{}await new Promise(r=>setTimeout(r,5));}process.stdout.write(frame.join('\\n')+'\\n');stop();})();continue;}\n
-process.stdout.write(frame.join('\\n')+'\\n');if(count===1)stop();
+process.stdout.write(frame.join('\\n')+'\\n');if(count===1&&s!=='after-header-before-exec'||count===2&&s==='after-header-before-exec')stop();
 }else process.stdout.write(line+'\\n');}});child.on('close',()=>{if(!cut)process.exit(0)});
 `,{mode:0o700});
     const scriptFile=path.join(dir,'launch.sh');
@@ -49,18 +49,17 @@ process.stdout.write(frame.join('\\n')+'\\n');if(count===1)stop();
     const cut=JSON.parse(await fs.readFile(marker,'utf8'));
     await delay(120);
     result.cutFrame=cut.count;result.initial=outcome;result.commands=cut.requests;result.execAtCut=cut.execAtCut;
-    assert.ok(cut.requests.every(v=>v.includes('show-environment')&&!v.includes('new-session')));
-    assert.equal(cut.requests.length,0,'no second environment request');
+    assert.ok(cut.requests.every(v=>!v.includes('new-session')&&!v.includes('set-environment')),'followups only read the original connection');
     if(scenario==='after-exec-before-env')assert.equal(cut.execAtCut,await fs.realpath('/bin/sleep'));
     result.panePid=Number(command('list-panes','-t','=target','-F','#{pane_pid}').trim());
     result.serverPid=server;
     result.sessionEnv=command('show-environment','-t','=target').split('\n').filter(v=>v.startsWith('ZYLOS_'));
     result.initialExe=await fs.readlink(`/proc/${result.panePid}/exe`);
-    assert.equal(outcome,scenario==='after-exec-before-env'?'success':'pending');
-    if(['after-env-before-exec','after-create-before-env'].includes(scenario)) {
+    assert.equal(outcome,'pending','creation ACK alone cannot replace the completion header');
+    if(['after-header-before-exec','after-create-before-env'].includes(scenario)) {
       await fs.writeFile(gate,'go');
       for(let i=0;i<100&&outcome==='pending';i++)await delay(20);
-      assert.equal(outcome,'success');
+      assert.equal(outcome,scenario==='after-header-before-exec'?'success':'pending');
       result.finalExe=await fs.readlink(`/proc/${result.panePid}/exe`);
       assert.equal(result.finalExe,await fs.realpath('/bin/sleep'));
     } else if(scenario==='replacement-session') {
@@ -71,8 +70,8 @@ process.stdout.write(frame.join('\\n')+'\\n');if(count===1)stop();
       assert.equal(command('list-panes','-t','=target','-F','#{pane_id}:#{pane_pid}').trim(),replacement);
       result.replacement=replacement;
     } else if(scenario==='after-exec-before-env') {
-      assert.equal(outcome,'success');
-      await delay(150);assert.equal(outcome,'success');
+      assert.equal(outcome,'pending');
+      await delay(150);assert.equal(outcome,'pending');
     } else if(['original-server-exit','replacement-server','before-ack-server-exit','before-ack-replacement'].includes(scenario)) {
       command('kill-server');await delay(80);
       if(scenario.endsWith('replacement')||scenario==='replacement-server')command('-f','/dev/null','new-session','-d','-s','target','sleep 30');
@@ -111,7 +110,7 @@ if(process.env.P02_TRANSPORT_WORKER) {
     const timer=setTimeout(()=>child.kill('SIGKILL'),10000);
     const code=await new Promise(resolve=>child.on('close',resolve));clearTimeout(timer);
     assert.equal(code,0,stderr);const record=JSON.parse(stdout.trim());t.diagnostic(JSON.stringify(record));
-    // Pre-creation-ACK loss remains an open liveness defect. Complete creation
-    // frames now include F2; no second reply is needed to confirm live exec.
+    // True EOF before the completion header retains pending even with a live
+    // runtime; a delivered header plus original ACK can complete after EOF.
   });
 }
