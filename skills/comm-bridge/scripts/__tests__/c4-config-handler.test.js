@@ -65,12 +65,12 @@ test('write error remains an error and preserves existing config', t => {
   assert.throws(() => handler('runtime', { action: 'set', sessionGroup: 'chat:A', runtime: 'codex' }), { code: 'CONFIG_STORE_FAILED' });
   assert.deepEqual(store.getSessionRuntimeConfig({ sessionGroup: 'chat:A' }), { mode: 'inherit' });
 });
-test('status priority respects single, other-runtime, fence, absence, unknown, pending, applied', () => {
+test('four-state priority returns null before sampling single or non-current runtime', () => {
   const resolved = { runtime: 'claude', mode: 'default' };
   const base = { kind: 'model', runtime: 'claude', sessionMode: 'multi', resolved, observation: { hasProcess: true, identityVerified: true, ready: true, runId: 'run1', launchConfig: resolved } };
   const check = (patch, status) => assert.equal(classifyConfigRunning({ ...base, ...patch }).status, status);
-  check({ sessionMode: 'single', runtime: 'codex', fence: { reason: 'model_config' } }, 'single_native');
-  check({ runtime: 'codex', fence: { reason: 'model_config' } }, 'other_runtime');
+  assert.equal(classifyConfigRunning({ ...base, sessionMode: 'single', fence: { reason: 'model_config' } }), null);
+  assert.equal(classifyConfigRunning({ ...base, runtime: 'codex', fence: { reason: 'model_config' } }), null);
   check({ fence: { reason: 'model_config' }, observation: { hasProcess: false } }, 'pending');
   check({ observation: { hasProcess: false } }, 'not_running');
   check({ observation: { ...base.observation, identityVerified: false } }, 'unknown');
@@ -97,7 +97,51 @@ test('model wrapper reads and writes exact pairs, rejects partial replacement', 
   const request = { action: 'set', sessionGroup: 'chat:A', runtime: 'codex', model: 'm', effort: 'high' };
   assert.equal(handler('model', request).data.changed, true);
   assert.equal(handler('model', request).data.changed, false);
-  assert.equal(handler('model', request).data.running.status, 'other_runtime');
+  assert.equal(handler('model', request).data.running, null);
   assert.throws(() => handler('model', { ...request, effort: null }), { code: 'MODEL_PAIR_REQUIRED' });
   assert.equal(store.getSessionModelConfig({ sessionGroup: 'chat:A', runtime: 'codex' }).effort, 'high');
+});
+
+test('single and non-current model return mode/resolved and skip fence/process sampling', t => {
+  for (const sessionMode of ['single', 'multi']) {
+    const { store } = fixture(t);
+    const originalFence = store.getDrainFence;
+    store.getDrainFence = () => { throw new Error('must not read fence'); };
+    const handler = createConfigHandler({ store, validateComponent: () => true,
+      readSessionMode: () => sessionMode,
+      observeRunning: () => { throw new Error('must not sample process'); },
+    });
+    for (const action of ['get', 'set', 'reset']) {
+      const request = { action, sessionGroup: 'chat:A', runtime: 'codex',
+        ...(action === 'set' ? { model: 'm', effort: 'high' } : {}) };
+      const { data } = handler('model', request);
+      assert.equal(data.sessionMode, sessionMode);
+      assert.deepEqual(data.resolved, { runtime: 'claude', mode: 'default' });
+      assert.equal(data.running, null);
+      assert.equal(data.runtime, 'codex');
+      assert.ok(data.desired);
+    }
+    if (sessionMode === 'single') {
+      const { data } = handler('runtime', { action: 'get', sessionGroup: 'chat:A' });
+      assert.equal(data.sessionMode, 'single');
+      assert.deepEqual(data.resolved, { runtime: 'claude', mode: 'default' });
+      assert.equal(data.running, null);
+    }
+    store.getDrainFence = originalFence;
+  }
+});
+test('current model exposes resolved input and all four running statuses at handler boundary', t => {
+  const resolved = { runtime: 'claude', mode: 'default' };
+  for (const [observation, expected] of [
+    [{ hasProcess: false }, 'not_running'],
+    [{ hasProcess: true, identityVerified: false }, 'unknown'],
+    [{ hasProcess: true, identityVerified: true, ready: false, runId: 'run', launchConfig: resolved }, 'pending'],
+    [{ hasProcess: true, identityVerified: true, ready: true, runId: 'run', launchConfig: resolved }, 'applied'],
+  ]) {
+    const { handler } = fixture(t, { observeRunning: () => observation });
+    const { data } = handler('model', { action: 'get', sessionGroup: 'chat:A', runtime: 'claude' });
+    assert.equal(data.sessionMode, 'multi');
+    assert.deepEqual(data.resolved, resolved);
+    assert.equal(data.running.status, expected);
+  }
 });

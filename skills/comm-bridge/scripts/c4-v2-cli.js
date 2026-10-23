@@ -1,5 +1,6 @@
+import fs from 'node:fs';
 import { dataError, requireGroup } from './c4-session-group.js';
-import { formatAbsorbedPage, formatAbsorbedPart, formatAbsorbedSummary, formatQueryError } from './c4-query-format.js';
+import { formatAbsorbedPage, formatAbsorbedFull, formatAbsorbedSummary, formatQueryError, absorbedField } from './c4-query-format.js';
 
 const invalid = message => { throw dataError('INVALID_ARGS', message); };
 const integer = (value, name, minimum = 0) => {
@@ -8,26 +9,44 @@ const integer = (value, name, minimum = 0) => {
 };
 const groupScope = group => group === undefined ? '*' : requireGroup(group);
 
-// Pure adapters: no process, file, stdout or default database access. The later
-// CLI integration owns argv routing and the existing legacy text presentation.
+// Query adapters buffer output before emitting. Only explicit full-field export
+// writes a file; database access remains through the supplied store.
 export function createQueryHandlers(store) {
   return {
     absorbed(options = {}) {
-      const { runId, summary = false, id, group, scopeAfter, after, limit, field, offset, maxBytes } = options;
+      const { runId, summary = false, id, group, scopeAfter, after, limit, field, out } = options;
       if (typeof runId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(runId)) invalid('runId must be a UUID');
-      if (maxBytes !== undefined && (!Number.isInteger(maxBytes) || maxBytes < 2048 || maxBytes > 16384)) invalid('maxBytes must be between 2048 and 16384');
-      if (summary && (id !== undefined || group !== undefined || after !== undefined || limit !== undefined || field !== undefined || offset !== undefined)) invalid('Summary options cannot be mixed with page or part options');
+      const allowed = ['runId', 'summary', 'id', 'group', 'scopeAfter', 'after', 'limit', 'field', 'out', 'json'];
+      if (Object.keys(options).some(key => !allowed.includes(key))) invalid('Unexpected absorbed query argument');
+      if (summary && (id !== undefined || group !== undefined || after !== undefined || field !== undefined || out !== undefined)) invalid('Summary options cannot be mixed with page or full options');
       if (!summary && scopeAfter !== undefined) invalid('scopeAfter requires summary');
       if (scopeAfter !== undefined && scopeAfter !== '*') requireGroup(scopeAfter);
       if (id !== undefined) {
         integer(id, 'id', 1);
-        if (group !== undefined || after !== undefined || limit !== undefined) invalid('Part options cannot be mixed with page options');
-      } else if (field !== undefined || offset !== undefined) invalid('field and offset require id');
+        if (group !== undefined || after !== undefined || limit !== undefined) invalid('Full options cannot be mixed with page options');
+      } else if (field !== undefined || out !== undefined) invalid('field and out require id');
+      if (out !== undefined && (typeof out !== 'string' || !out || out.includes('\0'))) invalid('Invalid output path');
       if (group !== undefined && group !== '*') requireGroup(group);
       if (after !== undefined) integer(after, 'after');
       if (limit !== undefined) integer(limit, 'limit', 1);
       const snapshot = store.queries.readAbsorbed(runId);
-      return summary ? formatAbsorbedSummary(snapshot, options) : id !== undefined ? formatAbsorbedPart(snapshot, options) : formatAbsorbedPage(snapshot, options);
+      // Validate and encode before creating the destination; integrity errors
+      // must never publish a partial export.
+      if (out !== undefined) {
+        const value = absorbedField(snapshot, options).data;
+        const output = formatAbsorbedFull(snapshot, options);
+        let descriptor;
+        try { descriptor = fs.openSync(out, 'wx', 0o600); }
+        catch (cause) { throw dataError(cause.code === 'EEXIST' ? 'INVALID_ARGS' : 'WRITE_FAILED', 'Could not create output file', { cause }); }
+        try { fs.writeFileSync(descriptor, value, 'utf8'); fs.closeSync(descriptor); }
+        catch (cause) {
+          try { fs.closeSync(descriptor); } catch {}
+          try { fs.unlinkSync(out); } catch {}
+          throw dataError('WRITE_FAILED', 'Could not write output file', { cause });
+        }
+        return output;
+      }
+      return summary ? formatAbsorbedSummary(snapshot, options) : id !== undefined ? formatAbsorbedFull(snapshot, options) : formatAbsorbedPage(snapshot, options);
     },
     modeTransition({ runId } = {}) {
       const row = store.getModeTransition({ runId });
