@@ -35,11 +35,24 @@ function isNodeTest(file) {
   return false;
 }
 
-const testFiles = TEST_ROOTS
+const discoveredFiles = TEST_ROOTS
   .flatMap((dir) => walk(dir))
   .filter(isNodeTest)
   .sort()
   .map((file) => path.relative(ROOT, file));
+
+// Explicit paths are selected only from the normal discovery roots.
+const requested = process.argv.slice(2);
+if (requested.length === 1 && requested[0] === '--list') {
+  console.log(discoveredFiles.join('\n'));
+  process.exit(0);
+}
+const unknown = requested.filter(file => !discoveredFiles.includes(file));
+if (unknown.length) {
+  console.error(`Not a discovered Node test: ${unknown.join(', ')}`);
+  process.exit(1);
+}
+const testFiles = requested.length ? discoveredFiles.filter(file => requested.includes(file)) : discoveredFiles;
 
 if (testFiles.length === 0) {
   console.error('No Node test files found.');
