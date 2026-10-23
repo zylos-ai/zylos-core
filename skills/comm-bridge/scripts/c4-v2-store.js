@@ -1,3 +1,4 @@
+import { writeSync } from 'node:fs';
 import { composeSessionGroup, parseSessionGroup, requireGroup, validNamespace, dataError, isDataError } from './c4-session-group.js';
 import { configFunctions } from './c4-store-config.js';
 import { deliveryFunctions } from './c4-store-delivery.js';
@@ -11,9 +12,7 @@ export function createStore(database, dependencies = {}) {
   const db = typeof database === 'function' ? database : () => database;
   const now = dependencies.now ?? Date.now;
   const seconds = () => Math.floor(now() / 1000);
-  let poisoned = false;
   function connection() {
-    if (poisoned) throw dataError('DB_WRITE_FAILED', 'Connection is unusable after rollback failure', { persisted: null });
     return db();
   }
   function read(operation) {
@@ -38,11 +37,9 @@ export function createStore(database, dependencies = {}) {
     } catch (error) {
       try { c.exec('ROLLBACK'); }
       catch (rollbackError) {
-        poisoned = true;
-        error.rollbackError = rollbackError;
-        error.persisted = null;
-        try { c.close(); } catch { /* Retain the original and rollback errors. */ }
-        throw error;
+        try {
+          writeSync(2, JSON.stringify({ code: error.code ?? null, rollbackError: { code: rollbackError.code ?? null, message: rollbackError.message } }) + '\n');
+        } finally { process.exit(1); }
       }
       if (isDataError(error)) { error.persisted = []; throw error; }
       if (error.code?.startsWith('SQLITE_BUSY')) throw dataError('DB_BUSY', error.message, { cause: error });

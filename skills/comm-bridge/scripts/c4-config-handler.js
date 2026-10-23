@@ -1,4 +1,4 @@
-import { composeSessionGroup, parseSessionGroup, dataError } from './c4-session-group.js';
+import { composeSessionGroup, parseSessionGroup, validNamespace, dataError } from './c4-session-group.js';
 
 const own = (object, key) => Object.prototype.hasOwnProperty.call(object, key);
 function validateRequest(kind, request) {
@@ -64,7 +64,13 @@ export function createConfigHandler({ store, validateComponent, readSessionMode,
     if (own(request, 'sessionGroup')) {
       sessionGroup = request.sessionGroup;
       if (!parseSessionGroup(sessionGroup)) {
-        if (typeof sessionGroup === 'string' && sessionGroup.includes(':')) composeSessionGroup(sessionGroup.slice(0, sessionGroup.indexOf(':')), sessionGroup.slice(sessionGroup.indexOf(':') + 1));
+        if (typeof sessionGroup === 'string' && sessionGroup.includes(':')) {
+          const colon = sessionGroup.indexOf(':'), namespace = sessionGroup.slice(0, colon), local = sessionGroup.slice(colon + 1);
+          if (!validNamespace(namespace)) throw dataError('SESSION_GROUP_INVALID', 'Invalid namespace');
+          if (local.length > 95) throw dataError('SESSION_GROUP_TOO_LONG', `Session group name is ${local.length} chars, over the 95-char limit (got: ${JSON.stringify(local.slice(0, 32))}). Message was NOT stored. Map the conversation to a unique shorter name; do not drop the group.`);
+          const position = local.length === 0 || !/^[A-Za-z0-9]/.test(local) ? 0 : local.search(/[^A-Za-z0-9_.:-]/);
+          throw dataError('SESSION_GROUP_INVALID', `Invalid session group ${JSON.stringify(local)} at position ${position}: ${JSON.stringify(local[position] ?? '')}. Use a nonempty name starting with a letter or digit, followed by letters, digits, _, ., :, or -. Message was NOT stored; fix the component mapping, do not drop the group.`);
+        }
         throw dataError('SESSION_GROUP_INVALID', 'Invalid session group');
       }
     } else {
@@ -119,7 +125,6 @@ export async function runConfigCli(kind, argv, io = process) {
     return 0;
   } catch (error) {
     const result = { ok: false, error: { code: error.code ?? 'INTERNAL_ERROR', message: error.message, persisted: own(error, 'persisted') ? error.persisted : null } };
-    if (error.rollbackError) result.error.rollbackError = error.rollbackError.message;
     (json ? io.stdout : io.stderr).write(json ? `${JSON.stringify(result)}\n` : `Error [${result.error.code}]: ${error.message}\n`);
     return 1;
   }
