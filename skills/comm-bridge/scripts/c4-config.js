@@ -1,6 +1,6 @@
-import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import { loadCoreConfig } from './core-config-loader.js';
 
 export const POLL_INTERVAL_BASE = 1000;
 export const POLL_INTERVAL_MAX = 3000;
@@ -50,16 +50,17 @@ export const CONTENT_PREVIEW_CHARS = 100;
 
 const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
 
-// Read active runtime from config.json to dispatch to the correct tmux session.
-// Defaults to 'claude' when config is absent or runtime is unset.
-function _readConfig() {
-  try {
-    return JSON.parse(fs.readFileSync(path.join(ZYLOS_DIR, '.zylos', 'config.json'), 'utf8'));
-  } catch {
-    return {};
-  }
+// Runtime identity and status-notice customization come from one strict F1
+// snapshot. A missing file/key keeps the legacy defaults; corruption is fatal.
+const { readZylosConfigStrict } = await loadCoreConfig();
+const _configRead = readZylosConfigStrict();
+if (_configRead.state === 'error') {
+  const error = new Error(`Zylos configuration is unreadable: ${_configRead.error.message}`);
+  error.code = 'CONFIG_UNREADABLE';
+  error.cause = _configRead.error;
+  throw error;
 }
-const _cfg = _readConfig();
+const _cfg = _configRead.state === 'ok' ? _configRead.config : {};
 export const STATUS_NOTICE_CONFIG = _cfg.statusNotices ?? {};
 export const ACTIVE_RUNTIME = _cfg.runtime === 'codex' ? 'codex' : 'claude';
 export const TMUX_SESSION = ACTIVE_RUNTIME === 'codex' ? 'codex-main' : 'claude-main';

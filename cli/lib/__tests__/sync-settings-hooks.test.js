@@ -272,12 +272,15 @@ describe('syncModelCoupledNewSessionThreshold', () => {
     const result = syncModelCoupledNewSessionThreshold({
       modelBackfilled: true,
       cfg: {},
-      updateConfig: (update) => updates.push(update),
+      updateConfig: (update) => {
+        updates.push(update);
+        return { changed: true };
+      },
       log: (line) => logs.push(line),
     });
 
     assert.equal(result.changed, true);
-    assert.deepEqual(updates, [{ new_session_threshold: 30 }]);
+    assert.deepEqual(updates, [{ setIfAbsent: { new_session_threshold: 30 } }]);
     assert.deepEqual(logs, ['  + new_session_threshold: 30 (paired with model backfill)']);
   });
 
@@ -285,8 +288,9 @@ describe('syncModelCoupledNewSessionThreshold', () => {
     const result = syncModelCoupledNewSessionThreshold({
       modelBackfilled: true,
       cfg: { new_session_threshold: 70 },
-      updateConfig: () => {
-        throw new Error('should not overwrite explicit threshold');
+      updateConfig: (update) => {
+        assert.deepEqual(update, { setIfAbsent: { new_session_threshold: 30 } });
+        return { changed: false };
       },
       log: () => {
         throw new Error('should not log when threshold exists');

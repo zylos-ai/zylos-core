@@ -144,12 +144,17 @@ ok "Services started"
 # ── Step 4: Start the configured agent runtime in tmux ───────────────────────
 # Determine runtime: ZYLOS_RUNTIME env var always wins; fall back to config.json.
 if [ -z "${ZYLOS_RUNTIME:-}" ]; then
-  ZYLOS_RUNTIME=$(node -e "
-    try {
-      const c = JSON.parse(require('fs').readFileSync('${ZYLOS_DIR}/.zylos/config.json','utf8'));
-      process.stdout.write(c.runtime || 'claude');
-    } catch { process.stdout.write('claude'); }
-  " 2>/dev/null || echo "claude")
+  export ZYLOS_DIR
+  ZYLOS_RUNTIME=$(node --input-type=module -e "
+    import { pathToFileURL } from 'node:url';
+    const loaderPath = process.env.ZYLOS_DIR + '/.claude/skills/comm-bridge/scripts/core-config-loader.js';
+    const { loadCoreConfig } = await import(pathToFileURL(loaderPath).href);
+    const { readZylosConfigStrict } = await loadCoreConfig();
+    const result = readZylosConfigStrict();
+    if (result.state === 'error') throw result.error;
+    const config = result.state === 'ok' ? result.config : {};
+    process.stdout.write(config.runtime || 'claude');
+  ")
 fi
 
 step 4 "Starting ${ZYLOS_RUNTIME} agent..."

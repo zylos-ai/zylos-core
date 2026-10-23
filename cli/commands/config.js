@@ -7,7 +7,7 @@
  *   zylos config set <key> <val>  Set a config value
  */
 
-import { getZylosConfig, updateZylosConfig } from '../lib/config.js';
+import { getZylosConfig, updateZylosConfigLocked } from '../lib/config.js';
 import { switchProtocol, isCaddyAvailable } from '../lib/caddy.js';
 import { bold, dim, green, red, yellow, cyan, success, error, warn, heading } from '../lib/colors.js';
 
@@ -77,6 +77,11 @@ function getConfig(key) {
 }
 
 async function setConfig(key, value) {
+  if (key === 'session_mode') {
+    const reserved = new Error('session_mode is managed by the session cutover workflow');
+    reserved.code = 'CONFIG_KEY_RESERVED';
+    throw reserved;
+  }
   // Validate allowed values
   if (ALLOWED_VALUES[key] && !ALLOWED_VALUES[key].includes(value)) {
     console.error(red(`Invalid value for "${bold(key)}": ${value}`));
@@ -84,10 +89,8 @@ async function setConfig(key, value) {
     process.exit(1);
   }
 
-  const config = getZylosConfig();
-  const oldValue = config[key];
-
-  updateZylosConfig({ [key]: value });
+  const result = updateZylosConfigLocked({ set: { [key]: value } });
+  const oldValue = result.previous[key];
   console.log(`${bold(key)} = ${cyan(value)}${oldValue !== undefined ? ` ${dim(`(was: ${oldValue})`)}` : ''}`);
 
   // Apply side effects
@@ -121,7 +124,7 @@ async function applyProtocolChange(newProtocol, oldProtocol) {
   } else {
     console.error(`  ${error(`Failed to update Caddyfile: ${result.error}`)}`);
     // Revert config
-    updateZylosConfig({ protocol: oldProtocol || 'https' });
+    updateZylosConfigLocked({ set: { protocol: oldProtocol || 'https' } });
     console.error(`  ${dim('Config reverted.')}`);
     process.exit(1);
   }

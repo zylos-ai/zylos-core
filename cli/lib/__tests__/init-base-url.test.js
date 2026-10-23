@@ -162,11 +162,14 @@ describe('fresh install new-session threshold default', () => {
 
     const changed = seedFreshInstallNewSessionThresholdDefault({
       config: { runtime: 'claude' },
-      updateConfig: (update) => updates.push(update),
+      updateConfig: (update) => {
+        updates.push(update);
+        return { changed: true };
+      },
     });
 
     assert.equal(changed, true);
-    assert.deepEqual(updates, [{ new_session_threshold: 30 }]);
+    assert.deepEqual(updates, [{ setIfAbsent: { new_session_threshold: 30 } }]);
   });
 
   test('preserves an existing Claude threshold value', async () => {
@@ -174,8 +177,9 @@ describe('fresh install new-session threshold default', () => {
 
     const changed = seedFreshInstallNewSessionThresholdDefault({
       config: { new_session_threshold: 70 },
-      updateConfig: () => {
-        throw new Error('should not overwrite an existing threshold');
+      updateConfig: (update) => {
+        assert.deepEqual(update, { setIfAbsent: { new_session_threshold: 30 } });
+        return { changed: false };
       },
     });
 
