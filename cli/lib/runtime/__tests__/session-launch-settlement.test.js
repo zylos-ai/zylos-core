@@ -153,15 +153,16 @@ for (const group of [null,'telegram:g-123']) test(`creation ACK observes literal
   assert.equal(f.tmux('list-sessions','-F','#{session_name}').trim().split('\n').length,2);
 });
 
-test('single launch with stale global group retains uncertainty until pane exits', {timeout:5000}, async t=>{
+for (const inherited of ['inherited-stale','']) test(`single launch removes inherited group ${JSON.stringify(inherited)}`, {timeout:5000}, async t=>{
   const f=await setup(t);
-  f.tmux('set-environment','-g','ZYLOS_SESSION_GROUP','inherited-stale');
-  let outcome='pending';
-  const pending=f.launch().then(()=>{outcome='success'},e=>{outcome=e.code});
-  await delay(200);
-  assert.equal(outcome,'pending');
-  assert.equal(f.tmux('display-message','-p','-t','=target','#{ZYLOS_SESSION_GROUP}').trim(),'inherited-stale');
-  assert.doesNotMatch(f.tmux('show-environment','-t','=target'),/^ZYLOS_SESSION_GROUP=/m);
-  f.tmux('kill-session','-t','=target');await pending;
-  assert.equal(outcome,'LAUNCH_FAILED');
+  f.tmux('set-environment','-g','ZYLOS_SESSION_GROUP',inherited);
+  const origin=f.tmux('list-panes','-t','=keeper','-F','#{pane_id}:#{pane_pid}').trim();
+  const result=await f.launch();
+  assert.equal(result.tmuxName,'target');
+  assert.equal(f.tmux('show-environment','-t','=target','ZYLOS_SESSION_GROUP').trim(),'-ZYLOS_SESSION_GROUP');
+  assert.equal(f.tmux('show-environment','-g','ZYLOS_SESSION_GROUP').trim(),`ZYLOS_SESSION_GROUP=${inherited}`);
+  const pid=f.tmux('list-panes','-t','=target','-F','#{pane_pid}').trim();
+  assert.equal(await fs.readlink(`/proc/${pid}/exe`),await fs.realpath('/bin/sleep'));
+  assert.ok(!(await fs.readFile(`/proc/${pid}/environ`,'utf8')).split('\0').some(v=>v.startsWith('ZYLOS_SESSION_GROUP=')));
+  assert.equal(f.tmux('list-panes','-t','=keeper','-F','#{pane_id}:#{pane_pid}').trim(),origin);
 });

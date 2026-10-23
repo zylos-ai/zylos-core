@@ -27,8 +27,8 @@ const formatLiteral = value => String(value).replaceAll('#','##').replaceAll(','
 export function settleLaunch({tmuxName,runId,launchConfig,sessionGroup,root,script,identity,args,tmux={},noticeMs=3000,onNotice=console.warn}) {
   const socket = tmux.socketPath ? ['-S',tmux.socketPath] : tmux.socketName ? ['-L',tmux.socketName] : [];
   if (tmux.socketPath && tmux.socketName) { script.cleanup(); throw new TypeError('Choose one tmux socket'); }
-  // Observe F2 in the creation command itself. A second control reply can be
-  // lost after creation has already committed, leaving a live launch pending.
+  // Multi-mode observes F2 in the creation command itself. Single-mode also
+  // requires a session-local removal proof on this same control connection.
   // The literal modifier also bypasses tmux style handling for #[...].
   const equal = (key,value) => `#{==:#{${key}},#{l:${formatLiteral(value)}}}`;
   const format = ['#{session_id}','#{pane_id}','#{pane_pid}','#{session_created}',
@@ -46,11 +46,18 @@ export function settleLaunch({tmuxName,runId,launchConfig,sessionGroup,root,scri
     function finish(error) {
       if (settled) return;
       settled=true; clearTimeout(notice); clearInterval(interval);
-      // No mutation is outstanding on a terminal path; closing this client only
-      // detaches it. It is never used as evidence of cancellation.
+      // Creation has acknowledged before pane-exit failure or exec success.
+      // A queued tombstone can only address that original immutable session ID;
+      // it cannot create a process or touch a same-name replacement. Closing
+      // this client only detaches it, never proves cancellation.
       const complete = () => { script.cleanup(); error ? reject(error) : resolve({tmuxName,createdAt:target.createdAt}); };
       if (child.exitCode !== null || child.signalCode !== null || !child.pid) complete();
       else { child.once('close',complete); child.stdin.destroy(); child.kill(); }
+    }
+    function send(words) {
+      if (closed || settled) return;
+      try { child.stdin.write(words.map(shellQuote).join(' ')+'\n'); }
+      catch { closed=true; }
     }
     async function inspect() {
       if (checking || settled || !target) return;
@@ -85,17 +92,41 @@ export function settleLaunch({tmuxName,runId,launchConfig,sessionGroup,root,scri
         if (line.startsWith('%begin ')) {frame={id:line.slice(7),lines:[]};continue;}
         if (frame && (line.startsWith('%end ') || line.startsWith('%error '))) {
           if (line.slice(line.indexOf(' ')+1)!==frame.id) {closed=true;continue;}
-          const result=frame.lines.join('\n'),error=line.startsWith('%error '); frame=null;
+          const result=frame.lines.join('\n'),error=line.startsWith('%error '),control=frame.id.split(' ').at(-1)==='1'; frame=null;
           if (phase==='create') {
             if (error) {finish(adapterError(/duplicate session/.test(result)?'NAME_CONFLICT':'LAUNCH_FAILED',result));continue;}
             const m=result.match(/^(\$\d+)\t(%\d+)\t(\d+)\t(\d+)\t([01])\t([01])\t([01])$/);
             if (!m) {phase='unknown';continue;}
-            target={session:m[1],pane:m[2],pid:Number(m[3]),createdAt:Number(m[4])}; phase='observe';
-            // Format lookup also sees the server's inherited environment. In
-            // single mode a nonempty inherited group must not confirm success;
-            // process-env absence is checked separately below.
-            environmentConfirmed=m[5]==='1' && m[6]==='1' && m[7]==='1';
+            target={session:m[1],pane:m[2],pid:Number(m[3]),createdAt:Number(m[4])};
+            phase=sessionGroup===null ? 'remove-group' : 'observe';
+            environmentConfirmed=sessionGroup!==null && m[5]==='1' && m[6]==='1' && m[7]==='1';
+            // -e KEY does not remove inherited tmux environment. Install a
+            // session-local tombstone, always targeting the ACK's immutable ID.
+            // The generated launch script independently uses env -i so its
+            // original runtime never inherits the stale single-mode variable.
+            if (sessionGroup===null) send(['set-environment','-r','-t',target.session,'ZYLOS_SESSION_GROUP']);
             interval=setInterval(inspect,25); void inspect();
+          } else if (control && ['remove-group','prove-target','prove-absence'].includes(phase)) {
+            // Commands submitted on control stdin have flag 1; configured
+            // hooks have flag 0 and cannot impersonate these serialized ACKs.
+            // Loss/error/malformed proof never permits success or rebinding.
+            if (error) {phase='unknown';continue;}
+            if (phase==='remove-group') {
+              if (result!=='') {phase='unknown';continue;}
+              phase='prove-target';
+              // list-panes does not apply display-message's recursive strftime
+              // expansion to literal model values. Select only the original
+              // pane within the original session; never use the current target.
+              send(['list-panes','-s','-t',target.session,'-f',equal('pane_id',target.pane),'-F',format+'\t'+equal('session_name',tmuxName)]);
+            } else if (phase==='prove-target') {
+              const expected=[target.session,target.pane,target.pid,target.createdAt,1,1,1,1].join('\t');
+              if (result!==expected) {phase='unknown';continue;}
+              phase='prove-absence';
+              send(['show-environment','-t',target.session,'ZYLOS_SESSION_GROUP']);
+            } else {
+              environmentConfirmed=result==='-ZYLOS_SESSION_GROUP';
+              phase='observe';void inspect();
+            }
           }
           continue;
         }
