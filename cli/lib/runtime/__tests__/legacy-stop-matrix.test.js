@@ -77,6 +77,7 @@ test('real legacy orphan disproves pane/tree termination as historical ownership
   const f = await fixture(t);
   const script = path.join(f.dir,'orphan.mjs');
   const proof = path.join(f.dir,'proof.json');
+  const exitProof = path.join(f.dir,'middle-exit.json');
   await fs.writeFile(script, `import {spawn} from 'node:child_process';
 import {readFileSync,writeFileSync} from 'node:fs';
 const mode=process.argv[2];
@@ -91,7 +92,8 @@ if(mode === 'middle') {
  },100);
  setInterval(()=>{},1000);
 } else {
- spawn(process.execPath,[import.meta.filename,'middle'],{stdio:'ignore'});
+ const middle=spawn(process.execPath,[import.meta.filename,'middle'],{stdio:'ignore'});
+ middle.once('exit',(code,signal)=>writeFileSync(${JSON.stringify(exitProof)},JSON.stringify({pid:middle.pid,code,signal})));
  setInterval(()=>{},1000);
 }
 `);
@@ -103,10 +105,30 @@ if(mode === 'middle') {
   });
   for(let i=0;i<100;i++) {try {orphan=JSON.parse(await fs.readFile(proof,'utf8'));break;} catch {await delay(20);} }
   assert.ok(orphan,'orphan proof must be produced');
-  assert.equal(orphan.ppid,1);
+  let middleExit;
+  for(let i=0;i<100;i++) {try {middleExit=JSON.parse(await fs.readFile(exitProof,'utf8'));break;} catch {await delay(20);} }
+  assert.ok(middleExit,'original middle process exit must be observed by its parent');
+  assert.equal(middleExit.code,0);
+  assert.equal(middleExit.signal,null);
   assert.equal(orphan.runId,null);
   const pane = Number(f.command('display-message','-p','-t',`=${LEGACY_TMUX_NAMES[0]}:`,'#{pane_pid}'));
   assert.notEqual(orphan.sid,pane);
+  // Adoption may be by PID 1 or a subreaper. Prove detachment from the
+  // original pane by inspecting the current ancestor chain, not adopter ID.
+  const ancestors = [];
+  let current = orphan.pid;
+  while (current !== 0) {
+    assert.ok(!ancestors.includes(current),'process ancestry must not cycle');
+    ancestors.push(current);
+    const stat = await fs.readFile(`/proc/${current}/stat`,'utf8');
+    const fields = stat.slice(stat.lastIndexOf(')')+2).trim().split(/\s+/);
+    const parent = Number(fields[1]);
+    assert.ok(Number.isSafeInteger(parent) && parent >= 0,'readable parent identity required');
+    if (current === orphan.pid) orphan.ppid = parent;
+    current = parent;
+  }
+  assert.ok(!ancestors.includes(pane),'orphan must no longer descend from original pane');
+  assert.ok(!ancestors.includes(middleExit.pid),'orphan must no longer descend from exited middle');
   await assert.rejects(f.adapter.stop({tmuxName:LEGACY_TMUX_NAMES[0],expectedRunId:null}),{code:'STOP_UNCONFIRMED'});
   // Deliberate counterexample experiment, not adapter behavior or stop success.
   f.command('kill-session','-t',`=${LEGACY_TMUX_NAMES[0]}`);
@@ -115,5 +137,5 @@ if(mode === 'middle') {
   const stat = await fs.readFile(`/proc/${orphan.pid}/stat`,'utf8');
   assert.notEqual(stat.slice(stat.lastIndexOf(')')+2).split(' ')[0],'Z');
   assert.equal(f.snapshot('origin'),f.origin);
-  console.log('orphan-counterexample',JSON.stringify({pane, ...orphan,aliveAfterTmuxKill:true}));
+  console.log('orphan-counterexample',JSON.stringify({pane, ...orphan,middleExit,ancestors,aliveAfterTmuxKill:true}));
 });
