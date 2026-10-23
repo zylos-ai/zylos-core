@@ -1,4 +1,4 @@
-import { composeSessionGroup, parseSessionGroup, validNamespace, dataError } from './c4-session-group.js';
+import { composeSessionGroup, parseSessionGroup, validNamespace, validateGroupName, dataError } from './c4-session-group.js';
 
 const own = (object, key) => Object.prototype.hasOwnProperty.call(object, key);
 function validateRequest(kind, request) {
@@ -67,9 +67,7 @@ export function createConfigHandler({ store, validateComponent, readSessionMode,
         if (typeof sessionGroup === 'string' && sessionGroup.includes(':')) {
           const colon = sessionGroup.indexOf(':'), namespace = sessionGroup.slice(0, colon), local = sessionGroup.slice(colon + 1);
           if (!validNamespace(namespace)) throw dataError('SESSION_GROUP_INVALID', 'Invalid namespace');
-          if (local.length > 95) throw dataError('SESSION_GROUP_TOO_LONG', `Session group name is ${local.length} chars, over the 95-char limit (got: ${JSON.stringify(local.slice(0, 32))}). Message was NOT stored. Map the conversation to a unique shorter name; do not drop the group.`);
-          const position = local.length === 0 || !/^[A-Za-z0-9]/.test(local) ? 0 : local.search(/[^A-Za-z0-9_.:-]/);
-          throw dataError('SESSION_GROUP_INVALID', `Invalid session group ${JSON.stringify(local)} at position ${position}: ${JSON.stringify(local[position] ?? '')}. Use a nonempty name starting with a letter or digit, followed by letters, digits, _, ., :, or -. Message was NOT stored; fix the component mapping, do not drop the group.`);
+          validateGroupName(local);
         }
         throw dataError('SESSION_GROUP_INVALID', 'Invalid session group');
       }
