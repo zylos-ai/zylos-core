@@ -144,3 +144,20 @@ test('two connections serialize NULL enqueue and begin transition in both commit
     }
   }
 });
+
+for (const reason of ['upgrade', 'auth', 'mode_switch', 'model_config']) {
+  test(`Origin fence ${reason} accepts a run and rejects missing runs without writes`, t => {
+    const { store, db } = fixture(t, single);
+    const rows = () => db.prepare('SELECT * FROM drain_fences ORDER BY session_group').all();
+    for (const options of [{ reason }, { reason, runId: null }, { reason, runId: '' }]) {
+      assert.throws(() => store.setDrainFence('origin', options), { code: 'FENCE_INVALID' });
+      assert.deepEqual(rows(), []);
+    }
+    store.setDrainFence('origin', { reason, runId: 'origin-run' });
+    assert.deepEqual(rows(), [{ session_group: 'origin', reason, run_id: 'origin-run', created_at: NOW }]);
+    assert.deepEqual(store.getDrainFence('origin'), { sessionGroup: 'origin', reason, runId: 'origin-run', createdAt: NOW });
+    const before = rows();
+    assert.throws(() => store.setDrainFence('origin', { reason }), { code: 'FENCE_INVALID' });
+    assert.deepEqual(rows(), before, 'invalid retry preserves existing fence');
+  });
+}
