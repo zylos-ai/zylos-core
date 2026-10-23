@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { adapterError, runtimeExecutable, shellQuote } from './session-command.js';
+import { readProcessImage } from './session-process-observation.js';
 
 // Establish the final exec image before submitting any mutation. Script runtimes
 // use their shebang interpreter; the exact script and argument tail are checked.
@@ -19,20 +20,6 @@ export async function executableIdentity(command, env) {
   return {executable:await fs.realpath(executable),command};
 }
 const quote = value => `'${String(value).replaceAll("'", "'\\''")}'`;
-async function processImage(pid) {
-  try {
-    const stat = await fs.readFile(`/proc/${pid}/stat`,'utf8');
-    const fields = stat.slice(stat.lastIndexOf(')')+2).split(' ');
-    if (fields[0] === 'Z') return {gone:true};
-    const [exe,argv,env,cwd] = await Promise.all([fs.readlink(`/proc/${pid}/exe`),fs.readFile(`/proc/${pid}/cmdline`),fs.readFile(`/proc/${pid}/environ`),fs.readlink(`/proc/${pid}/cwd`)]);
-    const after = await fs.readFile(`/proc/${pid}/stat`,'utf8');
-    if (after.slice(after.lastIndexOf(')')+2).split(' ')[19] !== fields[19]) return {uncertain:true};
-    return {exe,cwd,env:env.toString().split('\0'),argv:argv.toString().split('\0').filter(Boolean),start:fields[19]};
-  } catch (error) {
-    if (['ENOENT','ESRCH'].includes(error.code)) return {gone:true};
-    return {uncertain:true};
-  }
-}
 
 /** One submitted creation, one held control connection, no cancellation fiction.
  * A notice is advisory. Loss of the connection before proof retains the promise.
@@ -66,13 +53,13 @@ export function settleLaunch({tmuxName,runId,launchConfig,sessionGroup,root,scri
       if (checking || settled || !target) return;
       checking=true;
       try {
-        const image=await processImage(target.pid);
+        const image=await readProcessImage(target.pid);
         // An acknowledged creation includes its already-forked pane PID: if
         // that process is gone it cannot later exec. Never infer this pre-ack.
         if (image.gone) { finish(adapterError('LAUNCH_FAILED','Runtime exited before exec could be confirmed')); return; }
-        if (image.uncertain) return;
-        if (start !== undefined && image.start !== start) { finish(adapterError('LAUNCH_FAILED','Original launch process exited')); return; }
+        if (start !== undefined && image.start !== undefined && image.start !== start) { finish(adapterError('LAUNCH_FAILED','Original launch process exited')); return; }
         start ??= image.start;
+        if (image.uncertain) return;
         const wanted=[identity.command,...args];
         const actual=image.argv.slice(-wanted.length);
         if (environmentConfirmed && image.cwd === root && image.env.includes(`ZYLOS_RUN_ID=${runId}`) && image.env.includes(`ZYLOS_MODEL_CONFIG=${JSON.stringify(launchConfig)}`) && (sessionGroup === null ? !image.env.some(v=>v.startsWith('ZYLOS_SESSION_GROUP=')) : image.env.includes(`ZYLOS_SESSION_GROUP=${sessionGroup}`)) && image.exe === identity.executable && actual.length === wanted.length && actual.every((v,i)=>v===wanted[i])) finish();
