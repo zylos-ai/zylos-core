@@ -16,11 +16,11 @@ async function setup(t) {
   tmux('-f','/dev/null','new-session','-d','-s','keeper','sleep 60');
   const server=Number(tmux('display-message','-p','#{pid}').trim());
   t.after(async()=>{try{process.kill(server,'SIGCONT');}catch{} try{tmux('kill-server');}catch{} for(const script of scripts) script.cleanup(); await fs.rm(dir,{recursive:true,force:true});});
-  async function launch(command='/bin/sleep',args=['30'],name='target',onNotice=()=>{}) {
+  async function launch(command='/bin/sleep',args=['30'],name='target',onNotice=()=>{},f2={}) {
     const identity=await executableIdentity(command,process.env);
-    const script=writeSessionLaunchScript({command,args,env:{PATH:'/usr/bin:/bin'},root:dir,multi:false});
+    const script=writeSessionLaunchScript({command,args,env:{PATH:'/usr/bin:/bin'},root:dir,multi:f2.sessionGroup != null});
     scripts.push(script);
-    return settleLaunch({tmuxName:name,runId:'isolated-run',launchConfig:{runtime:'claude',mode:'default'},sessionGroup:null,root:dir,script,identity,args,tmux:{binary,socketPath,configFile:'/dev/null'},noticeMs:50,onNotice});
+    return settleLaunch({tmuxName:name,runId:'isolated-run',launchConfig:{runtime:'claude',mode:'default'},sessionGroup:null,...f2,root:dir,script,identity,args,tmux:{binary,socketPath,configFile:'/dev/null'},noticeMs:50,onNotice});
   }
   return {launch,tmux,server,dir};
 }
@@ -115,4 +115,36 @@ test('first creation on isolated socket confirms original new server',async t=>{
   assert.equal(result.tmuxName,'target');
   assert.equal(f.tmux('list-sessions','-F','#{session_name}').trim(),'target');
   assert.equal(Number.isInteger(result.createdAt),true);
+});
+
+for (const group of [null,'telegram:g-123']) test(`creation ACK observes literal F2 with format syntax, group=${group}`, {timeout:5000}, async t=>{
+  const f=await setup(t);
+  if(group!==null)f.tmux('set-environment','-g','ZYLOS_SESSION_GROUP','inherited-stale');
+  const runId='literal#{pid},}';
+  const launchConfig={runtime:'claude',mode:'override',model:'literal#{pid},} \t \" \n percent%end',effort:'high'};
+  const result=await f.launch('/bin/sleep',['30'],'target',()=>{},{runId,launchConfig,sessionGroup:group});
+  assert.equal(result.tmuxName,'target');
+  const rows=f.tmux('show-environment','-t','=target').split('\n');
+  assert.ok(rows.includes(`ZYLOS_RUN_ID=${runId}`));
+  assert.ok(rows.includes(`ZYLOS_MODEL_CONFIG=${JSON.stringify(launchConfig)}`));
+  assert.equal(rows.some(v=>v.startsWith('ZYLOS_SESSION_GROUP=')),group!==null);
+  if(group!==null)assert.ok(rows.includes(`ZYLOS_SESSION_GROUP=${group}`));
+  const pid=f.tmux('list-panes','-t','=target','-F','#{pane_pid}').trim();
+  const env=(await fs.readFile(`/proc/${pid}/environ`,'utf8')).split('\0');
+  assert.equal(env.some(v=>v.startsWith('ZYLOS_SESSION_GROUP=')),group!==null);
+  await delay(100);
+  assert.equal(f.tmux('list-sessions','-F','#{session_name}').trim().split('\n').length,2);
+});
+
+test('single launch with stale global group retains uncertainty until pane exits', {timeout:5000}, async t=>{
+  const f=await setup(t);
+  f.tmux('set-environment','-g','ZYLOS_SESSION_GROUP','inherited-stale');
+  let outcome='pending';
+  const pending=f.launch().then(()=>{outcome='success'},e=>{outcome=e.code});
+  await delay(200);
+  assert.equal(outcome,'pending');
+  assert.equal(f.tmux('display-message','-p','-t','=target','#{ZYLOS_SESSION_GROUP}').trim(),'inherited-stale');
+  assert.doesNotMatch(f.tmux('show-environment','-t','=target'),/^ZYLOS_SESSION_GROUP=/m);
+  f.tmux('kill-session','-t','=target');await pending;
+  assert.equal(outcome,'LAUNCH_FAILED');
 });

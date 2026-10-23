@@ -19,7 +19,7 @@ export async function executableIdentity(command, env) {
   }
   return {executable:await fs.realpath(executable),command};
 }
-const quote = value => `'${String(value).replaceAll("'", "'\\''")}'`;
+const formatLiteral = value => String(value).replaceAll('#','##').replaceAll(',','#,').replaceAll('}','#}');
 
 /** One submitted creation, one held control connection, no cancellation fiction.
  * A notice is advisory. Loss of the connection before proof retains the promise.
@@ -27,7 +27,12 @@ const quote = value => `'${String(value).replaceAll("'", "'\\''")}'`;
 export function settleLaunch({tmuxName,runId,launchConfig,sessionGroup,root,script,identity,args,tmux={},noticeMs=3000,onNotice=console.warn}) {
   const socket = tmux.socketPath ? ['-S',tmux.socketPath] : tmux.socketName ? ['-L',tmux.socketName] : [];
   if (tmux.socketPath && tmux.socketName) { script.cleanup(); throw new TypeError('Choose one tmux socket'); }
-  const format = '#{session_id}\t#{pane_id}\t#{pane_pid}\t#{session_created}';
+  // Observe F2 in the creation command itself. A second control reply can be
+  // lost after creation has already committed, leaving a live launch pending.
+  const equal = (key,value) => `#{==:#{${key}},${formatLiteral(value)}}`;
+  const format = ['#{session_id}','#{pane_id}','#{pane_pid}','#{session_created}',
+    equal('ZYLOS_RUN_ID',runId),equal('ZYLOS_MODEL_CONFIG',JSON.stringify(launchConfig)),
+    equal('ZYLOS_SESSION_GROUP',sessionGroup ?? '')].join('\t');
   const argv = [...socket,...(tmux.configFile ? ['-f',tmux.configFile] : []),'-C','new-session','-P','-F',format,'-s',tmuxName,'-c',root,
     '-e',`ZYLOS_RUN_ID=${runId}`,'-e',`ZYLOS_MODEL_CONFIG=${JSON.stringify(launchConfig)}`,
     '-e',sessionGroup === null ? 'ZYLOS_SESSION_GROUP' : `ZYLOS_SESSION_GROUP=${sessionGroup}`,
@@ -45,9 +50,6 @@ export function settleLaunch({tmuxName,runId,launchConfig,sessionGroup,root,scri
       const complete = () => { script.cleanup(); error ? reject(error) : resolve({tmuxName,createdAt:target.createdAt}); };
       if (child.exitCode !== null || child.signalCode !== null || !child.pid) complete();
       else { child.once('close',complete); child.stdin.destroy(); child.kill(); }
-    }
-    function send(words) {
-      if (!closed) { try { child.stdin.write(words.map(quote).join(' ')+'\n'); } catch { closed=true; } }
     }
     async function inspect() {
       if (checking || settled || !target) return;
@@ -85,17 +87,14 @@ export function settleLaunch({tmuxName,runId,launchConfig,sessionGroup,root,scri
           const result=frame.lines.join('\n'),error=line.startsWith('%error '); frame=null;
           if (phase==='create') {
             if (error) {finish(adapterError(/duplicate session/.test(result)?'NAME_CONFLICT':'LAUNCH_FAILED',result));continue;}
-            const m=result.match(/^(\$\d+)\t(%\d+)\t(\d+)\t(\d+)$/m);
+            const m=result.match(/^(\$\d+)\t(%\d+)\t(\d+)\t(\d+)\t([01])\t([01])\t([01])$/);
             if (!m) {phase='unknown';continue;}
-            target={session:m[1],pane:m[2],pid:Number(m[3]),createdAt:Number(m[4])}; phase='environment';
-            send(['show-environment','-t',target.session]);
+            target={session:m[1],pane:m[2],pid:Number(m[3]),createdAt:Number(m[4])}; phase='observe';
+            // Format lookup also sees the server's inherited environment. In
+            // single mode a nonempty inherited group must not confirm success;
+            // process-env absence is checked separately below.
+            environmentConfirmed=m[5]==='1' && m[6]==='1' && m[7]==='1';
             interval=setInterval(inspect,25); void inspect();
-          } else if (phase==='environment') {
-            if (!error) {
-              const rows=result.split('\n');
-              environmentConfirmed=rows.includes(`ZYLOS_RUN_ID=${runId}`) && rows.includes(`ZYLOS_MODEL_CONFIG=${JSON.stringify(launchConfig)}`) && (sessionGroup === null ? !rows.some(v=>v.startsWith('ZYLOS_SESSION_GROUP=')) : rows.includes(`ZYLOS_SESSION_GROUP=${sessionGroup}`));
-            }
-            phase='observe';void inspect();
           }
           continue;
         }
