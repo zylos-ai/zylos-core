@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { SKILLS_DIR } from './c4-config.js';
 import * as db from './c4-db.js';
 import { createStore } from './c4-v2-store.js';
 import { createQueryHandlers } from './c4-v2-cli.js';
@@ -7,7 +7,7 @@ import { dataError, requireGroup } from './c4-session-group.js';
 import { formatQueryError, replyVia } from './c4-query-format.js';
 
 const query = createQueryHandlers(createStore(db.getDb));
-const sendPath = path.join(path.dirname(fileURLToPath(import.meta.url)), 'c4-send.js');
+const sendPath = path.join(SKILLS_DIR, 'comm-bridge', 'scripts', 'c4-send.js');
 const invalid = message => { throw dataError('INVALID_ARGS', message); };
 const number = (raw, name, min = 0) => {
   if (!/^(0|[1-9][0-9]*)$/.test(raw ?? '') || !Number.isSafeInteger(Number(raw)) || Number(raw) < min) invalid(`${name} must be an integer >= ${min}`);

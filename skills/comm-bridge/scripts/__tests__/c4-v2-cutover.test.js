@@ -10,9 +10,11 @@ import * as schema from '../c4-schema.js';
 import { guardDatabase } from '../sqlite-schema.js';
 import { createStore } from '../c4-v2-store.js';
 const scripts = fileURLToPath(new URL('../', import.meta.url));
-function fixture(t, config) {
-  const root = mkdtempSync(join(tmpdir(), 'c4-cutover-'));
-  t.after(() => rmSync(root, { recursive: true, force: true }));
+function fixture(t, config, suffix = '') {
+  const parent = mkdtempSync(join(tmpdir(), 'c4-cutover-'));
+  const root = join(parent, 'instance' + suffix);
+  mkdirSync(root);
+  t.after(() => rmSync(parent, { recursive: true, force: true }));
   mkdirSync(join(root, 'comm-bridge')); mkdirSync(join(root, '.claude/skills/chat'), { recursive: true });
   mkdirSync(join(root, '.zylos'));
   if (config !== undefined) writeFileSync(join(root, '.zylos/config.json'), JSON.stringify(config));
@@ -132,4 +134,21 @@ test('manual control expiration is independent of the unconnected live resolver'
   assert.deepEqual(row, {status:'timeout',last_error:'MANUAL_EXPIRED'});
   assert.match(cli('c4-control.js', ['expire','--id',String(id)],1).stderr,/CONTROL_NOT_ACTIVE/);
   assert.match(cli('c4-control.js', ['expire','--id','1x'],1).stderr,/INVALID_ARGS/);
+});
+
+for (const suffix of ['', " space'quote", '\nline']) test(`reply route uses instance installation path ${JSON.stringify(suffix)}`, t => {
+  const { store, cli, root } = fixture(t, undefined, suffix);
+  const row = store.insertConversation('in', 'chat', 'endpoint', 'route probe');
+  store.claimConversation(row.id); store.markDelivered(row.id);
+  const installed = join(root, '.claude/skills/comm-bridge/scripts/c4-send.js');
+  const quoted = "'" + installed.replaceAll("'", "'\\''") + "'";
+  const expected = suffix.includes('\n')
+    ? `---- reply via: 不可用（Core 路径含控制字符，见 C4 #${row.id}）`
+    : `---- reply via: node ${quoted} 'chat' 'endpoint'`;
+  for (const args of [['--unsummarized'], ['--begin', String(row.id), '--end', String(row.id)]]) {
+    const text = cli('c4-fetch.js', args).stdout;
+    assert.ok(text.includes('route probe'));
+    assert.deepEqual(text.split('\n').filter(line => line.startsWith('---- reply via:')), [expected]);
+    assert.ok(!text.includes(join(scripts, 'c4-send.js')));
+  }
 });
