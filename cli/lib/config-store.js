@@ -149,7 +149,7 @@ export function updateConfigStore(configFile, update, {
     faultInjector('before_rename', { tempFile, configFile });
     renameSync(tempFile, configFile);
     renamed = true;
-    faultInjector('after_rename', { tempFile, configFile });
+    faultInjector('after_rename', { tempFile, configFile, result });
     const dirFd = openSync(configDir, 'r');
     try {
       fsyncSync(dirFd);

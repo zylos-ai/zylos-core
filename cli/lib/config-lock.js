@@ -100,6 +100,7 @@ export function detectConfigLockCapability({ platform = process.platform, ...dep
 
 export function updateConfigWithLock({ configFile, lockFile, update, waitMs = 2000, deadlineAt }, {
   capability = detectConfigLockCapability(),
+  helper = HELPER,
   spawn = spawnSync,
   openSync = fs.openSync,
   closeSync = fs.closeSync,
@@ -119,7 +120,7 @@ export function updateConfigWithLock({ configFile, lockFile, update, waitMs = 20
   const lockFd = openSync(lockFile, 'a', 0o600);
   let child;
   try {
-    const common = [process.execPath, HELPER];
+    const common = [process.execPath, helper];
     const args = capability.backend === 'linux-flock'
       ? ['--exclusive', '--no-fork', '--conflict-exit-code', '75', '--timeout', String(budget / 1000), '/proc/self/fd/3', ...common]
       : ['-e', PERL_LOCK_SCRIPT, String(budget), ...common];
