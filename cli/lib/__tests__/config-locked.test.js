@@ -211,10 +211,12 @@ describe('config locking', () => {
     assert.deepEqual(new Set(committed.map(entry => entry.value)), new Set(results.map(result => result.value)));
 
     const byValue = new Map(results.map(result => [result.value, result]));
-    for (const entry of committed) {
+    for (const [index, entry] of committed.entries()) {
+      const expectedPrevious = index === 0 ? 'initial' : committed[index - 1].value;
       const reported = byValue.get(entry.value);
       assert.equal(reported.commitSequence, entry.sequence);
-      assert.equal(reported.previous ?? 'initial', entry.previous ?? 'initial');
+      assert.equal(entry.previous ?? 'initial', expectedPrevious);
+      assert.equal(reported.previous ?? 'initial', expectedPrevious);
     }
     assert.ok(
       results.findIndex(result => result.commitSequence === 2)
