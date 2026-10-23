@@ -40,8 +40,29 @@ available. JSON success is `{ok:true,data:...}`; JSON failure is
 `{ok:false,error:...}` with a nonzero exit code. Existing text commands retain
 human-readable output. `--` ends option parsing for positional content.
 
-This implementation does not supply the strict configuration reader or live
-session resolver/adapter. Control enqueue and runtime/model configuration remain
-pending that integration. Router, receive/send and session bootstrap cutovers are
-separate work; these commands do not establish readiness to run an existing
-instance, merge a release, or deploy.
+Control and configuration commands use the instance's strict configuration
+reader and the Core package's runtime implementation. A copied skill locates its
+Core package through `ZYLOS_PACKAGE_ROOT`, the source-tree location, or the
+global npm package location. A broken explicit package root is an error.
+
+- `c4-control.js enqueue --content TEXT [--group GROUP] --target-run RUN_ID [--expected-runtime RUNTIME] [--expected-session SESSION_ID]`
+- `c4-runtime-config.js get|set|reset --group GROUP [--runtime RUNTIME] [--json]`
+- `c4-model-config.js get|set|reset --group GROUP --runtime RUNTIME [--model MODEL --effort EFFORT] [--json]`
+
+Runtime/model selectors also accept `--channel COMPONENT [--session-group NAME]`
+instead of `--group`. Targeted controls with acknowledgement require
+`--ack-deadline SECONDS`; `--no-ack-suffix` omits acknowledgement. Single mode
+uses no group selector for controls. Expected runtime/session flags require
+`--target-run`. Enqueue success proves the database commit, not delivery.
+
+Target bindings preserve the synchronous library API. A short-lived worker
+observes and revalidates the original tmux object over one connection. No
+snapshot is assembled from separate connections. Running configuration status
+also checks actual process identity; launch metadata alone is insufficient.
+Model overrides query the real runtime executable's help and validate the pair
+before writing. This verifies the local adapter's argument contract, not that a
+remote model is available to the account.
+
+Router, receive/send and session bootstrap cutovers remain separate work. These
+commands do not establish readiness to run an existing instance, merge a
+release, or deploy.

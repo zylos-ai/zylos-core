@@ -10,6 +10,7 @@
 
 import {
   insertControl,
+  buildTargetBinding,
   getControlById,
   ackControl,
   expireTimedOutControls,
@@ -20,6 +21,7 @@ import {
 function usage() {
   console.error('Usage: c4-control.js <enqueue|get|ack|expire> [options]');
   console.error('  enqueue --content "<text>" [--priority 3] [--block-queue-until-idle] [--bypass-state] [--ack-deadline <seconds>] [--available-in <seconds>] [--no-ack-suffix]');
+  console.error('           [--group G] [--target-run ID [--expected-runtime RT] [--expected-session ID]]');
   console.error('           Legacy alias: --require-idle');
   console.error('  get --id <control_id>');
   console.error('  ack --id <control_id>');
@@ -68,6 +70,15 @@ function nowSeconds() {
 }
 
 function handleEnqueue(args) {
+  const values = new Set(['--content', '--priority', '--ack-deadline', '--available-in', '--group', '--target-run', '--expected-runtime', '--expected-session']);
+  const flags = new Set(['--block-queue-until-idle', '--require-idle', '--bypass-state', '--no-ack-suffix']);
+  const seen = new Set();
+  for (let i = 0; i < args.length; i++) {
+    const flag = args[i];
+    if (seen.has(flag) || (!values.has(flag) && !flags.has(flag))) errorExit(`invalid or duplicate option: ${flag}`);
+    seen.add(flag);
+    if (values.has(flag) && (!args[++i] || args[i].startsWith('--'))) errorExit(`missing value for ${flag}`);
+  }
   const content = parseStringArg(args, '--content');
   if (!content) {
     errorExit('--content is required');
@@ -93,7 +104,18 @@ function handleEnqueue(args) {
   const availableAt = availableInSeconds !== null ? now + availableInSeconds : null;
   const requireIdle = hasFlag(args, '--block-queue-until-idle') || hasFlag(args, '--require-idle');
 
+  const sessionGroup = parseStringArg(args, '--group');
+  const expectedRunId = parseStringArg(args, '--target-run');
+  const expectedRuntime = parseStringArg(args, '--expected-runtime');
+  const expectedSessionId = parseStringArg(args, '--expected-session');
+  if (!expectedRunId && (expectedRuntime !== null || expectedSessionId !== null)) errorExit('--expected-runtime/--expected-session require --target-run');
+  const targetBinding = expectedRunId === null ? null : buildTargetBinding({
+    sessionGroup, expectedRunId,
+    ...(expectedRuntime === null ? {} : { expectedRuntime }),
+    ...(expectedSessionId === null ? {} : { expectedSessionId }),
+  });
   const record = insertControl(content, {
+    sessionGroup, targetBinding,
     priority: priority ?? 3,
     requireIdle,
     bypassState: hasFlag(args, '--bypass-state'),
@@ -165,6 +187,7 @@ function main() {
         errorExit(`unknown command: ${command}`);
     }
   } catch (error) {
+    if (Object.hasOwn(error, 'runId')) console.error(`runId=${JSON.stringify(error.runId)}`);
     console.error(`Error [${error.code ?? 'INVALID_ARGS'}]: ${error.message}`);
     process.exitCode = 1;
   } finally {

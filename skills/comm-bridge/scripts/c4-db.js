@@ -22,14 +22,27 @@ let db = null;
 import { createStore } from './c4-v2-store.js';
 import { withDeadlineRead } from './c4-deadline-read.js';
 import { validateChannel } from './c4-validate.js';
+import { loadCoreConfig, resolveCoreConfigModule } from './core-config-loader.js';
+import { pathToFileURL } from 'node:url';
+import { observeCoreTarget } from './c4-runtime-observer.js';
+const coreConfig = await loadCoreConfig();
+const runtimeCommand = await import(pathToFileURL(path.join(path.dirname(resolveCoreConfigModule()), 'runtime/session-command.js')).href);
 export { composeSessionGroup, parseSessionGroup } from './c4-session-group.js';
 
 const store = createStore(getDb, {
   validateComponent: name => validateChannel(name, true),
-  readConfig: () => {
-    // P01-C supplies the strict P03 reader through this dependency boundary.
-    // A deployed skill is not adjacent to the npm package's cli directory.
-    throw new Error('Strict F1 reader has not been connected');
+  readConfig: coreConfig.readZylosConfigStrict,
+  resolveTarget: observeCoreTarget,
+  validateModel: (runtime, pair) => {
+    try {
+      const command = runtimeCommand.runtimeExecutable(runtime);
+      const help = runtimeCommand.runtimeHelp(command);
+      return runtimeCommand.validateLaunchConfig(runtime, { runtime, mode: 'override', ...pair }, help);
+    } catch (cause) {
+      const error = new Error('Runtime rejected model/effort configuration');
+      error.code = 'MODEL_CONFIG_INVALID'; error.cause = cause;
+      throw error;
+    }
   },
 });
 

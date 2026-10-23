@@ -107,12 +107,13 @@ export async function runConfigCli(kind, argv, io = process) {
     const { request } = parseConfigArgs(kind, argv);
     const store = await import('./c4-db.js');
     const { validateChannel } = await import('./c4-validate.js');
+    const { loadCoreConfig } = await import('./core-config-loader.js');
+    const { readSessionMode } = await loadCoreConfig();
+    const { observeCoreRunning } = await import('./c4-runtime-observer.js');
     const handler = createConfigHandler({
       store, validateComponent: name => validateChannel(name, true),
-      readSessionMode: () => {
-        throw dataError('CONFIG_UNREADABLE', 'Strict F1 reader has not been connected (P03)');
-      },
-      observeRunning: () => { throw new Error('Running observation adapter has not been connected (P02)'); },
+      readSessionMode: () => readSessionMode().mode ?? 'single',
+      observeRunning: observeCoreRunning,
     });
     const result = handler(kind, request);
     io.stdout.write(json ? `${JSON.stringify(result)}\n` : `OK: ${JSON.stringify(result.data)}\n`);
