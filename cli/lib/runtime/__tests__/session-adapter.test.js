@@ -18,7 +18,7 @@ function fixture({present = true, runId = 'r', openError, runtime = 'claude'} = 
     revalidateSessionTarget:async () => { calls.push(['validate']); },
     readTargetRuntime:async () => ({runtime}),
   };
-  const adapter = new Adapter({dependencies,findRunProcesses:async () => [],sleep:async () => {}});
+  const adapter = new Adapter({dependencies,findRunProcesses:async () => [],readOwnedProcess:async pid=>({pid,start:'100'}),sleep:async () => {}});
   return {adapter, dependencies, target, connection, calls};
 }
 const error = (code,cause) => Object.assign(new Error(code),{code,cause});
@@ -37,7 +37,7 @@ test('run mismatch does not signal or kill',async () => {
 });
 test('stop bound object and confirm descendants with TERM then KILL',async () => {
   const f=fixture(); let scans=0; const signals=[];
-  f.adapter.options.findRunProcesses=async () => ++scans < 4 ? [123] : [];
+  f.adapter.options.findRunProcesses=async () => ++scans < 4 ? [{pid:123,start:'100'}] : [];
   f.adapter.options.signalProcess=(...args) => signals.push(args);
   await f.adapter.stop({tmuxName:'x',expectedRunId:'r'});
   assert.deepEqual(signals,[[123,'SIGTERM'],[123,'SIGKILL']]);
@@ -59,7 +59,7 @@ test('null absent run logs unknown and tmux unobservable refuses',async () => {
   await assert.rejects(fixture({openError:error('TMUX_UNAVAILABLE')}).adapter.stop({tmuxName:'x',expectedRunId:'r'}),{code:'STOP_UNCONFIRMED'});
 });
 test('live descendants after escalation are not reported stopped',async () => {
-  const f=fixture({present:false}); f.adapter.options.findRunProcesses=async () => [123]; f.adapter.options.signalProcess=()=>{};
+  const f=fixture({present:false}); f.adapter.options.findRunProcesses=async () => [{pid:123,start:'100'}]; f.adapter.options.signalProcess=()=>{};
   await assert.rejects(f.adapter.stop({tmuxName:'x',expectedRunId:'r'}),{code:'STOP_UNCONFIRMED'});
 });
 test('multiline text uses a private file, revalidates before paste, cleans buffer',async () => {
@@ -128,7 +128,7 @@ test('process scan uses exact inherited run key and excludes zombies',async()=> 
   try {
     for(const [pid,value,state] of [[101,'wanted','S'],[102,'wanted-extra','S'],[103,'wanted','Z']]) {
       await fs.mkdir(path.join(dir,String(pid)));
-      await fs.writeFile(path.join(dir,String(pid),'stat'),`${pid} (fake runtime) ${state} 1 0`);
+      await fs.writeFile(path.join(dir,String(pid),'stat'),`${pid} (fake runtime) ${[state,...Array(18).fill('0'),'100'].join(' ')}`);
       await fs.writeFile(path.join(dir,String(pid),'environ'),`OTHER=value\0ZYLOS_RUN_ID=${value}\0`);
     }
     assert.deepEqual(await findRunProcesses('wanted',{procRoot:dir}),[101]);
@@ -161,7 +161,7 @@ test('acknowledged exact object kill survives connection exit, arbitrary disconn
 test('kill acknowledgement cannot replace descendant confirmation or authorize null run stop', async () => {
   const f = fixture();
   f.connection.didAcknowledgeSessionKill = () => true;
-  f.adapter.options.findRunProcesses = async () => [123];
+  f.adapter.options.findRunProcesses = async () => [{pid:123,start:'100'}];
   f.adapter.options.signalProcess = () => {};
   await assert.rejects(f.adapter.stop({tmuxName:'x',expectedRunId:'r'}), {code:'STOP_UNCONFIRMED'});
   const legacy = fixture({runId:null});

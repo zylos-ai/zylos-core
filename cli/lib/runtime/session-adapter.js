@@ -5,23 +5,18 @@ import { randomUUID } from 'node:crypto';
 import { RuntimeAdapter } from './base.js';
 import { adapterError, runtimeExecutable, runtimeHelp, validateLaunchConfig, buildRuntimeArgs, launchEnvironment, writeSessionLaunchScript, hasNativeClaudeAuth } from './session-command.js';
 import { settleLaunch, executableIdentity } from './session-launch.js';
+import { readOwnedProcess } from './session-process-ownership.js';
 import { ZYLOS_DIR } from '../config.js';
 
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 /** Enumerate only this UID; inability to inspect an owned process is not absence. */
-export async function findRunProcesses(runId, {procRoot = '/proc', platform = process.platform, uid = process.getuid?.()} = {}) {
+export async function findRunProcesses(runId, {procRoot = '/proc', platform = process.platform, uid = process.getuid?.(), withIdentity = false, filesystem = fs} = {}) {
   if (platform !== 'linux' || uid === undefined) throw new Error('Process environment scan unavailable');
   const found = [];
-  for (const entry of await fs.readdir(procRoot)) {
+  for (const entry of await filesystem.readdir(procRoot)) {
     if (!/^\d+$/.test(entry)) continue;
-    try {
-      const dir = path.join(procRoot,entry);
-      if ((await fs.stat(dir)).uid !== uid) continue;
-      const stat = await fs.readFile(`${dir}/stat`, 'utf8');
-      if (stat.slice(stat.lastIndexOf(')') + 2).startsWith('Z ')) continue;
-      const env = await fs.readFile(`${dir}/environ`);
-      if (env.toString().split('\0').includes(`ZYLOS_RUN_ID=${runId}`)) found.push(Number(entry));
-    } catch (error) { if (!['ENOENT','ESRCH'].includes(error.code)) throw error; }
+    const owned=await readOwnedProcess(Number(entry),runId,{procRoot,platform,uid,filesystem});
+    if(owned)found.push(withIdentity ? owned : owned.pid);
   }
   return found;
 }
@@ -55,9 +50,20 @@ export class SessionAdapter extends RuntimeAdapter {
   }
   async stop({tmuxName, expectedRunId}) {
     let connection, absentAtEntry = false;
-    const scan = this.options.findRunProcesses || findRunProcesses;
+    const scan = this.options.findRunProcesses || (runId=>findRunProcesses(runId,{withIdentity:true}));
+    const observe = this.options.readOwnedProcess || readOwnedProcess;
     const signal = this.options.signalProcess || ((pid, sig) => process.kill(pid, sig));
     const unknown = () => (this.options.log || console.warn)('Session ended; process state unknown');
+    const incarnations = new Map();
+    const owned = async () => {
+      const rows=await scan(expectedRunId);
+      for(const row of rows) {
+        if(!Number.isSafeInteger(row?.pid) || row.pid<=0 || !/^\d+$/.test(row.start)) throw adapterError('STOP_UNCONFIRMED','Ownership scan omitted process incarnation');
+        if(incarnations.has(row.pid) && incarnations.get(row.pid)!==row.start) throw adapterError('STOP_UNCONFIRMED','Observed PID was replaced by a different incarnation');
+        incarnations.set(row.pid,row.start);
+      }
+      return rows;
+    };
     try {
       const deps = await this.dependencies();
       let target;
@@ -70,18 +76,25 @@ export class SessionAdapter extends RuntimeAdapter {
         if (target.runId !== expectedRunId) throw adapterError('RUNID_MISMATCH');
         // Without an ownership key, killing a pane does not establish descendant exit.
         if (!expectedRunId) throw adapterError('STOP_UNCONFIRMED','Runtime ownership cannot be established');
-        await scan(expectedRunId); // refuse mutation when ownership cannot be inspected
+        await owned(); // refuse mutation when ownership cannot be inspected
         await deps.revalidateSessionTarget({connection,target});
         await connection.command(['kill-session','-t',target.tmuxSessionId]);
       }
       if (!expectedRunId) { unknown(); return; }
       let pids;
-      try { pids = await scan(expectedRunId); }
-      catch (error) { if (absentAtEntry) { unknown(); return; } throw error; }
+      try { pids = await owned(); }
+      catch (error) { if (absentAtEntry && !['STOP_UNCONFIRMED','PROCESS_IDENTITY_CHANGED'].includes(error.code)) { unknown(); return; } throw error; }
       for (const sig of ['SIGTERM','SIGKILL']) {
-        for (const pid of pids) { try { signal(pid,sig); } catch (error) { if (error.code !== 'ESRCH') throw error; } }
+        for (const original of pids) {
+          const current=await observe(original.pid,expectedRunId);
+          if(!current)continue;
+          if(current.start!==original.start) throw adapterError('STOP_UNCONFIRMED','Process incarnation changed before signal');
+          // The immediately preceding observation rejects visible PID reuse;
+          // process.kill is not an atomic identity-bound kernel operation.
+          try { signal(original.pid,sig); } catch (error) { if (error.code !== 'ESRCH') throw error; }
+        }
         if (pids.length) await (this.options.sleep || pause)(this.options.stopGraceMs ?? 200);
-        pids = await scan(expectedRunId);
+        pids = await owned();
         if (!pids.length) break;
       }
       if (pids.length) throw adapterError('STOP_UNCONFIRMED','Owned processes remain');

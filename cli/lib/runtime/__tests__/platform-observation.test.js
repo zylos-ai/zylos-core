@@ -94,7 +94,7 @@ test('partial ownership scan fails as a whole and cannot authorize present-sessi
   try {
     for (const pid of ['101', '102']) {
       await fs.mkdir(path.join(dir, pid));
-      await fs.writeFile(path.join(dir, pid, 'stat'), `${pid} (fixture) S 1`);
+      await fs.writeFile(path.join(dir, pid, 'stat'), `${pid} (fixture) ${['S',...Array(18).fill('0'),'100'].join(' ')}`);
     }
     await fs.writeFile(path.join(dir, '101', 'environ'), 'ZYLOS_RUN_ID=r\0');
     await fs.mkdir(path.join(dir, '102', 'environ')); // Deterministic EISDIR, even as root.
