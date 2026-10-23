@@ -10,6 +10,7 @@ import { CONFIG_LOCK_FALLBACK_WARNING, updateConfigWithLock } from '../config-lo
 
 const helper = fileURLToPath(new URL('./fixtures/f1-worker.js', import.meta.url));
 const loopHelper = fileURLToPath(new URL('./fixtures/f1-loop-worker.js', import.meta.url));
+const LOCK_READY = 'F1_LOCK_READY\n';
 let root;
 let configFile;
 let lockFile;
@@ -26,16 +27,48 @@ function write(config) {
   fs.writeFileSync(configFile, JSON.stringify(config) + '\n');
 }
 
-function runWorker(payload) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [helper, JSON.stringify(payload)], { stdio: ['ignore', 'pipe', 'pipe'] });
-    let stdout = '';
-    let stderr = '';
-    child.stdout.on('data', chunk => { stdout += chunk; });
-    child.stderr.on('data', chunk => { stderr += chunk; });
-    child.once('error', reject);
-    child.once('close', (status, signal) => resolve({ status, signal, stdout, stderr, child }));
+function startWorker(payload, { waitForLock = false } = {}) {
+  const child = spawn(process.execPath, [helper, JSON.stringify(payload)], { stdio: ['ignore', 'pipe', 'pipe'] });
+  let stdout = '';
+  let stderr = '';
+  let sawReady = false;
+  let resolveReady;
+  const readySignal = waitForLock
+    ? new Promise(resolve => { resolveReady = resolve; })
+    : Promise.resolve();
+  child.stdout.on('data', chunk => {
+    stdout += chunk;
+    if (waitForLock && !sawReady && stdout.includes(LOCK_READY)) {
+      sawReady = true;
+      resolveReady();
+    }
   });
+  child.stderr.on('data', chunk => { stderr += chunk; });
+  const completion = new Promise((resolve, reject) => {
+    child.once('error', reject);
+    child.once('close', (status, signal) => {
+      resolve({ status, signal, stdout: stdout.replace(LOCK_READY, ''), stderr, child });
+    });
+  });
+  const ready = waitForLock
+    ? Promise.race([
+      readySignal,
+      completion.then(({ status, signal }) => {
+        if (!sawReady) {
+          throw new Error(`lock holder exited before ready: status=${status} signal=${signal || 'none'} stderr=${stderr}`);
+        }
+      }),
+    ])
+    : readySignal;
+  return { child, ready, completion };
+}
+
+function runWorker(payload) {
+  return startWorker(payload).completion;
+}
+
+function startLockHolder(payload) {
+  return startWorker(payload, { waitForLock: true });
 }
 
 function runLoopWorker(payload, onResult) {
@@ -113,10 +146,10 @@ describe('atomic config store', () => {
 describe('config locking', () => {
   it('serializes real processes and preserves both writers', async () => {
     write({ untouched: true });
-    const a = runWorker({ configFile, lockFile, update: { set: { a: 1 } }, holdMs: 250 });
-    await new Promise(resolve => setTimeout(resolve, 50));
+    const holder = startLockHolder({ configFile, lockFile, update: { set: { a: 1 } }, holdMs: 250 });
+    await holder.ready;
     const b = runWorker({ configFile, lockFile, update: { set: { b: 2 } } });
-    const [ra, rb] = await Promise.all([a, b]);
+    const [ra, rb] = await Promise.all([holder.completion, b]);
     assert.equal(ra.status, 0, ra.stderr);
     assert.equal(rb.status, 0, rb.stderr);
     assert.deepEqual(JSON.parse(fs.readFileSync(configFile)), { untouched: true, a: 1, b: 2 });
@@ -124,19 +157,19 @@ describe('config locking', () => {
 
   it('times out without falling back when a real lock is busy', async () => {
     write({ untouched: true });
-    const holder = runWorker({ configFile, lockFile, update: { set: { a: 1 } }, holdMs: 350 });
-    await new Promise(resolve => setTimeout(resolve, 50));
+    const holder = startLockHolder({ configFile, lockFile, update: { set: { a: 1 } }, holdMs: 350 });
+    await holder.ready;
     const result = await runWorker({ configFile, lockFile, update: { set: { b: 2 } }, waitMs: 50 });
     assert.equal(result.status, 2);
     assert.match(result.stderr, /CONFIG_LOCK_TIMEOUT/);
-    await holder;
+    await holder.completion;
     assert.deepEqual(JSON.parse(fs.readFileSync(configFile)), { untouched: true, a: 1 });
   });
 
   it('enforces the default 2000ms wait budget with monotonic elapsed time', async () => {
     write({ untouched: true });
-    const holder = runWorker({ configFile, lockFile, update: { set: { a: 1 } }, holdMs: 2300 });
-    await new Promise(resolve => setTimeout(resolve, 75));
+    const holder = startLockHolder({ configFile, lockFile, update: { set: { a: 1 } }, holdMs: 2300 });
+    await holder.ready;
     const started = process.hrtime.bigint();
     const result = await runWorker({ configFile, lockFile, update: { set: { b: 2 } } });
     const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
@@ -144,13 +177,13 @@ describe('config locking', () => {
     assert.match(result.stderr, /CONFIG_LOCK_TIMEOUT/);
     assert.ok(elapsedMs >= 1850, `elapsed ${elapsedMs}ms`);
     assert.ok(elapsedMs < 2600, `elapsed ${elapsedMs}ms`);
-    await holder;
+    await holder.completion;
   });
 
   it('honors a shorter absolute deadline than waitMs', async () => {
     write({ untouched: true });
-    const holder = runWorker({ configFile, lockFile, update: { set: { a: 1 } }, holdMs: 500 });
-    await new Promise(resolve => setTimeout(resolve, 50));
+    const holder = startLockHolder({ configFile, lockFile, update: { set: { a: 1 } }, holdMs: 500 });
+    await holder.ready;
     const started = process.hrtime.bigint();
     const result = await runWorker({
       configFile,
@@ -164,7 +197,7 @@ describe('config locking', () => {
     assert.match(result.stderr, /CONFIG_LOCK_TIMEOUT/);
     assert.ok(elapsedMs >= 50, `elapsed ${elapsedMs}ms`);
     assert.ok(elapsedMs < 500, `elapsed ${elapsedMs}ms`);
-    await holder;
+    await holder.completion;
   });
 
   it('linearizes two real processes doing 100 same-key writes each', { timeout: 30_000 }, async () => {
@@ -234,19 +267,19 @@ describe('config locking', () => {
 
   it('evaluates setIfAbsent after waiting for the lock', async () => {
     write({ untouched: true });
-    const first = runWorker({
+    const first = startLockHolder({
       configFile,
       lockFile,
       update: { set: { new_session_threshold: 30 } },
       holdMs: 200,
     });
-    await new Promise(resolve => setTimeout(resolve, 50));
+    await first.ready;
     const conditional = runWorker({
       configFile,
       lockFile,
       update: { setIfAbsent: { new_session_threshold: 70 } },
     });
-    const [, second] = await Promise.all([first, conditional]);
+    const [, second] = await Promise.all([first.completion, conditional]);
     assert.equal(second.status, 0, second.stderr);
     const result = JSON.parse(second.stdout);
     assert.equal(result.changed, false);
@@ -258,18 +291,36 @@ describe('config locking', () => {
     write({ old: true });
     fs.closeSync(fs.openSync(lockFile, 'a', 0o600));
     const inode = fs.statSync(lockFile).ino;
-    const crashed = await runWorker({
+    const crashing = startLockHolder({
       configFile,
       lockFile,
       update: { set: { lost: true } },
       crashAt: 'before_rename',
     });
+    await crashing.ready;
+    const crashed = await crashing.completion;
     assert.notEqual(crashed.status, 0);
     assert.deepEqual(JSON.parse(fs.readFileSync(configFile)), { old: true });
     const recovered = await runWorker({ configFile, lockFile, update: { set: { recovered: true } } });
     assert.equal(recovered.status, 0, recovered.stderr);
     assert.equal(fs.statSync(lockFile).ino, inode);
     assert.deepEqual(JSON.parse(fs.readFileSync(configFile)), { old: true, recovered: true });
+  });
+
+  it('fails explicitly without running the writer when the holder cannot acquire a lock', async () => {
+    write({ untouched: true });
+    const holder = startLockHolder({
+      configFile,
+      lockFile,
+      update: { set: { must_not_write: true } },
+      holdMs: 1,
+      fixtureLockFailure: true,
+    });
+    await assert.rejects(holder.ready, /lock holder exited before ready/);
+    const result = await holder.completion;
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /CONFIG_TEST_LOCK_FAILED/);
+    assert.deepEqual(JSON.parse(fs.readFileSync(configFile)), { untouched: true });
   });
 
   it('uses atomic fallback with exactly one warning only when capability is absent', () => {
