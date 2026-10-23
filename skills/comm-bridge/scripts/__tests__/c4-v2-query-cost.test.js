@@ -1,60 +1,35 @@
 import Database from 'better-sqlite3';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
-import { createRequire } from 'node:module';
-import { execFileSync } from 'node:child_process';
 import { guardDatabase } from '../sqlite-schema.js';
 import * as owner from '../c4-schema.js';
 import { createStore } from '../c4-v2-store.js';
 
-test('query work remains bounded when terminal history doubles; unfiltered negative control grows', t => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'c4-query-cost-'));
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  const library = path.join(dir, 'vmstats.' + (process.platform === 'darwin' ? 'dylib' : 'so'));
-  const require = createRequire(import.meta.url);
-  const include = path.join(path.dirname(require.resolve('better-sqlite3/package.json')), 'deps/sqlite3');
-  try {
-    execFileSync('cc', [
-      ...(process.platform === 'darwin' ? ['-dynamiclib'] : ['-shared', '-fPIC']),
-      '-I', include, '-o', library, new URL('./helpers/sqlite-vm-stats.c', import.meta.url).pathname,
-    ], { stdio: 'pipe' });
-  } catch (error) {
-    t.skip('ENV: C compiler/SQLite extension headers unavailable: ' + error.message);
-    return;
+function assertIndexed(plans) {
+  const details = plans.flatMap(plan => plan.details);
+  assert.ok(details.some(detail => /USING (?:COVERING )?INDEX|USING INTEGER PRIMARY KEY/.test(detail)), 'query must have an indexed access path: ' + JSON.stringify(plans));
+  for (const detail of details) {
+    // Candidate heads are intentionally enumerated; the historical message,
+    // control and checkpoint tables must not be scanned without an index.
+    assert.doesNotMatch(detail, /\bSCAN (?:conversations|control_queue|checkpoints|c|p)\b(?! USING (?:COVERING )?INDEX)/i);
   }
-  const db = new Database(':memory:');
+}
+
+test('query plans use indexes without compiler instrumentation or native extensions', t => {
+  let trace = [], recording = false;
+  const db = new Database(':memory:', { verbose: sql => { if (recording && /^\s*(?:SELECT|WITH)\b/i.test(sql)) trace.push(sql); } });
   t.after(() => db.close());
   guardDatabase(db, owner);
-  db.loadExtension(library);
-
-  // Read the real driver's VM counter while each statement is still retained.
-  // No second SQLite build, planner inference, wall-clock threshold or SQL rewrite.
-  const stats = db.prepare('SELECT test_vm_steps(?) AS n');
-  let trace = [];
-  const proxy = new Proxy(db, {
-    get(target, key) {
-      if (key === 'prepare') return sql => {
-        const stmt = target.prepare(sql);
-        return new Proxy(stmt, {
-          get(statement, method) {
-            if (['get', 'all', 'run'].includes(method)) return (...args) => {
-              const result = statement[method](...args);
-              trace.push({ sql, steps: stats.get(sql).n });
-              return result;
-            };
-            const value = statement[method];
-            return typeof value === 'function' ? value.bind(statement) : value;
-          },
-        });
-      };
-      const value = target[key];
-      return typeof value === 'function' ? value.bind(target) : value;
-    },
-  });
-  const store = createStore(proxy);
+  const store = createStore(db);
+  function inspect(operation) {
+    trace = []; recording = true;
+    let result;
+    try { result = operation(); } finally { recording = false; }
+    const statements = [...trace];
+    const plans = statements.map(sql => ({ sql, details: db.prepare('EXPLAIN QUERY PLAN ' + sql).all().map(row => row.detail) }));
+    assertIndexed(plans);
+    return { result, plans };
+  }
   const seed = db.prepare("INSERT INTO conversations(id,direction,channel,content,status,session_group) VALUES(?,'in','test','x',?,?)");
   const controls = db.prepare("INSERT INTO control_queue(raw_content,content,status,session_group,created_at,updated_at) VALUES('x','x',?,?,1,1)");
   function history(start, end, groups) {
@@ -76,7 +51,6 @@ test('query work remains bounded when terminal history doubles; unfiltered negat
   })();
   db.prepare("INSERT INTO checkpoints(summary,end_conversation_id,session_group) VALUES('baseline',100000,'*')").run();
   function measure() {
-    const out = {};
     const operations = {
       machine: () => store.countNonTerminalControls({ machine: true }),
       group: () => store.countNonTerminalControls({ sessionGroup: 'active' }),
@@ -85,28 +59,18 @@ test('query work remains bounded when terminal history doubles; unfiltered negat
       tail: () => store.getGlobalDeliveredSince(100000, { limit: 5 }),
       range: () => store.getUnsummarizedRange('active'),
     };
-    for (const [name, operation] of Object.entries(operations)) {
-      trace = [];
-      const result = operation();
-      out[name] = { steps: trace.reduce((n, item) => n + item.steps, 0), result };
-    }
-    trace = [];
-    proxy.prepare('SELECT session_group,count(*) FROM conversations GROUP BY session_group').all();
-    out.negative = { steps: trace[0].steps };
-    return out;
+    return Object.fromEntries(Object.entries(operations).map(([name, operation]) => [name, inspect(operation)]));
   }
   const first = measure();
   history(100001, 200000, 1000);
   const second = measure();
   for (const name of ['machine', 'group', 'all', 'pending', 'tail', 'range']) {
-    assert.equal(second[name].steps, first[name].steps, name);
     assert.deepEqual(second[name].result, first[name].result, name);
   }
-  assert.ok(second.negative.steps > first.negative.steps * 1.8);
   assert.deepEqual(first.tail.result.map(row => row.id), [1000016, 1000017, 1000018, 1000019, 1000020]);
   assert.equal(first.range.result.count, 10);
   for (const name of Object.keys(first)) {
-    t.diagnostic(`${name}: ${first[name].steps} → ${second[name].steps} VM steps`);
+    t.diagnostic(JSON.stringify({ operation: name, plans: second[name].plans }));
   }
 
   // Three candidates, including a group with only a new summary. Silent heads
@@ -130,15 +94,17 @@ test('query work remains bounded when terminal history doubles; unfiltered negat
   cursor.run('summary', 1000022);
   db.prepare("INSERT INTO checkpoints(summary,end_conversation_id,session_group) VALUES('new',1000022,'summary')").run();
   function originCost() {
-    trace = [];
-    const result = store.getOriginSyncBacklog();
-    const details = trace.filter(item => !item.sql.includes('FROM group_heads h'));
-    return { result, steps: details.reduce((n, item) => n + item.steps, 0), statements: details.length };
+    const { result, plans } = inspect(() => store.getOriginSyncBacklog());
+    const details = plans.filter(item => !item.sql.includes('FROM group_heads h'));
+    return { result, plans: details, statements: details.length };
   }
   const originFirst = originCost();
   silentHeads(501, 1000);
   const originSecond = originCost();
   assert.deepEqual(originFirst.result.groups.map(group => group.sessionGroup), ['active', 'fresh', 'summary']);
   assert.deepEqual(originSecond, originFirst);
-  t.diagnostic(`Origin details excluding candidate-head scan: ${originFirst.steps} → ${originSecond.steps} VM steps`);
+  t.diagnostic(JSON.stringify({ operation: 'Origin detail queries', statements: originSecond.statements, plans: originSecond.plans }));
+  const negative = db.prepare("EXPLAIN QUERY PLAN SELECT * FROM conversations NOT INDEXED WHERE content='missing'").all().map(row => row.detail);
+  assert.ok(negative.some(detail => detail === 'SCAN conversations'));
+  assert.throws(() => assertIndexed([{ details: negative }]), assert.AssertionError, 'known full-table scan must fail the same plan assertion');
 });

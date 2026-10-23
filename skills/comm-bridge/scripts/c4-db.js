@@ -69,19 +69,6 @@ export function getDb() {
 function nowSeconds() { return Math.floor(Date.now() / 1000); }
 
 /**
- * Insert a conversation record
- * @param {string} direction - 'in' or 'out'
- * @param {string} channel - 'telegram', 'lark', 'scheduler', 'system', etc.
- * @param {string|null} endpointId - chat_id or null
- * @param {string} content - message content
- * @param {string} status - 'pending' or 'delivered' (default: 'pending' for in, 'delivered' for out)
- * @param {number} priority - 1=urgent, 2=high, 3=normal (default: 3)
- * @param {boolean} requireIdle - whether to wait for Claude idle state (default: false)
- * @returns {object} - inserted record with id
- */
-
-
-/**
  * Reserve or suppress an unhealthy/status notice cooldown.
  * Uses SQLite as the comm-bridge persistence/concurrency boundary so
  * concurrent c4-receive processes cannot both reserve the same cooldown key.
@@ -178,44 +165,6 @@ export function finishStatusNotice(claim, outcome, { now = nowSeconds(), ttl = 6
 }
 
 /**
- * Get next pending message from queue (priority-based, then FIFO)
- * @returns {object|null} - highest priority pending message or null
- */
-
-
-/**
- * Atomically claim a pending conversation message to running
- * @param {number} id - conversation id
- * @returns {boolean}
- */
-
-
-/**
- * Return a running message back to pending state
- * @param {number} id - conversation id
- */
-
-
-/**
- * Mark a message as delivered
- * @param {number} id - message id
- */
-
-
-/**
- * Increment retry count for a message
- * @param {number} id - message id
- * @returns {number} - new retry count
- */
-
-
-/**
- * Mark a message as failed
- * @param {number} id - message id
- */
-
-
-/**
  * Get count of pending messages
  * @returns {number}
  */
@@ -242,15 +191,6 @@ export function getPendingControlCount() {
 }
 
 /**
- * Insert a control queue record
- * @param {string} content - instruction content
- * @param {object} options - queue options
- * @param {boolean} [options.appendAckSuffix=true] - append "ack via" suffix to content
- * @returns {object} inserted control record
- */
-
-
-/**
  * Get one control record by id
  * @param {number} id - control id
  * @returns {object|null}
@@ -265,20 +205,6 @@ export function getControlById(id) {
     WHERE id = ?
   `).get(id) || null;
 }
-
-/**
- * Get next pending control item by priority/FIFO order
- * @param {number} current - unix seconds
- * @returns {object|null}
- */
-
-
-/**
- * Atomically claim a pending control item to running
- * @param {number} id - control id
- * @returns {boolean}
- */
-
 
 /**
  * Return a running control record back to pending
@@ -412,33 +338,6 @@ export function cleanupControlQueue(cutoff) {
   `).run(cutoff);
   return result.changes || 0;
 }
-
-/**
- * Create a checkpoint
- * @param {number} endConversationId - last conversation id covered by this checkpoint (caller determines the boundary)
- * @param {string|null} summary - checkpoint summary
- * @returns {object} - checkpoint record with id, start/end conversation ids
- */
-
-
-/**
- * Get the most recent checkpoint
- * @returns {object|null} - checkpoint record or null
- */
-
-
-/**
- * Get range and count of unsummarized conversations (after last checkpoint)
- * @returns {object} - { begin_id, end_id, count }
- */
-
-
-/**
- * Get unsummarized conversations (after last checkpoint)
- * @param {number|null} limit - if set, return only the most recent N records
- * @returns {array} - conversation records in chronological order
- */
-
 
 /**
  * Get conversations by id range (inclusive)

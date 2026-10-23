@@ -1,4 +1,4 @@
-import { composeSessionGroup, parseSessionGroup, dataError } from './c4-session-group.js';
+import { composeSessionGroup, parseSessionGroup, validNamespace, validateGroupName, dataError } from './c4-session-group.js';
 
 const own = (object, key) => Object.prototype.hasOwnProperty.call(object, key);
 function validateRequest(kind, request) {
@@ -64,7 +64,11 @@ export function createConfigHandler({ store, validateComponent, readSessionMode,
     if (own(request, 'sessionGroup')) {
       sessionGroup = request.sessionGroup;
       if (!parseSessionGroup(sessionGroup)) {
-        if (typeof sessionGroup === 'string' && sessionGroup.includes(':')) composeSessionGroup(sessionGroup.slice(0, sessionGroup.indexOf(':')), sessionGroup.slice(sessionGroup.indexOf(':') + 1));
+        if (typeof sessionGroup === 'string' && sessionGroup.includes(':')) {
+          const colon = sessionGroup.indexOf(':'), namespace = sessionGroup.slice(0, colon), local = sessionGroup.slice(colon + 1);
+          if (!validNamespace(namespace)) throw dataError('SESSION_GROUP_INVALID', 'Invalid namespace');
+          validateGroupName(local);
+        }
         throw dataError('SESSION_GROUP_INVALID', 'Invalid session group');
       }
     } else {
@@ -120,7 +124,6 @@ export async function runConfigCli(kind, argv, io = process) {
     return 0;
   } catch (error) {
     const result = { ok: false, error: { code: error.code ?? 'INTERNAL_ERROR', message: error.message, persisted: own(error, 'persisted') ? error.persisted : null } };
-    if (error.rollbackError) result.error.rollbackError = error.rollbackError.message;
     (json ? io.stdout : io.stderr).write(json ? `${JSON.stringify(result)}\n` : `Error [${result.error.code}]: ${error.message}\n`);
     return 1;
   }

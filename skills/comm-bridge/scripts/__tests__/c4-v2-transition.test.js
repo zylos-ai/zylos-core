@@ -7,7 +7,9 @@ import { createStore } from '../c4-v2-store.js';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
+import { once } from 'node:events';
+import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 function fixture(t, filename = ':memory:') {
@@ -125,4 +127,115 @@ test('calibration: atomicity assertion detects split transaction mutant', async 
     const acceptance = () => assert.deepEqual(state(), before);
     if (create === createStore) acceptance(); else assert.throws(acceptance, assert.AssertionError);
   }
+});
+
+// Snapshot every table independently; total_changes also detects writes later undone.
+function allTables(db) {
+  return Object.fromEntries(db.prepare("SELECT name FROM sqlite_schema WHERE type='table' ORDER BY name").all()
+    .map(({ name }) => [name, db.prepare(`SELECT * FROM "${name.replaceAll('"', '""')}" ORDER BY rowid`).all()]));
+}
+function assertLastCompleted(db, store, expectedId) {
+  const raw = expectedId === null ? null : db.prepare('SELECT * FROM mode_transitions WHERE run_id=?').get(expectedId);
+  const expected = raw && { ...raw, coverage_snapshot: JSON.parse(raw.coverage_snapshot), absorbed_ids: JSON.parse(raw.absorbed_ids) };
+  const before = allTables(db), changes = db.prepare('SELECT total_changes() AS n').get().n;
+  db.pragma('query_only=ON');
+  try { assert.deepEqual(store.getLastCompletedModeTransition(), expected); }
+  finally { db.pragma('query_only=OFF'); }
+  assert.deepEqual(allTables(db), before);
+  assert.equal(db.prepare('SELECT total_changes() AS n').get().n, changes);
+}
+function completedRows(db) {
+  const insert = db.prepare(`INSERT INTO mode_transitions
+    (run_id,source_mode,target_mode,phase,created_at,updated_at,cutoff,coverage_snapshot,absorbed_ids,reason)
+    VALUES(?,'single','multi',?,?,?,17,'{"*":3}','[4,8,17]',?)`);
+  return (id, created, updated, phase = 'complete') => insert.run(id, phase, created, updated, `reason-${id}`);
+}
+function checkCompletedOrdering(t, create = createStore) {
+  const { db } = fixture(t); const store = create(db), insert = completedRows(db);
+  assertLastCompleted(db, store, null);
+  insert('open', 900, 900, 'gating');
+  for (const phase of ['gating', 'converting', 'cutover']) {
+    db.prepare('UPDATE mode_transitions SET phase=?').run(phase);
+    assertLastCompleted(db, store, null);
+  }
+  insert('updated-winner', 10, 100);
+  insert('created-later', 20, 90);
+  assertLastCompleted(db, store, 'updated-winner');
+  insert('created-tie-winner', 30, 100);
+  insert('lower-created-later-rowid', 25, 100);
+  assertLastCompleted(db, store, 'created-tie-winner');
+  insert('rowid-tie-winner', 30, 100);
+  assertLastCompleted(db, store, 'rowid-tie-winner');
+}
+test('getLastCompletedModeTransition: empty/open null, updated_at/created_at/rowid descending, full row and no writes', t => {
+  checkCompletedOrdering(t);
+});
+
+async function modifiedStore(moduleName, before, after) {
+  const moduleURL = new URL(`../${moduleName}`, import.meta.url);
+  const absoluteImports = (source, base) => source.replace(/from '(\.\/[^']+)'/g, (_, path) => `from '${new URL(path, base).href}'`);
+  const source = readFileSync(moduleURL, 'utf8');
+  assert.ok(source.includes(before), 'mutation anchor must exist');
+  const mutated = absoluteImports(source.replace(before, after), moduleURL);
+  const uri = source => 'data:text/javascript;base64,' + Buffer.from(source).toString('base64');
+  const storeURL = new URL('../c4-v2-store.js', import.meta.url);
+  const storeSource = moduleName === 'c4-v2-store.js' ? mutated
+    : absoluteImports(readFileSync(storeURL, 'utf8'), storeURL).replace(moduleURL.href, uri(mutated));
+  return (await import(uri(storeSource))).createStore;
+}
+for (const order of ['created_at DESC', 'updated_at DESC,rowid DESC', 'updated_at DESC,created_at DESC,rowid ASC']) {
+  test(`getLastCompletedModeTransition calibration rejects ordering mutant: ${order}`, async t => {
+    const mutant = await modifiedStore('c4-store-transition.js', 'updated_at DESC,created_at DESC,rowid DESC', order);
+    assert.throws(() => checkCompletedOrdering(t, mutant), assert.AssertionError);
+  });
+}
+
+test('getLastCompletedModeTransition: injected driver busy maps to DB_BUSY, not null', async t => {
+  const { db } = fixture(t);
+  const mutant = await modifiedStore('c4-v2-store.js',
+    "if (error.code?.startsWith('SQLITE_BUSY')) throw dataError('DB_BUSY', error.message, { cause: error });",
+    "if (error.code?.startsWith('SQLITE_BUSY')) return null;");
+  const nativePrepare = db.prepare;
+  db.prepare = function(sql) {
+    if (sql.includes("WHERE phase='complete'")) throw Object.assign(new Error('controlled driver busy'), { code: 'SQLITE_BUSY' });
+    return nativePrepare.call(this, sql);
+  };
+  try {
+    const acceptance = create => assert.throws(() => create(db).getLastCompletedModeTransition(), { code: 'DB_BUSY', persisted: [] });
+    acceptance(createStore);
+    assert.throws(() => acceptance(mutant), assert.AssertionError);
+  } finally { db.prepare = nativePrepare; }
+});
+
+test('getLastCompletedModeTransition: NORMAL WAL reads committed row while writer holds, then new row after commit', async t => {
+  const dir = mkdtempSync(join(tmpdir(), 'c4-last-completed-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const filename = join(dir, 'db.sqlite');
+  const seed = new Database(filename); guardDatabase(seed, owner);
+  assert.equal(seed.pragma('journal_mode=WAL', { simple: true }), 'wal');
+  completedRows(seed)('committed', 10, 20); seed.close();
+  const source = `import Database from ${JSON.stringify(require.resolve('better-sqlite3'))};
+    const db = new Database(process.argv[1]);
+    db.exec("BEGIN IMMEDIATE; UPDATE mode_transitions SET reason='new-committed'");
+    process.send({ mode: db.pragma('locking_mode', { simple: true }), journal: db.pragma('journal_mode', { simple: true }), inTransaction: db.inTransaction });
+    process.on('message', () => { db.exec('COMMIT'); db.close(); process.exit(0); });`;
+  const child = spawn(process.execPath, ['--input-type=module', '-e', source, filename], { stdio: ['ignore', 'ignore', 'pipe', 'ipc'] });
+  let stderr = ''; child.stderr.on('data', data => { stderr += data; });
+  const exited = once(child, 'exit');
+  t.after(async () => { if (child.exitCode === null && child.signalCode === null) { child.kill(); await exited; } });
+  const [locked] = await Promise.race([once(child, 'message'), exited.then(() => { throw new Error(`writer exited before barrier: ${stderr}`); })]);
+  assert.deepEqual(locked, { mode: 'normal', journal: 'wal', inTransaction: true });
+  const reader = new Database(filename, { readonly: true, fileMustExist: true });
+  try {
+    const store = createStore(reader);
+    const before = allTables(reader), changes = reader.prepare('SELECT total_changes() AS n').get().n;
+    const old = store.getLastCompletedModeTransition();
+    assert.equal(old.reason, 'reason-committed');
+    assert.deepEqual(old.coverage_snapshot, { '*': 3 }); assert.deepEqual(old.absorbed_ids, [4, 8, 17]);
+    assert.deepEqual(allTables(reader), before);
+    assert.equal(reader.prepare('SELECT total_changes() AS n').get().n, changes);
+    child.send('commit'); const [code, signal] = await exited;
+    assert.equal(code, 0, stderr); assert.equal(signal, null);
+    assert.deepEqual(store.getLastCompletedModeTransition(), { ...old, reason: 'new-committed' });
+  } finally { reader.close(); }
 });

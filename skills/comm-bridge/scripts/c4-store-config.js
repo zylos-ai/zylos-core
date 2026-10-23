@@ -30,7 +30,7 @@ export function configFunctions({ read, write, snapshot, get, all, run, knownGro
   function configWrite(operation) {
     try { return write(operation); }
     catch (error) {
-      if (['DB_BUSY', 'DB_WRITE_FAILED'].includes(error.code) && error.persisted !== null && !error.rollbackError) throw dataError('CONFIG_STORE_FAILED', error.message, { cause: error });
+      if (['DB_BUSY', 'DB_WRITE_FAILED'].includes(error.code)) throw dataError('CONFIG_STORE_FAILED', error.message, { cause: error });
       throw error;
     }
   }

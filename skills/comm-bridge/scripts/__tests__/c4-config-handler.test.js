@@ -32,6 +32,18 @@ test('selectors only read existing namespaces and groups; exact values and unkno
   const result = handler('runtime', { action: 'set', componentName: 'chat', groupName: 'A', runtime: 'codex' });
   assert.equal(result.data.sessionGroup, 'chat:A'); assert.equal(result.data.running.status, 'not_running');
 });
+test('explicit group validation preserves invalid-versus-too-long errors before store access', t => {
+  const { handler, db } = fixture(t), before = db.prepare('SELECT total_changes() AS n').get().n;
+  for (const [sessionGroup, code, message] of [
+    ['BAD:' + 'a'.repeat(96), 'SESSION_GROUP_INVALID', 'Invalid namespace'],
+    ['chat:' + 'a'.repeat(96), 'SESSION_GROUP_TOO_LONG', /over the 95-char limit/],
+    ['chat:', 'SESSION_GROUP_INVALID', /at position 0/],
+    ['chat:-bad', 'SESSION_GROUP_INVALID', /at position 0/],
+    ['chat:a bad', 'SESSION_GROUP_INVALID', /at position 1/],
+    [null, 'SESSION_GROUP_INVALID', 'Invalid session group'],
+  ]) assert.throws(() => handler('runtime', { action: 'get', sessionGroup }), { code, message, persisted: [] });
+  assert.equal(db.prepare('SELECT total_changes() AS n').get().n, before);
+});
 test('saved changed and desired survive failed F1 or running observation; no fence or model loss', t => {
   for (const overrides of [{ readSessionMode: () => { throw new Error('F1 failed'); } }, { observeRunning: () => { throw new Error('P02 unconnected'); } }]) {
     const { store, handler } = fixture(t, overrides);

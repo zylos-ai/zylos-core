@@ -7,7 +7,7 @@ import path from 'node:path';
 import { guardDatabase } from '../sqlite-schema.js';
 import * as owner from '../c4-schema.js';
 import { createStore } from '../c4-v2-store.js';
-import { dataError } from '../c4-session-group.js';
+import { spawnSync } from 'node:child_process';
 
 function fixture(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'c4-transactions-'));
@@ -44,39 +44,45 @@ test('non-SQLite I/O error maps to DB_WRITE_FAILED only after confirmed rollback
   assert.equal(db.inTransaction, false); assert.deepEqual(ledger(observer), before);
 });
 
-test('rollback failure closes and poisons connection without claiming empty persistence', t => {
-  const { db, observer } = fixture(t), before = ledger(observer), rollbackError = new Error('rollback failed');
-  const failure = Object.assign(new Error('commit failed'), { code: 'EIO' });
-  const s = store(intercept(db, (sql, perform) => {
-    if (sql === 'COMMIT') throw failure;
-    if (sql === 'ROLLBACK') throw rollbackError;
-    return perform();
-  }));
-  assert.throws(() => s.insertConversation('in', 'foo', 'endpoint', 'message'), error => {
-    assert.equal(error, failure); assert.equal(error.rollbackError, rollbackError); assert.equal(error.persisted, null); return true;
+for (const kind of ['message', 'config', 'handler', 'snapshot']) {
+  test(`rollback failure exits process before reporting or serving another request: ${kind}`, t => {
+    const { observer, filename } = fixture(t), before = ledger(observer);
+    const source = `import Database from ${JSON.stringify(import.meta.resolve('better-sqlite3'))};
+      import { createStore } from ${JSON.stringify(new URL('../c4-v2-store.js', import.meta.url).href)};
+      import { createConfigHandler } from ${JSON.stringify(new URL('../c4-config-handler.js', import.meta.url).href)};
+      const db = new Database(process.argv[1]);
+      const nativeExec = db.exec.bind(db);
+      db.exec = sql => {
+        if (sql === 'COMMIT') throw Object.assign(new Error('commit failed'), { code: 'EIO' });
+        if (sql === 'ROLLBACK') throw Object.assign(new Error('rollback unavailable'), { code: 'ROLLBACK_IO' });
+        return nativeExec(sql);
+      };
+      let opens = 0;
+      const s = createStore(() => { opens++; if (opens > 1) process.stdout.write('REOPENED\\n'); return db; }, { validateComponent: () => true, readConfig: () => ({state:'missing'}) });
+      const handler = createConfigHandler({ store: s, readSessionMode: () => 'multi', observeRunning: () => ({hasProcess:false}) });
+      try {
+        if (process.argv[2] === 'message') s.insertConversation('in','foo','endpoint','message');
+        else if (process.argv[2] === 'config') s.setSessionRuntimeConfig({ sessionGroup:'origin',runtime:'codex' });
+        else if (process.argv[2] === 'handler') handler('runtime',{action:'set',sessionGroup:'origin',runtime:'codex'});
+        else s.getUnsummarizedRange('origin');
+        process.stdout.write('REPORTED_SUCCESS\\n');
+      } catch (error) { process.stdout.write('REPORTED_ERROR '+JSON.stringify({code:error.code,persisted:error.persisted})+'\\n'); }
+      s.getChannelNamespace('foo');
+      s.ensureChannelNamespace('bar');
+      process.stdout.write('SERVED_NEXT_REQUEST\\n');`;
+    const result = spawnSync(process.execPath, ['--input-type=module', '-e', source, filename, kind], { encoding: 'utf8', timeout: 10000 });
+    assert.equal(result.error, undefined);
+    assert.notEqual(result.status, 0); assert.notEqual(result.status, null);
+    assert.equal(result.stdout, '', 'no result, same-process reopen, or subsequent read/write is allowed');
+    const lines = result.stderr.trim().split('\n');
+    assert.equal(lines.length, 1, result.stderr);
+    assert.deepEqual(JSON.parse(lines[0]), { code: 'EIO', rollbackError: { code: 'ROLLBACK_IO', message: 'rollback unavailable' } });
+    // Reopening happens only in the parent after the crashed worker has exited.
+    const recovered = new Database(filename, { readonly: true, fileMustExist: true });
+    try { assert.deepEqual(ledger(recovered), before); } finally { recovered.close(); }
+    t.diagnostic(JSON.stringify({ kind, exit: result.status, stderr: lines[0], recovered: true }));
   });
-  assert.equal(db.open, false);
-  for (const operation of [() => s.getChannelNamespace('foo'), () => s.ensureChannelNamespace('bar')]) {
-    assert.throws(operation, { code: 'DB_WRITE_FAILED', persisted: null });
-  }
-  // SQLite close rolls back in this fixture, but API correctly does not infer it.
-  assert.deepEqual(ledger(observer), before);
-});
-
-test('config rollback failure is never flattened into CONFIG_STORE_FAILED persisted[]', t => {
-  const { db, observer } = fixture(t), before = ledger(observer);
-  const failure = dataError('DB_WRITE_FAILED', 'commit failed');
-  const s = store(intercept(db, (sql, perform) => {
-    if (sql === 'COMMIT') throw failure;
-    if (sql === 'ROLLBACK') throw new Error('rollback unavailable');
-    return perform();
-  }));
-  assert.throws(() => s.setSessionRuntimeConfig({ sessionGroup: 'origin', runtime: 'codex' }), error => {
-    assert.equal(error, failure); assert.notEqual(error.code, 'CONFIG_STORE_FAILED'); assert.equal(error.persisted, null); assert.ok(error.rollbackError); return true;
-  });
-  assert.equal(db.open, false); assert.deepEqual(ledger(observer), before);
-  assert.throws(() => s.resetSessionRuntimeConfig({ sessionGroup: 'origin' }), { code: 'DB_WRITE_FAILED', persisted: null });
-});
+}
 
 test('two real connections contend for writer lock: DB_BUSY with empty persistence', t => {
   const { db, observer, filename } = fixture(t), writer = new Database(filename, { timeout: 20 });
