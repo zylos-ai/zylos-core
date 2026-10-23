@@ -13,15 +13,17 @@ import {
   getControlById,
   ackControl,
   expireTimedOutControls,
+  expireControlById,
   close
 } from './c4-db.js';
 
 function usage() {
-  console.error('Usage: c4-control.js <enqueue|get|ack> [options]');
+  console.error('Usage: c4-control.js <enqueue|get|ack|expire> [options]');
   console.error('  enqueue --content "<text>" [--priority 3] [--block-queue-until-idle] [--bypass-state] [--ack-deadline <seconds>] [--available-in <seconds>] [--no-ack-suffix]');
   console.error('           Legacy alias: --require-idle');
   console.error('  get --id <control_id>');
   console.error('  ack --id <control_id>');
+  console.error('  expire --id <control_id>');
 }
 
 function errorExit(message) {
@@ -147,6 +149,14 @@ function main() {
       case 'get':
         handleGet(commandArgs);
         break;
+      case 'expire': {
+        if (commandArgs.length !== 2 || commandArgs[0] !== '--id' || !/^[1-9][0-9]*$/.test(commandArgs[1]) || !Number.isSafeInteger(Number(commandArgs[1]))) {
+          throw new Error('INVALID_ARGS: expire requires --id <positive integer>');
+        }
+        const result = expireControlById(Number(commandArgs[1]));
+        console.log(JSON.stringify(result));
+        break;
+      }
       case 'ack':
         handleAck(commandArgs);
         break;
@@ -154,6 +164,9 @@ function main() {
         usage();
         errorExit(`unknown command: ${command}`);
     }
+  } catch (error) {
+    console.error(`Error [${error.code ?? 'INVALID_ARGS'}]: ${error.message}`);
+    process.exitCode = 1;
   } finally {
     close();
   }

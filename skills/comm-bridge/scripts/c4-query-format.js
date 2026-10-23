@@ -101,7 +101,7 @@ export function formatAbsorbedSummary({ transition, rows }, { scopeAfter, maxByt
 }
 export function formatQueryError(error, { maxBytes = 16384, json = false } = {}) {
   const max = Number.isInteger(maxBytes) && maxBytes >= 2048 && maxBytes <= 16384 ? maxBytes : 16384;
-  const detail = { code: error.code ?? 'READ_FAILED', message: error.message, persisted: error.persisted ?? [], ...(error.ids ? { ids: [], count: error.count ?? error.ids.length } : {}) };
+  const detail = { code: error.code ?? 'READ_FAILED', message: error.message, persisted: Object.hasOwn(error, 'persisted') ? error.persisted : [], ...(error.rollbackError ? { rollbackError: error.rollbackError.message } : {}), ...(error.ids ? { ids: [], count: error.count ?? error.ids.length } : {}) };
   const encode = () => json ? JSON.stringify({ ok: false, error: detail }) + '\n' : `Error [${detail.code}]: ${escapeText(detail.message)}${detail.ids ? ` ids=${detail.ids.join(',')} count=${detail.count}` : ''}\n`;
   if (bytes(encode()) > max) detail.message = 'Query failed';
   for (const id of error.ids ?? []) { detail.ids.push(id); if (bytes(encode()) > max) { detail.ids.pop(); break; } }

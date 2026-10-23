@@ -7,11 +7,11 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const CLI_PATH = fileURLToPath(new URL('../c4-fetch.js', import.meta.url));
-const RECEIVE_PATH = fileURLToPath(new URL('../c4-receive.js', import.meta.url));
+const RECEIVE_PATH = fileURLToPath(new URL('../c4-db.js', import.meta.url));
 const CHECKPOINT_PATH = fileURLToPath(new URL('../c4-checkpoint.js', import.meta.url));
 
 function cli(args, env = {}) {
-  const result = spawnSync('node', [CLI_PATH, ...args], {
+  const result = spawnSync(process.execPath, [CLI_PATH, ...args], {
     env: { ...process.env, ...env },
     encoding: 'utf8'
   });
@@ -19,14 +19,16 @@ function cli(args, env = {}) {
 }
 
 function receive(args, env = {}) {
-  return spawnSync('node', [RECEIVE_PATH, ...args], {
-    env: { ...process.env, ...env },
-    encoding: 'utf8'
+  const channel = args[args.indexOf('--channel') + 1];
+  const endpoint = args.includes('--endpoint') ? args[args.indexOf('--endpoint') + 1] : 'null';
+  const content = args[args.indexOf('--content') + 1];
+  return spawnSync(process.execPath, [RECEIVE_PATH, 'insert', 'out', channel, endpoint, content], {
+    env: { ...process.env, ...env }, encoding: 'utf8'
   });
 }
 
 function checkpoint(args, env = {}) {
-  return spawnSync('node', [CHECKPOINT_PATH, ...args], {
+  return spawnSync(process.execPath, [CHECKPOINT_PATH, ...args], {
     env: { ...process.env, ...env },
     encoding: 'utf8'
   });
@@ -51,7 +53,7 @@ describe('c4-fetch --unsummarized', () => {
     withTmpDir(({ env }) => {
       const { stdout, status } = cli(['--unsummarized'], env);
       assert.equal(status, 0);
-      assert.ok(stdout.includes('No unsummarized conversations'));
+      assert.ok(stdout.includes('count=0'));
     });
   });
 
@@ -62,14 +64,14 @@ describe('c4-fetch --unsummarized', () => {
 
       const { stdout, status } = cli(['--unsummarized'], env);
       assert.equal(status, 0);
-      assert.ok(stdout.includes('Unsummarized Range'));
+      assert.ok(stdout.includes('unsummarized scope=*'));
       assert.ok(stdout.includes('count=2'));
       assert.ok(stdout.includes('msg1'));
       assert.ok(stdout.includes('msg2'));
     });
   });
 
-  it('keeps inbound endpoint content clean without reply routing', () => {
+  it('keeps outbound endpoint content clean without reply routing', () => {
     withTmpDir(({ tmpDir, env }) => {
       fs.mkdirSync(path.join(tmpDir, '.claude', 'skills', 'telegram'), { recursive: true });
       receive(['--channel', 'telegram', '--endpoint', '123', '--content', 'clean msg'], env);
@@ -137,7 +139,7 @@ describe('c4-fetch validation', () => {
     withTmpDir(({ env }) => {
       const { stderr, status } = cli(['--begin', '1'], env);
       assert.equal(status, 1);
-      assert.ok(stderr.includes('Usage'));
+      assert.ok(stderr.includes('end must be an integer'));
     });
   });
 });

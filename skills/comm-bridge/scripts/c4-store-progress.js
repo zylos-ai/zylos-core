@@ -98,12 +98,25 @@ export function progressFunctions({ read, write, snapshot, get, all, run, second
       return all(c, 'SELECT id,end_conversation_id FROM checkpoints WHERE end_conversation_id>? ORDER BY id', max).map(row => ({ checkpointId: row.id, end: row.end_conversation_id, maxConversationId: max, affected: { B: baseline(c), coverageAll: coverage(c, '*') }, repairRequired: true }));
     }),
   };
+  function originSummarySnapshot(c, group, afterCheckpointId) {
+    const cursor = afterCheckpointId ?? get(c, 'SELECT checkpoint_id FROM origin_sync_cursors WHERE session_group=?', group)?.checkpoint_id ?? 0;
+    const rows = all(c, 'SELECT * FROM checkpoints WHERE session_group=? AND id>? AND end_conversation_id>? AND no_content=0 ORDER BY id', group, cursor, baseline(c));
+    return { rows, coverageEnd: coverage(c, group), checkpointId: rows.at(-1)?.id ?? cursor };
+  }
   function originSummaries(group, afterCheckpointId) {
     requireGroup(group);
+    return snapshot(c => originSummarySnapshot(c, group, afterCheckpointId));
+  }
+  function originCombined(group, { limit } = {}) {
+    requireGroup(group);
+    const l = limitClause(limit);
     return snapshot(c => {
-      const cursor = afterCheckpointId ?? get(c, 'SELECT checkpoint_id FROM origin_sync_cursors WHERE session_group=?', group)?.checkpoint_id ?? 0;
-      const rows = all(c, 'SELECT * FROM checkpoints WHERE session_group=? AND id>? AND end_conversation_id>? AND no_content=0 ORDER BY id', group, cursor, baseline(c));
-      return { rows, coverageEnd: coverage(c, group), checkpointId: rows.at(-1)?.id ?? cursor };
+      const summaries = originSummarySnapshot(c, group);
+      const cursor = get(c, 'SELECT synced_id FROM origin_sync_cursors WHERE session_group=?', group)?.synced_id ?? 0;
+      const after = Math.max(cursor, baseline(c), summaries.coverageEnd), upTo = frontier(c, group);
+      const rows = all(c, `SELECT * FROM conversations WHERE session_group=? AND id>? AND id<=? AND ${loadable} ORDER BY id${l.sql}`, group, after, upTo, ...l.args);
+      const more = rows.length && get(c, `SELECT 1 FROM conversations WHERE session_group=? AND id>? AND id<=? AND ${loadable} LIMIT 1`, group, rows.at(-1).id, upTo);
+      return { summaries: summaries.rows, coverageEnd: summaries.coverageEnd, checkpointId: summaries.checkpointId, rows, safeEnd: upTo, upTo: more ? rows.at(-1).id : upTo };
     });
   }
   function unsummarizedQuery({ group = '*', upToConversationId, limit } = {}) {
@@ -111,11 +124,11 @@ export function progressFunctions({ read, write, snapshot, get, all, run, second
     return snapshot(c => {
       const safeEnd = frontier(c, group), requested = upToConversationId ?? safeEnd;
       const rows = unsummarized(c, group, { upToConversationId: requested, limit });
-      const latest = get(c, `SELECT end_conversation_id FROM checkpoints WHERE session_group=? AND no_content=0${group === '*' ? '' : ' AND end_conversation_id>?'} ORDER BY id DESC LIMIT 1`, group, ...(group === '*' ? [] : [baseline(c)]));
+      const latest = get(c, `SELECT end_conversation_id,summary FROM checkpoints WHERE session_group=? AND no_content=0${group === '*' ? '' : ' AND end_conversation_id>?'} ORDER BY id DESC LIMIT 1`, group, ...(group === '*' ? [] : [baseline(c)]));
       const f = scope(group);
       const more = rows.length && get(c, `SELECT 1 FROM conversations WHERE id>? AND id<=?${f.sql} AND status='delivered' LIMIT 1`, rows.at(-1).id, requested, ...f.args);
-      return { rows, checkpointEnd: latest?.end_conversation_id ?? 0, safeEnd, upTo: more ? rows.at(-1).id : requested };
+      return { rows, checkpointEnd: latest?.end_conversation_id ?? 0, checkpointSummary: latest?.summary ?? null, safeEnd, upTo: more ? rows.at(-1).id : requested };
     });
   }
-  return { api, coverage, frontier, checkpoint, originSummaries, unsummarizedQuery };
+  return { api, coverage, frontier, checkpoint, originSummaries, originCombined, unsummarizedQuery };
 }
