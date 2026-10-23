@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 """Historical ownership loss before legacy stop; Linux mechanism evidence only."""
+# HISTORICAL ONLY: retired cleanup policy; not current stop behavior/acceptance.
+
 import ctypes, json, os, pathlib, platform, shlex, signal, subprocess, sys, tempfile, time
 
 

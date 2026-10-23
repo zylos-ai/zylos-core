@@ -4,7 +4,6 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { readProcessImage } from '../session-process-observation.js';
-import { findRunProcesses, SessionAdapter } from '../session-adapter.js';
 
 const fault = code => Object.assign(new Error(code), { code });
 const stat = (start = '100', state = 'S') => `42 (name with ) spaces) ${[state, ...Array(18).fill('0'), start].join(' ')}`;
@@ -87,30 +86,6 @@ test('real Linux current-process image carries independently known argv cwd and 
   assert.equal(image.exe, await fs.realpath(process.execPath));
   assert.ok(image.argv.some(arg => arg && path.resolve(arg) === process.argv[1]));
   assert.match(image.start, /^\d+$/);
-});
-
-test('partial ownership scan fails as a whole and cannot authorize present-session mutation', async () => {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'p02-platform-'));
-  try {
-    for (const pid of ['101', '102']) {
-      await fs.mkdir(path.join(dir, pid));
-      await fs.writeFile(path.join(dir, pid, 'stat'), `${pid} (fixture) ${['S',...Array(18).fill('0'),'100'].join(' ')}`);
-    }
-    await fs.writeFile(path.join(dir, '101', 'environ'), 'ZYLOS_RUN_ID=r\0');
-    await fs.mkdir(path.join(dir, '102', 'environ')); // Deterministic EISDIR, even as root.
-    const scan = id => findRunProcesses(id, { procRoot: dir });
-    await assert.rejects(scan('r'), { code: 'EISDIR' });
-    const mutations = [];
-    const connection = { close() {}, command: async args => mutations.push(args) };
-    const adapter = new SessionAdapter({ findRunProcesses: scan, pinProcess: async pid => {mutations.push(['pin',pid]);throw new Error('Unexpected pin');}, dependencies: {
-      openTmuxConnection: async () => connection,
-      observeSessionTarget: async () => ({ present: true, runId: 'r', tmuxSessionId: '$1' }),
-      revalidateSessionTarget: async () => {},
-    } });
-    await assert.rejects(adapter.stop({ tmuxName: 'isolated', expectedRunId: 'r' }), { code: 'STOP_UNCONFIRMED' });
-    assert.deepEqual(mutations, []);
-    assert.deepEqual(await findRunProcesses('r', { procRoot: dir, uid: process.getuid() + 1 }), []);
-  } finally { await fs.rm(dir, { recursive: true, force: true }); }
 });
 
 test('missing proc root is unavailable rather than proof that the process exited', async () => {

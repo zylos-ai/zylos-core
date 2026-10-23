@@ -1,46 +1,73 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
-import os from 'node:os';
 import path from 'node:path';
-import {execFileSync} from 'node:child_process';
 import {randomUUID} from 'node:crypto';
-import {pathToFileURL} from 'node:url';
-import {SessionAdapter,findRunProcesses} from '../session-adapter.js';
-import {readOwnedProcess} from '../session-process-ownership.js';
-import {pinProcess} from '../session-process-signal.js';
-const binary=process.env.TEST_TMUX_BIN || 'tmux';
-const delay=ms=>new Promise(r=>setTimeout(r,ms));
-const realDependencies=process.env.P02_REAL_A_ROOT ? {
- ...(await import(pathToFileURL(path.join(process.env.P02_REAL_A_ROOT,'cli/lib/runtime/tmux-connection.js')))),
- ...(await import(pathToFileURL(path.join(process.env.P02_REAL_A_ROOT,'cli/lib/runtime/session-target.js')))),
-} : undefined;
-for(const absentAtEntry of [false,true])test(`real keyed stop: absentAtEntry=${absentAtEntry}, ignoreTERM=${absentAtEntry}`,async t=>{
- const dir=await fs.mkdtemp(path.join(os.tmpdir(),'p02-stop-live-'));const socketPath=path.join(dir,'s'),key=randomUUID(),signals=[];let family;
- const tmux=(...a)=>execFileSync(binary,['-S',socketPath,...a],{encoding:'utf8',stdio:['ignore','pipe','pipe'],timeout:3000}).trim();
- try{
-  const helper=path.join(dir,'pidfd-signal');
-  execFileSync(process.execPath,[new URL('../../../../scripts/build-process-signal.js',import.meta.url).pathname,helper]);
-  tmux('-f','/dev/null','new-session','-d','-s','origin','sleep 30');const origin=tmux('list-panes','-t','=origin','-F','#{pane_id}:#{pane_pid}');
-  const script=path.join(dir,'runtime.mjs'),proof=path.join(dir,'family.json');
-  await fs.writeFile(script,`import{spawn}from'node:child_process';import{writeFileSync}from'node:fs';process.on('SIGHUP',()=>{});${absentAtEntry?"process.on('SIGTERM',()=>{});":''}if(process.argv[2]==='child'){process.send('ready')}else{const c=spawn(process.execPath,[import.meta.filename,'child'],{stdio:['ignore','ignore','ignore','ipc']});c.on('message',()=>writeFileSync(${JSON.stringify(proof)},JSON.stringify([process.pid,c.pid])))}setInterval(()=>{},1000);`);
-  tmux('new-session','-d','-s','target','-e',`ZYLOS_RUN_ID=${key}`,'-e','ZYLOS_MODEL_CONFIG={"runtime":"claude","mode":"default"}',`exec ${process.execPath} ${script}`);
-  for(let i=0;i<100;i++){try{family=JSON.parse(await fs.readFile(proof,'utf8'));break}catch{}await delay(10)}
-  assert.equal(family?.length,2);
-  const identities=await Promise.all(family.map(pid=>readOwnedProcess(pid,key)));assert.ok(identities.every(Boolean));
-  if(absentAtEntry){tmux('kill-session','-t','=target');await delay(50);for(const pid of family)assert.ok(await readOwnedProcess(pid,key))}
-  // Limit enumeration to independently recorded fixture PIDs; stat, UID, env
-  // and signals still use real /proc/kernel. Host-owned unreadable processes
-  // deliberately are not treated as absent by the production scanner.
-  const scan=runId=>findRunProcesses(runId,{withIdentity:true,filesystem:{...fs,readdir:async()=>family.map(String)}});
-  const adapter=new SessionAdapter({dependencies:realDependencies,findRunProcesses:scan,tmux:{binary,socketPath,sessionName:'origin'},stopGraceMs:50,pinProcess:async pid=>{
-   const handle=await pinProcess(pid,{binary:helper});
-   return handle && {signal:async sig=>{signals.push([pid,sig]);return handle.signal(sig)},close:()=>handle.close()};
-  }});
-  await adapter.stop({tmuxName:'target',expectedRunId:key});
-  assert.deepEqual(await scan(key),[]);
-  assert.ok(signals.some(x=>x[1]==='SIGTERM'));assert.equal(signals.some(x=>x[1]==='SIGKILL'),absentAtEntry);
-  assert.equal(tmux('list-sessions','-F','#{session_name}'),'origin');assert.equal(tmux('list-panes','-t','=origin','-F','#{pane_id}:#{pane_pid}'),origin);
-  t.diagnostic(JSON.stringify({absentAtEntry,identities,signals,ownedGone:true,originUnchanged:true,scanDomain:"known fixture parent and child; real proc reads"}));
- }finally{for(const pid of family||[]){try{if(await readOwnedProcess(pid,key))process.kill(pid,'SIGKILL')}catch{}}try{tmux('kill-server')}catch{}await fs.rm(dir,{recursive:true,force:true})}
+import {fixture,service,actualDependencies,until} from './stop-tmux-fixture.js';
+import {readProcessImage} from '../session-process-observation.js';
+import {shellQuote} from '../session-command.js';
+
+for(const present of [true,false])test(`real tmux stop: present=${present}; independent same-run service and origin survive`,async t=>{
+ const f=await fixture(t),key=randomUUID();
+ if(present)f.command('new-session','-d','-s','target','-e',`ZYLOS_RUN_ID=${key}`,'sleep 60');
+ const original=present?f.snapshot('target'):null;
+ const independent=await service(f,key);
+ await f.adapter.stop({tmuxName:'target',expectedRunId:key});
+ assert.equal(f.command('list-sessions','-F','#{session_name}'),'origin');
+ assert.equal(f.snapshot('origin'),f.origin);
+ const preserved=await independent.verify();
+ t.diagnostic(JSON.stringify({present,original,service:preserved,originUnchanged:true,targetAbsent:true}));
+});
+
+test('real no-server stop succeeds with nonempty/null key and preserves the independent service',async t=>{
+ const f=await fixture(t,{origin:false}),key=randomUUID(),independent=await service(f,key);
+ for(const expectedRunId of [key,null])await f.adapter.stop({tmuxName:'absent',expectedRunId});
+ t.diagnostic(JSON.stringify({explicitNoServer:true,service:await independent.verify()}));
+});
+
+test('unreadable process environment/runtime tree cannot block observable tmux removal',async t=>{
+ const f=await fixture(t),key=randomUUID(),independent=await service(f,key);
+ f.command('new-session','-d','-s','target','-e',`ZYLOS_RUN_ID=${key}`,'sleep 60');
+ let unavailableReads=0;
+ f.adapter.options.dependencies={...actualDependencies,observeSessionTarget:options=>actualDependencies.observeSessionTarget({
+  ...options,readProcessTree:async()=>{unavailableReads++;throw Object.assign(new Error('process information denied'),{code:'EACCES'})},
+ })};
+ for(const option of ['findRunProcesses','readOwnedProcess','pinProcess','signalProcess','processSignal','stopGraceMs'])
+  Object.defineProperty(f.adapter.options,option,{get(){throw Object.assign(new Error('process environment denied'),{code:'EACCES'})}});
+ await f.adapter.stop({tmuxName:'target',expectedRunId:key});
+ assert.equal(f.command('list-sessions','-F','#{session_name}'),'origin');assert.equal(f.snapshot('origin'),f.origin);
+ assert.ok(unavailableReads>0,'actual resolver exercised unavailable runtime observation');
+ t.diagnostic(JSON.stringify({processObservationUnavailable:true,service:await independent.verify(),originUnchanged:true,targetAbsent:true}));
+});
+
+test('service actually spawned by target inherits run ID and survives both present and absent stop',async t=>{
+ const f=await fixture(t),key=randomUUID(),proof=path.join(f.dir,'inherited.json'),done=path.join(f.dir,'finish');
+ const childScript=path.join(f.dir,'inherited-service.mjs'),parentScript=path.join(f.dir,'agent-parent.mjs');
+ await fs.writeFile(childScript,`import{writeFileSync,existsSync}from'node:fs';let tick=0;const signals=[];
+ for(const s of ['SIGHUP','SIGTERM'])process.on(s,()=>signals.push(s));
+ const beat=()=>{if(existsSync(${JSON.stringify(done)}))process.exit(0);writeFileSync(${JSON.stringify(proof)},JSON.stringify({pid:process.pid,ppid:process.ppid,runId:process.env.ZYLOS_RUN_ID,tick:++tick,signals}))};
+ beat();setInterval(beat,20);setTimeout(()=>process.exit(0),30000);`);
+ await fs.writeFile(parentScript,`import{spawn}from'node:child_process';import{existsSync}from'node:fs';
+ const child=spawn(process.execPath,[${JSON.stringify(childScript)}],{detached:true,stdio:'ignore'});child.unref();
+ setInterval(()=>{if(existsSync(${JSON.stringify(done)}))process.exit(0)},20);setTimeout(()=>process.exit(0),30000);`);
+ let child;
+ f.cleanup.push(async()=>{
+  await fs.writeFile(done,'done');
+  if(child)await until(()=>readProcessImage(child.pid),value=>value.gone===true);
+ });
+ f.command('new-session','-d','-s','target','-e',`ZYLOS_RUN_ID=${key}`,
+  `exec env -i HOME=${shellQuote(f.dir)} ZYLOS_RUN_ID="$ZYLOS_RUN_ID" ${shellQuote(process.execPath)} ${shellQuote(parentScript)}`);
+ const panePid=Number(f.command('display-message','-p','-t','=target:','#{pane_pid}'));
+ child=await until(async()=>JSON.parse(await fs.readFile(proof,'utf8')),value=>value.runId===key);
+ assert.equal(child.ppid,panePid,'service must really originate in the target');
+ const image=await readProcessImage(child.pid);assert.ok(image.env.includes(`ZYLOS_RUN_ID=${key}`));
+ for(const phase of ['present','absent']){
+  await f.adapter.stop({tmuxName:'target',expectedRunId:key});
+  const checkpoint=JSON.parse(await fs.readFile(proof,'utf8'));
+  const after=await until(async()=>JSON.parse(await fs.readFile(proof,'utf8')),value=>value.tick>checkpoint.tick+1);
+  assert.deepEqual(after.signals,[]);assert.equal((await readProcessImage(child.pid)).start,image.start);
+  assert.equal(f.command('list-sessions','-F','#{session_name}'),'origin');assert.equal(f.snapshot('origin'),f.origin);
+  t.diagnostic(JSON.stringify({phase,originalPanePid:panePid,servicePid:child.pid,start:image.start,
+   actualInheritedRunId:true,checkpointTick:checkpoint.tick,afterTick:after.tick,signals:after.signals,originUnchanged:true}));
+ }
 });

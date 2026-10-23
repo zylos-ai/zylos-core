@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 """Isolated Linux stop mechanism evidence. Does not implement product stop."""
+# HISTORICAL ONLY: retired cleanup policy; not current stop behavior/acceptance.
+
 import os, sys, signal, time, json, pathlib, subprocess, tempfile, shlex, platform
 if sys.platform != "linux":
     raise SystemExit("This controlled process probe requires Linux /proc")

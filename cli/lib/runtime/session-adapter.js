@@ -5,22 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { RuntimeAdapter } from './base.js';
 import { adapterError, runtimeExecutable, runtimeHelp, validateLaunchConfig, buildRuntimeArgs, launchEnvironment, writeSessionLaunchScript, hasNativeClaudeAuth } from './session-command.js';
 import { settleLaunch, executableIdentity } from './session-launch.js';
-import { readOwnedProcess } from './session-process-ownership.js';
-import { pinProcess } from './session-process-signal.js';
 import { ZYLOS_DIR } from '../config.js';
-
-const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
-/** Enumerate only this UID; inability to inspect an owned process is not absence. */
-export async function findRunProcesses(runId, {procRoot = '/proc', platform = process.platform, uid = process.getuid?.(), withIdentity = false, filesystem = fs} = {}) {
-  if (platform !== 'linux' || uid === undefined) throw new Error('Process environment scan unavailable');
-  const found = [];
-  for (const entry of await filesystem.readdir(procRoot)) {
-    if (!/^\d+$/.test(entry)) continue;
-    const owned=await readOwnedProcess(Number(entry),runId,{procRoot,platform,uid,filesystem});
-    if(owned)found.push(withIdentity ? owned : owned.pid);
-  }
-  return found;
-}
 
 export class SessionAdapter extends RuntimeAdapter {
   async dependencies() {
@@ -50,74 +35,27 @@ export class SessionAdapter extends RuntimeAdapter {
     } finally { connection?.close(); }
   }
   async stop({tmuxName, expectedRunId}) {
-    let connection, absentAtEntry = false;
-    const scan = this.options.findRunProcesses || (runId=>findRunProcesses(runId,{withIdentity:true}));
-    const observe = this.options.readOwnedProcess || readOwnedProcess;
-    const pin = this.options.pinProcess || (pid=>pinProcess(pid,this.options.processSignal));
-    const handles = new Map();
-    const unknown = () => (this.options.log || console.warn)('Session ended; process state unknown');
-    const incarnations = new Map();
-    const owned = async () => {
-      const rows=await scan(expectedRunId);
-      for(const row of rows) {
-        if(!Number.isSafeInteger(row?.pid) || row.pid<=0 || !/^\d+$/.test(row.start)) throw adapterError('STOP_UNCONFIRMED','Ownership scan omitted process incarnation');
-        if(incarnations.has(row.pid) && incarnations.get(row.pid)!==row.start) throw adapterError('STOP_UNCONFIRMED','Observed PID was replaced by a different incarnation');
-        incarnations.set(row.pid,row.start);
-      }
-      return rows;
-    };
-    const hold = async rows => {
-      for (const row of rows) {
-        if (handles.has(row.pid)) continue;
-        // Acquisition precedes ownership revalidation. Once pinned, a later
-        // numeric-PID replacement can never become this handle's target.
-        const handle=await pin(row.pid);
-        if (!handle) continue;
-        handles.set(row.pid,handle); // all subsequent error paths close it
-        const current=await observe(row.pid,expectedRunId);
-        if (current && current.start!==row.start) throw adapterError('STOP_UNCONFIRMED','Process incarnation changed after pinning');
-      }
-    };
+    let connection;
     try {
       const deps = await this.dependencies();
       let target;
       try {
         connection = await this.connection();
-        target = await deps.observeSessionTarget({tmuxName, connection, readReady:async () => null});
-        absentAtEntry = !target.present;
-      } catch (error) { if (error.code === 'TMUX_NO_SERVER') absentAtEntry = true; else throw error; }
-      if (!absentAtEntry) {
-        if (target.runId !== expectedRunId) throw adapterError('RUNID_MISMATCH');
-        // Without an ownership key, killing a pane does not establish descendant exit.
-        if (!expectedRunId) throw adapterError('STOP_UNCONFIRMED','Runtime ownership cannot be established');
-        await hold(await owned()); // acquire/verify before mutating the tmux target
-        await deps.revalidateSessionTarget({connection,target});
-        await connection.command(['kill-session','-t',target.tmuxSessionId]);
+        // Only tmux identity matters here. Runtime/process observation remains
+        // available to isRunning/launch, but does not authorize a stop target.
+        target = await deps.observeSessionTarget({tmuxName, connection,
+          readReady:async () => null, readProcessTree:async () => []});
+      } catch (error) {
+        if (error.code === 'TMUX_NO_SERVER') return;
+        throw error;
       }
-      if (!expectedRunId) { unknown(); return; }
-      let pids;
-      try { pids = await owned(); }
-      catch (error) { if (absentAtEntry && !['STOP_UNCONFIRMED','PROCESS_IDENTITY_CHANGED'].includes(error.code)) { unknown(); return; } throw error; }
-      for (const sig of ['SIGTERM','SIGKILL']) {
-        await hold(pids);
-        for (const original of pids) {
-          const handle=handles.get(original.pid);
-          if (!handle) continue;
-          const current=await observe(original.pid,expectedRunId);
-          if(!current)continue;
-          if(current.start!==original.start) throw adapterError('STOP_UNCONFIRMED','Process incarnation changed before signal');
-          // A successful read is ownership evidence, not a signal destination.
-          // ESRCH is represented by false; only re-enumeration confirms exit.
-          await handle.signal(sig);
-        }
-        if (pids.length) await (this.options.sleep || pause)(this.options.stopGraceMs ?? 200);
-        pids = await owned();
-        if (!pids.length) break;
-      }
-      if (pids.length) throw adapterError('STOP_UNCONFIRMED','Owned processes remain');
-      if (!absentAtEntry && !connection.didAcknowledgeSessionKill?.(target.tmuxSessionId)) {
-        // Only an acknowledged kill of this exact object, or an ID snapshot on
-        // the original connection, proves removal. A disconnect alone does not.
+      if (!target.present) return;
+      if (target.runId !== expectedRunId) throw adapterError('RUNID_MISMATCH');
+      await deps.revalidateSessionTarget({connection,target});
+      await connection.command(['kill-session','-t',target.tmuxSessionId]);
+      // A matching successful kill ACK proves this exact object's removal,
+      // including a final-session kill that closes the original connection.
+      if (!connection.didAcknowledgeSessionKill?.(target.tmuxSessionId)) {
         const ids = (await connection.command(['list-sessions','-F','#{session_id}'])).trim().split('\n');
         if (ids.some(id => !/^\$\d+$/.test(id)) || ids.includes(target.tmuxSessionId)) {
           throw adapterError('STOP_UNCONFIRMED','Original session removal is not confirmed');
@@ -126,12 +64,7 @@ export class SessionAdapter extends RuntimeAdapter {
     } catch (error) {
       if (['RUNID_MISMATCH','STOP_UNCONFIRMED'].includes(error.code)) throw error;
       throw adapterError('STOP_UNCONFIRMED','Session termination could not be confirmed',error.cause);
-    } finally {
-      let closeFailure;
-      try {connection?.close();} catch(error) {closeFailure=error;}
-      const closed=await Promise.allSettled([...handles.values()].map(handle=>Promise.resolve().then(()=>handle.close())));
-      if(closeFailure || closed.some(result=>result.status==='rejected')) throw adapterError('STOP_UNCONFIRMED','Termination resources could not be closed');
-    }
+    } finally { connection?.close(); }
   }
   async captureScreen({target,connection}) {
     await (await this.dependencies()).revalidateSessionTarget({target,connection});
