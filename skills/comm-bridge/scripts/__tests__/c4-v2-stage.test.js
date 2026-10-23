@@ -21,8 +21,8 @@ beginModeTransition getModeTransition getLastCompletedModeTransition setModeTran
 getSessionModelConfig setSessionModelConfig resetSessionModelConfig getSessionRuntimeConfig setSessionRuntimeConfig resetSessionRuntimeConfig resolveSessionLaunchConfig listGroupRuntimeOverrides
 auditCheckpoints getDb close`.split(/\s+/);
 function root(t) { const dir = mkdtempSync(join(tmpdir(), 'c4-stage-')); t.after(() => rmSync(dir, { recursive: true, force: true })); return dir; }
-function child(dir, code) {
-  return spawnSync(process.execPath, ['--input-type=module', '-e', code], { env: { ...process.env, ZYLOS_DIR: dir }, encoding: 'utf8' });
+function child(dir, code, env = {}) {
+  return spawnSync(process.execPath, ['--input-type=module', '-e', code], { env: { ...process.env, ZYLOS_DIR: dir, ...env }, encoding: 'utf8' });
 }
 test('PR-B every frozen named export imports and pure parsers run without opening a database', t => {
   const dir = root(t);
@@ -85,16 +85,16 @@ test('PR-A: complete v2 owner is registered and guards an isolated database', t 
   assert.throws(() => guardDatabase(db, owner), /checkpoint_id/);
 });
 
-test('PR-B copied installed skill imports without a sibling npm cli directory', t => {
+test('copied skill refuses import when its explicit Core dependency is absent, without opening a database', t => {
   const dir = root(t), skill = join(dir, '.claude/skills/comm-bridge');
   mkdirSync(skill, { recursive: true });
   cpSync(new URL('../', import.meta.url), join(skill, 'scripts'), { recursive: true, filter: source => !source.includes('__tests__') });
   cpSync(new URL('../../package.json', import.meta.url), join(skill, 'package.json'));
   symlinkSync(new URL('../../node_modules', import.meta.url).pathname, join(skill, 'node_modules'));
   const copied = new URL(`file://${join(skill, 'scripts/c4-db.js')}`).href;
-  const result = child(dir, `import assert from 'node:assert/strict'; import {parseSessionGroup,resolveSessionLaunchConfig} from ${JSON.stringify(copied)};
-assert.equal(parseSessionGroup('foo').namespace,'foo');
-assert.throws(()=>resolveSessionLaunchConfig({sessionMode:'single'}),{code:'CONFIG_UNREADABLE'});`);
+  const result = child(dir, `import assert from 'node:assert/strict';
+await assert.rejects(import(${JSON.stringify(copied)}), /Cannot locate the installed zylos-core cli\\/lib\\/config\\.js/);`,
+  { ZYLOS_PACKAGE_ROOT: join(dir, 'absent-core-package') });
   assert.equal(result.status, 0, result.stderr);
   assert.deepEqual(readdirSync(dir), ['.claude']);
 });
