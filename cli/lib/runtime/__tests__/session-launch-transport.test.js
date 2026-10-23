@@ -11,7 +11,7 @@ const delay=ms=>new Promise(r=>setTimeout(r,ms));
 const binary=process.env.TEST_TMUX_BIN || 'tmux';
 const scenarios=['before-create-ack','after-create-before-env','after-env-before-exec','after-exec-before-env','malformed-create-ack','original-server-exit','replacement-server','before-ack-server-exit','before-ack-replacement','wrong-f2','replacement-session'];
 
-// Every worker has a private socket and controlled sleep image. A proxy transports
+// Multi-mode needs no single-mode tombstone commands. Every worker has a private socket and controlled sleep image. A proxy transports
 // real tmux control frames, dropping only the selected reply boundary. It neither
 // invents a successful frame nor changes the product's observation logic.
 async function worker(scenario) {
@@ -44,7 +44,7 @@ process.stdout.write(frame.join('\\n')+'\\n');if(count===1)stop();
     const gated=scenario!=='after-exec-before-env';
     await fs.writeFile(scriptFile,`#!/bin/sh\n${gated ? `while [ ! -f '${gate}' ]; do sleep 0.02; done\n`:''}exec /bin/sleep 30\n`,{mode:0o700});
     let cleanups=0;
-    settleLaunch({tmuxName:'target',runId:'transport-run',launchConfig:{runtime:'claude',mode:'default'},sessionGroup:null,root:dir,script:{file:scriptFile,cleanup(){cleanups++;}},identity:await executableIdentity('/bin/sleep',process.env),args:['30'],tmux:{binary:proxy,socketPath:socket,configFile:'/dev/null'},noticeMs:80,onNotice(){}}).then(()=>{outcome='success'},e=>{outcome=e.code});
+    settleLaunch({tmuxName:'target',runId:'transport-run',launchConfig:{runtime:'claude',mode:'default'},sessionGroup:'telegram:transport',root:dir,script:{file:scriptFile,cleanup(){cleanups++;}},identity:await executableIdentity('/bin/sleep',process.env),args:['30'],tmux:{binary:proxy,socketPath:socket,configFile:'/dev/null'},noticeMs:80,onNotice(){}}).then(()=>{outcome='success'},e=>{outcome=e.code});
     for(let i=0;i<100;i++){try{await fs.access(marker);break;}catch{await delay(20);}}
     const cut=JSON.parse(await fs.readFile(marker,'utf8'));
     await delay(120);
