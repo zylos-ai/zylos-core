@@ -3,15 +3,15 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { SessionAdapter, findRunProcesses } from '../cli/lib/runtime/session-adapter.js';
-import { buildRuntimeArgs, validateLaunchConfig, writeSessionLaunchScript } from '../cli/lib/runtime/session-command.js';
-import { ClaudeAdapter } from '../cli/lib/runtime/claude.js';
-import { CodexAdapter } from '../cli/lib/runtime/codex.js';
+import { SessionAdapter, findRunProcesses } from '../session-adapter.js';
+import { buildRuntimeArgs, validateLaunchConfig, writeSessionLaunchScript } from '../session-command.js';
+import { ClaudeAdapter } from '../claude.js';
+import { CodexAdapter } from '../codex.js';
 
 class Adapter extends SessionAdapter { get runtimeId() { return 'claude'; } }
 function fixture({present = true, runId = 'r', openError, runtime = 'claude'} = {}) {
   const calls = [], target = {present, runId, tmuxSessionId:'$7', paneId:'%8'};
-  const connection = {close:() => calls.push(['close']), command:async argv => { calls.push(argv); if (argv[0] === 'kill-session') target.present = false; return 'screen'; }};
+  const connection = {close:() => calls.push(['close']), command:async argv => { calls.push(argv); if (argv[0] === 'kill-session') target.present = false; if (argv[0] === 'list-sessions') return target.present ? '$7' : '$9'; return 'screen'; }};
   const dependencies = {
     openTmuxConnection:async () => { if (openError) throw openError; return connection; },
     observeSessionTarget:async () => target,
@@ -134,4 +134,37 @@ test('process scan uses exact inherited run key and excludes zombies',async()=> 
     assert.deepEqual(await findRunProcesses('wanted',{procRoot:dir}),[101]);
     await assert.rejects(findRunProcesses('wanted',{procRoot:dir,platform:'unsupported'}));
   } finally {await fs.rm(dir,{recursive:true,force:true});}
+});
+
+// Internal reader evidence keeps a readable shell-only tree distinct from failure.
+test('readable runtime absence is false; unreadable and ambiguous remain unavailable', async () => {
+  for (const runtimeObservation of ['absent', 'unavailable', 'ambiguous', undefined]) {
+    const f = fixture({runtime:'unknown'});
+    f.dependencies.readTargetRuntime = async () => ({runtime:'unknown', runtimeObservation});
+    if (runtimeObservation === 'absent') assert.deepEqual(await f.adapter.isRunning({tmuxName:'x'}), {tmux:true,process:false});
+    else await assert.rejects(f.adapter.isRunning({tmuxName:'x'}), {code:'TMUX_UNAVAILABLE'});
+  }
+});
+test('acknowledged exact object kill survives connection exit, arbitrary disconnect does not', async () => {
+  for (const acknowledged of ['$7', '$99', null]) {
+    const f = fixture();
+    const command = f.connection.command;
+    f.connection.command = async argv => {
+      if (argv[0] === 'list-sessions') throw error('TMUX_UNAVAILABLE');
+      return command(argv);
+    };
+    f.connection.didAcknowledgeSessionKill = id => id === acknowledged;
+    if (acknowledged === '$7') await f.adapter.stop({tmuxName:'x',expectedRunId:'r'});
+    else await assert.rejects(f.adapter.stop({tmuxName:'x',expectedRunId:'r'}), {code:'STOP_UNCONFIRMED'});
+  }
+});
+test('kill acknowledgement cannot replace descendant confirmation or authorize null run stop', async () => {
+  const f = fixture();
+  f.connection.didAcknowledgeSessionKill = () => true;
+  f.adapter.options.findRunProcesses = async () => [123];
+  f.adapter.options.signalProcess = () => {};
+  await assert.rejects(f.adapter.stop({tmuxName:'x',expectedRunId:'r'}), {code:'STOP_UNCONFIRMED'});
+  const legacy = fixture({runId:null});
+  await assert.rejects(legacy.adapter.stop({tmuxName:'x',expectedRunId:null}), {code:'STOP_UNCONFIRMED'});
+  assert.equal(legacy.calls.some(c => c[0] === 'kill-session'), false);
 });

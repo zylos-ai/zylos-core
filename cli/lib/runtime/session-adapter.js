@@ -43,7 +43,7 @@ export class SessionAdapter extends RuntimeAdapter {
       if (!target.present) return {tmux:false, process:false};
       // F2 is configuration evidence only; process liveness needs a process snapshot.
       const observed = await deps.readTargetRuntime({connection, paneId:target.paneId, rawF2:{}, readProcessTree:this.options.readProcessTree});
-      if (observed.runtime === 'unknown') throw adapterError('TMUX_UNAVAILABLE','Runtime process liveness is unknown','error');
+      if (observed.runtime === 'unknown' && observed.runtimeObservation !== 'absent') throw adapterError('TMUX_UNAVAILABLE','Runtime process liveness is unknown','error');
       return {tmux:true, process:observed.runtime === this.runtimeId};
     } catch (error) {
       if (error.code === 'TMUX_NO_SERVER') return {tmux:false, process:false};
@@ -83,11 +83,13 @@ export class SessionAdapter extends RuntimeAdapter {
         if (!pids.length) break;
       }
       if (pids.length) throw adapterError('STOP_UNCONFIRMED','Owned processes remain');
-      if (!absentAtEntry) {
-        try {
-          const after = await deps.observeSessionTarget({tmuxName,connection,readReady:async () => null});
-          if (after.present && after.tmuxSessionId === target.tmuxSessionId) throw adapterError('STOP_UNCONFIRMED');
-        } catch (error) { if (error.code !== 'TMUX_NO_SERVER') throw error; }
+      if (!absentAtEntry && !connection.didAcknowledgeSessionKill?.(target.tmuxSessionId)) {
+        // Only an acknowledged kill of this exact object, or an ID snapshot on
+        // the original connection, proves removal. A disconnect alone does not.
+        const ids = (await connection.command(['list-sessions','-F','#{session_id}'])).trim().split('\n');
+        if (ids.some(id => !/^\$\d+$/.test(id)) || ids.includes(target.tmuxSessionId)) {
+          throw adapterError('STOP_UNCONFIRMED','Original session removal is not confirmed');
+        }
       }
     } catch (error) {
       if (['RUNID_MISMATCH','STOP_UNCONFIRMED'].includes(error.code)) throw error;
