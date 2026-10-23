@@ -116,7 +116,7 @@ test('launch rejects conflicts before binary/config, then missing binary before 
   await assert.rejects(f.adapter.launch(input),{code:'MODEL_CONFIG_REJECTED'});
   assert.equal(f.calls.some(c=>c[0]==='new-session'),false);
 });
-test('unfinished launch fails before any mutation, never reports successful launch',async()=> {
+test('unreadable executable identity fails preflight before creation',async()=> {
   const f=fixture({present:false});f.adapter.options.paths={tmuxNameForGroup:()=> 'isolated'};
   f.adapter.options.runtimeExecutable=()=>'/fake';
   await assert.rejects(f.adapter.launch({sessionGroup:null,runId:'r',sessionMode:'single',launchConfig:{runtime:'claude',mode:'default'}}),{code:'LAUNCH_FAILED'});

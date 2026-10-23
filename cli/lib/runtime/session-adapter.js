@@ -3,7 +3,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { RuntimeAdapter } from './base.js';
-import { adapterError, runtimeExecutable, runtimeHelp, validateLaunchConfig } from './session-command.js';
+import { adapterError, runtimeExecutable, runtimeHelp, validateLaunchConfig, buildRuntimeArgs, launchEnvironment, writeSessionLaunchScript } from './session-command.js';
+import { settleLaunch, executableIdentity } from './session-launch.js';
+import { ZYLOS_DIR } from '../config.js';
 
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 /** Enumerate only this UID; inability to inspect an owned process is not absence. */
@@ -134,9 +136,14 @@ export class SessionAdapter extends RuntimeAdapter {
       const help = launchConfig?.mode === 'override' ? (this.options.runtimeHelp || runtimeHelp)(command,env) : '';
       validateLaunchConfig(this.runtimeId,launchConfig,help);
       if (!runId || !['single','multi'].includes(sessionMode) || (sessionMode === 'single') !== (sessionGroup === null)) throw adapterError('MODEL_CONFIG_REJECTED');
-      // A disconnected control client cannot cancel an already queued new-session.
-      // Do not expose a launch implementation until settlement is guaranteed.
-      throw adapterError('LAUNCH_FAILED','Launch mutation settlement is not implemented','error');
+      const root = await fs.realpath(this.options.root || ZYLOS_DIR);
+      const cleanEnv = launchEnvironment(root,env);
+      const identity = await executableIdentity(command, cleanEnv);
+      const args = buildRuntimeArgs(this.runtimeId, launchConfig, {root, help});
+      const script = writeSessionLaunchScript({command,args,env:cleanEnv,root,multi:sessionMode === 'multi'});
+      return await settleLaunch({tmuxName,runId,launchConfig,sessionGroup,root,script,identity,args,
+        tmux:this.options.tmux,noticeMs:this.options.launchNoticeMs,
+        onNotice:this.options.onLaunchPending || this.options.log || console.warn});
     } catch (error) {
       if (['NAME_CONFLICT','RUNTIME_NOT_INSTALLED','MODEL_CONFIG_REJECTED','LAUNCH_FAILED'].includes(error.code)) throw error;
       throw adapterError('LAUNCH_FAILED','Launch preflight failed',error.cause);
