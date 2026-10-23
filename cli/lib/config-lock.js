@@ -64,12 +64,6 @@ function parseHelperResult(child) {
   throw restoreError(message.error);
 }
 
-function remainingWait(waitMs, deadlineAt, now = Date.now()) {
-  const requested = Number.isFinite(waitMs) && waitMs >= 0 ? waitMs : 2000;
-  if (deadlineAt === undefined || deadlineAt === null) return requested;
-  return Math.max(0, Math.min(requested, Number(deadlineAt) - now));
-}
-
 function linuxCapability({ env = process.env, existsSync = fs.existsSync } = {}) {
   const flock = executableOnPath('flock', env.PATH);
   if (!flock || !existsSync('/proc/self/fd')) return null;
@@ -98,7 +92,7 @@ export function detectConfigLockCapability({ platform = process.platform, ...dep
   return null;
 }
 
-export function updateConfigWithLock({ configFile, lockFile, update, waitMs = 2000, deadlineAt }, {
+export function updateConfigWithLock({ configFile, lockFile, update, waitMs = 2000 }, {
   capability = detectConfigLockCapability(),
   helper = HELPER,
   spawn = spawnSync,
@@ -107,9 +101,8 @@ export function updateConfigWithLock({ configFile, lockFile, update, waitMs = 20
   mkdirSync = fs.mkdirSync,
   writeStderr = (message) => process.stderr.write(message),
   fallbackStore = updateConfigStore,
-  now = Date.now,
 } = {}) {
-  const budget = remainingWait(waitMs, deadlineAt, now());
+  const budget = Number.isFinite(waitMs) && waitMs >= 0 ? waitMs : 2000;
   if (budget <= 0) throw lockTimeout();
   if (!capability) {
     writeStderr(CONFIG_LOCK_FALLBACK_WARNING);
