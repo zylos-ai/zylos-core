@@ -58,25 +58,8 @@ function runLoopWorker(payload, onResult) {
   });
 }
 
-function commitOrder(results, initial) {
-  const byPrevious = new Map();
-  for (const result of results) {
-    const key = result.previous ?? initial;
-    assert.equal(byPrevious.has(key), false, `duplicate successor for ${key}`);
-    byPrevious.set(key, result.value);
-  }
-  const order = [];
-  let cursor = initial;
-  while (byPrevious.has(cursor)) {
-    cursor = byPrevious.get(cursor);
-    order.push(cursor);
-  }
-  assert.equal(order.length, results.length, 'results must form one complete commit chain');
-  return order;
-}
-
-function assertReportedInCommitOrder(reported, committed) {
-  assert.deepEqual(reported.map(result => result.value), committed);
+function readCommitLedger(file) {
+  return fs.readFileSync(file, 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse);
 }
 
 describe('atomic config store', () => {
@@ -186,6 +169,8 @@ describe('config locking', () => {
 
   it('linearizes two real processes doing 100 same-key writes each', { timeout: 30_000 }, async () => {
     write({ shared: 'initial', untouched: true });
+    const ledgerFile = path.join(root, 'commit-ledger.jsonl');
+    const arrivalBarrier = path.join(root, 'second-result-reported');
     const results = [];
     const observed = new Set();
     const observerErrors = [];
@@ -203,7 +188,7 @@ describe('config locking', () => {
       }
     };
     const observer = observe();
-    const payload = { configFile, lockFile, iterations: 100 };
+    const payload = { configFile, lockFile, ledgerFile, arrivalBarrier, iterations: 100 };
     const [a, b] = await Promise.all([
       runLoopWorker({ ...payload, writer: 'a' }, result => results.push(result)),
       runLoopWorker({ ...payload, writer: 'b' }, result => results.push(result)),
@@ -220,15 +205,27 @@ describe('config locking', () => {
     assert.ok([...observed].some(value => value?.startsWith('a:')), 'observer missed writer a');
     assert.ok([...observed].some(value => value?.startsWith('b:')), 'observer missed writer b');
 
-    const committed = commitOrder(results, 'initial');
-    assert.equal(JSON.parse(fs.readFileSync(configFile, 'utf8')).shared, committed.at(-1));
-    assert.deepEqual(new Set(committed), new Set(results.map(result => result.value)));
+    const committed = readCommitLedger(ledgerFile);
+    assert.deepEqual(committed.map(entry => entry.sequence), Array.from({ length: 200 }, (_, index) => index + 1));
+    assert.equal(JSON.parse(fs.readFileSync(configFile, 'utf8')).shared, committed.at(-1).value);
+    assert.deepEqual(new Set(committed.map(entry => entry.value)), new Set(results.map(result => result.value)));
 
-    const byCommit = new Map(results.map(result => [result.value, result]));
-    const committedResults = committed.map(value => byCommit.get(value));
-    assertReportedInCommitOrder(committedResults, committed);
+    const byValue = new Map(results.map(result => [result.value, result]));
+    for (const entry of committed) {
+      const reported = byValue.get(entry.value);
+      assert.equal(reported.commitSequence, entry.sequence);
+      assert.equal(reported.previous ?? 'initial', entry.previous ?? 'initial');
+    }
+    assert.ok(
+      results.findIndex(result => result.commitSequence === 2)
+        < results.findIndex(result => result.commitSequence === 1),
+      'barrier must report commit 2 before commit 1',
+    );
     assert.throws(
-      () => assertReportedInCommitOrder([...committedResults].reverse(), committed),
+      () => assert.deepEqual(
+        results.map(result => result.value),
+        committed.map(entry => entry.value),
+      ),
       /Expected values to be strictly deep-equal/,
     );
   });
