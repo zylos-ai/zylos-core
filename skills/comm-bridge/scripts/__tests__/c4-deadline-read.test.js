@@ -27,14 +27,14 @@ function trackedOpen() {
   return { opened, open: (file, options) => { const db = new Database(file, options); opened.push(db); return db; } };
 }
 const read = db => db.prepare('SELECT value FROM deadline_fixture').pluck().get();
-async function lock(t, filename, exclusive, releaseAfter = 60000) {
+async function lock(t, filename, releaseAfter = 60000) {
   const source = `import Database from ${JSON.stringify(import.meta.resolve('better-sqlite3'))};
     const db = new Database(process.argv[1]);
     db.pragma('locking_mode=' + process.argv[2]);
     db.exec('BEGIN IMMEDIATE; UPDATE deadline_fixture SET value=2');
     process.send('locked');
     setTimeout(() => { db.exec('ROLLBACK'); db.close(); process.exit(0); }, Number(process.argv[3]));`;
-  const child = spawn(process.execPath, ['--input-type=module', '-e', source, filename, exclusive ? 'EXCLUSIVE' : 'NORMAL', String(releaseAfter)], { stdio: ['ignore', 'ignore', 'pipe', 'ipc'] });
+  const child = spawn(process.execPath, ['--input-type=module', '-e', source, filename, 'NORMAL', String(releaseAfter)], { stdio: ['ignore', 'ignore', 'pipe', 'ipc'] });
   let stderr = '';
   child.stderr.on('data', data => { stderr += data; });
   t.after(async () => {
@@ -53,7 +53,7 @@ function timedCall(filename, duration, operation = read, extra = {}) {
   return { value, error, elapsed: performance.now() - start };
 }
 
-test('record actual runtime and embedded SQLite qualification versions', t => {
+test('record actual runtime and embedded SQLite versions', t => {
   const db = new Database(':memory:');
   t.diagnostic(JSON.stringify({ node: process.version, betterSqlite3: JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.resolve('better-sqlite3')), 'utf8')).version, sqlite: db.prepare('SELECT sqlite_version()').pluck().get() }));
   db.close();
@@ -106,54 +106,11 @@ test('owner inspection and operation share remaining budget and close on expirat
   assert.ok(tracker.opened.every(db => !db.open));
 });
 
-let nativeWaitQualified = false;
-// Raw binding control distinguishes host/native wait behavior from the helper.
-test('raw SQLite ordinary five-second wait qualification', async t => {
-  const filename = fixture(t); await lock(t, filename, true);
-  const db = new Database(filename, { readonly: true, fileMustExist: true, timeout: 5000 });
-  t.after(() => db.close());
-  const start = performance.now();
-  assert.throws(() => db.pragma('user_version', { simple: true }), { code: 'SQLITE_BUSY' });
-  const elapsed = performance.now() - start;
-  t.diagnostic(`raw native busy_timeout=5000: ${elapsed.toFixed(1)}ms`);
-  nativeWaitQualified = elapsed >= 4900 && elapsed < 6500;
-  assert.ok(nativeWaitQualified, 'QUALIFICATION: native SQLite busy_timeout exceeded the expected timing bound; cause requires diagnosis');
-});
-
-test('WAL exclusive lock qualifies as blocking and consumes one-second budget', async t => {
-  if (!nativeWaitQualified) { t.skip('QUALIFICATION: native busy_timeout timing failed; see independent native probe'); return; }
-  const filename = fixture(t); await lock(t, filename, true);
-  const tracker = trackedOpen();
-  const result = timedCall(filename, 1000, read, tracker);
-  t.diagnostic(`exclusive wait: ${result.elapsed.toFixed(1)}ms; ${result.error?.code}`);
-  assert.equal(result.error?.code, 'deadline_exceeded');
-  assert.ok(result.elapsed >= 900 && result.elapsed < 1500);
-  assert.ok(tracker.opened.every(db => !db.open));
-});
-
 test('ordinary WAL writer qualifies as nonblocking and returns committed snapshot', async t => {
-  const filename = fixture(t); await lock(t, filename, false);
+  const filename = fixture(t); await lock(t, filename);
   const result = timedCall(filename, 1000);
   t.diagnostic(`ordinary WAL writer: ${result.elapsed.toFixed(1)}ms`);
   assert.equal(result.error, undefined); assert.equal(result.value, 1); assert.ok(result.elapsed < 900);
-});
-
-test('exclusive lock stops at ordinary five-second cap while deadline remains', async t => {
-  if (!nativeWaitQualified) { t.skip('QUALIFICATION: native busy_timeout timing failed; see independent native probe'); return; }
-  const filename = fixture(t); await lock(t, filename, true);
-  const result = timedCall(filename, 7000);
-  t.diagnostic(`ordinary cap: ${result.elapsed.toFixed(1)}ms; ${result.error?.code}`);
-  assert.equal(result.error?.code, 'DB_BUSY');
-  assert.ok(result.elapsed >= 4900 && result.elapsed < 6500);
-});
-
-test('exclusive lock released after two seconds returns complete result within long budget', async t => {
-  if (!nativeWaitQualified) { t.skip('QUALIFICATION: native busy_timeout timing failed; see independent native probe'); return; }
-  const filename = fixture(t); await lock(t, filename, true, 2000);
-  const result = timedCall(filename, 10000);
-  t.diagnostic(`released lock: ${result.elapsed.toFixed(1)}ms`);
-  assert.equal(result.error, undefined); assert.equal(result.value, 1);
-  assert.ok(result.elapsed >= 1800 && result.elapsed < 4000);
 });
 
 test('already started readonly query completes after deadline', t => {

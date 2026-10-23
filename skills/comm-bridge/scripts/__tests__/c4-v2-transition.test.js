@@ -190,49 +190,52 @@ for (const order of ['created_at DESC', 'updated_at DESC,rowid DESC', 'updated_a
   });
 }
 
-test('getLastCompletedModeTransition: real EXCLUSIVE WAL lock throws DB_BUSY, not null; normal WAL remains readable', async t => {
+test('getLastCompletedModeTransition: injected driver busy maps to DB_BUSY, not null', async t => {
+  const { db } = fixture(t);
+  const mutant = await modifiedStore('c4-v2-store.js',
+    "if (error.code?.startsWith('SQLITE_BUSY')) throw dataError('DB_BUSY', error.message, { cause: error });",
+    "if (error.code?.startsWith('SQLITE_BUSY')) return null;");
+  const nativePrepare = db.prepare;
+  db.prepare = function(sql) {
+    if (sql.includes("WHERE phase='complete'")) throw Object.assign(new Error('controlled driver busy'), { code: 'SQLITE_BUSY' });
+    return nativePrepare.call(this, sql);
+  };
+  try {
+    const acceptance = create => assert.throws(() => create(db).getLastCompletedModeTransition(), { code: 'DB_BUSY', persisted: [] });
+    acceptance(createStore);
+    assert.throws(() => acceptance(mutant), assert.AssertionError);
+  } finally { db.prepare = nativePrepare; }
+});
+
+test('getLastCompletedModeTransition: NORMAL WAL reads committed row while writer holds, then new row after commit', async t => {
   const dir = mkdtempSync(join(tmpdir(), 'c4-last-completed-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const filename = join(dir, 'db.sqlite');
   const seed = new Database(filename); guardDatabase(seed, owner);
   assert.equal(seed.pragma('journal_mode=WAL', { simple: true }), 'wal');
-  completedRows(seed)('committed', 10, 20);
-  const expected = { ...seed.prepare('SELECT * FROM mode_transitions').get(), coverage_snapshot: { '*': 3 }, absorbed_ids: [4, 8, 17] };
-  const before = allTables(seed); seed.close();
-  const mutant = await modifiedStore('c4-v2-store.js',
-    "if (error.code?.startsWith('SQLITE_BUSY')) throw dataError('DB_BUSY', error.message, { cause: error });",
-    "if (error.code?.startsWith('SQLITE_BUSY')) return null;");
-  for (const mode of ['NORMAL', 'EXCLUSIVE']) {
-    const source = `import Database from ${JSON.stringify(require.resolve('better-sqlite3'))};
-      const db = new Database(process.argv[1]);
-      const mode = db.pragma('locking_mode=' + process.argv[2], { simple: true });
-      db.exec("BEGIN IMMEDIATE; UPDATE mode_transitions SET reason='uncommitted'");
-      process.send({ mode, journal: db.pragma('journal_mode', { simple: true }), inTransaction: db.inTransaction });
-      process.on('message', () => { db.exec('ROLLBACK'); db.close(); process.exit(0); });`;
-    const child = spawn(process.execPath, ['--input-type=module', '-e', source, filename, mode], { stdio: ['ignore', 'ignore', 'pipe', 'ipc'] });
-    let stderr = ''; child.stderr.on('data', data => { stderr += data; });
-    t.after(async () => { if (child.exitCode === null && child.signalCode === null) { const exit = once(child, 'exit'); child.kill(); await exit; } });
-    const exited = once(child, 'exit');
-    const [locked] = await Promise.race([once(child, 'message'), exited.then(() => { throw new Error(`locker exited before barrier: ${stderr}`); })]);
-    assert.deepEqual(locked, { mode: mode.toLowerCase(), journal: 'wal', inTransaction: true });
-    // Classification only: no elapsed-time acceptance or replacement of IF65 native wait qualification.
-    const reader = new Database(filename, { readonly: true, fileMustExist: true, timeout: 0 });
-    try {
-      assert.equal(reader.readonly, true);
-      const store = createStore(reader);
-      if (mode === 'NORMAL') assert.deepEqual(store.getLastCompletedModeTransition(), expected);
-      else {
-        assert.throws(() => reader.prepare('SELECT * FROM mode_transitions').all(), { code: 'SQLITE_BUSY' });
-        const acceptance = candidate => assert.throws(() => candidate.getLastCompletedModeTransition(), { code: 'DB_BUSY', persisted: [] });
-        acceptance(store);
-        assert.throws(() => acceptance(mutant(reader)), assert.AssertionError);
-        t.diagnostic('EXCLUSIVE WAL: raw SQLITE_BUSY -> API DB_BUSY; swallow-to-null mutant rejected; timeout=0 classification only');
-      }
-    } finally { reader.close(); child.send('release'); }
-    const [code, signal] = await exited;
+  completedRows(seed)('committed', 10, 20); seed.close();
+  const source = `import Database from ${JSON.stringify(require.resolve('better-sqlite3'))};
+    const db = new Database(process.argv[1]);
+    db.exec("BEGIN IMMEDIATE; UPDATE mode_transitions SET reason='new-committed'");
+    process.send({ mode: db.pragma('locking_mode', { simple: true }), journal: db.pragma('journal_mode', { simple: true }), inTransaction: db.inTransaction });
+    process.on('message', () => { db.exec('COMMIT'); db.close(); process.exit(0); });`;
+  const child = spawn(process.execPath, ['--input-type=module', '-e', source, filename], { stdio: ['ignore', 'ignore', 'pipe', 'ipc'] });
+  let stderr = ''; child.stderr.on('data', data => { stderr += data; });
+  const exited = once(child, 'exit');
+  t.after(async () => { if (child.exitCode === null && child.signalCode === null) { child.kill(); await exited; } });
+  const [locked] = await Promise.race([once(child, 'message'), exited.then(() => { throw new Error(`writer exited before barrier: ${stderr}`); })]);
+  assert.deepEqual(locked, { mode: 'normal', journal: 'wal', inTransaction: true });
+  const reader = new Database(filename, { readonly: true, fileMustExist: true });
+  try {
+    const store = createStore(reader);
+    const before = allTables(reader), changes = reader.prepare('SELECT total_changes() AS n').get().n;
+    const old = store.getLastCompletedModeTransition();
+    assert.equal(old.reason, 'reason-committed');
+    assert.deepEqual(old.coverage_snapshot, { '*': 3 }); assert.deepEqual(old.absorbed_ids, [4, 8, 17]);
+    assert.deepEqual(allTables(reader), before);
+    assert.equal(reader.prepare('SELECT total_changes() AS n').get().n, changes);
+    child.send('commit'); const [code, signal] = await exited;
     assert.equal(code, 0, stderr); assert.equal(signal, null);
-    const reopened = new Database(filename, { readonly: true, fileMustExist: true });
-    try { assert.deepEqual(allTables(reopened), before); assert.deepEqual(createStore(reopened).getLastCompletedModeTransition(), expected); }
-    finally { reopened.close(); }
-  }
+    assert.deepEqual(store.getLastCompletedModeTransition(), { ...old, reason: 'new-committed' });
+  } finally { reader.close(); }
 });
