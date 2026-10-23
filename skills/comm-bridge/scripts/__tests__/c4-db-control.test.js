@@ -9,10 +9,28 @@ import path from 'node:path';
 const ORIG_ZYLOS_DIR = process.env.ZYLOS_DIR;
 const TMP_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'c4-db-test-'));
 process.env.ZYLOS_DIR = TMP_DIR;
+for (const component of ['telegram', 'scheduler']) fs.mkdirSync(path.join(TMP_DIR, '.claude', 'skills', component), { recursive: true });
 
 // Dynamic import so the env var is set before c4-config.js evaluates.
 const mod = await import(new URL('../c4-db.js', import.meta.url));
 const db = mod.getDb();
+
+// New controls explicitly address Origin. Acknowledged group controls carry a
+// deadline; this helper only supplies fixture identity, never legacy API support.
+const CONTROL_GROUP = 'origin';
+const CONTROL_DEADLINE = Math.floor(Date.now() / 1000) + 86400;
+function enqueueTargeted(content, options = {}) {
+  return mod.insertControl(content, { sessionGroup: CONTROL_GROUP, ackDeadlineAt: CONTROL_DEADLINE, ...options });
+}
+function nextTargeted(current = Math.floor(Date.now() / 1000)) {
+  return mod.getNextPendingControl(current, { sessionGroups: [CONTROL_GROUP] });
+}
+function seedHistoricalMachineControl(content) {
+  const now = Math.floor(Date.now() / 1000);
+  const result = db.prepare(`INSERT INTO control_queue(raw_content,content,status,created_at,updated_at)
+    VALUES(?,?,'pending',?,?)`).run(content, content, now, now);
+  return db.prepare('SELECT * FROM control_queue WHERE id=?').get(Number(result.lastInsertRowid));
+}
 
 // Restore env after module load (tests use the already-open db handle).
 if (ORIG_ZYLOS_DIR === undefined) delete process.env.ZYLOS_DIR;
@@ -25,6 +43,10 @@ else process.env.ZYLOS_DIR = ORIG_ZYLOS_DIR;
 function resetTables() {
   db.exec('DELETE FROM control_queue');
   db.exec('DELETE FROM conversations');
+  db.exec('DELETE FROM group_heads');
+  db.exec('DELETE FROM channel_namespaces');
+  db.exec('DELETE FROM drain_fences');
+  db.exec('DELETE FROM mode_transitions');
   db.exec('DELETE FROM status_notice_cooldowns');
   // Reset autoincrement counters
   db.exec("DELETE FROM sqlite_sequence WHERE name IN ('control_queue', 'conversations')");
@@ -42,8 +64,8 @@ process.on('exit', () => {
 describe('insertControl', () => {
   beforeEach(() => resetTables());
 
-  it('inserts a basic control record with defaults', () => {
-    const rec = mod.insertControl('do something');
+  it('inserts a targeted control with delivery defaults and required deadline', () => {
+    const rec = enqueueTargeted('do something');
     assert.ok(typeof rec.id === 'number' && rec.id > 0);
     assert.equal(rec.raw_content, 'do something');
     assert.ok(rec.content.startsWith('do something'));
@@ -51,7 +73,8 @@ describe('insertControl', () => {
     assert.equal(rec.priority, 3);
     assert.equal(rec.require_idle, 0);
     assert.equal(rec.bypass_state, 0);
-    assert.equal(rec.ack_deadline_at, null);
+    assert.equal(rec.ack_deadline_at, CONTROL_DEADLINE);
+    assert.equal(rec.session_group, CONTROL_GROUP);
     assert.equal(rec.status, 'pending');
     assert.equal(rec.retry_count, 0);
     assert.equal(rec.available_at, null);
@@ -60,7 +83,7 @@ describe('insertControl', () => {
   });
 
   it('auto-appends ack suffix with the actual id', () => {
-    const rec = mod.insertControl('Do something.');
+    const rec = enqueueTargeted('Do something.');
     assert.ok(rec.content.includes('---- ack via:'));
     assert.ok(rec.content.includes(`ack --id ${rec.id}`));
     // verify persisted value matches
@@ -69,7 +92,7 @@ describe('insertControl', () => {
   });
 
   it('supports appendAckSuffix=false for clean slash controls', () => {
-    const rec = mod.insertControl('/clear', { appendAckSuffix: false });
+    const rec = enqueueTargeted('/clear', { appendAckSuffix: false });
     assert.equal(rec.raw_content, '/clear');
     assert.equal(rec.content, '/clear');
     const row = mod.getControlById(rec.id);
@@ -77,7 +100,7 @@ describe('insertControl', () => {
   });
 
   it('populates all options when provided', () => {
-    const rec = mod.insertControl('full opts', {
+    const rec = enqueueTargeted('full opts', {
       priority: 5,
       requireIdle: true,
       bypassState: true,
@@ -92,14 +115,14 @@ describe('insertControl', () => {
   });
 
   it('assigns sequential ids', () => {
-    const a = mod.insertControl('a');
-    const b = mod.insertControl('b');
+    const a = enqueueTargeted('a');
+    const b = enqueueTargeted('b');
     assert.equal(b.id, a.id + 1);
   });
 
   it('supersedes older equivalent pending controls', () => {
-    const first = mod.insertControl('repeat me');
-    const second = mod.insertControl('repeat me');
+    const first = enqueueTargeted('repeat me');
+    const second = enqueueTargeted('repeat me');
 
     const oldRow = mod.getControlById(first.id);
     const newRow = mod.getControlById(second.id);
@@ -111,8 +134,8 @@ describe('insertControl', () => {
   });
 
   it('supersedes older pending controls even when other delivery options differ', () => {
-    const base = mod.insertControl('same content', { priority: 2 });
-    const replacement = mod.insertControl('same content', { priority: 3, requireIdle: true, bypassState: true });
+    const base = enqueueTargeted('same content', { priority: 2 });
+    const replacement = enqueueTargeted('same content', { priority: 3, requireIdle: true, bypassState: true });
 
     assert.equal(replacement.superseded_count, 1);
     assert.equal(mod.getControlById(base.id).status, 'superseded');
@@ -120,13 +143,13 @@ describe('insertControl', () => {
   });
 
   it('does not supersede running or final controls', () => {
-    const running = mod.insertControl('same content');
+    const running = enqueueTargeted('same content');
     mod.claimControl(running.id);
 
-    const done = mod.insertControl('same content');
+    const done = enqueueTargeted('same content');
     mod.ackControl(done.id);
 
-    const replacement = mod.insertControl('same content');
+    const replacement = enqueueTargeted('same content');
 
     assert.equal(mod.getControlById(running.id).status, 'running');
     assert.equal(mod.getControlById(done.id).status, 'done');
@@ -135,14 +158,14 @@ describe('insertControl', () => {
   });
 
   it('does not supersede failed or timeout controls', () => {
-    const failed = mod.insertControl('same content');
+    const failed = enqueueTargeted('same content');
     mod.claimControl(failed.id);
     mod.retryOrFailControl(failed.id, 'boom', 1);
 
-    const timedOut = mod.insertControl('same content', { ackDeadlineAt: Math.floor(Date.now() / 1000) - 5 });
+    const timedOut = enqueueTargeted('same content', { ackDeadlineAt: Math.floor(Date.now() / 1000) - 5 });
     mod.expireTimedOutControls();
 
-    const replacement = mod.insertControl('same content');
+    const replacement = enqueueTargeted('same content');
 
     assert.equal(mod.getControlById(failed.id).status, 'failed');
     assert.equal(mod.getControlById(timedOut.id).status, 'timeout');
@@ -169,11 +192,21 @@ describe('getControlById', () => {
   beforeEach(() => resetTables());
 
   it('returns the record when found', () => {
-    const rec = mod.insertControl('findme');
+    const rec = enqueueTargeted('findme');
     const row = mod.getControlById(rec.id);
     assert.ok(row);
     assert.equal(row.id, rec.id);
     assert.ok(row.content.startsWith('findme'));
+    assert.equal(row.session_group, CONTROL_GROUP);
+    assert.equal(row.target_binding, null);
+  });
+
+  it('preserves the persisted target identity when reading by id', () => {
+    const targetBinding = { expectedRunId: 'run-1', tmuxTarget: { serverGeneration: 'generation-1', sessionId: '$1', paneId: '%2' } };
+    const rec = enqueueTargeted('bound', { targetBinding });
+    const row = mod.getControlById(rec.id);
+    assert.equal(row.session_group, CONTROL_GROUP);
+    assert.deepEqual(JSON.parse(row.target_binding), targetBinding);
   });
 
   it('returns null when not found', () => {
@@ -189,45 +222,53 @@ describe('getNextPendingControl', () => {
   beforeEach(() => resetTables());
 
   it('returns lower priority number first', () => {
-    const low = mod.insertControl('low prio', { priority: 1 });
-    const high = mod.insertControl('high prio', { priority: 0 });
-    const next = mod.getNextPendingControl();
+    const low = enqueueTargeted('low prio', { priority: 1 });
+    const high = enqueueTargeted('high prio', { priority: 0 });
+    const next = nextTargeted();
     assert.equal(next.id, high.id);
   });
 
   it('returns FIFO within same priority', () => {
-    const first = mod.insertControl('first');
-    const second = mod.insertControl('second');
-    const next = mod.getNextPendingControl();
+    const first = enqueueTargeted('first');
+    const second = enqueueTargeted('second');
+    const next = nextTargeted();
     assert.equal(next.id, first.id);
   });
 
   it('skips superseded records', () => {
-    mod.insertControl('dupe');
-    const latest = mod.insertControl('dupe');
-    const next = mod.getNextPendingControl();
+    enqueueTargeted('dupe');
+    const latest = enqueueTargeted('dupe');
+    const next = nextTargeted();
     assert.equal(next.id, latest.id);
   });
 
   it('respects available_at filter', () => {
     const now = Math.floor(Date.now() / 1000);
-    mod.insertControl('future', { availableAt: now + 3600 });
-    const ready = mod.insertControl('ready');
-    const next = mod.getNextPendingControl(now);
+    enqueueTargeted('future', { availableAt: now + 3600 });
+    const ready = enqueueTargeted('ready');
+    const next = nextTargeted(now);
     assert.equal(next.id, ready.id);
   });
 
   it('skips non-pending records', () => {
-    const first = mod.insertControl('first');
+    const first = enqueueTargeted('first');
     mod.claimControl(first.id); // pending -> running
-    const second = mod.insertControl('second');
-    const next = mod.getNextPendingControl();
+    const second = enqueueTargeted('second');
+    const next = nextTargeted();
     assert.equal(next.id, second.id);
   });
 
   it('returns null when no pending records exist', () => {
-    const next = mod.getNextPendingControl();
+    const next = nextTargeted();
     assert.equal(next, null);
+  });
+
+  it('no-options selector reads only historical machine controls', () => {
+    enqueueTargeted('targeted');
+    assert.equal(mod.getNextPendingControl(), null);
+    const machine = seedHistoricalMachineControl('legacy machine');
+    assert.equal(mod.getNextPendingControl().id, machine.id);
+    assert.notEqual(nextTargeted().id, machine.id);
   });
 });
 
@@ -238,7 +279,7 @@ describe('claimControl', () => {
   beforeEach(() => resetTables());
 
   it('transitions pending to running and returns true', () => {
-    const rec = mod.insertControl('claim me');
+    const rec = enqueueTargeted('claim me');
     const ok = mod.claimControl(rec.id);
     assert.equal(ok, true);
     const row = mod.getControlById(rec.id);
@@ -246,14 +287,14 @@ describe('claimControl', () => {
   });
 
   it('returns false for non-pending record', () => {
-    const rec = mod.insertControl('claim me');
+    const rec = enqueueTargeted('claim me');
     mod.claimControl(rec.id); // now running
     const ok = mod.claimControl(rec.id); // already running
     assert.equal(ok, false);
   });
 
-  it('concurrent claims: only one succeeds', () => {
-    const rec = mod.insertControl('race');
+  it('repeated claims: only one succeeds', () => {
+    const rec = enqueueTargeted('race');
     const r1 = mod.claimControl(rec.id);
     const r2 = mod.claimControl(rec.id);
     assert.equal(r1, true);
@@ -268,7 +309,7 @@ describe('requeueControl', () => {
   beforeEach(() => resetTables());
 
   it('transitions running back to pending', () => {
-    const rec = mod.insertControl('requeue me');
+    const rec = enqueueTargeted('requeue me');
     mod.claimControl(rec.id);
     mod.requeueControl(rec.id);
     const row = mod.getControlById(rec.id);
@@ -276,7 +317,7 @@ describe('requeueControl', () => {
   });
 
   it('stores lastError when provided', () => {
-    const rec = mod.insertControl('fail then requeue');
+    const rec = enqueueTargeted('fail then requeue');
     mod.claimControl(rec.id);
     mod.requeueControl(rec.id, 'something broke');
     const row = mod.getControlById(rec.id);
@@ -291,7 +332,7 @@ describe('ackControl', () => {
   beforeEach(() => resetTables());
 
   it('transitions pending to done', () => {
-    const rec = mod.insertControl('ack pending');
+    const rec = enqueueTargeted('ack pending');
     const result = mod.ackControl(rec.id);
     assert.equal(result.found, true);
     assert.equal(result.alreadyFinal, false);
@@ -301,7 +342,7 @@ describe('ackControl', () => {
   });
 
   it('transitions running to done', () => {
-    const rec = mod.insertControl('ack running');
+    const rec = enqueueTargeted('ack running');
     mod.claimControl(rec.id);
     const result = mod.ackControl(rec.id);
     assert.equal(result.found, true);
@@ -310,7 +351,7 @@ describe('ackControl', () => {
   });
 
   it('is idempotent on done (alreadyFinal=true)', () => {
-    const rec = mod.insertControl('idempotent');
+    const rec = enqueueTargeted('idempotent');
     mod.ackControl(rec.id); // done
     const result = mod.ackControl(rec.id); // again
     assert.equal(result.found, true);
@@ -320,7 +361,7 @@ describe('ackControl', () => {
 
   it('detects timeout when ack_deadline_at is exceeded', () => {
     const past = Math.floor(Date.now() / 1000) - 3600;
-    const rec = mod.insertControl('overdue ack', { ackDeadlineAt: past });
+    const rec = enqueueTargeted('overdue ack', { ackDeadlineAt: past });
     const result = mod.ackControl(rec.id);
     assert.equal(result.found, true);
     assert.equal(result.alreadyFinal, true);
@@ -335,8 +376,8 @@ describe('ackControl', () => {
   });
 
   it('treats superseded as an already-final state', () => {
-    const first = mod.insertControl('dupe');
-    const second = mod.insertControl('dupe');
+    const first = enqueueTargeted('dupe');
+    const second = enqueueTargeted('dupe');
     const result = mod.ackControl(first.id);
 
     assert.equal(second.status, 'pending');
@@ -353,7 +394,7 @@ describe('retryOrFailControl', () => {
   beforeEach(() => resetTables());
 
   it('increments retry_count and requeues to pending', () => {
-    const rec = mod.insertControl('retry me');
+    const rec = enqueueTargeted('retry me');
     const result = mod.retryOrFailControl(rec.id, 'err1', 3);
     assert.equal(result.status, 'pending');
     assert.equal(result.retry_count, 1);
@@ -363,7 +404,7 @@ describe('retryOrFailControl', () => {
   });
 
   it('marks as failed when max retries exceeded', () => {
-    const rec = mod.insertControl('fail me');
+    const rec = enqueueTargeted('fail me');
     mod.retryOrFailControl(rec.id, 'err1', 3); // retry_count=1
     mod.retryOrFailControl(rec.id, 'err2', 3); // retry_count=2
     const result = mod.retryOrFailControl(rec.id, 'err3', 3); // retry_count=3 >= 3
@@ -391,9 +432,9 @@ describe('expireTimedOutControls', () => {
     const pastDeadline = now - 100;
 
     // pending with past deadline
-    mod.insertControl('pending overdue', { ackDeadlineAt: pastDeadline });
+    enqueueTargeted('pending overdue', { ackDeadlineAt: pastDeadline });
     // running with past deadline
-    const running = mod.insertControl('running overdue', { ackDeadlineAt: pastDeadline });
+    const running = enqueueTargeted('running overdue', { ackDeadlineAt: pastDeadline });
     mod.claimControl(running.id);
 
     const count = mod.expireTimedOutControls(now);
@@ -405,10 +446,12 @@ describe('expireTimedOutControls', () => {
     const pastDeadline = now - 100;
 
     // done record with past deadline
-    const done = mod.insertControl('done item', { ackDeadlineAt: pastDeadline });
+    const done = enqueueTargeted('done item');
     mod.ackControl(done.id);
+    db.prepare('UPDATE control_queue SET ack_deadline_at=? WHERE id=?').run(pastDeadline, done.id);
+    assert.equal(mod.getControlById(done.id).status, 'done');
     // failed record with past deadline
-    const failed = mod.insertControl('failed item', { ackDeadlineAt: pastDeadline });
+    const failed = enqueueTargeted('failed item', { ackDeadlineAt: pastDeadline });
     mod.retryOrFailControl(failed.id, 'e', 1);
 
     const count = mod.expireTimedOutControls(now);
@@ -418,8 +461,8 @@ describe('expireTimedOutControls', () => {
   it('ignores superseded records', () => {
     const now = Math.floor(Date.now() / 1000);
     const pastDeadline = now - 100;
-    mod.insertControl('dupe', { ackDeadlineAt: pastDeadline });
-    mod.insertControl('dupe', { ackDeadlineAt: pastDeadline });
+    enqueueTargeted('dupe', { ackDeadlineAt: pastDeadline });
+    enqueueTargeted('dupe', { ackDeadlineAt: pastDeadline });
 
     const count = mod.expireTimedOutControls(now);
     assert.equal(count, 1);
@@ -427,7 +470,9 @@ describe('expireTimedOutControls', () => {
 
   it('ignores records with no deadline', () => {
     const now = Math.floor(Date.now() / 1000);
-    mod.insertControl('no deadline');
+    const legacy = seedHistoricalMachineControl('no deadline');
+    assert.equal(legacy.session_group, null);
+    assert.equal(legacy.ack_deadline_at, null);
     const count = mod.expireTimedOutControls(now);
     assert.equal(count, 0);
   });
@@ -461,7 +506,7 @@ describe('cleanupControlQueue', () => {
 
   it('preserves recent terminal records', () => {
     const now = Math.floor(Date.now() / 1000);
-    const rec = mod.insertControl('recent done');
+    const rec = enqueueTargeted('recent done');
     mod.ackControl(rec.id);
 
     const cutoff = now - 86400 * 7;
@@ -536,18 +581,27 @@ describe('insertConversation', () => {
     assert.equal(conv.status, 'delivered');
   });
 
-  it('respects explicit status override', () => {
-    const conv = mod.insertConversation('in', 'system', null, 'msg', 'delivered');
-    assert.equal(conv.status, 'delivered');
+  it('accepts explicit failed intake and rejects delivered intake', () => {
+    const conv = mod.insertConversation('in', 'system', null, 'msg', { status: 'failed' });
+    assert.equal(conv.status, 'failed');
+    assert.throws(() => mod.insertConversation('in', 'system', null, 'msg', { status: 'delivered' }), { code: 'INVALID_ARGS' });
+  });
+
+  it('records delivered incoming status through claim and actual completion', () => {
+    const conv = mod.insertConversation('in', 'system', null, 'msg');
+    assert.equal(mod.claimConversation(conv.id), true);
+    assert.equal(mod.markDelivered(conv.id, { sessionId: 'fixture-session' }), true);
+    const stored = db.prepare('SELECT status,session_id FROM conversations WHERE id=?').get(conv.id);
+    assert.deepEqual(stored, { status: 'delivered', session_id: 'fixture-session' });
   });
 
   it('sets requireIdle flag', () => {
-    const conv = mod.insertConversation('in', 'scheduler', null, 'task', null, 3, true);
+    const conv = mod.insertConversation('in', 'scheduler', null, 'task', { requireIdle: true });
     assert.equal(conv.require_idle, 1);
   });
 
   it('records delivery action metadata', () => {
-    const conv = mod.insertConversation('in', 'telegram', '123', 'msg', 'delivered', 3, false, 'suppressed');
+    const conv = mod.insertConversation('in', 'telegram', '123', 'msg', { status: 'failed', deliveryAction: 'suppressed' });
     assert.equal(conv.delivery_action, 'suppressed');
 
     const row = db.prepare('SELECT delivery_action FROM conversations WHERE id = ?').get(conv.id);

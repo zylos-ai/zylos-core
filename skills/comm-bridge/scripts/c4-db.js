@@ -19,6 +19,21 @@ export { migrateSchema, stripTrailingAckSuffix } from './c4-migrations.js';
 
 let db = null;
 
+import { createStore } from './c4-v2-store.js';
+import { withDeadlineRead } from './c4-deadline-read.js';
+import { validateChannel } from './c4-validate.js';
+export { composeSessionGroup, parseSessionGroup } from './c4-session-group.js';
+
+const store = createStore(getDb, {
+  validateComponent: name => validateChannel(name, true),
+  readConfig: () => {
+    // P01-C supplies the strict P03 reader through this dependency boundary.
+    // A deployed skill is not adjacent to the npm package's cli directory.
+    throw new Error('Strict F1 reader has not been connected');
+  },
+});
+
+
 /**
  * Get database connection, initializing if needed
  */
@@ -39,46 +54,6 @@ export function getDb() {
 }
 
 function nowSeconds() { return Math.floor(Date.now() / 1000); }
-
-/**
- * Insert a conversation record
- * @param {string} direction - 'in' or 'out'
- * @param {string} channel - 'telegram', 'lark', 'scheduler', 'system', etc.
- * @param {string|null} endpointId - chat_id or null
- * @param {string} content - message content
- * @param {string} status - 'pending' or 'delivered' (default: 'pending' for in, 'delivered' for out)
- * @param {number} priority - 1=urgent, 2=high, 3=normal (default: 3)
- * @param {boolean} requireIdle - whether to wait for Claude idle state (default: false)
- * @returns {object} - inserted record with id
- */
-export function insertConversation(direction, channel, endpointId, content, status = null, priority = 3, requireIdle = false, deliveryAction = null) {
-  const db = getDb();
-
-  // Default status: 'pending' for incoming, 'delivered' for outgoing
-  const finalStatus = status || (direction === 'in' ? 'pending' : 'delivered');
-
-  const requireIdleVal = requireIdle ? 1 : 0;
-
-  const stmt = db.prepare(`
-    INSERT INTO conversations (direction, channel, endpoint_id, content, status, delivery_action, priority, require_idle)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-  `);
-
-  const result = stmt.run(direction, channel, endpointId, content, finalStatus, deliveryAction, priority, requireIdleVal);
-
-  return {
-    id: result.lastInsertRowid,
-    direction,
-    channel,
-    endpoint_id: endpointId,
-    content,
-    status: finalStatus,
-    delivery_action: deliveryAction,
-    priority,
-    require_idle: requireIdleVal,
-    retry_count: 0
-  };
-}
 
 /**
  * Reserve or suppress an unhealthy/status notice cooldown.
@@ -177,79 +152,6 @@ export function finishStatusNotice(claim, outcome, { now = nowSeconds(), ttl = 6
 }
 
 /**
- * Get next pending message from queue (priority-based, then FIFO)
- * @returns {object|null} - highest priority pending message or null
- */
-export function getNextPending() {
-  const db = getDb();
-  return db.prepare(`
-    SELECT id, direction, channel, endpoint_id, content, timestamp, priority, require_idle, retry_count
-    FROM conversations
-    WHERE direction = 'in' AND status = 'pending'
-    ORDER BY COALESCE(priority, 3) ASC, timestamp ASC
-    LIMIT 1
-  `).get() || null;
-}
-
-/**
- * Atomically claim a pending conversation message to running
- * @param {number} id - conversation id
- * @returns {boolean}
- */
-export function claimConversation(id) {
-  const db = getDb();
-  const result = db.prepare(`
-    UPDATE conversations
-    SET status = 'running'
-    WHERE id = ? AND direction = 'in' AND status = 'pending'
-  `).run(id);
-  return result.changes > 0;
-}
-
-/**
- * Return a running message back to pending state
- * @param {number} id - conversation id
- */
-export function requeueConversation(id) {
-  const db = getDb();
-  db.prepare(`
-    UPDATE conversations
-    SET status = 'pending'
-    WHERE id = ? AND direction = 'in' AND status = 'running'
-  `).run(id);
-}
-
-/**
- * Mark a message as delivered
- * @param {number} id - message id
- */
-export function markDelivered(id) {
-  const db = getDb();
-  db.prepare('UPDATE conversations SET status = ? WHERE id = ?').run('delivered', id);
-}
-
-/**
- * Increment retry count for a message
- * @param {number} id - message id
- * @returns {number} - new retry count
- */
-export function incrementRetryCount(id) {
-  const db = getDb();
-  db.prepare('UPDATE conversations SET retry_count = COALESCE(retry_count, 0) + 1 WHERE id = ?').run(id);
-  const row = db.prepare('SELECT retry_count FROM conversations WHERE id = ?').get(id);
-  return row?.retry_count || 0;
-}
-
-/**
- * Mark a message as failed
- * @param {number} id - message id
- */
-export function markFailed(id) {
-  const db = getDb();
-  db.prepare('UPDATE conversations SET status = ? WHERE id = ?').run('failed', id);
-}
-
-/**
  * Get count of pending messages
  * @returns {number}
  */
@@ -276,91 +178,6 @@ export function getPendingControlCount() {
 }
 
 /**
- * Insert a control queue record
- * @param {string} content - instruction content
- * @param {object} options - queue options
- * @param {boolean} [options.appendAckSuffix=true] - append "ack via" suffix to content
- * @returns {object} inserted control record
- */
-export function insertControl(content, options = {}) {
-  const database = getDb();
-  const {
-    priority = 3,
-    requireIdle = false,
-    bypassState = false,
-    ackDeadlineAt = null,
-    availableAt = null,
-    appendAckSuffix = true
-  } = options;
-
-  const tx = database.transaction(() => {
-    const current = nowSeconds();
-    const insertStmt = database.prepare(`
-      INSERT INTO control_queue (
-        raw_content, content, priority, require_idle, bypass_state, ack_deadline_at,
-        status, retry_count, available_at, last_error, created_at, updated_at
-      )
-      VALUES (?, ?, ?, ?, ?, ?, 'pending', 0, ?, NULL, ?, ?)
-    `);
-
-    const result = insertStmt.run(
-      content,
-      content,
-      priority,
-      requireIdle ? 1 : 0,
-      bypassState ? 1 : 0,
-      ackDeadlineAt,
-      availableAt,
-      current,
-      current
-    );
-
-    const id = Number(result.lastInsertRowid);
-
-    let finalContent = content;
-    if (appendAckSuffix) {
-      // Control acknowledgements are stored with the queued control item so
-      // the ack ID remains attached to the exact work item being delivered.
-      const controlScriptPath = path.join(__dirname, 'c4-control.js');
-      const ackSuffix = ` ---- ack via: node ${controlScriptPath} ack --id ${id}`;
-      finalContent = content + ackSuffix;
-    }
-
-    database.prepare(`
-      UPDATE control_queue
-      SET content = ?, updated_at = ?
-      WHERE id = ?
-    `).run(finalContent, current, id);
-
-    const supersedeResult = database.prepare(`
-      UPDATE control_queue
-      SET status = 'superseded', updated_at = ?, last_error = NULL
-      WHERE id != ?
-        AND status = 'pending'
-        AND raw_content = ?
-    `).run(
-      current,
-      id,
-      content
-    );
-
-    const row = database.prepare(`
-      SELECT id, raw_content, content, priority, require_idle, bypass_state, ack_deadline_at,
-             status, retry_count, available_at, last_error, created_at, updated_at
-      FROM control_queue
-      WHERE id = ?
-    `).get(id);
-
-    return {
-      ...row,
-      superseded_count: supersedeResult.changes || 0
-    };
-  });
-
-  return tx();
-}
-
-/**
  * Get one control record by id
  * @param {number} id - control id
  * @returns {object|null}
@@ -369,43 +186,11 @@ export function getControlById(id) {
   const database = getDb();
   return database.prepare(`
     SELECT id, raw_content, content, priority, require_idle, bypass_state, ack_deadline_at,
-           status, retry_count, available_at, last_error, created_at, updated_at
+           status, retry_count, available_at, last_error, created_at, updated_at,
+           session_group, target_binding
     FROM control_queue
     WHERE id = ?
   `).get(id) || null;
-}
-
-/**
- * Get next pending control item by priority/FIFO order
- * @param {number} current - unix seconds
- * @returns {object|null}
- */
-export function getNextPendingControl(current = nowSeconds()) {
-  const database = getDb();
-  return database.prepare(`
-    SELECT id, raw_content, content, priority, require_idle, bypass_state, ack_deadline_at,
-           status, retry_count, available_at, last_error, created_at, updated_at
-    FROM control_queue
-    WHERE status = 'pending'
-      AND (available_at IS NULL OR available_at <= ?)
-    ORDER BY COALESCE(priority, 3) ASC, id ASC
-    LIMIT 1
-  `).get(current) || null;
-}
-
-/**
- * Atomically claim a pending control item to running
- * @param {number} id - control id
- * @returns {boolean}
- */
-export function claimControl(id) {
-  const database = getDb();
-  const result = database.prepare(`
-    UPDATE control_queue
-    SET status = 'running', updated_at = ?, last_error = NULL
-    WHERE id = ? AND status = 'pending'
-  `).run(nowSeconds(), id);
-  return result.changes > 0;
 }
 
 /**
@@ -542,87 +327,6 @@ export function cleanupControlQueue(cutoff) {
 }
 
 /**
- * Create a checkpoint
- * @param {number} endConversationId - last conversation id covered by this checkpoint (caller determines the boundary)
- * @param {string|null} summary - checkpoint summary
- * @returns {object} - checkpoint record with id, start/end conversation ids
- */
-export function createCheckpoint(endConversationId, summary = null) {
-  const db = getDb();
-
-  // start = previous checkpoint's end + 1 (or 1 if first checkpoint)
-  const prevCheckpoint = db.prepare(
-    'SELECT end_conversation_id FROM checkpoints ORDER BY id DESC LIMIT 1'
-  ).get();
-
-  const startId = prevCheckpoint ? (prevCheckpoint.end_conversation_id || 0) + 1 : 1;
-
-  const stmt = db.prepare('INSERT INTO checkpoints (summary, start_conversation_id, end_conversation_id) VALUES (?, ?, ?)');
-  const result = stmt.run(summary, startId, endConversationId);
-
-  return {
-    id: result.lastInsertRowid,
-    start_conversation_id: startId,
-    end_conversation_id: endConversationId,
-    timestamp: new Date().toISOString()
-  };
-}
-
-/**
- * Get the most recent checkpoint
- * @returns {object|null} - checkpoint record or null
- */
-export function getLastCheckpoint() {
-  const db = getDb();
-  return db.prepare(
-    'SELECT id, timestamp, summary, start_conversation_id, end_conversation_id FROM checkpoints ORDER BY id DESC LIMIT 1'
-  ).get() || null;
-}
-
-/**
- * Get range and count of unsummarized conversations (after last checkpoint)
- * @returns {object} - { begin_id, end_id, count }
- */
-export function getUnsummarizedRange() {
-  const db = getDb();
-  const lastCheckpoint = db.prepare(
-    'SELECT end_conversation_id FROM checkpoints ORDER BY id DESC LIMIT 1'
-  ).get();
-  const afterId = lastCheckpoint?.end_conversation_id || 0;
-  const result = db.prepare(
-    'SELECT MIN(id) as begin_id, MAX(id) as end_id, COUNT(*) as count FROM conversations WHERE id > ?'
-  ).get(afterId);
-  return {
-    begin_id: result?.begin_id || null,
-    end_id: result?.end_id || null,
-    count: result?.count || 0
-  };
-}
-
-/**
- * Get unsummarized conversations (after last checkpoint)
- * @param {number|null} limit - if set, return only the most recent N records
- * @returns {array} - conversation records in chronological order
- */
-export function getUnsummarizedConversations(limit = null) {
-  const db = getDb();
-  const lastCheckpoint = db.prepare(
-    'SELECT end_conversation_id FROM checkpoints ORDER BY id DESC LIMIT 1'
-  ).get();
-  const afterId = lastCheckpoint?.end_conversation_id || 0;
-
-  if (limit) {
-    return db.prepare(
-      'SELECT * FROM (SELECT * FROM conversations WHERE id > ? ORDER BY id DESC LIMIT ?) ORDER BY id ASC'
-    ).all(afterId, limit);
-  }
-
-  return db.prepare(
-    'SELECT * FROM conversations WHERE id > ? ORDER BY id ASC'
-  ).all(afterId);
-}
-
-/**
  * Get conversations by id range (inclusive)
  * @param {number} beginId - start conversation id
  * @param {number} endId - end conversation id
@@ -724,6 +428,76 @@ export function close() {
     db.close();
     db = null;
   }
+}
+
+export const getChannelNamespace = (...args) => store.getChannelNamespace(...args);
+export const getComponentByNamespace = (...args) => store.getComponentByNamespace(...args);
+export const ensureChannelNamespace = (...args) => store.ensureChannelNamespace(...args);
+export const registerChannelNamespace = (...args) => store.registerChannelNamespace(...args);
+export const resolveSessionGroup = (...args) => store.resolveSessionGroup(...args);
+export const insertConversation = (...args) => store.insertConversation(...args);
+export const insertInternalMessage = (...args) => store.insertInternalMessage(...args);
+export const buildTargetBinding = (...args) => store.buildTargetBinding(...args);
+export const getNextPending = (...args) => store.getNextPending(...args);
+export const claimConversation = (...args) => store.claimConversation(...args);
+export const requeueConversation = (...args) => store.requeueConversation(...args);
+export const markDelivered = (...args) => store.markDelivered(...args);
+export const expirePending = (...args) => store.expirePending(...args);
+export const failDelivery = (...args) => store.failDelivery(...args);
+export const recoverOrphanRunning = (...args) => store.recoverOrphanRunning(...args);
+export const listPendingSessionGroups = (...args) => store.listPendingSessionGroups(...args);
+export const countRunningConversations = (...args) => store.countRunningConversations(...args);
+export const countGlobalRunningConversations = (...args) => store.countGlobalRunningConversations(...args);
+export const hasOutboundAfter = (...args) => store.hasOutboundAfter(...args);
+export const getLastActivity = (...args) => store.getLastActivity(...args);
+export const markStatusNoticeSuppressed = (...args) => store.markStatusNoticeSuppressed(...args);
+export const getSessionModelConfig = (...args) => store.getSessionModelConfig(...args);
+export const setSessionModelConfig = (...args) => store.setSessionModelConfig(...args);
+export const resetSessionModelConfig = (...args) => store.resetSessionModelConfig(...args);
+export const getSessionRuntimeConfig = (...args) => store.getSessionRuntimeConfig(...args);
+export const setSessionRuntimeConfig = (...args) => store.setSessionRuntimeConfig(...args);
+export const resetSessionRuntimeConfig = (...args) => store.resetSessionRuntimeConfig(...args);
+export const resolveSessionLaunchConfig = (...args) => store.resolveSessionLaunchConfig(...args);
+export const listGroupRuntimeOverrides = (...args) => store.listGroupRuntimeOverrides(...args);
+export const legacyBaselineEnd = (...args) => store.legacyBaselineEnd(...args);
+export const getCoverageEnd = (...args) => store.getCoverageEnd(...args);
+export const getGlobalCoverageEnd = (...args) => store.getGlobalCoverageEnd(...args);
+export const getDeliveredFrontier = (...args) => store.getDeliveredFrontier(...args);
+export const getGlobalDeliveredFrontier = (...args) => store.getGlobalDeliveredFrontier(...args);
+export const createCheckpoint = (...args) => store.createCheckpoint(...args);
+export const getLatestContentCheckpoint = (...args) => store.getLatestContentCheckpoint(...args);
+export const getDeliveredSince = (...args) => store.getDeliveredSince(...args);
+export const getGlobalDeliveredSince = (...args) => store.getGlobalDeliveredSince(...args);
+export const getUnsummarizedRange = (...args) => store.getUnsummarizedRange(...args);
+export const getGlobalUnsummarizedRange = (...args) => store.getGlobalUnsummarizedRange(...args);
+export const getUnsummarizedConversations = (...args) => store.getUnsummarizedConversations(...args);
+export const getGlobalUnsummarizedConversations = (...args) => store.getGlobalUnsummarizedConversations(...args);
+export const getContentCheckpointsSince = (...args) => store.getContentCheckpointsSince(...args);
+export const getOriginSyncConversations = (...args) => store.getOriginSyncConversations(...args);
+export const advanceOriginSyncCursor = (...args) => store.advanceOriginSyncCursor(...args);
+export const getOriginSyncBacklog = (...args) => store.getOriginSyncBacklog(...args);
+export const insertControl = (...args) => store.insertControl(...args);
+export const getNextPendingControl = (...args) => store.getNextPendingControl(...args);
+export const claimControl = (...args) => store.claimControl(...args);
+export const expirePendingControls = (...args) => store.expirePendingControls(...args);
+export const expireStaleRunningControls = (...args) => store.expireStaleRunningControls(...args);
+export const countNonTerminalControls = (...args) => store.countNonTerminalControls(...args);
+export const expireControlById = (...args) => store.expireControlById(...args);
+export const setDrainFence = (...args) => store.setDrainFence(...args);
+export const getDrainFence = (...args) => store.getDrainFence(...args);
+export const listDrainFences = (...args) => store.listDrainFences(...args);
+export const clearDrainFence = (...args) => store.clearDrainFence(...args);
+export const beginModeTransition = (...args) => store.beginModeTransition(...args);
+export const getLastCompletedModeTransition = (...args) => store.getLastCompletedModeTransition(...args);
+export const listGroupHeads = (...args) => store.listGroupHeads(...args);
+export const absorbForTransition = (...args) => store.absorbForTransition(...args);
+export const setModeTransitionPhase = (...args) => store.setModeTransitionPhase(...args);
+export const getAbsorbedConversations = (...args) => store.getAbsorbedConversations(...args);
+export function getModeTransition(options = {}, { deadlineAt } = {}) {
+  return deadlineAt === undefined ? store.getModeTransition(options) : withDeadlineRead(DB_PATH, schema, deadlineAt, connection => createStore(connection).getModeTransition(options));
+}
+export function auditCheckpoints({ deadlineAt } = {}) {
+  return deadlineAt === undefined ? store.auditCheckpoints() : withDeadlineRead(DB_PATH, schema, deadlineAt, connection => createStore(connection).auditCheckpoints());
 }
 
 // CLI mode
