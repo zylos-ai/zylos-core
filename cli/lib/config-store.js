@@ -74,18 +74,24 @@ export function validateUpdateIntent(update) {
 
 export function evaluateConfigUpdate(current, update) {
   const { set, setIfAbsent } = validateUpdateIntent(update);
-  const config = { ...current };
+  const config = Object.fromEntries(Object.entries(current));
   const previous = {};
   const written = [];
   const skipped = [];
   const touched = [...Object.keys(set), ...Object.keys(setIfAbsent)];
 
   for (const key of touched) {
-    if (Object.hasOwn(current, key)) previous[key] = current[key];
+    if (Object.hasOwn(current, key)) {
+      Object.defineProperty(previous, key, {
+        value: current[key], enumerable: true, writable: true, configurable: true,
+      });
+    }
   }
   for (const [key, value] of Object.entries(set)) {
     if (!Object.hasOwn(current, key) || !Object.is(current[key], value)) {
-      config[key] = value;
+      Object.defineProperty(config, key, {
+        value, enumerable: true, writable: true, configurable: true,
+      });
       written.push(key);
     }
   }
@@ -93,7 +99,9 @@ export function evaluateConfigUpdate(current, update) {
     if (Object.hasOwn(current, key)) {
       skipped.push(key);
     } else {
-      config[key] = value;
+      Object.defineProperty(config, key, {
+        value, enumerable: true, writable: true, configurable: true,
+      });
       written.push(key);
     }
   }

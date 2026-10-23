@@ -11,6 +11,7 @@ const cliPath = path.join(rootDir, 'cli', 'zylos.js');
 const c4ConfigUrl = pathToFileURL(path.join(rootDir, 'skills', 'comm-bridge', 'scripts', 'c4-config.js')).href;
 const loaderUrl = pathToFileURL(path.join(rootDir, 'skills', 'comm-bridge', 'scripts', 'core-config-loader.js')).href;
 const authHook = path.join(rootDir, 'skills', 'activity-monitor', 'scripts', 'hook-auth-prompt.js');
+const caddySetup = path.join(rootDir, 'skills', 'http', 'scripts', 'setup-caddy.js');
 let root;
 
 beforeEach(() => { root = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-config-readers-')); });
@@ -52,6 +53,24 @@ describe('strict runtime readers', () => {
     assert.match(malformed.stderr, /CONFIG_UNREADABLE|configuration is unreadable/);
   });
 
+  it('applies the missing-key runtime and statusNotices matrix from one snapshot', () => {
+    const cases = [
+      { config: null, expected: { runtime: 'claude', notices: {} } },
+      { config: {}, expected: { runtime: 'claude', notices: {} } },
+      { config: { runtime: 'other', statusNotices: null }, expected: { runtime: 'claude', notices: {} } },
+      { config: { runtime: 'codex' }, expected: { runtime: 'codex', notices: {} } },
+      { config: { statusNotices: { prefix: 'Core' } }, expected: { runtime: 'claude', notices: { prefix: 'Core' } } },
+    ];
+    for (const [index, entry] of cases.entries()) {
+      const file = path.join(root, '.zylos', 'config.json');
+      fs.rmSync(file, { force: true });
+      if (entry.config !== null) writeConfig(JSON.stringify(entry.config));
+      const result = run(['--input-type=module', '-e', `const c=await import(${JSON.stringify(`${c4ConfigUrl}?matrix=${index}`)}); console.log(JSON.stringify({runtime:c.ACTIVE_RUNTIME,notices:c.STATUS_NOTICE_CONFIG}));`]);
+      assert.equal(result.status, 0, result.stderr);
+      assert.deepEqual(JSON.parse(result.stdout), entry.expected);
+    }
+  });
+
   it('fails explicitly when an installed Core module cannot be located', () => {
     const missingRoot = path.join(root, 'missing-package');
     const result = run(['--input-type=module', '-e', `const l=await import(${JSON.stringify(loaderUrl)}); await l.loadCoreConfig();`], {
@@ -63,6 +82,10 @@ describe('strict runtime readers', () => {
 
   it('does not auto-approve when the auth hook sees malformed F1', () => {
     writeConfig('{');
+    const enqueueFlag = path.join(root, 'enqueue-attempted.flag');
+    const control = path.join(root, '.claude', 'skills', 'comm-bridge', 'scripts', 'c4-control.js');
+    fs.mkdirSync(path.dirname(control), { recursive: true });
+    fs.writeFileSync(control, `require('node:fs').writeFileSync(${JSON.stringify(enqueueFlag)}, 'called');\n`);
     const invoked = spawnSync(process.execPath, [authHook], {
       env: { ...process.env, HOME: root, ZYLOS_DIR: root, ZYLOS_PACKAGE_ROOT: rootDir },
       input: JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'true' } }),
@@ -70,7 +93,21 @@ describe('strict runtime readers', () => {
     });
     assert.notEqual(invoked.status, 0);
     assert.match(invoked.stderr, /CONFIG_UNREADABLE/);
-    assert.equal(fs.existsSync(path.join(root, 'activity-monitor', 'enqueue-attempted.flag')), false);
+    assert.equal(fs.existsSync(enqueueFlag), false);
+  });
+
+  it('fails the standalone Caddy consumer before actions when F1 is malformed', () => {
+    writeConfig('{');
+    const caddy = path.join(root, 'bin', 'caddy');
+    fs.mkdirSync(path.dirname(caddy), { recursive: true });
+    fs.writeFileSync(caddy, '#!/bin/sh\nexit 99\n');
+    fs.chmodSync(caddy, 0o755);
+    const before = fs.readFileSync(path.join(root, '.zylos', 'config.json'), 'utf8');
+    const result = run([caddySetup]);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /CONFIG_UNREADABLE|configuration is unreadable/);
+    assert.equal(fs.readFileSync(path.join(root, '.zylos', 'config.json'), 'utf8'), before);
+    assert.equal(fs.existsSync(path.join(root, 'http', 'Caddyfile')), false);
   });
 
   it('keeps Docker environment priority and does not swallow strict fallback errors', () => {

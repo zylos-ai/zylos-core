@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
 import { migrateNewSessionThresholdDefaults } from '../migrate.js';
 
 const rootDir = path.resolve(import.meta.dirname, '../../..');
@@ -54,6 +55,60 @@ describe('production config writers', () => {
     fs.writeFileSync(configFile, '{');
     assert.throws(() => migrateNewSessionThresholdDefaults({ zylosDir: root }), error => error.code === 'CONFIG_UNREADABLE');
     assert.equal(fs.readFileSync(configFile, 'utf8'), '{');
+  });
+
+  it('rolls back a protocol write through the locked writer when Caddy validation fails', () => {
+    const configFile = path.join(root, '.zylos', 'config.json');
+    const caddyFile = path.join(root, 'http', 'Caddyfile');
+    const caddyBin = path.join(root, 'bin', 'caddy');
+    fs.mkdirSync(path.dirname(configFile), { recursive: true });
+    fs.mkdirSync(path.dirname(caddyFile), { recursive: true });
+    fs.mkdirSync(path.dirname(caddyBin), { recursive: true });
+    fs.writeFileSync(configFile, JSON.stringify({ domain: 'example.test', protocol: 'https', unknown: false }));
+    fs.writeFileSync(caddyFile, '# Domain: example.test\nexample.test {\n    respond "ok"\n}\n');
+    fs.writeFileSync(caddyBin, '#!/bin/sh\nexit 1\n');
+    fs.chmodSync(caddyBin, 0o755);
+
+    const result = cli(['config', 'set', 'protocol', 'http']);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /Config reverted/);
+    assert.deepEqual(JSON.parse(fs.readFileSync(configFile, 'utf8')), {
+      domain: 'example.test', protocol: 'https', unknown: false,
+    });
+    assert.match(fs.readFileSync(caddyFile, 'utf8'), /^example\.test \{/m);
+    assert.equal(fs.statSync(`${configFile}.lock`).isFile(), true);
+  });
+
+  it('keeps fresh-install and re-init defaults idempotent through real production writers', () => {
+    const configUrl = pathToFileURL(path.join(rootDir, 'cli', 'lib', 'config.js')).href;
+    const initUrl = pathToFileURL(path.join(rootDir, 'cli', 'commands', 'init.js')).href;
+    const migrateUrl = pathToFileURL(path.join(rootDir, 'cli', 'lib', 'migrate.js')).href;
+    const syncUrl = pathToFileURL(path.join(rootDir, 'cli', 'lib', 'sync-settings-hooks.js')).href;
+    const script = `
+      const config = await import(${JSON.stringify(configUrl)});
+      const init = await import(${JSON.stringify(initUrl)});
+      const migrate = await import(${JSON.stringify(migrateUrl)});
+      const sync = await import(${JSON.stringify(syncUrl)});
+      config.updateZylosConfigLocked({ set: { runtime: 'claude', unknown: false } });
+      init.seedFreshInstallNewSessionThresholdDefault();
+      config.updateZylosConfigLocked({ setIfAbsent: { session_mode: 'multi' } });
+      migrate.migrateNewSessionThresholdDefaults({ zylosDir: process.env.ZYLOS_DIR });
+      sync.syncModelCoupledNewSessionThreshold({ modelBackfilled: true, log: () => {} });
+      config.updateZylosConfigLocked({ set: { runtime: 'codex' } });
+      migrate.migrateNewSessionThresholdDefaults({ zylosDir: process.env.ZYLOS_DIR });
+    `;
+    const result = spawnSync(process.execPath, ['--input-type=module', '-e', script], {
+      env: { ...process.env, ZYLOS_DIR: root },
+      encoding: 'utf8',
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(root, '.zylos', 'config.json'), 'utf8')), {
+      runtime: 'codex',
+      unknown: false,
+      new_session_threshold: 30,
+      session_mode: 'multi',
+      codex_new_session_threshold: 75,
+    });
   });
 
   it('has no legacy writer references or standalone F1 overwrite implementation', () => {

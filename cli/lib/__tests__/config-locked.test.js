@@ -3,12 +3,13 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { updateConfigStore } from '../config-store.js';
 import { CONFIG_LOCK_FALLBACK_WARNING, updateConfigWithLock } from '../config-lock.js';
 
 const helper = fileURLToPath(new URL('./fixtures/f1-worker.js', import.meta.url));
+const loopHelper = fileURLToPath(new URL('./fixtures/f1-loop-worker.js', import.meta.url));
 let root;
 let configFile;
 let lockFile;
@@ -35,6 +36,47 @@ function runWorker(payload) {
     child.once('error', reject);
     child.once('close', (status, signal) => resolve({ status, signal, stdout, stderr, child }));
   });
+}
+
+function runLoopWorker(payload, onResult) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [loopHelper, JSON.stringify(payload)], { stdio: ['ignore', 'pipe', 'pipe'] });
+    let pending = '';
+    let stderr = '';
+    child.stdout.setEncoding('utf8');
+    child.stdout.on('data', chunk => {
+      pending += chunk;
+      const lines = pending.split('\n');
+      pending = lines.pop();
+      for (const line of lines) {
+        if (line) onResult(JSON.parse(line));
+      }
+    });
+    child.stderr.on('data', chunk => { stderr += chunk; });
+    child.once('error', reject);
+    child.once('close', (status, signal) => resolve({ status, signal, stderr, pending }));
+  });
+}
+
+function commitOrder(results, initial) {
+  const byPrevious = new Map();
+  for (const result of results) {
+    const key = result.previous ?? initial;
+    assert.equal(byPrevious.has(key), false, `duplicate successor for ${key}`);
+    byPrevious.set(key, result.value);
+  }
+  const order = [];
+  let cursor = initial;
+  while (byPrevious.has(cursor)) {
+    cursor = byPrevious.get(cursor);
+    order.push(cursor);
+  }
+  assert.equal(order.length, results.length, 'results must form one complete commit chain');
+  return order;
+}
+
+function assertReportedInCommitOrder(reported, committed) {
+  assert.deepEqual(reported.map(result => result.value), committed);
 }
 
 describe('atomic config store', () => {
@@ -68,6 +110,21 @@ describe('atomic config store', () => {
     }), error => error.code === 'CONFIG_WRITE_FAILED' && error.phase === 'after_rename'
       && error.persisted === null);
     assert.deepEqual(JSON.parse(fs.readFileSync(configFile)), { old: true, next: true });
+  });
+
+  it('persists __proto__ as an own key and returns its previous value', () => {
+    write(JSON.parse('{"__proto__":{"old":true}}'));
+    const result = updateConfigStore(configFile, JSON.parse('{"set":{"__proto__":{"next":true}}}'));
+    assert.equal(Object.hasOwn(result.previous, '__proto__'), true);
+    assert.deepEqual(result.previous.__proto__, { old: true });
+    const persisted = JSON.parse(fs.readFileSync(configFile, 'utf8'));
+    assert.equal(Object.hasOwn(persisted, '__proto__'), true);
+    assert.deepEqual(persisted.__proto__, { next: true });
+
+    const absentFile = path.join(root, '.zylos', 'absent.json');
+    const absent = updateConfigStore(absentFile, JSON.parse('{"setIfAbsent":{"__proto__":{"created":true}}}'));
+    assert.equal(Object.hasOwn(absent.config, '__proto__'), true);
+    assert.deepEqual(JSON.parse(fs.readFileSync(absentFile, 'utf8')).__proto__, { created: true });
   });
 });
 describe('config locking', () => {
@@ -105,6 +162,75 @@ describe('config locking', () => {
     assert.ok(elapsedMs >= 1850, `elapsed ${elapsedMs}ms`);
     assert.ok(elapsedMs < 2600, `elapsed ${elapsedMs}ms`);
     await holder;
+  });
+
+  it('honors a shorter absolute deadline than waitMs', async () => {
+    write({ untouched: true });
+    const holder = runWorker({ configFile, lockFile, update: { set: { a: 1 } }, holdMs: 500 });
+    await new Promise(resolve => setTimeout(resolve, 50));
+    const started = process.hrtime.bigint();
+    const result = await runWorker({
+      configFile,
+      lockFile,
+      update: { set: { b: 2 } },
+      waitMs: 2_000,
+      deadlineAt: Date.now() + 100,
+    });
+    const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
+    assert.equal(result.status, 2);
+    assert.match(result.stderr, /CONFIG_LOCK_TIMEOUT/);
+    assert.ok(elapsedMs >= 50, `elapsed ${elapsedMs}ms`);
+    assert.ok(elapsedMs < 500, `elapsed ${elapsedMs}ms`);
+    await holder;
+  });
+
+  it('linearizes two real processes doing 100 same-key writes each', { timeout: 30_000 }, async () => {
+    write({ shared: 'initial', untouched: true });
+    const results = [];
+    const observed = new Set();
+    const observerErrors = [];
+    let observing = true;
+    const observe = async () => {
+      while (observing) {
+        try {
+          const snapshot = JSON.parse(fs.readFileSync(configFile, 'utf8'));
+          assert.equal(snapshot.untouched, true);
+          observed.add(snapshot.shared);
+        } catch (error) {
+          observerErrors.push(error);
+        }
+        await new Promise(resolve => setImmediate(resolve));
+      }
+    };
+    const observer = observe();
+    const payload = { configFile, lockFile, iterations: 100 };
+    const [a, b] = await Promise.all([
+      runLoopWorker({ ...payload, writer: 'a' }, result => results.push(result)),
+      runLoopWorker({ ...payload, writer: 'b' }, result => results.push(result)),
+    ]);
+    observing = false;
+    await observer;
+
+    assert.equal(a.status, 0, a.stderr);
+    assert.equal(b.status, 0, b.stderr);
+    assert.equal(a.pending, '');
+    assert.equal(b.pending, '');
+    assert.equal(results.length, 200);
+    assert.deepEqual(observerErrors, []);
+    assert.ok([...observed].some(value => value?.startsWith('a:')), 'observer missed writer a');
+    assert.ok([...observed].some(value => value?.startsWith('b:')), 'observer missed writer b');
+
+    const committed = commitOrder(results, 'initial');
+    assert.equal(JSON.parse(fs.readFileSync(configFile, 'utf8')).shared, committed.at(-1));
+    assert.deepEqual(new Set(committed), new Set(results.map(result => result.value)));
+
+    const byCommit = new Map(results.map(result => [result.value, result]));
+    const committedResults = committed.map(value => byCommit.get(value));
+    assertReportedInCommitOrder(committedResults, committed);
+    assert.throws(
+      () => assertReportedInCommitOrder([...committedResults].reverse(), committed),
+      /Expected values to be strictly deep-equal/,
+    );
   });
 
   it('evaluates setIfAbsent after waiting for the lock', async () => {
@@ -165,6 +291,56 @@ describe('config locking', () => {
       capability: { backend: 'linux-flock', executable: '/usr/bin/flock' },
       spawn: () => ({ status: 0, signal: null, stdout: '', stderr: '' }),
     }), error => error.code === 'CONFIG_WRITE_UNKNOWN' && error.phase === 'unknown' && error.persisted === null);
+  });
+
+  it('classifies a real committed write with truncated helper output as unknown', () => {
+    write({ untouched: true });
+    const storeUrl = new URL('../config-store.js', import.meta.url).href;
+    const script = `
+      let input = '';
+      for await (const chunk of process.stdin) input += chunk;
+      const { configFile, update } = JSON.parse(input);
+      const { updateConfigStore } = await import(${JSON.stringify(storeUrl)});
+      updateConfigStore(configFile, update);
+      process.stdout.write('{"ok":true,"result":');
+    `;
+    assert.throws(() => updateConfigWithLock({ configFile, lockFile, update: { set: { committed: true } } }, {
+      capability: { backend: 'linux-flock', executable: '/usr/bin/flock' },
+      spawn: (_executable, _args, options) => spawnSync(
+        process.execPath,
+        ['--input-type=module', '-e', script],
+        options,
+      ),
+    }), error => error.code === 'CONFIG_WRITE_UNKNOWN'
+      && error.phase === 'unknown'
+      && error.persisted === null);
+    assert.deepEqual(JSON.parse(fs.readFileSync(configFile, 'utf8')), { untouched: true, committed: true });
+  });
+
+  it('classifies an invalid helper envelope as an unknown commit result', () => {
+    assert.throws(() => updateConfigWithLock({ configFile, lockFile, update: { set: { a: 1 } } }, {
+      capability: { backend: 'linux-flock', executable: '/usr/bin/flock' },
+      spawn: () => ({ status: 0, signal: null, stdout: '{}', stderr: '' }),
+    }), error => error.code === 'CONFIG_WRITE_UNKNOWN'
+      && error.phase === 'unknown'
+      && error.persisted === null);
+  });
+
+  it('keeps unknown commit semantics at the public API when the real helper exceeds spawnSync output limits', async () => {
+    write({ oversized: 'x'.repeat(1_200_000) });
+    const originalZylosDir = process.env.ZYLOS_DIR;
+    process.env.ZYLOS_DIR = root;
+    const { updateZylosConfigLocked } = await import(`../config.js?overflow=${Date.now()}`);
+    try {
+      assert.throws(() => updateZylosConfigLocked({ set: { committed: true } }), error => error.code === 'CONFIG_WRITE_UNKNOWN'
+        && error.phase === 'unknown'
+        && error.persisted === null
+        && error.cause?.code === 'ENOBUFS');
+    } finally {
+      if (originalZylosDir === undefined) delete process.env.ZYLOS_DIR;
+      else process.env.ZYLOS_DIR = originalZylosDir;
+    }
+    assert.equal(JSON.parse(fs.readFileSync(configFile, 'utf8')).committed, true);
   });
 
   it('does not classify non-contention flock failures as timeouts', () => {

@@ -31,15 +31,37 @@ function restoreError(data) {
   return error;
 }
 
+function unknownWriteResult(child, cause) {
+  const error = new Error('Config writer result was lost; commit state is unknown');
+  error.code = 'CONFIG_WRITE_UNKNOWN';
+  error.phase = 'unknown';
+  error.persisted = null;
+  error.status = child?.status;
+  error.signal = child?.signal;
+  if (cause) error.cause = cause;
+  return error;
+}
+
 function parseHelperResult(child) {
-  if (child.error) throw child.error;
+  if (child.error) throw unknownWriteResult(child, child.error);
   const text = String(child.stdout || '').trim();
   if (!text) return null;
   let message;
   try { message = JSON.parse(text); }
-  catch { throw new Error(`Invalid config helper response: ${text.slice(0, 200)}`); }
-  if (message.ok) return message.result;
-  throw restoreError(message.error || {});
+  catch (cause) { throw unknownWriteResult(child, cause); }
+  if (!message || typeof message !== 'object' || typeof message.ok !== 'boolean') {
+    throw unknownWriteResult(child, new Error('Invalid config helper response envelope'));
+  }
+  if (message.ok) {
+    if (!Object.hasOwn(message, 'result')) {
+      throw unknownWriteResult(child, new Error('Config helper response is missing its result'));
+    }
+    return message.result;
+  }
+  if (!message.error || typeof message.error !== 'object') {
+    throw unknownWriteResult(child, new Error('Config helper response is missing its error'));
+  }
+  throw restoreError(message.error);
 }
 
 function remainingWait(waitMs, deadlineAt, now = Date.now()) {
@@ -115,12 +137,7 @@ export function updateConfigWithLock({ configFile, lockFile, update, waitMs = 20
   if (result) return result;
   if (child.status === 75) throw lockTimeout();
   if (child.status === 0 || child.signal) {
-    const error = new Error('Config writer result was lost; commit state is unknown');
-    error.code = 'CONFIG_WRITE_UNKNOWN';
-    error.phase = 'unknown';
-    error.persisted = null;
-    error.signal = child.signal;
-    throw error;
+    throw unknownWriteResult(child);
   }
   const detail = String(child.stderr || '').trim();
   const error = new Error(`Config lock helper failed${detail ? `: ${detail}` : ''}`);

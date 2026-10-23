@@ -60,4 +60,21 @@ describe('update intent evaluation', () => {
       config: { runtime: 'codex' },
     });
   });
+
+  it('preserves __proto__ as an own JSON key in set, setIfAbsent, and previous', () => {
+    const setResult = evaluateConfigUpdate({}, JSON.parse('{"set":{"__proto__":{"set":true}}}'));
+    assert.equal(Object.hasOwn(setResult.config, '__proto__'), true);
+    assert.deepEqual(setResult.config.__proto__, { set: true });
+
+    const absentResult = evaluateConfigUpdate({}, JSON.parse('{"setIfAbsent":{"__proto__":{"absent":true}}}'));
+    assert.equal(Object.hasOwn(absentResult.config, '__proto__'), true);
+    assert.deepEqual(absentResult.config.__proto__, { absent: true });
+
+    const current = JSON.parse('{"__proto__":{"old":true}}');
+    const previousResult = evaluateConfigUpdate(current, JSON.parse('{"set":{"__proto__":{"next":true}}}'));
+    assert.equal(Object.hasOwn(previousResult.previous, '__proto__'), true);
+    assert.deepEqual(previousResult.previous.__proto__, { old: true });
+    assert.equal(Object.hasOwn(previousResult.config, '__proto__'), true);
+    assert.deepEqual(previousResult.config.__proto__, { next: true });
+  });
 });
