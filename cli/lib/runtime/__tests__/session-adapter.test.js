@@ -38,7 +38,7 @@ test('run mismatch does not signal or kill',async () => {
 test('stop bound object and confirm descendants with TERM then KILL',async () => {
   const f=fixture(); let scans=0; const signals=[];
   f.adapter.options.findRunProcesses=async () => ++scans < 4 ? [{pid:123,start:'100'}] : [];
-  f.adapter.options.signalProcess=(...args) => signals.push(args);
+  f.adapter.options.pinProcess=async pid=>({signal:async sig=>signals.push([pid,sig]),close:async()=>{}});
   await f.adapter.stop({tmuxName:'x',expectedRunId:'r'});
   assert.deepEqual(signals,[[123,'SIGTERM'],[123,'SIGKILL']]);
   assert.deepEqual(f.calls.slice(0,2),[['validate'],['kill-session','-t','$7']]);
@@ -59,7 +59,7 @@ test('null absent run logs unknown and tmux unobservable refuses',async () => {
   await assert.rejects(fixture({openError:error('TMUX_UNAVAILABLE')}).adapter.stop({tmuxName:'x',expectedRunId:'r'}),{code:'STOP_UNCONFIRMED'});
 });
 test('live descendants after escalation are not reported stopped',async () => {
-  const f=fixture({present:false}); f.adapter.options.findRunProcesses=async () => [{pid:123,start:'100'}]; f.adapter.options.signalProcess=()=>{};
+  const f=fixture({present:false}); f.adapter.options.findRunProcesses=async () => [{pid:123,start:'100'}]; f.adapter.options.pinProcess=async()=>({signal:async()=>{},close:async()=>{}});
   await assert.rejects(f.adapter.stop({tmuxName:'x',expectedRunId:'r'}),{code:'STOP_UNCONFIRMED'});
 });
 test('multiline text uses a private file, revalidates before paste, cleans buffer',async () => {
@@ -162,7 +162,7 @@ test('kill acknowledgement cannot replace descendant confirmation or authorize n
   const f = fixture();
   f.connection.didAcknowledgeSessionKill = () => true;
   f.adapter.options.findRunProcesses = async () => [{pid:123,start:'100'}];
-  f.adapter.options.signalProcess = () => {};
+  f.adapter.options.pinProcess = async()=>({signal:async()=>{},close:async()=>{}});
   await assert.rejects(f.adapter.stop({tmuxName:'x',expectedRunId:'r'}), {code:'STOP_UNCONFIRMED'});
   const legacy = fixture({runId:null});
   await assert.rejects(legacy.adapter.stop({tmuxName:'x',expectedRunId:null}), {code:'STOP_UNCONFIRMED'});

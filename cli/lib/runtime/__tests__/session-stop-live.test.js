@@ -5,14 +5,22 @@ import os from 'node:os';
 import path from 'node:path';
 import {execFileSync} from 'node:child_process';
 import {randomUUID} from 'node:crypto';
+import {pathToFileURL} from 'node:url';
 import {SessionAdapter,findRunProcesses} from '../session-adapter.js';
 import {readOwnedProcess} from '../session-process-ownership.js';
+import {pinProcess} from '../session-process-signal.js';
 const binary=process.env.TEST_TMUX_BIN || 'tmux';
 const delay=ms=>new Promise(r=>setTimeout(r,ms));
+const realDependencies=process.env.P02_REAL_A_ROOT ? {
+ ...(await import(pathToFileURL(path.join(process.env.P02_REAL_A_ROOT,'cli/lib/runtime/tmux-connection.js')))),
+ ...(await import(pathToFileURL(path.join(process.env.P02_REAL_A_ROOT,'cli/lib/runtime/session-target.js')))),
+} : undefined;
 for(const absentAtEntry of [false,true])test(`real keyed stop: absentAtEntry=${absentAtEntry}, ignoreTERM=${absentAtEntry}`,async t=>{
  const dir=await fs.mkdtemp(path.join(os.tmpdir(),'p02-stop-live-'));const socketPath=path.join(dir,'s'),key=randomUUID(),signals=[];let family;
  const tmux=(...a)=>execFileSync(binary,['-S',socketPath,...a],{encoding:'utf8',stdio:['ignore','pipe','pipe'],timeout:3000}).trim();
  try{
+  const helper=path.join(dir,'pidfd-signal');
+  execFileSync(process.execPath,[new URL('../../../../scripts/build-process-signal.js',import.meta.url).pathname,helper]);
   tmux('-f','/dev/null','new-session','-d','-s','origin','sleep 30');const origin=tmux('list-panes','-t','=origin','-F','#{pane_id}:#{pane_pid}');
   const script=path.join(dir,'runtime.mjs'),proof=path.join(dir,'family.json');
   await fs.writeFile(script,`import{spawn}from'node:child_process';import{writeFileSync}from'node:fs';process.on('SIGHUP',()=>{});${absentAtEntry?"process.on('SIGTERM',()=>{});":''}if(process.argv[2]==='child'){process.send('ready')}else{const c=spawn(process.execPath,[import.meta.filename,'child'],{stdio:['ignore','ignore','ignore','ipc']});c.on('message',()=>writeFileSync(${JSON.stringify(proof)},JSON.stringify([process.pid,c.pid])))}setInterval(()=>{},1000);`);
@@ -25,7 +33,10 @@ for(const absentAtEntry of [false,true])test(`real keyed stop: absentAtEntry=${a
   // and signals still use real /proc/kernel. Host-owned unreadable processes
   // deliberately are not treated as absent by the production scanner.
   const scan=runId=>findRunProcesses(runId,{withIdentity:true,filesystem:{...fs,readdir:async()=>family.map(String)}});
-  const adapter=new SessionAdapter({findRunProcesses:scan,tmux:{binary,socketPath,sessionName:'origin'},stopGraceMs:50,signalProcess:(pid,sig)=>{signals.push([pid,sig]);process.kill(pid,sig)}});
+  const adapter=new SessionAdapter({dependencies:realDependencies,findRunProcesses:scan,tmux:{binary,socketPath,sessionName:'origin'},stopGraceMs:50,pinProcess:async pid=>{
+   const handle=await pinProcess(pid,{binary:helper});
+   return handle && {signal:async sig=>{signals.push([pid,sig]);return handle.signal(sig)},close:()=>handle.close()};
+  }});
   await adapter.stop({tmuxName:'target',expectedRunId:key});
   assert.deepEqual(await scan(key),[]);
   assert.ok(signals.some(x=>x[1]==='SIGTERM'));assert.equal(signals.some(x=>x[1]==='SIGKILL'),absentAtEntry);

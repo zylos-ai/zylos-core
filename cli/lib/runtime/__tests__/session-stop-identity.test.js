@@ -36,7 +36,7 @@ test('missing environment with original incarnation alive is unavailable, exit r
 function fixture({present=true,scan,observe}={}){
  const signals=[],logs=[],commands=[];let exists=present;
  const connection={close(){},didAcknowledgeSessionKill:()=>true,command:async a=>{commands.push(a);if(a[0]==='kill-session')exists=false;return exists?'$1':'$2'}};
- const adapter=new SessionAdapter({findRunProcesses:scan|| (async()=>[]),readOwnedProcess:observe|| (async pid=>({pid,start:'100'})),signalProcess:(...a)=>signals.push(a),sleep:async()=>{},log:x=>logs.push(x),dependencies:{
+ const adapter=new SessionAdapter({findRunProcesses:scan|| (async()=>[]),readOwnedProcess:observe|| (async pid=>({pid,start:'100'})),pinProcess:async pid=>({signal:async sig=>signals.push([pid,sig]),close:async()=>{}}),sleep:async()=>{},log:x=>logs.push(x),dependencies:{
   openTmuxConnection:async()=>connection,observeSessionTarget:async()=>({present:exists,runId:'r',tmuxSessionId:'$1'}),revalidateSessionTarget:async()=>{},
  }});
  return {adapter,signals,logs,commands};
@@ -51,7 +51,7 @@ test('TERM cannot signal an observed replacement generation',async()=>{
  await assert.rejects(f.adapter.stop({tmuxName:'x',expectedRunId:'r'}),{code:'STOP_UNCONFIRMED'});assert.deepEqual(f.signals,[]);
 });
 test('KILL revalidates generation after TERM rather than trusting the earlier snapshot',async()=>{
- let reads=0;const f=fixture({scan:async()=>[{pid:42,start:'100'}],observe:async()=>({pid:42,start:++reads===1?'100':'101'})});
+ let reads=0;const f=fixture({scan:async()=>[{pid:42,start:'100'}],observe:async()=>({pid:42,start:++reads<=2?'100':'101'})});
  await assert.rejects(f.adapter.stop({tmuxName:'x',expectedRunId:'r'}),{code:'STOP_UNCONFIRMED'});assert.deepEqual(f.signals,[[42,'SIGTERM']]);
 });
 test('different ownership or exited PID is never signalled and a later empty scan confirms exit',async()=>{
@@ -69,7 +69,7 @@ test('real proc-format same-PID replacement between initial and post-kill scans 
  try{
   await fs.mkdir(path.join(dir,'42'));await fs.writeFile(path.join(dir,'42','stat'),stat());await fs.writeFile(path.join(dir,'42','environ'),'ZYLOS_RUN_ID=r\0');
   const f=fixture({scan:async()=>{if(++scans===2)await fs.writeFile(path.join(dir,'42','stat'),stat('101'));return findRunProcesses('r',{procRoot:dir,withIdentity:true})},observe:pid=>readOwnedProcess(pid,'r',{procRoot:dir})});
-  f.adapter.options.signalProcess=(pid,sig)=>{f.signals.push([pid,sig]);return writeFileSync(path.join(dir,'42','environ'),'ZYLOS_RUN_ID=other\0')};
+  f.adapter.options.pinProcess=async pid=>({signal:async sig=>{f.signals.push([pid,sig]);writeFileSync(path.join(dir,'42','environ'),'ZYLOS_RUN_ID=other\0')},close:async()=>{}});
   let outcome='success';try{await f.adapter.stop({tmuxName:'x',expectedRunId:'r'})}catch(error){outcome=error.code}
   t.diagnostic(JSON.stringify({outcome,signals:f.signals,scanCount:scans,syntheticPIDReuse:true}));
   assert.equal(outcome,'STOP_UNCONFIRMED');assert.deepEqual(f.signals,[]);

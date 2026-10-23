@@ -4,6 +4,11 @@ These are diagnostic programs, not a production process backend. They use only
 new controlled processes. They need no model, account, production tmux socket,
 or credential. Run from this directory in a source checkout.
 
+The original `stop-pid-reuse.mjs` asserts the pre-fix failure and should be run
+at commit `847a0bc65ac98451abd511ebc64c351fec624ead` to reproduce it.
+For the new handle-based implementation, use `stop-pidfd-reuse.mjs` and the
+build/negative-control instructions in `docs/runtime-process-signal.md`.
+
 ## Real PID reuse after the last ownership observation
 
 On Linux with unprivileged user/PID/mount namespaces enabled:

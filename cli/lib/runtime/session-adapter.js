@@ -6,6 +6,7 @@ import { RuntimeAdapter } from './base.js';
 import { adapterError, runtimeExecutable, runtimeHelp, validateLaunchConfig, buildRuntimeArgs, launchEnvironment, writeSessionLaunchScript, hasNativeClaudeAuth } from './session-command.js';
 import { settleLaunch, executableIdentity } from './session-launch.js';
 import { readOwnedProcess } from './session-process-ownership.js';
+import { pinProcess } from './session-process-signal.js';
 import { ZYLOS_DIR } from '../config.js';
 
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -52,7 +53,8 @@ export class SessionAdapter extends RuntimeAdapter {
     let connection, absentAtEntry = false;
     const scan = this.options.findRunProcesses || (runId=>findRunProcesses(runId,{withIdentity:true}));
     const observe = this.options.readOwnedProcess || readOwnedProcess;
-    const signal = this.options.signalProcess || ((pid, sig) => process.kill(pid, sig));
+    const pin = this.options.pinProcess || (pid=>pinProcess(pid,this.options.processSignal));
+    const handles = new Map();
     const unknown = () => (this.options.log || console.warn)('Session ended; process state unknown');
     const incarnations = new Map();
     const owned = async () => {
@@ -63,6 +65,18 @@ export class SessionAdapter extends RuntimeAdapter {
         incarnations.set(row.pid,row.start);
       }
       return rows;
+    };
+    const hold = async rows => {
+      for (const row of rows) {
+        if (handles.has(row.pid)) continue;
+        // Acquisition precedes ownership revalidation. Once pinned, a later
+        // numeric-PID replacement can never become this handle's target.
+        const handle=await pin(row.pid);
+        if (!handle) continue;
+        handles.set(row.pid,handle); // all subsequent error paths close it
+        const current=await observe(row.pid,expectedRunId);
+        if (current && current.start!==row.start) throw adapterError('STOP_UNCONFIRMED','Process incarnation changed after pinning');
+      }
     };
     try {
       const deps = await this.dependencies();
@@ -76,7 +90,7 @@ export class SessionAdapter extends RuntimeAdapter {
         if (target.runId !== expectedRunId) throw adapterError('RUNID_MISMATCH');
         // Without an ownership key, killing a pane does not establish descendant exit.
         if (!expectedRunId) throw adapterError('STOP_UNCONFIRMED','Runtime ownership cannot be established');
-        await owned(); // refuse mutation when ownership cannot be inspected
+        await hold(await owned()); // acquire/verify before mutating the tmux target
         await deps.revalidateSessionTarget({connection,target});
         await connection.command(['kill-session','-t',target.tmuxSessionId]);
       }
@@ -85,13 +99,16 @@ export class SessionAdapter extends RuntimeAdapter {
       try { pids = await owned(); }
       catch (error) { if (absentAtEntry && !['STOP_UNCONFIRMED','PROCESS_IDENTITY_CHANGED'].includes(error.code)) { unknown(); return; } throw error; }
       for (const sig of ['SIGTERM','SIGKILL']) {
+        await hold(pids);
         for (const original of pids) {
+          const handle=handles.get(original.pid);
+          if (!handle) continue;
           const current=await observe(original.pid,expectedRunId);
           if(!current)continue;
           if(current.start!==original.start) throw adapterError('STOP_UNCONFIRMED','Process incarnation changed before signal');
-          // The immediately preceding observation rejects visible PID reuse;
-          // process.kill is not an atomic identity-bound kernel operation.
-          try { signal(original.pid,sig); } catch (error) { if (error.code !== 'ESRCH') throw error; }
+          // A successful read is ownership evidence, not a signal destination.
+          // ESRCH is represented by false; only re-enumeration confirms exit.
+          await handle.signal(sig);
         }
         if (pids.length) await (this.options.sleep || pause)(this.options.stopGraceMs ?? 200);
         pids = await owned();
@@ -109,7 +126,12 @@ export class SessionAdapter extends RuntimeAdapter {
     } catch (error) {
       if (['RUNID_MISMATCH','STOP_UNCONFIRMED'].includes(error.code)) throw error;
       throw adapterError('STOP_UNCONFIRMED','Session termination could not be confirmed',error.cause);
-    } finally { connection?.close(); }
+    } finally {
+      let closeFailure;
+      try {connection?.close();} catch(error) {closeFailure=error;}
+      const closed=await Promise.allSettled([...handles.values()].map(handle=>Promise.resolve().then(()=>handle.close())));
+      if(closeFailure || closed.some(result=>result.status==='rejected')) throw adapterError('STOP_UNCONFIRMED','Termination resources could not be closed');
+    }
   }
   async captureScreen({target,connection}) {
     await (await this.dependencies()).revalidateSessionTarget({target,connection});

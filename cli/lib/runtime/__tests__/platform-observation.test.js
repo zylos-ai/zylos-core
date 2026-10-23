@@ -102,7 +102,7 @@ test('partial ownership scan fails as a whole and cannot authorize present-sessi
     await assert.rejects(scan('r'), { code: 'EISDIR' });
     const mutations = [];
     const connection = { close() {}, command: async args => mutations.push(args) };
-    const adapter = new SessionAdapter({ findRunProcesses: scan, signalProcess: (...args) => mutations.push(args), dependencies: {
+    const adapter = new SessionAdapter({ findRunProcesses: scan, pinProcess: async pid => {mutations.push(['pin',pid]);throw new Error('Unexpected pin');}, dependencies: {
       openTmuxConnection: async () => connection,
       observeSessionTarget: async () => ({ present: true, runId: 'r', tmuxSessionId: '$1' }),
       revalidateSessionTarget: async () => {},

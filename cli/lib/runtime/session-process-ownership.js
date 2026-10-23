@@ -11,7 +11,8 @@ function identity(text,pid) {
 }
 
 /** Exact UID/run ownership with an incarnation bracketing the environment read.
- * This is observation, not a pidfd: signal delivery still has a syscall gap.
+ * This is observation, not a handle. Signal callers must pin the target before
+ * using this observation as authorization; a subsequent numeric kill is unsafe.
  */
 export async function readOwnedProcess(pid,runId,{procRoot='/proc',platform=process.platform,uid=process.getuid?.(),filesystem=fs}={}) {
   if (platform!=='linux' || uid===undefined || !Number.isSafeInteger(pid) || pid<=0) throw new Error('Process ownership observation unavailable');

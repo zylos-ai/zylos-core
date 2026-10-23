@@ -11,3 +11,6 @@ test/integration/runtime/*.local.json
 
 # Agent worktrees (runtime artifact)
 .claude/worktrees/
+
+# Locally built, architecture-specific process helper (source remains tracked).
+cli/lib/runtime/native/pidfd-signal-*
