@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { tmuxClientArgs } from './tmux-client-args.js';
 
 export function tmuxError(code, message, cause) {
   return Object.assign(new Error(message), { code, ...(cause ? { cause } : {}) });
@@ -12,8 +13,7 @@ function quote(value) {
 
 /** One short-lived control client. Never reconnects, including after socket reuse. */
 export async function openTmuxConnection({ socketPath, socketName, sessionName, timeoutMs = 3000, binary = 'tmux' } = {}) {
-  if (socketPath && socketName) throw new TypeError('Choose one tmux socket');
-  const args = [...(socketPath ? ['-S', socketPath] : socketName ? ['-L', socketName] : []), '-N', '-C', 'attach-session', '-f', 'ignore-size,no-output', ...(sessionName ? ['-t', `=${sessionName}`] : [])];
+  const args = [...tmuxClientArgs({ socketPath, socketName }), '-N', '-C', 'attach-session', '-f', 'ignore-size,no-output', ...(sessionName ? ['-t', `=${sessionName}`] : [])];
   const child = spawn(binary, args, { stdio: ['pipe', 'pipe', 'pipe'] });
   let dead = false, buffer = '', stderr = '', frame = null, pending = null, queue = Promise.resolve();
   let initialResolve, initialReject;

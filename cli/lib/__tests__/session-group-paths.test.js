@@ -72,7 +72,7 @@ test('pure paths and environment precedence never create directories', () => {
 test('list performs one argv call; only absent server is empty, other failures propagate', () => {
   let calls=0;
   const result=p.listGroupTmuxSessions({socketPath:'/private/socket',exec:(cmd,args)=>{
-    calls++; assert.equal(cmd,'tmux'); assert.deepEqual(args,['-S','/private/socket','list-sessions','-F','#{session_name}\t#{session_created}']);
+    calls++; assert.equal(cmd,'tmux'); assert.deepEqual(args,['-u','-S','/private/socket','list-sessions','-F','#{session_name}\t#{session_created}']);
     return 'zylos-group-lark= x\nclaude-main\t1\nzylos-group-origin\t123\nzylos-group-Foo\t2\n';
   }});
   assert.equal(calls,1); assert.deepEqual(result,[{sessionGroup:'origin',tmuxName:'zylos-group-origin',createdAt:123}]);

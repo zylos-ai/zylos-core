@@ -4,6 +4,7 @@ import os from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { encodeGroupCharacters, decodeGroupCharacters } from './session-group-codec.js';
 import { parseSessionGroup } from '../../skills/comm-bridge/scripts/c4-db.js';
+import { tmuxClientArgs } from './runtime/tmux-client-args.js';
 
 export const GROUP_TMUX_PREFIX = 'zylos-group-';
 export const LEGACY_TMUX_NAMES = Object.freeze(['claude-main', 'codex-main']);
@@ -66,8 +67,7 @@ export const hookErrorLogPath = (env = process.env) => path.join(legacyRunDir(en
 
 /** One read only; missing tmux binary, permissions and malformed output are errors. */
 export function listGroupTmuxSessions({ exec = execFileSync, socketPath, socketName, binary = 'tmux' } = {}) {
-  if (socketPath && socketName) throw new TypeError('Choose one tmux socket');
-  const args = [...(socketPath ? ['-S', socketPath] : socketName ? ['-L', socketName] : []), 'list-sessions', '-F', '#{session_name}\t#{session_created}'];
+  const args = [...tmuxClientArgs({ socketPath, socketName }), 'list-sessions', '-F', '#{session_name}\t#{session_created}'];
   let output;
   try {
     output = exec(binary, args, { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'pipe'] });
