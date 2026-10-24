@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {fixture,service,actualDependencies} from './stop-tmux-fixture.js';
+import {fixture,service,actualDependencies,delay} from './stop-tmux-fixture.js';
 
 test('real same-name replacement with the same run ID is never rebound or killed',async t=>{
  const f=await fixture(t),key='same-name-run';
@@ -20,20 +20,33 @@ test('real same-socket server replacement does not reopen or act on the new serv
  const f=await fixture(t),key='same-server-run',independent=await service(f,key);
  f.command('new-session','-d','-s','target','-e',`ZYLOS_RUN_ID=${key}`,'sleep 60');
  const generation=f.command('display-message','-p','#{pid}:#{start_time}');let replacement,newOrigin,newGeneration,opens=0;
+ const oldServerPid=Number(generation.split(':')[0]),injectionErrors=[];let oldServerExited=false;
+ assert.ok(Number.isSafeInteger(oldServerPid)&&oldServerPid>0);
  f.adapter.options.dependencies={...actualDependencies,
   openTmuxConnection:options=>{opens++;return actualDependencies.openTmuxConnection(options)},
   revalidateSessionTarget:async options=>{
-   // This deliberate fixture action destroys its own server, not production.
-   f.command('kill-server');
-   f.command('-f','/dev/null','new-session','-d','-s','origin','-e','ZYLOS_RUN_ID=new-origin','sleep 60');
-   f.command('new-session','-d','-s','target','-e',`ZYLOS_RUN_ID=${key}`,'sleep 60');
-   newOrigin=f.snapshot('origin');replacement=f.snapshot('target');newGeneration=f.command('display-message','-p','#{pid}:#{start_time}');
+   try {
+    // kill-server can return before its process exits and releases the socket.
+    // Wait for this fixture's original PID to disappear before creating a replacement.
+    f.command('kill-server');
+    for(let attempt=0;attempt<150;attempt++) {
+     try {process.kill(oldServerPid,0);}
+     catch(error) {if(error.code!=='ESRCH')throw error;oldServerExited=true;break;}
+     await delay(20);
+    }
+    assert.equal(oldServerExited,true,`Original fixture server ${oldServerPid} did not exit`);
+    f.command('-f','/dev/null','new-session','-d','-s','origin','-e','ZYLOS_RUN_ID=new-origin','sleep 60');
+    f.command('new-session','-d','-s','target','-e',`ZYLOS_RUN_ID=${key}`,'sleep 60');
+    newOrigin=f.snapshot('origin');replacement=f.snapshot('target');newGeneration=f.command('display-message','-p','#{pid}:#{start_time}');
+   } catch(error) {injectionErrors.push(error.stack||String(error));throw error;}
+   // Only this product revalidation failure is expected to become STOP_UNCONFIRMED.
    return actualDependencies.revalidateSessionTarget(options);
   },
  };
  await assert.rejects(f.adapter.stop({tmuxName:'target',expectedRunId:key}),{code:'STOP_UNCONFIRMED'});
+ assert.deepEqual(injectionErrors,[],'Server-replacement injection must succeed independently of the expected stop error');
  assert.notEqual(newGeneration,generation);assert.equal(opens,1);assert.equal(f.snapshot('target'),replacement);assert.equal(f.snapshot('origin'),newOrigin);
- t.diagnostic(JSON.stringify({generation,newGeneration,opens,replacementPreserved:true,newOriginUnchanged:true,service:await independent.verify()}));
+ t.diagnostic(JSON.stringify({generation,newGeneration,oldServerPid,oldServerExited,injectionErrors,opens,replacementPreserved:true,newOriginUnchanged:true,service:await independent.verify()}));
 });
 
 for(const mode of ['command-failure','disconnect','target-remains'])test(`real transport ${mode}: no false stop success`,async t=>{
