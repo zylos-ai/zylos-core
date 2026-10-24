@@ -107,24 +107,33 @@ function syncSettings() {
   }
 }
 
+// npm config from the environment: the lowercase form npm passes to scripts
+// wins (an empty value is an explicit CLI override); otherwise the uppercase form.
+function npmConfig(env, key) {
+  const lower = `npm_config_${key}`;
+  return lower in env ? env[lower] : env[lower.toUpperCase()];
+}
+
 /**
- * True when npm runs this hook for a local install inside a source checkout
- * (`npm install` / `npm ci` while developing, reviewing or testing). Only a
- * global install (`npm install -g`, `--location=global`) is a real Zylos
- * install or upgrade. A direct `node scripts/postinstall.js` is not an npm
- * lifecycle run and keeps its behavior.
+ * True when npm runs this hook for the source checkout itself (`npm install` /
+ * `npm ci` while developing, reviewing or testing). A real install places the
+ * package inside a node_modules directory (`npm install -g`, self-upgrade);
+ * a global install linked to a checkout is recognized by npm's global config.
+ * A direct `node scripts/postinstall.js` is not an npm lifecycle run and keeps
+ * its behavior.
  */
-function isLocalNpmInstall(env) {
+function isSourceCheckoutInstall(env, packageRoot) {
   if (env.npm_lifecycle_event !== 'postinstall') return false;
-  return env.npm_config_global !== 'true' && env.npm_config_location !== 'global';
+  if (packageRoot.split(path.sep).includes('node_modules')) return false;
+  return npmConfig(env, 'global') !== 'true' && npmConfig(env, 'location') !== 'global';
 }
 
 function main() {
   // CI: skip everything
   if (process.env.CI) return;
 
-  // Local install in a source checkout: never write to the live instance
-  if (isLocalNpmInstall(process.env)) return;
+  // npm install / npm ci in a source checkout: never write to the live instance
+  if (isSourceCheckoutInstall(process.env, fs.realpathSync(path.join(__dirname, '..')))) return;
 
   // Zylos must be initialized — .claude/ directory exists after `zylos init`
   const claudeDir = path.join(ZYLOS_DIR, '.claude');
