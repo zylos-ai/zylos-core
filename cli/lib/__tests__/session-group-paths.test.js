@@ -4,11 +4,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { installParserFixture } from '../../../test/helpers/p02-parser-fixture.js';
 import { encodeGroupCharacters as enc, decodeGroupCharacters as dec } from '../session-group-codec.js';
 export const groups = ['origin','telegram:g-100123','telegram:g-1','wechat:abc_chatroom','lark','larkx','lark:x','lark:oc_x:omt_y','openmax:dm.AbC','ns:a:b','ns:a.b','ns:a_b','ns:a__b','ns:a_cb','ns:AbC','ns:abc','ns:x:','ns:x.', `${'n'.repeat(32)}:${'A'.repeat(95)}`];
 // Deterministic generated inputs exercise character combinations; legality remains
-// delegated to the real P01 parser (or the explicitly enabled finite fixture).
+// delegated to the real P01 parser.
 let seed = 8731;
 for (let i = 0; i < 100; i++) {
   let name = 'A';
@@ -16,7 +15,6 @@ for (let i = 0; i < 100; i++) {
   for (let j = 0; j < 50; j++) { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; name += alphabet[seed % alphabet.length]; }
   groups.push(`sample${i}:${name}`);
 }
-installParserFixture(groups);
 const p = await import('../session-group-paths.js');
 function* words(alphabet, max, prefix = '') {
   yield prefix;

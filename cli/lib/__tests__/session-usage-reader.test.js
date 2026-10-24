@@ -3,8 +3,6 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import {installParserFixture} from '../../../test/helpers/p02-parser-fixture.js';
-installParserFixture(['origin','lark:x','lark:y']);
 const {readCodexSampleForIdentity,codexRateLimits}=await import('../session-usage-reader.js');
 const {createSessionReader}=await import('../session-state-reader-async.js');
 const identity={present:true,ready:true,runtime:'codex',runId:'run',sessionId:'session',createdAt:123,serverGeneration:'gen',tmuxSessionId:'$1',paneId:'%1'};

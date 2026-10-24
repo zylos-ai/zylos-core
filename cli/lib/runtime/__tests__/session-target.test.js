@@ -4,8 +4,6 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { installParserFixture } from '../../../../test/helpers/p02-parser-fixture.js';
-installParserFixture(['origin']);
 const { openTmuxConnection, serverGeneration } = await import('../tmux-connection.js');
 const { observeSessionTarget, resolveSessionTarget, revalidateSessionTarget, readTargetRuntime } = await import('../session-target.js');
 const ready = async () => ({ runId: 'r1', sessionId: 's1', ts: 1, startupControlIds: [] });

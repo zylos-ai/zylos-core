@@ -3,8 +3,6 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { installParserFixture } from '../../../test/helpers/p02-parser-fixture.js';
-installParserFixture(['origin']);
 const p=await import('../mode-switch-files.js');
 const record={runId:'12345678-1234-1234-1234-123456789abc',cutoff:42,source:'single',target:'multi'};
 test('W4 fixed first line roundtrip; free body retained; all malformed fields fail closed',()=>{
