@@ -17,8 +17,8 @@ function fixture(fn) {
     env: { ...process.env, HOME: root, ZYLOS_DIR: root, ZYLOS_PACKAGE_ROOT: packageRoot, C4_DISPATCHER_DISABLE_MAIN: '1', ...options.env },
     encoding: 'utf8', timeout: 10000, input: options.input,
   });
-  const evaluate = source => spawnSync(process.execPath, ['--input-type=module', '-e', source], {
-    env: { ...process.env, HOME: root, ZYLOS_DIR: root, ZYLOS_PACKAGE_ROOT: packageRoot, C4_DISPATCHER_DISABLE_MAIN: '1' },
+  const evaluate = (source, env = {}) => spawnSync(process.execPath, ['--input-type=module', '-e', source], {
+    env: { ...process.env, HOME: root, ZYLOS_DIR: root, ZYLOS_PACKAGE_ROOT: packageRoot, C4_DISPATCHER_DISABLE_MAIN: '1', ...env },
     encoding: 'utf8', timeout: 10000,
   });
   try { fn({ root, file, run, evaluate }); }
@@ -73,6 +73,26 @@ test('dispatcher refuses queued delivery if F1 becomes malformed after initializ
   const db = new Database(path.join(root, 'comm-bridge/c4.db'));
   assert.equal(db.prepare('SELECT status FROM conversations WHERE content = ?').get('pending').status, 'pending');
   db.close();
+}));
+
+test('dispatcher resolves Core once without ZYLOS_PACKAGE_ROOT and keeps F1 reads fresh', () => fixture(({ root, file, evaluate }) => {
+  fs.writeFileSync(file, '{}');
+  const bin = path.join(root, 'bin');
+  const count = path.join(root, 'npm-calls');
+  fs.mkdirSync(bin);
+  fs.writeFileSync(path.join(bin, 'npm'), '#!/bin/sh\nprintf "call\\n" >> "$NPM_COUNT_FILE"\nprintf "%s\\n" "$NPM_TEST_ROOT"\n', { mode: 0o755 });
+  const dispatcher = new URL('../c4-dispatcher.js', import.meta.url).href;
+  const result = evaluate(`
+    import assert from 'node:assert/strict';
+    import fs from 'node:fs';
+    delete process.env.ZYLOS_PACKAGE_ROOT;
+    const m = await import(${JSON.stringify(dispatcher)});
+    for (let i = 0; i < 5; i++) await m.processNextMessage();
+    assert.equal(fs.readFileSync(${JSON.stringify(count)}, 'utf8').trim().split('\\n').length, 1);
+    fs.writeFileSync(${JSON.stringify(file)}, '{ broken');
+    await assert.rejects(m.processNextMessage(), { code: 'CONFIG_UNREADABLE' });
+  `, { PATH: `${bin}${path.delimiter}${process.env.PATH}`, NPM_COUNT_FILE: count, NPM_TEST_ROOT: root });
+  assert.equal(result.status, 0, result.stderr);
 }));
 
 test('status notice assembly and default delivery identity visibly reject malformed F1 at use', () => fixture(({ file, evaluate }) => {

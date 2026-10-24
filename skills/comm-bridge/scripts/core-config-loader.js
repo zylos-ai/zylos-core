@@ -27,12 +27,22 @@ export function resolveCoreConfigModule() {
   }
   return configPath;
 }
+let coreConfigPromise;
+
 export async function loadCoreConfig() {
-  const module = await import(pathToFileURL(resolveCoreConfigModule()).href);
-  for (const name of ['readZylosConfigStrict', 'readZylosConfigOrThrow', 'readSessionMode', 'updateZylosConfigLocked', 'writeSessionModeAtCutover']) {
-    if (typeof module[name] !== 'function') {
-      throw new Error(`Installed zylos-core config module is missing ${name}`);
-    }
+  if (!coreConfigPromise) {
+    coreConfigPromise = (async () => {
+      const module = await import(pathToFileURL(resolveCoreConfigModule()).href);
+      for (const name of ['readZylosConfigStrict', 'readZylosConfigOrThrow', 'readSessionMode', 'updateZylosConfigLocked', 'writeSessionModeAtCutover']) {
+        if (typeof module[name] !== 'function') {
+          throw new Error(`Installed zylos-core config module is missing ${name}`);
+        }
+      }
+      return module;
+    })().catch(error => {
+      coreConfigPromise = undefined;
+      throw error;
+    });
   }
-  return module;
+  return coreConfigPromise;
 }
