@@ -18,14 +18,12 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { execFileSync } from 'child_process';
-import { loadCoreConfig } from '../../comm-bridge/scripts/core-config-loader.js';
+import { readZylosConfigOrThrow } from '../../comm-bridge/scripts/local-config.js';
 
 const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
 const LOG_FILE = path.join(ZYLOS_DIR, 'activity-monitor', 'hook-timing.log');
 const C4_CONTROL = path.join(ZYLOS_DIR, '.claude', 'skills', 'comm-bridge', 'scripts', 'c4-control.js');
 const AUTO_APPROVE_AVAILABLE_IN_SEC = 1;
-
-const { readZylosConfigOrThrow } = await loadCoreConfig();
 
 function readConfig() {
   return readZylosConfigOrThrow();

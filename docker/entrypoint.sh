@@ -147,12 +147,9 @@ if [ -z "${ZYLOS_RUNTIME:-}" ]; then
   export ZYLOS_DIR
   ZYLOS_RUNTIME=$(node --input-type=module -e "
     import { pathToFileURL } from 'node:url';
-    const loaderPath = process.env.ZYLOS_DIR + '/.claude/skills/comm-bridge/scripts/core-config-loader.js';
-    const { loadCoreConfig } = await import(pathToFileURL(loaderPath).href);
-    const { readZylosConfigStrict } = await loadCoreConfig();
-    const result = readZylosConfigStrict();
-    if (result.state === 'error') throw result.error;
-    const config = result.state === 'ok' ? result.config : {};
+    const readerPath = process.env.ZYLOS_DIR + '/.claude/skills/comm-bridge/scripts/local-config.js';
+    const { readZylosConfigOrThrow } = await import(pathToFileURL(readerPath).href);
+    const config = readZylosConfigOrThrow();
     process.stdout.write(config.runtime || 'claude');
   ")
 fi

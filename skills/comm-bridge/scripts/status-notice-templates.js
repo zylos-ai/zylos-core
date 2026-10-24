@@ -1,7 +1,5 @@
-import { loadCoreConfig } from './core-config-loader.js';
+import { readZylosConfigOrThrow } from './local-config.js';
 import { NOTICE_TEMPLATES } from './status-notice-catalog.js';
-
-const { readZylosConfigOrThrow } = await loadCoreConfig();
 
 const DEFAULTS = {
   rate_limited: {

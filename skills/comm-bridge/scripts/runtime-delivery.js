@@ -1,11 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { loadCoreConfig } from './core-config-loader.js';
+import { readZylosConfigOrThrow } from './local-config.js';
 import { runtimeRoot, isManagedClaudeProcess } from '../../activity-monitor/scripts/runtime-generation.js';
-
-const { readZylosConfigOrThrow } = await loadCoreConfig();
-
 function configuredSession() {
   return readZylosConfigOrThrow().runtime === 'codex' ? 'codex-main' : 'claude-main';
 }

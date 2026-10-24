@@ -130,7 +130,7 @@ describe('strict runtime readers', () => {
   it('keeps Docker environment priority and does not swallow strict fallback errors', () => {
     const source = fs.readFileSync(path.join(rootDir, 'docker', 'entrypoint.sh'), 'utf8');
     assert.match(source, /if \[ -z "\$\{ZYLOS_RUNTIME:-\}" \]/);
-    assert.match(source, /readZylosConfigStrict/);
+    assert.match(source, /readZylosConfigOrThrow/);
     assert.doesNotMatch(source, /catch \{ process\.stdout\.write\('claude'\)/);
   });
 });

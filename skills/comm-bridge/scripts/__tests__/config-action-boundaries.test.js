@@ -75,10 +75,11 @@ test('dispatcher refuses queued delivery if F1 becomes malformed after initializ
   db.close();
 }));
 
-test('dispatcher resolves Core once without ZYLOS_PACKAGE_ROOT and keeps F1 reads fresh', () => fixture(({ root, file, evaluate }) => {
+test('dispatcher never resolves Core without ZYLOS_PACKAGE_ROOT and keeps F1 reads fresh', () => fixture(({ root, file, evaluate }) => {
   fs.writeFileSync(file, '{}');
   const bin = path.join(root, 'bin');
   const count = path.join(root, 'npm-calls');
+  fs.writeFileSync(count, '');
   fs.mkdirSync(bin);
   fs.writeFileSync(path.join(bin, 'npm'), '#!/bin/sh\nprintf "call\\n" >> "$NPM_COUNT_FILE"\nprintf "%s\\n" "$NPM_TEST_ROOT"\n', { mode: 0o755 });
   const dispatcher = new URL('../c4-dispatcher.js', import.meta.url).href;
@@ -88,7 +89,7 @@ test('dispatcher resolves Core once without ZYLOS_PACKAGE_ROOT and keeps F1 read
     delete process.env.ZYLOS_PACKAGE_ROOT;
     const m = await import(${JSON.stringify(dispatcher)});
     for (let i = 0; i < 5; i++) await m.processNextMessage();
-    assert.equal(fs.readFileSync(${JSON.stringify(count)}, 'utf8').trim().split('\\n').length, 1);
+    assert.equal(fs.readFileSync(${JSON.stringify(count)}, 'utf8'), '');
     fs.writeFileSync(${JSON.stringify(file)}, '{ broken');
     await assert.rejects(m.processNextMessage(), { code: 'CONFIG_UNREADABLE' });
   `, { PATH: `${bin}${path.delimiter}${process.env.PATH}`, NPM_COUNT_FILE: count, NPM_TEST_ROOT: root });

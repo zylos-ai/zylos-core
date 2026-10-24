@@ -1,6 +1,6 @@
 import path from 'path';
 import os from 'os';
-import { loadCoreConfig } from './core-config-loader.js';
+import { readZylosConfigOrThrow } from './local-config.js';
 
 export const POLL_INTERVAL_BASE = 1000;
 export const POLL_INTERVAL_MAX = 3000;
@@ -48,9 +48,8 @@ export const CONTENT_PREVIEW_CHARS = 100;
 
 const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
 
-// Only consumers of runtime identity load Core and read F1.
+// Runtime identity is read at the action boundary, without loading Core.
 export async function getRuntimeIdentity() {
-  const { readZylosConfigOrThrow } = await loadCoreConfig();
   const config = readZylosConfigOrThrow();
   const runtime = config.runtime === 'codex' ? 'codex' : 'claude';
   return { runtime, session: runtime === 'codex' ? 'codex-main' : 'claude-main' };
