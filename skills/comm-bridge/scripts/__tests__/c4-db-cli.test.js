@@ -11,14 +11,14 @@ const DB_CLI_PATH = fileURLToPath(new URL('../c4-db.js', import.meta.url));
 const RECEIVE_PATH = fileURLToPath(new URL('../c4-receive.js', import.meta.url));
 
 function dbCli(args, env = {}) {
-  return spawnSync('node', [DB_CLI_PATH, ...args], {
+  return spawnSync(process.execPath, [DB_CLI_PATH, ...args], {
     env: { ...process.env, ...env },
     encoding: 'utf8'
   });
 }
 
 function receive(args, env = {}) {
-  return spawnSync('node', [RECEIVE_PATH, ...args], {
+  return spawnSync(process.execPath, [RECEIVE_PATH, ...args], {
     env: { ...process.env, ...env },
     encoding: 'utf8'
   });
@@ -38,7 +38,7 @@ describe('c4-db recent', () => {
   it('returns the latest N conversations in chronological order', () => {
     withTmpDir(({ env }) => {
       for (let i = 1; i <= 4; i++) {
-        const result = receive(['--channel', 'system', '--no-reply', '--content', `msg${i}`], env);
+        const result = dbCli(['insert', 'out', 'system', 'null', `msg${i}`], env);
         assert.equal(result.status, 0);
       }
 

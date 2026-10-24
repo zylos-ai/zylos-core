@@ -285,7 +285,7 @@ test('IB50 global/group reads preserve scopes, checkpoint metadata and truncatio
   const c = store.insertConversation('out', 'foo', 'e', 'c');
   store.insertConversation('in', 'foo', 'e', 'pending');
   store.insertConversation('out', 'bar', 'e', 'other');
-  assert.deepEqual(query.unsummarized({ group: 'foo', limit: 1 }), { rows: [b], checkpointEnd: a.id, safeEnd: c.id, upTo: b.id });
+  assert.deepEqual(query.unsummarized({ group: 'foo', limit: 1 }), { rows: [b], checkpointEnd: a.id, checkpointSummary: 'summary', safeEnd: c.id, upTo: b.id });
   assert.deepEqual(query.unsummarized({ group: 'foo' }).rows.map(x => x.id), [b.id, c.id]);
   assert.equal(query.unsummarizedRange().safeEnd, c.id);
   assert.throws(() => query.unsummarizedRange({ group: '*' }), { code: 'SESSION_GROUP_INVALID' });
@@ -318,4 +318,10 @@ test('single-target summary counts legal constructor namespace in JSON and text'
   const text = query.absorbed(options);
   assert.match(text, /bySourceGroup=chat:1,constructor:2\n/);
   assert.ok(!text.includes('[native code]'));
+});
+
+test('CLI error encoding retains explicit persisted effects on a typed failure', () => {
+  const result = JSON.parse(formatQueryError({ code: 'DB_WRITE_FAILED', message: 'write failed', persisted: ['config'] }, { json: true }));
+  assert.equal(result.error.code, 'DB_WRITE_FAILED');
+  assert.deepEqual(result.error.persisted, ['config']);
 });

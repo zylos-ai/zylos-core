@@ -1,3 +1,4 @@
+import Database from 'better-sqlite3';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { describe, it } from 'node:test';
@@ -9,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 const CLI_PATH = fileURLToPath(new URL('../c4-checkpoint.js', import.meta.url));
 
 function cli(args, env = {}) {
-  const result = spawnSync('node', [CLI_PATH, ...args], {
+  const result = spawnSync(process.execPath, [CLI_PATH, ...args], {
     env: { ...process.env, ...env },
     encoding: 'utf8'
   });
@@ -22,9 +23,12 @@ function cli(args, env = {}) {
  */
 function withTmpDir(fn) {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'c4-checkpoint-cli-'));
-  const env = { ZYLOS_DIR: tmpDir };
+  const env = { ZYLOS_DIR: tmpDir, HOME: tmpDir };
   // Warm up: initialize DB so subsequent calls have clean stdout.
   cli(['latest'], env);
+  const database = new Database(path.join(tmpDir, 'comm-bridge/c4.db'));
+  for (let i=1; i<=30; i++) database.prepare("INSERT INTO conversations(direction,channel,content,status,session_group) VALUES('out','system',?,'delivered','origin')").run(`seed${i}`);
+  database.close();
   try {
     return fn({ tmpDir, env });
   } finally {
@@ -60,9 +64,9 @@ describe('c4-checkpoint create', () => {
     });
   });
 
-  it('creates checkpoint without --summary', () => {
+  it('creates explicit no-content checkpoint', () => {
     withTmpDir(({ env }) => {
-      const { stdout, status } = cli(['create', '5'], env);
+      const { stdout, status } = cli(['create', '5', '--no-content'], env);
       assert.equal(status, 0);
       assert.ok(stdout.includes('Checkpoint created:'));
     });
@@ -76,7 +80,7 @@ describe('c4-checkpoint create validation', () => {
     withTmpDir(({ env }) => {
       const { stderr, status } = cli(['create'], env);
       assert.equal(status, 1);
-      assert.ok(stderr.includes('end_conversation_id'));
+      assert.ok(stderr.includes('end id'));
     });
   });
 
@@ -84,7 +88,7 @@ describe('c4-checkpoint create validation', () => {
     withTmpDir(({ env }) => {
       const { stderr, status } = cli(['create', 'abc'], env);
       assert.equal(status, 1);
-      assert.ok(stderr.includes('number'));
+      assert.ok(stderr.includes('integer'));
     });
   });
 });
@@ -140,7 +144,7 @@ describe('c4-checkpoint list', () => {
     withTmpDir(({ env }) => {
       const { stderr, status } = cli(['list', '--limit', '-1'], env);
       assert.equal(status, 1);
-      assert.ok(stderr.includes('positive integer'));
+      assert.ok(stderr.includes('integer >= 1'));
     });
   });
 });
@@ -178,7 +182,7 @@ describe('c4-checkpoint unknown command', () => {
     withTmpDir(({ env }) => {
       const { stderr, status } = cli(['foobar'], env);
       assert.equal(status, 1);
-      assert.ok(stderr.includes('unknown command'));
+      assert.ok(stderr.includes('Unknown checkpoint command'));
     });
   });
 
@@ -186,7 +190,7 @@ describe('c4-checkpoint unknown command', () => {
     withTmpDir(({ env }) => {
       const { stderr, status } = cli(['50'], env);
       assert.equal(status, 1);
-      assert.ok(stderr.includes('unknown command'));
+      assert.ok(stderr.includes('Unknown checkpoint command'));
     });
   });
 });
@@ -196,7 +200,7 @@ describe('c4-checkpoint unknown command', () => {
 describe('c4-checkpoint help', () => {
   it('--help shows usage and exits 0', () => {
     withTmpDir(({ env }) => {
-      const { stderr, status } = cli(['--help'], env);
+      const { stdout: stderr, status } = cli(['--help'], env);
       assert.equal(status, 0);
       assert.ok(stderr.includes('Usage'));
     });
@@ -204,7 +208,7 @@ describe('c4-checkpoint help', () => {
 
   it('-h shows usage and exits 0', () => {
     withTmpDir(({ env }) => {
-      const { stderr, status } = cli(['-h'], env);
+      const { stdout: stderr, status } = cli(['-h'], env);
       assert.equal(status, 0);
       assert.ok(stderr.includes('Usage'));
     });

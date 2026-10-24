@@ -35,7 +35,12 @@ test('public no-server observation is absent and status not_running without serv
   const state=call('readSessionState',[null,{freshnessMs:5000}]); assert.equal(state.value.status.reason,'not_running');
   assert.equal(state.value.usage.reason,'not_running');
   assert.equal((await fs.readdir(dir)).some(name=>name.startsWith('tmux-')),false);
-  // The real provider fails closed without a configured F1 reader.
+  // The connected provider resolves absent live targets from strict F1.
+  assert.deepEqual(call('resolveTargetRuntime',[null]),{value:'claude',promise:true});
+  await fs.mkdir(path.join(dir,'.zylos'),{recursive:true});
+  await fs.writeFile(path.join(dir,'.zylos/config.json'),JSON.stringify({runtime:'codex'}));
+  assert.deepEqual(call('resolveTargetRuntime',[null]),{value:'codex',promise:true});
+  await fs.writeFile(path.join(dir,'.zylos/config.json'),'{broken');
   assert.equal(call('resolveTargetRuntime',[null]).error.code,'CONFIG_UNREADABLE');
 });
 test('public async reader rejects invalid options and unavailable tmux',async t=>{

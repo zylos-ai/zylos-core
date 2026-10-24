@@ -15,7 +15,7 @@ export function normalizeTargetBinding(value) {
 // resolveTarget is a private Core dependency. It must collect the target,
 // environment, runtime and READY identity using one tmux server connection.
 export function createTargetBindingBuilder({ baseline, snapshot, knownGroup, get, resolveTarget }) {
-  return function buildTargetBinding(options) {
+  return async function buildTargetBinding(options) {
     if (!options || typeof options !== 'object' || Array.isArray(options) || Object.keys(options).some(k => !['sessionGroup', 'expectedRunId', 'expectedRuntime', 'expectedSessionId'].includes(k))) throw dataError('INVALID_ARGS', 'Invalid target binding options');
     const { sessionGroup = null, expectedRunId, expectedRuntime, expectedSessionId } = options;
     if (typeof expectedRunId !== 'string' || !expectedRunId || (expectedRuntime !== undefined && (typeof expectedRuntime !== 'string' || !expectedRuntime)) || (expectedSessionId != null && (typeof expectedSessionId !== 'string' || !expectedSessionId))) throw dataError('INVALID_ARGS', 'Expected target identity is required');
@@ -29,7 +29,7 @@ export function createTargetBindingBuilder({ baseline, snapshot, knownGroup, get
       if (get(c, "SELECT 1 FROM mode_transitions WHERE phase<>'complete'")) throw dataError('TRANSITION_OPEN', 'A mode transition is in progress');
     });
     if (typeof resolveTarget !== 'function') throw dataError('TARGET_SNAPSHOT_UNKNOWN', 'Core target resolver has not been connected');
-    const target = resolveTarget({ sessionGroup, sessionMode });
+    const target = await resolveTarget({ sessionGroup, sessionMode });
     if (!target) throw dataError('TARGET_NOT_RUNNING', 'The target session is not running');
     if (target.runId !== expectedRunId) throw dataError('TARGET_MISMATCH', 'The target run has changed', { runId: target.runId ?? null });
     if (!target.runtime || target.runtime === 'unknown') throw dataError('TARGET_SNAPSHOT_UNKNOWN', 'The target runtime cannot be identified');

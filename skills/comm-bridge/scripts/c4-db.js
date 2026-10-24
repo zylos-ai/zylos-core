@@ -21,14 +21,27 @@ let db = null;
 
 import { createStore } from './c4-v2-store.js';
 import { validateChannel } from './c4-validate.js';
+import { loadCoreConfig, resolveCoreConfigModule } from './core-config-loader.js';
+import { pathToFileURL } from 'node:url';
+import { observeCoreTarget } from './c4-runtime-observer.js';
+const coreConfig = await loadCoreConfig();
+const runtimeCommand = await import(pathToFileURL(path.join(path.dirname(resolveCoreConfigModule()), 'runtime/session-command.js')).href);
 export { composeSessionGroup, parseSessionGroup } from './c4-session-group.js';
 
 const store = createStore(getDb, {
   validateComponent: name => validateChannel(name, true),
-  readConfig: () => {
-    // P01-C supplies the strict P03 reader through this dependency boundary.
-    // A deployed skill is not adjacent to the npm package's cli directory.
-    throw new Error('Strict F1 reader has not been connected');
+  readConfig: coreConfig.readZylosConfigStrict,
+  resolveTarget: observeCoreTarget,
+  validateModel: (runtime, pair) => {
+    try {
+      const command = runtimeCommand.runtimeExecutable(runtime);
+      const help = runtimeCommand.runtimeHelp(command);
+      return runtimeCommand.validateLaunchConfig(runtime, { runtime, mode: 'override', ...pair }, help);
+    } catch (cause) {
+      const error = new Error('Runtime rejected model/effort configuration');
+      error.code = 'MODEL_CONFIG_INVALID'; error.cause = cause;
+      throw error;
+    }
   },
 });
 
@@ -346,7 +359,7 @@ export function getConversationsByRange(beginId, endId) {
 export function getRecentConversations(limit = 20) {
   const db = getDb();
   return db.prepare(
-    'SELECT * FROM (SELECT * FROM conversations ORDER BY timestamp DESC LIMIT ?) ORDER BY timestamp ASC, id ASC'
+    'SELECT * FROM (SELECT * FROM conversations ORDER BY timestamp DESC, id DESC LIMIT ?) ORDER BY timestamp ASC, id ASC'
   ).all(limit);
 }
 
@@ -436,7 +449,7 @@ export const registerChannelNamespace = (...args) => store.registerChannelNamesp
 export const resolveSessionGroup = (...args) => store.resolveSessionGroup(...args);
 export const insertConversation = (...args) => store.insertConversation(...args);
 export const insertInternalMessage = (...args) => store.insertInternalMessage(...args);
-export const buildTargetBinding = (...args) => store.buildTargetBinding(...args);
+export const buildTargetBinding = async (...args) => await store.buildTargetBinding(...args);
 export const getNextPending = (...args) => store.getNextPending(...args);
 export const claimConversation = (...args) => store.claimConversation(...args);
 export const requeueConversation = (...args) => store.requeueConversation(...args);
@@ -495,75 +508,8 @@ export const getAbsorbedConversations = (...args) => store.getAbsorbedConversati
 export const getModeTransition = (options = {}) => store.getModeTransition(options);
 export const auditCheckpoints = () => store.auditCheckpoints();
 
-// CLI mode
+// CLI mode: import after the facade has initialized to avoid a module cycle.
 const isMainModule = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
-
 if (isMainModule) {
-  const args = process.argv.slice(2);
-  const command = args[0];
-
-  switch (command) {
-    case 'init':
-      getDb();
-      console.log('Database initialized at:', DB_PATH);
-      break;
-
-    case 'insert':
-      // insert <direction> <channel> <endpoint_id> <content>
-      if (args.length < 5) {
-        console.error('Usage: c4-db.js insert <direction> <channel> <endpoint_id> <content>');
-        process.exit(1);
-      }
-      const record = insertConversation(args[1], args[2], args[3] === 'null' ? null : args[3], args[4]);
-      console.log('Inserted:', JSON.stringify(record));
-      break;
-
-    case 'checkpoint':
-      // checkpoint <end_conversation_id> [summary]
-      if (args.length < 2) {
-        console.error('Usage: c4-db.js checkpoint <end_conversation_id> [summary]');
-        process.exit(1);
-      }
-      const cpEndId = parseInt(args[1]);
-      if (isNaN(cpEndId)) {
-        console.error('end_conversation_id must be a number');
-        process.exit(1);
-      }
-      const cpSummary = args[2] || null;
-      const cp = createCheckpoint(cpEndId, cpSummary);
-      console.log('Checkpoint created:', JSON.stringify(cp));
-      break;
-
-    case 'unsummarized':
-      const range = getUnsummarizedRange();
-      console.log(JSON.stringify(range, null, 2));
-      break;
-
-    case 'recent':
-      const limit = parseInt(args[1]) || 20;
-      const recent = getRecentConversations(limit);
-      console.log(JSON.stringify(recent, null, 2));
-      break;
-
-    case 'checkpoints':
-      const cps = getCheckpoints();
-      console.log(JSON.stringify(cps, null, 2));
-      break;
-
-    default:
-      console.log(`C4 Database CLI
-
-Usage: c4-db.js <command> [args]
-
-Commands:
-  init                                  Initialize database
-  insert <dir> <channel> <endpoint> <content>  Insert conversation
-  checkpoint <end_id> [summary]          Create checkpoint up to conversation id
-  unsummarized                          Show unsummarized conversation range and count
-  recent [limit]                        Get recent conversations
-  checkpoints                           List all checkpoints
-`);
-  }
-
-  close();
+  import('./c4-public-cli.js').then(({ runCli }) => runCli('database', process.argv.slice(2)));
 }

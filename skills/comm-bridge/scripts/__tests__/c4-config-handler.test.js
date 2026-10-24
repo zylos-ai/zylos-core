@@ -21,18 +21,18 @@ test('pure CLI parser rejects conflicts, duplicates, excess flags and missing mo
   assert.throws(() => parseConfigArgs('model', ['get', '--group', 'origin']), { code: 'INVALID_ARGS' });
   assert.deepEqual(parseConfigArgs('model', ['set', '--channel', 'chat', '--session-group', 'A', '--runtime', 'codex', '--model', 'm', '--effort', 'high', '--json']), { json: true, request: { action: 'set', componentName: 'chat', groupName: 'A', runtime: 'codex', model: 'm', effort: 'high' } });
 });
-test('selectors only read existing namespaces and groups; exact values and unknown args rejected', t => {
+test('selectors only read existing namespaces and groups; exact values and unknown args rejected', async t => {
   const { handler, db } = fixture(t);
   const before = db.prepare('SELECT count(*) AS n FROM channel_namespaces').get().n;
-  for (const request of [{ action: 'get', componentName: 'absent' }, { action: 'get', componentName: 'chat', groupName: 'B' }]) assert.throws(() => handler('runtime', request), { code: 'SESSION_GROUP_NOT_FOUND' });
-  for (const groupName of ['', undefined, null]) assert.throws(() => handler('runtime', { action: 'get', componentName: 'chat', groupName }), { code: 'SESSION_GROUP_INVALID' });
-  assert.throws(() => handler('runtime', { action: 'get', sessionGroup: 'chat:A', surprise: true }), { code: 'INVALID_ARGS' });
-  assert.throws(() => handler('runtime', { action: 'get', sessionGroup: 'chat:' + 'a'.repeat(96) }), { code: 'SESSION_GROUP_TOO_LONG' });
+  for (const request of [{ action: 'get', componentName: 'absent' }, { action: 'get', componentName: 'chat', groupName: 'B' }]) await assert.rejects(() => handler('runtime', request), { code: 'SESSION_GROUP_NOT_FOUND' });
+  for (const groupName of ['', undefined, null]) await assert.rejects(() => handler('runtime', { action: 'get', componentName: 'chat', groupName }), { code: 'SESSION_GROUP_INVALID' });
+  await assert.rejects(() => handler('runtime', { action: 'get', sessionGroup: 'chat:A', surprise: true }), { code: 'INVALID_ARGS' });
+  await assert.rejects(() => handler('runtime', { action: 'get', sessionGroup: 'chat:' + 'a'.repeat(96) }), { code: 'SESSION_GROUP_TOO_LONG' });
   assert.equal(db.prepare('SELECT count(*) AS n FROM channel_namespaces').get().n, before);
-  const result = handler('runtime', { action: 'set', componentName: 'chat', groupName: 'A', runtime: 'codex' });
+  const result = await handler('runtime', { action: 'set', componentName: 'chat', groupName: 'A', runtime: 'codex' });
   assert.equal(result.data.sessionGroup, 'chat:A'); assert.equal(result.data.running.status, 'not_running');
 });
-test('explicit group validation preserves invalid-versus-too-long errors before store access', t => {
+test('explicit group validation preserves invalid-versus-too-long errors before store access', async t => {
   const { handler, db } = fixture(t), before = db.prepare('SELECT total_changes() AS n').get().n;
   for (const [sessionGroup, code, message] of [
     ['BAD:' + 'a'.repeat(96), 'SESSION_GROUP_INVALID', 'Invalid namespace'],
@@ -41,28 +41,30 @@ test('explicit group validation preserves invalid-versus-too-long errors before 
     ['chat:-bad', 'SESSION_GROUP_INVALID', /at position 0/],
     ['chat:a bad', 'SESSION_GROUP_INVALID', /at position 1/],
     [null, 'SESSION_GROUP_INVALID', 'Invalid session group'],
-  ]) assert.throws(() => handler('runtime', { action: 'get', sessionGroup }), { code, message, persisted: [] });
+  ]) await assert.rejects(() => handler('runtime', { action: 'get', sessionGroup }), { code, message, persisted: [] });
   assert.equal(db.prepare('SELECT total_changes() AS n').get().n, before);
 });
-test('saved changed and desired survive failed F1 or running observation; no fence or model loss', t => {
-  for (const overrides of [{ readSessionMode: () => { throw new Error('F1 failed'); } }, { observeRunning: () => { throw new Error('P02 unconnected'); } }]) {
+test('saved changed and desired survive failed F1 or running observation; no fence or model loss', async t => {
+  for (const overrides of [{ readSessionMode: () => { throw new Error('F1 failed'); } }, { observeRunning: async () => { await new Promise(resolve => setImmediate(resolve)); throw Object.assign(new Error('P02 unavailable'), { code: 'TMUX_UNAVAILABLE' }); } }]) {
     const { store, handler } = fixture(t, overrides);
     store.setSessionModelConfig({ sessionGroup: 'chat:A', runtime: 'codex', model: 'm', effort: 'high' });
     const request = { action: 'set', sessionGroup: 'chat:A', runtime: 'codex' };
-    const first = handler('runtime', request);
+    const first = await handler('runtime', request);
     assert.equal(first.ok, true); assert.equal(first.data.changed, true);
     assert.deepEqual(first.data.desired, { mode: 'override', runtime: 'codex' });
     assert.equal(first.data.running.status, 'unknown'); assert.ok(first.data.running.reason);
-    assert.equal(handler('runtime', request).data.changed, false);
-    assert.equal(handler('runtime', { action: 'reset', sessionGroup: 'chat:A' }).data.changed, true);
+    if (overrides.observeRunning) assert.equal(first.data.running.code, 'TMUX_UNAVAILABLE');
+    assert.deepEqual(store.getSessionRuntimeConfig({ sessionGroup: 'chat:A' }), { mode: 'override', runtime: 'codex' });
+    assert.equal((await handler('runtime', request)).data.changed, false);
+    assert.equal((await handler('runtime', { action: 'reset', sessionGroup: 'chat:A' })).data.changed, true);
     assert.equal(store.getSessionModelConfig({ sessionGroup: 'chat:A', runtime: 'codex' }).mode, 'override');
     assert.equal(store.getDrainFence('chat:A'), null);
   }
 });
-test('write error remains an error and preserves existing config', t => {
+test('write error remains an error and preserves existing config', async t => {
   const { handler, store, db } = fixture(t);
   db.exec("CREATE TRIGGER reject_override BEFORE INSERT ON group_runtime_overrides BEGIN SELECT RAISE(ABORT,'fixture'); END");
-  assert.throws(() => handler('runtime', { action: 'set', sessionGroup: 'chat:A', runtime: 'codex' }), { code: 'CONFIG_STORE_FAILED' });
+  await assert.rejects(() => handler('runtime', { action: 'set', sessionGroup: 'chat:A', runtime: 'codex' }), { code: 'CONFIG_STORE_FAILED' });
   assert.deepEqual(store.getSessionRuntimeConfig({ sessionGroup: 'chat:A' }), { mode: 'inherit' });
 });
 test('four-state priority returns null before sampling single or non-current runtime', () => {
@@ -81,28 +83,28 @@ test('four-state priority returns null before sampling single or non-current run
   check({}, 'applied');
   check({ kind: 'runtime', runtime: 'codex' }, 'applied');
 });
-test('postcommit resolution can see later writer without replacing saved desired', t => {
+test('postcommit resolution can see later writer without replacing saved desired', async t => {
   const { store } = fixture(t);
   const handler = createConfigHandler({ store, validateComponent: () => true,
     readSessionMode: () => { store.setSessionRuntimeConfig({ sessionGroup: 'chat:A', runtime: 'claude' }); return 'multi'; },
     observeRunning: () => ({ hasProcess: false }),
   });
-  const result = handler('runtime', { action: 'set', sessionGroup: 'chat:A', runtime: 'codex' });
+  const result = await handler('runtime', { action: 'set', sessionGroup: 'chat:A', runtime: 'codex' });
   assert.equal(result.data.changed, true);
   assert.equal(result.data.desired.runtime, 'codex');
   assert.equal(result.data.resolved.runtime, 'claude');
 });
-test('model wrapper reads and writes exact pairs, rejects partial replacement', t => {
+test('model wrapper reads and writes exact pairs, rejects partial replacement', async t => {
   const { handler, store } = fixture(t);
   const request = { action: 'set', sessionGroup: 'chat:A', runtime: 'codex', model: 'm', effort: 'high' };
-  assert.equal(handler('model', request).data.changed, true);
-  assert.equal(handler('model', request).data.changed, false);
-  assert.equal(handler('model', request).data.running, null);
-  assert.throws(() => handler('model', { ...request, effort: null }), { code: 'MODEL_PAIR_REQUIRED' });
+  assert.equal((await handler('model', request)).data.changed, true);
+  assert.equal((await handler('model', request)).data.changed, false);
+  assert.equal((await handler('model', request)).data.running, null);
+  await assert.rejects(() => handler('model', { ...request, effort: null }), { code: 'MODEL_PAIR_REQUIRED' });
   assert.equal(store.getSessionModelConfig({ sessionGroup: 'chat:A', runtime: 'codex' }).effort, 'high');
 });
 
-test('single and non-current model return mode/resolved and skip fence/process sampling', t => {
+test('single and non-current model return mode/resolved and skip fence/process sampling', async t => {
   for (const sessionMode of ['single', 'multi']) {
     const { store } = fixture(t);
     const originalFence = store.getDrainFence;
@@ -114,7 +116,7 @@ test('single and non-current model return mode/resolved and skip fence/process s
     for (const action of ['get', 'set', 'reset']) {
       const request = { action, sessionGroup: 'chat:A', runtime: 'codex',
         ...(action === 'set' ? { model: 'm', effort: 'high' } : {}) };
-      const { data } = handler('model', request);
+      const { data } = await handler('model', request);
       assert.equal(data.sessionMode, sessionMode);
       assert.deepEqual(data.resolved, { runtime: 'claude', mode: 'default' });
       assert.equal(data.running, null);
@@ -122,7 +124,7 @@ test('single and non-current model return mode/resolved and skip fence/process s
       assert.ok(data.desired);
     }
     if (sessionMode === 'single') {
-      const { data } = handler('runtime', { action: 'get', sessionGroup: 'chat:A' });
+      const { data } = await handler('runtime', { action: 'get', sessionGroup: 'chat:A' });
       assert.equal(data.sessionMode, 'single');
       assert.deepEqual(data.resolved, { runtime: 'claude', mode: 'default' });
       assert.equal(data.running, null);
@@ -130,7 +132,7 @@ test('single and non-current model return mode/resolved and skip fence/process s
     store.getDrainFence = originalFence;
   }
 });
-test('current model exposes resolved input and all four running statuses at handler boundary', t => {
+test('current model exposes resolved input and all four running statuses at handler boundary', async t => {
   const resolved = { runtime: 'claude', mode: 'default' };
   for (const [observation, expected] of [
     [{ hasProcess: false }, 'not_running'],
@@ -139,7 +141,7 @@ test('current model exposes resolved input and all four running statuses at hand
     [{ hasProcess: true, identityVerified: true, ready: true, runId: 'run', launchConfig: resolved }, 'applied'],
   ]) {
     const { handler } = fixture(t, { observeRunning: () => observation });
-    const { data } = handler('model', { action: 'get', sessionGroup: 'chat:A', runtime: 'claude' });
+    const { data } = await handler('model', { action: 'get', sessionGroup: 'chat:A', runtime: 'claude' });
     assert.equal(data.sessionMode, 'multi');
     assert.deepEqual(data.resolved, resolved);
     assert.equal(data.running.status, expected);

@@ -69,6 +69,11 @@ export function createQueryHandlers(store) {
       requireGroup(group);
       return store.queries.originSummaries(group);
     },
+    originCombined({ group, limit } = {}) {
+      requireGroup(group);
+      if (limit !== undefined) integer(limit, 'limit', 1);
+      return store.queries.originCombined(group, { limit });
+    },
     originRaw({ group, after, limit } = {}) {
       requireGroup(group); integer(after, 'after');
       if (limit !== undefined) integer(limit, 'limit', 1);

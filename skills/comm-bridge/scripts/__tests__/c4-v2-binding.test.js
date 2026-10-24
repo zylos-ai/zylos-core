@@ -14,7 +14,7 @@ function fixture(t, dependencies = {}) {
 const options = { sessionGroup: 'origin', expectedRunId: 'run-1', expectedRuntime: 'claude', expectedSessionId: 'session-1' };
 const target = () => ({ runId: 'run-1', runtime: 'claude', sessionGroup: 'origin', currentSession: { runId: 'run-1', sessionId: 'session-1' }, tmuxTarget: binding.tmuxTarget });
 
-test('private resolver validates ordered identity failures without writing controls', t => {
+test('private resolver validates ordered identity failures without writing controls', async t => {
   const cases = [
     { target: null, code: 'TARGET_NOT_RUNNING' },
     { patch: { runId: 'run-2', runtime: 'unknown', sessionGroup: 'wrong', currentSession: null }, code: 'TARGET_MISMATCH' },
@@ -27,12 +27,12 @@ test('private resolver validates ordered identity failures without writing contr
   for (const sample of cases) {
     let calls = 0;
     const { db, s } = fixture(t, { resolveTarget: input => { calls++; assert.deepEqual(input, { sessionGroup: 'origin', sessionMode: 'multi' }); return 'target' in sample ? sample.target : { ...target(), ...sample.patch }; } });
-    assert.throws(() => s.buildTargetBinding(options), error => { assert.equal(error.code, sample.code); assert.deepEqual(error.persisted, []); if (sample.code === 'TARGET_MISMATCH') assert.equal(error.runId, 'run-2'); return true; });
+    await assert.rejects(() => s.buildTargetBinding(options), error => { assert.equal(error.code, sample.code); assert.deepEqual(error.persisted, []); if (sample.code === 'TARGET_MISMATCH') assert.equal(error.runId, 'run-2'); return true; });
     assert.equal(calls, 1); assert.equal(db.prepare('SELECT count(*) FROM control_queue').pluck().get(), 0);
   }
 });
 
-test('scope and transition checks happen before private resolver; caller cannot supply tmux', t => {
+test('scope and transition checks happen before private resolver; caller cannot supply tmux', async t => {
   let calls = 0;
   const { db, s } = fixture(t, { resolveTarget: () => { calls++; return target(); } });
   for (const [input, code] of [
@@ -40,18 +40,26 @@ test('scope and transition checks happen before private resolver; caller cannot 
     [{ ...options, sessionGroup: null }, 'CONTROL_TARGET_REQUIRED'],
     [{ ...options, sessionGroup: '*' }, 'SESSION_GROUP_INVALID'],
     [{ ...options, sessionGroup: 'unknown' }, 'SESSION_GROUP_NOT_FOUND'],
-  ]) assert.throws(() => s.buildTargetBinding(input), { code });
+  ]) await assert.rejects(() => s.buildTargetBinding(input), { code });
   db.exec("INSERT INTO mode_transitions(run_id,source_mode,target_mode,phase,created_at,updated_at) VALUES('transition','single','multi','gating',0,0)");
-  assert.throws(() => s.buildTargetBinding(options), { code: 'TRANSITION_OPEN' });
+  await assert.rejects(() => s.buildTargetBinding(options), { code: 'TRANSITION_OPEN' });
   assert.equal(calls, 0);
   const single = fixture(t, { readConfig: () => ({ state: 'ok', config: { session_mode: 'single' } }), resolveTarget: () => { calls++; return target(); } }).s;
-  assert.throws(() => single.buildTargetBinding(options), { code: 'TARGET_SCOPE_MISMATCH' });
+  await assert.rejects(() => single.buildTargetBinding(options), { code: 'TARGET_SCOPE_MISMATCH' });
   assert.equal(calls, 0);
 });
 
-test('successful private snapshot builds canonical binding; insertion is separate', t => {
-  const { db, s } = fixture(t, { resolveTarget: () => target() });
-  const canonical = s.buildTargetBinding(options);
+test('successful private snapshot builds canonical binding; insertion is separate', async t => {
+  let calls = 0;
+  const { db, s } = fixture(t, { resolveTarget: async () => {
+    calls++;
+    assert.equal(db.inTransaction, false);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(db.inTransaction, false);
+    return target();
+  } });
+  const canonical = await s.buildTargetBinding(options);
+  assert.equal(calls, 1);
   assert.equal(canonical, JSON.stringify(binding));
   assert.equal(db.prepare('SELECT count(*) FROM control_queue').pluck().get(), 0);
   const row = s.insertControl('probe', { sessionGroup: 'origin', targetBinding: canonical, appendAckSuffix: false });
