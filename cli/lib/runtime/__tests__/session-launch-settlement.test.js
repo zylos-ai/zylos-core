@@ -51,18 +51,15 @@ test('exec failure settles after acknowledged pane exits, with no later creation
   await delay(100);assert.equal(f.tmux('list-sessions','-F','#{session_name}').trim(),'keeper');
 });
 
-// This opt-in integration consumes the actual A/P01 checkout, never a parser mock.
-test('adapter launch consumes real A/P01 paths and observers with script runtime', {skip:!process.env.P02_REAL_A_ROOT}, async t=>{
+// Exercise the real in-tree A/P01 dependencies on every combined-tree run.
+test('adapter launch consumes real A/P01 paths and observers with script runtime', async t=>{
   const f=await setup(t);
-  const {pathToFileURL}=await import('node:url');
-  const base=process.env.P02_REAL_A_ROOT;
-  const paths=await import(pathToFileURL(path.join(base,'cli/lib/session-group-paths.js')));
-  const deps={...await import(pathToFileURL(path.join(base,'cli/lib/runtime/tmux-connection.js'))),...await import(pathToFileURL(path.join(base,'cli/lib/runtime/session-target.js')))};
+  const paths=await import('../../session-group-paths.js');
   const {SessionAdapter}=await import('../session-adapter.js');
   class Adapter extends SessionAdapter {get runtimeId(){return 'claude';}}
   const command=path.join(f.dir,'runtime');
   await fs.writeFile(command,`#!${process.execPath}\nif(process.argv.includes('--help')) { console.log(' --model MODEL --effort EFFORT '); } else if(process.argv[2]==='auth' && process.argv[3]==='status') { console.log('{\"loggedIn\":false}'); } else { setInterval(()=>{},1000); }\n`,{mode:0o700});
-  const adapter=new Adapter({root:f.dir,paths,dependencies:deps,env:{...process.env,CLAUDE_BIN:command},tmux:{binary,socketPath:path.join(f.dir,'socket'),configFile:'/dev/null'}});
+  const adapter=new Adapter({root:f.dir,env:{...process.env,CLAUDE_BIN:command},tmux:{binary,socketPath:path.join(f.dir,'socket'),configFile:'/dev/null'}});
   const input={sessionGroup:'telegram:g-123',runId:'actual-adapter-run',sessionMode:'multi',launchConfig:{runtime:'claude',mode:'override',model:'model with spaces',effort:'high'}};
   const result=await adapter.launch(input);
   assert.equal(result.tmuxName,paths.tmuxNameForGroup(input.sessionGroup));

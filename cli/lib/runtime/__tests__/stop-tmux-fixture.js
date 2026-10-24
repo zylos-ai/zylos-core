@@ -1,19 +1,17 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import {pathToFileURL} from 'node:url';
 import {execFileSync,spawn} from 'node:child_process';
 import {once} from 'node:events';
 import assert from 'node:assert/strict';
 import {SessionAdapter} from '../session-adapter.js';
 import {readProcessImage} from '../session-process-observation.js';
 
-export const providerRoot=process.env.P02_REAL_A_ROOT || new URL('../../../../',import.meta.url).pathname;
-export const actualDependencies={
- ...(await import(pathToFileURL(path.join(providerRoot,'cli/lib/runtime/tmux-connection.js')))),
- ...(await import(pathToFileURL(path.join(providerRoot,'cli/lib/runtime/session-target.js')))),
-};
-export const {LEGACY_TMUX_NAMES}=await import(pathToFileURL(path.join(providerRoot,'cli/lib/session-group-paths.js')));
+import * as tmuxConnection from '../tmux-connection.js';
+import * as sessionTarget from '../session-target.js';
+export {LEGACY_TMUX_NAMES} from '../../session-group-paths.js';
+
+export const actualDependencies={...tmuxConnection,...sessionTarget};
 export const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 export async function until(read,check) {
   let value;
