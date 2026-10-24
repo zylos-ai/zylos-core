@@ -106,7 +106,7 @@ export class SessionAdapter extends RuntimeAdapter {
       if (!runId || !['single','multi'].includes(sessionMode) || (sessionMode === 'single') !== (sessionGroup === null)) throw adapterError('MODEL_CONFIG_REJECTED');
       const root = await fs.realpath(this.options.root || ZYLOS_DIR);
       const cleanEnv = launchEnvironment(root,env);
-      if (this.runtimeId === 'claude' && hasNativeClaudeAuth(command, cleanEnv)) {
+      if (this.runtimeId === 'claude' && (Object.hasOwn(cleanEnv, 'ANTHROPIC_API_KEY') || Object.hasOwn(cleanEnv, 'CLAUDE_CODE_OAUTH_TOKEN')) && hasNativeClaudeAuth(command, cleanEnv)) {
         delete cleanEnv.ANTHROPIC_API_KEY;
         delete cleanEnv.CLAUDE_CODE_OAUTH_TOKEN;
       }
