@@ -26,7 +26,7 @@ export async function openTmuxConnection({ socketPath, socketName, sessionName, 
     clearTimeout(startupTimer);
     initialReject(error);
     if (pending) { clearTimeout(pending.timer); pending.reject(error); pending = null; }
-    child.stdin.destroy(); child.kill();
+    child.stdin.destroy(); child.stdout.destroy(); child.stderr.destroy(); child.kill();
   };
   startupTimer = setTimeout(() => fatal(tmuxError('TMUX_UNAVAILABLE', 'tmux connection timed out', 'timeout')), timeoutMs);
   child.stderr.on('data', data => { stderr = (stderr + data).slice(-8192); });
