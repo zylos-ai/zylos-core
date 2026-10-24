@@ -45,6 +45,7 @@ export function controlFunctions({ read, write, get, all, run, seconds, baseline
       if (!row) throw dataError('CONTROL_NOT_ACTIVE', 'Control is absent or terminal');
       return row;
     }),
+    failStaleTargetControl: id => write(c => get(c, "UPDATE control_queue SET status='timeout',last_error='STALE_TARGET',updated_at=? WHERE id=? AND status='running' AND target_binding IS NOT NULL RETURNING *", seconds(), id) ?? null),
     setDrainFence: (group, { reason = null, runId = null } = {}) => write(c => {
       const hasRun = typeof runId === 'string' && runId.length > 0;
       const normal = ['ttl','evict','upgrade','auth','mode_switch','model_config'];
