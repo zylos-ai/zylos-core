@@ -3,8 +3,6 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { installParserFixture } from '../../../test/helpers/p02-parser-fixture.js';
-installParserFixture(['origin','lark:x']);
 const {createSessionReader}=await import('../session-state-reader-async.js');
 const {readRuntimeHealth}=await import('../session-state-reader.js');
 const identity={present:true,ready:true,runtime:'claude',runId:'run',sessionId:'session',createdAt:123,serverGeneration:'generation',tmuxSessionId:'$1',paneId:'%1',tmuxName:'zylos-group-lark=x',launchConfig:{runtime:'claude'}};

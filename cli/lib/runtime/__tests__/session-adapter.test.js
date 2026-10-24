@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { SessionAdapter, findRunProcesses } from '../session-adapter.js';
+import { SessionAdapter } from '../session-adapter.js';
 import { buildRuntimeArgs, validateLaunchConfig, writeSessionLaunchScript } from '../session-command.js';
 import { ClaudeAdapter } from '../claude.js';
 import { CodexAdapter } from '../codex.js';
@@ -18,7 +18,7 @@ function fixture({present = true, runId = 'r', openError, runtime = 'claude'} = 
     revalidateSessionTarget:async () => { calls.push(['validate']); },
     readTargetRuntime:async () => ({runtime}),
   };
-  const adapter = new Adapter({dependencies,findRunProcesses:async () => [],sleep:async () => {}});
+  const adapter = new Adapter({dependencies});
   return {adapter, dependencies, target, connection, calls};
 }
 const error = (code,cause) => Object.assign(new Error(code),{code,cause});
@@ -35,31 +35,27 @@ test('run mismatch does not signal or kill',async () => {
   await assert.rejects(f.adapter.stop({tmuxName:'x',expectedRunId:'other'}),{code:'RUNID_MISMATCH'});
   assert.equal(f.calls.some(c => c[0] === 'kill-session'),false);
 });
-test('stop bound object and confirm descendants with TERM then KILL',async () => {
-  const f=fixture(); let scans=0; const signals=[];
-  f.adapter.options.findRunProcesses=async () => ++scans < 4 ? [123] : [];
-  f.adapter.options.signalProcess=(...args) => signals.push(args);
+test('stop bound object and confirm its removal on the original connection',async () => {
+  const f=fixture();
   await f.adapter.stop({tmuxName:'x',expectedRunId:'r'});
-  assert.deepEqual(signals,[[123,'SIGTERM'],[123,'SIGKILL']]);
-  assert.deepEqual(f.calls.slice(0,2),[['validate'],['kill-session','-t','$7']]);
+  assert.deepEqual(f.calls,[['validate'],['kill-session','-t','$7'],['list-sessions','-F','#{session_id}'],['close']]);
 });
-test('unavailable ownership scan only succeeds when absent at entry',async () => {
+test('process cleanup dependencies are never consumed for present or absent targets',async () => {
   for (const present of [false,true]) {
-    const f=fixture({present}); const logs=[];
-    f.adapter.options.findRunProcesses=async () => { throw new Error('unsupported'); };
-    f.adapter.options.log=s => logs.push(s);
-    if (present) await assert.rejects(f.adapter.stop({tmuxName:'x',expectedRunId:'r'}),{code:'STOP_UNCONFIRMED'});
-    else { await f.adapter.stop({tmuxName:'x',expectedRunId:'r'}); assert.match(logs[0],/unknown/); }
-    assert.equal(f.calls.some(c => c[0] === 'kill-session'),false);
+    const f=fixture({present});
+    for(const key of ['findRunProcesses','readOwnedProcess','pinProcess','signalProcess','stopGraceMs'])
+      Object.defineProperty(f.adapter.options,key,{get(){throw new Error('Obsolete process cleanup dependency read')}});
+    await f.adapter.stop({tmuxName:'x',expectedRunId:'r'});
+    assert.equal(f.calls.some(c=>c[0]==='kill-session'),present);
   }
 });
-test('null absent run logs unknown and tmux unobservable refuses',async () => {
-  const f=fixture({present:false}); const logs=[]; f.adapter.options.log=s=>logs.push(s);
-  await f.adapter.stop({tmuxName:'x',expectedRunId:null}); assert.equal(logs.length,1);
+test('null absent succeeds without process-unknown logs; unobservable tmux refuses',async () => {
+  const f=fixture({present:false});const logs=[];f.adapter.options.log=s=>logs.push(s);
+  await f.adapter.stop({tmuxName:'x',expectedRunId:null});assert.deepEqual(logs,[]);
   await assert.rejects(fixture({openError:error('TMUX_UNAVAILABLE')}).adapter.stop({tmuxName:'x',expectedRunId:'r'}),{code:'STOP_UNCONFIRMED'});
 });
-test('live descendants after escalation are not reported stopped',async () => {
-  const f=fixture({present:false}); f.adapter.options.findRunProcesses=async () => [123]; f.adapter.options.signalProcess=()=>{};
+test('target still present after kill cannot be reported stopped',async () => {
+  const f=fixture();f.connection.command=async argv=>{f.calls.push(argv);return '$7'};
   await assert.rejects(f.adapter.stop({tmuxName:'x',expectedRunId:'r'}),{code:'STOP_UNCONFIRMED'});
 });
 test('multiline text uses a private file, revalidates before paste, cleans buffer',async () => {
@@ -123,19 +119,10 @@ test('unreadable executable identity fails preflight before creation',async()=> 
   assert.equal(f.calls.some(c=>c[0]==='new-session'),false);
 });
 
-test('process scan uses exact inherited run key and excludes zombies',async()=> {
-  const dir=await fs.mkdtemp(path.join(os.tmpdir(),'p02-proc-'));
-  try {
-    for(const [pid,value,state] of [[101,'wanted','S'],[102,'wanted-extra','S'],[103,'wanted','Z']]) {
-      await fs.mkdir(path.join(dir,String(pid)));
-      await fs.writeFile(path.join(dir,String(pid),'stat'),`${pid} (fake runtime) ${state} 1 0`);
-      await fs.writeFile(path.join(dir,String(pid),'environ'),`OTHER=value\0ZYLOS_RUN_ID=${value}\0`);
-    }
-    assert.deepEqual(await findRunProcesses('wanted',{procRoot:dir}),[101]);
-    await assert.rejects(findRunProcesses('wanted',{procRoot:dir,platform:'unsupported'}));
-  } finally {await fs.rm(dir,{recursive:true,force:true});}
+test('historical null-run target can close after normal identity revalidation',async () => {
+  const f=fixture({runId:null});await f.adapter.stop({tmuxName:'legacy',expectedRunId:null});
+  assert.deepEqual(f.calls.slice(0,2),[['validate'],['kill-session','-t','$7']]);
 });
-
 // Internal reader evidence keeps a readable shell-only tree distinct from failure.
 test('readable runtime absence is false; unreadable and ambiguous remain unavailable', async () => {
   for (const runtimeObservation of ['absent', 'unavailable', 'ambiguous', undefined]) {
@@ -158,13 +145,8 @@ test('acknowledged exact object kill survives connection exit, arbitrary disconn
     else await assert.rejects(f.adapter.stop({tmuxName:'x',expectedRunId:'r'}), {code:'STOP_UNCONFIRMED'});
   }
 });
-test('kill acknowledgement cannot replace descendant confirmation or authorize null run stop', async () => {
-  const f = fixture();
-  f.connection.didAcknowledgeSessionKill = () => true;
-  f.adapter.options.findRunProcesses = async () => [123];
-  f.adapter.options.signalProcess = () => {};
-  await assert.rejects(f.adapter.stop({tmuxName:'x',expectedRunId:'r'}), {code:'STOP_UNCONFIRMED'});
-  const legacy = fixture({runId:null});
-  await assert.rejects(legacy.adapter.stop({tmuxName:'x',expectedRunId:null}), {code:'STOP_UNCONFIRMED'});
-  assert.equal(legacy.calls.some(c => c[0] === 'kill-session'), false);
+test('a command failure cannot be replaced by a purported kill acknowledgement',async () => {
+  const f=fixture();f.connection.didAcknowledgeSessionKill=()=>true;
+  f.connection.command=async()=>{throw error('TMUX_COMMAND_FAILED','error')};
+  await assert.rejects(f.adapter.stop({tmuxName:'x',expectedRunId:'r'}),{code:'STOP_UNCONFIRMED',cause:'error'});
 });

@@ -1,9 +1,10 @@
 /** Shared M2 paths and strict, reversible tmux group names (IB-26). */
 import path from 'node:path';
 import os from 'node:os';
-import { execFileSync } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import { encodeGroupCharacters, decodeGroupCharacters } from './session-group-codec.js';
 import { parseSessionGroup } from '../../skills/comm-bridge/scripts/c4-db.js';
+import { tmuxClientArgs } from './runtime/tmux-client-args.js';
 
 export const GROUP_TMUX_PREFIX = 'zylos-group-';
 export const LEGACY_TMUX_NAMES = Object.freeze(['claude-main', 'codex-main']);
@@ -64,13 +65,44 @@ export const supervisorDiagnosticPath = (env = process.env) => path.join(legacyR
 export const poolMetricsPath = (env = process.env) => path.join(legacyRunDir(env), 'pool-metrics.jsonl');
 export const hookErrorLogPath = (env = process.env) => path.join(legacyRunDir(env), 'hook-activity-errors.log');
 
+// Keep the former synchronous error contract while letting the event loop run.
+function execTmuxFile(binary, args, { timeout, ...options }) {
+  return new Promise((resolve, reject) => {
+    let timedOut = false;
+    const child = execFile(binary, args, { ...options, timeout: 0 }, (error, stdout, stderr) => {
+      clearTimeout(timer);
+      child.stdin.destroy();
+      if (timedOut) {
+        error ||= new Error(`Command timed out: ${binary}`);
+        error.code = 'ETIMEDOUT';
+        error.status = child.exitCode;
+        error.signal = child.signalCode;
+      }
+      if (!error) { resolve(stdout); return; }
+      error.stdout = stdout;
+      error.stderr = stderr;
+      if (typeof error.code === 'number') {
+        error.status = error.code;
+        delete error.code;
+      }
+      reject(error);
+    });
+    const timer = setTimeout(() => {
+      timedOut = true;
+      // A frozen server may retain the client's pipe descriptors. Release our
+      // streams before killing it; execFile settles only after client close.
+      child.stdin.destroy(); child.stdout.destroy(); child.stderr.destroy();
+      child.kill();
+    }, timeout);
+  });
+}
+
 /** One read only; missing tmux binary, permissions and malformed output are errors. */
-export function listGroupTmuxSessions({ exec = execFileSync, socketPath, socketName, binary = 'tmux' } = {}) {
-  if (socketPath && socketName) throw new TypeError('Choose one tmux socket');
-  const args = [...(socketPath ? ['-S', socketPath] : socketName ? ['-L', socketName] : []), 'list-sessions', '-F', '#{session_name}\t#{session_created}'];
+export async function listGroupTmuxSessions({ exec = execTmuxFile, socketPath, socketName, binary = 'tmux' } = {}) {
+  const args = [...tmuxClientArgs({ socketPath, socketName }), 'list-sessions', '-F', '#{session_name}\t#{session_created}'];
   let output;
   try {
-    output = exec(binary, args, { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'pipe'] });
+    output = await exec(binary, args, { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'pipe'] });
   } catch (error) {
     const stderr = String(error.stderr || '').trim();
     // tmux reports an absent or exited server with these diagnostics. Do not

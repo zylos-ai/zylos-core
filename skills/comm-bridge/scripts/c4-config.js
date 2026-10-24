@@ -1,6 +1,6 @@
 import path from 'path';
 import os from 'os';
-import { loadCoreConfig } from './core-config-loader.js';
+import { readZylosConfigOrThrow } from './local-config.js';
 
 export const POLL_INTERVAL_BASE = 1000;
 export const POLL_INTERVAL_MAX = 3000;
@@ -50,20 +50,12 @@ export const CONTENT_PREVIEW_CHARS = 100;
 
 const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
 
-// Runtime identity and status-notice customization come from one strict F1
-// snapshot. A missing file/key keeps the legacy defaults; corruption is fatal.
-const { readZylosConfigStrict } = await loadCoreConfig();
-const _configRead = readZylosConfigStrict();
-if (_configRead.state === 'error') {
-  const error = new Error(`Zylos configuration is unreadable: ${_configRead.error.message}`);
-  error.code = 'CONFIG_UNREADABLE';
-  error.cause = _configRead.error;
-  throw error;
+// Runtime identity is read at the action boundary, without loading Core.
+export async function getRuntimeIdentity() {
+  const config = readZylosConfigOrThrow();
+  const runtime = config.runtime === 'codex' ? 'codex' : 'claude';
+  return { runtime, session: runtime === 'codex' ? 'codex-main' : 'claude-main' };
 }
-const _cfg = _configRead.state === 'ok' ? _configRead.config : {};
-export const STATUS_NOTICE_CONFIG = _cfg.statusNotices ?? {};
-export const ACTIVE_RUNTIME = _cfg.runtime === 'codex' ? 'codex' : 'claude';
-export const TMUX_SESSION = ACTIVE_RUNTIME === 'codex' ? 'codex-main' : 'claude-main';
 export const DATA_DIR = path.join(ZYLOS_DIR, 'comm-bridge');
 export const DB_PATH = path.join(DATA_DIR, 'c4.db');
 export const ACTIVITY_MONITOR_DIR = path.join(ZYLOS_DIR, 'activity-monitor');

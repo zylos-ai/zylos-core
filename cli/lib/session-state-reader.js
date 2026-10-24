@@ -1,30 +1,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { Worker } from 'node:worker_threads';
+import { createSessionReader } from './session-state-reader-async.js';
 import { zylosRoot } from './session-group-paths.js';
 import { safeHealthReason } from '../../skills/activity-monitor/scripts/health-evidence.js';
 
-// A short-lived thread keeps the public API synchronous while the whole read
-// holds one asynchronous tmux connection. It is read-only and never reconnects.
-function invoke(method, args) {
-  const shared = new SharedArrayBuffer(8 + 16 * 1024 * 1024);
-  const control = new Int32Array(shared, 0, 2);
-  const worker = new Worker(new URL('./session-state-reader-worker.js', import.meta.url), { workerData: { method, args, shared } });
-  worker.on('error', () => {}); // Worker bootstrap failure is bounded by the wait.
-  const outcome = Atomics.wait(control, 0, 0, 15000);
-  if (outcome === 'timed-out') {
-    void worker.terminate();
-    throw Object.assign(new Error('Session observation timed out'), { code: 'READER_TIMEOUT' });
-  }
-  const result = JSON.parse(new TextDecoder().decode(new Uint8Array(shared, 8, Atomics.load(control, 1))));
-  if (result.error) throw Object.assign(new Error(result.error.message), { code: result.error.code, cause: result.error.cause });
-  return result.value;
-}
-export const readLiveIdentity = sessionGroup => invoke('readLiveIdentity', [sessionGroup]);
-export const readSessionState = (sessionGroup, options) => invoke('readSessionState', [sessionGroup, options]);
-export const resolveTargetRuntime = sessionGroup => invoke('resolveTargetRuntime', [sessionGroup]);
-export const readCodexUsageSample = options => invoke('readCodexUsageSample', [options]);
-export const readAccountUsage = runtime => invoke('readAccountUsage', [runtime]);
+// Public readers retain one asynchronous tmux connection per observation.
+export const { readLiveIdentity, readSessionState, resolveTargetRuntime,
+  readCodexUsageSample, readAccountUsage } = createSessionReader();
 
 export function readRuntimeHealth(runtime) {
   if (!['claude','codex'].includes(runtime)) throw new TypeError('Unknown runtime');

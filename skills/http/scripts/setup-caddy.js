@@ -48,16 +48,10 @@ function prompt(question) {
 }
 
 function readConfig() {
-  const result = readZylosConfigStrict();
-  if (result.state === 'error') {
-    const error = new Error(`Zylos configuration is unreadable: ${result.error.message}`);
-    error.code = 'CONFIG_UNREADABLE';
-    throw error;
-  }
-  return result.state === 'ok' ? result.config : {};
+  return readZylosConfigOrThrow();
 }
 
-const { readZylosConfigStrict, updateZylosConfigLocked } = await loadCoreConfig();
+const { readZylosConfigOrThrow, updateZylosConfigLocked } = await loadCoreConfig();
 
 function saveConfig(updates) {
   return updateZylosConfigLocked({ set: updates });

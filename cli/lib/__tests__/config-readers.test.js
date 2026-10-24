@@ -31,6 +31,21 @@ function writeConfig(source) {
 }
 
 describe('strict runtime readers', () => {
+  it('shares CONFIG_UNREADABLE with the original cause and only defaults missing F1', () => {
+    const configUrl = pathToFileURL(path.join(rootDir, 'cli/lib/config.js')).href;
+    const read = `const {readZylosConfigOrThrow:read}=await import(${JSON.stringify(configUrl)});`;
+    for (const source of [null, '{}', '{"runtime":"codex"}']) {
+      if (source !== null) writeConfig(source);
+      const result = run(['--input-type=module', '-e', `${read} console.log(JSON.stringify(read()));`]);
+      assert.equal(result.status, 0, result.stderr);
+      assert.deepEqual(JSON.parse(result.stdout), source ? JSON.parse(source) : {});
+    }
+    writeConfig('{ broken');
+    const malformed = run(['--input-type=module', '-e', `${read} try {read();process.exit(9)} catch(error){console.log(JSON.stringify({code:error.code,cause:error.cause?.name}));}`]);
+    assert.equal(malformed.status, 0, malformed.stderr);
+    assert.deepEqual(JSON.parse(malformed.stdout), { code: 'CONFIG_UNREADABLE', cause: 'SyntaxError' });
+  });
+
   it('defaults a missing runtime but rejects malformed F1 at the CLI boundary', () => {
     const missing = run([cliPath, 'runtime', 'status']);
     assert.equal(missing.status, 0, missing.stderr);
@@ -41,14 +56,16 @@ describe('strict runtime readers', () => {
     assert.match(malformed.stderr, /configuration is unreadable/i);
   });
 
-  it('loads runtime and statusNotices from the same strict c4-config snapshot', () => {
+  it('reads runtime strictly at the action boundary, leaving c4-config import available', () => {
     writeConfig(JSON.stringify({ runtime: 'codex', statusNotices: { brand: 'Product' } }));
-    const valid = run(['--input-type=module', '-e', `const c=await import(${JSON.stringify(c4ConfigUrl)}); console.log(JSON.stringify({runtime:c.ACTIVE_RUNTIME,notices:c.STATUS_NOTICE_CONFIG}));`]);
+    const valid = run(['--input-type=module', '-e', `const c=await import(${JSON.stringify(c4ConfigUrl)}); console.log(JSON.stringify(await c.getRuntimeIdentity()));`]);
     assert.equal(valid.status, 0, valid.stderr);
-    assert.deepEqual(JSON.parse(valid.stdout), { runtime: 'codex', notices: { brand: 'Product' } });
+    assert.deepEqual(JSON.parse(valid.stdout), { runtime: 'codex', session: 'codex-main' });
 
     writeConfig('{');
-    const malformed = run(['--input-type=module', '-e', `await import(${JSON.stringify(c4ConfigUrl)});`]);
+    const imported = run(['--input-type=module', '-e', `await import(${JSON.stringify(c4ConfigUrl)});`]);
+    assert.equal(imported.status, 0, imported.stderr);
+    const malformed = run(['--input-type=module', '-e', `const c=await import(${JSON.stringify(c4ConfigUrl)}); await c.getRuntimeIdentity();`]);
     assert.notEqual(malformed.status, 0);
     assert.match(malformed.stderr, /CONFIG_UNREADABLE|configuration is unreadable/);
   });
@@ -65,7 +82,7 @@ describe('strict runtime readers', () => {
       const file = path.join(root, '.zylos', 'config.json');
       fs.rmSync(file, { force: true });
       if (entry.config !== null) writeConfig(JSON.stringify(entry.config));
-      const result = run(['--input-type=module', '-e', `const c=await import(${JSON.stringify(`${c4ConfigUrl}?matrix=${index}`)}); console.log(JSON.stringify({runtime:c.ACTIVE_RUNTIME,notices:c.STATUS_NOTICE_CONFIG}));`]);
+      const result = run(['--input-type=module', '-e', `const c=await import(${JSON.stringify(`${c4ConfigUrl}?matrix=${index}`)}); const core=await import(${JSON.stringify(loaderUrl)}); const config=(await core.loadCoreConfig()).readZylosConfigOrThrow(); console.log(JSON.stringify({runtime:(await c.getRuntimeIdentity()).runtime,notices:config.statusNotices??{}}));`]);
       assert.equal(result.status, 0, result.stderr);
       assert.deepEqual(JSON.parse(result.stdout), entry.expected);
     }
@@ -113,7 +130,7 @@ describe('strict runtime readers', () => {
   it('keeps Docker environment priority and does not swallow strict fallback errors', () => {
     const source = fs.readFileSync(path.join(rootDir, 'docker', 'entrypoint.sh'), 'utf8');
     assert.match(source, /if \[ -z "\$\{ZYLOS_RUNTIME:-\}" \]/);
-    assert.match(source, /readZylosConfigStrict/);
+    assert.match(source, /readZylosConfigOrThrow/);
     assert.doesNotMatch(source, /catch \{ process\.stdout\.write\('claude'\)/);
   });
 });

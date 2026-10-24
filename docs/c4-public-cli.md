@@ -32,9 +32,13 @@ Other independent commands:
 - `c4-fetch.js --origin-sync --group GROUP --summaries-only [--json]`
 - `c4-fetch.js --origin-sync --group GROUP --raw-only --after COVERAGE [--limit N] [--json]`
 - `c4-fetch.js --origin-sync --group GROUP [--limit N] [--json]` reads both parts in one snapshot.
-- `c4-fetch.js --absorbed --run-id UUID [--summary | --id ID --offset OFFSET | --after ID] [--max-bytes N] [--json]`
+- `c4-fetch.js --absorbed --run-id UUID [--summary [--scope-after GROUP] | --id ID [--field text|endpoint] [--out FILE] | --after ID] [--limit N] [--json]`
 
-Absorbed queries retain the store's encoded byte budget and pagination markers.
+Absorbed queries paginate by count: pages default to 20 records (maximum 100),
+and summaries default to 50 scopes (maximum 200). Pages preview the first 300
+Unicode code points of each message; `--id` returns the complete selected field.
+`--out` writes that field to a new file and refuses to overwrite an existing file.
+The retired `--offset` and `--max-bytes` options are rejected.
 Ordinary text fetches encode reply arguments while the original row is still
 available. JSON success is `{ok:true,data:...}`; JSON failure is
 `{ok:false,error:...}` with a nonzero exit code. Existing text commands retain
@@ -42,8 +46,9 @@ human-readable output. `--` ends option parsing for positional content.
 
 Control and configuration commands use the instance's strict configuration
 reader and the Core package's runtime implementation. A copied skill locates its
-Core package through `ZYLOS_PACKAGE_ROOT`, the source-tree location, or the
-global npm package location. A broken explicit package root is an error.
+Core package through `ZYLOS_PACKAGE_ROOT`, the source-tree location, the `zylos`
+executable on `PATH`, or the global npm package location, in that order.
+A broken explicit package root is an error.
 
 - `c4-control.js enqueue --content TEXT [--group GROUP] --target-run RUN_ID [--expected-runtime RUNTIME] [--expected-session SESSION_ID] [--json]`
 - `c4-runtime-config.js get|set|reset --group GROUP [--runtime RUNTIME] [--json]`

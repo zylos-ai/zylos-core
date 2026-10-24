@@ -5,7 +5,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { ZYLOS_DIR, SKILLS_DIR, COMPONENTS_DIR, readZylosConfigStrict } from '../lib/config.js';
+import { ZYLOS_DIR, SKILLS_DIR, COMPONENTS_DIR, readZylosConfigOrThrow } from '../lib/config.js';
 import { bold, dim, green, red, yellow, cyan, success, error, warn, heading } from '../lib/colors.js';
 import { loadRegistry } from '../lib/registry.js';
 import { loadComponents, saveComponents } from '../lib/components.js';
@@ -1205,9 +1205,7 @@ async function upgradeSelfCore({ branch, beta = false, mode = 'merge' } = {}) {
       // bootstrap problem where the old component.js lacks restart logic.
       if (result.success && result.instructionFilesRebuilt) {
         try {
-          const configResult = readZylosConfigStrict();
-          if (configResult.state === 'error') throw configResult.error;
-          const activeRuntime = (configResult.state === 'ok' ? configResult.config.runtime : undefined) ?? 'claude';
+          const activeRuntime = readZylosConfigOrThrow().runtime ?? 'claude';
           if (activeRuntime === 'claude') {
             const c4ControlPath = path.join(ZYLOS_DIR, '.claude', 'skills', 'comm-bridge', 'scripts', 'c4-control.js');
             const { spawnSync } = await import('child_process');

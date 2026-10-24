@@ -51,8 +51,7 @@ import {
   REQUIRE_IDLE_POST_SEND_HOLD_MS,
   REQUIRE_IDLE_EXECUTION_MAX_WAIT_MS,
   REQUIRE_IDLE_EXECUTION_POLL_MS,
-  ACTIVE_RUNTIME,
-  TMUX_SESSION,
+  getRuntimeIdentity,
   ACTIVITY_MONITOR_DIR,
   AGENT_STATUS_FILE,
   PROC_STATE_FILE,
@@ -65,6 +64,8 @@ import {
   isUsageOverlayCapture as sharedIsUsageOverlayCapture
 } from './tmux-input-state.js';
 import { buildReplyViaSuffix, hasLegacyReplyViaSuffix, sanitizeMessage, truncateForDelivery } from './c4-utils.js';
+
+const { runtime: ACTIVE_RUNTIME, session: TMUX_SESSION } = await getRuntimeIdentity();
 
 let isShuttingDown = false;
 let pollInterval = POLL_INTERVAL_BASE;
@@ -692,7 +693,8 @@ function maybeCleanupControlQueue() {
   lastControlCleanupMs = nowMs;
 }
 
-async function processNextMessage() {
+export async function processNextMessage() {
+  await getRuntimeIdentity();
   maybeCleanupControlQueue();
   const timedOut = expireTimedOutControls();
   if (timedOut > 0) {

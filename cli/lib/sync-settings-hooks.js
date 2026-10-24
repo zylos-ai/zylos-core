@@ -22,7 +22,7 @@ import os from 'os';
 import { execFileSync } from 'child_process';
 import { fileURLToPath } from 'url';
 import { hookScriptKey, hookScriptBaseKey, getCommandHooks } from './hook-utils.js';
-import { getZylosConfig, readZylosConfigStrict, updateZylosConfigLocked } from './config.js';
+import { getZylosConfig, readZylosConfigStrict, readZylosConfigOrThrow, updateZylosConfigLocked } from './config.js';
 import { renderCodexProjectConfig, renderCodexGlobalConfig, writeCodexConfig, resolveCodexBypassPermissions } from './runtime-setup.js';
 import {
   SIDE_EFFECT_NAMES,
@@ -395,7 +395,7 @@ export function shouldSyncCodexConfig({
   projectDir = ZYLOS_DIR,
   existsSync = fs.existsSync,
 } = {}) {
-  if (cfg === undefined) cfg = strictRuntimeConfig();
+  if (cfg === undefined) cfg = readZylosConfigOrThrow();
   const codexDir = path.join(homeDir, '.codex');
   const globalConfigPath = path.join(codexDir, 'config.toml');
   const projectConfigPath = path.join(path.resolve(projectDir), '.codex', 'config.toml');
@@ -420,7 +420,7 @@ export function syncCodexConfig({
   writeConfig = writeCodexConfig,
   log = console.log,
 } = {}) {
-  if (cfg === undefined) cfg = strictRuntimeConfig();
+  if (cfg === undefined) cfg = readZylosConfigOrThrow();
   const state = shouldSyncCodexConfig({ cfg, homeDir, projectDir, existsSync });
   if (!state.shouldSync) {
     return { attempted: false, changed: false, fatal: false };
@@ -468,17 +468,6 @@ export function syncCodexConfig({
   if (existingProject !== desiredProject) log(`  ~ codex project config: ${state.projectConfigPath}`);
   if (existingGlobal !== desiredGlobal) log(`  ~ codex global config: ${state.globalConfigPath}`);
   return { attempted: true, changed: true, fatal: false };
-}
-
-function strictRuntimeConfig() {
-  const result = readZylosConfigStrict();
-  if (result.state === 'error') {
-    const error = new Error(`Zylos configuration is unreadable: ${result.error.message}`);
-    error.code = 'CONFIG_UNREADABLE';
-    error.cause = result.error;
-    throw error;
-  }
-  return result.state === 'ok' ? result.config : {};
 }
 
 /**

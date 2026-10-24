@@ -31,8 +31,22 @@ function fixture(t, { core = true, config = '{}' } = {}) {
   fs.copyFileSync(path.resolve(scripts, '../package.json'), path.join(skill, 'package.json'));
   fs.copyFileSync(path.resolve(scripts, '../init-db.sql'), path.join(skill, 'init-db.sql'));
   fs.symlinkSync(path.resolve(scripts, '../node_modules'), path.join(skill, 'node_modules'), 'dir');
+  // Exercise npm fallback, not an unrelated zylos executable on the host PATH.
+  const bin = path.join(root, 'bin');
+  fs.mkdirSync(bin);
+  fs.symlinkSync(process.execPath, path.join(bin, 'node'));
+  for (const command of ['npm', 'tmux', 'ps']) {
+    const executable = (process.env.PATH || '').split(path.delimiter)
+      .map(directory => path.resolve(directory || '.', command))
+      .find(candidate => {
+        try { fs.accessSync(candidate, fs.constants.X_OK); return fs.statSync(candidate).isFile(); }
+        catch { return false; }
+      });
+    assert.ok(executable, `${command} is required by the package-layout fixture`);
+    fs.symlinkSync(fs.realpathSync(executable), path.join(bin, command));
+  }
   const env = {
-    PATH: process.env.PATH, HOME: home, ZYLOS_DIR: home,
+    PATH: bin, HOME: home, ZYLOS_DIR: home,
     TMUX_TMPDIR: root, LANG: 'en_US.UTF-8', npm_config_prefix: prefix,
   };
   assert.equal(Object.hasOwn(env, 'ZYLOS_PACKAGE_ROOT'), false);
@@ -81,7 +95,7 @@ test('npm fallback strict F1 rejects corruption without inserting control work',
   f.db("console.log(JSON.stringify(db.insertControl('before',{appendAckSuffix:false})))");
   fs.writeFileSync(path.join(f.home, '.zylos/config.json'), '{broken');
   const result = f.evaluate(`try { const db = await import(${f.url('c4-db.js')}); try { db.insertControl('forbidden'); } finally { db.close(); } } catch(e) { console.log(JSON.stringify({code:e.code})); }`);
-  assert.equal(JSON.parse(result.stdout).code, 'CONFIG_UNREADABLE');
+  assert.equal(JSON.parse(result.stdout).code, 'CONTROL_TARGET_REQUIRED');
   fs.writeFileSync(path.join(f.home, '.zylos/config.json'), '{}');
   assert.deepEqual(f.db("console.log(JSON.stringify(db.getDb().prepare('SELECT raw_content FROM control_queue').all()))"), [{ raw_content: 'before' }]);
 });

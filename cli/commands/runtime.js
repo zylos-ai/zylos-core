@@ -13,7 +13,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execSync } from 'node:child_process';
-import { readZylosConfigStrict, updateZylosConfigLocked, ZYLOS_DIR } from '../lib/config.js';
+import { readZylosConfigOrThrow, updateZylosConfigLocked, ZYLOS_DIR } from '../lib/config.js';
 import { getAdapter, SUPPORTED_RUNTIMES } from '../lib/runtime/index.js';
 import { buildInstructionFile, isSplitInstructionsActive } from '../lib/runtime/instruction-builder.js';
 import { commandExists } from '../lib/shell-utils.js';
@@ -349,14 +349,7 @@ async function switchRuntime(target, flags) {
 }
 
 function readRuntimeConfig() {
-  const result = readZylosConfigStrict();
-  if (result.state === 'error') {
-    const error = new Error(`Zylos configuration is unreadable: ${result.error.message}`);
-    error.code = 'CONFIG_UNREADABLE';
-    error.cause = result.error;
-    throw error;
-  }
-  return result.state === 'ok' ? result.config : {};
+  return readZylosConfigOrThrow();
 }
 
 // ── Help ──────────────────────────────────────────────────────────────────

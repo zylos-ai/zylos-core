@@ -3,8 +3,6 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { installParserFixture } from '../../../test/helpers/p02-parser-fixture.js';
-installParserFixture(['origin','lark:x','lark:y']);
 const p=await import('../session-memory-paths.js');
 const run='12345678-1234-1234-1234-123456789abc';
 test('W4-W6 paths isolate run and scope without creating directories',()=>{

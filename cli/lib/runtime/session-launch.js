@@ -1,134 +1,139 @@
-import fs from 'node:fs/promises';
 import { spawn } from 'node:child_process';
-import { adapterError, runtimeExecutable, shellQuote } from './session-command.js';
-import { readProcessImage } from './session-process-observation.js';
+import { adapterError, shellQuote } from './session-command.js';
+import { tmuxClientArgs } from './tmux-client-args.js';
 
-// Establish the final exec image before submitting any mutation. Script runtimes
-// use their shebang interpreter; the exact script and argument tail are checked.
-export async function executableIdentity(command, env) {
-  if (process.platform !== 'linux') throw adapterError('LAUNCH_FAILED','Exec observation unavailable on this platform');
-  const bytes = await fs.readFile(command);
-  let executable = command;
-  if (bytes.subarray(0,2).toString() === '#!') {
-    const words = bytes.toString('utf8',0,256).split('\n')[0].slice(2).trim().split(/\s+/);
-    executable = words[0];
-    if (executable.endsWith('/env')) {
-      if (words.length !== 2 || words[1].startsWith('-')) throw adapterError('LAUNCH_FAILED','Unsupported runtime interpreter');
-      executable = runtimeExecutable(words[1],env);
-    }
-  }
-  return {executable:await fs.realpath(executable),command};
-}
+// Match the shared tmux connection's observation budget. Cleanup has its own
+// short bound so a frozen server cannot keep the caller or its client alive.
+export const LAUNCH_TIMEOUT_MS = 3000;
+export const LAUNCH_CLEANUP_TIMEOUT_MS = 500;
+const EXEC_POLL_MS = 25;
 const formatLiteral = value => String(value).replaceAll('#','##').replaceAll(',','#,').replaceAll('}','#}');
+const startingCommands = new Set(['sh','dash','bash','zsh','ksh','ash','fish','env','tmux','tmux: server']);
 
-/** One submitted creation, one held control connection, no cancellation fiction.
- * A notice is advisory. Loss of the connection before proof retains the promise.
+/** Submit once, observe on that client, and release all local work before return.
+ * A request already held by an unobservable server may still execute later;
+ * that server-side outcome belongs to the router, not a background launcher.
  */
-export function settleLaunch({tmuxName,runId,launchConfig,sessionGroup,root,script,identity,args,tmux={},noticeMs=3000,onNotice=console.warn}) {
-  const socket = tmux.socketPath ? ['-S',tmux.socketPath] : tmux.socketName ? ['-L',tmux.socketName] : [];
-  if (tmux.socketPath && tmux.socketName) { script.cleanup(); throw new TypeError('Choose one tmux socket'); }
-  // Multi-mode observes F2 in the creation command itself. Single-mode also
-  // requires a session-local removal proof on this same control connection.
-  // The literal modifier also bypasses tmux style handling for #[...].
+export function settleLaunch({tmuxName,runId,launchConfig,sessionGroup,root,script,tmux={}}) {
+  let clientArgs;
+  try { clientArgs = tmuxClientArgs(tmux); }
+  catch (error) { script.cleanup(); throw error; }
   const equal = (key,value) => `#{==:#{${key}},#{l:${formatLiteral(value)}}}`;
   const format = ['#{session_id}','#{pane_id}','#{pane_pid}','#{session_created}',
     equal('ZYLOS_RUN_ID',runId),equal('ZYLOS_MODEL_CONFIG',JSON.stringify(launchConfig)),
     equal('ZYLOS_SESSION_GROUP',sessionGroup ?? '')].join('\t');
-  const argv = [...socket,...(tmux.configFile ? ['-f',tmux.configFile] : []),'-C','new-session','-P','-F',format,'-s',tmuxName,'-c',root,
+  const argv = [...clientArgs,...(tmux.configFile ? ['-f',tmux.configFile] : []),'-C','new-session','-P','-F',format,'-s',tmuxName,'-c',root,
     '-e',`ZYLOS_RUN_ID=${runId}`,'-e',`ZYLOS_MODEL_CONFIG=${JSON.stringify(launchConfig)}`,
     '-e',sessionGroup === null ? 'ZYLOS_SESSION_GROUP' : `ZYLOS_SESSION_GROUP=${sessionGroup}`,
     `exec /bin/sh ${shellQuote(script.file)}`];
   return new Promise((resolve,reject) => {
     const child = spawn(tmux.binary || 'tmux',argv,{stdio:['pipe','pipe','pipe']});
-    let frame,buffer='',phase='create',target,environmentConfirmed=false,settled=false,closed=false,start;
-    let interval,checking=false;
-    const notice = setTimeout(() => { try { onNotice('Launch remains pending; original tmux request is retained'); } catch {} },noticeMs);
-    function finish(error) {
-      if (settled) return;
-      settled=true; clearTimeout(notice); clearInterval(interval);
-      // Creation has acknowledged before pane-exit failure or exec success.
-      // A queued tombstone can only address that original immutable session ID;
-      // it cannot create a process or touch a same-name replacement. Closing
-      // this client only detaches it, never proves cancellation.
-      const complete = () => { script.cleanup(); error ? reject(error) : resolve({tmuxName,createdAt:target.createdAt}); };
-      if (child.exitCode !== null || child.signalCode !== null || !child.pid) complete();
-      else { child.once('close',complete); child.stdin.destroy(); child.kill(); }
-    }
-    function send(words) {
-      if (closed || settled) return;
-      try { child.stdin.write(words.map(shellQuote).join(' ')+'\n'); }
-      catch { closed=true; }
-    }
-    async function inspect() {
-      if (checking || settled || !target) return;
-      checking=true;
-      try {
-        const image=await readProcessImage(target.pid);
-        // An acknowledged creation includes its already-forked pane PID: if
-        // that process is gone it cannot later exec. Never infer this pre-ack.
-        if (image.gone) { finish(adapterError('LAUNCH_FAILED','Runtime exited before exec could be confirmed')); return; }
-        if (start !== undefined && image.start !== undefined && image.start !== start) { finish(adapterError('LAUNCH_FAILED','Original launch process exited')); return; }
-        start ??= image.start;
-        if (image.uncertain) return;
-        const wanted=[identity.command,...args];
-        const actual=image.argv.slice(-wanted.length);
-        if (environmentConfirmed && image.cwd === root && image.env.includes(`ZYLOS_RUN_ID=${runId}`) && image.env.includes(`ZYLOS_MODEL_CONFIG=${JSON.stringify(launchConfig)}`) && (sessionGroup === null ? !image.env.some(v=>v.startsWith('ZYLOS_SESSION_GROUP=')) : image.env.includes(`ZYLOS_SESSION_GROUP=${sessionGroup}`)) && image.exe === identity.executable && actual.length === wanted.length && actual.every((v,i)=>v===wanted[i])) finish();
-      } finally {checking=false;}
-    }
-    child.on('error',error => {
-      // A spawn error proves no tmux client existed; unlike disconnect, this is
-      // safe to settle without observing a server.
-      if (!child.pid) finish(adapterError('LAUNCH_FAILED',error.message));
+    let buffer='', frame, target, closed=false, cleaning=false, finishing=false, pollTimer, cleanupTimer, lastCommand;
+    let failure;
+    const pending=['create'];
+    const clientExit = new Promise(done => {
+      child.once('exit',done);
+      child.once('error',() => { if (!child.pid) done(); });
     });
-    child.stdin.on('error',()=>{closed=true;});
-    child.on('close',()=>{closed=true;});
+    const deadline=setTimeout(() => fail(adapterError('LAUNCH_FAILED','Launch confirmation timed out','timeout')),LAUNCH_TIMEOUT_MS);
+    async function finish(error) {
+      if (finishing) return;
+      finishing=true;
+      clearTimeout(deadline); clearTimeout(pollTimer); clearTimeout(cleanupTimer);
+      child.stdin.destroy(); child.stdout.destroy(); child.stderr.destroy();
+      // This is our short-lived tmux client, never the pane/runtime process.
+      if (child.pid && child.exitCode===null && child.signalCode===null) child.kill('SIGKILL');
+      await clientExit;
+      try { script.cleanup(); }
+      catch (cleanupError) { error ??= adapterError('LAUNCH_FAILED',cleanupError.message); }
+      error ? reject(error) : resolve({tmuxName,createdAt:target.createdAt});
+    }
+    function send(kind,words) {
+      if (closed || finishing || child.stdin.destroyed || !child.stdin.writable) return false;
+      pending.push(kind);
+      try { child.stdin.write(words.map(shellQuote).join(' ')+'\n'); }
+      catch { pending.pop(); closed=true; return false; }
+      return true;
+    }
+    function fail(error) {
+      if (cleaning || finishing) return;
+      cleaning=true; failure=error;
+      clearTimeout(deadline); clearTimeout(pollTimer);
+      // Never reconnect: session IDs can be reused by a replacement server.
+      // A dead/unwritable original transport cannot confirm cleanup; the router
+      // handles that unobservable outcome after this bounded failure returns.
+      if (target && send('kill',['kill-session','-t',target.session])) {
+        cleanupTimer=setTimeout(() => void finish(error),LAUNCH_CLEANUP_TIMEOUT_MS);
+      } else void finish(error);
+    }
+    function inspect() {
+      if (cleaning || finishing) return;
+      if (!send('inspect',['display-message','-p','-t',target.pane,
+        '#{session_id}\t#{pane_id}\t#{pane_dead}\t#{pane_current_command}'])) {
+        fail(adapterError('LAUNCH_FAILED','Launch observation connection closed'));
+      }
+    }
+    function reply(kind,result,error) {
+      if (cleaning) { if (kind==='kill') void finish(failure); return; }
+      if (kind==='create') {
+        if (error) { fail(adapterError(/duplicate session/.test(result)?'NAME_CONFLICT':'LAUNCH_FAILED',result)); return; }
+        // Retain a valid object address even if later receipt fields are
+        // malformed, so validation failure still cleans up our created session.
+        const address=result.match(/^(\$\d+)\t(%\d+)\t/);
+        if (address) target={session:address[1],pane:address[2]};
+        const m=result.match(/^(\$\d+)\t(%\d+)\t(\d+)\t(\d+)\t([01])\t([01])\t([01])$/);
+        if (!m) { fail(adapterError('LAUNCH_FAILED','Invalid tmux creation receipt')); return; }
+        target={session:m[1],pane:m[2],createdAt:Number(m[4])};
+        if (!Number.isSafeInteger(target.createdAt) || m[5]!=='1' || m[6]!=='1' || (sessionGroup!==null && m[7]!=='1')) {
+          fail(adapterError('LAUNCH_FAILED','Launch environment was not confirmed')); return;
+        }
+        if (sessionGroup===null) {
+          if (!send('single',['set-environment','-r','-t',target.session,'ZYLOS_SESSION_GROUP'])) fail(adapterError('LAUNCH_FAILED','Launch connection closed'));
+        } else inspect();
+      } else if (kind==='single') {
+        if (error) fail(adapterError('LAUNCH_FAILED','Cannot clear single-session group environment'));
+        else inspect();
+      } else if (kind==='inspect') {
+        const m=result.match(/^(\$\d+)\t(%\d+)\t([01])\t([^\t\r\n]*)$/);
+        if (error || !m || m[1]!==target.session || m[2]!==target.pane || m[3]!=='0') {
+          fail(adapterError('LAUNCH_FAILED','Runtime exited before exec confirmation')); return;
+        }
+        const command=m[4];
+        const started=command && !startingCommands.has(command.replace(/^-/,'').split('/').at(-1));
+        // Two observations separated by one poll reject immediate exits and
+        // let shell/env wrappers finish exec without inspecting a /proc image.
+        if (started && lastCommand===command) { void finish(); return; }
+        lastCommand=started ? command : undefined;
+        pollTimer=setTimeout(inspect,EXEC_POLL_MS);
+      } else fail(adapterError('LAUNCH_FAILED','Unexpected tmux reply'));
+    }
+    child.on('error',error => fail(adapterError('LAUNCH_FAILED',error.message)));
+    child.stdin.on('error',() => { closed=true; cleaning ? void finish(failure) : fail(adapterError('LAUNCH_FAILED','Launch connection closed')); });
+    child.on('exit',() => { closed=true; });
+    // `exit` may precede the last buffered stdout frame (notably a duplicate
+    // name error). Let the streams drain before diagnosing an early exit.
+    // The deadline still bounds clients whose descendants retain a pipe.
+    child.on('close',() => {
+      if (!finishing) cleaning ? void finish(failure) : fail(adapterError('LAUNCH_FAILED','Launch client exited before confirmation'));
+    });
+    child.stdout.on('error',error => fail(adapterError('LAUNCH_FAILED',error.message)));
+    child.stderr.on('error',error => fail(adapterError('LAUNCH_FAILED',error.message)));
     child.stderr.resume();
     child.stdout.setEncoding('utf8');
     child.stdout.on('data',data => {
+      if (finishing) return;
       buffer+=data;
       let end;
-      while ((end=buffer.indexOf('\n')) !== -1) {
+      while (!finishing && (end=buffer.indexOf('\n'))!==-1) {
         const line=buffer.slice(0,end).replace(/\r$/,''); buffer=buffer.slice(end+1);
-        if (line.startsWith('%begin ')) {frame={id:line.slice(7),lines:[]};continue;}
+        if (line.startsWith('%begin ')) {
+          if (frame) { fail(adapterError('LAUNCH_FAILED','Invalid tmux response frame')); return; }
+          frame={id:line.slice(7),lines:[]}; continue;
+        }
         if (frame && (line.startsWith('%end ') || line.startsWith('%error '))) {
-          if (line.slice(line.indexOf(' ')+1)!==frame.id) {closed=true;continue;}
-          const result=frame.lines.join('\n'),error=line.startsWith('%error '),control=frame.id.split(' ').at(-1)==='1'; frame=null;
-          if (phase==='create') {
-            if (error) {finish(adapterError(/duplicate session/.test(result)?'NAME_CONFLICT':'LAUNCH_FAILED',result));continue;}
-            const m=result.match(/^(\$\d+)\t(%\d+)\t(\d+)\t(\d+)\t([01])\t([01])\t([01])$/);
-            if (!m) {phase='unknown';continue;}
-            target={session:m[1],pane:m[2],pid:Number(m[3]),createdAt:Number(m[4])};
-            phase=sessionGroup===null ? 'remove-group' : 'observe';
-            environmentConfirmed=sessionGroup!==null && m[5]==='1' && m[6]==='1' && m[7]==='1';
-            // -e KEY does not remove inherited tmux environment. Install a
-            // session-local tombstone, always targeting the ACK's immutable ID.
-            // The generated launch script independently uses env -i so its
-            // original runtime never inherits the stale single-mode variable.
-            if (sessionGroup===null) send(['set-environment','-r','-t',target.session,'ZYLOS_SESSION_GROUP']);
-            interval=setInterval(inspect,25); void inspect();
-          } else if (control && ['remove-group','prove-target','prove-absence'].includes(phase)) {
-            // Commands submitted on control stdin have flag 1; configured
-            // hooks have flag 0 and cannot impersonate these serialized ACKs.
-            // Loss/error/malformed proof never permits success or rebinding.
-            if (error) {phase='unknown';continue;}
-            if (phase==='remove-group') {
-              if (result!=='') {phase='unknown';continue;}
-              phase='prove-target';
-              // list-panes does not apply display-message's recursive strftime
-              // expansion to literal model values. Select only the original
-              // pane within the original session; never use the current target.
-              send(['list-panes','-s','-t',target.session,'-f',equal('pane_id',target.pane),'-F',format+'\t'+equal('session_name',tmuxName)]);
-            } else if (phase==='prove-target') {
-              const expected=[target.session,target.pane,target.pid,target.createdAt,1,1,1,1].join('\t');
-              if (result!==expected) {phase='unknown';continue;}
-              phase='prove-absence';
-              send(['show-environment','-t',target.session,'ZYLOS_SESSION_GROUP']);
-            } else {
-              environmentConfirmed=result==='-ZYLOS_SESSION_GROUP';
-              phase='observe';void inspect();
-            }
-          }
-          continue;
+          if (line.slice(line.indexOf(' ')+1)!==frame.id) { fail(adapterError('LAUNCH_FAILED','Invalid tmux response frame')); return; }
+          const result=frame.lines.join('\n'); frame=null;
+          reply(pending.shift(),result,line.startsWith('%error ')); continue;
         }
         if (frame) frame.lines.push(line);
       }

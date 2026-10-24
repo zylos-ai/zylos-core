@@ -16,7 +16,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { execSync, execFileSync, spawnSync, spawn } from 'node:child_process';
-import { ZYLOS_DIR, SKILLS_DIR, CONFIG_DIR, COMPONENTS_DIR, LOCKS_DIR, COMPONENTS_FILE, BIN_DIR, HTTP_DIR, CADDYFILE, CADDY_BIN, getZylosConfig, readZylosConfigStrict, updateZylosConfigLocked } from '../lib/config.js';
+import { ZYLOS_DIR, SKILLS_DIR, CONFIG_DIR, COMPONENTS_DIR, LOCKS_DIR, COMPONENTS_FILE, BIN_DIR, HTTP_DIR, CADDYFILE, CADDY_BIN, getZylosConfig, readZylosConfigOrThrow, updateZylosConfigLocked } from '../lib/config.js';
 import { generateManifest, saveMergeBaseline } from '../lib/manifest.js';
 import { prompt, promptYesNo, promptChoice, promptSecret } from '../lib/prompts.js';
 import { bold, dim, green, red, yellow, cyan, bgGreen, success, error, warn, heading } from '../lib/colors.js';
@@ -1964,14 +1964,7 @@ export async function initCommand(args) {
 
   // Step 4.5: Select agent runtime
   // Resolution: --runtime flag > ZYLOS_RUNTIME env > existing config > interactive prompt
-  const runtimeConfigResult = readZylosConfigStrict();
-  if (runtimeConfigResult.state === 'error') {
-    const configError = new Error(`Zylos configuration is unreadable: ${runtimeConfigResult.error.message}`);
-    configError.code = 'CONFIG_UNREADABLE';
-    configError.cause = runtimeConfigResult.error;
-    throw configError;
-  }
-  const existingRuntime = runtimeConfigResult.state === 'ok' ? runtimeConfigResult.config.runtime : undefined;
+  const existingRuntime = readZylosConfigOrThrow().runtime;
   let selectedRuntime = opts.runtime || existingRuntime || null;
   if (!selectedRuntime) {
     if (!skipConfirm) {

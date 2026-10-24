@@ -52,12 +52,12 @@ test('JSON argument and scope refusals preserve all existing rows',t=>{
     assert.deepEqual(db.prepare('SELECT * FROM control_queue').all(),before);
   }
 });
-test('strict F1 import failure is a single JSON error without a write',t=>{
+test('unreadable F1 refuses machine control at the action boundary as one JSON error',t=>{
   const {root,db,run}=fixture(t);
   fs.mkdirSync(path.join(root,'.zylos'));
   fs.writeFileSync(path.join(root,'.zylos/config.json'),'{invalid');
   const result=run(['enqueue','--content','x','--json'],1);
-  assert.equal(result.ok,false);assert.equal(result.error.code,'CONFIG_UNREADABLE');
+  assert.equal(result.ok,false);assert.equal(result.error.code,'CONTROL_TARGET_REQUIRED');
   assert.deepEqual(result.error.persisted,[]);
   assert.equal(db.prepare('SELECT count(*) AS n FROM control_queue').get().n,0);
 });

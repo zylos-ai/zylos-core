@@ -33,7 +33,7 @@ test('real F1 corruption refuses machine control without a write', t => {
   f.db("console.log(JSON.stringify(db.insertControl('first',{appendAckSuffix:false})))");
   fs.writeFileSync(path.join(f.root, '.zylos/config.json'), '{broken');
   const r = f.run(`try { const db = await import(${f.module}); db.insertControl('bad'); } catch(e) { console.log(e.code); }`);
-  assert.match(r.stdout, /CONFIG_UNREADABLE/);
+  assert.match(r.stdout, /CONTROL_TARGET_REQUIRED/);
   fs.writeFileSync(path.join(f.root, '.zylos/config.json'), '{}');
   const rows = f.db("console.log(JSON.stringify(db.getDb().prepare('SELECT raw_content FROM control_queue').all()))");
   assert.deepEqual(rows, [{ raw_content: 'first' }]);
