@@ -495,6 +495,7 @@ export const expirePendingControls = (...args) => store.expirePendingControls(..
 export const expireStaleRunningControls = (...args) => store.expireStaleRunningControls(...args);
 export const countNonTerminalControls = (...args) => store.countNonTerminalControls(...args);
 export const expireControlById = (...args) => store.expireControlById(...args);
+export const failStaleTargetControl = (...args) => store.failStaleTargetControl(...args);
 export const setDrainFence = (...args) => store.setDrainFence(...args);
 export const getDrainFence = (...args) => store.getDrainFence(...args);
 export const listDrainFences = (...args) => store.listDrainFences(...args);

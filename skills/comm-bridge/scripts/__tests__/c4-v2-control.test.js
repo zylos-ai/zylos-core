@@ -109,6 +109,45 @@ test('DM27 manual expire only active rows and target APIs reject ambiguous shape
   assert.throws(() => s.expireControlById(99999), { code: 'CONTROL_NOT_ACTIVE' });
   for (const invalid of [{}, { sessionGroup: 'a', machine: true }, { machine: false }, { allSessionGroups: false }, { sessionGroup: '*' }]) for (const method of ['countNonTerminalControls', 'expirePendingControls']) assert.throws(() => s[method](invalid));
 });
+test('IB12 stale targeted running control ends without retry or another claim', t => {
+  let now = NOW;
+  const { store: s, db, filename } = fixture(t, { ...single, now: () => now * 1000 }, true);
+  const observer = new Database(filename, { readonly: true }); t.after(() => observer.close());
+  const selected = add(s, 'a', 'selected', { targetBinding: binding('old-run') });
+  const other = add(s, 'b', 'other', { targetBinding: binding('other-run') });
+  assert.equal(s.claimControl(selected.id), true); assert.equal(s.claimControl(other.id), true);
+  db.prepare('UPDATE control_queue SET retry_count=2,last_error=? WHERE id=?').run('previous', selected.id);
+  const before = row(observer, selected.id), otherBefore = row(observer, other.id);
+  now++;
+  const expected = { ...before, status: 'timeout', last_error: 'STALE_TARGET', updated_at: now };
+  assert.deepEqual(s.failStaleTargetControl(selected.id), expected);
+  assert.deepEqual(row(observer, selected.id), expected);
+  assert.deepEqual(row(observer, other.id), otherBefore, 'only the requested id changes');
+  assert.equal(s.getNextPendingControl(now, { sessionGroups: ['a'] }), null);
+  assert.equal(s.claimControl(selected.id), false);
+  assert.equal(s.failStaleTargetControl(selected.id), null);
+  assert.deepEqual(row(observer, selected.id), expected, 'terminal retries do not change timestamp or retry_count');
+});
+test('IB12 stale target rejects pending, unbound, terminal and absent controls without writes', t => {
+  const { store: s, db, filename } = fixture(t, single, true);
+  const observer = new Database(filename, { readonly: true }); t.after(() => observer.close());
+  const snapshots = () => observer.prepare('SELECT * FROM control_queue ORDER BY id').all();
+  const changes = () => db.prepare('SELECT total_changes() AS n').get().n;
+  for (const status of ['pending', 'running', 'done', 'failed', 'timeout', 'superseded']) {
+    for (const bound of [false, true]) {
+      if (status === 'running' && bound) continue;
+      const r = add(s, 'a', `${status}-${bound}`, { targetBinding: bound ? binding('old-run') : null });
+      db.prepare('UPDATE control_queue SET status=?,retry_count=3,last_error=?,updated_at=? WHERE id=?').run(status, 'preserve', NOW - 10, r.id);
+      const before = snapshots(), count = changes();
+      assert.equal(s.failStaleTargetControl(r.id), null, `${status}, bound=${bound}`);
+      assert.deepEqual(snapshots(), before);
+      assert.equal(changes(), count, 'even a same-value UPDATE is forbidden');
+    }
+  }
+  const before = snapshots(), count = changes();
+  assert.equal(s.failStaleTargetControl(99999), null);
+  assert.deepEqual(snapshots(), before); assert.equal(changes(), count);
+});
 test('fence validation matrix, first-write preservation and manual restart identity guards', t => {
   const { store: s } = fixture(t, single);
   for (const reason of ['ttl', 'evict']) assert.throws(() => s.setDrainFence('origin', { reason, runId: 'r' }), { code: 'FENCE_INVALID' });
