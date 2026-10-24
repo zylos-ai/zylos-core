@@ -107,9 +107,24 @@ function syncSettings() {
   }
 }
 
+/**
+ * True when npm runs this hook for a local install inside a source checkout
+ * (`npm install` / `npm ci` while developing, reviewing or testing). Only a
+ * global install (`npm install -g`, `--location=global`) is a real Zylos
+ * install or upgrade. A direct `node scripts/postinstall.js` is not an npm
+ * lifecycle run and keeps its behavior.
+ */
+function isLocalNpmInstall(env) {
+  if (env.npm_lifecycle_event !== 'postinstall') return false;
+  return env.npm_config_global !== 'true' && env.npm_config_location !== 'global';
+}
+
 function main() {
   // CI: skip everything
   if (process.env.CI) return;
+
+  // Local install in a source checkout: never write to the live instance
+  if (isLocalNpmInstall(process.env)) return;
 
   // Zylos must be initialized — .claude/ directory exists after `zylos init`
   const claudeDir = path.join(ZYLOS_DIR, '.claude');
