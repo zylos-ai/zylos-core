@@ -39,7 +39,7 @@ test('account sample selects eligible rollout by mtime; identity replacement inv
   const otherDir=path.join(f.root,'activity-monitor/session-groups/lark:y');fs.mkdirSync(otherDir,{recursive:true});const otherRollout=path.join(f.root,'other.jsonl');
   fs.writeFileSync(path.join(otherDir,'events.jsonl'),line({...f.event,session_group:'lark:y',transcript_path:otherRollout}));const other=row();other.payload.rate_limits.secondary.used_percent=99;fs.writeFileSync(otherRollout,line(other));
   fs.utimesSync(f.rollout,100,100);fs.utimesSync(otherRollout,200,200);
-  const reader=createSessionReader({env:f.env,open:async()=>({close:async()=>{}}),observe:async()=>identity,listSessions:()=>[{sessionGroup:'lark:x'},{sessionGroup:'lark:y'}]});
+  const reader=createSessionReader({env:f.env,open:async()=>({close:async()=>{}}),observe:async()=>identity,listSessions:async()=>[{sessionGroup:'lark:x'},{sessionGroup:'lark:y'}]});
   assert.equal((await reader.readAccountUsage('codex')).fiveHour.usedPercentage,99);
   fs.utimesSync(f.rollout,300,300);assert.equal((await reader.readAccountUsage('codex')).fiveHour.usedPercentage,23);
   let calls=0;const changing=createSessionReader({env:f.env,open:async()=>({close:async()=>{}}),observe:async()=>++calls===1?identity:{...identity,sessionId:'new'}});

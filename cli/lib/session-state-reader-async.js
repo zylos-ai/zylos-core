@@ -60,7 +60,7 @@ export function createSessionReader({ open = openTmuxConnection, observe = obser
   async function readAccountUsage(runtime) {
     if (!['claude','codex'].includes(runtime)) throw new TypeError('Unknown runtime');
     const samples = [];
-    for (const { sessionGroup } of listSessions(connectionOptions)) {
+    for (const { sessionGroup } of await listSessions(connectionOptions)) {
       const candidate = await withConnection(sessionGroup, async read => {
         const first = await read();
         if (!first.ready || first.runtime !== runtime) return null;
