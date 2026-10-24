@@ -10,7 +10,10 @@ function loadCoreRuntime() {
       import(pathToFileURL(path.join(lib, 'runtime/tmux-connection.js')).href),
       import(pathToFileURL(path.join(lib, 'runtime/session-target.js')).href),
     ]);
-  })();
+  })().catch(error => {
+    coreModules = undefined;
+    throw error;
+  });
 }
 
 // Private construction seam for isolated transports. Each observation owns one

@@ -37,6 +37,25 @@ function fixture(t, { runtimeProcess = false } = {}) {
   return { root, tmux, readyPath, ready, observer: createCoreObserver({ tmux: { socketPath } }) };
 }
 
+test('Core module loading retries after failure and caches success', async t => {
+  const { root, tmux, ready } = fixture(t);
+  // A fresh module keeps this regression independent of other observer calls.
+  const { createCoreObserver: createFreshObserver } = await import('../c4-runtime-observer.js?retry-test');
+  const observer = createFreshObserver({ tmux: { socketPath: path.join(root, 'tmux.sock') } });
+  const incomplete = path.join(root, 'incomplete-core');
+  fs.mkdirSync(path.join(incomplete, 'cli/lib'), { recursive: true });
+  fs.writeFileSync(path.join(incomplete, 'cli/lib/config.js'), '');
+  process.env.ZYLOS_PACKAGE_ROOT = incomplete;
+  await assert.rejects(observer.observeCoreTarget({ sessionMode: 'single' }), { code: 'ERR_MODULE_NOT_FOUND' });
+  process.env.ZYLOS_PACKAGE_ROOT = packageRoot;
+  const result = await observer.observeCoreTarget({ sessionMode: 'single' });
+  assert.equal(result.runId, 'run-1');
+  assert.deepEqual(result.currentSession, ready);
+  process.env.ZYLOS_PACKAGE_ROOT = incomplete;
+  assert.deepEqual(await observer.observeCoreTarget({ sessionMode: 'single' }), result);
+  assert.equal(tmux('list-clients', '-F', '#{client_pid}'), '');
+});
+
 test('async target observer returns exact real tmux identity and READY', async t => {
   const { observer, tmux, ready } = fixture(t);
   const pending = observer.observeCoreTarget({ sessionMode: 'single' });
