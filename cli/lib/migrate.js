@@ -3,6 +3,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { ZYLOS_DIR } from './config.js';
+import { updateConfigWithLock } from './config-lock.js';
 
 const PACKAGE_ROOT = path.join(import.meta.dirname, '..', '..');
 const DEFAULT_TEMPLATES_DIR = path.join(PACKAGE_ROOT, 'templates');
@@ -66,22 +67,12 @@ export function migrateClaudeMdToZylosMd({
   return true;
 }
 
-function migrateNewSessionThresholdDefaults({ zylosDir = ZYLOS_DIR } = {}) {
+export function migrateNewSessionThresholdDefaults({ zylosDir = ZYLOS_DIR } = {}) {
   const configPath = path.join(path.resolve(zylosDir), '.zylos', 'config.json');
-  let config = {};
-  try { config = JSON.parse(fs.readFileSync(configPath, 'utf8')); } catch { }
-  const updates = {};
-  if (config.new_session_threshold === undefined) updates.new_session_threshold = 70;
-  if (config.codex_new_session_threshold === undefined) updates.codex_new_session_threshold = 75;
-  if (Object.keys(updates).length === 0) return false;
-  Object.assign(config, updates);
-  fs.mkdirSync(path.dirname(configPath), { recursive: true });
-  const tmpPath = `${configPath}.tmp.${process.pid}.${Date.now()}`;
-  try {
-    fs.writeFileSync(tmpPath, JSON.stringify(config, null, 2) + '\n', 'utf8');
-    fs.renameSync(tmpPath, configPath);
-  } finally {
-    try { fs.unlinkSync(tmpPath); } catch { }
-  }
-  return true;
+  const result = updateConfigWithLock({
+    configFile: configPath,
+    lockFile: `${configPath}.lock`,
+    update: { setIfAbsent: { new_session_threshold: 70, codex_new_session_threshold: 75 } },
+  });
+  return result.changed;
 }

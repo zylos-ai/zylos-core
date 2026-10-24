@@ -207,11 +207,11 @@ for(const legacy of ['group-writable','backup-alias'])test(`completed upgrade pe
  close();`);
  const alias=path.join(f.root,'deployment-alias');fs.symlinkSync(f.root,alias);
  for(const deploymentRoot of [f.root,alias]) {
-  const opened=spawnSync(process.execPath,[runner],{encoding:'utf8',env:{...process.env,ZYLOS_DIR:deploymentRoot}});
+  const opened=spawnSync(process.execPath,[runner],{encoding:'utf8',env:{...process.env,ZYLOS_DIR:deploymentRoot,ZYLOS_PACKAGE_ROOT:path.resolve('.')}});
   assert.equal(opened.status,0,opened.stderr);
  }
  const hook=path.join(f.j.skillsDir,'comm-bridge/scripts/c4-session-init.js');
- const checkpoint=spawnSync(process.execPath,[hook],{encoding:'utf8',env:{...process.env,ZYLOS_DIR:f.root}});
+ const checkpoint=spawnSync(process.execPath,[hook],{encoding:'utf8',env:{...process.env,ZYLOS_DIR:f.root,ZYLOS_PACKAGE_ROOT:path.resolve('.')}});
  assert.equal(checkpoint.status,0,checkpoint.stderr);assert.doesNotMatch(checkpoint.stdout,/UPGRADE RECOVERY TASK/);
 });
 

@@ -7,7 +7,7 @@ import { execSync, spawnSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { ZYLOS_DIR, SKILLS_DIR, getZylosConfig } from '../lib/config.js';
+import { ZYLOS_DIR, SKILLS_DIR, readZylosConfigOrThrow } from '../lib/config.js';
 import { bold, dim, green, red, yellow, cyan, success, error, warn, heading } from '../lib/colors.js';
 import { commandExists } from '../lib/shell-utils.js';
 import { getActiveAdapter } from '../lib/runtime/index.js';
@@ -76,7 +76,7 @@ export function restartServicesWithDeps({
 export async function showStatus() {
   console.log(heading('Zylos Status') + '\n' + dim('============') + '\n');
 
-  const activeRuntime = getZylosConfig().runtime ?? 'claude';
+  const activeRuntime = readZylosConfigOrThrow().runtime ?? 'claude';
   const isCodex = activeRuntime === 'codex';
   const runtimeBin = isCodex ? 'codex' : 'claude';
   const runtimeLabel = isCodex ? 'Codex' : 'Claude';

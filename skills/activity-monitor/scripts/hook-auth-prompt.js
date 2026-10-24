@@ -18,19 +18,15 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { execFileSync } from 'child_process';
+import { readZylosConfigOrThrow } from '../../comm-bridge/scripts/local-config.js';
 
-const ZYLOS_DIR = path.join(os.homedir(), 'zylos');
+const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
 const LOG_FILE = path.join(ZYLOS_DIR, 'activity-monitor', 'hook-timing.log');
-const CONFIG_FILE = path.join(ZYLOS_DIR, '.zylos', 'config.json');
 const C4_CONTROL = path.join(ZYLOS_DIR, '.claude', 'skills', 'comm-bridge', 'scripts', 'c4-control.js');
 const AUTO_APPROVE_AVAILABLE_IN_SEC = 1;
 
 function readConfig() {
-  try {
-    return JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
-  } catch {
-    return {};
-  }
+  return readZylosConfigOrThrow();
 }
 
 async function main() {
@@ -79,4 +75,7 @@ async function main() {
   }
 }
 
-main().catch(() => {});
+main().catch((error) => {
+  console.error(`[hook-auth-prompt] ${error.code || 'ERROR'}: ${error.message}`);
+  process.exitCode = 1;
+});

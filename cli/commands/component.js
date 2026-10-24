@@ -5,7 +5,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { ZYLOS_DIR, SKILLS_DIR, COMPONENTS_DIR, getZylosConfig } from '../lib/config.js';
+import { ZYLOS_DIR, SKILLS_DIR, COMPONENTS_DIR, readZylosConfigOrThrow } from '../lib/config.js';
 import { bold, dim, green, red, yellow, cyan, success, error, warn, heading } from '../lib/colors.js';
 import { loadRegistry } from '../lib/registry.js';
 import { loadComponents, saveComponents } from '../lib/components.js';
@@ -1205,13 +1205,15 @@ async function upgradeSelfCore({ branch, beta = false, mode = 'merge' } = {}) {
       // bootstrap problem where the old component.js lacks restart logic.
       if (result.success && result.instructionFilesRebuilt) {
         try {
-          const activeRuntime = getZylosConfig().runtime ?? 'claude';
+          const activeRuntime = readZylosConfigOrThrow().runtime ?? 'claude';
           if (activeRuntime === 'claude') {
             const c4ControlPath = path.join(ZYLOS_DIR, '.claude', 'skills', 'comm-bridge', 'scripts', 'c4-control.js');
             const { spawnSync } = await import('child_process');
             spawnSync('node', [c4ControlPath, 'enqueue', '--content', '/exit', '--priority', '1', '--block-queue-until-idle', '--no-ack-suffix'], { stdio: 'pipe' });
           }
-        } catch { /* non-fatal */ }
+        } catch (error) {
+          console.error(`Warning: runtime restart was not enqueued: ${error.message}`);
+        }
       }
     } else if (result.success) {
       console.log(`\n${success(`${bold('zylos-core')} upgraded: ${dim(result.from)} → ${bold(result.to)}`)}`);
