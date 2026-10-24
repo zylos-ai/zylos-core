@@ -118,7 +118,7 @@ export function checkpointCli(args) {
 }
 export function fetchCli(args) {
   if (!args.length) invalid('Usage: c4-fetch.js requires a query');
-  if (args.length === 1 && ['--help','-h'].includes(args[0])) return 'c4-fetch.js --unsummarized [--group G] [--up-to ID] [--limit N] | --begin ID --end ID | --checkpoints --after ID | --origin-sync --group G (--summaries-only|--raw-only --after ID) | --absorbed --run-id UUID [--summary|--id ID|--after ID]\n';
+  if (args.length === 1 && ['--help','-h'].includes(args[0])) return 'c4-fetch.js --unsummarized [--group G] [--up-to ID] [--limit N] | --begin ID --end ID | --checkpoints --after ID | --origin-sync --group G (--summaries-only|--raw-only --after ID) | --absorbed --run-id UUID [--summary [--scope-after G]|--id ID [--field text|endpoint] [--out FILE]|--after ID] [--limit N]\n';
   const modes = ['unsummarized','checkpoints','origin-sync','absorbed'];
   const selected = modes.filter(key => args.includes('--' + key));
   if (selected.length > 1) invalid('Fetch modes are mutually exclusive');
@@ -127,7 +127,7 @@ export function fetchCli(args) {
     unsummarized: [['group','up-to','limit'], ['unsummarized','json']],
     checkpoints: [['group','after'], ['checkpoints','json']],
     'origin-sync': [['group','after','limit'], ['origin-sync','summaries-only','raw-only','json']],
-    absorbed: [['run-id','group','scope-after','after','limit','id','field','offset','max-bytes'], ['absorbed','summary','json']],
+    absorbed: [['run-id','group','scope-after','after','limit','id','field','out'], ['absorbed','summary','json']],
     range: [['begin','end'], ['json']],
   };
   const o = options(args, ...allowed[mode]); noPositionals(o);
@@ -136,7 +136,7 @@ export function fetchCli(args) {
     for (const [key, value] of Object.entries(o)) {
       if (['positional','absorbed'].includes(key)) continue;
       const camel = key.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
-      request[camel] = ['after','limit','id','offset','max-bytes'].includes(key) ? number(value, key, ['limit','id'].includes(key) ? 1 : 0) : value;
+      request[camel] = ['after','limit','id'].includes(key) ? number(value, key, ['limit','id'].includes(key) ? 1 : 0) : value;
     }
     return query.absorbed(request);
   }
@@ -167,8 +167,7 @@ export function fetchCli(args) {
 export function runCli(kind, args) {
   try { process.stdout.write(({ database: databaseCli, checkpoint: checkpointCli, fetch: fetchCli })[kind](args)); }
   catch (error) {
-    const maxIndex = args.indexOf('--max-bytes');
-    const encoded = formatQueryError(error, { json: args.includes('--json'), maxBytes: maxIndex < 0 ? undefined : Number(args[maxIndex + 1]) });
+    const encoded = formatQueryError(error, { json: args.includes('--json') });
     (args.includes('--json') ? process.stdout : process.stderr).write(encoded);
     process.exitCode = 1;
   } finally { db.close(); }

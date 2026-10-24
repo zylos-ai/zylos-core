@@ -12,7 +12,7 @@ export function transitionFunctions({ read, write, snapshot, get, all, run, seco
     if (row.phase === 'gating') return [];
     const rows = (row.absorbed_ids ?? []).map(id => get(c, 'SELECT * FROM conversations WHERE id=?', id));
     const bad = (row.absorbed_ids ?? []).filter((id, i) => !rows[i] || rows[i].status !== 'switch_absorbed');
-    if (bad.length) throw dataError('ABSORBED_MISMATCH', 'Absorbed messages are missing or have changed state', { ids: bad, count: bad.length });
+    if (bad.length) throw dataError('ABSORBED_MISMATCH', 'Absorbed messages are missing or have changed state', { ids: bad.slice(0, 20), count: bad.length });
     return rows.sort((a,b) => a.id-b.id);
   }
   const api = {

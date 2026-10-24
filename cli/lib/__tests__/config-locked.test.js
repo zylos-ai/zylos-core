@@ -166,13 +166,14 @@ describe('config locking', () => {
     assert.deepEqual(JSON.parse(fs.readFileSync(configFile)), { untouched: true, a: 1 });
   });
 
-  it('enforces the default 2000ms wait budget with monotonic elapsed time', async () => {
+  it('enforces the default 2000ms wait budget with monotonic elapsed time', async (t) => {
     write({ untouched: true });
     const holder = startLockHolder({ configFile, lockFile, update: { set: { a: 1 } }, holdMs: 2300 });
     await holder.ready;
     const started = process.hrtime.bigint();
     const result = await runWorker({ configFile, lockFile, update: { set: { b: 2 } } });
     const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
+    t.diagnostic(`default waitMs=2000; worker elapsed=${elapsedMs.toFixed(3)}ms (includes process startup)`);
     assert.equal(result.status, 2);
     assert.match(result.stderr, /CONFIG_LOCK_TIMEOUT/);
     assert.ok(elapsedMs >= 1850, `elapsed ${elapsedMs}ms`);
@@ -180,7 +181,7 @@ describe('config locking', () => {
     await holder.completion;
   });
 
-  it('honors a shorter absolute deadline than waitMs', async () => {
+  it('does not shorten waitMs when an obsolete shorter deadlineAt is supplied', async (t) => {
     write({ untouched: true });
     const holder = startLockHolder({ configFile, lockFile, update: { set: { a: 1 } }, holdMs: 500 });
     await holder.ready;
@@ -193,11 +194,13 @@ describe('config locking', () => {
       deadlineAt: Date.now() + 100,
     });
     const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
-    assert.equal(result.status, 2);
-    assert.match(result.stderr, /CONFIG_LOCK_TIMEOUT/);
-    assert.ok(elapsedMs >= 50, `elapsed ${elapsedMs}ms`);
-    assert.ok(elapsedMs < 500, `elapsed ${elapsedMs}ms`);
-    await holder.completion;
+    t.diagnostic(`waitMs=2000; obsolete deadline=100ms; worker elapsed=${elapsedMs.toFixed(3)}ms`);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stderr, '');
+    assert.ok(elapsedMs >= 300, `elapsed ${elapsedMs}ms`);
+    assert.equal((await holder.completion).status, 0);
+    assert.deepEqual(JSON.parse(result.stdout).config, { untouched: true, a: 1, b: 2 });
+    assert.deepEqual(JSON.parse(fs.readFileSync(configFile)), { untouched: true, a: 1, b: 2 });
   });
 
   it('linearizes two real processes doing 100 same-key writes each', { timeout: 30_000 }, async () => {

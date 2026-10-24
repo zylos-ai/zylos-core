@@ -196,7 +196,6 @@ async function main() {
         code: error.code ?? 'INVALID_ARGS', message: error.message,
         persisted: Object.hasOwn(error, 'persisted') ? error.persisted : [],
         ...(Object.hasOwn(error, 'runId') ? { runId: error.runId } : {}),
-        ...(error.rollbackError ? { rollbackError: error.rollbackError.message } : {}),
       };
       console.log(JSON.stringify({ ok: false, error: detail }));
     } else {

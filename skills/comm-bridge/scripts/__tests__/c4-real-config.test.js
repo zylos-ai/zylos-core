@@ -45,7 +45,8 @@ test('real readSessionMode and runtime CLI classify single mode after a persiste
   const output=JSON.parse(result.stdout);
   assert.equal(output.ok,true); assert.equal(output.data.changed,true);
   assert.equal(output.data.resolved.runtime,'claude');
-  assert.equal(output.data.running.status,'single_native');
+  assert.equal(output.data.sessionMode,'single');
+  assert.equal(output.data.running,null);
 });
 test('runtime model validator rejects unavailable executable without persisting an override', t => {
   const f = fixture(t);

@@ -20,7 +20,6 @@ export { migrateSchema, stripTrailingAckSuffix } from './c4-migrations.js';
 let db = null;
 
 import { createStore } from './c4-v2-store.js';
-import { withDeadlineRead } from './c4-deadline-read.js';
 import { validateChannel } from './c4-validate.js';
 import { loadCoreConfig, resolveCoreConfigModule } from './core-config-loader.js';
 import { pathToFileURL } from 'node:url';
@@ -506,12 +505,8 @@ export const listGroupHeads = (...args) => store.listGroupHeads(...args);
 export const absorbForTransition = (...args) => store.absorbForTransition(...args);
 export const setModeTransitionPhase = (...args) => store.setModeTransitionPhase(...args);
 export const getAbsorbedConversations = (...args) => store.getAbsorbedConversations(...args);
-export function getModeTransition(options = {}, { deadlineAt } = {}) {
-  return deadlineAt === undefined ? store.getModeTransition(options) : withDeadlineRead(DB_PATH, schema, deadlineAt, connection => createStore(connection).getModeTransition(options));
-}
-export function auditCheckpoints({ deadlineAt } = {}) {
-  return deadlineAt === undefined ? store.auditCheckpoints() : withDeadlineRead(DB_PATH, schema, deadlineAt, connection => createStore(connection).auditCheckpoints());
-}
+export const getModeTransition = (options = {}) => store.getModeTransition(options);
+export const auditCheckpoints = () => store.auditCheckpoints();
 
 // CLI mode: import after the facade has initialized to avoid a module cycle.
 const isMainModule = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];

@@ -44,11 +44,10 @@ function sameLaunch(left, right) {
 // Observation is an explicit P02 adapter boundary. identityVerified must prove the
 // snapshot/current-session files belong to this run; presence alone is insufficient.
 export function classifyConfigRunning({ kind, runtime, sessionMode, resolved, fence, observation }) {
+  if (sessionMode === 'single' || (kind === 'model' && runtime !== resolved.runtime)) return null;
   const running = { runId: typeof observation?.runId === 'string' && observation.runId ? observation.runId : null,
     launchConfig: validLaunch(observation?.launchConfig) ? observation.launchConfig : null, status: 'unknown' };
-  if (sessionMode === 'single') running.status = 'single_native';
-  else if (kind === 'model' && runtime !== resolved.runtime) running.status = 'other_runtime';
-  else if (fence?.reason === 'model_config') running.status = 'pending';
+  if (fence?.reason === 'model_config') running.status = 'pending';
   else if (observation?.hasProcess === false) running.status = 'not_running';
   else if (observation?.hasProcess !== true || observation.identityVerified !== true || typeof observation.ready !== 'boolean' || typeof observation.runId !== 'string' || !observation.runId || !validLaunch(observation.launchConfig)) {
     running.reason = 'Running identity or launch snapshot could not be verified';
@@ -87,14 +86,19 @@ export function createConfigHandler({ store, validateComponent, readSessionMode,
     for (const key of ['runtime', 'model', 'effort']) if (own(request, key)) args[key] = request[key];
     // Store owns group existence recheck and writes atomically; no wrapper retry.
     const saved = store[`${request.action}Session${suffix}Config`](args);
-    const data = { sessionGroup, ...(kind === 'model' ? { runtime: request.runtime } : {}),
+    const data = { sessionGroup, sessionMode: null, resolved: null, ...(kind === 'model' ? { runtime: request.runtime } : {}),
       ...(request.action === 'get' ? { desired: saved } : saved) };
     try {
       const sessionMode = readSessionMode();
       if (!['single', 'multi'].includes(sessionMode)) throw dataError('CONFIG_UNREADABLE', 'Invalid session mode');
+      data.sessionMode = sessionMode;
       const resolved = store.resolveSessionLaunchConfig({ sessionGroup, sessionMode });
       if (!validLaunch(resolved)) throw dataError('CONFIG_UNREADABLE', 'Invalid resolved launch configuration');
-      if (kind === 'runtime') data.resolved = resolved;
+      data.resolved = resolved;
+      if (sessionMode === 'single' || (kind === 'model' && request.runtime !== resolved.runtime)) {
+        data.running = null;
+        return { ok: true, data };
+      }
       const fence = store.getDrainFence(sessionMode === 'single' ? '*' : sessionGroup);
       const observation = observeRunning({ sessionGroup: sessionMode === 'single' ? 'origin' : sessionGroup, sessionMode });
       data.running = classifyConfigRunning({ kind, runtime: request.runtime, sessionMode, resolved, fence, observation });

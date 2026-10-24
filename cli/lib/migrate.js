@@ -67,13 +67,12 @@ export function migrateClaudeMdToZylosMd({
   return true;
 }
 
-export function migrateNewSessionThresholdDefaults({ zylosDir = ZYLOS_DIR, deadlineAt } = {}) {
+export function migrateNewSessionThresholdDefaults({ zylosDir = ZYLOS_DIR } = {}) {
   const configPath = path.join(path.resolve(zylosDir), '.zylos', 'config.json');
   const result = updateConfigWithLock({
     configFile: configPath,
     lockFile: `${configPath}.lock`,
     update: { setIfAbsent: { new_session_threshold: 70, codex_new_session_threshold: 75 } },
-    deadlineAt,
   });
   return result.changed;
 }

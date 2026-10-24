@@ -111,19 +111,25 @@ test('namespace, group discovery and ordinary fetch preserve safe literal reply 
   const parsed=spawnSync('/bin/sh',['-c',`printf '%s\\n'${argv}`],{encoding:'utf8'});
   assert.equal(parsed.stdout,`chat\n${endpoint}\n--session-group\nA:b\n`);
 });
-test('absorbed real CLI pages/parts are bounded and fail without partial output', t => {
+test('absorbed real CLI pages and full fields reject integrity errors without partial output', t => {
   const { store, data, cli, database }=fixture(t);
   const row=store.insertConversation('in','chat','secret endpoint','中\n\0'.repeat(2000));
   const {runId}=store.beginModeTransition('single','multi'); store.setDrainFence('*'); store.absorbForTransition(runId);
   assert.equal(data('c4-db.js',['mode-transition','show']).run_id,runId);
-  for(const args of [[],['--summary'],['--id',String(row.id),'--offset','0']]) for(const json of [false,true]) {
-    const out=cli('c4-fetch.js',['--absorbed','--run-id',runId,...args,'--max-bytes','2048',...(json?['--json']:[])]).stdout;
-    assert.ok(Buffer.byteLength(out)<=2048); assert.ok(!out.includes('secret endpoint'));
+  for(const args of [[],['--summary'],['--id',String(row.id)]]) for(const json of [false,true]) {
+    const out=cli('c4-fetch.js',['--absorbed','--run-id',runId,...args,...(json?['--json']:[])]).stdout;
+    assert.ok(!out.includes('secret endpoint'));
+    if (args.includes('--id')) {
+      if (json) assert.equal(JSON.parse(out).data.data, row.content);
+      else assert.match(out, new RegExp(`end id=${row.id} field=text\\n$`));
+    } else if (!args.includes('--summary') && json) {
+      assert.equal(JSON.parse(out).data.items[0].text, Array.from(row.content).slice(0, 300).join(''));
+    }
     if(json) assert.equal(JSON.parse(out).ok,true); else assert.ok(out.endsWith('\n'));
   }
   database.prepare("UPDATE conversations SET status='failed' WHERE id=?").run(row.id);
-  const result=cli('c4-fetch.js',['--absorbed','--run-id',runId,'--max-bytes','2048','--json'],1);
-  assert.equal(JSON.parse(result.stdout).error.code,'ABSORBED_MISMATCH'); assert.ok(Buffer.byteLength(result.stdout)<=2048);
+  const result=cli('c4-fetch.js',['--absorbed','--run-id',runId,'--json'],1);
+  assert.equal(JSON.parse(result.stdout).error.code,'ABSORBED_MISMATCH');
 });
 
 test('manual control expiration is independent of the unconnected live resolver', t => {
