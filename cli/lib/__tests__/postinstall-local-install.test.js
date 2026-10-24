@@ -92,8 +92,13 @@ describe('postinstall local install guard', () => {
     assert.equal(settingsSynced(zylosDir), true);
   });
 
-  it('syncs for the uppercase NPM_CONFIG_GLOBAL / NPM_CONFIG_LOCATION forms', () => {
-    for (const npmEnv of [{ NPM_CONFIG_GLOBAL: 'true' }, { NPM_CONFIG_LOCATION: 'global' }]) {
+  it('syncs for uppercase and mixed-case NPM_CONFIG_GLOBAL / NPM_CONFIG_LOCATION forms', () => {
+    for (const npmEnv of [
+      { NPM_CONFIG_GLOBAL: 'true' },
+      { NPM_CONFIG_LOCATION: 'global' },
+      { Npm_config_Global: 'true' },
+      { Npm_config_Location: 'global' },
+    ]) {
       const zylosDir = fixtureZylosDir();
       runPostinstall(zylosDir, { npm_lifecycle_event: 'postinstall', npm_command: 'install', ...npmEnv });
       assert.equal(skillsSynced(zylosDir), true);
@@ -101,16 +106,18 @@ describe('postinstall local install guard', () => {
     }
   });
 
-  it('lets an explicit lowercase local override win over uppercase global', () => {
-    const zylosDir = fixtureZylosDir();
-    runPostinstall(zylosDir, {
-      npm_lifecycle_event: 'postinstall',
-      npm_command: 'install',
-      NPM_CONFIG_GLOBAL: 'true',
-      npm_config_global: '',
-    });
-    assert.equal(skillsSynced(zylosDir), false);
-    assert.equal(settingsSynced(zylosDir), false);
+  it('lets an explicit lowercase local override win over uppercase or mixed-case global', () => {
+    for (const global of [{ NPM_CONFIG_GLOBAL: 'true' }, { Npm_config_Global: 'true' }]) {
+      const zylosDir = fixtureZylosDir();
+      runPostinstall(zylosDir, {
+        npm_lifecycle_event: 'postinstall',
+        npm_command: 'install',
+        ...global,
+        npm_config_global: '',
+      });
+      assert.equal(skillsSynced(zylosDir), false);
+      assert.equal(settingsSynced(zylosDir), false);
+    }
   });
 
   it('syncs when the package is installed inside node_modules, whatever npm config says', () => {

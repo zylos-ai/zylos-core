@@ -108,10 +108,13 @@ function syncSettings() {
 }
 
 // npm config from the environment: the lowercase form npm passes to scripts
-// wins (an empty value is an explicit CLI override); otherwise the uppercase form.
+// wins (an empty value is an explicit CLI override); otherwise any other
+// spelling, since npm reads config names case-insensitively.
 function npmConfig(env, key) {
   const lower = `npm_config_${key}`;
-  return lower in env ? env[lower] : env[lower.toUpperCase()];
+  if (lower in env) return env[lower];
+  const name = Object.keys(env).find(n => n.toLowerCase() === lower);
+  return name === undefined ? undefined : env[name];
 }
 
 /**
