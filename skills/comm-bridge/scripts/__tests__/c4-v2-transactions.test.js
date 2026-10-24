@@ -63,7 +63,7 @@ for (const kind of ['message', 'config', 'handler', 'snapshot']) {
       try {
         if (process.argv[2] === 'message') s.insertConversation('in','foo','endpoint','message');
         else if (process.argv[2] === 'config') s.setSessionRuntimeConfig({ sessionGroup:'origin',runtime:'codex' });
-        else if (process.argv[2] === 'handler') handler('runtime',{action:'set',sessionGroup:'origin',runtime:'codex'});
+        else if (process.argv[2] === 'handler') await handler('runtime',{action:'set',sessionGroup:'origin',runtime:'codex'});
         else s.getUnsummarizedRange('origin');
         process.stdout.write('REPORTED_SUCCESS\\n');
       } catch (error) { process.stdout.write('REPORTED_ERROR '+JSON.stringify({code:error.code,persisted:error.persisted})+'\\n'); }

@@ -65,7 +65,7 @@ function nowSeconds() {
   return Math.floor(Date.now() / 1000);
 }
 
-function handleEnqueue(args) {
+async function handleEnqueue(args) {
   const values = new Set(['--content', '--priority', '--ack-deadline', '--available-in', '--group', '--target-run', '--expected-runtime', '--expected-session']);
   const flags = new Set(['--block-queue-until-idle', '--require-idle', '--bypass-state', '--no-ack-suffix', '--json']);
   const seen = new Set();
@@ -105,7 +105,7 @@ function handleEnqueue(args) {
   const expectedRuntime = parseStringArg(args, '--expected-runtime');
   const expectedSessionId = parseStringArg(args, '--expected-session');
   if (!expectedRunId && (expectedRuntime !== null || expectedSessionId !== null)) errorExit('--expected-runtime/--expected-session require --target-run');
-  const targetBinding = expectedRunId === null ? null : buildTargetBinding({
+  const targetBinding = expectedRunId === null ? null : await buildTargetBinding({
     sessionGroup, expectedRunId,
     ...(expectedRuntime === null ? {} : { expectedRuntime }),
     ...(expectedSessionId === null ? {} : { expectedSessionId }),
@@ -170,7 +170,7 @@ async function main() {
       expireTimedOutControls, expireControlById, close } = await import('./c4-db.js'));
     switch (command) {
       case 'enqueue':
-        handleEnqueue(commandArgs);
+        await handleEnqueue(commandArgs);
         break;
       case 'get':
         handleGet(commandArgs);

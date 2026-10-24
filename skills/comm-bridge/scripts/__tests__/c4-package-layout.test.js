@@ -109,7 +109,7 @@ test('copied runtime CLI resolves npm Core and observes an isolated no-server ta
   assert.equal(output.data.resolved.runtime, 'claude');
   assert.equal(output.data.sessionMode, 'single');
   assert.equal(output.data.running, null, JSON.stringify(output));
-  const observed = JSON.parse(f.evaluate(`const observer = await import(${f.url('c4-runtime-observer.js')}); console.log(JSON.stringify(observer.observeCoreRunning({sessionGroup:'origin',sessionMode:'single'})));`).stdout);
+  const observed = JSON.parse(f.evaluate(`const observer = await import(${f.url('c4-runtime-observer.js')}); console.log(JSON.stringify(await observer.observeCoreRunning({sessionGroup:'origin',sessionMode:'single'})));`).stdout);
   assert.deepEqual(observed, { hasProcess: false });
 });
 

@@ -1,25 +1,55 @@
-import { Worker } from 'node:worker_threads';
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { resolveCoreConfigModule } from './core-config-loader.js';
 
-// Private construction seam for isolated transports. Public callers never choose
-// a tmux object or connection; each observation owns one short-lived connection.
-export function createCoreObserver({ tmux = {}, timeoutMs = 15000 } = {}) {
-  function observe(method, options) {
-    const shared = new SharedArrayBuffer(8 + 1024 * 1024);
-    const control = new Int32Array(shared, 0, 2);
-    const worker = new Worker(new URL('./c4-runtime-observer-worker.js', import.meta.url), {
-      workerData: { method, options, tmux, coreConfigPath: resolveCoreConfigModule(), shared },
-    });
-    worker.on('error', () => {});
-    const status = Atomics.wait(control, 0, 0, timeoutMs);
-    if (status === 'timed-out') {
-      void worker.terminate();
-      throw Object.assign(new Error('Core target observation timed out'), { code: 'TARGET_SNAPSHOT_UNKNOWN' });
-    }
-    const length = Atomics.load(control, 1);
-    const result = JSON.parse(new TextDecoder().decode(new Uint8Array(shared, 8, length)));
-    if (result.error) throw Object.assign(new Error(result.error.message), result.error);
-    return result.value;
+let coreModules;
+function loadCoreRuntime() {
+  return coreModules ??= (async () => {
+    const lib = path.dirname(resolveCoreConfigModule());
+    return Promise.all([
+      import(pathToFileURL(path.join(lib, 'runtime/tmux-connection.js')).href),
+      import(pathToFileURL(path.join(lib, 'runtime/session-target.js')).href),
+    ]);
+  })();
+}
+
+// Private construction seam for isolated transports. Each observation owns one
+// connection and uses its native asynchronous command timeout.
+export function createCoreObserver({ tmux = {} } = {}) {
+  async function observe(method, options) {
+    const { sessionGroup = null, sessionMode } = options ?? {};
+    if (!['single', 'multi'].includes(sessionMode)) throw Object.assign(new Error('Invalid session mode'), { code: 'INVALID_ARGS' });
+    const [{ openTmuxConnection }, { observeSessionTarget, revalidateSessionTarget, readTargetRuntime }] = await loadCoreRuntime();
+    let connection;
+    try {
+      connection = await openTmuxConnection(tmux);
+      const target = await observeSessionTarget({ sessionGroup: sessionMode === 'single' ? null : sessionGroup, connection });
+      if (!target.present) return method === 'running' ? { hasProcess: false } : null;
+      let processState;
+      if (method === 'running') {
+        // F2 describes launch intent. Running status needs actual process evidence.
+        processState = await readTargetRuntime({ connection, paneId: target.paneId, rawF2: {} });
+      }
+      await revalidateSessionTarget({ connection, target });
+      if (method === 'running') {
+        const scopeMatches = sessionMode === 'single'
+          ? !Object.hasOwn(target.rawF2, 'ZYLOS_SESSION_GROUP')
+          : target.rawF2.ZYLOS_SESSION_GROUP === sessionGroup;
+        return {
+          hasProcess: processState.runtimeObservation === 'present' ? true : processState.runtimeObservation === 'absent' ? false : null,
+          identityVerified: Boolean(scopeMatches && target.runId &&
+            (processState.runtimeObservation !== 'present' || processState.runtime === target.launchConfig?.runtime)),
+          ready: target.ready, launchConfig: target.launchConfig, runId: target.runId,
+        };
+      }
+      return { runId: target.runId, runtime: target.runtime,
+        sessionGroup: target.rawF2.ZYLOS_SESSION_GROUP,
+        currentSession: target.f3,
+        tmuxTarget: { serverGeneration: target.serverGeneration, sessionId: target.tmuxSessionId, paneId: target.paneId } };
+    } catch (error) {
+      if (error.code === 'TMUX_NO_SERVER') return method === 'running' ? { hasProcess: false } : null;
+      throw error;
+    } finally { await connection?.close(); }
   }
   return {
     observeCoreTarget: options => observe('target', options),

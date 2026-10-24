@@ -65,8 +65,9 @@ success also includes the committed `targetBinding` object. Refusals return
 including the observed `runId` for a target mismatch. Without `--json`, the
 existing text output is retained.
 
-Target bindings preserve the synchronous library API. A short-lived worker
-observes and revalidates the original tmux object over one connection. No
+Target binding and running-state observation return Promises. Callers await
+observation and revalidation of the original tmux object over one connection,
+outside database transactions. The connection's own timeout applies. No
 snapshot is assembled from separate connections. Running configuration status
 also checks actual process identity; launch metadata alone is insufficient.
 Model overrides query the real runtime executable's help and validate the pair

@@ -57,7 +57,7 @@ export function classifyConfigRunning({ kind, runtime, sessionMode, resolved, fe
 }
 
 export function createConfigHandler({ store, validateComponent, readSessionMode, observeRunning }) {
-  return function handle(kind, request) {
+  return async function handle(kind, request) {
     validateRequest(kind, request);
     let sessionGroup;
     if (own(request, 'sessionGroup')) {
@@ -100,7 +100,7 @@ export function createConfigHandler({ store, validateComponent, readSessionMode,
         return { ok: true, data };
       }
       const fence = store.getDrainFence(sessionMode === 'single' ? '*' : sessionGroup);
-      const observation = observeRunning({ sessionGroup: sessionMode === 'single' ? 'origin' : sessionGroup, sessionMode });
+      const observation = await observeRunning({ sessionGroup: sessionMode === 'single' ? 'origin' : sessionGroup, sessionMode });
       data.running = classifyConfigRunning({ kind, runtime: request.runtime, sessionMode, resolved, fence, observation });
     } catch (error) {
       data.running = { runId: null, launchConfig: null, status: 'unknown', reason: error.message, ...(error.code ? { code: error.code } : {}) };
@@ -123,7 +123,7 @@ export async function runConfigCli(kind, argv, io = process) {
       readSessionMode: () => readSessionMode().mode ?? 'single',
       observeRunning: observeCoreRunning,
     });
-    const result = handler(kind, request);
+    const result = await handler(kind, request);
     io.stdout.write(json ? `${JSON.stringify(result)}\n` : `OK: ${JSON.stringify(result.data)}\n`);
     return 0;
   } catch (error) {

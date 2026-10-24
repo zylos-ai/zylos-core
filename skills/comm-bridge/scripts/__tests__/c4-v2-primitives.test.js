@@ -163,27 +163,27 @@ test('invalid F1 mode is not silently used as a baseline', t => {
   const { store: s } = fixture(t, { readConfig: () => ({ state: 'ok', config: { session_mode: 'broken' } }) });
   assert.throws(() => s.resolveSessionLaunchConfig({ sessionMode: 'single' }), { code: 'CONFIG_UNREADABLE' });
 });
-test('target binding validates scope, run, runtime and readiness in contract order', t => {
+test('target binding validates scope, run, runtime and readiness in contract order', async t => {
   const live = { runId: 'r', runtime: 'codex', sessionGroup: 'foo', currentSession: { runId: 'r', sessionId: 'sid' }, tmuxTarget: { serverGeneration: '123:456', sessionId: '$1', paneId: '%2' } };
   let calls = 0;
   const { store: s } = fixture(t, { resolveTarget: () => { calls++; return live; } });
   s.insertConversation('in', 'foo', 'e', 'seed');
   const options = { sessionGroup: 'foo', expectedRunId: 'r', expectedRuntime: 'codex', expectedSessionId: 'sid' };
-  assert.deepEqual(JSON.parse(s.buildTargetBinding(options)), { expectedRunId: 'r', tmuxTarget: live.tmuxTarget, expectedSessionId: 'sid' });
+  assert.deepEqual(JSON.parse(await s.buildTargetBinding(options)), { expectedRunId: 'r', tmuxTarget: live.tmuxTarget, expectedSessionId: 'sid' });
   assert.equal(calls, 1);
-  assert.throws(() => s.buildTargetBinding({ ...options, tmuxTarget: live.tmuxTarget }), { code: 'INVALID_ARGS' });
-  assert.throws(() => s.buildTargetBinding({ ...options, sessionGroup: null }), { code: 'CONTROL_TARGET_REQUIRED' });
-  assert.throws(() => s.buildTargetBinding({ ...options, expectedRunId: 'old' }), { code: 'TARGET_MISMATCH', runId: 'r' });
+  await assert.rejects(() => s.buildTargetBinding({ ...options, tmuxTarget: live.tmuxTarget }), { code: 'INVALID_ARGS' });
+  await assert.rejects(() => s.buildTargetBinding({ ...options, sessionGroup: null }), { code: 'CONTROL_TARGET_REQUIRED' });
+  await assert.rejects(() => s.buildTargetBinding({ ...options, expectedRunId: 'old' }), { code: 'TARGET_MISMATCH', runId: 'r' });
   live.runtime = 'unknown';
-  assert.throws(() => s.buildTargetBinding(options), { code: 'TARGET_SNAPSHOT_UNKNOWN' });
+  await assert.rejects(() => s.buildTargetBinding(options), { code: 'TARGET_SNAPSHOT_UNKNOWN' });
   live.runtime = 'claude';
-  assert.throws(() => s.buildTargetBinding(options), { code: 'TARGET_RUNTIME_MISMATCH' });
+  await assert.rejects(() => s.buildTargetBinding(options), { code: 'TARGET_RUNTIME_MISMATCH' });
   live.runtime = 'codex'; live.sessionGroup = 'bar';
-  assert.throws(() => s.buildTargetBinding(options), { code: 'TARGET_SCOPE_MISMATCH' });
+  await assert.rejects(() => s.buildTargetBinding(options), { code: 'TARGET_SCOPE_MISMATCH' });
   live.sessionGroup = 'foo'; live.currentSession.runId = 'old';
-  assert.throws(() => s.buildTargetBinding(options), { code: 'TARGET_NOT_READY' });
+  await assert.rejects(() => s.buildTargetBinding(options), { code: 'TARGET_NOT_READY' });
   live.currentSession.runId = 'r'; live.currentSession.sessionId = 'new';
-  assert.throws(() => s.buildTargetBinding(options), { code: 'STALE_TARGET' });
+  await assert.rejects(() => s.buildTargetBinding(options), { code: 'STALE_TARGET' });
   s.beginModeTransition('multi', 'single');
-  assert.throws(() => s.buildTargetBinding(options), { code: 'TRANSITION_OPEN' });
+  await assert.rejects(() => s.buildTargetBinding(options), { code: 'TRANSITION_OPEN' });
 });

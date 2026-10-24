@@ -37,10 +37,11 @@ function fixture(t, { runtimeProcess = false } = {}) {
   return { root, tmux, readyPath, ready, observer: createCoreObserver({ tmux: { socketPath } }) };
 }
 
-test('synchronous target bridge returns exact real tmux identity and READY', t => {
+test('async target observer returns exact real tmux identity and READY', async t => {
   const { observer, tmux, ready } = fixture(t);
-  const result = observer.observeCoreTarget({ sessionMode: 'single' });
-  assert.equal(result?.then, undefined);
+  const pending = observer.observeCoreTarget({ sessionMode: 'single' });
+  assert.equal(typeof pending.then, 'function');
+  const result = await pending;
   assert.equal(result.runId, 'run-1'); assert.equal(result.runtime, 'claude');
   assert.equal(result.sessionGroup, undefined); assert.deepEqual(result.currentSession, ready);
   assert.deepEqual(result.tmuxTarget, {
@@ -51,39 +52,73 @@ test('synchronous target bridge returns exact real tmux identity and READY', t =
   assert.equal(tmux('list-clients', '-F', '#{client_pid}'), '');
 });
 
-test('F2 launch intent alone cannot claim a live runtime process', t => {
+test('F2 launch intent alone cannot claim a live runtime process', async t => {
   const { observer } = fixture(t);
-  const running = observer.observeCoreRunning({ sessionGroup: 'origin', sessionMode: 'single' });
+  const running = await observer.observeCoreRunning({ sessionGroup: 'origin', sessionMode: 'single' });
   assert.equal(running.hasProcess, false);
   assert.equal(running.identityVerified, true); assert.equal(running.ready, true);
   assert.deepEqual(running.launchConfig, { runtime: 'claude', mode: 'default' });
 });
 
-test('real process observation, malformed READY and scope identity are distinct', t => {
+test('real process observation, malformed READY and scope identity are distinct', async t => {
   const { observer, tmux, readyPath } = fixture(t, { runtimeProcess: true });
-  let running = observer.observeCoreRunning({ sessionGroup: 'origin', sessionMode: 'single' });
+  let running = await observer.observeCoreRunning({ sessionGroup: 'origin', sessionMode: 'single' });
   assert.equal(running.hasProcess, true); assert.equal(running.identityVerified, true);
   tmux('set-environment', '-t', '=zylos-group-origin', 'ZYLOS_MODEL_CONFIG', '{"runtime":"codex","mode":"default"}');
-  assert.equal(observer.observeCoreRunning({ sessionGroup: 'origin', sessionMode: 'single' }).identityVerified, false);
+  assert.equal((await observer.observeCoreRunning({ sessionGroup: 'origin', sessionMode: 'single' })).identityVerified, false);
   tmux('set-environment', '-t', '=zylos-group-origin', 'ZYLOS_MODEL_CONFIG', '{"runtime":"claude","mode":"default"}');
   fs.writeFileSync(readyPath, '{}');
-  running = observer.observeCoreRunning({ sessionGroup: 'origin', sessionMode: 'single' });
+  running = await observer.observeCoreRunning({ sessionGroup: 'origin', sessionMode: 'single' });
   assert.equal(running.hasProcess, true); assert.equal(running.ready, false);
   tmux('set-environment', '-t', '=zylos-group-origin', 'ZYLOS_SESSION_GROUP', 'other');
-  assert.equal(observer.observeCoreRunning({ sessionGroup: 'origin', sessionMode: 'multi' }).identityVerified, false);
-  assert.equal(observer.observeCoreTarget({ sessionGroup: 'origin', sessionMode: 'multi' }).sessionGroup, 'other');
+  assert.equal((await observer.observeCoreRunning({ sessionGroup: 'origin', sessionMode: 'multi' })).identityVerified, false);
+  assert.equal((await observer.observeCoreTarget({ sessionGroup: 'origin', sessionMode: 'multi' })).sessionGroup, 'other');
 });
 
-test('missing run stays observable for ordered builder validation; absent differs from transport error', t => {
+test('missing run stays observable for ordered builder validation; absent differs from transport error', async t => {
   const { observer, tmux, root } = fixture(t);
   tmux('set-environment', '-u', '-t', '=zylos-group-origin', 'ZYLOS_RUN_ID');
-  assert.equal(observer.observeCoreTarget({ sessionMode: 'single' }).runId, null);
-  assert.equal(observer.observeCoreTarget({ sessionGroup: 'other', sessionMode: 'multi' }), null);
+  assert.equal((await observer.observeCoreTarget({ sessionMode: 'single' })).runId, null);
+  assert.equal(await observer.observeCoreTarget({ sessionGroup: 'other', sessionMode: 'multi' }), null);
   tmux('kill-server');
-  assert.equal(observer.observeCoreTarget({ sessionMode: 'single' }), null);
-  assert.deepEqual(observer.observeCoreRunning({ sessionMode: 'single' }), { hasProcess: false });
+  assert.equal(await observer.observeCoreTarget({ sessionMode: 'single' }), null);
+  assert.deepEqual(await observer.observeCoreRunning({ sessionMode: 'single' }), { hasProcess: false });
   const broken = createCoreObserver({ tmux: { binary: path.join(root, 'missing-tmux') } });
-  assert.throws(() => broken.observeCoreTarget({ sessionMode: 'single' }), { code: 'TMUX_UNAVAILABLE' });
+  await assert.rejects(() => broken.observeCoreTarget({ sessionMode: 'single' }), { code: 'TMUX_UNAVAILABLE' });
+});
+
+
+// Keep this test compatible with the previous synchronous implementation so the
+// same assertion is a negative control: its blocked event loop cannot tick.
+test('frozen private tmux observation leaves the caller timer responsive', async t => {
+  const { observer, tmux } = fixture(t);
+  const server = Number(tmux('display-message', '-p', '#{pid}'));
+  assert.ok(Number.isSafeInteger(server) && server > 0);
+  let pending = true, ticksWhilePending = 0, firstTickMs;
+  const started = performance.now();
+  const timer = setInterval(() => {
+    if (pending) {
+      ticksWhilePending++;
+      firstTickMs ??= performance.now() - started;
+    }
+  }, 100);
+  let failure;
+  try {
+    process.kill(server, 'SIGSTOP');
+    try { await observer.observeCoreTarget({ sessionMode: 'single' }); }
+    catch (error) { failure = error; }
+    finally { pending = false; clearInterval(timer); }
+    assert.equal(failure?.code, 'TMUX_UNAVAILABLE');
+    assert.equal(failure?.cause, 'timeout');
+    assert.ok(ticksWhilePending > 0, 'caller timer never fired while observation was pending');
+    assert.match(execFileSync('ps', ['-o', 'stat=', '-p', String(server)], { encoding: 'utf8' }).trim(), /^T/);
+    t.diagnostic(JSON.stringify({ firstTickMs, ticksWhilePending, elapsedMs: performance.now() - started, code: failure.code }));
+  } finally {
+    pending = false;
+    clearInterval(timer);
+    // Resume before fixture teardown tries to send kill-server to this socket.
+    try { process.kill(server, 'SIGCONT'); } catch {}
+  }
 });
 
 for (const json of [false, true]) for (const mode of ['single', 'multi']) test(`production control CLI and builder use real isolated tmux (${mode}, json=${json})`, t => {
