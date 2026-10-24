@@ -1,541 +1,214 @@
-import { describe, it, mock, after, beforeEach } from 'node:test';
+import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { parse } from 'smol-toml';
+import { execFileSync } from 'node:child_process';
+import { setTimeout as delay } from 'node:timers/promises';
+import { ClaudeAdapter } from '../runtime/claude.js';
+import { CodexAdapter } from '../runtime/codex.js';
 import { deployManifestTemplate } from '../runtime/tmux-env.js';
+import { tmuxNameForGroup } from '../session-group-paths.js';
 
-// ── Fake filesystem ──────────────────────────────────────────────────────────
+// Frozen SessionAdapter API integration. Only the model CLI is a stand-in;
+// paths, target observation, command/env/script construction and tmux settlement
+// are production code. No child_process mock: spawn must really be exported.
+// Uses a stand-in runtime self-report and real tmux; does not validate real model/auth.
+// Retired assertions: JSON/Node launcher, -E/-e PATH transport, existing-session
+// sendMessage reuse, launch-time instruction migration and persistent permission
+// writes. They are not requirements of launch({sessionGroup,runId,launchConfig,
+// sessionMode}); same-name reuse must now fail with NAME_CONFLICT.
+const binary = process.env.TEST_TMUX_BIN || 'tmux';
+const sentinel = 'System startup trigger, not a user message. Continue with startup context.';
+const secret = 'sk-ant-synthetic-launch-test';
 
-const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-launch-test-'));
-const fakeHome = path.join(tmpRoot, 'home');
-const fakeZylosDir = path.join(fakeHome, 'zylos');
-
-const savedEnv = {
-  HOME: process.env.HOME,
-  ZYLOS_DIR: process.env.ZYLOS_DIR,
-  CLAUDE_BIN: process.env.CLAUDE_BIN,
-  CODEX_BIN: process.env.CODEX_BIN,
-  CLAUDE_BYPASS_PERMISSIONS: process.env.CLAUDE_BYPASS_PERMISSIONS,
-  CODEX_BYPASS_PERMISSIONS: process.env.CODEX_BYPASS_PERMISSIONS,
-};
-
-process.env.HOME = fakeHome;
-process.env.ZYLOS_DIR = fakeZylosDir;
-process.env.CLAUDE_BIN = 'claude';
-process.env.CODEX_BIN = 'codex';
-process.env.CLAUDE_BYPASS_PERMISSIONS = 'false';
-process.env.CODEX_BYPASS_PERMISSIONS = 'false';
-
-// Directory structure
-for (const dir of [
-  path.join(fakeHome, '.claude'),
-  path.join(fakeZylosDir, '.claude', 'skills', 'comm-bridge', 'scripts'),
-  path.join(fakeZylosDir, '.claude', 'skills', 'zylos-memory', 'scripts'),
-  path.join(fakeZylosDir, '.claude', 'skills', 'activity-monitor', 'scripts'),
-  path.join(fakeZylosDir, 'memory'),
-  path.join(fakeZylosDir, 'activity-monitor'),
-]) {
-  fs.mkdirSync(dir, { recursive: true });
-}
-
-fs.writeFileSync(path.join(fakeZylosDir, '.env'), [
-  'ANTHROPIC_API_KEY=sk-ant-secret-test-key-do-not-expose',
-].join('\n'));
-
-fs.writeFileSync(path.join(fakeZylosDir, 'memory', 'state.md'), '- Status: completed\n');
-fs.writeFileSync(path.join(fakeZylosDir, 'CLAUDE.md'), 'legacy claude instructions\n');
-fs.writeFileSync(path.join(fakeZylosDir, 'AGENTS.md'), 'legacy codex instructions\n');
-
-for (const script of [
-  '.claude/skills/zylos-memory/scripts/session-start-inject.js',
-  '.claude/skills/comm-bridge/scripts/c4-session-init.js',
-  '.claude/skills/activity-monitor/scripts/session-start-prompt.js',
-]) {
-  fs.writeFileSync(path.join(fakeZylosDir, script), '// stub');
-}
-
-// ── Mock child_process ───────────────────────────────────────────────────────
-
-const calls = { execSync: [], execFileSync: [] };
-let tmuxSessionExists = false;
-const resolvedCodex = "/selected codex/it's/bin/codex";
-let codexHelp = '  --no-daemon  Run without the shared background server';
-let codexHelpError = null;
-
-mock.module('node:child_process', {
-  namedExports: {
-    execSync: mock.fn((cmd, opts) => {
-      calls.execSync.push({ cmd, opts });
-      if (typeof cmd === 'string' && cmd.includes('tmux has-session')) {
-        if (!tmuxSessionExists) throw new Error('no session');
-      }
-      return '';
-    }),
-    execFileSync: mock.fn((file, args, opts) => {
-      calls.execFileSync.push({ file, args: args ? [...args] : [], opts });
-      if (file === 'tmux' && args?.[0] === 'has-session') {
-        if (!tmuxSessionExists) throw new Error('no session');
-        return '';
-      }
-      if (file === 'which' && args?.[0] === 'codex') return resolvedCodex + '\n';
-      if (file === resolvedCodex && args?.[0] === '--help') {
-        if (codexHelpError) throw codexHelpError;
-        return codexHelp;
-      }
-      if (args?.[0] === '--version') return '2.1.137';
-      if (args?.includes('auth')) throw new Error('not logged in');
-      return '';
-    }),
-    spawnSync: mock.fn((file, args, opts) => {
-      const zylosDir = opts?.env?.ZYLOS_CODEX_TRUST_CWD || fakeZylosDir;
-      const key = `${path.join(zylosDir, '.codex', 'hooks.json')}:session_start:0:0`;
-      const configPath = path.join(fakeHome, '.codex', 'config.toml');
-      fs.mkdirSync(path.dirname(configPath), { recursive: true });
-      fs.writeFileSync(configPath, [
-        '[features]',
-        'hooks = true',
-        '',
-        `[hooks.state."${key}"]`,
-        'enabled = true',
-        'trusted_hash = "sha256:test"',
-        '',
-      ].join('\n'));
-      return {
-        status: 0,
-        stdout: JSON.stringify({ ok: true, trusted: 1 }) + '\n',
-        stderr: '',
-      };
-    }),
-    execFile: mock.fn((...fnArgs) => {
-      const cb = fnArgs.find(a => typeof a === 'function');
-      if (cb) process.nextTick(() => cb(null, '', ''));
-      return { on: () => {}, stdout: null, stderr: null, pid: 0 };
-    }),
-  },
-});
-
-// ── Import adapters after mocks ──────────────────────────────────────────────
-
-const { ClaudeAdapter } = await import('../runtime/claude.js');
-const { CodexAdapter } = await import('../runtime/codex.js');
-
-// ── Cleanup ──────────────────────────────────────────────────────────────────
-
-after(() => {
-  for (const [k, v] of Object.entries(savedEnv)) {
-    if (v === undefined) delete process.env[k];
-    else process.env[k] = v;
+function setup(t, Cls, { help = ' --model MODEL --effort EFFORT --no-daemon ', helpFails = false, nativeAuth = false } = {}) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'runtime-launch-'));
+  const root = path.join(dir, "root with ' quote");
+  const home = path.join(dir, 'home');
+  fs.mkdirSync(root); fs.mkdirSync(home);
+  const socketPath = path.join(dir, 'socket');
+  const tmux = (...args) => execFileSync(binary, ['-S', socketPath, ...args], { encoding: 'utf8', timeout: 3000, stdio: ['ignore','pipe','pipe'] });
+  t.after(() => { try { tmux('kill-server'); } catch {} fs.rmSync(dir, { recursive: true, force: true }); });
+  const command = path.join(dir, "runtime with ' quote");
+  const helpLog = path.join(dir, 'help-log');
+  const report = path.join(dir, 'runtime-report.json');
+  fs.writeFileSync(command, `#!${process.execPath}\nconst fs = require('node:fs');\nif (process.argv.includes('--help')) { fs.appendFileSync(${JSON.stringify(helpLog)}, 'help\\n'); ${helpFails ? 'process.exit(2);' : `console.log(${JSON.stringify(help)});`} } else if (process.argv[2] === 'auth' && process.argv[3] === 'status') { console.log(JSON.stringify({ loggedIn: ${nativeAuth}, authMethod: 'claude.ai' })); } else { fs.writeFileSync(${JSON.stringify(report)}, JSON.stringify({pid:process.pid,args:process.argv,env:process.env,cwd:process.cwd(),exe:fs.realpathSync(process.execPath)})); setInterval(() => {}, 1000); }\n`, { mode: 0o700 });
+  fs.writeFileSync(path.join(root, '.env'), `ANTHROPIC_API_KEY=${secret}\n`);
+  const env = { HOME: home, PATH: process.env.PATH, USER: process.env.USER || 'test',
+    CLAUDE_BIN: command, CODEX_BIN: command, CLAUDECODE: '1', CLAUDE_CODE_ENTRYPOINT: 'cli',
+    ZYLOS_SESSION_GROUP: 'stale-group', ZYLOS_RUN_ID: 'stale-run', ZYLOS_MODEL_CONFIG: 'stale-config' };
+  const adapter = new Cls({ root, env, tmux: { binary, socketPath, configFile: '/dev/null' } });
+  const runtime = adapter.runtimeId;
+  const input = { sessionGroup: null, runId: 'fresh-run', sessionMode: 'single', launchConfig: { runtime, mode: 'default' } };
+  async function launch(changes = {}) {
+    const request = { ...input, ...changes };
+    fs.rmSync(report, { force: true });
+    const result = await adapter.launch(request);
+    const pid = tmux('list-panes', '-t', result.tmuxName, '-F', '#{pane_pid}').trim();
+    let observed;
+    for (let attempt = 0; attempt < 100; attempt++) {
+      try { observed = JSON.parse(fs.readFileSync(report, 'utf8')); break; } catch {}
+      await delay(10);
+    }
+    assert.ok(observed, 'launched runtime must publish its observation');
+    assert.equal(observed.pid, Number(pid), 'self-report must come from the target pane process');
+    return { result, ...observed, pid };
   }
-  fs.rmSync(tmpRoot, { recursive: true, force: true });
-});
-
-beforeEach(() => {
-  calls.execSync.length = 0;
-  calls.execFileSync.length = 0;
-  tmuxSessionExists = false;
-  codexHelp = '  --no-daemon  Run without the shared background server';
-  codexHelpError = null;
-});
-
-// ── Helpers ──────────────────────────────────────────────────────────────────
-
-function findTmuxNewSession() {
-  return calls.execFileSync.find(
-    c => c.file === 'tmux' && c.args?.includes('new-session')
-  );
+  return { root, home, command, env, adapter, input, launch, tmux, helpLog };
 }
 
-function makeAdapter(Cls) {
-  const adapter = new Cls({});
-  adapter.buildInstructionFile = async () => '/fake/instruction.md';
-  return adapter;
-}
-
-function readSpecEnv() {
-  const tmux = findTmuxNewSession();
-  if (!tmux) return null;
-  const lastArg = tmux.args[tmux.args.length - 1];
-  const specMatch = lastArg.match(/"([^"]+\.json)"/);
-  if (!specMatch) return null;
-  try {
-    const spec = JSON.parse(fs.readFileSync(specMatch[1], 'utf8'));
-    return spec.env;
-  } catch {
-    return null;
-  }
-}
-
-function readLaunchSpec() {
-  const tmux = findTmuxNewSession();
-  if (!tmux) return null;
-  const lastArg = tmux.args[tmux.args.length - 1];
-  const specMatch = lastArg.match(/"([^"]+\.json)"/);
-  if (!specMatch) return null;
-  try {
-    return JSON.parse(fs.readFileSync(specMatch[1], 'utf8'));
-  } catch {
-    return null;
-  }
-}
-
-describe('npm mirror environment through runtime launch', () => {
-  for (const Cls of [ClaudeAdapter, CodexAdapter]) {
-    it(`${Cls.name} launches without a generation file or generation environment`, async () => {
-      tmuxSessionExists = false;
-      const adapter = makeAdapter(Cls);
-      await adapter.launch();
-      assert.equal(fs.existsSync(path.join(fakeZylosDir, 'activity-monitor/runtime-generation.json')), false);
-      assert.equal(readLaunchSpec().env.ZYLOS_RUNTIME_GENERATION, undefined);
-      tmuxSessionExists = true;
-      let sent;
-      adapter.sendMessage = async command => { sent = command; };
-      await adapter.launch();
-      assert.equal(fs.existsSync(path.join(fakeZylosDir, 'activity-monitor/runtime-generation.json')), false);
-      assert.equal(sent.includes('ZYLOS_RUNTIME_GENERATION'), false);
-    });
-  }
-  for (const Cls of [ClaudeAdapter, CodexAdapter]) {
-    it(`${Cls.name} preserves deployment mirrors on initial launch and new sessions`, async () => {
-      const names = ['npm_config_registry', 'npm_config_better_sqlite3_binary_host_mirror'];
-      const previous = Object.fromEntries(names.map(name => [name, process.env[name]]));
-      const dotenvPath = path.join(fakeZylosDir, '.env');
-      const dotenvBefore = fs.readFileSync(dotenvPath);
-      const manifestPath = path.join(fakeZylosDir, '.zylos', 'runtime-env.manifest');
-      const manifestBefore = fs.existsSync(manifestPath) ? fs.readFileSync(manifestPath) : null;
-      const template = path.resolve(import.meta.dirname, '../../../templates/runtime-env.manifest.example');
-      try {
-        fs.writeFileSync(dotenvPath, 'ZYLOS_CLEAN_ENV=true\n');
-        fs.mkdirSync(path.dirname(manifestPath), { recursive: true });
-        if (fs.existsSync(manifestPath)) fs.unlinkSync(manifestPath);
-        deployManifestTemplate(template, fakeZylosDir);
-        process.env.npm_config_registry = 'https://registry.example.test/';
-        process.env.npm_config_better_sqlite3_binary_host_mirror = 'https://binary.example.test/better-sqlite3';
-        // Exercise the adapters again with no existing session, as after a
-        // restart/rotation. This checks launch-spec wiring, not a live PM2 host.
-        for (const cycle of ['initial', 'restart', 'rotation']) {
-          calls.execFileSync.length = 0;
-          calls.execSync.length = 0;
-          tmuxSessionExists = false;
-          await makeAdapter(Cls).launch({ bypassPermissions: false });
-          const spec = readLaunchSpec();
-          assert.ok(spec, `${cycle}: launch spec missing`);
-          for (const name of names) assert.equal(spec.env[name], process.env[name], `${cycle}: ${name}`);
-        }
-      } finally {
-        fs.writeFileSync(dotenvPath, dotenvBefore);
-        if (manifestBefore) fs.writeFileSync(manifestPath, manifestBefore);
-        else if (fs.existsSync(manifestPath)) fs.unlinkSync(manifestPath);
-        for (const [name, value] of Object.entries(previous)) {
-          if (value === undefined) delete process.env[name];
-          else process.env[name] = value;
-        }
-      }
-    });
-  }
-});
-
-// ── Claude launch tests ──────────────────────────────────────────────────────
-
-describe('Claude launch — new session', () => {
-  it('tmux new-session includes -E flag', async () => {
-    tmuxSessionExists = false;
-    await makeAdapter(ClaudeAdapter).launch({ bypassPermissions: false });
-
-    const tmux = findTmuxNewSession();
-    assert.ok(tmux, 'should call execFileSync with tmux new-session');
-    assert.ok(tmux.args.includes('-E'), 'tmux args must include -E');
+for (const Cls of [ClaudeAdapter, CodexAdapter]) {
+  test(`${Cls.name}: default launch observes actual exec, cwd and fresh single-session F2`, async t => {
+    const f = setup(t, Cls); const p = await f.launch();
+    assert.equal(p.result.tmuxName, tmuxNameForGroup('origin'));
+    assert.equal(p.exe, fs.realpathSync(process.execPath));
+    assert.equal(p.args[1], f.command);
+    assert.equal(p.cwd, fs.realpathSync(f.root));
+    assert.equal(p.env.ZYLOS_RUN_ID, f.input.runId);
+    assert.equal(p.env.ZYLOS_MODEL_CONFIG, JSON.stringify(f.input.launchConfig));
+    assert.equal(p.env.ZYLOS_SESSION_GROUP, undefined);
+    assert.doesNotMatch(f.tmux('show-environment', '-t', p.result.tmuxName), /^ZYLOS_SESSION_GROUP=/m);
+    assert.equal(p.env.CLAUDECODE, undefined); assert.equal(p.env.CLAUDE_CODE_ENTRYPOINT, undefined);
+    assert.equal(p.env.ZYLOS_RUNTIME_GENERATION, undefined);
+    assert.equal(fs.existsSync(path.join(f.root, 'activity-monitor/runtime-generation.json')), false);
+    assert.equal(p.args.includes('--model'), false);
+    assert.equal(p.args.some(a => a.startsWith('model_reasoning_effort=')), false);
+    assert.equal(Number.isInteger(p.result.createdAt), true);
+    const paneCommand = f.tmux('display-message', '-p', '-t', p.result.tmuxName, '#{pane_start_command}');
+    assert.equal(paneCommand.includes(secret), false);
+    assert.equal(paneCommand.includes('ANTHROPIC_API_KEY'), false);
+    if (Cls === CodexAdapter) assert.equal(p.args.at(-1), sentinel);
   });
 
-  it('tmux shell-command uses absolute node path from process.execPath', async () => {
-    tmuxSessionExists = false;
-    await makeAdapter(ClaudeAdapter).launch({ bypassPermissions: false });
-
-    const tmux = findTmuxNewSession();
-    assert.ok(tmux);
-    const shellCmd = tmux.args[tmux.args.length - 1];
-    assert.ok(
-      shellCmd.includes(process.execPath),
-      `tmux shell-command must use absolute node path (process.execPath=${process.execPath}), got: ${shellCmd}`,
-    );
-  });
-
-  it('tmux cmdline does not contain API key or ANTHROPIC_API_KEY', async () => {
-    tmuxSessionExists = false;
-    await makeAdapter(ClaudeAdapter).launch({ bypassPermissions: false });
-
-    const tmux = findTmuxNewSession();
-    assert.ok(tmux);
-    const joined = tmux.args.join(' ');
-    assert.ok(!joined.includes('sk-ant-'), 'tmux cmdline must not contain API key value');
-    assert.ok(!joined.includes('ANTHROPIC_API_KEY'), 'tmux cmdline must not expose ANTHROPIC_API_KEY');
-  });
-
-  it('spec.env excludes CLAUDECODE and CLAUDE_CODE_ENTRYPOINT even when present in process.env', async () => {
-    tmuxSessionExists = false;
-    process.env.CLAUDECODE = '1';
-    process.env.CLAUDE_CODE_ENTRYPOINT = 'cli';
-    try {
-      await makeAdapter(ClaudeAdapter).launch({ bypassPermissions: false });
-      const env = readSpecEnv();
-      assert.ok(env, 'spec should be written');
-      assert.equal(env.CLAUDECODE, undefined, 'CLAUDECODE must be stripped from spec.env');
-      assert.equal(env.CLAUDE_CODE_ENTRYPOINT, undefined, 'CLAUDE_CODE_ENTRYPOINT must be stripped from spec.env');
-    } finally {
-      delete process.env.CLAUDECODE;
-      delete process.env.CLAUDE_CODE_ENTRYPOINT;
+  test(`${Cls.name}: repeated fresh launches preserve manifest npm mirrors`, async t => {
+    const f = setup(t, Cls);
+    deployManifestTemplate(path.resolve(import.meta.dirname, '../../../templates/runtime-env.manifest.example'), f.root);
+    f.env.npm_config_registry = 'https://registry.example.test/';
+    f.env.npm_config_better_sqlite3_binary_host_mirror = 'https://binary.example.test/better-sqlite3';
+    for (let cycle = 0; cycle < 3; cycle++) {
+      const p = await f.launch({ sessionGroup: `test:cycle-${cycle}`, sessionMode: 'multi', runId: `cycle-${cycle}` });
+      for (const key of ['npm_config_registry', 'npm_config_better_sqlite3_binary_host_mirror']) assert.equal(p.env[key], f.env[key]);
+      assert.equal(p.env.ZYLOS_SESSION_GROUP, `test:cycle-${cycle}`);
     }
   });
 
-  it('spec.env excludes auth tokens when native auth is detected', async () => {
-    tmuxSessionExists = false;
-    // Simulate native auth by writing a credentials file
-    const credFile = path.join(fakeHome, '.claude', '.credentials.json');
-    fs.writeFileSync(credFile, JSON.stringify({
-      claudeAiOauth: { refreshToken: 'fake-refresh-token' },
-    }));
-    try {
-      await makeAdapter(ClaudeAdapter).launch({ bypassPermissions: false });
-      const env = readSpecEnv();
-      assert.ok(env, 'spec should be written');
-      assert.equal(env.ANTHROPIC_API_KEY, undefined, 'ANTHROPIC_API_KEY must be stripped when native auth detected');
-      assert.equal(env.CLAUDE_CODE_OAUTH_TOKEN, undefined, 'CLAUDE_CODE_OAUTH_TOKEN must be stripped when native auth detected');
-    } finally {
-      fs.unlinkSync(credFile);
-    }
+  test(`${Cls.name}: existing name rejects without writing into the original process`, async t => {
+    const f = setup(t, Cls); const first = await f.launch();
+    await assert.rejects(f.launch({ runId: 'replacement-run' }), { code: 'NAME_CONFLICT' });
+    assert.equal(f.tmux('list-panes', '-t', first.result.tmuxName, '-F', '#{pane_pid}').trim(), first.pid);
+    assert.equal(f.tmux('list-sessions', '-F', '#{session_name}').trim(), first.result.tmuxName);
+    assert.match(f.tmux('show-environment', '-t', first.result.tmuxName), /ZYLOS_RUN_ID=fresh-run/);
   });
+
+  test(`${Cls.name}: explicit override preserves quoted model argv and multi group`, async t => {
+    const f = setup(t, Cls);
+    const config = { runtime: f.input.launchConfig.runtime, mode: 'override', model: "model with ' quote", effort: 'high' };
+    const p = await f.launch({ launchConfig: config, sessionMode: 'multi', sessionGroup: 'telegram:g-123' });
+    assert.equal(p.args[p.args.indexOf('--model') + 1], config.model);
+    assert.equal(p.env.ZYLOS_MODEL_CONFIG, JSON.stringify(config));
+    assert.equal(p.env.ZYLOS_SESSION_GROUP, 'telegram:g-123');
+    assert.equal(fs.readFileSync(f.helpLog, 'utf8'), 'help\n');
+    if (Cls === ClaudeAdapter) assert.equal(p.args[p.args.indexOf('--effort') + 1], 'high');
+    else { assert.ok(p.args.includes('model_reasoning_effort="high"')); assert.ok(p.args.includes('--no-daemon')); assert.equal(p.args.at(-1), sentinel); }
+  });
+
+  test(`${Cls.name}: capability failure rejects before tmux creation`, async t => {
+    const f = setup(t, Cls, { helpFails: true });
+    await assert.rejects(f.launch({ launchConfig: { runtime: f.input.launchConfig.runtime, mode: 'override', model: 'test', effort: 'high' } }), { code: 'LAUNCH_FAILED' });
+    assert.throws(() => f.tmux('list-sessions'));
+  });
+
+  test(`${Cls.name}: unsupported override rejects before creation`, async t => {
+    const f = setup(t, Cls, { help: ' --help ' });
+    await assert.rejects(f.launch({ launchConfig: { runtime: f.input.launchConfig.runtime, mode: 'override', model: 'test', effort: 'high' } }), { code: 'MODEL_CONFIG_REJECTED' });
+    assert.throws(() => f.tmux('list-sessions'));
+  });
+}
+
+test('Claude compat PATH is deduplicated in actual runtime environment', async t => {
+  const f = setup(t, ClaudeAdapter);
+  fs.writeFileSync(path.join(f.root, '.env'), 'ZYLOS_CLEAN_ENV=false\n');
+  f.env.PATH = '/usr/bin:/bin:/usr/bin:/bin';
+  const p = await f.launch(); assert.equal(p.env.PATH, '/usr/bin:/bin');
 });
 
-describe('Claude launch — existing session', () => {
-  it('does not create a new tmux session', async () => {
-    tmuxSessionExists = true;
-    const adapter = makeAdapter(ClaudeAdapter);
-    adapter.sendMessage = async () => {};
-
-    await adapter.launch({ bypassPermissions: false });
-
-    assert.equal(findTmuxNewSession(), undefined, 'must NOT call tmux new-session');
-  });
-
-  it('sends command via sendMessage', async () => {
-    tmuxSessionExists = true;
-    let sent = '';
-    const adapter = makeAdapter(ClaudeAdapter);
-    adapter.sendMessage = async (text) => { sent = text; };
-
-    await adapter.launch({ bypassPermissions: false });
-
-    assert.ok(sent.length > 0, 'sendMessage should be called');
-    assert.ok(sent.includes('claude'), 'sent command should reference claude');
-  });
-});
-
-describe('Claude launch — compat mode PATH dedupe', () => {
-  it('spec.env.PATH is deduplicated in compat mode', async () => {
-    tmuxSessionExists = false;
-    // Switch to compat mode
-    fs.writeFileSync(path.join(fakeZylosDir, '.env'), [
-      'ANTHROPIC_API_KEY=sk-ant-secret-test-key-do-not-expose',
-      'ZYLOS_CLEAN_ENV=false',
-    ].join('\n'));
-    // Inject a bloated PATH
-    const origPath = process.env.PATH;
-    process.env.PATH = '/a:/b:/a:/c:/b';
-    try {
-      await makeAdapter(ClaudeAdapter).launch({ bypassPermissions: false });
-      const env = readSpecEnv();
-      assert.ok(env, 'spec should be written');
-      assert.equal(env.PATH, '/a:/b:/c', 'PATH must be deduplicated in compat mode');
-
-      const tmux = findTmuxNewSession();
-      const pathArg = tmux.args.find(a => a.startsWith('PATH='));
-      assert.ok(pathArg, 'tmux args should contain PATH= env');
-      assert.equal(pathArg, 'PATH=/a:/b:/c', 'tmux -e PATH must also be deduplicated');
-    } finally {
-      process.env.PATH = origPath;
-      // Restore default (clean env is now the default)
-      fs.writeFileSync(path.join(fakeZylosDir, '.env'), [
-        'ANTHROPIC_API_KEY=sk-ant-secret-test-key-do-not-expose',
-      ].join('\n'));
-    }
-  });
-});
-
-// ── Codex launch tests ───────────────────────────────────────────────────────
-
-describe('Codex launch — new session', () => {
-  it('refuses to launch without instructions while split migration is pending', async () => {
-    const agentsPath = path.join(fakeZylosDir, 'AGENTS.md');
-    fs.unlinkSync(agentsPath);
-    try {
-      await assert.rejects(
-        () => makeAdapter(CodexAdapter).launch({ bypassPermissions: false }),
-        /missing while split instructions are pending migration/,
-      );
-    } finally {
-      fs.writeFileSync(agentsPath, 'legacy codex instructions\n');
-    }
-  });
-
-  it('tmux new-session includes -E flag', async () => {
-    tmuxSessionExists = false;
-    await makeAdapter(CodexAdapter).launch({ bypassPermissions: false });
-
-    const tmux = findTmuxNewSession();
-    assert.ok(tmux, 'should call execFileSync with tmux new-session');
-    assert.ok(tmux.args.includes('-E'), 'tmux args must include -E');
-  });
-
-  it('tmux shell-command uses absolute node path from process.execPath', async () => {
-    tmuxSessionExists = false;
-    await makeAdapter(CodexAdapter).launch({ bypassPermissions: false });
-
-    const tmux = findTmuxNewSession();
-    assert.ok(tmux);
-    const shellCmd = tmux.args[tmux.args.length - 1];
-    assert.ok(
-      shellCmd.includes(process.execPath),
-      `tmux shell-command must use absolute node path (process.execPath=${process.execPath}), got: ${shellCmd}`,
-    );
-  });
-
-  it('tmux cmdline does not contain secrets', async () => {
-    tmuxSessionExists = false;
-    await makeAdapter(CodexAdapter).launch({ bypassPermissions: false });
-
-    const tmux = findTmuxNewSession();
-    assert.ok(tmux);
-    const joined = tmux.args.join(' ');
-    assert.ok(!joined.includes('sk-ant-'), 'tmux cmdline must not contain API key value');
-  });
-
-  it('launch spec carries the internal kick sentinel, not a human-looking prompt', async () => {
-    tmuxSessionExists = false;
-    await makeAdapter(CodexAdapter).launch({ bypassPermissions: false });
-
-    const spec = readLaunchSpec();
-    assert.ok(spec, 'spec should be written');
-    // Since #681 the positional launch arg is the kick prompt that triggers the
-    // SessionStart hook — never the retired text bootstrap payload. Since
-    // #743/#745 that prompt is a stateless internal lifecycle sentinel,
-    // never a human-looking greeting that could be mistaken for a user turn.
-    assert.deepEqual(spec.args.slice(0, -1), ['--no-daemon']);
-    // Exact-string lock: the full contract text, not a prefix — a mutated
-    // second sentence must fail here.
-    assert.equal(spec.args.at(-1),
-      'System startup trigger, not a user message. Continue with startup context.');
-    assert.doesNotMatch(spec.args.at(-1), /\bhello\b/i);
-    assert.doesNotMatch(spec.args.at(-1), /welcome back/i);
-    assert.ok(!JSON.stringify(spec).includes('session-start-inject.js'));
-  });
-
-  it('kick sentinel is stateless — identical argv on every launch, no marker files (#743)', async () => {
-    tmuxSessionExists = false;
-    await makeAdapter(CodexAdapter).launch({ bypassPermissions: false });
-    const first = readLaunchSpec().args.at(-1);
-
-    calls.execFileSync.length = 0;
-    await makeAdapter(CodexAdapter).launch({ bypassPermissions: false });
-    const second = readLaunchSpec().args.at(-1);
-
-    assert.equal(first, second, 'kick must not vary across launches');
-    assert.ok(!fs.existsSync(path.join(fakeZylosDir, '.zylos', 'first-start-done')),
-      'stateless sentinel must not persist launch state');
-  });
-});
-
-describe('Codex launch — persistent permissions', () => {
-  for (const exists of [false, true]) {
-    it(`applies explicit bypass opt-in and withdrawal (existing tmux: ${exists})`, async () => {
-      tmuxSessionExists = exists;
-      const adapter = makeAdapter(CodexAdapter);
-      let sent = '';
-      adapter.sendMessage = async text => { sent = text; };
-      const file = path.join(fakeZylosDir, '.codex', 'config.toml');
-      await adapter.launch({ bypassPermissions: true });
-      assert.equal(parse(fs.readFileSync(file, 'utf8')).approval_policy, 'never');
-      assert.equal(parse(fs.readFileSync(file, 'utf8')).sandbox_mode, 'danger-full-access');
-      if (exists) assert.match(sent, /--dangerously-bypass-approvals-and-sandbox/);
-      else assert.ok(readLaunchSpec().args.includes('--dangerously-bypass-approvals-and-sandbox'));
-      calls.execFileSync.length = 0;
-      await adapter.launch({ bypassPermissions: false });
-      assert.equal(parse(fs.readFileSync(file, 'utf8')).approval_policy, undefined);
-      assert.equal(parse(fs.readFileSync(file, 'utf8')).sandbox_mode, undefined);
-      if (exists) assert.doesNotMatch(sent, /--dangerously-bypass-approvals-and-sandbox/);
-      else assert.ok(!readLaunchSpec().args.includes('--dangerously-bypass-approvals-and-sandbox'));
-    });
+test('Codex override without daemon capability omits unsupported flag and keeps stateless sentinel', async t => {
+  const f = setup(t, CodexAdapter, { help: ' --model MODEL ' });
+  for (let i = 0; i < 2; i++) {
+    const p = await f.launch({ sessionGroup: `test:codex-${i}`, sessionMode: 'multi', launchConfig: { runtime: 'codex', mode: 'override', model: 'test', effort: 'low' } });
+    assert.equal(p.args.includes('--no-daemon'), false); assert.equal(p.args.at(-1), sentinel);
+    assert.equal(p.args.some(a => a.includes('session-start-inject.js')), false);
   }
+  assert.equal(fs.existsSync(path.join(f.root, '.zylos/first-start-done')), false);
 });
 
-describe('Codex launch — existing session', () => {
-  it('does not create a new tmux session', async () => {
-    tmuxSessionExists = true;
-    const adapter = makeAdapter(CodexAdapter);
-    adapter.sendMessage = async () => {};
-
-    await adapter.launch({ bypassPermissions: false });
-
-    assert.equal(findTmuxNewSession(), undefined, 'must NOT call tmux new-session');
-  });
-
-  it('does not inject a bootstrap prompt in sendMessage', async () => {
-    tmuxSessionExists = true;
-    let sent = '';
-    const adapter = makeAdapter(CodexAdapter);
-    adapter.sendMessage = async (text) => { sent = text; };
-
-    await adapter.launch({ bypassPermissions: false });
-
-    assert.ok(sent.length > 0, 'sendMessage should be called');
-    assert.ok(sent.includes('codex'), 'sent command should reference codex');
-    // Exact-string lock for the paste path: the kick must ride as one
-    // shell-quoted argv carrying the full contract text.
-    assert.ok(sent.includes(
-      "'System startup trigger, not a user message. Continue with startup context.'"),
-    'existing-session command must carry the exact kick as one quoted argv');
-    assert.ok(!sent.includes('_p=$(cat'), 'existing-session command should not load bootstrap prompt');
-    assert.ok(!sent.includes('session-start-inject.js'), 'existing-session command should not run text bootstrap');
-  });
+// Preserve native-auth precedence and daemon isolation through the target API.
+test('Claude native auth strips dotenv tokens from actual runtime environment', async t => {
+  const f = setup(t, ClaudeAdapter);
+  fs.mkdirSync(path.join(f.root, '.zylos'));
+  fs.writeFileSync(path.join(f.root, '.zylos/runtime-env.manifest'), 'env ANTHROPIC_API_KEY\nenv CLAUDE_CODE_OAUTH_TOKEN\n');
+  fs.mkdirSync(path.join(f.home, '.claude'));
+  fs.writeFileSync(path.join(f.home, '.claude/.credentials.json'), JSON.stringify({ claudeAiOauth: { refreshToken: 'synthetic-refresh-token' } }));
+  fs.appendFileSync(path.join(f.root, '.env'), 'CLAUDE_CODE_OAUTH_TOKEN=synthetic-oauth-token\n');
+  const p = await f.launch();
+  assert.equal(p.env.ANTHROPIC_API_KEY, undefined, 'native auth must not be overridden by dotenv API key');
+  assert.equal(p.env.CLAUDE_CODE_OAUTH_TOKEN, undefined, 'native auth must not be overridden by dotenv token');
 });
 
-// Exercise actual adapter wiring, including both command construction paths.
-describe('Codex launch — daemon isolation', () => {
-  for (const exists of [false, true]) {
-    for (const supported of [false, true]) {
-      it(`selects compatible daemon options (existing tmux: ${exists}, supported: ${supported})`, async () => {
-        tmuxSessionExists = exists;
-        codexHelp = supported ? '  --no-daemon  Run without the shared background server' : 'Options:\n  --help  Print help';
-        const adapter = makeAdapter(CodexAdapter);
-        let sent = '';
-        adapter.sendMessage = async text => { sent = text; };
-        for (const bypassPermissions of [false, true]) {
-          calls.execFileSync.length = 0;
-          await adapter.launch({ bypassPermissions });
-          const command = exists ? sent : readLaunchSpec().args.join(' ');
-          if (exists) assert.ok(sent.includes("'/selected codex/it'\\''s/bin/codex'"));
-          else {
-            assert.equal(readLaunchSpec().command, resolvedCodex);
-            assert.notEqual(readLaunchSpec().env.PATH, process.env.PATH);
-          }
-          assert.equal(command.includes('--no-daemon'), supported);
-          assert.equal(command.includes('--dangerously-bypass-approvals-and-sandbox'), bypassPermissions);
-          assert.ok(command.includes('System startup trigger, not a user message. Continue with startup context.'));
-        }
-        const probes = calls.execFileSync.filter(c => c.file === resolvedCodex && c.args[0] === '--help');
-        assert.equal(probes.length, 1, 'recheck installed CLI capabilities on each launch');
-        assert.equal(probes[0].opts.timeout, 10_000);
-      });
-    }
-    it(`does not launch when capability detection fails (existing tmux: ${exists})`, async () => {
-      tmuxSessionExists = exists;
-      codexHelpError = new Error('help timed out');
-      const adapter = makeAdapter(CodexAdapter);
-      let sent = false;
-      adapter.sendMessage = async () => { sent = true; };
-      await assert.rejects(() => adapter.launch(), /Cannot determine Codex launch options: help timed out/);
-      assert.equal(findTmuxNewSession(), undefined);
-      assert.equal(sent, false);
-    });
-  }
+test('Codex default launch retains supported daemon isolation', async t => {
+  const f = setup(t, CodexAdapter);
+  const p = await f.launch();
+  assert.ok(p.args.includes('--no-daemon'), 'supported isolation must also apply to default model config');
+});
+
+
+test('Codex default launch without daemon capability omits unsupported flag', async t => {
+  const f = setup(t, CodexAdapter, { help: ' --help ' });
+  const p = await f.launch();
+  assert.equal(p.args.includes('--no-daemon'), false);
+  assert.equal(p.args.at(-1), sentinel);
+});
+
+test('Codex default capability failure rejects before creation', async t => {
+  const f = setup(t, CodexAdapter, { helpFails: true });
+  await assert.rejects(f.launch(), { code: 'LAUNCH_FAILED' });
+  assert.throws(() => f.tmux('list-sessions'));
+});
+
+test('Claude native auth status strips dotenv tokens without credential file', async t => {
+  const f = setup(t, ClaudeAdapter, { nativeAuth: true });
+  fs.mkdirSync(path.join(f.root, '.zylos'));
+  fs.writeFileSync(path.join(f.root, '.zylos/runtime-env.manifest'), 'env ANTHROPIC_API_KEY\nenv CLAUDE_CODE_OAUTH_TOKEN\n');
+  fs.appendFileSync(path.join(f.root, '.env'), 'CLAUDE_CODE_OAUTH_TOKEN=synthetic-oauth-token\n');
+  const p = await f.launch();
+  assert.equal(p.env.ANTHROPIC_API_KEY, undefined);
+  assert.equal(p.env.CLAUDE_CODE_OAUTH_TOKEN, undefined);
+});
+
+
+test('Claude without native auth retains explicitly allowed dotenv tokens', async t => {
+  const f = setup(t, ClaudeAdapter);
+  fs.mkdirSync(path.join(f.root, '.zylos'));
+  fs.writeFileSync(path.join(f.root, '.zylos/runtime-env.manifest'), 'env ANTHROPIC_API_KEY\nenv CLAUDE_CODE_OAUTH_TOKEN\n');
+  fs.appendFileSync(path.join(f.root, '.env'), 'CLAUDE_CODE_OAUTH_TOKEN=synthetic-oauth-token\n');
+  const originalEnv = { ...f.env };
+  const p = await f.launch();
+  assert.equal(p.env.ANTHROPIC_API_KEY, secret);
+  assert.equal(p.env.CLAUDE_CODE_OAUTH_TOKEN, 'synthetic-oauth-token');
+  assert.deepEqual(f.env, originalEnv);
+});
+
+
+test('Claude selected config directory does not borrow default HOME credentials', async t => {
+  const f = setup(t, ClaudeAdapter);
+  fs.mkdirSync(path.join(f.home, '.claude'));
+  fs.writeFileSync(path.join(f.home, '.claude/.credentials.json'), JSON.stringify({ claudeAiOauth: { refreshToken: 'different-account-token' } }));
+  const selected = path.join(f.home, 'selected'); fs.mkdirSync(selected);
+  f.env.CLAUDE_CONFIG_DIR = selected;
+  fs.mkdirSync(path.join(f.root, '.zylos'));
+  fs.writeFileSync(path.join(f.root, '.zylos/runtime-env.manifest'), 'env ANTHROPIC_API_KEY\ninherit CLAUDE_CONFIG_DIR\n');
+  const p = await f.launch();
+  assert.equal(p.env.CLAUDE_CONFIG_DIR, selected);
+  assert.equal(p.env.ANTHROPIC_API_KEY, secret);
 });
