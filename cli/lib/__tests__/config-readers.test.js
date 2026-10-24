@@ -90,7 +90,7 @@ describe('strict runtime readers', () => {
 
   it('fails explicitly when an installed Core module cannot be located', () => {
     const missingRoot = path.join(root, 'missing-package');
-    const result = run(['--input-type=module', '-e', `const l=await import(${JSON.stringify(loaderUrl)}); l.resolveCoreConfigModule({here:${JSON.stringify(missingRoot)},env:{PATH:''},exec:()=>{throw new Error('npm unavailable')}});`], {
+    const result = run(['--input-type=module', '-e', `const l=await import(${JSON.stringify(loaderUrl)}); await l.loadCoreConfig();`], {
       ZYLOS_PACKAGE_ROOT: missingRoot,
     });
     assert.notEqual(result.status, 0);
