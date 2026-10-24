@@ -146,6 +146,20 @@ test('out removes partially written destination on driver write failure', t => {
   assert.throws(() => query.absorbed({ runId, id: row.id, out }), { code: 'WRITE_FAILED' });
   assert.equal(writes, 1); assert.equal(fs.existsSync(out), false);
 });
+test('store mismatch error caps ids at 20 and retains the total before formatting', t => {
+  const { db, store } = fixture(t);
+  const rows = Array.from({ length: 35 }, () => store.insertConversation('in', 'foo', 'e', 'x'));
+  const runId = absorb(store), badIds = rows.map(row => row.id);
+  db.prepare("UPDATE conversations SET status='failed'").run();
+  db.prepare('DELETE FROM conversations WHERE id=?').run(rows[3].id);
+  assert.throws(() => store.queries.readAbsorbed(runId), error => {
+    assert.equal(error.code, 'ABSORBED_MISMATCH');
+    assert.equal(error.ids.length, 20);
+    assert.equal(error.count, badIds.length);
+    assert.deepEqual(error.ids, badIds.slice(0, 20));
+    return true;
+  });
+});
 test('missing and state-changed absorbed rows reject all formats and export before output', t => {
   const { db, store, query } = fixture(t);
   const rows = Array.from({ length: 35 }, () => store.insertConversation('in', 'foo', 'e', 'x'));
