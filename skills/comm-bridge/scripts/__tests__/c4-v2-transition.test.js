@@ -239,3 +239,130 @@ test('getLastCompletedModeTransition: NORMAL WAL reads committed row while write
     assert.deepEqual(store.getLastCompletedModeTransition(), { ...old, reason: 'new-committed' });
   } finally { reader.close(); }
 });
+
+
+// DM-62 / P01: library snapshots and static Router census. Directory/skeleton
+// creation and real Router transport belong to P10/P04 integration, not this test.
+function dm62Heads(reader) {
+  return reader.prepare('SELECT session_group, head_id FROM group_heads ORDER BY session_group COLLATE BINARY')
+    .all().map(row => ({ sessionGroup: row.session_group, headId: row.head_id }));
+}
+function assertDm62Heads(actual, expected) {
+  assert.deepEqual(actual, expected, 'DM-62 conversion must include every group and its current head');
+}
+function assertDm62RouterCensus(sources) {
+  // Include aliases/imports as well as calls: a newly imported D6 reader must
+  // trigger review even when hidden behind a local name. Direct SQL is forbidden.
+  const d6Readers = /\b(?:group_heads|listGroupHeads|listGroups|getLastActivity|getOriginSyncBacklog|absorbForTransition)\b/;
+  for (const [name, source] of sources) {
+    assert.doesNotMatch(source, d6Readers, `DM-62 Router must not access D6: ${name}`);
+  }
+}
+const dm62RouterSources = () => [
+  ['c4-dispatcher.js', readFileSync(new URL('../c4-dispatcher.js', import.meta.url), 'utf8')],
+  ['message-router.js', readFileSync(new URL('../../../activity-monitor/scripts/message-router.js', import.meta.url), 'utf8')],
+];
+function dm62Fixture(t, create = createStore) {
+  const dir = mkdtempSync(join(tmpdir(), 'c4-dm62-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const filename = join(dir, 'db.sqlite');
+  const { db } = fixture(t, filename);
+  const store = create(db, { validateComponent: () => true });
+  const reader = new Database(filename, { readonly: true, fileMustExist: true });
+  t.after(() => reader.close());
+  const origin = store.insertConversation('in', 'system', null, 'origin');
+  const whole = store.insertConversation('in', 'chat', null, 'whole');
+  const subgroup = store.insertConversation('in', 'chat', 'room', 'subgroup', { groupName: 'room' });
+  const beforeGate = dm62Heads(reader);
+  assert.deepEqual(beforeGate, [
+    { sessionGroup: 'chat', headId: whole.id },
+    { sessionGroup: 'chat:room', headId: subgroup.id },
+    { sessionGroup: 'origin', headId: origin.id },
+  ]);
+  const { runId } = store.beginModeTransition('single', 'multi');
+  store.setDrainFence('*');
+  const duringGate = store.insertConversation('in', 'chat', 'gated', 'during gate', { groupName: 'gated' });
+  assert.equal(reader.prepare('SELECT phase FROM mode_transitions WHERE run_id=?').get(runId).phase, 'gating');
+  const { cutoff } = store.absorbForTransition(runId);
+  assert.equal(reader.prepare('SELECT phase FROM mode_transitions WHERE run_id=?').get(runId).phase, 'converting');
+  assert.ok(dm62Heads(reader).some(row => row.headId === duringGate.id));
+  return { db, reader, store, runId, cutoff, beforeGate };
+}
+function dm62Snapshot(db, reader, store) {
+  const before = allTables(reader);
+  const changes = db.prepare('SELECT total_changes() AS n').get().n;
+  const sql = [], prepare = db.prepare;
+  db.prepare = function(statement) { sql.push(statement); return prepare.call(this, statement); };
+  db.pragma('query_only=ON');
+  let heads;
+  try { heads = store.listGroupHeads(); }
+  finally { db.pragma('query_only=OFF'); db.prepare = prepare; }
+  assertDm62Heads(heads, dm62Heads(reader));
+  assert.equal(sql.length, 1, 'DM-62 snapshot must use one statement');
+  assert.match(sql[0], /^SELECT\b/i);
+  assert.deepEqual(allTables(reader), before, 'DM-62 snapshot must not change any table');
+  assert.equal(db.prepare('SELECT total_changes() AS n').get().n, changes);
+  return heads;
+}
+test('DM-62 full heads snapshots include gated and post-cutoff groups; delivery primitives never read D6', t => {
+  const { db, reader, store, runId, cutoff, beforeGate } = dm62Fixture(t);
+  const first = dm62Snapshot(db, reader, store);
+  assert.equal(first.length, beforeGate.length + 1);
+  // Keep the global gate active while a second connection writes a new group
+  // and advances an existing head after the frozen absorption cutoff.
+  const writer = new Database(db.name);
+  try {
+    const incoming = createStore(writer, { validateComponent: () => true });
+    const late = incoming.insertConversation('in', 'chat', 'A', 'after cutoff', { groupName: 'A' });
+    const advance = incoming.insertConversation('in', 'chat', 'room', 'advance', { groupName: 'room' });
+    assert.ok(late.id > cutoff); assert.ok(advance.id > cutoff);
+    const second = dm62Snapshot(db, reader, store);
+    assert.equal(second.length, first.length + 1);
+    assert.equal(second.find(row => row.sessionGroup === 'chat:room').headId, advance.id);
+    assert.ok(!first.some(row => row.sessionGroup === 'chat:A'), 'earlier result remains a snapshot');
+    assert.equal(first.find(row => row.sessionGroup === 'chat:room').headId, beforeGate.find(row => row.sessionGroup === 'chat:room').headId);
+    assert.deepEqual(second.map(row => row.sessionGroup), ['chat', 'chat:A', 'chat:gated', 'chat:room', 'origin']);
+    store.setModeTransitionPhase(runId, 'cutover');
+    store.setModeTransitionPhase(runId, 'complete');
+    const headsBeforeDelivery = dm62Heads(reader);
+    const sql = [], prepare = db.prepare;
+    db.prepare = function(statement) { sql.push(statement); return prepare.call(this, statement); };
+    try {
+      const next = store.getNextPending();
+      assert.equal(next.id, late.id);
+      assert.equal(store.claimConversation(next.id), true);
+      assert.equal(store.markDelivered(next.id, { sessionId: 'dm62-isolated-session' }), true);
+    } finally { db.prepare = prepare; }
+    assert.ok(sql.length > 0);
+    for (const statement of sql) assert.doesNotMatch(statement, /\bgroup_heads\b/i, 'DM-62 delivery must not read D6');
+    assert.deepEqual(reader.prepare('SELECT status,session_id FROM conversations WHERE id=?').get(late.id),
+      { status: 'delivered', session_id: 'dm62-isolated-session' });
+    assert.deepEqual(dm62Heads(reader), headsBeforeDelivery);
+  } finally { writer.close(); }
+  assertDm62RouterCensus(dm62RouterSources());
+});
+test('DM-62 calibration: omission of one conversion group turns the same oracle red', async t => {
+  const mutant = await modifiedStore('c4-store-transition.js',
+    'FROM group_heads ORDER BY session_group COLLATE BINARY',
+    "FROM group_heads WHERE session_group<>\\'chat:gated\\' ORDER BY session_group COLLATE BINARY");
+  const { db, reader, store } = dm62Fixture(t, mutant);
+  assert.throws(() => dm62Snapshot(db, reader, store), error => {
+    assert.ok(error instanceof assert.AssertionError);
+    assert.match(error.message, /DM-62 conversion must include every group/);
+    t.diagnostic(`EXPECTED RED: ${error.message.split('\n')[0]}`);
+    return true;
+  });
+});
+for (const access of ['listGroupHeads()', "db.prepare('SELECT * FROM group_heads').all()", 'getLastActivity(group)']) {
+  test(`DM-62 calibration: Router access ${access} turns the same census red`, t => {
+    const sources = dm62RouterSources();
+    assertDm62RouterCensus(sources);
+    sources[0][1] += `\n${access};\n`;
+    assert.throws(() => assertDm62RouterCensus(sources), error => {
+      assert.ok(error instanceof assert.AssertionError);
+      assert.match(error.message, /DM-62 Router must not access D6/);
+      t.diagnostic(`EXPECTED RED: DM-62 Router must not access D6 (${access})`);
+      return true;
+    });
+  });
+}
