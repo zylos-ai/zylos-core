@@ -1,165 +1,113 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
-import os from 'node:os';
 import path from 'node:path';
-import {execFileSync} from 'node:child_process';
-import {settleLaunch,executableIdentity} from '../session-launch.js';
-import {writeSessionLaunchScript} from '../session-command.js';
-const binary=process.env.TEST_TMUX_BIN || 'tmux';
-const delay=ms=>new Promise(r=>setTimeout(r,ms));
-async function setup(t) {
-  const scripts=[];
-  const dir=await fs.mkdtemp(path.join(os.tmpdir(),'p02-settlement-'));
-  const socketPath=path.join(dir,'socket');
-  const tmux=(...args)=>execFileSync(binary,['-S',socketPath,...args],{encoding:'utf8',timeout:3000});
-  tmux('-f','/dev/null','new-session','-d','-s','keeper','sleep 60');
-  const server=Number(tmux('display-message','-p','#{pid}').trim());
-  t.after(async()=>{try{process.kill(server,'SIGCONT');}catch{} try{tmux('kill-server');}catch{} for(const script of scripts) script.cleanup(); await fs.rm(dir,{recursive:true,force:true});});
-  async function launch(command='/bin/sleep',args=['30'],name='target',onNotice=()=>{},f2={}) {
-    const identity=await executableIdentity(command,process.env);
-    const script=writeSessionLaunchScript({command,args,env:{PATH:'/usr/bin:/bin'},root:dir,multi:f2.sessionGroup != null});
-    scripts.push(script);
-    return settleLaunch({tmuxName:name,runId:'isolated-run',launchConfig:{runtime:'claude',mode:'default'},sessionGroup:null,...f2,root:dir,script,identity,args,tmux:{binary,socketPath,configFile:'/dev/null'},noticeMs:50,onNotice});
-  }
-  return {launch,tmux,server,dir};
-}
-test('paused original server preserves promise, then confirms exec and F2 without READY',async t=>{
-  const f=await setup(t);let notices=0,done=false;
-  process.kill(f.server,'SIGSTOP');
-  const pending=f.launch('/bin/sleep',['30'],'target',()=>{notices++;throw new Error('notice consumer failed');}).finally(()=>{done=true;});
-  await delay(150);assert.equal(done,false);assert.equal(notices,1);
-  process.kill(f.server,'SIGCONT');
-  const result=await pending;assert.equal(result.tmuxName,'target');
-  assert.equal(result.createdAt,Number(f.tmux('list-sessions','-F','#{session_name} #{session_created}').split('\n').find(v=>v.startsWith('target ')).split(' ')[1]));
-  const pid=f.tmux('list-panes','-t','target','-F','#{pane_pid}').trim();
-  assert.equal(await fs.readlink(`/proc/${pid}/exe`),await fs.realpath('/bin/sleep'));
-  assert.match(f.tmux('show-environment','-t','target'),/ZYLOS_RUN_ID=isolated-run/);
-  assert.doesNotMatch(f.tmux('show-environment','-t','target'),/^ZYLOS_SESSION_GROUP=/m);
-  await delay(100);assert.equal(f.tmux('list-sessions','-F','#{session_name}').trim().split('\n').length,2);
-});
-test('paused creation race rejects NAME_CONFLICT only after original response',async t=>{
-  const f=await setup(t);process.kill(f.server,'SIGSTOP');let done=false;
-  const pending=f.launch('/bin/sleep',['30'],'keeper').finally(()=>{done=true;});
-  const rejection=assert.rejects(pending,{code:'NAME_CONFLICT'});
-  await delay(100);assert.equal(done,false);process.kill(f.server,'SIGCONT');await rejection;
-  await delay(100);assert.equal(f.tmux('list-sessions','-F','#{session_name}').trim(),'keeper');
-});
-test('exec failure settles after acknowledged pane exits, with no later creation',async t=>{
-  const f=await setup(t);
-  await assert.rejects(f.launch('/bin/false',[]),{code:'LAUNCH_FAILED'});
-  await delay(100);assert.equal(f.tmux('list-sessions','-F','#{session_name}').trim(),'keeper');
+import { spawn } from 'node:child_process';
+import { LAUNCH_TIMEOUT_MS, LAUNCH_CLEANUP_TIMEOUT_MS } from '../session-launch.js';
+import { setupLaunch, delay, binary, assertGone } from './launch-tmux-fixture.js';
+const bound = LAUNCH_TIMEOUT_MS + LAUNCH_CLEANUP_TIMEOUT_MS;
+
+test('shell wrapper execs runtime and settles within the confirmation budget', async t => {
+  const f = await setupLaunch(t);
+  const wrapper = path.join(f.dir, 'runtime-wrapper');
+  await fs.writeFile(wrapper, '#!/bin/sh\nexec /bin/sleep 30\n', {mode:0o700});
+  const client = await f.clientWrapper();
+  const start = performance.now();
+  const result = await f.launch({command:wrapper, args:[], tmuxBinary:client.file});
+  const elapsed = performance.now()-start;
+  assert.equal(result.tmuxName, 'target');
+  assert.ok(elapsed < LAUNCH_TIMEOUT_MS);
+  assert.equal(f.tmux('list-panes', '-t', '=target', '-F', '#{pane_current_command}').trim(), 'sleep');
+  assertGone(assert, Number(await fs.readFile(client.pidFile, 'utf8')));
+  t.diagnostic(JSON.stringify({wrapperSuccessMs:Math.round(elapsed)}));
 });
 
-// Exercise the real in-tree A/P01 dependencies on every combined-tree run.
-test('adapter launch consumes real A/P01 paths and observers with script runtime', async t=>{
-  const f=await setup(t);
+test('server stopped before submission: bounded failure, natural caller exit and no client left', {timeout:10000}, async t => {
+  const f = await setupLaunch(t);
+  const wrapper = await f.clientWrapper();
+  process.kill(f.server, 'SIGSTOP');
+  const program = `import {settleLaunch} from ${JSON.stringify(new URL('../session-launch.js',import.meta.url).href)};
+import {writeSessionLaunchScript} from ${JSON.stringify(new URL('../session-command.js',import.meta.url).href)};
+const script=writeSessionLaunchScript({command:'/bin/sleep',args:['30'],env:{PATH:process.env.PATH},root:${JSON.stringify(f.dir)},multi:false});
+const start=performance.now();
+try { await settleLaunch({tmuxName:'target',runId:'frozen-run',launchConfig:{runtime:'claude',mode:'default'},sessionGroup:null,root:${JSON.stringify(f.dir)},script,tmux:{binary:${JSON.stringify(wrapper.file)},socketPath:${JSON.stringify(f.socketPath)},configFile:'/dev/null'}}); process.exitCode=1; }
+catch(error) { console.log(JSON.stringify({code:error.code,elapsed:performance.now()-start})); if(error.code!=='LAUNCH_FAILED') process.exitCode=2; }`;
+  const child = spawn(process.execPath, ['--input-type=module','-e',program], {stdio:['ignore','pipe','pipe']});
+  let stdout='',stderr=''; child.stdout.on('data',d=>stdout+=d); child.stderr.on('data',d=>stderr+=d);
+  t.after(()=>{ if(child.exitCode===null && child.signalCode===null) child.kill('SIGKILL'); });
+  const exited = new Promise((resolve,reject)=>{child.once('error',reject);child.once('close',(code,signal)=>resolve({code,signal}));});
+  let watchdog;
+  const result = await Promise.race([exited, new Promise((_,reject)=>{watchdog=setTimeout(()=>reject(new Error('caller retained timer, client, or stdio')),bound+2000);})]).finally(()=>clearTimeout(watchdog));
+  assert.deepEqual(result,{code:0,signal:null},stderr);
+  const report=JSON.parse(stdout.trim());
+  assert.equal(report.code,'LAUNCH_FAILED');
+  assert.ok(report.elapsed>=LAUNCH_TIMEOUT_MS-100);
+  assert.ok(report.elapsed<bound+1000);
+  assertGone(assert,Number(await fs.readFile(wrapper.pidFile,'utf8')));
+  // The caller has exited while the server is still stopped: no resumed server
+  // or test teardown is responsible for releasing its streams/child/timers.
+  f.killFrozenServer();
+  await delay(50);
+  t.diagnostic(JSON.stringify({...report,naturalCallerExit:true,clientGone:true,serverKilledAfterExit:true}));
+});
+
+test('immediate runtime exit fails and removes its retained dead session', async t => {
+  const f=await setupLaunch(t);
+  f.tmux('set-option','-g','remain-on-exit','on');
+  const wrapper=await f.clientWrapper();
+  await assert.rejects(f.launch({command:'/bin/false',args:[],tmuxBinary:wrapper.file}),{code:'LAUNCH_FAILED'});
+  assert.equal(f.tmux('list-sessions','-F','#{session_name}').trim(),'keeper');
+  assertGone(assert,Number(await fs.readFile(wrapper.pidFile,'utf8')));
+});
+
+test('known session still in launch shell times out and is killed before rejection', {timeout:8000}, async t => {
+  const f=await setupLaunch(t);
+  const held=path.join(f.dir,'held-shell');
+  await fs.writeFile(held,'#!/bin/sh\nwhile :; do :; done\n',{mode:0o700});
+  const wrapper=await f.clientWrapper();
+  const start=performance.now();
+  await assert.rejects(f.launch({command:held,args:[],tmuxBinary:wrapper.file}),{code:'LAUNCH_FAILED'});
+  const elapsed=performance.now()-start;
+  assert.ok(elapsed>=LAUNCH_TIMEOUT_MS-100);
+  assert.ok(elapsed<bound+1000);
+  assert.equal(f.tmux('list-sessions','-F','#{session_name}').trim(),'keeper','timeout must kill the created session, not just reject a Promise.race');
+  assertGone(assert,Number(await fs.readFile(wrapper.pidFile,'utf8')));
+  t.diagnostic(JSON.stringify({knownSessionTimeoutMs:Math.round(elapsed),sessionKilled:true,clientGone:true}));
+});
+
+test('duplicate session is NAME_CONFLICT and retains the original pane', async t => {
+  const f=await setupLaunch(t);
+  const original=f.tmux('list-panes','-t','=keeper','-F','#{pane_id}:#{pane_pid}').trim();
+  await assert.rejects(f.launch({tmuxName:'keeper'}),{code:'NAME_CONFLICT'});
+  assert.equal(f.tmux('list-panes','-t','=keeper','-F','#{pane_id}:#{pane_pid}').trim(),original);
+});
+
+for(const mode of ['default','override']) test(`adapter ${mode} consumes real A/P01 paths and runtime self-report`,async t=>{
+  const f=await setupLaunch(t);
   const paths=await import('../../session-group-paths.js');
   const {SessionAdapter}=await import('../session-adapter.js');
   class Adapter extends SessionAdapter {get runtimeId(){return 'claude';}}
-  const command=path.join(f.dir,'runtime');
-  await fs.writeFile(command,`#!${process.execPath}\nif(process.argv.includes('--help')) { console.log(' --model MODEL --effort EFFORT '); } else if(process.argv[2]==='auth' && process.argv[3]==='status') { console.log('{\"loggedIn\":false}'); } else { setInterval(()=>{},1000); }\n`,{mode:0o700});
-  const adapter=new Adapter({root:f.dir,env:{...process.env,CLAUDE_BIN:command},tmux:{binary,socketPath:path.join(f.dir,'socket'),configFile:'/dev/null'}});
-  const input={sessionGroup:'telegram:g-123',runId:'actual-adapter-run',sessionMode:'multi',launchConfig:{runtime:'claude',mode:'override',model:'model with spaces',effort:'high'}};
+  const command=path.join(f.dir,'runtime'),report=path.join(f.dir,'runtime.json');
+  await fs.writeFile(command,`#!${process.execPath}\nconst fs=require('node:fs');if(process.argv.includes('--help'))console.log(' --model MODEL --effort EFFORT ');else if(process.argv[2]==='auth')console.log('{"loggedIn":false}');else{fs.writeFileSync(${JSON.stringify(report)},JSON.stringify({argv:process.argv,env:process.env,cwd:process.cwd()}));setInterval(()=>{},1000);}\n`,{mode:0o700});
+  const adapter=new Adapter({root:f.dir,env:{PATH:process.env.PATH,HOME:f.dir,CLAUDE_BIN:command},tmux:{binary,socketPath:f.socketPath,configFile:'/dev/null'}});
+  const launchConfig={runtime:'claude',mode,...(mode==='override'?{model:'model with spaces',effort:'high'}:{})};
+  const group=mode==='default'?null:'telegram:g-123';
+  const input={sessionGroup:group,runId:'real-adapter-run',sessionMode:group?'multi':'single',launchConfig};
   const result=await adapter.launch(input);
-  assert.equal(result.tmuxName,paths.tmuxNameForGroup(input.sessionGroup));
-  const pid=f.tmux('list-panes','-t',result.tmuxName,'-F','#{pane_pid}').trim();
-  const argv=(await fs.readFile(`/proc/${pid}/cmdline`,'utf8')).split('\0');
-  assert.equal(argv[argv.indexOf('--model')+1],'model with spaces');
-  assert.equal(await fs.readlink(`/proc/${pid}/exe`),await fs.realpath(process.execPath));
-  assert.equal(await fs.readlink(`/proc/${pid}/cwd`),f.dir);
-  const env=await fs.readFile(`/proc/${pid}/environ`,'utf8');
-  assert.ok(env.split('\0').includes('ZYLOS_SESSION_GROUP=telegram:g-123'));
-  const stat=await fs.readFile(`/proc/${pid}/stat`,'utf8');
-  assert.equal(Number(stat.slice(stat.lastIndexOf(')')+2).split(' ')[1]),f.server);
+  assert.equal(result.tmuxName,paths.tmuxNameForGroup(group || 'origin'));
+  for(let i=0;i<100;i++){try{await fs.access(report);break;}catch{}await delay(10);}
+  const observed=JSON.parse(await fs.readFile(report,'utf8'));
+  assert.equal(observed.cwd,await fs.realpath(f.dir));
+  assert.equal(observed.env.ZYLOS_RUN_ID,input.runId);
+  assert.equal(observed.env.ZYLOS_SESSION_GROUP,group ?? undefined);
+  assert.equal(observed.env.ZYLOS_MODEL_CONFIG,JSON.stringify(launchConfig));
+  if(mode==='override')assert.equal(observed.argv[observed.argv.indexOf('--model')+1],'model with spaces');
+  else assert.equal(observed.argv.includes('--model'),false);
   await assert.rejects(adapter.launch(input),{code:'NAME_CONFLICT'});
 });
 
-test('lost original client cannot bind to replacement server at the same socket',async t=>{
-  const f=await setup(t);let settled=false,outcome='pending';
-  // Hold the original pane before exec independently of control-frame timing.
-  // A late authentic ACK must never let the original launch succeed before we
-  // destroy its server; the replacement is the only sleep image in this test.
-  const gate=path.join(f.dir,'release-original'),execMarker=path.join(f.dir,'original-exec');
-  const scriptFile=path.join(f.dir,'gated-launch.sh');
-  await fs.writeFile(scriptFile,`#!/bin/sh\nwhile [ ! -f '${gate}' ]; do sleep 0.02; done\nprintf exec > '${execMarker}'\nexec /bin/sleep 30\n`,{mode:0o700});
-  const identity=await executableIdentity('/bin/sleep',process.env);
-  process.kill(f.server,'SIGSTOP');
-  for(let i=0;i<100;i++){const stat=await fs.readFile(`/proc/${f.server}/stat`,'utf8');if(stat.slice(stat.lastIndexOf(')')+2).split(' ')[0]==='T')break;await delay(5);}
-  const stoppedStat=await fs.readFile(`/proc/${f.server}/stat`,'utf8');
-  assert.equal(stoppedStat.slice(stoppedStat.lastIndexOf(')')+2).split(' ')[0],'T');
-  const pending=settleLaunch({tmuxName:'target',runId:'isolated-run',launchConfig:{runtime:'claude',mode:'default'},sessionGroup:null,root:f.dir,
-    script:{file:scriptFile,cleanup(){}},identity,args:['30'],tmux:{binary,socketPath:path.join(f.dir,'socket'),configFile:'/dev/null'},noticeMs:50,onNotice(){}})
-    .then(value=>{settled=true;outcome=JSON.stringify(value);},error=>{settled=true;outcome=`${error.code}:${error.message}`;});
-  await delay(100);
-  const children=(await fs.readFile(`/proc/${process.pid}/task/${process.pid}/children`,'utf8')).trim().split(/\s+/);
-  let killed=false;
-  for(const pid of children) {
-    if(!pid) continue;
-    try {
-      const argv=(await fs.readFile(`/proc/${pid}/cmdline`,'utf8')).split('\0');
-      if(argv.includes(path.join(f.dir,'socket')) && argv.includes('-C')) { process.kill(Number(pid),'SIGKILL');killed=true; }
-    } catch(error) {if(error.code!=='ENOENT') throw error;}
-  }
-  assert.equal(killed,true);await delay(50);assert.equal(settled,false);
-  process.kill(f.server,'SIGCONT');await delay(100);
-  const original=f.tmux('list-panes','-a','-F','#{session_name}:#{pane_pid}').trim().split('\n').find(row=>row.startsWith('target:'));
-  const originalPid=original ? Number(original.slice('target:'.length)) : null;
-  const originalExe=originalPid ? await fs.readlink(`/proc/${originalPid}/exe`) : null;
-  if(originalPid)assert.equal(originalExe,await fs.realpath('/bin/sh'),'original pane remains gated before runtime exec');
-  await assert.rejects(fs.access(execMarker),{code:'ENOENT'});
-  assert.equal(outcome,'pending','original launch cannot succeed while exec is gated');
-  f.tmux('kill-server');await delay(50);
-  f.tmux('-f','/dev/null','new-session','-d','-s','target','sleep 30');
-  const replacement=f.tmux('list-panes','-t','=target','-F','#{session_id}:#{pane_id}:#{pane_pid}:#{session_created}').trim();
-  await delay(100);
-  // Killing the client PID can leave the server's passed stdout descriptor alive:
-  // a late authentic create ACK permits failure once the original pane exits.
-  // The separate proxy matrix exercises an actually severed output transport.
-  assert.ok(outcome==='pending'||outcome.startsWith('LAUNCH_FAILED:'),`Unexpected settlement: ${outcome}`);
-  assert.equal(f.tmux('list-panes','-t','=target','-F','#{session_id}:#{pane_id}:#{pane_pid}:#{session_created}').trim(),replacement);
-  await assert.rejects(fs.access(execMarker),{code:'ENOENT'});
-  t.diagnostic(JSON.stringify({outcome,originalPid,originalExe,originalExecBlocked:true,replacementRetained:replacement}));
-  void pending;
-});
-
-test('first creation on isolated socket confirms original new server',async t=>{
-  const f=await setup(t);f.tmux('kill-server');await delay(50);
-  const result=await f.launch();
-  assert.equal(result.tmuxName,'target');
-  assert.equal(f.tmux('list-sessions','-F','#{session_name}').trim(),'target');
-  assert.equal(Number.isInteger(result.createdAt),true);
-});
-
-for (const group of [null,'telegram:g-123']) test(`creation ACK observes literal F2 with format syntax, group=${group}`, {timeout:5000}, async t=>{
-  const f=await setup(t);
-  if(group!==null)f.tmux('set-environment','-g','ZYLOS_SESSION_GROUP','inherited-stale');
-  const runId='literal#{pid},}';
-  const launchConfig={runtime:'claude',mode:'override',model:'literal#{pid},} \t \" \n percent%end',effort:'high'};
-  const result=await f.launch('/bin/sleep',['30'],'target',()=>{},{runId,launchConfig,sessionGroup:group});
-  assert.equal(result.tmuxName,'target');
-  const rows=f.tmux('show-environment','-t','=target').split('\n');
-  assert.ok(rows.includes(`ZYLOS_RUN_ID=${runId}`));
-  assert.ok(rows.includes(`ZYLOS_MODEL_CONFIG=${JSON.stringify(launchConfig)}`));
-  assert.equal(rows.some(v=>v.startsWith('ZYLOS_SESSION_GROUP=')),group!==null);
-  if(group!==null)assert.ok(rows.includes(`ZYLOS_SESSION_GROUP=${group}`));
-  const pid=f.tmux('list-panes','-t','=target','-F','#{pane_pid}').trim();
-  const env=(await fs.readFile(`/proc/${pid}/environ`,'utf8')).split('\0');
-  assert.equal(env.some(v=>v.startsWith('ZYLOS_SESSION_GROUP=')),group!==null);
-  await delay(100);
-  assert.equal(f.tmux('list-sessions','-F','#{session_name}').trim().split('\n').length,2);
-});
-
-for (const inherited of ['inherited-stale','']) test(`single launch removes inherited group ${JSON.stringify(inherited)}`, {timeout:5000}, async t=>{
-  const f=await setup(t);
-  f.tmux('set-environment','-g','ZYLOS_SESSION_GROUP',inherited);
-  const origin=f.tmux('list-panes','-t','=keeper','-F','#{pane_id}:#{pane_pid}').trim();
-  const result=await f.launch();
-  assert.equal(result.tmuxName,'target');
-  assert.equal(f.tmux('show-environment','-t','=target','ZYLOS_SESSION_GROUP').trim(),'-ZYLOS_SESSION_GROUP');
-  assert.equal(f.tmux('show-environment','-g','ZYLOS_SESSION_GROUP').trim(),`ZYLOS_SESSION_GROUP=${inherited}`);
-  const pid=f.tmux('list-panes','-t','=target','-F','#{pane_pid}').trim();
-  assert.equal(await fs.readlink(`/proc/${pid}/exe`),await fs.realpath('/bin/sleep'));
-  assert.ok(!(await fs.readFile(`/proc/${pid}/environ`,'utf8')).split('\0').some(v=>v.startsWith('ZYLOS_SESSION_GROUP=')));
-  assert.equal(f.tmux('list-panes','-t','=keeper','-F','#{pane_id}:#{pane_pid}').trim(),origin);
+test('missing tmux executable fails without retaining the launch script or child',async t=>{
+  const f=await setupLaunch(t);
+  await assert.rejects(f.launch({tmuxBinary:path.join(f.dir,'missing-tmux')}),{code:'LAUNCH_FAILED'});
+  assert.equal(f.tmux('list-sessions','-F','#{session_name}').trim(),'keeper');
 });

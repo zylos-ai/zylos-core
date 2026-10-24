@@ -4,7 +4,6 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {fixture,service,actualDependencies,until} from './stop-tmux-fixture.js';
-import {readProcessImage} from '../session-process-observation.js';
 import {shellQuote} from '../session-command.js';
 
 for(const present of [true,false])test(`real tmux stop: present=${present}; independent same-run service and origin survive`,async t=>{
@@ -43,9 +42,9 @@ test('unreadable process environment/runtime tree cannot block observable tmux r
 test('service actually spawned by target inherits run ID and survives both present and absent stop',async t=>{
  const f=await fixture(t),key=randomUUID(),proof=path.join(f.dir,'inherited.json'),done=path.join(f.dir,'finish');
  const childScript=path.join(f.dir,'inherited-service.mjs'),parentScript=path.join(f.dir,'agent-parent.mjs');
- await fs.writeFile(childScript,`import{writeFileSync,existsSync}from'node:fs';let tick=0;const signals=[];
+ await fs.writeFile(childScript,`import{writeFileSync,existsSync}from'node:fs';import{randomUUID}from'node:crypto';let tick=0;const signals=[],start=randomUUID();
  for(const s of ['SIGHUP','SIGTERM'])process.on(s,()=>signals.push(s));
- const beat=()=>{if(existsSync(${JSON.stringify(done)}))process.exit(0);writeFileSync(${JSON.stringify(proof)},JSON.stringify({pid:process.pid,ppid:process.ppid,runId:process.env.ZYLOS_RUN_ID,tick:++tick,signals}))};
+ const beat=()=>{if(existsSync(${JSON.stringify(done)}))process.exit(0);writeFileSync(${JSON.stringify(proof)},JSON.stringify({pid:process.pid,ppid:process.ppid,start,exe:process.execPath,runId:process.env.ZYLOS_RUN_ID,tick:++tick,signals}))};
  beat();setInterval(beat,20);setTimeout(()=>process.exit(0),30000);`);
  await fs.writeFile(parentScript,`import{spawn}from'node:child_process';import{existsSync}from'node:fs';
  const child=spawn(process.execPath,[${JSON.stringify(childScript)}],{detached:true,stdio:'ignore'});child.unref();
@@ -53,21 +52,21 @@ test('service actually spawned by target inherits run ID and survives both prese
  let child;
  f.cleanup.push(async()=>{
   await fs.writeFile(done,'done');
-  if(child)await until(()=>readProcessImage(child.pid),value=>value.gone===true);
+  if(child)await until(()=>{try{process.kill(child.pid,0);return false;}catch(error){if(error.code!=='ESRCH')throw error;return true;}},gone=>gone);
  });
  f.command('new-session','-d','-s','target','-e',`ZYLOS_RUN_ID=${key}`,
   `exec env -i HOME=${shellQuote(f.dir)} ZYLOS_RUN_ID="$ZYLOS_RUN_ID" ${shellQuote(process.execPath)} ${shellQuote(parentScript)}`);
  const panePid=Number(f.command('display-message','-p','-t','=target:','#{pane_pid}'));
  child=await until(async()=>JSON.parse(await fs.readFile(proof,'utf8')),value=>value.runId===key);
  assert.equal(child.ppid,panePid,'service must really originate in the target');
- const image=await readProcessImage(child.pid);assert.ok(image.env.includes(`ZYLOS_RUN_ID=${key}`));
+ assert.equal(child.runId,key);assert.equal(child.exe,process.execPath);assert.ok(child.start);
  for(const phase of ['present','absent']){
   await f.adapter.stop({tmuxName:'target',expectedRunId:key});
   const checkpoint=JSON.parse(await fs.readFile(proof,'utf8'));
   const after=await until(async()=>JSON.parse(await fs.readFile(proof,'utf8')),value=>value.tick>checkpoint.tick+1);
-  assert.deepEqual(after.signals,[]);assert.equal((await readProcessImage(child.pid)).start,image.start);
+  assert.deepEqual(after.signals,[]);assert.equal(after.pid,child.pid);assert.equal(after.start,child.start);assert.equal(after.exe,child.exe);assert.equal(after.runId,key);
   assert.equal(f.command('list-sessions','-F','#{session_name}'),'origin');assert.equal(f.snapshot('origin'),f.origin);
-  t.diagnostic(JSON.stringify({phase,originalPanePid:panePid,servicePid:child.pid,start:image.start,
+  t.diagnostic(JSON.stringify({phase,originalPanePid:panePid,servicePid:child.pid,start:child.start,
    actualInheritedRunId:true,checkpointTick:checkpoint.tick,afterTick:after.tick,signals:after.signals,originUnchanged:true}));
  }
 });

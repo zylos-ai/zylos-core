@@ -4,7 +4,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { RuntimeAdapter } from './base.js';
 import { adapterError, runtimeExecutable, runtimeHelp, validateLaunchConfig, buildRuntimeArgs, launchEnvironment, writeSessionLaunchScript, hasNativeClaudeAuth } from './session-command.js';
-import { settleLaunch, executableIdentity } from './session-launch.js';
+import { settleLaunch } from './session-launch.js';
 import { ZYLOS_DIR } from '../config.js';
 
 export class SessionAdapter extends RuntimeAdapter {
@@ -110,12 +110,9 @@ export class SessionAdapter extends RuntimeAdapter {
         delete cleanEnv.ANTHROPIC_API_KEY;
         delete cleanEnv.CLAUDE_CODE_OAUTH_TOKEN;
       }
-      const identity = await executableIdentity(command, cleanEnv);
       const args = buildRuntimeArgs(this.runtimeId, launchConfig, {root, help});
       const script = writeSessionLaunchScript({command,args,env:cleanEnv,root,multi:sessionMode === 'multi'});
-      return await settleLaunch({tmuxName,runId,launchConfig,sessionGroup,root,script,identity,args,
-        tmux:this.options.tmux,noticeMs:this.options.launchNoticeMs,
-        onNotice:this.options.onLaunchPending || this.options.log || console.warn});
+      return await settleLaunch({tmuxName,runId,launchConfig,sessionGroup,root,script,tmux:this.options.tmux});
     } catch (error) {
       if (['NAME_CONFLICT','RUNTIME_NOT_INSTALLED','MODEL_CONFIG_REJECTED','LAUNCH_FAILED'].includes(error.code)) throw error;
       throw adapterError('LAUNCH_FAILED','Launch preflight failed',error.cause);

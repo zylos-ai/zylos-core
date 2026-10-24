@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { setTimeout as delay } from 'node:timers/promises';
 import { ClaudeAdapter } from '../runtime/claude.js';
 import { CodexAdapter } from '../runtime/codex.js';
 import { deployManifestTemplate } from '../runtime/tmux-env.js';
@@ -12,7 +13,7 @@ import { tmuxNameForGroup } from '../session-group-paths.js';
 // Frozen SessionAdapter API integration. Only the model CLI is a stand-in;
 // paths, target observation, command/env/script construction and tmux settlement
 // are production code. No child_process mock: spawn must really be exported.
-// Requires Linux /proc and tmux; does not validate real model/auth or macOS.
+// Uses a stand-in runtime self-report and real tmux; does not validate real model/auth.
 // Retired assertions: JSON/Node launcher, -E/-e PATH transport, existing-session
 // sendMessage reuse, launch-time instruction migration and persistent permission
 // writes. They are not requirements of launch({sessionGroup,runId,launchConfig,
@@ -31,7 +32,8 @@ function setup(t, Cls, { help = ' --model MODEL --effort EFFORT --no-daemon ', h
   t.after(() => { try { tmux('kill-server'); } catch {} fs.rmSync(dir, { recursive: true, force: true }); });
   const command = path.join(dir, "runtime with ' quote");
   const helpLog = path.join(dir, 'help-log');
-  fs.writeFileSync(command, `#!${process.execPath}\nconst fs = require('node:fs');\nif (process.argv.includes('--help')) { fs.appendFileSync(${JSON.stringify(helpLog)}, 'help\\n'); ${helpFails ? 'process.exit(2);' : `console.log(${JSON.stringify(help)});`} } else if (process.argv[2] === 'auth' && process.argv[3] === 'status') { console.log(JSON.stringify({ loggedIn: ${nativeAuth}, authMethod: 'claude.ai' })); } else { setInterval(() => {}, 1000); }\n`, { mode: 0o700 });
+  const report = path.join(dir, 'runtime-report.json');
+  fs.writeFileSync(command, `#!${process.execPath}\nconst fs = require('node:fs');\nif (process.argv.includes('--help')) { fs.appendFileSync(${JSON.stringify(helpLog)}, 'help\\n'); ${helpFails ? 'process.exit(2);' : `console.log(${JSON.stringify(help)});`} } else if (process.argv[2] === 'auth' && process.argv[3] === 'status') { console.log(JSON.stringify({ loggedIn: ${nativeAuth}, authMethod: 'claude.ai' })); } else { fs.writeFileSync(${JSON.stringify(report)}, JSON.stringify({pid:process.pid,args:process.argv,env:process.env,cwd:process.cwd(),exe:fs.realpathSync(process.execPath)})); setInterval(() => {}, 1000); }\n`, { mode: 0o700 });
   fs.writeFileSync(path.join(root, '.env'), `ANTHROPIC_API_KEY=${secret}\n`);
   const env = { HOME: home, PATH: process.env.PATH, USER: process.env.USER || 'test',
     CLAUDE_BIN: command, CODEX_BIN: command, CLAUDECODE: '1', CLAUDE_CODE_ENTRYPOINT: 'cli',
@@ -41,12 +43,17 @@ function setup(t, Cls, { help = ' --model MODEL --effort EFFORT --no-daemon ', h
   const input = { sessionGroup: null, runId: 'fresh-run', sessionMode: 'single', launchConfig: { runtime, mode: 'default' } };
   async function launch(changes = {}) {
     const request = { ...input, ...changes };
+    fs.rmSync(report, { force: true });
     const result = await adapter.launch(request);
     const pid = tmux('list-panes', '-t', result.tmuxName, '-F', '#{pane_pid}').trim();
-    const proc = `/proc/${pid}`;
-    const args = fs.readFileSync(`${proc}/cmdline`, 'utf8').split('\0').filter(Boolean);
-    const actualEnv = Object.fromEntries(fs.readFileSync(`${proc}/environ`, 'utf8').split('\0').filter(Boolean).map(row => { const i = row.indexOf('='); return [row.slice(0, i), row.slice(i + 1)]; }));
-    return { result, pid, args, env: actualEnv, cwd: fs.readlinkSync(`${proc}/cwd`), exe: fs.readlinkSync(`${proc}/exe`) };
+    let observed;
+    for (let attempt = 0; attempt < 100; attempt++) {
+      try { observed = JSON.parse(fs.readFileSync(report, 'utf8')); break; } catch {}
+      await delay(10);
+    }
+    assert.ok(observed, 'launched runtime must publish its observation');
+    assert.equal(observed.pid, Number(pid), 'self-report must come from the target pane process');
+    return { result, ...observed, pid };
   }
   return { root, home, command, env, adapter, input, launch, tmux, helpLog };
 }
