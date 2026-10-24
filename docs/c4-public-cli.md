@@ -73,7 +73,3 @@ also checks actual process identity; launch metadata alone is insufficient.
 Model overrides query the real runtime executable's help and validate the pair
 before writing. This verifies the local adapter's argument contract, not that a
 remote model is available to the account.
-
-Router, receive/send and session bootstrap cutovers remain separate work. These
-commands do not establish readiness to run an existing instance, merge a
-release, or deploy.
