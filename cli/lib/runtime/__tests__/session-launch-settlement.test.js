@@ -2,7 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import os from 'node:os';
+import { spawn, execFile, execFileSync } from 'node:child_process';
+import { promisify } from 'node:util';
+import { fileURLToPath } from 'node:url';
 import { LAUNCH_TIMEOUT_MS, LAUNCH_CLEANUP_TIMEOUT_MS } from '../session-launch.js';
 import { setupLaunch, delay, binary, assertGone } from './launch-tmux-fixture.js';
 const bound = LAUNCH_TIMEOUT_MS + LAUNCH_CLEANUP_TIMEOUT_MS;
@@ -111,3 +114,28 @@ test('missing tmux executable fails without retaining the launch script or child
   await assert.rejects(f.launch({tmuxBinary:path.join(f.dir,'missing-tmux')}),{code:'LAUNCH_FAILED'});
   assert.equal(f.tmux('list-sessions','-F','#{session_name}').trim(),'keeper');
 });
+
+
+for (const locale of ['unset', 'C']) for (const scenario of ['launch-multi', 'launch-single', 'observe', 'list']) {
+  test(`tmux locale ${locale}: ${scenario} succeeds without inherited UTF-8 settings`, async t => {
+    // Keep socket paths short enough for macOS as well as Linux.
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'p02l-'));
+    const env = {...process.env, HOME:dir, ZYLOS_DIR:dir};
+    for (const key of ['LANG', 'LC_ALL', 'LC_CTYPE', 'TMUX', 'TMUX_PANE']) delete env[key];
+    if (locale === 'C') env.LANG = 'C';
+    const probe = new URL('./locale-tmux-probe.js', import.meta.url);
+    try {
+      const {stdout} = await promisify(execFile)(process.execPath,
+        [fileURLToPath(probe), dir, scenario, locale], {env, timeout:8000});
+      const result = JSON.parse(stdout.trim());
+      assert.equal(result.success, true);
+      assert.equal(result.scenario, scenario);
+      assert.equal(result.locale, locale);
+      t.diagnostic(JSON.stringify(result));
+    } finally {
+      try { execFileSync(binary, ['-u', '-S', path.join(dir, 's'), 'kill-server'],
+        {timeout:1000, stdio:'ignore'}); } catch {}
+      await fs.rm(dir, {recursive:true, force:true});
+    }
+  });
+}

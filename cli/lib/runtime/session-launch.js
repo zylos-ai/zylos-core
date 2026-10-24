@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import { adapterError, shellQuote } from './session-command.js';
+import { tmuxClientArgs } from './tmux-client-args.js';
 
 // Match the shared tmux connection's observation budget. Cleanup has its own
 // short bound so a frozen server cannot keep the caller or its client alive.
@@ -14,13 +15,14 @@ const startingCommands = new Set(['sh','dash','bash','zsh','ksh','ash','fish','e
  * that server-side outcome belongs to the router, not a background launcher.
  */
 export function settleLaunch({tmuxName,runId,launchConfig,sessionGroup,root,script,tmux={}}) {
-  const socket = tmux.socketPath ? ['-S',tmux.socketPath] : tmux.socketName ? ['-L',tmux.socketName] : [];
-  if (tmux.socketPath && tmux.socketName) { script.cleanup(); throw new TypeError('Choose one tmux socket'); }
+  let clientArgs;
+  try { clientArgs = tmuxClientArgs(tmux); }
+  catch (error) { script.cleanup(); throw error; }
   const equal = (key,value) => `#{==:#{${key}},#{l:${formatLiteral(value)}}}`;
   const format = ['#{session_id}','#{pane_id}','#{pane_pid}','#{session_created}',
     equal('ZYLOS_RUN_ID',runId),equal('ZYLOS_MODEL_CONFIG',JSON.stringify(launchConfig)),
     equal('ZYLOS_SESSION_GROUP',sessionGroup ?? '')].join('\t');
-  const argv = [...socket,...(tmux.configFile ? ['-f',tmux.configFile] : []),'-C','new-session','-P','-F',format,'-s',tmuxName,'-c',root,
+  const argv = [...clientArgs,...(tmux.configFile ? ['-f',tmux.configFile] : []),'-C','new-session','-P','-F',format,'-s',tmuxName,'-c',root,
     '-e',`ZYLOS_RUN_ID=${runId}`,'-e',`ZYLOS_MODEL_CONFIG=${JSON.stringify(launchConfig)}`,
     '-e',sessionGroup === null ? 'ZYLOS_SESSION_GROUP' : `ZYLOS_SESSION_GROUP=${sessionGroup}`,
     `exec /bin/sh ${shellQuote(script.file)}`];
