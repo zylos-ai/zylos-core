@@ -1,4 +1,6 @@
-import { STATUS_NOTICE_CONFIG } from './c4-config.js';
+import { loadCoreConfig } from './core-config-loader.js';
+
+const { readZylosConfigOrThrow } = await loadCoreConfig();
 import { NOTICE_TEMPLATES } from './status-notice-catalog.js';
 
 const DEFAULTS = {
@@ -56,7 +58,7 @@ function formatResetTime(resetAt, requestedZone) {
 }
 
 // Configuration is trusted operator input. Runtime error text is never rendered.
-export function messageForStatus({ health, reason, noticeCode, resetAt, context = 'inbound' } = {}, config = STATUS_NOTICE_CONFIG) {
+export function messageForStatus({ health, reason, noticeCode, resetAt, context = 'inbound' } = {}, config = readZylosConfigOrThrow().statusNotices ?? {}) {
   config = config && typeof config === 'object' ? config : {};
   const category = Object.hasOwn(DEFAULTS, noticeCode) ? noticeCode : Object.hasOwn(DEFAULTS, health) ? health : 'unavailable';
   const mode = context === 'failure' ? 'failure' : 'inbound';

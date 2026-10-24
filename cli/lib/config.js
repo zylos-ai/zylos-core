@@ -44,6 +44,12 @@ export function readZylosConfigStrict() {
   return readConfigStrict(CONFIG_FILE);
 }
 
+export function readZylosConfigOrThrow() {
+  const result = readZylosConfigStrict();
+  if (result.state === 'error') throw configUnreadable(result.error);
+  return result.state === 'ok' ? result.config : {};
+}
+
 export function readSessionMode() {
   const result = readZylosConfigStrict();
   if (result.state === 'error') throw configUnreadable(result.error);

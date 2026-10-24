@@ -1,10 +1,16 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { TMUX_SESSION } from './c4-config.js';
+import { loadCoreConfig } from './core-config-loader.js';
 import { runtimeRoot, isManagedClaudeProcess } from '../../activity-monitor/scripts/runtime-generation.js';
 
-export function readDeliveryIdentity({ zylosDir = runtimeRoot(), session = TMUX_SESSION,
+const { readZylosConfigOrThrow } = await loadCoreConfig();
+
+function configuredSession() {
+  return readZylosConfigOrThrow().runtime === 'codex' ? 'codex-main' : 'claude-main';
+}
+
+export function readDeliveryIdentity({ zylosDir = runtimeRoot(), session = configuredSession(),
   read = fs.readFileSync, run = execFileSync, platform = process.platform } = {}) {
   try {
     const foreground = JSON.parse(read(path.join(zylosDir, 'activity-monitor/foreground-session.json'), 'utf8'));

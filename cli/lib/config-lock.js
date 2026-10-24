@@ -92,6 +92,12 @@ export function detectConfigLockCapability({ platform = process.platform, ...dep
   return null;
 }
 
+export function configLockArgs(capability, waitMs, command) {
+  return capability.backend === 'linux-flock'
+    ? ['--exclusive', '--no-fork', '--conflict-exit-code', '75', '--timeout', String(waitMs / 1000), '/proc/self/fd/3', ...command]
+    : ['-e', PERL_LOCK_SCRIPT, String(waitMs), ...command];
+}
+
 export function updateConfigWithLock({ configFile, lockFile, update, waitMs = 2000 }, {
   capability = detectConfigLockCapability(),
   helper = HELPER,
@@ -113,10 +119,7 @@ export function updateConfigWithLock({ configFile, lockFile, update, waitMs = 20
   const lockFd = openSync(lockFile, 'a', 0o600);
   let child;
   try {
-    const common = [process.execPath, helper];
-    const args = capability.backend === 'linux-flock'
-      ? ['--exclusive', '--no-fork', '--conflict-exit-code', '75', '--timeout', String(budget / 1000), '/proc/self/fd/3', ...common]
-      : ['-e', PERL_LOCK_SCRIPT, String(budget), ...common];
+    const args = configLockArgs(capability, budget, [process.execPath, helper]);
     child = spawn(capability.executable, args, {
       input: JSON.stringify({ configFile, update }),
       encoding: 'utf8',

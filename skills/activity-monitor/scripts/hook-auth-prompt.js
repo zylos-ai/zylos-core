@@ -25,16 +25,10 @@ const LOG_FILE = path.join(ZYLOS_DIR, 'activity-monitor', 'hook-timing.log');
 const C4_CONTROL = path.join(ZYLOS_DIR, '.claude', 'skills', 'comm-bridge', 'scripts', 'c4-control.js');
 const AUTO_APPROVE_AVAILABLE_IN_SEC = 1;
 
-const { readZylosConfigStrict } = await loadCoreConfig();
+const { readZylosConfigOrThrow } = await loadCoreConfig();
 
 function readConfig() {
-  const result = readZylosConfigStrict();
-  if (result.state === 'error') {
-    const error = new Error(`Zylos configuration is unreadable: ${result.error.message}`);
-    error.code = 'CONFIG_UNREADABLE';
-    throw error;
-  }
-  return result.state === 'ok' ? result.config : {};
+  return readZylosConfigOrThrow();
 }
 
 async function main() {
