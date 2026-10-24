@@ -107,9 +107,36 @@ function syncSettings() {
   }
 }
 
+// npm config from the environment: the lowercase form npm passes to scripts
+// wins (an empty value is an explicit CLI override); otherwise any other
+// spelling, since npm reads config names case-insensitively.
+function npmConfig(env, key) {
+  const lower = `npm_config_${key}`;
+  if (lower in env) return env[lower];
+  const name = Object.keys(env).find(n => n.toLowerCase() === lower);
+  return name === undefined ? undefined : env[name];
+}
+
+/**
+ * True when npm runs this hook for the source checkout itself (`npm install` /
+ * `npm ci` while developing, reviewing or testing). A real install places the
+ * package inside a node_modules directory (`npm install -g`, self-upgrade);
+ * a global install linked to a checkout is recognized by npm's global config.
+ * A direct `node scripts/postinstall.js` is not an npm lifecycle run and keeps
+ * its behavior.
+ */
+function isSourceCheckoutInstall(env, packageRoot) {
+  if (env.npm_lifecycle_event !== 'postinstall') return false;
+  if (packageRoot.split(path.sep).includes('node_modules')) return false;
+  return npmConfig(env, 'global') !== 'true' && npmConfig(env, 'location') !== 'global';
+}
+
 function main() {
   // CI: skip everything
   if (process.env.CI) return;
+
+  // npm install / npm ci in a source checkout: never write to the live instance
+  if (isSourceCheckoutInstall(process.env, fs.realpathSync(path.join(__dirname, '..')))) return;
 
   // Zylos must be initialized — .claude/ directory exists after `zylos init`
   const claudeDir = path.join(ZYLOS_DIR, '.claude');
