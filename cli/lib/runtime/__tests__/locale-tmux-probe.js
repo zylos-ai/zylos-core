@@ -54,7 +54,7 @@ try {
       assert.ok(Number.isSafeInteger(target.createdAt));
     } else {
       assert.equal(scenario, 'list');
-      const sessions = listGroupTmuxSessions({binary, socketPath});
+      const sessions = await listGroupTmuxSessions({binary, socketPath});
       assert.deepEqual(sessions, [{sessionGroup, tmuxName,
         createdAt:Number(tmux('display-message', '-p', '-t', `=${tmuxName}:`, '#{session_created}'))}]);
     }
