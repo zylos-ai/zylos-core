@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { MARKER_TTL_MS } from '../sync-lock.js';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -16,7 +17,8 @@ test('IB51 CLI exits distinguish malformed input, ownership loss, conflict and s
   const env = { ...f.env, ZYLOS_RUN_ID: f.ready.runId };
   const runDir = path.join(f.root, 'activity-monitor/session-groups/origin');
   const memoryDir = path.join(f.root, 'memory'); fs.mkdirSync(memoryDir);
-  fs.writeFileSync(path.join(runDir, 'sync.lock'), JSON.stringify({ runId: env.ZYLOS_RUN_ID, kind: 'global', token, startedAt: Date.now(), expiresAt: Date.now() + 1800000 }));
+  const startedAt = Date.now();
+  fs.writeFileSync(path.join(runDir, 'sync.lock'), JSON.stringify({ runId: env.ZYLOS_RUN_ID, kind: 'global', token, startedAt, expiresAt: startedAt + MARKER_TTL_MS }));
   const text = renderStateSkeleton({ scope: '*', syncedAt: '2026-10-19T05:30:02Z' });
   fs.writeFileSync(path.join(memoryDir, `state.md.${token}.tmp`), text);
   const invalid = run('sync-files', ['commit', '--token', token], env, '{}');

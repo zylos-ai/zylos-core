@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { cleanup, rotate, list, commit, checkpoint, extractAbsorbedBlock } from '../sync-files.js';
 import { renderStateSkeleton } from '../state-format.js';
-import { memoryScope, markerPath } from '../sync-lock.js';
+import { MARKER_TTL_MS, memoryScope, markerPath } from '../sync-lock.js';
 
 const token = 'a'.repeat(32), segment = '20261019T053002123Z';
 async function fixture(t, group = 'telegram:test') {
@@ -15,7 +15,8 @@ async function fixture(t, group = 'telegram:test') {
   if (group !== null) env.ZYLOS_SESSION_GROUP = group;
   const scope = await memoryScope(env), kind = group === null ? 'global' : 'group';
   fs.mkdirSync(scope.memoryDir, { recursive: true }); fs.mkdirSync(scope.runDir, { recursive: true });
-  fs.writeFileSync(markerPath(scope.runDir, kind), JSON.stringify({ runId: env.ZYLOS_RUN_ID, kind, token, startedAt: Date.now(), expiresAt: Date.now() + 1800000 }));
+  const startedAt = Date.now();
+  fs.writeFileSync(markerPath(scope.runDir, kind), JSON.stringify({ runId: env.ZYLOS_RUN_ID, kind, token, startedAt, expiresAt: startedAt + MARKER_TTL_MS }));
   const settings = { token, env }, warnings = [], deps = { currentRunId: async () => env.ZYLOS_RUN_ID, warning: value => warnings.push(value) };
   const state = path.join(scope.memoryDir, 'state.md'), temporary = `${state}.${token}.tmp`;
   const skeleton = (ids = [], extra = {}) => renderStateSkeleton({ scope: scope.scope, syncedAt: '2026-10-19T05:30:02Z', absorbed: ids.length ? { runId: 'run-1', followUp: 'group', rows: ids.map(id => ({ id, timestamp: '2026-10-19 05:30:02', channel: 'telegram', endpointId: 'x', content: id === 2 ? '汉'.repeat(400) + '\nend' : `text ${id}` })) } : null, ...extra });

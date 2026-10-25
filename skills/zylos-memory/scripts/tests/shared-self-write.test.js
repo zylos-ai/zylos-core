@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { resolveAllowedMemoryPath, applyFragmentLocked, apply } from '../self-write.js';
-import { memoryScope, markerPath, withMemoryLock } from '../sync-lock.js';
+import { MARKER_TTL_MS, memoryScope, markerPath, withMemoryLock } from '../sync-lock.js';
 
 async function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'p07-self-'));
@@ -12,7 +12,8 @@ async function fixture(t) {
   const env = { ...process.env, ZYLOS_DIR: root, ZYLOS_SESSION_GROUP: 'origin', ZYLOS_RUN_ID: 'self-test' };
   const scope = await memoryScope(env), token = 'a'.repeat(32);
   fs.mkdirSync(scope.runDir, { recursive: true }); fs.mkdirSync(path.join(root, 'memory'), { recursive: true });
-  fs.writeFileSync(markerPath(scope.runDir, 'origin'), JSON.stringify({ runId: env.ZYLOS_RUN_ID, kind: 'origin', token, startedAt: Date.now(), expiresAt: Date.now() + 1800000 }));
+  const startedAt = Date.now();
+  fs.writeFileSync(markerPath(scope.runDir, 'origin'), JSON.stringify({ runId: env.ZYLOS_RUN_ID, kind: 'origin', token, startedAt, expiresAt: startedAt + MARKER_TTL_MS }));
   const settings = { env, kind: 'origin', token }, deps = { currentRunId: async () => env.ZYLOS_RUN_ID };
   return { root, ...scope, settings, deps };
 }
