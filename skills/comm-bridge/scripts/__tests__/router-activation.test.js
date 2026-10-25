@@ -97,20 +97,22 @@ test('T03 NAME_CONFLICT requeues without retry and startup control invalidation 
 
 test('IB34 branch validation rejects missing, forbidden, wrong units and mismatched identity', () => {
   const request = { version: 1, type: 'start_attempt', requestId: 'sa-test' };
-  const valid = { ...request, ok: true, result: 'registered', reason: 'recovery_due', attemptAt: 1800000000, attemptCount: 1 };
-  assert.ok(validStartAttemptReply({ ...valid, future: true }, request, 'unavailable'));
+  const valid = { ...request, ok: true, result: 'registered', reason: 'recovery_due' };
+  assert.ok(validStartAttemptReply({ ...valid, future: true }, request));
   for (const patch of [{ version: 2 }, { type: 'wrong' }, { requestId: 'old' }, { ok: 1 }, { result: 'new' },
-    { reason: 'other' }, { attemptAt: 1800000000000 }, { attemptAt: 1.5 }, { attemptCount: 0 }, { attemptCount: '1' }, { attemptCount: null }, { attemptCount: 1.5 }, { code: 'bad' }, { notBefore: 1800000000000 }]) {
-    assert.equal(validStartAttemptReply({ ...valid, ...patch }, request, 'unavailable'), false, JSON.stringify(patch));
+    { reason: 'other' }, { code: 'bad' }, { notBefore: 1800000000000 }]) {
+    assert.equal(validStartAttemptReply({ ...valid, ...patch }, request), false, JSON.stringify(patch));
   }
-  assert.equal(validStartAttemptReply({ ...request, ok: false, code: 'attempt_backoff', notBefore: 1800000000 }, request, 'down'), false);
-  assert.equal(validStartAttemptReply({ ...request, ok: false, code: 'probe_inflight', notBefore: 1800000000000 }, request, 'down'), false);
-  assert.equal(validStartAttemptReply({ ...request, ok: true, result: 'not_restricted', attemptCount: 1 }, request, 'down'), false);
-  const down = { ...valid }; delete down.attemptCount;
-  assert.ok(validStartAttemptReply(down, request));
-  // Reply validity cannot depend on a stale caller health observation.
-  assert.ok(validStartAttemptReply(down, request, 'unavailable'));
-  assert.ok(validStartAttemptReply(valid, request, 'down'));
+  assert.equal(validStartAttemptReply({ ...request, ok: false, code: 'attempt_backoff', notBefore: 1800000000 }, request), false);
+  assert.equal(validStartAttemptReply({ ...request, ok: false, code: 'probe_inflight', notBefore: 1800000000000 }, request), false);
+  const { reason, ...missingReason } = valid;
+  assert.equal(validStartAttemptReply(missingReason, request), false);
+  assert.equal(validStartAttemptReply({ ...request, ok: true, result: 'not_restricted', reason }, request), false);
+  for (const extra of [{ attemptAt: 1800000000000 }, { attemptAt: null }, { attemptCount: '1' }]) {
+    assert.ok(validStartAttemptReply({ ...valid, ...extra }, request));
+    assert.ok(validStartAttemptReply({ ...request, ok: true, result: 'not_restricted', ...extra }, request));
+    assert.ok(validStartAttemptReply({ ...request, ok: false, code: 'probe_inflight', ...extra }, request));
+  }
 });
 
 test('T03 timeout observation failures alert and retain the running row and reservation', async t => {

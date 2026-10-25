@@ -11,16 +11,12 @@ export function validStartAttemptReply(reply, request) {
   if (reply.ok === false && reply.code === 'invalid_request' && !Object.hasOwn(reply, 'type') && !Object.hasOwn(reply, 'requestId')) return true;
   if (reply.version !== 1 || reply.type !== request.type || reply.requestId !== request.requestId || typeof reply.ok !== 'boolean') return false;
   if (reply.ok) {
-    if (reply.result === 'not_restricted') return absent(reply, ['reason', 'attemptAt', 'attemptCount', 'code', 'notBefore']);
-    // The provider may change health while this request is in flight.
-    // Its down branch omits attemptCount; validate presence without guessing
-    // the provider's registration-time health from our earlier observation.
+    if (reply.result === 'not_restricted') return absent(reply, ['reason', 'code', 'notBefore']);
+    // Provider counters and timestamps are not part of this response contract.
     return reply.result === 'registered' && ['user_message', 'recovery_due'].includes(reply.reason) &&
-      Number.isSafeInteger(reply.attemptAt) && reply.attemptAt >= 0 && reply.attemptAt < 1e11 &&
-      (!Object.hasOwn(reply, 'attemptCount') || Number.isSafeInteger(reply.attemptCount) && reply.attemptCount >= 1) &&
       absent(reply, ['code', 'notBefore']);
   }
-  if (!absent(reply, ['result', 'reason', 'attemptAt', 'attemptCount'])) return false;
+  if (!absent(reply, ['result', 'reason'])) return false;
   if (timedCodes.has(reply.code)) return Number.isSafeInteger(reply.notBefore) && reply.notBefore >= 1e12;
   return plainCodes.has(reply.code) && !Object.hasOwn(reply, 'notBefore');
 }

@@ -23,7 +23,7 @@ test('restricted admission reads only the runtime health projection', async t =>
         f.calls.push(['submit', request]);
         assert.equal(f.row(row.id).status, 'pending');
         return { kind: 'accepted', sent: true, reply: { ...request, ok: true, result: 'registered',
-          reason: 'recovery_due', attemptAt: Math.floor(f.now() / 1000), ...(health === 'down' ? {} : { attemptCount: 1 }) } };
+          reason: 'recovery_due' } };
       };
       await f.create().initialize(); await f.rounds(4);
       assert(accessed.includes('health'));

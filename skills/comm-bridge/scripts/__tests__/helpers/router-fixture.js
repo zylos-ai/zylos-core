@@ -26,7 +26,7 @@ export function routerFixture(t, { mode = 'multi', poolSize = 2, readyTimeoutMs 
     readRuntimeHealth: runtime => health.get(runtime) ?? { health: 'ok', publicHealth: 'ok' },
     getSessionAdapter: runtime => ({ launch: async input => { calls.push(['launch', input]); put(input.sessionGroup, { runId: input.runId, runtime, launchConfig: input.launchConfig }); },
       stop: async input => { calls.push(['stop', input]); for (const [group,v] of scene) if (v.tmuxName === input.tmuxName) scene.delete(group); } }),
-    submit: async request => { calls.push(['submit', request]); return { kind: 'accepted', sent: true, reply: { ...request, ok: true, result: 'registered', reason: 'recovery_due', attemptAt: clock / 1000, attemptCount: 1 } }; },
+    submit: async request => { calls.push(['submit', request]); return { kind: 'accepted', sent: true, reply: { ...request, ok: true, result: 'registered', reason: 'recovery_due' } }; },
     deliverControl: async row => { calls.push(['control', row.id]); f.db.prepare("UPDATE control_queue SET status='done' WHERE id=? AND status='running'").run(row.id); },
     deliverConversation: async (row, live) => { calls.push(['conversation', row.id]); db.markDelivered(row.id, { sessionId: live.sessionId }); },
     handleExpired: async row => calls.push(['expired', row.id]), prepareSingle: async () => calls.push(['prepare']),
