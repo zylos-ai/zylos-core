@@ -30,7 +30,10 @@ async function after(t,mode,variant=''){
  const f=await fixture(t,mode,variant);assert.equal((await f.submit()).kind,'accepted');f.change('new-session');
  const state=await f.command('tick');assert.equal(state.requests.length,1);assert.equal(state.requests[0].expectedSessionId,'session-1');
  // Identity mismatch is observed before acquiring a new manual fence.
- assert.deepEqual(state.fences,[]);assert.doesNotThrow(()=>f.tmux('has-session','-t','=zylos-group-origin'));await f.stop();
+ assert.deepEqual(state.fences,[]);assert.doesNotThrow(()=>f.tmux('has-session','-t','=zylos-group-origin'));
+ assert.equal(state.alerts.length,1);assert.match(state.alerts[0].message,/requestId=observed-session/);assert.match(state.alerts[0].message,/reason=TARGET_MISMATCH/);
+ const again=await f.command('tick');assert.equal(again.alerts.length,1);assert.equal(again.requests.length,1);
+ await f.stop();
 }
 for(const mode of ['single','multi'])test(`IF-36 ${mode} actual entry retains request and original after accepted run reports changed session`,{timeout:20000},async t=>{await after(t,mode);});
 test('IF-36 actual execution mismatch assertion rejects ignored F3 session guard',{timeout:20000},async t=>{await assert.rejects(after(t,'multi','ignore-execution-session'),{code:'ERR_ASSERTION'});});

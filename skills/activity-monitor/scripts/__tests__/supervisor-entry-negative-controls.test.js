@@ -24,6 +24,8 @@ async function fixture(t,kind,mutant=false){
  const service=await startSupervisor({env:{...process.env,ZYLOS_DIR:root},db:{...db,getDb:()=>database,resolveSessionLaunchConfig:()=>({runtime:'codex',mode:'default'}),setDrainFence:(...args)=>{gateWrites++;return db.setDrainFence(...args);}},
  scenes:{observe:async()=>[],observeGroup:async()=>({present:false}),listRuns:async()=>[{runId:'run-1'}],readRun:async()=>scene},requestStore:requests,
  readMode:()=>({mode:'multi'}),readConfiguration:()=>({mode:'multi',runtime:'claude',capacity:2}),resolveTargetRuntime:()=> 'claude',
+ // Successful config admission requires an explicitly available Sync reader.
+ readSyncMarker:()=>({held:false,stale:false}),
  machineTasks:{tick(){},stop(){}},legacyStatus:{tick(){},close(){}},log:()=>{},loopOptions:{schedule:()=>1,cancel:()=>{}}});
  t.after(async()=>{await service.stop();database.close();fs.rmSync(root,{recursive:true,force:true});});
  if(kind==='duplicate'&&mutant){const owner=service.supervisor.admission,config=owner.config.bind(owner);owner.config=async(request,rows)=>{if(await owner.db.getDrainFence(request.sessionGroup))await owner.db.setDrainFence(request.sessionGroup,{reason:'model_config',runId:request.expectedRunId});return config(request,rows);};}

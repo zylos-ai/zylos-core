@@ -161,3 +161,19 @@ test('DM-47 composed owners keep current and legacy caches inside their own root
   fs.writeFileSync(legacyA, 'old-a'); fs.writeFileSync(legacyB, 'old-b');
   await a.reopen(); assert.equal(fs.existsSync(legacyA), false); assert.equal(fs.readFileSync(legacyB, 'utf8'), 'old-b');
 });
+
+// Review P2-1: composed auth recovery must use the same dependency preflight.
+async function unavailableAuthAssertion(t, create) {
+  const f = fixture(t, { create }); await f.reopen(); f.seed(); f.add();
+  f.supervisor.lifecycle.d.readSyncMarker = () => { throw Object.assign(new Error('P07 unavailable'), { code: 'DEPENDENCY_UNAVAILABLE' }); };
+  await assert.rejects(f.tick(), { code: 'DEPENDENCY_UNAVAILABLE' });
+  assert.equal(f.state.d8Writes, 0, 'unavailable Sync dependency must not fence auth recovery');
+  assert.equal(f.state.fences.size, 0); assert.deepEqual(f.state.stops, []);
+  assert.equal(f.supervisor.health.store('codex').read().health, 'auth_failed');
+}
+test('auth preflight runs before fence and direct-write mutant fails the same assertion', async t => {
+  await unavailableAuthAssertion(t, createSupervisor);
+  const bad = await import(variant('../supervisor.js', "else await lifecycle.beginReclaim(observed,'auth',fresh);",
+    "else db.setDrainFence(target.sessionGroup,{reason:'auth',runId:target.runId});"));
+  await assert.rejects(unavailableAuthAssertion(t, bad.createSupervisor), { code: 'ERR_ASSERTION' });
+});

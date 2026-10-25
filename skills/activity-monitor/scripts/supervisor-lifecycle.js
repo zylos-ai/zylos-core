@@ -54,6 +54,8 @@ export class SupervisorLifecycle {
     this.sessions = new Map();
     this.lastSyncCheck = null;
     this.manualWarnings = new Set();
+    this.reclaimWarnings = new Set();
+    this.reclaimStopPending = new Set();
   }
 
   async event(event, details) {
@@ -84,17 +86,52 @@ export class SupervisorLifecycle {
     return true;
   }
 
-  async idle(scene, context) {
-    if (!scene.present || !scene.ready || scene.processRunning !== true || scene.state !== 'idle' ||
-        !finite(scene.idleSince) || this.now() - scene.idleSince < this.idleConfirmMs) return false;
+  async checkReclaimDependencies(scene, context) {
     if (typeof this.d.readSyncMarker !== 'function') throw error('DEPENDENCY_UNAVAILABLE', 'Sync marker reader is unavailable');
     const kinds = modeOf(context) === 'single' ? ['global'] : scene.sessionGroup === 'origin' ? ['group', 'origin'] : ['group'];
+    let unheld = true;
     for (const kind of kinds) {
       const marker = await this.d.readSyncMarker({ runDir: scene.runDir, kind, currentRunId: scene.runId });
       if (!marker || typeof marker.held !== 'boolean' || typeof marker.stale !== 'boolean') throw error('INVALID_OBSERVATION', 'Invalid Sync marker result');
-      if (marker.held && !marker.stale) return false;
+      if (marker.held && !marker.stale) unheld = false;
     }
-    return true;
+    return unheld;
+  }
+
+  async idle(scene, context) {
+    if (!scene.present || !scene.ready || scene.processRunning !== true || scene.state !== 'idle' ||
+        !finite(scene.idleSince) || this.now() - scene.idleSince < this.idleConfirmMs) return false;
+    return this.checkReclaimDependencies(scene, context);
+  }
+
+  async reclaimObservation(fence, unfenced, operation) {
+    try { return await operation(); }
+    catch (cause) {
+      // A previous stop with an unknown outcome still requires confirmation.
+      // Otherwise cancel only our exact fence; no stop was issued this round.
+      if (this.reclaimStopPending.has(JSON.stringify([fence.sessionGroup, fence.runId, fence.reason]))) throw cause;
+      if (!unfenced) await this.reclaimRead(fence, () => this.clear(fence));
+      if (fence.reason === 'ttl') this.ttlReset.set(fence.sessionGroup, { runId: fence.runId, at: this.now() });
+      await this.event('reclaim_cancelled', { session_group: fence.sessionGroup, run_id: fence.runId, reason: 'observation_error', error: cause.code ?? cause.message });
+      throw cause;
+    }
+  }
+
+  async warnReclaim(fence, cause, name = 'reclaim_observation_unavailable') {
+    const key = JSON.stringify([fence.sessionGroup, fence.runId, fence.reason, name]);
+    if (this.reclaimWarnings.has(key)) return;
+    this.reclaimWarnings.add(key);
+    const event = { event: name, session_group: fence.sessionGroup, sessionGroup: fence.sessionGroup,
+      run_id: fence.runId, reason: cause.code ?? cause.message };
+    await this.event(name, event);
+    if (this.d.alert) Promise.resolve().then(() => this.d.alert(event)).catch(alertError => {
+      this.reclaimWarnings.delete(key); this.d.reportError?.(alertError, { phase: 'reclaim_alert' });
+    });
+  }
+
+  async reclaimRead(fence, operation) {
+    try { return await operation(); }
+    catch (cause) { await this.warnReclaim(fence, cause); throw cause; }
   }
 
   async running(group, { withoutDeadline = false } = {}) {
@@ -120,6 +157,7 @@ export class SupervisorLifecycle {
     if (!await this.allowed(scene.sessionGroup, context)) return false;
     const fresh = await this.observe(scene.sessionGroup);
     if (!fresh.present || !fresh.ready || fresh.runId !== scene.runId) return false;
+    await this.checkReclaimDependencies(fresh, context);
     await this.d.db.setDrainFence(scene.sessionGroup, { reason, runId: scene.runId });
     const saved = await this.d.db.getDrainFence(scene.sessionGroup);
     return saved?.reason === reason && saved.runId === scene.runId;
@@ -130,29 +168,29 @@ export class SupervisorLifecycle {
     const group = unfenced ? null : fence.sessionGroup;
     if (group === '*') return 'ignored';
     if (!unfenced) {
-      const current = await this.d.db.getDrainFence(group);
+      const current = await this.reclaimRead(fence, () => this.d.db.getDrainFence(group));
       if (!current || current.runId !== fence.runId || current.reason !== fence.reason) return 'changed';
     }
-    let scene = await this.observe(group);
+    let scene = await this.reclaimObservation(fence, unfenced, () => this.observe(group));
     if (finite(scene.currentSessionTs)) {
-      const expired = await this.d.db.expireStaleRunningControls(targetOf(group), { deliveredBefore: Math.floor(scene.currentSessionTs / 1000) });
+      const expired = await this.reclaimRead(fence, () => this.d.db.expireStaleRunningControls(targetOf(group), { deliveredBefore: Math.floor(scene.currentSessionTs / 1000) }));
       for (const row of expired) await this.event('control_expired', { session_group: group, control_id: row.id, run_id: fence.runId });
     }
-    const counts = await this.running(group, { withoutDeadline: singleAuth });
+    const counts = await this.reclaimRead(fence, () => this.running(group, { withoutDeadline: singleAuth }));
     if (counts.conversations > 0 || counts.controls > 0) return 'waiting_inflight';
     if (scene.present && scene.runId === fence.runId) {
       if (typeof scene.processRunning !== 'boolean') return 'unknown_process';
       if (scene.processRunning !== false) {
-        if (!await this.idle(scene, context)) {
+        if (!await this.reclaimObservation(fence, unfenced, () => this.idle(scene, context))) {
           if (singleAuth || fence.reason === 'model_config') return 'waiting_idle';
           if (!unfenced) await this.clear(fence);
           if (fence.reason === 'ttl') this.ttlReset.set(group, { runId: fence.runId, at: this.now() });
           await this.event('reclaim_cancelled', { session_group: group, run_id: fence.runId, reason: 'not_idle' });
           return 'cancelled';
         }
-        const again = singleAuth ? await this.running(group, { withoutDeadline: true }) : {
+        const again = await this.reclaimRead(fence, async () => singleAuth ? this.running(group, { withoutDeadline: true }) : {
           conversations: group === null ? await this.d.db.countGlobalRunningConversations() : await this.d.db.countRunningConversations(group), controls: 0,
-        };
+        });
         if (again.conversations !== 0 || again.controls !== 0) {
           if (singleAuth) return 'waiting_inflight';
           if (fence.reason !== 'model_config' && !unfenced) await this.clear(fence);
@@ -161,18 +199,28 @@ export class SupervisorLifecycle {
         }
       }
       // Re-read immediately before constructing the stop; never retarget a replacement.
-      scene = await this.observe(group);
+      scene = await this.reclaimObservation(fence, unfenced, () => this.observe(group));
       if (scene.present && scene.runId === fence.runId) {
         if (typeof scene.processRunning !== 'boolean') return 'unknown_process';
-        await this.d.stop(scene);
-        const after = await this.observe(group);
-        if (after.present && after.runId === fence.runId) throw error('STOP_UNCONFIRMED', 'Target tmux still exists');
+        try {
+          await this.d.stop(scene);
+          const after = await this.observe(group);
+          if (after.present && after.runId === fence.runId) throw error('STOP_UNCONFIRMED', 'Target tmux still exists');
+        } catch (cause) {
+          this.reclaimStopPending.add(JSON.stringify([fence.sessionGroup, fence.runId, fence.reason]));
+          await this.warnReclaim(fence, cause, 'reclaim_stop_unconfirmed');
+          throw cause;
+        }
       }
     } else if (scene.present && !scene.runId) {
       return 'unknown_identity';
     }
     if (!unfenced) await this.clear(fence);
     this.ttlPreparation.delete(group);
+    this.reclaimStopPending.delete(JSON.stringify([fence.sessionGroup, fence.runId, fence.reason]));
+    for (const name of ['reclaim_observation_unavailable', 'reclaim_stop_unconfirmed']) {
+      this.reclaimWarnings.delete(JSON.stringify([fence.sessionGroup, fence.runId, fence.reason, name]));
+    }
     await this.event('reclaim_done', { session_group: group, run_id: fence.runId, reason: fence.reason });
     return 'done';
   }
@@ -388,41 +436,51 @@ export class SupervisorLifecycle {
         await this.warnManual(key, { event: 'manual_restart_blocked', requestId: request.requestId, reason: 'mode_or_fence_conflict' });
       }
     }
-    for (const key of this.manualWarnings) if (!activeWarnings.has(key)) this.manualWarnings.delete(key);
+    for (const key of this.manualWarnings) {
+      const executing = requests.some(request => key === JSON.stringify(['execution', request.requestId]));
+      if (!activeWarnings.has(key) && !executing) this.manualWarnings.delete(key);
+    }
     return requests;
   }
 
   async advanceManual(context) {
     const requests = await this.checkManualFences(context);
     await this.each(requests, async request => {
-      const group = request.mode === 'single' ? '*' : 'origin';
-      const target = await this.d.observeFixedTarget(request);
-      if (!target || typeof target.present !== 'boolean') throw error('INVALID_OBSERVATION', 'Fixed target presence is unknown');
-      let fence = await this.d.db.getDrainFence(group);
-      if (modeOf(context) !== request.mode || context.transition || await this.d.db.getModeTransition() ||
-          request.mode === 'multi' && await this.d.db.getDrainFence('*') ||
-          fence && (fence.reason !== 'manual_restart' || fence.runId !== request.expectedRunId)) {
-        const key = JSON.stringify(['blocked', request.requestId]);
-        await this.warnManual(key, { event: 'manual_restart_blocked', requestId: request.requestId, reason: 'mode_or_fence_conflict' });
-        return;
-      }
-      // The absent-target/absent-fence case is the crash-after-clear recovery path.
-      if (target.present) {
-        if (!fence) {
-          await this.d.db.setDrainFence(group, { reason: 'manual_restart', runId: request.expectedRunId });
-          fence = await this.d.db.getDrainFence(group);
-          if (fence?.reason !== 'manual_restart' || fence.runId !== request.expectedRunId) throw error('FENCE_MISMATCH', 'Manual fence was not acquired');
+      try {
+        const group = request.mode === 'single' ? '*' : 'origin';
+        const target = await this.d.observeFixedTarget(request);
+        if (!target || typeof target.present !== 'boolean') throw error('INVALID_OBSERVATION', 'Fixed target presence is unknown');
+        let fence = await this.d.db.getDrainFence(group);
+        if (modeOf(context) !== request.mode || context.transition || await this.d.db.getModeTransition() ||
+            request.mode === 'multi' && await this.d.db.getDrainFence('*') ||
+            fence && (fence.reason !== 'manual_restart' || fence.runId !== request.expectedRunId)) {
+          const key = JSON.stringify(['blocked', request.requestId]);
+          await this.warnManual(key, { event: 'manual_restart_blocked', requestId: request.requestId, reason: 'mode_or_fence_conflict' });
+          return;
         }
-        await this.d.stopFixedTarget(request);
-        const after = await this.d.observeFixedTarget(request);
-        if (!after || after.present !== false) throw error('STOP_UNCONFIRMED', 'Manual target disappearance is unconfirmed');
+        // The absent-target/absent-fence case is the crash-after-clear recovery path.
+        if (target.present) {
+          if (!fence) {
+            await this.d.db.setDrainFence(group, { reason: 'manual_restart', runId: request.expectedRunId });
+            fence = await this.d.db.getDrainFence(group);
+            if (fence?.reason !== 'manual_restart' || fence.runId !== request.expectedRunId) throw error('FENCE_MISMATCH', 'Manual fence was not acquired');
+          }
+          await this.d.stopFixedTarget(request);
+          const after = await this.d.observeFixedTarget(request);
+          if (!after || after.present !== false) throw error('STOP_UNCONFIRMED', 'Manual target disappearance is unconfirmed');
+        }
+        const count = request.mode === 'single' ? await this.d.db.countGlobalRunningConversations() : await this.d.db.countRunningConversations('origin');
+        if (count !== 0) return;
+        if (fence) await this.clear(fence);
+        this.d.requests.remove(request.requestId);
+        await this.event('manual_restart_done', { requestId: request.requestId, run_id: request.expectedRunId, session_group: group });
+      } catch (cause) {
+        await this.warnManual(JSON.stringify(['execution', request.requestId]), {
+          event: 'manual_restart_blocked', requestId: request.requestId,
+          run_id: request.expectedRunId, reason: cause.code || 'EXECUTION_FAILED',
+        });
+        throw cause;
       }
-      const count = request.mode === 'single' ? await this.d.db.countGlobalRunningConversations() : await this.d.db.countRunningConversations('origin');
-      if (count !== 0) return;
-      if (fence) await this.clear(fence);
-      this.d.requests.remove(request.requestId);
-      await this.event('manual_restart_done', { requestId: request.requestId, run_id: request.expectedRunId, session_group: group });
     });
   }
 }
-

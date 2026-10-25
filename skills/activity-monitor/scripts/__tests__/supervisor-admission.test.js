@@ -18,7 +18,7 @@ function fixture(t) {
   const db = { getModeTransition: () => state.transition, getDrainFence: g => state.fences.get(g) ?? null,
     setDrainFence: (g,f) => { if (!state.fences.has(g)) state.fences.set(g,f); } };
   const deps = { store, db, readMode: () => ({mode:state.mode}), listRuns: () => state.runs, readRun: () => state.run,
-    resolveLaunchConfig: () => state.expected, now: () => 1792000000123, diagnostic: event => state.events.push(event) };
+    resolveLaunchConfig: () => state.expected, preflightReclaim: async () => {}, now: () => 1792000000123, diagnostic: event => state.events.push(event) };
   const admission = new SupervisorAdmission(deps); admission.openEntry();
   return { root, file, store, state, db, admission, deps };
 }
@@ -140,4 +140,16 @@ test('config admission refuses malformed snapshots and fails closed on invalid e
   }
   f.state.expected = {runtime:'codex',mode:'override',model:'x',effort:'xhigh'};
   assert.equal((await f.admission.handle(config())).result, 'accepted');
+});
+
+test('P2 config reclaim missing or failed dependency cannot fence a receiving group', async t => {
+ const f=fixture(t);
+ for (const preflight of [undefined, async()=>{throw Object.assign(new Error('Sync unavailable'),{code:'DEPENDENCY_UNAVAILABLE'});}]) {
+  f.admission.preflightReclaim=preflight;
+  await assert.rejects(f.admission.handle(config()),{code:'DEPENDENCY_UNAVAILABLE'});
+  assert.equal(f.state.fences.size,0);
+ }
+ let calls=0;
+ f.admission.preflightReclaim=async(scene,context)=>{calls++;assert.equal(scene.sessionGroup,'telegram:a');assert.equal(scene.runId,'r1');assert.equal(context.configuration.mode,'multi');assert.equal(f.state.fences.size,0);};
+ assert.equal((await f.admission.handle(config())).result,'accepted');assert.equal(calls,1);
 });

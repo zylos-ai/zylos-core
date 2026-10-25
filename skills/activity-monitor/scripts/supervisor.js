@@ -61,6 +61,7 @@ export function createSupervisor(deps) {
     checkAuth,requestProbe:runtime=>observer.requestProbe(runtime),log,now});
   admission=new SupervisorAdmission({db,store:deps.requestStore,readMode,listRuns:()=>scenes.listRuns(),readRun:group=>scenes.readRun(group),
     resolveLaunchConfig:async group=>db.resolveSessionLaunchConfig({sessionGroup:group,sessionMode:(await readMode()).mode}),
+    preflightReclaim:(scene,context)=>lifecycle.checkReclaimDependencies(scene,context),
     modeSwitch:deps.modeSwitch,startAttempt:request=>health.registerStartAttempt(request),diagnostic,now});
   lifecycle=new SupervisorLifecycle({db,observeGroup:group=>scenes.observeGroup(group),observe:listScenes,stop:scene=>scenes.stop(scene),readSyncMarker,prompts,
     requests:admission.store,alert:deps.alert,bindTarget:scene=>scenes.bindTarget(scene),observeFixedTarget:request=>scenes.observeFixedTarget(request),
@@ -130,7 +131,7 @@ export function createSupervisor(deps) {
             if(!observed.present || observed.runId!==target.runId || !observed.ready)continue;
             const fresh={configuration,transition:null,fences:await db.listDrainFences()};
             if(configuration.mode==='single')await lifecycle.advanceReclaim({sessionGroup:null,reason:'auth',runId:target.runId},fresh,{unfenced:true,singleAuth:true});
-            else if(!await db.getDrainFence('*') && !await db.getDrainFence(target.sessionGroup))db.setDrainFence(target.sessionGroup,{reason:'auth',runId:target.runId});
+            else await lifecycle.beginReclaim(observed,'auth',fresh);
           }
         });
         await health.completeAuthRecovery(runtime,{isGone:async target=>{

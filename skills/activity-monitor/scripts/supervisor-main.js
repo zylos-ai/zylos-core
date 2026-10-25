@@ -12,6 +12,7 @@ import { SupervisorServerObservation, parseServerAlertTarget } from './superviso
 import { SupervisorLegacyStatus } from './supervisor-legacy-status.js';
 import { SupervisorScenes } from './supervisor-scenes.js';
 import { SupervisorMachineTasks } from './supervisor-machine-tasks.js';
+import { parseSupervisorConfiguration } from './supervisor-configuration.js';
 import { readScopedHealthQuota } from './health-quota.js';
 import { HealthEventReader } from './health-event-reader.js';
 import { RestartRequestStore } from './restart-request-store.js';
@@ -29,7 +30,7 @@ export async function startSupervisor({ env=process.env, log=message=>console.er
   const root=zylosRoot(env), directory=path.join(root,'activity-monitor');
   fs.mkdirSync(directory,{recursive:true});
   const db=overrides.db ?? defaultDb, readMode=overrides.readMode ?? readSessionMode, readConfig=overrides.readConfig ?? readZylosConfigOrThrow;
-  let supervisor,events,configuration,machineTasks,legacy;
+  let supervisor,events,configuration,machineTasks,legacy,lifecycleConfiguration;
   const pendingAlerts=new Set(),pendingNotices=new Set();
   const sendAlert=overrides.sendAlert ?? ((target,message)=>new Promise((resolve,reject)=>{
     const child=execFile(process.execPath,[fileURLToPath(new URL('../../comm-bridge/scripts/c4-send.js',import.meta.url)),target.channel,target.endpoint],
@@ -43,7 +44,8 @@ export async function startSupervisor({ env=process.env, log=message=>console.er
   const scenes=overrides.scenes ?? new SupervisorServerObservation(baseScenes,{guard});
   const targetReader=createSessionReader({env,connectionOptions:baseScenes.connectionOptions ?? {},resolveConfig:input=>db.resolveSessionLaunchConfig(input)});
   const alert=event=>{
-    const pending=guard.notify(null,`Supervisor: ${event.event ?? event.reason ?? 'lifecycle requires attention'} (${event.sessionGroup ?? 'global'}).`);
+    const details=[event.requestId && `requestId=${event.requestId}`,event.reason && `reason=${event.reason}`].filter(Boolean).join(' ');
+    const pending=guard.notify(null,`Supervisor: ${event.event ?? 'lifecycle requires attention'} (${event.sessionGroup ?? event.session_group ?? 'global'}). ${details}`.trim());
     pendingAlerts.add(pending);pending.finally(()=>pendingAlerts.delete(pending)).catch(log);return pending;
   };
   const prompts={
@@ -61,7 +63,8 @@ export async function startSupervisor({ env=process.env, log=message=>console.er
     readConfiguration:async()=>{
       const raw=await readConfig(), mode=(await readMode()).mode;
       if(!mode)throw Object.assign(new Error('Session mode requires the migration owner'),{code:'CONFIG_UNREADABLE'});
-      configuration={...raw,mode};
+      lifecycleConfiguration ??= parseSupervisorConfiguration(raw,env);
+      configuration={...raw,...lifecycleConfiguration,mode};
       try {
         const pool=await loadCoreModule('session-pool-config.js');
         if(typeof pool.resolveSessionPoolSize!=='function')throw unavailable('P04 pool configuration reader');

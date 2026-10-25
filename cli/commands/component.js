@@ -170,7 +170,11 @@ export function formatC4Reply(type, data) {
           instructionFilesRebuilt && 'instruction files',
           settingsChanged && 'hook settings',
         ].filter(Boolean).join(' and ');
-        r += `\n\n${what.charAt(0).toUpperCase() + what.slice(1)} updated — Claude will restart automatically to load the new configuration. No action needed.`;
+        if (data.runtimeRestart?.ok === false) {
+          r += `\n\n${what.charAt(0).toUpperCase() + what.slice(1)} updated. ${data.runtimeRestart.error.message} (${data.runtimeRestart.error.code})`;
+        } else {
+          r += `\n\n${what.charAt(0).toUpperCase() + what.slice(1)} updated — Claude will restart automatically to load the new configuration. No action needed.`;
+        }
       }
       const protection=formatSelfUpgradeProtection(data);if(protection)r+='\n'+protection;
       return r;
@@ -1191,10 +1195,12 @@ async function upgradeSelfCore({ branch, beta = false, mode = 'merge' } = {}) {
     // This legacy result flag requests one restart after the services return.
     if (result.success && result.instructionFilesRebuilt) {
       try {
-        result.runtimeRestart = await requestRuntimeRestart();
+        result.runtimeRestart = await requestRuntimeRestart({ afterServiceRestart: true });
         if (!result.runtimeRestart.ok) console.error(`Warning: ${result.runtimeRestart.error.message} (${result.runtimeRestart.error.code})`);
       } catch (error) {
-        console.error(`Warning: runtime restart was not submitted: ${error.message}`);
+        result.runtimeRestart = { ok: false, error: { code: error.code || 'restart_submission_failed',
+          message: `Runtime restart was not submitted: ${error.message}. All currently running managed sessions, including Origin, need manual restart.` } };
+        console.error(`Warning: ${result.runtimeRestart.error.message}`);
       }
     }
 

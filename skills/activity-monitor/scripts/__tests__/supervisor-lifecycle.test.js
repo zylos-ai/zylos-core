@@ -67,11 +67,12 @@ test('ordinary busy cancels with TTL reset; model_config busy retains its fence'
     if (reason === 'ttl') { await f.lifecycle.checkTtl(f.scenes[0], f.context); assert.equal(f.fences.size, 0); }
   }
 });
-test('unknown process and observation errors retain the fence', async () => {
+test('unknown process waits; failed observation cancels its own fence', async () => {
   const f = fixture(), row = f.fence(); f.scenes[0].processRunning = undefined;
   assert.equal(await f.lifecycle.advanceReclaim(row, f.context), 'unknown_process'); assert.equal(f.fences.size, 1);
   f.deps.observeGroup = () => { throw Object.assign(new Error('unavailable'), { code: 'TMUX_UNAVAILABLE' }); };
-  await assert.rejects(f.lifecycle.advanceReclaim(row, f.context), { code: 'TMUX_UNAVAILABLE' }); assert.equal(f.fences.size, 1);
+  await assert.rejects(f.lifecycle.advanceReclaim(row, f.context), { code: 'TMUX_UNAVAILABLE' }); assert.equal(f.fences.size, 0);
+  assert.ok(f.events.some(e => e.event === 'reclaim_cancelled' && e.reason === 'observation_error'));
 });
 test('exited runtime cleans residual tmux without idle or marker; replacement stays untouched', async () => {
   const f = fixture(), row = f.fence(); f.scenes[0].processRunning = false; f.scenes[0].state = 'busy';
@@ -310,4 +311,117 @@ test('manual fence diagnostics remain available during an active transition', as
   assert.ok(f.events.some(e => e.event === 'manual_restart_orphan_fence'));
   assert.ok(f.events.some(e => e.event === 'manual_restart_blocked'));
   assert.equal(f.fences.size, 1); assert.equal(f.requests.length, 1); assert.deepEqual(f.stops, []);
+});
+
+// Review P2-1: no drain gate before the actual Sync reader is available.
+test('reclaim preflight rejects unavailable or malformed Sync dependencies before fencing', async () => {
+  for (const reason of ['ttl', 'evict', 'upgrade', 'auth', 'mode_switch', 'model_config']) {
+    for (const unavailable of ['missing', 'throws', 'invalid']) {
+      const f = fixture(); f.scenes[0].state = 'busy';
+      f.deps.readSyncMarker = unavailable === 'missing' ? undefined : unavailable === 'invalid' ? () => null :
+        () => { throw Object.assign(new Error('P07 unavailable'), { code: 'DEPENDENCY_UNAVAILABLE' }); };
+      await assert.rejects(f.lifecycle.beginReclaim(f.scenes[0], reason, f.context), {
+        code: unavailable === 'invalid' ? 'INVALID_OBSERVATION' : 'DEPENDENCY_UNAVAILABLE',
+      });
+      assert.equal(f.fences.size, 0); assert.deepEqual(f.stops, []);
+    }
+  }
+  const f = fixture(); f.scenes = [scene('origin')];
+  f.deps.readSyncMarker = ({ kind }) => {
+    if (kind === 'origin') throw Object.assign(new Error('Origin reader unavailable'), { code: 'DEPENDENCY_UNAVAILABLE' });
+    return { held: true, stale: false };
+  };
+  await assert.rejects(f.lifecycle.beginReclaim(f.scenes[0], 'upgrade', f.context), { code: 'DEPENDENCY_UNAVAILABLE' });
+  assert.equal(f.fences.size, 0);
+});
+test('TTL without backlog and restart requests cannot leave fences when P07 is unavailable', async () => {
+  const f = fixture(); f.scenes.push(scene('origin'));
+  f.deps.readSyncMarker = () => { throw Object.assign(new Error('P07 unavailable'), { code: 'DEPENDENCY_UNAVAILABLE' }); };
+  await assert.rejects(f.lifecycle.checkTtl(f.scenes[0], f.context), { code: 'DEPENDENCY_UNAVAILABLE' });
+  f.requests = [{ reason: 'upgrade', requestId: 'upgrade', runIds: ['run-a', 'run-origin'] }];
+  await assert.rejects(f.lifecycle.advanceRestarts(f.context), { code: 'DEPENDENCY_UNAVAILABLE' });
+  assert.equal(f.fences.size, 0); assert.equal(f.requests.length, 1); assert.deepEqual(f.stops, []);
+});
+test('available held marker permits fencing but never permits an idle stop', async () => {
+  const f = fixture(); f.marker = { held: true, stale: false };
+  assert.equal(await f.lifecycle.beginReclaim(f.scenes[0], 'upgrade', f.context), true);
+  assert.equal(await f.lifecycle.advanceReclaim(f.fences.get('a'), f.context), 'cancelled');
+  assert.deepEqual(f.stops, []); assert.equal(f.fences.size, 0);
+});
+test('Sync observation failure after fencing clears exact ordinary/config fences without stopping', async () => {
+  for (const reason of ['ttl', 'evict', 'upgrade', 'auth', 'mode_switch', 'model_config']) {
+    const f = fixture(); await f.lifecycle.beginReclaim(f.scenes[0], reason, f.context);
+    f.deps.readSyncMarker = () => { throw Object.assign(new Error('reader failed'), { code: 'DEPENDENCY_UNAVAILABLE' }); };
+    await assert.rejects(f.lifecycle.advanceReclaim(f.fences.get('a'), f.context), { code: 'DEPENDENCY_UNAVAILABLE' });
+    assert.equal(f.fences.size, 0); assert.deepEqual(f.stops, []);
+    assert.ok(f.events.some(e => e.event === 'reclaim_cancelled' && e.reason === 'observation_error'));
+  }
+});
+test('observation cancellation cannot clear a replacement fence', async () => {
+  const f = fixture(), row = f.fence();
+  f.deps.readSyncMarker = () => {
+    f.fences.set('a', { sessionGroup: 'a', runId: 'replacement', reason: 'auth' });
+    throw Object.assign(new Error('reader failed'), { code: 'DEPENDENCY_UNAVAILABLE' });
+  };
+  await assert.rejects(f.lifecycle.advanceReclaim(row, f.context), { code: 'FENCE_MISMATCH' });
+  assert.equal(f.fences.get('a').runId, 'replacement'); assert.deepEqual(f.stops, []);
+});
+test('post-stop observation failure retains the fence and alerts immediately', async () => {
+  const f = fixture(), row = f.fence(), alerts = []; let stopped = false;
+  f.deps.alert = event => { alerts.push(event); };
+  const observe = f.deps.observeGroup;
+  f.deps.stop = () => { stopped = true; };
+  f.deps.observeGroup = group => {
+    if (stopped) throw Object.assign(new Error('read failed after stop'), { code: 'TMUX_UNAVAILABLE' });
+    return observe(group);
+  };
+  await assert.rejects(f.lifecycle.advanceReclaim(row, f.context), { code: 'TMUX_UNAVAILABLE' });
+  await Promise.resolve();
+  assert.equal(f.fences.size, 1); assert.equal(alerts.length, 1);
+  assert.equal(alerts[0].event, 'reclaim_stop_unconfirmed');
+  await assert.rejects(f.lifecycle.advanceReclaim(row, f.context), { code: 'TMUX_UNAVAILABLE' });
+  assert.equal(f.fences.size, 1); assert.equal(alerts.length, 1);
+});
+
+// Review P2-4: replace the target between drain checks and the final stop guard.
+async function replacementBeforeStopAssertion(Class) {
+  const f = fixture(Class), row = f.fence(); let observations = 0;
+  f.deps.observeGroup = () => {
+    if (++observations === 2) f.scenes = [scene('a', { runId: 'replacement' })];
+    return f.scenes[0] ?? { present: false };
+  };
+  assert.equal(await f.lifecycle.advanceReclaim(row, f.context), 'done');
+  assert.deepEqual(f.stops, [], 'stop must not target a replacement run');
+  assert.equal(f.scenes[0].runId, 'replacement'); assert.equal(f.fences.size, 0);
+}
+test('final runId guard refuses replacement and removing it fails the same assertion', async () => {
+  await replacementBeforeStopAssertion(SupervisorLifecycle);
+  const source = await fs.readFile(new URL('../supervisor-lifecycle.js', import.meta.url), 'utf8');
+  const anchor = "scene = await this.reclaimObservation(fence, unfenced, () => this.observe(group));\n      if (scene.present && scene.runId === fence.runId)";
+  assert.equal(source.split(anchor).length, 2);
+  const mutated = source.replace(anchor, "scene = await this.reclaimObservation(fence, unfenced, () => this.observe(group));\n      if (scene.present)")
+    .replace("'./launch-config-shape.js'", JSON.stringify(new URL('../launch-config-shape.js', import.meta.url).href));
+  const bad = await import(`data:text/javascript;base64,${Buffer.from(mutated).toString('base64')}`);
+  await assert.rejects(replacementBeforeStopAssertion(bad.SupervisorLifecycle), {
+    code: 'ERR_ASSERTION', message: /stop must not target a replacement run/,
+  });
+});
+
+test('failed reclaim database observations retain the fence and alert once without waiting for channel I/O', async () => {
+  for (const source of ['fence', 'conversations', 'controls', 'final-count']) {
+    const f = fixture(), row = f.fence(), alerts = [], releases = [];
+    f.deps.alert = event => { alerts.push(event); return new Promise(resolve => releases.push(resolve)); };
+    const fail = () => { throw Object.assign(new Error('DB unavailable'), { code: 'DB_BUSY' }); };
+    if (source === 'fence') f.db.getDrainFence = fail;
+    if (source === 'conversations') f.db.countRunningConversations = fail;
+    if (source === 'controls') f.db.countNonTerminalControls = fail;
+    if (source === 'final-count') {
+      let reads = 0; f.db.countRunningConversations = () => ++reads % 2 === 0 ? fail() : 0;
+    }
+    await assert.rejects(f.lifecycle.advanceReclaim(row, f.context), { code: 'DB_BUSY' });
+    await assert.rejects(f.lifecycle.advanceReclaim(row, f.context), { code: 'DB_BUSY' });
+    assert.equal(f.fences.size, 1); assert.deepEqual(f.stops, []);
+    assert.equal(alerts.length, 1); assert.equal(alerts[0].event, 'reclaim_observation_unavailable');
+    releases.forEach(resolve => resolve());
+  }
 });
