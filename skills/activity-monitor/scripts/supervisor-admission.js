@@ -23,8 +23,8 @@ export function validSupervisorRequest(request) {
 /** One queue is shared with lifecycle mutations; external waits must stay outside it. */
 export class SupervisorAdmission {
   constructor({ store = new RestartRequestStore(), db, readMode, listRuns, readRun,
-    resolveLaunchConfig, modeSwitch, startAttempt, diagnostic = () => {}, now = Date.now } = {}) {
-    Object.assign(this, { store, db, readMode, listRuns, readRun, resolveLaunchConfig, modeSwitch, startAttempt, diagnostic, now });
+    resolveLaunchConfig, preflightReclaim, modeSwitch, startAttempt, diagnostic = () => {}, now = Date.now } = {}) {
+    Object.assign(this, { store, db, readMode, listRuns, readRun, resolveLaunchConfig, preflightReclaim, modeSwitch, startAttempt, diagnostic, now });
     this.open = false; this.tail = Promise.resolve();
   }
   serialize(operation) {
@@ -125,6 +125,8 @@ export class SupervisorAdmission {
     const expected = await this.resolveLaunchConfig(request.sessionGroup);
     if (!validSnapshot(expected)) throw Object.assign(new Error('Expected launch configuration is invalid'), { code: 'CONFIG_UNREADABLE' });
     if (isDeepStrictEqual(run.launchConfig, expected)) return { ok: true, result: 'unchanged' };
+    if (typeof this.preflightReclaim !== 'function') throw Object.assign(new Error('Reclaim preflight is unavailable'), { code: 'DEPENDENCY_UNAVAILABLE' });
+    await this.preflightReclaim({ ...run, sessionGroup: request.sessionGroup }, { configuration: { mode: 'multi' } });
     await this.db.setDrainFence(request.sessionGroup, { reason: 'model_config', runId: request.expectedRunId });
     return { ok: true, result: 'accepted' };
   }
