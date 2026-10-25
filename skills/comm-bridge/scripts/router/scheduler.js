@@ -16,7 +16,7 @@ export function createRouter(dependencies, configuration = {}) {
   if (!dependencies.db) throw new TypeError('Router database is required');
   const options = { pendingMaxAgeSeconds: PENDING_MAX_AGE_SECONDS, recoverMaxAgeSeconds: RECOVER_MAX_AGE_SECONDS,
     maxRetries: MAX_RETRIES, cleanupIntervalMs: CONTROL_CLEANUP_INTERVAL_MS, retentionDays: CONTROL_RETENTION_DAYS,
-    mismatchIntervalMs: 60000, pollIntervalMs: 1000, ...configuration };
+    diagnosticsIntervalMs: 60000, mismatchIntervalMs: 60000, pollIntervalMs: 1000, ...configuration };
   for (const name of ['readyTimeoutMs','poolSize','pendingMaxAgeSeconds','recoverMaxAgeSeconds']) {
     if (!Number.isSafeInteger(options[name]) || options[name] <= 0) throw new TypeError(`${name} must be a positive integer`);
   }
@@ -30,7 +30,7 @@ export function createRouter(dependencies, configuration = {}) {
   const opportunities = new Set();
   const attemptedRound = new Map();
   let sceneTask = null, legacyTask = null, maintenanceTask = null, timer = null, initialization = null;
-  let lastCleanup = -Infinity, lastMismatch = -Infinity;
+  let lastCleanup = -Infinity, lastDiagnostics = -Infinity, lastMismatch = -Infinity;
   const diagnostic = (event, fields = {}) => {
     try { Promise.resolve(deps.diagnostic?.(event, fields)).catch(error => deps.log?.(`Router diagnostic: ${error.message}`)); }
     catch (error) { deps.log?.(`Router diagnostic: ${error.message}`); }
@@ -138,7 +138,10 @@ export function createRouter(dependencies, configuration = {}) {
     deps.db.expireTimedOutControls(seconds);
     if (now() - lastCleanup >= options.cleanupIntervalMs) {
       deps.db.cleanupControlQueue(seconds - options.retentionDays * 86400); lastCleanup = now();
-      if (!maintenanceTask && deps.maintainDiagnostics) maintenanceTask = track(Promise.resolve().then(deps.maintainDiagnostics)
+    }
+    if (!maintenanceTask && deps.maintainDiagnostics && now() - lastDiagnostics >= options.diagnosticsIntervalMs) {
+      lastDiagnostics = now();
+      maintenanceTask = track(Promise.resolve().then(deps.maintainDiagnostics)
         .catch(error => diagnostic('maintenance_error', { reason: error.message })).finally(() => { maintenanceTask = null; }));
     }
     if (now() - lastMismatch >= options.mismatchIntervalMs) {

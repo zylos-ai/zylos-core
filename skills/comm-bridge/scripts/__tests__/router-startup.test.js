@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { routerFixture, flush } from './helpers/router-fixture.js';
+import { routerFixture, deferred, flush } from './helpers/router-fixture.js';
 import { resolveSessionPoolSize } from '../../../../cli/lib/session-pool-config.js';
 
 test('T02 pool size: environment then file then fixed hardware, minimum one', () => {
@@ -108,4 +108,76 @@ test('T01 unowned timeout observation failure alerts without stopping or freeing
   f.deps.readLiveIdentity = read; await router.state.lanes.get('a').kick();
   assert.equal(f.calls.filter(x => x[0] === 'stop').length, 1);
   assert.equal(f.scene.has('a'), false);
+});
+
+// P04 T07 / DM F12/F14: rotation is independent of daily control cleanup.
+test('T07 diagnostics maintenance runs every minute independently and remains single-flight', async t => {
+  const f = routerFixture(t); f.put('origin');
+  const hold = deferred(); let starts = 0;
+  f.deps.maintainDiagnostics = async () => { starts++; if (starts === 2) await hold.promise; };
+  const router = f.create(); await router.initialize(); await f.rounds();
+  assert.equal(starts, 1);
+  f.advance(59999); await f.rounds(); assert.equal(starts, 1);
+  try {
+    f.advance(1); router.tick(); await flush(); assert.equal(starts, 2);
+    f.advance(60000); router.tick(); await flush(); assert.equal(starts, 2);
+    assert.equal(f.calls.filter(x => x[0] === 'cleanup').length, 1);
+  } finally { hold.resolve(); await router.idle(); }
+  await f.rounds(); assert.equal(starts, 3);
+  assert.equal(f.calls.filter(x => x[0] === 'cleanup').length, 1);
+});
+
+// P04 T01 / M1 8.3: missing identity does not wait for the READY deadline.
+test('T01 missing runId stops immediately with null binding and alerts; known run waits', async t => {
+  const f = routerFixture(t); f.put('origin');
+  const missing = f.put('missing', { runId: null, ready: false });
+  f.put('starting', { ready: false });
+  const router = f.create(); await router.initialize(); await f.rounds(2);
+  assert.deepEqual(f.calls.filter(x => x[0] === 'stop').map(x => x[1]), [{ tmuxName: missing.tmuxName, expectedRunId: null }]);
+  assert.ok(f.events.some(x => x.event === 'tmux_runid_missing' && x.session_group === 'missing'));
+  assert.ok(f.calls.some(x => x[0] === 'alert' && x[1] === 'tmux_runid_missing' && x[2].sessionGroup === 'missing'));
+  assert.equal(f.scene.has('missing'), false); assert.equal(f.scene.has('starting'), true);
+});
+
+// P04 T02 / M1 2.8: count the incompatible pending scope, without consuming it.
+test('T02 mode mismatch counts and alerts once per interval in both modes', async t => {
+  for (const mode of ['single', 'multi']) await t.test(mode, async t => {
+    const f = routerFixture(t, { mode }); f.put(mode === 'single' ? null : 'origin');
+    const controls = ['one','two','running'].map(text => f.db.insertControl(text, { sessionGroup: 'other', appendAckSuffix: false }));
+    // Simulate persisted machine controls left by a prior single-mode process.
+    if (mode === 'multi') f.sqlite.prepare('UPDATE control_queue SET session_group=NULL').run();
+    f.db.claimControl(controls[2].id);
+    const router = f.create(); await router.initialize(); await f.rounds(3);
+    const events = () => f.events.filter(x => x.event === 'mode_mismatch');
+    const alerts = () => f.calls.filter(x => x[0] === 'alert' && x[1] === 'mode_mismatch');
+    assert.deepEqual(events(), [{ event: 'mode_mismatch', count: 2, mode }]);
+    assert.equal(alerts().length, 1); assert.equal(alerts()[0][2].pending, 2); assert.equal(alerts()[0][2].running, 1);
+    assert.deepEqual(controls.map(row => f.db.getControlById(row.id).status), ['pending','pending','running']);
+    f.advance(60000); await f.rounds(); assert.equal(events().length, 2); assert.equal(alerts().length, 2);
+    for (const row of controls) f.db.expireControlById(row.id);
+    f.advance(60000); await f.rounds(); assert.equal(events().length, 2); assert.equal(alerts().length, 2);
+  });
+});
+
+// P04 T01: a READY identity without startup controls is adopted once and reported.
+test('T01 startup prompt missing is reported once per adopted identity, not with a prompt', async t => {
+  const f = routerFixture(t); f.put('origin'); f.put('a'); f.put('with-prompt');
+  const prompt = f.db.insertControl('startup', { sessionGroup: 'with-prompt', appendAckSuffix: false });
+  f.current.get('with-prompt').startupControlIds = [prompt.id];
+  const router = f.create(); await router.initialize(); await f.rounds(4);
+  const missing = () => f.events.filter(x => x.event === 'startup_prompt_missing');
+  assert.equal(missing().filter(x => x.session_group === 'a').length, 1);
+  assert.equal(missing().some(x => x.session_group === 'with-prompt'), false);
+  f.put('a', { sessionId: 'after-clear' }); await f.rounds(3);
+  assert.equal(missing().filter(x => x.session_group === 'a').length, 2);
+  assert.equal(missing().find(x => x.session_id === 'after-clear').session_group, 'a');
+});
+
+// IF-70: the two independent age limits are visible exactly once at startup.
+test('IF70 pending and recovery age limits print once despite reinitialize and ticks', async t => {
+  const f = routerFixture(t); f.put('origin');
+  f.options.pendingMaxAgeSeconds = 123; f.options.recoverMaxAgeSeconds = 456;
+  const router = f.create(); await router.initialize(); await router.initialize(); await f.rounds(4);
+  assert.deepEqual(f.calls.filter(x => x[0] === 'log').map(x => x[1]),
+    ['C4_PENDING_MAX_AGE_SECONDS=123', 'C4_RECOVER_MAX_AGE_SECONDS=456']);
 });
