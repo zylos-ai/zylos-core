@@ -1,209 +1,109 @@
-import fs from 'fs';
-import path from 'path';
+import { loadCoreModule } from './core-modules.js';
+import fs from 'node:fs';
+import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { messageForStatus } from '../../comm-bridge/scripts/status-notice-templates.js';
+import { runtimeRoot } from './runtime-generation.js';
+import { normalizeHealth, recoveryEligibility } from './runtime-health.js';
+const { assertSessionGroup } = await loadCoreModule('session-group-paths.js');
 
 export const PROBE_CACHE_TTL_MS = 30000;
 export const ROUTE_PROBE_TIMEOUT_MS = 25000;
-
-function nowMs() {
-  return Date.now();
-}
-
-function atomicWriteJson(filePath, value) {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  const tmp = `${filePath}.tmp.${process.pid}.${Date.now()}`;
-  fs.writeFileSync(tmp, `${JSON.stringify(value, null, 2)}\n`);
-  fs.renameSync(tmp, filePath);
-}
-
-export function normalizeHealth(health) {
-  if (health === 'ok' || health === 'rate_limited' || health === 'auth_failed') return health;
-  return 'unavailable';
-}
-
-export function messageForRoute({ health, reason }) {
-  return messageForStatus({ health, reason });
+export const messageForRoute = ({ health, reason }) => messageForStatus({ health, reason });
+const runtimeValid = runtime => typeof runtime === 'string' && /^[a-z][a-z0-9-]{0,31}$/.test(runtime);
+const object = value => value && typeof value === 'object' && !Array.isArray(value);
+export function validRouteRequest(request) {
+  if (!object(request) || ![1, 2].includes(request.version) || request.type !== 'route'
+      || typeof request.requestId !== 'string' || !request.requestId || typeof request.noReply !== 'boolean'
+      || !Number.isSafeInteger(request.receivedAt)) return false;
+  if (request.version === 1) return true;
+  if (!Object.hasOwn(request, 'channel') || !Object.hasOwn(request, 'endpoint')
+      || !Object.hasOwn(request, 'componentName') || !Object.hasOwn(request, 'sessionGroup')) return false;
+  if (request.channel !== null && typeof request.channel !== 'string') return false;
+  if (request.endpoint !== null && typeof request.endpoint !== 'string') return false;
+  if (request.componentName !== null && typeof request.componentName !== 'string') return false;
+  if (request.sessionGroup !== null) { try { assertSessionGroup(request.sessionGroup); } catch { return false; } }
+  return (request.coreSide === undefined || typeof request.coreSide === 'boolean') && (request.coreSide !== true || request.coreSource === 'scheduler');
 }
 
 export class MessageRouter {
-  constructor({ healthEngine, cacheFile, log = () => {}, now = nowMs } = {}) {
-    if (!healthEngine) {
-      throw new Error('MessageRouter requires healthEngine');
-    }
-    this.healthEngine = healthEngine;
-    this.cacheFile = cacheFile;
-    this.log = log;
-    this.now = now;
-    this.inFlightProbe = null;
+  constructor({ healthCoordinator, resolveTargetRuntime, getModeTransition = () => null,
+    checkAuth, requestProbe, cacheDirectory = path.join(runtimeRoot(), 'activity-monitor', 'message-router-probe-cache'),
+    log = () => {}, now = Date.now } = {}) {
+    if (!healthCoordinator || !resolveTargetRuntime) throw new Error('MessageRouter requires runtime health and target resolution');
+    Object.assign(this, { healthCoordinator, resolveTargetRuntime, getModeTransition, checkAuth, requestProbe, cacheDirectory, log, now });
   }
-
-  async route(request) {
-    if (!request || request.version !== 1 || request.type !== 'route') {
-      throw new Error('invalid route request');
-    }
-    this.healthEngine.evidence?.refresh();
-
-    const rawHealth = this.healthEngine.health ?? 'ok';
-    const health = normalizeHealth(rawHealth);
-    const reason = this._currentReason(rawHealth);
-
-    if (health === 'ok') {
-      this._clearCache();
-      return this._decision(request, { recovered: true, health: 'ok' });
-    }
-
-    let forceProbe = false;
-    if (!request.noReply && typeof this.healthEngine.notifyUserMessage === 'function') {
-      forceProbe = this.healthEngine.notifyUserMessage(Math.floor(this.now() / 1000));
-      if (forceProbe) this._clearCache();
-    }
-
-    if (!forceProbe) {
-      const cached = this._readValidCache(health, reason);
-      if (cached) {
-        return this._decision(request, {
-          recovered: false,
-          health,
-          reason,
-          userMessage: request.noReply ? undefined : messageForRoute({ health, reason }),
-          cacheHit: true,
-        });
-      }
-
-      if (this._isWithinUnavailableBackoff(rawHealth)) {
-        const userMessage = messageForRoute({ health, reason });
-        return this._decision(request, {
-          recovered: false,
-          health,
-          reason,
-          userMessage: request.noReply ? undefined : userMessage,
-        });
-      }
-    }
-
-    const probeResult = await this._joinOrStartProbe(rawHealth, reason);
-    if (normalizeHealth(this.healthEngine.health ?? 'ok') === 'ok') {
-      this._clearCache();
-      return this._decision(request, { recovered: true, health: 'ok', probeStarted: probeResult?.probeStarted });
-    }
-
-    const finalHealth = normalizeHealth(this.healthEngine.health ?? rawHealth);
-    const finalReason = this._currentReason(this.healthEngine.health ?? rawHealth);
-    const userMessage = messageForRoute({ health: finalHealth, reason: finalReason });
-    this._writeNegativeCache(finalHealth, finalReason, userMessage, probeResult?.probeStartedAt);
-
-    return this._decision(request, {
-      recovered: false,
-      health: finalHealth,
-      reason: finalReason,
-      userMessage: request.noReply ? undefined : userMessage,
-      probeStarted: probeResult?.probeStarted,
-    });
+  cachePath(runtime) { return path.join(this.cacheDirectory, `${runtime}.json`); }
+  clearLegacyCache(file = path.join(runtimeRoot(), 'activity-monitor', 'message-router-probe-cache.json')) {
+    try { fs.unlinkSync(file); } catch (error) { if (error.code !== 'ENOENT') this.log(`Cannot clear old probe cache: ${error.message}`); }
   }
-
-  _decision(request, decision) {
-    const evidence=this.healthEngine.evidence?.store.read();
-    const notice = evidence?.health === decision.health
-      ? (this.healthEngine.evidence.notice?.() ?? evidence?.notice) : null;
-    return {
-      version: 1,
-      requestId: request.requestId,
-      ...(evidence ? {healthEpisode:`${this.healthEngine.evidence.store.runtime}:${evidence.episode}`,healthRevision:evidence.revision} : {}),
-      ...decision,
-      ...(!decision.recovered && !request.noReply && notice ? {
-        userMessage: messageForStatus({ health:decision.health, reason:decision.reason, noticeCode:notice.noticeCode, resetAt:notice.resetAt }),
-      } : {}),
-    };
-  }
-
-  _currentReason(rawHealth) {
-    return this.healthEngine.healthReason || this.healthEngine.unavailableReason || rawHealth || 'unknown';
-  }
-
-  _isWithinUnavailableBackoff(rawHealth) {
-    if (rawHealth !== 'recovering' && rawHealth !== 'down' && rawHealth !== 'unavailable') return false;
-    const lastRecoveryAt = Number(this.healthEngine.lastRecoveryAt) || 0;
-    const backoffDelay = typeof this.healthEngine.getBackoffDelay === 'function'
-      ? this.healthEngine.getBackoffDelay()
-      : Number(this.healthEngine.backoffDelay) || 0;
-    if (lastRecoveryAt <= 0 || backoffDelay <= 0) return false;
-    const nowSec = Math.floor(this.now() / 1000);
-    return (nowSec - lastRecoveryAt) < backoffDelay;
-  }
-
-  async _joinOrStartProbe(rawHealth, reason) {
-    const fence=this.healthEngine.captureFence?.();
-    const key = `${rawHealth}:${reason || ''}:${JSON.stringify(fence || null)}`;
-    if (this.inFlightProbe?.key === key) {
-      return this._awaitWithBudget(this.inFlightProbe.promise);
+  async route(input) {
+    if (!validRouteRequest(input)) throw Object.assign(new Error('Invalid route request'), { code: 'invalid_request' });
+    const request = input.version === 1 ? { ...input, sessionGroup: null, coreSide: false } : input;
+    if (await this.getModeTransition()) return this.decision(request, 'unknown', { health: 'unavailable', reason: 'transition_open', decision: 'pending', transitionHold: true });
+    const resolution = await this.resolveTargetRuntime(request.sessionGroup);
+    const runtime = typeof resolution === 'string' ? resolution : resolution?.runtime;
+    if (!runtimeValid(runtime) || runtime === 'unknown') {
+      this.log('MessageRouter: target runtime is unknown');
+      return this.decision(request, 'unknown', { health: 'unavailable', reason: 'runtime_unknown', observation: 'runtime_unknown', decision: 'pending' });
     }
-
-    const startedAt = this.now();
-    const promise = this._runRecoveryProbe()
-      .finally(() => {
-        if (this.inFlightProbe?.key === key) this.inFlightProbe = null;
-      });
-    this.inFlightProbe = { key, startedAt, promise };
-    const result = await this._awaitWithBudget(promise);
-    return { ...result, probeStarted: true, probeStartedAt: startedAt };
+    let state = this.healthCoordinator.store(runtime).read();
+    if (!state) return this.decision(request, runtime, { health: 'ok', reason: 'ok', decision: 'pending', observation: 'health_record_missing' });
+    const rawHealth = state.health ?? 'ok';
+    let health = normalizeHealth(rawHealth);
+    let reason = this.reason(state);
+    if (health === 'ok') { this.clearCache(runtime); return this.decision(request, runtime, { health, reason, decision: 'pending' }); }
+    if (health === 'auth_failed') return this.authDecision(request, runtime, state);
+    let accelerated = false;
+    if (!request.noReply) accelerated = await this.healthCoordinator.notifyUserMessage(runtime);
+    if (accelerated) this.clearCache(runtime);
+    const cache = !accelerated && this.readNegativeCache(runtime);
+    const gate = recoveryEligibility(this.healthCoordinator.store(runtime).read(), { runtime, cache, nowMs: this.now() });
+    if (gate.eligible) await this.awaitBudget(Promise.resolve().then(() => this.requestProbe?.(runtime)));
+    state = this.healthCoordinator.store(runtime).read();
+    health = normalizeHealth(state.health ?? rawHealth); reason = this.reason(state);
+    if (health === 'ok') { this.clearCache(runtime); return this.decision(request, runtime, { health, reason, decision: 'pending' }); }
+    if (health === 'auth_failed') return this.authDecision(request, runtime, state);
+    if (gate.eligible) this.writeNegativeCache(runtime, health, reason);
+    return this.decision(request, runtime, { health, reason, ...(health === 'rate_limited' ? { decision: 'pending' } : { recovered: false }), ...(gate.code === 'probe_cache' ? { cacheHit: true } : {}) });
   }
-
-  async _awaitWithBudget(promise) {
-    let timeoutId;
-    const timeout = new Promise(resolve => {
-      timeoutId = setTimeout(() => resolve({ recovered: false, timedOut: true }), ROUTE_PROBE_TIMEOUT_MS);
-    });
+  async authDecision(request, runtime, state) {
+    const health = 'auth_failed'; const reason = this.reason(state);
+    if (request.coreSide || (request.noReply && !request.channel)) return this.decision(request, runtime, { health, reason, decision: 'pending' });
+    const action = this.checkAuth?.(runtime);
+    const result = await this.awaitBudget(Promise.resolve(action ?? { result: 'uncertain', reason: 'authentication check unavailable' }));
+    if (result?.result === 'success' || result?.status === 'success') return this.decision(request, runtime, { health, reason, decision: 'pending' });
+    const failed = result?.result === 'failure' || result?.status === 'failure';
+    const detail = String(result?.reason ?? (result?.timedOut ? 'authentication check timed out' : 'authentication check unconfirmed')).replace(/[\x00-\x1f\x7f-\x9f]/g, '').slice(0, 500);
+    return this.decision(request, runtime, { health, reason, decision: 'auth_rejected', auth: { result: failed ? 'failed' : 'unconfirmed', detail } });
+  }
+  reason(state) { return state.reason || normalizeHealth(state.health); }
+  decision(request, runtime, result) {
+    const recovered = result.decision === 'pending';
+    const answer = { version: request.version, type: 'route', requestId: request.requestId, runtime,
+      health: result.health, reason: result.reason || normalizeHealth(result.health), recovered, transitionHold: false, ...result };
+    if (!answer.recovered && !request.noReply) {
+      answer.userMessage = messageForStatus({ health: answer.health, reason: answer.reason });
+    }
+    return answer;
+  }
+  async awaitBudget(promise) {
+    let timer;
+    try { return await Promise.race([promise, new Promise(resolve => { timer = setTimeout(() => resolve({ timedOut: true }), ROUTE_PROBE_TIMEOUT_MS); })]); }
+    finally { clearTimeout(timer); }
+  }
+  readNegativeCache(runtime) {
+    try { return JSON.parse(fs.readFileSync(this.cachePath(runtime), 'utf8')); }
+    catch { return null; }
+  }
+  writeNegativeCache(runtime, health, reason) {
+    const file = this.cachePath(runtime); const tmp = `${file}.${randomUUID()}.tmp`;
     try {
-      return await Promise.race([promise, timeout]);
-    } finally {
-      clearTimeout(timeoutId);
-    }
+      const createdAt = this.now(); fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(tmp, JSON.stringify({ version: 2, runtime, health, reason, recovered: false,
+        userMessage: messageForRoute({ health, reason }), createdAt, expiresAt: createdAt + PROBE_CACHE_TTL_MS, probeStartedAt: createdAt }));
+      fs.renameSync(tmp, file);
+    } catch (error) { try { fs.unlinkSync(tmp); } catch {} this.log(`MessageRouter: cache write failed: ${error.message}`); }
   }
-
-  async _runRecoveryProbe() {
-    if (typeof this.healthEngine.runRecoveryProbe === 'function') {
-      return this.healthEngine.runRecoveryProbe({ timeoutMs: ROUTE_PROBE_TIMEOUT_MS });
-    }
-    return { recovered: false };
-  }
-
-  _readValidCache(health, reason) {
-    if (!this.cacheFile) return null;
-    try {
-      const cache = JSON.parse(fs.readFileSync(this.cacheFile, 'utf8'));
-      if (cache.version !== 1) return null;
-      if (cache.expiresAt <= this.now()) return null;
-      if (cache.recovered !== false) return null;
-      if (cache.health !== health || cache.reason !== reason) return null;
-      return cache;
-    } catch {
-      return null;
-    }
-  }
-
-  _writeNegativeCache(health, reason, userMessage, probeStartedAt = this.now()) {
-    if (!this.cacheFile) return;
-    try {
-      const createdAt = this.now();
-      atomicWriteJson(this.cacheFile, {
-        version: 1,
-        health,
-        reason,
-        recovered: false,
-        userMessage,
-        createdAt,
-        expiresAt: createdAt + PROBE_CACHE_TTL_MS,
-        probeStartedAt,
-      });
-    } catch (err) {
-      this.log(`MessageRouter: failed to write probe cache (${err.message})`);
-    }
-  }
-
-  _clearCache() {
-    if (!this.cacheFile) return;
-    try {
-      fs.rmSync(this.cacheFile, { force: true });
-    } catch { /* best-effort */ }
-  }
+  clearCache(runtime) { try { fs.unlinkSync(this.cachePath(runtime)); } catch (error) { if (error.code !== 'ENOENT') this.log(`MessageRouter: cache clear failed: ${error.message}`); } }
 }

@@ -1,0 +1,11 @@
+Running 1 Node test files
+✔ Entry quiet round including afterRound, 1 groups (880.027983ms)
+✔ Entry quiet round including afterRound, 4 groups (2869.959305ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 2
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 3880.858481

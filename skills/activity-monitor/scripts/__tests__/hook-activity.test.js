@@ -6,7 +6,7 @@ import { after, beforeEach, describe, it } from 'node:test';
 
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hook-activity-test-'));
 const monitorDir = path.join(tmpDir, 'activity-monitor');
-const eventsFile = path.join(monitorDir, 'tool-events.jsonl');
+const eventsFile = path.join(monitorDir, 'events.jsonl');
 
 after(() => {
   fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -34,7 +34,7 @@ function readEvents() {
 }
 
 describe('hook-activity', () => {
-  it('uses Claude tool_use_id as event_id when present', async () => {
+  it('uses Claude tool_use_id as tool_use_id when present', async () => {
     await runHook({
       hook_event_name: 'PreToolUse',
       session_id: 'payload-session',
@@ -47,11 +47,11 @@ describe('hook-activity', () => {
     assert.equal(event.event, 'pre_tool');
     assert.equal(event.session_id, 'payload-session');
     assert.equal(event.tool, 'WebFetch');
-    assert.equal(event.event_id, 'toolu_01ABC123');
-    assert.deepEqual(event.summary, { type: 'url-host', value: 'example.com' });
+    assert.equal(event.tool_use_id, 'toolu_01ABC123');
+    assert.deepEqual(event.tool_input, { url: 'https://example.com/path' });
   });
 
-  it('falls back to a generated event_id when tool_use_id is absent', async () => {
+  it('T08: preserves absent native tool_use_id without fabricating one', async () => {
     await runHook({
       hook_event_name: 'PreToolUse',
       session_id: 'payload-session',
@@ -60,7 +60,7 @@ describe('hook-activity', () => {
     }, 1000);
 
     const [event] = readEvents();
-    assert.match(event.event_id, /^evt_/);
+    assert.equal(Object.hasOwn(event, 'tool_use_id'), false);
   });
 
   it('appends PostToolUseFailure with the same event_id and summary', async () => {
@@ -84,8 +84,8 @@ describe('hook-activity', () => {
     assert.equal(events[0].event, 'pre_tool');
     assert.equal(events[1].event, 'post_tool_failure');
     assert.equal(events[1].session_id, 'session-1');
-    assert.equal(events[1].event_id, 'toolu_search_1');
-    assert.deepEqual(events[1].summary, { type: 'query-preview', value: 'issue 492' });
+    assert.equal(events[1].tool_use_id, 'toolu_search_1');
+    assert.deepEqual(events[1].tool_input, { query: 'issue 492' });
   });
 
   it('records prompt events without tool fields', async () => {
@@ -112,7 +112,7 @@ describe('hook-activity', () => {
     const [event] = readEvents();
     assert.equal(event.event, 'post_tool');
     assert.equal(event.tool, 'WebFetch');
-    assert.equal(event.event_id, 'toolu_post_1');
+    assert.equal(event.tool_use_id, 'toolu_post_1');
   });
 
   it('records Stop as stop event without tool fields', async () => {
@@ -129,7 +129,7 @@ describe('hook-activity', () => {
 
   it('records Notification as idle event', async () => {
     await runHook({
-      hook_event_name: 'Notification',
+      hook_event_name: 'Notification', notification_type: 'idle_prompt',
       session_id: 'session-5'
     }, 4000);
 
@@ -137,7 +137,7 @@ describe('hook-activity', () => {
     assert.equal(event.event, 'idle');
   });
 
-  it('ignores subagent hook events when agent_id is present', async () => {
+  it('T08: retains subagent hook facts with agent_id', async () => {
     process.env.ZYLOS_DIR = tmpDir;
     process.env.HOOK_ACTIVITY_DISABLE_MAIN = '1';
     const modulePath = new URL('../hook-activity.js', import.meta.url);
@@ -151,8 +151,8 @@ describe('hook-activity', () => {
       tool_input: { url: 'https://example.com/subagent' },
       tool_use_id: 'toolu_subagent_1'
     }, { nowMs: 4500, claudePid: 4242 });
-    assert.equal(result, null);
-    assert.equal(fs.existsSync(eventsFile), false);
+    assert.equal(result.agent_id, 'agent-123');
+    assert.equal(fs.existsSync(eventsFile), true);
   });
 
   it('still records root-agent events when only agent_type is present', async () => {
@@ -168,7 +168,7 @@ describe('hook-activity', () => {
     const [event] = readEvents();
     assert.equal(event.event, 'pre_tool');
     assert.equal(event.session_id, 'session-agent-mode');
-    assert.equal(event.event_id, 'toolu_root_agent_1');
+    assert.equal(event.tool_use_id, 'toolu_root_agent_1');
   });
 
   it('returns null for unknown hook event', async () => {
@@ -196,7 +196,7 @@ describe('hook-activity', () => {
     process.env.CLAUDE_SESSION_ID = 'env-session';
   });
 
-  it('assigns rule_id for tools matching a watchdog rule', async () => {
+  it('T08: leaves watchdog classification to the consumer', async () => {
     await runHook({
       hook_event_name: 'PreToolUse',
       session_id: 'session-6',
@@ -206,7 +206,7 @@ describe('hook-activity', () => {
     }, 7000);
 
     const [event] = readEvents();
-    assert.equal(event.rule_id, 'web-tools-timeout');
+    assert.equal(Object.hasOwn(event, 'rule_id'), false);
   });
 
   it('does not assign rule_id for non-matching tools', async () => {

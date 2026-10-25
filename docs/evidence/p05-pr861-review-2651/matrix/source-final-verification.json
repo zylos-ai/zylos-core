@@ -1,0 +1,9 @@
+{
+  "changed": [
+    "skills/activity-monitor/scripts/__tests__/supervisor-entry.test.js",
+    "skills/activity-monitor/scripts/__tests__/supervisor-manual-entry.integration.test.js",
+    "skills/activity-monitor/scripts/activity-monitor.js"
+  ],
+  "reason": "24ff6d corrects removed expectedSessionId assertion. 05e5fca explicitly invokes the guarded monitor entry from PM2 wrapper, with focused entry 8/8 evidence; no tmux adapter/runtime/stress source change. Initial failed suites rerun on final sources; other suites/stress retain their recorded source hashes.",
+  "finalHead": "05e5fca8b91a7d81af8d438a5849977333176b59"
+}
