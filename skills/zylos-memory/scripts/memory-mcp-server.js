@@ -28,7 +28,7 @@ export function createMemoryEditor(env = process.env, { fragment = applyFragment
           ((input.op === 'edit' || Object.hasOwn(input, 'expected')) && typeof input.expected !== 'string')) {
         throw memoryError('INVALID_INPUT', 'Expected an edit or create memory operation');
       }
-      return await guard({ token: input.token, env: binding }, scope => {
+      return await guard({ kind: 'auto', token: input.token, env: binding }, scope => {
         const { marker } = scope;
         const temporary = path.relative(path.join(scope.root, 'memory'),
           path.join(scope.memoryDir, `state.md.${input.token}.tmp`)).split(path.sep).join('/');
