@@ -1,0 +1,21 @@
+[
+  "cli/lib/__tests__/caddy-port-preservation.test.js",
+  "cli/lib/__tests__/config-readers.test.js",
+  "cli/lib/__tests__/config-writers.test.js",
+  "cli/lib/__tests__/instruction-migration.test.js",
+  "cli/lib/__tests__/local-source.e2e.test.js",
+  "cli/lib/__tests__/official-file-delivery.e2e.test.js",
+  "cli/lib/__tests__/upgrade-all-exit-code.e2e.test.js",
+  "cli/lib/__tests__/upgrade-daily-availability.test.js",
+  "cli/lib/__tests__/upgrade-recovery.test.js",
+  "cli/lib/__tests__/upstream-cli.e2e.test.js",
+  "cli/lib/__tests__/upstream-npm-env.test.js",
+  "cli/lib/__tests__/upstream-profile-proxy.test.js",
+  "skills/comm-bridge/scripts/__tests__/c4-control-cli.test.js",
+  "skills/comm-bridge/scripts/__tests__/c4-conversations-budget.test.js",
+  "skills/comm-bridge/scripts/__tests__/c4-dispatcher-pure.test.js",
+  "skills/comm-bridge/scripts/__tests__/c4-receive.test.js",
+  "skills/comm-bridge/scripts/__tests__/c4-send-cli.test.js",
+  "skills/comm-bridge/scripts/__tests__/c4-session-init-cli.test.js",
+  "skills/comm-bridge/scripts/__tests__/config-action-boundaries.test.js"
+]

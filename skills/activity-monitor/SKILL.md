@@ -101,8 +101,6 @@ Retries in unavailable/recovering use exponential backoff (1m, 5m, 25m, then 60m
 
 Recovery and post-restart probes require end-to-end acknowledgement. The dispatcher retains confirmed-active busy auto-ack for other heartbeat phases; idle heartbeat auto-ack has been removed.
 
-See [Recovery and maintenance behavior](references/health-engine.md) for timing and compatibility details.
-
 ### Unhealthy Message Routing
 
 When health is not `ok`, C4 intake still records incoming messages as delivered. The MessageRouter returns an immediate status response for the current message when replies are enabled; `--no-reply` messages are accepted silently. If the router IPC is unavailable, `c4-receive.js` falls back to the status file and follows the same delivered/current-message behavior.

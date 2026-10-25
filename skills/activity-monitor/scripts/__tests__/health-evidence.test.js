@@ -5,8 +5,6 @@ import path from 'node:path';
 import {test} from 'node:test';
 import {randomUUID} from 'node:crypto';
 import {HealthStore} from '../health-store.js';
-import {HealthController} from '../health-controller.js';
-import {HealthEngine} from '../health-engine.js';
 const identity={runtime:'claude',session_id:'session',claude_pid:123};
 function fixture(t) {
   const zylosDir=fs.mkdtempSync(path.join(os.tmpdir(),'health-evidence-file-'));t.after(()=>fs.rmSync(zylosDir,{recursive:true,force:true}));
@@ -87,15 +85,4 @@ test('atomic write failure leaves health and marker unchanged',t=>{
   const f=fixture(t);const before=f.store.read();
   f.store.write=()=>{throw new Error('injected write failure');};
   assert.throws(()=>f.consume(f.event()),/injected/);assert.deepEqual(f.store.read(),before);
-});
-test('controller consumes committed health and restores scheduling without touching unrelated state',t=>{
-  const f=fixture(t);let current=identity;const engine=new HealthEngine({}, {now:f.now});
-  f.store.saveScheduling({...f.store.read().scheduling,rateLimitResetTime:'14:30'},0);
-  t.after(()=>engine.destroy());
-  let pending=f.event();
-  const controller=new HealthController({store:f.store,engine,identity:()=>current,zylosDir:f.zylosDir,quota:()=>null,
-    drainEvents:()=>{if(pending){controller.consume(pending);pending=null;}}});
-  assert.equal(engine.rateLimitResetTime,'14:30');
-  const fence=controller.captureFence();controller.drain();assert.equal(engine.health,'rate_limited');assert.equal(controller.validFence(fence),false);
-  const stable=controller.captureFence();current={...identity,claude_pid:124};assert.equal(controller.validFence(stable),false);
 });

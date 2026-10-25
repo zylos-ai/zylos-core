@@ -50,7 +50,7 @@ function fixture(t) {
   const db = new Database(':memory:'); guardDatabase(db,schema);
   t.after(() => { db.close(); fs.rmSync(root,{recursive:true,force:true}); });
   const store = new HealthStore({zylosDir:root,now:()=>100000,
-    freezeNotice: options => freezeFirstFailureNotice(db,options)});
+    freezeNotice: options => freezeFirstFailureNotice(db,{...options,sessionGroup:null})});
   return {root,db,store};
 }
 function inbound(db,id,{status='delivered',channel='fake',endpoint='group|thread:t|msg:'+id}={}) {
@@ -149,4 +149,14 @@ test('sender exception retains cooldown and records uncertain result', async t =
   assert.equal(f.store.read().pending_notice,undefined);
   assert.equal(f.store.read().last_notice_outcome.status,'uncertain');
   assert.equal(f.db.prepare('SELECT count(*) n FROM status_notice_cooldowns').get().n,1);
+});
+
+test('T02 grouped failure freezes its own message and publishes notice updates through runtime serialization',async t=>{
+  const f=fixture(t);f.store.freezeNotice=input=>freezeFirstFailureNotice(f.db,input);
+  inbound(f.db,1);inbound(f.db,2);f.db.prepare('UPDATE conversations SET session_group=? WHERE id=?').run('telegram:a',1);f.db.prepare('UPDATE conversations SET session_group=? WHERE id=?').run('telegram:b',2);
+  const result=f.store.consume(event,{identity,sessionGroup:'telegram:a'});assert.equal(result.status,'processed');
+  const intent=f.store.read('telegram:a').pending_notice;assert.equal(intent.conversation_id,1);assert.equal(intent.session_group,'telegram:a');assert.equal(f.store.read('telegram:b').pending_notice,undefined);
+  let mutations=0;const sent=[];const opts=options(f,{sent});const reserve=opts.reserve;
+  await processFirstFailureNotices({...opts,identity:async()=>identity,sessionGroup:'telegram:a',mutate:async fn=>{mutations++;return fn();},reserve:(channel,endpoint,route)=>{assert.equal(route.sessionGroup,'telegram:a');assert.equal(route.runtime,'claude');return reserve(channel,endpoint,route);}});
+  assert.equal(sent.length,1);assert.equal(mutations,2);assert.equal(f.store.read('telegram:a').last_notice_outcome.status,'sent');
 });

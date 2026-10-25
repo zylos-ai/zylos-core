@@ -1,0 +1,47 @@
+Running 7 Node test files
+✔ IF-14 composed socket rejects stale-run delivery without resetting observer counters (13.378854ms)
+✔ #16a composed maintenance drives once per runtime before probe coalescing (62.975306ms)
+✔ IF-27 composed mixed-runtime demand waits for its own runtime and only recovers its F10 (59.140666ms)
+✔ #16a concurrent socket requests serialize one F10 registration and retain pending demand (34.812208ms)
+✔ T01 assembly: restore health before admission; no-launch empty round executes (6.4859ms)
+✔ DM-54 assembly: damaged F9 retained while existing lifecycle loop stays scheduled (1.207663ms)
+✔ IF-31 assembly: unwritable diagnostic output cannot block completed authentication recovery (33.573759ms)
+✔ T01/T02 assembly: one failed probe poll cannot starve another runtime or auth recovery (33.183256ms)
+✔ T01/IB-41 assembly: config reclaim resolves mode at admission, after F1 cutover (0.642918ms)
+✔ T02/T08 assembly: stopped, unknown, or no-longer-ready processes cannot refresh F4 (2.003821ms)
+✔ T02/T08 assembly: hooks and status share the round sample; replacement identity blocks publication (0.800273ms)
+✔ T01 shutdown: accepted lifecycle mutation finishes before Supervisor stop resolves (4.021562ms)
+✔ T01 shutdown: detached route auth and accepted health writes drain before return (1.045126ms)
+✔ IF-28 composed multi auth captures only affected runtime, retains F10 until old target and D8 are gone, rechecks after restart (38.240944ms)
+✔ IF-28 composed single auth preserves blocking through in-flight work and restart; deadline-less control does not prevent cleanup (32.364219ms)
+✔ DM-63 composed auth recovery after F10 reopen retains unexpired rate-limit facts (31.583351ms)
+✔ DM-63 composed auth recovery after F10 reopen retains expired rate-limit facts (34.498197ms)
+✔ DM-63 composed auth recovery after F10 reopen retains zero rate-limit facts (33.761399ms)
+✔ DM-63 composed auth recovery after F10 reopen retains no-limit rate-limit facts (21.95224ms)
+✔ IF-28 / DM-63 composed early recovery boundary (12.125748ms)
+✔ IF-28 / DM-63 composed deadline recovery boundary (18.584977ms)
+✔ IF-28 / DM-63 composed limit recovery boundary (18.298382ms)
+✔ DM-47 composed owners keep current and legacy caches inside their own root (1.915785ms)
+✔ auth preflight runs before fence (12.245907ms)
+✔ IB-33 pending auth demand retries no more than once per minute per runtime, including adapter errors (49.716015ms)
+✔ IB-33 incoming routing joins pending auth flight; distinct runtimes stay independent; later incoming may retry immediately (35.448564ms)
+✔ T01 actual entry restores before Sock admission and shuts down with a partial-line peer (97.696088ms)
+✔ T01 duplicate entry preserves the original listener; non-socket paths remain intact (157.911236ms)
+✔ T01 bad startup F1 keeps Sock closed to mutations; restore failure cleans up listener (153.719147ms)
+✔ T01 copied installed skills resolve the separate Core package and serve actual Sock requests (122.241673ms)
+✔ T02 entry freezes first-failure notice synchronously with correct single/multi SQL scope (181.68395ms)
+✔ T01 legacy F1 opens actual entry as single and reports unavailable automatic migration separately (167.899172ms)
+✔ T01/T06: exited runtime is stopped and confirmed before crash diagnostic; no restart (1.586092ms)
+✔ T06: same-run session change and fresh handoff are rotation diagnostics (0.330813ms)
+✔ T01: D8/D9 retain ownership of stopped runtimes (0.298753ms)
+✔ T01: unknown occupancy and replacement runs never authorize stopping the replacement (0.254229ms)
+✔ T01: successful adapter stop is final; no caller post-stop observation (0.38815ms)
+✔ IF-29 composed unknown server preserves occupancy, F10 and F4 without exit or recovery actions (37.366086ms)
+ℹ tests 38
+ℹ suites 0
+ℹ pass 38
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 936.660791
