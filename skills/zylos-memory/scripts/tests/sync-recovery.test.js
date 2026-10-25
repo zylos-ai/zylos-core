@@ -7,7 +7,7 @@ import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { fileURLToPath } from 'node:url';
 import { fixture as storeFixture } from '../../../comm-bridge/scripts/__tests__/c4-v2-test-helpers.js';
-import { memoryScope, markerPath } from '../sync-lock.js';
+import { MARKER_TTL_MS, memoryScope, markerPath } from '../sync-lock.js';
 import { renderStateSkeleton } from '../state-format.js';
 import { cleanup, list, commit } from '../sync-files.js';
 const token = 'a'.repeat(32), segment = '20261019T053002123Z';
@@ -18,7 +18,8 @@ async function fixture(t) {
   const env = { ...process.env, ZYLOS_DIR: root, ZYLOS_RUN_ID: 'crash-test', ZYLOS_SESSION_GROUP: 'origin' };
   const scope = await memoryScope(env);
   fs.mkdirSync(scope.runDir, { recursive: true }); fs.mkdirSync(scope.memoryDir, { recursive: true });
-  fs.writeFileSync(markerPath(scope.runDir, 'group'), JSON.stringify({ kind: 'group', token, runId: env.ZYLOS_RUN_ID, startedAt: Date.now(), expiresAt: Date.now() + 1800000 }));
+  const startedAt = Date.now();
+  fs.writeFileSync(markerPath(scope.runDir, 'group'), JSON.stringify({ kind: 'group', token, runId: env.ZYLOS_RUN_ID, startedAt, expiresAt: startedAt + MARKER_TTL_MS }));
   const original = renderStateSkeleton({ scope: 'origin', syncedAt: '2026-10-19T00:00:00Z' });
   const state = path.join(scope.memoryDir, 'state.md'), temporary = `${state}.${token}.tmp`, piece = path.join(scope.memoryDir, `inbox.${segment}.md`);
   fs.writeFileSync(state, original); fs.writeFileSync(piece, 'commitment: keep this');

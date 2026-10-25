@@ -7,14 +7,15 @@ import { fixture as storeFixture } from '../../../comm-bridge/scripts/__tests__/
 import { checkpoint, rotate, commit } from '../sync-files.js';
 import { renderStateSkeleton } from '../state-format.js';
 import { advance } from '../origin-cursor.js';
-import { memoryScope, markerPath } from '../sync-lock.js';
+import { MARKER_TTL_MS, memoryScope, markerPath } from '../sync-lock.js';
 async function fixture(t, group = 'origin') {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'p07-progress-'));
   const env = { ...process.env, ZYLOS_DIR: root, ZYLOS_RUN_ID: 'progress-test' };
   delete env.ZYLOS_SESSION_GROUP; if (group !== null) env.ZYLOS_SESSION_GROUP = group;
   const scope = await memoryScope(env), token = 'a'.repeat(32);
   fs.mkdirSync(scope.runDir, { recursive: true });
-  for (const kind of group === 'origin' ? ['origin', 'group'] : group === null ? ['global'] : ['group']) fs.writeFileSync(markerPath(scope.runDir, kind), JSON.stringify({ runId: env.ZYLOS_RUN_ID, kind, token, startedAt: Date.now(), expiresAt: Date.now() + 1800000 }));
+  const startedAt = Date.now();
+  for (const kind of group === 'origin' ? ['origin', 'group'] : group === null ? ['global'] : ['group']) fs.writeFileSync(markerPath(scope.runDir, kind), JSON.stringify({ runId: env.ZYLOS_RUN_ID, kind, token, startedAt, expiresAt: startedAt + MARKER_TTL_MS }));
   const { db, store } = storeFixture(t, {}, path.join(root, 'fixture.db'));
   t.after(() => { if (db.open) db.close(); fs.rmSync(root, { recursive: true, force: true }); });
   const seed = (id, sessionGroup = 'origin', status = 'delivered') => db.prepare("INSERT INTO conversations(id,direction,channel,content,status,session_group) VALUES(?,'in','system','test',?,?)").run(id, status, sessionGroup);
