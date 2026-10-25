@@ -51,7 +51,7 @@ const cyan   = (s) => `\x1b[36m${s}\x1b[0m`;
  *
  * @param {string[]} args - CLI args after "runtime"
  */
-export async function runtimeCommand(args) {
+export async function runtimeCommand(args, { execute = executeRuntimeSwitch } = {}) {
   const sub = args[0];
 
   if (!sub || sub === 'status') {
@@ -64,7 +64,7 @@ export async function runtimeCommand(args) {
 
   // zylos runtime <name> [flags]
   if (SUPPORTED_RUNTIMES.includes(sub)) {
-    const result = await executeRuntimeSwitch(sub, args.slice(1));
+    const result = await execute(sub, args.slice(1));
     if (args.includes('--json')) console.log(JSON.stringify(result));
     else if (!result.ok) console.error(`Error [${result.error.code}]: ${result.error.message}`);
     else {
@@ -241,7 +241,7 @@ export async function checkRuntimeAuthGate(target, adapter, parsed, {
   }
 
   if (auth.status === 'uncertain') {
-    error(red(`\n${bold(target)} authentication check was inconclusive.`));
+    error(`Error [AUTH_NOT_CONFIRMED]: ${target} authentication check was inconclusive.`);
     error(yellow('\nRetry after the service/API is reachable, or use --no-validate to skip the probe if you accept the risk.'));
     error(dim(`Reason: ${auth.reason || 'auth_check_uncertain'}`));
     error(yellow('\nSwitch aborted — auth could not be verified.'));
@@ -249,7 +249,7 @@ export async function checkRuntimeAuthGate(target, adapter, parsed, {
     return { skipped: false, status: auth.status };
   }
 
-  error(red(`\n${bold(target)} is not authenticated.`));
+  error(`Error [AUTH_NOT_CONFIRMED]: ${target} is not authenticated.`);
   error(yellow('\nAuthenticate first, then retry. Options:\n'));
   if (target === 'codex') {
     error(`  ${cyan('zylos runtime codex --save-apikey <key>')}     ${dim('OpenAI API key')}`);
@@ -273,7 +273,7 @@ export async function runtimeHooksReady(target) {
   const pendingMigration = !isSplitInstructionsActive({ zylosDir: ZYLOS_DIR });
   if (target === 'codex') return { ready: isCodexTrustValid({ zylosDir: ZYLOS_DIR, projectDir: ZYLOS_DIR, codexVersion: getCodexVersion() }).valid, pendingMigration };
   try {
-    const settings = JSON.parse(fs.readFileSync(path.join(process.env.HOME, '.claude', 'settings.json'), 'utf8'));
+    const settings = JSON.parse(fs.readFileSync(path.join(ZYLOS_DIR, '.claude', 'settings.json'), 'utf8'));
     const copy = structuredClone(settings);
     const changes = syncHooks(copy, null, { zylosDir: ZYLOS_DIR, dryRun: true, log: () => {},
       desiredHooks: desiredClaudeHooks({ stopFailureSupported: detectStopFailureSupport() }) });

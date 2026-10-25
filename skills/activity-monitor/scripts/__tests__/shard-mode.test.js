@@ -87,7 +87,7 @@ function fakeResolver(chain) {
 }
 
 describe('shard-registry chain', () => {
-  it('builds the 6 core shards in the agreed order', () => {
+  it('builds the four P06 core shards in the agreed order', () => {
     const { chain } = buildChain({ zylosDir: makeTmpdir() });
     assert.deepEqual(
       chain.map(s => [s.name, s.chainIndex]),
@@ -95,9 +95,7 @@ describe('shard-registry chain', () => {
         ['identity', 0],
         ['custom', 1],
         ['references', 2],
-        ['state', 3],
-        ['c4-checkpoint', 4],
-        ['c4-conversations', 5],
+        ['c4-conversations', 3],
       ]
     );
     assert.ok(chain.every(s => s.budget.maxChars === DEFAULT_SHARD_BUDGET.maxChars));
@@ -109,7 +107,7 @@ describe('shard-registry chain', () => {
     assert.deepEqual(warnings, []);
     assert.equal(chain.length, CORE_SHARDS.length + 1);
     assert.equal(chain.at(-1).name, 'role-inject');
-    assert.equal(chain.at(-1).chainIndex, 6);
+    assert.equal(chain.at(-1).chainIndex, 4);
   });
 
   it('rejects invalid declarations without breaking the chain', () => {
@@ -362,7 +360,7 @@ describe('runSessionStartShard (content shards)', () => {
       registerExitFlagImpl: fn => fn(),
     });
 
-    assert.equal(out.read(), '=== ZYLOS STARTUP CONTEXT [7/7] role-inject ===\nROLE CONTEXT\n');
+    assert.equal(out.read(), '=== ZYLOS STARTUP CONTEXT [5/5] role-inject ===\nROLE CONTEXT\n');
   });
 
   it('runs the custom shard end-to-end: user markdown injected at chain position 2', async () => {
@@ -392,7 +390,7 @@ describe('runSessionStartShard (content shards)', () => {
       else process.env.ZYLOS_DIR = savedZylosDir;
     }
 
-    assert.equal(out.read(), '=== ZYLOS STARTUP CONTEXT [2/6] custom ===\nALWAYS REPLY IN PIRATE\n');
+    assert.equal(out.read(), '=== ZYLOS STARTUP CONTEXT [2/4] custom ===\nALWAYS REPLY IN PIRATE\n');
   });
 
   it('custom shard with no content still emits its numbered header (chain numbering intact)', async () => {
@@ -416,7 +414,7 @@ describe('runSessionStartShard (content shards)', () => {
       else process.env.ZYLOS_DIR = savedZylosDir;
     }
 
-    assert.equal(out.read(), '=== ZYLOS STARTUP CONTEXT [2/6] custom ===\n');
+    assert.equal(out.read(), '=== ZYLOS STARTUP CONTEXT [2/4] custom ===\n');
   });
 });
 

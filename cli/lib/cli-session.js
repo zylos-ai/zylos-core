@@ -10,5 +10,5 @@ export async function resolveCliSession({ env = process.env, mode = readSessionM
   if (sessionGroup !== null) assertSessionGroup(sessionGroup);
   const live = await identity(sessionGroup);
   const runtime = live.present ? live.runtime : await resolveRuntime(sessionGroup);
-  return { sessionGroup, live, adapter: adapter(runtime), runtime };
+  return { sessionGroup, live, adapter: runtime === 'unknown' ? null : adapter(runtime), runtime };
 }

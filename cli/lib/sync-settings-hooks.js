@@ -19,11 +19,13 @@
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import { randomBytes } from 'node:crypto';
 import { execFileSync } from 'child_process';
 import { fileURLToPath } from 'url';
 import { hookScriptKey, hookScriptBaseKey, getCommandHooks } from './hook-utils.js';
-import { getZylosConfig, readZylosConfigStrict, readZylosConfigOrThrow, updateZylosConfigLocked } from './config.js';
+import { getZylosConfig, readZylosConfigOrThrow, updateZylosConfigLocked } from './config.js';
 import { renderCodexProjectConfig, renderCodexGlobalConfig, writeCodexConfig, resolveCodexBypassPermissions } from './runtime-setup.js';
+import { installCoreCodexHook } from './codex-hooks.js';
 import {
   SIDE_EFFECT_NAMES,
   buildChain,
@@ -61,15 +63,15 @@ export function isCoreManaged(hook, { zylosDir = ZYLOS_DIR } = {}) {
     || key === path.resolve(zylosDir, '.zylos', 'instructions', 'assembler.mjs').replaceAll('\\', '/');
 }
 
-function zylosClaudeScript(relativePath) {
-  const scriptPath = path.resolve(ZYLOS_DIR, '.claude', relativePath);
+function zylosClaudeScript(relativePath, zylosDir = ZYLOS_DIR) {
+  const scriptPath = path.resolve(zylosDir, '.claude', relativePath);
   return `node ${scriptPath}`;
 }
 
-function commandHook(relativePath, options = {}) {
+function commandHook(relativePath, options = {}, zylosDir = ZYLOS_DIR) {
   return {
     type: 'command',
-    command: zylosClaudeScript(relativePath),
+    command: zylosClaudeScript(relativePath, zylosDir),
     ...options,
   };
 }
@@ -78,7 +80,7 @@ function commandHook(relativePath, options = {}) {
  * One SessionStart hook command per injection shard (plus the two
  * side-effect steps), all running the orchestrator script with distinct
  * `--shard` args. Chain membership and order come from the shard registry:
- * 7 core shards followed by any component shards declared under
+ * Four core shards followed by any component shards declared under
  * ~/zylos/.zylos/shards.d/.
  */
 export function desiredSessionStartHooks({
@@ -91,7 +93,7 @@ export function desiredSessionStartHooks({
     SIDE_EFFECT_NAMES.foreground,
     SIDE_EFFECT_NAMES.startPrompt,
   ];
-  const orchestrator = zylosClaudeScript('skills/activity-monitor/scripts/session-start-orchestrator.js');
+  const orchestrator = zylosClaudeScript('skills/activity-monitor/scripts/session-start-orchestrator.js', zylosDir);
   const instructionsDir = path.resolve(zylosDir, '.zylos', 'instructions');
   const assembler = path.join(instructionsDir, 'assembler.mjs');
   const assemblerHook = canonicalAssemblerEntry({ zylosDir });
@@ -186,18 +188,18 @@ export function desiredClaudeHooks({
   const sessionStartHooks = desiredSessionStartHooks({ zylosDir, existsSync });
   const activityHook = commandHook(
     'skills/activity-monitor/scripts/hook-activity.js',
-    { async: true, timeout: 5 }
+    { async: true, timeout: 5 }, zylosDir
   );
-  const healthHook = commandHook('skills/activity-monitor/scripts/hook-health.js', { async: false, timeout: 5 });
+  const healthHook = commandHook('skills/activity-monitor/scripts/hook-health.js', { async: false, timeout: 5 }, zylosDir);
 
   return {
     SessionStart: ['startup', 'clear', 'compact'].map(matcher => ({
       matcher,
-      hooks: [...(stopFailureSupported ? [{ ...healthHook }] : []), ...sessionStartHooks.map(hook => ({ ...hook }))],
+      hooks: [{ ...healthHook }, ...sessionStartHooks.map(hook => ({ ...hook }))],
     })),
     UserPromptSubmit: [
       {
-        hooks: [...(stopFailureSupported ? [{ ...healthHook }] : []), { ...activityHook }],
+        hooks: [{ ...healthHook }, { ...activityHook }],
       },
     ],
     PreToolUse: [
@@ -211,7 +213,7 @@ export function desiredClaudeHooks({
         hooks: [
           commandHook(
             'skills/activity-monitor/scripts/hook-auth-prompt.js',
-            { async: true, timeout: 5000 }
+            { async: true, timeout: 5000 }, zylosDir
           ),
         ],
       },
@@ -230,7 +232,7 @@ export function desiredClaudeHooks({
     ],
     Stop: [
       {
-        hooks: [...(stopFailureSupported ? [{ ...healthHook }] : []), { ...activityHook }],
+        hooks: [{ ...healthHook }, { ...activityHook }],
       },
     ],
     ...(stopFailureSupported ? { StopFailure: [{ hooks: [{ ...healthHook }] }] } : {}),
@@ -391,6 +393,7 @@ export function persistInstalledSettingsAndSyncCoupledThreshold({
 
 export function shouldSyncCodexConfig({
   cfg,
+  prepareBothRuntimes = false,
   homeDir = os.homedir(),
   projectDir = ZYLOS_DIR,
   existsSync = fs.existsSync,
@@ -406,12 +409,13 @@ export function shouldSyncCodexConfig({
     projectConfigPath,
     // Keep legacy alias for any external callers
     configPath: globalConfigPath,
-    shouldSync: cfg.runtime === 'codex' || hasCodexState,
+    shouldSync: prepareBothRuntimes || cfg.runtime === 'codex' || hasCodexState,
   };
 }
 
 export function syncCodexConfig({
   dryRun = false,
+  prepareBothRuntimes = false,
   cfg,
   projectDir = ZYLOS_DIR,
   homeDir = os.homedir(),
@@ -421,7 +425,7 @@ export function syncCodexConfig({
   log = console.log,
 } = {}) {
   if (cfg === undefined) cfg = readZylosConfigOrThrow();
-  const state = shouldSyncCodexConfig({ cfg, homeDir, projectDir, existsSync });
+  const state = shouldSyncCodexConfig({ cfg, prepareBothRuntimes, homeDir, projectDir, existsSync });
   if (!state.shouldSync) {
     return { attempted: false, changed: false, fatal: false };
   }
@@ -439,7 +443,7 @@ export function syncCodexConfig({
   } catch {
     const error = 'Failed to refresh Codex project config: check TOML syntax and deployment environment.';
     log(`  Warning: ${error}`);
-    return { attempted: true, changed: false, fatal: cfg.runtime === 'codex', error };
+    return { attempted: true, changed: false, fatal: prepareBothRuntimes || cfg.runtime === 'codex', error };
   }
   const desiredGlobal = renderCodexGlobalConfig(projectDir, existingGlobal);
   if (existingProject === desiredProject && existingGlobal === desiredGlobal) {
@@ -453,7 +457,7 @@ export function syncCodexConfig({
   }
 
   if (!writeConfig(projectDir)) {
-    if (cfg.runtime !== 'codex') {
+    if (!prepareBothRuntimes && cfg.runtime !== 'codex') {
       log('  Warning: failed to refresh codex config outside codex runtime.');
       return { attempted: true, changed: false, fatal: false, warning: true };
     }
@@ -627,30 +631,136 @@ export function syncHooks(installedSettings, _templateSettings, {
   return { added, updated, removed };
 }
 
-/**
- * Enqueue a /exit command so the Claude runtime restarts and loads the new
- * settings.json hooks.  Only acts when the active runtime is Claude and the
- * C4 control script exists.  Failures are non-fatal — the worst case is the
- * user manually restarts.
- */
-function enqueueRestartIfNeeded() {
+export function syncRuntimeHooks({
+  zylosDir = ZYLOS_DIR,
+  stopFailureSupported = detectStopFailureSupport(),
+  log = console.log,
+} = {}) {
+  const settingsPath = path.join(zylosDir, '.claude', 'settings.json');
+  let installedSettings = {};
   try {
-    const strict = readZylosConfigStrict();
-    if (strict.state === 'error') throw strict.error;
-    const cfg = strict.state === 'ok' ? strict.config : {};
-    if ((cfg.runtime ?? 'claude') !== 'claude') return;
-
-    const c4ControlPath = path.join(ZYLOS_DIR, '.claude', 'skills', 'comm-bridge', 'scripts', 'c4-control.js');
-    if (!fs.existsSync(c4ControlPath)) return;
-
-    execFileSync('node', [c4ControlPath, 'enqueue', '--content', '/exit', '--priority', '1', '--block-queue-until-idle', '--no-ack-suffix'], { stdio: 'pipe', timeout: 10000 });
-    console.log('Settings hooks: restart enqueued (Claude will reload new configuration).');
+    installedSettings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+    if (!installedSettings || typeof installedSettings !== 'object' || Array.isArray(installedSettings)) {
+      throw new Error('Expected a settings object');
+    }
+    if (installedSettings.hooks !== undefined &&
+        (!installedSettings.hooks || typeof installedSettings.hooks !== 'object' || Array.isArray(installedSettings.hooks))) {
+      throw new Error('Expected a hooks object');
+    }
   } catch (error) {
-    console.error(`Settings hooks: restart not enqueued: ${error.message}`);
+    if (error.code !== 'ENOENT') {
+      throw Object.assign(new Error('Cannot read Claude settings for hook synchronization', { cause: error }), { code: 'SETTINGS_UNREADABLE' });
+    }
+  }
+  const changes = syncHooks(installedSettings, {}, {
+    desiredHooks: desiredClaudeHooks({ zylosDir, stopFailureSupported }),
+    claimedKeys: claimedHookBaseKeys({ zylosDir }),
+    zylosDir,
+    log,
+  });
+  if (changes.added || changes.updated || changes.removed) {
+    persistInstalledSettingsAndSyncCoupledThreshold({
+      installedSettings, settingsPath, syncThreshold: () => ({ changed: false }),
+    });
+  }
+  const codex = installCoreCodexHook({ zylosDir });
+  return { claude: changes, codex, stopFailureSupported };
+}
+
+/** Generation is separate from restart submission so upgrade can call it after its deadline gate. */
+export async function enqueueRestartIfNeeded({
+  readConfig = readZylosConfigOrThrow,
+  readTransition = async () => (await import('../../skills/comm-bridge/scripts/c4-db.js')).getModeTransition(),
+  exec = execFileSync,
+  exists = fs.existsSync,
+  zylosDir = ZYLOS_DIR,
+  log = console.log,
+  errorLog = console.error,
+  loadSockClient = () => import('./am-sock-client.js'),
+  now = Date.now,
+  requestId = () => `upgrade-${now()}-${randomBytes(6).toString('hex')}`,
+  deadlineAt,
+} = {}) {
+  const deadline = deadlineAt ?? now() + 10000;
+  try {
+    const cfg = readConfig();
+    const mode = cfg.session_mode ?? 'single';
+    if (!['single', 'multi'].includes(mode)) throw Object.assign(new Error('Invalid session_mode'), { code: 'CONFIG_UNREADABLE' });
+    const transition = await readTransition();
+    if (mode === 'multi' || transition) {
+      let client;
+      try {
+        client = await loadSockClient();
+        if (['submit', 'validateReply', 'lookupRestartRequest'].some(name => typeof client[name] !== 'function')) {
+          throw new Error('Required P05 client exports are unavailable');
+        }
+      } catch (cause) {
+        throw Object.assign(new Error('P05 restart_all submission client is unavailable', { cause }), { code: 'DEPENDENCY_MISSING' });
+      }
+      if (!Number.isSafeInteger(deadline)) throw Object.assign(new Error('Invalid restart deadline'), { code: 'INVALID_INPUT' });
+      if (now() >= deadline) {
+        errorLog('Settings hooks: restart not submitted: deadline_exceeded');
+        return { submitted: false, code: 'deadline_exceeded', sent: false, category: 'T', persisted: [] };
+      }
+      const request = { version: 1, type: 'restart_all', requestId: requestId(), reason: 'upgrade' };
+      let outcome;
+      try {
+        outcome = await client.submit(request, { deadlineAt: deadline, replyMaxMs: 10000,
+          socketPath: path.join(zylosDir, 'activity-monitor', 'am.sock') });
+      } catch {
+        // An unexpected client error cannot prove that nothing reached M4.
+        outcome = { kind: 'no_reply', sent: true };
+      }
+      let kind = outcome?.kind;
+      if (['accepted', 'rejected'].includes(kind)) {
+        let valid = false;
+        try { valid = client.validateReply(request, outcome.reply); } catch { /* Treat malformed replies as unknown. */ }
+        if (!valid) kind = 'invalid_reply';
+        else if (kind === 'accepted') {
+          log(`Settings hooks: restart ${outcome.reply.result} (${outcome.reply.runCount} runs); readiness is not confirmed.`);
+          return { submitted: true, requestId: request.requestId, result: outcome.reply.result, runCount: outcome.reply.runCount };
+        } else {
+          const code = outcome.reply.code;
+          if (code === 'single_mode') {
+            const currentMode = readConfig().session_mode ?? 'single';
+            const currentTransition = await readTransition();
+            if (currentMode === 'single' && !currentTransition) {
+              return enqueueSingleRestart();
+            }
+          }
+          errorLog(`Settings hooks: restart rejected: ${code}`);
+          return { submitted: false, requestId: request.requestId, code, sent: true,
+            category: ['manual_restart_pending', 'entry_not_open'].includes(code) ? 'T' : 'R', persisted: [] };
+        }
+      }
+      if (outcome?.sent === false && ['connect_failed', 'deadline_exceeded'].includes(kind)) {
+        errorLog(`Settings hooks: restart not submitted: ${kind}`);
+        return { submitted: false, requestId: request.requestId, code: kind, sent: false, category: 'T', persisted: [] };
+      }
+      let lookup = 'unknown';
+      try { lookup = await client.lookupRestartRequest(request.requestId, { deadlineAt: deadline }); }
+      catch { /* Preserve uncertainty when the readback itself fails. */ }
+      if (!['accepted', 'done', 'unknown', 'deadline_exceeded'].includes(lookup)) lookup = 'unknown';
+      errorLog(`Settings hooks: restart result uncertain (${kind || 'invalid_reply'}); lookup: ${lookup}; no resubmission.`);
+      return { submitted: ['accepted', 'done'].includes(lookup) ? true : null,
+        requestId: request.requestId, code: kind || 'invalid_reply', sent: true, category: 'U', persisted: null, lookup };
+    }
+    return enqueueSingleRestart();
+  } catch (error) {
+    errorLog(`Settings hooks: restart not enqueued: ${error.code || 'ERROR'}: ${error.message}`);
+    return { submitted: false, code: error.code || 'ERROR' };
+  }
+
+  function enqueueSingleRestart() {
+    const c4ControlPath = path.join(zylosDir, '.claude', 'skills', 'comm-bridge', 'scripts', 'c4-control.js');
+    if (!exists(c4ControlPath)) return { skipped: true, reason: 'control_missing' };
+    exec('node', [c4ControlPath, 'enqueue', '--content', '/exit', '--priority', '1', '--require-idle', '--no-ack-suffix'], { stdio: 'pipe', timeout: 10000 });
+    log('Settings hooks: restart enqueued.');
+    return { submitted: true };
   }
 }
 
-export function main(argv = process.argv.slice(2)) {
+export async function main(argv = process.argv.slice(2)) {
   const dryRun = argv.includes('--dry-run');
 
   if (!fs.existsSync(TEMPLATE_SETTINGS)) {
@@ -719,13 +829,16 @@ export function main(argv = process.argv.slice(2)) {
     if (result.changed) settingsBackfilled = true;
   }
 
-  const codexSync = syncCodexConfig({ dryRun });
+  const codexSync = syncCodexConfig({ dryRun, prepareBothRuntimes: true });
   if (codexSync.fatal) {
     console.error(codexSync.error);
     process.exit(1);
   }
 
-  if (added === 0 && updated === 0 && removed === 0 && !statusLineChanged && !modelSync.changed && !settingsBackfilled && !codexSync.changed) {
+  // Hook membership can change independently of either TOML file.
+  const codexHooks = dryRun ? { changed: false } : installCoreCodexHook({ zylosDir: ZYLOS_DIR });
+
+  if (added === 0 && updated === 0 && removed === 0 && !statusLineChanged && !modelSync.changed && !settingsBackfilled && !codexSync.changed && !codexHooks.changed) {
     console.log('Settings hooks: all up to date (no changes).');
     return;
   }
@@ -743,19 +856,22 @@ export function main(argv = process.argv.slice(2)) {
     modelBackfilled: modelSync.changed,
   });
 
-  if (added === 0 && updated === 0 && removed === 0 && !statusLineChanged && !modelSync.changed && !settingsBackfilled) {
+  if (added === 0 && updated === 0 && removed === 0 && !statusLineChanged && !modelSync.changed && !settingsBackfilled && !codexHooks.changed) {
     console.log(`Settings hooks: all up to date; Codex config ${codexSync.changed ? 'refreshed' : 'unchanged'}.`);
     return;
   }
 
-  console.log(`Settings hooks: ${added} added, ${updated} updated, ${removed} removed${statusLineChanged ? ', statusLine updated' : ''}${modelSync.changed ? ', model backfilled' : ''}${thresholdSync.changed ? ', new-session threshold paired' : ''}${settingsBackfilled ? ', settings backfilled' : ''}${codexSync.changed ? ', Codex config refreshed' : ''}.`);
+  console.log(`Settings hooks: ${added} added, ${updated} updated, ${removed} removed${statusLineChanged ? ', statusLine updated' : ''}${modelSync.changed ? ', model backfilled' : ''}${thresholdSync.changed ? ', new-session threshold paired' : ''}${settingsBackfilled ? ', settings backfilled' : ''}${codexSync.changed ? ', Codex config refreshed' : ''}${codexHooks.changed ? ', Codex hooks refreshed' : ''}.`);
 
   // Enqueue restart when hooks changed — this runs from the NEWLY installed
   // package during upgrade (via resolveInstalledSyncScript), so it works even
   // when the calling component.js is an older version without restart logic.
-  enqueueRestartIfNeeded();
+  await enqueueRestartIfNeeded();
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  main();
+  main().catch(error => {
+    console.error(`Settings hooks: ${error.code || 'ERROR'}: ${error.message}`);
+    process.exitCode = 1;
+  });
 }

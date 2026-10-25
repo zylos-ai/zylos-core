@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { collectStatus } from '../status-view.js';
 import { showStatus } from '../../commands/service.js';
+import { collectHostStatus } from '../../commands/service.js';
 
 const absent = { identity: { present: false }, status: { valid: false, reason: 'not_running', sampledAt: null } };
 const live = (ready = true, reason = null) => ({ identity: { present: true, ready, runtime: 'codex', runId: 'run', sessionId: ready ? 'session' : null },
@@ -20,6 +21,22 @@ test('IF-56b single/null uses only null reader and preserves absent/running stat
       if (!row.identity.present) assert.equal(view.origin.runtime, null);
     }
   }
+});
+
+test('review P2: text status retains PM2 and disk while JSON never queries host extras', async () => {
+  const original = console.log, previousExit = process.exitCode;
+  const lines = []; console.log = line => lines.push(line);
+  try {
+    const host = () => collectHostStatus({ exec: () => JSON.stringify([{ name: 'scheduler', pm2_env: { status: 'online' } }]),
+      disk: () => ({ blocks: 20, bavail: 10, bsize: 1024 ** 3 }) });
+    await showStatus([], { collect: () => collectStatus(fixture()), host });
+    assert.match(lines.join('\n'), /scheduler: online/);
+    assert.match(lines.join('\n'), /Disk: 10 GiB available \/ 20 GiB total/);
+    lines.length = 0;
+    await showStatus(['--json'], { collect: () => collectStatus(fixture()), host: () => assert.fail('JSON must retain IB-73 only') });
+    assert.equal(lines.length, 1);
+    assert.equal(JSON.parse(lines[0]).ok, true);
+  } finally { console.log = original; process.exitCode = previousExit; }
 });
 
 test('IF-56b multi sort/starting/stale/generation reasons are reader projections', async () => {

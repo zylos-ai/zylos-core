@@ -34,7 +34,12 @@ test('IF-47 init --json text compatibility and unknown argument rejection', () =
   assert.throws(() => parseInitFlags(['--bad']), /Unknown init option/);
 });
 
-test('IF-47 init refuses corrupt F1 before running any installation/auth stage', async () => {
+test('IF-47 init refuses corrupt F1 before running any installation/auth stage', async t => {
+  const previous = fs.existsSync(CONFIG_FILE) ? fs.readFileSync(CONFIG_FILE) : null;
+  t.after(() => {
+    if (previous === null) fs.rmSync(CONFIG_FILE, { force: true });
+    else fs.writeFileSync(CONFIG_FILE, previous);
+  });
   fs.mkdirSync(path.dirname(CONFIG_FILE), { recursive: true });
   fs.writeFileSync(CONFIG_FILE, '{broken');
   const before = fs.readFileSync(CONFIG_FILE, 'utf8');

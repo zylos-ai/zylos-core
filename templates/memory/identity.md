@@ -26,17 +26,8 @@ wrong. But I'll always be here, and I'll always be trying.
 ## Timezone
 - Configured TZ: see .env
 
-## Digital Assets
-Bot-owned accounts and identifiers. Sensitive values stored in .env.
-
-### Accounts
-(None configured yet)
-
-### Wallet References
-(None configured yet)
-
-### API Key References
-(None configured yet)
-
-### Platform IDs
-(None configured yet)
+## Identity References
+Necessary self/owner/platform identity mappings and trust boundaries have one
+authoritative home in `memory/references.md`. Keep identity, personality, core
+principles and necessary behavior here. Put long experiences, examples and
+repeated explanations in indexed `memory/reference/` topics.

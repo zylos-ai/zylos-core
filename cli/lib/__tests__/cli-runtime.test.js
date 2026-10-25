@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { updateConfigWithLock } from '../config-lock.js';
 import { readConfigStrict } from '../config-store.js';
-import { executeRuntimeSwitch, observeRuntimeGroups } from '../../commands/runtime.js';
+import { executeRuntimeSwitch, observeRuntimeGroups, runtimeCommand } from '../../commands/runtime.js';
 
 function fixture(overrides = {}) {
   const calls = [];
@@ -40,6 +40,25 @@ test('IF-47 runtime prechecks are ordered and stop before persistence', async ()
   const invalid = fixture();
   assert.equal((await invalid.run(['--unknown'])).error.code, 'INVALID_ARGUMENT');
   assert.deepEqual(invalid.calls, []);
+});
+
+test('review JSON: full-path credentials/restart and failed precheck emit exactly the final envelope', async () => {
+  const original = console.log, previousExit = process.exitCode;
+  const lines = []; console.log = text => lines.push(text);
+  try {
+    for (const failed of [false, true]) {
+      const f = fixture(failed ? { hooksReady: () => false } : {
+        write: () => ({ previous: { runtime: 'claude' }, config: { runtime: 'codex', session_mode: 'single' }, changed: true }),
+        restart: ({ logSuccess }) => { logSuccess('progress must stay suppressed'); },
+      });
+      const result = await runtimeCommand(['codex', '--save-apikey', 'fixture-key', '--json'], { execute: (_runtime, flags) => f.run(flags) });
+      assert.equal(lines.length, 1);
+      assert.deepEqual(JSON.parse(lines[0]), result);
+      assert.equal(result.ok, !failed);
+      assert.ok(f.calls.includes('credentials'));
+      lines.length = 0;
+    }
+  } finally { console.log = original; process.exitCode = previousExit; }
 });
 
 test('IF-47 unchanged skips install/hooks/auth/write/restart; no-validate only skips auth', async () => {

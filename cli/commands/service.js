@@ -72,7 +72,20 @@ export function restartServicesWithDeps({
   return true;
 }
 
-export async function showStatus(args = [], { collect, load = () => import('../lib/status-view.js') } = {}) {
+export function collectHostStatus({ exec = execFileSync, disk = () => fs.statfsSync(ZYLOS_DIR) } = {}) {
+  const result = { services: null, disk: null };
+  try {
+    result.services = JSON.parse(exec('pm2', ['jlist'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 5000 }))
+      .map(item => ({ name: item.name, status: item.pm2_env?.status ?? 'unknown' }));
+  } catch { /* Host data is supplementary to the session projection. */ }
+  try {
+    const stat = disk();
+    result.disk = { total: stat.blocks * stat.bsize, available: stat.bavail * stat.bsize };
+  } catch { /* Keep partial status available. */ }
+  return result;
+}
+
+export async function showStatus(args = [], { collect, host = collectHostStatus, load = () => import('../lib/status-view.js') } = {}) {
   const json = args.includes('--json');
   let result;
   if (args.some(arg => arg !== '--json') || args.filter(arg => arg === '--json').length > 1) {
@@ -93,6 +106,12 @@ export async function showStatus(args = [], { collect, load = () => import('../l
     }
     if (result.data.groupListError) console.error(`Groups unavailable: ${result.data.groupListError.message}`);
     for (const [runtime, health] of Object.entries(result.data.runtimeHealth)) console.log(`  ${runtime}: ${health.health ?? 'unknown'}`);
+    const machine = host();
+    console.log(heading('Services (PM2):'));
+    if (machine.services === null) console.log('  unavailable');
+    else if (!machine.services.length) console.log('  No services running');
+    else for (const item of machine.services) console.log(`  ${item.name}: ${item.status}`);
+    console.log(machine.disk ? `Disk: ${Math.round(machine.disk.available / 1024 ** 3)} GiB available / ${Math.round(machine.disk.total / 1024 ** 3)} GiB total` : 'Disk: unavailable');
   }
   if (!result.ok) process.exitCode = 1;
   return result;

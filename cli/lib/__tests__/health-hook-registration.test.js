@@ -8,7 +8,7 @@ test('stable Claude versions since StopFailure introduction enable health hooks;
   assert.equal(detectStopFailureSupport({ execFileSyncImpl: () => { throw new Error('missing'); } }), false);
   assert.equal(detectStopFailureSupport({ execFileSyncImpl: (_bin, args, opts) => { assert.deepEqual(args, ['--version']); assert.equal(opts.timeout, 2000); return '2.1.301'; } }), true);
 });
-test('version detection drives all four health registrations during settings sync', () => {
+test('P06 2.2: only StopFailure registration depends on version support', () => {
   const custom = { type: 'command', command: 'node /custom/activity.js' };
   const settings = { hooks: { Stop: [{ hooks: [custom] }] } };
   for (const version of ['2.1.77', '2.1.78', '2.1.284', '3.0.0', '2.1.77']) {
@@ -16,7 +16,7 @@ test('version detection drives all four health registrations during settings syn
     syncHooks(settings, {}, { desiredHooks: desiredClaudeHooks({ stopFailureSupported: supported }), log: () => {} });
     for (const event of ['SessionStart', 'UserPromptSubmit', 'Stop', 'StopFailure']) {
       const registered = (settings.hooks[event] || []).some(group => (group.hooks || []).some(hook => hook.command?.includes('hook-health.js')));
-      assert.equal(registered, version !== '2.1.77', `${version}: ${event}`);
+      assert.equal(registered, event !== 'StopFailure' || version !== '2.1.77', `${version}: ${event}`);
     }
     assert.ok(settings.hooks.Stop.some(group => group.hooks.includes(custom)));
   }

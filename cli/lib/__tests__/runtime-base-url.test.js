@@ -11,6 +11,34 @@ fs.mkdirSync(process.env.ZYLOS_DIR, { recursive: true });
 fs.writeFileSync(path.join(process.env.ZYLOS_DIR, '.env'), '', 'utf8');
 
 describe('runtime base URL support', () => {
+  test('review P1: readiness checks installed project hooks, and rejects missing/stale hooks (M9)', async t => {
+    const { runtimeHooksReady, executeRuntimeSwitch } = await import('../../commands/runtime.js');
+    const { syncRuntimeHooks } = await import('../sync-settings-hooks.js');
+    const instruction = path.join(process.env.ZYLOS_DIR, 'CLAUDE.md');
+    const installed = path.join(process.env.ZYLOS_DIR, '.claude', 'settings.json');
+    fs.writeFileSync(instruction, 'legacy instructions\n');
+    syncRuntimeHooks({ zylosDir: process.env.ZYLOS_DIR });
+    const good = fs.readFileSync(installed);
+    const userSettings = path.join(tmpRoot, '.claude', 'settings.json');
+    fs.mkdirSync(path.dirname(userSettings), { recursive: true });
+    fs.writeFileSync(userSettings, '{broken');
+    assert.equal((await runtimeHooksReady('claude')).ready, true);
+    let writes = 0;
+    const deps = { read: () => ({ state: 'ok', config: { runtime: 'codex', session_mode: 'multi' } }),
+      exists: () => true, adapter: () => ({ checkAuth: () => assert.fail('no-validate must skip auth') }),
+      write: () => { writes++; return { previous: { runtime: 'codex' }, config: { runtime: 'claude', session_mode: 'multi' }, changed: true }; },
+      observe: async () => ({ groups: [], groupsComplete: true, observationErrors: [] }) };
+    assert.equal((await executeRuntimeSwitch('claude', ['--no-validate'], deps)).ok, true);
+    for (const bad of [null, '{}', '{broken']) {
+      if (bad === null) fs.rmSync(installed); else fs.writeFileSync(installed, bad);
+      const result = await executeRuntimeSwitch('claude', ['--no-validate'], deps);
+      assert.equal(result.error.code, 'HOOKS_NOT_READY');
+      assert.deepEqual(result.error.persisted, []);
+    }
+    assert.equal(writes, 1);
+    fs.writeFileSync(installed, good);
+    t.after(() => { fs.rmSync(userSettings, { force: true }); });
+  });
   test('reports pending migration when the selected runtime has no legacy output', async () => {
     const { prepareRuntimeInstruction } = await import('../../commands/runtime.js');
     const zylosDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-runtime-instructions-'));
@@ -87,16 +115,18 @@ describe('runtime base URL support', () => {
 
     for (const status of ['failure', 'uncertain']) {
       let exitCode = null;
+      const errors = [];
       await assert.rejects(
         () => checkRuntimeAuthGate(
           'claude',
           { checkAuth: async () => ({ status, reason: `test_${status}` }) },
           parsed,
-          { log: () => {}, error: () => {}, exit: (code) => { exitCode = code; throw new Error(`exit ${code}`); } }
+          { log: () => {}, error: message => errors.push(message), exit: (code) => { exitCode = code; throw new Error(`exit ${code}`); } }
         ),
         /exit 1/
       );
       assert.equal(exitCode, 1);
+      assert.match(errors[0], /^Error \[AUTH_NOT_CONFIRMED\]:/);
     }
   });
 
