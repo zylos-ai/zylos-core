@@ -3,9 +3,9 @@ import { pathToFileURL } from 'node:url';
 import { loadCoreModule } from '../../activity-monitor/scripts/core-modules.js';
 const { requestRuntimeRestart } = await loadCoreModule('request-runtime-restart.js');
 
-export async function main(args = process.argv.slice(2)) {
+export async function main(args = process.argv.slice(2), { requestRestart = requestRuntimeRestart } = {}) {
   if (args.some(arg => arg !== '--json')) throw Object.assign(new Error('Expected restart.js [--json]'),{code:'INVALID_ARGS'});
-  const result = await requestRuntimeRestart();
+  const result = await requestRestart();
   if (args.includes('--json')) process.stdout.write(JSON.stringify(result)+'\n');
   else if (result.ok) process.stdout.write(`OK: ${result.data.result}\n`);
   else process.stderr.write(`Error [${result.error.code}]: ${result.error.message}\n`);

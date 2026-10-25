@@ -16,10 +16,11 @@ const set = db.setDrainFence, clear = db.clearDrainFence;
 db.setDrainFence = async (...args) => { const value = set(...args); await barrier('after-fence'); return value; };
 db.clearDrainFence = async (...args) => { const value = clear(...args); await barrier('after-clear'); return value; };
 const lifecycle = new SupervisorLifecycle({ db, requests,
-  observeFixedTarget: request => scenes.observeFixedTarget(request),
-  stopFixedTarget: async request => { await scenes.stopFixedTarget(request); await barrier('after-stop'); },
+  observeGroup: group => scenes.observeGroup(group),
+  stop: async scene => { await scenes.stop(scene); await barrier('after-stop'); },
 });
 await barrier('after-intent');
-await lifecycle.advanceManual({ configuration: { mode } });
+await lifecycle.advanceManual({ configuration: { mode }, transition: db.getModeTransition(),
+  fences: db.listDrainFences(), restartRequests: requests.read(), scenes: await scenes.observe({ configuration: { mode } }) });
 process.send({ result: requests.read().length === 0 ? 'done' : 'pending' });
 database.close();

@@ -58,46 +58,39 @@ export class SupervisorLoop {
 
   async runRound() {
     const d = this.deps;
-    // Mode cutover does not restart this owner. Read current strict F1 before actions.
-    this.configuration = await d.readConfiguration();
-    // Reads must succeed before using an empty/absent fact to authorize actions.
-    const transition = await d.getModeTransition();
-    const fences = await d.listDrainFences();
-    const context = { configuration: this.configuration, transition, fences };
-    if (d.checkManualFences) {
-      try { await d.lifecycleSerial(() => d.checkManualFences(context)); }
-      catch (error) { await d.reportError(error, { phase: 'manual-fences' }); }
-    }
-    if (transition) {
-      await d.advanceTransition(transition);
-    } else {
-      await d.lifecycleSerial(async () => {
-        // A socket request may have accepted a transition since the first read.
-        if (await d.getModeTransition()) return;
+    let context;
+    await d.lifecycleSerial(async () => {
+      // Sample all round authorities and scenes while socket admission is excluded.
+      this.configuration = await d.readConfiguration();
+      context = { configuration: this.configuration, transition: await d.getModeTransition(),
+        fences: await d.listDrainFences(), restartRequests: await d.readRestartRequests() };
+      context.scenes = await d.observe(context);
+      context.manualRequests = [];
+      if (d.checkManualFences) {
+        try { context.manualRequests = await d.checkManualFences(context); }
+        catch (error) { await d.reportError(error, { phase: 'manual-fences' }); }
+      }
+      if (!context.transition) {
         for (const phase of ['advanceManual', 'advanceRestarts', 'reconcileConfiguration']) {
           try { await d[phase](context); }
           catch (error) { await d.reportError(error, { phase }); }
         }
-      });
-    }
-    const scenes = await d.observe(context);
-    await d.observeExits?.(scenes);
-    await this.each(scenes, scene => d.probeAndPublish(scene, context), 'observe');
-    // Re-read both authorities inside the same queue used by socket admission.
-    await d.lifecycleSerial(async () => {
-      const current = { ...context, transition: await d.getModeTransition(), fences: await d.listDrainFences() };
-      await this.each(current.fences, fence => d.advanceReclaim(fence, current), 'reclaim');
-      if (current.transition) return;
-      await this.each(scenes, scene => d.checkRotation(scene, current), 'rotation');
-      if (this.configuration.mode === 'multi') {
-        await this.each(scenes, scene => d.checkTtl(scene, current), 'ttl');
-        // Reclaim may have changed capacity; never re-use the earlier scene list.
-        try { await d.checkEviction(await d.observe(current), current); }
+      }
+      await this.each(context.fences, fence => d.advanceReclaim(fence, context), 'reclaim');
+      if (context.transition) return;
+      await this.each(context.scenes, scene => d.checkRotation(scene, context), 'rotation');
+      if (context.configuration.mode === 'multi') {
+        await this.each(context.scenes, scene => d.checkTtl(scene, context), 'ttl');
+        try { await d.checkEviction(context.scenes, context); }
         catch (error) { await d.reportError(error, { phase: 'eviction' }); }
       }
-      try { await d.checkSync(scenes, current); }
+      try { await d.checkSync(context.scenes, context); }
       catch (error) { await d.reportError(error, { phase: 'sync' }); }
     });
+    // Transition and health workers may acquire their own lifecycle sections.
+    if (context.transition) await d.advanceTransition(context.transition);
+    await d.observeExits?.(context.scenes);
+    await this.each(context.scenes, scene => d.probeAndPublish(scene, context), 'observe');
     await d.writeMetricsAndMaintain(context);
   }
 

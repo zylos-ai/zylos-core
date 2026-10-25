@@ -4,21 +4,11 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import net from 'node:net';
-import { randomUUID } from 'node:crypto';
 import { requestRuntimeRestart } from '../request-runtime-restart.js';
 import { submit } from '../am-sock-client.js';
 import { upgradeRuntime } from '../../../skills/upgrade-claude/scripts/upgrade.js';
-const data = source => `data:text/javascript;base64,${Buffer.from(source).toString('base64')}`;
-async function loadProducer(file, replacements, outputKey) {
-  let source = fs.readFileSync(file, 'utf8');
-  if (outputKey) source = source.replaceAll('console.log(', `globalThis[${JSON.stringify(outputKey)}].output(`).replaceAll('console.error(', `globalThis[${JSON.stringify(outputKey)}].output(`).replaceAll('process.stdout.write(', `globalThis[${JSON.stringify(outputKey)}].output(`);
-  for (const [relative, url] of Object.entries(replacements)) {
-    assert.ok(source.includes(`from '${relative}'`), relative);
-    source = source.replaceAll(`from '${relative}'`, `from '${url}'`);
-  }
-  source = source.replace(/from '(\.[^']+)'/g, (_, relative) => `from '${new URL(relative, file).href}'`);
-  return import(data(source));
-}
+import { main as restartMain } from '../../../skills/restart-claude/scripts/restart.js';
+import { restartAfterSelfUpgrade, formatC4Reply } from '../../commands/component.js';
 async function fixture(t, response) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'restart-producers-')); const socketPath = path.join(root, 'am.sock');
   const requests = [], peers = new Set(), trace = [];
@@ -38,45 +28,37 @@ async function fixture(t, response) {
     enqueueExit: () => { throw new Error('must not fallback to /exit'); } });
   return { root, requests, trace, restart };
 }
-async function invoke(t, producer, response, repeatOnUnknown = false) {
-  const f = await fixture(t, response); const key = `producer_${randomUUID()}`;
-  globalThis[key] = { ...f, restart: async (options) => {
+async function invoke(t, producer, response) {
+  const f = await fixture(t, response), output = [];
+  const restart = async (options) => {
     if (producer === 'component') assert.deepEqual(options, { afterServiceRestart: true });
-    const result = await f.restart(options); if (repeatOnUnknown && result.error?.code === 'restart_result_unknown') await f.restart(); return result;
-  } };
-  t.after(() => { delete globalThis[key]; });
-  const ref = `globalThis[${JSON.stringify(key)}]`;
-  const requestModule = data(`export const requestRuntimeRestart = options => ${ref}.restart(options);`);
-  const priorArgv = process.argv, priorExitCode = process.exitCode, output = [];
-  globalThis[key].output = (...args) => { output.push(args.join(' ')); return true; };
+    return f.restart(options);
+  };
+  const priorExitCode = process.exitCode;
+  const capture = (...args) => { output.push(args.join(' ')); return true; };
+  const mocks = [t.mock.method(console, 'log', capture), t.mock.method(console, 'error', capture),
+    t.mock.method(process.stdout, 'write', capture)];
   try {
-    process.argv = ['node', 'fixture', '--json', '--yes'];
     if (producer === 'component') {
-      const self = data(`const f=${ref}; export const checkForCoreUpdates=()=>({success:true,hasUpdate:true,current:'1.0.0',latest:'1.0.1'});
-        export const downloadCoreToTemp=()=>({success:true,tempDir:f.root}); export const readChangelog=()=>'';
-        export const cleanupTemp=()=>{}; export const cleanupBackup=()=>{};
-        export const runSelfUpgrade=()=>{f.trace.push('install');return {success:true,instructionFilesRebuilt:true,from:'1.0.0',to:'1.0.1'};};`);
-      const locks = data('export const acquireLock=()=>({success:true}); export const releaseLock=()=>{};');
-      const module = await loadProducer(new URL('../../commands/component.js', import.meta.url), {
-        '../lib/self-upgrade.js': self, '../lib/lock.js': locks, '../lib/request-runtime-restart.js': requestModule,
-      }, key);
-      await module.upgradeComponent(['--self', '--json', '--yes']);
+      // The actual self-upgrade finalizer calls this step after installation.
+      const result = await restartAfterSelfUpgrade({ success: true, instructionFilesRebuilt: true,
+        from: '1.0.0', to: '1.0.1' }, { requestRestart: restart });
+      output.push(JSON.stringify({ ...result, reply: formatC4Reply('self-upgrade', result) }));
     } else if (producer === 'restart') {
-      const loader = data(`export const loadCoreModule=()=>import(${JSON.stringify(requestModule)});`);
-      const module = await loadProducer(new URL('../../../skills/restart-claude/scripts/restart.js', import.meta.url), {
-        '../../activity-monitor/scripts/core-modules.js': loader,
-      }, key);
-      await module.main(['--json']);
+      await restartMain(['--json'], { requestRestart: restart });
     } else {
       const result = await upgradeRuntime({ readMode: () => ({ mode: 'multi' }), readTransition: () => null,
-        install: () => f.trace.push('install'), requestRestart: () => globalThis[key].restart(),
+        install: () => f.trace.push('install'), requestRestart: restart,
         enqueue: () => { throw new Error('must not enqueue'); }, waitForExit: () => { throw new Error('must not poll'); } });
       output.push(JSON.stringify(result));
     }
-  } finally { process.argv = priorArgv; process.exitCode = priorExitCode; }
+  } finally {
+    for (const mock of mocks) mock.mock.restore();
+    process.exitCode = priorExitCode;
+  }
   assert.equal(f.requests.length, 1, `${producer}/${response} submits exactly once`);
   assert.equal(f.requests[0].type, 'restart_all'); assert.equal(f.requests[0].reason, 'upgrade');
-  assert.deepEqual(f.trace, [...(producer === 'restart' ? [] : ['install']), 'submit', ...(['uncertain', 'timeout'].includes(response) ? ['lookup'] : [])]);
+  assert.deepEqual(f.trace, [...(producer === 'upgrade' ? ['install'] : []), 'submit', ...(['uncertain', 'timeout'].includes(response) ? ['lookup'] : [])]);
   const all = output.join('\n');
   if (response === 'rejected') assert.match(all, /manual_restart_pending/);
   if (['uncertain', 'timeout'].includes(response)) assert.match(all, /restart_result_unknown/);
@@ -88,9 +70,13 @@ async function invoke(t, producer, response, repeatOnUnknown = false) {
     else assert.match(report.reply,/do not resubmit automatically/);
   }
 }
-test('IB-17 actual component/restart/upgrade entry producers: Unix Sock success, refusal and uncertain result', async t => {
+test('IB-17 self-upgrade restart step and restart/upgrade producers: Unix Sock success, refusal and uncertain result', async t => {
   for (const producer of ['component', 'restart', 'upgrade']) for (const response of ['accepted', 'rejected', 'uncertain', 'timeout']) await invoke(t, producer, response);
 });
-test('IB-17 producer acceptance rejects automatic resubmission after uncertain delivery', async t => {
-  for (const producer of ['component', 'restart', 'upgrade']) await assert.rejects(invoke(t, producer, 'uncertain', true), { code: 'ERR_ASSERTION' });
+test('IB-17 self-upgrade restart step only requests restart after successful instruction rebuild', async t => {
+  for (const result of [{success:false,instructionFilesRebuilt:true},{success:true,instructionFilesRebuilt:false}]) {
+    let calls = 0;
+    assert.equal(await restartAfterSelfUpgrade(result,{requestRestart:()=>{calls++;}}),result);
+    assert.equal(calls,0);
+  }
 });

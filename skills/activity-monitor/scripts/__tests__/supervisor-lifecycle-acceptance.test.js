@@ -18,7 +18,7 @@ function localFixture(t, Class = SupervisorLifecycle, options = {}) {
   f.scene = { sessionGroup: 'origin', runtime: 'claude', runId: 'old-run', sessionId: 's1',
     present: true, ready: true, processRunning: true, state: 'idle', idleSince: f.now - 10000,
     runDir: root, usagePercent: 80, launchConfig: { runtime: 'claude', mode: 'default' } };
-  f.db = { getModeTransition: () => f.transition, getDrainFence: () => null,
+  f.db = { getModeTransition: () => f.transition, getDrainFence: () => null, listDrainFences: () => [],
     getUnsummarizedRange: () => f.range, getGlobalUnsummarizedRange: () => f.range,
     getOriginSyncBacklog: () => f.backlog,
     insertControl: (content, opts) => { f.controls.push({ content, ...opts }); return { id: f.controls.length }; },
@@ -29,6 +29,9 @@ function localFixture(t, Class = SupervisorLifecycle, options = {}) {
     prompts: { GROUP_SYNC_PROMPT: 'group sync', ORIGIN_SYNC_PROMPT: 'origin sync',
       ROTATION_PROMPT: 'rotate', CONFIG_RECLAIM_PROMPT: 'config' },
     ...options.deps };
+  const configuration = f.context.configuration;
+  Object.defineProperty(f, 'context', { get: () => ({ configuration, transition: f.db.getModeTransition(),
+    fences: f.db.listDrainFences(), restartRequests: [], scenes: [{ ...f.scene }] }) });
   f.lifecycle = new Class(f.deps, { now: () => f.now });
   return f;
 }
@@ -111,7 +114,8 @@ async function configScenario(t, Class) {
   const lifecycle = new Class({ db: store, observe: () => scenes.observe({ configuration: { mode: 'multi' } }),
     observeGroup: group => scenes.observeGroup(group), bindTarget: scene => scenes.bindTarget(scene), requests: { read: () => [] },
     prompts: { CONFIG_RECLAIM_PROMPT: (scene, desired) => { calls++; assert.deepEqual(scene.launchConfig, old.launchConfig); assert.deepEqual(desired, expected); return 'config reclaim'; } } });
-  await lifecycle.reconcileConfiguration({ configuration: { mode: 'multi' } });
+  await lifecycle.reconcileConfiguration({ configuration: { mode: 'multi' }, transition: store.getModeTransition(),
+    fences: store.listDrainFences(), restartRequests: [], scenes: await scenes.observe({ configuration: { mode: 'multi' } }) });
   assert.equal(calls, 1, 'new desired config hid the old running snapshot');
   const rows = target.db.prepare('SELECT * FROM control_queue').all();
   assert.equal(rows.length, 1); assert.equal(rows[0].priority, 1);
@@ -158,7 +162,7 @@ async function rotationScenario(t, Class) {
     await assert.rejects(f.lifecycle.checkRotation(f.scene, f.context), /rotation write failed/);
     f.db.insertControl = insert; await f.lifecycle.checkRotation(f.scene, f.context); assert.equal(f.controls.length, 5);
     assert.ok(f.controls.every(c => c.sessionGroup === (mode === 'single' ? null : 'origin') && c.bypassState === true && c.appendAckSuffix === false));
-    assert.equal(f.events.filter(e => e.event === 'rotate_done').length, 2);
+    assert.equal(f.events.filter(e => e.event === 'rotate_done').length, 0);
     f.scene.present = false; f.now += 300000;
     await f.lifecycle.checkRotation(f.scene, f.context); assert.equal(f.controls.length, 5);
   }

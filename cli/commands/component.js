@@ -1062,6 +1062,23 @@ function handleSelfCheckOnly({ jsonOutput, branch, beta = false }) {
   cleanupCoreTemp(tempDir);
 }
 
+/** Request one runtime restart after the self-upgrade services have returned. */
+export async function restartAfterSelfUpgrade(result, { requestRestart = requestRuntimeRestart } = {}) {
+  // P11 owns merging hook and instruction requests in the upgrade finalizer.
+  // This legacy result flag requests one restart after the services return.
+  if (result.success && result.instructionFilesRebuilt) {
+    try {
+      result.runtimeRestart = await requestRestart({ afterServiceRestart: true });
+      if (!result.runtimeRestart.ok) console.error(`Warning: ${result.runtimeRestart.error.message} (${result.runtimeRestart.error.code})`);
+    } catch (error) {
+      result.runtimeRestart = { ok: false, error: { code: error.code || 'restart_submission_failed',
+        message: `Runtime restart was not submitted: ${error.message}. All currently running managed sessions, including Origin, need manual restart.` } };
+      console.error(`Warning: ${result.runtimeRestart.error.message}`);
+    }
+  }
+  return result;
+}
+
 /**
  * Upgrade zylos-core itself.
  * Lock-first pattern, same as component upgrades.
@@ -1191,18 +1208,7 @@ async function upgradeSelfCore({ branch, beta = false, mode = 'merge' } = {}) {
     // Legacy success cleanup is common to JSON and human output.
     if(result.success && !result.preInstallProtection && !result.backupOnly && result.backupDir)cleanupBackup(result.backupDir);
 
-    // P11 owns merging hook and instruction requests in the upgrade finalizer.
-    // This legacy result flag requests one restart after the services return.
-    if (result.success && result.instructionFilesRebuilt) {
-      try {
-        result.runtimeRestart = await requestRuntimeRestart({ afterServiceRestart: true });
-        if (!result.runtimeRestart.ok) console.error(`Warning: ${result.runtimeRestart.error.message} (${result.runtimeRestart.error.code})`);
-      } catch (error) {
-        result.runtimeRestart = { ok: false, error: { code: error.code || 'restart_submission_failed',
-          message: `Runtime restart was not submitted: ${error.message}. All currently running managed sessions, including Origin, need manual restart.` } };
-        console.error(`Warning: ${result.runtimeRestart.error.message}`);
-      }
-    }
+    await restartAfterSelfUpgrade(result);
 
     // Output result
     if (jsonOutput) {
