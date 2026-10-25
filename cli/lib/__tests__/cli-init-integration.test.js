@@ -57,12 +57,14 @@ test('IF-47/DM-48 default init imports real migration ensure and preserves unrea
   }
 });
 
-test('IF-47 default init prepares actual dual hooks and reports unavailable native trust', () => {
+test('IF-47 init template generator prepares dual hooks and assets report unavailable native trust', () => {
   const context = fixture();
   const instruction = path.join(context.root, 'instructions.md');
   fs.writeFileSync(instruction, '# Fixture instructions\n');
+  fs.writeFileSync(path.join(context.root, 'CLAUDE.md'), '# Fixture instructions\n');
   const result = run(context, `
-    import { prepareInitRuntimeAssets } from ${JSON.stringify(initUrl)};
+    import { prepareInitRuntimeAssets, syncSettingsHooksAfterTemplateDeploy } from ${JSON.stringify(initUrl)};
+    syncSettingsHooksAfterTemplateDeploy();
     const result = await prepareInitRuntimeAssets({ instruction: () => ${JSON.stringify(instruction)} });
     console.log(JSON.stringify(result));
   `);

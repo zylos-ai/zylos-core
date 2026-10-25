@@ -19,7 +19,7 @@ import { listGroupTmuxSessions } from '../lib/session-group-paths.js';
 import { readLiveIdentity } from '../lib/session-state-reader.js';
 import { desiredClaudeHooks, syncHooks, detectStopFailureSupport } from '../lib/sync-settings-hooks.js';
 import { isCodexTrustValid, getCodexVersion } from '../lib/codex-hooks.js';
-import { buildInstructionFile, isSplitInstructionsActive } from '../lib/runtime/instruction-builder.js';
+import { isSplitInstructionsActive } from '../lib/runtime/instruction-builder.js';
 import { commandExists } from '../lib/shell-utils.js';
 import { getCoreEcosystemPath, restartManagedProcess } from '../lib/pm2.js';
 import {
@@ -92,13 +92,7 @@ function showStatus() {
   console.log(`Current runtime: ${bold(label)}`);
 }
 
-export function prepareRuntimeInstruction(target, { zylosDir = ZYLOS_DIR } = {}) {
-  const instructionPath = buildInstructionFile(target, { zylosDir });
-  return {
-    instructionPath,
-    pendingMigration: !isSplitInstructionsActive({ zylosDir }) && !fs.existsSync(instructionPath),
-  };
-}
+
 
 // ── Credential save helpers ───────────────────────────────────────────────
 
@@ -223,54 +217,13 @@ export function restartRuntimeServices({
   }
 }
 
-export async function checkRuntimeAuthGate(target, adapter, parsed, {
-  log = console.log,
-  error = console.error,
-  exit = process.exit,
-} = {}) {
-  if (parsed.noValidate) {
-    log(`Skipping ${bold(target)} authentication check (--no-validate).`);
-    return { skipped: true };
-  }
-
-  log(`Checking ${bold(target)} authentication...`);
-  const auth = await adapter.checkAuth();
-  if (auth.status === 'success') {
-    log(`  ${green('✓')} authenticated`);
-    return { skipped: false, status: auth.status };
-  }
-
-  if (auth.status === 'uncertain') {
-    error(`Error [AUTH_NOT_CONFIRMED]: ${target} authentication check was inconclusive.`);
-    error(yellow('\nRetry after the service/API is reachable, or use --no-validate to skip the probe if you accept the risk.'));
-    error(dim(`Reason: ${auth.reason || 'auth_check_uncertain'}`));
-    error(yellow('\nSwitch aborted — auth could not be verified.'));
-    exit(1);
-    return { skipped: false, status: auth.status };
-  }
-
-  error(`Error [AUTH_NOT_CONFIRMED]: ${target} is not authenticated.`);
-  error(yellow('\nAuthenticate first, then retry. Options:\n'));
-  if (target === 'codex') {
-    error(`  ${cyan('zylos runtime codex --save-apikey <key>')}     ${dim('OpenAI API key')}`);
-    error(`  ${cyan('codex login --device-auth')}                   ${dim('Device auth (headless, no browser)')}`);
-    error(`  ${cyan('codex login')}                                 ${dim('Browser login (then retry)')}`);
-  } else {
-    error(`  ${cyan('zylos runtime claude --save-apikey <key>')}       ${dim('Anthropic API key (sk-ant-api...)')}`);
-    error(`  ${cyan('zylos runtime claude --save-setup-token <token>')} ${dim('Setup token (sk-ant-oat...)')}`);
-    error(`  ${cyan('claude auth login')}                               ${dim('Browser OAuth (then retry)')}`);
-  }
-  error(yellow('\nSwitch aborted — authenticate first to avoid losing IM access.'));
-  exit(1);
-  return { skipped: false, status: auth.status };
-}
 
 // ── Switch ────────────────────────────────────────────────────────────────
 
 export async function runtimeHooksReady(target) {
   const instruction = path.join(ZYLOS_DIR, target === 'codex' ? 'AGENTS.md' : 'CLAUDE.md');
-  if (!fs.existsSync(instruction)) return false;
   const pendingMigration = !isSplitInstructionsActive({ zylosDir: ZYLOS_DIR });
+  if (!fs.existsSync(instruction)) return { ready: false, pendingMigration };
   if (target === 'codex') return { ready: isCodexTrustValid({ zylosDir: ZYLOS_DIR, projectDir: ZYLOS_DIR, codexVersion: getCodexVersion() }).valid, pendingMigration };
   try {
     const settings = JSON.parse(fs.readFileSync(path.join(ZYLOS_DIR, '.claude', 'settings.json'), 'utf8'));
@@ -278,7 +231,7 @@ export async function runtimeHooksReady(target) {
     const changes = syncHooks(copy, null, { zylosDir: ZYLOS_DIR, dryRun: true, log: () => {},
       desiredHooks: desiredClaudeHooks({ stopFailureSupported: detectStopFailureSupport() }) });
     return { ready: changes.added + changes.updated + changes.removed === 0, pendingMigration };
-  } catch { return false; }
+  } catch { return { ready: false, pendingMigration }; }
 }
 
 export async function observeRuntimeGroups(baseline, sessionMode, { list = listGroupTmuxSessions,
@@ -342,7 +295,7 @@ export async function executeRuntimeSwitch(target, flags, { read = readZylosConf
     } catch (error) { return fail('CREDENTIAL_SAVE_FAILED', error.message); }
     try {
       const ready = await hooksReady(target);
-      if (!ready || ready.ready === false) return fail('HOOKS_NOT_READY', 'Runtime hooks/instructions not ready; run zylos init');
+      if (!ready.ready) return fail('HOOKS_NOT_READY', 'Runtime hooks/instructions not ready; run zylos init');
       if (ready.pendingMigration) warnings.push({ code: 'INSTRUCTION_PENDING_MIGRATION', message: 'Instruction migration pending; run zylos migrate-instructions' });
     }
     catch (error) { return fail('HOOKS_NOT_READY', error.message); }

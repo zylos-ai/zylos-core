@@ -24,11 +24,13 @@ import { commandExists } from '../lib/shell-utils.js';
 import {
   activateFreshSplitInstructions,
   refreshSplitInstructions,
+  buildInstructionFile,
 } from '../lib/runtime/instruction-builder.js';
 import { deployManifestTemplate } from '../lib/runtime/tmux-env.js';
 import { runMigrations } from '../lib/migrate.js';
 import { ensureCodexHooksTrusted } from '../lib/codex-hooks.js';
-import { buildInstructionFile } from '../lib/runtime/instruction-builder.js';
+import { syncRuntimeHooks } from '../lib/sync-settings-hooks.js';
+import { runtimeHooksReady } from './runtime.js';
 import {
   installGlobalPackage,
   installCodex,
@@ -77,11 +79,8 @@ export async function prepareInitRuntimeClis({ exists = commandExists,
 export async function prepareInitRuntimeAssets({ result = { completed: [], failed: [] },
   instruction = runtime => buildInstructionFile(runtime, { zylosDir: ZYLOS_DIR }),
   hooks = { claude: async () => {
-    const { syncRuntimeHooks } = await import('../lib/sync-settings-hooks.js');
-    if (typeof syncRuntimeHooks !== 'function') throw new Error('Core dual-runtime hook synchronization unavailable');
-    await syncRuntimeHooks({ zylosDir: ZYLOS_DIR });
+    if (!(await runtimeHooksReady('claude')).ready) throw new Error('Claude hooks/instructions not ready');
   }, codex: () => {
-    if (!writeCodexConfig(ZYLOS_DIR)) throw new Error('Codex configuration failed');
     ensureCodexHooksTrusted({ zylosDir: ZYLOS_DIR });
   } }, exists = fs.existsSync } = {}) {
   for (const runtime of ['claude', 'codex']) {
@@ -741,17 +740,11 @@ function copyMissingTree(src, dest) {
  * - ecosystem.config.cjs: always updated (managed by zylos-core)
  * - .env, CLAUDE.md, memory/*: only created if missing (user-managed)
  */
-export function syncSettingsHooksAfterTemplateDeploy({
-  zylosDir = ZYLOS_DIR,
-  syncScript = path.join(PACKAGE_ROOT, 'cli', 'lib', 'sync-settings-hooks.js'),
-} = {}) {
-  execFileSync(process.execPath, [syncScript], {
-    stdio: 'inherit',
-    env: { ...process.env, ZYLOS_DIR: zylosDir },
-  });
+export function syncSettingsHooksAfterTemplateDeploy({ zylosDir = ZYLOS_DIR } = {}) {
+  return syncRuntimeHooks({ zylosDir });
 }
 
-export function deployTemplates({ freshInstall = false, syncHooks = true } = {}) {
+export function deployTemplates({ freshInstall = false } = {}) {
   if (!fs.existsSync(TEMPLATES_SRC)) return;
 
   // ecosystem.config.cjs — always update (source of truth for service definitions)
@@ -805,7 +798,7 @@ export function deployTemplates({ freshInstall = false, syncHooks = true } = {})
   // npm postinstall can only sync assembler hooks for an already-materialized
   // installation. Fresh init creates the assembler above, so converge hooks
   // here after both the instruction assets and settings template exist.
-  if (syncHooks) syncSettingsHooksAfterTemplateDeploy();
+  syncSettingsHooksAfterTemplateDeploy();
 }
 
 // ── Core Skills sync ────────────────────────────────────────────
@@ -2001,7 +1994,7 @@ export async function initCommand(args) {
   if (initialSkillSync.error) preparation.failed.push({ item: 'core.skills', message: initialSkillSync.error });
   if (installState === 'fresh') updateZylosConfigLocked({ setIfAbsent: { session_mode: 'multi' } });
   runMigrations({ zylosDir: ZYLOS_DIR, templatesDir: TEMPLATES_SRC });
-  try { deployTemplates({ freshInstall: installState === 'fresh', syncHooks: false }); }
+  try { deployTemplates({ freshInstall: installState === 'fresh' }); }
   catch (error) { preparation.failed.push({ item: 'templates', message: error.message }); }
   await prepareInitRuntimeAssets({ result: preparation });
   reportInitPreparation(preparation);

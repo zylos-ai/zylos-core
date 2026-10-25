@@ -9,20 +9,22 @@ export async function groupCommand(args, { run = runConfigCli, io = process } = 
     process.exitCode = 1;
     return;
   }
-  const output = flags.includes('--json') ? io : {
-    stderr: io.stderr,
-    stdout: { write(text) {
-      io.stdout.write(text);
-      if (!text.startsWith('OK: ')) return;
-      try {
-        const data = JSON.parse(text.slice(4));
-        if (data.running !== null) return;
+  let exitCode;
+  if (flags.includes('--json')) exitCode = await run(kind, flags, io);
+  else {
+    let output = '';
+    exitCode = await run(kind, [...flags, '--json'], { stderr: io.stderr, stdout: { write: text => { output += text; } } });
+    const result = JSON.parse(output);
+    if (!result.ok) io.stderr.write(`Error [${result.error.code}]: ${result.error.message}\n`);
+    else {
+      const data = result.data;
+      io.stdout.write(`OK: ${JSON.stringify(data)}\n`);
+      if (data.running === null) {
         if (data.sessionMode !== 'multi') io.stdout.write('Applies only in multi session mode.\n');
         else if (kind === 'model' && data.runtime !== data.resolved?.runtime) io.stdout.write(`Saved configuration for ${data.runtime}; current group runtime is ${data.resolved?.runtime ?? 'unknown'}.\n`);
-      } catch { /* The formal wrapper owns output and errors. */ }
-    } },
-  };
-  const exitCode = await run(kind, flags, output);
+      }
+    }
+  }
   process.exitCode = exitCode;
   return exitCode;
 }

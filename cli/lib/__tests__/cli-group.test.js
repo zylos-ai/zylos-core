@@ -30,9 +30,13 @@ test('IF-47 group text explains null running using mode before runtime compariso
     for (const [sessionMode, expected] of [['single', /only in multi/], ['multi', /current group runtime is claude/]]) {
       let text = '';
       await groupCommand(['model', 'get'], { io: { stdout: { write: value => { text += value; } }, stderr: {} },
-        run: async (_kind, _args, io) => { io.stdout.write(`OK: ${JSON.stringify({ running: null, sessionMode, runtime: 'codex', resolved: { runtime: 'claude' } })}\n`); return 0; } });
+        run: async (_kind, args, io) => { assert.equal(args.at(-1), '--json'); io.stdout.write(`${JSON.stringify({ ok: true, data: { running: null, sessionMode, runtime: 'codex', resolved: { runtime: 'claude' } } })}\n`); return 0; } });
       assert.match(text, expected);
     }
+    let stdout = '', stderr = '';
+    const code = await groupCommand(['runtime', 'get'], { io: { stdout: { write: value => { stdout += value; } }, stderr: { write: value => { stderr += value; } } },
+      run: async (_kind, _args, io) => { io.stdout.write(JSON.stringify({ ok: false, error: { code: 'DB_BUSY', message: 'busy', persisted: [] } })); return 1; } });
+    assert.equal(code, 1); assert.equal(stdout, ''); assert.match(stderr, /^Error \[DB_BUSY\]: busy\n$/);
   } finally { process.exitCode = previous; }
 });
 

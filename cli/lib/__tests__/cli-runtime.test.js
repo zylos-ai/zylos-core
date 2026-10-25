@@ -15,7 +15,7 @@ function fixture(overrides = {}) {
     adapter: () => { calls.push('adapter'); return { checkAuth: async () => { calls.push('auth'); return { status: 'success' }; } }; },
     exists: () => { calls.push('exists'); return true; },
     credentials: () => { calls.push('credentials'); return true; },
-    hooksReady: () => { calls.push('hooks'); return true; },
+    hooksReady: () => { calls.push('hooks'); return { ready: true, pendingMigration: false }; },
     write: () => { calls.push('write'); return { previous: { runtime: 'claude' }, config: { runtime: 'codex', session_mode: 'multi' }, changed: true }; },
     observe: async () => { calls.push('observe'); return { groups: [], groupsComplete: true, observationErrors: [] }; },
     restart: () => { calls.push('restart'); },
@@ -31,7 +31,7 @@ test('IF-47 runtime prechecks are ordered and stop before persistence', async ()
   for (const [override, code, expected] of [
     [{ exists: () => false }, 'RUNTIME_NOT_INSTALLED', ['adapter', 'read']],
     [{ read: () => ({ state: 'error' }) }, 'CONFIG_UNREADABLE', ['adapter']],
-    [{ hooksReady: () => false }, 'HOOKS_NOT_READY', ['adapter', 'read', 'exists']],
+    [{ hooksReady: () => ({ ready: false, pendingMigration: false }) }, 'HOOKS_NOT_READY', ['adapter', 'read', 'exists']],
     [{ adapter: () => ({ checkAuth: async () => ({ status: 'uncertain' }) }) }, 'AUTH_NOT_CONFIRMED', ['read', 'exists', 'hooks']],
   ]) {
     const f = fixture(override); const result = await f.run();
@@ -47,7 +47,7 @@ test('review JSON: full-path credentials/restart and failed precheck emit exactl
   const lines = []; console.log = text => lines.push(text);
   try {
     for (const failed of [false, true]) {
-      const f = fixture(failed ? { hooksReady: () => false } : {
+      const f = fixture(failed ? { hooksReady: () => ({ ready: false, pendingMigration: false }) } : {
         write: () => ({ previous: { runtime: 'claude' }, config: { runtime: 'codex', session_mode: 'single' }, changed: true }),
         restart: ({ logSuccess }) => { logSuccess('progress must stay suppressed'); },
       });
@@ -86,7 +86,7 @@ test('IF-47 later credential/hook failures retain only confirmed saved credentia
   const result = await partial.run(['--save-apikey', 'fixture-key', '--save-base-url', 'https://example.test/v1']);
   assert.equal(result.error.code, 'CREDENTIAL_SAVE_FAILED'); assert.deepEqual(result.error.persisted, ['apiKey']);
   assert.equal(partial.calls.includes('write'), false);
-  const hooks = fixture({ hooksReady: () => false });
+  const hooks = fixture({ hooksReady: () => ({ ready: false, pendingMigration: false }) });
   const failed = await hooks.run(['--save-apikey', 'fixture-key']);
   assert.equal(failed.error.code, 'HOOKS_NOT_READY'); assert.deepEqual(failed.error.persisted, ['apiKey']);
 });
@@ -138,7 +138,7 @@ test('IF-47 real IB-46 writer preserves concurrent keys and returns the lock-tim
     for (const concurrentRuntime of ['codex', 'claude']) {
       fs.writeFileSync(file, JSON.stringify({ runtime: concurrentRuntime === 'codex' ? 'claude' : 'codex', session_mode: 'multi', keep: 1 }));
       const f = fixture({ read: () => readConfigStrict(file), hooksReady: () => {
-        save({ set: { runtime: concurrentRuntime, concurrent: 2 } }); return true;
+        save({ set: { runtime: concurrentRuntime, concurrent: 2 } }); return { ready: true, pendingMigration: false };
       }, write: save });
       const result = await f.run(['--save-apikey', 'fixture-key']);
       assert.equal(result.ok, true); assert.equal(result.data.previousBaseline, concurrentRuntime);
