@@ -86,7 +86,7 @@ test('T08/DM-53: context monitor preserves native status and excludes raw failed
   const result=spawnSync(process.execPath,[script],{env,input:JSON.stringify(payload),encoding:'utf8'});
   assert.equal(result.status,0);assert.equal(result.stdout,'');
   const written=JSON.parse(fs.readFileSync(path.join(options.zylosDir,'activity-monitor','statusline.json'),'utf8'));
-  assert.deepEqual({...written,zylos:undefined},{...payload,zylos:undefined});assert.equal(written.zylos.v,1);
+  assert.deepEqual(written,payload);assert.equal(Object.hasOwn(written,'zylos'),false);
   const invalid=spawnSync(process.execPath,[script],{env,input:'{"SECRET_RAW_INPUT":',encoding:'utf8'});
   assert.equal(invalid.status,0);
   assert.equal(fs.readFileSync(path.join(options.zylosDir,'activity-monitor','hook-activity-errors.log'),'utf8').includes('SECRET_RAW_INPUT'),false);

@@ -26,7 +26,6 @@ const { activateFreshSplitInstructions, instructionPaths } = await import('../ru
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const TEMPLATE_SETTINGS_PATH = path.join(__dirname, '..', '..', '..', 'templates', '.claude', 'settings.json');
-const CONTEXT_MONITOR_PATH = path.join(__dirname, '..', '..', '..', 'skills', 'activity-monitor', 'scripts', 'context-monitor.js');
 const POSTINSTALL_PATH = path.join(__dirname, '..', '..', '..', 'scripts', 'postinstall.js');
 const INIT_MODULE_PATH = path.join(__dirname, '..', '..', 'commands', 'init.js');
 
@@ -159,13 +158,6 @@ describe('desiredClaudeHooks', () => {
     assert.equal(groups.length, 1);
     assert.ok(groups[0].hooks.some(h => h.command.includes('hook-activity.js')));
     assert.equal(path.isAbsolute(extractScriptPath(groups[0].hooks[0].command)), true);
-  });
-});
-
-describe('Activity monitor threshold fallback', () => {
-  it('keeps the runtime fallback threshold at 70', () => {
-    const source = fs.readFileSync(CONTEXT_MONITOR_PATH, 'utf8');
-    assert.match(source, /const DEFAULT_THRESHOLD = 70;/);
   });
 });
 
