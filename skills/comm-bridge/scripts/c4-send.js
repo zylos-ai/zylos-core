@@ -31,6 +31,7 @@ import { spawn } from 'child_process';
 import { insertConversation, close } from './c4-db.js';
 import { SKILLS_DIR } from './c4-config.js';
 import { validateChannel, validateEndpoint } from './c4-validate.js';
+import { sendInternal } from './c4-send-internal.js';
 
 function printUsage() {
   console.log('Usage: node c4-send.js <channel> <endpoint_id> <<\'EOF\'');
@@ -56,6 +57,14 @@ function readStdin() {
 
 async function main() {
   const args = process.argv.slice(2);
+
+  // Internal has a strict stdin-only protocol, independent of legacy parsing.
+  if (args[0] === 'internal') {
+    try { console.log(await sendInternal(args, readStdin)); }
+    catch (err) { console.error(`Error: ${err.code || 'DB_WRITE_FAILED'}: ${err.message}`); process.exitCode = 1; }
+    finally { close(); }
+    return;
+  }
 
   if (args.length < 2) {
     printUsage();
