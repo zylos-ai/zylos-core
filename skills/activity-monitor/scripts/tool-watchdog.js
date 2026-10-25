@@ -56,19 +56,6 @@ export function evaluateToolWatchdogTransition({
       return phase;
     }
 
-    if (deps.canTreatPaneAsRecovered(interactiveState)) {
-      deps.applySyntheticClearHint(
-        foregroundIdentity.sessionId,
-        foregroundIdentity.claudePid,
-        'interactive_recovered',
-        nowMs
-      );
-      deps.clearWatchdogState();
-      phase.watchdog_phase = 'recovered';
-      phase.api_activity_dirty = true;
-      return phase;
-    }
-
     if (state.watchdogState.interrupt_sent_at && nowMs <= state.watchdogState.grace_deadline_at) {
       phase.watchdog_phase = 'interrupt_wait';
       return phase;

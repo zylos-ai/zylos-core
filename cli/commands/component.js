@@ -23,6 +23,7 @@ import { acquireLock, releaseLock } from '../lib/lock.js';
 import { fetchRawFile } from '../lib/github.js';
 import { promptYesNo } from '../lib/prompts.js';
 import { evaluateUpgrade } from '../lib/claude-eval.js';
+import { requestRuntimeRestart } from '../lib/request-runtime-restart.js';
 
 /**
  * Print a single upgrade step result in real time.
@@ -169,7 +170,11 @@ export function formatC4Reply(type, data) {
           instructionFilesRebuilt && 'instruction files',
           settingsChanged && 'hook settings',
         ].filter(Boolean).join(' and ');
-        r += `\n\n${what.charAt(0).toUpperCase() + what.slice(1)} updated — Claude will restart automatically to load the new configuration. No action needed.`;
+        if (data.runtimeRestart?.ok === false) {
+          r += `\n\n${what.charAt(0).toUpperCase() + what.slice(1)} updated. ${data.runtimeRestart.error.message} (${data.runtimeRestart.error.code})`;
+        } else {
+          r += `\n\n${what.charAt(0).toUpperCase() + what.slice(1)} updated — Claude will restart automatically to load the new configuration. No action needed.`;
+        }
       }
       const protection=formatSelfUpgradeProtection(data);if(protection)r+='\n'+protection;
       return r;
@@ -1186,6 +1191,19 @@ async function upgradeSelfCore({ branch, beta = false, mode = 'merge' } = {}) {
     // Legacy success cleanup is common to JSON and human output.
     if(result.success && !result.preInstallProtection && !result.backupOnly && result.backupDir)cleanupBackup(result.backupDir);
 
+    // P11 owns merging hook and instruction requests in the upgrade finalizer.
+    // This legacy result flag requests one restart after the services return.
+    if (result.success && result.instructionFilesRebuilt) {
+      try {
+        result.runtimeRestart = await requestRuntimeRestart({ afterServiceRestart: true });
+        if (!result.runtimeRestart.ok) console.error(`Warning: ${result.runtimeRestart.error.message} (${result.runtimeRestart.error.code})`);
+      } catch (error) {
+        result.runtimeRestart = { ok: false, error: { code: error.code || 'restart_submission_failed',
+          message: `Runtime restart was not submitted: ${error.message}. All currently running managed sessions, including Origin, need manual restart.` } };
+        console.error(`Warning: ${result.runtimeRestart.error.message}`);
+      }
+    }
+
     // Output result
     if (jsonOutput) {
       const output = { ...result };
@@ -1199,22 +1217,6 @@ async function upgradeSelfCore({ branch, beta = false, mode = 'merge' } = {}) {
       }
       output.reply = formatC4Reply('self-upgrade', { ...result, changelog: coreChangelog });
       console.log(JSON.stringify(output, null, 2));
-      // Auto-restart for instruction file changes (CLAUDE.md / AGENTS.md).
-      // Settings hook changes are handled by sync-settings-hooks.js directly,
-      // which enqueues /exit from the newly installed package — avoiding the
-      // bootstrap problem where the old component.js lacks restart logic.
-      if (result.success && result.instructionFilesRebuilt) {
-        try {
-          const activeRuntime = readZylosConfigOrThrow().runtime ?? 'claude';
-          if (activeRuntime === 'claude') {
-            const c4ControlPath = path.join(ZYLOS_DIR, '.claude', 'skills', 'comm-bridge', 'scripts', 'c4-control.js');
-            const { spawnSync } = await import('child_process');
-            spawnSync('node', [c4ControlPath, 'enqueue', '--content', '/exit', '--priority', '1', '--block-queue-until-idle', '--no-ack-suffix'], { stdio: 'pipe' });
-          }
-        } catch (error) {
-          console.error(`Warning: runtime restart was not enqueued: ${error.message}`);
-        }
-      }
     } else if (result.success) {
       console.log(`\n${success(`${bold('zylos-core')} upgraded: ${dim(result.from)} → ${bold(result.to)}`)}`);
       if (coreChangelog) {
