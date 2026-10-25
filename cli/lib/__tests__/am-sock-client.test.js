@@ -34,9 +34,9 @@ test('IF-37 validates all five reply branches and mandatory relationships', () =
     ['mode_switch', { ok: true, result: 'accepted', runId: 't1' }, true],
     ['mode_switch', { ok: true, result: 'noop', futureField: 1 }, true],
     ['start_attempt', { ok: true, result: 'not_restricted' }, true],
-    ['start_attempt', { ok: true, result: 'not_restricted', attemptAt: 1 }, false],
-    ['start_attempt', { ok: true, result: 'registered', reason: 'recovery_due', attemptAt: 1792000000, attemptCount: 1 }, true],
-    ['start_attempt', { ok: true, result: 'registered', reason: 'recovery_due', attemptAt: 1792000000000, attemptCount: 1 }, false],
+    ['start_attempt', { ok: true, result: 'not_restricted', attemptAt: 1 }, true],
+    ['start_attempt', { ok: true, result: 'registered', reason: 'recovery_due' }, true],
+    ['start_attempt', { ok: true, result: 'registered', reason: 'recovery_due', attemptAt: 1792000000000, attemptCount: '1' }, true],
     ['start_attempt', { ok: false, code: 'probe_inflight', notBefore: 1792000000000 }, false],
     ['start_attempt', { ok: false, code: 'attempt_backoff', notBefore: 1792000000000 }, true],
     ['start_attempt', { ok: false, code: 'attempt_backoff', notBefore: 1792000000 }, false],
@@ -105,7 +105,7 @@ test('IF-37 five-family matrix: complete, partial, reset, malformed, late and de
   t.mock.timers.enable({apis:['setTimeout']});
   let clock = 1792000000000;
   const replies = {
-    start_attempt: {ok:true,result:'registered',reason:'recovery_due',attemptAt:1792000000,attemptCount:1},
+    start_attempt: {ok:true,result:'registered',reason:'recovery_due'},
     restart_all: {ok:true,result:'done_empty',runCount:0},
     ready_for_config_reclaim: {ok:true,result:'unchanged'}, manual_restart: {ok:true,result:'already_stopped'}, mode_switch:{ok:true,result:'noop'},
   };

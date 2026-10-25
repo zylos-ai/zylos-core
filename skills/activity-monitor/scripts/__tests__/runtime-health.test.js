@@ -7,6 +7,16 @@ import { randomUUID } from 'node:crypto';
 import { RuntimeHealthCoordinator, aggregateRuntimeDemand, classifyRecoveryResult } from '../runtime-health.js';
 import { HealthStore } from '../health-store.js';
 
+function registered(reply) {
+  assert.equal(reply.result, 'registered');
+  assert.equal(Object.hasOwn(reply, 'attemptCount'), false);
+  assert.equal(Object.hasOwn(reply, 'attemptAt'), false);
+}
+function scheduling(state) {
+  const s = state.scheduling;
+  return [s.restartFailureCount, s.lastRecoveryAt, s.lastDownCheckAt];
+}
+
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(),'runtime-health-'));
   t.after(() => fs.rmSync(root,{recursive:true,force:true}));
@@ -35,7 +45,7 @@ test('start registration validates request and evaluates restrictions in order',
   f.set({}, {cooldownUntil:0});f.setCache({version:2,runtime:'claude',health:'rate_limited',reason:'rate_limit_unclassified',expiresAt:f.now()+30000});
   assert.equal((await f.health.registerStartAttempt(f.request())).code,'probe_cache');
   f.setCache(null);const answer=await f.health.registerStartAttempt(f.request());
-  assert.equal(answer.result,'registered');assert.equal(answer.attemptAt,f.now()/1000);assert.equal(answer.attemptCount,1);
+  registered(answer);assert.deepEqual(scheduling(f.read()),[1,f.now()/1000,0]);
   assert.equal(Object.hasOwn(answer,'code'),false);assert.equal(Object.hasOwn(answer,'notBefore'),false);
   assert.equal((await f.health.registerStartAttempt(f.request())).code,'attempt_backoff');
 });
@@ -46,7 +56,8 @@ test('IF-62/DM-68 concurrent same-runtime requests commit exactly one attempt an
   assert.equal(replies.filter(r=>r.result==='registered').length,1);assert.equal(f.read().scheduling.restartFailureCount,1);
   const restarted=new RuntimeHealthCoordinator(f.options);
   assert.equal((await restarted.registerStartAttempt(f.request())).code,'attempt_backoff');
-  f.advance(60000);assert.equal((await restarted.registerStartAttempt(f.request())).attemptCount,2);
+  f.advance(60000);registered(await restarted.registerStartAttempt(f.request()));
+  assert.deepEqual(scheduling(f.read()),[2,f.now()/1000,0]);
   assert.equal((await restarted.registerStartAttempt(f.request())).notBefore,f.now()+300000);
 });
 
@@ -80,7 +91,7 @@ test('DM-72 down registration leaves count unchanged; user acceleration is singl
   const f=fixture(t);f.set({health:'down'},{restartFailureCount:8,lastDownCheckAt:f.now()/1000-20});
   assert.equal((await f.health.registerStartAttempt(f.request())).code,'down_retry_interval');
   assert.equal(await f.health.notifyUserMessage('claude'),true);
-  const reply=await f.health.registerStartAttempt(f.request());assert.equal(reply.reason,'user_message');assert.equal(Object.hasOwn(reply,'attemptCount'),false);assert.equal(f.read().scheduling.restartFailureCount,8);
+  const reply=await f.health.registerStartAttempt(f.request());registered(reply);assert.equal(reply.reason,'user_message');assert.deepEqual(scheduling(f.read()),[8,0,f.now()/1000]);
   assert.equal((await f.health.registerStartAttempt(f.request())).code,'down_retry_interval');
   assert.equal(await f.health.notifyUserMessage('claude'),false);
 });
@@ -89,7 +100,8 @@ test('DM-45/72 cooldown restore retains budget, rate-limit acceleration clears c
   const f=fixture(t);f.set({health:'rate_limited'},{restartFailureCount:3,lastRecoveryAt:f.now()/1000-500,cooldownUntil:f.now()/1000-1});
   await f.health.restore('claude');assert.equal(f.read().health,'rate_limited');assert.equal(f.read().scheduling.restartFailureCount,3);assert.equal(f.read().scheduling.cooldownUntil,0);
   assert.equal((await f.health.registerStartAttempt(f.request())).code,'attempt_backoff');
-  await f.health.notifyUserMessage('claude');assert.equal((await f.health.registerStartAttempt(f.request())).attemptCount,4);
+  await f.health.notifyUserMessage('claude');registered(await f.health.registerStartAttempt(f.request()));
+  assert.deepEqual(scheduling(f.read()),[4,f.now()/1000,0]);
 });
 
 test('IB-35 done outranks screen, rate limit outranks simultaneous authentication and keeps budgets',async t=>{

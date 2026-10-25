@@ -25,8 +25,8 @@ const good = {
   ],
   start_attempt: [
     { ok: true, result: 'not_restricted' },
-    { ok: true, result: 'registered', reason: 'recovery_due', attemptAt: 1792000000, attemptCount: 1 },
-    { ok: true, result: 'registered', reason: 'user_message', attemptAt: 1792000000 },
+    { ok: true, result: 'registered', reason: 'recovery_due' },
+    { ok: true, result: 'registered', reason: 'user_message' },
     ...['rate_limit_cooldown', 'probe_cache', 'attempt_backoff', 'down_retry_interval'].map(code => ({ ok: false, code, notBefore: 1792000010000 })),
     ...['invalid_request', 'auth_blocked', 'scene_present', 'probe_inflight', 'health_write_failed'].map(code => ({ ok: false, code })),
   ],
@@ -49,9 +49,7 @@ test('IF-37 complete legal branch inventory, unknown extensions and every branch
       const result = await transport(type, extended); assert.equal(result.kind, fields.ok ? 'accepted' : 'rejected'); assert.equal(result.sent, true);
       assert.deepEqual(result.reply, extended);
       for (const key of Object.keys(reply)) {
-        // attemptCount is absent for down; all other present fields in these
-        // branch-minimal fixtures are mandatory.
-        if (key === 'attemptCount') continue;
+        // Every field in these branch-minimal fixtures is mandatory.
         const missing = { ...reply }; delete missing[key];
         assert.equal(validateReply(envelope(type), missing), false, `${type} missing ${key}: ${JSON.stringify(fields)}`);
       }
@@ -73,13 +71,29 @@ test('IF-37 literal invalid reason/code, incompatible ok/result and field relati
     ['restart_all', { ok: true, result: 'accepted', runCount: 0 }],
     ['manual_restart', { ok: false, result: 'stale_target' }],
     ['mode_switch', { ok: false, code: 'transition_open', runId: 'switch', target: 'other' }],
-    ['start_attempt', { ok: true, result: 'registered', reason: 'recovery_due', attemptCount: 1 }],
-    ['start_attempt', { ok: true, result: 'registered', reason: 'recovery_due', attemptAt: 1792000000000, attemptCount: 1 }],
-    ['start_attempt', { ok: true, result: 'registered', reason: 'recovery_due', attemptAt: 1792000000, attemptCount: '1' }],
-    ['start_attempt', { ok: true, result: 'not_restricted', attemptAt: 1792000000 }],
     ['start_attempt', { ok: false, code: 'attempt_backoff' }],
     ['start_attempt', { ok: false, code: 'attempt_backoff', notBefore: 1792000000 }],
     ['start_attempt', { ok: false, code: 'unknown_code' }],
   ];
   for (const [type, fields] of cases) assert.deepEqual(await transport(type, fields), { kind: 'invalid_reply', sent: true }, `${type}: ${JSON.stringify(fields)}`);
+});
+
+// Removed registration metadata is an unknown extension on every branch.
+test('IF-62 start_attempt ignores retired attempt metadata, including malformed values', async () => {
+  const extensions = [
+    { attemptCount: 1 },
+    { attemptAt: 1792000000000, attemptCount: '1' },
+    { attemptAt: { unexpected: true }, attemptCount: null },
+    { attemptAt: null, attemptCount: ['invalid-old-count'] },
+  ];
+  for (const fields of good.start_attempt) {
+    for (const extension of extensions) {
+      const extended = { ...envelope('start_attempt'), ...fields, ...extension };
+      assert.equal(validateReply(envelope('start_attempt'), extended), true, JSON.stringify(extended));
+      const result = await transport('start_attempt', extended);
+      assert.equal(result.kind, fields.ok ? 'accepted' : 'rejected');
+      assert.equal(result.sent, true);
+      assert.deepEqual(result.reply, extended);
+    }
+  }
 });

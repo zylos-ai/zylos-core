@@ -16,6 +16,16 @@ async function mutant(from, to) {
   source = source.replace(from, to).replace(/from '(\.[^']+)'/g, (_, relative) => `from '${new URL(relative, file).href}'`);
   return (await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`)).RuntimeHealthCoordinator;
 }
+function registered(reply) {
+  assert.equal(reply.result, 'registered');
+  assert.equal(Object.hasOwn(reply, 'attemptCount'), false);
+  assert.equal(Object.hasOwn(reply, 'attemptAt'), false);
+}
+function schedulingValues(state) {
+  const s = state.scheduling;
+  return [s.restartFailureCount, s.lastRecoveryAt, s.lastDownCheckAt];
+}
+
 function fixture(t, Coordinator = RuntimeHealthCoordinator) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'budget-acceptance-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -40,7 +50,7 @@ function result(request, extra = {}) { return { runtime: 'claude', runId: reques
 
 test('DM-68 registration survives observed appearance, READY, exit and observation-only guardian callbacks', async t => {
   const f = fixture(t); f.clock(T + 60); const request = f.request();
-  assert.equal((await f.health.registerStartAttempt(request)).attemptCount, 2);
+  registered(await f.health.registerStartAttempt(request));assert.deepEqual(schedulingValues(f.read()), [2, T + 60, 0]);
   const before = fs.readFileSync(f.store.file, 'utf8');
   for (const ready of [false, true]) {
     f.scenes([{ ...request, ready }]);
@@ -52,7 +62,7 @@ test('DM-68 registration survives observed appearance, READY, exit and observati
   await observeRuntimeProcess({ isRunning: async () => ({ tmux: true, process: false }) }, { tmuxName: 'fixture-only' });
   assert.deepEqual(budget(f), [2, T + 60]);
   f.clock(T + 359); assert.equal((await f.health.registerStartAttempt(f.request())).notBefore, (T + 360) * 1000);
-  f.clock(T + 360); assert.equal((await f.health.registerStartAttempt(f.request())).attemptCount, 3);
+  f.clock(T + 360); registered(await f.health.registerStartAttempt(f.request()));assert.deepEqual(schedulingValues(f.read()), [3, T + 360, 0]);
 });
 
 async function linkedSequence(t, Coordinator) {
@@ -92,15 +102,14 @@ test('DM-70 lost r1 reply, unregistered same-group r2, stale and group-associati
 async function accelerationSequences(t, Coordinator) {
   const down = fixture(t, Coordinator); down.set('down', { restartFailureCount: 2, lastDownCheckAt: T }); down.clock(T + 3600);
   const reply = await down.health.registerStartAttempt(down.request());
-  assert.equal(reply.attemptAt, T + 3600); assert.equal(Object.hasOwn(reply, 'attemptCount'), false);
-  assert.equal(down.read().scheduling.restartFailureCount, 2); assert.equal(down.read().scheduling.lastDownCheckAt, T + 3600);
+  registered(reply);assert.deepEqual(schedulingValues(down.read()), [2, T, T + 3600]);
   const unavailable = fixture(t, Coordinator); unavailable.set('unavailable', { restartFailureCount: 3 }); unavailable.clock(T + 1);
   await unavailable.health.notifyUserMessage('claude'); assert.deepEqual(budget(unavailable), [0, 0]);
-  assert.equal((await unavailable.health.registerStartAttempt(unavailable.request())).attemptCount, 1);
+  registered(await unavailable.health.registerStartAttempt(unavailable.request()));assert.deepEqual(schedulingValues(unavailable.read()), [1, T + 1, 0]);
   const limited = fixture(t, Coordinator); limited.set('rate_limited', { restartFailureCount: 3, cooldownUntil: T + 500 }); limited.clock(T + 1);
   await limited.health.notifyUserMessage('claude'); assert.deepEqual(budget(limited), [3, T]);
   assert.equal(limited.read().scheduling.cooldownUntil, 0); assert.equal(limited.read().scheduling.lastUserMessageRecoveryAt, T + 1);
-  assert.equal((await limited.health.registerStartAttempt(limited.request())).attemptCount, 4);
+  registered(await limited.health.registerStartAttempt(limited.request()));assert.deepEqual(schedulingValues(limited.read()), [4, T + 1, 0]);
 }
 test('DM-72 all three frozen sequences reject down-count and rate-message-reset implementations', async t => {
   await accelerationSequences(t, RuntimeHealthCoordinator);
@@ -154,8 +163,9 @@ test('IF-62 A exact decision rows, missing/unreadable F10 and no F11 writes', as
     const bytes = fs.readFileSync(f.store.file, 'utf8'); const reply = await f.health.registerStartAttempt(request);
     const envelope = { version: 1, type: 'start_attempt', requestId: request.requestId };
     if (code === 'registered') {
-      assert.deepEqual(reply, { ...envelope, ok: true, result: 'registered', reason: label === 'accelerated' ? 'user_message' : 'recovery_due', attemptAt: now,
-        ...(healthValue === 'down' ? {} : { attemptCount: 2 }) }, label);
+      assert.deepEqual(reply, { ...envelope, ok: true, result: 'registered', reason: label === 'accelerated' ? 'user_message' : 'recovery_due' }, label);
+      registered(reply);
+      assert.deepEqual(schedulingValues(f.read()), healthValue === 'down' ? [1, T, now] : [2, now, 0], label);
       assert.equal(f.writes(), 1, label); assert.equal(f.read().health, healthValue, label);
     } else {
       assert.deepEqual(reply, code === 'not_restricted' ? { ...envelope, ok: true, result: code } : { ...envelope, ok: false, code, ...(notBefore === undefined ? {} : { notBefore }) }, label);

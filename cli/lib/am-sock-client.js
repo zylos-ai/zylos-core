@@ -23,13 +23,11 @@ export function validateReply(request, reply) {
   if (reply.version !== 1 || reply.type !== request.type || reply.requestId !== request.requestId || typeof reply.ok !== 'boolean') return false;
   if (request.type === 'start_attempt') {
     if (reply.ok) {
-      if (reply.result === 'not_restricted') return absent(reply, ['reason', 'attemptAt', 'attemptCount', 'code', 'notBefore']);
+      if (reply.result === 'not_restricted') return absent(reply, ['reason', 'code', 'notBefore']);
       return reply.result === 'registered' && oneOf(reply.reason, ['user_message', 'recovery_due'])
-        && integer(reply.attemptAt) && reply.attemptAt >= 0 && reply.attemptAt < 1e11
-        && (!Object.hasOwn(reply, 'attemptCount') || (integer(reply.attemptCount) && reply.attemptCount >= 1))
         && absent(reply, ['code', 'notBefore']);
     }
-    if (!absent(reply, ['result', 'reason', 'attemptAt', 'attemptCount'])) return false;
+    if (!absent(reply, ['result', 'reason'])) return false;
     if (oneOf(reply.code, ['rate_limit_cooldown', 'probe_cache', 'attempt_backoff', 'down_retry_interval'])) return integer(reply.notBefore) && reply.notBefore >= 1e12;
     return oneOf(reply.code, ['invalid_request', 'auth_blocked', 'scene_present', 'probe_inflight', 'health_write_failed']) && absent(reply, ['notBefore']);
   }
