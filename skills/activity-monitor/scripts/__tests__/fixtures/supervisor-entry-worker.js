@@ -14,7 +14,7 @@ if(scenario==='restore-failure')options.requestStore={read(){throw Object.assign
 let service;
 try {
   service=await startSupervisor(options);
-  process.send({ready:true,admissionOpen:service.supervisor.admission.open,configurationError:service.supervisor.loop.configurationError?.code,logs});
+  process.send({ready:true,admissionOpen:service.supervisor.admission.open,configurationError:service.supervisor.loop.configurationError?.code,mode:service.supervisor.loop.configuration?.mode,legacy:service.supervisor.loop.configuration?.legacy,logs});
 } catch(error) {
   process.send({startupError:error.code ?? error.message});process.disconnect();
 }
