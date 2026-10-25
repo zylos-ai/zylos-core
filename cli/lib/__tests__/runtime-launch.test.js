@@ -1,9 +1,8 @@
+import { isolatedTmux } from '../../../test/helpers/isolated-tmux.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
 import { ClaudeAdapter } from '../runtime/claude.js';
 import { CodexAdapter } from '../runtime/codex.js';
@@ -23,13 +22,10 @@ const sentinel = 'System startup trigger, not a user message. Continue with star
 const secret = 'sk-ant-synthetic-launch-test';
 
 function setup(t, Cls, { help = ' --model MODEL --effort EFFORT --no-daemon ', helpFails = false, nativeAuth = false } = {}) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'runtime-launch-'));
+  const {dir,socketPath,tmux}=isolatedTmux(t,{prefix:'runtime-launch-',socketName:'socket',trim:false});
   const root = path.join(dir, "root with ' quote");
   const home = path.join(dir, 'home');
   fs.mkdirSync(root); fs.mkdirSync(home);
-  const socketPath = path.join(dir, 'socket');
-  const tmux = (...args) => execFileSync(binary, ['-S', socketPath, ...args], { encoding: 'utf8', timeout: 3000, stdio: ['ignore','pipe','pipe'] });
-  t.after(() => { try { tmux('kill-server'); } catch {} fs.rmSync(dir, { recursive: true, force: true }); });
   const command = path.join(dir, "runtime with ' quote");
   const helpLog = path.join(dir, 'help-log');
   const report = path.join(dir, 'runtime-report.json');
@@ -113,11 +109,15 @@ for (const Cls of [ClaudeAdapter, CodexAdapter]) {
     else { assert.ok(p.args.includes('model_reasoning_effort="high"')); assert.ok(p.args.includes('--no-daemon')); assert.equal(p.args.at(-1), sentinel); }
   });
 
-  test(`${Cls.name}: capability failure rejects before tmux creation`, async t => {
-    const f = setup(t, Cls, { helpFails: true });
-    await assert.rejects(f.launch({ launchConfig: { runtime: f.input.launchConfig.runtime, mode: 'override', model: 'test', effort: 'high' } }), { code: 'LAUNCH_FAILED' });
-    assert.throws(() => f.tmux('list-sessions'));
-  });
+  for(const mode of (Cls===CodexAdapter?['override','default']:['override'])) {
+    const title=mode==='override'?`${Cls.name}: capability failure rejects before tmux creation`:'Codex default capability failure rejects before creation';
+    test(title,async t=>{
+      const f=setup(t,Cls,{helpFails:true});
+      const changes=mode==='default'?{}:{launchConfig:{runtime:f.input.launchConfig.runtime,mode,model:'test',effort:'high'}};
+      await assert.rejects(f.launch(changes),{code:'LAUNCH_FAILED'});
+      assert.throws(()=>f.tmux('list-sessions'));
+    });
+  }
 
   test(`${Cls.name}: unsupported override rejects before creation`, async t => {
     const f = setup(t, Cls, { help: ' --help ' });
@@ -133,70 +133,45 @@ test('Claude compat PATH is deduplicated in actual runtime environment', async t
   const p = await f.launch(); assert.equal(p.env.PATH, '/usr/bin:/bin');
 });
 
-test('Codex override without daemon capability omits unsupported flag and keeps stateless sentinel', async t => {
-  const f = setup(t, CodexAdapter, { help: ' --model MODEL ' });
-  for (let i = 0; i < 2; i++) {
-    const p = await f.launch({ sessionGroup: `test:codex-${i}`, sessionMode: 'multi', launchConfig: { runtime: 'codex', mode: 'override', model: 'test', effort: 'low' } });
-    assert.equal(p.args.includes('--no-daemon'), false); assert.equal(p.args.at(-1), sentinel);
-    assert.equal(p.args.some(a => a.includes('session-start-inject.js')), false);
+for(const [mode,title,help,cycles] of [
+  ['override','Codex override without daemon capability omits unsupported flag and keeps stateless sentinel',' --model MODEL ',2],
+  ['default','Codex default launch without daemon capability omits unsupported flag',' --help ',1],
+]) test(title,async t=>{
+  const f=setup(t,CodexAdapter,{help});
+  for(let i=0;i<cycles;i++){
+    const changes=mode==='default'?{}:{sessionGroup:`test:codex-${i}`,sessionMode:'multi',launchConfig:{runtime:'codex',mode,model:'test',effort:'low'}};
+    const p=await f.launch(changes);
+    assert.equal(p.args.includes('--no-daemon'),false);assert.equal(p.args.at(-1),sentinel);
+    if(mode==='override')assert.equal(p.args.some(a=>a.includes('session-start-inject.js')),false);
   }
-  assert.equal(fs.existsSync(path.join(f.root, '.zylos/first-start-done')), false);
+  if(mode==='override')assert.equal(fs.existsSync(path.join(f.root,'.zylos/first-start-done')),false);
+});
+
+// Preserve both manifest-based native-auth paths and explicit-token fallback.
+for(const [auth,title] of [
+  ['credentials','Claude native auth strips dotenv tokens from actual runtime environment'],
+  ['status','Claude native auth status strips dotenv tokens without credential file'],
+  ['none','Claude without native auth retains explicitly allowed dotenv tokens'],
+]) test(title,async t=>{
+  const f=setup(t,ClaudeAdapter,{nativeAuth:auth==='status'});
+  fs.mkdirSync(path.join(f.root,'.zylos'));
+  fs.writeFileSync(path.join(f.root,'.zylos/runtime-env.manifest'),'env ANTHROPIC_API_KEY\nenv CLAUDE_CODE_OAUTH_TOKEN\n');
+  if(auth==='credentials'){
+    fs.mkdirSync(path.join(f.home,'.claude'));
+    fs.writeFileSync(path.join(f.home,'.claude/.credentials.json'),JSON.stringify({claudeAiOauth:{refreshToken:'synthetic-refresh-token'}}));
+  }
+  fs.appendFileSync(path.join(f.root,'.env'),'CLAUDE_CODE_OAUTH_TOKEN=synthetic-oauth-token\n');
+  const originalEnv={...f.env},p=await f.launch();
+  assert.equal(p.env.ANTHROPIC_API_KEY,auth==='none'?secret:undefined);
+  assert.equal(p.env.CLAUDE_CODE_OAUTH_TOKEN,auth==='none'?'synthetic-oauth-token':undefined);
+  if(auth==='none')assert.deepEqual(f.env,originalEnv);
 });
 
 // Preserve native-auth precedence and daemon isolation through the target API.
-test('Claude native auth strips dotenv tokens from actual runtime environment', async t => {
-  const f = setup(t, ClaudeAdapter);
-  fs.mkdirSync(path.join(f.root, '.zylos'));
-  fs.writeFileSync(path.join(f.root, '.zylos/runtime-env.manifest'), 'env ANTHROPIC_API_KEY\nenv CLAUDE_CODE_OAUTH_TOKEN\n');
-  fs.mkdirSync(path.join(f.home, '.claude'));
-  fs.writeFileSync(path.join(f.home, '.claude/.credentials.json'), JSON.stringify({ claudeAiOauth: { refreshToken: 'synthetic-refresh-token' } }));
-  fs.appendFileSync(path.join(f.root, '.env'), 'CLAUDE_CODE_OAUTH_TOKEN=synthetic-oauth-token\n');
-  const p = await f.launch();
-  assert.equal(p.env.ANTHROPIC_API_KEY, undefined, 'native auth must not be overridden by dotenv API key');
-  assert.equal(p.env.CLAUDE_CODE_OAUTH_TOKEN, undefined, 'native auth must not be overridden by dotenv token');
-});
-
 test('Codex default launch retains supported daemon isolation', async t => {
   const f = setup(t, CodexAdapter);
   const p = await f.launch();
   assert.ok(p.args.includes('--no-daemon'), 'supported isolation must also apply to default model config');
-});
-
-
-test('Codex default launch without daemon capability omits unsupported flag', async t => {
-  const f = setup(t, CodexAdapter, { help: ' --help ' });
-  const p = await f.launch();
-  assert.equal(p.args.includes('--no-daemon'), false);
-  assert.equal(p.args.at(-1), sentinel);
-});
-
-test('Codex default capability failure rejects before creation', async t => {
-  const f = setup(t, CodexAdapter, { helpFails: true });
-  await assert.rejects(f.launch(), { code: 'LAUNCH_FAILED' });
-  assert.throws(() => f.tmux('list-sessions'));
-});
-
-test('Claude native auth status strips dotenv tokens without credential file', async t => {
-  const f = setup(t, ClaudeAdapter, { nativeAuth: true });
-  fs.mkdirSync(path.join(f.root, '.zylos'));
-  fs.writeFileSync(path.join(f.root, '.zylos/runtime-env.manifest'), 'env ANTHROPIC_API_KEY\nenv CLAUDE_CODE_OAUTH_TOKEN\n');
-  fs.appendFileSync(path.join(f.root, '.env'), 'CLAUDE_CODE_OAUTH_TOKEN=synthetic-oauth-token\n');
-  const p = await f.launch();
-  assert.equal(p.env.ANTHROPIC_API_KEY, undefined);
-  assert.equal(p.env.CLAUDE_CODE_OAUTH_TOKEN, undefined);
-});
-
-
-test('Claude without native auth retains explicitly allowed dotenv tokens', async t => {
-  const f = setup(t, ClaudeAdapter);
-  fs.mkdirSync(path.join(f.root, '.zylos'));
-  fs.writeFileSync(path.join(f.root, '.zylos/runtime-env.manifest'), 'env ANTHROPIC_API_KEY\nenv CLAUDE_CODE_OAUTH_TOKEN\n');
-  fs.appendFileSync(path.join(f.root, '.env'), 'CLAUDE_CODE_OAUTH_TOKEN=synthetic-oauth-token\n');
-  const originalEnv = { ...f.env };
-  const p = await f.launch();
-  assert.equal(p.env.ANTHROPIC_API_KEY, secret);
-  assert.equal(p.env.CLAUDE_CODE_OAUTH_TOKEN, 'synthetic-oauth-token');
-  assert.deepEqual(f.env, originalEnv);
 });
 
 

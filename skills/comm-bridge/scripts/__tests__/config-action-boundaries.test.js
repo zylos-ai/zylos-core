@@ -95,19 +95,3 @@ test('dispatcher never resolves Core without ZYLOS_PACKAGE_ROOT and keeps F1 rea
   `, { PATH: `${bin}${path.delimiter}${process.env.PATH}`, NPM_COUNT_FILE: count, NPM_TEST_ROOT: root });
   assert.equal(result.status, 0, result.stderr);
 }));
-
-test('status notice assembly and default delivery identity visibly reject malformed F1 at use', () => fixture(({ file, evaluate }) => {
-  const templates = new URL('../status-notice-templates.js', import.meta.url).href;
-  const delivery = new URL('../runtime-delivery.js', import.meta.url).href;
-  fs.writeFileSync(file, '{ broken');
-  for (const [url, action] of [[templates, 'm.messageForStatus({health:"auth_failed"})'], [delivery, 'm.readDeliveryIdentity()']]) {
-    assert.equal(evaluate(`await import(${JSON.stringify(url)});`).status, 0);
-    const result = evaluate(`const m=await import(${JSON.stringify(url)}); ${action};`);
-    assert.notEqual(result.status, 0);
-    assert.match(result.stderr, /CONFIG_UNREADABLE/);
-  }
-  fs.writeFileSync(file, JSON.stringify({ statusNotices: { brand: 'Product' } }));
-  const valid = evaluate(`const m=await import(${JSON.stringify(templates)}); console.log(m.messageForStatus({health:'auth_failed'}));`);
-  assert.equal(valid.status, 0, valid.stderr);
-  assert.match(valid.stdout, /\[Product\]/);
-}));

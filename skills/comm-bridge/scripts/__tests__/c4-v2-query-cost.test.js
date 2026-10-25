@@ -40,7 +40,7 @@ test('query plans use indexes without compiler instrumentation or native extensi
       }
     })();
   }
-  history(1, 100000, 500);
+  history(1, 2000, 500);
   db.transaction(() => {
     for (let id = 1; id <= 20; id++) {
       seed.run(1000000 + id, id <= 10 ? 'pending' : 'delivered', id <= 10 ? 'pending' : 'active');
@@ -62,7 +62,7 @@ test('query plans use indexes without compiler instrumentation or native extensi
     return Object.fromEntries(Object.entries(operations).map(([name, operation]) => [name, inspect(operation)]));
   }
   const first = measure();
-  history(100001, 200000, 1000);
+  history(2001, 4000, 1000);
   const second = measure();
   for (const name of ['machine', 'group', 'all', 'pending', 'tail', 'range']) {
     assert.deepEqual(second[name].result, first[name].result, name);

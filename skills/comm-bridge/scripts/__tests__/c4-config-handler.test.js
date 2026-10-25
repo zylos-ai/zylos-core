@@ -1,15 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import Database from 'better-sqlite3';
-import { guardDatabase } from '../sqlite-schema.js';
-import * as schema from '../c4-schema.js';
-import { createStore } from '../c4-v2-store.js';
+import { fixture as storeFixture } from './c4-v2-test-helpers.js';
 import { createConfigHandler, classifyConfigRunning, parseConfigArgs } from '../c4-config-handler.js';
 
 function fixture(t, overrides = {}) {
-  const db = new Database(':memory:');
-  t.after(() => db.close()); guardDatabase(db, schema);
-  const store = createStore(db, { validateComponent: () => true, readConfig: () => ({ state: 'ok', config: { runtime: 'claude', session_mode: 'multi' } }), validateModel: () => true });
+  const { db, store } = storeFixture(t);
   store.insertConversation('in', 'chat', 'e', 'hello', { groupName: 'A' });
   const handler = createConfigHandler({ store, validateComponent: () => true, readSessionMode: () => 'multi', observeRunning: () => ({ hasProcess: false }), ...overrides });
   return { store, db, handler };

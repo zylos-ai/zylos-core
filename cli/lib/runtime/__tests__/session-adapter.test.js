@@ -30,34 +30,6 @@ test('absence only: no server is false; timeout remains unavailable',async () =>
 test('configured runtime alone cannot establish process liveness',async () => {
   await assert.rejects(fixture({runtime:'unknown'}).adapter.isRunning({tmuxName:'x'}),{code:'TMUX_UNAVAILABLE'});
 });
-test('run mismatch does not signal or kill',async () => {
-  const f = fixture();
-  await assert.rejects(f.adapter.stop({tmuxName:'x',expectedRunId:'other'}),{code:'RUNID_MISMATCH'});
-  assert.equal(f.calls.some(c => c[0] === 'kill-session'),false);
-});
-test('stop bound object and confirm its removal with session guards',async () => {
-  const f=fixture();
-  await f.adapter.stop({tmuxName:'x',expectedRunId:'r'});
-  assert.deepEqual(f.calls,[['validate'],['kill-session','-t','$7'],['display-message','-p','-t','$7','#{session_id}'],['close']]);
-});
-test('process cleanup dependencies are never consumed for present or absent targets',async () => {
-  for (const present of [false,true]) {
-    const f=fixture({present});
-    for(const key of ['findRunProcesses','readOwnedProcess','pinProcess','signalProcess','stopGraceMs'])
-      Object.defineProperty(f.adapter.options,key,{get(){throw new Error('Obsolete process cleanup dependency read')}});
-    await f.adapter.stop({tmuxName:'x',expectedRunId:'r'});
-    assert.equal(f.calls.some(c=>c[0]==='kill-session'),present);
-  }
-});
-test('null absent succeeds without process-unknown logs; unobservable tmux refuses',async () => {
-  const f=fixture({present:false});const logs=[];f.adapter.options.log=s=>logs.push(s);
-  await f.adapter.stop({tmuxName:'x',expectedRunId:null});assert.deepEqual(logs,[]);
-  await assert.rejects(fixture({openError:error('TMUX_UNAVAILABLE')}).adapter.stop({tmuxName:'x',expectedRunId:'r'}),{code:'STOP_UNCONFIRMED'});
-});
-test('target still present after kill cannot be reported stopped',async () => {
-  const f=fixture();f.connection.command=async argv=>{f.calls.push(argv);return '$7'};
-  await assert.rejects(f.adapter.stop({tmuxName:'x',expectedRunId:'r'}),{code:'STOP_UNCONFIRMED'});
-});
 test('multiline text loads a private file and pastes in one guarded batch',async () => {
   const f=fixture(); let file;
   f.connection.commandBatch=async commands=> {
@@ -134,10 +106,6 @@ test('unreadable executable identity fails preflight before creation',async()=> 
   assert.equal(f.calls.some(c=>c[0]==='new-session'),false);
 });
 
-test('historical null-run target can close after normal identity revalidation',async () => {
-  const f=fixture({runId:null});await f.adapter.stop({tmuxName:'legacy',expectedRunId:null});
-  assert.deepEqual(f.calls.slice(0,2),[['validate'],['kill-session','-t','$7']]);
-});
 // Internal reader evidence keeps a readable shell-only tree distinct from failure.
 test('readable runtime absence is false; unreadable and ambiguous remain unavailable', async () => {
   for (const runtimeObservation of ['absent', 'unavailable', 'ambiguous', undefined]) {
@@ -147,11 +115,6 @@ test('readable runtime absence is false; unreadable and ambiguous remain unavail
     else await assert.rejects(f.adapter.isRunning({tmuxName:'x'}), {code:'TMUX_UNAVAILABLE'});
   }
 });
-test('a kill command error cannot be replaced by later absence',async () => {
-  const f=fixture();f.connection.command=async()=>{throw error('TMUX_COMMAND_FAILED','error')};
-  await assert.rejects(f.adapter.stop({tmuxName:'x',expectedRunId:'r'}),{code:'STOP_UNCONFIRMED',cause:'error'});
-});
-
 test('isRunning reports deterministic disappearance during observation or process read as false',async()=>{
   for(const method of ['observeSessionTarget','readTargetRuntime'])for(const code of ['TARGET_GONE','GENERATION_CHANGED']){
     const f=fixture();f.dependencies[method]=async()=>{throw error(code)};

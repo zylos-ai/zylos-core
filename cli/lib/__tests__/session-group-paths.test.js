@@ -1,3 +1,4 @@
+import { isolatedTmux } from '../../../test/helpers/isolated-tmux.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -80,48 +81,40 @@ test('list performs one async argv call; only absent server is empty, other fail
   for (const error of [Object.assign(new Error(),{code:'ENOENT'}),Object.assign(new Error(),{code:'ETIMEDOUT'}),Object.assign(new Error(),{code:'EACCES'}),Object.assign(new Error(),{status:1,stderr:'permission denied'})]) await assert.rejects(p.listGroupTmuxSessions({exec:async()=>{throw error;}}),e=>e===error);
   await assert.rejects(p.listGroupTmuxSessions({exec:async()=> 'zylos-group-origin\tbad\n'}),{code:'TMUX_RESPONSE_INVALID'});
 });
-test('real private tmux: names, timestamps, exact targets and missing server', async () => {
-  const root=fs.mkdtempSync(path.join(os.tmpdir(),'p02-tmux-')); const socket=path.join(root,'socket');
-  const tmux=(...args)=>execFileSync('tmux',['-S',socket,...args],{encoding:'utf8',stdio:['ignore','pipe','pipe']});
-  try {
-    await assert.rejects(p.listGroupTmuxSessions({socketPath:socket,binary:path.join(root,'missing-tmux')}),{code:'ENOENT'});
-    const deniedBinary=path.join(root,'denied-tmux');
-    fs.writeFileSync(deniedBinary,'#!/bin/sh\nexit 0\n',{mode:0o600});
-    await assert.rejects(p.listGroupTmuxSessions({socketPath:socket,binary:deniedBinary}),{code:'EACCES'});
-    assert.deepEqual(await p.listGroupTmuxSessions({socketPath:socket}),[]);
-    const liveGroups=groups.filter(g=>g!=='telegram:g-1' && !g.startsWith('sample'));
-    for(const g of liveGroups) tmux('-f','/dev/null','new-session','-d','-s',p.tmuxNameForGroup(g),'sleep 60');
-    for(const name of ['claude-main','zylos-group-Foo']) tmux('new-session','-d','-s',name,'sleep 60');
-    const listed=await p.listGroupTmuxSessions({socketPath:socket});
-    assert.deepEqual(listed.map(x=>x.sessionGroup).sort(),liveGroups.toSorted());
-    for(const row of listed) assert.equal(row.createdAt,Number(tmux('display-message','-p','-t',p.tmuxPaneTarget(row.tmuxName),'#{session_created}').trim()));
-    const short=p.tmuxSessionTarget(p.tmuxNameForGroup('telegram:g-1'));
-    assert.throws(()=>tmux('has-session','-t',short)); assert.throws(()=>tmux('kill-session','-t',short));
-    tmux('has-session','-t',p.tmuxSessionTarget(p.tmuxNameForGroup('telegram:g-100123')));
-    const pane=p.tmuxPaneTarget(p.tmuxNameForGroup('origin'));
-    tmux('send-keys','-t',pane,'-l','p02-private-marker');
-    assert.match(tmux('capture-pane','-p','-t',pane),/p02-private-marker/);
-  } finally {try {tmux('kill-server');} catch {} fs.rmSync(root,{recursive:true,force:true});}
+test('real private tmux: names, timestamps, exact targets and missing server', async t => {
+  const {dir:root,socketPath:socket,binary,tmux}=isolatedTmux(t,{prefix:'p02-tmux-',socketName:'socket',trim:false});
+  await assert.rejects(p.listGroupTmuxSessions({socketPath:socket,binary:path.join(root,'missing-tmux')}),{code:'ENOENT'});
+  const deniedBinary=path.join(root,'denied-tmux');
+  fs.writeFileSync(deniedBinary,'#!/bin/sh\nexit 0\n',{mode:0o600});
+  await assert.rejects(p.listGroupTmuxSessions({socketPath:socket,binary:deniedBinary}),{code:'EACCES'});
+  assert.deepEqual(await p.listGroupTmuxSessions({socketPath:socket,binary}),[]);
+  const liveGroups=groups.filter(g=>g!=='telegram:g-1' && !g.startsWith('sample'));
+  for(const g of liveGroups) tmux('-f','/dev/null','new-session','-d','-s',p.tmuxNameForGroup(g),'sleep 60');
+  for(const name of ['claude-main','zylos-group-Foo']) tmux('new-session','-d','-s',name,'sleep 60');
+  const listed=await p.listGroupTmuxSessions({socketPath:socket,binary});
+  assert.deepEqual(listed.map(x=>x.sessionGroup).sort(),liveGroups.toSorted());
+  for(const row of listed) assert.equal(row.createdAt,Number(tmux('display-message','-p','-t',p.tmuxPaneTarget(row.tmuxName),'#{session_created}').trim()));
+  const short=p.tmuxSessionTarget(p.tmuxNameForGroup('telegram:g-1'));
+  assert.throws(()=>tmux('has-session','-t',short)); assert.throws(()=>tmux('kill-session','-t',short));
+  tmux('has-session','-t',p.tmuxSessionTarget(p.tmuxNameForGroup('telegram:g-100123')));
+  const pane=p.tmuxPaneTarget(p.tmuxNameForGroup('origin'));
+  tmux('send-keys','-t',pane,'-l','p02-private-marker');
+  assert.match(tmux('capture-pane','-p','-t',pane),/p02-private-marker/);
 });
 
 // A subprocess proves both event-loop responsiveness and natural exit while the
 // private server remains frozen (tmux passes its client pipes to the server).
 test('async list keeps timers responsive and exits after frozen-server timeout', {timeout:12000}, async t => {
-  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'p02-list-'));
-  const socketPath=path.join(dir,'s'),pidFile=path.join(dir,'client-pid');
-  const binary=process.env.TEST_TMUX_BIN || 'tmux';
-  const tmux=(...args)=>execFileSync(binary,['-u','-S',socketPath,...args],
-    {encoding:'utf8',timeout:2000,stdio:['ignore','pipe','pipe']}).trim();
-  const quote=value=>`'${value.replaceAll("'", "'\\''")}'`;
-  const wrapper=path.join(dir,'tmux-wrapper');
-  fs.writeFileSync(wrapper,`#!/bin/sh\nprintf '%s\\n' "$$" > ${quote(pidFile)}\nexec ${quote(binary)} "$@"\n`,{mode:0o700});
   let server,child,exited;
-  t.after(async()=>{
+  const {dir,socketPath,binary,tmux}=isolatedTmux(t,{prefix:'p02-list-',tmuxArgs:['-u'],timeout:2000,beforeCleanup:async()=>{
     if(child && child.exitCode===null && child.signalCode===null) child.kill('SIGKILL');
     if(exited) await exited;
     if(server) try{process.kill(server,'SIGKILL');}catch{}
-    fs.rmSync(dir,{recursive:true,force:true});
-  });
+  }});
+  const pidFile=path.join(dir,'client-pid');
+  const quote=value=>`'${value.replaceAll("'", "'\\''")}'`;
+  const wrapper=path.join(dir,'tmux-wrapper');
+  fs.writeFileSync(wrapper,`#!/bin/sh\nprintf '%s\\n' "$$" > ${quote(pidFile)}\nexec ${quote(binary)} "$@"\n`,{mode:0o700});
   tmux('-f','/dev/null','new-session','-d','-s','keeper','sleep 30');
   server=Number(tmux('display-message','-p','#{pid}'));
   process.kill(server,'SIGSTOP');

@@ -1,9 +1,9 @@
+import { isolatedTmux } from '../../../../test/helpers/isolated-tmux.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
-import os from 'node:os';
 import path from 'node:path';
-import { execFile, execFileSync } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 
@@ -14,8 +14,7 @@ const kick = 'System startup trigger, not a user message. Continue with startup 
 const tmuxBinary = process.env.TEST_TMUX_BIN || 'tmux';
 
 async function launchFixture(t, runtime, withHook) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'p02-sp-'));
-  const socketPath = path.join(root, 's');
+  const {dir:root,socketPath}=isolatedTmux(t,{prefix:'p02-sp-',tmuxArgs:['-u'],timeout:2000});
   const log = path.join(root, 'c4.jsonl');
   const report = path.join(root, 'runtime.json');
   const recorder = path.join(root, 'record.mjs');
@@ -27,10 +26,6 @@ async function launchFixture(t, runtime, withHook) {
   for (const dir of ['.claude/skills/comm-bridge/scripts','memory','pm2','codex']) {
     await fs.mkdir(path.join(root,dir),{recursive:true});
   }
-  t.after(async () => {
-    try { execFileSync(tmuxBinary,['-u','-S',socketPath,'kill-server'],{timeout:2000,stdio:'ignore'}); } catch {}
-    await fs.rm(root,{recursive:true,force:true});
-  });
   await fs.writeFile(log,'');
   await fs.writeFile(path.join(root,'memory/state.md'),'- Status: completed\n');
   // Real C4 CLI execution is replaced at its isolated installation path. The

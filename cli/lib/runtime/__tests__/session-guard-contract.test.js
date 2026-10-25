@@ -1,3 +1,4 @@
+import { isolatedTmux } from '../../../../test/helpers/isolated-tmux.js';
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
@@ -32,8 +33,7 @@ function bindingStore(t,observer){
 }
 
 async function fixture(t){
-  const dir=await fs.mkdtemp(path.join(root,'case-')),socketPath=path.join(dir,'s');
-  const tmux=(...args)=>execFileSync(binary,['-u','-S',socketPath,...args],{encoding:'utf8',stdio:['ignore','pipe','pipe'],timeout:2000}).trim();
+  const {dir,socketPath,tmux}=isolatedTmux(t,{parentDir:root,prefix:'case-',tmuxArgs:['-u'],timeout:2000});
   tmux('-f','/dev/null','new-session','-d','-s','keeper','sleep 120');
   const input=path.join(dir,'received');
   tmux('new-session','-d','-s','zylos-group-origin','-e','ZYLOS_RUN_ID=guard-run',
@@ -44,7 +44,6 @@ async function fixture(t){
   const flag=path.join(dir,'hang'),calls=path.join(dir,'calls'),wrapper=path.join(dir,'tmux-wrapper');
   await fs.writeFile(wrapper,`#!${process.execPath}\nconst fs=require('node:fs'),cp=require('node:child_process');const a=process.argv.slice(2);fs.appendFileSync(${JSON.stringify(calls)},JSON.stringify(a)+'\\n');if(fs.existsSync(${JSON.stringify(flag)})){setInterval(()=>{},1000);}else{const r=cp.spawnSync(${JSON.stringify(actualBinary)},a,{stdio:'inherit'});process.exit(r.status??1);}\n`,{mode:0o700});
   const options={socketPath,binary:wrapper,timeoutMs:100};
-  t.after(async()=>{try{tmux('kill-server');}catch{}await fs.rm(dir,{recursive:true,force:true});});
   return {dir,tmux,input,flag,calls,options};
 }
 

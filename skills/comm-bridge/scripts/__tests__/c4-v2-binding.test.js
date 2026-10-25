@@ -1,16 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import Database from 'better-sqlite3';
-import { guardDatabase } from '../sqlite-schema.js';
-import * as owner from '../c4-schema.js';
-import { createStore } from '../c4-v2-store.js';
+import { fixture } from './c4-v2-test-helpers.js';
 import { normalizeTargetBinding } from '../c4-target-binding.js';
 const binding = { expectedRunId: 'run-1', tmuxTarget: { serverGeneration: '48213:1791990000', sessionId: '$3', paneId: '%7' }, expectedSessionId: 'session-1' };
-function fixture(t, dependencies = {}) {
-  const db = new Database(':memory:'); guardDatabase(db, owner); t.after(() => db.close());
-  const s = createStore(db, { validateComponent: () => true, readConfig: () => ({ state: 'ok', config: { session_mode: 'multi' } }), ...dependencies });
-  return { db, s };
-}
 const options = { sessionGroup: 'origin', expectedRunId: 'run-1', expectedRuntime: 'claude', expectedSessionId: 'session-1' };
 const target = () => ({ runId: 'run-1', runtime: 'claude', sessionGroup: 'origin', currentSession: { runId: 'run-1', sessionId: 'session-1' }, tmuxTarget: binding.tmuxTarget });
 
@@ -26,7 +18,7 @@ test('private resolver validates ordered identity failures without writing contr
   ];
   for (const sample of cases) {
     let calls = 0;
-    const { db, s } = fixture(t, { resolveTarget: input => { calls++; assert.deepEqual(input, { sessionGroup: 'origin', sessionMode: 'multi' }); return 'target' in sample ? sample.target : { ...target(), ...sample.patch }; } });
+    const { db, store: s } = fixture(t, { resolveTarget: input => { calls++; assert.deepEqual(input, { sessionGroup: 'origin', sessionMode: 'multi' }); return 'target' in sample ? sample.target : { ...target(), ...sample.patch }; } });
     await assert.rejects(() => s.buildTargetBinding(options), error => { assert.equal(error.code, sample.code); assert.deepEqual(error.persisted, []); if (sample.code === 'TARGET_MISMATCH') assert.equal(error.runId, 'run-2'); return true; });
     assert.equal(calls, 1); assert.equal(db.prepare('SELECT count(*) FROM control_queue').pluck().get(), 0);
   }
@@ -34,7 +26,7 @@ test('private resolver validates ordered identity failures without writing contr
 
 test('scope and transition checks happen before private resolver; caller cannot supply tmux', async t => {
   let calls = 0;
-  const { db, s } = fixture(t, { resolveTarget: () => { calls++; return target(); } });
+  const { db, store: s } = fixture(t, { resolveTarget: () => { calls++; return target(); } });
   for (const [input, code] of [
     [{ ...options, tmuxTarget: binding.tmuxTarget }, 'INVALID_ARGS'],
     [{ ...options, sessionGroup: null }, 'CONTROL_TARGET_REQUIRED'],
@@ -44,14 +36,14 @@ test('scope and transition checks happen before private resolver; caller cannot 
   db.exec("INSERT INTO mode_transitions(run_id,source_mode,target_mode,phase,created_at,updated_at) VALUES('transition','single','multi','gating',0,0)");
   await assert.rejects(() => s.buildTargetBinding(options), { code: 'TRANSITION_OPEN' });
   assert.equal(calls, 0);
-  const single = fixture(t, { readConfig: () => ({ state: 'ok', config: { session_mode: 'single' } }), resolveTarget: () => { calls++; return target(); } }).s;
+  const single = fixture(t, { readConfig: () => ({ state: 'ok', config: { session_mode: 'single' } }), resolveTarget: () => { calls++; return target(); } }).store;
   await assert.rejects(() => single.buildTargetBinding(options), { code: 'TARGET_SCOPE_MISMATCH' });
   assert.equal(calls, 0);
 });
 
 test('successful private snapshot builds canonical binding; insertion is separate', async t => {
   let calls = 0;
-  const { db, s } = fixture(t, { resolveTarget: async () => {
+  const { db, store: s } = fixture(t, { resolveTarget: async () => {
     calls++;
     assert.equal(db.inTransaction, false);
     await new Promise(resolve => setImmediate(resolve));
@@ -67,7 +59,7 @@ test('successful private snapshot builds canonical binding; insertion is separat
 });
 
 test('malformed and unknown binding fields reject before superseding pending rows', t => {
-  const { db, s } = fixture(t);
+  const { db, store: s } = fixture(t);
   const enqueue = value => s.insertControl('probe', { sessionGroup: 'origin', targetBinding: value, appendAckSuffix: false });
   const first = enqueue(binding);
   for (const bad of ['{', [], {}, { ...binding, extra: true }, { ...binding, expectedRunId: undefined }, { ...binding, expectedSessionId: '' }, { ...binding, tmuxTarget: { ...binding.tmuxTarget, extra: true } }, { ...binding, tmuxTarget: { ...binding.tmuxTarget, sessionId: '3' } }, { ...binding, tmuxTarget: { ...binding.tmuxTarget, paneId: 7 } }, { ...binding, tmuxTarget: { ...binding.tmuxTarget, serverGeneration: '' } }]) {
@@ -77,7 +69,7 @@ test('malformed and unknown binding fields reject before superseding pending row
 });
 
 test('reordered JSON normalizes identically and supersedes; changed server generation does not', t => {
-  const { db, s } = fixture(t);
+  const { db, store: s } = fixture(t);
   const enqueue = value => s.insertControl('probe', { sessionGroup: 'origin', targetBinding: value, appendAckSuffix: false });
   const a = enqueue(binding);
   const reordered = JSON.stringify({ expectedSessionId: 'session-1', tmuxTarget: { paneId: '%7', sessionId: '$3', serverGeneration: '48213:1791990000' }, expectedRunId: 'run-1' });

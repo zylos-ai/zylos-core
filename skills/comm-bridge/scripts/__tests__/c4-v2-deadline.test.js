@@ -3,13 +3,10 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
-import { spawn, spawnSync } from 'node:child_process';
-import { once } from 'node:events';
-import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
+import { spawnSync } from 'node:child_process';
 import Database from 'better-sqlite3';
 
-const require = createRequire(import.meta.url);
 const self = fileURLToPath(import.meta.url);
 const selected = process.argv[2];
 
@@ -49,9 +46,10 @@ if (!selected) {
   }
   TrackedDatabase.prototype = Database.prototype;
   mock.module('better-sqlite3', { defaultExport: TrackedDatabase });
-  const api = await import(process.env.C4_PUBLIC_TEST_MODULE ? pathToFileURL(process.env.C4_PUBLIC_TEST_MODULE) : new URL('../c4-db.js', import.meta.url));
+  const api = await import(new URL('../c4-db.js', import.meta.url));
   const call = () => entry === 'transition' ? api.getModeTransition() : api.auditCheckpoints();
   let writer;
+  assert.equal((await import('../c4-config.js')).DB_PATH, filename, 'public reader must use the isolated fixture database');
   const shared = api.getDb();
   const originalPrepare = shared.prepare, originalPragma = shared.pragma;
   const pragmaWrites = [], queryConnections = new Set(), events = [];
@@ -96,16 +94,10 @@ if (!selected) {
       return originalPrepare.call(this, sql, ...args);
     };
     if (scenario === 'wal') {
-      const source = `import Database from ${JSON.stringify(require.resolve('better-sqlite3'))};
-        const db = new Database(process.argv[1]);
-        db.exec("BEGIN IMMEDIATE; UPDATE mode_transitions SET reason='new-committed'; UPDATE checkpoints SET end_conversation_id=3000 WHERE id IN (100,101); INSERT INTO conversations(id,direction,channel,content,status) VALUES(8,'out','foo','new-committed','delivered')");
-        process.send({ mode: db.pragma('locking_mode', { simple: true }), journal: db.pragma('journal_mode', { simple: true }), inTransaction: db.inTransaction });
-        process.on('message', () => { db.exec('COMMIT'); db.close(); process.exit(0); });`;
-      const child = spawn(process.execPath, ['--input-type=module', '-e', source, filename], { stdio: ['ignore', 'ignore', 'pipe', 'ipc'] });
-      let stderr = ''; child.stderr.on('data', data => { stderr += data; });
-      const exited = once(child, 'exit');
-      writer = { child, exited };
-      const [held] = await Promise.race([once(child, 'message'), exited.then(() => { throw new Error(`writer exited before barrier: ${stderr}`); })]);
+      // This helper also imports store/config modules: load it only after ZYLOS_DIR is set.
+      const { startHeldWriter } = await import('./c4-v2-test-helpers.js');
+      writer = startHeldWriter(filename, "UPDATE mode_transitions SET reason='new-committed'; UPDATE checkpoints SET end_conversation_id=3000 WHERE id IN (100,101); INSERT INTO conversations(id,direction,channel,content,status) VALUES(8,'out','foo','new-committed','delivered')");
+      const [held] = await writer.held;
       assert.deepEqual(held, { mode: 'normal', journal: 'wal', inTransaction: true });
       events.push({ event: 'writer-held', ...held });
     }

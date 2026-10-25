@@ -1,18 +1,16 @@
+import {isolatedTmux,tmuxClientEnv} from '../../../test/helpers/isolated-tmux.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
-import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 const driver=fileURLToPath(new URL('../../../test/helpers/public-reader-driver.js',import.meta.url));
 async function fixture(t,{server=true}={}) {
-  const dir=await fs.mkdtemp(path.join(os.tmpdir(),'p02-public-reader-'));
-  const socket=path.join(dir,'private.sock');
-  const env={...process.env,TMUX_TMPDIR:dir,TMUX:`${socket},0,0`,ZYLOS_DIR:dir};
-  const tmux=(...args)=>execFileSync('tmux',['-S',socket,...args],{encoding:'utf8',stdio:['ignore','pipe','pipe'],env}).trim();
+  const f=isolatedTmux(t,{prefix:'p02-public-reader-',socketName:'private.sock'});
+  const {dir,tmux}=f;
+  const env=tmuxClientEnv(f,{...process.env,ZYLOS_DIR:dir});
   if(server) tmux('-f','/dev/null','new-session','-d','-s','zylos-group-origin','-e','ZYLOS_RUN_ID=r1','-e','ZYLOS_MODEL_CONFIG={"runtime":"claude","mode":"default"}','sleep','120');
-  t.after(async()=>{if(server) try{tmux('kill-server');}catch{} await fs.rm(dir,{recursive:true,force:true});});
   const run=path.join(dir,'activity-monitor','session-groups','origin'); await fs.mkdir(run,{recursive:true});
   const write=(name,value)=>fs.writeFile(path.join(run,name),JSON.stringify(value));
   const call=(method,args,extra={})=>JSON.parse(execFileSync(process.execPath,[driver],{encoding:'utf8',timeout:20000,env:{...env,...extra,P02_READER_CALL:JSON.stringify({method,args})}}));
