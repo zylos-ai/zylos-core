@@ -26,7 +26,10 @@ for(const sessionGroup of [null,'telegram:literal']) for(const model of models) 
     }
     assert.equal(f.tmux('show-environment','-g','ZYLOS_SESSION_GROUP').trim(),'ZYLOS_SESSION_GROUP=stale-global');
     assert.equal(f.tmux('list-panes','-t','=keeper','-F','#{pane_id}:#{pane_pid}').trim(),original);
-    assert.equal((await fs.readFile(wrapper.calls,'utf8')).trim(),'create','one original client; no reconnect');
+    const calls=(await fs.readFile(wrapper.calls,'utf8')).trim().split('\n');
+    assert.equal(calls.filter(line=>line.includes('new-session -d -P')).length,1,'submit creation exactly once');
+    assert.equal(calls.some(line=>/(?:^| )-CC?(?: |$)/.test(line)),false,'ordinary clients only');
+    assert.ok(calls.slice(1).every(line=>line.includes(' -N ')),'follow-up commands must not start a server');
     assertGone(assert,Number(await fs.readFile(wrapper.pidFile,'utf8')));
   });
 }

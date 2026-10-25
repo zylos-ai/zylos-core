@@ -164,3 +164,17 @@ for (const locale of ['unset', 'C']) for (const scenario of ['launch-multi', 'la
     }
   });
 }
+
+test('creation receipt followed by client failure still cleans only the created session', async t => {
+  const f = await setupLaunch(t);
+  const wrapper = path.join(f.dir, 'receipt-error');
+  const {shellQuote} = await import('../session-command.js');
+  await fs.writeFile(wrapper, `#!/bin/sh
+case " $* " in
+  *" new-session "*) ${shellQuote(binary)} "$@"; echo 'fixture failure after receipt' >&2; exit 7 ;;
+  *) exec ${shellQuote(binary)} "$@" ;;
+esac
+`, {mode:0o700});
+  await assert.rejects(f.launch({tmuxBinary:wrapper}), {code:'LAUNCH_FAILED'});
+  assert.equal(f.tmux('list-sessions','-F','#{session_name}').trim(),'keeper');
+});

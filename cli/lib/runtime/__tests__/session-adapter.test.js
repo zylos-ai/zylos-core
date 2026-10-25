@@ -11,7 +11,7 @@ import { CodexAdapter } from '../codex.js';
 class Adapter extends SessionAdapter { get runtimeId() { return 'claude'; } }
 function fixture({present = true, runId = 'r', openError, runtime = 'claude'} = {}) {
   const calls = [], target = {present, runId, tmuxSessionId:'$7', paneId:'%8'};
-  const connection = {close:() => calls.push(['close']), command:async argv => { calls.push(argv); if (argv[0] === 'kill-session') target.present = false; if (argv[0] === 'list-sessions') return target.present ? '$7' : '$9'; return 'screen'; }};
+  const connection = {close:() => calls.push(['close']), command:async argv => { calls.push(argv); if (argv[0] === 'kill-session') target.present = false; if (argv[0] === 'display-message') {if(!target.present)throw error('TARGET_GONE');return '$7';} return 'screen'; }};
   const dependencies = {
     openTmuxConnection:async () => { if (openError) throw openError; return connection; },
     observeSessionTarget:async () => target,
@@ -35,10 +35,10 @@ test('run mismatch does not signal or kill',async () => {
   await assert.rejects(f.adapter.stop({tmuxName:'x',expectedRunId:'other'}),{code:'RUNID_MISMATCH'});
   assert.equal(f.calls.some(c => c[0] === 'kill-session'),false);
 });
-test('stop bound object and confirm its removal on the original connection',async () => {
+test('stop bound object and confirm its removal with session guards',async () => {
   const f=fixture();
   await f.adapter.stop({tmuxName:'x',expectedRunId:'r'});
-  assert.deepEqual(f.calls,[['validate'],['kill-session','-t','$7'],['list-sessions','-F','#{session_id}'],['close']]);
+  assert.deepEqual(f.calls,[['validate'],['kill-session','-t','$7'],['display-message','-p','-t','$7','#{session_id}'],['close']]);
 });
 test('process cleanup dependencies are never consumed for present or absent targets',async () => {
   for (const present of [false,true]) {
@@ -58,18 +58,33 @@ test('target still present after kill cannot be reported stopped',async () => {
   const f=fixture();f.connection.command=async argv=>{f.calls.push(argv);return '$7'};
   await assert.rejects(f.adapter.stop({tmuxName:'x',expectedRunId:'r'}),{code:'STOP_UNCONFIRMED'});
 });
-test('multiline text uses a private file, revalidates before paste, cleans buffer',async () => {
+test('multiline text loads a private file and pastes in one guarded batch',async () => {
   const f=fixture(); let file;
-  f.connection.command=async argv=> { f.calls.push(argv); if(argv[0]==='load-buffer') { file=argv[3]; assert.equal(await fs.readFile(file,'utf8'),'one\ntwo'); } };
+  f.connection.commandBatch=async commands=> {
+    f.calls.push(['batch',commands]);
+    assert.deepEqual(commands.map(c=>c[0]),['load-buffer','paste-buffer']);
+    const load=commands[0],paste=commands[1];file=load[3];
+    assert.equal(await fs.readFile(file,'utf8'),'one\ntwo');
+    assert.equal((await fs.stat(file)).mode & 0o777,0o600);
+    assert.equal(load[2],paste[paste.indexOf('-b')+1]);
+  };
   await f.adapter.sendText({target:f.target,connection:f.connection,text:'one\ntwo'});
-  assert.deepEqual(f.calls.map(c=>c[0]),['load-buffer','validate','paste-buffer','delete-buffer']);
+  assert.deepEqual(f.calls.map(c=>c[0]),['validate','batch','delete-buffer']);
   await assert.rejects(fs.stat(file),{code:'ENOENT'});
 });
-test('changed target refuses paste and still cleans temporary buffer',async () => {
-  const f=fixture(); f.dependencies.revalidateSessionTarget=async()=>{throw error('RUNID_MISMATCH');};
+test('changed target refuses load and paste and still cleans temporary data',async () => {
+  const f=fixture();f.connection.commandBatch=async()=>assert.fail('No batch after failed validation');
+  f.dependencies.revalidateSessionTarget=async()=>{throw error('RUNID_MISMATCH');};
   await assert.rejects(f.adapter.sendText({target:f.target,connection:f.connection,text:'hello'}),{code:'RUNID_MISMATCH'});
-  assert.equal(f.calls.some(c=>c[0]==='paste-buffer'),false);
-  assert.equal(f.calls.at(-1)[0],'delete-buffer');
+  assert.equal(f.calls.some(c=>c[0]==='load-buffer'||c[0]==='paste-buffer'),false);
+});
+test('keystroke options and command syntax are rejected before any target I/O',async()=>{
+  for(const key of ['-l','-R',';','Enter;run-shell','C-c\n','']){
+    const f=fixture();await assert.rejects(f.adapter.sendKeys({target:f.target,connection:f.connection,keys:[key]}));
+    assert.deepEqual(f.calls,[]);
+  }
+  const f=fixture();await f.adapter.sendKeys({target:f.target,connection:f.connection,keys:['Escape','Enter','C-c','M-x','F1']});
+  assert.deepEqual(f.calls,[['validate'],['send-keys','-t','%8','Escape','Enter','C-c','M-x','F1']]);
 });
 test('default argv omits model and effort and both runtimes attach per-process MCP',()=> {
   for(const runtime of ['claude','codex']) {
@@ -132,21 +147,7 @@ test('readable runtime absence is false; unreadable and ambiguous remain unavail
     else await assert.rejects(f.adapter.isRunning({tmuxName:'x'}), {code:'TMUX_UNAVAILABLE'});
   }
 });
-test('acknowledged exact object kill survives connection exit, arbitrary disconnect does not', async () => {
-  for (const acknowledged of ['$7', '$99', null]) {
-    const f = fixture();
-    const command = f.connection.command;
-    f.connection.command = async argv => {
-      if (argv[0] === 'list-sessions') throw error('TMUX_UNAVAILABLE');
-      return command(argv);
-    };
-    f.connection.didAcknowledgeSessionKill = id => id === acknowledged;
-    if (acknowledged === '$7') await f.adapter.stop({tmuxName:'x',expectedRunId:'r'});
-    else await assert.rejects(f.adapter.stop({tmuxName:'x',expectedRunId:'r'}), {code:'STOP_UNCONFIRMED'});
-  }
-});
-test('a command failure cannot be replaced by a purported kill acknowledgement',async () => {
-  const f=fixture();f.connection.didAcknowledgeSessionKill=()=>true;
-  f.connection.command=async()=>{throw error('TMUX_COMMAND_FAILED','error')};
+test('a kill command error cannot be replaced by later absence',async () => {
+  const f=fixture();f.connection.command=async()=>{throw error('TMUX_COMMAND_FAILED','error')};
   await assert.rejects(f.adapter.stop({tmuxName:'x',expectedRunId:'r'}),{code:'STOP_UNCONFIRMED',cause:'error'});
 });

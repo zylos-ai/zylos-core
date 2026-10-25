@@ -74,3 +74,42 @@ for(const key of ['last-session-run',null])test(`real final-session kill confirm
  assert.throws(()=>f.command('list-sessions','-F','#{session_id}'));
  t.diagnostic(JSON.stringify({lastSession:true,key,targetRemovalAcknowledged:true}));
 });
+
+test('session confirmation cannot mistake a vanished pane for removal of a surviving session',async t=>{
+ const f=await fixture(t),key='pane-only-removal';
+ f.command('new-session','-d','-s','target','-e',`ZYLOS_RUN_ID=${key}`,'sleep 60');
+ const pane=f.command('display-message','-p','-t','=target:','#{pane_id}');
+ f.command('new-window','-d','-t','=target:','sleep 60');
+ f.adapter.options.dependencies={...actualDependencies,openTmuxConnection:async options=>{
+  const connection=await actualDependencies.openTmuxConnection(options),command=connection.command.bind(connection);
+  connection.command=async(args,guard)=>{
+   if(args[0]==='kill-session'){f.command('kill-pane','-t',pane);return '';}
+   return command(args,guard);
+  };return connection;
+ }};
+ await assert.rejects(f.adapter.stop({tmuxName:'target',expectedRunId:key}),{code:'STOP_UNCONFIRMED'});
+ assert.match(f.snapshot('target'),new RegExp(`:${key}$`));
+ assert.equal(f.snapshot('origin'),f.origin);
+});
+
+test('replacement after acknowledged kill is not confirmation of the original session removal',async t=>{
+ const f=await fixture(t),key='confirmation-race';
+ f.command('new-session','-d','-s','target','-e',`ZYLOS_RUN_ID=${key}`,'sleep 60');
+ const old=f.command('display-message','-p','#{pid}:#{start_time}');let replacement;
+ f.adapter.options.dependencies={...actualDependencies,openTmuxConnection:async options=>{
+  const connection=await actualDependencies.openTmuxConnection(options),command=connection.command.bind(connection);
+  connection.command=async(args,guard)=>{
+   const result=await command(args,guard);
+   if(args[0]==='kill-session'){
+    f.command('kill-server');await delay(50);
+    f.command('-f','/dev/null','new-session','-d','-s','origin','sleep 60');
+    f.command('new-session','-d','-s','target','-e',`ZYLOS_RUN_ID=${key}`,'sleep 60');
+    replacement=f.snapshot('target');
+   }
+   return result;
+  };return connection;
+ }};
+ await assert.rejects(f.adapter.stop({tmuxName:'target',expectedRunId:key}),{code:'STOP_UNCONFIRMED'});
+ assert.notEqual(f.command('display-message','-p','#{pid}:#{start_time}'),old);
+ assert.equal(f.snapshot('target'),replacement);
+});

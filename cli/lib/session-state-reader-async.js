@@ -8,7 +8,8 @@ const publicIdentity = value => Object.fromEntries(['present','tmuxName','runId'
 const absent = group => ({ present: false, tmuxName: tmuxNameForGroup(group ?? 'origin'), runId: null, createdAt: null,
   runtime: 'unknown', launchConfig: null, ready: false, sessionId: null });
 
-/** Internal dependency injection is for isolated tests; production uses real providers. */
+/** Each read owns a bounded executor; repeated samples keep its pinned identity.
+ * Internal dependency injection is for isolated tests; production uses real providers. */
 export function createSessionReader({ open = openTmuxConnection, observe = observeSessionTarget, env = process.env,
   now = Date.now, connectionOptions = {}, resolveConfig, listSessions = listGroupTmuxSessions } = {}) {
   async function withConnection(group, operation) {
