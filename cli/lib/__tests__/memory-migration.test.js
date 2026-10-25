@@ -573,8 +573,15 @@ test('F8 rejects symlink locks, missing backend, and a holder lost during identi
     const children = execFileSync('ps', ['-o', 'pid=,args=', '--ppid', String(process.pid)], { encoding: 'utf8' });
     const holder = children.split('\n').find(line => line.includes('/memory-lock.js --hold-lock'));
     assert.ok(holder, children);
-    process.kill(Number(holder.trim().split(/\s+/)[0]), 'SIGKILL');
-    await new Promise(resolve => setTimeout(resolve, 25));
+    const holderPid = Number(holder.trim().split(/\s+/)[0]);
+    process.kill(holderPid, 'SIGKILL');
+    // Wait for actual reaping so assertHeld observes the child exit under load.
+    const deadline = Date.now() + 5000;
+    while (fs.existsSync(`/proc/${holderPid}`) && Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    assert.equal(fs.existsSync(`/proc/${holderPid}`), false, 'Killed holder was not reaped');
+    await new Promise(resolve => setImmediate(resolve));
     return f.live;
   } });
   await assert.rejects(service.apply(patch), { code: 'LOCK_LOST', persisted: null });
