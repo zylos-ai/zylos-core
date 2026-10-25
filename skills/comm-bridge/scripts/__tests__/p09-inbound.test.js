@@ -104,7 +104,7 @@ test('IF-05 real rollback/DB_BUSY prevent F14 and cooldown; postcommit uncertain
   await assert.rejects(receive(input, f.dependencies), { code: 'UNHEALTHY_NOTIFY_UNCERTAIN', persisted: ['D1'] });
   assert.equal(f.db.prepare("SELECT count(*) AS n FROM conversations WHERE status='failed'").get().n, 1);
   assert.deepEqual(f.order, ['event', 'reserve']);
-  f.dependencies.db = { ...f.store, insertConversation: () => { throw Object.assign(new Error('unknown commit'), { persisted: null }); } };
+  f.dependencies.db = { ...f.store, insertConversation: () => { throw new Error('unknown commit'); } };
   await assert.rejects(receive(input, f.dependencies), { code: 'INTERNAL_ERROR', persisted: null });
 });
 
@@ -198,7 +198,10 @@ test('IF-06/DM-51 query current/rotated logs, ignores incomplete/bad lines, rema
   const reply = await receive([...input, '--no-reply'], f.dependencies);
   const filename = path.join(path.dirname(f.filename), 'receive-events.jsonl');
   const event = { v: 1, event: 'auth_rejected', conversation_id: reply.id, reason_code: 'auth_check_failed', detail: 'evidence', runtime: 'codex', ts: 123 };
-  fs.writeFileSync(filename, JSON.stringify(event) + '\n{bad}\nnull\n' + JSON.stringify({ ...event, detail: 'partial' }));
+  fs.writeFileSync(filename, [event,
+    { ...event, conversation_id: reply.id + 1, detail: 'other id' },
+    { ...event, event: 'group_rejected', detail: 'other event' },
+  ].map(row => JSON.stringify(row)).join('\n') + '\n{bad}\nnull\n' + JSON.stringify({ ...event, detail: 'partial' }));
   const deps = { filename, diagnostic: () => {}, getConversationsByRange: (a, b) => f.db.prepare('SELECT * FROM conversations WHERE id BETWEEN ? AND ?').all(a, b) };
   const before = fs.readFileSync(filename);
   assert.equal(queryRejection(String(reply.id), deps).detail, 'evidence'); assert.deepEqual(fs.readFileSync(filename), before);
