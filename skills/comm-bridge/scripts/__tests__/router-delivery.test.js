@@ -1,4 +1,9 @@
 import test from 'node:test';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { createRouterDiagnostics } from '../router/diagnostics.js';
+import { createJsonlStream } from '../../../../cli/lib/jsonl-stream.js';
 import assert from 'node:assert/strict';
 import { createDelivery, getDeliveryDelay, checkClaudeFallbackInputBox } from '../router/delivery.js';
 import { fixture } from './c4-v2-test-helpers.js';
@@ -118,7 +123,7 @@ test('paste failure uses atomic failDelivery: second failure is terminal and fal
 test('lost markDelivered stays final without a second paste', async t => {
   const f = setup(t), row = f.message(); f.adapter.sendText = async args => { f.calls.push(['paste', args]); f.db.markDelivered(row.id, { sessionId: 'other' }); };
   await f.create().deliverConversation(row); assert.equal(f.row(row.id).session_id, 'other'); assert.equal(f.calls.filter(c => c[0] === 'paste').length, 1);
-  assert(f.calls.some(c => c[0] === 'diagnostic' && c[1] === 'conditional_write_lost'));
+  assert(f.calls.some(c => c[0] === 'diagnostic' && c[1] === 'mark_delivered_stale'));
 });
 
 test('Enter failure increments retry, invalid keystroke rejected; valid keystroke always acks', async t => {
@@ -233,4 +238,45 @@ test('F4 reader failure is offline, while valid READY bypass control can recover
   const d = f.create(); await d.deliverConversation(row);
   assert.equal(f.row(row.id).status, 'pending'); assert.equal(f.row(row.id).retry_count, 0);
   const control = f.control('[KEYSTROKE]Enter', { bypass_state: 1 }); await d.deliverControl(control); assert.equal(control.status, 'done');
+});
+
+// T07: actual delivery decisions through the real diagnostic writer and JSONL file.
+test('T07 JSONL records successful settlement, stale settlement and distinct gate releases', async t => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'delivery-jsonl-'));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const file = path.join(directory, 'router-events.jsonl');
+  const diagnostics = createRouterDiagnostics({ stream: createJsonlStream(file),
+    receiveStream: createJsonlStream(path.join(directory, 'receive-events.jsonl')) });
+  const f = setup(t); f.deps.diagnostic = diagnostics.diagnostic;
+  const delivery = f.create(), success = f.message();
+  await delivery.deliverConversation(success);
+  const stale = f.message();
+  const paste = f.adapter.sendText;
+  f.adapter.sendText = async args => { await paste(args); f.db.markDelivered(stale.id, { sessionId: 'other' }); };
+  await delivery.deliverConversation(stale);
+  f.adapter.sendText = paste;
+  const gated = f.message();
+  for (const kind of ['session', 'runtime', 'idle']) {
+    f.state.health = kind === 'session' ? 'recovering' : 'ok';
+    f.deps.readRuntimeHealth = () => ({ publicHealth: kind === 'runtime' ? 'unavailable' : 'ok' });
+    gated.require_idle = kind === 'idle' ? 1 : 0; f.state.idle_seconds = 0;
+    await delivery.deliverConversation(gated);
+    assert.equal(f.row(gated.id).status, 'pending');
+    assert.equal(f.row(gated.id).retry_count, 0);
+    if (kind !== 'idle') assert(f.store.claimConversation(gated.id));
+  }
+  await diagnostics.flush();
+  const rows = (await fs.readFile(file, 'utf8')).trim().split('\n').map(JSON.parse);
+  const delivered = rows.filter(row => row.event === 'deliver');
+  assert.equal(delivered.length, 1); assert.equal(delivered[0].conversation_id, success.id);
+  assert.equal(delivered[0].decision, 'deliver'); assert.equal(delivered[0].session_id, 's2');
+  const lost = rows.filter(row => row.event === 'mark_delivered_stale');
+  assert.equal(lost.length, 1); assert.equal(lost[0].conversation_id, stale.id);
+  assert.equal(f.row(stale.id).session_id, 'other');
+  const releases = rows.filter(row => row.event === 'release');
+  assert.deepEqual(releases.map(row => row.code), ['session_unhealthy', 'runtime_unavailable', 'require_idle']);
+  for (const row of releases) {
+    assert.equal(row.decision, 'release'); assert.equal(row.reason, row.code);
+    assert.equal(row.conversation_id, gated.id); assert.equal(row.session_group, gated.session_group);
+  }
 });

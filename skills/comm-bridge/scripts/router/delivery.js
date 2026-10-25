@@ -64,7 +64,7 @@ export function createDelivery(deps, configuration = {}) {
     const periodic = new PeriodicEnter({ enabled: options.periodicEnabled, intervalMs: options.periodicIntervalMs,
       maxAttempts: options.periodicMaxAttempts, now, emit });
     let connection, target, adapter, timer, draining = false, queue = Promise.resolve(), periodicError;
-    let result = 'blocked', error, state = { state: 'offline' }, initial = true, sessionId = null, entered = false;
+    let result = 'blocked', gateCode, error, state = { state: 'offline' }, initial = true, sessionId = null, entered = false;
     const bound = () => ({ target, connection });
     function io(action) {
       const work = queue.then(() => { if (periodicError) throw periodicError; return action(); });
@@ -179,8 +179,8 @@ export function createDelivery(deps, configuration = {}) {
           ['serverGeneration', 'sessionId', 'paneId'].some(key => binding.tmuxTarget[key] !== target[key]) ||
           (binding.expectedSessionId != null && binding.expectedSessionId !== target.runtimeSessionId)) throw failure('RUNID_MISMATCH');
       }
-      if (!target.ready) { emit('wait_ready'); }
-      else if (!['claude', 'codex'].includes(target.runtime)) { emit('runtime_unknown'); try { deps.alert?.('runtime_unknown', fields); } catch {} }
+      if (!target.ready) { gateCode = 'wait_ready'; emit('wait_ready'); }
+      else if (!['claude', 'codex'].includes(target.runtime)) { gateCode = 'runtime_unknown'; emit('runtime_unknown'); try { deps.alert?.('runtime_unknown', fields); } catch {} }
       else {
         state = await readState();
         const item = { ...row, type };
@@ -189,7 +189,9 @@ export function createDelivery(deps, configuration = {}) {
         const publicHealth = health.missing ? 'ok' : health.unreadable ? 'unavailable' : (health.publicHealth ?? health.health);
         if ((!bypass && (offline(state.state) || (state.health ?? 'ok') !== 'ok' || publicHealth !== 'ok')) ||
           (row.require_idle === 1 && (state.state !== 'idle' || !(Number.isFinite(state.idle_seconds) && state.idle_seconds >= REQUIRE_IDLE_MIN_SECONDS)))) {
-          emit('wait_health', { reason: 'delivery_gate' });
+          gateCode = !bypass && offline(state.state) ? 'session_offline'
+            : !bypass && (state.health ?? 'ok') !== 'ok' ? 'session_unhealthy'
+            : !bypass && publicHealth !== 'ok' ? 'runtime_unavailable' : 'require_idle';
         } else {
           adapter = deps.getSessionAdapter(target.runtime);
           const content = row.content || '';
@@ -256,11 +258,13 @@ export function createDelivery(deps, configuration = {}) {
     if (result === 'blocked') {
       if (type === 'control') deps.db.requeueControl(row.id);
       else deps.db.requeueConversation(row.id);
+      emit('release', { code: gateCode, reason: gateCode });
     } else if (result === 'delivered') {
       const current = await deps.readCurrentSession(group);
       if (current?.runId === target.runId && typeof current.sessionId === 'string' && current.sessionId) sessionId = current.sessionId;
       else { emit('delivery_identity_lost', { reason: 'READY_IDENTITY_LOST' }); throw failure('READY_IDENTITY_LOST'); }
-      if (!deps.db.markDelivered(row.id, { sessionId })) emit('conditional_write_lost', { operation: 'markDelivered' });
+      if (!deps.db.markDelivered(row.id, { sessionId })) emit('mark_delivered_stale', { sessionId });
+      else emit('deliver', { sessionId });
     } else if (result === 'ack') deps.db.ackControl(row.id);
     return { delivered: result !== 'blocked', blocked: result === 'blocked', state: state.state };
   }
