@@ -20,7 +20,13 @@ async function fixture(t, group = 'origin') {
   const { db, store } = storeFixture(t, {}, path.join(root, 'fixture.db'));
   t.after(() => { if (db.open) db.close(); fs.rmSync(root, { recursive: true, force: true }); });
   const seed = (id, sessionGroup = 'origin', status = 'delivered') => db.prepare("INSERT INTO conversations(id,direction,channel,content,status,session_group) VALUES(?,'in','system','test',?,?)").run(id, status, sessionGroup);
-  return { root, ...scope, db, store, seed, tokens, settings: { env, token }, deps: { database: store, currentRunId: async () => env.ZYLOS_RUN_ID } };
+  const seedGroup = (group, count) => db.transaction(() => {
+    const insert = db.prepare("INSERT INTO conversations(direction,channel,content,status,session_group) VALUES('out',?,'test','delivered',?) RETURNING *");
+    const rows = Array.from({ length: count }, () => insert.get(group, group));
+    db.prepare('INSERT INTO group_heads(session_group,head_id) VALUES(?,?)').run(group, rows.at(-1).id);
+    return rows;
+  })();
+  return { root, ...scope, db, store, seed, seedGroup, tokens, settings: { env, token }, deps: { database: store, currentRunId: async () => env.ZYLOS_RUN_ID } };
 }
 test('IB51 checkpoint invokes real M7 transaction for group/global and preserves rejection code', async t => {
   for (const group of ['origin', null]) {
@@ -95,7 +101,7 @@ test('P07 single consumer: 16 source groups produce one global checkpoint', asyn
 // selection and self-layer edits remain part of real-runtime integration.
 test('Origin real P01 late inbox summary remains discoverable without new messages', async t => {
   const f = await fixture(t), group = 'sleeping';
-  f.db.transaction(() => { for (let i = 0; i < 100; i++) f.store.insertConversation('out', group, 'e', `raw ${i}`); })();
+  f.seedGroup(group, 100);
   const candidate = f.store.getOriginSyncBacklog().groups.find(row => row.sessionGroup === group);
   const rows = f.store.getOriginSyncConversations(group, { afterConversationId: 0, rawAfter: 0, upToConversationId: candidate.upTo, limit: 100 });
   assert.equal(rows.length, 100);
@@ -114,7 +120,7 @@ test('Origin real P01 late inbox summary remains discoverable without new messag
 
 test('Origin real P01 fixed summary snapshot preserves raw coverage across later checkpoint', async t => {
   const f = await fixture(t), group = 'coverage';
-  const records = f.db.transaction(() => Array.from({ length: 200 }, (_, i) => f.store.insertConversation('out', group, 'e', `message ${i + 1}`)))();
+  const records = f.seedGroup(group, 200);
   const first = f.store.createCheckpoint(group, records[99].id, 'covers 1-100');
   const snapshot = f.store.queries.originSummaries(group);
   const later = f.store.createCheckpoint(group, records[149].id, 'covers 101-150');
@@ -127,8 +133,7 @@ test('Origin real P01 fixed summary snapshot preserves raw coverage across later
 
 test('Origin real P01 50-row budget keeps unsummarized sleeping groups and advances summary-only groups', async t => {
   const f = await fixture(t), groups = ['a-sleeping', 'b-raw', 'c-summary', 'd-summary', 'e-summary'];
-  const records = f.db.transaction(() => Object.fromEntries(groups.map(group => [group,
-    Array.from({ length: 30 }, (_, i) => f.store.insertConversation('out', group, 'e', `message ${i}`))])))();
+  const records = Object.fromEntries(groups.map(group => [group, f.seedGroup(group, 30)]));
   for (const group of groups.slice(2)) f.store.createCheckpoint(group, records[group][9].id, `summary ${group}`);
   const candidates = f.store.getOriginSyncBacklog().groups;
   assert.deepEqual(candidates.map(row => row.sessionGroup), groups);

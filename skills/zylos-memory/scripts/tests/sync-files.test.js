@@ -162,7 +162,7 @@ test('IB48 round trip and IB51 model Pending text preserve the exact retained do
   const f = await fixture(t), original = write(f, [1, 2, 3]);
   const block = extractAbsorbedBlock(original);
   assert.equal(block.entries.length, 3);
-  assert.equal(block.title + block.entries.map(entry => entry.raw).join(''), original.split('## Pending\n\n')[1]);
+  assert.equal(block.title + block.entries.map(entry => entry.raw).join(''), original.split('## Pending\n\n')[1].split('\n## Commitments')[0]);
   const temporary = f.skeleton().replace('## Pending\n', '## Pending\n\n- model task\n');
   fs.writeFileSync(f.temporary, temporary);
   await commit({ ...f.settings, input: { followedUpIds: [1] } }, f.deps);
