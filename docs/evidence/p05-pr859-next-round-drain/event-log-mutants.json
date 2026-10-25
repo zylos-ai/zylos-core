@@ -1,0 +1,111 @@
+{
+  "sourceSha256": "d19e5434d323fda03d333963b253888103a358d1ee133d3840a4286617318eea",
+  "testSha256": "2f556398f193db68d7d52b81571728811099f0ed8ecbe3d3db7f9624639d9063",
+  "runs": [
+    {
+      "variant": "same-round-drain",
+      "iteration": 1,
+      "exit": 1,
+      "failures": [
+        "\u2716 DM-38: next read drains a late append on the renamed inode exactly once (1.715764ms)",
+        "\u2716 DM-38: partial old-inode write can finish before the next read without warning (0.917615ms)",
+        "\u2716 DM-38: abandoned partial line warns only at next-read final drain (0.853333ms)",
+        "\u2716 DM-38: next read drains every deferred rotation and closes all old descriptors (0.899988ms)",
+        "\u2716 DM-38: next read drains a late append on the renamed inode exactly once (1.715764ms)",
+        "\u2716 DM-38: partial old-inode write can finish before the next read without warning (0.917615ms)",
+        "\u2716 DM-38: abandoned partial line warns only at next-read final drain (0.853333ms)",
+        "\u2716 DM-38: next read drains every deferred rotation and closes all old descriptors (0.899988ms)"
+      ]
+    },
+    {
+      "variant": "split-write",
+      "iteration": 1,
+      "exit": 1,
+      "failures": [
+        "\u2716 DM-38: two real writers each append 200 complete lines during rotations (149.273422ms)",
+        "\u2716 DM-38: two real writers each append 200 complete lines during rotations (149.273422ms)"
+      ]
+    },
+    {
+      "variant": "split-write",
+      "iteration": 2,
+      "exit": 1,
+      "failures": [
+        "\u2716 DM-38: two real writers each append 200 complete lines during rotations (141.841185ms)",
+        "\u2716 DM-38: two real writers each append 200 complete lines during rotations (141.841185ms)"
+      ]
+    },
+    {
+      "variant": "split-write",
+      "iteration": 3,
+      "exit": 1,
+      "failures": [
+        "\u2716 DM-38: two real writers each append 200 complete lines during rotations (143.758976ms)",
+        "\u2716 DM-38: two real writers each append 200 complete lines during rotations (143.758976ms)"
+      ]
+    },
+    {
+      "variant": "split-write",
+      "iteration": 4,
+      "exit": 1,
+      "failures": [
+        "\u2716 DM-38: two real writers each append 200 complete lines during rotations (138.871949ms)",
+        "\u2716 DM-38: two real writers each append 200 complete lines during rotations (138.871949ms)"
+      ]
+    },
+    {
+      "variant": "split-write",
+      "iteration": 5,
+      "exit": 1,
+      "failures": [
+        "\u2716 DM-38: two real writers each append 200 complete lines during rotations (139.764856ms)",
+        "\u2716 DM-38: two real writers each append 200 complete lines during rotations (139.764856ms)"
+      ]
+    },
+    {
+      "variant": "split-write",
+      "iteration": 6,
+      "exit": 1,
+      "failures": [
+        "\u2716 DM-38: two real writers each append 200 complete lines during rotations (142.173633ms)",
+        "\u2716 DM-38: two real writers each append 200 complete lines during rotations (142.173633ms)"
+      ]
+    },
+    {
+      "variant": "split-write",
+      "iteration": 7,
+      "exit": 1,
+      "failures": [
+        "\u2716 DM-38: two real writers each append 200 complete lines during rotations (146.699803ms)",
+        "\u2716 DM-38: two real writers each append 200 complete lines during rotations (146.699803ms)"
+      ]
+    },
+    {
+      "variant": "split-write",
+      "iteration": 8,
+      "exit": 1,
+      "failures": [
+        "\u2716 DM-38: two real writers each append 200 complete lines during rotations (150.712331ms)",
+        "\u2716 DM-38: two real writers each append 200 complete lines during rotations (150.712331ms)"
+      ]
+    },
+    {
+      "variant": "split-write",
+      "iteration": 9,
+      "exit": 1,
+      "failures": [
+        "\u2716 DM-38: two real writers each append 200 complete lines during rotations (143.601285ms)",
+        "\u2716 DM-38: two real writers each append 200 complete lines during rotations (143.601285ms)"
+      ]
+    },
+    {
+      "variant": "split-write",
+      "iteration": 10,
+      "exit": 1,
+      "failures": [
+        "\u2716 DM-38: two real writers each append 200 complete lines during rotations (143.270608ms)",
+        "\u2716 DM-38: two real writers each append 200 complete lines during rotations (143.270608ms)"
+      ]
+    }
+  ]
+}

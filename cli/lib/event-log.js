@@ -49,8 +49,8 @@ function* reverseLines(fd, size, chunkSize=64*1024) {
 
 /** Retain the old fd across rotations and consume every surviving intermediate file. */
 export class EventLogReader {
- constructor(file,{warn=()=>{}}={}){this.file=file;this.warn=warn;this.fd=null;this.offset=0;this.identity=null;this.lastStamp=-1;}
- close(){if(this.fd!==null)fs.closeSync(this.fd);this.fd=null;this.identity=null;this.offset=0;}
+ constructor(file,{warn=()=>{}}={}){this.file=file;this.warn=warn;this.fd=null;this.offset=0;this.identity=null;this.lastStamp=-1;this.previous=[];}
+ close(){for(const old of this.previous)fs.closeSync(old.fd);this.previous=[];if(this.fd!==null)fs.closeSync(this.fd);this.fd=null;this.identity=null;this.offset=0;}
  /** First read only: visit newest complete records until the caller's recovery boundary.
   * The newest fd remains at the captured end, including any incomplete trailing line.
   * visit returns {keep, done}; metadata discovery may continue without retaining history.
@@ -76,26 +76,31 @@ export class EventLogReader {
   return rows.reverse();
  }
 
- readFd({final=false}={}){
-  const stat=fs.fstatSync(this.fd);if(stat.size<this.offset){this.warn('event_log_truncated');this.offset=0;}
-  const size=stat.size-this.offset;if(!size)return [];
-  const buffer=Buffer.alloc(size);const n=fs.readSync(this.fd,buffer,0,size,this.offset);const complete=buffer.subarray(0,n).lastIndexOf(10);
+ readFd({final=false,cursor=this}={}){
+  const stat=fs.fstatSync(cursor.fd);if(stat.size<cursor.offset){this.warn('event_log_truncated');cursor.offset=0;}
+  const size=stat.size-cursor.offset;if(!size)return [];
+  const buffer=Buffer.alloc(size);const n=fs.readSync(cursor.fd,buffer,0,size,cursor.offset);const complete=buffer.subarray(0,n).lastIndexOf(10);
   if(final && complete<n-1)this.warn('event_log_invalid_line');
   if(complete<0)return [];
-  this.offset+=complete+1;
+  cursor.offset+=complete+1;
   return buffer.subarray(0,complete).toString('utf8').split('\n').flatMap(line=>{const value=parseLine(line,this.warn);return value?[value]:[];});
  }
  read(){
+  const rows=[];
+  while(this.previous.length){const cursor=this.previous.shift();
+   try{rows.push(...this.readFd({cursor,final:true}));}finally{fs.closeSync(cursor.fd);}
+  }
   const files=logFiles(this.file).flatMap(item=>{try{const s=fs.statSync(item.file);return [{...item,identity:`${s.dev}:${s.ino}`}];}catch(e){if(e.code==='ENOENT')return [];throw e;}});
-  if(!files.length && !fs.existsSync(path.dirname(this.file))){const rows=this.fd===null?[]:this.readFd();this.close();return rows;}
-  const rows=this.fd===null?[]:this.readFd();let start=0;
+  if(!files.length && !fs.existsSync(path.dirname(this.file))){if(this.fd!==null)rows.push(...this.readFd());this.close();return rows;}
+  if(this.fd!==null)rows.push(...this.readFd());let start=0;
   if(this.fd!==null){const index=files.findIndex(x=>x.identity===this.identity);if(index>=0){this.lastStamp=files[index].stamp;start=index+1;}else{this.warn('event_log_gap');start=0;}}
   for(let i=start;i<files.length;i++){
    const item=files[i];if(item.identity===this.identity)continue;
-   // A writer may still hold the renamed inode after our first read. Drain it
-   // once more at the handoff, then switch to the new file.
-   if(this.fd!==null)rows.push(...this.readFd({final:true}));
-   this.close();try{this.fd=fs.openSync(item.file,'r');}catch(e){if(e.code==='ENOENT')continue;throw e;}
+   // A writer may still hold a renamed inode. Keep its unread tail until the
+   // next read, including every intermediate rotation encountered this round.
+   if(this.fd!==null)this.previous.push({fd:this.fd,offset:this.offset});
+   this.fd=null;this.identity=null;this.offset=0;
+   try{this.fd=fs.openSync(item.file,'r');}catch(e){if(e.code==='ENOENT')continue;throw e;}
    const stat=fs.fstatSync(this.fd);this.identity=`${stat.dev}:${stat.ino}`;this.lastStamp=item.stamp;rows.push(...this.readFd());
   }
   return rows;
