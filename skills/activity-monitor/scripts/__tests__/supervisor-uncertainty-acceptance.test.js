@@ -40,15 +40,14 @@ async function scenario(t, Observation) {
   await supervisor.loop.deps.observeExits(await scenes.observe());
   failed = true;
   const unknown = await scenes.observe();
-  const policy = await supervisor.lifecycle.checkEviction(unknown, { configuration });
+  const policy = await supervisor.lifecycle.checkEviction(unknown, { configuration,scenes:unknown,fences:[],restartRequests:[],transition:null });
   assert.equal(policy.free, 0, 'unobservable server released occupied pool capacity');
   assert.deepEqual(policy, { waiting: 1, free: 0, inflight: 0, need: 1, selected: 0 });
   assert.equal(unknown[0].present, true); assert.equal(unknown[0].runId, null); assert.equal(unknown[0].ready, false);
   await supervisor.loop.deps.observeExits(unknown);
   await supervisor.loop.deps.probeAndPublish(unknown[0], {});
-  await supervisor.loop.deps.writeMetricsAndMaintain({});
+  await supervisor.loop.deps.writeMetricsAndMaintain({scenes:unknown,fences:[]});
   while (supervisor.observer.preparations.size) await Promise.all([...supervisor.observer.preparations]);
-  assert.deepEqual(scenes.takeServerExits(), []);
   assert.deepEqual(actions, []);
   assert.deepEqual(['claude', 'codex'].map(runtime => fs.readFileSync(supervisor.health.store(runtime).file, 'utf8')), healthBefore);
   assert.equal(fs.readFileSync(statusPath, 'utf8'), 'unchanged-status');

@@ -24,7 +24,7 @@ function fixture(t, checkAuth, create = createSupervisor) {
     health.health = 'auth_failed'; health.reason = 'authentication_failed'; store.write(health);
   }
   return { state, supervisor, start: () => supervisor.loop.deps.readConfiguration(),
-    tick: () => supervisor.loop.deps.writeMetricsAndMaintain({}),
+    tick: () => supervisor.loop.deps.writeMetricsAndMaintain({scenes:[],fences:[]}),
     route: () => supervisor.router.route({ version: 1, type: 'route', requestId: 'incoming', noReply: false, receivedAt: state.now }) };
 }
 

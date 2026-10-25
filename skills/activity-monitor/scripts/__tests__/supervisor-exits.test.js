@@ -5,7 +5,7 @@ function fixture() {
  const events=[],stops=[];let transition=null,fence=null;
  const scene={sessionGroup:'telegram:one',runId:'r1',runtime:'codex',sessionId:'s1',ready:true,present:true,processRunning:true,currentSessionTs:100,tmuxTarget:{serverGeneration:'1:1'}};
  let current={...scene};
- const scenes={observeGroup:async()=>current,stop:async value=>{stops.push(value);current={present:false};},observeFixedTarget:async()=>({present:false})};
+ const scenes={observeGroup:async()=>current,stop:async value=>{stops.push(value);current={present:false};}};
  const observer=new SupervisorExits({scenes,db:{getModeTransition:()=>transition,getDrainFence:()=>fence},serialize:fn=>fn(),readMode:()=>({mode:'multi'}),diagnostic:event=>events.push(event),stat:async()=>({mtimeMs:99})});
  return {observer,scene,events,stops,set:value=>{current=value;},gate:value=>{transition=value;},fence:value=>{fence=value;}};
 }
@@ -21,6 +21,10 @@ test('T01: D8/D9 retain ownership of stopped runtimes',async()=>{
 test('T01: unknown occupancy and replacement runs never authorize stopping the replacement',async()=>{
  const f=fixture();await f.observer.advance([f.scene]);f.set({present:true,runId:null});await f.observer.advance([{sessionGroup:f.scene.sessionGroup,present:true,runId:null}]);assert.equal(f.events.length,0);const next={...f.scene,runId:'r2'};f.set(next);await f.observer.advance([next]);assert.equal(f.events.length,1);assert.equal(f.stops.length,0);
 });
-test('T01: exact expired server evidence does not inspect or stop a new server',async()=>{
- const f=fixture();await f.observer.advance([f.scene]);f.observer.scenes.observeGroup=async()=>{throw new Error('new server unknown');};await f.observer.advance([{sessionGroup:f.scene.sessionGroup,present:true,ready:false}], [f.scene]);assert.equal(f.events.length,1);assert.equal(f.stops.length,0);
+test('T01: successful adapter stop is final; no caller post-stop observation',async()=>{
+ const f=fixture();await f.observer.advance([f.scene]);
+ const stopped={...f.scene,processRunning:false};f.set(stopped);
+ let observations=0;const observe=f.observer.scenes.observeGroup;
+ f.observer.scenes.observeGroup=async()=>{assert.equal(++observations,1);return observe();};
+ await f.observer.advance([stopped]);assert.equal(observations,1);assert.equal(f.stops.length,1);assert.equal(f.events.length,1);
 });

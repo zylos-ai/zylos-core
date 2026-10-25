@@ -124,7 +124,7 @@ async function aggregationScenario(t, create) {
   // Observe before requestProbe's single-flight map can hide duplicate drives.
   f.supervisor.observer.driveDemand = runtime => { driven.push(runtime); return drive(runtime); };
   await f.supervisor.loop.deps.readConfiguration();
-  await f.supervisor.loop.deps.writeMetricsAndMaintain({}); await f.prepared();
+  await f.supervisor.loop.deps.writeMetricsAndMaintain({scenes:f.current,fences:[]}); await f.prepared();
   assert.deepEqual(driven, ['claude', 'codex'], 'pending groups drove a runtime more than once');
   assert.deepEqual(f.controls.map(c => c.targetBinding.runtime).sort(), ['claude', 'codex']);
   assert.equal(f.supervisor.observer.probes.size, 2);
@@ -140,18 +140,18 @@ async function runtimeScenario(t, create) {
   f.setHealth('claude', 'rate_limited'); f.setHealth('codex', 'unavailable');
   const codexBefore = fs.readFileSync(f.supervisor.health.store('codex').file, 'utf8');
   await f.supervisor.loop.deps.readConfiguration();
-  await f.supervisor.loop.deps.writeMetricsAndMaintain({}); await f.prepared();
+  await f.supervisor.loop.deps.writeMetricsAndMaintain({scenes:f.current,fences:[]}); await f.prepared();
   assert.equal(f.controls.length, 0, 'Claude demand probed the existing Codex runtime');
   assert.equal(f.supervisor.observer.probes.size, 0);
   assert.equal(f.stops.length, 0);
   const claude = f.addScene('claude', 'telegram:a');
-  await f.supervisor.loop.deps.writeMetricsAndMaintain({}); await f.prepared();
+  await f.supervisor.loop.deps.writeMetricsAndMaintain({scenes:f.current,fences:[]}); await f.prepared();
   assert.equal(f.controls.length, 1);
   assert.deepEqual(f.controls[0].targetBinding, { runtime: 'claude', runId: claude.runId });
   assert.equal(f.controls[0].sessionGroup, claude.sessionGroup);
   assert.equal(f.controls[0].ackDeadlineAt, f.now() / 1000 + 120);
   f.controls[0].status = 'done';
-  await f.supervisor.loop.deps.writeMetricsAndMaintain({}); await f.prepared();
+  await f.supervisor.loop.deps.writeMetricsAndMaintain({scenes:f.current,fences:[]}); await f.prepared();
   assert.equal(f.supervisor.health.store('claude').read().health, 'ok');
   assert.equal(fs.readFileSync(f.supervisor.health.store('codex').file, 'utf8'), codexBefore);
   assert.equal(f.current[0], codex); assert.equal(f.stops.length, 0);

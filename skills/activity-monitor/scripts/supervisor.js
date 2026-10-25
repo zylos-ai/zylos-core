@@ -19,7 +19,7 @@ export const AUTH_DEMAND_RETRY_MS = 60000;
 export function createSupervisor(deps) {
   const { db, scenes, readConfiguration, readMode, readSyncMarker, prompts, now=Date.now, log=()=>{} }=deps;
   const activities=new Map();let configuration;let lastMetrics=null;let lastMaintenance=0;
-  let observer,router,admission,lifecycle,stopping=false,stopPromise;
+  let observer,router,admission,lifecycle,stopping=false,stopPromise,roundContext;
   const authChecks=new Set(),authFlights=new Map(),authRetryAt=new Map();
   const reportError=(error,context={})=>log({error:error.code || error.message,...context});
   const diagnostic=event=>{try{appendEvent(supervisorDiagnosticPath(deps.env),{v:1,ts:now(),session_group:event.sessionGroup ?? null,conversation_id:null,decision:event.decision ?? event.event,reason:event.reason ?? '',...event});}catch(error){reportError(error,{phase:'diagnostic'});}};
@@ -75,47 +75,44 @@ export function createSupervisor(deps) {
     preflightReclaim:(scene,context)=>lifecycle.checkReclaimDependencies(scene,context),
     modeSwitch:deps.modeSwitch,startAttempt:request=>health.registerStartAttempt(request),diagnostic,now});
   lifecycle=new SupervisorLifecycle({db,observeGroup:group=>scenes.observeGroup(group),observe:listScenes,stop:scene=>scenes.stop(scene),readSyncMarker,prompts,
-    requests:admission.store,alert:deps.alert,bindTarget:scene=>scenes.bindTarget(scene),observeFixedTarget:request=>scenes.observeFixedTarget(request),
-    stopFixedTarget:request=>scenes.stopFixedTarget(request),diagnostic,reportError},{now});
+    requests:admission.store,alert:deps.alert,bindTarget:scene=>scenes.bindTarget(scene),diagnostic,reportError},{now});
   const exits=new SupervisorExits({scenes,db,serialize:operation=>admission.serialize(operation),readMode,diagnostic,reportError,env:deps.env});
   const lifecycleMethods=Object.fromEntries(['advanceManual','advanceRestarts','reconcileConfiguration','advanceReclaim','checkRotation','checkTtl','checkEviction','checkSync'].map(name=>[name,(...args)=>lifecycle[name](...args)]));
   const loop=new SupervisorLoop({
-    readConfiguration:async()=>{configuration=await readConfiguration();return configuration;},
+    readConfiguration:async()=>{roundContext=null;configuration=await readConfiguration();return configuration;},
     restore:async()=>{
       try{admission.restore();}catch(error){if(error.code!=='requests_unreadable')throw error;reportError(error,{phase:'requests'});}
       for(const runtime of ['claude','codex'])await health.restore(runtime);
       router.clearLegacyCache(path.join(deps.zylosDir,'activity-monitor','message-router-probe-cache.json'));await deps.restoreTransition?.();
-    },openAdmission:()=>admission.openEntry(),reportError,getModeTransition:db.getModeTransition,listDrainFences:db.listDrainFences,
+    },openAdmission:()=>admission.openEntry(),reportError,getModeTransition:db.getModeTransition,listDrainFences:db.listDrainFences,readRestartRequests:()=>admission.readRequests(),
     advanceAutomaticMigration:context=>deps.advanceAutomaticMigration?.(context),
     advanceTransition:async transition=>{if(deps.advanceTransition)await deps.advanceTransition(transition);else reportError(Object.assign(new Error('Mode transition owner unavailable'),{code:'DEPENDENCY_UNAVAILABLE'}),{phase:'transition'});},
-    lifecycleSerial:operation=>admission.serialize(operation),checkManualFences:context=>lifecycle.checkManualFences(context),...lifecycleMethods,observe:listScenes,
-    observeExits:current=>exits.advance(current,(scenes.takeServerExits?.() ?? []).flatMap(item=>item.scenes)),
-    afterRound:()=>deps.afterRound?.({health,lifecycle,admission}),
+    lifecycleSerial:operation=>admission.serialize(operation),checkManualFences:context=>lifecycle.checkManualFences(context),...lifecycleMethods,observe:context=>{roundContext=context;return listScenes();},
+    observeExits:current=>exits.advance(current),
+    afterRound:()=>deps.afterRound?.({health,lifecycle,admission,context:roundContext}),
     probeAndPublish:async(scene,context)=>{
       if(!scene.ready || scene.processRunning!==true || !scene.runId || !scene.sessionId)return;
-      const matches=current=>current.present && current.ready && current.processRunning===true && current.runId===scene.runId && current.sessionId===scene.sessionId && current.runtime===scene.runtime;
-      const sampled=await scenes.observeGroup(scene.sessionGroup);
-      if(!matches(sampled))return;
-      const activity=readActivity(sampled);
-      // Hook evidence must use the currently observed process, not the process
-      // captured when the loop first enumerated scenes.
-      await deps.consumeHealthEvents?.(sampled,health);
-      const current=await scenes.observeGroup(scene.sessionGroup);
-      if(!matches(current) || current.runtimePid!==sampled.runtimePid)return;
-      publishSessionStatus({statusFile:path.join(sampled.runDir,'agent-status.json'),scene:sampled,activity,health:health.store(sampled.runtime).read(),proc:sampled.proc,now:now()});
-      await observer.observeScene(sampled);
+      const matches=current=>current.present && current.ready && current.runId===scene.runId && current.sessionId===scene.sessionId && current.runtime===scene.runtime;
+      // The round owns the process sample. Recheck only run/session identity at
+      // publication boundaries; do not resample every read-only health check.
+      if(!matches(await scenes.readIdentity(scene.sessionGroup)))return;
+      const activity=readActivity(scene);
+      await deps.consumeHealthEvents?.(scene,health);
+      if(!matches(await scenes.readIdentity(scene.sessionGroup)))return;
+      publishSessionStatus({statusFile:path.join(scene.runDir,'agent-status.json'),scene,activity,health:health.store(scene.runtime).read(),proc:scene.proc,now:now()});
+      await observer.observeScene(scene);
     },
     writeMetricsAndMaintain:async context=>{
-      const current=await listScenes();
+      const current=context.scenes;
       for(const probe of [...observer.probes.values()]) {
         try { await observer.pollProbe(probe); }
         catch(error) { reportError(error,{phase:'recovery-probe',runtime:probe.runtime}); }
       }
       const pendingGroups=await db.listPendingSessionGroups();
-      const demand=await aggregateRuntimeDemand({mode:configuration.mode,pendingGroups,fences:await db.listDrainFences(),resolveTargetRuntime:deps.resolveTargetRuntime,baselineRuntime:configuration.runtime});
+      const demand=await aggregateRuntimeDemand({mode:configuration.mode,pendingGroups,fences:context.fences,resolveTargetRuntime:deps.resolveTargetRuntime,baselineRuntime:configuration.runtime});
       for(const runtime of demand.keys())observer.driveDemand(runtime);
       const metrics={ready:current.filter(s=>s.sessionGroup!=='origin' && s.ready).length,starting:current.filter(s=>s.sessionGroup!=='origin' && !s.ready).length,
-        reclaiming:(await db.listDrainFences()).filter(f=>f.sessionGroup!=='*').length,waiting:pendingGroups.filter(g=>!current.some(s=>s.sessionGroup===g.sessionGroup)).length};
+        reclaiming:context.fences.filter(f=>f.sessionGroup!=='*').length,waiting:pendingGroups.filter(g=>!current.some(s=>s.sessionGroup===g.sessionGroup)).length};
       if(JSON.stringify(metrics)!==lastMetrics) {
         try { appendEvent(poolMetricsPath(deps.env),{v:1,ts:now(),...metrics});lastMetrics=JSON.stringify(metrics); }
         catch(error) { reportError(error,{phase:'pool-metrics'}); }
@@ -136,13 +133,15 @@ export function createSupervisor(deps) {
         }
         const targets=health.authTargets(runtime);
         await admission.serialize(async()=>{
-          if(await db.getModeTransition())return;
+          const fresh={configuration:await readConfiguration(),transition:await db.getModeTransition(),
+            fences:await db.listDrainFences(),restartRequests:admission.readRequests()};
+          if(fresh.transition)return;
+          fresh.scenes=await scenes.observe({configuration:fresh.configuration});
           for(const target of targets) {
-            if((target.sessionGroup==='origin' || target.sessionGroup===null) && manualPending())continue;
-            const observed=await scenes.observeGroup(target.sessionGroup);
-            if(!observed.present || observed.runId!==target.runId || !observed.ready)continue;
-            const fresh={configuration,transition:null,fences:await db.listDrainFences()};
-            if(configuration.mode==='single')await lifecycle.advanceReclaim({sessionGroup:null,reason:'auth',runId:target.runId},fresh,{unfenced:true,singleAuth:true});
+            if((target.sessionGroup==='origin' || target.sessionGroup===null) && fresh.restartRequests.some(row=>row.reason==='manual_restart'))continue;
+            const observed=fresh.scenes.find(scene=>scene.sessionGroup===target.sessionGroup || (scene.sessionGroup==='origin' && target.sessionGroup===null));
+            if(!observed?.present || observed.runId!==target.runId || !observed.ready)continue;
+            if(fresh.configuration.mode==='single')await lifecycle.advanceReclaim({sessionGroup:null,reason:'auth',runId:target.runId},fresh,{unfenced:true,singleAuth:true});
             else await lifecycle.beginReclaim(observed,'auth',fresh);
           }
         });

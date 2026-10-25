@@ -36,7 +36,7 @@ test('IF-31 assembly: unwritable diagnostic output cannot block completed authen
  // A directory at the file path fails actual append and rotation without needing
  // privilege-sensitive chmod assumptions (the test may run as root).
  fs.mkdirSync(path.join(root,'activity-monitor','pool-metrics.jsonl'),{recursive:true});
- await supervisor.loop.deps.writeMetricsAndMaintain({});
+ await supervisor.loop.deps.writeMetricsAndMaintain({scenes:[],fences:[]});
  assert.equal(supervisor.health.store('claude').read().health,'ok');
  assert.equal(supervisor.health.authRecoveries.has('claude'),false);
  assert.ok(calls.some(row=>row.phase==='pool-metrics'));
@@ -50,7 +50,7 @@ test('T01/T02 assembly: one failed probe poll cannot starve another runtime or a
  supervisor.observer.probes.set('claude',{runtime:'claude',resolve:()=>{}});
  supervisor.observer.probes.set('codex',{runtime:'codex',resolve:()=>{}});
  supervisor.observer.pollProbe=async probe=>{polled.push(probe.runtime);if(probe.runtime==='claude')throw Object.assign(new Error('pane unreadable'),{code:'TMUX_UNAVAILABLE'});};
- await supervisor.loop.deps.writeMetricsAndMaintain({});
+ await supervisor.loop.deps.writeMetricsAndMaintain({scenes:[],fences:[]});
  assert.deepEqual(polled,['claude','codex']);
  assert.equal(supervisor.health.store('codex').read().health,'ok');
  assert.ok(calls.some(row=>row.phase==='recovery-probe' && row.runtime==='claude'));
@@ -70,11 +70,12 @@ test('T02/T08 assembly: stopped, unknown, or no-longer-ready processes cannot re
  const {supervisor,scenes,root}=fixture(t);
  const scene={sessionGroup:'chat:A',runtime:'claude',runId:'r',sessionId:'s',runDir:root,createdAt:100,ready:true,present:true,processRunning:true};
  const file=path.join(root,'agent-status.json');fs.writeFileSync(file,'prior state');let observations=0;
- let current=scene;scenes.observeGroup=async()=>{observations++;return current;};
+ let current=scene;scenes.readIdentity=async()=>{observations++;return current;};
+ scenes.observeGroup=async()=>{throw new Error("publication must not resample processes");};
  await supervisor.loop.deps.probeAndPublish({...scene,processRunning:false},{});
  await supervisor.loop.deps.probeAndPublish({...scene,processRunning:undefined},{});
  assert.equal(observations,0);
- for(const change of [{processRunning:false},{processRunning:undefined},{ready:false}]){
+ for(const change of [{present:false},{runId:'replacement'},{sessionId:'replacement'},{ready:false}]){
   current={...scene,...change};await supervisor.loop.deps.probeAndPublish(scene,{});
   assert.equal(fs.readFileSync(file,'utf8'),'prior state');
  }
@@ -83,20 +84,21 @@ test('T02/T08 assembly: stopped, unknown, or no-longer-ready processes cannot re
 });
 
 
-test('T02/T08 assembly: hooks use freshly observed PID and F4 never republishes a replaced process sample',async t=>{
+test('T02/T08 assembly: hooks and status share the round sample; replacement identity blocks publication',async t=>{
  const consumed=[];let current,replaceDuringConsume=false;
  const {supervisor,scenes,root}=fixture(t,{consumeHealthEvents:async scene=>{
   consumed.push(scene.runtimePid);
-  if(replaceDuringConsume)current={...current,runtimePid:3,proc:{pid:3,alive:true}};
+  if(replaceDuringConsume)current={...current,sessionId:'replacement-session'};
  }});
- const original={sessionGroup:'chat:A',runtime:'claude',runId:'r',sessionId:'s',runDir:root,createdAt:100,ready:true,present:true,processRunning:true,runtimePid:1,proc:{pid:1,alive:true}};
- current={...original,runtimePid:2,proc:{pid:2,alive:true}};
- scenes.observeGroup=async()=>current;
- await supervisor.loop.deps.probeAndPublish(original,{});
+ const sampled={sessionGroup:'chat:A',runtime:'claude',runId:'r',sessionId:'s',runDir:root,createdAt:100,ready:true,present:true,processRunning:true,runtimePid:1,proc:{pid:1,alive:true}};
+ current=sampled;
+ scenes.readIdentity=async()=>current;
+ scenes.observeGroup=async()=>{throw new Error('publication must reuse the round process sample');};
+ await supervisor.loop.deps.probeAndPublish(sampled,{});
  const file=path.join(root,'agent-status.json'),saved=fs.readFileSync(file,'utf8');
- assert.deepEqual(consumed,[2]);assert.equal(JSON.parse(saved).proc.pid,2);
- replaceDuringConsume=true;await supervisor.loop.deps.probeAndPublish(original,{});
- assert.deepEqual(consumed,[2,2]);assert.equal(fs.readFileSync(file,'utf8'),saved);
+ assert.deepEqual(consumed,[1]);assert.equal(JSON.parse(saved).proc.pid,1);
+ replaceDuringConsume=true;await supervisor.loop.deps.probeAndPublish(sampled,{});
+ assert.deepEqual(consumed,[1,1]);assert.equal(fs.readFileSync(file,'utf8'),saved);
 });
 
 

@@ -51,7 +51,7 @@ function fixture(t, { mode = 'multi', create = createSupervisor } = {}) {
     return supervisor;
   };
   t.after(async () => supervisor?.stop());
-  const tick = () => supervisor.loop.deps.writeMetricsAndMaintain({});
+  const tick = () => supervisor.loop.deps.writeMetricsAndMaintain({scenes:[...state.live.values()],fences:db.listDrainFences()});
   const seed = (active = false, cooldown = 0) => {
     const store = supervisor.health.store('codex'), health = store.read();
     health.health = 'auth_failed'; health.reason = 'authentication_failed'; health.rateLimitActive = active;
@@ -75,10 +75,10 @@ test('IF-28 composed multi auth captures only affected runtime, retains F10 unti
   await f.tick(); assert.deepEqual(f.state.checks, ['codex']);
   const fence = f.state.fences.get(f.group);
   f.state.running = 1;
-  assert.equal(await f.supervisor.lifecycle.advanceReclaim(fence, { configuration: { mode: 'multi' } }), 'waiting_inflight');
+  assert.equal(await f.supervisor.lifecycle.advanceReclaim(fence, {configuration:{mode:'multi'},scenes:[...f.state.live.values()],fences:[...f.state.fences.values()],restartRequests:[],transition:null}), 'waiting_inflight');
   await f.tick(); assert.equal(f.supervisor.health.store('codex').read().health, 'auth_failed');
   f.state.running = 0;
-  assert.equal(await f.supervisor.lifecycle.advanceReclaim(fence, { configuration: { mode: 'multi' } }), 'done');
+  assert.equal(await f.supervisor.lifecycle.advanceReclaim(fence, {configuration:{mode:'multi'},scenes:[...f.state.live.values()],fences:[...f.state.fences.values()],restartRequests:[],transition:null}), 'done');
   await f.tick();
   assert.deepEqual(f.state.checks, ['codex', 'codex']);
   assert.deepEqual(f.state.stops, ['old-run']); assert.equal(f.state.live.get('lark:other').runId, 'claude-run');
