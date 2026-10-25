@@ -165,7 +165,12 @@ export async function release({ kind, token, env = process.env, waitMs }) {
 
 /** All guarded mutations check ownership and execute in the same F8 section. */
 export async function guard({ kind, token, env = process.env, waitMs }, action) {
-  const scope = await memoryScope(env);
+  let scope;
+  try { scope = await memoryScope(env); }
+  catch (error) {
+    if (error.code === 'SESSION_GROUP_INVALID') throw memoryError('SCOPE_UNBOUND', 'Invalid running scope');
+    throw error;
+  }
   const defaultKind = scope.kind === 'group' ? 'group' : 'global';
   checkKind(scope, kind === 'auto' ? defaultKind : kind ?? defaultKind);
   if (!/^[0-9a-f]{32}$/.test(token || '')) throw memoryError('TOKEN_MISMATCH', 'Sync token is missing or invalid');

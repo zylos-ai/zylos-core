@@ -103,6 +103,8 @@ test('shared guard checks token, kind and environment runId independently', asyn
   const origin = await acquire({ kind: 'origin', env }, { currentRunId });
   assert.equal(await guard({ kind: 'auto', token: origin, env }, ({ marker }) => marker.kind), 'origin');
   await assert.rejects(guard({ token: origin, env }, () => assert.fail('origin token entered group write')), { code: 'TOKEN_MISMATCH' });
+  await assert.rejects(guard({ kind: 'auto', token, env: { ...env, ZYLOS_SESSION_GROUP: '../bad' } }, () => assert.fail('invalid binding mutated')), { code: 'SCOPE_UNBOUND' });
+  await assert.rejects(guard({ kind: 'auto', token, env: { ZYLOS_DIR: env.ZYLOS_DIR } }, () => assert.fail('unbound scope mutated')), { code: 'SCOPE_UNBOUND' });
   // Same run, new token isolates takeover from runId mismatch.
   const next = await acquire({ kind: 'group', env }, { currentRunId, now: () => marker.expiresAt + 1 });
   assert.notEqual(next, token);
