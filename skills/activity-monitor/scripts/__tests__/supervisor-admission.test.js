@@ -160,8 +160,10 @@ test('manual admission checks optional sessionId once without requiring a tmux d
   assert.equal((await f.admission.handle(manual({expectedSessionId:'session-1'}))).result,'accepted');
   const [row] = f.store.read();
   assert.deepEqual(row,{requestId:'manual',reason:'manual_restart',acceptedAt:1792000000123,runIds:['r1'],
-    mode:'multi',expectedRunId:'r1',expectedSessionId:'session-1'});
+    mode:'multi',expectedRunId:'r1'});
   f.state.run.sessionId='session-2';
   assert.equal((await f.admission.handle(manual({expectedSessionId:'session-1'}))).result,'already_accepted');
+  assert.equal((await f.admission.handle(manual({expectedSessionId:'session-2'}))).result,'already_accepted');
+  assert.equal(validateRestartRequests([{...row,expectedSessionId:'session-1'}]),false);
   assert.equal(validateRestartRequests([{...row,tmuxTarget:{serverGeneration:'123:4',sessionId:'$1',paneId:'%1'}}]),false);
 });
