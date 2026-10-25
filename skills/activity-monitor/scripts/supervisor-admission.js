@@ -88,7 +88,7 @@ export class SupervisorAdmission {
     const rejected = reason => ({ ok: false, result: 'rejected', reason });
     const existing = rows.find(row => row.requestId === request.requestId);
     if (existing) return existing.reason === 'manual_restart'
-        && existing.expectedRunId === request.expectedRunId && existing.expectedSessionId === request.expectedSessionId
+        && existing.expectedRunId === request.expectedRunId
       ? { ok: true, result: 'already_accepted' } : rejected('request_conflict');
     if (await this.db.getModeTransition()) return rejected('transition_open');
     if (rows.some(row => row.reason === 'upgrade')) return rejected('restart_all_pending');
@@ -104,8 +104,7 @@ export class SupervisorAdmission {
     if (!run.ready) return rejected('not_ready');
     if (request.expectedSessionId !== undefined && request.expectedSessionId !== run.sessionId) return rejected('identity_unavailable');
     const row = { requestId: request.requestId, reason: 'manual_restart', acceptedAt: this.now(), runIds: [run.runId],
-      mode, expectedRunId: run.runId,
-      ...(request.expectedSessionId === undefined ? {} : { expectedSessionId: request.expectedSessionId }) };
+      mode, expectedRunId: run.runId };
     this.store.write([...rows, row]);
     return { ok: true, result: 'accepted' };
   }

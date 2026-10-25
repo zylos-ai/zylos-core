@@ -16,9 +16,8 @@ export function validateRestartRequests(rows) {
     let fields = ['requestId', 'reason', 'acceptedAt', 'runIds'];
     if (row.reason === 'manual_restart') {
       if (++manual > 1 || !['single', 'multi'].includes(row.mode) || !nonempty(row.expectedRunId)
-          || row.runIds.length !== 1 || row.runIds[0] !== row.expectedRunId
-          || (Object.hasOwn(row, 'expectedSessionId') && typeof row.expectedSessionId !== 'string')) return false;
-      fields = [...fields, 'mode', 'expectedRunId', 'expectedSessionId'];
+          || row.runIds.length !== 1 || row.runIds[0] !== row.expectedRunId) return false;
+      fields = [...fields, 'mode', 'expectedRunId'];
     } else if (row.reason !== 'upgrade') return false;
     if (Object.keys(row).some(key => !fields.includes(key))) return false;
   }
