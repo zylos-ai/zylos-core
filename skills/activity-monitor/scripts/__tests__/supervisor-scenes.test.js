@@ -1,7 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import path from 'node:path';
 import { readyTmuxTarget } from '../../../../test/helpers/ready-tmux-target.js';
 import { SupervisorScenes } from '../supervisor-scenes.js';
+import { SupervisorServerObservation } from '../supervisor-server-observation.js';
+import { SupervisorServerHealth } from '../supervisor-server-health.js';
 
 function service(f, options = {}) {
   return new SupervisorScenes({ env: f.env, connectionOptions: { socketPath: f.socketPath, binary: f.binary },
@@ -97,4 +100,24 @@ test('health stop preserves a replacement run and confirms the original session 
   await scenes.stop(old);
   assert.equal((await scenes.readIdentity('origin')).present, false);
   assert.doesNotThrow(() => f.tmux('has-session', '-t', '=fixture-keeper'));
+});
+
+// T02 / 2635 regression: lightweight identity caching must retain occupancy metadata.
+test('identity cache retains paths and lifecycle timestamps during tmux unavailability', { timeout:15000 }, async t => {
+  const f = readyTmuxTarget(t, { prefix:'p05-identity-cache-', mode:'multi' });
+  const base = service(f);
+  const scenes = new SupervisorServerObservation(base, { guard:new SupervisorServerHealth() });
+  const full = await scenes.observeGroup('origin');
+  await scenes.readIdentity('origin');
+  base.observe = async () => { throw Object.assign(new Error('timeout'), {code:'TMUX_UNAVAILABLE',cause:'timeout'}); };
+  const [cached] = await scenes.observe();
+  // C log maintenance uses runDir; Codex exit classification uses currentSessionTs.
+  assert.equal(path.join(cached.runDir, 'events.jsonl'), path.join(full.runDir, 'events.jsonl'));
+  assert.equal(cached.currentSessionTs, full.currentSessionTs);
+  assert.equal(cached.createdAt, full.createdAt);
+  assert.equal(cached.present, true);
+  assert.equal(cached.ready, false);
+  assert.equal(cached.processRunning, undefined);
+  assert.equal(cached.runId, null);
+  assert.equal(cached.healthIdentity, undefined);
 });

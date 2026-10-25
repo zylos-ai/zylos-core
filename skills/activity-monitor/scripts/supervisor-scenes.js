@@ -150,6 +150,8 @@ export class SupervisorScenes {
         readReady: this.readReady, readProcessTree: async () => [] });
       if (!target.present) return absent(group, this.env);
       return { sessionGroup: group, present: true, tmuxName: target.tmuxName,
+        runDir: groupRunDir(group ?? 'origin', this.env),
+        createdAt: target.createdAt * 1000, currentSessionTs: target.f3?.ts ?? null,
         runId: target.runId, runtime: target.runtime, sessionId: target.sessionId,
         ready: target.ready && scopeMatches(scope, target), launchConfig: target.launchConfig,
         tmuxTarget: descriptor(target) };
