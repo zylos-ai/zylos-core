@@ -41,13 +41,24 @@ const path = require('path');
 module.exports = myFunction;
 ```
 
+## Testing
+
+Tests never touch a live instance. The Node and Jest test runners set `HOME` and
+`ZYLOS_DIR` to fresh temporary directories before any test module loads; do not
+bypass these runners. Tests may override these defaults with their own isolated
+fixtures. On a machine running a live Zylos instance, run `npm install`, `npm ci`,
+or `npm test` only in an isolated environment: a separate Unix user, or temporary
+`HOME` and `ZYLOS_DIR` with `--ignore-scripts`. The package's `postinstall` syncs
+skills into `ZYLOS_DIR`. With lifecycle scripts disabled, provision required test
+dependencies separately in that isolated environment.
+
 ## tmux Compatibility
 
 Minimum supported tmux is **3.2a**. Version matrix: **3.2a, 3.3a, 3.4, 3.7c, 3.8**. 3.3a is the Debian 12 package, 3.4 the Ubuntu 24.04 package.
 
 A change that builds tmux commands, format strings or environment values, or parses anything read back from tmux (`cli/lib/runtime/` and its callers), merges only after it passes the whole matrix. One local tmux version does not stand in for the matrix. For each version:
 
-1. **Runtime tests.** Put a binary named `tmux` of that version first on `PATH` and point `TEST_TMUX_BIN` at it, then run `node --test cli/lib/runtime/__tests__/*.test.js`. Every test must pass.
+1. **Runtime tests.** Put a binary named `tmux` of that version first on `PATH` and point `TEST_TMUX_BIN` at it, then run `node scripts/run-node-tests.js cli/lib/runtime/__tests__/*.test.js`. Every test must pass.
 2. **Real-path stress.** Launch at least 300 rounds and deliver at least 150 rounds through the real adapter code, on one socket with background session create/kill churn. Required: 0 errors, 0 tmux server crashes, 0 lines delivered to the wrong pane, 0 missing lines.
 3. **Positive control.** Under the same harness, a known-bad variant must fail: for example, the guard condition made constant-true, or the previous crashing code. A run that cannot fail does not count.
 

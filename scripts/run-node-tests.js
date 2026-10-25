@@ -2,6 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { createTestEnvironment } from './test-environment.js';
 
 const ROOT = process.cwd();
 const TEST_ROOTS = [
@@ -60,8 +61,12 @@ if (testFiles.length === 0) {
 }
 
 console.log(`Running ${testFiles.length} Node test files`);
-const result = spawnSync(process.execPath, ['--experimental-test-module-mocks', '--test', ...testFiles], {
-  stdio: 'inherit',
-});
-
-process.exit(result.status ?? 1);
+const environment = createTestEnvironment();
+try {
+  const result = spawnSync(process.execPath, ['--experimental-test-module-mocks', '--test', ...testFiles], {
+    stdio: 'inherit',
+  });
+  process.exitCode = result.status ?? 1;
+} finally {
+  environment.cleanup();
+}
