@@ -11,12 +11,15 @@ function enqueueSingleExit() {
     '--block-queue-until-idle', '--no-ack-suffix'], {encoding:'utf8',timeout:10000}, (error, stdout) => error ? reject(error) : resolve(stdout.trim())));
 }
 
-/** T07: select once; never fall back from an uncertain or rejected submission. */
-export async function requestRuntimeRestart({ now = Date.now, deadlineAt, readMode = readSessionMode,
+/** T07: select once; never fall back or resubmit after a connected attempt.
+ * Only the self-upgrade call after services restart may retry failed connects.
+ */
+export async function requestRuntimeRestart({ now = Date.now, deadlineAt, afterServiceRestart = false, readMode = readSessionMode,
   readTransition = getModeTransition, send = submit, lookup = lookupRestartRequest,
   enqueueExit = enqueueSingleExit, requestId = `restart-${Date.now()}-${randomBytes(6).toString('hex')}` } = {}) {
-  const deadline = deadlineAt ?? now() + 10000;
-  const fail = (code, message, persisted = []) => ({ok:false,error:{code,message,persisted},requestId});
+  const deadline = afterServiceRestart ? Math.min(deadlineAt ?? Infinity, now() + 30000) : deadlineAt ?? now() + 10000;
+  const fail = (code, message, persisted = []) => ({ok:false,error:{code,message: afterServiceRestart && persisted !== null
+    ? `${message}. All currently running managed sessions, including Origin, need manual restart.` : message,persisted},requestId});
   if (now() >= deadline) return fail('deadline_exceeded','Restart budget was exhausted before submission');
   const mode = await readMode();
   if (now() >= deadline) return fail('deadline_exceeded','Restart budget was exhausted before submission');
@@ -26,7 +29,7 @@ export async function requestRuntimeRestart({ now = Date.now, deadlineAt, readMo
     const output = await enqueueExit();
     return {ok:true,data:{result:'exit_enqueued',mode:'single',output}};
   }
-  const result = await send({version:1,type:'restart_all',requestId,reason:'upgrade'},{deadlineAt:deadline});
+  const result = await send({version:1,type:'restart_all',requestId,reason:'upgrade'},{deadlineAt:deadline, ...(afterServiceRestart ? {connectRetryEveryMs:1000} : {})});
   if (result.kind === 'accepted') return {ok:true,data:{result:result.reply.result,requestId,runCount:result.reply.runCount}};
   if (result.kind === 'rejected' || !result.sent) return fail(result.reply?.code ?? result.kind,'Restart was not accepted');
   let observed;

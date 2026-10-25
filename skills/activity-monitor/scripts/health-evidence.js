@@ -36,6 +36,7 @@ export function initialHealthEvidence(health = 'ok', reason = '') {
 }
 
 export function safeHealthReason(health, reason) {
+  if (health === 'ok') return '';
   const allowed = new Set(['rate_limit_unclassified','rate_limit_five_hour','rate_limit_seven_day','authentication_failed','billing_error','overloaded','server_error','model_not_found','hook_evidence_unordered','health_storage_unavailable']);
   if (allowed.has(reason)) return reason;
   if (health === 'ok') return '';

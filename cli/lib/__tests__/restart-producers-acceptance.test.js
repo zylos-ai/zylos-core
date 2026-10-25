@@ -33,19 +33,20 @@ async function fixture(t, response) {
   });
   await new Promise(resolve => server.listen(socketPath, resolve));
   t.after(async () => { for (const peer of peers) peer.destroy(); await new Promise(resolve => server.close(resolve)); fs.rmSync(root, { recursive: true, force: true }); });
-  const restart = () => requestRuntimeRestart({ readMode: () => ({ mode: 'multi' }), readTransition: () => null,
+  const restart = (options = {}) => requestRuntimeRestart({ ...options, readMode: () => ({ mode: 'multi' }), readTransition: () => null,
     send: (request, options) => submit(request, { ...options, socketPath, replyMaxMs: 20 }), lookup: async () => { trace.push('lookup'); return 'unknown'; },
     enqueueExit: () => { throw new Error('must not fallback to /exit'); } });
   return { root, requests, trace, restart };
 }
 async function invoke(t, producer, response, repeatOnUnknown = false) {
   const f = await fixture(t, response); const key = `producer_${randomUUID()}`;
-  globalThis[key] = { ...f, restart: async () => {
-    const result = await f.restart(); if (repeatOnUnknown && result.error?.code === 'restart_result_unknown') await f.restart(); return result;
+  globalThis[key] = { ...f, restart: async (options) => {
+    if (producer === 'component') assert.deepEqual(options, { afterServiceRestart: true });
+    const result = await f.restart(options); if (repeatOnUnknown && result.error?.code === 'restart_result_unknown') await f.restart(); return result;
   } };
   t.after(() => { delete globalThis[key]; });
   const ref = `globalThis[${JSON.stringify(key)}]`;
-  const requestModule = data(`export const requestRuntimeRestart = () => ${ref}.restart();`);
+  const requestModule = data(`export const requestRuntimeRestart = options => ${ref}.restart(options);`);
   const priorArgv = process.argv, priorExitCode = process.exitCode, output = [];
   globalThis[key].output = (...args) => { output.push(args.join(' ')); return true; };
   try {
@@ -80,6 +81,12 @@ async function invoke(t, producer, response, repeatOnUnknown = false) {
   if (response === 'rejected') assert.match(all, /manual_restart_pending/);
   if (['uncertain', 'timeout'].includes(response)) assert.match(all, /restart_result_unknown/);
   if (response === 'accepted') assert.match(all, /accepted/);
+  if (producer === 'component' && response !== 'accepted') {
+    const report=JSON.parse(output.find(line=>line.trim().startsWith('{')));
+    assert.equal(report.runtimeRestart.ok,false);assert.doesNotMatch(report.reply,/No action needed/);
+    if(response==='rejected') assert.match(report.reply,/All currently running managed sessions, including Origin, need manual restart/);
+    else assert.match(report.reply,/do not resubmit automatically/);
+  }
 }
 test('IB-17 actual component/restart/upgrade entry producers: Unix Sock success, refusal and uncertain result', async t => {
   for (const producer of ['component', 'restart', 'upgrade']) for (const response of ['accepted', 'rejected', 'uncertain', 'timeout']) await invoke(t, producer, response);
