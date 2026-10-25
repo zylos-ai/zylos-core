@@ -948,10 +948,10 @@ test at skills/activity-monitor/scripts/__tests__/supervisor-manual-entry.integr
 ✖ IF-36 single actual M4/client lost reply requery retains original target and preserves same-name replacement (695.188491ms)
   AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
   + actual - expected
-  
+
   + undefined
   - 'session-1'
-  
+
       at scenario (file://<checkout>/skills/activity-monitor/scripts/__tests__/supervisor-manual-entry.integration.test.js:26:83)
       at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
       at async TestContext.<anonymous> (file://<checkout>/skills/activity-monitor/scripts/__tests__/supervisor-manual-entry.integration.test.js:38:181)
@@ -969,10 +969,10 @@ test at skills/activity-monitor/scripts/__tests__/supervisor-manual-entry.integr
 ✖ IF-36 multi actual M4/client lost reply requery retains original target and preserves same-name replacement (664.24068ms)
   AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
   + actual - expected
-  
+
   + undefined
   - 'session-1'
-  
+
       at scenario (file://<checkout>/skills/activity-monitor/scripts/__tests__/supervisor-manual-entry.integration.test.js:26:83)
       at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
       at async TestContext.<anonymous> (file://<checkout>/skills/activity-monitor/scripts/__tests__/supervisor-manual-entry.integration.test.js:38:181)
