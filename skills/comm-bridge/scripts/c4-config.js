@@ -1,6 +1,6 @@
-import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import { readZylosConfigOrThrow } from './local-config.js';
 
 export const POLL_INTERVAL_BASE = 1000;
 export const POLL_INTERVAL_MAX = 3000;
@@ -22,6 +22,8 @@ function positiveInteger(value, fallback) {
   const number = Number(value);
   return Number.isSafeInteger(number) && number > 0 ? number : fallback;
 }
+export const PENDING_MAX_AGE_SECONDS = positiveInteger(process.env.C4_PENDING_MAX_AGE_SECONDS, 1800);
+export const RECOVER_MAX_AGE_SECONDS = positiveInteger(process.env.C4_RECOVER_MAX_AGE_SECONDS, 1800);
 export const PERIODIC_ENTER_ENABLED = (process.env.C4_PERIODIC_ENTER_ENABLED ?? '1') === '1';
 export const PERIODIC_ENTER_INTERVAL_MS = Math.max(1000, positiveInteger(process.env.C4_PERIODIC_ENTER_INTERVAL_MS, 60000));
 export const PERIODIC_ENTER_MAX_ATTEMPTS = Math.min(10, positiveInteger(process.env.C4_PERIODIC_ENTER_MAX_ATTEMPTS, 3));
@@ -48,19 +50,12 @@ export const CONTENT_PREVIEW_CHARS = 100;
 
 const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
 
-// Read active runtime from config.json to dispatch to the correct tmux session.
-// Defaults to 'claude' when config is absent or runtime is unset.
-function _readConfig() {
-  try {
-    return JSON.parse(fs.readFileSync(path.join(ZYLOS_DIR, '.zylos', 'config.json'), 'utf8'));
-  } catch {
-    return {};
-  }
+// Runtime identity is read at the action boundary, without loading Core.
+export async function getRuntimeIdentity() {
+  const config = readZylosConfigOrThrow();
+  const runtime = config.runtime === 'codex' ? 'codex' : 'claude';
+  return { runtime, session: runtime === 'codex' ? 'codex-main' : 'claude-main' };
 }
-const _cfg = _readConfig();
-export const STATUS_NOTICE_CONFIG = _cfg.statusNotices ?? {};
-export const ACTIVE_RUNTIME = _cfg.runtime === 'codex' ? 'codex' : 'claude';
-export const TMUX_SESSION = ACTIVE_RUNTIME === 'codex' ? 'codex-main' : 'claude-main';
 export const DATA_DIR = path.join(ZYLOS_DIR, 'comm-bridge');
 export const DB_PATH = path.join(DATA_DIR, 'c4.db');
 export const ACTIVITY_MONITOR_DIR = path.join(ZYLOS_DIR, 'activity-monitor');

@@ -4,6 +4,8 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { configUnreadable, readConfigStrict } from './config-store.js';
+import { updateConfigWithLock } from './config-lock.js';
 
 export const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(process.env.HOME, 'zylos');
 export const SKILLS_DIR = path.join(ZYLOS_DIR, '.claude', 'skills');
@@ -20,7 +22,7 @@ export const CADDY_BIN = path.join(BIN_DIR, 'caddy');
 
 // ── Config file (config.json) ───────────────────────────────────
 
-const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
+export const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
 
 /**
  * Read the zylos config.json.
@@ -35,12 +37,56 @@ export function getZylosConfig() {
 }
 
 /**
- * Write the zylos config.json (merges with existing).
- * @param {object} updates - Key-value pairs to merge into config
+ * Strictly read config.json without turning corruption or I/O failures into
+ * missing configuration.
  */
-export function updateZylosConfig(updates) {
-  const config = getZylosConfig();
-  Object.assign(config, updates);
-  fs.mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
-  fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2) + '\n');
+export function readZylosConfigStrict() {
+  return readConfigStrict(CONFIG_FILE);
+}
+
+export function readZylosConfigOrThrow() {
+  const result = readZylosConfigStrict();
+  if (result.state === 'error') throw configUnreadable(result.error);
+  return result.state === 'ok' ? result.config : {};
+}
+
+export function readSessionMode() {
+  const result = readZylosConfigStrict();
+  if (result.state === 'error') throw configUnreadable(result.error);
+  if (result.state === 'missing' || !Object.hasOwn(result.config, 'session_mode')) {
+    return { mode: null, keyPresent: false };
+  }
+  const mode = result.config.session_mode;
+  if (mode !== 'single' && mode !== 'multi') {
+    throw configUnreadable(new TypeError('session_mode must be "single" or "multi"'));
+  }
+  return { mode, keyPresent: true };
+}
+
+export function updateZylosConfigLocked(update, options = {}) {
+  return updateConfigWithLock({
+    configFile: CONFIG_FILE,
+    lockFile: `${CONFIG_FILE}.lock`,
+    update,
+    ...options,
+  });
+}
+
+export function writeSessionModeAtCutover(mode, options = {}) {
+  if (mode !== 'single' && mode !== 'multi') {
+    throw new TypeError('session mode must be "single" or "multi"');
+  }
+  let writeResult;
+  try {
+    writeResult = updateZylosConfigLocked({ set: { session_mode: mode } }, options);
+  } catch (error) {
+    if (error.code !== 'CONFIG_WRITE_FAILED' || error.phase !== 'after_rename') throw error;
+    try { error.verification = readSessionMode(); } catch (verifyError) { error.verificationError = verifyError; }
+    throw error;
+  }
+  const verification = readSessionMode();
+  if (!verification.keyPresent || verification.mode !== mode) {
+    throw configUnreadable(new Error(`session_mode verification mismatch: expected ${mode}`));
+  }
+  return { ...writeResult, verification };
 }

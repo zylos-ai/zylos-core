@@ -22,7 +22,7 @@ import os from 'os';
 import { execFileSync } from 'child_process';
 import { fileURLToPath } from 'url';
 import { hookScriptKey, hookScriptBaseKey, getCommandHooks } from './hook-utils.js';
-import { getZylosConfig, updateZylosConfig } from './config.js';
+import { getZylosConfig, readZylosConfigStrict, readZylosConfigOrThrow, updateZylosConfigLocked } from './config.js';
 import { renderCodexProjectConfig, renderCodexGlobalConfig, writeCodexConfig, resolveCodexBypassPermissions } from './runtime-setup.js';
 import {
   SIDE_EFFECT_NAMES,
@@ -300,8 +300,8 @@ export function syncTemplateSetting(key, {
 
 export function syncModelCoupledNewSessionThreshold({
   modelBackfilled = false,
-  cfg = getZylosConfig(),
-  updateConfig = updateZylosConfig,
+  cfg,
+  updateConfig = updateZylosConfigLocked,
   dryRun = false,
   log = console.log,
 } = {}) {
@@ -309,12 +309,14 @@ export function syncModelCoupledNewSessionThreshold({
     return { changed: false, reason: 'model_not_backfilled' };
   }
 
-  if (Object.hasOwn(cfg, 'new_session_threshold')) {
-    return { changed: false, reason: 'threshold_already_set' };
-  }
-
-  if (!dryRun) {
-    updateConfig({ new_session_threshold: 30 });
+  if (dryRun) {
+    cfg ??= getZylosConfig();
+    if (Object.hasOwn(cfg, 'new_session_threshold')) {
+      return { changed: false, reason: 'threshold_already_set' };
+    }
+  } else {
+    const result = updateConfig({ setIfAbsent: { new_session_threshold: 30 } });
+    if (!result.changed) return { changed: false, reason: 'threshold_already_set' };
   }
   log('  + new_session_threshold: 30 (paired with model backfill)');
   return { changed: true };
@@ -388,11 +390,12 @@ export function persistInstalledSettingsAndSyncCoupledThreshold({
 }
 
 export function shouldSyncCodexConfig({
-  cfg = getZylosConfig(),
+  cfg,
   homeDir = os.homedir(),
   projectDir = ZYLOS_DIR,
   existsSync = fs.existsSync,
 } = {}) {
+  if (cfg === undefined) cfg = readZylosConfigOrThrow();
   const codexDir = path.join(homeDir, '.codex');
   const globalConfigPath = path.join(codexDir, 'config.toml');
   const projectConfigPath = path.join(path.resolve(projectDir), '.codex', 'config.toml');
@@ -409,7 +412,7 @@ export function shouldSyncCodexConfig({
 
 export function syncCodexConfig({
   dryRun = false,
-  cfg = getZylosConfig(),
+  cfg,
   projectDir = ZYLOS_DIR,
   homeDir = os.homedir(),
   existsSync = fs.existsSync,
@@ -417,6 +420,7 @@ export function syncCodexConfig({
   writeConfig = writeCodexConfig,
   log = console.log,
 } = {}) {
+  if (cfg === undefined) cfg = readZylosConfigOrThrow();
   const state = shouldSyncCodexConfig({ cfg, homeDir, projectDir, existsSync });
   if (!state.shouldSync) {
     return { attempted: false, changed: false, fatal: false };
@@ -631,7 +635,9 @@ export function syncHooks(installedSettings, _templateSettings, {
  */
 function enqueueRestartIfNeeded() {
   try {
-    const cfg = getZylosConfig();
+    const strict = readZylosConfigStrict();
+    if (strict.state === 'error') throw strict.error;
+    const cfg = strict.state === 'ok' ? strict.config : {};
     if ((cfg.runtime ?? 'claude') !== 'claude') return;
 
     const c4ControlPath = path.join(ZYLOS_DIR, '.claude', 'skills', 'comm-bridge', 'scripts', 'c4-control.js');
@@ -639,7 +645,9 @@ function enqueueRestartIfNeeded() {
 
     execFileSync('node', [c4ControlPath, 'enqueue', '--content', '/exit', '--priority', '1', '--block-queue-until-idle', '--no-ack-suffix'], { stdio: 'pipe', timeout: 10000 });
     console.log('Settings hooks: restart enqueued (Claude will reload new configuration).');
-  } catch { /* non-fatal */ }
+  } catch (error) {
+    console.error(`Settings hooks: restart not enqueued: ${error.message}`);
+  }
 }
 
 export function main(argv = process.argv.slice(2)) {

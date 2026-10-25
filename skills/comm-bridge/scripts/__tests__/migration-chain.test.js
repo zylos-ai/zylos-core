@@ -13,7 +13,7 @@ for (const [name, owner, seed, query] of [
   ...['v0.1.0','v0.4.11','v0.5.2'].map(tag => [`c4-${tag}.sql`,c4,"INSERT INTO conversations(direction,channel,endpoint_id,content) VALUES('in','web-console','session-handoff','retained')",'SELECT content FROM conversations']),
   ['scheduler-v0.1.0.sql',scheduler,"INSERT INTO system_state VALUES('retained','value',1)",'SELECT value FROM system_state'],
   ['web-console-v0.5.3.sql',web,"INSERT INTO sessions VALUES('retained',1,1)",'SELECT token FROM sessions'],
-]) test(`historical ${name}: read-only plan, 0→1 data retention and no repeated migration`, () => {
+]) test(`historical ${name}: read-only plan, complete-chain data retention and no repeated migration`, () => {
   const db = new Database(':memory:');
   try {
     db.exec(fs.readFileSync(new URL(name, fixtures),'utf8'));
@@ -21,7 +21,7 @@ for (const [name, owner, seed, query] of [
     const before=db.prepare(query).all();
     const schemaBefore=db.prepare('SELECT sql FROM sqlite_master ORDER BY name').all();
     const plan=planDatabaseMigration(db,owner);
-    assert.deepEqual(plan.steps.map(({from,to})=>[from,to]),[[0,1]]);
+    assert.deepEqual(plan.steps.map(({from,to})=>[from,to]),owner===c4?[[0,1],[1,2]]:[[0,1]]);
     assert.equal(db.pragma('user_version',{simple:true}),0);
     assert.deepEqual(db.prepare('SELECT sql FROM sqlite_master ORDER BY name').all(),schemaBefore);
     let calls=0;
@@ -47,7 +47,7 @@ test('historical C4 ALTER-added nullable raw_content shape backfills ACK suffix'
   } finally {db.close();}
 });
 
-// Synthetic mechanism fixture only. No released owner has schema version 2.
+// Synthetic mechanism fixture independent of the concrete owner versions.
 function synthetic(fail=false) {
   return {
     SUPPORTED_SCHEMA_VERSION:2,supportsNewDatabase:true,
@@ -95,7 +95,7 @@ test('invalid target layout after a step rolls back data and version',()=>{
  }finally{db.close();}
 });
 
-// Synthetic future owner: released owners still stop at v1. The extension
+// Synthetic future owner exercising a longer chain. The extension
 // column and archive table model locally owned data carried across core DDL.
 function syntheticV9({failAtRebuild=false,discardExtension=false}={}) {
  const columns=version=>version<2?['id','value']:
@@ -277,15 +277,15 @@ for(const [definition,usable] of [
  }finally{db.close();}
 });
 
-test('C4 v1 needs no health migration and retains rows and user extensions', () => {
+test('C4 v1 migrates to current schema and retains rows and user extensions', () => {
  const db=new Database(':memory:');try {
   db.exec(fs.readFileSync(new URL('c4-v0.9.0-v1.sql',fixtures),'utf8'));
   db.exec("CREATE TABLE archive_records(id INTEGER PRIMARY KEY,value TEXT); INSERT INTO archive_records VALUES(1,'retained'); ALTER TABLE checkpoints ADD COLUMN external TEXT; UPDATE checkpoints SET external='kept'");
   const before=db.prepare('SELECT * FROM checkpoints ORDER BY id').all();
-  assert.deepEqual(planDatabaseMigration(db,c4,extensionOptions).steps,[]);
+  assert.deepEqual(planDatabaseMigration(db,c4,extensionOptions).steps.map(({from,to})=>[from,to]),[[1,2]]);
   const result=migrateDatabase(db,c4,extensionOptions);
-  assert.equal(result.version,1);
-  assert.deepEqual(db.prepare('SELECT * FROM checkpoints ORDER BY id').all(),before);
+  assert.equal(result.version,c4.SUPPORTED_SCHEMA_VERSION);
+  assert.deepEqual(db.prepare('SELECT id,timestamp,summary,start_conversation_id,end_conversation_id,external FROM checkpoints ORDER BY id').all(),before);
   assert.equal(db.prepare('SELECT value FROM archive_records').get().value,'retained');
   for(const name of ['status_notice_attempts','runtime_health_events','runtime_health_state'])
     assert.equal(db.prepare('SELECT name FROM sqlite_master WHERE name=?').get(name),undefined);

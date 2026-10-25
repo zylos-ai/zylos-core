@@ -154,12 +154,12 @@ test('upgrade preflight and rehearsal reject an unsafe extension before service 
  }finally{db.close();}
  const before=fs.readFileSync(source);
  assert.throws(()=>runCoreDbWorker({action:'offline-preflight',zylosDir:dir,schemaRoot}),/conversations\.my_tag.*default/);
- assert.throws(()=>rehearseCoreDbUpgrade(dir,path.resolve('.'),{driverRoot:path.join(os.homedir(),'zylos','.claude','skills')}),/conversations\.my_tag.*default/);
+ assert.throws(()=>rehearseCoreDbUpgrade(dir,path.resolve('.'),{driverRoot:path.join(dir,'.claude','skills')}),/conversations\.my_tag.*default/);
  assert.deepEqual(fs.readFileSync(source),before);
 });
 
 test('target rehearsal migrates private copies before stop and leaves live databases unchanged', {skip:!Database},t=>{
- const dir=fixture(t),source=path.join(dir,'comm-bridge/c4.db');
+ const dir=fixture(t),source=path.join(dir,'comm-bridge/c4.db');skills(dir);
  fs.mkdirSync(path.dirname(source),{recursive:true});
  const db=new Database(source);
  try {
@@ -167,7 +167,7 @@ test('target rehearsal migrates private copies before stop and leaves live datab
   db.exec("INSERT INTO conversations(direction,channel,endpoint_id,content) VALUES('in','web-console','session-handoff','retained')");
  } finally {db.close();}
  const before=fs.readFileSync(source);
- const result=rehearseCoreDbUpgrade(dir,path.resolve('.'),{driverRoot:path.join(os.homedir(),'zylos','.claude','skills')});
+ const result=rehearseCoreDbUpgrade(dir,path.resolve('.'),{driverRoot:path.join(dir,'.claude','skills')});
  assert.deepEqual(result.databases.map(row=>row.toVersion),currentVersions);
  assert.equal(result.databases[0].fromVersion,0);
  assert.deepEqual(fs.readFileSync(source),before);
@@ -306,7 +306,7 @@ test('controlled installed migration requires installing identity, preserves sna
  Object.assign(j,{nodePath:process.execPath,coreManifest:[{name:'comm-bridge',existedBefore:true,backedUp:true,originalHash:digest}],originalServices:[]});
  j.initialIdentity={nodePath:process.execPath,cliRoot:path.join(dir,'package/cli'),cliHash:digest,packageJson:path.join(dir,'package/package.json'),packageHash:digest,workerPath:path.join(dir,'package/cli/lib/core-db-backup-worker.js'),workerHash:digest,ecosystemHash:null,databases:CORE_DATABASES.map(item=>({source:item.source,exists:item.owner!=='web-console'}))};
  const ordinary=[['comm-bridge/scripts/c4-db.js','getDb',"INSERT INTO conversations(direction,channel,content) VALUES ('in','fixture','after-ready')"],['scheduler/scripts/database.js','getDb',"INSERT INTO tasks(id,name,prompt,type,next_run_at,created_at,updated_at) VALUES ('after-ready','fixture','fixture','one-time',1,1,1)"],['web-console/scripts/db.js','openDb',"INSERT INTO sessions(token,created_at,last_seen_at) VALUES ('after-ready',1,1)"]];
- const open=(item)=>spawnSync(process.execPath,['--input-type=module','-e',`const mod=await import(${JSON.stringify(path.join(schemaRoot,item[0]))});const db=mod[${JSON.stringify(item[1])}]();db.exec(${JSON.stringify(item[2])});db.close();`],{encoding:'utf8',env:{...process.env,HOME:dir,ZYLOS_DIR:dir,PM2_HOME:path.join(dir,'pm2-home')}});
+ const open=(item)=>spawnSync(process.execPath,['--input-type=module','-e',`const mod=await import(${JSON.stringify(path.join(schemaRoot,item[0]))});const db=mod[${JSON.stringify(item[1])}]();db.exec(${JSON.stringify(item[2])});db.close();`],{encoding:'utf8',env:{...process.env,HOME:dir,ZYLOS_DIR:dir,ZYLOS_PACKAGE_ROOT:path.resolve('.'),PM2_HOME:path.join(dir,'pm2-home')}});
  m.durable(path.join(transactionDir,'journal.json'),j);m.marker(dir,transactionDir,j);
  for(const item of ordinary){const result=open(item);assert.notEqual(result.status,0);assert.match(result.stderr,/unavailable|maintenance|upgrade/i);}
 

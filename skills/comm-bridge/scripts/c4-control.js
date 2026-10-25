@@ -8,25 +8,25 @@
  *   ack --id <control_id>
  */
 
-import {
-  insertControl,
-  getControlById,
-  ackControl,
-  expireTimedOutControls,
-  close
-} from './c4-db.js';
+import { dataError } from './c4-session-group.js';
+
+let insertControl, buildTargetBinding, getControlById, ackControl,
+  expireTimedOutControls, expireControlById;
+let close = () => {};
+
 
 function usage() {
-  console.error('Usage: c4-control.js <enqueue|get|ack> [options]');
+  console.error('Usage: c4-control.js <enqueue|get|ack|expire> [options]');
   console.error('  enqueue --content "<text>" [--priority 3] [--block-queue-until-idle] [--bypass-state] [--ack-deadline <seconds>] [--available-in <seconds>] [--no-ack-suffix]');
+  console.error('           [--group G] [--target-run ID [--expected-runtime RT] [--expected-session ID]] [--json]');
   console.error('           Legacy alias: --require-idle');
   console.error('  get --id <control_id>');
   console.error('  ack --id <control_id>');
+  console.error('  expire --id <control_id>');
 }
 
 function errorExit(message) {
-  console.error(`Error: ${message}`);
-  process.exit(1);
+  throw dataError('INVALID_ARGS', message);
 }
 
 function parseNumberArg(args, flag) {
@@ -65,7 +65,16 @@ function nowSeconds() {
   return Math.floor(Date.now() / 1000);
 }
 
-function handleEnqueue(args) {
+async function handleEnqueue(args) {
+  const values = new Set(['--content', '--priority', '--ack-deadline', '--available-in', '--group', '--target-run', '--expected-runtime', '--expected-session']);
+  const flags = new Set(['--block-queue-until-idle', '--require-idle', '--bypass-state', '--no-ack-suffix', '--json']);
+  const seen = new Set();
+  for (let i = 0; i < args.length; i++) {
+    const flag = args[i];
+    if (seen.has(flag) || (!values.has(flag) && !flags.has(flag))) errorExit(`invalid or duplicate option: ${flag}`);
+    seen.add(flag);
+    if (values.has(flag) && (!args[++i] || args[i].startsWith('--'))) errorExit(`missing value for ${flag}`);
+  }
   const content = parseStringArg(args, '--content');
   if (!content) {
     errorExit('--content is required');
@@ -91,7 +100,18 @@ function handleEnqueue(args) {
   const availableAt = availableInSeconds !== null ? now + availableInSeconds : null;
   const requireIdle = hasFlag(args, '--block-queue-until-idle') || hasFlag(args, '--require-idle');
 
+  const sessionGroup = parseStringArg(args, '--group');
+  const expectedRunId = parseStringArg(args, '--target-run');
+  const expectedRuntime = parseStringArg(args, '--expected-runtime');
+  const expectedSessionId = parseStringArg(args, '--expected-session');
+  if (!expectedRunId && (expectedRuntime !== null || expectedSessionId !== null)) errorExit('--expected-runtime/--expected-session require --target-run');
+  const targetBinding = expectedRunId === null ? null : await buildTargetBinding({
+    sessionGroup, expectedRunId,
+    ...(expectedRuntime === null ? {} : { expectedRuntime }),
+    ...(expectedSessionId === null ? {} : { expectedSessionId }),
+  });
   const record = insertControl(content, {
+    sessionGroup, targetBinding,
     priority: priority ?? 3,
     requireIdle,
     bypassState: hasFlag(args, '--bypass-state'),
@@ -100,6 +120,12 @@ function handleEnqueue(args) {
     availableAt
   });
 
+  if (hasFlag(args, '--json')) {
+    const data = { id: record.id, supersededCount: record.superseded_count };
+    if (record.target_binding !== null) data.targetBinding = JSON.parse(record.target_binding);
+    console.log(JSON.stringify({ ok: true, data }));
+    return;
+  }
   console.log(`OK: enqueued control ${record.id}`);
   if (record.superseded_count > 0) {
     console.log(`OK: superseded ${record.superseded_count} equivalent pending control(s)`);
@@ -129,7 +155,7 @@ function handleAck(args) {
   console.log(`OK: control ${id} marked as done`);
 }
 
-function main() {
+async function main() {
   const args = process.argv.slice(2);
   const command = args[0];
   const commandArgs = args.slice(1);
@@ -140,13 +166,23 @@ function main() {
   }
 
   try {
+    ({ insertControl, buildTargetBinding, getControlById, ackControl,
+      expireTimedOutControls, expireControlById, close } = await import('./c4-db.js'));
     switch (command) {
       case 'enqueue':
-        handleEnqueue(commandArgs);
+        await handleEnqueue(commandArgs);
         break;
       case 'get':
         handleGet(commandArgs);
         break;
+      case 'expire': {
+        if (commandArgs.length !== 2 || commandArgs[0] !== '--id' || !/^[1-9][0-9]*$/.test(commandArgs[1]) || !Number.isSafeInteger(Number(commandArgs[1]))) {
+          throw new Error('INVALID_ARGS: expire requires --id <positive integer>');
+        }
+        const result = expireControlById(Number(commandArgs[1]));
+        console.log(JSON.stringify(result));
+        break;
+      }
       case 'ack':
         handleAck(commandArgs);
         break;
@@ -154,9 +190,22 @@ function main() {
         usage();
         errorExit(`unknown command: ${command}`);
     }
+  } catch (error) {
+    if (hasFlag(commandArgs, '--json')) {
+      const detail = {
+        code: error.code ?? 'INVALID_ARGS', message: error.message,
+        persisted: Object.hasOwn(error, 'persisted') ? error.persisted : [],
+        ...(Object.hasOwn(error, 'runId') ? { runId: error.runId } : {}),
+      };
+      console.log(JSON.stringify({ ok: false, error: detail }));
+    } else {
+      if (Object.hasOwn(error, 'runId')) console.error(`runId=${JSON.stringify(error.runId)}`);
+      console.error(`Error [${error.code ?? 'INVALID_ARGS'}]: ${error.message}`);
+    }
+    process.exitCode = 1;
   } finally {
     close();
   }
 }
 
-main();
+await main();
