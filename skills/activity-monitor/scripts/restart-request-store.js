@@ -5,10 +5,6 @@ import { durableJson, runtimeRoot } from './runtime-generation.js';
 export const validRequestId = value => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/.test(value);
 const nonempty = value => typeof value === 'string' && value.length > 0;
 const object = value => value && typeof value === 'object' && !Array.isArray(value);
-export function validTmuxTarget(target) {
-  return object(target) && Object.keys(target).length === 3 && /^\d+:\d+$/.test(target.serverGeneration)
-    && /^\$\d+$/.test(target.sessionId) && /^%\d+$/.test(target.paneId);
-}
 export function validateRestartRequests(rows) {
   if (!Array.isArray(rows)) return false;
   const ids = new Set(); let manual = 0;
@@ -20,9 +16,9 @@ export function validateRestartRequests(rows) {
     let fields = ['requestId', 'reason', 'acceptedAt', 'runIds'];
     if (row.reason === 'manual_restart') {
       if (++manual > 1 || !['single', 'multi'].includes(row.mode) || !nonempty(row.expectedRunId)
-          || row.runIds.length !== 1 || row.runIds[0] !== row.expectedRunId || !validTmuxTarget(row.tmuxTarget)
+          || row.runIds.length !== 1 || row.runIds[0] !== row.expectedRunId
           || (Object.hasOwn(row, 'expectedSessionId') && typeof row.expectedSessionId !== 'string')) return false;
-      fields = [...fields, 'mode', 'expectedRunId', 'tmuxTarget', 'expectedSessionId'];
+      fields = [...fields, 'mode', 'expectedRunId', 'expectedSessionId'];
     } else if (row.reason !== 'upgrade') return false;
     if (Object.keys(row).some(key => !fields.includes(key))) return false;
   }

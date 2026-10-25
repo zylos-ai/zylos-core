@@ -72,7 +72,5 @@ export class SupervisorServerObservation {
   bindTarget(...args) { return this.forward('bindTarget', args); }
   readScreen(...args) { return this.forward('readScreen', args); }
   stop(...args) { return this.forward('stop', args); }
-  observeFixedTarget(...args) { return this.forward('observeFixedTarget', args); }
-  stopFixedTarget(...args) { return this.forward('stopFixedTarget', args); }
   advance() { return this.guard.advance({ socketKey: this.socketKey }); }
 }
