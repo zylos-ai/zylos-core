@@ -103,7 +103,7 @@ export function createSupervisor(deps) {
       await observer.observeScene(scene);
     },
     writeMetricsAndMaintain:async context=>{
-      const current=context.scenes;
+      const current=context.scenes.filter(scene=>scene.present!==false);
       for(const probe of [...observer.probes.values()]) {
         try { await observer.pollProbe(probe); }
         catch(error) { reportError(error,{phase:'recovery-probe',runtime:probe.runtime}); }

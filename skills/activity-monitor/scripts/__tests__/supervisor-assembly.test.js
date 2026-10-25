@@ -11,7 +11,7 @@ function fixture(t,{badRequests=false,readMode=()=>({mode:'multi'}),resolveLaunc
  const calls=[],db={getModeTransition:()=>null,listDrainFences:()=>[],getDrainFence:()=>null,listPendingSessionGroups:()=>[],getControlById:()=>null,resolveSessionLaunchConfig:resolveLaunchConfig};
  const scenes={observe:async()=>[],readIdentity(group) { return this.observeGroup(group); }, observeGroup:async()=>({present:false}),listRuns:async()=>[],readRun:async()=>null};
  const supervisor=createSupervisor({db,scenes,zylosDir:root,env:{ZYLOS_DIR:root},readConfiguration:async()=>({mode:'multi',runtime:'claude',capacity:2}),readMode,resolveTargetRuntime:async()=> 'claude',requestStore:new RestartRequestStore({file}),consumeHealthEvents,checkAuth,log:item=>calls.push(item),loopOptions:{schedule:()=>1,cancel:()=>{}}});
- t.after(()=>supervisor.stop());return {supervisor,calls,file,root,scenes};
+ t.after(()=>supervisor.stop());return {supervisor,calls,file,root,scenes,db};
 }
 test('T01 assembly: restore health before admission; no-launch empty round executes',async t=>{
  const {supervisor}=fixture(t);assert.equal(supervisor.admission.open,false);await supervisor.loop.start();assert.equal(supervisor.admission.open,true);assert.equal(supervisor.health.stores.size,2);
@@ -36,6 +36,7 @@ test('IF-31 assembly: unwritable diagnostic output cannot block completed authen
  // A directory at the file path fails actual append and rotation without needing
  // privilege-sensitive chmod assumptions (the test may run as root).
  fs.mkdirSync(path.join(root,'activity-monitor','pool-metrics.jsonl'),{recursive:true});
+ fs.mkdirSync(path.join(root,'activity-monitor','pool-metrics.0.jsonl')); // Retention unlink also fails.
  await supervisor.loop.deps.writeMetricsAndMaintain({scenes:[],fences:[]});
  assert.equal(supervisor.health.store('claude').read().health,'ok');
  assert.equal(supervisor.health.authRecoveries.has('claude'),false);
@@ -128,4 +129,19 @@ test('T01 shutdown: detached route auth and accepted health writes drain before 
  assert.equal(written,true);assert.equal(supervisor.health.queues.size,0);
  assert.equal(supervisor.health.authRecoveries.size,0);
  assert.equal((await supervisor.router.checkAuth('claude')).reason,'supervisor_stopping');
+});
+
+// B2 / T08: metrics uses the lifecycle round, including its stop updates.
+test('T08 assembly: metrics reuses scene and fence snapshots and excludes stopped entries',async t=>{
+ const {supervisor,scenes,db,root}=fixture(t);
+ await supervisor.loop.deps.readConfiguration();
+ scenes.observe=async()=>{throw new Error('metrics must not resample scenes');};
+ db.listDrainFences=()=>{throw new Error('metrics must not reread D8');};
+ const snapshot=[{runDir:root,sessionGroup:'chat:ready',present:true,ready:true},
+  {runDir:root,sessionGroup:'chat:unknown',present:true,ready:false},
+  {runDir:root,sessionGroup:'chat:stopped',present:false,ready:false}];
+ await supervisor.loop.deps.writeMetricsAndMaintain({scenes:snapshot,fences:[{sessionGroup:'chat:unknown',reason:'upgrade'}]});
+ const metrics=JSON.parse(fs.readFileSync(path.join(root,'activity-monitor','pool-metrics.jsonl'),'utf8').trim());
+ assert.deepEqual({ready:metrics.ready,starting:metrics.starting,reclaiming:metrics.reclaiming,waiting:metrics.waiting},
+  {ready:1,starting:1,reclaiming:1,waiting:0});
 });
