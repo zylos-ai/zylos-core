@@ -16,14 +16,14 @@ test at cli/lib/runtime/__tests__/session-send-guard-race.test.js:62:3
 ✖ sendText rejects same-socket replacement after revalidation and before guarded action (175.329115ms)
   AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
   + actual - expected
-  
+
     {
   +   code: null,
   +   received: 'old-message'
   -   code: 'GENERATION_CHANGED',
   -   received: ''
     }
-  
+
       at TestContext.<anonymous> (file://<workspace>/p05-evidence-2651/matrix-b/constant-true-mutant/cli/lib/runtime/__tests__/session-send-guard-race.test.js:72:12)
       at async Test.run (node:internal/test_runner/test:1409:7)
       at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
@@ -39,14 +39,14 @@ test at cli/lib/runtime/__tests__/session-send-guard-race.test.js:62:3
 ✖ sendKeys rejects same-socket replacement after revalidation and before guarded action (165.329133ms)
   AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
   + actual - expected
-  
+
     {
   +   code: null,
   +   received: 'X'
   -   code: 'GENERATION_CHANGED',
   -   received: ''
     }
-  
+
       at TestContext.<anonymous> (file://<workspace>/p05-evidence-2651/matrix-b/constant-true-mutant/cli/lib/runtime/__tests__/session-send-guard-race.test.js:72:12)
       at async Test.run (node:internal/test_runner/test:1409:7)
       at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
