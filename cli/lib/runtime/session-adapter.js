@@ -91,7 +91,7 @@ export class SessionAdapter extends RuntimeAdapter {
       throw adapterError('ENTER_UNVERIFIED','Key delivery could not be confirmed',error.cause);
     }
   }
-  async sendText({target,connection,text}) {
+  async sendText({target,connection,text,bracketedPaste = false}) {
     if (typeof text !== 'string' || text.includes('\0')) throw new TypeError('Invalid text');
     const dir = await fs.mkdtemp(path.join(os.tmpdir(),'zylos-paste-'));
     const file = path.join(dir,'text');
@@ -102,7 +102,7 @@ export class SessionAdapter extends RuntimeAdapter {
         await (await this.dependencies()).revalidateSessionTarget({target,connection});
         await connection.commandBatch([
           ['load-buffer','-b',buffer,file.replaceAll('#','##')],
-          ['paste-buffer','-d','-b',buffer,'-t',target.paneId],
+          ['paste-buffer',...(bracketedPaste ? ['-p'] : []),'-d','-b',buffer,'-t',target.paneId],
         ]);
       } catch (error) {
         if (['TARGET_GONE','GENERATION_CHANGED','RUNID_MISMATCH'].includes(error.code)) throw error;
