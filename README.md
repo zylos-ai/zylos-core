@@ -31,7 +31,7 @@ Supports Claude Code (Anthropic) and Codex (OpenAI). Fully compatible with the [
 
 ## Quick Start
 
-**Prerequisites:** A Linux server (or Mac), a [Claude](https://claude.ai) subscription (or [OpenAI Codex](https://github.com/openai/codex) as an alternative runtime — Codex CLI v0.129.0+ required, 0.146+ recommended).
+**Prerequisites:** A Linux server (or Mac) with tmux 3.2a or later (the installer installs tmux if it is missing), a [Claude](https://claude.ai) subscription (or [OpenAI Codex](https://github.com/openai/codex) as an alternative runtime — Codex CLI v0.129.0+ required, 0.146+ recommended).
 
 Zylos-managed Codex sessions use `--no-daemon` when the installed CLI advertises it, isolating startup from shared background-server settings. Older CLIs without this option keep their existing launch behavior. This does not change the shared daemon or your standalone Codex configuration.
 
