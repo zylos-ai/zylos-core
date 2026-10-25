@@ -204,10 +204,13 @@ test('IB-04 real D4 reservation survives uncertain/sent, only unstarted failure 
   const clear = (key, stamp) => f.db.prepare('DELETE FROM status_notice_cooldowns WHERE cooldown_key=? AND last_notified_at=?').run(key, stamp);
   const count = () => f.db.prepare('SELECT count(*) AS n FROM status_notice_cooldowns').get().n;
   for (const [runtime, outcome, child] of [['claude', 'sent', { status: 0, pid: 1 }], ['codex', 'uncertain', { status: 1, pid: 2 }], ['unknown', 'failed', { error: { code: 'ENOENT' } }]]) {
-    const claim = reserveStatusNotice('chat', 'room|msg:1', { sessionGroup: 'chat:A', runtime }, { reserve });
+    const claim = reserveStatusNotice('chat', 'room|msg:1', { sessionGroup: 'chat', runtime }, { reserve });
+    let spawned;
     const result = sendStatusNotice(claim, 'text', {}, { exists: () => true, diagnostic: false, clear, spawn: (_cmd, args, options) => {
-      assert.deepEqual(args.slice(1), ['chat', 'room|msg:1']); assert.equal(options.input, 'text'); return child;
+      spawned = { args, options }; return child;
     } });
+    assert.deepEqual(spawned.args.slice(1), ['chat', 'room|msg:1']);
+    assert.equal(spawned.options.input, 'text');
     assert.equal(result.outcome, outcome);
   }
   assert.equal(count(), 2);

@@ -17,10 +17,9 @@ import {HealthStore} from '../health-store.js';
 import {createToolPipeline} from '../adapters/runtime-components.js';
 import {createToolEventStreamState,rotateToolEventStream} from '../tool-event-stream.js';
 import {currentOutageNotice} from '../outage-notice.js';
-import {SKILLS_DIR} from '../../../comm-bridge/scripts/c4-config.js';
 
 function fixture(t) {
-  fs.mkdirSync(path.join(SKILLS_DIR,'fake'),{recursive:true});
+  fs.mkdirSync(path.join(process.env.ZYLOS_DIR,'.claude','skills','fake'),{recursive:true});
   const zylosDir=fs.mkdtempSync(path.join(os.tmpdir(),'health-stream-'));
   t.after(()=>fs.rmSync(zylosDir,{recursive:true,force:true}));
   const dir=path.join(zylosDir,'activity-monitor');fs.mkdirSync(dir);

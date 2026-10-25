@@ -110,8 +110,10 @@ export async function main(args = process.argv.slice(2)) {
     const result = await receive(args);
     console.log(json ? JSON.stringify(result) : `[C4] Message ${result.action === 'queued' ? 'queued' : 'handled'} (id=${result.id}, action=${result.action})`);
   } catch (error) {
-    const code = error.code ?? 'INTERNAL_ERROR';
-    if (json) console.log(JSON.stringify({ ok: false, error: { code, message: error.message, persisted: error.persisted === undefined ? null : error.persisted, ...(error.id ? { id: error.id } : {}) } }));
+    const contractError = isDataError(error);
+    const code = contractError ? error.code : 'INTERNAL_ERROR';
+    const persisted = contractError ? error.persisted ?? null : [];
+    if (json) console.log(JSON.stringify({ ok: false, error: { code, message: error.message, persisted, ...(error.id ? { id: error.id } : {}) } }));
     else console.error(`Error [${code}]: ${error.message}`);
     process.exitCode = 1;
   } finally { database.close(); }

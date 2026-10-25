@@ -12,7 +12,6 @@ import { freezeFirstFailureNotice, processFirstFailureNotices, sendNoticeWorker 
 import { reserveStatusNoticeCooldown } from '../c4-db.js';
 import { reserveStatusNotice } from '../status-notice.js';
 import { HealthStore } from '../../../activity-monitor/scripts/health-store.js';
-import { SKILLS_DIR } from '../c4-config.js';
 
 const identity = { runtime:'claude', session_id:'session', claude_pid:123 };
 const event = { schema_version:1, source:'hook', ...identity,
@@ -75,7 +74,7 @@ for (const mode of ['sent','sender-signal','worker-killed','spawn-error']) {
   });
 }
 function fixture(t) {
-  fs.mkdirSync(path.join(SKILLS_DIR,'fake'),{recursive:true});
+  fs.mkdirSync(path.join(process.env.ZYLOS_DIR,'.claude','skills','fake'),{recursive:true});
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'first-notice-file-'));
   const db = new Database(':memory:'); guardDatabase(db,schema);
   t.after(() => { db.close(); fs.rmSync(root,{recursive:true,force:true}); });

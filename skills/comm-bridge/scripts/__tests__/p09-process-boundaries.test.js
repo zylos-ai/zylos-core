@@ -18,6 +18,33 @@ const databaseModule = createRequire(import.meta.url).resolve('better-sqlite3');
 const pending = { decision: 'pending', recovered: true, runtime: 'codex', health: 'rate_limited', reason: 'quota', transitionHold: false };
 const auth = { decision: 'auth_rejected', recovered: false, runtime: 'codex', health: 'auth_failed', reason: 'auth_failed', transitionHold: false, auth: { result: 'failed', detail: 'original rejection' } };
 
+test('IF-01 receive CLI maps database open failure to INTERNAL_ERROR with no persisted writes', t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'p09-open-failure-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(dir, '.claude', 'skills', 'chat'), { recursive: true });
+  const databasePath = path.join(dir, 'comm-bridge', 'c4.db');
+  fs.mkdirSync(databasePath, { recursive: true });
+  for (const json of [true, false]) {
+    const result = spawnSync(process.execPath, [new URL('c4-receive.js', scripts).pathname,
+      '--channel', 'chat', '--content', 'request', '--no-reply', ...(json ? ['--json'] : [])], {
+      env: { ...process.env, ZYLOS_DIR: dir }, encoding: 'utf8', timeout: 3000,
+    });
+    assert.equal(result.status, 1, result.stderr + result.stdout);
+    if (json) {
+      const output = JSON.parse(result.stdout);
+      assert.equal(output.ok, false);
+      assert.equal(output.error.code, 'INTERNAL_ERROR');
+      assert.deepEqual(output.error.persisted, []);
+      assert.equal(result.stderr, '');
+    } else {
+      assert.match(result.stderr, /^Error \[INTERNAL_ERROR\]:/);
+      assert.equal(result.stdout, '');
+    }
+    assert.deepEqual(fs.readdirSync(databasePath), []);
+    assert.deepEqual(fs.readdirSync(path.dirname(databasePath)), ['c4.db']);
+  }
+});
+
 function startChild(t, source, args = []) {
   const child = spawn(process.execPath, ['--input-type=module', '-e', source, ...args], { stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
   let stderr = '';
