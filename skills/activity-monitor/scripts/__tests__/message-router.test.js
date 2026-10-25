@@ -3,7 +3,9 @@ import { test } from 'node:test';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { MessageRouter, messageForRoute, normalizeHealth, validRouteRequest } from '../message-router.js';
+import { MessageRouter, messageForRoute, validRouteRequest } from '../message-router.js';
+import { normalizeHealth } from '../runtime-health.js';
+import { SupervisorHealthObserver } from '../supervisor-health-observer.js';
 
 const request = (overrides = {}) => ({ version: 2, type: 'route', requestId: 'req-1', channel: 'telegram', endpoint: 'ep1',
   componentName: 'telegram', sessionGroup: 'telegram:one', noReply: false, receivedAt: 1792000000000, ...overrides });
@@ -55,8 +57,13 @@ test('IB-02 rate limit is pending; non-noReply acceleration runs before cache', 
   assert.deepEqual(f.calls.probes, ['claude']); assert.deepEqual(f.calls.notify, ['claude']);
   assert.equal(result.decision, 'pending'); assert.equal(result.recovered, true); assert.equal(result.userMessage, undefined);
 });
-test('IB-02 caches and merges probes independently per runtime', async t => {
-  const resolvers = []; const f = fixture(t, { requestProbe: runtime => new Promise(resolve => resolvers.push({runtime, resolve})) });
+test('IB-02 routes share the observer probe per runtime and cache completed failures', async t => {
+  const resolvers = []; const f = fixture(t);
+  const observer = new SupervisorHealthObserver({ coordinator: {
+    restore: runtime => new Promise(resolve => resolvers.push({runtime, resolve: () => resolve(f.states[runtime])})),
+    readNegativeCache: runtime => f.router.readNegativeCache(runtime),
+  }, readMode: () => 'multi', listScenes: () => [] });
+  f.router.requestProbe = runtime => observer.requestProbe(runtime);
   f.states.claude = { health: 'unavailable', reason: 'heartbeat_timeout', scheduling: {} };
   const pending = [f.router.route(request()), f.router.route(request({ requestId: '2' })), f.router.route(request({ sessionGroup: 'telegram:two', requestId: '3' }))];
   await new Promise(resolve => setImmediate(resolve));

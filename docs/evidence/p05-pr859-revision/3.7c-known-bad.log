@@ -1,0 +1,59 @@
+Running 1 Node test files
+✖ sendText rejects same-socket replacement after revalidation and before guarded action (183.815432ms)
+✖ sendKeys rejects same-socket replacement after revalidation and before guarded action (174.12773ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 0
+ℹ fail 2
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 454.140886
+
+✖ failing tests:
+
+test at cli/lib/runtime/__tests__/session-send-guard-race.test.js:62:3
+✖ sendText rejects same-socket replacement after revalidation and before guarded action (183.815432ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+
+    {
+  +   code: null,
+  +   received: 'old-message'
+  -   code: 'GENERATION_CHANGED',
+  -   received: ''
+    }
+
+      at TestContext.<anonymous> (file://<workspace>/p05-evidence-2644/matrix-a/constant-true-mutant/cli/lib/runtime/__tests__/session-send-guard-race.test.js:72:12)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: { code: null, received: 'old-message' },
+    expected: { code: 'GENERATION_CHANGED', received: '' },
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at cli/lib/runtime/__tests__/session-send-guard-race.test.js:62:3
+✖ sendKeys rejects same-socket replacement after revalidation and before guarded action (174.12773ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+
+    {
+  +   code: null,
+  +   received: 'X'
+  -   code: 'GENERATION_CHANGED',
+  -   received: ''
+    }
+
+      at TestContext.<anonymous> (file://<workspace>/p05-evidence-2644/matrix-a/constant-true-mutant/cli/lib/runtime/__tests__/session-send-guard-race.test.js:72:12)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: { code: null, received: 'X' },
+    expected: { code: 'GENERATION_CHANGED', received: '' },
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }

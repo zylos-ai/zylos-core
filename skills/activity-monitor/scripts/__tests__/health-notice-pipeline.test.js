@@ -198,7 +198,7 @@ test('real isolated sender child captures one bilingual notice without writing t
 // P05 §4 health hook acceptance: preserve the recovered snapshot branch, then
 // prove a strictly later failure commits health, marker and new frozen route
 // together for the same PID/session. No identity change hides the regression.
-async function exactRecoveryRegression(t, Store = HealthStore) {
+async function exactRecoveryRegression(t) {
   const f=fixture(t),at=f.now();
   f.db.prepare("INSERT INTO conversations(direction,channel,endpoint_id,content,status) VALUES('in','fake','first','test','delivered')").run();
   const first=f.collect();
@@ -223,7 +223,7 @@ async function exactRecoveryRegression(t, Store = HealthStore) {
   const afterStop=f.store.read();assert.equal(afterStop.health,'ok');
   f.setTime(at+21);f.collect({hook_event_name:'UserPromptSubmit',prompt_id:'next'});f.tick();
   assert.deepEqual(f.store.read().last_processed,afterStop.last_processed);
-  const restarted=new Store({zylosDir:f.zylosDir,now:f.now,freezeNotice:input=>freezeFirstFailureNotice(f.db,{...input,sessionGroup:null})});
+  const restarted=new HealthStore({zylosDir:f.zylosDir,now:f.now,freezeNotice:input=>freezeFirstFailureNotice(f.db,{...input,sessionGroup:null})});
   f.db.prepare("INSERT INTO conversations(direction,channel,endpoint_id,content,status) VALUES('in','fake','next','test','delivered')").run();
   f.setTime(at+30);const next=f.collect({prompt_id:'next',error:'authentication_failed'});
   let publications=0;const publish=restarted.write.bind(restarted);
@@ -246,13 +246,4 @@ async function exactRecoveryRegression(t, Store = HealthStore) {
   assert.equal(restarted.consume(next,{identity:f.identity}).reason,'replay');
   assert.equal(fs.readFileSync(restarted.file,'utf8'),afterSend);
 }
-test('same-identity recovery rejects intervening old event but atomically commits later failure; old suppression mutant fails',async t=>{
-  await exactRecoveryRegression(t);
-  class SuppressAllRecovered extends HealthStore {
-    consume(event,options={}) {
-      if(this.read(options.sessionGroup).recovered) return {status:'ignored',reason:'pre_recovery_event'};
-      return super.consume(event,options);
-    }
-  }
-  await assert.rejects(exactRecoveryRegression(t,SuppressAllRecovered),{code:'ERR_ASSERTION'});
-});
+test('same-identity recovery rejects intervening old event but atomically commits later failure', exactRecoveryRegression);

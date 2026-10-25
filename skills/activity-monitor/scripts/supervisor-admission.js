@@ -2,7 +2,7 @@ import { loadCoreModule } from './core-modules.js';
 import { isDeepStrictEqual } from 'node:util';
 import { validLaunchConfigSnapshot as validSnapshot } from './launch-config-shape.js';
 const { assertSessionGroup } = await loadCoreModule('session-group-paths.js');
-import { RestartRequestStore, validRequestId, validTmuxTarget } from './restart-request-store.js';
+import { RestartRequestStore, validRequestId } from './restart-request-store.js';
 
 const nonempty = value => typeof value === 'string' && value.length > 0;
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -100,11 +100,11 @@ export class SupervisorAdmission {
     if (!request.expectedRunId) return run === null ? { ok: true, result: 'already_stopped' } : rejected('target_required');
     if (run === null) return { ok: true, result: 'already_stopped' };
     if (nonempty(run?.runId) && run.runId !== request.expectedRunId) return { ok: false, result: 'stale_target', currentRunId: run.runId };
-    if (!nonempty(run?.runId) || !validTmuxTarget(run.tmuxTarget)) return rejected('identity_unavailable');
+    if (!nonempty(run?.runId)) return rejected('identity_unavailable');
     if (!run.ready) return rejected('not_ready');
     if (request.expectedSessionId !== undefined && request.expectedSessionId !== run.sessionId) return rejected('identity_unavailable');
     const row = { requestId: request.requestId, reason: 'manual_restart', acceptedAt: this.now(), runIds: [run.runId],
-      mode, expectedRunId: run.runId, tmuxTarget: run.tmuxTarget,
+      mode, expectedRunId: run.runId,
       ...(request.expectedSessionId === undefined ? {} : { expectedSessionId: request.expectedSessionId }) };
     this.store.write([...rows, row]);
     return { ok: true, result: 'accepted' };
