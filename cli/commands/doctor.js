@@ -257,7 +257,7 @@ function checkPm2Services() {
 
 function checkTmuxSession() {
   try {
-    execFileSync('tmux', ['has-session', '-t', SESSION], {
+    execFileSync('tmux', ['has-session', '-t', `=${SESSION}`], {
       stdio: 'pipe', timeout: 30000,
     });
     return true;
@@ -268,23 +268,27 @@ function checkTmuxSession() {
 
 // ── Diagnostics collection ───────────────────────────────────────
 
-async function collectDiagnostics(env) {
-  const selected = await resolveCliSession();
+export async function collectDiagnostics(env, { resolve = resolveCliSession, network = checkNetwork, pm2Check = checkPm2Installed } = {}) {
+  const selected = await resolve();
   SESSION = selected.live.tmuxName;
   ACTIVE_RUNTIME = selected.runtime;
-  AGENT_DISPLAY = ACTIVE_RUNTIME === 'codex' ? 'Codex' : 'Claude';
+  AGENT_DISPLAY = ACTIVE_RUNTIME === 'unknown' ? 'Unknown runtime' : ACTIVE_RUNTIME === 'codex' ? 'Codex' : 'Claude';
   _activeAdapter = selected.adapter;
-  API_HOST = ACTIVE_RUNTIME === 'codex' ? 'api.openai.com' : 'api.anthropic.com';
-  const networkPromise = checkNetwork(env);
+  API_HOST = ACTIVE_RUNTIME === 'unknown' ? null : ACTIVE_RUNTIME === 'codex' ? 'api.openai.com' : 'api.anthropic.com';
+  const networkPromise = API_HOST ? network(env) : Promise.resolve({ dns: false, proxy: null, reachable: false, reason: 'runtime_unknown', details: {} });
 
   const tmux = checkTmuxInstalled();
-  const pm2 = checkPm2Installed();
+  const pm2 = pm2Check();
   const net = await networkPromise;
 
   // Runtime-specific CLI/auth checks.
   // Both runtimes use adapter.checkAuth() for consistency with the running process.
   let cli, authStatus, autonomous;
-  if (ACTIVE_RUNTIME !== 'codex') {
+  if (ACTIVE_RUNTIME === 'unknown') {
+    cli = { installed: false, reason: 'runtime_unknown' };
+    authStatus = 'uncertain';
+    autonomous = false;
+  } else if (ACTIVE_RUNTIME !== 'codex') {
     cli = checkClaudeCli();
     authStatus = cli.installed ? (await _activeAdapter.checkAuth()).status : 'failure';
     autonomous = cli.installed ? checkAutonomousMode() : false;
@@ -310,7 +314,7 @@ async function collectDiagnostics(env) {
 
 // ── JSON builder ─────────────────────────────────────────────────
 
-function buildDiagnosticJson(diag, coreVersion) {
+export function buildDiagnosticJson(diag, coreVersion) {
   const issues = [];
 
   if (!diag.system.tmux.installed) {
@@ -319,7 +323,9 @@ function buildDiagnosticJson(diag, coreVersion) {
   if (!diag.system.pm2.installed) {
     issues.push({ id: 'pm2_missing', label: 'PM2 not installed', hint: 'Run zylos init' });
   }
-  if (!diag.system.network.reachable) {
+  if (ACTIVE_RUNTIME === 'unknown') {
+    issues.push({ id: 'runtime_unknown', label: 'Runtime identity unavailable', hint: 'Inspect the session launch identity before runtime-specific checks' });
+  } else if (!diag.system.network.reachable) {
     const net = diag.system.network;
     let hint = 'Check internet connection and firewall settings.';
     if (net.proxy) {
@@ -333,8 +339,8 @@ function buildDiagnosticJson(diag, coreVersion) {
     }
     issues.push({ id: 'network_unreachable', label: `Cannot reach ${API_HOST}`, hint });
   }
-  const runtimeLabel = ACTIVE_RUNTIME === 'codex' ? 'Codex' : 'Claude';
-  if (!diag.ai.cli.installed) {
+  const runtimeLabel = AGENT_DISPLAY;
+  if (ACTIVE_RUNTIME !== 'unknown' && !diag.ai.cli.installed) {
     issues.push({ id: 'cli_missing', label: `${runtimeLabel} CLI not installed`, hint: 'Run zylos init' });
   }
   if (diag.ai.cli.installed && !diag.ai.networkSkipped && diag.ai.authStatus === 'failure') {

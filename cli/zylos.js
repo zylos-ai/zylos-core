@@ -145,7 +145,7 @@ Setup:
   shell               Interactive CLI mode (REPL)
   runtime <name>      Switch agent runtime (claude|codex)
   runtime status      Show currently configured runtime
-  auth <name>         Authenticate a prepared runtime
+  auth <name>         Authenticate a prepared runtime (Codex: --device-code)
   group <kind>        Read or update group runtime/model configuration
   migrate-instructions  Analyze/migrate legacy mixed instructions (dry-run by default)
                       --apply  Create durable backup and activate split instructions

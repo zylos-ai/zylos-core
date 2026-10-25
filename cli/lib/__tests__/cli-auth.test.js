@@ -22,9 +22,22 @@ test('IF-47 native auth stdio is interactive with stdout reserved; only confirme
           assert.deepEqual(options.stdio, ['inherit', 2, 2]); return { status: 0 };
         }, adapter: () => ({ checkAuth: async () => ({ status }) }) });
       assert.equal(calls, 1); assert.equal(result.ok, status === 'success');
-      if (!result.ok) { assert.equal(result.error.persisted, null); assert.equal(result.error.configChanged, false); }
+      if (!result.ok) {
+        assert.equal(result.error.persisted, null); assert.equal(result.error.configChanged, false);
+        assert.equal(result.error.code, status === 'failure' ? 'AUTH_FAILED' : 'AUTH_NOT_CONFIRMED');
+      }
     }
   }
+});
+
+test('review P2: Codex device-code option maps to native device auth without changing browser default', async () => {
+  for (const flags of [[], ['--device-code']]) {
+    const result = await executeAuth(['codex', ...flags, '--json'], { exists: () => true,
+      spawn: (name, argv) => { assert.equal(name, 'codex'); assert.deepEqual(argv, ['login', ...(flags.length ? ['--device-auth'] : [])]); return { status: 0 }; },
+      adapter: () => ({ checkAuth: () => ({ status: 'success' }) }) });
+    assert.equal(result.ok, true);
+  }
+  assert.equal((await executeAuth(['claude', '--device-code'])).error.code, 'INVALID_ARGUMENT');
 });
 
 test('IF-47 native cancellation/failure preserves credential uncertainty and never probes success', async () => {
