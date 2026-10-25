@@ -25,7 +25,7 @@ async function fixture(t) {
   fs.writeFileSync(temporary, original.replace('coverage= ', 'coverage=2 ').replace('inbox_committed= ', `inbox_committed=${segment} `).replace('## Headline\n', '## Headline\nRecovered\n'));
   db.prepare("INSERT INTO conversations(id,direction,channel,content,status,session_group) VALUES(1,'in','system','one','delivered','origin'),(2,'in','system','two','delivered','origin')").run();
   t.after(() => { if (db.open) db.close(); fs.rmSync(root, { recursive: true, force: true }); });
-  return { root, env, state, temporary, piece, original, db, store, settings: { token, env }, deps: { currentRunId: async () => env.ZYLOS_RUN_ID } };
+  return { root, env, state, temporary, piece, original, db, store, settings: { token, env } };
 }
 async function killAt(t, f, phase, end) {
   const worker = fileURLToPath(new URL('./fixtures/sync-crash-worker.js', import.meta.url));
@@ -48,7 +48,7 @@ test('DM39 two real checkpoint-before-rename crashes retain inputs and both delt
   }
   assert.deepEqual(f.store.getContentCheckpointsSince('origin', 0).map(cp => cp.summary), ['summary 1', 'summary 2']);
   // Recovery only when the caller actually starts another Sync; reads above do not repair.
-  await commit({ ...f.settings, input: { followedUpIds: [] } }, f.deps);
+  await commit({ ...f.settings, input: { followedUpIds: [] } });
   assert.match(fs.readFileSync(f.state, 'utf8'), /Recovered/); assert.equal(fs.existsSync(f.piece), false);
 });
 test('DM39 real rename-before-delete crash publishes state and cleanup removes retained committed input', async t => {
@@ -56,5 +56,5 @@ test('DM39 real rename-before-delete crash publishes state and cleanup removes r
   assert.equal(await killAt(t, f, 'after-rename', 2), 'state-published');
   assert.match(fs.readFileSync(f.state, 'utf8'), /Recovered/);
   assert.equal(fs.existsSync(f.piece), true); assert.deepEqual(await list(f.settings), []);
-  await cleanup(f.settings, f.deps); assert.equal(fs.existsSync(f.piece), false);
+  await cleanup(f.settings); assert.equal(fs.existsSync(f.piece), false);
 });

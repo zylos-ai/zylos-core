@@ -26,7 +26,7 @@ async function fixture(t, group = 'origin') {
     db.prepare('INSERT INTO group_heads(session_group,head_id) VALUES(?,?)').run(group, rows.at(-1).id);
     return rows;
   })();
-  return { root, ...scope, db, store, seed, seedGroup, tokens, settings: { env, token }, deps: { database: store, currentRunId: async () => env.ZYLOS_RUN_ID } };
+  return { root, ...scope, db, store, seed, seedGroup, tokens, settings: { env, token }, deps: { database: store } };
 }
 test('IB51 checkpoint invokes real M7 transaction for group/global and preserves rejection code', async t => {
   for (const group of ['origin', null]) {

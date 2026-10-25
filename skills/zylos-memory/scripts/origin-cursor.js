@@ -6,7 +6,7 @@ export async function advance({ group, syncedId, checkpointId, ...settings }, de
   return guard({ ...settings, kind: 'origin' }, async () => {
     const database = deps.database || await import('../../comm-bridge/scripts/c4-db.js');
     return database.advanceOriginSyncCursor(group, { syncedId, checkpointId });
-  }, deps);
+  });
 }
 if (isMain(import.meta.url)) await runCli(async () => {
   const [command, ...args] = process.argv.slice(2), parsed = options(args, ['group', 'synced', 'checkpoint', 'token']);
