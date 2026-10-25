@@ -9,8 +9,8 @@ import { acquire, memoryScope } from '../sync-lock.js';
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'memory-tool-'));
 const runId = '11111111-1111-4111-8111-111111111111';
-async function fixture(kind, group) {
-  const dir = fs.mkdtempSync(path.join(root, kind));
+async function fixture(kind, group, sharedRoot) {
+  const dir = sharedRoot ?? fs.mkdtempSync(path.join(root, kind));
   const env = { ...process.env, ZYLOS_DIR: dir, ZYLOS_RUN_ID: runId };
   if (group) env.ZYLOS_SESSION_GROUP = group; else delete env.ZYLOS_SESSION_GROUP;
   const currentRunId = async () => runId;
@@ -108,7 +108,7 @@ test('IF43: stdio emits only protocol frames and advertises the restricted tool'
 });
 
 test('IF43: concurrent group editors cannot cross scope and origin tokens choose separate permissions', async () => {
-  const a = await fixture('group', 'telegram:a'), b = await fixture('group', 'telegram:b');
+  const a = await fixture('group', 'telegram:a'), b = await fixture('group', 'telegram:b', a.dir);
   const fileA = `session-groups/telegram:a/state.md.${a.token}.tmp`;
   const fileB = `session-groups/telegram:b/state.md.${b.token}.tmp`;
   assert.deepEqual((await Promise.all([a.editor(create(a.token, fileA, 'A')), b.editor(create(b.token, fileB, 'B'))])).map(result => result.ok), [true, true]);

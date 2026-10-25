@@ -119,14 +119,16 @@ describe('rotate-session integration', () => {
 
   it('uses mtime fallback when header is missing', () => {
     writeCurrent('No header here, just content.\n');
+    const mtime = new Date('2025-06-15T01:00:00Z');
+    fs.utimesSync(CURRENT_FILE, mtime, mtime);
 
-    const output = runRotate();
+    const output = runRotate({ TZ: 'America/Los_Angeles' });
     assert.match(output, /Rotated current\.md/);
     assert.equal(fs.existsSync(CURRENT_FILE), false);
 
     const files = fs.readdirSync(SESSIONS_DIR).filter((f) => f !== 'current.md');
     assert.ok(files.length >= 1, `Expected at least 1 archived file, got: ${files}`);
-    assert.match(files[0], /^\d{4}-\d{2}-\d{2}/);
+    assert.equal(files[0], '2025-06-14.md');
   });
 
   it('creates sessions directory if missing', () => {
