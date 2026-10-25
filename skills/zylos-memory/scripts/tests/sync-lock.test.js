@@ -76,12 +76,35 @@ test('expiry during a guarded operation cannot admit a contender', async () => {
   const marker = JSON.parse(fs.readFileSync(file));
   const expiresAt = Date.now() + 30;
   fs.writeFileSync(file, JSON.stringify({ ...marker, startedAt: expiresAt - MARKER_TTL_MS, expiresAt }));
-  await guard({ kind: 'group', token, env }, async ({ assertHeld }) => {
+  await guard({ kind: 'group', token, env }, async () => {
     await new Promise(resolve => setTimeout(resolve, 40));
     await assert.rejects(acquire({ kind: 'group', env, waitMs: 80 }, { currentRunId }), { code: 'LOCK_TIMEOUT' });
-    assertHeld();
     assert.equal(JSON.parse(fs.readFileSync(file)).token, token);
   }, { currentRunId });
   const next = await acquire({ kind: 'group', env }, { currentRunId });
   assert.notEqual(next, token);
+});
+
+// IB-51/53: each ownership predicate rejects independently; no live tmux read.
+test('shared guard checks token, kind and environment runId independently', async () => {
+  const env = fixture('origin');
+  const scope = await memoryScope(env);
+  const token = await acquire({ kind: 'group', env }, { currentRunId });
+  const file = path.join(scope.runDir, 'sync.lock');
+  const marker = JSON.parse(fs.readFileSync(file));
+  for (const changed of [{ token: 'a'.repeat(32) }, { kind: 'origin' }, { runId: 'other-run' }]) {
+    fs.writeFileSync(file, JSON.stringify({ ...marker, ...changed }));
+    let called = false;
+    await assert.rejects(guard({ token, env }, () => { called = true; }), { code: 'TOKEN_MISMATCH' });
+    assert.equal(called, false);
+  }
+  fs.writeFileSync(file, JSON.stringify(marker));
+  assert.equal(await guard({ token, env }, ({ marker }) => marker.kind), 'group');
+  const origin = await acquire({ kind: 'origin', env }, { currentRunId });
+  assert.equal(await guard({ kind: 'auto', token: origin, env }, ({ marker }) => marker.kind), 'origin');
+  await assert.rejects(guard({ token: origin, env }, () => assert.fail('origin token entered group write')), { code: 'TOKEN_MISMATCH' });
+  // Same run, new token isolates takeover from runId mismatch.
+  const next = await acquire({ kind: 'group', env }, { currentRunId, now: () => marker.expiresAt + 1 });
+  assert.notEqual(next, token);
+  await assert.rejects(guard({ kind: 'group', token, env }, () => assert.fail('old token mutated')), { code: 'TOKEN_MISMATCH' });
 });

@@ -1,13 +1,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { parse } from 'dotenv';
-import { memoryScope, memoryError, withMemoryLock, reportMemoryError } from './sync-lock.js';
+import { loadTimezoneFromEnv } from './shared.js';
+import { isMain, readInput, runCli } from './sync-cli.js';
+import { memoryScope, memoryError, withMemoryLock } from './sync-lock.js';
 
 function timeParts(root, env, now) {
-  let timezone = env.TZ;
-  try { timezone = parse(fs.readFileSync(path.join(root, '.env'), 'utf8')).TZ || timezone; }
-  catch (error) { if (error.code !== 'ENOENT') throw error; }
+  const timezone = loadTimezoneFromEnv(root, { ...env });
   const parts = new Intl.DateTimeFormat('en-CA', { ...(timezone ? { timeZone: timezone } : {}),
     year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
   }).formatToParts(now);
@@ -23,12 +21,15 @@ function inboxText(text) {
   return body;
 }
 
-function appendRollback(file, build, io) {
+function appendRollback(file, build, io, tailOnly = false) {
   const fd = io.openSync(file, 'a+', 0o600);
   let original;
   try {
     original = io.fstatSync(fd).size;
-    const old = io.readFileSync(fd, 'utf8');
+    const tail = Buffer.alloc(1);
+    const old = tailOnly
+      ? (original && io.readSync(fd, tail, 0, 1, original - 1) ? tail.toString() : '')
+      : io.readFileSync(fd, 'utf8');
     const bytes = Buffer.from(build(old));
     let offset = 0;
     while (offset < bytes.length) {
@@ -49,7 +50,7 @@ function appendRollback(file, build, io) {
   } finally { io.closeSync(fd); }
 }
 
-export async function appendInbox({ kind, content, env = process.env, waitMs, signal }, { now = () => new Date(), io = fs } = {}) {
+export async function appendInbox({ kind, content, env = process.env, waitMs }, { now = () => new Date(), io = fs } = {}) {
   if (!['commitment', 'decision', 'fact'].includes(kind)) throw memoryError('INVALID_INPUT', 'Invalid inbox kind');
   const body = inboxText(content);
   const scope = await memoryScope(env);
@@ -63,10 +64,10 @@ export async function appendInbox({ kind, content, env = process.env, waitMs, si
       return `${old && !old.endsWith('\n') ? '\n' : ''}${heading}- ${time} ${kind}: ${body}\n`;
     }, io);
     return { path: file, bytes };
-  }, { waitMs, signal });
+  }, { waitMs });
 }
 
-export async function appendSession({ content, env = process.env, waitMs, signal }, { now = () => new Date(), io = fs } = {}) {
+export async function appendSession({ content, env = process.env, waitMs }, { now = () => new Date(), io = fs } = {}) {
   if (typeof content !== 'string' || !content.trim()) throw memoryError('INVALID_INPUT', 'Session body must be nonempty text');
   const scope = await memoryScope(env);
   return withMemoryLock(scope.runDir, () => {
@@ -74,19 +75,17 @@ export async function appendSession({ content, env = process.env, waitMs, signal
     const directory = path.join(scope.memoryDir, 'sessions');
     io.mkdirSync(directory, { recursive: true, mode: 0o700 });
     const file = path.join(directory, `${date}.md`);
-    const bytes = appendRollback(file, old => `${old && !old.endsWith('\n') ? '\n' : ''}${content}${content.endsWith('\n') ? '' : '\n'}`, io);
+    const bytes = appendRollback(file, old => `${old && !old.endsWith('\n') ? '\n' : ''}${content}${content.endsWith('\n') ? '' : '\n'}`, io, true);
     return { path: file, bytes };
-  }, { waitMs, signal });
+  }, { waitMs });
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  try {
-    const [command, ...args] = process.argv.slice(2);
-    const content = fs.readFileSync(0, 'utf8');
-    let result;
-    if (command === 'inbox' && args.length === 2 && args[0] === '--kind') result = await appendInbox({ kind: args[1], content });
-    else if (command === 'session' && args.length === 0) result = await appendSession({ content });
-    else throw memoryError('INVALID_INPUT', 'Invalid memory append command');
-    process.stdout.write(JSON.stringify(result) + '\n');
-  } catch (error) { reportMemoryError(error); }
-}
+if (isMain(import.meta.url)) await runCli(async () => {
+  const [command, ...args] = process.argv.slice(2);
+  const content = readInput();
+  let result;
+  if (command === 'inbox' && args.length === 2 && args[0] === '--kind') result = await appendInbox({ kind: args[1], content });
+  else if (command === 'session' && args.length === 0) result = await appendSession({ content });
+  else throw memoryError('INVALID_INPUT', 'Invalid memory append command');
+  process.stdout.write(JSON.stringify(result) + '\n');
+});

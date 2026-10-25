@@ -10,24 +10,16 @@ const moduleUrl = new URL('../sync-lock.js', import.meta.url).href;
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'memory-lock-'));
 
 // DM-40: callback process retains the lock after acquisition helper exits.
-test('parent retains F8, cancellation cannot execute a late callback, inode stays fixed', async () => {
+test('parent retains F8, timeout cannot execute a late callback, inode stays fixed', async () => {
   const run = tmp();
-  let checked;
-  await withMemoryLock(run, async assertHeld => {
-    checked = assertHeld; assertHeld();
+  await withMemoryLock(run, async () => {
     const inode = fs.statSync(path.join(run, 'memory.lock')).ino;
     let called = false;
     await assert.rejects(withMemoryLock(run, () => { called = true; }, { waitMs: 80 }), { code: 'LOCK_TIMEOUT' });
     assert.equal(called, false);
     assert.equal(fs.statSync(path.join(run, 'memory.lock')).ino, inode);
-    const controller = new AbortController();
-    const waiting = withMemoryLock(run, () => { called = true; }, { signal: controller.signal });
-    controller.abort();
-    await assert.rejects(waiting, { code: 'LOCK_TIMEOUT' });
-    assert.equal(called, false);
   });
-  assert.throws(checked, { code: 'LOCK_LOST' });
-  await withMemoryLock(run, assertHeld => assertHeld());
+  await withMemoryLock(run, () => {});
 });
 
 // DM-40: real stopped holder, full 10s wait, resume, and process death.
