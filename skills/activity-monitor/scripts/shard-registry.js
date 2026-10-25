@@ -78,23 +78,11 @@ export const CORE_SHARDS = Object.freeze([
       (await import('../../zylos-memory/scripts/session-start-inject.js')).emitMemoryPart('references', payload),
   },
   {
-    name: 'state',
-    order: 4,
-    emit: async payload =>
-      (await import('../../zylos-memory/scripts/session-start-inject.js')).emitMemoryPart('state', payload),
-  },
-  {
-    name: 'c4-checkpoint',
-    order: 5,
-    emit: async payload =>
-      (await import('../../comm-bridge/scripts/c4-session-init.js')).emitC4Checkpoint(payload),
-  },
-  {
     // Passes the shard budget so the emitter packs whole messages
     // newest-first instead of ever falling back to the generic tail-trim +
     // spill (which would cut the newest messages of the chronological text).
     name: 'c4-conversations',
-    order: 6,
+    order: 4,
     emit: async payload =>
       (await import('../../comm-bridge/scripts/c4-session-init.js')).emitC4Conversations(payload, DEFAULT_SHARD_BUDGET),
   },

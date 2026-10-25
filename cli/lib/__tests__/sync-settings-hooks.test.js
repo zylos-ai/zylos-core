@@ -60,8 +60,6 @@ const CORE_SHARD_SEQUENCE = [
   'identity',
   'custom',
   'references',
-  'state',
-  'c4-checkpoint',
   'c4-conversations',
   'fg',
   'start-prompt',
@@ -74,7 +72,7 @@ describe('desiredClaudeHooks', () => {
     assert.equal(groups.length, 3);
     for (const group of groups) {
       assert.equal(group.hooks.some(hook => hook.command.includes('assembler.mjs')), false);
-      assert.deepEqual(group.hooks.map(h => extractShardArg(h.command)), CORE_SHARD_SEQUENCE);
+      assert.deepEqual(group.hooks.filter(h => h.command.includes('session-start-orchestrator.js')).map(h => extractShardArg(h.command)), CORE_SHARD_SEQUENCE);
     }
     fs.rmSync(zylosDir, { recursive: true, force: true });
   });
@@ -143,10 +141,10 @@ describe('desiredClaudeHooks', () => {
     const groups = hooks.SessionStart;
     assert.equal(groups.length, 3);
     for (const group of groups) {
-      assert.match(group.hooks[0].command, /\.zylos\/instructions\/assembler\.mjs/);
-      assert.equal(extractShardArg(group.hooks[0].command), null);
-      assert.deepEqual(group.hooks.slice(1).map(h => extractShardArg(h.command)), CORE_SHARD_SEQUENCE);
-      for (const hook of group.hooks.slice(1)) {
+      assert.match(group.hooks[1].command, /\.zylos\/instructions\/assembler\.mjs/);
+      assert.equal(extractShardArg(group.hooks[1].command), null);
+      assert.deepEqual(group.hooks.slice(2).map(h => extractShardArg(h.command)), CORE_SHARD_SEQUENCE);
+      for (const hook of group.hooks.slice(2)) {
         assert.match(hook.command, /session-start-orchestrator\.js --shard /);
         assert.equal(path.isAbsolute(extractScriptPath(hook.command)), true);
         assert.equal(hook.timeout, 20000);
@@ -821,9 +819,8 @@ describe('syncHooks SessionStart orchestrator convergence', () => {
       desiredHooks: desiredClaudeHooks({ existsSync: () => true }),
     });
 
-    // Removing migration-prompt subtracts one command from each of the three
-    // SessionStart matchers; retired per-step hooks remain unchanged.
-    assert.deepEqual(result, { added: 34, updated: 0, removed: 12 });
+    // Four injection shards, side effects and synchronous health registration.
+    assert.deepEqual(result, { added: 33, updated: 0, removed: 12 });
     assertSessionStartUsesOrchestrator(installed);
   });
 
@@ -1014,7 +1011,7 @@ describe('component shard claim boundary (opt-in contract)', () => {
       .filter(h => h.command?.includes('session-start-orchestrator.js'))
       .map(h => extractShardArg(h.command));
     assert.deepEqual(shardArgs, [
-      'identity', 'custom', 'references', 'state', 'c4-checkpoint', 'c4-conversations', 'role-inject', 'fg', 'start-prompt',
+      'identity', 'custom', 'references', 'c4-conversations', 'role-inject', 'fg', 'start-prompt',
     ]);
     // User and undeclared hooks are untouched.
     assert.ok(startup.hooks.some(h => h.command?.includes('/custom/my-session-start.js')));

@@ -322,12 +322,14 @@ describe('session-start-orchestrator', () => {
     assert.ok(calls.some(call => call[0] === 'unref'));
   });
 
-  it('passes a hard timeout and kill signal to prompt child process', () => {
+  it('passes a hard timeout and kill signal to prompt child process', async () => {
     const calls = [];
-    enqueueStartupPrompt('startup', {
+    await enqueueStartupPrompt('startup', {
       controlPath: '/tmp/c4-control.js',
       childTimeoutMs: 1234,
-      execFile: (...args) => calls.push(args),
+      onboardingPending: () => false,
+      scopeReader: async () => ({ sessionGroup: null }),
+      execFile: async (...args) => { calls.push(args); return { stdout: '{"id":1}' }; },
     });
 
     assert.equal(calls.length, 1);
@@ -354,7 +356,7 @@ describe('session-start-orchestrator', () => {
       execFile: (...args) => calls.push(args),
     });
 
-    assert.deepEqual(result, { skipped: true, reason: 'onboarding_pending' });
+    assert.deepEqual(result, { skipped: true, reason: 'onboarding_pending', startupControlIds: [] });
     assert.equal(calls.length, 0);
   });
 
@@ -363,14 +365,16 @@ describe('session-start-orchestrator', () => {
     let settled = false;
     const pending = enqueueStartupPrompt('startup', {
       controlPath: '/tmp/c4-control.js',
+      onboardingPending: () => false,
+      scopeReader: async () => ({ sessionGroup: null }),
       execFile: () => new Promise((resolve) => { resolveChild = resolve; }),
     }).then(() => { settled = true; });
 
     // The async child has not resolved yet → enqueue must still be pending,
     // proving it does not block synchronously like the old execFileSync.
-    await Promise.resolve();
+    await new Promise(resolve => setImmediate(resolve));
     assert.equal(settled, false);
-    resolveChild();
+    resolveChild({ stdout: '{"id":1}' });
     await pending;
     assert.equal(settled, true);
   });
@@ -457,7 +461,7 @@ describe('session-start-orchestrator', () => {
 // The injection-order contract used to be the legacy assertions above
 // ("memory then C4" inside one process). With the shard split, the single
 // authoritative order is the registry chain
-// identity→custom→references→state→c4-checkpoint→c4-conversations: shards run as
+// identity→custom→references→c4-conversations: shards run as
 // independent hook processes and the flag chain — not process scheduling —
 // decides what lands in context first. These tests pin that contract at the
 // whole-chain level (shard-mode.test.js covers the per-link mechanics).
@@ -465,14 +469,15 @@ describe('authoritative injection order (shard chain)', () => {
   it('subsumes the legacy contract: every memory shard precedes every C4 shard in the chain', () => {
     const names = CORE_SHARDS.map(shard => shard.name);
     const lastMemory = Math.max(
-      ...['identity', 'references', 'state'].map(name => names.indexOf(name)));
+      ...['identity', 'custom', 'references'].map(name => names.indexOf(name)));
     const firstC4 = Math.min(
-      ...['c4-checkpoint', 'c4-conversations'].map(name => names.indexOf(name)));
+      ...['c4-conversations'].map(name => names.indexOf(name)));
+    assert.deepEqual(names, ['identity', 'custom', 'references', 'c4-conversations']);
     assert.ok(lastMemory >= 0 && firstC4 > lastMemory,
       `chain ${names.join('→')} must keep memory shards ahead of C4 shards`);
   });
 
-  it('six core shards launched concurrently in reverse order inject in chain order', async () => {
+  it('four core shards launched concurrently in reverse order inject in chain order', async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shard-chain-order-'));
     const outPath = path.join(tmpDir, 'stdout.txt');
     const fd = fs.openSync(outPath, 'w+');

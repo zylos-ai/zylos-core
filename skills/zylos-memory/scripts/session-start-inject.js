@@ -53,7 +53,6 @@ function section(label, filePath) {
 
 export const MEMORY_PARTS = Object.freeze({
   identity: Object.freeze({ label: 'BOT IDENTITY', file: 'identity.md' }),
-  state: Object.freeze({ label: 'ACTIVE STATE', file: 'state.md' }),
   references: Object.freeze({ label: 'REFERENCES', file: 'references.md' }),
 });
 
@@ -70,7 +69,6 @@ export function emitMemoryPart(part) {
 export function injectMemory() {
   const parts = [
     emitMemoryPart('identity'),
-    emitMemoryPart('state'),
     emitMemoryPart('references')
   ];
 

@@ -157,7 +157,7 @@ requests, follow the component-management skill workflow.
 When the user asks to switch to another runtime, confirm via C4 first
 (friendly wording; emphasize memory and context are fully preserved), then
 run `zylos runtime <target>`. After it completes, send a one-line transition
-notice. If it exits with code 2 (auth required), follow
+notice. If it exits with code 1 and `AUTH_NOT_CONFIRMED`, follow
 `~/zylos/.claude/skills/component-management/references/runtime-switch.md`.
 
 ## Memory System
@@ -168,18 +168,18 @@ Persistent memory lives in `~/zylos/memory/`.
 
 | Tier | Path | Purpose | Loading |
 |------|------|---------|---------|
-| **Identity** | `memory/identity.md` | Bot soul: personality, principles, digital assets | Always (session start) |
+| **Identity** | `memory/identity.md` | Identity, personality, core principles, necessary behavior | Always (session start) |
 | **Custom** | `custom-hooks/session-start/*.md` | Operator-placed standing directives (machine-local); not agent-managed | Always (session start) |
-| **State** | `memory/state.md` | Active work, pending tasks | Always (session start) |
+| **Working Memory** | Current scope's state/inbox/segments | Active work, pending tasks | On demand through read-work-memory.js |
 | **References** | `memory/references.md` | Pointers to config files, key paths | Always (session start) |
 | **User Profiles** | `memory/users/<id>/profile.md` | Per-user preferences | On demand |
 | **Reference** | `memory/reference/*.md` | Decisions, projects, shared prefs, ideas | On demand |
-| **Sessions** | `memory/sessions/current.md` | Today's event log | On demand |
+| **Sessions** | Current scope's `sessions/YYYY-MM-DD.md` | Daily event log in configured TZ | On demand |
 | **Archive** | `memory/archive/` | Cold storage | Rarely |
 
 ### Custom Standing Directives (`custom-hooks/session-start/`)
 
-Holds standing directives that must be in force from the first moment of
+Holds shared standing directives that must be in force from the first moment of
 every session — machine- or deployment-local rules (toolchain constraints,
 platform policies, house rules). Files are injected at every session start,
 concatenated in filename order. Routing test: *"must this be active in every
@@ -187,7 +187,9 @@ session, without anyone asking?"* → here. Contrast: `identity.md` = who the
 agent **is**; this directory = how this **deployment must operate**;
 `reference/preferences.md` = conventions consulted on demand. Keep it small —
 every line is a permanent per-session token cost; never put explanatory
-readme `.md` files inside.
+readme `.md` files inside. Save user-requested global rules to `ZYLOS.md`
+immediately and confirm only after saving succeeds. Memory Sync does not maintain
+these rules; an inbox note does not replace saving the rule.
 
 ### Multi-User
 
@@ -196,27 +198,74 @@ The bot serves a team. Route user-specific preferences to
 
 ### Memory Update Practices
 
-1. **At session start:** identity + state + references arrive as numbered
+1. **At session start:** identity, custom directives, references and current-scope
+   conversations arrive as four numbered
    blocks headed `=== ZYLOS STARTUP CONTEXT [k/N] <name> ===`. If a number in
    1..N is missing, that block was lost — read its source directly. A block
    noting truncation points to the file holding its full content.
-2. **During work:** update the appropriate memory file immediately when you
-   learn something important.
+2. **Before resuming work:** read the complete current-scope handoff at the path
+   supplied by Bootstrap. Read successive file ranges until all bytes are read;
+   first/last markers do not prove completeness. A missing file means there is no
+   handoff; an unreadable or incomplete file must be reported and fully read
+   before acting on work that depends on it. For continuing work, historical
+   references or earlier commitments, read working memory with
+   `node ~/zylos/.claude/skills/zylos-memory/scripts/read-work-memory.js --json`.
+   A large result supplies a file path and hash; read the entire file and verify
+   the hash. An independent new question needs no working-memory read. Reading
+   does not consume handoff or inbox material. Retain unfinished
+   handoff items; clear the handoff only after all its work is completed or cancelled.
+   For commitments, decisions and facts use `memory-append.js inbox --kind
+   commitment|decision|fact`, and for session notes use its `session` entry, with
+   content on stdin. Scope comes from the environment. Report append failure as
+   not recorded; retry LOCK_TIMEOUT within its contract and correct INVALID_INPUT.
 3. **Memory Sync:** when triggered, read
    `~/zylos/.claude/skills/zylos-memory/SKILL.md` and launch the background
    subagent exactly as it specifies (runtime-appropriate launch mechanics are
    documented there). Do not run Memory Sync inline when a background
    mechanism is available.
 4. **references.md is a pointer file with strict content rules.** Allowed:
-   stable identifiers, endpoints/ports, key paths, active policy pointers,
-   pointers to source-of-truth files. Disallowed (route instead): version/
-   incident history → `reference/decisions.md`; dead components → `archive/`;
-   any value already in a config file → pointer. Target ≤8KB.
-5. **state.md is an active-work file with strict content rules.** Allowed:
+   identity mappings for self, owner and necessary collaborators, trust and
+   operating boundaries, configuration-source pointers, and navigation to
+   on-demand material. Each index entry names its content, path and when to read
+   it. Reuse existing topic files before creating new ones; retain one authoritative
+   body per fact. Detailed machine/service information, project background and
+   contact endpoints belong in indexed topic files, and configured values remain
+   in their configuration source. Preserve necessary identity when reorganizing.
+   Identity itself retains personality, core principles and necessary behavior;
+   long experiences, examples and repeated explanations move to indexed topics.
+5. **state.md is maintained by the current scope's Memory Sync.** Allowed:
    current focus, genuinely pending items, blockers. Disallowed (route
    instead): completed-task narrative → `reference/projects.md`; decision
    rationale → `reference/decisions.md`; superseded detail → `archive/`.
-   Target ≤10KB.
+   It has no fixed length limit; keep current work focused and archive old content
+   through Sync. Agents do not directly rewrite state, inbox, identity or shared
+   references through the memory tool. The tool permits current-scope append,
+   handoff and authorized reference edits; it does not grant cross-group
+   writes or replace migration apply. After an authorized identity change request
+   rotation through `request-rotation.js --reason identity`.
+
+### Handoff Follow-up
+
+Preserve absorbed-message run ID, total/per-scope counts, first/last IDs, and the
+full query/reply commands from the handoff. Read `c4-fetch.js --absorbed --run-id R
+--summary` pages using `--scope-after` until nextScope is none. In multi mode,
+Origin handles origin and sends each other scope an internal notice with R,
+count and first/last IDs; each group verifies its own Pending and C4 history.
+Origin verifies earlier internal notices and actual progress after replacement;
+a repeated notice does not authorize repeating the underlying work. For repeated
+mode switches, verify the switch archive before reusing a fixed-path recovery
+file; report ambiguous references and retain unresolved work.
+In single mode the sole session handles all * items. Read item pages with
+`--after` and the returned next value, never ID arithmetic. Truncated or incomplete
+pages are unread: retry with a smaller `--limit`. Use `--id N` for truncated item
+previews; require the end line. Above 8192 text bytes use `--id N --out <file>`
+and read the full file. Check actual progress before repeating work; an outbound
+audit entry alone does not prove completion. Reply using the handoff's command
+with `--absorbed-reply R N` and stdin, not a reconstructed display route.
+SEND_FAILED means unknown delivery, so do not automatically resend.
+ENDPOINT_NOT_PASSABLE or COMPONENT_SPAWN_FAILED must be reported to the owner;
+continue other items. Preserve unfinished items on the next handoff. Sync removes
+followed-up Pending entries through its normal commit, without changing C4.
 
 ### Classification Rules for reference/ Files
 
@@ -226,7 +275,9 @@ The bot serves a team. Route user-specific preferences to
   (exception: must-be-active-every-session rules → `custom-hooks/session-start/`)
 - **ideas.md:** uncommitted plans, explorations, hypotheses
 
-When in doubt, write to `sessions/current.md`.
+For session notes, use `memory-append.js session` with content on stdin. It writes
+the current scope's `sessions/YYYY-MM-DD.md` in the configured timezone; do not
+create `sessions/current.md`.
 
 ### On-Demand Memory Loading
 
@@ -235,7 +286,7 @@ When you lack context to act confidently, read the relevant file first — a
 file read is far cheaper than a wrong assumption. Triggers: interacting with
 a user → their profile; making a decision → `decisions.md`; starting/resuming
 work → `projects.md`; following a convention → `preferences.md`; exploring
-ideas → `ideas.md`; recalling recent events → `sessions/current.md`;
+ideas → `ideas.md`; recalling recent events → the current scope's daily session log;
 historical info → `archive/`.
 
 ## Data Directories
