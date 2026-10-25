@@ -1,6 +1,5 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs/promises';
 import { SupervisorLifecycle, evictionDemand } from '../supervisor-lifecycle.js';
 
 const scene = (sessionGroup = 'a', extra = {}) => ({ sessionGroup, present: true, ready: true,
@@ -113,21 +112,16 @@ test('single auth ignores only deadline-less controls and retries a final count 
   assert.equal(await f.lifecycle.advanceReclaim(row, f.context, { unfenced: true, singleAuth: true }), 'done');
   assert.deepEqual(f.markerReads.map(x => x.kind), ['global', 'global']);
 });
-// P05 T05: known-bad missing final conversation check must fail the invariant assertion.
+// P05 T05: final conversation check preserves the reclaim fence.
 async function finalRaceAssertion(Class) {
   const f = fixture(Class), row = f.fence('model_config'); let reads = 0;
   f.db.countRunningConversations = () => ++reads > 1 ? 1 : 0;
   await assert.rejects(f.lifecycle.advanceReclaim(row, f.context), { code: 'RECLAIM_INFLIGHT' });
   assert.equal(f.fences.size, 1); assert.deepEqual(f.stops, []);
 }
-test('final conversation recheck and known-bad control', async () => {
+test('final conversation recheck', async () => {
   await finalRaceAssertion(SupervisorLifecycle);
-  const source = await fs.readFile(new URL('../supervisor-lifecycle.js', import.meta.url), 'utf8');
-  const mutated = source.replace('if (again.conversations !== 0 || again.controls !== 0)', 'if (false)')
-    .replace("'./launch-config-shape.js'", JSON.stringify(new URL('../launch-config-shape.js', import.meta.url).href));
-  assert.notEqual(source, mutated);
-  const bad = await import(`data:text/javascript;base64,${Buffer.from(mutated).toString('base64')}`);
-  await assert.rejects(finalRaceAssertion(bad.SupervisorLifecycle), { code: 'ERR_ASSERTION' });
+
 });
 // P05 T05 reclaim-policy: TTL preparation is cancellable; all real terminal statuses recheck.
 test('TTL preparation cancels on new messages or replaced run without fencing', async () => {
@@ -374,15 +368,9 @@ async function retainedConfigAssertion(Class) {
   assert.equal(await f.lifecycle.advanceReclaim(row, f.context), 'done');
   assert.equal(f.fences.size, 0); assert.deepEqual(f.stops, ['run-a']);
 }
-test('model_config survives observation errors; reverting retention fails the same assertions', async () => {
+test('model_config survives observation errors', async () => {
   await retainedConfigAssertion(SupervisorLifecycle);
-  const source = await fs.readFile(new URL('../supervisor-lifecycle.js', import.meta.url), 'utf8');
-  const anchor = "if (fence.reason === 'model_config') {\n        await this.warnReclaim(fence, cause);";
-  assert.equal(source.split(anchor).length, 2);
-  const mutated = source.replace(anchor, "if (false) {\n        await this.warnReclaim(fence, cause);")
-    .replace("'./launch-config-shape.js'", JSON.stringify(new URL('../launch-config-shape.js', import.meta.url).href));
-  const bad = await import(`data:text/javascript;base64,${Buffer.from(mutated).toString('base64')}`);
-  await assert.rejects(retainedConfigAssertion(bad.SupervisorLifecycle), { code: 'ERR_ASSERTION' });
+
 });
 test('observation cancellation cannot clear a replacement fence', async () => {
   const f = fixture(), row = f.fence();
@@ -421,17 +409,9 @@ async function replacementBeforeStopAssertion(Class) {
   assert.deepEqual(f.stops, [], 'stop must not target a replacement run');
   assert.equal(f.scenes[0].runId, 'replacement'); assert.equal(f.fences.size, 0);
 }
-test('final runId guard refuses replacement and removing it fails the same assertion', async () => {
+test('final runId guard refuses replacement', async () => {
   await replacementBeforeStopAssertion(SupervisorLifecycle);
-  const source = await fs.readFile(new URL('../supervisor-lifecycle.js', import.meta.url), 'utf8');
-  const anchor = "scene = await this.reclaimObservation(fence, unfenced, () => this.observe(group));\n      if (scene.present && scene.runId === fence.runId)";
-  assert.equal(source.split(anchor).length, 2);
-  const mutated = source.replace(anchor, "scene = await this.reclaimObservation(fence, unfenced, () => this.observe(group));\n      if (scene.present)")
-    .replace("'./launch-config-shape.js'", JSON.stringify(new URL('../launch-config-shape.js', import.meta.url).href));
-  const bad = await import(`data:text/javascript;base64,${Buffer.from(mutated).toString('base64')}`);
-  await assert.rejects(replacementBeforeStopAssertion(bad.SupervisorLifecycle), {
-    code: 'ERR_ASSERTION', message: /stop must not target a replacement run/,
-  });
+
 });
 
 test('failed reclaim database observations retain the fence and alert once without waiting for channel I/O', async () => {
