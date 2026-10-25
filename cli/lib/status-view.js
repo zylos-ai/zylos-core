@@ -1,9 +1,8 @@
-import { readSessionMode } from './config.js';
+import { readSessionMode, ZYLOS_DIR } from './config.js';
 import { listGroupTmuxSessions } from './session-group-paths.js';
 import { readSessionState, readRuntimeHealth } from './session-state-reader.js';
 import { SUPPORTED_RUNTIMES } from './runtime/index.js';
 import fs from 'node:fs';
-import { ZYLOS_DIR } from './config.js';
 
 const readError = error => ({ code: 'READ_FAILED', message: error.message });
 

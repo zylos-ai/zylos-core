@@ -61,6 +61,18 @@ test('review JSON: full-path credentials/restart and failed precheck emit exactl
   } finally { console.log = original; process.exitCode = previousExit; }
 });
 
+test('IF-47 auth failure is rejected by the runtime command with exit code 1', async () => {
+  const f = fixture({ adapter: () => ({ checkAuth: async () => ({ status: 'failure' }) }) });
+  const original = console.log, previousExit = process.exitCode;
+  console.log = () => {};
+  try {
+    const result = await runtimeCommand(['codex', '--json'], { execute: (_runtime, flags) => f.run(flags) });
+    assert.equal(result.ok, false); assert.equal(result.error.code, 'AUTH_NOT_CONFIRMED');
+    assert.equal(result.error.authStatus, 'failure'); assert.equal(process.exitCode, 1);
+    assert.deepEqual(result.error.persisted, []); assert.deepEqual(f.calls, ['read', 'exists', 'hooks']);
+  } finally { console.log = original; process.exitCode = previousExit; }
+});
+
 test('IF-47 unchanged skips install/hooks/auth/write/restart; no-validate only skips auth', async () => {
   const same = fixture({ read: () => ({ state: 'ok', config: { runtime: 'codex' } }) });
   assert.equal((await same.run()).data.result, 'unchanged');

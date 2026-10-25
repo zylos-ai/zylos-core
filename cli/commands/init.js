@@ -2279,8 +2279,7 @@ export async function initCommand(args) {
       }
     }
 
-    // Persist runtime selection before deploying templates so deployTemplates()
-    // generates the correct instruction file for the new runtime.
+    // Persist the selected runtime baseline.
     if (!existingRuntime || existingRuntime !== selectedRuntime) {
       updateZylosConfigLocked({ set: { runtime: selectedRuntime } });
     }

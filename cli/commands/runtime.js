@@ -12,7 +12,6 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { execSync } from 'node:child_process';
 import { readZylosConfigOrThrow, readZylosConfigStrict, readSessionMode, updateZylosConfigLocked, ZYLOS_DIR } from '../lib/config.js';
 import { getSessionAdapter, SUPPORTED_RUNTIMES } from '../lib/runtime/index.js';
 import { listGroupTmuxSessions } from '../lib/session-group-paths.js';
@@ -31,7 +30,6 @@ import {
   saveSetupTokenToEnv,
   saveCodexApiKey,
   saveCodexBaseUrlToEnv,
-  saveCodexApiKeyToEnv,
   writeCodexConfig,
 } from '../lib/runtime-setup.js';
 
@@ -39,10 +37,7 @@ import {
 
 const green  = (s) => `\x1b[32m${s}\x1b[0m`;
 const yellow = (s) => `\x1b[33m${s}\x1b[0m`;
-const red    = (s) => `\x1b[31m${s}\x1b[0m`;
 const bold   = (s) => `\x1b[1m${s}\x1b[0m`;
-const dim    = (s) => `\x1b[2m${s}\x1b[0m`;
-const cyan   = (s) => `\x1b[36m${s}\x1b[0m`;
 
 // ── Public API ────────────────────────────────────────────────────────────
 
@@ -91,8 +86,6 @@ function showStatus() {
   const label = current === 'codex' ? 'Codex (OpenAI)' : 'Claude Code (Anthropic)';
   console.log(`Current runtime: ${bold(label)}`);
 }
-
-
 
 // ── Credential save helpers ───────────────────────────────────────────────
 
@@ -216,7 +209,6 @@ export function restartRuntimeServices({
     }
   }
 }
-
 
 // ── Switch ────────────────────────────────────────────────────────────────
 
