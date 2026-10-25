@@ -17,32 +17,6 @@ export function selectToolInput(tool, input) {
   if (!input || typeof input !== 'object' || !INPUT_FIELDS[tool]) return undefined;
   return Object.fromEntries(INPUT_FIELDS[tool].filter(key=>Object.hasOwn(input,key)).map(key=>[key,input[key]]));
 }
-// Parse known producer suffixes as data. Never execute or expand shell syntax.
-function suffixWords(text) {
-  const words=[];let word='',quoted=null,active=false;
-  for(let i=0;i<text.length;i++){
-    const char=text[i];
-    if(quoted){if(char===quoted){quoted=null;}else if(char==='\\' && quoted==='"' && /["\\$`]/.test(text[i+1] || '')){word+=text[++i];}else word+=char;active=true;continue;}
-    if(char==="'" || char==='"'){quoted=char;active=true;}
-    else if(/\s/.test(char)){if(active){words.push(word);word='';active=false;}}
-    else if(char==='\\' && i+1<text.length){word+=text[++i];active=true;}
-    else if(/[;&|<>$`]/.test(char))return null;
-    else {word+=char;active=true;}
-  }
-  if(quoted)return null;if(active)words.push(word);return words;
-}
-export function parsePromptSource(prompt) {
-  if(typeof prompt!=='string')return undefined;
-  const reply=prompt.lastIndexOf('---- reply via: ');
-  if(reply>=0){
-    const args=suffixWords(prompt.slice(reply+16).trim());
-    if(args && (args.length===4 || (args.length===6 && args[4]==='--session-group')) && args[0]==='node' && /(?:^|\/)c4-send\.js$/.test(args[1]))return {kind:'c4',channel:args[2],endpoint:args[3]};
-  }
-  const control=prompt.match(/---- ack via: node [^\n]*\/c4-control\.js ack --id (\d+)\s*$/);
-  if(control && Number.isSafeInteger(Number(control[1])))return {kind:'control',control_id:Number(control[1])};
-  if(/---- After completing this task, run: ~\/zylos\/\.claude\/skills\/scheduler\/scripts\/cli\.js done [^\s]+\s*$/.test(prompt))return {kind:'scheduler'};
-  return undefined;
-}
 export function handleHookActivity(data, { nowMs=Date.now(), env=process.env } = {}) {
   const event=EVENTS[data?.hook_event_name];
   if (!event || (event==='idle' && data.notification_type!=='idle_prompt')) return null;
@@ -60,7 +34,6 @@ export function handleHookActivity(data, { nowMs=Date.now(), env=process.env } =
   if(event==='post_tool_failure' && Object.hasOwn(data,'error'))record.error=data.error;
   if(['stop','subagent_stop'].includes(event) && Object.hasOwn(data,'last_assistant_message'))record.last_assistant_message=data.last_assistant_message;
   if(event==='idle')record.notification_type=data.notification_type;
-  if(event==='prompt'){const source=parsePromptSource(data.prompt);if(source)record.prompt_source=source;}
   appendEvent(path.join(location.dir,RUN_FILES.EVENTS),record);
   return record;
 }

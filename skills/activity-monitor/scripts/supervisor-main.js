@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import net from 'node:net';
 import { execFile } from 'node:child_process';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import * as defaultDb from '../../comm-bridge/scripts/c4-db.js';
 import { freezeFirstFailureNotice, drainFirstFailureNotices } from '../../comm-bridge/scripts/first-failure-notice.js';
 import { loadCoreModule } from './core-modules.js';
@@ -23,7 +23,7 @@ const { zylosRoot } = await loadCoreModule('session-group-paths.js');
 const { createSessionReader } = await loadCoreModule('session-state-reader-async.js');
 const { matchClaudeScreen } = await loadCoreModule('heartbeat/claude-probe.js');
 const { matchCodexScreen } = await loadCoreModule('heartbeat/codex-probe.js');
-const unavailable = name => Object.assign(new Error(`${name} is unavailable on this code baseline`),{code:'DEPENDENCY_UNAVAILABLE'});
+const unavailable = name => Object.assign(new Error(`${name} is unavailable on this code baseline`),{code:'DEPENDENCY_UNAVAILABLE',dependency:name});
 
 /** Entry construction performs no launch, installation or configuration repair. */
 export async function startSupervisor({ env=process.env, log=message=>console.error(typeof message==='string'?message:JSON.stringify(message)), ...overrides }={}) {
@@ -56,14 +56,16 @@ export async function startSupervisor({ env=process.env, log=message=>console.er
     ROTATION_PROMPT:()=> 'Context usage has reached the session threshold. Complete required handoff and use the new-session skill to continue in a fresh session.',
     CONFIG_RECLAIM_PROMPT:()=> 'The launch configuration changed. Complete required background work and the session handoff, then submit ready_for_config_reclaim through the supervisor. After acceptance, finish this control and the current turn.',
   };
+  const missingDependencies=new Set();
+  const dependencyMissing=(dependency,affected)=>{if(missingDependencies.has(dependency))return;missingDependencies.add(dependency);log({error:'DEPENDENCY_UNAVAILABLE',dependency,affected});};
   let syncReader;
   try {
     const module=await import(new URL('../../zylos-memory/scripts/sync-lock.js',import.meta.url));syncReader=module.readSyncMarker;
     Object.assign(prompts,await import(new URL('../../zylos-memory/scripts/sync-prompts.js',import.meta.url)));
     if(typeof syncReader!=='function')throw unavailable('P07 Sync marker reader');
-  }catch(error){if(error.code!=='ERR_MODULE_NOT_FOUND')throw error;log('P07 Sync dependencies are unavailable; affected actions will retain their state.');}
+  }catch(error){if(!['ERR_MODULE_NOT_FOUND','DEPENDENCY_UNAVAILABLE'].includes(error.code))throw error;dependencyMissing('P07 Sync marker reader','Sync actions retain their state');}
   const healthIdentity=scene=>Number.isSafeInteger(scene.runtimePid)?{runtime:scene.runtime,session_id:scene.sessionId,claude_pid:scene.runtimePid}:null;
-  supervisor=createSupervisor({env,zylosDir:root,db,scenes,readMode,requestStore:new RestartRequestStore({file:path.join(directory,'restart-requests.json')}),
+  supervisor=createSupervisor({env,zylosDir:root,db,scenes,readMode,missingDependencies,requestStore:new RestartRequestStore({file:path.join(directory,'restart-requests.json')}),
     readConfiguration:async()=>{
       const raw=await readConfig(), {mode,legacy}=await readMode();
       lifecycleConfiguration ??= parseSupervisorConfiguration(raw,env);
@@ -72,7 +74,7 @@ export async function startSupervisor({ env=process.env, log=message=>console.er
         const pool=await loadCoreModule('session-pool-config.js');
         if(typeof pool.resolveSessionPoolSize!=='function')throw unavailable('P04 pool configuration reader');
         configuration.capacity=pool.resolveSessionPoolSize({env,config:raw});
-      }catch(error){if(!['ERR_MODULE_NOT_FOUND','DEPENDENCY_UNAVAILABLE'].includes(error.code))throw error;delete configuration.capacity;log({error:'DEPENDENCY_UNAVAILABLE',dependency:'P04 pool configuration reader',affected:'eviction'});}
+      }catch(error){if(!['ERR_MODULE_NOT_FOUND','DEPENDENCY_UNAVAILABLE'].includes(error.code))throw error;delete configuration.capacity;dependencyMissing('P04 pool configuration reader','eviction');}
       return configuration;
     },
     advanceAutomaticMigration:async()=>{throw unavailable('P10 automatic migration owner');},
@@ -147,8 +149,4 @@ export async function startSupervisor({ env=process.env, log=message=>console.er
     throw error;
   }
   return {supervisor,server,stop};
-}
-if(process.argv[1] && import.meta.url===pathToFileURL(process.argv[1]).href) {
-  const service=await startSupervisor();
-  for(const signal of ['SIGTERM','SIGINT'])process.once(signal,()=>{void service.stop().then(()=>process.exit(0),error=>{console.error(error.code ?? error.message);process.exit(1);});});
 }

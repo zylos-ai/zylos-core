@@ -4,15 +4,14 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { execFileSync, spawnSync } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 const Database = createRequire(new URL('../../../comm-bridge/package.json', import.meta.url))('better-sqlite3');
 import { enqueueMachineControl } from '../machine-control.js';
 import { SupervisorMachineTasks } from '../supervisor-machine-tasks.js';
 import { UsageMonitor } from '../usage-monitor.js';
 const cli = fileURLToPath(new URL('../../../comm-bridge/scripts/c4-control.js', import.meta.url));
-const data = source => `data:text/javascript;base64,${Buffer.from(source).toString('base64')}`;
+import { main as upgradeMain } from '../upgrade-check.js';
 function fixture(t, mode, mutation) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'control-producers-')); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   fs.mkdirSync(path.join(root, '.zylos'), { recursive: true }); fs.mkdirSync(path.join(root, 'activity-monitor'));
@@ -30,22 +29,8 @@ function fixture(t, mode, mutation) {
   return { root, mode, run, enqueue, calls };
 }
 async function upgradeCheck(t, f) {
-  const key = `notices_${randomUUID()}`; globalThis[key] = f; t.after(() => { delete globalThis[key]; });
-  const ref = `globalThis[${JSON.stringify(key)}]`;
-  const processModule = data(`export const execFileSync=(command,args)=>{
-    if(command==='zylos')return '1.0.0';
-    if(command==='git')return 'abcdef refs/tags/v1.0.1';
-    if(command==='node') {const result=${ref}.run(args.slice(1));if(!result.ok)throw Object.assign(new Error(result.output),{stdout:result.output});return result.output;}
-    throw new Error('Unexpected external process '+command);
-  };`);
-  const machineModule = data(`export const enqueueMachineControl=(args,options)=>${ref}.enqueue(args,options);`);
-  const file = new URL('../upgrade-check.js', import.meta.url);
-  let source = fs.readFileSync(file, 'utf8').replace("from 'child_process'", `from '${processModule}'`)
-    .replace("from './machine-control.js'", `from '${machineModule}'`)
-    .replace("process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos')", JSON.stringify(f.root))
-    .replaceAll('import.meta.dirname', JSON.stringify(path.dirname(fileURLToPath(file))))
-    .replace(/from '(\.[^']+)'/g, (_, relative) => `from '${new URL(relative, file).href}'`);
-  const module = await import(data(source)); await module.main();
+  await upgradeMain({run:()=> '1.0.0',latestTag:()=>({version:'1.0.1',error:null}),
+    componentsFile:path.join(f.root,'.zylos/components.json'),enqueue:f.enqueue,control:f.run,logger:()=>{}});
 }
 async function produce(t, mode, mutation) {
   const f = fixture(t, mode, mutation); const now = new Date(2026, 9, 25, 5).getTime();

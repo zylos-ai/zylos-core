@@ -64,27 +64,37 @@ export class SupervisorMachineTasks {
     const config=await this.readConfig();const now=this.now(),seconds=Math.floor(now/1000);
     const date=new Date(now),parts={hour:date.getHours(),date:`${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}`};
     this.daily('daily-memory-commit-state',3,parts,()=>this.execute(fileURLToPath(new URL('../../zylos-memory/scripts/daily-commit.js',import.meta.url)),30000));
+    const dailyDue=(id,hour)=>parts.hour===hour && this.state(id)?.last_date!==parts.date && !this.pending.has(id);
+    const upgradeDue=dailyDue('upgrade-check-state',6);
+    const dailyUpgradeDue=enabled(config.daily_upgrade_enabled,false) && dailyDue('daily-upgrade-state',5);
+    const healthDue=enabled(config.health_check_enabled,true) && !this.pending.has('health-check') && seconds-(this.state('health-check-state')?.last_check_at??0)>=86400;
+    const usageDue=['claude','codex'].flatMap(runtime=>{
+      const monitor=this.monitor(runtime,config,parts.hour);
+      if(this.pending.has(`usage:${runtime}`))return [];
+      const sample=monitor.isMonitorEnabled() && seconds-monitor.getLastMonitorRunAt()>=monitor.options.checkIntervalSec;
+      const alert=monitor.isAlertEnabled() && seconds-monitor.getLastAlertRunAt()>=number(config.usage_alert_interval,3600);
+      return sample||alert?[{runtime,monitor,sample,alert}]:[];
+    });
+    if(!upgradeDue && !dailyUpgradeDue && !healthDue && !usageDue.length)return;
     const origin=await this.readOriginState();
     const health=origin.runtime&&origin.runtime!=='unknown'?await this.readHealth(origin.runtime):null;
     const healthy=health && !health.unreadable && (health.missing||health.health==='ok');
     if(healthy) {
-      this.daily('upgrade-check-state',6,parts,()=>this.execute(fileURLToPath(new URL('./upgrade-check.js',import.meta.url)),300000));
-      if(enabled(config.daily_upgrade_enabled,false)&&origin.runtime==='claude')this.daily('daily-upgrade-state',5,parts,()=>this.control('Daily upgrade. Use the upgrade-claude skill to upgrade Claude Code to the latest version.'));
-      if(enabled(config.health_check_enabled,true)&&origin.present&&(seconds-(this.state('health-check-state')?.last_check_at??0)>=86400)) {
+      if(upgradeDue)this.daily('upgrade-check-state',6,parts,()=>this.execute(fileURLToPath(new URL('./upgrade-check.js',import.meta.url)),300000));
+      if(dailyUpgradeDue&&origin.runtime==='claude')this.daily('daily-upgrade-state',5,parts,()=>this.control('Daily upgrade. Use the upgrade-claude skill to upgrade Claude Code to the latest version.'));
+      if(healthDue&&origin.present) {
         this.schedule('health-check',async()=>{await this.control(healthPrompt);this.write('health-check-state',{last_check_at:seconds,last_check_human:date.toISOString().replace('T',' ').slice(0,19)});});
       }
     }
-    for(const runtime of ['claude','codex']) {
+    for(const {runtime,monitor,sample,alert} of usageDue) {
       const account=await this.readHealth(runtime);if(account.unreadable||(!account.missing&&account.health!=='ok'))continue;
-      const monitor=this.monitor(runtime,config,parts.hour);
       const idleSince=origin.idleSince??origin.idle_since;
       const snapshot={currentTime:seconds,claudeState:origin.sampleValid===false?'unknown':origin.state,
         idleSeconds:Number.isFinite(idleSince)?Math.max(0,(now-idleSince)/1000):0};
       if(!monitor.canRunTask(snapshot))continue;
-      if(monitor.isMonitorEnabled()&&seconds-monitor.getLastMonitorRunAt()>=monitor.options.checkIntervalSec) {
+      if(sample) {
         this.schedule(`usage:${runtime}`,()=>monitor.runMonitor({currentTime:seconds}));
-      }else if(monitor.isAlertEnabled()&&seconds-monitor.getLastAlertRunAt()>=number(config.usage_alert_interval,3600)
-        &&monitor.canRunTask({...snapshot,activeHoursOnly:true}))this.schedule(`usage:${runtime}`,()=>monitor.runAlert({currentTime:seconds}));
+      }else if(alert &&monitor.canRunTask({...snapshot,activeHoursOnly:true}))this.schedule(`usage:${runtime}`,()=>monitor.runAlert({currentTime:seconds}));
     }
   }
   async stop(){this.stopped=true;await Promise.allSettled([...this.pending.values()]);}

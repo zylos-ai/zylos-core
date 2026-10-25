@@ -49,3 +49,18 @@ test('T08 per-runtime account tasks remain single flight and read sampler rather
   f.setNow(new Date(2026,9,25,11,1).getTime());await f.tasks.tick();await settle(f.tasks);
   assert.deepEqual(samples,['codex','claude','codex']);
 });
+
+test('C2 quiet ticks skip Origin observation until maintenance or usage is due',async t=>{
+  const f=fixture(t,{hour:10});let reads=0;
+  f.tasks.readOriginState=()=>{reads++;return f.state.origin;};
+  for(let i=0;i<4;i++)await f.tasks.tick();
+  assert.equal(reads,0);
+  f.state.config.usage_monitor_enabled=true;
+  await f.tasks.tick();await settle(f.tasks);assert.equal(reads,1);
+  await f.tasks.tick();assert.equal(reads,1,'both account sampling windows are now in the future');
+  f.setNow(new Date(2026,9,25,11,1).getTime());
+  await f.tasks.tick();await settle(f.tasks);assert.equal(reads,2);
+  f.state.config.usage_monitor_enabled=false;f.state.config.health_check_enabled=true;
+  await f.tasks.tick();await settle(f.tasks);assert.equal(reads,3);
+  await f.tasks.tick();assert.equal(reads,3,'successful daily health maintenance is not observed again');
+});

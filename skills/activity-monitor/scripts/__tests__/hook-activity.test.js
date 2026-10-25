@@ -222,17 +222,3 @@ describe('hook-activity', () => {
     assert.equal(Object.hasOwn(event, 'rule_id'), false);
   });
 });
-
-describe('T08 prompt_source native suffix parsing',()=>{
- it('records only recognized source metadata, including shell-quoted endpoint data',async()=>{
-  const {parsePromptSource}=await import('../hook-activity.js');
-  assert.deepEqual(parsePromptSource('hello ---- reply via: node /x/c4-send.js "telegram" "123"'),{kind:'c4',channel:'telegram',endpoint:'123'});
-  assert.deepEqual(parsePromptSource("hello ---- reply via: node '/x/c4-send.js' 'chat' 'a'\\''b|type:p2p' --session-group team"),{kind:'c4',channel:'chat',endpoint:"a'b|type:p2p"});
-  assert.deepEqual(parsePromptSource('work ---- ack via: node /x/c4-control.js ack --id 42'),{kind:'control',control_id:42});
-  assert.deepEqual(parsePromptSource('[Scheduled Task: task-a] work\n---- After completing this task, run: ~/zylos/.claude/skills/scheduler/scripts/cli.js done task-a'),{kind:'scheduler'});
-  assert.equal(parsePromptSource('ordinary prompt mentioning ---- reply via: node example'),undefined);
-  assert.equal(parsePromptSource('x ---- reply via: node /x/c4-send.js a b; bad'),undefined);
-  await runHook({hook_event_name:'UserPromptSubmit',session_id:'s',prompt:'private body ---- reply via: node /x/c4-send.js "chat" "123"'});
-  const [record]=readEvents();assert.deepEqual(record.prompt_source,{kind:'c4',channel:'chat',endpoint:'123'});assert.equal('prompt' in record,false);
- });
-});

@@ -6,7 +6,7 @@ import { durableJson } from './runtime-generation.js';
 import { publicHealth } from './status-writer.js';
 const { legacyRunDir, zylosRoot } = await loadCoreModule('session-group-paths.js');
 const { openTmuxConnection } = await loadCoreModule('runtime/tmux-connection.js');
-const { observeSessionTarget, revalidateSessionTarget, readProcessTree } = await loadCoreModule('runtime/session-target.js');
+const { observeSessionTarget, readTargetRuntime, revalidateSessionTarget, readProcessTree } = await loadCoreModule('runtime/session-target.js');
 const sameForeground=(a,b)=>a && b && ['session_id','claude_pid','runtime','observed_at'].every(key=>a[key]===b[key]);
 
 /** Migration-only legacy state projection. This observer never enters pool
@@ -36,15 +36,8 @@ export class SupervisorLegacyStatus {
         readReady:async()=>null,readProcessTree:getTree});
       if(!target.present){this.close();return;}
       if(target.runId || target.runtime!==foreground.runtime || foreground.observed_at<target.createdAt*1000)return;
-      const panePid=Number((await connection.command(['display-message','-p','-t',target.paneId,'#{pane_pid}'])).trim());
-      const rows=await getTree(), process=rows.find(row=>row.pid===foreground.claude_pid);
-      if(process?.name.replace(/\.exe$/,'')!==foreground.runtime)return;
-      let cursor=process,owned=false;const visited=new Set();
-      while(cursor && !visited.has(cursor.pid)) {
-        if(cursor.pid===panePid){owned=true;break;}
-        visited.add(cursor.pid);cursor=rows.find(row=>row.pid===cursor.ppid);
-      }
-      if(!owned)return;
+      const process=await readTargetRuntime({connection,paneId:target.paneId,rawF2:{},readProcessTree:getTree});
+      if(process.runtime!==foreground.runtime || process.runtimePid!==foreground.claude_pid)return;
       const key=[target.serverGeneration,target.tmuxSessionId,target.paneId,foreground.claude_pid,foreground.session_id,foreground.observed_at].join(':');
       if(key!==this.key) {
         this.close();this.key=key;

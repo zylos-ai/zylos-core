@@ -5,7 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import net from 'node:net';
 import { fork } from 'node:child_process';
-import { once } from 'node:events';
+import { once, EventEmitter } from 'node:events';
+import { main as monitorMain } from '../monitor.js';
 import { fileURLToPath } from 'node:url';
 const repository=fileURLToPath(new URL('../../../../',import.meta.url));
 const entry=fileURLToPath(new URL('../supervisor-main.js',import.meta.url));
@@ -37,6 +38,8 @@ async function stop(worker) {
 test('T01 actual entry restores before Sock admission and shuts down with a partial-line peer', {timeout:15000}, async t=>{
   const root=prepare(t),w=launch(t,root);const ready=await w.next();assert.equal(ready.admissionOpen,true);
   assert.ok(ready.logs.some(row=>row?.error==='DEPENDENCY_UNAVAILABLE'&&row.dependency==='P04 pool configuration reader'));
+  w.child.send('rounds');const repeated=await w.next();
+  assert.equal(repeated.logs.filter(row=>row?.dependency==='P04 pool configuration reader').length,1);
   assert.equal(fs.statSync(path.join(root,'activity-monitor/am.sock')).mode&0o777,0o600);
   assert.equal((await request(root,{version:1,type:'restart_all',requestId:'empty',reason:'upgrade'})).result,'done_empty');
   const partial=net.createConnection(path.join(root,'activity-monitor/am.sock'));await once(partial,'connect');partial.write('{');
@@ -98,4 +101,11 @@ test('T01 legacy F1 opens actual entry as single and reports unavailable automat
   const explicit=prepare(t,{session_mode:'single',runtime:'claude'}),e=launch(t,explicit);const explicitReady=await e.next();
   assert.equal(explicitReady.admissionOpen,true);assert.equal(explicitReady.legacy,false);
   assert.equal(explicitReady.logs.some(row=>row?.phase==='automatic-migration'),false);await stop(e);
+});
+
+test('C4 monitor signal handler reports stop rejection and exits unsuccessfully',async()=>{
+ const runtime=new EventEmitter(),errors=[],exits=[];runtime.exit=code=>exits.push(code);
+ await monitorMain({runtime,start:async()=>({stop:async()=>{throw Object.assign(new Error('stop failed'),{code:'STOP_FAILED'});}}),log:error=>errors.push(error)});
+ runtime.emit('SIGTERM');await new Promise(resolve=>setImmediate(resolve));
+ assert.deepEqual(errors,['STOP_FAILED']);assert.deepEqual(exits,[1]);
 });

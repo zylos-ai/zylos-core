@@ -21,7 +21,16 @@ export function createSupervisor(deps) {
   const activities=new Map();let configuration;let lastMetrics=null;let lastMaintenance=0;
   let observer,router,admission,lifecycle,stopping=false,stopPromise,roundContext;
   const authChecks=new Set(),authFlights=new Map(),authRetryAt=new Map();
-  const reportError=(error,context={})=>log({error:error.code || error.message,...context});
+  const missingDependencies=deps.missingDependencies ?? new Set();
+  const reportError=(error,context={})=>{
+    if(['ERR_MODULE_NOT_FOUND','DEPENDENCY_UNAVAILABLE'].includes(error.code)) {
+      const dependency=error.dependency ?? error.message;
+      if(missingDependencies.has(dependency))return;
+      missingDependencies.add(dependency);
+      log({error:error.code,dependency,...context});return;
+    }
+    log({error:error.code || error.message,...context});
+  };
   const diagnostic=event=>{try{appendEvent(supervisorDiagnosticPath(deps.env),{v:1,ts:now(),session_group:event.sessionGroup ?? null,conversation_id:null,decision:event.decision ?? event.event,reason:event.reason ?? '',...event});}catch(error){reportError(error,{phase:'diagnostic'});}};
   const readActivity=scene=>{
     let activity=activities.get(scene.sessionGroup);

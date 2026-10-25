@@ -174,3 +174,13 @@ test('T08 assembly: single auth null scope invalidates only its matching Origin 
  await supervisor.lifecycle.d.stop({sessionGroup:null,runId:'old'});
  assert.equal(context.scenes[0].present,true);assert.equal(context.scenes[0].runId,'replacement');
 });
+
+test('C3 each unavailable dependency logs once while unrelated failures remain visible',async t=>{
+ const {supervisor,calls}=fixture(t);
+ await supervisor.loop.deps.advanceTransition({});await supervisor.loop.deps.advanceTransition({});
+ const report=supervisor.loop.deps.reportError;
+ for(const dependency of ['P04 pool','P07 Sync','P10 migration'])for(let i=0;i<3;i++)report(Object.assign(new Error(dependency),{code:'DEPENDENCY_UNAVAILABLE'}),{phase:'fixture',sessionGroup:String(i)});
+ for(let i=0;i<2;i++)report(Object.assign(new Error('unrelated failure'),{code:'EIO'}));
+ assert.equal(calls.filter(row=>row.error==='DEPENDENCY_UNAVAILABLE').length,4);
+ assert.equal(calls.filter(row=>row.error==='EIO').length,2);
+});

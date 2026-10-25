@@ -88,36 +88,36 @@ function runC4Control(args) {
   }
 }
 
-export async function main() {
+export async function main({run=execFileSync,latestTag=getLatestTag,componentsFile=COMPONENTS_JSON,enqueue=enqueueMachineControl,control=runC4Control,logger=log}={}) {
   const upgrades = [];
   let failures = 0;
 
   // Check zylos-core
   try {
-    const coreVersion = execFileSync('zylos', ['--version'], {
+    const coreVersion = run('zylos', ['--version'], {
       encoding: 'utf8', stdio: 'pipe', timeout: 5000
     }).trim();
-    const result = getLatestTag('zylos-ai/zylos-core');
+    const result = latestTag('zylos-ai/zylos-core');
     if (result.error) {
-      log(`Upgrade check: failed to fetch zylos-core tag (${result.error})`);
+      logger(`Upgrade check: failed to fetch zylos-core tag (${result.error})`);
       failures++;
     } else if (result.version && compareSemver(coreVersion.replace(/^v/, ''), result.version) > 0) {
       upgrades.push(`zylos-core ${sanitizeVersion(coreVersion)} → ${sanitizeVersion(result.version)}`);
     }
   } catch (err) {
-    log(`Upgrade check: failed to check core version (${err.message})`);
+    logger(`Upgrade check: failed to check core version (${err.message})`);
     failures++;
   }
 
   // Check installed components
   try {
-    if (fs.existsSync(COMPONENTS_JSON)) {
-      const components = JSON.parse(fs.readFileSync(COMPONENTS_JSON, 'utf8'));
+    if (fs.existsSync(componentsFile)) {
+      const components = JSON.parse(fs.readFileSync(componentsFile, 'utf8'));
       for (const [name, info] of Object.entries(components)) {
         if (!info.repo || !info.version) continue;
-        const result = getLatestTag(info.repo);
+        const result = latestTag(info.repo);
         if (result.error) {
-          log(`Upgrade check: failed to fetch ${name} tag (${result.error})`);
+          logger(`Upgrade check: failed to fetch ${name} tag (${result.error})`);
           failures++;
           continue;
         }
@@ -127,25 +127,25 @@ export async function main() {
       }
     }
   } catch (err) {
-    log(`Upgrade check: failed to read components (${err.message})`);
+    logger(`Upgrade check: failed to read components (${err.message})`);
     failures++;
   }
 
   if (upgrades.length === 0) {
-    log(`Upgrade check: all components up to date${failures > 0 ? ` (${failures} check(s) failed)` : ''}`);
+    logger(`Upgrade check: all components up to date${failures > 0 ? ` (${failures} check(s) failed)` : ''}`);
     return;
   }
 
   const content = `Component upgrades available: ${upgrades.join(', ')}. When the user next sends a message, mention these available upgrades and ask if they would like to upgrade.`;
-  const result = await enqueueMachineControl([
+  const result = await enqueue([
     'enqueue', '--content', content, '--priority', '3', '--no-ack-suffix'
-  ], {run:runC4Control});
+  ], {run:control});
 
   if (result.ok) {
     const match = result.output.match(/control\s+(\d+)/i);
-    log(`Upgrade check: ${upgrades.length} upgrade(s) found, notified via control id=${match?.[1] ?? '?'} — ${upgrades.join(', ')}`);
+    logger(`Upgrade check: ${upgrades.length} upgrade(s) found, notified via control id=${match?.[1] ?? '?'} — ${upgrades.join(', ')}`);
   } else {
-    log(`Upgrade check: notification enqueue failed: ${result.output}`);
+    logger(`Upgrade check: notification enqueue failed: ${result.output}`);
   }
 }
 
