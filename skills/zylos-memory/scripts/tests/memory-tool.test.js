@@ -106,3 +106,35 @@ test('IF43: stdio emits only protocol frames and advertises the restricted tool'
   assert.equal(frames[2].result.isError, true);
   assert.equal(JSON.parse(frames[2].result.content[0].text).code, 'SCOPE_UNBOUND');
 });
+
+test('IF43: concurrent group editors cannot cross scope and origin tokens choose separate permissions', async () => {
+  const a = await fixture('group', 'telegram:a'), b = await fixture('group', 'telegram:b');
+  const fileA = `session-groups/telegram:a/state.md.${a.token}.tmp`;
+  const fileB = `session-groups/telegram:b/state.md.${b.token}.tmp`;
+  assert.deepEqual((await Promise.all([a.editor(create(a.token, fileA, 'A')), b.editor(create(b.token, fileB, 'B'))])).map(result => result.ok), [true, true]);
+  assert.equal((await a.editor(create(a.token, fileB))).code, 'PATH_NOT_ALLOWED');
+  assert.equal((await a.editor(create(b.token, fileA))).code, 'TOKEN_MISMATCH');
+  const origin = await fixture('origin', 'origin');
+  const groupToken = await acquire({ kind: 'group', env: origin.env }, { currentRunId: async () => runId });
+  assert.equal((await origin.editor(create(groupToken, `session-groups/origin/state.md.${groupToken}.tmp`))).ok, true);
+  assert.equal((await origin.editor(create(groupToken, 'identity.md'))).code, 'PATH_NOT_ALLOWED');
+  assert.equal((await origin.editor(create(origin.token, 'identity.md'))).ok, true);
+});
+
+test('IF43: actual stdio process exposes no authority when forwarded run env is absent', async () => {
+  const { execFileSync } = await import('node:child_process');
+  const env = { ...process.env };
+  delete env.ZYLOS_RUN_ID; delete env.ZYLOS_SESSION_GROUP;
+  const requests = [
+    { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2024-11-05' } },
+    { jsonrpc: '2.0', method: 'notifications/initialized' },
+    { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'edit_memory', arguments: create('0'.repeat(32), 'identity.md') } },
+  ];
+  const output = execFileSync(process.execPath, [path.resolve(import.meta.dirname, '../memory-mcp-server.js')], {
+    env, input: requests.map(request => JSON.stringify(request)).join('\n') + '\n', encoding: 'utf8', timeout: 5000,
+  });
+  const frames = output.trim().split('\n').map(line => JSON.parse(line));
+  assert.equal(frames.length, 2);
+  assert.equal(frames[0].result.protocolVersion, '2024-11-05');
+  assert.equal(JSON.parse(frames[1].result.content[0].text).code, 'SCOPE_UNBOUND');
+});
