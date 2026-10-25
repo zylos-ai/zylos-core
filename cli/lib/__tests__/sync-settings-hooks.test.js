@@ -76,7 +76,8 @@ describe('desiredClaudeHooks', () => {
   });
 
   it('real postinstall does not publish dead assembler hooks before init', () => {
-    const zylosDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-postinstall-hooks-'));
+    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-postinstall-hooks-'));
+    const zylosDir = path.join(homeDir, 'zylos');
     fs.mkdirSync(path.join(zylosDir, '.claude'), { recursive: true });
     fs.mkdirSync(path.join(zylosDir, '.zylos'), { recursive: true });
     fs.writeFileSync(path.join(zylosDir, '.claude', 'settings.json'), JSON.stringify({ hooks: {} }));
@@ -86,7 +87,7 @@ describe('desiredClaudeHooks', () => {
       env: {
         ...process.env,
         CI: '',
-        HOME: path.dirname(zylosDir),
+        HOME: homeDir,
         ZYLOS_DIR: zylosDir,
         ZYLOS_SKIP_POSTINSTALL: '1',
       },
@@ -94,8 +95,9 @@ describe('desiredClaudeHooks', () => {
     const settings = JSON.parse(fs.readFileSync(path.join(zylosDir, '.claude', 'settings.json'), 'utf8'));
     const installedHooks = Object.values(settings.hooks)
       .flatMap(groups => groups.flatMap(group => getCommandHooks(group)));
+    assert.ok(installedHooks.some(hook => hook.command.includes('session-start-orchestrator.js --shard identity')));
     assert.equal(installedHooks.some(hook => hook.command.includes('assembler.mjs')), false);
-    fs.rmSync(zylosDir, { recursive: true, force: true });
+    fs.rmSync(homeDir, { recursive: true, force: true });
   });
 
   it('fresh init deploy syncs exactly one assembler hook for startup, clear, and compact', () => {
@@ -103,6 +105,11 @@ describe('desiredClaudeHooks', () => {
     const zylosDir = path.join(homeDir, 'zylos');
     fs.mkdirSync(path.join(zylosDir, '.zylos'), { recursive: true });
     fs.writeFileSync(path.join(zylosDir, '.zylos', 'config.json'), JSON.stringify({ runtime: 'claude' }));
+    const controlPath = path.join(zylosDir, '.claude', 'skills', 'comm-bridge', 'scripts', 'c4-control.js');
+    const restartLog = path.join(homeDir, 'restart.jsonl');
+    fs.mkdirSync(path.dirname(controlPath), { recursive: true });
+    fs.writeFileSync(path.join(path.dirname(controlPath), 'package.json'), '{"type":"module"}');
+    fs.writeFileSync(controlPath, `import fs from 'node:fs'; fs.appendFileSync(${JSON.stringify(restartLog)}, JSON.stringify(process.argv.slice(2)) + '\\n');`);
     execFileSync(process.execPath, [
       '--input-type=module',
       '--eval',
@@ -117,6 +124,7 @@ describe('desiredClaudeHooks', () => {
       assert.equal(groups.length, 1);
       assert.equal(groups[0].hooks.filter(hook => hook.command.includes('assembler.mjs')).length, 1);
     }
+    assert.equal(fs.existsSync(restartLog), false, 'fresh init must never enqueue a restart');
     fs.rmSync(homeDir, { recursive: true, force: true });
   });
 

@@ -9,7 +9,7 @@ import { approvePermission } from '../../../skills/activity-monitor/scripts/hook
 import { isCoreCodexHook } from '../codex-hooks.js';
 
 const payload = { hook_event_name: 'PermissionRequest', session_id: 'real-session' };
-const env = { ZYLOS_RUN_ID: 'run-1', ZYLOS_MODEL_CONFIG: '{"runtime":"claude"}' };
+const env = { ZYLOS_RUN_ID: 'run-1' };
 function authOptions(group = 'origin') {
   const calls = [];
   return { calls, env, readConfig: () => ({ runtime: 'codex', auto_approve_permission: true }),
@@ -32,10 +32,9 @@ test('P06 2.9: permission approval targets the current Claude run despite a Code
   assert.equal(single.calls[0][1].includes('--group'), false);
 });
 
-test('P06 2.9: subagents, missing F2, wrong runtime, disabled and malformed policy never enqueue', async () => {
+test('P06 2.9: subagents, missing run, disabled and malformed policy never enqueue', async () => {
   for (const options of [
     { ...authOptions(), env: {} },
-    { ...authOptions(), env: { ...env, ZYLOS_MODEL_CONFIG: '{"runtime":"codex"}' } },
     { ...authOptions(), readConfig: () => ({ auto_approve_permission: false }) },
   ]) {
     assert.equal((await approvePermission(payload, options)).skipped, true);
@@ -55,13 +54,11 @@ function restartOptions(config = {}) {
     exec: (...args) => calls.push(args), exists: () => true, log: () => {}, errorLog: () => {} };
 }
 
-test('P06 2.10: stable single restart uses require-idle for both default runtimes', async () => {
-  for (const runtime of ['claude', 'codex']) {
-    const options = restartOptions({ runtime, session_mode: 'single' });
-    assert.equal((await enqueueRestartIfNeeded(options)).submitted, true);
-    assert.ok(options.calls[0][1].includes('--require-idle'));
-    assert.equal(options.calls[0][1].includes('--group'), false);
-  }
+test('P06 2.10: stable single restart uses require-idle', async () => {
+  const options = restartOptions({ session_mode: 'single' });
+  assert.equal((await enqueueRestartIfNeeded(options)).submitted, true);
+  assert.ok(options.calls[0][1].includes('--require-idle'));
+  assert.equal(options.calls[0][1].includes('--group'), false);
 });
 
 test('P06 2.10: unreadable mode or transition never falls back to exit', async () => {
@@ -164,8 +161,7 @@ test('IB-40/43 all uncertain outcomes use one same-deadline lookup and never res
 });
 
 test('IB-40/43 lookup failure and exhausted budget remain fail closed', async () => {
-  const failed = sockFixture();
-  failed.submitRestart = () => { throw Error('unexpected'); };
+  const failed = sockFixture({ kind: 'no_reply', sent: true });
   failed.lookupRestart = () => { throw Error('unreadable'); };
   const actual = await enqueueRestartIfNeeded(failed);
   assert.equal(actual.category, 'U'); assert.equal(actual.lookup, 'unknown'); assert.equal(actual.submitted, null);
@@ -228,6 +224,12 @@ test('P06 review: upgrade refreshes stale Codex hooks with unchanged TOML and dr
   const root = path.join(home, 'zylos');
   fs.mkdirSync(path.join(root, '.zylos'), { recursive: true });
   fs.writeFileSync(path.join(root, '.zylos', 'config.json'), JSON.stringify({ runtime: 'claude', session_mode: 'single' }));
+  const controlPath = path.join(root, '.claude', 'skills', 'comm-bridge', 'scripts', 'c4-control.js');
+  const restartLog = path.join(home, 'restart.jsonl');
+  fs.mkdirSync(path.dirname(controlPath), { recursive: true });
+  fs.writeFileSync(path.join(path.dirname(controlPath), 'package.json'), '{"type":"module"}');
+  fs.writeFileSync(controlPath, `import fs from 'node:fs'; fs.appendFileSync(${JSON.stringify(restartLog)}, JSON.stringify(process.argv.slice(2)) + '\\n');`);
+  const restarts = () => fs.readFileSync(restartLog, 'utf8').trim().split('\n').map(line => JSON.parse(line));
   const script = new URL('../sync-settings-hooks.js', import.meta.url);
   const run = (...args) => {
     const result = spawnSync(process.execPath, [script.pathname, ...args], {
@@ -237,6 +239,7 @@ test('P06 review: upgrade refreshes stale Codex hooks with unchanged TOML and dr
     return result.stdout;
   };
   run();
+  assert.deepEqual(restarts(), [['enqueue', '--content', '/exit', '--priority', '1', '--require-idle', '--no-ack-suffix']]);
   const tomlPaths = [path.join(home, '.codex', 'config.toml'), path.join(root, '.codex', 'config.toml')];
   const beforeToml = tomlPaths.map(file => fs.readFileSync(file, 'utf8'));
   const hooksPath = path.join(root, '.codex', 'hooks.json');
@@ -246,13 +249,16 @@ test('P06 review: upgrade refreshes stale Codex hooks with unchanged TOML and dr
   }] }] } });
   fs.writeFileSync(hooksPath, stale);
   run('--dry-run');
+  assert.equal(restarts().length, 1);
   assert.equal(fs.readFileSync(hooksPath, 'utf8'), stale);
   assert.match(run(), /Codex hooks refreshed/);
+  assert.equal(restarts().length, 2);
   assert.deepEqual(tomlPaths.map(file => fs.readFileSync(file, 'utf8')), beforeToml);
   const refreshed = fs.readFileSync(hooksPath, 'utf8');
   assert.doesNotMatch(refreshed, /--shard state/);
   assert.match(refreshed, /--shard c4-conversations/);
   assert.match(refreshed, /\/user\/custom-hook.js/);
   assert.match(run(), /all up to date/);
+  assert.equal(restarts().length, 2);
   assert.equal(fs.readFileSync(hooksPath, 'utf8'), refreshed);
 });
