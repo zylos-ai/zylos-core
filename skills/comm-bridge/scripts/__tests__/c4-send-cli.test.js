@@ -93,6 +93,18 @@ describe('c4-send basic', () => {
 // -- validation --
 
 describe('c4-send validation', () => {
+  it('rejects empty positional content before dispatch or audit', () => {
+    withTmpDir(({ tmpDir, env }) => {
+      const sentFile = setupMockChannel(tmpDir, 'mock-channel');
+      const result = cli(['mock-channel', 'endpoint', ''], env);
+      assert.equal(result.status, 1);
+      assert.equal(result.stdout, '');
+      assert.equal(result.stderr, '[C4] EMPTY_CONTENT: Message is required\n');
+      assert.equal(fs.existsSync(sentFile), false);
+      assert.deepEqual(dbRecent(env), []);
+    });
+  });
+
   it('errors with no arguments', () => {
     withTmpDir(({ env }) => {
       const { stdout, status } = cli([], env);
@@ -182,6 +194,19 @@ describe('c4-send void channel', () => {
 // -- failed channel --
 
 describe('c4-send failed channel', () => {
+  it('preserves the exact legacy stdout and exit code for component exit 3', () => {
+    withTmpDir(({ tmpDir, env }) => {
+      const skillDir = path.join(tmpDir, '.claude', 'skills', 'bad-channel', 'scripts');
+      fs.mkdirSync(skillDir, { recursive: true });
+      fs.writeFileSync(path.join(skillDir, 'send.js'), 'process.exit(3);');
+      const result = cli(['bad-channel', '--stdin'], env, 'Hello');
+      assert.equal(result.status, 3);
+      assert.equal(result.stdout, '[C4] Failed to send message via bad-channel (exit code: 3)\n');
+      assert.equal(result.stderr, '');
+      assert.equal(dbRecent(env)[0].status, 'delivered');
+    });
+  });
+
   it('reports failure when channel script exits non-zero', () => {
     withTmpDir(({ tmpDir, env }) => {
       const skillDir = path.join(tmpDir, '.claude', 'skills', 'bad-channel', 'scripts');

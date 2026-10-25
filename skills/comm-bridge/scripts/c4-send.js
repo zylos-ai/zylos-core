@@ -21,6 +21,7 @@ async function main() {
   const args = process.argv.slice(2);
   const api = { ...database, validateChannel, validateEndpoint };
   let internal = args[0] === 'internal';
+  let externalChannel;
   try {
     if (internal) {
       console.log(await sendInternal(args, readStdin));
@@ -43,10 +44,10 @@ async function main() {
       console.log('[C4] Message recorded on void channel (not dispatched)');
       return;
     }
+    externalChannel = request.channel;
     await sendExternal(request, message, { api, skillsDir: SKILLS_DIR,
       appendFallback: async (record, groupName) => {
-        if (groupName === undefined || record.session_group.includes(':')) return;
-        const { appendOutGroupFallback } = await import('./c4-entry-events.js');
+        const { appendOutGroupFallback } = await import('./c4-outbound-events.js');
         await appendOutGroupFallback(record, groupName);
       } });
     console.log(`[C4] Message sent via ${request.channel}`);
@@ -57,7 +58,11 @@ async function main() {
       return;
     }
     if (error.message.startsWith('Usage:')) console.log(error.message);
-    if (error.code === 'SEND_FAILED') console.log('[C4] Failed to send message via component');
+    if (error.code === 'SEND_FAILED') {
+      console.log(`[C4] Failed to send message via ${externalChannel} (exit code: ${error.exitCode})`);
+      process.exitCode = error.exitCode ?? 1;
+      return;
+    }
     console.error(`[C4] ${error.code || 'INTERNAL_ERROR'}: ${error.message}`);
     process.exitCode = 1;
   } finally { database.close(); }

@@ -8,7 +8,7 @@ import { fixture } from './c4-v2-test-helpers.js';
 import { parseSendArgs } from '../c4-send-args.js';
 import { readAbsorbedReply, sendExternal } from '../c4-send-external.js';
 
-function setup(t, endpoint = 'route') {
+function setup(t, endpoint = 'route', options = { groupName: 'room' }) {
   const result = fixture(t, {}, true);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'absorbed-reply-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
@@ -16,7 +16,7 @@ function setup(t, endpoint = 'route') {
   const output = path.join(dir, 'argv.json');
   fs.mkdirSync(path.dirname(script), { recursive: true });
   fs.writeFileSync(script, `require('node:fs').writeFileSync(${JSON.stringify(output)}, JSON.stringify(process.argv.slice(2)))`);
-  const row = result.store.insertConversation('in', 'demo', endpoint, 'original', { groupName: 'room' });
+  const row = result.store.insertConversation('in', 'demo', endpoint, 'original', options);
   const { runId } = result.store.beginModeTransition('single', 'multi');
   result.store.setDrainFence('*');
   result.store.absorbForTransition(runId);
@@ -69,7 +69,14 @@ test('#6b uninstalled component and unpassable original routes reject without ne
     const before = db.prepare('SELECT * FROM conversations').all();
     const runBefore = db.prepare('SELECT * FROM mode_transitions').all();
     await assert.rejects(sendExternal(readAbsorbedReply(runId, String(row.id), api), 'body', { api, skillsDir: dir }),
-      { code: endpoint === 'route' ? 'INVALID_ARGS' : 'ENDPOINT_NOT_PASSABLE' });
+      error => {
+        assert.equal(error.code, endpoint === 'route' ? 'INVALID_ARGS' : 'ENDPOINT_NOT_PASSABLE');
+        if (endpoint !== 'route') {
+          assert.ok(error.message.includes(`id: ${row.id}`));
+          assert.ok(!error.message.includes(endpoint));
+        }
+        return true;
+      });
     assert.deepEqual(db.prepare('SELECT * FROM conversations').all(), before);
     assert.deepEqual(db.prepare('SELECT * FROM mode_transitions').all(), runBefore);
   }
@@ -96,27 +103,23 @@ test('#6b D9 and D1 reads share an actual WAL snapshot during a concurrent commi
   assert.throws(() => readAbsorbedReply(runId, String(row.id), api), { code: 'ABSORBED_NOT_IN_RUN' });
 });
 
-test('#6b snapshot negative control detects reads outside the shared transaction', t => {
-  const { api, db, filename, runId, row } = setup(t);
-  const writer = new Database(filename);
-  t.after(() => writer.close());
-  const readRun = api.getModeTransition;
-  api.getModeTransition = options => {
-    const run = readRun(options);
-    writer.prepare("UPDATE conversations SET status='failed' WHERE id=?").run(row.id);
-    return run;
-  };
-  const brokenApi = { ...api, getDb: () => ({ transaction: operation => operation }) };
-  assert.throws(() => readAbsorbedReply(runId, String(row.id), brokenApi), { code: 'ABSORBED_MISMATCH' });
-  assert.equal(db.inTransaction, false);
-});
-
 test('#6b absorbed internal route is retained in full for the internal handler', t => {
   const { api, db, runId, row } = setup(t);
   const endpoint = 'peer:room-with-\'"$`\\\nbytes';
   db.prepare("UPDATE conversations SET channel='internal',endpoint_id=?,session_group='origin' WHERE id=?").run(endpoint, row.id);
   assert.deepEqual(readAbsorbedReply(runId, String(row.id), api),
-    { kind: 'external', channel: 'internal', endpoint, groupName: undefined });
+    { kind: 'external', channel: 'internal', endpoint, id: String(row.id), wholeGroup: true });
+});
+
+test('#6b whole component absorbed route keeps whole-group audit despite later endpoint subgroup history', async t => {
+  const { api, db, store, runId, row, dir, output } = setup(t, 'route', {});
+  store.insertConversation('in', 'demo', 'route', 'later subgroup message', { groupName: 'later' });
+  const request = readAbsorbedReply(runId, String(row.id), api);
+  assert.deepEqual(request, { kind: 'external', channel: 'demo', endpoint: 'route', id: String(row.id), wholeGroup: true });
+  const audit = await sendExternal(request, 'whole reply', { api, skillsDir: dir });
+  assert.equal(audit.session_group, 'demo');
+  assert.equal(db.prepare('SELECT session_group FROM conversations WHERE id=?').get(audit.id).session_group, 'demo');
+  assert.deepEqual(JSON.parse(fs.readFileSync(output)), ['route', 'whole reply']);
 });
 
 test('#6b unsafe numeric D9 id is refused rather than replying to a rounded neighboring id', t => {

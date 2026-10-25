@@ -6,6 +6,7 @@ import { SKILLS_DIR, DATA_DIR } from './c4-config.js';
 import { claimStatusNotice, startStatusNotice, finishStatusNotice } from './c4-db.js';
 import { normalizeStatusEndpoint } from './status-endpoint.js';
 import { validateChannel, validateEndpoint } from './c4-validate.js';
+import { parseSessionGroup } from './c4-session-group.js';
 export { normalizeStatusEndpoint } from './status-endpoint.js';
 
 export const STATUS_NOTICE_TTL_SECONDS = 600;
@@ -62,7 +63,9 @@ export function sendStatusNotice(claim, message, route = {}, { spawn = spawnSync
   }
   let result;
   try {
-    result = spawn(process.execPath, [script, claim.channel, ...(claim.endpoint ? [claim.endpoint] : ['--stdin'])], {
+    const groupName = parseSessionGroup(claim.sessionGroup ?? route.sessionGroup)?.groupName;
+    result = spawn(process.execPath, [script, claim.channel, ...(claim.endpoint ? [claim.endpoint] : ['--stdin']),
+      ...(groupName ? ['--session-group', groupName] : [])], {
       input: message, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 30000, killSignal: 'SIGKILL',
     });
   } catch {

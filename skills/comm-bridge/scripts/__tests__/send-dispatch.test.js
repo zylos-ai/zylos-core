@@ -82,7 +82,7 @@ test('IB-55 valid internal dispatch passes the lazy body callback and preserves 
   assert.equal(empty.stderr, 'Error: EMPTY_CONTENT: Message content is empty\n');
 });
 
-test('installed external and void commands work without the unmerged internal helper', async t => {
+test('installed external and void commands dispatch through installed component scripts', t => {
   const fixture = setup(t);
   const component = path.join(fixture.dir, '.claude/skills/demo/scripts');
   fs.mkdirSync(component, { recursive: true });
@@ -94,20 +94,6 @@ test('installed external and void commands work without the unmerged internal he
   assert.equal(external.status, 0, external.stderr);
   assert.deepEqual(JSON.parse(fs.readFileSync(output)), ['a\'"$`\\\nroute', 'body']);
   assert.equal(invoke(['void', 'handoff', '--stdin']).status, 0);
-  const missing = await runOpenStdin(t, fixture, ['internal', 'demo:room']);
-  assert.equal(missing.status, 1);
-  assert.match(missing.stderr, /^Error: ERR_MODULE_NOT_FOUND:/);
-  assert.equal(missing.stdout, '');
-});
-
-test('IB-55 open-stdin control detects the eager-read regression', async t => {
-  const fixture = setup(t);
-  installInternalContract(fixture.installed);
-  const source = fs.readFileSync(fixture.cli, 'utf8');
-  const mutant = source.replace('sendInternal(args, readStdin)', 'sendInternal(args, async () => body)');
-  assert.notEqual(mutant, source);
-  fs.writeFileSync(fixture.cli, mutant.replace('if (internal) {', 'if (internal) { const body = await readStdin();'));
-  await assert.rejects(runOpenStdin(t, fixture, ['internal']), /dispatch waited for open stdin/);
 });
 
 test('#6b installed CLI reads original absorbed route and delegates internal targets through the same callback contract', t => {

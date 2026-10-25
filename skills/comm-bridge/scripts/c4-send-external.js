@@ -36,21 +36,21 @@ export function readAbsorbedReply(runId, id, api) {
     if (!record || record.status !== 'switch_absorbed') throw sendError('ABSORBED_MISMATCH', 'Absorbed conversation is missing or has changed state');
     const colon = record.session_group?.indexOf(':') ?? -1;
     return { kind: 'external', channel: record.channel, endpoint: record.endpoint_id,
-      groupName: colon >= 0 ? record.session_group.slice(colon + 1) : undefined };
+      id, ...(colon >= 0 ? { groupName: record.session_group.slice(colon + 1) } : { wholeGroup: true }) };
   })();
 }
 
-export function assertEndpointPassable(endpoint) {
+export function assertEndpointPassable(endpoint, id) {
   if (endpoint === null) return;
   if (typeof endpoint !== 'string' || !endpoint) throw sendError('INVALID_ARGS', 'Invalid endpoint');
   if (endpoint.includes('\0') || Buffer.byteLength(endpoint) > ARG_PAYLOAD_MAX) {
-    throw sendError('ENDPOINT_NOT_PASSABLE', 'Endpoint cannot be passed as an argv value');
+    throw sendError('ENDPOINT_NOT_PASSABLE', `Endpoint cannot be passed as an argv value${id === undefined ? '' : ` (id: ${id})`}`);
   }
 }
 
 export async function sendExternal(request, message, { api, skillsDir, env = process.env,
-  appendFallback, spawnComponent = spawn, beforeSpawn, diagnostic = console.error } = {}) {
-  const { channel, endpoint, groupName } = request;
+  appendFallback } = {}) {
+  const { channel, endpoint, groupName, wholeGroup } = request;
   const script = path.join(skillsDir, channel, 'scripts', 'send.js');
   try {
     api.validateChannel(channel, true);
@@ -58,24 +58,20 @@ export async function sendExternal(request, message, { api, skillsDir, env = pro
   } catch {
     throw sendError('INVALID_ARGS', 'Invalid channel: Channel script not found or component unavailable');
   }
-  assertEndpointPassable(endpoint);
+  assertEndpointPassable(endpoint, request.id);
   const record = api.insertConversation('out', channel, endpoint, message,
-    { status: 'delivered', groupName, sessionId: senderSessionId(env) });
-  if (appendFallback) {
-    try { await appendFallback(record, groupName); }
-    catch { diagnostic('[C4] Failed to append out_group_fallback diagnostic'); }
-  }
-  await beforeSpawn?.(record);
+    { status: 'delivered', groupName, wholeGroup, sessionId: senderSessionId(env) });
+  await appendFallback?.(record, groupName);
   return new Promise((resolve, reject) => {
     let child;
     const spawnFailed = error => reject(sendError('COMPONENT_SPAWN_FAILED',
       `Component did not start (${error.code || 'UNKNOWN'}); audit retained; not sent`));
-    try { child = spawnComponent('node', [script, ...(endpoint === null ? [] : [endpoint]), message], { stdio: 'inherit' }); }
+    try { child = spawn('node', [script, ...(endpoint === null ? [] : [endpoint]), message], { stdio: 'inherit' }); }
     catch (error) { spawnFailed(error); return; }
     child.once('error', spawnFailed);
     child.once('close', (code, signal) => {
       if (code === 0) resolve(record);
-      else reject(sendError('SEND_FAILED', `Failed to send: component exit ${code ?? signal}; audit retained; delivery unconfirmed`));
+      else reject(Object.assign(sendError('SEND_FAILED', `Failed to send: component exit ${code ?? signal}; audit retained; delivery unconfirmed`), { exitCode: code }));
     });
   });
 }

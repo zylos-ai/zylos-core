@@ -78,8 +78,9 @@ export function createStore(database, dependencies = {}) {
       return { componentName: name, namespace };
     }
   }
-  function resolve(c, direction, channel, endpointId, { groupName, handoffGroup } = {}) {
+  function resolve(c, direction, channel, endpointId, { groupName, handoffGroup, wholeGroup } = {}) {
     if (!['in', 'out'].includes(direction) || channel === 'internal') throw dataError('INVALID_ARGS', 'Invalid message source');
+    if (wholeGroup !== undefined && (typeof wholeGroup !== 'boolean' || direction !== 'out' || ['void','system'].includes(channel) || groupName !== undefined || handoffGroup !== undefined)) throw dataError('INVALID_ARGS', 'wholeGroup is reserved for external whole-component output');
     if (channel === 'void' && direction === 'out') {
       if (!handoffGroup) throw dataError('NO_SESSION_ENV', 'The recording session is required');
       if (!parseSessionGroup(handoffGroup) || !exists(c, handoffGroup)) throw dataError('UNKNOWN_GROUP', 'Unknown recording group');
@@ -88,6 +89,7 @@ export function createStore(database, dependencies = {}) {
     if (handoffGroup !== undefined) throw dataError('INVALID_ARGS', 'handoffGroup is reserved for Core void output');
     if (channel === 'system') return 'origin';
     const { namespace } = ensure(c, channel);
+    if (wholeGroup) return namespace;
     if (direction === 'in') return composeSessionGroup(namespace, groupName);
     if (groupName !== undefined) {
       try { const group = composeSessionGroup(namespace, groupName); if (exists(c, group)) return group; } catch (error) { if (!['SESSION_GROUP_INVALID','SESSION_GROUP_TOO_LONG'].includes(error.code)) throw error; }
@@ -120,7 +122,7 @@ export function createStore(database, dependencies = {}) {
     insertConversation: (direction, channel, endpointId, content, options = {}) => write(c => {
       if (!options || typeof options !== 'object' || Array.isArray(options)) throw dataError('INVALID_ARGS', 'Expected message options');
       if (typeof content !== 'string') throw dataError('INVALID_ARGS', 'Message content must be a string');
-      const allowed = new Set(['status', 'priority', 'requireIdle', 'deliveryAction', 'groupName', 'handoffGroup', 'sessionId']);
+      const allowed = new Set(['status', 'priority', 'requireIdle', 'deliveryAction', 'groupName', 'handoffGroup', 'wholeGroup', 'sessionId']);
       if (Object.keys(options).some(key => !allowed.has(key))) throw dataError('INVALID_ARGS', 'Unknown message option');
       if (options.status !== undefined && !(direction === 'in' ? ['pending', 'failed'] : ['delivered']).includes(options.status)) throw dataError('INVALID_ARGS', 'Invalid initial message status');
       return insert(c, direction, channel, endpointId, content, resolve(c, direction, channel, endpointId, options), options);

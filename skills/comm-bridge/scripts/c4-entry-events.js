@@ -1,17 +1,17 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import os from 'node:os';
 import { pathToFileURL } from 'node:url';
 import { resolveCoreConfigModule } from './core-config-loader.js';
-import { composeSessionGroup, dataError } from './c4-session-group.js';
+import { dataError } from './c4-session-group.js';
+import { DATA_DIR } from './c4-config.js';
 import { normalizeStatusEndpoint } from './status-endpoint.js';
 import { safeEntryId } from './c4-entry-id.js';
 
-export const entryEventsPath = (env = process.env) => path.join(env.ZYLOS_DIR || path.join(env.HOME || os.homedir(), 'zylos'), 'comm-bridge', 'receive-events.jsonl');
+export const entryEventsPath = () => path.join(DATA_DIR, 'receive-events.jsonl');
 export const sanitizeEntryDetail = detail => Array.from(String(detail ?? '').replace(/[\u0000-\u001f\u007f-\u009f]/g, '')).slice(0, 500).join('');
 
 export async function appendEntryEvent(event, options = {}) {
-  const filename = options.filename ?? entryEventsPath(options.env);
+  const filename = options.filename ?? entryEventsPath();
   const value = { v: 1, ts: (options.now ?? Date.now)(), ...event,
     endpoint: normalizeStatusEndpoint(event.endpoint), detail: sanitizeEntryDetail(event.detail) };
   try {
@@ -22,16 +22,6 @@ export async function appendEntryEvent(event, options = {}) {
     (options.diagnostic ?? console.error)(`entry event ${event.event} append failed: ${error.code ?? error.message}`);
     return false;
   }
-}
-
-export async function appendOutGroupFallback(record, groupName, options = {}) {
-  if (groupName === undefined || !record.session_group || record.session_group.includes(':')) return false;
-  let reason = 'SESSION_GROUP_NOT_FOUND';
-  try { composeSessionGroup(record.session_group, groupName); }
-  catch (error) { reason = error.code; }
-  return appendEntryEvent({ event: 'out_group_fallback', conversation_id: record.id,
-    channel: record.channel, endpoint: record.endpoint_id, session_group: record.session_group,
-    runtime: '', reason_code: reason, detail: '' }, options);
 }
 
 function retainedFiles(filename, io) {
@@ -47,7 +37,7 @@ function retainedFiles(filename, io) {
 export function queryRejection(id, { getConversationsByRange, filename = entryEventsPath(), io = fs,
   diagnostic = console.error } = {}) {
   const textId = String(id);
-  if (!/^[1-9][0-9]{0,18}$/.test(textId) || (textId.length === 19 && textId > '9223372036854775807')) throw dataError('INVALID_ARGS', 'id must be a positive SQLite integer');
+  if (!/^[1-9][0-9]*$/.test(textId)) throw dataError('INVALID_ARGS', 'id must be a positive integer');
   const exactId = safeEntryId(id);
   if (exactId === null) throw dataError('NOT_FOUND', 'Conversation not found');
   const rows = getConversationsByRange(exactId, exactId);
@@ -70,7 +60,7 @@ export function queryRejection(id, { getConversationsByRange, filename = entryEv
         const valid = event && event.v === 1 && event.event === 'auth_rejected'
           && (typeof event.conversation_id === 'string' || Number.isSafeInteger(event.conversation_id))
           && ['auth_check_failed', 'auth_check_unconfirmed'].includes(event.reason_code)
-          && typeof event.detail === 'string' && ['claude', 'codex'].includes(event.runtime)
+          && typeof event.detail === 'string' && typeof event.runtime === 'string'
           && Number.isSafeInteger(event.ts) && event.ts >= 0;
         if (!valid) { diagnostic('rejection log: skipped invalid event'); continue; }
         if (String(event.conversation_id) === String(id)) {

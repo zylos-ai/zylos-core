@@ -3,32 +3,26 @@ import { test } from 'node:test';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { EventEmitter } from 'node:events';
+import { createRequire } from 'node:module';
 import { fixture } from './c4-v2-test-helpers.js';
 import { parseSendArgs } from '../c4-send-args.js';
 import { sendExternal, recordVoid, senderSessionId, readAbsorbedReply } from '../c4-send-external.js';
-import { appendOutGroupFallback } from '../c4-entry-events.js';
+import { appendOutGroupFallback } from '../c4-outbound-events.js';
 
 function setup(t) {
-  const { db, store } = fixture(t);
+  const { db, store, filename } = fixture(t, {}, true);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'send-entry-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const script = path.join(dir, 'demo', 'scripts', 'send.js');
   fs.mkdirSync(path.dirname(script), { recursive: true });
-  fs.writeFileSync(script, 'process.exit(0)');
+  const marker = path.join(dir, 'component-started');
+  fs.writeFileSync(script, `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'started')`);
   const api = { ...store, getDb: () => db,
     getConversationsByRange: (a, b) => db.prepare('SELECT * FROM conversations WHERE id>=? AND id<=?').all(a, b),
     validateChannel: () => {}, validateEndpoint: endpoint => assert.ok(endpoint) };
-  return { db, store, dir, script, api };
+  return { db, store, filename, dir, script, marker, api };
 }
 const request = { channel: 'demo', endpoint: 'endpoint' };
-function childResult(code = 0, error) {
-  return () => {
-    const child = new EventEmitter();
-    queueMicrotask(() => error ? child.emit('error', error) : child.emit('close', code, null));
-    return child;
-  };
-}
 
 test('IF-57 legacy argument precedence and trailing group option preserve content', () => {
   for (const isTTY of [true, false]) {
@@ -58,51 +52,39 @@ test('IF-07 current identity must match inherited run; legacy reads only foregro
 });
 
 test('IB-10 void requires environment ownership and retains delivered record without component', t => {
-  const { api, db, dir } = setup(t);
+  const { api, db, dir, store } = setup(t);
   assert.throws(() => recordVoid(request, 'note', { api, env: { ZYLOS_DIR: dir } }), { code: 'NO_SESSION_ENV' });
   assert.throws(() => recordVoid(request, 'note', { api, env: { ZYLOS_SESSION_GROUP: 'demo:missing' } }), { code: 'UNKNOWN_GROUP' });
   assert.equal(db.prepare('SELECT count(*) n FROM conversations').get().n, 0);
   const row = recordVoid(request, 'note', { api, env: { ZYLOS_RUN_ID: 'run-a', ZYLOS_DIR: dir } });
   assert.equal(row.channel, 'void'); assert.equal(row.status, 'delivered'); assert.equal(row.session_group, 'origin');
+  store.insertConversation('in', 'demo', 'endpoint', 'group owner', { groupName: 'owned' });
+  const grouped = recordVoid(request, 'group note', { api, env: { ZYLOS_SESSION_GROUP: 'demo:owned', ZYLOS_RUN_ID: 'run-a', ZYLOS_DIR: dir } });
+  assert.equal(grouped.session_group, 'demo:owned');
+  assert.throws(() => recordVoid(request, 'empty group', { api, env: { ZYLOS_SESSION_GROUP: '', ZYLOS_RUN_ID: 'run-a' } }), { code: 'NO_SESSION_ENV' });
 });
 
 test('IF-68 precheck failures leave D1 D5 D6 empty and never invoke component', async t => {
-  const { api, db, dir, script } = setup(t);
-  let spawned = 0;
-  const options = { api, skillsDir: dir, spawnComponent: () => { spawned++; } };
+  const { api, db, dir, script, marker } = setup(t);
+  const options = { api, skillsDir: dir };
   for (const endpoint of ['x\0y', 'x'.repeat(131072)]) {
     await assert.rejects(sendExternal({ ...request, endpoint }, 'body', options), { code: 'ENDPOINT_NOT_PASSABLE' });
   }
   fs.renameSync(script, script + '.away');
   await assert.rejects(sendExternal(request, 'body', options), { code: 'INVALID_ARGS' });
-  assert.equal(spawned, 0);
+  assert.equal(fs.existsSync(marker), false);
   for (const table of ['conversations', 'channel_namespaces', 'group_heads']) assert.equal(db.prepare(`SELECT count(*) n FROM ${table}`).get().n, 0);
 });
 
-test('IF-68 exact maximum endpoint bytes reach component only after committed audit', async t => {
-  const { api, db, dir } = setup(t);
-  const endpoint = 'x'.repeat(131071);
-  let seen;
-  await sendExternal({ ...request, endpoint }, 'body', { api, skillsDir: dir,
-    spawnComponent: (command, args, options) => {
-      assert.equal(db.prepare('SELECT count(*) n FROM conversations').get().n, 1);
-      assert.equal(command, 'node'); assert.equal(options.stdio, 'inherit'); seen = args;
-      return childResult()();
-    } });
-  assert.equal(seen[1], endpoint); assert.equal(seen[2], 'body');
-});
-
-test('IF-68 audit rollback prevents component; spawn and exit failures preserve audit', async t => {
-  const { api, db, dir } = setup(t);
-  let spawned = 0;
+test('IF-68 audit rollback prevents component; actual exit failure preserves audit', async t => {
+  const { api, db, dir, script, marker } = setup(t);
   db.exec("CREATE TRIGGER reject_send BEFORE INSERT ON conversations BEGIN SELECT RAISE(ABORT,'reject'); END");
-  await assert.rejects(sendExternal(request, 'body', { api, skillsDir: dir, spawnComponent: () => { spawned++; } }), { code: 'DB_WRITE_FAILED' });
-  assert.equal(spawned, 0); assert.equal(db.prepare('SELECT count(*) n FROM conversations').get().n, 0);
+  await assert.rejects(sendExternal(request, 'body', { api, skillsDir: dir }), { code: 'DB_WRITE_FAILED' });
+  assert.equal(fs.existsSync(marker), false); assert.equal(db.prepare('SELECT count(*) n FROM conversations').get().n, 0);
   db.exec('DROP TRIGGER reject_send');
-  await assert.rejects(sendExternal(request, 'body', { api, skillsDir: dir,
-    spawnComponent: childResult(null, Object.assign(new Error('missing'), { code: 'ENOENT' })) }), { code: 'COMPONENT_SPAWN_FAILED' });
-  await assert.rejects(sendExternal(request, 'body', { api, skillsDir: dir, spawnComponent: childResult(1) }), { code: 'SEND_FAILED' });
-  assert.equal(db.prepare("SELECT count(*) n FROM conversations WHERE status='delivered'").get().n, 2);
+  fs.writeFileSync(script, 'process.exit(1)');
+  await assert.rejects(sendExternal(request, 'body', { api, skillsDir: dir }), { code: 'SEND_FAILED', exitCode: 1 });
+  assert.equal(db.prepare("SELECT count(*) n FROM conversations WHERE status='delivered'").get().n, 1);
 });
 
 test('#6b absorbed reply reads actual D9 and D1 in one transaction and preserves original routing', t => {
@@ -113,19 +95,23 @@ test('#6b absorbed reply reads actual D9 and D1 in one transaction and preserves
   store.setDrainFence('*'); store.absorbForTransition(runId);
   const original = api.getModeTransition;
   api.getModeTransition = options => { assert.equal(db.inTransaction, true); return original(options); };
-  assert.deepEqual(readAbsorbedReply(runId, String(row.id), api), { kind: 'external', channel: 'demo', endpoint, groupName: 'group' });
+  assert.deepEqual(readAbsorbedReply(runId, String(row.id), api), { kind: 'external', channel: 'demo', endpoint, id: String(row.id), groupName: 'group' });
   assert.throws(() => readAbsorbedReply(runId, '2', api), { code: 'ABSORBED_NOT_IN_RUN' });
   db.prepare("UPDATE conversations SET status='failed' WHERE id=?").run(row.id);
   assert.throws(() => readAbsorbedReply(runId, String(row.id), api), { code: 'ABSORBED_MISMATCH' });
 });
 
 test('IF-68 real component receives maximum endpoint and preserves shell metacharacters', async t => {
-  const { api, dir, script, db } = setup(t);
+  const { api, dir, script, db, filename } = setup(t);
   const output = path.join(dir, 'argv.json');
-  fs.writeFileSync(script, `const fs = require('node:fs'); fs.writeFileSync(${JSON.stringify(output)}, JSON.stringify(process.argv.slice(2)));`);
-  for (const endpoint of ['x'.repeat(131071), 'a\'"$`\\\nroute']) {
+  const sqlite = createRequire(import.meta.url).resolve('better-sqlite3');
+  fs.writeFileSync(script, `const fs = require('node:fs'); const Database = require(${JSON.stringify(sqlite)});
+    const db = new Database(${JSON.stringify(filename)}, {readonly:true});
+    const rows = db.prepare('SELECT count(*) n FROM conversations').get().n;
+    db.close(); fs.writeFileSync(${JSON.stringify(output)}, JSON.stringify({args:process.argv.slice(2), rows}));`);
+  for (const [index, endpoint] of ['x'.repeat(131071), 'a\'"$`\\\nroute'].entries()) {
     await sendExternal({ ...request, endpoint }, 'body', { api, skillsDir: dir });
-    assert.deepEqual(JSON.parse(fs.readFileSync(output)), [endpoint, 'body']);
+    assert.deepEqual(JSON.parse(fs.readFileSync(output)), { args: [endpoint, 'body'], rows: index + 1 });
   }
   assert.equal(db.prepare('SELECT count(*) n FROM conversations').get().n, 2);
 });
@@ -135,7 +121,7 @@ test('IF-68 actual E2BIG and script deletion after audit preserve delivered rows
   await assert.rejects(sendExternal(request, 'x'.repeat(131072), { api, skillsDir: dir }),
     error => error.code === 'COMPONENT_SPAWN_FAILED' && error.message.includes('E2BIG'));
   await assert.rejects(sendExternal(request, 'body', { api, skillsDir: dir,
-    beforeSpawn: () => fs.renameSync(script, script + '.removed') }), { code: 'SEND_FAILED' });
+    appendFallback: () => fs.renameSync(script, script + '.removed') }), { code: 'SEND_FAILED' });
   assert.equal(db.prepare("SELECT count(*) n FROM conversations WHERE status='delivered'").get().n, 2);
 });
 
@@ -146,7 +132,7 @@ test('IF-07 actual outbound history and explicit group resolution log only commi
   store.insertConversation('in', 'demo', 'other', 'unrelated', {groupName:'other'});
   store.insertConversation('in', 'demo', 'endpoint', 'new', {groupName:'new'});
   const events = [];
-  const options = {api, skillsDir:dir, spawnComponent:childResult(), appendFallback: async (record, groupName) => {
+  const options = {api, skillsDir:dir, appendFallback: async (record, groupName) => {
     assert.equal(db.inTransaction, false);
     assert.deepEqual(db.prepare('SELECT * FROM conversations WHERE id=?').get(record.id), record);
     await appendOutGroupFallback(record, groupName, {now:()=>123, createJsonlStream:() => ({append:event=>events.push(event)})});
@@ -175,7 +161,7 @@ test('IF-07 matching and stale F3 run identities persist exact session_id or NUL
   const env = {ZYLOS_DIR:dir,ZYLOS_RUN_ID:'own-run',ZYLOS_SESSION_GROUP:'demo:room'};
   for (const [runId, expected] of [['other-run',null],['own-run','own-session']]) {
     fs.writeFileSync(path.join(runDir,'current-session.json'),JSON.stringify({runId,sessionId:'own-session'}));
-    const row = await sendExternal(request,'body',{api,env,skillsDir:dir,spawnComponent:childResult()});
+    const row = await sendExternal(request,'body',{api,env,skillsDir:dir});
     assert.equal(row.session_id,expected);
     assert.equal(db.prepare('SELECT session_id FROM conversations WHERE id=?').get(row.id).session_id,expected);
   }
