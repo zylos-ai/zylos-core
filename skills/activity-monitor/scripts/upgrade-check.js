@@ -10,6 +10,8 @@ import { execFileSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import { pathToFileURL } from 'node:url';
+import { enqueueMachineControl } from './machine-control.js';
 
 const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
 const MONITOR_DIR = path.join(ZYLOS_DIR, 'activity-monitor');
@@ -86,7 +88,7 @@ function runC4Control(args) {
   }
 }
 
-function main() {
+export async function main() {
   const upgrades = [];
   let failures = 0;
 
@@ -135,9 +137,9 @@ function main() {
   }
 
   const content = `Component upgrades available: ${upgrades.join(', ')}. When the user next sends a message, mention these available upgrades and ask if they would like to upgrade.`;
-  const result = runC4Control([
+  const result = await enqueueMachineControl([
     'enqueue', '--content', content, '--priority', '3', '--no-ack-suffix'
-  ]);
+  ], {run:runC4Control});
 
   if (result.ok) {
     const match = result.output.match(/control\s+(\d+)/i);
@@ -147,4 +149,4 @@ function main() {
   }
 }
 
-main();
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main().catch(error=>{log(`Upgrade check failed: ${error.message}`);process.exitCode=1;});

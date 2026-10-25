@@ -11,7 +11,7 @@ const event={schema_version:1,source:'hook',...identity,event_id:'11111111-1111-
 const pendingFields=['eventId','conversationId','channel','endpoint','health','reason','notice','createdAt'].sort();
 const topFields=['v','runtime','health','reason','cooldownUntil','rateLimitResetTime','unavailableSince',
   'recoveringStartedAt','restartFailureCount','lastRecoveryAt','lastDownCheckAt','lastUserMessageRecoveryAt',
-  'updatedAt','hook'].sort();
+  'updatedAt','hook','rateLimitActive'].sort();
 
 function fixture(t,{runtime='claude',...options}={}) {
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'health-layout-'));
@@ -48,13 +48,13 @@ test('disk has exact engine fields, nested camelCase evidence and exact pending 
   assert.equal(f.store.saveScheduling(scheduling,f.store.read().revision),true);
   const raw=disk(f);
   assert.deepEqual(Object.keys(raw).filter(key=>key!=='pendingNotice').sort(),topFields);
-  assert.deepEqual(Object.keys(raw.pendingNotice).sort(),pendingFields);
+  assert.deepEqual(Object.keys(raw.hook.groups.origin.pendingNotice).sort(),pendingFields);
   assert.equal(raw.v,1);assert.equal(raw.runtime,'claude');assert.equal(raw.updatedAt,100000);
   for(const [key,value] of Object.entries(scheduling))assert.equal(raw[key],value,key);
-  assert.equal(raw.hook.lastProcessedAt,100000);assert.equal(raw.hook.lastProcessedEventId,event.event_id);
+  assert.equal(raw.hook.groups.origin.lastProcessedAt,100000);assert.equal(raw.hook.groups.origin.lastProcessedEventId,event.event_id);
   assert.deepEqual(raw.hook.lastFailure,{eventId:event.event_id,error:'rate_limit',observedAt:100000});
   assert.equal(raw.hook.pid,123);assert.equal(raw.hook.processStart,undefined);
-  assert.equal(raw.pendingNotice.conversationId,12);assert.equal(raw.pendingNotice.createdAt,100000);
+  assert.equal(raw.hook.groups.origin.pendingNotice.conversationId,12);assert.equal(raw.hook.groups.origin.pendingNotice.createdAt,100000);
   camelKeys(raw);
   assert.deepEqual(fs.readdirSync(path.dirname(f.file)),['claude.json']);
   const reopened=new HealthStore({zylosDir:f.root,now:()=>100000});
@@ -80,7 +80,7 @@ for(const mode of ['json','version','runtime'])test('invalid '+mode+' is quarant
 for(const field of ['lastProcessedAt','revision','episode'])test('malformed hook '+field+' is quarantined without losing original bytes',t=>{
   for(const value of ['invalid',-1,1.5]) {
     const f=fixture(t);consume(f);
-    const raw=disk(f);raw.hook[field]=value;
+    const raw=disk(f);(field === 'lastProcessedAt' ? raw.hook.groups.origin : raw.hook)[field]=value;
     const original=JSON.stringify(raw);fs.writeFileSync(f.file,original);
     const state=f.store.read();
     assert.equal(state.health,'ok');assert.equal(state.reason,'');
@@ -107,8 +107,8 @@ test('two corrupt files at the same millisecond preserve both quarantined origin
 for(const status of ['sent','failed','uncertain','suppressed','stale'])test('terminal '+status+' clears pending and records outcome together',t=>{
   const f=fixture(t);consume(f);
   assert.equal(f.store.updatePending(event.event_id,{status,updated_at:100001}),true);
-  const raw=disk(f);assert.equal(raw.pendingNotice,undefined);assert.equal(raw.hook.pendingAttempt,undefined);
-  assert.equal(raw.hook.lastNoticeOutcome.status,status);camelKeys(raw);
+  const raw=disk(f);assert.equal(raw.hook.groups.origin.pendingNotice,undefined);assert.equal(raw.hook.groups.origin.pendingAttempt,undefined);
+  assert.equal(raw.hook.groups.origin.lastNoticeOutcome.status,status);camelKeys(raw);
   const restored=new HealthStore({zylosDir:f.root});
   assert.equal(restored.read().pending_notice,undefined);assert.equal(restored.read().last_notice_outcome.status,status);
 });
@@ -116,12 +116,12 @@ for(const status of ['sent','failed','uncertain','suppressed','stale'])test('ter
 test('sending marker is outside pending payload and restart records uncertain without replay',t=>{
   const f=fixture(t);consume(f);
   f.store.updatePending(event.event_id,{status:'sending',updated_at:100001});
-  assert.deepEqual(Object.keys(disk(f).pendingNotice).sort(),pendingFields);
-  assert.ok(disk(f).hook.pendingAttempt);camelKeys(disk(f));
+  assert.deepEqual(Object.keys(disk(f).hook.groups.origin.pendingNotice).sort(),pendingFields);
+  assert.ok(disk(f).hook.groups.origin.pendingAttempt);camelKeys(disk(f));
   const restarted=new HealthStore({zylosDir:f.root}).read();
   assert.equal(restarted.pending_notice,undefined);
   assert.equal(restarted.last_notice_outcome.status,'uncertain');
-  assert.equal(disk(f).pendingNotice,undefined);
+  assert.equal(disk(f).hook.groups.origin.pendingNotice,undefined);
 });
 
 test('old send outcome cannot clear a newer pending event',t=>{

@@ -5,7 +5,7 @@ description: Use when the user asks to restart Claude Code, or after changing se
 
 # Restart Claude Code Skill
 
-Restart Claude Code session - sends /exit and lets activity-monitor daemon handle the restart.
+Request a runtime restart through the Supervisor. The dispatcher starts replacement sessions after safe reclamation.
 
 ## When to Use
 
@@ -16,7 +16,7 @@ Restart Claude Code session - sends /exit and lets activity-monitor daemon handl
 
 ## Pre-Restart Checklist
 
-Before sending `/exit`, complete these steps **in order**:
+Before requesting the restart, complete these steps **in order**:
 
 ### 1. Stop background tasks
 
@@ -55,15 +55,13 @@ conversation. If the user is actively waiting, send only a short user-facing
 notice to their current `reply via` path, without internal task inventory or
 cross-channel context.
 
-### 5. Enqueue /exit
+### 5. Submit the restart
 
 ```bash
-node ~/zylos/.claude/skills/comm-bridge/scripts/c4-control.js enqueue --content "/exit" --priority 1 --block-queue-until-idle
+node ~/zylos/.claude/skills/restart-claude/scripts/restart.js --json
 ```
 
-## How It Works
-
-1. **Enqueue /exit**: Puts `/exit` into the control queue (priority=1, block_queue_until_idle)
-2. **Block subsequent messages**: block_queue_until_idle prevents other messages from being dispatched
-3. **Deliver when idle**: Dispatcher delivers `/exit` to tmux when Claude is idle
-4. **Daemon restart**: activity-monitor detects exit and restarts Claude
+The script reads the session mode and active transition. In multi mode or during
+a transition it submits `restart_all`; steady single mode retains the queued
+`/exit` path. It reports a refusal or an unknown outcome without automatically
+resubmitting. An accepted request does not mean replacement sessions are ready.
