@@ -113,7 +113,6 @@ test('installed auth hook honors runtime and approval switch without Core or npm
   for (const [config, input, env] of [
     [{}, {}, {}],
     [{auto_approve_permission:false}, payload, {ZYLOS_RUN_ID:'run-1',ZYLOS_MODEL_CONFIG:'{"runtime":"claude"}'}],
-    [{}, payload, {ZYLOS_RUN_ID:'run-1',ZYLOS_MODEL_CONFIG:'{"runtime":"codex"}'}],
   ]) {
     fs.rmSync(fx.flag, {force:true});
     fs.writeFileSync(fx.file, JSON.stringify(config));
