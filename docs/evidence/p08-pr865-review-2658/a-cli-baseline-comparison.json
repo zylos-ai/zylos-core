@@ -1,0 +1,11 @@
+{
+  "base": "64d7a2bc2219e8710cea7ae08f5dbd0a5daa1f26",
+  "baseline_checkout": "68310e89427663998f5f3e2856e548b10fb51ff8",
+  "identical_tree": true,
+  "failures": [
+    "c4-send void channel",
+    "records the message in c4.db and exits 0 without a skill directory",
+    "does not spawn a channel send script even if one exists",
+    "supports stdin/heredoc message input"
+  ]
+}

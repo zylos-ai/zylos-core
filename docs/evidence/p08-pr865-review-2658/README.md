@@ -33,3 +33,7 @@ All commands use node scripts/run-node-tests.js with its isolated HOME/ZYLOS_DIR
 - Additional c4-send-cli.test.js: **7 passed, 3 failed**. The failing cases are the previously reported void cases: recording without a skill directory, avoiding a channel script, and stdin/heredoc input. This revision only changes the internal branch catch in c4-send.js; external/void behavior is unchanged. Earlier review proved these failures on the prior baseline; this run does not claim a fresh baseline comparison.
 
 No full repository Node/Jest or tmux matrix rerun. No tmux construction, parsing or runtime implementation changed. Actual downstream delivery/reply, mode transitions and inbox/business integration are not claimed. No merge, release, deployment or dependency installation performed.
+
+## Current baseline comparison
+
+The extra c4-send-cli suite was rerun against the exact tree of pinned batch `64d7a2b` (checkout `68310e8`, tree equality verified). Both revised A and baseline have 7 passed / 3 failed tests, with the same three void leaf failures and enclosing suite failure. Logs and exact comparison are adjacent. No external/void product code was changed in this revision.
