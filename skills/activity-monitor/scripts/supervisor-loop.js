@@ -74,6 +74,12 @@ export class SupervisorLoop {
       await d.lifecycleSerial(async () => {
         // A socket request may have accepted a transition since the first read.
         if (await d.getModeTransition()) return;
+        if (this.configuration.legacy) {
+          try { await d.advanceAutomaticMigration?.(context); }
+          catch (error) { await d.reportError(error, { phase: 'automatic-migration' }); }
+          // An available migration owner may have accepted a transition.
+          if (await d.getModeTransition()) return;
+        }
         for (const phase of ['advanceManual', 'advanceRestarts', 'reconcileConfiguration']) {
           try { await d[phase](context); }
           catch (error) { await d.reportError(error, { phase }); }
