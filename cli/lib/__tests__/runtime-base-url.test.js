@@ -94,9 +94,9 @@ describe('runtime base URL support', () => {
           parsed,
           { log: () => {}, error: () => {}, exit: (code) => { exitCode = code; throw new Error(`exit ${code}`); } }
         ),
-        /exit 2/
+        /exit 1/
       );
-      assert.equal(exitCode, 2);
+      assert.equal(exitCode, 1);
     }
   });
 

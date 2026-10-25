@@ -24,23 +24,16 @@ import { commandExists } from '../lib/shell-utils.js';
 import { parseSkillMd } from '../lib/skill.js';
 import { bold, dim, green, red, yellow, heading } from '../lib/colors.js';
 import { getTmuxCapability, describeTmuxSendKeys } from '../lib/tmux-send-keys.js';
-import { getActiveAdapter } from '../lib/runtime/index.js';
+import { resolveCliSession } from '../lib/cli-session.js';
 
-// Resolve active runtime session name and display name at startup.
-// Falls back to 'claude-main' / 'Claude' if config is missing or unknown runtime.
-let SESSION = 'claude-main';
-let AGENT_DISPLAY = 'Claude';
-let ACTIVE_RUNTIME = 'claude';
+// Resolve the actual target before diagnostics, using the shared strict reader.
+let SESSION;
+let AGENT_DISPLAY;
+let ACTIVE_RUNTIME;
 let _activeAdapter = null;
-try {
-  _activeAdapter = getActiveAdapter();
-  SESSION = _activeAdapter.sessionName;
-  AGENT_DISPLAY = _activeAdapter.displayName;
-  ACTIVE_RUNTIME = _activeAdapter.config?.runtime ?? 'claude';
-} catch { /* config.json absent or unknown runtime — use Claude defaults */ }
 const LOG_DIR = path.join(ZYLOS_DIR, 'logs');
 const LOG_FILE = path.join(LOG_DIR, 'doctor.log');
-const API_HOST = ACTIVE_RUNTIME === 'codex' ? 'api.openai.com' : 'api.anthropic.com';
+let API_HOST;
 const VERSION_CHECK_CONCURRENCY = 3;
 const CLAUDE_FIX_TIMEOUT = 300000; // 5 minutes
 
@@ -276,6 +269,12 @@ function checkTmuxSession() {
 // ── Diagnostics collection ───────────────────────────────────────
 
 async function collectDiagnostics(env) {
+  const selected = await resolveCliSession();
+  SESSION = selected.live.tmuxName;
+  ACTIVE_RUNTIME = selected.runtime;
+  AGENT_DISPLAY = ACTIVE_RUNTIME === 'codex' ? 'Codex' : 'Claude';
+  _activeAdapter = selected.adapter;
+  API_HOST = ACTIVE_RUNTIME === 'codex' ? 'api.openai.com' : 'api.anthropic.com';
   const networkPromise = checkNetwork(env);
 
   const tmux = checkTmuxInstalled();

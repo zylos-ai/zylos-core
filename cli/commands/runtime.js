@@ -13,14 +13,16 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execSync } from 'node:child_process';
-import { readZylosConfigOrThrow, updateZylosConfigLocked, ZYLOS_DIR } from '../lib/config.js';
-import { getAdapter, SUPPORTED_RUNTIMES } from '../lib/runtime/index.js';
+import { readZylosConfigOrThrow, readZylosConfigStrict, readSessionMode, updateZylosConfigLocked, ZYLOS_DIR } from '../lib/config.js';
+import { getSessionAdapter, SUPPORTED_RUNTIMES } from '../lib/runtime/index.js';
+import { listGroupTmuxSessions } from '../lib/session-group-paths.js';
+import { readLiveIdentity } from '../lib/session-state-reader.js';
+import { desiredClaudeHooks, syncHooks, detectStopFailureSupport } from '../lib/sync-settings-hooks.js';
+import { isCodexTrustValid, getCodexVersion } from '../lib/codex-hooks.js';
 import { buildInstructionFile, isSplitInstructionsActive } from '../lib/runtime/instruction-builder.js';
 import { commandExists } from '../lib/shell-utils.js';
 import { getCoreEcosystemPath, restartManagedProcess } from '../lib/pm2.js';
 import {
-  installClaude,
-  installCodex,
   isValidBaseUrl,
   saveApiKey,
   saveApiKeyToEnv,
@@ -62,12 +64,23 @@ export async function runtimeCommand(args) {
 
   // zylos runtime <name> [flags]
   if (SUPPORTED_RUNTIMES.includes(sub)) {
-    return switchRuntime(sub, args.slice(1));
+    const result = await executeRuntimeSwitch(sub, args.slice(1));
+    if (args.includes('--json')) console.log(JSON.stringify(result));
+    else if (!result.ok) console.error(`Error [${result.error.code}]: ${result.error.message}`);
+    else {
+      const data = result.data;
+      console.log(data.result === 'saved' ? `Baseline saved: ${data.previousBaseline} -> ${data.baseline}` : `Already on ${data.baseline} runtime.`);
+      for (const group of data.groups) console.log(`  ${group.sessionGroup}: ${group.status}`);
+      if (!data.groupsComplete) console.error('Group observation incomplete:', data.observationErrors.map(error => `${error.source}: ${error.message}`).join('; '));
+      for (const warning of data.warnings) console.error(`Warning [${warning.code}]: ${warning.message}`);
+    }
+    if (!result.ok) process.exitCode = 1;
+    return result;
   }
 
-  console.error(`Unknown subcommand: ${sub}`);
-  showHelp();
-  process.exit(1);
+  if (args.includes('--json')) console.log(JSON.stringify({ ok: false, error: { code: 'RUNTIME_UNSUPPORTED', message: `Unsupported runtime: ${sub}`, persisted: [] } }));
+  else { console.error(`Unknown subcommand: ${sub}`); showHelp(); }
+  process.exitCode = 1;
 }
 
 // ── Status ────────────────────────────────────────────────────────────────
@@ -134,6 +147,7 @@ export function parseRuntimeFlags(flags) {
   const baseUrlIdx = flags.indexOf('--save-base-url');
 
   return {
+    flags,
     apiKey: apiKeyIdx >= 0 ? flags[apiKeyIdx + 1] : null,
     setupToken: setupTokenIdx >= 0 ? flags[setupTokenIdx + 1] : null,
     baseUrl: baseUrlIdx >= 0 ? flags[baseUrlIdx + 1] : null,
@@ -145,6 +159,16 @@ export function parseRuntimeFlags(flags) {
 }
 
 export function validateRuntimeFlags(target, parsed) {
+  const valueFlags = new Set(['--save-apikey', '--save-setup-token', '--save-base-url']);
+  const seen = new Set();
+  for (let index = 0; index < (parsed.flags || []).length; index++) {
+    const flag = parsed.flags[index];
+    if (seen.has(flag) || (!valueFlags.has(flag) && !['--json', '--no-validate'].includes(flag))) return { error: `Invalid or duplicate option: ${flag}` };
+    seen.add(flag);
+    if (valueFlags.has(flag)) index++;
+  }
+  if (target !== 'claude' && parsed.hasSetupToken) return { error: '--save-setup-token requires claude' };
+  if (parsed.hasApiKey && parsed.hasSetupToken) return { error: 'Choose either API key or setup token' };
   if (parsed.hasApiKey && (!parsed.apiKey || parsed.apiKey.startsWith('--'))) {
     return {
       error: 'Missing value for --save-apikey.',
@@ -221,7 +245,7 @@ export async function checkRuntimeAuthGate(target, adapter, parsed, {
     error(yellow('\nRetry after the service/API is reachable, or use --no-validate to skip the probe if you accept the risk.'));
     error(dim(`Reason: ${auth.reason || 'auth_check_uncertain'}`));
     error(yellow('\nSwitch aborted — auth could not be verified.'));
-    exit(2);
+    exit(1);
     return { skipped: false, status: auth.status };
   }
 
@@ -237,115 +261,119 @@ export async function checkRuntimeAuthGate(target, adapter, parsed, {
     error(`  ${cyan('claude auth login')}                               ${dim('Browser OAuth (then retry)')}`);
   }
   error(yellow('\nSwitch aborted — authenticate first to avoid losing IM access.'));
-  exit(2);
+  exit(1);
   return { skipped: false, status: auth.status };
 }
 
 // ── Switch ────────────────────────────────────────────────────────────────
 
-async function switchRuntime(target, flags) {
-  const cfg = readRuntimeConfig();
-  const current = cfg.runtime ?? 'claude';
-  const monitorDir = path.join(ZYLOS_DIR, 'activity-monitor');
-  const parsed = parseRuntimeFlags(flags);
-  const validationError = validateRuntimeFlags(target, parsed);
-  if (validationError) {
-    console.error(red(`\n${validationError.error}`));
-    console.error(dim(`  Example: ${validationError.example}`));
-    process.exit(1);
-  }
-
-  const { apiKey, setupToken, baseUrl } = parsed;
-
-  if (current === target && !apiKey && !setupToken && !baseUrl) {
-    console.log(`Already on ${bold(target)} runtime.`);
-    return;
-  }
-
-  // Step 1: Ensure target runtime CLI is installed.
-  if (!commandExists(target)) {
-    console.log(`${bold(target)} CLI not found — installing...`);
-    const installed = target === 'codex' ? installCodex() : installClaude();
-    if (!installed || !commandExists(target)) {
-      console.error(red(`\nFailed to install ${bold(target)} CLI.`));
-      if (target === 'codex') {
-        console.error(`  ${dim('Install manually: npm install -g @openai/codex')}`);
-      } else {
-        console.error(`  ${dim('Install manually: curl -fsSL https://claude.ai/install.sh | bash')}`);
-      }
-      process.exit(1);
-    }
-    console.log(`  ${green('✓')} installed`);
-  }
-
-  // Step 2: Apply credentials if provided via flags.
-  if (apiKey || setupToken) {
-    console.log(`Saving credentials for ${bold(target)}...`);
-    if (!applyCredentials(target, { apiKey, setupToken })) {
-      console.error(red(`\nFailed to save credentials.`));
-      process.exit(1);
-    }
-    console.log(`  ${green('✓')} credentials saved`);
-  }
-
-  if (baseUrl) {
-    console.log(`Saving base URL for ${bold(target)}...`);
-    if (!applyBaseUrl(target, baseUrl)) {
-      console.error(red(`\nFailed to save base URL.`));
-      process.exit(1);
-    }
-    console.log(`  ${green('✓')} base URL saved`);
-  }
-
-  // Step 2b: Write Codex headless config (trust dir, suppress all interactive prompts).
-  // Done before auth check so config is present when checkAuth spawns `codex login status`.
-  if (target === 'codex') {
-    writeCodexConfig(ZYLOS_DIR);
-  }
-
-  // Step 3: Check auth for target runtime unless explicitly skipped.
-  // A confirmed unauthenticated switch leaves the system unreachable via IM.
-  const adapter = getAdapter(target, cfg);
-  await checkRuntimeAuthGate(target, adapter, parsed);
-
-  // Step 4: Persist new runtime in config.
-  updateZylosConfigLocked({ set: { runtime: target } });
-
-  // Step 5: Rebuild instruction file for the new runtime.
-  console.log(`Rebuilding instruction file for ${bold(target)}...`);
+export async function runtimeHooksReady(target) {
+  const instruction = path.join(ZYLOS_DIR, target === 'codex' ? 'AGENTS.md' : 'CLAUDE.md');
+  if (!fs.existsSync(instruction)) return false;
+  const pendingMigration = !isSplitInstructionsActive({ zylosDir: ZYLOS_DIR });
+  if (target === 'codex') return { ready: isCodexTrustValid({ zylosDir: ZYLOS_DIR, projectDir: ZYLOS_DIR, codexVersion: getCodexVersion() }).valid, pendingMigration };
   try {
-    const instruction = prepareRuntimeInstruction(target);
-    if (instruction.pendingMigration) {
-      console.error(`  ${yellow('PENDING MIGRATION: no instruction file exists for this runtime')}`);
-      console.error(`  ${dim('Run the split-instruction migration before launching this runtime.')}`);
-    } else {
-      console.log(`  ${green('✓')} done`);
-    }
-  } catch (e) {
-    console.error(`  ${yellow(`Warning: failed to rebuild instruction file — ${e.message}`)}`);
-    console.error(`  ${dim('Check that ~/zylos/ZYLOS.md exists (run: zylos init --repair)')}`);
+    const settings = JSON.parse(fs.readFileSync(path.join(process.env.HOME, '.claude', 'settings.json'), 'utf8'));
+    const copy = structuredClone(settings);
+    const changes = syncHooks(copy, null, { zylosDir: ZYLOS_DIR, dryRun: true, log: () => {},
+      desiredHooks: desiredClaudeHooks({ stopFailureSupported: detectStopFailureSupport() }) });
+    return { ready: changes.added + changes.updated + changes.removed === 0, pendingMigration };
+  } catch { return false; }
+}
+
+export async function observeRuntimeGroups(baseline, sessionMode, { list = listGroupTmuxSessions,
+  overrides = async () => (await import('../../skills/comm-bridge/scripts/c4-db.js')).listGroupRuntimeOverrides(),
+  identity = readLiveIdentity } = {}) {
+  const result = { groups: [], groupsComplete: true, observationErrors: [] };
+  if (sessionMode === null || sessionMode === 'single') return result;
+  const names = new Set(['origin']);
+  const failures = (source, sessionGroup, error) => {
+    result.groupsComplete = false;
+    result.observationErrors.push({ source, sessionGroup, code: 'READ_FAILED', message: error.message });
+  };
+  try { for (const row of await list()) names.add(row.sessionGroup); } catch (error) { failures('tmux', null, error); }
+  let configured;
+  try { configured = await overrides(); for (const row of configured) names.add(row.sessionGroup); }
+  catch (error) { failures('overrides', null, error); }
+  for (const sessionGroup of [...names].sort()) {
+    const inherits = configured ? !configured.some(row => row.sessionGroup === sessionGroup) : null;
+    let live = null, error = null;
+    try { live = await identity(sessionGroup); }
+    catch (cause) { error = { code: 'READ_FAILED', message: cause.message }; failures('session', sessionGroup, cause); }
+    const liveRuntime = live?.present ? live.runtime : null;
+    const status = inherits === false ? 'override_kept' : inherits === null || error || liveRuntime === 'unknown' || (live?.present && !live.launchConfig)
+      ? 'unknown' : liveRuntime === null ? 'not_running' : liveRuntime === baseline ? 'effective' : 'pending_reclaim';
+    result.groups.push({ sessionGroup, inherits, liveRuntime, status, error });
   }
+  return result;
+}
 
-  // Step 6: Clear stale health state from old runtime.
-  try { fs.unlinkSync(path.join(monitorDir, 'agent-status.json')); } catch {}
-  try { fs.unlinkSync(path.join(monitorDir, 'heartbeat-pending.json')); } catch {}
-  try { fs.unlinkSync(path.join(monitorDir, 'codex-heartbeat-pending.json')); } catch {}
-
-  // Step 7: Restart activity-monitor and c4-dispatcher.
-  // activity-monitor starts the new runtime session on its next cycle and cleans up the old one.
-  // c4-dispatcher caches TMUX_SESSION at startup from config.json — must restart so it picks up
-  // the new session name; otherwise it keeps delivering messages to the old runtime's pane.
-  // NOTE: Do NOT kill the old tmux session here. This command may run from inside the old
-  // session (e.g. via "zylos attach"), and killing its own parent session would terminate
-  // this process before the PM2 restart completes. The activity-monitor handles cleanup:
-  // on startup it kills the other runtime's session (OTHER_SESSION in init()) after a
-  // short delay, then starts the correct new session.
-  console.log('\nRestarting services...');
-  restartRuntimeServices();
-
-  const targetLabel = target === 'codex' ? 'Codex (OpenAI)' : 'Claude Code (Anthropic)';
-  console.log(`\n${green(`Switched to ${bold(targetLabel)}.`)}`);
-  console.log(dim('The new runtime session will be ready in ~10 seconds.'));
+export async function executeRuntimeSwitch(target, flags, { read = readZylosConfigStrict, mode = readSessionMode,
+  exists = commandExists, adapter = getSessionAdapter, credentials = applyCredentials, baseUrl = applyBaseUrl,
+  hooksReady = runtimeHooksReady, write = updateZylosConfigLocked, observe = observeRuntimeGroups,
+  restart = restartRuntimeServices } = {}) {
+  const credentialsSaved = [], warnings = [];
+  const fail = (code, message, extra = {}) => ({ ok: false, error: { code, message, persisted: [...credentialsSaved], ...extra } });
+  const parsed = parseRuntimeFlags(flags);
+  if (!SUPPORTED_RUNTIMES.includes(target)) return fail('RUNTIME_UNSUPPORTED', 'Unsupported runtime');
+  const invalid = validateRuntimeFlags(target, parsed);
+  if (invalid) return fail('INVALID_ARGUMENT', invalid.error);
+  let selected;
+  try { selected = adapter(target); } catch (error) { return fail('RUNTIME_UNSUPPORTED', error.message); }
+  let config;
+  try {
+    const result = read();
+    if (result.state === 'error') return fail('CONFIG_UNREADABLE', result.error?.message || 'Cannot read configuration');
+    config = result.state === 'ok' ? result.config : {};
+  } catch (error) { return fail('CONFIG_UNREADABLE', error.message); }
+  let previousBaseline = config.runtime ?? 'claude';
+  let baseline = previousBaseline, changed = false;
+  const fullPath = previousBaseline !== target || parsed.hasApiKey || parsed.hasSetupToken || parsed.hasBaseUrl;
+  if (fullPath) {
+    if (!exists(target)) return fail('RUNTIME_NOT_INSTALLED', `${target} CLI missing; run zylos init`);
+    try {
+      for (const [key, value, save] of [
+        ['apiKey', parsed.apiKey, () => credentials(target, { apiKey: parsed.apiKey })],
+        ['setupToken', parsed.setupToken, () => credentials(target, { setupToken: parsed.setupToken })],
+        ['baseUrl', parsed.baseUrl, () => baseUrl(target, parsed.baseUrl)],
+      ]) {
+        if (value) { if (!await save()) return fail('CREDENTIAL_SAVE_FAILED', `Could not save ${key}`); credentialsSaved.push(key); }
+      }
+    } catch (error) { return fail('CREDENTIAL_SAVE_FAILED', error.message); }
+    try {
+      const ready = await hooksReady(target);
+      if (!ready || ready.ready === false) return fail('HOOKS_NOT_READY', 'Runtime hooks/instructions not ready; run zylos init');
+      if (ready.pendingMigration) warnings.push({ code: 'INSTRUCTION_PENDING_MIGRATION', message: 'Instruction migration pending; run zylos migrate-instructions' });
+    }
+    catch (error) { return fail('HOOKS_NOT_READY', error.message); }
+    if (parsed.noValidate) warnings.push({ code: 'AUTH_CHECK_SKIPPED', message: 'Authentication check skipped (--no-validate)' });
+    else {
+      let auth;
+      try { auth = await selected.checkAuth(); } catch { auth = { status: 'uncertain' }; }
+      if (auth.status !== 'success') return fail('AUTH_NOT_CONFIRMED', `${target} authentication not confirmed; run zylos auth ${target}`, { authStatus: auth.status === 'failure' ? 'failure' : 'uncertain' });
+    }
+    try {
+      const saved = write({ set: { runtime: target } });
+      previousBaseline = saved.previous.runtime ?? 'claude'; baseline = saved.config.runtime ?? 'claude';
+      config = saved.config; changed = saved.changed;
+    } catch (error) {
+      return fail(error.code || 'CONFIG_WRITE_FAILED', error.message, { ...(error.phase ? { phase: error.phase } : {}),
+        ...(error.phase === 'after_rename' ? { persisted: null, persistedBeforeConfig: [...credentialsSaved] } : {}) });
+    }
+  }
+  let sessionMode;
+  try { sessionMode = fullPath ? config.session_mode ?? null : mode().mode;
+    if (![null, 'single', 'multi'].includes(sessionMode)) sessionMode = 'unreadable'; }
+  catch { sessionMode = 'unreadable'; }
+  let observed;
+  try { observed = await observe(baseline, sessionMode); }
+  catch (error) { observed = { groups: [], groupsComplete: false, observationErrors: [{ source: 'session', sessionGroup: null, code: 'READ_FAILED', message: error.message }] }; }
+  if (fullPath && (sessionMode === null || sessionMode === 'single')) {
+    try { restart({ logSuccess: () => {}, logWarning: message => warnings.push({ code: 'SERVICE_RESTART_FAILED', message }) }); }
+    catch (error) { warnings.push({ code: 'SERVICE_RESTART_FAILED', message: error.message }); }
+  }
+  return { ok: true, data: { result: changed ? 'saved' : 'unchanged', previousBaseline, baseline,
+    credentialsSaved, sessionMode, ...observed, warnings } };
 }
 
 function readRuntimeConfig() {
@@ -386,8 +414,7 @@ Validation:
 
 Exit codes:
   0  Success
-  1  Fatal error (install failed, credential save failed)
-  2  Auth required — use --save-apikey / --save-setup-token or authenticate first
+  1  Failed; AUTH_NOT_CONFIRMED requires zylos auth <runtime>
 
 Examples:
   zylos runtime status
