@@ -17,7 +17,7 @@ function loadCoreRuntime() {
 }
 
 // Private construction seam for isolated transports. Each observation owns one
-// connection and uses its native asynchronous command timeout.
+// executor, pins one target, and uses guarded asynchronous command timeouts.
 export function createCoreObserver({ tmux = {} } = {}) {
   async function observe(method, options) {
     const { sessionGroup = null, sessionMode } = options ?? {};
@@ -51,6 +51,12 @@ export function createCoreObserver({ tmux = {} } = {}) {
         tmuxTarget: { serverGeneration: target.serverGeneration, sessionId: target.tmuxSessionId, paneId: target.paneId } };
     } catch (error) {
       if (error.code === 'TMUX_NO_SERVER') return method === 'running' ? { hasProcess: false } : null;
+      if (method === 'target' && ['TARGET_GONE','GENERATION_CHANGED','RUNID_MISMATCH'].includes(error.code)) {
+        throw Object.assign(new Error('Target identity changed during observation'), {code:'TARGET_NOT_READY'});
+      }
+      if (error.code === 'TMUX_COMMAND_FAILED') {
+        throw Object.assign(new Error('Cannot inspect tmux target'), { code: 'TMUX_UNAVAILABLE', cause: error.cause || 'error' });
+      }
       throw error;
     } finally { await connection?.close(); }
   }

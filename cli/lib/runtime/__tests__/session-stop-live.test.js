@@ -42,9 +42,9 @@ test('unreadable process environment/runtime tree cannot block observable tmux r
 test('service actually spawned by target inherits run ID and survives both present and absent stop',async t=>{
  const f=await fixture(t),key=randomUUID(),proof=path.join(f.dir,'inherited.json'),done=path.join(f.dir,'finish');
  const childScript=path.join(f.dir,'inherited-service.mjs'),parentScript=path.join(f.dir,'agent-parent.mjs');
- await fs.writeFile(childScript,`import{writeFileSync,existsSync}from'node:fs';import{randomUUID}from'node:crypto';let tick=0;const signals=[],start=randomUUID();
+ await fs.writeFile(childScript,`import{writeFileSync,renameSync,existsSync}from'node:fs';import{randomUUID}from'node:crypto';let tick=0;const signals=[],start=randomUUID();
  for(const s of ['SIGHUP','SIGTERM'])process.on(s,()=>signals.push(s));
- const beat=()=>{if(existsSync(${JSON.stringify(done)}))process.exit(0);writeFileSync(${JSON.stringify(proof)},JSON.stringify({pid:process.pid,ppid:process.ppid,start,exe:process.execPath,runId:process.env.ZYLOS_RUN_ID,tick:++tick,signals}))};
+ const beat=()=>{if(existsSync(${JSON.stringify(done)}))process.exit(0);writeFileSync(${JSON.stringify(proof+'.tmp')},JSON.stringify({pid:process.pid,ppid:process.ppid,start,exe:process.execPath,runId:process.env.ZYLOS_RUN_ID,tick:++tick,signals}));renameSync(${JSON.stringify(proof+'.tmp')},${JSON.stringify(proof)})};
  beat();setInterval(beat,20);setTimeout(()=>process.exit(0),30000);`);
  await fs.writeFile(parentScript,`import{spawn}from'node:child_process';import{existsSync}from'node:fs';
  const child=spawn(process.execPath,[${JSON.stringify(childScript)}],{detached:true,stdio:'ignore'});child.unref();

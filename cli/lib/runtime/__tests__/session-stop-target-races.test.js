@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {fixture,service,actualDependencies,delay} from './stop-tmux-fixture.js';
 
-test('real same-name replacement with the same run ID is never rebound or killed',async t=>{
+test('real same-name replacement proves original session gone and is never rebound or killed',async t=>{
  const f=await fixture(t),key='same-name-run';
  f.command('new-session','-d','-s','target','-e',`ZYLOS_RUN_ID=${key}`,'sleep 60');
  const original=f.snapshot('target'),independent=await service(f,key);let replacement;
@@ -11,7 +11,7 @@ test('real same-name replacement with the same run ID is never rebound or killed
   f.command('new-session','-d','-s','target','-e',`ZYLOS_RUN_ID=${key}`,'sleep 60');
   replacement=f.snapshot('target');return actualDependencies.revalidateSessionTarget(options);
  }};
- await assert.rejects(f.adapter.stop({tmuxName:'target',expectedRunId:key}),{code:'STOP_UNCONFIRMED'});
+ await f.adapter.stop({tmuxName:'target',expectedRunId:key});
  assert.notEqual(replacement,original);assert.equal(f.snapshot('target'),replacement);assert.equal(f.snapshot('origin'),f.origin);
  t.diagnostic(JSON.stringify({original,replacement,replacementPreserved:true,service:await independent.verify(),originUnchanged:true}));
 });
@@ -73,4 +73,81 @@ for(const key of ['last-session-run',null])test(`real final-session kill confirm
  await f.adapter.stop({tmuxName:'target',expectedRunId:key});
  assert.throws(()=>f.command('list-sessions','-F','#{session_id}'));
  t.diagnostic(JSON.stringify({lastSession:true,key,targetRemovalAcknowledged:true}));
+});
+
+test('session confirmation cannot mistake a vanished pane for removal of a surviving session',async t=>{
+ const f=await fixture(t),key='pane-only-removal';
+ f.command('new-session','-d','-s','target','-e',`ZYLOS_RUN_ID=${key}`,'sleep 60');
+ const pane=f.command('display-message','-p','-t','=target:','#{pane_id}');
+ f.command('new-window','-d','-t','=target:','sleep 60');
+ f.adapter.options.dependencies={...actualDependencies,openTmuxConnection:async options=>{
+  const connection=await actualDependencies.openTmuxConnection(options),command=connection.command.bind(connection);
+  connection.command=async(args,guard)=>{
+   if(args[0]==='kill-session'){f.command('kill-pane','-t',pane);return '';}
+   return command(args,guard);
+  };return connection;
+ }};
+ await assert.rejects(f.adapter.stop({tmuxName:'target',expectedRunId:key}),{code:'STOP_UNCONFIRMED'});
+ assert.match(f.snapshot('target'),new RegExp(`:${key}$`));
+ assert.equal(f.snapshot('origin'),f.origin);
+});
+
+test('replacement after acknowledged kill is not confirmation of the original session removal',async t=>{
+ const f=await fixture(t),key='confirmation-race';
+ f.command('new-session','-d','-s','target','-e',`ZYLOS_RUN_ID=${key}`,'sleep 60');
+ const old=f.command('display-message','-p','#{pid}:#{start_time}');let replacement;
+ f.adapter.options.dependencies={...actualDependencies,openTmuxConnection:async options=>{
+  const connection=await actualDependencies.openTmuxConnection(options),command=connection.command.bind(connection);
+  connection.command=async(args,guard)=>{
+   const result=await command(args,guard);
+   if(args[0]==='kill-session'){
+    f.command('kill-server');await delay(50);
+    f.command('-f','/dev/null','new-session','-d','-s','origin','sleep 60');
+    f.command('new-session','-d','-s','target','-e',`ZYLOS_RUN_ID=${key}`,'sleep 60');
+    replacement=f.snapshot('target');
+   }
+   return result;
+  };return connection;
+ }};
+ await assert.rejects(f.adapter.stop({tmuxName:'target',expectedRunId:key}),{code:'STOP_UNCONFIRMED'});
+ assert.notEqual(f.command('display-message','-p','#{pid}:#{start_time}'),old);
+ assert.equal(f.snapshot('target'),replacement);
+});
+
+test('real session disappears after revalidation and before guarded kill: stop succeeds',async t=>{
+ const f=await fixture(t),key='gone-before-kill';
+ f.command('new-session','-d','-s','target','-e',`ZYLOS_RUN_ID=${key}`,'sleep 60');
+ let injected=false;
+ f.adapter.options.dependencies={...actualDependencies,openTmuxConnection:async options=>{
+  const connection=await actualDependencies.openTmuxConnection(options),command=connection.command.bind(connection);
+  connection.command=async(args,guard)=>{
+   if(args[0]==='kill-session'){
+    f.command('kill-session','-t',args[2]);injected=true;
+   }
+   return command(args,guard);
+  };return connection;
+ }};
+ await f.adapter.stop({tmuxName:'target',expectedRunId:key});
+ assert.equal(injected,true);
+ assert.equal(f.command('list-sessions','-F','#{session_name}'),'origin');
+ assert.equal(f.snapshot('origin'),f.origin);
+});
+
+test('pane disappears during initial stop observation while session survives: stop stays unconfirmed',async t=>{
+ const f=await fixture(t),key='observation-pane-race';
+ f.command('new-session','-d','-s','target','-e',`ZYLOS_RUN_ID=${key}`,'sleep 60');
+ const pane=f.command('display-message','-p','-t','=target:','#{pane_id}');
+ f.command('new-window','-d','-t','=target:','sleep 60');
+ let injected=false;
+ f.adapter.options.dependencies={...actualDependencies,openTmuxConnection:async options=>{
+  const connection=await actualDependencies.openTmuxConnection(options),command=connection.command.bind(connection);
+  connection.command=async(args,guard)=>{
+   if(args[0]==='show-environment'&&!injected){f.command('kill-pane','-t',pane);injected=true;}
+   return command(args,guard);
+  };return connection;
+ }};
+ await assert.rejects(f.adapter.stop({tmuxName:'target',expectedRunId:key}),{code:'STOP_UNCONFIRMED'});
+ assert.equal(injected,true);
+ assert.match(f.snapshot('target'),new RegExp(`:${key}$`));
+ assert.equal(f.snapshot('origin'),f.origin);
 });

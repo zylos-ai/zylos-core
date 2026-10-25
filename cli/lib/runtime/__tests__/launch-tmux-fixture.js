@@ -32,7 +32,7 @@ export async function setupLaunch(t) {
     const file = path.join(dir, 'tmux-wrapper');
     const pidFile = path.join(dir, 'client-pid');
     const calls = path.join(dir, 'client-calls');
-    await fs.writeFile(file, `#!/bin/bash\nprintf '%s\\n' "$$" > ${shellQuote(pidFile)}\nprintf 'create\\n' >> ${shellQuote(calls)}\nargs=("$@")\n${replacement===undefined ? '' : `for ((i=0; i<\${#args[@]}; i++)); do\n  if [[ "\${args[$i]}" == ZYLOS_MODEL_CONFIG=* ]]; then args[$i]=${shellQuote('ZYLOS_MODEL_CONFIG='+JSON.stringify(replacement))}; fi\ndone\n`}exec ${shellQuote(binary)} "\${args[@]}"\n`, {mode:0o700});
+    await fs.writeFile(file, `#!/bin/bash\nprintf '%s\\n' "$$" > ${shellQuote(pidFile)}\nprintf '%s\\n' \"$*\" >> ${shellQuote(calls)}\nargs=("$@")\n${replacement===undefined ? '' : `for ((i=0; i<\${#args[@]}; i++)); do\n  if [[ "\${args[$i]}" == ZYLOS_MODEL_CONFIG=* ]]; then args[$i]=${shellQuote('ZYLOS_MODEL_CONFIG='+JSON.stringify(replacement))}; fi\ndone\n`}exec ${shellQuote(binary)} "\${args[@]}"\n`, {mode:0o700});
     return {file,pidFile,calls};
   }
   return {dir, socketPath, server, tmux, launch, clientWrapper, killFrozenServer};

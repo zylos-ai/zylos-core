@@ -3,7 +3,7 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { groupRunDir, tmuxNameForGroup } from '../session-group-paths.js';
-import { tmuxError, serverGeneration } from './tmux-connection.js';
+import { tmuxError } from './tmux-connection.js';
 
 const exec = promisify(execFile);
 const bindings = new WeakMap();
@@ -72,7 +72,7 @@ export async function readTargetRuntime({ connection, paneId, rawF2, readProcess
       layer = rows.filter(row => parents.has(row.ppid) && !seen.has(row.pid));
     }
   } catch (error) {
-    if (error.code?.startsWith('TMUX_')) throw error;
+    if (error.code?.startsWith('TMUX_') || ['TARGET_GONE','GENERATION_CHANGED','RUNID_MISMATCH'].includes(error.code)) throw error;
     // An unreadable process tree is unknown, not permission to infer from config.
     runtime = 'unknown';
     runtimeObservation = 'unavailable';
@@ -80,8 +80,8 @@ export async function readTargetRuntime({ connection, paneId, rawF2, readProcess
   return { runtime, launchConfig, runtimeObservation };
 }
 
-async function environment(connection, sessionId) {
-  const text = await connection.command(['show-environment', '-t', sessionId]);
+async function environment(connection, sessionId, kind = 'pane') {
+  const text = await connection.command(['show-environment', '-t', sessionId], { kind });
   return Object.fromEntries(text.split('\n').filter(line => line.includes('=')).map(line => {
     const index = line.indexOf('='); return [line.slice(0, index), line.slice(index + 1)];
   }));
@@ -90,14 +90,26 @@ async function environment(connection, sessionId) {
 export async function observeSessionTarget({ sessionGroup, tmuxName = tmuxNameForGroup(sessionGroup ?? 'origin'), connection, readReady = readReadyIdentity, readProcessTree: getTree }) {
   const absent = { present: false, tmuxName, runId: null, createdAt: null, runtime: 'unknown', launchConfig: null, ready: false, sessionId: null };
   let output;
-  try { output = await connection.command(['display-message', '-p', '-t', `=${tmuxName}:`, '#{session_id}\t#{pane_id}\t#{session_created}']); }
-  catch (error) { if (missing(error)) return absent; throw error; }
+  const pinned = connection.binding;
+  if (pinned && pinned.tmuxName !== undefined && pinned.tmuxName !== tmuxName) {
+    throw tmuxError('TARGET_GONE', 'Cannot resolve a different name on a bound executor');
+  }
+  // tmux 3.2a dereferences a missing session for session_created; conditional
+  // expansion keeps initial name lookups safe while retaining an empty field.
+  try { output = await connection.command(['display-message', '-p', '-t', pinned?.paneId ?? `=${tmuxName}:`, '#{pid}:#{start_time}\t#{session_id}\t#{pane_id}\t#{?session_id,#{session_created},}']); }
+  catch (error) {
+    if (missing(error)) return absent;
+    if (error.code === 'TMUX_COMMAND_FAILED') throw tmuxError('TMUX_UNAVAILABLE', error.message, error.cause || 'error');
+    throw error;
+  }
   // display-message returns an empty format (not an error) for an absent target.
   if (!output.trim()) return absent;
-  const [tmuxSessionId, paneId, created] = output.trim().split('\t');
-  if (!/^\$\d+$/.test(tmuxSessionId) || !/^%\d+$/.test(paneId) || !/^\d+$/.test(created)) throw tmuxError('TMUX_UNAVAILABLE', 'Invalid tmux object identity', 'error');
+  const [generation, tmuxSessionId, paneId, created] = output.split('\t');
+  // Server formats still expand when display-message cannot find its target.
+  if (!pinned && /^\d+:\d+$/.test(generation) && tmuxSessionId === '' && paneId === '' && created === '') return absent;
+  if (!/^\d+:\d+$/.test(generation) || !/^\$\d+$/.test(tmuxSessionId) || !/^%\d+$/.test(paneId) || !/^\d+$/.test(created)) throw tmuxError('TMUX_UNAVAILABLE', 'Invalid tmux object identity', 'error');
   try {
-    const generation = await serverGeneration(connection);
+    connection.bindTarget({ serverGeneration: generation, tmuxSessionId, paneId, tmuxName });
     const rawF2 = await environment(connection, tmuxSessionId);
     const runId = rawF2.ZYLOS_RUN_ID || null;
     const runtime = await readTargetRuntime({ connection, paneId, rawF2, readProcessTree: getTree });
@@ -109,12 +121,18 @@ export async function observeSessionTarget({ sessionGroup, tmuxName = tmuxNameFo
     return freezeDeep(target);
   } catch (error) {
     if (missing(error)) throw tmuxError('TARGET_GONE', 'Target object disappeared during observation');
+    if (error.code === 'TMUX_COMMAND_FAILED') throw tmuxError('TMUX_UNAVAILABLE', error.message, error.cause || 'error');
     throw error;
   }
 }
 
 export async function resolveSessionTarget(options) {
-  const observed = await observeSessionTarget(options);
+  let observed;
+  try { observed = await observeSessionTarget(options); }
+  catch (error) {
+    if (error.code === 'TMUX_NO_SERVER') throw tmuxError('TARGET_GONE', 'Target server is absent');
+    throw error;
+  }
   if (!observed.present) throw tmuxError('TARGET_GONE', 'Target session is absent');
   if (!observed.runId) throw tmuxError('RUNID_MISMATCH', 'Target run ID is missing');
   const target = Object.freeze({ ...observed, sessionId: observed.tmuxSessionId });
@@ -122,16 +140,19 @@ export async function resolveSessionTarget(options) {
   return target;
 }
 
-export async function revalidateSessionTarget({ connection, target }) {
+export async function revalidateSessionTarget({ connection, target, kind = 'pane' }) {
   const binding = bindings.get(target);
   if (!binding || binding.connection !== connection) throw new TypeError('Target must be resolved on this connection');
-  if (await serverGeneration(connection) !== binding.serverGeneration) throw tmuxError('GENERATION_CHANGED', 'tmux server generation changed');
+  if (!['pane','session'].includes(kind)) throw new TypeError('Invalid target kind');
+  const generation = (await connection.command(['display-message', '-p', '#{pid}:#{start_time}'], { kind })).trim();
+  if (!/^\d+:\d+$/.test(generation)) throw tmuxError('TMUX_UNAVAILABLE', 'tmux server generation unavailable', 'error');
+  if (generation !== binding.serverGeneration) throw tmuxError('GENERATION_CHANGED', 'tmux server generation changed');
   let output, env;
   try {
-    output = await connection.command(['display-message', '-p', '-t', binding.paneId, '#{session_id}\t#{pane_id}']);
-    env = await environment(connection, binding.tmuxSessionId);
+    output = await connection.command(['display-message', '-p', '-t', kind === 'session' ? binding.tmuxSessionId : binding.paneId, kind === 'session' ? '#{session_id}' : '#{session_id}\t#{pane_id}'], { kind });
+    env = await environment(connection, binding.tmuxSessionId, kind);
   } catch (error) { if (missing(error)) throw tmuxError('TARGET_GONE', 'Bound tmux object disappeared'); throw error; }
-  if (output.trim() !== `${binding.tmuxSessionId}\t${binding.paneId}`) throw tmuxError('TARGET_GONE', 'Bound tmux object changed');
+  if (output.trim() !== (kind === 'session' ? binding.tmuxSessionId : `${binding.tmuxSessionId}\t${binding.paneId}`)) throw tmuxError('TARGET_GONE', 'Bound tmux object changed');
   if ((env.ZYLOS_RUN_ID || null) !== binding.runId) throw tmuxError('RUNID_MISMATCH', 'Target run ID changed');
   return true;
 }
