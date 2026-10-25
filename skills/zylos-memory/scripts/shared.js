@@ -13,7 +13,6 @@ export const SESSIONS_DIR = path.join(MEMORY_DIR, 'sessions');
 
 export const BUDGETS = {
   'identity.md': 16 * 1024,
-  'state.md': 16 * 1024,
   'references.md': 16 * 1024
 };
 
@@ -21,8 +20,7 @@ export const BUDGETS = {
 // threshold is still within budget, but must be audited on the next
 // Memory Sync before the always-loaded set bloats (#696, #702).
 export const WARN_THRESHOLDS = {
-  'references.md': 8 * 1024,
-  'state.md': 10 * 1024
+  'references.md': 8 * 1024
 };
 
 export const REFERENCE_FILES = [
