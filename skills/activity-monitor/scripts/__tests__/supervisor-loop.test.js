@@ -50,3 +50,45 @@ test('T01 legacy migration failure does not stop observation; accepted transitio
  f.calls.length=0;await f.loop.tick();assert.equal(calls,2);assert.equal(f.calls.includes('manual'),false);assert.ok(f.calls.includes('metrics'));
  f.calls.length=0;await f.loop.tick();assert.equal(calls,2);assert.ok(f.calls.includes('transition'));await f.loop.stop();
 });
+
+// B2/B6: one round samples scenes and admission authorities once under serialization.
+test('round shares one serialized snapshot and checks manual fences once', async () => {
+  let locked = false;
+  const counts = { configuration: 0, transition: 0, fences: 0, requests: 0, scenes: 0, manual: 0 };
+  const scenes = [{ sessionGroup: 'origin' }, { sessionGroup: 'group' }];
+  const fences = [], requests = [], contexts = [];
+  const read = (name, value) => async () => { assert.equal(locked, true); counts[name]++; return value; };
+  const phase = async context => { assert.equal(locked, true); contexts.push(context); };
+  const f = fixture({
+    lifecycleSerial: async action => { assert.equal(locked, false); locked = true; try { return await action(); } finally { locked = false; } },
+    readConfiguration: read('configuration', { mode: 'multi' }), getModeTransition: read('transition', null),
+    listDrainFences: read('fences', fences), readRestartRequests: read('requests', requests), observe: read('scenes', scenes),
+    checkManualFences: async context => { counts.manual++; await phase(context); return []; },
+    advanceManual: phase, advanceRestarts: phase, reconcileConfiguration: phase,
+    checkRotation: async (scene, context) => { assert.ok(scenes.includes(scene)); await phase(context); },
+    checkTtl: async (scene, context) => { assert.ok(scenes.includes(scene)); await phase(context); },
+    checkEviction: async (sample, context) => { assert.equal(sample, scenes); await phase(context); },
+    checkSync: async (sample, context) => { assert.equal(sample, scenes); await phase(context); },
+    probeAndPublish: async (scene, context) => { assert.equal(locked, false); assert.ok(scenes.includes(scene)); contexts.push(context); },
+    writeMetricsAndMaintain: async context => { assert.equal(locked, false); contexts.push(context); },
+  });
+  await f.loop.runRound();
+  assert.deepEqual(counts, { configuration: 1, transition: 1, fences: 1, requests: 1, scenes: 1, manual: 1 });
+  assert.ok(contexts.every(context => context === contexts[0]));
+  assert.equal(contexts[0].scenes, scenes); assert.equal(contexts[0].fences, fences); assert.equal(contexts[0].restartRequests, requests);
+});
+
+// DM54: corrupt intent is not an empty queue and must not strand durable D8 work.
+test('unreadable F9 is reported while the same snapshot still advances existing reclaim', async () => {
+  const failure = Object.assign(new Error('corrupt F9'), { code: 'REQUESTS_UNREADABLE' });
+  let observed;
+  const f = fixture({ readRestartRequests: async () => { throw failure; },
+    listDrainFences: async () => [{ sessionGroup: 'group', reason: 'upgrade', runId: 'run' }],
+    advanceReclaim: async (fence, context) => { observed = context; f.calls.push('reclaim'); },
+  });
+  await f.loop.start();
+  assert.equal(observed.restartRequestsError, failure);
+  assert.deepEqual(observed.restartRequests, []);
+  assert.ok(f.calls.includes('error:restart-requests')); assert.ok(f.calls.includes('reclaim')); assert.ok(f.calls.includes('metrics'));
+  await f.loop.stop();
+});

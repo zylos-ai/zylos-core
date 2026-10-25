@@ -63,7 +63,13 @@ export class SupervisorLoop {
       // Sample all round authorities and scenes while socket admission is excluded.
       this.configuration = await d.readConfiguration();
       context = { configuration: this.configuration, transition: await d.getModeTransition(),
-        fences: await d.listDrainFences(), restartRequests: await d.readRestartRequests() };
+        fences: await d.listDrainFences(), restartRequests: [] };
+      try { context.restartRequests = await d.readRestartRequests(); }
+      catch (error) {
+        // Unreadable intent blocks new work, but cannot strand existing D8 reclaim.
+        context.restartRequestsError = error;
+        await d.reportError(error, { phase: 'restart-requests' });
+      }
       context.scenes = await d.observe(context);
       context.manualRequests = [];
       if (d.checkManualFences) {

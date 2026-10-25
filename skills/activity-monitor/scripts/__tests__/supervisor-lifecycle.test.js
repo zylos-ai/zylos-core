@@ -428,3 +428,60 @@ test('failed reclaim database observations retain the fence and alert once witho
     releases.forEach(resolve => resolve());
   }
 });
+
+// B2: read-only producers consume captured authorities; no extra F9/D8/tmux reads.
+test('quiet lifecycle checks share sampled authorities without rereading runtime', async () => {
+  const f = fixture(); f.scenes[0].createdAt = f.now; f.requests = [];
+  const context = f.context;
+  const unexpected = () => { throw new Error('unexpected fresh read during quiet round'); };
+  f.db.getModeTransition = unexpected; f.db.listDrainFences = unexpected;
+  f.deps.requests.read = unexpected; f.deps.observeGroup = unexpected;
+  await f.lifecycle.checkManualFences(context); await f.lifecycle.advanceRestarts(context);
+  await f.lifecycle.reconcileConfiguration(context); await f.lifecycle.checkRotation(context.scenes[0], context);
+  await f.lifecycle.checkTtl(context.scenes[0], context); await f.lifecycle.checkEviction(context.scenes, context);
+  await f.lifecycle.checkSync(context.scenes, context);
+  assert.equal(f.controls.length, 0); assert.equal(f.stops.length, 0);
+});
+
+// B1/B2: a failed observation must not masquerade as absence or authorize writes.
+test('failed scene snapshots preserve upgrade intent and block lifecycle producers', async () => {
+  const f = fixture(); f.requests = [{ reason: 'upgrade', requestId: 'req', runIds: ['run-a'] }];
+  f.scenes[0] = { ...f.scenes[0], present: false, observationError: Object.assign(new Error('unavailable'), { code: 'TMUX_UNAVAILABLE' }) };
+  for (const action of [
+    () => f.lifecycle.advanceRestarts(f.context), () => f.lifecycle.reconcileConfiguration(f.context),
+    () => f.lifecycle.checkRotation(f.scenes[0], f.context), () => f.lifecycle.checkTtl(f.scenes[0], f.context),
+    () => f.lifecycle.checkEviction(f.scenes, f.context), () => f.lifecycle.checkSync(f.scenes, f.context),
+  ]) await assert.rejects(action(), { code: 'TMUX_UNAVAILABLE' });
+  assert.equal(f.requests.length, 1); assert.equal(f.controls.length, 0); assert.equal(f.fences.size, 0);
+});
+
+// B4: execution identifies the run only; sessionId is an admission check.
+test('manual execution ignores a later sessionId change and updates round snapshot after stop', async () => {
+  const f = fixture(); f.scenes = [scene('origin', { sessionId: 'new-session' })];
+  f.requests = [{ reason: 'manual_restart', requestId: 'manual', mode: 'multi', expectedRunId: 'run-origin', expectedSessionId: 'accepted-session' }];
+  const context = f.context;
+  await f.lifecycle.advanceManual(context);
+  assert.deepEqual(f.stops, ['run-origin']); assert.equal(context.scenes[0].present, false);
+  assert.deepEqual(context.fences, []); assert.deepEqual(context.restartRequests, []);
+});
+
+// B2: later consumers must see a replacement discovered by the mutation guard.
+test('reclaim replacement revalidation updates the shared round snapshot', async () => {
+  const f = fixture(), row = f.fence(), context = f.context;
+  f.deps.observeGroup = () => scene('a', { runId: 'replacement' });
+  assert.equal(await f.lifecycle.advanceReclaim(row, context), 'done');
+  assert.equal(context.scenes[0].runId, 'replacement'); assert.equal(context.scenes[0].present, true);
+  assert.deepEqual(context.fences, []); assert.deepEqual(f.stops, []);
+});
+
+test('unreadable intent blocks new lifecycle writes while authoritative D8 reclaim completes', async () => {
+  const f = fixture(), fence = f.fence(), context = f.context;
+  context.restartRequestsError = new Error('corrupt F9'); f.unsummarized = 20;
+  assert.deepEqual(await f.lifecycle.checkManualFences(context), []);
+  await f.lifecycle.advanceRestarts(context); await f.lifecycle.reconcileConfiguration(context);
+  await f.lifecycle.checkRotation(context.scenes[0], context); await f.lifecycle.checkTtl(context.scenes[0], context);
+  await f.lifecycle.checkSync(context.scenes, context);
+  assert.equal(f.controls.length, 0);
+  assert.equal(await f.lifecycle.advanceReclaim(fence, context), 'done');
+  assert.deepEqual(f.stops, ['run-a']); assert.equal(f.fences.size, 0);
+});

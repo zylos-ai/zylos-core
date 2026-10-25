@@ -92,7 +92,7 @@ export class SupervisorLifecycle {
   }
 
   allowed(group, context) {
-    if (context.transition || context.fences.some(fence => fence.sessionGroup === '*')) return false;
+    if (context.restartRequestsError || context.transition || context.fences.some(fence => fence.sessionGroup === '*')) return false;
     if (group !== null && context.fences.some(fence => fence.sessionGroup === group)) return false;
     return !((group === 'origin' || group === null) && context.restartRequests.some(request => request.reason === 'manual_restart'));
   }
@@ -101,6 +101,7 @@ export class SupervisorLifecycle {
     context.transition = await this.d.db.getModeTransition();
     context.fences = await this.d.db.listDrainFences();
     context.restartRequests = this.d.requests?.read() ?? [];
+    delete context.restartRequestsError;
   }
 
   async beforeWrite(group, context, scene) {
@@ -360,7 +361,7 @@ export class SupervisorLifecycle {
   async checkSync(scenes, context) {
     const now = this.now();
     if (this.lastSyncCheck !== null && now - this.lastSyncCheck < this.syncCheckMs) return;
-    if (context.transition || context.fences.some(fence => fence.sessionGroup === '*')) return;
+    if (context.restartRequestsError || context.transition || context.fences.some(fence => fence.sessionGroup === '*')) return;
     this.lastSyncCheck = now;
     await this.each(scenes, async scene => {
       if (scene.observationError) throw scene.observationError;
@@ -416,7 +417,7 @@ export class SupervisorLifecycle {
   }
 
   async advanceRestarts(context) {
-    if (context.transition) return;
+    if (context.restartRequestsError || context.transition) return;
     await this.each(context.restartRequests.filter(r => r.reason === 'upgrade'), async request => {
       const scenes = context.scenes;
       const failure = scenes.find(scene => scene.observationError);
@@ -440,12 +441,13 @@ export class SupervisorLifecycle {
   manualBlocked(request, context) {
     const group = request.mode === 'single' ? '*' : 'origin';
     const fence = context.fences.find(item => item.sessionGroup === group);
-    return modeOf(context) !== request.mode || context.transition ||
+    return context.restartRequestsError || modeOf(context) !== request.mode || context.transition ||
       request.mode === 'multi' && context.fences.some(item => item.sessionGroup === '*') ||
       fence && (fence.reason !== 'manual_restart' || fence.runId !== request.expectedRunId);
   }
 
   async checkManualFences(context) {
+    if (context.restartRequestsError) return [];
     const requests = context.restartRequests.filter(request => request.reason === 'manual_restart');
     const activeWarnings = new Set(), allowed = [];
     for (const fence of context.fences.filter(item => item.reason === 'manual_restart')) {
