@@ -32,7 +32,7 @@ test('false, truncated, removed and rotated diagnostics leave router decisions u
       }
       const failures = [];
       const stream = createJsonlStream(file, variant === 'write-failed' ? {
-        write: async () => { throw new Error('injected write failure'); },
+        write: () => { throw new Error('injected write failure'); },
       } : {});
       const diagnostics = createRouterDiagnostics({ stream, receiveStream: createJsonlStream(receive),
         now: f.now, stderr: message => failures.push(message) });

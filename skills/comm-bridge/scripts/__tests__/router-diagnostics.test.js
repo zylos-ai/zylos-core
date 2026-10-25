@@ -2,8 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
+import syncFs from 'node:fs';
+import { spawn } from 'node:child_process';
 import path from 'node:path';
-import { createJsonlStream, lockJsonlFile, JSONL_MAX_BYTES, JSONL_RETENTION_MS } from '../../../../cli/lib/jsonl-stream.js';
+import { createJsonlStream, JSONL_MAX_BYTES, JSONL_RETENTION_MS } from '../../../../cli/lib/jsonl-stream.js';
 import { createRouterDiagnostics } from '../router/diagnostics.js';
 
 async function fixture(t) {
@@ -13,80 +15,119 @@ async function fixture(t) {
 }
 const lines = async filename => (await fs.readFile(filename, 'utf8')).trimEnd().split('\n').filter(Boolean).map(JSON.parse);
 
-// IF10-11a: real inode locks, short writes, rollback, rotation and retention.
-test('JSONL short writes complete the line and failed writes restore the previous length', async t => {
-  const { file } = await fixture(t);
+// T07: readers ignore an incomplete tail and malformed newline-delimited segments.
+function completeRows(text) {
+  return text.split('\n').slice(0, -1).flatMap(line => {
+    try { return [JSON.parse(line)]; } catch { return []; }
+  });
+}
+
+test('one append write; short writes and failures preserve bytes and only report diagnostics', async t => {
+  const { file, directory } = await fixture(t);
   const normal = createJsonlStream(file);
   await normal.append({ id: 1 });
-  const short = createJsonlStream(file, { write: (fd, buffer, offset) => fd.write(buffer, offset, Math.min(3, buffer.length - offset), null) });
-  await short.append({ id: 2, text: 'longer than one write' });
   let calls = 0;
-  const failing = createJsonlStream(file, { write: async (fd, buffer, offset) => {
-    if (calls++) throw new Error('injected write failure');
-    return fd.write(buffer, offset, 4, null);
+  const errors = [];
+  const short = createJsonlStream(file, { write(fd, buffer) {
+    calls++;
+    assert(syncFs.fstatSync(fd).isFile());
+    const written = syncFs.writeSync(fd, buffer, 0, 4);
+    // Another writer can append before this writer notices its failure.
+    syncFs.appendFileSync(file, JSON.stringify({ id: 'adjacent' }) + '\n');
+    return written;
   } });
-  await assert.rejects(failing.append({ id: 3 }), /injected/);
-  assert.deepEqual((await lines(file)).map(row => row.id), [1, 2]);
+  const diagnostics = createRouterDiagnostics({ stream: short,
+    receiveStream: createJsonlStream(path.join(directory, 'receive-events.jsonl')),
+    stderr: text => errors.push(text) });
+  assert.equal(await diagnostics.diagnostic('deliver'), false);
+  assert.equal(calls, 1);
+  const damaged = await fs.readFile(file, 'utf8');
+  assert(damaged.includes('{"v"{"id":"adjacent"}\n'));
+  assert.deepEqual(completeRows(damaged), [{ id: 1 }]);
+  await normal.append({ id: 2 });
+  const before = await fs.readFile(file);
+  const failing = createJsonlStream(file, { write() { throw Error('injected disk failure'); } });
+  const failedDiagnostics = createRouterDiagnostics({ stream: failing, stderr: text => errors.push(text) });
+  assert.equal(await failedDiagnostics.diagnostic('deliver'), false);
+  assert.deepEqual(await fs.readFile(file), before);
+  assert.deepEqual(completeRows(before.toString()), [{ id: 1 }, { id: 2 }]);
+  assert.equal(errors.length, 2);
+  assert.match(errors[0], /short write/);
+  assert.match(errors[1], /injected disk failure/);
+  assert.deepEqual(completeRows('{"id":3}'), []);
 });
 
-test('a writer waiting on the old inode reopens after rotation', async t => {
-  const { file } = await fixture(t);
-  await createJsonlStream(file).append({ old: true });
-  let entered;
-  const opened = new Promise(resolve => { entered = resolve; });
-  let resume;
-  const gate = new Promise(resolve => { resume = resolve; });
-  let locks = 0;
-  const writer = createJsonlStream(file, { lock: async fd => {
-    if (locks++ === 0) { entered(); await gate; }
-    return lockJsonlFile(fd);
-  } });
-  const pending = writer.append({ fresh: true });
-  await opened;
-  const { rotated } = await createJsonlStream(file, { maxBytes: 1 }).maintain();
-  resume();
-  await pending;
-  assert.deepEqual(await lines(rotated), [{ old: true }]);
-  assert.deepEqual(await lines(file), [{ fresh: true }]);
-  assert.equal(locks, 2);
-});
+function writer(file, id, signal) {
+  const module = new URL('../../../../cli/lib/jsonl-stream.js', import.meta.url).href;
+  const source = `import {createJsonlStream} from ${JSON.stringify(module)};
+    const stream=createJsonlStream(process.argv[1]);
+    for(let i=0;i<200;i++) {
+      await stream.append({writer:process.argv[2],i,text:'界'.repeat(24000)});
+      if(i===99) { process.send('half'); await new Promise(resolve => process.once('message',resolve)); }
+    }`;
+  const child = spawn(process.execPath, ['--input-type=module', '-e', source, file, id],
+    { stdio: ['ignore', 'ignore', 'pipe', 'ipc'], signal });
+  let stderr = '';
+  child.stderr.on('data', data => { stderr += data; });
+  const done = new Promise((resolve, reject) => {
+    child.on('error', reject);
+    child.on('exit', code => code === 0 ? resolve() : reject(Error(stderr || `writer exited ${code}`)));
+  });
+  const half = new Promise(resolve => child.once('message', resolve));
+  return { child, done, half: Promise.race([half, done.then(() => { throw Error('writer exited before halfway'); })]) };
+}
 
-test('positive controls detect unlocked interleaving and an omitted inode check', async t => {
+test('two processes append 200 records each, including >64 KB lines, during rotation', { timeout: 30000 }, async t => {
   const { directory, file } = await fixture(t);
-  async function concurrent(filename, lock) {
-    const write = async (fd, buffer, offset) => {
-      const result = await fd.write(buffer, offset, 1, null);
-      await new Promise(resolve => setImmediate(resolve));
-      return result;
-    };
-    const first = createJsonlStream(filename, { lock, write });
-    const second = createJsonlStream(filename, { lock, write });
-    await Promise.all([first.append({ text: 'a'.repeat(100) }), second.append({ text: 'b'.repeat(100) })]);
-    return lines(filename);
+  const stream = createJsonlStream(file);
+  const writers = [writer(file, 'a', t.signal), writer(file, 'b', t.signal)];
+  let running = true;
+  const rotation = (async () => {
+    while (running) { await stream.maintain(); await new Promise(resolve => setTimeout(resolve, 1)); }
+  })();
+  try {
+    await Promise.all(writers.map(w => w.half));
+    // Also establish a deterministic rotation before the second half is written.
+    await stream.maintain();
+    assert((await fs.readdir(directory)).some(name => /^router-events\.\d+\.jsonl$/.test(name)));
+    for (const w of writers) w.child.send('continue');
+    await Promise.all(writers.map(w => w.done));
+  } finally {
+    running = false;
+    await rotation;
+    for (const w of writers) if (w.child.exitCode === null) w.child.kill();
+    await Promise.allSettled(writers.map(w => w.done));
   }
-  assert.equal((await concurrent(file, lockJsonlFile)).length, 2);
-  await assert.rejects(concurrent(path.join(directory, 'unlocked.jsonl'), async () => async () => {}), SyntaxError);
+  const rows = [];
+  let bytes = 0;
+  for (const name of await fs.readdir(directory)) {
+    const text = await fs.readFile(path.join(directory, name), 'utf8');
+    assert(text.endsWith('\n'));
+    const parsed = text.slice(0, -1).split('\n').map(JSON.parse);
+    rows.push(...parsed);
+    bytes += Buffer.byteLength(text);
+  }
+  assert.equal(rows.length, 400);
+  assert.equal(new Set(rows.map(row => `${row.writer}:${row.i}`)).size, 400);
+  assert(rows.every(row => ['a', 'b'].includes(row.writer) && row.i >= 0 && row.i < 200 && row.text === '界'.repeat(24000)));
+  assert.equal(bytes, rows.reduce((sum, row) => sum + Buffer.byteLength(JSON.stringify(row) + '\n'), 0));
+});
 
-  const sourcePath = new URL('../../../../cli/lib/jsonl-stream.js', import.meta.url);
-  const source = await fs.readFile(sourcePath, 'utf8');
-  const check = 'if (!current || !sameFile(opened, current)) continue;';
-  assert(source.includes(check));
-  const mutantSource = source.replace(check, '/* known-bad: no inode check */')
-    .replace("'./config-lock.js'", JSON.stringify(new URL('./config-lock.js', sourcePath).href));
-  const mutant = await import(`data:text/javascript;base64,${Buffer.from(mutantSource).toString('base64')}`);
-  const mutantFile = path.join(directory, 'mutant.jsonl');
-  await createJsonlStream(mutantFile).append({ old: true });
-  let opened, resume;
-  const entry = new Promise(resolve => { opened = resolve; });
-  const gate = new Promise(resolve => { resume = resolve; });
-  const writer = mutant.createJsonlStream(mutantFile, { lock: async fd => { opened(); await gate; return lockJsonlFile(fd); } });
-  const pending = writer.append({ fresh: true });
-  await entry;
-  const { rotated } = await createJsonlStream(mutantFile, { maxBytes: 1 }).maintain();
-  resume();
-  await pending;
-  const rotatedRows = await lines(rotated);
-  assert.throws(() => assert.deepEqual(rotatedRows, [{ old: true }]), assert.AssertionError);
+test('a writer opened before rename can append to the rotated file', async t => {
+  const { file } = await fixture(t);
+  await createJsonlStream(file).append({ id: 'before' });
+  const rotated = file.replace('.jsonl', '.1800000000000.jsonl');
+  let descriptor;
+  const writer = createJsonlStream(file, { write(fd, buffer) {
+    descriptor = fd;
+    syncFs.renameSync(file, rotated);
+    syncFs.appendFileSync(file, JSON.stringify({ id: 'current' }) + '\n');
+    return syncFs.writeSync(fd, buffer);
+  } });
+  await writer.append({ id: 'late' });
+  assert.throws(() => syncFs.fstatSync(descriptor), { code: 'EBADF' });
+  assert.deepEqual(await lines(rotated), [{ id: 'before' }, { id: 'late' }]);
+  assert.deepEqual(await lines(file), [{ id: 'current' }]);
 });
 
 test('10 MiB and seven day boundaries only affect this stream rotations', async t => {
