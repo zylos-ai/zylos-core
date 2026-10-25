@@ -5,9 +5,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { cleanup, rotate, list, commit, checkpoint, extractAbsorbedBlock } from '../sync-files.js';
 import { renderStateSkeleton } from '../state-format.js';
-import { MARKER_TTL_MS, memoryScope, markerPath } from '../sync-lock.js';
+import { acquire, memoryScope } from '../sync-lock.js';
 
-const token = 'a'.repeat(32), segment = '20261019T053002123Z';
+const segment = '20261019T053002123Z';
 async function fixture(t, group = 'telegram:test') {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'p07-files-'));
   const env = { ...process.env, ZYLOS_DIR: root, ZYLOS_RUN_ID: 'test-run' };
@@ -15,8 +15,7 @@ async function fixture(t, group = 'telegram:test') {
   if (group !== null) env.ZYLOS_SESSION_GROUP = group;
   const scope = await memoryScope(env), kind = group === null ? 'global' : 'group';
   fs.mkdirSync(scope.memoryDir, { recursive: true }); fs.mkdirSync(scope.runDir, { recursive: true });
-  const startedAt = Date.now();
-  fs.writeFileSync(markerPath(scope.runDir, kind), JSON.stringify({ runId: env.ZYLOS_RUN_ID, kind, token, startedAt, expiresAt: startedAt + MARKER_TTL_MS }));
+  const token = await acquire({ env, kind }, { currentRunId: async () => env.ZYLOS_RUN_ID });
   const settings = { token, env }, warnings = [], deps = { currentRunId: async () => env.ZYLOS_RUN_ID, warning: value => warnings.push(value) };
   const state = path.join(scope.memoryDir, 'state.md'), temporary = `${state}.${token}.tmp`;
   const skeleton = (ids = [], extra = {}) => renderStateSkeleton({ scope: scope.scope, syncedAt: '2026-10-19T05:30:02Z', absorbed: ids.length ? { runId: 'run-1', followUp: 'group', rows: ids.map(id => ({ id, timestamp: '2026-10-19 05:30:02', channel: 'telegram', endpointId: 'x', content: id === 2 ? '汉'.repeat(400) + '\nend' : `text ${id}` })) } : null, ...extra });
@@ -156,4 +155,17 @@ test('IB51 cleanup deletion failure is a failed step, not a successful cleanup',
   fs.unlinkSync(target); fs.mkdirSync(target);
   await assert.rejects(cleanup(f.settings, f.deps));
   assert.equal(fs.existsSync(target), true);
+});
+
+// IB48/IB51: renderer and extractor share line syntax; retained block is first.
+test('IB48 round trip and IB51 model Pending text preserve the exact retained document', async t => {
+  const f = await fixture(t), original = write(f, [1, 2, 3]);
+  const block = extractAbsorbedBlock(original);
+  assert.equal(block.entries.length, 3);
+  assert.equal(block.title + block.entries.map(entry => entry.raw).join(''), original.split('## Pending\n\n')[1].split('\n## Commitments')[0]);
+  const temporary = f.skeleton().replace('## Pending\n', '## Pending\n\n- model task\n');
+  fs.writeFileSync(f.temporary, temporary);
+  await commit({ ...f.settings, input: { followedUpIds: [1] } }, f.deps);
+  const expected = temporary.replace('- model task', block.title + block.entries.slice(1).map(entry => entry.raw).join('') + '- model task');
+  assert.equal(fs.readFileSync(f.state, 'utf8'), expected);
 });

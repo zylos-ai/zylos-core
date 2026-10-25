@@ -1,0 +1,20 @@
+Running 1 Node test files
+✔ T01 actual entry restores before Sock admission and shuts down with a partial-line peer (122.486814ms)
+✔ T01 duplicate entry preserves the original listener; non-socket paths remain intact (189.316329ms)
+✔ T01 bad startup F1 keeps Sock closed to mutations; restore failure cleans up listener (194.083292ms)
+✔ T01 copied installed skills resolve the separate Core package and serve actual Sock requests (156.100606ms)
+✔ T02 entry freezes first-failure notice synchronously with correct single/multi SQL scope (254.71825ms)
+✔ T01 legacy F1 opens actual entry as single and reports unavailable automatic migration separately (199.475189ms)
+(node:257591) ExperimentalWarning: Module mocking is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:257591) DeprecationWarning: mock.module(): options.namedExports is deprecated. Use options.exports instead.
+✔ C4 monitor signal handler reports stop rejection and exits unsuccessfully (0.867139ms)
+✔ C4 canonical PM2 wrapper invokes the monitor entry even when imported indirectly (3.506054ms)
+ℹ tests 8
+ℹ suites 0
+ℹ pass 8
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1245.207637

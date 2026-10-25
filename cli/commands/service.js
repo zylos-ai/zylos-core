@@ -10,7 +10,7 @@ import path from 'node:path';
 import { ZYLOS_DIR, SKILLS_DIR, readZylosConfigOrThrow } from '../lib/config.js';
 import { bold, dim, green, red, yellow, cyan, success, error, warn, heading } from '../lib/colors.js';
 import { commandExists } from '../lib/shell-utils.js';
-import { getActiveAdapter } from '../lib/runtime/index.js';
+import { getSessionAdapter } from '../lib/runtime/index.js';
 import { getCoreEcosystemPath, restartFromEcosystem, restartManagedProcess } from '../lib/pm2.js';
 
 function shellQuote(value) {
@@ -89,7 +89,7 @@ export async function showStatus() {
     // Check authentication via adapter (same logic as the running process uses)
     let authStatus = 'failure';
     try {
-      const adapter = getActiveAdapter();
+      const adapter = getSessionAdapter(activeRuntime);
       const authResult = await adapter.checkAuth();
       authStatus = authResult.status || 'failure';
     } catch {}

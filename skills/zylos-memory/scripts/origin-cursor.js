@@ -3,9 +3,8 @@ import { guard } from './sync-lock.js';
 import { inputError, isMain, options, runCli } from './sync-cli.js';
 
 export async function advance({ group, syncedId, checkpointId, ...settings }, deps = {}) {
-  return guard({ ...settings, kind: 'origin' }, async ({ assertHeld }) => {
+  return guard({ ...settings, kind: 'origin' }, async () => {
     const database = deps.database || await import('../../comm-bridge/scripts/c4-db.js');
-    assertHeld();
     return database.advanceOriginSyncCursor(group, { syncedId, checkpointId });
   }, deps);
 }

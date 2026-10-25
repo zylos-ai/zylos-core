@@ -1,0 +1,11 @@
+{
+  "command": [
+    "node",
+    "--experimental-vm-modules",
+    "node_modules/.bin/jest",
+    "--runInBand"
+  ],
+  "exitCode": 0,
+  "seconds": 8.392931938171387,
+  "fixtureCorrection": "Existing web-console node_modules symlink; initial failure retained in b-jest-initial-missing-deps.log"
+}

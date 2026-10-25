@@ -7,10 +7,10 @@ import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { fileURLToPath } from 'node:url';
 import { fixture as storeFixture } from '../../../comm-bridge/scripts/__tests__/c4-v2-test-helpers.js';
-import { MARKER_TTL_MS, memoryScope, markerPath } from '../sync-lock.js';
+import { acquire, memoryScope } from '../sync-lock.js';
 import { renderStateSkeleton } from '../state-format.js';
 import { cleanup, list, commit } from '../sync-files.js';
-const token = 'a'.repeat(32), segment = '20261019T053002123Z';
+const segment = '20261019T053002123Z';
 async function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'p07-crash-'));
   fs.mkdirSync(path.join(root, 'comm-bridge'));
@@ -18,8 +18,7 @@ async function fixture(t) {
   const env = { ...process.env, ZYLOS_DIR: root, ZYLOS_RUN_ID: 'crash-test', ZYLOS_SESSION_GROUP: 'origin' };
   const scope = await memoryScope(env);
   fs.mkdirSync(scope.runDir, { recursive: true }); fs.mkdirSync(scope.memoryDir, { recursive: true });
-  const startedAt = Date.now();
-  fs.writeFileSync(markerPath(scope.runDir, 'group'), JSON.stringify({ kind: 'group', token, runId: env.ZYLOS_RUN_ID, startedAt, expiresAt: startedAt + MARKER_TTL_MS }));
+  const token = await acquire({ env, kind: 'group' }, { currentRunId: async () => env.ZYLOS_RUN_ID });
   const original = renderStateSkeleton({ scope: 'origin', syncedAt: '2026-10-19T00:00:00Z' });
   const state = path.join(scope.memoryDir, 'state.md'), temporary = `${state}.${token}.tmp`, piece = path.join(scope.memoryDir, `inbox.${segment}.md`);
   fs.writeFileSync(state, original); fs.writeFileSync(piece, 'commitment: keep this');
@@ -30,7 +29,7 @@ async function fixture(t) {
 }
 async function killAt(t, f, phase, end) {
   const worker = fileURLToPath(new URL('./fixtures/sync-crash-worker.js', import.meta.url));
-  const child = spawn(process.execPath, [worker, phase, String(end), token], { env: f.env, stdio: ['ignore', 'pipe', 'pipe'] });
+  const child = spawn(process.execPath, [worker, phase, String(end), f.settings.token], { env: f.env, stdio: ['ignore', 'pipe', 'pipe'] });
   const closed = once(child, 'close');
   t.after(() => { if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL'); });
   let errors = ''; child.stderr.on('data', data => { errors += data; });

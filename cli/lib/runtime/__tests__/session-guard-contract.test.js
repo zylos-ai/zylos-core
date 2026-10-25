@@ -171,10 +171,17 @@ test('IF-13 marker-looking pane content and message syntax are data, not guard o
 });
 
 for(const method of ['sendText','sendKeys'])test(`IF-13 ${method} guarded command timeout uses its step error`,async t=>{
-  const f=await fixture(t),connection=await openTmuxConnection(f.options);t.after(()=>connection.close());
+  const f=await fixture(t);
+  // Setup starts a Node wrapper for every ordinary tmux read. Under parallel
+  // suite load its startup can exceed the deliberately short fault deadline.
+  f.options.timeoutMs=2000;
+  const connection=await openTmuxConnection(f.options);t.after(()=>connection.close());
   const target=await resolveSessionTarget({sessionGroup:'origin',connection}),adapter=new SessionAdapter();
+  f.options.timeoutMs=100; // Keep the actual injected hang deadline unchanged.
   await fs.writeFile(f.flag,'1');
+  const started=performance.now();
   await assert.rejects(adapter[method]({connection,target,text:'never sent',keys:['Enter']}),{code:method==='sendText'?'PASTE_FAILED':'ENTER_UNVERIFIED',cause:'timeout'});
+  assert.ok(performance.now()-started>=90,'injected command must reach its 100ms timeout');
   assert.equal(connection.closed,true);
 });
 

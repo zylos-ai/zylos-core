@@ -1,0 +1,24 @@
+Running 2 Node test files
+✔ IF-36 single actual M4/client lost reply requery retains original target and preserves same-name replacement (778.902584ms)
+✔ IF-36 multi actual M4/client lost reply requery retains original target and preserves same-name replacement (805.441859ms)
+✔ DM-42 actual manual M4 SIGKILL before-remove preserves truthful completion without resubmission (658.268283ms)
+✔ DM-42 actual manual M4 SIGKILL after-remove preserves truthful completion without resubmission (671.418522ms)
+✔ IF-36 actual entry rejects already observed session change before manual acceptance; ignoring session fails (952.067386ms)
+✔ IF-36 single actual entry stops accepted run after session changes without rechecking sessionId (580.142084ms)
+✔ IF-36 multi actual entry stops accepted run after session changes without rechecking sessionId (613.22848ms)
+✔ IF-36 missing post-acceptance hook marker retains run-level stop boundary without invented atomic session proof (588.282549ms)
+✔ IF-36 invalid READY empty session does not invent a context-change veto (558.672821ms)
+✔ IF-36 invalid READY missing timestamp does not invent a context-change veto (571.965154ms)
+✔ IF-36 invalid READY noninteger timestamp does not invent a context-change veto (590.40672ms)
+✔ IF-36 invalid READY missing control IDs does not invent a context-change veto (530.770555ms)
+✔ IF-36 invalid READY nonarray control IDs does not invent a context-change veto (568.761606ms)
+✔ IF-36 invalid READY noninteger control ID does not invent a context-change veto (567.608413ms)
+✔ IF-36 replacement READY identity preserves replacement and renamed original (552.565538ms)
+ℹ tests 15
+ℹ suites 0
+ℹ pass 15
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 6749.004649

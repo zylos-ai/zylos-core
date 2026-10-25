@@ -2,12 +2,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { guard, memoryScope, memoryError } from './sync-lock.js';
-import { parseStateHeader, validateStateDocument } from './state-format.js';
+import { parseStateHeader, validateStateDocument, absorbedTitle, absorbedEntry } from './state-format.js';
 import { inputError, isMain, options, parseJson, readInput, runCli } from './sync-cli.js';
 
 const segment = /^inbox\.(\d{8}T\d{9}Z(?:-[1-9]\d*)?)\.md$/;
-const absorbedTitle = /^- \[切换来信\] run=(\S+) 共 \d+ 条（#\d+–#\d+）；回复：c4-send\.js --absorbed-reply \1 <id>；全文：c4-fetch\.js --absorbed --run-id \1 --id <id>$/;
-const absorbedEntry = /^- #(\d+) \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z \[.*\] .*$/;
 const warn = message => console.error(`Warning: ${message}`);
 const lines = text => (text.match(/[^\n]*(?:\n|$)/g) || []).filter(Boolean).map(raw => ({ raw, text: raw.replace(/\r?\n$/, '') }));
 function readOptional(file) {
@@ -16,8 +14,7 @@ function readOptional(file) {
 function names(dir) {
   try { return fs.readdirSync(dir); } catch (error) { if (error.code === 'ENOENT') return []; throw error; }
 }
-const kindFor = async env => (await memoryScope(env)).sessionGroup === null ? 'global' : 'group';
-const locked = async (settings, body, deps) => guard({ ...settings, kind: await kindFor(settings.env) }, body, deps);
+const locked = (settings, body, deps) => guard(settings, body, deps);
 
 export function extractAbsorbedBlock(text) {
   const all = lines(text), pending = all.findIndex(line => line.text === '## Pending');
@@ -34,7 +31,6 @@ export function extractAbsorbedBlock(text) {
   return { title: all[start].raw, entries };
 }
 export function composeState(official, temporary, followedUpIds, warning = warn) {
-  if (!Array.isArray(followedUpIds) || followedUpIds.some(id => !Number.isSafeInteger(id) || id <= 0)) throw inputError('followedUpIds must contain positive integer IDs');
   const block = extractAbsorbedBlock(official), known = new Set(block.entries.map(entry => entry.id));
   if (followedUpIds.some(id => !known.has(id))) throw inputError('followedUpIds contains an ID absent from the official Pending block');
   const followed = new Set(followedUpIds), remaining = block.entries.filter(entry => !followed.has(entry.id));
@@ -66,19 +62,19 @@ function deleteSegments(dir, ids, warning = warn, tolerateFailure = false) {
 }
 
 export async function cleanup(settings = {}, deps = {}) {
-  return locked(settings, ({ memoryDir, scope, assertHeld }) => {
+  return locked(settings, ({ memoryDir, scope }) => {
     const header = parseStateHeader(readOptional(path.join(memoryDir, 'state.md')), { scope });
-    if (header.valid) { assertHeld(); deleteSegments(memoryDir, header.inboxCommitted, deps.warning); }
+    if (header.valid) { deleteSegments(memoryDir, header.inboxCommitted, deps.warning); }
     else (deps.warning || warn)('Invalid state header; all inbox segments retained');
     for (const name of names(memoryDir)) {
       if (/^state\.md\.[^.]+\.tmp$/.test(name) && name !== `state.md.${settings.token}.tmp`) {
-        assertHeld(); fs.unlinkSync(path.join(memoryDir, name));
+        fs.unlinkSync(path.join(memoryDir, name));
       }
     }
   }, deps);
 }
 export async function rotate(settings = {}, deps = {}) {
-  return locked(settings, ({ memoryDir, assertHeld }) => {
+  return locked(settings, ({ memoryDir }) => {
     const inbox = path.join(memoryDir, 'inbox.md');
     let stat;
     try { stat = fs.statSync(inbox); } catch (error) { if (error.code === 'ENOENT') return null; throw error; }
@@ -86,7 +82,7 @@ export async function rotate(settings = {}, deps = {}) {
     const id = new Date().toISOString().replace(/[-:.]/g, '');
     let chosen = id, suffix = 0;
     while (fs.existsSync(path.join(memoryDir, `inbox.${chosen}.md`))) chosen = `${id}-${++suffix}`;
-    assertHeld(); fs.renameSync(inbox, path.join(memoryDir, `inbox.${chosen}.md`));
+    fs.renameSync(inbox, path.join(memoryDir, `inbox.${chosen}.md`));
     return chosen;
   }, deps);
 }
@@ -97,16 +93,15 @@ export async function list({ env = process.env } = {}) {
   return names(memoryDir).map(name => segment.exec(name)?.[1]).filter(id => id && !committed.has(id)).sort();
 }
 export async function checkpoint({ end, summary, noContent = false, ...settings }, deps = {}) {
-  return locked(settings, async ({ scope, assertHeld }) => {
+  return locked(settings, async ({ scope }) => {
     const database = deps.database || await import('../../comm-bridge/scripts/c4-db.js');
-    assertHeld();
     return database.createCheckpoint(scope, end, noContent ? null : summary, { noContent });
   }, deps);
 }
 export async function commit({ input, ...settings }, deps = {}) {
-  const payload = typeof input === 'string' ? parseJson(input) : input;
-  if (!payload || Array.isArray(payload) || typeof payload !== 'object' || !Array.isArray(payload.followedUpIds) || payload.followedUpIds.some(id => !Number.isSafeInteger(id) || id <= 0)) throw inputError('Expected {followedUpIds:[positive integer IDs]}');
-  return locked(settings, ({ memoryDir, scope, assertHeld }) => {
+  return locked(settings, ({ memoryDir, scope }) => {
+    const payload = typeof input === 'string' ? parseJson(input) : input;
+    if (!payload || Array.isArray(payload) || typeof payload !== 'object' || !Array.isArray(payload.followedUpIds) || payload.followedUpIds.some(id => !Number.isSafeInteger(id) || id <= 0)) throw inputError('Expected {followedUpIds:[positive integer IDs]}');
     const officialPath = path.join(memoryDir, 'state.md'), temporaryPath = `${officialPath}.${settings.token}.tmp`;
     const official = readOptional(officialPath);
     let temporary;
@@ -115,9 +110,7 @@ export async function commit({ input, ...settings }, deps = {}) {
     const combined = composeState(official, temporary, payload.followedUpIds, deps.warning);
     if (!validateStateDocument(combined, { scope })) throw memoryError('STATE_DOCUMENT_INVALID', 'State header or required sections are invalid');
     const header = parseStateHeader(combined, { scope });
-    assertHeld();
     fs.writeFileSync(temporaryPath, combined, 'utf8');
-    assertHeld();
     fs.renameSync(temporaryPath, officialPath);
     // Publication is complete. A failed delete cannot roll back the state.
     deleteSegments(memoryDir, header.inboxCommitted, deps.warning, true);

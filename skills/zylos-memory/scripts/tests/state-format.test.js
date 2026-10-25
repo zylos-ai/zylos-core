@@ -95,3 +95,23 @@ test('IB48 timestamp conversion is UTC, second precision, supplied syncedAt reta
   const text = renderStateSkeleton({ scope: '*', syncedAt: '2026-10-19T13:30:02+08:00' });
   assert.match(text, /synced_at=2026-10-19T13:30:02\+08:00/);
 });
+
+// A P2-1 / IB-48: freeze the entire rendered document, including Pending placement.
+test('IB-48 absorbed title and rows appear at the start of Pending in the full document', () => {
+  assert.equal(render([row(2), row(1)]), `<!-- zylos-state v1 | scope=telegram:g-123 | synced_at=2026-10-19T05:30:02Z | coverage= | inbox_committed= -->
+
+# Working State
+
+## Headline
+
+## In Progress
+
+## Pending
+
+- [切换来信] run=run-1 共 2 条（#1–#2）；回复：c4-send.js --absorbed-reply run-1 <id>；全文：c4-fetch.js --absorbed --run-id run-1 --id <id>
+- #1 2026-10-19T05:30:02Z [telegram -123|msg:91] hello
+- #2 2026-10-19T05:30:02Z [telegram -123|msg:91] hello
+
+## Commitments
+`);
+});

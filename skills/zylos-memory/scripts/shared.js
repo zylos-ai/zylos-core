@@ -35,20 +35,20 @@ export const REFERENCE_FILES = [
  * Side effect: sets process.env.TZ, which changes Date behavior process-wide.
  * @returns {string|null} timezone string or null
  */
-export function loadTimezoneFromEnv() {
-  const envPath = path.join(ZYLOS_DIR, '.env');
+export function loadTimezoneFromEnv(root = ZYLOS_DIR, targetEnv = process.env) {
+  const envPath = path.join(root, '.env');
   try {
     const envText = fs.readFileSync(envPath, 'utf8');
     const env = parse(envText);
     if (env.TZ) {
-      process.env.TZ = env.TZ;
+      targetEnv.TZ = env.TZ;
       return env.TZ;
     }
   } catch {
     // .env may not exist on fresh setups
   }
 
-  return process.env.TZ || null;
+  return targetEnv.TZ || null;
 }
 
 const MAX_WALK_DEPTH = 10;

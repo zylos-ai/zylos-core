@@ -2,13 +2,13 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { pathToFileURL } from 'node:url';
 import { performance } from 'node:perf_hooks';
 import { resolveCoreConfigModule } from '../../comm-bridge/scripts/core-config-loader.js';
 
 export const MARKER_TTL_MS = 1800000;
-export const memoryError = (code, message) => Object.assign(new Error(message), { code,
-  exitCode: ['SYNC_BUSY', 'LOCK_TIMEOUT'].includes(code) ? 2 : code === 'TOKEN_MISMATCH' ? 3 : 1 });
+import { memoryError, reportMemoryError, isMain, options, runCli } from './sync-cli.js';
+export { memoryError, reportMemoryError } from './sync-cli.js';
 
 // The child only acquires a lock on an inherited descriptor. It exits before
 // the callback starts; the parent retains the same open-file description.
@@ -21,16 +21,16 @@ exit 0;
 `;
 
 /** Fixed-inode kernel lock. The callback and retained lock fd live together. */
-export async function withMemoryLock(runDir, action, { waitMs = 10000, signal } = {}) {
+export async function withMemoryLock(runDir, action, { waitMs = 10000 } = {}) {
   if (typeof runDir !== 'string' || !runDir || typeof action !== 'function' ||
       !Number.isFinite(waitMs) || waitMs < 0 || waitMs > 10000) {
     throw memoryError('INVALID_INPUT', 'Invalid memory lock arguments');
   }
   if (!['linux', 'darwin'].includes(process.platform)) throw memoryError('LOCK_UNAVAILABLE', 'Kernel memory locking is unavailable');
-  if (signal?.aborted || waitMs === 0) throw memoryError('LOCK_TIMEOUT', 'Memory lock wait cancelled');
+  if (waitMs === 0) throw memoryError('LOCK_TIMEOUT', 'Memory lock acquisition timed out');
   const started = performance.now();
   const lockPath = path.join(runDir, 'memory.lock');
-  let fd, held = false;
+  let fd;
   try {
     fs.mkdirSync(runDir, { recursive: true, mode: 0o700 });
     fd = fs.openSync(lockPath, fs.constants.O_CREAT | fs.constants.O_RDWR | fs.constants.O_NOFOLLOW, 0o600);
@@ -46,39 +46,25 @@ export async function withMemoryLock(runDir, action, { waitMs = 10000, signal } 
       const child = spawn(executable, args, { stdio: ['ignore', 'ignore', 'pipe', fd] });
       let failure, diagnostic = '';
       const cancel = () => {
-        failure ??= memoryError('LOCK_TIMEOUT', 'Memory lock acquisition timed out or cancelled');
+        failure ??= memoryError('LOCK_TIMEOUT', 'Memory lock acquisition timed out');
         child.kill('SIGKILL');
       };
       const timer = setTimeout(cancel, remaining);
-      signal?.addEventListener('abort', cancel, { once: true });
-      if (signal?.aborted) cancel();
       child.stderr.on('data', chunk => { diagnostic = (diagnostic + chunk).slice(-2048); });
       child.on('error', cause => { failure ??= memoryError('LOCK_UNAVAILABLE', cause.message); });
       // Reap before closing the inherited fd or rejecting; a late acquisition
-      // can never run the callback after timeout/cancellation.
+      // can never run the callback after timeout.
       child.on('close', code => {
-        clearTimeout(timer); signal?.removeEventListener('abort', cancel);
-        if (signal?.aborted || performance.now() - started >= waitMs || code === 75) {
-          failure ??= memoryError('LOCK_TIMEOUT', 'Memory lock acquisition timed out or cancelled');
+        clearTimeout(timer);
+        if (performance.now() - started >= waitMs || code === 75) {
+          failure ??= memoryError('LOCK_TIMEOUT', 'Memory lock acquisition timed out');
         }
         if (!failure && code !== 0) failure = memoryError('LOCK_UNAVAILABLE', diagnostic.trim() || 'Kernel lock acquisition failed');
         failure ? reject(failure) : resolve();
       });
     });
-    held = true;
-    const assertHeld = () => {
-      if (!held) throw memoryError('LOCK_LOST', 'Memory lock is no longer held');
-      const current = fs.lstatSync(lockPath);
-      if (!current.isFile() || current.dev !== inode.dev || current.ino !== inode.ino) {
-        throw memoryError('LOCK_LOST', 'Memory lock inode changed');
-      }
-    };
-    assertHeld();
-    const result = await action(assertHeld);
-    assertHeld();
-    return result;
+    return await action();
   } finally {
-    held = false;
     if (fd !== undefined) fs.closeSync(fd);
   }
 }
@@ -97,9 +83,8 @@ export function readMarker(runDir, kind, warn = message => process.stderr.write(
     return { marker: null, reason: 'invalid' };
   }
   if (!value || typeof value.runId !== 'string' || !value.runId || !['group', 'origin', 'global'].includes(value.kind) ||
-      !/^[0-9a-f]{32}$/.test(value.token || '') || !Number.isSafeInteger(value.startedAt) || value.startedAt < 0 ||
-      !Number.isSafeInteger(value.expiresAt) || value.expiresAt !== value.startedAt + MARKER_TTL_MS ||
-      (kind === 'origin') !== (value.kind === 'origin')) {
+      !/^[0-9a-f]{32}$/.test(value.token || '') ||
+      !Number.isSafeInteger(value.expiresAt) || value.expiresAt < 0) {
     warn('Warning: invalid Sync marker');
     return { marker: null, reason: 'invalid' };
   }
@@ -119,7 +104,7 @@ export async function memoryScope(env = process.env) {
   const coreDir = path.dirname(resolveCoreConfigModule());
   const paths = await import(pathToFileURL(path.join(coreDir, 'session-group-paths.js')).href);
   const run = paths.runDirFromEnv(env);
-  return { ...run, runDir: run.dir, root: paths.zylosRoot(env),
+  return { ...run, runDir: paths.groupRunDir(run.sessionGroup || 'origin', env), root: paths.zylosRoot(env),
     memoryDir: run.sessionGroup ? paths.groupMemoryDir(run.sessionGroup, env) : path.join(paths.zylosRoot(env), 'memory'),
     runId: env.ZYLOS_RUN_ID || null, scope: run.sessionGroup || '*' };
 }
@@ -148,7 +133,7 @@ export async function readCurrentRunId(scope, { tmux } = {}) {
   } finally { connection?.close(); }
 }
 
-export async function acquire({ kind, env = process.env, waitMs, signal }, { currentRunId = readCurrentRunId, now = Date.now } = {}) {
+export async function acquire({ kind, env = process.env, waitMs }, { currentRunId = readCurrentRunId, now = Date.now } = {}) {
   const scope = await memoryScope(env);
   checkKind(scope, kind);
   return withMemoryLock(scope.runDir, async () => {
@@ -165,33 +150,38 @@ export async function acquire({ kind, env = process.env, waitMs, signal }, { cur
     fs.writeFileSync(temp, JSON.stringify(marker) + '\n', { mode: 0o600, flag: 'wx' });
     fs.renameSync(temp, target);
     return token;
-  }, { waitMs, signal });
+  }, { waitMs });
 }
 
-export async function release({ kind, token, env = process.env, waitMs, signal }) {
+export async function release({ kind, token, env = process.env, waitMs }) {
   const scope = await memoryScope(env);
   checkKind(scope, kind);
   if (!/^[0-9a-f]{32}$/.test(token || '')) throw memoryError('INVALID_INPUT', 'Invalid Sync token');
   return withMemoryLock(scope.runDir, () => {
     const { marker } = readMarker(scope.runDir, kind);
     if (marker?.token === token) fs.unlinkSync(markerPath(scope.runDir, kind));
-  }, { waitMs, signal });
+  }, { waitMs });
 }
 
 /** All guarded mutations check ownership and execute in the same F8 section. */
-export async function guard({ kind, token, env = process.env, waitMs, signal }, action,
-  { currentRunId = readCurrentRunId } = {}) {
-  const scope = await memoryScope(env);
-  checkKind(scope, kind);
+export async function guard({ kind, token, env = process.env, waitMs }, action) {
+  let scope;
+  try { scope = await memoryScope(env); }
+  catch (error) {
+    if (error.code === 'SESSION_GROUP_INVALID') throw memoryError('SCOPE_UNBOUND', 'Invalid running scope');
+    throw error;
+  }
+  const defaultKind = scope.kind === 'group' ? 'group' : 'global';
+  checkKind(scope, kind === 'auto' ? defaultKind : kind ?? defaultKind);
   if (!/^[0-9a-f]{32}$/.test(token || '')) throw memoryError('TOKEN_MISMATCH', 'Sync token is missing or invalid');
-  return withMemoryLock(scope.runDir, async assertHeld => {
-    const { marker } = readMarker(scope.runDir, kind);
-    if (!marker || marker.token !== token || marker.kind !== kind || marker.runId !== scope.runId ||
-        await currentRunId(scope) !== scope.runId) {
-      throw memoryError('TOKEN_MISMATCH', 'Sync ownership no longer matches');
-    }
-    return action({ ...scope, marker, assertHeld });
-  }, { waitMs, signal });
+  return withMemoryLock(scope.runDir, () => {
+    const kinds = kind === 'auto' && scope.sessionGroup === 'origin'
+      ? ['group', 'origin'] : [kind === 'auto' ? defaultKind : kind ?? defaultKind];
+    const marker = kinds.map(candidate => readMarker(scope.runDir, candidate).marker)
+      .find((marker, i) => marker && marker.token === token && marker.kind === kinds[i]);
+    if (!marker || marker.runId !== scope.runId) throw memoryError('TOKEN_MISMATCH', 'Sync ownership no longer matches');
+    return action({ ...scope, marker });
+  }, { waitMs });
 }
 
 export async function status({ group, env = process.env } = {}, { currentRunId = readCurrentRunId } = {}) {
@@ -203,28 +193,14 @@ export async function status({ group, env = process.env } = {}, { currentRunId =
   return result;
 }
 
-export function reportMemoryError(error) {
-  process.stderr.write(`Error [${error.code || 'IO_ERROR'}]: ${error.message}\n`);
-  process.exitCode = error.exitCode || 1;
-}
-
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  try {
-    const [command, ...args] = process.argv.slice(2);
-    const values = {};
-    for (let i = 0; i < args.length; i++) {
-      if (args[i] === '--json' && command === 'status') values.json = true;
-      else if (['--kind', '--token', '--group'].includes(args[i]) && args[i + 1]) {
-        const key = args[i].slice(2);
-        if (Object.hasOwn(values, key)) throw memoryError('INVALID_INPUT', 'Duplicate argument');
-        values[key] = args[++i];
-      } else throw memoryError('INVALID_INPUT', 'Invalid argument');
-    }
-    if (command === 'status' && !values.kind && !values.token) {
-      process.stdout.write(JSON.stringify(await status(values), null, values.json ? 0 : 2) + '\n');
-    } else if (command === 'acquire' && !values.group && !values.token && !values.json) {
-      process.stdout.write(await acquire(values) + '\n');
-    } else if (command === 'release' && !values.group && !values.json) await release(values);
-    else throw memoryError('INVALID_INPUT', 'Invalid Sync lock command');
-  } catch (error) { reportMemoryError(error); }
-}
+if (isMain(import.meta.url)) await runCli(async () => {
+  const [command, ...args] = process.argv.slice(2);
+  const values = options(args, ['kind', 'token', 'group'], ['json']);
+  if (values.positional.length) throw memoryError('INVALID_INPUT', 'Unexpected positional arguments');
+  if (command === 'status' && !values.kind && !values.token) {
+    process.stdout.write(JSON.stringify(await status(values), null, values.json ? 0 : 2) + '\n');
+  } else if (command === 'acquire' && !values.group && !values.token && !values.json) {
+    process.stdout.write(await acquire(values) + '\n');
+  } else if (command === 'release' && !values.group && !values.json) await release(values);
+  else throw memoryError('INVALID_INPUT', 'Invalid Sync lock command');
+});
