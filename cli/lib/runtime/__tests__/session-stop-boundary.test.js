@@ -34,10 +34,11 @@ test('run mismatch including null-vs-keyed refuses before revalidation or kill',
     const f=fixture({runId});await assert.rejects(f.stop(expected),{code:'RUNID_MISMATCH'});assert.deepEqual(f.calls,[['close']]);
   }
 });
-test('generation/object/run replacement during revalidation never retargets or kills',async()=>{
+test('generation/run replacement refuses and same-generation absence succeeds without a kill',async()=>{
   for(const code of ['GENERATION_CHANGED','TARGET_GONE','RUNID_MISMATCH']){
     const f=fixture({revalidateError:fault(code)});
-    await assert.rejects(f.stop(),{code:code==='RUNID_MISMATCH'?code:'STOP_UNCONFIRMED'});
+    if(code==='TARGET_GONE')await f.stop();
+    else await assert.rejects(f.stop(),{code:code==='RUNID_MISMATCH'?code:'STOP_UNCONFIRMED'});
     assert.deepEqual(f.calls,[['validate'],['close']]);
   }
 });
@@ -72,5 +73,14 @@ test('no obsolete cleanup capability, delay or process environment is consumed',
     for(const key of ['findRunProcesses','readOwnedProcess','pinProcess','signalProcess','processSignal','stopGraceMs','sleep'])
       Object.defineProperty(f.adapter.options,key,{get(){throw new Error('Process cleanup is forbidden')}});
     await f.stop();
+  }
+});
+
+test('same-generation disappearance before kill succeeds, but a changed generation is unconfirmed',async()=>{
+  for(const code of ['TARGET_GONE','GENERATION_CHANGED']){
+    const f=fixture({killError:fault(code)});
+    if(code==='TARGET_GONE')await f.stop();
+    else await assert.rejects(f.stop(),{code:'STOP_UNCONFIRMED'});
+    assert.deepEqual(f.calls,[['validate'],['kill-session','-t','$1'],['close']]);
   }
 });

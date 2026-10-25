@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { openTmuxConnection } from '../tmux-connection.js';
+import { openTmuxConnection, serverGeneration } from '../tmux-connection.js';
 
 async function fixture(t) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'p02-guard-errors-'));
@@ -53,4 +53,15 @@ test('no-server words in a socket path do not turn permission failure into absen
   const f = await fixture(t);
   await f.set('permission');
   await assert.rejects(openTmuxConnection({ binary: f.binary }), { code: 'TMUX_UNAVAILABLE', cause: 'error' });
+});
+
+test('server generation maps command failures to unavailable while preserving timeout cause', async () => {
+  for (const cause of ['error', 'timeout']) {
+    await assert.rejects(serverGeneration({ command: async () => {
+      throw Object.assign(new Error('generation probe failed'), { code: 'TMUX_COMMAND_FAILED', cause });
+    } }), { code: 'TMUX_UNAVAILABLE', cause });
+  }
+  await assert.rejects(serverGeneration({ command: async () => {
+    throw Object.assign(new Error('gone'), { code: 'TARGET_GONE' });
+  } }), { code: 'TARGET_GONE' });
 });

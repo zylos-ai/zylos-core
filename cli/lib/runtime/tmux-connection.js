@@ -69,6 +69,14 @@ export async function openTmuxConnection(options = {}) {
   const connection = {
     get closed() { return closed; },
     get binding() { return binding; },
+    async cleanupBuffer(name) {
+      if (!/^zylos-[0-9a-f-]{36}$/.test(name)) throw new TypeError('Invalid private buffer name');
+      // A private buffer belongs to the send, not its pane. Cleanup must still
+      // run after the pane disappears or a command timeout closes this executor.
+      await runTmuxCommand(['delete-buffer', '-b', name], {
+        ...options, noServerStart: true, signal: undefined,
+      });
+    },
     bindTarget(target) {
       const candidate = { serverGeneration: target.serverGeneration, tmuxSessionId: target.tmuxSessionId,
         paneId: target.paneId, tmuxName: target.tmuxName };
@@ -129,7 +137,12 @@ export async function openTmuxConnection(options = {}) {
 }
 
 export async function serverGeneration(connection) {
-  const value = (await connection.command(['display-message', '-p', '#{pid}:#{start_time}'])).trim();
+  let value;
+  try { value = (await connection.command(['display-message', '-p', '#{pid}:#{start_time}'])).trim(); }
+  catch (error) {
+    if (error.code === 'TMUX_COMMAND_FAILED') throw tmuxError('TMUX_UNAVAILABLE', error.message, error.cause || 'error');
+    throw error;
+  }
   if (!/^\d+:\d+$/.test(value)) throw tmuxError('TMUX_UNAVAILABLE', 'tmux server generation unavailable', 'error');
   return value;
 }

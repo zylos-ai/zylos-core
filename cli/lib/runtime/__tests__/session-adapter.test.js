@@ -11,7 +11,7 @@ import { CodexAdapter } from '../codex.js';
 class Adapter extends SessionAdapter { get runtimeId() { return 'claude'; } }
 function fixture({present = true, runId = 'r', openError, runtime = 'claude'} = {}) {
   const calls = [], target = {present, runId, tmuxSessionId:'$7', paneId:'%8'};
-  const connection = {close:() => calls.push(['close']), command:async argv => { calls.push(argv); if (argv[0] === 'kill-session') target.present = false; if (argv[0] === 'display-message') {if(!target.present)throw error('TARGET_GONE');return '$7';} return 'screen'; }};
+  const connection = {cleanupBuffer:async name => calls.push(['delete-buffer','-b',name]), close:() => calls.push(['close']), command:async argv => { calls.push(argv); if (argv[0] === 'kill-session') target.present = false; if (argv[0] === 'display-message') {if(!target.present)throw error('TARGET_GONE');return '$7';} return 'screen'; }};
   const dependencies = {
     openTmuxConnection:async () => { if (openError) throw openError; return connection; },
     observeSessionTarget:async () => target,
@@ -150,4 +150,20 @@ test('readable runtime absence is false; unreadable and ambiguous remain unavail
 test('a kill command error cannot be replaced by later absence',async () => {
   const f=fixture();f.connection.command=async()=>{throw error('TMUX_COMMAND_FAILED','error')};
   await assert.rejects(f.adapter.stop({tmuxName:'x',expectedRunId:'r'}),{code:'STOP_UNCONFIRMED',cause:'error'});
+});
+
+test('isRunning reports deterministic disappearance during observation or process read as false',async()=>{
+  for(const method of ['observeSessionTarget','readTargetRuntime'])for(const code of ['TARGET_GONE','GENERATION_CHANGED']){
+    const f=fixture();f.dependencies[method]=async()=>{throw error(code)};
+    assert.deepEqual(await f.adapter.isRunning({tmuxName:'x'}),{tmux:false,process:false});
+    assert.deepEqual(f.calls,[['close']]);
+  }
+});
+
+
+test('stop cannot infer session absence from a pane-level observation failure',async()=>{
+  const f=fixture();
+  f.dependencies.observeSessionTarget=async()=>{throw error('TARGET_GONE')};
+  await assert.rejects(f.adapter.stop({tmuxName:'x',expectedRunId:'r'}),{code:'STOP_UNCONFIRMED'});
+  assert.deepEqual(f.calls,[['close']]);
 });

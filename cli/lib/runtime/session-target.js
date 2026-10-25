@@ -94,7 +94,9 @@ export async function observeSessionTarget({ sessionGroup, tmuxName = tmuxNameFo
   if (pinned && pinned.tmuxName !== undefined && pinned.tmuxName !== tmuxName) {
     throw tmuxError('TARGET_GONE', 'Cannot resolve a different name on a bound executor');
   }
-  try { output = await connection.command(['display-message', '-p', '-t', pinned?.paneId ?? `=${tmuxName}:`, '#{pid}:#{start_time}\t#{session_id}\t#{pane_id}\t#{session_created}']); }
+  // tmux 3.2a dereferences a missing session for session_created; conditional
+  // expansion keeps initial name lookups safe while retaining an empty field.
+  try { output = await connection.command(['display-message', '-p', '-t', pinned?.paneId ?? `=${tmuxName}:`, '#{pid}:#{start_time}\t#{session_id}\t#{pane_id}\t#{?session_id,#{session_created},}']); }
   catch (error) {
     if (missing(error)) return absent;
     if (error.code === 'TMUX_COMMAND_FAILED') throw tmuxError('TMUX_UNAVAILABLE', error.message, error.cause || 'error');
@@ -125,7 +127,12 @@ export async function observeSessionTarget({ sessionGroup, tmuxName = tmuxNameFo
 }
 
 export async function resolveSessionTarget(options) {
-  const observed = await observeSessionTarget(options);
+  let observed;
+  try { observed = await observeSessionTarget(options); }
+  catch (error) {
+    if (error.code === 'TMUX_NO_SERVER') throw tmuxError('TARGET_GONE', 'Target server is absent');
+    throw error;
+  }
   if (!observed.present) throw tmuxError('TARGET_GONE', 'Target session is absent');
   if (!observed.runId) throw tmuxError('RUNID_MISMATCH', 'Target run ID is missing');
   const target = Object.freeze({ ...observed, sessionId: observed.tmuxSessionId });

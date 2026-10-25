@@ -85,8 +85,10 @@ test('IF-18 hanging command and unusable executable remain unknown; no server is
 });
 
 // P02-side caller harness: it consumes real resolver errors and real P01 ledger
-// primitives. P04's dispatcher integration remains a separately reported gate.
-for(const scenario of ['absent','missing-run','timeout'])test(`IF-13 first-resolution ${scenario}: zero sending and correct real ledger outcomes`,async t=>{
+// primitives. The harness itself chooses requeue/stale outcomes below; these
+// assertions verify the provider errors and ledger primitives, NOT dispatcher
+// routing. P04 must verify those choices through its real dispatcher integration.
+for(const scenario of ['absent','missing-run','timeout'])test(`IF-13 first-resolution ${scenario}: provider zero sending and caller-selected real ledger outcomes`,async t=>{
   const f=await fixture(t);
   const initial=await openTmuxConnection(f.options);
   const bound=await resolveSessionTarget({sessionGroup:'origin',connection:initial});initial.close();

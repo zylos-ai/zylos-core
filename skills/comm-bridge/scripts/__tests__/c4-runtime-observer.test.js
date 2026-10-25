@@ -198,3 +198,27 @@ for (const json of [false, true]) for (const mode of ['single', 'multi']) test(`
   tmux('kill-server'); cli([], 'TARGET_NOT_RUNNING');
   assert.deepEqual(db.prepare('SELECT * FROM control_queue').all(), [row]);
 });
+
+for (const phase of ['runtime-process', 'final-revalidation']) test(`post-observation ${phase} command failure maps to TMUX_UNAVAILABLE`, async t => {
+  const {root} = fixture(t);
+  const binary = execFileSync('sh', ['-c', 'command -v tmux'], {encoding:'utf8'}).trim();
+  const wrapper = path.join(root, 'tmux-error-wrapper');
+  const count = path.join(root, 'environment-reads');
+  // Initial observation uses configured F2. Inject failure only at the later
+  // process probe or third environment read (the observer's final revalidation).
+  fs.writeFileSync(wrapper, `#!${process.execPath}
+const fs = require('node:fs'), cp = require('node:child_process');
+const args = process.argv.slice(2), action = args.join(' ');
+let reads = fs.existsSync(${JSON.stringify(count)}) ? Number(fs.readFileSync(${JSON.stringify(count)}, 'utf8')) : 0;
+if (action.includes('show-environment')) fs.writeFileSync(${JSON.stringify(count)}, String(++reads));
+if (${JSON.stringify(phase)} === 'runtime-process' ? action.includes('#{pane_pid}') : reads === 3) {
+  process.stdout.write('ZYLOS_OK\\n'); process.stderr.write('injected command failure\\n'); process.exit(1);
+}
+const result = cp.spawnSync(${JSON.stringify(binary)}, args, {stdio:'inherit'});
+process.exit(result.status ?? 1);
+`, {mode:0o700});
+  const observer = createCoreObserver({tmux:{socketPath:path.join(root,'tmux.sock'), binary:wrapper}});
+  const method = phase === 'runtime-process' ? 'observeCoreRunning' : 'observeCoreTarget';
+  await assert.rejects(observer[method]({sessionMode:'single'}), {code:'TMUX_UNAVAILABLE', cause:'error'});
+  assert.equal(Number(fs.readFileSync(count, 'utf8')), phase === 'runtime-process' ? 2 : 3);
+});

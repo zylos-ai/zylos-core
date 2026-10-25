@@ -6,20 +6,21 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 const { openTmuxConnection, serverGeneration } = await import('../tmux-connection.js');
 const { observeSessionTarget, resolveSessionTarget, revalidateSessionTarget, readTargetRuntime } = await import('../session-target.js');
+const binary = process.env.TEST_TMUX_BIN || 'tmux';
 const ready = async () => ({ runId: 'r1', sessionId: 's1', ts: 1, startupControlIds: [] });
 async function fixture(t) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'p02-target-'));
   const socketPath = path.join(dir, 'tmux.sock');
-  const tmux = (...args) => execFileSync('tmux', ['-S', socketPath, ...args], { encoding: 'utf8', stdio: ['ignore','pipe','pipe'] }).trim();
+  const tmux = (...args) => execFileSync(binary, ['-S', socketPath, ...args], { encoding: 'utf8', stdio: ['ignore','pipe','pipe'] }).trim();
   tmux('-f', '/dev/null', 'new-session', '-d', '-s', 'fixture', '-e', 'ZYLOS_RUN_ID=r1', '-e', 'ZYLOS_MODEL_CONFIG={"runtime":"claude","mode":"default"}', 'sleep', '120');
-  const connection = await openTmuxConnection({ socketPath, sessionName: 'fixture' });
+  const connection = await openTmuxConnection({ binary, socketPath, sessionName: 'fixture' });
   t.after(async () => { connection.close(); try { tmux('kill-server'); } catch {} await fs.rm(dir, { recursive: true, force: true }); });
   return { connection, tmux, socketPath, options: { connection, tmuxName: 'fixture', readReady: ready } };
 }
 test('ordinary commands preserve quoting and leave no retained tmux clients', async t => {
   const {connection, tmux,options} = await fixture(t);
   await resolveSessionTarget(options);
-  assert.deepEqual(await Promise.all(['a','b','c'].map(x => connection.command(['display-message','-p',x]))), ['a','b','c']);
+  assert.deepEqual(await Promise.all(["a'b",'semi;colon','$HOME'].map(x => connection.command(['display-message','-p',x]))), ["a'b",'semi;colon','$HOME']);
   assert.match(await serverGeneration(connection), /^\d+:\d+$/);
   assert.equal(tmux('list-clients','-F','#{client_pid}'), '');
   await assert.rejects(connection.command(['display-message','-p','x\ny']), TypeError);
@@ -41,7 +42,7 @@ test('removed pane, absent target, and missing run ID fail distinctly', async t 
   const target = await resolveSessionTarget(options);
   tmux('split-window','-d','-t','fixture','sleep','120'); tmux('kill-pane','-t',target.paneId);
   await assert.rejects(revalidateSessionTarget({connection,target}), {code:'TARGET_GONE'});
-  const fresh=await openTmuxConnection({socketPath});t.after(()=>fresh.close());
+  const fresh=await openTmuxConnection({binary,socketPath});t.after(()=>fresh.close());
   assert.equal((await observeSessionTarget({...options,connection:fresh,tmuxName:'absent'})).present,false);
   await assert.rejects(resolveSessionTarget({...options,connection:fresh,tmuxName:'absent'}),{code:'TARGET_GONE'});
   tmux('set-environment','-u','-t','fixture','ZYLOS_RUN_ID');
@@ -60,11 +61,11 @@ test('same socket restart fails its generation guard without replay', async t =>
   await new Promise(resolve=>setTimeout(resolve,100));
   tmux('-f','/dev/null','new-session','-d','-s','fixture','sleep','120');
   await assert.rejects(revalidateSessionTarget({connection,target}),{code:'GENERATION_CHANGED'});
-  const replacement = await openTmuxConnection({socketPath}); assert.notEqual(replacement.serverGeneration,target.serverGeneration); replacement.close();
+  const replacement = await openTmuxConnection({binary,socketPath}); assert.notEqual(replacement.serverGeneration,target.serverGeneration); replacement.close();
 });
 test('absent server differs from unexecutable transport; missing generation rejected', async t => {
   const dir=await fs.mkdtemp(path.join(os.tmpdir(),'p02-no-server-')); t.after(()=>fs.rm(dir,{recursive:true,force:true}));
-  await assert.rejects(openTmuxConnection({socketPath:path.join(dir,'absent')}),{code:'TMUX_NO_SERVER'});
+  await assert.rejects(openTmuxConnection({binary,socketPath:path.join(dir,'absent')}),{code:'TMUX_NO_SERVER'});
   await assert.rejects(openTmuxConnection({binary:path.join(dir,'missing')}),{code:'TMUX_UNAVAILABLE',cause:'error'});
   await assert.rejects(serverGeneration({command:async()=> '123:'}),{code:'TMUX_UNAVAILABLE'});
 });
@@ -112,7 +113,7 @@ test('initial disappearance and generation change are detected before any sendin
 });
 test('command timeout closes executor and never accepts a retry', async t => {
   const {socketPath}=await fixture(t);
-  const connection=await openTmuxConnection({socketPath,timeoutMs:40});
+  const connection=await openTmuxConnection({binary,socketPath,timeoutMs:40});
   t.after(()=>connection.close());
   await assert.rejects(connection.command(['wait-for','unreleased-test-channel']),{code:'TMUX_UNAVAILABLE',cause:'timeout'});
   assert.equal(connection.closed,true);
@@ -139,4 +140,24 @@ test('closed executor never sends a command', async t => {
   const target = await resolveSessionTarget(options);
   connection.close();
   await assert.rejects(connection.command(['kill-session','-t',target.tmuxSessionId],{kind:'session'}),{code:'TMUX_UNAVAILABLE'});
+});
+
+test('absent target uses a conditional session timestamp and leaves the server alive', async t => {
+  const {connection, tmux, options} = await fixture(t);
+  const command = connection.command.bind(connection);
+  let identityFormat;
+  connection.command = async (argv, settings) => {
+    if (argv.includes('=absent:')) identityFormat = argv.at(-1);
+    return command(argv, settings);
+  };
+  assert.equal((await observeSessionTarget({...options, tmuxName:'absent'})).present, false);
+  assert.equal(identityFormat.split('\t').at(-1), '#{?session_id,#{session_created},}');
+  assert.equal(tmux('display-message', '-p', '-t', '=absent:', identityFormat.split('\t').at(-1)), '');
+  assert.equal(tmux('display-message', '-p', '-t', '=fixture:', '#{session_name}'), 'fixture');
+});
+
+test('first resolution maps a disappearing server to TARGET_GONE', async t => {
+  const {connection, tmux, options} = await fixture(t);
+  tmux('kill-server');
+  await assert.rejects(resolveSessionTarget(options), {code:'TARGET_GONE'});
 });

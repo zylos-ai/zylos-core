@@ -4,7 +4,10 @@ import { openTmuxConnection, runTmuxCommand } from './tmux-connection.js';
 export const LAUNCH_TIMEOUT_MS = 3000;
 export const LAUNCH_CLEANUP_TIMEOUT_MS = 500;
 const EXEC_POLL_MS = 25;
-const formatLiteral = value => String(value).replaceAll('#','##').replaceAll(',','#,').replaceAll('}','#}');
+// Character formats avoid version-dependent literal escaping (3.2a retains
+// #} inside #{l:...}) and the special ##[ style expansion. Their output is
+// not expanded again, so arbitrary values remain data in the comparison.
+const formatLiteral = value => String(value).replace(/[#,}]/g, char => `#{a:${char.charCodeAt(0)}}`);
 const startingCommands = new Set(['sh','dash','bash','zsh','ksh','ash','fish','env','tmux','tmux: server']);
 
 /** Submit once and bound all confirmation and local cleanup before return. */
@@ -20,7 +23,7 @@ export async function settleLaunch({tmuxName,runId,launchConfig,sessionGroup,roo
     const address = receipt?.match(/^(\d+:\d+)\t(\$\d+)\t(%\d+)\t/);
     if (address) target = {serverGeneration:address[1],tmuxSessionId:address[2],paneId:address[3]};
   };
-  const equal = (key,value) => `#{==:#{${key}},#{l:${formatLiteral(value)}}}`;
+  const equal = (key,value) => `#{==:#{${key}},${formatLiteral(value)}}`;
   const format = ['#{pid}:#{start_time}','#{session_id}','#{pane_id}','#{pane_pid}','#{session_created}',
     equal('ZYLOS_RUN_ID',runId),equal('ZYLOS_MODEL_CONFIG',JSON.stringify(launchConfig)),
     equal('ZYLOS_SESSION_GROUP',sessionGroup ?? '')].join('\t');

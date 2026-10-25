@@ -54,6 +54,9 @@ export function createCoreObserver({ tmux = {} } = {}) {
       if (method === 'target' && ['TARGET_GONE','GENERATION_CHANGED','RUNID_MISMATCH'].includes(error.code)) {
         throw Object.assign(new Error('Target identity changed during observation'), {code:'TARGET_NOT_READY'});
       }
+      if (error.code === 'TMUX_COMMAND_FAILED') {
+        throw Object.assign(new Error('Cannot inspect tmux target'), { code: 'TMUX_UNAVAILABLE', cause: error.cause || 'error' });
+      }
       throw error;
     } finally { await connection?.close(); }
   }

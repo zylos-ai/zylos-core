@@ -29,7 +29,7 @@ export class SessionAdapter extends RuntimeAdapter {
       if (observed.runtime === 'unknown' && observed.runtimeObservation !== 'absent') throw adapterError('TMUX_UNAVAILABLE','Runtime process liveness is unknown','error');
       return {tmux:true, process:observed.runtime === this.runtimeId};
     } catch (error) {
-      if (error.code === 'TMUX_NO_SERVER') return {tmux:false, process:false};
+      if (['TMUX_NO_SERVER','TARGET_GONE','GENERATION_CHANGED'].includes(error.code)) return {tmux:false, process:false};
       if (error.code === 'TMUX_UNAVAILABLE') throw error;
       throw adapterError('TMUX_UNAVAILABLE','Cannot inspect session',error.cause === 'timeout' ? 'timeout':'error');
     } finally { connection?.close(); }
@@ -51,8 +51,15 @@ export class SessionAdapter extends RuntimeAdapter {
       }
       if (!target.present) return;
       if (target.runId !== expectedRunId) throw adapterError('RUNID_MISMATCH');
-      await deps.revalidateSessionTarget({connection,target,kind:'session'});
-      await connection.command(['kill-session','-t',target.tmuxSessionId], {kind:'session'});
+      try {
+        await deps.revalidateSessionTarget({connection,target,kind:'session'});
+        await connection.command(['kill-session','-t',target.tmuxSessionId], {kind:'session'});
+      } catch (error) {
+        // Only session-level absence proves stop succeeded; observation above
+        // uses pane guards and can lose a pane while its session survives.
+        if (error.code === 'TARGET_GONE') return;
+        throw error;
+      }
       // A successful kill is not sufficient: confirm removal of the session,
       // even if its original pane vanished while other windows remained.
       try {
@@ -94,7 +101,7 @@ export class SessionAdapter extends RuntimeAdapter {
       try {
         await (await this.dependencies()).revalidateSessionTarget({target,connection});
         await connection.commandBatch([
-          ['load-buffer','-b',buffer,file],
+          ['load-buffer','-b',buffer,file.replaceAll('#','##')],
           ['paste-buffer','-d','-b',buffer,'-t',target.paneId],
         ]);
       } catch (error) {
@@ -102,7 +109,8 @@ export class SessionAdapter extends RuntimeAdapter {
         throw adapterError('PASTE_FAILED','Text delivery could not be confirmed',error.cause);
       }
     } finally {
-      try { await connection.command(['delete-buffer','-b',buffer]); } catch {}
+      // Unique buffer cleanup is independent of target identity and executor state.
+      try { await connection.cleanupBuffer(buffer); } catch {}
       await fs.rm(dir,{recursive:true,force:true});
     }
   }
