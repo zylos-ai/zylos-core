@@ -41,6 +41,17 @@ test('T01/P10 F1 cutover refreshes mode before lifecycle actions; unreadable F1 
  bad=false;mode='single';await f.loop.tick();assert.equal(f.calls.includes('ttl'),false);assert.ok(f.calls.includes('metrics'));await f.loop.stop();
 });
 
+// P05 T01 / P10: migration is serialized with admission and owns acceptance.
+test('T01 legacy migration failure does not stop observation; accepted transition suppresses lifecycle producers',async()=>{
+ let transition=null,calls=0;
+ const f=fixture({readConfiguration:async()=>({mode:'single',legacy:true}),getModeTransition:async()=>transition,
+  listDrainFences:async()=>[{sessionGroup:'origin'}],advanceReclaim:async(_fence,context)=>{context.transition=null;},
+  advanceAutomaticMigration:async()=>{calls++;if(calls===1)throw Object.assign(new Error('missing P10'),{code:'DEPENDENCY_UNAVAILABLE'});transition={id:'migration'};}});
+ await f.loop.start();assert.ok(f.calls.includes('error:automatic-migration'));assert.ok(f.calls.includes('probe:origin'));
+ f.calls.length=0;await f.loop.tick();assert.equal(calls,2);assert.equal(f.calls.includes('manual'),false);assert.equal(f.calls.includes('rotation'),false);assert.equal(f.calls.includes('sync'),false);assert.ok(f.calls.includes('metrics'));
+ f.calls.length=0;await f.loop.tick();assert.equal(calls,2);assert.ok(f.calls.includes('transition'));await f.loop.stop();
+});
+
 // B2/B6: one round samples scenes and admission authorities once; transition owns its own serialization.
 test('round shares one serialized snapshot and checks manual fences once', async () => {
   let locked = false;

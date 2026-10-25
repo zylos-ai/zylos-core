@@ -1,0 +1,10 @@
+{
+  "parent": "c88dd7e2611d8551513ad698c9e4ade767c5835d",
+  "files": {
+    "skills/activity-monitor/scripts/supervisor-main.js": "e37dc8e5cca128015e9bd3599b8ea202c8badd312ce12873c12742303672262c",
+    "skills/activity-monitor/scripts/supervisor-lifecycle.js": "b03314494bd3b5c3b002ad6d2d7abb3ad64ffab6402c2ef2a07a91c608830b98",
+    "skills/activity-monitor/scripts/__tests__/supervisor-entry.test.js": "599cb924205b8e7c3aadf2d47f35218197815bbf84b15625499874994f36f4b5",
+    "skills/activity-monitor/scripts/__tests__/supervisor-lifecycle.test.js": "9c5616b82f6e5b623c16b65383a5fcd8e9e9a188ac2a4371433ed48babcdabf5",
+    "skills/activity-monitor/scripts/__tests__/fixtures/supervisor-entry-worker.js": "e730b334fcf33c5ab85e146c13b7d65db1dc93279dc8a9e874d390014b089a58"
+  }
+}

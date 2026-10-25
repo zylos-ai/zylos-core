@@ -509,3 +509,15 @@ test('manual adapter RUNID_MISMATCH after fresh observation completes old reques
   assert.equal(f.requests.length, 0); assert.equal(f.fences.size, 0);
   assert.equal(f.events.at(-1).event, 'manual_restart_done');
 });
+
+test('C3 unavailable capacity defers eviction; malformed resolved capacity remains an error',async()=>{
+ const f=fixture();delete f.context.configuration.capacity;
+ f.context.configuration.capacityUnavailable=true;
+ const read=f.db.listPendingSessionGroups;f.db.listPendingSessionGroups=()=>{throw new Error('eviction must be deferred');};
+ assert.equal(await f.lifecycle.checkEviction(f.scenes,f.context),undefined);
+ f.db.listPendingSessionGroups=read;f.context.configuration.capacityUnavailable=false;
+ for(const capacity of [undefined,null,0,-1,1.5,'2']) {
+  f.context.configuration.capacity=capacity;
+  await assert.rejects(f.lifecycle.checkEviction(f.scenes,f.context),{code:'CONFIG_UNREADABLE'});
+ }
+});

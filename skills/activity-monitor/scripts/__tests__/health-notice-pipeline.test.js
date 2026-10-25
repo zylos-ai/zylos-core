@@ -14,8 +14,8 @@ import {readDeliveryIdentity} from '../../../comm-bridge/scripts/runtime-deliver
 import {writeHealthQuota,readHealthQuota} from '../health-quota.js';
 import {collectHealthHook} from '../hook-health.js';
 import {HealthStore} from '../health-store.js';
-import {createToolPipeline} from '../adapters/runtime-components.js';
-import {createToolEventStreamState,rotateToolEventStream} from '../tool-event-stream.js';
+import {HealthEventReader} from '../health-event-reader.js';
+import {rotateEventLog} from '../../../../cli/lib/event-log.js';
 import {currentOutageNotice} from '../outage-notice.js';
 
 function fixture(t) {
@@ -29,72 +29,73 @@ function fixture(t) {
   const store=new HealthStore({zylosDir,now:()=>clock,freezeNotice:input=>freezeFirstFailureNotice(db,{...input,sessionGroup:null})});
   const files=Object.fromEntries(['toolEvents','toolEventStreamState','sessionToolState','apiActivity','foregroundSession','statusline'].map(key=>[key,path.join(dir,key)]));
   files.toolEvents=path.join(dir,'events.jsonl');
-  const {pipeline}=createToolPipeline({runtimeId:'claude'}, {}, {files,getRuntimeLaunchAtMs:()=>0,
-    onHealthEvent:event=>store.consume(event,{identity})});
+  const pipeline=new HealthEventReader({coordinator:{consumeHook:(_runtime,event,options)=>store.consume(event,options)},zylosDir,now:()=>clock,quota:()=>null});
+  t.after(()=>pipeline.close());
+  const scene={runDir:dir,sessionGroup:'origin',runtime:'claude'};
   const options={zylosDir,pid:process.pid,managedIdentity:()=>identity};
   const collect=(overrides={},time=clock)=>collectHealthHook({hook_event_name:'StopFailure',session_id:'session',prompt_id:'prompt',error:'rate_limit',...overrides},{...options,nowMs:time});
-  const tick=()=>pipeline.processToolLifecycle(clock,process.pid,null);
+  const tick=()=>pipeline.consumeScene(scene,identity);
   return {zylosDir,identity,db,store,files,pipeline,options,collect,tick,now:()=>clock,setTime:value=>clock=value};
 }
 
-test('A-B-A, cursor reset and monitor restart retain one strict terminal marker',t=>{
+test('A-B-A, reader restart and monitor restart retain one strict terminal marker',async t=>{
   const f=fixture(t), at=f.now();
-  const a=f.collect();f.tick();
-  f.setTime(at+1);f.collect({hook_event_name:'Stop'},at+1);f.tick();
+  const a=f.collect();await f.tick();
+  f.setTime(at+1);f.collect({hook_event_name:'Stop'},at+1);await f.tick();
   const before=f.store.read();
-  fs.appendFileSync(f.files.toolEvents,JSON.stringify(a)+'\n');f.tick();
+  fs.appendFileSync(f.files.toolEvents,JSON.stringify(a)+'\n');await f.tick();
   assert.deepEqual(f.store.read(),before);
-  f.pipeline.streamState=createToolEventStreamState(f.files.toolEvents);f.tick();
+  f.pipeline.close();f.pipeline.streams.clear();await f.tick();
   assert.deepEqual(f.store.read(),before);
   const restarted=new HealthStore({zylosDir:f.zylosDir,now:f.now});
   assert.equal(restarted.consume(a,{identity:f.identity}).reason,'replay');
   assert.equal(restarted.read().last_processed.received_at,at+1);
 });
 
-test('nonterminal hooks, equal timestamps, stale and backward-clock events do not move marker',t=>{
+test('nonterminal hooks, equal timestamps, stale and backward-clock events do not move marker',async t=>{
   const f=fixture(t),at=f.now();
   for (const hook_event_name of ['SessionStart','UserPromptSubmit']) f.collect({hook_event_name});
-  f.tick();assert.equal(f.store.read().last_processed,undefined);
-  f.collect();f.tick();const before=f.store.read();
-  f.collect({hook_event_name:'Stop'});f.collect({},at-300001);f.collect({},at+1);f.tick();
+  await f.tick();assert.equal(f.store.read().last_processed,undefined);
+  f.collect();await f.tick();const before=f.store.read();
+  f.collect({hook_event_name:'Stop'});f.collect({},at-300001);f.collect({},at+1);await f.tick();
   assert.deepEqual(f.store.read(),before);
-  f.setTime(at-1000);f.collect();f.tick();assert.deepEqual(f.store.read(),before);
+  f.setTime(at-1000);f.collect();await f.tick();assert.deepEqual(f.store.read(),before);
 });
 
-test('failed atomic health commit leaves cursor retryable and pending target frozen',t=>{
+test('failed atomic health commit leaves cursor retryable and pending target frozen',async t=>{
   const f=fixture(t);
   f.db.prepare("INSERT INTO conversations(direction,channel,endpoint_id,content,status) VALUES('in','fake','original','secret','delivered')").run();
   f.collect();
   const write=f.store.write.bind(f.store);f.store.write=()=>{throw new Error('disk failure');};
-  assert.throws(f.tick,/disk failure/);assert.equal(f.pipeline.streamState.offset,0);
+  await assert.rejects(f.tick,/disk failure/);assert.equal(f.pipeline.streams.get('origin').pending.length,1);
   assert.equal(fs.existsSync(f.files.toolEventStreamState),false);
-  f.store.write=write;f.tick();
+  f.store.write=write;await f.tick();
   assert.equal(f.store.read().pending_notice.endpoint,'original');
   assert.equal(f.store.read().health,'rate_limited');
-  assert.ok(f.pipeline.streamState.offset>0);
+  assert.equal(f.pipeline.streams.get('origin').pending.length,0);
   assert.doesNotMatch(fs.readFileSync(f.store.file,'utf8'),/secret/);
 });
 
-test('rotation replay and late writes use the same persisted marker',t=>{
-  const f=fixture(t),at=f.now();const a=f.collect();f.tick();
-  f.pipeline.streamState=rotateToolEventStream({filePath:f.files.toolEvents,nowMs:at});
-  fs.appendFileSync(`${f.files.toolEvents}.old`,JSON.stringify(a)+'\n');
-  f.tick();assert.equal(f.store.read().last_processed.event_id,a.event_id);
+test('rotation replay and late writes use the same persisted marker',async t=>{
+  const f=fixture(t),at=f.now();const a=f.collect();await f.tick();
+  const rotated=rotateEventLog(f.files.toolEvents,{now:at,maxBytes:0});
+  fs.appendFileSync(rotated,JSON.stringify(a)+'\n');
+  await f.tick();assert.equal(f.store.read().last_processed.event_id,a.event_id);
   f.setTime(at+1);const b={...a,event_id:randomUUID(),received_at:at+1,ts:at+1,event:'stop',error:null};
-  fs.appendFileSync(`${f.files.toolEvents}.old`,JSON.stringify(b)+'\n');f.tick();
+  fs.appendFileSync(rotated,JSON.stringify(b)+'\n');await f.tick();
   assert.equal(f.store.read().last_processed.event_id,b.event_id);
 });
 
-test('partial JSON line survives two reads without duplicated tail',t=>{
+test('partial JSON line survives two reads without duplicated tail',async t=>{
   const f=fixture(t);const event=f.collect();const raw=JSON.stringify(event)+'\n';
-  fs.writeFileSync(f.files.toolEvents,raw.slice(0,20));f.tick();assert.equal(f.store.read().last_processed,undefined);
-  fs.appendFileSync(f.files.toolEvents,raw.slice(20));f.tick();assert.equal(f.store.read().health,'rate_limited');
+  fs.writeFileSync(f.files.toolEvents,raw.slice(0,20));await f.tick();assert.equal(f.store.read().last_processed,undefined);
+  fs.appendFileSync(f.files.toolEvents,raw.slice(20));await f.tick();assert.equal(f.store.read().health,'rate_limited');
 });
 
 test('336ms late quota enriches reply and future reads without rewriting failure classification',async t=>{
   const f=fixture(t),at=f.now(),reset=Math.floor(at/1000)+3600;
   f.db.prepare("INSERT INTO conversations(direction,channel,endpoint_id,content,status) VALUES('in','fake','original','secret','delivered')").run();
-  f.collect();f.tick();const before=f.store.read();const sent=[];
+  f.collect();await f.tick();const before=f.store.read();const sent=[];
   const quota=()=>readHealthQuota({identity:f.identity,zylosDir:f.zylosDir,nowMs:f.now()});
   const options={store:f.store,database:f.db,identity:()=>f.identity,now:f.now,quota,quotaWaitMs:750,
     reserve:(channel,endpoint,route)=>claimStatusNotice({key:statusNoticeKey(channel,endpoint,route.health,route.reason),channel,endpoint,normalizedEndpoint:endpoint,...route,now:Math.floor(f.now()/1000)},f.db),
@@ -111,8 +112,8 @@ test('336ms late quota enriches reply and future reads without rewriting failure
   assert.equal(restarted.currentNotice({identity:f.identity,quota:null}).resetAt,reset*1000);
 });
 
-test('quota refinement rejects foreign identity, older evidence and recovery',t=>{
-  const f=fixture(t),at=f.now();f.collect();f.tick();const state=f.store.read();
+test('quota refinement rejects foreign identity, older evidence and recovery',async t=>{
+  const f=fixture(t),at=f.now();f.collect();await f.tick();const state=f.store.read();
   const quota={schema_version:1,source:'statusline',...f.identity,observed_at:at+1,rate_limits:{five_hour:{used_percentage:100,resets_at:Math.floor(at/1000)+3600}}};
   for(const change of [{session_id:'other'},{claude_pid:1},{observed_at:at-1},{observed_at:at+1001}]) {
     assert.equal(currentOutageNotice(state,f.identity,{...quota,...change},at+1000).annotation,null);
@@ -124,14 +125,14 @@ test('quota refinement rejects foreign identity, older evidence and recovery',t=
 test('same-session recovery, normal Stop, new prompt and AM restart permit a new failure notice',async t=>{
   const f=fixture(t),at=f.now();
   f.db.prepare("INSERT INTO conversations(direction,channel,endpoint_id,content,status) VALUES('in','fake','first','test','delivered')").run();
-  const first=f.collect();f.tick();
+  const first=f.collect();await f.tick();
   const sent=[];
   const reserve=(channel,endpoint,route)=>claimStatusNotice({key:statusNoticeKey(channel,endpoint,route.health,route.reason),channel,endpoint,normalizedEndpoint:endpoint,...route,now:Math.floor(f.now()/1000)},f.db);
   const send=async(claim,message,route)=>{sent.push({claim,message,route});return {outcome:'sent'};};
   await processFirstFailureNotices({store:f.store,database:f.db,identity:()=>f.identity,now:f.now,reserve,send});
   f.setTime(at+10);f.store.transition('ok','',{identity:f.identity,kind:'recovery'});
-  f.setTime(at+20);f.collect({hook_event_name:'Stop',prompt_id:'normal'});f.tick();
-  f.setTime(at+21);f.collect({hook_event_name:'UserPromptSubmit',prompt_id:'next'});f.tick();
+  f.setTime(at+20);f.collect({hook_event_name:'Stop',prompt_id:'normal'});await f.tick();
+  f.setTime(at+21);f.collect({hook_event_name:'UserPromptSubmit',prompt_id:'next'});await f.tick();
   const restarted=new HealthStore({zylosDir:f.zylosDir,now:f.now,freezeNotice:input=>freezeFirstFailureNotice(f.db,{...input,sessionGroup:null})});
   f.db.prepare("INSERT INTO conversations(direction,channel,endpoint_id,content,status) VALUES('in','fake','next','test','delivered')").run();
   f.setTime(at+30);const next=f.collect({prompt_id:'next',error:'authentication_failed'});
@@ -154,7 +155,7 @@ test('Darwin ps ancestry runs collector, quota, health persistence and notice wi
     read:target=>{assert.equal(target,file,'Darwin must not read procfs');return fs.readFileSync(target,'utf8');},
     run:(bin,args)=>{if(bin==='tmux')return '4000';assert.equal(bin,'ps');psReads++;return Number(args.at(-1))===4242?'4100':'4000';}});
   const identity=proof();assert.deepEqual(identity,{runtime:'claude',...foreground});
-  f.pipeline.onHealthEvent=event=>f.store.consume(event,{identity:proof()});
+  f.pipeline.coordinator.consumeHook=(_runtime,event)=>f.store.consume(event,{identity:proof()});
   const reset=Math.floor(at/1000)+3600;
   writeHealthQuota({session_id:foreground.session_id,rate_limits:{five_hour:{used_percentage:100,resets_at:reset}}},
     {zylosDir:f.zylosDir,pid:4242,nowMs:at,managedIdentity:proof});
@@ -162,7 +163,7 @@ test('Darwin ps ancestry runs collector, quota, health persistence and notice wi
   const event=collectHealthHook({hook_event_name:'StopFailure',session_id:foreground.session_id,prompt_id:'mac-prompt',error:'rate_limit'},
     {zylosDir:f.zylosDir,pid:4242,nowMs:at});
   assert.equal(event.process_start,undefined);assert.equal(event.quota.rate_limits.five_hour.used_percentage,100);
-  f.tick();assert.equal(f.store.read().health,'rate_limited');
+  await f.tick();assert.equal(f.store.read().health,'rate_limited');
   const raw=JSON.parse(fs.readFileSync(f.store.file));assert.equal(raw.hook.pid,4242);assert.equal(raw.hook.processStart,undefined);
   const sent=[];
   await processFirstFailureNotices({store:f.store,database:f.db,identity:proof,now:f.now,
@@ -181,7 +182,7 @@ test('real isolated sender child captures one bilingual notice without writing t
   const capture=path.join(f.zylosDir,'capture.json');
   fs.writeFileSync(path.join(sender,'send.js'),`const fs=require('node:fs');fs.writeFileSync(${JSON.stringify(capture)},JSON.stringify({args:process.argv.slice(2),body:fs.readFileSync(0,'utf8')}));`);
   f.db.prepare("INSERT INTO conversations(direction,channel,endpoint_id,content,status) VALUES('in','fake','capture-only','secret','delivered')").run();
-  f.collect();f.tick();
+  f.collect();await f.tick();
   const options={store:f.store,database:f.db,identity:()=>f.identity,now:f.now,zylosDir:f.zylosDir,send:sendNoticeWorker,
     reserve:(channel,endpoint,route)=>claimStatusNotice({key:statusNoticeKey(channel,endpoint,route.health,route.reason),channel,endpoint,normalizedEndpoint:endpoint,...route,now:Math.floor(f.now()/1000)},f.db)};
   await processFirstFailureNotices(options);
@@ -203,7 +204,7 @@ async function exactRecoveryRegression(t) {
   f.db.prepare("INSERT INTO conversations(direction,channel,endpoint_id,content,status) VALUES('in','fake','first','test','delivered')").run();
   const first=f.collect();
   f.store.consume({...first,event_id:randomUUID(),received_at:at-1,ts:at-1},{identity:f.identity,sessionGroup:'other'});
-  f.tick();
+  await f.tick();
   assert.equal(f.store.read().health,'rate_limited');
   f.setTime(at+10);f.store.transition('ok','',{identity:f.identity,kind:'recovery'});
   const recovered=fs.readFileSync(f.store.file,'utf8');
@@ -219,9 +220,9 @@ async function exactRecoveryRegression(t) {
   assert.equal(branch.store.consume(old,{identity:f.identity}).reason,'pre_recovery_event');
   assert.equal(fs.readFileSync(branch.store.file,'utf8'),recovered);
 
-  f.setTime(at+20);f.collect({hook_event_name:'Stop',prompt_id:'normal'});f.tick();
+  f.setTime(at+20);f.collect({hook_event_name:'Stop',prompt_id:'normal'});await f.tick();
   const afterStop=f.store.read();assert.equal(afterStop.health,'ok');
-  f.setTime(at+21);f.collect({hook_event_name:'UserPromptSubmit',prompt_id:'next'});f.tick();
+  f.setTime(at+21);f.collect({hook_event_name:'UserPromptSubmit',prompt_id:'next'});await f.tick();
   assert.deepEqual(f.store.read().last_processed,afterStop.last_processed);
   const restarted=new HealthStore({zylosDir:f.zylosDir,now:f.now,freezeNotice:input=>freezeFirstFailureNotice(f.db,{...input,sessionGroup:null})});
   f.db.prepare("INSERT INTO conversations(direction,channel,endpoint_id,content,status) VALUES('in','fake','next','test','delivered')").run();

@@ -301,6 +301,8 @@ export class SupervisorLifecycle {
   }
 
   async checkEviction(scenes, context) {
+    // The entry already reports a missing P04 reader once; defer only eviction.
+    if (context.configuration.capacityUnavailable === true) return;
     if (modeOf(context) !== 'multi' || context.transition || context.fences.some(fence => fence.sessionGroup === '*')) return;
     const failure = scenes.find(scene => scene.observationError);
     if (failure) throw failure.observationError;

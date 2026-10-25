@@ -82,6 +82,12 @@ export class SupervisorLoop {
         try { context.manualRequests = await d.checkManualFences(context); }
         catch (error) { await d.reportError(error, { phase: 'manual-fences' }); }
       }
+      if (!context.transition && context.configuration.legacy) {
+        try { await d.advanceAutomaticMigration?.(context); }
+        catch (error) { await d.reportError(error, { phase: 'automatic-migration' }); }
+        // Migration may have accepted a transition while holding this queue.
+        context.transition = await d.getModeTransition();
+      }
       if (!context.transition) {
         for (const phase of ['advanceManual', 'advanceRestarts', 'reconcileConfiguration']) {
           try { await d[phase](context); }
@@ -93,8 +99,10 @@ export class SupervisorLoop {
     await d.observeExits?.(context.scenes);
     await this.each(context.scenes, scene => d.probeAndPublish(scene, context), 'observe');
     await d.lifecycleSerial(async () => {
+      // Automatic legacy migration can open a transition after the initial read.
+      const transitionOpen = Boolean(transition || context.transition);
       await this.each(context.fences, fence => d.advanceReclaim(fence, context), 'reclaim');
-      if (transition || context.transition) return;
+      if (transitionOpen) return;
       await this.each(context.scenes, scene => d.checkRotation(scene, context), 'rotation');
       if (context.configuration.mode === 'multi') {
         await this.each(context.scenes, scene => d.checkTtl(scene, context), 'ttl');

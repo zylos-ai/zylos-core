@@ -175,13 +175,13 @@ test('import with a missing argv path does not run the CLI or throw', () => {
 
 test('health-check instructions route PM2 inspection through the sanitizer', () => {
   const healthSkill = readFileSync(new URL('../../SKILL.md', import.meta.url), 'utf8');
-  const monitor = readFileSync(
-    new URL('../../../activity-monitor/scripts/monitor.js', import.meta.url),
+  const machineTasks = readFileSync(
+    new URL('../../../activity-monitor/scripts/supervisor-machine-tasks.js', import.meta.url),
     'utf8',
   );
 
   assert.match(healthSkill, /health-check\/scripts\/pm2-snapshot\.js/);
   assert.doesNotMatch(healthSkill, /```bash\s+pm2 jlist\s+```/);
-  assert.match(monitor, /Use the health-check skill sanitized helper/);
-  assert.doesNotMatch(monitor, /Check PM2 services \(pm2 jlist\)/);
+  assert.match(machineTasks, /Use the health-check skill sanitized helper/);
+  assert.doesNotMatch(machineTasks, /Check PM2 services \(pm2 jlist\)/);
 });

@@ -1,0 +1,11 @@
+Running 1 Node test files
+✔ B2 real quiet composed round, 1 groups (3824.022212ms)
+✔ B2 real quiet composed round, 4 groups (18227.359361ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 2
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 22174.700658
