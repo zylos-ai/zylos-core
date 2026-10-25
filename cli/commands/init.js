@@ -21,7 +21,6 @@ import { generateManifest, saveMergeBaseline } from '../lib/manifest.js';
 import { prompt, promptYesNo, promptChoice, promptSecret } from '../lib/prompts.js';
 import { bold, dim, green, red, yellow, cyan, bgGreen, success, error, warn, heading } from '../lib/colors.js';
 import { commandExists } from '../lib/shell-utils.js';
-import { getActiveAdapter } from '../lib/runtime/index.js';
 import {
   activateFreshSplitInstructions,
   refreshSplitInstructions,
