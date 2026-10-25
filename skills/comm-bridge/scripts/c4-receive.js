@@ -69,7 +69,7 @@ export async function receive(args, dependencies = {}) {
   } catch (error) {
     if (isDataError(error)) throw error;
     throw dataError('INTERNAL_ERROR', 'Inbound commit state is unknown; do not resend without checking.',
-      { persisted: error.persisted === undefined ? null : error.persisted, cause: error });
+      { persisted: null, cause: error });
   }
   const result = { ok: true, action: pending ? 'queued' : auth ? 'auth_rejected' : 'delivered',
     id: record.id, sessionGroup: record.session_group, runtime: route.runtime };

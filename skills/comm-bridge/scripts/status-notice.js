@@ -48,14 +48,13 @@ export function logStatusNotice(claim, route, outcome, result = {}, { zylosDir =
   } catch { /* Diagnostics must not change send outcomes. */ }
 }
 
-export function sendStatusNotice(claim, message, route = {}, { spawn = spawnSync, diagnostic = true,
-  clear = clearStatusNoticeCooldownReservation, exists = fs.existsSync, onDiagnostic = console.error } = {}) {
+export function sendStatusNotice(claim, message, route = {}, { spawn = spawnSync, diagnostic = true } = {}) {
   validateTarget(claim.channel, claim.endpoint);
   const script = fileURLToPath(new URL('./c4-send.js', import.meta.url));
   const channelScript = path.join(SKILLS_DIR, claim.channel, 'scripts', 'send.js');
   // Only a failure before starting a child proves that no channel send ran.
-  const clearOwn = () => { try { clear(claim.key, claim.reservedAt); } catch { onDiagnostic('status notice: failed to clear own cooldown reservation'); } };
-  if (!exists(script) || !exists(channelScript)) {
+  const clearOwn = () => { try { clearStatusNoticeCooldownReservation(claim.key, claim.reservedAt); } catch { console.error('status notice: failed to clear own cooldown reservation'); } };
+  if (!fs.existsSync(script) || !fs.existsSync(channelScript)) {
     clearOwn();
     if (diagnostic) logStatusNotice(claim, route, 'failed');
     return { outcome: 'failed', code: 'NOTICE_SEND_UNAVAILABLE' };

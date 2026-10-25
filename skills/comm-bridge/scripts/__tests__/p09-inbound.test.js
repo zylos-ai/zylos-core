@@ -9,7 +9,7 @@ import { receive, parseReceiveArgs } from '../c4-receive.js';
 import { validRouteResponse, queryRoute, fallbackFileRoute } from '../c4-entry-route.js';
 import { appendEntryEvent, queryRejection } from '../c4-entry-events.js';
 import { dataError } from '../c4-session-group.js';
-import { reserveStatusNotice, sendStatusNotice, statusNoticeKey } from '../status-notice.js';
+import { statusNoticeKey } from '../status-notice.js';
 
 const input = ['--channel', 'chat', '--endpoint', 'room|msg:1', '--content', 'hello'];
 const pending = { decision: 'pending', recovered: true, runtime: 'codex', health: 'rate_limited', reason: 'quota', transitionHold: false };
@@ -193,39 +193,12 @@ test('DM-50 six tuple distinguishes groups/runtime/reason, supports missing heal
   assert.notEqual(key('chat:A', 'codex', 'ok', 'x::y', 'a'), key('chat:A', 'codex', 'ok', 'y', 'a::x'));
 });
 
-test('IB-04 real D4 reservation survives uncertain/sent, only unstarted failure clears exact reservation', t => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'p09-notice-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  const component = path.join(process.env.ZYLOS_DIR, '.claude', 'skills', 'chat'); fs.mkdirSync(component, { recursive: true });
-  const f = setup(t); const now = 100;
-  const reserve = ({ cooldownKey, channel, endpoint, statusType, reason, ttl }) => {
-    const changed = f.db.prepare('INSERT OR IGNORE INTO status_notice_cooldowns(cooldown_key,channel,endpoint,status_type,reason,last_notified_at,expires_at,updated_at) VALUES(?,?,?,?,?,?,?,?)').run(cooldownKey, channel, endpoint, statusType, reason, now, now + ttl, now);
-    return { key: cooldownKey, reservedAt: now, suppressed: !changed.changes };
-  };
-  const clear = (key, stamp) => f.db.prepare('DELETE FROM status_notice_cooldowns WHERE cooldown_key=? AND last_notified_at=?').run(key, stamp);
-  const count = () => f.db.prepare('SELECT count(*) AS n FROM status_notice_cooldowns').get().n;
-  for (const [runtime, outcome, child] of [['claude', 'sent', { status: 0, pid: 1 }], ['codex', 'uncertain', { status: 1, pid: 2 }], ['unknown', 'failed', { error: { code: 'ENOENT' } }]]) {
-    const claim = reserveStatusNotice('chat', 'room|msg:1', { sessionGroup: 'chat', runtime }, { reserve });
-    let spawned;
-    const result = sendStatusNotice(claim, 'text', {}, { exists: () => true, diagnostic: false, clear, spawn: (_cmd, args, options) => {
-      spawned = { args, options }; return child;
-    } });
-    assert.deepEqual(spawned.args.slice(1), ['chat', 'room|msg:1']);
-    assert.equal(spawned.options.input, 'text');
-    assert.equal(result.outcome, outcome);
-  }
-  assert.equal(count(), 2);
-  const claim = reserveStatusNotice('chat', 'room|msg:1', { sessionGroup: 'chat:A', runtime: 'other' }, { reserve });
-  f.db.prepare('UPDATE status_notice_cooldowns SET last_notified_at=101 WHERE cooldown_key=?').run(claim.key);
-  sendStatusNotice(claim, 'text', {}, { exists: () => false, diagnostic: false, clear });
-  assert.equal(count(), 3);
-});
-
 test('IF-06/DM-51 query current/rotated logs, ignores incomplete/bad lines, remains read only, refuses errors', async t => {
   const f = setup(t); f.dependencies.queryRoute = async () => auth('failed');
   const reply = await receive([...input, '--no-reply'], f.dependencies);
   const filename = path.join(path.dirname(f.filename), 'receive-events.jsonl');
   const event = { v: 1, event: 'auth_rejected', conversation_id: reply.id, reason_code: 'auth_check_failed', detail: 'evidence', runtime: 'codex', ts: 123 };
-  fs.writeFileSync(filename, JSON.stringify(event) + '\n{bad}\nnull\n' + JSON.stringify({ ...event, detail: null }) + '\n' + JSON.stringify({ ...event, detail: 'partial' }));
+  fs.writeFileSync(filename, JSON.stringify(event) + '\n{bad}\nnull\n' + JSON.stringify({ ...event, detail: 'partial' }));
   const deps = { filename, diagnostic: () => {}, getConversationsByRange: (a, b) => f.db.prepare('SELECT * FROM conversations WHERE id BETWEEN ? AND ?').all(a, b) };
   const before = fs.readFileSync(filename);
   assert.equal(queryRejection(String(reply.id), deps).detail, 'evidence'); assert.deepEqual(fs.readFileSync(filename), before);

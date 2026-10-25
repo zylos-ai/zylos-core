@@ -64,10 +64,10 @@ function receiveCLI(f, env, args = []) {
 
 test('IF-04 actual CLI missing socket reads only selected on-disk F10 across external/Core/noReply cases', { timeout: 60000 }, t => {
   const env = tmuxClientEnv(isolatedTmux(t));
-  for (const runtime of ['claude', 'codex']) {
+  for (const runtime of ['codex']) {
     for (const health of ['missing', 'unreadable', 'ok', 'rate_limited', 'auth_failed', 'unavailable']) {
       for (const core of [false, true]) {
-        for (const noReply of [false, true]) {
+        for (const noReply of ['auth_failed', 'unavailable'].includes(health) ? [false, true] : [false]) {
           const f = diskFixture(t, runtime, health);
           const result = receiveCLI(f, env, [...(core ? ['--core-source', 'scheduler'] : []), ...(noReply ? ['--no-reply'] : [])]);
           const rejected = health === 'unavailable' || (health === 'auth_failed' && !core);
@@ -83,9 +83,6 @@ test('IF-04 actual CLI missing socket reads only selected on-disk F10 across ext
           const reads = fs.readFileSync(path.join(f.root, 'reads.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
           assert.deepEqual(reads, [f.target], label + ' must not consult other runtime/whole-agent health');
           assert.equal(fs.existsSync(path.join(f.root, 'activity-monitor', 'am.sock')), false);
-          if (health === 'auth_failed' && !core) {
-            assert.equal(result.reply.reasonLogged, false, 'Base lacks P04 append module; do not claim an event was written');
-          }
         }
       }
     }

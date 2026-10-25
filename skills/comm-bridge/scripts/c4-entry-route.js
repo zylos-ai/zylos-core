@@ -6,6 +6,9 @@ import { ACTIVITY_MONITOR_DIR } from './c4-config.js';
 import { getModeTransition } from './c4-db.js';
 import { messageForStatus } from './status-notice-templates.js';
 
+const { resolveTargetRuntime, readRuntimeHealth } = await import(
+  pathToFileURL(path.join(path.dirname(resolveCoreConfigModule()), 'session-state-reader.js')).href);
+
 export function validRouteResponse(response, request) {
   if (!response || response.version !== 2 || response.type !== request.type || response.requestId !== request.requestId ||
       typeof response.recovered !== 'boolean' || typeof response.runtime !== 'string' || !response.runtime ||
@@ -45,9 +48,8 @@ export function ipcRoute(request, { socketPath = path.join(ACTIVITY_MONITOR_DIR,
 
 export async function fallbackFileRoute(request, dependencies = {}) {
   const transition = dependencies.getModeTransition ?? getModeTransition;
-  const loadReader = () => import(pathToFileURL(path.join(path.dirname(resolveCoreConfigModule()), 'session-state-reader.js')).href);
-  const resolve = dependencies.resolveTargetRuntime ?? (async group => (await loadReader()).resolveTargetRuntime(group));
-  const readHealth = dependencies.readRuntimeHealth ?? (async runtime => (await loadReader()).readRuntimeHealth(runtime));
+  const resolve = dependencies.resolveTargetRuntime ?? resolveTargetRuntime;
+  const readHealth = dependencies.readRuntimeHealth ?? readRuntimeHealth;
   const diagnostic = dependencies.diagnostic ?? console.error;
   const pending = (runtime = 'unknown', extra = {}) => ({ decision: 'pending', recovered: true,
     runtime, health: 'unavailable', reason: 'router_unavailable', transitionHold: false, fallback: true, ...extra });
