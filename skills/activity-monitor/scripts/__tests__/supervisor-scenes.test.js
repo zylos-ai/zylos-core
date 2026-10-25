@@ -102,13 +102,14 @@ test('health stop preserves a replacement run and confirms the original session 
   assert.doesNotThrow(() => f.tmux('has-session', '-t', '=fixture-keeper'));
 });
 
-// T02 / 2635 regression: lightweight identity caching must retain occupancy metadata.
-test('identity cache retains paths and lifecycle timestamps during tmux unavailability', { timeout:15000 }, async t => {
+// T02 / P3-1: identity checks must not replace full occupancy metadata.
+test('identity checks preserve the full occupancy snapshot during tmux unavailability', { timeout:15000 }, async t => {
   const f = readyTmuxTarget(t, { prefix:'p05-identity-cache-', mode:'multi' });
   const base = service(f);
   const scenes = new SupervisorServerObservation(base, { guard:new SupervisorServerHealth() });
   const full = await scenes.observeGroup('origin');
-  await scenes.readIdentity('origin');
+  const identity = await scenes.readIdentity('origin');
+  for (const key of ['runDir','createdAt','currentSessionTs']) assert.equal(Object.hasOwn(identity,key),false);
   base.observe = async () => { throw Object.assign(new Error('timeout'), {code:'TMUX_UNAVAILABLE',cause:'timeout'}); };
   const [cached] = await scenes.observe();
   // C log maintenance uses runDir; Codex exit classification uses currentSessionTs.

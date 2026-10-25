@@ -17,6 +17,7 @@ export class SupervisorServerObservation {
   constructor(scenes, { guard, socketKey = 'default', open = openTmuxConnection } = {}) {
     Object.assign(this, { scenes, guard, socketKey, open });
     this.cached = null;
+    this.cachedGeneration = null;
     this.exits = new Map();
     this.reported = new Set();
   }
@@ -36,10 +37,10 @@ export class SupervisorServerObservation {
       this.recordExit(await this.guard.observeFailure({ socketKey: this.socketKey, error, deferTermination: true }));
     }
   }
-  async success(scenes, replace) {
+  async success(scenes, replace, cacheOccupancy = true) {
     let connection;
     try {
-      const generations = new Set(scenes.filter(scene => scene.present).map(scene => scene.tmuxTarget?.serverGeneration));
+      const generations = new Set(scenes.filter(scene => scene.present && scene.tmuxTarget).map(scene => scene.tmuxTarget.serverGeneration));
       if (generations.size > 1 || generations.has(undefined)) {
         throw Object.assign(new Error('tmux changed during observation'), { code: 'TMUX_UNAVAILABLE', cause: 'error' });
       }
@@ -52,12 +53,15 @@ export class SupervisorServerObservation {
       // generation instead of opening another executor and querying tmux twice.
       const result = await this.guard.observeSuccess({ socketKey: this.socketKey,
         readGeneration: () => generation });
-      if (!result.cached) return;
-      const matching = scenes.filter(scene => scene.tmuxTarget?.serverGeneration === result.generation);
+      if (!result.cached || !cacheOccupancy) return;
+      // Listing can prove occupancy even when one group's non-tmux read fails.
+      const matching = scenes.filter(scene => !scene.tmuxTarget || scene.tmuxTarget.serverGeneration === result.generation);
+      if (this.cachedGeneration !== result.generation) this.cached = null;
+      this.cachedGeneration = result.generation;
       if (replace) this.cached = matching;
       else if (matching.length) {
         const groups = new Set(matching.map(scene => scene.sessionGroup));
-        this.cached = [...(this.cached ?? []).filter(scene => scene.tmuxTarget?.serverGeneration === result.generation && !groups.has(scene.sessionGroup)), ...matching];
+        this.cached = [...(this.cached ?? []).filter(scene => !groups.has(scene.sessionGroup)), ...matching];
       }
     } catch (error) {
       if (error?.code === 'TMUX_NO_SERVER' && !scenes.some(scene => scene.present)) {
@@ -79,7 +83,10 @@ export class SupervisorServerObservation {
     } catch (error) {
       await this.failure(error);
       if (error?.code !== 'TMUX_UNAVAILABLE' || !this.cached?.length) throw error;
-      return this.cached.map(scene => ({ ...scene, ready: false, processRunning: undefined,
+      return this.cached.map(scene => ({
+        sessionGroup: scene.sessionGroup, present: scene.present, tmuxName: scene.tmuxName,
+        runDir: scene.runDir, createdAt: scene.createdAt, currentSessionTs: scene.currentSessionTs,
+        ready: false, processRunning: undefined,
         runId: null, sessionId: null, runtime: 'unknown', tmuxTarget: null,
         state: 'unknown', idleSince: null, usagePercent: null, observationError: error }));
     }
@@ -90,7 +97,8 @@ export class SupervisorServerObservation {
       const scenes = Array.isArray(result) ? result : result ? [result] : [];
       const unavailable = scenes.find(scene => scene.observationError?.code === 'TMUX_UNAVAILABLE');
       if (unavailable) throw unavailable.observationError;
-      await this.success(scenes, method === 'listRuns');
+      // Identity checks do not replace the full occupancy snapshot with a partial scene.
+      await this.success(scenes, method === 'listRuns', method !== 'readIdentity');
       return result;
     } catch (error) { await this.failure(error); throw error; }
   }

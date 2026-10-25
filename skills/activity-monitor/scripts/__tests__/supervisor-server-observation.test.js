@@ -97,3 +97,47 @@ test('T02 readable tmux identity remains usable when OS identity cannot be cache
   const [scene] = await f.provider.observe(); assert.equal(scene.ready, true);
   assert.equal(f.guard.servers.get('default').cache, null);
 });
+test('T02 a non-tmux group error preserves all occupancy and does not start a server outage', async () => {
+  const f = fixture();
+  const failedGroup = { sessionGroup: 'broken', present: true, ready: false, tmuxTarget: null,
+    observationError: Object.assign(new Error('activity read failed'), {code:'EACCES'}) };
+  f.base.observe = async () => [f.scene, failedGroup];
+  assert.deepEqual(await f.provider.observe(), [f.scene, failedGroup]);
+  f.advance(61000);
+  assert.deepEqual(await f.provider.observe(), [f.scene, failedGroup]);
+  await f.provider.advance();
+  assert.deepEqual(f.alerts, []);
+  assert.equal(f.guard.servers.get('default').episode, null);
+  // A later socket failure still retains the group whose listing proved presence.
+  f.base.observe = async () => { throw unavailable(); };
+  assert.deepEqual((await f.provider.observe()).map(scene => scene.sessionGroup), ['origin', 'broken']);
+});
+test('T02 unknown occupancy has one shape after full observation or identity reads', async () => {
+  const snapshots = [];
+  for (const identityLast of [false, true]) {
+    const f = fixture();
+    Object.assign(f.scene, {tmuxName:'origin',runDir:'/fixture/origin',createdAt:123,currentSessionTs:456,
+      healthIdentity:{session_id:'old',claude_pid:321},proc:{pid:321,alive:true},runtimePid:321,
+      launchConfig:{model:'old'},tools:['old'],lastActivityAt:500});
+    f.base.readIdentity = async () => ({sessionGroup:'origin',present:true,tmuxName:'origin',
+      ready:true,runId:'old',runtime:'claude',tmuxTarget:f.scene.tmuxTarget});
+    if (!identityLast) await f.provider.readIdentity('origin');
+    await f.provider.observe();
+    if (identityLast) await f.provider.readIdentity('origin');
+    f.setFailure(true);
+    const [unknown] = await f.provider.observe();
+    assert.deepEqual(Object.keys(unknown).sort(), ['sessionGroup','present','tmuxName','runDir','createdAt',
+      'currentSessionTs','ready','processRunning','runId','sessionId','runtime','tmuxTarget','state',
+      'idleSince','usagePercent','observationError'].sort());
+    const {observationError, ...occupancy} = unknown;
+    assert.equal(observationError.code,'TMUX_UNAVAILABLE');
+    snapshots.push(occupancy);
+  }
+  assert.deepEqual(snapshots[0],snapshots[1]);
+});
+test('T02 identity-only observation does not manufacture a full occupancy snapshot', async () => {
+  const f = fixture();
+  await f.provider.readIdentity('origin');
+  f.setFailure(true);
+  await assert.rejects(f.provider.observe(), {code:'TMUX_UNAVAILABLE'});
+});

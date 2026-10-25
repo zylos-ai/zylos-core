@@ -9,7 +9,6 @@ const { assertSessionGroup } = await loadCoreModule('session-group-paths.js');
 
 export const PROBE_CACHE_TTL_MS = 30000;
 export const ROUTE_PROBE_TIMEOUT_MS = 25000;
-export { normalizeHealth } from './runtime-health.js';
 export const messageForRoute = ({ health, reason }) => messageForStatus({ health, reason });
 const runtimeValid = runtime => typeof runtime === 'string' && /^[a-z][a-z0-9-]{0,31}$/.test(runtime);
 const object = value => value && typeof value === 'object' && !Array.isArray(value);
@@ -33,7 +32,6 @@ export class MessageRouter {
     log = () => {}, now = Date.now } = {}) {
     if (!healthCoordinator || !resolveTargetRuntime) throw new Error('MessageRouter requires runtime health and target resolution');
     Object.assign(this, { healthCoordinator, resolveTargetRuntime, getModeTransition, checkAuth, requestProbe, cacheDirectory, log, now });
-    this.inFlightProbes = new Map();
   }
   cachePath(runtime) { return path.join(this.cacheDirectory, `${runtime}.json`); }
   clearLegacyCache(file = path.join(runtimeRoot(), 'activity-monitor', 'message-router-probe-cache.json')) {
@@ -59,15 +57,15 @@ export class MessageRouter {
     let accelerated = false;
     if (!request.noReply) accelerated = await this.healthCoordinator.notifyUserMessage(runtime);
     if (accelerated) this.clearCache(runtime);
-    const cache = !accelerated && this.readNegativeCache(runtime, health, reason);
+    const cache = !accelerated && this.readNegativeCache(runtime);
     const gate = recoveryEligibility(this.healthCoordinator.store(runtime).read(), { runtime, cache, nowMs: this.now() });
-    if (gate.eligible) await this.joinProbe(runtime);
+    if (gate.eligible) await this.awaitBudget(Promise.resolve().then(() => this.requestProbe?.(runtime)));
     state = this.healthCoordinator.store(runtime).read();
     health = normalizeHealth(state.health ?? rawHealth); reason = this.reason(state);
     if (health === 'ok') { this.clearCache(runtime); return this.decision(request, runtime, { health, reason, decision: 'pending' }); }
     if (health === 'auth_failed') return this.authDecision(request, runtime, state);
     if (gate.eligible) this.writeNegativeCache(runtime, health, reason);
-    return this.decision(request, runtime, { health, reason, ...(health === 'rate_limited' ? { decision: 'pending' } : { recovered: false }), ...(cache ? { cacheHit: true } : {}) });
+    return this.decision(request, runtime, { health, reason, ...(health === 'rate_limited' ? { decision: 'pending' } : { recovered: false }), ...(gate.code === 'probe_cache' ? { cacheHit: true } : {}) });
   }
   async authDecision(request, runtime, state) {
     const health = 'auth_failed'; const reason = this.reason(state);
@@ -89,26 +87,14 @@ export class MessageRouter {
     }
     return answer;
   }
-  async joinProbe(runtime) {
-    let flight = this.inFlightProbes.get(runtime);
-    if (!flight) {
-      const promise = Promise.resolve().then(() => this.requestProbe?.(runtime))
-        .finally(() => { if (this.inFlightProbes.get(runtime)?.promise === promise) this.inFlightProbes.delete(runtime); });
-      flight = { promise }; this.inFlightProbes.set(runtime, flight);
-    }
-    return this.awaitBudget(flight.promise);
-  }
   async awaitBudget(promise) {
     let timer;
     try { return await Promise.race([promise, new Promise(resolve => { timer = setTimeout(() => resolve({ timedOut: true }), ROUTE_PROBE_TIMEOUT_MS); })]); }
     finally { clearTimeout(timer); }
   }
-  readNegativeCache(runtime, health, reason) {
-    try {
-      const cache = JSON.parse(fs.readFileSync(this.cachePath(runtime), 'utf8'));
-      return cache.version === 2 && cache.runtime === runtime && cache.recovered === false
-        && cache.expiresAt > this.now() && cache.health === normalizeHealth(health) && cache.reason === reason ? cache : null;
-    } catch { return null; }
+  readNegativeCache(runtime) {
+    try { return JSON.parse(fs.readFileSync(this.cachePath(runtime), 'utf8')); }
+    catch { return null; }
   }
   writeNegativeCache(runtime, health, reason) {
     const file = this.cachePath(runtime); const tmp = `${file}.${randomUUID()}.tmp`;
