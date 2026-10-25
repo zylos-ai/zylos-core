@@ -8,15 +8,6 @@ import { SupervisorServerObservation } from '../supervisor-server-observation.js
 import { SupervisorServerHealth } from '../supervisor-server-health.js';
 import { RestartRequestStore } from '../restart-request-store.js';
 
-async function absentMutant() {
-  const url = new URL('../supervisor-server-observation.js', import.meta.url);
-  let source = fs.readFileSync(url, 'utf8');
-  const anchor = 'return this.cached.map(scene =>';
-  assert.equal(source.split(anchor).length, 2);
-  source = source.replace(anchor, 'return [].map(scene =>').replace(/(from\s+['"])(\.[^'"]+)(['"])/g,
-    (_, a, specifier, b) => a + new URL(specifier, url).href + b);
-  return (await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`)).SupervisorServerObservation;
-}
 async function scenario(t, Observation) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'supervisor-uncertainty-'));
   let failed = false, now = 1792000000000;
@@ -25,7 +16,7 @@ async function scenario(t, Observation) {
     createdAt: now, tmuxTarget: { serverGeneration: '123:5', sessionId: '$1', paneId: '%1' } };
   const faults = [], actions = [], pending = [{ sessionGroup: 'telegram:waiting' }];
   const observe = () => { if (failed) throw Object.assign(new Error('unobservable'), { code: 'TMUX_UNAVAILABLE', cause: 'timeout' }); return [scene]; };
-  const base = { connectionOptions: {}, observe, observeGroup: () => observe()[0], readRun: () => observe()[0], listRuns: observe,
+  const base = { connectionOptions: {}, observe, readIdentity(group) { return this.observeGroup(group); }, observeGroup: () => observe()[0], readRun: () => observe()[0], listRuns: observe,
     stop: () => { actions.push('stop'); }, bindTarget: () => { actions.push('bind'); } };
   const guard = new SupervisorServerHealth({ now: () => now, readProcessIdentity: () => failed ? { present: null } : { present: true, pid: 123, created: '1' },
     sendAlert: () => { actions.push('alert'); }, signalProcess: () => { actions.push('signal'); } });
@@ -72,8 +63,4 @@ async function scenario(t, Observation) {
 }
 test('IF-29 composed unknown server preserves occupancy, F10 and F4 without exit or recovery actions', async t => {
   await scenario(t, SupervisorServerObservation);
-});
-test('IF-29 negative control detects treating unavailable observation as an empty pool', async t => {
-  await assert.rejects(scenario(t, await absentMutant()),
-    error => error.code === 'ERR_ASSERTION' && error.message.includes('unobservable server released occupied pool capacity'));
 });

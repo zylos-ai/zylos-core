@@ -6,7 +6,7 @@ const logs=[];let noticeScope;
 const database={getDb:()=>({prepare:()=>({get:scope=>{noticeScope=scope;return {id:1,channel:'fake',endpoint_id:'frozen'};}})}),getModeTransition:()=>null,listDrainFences:()=>[],getDrainFence:()=>null,
   listPendingSessionGroups:()=>[],getControlById:()=>null,
   resolveSessionLaunchConfig:()=>({runtime:'claude',mode:'default'})};
-const scenes={observe:async()=>[],observeGroup:async()=>({present:false}),listRuns:async()=>[],readRun:async()=>null};
+const scenes={observe:async()=>[],readIdentity(group) { return this.observeGroup(group); }, observeGroup:async()=>({present:false}),listRuns:async()=>[],readRun:async()=>null};
 const options={db:database,scenes,legacyStatus:{tick(){},close(){}},log:value=>logs.push(value),machineTasks:{tick(){},stop(){}},
   sendAlert:()=>{throw new Error('external send forbidden');},
   loopOptions:{intervalMs:10000}};

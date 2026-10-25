@@ -37,7 +37,7 @@ export function createSupervisor(deps) {
   const manualPending=()=>admission.readRequests().some(row=>row.reason==='manual_restart');
   const guardedAction=(scene,action)=>admission.serialize(async()=>{
     if(stopping || await db.getModeTransition() || (scene.sessionGroup==='origin' && manualPending()))return false;
-    const current=await scenes.observeGroup(scene.sessionGroup);
+    const current=await scenes.readIdentity(scene.sessionGroup);
     if(!current.present || !current.ready || current.runId!==scene.runId || current.runtime!==scene.runtime)return false;
     await action(current);return true;
   });
@@ -59,7 +59,7 @@ export function createSupervisor(deps) {
       authFlights.delete(runtime);authChecks.delete(task);
     }).catch(()=>{});return task;
   };
-  observer=new SupervisorHealthObserver({coordinator:health,listScenes,readIdentity:group=>scenes.observeGroup(group),readState:scene=>({...readActivity(scene),healthIdentity:scene.healthIdentity,contextSwitches:scene.contextSwitches}),
+  observer=new SupervisorHealthObserver({coordinator:health,listScenes,readIdentity:group=>scenes.readIdentity(group),readState:scene=>({...readActivity(scene),healthIdentity:scene.healthIdentity,contextSwitches:scene.contextSwitches}),
     readScreen:scene=>scenes.readScreen(scene),matchScreen:deps.matchScreen,insertControl:db.insertControl,getControlById:db.getControlById,
     buildTargetBinding:scene=>scenes.bindTarget(scene),stop:scene=>guardedAction(scene,current=>scenes.stop(current)),
     readMode:async()=>(await readMode()).mode,getModeTransition:db.getModeTransition,getDrainFence:db.getDrainFence,manualPending,
@@ -147,7 +147,7 @@ export function createSupervisor(deps) {
           }
         });
         await health.completeAuthRecovery(runtime,{isGone:async target=>{
-          const observed=await scenes.observeGroup(target.sessionGroup);
+          const observed=await scenes.readIdentity(target.sessionGroup);
           return observed.present===false || (typeof observed.runId==='string' && observed.runId!==target.runId);
         },hasAuthFence:async target=>configuration.mode==='multi' && (await db.getDrainFence(target.sessionGroup))?.reason==='auth'});
       }

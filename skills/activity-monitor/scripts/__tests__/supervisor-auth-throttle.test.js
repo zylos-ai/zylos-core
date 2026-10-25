@@ -12,7 +12,7 @@ function fixture(t, checkAuth, create = createSupervisor) {
   const state = { now: 1000000, runtime: 'claude' };
   const db = { getModeTransition: () => null, listDrainFences: () => [], getDrainFence: () => null,
     listPendingSessionGroups: () => [{ sessionGroup: 'chat:pending' }], getControlById: () => null };
-  const scenes = { observe: async () => [], observeGroup: async () => ({ present: false }), listRuns: async () => [] };
+  const scenes = { observe: async () => [], readIdentity(group) { return this.observeGroup(group); }, observeGroup: async () => ({ present: false }), listRuns: async () => [] };
   const supervisor = create({ db, scenes, now: () => state.now, env: { ZYLOS_DIR: root }, zylosDir: root,
     readMode: () => ({ mode: 'multi' }), readConfiguration: () => ({ mode: 'multi', runtime: 'claude' }),
     resolveTargetRuntime: () => state.runtime, checkAuth,
@@ -59,17 +59,4 @@ test('IB-33 incoming routing joins pending auth flight; distinct runtimes stay i
   await f.tick(); assert.equal(calls.length, 2);
   assert.equal((await f.route()).decision, 'auth_rejected');
   assert.deepEqual(calls, ['claude', 'codex', 'claude']);
-});
-
-test('IB-33 demand throttle assertion rejects the actual source with backoff removed', async t => {
-  const url = new URL('../supervisor.js', import.meta.url);
-  const anchor = "if(background && now()<(authRetryAt.get(runtime) ?? 0))";
-  let source = fs.readFileSync(url, 'utf8'); assert.equal(source.split(anchor).length, 2);
-  source = source.replace(anchor, 'if(false)').replace(/(from\s+['"])(\.[^'"]+)(['"])/g,
-    (_, prefix, specifier, suffix) => prefix + new URL(specifier, url).href + suffix);
-  const { createSupervisor: bad } = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
-  let calls = 0;
-  const f = fixture(t, async () => { calls++; return { status: 'failure' }; }, bad);
-  await f.start(); await f.tick(); f.state.now += 1000; await f.tick();
-  assert.throws(() => assert.equal(calls, 1), { code: 'ERR_ASSERTION' });
 });

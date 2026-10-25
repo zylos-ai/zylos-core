@@ -13,10 +13,10 @@ test('T02 F6 cursor keeps failed commit retryable and restarted reader deduplica
   const health=new RuntimeHealthCoordinator({zylosDir:root,now:()=>now}), reader=new HealthEventReader({coordinator:health,zylosDir:root,now:()=>now,quota:()=>null});t.after(()=>reader.close());
   appendEvent(path.join(scene.runDir,'events.jsonl'),{type:'runtime_health',schema_version:1,source:'hook',runtime:'claude',event:'stop_failure',error:'rate_limit',event_id:'11111111-1111-4111-8111-111111111111',prompt_id:null,received_at:now,...identity});
   const store=health.store('claude'),write=store.write.bind(store);store.write=()=>{throw new Error('disk failed');};
-  await assert.rejects(reader.processScene(scene,identity),/disk failed/);assert.equal(reader.streams.get(scene.sessionGroup).pending.length,1);
-  store.write=write;assert.equal((await reader.processScene(scene,identity))[0].status,'processed');assert.equal(store.read(scene.sessionGroup).last_processed.received_at,now);
+  await assert.rejects(reader.consumeScene(scene,identity),/disk failed/);assert.equal(reader.streams.get(scene.sessionGroup).pending.length,1);
+  store.write=write;assert.equal((await reader.consumeScene(scene,identity))[0].status,'processed');assert.equal(store.read(scene.sessionGroup).last_processed.received_at,now);
   reader.close();const restarted=new HealthEventReader({coordinator:health,zylosDir:root,quota:()=>null});t.after(()=>restarted.close());
-  assert.equal((await restarted.processScene(scene,identity))[0].reason,'replay');
+  assert.equal((await restarted.consumeScene(scene,identity))[0].reason,'replay');
 });
 
 test('T02 F6 ingestion enriches from its own current F5, never another group or legacy quota',async t=>{
@@ -30,7 +30,7 @@ test('T02 F6 ingestion enriches from its own current F5, never another group or 
   publishContextSample({session_id:'s',rate_limits:{five_hour:{used_percentage:usage}}},{env,now});
   const scene={sessionGroup:group,runtime:'claude',runId,runDir:path.join(root,'activity-monitor/session-groups',group)};
   appendEvent(path.join(scene.runDir,'events.jsonl'),{type:'runtime_health',runtime:'claude'});
-  await reader.processScene(scene,{runtime:'claude',session_id:'s',claude_pid:123});
+  await reader.consumeScene(scene,{runtime:'claude',session_id:'s',claude_pid:123});
  }
  assert.deepEqual(captured.map(value=>value.rate_limits.five_hour.used_percentage),[100,20]);
 });

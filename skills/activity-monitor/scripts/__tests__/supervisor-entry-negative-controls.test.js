@@ -22,7 +22,7 @@ async function fixture(t,kind,mutant=false){
  let gateWrites=0;
  const scene={runId:'run-1',ready:true,launchConfig:{runtime:'claude',mode:'default'}};
  const service=await startSupervisor({env:{...process.env,ZYLOS_DIR:root},db:{...db,getDb:()=>database,resolveSessionLaunchConfig:()=>({runtime:'codex',mode:'default'}),setDrainFence:(...args)=>{gateWrites++;return db.setDrainFence(...args);}},
- scenes:{observe:async()=>[],observeGroup:async()=>({present:false}),listRuns:async()=>[{runId:'run-1'}],readRun:async()=>scene},requestStore:requests,
+ scenes:{observe:async()=>[],readIdentity(group) { return this.observeGroup(group); }, observeGroup:async()=>({present:false}),listRuns:async()=>[{runId:'run-1'}],readRun:async()=>scene},requestStore:requests,
  readMode:()=>({mode:'multi'}),readConfiguration:()=>({mode:'multi',runtime:'claude',capacity:2}),resolveTargetRuntime:()=> 'claude',
  // Successful config admission requires an explicitly available Sync reader.
  readSyncMarker:()=>({held:false,stale:false}),

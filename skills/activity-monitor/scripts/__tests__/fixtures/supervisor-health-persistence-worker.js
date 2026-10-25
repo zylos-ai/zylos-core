@@ -5,7 +5,7 @@ let clock=Number(process.argv[2]),current=[],control=null;
 const logs=[];
 const mutant=process.argv[3],root=process.env.ZYLOS_DIR;
 const db={getModeTransition:()=>null,listDrainFences:()=>[],getDrainFence:()=>null,listPendingSessionGroups:()=>[],getControlById:()=>control,insertControl:()=>{control={id:1,status:'pending'};return 1;},resolveSessionLaunchConfig:()=>({runtime:'claude',mode:'default'})};
-const scenes={observe:async()=>current,observeGroup:async group=>current.find(s=>s.sessionGroup===group)??{present:false},listRuns:async()=>current,readRun:async()=>null,bindTarget:async s=>({runId:s.runId}),readScreen:async()=>'',stop:async()=>false};
+const scenes={observe:async()=>current,readIdentity(group) { return this.observeGroup(group); }, observeGroup:async group=>current.find(s=>s.sessionGroup===group)??{present:false},listRuns:async()=>current,readRun:async()=>null,bindTarget:async s=>({runId:s.runId}),readScreen:async()=>'',stop:async()=>false};
 const service=await startSupervisor({now:()=>clock,db,scenes,resolveTargetRuntime:()=> 'claude',matchScreen:()=>({}),legacyStatus:{tick(){},close(){}},machineTasks:{tick(){},stop(){}},sendAlert:()=>{throw new Error('External send forbidden');},log:value=>logs.push(value),loopOptions:{intervalMs:3600000}});
 const {health,observer}=service.supervisor;
 if(mutant==='clear-budget'){const s=health.store('claude').read();s.scheduling.restartFailureCount=0;s.scheduling.lastRecoveryAt=0;health.store('claude').write(s);}

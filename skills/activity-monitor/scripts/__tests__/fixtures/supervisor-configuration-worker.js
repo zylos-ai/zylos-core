@@ -14,7 +14,7 @@ const db = { getModeTransition: () => null, listDrainFences: () => [...fences.va
   insertControl: (content, options) => { const row = { id: controls.length + 1, content, ...options }; controls.push(row); return row; },
   resolveSessionLaunchConfig: () => ({ runtime: 'claude', mode: 'default' }) };
 const service = await startSupervisor({ db, now: () => now,
-  scenes: { observe: async () => [], observeGroup: async () => scene, listRuns: async () => [], readRun: async () => null },
+  scenes: { observe: async () => [], readIdentity(group) { return this.observeGroup(group); }, observeGroup: async () => scene, listRuns: async () => [], readRun: async () => null },
   legacyStatus: { tick() {}, close() {} }, machineTasks: { tick() {}, stop() {} },
   readSyncMarker: () => ({ held: false, stale: false }),
   loopOptions: { schedule: () => 1, cancel() {} }, log() {},

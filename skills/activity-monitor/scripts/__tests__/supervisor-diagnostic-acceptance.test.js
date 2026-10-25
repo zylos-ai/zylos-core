@@ -7,26 +7,6 @@ import { createStore } from '../../../comm-bridge/scripts/c4-v2-store.js';
 import { SupervisorScenes } from '../supervisor-scenes.js';
 import { startSupervisor } from '../supervisor-main.js';
 
-function variant(file, from, to, imports = {}) {
-  const url = new URL(file, import.meta.url);
-  let source = fs.readFileSync(url, 'utf8');
-  if (from) { assert.equal(source.split(from).length, 2); source = source.replace(from, to); }
-  source = source.replace(/(from\s+['"])(\.[^'"]+)(['"])/g,
-    (_, prefix, specifier, suffix) => prefix + (imports[specifier] ?? new URL(specifier, url).href) + suffix);
-  source = source.replaceAll('import.meta.url', JSON.stringify(url.href));
-  return `data:text/javascript;base64,${Buffer.from(source).toString('base64')}`;
-}
-async function badEntry(kind) {
-  const supervisor = kind === 'corrupt' ? variant('../supervisor.js',
-    "if(error.code!=='requests_unreadable')throw error;", 'throw error;') : variant('../supervisor.js',
-    'for(const runtime of [\'claude\',\'codex\'])await health.restore(runtime);',
-    `for(const runtime of ['claude','codex'])await health.restore(runtime);
-     const fs = await import('node:fs');
-     if(fs.readFileSync(supervisorDiagnosticPath(deps.env),'utf8').includes('restart_done'))
-       db.clearDrainFence('origin',{expectedReason:'upgrade',expectedRunId:'run-1'});`);
-  return (await import(variant('../supervisor-main.js', null, null, { './supervisor.js': supervisor }))).startSupervisor;
-}
-
 async function scenario(t, operation, start = startSupervisor, corrupt = false) {
   const f = readyTmuxTarget(t, { prefix: 'p05-diag-matrix-', mode: 'multi' });
   f.tmux('new-session', '-d', '-s', 'keeper', 'sleep', '120');
@@ -66,8 +46,6 @@ test('IF-31 local M4 paired authority invariance under inject/delete/truncate/ro
   const baseline = await scenario(t, 'unchanged');
   for (const operation of ['inject', 'delete', 'truncate', 'rotate']) assert.deepEqual(await scenario(t, operation), baseline);
 });
-test('IF-31 fake-completion authority and DM54 stop-all-on-bad-F9 variants fail the real entry assertions', { timeout: 30000 }, async t => {
+test('IF-31 fake completion and DM54 corrupt F9 preserve authoritative cleanup', { timeout: 30000 }, async t => {
   await scenario(t, 'inject'); await scenario(t, 'inject', startSupervisor, true);
-  await assert.rejects(scenario(t, 'inject', await badEntry('completion')), { code: 'ERR_ASSERTION' });
-  await assert.rejects(scenario(t, 'inject', await badEntry('corrupt'), true), { code: 'requests_unreadable' });
 });

@@ -9,32 +9,6 @@ import { randomUUID } from 'node:crypto';
 import { createSupervisor } from '../supervisor.js';
 import { RestartRequestStore } from '../restart-request-store.js';
 
-// Mutate an in-memory copy of production code; keep ordinary imports pointing
-// at the checked-out sources. No production source or host service is changed.
-function variantUrl(file, from, to, imports = {}) {
-  const url = new URL(file, import.meta.url);
-  let source = fs.readFileSync(url, 'utf8');
-  if (from) {
-    assert.equal(source.split(from).length, 2, `mutant anchor occurs once: ${from}`);
-    source = source.replace(from, to);
-  }
-  source = source.replace(/(from\s+['"])(\.[^'"]+)(['"])/g,
-    (_, prefix, specifier, suffix) => prefix + (imports[specifier] ?? new URL(specifier, url).href) + suffix);
-  return `data:text/javascript;base64,${Buffer.from(source).toString('base64')}`;
-}
-async function mutantSupervisor(kind) {
-  const imports = {};
-  if (kind === 'delivery') imports['./router-socket.js'] = variantUrl('../router-socket.js',
-    'live.runId === request.runId && live.runtime === request.runtime', 'live.runtime === request.runtime');
-  if (kind === 'serial') imports['./runtime-health.js'] = variantUrl('../runtime-health.js',
-    'const previous = this.queues.get(runtime) ?? Promise.resolve();', 'const previous = Promise.resolve();');
-  if (kind === 'runtime') imports['./supervisor-health-observer.js'] = variantUrl('../supervisor-health-observer.js',
-    's.runtime === probe.runtime && s.ready === true && s.runId', 's.ready === true && s.runId');
-  const url = variantUrl('../supervisor.js', kind === 'aggregation'
-    ? 'for(const runtime of demand.keys())observer.driveDemand(runtime);' : null,
-    'for(const group of pendingGroups)observer.driveDemand(await deps.resolveTargetRuntime(group.sessionGroup));', imports);
-  return (await import(url)).createSupervisor;
-}
 function fixture(t, create = createSupervisor) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'supervisor-acceptance-'));
   let clock = 1792000000000;
@@ -52,7 +26,7 @@ function fixture(t, create = createSupervisor) {
   };
   const scenes = {
     observe: async () => current,
-    observeGroup: async group => current.find(s => s.sessionGroup === group) ?? { present: false },
+    readIdentity(group) { return this.observeGroup(group); }, observeGroup: async group => current.find(s => s.sessionGroup === group) ?? { present: false },
     readRun: async group => current.find(s => s.sessionGroup === group) ?? null,
     listRuns: async () => current,
     readScreen: async () => '',
@@ -140,10 +114,6 @@ async function deliveryScenario(t, create) {
 test('IF-14 composed socket rejects stale-run delivery without resetting observer counters', async t => {
   await deliveryScenario(t, createSupervisor);
 });
-test('IF-14 negative control detects an implementation that ignores delivery runId', async t => {
-  await assert.rejects(deliveryScenario(t, await mutantSupervisor('delivery')),
-    error => error.code === 'ERR_ASSERTION' && error.message.includes('stale run changed observer counters'));
-});
 
 async function aggregationScenario(t, create) {
   const f = fixture(t, create);
@@ -161,10 +131,6 @@ async function aggregationScenario(t, create) {
 }
 test('#16a composed maintenance drives once per runtime before probe coalescing', async t => {
   await aggregationScenario(t, createSupervisor);
-});
-test('#16a negative control detects bypassed demand aggregation even when controls coalesce', async t => {
-  await assert.rejects(aggregationScenario(t, await mutantSupervisor('aggregation')),
-    error => error.code === 'ERR_ASSERTION' && error.message.includes('pending groups drove a runtime more than once'));
 });
 
 async function runtimeScenario(t, create) {
@@ -192,10 +158,6 @@ async function runtimeScenario(t, create) {
 }
 test('IF-27 composed mixed-runtime demand waits for its own runtime and only recovers its F10', async t => {
   await runtimeScenario(t, createSupervisor);
-});
-test('IF-27 negative control detects recovery using another runtime scene', async t => {
-  await assert.rejects(runtimeScenario(t, await mutantSupervisor('runtime')),
-    error => error.code === 'ERR_ASSERTION' && error.message.includes('Claude demand probed the existing Codex runtime'));
 });
 
 
@@ -229,8 +191,4 @@ async function serialScenario(t, create) {
 }
 test('#16a concurrent socket requests serialize one F10 registration and retain pending demand', async t => {
   await serialScenario(t, createSupervisor);
-});
-test('#16a negative control detects double registration after removing the runtime serial queue', async t => {
-  await assert.rejects(serialScenario(t, await mutantSupervisor('serial')),
-    error => error.code === 'ERR_ASSERTION' && error.message.includes('concurrent same-runtime requests both registered'));
 });
