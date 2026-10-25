@@ -1,4 +1,4 @@
-import test from 'node:test';
+import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -8,6 +8,7 @@ import { createMemoryEditor, serveMemoryTools } from '../memory-mcp-server.js';
 import { acquire, memoryScope } from '../sync-lock.js';
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'memory-tool-'));
+after(() => fs.rmSync(root, { recursive: true, force: true }));
 const runId = '11111111-1111-4111-8111-111111111111';
 async function fixture(kind, group, sharedRoot) {
   const dir = sharedRoot ?? fs.mkdtempSync(path.join(root, kind));
@@ -15,15 +16,16 @@ async function fixture(kind, group, sharedRoot) {
   if (group) env.ZYLOS_SESSION_GROUP = group; else delete env.ZYLOS_SESSION_GROUP;
   const currentRunId = async () => runId;
   const token = await acquire({ kind, env }, { currentRunId });
-  return { env, token, dir, editor: createMemoryEditor(env, { currentRunId }), scope: await memoryScope(env) };
+  return { env, token, dir, editor: createMemoryEditor(env), scope: await memoryScope(env) };
 }
 const create = (token, file, replacement = 'content') => ({ op: 'create', path: file, replacement, token });
 
-test('IF43: group, origin and global use marker-derived target scopes', async () => {
+test('IB53 local: group, origin and global use marker-derived target scopes', async () => {
   const group = await fixture('group', 'telegram:g-1');
   const temporary = `session-groups/telegram:g-1/state.md.${group.token}.tmp`;
   assert.equal((await group.editor(create(group.token, temporary))).ok, true);
-  for (const target of ['identity.md', 'state.md', 'session-groups/telegram:g-2/state.md.' + group.token + '.tmp']) {
+  for (const target of ['identity.md', 'state.md', 'session-groups/telegram:g-1/state.md',
+    'session-groups/telegram:g-1/inbox.md', 'session-groups/telegram:g-2/state.md.' + group.token + '.tmp']) {
     assert.equal((await group.editor(create(group.token, target))).code, 'PATH_NOT_ALLOWED');
   }
   const origin = await fixture('origin', 'origin');
@@ -36,23 +38,21 @@ test('IF43: group, origin and global use marker-derived target scopes', async ()
   assert.equal((await global.editor(create(global.token, 'session-groups/origin/state.md'))).code, 'PATH_NOT_ALLOWED');
 });
 
-test('IF43: ownership checks happen within the real F8 lock and ignore model role claims', async () => {
+test('IB53 local: model role claims are rejected and the server environment stays bound', async () => {
   const f = await fixture('global');
   assert.equal((await f.editor({ ...create(f.token, 'identity.md'), kind: 'global' })).code, 'INVALID_INPUT');
   assert.equal((await f.editor(create('0'.repeat(32), 'identity.md'))).code, 'TOKEN_MISMATCH');
   assert.equal((await f.editor(create(undefined, 'identity.md'))).code, 'TOKEN_MISMATCH');
-  const stale = createMemoryEditor(f.env, { currentRunId: async () => 'replacement-run' });
-  assert.equal((await stale(create(f.token, 'identity.md'))).code, 'TOKEN_MISMATCH');
   const unbound = createMemoryEditor({ ZYLOS_DIR: f.dir });
   assert.equal((await unbound(create(f.token, 'identity.md'))).code, 'SCOPE_UNBOUND');
   // Server captures its own environment at startup, independent of later mutation.
-  const env = { ...f.env }, captured = createMemoryEditor(env, { currentRunId: async () => runId });
+  const env = { ...f.env }, captured = createMemoryEditor(env);
   env.ZYLOS_RUN_ID = 'different';
   assert.equal((await captured(create(f.token, 'identity.md'))).ok, true);
   assert.equal(fs.existsSync(path.join(f.dir, 'memory', 'state.md')), false);
 });
 
-test('IF43: create and fragment conflicts preserve existing files', async () => {
+test('IB53 local: create and fragment conflicts preserve existing files', async () => {
   const f = await fixture('global');
   assert.equal((await f.editor(create(f.token, 'identity.md', 'left middle right'))).ok, true);
   assert.equal((await f.editor(create(f.token, 'identity.md', 'overwrite'))).code, 'EXISTS');
@@ -65,7 +65,7 @@ test('IF43: create and fragment conflicts preserve existing files', async () => 
   assert.equal((await f.editor({ op: 'edit', path: 'references.md', expected: '', replacement: 'index', token: f.token })).ok, true);
 });
 
-test('IF43: traversal, target symlinks and parent symlinks cannot escape allowed paths', async () => {
+test('IB53 local: traversal, target symlinks and parent symlinks cannot escape allowed paths', async () => {
   const f = await fixture('global');
   const memory = path.join(f.dir, 'memory');
   fs.mkdirSync(memory, { recursive: true });
@@ -80,15 +80,15 @@ test('IF43: traversal, target symlinks and parent symlinks cannot escape allowed
   assert.equal(fs.existsSync(path.join(outside, 'new.md')), false);
 });
 
-test('IF43: write failure reports failure and preserves original content', async () => {
+test('IB53 local: write failure reports failure and preserves original content', async () => {
   const f = await fixture('global');
   await f.editor(create(f.token, 'identity.md', 'original'));
-  const failed = createMemoryEditor(f.env, { currentRunId: async () => runId, fragment: () => { throw Object.assign(new Error('disk failure'), { code: 'EIO' }); } });
+  const failed = createMemoryEditor(f.env, { fragment: () => { throw Object.assign(new Error('disk failure'), { code: 'EIO' }); } });
   await assert.rejects(failed({ op: 'edit', path: 'identity.md', expected: 'original', replacement: 'new', token: f.token }), /disk failure/);
   assert.equal(fs.readFileSync(path.join(f.dir, 'memory/identity.md'), 'utf8'), 'original');
 });
 
-test('IF43: stdio emits only protocol frames and advertises the restricted tool', async () => {
+test('IB53 local: stdio emits only protocol frames and advertises the restricted tool', async () => {
   const input = new PassThrough(), output = new PassThrough();
   let received = ''; output.on('data', chunk => { received += chunk; });
   const done = serveMemoryTools({ input, output, editor: async () => ({ ok: false, code: 'SCOPE_UNBOUND', message: 'unbound' }) });
@@ -107,7 +107,7 @@ test('IF43: stdio emits only protocol frames and advertises the restricted tool'
   assert.equal(JSON.parse(frames[2].result.content[0].text).code, 'SCOPE_UNBOUND');
 });
 
-test('IF43: concurrent group editors cannot cross scope and origin tokens choose separate permissions', async () => {
+test('IB53 local: concurrent group editors cannot cross scope and origin tokens choose separate permissions', async () => {
   const a = await fixture('group', 'telegram:a'), b = await fixture('group', 'telegram:b', a.dir);
   const fileA = `session-groups/telegram:a/state.md.${a.token}.tmp`;
   const fileB = `session-groups/telegram:b/state.md.${b.token}.tmp`;
@@ -121,7 +121,7 @@ test('IF43: concurrent group editors cannot cross scope and origin tokens choose
   assert.equal((await origin.editor(create(origin.token, 'identity.md'))).ok, true);
 });
 
-test('IF43: actual stdio process exposes no authority when forwarded run env is absent', async () => {
+test('IB53 local: actual stdio process exposes no authority when forwarded run env is absent', async () => {
   const { execFileSync } = await import('node:child_process');
   const env = { ...process.env };
   delete env.ZYLOS_RUN_ID; delete env.ZYLOS_SESSION_GROUP;

@@ -2,7 +2,7 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createInterface } from 'node:readline';
-import { memoryScope, readCurrentRunId, readMarker, withMemoryLock, memoryError } from './sync-lock.js';
+import { guard, memoryError } from './sync-lock.js';
 import { resolveAllowedMemoryPath, applyFragmentLocked, isSelfPath } from './self-write.js';
 
 const codes = new Set(['PATH_NOT_ALLOWED', 'TOKEN_MISMATCH', 'FRAGMENT_CONFLICT', 'EXISTS', 'INVALID_INPUT', 'LOCK_TIMEOUT', 'SCOPE_UNBOUND']);
@@ -17,41 +17,26 @@ export const EDIT_MEMORY_TOOL = {
 };
 
 /** Bind once to the server's environment; requests cannot supply an identity. */
-export function createMemoryEditor(env = process.env, { currentRunId = readCurrentRunId, lock = withMemoryLock,
-  fragment = applyFragmentLocked } = {}) {
+export function createMemoryEditor(env = process.env, { fragment = applyFragmentLocked } = {}) {
   const binding = Object.freeze({ ...env });
   return async input => {
     try {
       if (!input || Array.isArray(input) || typeof input !== 'object' ||
           Object.keys(input).some(key => !['op', 'path', 'expected', 'replacement', 'token'].includes(key)) ||
           !['create', 'edit'].includes(input.op) || typeof input.path !== 'string' ||
-          typeof input.replacement !== 'string' || (input.op === 'edit' && typeof input.expected !== 'string') ||
-          (Object.hasOwn(input, 'expected') && typeof input.expected !== 'string')) {
+          typeof input.replacement !== 'string' ||
+          ((input.op === 'edit' || Object.hasOwn(input, 'expected')) && typeof input.expected !== 'string')) {
         throw memoryError('INVALID_INPUT', 'Expected an edit or create memory operation');
       }
-      if (!binding.ZYLOS_RUN_ID) throw memoryError('SCOPE_UNBOUND', 'The tool has no running session identity');
-      let scope;
-      try { scope = await memoryScope(binding); }
-      catch { throw memoryError('SCOPE_UNBOUND', 'The tool has no valid session scope'); }
-      if (!['group', 'single'].includes(scope.kind)) throw memoryError('SCOPE_UNBOUND', 'The tool has no bound session scope');
-      if (typeof input.token !== 'string' || !/^[0-9a-f]{32}$/.test(input.token)) {
-        throw memoryError('TOKEN_MISMATCH', 'A current Sync token is required');
-      }
-      return await lock(scope.runDir, async assertHeld => {
-        const kinds = scope.kind === 'single' ? ['global'] : scope.sessionGroup === 'origin' ? ['group', 'origin'] : ['group'];
-        const marker = kinds.map(kind => readMarker(scope.runDir, kind).marker)
-          .find(candidate => candidate?.token === input.token && kinds.includes(candidate.kind));
-        if (!marker || marker.runId !== scope.runId || await currentRunId(scope) !== scope.runId) {
-          throw memoryError('TOKEN_MISMATCH', 'Sync ownership no longer matches this running session');
-        }
-        const temporary = marker.kind === 'group'
-          ? `session-groups/${scope.sessionGroup}/state.md.${input.token}.tmp`
-          : `state.md.${input.token}.tmp`;
+      return await guard({ token: input.token, env: binding }, scope => {
+        const { marker } = scope;
+        const temporary = path.relative(path.join(scope.root, 'memory'),
+          path.join(scope.memoryDir, `state.md.${input.token}.tmp`)).split(path.sep).join('/');
         const allowed = relative => (marker.kind !== 'origin' && relative === temporary) ||
           (marker.kind !== 'group' && isSelfPath(relative));
         const resolved = resolveAllowedMemoryPath({ root: scope.root, path: input.path, allowed });
         const result = fragment({ target: resolved.target, expected: input.op === 'create' ? null : input.expected,
-          replacement: input.replacement, assertHeld });
+          replacement: input.replacement });
         return { ok: true, path: resolved.path, bytes: result.bytes };
       });
     } catch (error) {

@@ -16,7 +16,7 @@ failure, do not release because no token was acquired.
 
 After acquisition, `TOKEN_MISMATCH` / exit 3 means stop immediately: no more
 script/tool operations, no release, no prompts. For any other required-step
-failure, stop later writes, release once with
+failure (including a tool protocol error), stop later writes, release once with
 `sync-lock.js release --kind <kind> --token T`, and report failure to the
 requesting session with the steps already committed. On success or no input,
 release exactly once too. If release fails, append that warning to the original
@@ -29,6 +29,17 @@ leave remaining inputs for recovery in a later triggered Sync. A crash or failed
 commit does not justify deleting inputs. Do not start another Sync merely to
 repair leftovers when there are no new conversations.
 
+## Sync limits
+
+Resolve limits once for this run using the same source order as the supervisor:
+first the inherited environment variable, then its key in
+`<ZYLOS_DIR>/.zylos/config.json`, then the default. A value that is not a positive
+integer is unset and falls through to the next source. `batchLimit` uses
+`ZYLOS_SYNC_BATCH_LIMIT` / `sync_batch_limit` / 200. The Origin raw-row budget
+uses `ZYLOS_ORIGIN_SYNC_THRESHOLD` / `origin_sync_threshold` / 50. Keep the
+resolved values for this run; do not substitute the defaults for configured
+values in subsequent fetch commands.
+
 ## Group Sync
 
 This also applies to the origin group's own working state. Set kind=group;
@@ -36,7 +47,7 @@ G is the inherited `ZYLOS_SESSION_GROUP`.
 
 1. Acquire. Read `c4-db.js unsummarized --group G --json`. If count is zero,
    release and report no input. Do not cleanup, rotate, or consume inbox.
-2. Fetch `c4-fetch.js --unsummarized --group G --up-to <safeEnd> --limit 200`.
+2. Fetch `c4-fetch.js --unsummarized --group G --up-to <safeEnd> --limit <batchLimit>`.
    Save its rows, latest summary, and returned batch end. The end printed for
    this batch, not a later observed frontier, is the checkpoint target. A read
    failure ends the run before any cleanup/rotation.
@@ -76,9 +87,8 @@ runs in the origin session, uses kind=origin, and never calls sync-files.
 
 1. Acquire, then read `c4-db.js origin-sync backlog --json`. No candidates means
    release and return. Save each group's cursorFrom S, upTo, and cursorUpdatedAt.
-   Process oldest bookmarks first. The raw-row budget is the configured
-   `origin_sync_threshold` (`ZYLOS_ORIGIN_SYNC_THRESHOLD`, default 50);
-   checkpoint summaries do not consume it.
+   Process oldest bookmarks first. The raw-row budget is the Origin budget
+   resolved above; checkpoint summaries do not consume it.
 2. For each candidate G, fetch
    `c4-fetch.js --origin-sync --group G --summaries-only`. Save C=coverageEnd
    and K=checkpointId from this same read alongside all summaries. If that
