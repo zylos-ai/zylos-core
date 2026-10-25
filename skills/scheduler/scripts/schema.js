@@ -1,9 +1,20 @@
 import { migrateSchema } from './migrations.js';
+import { migrateToV2 } from './migrations-v2.js';
 import { inspectLayout } from '../../comm-bridge/scripts/sqlite-schema.js';
-export const SUPPORTED_SCHEMA_VERSION = 1;
+export const SUPPORTED_SCHEMA_VERSION = 2;
 export const supportsNewDatabase = true;
 // Unmarked released layouts enter the explicit schema migration chain at 0.
-export const MIGRATIONS = Object.freeze({ 0: Object.freeze({ to: 1, migrate: migrateSchema }) });
+export const MIGRATIONS = Object.freeze({
+  0: Object.freeze({ to: 1, migrate: migrateSchema }),
+  1: Object.freeze({
+    to: 2,
+    changes: { addColumns: { tasks: {
+      session_component: { type: 'TEXT', pk: false },
+      session_group_name: { type: 'TEXT', pk: false },
+    } } },
+    migrate: migrateToV2,
+  }),
+});
 export const TABLES = {
   "tasks": [
     "id",
@@ -27,7 +38,9 @@ export const TABLES = {
     "created_at",
     "updated_at",
     "last_error",
-    "failed_at"
+    "failed_at",
+    "session_component",
+    "session_group_name"
   ],
   "task_history": [
     "id",
@@ -44,7 +57,7 @@ export const TABLES = {
     "updated_at"
   ]
 };
-export const COLUMN_DEFINITIONS = {"tasks": {"id": {"type": "TEXT", "pk": true}, "name": {"type": "TEXT", "pk": false}, "description": {"type": "TEXT", "pk": false}, "prompt": {"type": "TEXT", "pk": false}, "type": {"type": "TEXT", "pk": false}, "cron_expression": {"type": "TEXT", "pk": false}, "interval_seconds": {"type": "INTEGER", "pk": false}, "timezone": {"type": "TEXT", "pk": false}, "next_run_at": {"type": "INTEGER", "pk": false}, "last_run_at": {"type": "INTEGER", "pk": false}, "priority": {"type": "INTEGER", "pk": false}, "status": {"type": "TEXT", "pk": false}, "require_idle": {"type": "INTEGER", "pk": false}, "miss_threshold": {"type": "INTEGER", "pk": false}, "reply_channel": {"type": "TEXT", "pk": false}, "reply_endpoint": {"type": "TEXT", "pk": false}, "retry_count": {"type": "INTEGER", "pk": false}, "max_retries": {"type": "INTEGER", "pk": false}, "created_at": {"type": "INTEGER", "pk": false}, "updated_at": {"type": "INTEGER", "pk": false}, "last_error": {"type": "TEXT", "pk": false}, "failed_at": {"type": "INTEGER", "pk": false}}, "task_history": {"id": {"type": "INTEGER", "pk": true}, "task_id": {"type": "TEXT", "pk": false}, "executed_at": {"type": "INTEGER", "pk": false}, "completed_at": {"type": "INTEGER", "pk": false}, "status": {"type": "TEXT", "pk": false}, "duration_ms": {"type": "INTEGER", "pk": false}, "error": {"type": "TEXT", "pk": false}}, "system_state": {"key": {"type": "TEXT", "pk": true}, "value": {"type": "TEXT", "pk": false}, "updated_at": {"type": "INTEGER", "pk": false}}};
+export const COLUMN_DEFINITIONS = {"tasks": {"session_component": {"type": "TEXT", "pk": false}, "session_group_name": {"type": "TEXT", "pk": false}, "id": {"type": "TEXT", "pk": true}, "name": {"type": "TEXT", "pk": false}, "description": {"type": "TEXT", "pk": false}, "prompt": {"type": "TEXT", "pk": false}, "type": {"type": "TEXT", "pk": false}, "cron_expression": {"type": "TEXT", "pk": false}, "interval_seconds": {"type": "INTEGER", "pk": false}, "timezone": {"type": "TEXT", "pk": false}, "next_run_at": {"type": "INTEGER", "pk": false}, "last_run_at": {"type": "INTEGER", "pk": false}, "priority": {"type": "INTEGER", "pk": false}, "status": {"type": "TEXT", "pk": false}, "require_idle": {"type": "INTEGER", "pk": false}, "miss_threshold": {"type": "INTEGER", "pk": false}, "reply_channel": {"type": "TEXT", "pk": false}, "reply_endpoint": {"type": "TEXT", "pk": false}, "retry_count": {"type": "INTEGER", "pk": false}, "max_retries": {"type": "INTEGER", "pk": false}, "created_at": {"type": "INTEGER", "pk": false}, "updated_at": {"type": "INTEGER", "pk": false}, "last_error": {"type": "TEXT", "pk": false}, "failed_at": {"type": "INTEGER", "pk": false}}, "task_history": {"id": {"type": "INTEGER", "pk": true}, "task_id": {"type": "TEXT", "pk": false}, "executed_at": {"type": "INTEGER", "pk": false}, "completed_at": {"type": "INTEGER", "pk": false}, "status": {"type": "TEXT", "pk": false}, "duration_ms": {"type": "INTEGER", "pk": false}, "error": {"type": "TEXT", "pk": false}}, "system_state": {"key": {"type": "TEXT", "pk": true}, "value": {"type": "TEXT", "pk": false}, "updated_at": {"type": "INTEGER", "pk": false}}};
 export function inspectSchema(db, { allowNew = false, strict = true, allowExtraTables, allowExtraColumns, rejectUnsafeExtensions = strict } = {}) {
   return inspectLayout(db, 'scheduler', SUPPORTED_SCHEMA_VERSION, TABLES, { allowNew, strict, allowExtraTables, allowExtraColumns, rejectUnsafeExtensions, definitions: COLUMN_DEFINITIONS, migrateFromOlder: true });
 }

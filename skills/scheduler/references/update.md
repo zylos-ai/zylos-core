@@ -17,6 +17,7 @@ All `add` timing options (`--in`, `--at`, `--cron`, `--every`) plus:
 | `--no-block-queue-until-idle` | Disable block-queue-until-idle behavior |
 | `--reply-channel "<source>"` | Update reply channel |
 | `--reply-endpoint "<endpoint>"` | Update reply endpoint |
+| `--reply-session-group "<L>"` | Target group-local name; requires explicit `--reply-channel` |
 | `--clear-reply` | Clear reply configuration |
 | `--miss-threshold <seconds>` | Update miss threshold |
 
@@ -43,3 +44,9 @@ cli.js update task-abc --clear-reply
 # Switch from cron to interval
 cli.js update task-abc --every "2 hours"
 ```
+
+## Saved execution group
+
+A changed reply target recomputes the saved component/group; omitted L selects the component's overall group, not the prior group. Supplying L requires `--reply-channel` in this same command. Explicit channels are checked read-only against installed component directories, without requiring `send.js`; rejection leaves the task unchanged. Endpoint-only edits reuse the existing channel and select its overall group. `--clear-reply` preserves the saved group, including an empty saved group; schedule/prompt/priority-only edits preserve it too. The editor's session never retargets an existing task.
+
+Take exact channel/endpoint and group-local name from Core reply-via, mapping `--session-group` to `--reply-session-group`. For another chat, query `c4-db.js groups --match <text> --json` and use `componentName`/`sessionGroupName`. If not yet registered, use the component's `node scripts/session-group.js <endpoint>` (successful empty output means overall group; failure does not). Otherwise follow component documentation or have the user send a message and query again. Do not infer namespaces or guess L.

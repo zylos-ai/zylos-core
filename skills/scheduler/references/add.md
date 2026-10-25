@@ -29,6 +29,7 @@ Creates a new scheduled task. Exactly one timing option is required.
 | `--miss-threshold <seconds>` | Skip if overdue by more than this | 300 |
 | `--reply-channel "<source>"` | Reply channel (e.g., "telegram", "lark") | none |
 | `--reply-endpoint "<endpoint>"` | Reply endpoint (e.g., user ID) | none |
+| `--reply-session-group "<L>"` | Group-local name; requires explicit `--reply-channel` | component overall group |
 
 ## Examples
 
@@ -77,7 +78,17 @@ Don't use for: user notifications, time-sensitive tasks, high-priority alerts.
 ```bash
 --reply-channel "telegram" --reply-endpoint "8101553026"     # Telegram user
 --reply-channel "lark" --reply-endpoint "chat_xxx topic_yyy" # Lark topic
---reply-channel "telegram"                                    # Broadcast
+--reply-channel "telegram"                                    # Overall component group; no reply endpoint
 ```
 
 Endpoint structure depends on channel implementation. Can contain multiple space-separated values.
+
+### Saving the execution group
+
+An explicit `--reply-channel X` must name an installed component directory (no `send.js` requirement). It stores X and optional `--reply-session-group L` without allocating a namespace. This target takes precedence over the creating session. Without X, creation uses only `ZYLOS_SESSION_GROUP`: a known namespace is reverse-mapped read-only; origin or no variable saves no group. Unknown namespaces and malformed groups fail without creating a task. A target need not already have messages.
+
+Copy channel/endpoint from Core reply-via and rename its `--session-group L` option to `--reply-session-group L`. For another chat use `c4-db.js groups --match <text> --json`, selecting `componentName` and `sessionGroupName`; do not split the full namespace yourself. For a new chat use the component's `node scripts/session-group.js <endpoint>`; successful empty output means the overall group, while failure must not be treated as empty. If unavailable, follow component docs or ask for a message in that chat and query again. Never guess L or reject a target solely because groups has no row. Wrong L can execute in a different context even when the reply endpoint is right.
+
+```bash
+cli.js add "Report to this group" --in "1 hour" --reply-channel telegram --reply-endpoint "-1001" --reply-session-group "g-1001"
+```

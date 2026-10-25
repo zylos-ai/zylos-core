@@ -21,7 +21,7 @@ for (const [name, owner, seed, query] of [
     const before=db.prepare(query).all();
     const schemaBefore=db.prepare('SELECT sql FROM sqlite_master ORDER BY name').all();
     const plan=planDatabaseMigration(db,owner);
-    assert.deepEqual(plan.steps.map(({from,to})=>[from,to]),owner===c4?[[0,1],[1,2]]:[[0,1]]);
+    assert.deepEqual(plan.steps.map(({from,to})=>[from,to]),owner===c4 || owner===scheduler?[[0,1],[1,2]]:[[0,1]]);
     assert.equal(db.pragma('user_version',{simple:true}),0);
     assert.deepEqual(db.prepare('SELECT sql FROM sqlite_master ORDER BY name').all(),schemaBefore);
     let calls=0;
@@ -296,11 +296,13 @@ test('C4 v1 migrates to current schema and retains rows and user extensions', ()
 for(const [name,base,table,query,marker] of [
  ['scheduler',scheduler,'system_state','SELECT key,value FROM system_state','synthetic scheduler v1 state'],
  ['web-console',web,'sessions','SELECT token FROM sessions','fixture-web-v1'],
-])test(`tagged ${name} v1 fixture migrates to a synthetic v2 with rows and extensions retained`,()=>{
+])test(`tagged ${name} v1 fixture migrates through current to a synthetic next version with rows and extensions retained`,()=>{
  const db=new Database(':memory:');try{
   db.exec(fs.readFileSync(new URL(`${name}-v0.9.0-v1.sql`,fixtures),'utf8'));
   assert.equal(db.pragma('user_version',{simple:true}),1);
   assert.equal(base.inspectSchema(db).version,1);
+  const currentVersion=base.SUPPORTED_SCHEMA_VERSION, nextVersion=currentVersion+1;
+  migrateDatabase(db,base);
   const reference=new Database(':memory:');
   try{
    migrateDatabase(reference,base,{allowNew:true});
@@ -315,15 +317,15 @@ for(const [name,base,table,query,marker] of [
   assert.ok(before.some(row=>Object.values(row).includes(marker)));
   const tables={...base.TABLES,[table]:[...base.TABLES[table],'fixture_v2']};
   const definitions={...base.COLUMN_DEFINITIONS,[table]:{...base.COLUMN_DEFINITIONS[table],fixture_v2:{type:'TEXT',pk:false}}};
-  const owner={...base,name:`${name}-future`,SUPPORTED_SCHEMA_VERSION:2,TABLES:tables,
+  const owner={...base,name:`${name}-future`,SUPPORTED_SCHEMA_VERSION:nextVersion,TABLES:tables,
    inspectSchema(connection,options){
     const version=connection.pragma('user_version',{simple:true});
-    return inspectLayout(connection,`${name}-future`,2,version===1?base.TABLES:tables,{...options,definitions:version===1?base.COLUMN_DEFINITIONS:definitions});
+    return inspectLayout(connection,`${name}-future`,nextVersion,version===currentVersion?base.TABLES:tables,{...options,definitions:version===currentVersion?base.COLUMN_DEFINITIONS:definitions});
    },
-   MIGRATIONS:{...base.MIGRATIONS,1:{to:2,changes:{addColumns:{[table]:{fixture_v2:{type:'TEXT',pk:false}}}},migrate(connection){connection.exec(`ALTER TABLE ${table} ADD COLUMN fixture_v2 TEXT`);}}},
+   MIGRATIONS:{...base.MIGRATIONS,[currentVersion]:{to:nextVersion,changes:{addColumns:{[table]:{fixture_v2:{type:'TEXT',pk:false}}}},migrate(connection){connection.exec(`ALTER TABLE ${table} ADD COLUMN fixture_v2 TEXT`);}}},
   };
   const result=migrateDatabase(db,owner,extensionOptions);
-  assert.equal(result.version,2);
+  assert.equal(result.version,nextVersion);
   assert.deepEqual(result.extensions,{tables:['archive_records'],columns:[{table,column:'external'}]});
   assert.deepEqual(db.prepare(query).all(),before);
   assert.ok(db.prepare(`SELECT external FROM ${table}`).all().every(row=>row.external==='retained core extension'));

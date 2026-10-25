@@ -73,24 +73,17 @@ export function handleStaleRunningTasks(db) {
   for (const task of staleTasks) {
     console.log(`[${new Date().toISOString()}] Task ${task.id} (${task.name}) timed out after ${TASK_TIMEOUT}s`);
 
-    db.prepare(`
-      UPDATE task_history
-      SET status = 'timeout', completed_at = ?
-      WHERE task_id = ? AND status = 'started'
-    `).run(now(), task.id);
-
-    if (task.type === 'one-time') {
+    db.transaction(() => {
+      // Recheck after acquiring the write lock: done may have won the race.
+      const changed = db.prepare(`
+        UPDATE tasks SET status = ?, last_error = 'Task timed out', updated_at = ?
+        WHERE id = ? AND status = 'running' AND updated_at < ?
+      `).run(task.type === 'one-time' ? 'failed' : 'completed', currentTime, task.id, staleThreshold);
+      if (!changed.changes) return;
       db.prepare(`
-        UPDATE tasks
-        SET status = 'failed', last_error = 'Task timed out', updated_at = ?
-        WHERE id = ?
-      `).run(now(), task.id);
-    } else {
-      db.prepare(`
-        UPDATE tasks
-        SET status = 'completed', last_error = 'Task timed out', updated_at = ?
-        WHERE id = ?
-      `).run(now(), task.id);
-    }
+        UPDATE task_history SET status = 'timeout', completed_at = ?
+        WHERE task_id = ? AND status = 'started'
+      `).run(currentTime, task.id);
+    }).immediate();
   }
 }

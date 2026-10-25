@@ -30,7 +30,8 @@ function cliRaw(args, env = {}) {
 function withTmpDir(fn) {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'scheduler-cli-'));
   const dbPath = path.join(tmpDir, 'scheduler', 'scheduler.db');
-  const env = { ZYLOS_DIR: tmpDir, TZ: 'UTC' };
+  const env = { ZYLOS_DIR: tmpDir, TZ: 'UTC', ZYLOS_SESSION_GROUP: 'origin' };
+  for (const name of ['telegram', 'multica']) fs.mkdirSync(path.join(tmpDir, '.claude/skills', name), { recursive: true });
   try {
     return fn({ tmpDir, dbPath, env });
   } finally {
