@@ -163,7 +163,7 @@ describe('tool-watchdog', () => {
     assert.equal(calls.enqueues.length, 1);
   });
 
-  it('clears state without a redundant write when the pane is interactively recovered', () => {
+  it('T08: pane appearance cannot synthesize tool completion', () => {
     const state = createState({
       watchdogState: {
         episode_key: 'toolu_123',
@@ -190,12 +190,12 @@ describe('tool-watchdog', () => {
       deps,
     });
 
-    assert.equal(phase.watchdog_phase, 'recovered');
-    assert.equal(phase.api_activity_dirty, true);
-    assert.equal(calls.hints.length, 1);
-    assert.equal(calls.cleared, 1);
+    assert.equal(phase.watchdog_phase, 'interrupt_wait');
+    assert.equal(phase.api_activity_dirty, false);
+    assert.equal(calls.hints.length, 0);
+    assert.equal(calls.cleared, 0);
     assert.equal(calls.writes, 0);
-    assert.equal(state.watchdogState, null);
+    assert.equal(state.watchdogState.episode_key, 'toolu_123');
   });
 
   it('escalates to guardian recovery after interrupt grace expires', () => {
