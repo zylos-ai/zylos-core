@@ -6,7 +6,6 @@ import { spawnSync } from 'node:child_process';
 import { test } from 'node:test';
 
 const usageUrl = new URL('../usage-monitor.js', import.meta.url).href;
-const entryUrl = new URL('../activity-monitor.js', import.meta.url).href;
 
 function runIsolated(t, source, loader) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'usage-optional-sqlite-'));
@@ -39,39 +38,21 @@ const missingSqlite = `
   };
 `;
 
-test('disabled usage allows the real monitor entry to load without SQLite', t => {
-  // Stop at the orchestration boundary, before starting guardians, timers,
-  // sockets or subprocesses; all real entrypoint imports still evaluate.
-  const loader = `
-    export async function load(url, context, nextLoad) {
-      if (url.endsWith('/monitor-orchestrator.js')) return {
-        format: 'module', shortCircuit: true,
-        source: ${JSON.stringify(`
-          import assert from 'node:assert/strict';
-          export class MonitorOrchestrator {
-            constructor(deps) { this.deps = deps; }
-            start() {
-              const usage = this.deps.createUsageMonitor({ runtimeId: 'codex' });
-              assert.equal(usage.isMonitorEnabled(), false);
-              assert.equal(usage.isAlertEnabled(), false);
-              globalThis.entryLoadedWithoutServices = true;
-              throw new Error('TEST_STOP_BEFORE_SERVICES');
-            }
-          }
-        `)}
-      };
-      return nextLoad(url, context);
-    }
-  `;
+test('disabled usage module loads without SQLite; Supervisor database remains independently required', t => {
   runIsolated(t, `
     import assert from 'node:assert/strict';
     ${missingSqlite}
-    process.exit = () => { throw new Error('TEST_ENTRY_STOP'); };
-    await assert.rejects(import(${JSON.stringify(entryUrl)}), /TEST_ENTRY_STOP/);
-    assert.equal(globalThis.entryLoadedWithoutServices, true);
-    assert.equal(sqliteLoads, 0);
+    const { UsageMonitor } = await import(${JSON.stringify(usageUrl)});
+    const usage = new UsageMonitor({runtimeId:'codex'}, {monitorEnabled:false,alertEnabled:false});
+    assert.equal(usage.isMonitorEnabled(),false);
+    assert.equal(usage.isAlertEnabled(),false);
+    assert.equal(sqliteLoads,0);
+    await assert.rejects(import(${JSON.stringify(new URL('../supervisor-main.js', import.meta.url).href)}), /SQLite dependency unavailable/);
     console.log('OPTIONAL_SQLITE_OK');
-  `, loader);
+  `, `export async function resolve(specifier,context,nextResolve) {
+    if(specifier==='better-sqlite3')throw new Error('SQLite dependency unavailable');
+    return nextResolve(specifier,context);
+  }`);
 });
 
 test('missing SQLite skips an eligible usage check without throwing', t => {

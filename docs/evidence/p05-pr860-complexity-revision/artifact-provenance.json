@@ -1,0 +1,254 @@
+{
+  "packagedFromHead": "ad94f9015f385ca6210d2ab4f83dd9ab68fb5911",
+  "matrixSourceVerification": "unchanged during matrix and matches current source",
+  "logs": [
+    {
+      "name": "b-independent.log",
+      "command": "node scripts/run-node-tests.js <b-selection.json entries>",
+      "exitCode": 0,
+      "observedNodeSummary": {
+        "tests": 796,
+        "suites": 65,
+        "pass": 795,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 1,
+        "todo": 0
+      }
+    },
+    {
+      "name": "b-full-node.log",
+      "command": "node scripts/run-node-tests.js",
+      "exitCode": 1,
+      "observedNodeSummary": {
+        "tests": 2395,
+        "suites": 214,
+        "pass": 2273,
+        "fail": 94,
+        "cancelled": 0,
+        "skipped": 28,
+        "todo": 0
+      }
+    },
+    {
+      "name": "b-jest.log",
+      "command": "node --experimental-vm-modules node_modules/.bin/jest --runInBand",
+      "exitCode": 0
+    },
+    {
+      "name": "b-baseline-failing-files.log",
+      "command": "node scripts/run-node-tests.js <b-full-failing-files.json entries> (old B 03d511a)",
+      "exitCode": 1,
+      "observedNodeSummary": {
+        "tests": 281,
+        "suites": 27,
+        "pass": 186,
+        "fail": 94,
+        "cancelled": 0,
+        "skipped": 1,
+        "todo": 0
+      }
+    },
+    {
+      "name": "b-full-node-initial-missing-deps.log",
+      "command": "node scripts/run-node-tests.js (initial incomplete test dependency fixture)",
+      "exitCode": 1,
+      "observedNodeSummary": {
+        "tests": 2395,
+        "suites": 214,
+        "pass": 2155,
+        "fail": 212,
+        "cancelled": 0,
+        "skipped": 28,
+        "todo": 0
+      }
+    },
+    {
+      "name": "b-jest-initial-missing-deps.log",
+      "command": "node --experimental-vm-modules node_modules/.bin/jest --runInBand (initial incomplete test dependency fixture)",
+      "exitCode": 1
+    },
+    {
+      "name": "producers-targeted.log",
+      "command": "node scripts/run-node-tests.js cli/lib/__tests__/restart-producers-acceptance.test.js cli/lib/__tests__/request-runtime-restart.test.js",
+      "exitCode": 0,
+      "observedNodeSummary": {
+        "tests": 9,
+        "suites": 0,
+        "pass": 9,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0,
+        "todo": 0
+      }
+    }
+  ],
+  "inputs": [
+    {
+      "name": "3.2a-suite.log",
+      "originalSha256": "e40f9b271ded7e37c2e89bc7a598198c9572ef2f06f4b9354ac304a065761e28",
+      "packagedSha256": "e40f9b271ded7e37c2e89bc7a598198c9572ef2f06f4b9354ac304a065761e28"
+    },
+    {
+      "name": "3.2a-stress.log",
+      "originalSha256": "1579952ce778a056b3022ad843c5da8246b608b9ab5a0c81eafa57e7f43f3fc9",
+      "packagedSha256": "1579952ce778a056b3022ad843c5da8246b608b9ab5a0c81eafa57e7f43f3fc9"
+    },
+    {
+      "name": "3.2a-known-bad.log",
+      "originalSha256": "04ecce759efccfdd8d9d8c8a32a142302b6bfaff356d15ae2fe7ac2a326147cf",
+      "packagedSha256": "2e97f24d771c1ce6edfd66724b5fad7cb5b1b2cb64278499dc03eda7b9645570"
+    },
+    {
+      "name": "3.3a-suite-serial-retry.log",
+      "originalSha256": "b3c21a266c4ef997241ee35ab3ebc033eee4af583a7afeca310a89ed060f50b5",
+      "packagedSha256": "b3c21a266c4ef997241ee35ab3ebc033eee4af583a7afeca310a89ed060f50b5"
+    },
+    {
+      "name": "3.3a-suite-initial.log",
+      "originalSha256": "f276a545d503e3bdd4181ab1e0dcb4b140dc588b57463db18b26fd5852340568",
+      "packagedSha256": "eb919e127537d08c1e1377aa3c6293d006fdc182b14e40b45862405c6506c35a"
+    },
+    {
+      "name": "3.3a-stress.log",
+      "originalSha256": "2dd58609eec213d5d2f16512b331832826dc22fd3265dc7ebbe694a1eb6eed58",
+      "packagedSha256": "2dd58609eec213d5d2f16512b331832826dc22fd3265dc7ebbe694a1eb6eed58"
+    },
+    {
+      "name": "3.3a-known-bad.log",
+      "originalSha256": "3dabdee0dfa0121b39e69c973f2ae430e642e17502546d580ae3586c5216aa97",
+      "packagedSha256": "24de0c911f4f640eb88af13df6984b6ebcde8709b75b01638bd858d4a5d8b815"
+    },
+    {
+      "name": "3.4-suite.log",
+      "originalSha256": "9813d4529025650f19dd1d6d5a9adda11563e4dd92196de498ac34fa0f84b2ff",
+      "packagedSha256": "9813d4529025650f19dd1d6d5a9adda11563e4dd92196de498ac34fa0f84b2ff"
+    },
+    {
+      "name": "3.4-stress.log",
+      "originalSha256": "68932b125e8b8f310f83f77f50f0a3100db7b912a5876aa604d29e0ab0c526ce",
+      "packagedSha256": "68932b125e8b8f310f83f77f50f0a3100db7b912a5876aa604d29e0ab0c526ce"
+    },
+    {
+      "name": "3.4-known-bad.log",
+      "originalSha256": "d9b5a9a0efea5fb5c947f2cf9150932a9d30a33a74d847fc785cacb6bc3bea67",
+      "packagedSha256": "3cebe87140c5e4d207fcc53d5023e38f2b2e111d9d5ddd897a42119cda71bc36"
+    },
+    {
+      "name": "3.7c-suite.log",
+      "originalSha256": "310d1e3e7855c96b940a780880f08d7bcbf09f50e137690fcb286a5bcdaab8c4",
+      "packagedSha256": "310d1e3e7855c96b940a780880f08d7bcbf09f50e137690fcb286a5bcdaab8c4"
+    },
+    {
+      "name": "3.7c-stress.log",
+      "originalSha256": "1528b17ef57adcfc7a1a09c85fb8db34167c4e83c63881c87bcd73bc5ecbf252",
+      "packagedSha256": "1528b17ef57adcfc7a1a09c85fb8db34167c4e83c63881c87bcd73bc5ecbf252"
+    },
+    {
+      "name": "3.7c-known-bad.log",
+      "originalSha256": "6a2e60356b19860606eec6f982a4b8e22d56260ec44d26d45518d0eb91ef379e",
+      "packagedSha256": "8095a342e18b21cce3a8b313b3666a49fb79395a317c047587f6c613c7313122"
+    },
+    {
+      "name": "3.8-suite.log",
+      "originalSha256": "a82a808df89b6ca041a3c90a3c86fe0639ac9190f627d88b4b447847c8fe9943",
+      "packagedSha256": "a82a808df89b6ca041a3c90a3c86fe0639ac9190f627d88b4b447847c8fe9943"
+    },
+    {
+      "name": "3.8-stress.log",
+      "originalSha256": "4ee2ea9c8abc86a1f7bcf1555982fe34535c8b8e48dbcc58c10952adc41f8c9f",
+      "packagedSha256": "4ee2ea9c8abc86a1f7bcf1555982fe34535c8b8e48dbcc58c10952adc41f8c9f"
+    },
+    {
+      "name": "3.8-known-bad.log",
+      "originalSha256": "41f782fc516f6a47ba3066db554aae5ba84575ffea15d24101f0bcf17d228c02",
+      "packagedSha256": "5f5c347f6fc94b4ac96b496c9718eb8bd53c9ddd42be5f277e55053f1457cafa"
+    },
+    {
+      "name": "b-independent.log",
+      "originalSha256": "b6072cdb3c37ddb9952aebf3658f1af8ef6f022657b5affcba626fa2f16b8dd3",
+      "packagedSha256": "b6072cdb3c37ddb9952aebf3658f1af8ef6f022657b5affcba626fa2f16b8dd3"
+    },
+    {
+      "name": "b-full-node.log",
+      "originalSha256": "a8cd81858661919b00cc8750638f2254d335656ae4c76c76b7f3c38a61b11885",
+      "packagedSha256": "abb5d42c6122c20e82bb882a673dd076acbe0d6cf7da538516ef85eeb2313591"
+    },
+    {
+      "name": "b-jest.log",
+      "originalSha256": "548ffca73f51f794092c61a6cccb8d264cda0f19e2857281e20f8c9bcbc06301",
+      "packagedSha256": "548ffca73f51f794092c61a6cccb8d264cda0f19e2857281e20f8c9bcbc06301"
+    },
+    {
+      "name": "b-baseline-failing-files.log",
+      "originalSha256": "69b73ef2d27ab223fa4eb5976db79a54b8c3883fb3aa95c0c25a65caf587e24a",
+      "packagedSha256": "1ee79a095d7d48e09351f5b2cf91bdbb8bf1cc9d62a6dff0e2135d9adfb3acc5"
+    },
+    {
+      "name": "b-full-node-initial-missing-deps.log",
+      "originalSha256": "bb7deb908f3b15267af8be5dd9fd899584e8b70ab8b5e59dfce473c9e578d5b0",
+      "packagedSha256": "ac5d6c340c69ef2f65c9ed6304a44d3692d3d3159ca2124cf20d64b01e05f018"
+    },
+    {
+      "name": "b-jest-initial-missing-deps.log",
+      "originalSha256": "ef96e90762ab6fbb8f39ec11519bb8e8d7872ea0b1defdbbfed441bd843a9039",
+      "packagedSha256": "ef96e90762ab6fbb8f39ec11519bb8e8d7872ea0b1defdbbfed441bd843a9039"
+    },
+    {
+      "name": "producers-targeted.log",
+      "originalSha256": "d996066c797d4a4b581b0d1afa5aeadcf9b935fc1fd82c96303c480ee3b988d1",
+      "packagedSha256": "d996066c797d4a4b581b0d1afa5aeadcf9b935fc1fd82c96303c480ee3b988d1"
+    },
+    {
+      "name": "b-selection.json",
+      "originalSha256": "77e44f8a7da0836b035977bb619108460473948ecba22988e89e65735abeb841",
+      "packagedSha256": "61a36eec66fae14d0e4f80ef8f4f547a325968affdc87e9998b99522ea574110"
+    },
+    {
+      "name": "b-full-failing-files.json",
+      "originalSha256": "67a3b2c740e366f87c758f5bef100d9b31dd8740f9ac86770869cc5aae0d3acf",
+      "packagedSha256": "67a3b2c740e366f87c758f5bef100d9b31dd8740f9ac86770869cc5aae0d3acf"
+    },
+    {
+      "name": "b-failure-comparison.json",
+      "originalSha256": "4156bc5fa9dcdaed91376cb1ed5cdd938feecdbea21cb41b8b7bc716156b52f2",
+      "packagedSha256": "4156bc5fa9dcdaed91376cb1ed5cdd938feecdbea21cb41b8b7bc716156b52f2"
+    },
+    {
+      "name": "b-final-suite-counts.json",
+      "originalSha256": "321ae7200d8d4db5d7143d542fc50ab68f978ab612958b33da43f42ed774fe89",
+      "packagedSha256": "321ae7200d8d4db5d7143d542fc50ab68f978ab612958b33da43f42ed774fe89"
+    },
+    {
+      "name": "b-baseline-receipt.json",
+      "originalSha256": "07dc3e48590857ff90f6727e0dfeede829f09f21d01aaf46833fb00a0b3a8b82",
+      "packagedSha256": "07dc3e48590857ff90f6727e0dfeede829f09f21d01aaf46833fb00a0b3a8b82"
+    },
+    {
+      "name": "b-jest-final-receipt.json",
+      "originalSha256": "aa6d7eac287bb9c786bc47f0814583e305cda063346594fd3a52e0f921c55007",
+      "packagedSha256": "aa6d7eac287bb9c786bc47f0814583e305cda063346594fd3a52e0f921c55007"
+    },
+    {
+      "name": "b-full-node-final-receipt.json",
+      "originalSha256": "e01622bb171acfb105d05c315b63ad26bc9d85b35b68d723d21594fd36096405",
+      "packagedSha256": "e01622bb171acfb105d05c315b63ad26bc9d85b35b68d723d21594fd36096405"
+    },
+    {
+      "name": "b-extra-source-sha256.json",
+      "originalSha256": "99ed53b105aa3380bf664f9d7c7d76285b7aab772736f382bd3aed249ef0e711",
+      "packagedSha256": "99ed53b105aa3380bf664f9d7c7d76285b7aab772736f382bd3aed249ef0e711"
+    },
+    {
+      "name": "b7-review.md",
+      "originalSha256": "d5104be0985b73d2234206c73f7a7be8d2df7d2e463928515a116856397b8eb8",
+      "packagedSha256": "d5104be0985b73d2234206c73f7a7be8d2df7d2e463928515a116856397b8eb8"
+    },
+    {
+      "name": "README.md",
+      "originalSha256": "a2945fee0bd4080e99e225f0f4ff42f32bce491352b1559cc343253077e3405d",
+      "packagedSha256": "a2945fee0bd4080e99e225f0f4ff42f32bce491352b1559cc343253077e3405d"
+    }
+  ],
+  "note": "Counts are parsed only when present. Commands and exit codes are explicit caller-supplied metadata; README scope is supplied by the reviewer."
+}

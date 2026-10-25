@@ -14,7 +14,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execSync } from 'node:child_process';
 import { readZylosConfigOrThrow, updateZylosConfigLocked, ZYLOS_DIR } from '../lib/config.js';
-import { getAdapter, SUPPORTED_RUNTIMES } from '../lib/runtime/index.js';
+import { getSessionAdapter, SUPPORTED_RUNTIMES } from '../lib/runtime/index.js';
 import { buildInstructionFile, isSplitInstructionsActive } from '../lib/runtime/instruction-builder.js';
 import { commandExists } from '../lib/shell-utils.js';
 import { getCoreEcosystemPath, restartManagedProcess } from '../lib/pm2.js';
@@ -305,7 +305,7 @@ async function switchRuntime(target, flags) {
 
   // Step 3: Check auth for target runtime unless explicitly skipped.
   // A confirmed unauthenticated switch leaves the system unreachable via IM.
-  const adapter = getAdapter(target, cfg);
+  const adapter = getSessionAdapter(target);
   await checkRuntimeAuthGate(target, adapter, parsed);
 
   // Step 4: Persist new runtime in config.
