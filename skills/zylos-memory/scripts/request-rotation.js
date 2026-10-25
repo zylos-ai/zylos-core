@@ -3,8 +3,8 @@ import { pathToFileURL } from 'node:url';
 import path from 'node:path';
 import { resolveCoreConfigModule } from '../../comm-bridge/scripts/core-config-loader.js';
 import { IDENTITY_ROTATION_PROMPT } from './sync-prompts.js';
+import { memoryError as failure, isMain, options, runCli } from './sync-cli.js';
 
-const failure = (code, message, extra = {}) => Object.assign(new Error(message), { code, ...extra });
 
 async function defaultDependencies() {
   const coreDir = path.dirname(resolveCoreConfigModule());
@@ -19,8 +19,7 @@ async function defaultDependencies() {
 export async function requestRotation({ reason = 'identity' } = {}, dependencies) {
   if (reason !== 'identity') throw failure('INVALID_INPUT', 'Only identity rotation is supported');
   const d = dependencies ?? await defaultDependencies();
-  const { mode, keyPresent } = await d.readSessionMode();
-  if ((keyPresent && !['single', 'multi'].includes(mode)) || (!keyPresent && mode !== null)) throw failure('CONFIG_UNREADABLE', 'Invalid session mode');
+  const { mode } = await d.readSessionMode();
   if (await d.getModeTransition()) throw failure('TRANSITION_OPEN', 'A mode transition is in progress');
   const sessions = await d.listGroupTmuxSessions();
   const targets = mode === 'multi' ? sessions.map(session => session.sessionGroup) : sessions.some(session => session.sessionGroup === 'origin') ? [null] : [];
@@ -38,15 +37,9 @@ export async function requestRotation({ reason = 'identity' } = {}, dependencies
   return { enqueued };
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  try {
-    const args = process.argv.slice(2);
-    if (args.length !== 2 || args[0] !== '--reason' || args[1] !== 'identity') throw failure('INVALID_INPUT', 'Usage: request-rotation.js --reason identity');
-    const { enqueued } = await requestRotation({ reason: args[1] });
-    console.log(`OK: enqueued ${enqueued.length} rotation controls`);
-  } catch (error) {
-    console.error(`Error [${error.code ?? 'ROTATION_FAILED'}]: ${error.message}`);
-    if (error.enqueued?.length) console.error(`Already enqueued ${error.enqueued.length} controls: ${error.enqueued.map(row => row.id).join(',')}`);
-    process.exitCode = 1;
-  }
-}
+if (isMain(import.meta.url)) await runCli(async () => {
+  const parsed = options(process.argv.slice(2), ['reason']);
+  if (parsed.positional.length || parsed.reason !== 'identity') throw failure('INVALID_INPUT', 'Usage: request-rotation.js --reason identity');
+  const { enqueued } = await requestRotation({ reason: parsed.reason });
+  console.log(`OK: enqueued ${enqueued.length} rotation controls`);
+});
