@@ -721,6 +721,13 @@ export async function enqueueRestartIfNeeded({
           return { submitted: true, requestId: request.requestId, result: outcome.reply.result, runCount: outcome.reply.runCount };
         } else {
           const code = outcome.reply.code;
+          if (code === 'single_mode') {
+            const currentMode = readConfig().session_mode ?? 'single';
+            const currentTransition = await readTransition();
+            if (currentMode === 'single' && !currentTransition) {
+              return enqueueSingleRestart();
+            }
+          }
           errorLog(`Settings hooks: restart rejected: ${code}`);
           return { submitted: false, requestId: request.requestId, code, sent: true,
             category: ['manual_restart_pending', 'entry_not_open'].includes(code) ? 'T' : 'R', persisted: [] };
@@ -738,14 +745,18 @@ export async function enqueueRestartIfNeeded({
       return { submitted: ['accepted', 'done'].includes(lookup) ? true : null,
         requestId: request.requestId, code: kind || 'invalid_reply', sent: true, category: 'U', persisted: null, lookup };
     }
+    return enqueueSingleRestart();
+  } catch (error) {
+    errorLog(`Settings hooks: restart not enqueued: ${error.code || 'ERROR'}: ${error.message}`);
+    return { submitted: false, code: error.code || 'ERROR' };
+  }
+
+  function enqueueSingleRestart() {
     const c4ControlPath = path.join(zylosDir, '.claude', 'skills', 'comm-bridge', 'scripts', 'c4-control.js');
     if (!exists(c4ControlPath)) return { skipped: true, reason: 'control_missing' };
     exec('node', [c4ControlPath, 'enqueue', '--content', '/exit', '--priority', '1', '--require-idle', '--no-ack-suffix'], { stdio: 'pipe', timeout: 10000 });
     log('Settings hooks: restart enqueued.');
     return { submitted: true };
-  } catch (error) {
-    errorLog(`Settings hooks: restart not enqueued: ${error.code || 'ERROR'}: ${error.message}`);
-    return { submitted: false, code: error.code || 'ERROR' };
   }
 }
 
@@ -824,7 +835,10 @@ export async function main(argv = process.argv.slice(2)) {
     process.exit(1);
   }
 
-  if (added === 0 && updated === 0 && removed === 0 && !statusLineChanged && !modelSync.changed && !settingsBackfilled && !codexSync.changed) {
+  // Hook membership can change independently of either TOML file.
+  const codexHooks = dryRun ? { changed: false } : installCoreCodexHook({ zylosDir: ZYLOS_DIR });
+
+  if (added === 0 && updated === 0 && removed === 0 && !statusLineChanged && !modelSync.changed && !settingsBackfilled && !codexSync.changed && !codexHooks.changed) {
     console.log('Settings hooks: all up to date (no changes).');
     return;
   }
@@ -842,12 +856,12 @@ export async function main(argv = process.argv.slice(2)) {
     modelBackfilled: modelSync.changed,
   });
 
-  if (added === 0 && updated === 0 && removed === 0 && !statusLineChanged && !modelSync.changed && !settingsBackfilled) {
+  if (added === 0 && updated === 0 && removed === 0 && !statusLineChanged && !modelSync.changed && !settingsBackfilled && !codexHooks.changed) {
     console.log(`Settings hooks: all up to date; Codex config ${codexSync.changed ? 'refreshed' : 'unchanged'}.`);
     return;
   }
 
-  console.log(`Settings hooks: ${added} added, ${updated} updated, ${removed} removed${statusLineChanged ? ', statusLine updated' : ''}${modelSync.changed ? ', model backfilled' : ''}${thresholdSync.changed ? ', new-session threshold paired' : ''}${settingsBackfilled ? ', settings backfilled' : ''}${codexSync.changed ? ', Codex config refreshed' : ''}.`);
+  console.log(`Settings hooks: ${added} added, ${updated} updated, ${removed} removed${statusLineChanged ? ', statusLine updated' : ''}${modelSync.changed ? ', model backfilled' : ''}${thresholdSync.changed ? ', new-session threshold paired' : ''}${settingsBackfilled ? ', settings backfilled' : ''}${codexSync.changed ? ', Codex config refreshed' : ''}${codexHooks.changed ? ', Codex hooks refreshed' : ''}.`);
 
   // Enqueue restart when hooks changed — this runs from the NEWLY installed
   // package during upgrade (via resolveInstalledSyncScript), so it works even

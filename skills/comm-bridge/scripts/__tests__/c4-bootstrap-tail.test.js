@@ -16,6 +16,16 @@ function fixture(mode) {
   return { calls, scope, db, options: { scopeReader: async () => scope, withDb: async (_label, action) => action(db) } };
 }
 
+test('P1-2: recovery gate runs before scope resolution even through the direct export', async () => {
+  let gateCalls = 0;
+  const output = await emitC4Conversations({}, null, {
+    scopeReader: () => assert.fail('blocked recovery must not resolve scope'),
+    withDb: async () => { gateCalls++; return 'SYSTEM RECOVERY TASK'; },
+  });
+  assert.equal(gateCalls, 1);
+  assert.equal(output, 'SYSTEM RECOVERY TASK');
+});
+
 for (const mode of ['single', 'multi']) test(`P06 2.3: ${mode} tail captures coverage once and preserves messages`, async () => {
   const f = fixture(mode);
   const output = await emitC4Conversations({}, null, f.options);

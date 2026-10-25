@@ -87,16 +87,18 @@ describe('runtime base URL support', () => {
 
     for (const status of ['failure', 'uncertain']) {
       let exitCode = null;
+      const errors = [];
       await assert.rejects(
         () => checkRuntimeAuthGate(
           'claude',
           { checkAuth: async () => ({ status, reason: `test_${status}` }) },
           parsed,
-          { log: () => {}, error: () => {}, exit: (code) => { exitCode = code; throw new Error(`exit ${code}`); } }
+          { log: () => {}, error: message => errors.push(message), exit: (code) => { exitCode = code; throw new Error(`exit ${code}`); } }
         ),
-        /exit 2/
+        /exit 1/
       );
-      assert.equal(exitCode, 2);
+      assert.equal(exitCode, 1);
+      assert.match(errors[0], /^Error \[AUTH_NOT_CONFIRMED\]:/);
     }
   });
 

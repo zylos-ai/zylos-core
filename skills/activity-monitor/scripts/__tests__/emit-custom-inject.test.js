@@ -101,6 +101,14 @@ describe('emitCustomInject', () => {
       import { emitCustomInject } from ${JSON.stringify(new URL('../emit-custom-inject.js', import.meta.url).href)};
       const env = { ...process.env, ZYLOS_SESSION_GROUP: 'origin', ZYLOS_RUN_ID: 'own-run' };
       const result = await emitCustomInject({ env });
+      const otherEnv = { ...env, ZYLOS_SESSION_GROUP: 'lark:other' };
+      const other = await emitCustomInject({ env: otherEnv });
+      assert.match(other, /RULE FOR lark:other/);
+      assert.doesNotMatch(other, /RULE FOR origin/);
+      fs.unlinkSync(${JSON.stringify(path.join(root, 'memory/session-groups/lark:other/rules.md'))});
+      const withoutOtherRules = await emitCustomInject({env:otherEnv});
+      assert.match(withoutOtherRules, /Save immediately/);
+      assert.doesNotMatch(withoutOtherRules, /RULE FOR origin/);
       await assert.rejects(emitCustomInject({ env: { ...env, ZYLOS_SESSION_GROUP: '../other' } }));
       await assert.rejects(emitCustomInject({ env: { ZYLOS_DIR: process.env.ZYLOS_DIR } }), { code: 'SCOPE_INVALID' });
       fs.unlinkSync(${JSON.stringify(path.join(root, 'memory/session-groups/origin/rules.md'))});
