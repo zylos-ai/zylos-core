@@ -4,7 +4,6 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { SKILLS_DIR, DATA_DIR } from './c4-config.js';
 import { reserveStatusNoticeCooldown, clearStatusNoticeCooldownReservation } from './c4-db.js';
-import { parseSessionGroup } from './c4-session-group.js';
 import { normalizeStatusEndpoint } from './status-endpoint.js';
 import { validateChannel, validateEndpoint } from './c4-validate.js';
 export { normalizeStatusEndpoint } from './status-endpoint.js';
@@ -63,9 +62,7 @@ export function sendStatusNotice(claim, message, route = {}, { spawn = spawnSync
   }
   let result;
   try {
-    const groupName = parseSessionGroup(claim.sessionGroup)?.groupName;
-    result = spawn(process.execPath, [script, claim.channel, ...(claim.endpoint ? [claim.endpoint] : ['--stdin']),
-      ...(groupName ? ['--session-group', groupName] : [])], {
+    result = spawn(process.execPath, [script, claim.channel, ...(claim.endpoint ? [claim.endpoint] : ['--stdin'])], {
       input: message, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 30000, killSignal: 'SIGKILL',
     });
   } catch (error) {

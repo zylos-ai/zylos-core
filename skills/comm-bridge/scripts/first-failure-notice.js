@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { getDb, close, finishStatusNotice } from './c4-db.js';
+import { getDb, close, clearStatusNoticeCooldownReservation } from './c4-db.js';
 import { reserveStatusNotice, sendStatusNotice, logStatusNotice } from './status-notice.js';
 import { messageForStatus } from './status-notice-templates.js';
 import { readDeliveryIdentity } from './runtime-delivery.js';
@@ -75,7 +75,7 @@ export async function processFirstFailureNotices({ store, database = getDb(), id
   const finish = status => store.updatePending(intent.event_id, {status, updated_at:now()});
   const current = identity();
   if (!sameScope(intent,current)) { finish('stale'); return 1; }
-  const target = database.prepare('SELECT status FROM conversations WHERE id=?').get(intent.conversation_id);
+  const target = database.prepare('SELECT status, session_group FROM conversations WHERE id=?').get(intent.conversation_id);
   if (!['running','delivered'].includes(target?.status)) { finish('suppressed'); return 1; }
   let notice = intent.notice;
   if (intent.error === 'rate_limit') {
@@ -86,24 +86,25 @@ export async function processFirstFailureNotices({ store, database = getDb(), id
       if (!enriched.annotation && notice?.noticeCode !== 'quota_exhausted_reset' && now()-intent.created_at < Math.min(quotaWaitMs,FIRST_NOTICE_QUOTA_WAIT_MS)) return 0;
     }
   }
-  const route = {health:intent.health, reason:intent.reason, context:'failure',noticeKind:'first-failure',noticeCode:notice?.noticeCode,resetAt:notice?.resetAt};
+  const route = {sessionGroup:target.session_group, runtime:intent.runtime,
+    health:intent.health, reason:intent.reason, context:'failure',noticeKind:'first-failure',noticeCode:notice?.noticeCode,resetAt:notice?.resetAt};
   let claim;
   try { claim = reserve(intent.channel,intent.endpoint,route); }
   catch { finish('failed'); return 1; }
   if (claim.suppressed) { finish('suppressed'); return 1; }
   if (!sameScope(intent,identity())) {
-    finishStatusNotice(claim,'failed',{now:Math.floor(now()/1000)},database);
+    clearStatusNoticeCooldownReservation(claim.key,claim.reservedAt,database);
     finish('stale'); return 1;
   }
   // A restart after this point must never resend this same pending intent.
   if (!store.updatePending(intent.event_id,{status:'sending',updated_at:now()})) {
-    finishStatusNotice(claim,'failed',{now:Math.floor(now()/1000)},database);
+    clearStatusNoticeCooldownReservation(claim.key,claim.reservedAt,database);
     return 0;
   }
   let outcome = 'uncertain';
   try { outcome = (await send(claim,messageForStatus(route),route,{zylosDir})).outcome; }
   catch { /* The channel might have accepted the send. Keep its reservation. */ }
-  finishStatusNotice(claim,outcome,{now:Math.floor(now()/1000)},database);
+  if (outcome === 'failed') clearStatusNoticeCooldownReservation(claim.key,claim.reservedAt,database);
   finish(outcome);
   return 1;
 }

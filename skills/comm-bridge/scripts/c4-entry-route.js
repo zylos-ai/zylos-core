@@ -67,7 +67,7 @@ export async function fallbackFileRoute(request, dependencies = {}) {
     diagnostic(`route fallback: ${runtime} health record missing or unreadable`);
     return pending(runtime, { observation: 'health_record_missing' });
   }
-  const health = status.publicHealth ?? (['down', 'recovering'].includes(status.health) ? 'unavailable' : status.health);
+  const health = status.publicHealth;
   const reason = status.reason || health || 'unavailable';
   if (['ok', 'rate_limited'].includes(health)) return pending(runtime, { health, reason });
   if (health === 'auth_failed' && (request.coreSide || !request.componentName)) return pending(runtime, { health, reason });

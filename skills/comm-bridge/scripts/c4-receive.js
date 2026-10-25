@@ -3,7 +3,7 @@ import { pathToFileURL } from 'node:url';
 import * as database from './c4-db.js';
 import { reserveStatusNotice, sendStatusNotice } from './status-notice.js';
 import { validateChannel, validateEndpoint } from './c4-validate.js';
-import { validateGroupName, composeSessionGroup, dataError } from './c4-session-group.js';
+import { validateGroupName, composeSessionGroup, dataError, isDataError } from './c4-session-group.js';
 import { appendEntryEvent } from './c4-entry-events.js';
 import { queryRoute } from './c4-entry-route.js';
 
@@ -17,7 +17,7 @@ export function parseReceiveArgs(args) {
     const arg = args[i];
     if (flags[arg]) result[flags[arg]] = true;
     else if (values[arg]) {
-      if (args[i + 1] === undefined || args[i + 1].startsWith('--')) throw dataError('INVALID_ARGS', `Missing value for ${arg}`);
+      if (args[i + 1] === undefined) throw dataError('INVALID_ARGS', `Missing value for ${arg}`);
       result[values[arg]] = args[++i];
     } else throw dataError('INVALID_ARGS', `Unknown option: ${arg}`);
   }
@@ -43,7 +43,7 @@ export async function receive(args, dependencies = {}) {
     catch (error) { throw dataError('INVALID_ARGS', `invalid endpoint: ${error.message}`); }
   }
   try {
-    if (rawChannel) (dependencies.validateChannel ?? validateChannel)(rawChannel, true);
+    if (rawChannel) validateChannel(rawChannel, true);
     if (groupName !== undefined) validateGroupName(groupName);
   } catch (error) {
     const code = error.code?.startsWith('SESSION_GROUP_') ? error.code : 'INVALID_ARGS';
@@ -67,8 +67,9 @@ export async function receive(args, dependencies = {}) {
       ...(auth ? { deliveryAction: 'auth_rejected' } : {}),
       ...(groupName !== undefined ? { groupName } : {}) });
   } catch (error) {
-    throw dataError(error.code === 'DB_BUSY' ? 'DB_BUSY' : 'INTERNAL_ERROR', 'Failed to commit inbound message',
-      { persisted: error.persisted === undefined ? [] : error.persisted, cause: error });
+    if (isDataError(error)) throw error;
+    throw dataError('INTERNAL_ERROR', 'Inbound commit state is unknown; do not resend without checking.',
+      { persisted: error.persisted === undefined ? null : error.persisted, cause: error });
   }
   const result = { ok: true, action: pending ? 'queued' : auth ? 'auth_rejected' : 'delivered',
     id: record.id, sessionGroup: record.session_group, runtime: route.runtime };
@@ -110,7 +111,7 @@ export async function main(args = process.argv.slice(2)) {
     console.log(json ? JSON.stringify(result) : `[C4] Message ${result.action === 'queued' ? 'queued' : 'handled'} (id=${result.id}, action=${result.action})`);
   } catch (error) {
     const code = error.code ?? 'INTERNAL_ERROR';
-    if (json) console.log(JSON.stringify({ ok: false, error: { code, message: error.message, persisted: error.persisted === undefined ? [] : error.persisted, ...(error.id ? { id: error.id } : {}) } }));
+    if (json) console.log(JSON.stringify({ ok: false, error: { code, message: error.message, persisted: error.persisted === undefined ? null : error.persisted, ...(error.id ? { id: error.id } : {}) } }));
     else console.error(`Error [${code}]: ${error.message}`);
     process.exitCode = 1;
   } finally { database.close(); }

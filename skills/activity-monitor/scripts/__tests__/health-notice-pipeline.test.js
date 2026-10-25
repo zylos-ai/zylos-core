@@ -8,8 +8,8 @@ import Database from '../../../comm-bridge/node_modules/better-sqlite3/lib/index
 import {guardDatabase} from '../../../comm-bridge/scripts/sqlite-schema.js';
 import * as schema from '../../../comm-bridge/scripts/c4-schema.js';
 import {freezeFirstFailureNotice,processFirstFailureNotices,sendNoticeWorker} from '../../../comm-bridge/scripts/first-failure-notice.js';
-import {claimStatusNotice} from '../../../comm-bridge/scripts/c4-db.js';
-import {statusNoticeKey} from '../../../comm-bridge/scripts/status-notice.js';
+import {reserveStatusNoticeCooldown} from '../../../comm-bridge/scripts/c4-db.js';
+import {reserveStatusNotice} from '../../../comm-bridge/scripts/status-notice.js';
 import {readDeliveryIdentity} from '../../../comm-bridge/scripts/runtime-delivery.js';
 import {writeHealthQuota,readHealthQuota} from '../health-quota.js';
 import {collectHealthHook} from '../hook-health.js';
@@ -17,8 +17,10 @@ import {HealthStore} from '../health-store.js';
 import {createToolPipeline} from '../adapters/runtime-components.js';
 import {createToolEventStreamState,rotateToolEventStream} from '../tool-event-stream.js';
 import {currentOutageNotice} from '../outage-notice.js';
+import {SKILLS_DIR} from '../../../comm-bridge/scripts/c4-config.js';
 
 function fixture(t) {
+  fs.mkdirSync(path.join(SKILLS_DIR,'fake'),{recursive:true});
   const zylosDir=fs.mkdtempSync(path.join(os.tmpdir(),'health-stream-'));
   t.after(()=>fs.rmSync(zylosDir,{recursive:true,force:true}));
   const dir=path.join(zylosDir,'activity-monitor');fs.mkdirSync(dir);
@@ -63,7 +65,7 @@ test('nonterminal hooks, equal timestamps, stale and backward-clock events do no
 
 test('failed atomic health commit leaves cursor retryable and pending target frozen',t=>{
   const f=fixture(t);
-  f.db.prepare("INSERT INTO conversations(direction,channel,endpoint_id,content,status) VALUES('in','fake','original','secret','delivered')").run();
+  f.db.prepare("INSERT INTO conversations(session_group,direction,channel,endpoint_id,content,status) VALUES('fake','in','fake','original','secret','delivered')").run();
   f.collect();
   const write=f.store.write.bind(f.store);f.store.write=()=>{throw new Error('disk failure');};
   assert.throws(f.tick,/disk failure/);assert.equal(f.pipeline.streamState.offset,0);
@@ -93,11 +95,11 @@ test('partial JSON line survives two reads without duplicated tail',t=>{
 
 test('336ms late quota enriches reply and future reads without rewriting failure classification',async t=>{
   const f=fixture(t),at=f.now(),reset=Math.floor(at/1000)+3600;
-  f.db.prepare("INSERT INTO conversations(direction,channel,endpoint_id,content,status) VALUES('in','fake','original','secret','delivered')").run();
+  f.db.prepare("INSERT INTO conversations(session_group,direction,channel,endpoint_id,content,status) VALUES('fake','in','fake','original','secret','delivered')").run();
   f.collect();f.tick();const before=f.store.read();const sent=[];
   const quota=()=>readHealthQuota({identity:f.identity,zylosDir:f.zylosDir,nowMs:f.now()});
   const options={store:f.store,database:f.db,identity:()=>f.identity,now:f.now,quota,quotaWaitMs:750,
-    reserve:(channel,endpoint,route)=>claimStatusNotice({key:statusNoticeKey(channel,endpoint,route.health,route.reason),channel,endpoint,normalizedEndpoint:endpoint,...route,now:Math.floor(f.now()/1000)},f.db),
+    reserve:(channel,endpoint,route)=>reserveStatusNotice(channel,endpoint,route,{reserve:input=>reserveStatusNoticeCooldown({...input,now:Math.floor(f.now()/1000)},f.db)}),
     send:async(claim,message,route)=>{sent.push({message,route});return {outcome:'sent'};}};
   await processFirstFailureNotices(options);assert.equal(sent.length,0);
   f.setTime(at+336);writeHealthQuota({session_id:'session',rate_limits:{five_hour:{used_percentage:100,resets_at:reset}}},{...f.options,nowMs:f.now()});
@@ -123,17 +125,17 @@ test('quota refinement rejects foreign identity, older evidence and recovery',t=
 
 test('same-session recovery, normal Stop, new prompt and AM restart permit a new failure notice',async t=>{
   const f=fixture(t),at=f.now();
-  f.db.prepare("INSERT INTO conversations(direction,channel,endpoint_id,content,status) VALUES('in','fake','first','test','delivered')").run();
+  f.db.prepare("INSERT INTO conversations(session_group,direction,channel,endpoint_id,content,status) VALUES('fake','in','fake','first','test','delivered')").run();
   const first=f.collect();f.tick();
   const sent=[];
-  const reserve=(channel,endpoint,route)=>claimStatusNotice({key:statusNoticeKey(channel,endpoint,route.health,route.reason),channel,endpoint,normalizedEndpoint:endpoint,...route,now:Math.floor(f.now()/1000)},f.db);
+  const reserve=(channel,endpoint,route)=>reserveStatusNotice(channel,endpoint,route,{reserve:input=>reserveStatusNoticeCooldown({...input,now:Math.floor(f.now()/1000)},f.db)});
   const send=async(claim,message,route)=>{sent.push({claim,message,route});return {outcome:'sent'};};
   await processFirstFailureNotices({store:f.store,database:f.db,identity:()=>f.identity,now:f.now,reserve,send});
   f.setTime(at+10);f.store.transition('ok','',{identity:f.identity,kind:'recovery'});
   f.setTime(at+20);f.collect({hook_event_name:'Stop',prompt_id:'normal'});f.tick();
   f.setTime(at+21);f.collect({hook_event_name:'UserPromptSubmit',prompt_id:'next'});f.tick();
   const restarted=new HealthStore({zylosDir:f.zylosDir,now:f.now,freezeNotice:input=>freezeFirstFailureNotice(f.db,input)});
-  f.db.prepare("INSERT INTO conversations(direction,channel,endpoint_id,content,status) VALUES('in','fake','next','test','delivered')").run();
+  f.db.prepare("INSERT INTO conversations(session_group,direction,channel,endpoint_id,content,status) VALUES('fake','in','fake','next','test','delivered')").run();
   f.setTime(at+30);const next=f.collect({prompt_id:'next',error:'authentication_failed'});
   const result=restarted.consume(next,{identity:f.identity});
   assert.equal(result.reason,'hook_failure');assert.equal(restarted.read().health,'auth_failed');
@@ -158,7 +160,7 @@ test('Darwin ps ancestry runs collector, quota, health persistence and notice wi
   const reset=Math.floor(at/1000)+3600;
   writeHealthQuota({session_id:foreground.session_id,rate_limits:{five_hour:{used_percentage:100,resets_at:reset}}},
     {zylosDir:f.zylosDir,pid:4242,nowMs:at,managedIdentity:proof});
-  f.db.prepare("INSERT INTO conversations(direction,channel,endpoint_id,content,status) VALUES('in','fake','darwin','test','delivered')").run();
+  f.db.prepare("INSERT INTO conversations(session_group,direction,channel,endpoint_id,content,status) VALUES('fake','in','fake','darwin','test','delivered')").run();
   const event=collectHealthHook({hook_event_name:'StopFailure',session_id:foreground.session_id,prompt_id:'mac-prompt',error:'rate_limit'},
     {zylosDir:f.zylosDir,pid:4242,nowMs:at});
   assert.equal(event.process_start,undefined);assert.equal(event.quota.rate_limits.five_hour.used_percentage,100);
@@ -166,7 +168,7 @@ test('Darwin ps ancestry runs collector, quota, health persistence and notice wi
   const raw=JSON.parse(fs.readFileSync(f.store.file));assert.equal(raw.hook.pid,4242);assert.equal(raw.hook.processStart,undefined);
   const sent=[];
   await processFirstFailureNotices({store:f.store,database:f.db,identity:proof,now:f.now,
-    reserve:(channel,endpoint,route)=>claimStatusNotice({key:statusNoticeKey(channel,endpoint,route.health,route.reason),channel,endpoint,normalizedEndpoint:endpoint,...route,now:Math.floor(at/1000)},f.db),
+    reserve:(channel,endpoint,route)=>reserveStatusNotice(channel,endpoint,route,{reserve:input=>reserveStatusNoticeCooldown({...input,now:Math.floor(at/1000)},f.db)}),
     send:async(claim,message,route)=>{sent.push({claim,message,route});return {outcome:'sent'};}});
   assert.equal(sent.length,1);assert.equal(sent[0].route.resetAt,reset*1000);assert.match(sent[0].message,/expected to reset at/);
   assert.equal(f.store.consume(event,{identity:proof()}).reason,'replay');
@@ -180,10 +182,10 @@ test('real isolated sender child captures one bilingual notice without writing t
   const sender=path.join(f.zylosDir,'.claude/skills/fake/scripts');fs.mkdirSync(sender,{recursive:true});
   const capture=path.join(f.zylosDir,'capture.json');
   fs.writeFileSync(path.join(sender,'send.js'),`const fs=require('node:fs');fs.writeFileSync(${JSON.stringify(capture)},JSON.stringify({args:process.argv.slice(2),body:fs.readFileSync(0,'utf8')}));`);
-  f.db.prepare("INSERT INTO conversations(direction,channel,endpoint_id,content,status) VALUES('in','fake','capture-only','secret','delivered')").run();
+  f.db.prepare("INSERT INTO conversations(session_group,direction,channel,endpoint_id,content,status) VALUES('fake','in','fake','capture-only','secret','delivered')").run();
   f.collect();f.tick();
   const options={store:f.store,database:f.db,identity:()=>f.identity,now:f.now,zylosDir:f.zylosDir,send:sendNoticeWorker,
-    reserve:(channel,endpoint,route)=>claimStatusNotice({key:statusNoticeKey(channel,endpoint,route.health,route.reason),channel,endpoint,normalizedEndpoint:endpoint,...route,now:Math.floor(f.now()/1000)},f.db)};
+    reserve:(channel,endpoint,route)=>reserveStatusNotice(channel,endpoint,route,{reserve:input=>reserveStatusNoticeCooldown({...input,now:Math.floor(f.now()/1000)},f.db)})};
   await processFirstFailureNotices(options);
   assert.equal(f.store.read().pending_notice,undefined);
   assert.equal(f.store.read().last_notice_outcome.status,'sent');

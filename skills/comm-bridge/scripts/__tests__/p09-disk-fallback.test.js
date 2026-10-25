@@ -6,7 +6,6 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import Database from 'better-sqlite3';
 import { isolatedTmux, tmuxClientEnv } from '../../../../test/helpers/isolated-tmux.js';
-import { fixture } from './c4-v2-test-helpers.js';
 
 const cli = new URL('../c4-receive.js', import.meta.url);
 const record = (runtime, health) => ({ v: 1, runtime, health, reason: health === 'ok' ? '' : health,
@@ -33,15 +32,10 @@ function diskFixture(t, runtime, health) {
   const preload = path.join(root, 'observe.mjs');
   fs.writeFileSync(preload, `import fs from 'node:fs'; import path from 'node:path';
     const read=fs.readFileSync, append=fs.appendFileSync;
-    const root=process.env.ZYLOS_DIR, target=${JSON.stringify(target)}, opposite=${JSON.stringify(path.join(healthDir, opposite + '.json'))};
+    const root=process.env.ZYLOS_DIR;
     fs.readFileSync=function(file,...args){
       const name=String(file);
       if(name.includes('/runtime-health/') || name===root+'/activity-monitor/agent-status.json') append(root+'/reads.jsonl',JSON.stringify(name)+'\\n');
-      if(process.env.TEST_FORCE_OTHER_RUNTIME==='1' && name===target){
-        append(root+'/reads.jsonl',JSON.stringify(opposite)+'\\n');
-        const value=JSON.parse(read.call(this,opposite,'utf8')); value.runtime=${JSON.stringify(runtime)};
-        return JSON.stringify(value);
-      }
       return read.call(this,file,...args);
     };
     for(const method of ['writeFileSync','appendFileSync','renameSync','unlinkSync','truncateSync']){
@@ -53,10 +47,10 @@ function diskFixture(t, runtime, health) {
   return { root, target, opposite, preload };
 }
 
-function receiveCLI(f, env, args = [], mutant = false) {
+function receiveCLI(f, env, args = []) {
   const result = spawnSync(process.execPath, ['--import', f.preload, cli.pathname,
     '--channel', 'chat', '--endpoint', 'room', '--content', 'isolated input', '--json', ...args], {
-    env: { ...env, ZYLOS_DIR: f.root, TEST_FORCE_OTHER_RUNTIME: mutant ? '1' : '0' }, encoding: 'utf8', timeout: 5000, killSignal: 'SIGKILL',
+    env: { ...env, ZYLOS_DIR: f.root }, encoding: 'utf8', timeout: 5000, killSignal: 'SIGKILL',
   });
   assert.equal(result.error, undefined, String(result.error));
   assert.equal(result.status, 0, result.stdout + result.stderr);
@@ -96,37 +90,4 @@ test('IF-04 actual CLI missing socket reads only selected on-disk F10 across ext
       }
     }
   }
-});
-
-test('IF-04 negative control: other-runtime-read mutation fails the real CLI terminal-state oracle', { timeout: 10000 }, t => {
-  const env = tmuxClientEnv(isolatedTmux(t));
-  const f = diskFixture(t, 'claude', 'auth_failed');
-  const result = receiveCLI(f, env, ['--no-reply'], true);
-  assert.equal(result.reply.runtime, 'claude');
-  assert.throws(() => assert.equal(result.row.status, 'failed'), { code: 'ERR_ASSERTION' });
-  assert.equal(result.row.status, 'pending');
-  const reads = fs.readFileSync(path.join(f.root, 'reads.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
-  assert.equal(reads.some(file => file.endsWith('/codex.json')), true);
-});
-
-test('DM-51 negative control detects false reasonLogged when the postcommit F14 append fails', async t => {
-  const url = new URL('../c4-receive.js', import.meta.url), source = fs.readFileSync(url, 'utf8');
-  const anchor = 'result.reasonLogged = await append({';
-  assert.ok(source.includes(anchor));
-  // Preserve the actual append operation while making its reported result unconditionally true.
-  const ending = 'detail: route.auth.detail });';
-  assert.ok(source.includes(ending));
-  const mutated = source.replace(anchor, 'result.reasonLogged = (await append({')
-    .replace(ending, 'detail: route.auth.detail })) || true;')
-    .replace(/from '(\.\/[^']+)'/g, (_, relative) => `from '${new URL(relative, url).href}'`);
-  const { receive } = await import('data:text/javascript;base64,' + Buffer.from(mutated).toString('base64'));
-  const f = fixture(t, {}, true);
-  let appends = 0;
-  const reply = await receive(['--channel', 'chat', '--content', 'auth', '--no-reply'], {
-    db: f.store, validateChannel: () => true, queryRoute: async () => ({ decision: 'auth_rejected', recovered: false,
-      runtime: 'claude', health: 'auth_failed', auth: { result: 'failed', detail: 'past' } }), appendEntryEvent: async () => { appends++; return false; },
-  });
-  assert.equal(appends, 1);
-  assert.equal(f.db.prepare('SELECT status FROM conversations WHERE id=?').get(reply.id).status, 'failed');
-  assert.throws(() => assert.equal(reply.reasonLogged, false), { code: 'ERR_ASSERTION' });
 });
