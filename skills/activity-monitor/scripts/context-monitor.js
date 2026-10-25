@@ -10,7 +10,17 @@ export function publishContextSample(raw, { env = process.env, now = Date.now() 
   const status = typeof raw === 'string' ? JSON.parse(raw) : raw;
   if (!status || typeof status !== 'object' || Array.isArray(status)) throw new Error('Invalid statusLine sample');
   const location = runDirFromEnv(env);
-  const sample = { ...status, zylos: { v: 1, runId: env.ZYLOS_RUN_ID || null, capturedAt: now } };
+  const sample = { ...status };
+  if (location.kind === 'legacy') {
+    // Pre-upgrade sessions have no authoritative run identity. Keep the native
+    // sample at the legacy path without claiming a versioned run envelope.
+    delete sample.zylos;
+  } else {
+    if (typeof env.ZYLOS_RUN_ID !== 'string' || !env.ZYLOS_RUN_ID.trim()) {
+      throw new Error('Missing statusLine run identity');
+    }
+    sample.zylos = { v: 1, runId: env.ZYLOS_RUN_ID, sessionGroup: location.sessionGroup ?? 'origin', capturedAt: now };
+  }
   fs.mkdirSync(location.dir, { recursive: true });
   const file = path.join(location.dir, RUN_FILES.STATUSLINE);
   const temporary = `${file}.tmp.${process.pid}`;
