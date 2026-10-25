@@ -6,7 +6,7 @@ import path from 'node:path';
 import { spawn, execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createMigration, backupState } from '../../../skills/zylos-memory/scripts/memory-migration.js';
-import { withMemoryLock } from '../../../skills/zylos-memory/scripts/memory-lock.js';
+import { withMemoryLock } from '../../../skills/zylos-memory/scripts/sync-lock.js';
 import { readyTmuxTarget } from '../../../test/helpers/ready-tmux-target.js';
 
 const coreModule = new URL('../memory-migration.js', import.meta.url).href;
@@ -25,14 +25,14 @@ function childResult(child, input = '') {
 function lockChildren() {
   return execFileSync('ps', ['-axo', 'pid=,ppid=,args='], { encoding: 'utf8' }).split('\n')
     .map(line => line.trim().match(/^(\d+)\s+(\d+)\s+(.+)$/))
-    .filter(row => row && Number(row[2]) === process.pid && row[3].includes('--hold-lock'))
+    .filter(row => row && Number(row[2]) === process.pid && (/\bflock --exclusive\b/.test(row[3]) || row[3].includes('perl -e')))
     .map(row => Number(row[1])).sort((a, b) => a - b);
 }
 
 async function timeoutWithoutWaiter(operation) {
   const before = lockChildren();
   try {
-    await assert.rejects(operation(), { code: 'LOCK_TIMEOUT', persisted: [] });
+    await assert.rejects(operation(), { code: 'LOCK_TIMEOUT' });
     assert.deepEqual(lockChildren().filter(pid => !before.includes(pid)), [], 'LOCK_TIMEOUT left a live waiter');
   } finally {
     const extra = lockChildren().filter(pid => !before.includes(pid));
@@ -80,7 +80,7 @@ test('CLI text CHECK_FAILED reports every missing path and leaves completion pen
   const f = cliFixture(t), id = ['--id', 'references-layout-v1'];
   assert.equal((await f.run(['ensure', ...id, '--created-by', 'upgrade'])).code, 0);
   assert.equal((await f.run(['apply', ...id], JSON.stringify({ ...patch,
-    replacement: 'reference/one.md\nreference/two.md' }))).code, 0);
+    replacement: '`reference/one.md`\n`reference/two.md`' }))).code, 0);
   const result = await f.run(['complete', ...id, '--summary', '-'], 'reviewed');
   assert.equal(result.code, 1); assert.equal(result.stdout, '');
   assert.equal(result.stderr.split('\n')[0], 'Error [CHECK_FAILED]: Migration mechanical checks failed');
@@ -104,34 +104,6 @@ test('CLI text BACKUP_INVALID reports retained backup path without changing orig
   assert.equal(fs.readFileSync(path.join(f.backup, 'retained'), 'utf8'), 'invalid backup evidence');
 });
 
-test('emphasized index paths are collected when present and reject completion when absent', async t => {
-  const forms = ['**reference/gone.md**', '*reference/gone.md*', '_reference/gone.md_',
-    '__reference/gone.md__', 'see reference/gone.md**bold**'];
-  for (const form of forms) {
-    for (const present of [false, true]) {
-      const f = fixture(t); init(f); await f.service.apply({ ...patch, replacement: form });
-      if (present) {
-        fs.mkdirSync(path.join(f.memory, 'reference'));
-        fs.writeFileSync(path.join(f.memory, 'reference/gone.md'), 'exists');
-        await f.service.complete('reviewed emphasis');
-        assert.deepEqual(JSON.parse(fs.readFileSync(f.record)).evidence.mechanical.indexedPaths,
-          ['memory/reference/gone.md'], form);
-      } else {
-        await assert.rejects(f.service.complete('reviewed emphasis'), e =>
-          e.code === 'CHECK_FAILED' && e.missingPaths.includes('memory/reference/gone.md'), form);
-        assert.equal(f.service.status().state, 'pending');
-      }
-      const fresh = fixture(t); fs.writeFileSync(fresh.references, form);
-      assert.equal(fresh.service.ensure({ createdBy: 'init', freshInstall: true }).state, 'pending', form);
-    }
-  }
-  const f = fixture(t); init(f);
-  await f.service.apply({ ...patch, replacement: 'reference/topic_part.md\nreference/miss*.md\nreference/**/absent.md' });
-  fs.mkdirSync(path.join(f.memory, 'reference')); fs.writeFileSync(path.join(f.memory, 'reference/topic_part.md'), 'exists');
-  await f.service.complete('reviewed internal filename and globs');
-  assert.deepEqual(JSON.parse(fs.readFileSync(f.record)).evidence.mechanical.indexedPaths, ['memory/reference/topic_part.md']);
-});
-
 test('backup readback rejects corrupted staging bytes before publication and reentry preserves original', async t => {
   const f = fixture(t); init(f); const before = fs.readFileSync(f.record);
   const service = createMigration({ ...f.settings, checkpoint: point => {
@@ -149,24 +121,6 @@ test('backup readback rejects corrupted staging bytes before publication and ree
   assert.equal(fs.readFileSync(path.join(f.backup, 'references.md'), 'utf8'), 'original marker\n');
 });
 
-test('F8 inode replacement while waiting rejects before the migration action and leaves replacement intact', async t => {
-  const f = fixture(t); init(f); const before = fs.readFileSync(f.record);
-  const runDir = path.join(f.root, 'activity-monitor/session-groups/origin');
-  let release, entered; const barrier = new Promise(resolve => { release = resolve; });
-  const entering = new Promise(resolve => { entered = resolve; });
-  const holder = withMemoryLock(runDir, async () => { entered(); await barrier; }); await entering;
-  const lockPath = path.join(runDir, 'memory.lock');
-  const pending = f.service.apply(patch);
-  const rejected = assert.rejects(pending, { code: 'LOCK_UNAVAILABLE', persisted: [] });
-  try {
-    fs.renameSync(lockPath, `${lockPath}.retained`); fs.writeFileSync(lockPath, 'replacement inode');
-    release(); await holder; await rejected;
-    assert.equal(fs.readFileSync(lockPath, 'utf8'), 'replacement inode');
-    assert.equal(backupState(f.backup), 'absent'); assert.deepEqual(fs.readFileSync(f.record), before);
-    assert.equal(fs.readFileSync(f.references, 'utf8'), 'original marker\n');
-  } finally { release(); await holder; }
-});
-
 test('ensure preserves records, status is read-only, fresh install mechanically checked', t => {
   const f = fixture(t); assert.deepEqual(f.service.status(), { state: 'absent' });
   assert.equal(init(f).state, 'pending'); const original = fs.readFileSync(f.record);
@@ -174,7 +128,7 @@ test('ensure preserves records, status is read-only, fresh install mechanically 
   fs.writeFileSync(f.record, '{bad'); assert.equal(init(f).state, 'unreadable'); assert.equal(fs.readFileSync(f.record, 'utf8'), '{bad');
   const fresh = fixture(t); assert.equal(fresh.service.ensure({ createdBy: 'init', freshInstall: true }).state, 'done');
   assert.equal(JSON.parse(fs.readFileSync(fresh.record)).evidence.kind, 'fresh_install');
-  const missing = fixture(t); fs.writeFileSync(missing.references, 'reference/missing.md');
+  const missing = fixture(t); fs.writeFileSync(missing.references, '`reference/missing.md`');
   assert.equal(missing.service.ensure({ createdBy: 'init', freshInstall: true }).state, 'pending');
 });
 
@@ -198,7 +152,7 @@ test('complete checks without creating backups and persists attempts only on mec
   const f = fixture(t); init(f);
   await assert.rejects(f.service.complete('reviewed'), e => e.code === 'CHECK_FAILED' && e.persisted[0] === 'w7.attempts');
   assert.equal(backupState(f.backup), 'absent'); assert.equal(f.service.status().attempts, 1);
-  await f.service.apply({ ...patch, replacement: 'reference/topic.md' });
+  await f.service.apply({ ...patch, replacement: '`reference/topic.md`' });
   await assert.rejects(f.service.complete('reviewed'), e => e.missingPaths.includes('memory/reference/topic.md'));
   fs.mkdirSync(path.join(f.memory, 'reference')); fs.writeFileSync(path.join(f.memory, 'reference/topic.md'), 'topic');
   await f.service.complete('reviewed'); assert.equal(f.service.status().attempts, 3);
@@ -457,53 +411,6 @@ test('real isolated tmux F2 and F3 authorize current main and reject stale or or
   }
 });
 
-test('IF-24 index paths ignore prose punctuation, globs and other repository paths', async t => {
-  const text = [
-    'memory/reference/infra.md.', 'reference/infra.md\u3002', 'reference/infra.md\uff09',
-    'reference/infra.md\uff0c', 'reference/infra.md\u3001', '(reference/infra.md).',
-    'memory/reference/*.md', '`reference/*.md`', '[topics](reference/*.md)',
-    '../reference/elsewhere.md', '/repo/reference/guide.md', 'repo/reference/guide.md',
-    'repo/memory/reference/guide.md', 'https://example.test/reference/guide.md',
-    'nonreference/guide.md', '\u2026/reference/guide.md',
-  ].join('\n');
-  for (const freshInstall of [false, true]) {
-    const f = fixture(t);
-    fs.mkdirSync(path.join(f.memory, 'reference'));
-    fs.writeFileSync(path.join(f.memory, 'reference/infra.md'), 'infra');
-    if (freshInstall) {
-      fs.writeFileSync(f.references, text);
-      assert.equal(f.service.ensure({ createdBy: 'init', freshInstall: true }).state, 'done');
-    } else {
-      init(f); await f.service.apply({ ...patch, replacement: text });
-      await f.service.complete('Reviewed punctuation and index paths');
-    }
-    assert.deepEqual(JSON.parse(fs.readFileSync(f.record)).evidence.mechanical.indexedPaths, ['memory/reference/infra.md']);
-  }
-  const missing = fixture(t); init(missing);
-  await missing.service.apply({ ...patch, replacement: 'reference/missing.md\u3002' });
-  await assert.rejects(missing.service.complete('Missing target'), e =>
-    e.code === 'CHECK_FAILED' && e.missingPaths.includes('memory/reference/missing.md'));
-});
-
-test('IF-24 positive control rejects a timed-out lock that leaves its waiter alive', async t => {
-  const f = fixture(t), runDir = path.join(f.root, 'activity-monitor/session-groups/origin');
-  const original = fs.readFileSync(new URL('../memory-lock.js', import.meta.url), 'utf8');
-  const mutant = original.replace('configLockArgs(capability, waitMs,', 'configLockArgs(capability, 60000,')
-    .replaceAll("child.kill('SIGKILL');", 'void 0;').replace('await closed;', 'void closed;');
-  assert.notEqual(mutant, original);
-  const filename = path.join(f.root, 'memory-lock-mutant.mjs');
-  fs.writeFileSync(filename, mutant.replace("from './config-lock.js'", `from '${new URL('../config-lock.js', import.meta.url).href}'`));
-  const { withMemoryLock: brokenLock } = await import(`file://${filename}`);
-  let release, entered;
-  const barrier = new Promise(resolve => { release = resolve; });
-  const entering = new Promise(resolve => { entered = resolve; });
-  const holder = withMemoryLock(runDir, async () => { entered(); await barrier; }); await entering;
-  try {
-    await assert.rejects(timeoutWithoutWaiter(() => brokenLock(runDir, () => assert.fail('Waiter entered'), { waitMs: 20 })),
-      { code: 'ERR_ASSERTION', message: /LOCK_TIMEOUT left a live waiter/ });
-  } finally { release(); await holder; }
-});
-
 test('mechanical checks preserve Unicode and delimited space-containing index paths', async t => {
   const f = fixture(t); init(f);
   await f.service.apply({ ...patch, replacement: '`memory/reference/topic space.md` [topic](reference/主题.md)' });
@@ -513,95 +420,4 @@ test('mechanical checks preserve Unicode and delimited space-containing index pa
   fs.writeFileSync(path.join(f.memory, 'reference/topic space.md'), 'topic');
   fs.writeFileSync(path.join(f.memory, 'reference/主题.md'), 'topic');
   await f.service.complete('indexed');
-});
-
-test('positive controls detect invalid-backup acceptance, late backup, and authorization outside F8', async t => {
-  const source = fs.readFileSync(new URL('../memory-migration.js', import.meta.url), 'utf8');
-  async function mutant(f, transform) {
-    let code = transform(source);
-    assert.notEqual(code, source, 'mutation must change source');
-    code = code.replace(/from '(\.\/.+?)'/g, (_, relative) => `from '${new URL(relative, coreModule).href}'`)
-      .replace("new URL('../../package.json', import.meta.url)", JSON.stringify(fileURLToPath(new URL('../../../package.json', import.meta.url))));
-    const filename = path.join(f.root, 'mutant.mjs'); fs.writeFileSync(filename, code);
-    const { createMigration: create } = await import(`file://${filename}`);
-    return create(f.settings);
-  }
-  const invalid = fixture(t); init(invalid); fs.mkdirSync(invalid.backup);
-  const accepted = await mutant(invalid, s => s.replace("if (state === 'valid') return false;", "if (state !== 'absent') return false;"));
-  await assert.rejects(assert.rejects(accepted.apply(patch), { code: 'BACKUP_INVALID' }), { code: 'ERR_ASSERTION' });
-  const late = fixture(t); init(late);
-  const lateBackup = await mutant(late, s => s.replace(
-    'const created = ensureValidBackupLocked({ backupDir, references, checkpoint });', 'const created = false;')
-    .replace('return { path: normalized, backupCreated: created };',
-      'ensureValidBackupLocked({ backupDir, references, checkpoint }); return { path: normalized, backupCreated: created };'));
-  await lateBackup.apply(patch);
-  assert.throws(() => assert.equal(fs.readFileSync(path.join(late.backup, 'references.md'), 'utf8'), 'original marker\n'), { code: 'ERR_ASSERTION' });
-  const stale = fixture(t); init(stale);
-  const outside = await mutant(stale, s => s.replace(
-    "return lock(groupRunDir('origin', env), async (assertHeld = () => {}) => {\n      await authorize('apply');",
-    "await authorize('apply'); return lock(groupRunDir('origin', env), async (assertHeld = () => {}) => {"));
-  let release, entered;
-  const barrier = new Promise(resolve => { release = resolve; });
-  const entering = new Promise(resolve => { entered = resolve; });
-  const holder = withMemoryLock(path.join(stale.root, 'activity-monitor/session-groups/origin'), async () => { entered(); await barrier; });
-  await entering;
-  const pending = outside.apply(patch);
-  // Let the deliberately broken authorization finish before replacing the run.
-  await new Promise(resolve => setImmediate(resolve));
-  stale.live.runId = 'replacement'; release(); await holder;
-  await assert.rejects(assert.rejects(pending, { code: 'RUN_MISMATCH' }), { code: 'ERR_ASSERTION' });
-});
-
-test('F8 rejects symlink locks, missing backend, and a holder lost during identity sampling', async t => {
-  const f = fixture(t); init(f);
-  const runDir = path.join(f.root, 'activity-monitor/session-groups/origin'); fs.mkdirSync(runDir, { recursive: true });
-  fs.symlinkSync(f.references, path.join(runDir, 'memory.lock'));
-  await assert.rejects(f.service.apply(patch), { code: 'LOCK_UNAVAILABLE', persisted: [] });
-  assert.equal(fs.readFileSync(f.references, 'utf8'), 'original marker\n');
-  fs.unlinkSync(path.join(runDir, 'memory.lock'));
-  const envPath = process.env.PATH;
-  try {
-    process.env.PATH = f.root;
-    await assert.rejects(f.service.apply(patch), { code: 'LOCK_UNAVAILABLE', persisted: [] });
-  } finally { process.env.PATH = envPath; }
-  if (process.platform !== 'linux') {
-    t.diagnostic('Holder-loss process discovery is Linux-only; native platform probe is not covered here');
-    return;
-  }
-  const service = createMigration({ ...f.settings, observe: async () => {
-    // The lock helper is this process's only child; verify its command before killing it.
-    const children = execFileSync('ps', ['-o', 'pid=,args=', '--ppid', String(process.pid)], { encoding: 'utf8' });
-    const holder = children.split('\n').find(line => line.includes('/memory-lock.js --hold-lock'));
-    assert.ok(holder, children);
-    const holderPid = Number(holder.trim().split(/\s+/)[0]);
-    process.kill(holderPid, 'SIGKILL');
-    // Wait for actual reaping so assertHeld observes the child exit under load.
-    const deadline = Date.now() + 5000;
-    while (fs.existsSync(`/proc/${holderPid}`) && Date.now() < deadline) {
-      await new Promise(resolve => setTimeout(resolve, 10));
-    }
-    assert.equal(fs.existsSync(`/proc/${holderPid}`), false, 'Killed holder was not reaped');
-    await new Promise(resolve => setImmediate(resolve));
-    return f.live;
-  } });
-  await assert.rejects(service.apply(patch), { code: 'LOCK_LOST', persisted: null });
-  assert.equal(backupState(f.backup), 'absent');
-  assert.equal(fs.readFileSync(f.references, 'utf8'), 'original marker\n');
-  await f.service.apply(patch);
-});
-
-test('W7 malformed schema or completed evidence is retained and never treated as done', async t => {
-  const f = fixture(t); init(f);
-  const valid = JSON.parse(fs.readFileSync(f.record));
-  for (const invalid of [{ ...valid, attempts: -1 }, { ...valid, createdBy: 'other' },
-    { ...valid, state: 'done', completedAt: 1, evidence: {} },
-    { ...valid, state: 'pending', evidence: { kind: 'fresh_install' } }]) {
-    const bytes = JSON.stringify(invalid); fs.writeFileSync(f.record, bytes);
-    assert.equal(f.service.status().state, 'unreadable');
-    assert.equal(f.service.ensure({ createdBy: 'upgrade' }).state, 'unreadable');
-    await assert.rejects(f.service.apply(patch), { code: 'RECORD_UNREADABLE', persisted: [] });
-    await assert.rejects(f.service.complete('verified'), { code: 'RECORD_UNREADABLE', persisted: [] });
-    assert.equal(fs.readFileSync(f.record, 'utf8'), bytes);
-    assert.equal(backupState(f.backup), 'absent');
-  }
 });

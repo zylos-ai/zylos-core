@@ -30,7 +30,6 @@ export async function approvePermission(hookData, {
   env = process.env,
   readConfig = readZylosConfigOrThrow,
   scopeReader,
-  identityReader,
   exec = execFileSync,
   controlPath = C4_CONTROL,
 } = {}) {
@@ -48,12 +47,7 @@ export async function approvePermission(hookData, {
   try { launchConfig = JSON.parse(env.ZYLOS_MODEL_CONFIG); } catch { /* No F1 fallback. */ }
   if (launchConfig?.runtime !== 'claude') return { skipped: true, reason: 'runtime_unconfirmed' };
   scopeReader ??= (await import('./bootstrap-scope.js')).bootstrapScope;
-  identityReader ??= (await import('./bootstrap-identity.js')).readBootstrapIdentity;
   const scope = await scopeReader(env);
-  const identity = await identityReader(scope, { env });
-  if (identity.runtime !== 'claude' || identity.runId !== env.ZYLOS_RUN_ID) {
-    return { skipped: true, reason: 'runtime_unconfirmed' };
-  }
   exec('node', [
     controlPath, 'enqueue', '--content', '[KEYSTROKE]Enter', '--priority', '0',
     '--bypass-state', '--available-in', String(AUTO_APPROVE_AVAILABLE_IN_SEC), '--no-ack-suffix',

@@ -9,7 +9,7 @@ import { test } from 'node:test';
 import { readWorkMemory, parseReadWorkMemoryArgs } from '../read-work-memory.js';
 
 // P07 parser integration is deliberately unverified: this is a consumer fixture.
-const lockModule = new URL('../memory-lock.js', import.meta.url).href;
+const lockModule = new URL('../../../skills/zylos-memory/scripts/sync-lock.js', import.meta.url).href;
 const { withMemoryLock } = await import(lockModule);
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
 const id1 = '20261019T081500123Z', id2 = '20261019T091200456Z';
@@ -35,9 +35,9 @@ test('IF-22: same-lock snapshot excludes committed segments, hashes exact bytes 
   const before = Object.fromEntries(fs.readdirSync(f.memory).map(name => [name, fs.readFileSync(path.join(f.memory, name))]));
   let held = false, parseHeld = false;
   const result = await readWorkMemory({ ...f.options,
-    withMemoryLock: (run, action, options) => withMemoryLock(run, assertHeld => {
+    withMemoryLock: (run, action, options) => withMemoryLock(run, () => {
       held = true;
-      try { return action(assertHeld); } finally { held = false; }
+      try { return action(); } finally { held = false; }
     }, options),
     parseStateHeader: (text, options) => { parseHeld = held; return f.options.parseStateHeader(text, options); },
     readFile: file => { assert.equal(held, true); return fs.readFileSync(file); },
@@ -88,8 +88,8 @@ test('IF-22: large UTF-8 output spills the same captured bytes after unlocking',
   let held = false;
   const result = await readWorkMemory({ ...f.options,
     withMemoryLock: async (run, action, options) => {
-      const captured = await withMemoryLock(run, assertHeld => {
-      held = true; try { return action(assertHeld); } finally { held = false; }
+      const captured = await withMemoryLock(run, () => {
+      held = true; try { return action(); } finally { held = false; }
       }, options);
       fs.writeFileSync(path.join(f.memory, 'state.md'), 'changed after capture');
       return captured;
@@ -148,7 +148,7 @@ test('IB-23: expired total budget, non-UTF-8 and spill failure never return part
     },
   }), error => error.code === 'READ_FAILED' && error.parts.includes('snapshot'));
   assert.equal(reads, 1);
-  await withMemoryLock(f.run, assertHeld => assertHeld(), { waitMs: 1000 });
+  await withMemoryLock(f.run, () => {}, { waitMs: 1000 });
   fs.writeFileSync(path.join(f.memory, 'inbox.md'), Buffer.from([0xff]));
   await assert.rejects(readWorkMemory(f.options), { code: 'READ_FAILED' });
   fs.writeFileSync(path.join(f.memory, 'inbox.md'), 'restored');
@@ -223,7 +223,7 @@ test('IF-22: timeout cancels lock wait before returning and does not read withou
       readFile: () => { readAttempts++; throw Error('must not read without F8'); } }), { code: 'LOCK_TIMEOUT' });
     assert.ok(Date.now() - started < 2250);
   } finally { release(); await holder; }
-  await withMemoryLock(f.run, assertHeld => assertHeld(), { waitMs: 1000 });
+  await withMemoryLock(f.run, () => {}, { waitMs: 1000 });
   // A Promise.race-only timeout would let its abandoned waiter read after release.
   await new Promise(resolve => setTimeout(resolve, 100));
   assert.equal(readAttempts, 0);
@@ -260,7 +260,7 @@ test('IF-22: a SIGSTOP holder times out without a surviving waiter or source rea
   assert.equal(child.exitCode, null);
   child.kill('SIGCONT'); child.stdin.end();
   assert.deepEqual(await closed, { code: 0, signal: null });
-  await withMemoryLock(f.run, assertHeld => assertHeld(), { waitMs: 1000 });
+  await withMemoryLock(f.run, () => {}, { waitMs: 1000 });
   await new Promise(resolve => setTimeout(resolve, 100));
   assert.equal(reads, 0);
 });

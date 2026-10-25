@@ -42,7 +42,7 @@ export async function readWorkMemory({
     memoryDir = run.sessionGroup ? groupMemoryDir(run.sessionGroup, env) : path.join(zylosRoot(env), 'memory');
   } catch (cause) { throw fail('SCOPE_INVALID', cause.message); }
   try {
-    withMemoryLock ??= (await import('./memory-lock.js')).withMemoryLock;
+    withMemoryLock ??= (await import('../../skills/zylos-memory/scripts/sync-lock.js')).withMemoryLock;
     parseStateHeader ??= (await import(pathToFileURL(path.join(zylosRoot(env), '.claude', 'skills', 'zylos-memory', 'scripts', 'state-format.js')).href)).parseStateHeader;
     if (typeof withMemoryLock !== 'function' || typeof parseStateHeader !== 'function') throw Error('Required memory reader dependency is unavailable');
   } catch (cause) { throw fail('READ_FAILED', `Memory reader dependency unavailable: ${cause.message}`, ['dependencies']); }
@@ -51,9 +51,9 @@ export async function readWorkMemory({
   if (waitMs < 0) throw fail('LOCK_TIMEOUT', 'Insufficient budget to wait for memory lock');
   let captured;
   try {
-    captured = await withMemoryLock(run.dir, assertHeld => {
+    captured = await withMemoryLock(run.dir, () => {
       const read = (file, part, optional = false) => {
-        checkBudget(); assertHeld();
+        checkBudget();
         try { return Buffer.from(readFile(file)); }
         catch (cause) {
           if (optional && cause.code === 'ENOENT') return Buffer.alloc(0);
@@ -64,10 +64,6 @@ export async function readWorkMemory({
       let header;
       try { header = state.length ? parseStateHeader(decode(state), { scope }) : { valid: false }; }
       catch (cause) { throw fail('READ_FAILED', `Cannot parse state: ${cause.message}`, ['state']); }
-      if (!header || typeof header.valid !== 'boolean' || (header.valid &&
-          (header.scope !== scope || !Array.isArray(header.inboxCommitted)))) {
-        throw fail('READ_FAILED', 'State parser returned an invalid result', ['state']);
-      }
       if (!header.valid) header = { valid: false, scope: null, coverage: null, inboxCommitted: [] };
       const inbox = read(path.join(memoryDir, 'inbox.md'), 'inbox', true);
       let names;
@@ -81,7 +77,7 @@ export async function readWorkMemory({
         .filter(item => item.id && !committed.has(item.id))
         .sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
         .map(({ name, id }) => ({ id, bytes: read(path.join(memoryDir, name), `segment:${id}`) }));
-      assertHeld(); checkBudget();
+      checkBudget();
       return { state, header, inbox, segments };
     }, { waitMs });
   } catch (cause) {

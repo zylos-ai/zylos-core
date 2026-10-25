@@ -48,17 +48,28 @@ test('IF-20 rejected managed identity leaves F3 untouched and does not enqueue',
   assert.equal(fs.readdirSync(f.dir).length, 0);
 });
 
-test('P06 2.1 foreground identity uses actual runtime ancestry and rejects wrong pane or run', async () => {
+test('P06 2.1 READY identity binds the current run and pane without process ancestry', async () => {
   const scope = { kind: 'group', sessionGroup: 'origin' };
   const env = { ZYLOS_RUN_ID: 'r', ZYLOS_SESSION_GROUP: 'origin', TMUX_PANE: '%3' };
   const target = { present: true, runtime: 'codex', paneId: '%3', runId: 'r', rawF2: { ZYLOS_SESSION_GROUP: 'origin' } };
   let closed = 0;
   const options = { env, pid: 30, load: async () => ({ tmuxNameForGroup: () => 'zylos-group-origin' }),
     open: async () => ({ command: async () => '10', close: () => closed++ }), observe: async () => target,
-    processTree: async () => [{ pid: 30, ppid: 20, name: 'node' }, { pid: 20, ppid: 10, name: 'codex' }, { pid: 10, ppid: 1, name: 'sh' }] };
-  assert.equal((await readBootstrapIdentity(scope, options)).runtimePid, 20);
+    processTree: async () => assert.fail('managed READY must not inspect process ancestry') };
+  assert.equal((await readBootstrapIdentity(scope, options)).runtime, 'codex');
   await assert.rejects(readBootstrapIdentity(scope, { ...options, env: { ...env, TMUX_PANE: '%4' } }), { code: 'IDENTITY_UNAVAILABLE' });
   await assert.rejects(readBootstrapIdentity(scope, { ...options, env: { ...env, ZYLOS_RUN_ID: 'old' } }), { code: 'IDENTITY_UNAVAILABLE' });
-  await assert.rejects(readBootstrapIdentity(scope, { ...options, processTree: async () => [{ pid: 30, ppid: 1, name: 'node' }] }), { code: 'IDENTITY_UNAVAILABLE' });
-  assert.equal(closed, 4);
+  assert.equal(closed, 3);
+});
+
+test('IF-20 legacy foreground identity requires a runtime ancestor in the observed pane', async () => {
+  const target = { present: true, runtime: 'codex', paneId: '%3', runId: null };
+  const options = { env: {}, pid: 30,
+    load: async () => ({ LEGACY_TMUX_NAMES: ['codex-main'] }),
+    open: async () => ({ command: async () => '10', close() {} }), observe: async () => target,
+    processTree: async () => [{ pid: 30, ppid: 20, name: 'node' },
+      { pid: 20, ppid: 10, name: 'codex' }, { pid: 10, ppid: 1, name: 'sh' }] };
+  assert.equal((await readBootstrapIdentity({ kind: 'legacy' }, options)).runtimePid, 20);
+  await assert.rejects(readBootstrapIdentity({ kind: 'legacy' }, { ...options,
+    processTree: async () => [{ pid: 30, ppid: 1, name: 'node' }] }), { code: 'IDENTITY_UNAVAILABLE' });
 });

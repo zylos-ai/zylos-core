@@ -14,7 +14,6 @@ function authOptions(group = 'origin') {
   const calls = [];
   return { calls, env, readConfig: () => ({ runtime: 'codex', auto_approve_permission: true }),
     scopeReader: async () => ({ sessionGroup: group }),
-    identityReader: async () => ({ runtime: 'claude', runId: 'run-1' }),
     exec: (...args) => calls.push(args) };
 }
 
