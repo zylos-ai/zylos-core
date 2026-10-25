@@ -132,6 +132,26 @@ test('ensure preserves records, status is read-only, fresh install mechanically 
   assert.equal(missing.service.ensure({ createdBy: 'init', freshInstall: true }).state, 'pending');
 });
 
+test('W7 rejects invalid retained fields before authorization without changing the record', async t => {
+  const f = fixture(t); init(f);
+  const minimal = { v: 1, migrationId: 'references-layout-v1', state: 'pending', attempts: 0 };
+  fs.writeFileSync(f.record, JSON.stringify(minimal));
+  assert.deepEqual(f.service.status(), { state: 'pending', attempts: 0 });
+  fs.writeFileSync(f.record, JSON.stringify({ ...minimal, state: 'done', attempts: 2 }));
+  assert.deepEqual(f.service.status(), { state: 'done', attempts: 2 });
+  const service = createMigration({ ...f.settings, readMode: () => assert.fail('invalid W7 reached authorization') });
+  for (const invalid of [{ v: 2 }, { migrationId: 'other' }, { state: 'other' },
+    { attempts: '21' }, { attempts: null }, { attempts: -4 }, { attempts: 1.5 }, { attempts: undefined }]) {
+    const bytes = JSON.stringify({ ...minimal, ...invalid });
+    fs.writeFileSync(f.record, bytes);
+    assert.equal(service.status().state, 'unreadable', JSON.stringify(invalid));
+    await assert.rejects(service.apply(patch), { code: 'RECORD_UNREADABLE', persisted: [] });
+    await assert.rejects(service.complete('reviewed'), { code: 'RECORD_UNREADABLE', persisted: [] });
+    assert.equal(fs.readFileSync(f.record, 'utf8'), bytes);
+    assert.equal(backupState(f.backup), 'absent');
+  }
+});
+
 test('apply backs up exact initial bytes, reuses backup, complete cannot regress', async t => {
   const f = fixture(t); init(f);
   assert.equal((await f.service.apply(patch)).backupCreated, true);
