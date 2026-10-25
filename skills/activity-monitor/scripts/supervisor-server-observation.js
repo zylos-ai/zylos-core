@@ -1,6 +1,3 @@
-import { loadCoreModule } from './core-modules.js';
-const { openTmuxConnection } = await loadCoreModule('runtime/tmux-connection.js');
-
 export function parseServerAlertTarget(value) {
   if (typeof value !== 'string') return null;
   const colon = value.indexOf(':');
@@ -11,77 +8,39 @@ export function parseServerAlertTarget(value) {
 
 /** Observe-only decorator. Cached occupancy is never a current identity or an
  * authorization to reclaim, deliver, publish status, or release capacity.
- * advance() MUST be invoked outside the lifecycle queue.
  */
 export class SupervisorServerObservation {
-  constructor(scenes, { guard, socketKey = 'default', open = openTmuxConnection } = {}) {
-    Object.assign(this, { scenes, guard, socketKey, open });
+  constructor(scenes, { guard, socketKey = 'default' } = {}) {
+    Object.assign(this, { scenes, guard, socketKey });
     this.cached = null;
-    this.cachedGeneration = null;
-    this.exits = new Map();
-    this.reported = new Set();
   }
-  recordExit(result) {
-    if (result?.status !== 'old_server_gone' || this.reported.has(result.generation)) return;
-    this.reported.add(result.generation);
-    const scenes = (this.cached ?? []).filter(scene => scene.tmuxTarget?.serverGeneration === result.generation);
-    if (scenes.length) this.exits.set(result.generation, scenes);
-  }
-  takeServerExits() {
-    const exits = [...this.exits].map(([generation, scenes]) => ({ generation, scenes }));
-    this.exits.clear();
-    return exits;
-  }
-  async failure(error) {
-    if (error?.code === 'TMUX_UNAVAILABLE') {
-      this.recordExit(await this.guard.observeFailure({ socketKey: this.socketKey, error, deferTermination: true }));
+  failure(error) {
+    if (error?.code === 'TMUX_UNAVAILABLE') this.guard.observeFailure({ socketKey: this.socketKey, error });
+    if (error?.code === 'TMUX_NO_SERVER') {
+      this.cached = [];
+      this.guard.observeSuccess({ socketKey: this.socketKey });
     }
   }
-  async success(scenes, replace, cacheOccupancy = true) {
-    let connection;
-    try {
-      const generations = new Set(scenes.filter(scene => scene.present && scene.tmuxTarget).map(scene => scene.tmuxTarget.serverGeneration));
-      if (generations.size > 1 || generations.has(undefined)) {
-        throw Object.assign(new Error('tmux changed during observation'), { code: 'TMUX_UNAVAILABLE', cause: 'error' });
-      }
-      let generation = generations.values().next().value;
-      if (!generation) {
-        connection = await this.open(this.scenes.connectionOptions);
-        generation = connection.serverGeneration;
-      }
-      // Each scene was already revalidated on its bound connection. Reuse that
-      // generation instead of opening another executor and querying tmux twice.
-      const result = await this.guard.observeSuccess({ socketKey: this.socketKey,
-        readGeneration: () => generation });
-      if (!result.cached || !cacheOccupancy) return;
-      // Listing can prove occupancy even when one group's non-tmux read fails.
-      const matching = scenes.filter(scene => !scene.tmuxTarget || scene.tmuxTarget.serverGeneration === result.generation);
-      if (this.cachedGeneration !== result.generation) this.cached = null;
-      this.cachedGeneration = result.generation;
-      if (replace) this.cached = matching;
-      else if (matching.length) {
-        const groups = new Set(matching.map(scene => scene.sessionGroup));
-        this.cached = [...(this.cached ?? []).filter(scene => !groups.has(scene.sessionGroup)), ...matching];
-      }
-    } catch (error) {
-      if (error?.code === 'TMUX_NO_SERVER' && !scenes.some(scene => scene.present)) {
-        await this.guard.observeNoServer({ socketKey: this.socketKey });
-        if (replace) this.cached = [];
-        return;
-      }
-      if (error?.code === 'TMUX_NO_SERVER') throw Object.assign(new Error('tmux changed during observation'), { code: 'TMUX_UNAVAILABLE', cause: 'error' });
-      throw error;
-    } finally { connection?.close(); }
+  success(scenes, replace, cacheOccupancy = true) {
+    this.guard.observeSuccess({ socketKey: this.socketKey });
+    if (!cacheOccupancy) return;
+    const occupancy = scenes.map(scene => ({ sessionGroup: scene.sessionGroup, present: scene.present,
+      tmuxName: scene.tmuxName, runDir: scene.runDir, createdAt: scene.createdAt, currentSessionTs: scene.currentSessionTs }));
+    if (replace) this.cached = occupancy;
+    else if (occupancy.length) {
+      const groups = new Set(occupancy.map(scene => scene.sessionGroup));
+      this.cached = [...(this.cached ?? []).filter(scene => !groups.has(scene.sessionGroup)), ...occupancy];
+    }
   }
   async observe(context) {
     try {
       const scenes = await this.scenes.observe(context);
       const unavailable = scenes.find(scene => scene.observationError?.code === 'TMUX_UNAVAILABLE');
-      if (unavailable) await this.failure(unavailable.observationError);
-      else await this.success(scenes, true);
+      if (unavailable) this.failure(unavailable.observationError);
+      else this.success(scenes, true);
       return scenes;
     } catch (error) {
-      await this.failure(error);
+      this.failure(error);
       if (error?.code !== 'TMUX_UNAVAILABLE' || !this.cached?.length) throw error;
       return this.cached.map(scene => ({
         sessionGroup: scene.sessionGroup, present: scene.present, tmuxName: scene.tmuxName,
@@ -98,9 +57,9 @@ export class SupervisorServerObservation {
       const unavailable = scenes.find(scene => scene.observationError?.code === 'TMUX_UNAVAILABLE');
       if (unavailable) throw unavailable.observationError;
       // Identity checks do not replace the full occupancy snapshot with a partial scene.
-      await this.success(scenes, method === 'listRuns', method !== 'readIdentity');
+      this.success(scenes, method === 'listRuns', method !== 'readIdentity');
       return result;
-    } catch (error) { await this.failure(error); throw error; }
+    } catch (error) { this.failure(error); throw error; }
   }
   observeGroup(...args) { return this.strict('observeGroup', args); }
   readRun(...args) { return this.strict('readRun', args); }
@@ -108,16 +67,12 @@ export class SupervisorServerObservation {
   readIdentity(...args) { return this.strict('readIdentity', args); }
   async forward(method, args) {
     try { return await this.scenes[method](...args); }
-    catch (error) { await this.failure(error); throw error; }
+    catch (error) { this.failure(error); throw error; }
   }
   bindTarget(...args) { return this.forward('bindTarget', args); }
   readScreen(...args) { return this.forward('readScreen', args); }
   stop(...args) { return this.forward('stop', args); }
   observeFixedTarget(...args) { return this.forward('observeFixedTarget', args); }
   stopFixedTarget(...args) { return this.forward('stopFixedTarget', args); }
-  async advance() {
-    const result = await this.guard.advance({ socketKey: this.socketKey });
-    this.recordExit(result);
-    return result;
-  }
+  advance() { return this.guard.advance({ socketKey: this.socketKey }); }
 }

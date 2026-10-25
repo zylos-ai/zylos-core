@@ -1,0 +1,74 @@
+Running 1 Node test files
+✔ IF-31: reader finishes old inode, intermediate rotations, then current exactly once (4.178848ms)
+✔ IF-31: incomplete lines wait, malformed complete lines warn, future fields survive (0.863917ms)
+✔ IF-31: directory disappearance drains retained fd without fabricating events (0.891221ms)
+✔ DM-38: append and rename preserve complete long records and monotonic names (2.908258ms)
+✔ DM-38: two real writers each append 200 complete lines during rotations (50.645421ms)
+✔ DM-38 regression: maintenance never treats current filename as rotation timestamp zero (0.740087ms)
+✔ T08 recovery: backward UTF-8 chunk scan stops at boundary and resumes partial/current rotation once (4.393736ms)
+✖ DM-38: reader drains a late append on the renamed inode before switching (2.227366ms)
+✖ DM-38: a failed partial line is skipped with warning at rotation handoff (0.88775ms)
+ℹ tests 9
+ℹ suites 0
+ℹ pass 7
+ℹ fail 2
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 122.897764
+
+✖ failing tests:
+
+test at cli/lib/__tests__/event-log.test.js:59:1
+✖ DM-38: reader drains a late append on the renamed inode before switching (2.227366ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+
+    [
+      {
+  -     n: 2
+  -   },
+  -   {
+        n: 3
+      }
+    ]
+
+      at TestContext.<anonymous> (file://<workspace>/p05-evidence-2645/late-drain-mutant/cli/lib/__tests__/event-log.test.js:70:9)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: [ { n: 3 } ],
+    expected: [ { n: 2 }, { n: 3 } ],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at cli/lib/__tests__/event-log.test.js:74:1
+✖ DM-38: a failed partial line is skipped with warning at rotation handoff (0.88775ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+
+  + []
+  - [
+  -   'event_log_invalid_line'
+  - ]
+
+      at TestContext.<anonymous> (file://<workspace>/p05-evidence-2645/late-drain-mutant/cli/lib/__tests__/event-log.test.js:80:49)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: [],
+    expected: [ 'event_log_invalid_line' ],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }

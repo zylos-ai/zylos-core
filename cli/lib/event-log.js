@@ -1,11 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
-const helper=fileURLToPath(new URL('./locked-jsonl.pl',import.meta.url));
 export function appendEvent(file,event) {
  fs.mkdirSync(path.dirname(file),{recursive:true});
- execFileSync('perl',[helper,'append',file],{input:JSON.stringify(event)+'\n',timeout:10000,stdio:['pipe','pipe','pipe'],maxBuffer:1024*1024});
+ fs.appendFileSync(file,JSON.stringify(event)+'\n',{flag:'a',mode:0o600});
 }
 export function rotateEventLog(file,{now=Date.now(),maxBytes=10*1024*1024,retentionMs=7*86400000}={}) {
  const directory=path.dirname(file),stem=path.basename(file,'.jsonl');
@@ -13,7 +10,9 @@ export function rotateEventLog(file,{now=Date.now(),maxBytes=10*1024*1024,retent
  const rotated=names.map(name=>({name,stamp:name!==path.basename(file)&&name.startsWith(stem+'.')&&name.endsWith('.jsonl')?Number(name.slice(stem.length+1,-6)):NaN})).filter(x=>Number.isSafeInteger(x.stamp));
  const stamp=Math.max(now,...rotated.map(x=>x.stamp+1));
  let result=null;
- if(fs.existsSync(file))result=execFileSync('perl',[helper,'rotate',file,String(stamp),String(maxBytes)],{encoding:'utf8',timeout:10000}).trim()||null;
+ try {
+  if(fs.statSync(file).size>maxBytes){const destination=path.join(directory,`${stem}.${stamp}.jsonl`);fs.renameSync(file,destination);result=destination;}
+ } catch(error){if(error.code!=='ENOENT')throw error;}
  for(const old of rotated)if(old.stamp<now-retentionMs)try{fs.unlinkSync(path.join(directory,old.name));}catch(e){if(e.code!=='ENOENT')throw e;}
  return result;
 }
@@ -77,10 +76,12 @@ export class EventLogReader {
   return rows.reverse();
  }
 
- readFd(){
+ readFd({final=false}={}){
   const stat=fs.fstatSync(this.fd);if(stat.size<this.offset){this.warn('event_log_truncated');this.offset=0;}
   const size=stat.size-this.offset;if(!size)return [];
-  const buffer=Buffer.alloc(size);const n=fs.readSync(this.fd,buffer,0,size,this.offset);const complete=buffer.subarray(0,n).lastIndexOf(10);if(complete<0)return [];
+  const buffer=Buffer.alloc(size);const n=fs.readSync(this.fd,buffer,0,size,this.offset);const complete=buffer.subarray(0,n).lastIndexOf(10);
+  if(final && complete<n-1)this.warn('event_log_invalid_line');
+  if(complete<0)return [];
   this.offset+=complete+1;
   return buffer.subarray(0,complete).toString('utf8').split('\n').flatMap(line=>{const value=parseLine(line,this.warn);return value?[value]:[];});
  }
@@ -91,6 +92,9 @@ export class EventLogReader {
   if(this.fd!==null){const index=files.findIndex(x=>x.identity===this.identity);if(index>=0){this.lastStamp=files[index].stamp;start=index+1;}else{this.warn('event_log_gap');start=0;}}
   for(let i=start;i<files.length;i++){
    const item=files[i];if(item.identity===this.identity)continue;
+   // A writer may still hold the renamed inode after our first read. Drain it
+   // once more at the handoff, then switch to the new file.
+   if(this.fd!==null)rows.push(...this.readFd({final:true}));
    this.close();try{this.fd=fs.openSync(item.file,'r');}catch(e){if(e.code==='ENOENT')continue;throw e;}
    const stat=fs.fstatSync(this.fd);this.identity=`${stat.dev}:${stat.ino}`;this.lastStamp=item.stamp;rows.push(...this.readFd());
   }
