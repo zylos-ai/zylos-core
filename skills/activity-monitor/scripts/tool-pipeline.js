@@ -62,16 +62,6 @@ function sortToolEvents(events) {
   });
 }
 
-export function canTreatPaneAsRecovered(interactiveState) {
-  return Boolean(
-    interactiveState?.captureOk &&
-    interactiveState.promptVisible &&
-    !interactiveState.usageOverlay &&
-    !interactiveState.inProgressCapture &&
-    (interactiveState.inputState === 'empty' || interactiveState.inputState === 'has_content')
-  );
-}
-
 export class ToolPipeline {
   constructor({
     files,
@@ -370,31 +360,6 @@ export class ToolPipeline {
     return result.events;
   }
 
-  maybeBuildStatuslineClearHint(currentTmuxClaudePid, interactiveState) {
-    const statusline = this.readStatuslineRecord();
-    if (!statusline?.sessionId) return null;
-    if (statusline.observedAt < Math.max(0, this.runtimeLaunchAtMs() - STATUSLINE_LAUNCH_GUARD_MS)) return null;
-    if (statusline.observedAt <= this.lastStatuslineSyntheticClearAt) return null;
-    if (!canTreatPaneAsRecovered(interactiveState)) return null;
-    const session = getSessionSnapshot(this.lifecycleState, statusline.sessionId, statusline.sessionId);
-    const runningTools = session?.running_tools || [];
-    if (runningTools.length === 0) return null;
-    const newestStartedAt = Number(runningTools[runningTools.length - 1]?.started_at) || 0;
-    if (newestStartedAt > 0 && statusline.observedAt < (newestStartedAt + STATUSLINE_ACTIVE_TOOL_CLEAR_GRACE_MS)) {
-      return null;
-    }
-    this.lastStatuslineSyntheticClearAt = statusline.observedAt;
-    return {
-      ts: statusline.observedAt,
-      pid: currentTmuxClaudePid || 0,
-      session_id: statusline.sessionId,
-      event: 'session_clear_hint',
-      reason: 'statusline_turn_complete',
-      match_slack_ms: TOOL_EVENT_REORDER_WINDOW_MS,
-      _arrival_seq: ++this.arrivalSeq,
-    };
-  }
-
   collectLiveSessionPids() {
     const livePids = new Set();
     for (const session of Object.values(this.lifecycleState.sessions)) {
@@ -419,8 +384,6 @@ export class ToolPipeline {
       Object.assign(this, checkpoint);
       throw error;
     }
-    const syntheticClear = this.maybeBuildStatuslineClearHint(currentTmuxClaudePid, interactiveState);
-    if (syntheticClear) newEvents.push(syntheticClear);
     if (newEvents.length > 0) {
       this.reorderBuffer.push(...newEvents);
       sortToolEvents(this.reorderBuffer);

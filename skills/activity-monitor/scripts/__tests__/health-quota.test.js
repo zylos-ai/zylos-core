@@ -78,15 +78,34 @@ test('reader rejects malformed, oversized, or nonregular snapshot files',t=>{
   const file=path.join(options.zylosDir,'activity-monitor','health-quota','claude.json');
   for(const content of ['{',JSON.stringify({...snapshot,padding:'x'.repeat(3000)})]) {fs.writeFileSync(file,content);assert.equal(read(),null);}
 });
-test('context monitor preserves legacy status output and excludes raw failed input from logs',t=>{
+test('T08/DM-53: context monitor preserves native status and excludes raw failed input from logs',t=>{
   const {options}=fixture(t);
   const script=fileURLToPath(new URL('../context-monitor.js',import.meta.url));
   const env={...process.env,ZYLOS_DIR:options.zylosDir};
   const payload={...status,custom_field:'legacy consumer value',context_window:{used_percentage:0}};
   const result=spawnSync(process.execPath,[script],{env,input:JSON.stringify(payload),encoding:'utf8'});
   assert.equal(result.status,0);assert.equal(result.stdout,'');
-  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(options.zylosDir,'activity-monitor','statusline.json'),'utf8')),payload);
+  const written=JSON.parse(fs.readFileSync(path.join(options.zylosDir,'activity-monitor','statusline.json'),'utf8'));
+  assert.deepEqual({...written,zylos:undefined},{...payload,zylos:undefined});assert.equal(written.zylos.v,1);
   const invalid=spawnSync(process.execPath,[script],{env,input:'{"SECRET_RAW_INPUT":',encoding:'utf8'});
   assert.equal(invalid.status,0);
-  assert.equal(fs.readFileSync(path.join(options.zylosDir,'activity-monitor','context-monitor.log'),'utf8').includes('SECRET_RAW_INPUT'),false);
+  assert.equal(fs.readFileSync(path.join(options.zylosDir,'activity-monitor','hook-activity-errors.log'),'utf8').includes('SECRET_RAW_INPUT'),false);
+});
+
+test('T02/T08: first-failure quota reads exact F5 run/session and never the legacy latest snapshot',async t=>{
+  const {readScopedHealthQuota}=await import('../health-quota.js');
+  const {publishContextSample}=await import('../context-monitor.js');
+  const {identity,options}=fixture(t);writeHealthQuota(status,options);
+  const env={ZYLOS_DIR:options.zylosDir,ZYLOS_RUN_ID:'run-a',ZYLOS_SESSION_GROUP:'chat:A'};
+  const runDir=path.join(options.zylosDir,'activity-monitor/session-groups/chat:A');
+  const read=extra=>readScopedHealthQuota({runDir,runId:'run-a',identity,nowMs:options.nowMs,...extra});
+  assert.equal(read(),null); // An existing legacy quota file is not evidence for this group.
+  publishContextSample({...status,secret:'exclude'},{env,now:options.nowMs});
+  assert.deepEqual(read().rate_limits,status.rate_limits);assert.equal(JSON.stringify(read()).includes('secret'),false);
+  assert.equal(read({runId:'run-b'}),null);assert.equal(read({identity:{...identity,session_id:'other'}}),null);
+  assert.equal(read({identity:{...identity,runtime:'codex'}}),null);
+  assert.equal(read({nowMs:options.nowMs-1}),null);assert.equal(read({nowMs:options.nowMs+60001}),null);
+  const file=path.join(runDir,'statusline.json');fs.writeFileSync(file,'{');assert.equal(read(),null);
+  publishContextSample({session_id:'session'},{env,now:options.nowMs});assert.equal(read(),null);
+  const otherDir=path.join(options.zylosDir,'activity-monitor/session-groups/chat:B');assert.equal(read({runDir:otherDir}),null);
 });
