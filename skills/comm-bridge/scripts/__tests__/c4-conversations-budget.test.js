@@ -8,7 +8,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { DEFAULT_SHARD_BUDGET, withinBudget } from '../../../activity-monitor/scripts/shard-registry.js';
 
-const RECEIVE_PATH = fileURLToPath(new URL('../c4-receive.js', import.meta.url));
+const DATABASE_URL = new URL('../c4-db.js', import.meta.url).href;
 const SESSION_INIT_URL = pathToFileURL(fileURLToPath(new URL('../c4-session-init.js', import.meta.url))).href;
 const REGISTRY_URL = pathToFileURL(
   fileURLToPath(new URL('../../../activity-monitor/scripts/shard-registry.js', import.meta.url)),
@@ -45,7 +45,11 @@ function emitViaRegistry(env) {
 }
 
 function receive(content, env) {
-  const result = spawnSync('node', [RECEIVE_PATH, '--channel', 'system', '--no-reply', '--content', content], {
+  // Outbound rows are delivered immediately; c4-receive leaves inbound rows
+  // pending until dispatch, so they cannot seed the delivered-tail contract.
+  const script = `const db = await import(${JSON.stringify(DATABASE_URL)});
+    db.insertConversation('out', 'system', null, ${JSON.stringify(content)}); db.close();`;
+  const result = spawnSync(process.execPath, ['--input-type=module', '-e', script], {
     env: { ...process.env, ...env },
     encoding: 'utf8',
   });
@@ -62,9 +66,7 @@ function withTmpDir(fn) {
   }
 }
 
-// Most packing tests keep messages under the 2,048-byte dispatch spill
-// threshold so sizes stay exact on every path (the budgeted shard path emits
-// originals regardless — #724 — but the legacy no-budget path still spills).
+// Session startup preserves full messages, independently of dispatch spill.
 const marker = i => `UNIQ_MARK_${i}`;
 
 describe('emitC4Conversations budget packing (message-boundary, newest-first)', () => {
@@ -79,7 +81,6 @@ describe('emitC4Conversations budget packing (message-boundary, newest-first)', 
 
       assert.ok(out.includes(marker(6)), 'newest message must survive');
       assert.ok(!out.includes(marker(1)), 'oldest message must be dropped whole');
-      assert.match(out, /showing the newest \d+ of 6 unsummarized messages/);
       assert.ok(out.length <= 5000, `packed output must fit the char budget (got ${out.length})`);
       // Every kept message is complete: its marker implies its full body.
       for (let i = 1; i <= 6; i++) {
@@ -116,7 +117,6 @@ describe('emitC4Conversations budget packing (message-boundary, newest-first)', 
 
       assert.ok(out.includes(marker(6)), 'newest message must survive');
       assert.ok(!out.includes(marker(1)), 'oldest message must be dropped whole');
-      assert.match(out, /showing the newest \d+ of 6 unsummarized messages/);
     });
   });
 
@@ -133,37 +133,29 @@ describe('emitC4Conversations budget packing (message-boundary, newest-first)', 
     });
   });
 
-  it('never drops below one message — the newest stays even if it alone overflows', () => {
-    withTmpDir(({ env }) => {
-      // Over the 2,048-byte dispatch spill threshold so the lone-message
-      // fallback has a pointer form to reach for.
+  it('M09: drops a single oversized message without creating a spill file', () => {
+    withTmpDir(({ tmpDir, env }) => {
       receive(`${marker(1)} ${'x'.repeat(3000)}`, env);
-      receive(`${marker(2)} ${'x'.repeat(3000)}`, env);
 
-      // Budget smaller than a single message: packing keeps the newest one,
-      // which falls back to its preview + pointer form (#724) instead of
-      // handing the orchestrator an over-budget body to tail-trim blindly.
-      const out = emitConversations(env, { maxChars: 600, maxTokens: 200 });
+      const out = emitConversations(env, { maxChars: 1200, maxTokens: 100000 });
 
-      assert.ok(out.includes(marker(2)), 'the newest message is always kept');
-      assert.ok(!out.includes(marker(1)));
-      assert.ok(out.includes('[C4] ⚠️ TRUNCATED'), 'lone over-budget message must use the pointer form');
+      assert.ok(!out.includes(marker(1)), 'the newest message must be dropped whole');
+      assert.ok(!out.includes('TRUNCATED'), 'startup must not create attachment previews');
+      assert.ok(out.length <= 1200);
       assert.ok(!out.includes('x'.repeat(3000)), 'lone over-budget message must not be emitted in full');
+      const attachmentsDir = path.join(tmpDir, 'comm-bridge', 'attachments');
+      assert.ok(!fs.existsSync(attachmentsDir) || fs.readdirSync(attachmentsDir).length === 0);
     });
   });
 
-  it('emits a sub-threshold message in full even when it alone overflows a tiny budget', () => {
+  it('M09: also drops a single sub-threshold message when it exceeds the budget', () => {
     withTmpDir(({ env }) => {
-      // Under the spill thresholds (2,048 bytes / 800 chars) there is no pointer form to
-      // fall back to; the emitter keeps the original and the orchestrator's
-      // generic trim stays the last resort. Unreachable with the real shard
-      // budget (a sub-threshold message can never exceed 10K chars) — this
-      // pins the synthetic edge so the fallback never mangles small messages.
       receive(`${marker(1)} ${'x'.repeat(700)}`, env);
 
-      const out = emitConversations(env, { maxChars: 300, maxTokens: 50 });
+      const out = emitConversations(env, { maxChars: 1200, maxTokens: 100000 });
 
-      assert.ok(out.includes(`${marker(1)} ${'x'.repeat(700)}`), 'sub-threshold message stays original');
+      assert.ok(!out.includes(marker(1)), 'sub-threshold message is dropped whole');
+      assert.ok(out.length <= 1200);
       assert.ok(!out.includes('[C4] ⚠️ TRUNCATED'));
     });
   });
@@ -198,36 +190,33 @@ describe('emitC4Conversations budget packing (message-boundary, newest-first)', 
       assert.ok(out.includes(`${marker(4)} ${'z'.repeat(3000)}`), 'newest long message must survive in full');
       assert.ok(!out.includes(marker(1)), 'oldest message must be dropped whole');
       assert.ok(!out.includes('[C4] ⚠️ TRUNCATED'), 'kept messages must be originals, not previews');
-      assert.match(out, /showing the newest \d+ of 4 unsummarized messages/);
       assert.ok(out.length <= 10000, `packed output must fit the char budget (got ${out.length})`);
     });
   });
 
-  it('keeps the legacy no-budget path byte-identical: per-message spill still applies', () => {
+  it('preserves original bytes without spill on the no-budget path too', () => {
     withTmpDir(({ env }) => {
       const body = `${marker(1)} ${'w'.repeat(3000)}`;
       receive(body, env);
 
       const out = emitConversations(env, null);
 
-      assert.ok(out.includes('[C4] ⚠️ TRUNCATED'), 'legacy path must keep the preview + pointer form');
-      assert.ok(!out.includes(body), 'legacy path must not emit the full over-threshold message');
-      assert.ok(out.includes(marker(1)), 'preview must still lead with the message head');
+      assert.ok(!out.includes('TRUNCATED'), 'startup never uses the preview + pointer form');
+      assert.ok(out.includes(body), 'the full over-threshold message stays intact');
     });
   });
 
-  it('keeps the ACTION REQUIRED sync instruction while packing above the threshold', () => {
+  it('reads the latest six delivered messages without obsolete sync instructions', () => {
     withTmpDir(({ env }) => {
-      // 17 messages > CHECKPOINT_THRESHOLD (15); session-init then considers
-      // only the newest 6, and the budget squeezes those further.
+      // Startup considers only the newest six delivered messages; the budget
+      // squeezes that tail further without triggering memory synchronization.
       for (let i = 1; i <= 17; i++) receive(`${marker(i)} ${'x'.repeat(1200)}`, env);
 
       const out = emitConversations(env, { maxChars: 3000, maxTokens: 100000 });
 
-      assert.ok(out.includes('=== ACTION REQUIRED ==='), 'sync instruction must survive packing');
-      assert.ok(out.includes('There are 17 unsummarized conversations'));
+      assert.doesNotMatch(out, /ACTION REQUIRED|unsummarized|Memory Sync/);
       assert.ok(out.includes(marker(17)), 'newest message must survive');
-      assert.match(out, /showing the newest \d+ of 17 unsummarized messages/);
+      assert.ok(!out.includes(marker(11)), 'older messages must not enter the six-message tail');
       assert.ok(out.length <= 3000);
     });
   });
@@ -246,7 +235,6 @@ describe('emitC4Conversations budget packing (message-boundary, newest-first)', 
         'registry-driven emit must come back within the shard budget so composeShardOutput never truncates it',
       );
       assert.ok(out.includes(marker(6)), 'newest message must survive');
-      assert.match(out, /showing the newest \d+ of 6 unsummarized messages/);
     });
   });
 });

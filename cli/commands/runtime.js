@@ -14,7 +14,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execSync } from 'node:child_process';
 import { readZylosConfigOrThrow, updateZylosConfigLocked, ZYLOS_DIR } from '../lib/config.js';
-import { getAdapter, SUPPORTED_RUNTIMES } from '../lib/runtime/index.js';
+import { getSessionAdapter, SUPPORTED_RUNTIMES } from '../lib/runtime/index.js';
 import { buildInstructionFile, isSplitInstructionsActive } from '../lib/runtime/instruction-builder.js';
 import { commandExists } from '../lib/shell-utils.js';
 import { getCoreEcosystemPath, restartManagedProcess } from '../lib/pm2.js';
@@ -217,15 +217,15 @@ export async function checkRuntimeAuthGate(target, adapter, parsed, {
   }
 
   if (auth.status === 'uncertain') {
-    error(red(`\n${bold(target)} authentication check was inconclusive.`));
+    error(`Error [AUTH_NOT_CONFIRMED]: ${target} authentication check was inconclusive.`);
     error(yellow('\nRetry after the service/API is reachable, or use --no-validate to skip the probe if you accept the risk.'));
     error(dim(`Reason: ${auth.reason || 'auth_check_uncertain'}`));
     error(yellow('\nSwitch aborted — auth could not be verified.'));
-    exit(2);
+    exit(1);
     return { skipped: false, status: auth.status };
   }
 
-  error(red(`\n${bold(target)} is not authenticated.`));
+  error(`Error [AUTH_NOT_CONFIRMED]: ${target} is not authenticated.`);
   error(yellow('\nAuthenticate first, then retry. Options:\n'));
   if (target === 'codex') {
     error(`  ${cyan('zylos runtime codex --save-apikey <key>')}     ${dim('OpenAI API key')}`);
@@ -237,7 +237,7 @@ export async function checkRuntimeAuthGate(target, adapter, parsed, {
     error(`  ${cyan('claude auth login')}                               ${dim('Browser OAuth (then retry)')}`);
   }
   error(yellow('\nSwitch aborted — authenticate first to avoid losing IM access.'));
-  exit(2);
+  exit(1);
   return { skipped: false, status: auth.status };
 }
 
@@ -305,7 +305,7 @@ async function switchRuntime(target, flags) {
 
   // Step 3: Check auth for target runtime unless explicitly skipped.
   // A confirmed unauthenticated switch leaves the system unreachable via IM.
-  const adapter = getAdapter(target, cfg);
+  const adapter = getSessionAdapter(target, cfg);
   await checkRuntimeAuthGate(target, adapter, parsed);
 
   // Step 4: Persist new runtime in config.
@@ -386,8 +386,7 @@ Validation:
 
 Exit codes:
   0  Success
-  1  Fatal error (install failed, credential save failed)
-  2  Auth required — use --save-apikey / --save-setup-token or authenticate first
+  1  Failed; AUTH_NOT_CONFIRMED requires authentication before retrying
 
 Examples:
   zylos runtime status

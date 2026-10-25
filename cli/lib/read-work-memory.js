@@ -52,24 +52,30 @@ export async function readWorkMemory({
   let captured;
   try {
     captured = await withMemoryLock(run.dir, assertHeld => {
-      const read = (file, part) => {
+      const read = (file, part, optional = false) => {
         checkBudget(); assertHeld();
         try { return Buffer.from(readFile(file)); }
-        catch (cause) { throw fail('READ_FAILED', `Cannot read ${part}: ${cause.message}`, [part]); }
+        catch (cause) {
+          if (optional && cause.code === 'ENOENT') return Buffer.alloc(0);
+          throw fail('READ_FAILED', `Cannot read ${part}: ${cause.message}`, [part]);
+        }
       };
-      const state = read(path.join(memoryDir, 'state.md'), 'state');
+      const state = read(path.join(memoryDir, 'state.md'), 'state', true);
       let header;
-      try { header = parseStateHeader(decode(state), { scope }); }
+      try { header = state.length ? parseStateHeader(decode(state), { scope }) : { valid: false }; }
       catch (cause) { throw fail('READ_FAILED', `Cannot parse state: ${cause.message}`, ['state']); }
       if (!header || typeof header.valid !== 'boolean' || (header.valid &&
           (header.scope !== scope || !Array.isArray(header.inboxCommitted)))) {
         throw fail('READ_FAILED', 'State parser returned an invalid result', ['state']);
       }
       if (!header.valid) header = { valid: false, scope: null, coverage: null, inboxCommitted: [] };
-      const inbox = read(path.join(memoryDir, 'inbox.md'), 'inbox');
+      const inbox = read(path.join(memoryDir, 'inbox.md'), 'inbox', true);
       let names;
       try { names = listFiles(memoryDir); }
-      catch (cause) { throw fail('READ_FAILED', `Cannot list segments: ${cause.message}`, ['segments']); }
+      catch (cause) {
+        if (cause.code === 'ENOENT') names = [];
+        else throw fail('READ_FAILED', `Cannot list segments: ${cause.message}`, ['segments']);
+      }
       const committed = new Set(header.inboxCommitted);
       const segments = names.map(name => ({ name, id: segmentName.exec(name)?.[1] }))
         .filter(item => item.id && !committed.has(item.id))

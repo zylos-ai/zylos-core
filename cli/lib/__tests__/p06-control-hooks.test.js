@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { enqueueRestartIfNeeded, shouldSyncCodexConfig, syncCodexConfig, desiredClaudeHooks, syncRuntimeHooks } from '../sync-settings-hooks.js';
 import { approvePermission } from '../../../skills/activity-monitor/scripts/hook-auth-prompt.js';
 import { isCoreCodexHook } from '../codex-hooks.js';
@@ -125,6 +126,41 @@ test('IB-40/43 definitive rejection and sent:false never look up, resubmit or fa
   }
 });
 
+test('IB-40 single_mode falls back only after fresh stable single reads and keeps require-idle', async () => {
+  const rejection = { kind: 'rejected', sent: true, reply: { requestId: 'upgrade-1000-aabbccddeeff', code: 'single_mode' } };
+  const options = sockFixture(rejection);
+  let reads = 0, transitions = 0;
+  options.readConfig = () => ({ session_mode: ++reads === 1 ? 'multi' : 'single' });
+  options.readTransition = () => { transitions++; return null; };
+  assert.deepEqual(await enqueueRestartIfNeeded(options), { submitted: true });
+  assert.equal(reads, 2); assert.equal(transitions, 2);
+  assert.equal(options.calls.length, 1);
+  assert.deepEqual(options.calls[0][1].slice(1), ['enqueue', '--content', '/exit', '--priority', '1', '--require-idle', '--no-ack-suffix']);
+  assert.equal(options.submits.length, 1); assert.equal(options.lookups.length, 0);
+
+  for (const current of ['multi', 'invalid', 'transition', 'config_error', 'transition_error']) {
+    const rejected = sockFixture(rejection);
+    let configReads = 0, transitionReads = 0;
+    rejected.readConfig = () => {
+      if (++configReads === 1) return { session_mode: 'multi' };
+      if (current === 'config_error') throw new Error('unreadable config');
+      return { session_mode: ['multi', 'invalid'].includes(current) ? current : 'single' };
+    };
+    rejected.readTransition = () => {
+      if (++transitionReads === 1) return null;
+      if (current === 'transition_error') throw new Error('unreadable transition');
+      return current === 'transition' ? { phase: 'gating' } : null;
+    };
+    assert.equal((await enqueueRestartIfNeeded(rejected)).submitted, false, current);
+    assert.equal(rejected.calls.length, 0, current);
+    assert.equal(rejected.lookups.length, 0, current);
+  }
+  const invalid = sockFixture({ ...rejection, reply: { ...rejection.reply, requestId: 'other' } });
+  invalid.readConfig = () => ({ session_mode: 'multi' });
+  assert.equal((await enqueueRestartIfNeeded(invalid)).category, 'U');
+  assert.equal(invalid.calls.length, 0);
+});
+
 test('IB-40/43 all uncertain outcomes use one same-deadline lookup and never resubmit', async () => {
   for (const kind of ['no_reply', 'invalid_reply', 'timeout', 'deadline_exceeded']) {
     for (const lookup of ['accepted', 'done', 'unknown', 'deadline_exceeded']) {
@@ -199,4 +235,39 @@ test('P06 2.11: init hook sync preserves unreadable settings and reports failure
     assert.equal(fs.readFileSync(settingsPath, 'utf8'), bad);
     assert.equal(fs.existsSync(path.join(root, '.codex', 'hooks.json')), false);
   }
+});
+
+test('P06 review: upgrade refreshes stale Codex hooks with unchanged TOML and dry-run preserves them', t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'p06-upgrade-hooks-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const root = path.join(home, 'zylos');
+  fs.mkdirSync(path.join(root, '.zylos'), { recursive: true });
+  fs.writeFileSync(path.join(root, '.zylos', 'config.json'), JSON.stringify({ runtime: 'claude', session_mode: 'single' }));
+  const script = new URL('../sync-settings-hooks.js', import.meta.url);
+  const run = (...args) => {
+    const result = spawnSync(process.execPath, [script.pathname, ...args], {
+      env: { ...process.env, HOME: home, ZYLOS_DIR: root }, encoding: 'utf8', timeout: 20000,
+    });
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    return result.stdout;
+  };
+  run();
+  const tomlPaths = [path.join(home, '.codex', 'config.toml'), path.join(root, '.codex', 'config.toml')];
+  const beforeToml = tomlPaths.map(file => fs.readFileSync(file, 'utf8'));
+  const hooksPath = path.join(root, '.codex', 'hooks.json');
+  const userHook = { type: 'command', command: 'node /user/custom-hook.js' };
+  const stale = JSON.stringify({ hooks: { SessionStart: [{ hooks: [userHook, {
+    type: 'command', command: `node ${root}/.claude/skills/activity-monitor/scripts/session-start-orchestrator.js --shard state`,
+  }] }] } });
+  fs.writeFileSync(hooksPath, stale);
+  run('--dry-run');
+  assert.equal(fs.readFileSync(hooksPath, 'utf8'), stale);
+  assert.match(run(), /Codex hooks refreshed/);
+  assert.deepEqual(tomlPaths.map(file => fs.readFileSync(file, 'utf8')), beforeToml);
+  const refreshed = fs.readFileSync(hooksPath, 'utf8');
+  assert.doesNotMatch(refreshed, /--shard state/);
+  assert.match(refreshed, /--shard c4-conversations/);
+  assert.match(refreshed, /\/user\/custom-hook.js/);
+  assert.match(run(), /all up to date/);
+  assert.equal(fs.readFileSync(hooksPath, 'utf8'), refreshed);
 });

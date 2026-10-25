@@ -9,7 +9,7 @@ import { test } from 'node:test';
 import { readWorkMemory, parseReadWorkMemoryArgs } from '../read-work-memory.js';
 
 // P07 parser integration is deliberately unverified: this is a consumer fixture.
-const lockModule = new URL(process.env.TEST_MEMORY_LOCK_MODULE || '../memory-lock.js', import.meta.url).href;
+const lockModule = new URL('../memory-lock.js', import.meta.url).href;
 const { withMemoryLock } = await import(lockModule);
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
 const id1 = '20261019T081500123Z', id2 = '20261019T091200456Z';
@@ -87,12 +87,19 @@ test('IF-22: large UTF-8 output spills the same captured bytes after unlocking',
   fs.writeFileSync(path.join(f.memory, 'state.md'), 'abc '.repeat(12000));
   let held = false;
   const result = await readWorkMemory({ ...f.options,
-    withMemoryLock: (run, action, options) => withMemoryLock(run, assertHeld => {
+    withMemoryLock: async (run, action, options) => {
+      const captured = await withMemoryLock(run, assertHeld => {
       held = true; try { return action(assertHeld); } finally { held = false; }
-    }, options),
+      }, options);
+      fs.writeFileSync(path.join(f.memory, 'state.md'), 'changed after capture');
+      return captured;
+    },
+    readFile: file => {
+      assert.equal(held, true, 'source reads must end before releasing F8');
+      return fs.readFileSync(file);
+    },
     writeFile: (file, bytes, options) => {
       assert.equal(held, false);
-      fs.writeFileSync(path.join(f.memory, 'state.md'), 'changed after capture');
       return fs.writeFileSync(file, bytes, options);
     },
   });
@@ -151,7 +158,7 @@ test('IB-23: expired total budget, non-UTF-8 and spill failure never return part
   assert.equal(fs.readdirSync(f.root).some(name => name.startsWith('zylos-work-memory-')), false);
 });
 
-test('IF-22: missing/unreadable part rejects the whole snapshot and identifies the part', async t => {
+test('IF-22: unreadable part rejects the whole snapshot and identifies the part', async t => {
   const f = fixture(t);
   for (const part of ['state', 'inbox', `segment:${id2}`]) {
     await assert.rejects(readWorkMemory({ ...f.options, readFile: file => {
@@ -161,8 +168,29 @@ test('IF-22: missing/unreadable part rejects the whole snapshot and identifies t
       return fs.readFileSync(file);
     } }), error => error.code === 'READ_FAILED' && error.parts[0] === part);
   }
+});
+
+test('IB-23: a Sync-rotated inbox is empty while existing segments remain readable', async t => {
+  const f = fixture(t);
   fs.unlinkSync(path.join(f.memory, 'inbox.md'));
-  await assert.rejects(readWorkMemory(f.options), error => error.code === 'READ_FAILED' && error.parts[0] === 'inbox');
+  const result = await readWorkMemory(f.options);
+  assert.equal(result.data.state.valid, true);
+  assert.deepEqual(result.data.inbox, { bytes: 0, sha256: sha(Buffer.alloc(0)) });
+  assert.deepEqual(result.data.segments.map(part => part.id), [id2]);
+  assert.match(result.data.text, /second segment/);
+});
+
+test('IB-23: new group and fresh global memory return empty snapshots with an invalid-header warning', async t => {
+  for (const grouped of [true, false]) {
+    const f = fixture(t, grouped);
+    fs.rmSync(f.memory, { recursive: true });
+    const result = await readWorkMemory(f.options);
+    assert.equal(result.data.state.valid, false);
+    assert.equal(result.data.state.bytes, 0);
+    assert.equal(result.data.inbox.bytes, 0);
+    assert.deepEqual(result.data.segments, []);
+    assert.equal(result.data.warnings.length, 1);
+  }
 });
 
 test('IB-23: environment scope only, global and grouped reads cannot fall back across scopes', async t => {
@@ -177,7 +205,9 @@ test('IB-23: environment scope only, global and grouped reads cannot fall back a
   fs.unlinkSync(path.join(f.memory, 'state.md'));
   fs.mkdirSync(path.join(f.root, 'memory'), { recursive: true });
   fs.writeFileSync(path.join(f.root, 'memory/state.md'), 'wrong-scope secret marker');
-  await assert.rejects(readWorkMemory(f.options), error => error.code === 'READ_FAILED' && !error.message.includes('wrong-scope'));
+  const result = await readWorkMemory(f.options);
+  assert.equal(result.data.state.valid, false);
+  assert.doesNotMatch(result.data.text, /wrong-scope/);
 });
 
 test('IF-22: timeout cancels lock wait before returning and does not read without lock', async t => {

@@ -21,8 +21,6 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { createRequire } from 'node:module';
-import { bootstrapScope, loadCoreModule } from '../../activity-monitor/scripts/bootstrap-scope.js';
-import { isSubsession } from '../../activity-monitor/scripts/bootstrap-identity.js';
 const require=createRequire(import.meta.url);
 
 // Ordinary entrypoints only consult the explicit active marker. Historical
@@ -105,17 +103,20 @@ async function withC4Db(label, action) {
 
 /** Keep original message bytes and drop whole oldest messages to fit. */
 export async function emitC4Conversations(payload, budget = null, {
-  scopeReader = bootstrapScope, withDb = withC4Db,
+  scopeReader, withDb = withC4Db,
   migrationReader = async scope => {
     const record = path.join(scope.root, '.zylos/migrations/references-layout-v1.json');
     try { fs.lstatSync(record); }
     catch (error) { if (error.code === 'ENOENT') return { state: 'absent' }; throw error; }
+    const { loadCoreModule } = await import('../../activity-monitor/scripts/bootstrap-scope.js');
     const { createMigration } = await loadCoreModule('memory-migration.js');
     return createMigration({ env: { ...process.env, ZYLOS_DIR: scope.root } }).status();
   },
 } = {}) {
-  const scope = await scopeReader();
   return withDb('c4 conversations init', async db => {
+    const { isSubsession } = await import('../../activity-monitor/scripts/bootstrap-identity.js');
+    const readScope = scopeReader ?? (await import('../../activity-monitor/scripts/bootstrap-scope.js')).bootstrapScope;
+    const scope = await readScope();
     await normalHelpers();
     const coverage = scope.mode === 'multi' ? db.getCoverageEnd(scope.sessionGroup) : db.getGlobalCoverageEnd();
     const conversations = scope.mode === 'multi'

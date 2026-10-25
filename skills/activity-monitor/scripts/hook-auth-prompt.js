@@ -20,8 +20,6 @@ import os from 'os';
 import { execFileSync } from 'child_process';
 import { fileURLToPath } from 'node:url';
 import { readZylosConfigOrThrow } from '../../comm-bridge/scripts/local-config.js';
-import { bootstrapScope } from './bootstrap-scope.js';
-import { readBootstrapIdentity } from './bootstrap-identity.js';
 
 const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
 const LOG_FILE = path.join(ZYLOS_DIR, 'activity-monitor', 'hook-timing.log');
@@ -31,8 +29,8 @@ const AUTO_APPROVE_AVAILABLE_IN_SEC = 1;
 export async function approvePermission(hookData, {
   env = process.env,
   readConfig = readZylosConfigOrThrow,
-  scopeReader = bootstrapScope,
-  identityReader = readBootstrapIdentity,
+  scopeReader,
+  identityReader,
   exec = execFileSync,
   controlPath = C4_CONTROL,
 } = {}) {
@@ -49,6 +47,8 @@ export async function approvePermission(hookData, {
   let launchConfig;
   try { launchConfig = JSON.parse(env.ZYLOS_MODEL_CONFIG); } catch { /* No F1 fallback. */ }
   if (launchConfig?.runtime !== 'claude') return { skipped: true, reason: 'runtime_unconfirmed' };
+  scopeReader ??= (await import('./bootstrap-scope.js')).bootstrapScope;
+  identityReader ??= (await import('./bootstrap-identity.js')).readBootstrapIdentity;
   const scope = await scopeReader(env);
   const identity = await identityReader(scope, { env });
   if (identity.runtime !== 'claude' || identity.runId !== env.ZYLOS_RUN_ID) {
