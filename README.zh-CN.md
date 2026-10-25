@@ -30,7 +30,7 @@ Zylos 给它一个生命。跨重启的持久记忆。你睡觉时自动工作�
 
 ## 快速开始
 
-**前置条件：** 一台 Linux 服务器（或 Mac）、[Claude](https://claude.ai) 订阅（或以 [OpenAI Codex](https://github.com/openai/codex) 作为替代运行时）。
+**前置条件：** 一台 Linux 服务器（或 Mac），需要 tmux 3.2a 或更高版本（没有 tmux 时安装脚本会自动安装）；[Claude](https://claude.ai) 订阅（或以 [OpenAI Codex](https://github.com/openai/codex) 作为替代运行时）。
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/zylos-ai/zylos-core/main/scripts/install.sh | bash
