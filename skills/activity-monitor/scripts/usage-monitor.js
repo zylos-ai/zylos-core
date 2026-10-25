@@ -5,11 +5,11 @@ import * as c4Schema from '../../comm-bridge/scripts/c4-schema.js';
 import { guardDatabase, assertCoreDatabaseAvailable } from '../../comm-bridge/scripts/sqlite-schema.js';
 const coreRequire = createRequire(new URL('../../comm-bridge/package.json', import.meta.url));
 import { shouldStartUsageCheck } from './usage-check-engine.js';
-import { readCodexUsageFromActiveRollout } from './usage-codex-rollout-reader.js';
-import {
-  readClaudeUsageFromMonitorFiles,
-  readCodexUsageFromMonitorFile
-} from './usage-monitor-file-reader.js';
+import { loadCoreModule } from './core-modules.js';
+import { enqueueMachineControl } from './machine-control.js';
+import { durableJson } from './runtime-generation.js';
+// Optional usage must not load the native DB/reader graph until a sample is requested.
+const readAccountUsage = async (...args) => (await loadCoreModule('session-state-reader.js')).readAccountUsage(...args);
 
 export class UsageMonitor {
   constructor(adapter, options = {}) {
@@ -71,43 +71,14 @@ export class UsageMonitor {
     });
   }
 
-  runMonitor({ currentTime }) {
-    let snapshot = null;
-    let source = null;
-    if (this.runtimeId === 'claude') {
-      snapshot = readClaudeUsageFromMonitorFiles({
-        statuslineFile: this.options.statuslineFile,
-        usageStateFile: this.options.usageStateFile
-      });
-      source = snapshot?.statusShape || 'none';
-    } else {
-      snapshot = readCodexUsageFromMonitorFile({
-        usageStateFile: this.options.usageCodexStateFile
-      });
-      source = snapshot?.statusShape || 'usage-codex-missing';
-
-      if (!snapshot) {
-        const rolloutStatus = readCodexUsageFromActiveRollout();
-        if (rolloutStatus) {
-          snapshot = {
-            sessionPercent: rolloutStatus.sessionPercent,
-            sessionResets: rolloutStatus.sessionResets,
-            weeklyAllPercent: rolloutStatus.weeklyAllPercent,
-            weeklyAllResets: rolloutStatus.weeklyAllResets,
-            weeklySonnetPercent: null,
-            weeklySonnetResets: null,
-            fiveHourPercent: rolloutStatus.fiveHourPercent,
-            fiveHourResets: rolloutStatus.fiveHourResets,
-            statusShape: 'rollout_fallback'
-          };
-          source = snapshot.statusShape;
-          this.options.log('Usage monitor (codex): usage-codex.json unavailable, falling back to rollout reader');
-        }
-      }
-    }
-
+  async runMonitor({ currentTime }) {
+    const limits = await (this.options.readAccountUsage ?? readAccountUsage)(this.runtimeId);
+    const snapshot = normalizeAccountUsage(limits);
+    this.latestSample = snapshot;
+    this.latestUsageState = null;
+    const source = 'account_sampler';
     if (!snapshot) {
-      this.options.log(`Usage monitor (${this.runtimeId}): no local usage snapshot available`);
+      this.options.log(`Usage monitor (${this.runtimeId}): no eligible account sample`);
       this.lastUsageCheckAt = currentTime;
       return true;
     }
@@ -123,7 +94,7 @@ export class UsageMonitor {
       fiveHourResets: snapshot.fiveHourResets
     };
     const now = new Date().toISOString();
-    const tierMetric = usage.weeklyAll ?? usage.session;
+    const tierMetric = usage.weeklyAll ?? usage.fiveHour;
     const tier = this.getUsageTier(tierMetric ?? 0);
 
     const usageData = {
@@ -142,12 +113,14 @@ export class UsageMonitor {
       `5h=${usage.fiveHour ?? 'null'}% weekly=${usage.weeklyAll ?? 'null'}% tier=${tier}`
     );
 
+    this.latestUsageState = usageData;
     this.writeUsageState(usageData);
     this.lastUsageCheckAt = currentTime;
     return true;
   }
 
-  runAlert({ currentTime }) {
+  async runAlert({ currentTime }) {
+    await this.runMonitor({ currentTime });
     const checkedAt = new Date(currentTime * 1000).toISOString();
     const alertState = this.loadUsageAlertState();
     const writeCheckedState = (patch = {}) => {
@@ -160,7 +133,7 @@ export class UsageMonitor {
       });
     };
 
-    const state = this.loadUsageState();
+    const state = this.latestUsageState;
     if (!state) {
       this.options.log(`Usage alert (${this.runtimeId}): no usage state available`);
       writeCheckedState();
@@ -199,11 +172,11 @@ export class UsageMonitor {
       weeklyAllResets: state.weeklyAll?.resets
     };
     this.options.log(`Usage alert (${this.runtimeId}): notifying owner for tier=${tier}`);
-    this.sendNotification(formatUsageNotification(usage, tier));
+    if (!await this.sendNotification(formatUsageNotification(usage, tier))) return false;
     writeCheckedState({
       lastObservedTier: tier,
       lastNotifiedTier: tier,
-      lastNotifiedAt: new Date().toISOString(),
+      lastNotifiedAt: checkedAt,
     });
     return true;
   }
@@ -219,7 +192,7 @@ export class UsageMonitor {
 
   writeUsageState(data) {
     try {
-      fs.writeFileSync(this.getUsageStateFile(), JSON.stringify(data, null, 2));
+      durableJson(this.getUsageStateFile(), data);
     } catch (err) {
       this.options.log(`Usage monitor: failed to write state (${err.message})`);
     }
@@ -240,7 +213,7 @@ export class UsageMonitor {
 
   writeUsageAlertState(data) {
     try {
-      fs.writeFileSync(this.options.usageAlertStateFile, JSON.stringify(data, null, 2));
+      durableJson(this.options.usageAlertStateFile, data);
     } catch (err) {
       this.options.log(`Usage alert: failed to write state (${err.message})`);
     }
@@ -275,19 +248,21 @@ export class UsageMonitor {
     return 'ok';
   }
 
-  sendNotification(message) {
+  async sendNotification(message) {
     const content = `Usage alert received from activity monitor. Please forward this to the owner via their preferred DM channel:\n\n${message}`;
-    const result = this.options.runC4Control([
+    const result = await (this.options.enqueueMachineControl ?? enqueueMachineControl)([
       'enqueue',
       '--content', content,
       '--priority', '1',
       '--available-in', '5',
       '--no-ack-suffix'
-    ]);
+    ], {readMode:this.options.readMode, run:this.options.runC4Control});
     if (result.ok) {
       this.options.log(`Usage monitor: notification enqueued (${result.output})`);
+      return true;
     } else {
       this.options.log(`Usage monitor: notification enqueue failed (${result.output})`);
+      return false;
     }
   }
 }
@@ -328,4 +303,17 @@ function formatUsageNotification(usage, tier) {
 function tierRank(tier) {
   const ranks = { ok: 0, warning: 1, high: 2, critical: 3 };
   return ranks[tier] ?? 0;
+}
+
+/** The account reader has already selected one matching live source. */
+export function normalizeAccountUsage(limits) {
+  if (!limits || typeof limits !== 'object') return null;
+  const five = limits.fiveHour ?? limits.five_hour ?? limits.primary;
+  const weekly = limits.sevenDay ?? limits.seven_day ?? limits.secondary;
+  const sonnet = limits.seven_day_sonnet ?? limits.sonnet;
+  const percent = value => { const n=value?.usedPercentage ?? value?.used_percentage ?? value?.used_percent; return Number.isFinite(n) ? n : null; };
+  const reset = value => value?.resetsAt ?? value?.resets_at ?? null;
+  if ([five,weekly,sonnet].every(value => percent(value) === null)) return null;
+  return {sessionPercent:null,sessionResets:null,fiveHourPercent:percent(five),fiveHourResets:reset(five),
+    weeklyAllPercent:percent(weekly),weeklyAllResets:reset(weekly),weeklySonnetPercent:percent(sonnet),weeklySonnetResets:reset(sonnet)};
 }

@@ -1,0 +1,21 @@
+Running 1 Node test files
+✔ bad F1 does not open admission or schedule (2.224304ms)
+✔ restore precedes admission and lifecycle shares one scene sample (0.72501ms)
+✔ group failure preserves other observations and next tick (0.429004ms)
+✔ transition suppresses new lifecycle producers (0.295835ms)
+✔ overlap joins one round and read failure schedules recovery (4.311451ms)
+✔ T01 hook wakeups keep one timer and deferred server maintenance runs on failed observations (0.602104ms)
+✔ T01 missing pool/Sync dependencies preserve independent metrics and observation work (0.311631ms)
+✔ T01/P10 F1 cutover refreshes mode before lifecycle actions; unreadable F1 does not reuse stale mode (0.409452ms)
+✔ round shares one serialized snapshot and checks manual fences once (0.557391ms)
+✔ unreadable F9 is reported while the same snapshot still advances existing reclaim (0.386254ms)
+✔ completed transition precedes serial work and keeps transition-round restrictions (0.312362ms)
+✔ transition failure reports and continues exits, publication and existing reclamation each round (0.314866ms)
+ℹ tests 12
+ℹ suites 0
+ℹ pass 12
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 58.57468

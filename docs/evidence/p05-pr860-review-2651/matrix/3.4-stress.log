@@ -1,0 +1,11 @@
+Running 1 Node test files
+✔ matrix real launch/delivery under same-socket create/kill churn (53772.865202ms)
+ℹ {"version":"tmux 3.4","launchRounds":300,"launches":604,"deliveryRounds":150,"sends":600,"reads":1200,"churnCycles":9957,"errors":[],"serverLost":false,"foreignLines":0,"missingLines":0,"duplicates":0}
+ℹ tests 1
+ℹ suites 0
+ℹ pass 1
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 53864.039718
