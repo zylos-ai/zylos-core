@@ -62,6 +62,10 @@ test('IF-47 init template generator prepares dual hooks and assets report unavai
   const instruction = path.join(context.root, 'instructions.md');
   fs.writeFileSync(instruction, '# Fixture instructions\n');
   fs.writeFileSync(path.join(context.root, 'CLAUDE.md'), '# Fixture instructions\n');
+  const configPath = path.join(context.root, '.zylos', 'config.json');
+  const config = JSON.stringify({ runtime: 'claude', session_mode: 'multi', new_session_threshold: 30, keep: true });
+  fs.mkdirSync(path.dirname(configPath), { recursive: true });
+  fs.writeFileSync(configPath, config);
   const result = run(context, `
     import { prepareInitRuntimeAssets, syncSettingsHooksAfterTemplateDeploy } from ${JSON.stringify(initUrl)};
     syncSettingsHooksAfterTemplateDeploy();
@@ -79,5 +83,5 @@ test('IF-47 init template generator prepares dual hooks and assets report unavai
     assert.ok(commands.some(command => command.includes('session-start-orchestrator.js')));
   }
   assert.equal(fs.existsSync(path.join(context.root, '.codex', 'hooks.trust.json')), false);
-  assert.equal(fs.existsSync(path.join(context.root, '.zylos', 'config.json')), false);
+  assert.equal(fs.readFileSync(configPath, 'utf8'), config);
 });

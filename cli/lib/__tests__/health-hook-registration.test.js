@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { desiredClaudeHooks, syncHooks, supportsStopFailureVersion, detectStopFailureSupport } from '../sync-settings-hooks.js';
+import { desiredClaudeHooks, syncHooks, supportsStopFailureVersion, detectStopFailureSupport } from '../sync-runtime-hooks.js';
 
 test('stable Claude versions since StopFailure introduction enable health hooks; unknown and older versions use fallback', () => {
   for (const version of ['2.1.78', '2.1.78 (Claude Code)', '2.1.284', '2.1.300', '2.1.301', '2.1.301 (Claude Code)', '2.2.0', '3.0.0', '10.0.0 (Claude Code)']) assert.equal(supportsStopFailureVersion(version), true);

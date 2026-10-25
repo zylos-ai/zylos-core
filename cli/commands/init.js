@@ -29,7 +29,7 @@ import {
 import { deployManifestTemplate } from '../lib/runtime/tmux-env.js';
 import { runMigrations } from '../lib/migrate.js';
 import { ensureCodexHooksTrusted } from '../lib/codex-hooks.js';
-import { syncRuntimeHooks } from '../lib/sync-settings-hooks.js';
+import { syncRuntimeHooks } from '../lib/sync-runtime-hooks.js';
 import { runtimeHooksReady } from './runtime.js';
 import {
   installGlobalPackage,

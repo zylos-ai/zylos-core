@@ -13,7 +13,7 @@ fs.writeFileSync(path.join(process.env.ZYLOS_DIR, '.env'), '', 'utf8');
 describe('runtime base URL support', () => {
   test('review P1: readiness checks installed project hooks, and rejects missing/stale hooks (M9)', async t => {
     const { runtimeHooksReady, executeRuntimeSwitch } = await import('../../commands/runtime.js');
-    const { syncRuntimeHooks } = await import('../sync-settings-hooks.js');
+    const { syncRuntimeHooks } = await import('../sync-runtime-hooks.js');
     const instruction = path.join(process.env.ZYLOS_DIR, 'CLAUDE.md');
     const installed = path.join(process.env.ZYLOS_DIR, '.claude', 'settings.json');
     assert.deepEqual(await runtimeHooksReady('claude'), { ready: false, pendingMigration: true });

@@ -17,7 +17,7 @@ import { readZylosConfigOrThrow, readZylosConfigStrict, readSessionMode, updateZ
 import { getSessionAdapter, SUPPORTED_RUNTIMES } from '../lib/runtime/index.js';
 import { listGroupTmuxSessions } from '../lib/session-group-paths.js';
 import { readLiveIdentity } from '../lib/session-state-reader.js';
-import { desiredClaudeHooks, syncHooks, detectStopFailureSupport } from '../lib/sync-settings-hooks.js';
+import { desiredClaudeHooks, syncHooks, detectStopFailureSupport } from '../lib/sync-runtime-hooks.js';
 import { isCodexTrustValid, getCodexVersion } from '../lib/codex-hooks.js';
 import { isSplitInstructionsActive } from '../lib/runtime/instruction-builder.js';
 import { commandExists } from '../lib/shell-utils.js';

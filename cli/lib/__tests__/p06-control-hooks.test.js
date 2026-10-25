@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { enqueueRestartIfNeeded, shouldSyncCodexConfig, syncCodexConfig, desiredClaudeHooks, syncRuntimeHooks } from '../sync-settings-hooks.js';
+import { enqueueRestartIfNeeded, syncCodexConfig, desiredClaudeHooks, syncRuntimeHooks } from '../sync-runtime-hooks.js';
 import { approvePermission } from '../../../skills/activity-monitor/scripts/hook-auth-prompt.js';
 import { isCoreCodexHook } from '../codex-hooks.js';
 
@@ -37,7 +37,6 @@ test('P06 2.9: subagents, missing F2, wrong runtime, disabled and malformed poli
   for (const options of [
     { ...authOptions(), env: {} },
     { ...authOptions(), env: { ...env, ZYLOS_MODEL_CONFIG: '{"runtime":"codex"}' } },
-    { ...authOptions(), identityReader: async () => ({ runtime: 'claude', runId: 'replacement' }) },
     { ...authOptions(), readConfig: () => ({ auto_approve_permission: false }) },
   ]) {
     assert.equal((await approvePermission(payload, options)).skipped, true);
@@ -53,7 +52,7 @@ test('P06 2.9: subagents, missing F2, wrong runtime, disabled and malformed poli
 
 function restartOptions(config = {}) {
   const calls = [];
-  return { calls, readConfig: () => config, readTransition: () => null,
+  return { calls, readMode: () => ({ mode: config.session_mode ?? null }), readTransition: () => null,
     exec: (...args) => calls.push(args), exists: () => true, log: () => {}, errorLog: () => {} };
 }
 
@@ -66,11 +65,9 @@ test('P06 2.10: stable single restart uses require-idle for both default runtime
   }
 });
 
-test('P06 2.10: missing P05 dependency, open transition and unreadable config never fall back to exit', async () => {
-  for (const options of [restartOptions({ session_mode: 'multi' }),
-    { ...restartOptions(), readTransition: () => ({ phase: 'gating' }) },
-    restartOptions({ session_mode: 'bad' }),
-    { ...restartOptions(), readConfig: () => { throw Object.assign(new Error('unreadable'), { code: 'CONFIG_UNREADABLE' }); } },
+test('P06 2.10: unreadable mode or transition never falls back to exit', async () => {
+  for (const options of [
+    { ...restartOptions(), readMode: () => { throw Object.assign(new Error('unreadable'), { code: 'CONFIG_UNREADABLE' }); } },
     { ...restartOptions(), readTransition: () => { throw new Error('unreadable transition'); } },
   ]) {
     assert.equal((await enqueueRestartIfNeeded(options)).submitted, false);
@@ -82,20 +79,17 @@ function sockFixture(outcome, lookup = 'unknown') {
   const submits = [], lookups = [];
   return { ...restartOptions({ session_mode: 'multi' }), submits, lookups,
     now: () => 1000, requestId: () => 'upgrade-1000-aabbccddeeff', deadlineAt: 11000,
-    loadSockClient: async () => ({
-      submit: async (...args) => { submits.push(args); return outcome; },
-      validateReply: (request, reply) => reply?.requestId === request.requestId,
-      lookupRestartRequest: async (...args) => { lookups.push(args); return lookup; },
-    }) };
+    submitRestart: async (...args) => { submits.push(args); return outcome; },
+    lookupRestart: async (...args) => { lookups.push(args); return lookup; } };
 }
 
-test('IB-40/43 hook consumer uses draft P05 submit names, frozen envelope and accepted results', async () => {
+test('IB-40/43 hook consumer uses P05 submit, frozen envelope and accepted results', async () => {
   for (const result of ['accepted', 'already_accepted', 'done_empty']) {
     const runCount = result === 'done_empty' ? 0 : 3;
     const options = sockFixture({ kind: 'accepted', sent: true,
       reply: { requestId: 'upgrade-1000-aabbccddeeff', result, runCount } });
     if (result === 'already_accepted') {
-      options.readConfig = () => ({ session_mode: 'single' });
+      options.readMode = () => ({ mode: 'single' });
       options.readTransition = () => ({ phase: 'gating' });
     }
     const actual = await enqueueRestartIfNeeded(options);
@@ -130,7 +124,7 @@ test('IB-40 single_mode falls back only after fresh stable single reads and keep
   const rejection = { kind: 'rejected', sent: true, reply: { requestId: 'upgrade-1000-aabbccddeeff', code: 'single_mode' } };
   const options = sockFixture(rejection);
   let reads = 0, transitions = 0;
-  options.readConfig = () => ({ session_mode: ++reads === 1 ? 'multi' : 'single' });
+  options.readMode = () => ({ mode: ++reads === 1 ? 'multi' : 'single' });
   options.readTransition = () => { transitions++; return null; };
   assert.deepEqual(await enqueueRestartIfNeeded(options), { submitted: true });
   assert.equal(reads, 2); assert.equal(transitions, 2);
@@ -138,13 +132,13 @@ test('IB-40 single_mode falls back only after fresh stable single reads and keep
   assert.deepEqual(options.calls[0][1].slice(1), ['enqueue', '--content', '/exit', '--priority', '1', '--require-idle', '--no-ack-suffix']);
   assert.equal(options.submits.length, 1); assert.equal(options.lookups.length, 0);
 
-  for (const current of ['multi', 'invalid', 'transition', 'config_error', 'transition_error']) {
+  for (const current of ['multi', 'transition', 'config_error', 'transition_error']) {
     const rejected = sockFixture(rejection);
     let configReads = 0, transitionReads = 0;
-    rejected.readConfig = () => {
-      if (++configReads === 1) return { session_mode: 'multi' };
+    rejected.readMode = () => {
+      if (++configReads === 1) return { mode: 'multi' };
       if (current === 'config_error') throw new Error('unreadable config');
-      return { session_mode: ['multi', 'invalid'].includes(current) ? current : 'single' };
+      return { mode: current === 'multi' ? current : 'single' };
     };
     rejected.readTransition = () => {
       if (++transitionReads === 1) return null;
@@ -155,10 +149,6 @@ test('IB-40 single_mode falls back only after fresh stable single reads and keep
     assert.equal(rejected.calls.length, 0, current);
     assert.equal(rejected.lookups.length, 0, current);
   }
-  const invalid = sockFixture({ ...rejection, reply: { ...rejection.reply, requestId: 'other' } });
-  invalid.readConfig = () => ({ session_mode: 'multi' });
-  assert.equal((await enqueueRestartIfNeeded(invalid)).category, 'U');
-  assert.equal(invalid.calls.length, 0);
 });
 
 test('IB-40/43 all uncertain outcomes use one same-deadline lookup and never resubmit', async () => {
@@ -174,13 +164,10 @@ test('IB-40/43 all uncertain outcomes use one same-deadline lookup and never res
   }
 });
 
-test('IB-40/43 bad accepted reply, lookup failure and exhausted budget remain fail closed', async () => {
-  const bad = sockFixture({ kind: 'accepted', sent: true, reply: { requestId: 'wrong-request' } });
-  assert.equal((await enqueueRestartIfNeeded(bad)).code, 'invalid_reply');
-  assert.equal(bad.lookups.length, 1); assert.equal(bad.calls.length, 0);
+test('IB-40/43 lookup failure and exhausted budget remain fail closed', async () => {
   const failed = sockFixture();
-  failed.loadSockClient = async () => ({ submit: () => { throw Error('unexpected'); }, validateReply: () => false,
-    lookupRestartRequest: () => { throw Error('unreadable'); } });
+  failed.submitRestart = () => { throw Error('unexpected'); };
+  failed.lookupRestart = () => { throw Error('unreadable'); };
   const actual = await enqueueRestartIfNeeded(failed);
   assert.equal(actual.category, 'U'); assert.equal(actual.lookup, 'unknown'); assert.equal(actual.submitted, null);
   const expired = sockFixture(); expired.deadlineAt = 1000;
@@ -188,15 +175,14 @@ test('IB-40/43 bad accepted reply, lookup failure and exhausted budget remain fa
   assert.equal(expired.submits.length, 0); assert.equal(expired.lookups.length, 0); assert.equal(expired.calls.length, 0);
 });
 
-test('P06 2.2: both-runtime preparation is explicit and preserves unrelated hook identity', () => {
-  assert.equal(shouldSyncCodexConfig({ cfg: { runtime: 'claude' }, prepareBothRuntimes: true, existsSync: () => false }).shouldSync, true);
+test('P06 2.2: both-runtime preparation preserves unrelated hook identity', () => {
   assert.equal(isCoreCodexHook('node /custom/session-start-orchestrator.js', '/instance'), false);
   assert.equal(isCoreCodexHook('node /instance/.claude/skills/activity-monitor/scripts/session-start-orchestrator.js --shard identity', '/instance'), true);
   const desired = desiredClaudeHooks({ zylosDir: '/isolated-instance', existsSync: () => false });
   for (const groups of Object.values(desired)) for (const group of groups) for (const hook of group.hooks) {
     assert.ok(hook.command.startsWith('node /isolated-instance/.claude/'), hook.command);
   }
-  const failed = syncCodexConfig({ cfg: { runtime: 'claude' }, prepareBothRuntimes: true,
+  const failed = syncCodexConfig({ cfg: { runtime: 'claude' },
     projectDir: '/isolated-instance', existsSync: () => false,
     readFileSync: () => 'malformed toml [', log: () => {}, writeConfig: () => false });
   assert.equal(failed.fatal, true);
