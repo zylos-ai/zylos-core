@@ -4,11 +4,12 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { messageForStatus } from '../../comm-bridge/scripts/status-notice-templates.js';
 import { runtimeRoot } from './runtime-generation.js';
+import { normalizeHealth, recoveryEligibility } from './runtime-health.js';
 const { assertSessionGroup } = await loadCoreModule('session-group-paths.js');
 
 export const PROBE_CACHE_TTL_MS = 30000;
 export const ROUTE_PROBE_TIMEOUT_MS = 25000;
-export const normalizeHealth = health => ['ok', 'rate_limited', 'auth_failed'].includes(health) ? health : 'unavailable';
+export { normalizeHealth } from './runtime-health.js';
 export const messageForRoute = ({ health, reason }) => messageForStatus({ health, reason });
 const runtimeValid = runtime => typeof runtime === 'string' && /^[a-z][a-z0-9-]{0,31}$/.test(runtime);
 const object = value => value && typeof value === 'object' && !Array.isArray(value);
@@ -59,13 +60,13 @@ export class MessageRouter {
     if (!request.noReply) accelerated = await this.healthCoordinator.notifyUserMessage(runtime);
     if (accelerated) this.clearCache(runtime);
     const cache = !accelerated && this.readNegativeCache(runtime, health, reason);
-    const backoff = !accelerated && this.withinBackoff(this.healthCoordinator.store(runtime).read(), rawHealth);
-    if (!cache && !backoff) await this.joinProbe(runtime);
+    const gate = recoveryEligibility(this.healthCoordinator.store(runtime).read(), { runtime, cache, nowMs: this.now() });
+    if (gate.eligible) await this.joinProbe(runtime);
     state = this.healthCoordinator.store(runtime).read();
     health = normalizeHealth(state.health ?? rawHealth); reason = this.reason(state);
     if (health === 'ok') { this.clearCache(runtime); return this.decision(request, runtime, { health, reason, decision: 'pending' }); }
     if (health === 'auth_failed') return this.authDecision(request, runtime, state);
-    if (!cache && !backoff) this.writeNegativeCache(runtime, health, reason);
+    if (gate.eligible) this.writeNegativeCache(runtime, health, reason);
     return this.decision(request, runtime, { health, reason, ...(health === 'rate_limited' ? { decision: 'pending' } : { recovered: false }), ...(cache ? { cacheHit: true } : {}) });
   }
   async authDecision(request, runtime, state) {
@@ -88,21 +89,12 @@ export class MessageRouter {
     }
     return answer;
   }
-  withinBackoff(state, rawHealth) {
-    if (!['recovering', 'down', 'unavailable'].includes(rawHealth)) return false;
-    const scheduling = state.scheduling ?? {};
-    const last = Number(rawHealth === 'down' ? scheduling.lastDownCheckAt : scheduling.lastRecoveryAt) || 0;
-    const n = Number(scheduling.restartFailureCount) || 0;
-    const delay = rawHealth === 'down' ? 3600 : n <= 0 ? 0 : Math.min(3600, 60 * 5 ** (n - 1));
-    return last > 0 && delay > 0 && Math.floor(this.now() / 1000) - last < delay;
-  }
   async joinProbe(runtime) {
     let flight = this.inFlightProbes.get(runtime);
     if (!flight) {
-      const startedAt = this.now();
       const promise = Promise.resolve().then(() => this.requestProbe?.(runtime))
         .finally(() => { if (this.inFlightProbes.get(runtime)?.promise === promise) this.inFlightProbes.delete(runtime); });
-      flight = { startedAt, promise }; this.inFlightProbes.set(runtime, flight);
+      flight = { promise }; this.inFlightProbes.set(runtime, flight);
     }
     return this.awaitBudget(flight.promise);
   }
@@ -115,7 +107,7 @@ export class MessageRouter {
     try {
       const cache = JSON.parse(fs.readFileSync(this.cachePath(runtime), 'utf8'));
       return cache.version === 2 && cache.runtime === runtime && cache.recovered === false
-        && cache.expiresAt > this.now() && cache.health === health && cache.reason === reason ? cache : null;
+        && cache.expiresAt > this.now() && cache.health === normalizeHealth(health) && cache.reason === reason ? cache : null;
     } catch { return null; }
   }
   writeNegativeCache(runtime, health, reason) {

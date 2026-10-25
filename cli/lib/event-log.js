@@ -82,12 +82,11 @@ export class EventLogReader {
   const size=stat.size-this.offset;if(!size)return [];
   const buffer=Buffer.alloc(size);const n=fs.readSync(this.fd,buffer,0,size,this.offset);const complete=buffer.subarray(0,n).lastIndexOf(10);if(complete<0)return [];
   this.offset+=complete+1;
-  return buffer.subarray(0,complete).toString('utf8').split('\n').flatMap(line=>{try{const value=JSON.parse(line);if(!value||typeof value!=='object'||Array.isArray(value))throw new Error();if(value.v>1)this.warn('event_log_new_version');return [value];}catch{this.warn('event_log_invalid_line');return [];}});
+  return buffer.subarray(0,complete).toString('utf8').split('\n').flatMap(line=>{const value=parseLine(line,this.warn);return value?[value]:[];});
  }
  read(){
-  const dir=path.dirname(this.file),stem=path.basename(this.file,'.jsonl');let names;
-  try{names=fs.readdirSync(dir);}catch(e){if(e.code==='ENOENT'){const rows=this.fd===null?[]:this.readFd();this.close();return rows;}throw e;}
-  const files=names.flatMap(name=>{if(name===path.basename(this.file))return [{file:this.file,stamp:Infinity}];if(!name.startsWith(stem+'.')||!name.endsWith('.jsonl'))return [];const stamp=Number(name.slice(stem.length+1,-6));return Number.isSafeInteger(stamp)?[{file:path.join(dir,name),stamp}]:[];}).sort((a,b)=>a.stamp-b.stamp).flatMap(item=>{try{const s=fs.statSync(item.file);return [{...item,identity:`${s.dev}:${s.ino}`}];}catch(e){if(e.code==='ENOENT')return [];throw e;}});
+  const files=logFiles(this.file).flatMap(item=>{try{const s=fs.statSync(item.file);return [{...item,identity:`${s.dev}:${s.ino}`}];}catch(e){if(e.code==='ENOENT')return [];throw e;}});
+  if(!files.length && !fs.existsSync(path.dirname(this.file))){const rows=this.fd===null?[]:this.readFd();this.close();return rows;}
   const rows=this.fd===null?[]:this.readFd();let start=0;
   if(this.fd!==null){const index=files.findIndex(x=>x.identity===this.identity);if(index>=0){this.lastStamp=files[index].stamp;start=index+1;}else{this.warn('event_log_gap');start=0;}}
   for(let i=start;i<files.length;i++){
