@@ -45,9 +45,10 @@ test('T01/P10 F1 cutover refreshes mode before lifecycle actions; unreadable F1 
 test('T01 legacy migration failure does not stop observation; accepted transition suppresses lifecycle producers',async()=>{
  let transition=null,calls=0;
  const f=fixture({readConfiguration:async()=>({mode:'single',legacy:true}),getModeTransition:async()=>transition,
+  listDrainFences:async()=>[{sessionGroup:'origin'}],advanceReclaim:async(_fence,context)=>{context.transition=null;},
   advanceAutomaticMigration:async()=>{calls++;if(calls===1)throw Object.assign(new Error('missing P10'),{code:'DEPENDENCY_UNAVAILABLE'});transition={id:'migration'};}});
  await f.loop.start();assert.ok(f.calls.includes('error:automatic-migration'));assert.ok(f.calls.includes('probe:origin'));
- f.calls.length=0;await f.loop.tick();assert.equal(calls,2);assert.equal(f.calls.includes('manual'),false);assert.ok(f.calls.includes('metrics'));
+ f.calls.length=0;await f.loop.tick();assert.equal(calls,2);assert.equal(f.calls.includes('manual'),false);assert.equal(f.calls.includes('rotation'),false);assert.equal(f.calls.includes('sync'),false);assert.ok(f.calls.includes('metrics'));
  f.calls.length=0;await f.loop.tick();assert.equal(calls,2);assert.ok(f.calls.includes('transition'));await f.loop.stop();
 });
 
