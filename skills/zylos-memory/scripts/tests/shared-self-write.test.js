@@ -49,7 +49,7 @@ test('IB53 fragment publication failure leaves existing file intact', async t =>
   const rename = fs.renameSync;
   try {
     fs.renameSync = () => { throw new Error('injected before publication'); };
-    await assert.rejects(withMemoryLock(f.runDir, () => applyFragmentLocked({ target, expected: 'old', replacement: 'new' })), /injected/);
+    await assert.rejects(withMemoryLock(f.runDir, () => applyFragmentLocked({ target, expected: 'old', replacement: 'new' })), { code: 'WRITE_FAILED' });
   } finally { fs.renameSync = rename; }
   assert.equal(fs.readFileSync(target, 'utf8'), 'old');
   assert.deepEqual(fs.readdirSync(path.dirname(target)), ['identity.md']);

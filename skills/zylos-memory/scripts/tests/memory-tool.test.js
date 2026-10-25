@@ -80,12 +80,41 @@ test('IB53 local: traversal, target symlinks and parent symlinks cannot escape a
   assert.equal(fs.existsSync(path.join(outside, 'new.md')), false);
 });
 
-test('IB53 local: write failure reports failure and preserves original content', async () => {
+test('IB53 local: write failures return WRITE_FAILED and preserve the target', async t => {
   const f = await fixture('global');
   await f.editor(create(f.token, 'identity.md', 'original'));
-  const failed = createMemoryEditor(f.env, { fragment: () => { throw Object.assign(new Error('disk failure'), { code: 'EIO' }); } });
-  await assert.rejects(failed({ op: 'edit', path: 'identity.md', expected: 'original', replacement: 'new', token: f.token }), /disk failure/);
-  assert.equal(fs.readFileSync(path.join(f.dir, 'memory/identity.md'), 'utf8'), 'original');
+  for (const [method, code, op] of [['writeFileSync', 'EACCES', 'edit'], ['renameSync', 'EIO', 'edit'], ['linkSync', 'EIO', 'create']]) {
+    const mock = t.mock.method(fs, method, () => { throw Object.assign(new Error('private filesystem detail'), { code }); });
+    const result = await f.editor({ op, path: op === 'create' ? 'references.md' : 'identity.md',
+      expected: 'original', replacement: 'new', token: f.token });
+    mock.mock.restore();
+    assert.deepEqual(result, { ok: false, code: 'WRITE_FAILED', message: 'Memory write failed' });
+    assert.equal(fs.readFileSync(path.join(f.dir, 'memory/identity.md'), 'utf8'), 'original');
+    assert.equal(fs.existsSync(path.join(f.dir, 'memory/references.md')), false);
+  }
+});
+
+test('IB53 local: nonregular lock returns LOCK_UNAVAILABLE without writing', async () => {
+  for (const kind of ['directory', 'symlink']) {
+    const f = await fixture('global'), lock = path.join(f.scope.runDir, 'memory.lock');
+    fs.unlinkSync(lock);
+    if (kind === 'directory') fs.mkdirSync(lock);
+    else fs.symlinkSync(path.join(f.scope.runDir, 'sync.lock'), lock);
+    const result = await f.editor(create(f.token, 'identity.md'));
+    assert.equal(result.ok, false);
+    assert.equal(result.code, 'LOCK_UNAVAILABLE');
+    assert.equal(fs.existsSync(path.join(f.dir, 'memory/identity.md')), false);
+  }
+});
+
+test('IB53 local: published create succeeds even when temporary cleanup fails', async t => {
+  const f = await fixture('global');
+  const mock = t.mock.method(fs, 'unlinkSync', () => { throw Object.assign(new Error('cleanup failed'), { code: 'EACCES' }); });
+  const result = await f.editor(create(f.token, 'identity.md', 'published'));
+  mock.mock.restore();
+  assert.equal(result.ok, true);
+  assert.equal(fs.readFileSync(path.join(f.dir, 'memory/identity.md'), 'utf8'), 'published');
+  assert.equal((await f.editor(create(f.token, 'identity.md', 'retry'))).code, 'EXISTS');
 });
 
 test('IB53 local: stdio emits only protocol frames and advertises the restricted tool', async () => {

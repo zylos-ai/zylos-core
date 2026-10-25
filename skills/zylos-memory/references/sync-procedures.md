@@ -16,7 +16,8 @@ failure, do not release because no token was acquired.
 
 After acquisition, `TOKEN_MISMATCH` / exit 3 means stop immediately: no more
 script/tool operations, no release, no prompts. For any other required-step
-failure (including a tool protocol error), stop later writes, release once with
+failure (including `WRITE_FAILED` for a failed write/publication, `LOCK_UNAVAILABLE`
+for an unavailable kernel lock, or a tool protocol error), stop later writes, release once with
 `sync-lock.js release --kind <kind> --token T`, and report failure to the
 requesting session with the steps already committed. On success or no input,
 release exactly once too. If release fails, append that warning to the original
