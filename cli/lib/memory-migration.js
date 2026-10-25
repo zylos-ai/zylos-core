@@ -171,8 +171,11 @@ export function createMigration({ env = process.env, now = Date.now, version = V
         if (/^(?:memory\/)?reference\//.test(value)) indexed.push(value);
         return ' ';
       });
-    indexed.push(...[...remaining.matchAll(/(?:memory\/)?reference\/[^\s`<>\[\](){},;]+/gu)].map(match => match[0]));
-    const indexedPaths = [...new Set(indexed.map(value => `memory/${value.replace(/^memory\//, '')}`))];
+    for (const match of remaining.matchAll(/(?<![\p{L}\p{N}_./\\~:@%+\-])(?:memory\/)?reference\/[^\s`<>\[\](){},;]+/gu)) {
+      indexed.push(match[0].replace(/[.,;:!?\u3002\uff0c\uff1b\uff1a\uff01\uff1f\u3001\uff09\u3011\u300b\u2019\u201d]+$/u, ''));
+    }
+    const indexedPaths = [...new Set(indexed.filter(value => !/[*?\[\]]/.test(value))
+      .map(value => `memory/${value.replace(/^memory\//, '')}`))];
     for (const indexed of indexedPaths) {
       const target = path.resolve(root, indexed);
       if (!target.startsWith(`${path.join(memory, 'reference')}${path.sep}`)) { missingPaths.push(indexed); continue; }
@@ -304,11 +307,16 @@ export async function main(argv = process.argv.slice(2)) {
 }
 
 export async function runCli(argv = process.argv.slice(2)) {
-  try { console.log(JSON.stringify({ ok: true, data: await main(argv) })); }
+  const json = argv.includes('--json');
+  try {
+    const data = await main(argv);
+    console.log(json ? JSON.stringify({ ok: true, data }) : `OK: ${argv[0]} ${JSON.stringify(data)}`);
+  }
   catch (cause) {
     const code = cause.code || 'INVALID_INPUT';
-    console.log(JSON.stringify({ ok: false, error: { code, message: cause.message, persisted: cause.persisted ?? (cause.persisted === null ? null : []),
+    if (json) console.log(JSON.stringify({ ok: false, error: { code, message: cause.message, persisted: cause.persisted ?? (cause.persisted === null ? null : []),
       ...(cause.missingPaths ? { missingPaths: cause.missingPaths } : {}), ...(cause.path ? { path: cause.path } : {}) } }));
+    else console.error(`Error [${code}]: ${cause.message}`);
     process.exitCode = code === 'LOCK_TIMEOUT' ? 2 : code === 'FRAGMENT_CONFLICT' ? 4 : 1;
   }
 }

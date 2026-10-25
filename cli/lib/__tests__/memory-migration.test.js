@@ -22,6 +22,30 @@ function childResult(child, input = '') {
   });
 }
 
+function lockChildren() {
+  return execFileSync('ps', ['-axo', 'pid=,ppid=,args='], { encoding: 'utf8' }).split('\n')
+    .map(line => line.trim().match(/^(\d+)\s+(\d+)\s+(.+)$/))
+    .filter(row => row && Number(row[2]) === process.pid && row[3].includes('--hold-lock'))
+    .map(row => Number(row[1])).sort((a, b) => a - b);
+}
+
+async function timeoutWithoutWaiter(operation) {
+  const before = lockChildren();
+  try {
+    await assert.rejects(operation(), { code: 'LOCK_TIMEOUT', persisted: [] });
+    assert.deepEqual(lockChildren().filter(pid => !before.includes(pid)), [], 'LOCK_TIMEOUT left a live waiter');
+  } finally {
+    const extra = lockChildren().filter(pid => !before.includes(pid));
+    for (const pid of extra) {
+      try { process.kill(pid, 'SIGKILL'); } catch (cause) { if (cause.code !== 'ESRCH') throw cause; }
+    }
+    for (let i = 0; i < 100 && lockChildren().some(pid => extra.includes(pid)); i++) {
+      await new Promise(resolve => setTimeout(resolve, 20));
+    }
+    assert.equal(lockChildren().some(pid => extra.includes(pid)), false, 'Test waiter cleanup failed');
+  }
+}
+
 function fixture(t, overrides = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'p06-migration-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -177,9 +201,11 @@ test('bounded F8 timeout leaves no waiter and keeps inode stable', async t => {
   let release, entered; const barrier = new Promise(r => { release = r; }); const entering = new Promise(r => { entered = r; });
   const holder = withMemoryLock(runDir, async () => { entered(); await barrier; }); await entering;
   const inode = fs.statSync(path.join(runDir, 'memory.lock')).ino;
-  await assert.rejects(f.service.apply(patch, { waitMs: 20 }), { code: 'LOCK_TIMEOUT', persisted: [] });
-  await assert.rejects(f.service.complete('reviewed', { waitMs: 20 }), { code: 'LOCK_TIMEOUT', persisted: [] });
-  assert.equal(backupState(f.backup), 'absent'); release(); await holder;
+  try {
+    await timeoutWithoutWaiter(() => f.service.apply(patch, { waitMs: 20 }));
+    await timeoutWithoutWaiter(() => f.service.complete('reviewed', { waitMs: 20 }));
+    assert.equal(backupState(f.backup), 'absent');
+  } finally { release(); await holder; }
   await withMemoryLock(runDir, async () => {});
   assert.equal(fs.statSync(path.join(runDir, 'memory.lock')).ino, inode);
 });
@@ -224,7 +250,7 @@ test('installed skill uses Core discovery and rejects malformed CLI input withou
     path.join(installed, 'comm-bridge/scripts/core-config-loader.js'));
   const env = { ...f.env, ZYLOS_PACKAGE_ROOT: fileURLToPath(new URL('../../../', import.meta.url)) };
   const run = args => childResult(spawn(process.execPath, [wrapper, ...args], { env, stdio: ['pipe', 'pipe', 'pipe'] }));
-  const ensured = await run(['ensure', '--id', 'references-layout-v1', '--created-by', 'init']);
+  const ensured = await run(['ensure', '--id', 'references-layout-v1', '--created-by', 'init', '--json']);
   assert.equal(ensured.code, 0, ensured.stderr);
   assert.equal(JSON.parse(ensured.stdout).data.state, 'pending');
   const bytes = fs.readFileSync(f.record);
@@ -232,10 +258,26 @@ test('installed skill uses Core discovery and rejects malformed CLI input withou
     ['ensure', '--id', 'references-layout-v1', '--created-by', 'invalid'],
     ['status', '--id', 'references-layout-v1', '--id', 'references-layout-v1'],
     ['apply', '--id', 'references-layout-v1'] ]) {
-    const result = await run(args);
-    assert.equal(result.code, 1, result.stderr);
-    assert.equal(JSON.parse(result.stdout).error.code, 'INVALID_INPUT');
-    assert.deepEqual(fs.readFileSync(f.record), bytes);
+    for (const json of [false, true]) {
+      const result = await run([...args, ...(json ? ['--json'] : [])]);
+      assert.equal(result.code, 1, result.stderr);
+      if (json) {
+        assert.equal(JSON.parse(result.stdout).error.code, 'INVALID_INPUT');
+        assert.equal(result.stderr, '');
+        assert.equal(result.stdout.trim().split('\n').length, 1);
+      } else {
+        assert.equal(result.stdout, '');
+        assert.match(result.stderr, /^Error \[INVALID_INPUT\]: /);
+      }
+      assert.deepEqual(fs.readFileSync(f.record), bytes);
+    }
+  }
+  for (const command of ['ensure', 'status']) {
+    const args = [command, '--id', 'references-layout-v1', ...(command === 'ensure' ? ['--created-by', 'init'] : [])];
+    const text = await run(args);
+    assert.equal(text.code, 0); assert.match(text.stdout, /^OK: /); assert.equal(text.stderr, '');
+    const json = await run([...args, '--json']);
+    assert.equal(json.code, 0); assert.equal(JSON.parse(json.stdout).data.state, 'pending'); assert.equal(json.stderr, '');
   }
 });
 
@@ -249,24 +291,112 @@ test('real isolated tmux F2 and F3 authorize current main and reject stale or or
     { env: { ...env, ...override }, stdio: ['pipe', 'pipe', 'pipe'] }), input);
   const id = ['--id', 'references-layout-v1', '--json'];
   assert.equal((await run(['ensure', ...id, '--created-by', 'upgrade'])).code, 0);
+  const runDir = path.join(target.root, 'activity-monitor/session-groups/origin');
+  let release, entered;
+  const barrier = new Promise(resolve => { release = resolve; });
+  const entering = new Promise(resolve => { entered = resolve; });
+  const holder = withMemoryLock(runDir, async () => { entered(); await barrier; }); await entering;
+  const record = path.join(target.root, '.zylos/migrations/references-layout-v1.json');
+  const recordBytes = fs.readFileSync(record);
+  try {
+    await Promise.all(['apply', 'complete'].flatMap(command => [false, true].map(async json => {
+      const result = await run([command, '--id', 'references-layout-v1', ...(json ? ['--json'] : []),
+        ...(command === 'complete' ? ['--summary', '-'] : [])], command === 'apply' ? JSON.stringify(patch) : 'reviewed');
+      assert.equal(result.code, 2, `${command}: ${result.stdout} ${result.stderr}`);
+      if (json) {
+        const envelope = JSON.parse(result.stdout);
+        assert.equal(envelope.error.code, 'LOCK_TIMEOUT'); assert.deepEqual(envelope.error.persisted, []);
+        assert.equal(result.stderr, '');
+      } else {
+        assert.equal(result.stdout, ''); assert.match(result.stderr, /^Error \[LOCK_TIMEOUT\]: /);
+      }
+    })));
+    assert.deepEqual(fs.readFileSync(record), recordBytes);
+    assert.equal(fs.readFileSync(references, 'utf8'), 'original marker\n');
+    assert.equal(backupState(path.join(target.root, '.zylos/migrations/references-layout-v1.backup')), 'absent');
+  } finally { release(); await holder; }
   for (const [override, expected] of [[{ ZYLOS_SESSION_GROUP: 'other' }, 'NOT_MAIN_SESSION'],
     [{ ZYLOS_RUN_ID: 'stale' }, 'RUN_MISMATCH']]) {
     const result = await run(['apply', ...id], JSON.stringify(patch), override);
     assert.equal(JSON.parse(result.stdout).error.code, expected, result.stderr);
     assert.equal(fs.readFileSync(references, 'utf8'), 'original marker\n');
   }
-  const conflict = await run(['apply', ...id], JSON.stringify({ ...patch, expected: 'missing' }));
-  assert.equal(conflict.code, 4, conflict.stderr);
-  assert.deepEqual(JSON.parse(conflict.stdout).error.persisted, ['w7.backup']);
+  for (const json of [false, true]) {
+    const conflict = await run(['apply', '--id', 'references-layout-v1', ...(json ? ['--json'] : [])], JSON.stringify({ ...patch, expected: 'missing' }));
+    assert.equal(conflict.code, 4, conflict.stderr);
+    if (json) assert.deepEqual(JSON.parse(conflict.stdout).error.persisted, []);
+    else { assert.equal(conflict.stdout, ''); assert.match(conflict.stderr, /^Error \[FRAGMENT_CONFLICT\]: /); }
+  }
   assert.equal(fs.readFileSync(references, 'utf8'), 'original marker\n');
-  const applied = await run(['apply', ...id], JSON.stringify(patch));
+  const applied = await run(['apply', '--id', 'references-layout-v1'], JSON.stringify(patch));
   assert.equal(applied.code, 0, `${applied.stdout} ${applied.stderr}`);
+  assert.match(applied.stdout, /^OK: /); assert.equal(applied.stderr, '');
   fs.writeFileSync(target.readyPath, JSON.stringify({ ...target.ready, runId: 'replaced' }));
   const stale = await run(['complete', ...id, '--summary', '-'], 'verified');
   assert.equal(JSON.parse(stale.stdout).error.code, 'RUN_MISMATCH', stale.stderr);
   fs.writeFileSync(target.readyPath, JSON.stringify(target.ready));
-  const completed = await run(['complete', ...id, '--summary', '-'], 'verified');
+  const completed = await run(['complete', '--id', 'references-layout-v1', '--summary', '-'], 'verified');
   assert.equal(completed.code, 0, `${completed.stdout} ${completed.stderr}`);
+  assert.match(completed.stdout, /^OK: /); assert.equal(completed.stderr, '');
+  const jsonTarget = readyTmuxTarget(t, { prefix: 'p06-migrate-json-', mode: 'multi' });
+  fs.mkdirSync(path.join(jsonTarget.root, 'memory'));
+  fs.writeFileSync(path.join(jsonTarget.root, 'memory/references.md'), 'original marker\n');
+  const jsonEnv = { ...jsonTarget.env, ZYLOS_SESSION_GROUP: 'origin', ZYLOS_RUN_ID: jsonTarget.ready.runId,
+    ZYLOS_PACKAGE_ROOT: fileURLToPath(new URL('../../../', import.meta.url)) };
+  for (const [args, input] of [[['ensure', ...id, '--created-by', 'upgrade'], ''],
+    [['apply', ...id], JSON.stringify(patch)], [['complete', ...id, '--summary', '-'], 'verified']]) {
+    const result = await childResult(spawn(process.execPath, [cliScript, ...args],
+      { env: jsonEnv, stdio: ['pipe', 'pipe', 'pipe'] }), input);
+    assert.equal(result.code, 0, result.stderr); assert.equal(JSON.parse(result.stdout).ok, true);
+    assert.equal(result.stdout.trim().split('\n').length, 1); assert.equal(result.stderr, '');
+  }
+});
+
+test('IF-24 index paths ignore prose punctuation, globs and other repository paths', async t => {
+  const text = [
+    'memory/reference/infra.md.', 'reference/infra.md\u3002', 'reference/infra.md\uff09',
+    'reference/infra.md\uff0c', 'reference/infra.md\u3001', '(reference/infra.md).',
+    'memory/reference/*.md', '`reference/*.md`', '[topics](reference/*.md)',
+    '../reference/elsewhere.md', '/repo/reference/guide.md', 'repo/reference/guide.md',
+    'repo/memory/reference/guide.md', 'https://example.test/reference/guide.md',
+    'nonreference/guide.md', '\u2026/reference/guide.md',
+  ].join('\n');
+  for (const freshInstall of [false, true]) {
+    const f = fixture(t);
+    fs.mkdirSync(path.join(f.memory, 'reference'));
+    fs.writeFileSync(path.join(f.memory, 'reference/infra.md'), 'infra');
+    if (freshInstall) {
+      fs.writeFileSync(f.references, text);
+      assert.equal(f.service.ensure({ createdBy: 'init', freshInstall: true }).state, 'done');
+    } else {
+      init(f); await f.service.apply({ ...patch, replacement: text });
+      await f.service.complete('Reviewed punctuation and index paths');
+    }
+    assert.deepEqual(JSON.parse(fs.readFileSync(f.record)).evidence.mechanical.indexedPaths, ['memory/reference/infra.md']);
+  }
+  const missing = fixture(t); init(missing);
+  await missing.service.apply({ ...patch, replacement: 'reference/missing.md\u3002' });
+  await assert.rejects(missing.service.complete('Missing target'), e =>
+    e.code === 'CHECK_FAILED' && e.missingPaths.includes('memory/reference/missing.md'));
+});
+
+test('IF-24 positive control rejects a timed-out lock that leaves its waiter alive', async t => {
+  const f = fixture(t), runDir = path.join(f.root, 'activity-monitor/session-groups/origin');
+  const original = fs.readFileSync(new URL('../memory-lock.js', import.meta.url), 'utf8');
+  const mutant = original.replace('configLockArgs(capability, waitMs,', 'configLockArgs(capability, 60000,')
+    .replaceAll("child.kill('SIGKILL');", 'void 0;').replace('await closed;', 'void closed;');
+  assert.notEqual(mutant, original);
+  const filename = path.join(f.root, 'memory-lock-mutant.mjs');
+  fs.writeFileSync(filename, mutant.replace("from './config-lock.js'", `from '${new URL('../config-lock.js', import.meta.url).href}'`));
+  const { withMemoryLock: brokenLock } = await import(`file://${filename}`);
+  let release, entered;
+  const barrier = new Promise(resolve => { release = resolve; });
+  const entering = new Promise(resolve => { entered = resolve; });
+  const holder = withMemoryLock(runDir, async () => { entered(); await barrier; }); await entering;
+  try {
+    await assert.rejects(timeoutWithoutWaiter(() => brokenLock(runDir, () => assert.fail('Waiter entered'), { waitMs: 20 })),
+      { code: 'ERR_ASSERTION', message: /LOCK_TIMEOUT left a live waiter/ });
+  } finally { release(); await holder; }
 });
 
 test('mechanical checks preserve Unicode and delimited space-containing index paths', async t => {
