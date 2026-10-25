@@ -1,120 +1,38 @@
 import assert from 'node:assert/strict';
-import fs from 'fs';
-import os from 'os';
-import path from 'path';
-import { afterEach, describe, it } from 'node:test';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { test } from 'node:test';
 import { UsageMonitor } from '../usage-monitor.js';
-
-const tmpDirs = [];
-
-function makeMonitor(overrides = {}) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'usage-monitor-'));
-  tmpDirs.push(dir);
-  const calls = { log: [], control: [] };
-  const monitor = new UsageMonitor(
-    { runtimeId: overrides.runtimeId || 'claude' },
-    {
-      zylosDir: dir,
-      statuslineFile: path.join(dir, 'statusline.json'),
-      usageStateFile: path.join(dir, 'usage.json'),
-      usageCodexStateFile: path.join(dir, 'usage-codex.json'),
-      usageAlertStateFile: path.join(dir, 'usage-alert-state.json'),
-      monitorEnabled: true,
-      alertEnabled: true,
-      checkIntervalSec: 3600,
-      idleGateSec: 30,
-      warnThreshold: 80,
-      highThreshold: 90,
-      criticalThreshold: 95,
-      notifyCooldownSec: 14400,
-      activeHoursStart: 8,
-      activeHoursEnd: 23,
-      getLocalHour: () => overrides.localHour ?? 10,
-      runC4Control: (args) => {
-        calls.control.push(args);
-        return { ok: true, output: 'OK: enqueued control 1' };
-      },
-      log: (message) => calls.log.push(message),
-    }
-  );
-  return { dir, monitor, calls };
+function fixture(t,runtime='claude') {
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'usage-monitor-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
+  const calls={control:[],samples:[]};let limits={five_hour:{used_percentage:20},seven_day:{used_percentage:45}};
+  const monitor=new UsageMonitor({runtimeId:runtime},{zylosDir:dir,usageStateFile:path.join(dir,'usage.json'),usageCodexStateFile:path.join(dir,'usage-codex.json'),usageAlertStateFile:path.join(dir,'alert.json'),
+    monitorEnabled:true,alertEnabled:true,warnThreshold:80,highThreshold:90,criticalThreshold:95,notifyCooldownSec:14400,
+    readMode:()=>({mode:'multi'}),readAccountUsage:async r=>{calls.samples.push(r);return limits;},runC4Control:args=>{calls.control.push(args);return {ok:true,output:'control 1'};},log:()=>{}});
+  return {dir,monitor,calls,setLimits:value=>limits=value};
 }
-
-afterEach(() => {
-  while (tmpDirs.length > 0) {
-    fs.rmSync(tmpDirs.pop(), { recursive: true, force: true });
-  }
+test('T08 account monitor samples every invocation and never consumes old output files',async t=>{
+  const f=fixture(t);fs.writeFileSync(path.join(f.dir,'usage.json'),JSON.stringify({weeklyAll:{percent:99},tier:'critical'}));
+  await f.monitor.runMonitor({currentTime:1000});let state=JSON.parse(fs.readFileSync(path.join(f.dir,'usage.json')));
+  assert.equal(state.weeklyAll.percent,45);assert.equal(state.session.percent,null);assert.equal(state.statusShape,'account_sampler');
+  f.setLimits({five_hour:{used_percentage:30},seven_day:{used_percentage:60}});await f.monitor.runMonitor({currentTime:2000});
+  state=JSON.parse(fs.readFileSync(path.join(f.dir,'usage.json')));assert.equal(state.weeklyAll.percent,60);assert.deepEqual(f.calls.samples,['claude','claude']);
+  f.setLimits(null);await f.monitor.runAlert({currentTime:3000});assert.equal(f.calls.control.length,0);
 });
-
-describe('UsageMonitor', () => {
-  it('preserves startup check timing semantics for Claude and Codex', () => {
-    const claude = makeMonitor();
-    assert.equal(claude.monitor.initializeLastCheckAt(5000), 5000);
-
-    fs.writeFileSync(path.join(claude.dir, 'usage.json'), JSON.stringify({ lastCheckEpoch: 1234 }));
-    assert.equal(claude.monitor.initializeLastCheckAt(5000), 1234);
-
-    const codex = makeMonitor({ runtimeId: 'codex' });
-    assert.equal(codex.monitor.initializeLastCheckAt(5000), 0);
-  });
-
-  it('refreshes local usage state without sending an alert', () => {
-    const { dir, monitor, calls } = makeMonitor();
-    fs.writeFileSync(path.join(dir, 'statusline.json'), JSON.stringify({
-      usage: {
-        session: { percent: 12, resets: 'soon' },
-        weeklyAll: { percent: 45, resets: 'Monday' },
-        weeklySonnet: { percent: 30, resets: 'Monday' },
-        fiveHour: { percent: 20, resets: 'later' }
-      }
-    }));
-
-    assert.equal(monitor.runMonitor({ currentTime: 1000 }), true);
-
-    const state = JSON.parse(fs.readFileSync(path.join(dir, 'usage.json'), 'utf8'));
-    assert.equal(state.lastCheckEpoch, 1000);
-    assert.equal(state.session.percent, 12);
-    assert.equal(state.weeklyAll.percent, 45);
-    assert.equal(state.tier, 'ok');
-    assert.equal(state.statusShape, 'statusline_usage');
-    assert.deepEqual(calls.control, []);
-  });
-
-  it('sends usage alerts from persisted monitor state and writes alert state', () => {
-    const { dir, monitor, calls } = makeMonitor();
-    fs.writeFileSync(path.join(dir, 'usage.json'), JSON.stringify({
-      session: { percent: 70, resets: 'soon' },
-      weeklyAll: { percent: 96, resets: 'Monday' },
-      weeklySonnet: { percent: 91, resets: 'Monday' },
-      tier: 'critical'
-    }));
-
-    assert.equal(monitor.runAlert({ currentTime: 2000 }), true);
-
-    assert.equal(calls.control.length, 1);
-    assert.deepEqual(calls.control[0].slice(0, 2), ['enqueue', '--content']);
-    assert.match(calls.control[0][2], /Usage Critical/);
-    const alertState = JSON.parse(fs.readFileSync(path.join(dir, 'usage-alert-state.json'), 'utf8'));
-    assert.equal(alertState.lastObservedTier, 'critical');
-    assert.equal(alertState.lastNotifiedTier, 'critical');
-    assert.equal(alertState.sourceRuntime, 'claude');
-  });
-
-  it('suppresses repeated alerts during cooldown', () => {
-    const { dir, monitor, calls } = makeMonitor();
-    fs.writeFileSync(path.join(dir, 'usage.json'), JSON.stringify({
-      session: { percent: 70 },
-      weeklyAll: { percent: 92 },
-      tier: 'high'
-    }));
-    fs.writeFileSync(path.join(dir, 'usage-alert-state.json'), JSON.stringify({
-      lastNotifiedTier: 'high',
-      lastNotifiedAt: new Date(1000 * 1000).toISOString()
-    }));
-
-    assert.equal(monitor.runAlert({ currentTime: 2000 }), true);
-
-    assert.deepEqual(calls.control, []);
-    assert.ok(calls.log.some(message => message.includes('suppressing notification')));
-  });
+test('IF-17 usage alert samples current account and targets Origin with preserved delivery options',async t=>{
+  const f=fixture(t,'codex');f.setLimits({sevenDay:{usedPercentage:96,resetsAt:2000},fiveHour:{usedPercentage:70}});
+  assert.equal(await f.monitor.runAlert({currentTime:2000}),true);
+  assert.deepEqual(f.calls.samples,['codex']);assert.equal(f.calls.control.length,1);
+  const args=f.calls.control[0];assert.match(args[2],/Usage Critical/);assert.deepEqual(args.slice(-2),['--group','origin']);
+  assert.ok(args.includes('--no-ack-suffix'));assert.ok(args.includes('--available-in'));
+  const state=JSON.parse(fs.readFileSync(path.join(f.dir,'alert.json')));assert.equal(state.sourceRuntime,'codex');assert.equal(state.lastNotifiedAt,new Date(2000000).toISOString());
+});
+test('T08 same-tier cooldown suppresses duplicate and enqueue failure never records notification',async t=>{
+  const f=fixture(t);f.setLimits({seven_day:{used_percentage:92}});
+  fs.writeFileSync(path.join(f.dir,'alert.json'),JSON.stringify({lastNotifiedTier:'high',lastNotifiedAt:new Date(1000000).toISOString()}));
+  await f.monitor.runAlert({currentTime:2000});assert.equal(f.calls.control.length,0);
+  f.setLimits({seven_day:{used_percentage:99}});f.monitor.options.runC4Control=()=>({ok:false,output:'TRANSITION_OPEN'});
+  assert.equal(await f.monitor.runAlert({currentTime:3000}),false);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(f.dir,'alert.json'))).lastNotifiedTier,'high');
 });

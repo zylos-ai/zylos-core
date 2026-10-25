@@ -53,7 +53,7 @@ export async function readTargetRuntime({ connection, paneId, rawF2, readProcess
     if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) launchConfig = parsed;
   } catch { /* Missing or malformed F2 is deliberately not a default config. */ }
   if (known.has(launchConfig?.runtime)) return { runtime: launchConfig.runtime, launchConfig, runtimeObservation: 'configured' };
-  let runtime = 'unknown', runtimeObservation = 'unavailable';
+  let runtime = 'unknown', runtimeObservation = 'unavailable', runtimePid;
   try {
     const pid = Number((await connection.command(['display-message', '-p', '-t', paneId, '#{pane_pid}'])).trim());
     const rows = await getTree();
@@ -64,7 +64,11 @@ export async function readTargetRuntime({ connection, paneId, rawF2, readProcess
       const matches = new Set(layer.map(row => row.name.replace(/\.exe$/, '')).filter(name => known.has(name)));
       if (matches.size) {
         runtimeObservation = matches.size === 1 ? 'present' : 'ambiguous';
-        if (matches.size === 1) runtime = [...matches][0];
+        if (matches.size === 1) {
+          runtime = [...matches][0];
+          const processes = layer.filter(row => row.name.replace(/\.exe$/, '') === runtime);
+          if (processes.length === 1) runtimePid = processes[0].pid;
+        }
         break;
       }
       const parents = new Set(layer.map(row => row.pid));
@@ -77,7 +81,7 @@ export async function readTargetRuntime({ connection, paneId, rawF2, readProcess
     runtime = 'unknown';
     runtimeObservation = 'unavailable';
   }
-  return { runtime, launchConfig, runtimeObservation };
+  return { runtime, launchConfig, runtimeObservation, runtimePid };
 }
 
 async function environment(connection, sessionId, kind = 'pane') {

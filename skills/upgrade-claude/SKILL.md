@@ -5,7 +5,7 @@ description: Upgrade Claude Code to the latest version with graceful shutdown an
 
 # Upgrade Claude Code Skill
 
-Upgrade Claude Code to the latest version - sends /exit, waits for exit, upgrades, and lets activity-monitor restart.
+Upgrade Claude Code and request replacement sessions through the Supervisor.
 
 ## When to Use
 
@@ -64,7 +64,16 @@ nohup node ~/zylos/.claude/skills/upgrade-claude/scripts/upgrade.js >> ~/zylos/l
 
 ## How It Works
 
+In multi mode or during a mode transition, the script installs first and then
+submits `restart_all`. The runtime installer must preserve existing running
+processes; verify this for the installed runtime distribution before using that
+upgrade path. A refused or unknown restart result is reported without automatic
+resubmission. Supervisor acceptance does not mean new sessions are ready.
+
+In steady single mode, the existing ordering remains:
+
+
 1. **Enqueue /exit**: Puts `/exit` into the control queue (priority=1, block_queue_until_idle) — dispatcher handles idle detection and message blocking
 2. **Wait for exit**: Monitors Claude process until it exits (up to 120s); aborts if timeout
 3. **Upgrade**: Runs native installer (`curl -fsSL https://claude.ai/install.sh | bash`)
-4. **Daemon restart**: activity-monitor detects exit and restarts Claude automatically
+4. **Replacement**: the dispatcher starts replacement sessions after the old sessions exit

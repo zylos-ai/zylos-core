@@ -1,0 +1,440 @@
+Running 39 Node test files
+▶ kick-prompt (#743/#745 stateless internal sentinel)
+  ✔ is exactly the agreed one-sentence contract text (1.337262ms)
+  ✔ is a stable constant — no state, no per-launch variance (0.226555ms)
+  ✔ self-identifies as non-human (1.628076ms)
+  ✔ stays one short sentence and claims no lifecycle knowledge (#743) (0.291613ms)
+  ✔ never uses human-greeting wording (regression: #745 route misattribution) (0.293759ms)
+  ✔ stays shell-safe for double-quoted interpolation (0.213079ms)
+✔ kick-prompt (#743/#745 stateless internal sentinel) (6.299988ms)
+✔ real historical claude-main: absent/null succeeds without process lookup (73.996604ms)
+✔ real historical claude-main: present/null closes the original object (180.288871ms)
+ℹ {"name":"claude-main","original":"$1:%1:3875580:","historicalNull":true,"targetAbsent":true,"originUnchanged":true}
+✔ real historical claude-main: mismatched keyed/null values leave target and origin unchanged (225.503992ms)
+✔ real historical codex-main: absent/null succeeds without process lookup (50.285594ms)
+✔ real historical codex-main: present/null closes the original object (129.965601ms)
+ℹ {"name":"codex-main","original":"$1:%1:3876685:","historicalNull":true,"targetAbsent":true,"originUnchanged":true}
+✔ real historical codex-main: mismatched keyed/null values leave target and origin unchanged (396.422285ms)
+✔ absence only: no server is false; timeout remains unavailable (4.080445ms)
+✔ configured runtime alone cannot establish process liveness (0.506715ms)
+✔ multiline text loads a private file and pastes in one guarded batch (9.789855ms)
+✔ changed target refuses load and paste and still cleans temporary data (1.830132ms)
+✔ keystroke options and command syntax are rejected before any target I/O (1.144838ms)
+✔ default argv omits model and effort and both runtimes attach per-process MCP (1.048747ms)
+✔ override preserves model as independent argv and rejects unsupported capability (1.040698ms)
+✔ launch script is private, execs runtime, and omits group in single (2.76934ms)
+✔ auth checks use injected home/environment/executor without production auth (3.58217ms)
+✔ launch rejects conflicts before binary/config, then missing binary before config (1.002038ms)
+✔ unreadable executable identity fails preflight before creation (39.94056ms)
+✔ readable runtime absence is false; unreadable and ambiguous remain unavailable (1.071474ms)
+✔ isRunning reports deterministic disappearance during observation or process read as false (0.76481ms)
+✔ stop cannot infer session absence from a pane-level observation failure (0.441991ms)
+✔ IF-16 hanging initial command keeps D3 empty and preserves timeout cause (160.444818ms)
+✔ IF-16 hanging guarded-environment command keeps D3 empty and preserves timeout cause (295.23442ms)
+✔ IF-18 hanging command and unusable executable remain unknown; no server is absent (390.493664ms)
+✖ IF-13 first-resolution absent: provider zero sending and caller-selected real ledger outcomes (165.433427ms)
+✖ IF-13 first-resolution missing-run: provider zero sending and caller-selected real ledger outcomes (248.944951ms)
+✖ IF-13 first-resolution timeout: provider zero sending and caller-selected real ledger outcomes (385.55915ms)
+✔ IF-16 replacement between atomic identity and first guarded read rejects with D3 zero rows (393.625216ms)
+✖ IF-13 marker-looking pane content and message syntax are data, not guard output or commands (229.608407ms)
+✔ IF-13 sendText guarded command timeout uses its step error (652.7289ms)
+✔ IF-13 sendKeys guarded command timeout uses its step error (526.408887ms)
+✔ IF-13 replacing the bound server blocks old text and keys from the new pane (604.970226ms)
+✔ creation literal "model#[fg=red]" mismatch=false group=null (168.320451ms)
+✔ creation literal "model#[fg=red]" mismatch=true group=null (91.003943ms)
+✔ creation literal "model##[fg=red,bold]" mismatch=false group=null (178.487322ms)
+✔ creation literal "model##[fg=red,bold]" mismatch=true group=null (87.532191ms)
+✔ creation literal "model#[fg=red]#{pid},}#(echo ignored)\t\"\n" mismatch=false group=null (153.015238ms)
+✔ creation literal "model#[fg=red]#{pid},}#(echo ignored)\t\"\n" mismatch=true group=null (187.464145ms)
+✔ creation literal "model#[fg=red]" mismatch=false group=telegram:literal (172.150901ms)
+✔ creation literal "model#[fg=red]" mismatch=true group=telegram:literal (105.615147ms)
+✔ creation literal "model##[fg=red,bold]" mismatch=false group=telegram:literal (179.468277ms)
+✔ creation literal "model##[fg=red,bold]" mismatch=true group=telegram:literal (135.895303ms)
+✔ creation literal "model#[fg=red]#{pid},}#(echo ignored)\t\"\n" mismatch=false group=telegram:literal (124.905854ms)
+✔ creation literal "model#[fg=red]#{pid},}#(echo ignored)\t\"\n" mismatch=true group=telegram:literal (87.742642ms)
+✔ single tombstone preserves global group "stale-global" (184.721294ms)
+✔ single tombstone preserves global group "" (122.917544ms)
+✔ shell wrapper execs runtime and settles within the confirmation budget (135.434473ms)
+ℹ {"wrapperSuccessMs":88}
+✔ server stopped before submission: bounded failure, natural caller exit and no client left (3147.007406ms)
+ℹ {"code":"LAUNCH_FAILED","elapsed":3022.3244,"naturalCallerExit":true,"clientGone":true,"serverKilledAfterExit":true}
+✔ immediate runtime exit fails and removes its retained dead session (90.221445ms)
+✔ known session still in launch shell times out and is killed before rejection (3058.012875ms)
+ℹ {"knownSessionTimeoutMs":3007,"sessionKilled":true,"clientGone":true}
+✔ duplicate session is NAME_CONFLICT and retains the original pane (23.083772ms)
+✔ Claude launch auth status: neither variable skips the subprocess (86.697076ms)
+✔ Claude launch auth status: ANTHROPIC_API_KEY queries and strips native-auth conflicts (81.165029ms)
+✔ Claude launch auth status: CLAUDE_CODE_OAUTH_TOKEN queries and strips native-auth conflicts (81.470931ms)
+✔ missing tmux executable fails without retaining the launch script or child (14.400896ms)
+✔ tmux locale unset: launch-multi succeeds without inherited UTF-8 settings (125.669646ms)
+ℹ {"scenario":"launch-multi","locale":"unset","success":true,"sessions":["keeper","zylos-group-telegram=locale"]}
+✔ tmux locale unset: launch-single succeeds without inherited UTF-8 settings (129.153712ms)
+ℹ {"scenario":"launch-single","locale":"unset","success":true,"sessions":["keeper","origin"]}
+✔ tmux locale unset: observe succeeds without inherited UTF-8 settings (98.516495ms)
+ℹ {"scenario":"observe","locale":"unset","success":true,"sessions":["keeper","zylos-group-telegram=locale"]}
+✔ tmux locale unset: list succeeds without inherited UTF-8 settings (95.275103ms)
+ℹ {"scenario":"list","locale":"unset","success":true,"sessions":["keeper","zylos-group-telegram=locale"]}
+✔ tmux locale C: launch-multi succeeds without inherited UTF-8 settings (119.720303ms)
+ℹ {"scenario":"launch-multi","locale":"C","success":true,"sessions":["keeper","zylos-group-telegram=locale"]}
+✔ tmux locale C: launch-single succeeds without inherited UTF-8 settings (128.112485ms)
+ℹ {"scenario":"launch-single","locale":"C","success":true,"sessions":["keeper","origin"]}
+✔ tmux locale C: observe succeeds without inherited UTF-8 settings (111.518826ms)
+ℹ {"scenario":"observe","locale":"C","success":true,"sessions":["keeper","zylos-group-telegram=locale"]}
+✔ tmux locale C: list succeeds without inherited UTF-8 settings (85.726775ms)
+ℹ {"scenario":"list","locale":"C","success":true,"sessions":["keeper","zylos-group-telegram=locale"]}
+✔ creation receipt followed by client failure still cleans only the created session (22.590662ms)
+✔ real paste pane-disappears: unique message buffer is removed (147.578836ms)
+✔ real paste executor-times-out: unique message buffer is removed (278.322802ms)
+✔ real paste loads literal TMPDIR literal-#{pid} (133.284696ms)
+✔ real paste loads literal TMPDIR literal-$HOME (148.537328ms)
+✔ real paste loads literal TMPDIR literal-a$b-quote'-#{pid} (187.42249ms)
+✔ sendText rejects same-socket replacement after revalidation and before guarded action (305.918201ms)
+✔ sendKeys rejects same-socket replacement after revalidation and before guarded action (237.740207ms)
+✔ Claude launch without SessionStart prompt hook has no adapter C4 fallback (282.516803ms)
+ℹ {"runtime":"claude","withHook":false,"calls":[]}
+✔ Claude launch with SessionStart prompt hook has no adapter C4 fallback (404.169246ms)
+ℹ {"runtime":"claude","withHook":true,"calls":[{"api":"execFile","words":["node","/tmp/p02-sp-obojYG/.claude/skills/comm-bridge/scripts/c4-control.js","enqueue","--content","reply to your human partner if they are waiting for your reply, then continue your ongoing tasks using the startup memory and C4 context already injected in this session, and do not query c4.db for recent conversations unless explicitly required.","--priority","2","--no-ack-suffix"],"producer":"formal-hook","pid":3876781}]}
+✔ Codex launch retains its startup kick without producing C4 control (387.098415ms)
+ℹ {"runtime":"codex","withHook":false,"calls":[]}
+✔ runtime sources contain no dedicated adapter startup fallback implementation or calls (8.144678ms)
+✔ present keyed and historical-null targets close exact original ID and confirm removal (3.357828ms)
+✔ absent target and explicit no-server succeed for nonempty and null expected run IDs (0.599371ms)
+✔ run mismatch including null-vs-keyed refuses before revalidation or kill (1.524386ms)
+✔ generation/run replacement refuses and same-generation absence succeeds without a kill (0.771278ms)
+✔ kill failure remains failure even if a later confirmation would report absence (1.421804ms)
+✔ same-generation gone confirms removal; changed generation or unknown result never does (1.712111ms)
+✔ successful confirmation guard means session still exists regardless of action output (0.832402ms)
+✔ unobservable tmux cannot be treated as absence; preserve stable cause (0.364844ms)
+✔ no obsolete cleanup capability, delay or process environment is consumed (0.771807ms)
+✔ same-generation disappearance before kill succeeds, but a changed generation is unconfirmed (0.784934ms)
+✔ real tmux stop: present=true; independent same-run service and origin survive (413.075956ms)
+ℹ {"present":true,"original":"$1:%1:3875791:f2168463-9f7b-44df-87b2-a8669b404168","service":{"pid":3875851,"start":"8c008c34-58d2-4c57-905e-1a0dd07799fd","beforeTick":1,"checkpointTick":9,"afterTick":11,"signals":[]},"originUnchanged":true,"targetAbsent":true}
+✔ real tmux stop: present=false; independent same-run service and origin survive (179.16447ms)
+ℹ {"present":false,"original":null,"service":{"pid":3876648,"start":"cf296174-284b-4e4c-8784-2b83851d0847","beforeTick":1,"checkpointTick":2,"afterTick":4,"signals":[]},"originUnchanged":true,"targetAbsent":true}
+✔ real no-server stop succeeds with nonempty/null key and preserves the independent service (147.608458ms)
+ℹ {"explicitNoServer":true,"service":{"pid":3876981,"start":"4e52a3c0-3b0f-4c11-824b-09090bade150","beforeTick":1,"checkpointTick":2,"afterTick":4,"signals":[]}}
+✔ unreadable process environment/runtime tree cannot block observable tmux removal (270.787257ms)
+ℹ {"processObservationUnavailable":true,"service":{"pid":3877365,"start":"a670d819-7bb8-46bf-9a1f-5155652ba4f0","beforeTick":1,"checkpointTick":6,"afterTick":8,"signals":[]},"originUnchanged":true,"targetAbsent":true}
+✔ service actually spawned by target inherits run ID and survives both present and absent stop (590.030303ms)
+ℹ {"phase":"present","originalPanePid":3877965,"servicePid":3878217,"start":"3f513478-a887-4395-abba-318b3cfd9bb0","actualInheritedRunId":true,"checkpointTick":7,"afterTick":9,"signals":[],"originUnchanged":true}
+ℹ {"phase":"absent","originalPanePid":3877965,"servicePid":3878217,"start":"3f513478-a887-4395-abba-318b3cfd9bb0","actualInheritedRunId":true,"checkpointTick":11,"afterTick":13,"signals":[],"originUnchanged":true}
+✔ real same-name replacement proves original session gone and is never rebound or killed (269.956892ms)
+ℹ {"original":"$1:%1:3875948:same-name-run","replacement":"$2:%2:3876306:same-name-run","replacementPreserved":true,"service":{"pid":3875983,"start":"6151ee25-3f70-40c4-9c82-79c007fb413c","beforeTick":1,"checkpointTick":6,"afterTick":8,"signals":[]},"originUnchanged":true}
+✔ real same-socket server replacement does not reopen or act on the new server (294.392404ms)
+ℹ {"generation":"3876528:1792945943","newGeneration":"3876918:1792945944","oldServerPid":3876528,"oldServerExited":true,"injectionErrors":[],"opens":1,"replacementPreserved":true,"newOriginUnchanged":true,"service":{"pid":3876555,"start":"edc327d5-0c44-4a5f-a8ca-b5030a2eb84f","beforeTick":1,"checkpointTick":8,"afterTick":10,"signals":[]}}
+✔ real transport command-failure: no false stop success (183.063372ms)
+✔ real transport disconnect: no false stop success (228.441744ms)
+✔ real transport target-remains: no false stop success (152.410593ms)
+✔ real final-session kill confirms removal, runId=last-session-run (155.016353ms)
+ℹ {"lastSession":true,"key":"last-session-run","targetRemovalAcknowledged":true}
+✔ real final-session kill confirms removal, runId=null (170.087997ms)
+ℹ {"lastSession":true,"key":null,"targetRemovalAcknowledged":true}
+✔ session confirmation cannot mistake a vanished pane for removal of a surviving session (175.004894ms)
+✔ replacement after acknowledged kill is not confirmation of the original session removal (279.990257ms)
+✔ real session disappears after revalidation and before guarded kill: stop succeeds (178.133756ms)
+✔ pane disappears during initial stop observation while session survives: stop stays unconfirmed (118.749527ms)
+✔ ordinary commands preserve quoting and leave no retained tmux clients (157.633495ms)
+✔ fixed pane survives active pane change; run mutation rejected (116.243666ms)
+✔ removed pane, absent target, and missing run ID fail distinctly (122.916931ms)
+✔ F3 malformed/mismatched is not READY; snapshots immutable (274.308432ms)
+✔ same socket restart fails its generation guard without replay (218.486878ms)
+✔ absent server differs from unexecutable transport; missing generation rejected (39.873841ms)
+✔ runtime fallback uses unique shallowest name and never invents config (0.978667ms)
+✔ real Linux comm fallback recognizes a named stand-in without F2 defaults (392.52361ms)
+✔ initial disappearance and generation change are detected before any sending (1.48205ms)
+✔ command timeout closes executor and never accepts a retry (104.885251ms)
+✔ process observation distinguishes absence from ambiguity and unavailable scans (0.760564ms)
+✔ last-session kill requires a session guard confirmation after the command (113.988037ms)
+✔ closed executor never sends a command (114.110812ms)
+✔ absent target uses a conditional session timestamp and leaves the server alive (90.017234ms)
+✔ first resolution maps a disappearing server to TARGET_GONE (78.453765ms)
+✔ connection timeout releases stdio and exits before a frozen server resumes (342.620017ms)
+ℹ caller exited in 291ms with server still stopped
+✔ guard OK marker takes priority over no-server-like nonzero (224.946912ms)
+✔ guard OK marker takes priority over no-server-like stderr (186.217174ms)
+✔ guard marker-looking payload remains data; genuine no-server response means target gone (218.555366ms)
+✔ no-server words in a socket path do not turn permission failure into absence (108.265217ms)
+✔ server generation maps command failures to unavailable while preserving timeout cause (0.757026ms)
+▶ tmux-helpers integration (live calls to nonexistent sessions)
+  ✔ tmuxHasSession returns false for nonexistent session (9.976665ms)
+  ✔ tmuxGetPanePid returns 0 for nonexistent session (18.577959ms)
+  ✔ tmuxKillSession does not throw for nonexistent session (12.77244ms)
+  ✔ tmuxCapturePaneText returns null for nonexistent session (3.228956ms)
+  ✔ getProcessName returns null for nonexistent PID (36.908689ms)
+  ✔ hasChildProcess returns false for nonexistent parent (20.686821ms)
+✔ tmux-helpers integration (live calls to nonexistent sessions) (104.183949ms)
+▶ tmux-helpers timeout behavior
+  ✔ tmuxHasSession returns false on timeout (does not throw) (3.853904ms)
+  ✔ tmuxGetPanePid returns 0 on error (does not throw) (3.371288ms)
+  ✔ tmuxCapturePaneText returns null on error (does not throw) (3.497198ms)
+  ✔ getProcessName returns null on error (does not throw) (8.056277ms)
+  ✔ hasChildProcess returns false on error (does not throw) (20.896349ms)
+✔ tmux-helpers timeout behavior (40.31565ms)
+▶ tmux-helpers does not log on normal exit failures
+  ✔ tmuxHasSession with nonexistent session produces no stderr timeout warning (3.366242ms)
+  ✔ tmuxGetPanePid with nonexistent session produces no stderr timeout warning (3.075334ms)
+✔ tmux-helpers does not log on normal exit failures (6.727738ms)
+▶ isTimeoutError classifier
+  ✔ returns true for ETIMEDOUT error (Node execFileSync timeout) (0.272763ms)
+  ✔ returns false for normal exit code 1 (session not found) (0.155911ms)
+  ✔ returns false for null/undefined (0.110259ms)
+  ✔ returns false for generic errors (0.121235ms)
+✔ isTimeoutError classifier (0.930459ms)
+✔ IF-14 composed socket rejects stale-run delivery without resetting observer counters (22.270523ms)
+✔ #16a composed maintenance drives once per runtime before probe coalescing (72.825239ms)
+✔ IF-27 composed mixed-runtime demand waits for its own runtime and only recovers its F10 (68.534146ms)
+✔ #16a concurrent socket requests serialize one F10 registration and retain pending demand (43.452105ms)
+✔ IF-28 composed multi auth captures only affected runtime, retains F10 until old target and D8 are gone, rechecks after restart (62.177605ms)
+✔ IF-28 composed single auth preserves blocking through in-flight work and restart; deadline-less control does not prevent cleanup (45.539294ms)
+✔ DM-63 composed auth recovery after F10 reopen retains unexpired rate-limit facts (39.133894ms)
+✔ DM-63 composed auth recovery after F10 reopen retains expired rate-limit facts (38.996554ms)
+✔ DM-63 composed auth recovery after F10 reopen retains zero rate-limit facts (55.445056ms)
+✔ DM-63 composed auth recovery after F10 reopen retains no-limit rate-limit facts (44.917376ms)
+✔ IF-28 / DM-63 composed early recovery boundary (39.03725ms)
+✔ IF-28 / DM-63 composed deadline recovery boundary (38.984318ms)
+✔ IF-28 / DM-63 composed limit recovery boundary (57.028756ms)
+✔ DM-47 composed owners keep current and legacy caches inside their own root (3.252721ms)
+✔ auth preflight runs before fence (28.773636ms)
+✔ IF-31 local M4 paired authority invariance under inject/delete/truncate/rotate of all diagnostic streams (6282.606849ms)
+✔ IF-31 fake completion and DM54 corrupt F9 preserve authoritative cleanup (1355.488842ms)
+✔ entry advances existing durable D8 with corrupt F9 and malformed diagnostic streams (1269.217657ms)
+✔ entry advances existing durable D8 with corrupt F9 and unwritable diagnostic streams (969.946519ms)
+✔ T01 actual entry restores before Sock admission and shuts down with a partial-line peer (180.804307ms)
+✔ T01 duplicate entry preserves the original listener; non-socket paths remain intact (468.422561ms)
+✔ T01 bad startup F1 keeps Sock closed to mutations; restore failure cleans up listener (493.4942ms)
+✔ T01 copied installed skills resolve the separate Core package and serve actual Sock requests (372.990255ms)
+✔ T02 entry freezes first-failure notice synchronously with correct single/multi SQL scope (464.589511ms)
+✔ T01 legacy F1 opens actual entry as single and reports unavailable automatic migration separately (400.542418ms)
+✔ C4 monitor signal handler reports stop rejection and exits unsuccessfully (1.09136ms)
+✔ runtime SIGKILL removes only its exited managed session and records crash (1611.55329ms)
+✔ actual SQLite fence suppresses crash classification after runtime SIGKILL (591.137869ms)
+✔ T01/T06: exited runtime is stopped and confirmed before crash diagnostic; no restart (2.402727ms)
+✔ T06: same-run session change and fresh handoff are rotation diagnostics (0.63345ms)
+✔ T01: D8/D9 retain ownership of stopped runtimes (0.622529ms)
+✔ T01: unknown occupancy and replacement runs never authorize stopping the replacement (0.431228ms)
+✔ T01: successful adapter stop is final; no caller post-stop observation (0.93544ms)
+✔ IF-29 composed owner four result branches and stale identity preserve pending demand and retry budget (333.662804ms)
+✔ DM-68 composed appearance/READY/exit retains attempt budget (66.967518ms)
+✔ DM-46 local F10 reader traces only requested missing runtime (23.068423ms)
+✔ T01/T08 legacy and new Origin publish separate identities; newest unrelated transcript cannot make legacy busy (713.852172ms)
+✔ T01/T08 legacy foreground from another PID or unobservable tmux never publishes state (504.637274ms)
+✔ IF-30 Sync respects real D9 and resumes group/Origin production after completion (18.34617ms)
+✔ IF-30 repeated Sync content leaves one pending D3 row and supersedes the previous one (13.426204ms)
+✔ IF-33 consumer accepts expired/wrong-run/corrupt marker results and blocks only valid ownership (10.08589ms)
+✔ IF-33 negative control detects checking marker existence instead of its reader result (4.557945ms)
+✔ IF10-7d real F2 running snapshot stays old after D10/D11 changes and produces reclaim control (1320.06548ms)
+✔ T06 Sync reads all three marker scopes and failed writes do not mark a scope sent (1.700982ms)
+✔ T06 rotation scope, exact cooldown boundary, run/session identity and failed write retry (1.952552ms)
+✔ reclaim resumes after SIGKILL after-fence using durable fence and actual target (883.390676ms)
+✔ reclaim resumes after SIGKILL before-stop using durable fence and actual target (835.321911ms)
+✔ reclaim resumes after SIGKILL after-stop using durable fence and actual target (547.125519ms)
+✔ reclaim recovery harness detects restart that clears durable fence (393.05649ms)
+✔ reclaim waits conversations and controls, then stops the same run and clears (8.436021ms)
+✔ ordinary busy cancels with TTL reset; model_config busy retains its fence (2.88613ms)
+✔ unknown process waits; failed observation retains its own fence (1.677502ms)
+✔ exited runtime cleans residual tmux without idle or marker; replacement stays untouched (0.965039ms)
+✔ unconfirmed stop and failed DB reads cannot remove the durable fence (0.708353ms)
+✔ restarting the lifecycle object completes crash-after-stop and preserves manual fences (0.351277ms)
+✔ Origin checks both Sync markers; stale markers permit reclaim (1.04274ms)
+✔ single auth ignores only deadline-less controls and retries a final count race (0.770181ms)
+✔ final conversation recheck (1.448023ms)
+✔ TTL preparation cancels on new messages or replaced run without fencing (1.164231ms)
+✔ TTL preparation accepts terminal outcomes only after idle and same-run checks (2.660525ms)
+✔ TTL excludes Origin and starting runs; TTL still must be expired at completion (0.419648ms)
+✔ LRU uses current occupied startup capacity and excludes model_config from in-flight discount (1.045042ms)
+✔ rotation cooldown follows successful write and run/session pair (0.64189ms)
+✔ configuration compares full input and never fabricates missing snapshot (1.020443ms)
+✔ regular Sync new-run request obeys held marker and minimum interval (1.085467ms)
+✔ Origin checkpoint-only backlog uses longest wait, never new-run or context shortcut or backlog alert (0.651338ms)
+✔ backlog alert routes to Origin, dedupes six hours, and holds during manual restart (0.895605ms)
+✔ upgrade waits startup and unknown inventory; new run never joins original restart list (0.709392ms)
+✔ failed F9 deletion preserves restart and does not emit completion (0.239967ms)
+✔ manual stops requested Origin run immediately then waits only real conversation drain (1.111141ms)
+✔ manual crash after clear removes request without recreating fence or selecting replacement (0.251582ms)
+✔ manual mode, group-fence and global-fence conflicts preserve captured request (0.394256ms)
+✔ config reconciliation rejects malformed snapshots and invalid expected input without controls (1.790192ms)
+✔ nonfinite activity timestamps cannot begin TTL or eviction reclamation (2.053332ms)
+✔ orphan manual fences retain both scopes and alert once per episode without blocking on delivery (3.286379ms)
+✔ manual fence diagnostics remain available during an active transition (0.307916ms)
+✔ reclaim preflight rejects unavailable or malformed Sync dependencies before fencing (2.037231ms)
+✔ TTL without backlog and restart requests cannot leave fences when P07 is unavailable (0.360439ms)
+✔ available held marker permits fencing but never permits an idle stop (0.272495ms)
+✔ Sync observation failure retains every reclaim fence (1.090799ms)
+✔ model_config survives observation errors (0.688102ms)
+✔ observation failure cannot clear a replacement fence (0.475062ms)
+✔ successful stop is not followed by a second runtime observation (0.327001ms)
+✔ final runId guard refuses replacement (0.337653ms)
+✔ failed reclaim database observations retain the fence and alert once without waiting for channel I/O (1.294506ms)
+✔ quiet lifecycle checks share sampled authorities without rereading runtime (0.328671ms)
+✔ failed scene snapshots preserve upgrade intent and block lifecycle producers (0.570875ms)
+✔ manual execution ignores a later sessionId change and updates round snapshot after stop (0.323314ms)
+✔ reclaim replacement revalidation updates the shared round snapshot (0.286942ms)
+✔ unreadable intent blocks new lifecycle writes while authoritative D8 reclaim completes (0.369552ms)
+✔ manual replacement after fence acquisition is preserved without calling stop (0.311112ms)
+✔ manual adapter RUNID_MISMATCH after fresh observation completes old request and preserves replacement (0.327512ms)
+✖ IF-36 single actual M4/client lost reply requery retains original target and preserves same-name replacement (1212.574815ms)
+✖ IF-36 multi actual M4/client lost reply requery retains original target and preserves same-name replacement (877.417514ms)
+✔ DM-42 actual manual M4 SIGKILL before-remove preserves truthful completion without resubmission (1512.836344ms)
+✔ DM-42 actual manual M4 SIGKILL after-remove preserves truthful completion without resubmission (1144.717939ms)
+✔ IF-36 actual entry rejects already observed session change before manual acceptance; ignoring session fails (2368.017326ms)
+✔ IF-36 single actual entry stops accepted run after session changes without rechecking sessionId (1213.582137ms)
+✔ IF-36 multi actual entry stops accepted run after session changes without rechecking sessionId (1071.506476ms)
+✔ IF-36 missing post-acceptance hook marker retains run-level stop boundary without invented atomic session proof (788.542218ms)
+✔ IF-36 invalid READY empty session does not invent a context-change veto (715.181633ms)
+✔ IF-36 invalid READY missing timestamp does not invent a context-change veto (712.856313ms)
+✔ IF-36 invalid READY noninteger timestamp does not invent a context-change veto (674.693591ms)
+✔ IF-36 invalid READY missing control IDs does not invent a context-change veto (660.86416ms)
+✔ IF-36 invalid READY nonarray control IDs does not invent a context-change veto (657.280258ms)
+✔ IF-36 invalid READY noninteger control ID does not invent a context-change veto (628.588467ms)
+✔ IF-36 replacement READY identity preserves replacement and renamed original (650.747522ms)
+✔ manual single resumes after SIGKILL after-intent without stopping replacement (1534.848943ms)
+✔ manual single resumes after SIGKILL after-fence without stopping replacement (1478.776568ms)
+✔ manual single resumes after SIGKILL after-stop without stopping replacement (1434.621761ms)
+✔ manual single resumes after SIGKILL after-clear without stopping replacement (1133.849931ms)
+✔ manual multi resumes after SIGKILL after-intent without stopping replacement (628.066676ms)
+✔ manual multi resumes after SIGKILL after-fence without stopping replacement (891.343184ms)
+✔ manual multi resumes after SIGKILL after-stop without stopping replacement (958.017705ms)
+✔ manual multi resumes after SIGKILL after-clear without stopping replacement (943.02641ms)
+✔ IF-32 actual M4 entry SIGKILL after-fence resumes retained SQLite gate and exact target cleanup (1630.945152ms)
+✔ IF-32 actual M4 entry SIGKILL before-stop resumes retained SQLite gate and exact target cleanup (1757.852201ms)
+✔ IF-32 actual M4 entry SIGKILL after-stop resumes retained SQLite gate and exact target cleanup (925.09991ms)
+✔ IF-32 actual entry restart-clear-D8 mutant cannot pass original-target cleanup assertion (713.592934ms)
+✔ IF-34/DM-42 actual M4 commit-before-reply SIGKILL preserves snapshot, rejects changed content and finishes SQLite/tmux cleanup (2651.386495ms)
+✔ DM-42 actual entry crash harness rejects memory-only acceptance (752.845284ms)
+✔ IF-35 actual M4 SQLite commit-before-reply crash preserves one config gate across retry and input changes (2073.073753ms)
+✔ IF-35 config gate deletion on restart is detected by actual retry harness (1018.802499ms)
+✔ IF-28 real M4 SIGKILL after auth fence retains health, drains old target and rechecks credentials before clearing (1763.420205ms)
+✔ IF-03 actual entry selects live snapshot/process over new config, preserves unknown, resolves absent and unbound (1193.301856ms)
+✔ IF-03 live-runtime assertions reject a configured-runtime-only resolver (192.384031ms)
+✔ scene joins real READY and process identity without treating configured F2 as liveness (993.24706ms)
+✔ single lists Origin identity but machine observation retains NULL scope (796.34659ms)
+✔ unknown process data remains unknown and unreadable tmux is never absent (176.527216ms)
+✔ identity-only checks skip process, usage and activity sampling and reject a changed run (255.616868ms)
+✔ health stop preserves a replacement run and confirms the original session is gone (207.245704ms)
+✔ identity checks preserve the full occupancy snapshot during tmux unavailability (358.743601ms)
+✔ T02 unavailable alerts at 60 seconds then every thirty minutes, and remains unknown indefinitely (3.224023ms)
+✔ T02 successful observations end the alert episode and a new outage starts its own delay (0.529271ms)
+✔ T02 failed configured alert falls back to Web Console once per interval, including overlapping advances (0.843482ms)
+✔ T02 absent alert target uses Web Console and a failed Web Console target is not duplicated (0.609357ms)
+✔ T02 server outage episodes are independent and other errors are not tmux outages (0.982108ms)
+✔ T02 timeout unknown socket retains occupancy but never exports cached ready identity; direct reads remain strict (4.246452ms)
+✔ T02 error unknown socket retains occupancy but never exports cached ready identity; direct reads remain strict (5.39399ms)
+✔ T02 unavailable occupancy remains unknown after ten minutes without synthetic exits (3.48355ms)
+✔ T02 observed no-server follows absence and clears cached occupancy and alerts (1.282366ms)
+✔ T02 F1 alert target splits at first colon and rejects invalid/control-character destinations (0.37926ms)
+✔ T02 scene observations add no server probes and forwarded failures reach alert timing (2.912886ms)
+✔ T02 a non-tmux group error preserves all occupancy and does not start a server outage (2.784998ms)
+✔ T02 unknown occupancy has one shape after full observation or identity reads (2.296805ms)
+✔ T02 identity-only observation does not manufacture a full occupancy snapshot (7.588423ms)
+✔ T02 one failed socket retains its episode while another socket succeeds (1.229562ms)
+✔ T02 prolonged timeout and command errors never signal or end the real isolated server (1046.148993ms)
+✔ IF-28 single actual M4 SIGKILL recaptures old run without D8; finite control blocks while deadline-less permits cleanup (4126.113507ms)
+✔ IF-29 composed unknown server preserves occupancy, F10 and F4 without exit or recovery actions (53.608025ms)
+ℹ tests 294
+ℹ suites 5
+ℹ pass 288
+ℹ fail 6
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 11413.343545
+
+✖ failing tests:
+
+test at cli/lib/runtime/__tests__/session-guard-contract.test.js:90:58
+✖ IF-13 first-resolution absent: provider zero sending and caller-selected real ledger outcomes (165.433427ms)
+  Error: tmux command timed out
+      at tmuxError (file://<workspace>/p05-c-2635/cli/lib/runtime/tmux-connection.js:5:24)
+      at Timeout.<anonymous> (file://<workspace>/p05-c-2635/cli/lib/runtime/tmux-connection.js:33:41)
+      at listOnTimeout (node:internal/timers:685:17)
+      at process.processTimers (node:internal/timers:618:7) {
+    code: 'TMUX_UNAVAILABLE',
+    cause: 'timeout',
+    stdout: '',
+    stderr: '',
+    exitCode: null
+  }
+
+test at cli/lib/runtime/__tests__/session-guard-contract.test.js:90:58
+✖ IF-13 first-resolution missing-run: provider zero sending and caller-selected real ledger outcomes (248.944951ms)
+  Error: tmux command timed out
+      at tmuxError (file://<workspace>/p05-c-2635/cli/lib/runtime/tmux-connection.js:5:24)
+      at Timeout.<anonymous> (file://<workspace>/p05-c-2635/cli/lib/runtime/tmux-connection.js:33:41)
+      at listOnTimeout (node:internal/timers:685:17)
+      at process.processTimers (node:internal/timers:618:7) {
+    code: 'TMUX_UNAVAILABLE',
+    cause: 'timeout',
+    stdout: '',
+    stderr: '',
+    exitCode: null
+  }
+
+test at cli/lib/runtime/__tests__/session-guard-contract.test.js:90:58
+✖ IF-13 first-resolution timeout: provider zero sending and caller-selected real ledger outcomes (385.55915ms)
+  Error: tmux command timed out
+      at tmuxError (file://<workspace>/p05-c-2635/cli/lib/runtime/tmux-connection.js:5:24)
+      at Timeout.<anonymous> (file://<workspace>/p05-c-2635/cli/lib/runtime/tmux-connection.js:33:41)
+      at listOnTimeout (node:internal/timers:685:17)
+      at process.processTimers (node:internal/timers:618:7) {
+    code: 'TMUX_UNAVAILABLE',
+    cause: 'timeout',
+    stdout: 'ZYLOS_OK\n3878362:1792945944',
+    stderr: '',
+    exitCode: null
+  }
+
+test at cli/lib/runtime/__tests__/session-guard-contract.test.js:158:1
+✖ IF-13 marker-looking pane content and message syntax are data, not guard output or commands (229.608407ms)
+  Error: tmux command timed out
+      at tmuxError (file://<workspace>/p05-c-2635/cli/lib/runtime/tmux-connection.js:5:24)
+      at Timeout.<anonymous> (file://<workspace>/p05-c-2635/cli/lib/runtime/tmux-connection.js:33:41)
+      at listOnTimeout (node:internal/timers:685:17)
+      at process.processTimers (node:internal/timers:618:7) {
+    code: 'TMUX_UNAVAILABLE',
+    cause: 'timeout',
+    stdout: '',
+    stderr: '',
+    exitCode: null
+  }
+
+test at skills/activity-monitor/scripts/__tests__/supervisor-manual-entry.integration.test.js:38:38
+✖ IF-36 single actual M4/client lost reply requery retains original target and preserves same-name replacement (1212.574815ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+
+  + undefined
+  - 'session-1'
+
+      at scenario (file://<workspace>/p05-c-2635/skills/activity-monitor/scripts/__tests__/supervisor-manual-entry.integration.test.js:26:83)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async TestContext.<anonymous> (file://<workspace>/p05-c-2635/skills/activity-monitor/scripts/__tests__/supervisor-manual-entry.integration.test.js:38:181)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: 'session-1',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at skills/activity-monitor/scripts/__tests__/supervisor-manual-entry.integration.test.js:38:38
+✖ IF-36 multi actual M4/client lost reply requery retains original target and preserves same-name replacement (877.417514ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+
+  + undefined
+  - 'session-1'
+
+      at scenario (file://<workspace>/p05-c-2635/skills/activity-monitor/scripts/__tests__/supervisor-manual-entry.integration.test.js:26:83)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async TestContext.<anonymous> (file://<workspace>/p05-c-2635/skills/activity-monitor/scripts/__tests__/supervisor-manual-entry.integration.test.js:38:181)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: 'session-1',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
