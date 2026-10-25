@@ -5,10 +5,7 @@
  * uniform `=== LABEL ===` blocks (see session-format.js), shared with the
  * memory injection step so the combined session-start context reads
  * consistently:
- * - Last checkpoint (summary if present, else a `(no summary …)` fallback so
- *   the block never silently disappears when a checkpoint has a null summary)
- * - Unsummarized conversations (all if ≤ threshold, last N if > threshold)
- * - Memory Sync instruction (only if > threshold)
+ * Emits the current scope's delivered tail and on-demand memory pointers.
  *
  * Usage: node c4-session-init.js
  */
@@ -86,10 +83,7 @@ function needsRecoveryCue(context) {
 
 async function withC4Db(label, action) {
   const recovery = recoveryContext();
-  // Checkpoint owns the fallback cue. Conversation shard only suppresses C4,
-  // preventing three copies across initial prompt and the two C4 shards.
-  const cue = label === 'c4 checkpoint init' && needsRecoveryCue(recovery)
-    ? recoveryBlock(recovery) : '';
+  const cue = needsRecoveryCue(recovery) ? recoveryBlock(recovery) : '';
   if (recovery?.blocked) return cue;
   let close = () => {};
   try {
@@ -107,112 +101,43 @@ async function withC4Db(label, action) {
   }
 }
 
-/**
- * Emit the last-checkpoint section, or '' when no checkpoint exists yet.
- * Standalone emitter for the session-start shard orchestrator; also composed
- * into initC4Session() for the legacy single-stdout path.
- */
-export async function emitC4Checkpoint() {
-  return withC4Db('c4 checkpoint init', ({ getLastCheckpoint }) => {
-    const checkpoint = getLastCheckpoint();
-
-    // Always surface the last checkpoint. Summary present → show it; summary
-    // null → emit a fallback so the block never silently disappears.
-    if (!checkpoint) return '';
-    if (checkpoint.summary) {
-      return formatSection('LAST CHECKPOINT SUMMARY', checkpoint.summary);
+/** Keep original message bytes and drop whole oldest messages to fit. */
+export async function emitC4Conversations(payload, budget = null, {
+  scopeReader, withDb = withC4Db,
+  migrationReader = async scope => {
+    const record = path.join(scope.root, '.zylos/migrations/references-layout-v1.json');
+    try { fs.lstatSync(record); }
+    catch (error) { if (error.code === 'ENOENT') return { state: 'absent' }; throw error; }
+    const { loadCoreModule } = await import('../../activity-monitor/scripts/bootstrap-scope.js');
+    const { createMigration } = await loadCoreModule('memory-migration.js');
+    return createMigration({ env: { ...process.env, ZYLOS_DIR: scope.root } }).status();
+  },
+} = {}) {
+  return withDb('c4 conversations init', async db => {
+    const { isSubsession } = await import('../../activity-monitor/scripts/bootstrap-identity.js');
+    const readScope = scopeReader ?? (await import('../../activity-monitor/scripts/bootstrap-scope.js')).bootstrapScope;
+    const scope = await readScope();
+    await normalHelpers();
+    const coverage = scope.mode === 'multi' ? db.getCoverageEnd(scope.sessionGroup) : db.getGlobalCoverageEnd();
+    const conversations = scope.mode === 'multi'
+      ? db.getDeliveredSince(scope.sessionGroup, coverage, { limit: 6 })
+      : db.getGlobalDeliveredSince(coverage, { limit: 6 });
+    const instructions = [
+      `Scope: ${scope.scope}. Working memory is not injected. Read the complete snapshot with: node ${path.join(scope.root, '.claude/skills/zylos-memory/scripts/read-work-memory.js')} --json`,
+      `Before resuming work, read ${path.join(scope.memoryDir, 'handoff.md')} in full, using successive file ranges when needed. Reading does not consume it; retain unfinished items.`,
+    ];
+    if (!isSubsession(payload) && (scope.scope === '*' || scope.scope === 'origin')) {
+      try {
+        const migration = await migrationReader(scope);
+        if (migration.state === 'pending') instructions.push('References migration is pending. Use memory-migration.js status, then follow the references-layout migration instructions; this does not block READY.');
+        else if (migration.state === 'unreadable') instructions.push('References migration record UNAVAILABLE; do not overwrite it.');
+      } catch { instructions.push('References migration record UNAVAILABLE; do not overwrite it.'); }
     }
-    return formatSection(
-      'LAST CHECKPOINT',
-      `(no summary — checkpoint #${checkpoint.id}, ${checkpoint.timestamp})`,
-    );
-  });
-}
-
-/**
- * Emit the unsummarized-conversations section (including the "no new
- * conversations" fallback and, above threshold, the Memory Sync instruction).
- *
- * In shard mode the orchestrator passes the shard's budget, and messages are
- * emitted as ORIGINAL content — never the dispatch-style preview + attachment
- * pointer (#724): the DB stores originals, and compressing them at session
- * start would make the agent's own recent history lossy while budget room
- * goes unused. Over-budget output is packed at MESSAGE granularity instead:
- * whole oldest messages are dropped until the newest ones fit inline. This
- * shard must never rely on the generic tail-trim + spill fallback — that
- * would cut the NEWEST messages (the text is chronological) and depend on
- * the agent following a read-this-file pointer. Dropped messages are not
- * lost: Memory Sync reads c4.db directly, so they are covered by the next
- * checkpoint summary. Only when a SINGLE message alone overflows the whole
- * shard budget does that message fall back to the preview + pointer form —
- * a compressed newest message plus intact section structure beats the
- * orchestrator's blind tail-trim. Without a budget (legacy single-stdout
- * path, no packer to bound the output) behavior is unchanged: per-message
- * spill applies as before and the output is byte-identical to before.
- */
-export async function emitC4Conversations(_payload, budget = null) {
-  return withC4Db('c4 conversations init', async ({
-    getUnsummarizedRange,
-    getUnsummarizedConversations,
-    formatConversationsForAgent,
-  }) => {
-    const { CHECKPOINT_THRESHOLD, SESSION_INIT_RECENT_COUNT } = await import('./c4-config.js');
-
-    const range = getUnsummarizedRange();
-    if (range.count === 0) {
-      return formatSection('RECENT CONVERSATIONS', 'No new conversations since last checkpoint.');
-    }
-
-    const needsSync = range.count > CHECKPOINT_THRESHOLD;
-
-    // Get conversations: all if under threshold, last N if over
-    const conversations = needsSync
-      ? getUnsummarizedConversations(SESSION_INIT_RECENT_COUNT)
-      : getUnsummarizedConversations();
-
-    const assemble = (kept, { spill = true } = {}) => {
-      // Informational only — no file to read. Kept within the section so it
-      // survives exactly as long as the section does.
-      const note = kept.length < conversations.length
-        ? `(showing the newest ${kept.length} of ${range.count} unsummarized messages inline; older ones are covered by the next Memory Sync checkpoint)\n\n`
-        : '';
-      const sections = [formatSection('RECENT CONVERSATIONS', note + formatConversationsForAgent(kept, { spill }))];
-
-      // If over threshold, append Memory Sync instruction
-      if (needsSync) {
-        sections.push(formatSection(
-          'ACTION REQUIRED',
-          `There are ${range.count} unsummarized conversations (conversation id ${range.begin_id} ~ ${range.end_id}). Please use zylos-memory skill to process them.`,
-        ));
-      }
-
-      return sections.join('\n\n');
-    };
-
-    // Legacy single-stdout path: no packer bounds the output, so keep the
-    // per-message spill exactly as before (byte-identical).
-    if (!budget) return assemble(conversations);
-
-    // Budgeted shard path: original content, whole-message packing.
+    const assemble = rows => formatSection('RECENT CONVERSATIONS', instructions.join('\n') + '\n\n' + db.formatConversationsForAgent(rows, { spill: false }));
     let kept = conversations;
-    let body = assemble(kept, { spill: false });
-
-    // Reserve room for the [k/N] shard header the orchestrator prepends.
-    const packBudget = {
-      maxChars: Math.max(0, budget.maxChars - 200),
-      maxTokens: Math.max(0, budget.maxTokens - 60),
-    };
-    while (kept.length > 1 && !withinBudget(body, packBudget)) {
-      kept = kept.slice(1); // drop the oldest whole message
-      body = assemble(kept, { spill: false });
-    }
-    if (!withinBudget(body, packBudget)) {
-      // The single newest message alone overflows the shard budget: fall
-      // back to its preview + pointer form rather than handing the
-      // orchestrator an over-budget body to tail-trim blindly.
-      body = assemble(kept, { spill: true });
-    }
-    return body;
+    const packBudget = budget && { maxChars: Math.max(0, budget.maxChars - 200), maxTokens: Math.max(0, budget.maxTokens - 60) };
+    while (kept.length && packBudget && !withinBudget(assemble(kept), packBudget)) kept = kept.slice(1);
+    return assemble(kept);
   });
 }
 
@@ -220,7 +145,7 @@ export async function initC4Session() {
   try {
     const recovery = recoveryContext();
     if (recovery?.blocked) return needsRecoveryCue(recovery) ? recoveryBlock(recovery) + '\n' : '';
-    const sections = [await emitC4Checkpoint(), await emitC4Conversations()].filter(Boolean);
+    const sections = [await emitC4Conversations()].filter(Boolean);
     return `${sections.join('\n\n')}\n`;
   } catch (err) {
     if (err.cause) throw err;
