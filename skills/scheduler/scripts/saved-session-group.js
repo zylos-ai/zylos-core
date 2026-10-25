@@ -15,6 +15,11 @@ export function validateReplyTarget(options, { validate = validateChannel } = {}
       validate(channel, true);
     } catch (cause) { throw dataError('INVALID_ARGS', `invalid channel: ${String(channel)}`, { cause }); }
   }
+  for (const key of ['reply-channel', 'reply-endpoint']) {
+    if (has(options, key) && !options[key]) {
+      throw dataError('INVALID_ARGS', `--${key} must have a value`);
+    }
+  }
   if (has(options, 'reply-session-group')) {
     try { validateGroupName(options['reply-session-group']); }
     catch (cause) {

@@ -102,7 +102,8 @@ test('DM-58 task INSERT failure leaves namespace bindings unchanged', t => {
 test('DM-58 paired routes reject incomplete add/update without changing any task field', t => {
   const f = fixture(t);
   const plain = add(f, [], 'tg:creator');
-  for (const args of [['--reply-channel', 'telegram'], ['--reply-endpoint', '-1002']]) {
+  for (const args of [['--reply-channel', 'telegram'], ['--reply-endpoint', '-1002'],
+    ['--reply-endpoint', ''], ['--reply-channel', 'telegram', '--reply-endpoint', '']]) {
     for (const command of [['add', 'incomplete', '--in', '1 hour'], ['update', plain.id, '--priority', '1']]) {
       const before = f.read();
       const answer = f.run([...command, ...args]);
