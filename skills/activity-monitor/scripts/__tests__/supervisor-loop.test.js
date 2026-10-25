@@ -3,17 +3,17 @@ import assert from 'node:assert/strict';
 import { SupervisorLoop } from '../supervisor-loop.js';
 function fixture(overrides={}) {
  const calls=[],timers=[]; const rec=n=>async()=>{calls.push(n);};
- const deps={readConfiguration:async()=>({mode:'multi'}),restore:rec('restore'),openAdmission:rec('open'),reportError:async(e,d)=>calls.push(`error:${d.phase}`),getModeTransition:async()=>null,listDrainFences:async()=>[],readRestartRequests:async()=>[],lifecycleSerial:fn=>fn(),advanceTransition:rec('transition'),advanceManual:rec('manual'),advanceRestarts:rec('restarts'),reconcileConfiguration:rec('config'),observe:async()=>{calls.push('observe');return [{sessionGroup:'origin'},{sessionGroup:'tg:one'}];},probeAndPublish:async s=>calls.push(`probe:${s.sessionGroup}`),advanceReclaim:rec('reclaim'),checkRotation:rec('rotation'),checkTtl:rec('ttl'),checkEviction:rec('evict'),checkSync:rec('sync'),writeMetricsAndMaintain:rec('metrics'),...overrides};
+ const deps={readConfiguration:async()=>({mode:'multi'}),restore:rec('restore'),openAdmission:rec('open'),reportError:async(e,d)=>calls.push(`error:${d.phase}`),getModeTransition:async()=>null,listDrainFences:async()=>[],readRestartRequests:async()=>[],lifecycleSerial:fn=>fn(),advanceTransition:rec('transition'),advanceManual:rec('manual'),advanceRestarts:rec('restarts'),reconcileConfiguration:rec('config'),observe:async()=>{calls.push('observe');return [{sessionGroup:'origin'},{sessionGroup:'tg:one'}];},observeExits:rec('exits'),probeAndPublish:async s=>calls.push(`probe:${s.sessionGroup}`),advanceReclaim:rec('reclaim'),checkRotation:rec('rotation'),checkTtl:rec('ttl'),checkEviction:rec('evict'),checkSync:rec('sync'),writeMetricsAndMaintain:rec('metrics'),...overrides};
  return {calls,timers,deps,loop:new SupervisorLoop(deps,{schedule:(fn,ms)=>{timers.push({fn,ms});return timers.length;},cancel:()=>{}})};
 }
 // P05 T01 / supervisor-startup: configuration corruption cannot become single.
 test('bad F1 does not open admission or schedule',async()=>{const f=fixture({readConfiguration:async()=>{throw new Error('CONFIG_UNREADABLE');}});await f.loop.start();await f.loop.tick();assert.deepEqual(f.calls,['error:configuration']);assert.equal(f.timers.length,0);await f.loop.stop();});
 // P05 T01 / supervisor-loop: fixed stages and fresh capacity after reclaim.
-test('restore precedes admission and lifecycle shares one scene sample',async()=>{const f=fixture();await f.loop.start();assert.deepEqual(f.calls,['restore','open','observe','manual','restarts','config','rotation','rotation','ttl','ttl','evict','sync','probe:origin','probe:tg:one','metrics']);assert.equal(f.timers[0].ms,1000);await f.loop.stop();});
+test('restore precedes admission and lifecycle shares one scene sample',async()=>{const f=fixture({listDrainFences:async()=>[{sessionGroup:'tg:one'}]});await f.loop.start();assert.deepEqual(f.calls,['restore','open','observe','manual','restarts','config','exits','probe:origin','probe:tg:one','reclaim','rotation','rotation','ttl','ttl','evict','sync','metrics']);assert.equal(f.timers[0].ms,1000);await f.loop.stop();});
 // P05 T01: one group failure does not starve another.
 test('group failure preserves other observations and next tick',async()=>{const f=fixture();f.deps.probeAndPublish=async s=>{if(s.sessionGroup==='origin')throw new Error('unobservable');f.calls.push('second');};await f.loop.start();assert.ok(f.calls.includes('error:observe'));assert.ok(f.calls.includes('second'));assert.equal(f.timers.length,1);await f.loop.stop();});
 // P05 T01: D9 permits observations and existing reclaim only.
-test('transition suppresses new lifecycle producers',async()=>{const f=fixture({getModeTransition:async()=>({id:'switch'}),listDrainFences:async()=>[{sessionGroup:'tg:one'}]});await f.loop.start();assert.deepEqual(f.calls,['restore','open','observe','reclaim','transition','probe:origin','probe:tg:one','metrics']);await f.loop.stop();});
+test('transition suppresses new lifecycle producers',async()=>{const f=fixture({getModeTransition:async()=>({id:'switch'}),listDrainFences:async()=>[{sessionGroup:'tg:one'}]});await f.loop.start();assert.deepEqual(f.calls,['restore','open','transition','observe','exits','probe:origin','probe:tg:one','reclaim','metrics']);await f.loop.stop();});
 // P05 T01: no overlap; failed authoritative reads cannot become empty.
 test('overlap joins one round and read failure schedules recovery',async()=>{let release;const gate=new Promise(r=>release=r);let reads=0;const f=fixture({getModeTransition:async()=>{reads++;await gate;throw new Error('DB_BUSY');}});const first=f.loop.start();await new Promise(r=>setImmediate(r));const second=f.loop.tick();release();await Promise.all([first,second]);assert.equal(reads,1);assert.deepEqual(f.calls,['restore','open','error:round']);assert.equal(f.timers.length,1);await f.loop.stop();});
 
@@ -51,7 +51,7 @@ test('T01 legacy migration failure does not stop observation; accepted transitio
  f.calls.length=0;await f.loop.tick();assert.equal(calls,2);assert.ok(f.calls.includes('transition'));await f.loop.stop();
 });
 
-// B2/B6: one round samples scenes and admission authorities once under serialization.
+// B2/B6: one round samples scenes and admission authorities once; transition owns its own serialization.
 test('round shares one serialized snapshot and checks manual fences once', async () => {
   let locked = false;
   const counts = { configuration: 0, transition: 0, fences: 0, requests: 0, scenes: 0, manual: 0 };
@@ -61,7 +61,7 @@ test('round shares one serialized snapshot and checks manual fences once', async
   const phase = async context => { assert.equal(locked, true); contexts.push(context); };
   const f = fixture({
     lifecycleSerial: async action => { assert.equal(locked, false); locked = true; try { return await action(); } finally { locked = false; } },
-    readConfiguration: read('configuration', { mode: 'multi' }), getModeTransition: read('transition', null),
+    readConfiguration: read('configuration', { mode: 'multi' }), getModeTransition: async () => { assert.equal(locked, false); counts.transition++; return null; },
     listDrainFences: read('fences', fences), readRestartRequests: read('requests', requests), observe: read('scenes', scenes),
     checkManualFences: async context => { counts.manual++; await phase(context); return []; },
     advanceManual: phase, advanceRestarts: phase, reconcileConfiguration: phase,
@@ -90,5 +90,23 @@ test('unreadable F9 is reported while the same snapshot still advances existing 
   assert.equal(observed.restartRequestsError, failure);
   assert.deepEqual(observed.restartRequests, []);
   assert.ok(f.calls.includes('error:restart-requests')); assert.ok(f.calls.includes('reclaim')); assert.ok(f.calls.includes('metrics'));
+  await f.loop.stop();
+});
+
+// P3-2: a transition present at step 1 restricts this whole round even after completion.
+test('completed transition precedes serial work and keeps transition-round restrictions', async () => {
+  let transition = { id: 'switch' }, mode = 'multi', locked = false;
+  const f = fixture({
+    getModeTransition: async () => { assert.equal(locked, false); return transition; },
+    advanceTransition: async () => { assert.equal(locked, false); f.calls.push('transition'); transition = null; mode = 'single'; },
+    readConfiguration: async () => ({ mode }),
+    listDrainFences: async () => [{ sessionGroup: 'tg:one' }],
+    lifecycleSerial: async action => { locked = true; try { return await action(); } finally { locked = false; } },
+  });
+  await f.loop.start();
+  assert.ok(f.calls.indexOf('transition') < f.calls.indexOf('observe'));
+  assert.ok(f.calls.indexOf('probe:origin') < f.calls.indexOf('reclaim'));
+  for (const phase of ['manual','restarts','config','rotation','ttl','evict','sync']) assert.equal(f.calls.includes(phase), false, phase);
+  assert.equal(f.loop.configuration.mode, 'single');
   await f.loop.stop();
 });

@@ -1,0 +1,23 @@
+Running 1 Node test files
+✔ IF-34/DM-42 restart persists exact snapshot before reply and survives owner reconstruction (11.376061ms)
+✔ IF-34 restart empty writes only completion and steady single refuses (7.779152ms)
+✔ DM-54 invalid F9 refuses admission without changing any byte (1.418236ms)
+✔ IF-34 unknown live identity and write failures never return false accepted (0.865186ms)
+✔ IF-36 manual idempotence precedes all conflicts and stores the run identity (7.650684ms)
+✔ IF-36 conflicts precede absent-target result in frozen order (14.117423ms)
+✔ IF-36 stale, incomplete and starting identity cannot become manual targets (0.683957ms)
+✔ IF-35 config rechecks complete snapshot and current input; same run fence is idempotent (1.023608ms)
+✔ IF-35 config conflicts hold and DB failure does not acknowledge (7.488263ms)
+✔ T04 shared lifecycle queue serializes snapshots without nesting runtime writes (11.991446ms)
+✔ T04 startup gate rejects four new request families and keeps start_attempt unclassified until ready (0.414719ms)
+✔ config admission refuses malformed snapshots and fails closed on invalid expected config (1.214146ms)
+✔ P2 config reclaim missing or failed dependency cannot fence a receiving group (0.516507ms)
+✔ manual admission checks optional sessionId once without requiring a tmux descriptor (7.167184ms)
+ℹ tests 14
+ℹ suites 0
+ℹ pass 14
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 142.71346
