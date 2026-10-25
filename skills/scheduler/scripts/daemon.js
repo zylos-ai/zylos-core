@@ -73,7 +73,8 @@ export async function startScheduler() {
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+const entry = process.env.pm_exec_path || process.argv[1];
+if (entry && import.meta.url === pathToFileURL(entry).href) {
   startScheduler().catch(error => {
     console.error(`Scheduler failed [${error.code || 'INTERNAL_ERROR'}]: ${error.message}`);
     process.exitCode = 1;

@@ -39,7 +39,8 @@ export function updatedReplyTarget(task, options, deps = {}) {
   if (!['reply-channel', 'reply-endpoint', 'reply-session-group'].some(key => has(options, key))) return {};
   const channel = has(options, 'reply-channel') ? options['reply-channel'] : task.reply_channel;
   const endpoint = has(options, 'reply-endpoint') ? options['reply-endpoint'] : task.reply_endpoint;
-  // Endpoint-only updates reuse the saved channel without consulting the editor's group.
-  const saved = channel === null ? empty() : { session_component: channel, session_group_name: options['reply-session-group'] ?? null };
+  // An endpoint alone cannot define a new execution target. Without an effective
+  // reply channel, preserve the saved pair; otherwise select that channel's group.
+  const saved = channel === null ? {} : { session_component: channel, session_group_name: options['reply-session-group'] ?? null };
   return { reply_channel: channel, reply_endpoint: endpoint, ...saved };
 }

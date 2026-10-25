@@ -99,6 +99,27 @@ test('DM-58 task INSERT failure leaves namespace bindings unchanged', t => {
   assert.deepEqual(f.c4.prepare('SELECT * FROM channel_namespaces ORDER BY component_name').all(), f.before);
 });
 
+test('P2-2 endpoint-only update preserves saved execution group without a reply channel', t => {
+  const f = fixture(t);
+  for (const group of ['tg:creator', undefined]) {
+    const task = add(f, [], group);
+    const answer = f.run(['update', task.id, '--reply-endpoint', 'new-endpoint'], 'tg:editor');
+    assert.equal(answer.status, 0, answer.stderr);
+    const row = f.read().find(row => row.id === task.id);
+    assert.deepEqual(pair(row), pair(task));
+    assert.equal(row.reply_channel, null);
+    assert.equal(row.reply_endpoint, 'new-endpoint');
+  }
+  const task = add(f, ['--reply-channel', 'telegram', '--reply-session-group', 'specific']);
+  const answer = f.run(['update', task.id, '--reply-endpoint', 'new-endpoint'], 'tg:editor');
+  assert.equal(answer.status, 0, answer.stderr);
+  const row = f.read().find(row => row.id === task.id);
+  assert.deepEqual(pair(row), ['telegram', null]);
+  assert.equal(row.reply_channel, 'telegram');
+  assert.equal(row.reply_endpoint, 'new-endpoint');
+  assert.deepEqual(f.c4.prepare('SELECT * FROM channel_namespaces ORDER BY component_name').all(), f.before);
+});
+
 test('DM-58 single mode ignores latest lark input and other-group tmux hints; source guessing mutants fail', t => {
   const f = fixture(t);
   fs.mkdirSync(path.join(f.root, '.zylos'), { recursive: true });
