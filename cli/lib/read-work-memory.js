@@ -64,10 +64,6 @@ export async function readWorkMemory({
       let header;
       try { header = state.length ? parseStateHeader(decode(state), { scope }) : { valid: false }; }
       catch (cause) { throw fail('READ_FAILED', `Cannot parse state: ${cause.message}`, ['state']); }
-      if (!header || typeof header.valid !== 'boolean' || (header.valid &&
-          (header.scope !== scope || !Array.isArray(header.inboxCommitted)))) {
-        throw fail('READ_FAILED', 'State parser returned an invalid result', ['state']);
-      }
       if (!header.valid) header = { valid: false, scope: null, coverage: null, inboxCommitted: [] };
       const inbox = read(path.join(memoryDir, 'inbox.md'), 'inbox', true);
       let names;

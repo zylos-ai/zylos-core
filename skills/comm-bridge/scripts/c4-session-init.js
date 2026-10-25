@@ -105,9 +105,6 @@ async function withC4Db(label, action) {
 export async function emitC4Conversations(payload, budget = null, {
   scopeReader, withDb = withC4Db,
   migrationReader = async scope => {
-    const record = path.join(scope.root, '.zylos/migrations/references-layout-v1.json');
-    try { fs.lstatSync(record); }
-    catch (error) { if (error.code === 'ENOENT') return { state: 'absent' }; throw error; }
     const { loadCoreModule } = await import('../../activity-monitor/scripts/bootstrap-scope.js');
     const { createMigration } = await loadCoreModule('memory-migration.js');
     return createMigration({ env: { ...process.env, ZYLOS_DIR: scope.root } }).status();

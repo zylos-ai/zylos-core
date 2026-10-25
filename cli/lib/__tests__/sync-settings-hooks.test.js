@@ -10,13 +10,12 @@ const {
   desiredClaudeHooks,
   isCoreManaged,
   persistInstalledSettingsAndSyncCoupledThreshold,
-  shouldSyncCodexConfig,
   syncCodexConfig,
   syncHooks,
   syncModelCoupledNewSessionThreshold,
   syncTemplateSetting,
   syncTemplateModelSetting,
-} = await import('../sync-settings-hooks.js');
+} = await import('../sync-runtime-hooks.js');
 const { extractScriptPath, getCommandHooks, hookScriptKey, hookScriptBaseKey, extractShardArg } = await import('../hook-utils.js');
 const {
   renderCodexGlobalConfig,
@@ -100,7 +99,8 @@ describe('desiredClaudeHooks', () => {
   });
 
   it('fresh init deploy syncs exactly one assembler hook for startup, clear, and compact', () => {
-    const zylosDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-init-hooks-'));
+    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-init-hooks-'));
+    const zylosDir = path.join(homeDir, 'zylos');
     fs.mkdirSync(path.join(zylosDir, '.zylos'), { recursive: true });
     fs.writeFileSync(path.join(zylosDir, '.zylos', 'config.json'), JSON.stringify({ runtime: 'claude' }));
     execFileSync(process.execPath, [
@@ -109,7 +109,7 @@ describe('desiredClaudeHooks', () => {
       `import { deployTemplates } from ${JSON.stringify(INIT_MODULE_PATH)}; deployTemplates({ freshInstall: true });`,
     ], {
       stdio: 'pipe',
-      env: { ...process.env, HOME: path.dirname(zylosDir), ZYLOS_DIR: zylosDir },
+      env: { ...process.env, HOME: homeDir, ZYLOS_DIR: zylosDir },
     });
     const settings = JSON.parse(fs.readFileSync(path.join(zylosDir, '.claude', 'settings.json'), 'utf8'));
     for (const matcher of ['startup', 'clear', 'compact']) {
@@ -117,7 +117,7 @@ describe('desiredClaudeHooks', () => {
       assert.equal(groups.length, 1);
       assert.equal(groups[0].hooks.filter(hook => hook.command.includes('assembler.mjs')).length, 1);
     }
-    fs.rmSync(zylosDir, { recursive: true, force: true });
+    fs.rmSync(homeDir, { recursive: true, force: true });
   });
 
   it('the real clear hook rebuilds changed user instructions in a sandbox', () => {
@@ -469,18 +469,6 @@ describe('syncTemplateSetting', () => {
     });
 
     assert.equal(result.changed, false);
-  });
-});
-
-describe('shouldSyncCodexConfig', () => {
-  it('skips when runtime is not codex and no codex state exists', () => {
-    const result = shouldSyncCodexConfig({
-      cfg: { runtime: 'claude' },
-      homeDir: '/tmp/no-codex',
-      existsSync: () => false,
-    });
-
-    assert.equal(result.shouldSync, false);
   });
 });
 
@@ -966,7 +954,7 @@ describe('component shard claim boundary (opt-in contract)', () => {
 
   it('claims a declared legacy hook: old entry removed, --shard command generated, chain covers it', async () => {
     const zylosDir = makeDeclaredZylosDir();
-    const { desiredClaudeHooks: desired, claimedHookBaseKeys } = await import('../sync-settings-hooks.js');
+    const { desiredClaudeHooks: desired, claimedHookBaseKeys } = await import('../sync-runtime-hooks.js');
     const { buildChain } = await import('../../../skills/activity-monitor/scripts/shard-registry.js');
 
     const installed = {
@@ -1017,7 +1005,7 @@ describe('component shard claim boundary (opt-in contract)', () => {
 
   it('claims nothing when no declarations exist, even for shard-suffixed user paths', async () => {
     const zylosDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shard-claim-empty-'));
-    const { desiredClaudeHooks: desired, claimedHookBaseKeys } = await import('../sync-settings-hooks.js');
+    const { desiredClaudeHooks: desired, claimedHookBaseKeys } = await import('../sync-runtime-hooks.js');
 
     const installed = {
       hooks: {
@@ -1059,7 +1047,7 @@ describe('component shard claim boundary (opt-in contract)', () => {
       claimHooks: ['/custom/my-session-start.js'],
     }));
 
-    const { claimedHookBaseKeys } = await import('../sync-settings-hooks.js');
+    const { claimedHookBaseKeys } = await import('../sync-runtime-hooks.js');
     const claimed = claimedHookBaseKeys({ zylosDir });
     assert.equal(claimed.size, 0);
 
