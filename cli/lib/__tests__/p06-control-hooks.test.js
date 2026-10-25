@@ -77,6 +77,81 @@ test('P06 2.10: missing P05 dependency, open transition and unreadable config ne
   }
 });
 
+function sockFixture(outcome, lookup = 'unknown') {
+  const submits = [], lookups = [];
+  return { ...restartOptions({ session_mode: 'multi' }), submits, lookups,
+    now: () => 1000, requestId: () => 'upgrade-1000-aabbccddeeff', deadlineAt: 11000,
+    loadSockClient: async () => ({
+      submit: async (...args) => { submits.push(args); return outcome; },
+      validateReply: (request, reply) => reply?.requestId === request.requestId,
+      lookupRestartRequest: async (...args) => { lookups.push(args); return lookup; },
+    }) };
+}
+
+test('IB-40/43 hook consumer uses draft P05 submit names, frozen envelope and accepted results', async () => {
+  for (const result of ['accepted', 'already_accepted', 'done_empty']) {
+    const runCount = result === 'done_empty' ? 0 : 3;
+    const options = sockFixture({ kind: 'accepted', sent: true,
+      reply: { requestId: 'upgrade-1000-aabbccddeeff', result, runCount } });
+    if (result === 'already_accepted') {
+      options.readConfig = () => ({ session_mode: 'single' });
+      options.readTransition = () => ({ phase: 'gating' });
+    }
+    const actual = await enqueueRestartIfNeeded(options);
+    assert.deepEqual(actual, { submitted: true, requestId: 'upgrade-1000-aabbccddeeff', result, runCount });
+    assert.equal(options.submits.length, 1);
+    assert.deepEqual(options.submits[0][0], { version: 1, type: 'restart_all', requestId: 'upgrade-1000-aabbccddeeff', reason: 'upgrade' });
+    assert.equal(options.submits[0][1].deadlineAt, 11000);
+    assert.equal(options.submits[0][1].replyMaxMs, 10000);
+    assert.equal(options.submits[0][1].connectRetryEveryMs, undefined);
+    assert.match(options.submits[0][1].socketPath, /activity-monitor\/am\.sock$/);
+    assert.equal(options.lookups.length, 0); assert.equal(options.calls.length, 0);
+  }
+});
+
+test('IB-40/43 definitive rejection and sent:false never look up, resubmit or fall back to exit', async () => {
+  for (const code of ['single_mode', 'manual_restart_pending', 'requests_unreadable', 'request_conflict', 'invalid_request', 'entry_not_open']) {
+    const options = sockFixture({ kind: 'rejected', sent: true, reply: { requestId: 'upgrade-1000-aabbccddeeff', code } });
+    const actual = await enqueueRestartIfNeeded(options);
+    assert.equal(actual.submitted, false); assert.equal(actual.code, code);
+    assert.deepEqual(actual.persisted, []);
+    assert.equal(actual.category, ['manual_restart_pending', 'entry_not_open'].includes(code) ? 'T' : 'R');
+    assert.equal(options.lookups.length, 0); assert.equal(options.submits.length, 1); assert.equal(options.calls.length, 0);
+  }
+  for (const kind of ['connect_failed', 'deadline_exceeded']) {
+    const options = sockFixture({ kind, sent: false });
+    assert.equal((await enqueueRestartIfNeeded(options)).category, 'T');
+    assert.equal(options.lookups.length, 0); assert.equal(options.submits.length, 1); assert.equal(options.calls.length, 0);
+  }
+});
+
+test('IB-40/43 all uncertain outcomes use one same-deadline lookup and never resubmit', async () => {
+  for (const kind of ['no_reply', 'invalid_reply', 'timeout', 'deadline_exceeded']) {
+    for (const lookup of ['accepted', 'done', 'unknown', 'deadline_exceeded']) {
+      const options = sockFixture({ kind, sent: true }, lookup);
+      const actual = await enqueueRestartIfNeeded(options);
+      assert.equal(actual.category, 'U'); assert.equal(actual.persisted, null); assert.equal(actual.lookup, lookup);
+      assert.equal(actual.submitted, ['accepted', 'done'].includes(lookup) ? true : null);
+      assert.deepEqual(options.lookups, [['upgrade-1000-aabbccddeeff', { deadlineAt: 11000 }]]);
+      assert.equal(options.submits.length, 1); assert.equal(options.calls.length, 0);
+    }
+  }
+});
+
+test('IB-40/43 bad accepted reply, lookup failure and exhausted budget remain fail closed', async () => {
+  const bad = sockFixture({ kind: 'accepted', sent: true, reply: { requestId: 'wrong-request' } });
+  assert.equal((await enqueueRestartIfNeeded(bad)).code, 'invalid_reply');
+  assert.equal(bad.lookups.length, 1); assert.equal(bad.calls.length, 0);
+  const failed = sockFixture();
+  failed.loadSockClient = async () => ({ submit: () => { throw Error('unexpected'); }, validateReply: () => false,
+    lookupRestartRequest: () => { throw Error('unreadable'); } });
+  const actual = await enqueueRestartIfNeeded(failed);
+  assert.equal(actual.category, 'U'); assert.equal(actual.lookup, 'unknown'); assert.equal(actual.submitted, null);
+  const expired = sockFixture(); expired.deadlineAt = 1000;
+  assert.equal((await enqueueRestartIfNeeded(expired)).sent, false);
+  assert.equal(expired.submits.length, 0); assert.equal(expired.lookups.length, 0); assert.equal(expired.calls.length, 0);
+});
+
 test('P06 2.2: both-runtime preparation is explicit and preserves unrelated hook identity', () => {
   assert.equal(shouldSyncCodexConfig({ cfg: { runtime: 'claude' }, prepareBothRuntimes: true, existsSync: () => false }).shouldSync, true);
   assert.equal(isCoreCodexHook('node /custom/session-start-orchestrator.js', '/instance'), false);

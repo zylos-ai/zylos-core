@@ -19,6 +19,7 @@
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import { randomBytes } from 'node:crypto';
 import { execFileSync } from 'child_process';
 import { fileURLToPath } from 'url';
 import { hookScriptKey, hookScriptBaseKey, getCommandHooks } from './hook-utils.js';
@@ -675,16 +676,67 @@ export async function enqueueRestartIfNeeded({
   zylosDir = ZYLOS_DIR,
   log = console.log,
   errorLog = console.error,
+  loadSockClient = () => import('./am-sock-client.js'),
+  now = Date.now,
+  requestId = () => `upgrade-${now()}-${randomBytes(6).toString('hex')}`,
+  deadlineAt,
 } = {}) {
+  const deadline = deadlineAt ?? now() + 10000;
   try {
     const cfg = readConfig();
     const mode = cfg.session_mode ?? 'single';
     if (!['single', 'multi'].includes(mode)) throw Object.assign(new Error('Invalid session_mode'), { code: 'CONFIG_UNREADABLE' });
     const transition = await readTransition();
     if (mode === 'multi' || transition) {
-      // The P05 submission client is not present in this baseline. Never send
-      // an unscoped exit when the required supervisor submission is unavailable.
-      throw Object.assign(new Error('P05 restart_all submission client is unavailable'), { code: 'DEPENDENCY_MISSING' });
+      let client;
+      try {
+        client = await loadSockClient();
+        if (['submit', 'validateReply', 'lookupRestartRequest'].some(name => typeof client[name] !== 'function')) {
+          throw new Error('Required P05 client exports are unavailable');
+        }
+      } catch (cause) {
+        throw Object.assign(new Error('P05 restart_all submission client is unavailable', { cause }), { code: 'DEPENDENCY_MISSING' });
+      }
+      if (!Number.isSafeInteger(deadline)) throw Object.assign(new Error('Invalid restart deadline'), { code: 'INVALID_INPUT' });
+      if (now() >= deadline) {
+        errorLog('Settings hooks: restart not submitted: deadline_exceeded');
+        return { submitted: false, code: 'deadline_exceeded', sent: false, category: 'T', persisted: [] };
+      }
+      const request = { version: 1, type: 'restart_all', requestId: requestId(), reason: 'upgrade' };
+      let outcome;
+      try {
+        outcome = await client.submit(request, { deadlineAt: deadline, replyMaxMs: 10000,
+          socketPath: path.join(zylosDir, 'activity-monitor', 'am.sock') });
+      } catch {
+        // An unexpected client error cannot prove that nothing reached M4.
+        outcome = { kind: 'no_reply', sent: true };
+      }
+      let kind = outcome?.kind;
+      if (['accepted', 'rejected'].includes(kind)) {
+        let valid = false;
+        try { valid = client.validateReply(request, outcome.reply); } catch { /* Treat malformed replies as unknown. */ }
+        if (!valid) kind = 'invalid_reply';
+        else if (kind === 'accepted') {
+          log(`Settings hooks: restart ${outcome.reply.result} (${outcome.reply.runCount} runs); readiness is not confirmed.`);
+          return { submitted: true, requestId: request.requestId, result: outcome.reply.result, runCount: outcome.reply.runCount };
+        } else {
+          const code = outcome.reply.code;
+          errorLog(`Settings hooks: restart rejected: ${code}`);
+          return { submitted: false, requestId: request.requestId, code, sent: true,
+            category: ['manual_restart_pending', 'entry_not_open'].includes(code) ? 'T' : 'R', persisted: [] };
+        }
+      }
+      if (outcome?.sent === false && ['connect_failed', 'deadline_exceeded'].includes(kind)) {
+        errorLog(`Settings hooks: restart not submitted: ${kind}`);
+        return { submitted: false, requestId: request.requestId, code: kind, sent: false, category: 'T', persisted: [] };
+      }
+      let lookup = 'unknown';
+      try { lookup = await client.lookupRestartRequest(request.requestId, { deadlineAt: deadline }); }
+      catch { /* Preserve uncertainty when the readback itself fails. */ }
+      if (!['accepted', 'done', 'unknown', 'deadline_exceeded'].includes(lookup)) lookup = 'unknown';
+      errorLog(`Settings hooks: restart result uncertain (${kind || 'invalid_reply'}); lookup: ${lookup}; no resubmission.`);
+      return { submitted: ['accepted', 'done'].includes(lookup) ? true : null,
+        requestId: request.requestId, code: kind || 'invalid_reply', sent: true, category: 'U', persisted: null, lookup };
     }
     const c4ControlPath = path.join(zylosDir, '.claude', 'skills', 'comm-bridge', 'scripts', 'c4-control.js');
     if (!exists(c4ControlPath)) return { skipped: true, reason: 'control_missing' };
