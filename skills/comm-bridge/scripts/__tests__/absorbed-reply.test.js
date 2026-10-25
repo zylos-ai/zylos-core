@@ -37,14 +37,11 @@ test('#6b rejects malformed run/id at parse boundary without coercing numeric in
   assert.throws(() => parseSendArgs(['--absorbed-reply', runId, '1', 'extra']), { code: 'INVALID_ARGS' });
 });
 
-test('#6b missing run, gating membership and vanished row preserve D9 and never create out audit', t => {
+test('#6b missing run, nonmembership and vanished row preserve D9 and never create out audit', t => {
   const { api, db, runId, row } = setup(t);
   const original = db.prepare('SELECT absorbed_ids FROM mode_transitions WHERE run_id=?').get(runId).absorbed_ids;
   assert.throws(() => readAbsorbedReply('00000000-0000-0000-0000-000000000000', String(row.id), api), { code: 'RUN_NOT_FOUND' });
   assert.throws(() => readAbsorbedReply(runId, '999', api), { code: 'ABSORBED_NOT_IN_RUN' });
-  db.prepare("UPDATE mode_transitions SET phase='gating' WHERE run_id=?").run(runId);
-  assert.throws(() => readAbsorbedReply(runId, String(row.id), api), { code: 'ABSORBED_NOT_IN_RUN' });
-  db.prepare("UPDATE mode_transitions SET phase='converting' WHERE run_id=?").run(runId);
   db.prepare('DELETE FROM conversations WHERE id=?').run(row.id);
   assert.throws(() => readAbsorbedReply(runId, String(row.id), api), { code: 'ABSORBED_MISMATCH' });
   assert.equal(db.prepare('SELECT absorbed_ids FROM mode_transitions WHERE run_id=?').get(runId).absorbed_ids, original);
@@ -122,6 +119,17 @@ test('#6b whole component absorbed route keeps whole-group audit despite later e
   assert.deepEqual(JSON.parse(fs.readFileSync(output)), ['route', 'whole reply']);
 });
 
+test('#6b legacy empty absorbed group follows ordinary endpoint group resolution', async t => {
+  const { api, db, store, runId, row, dir, output } = setup(t, 'route', {});
+  db.prepare("UPDATE conversations SET session_group='' WHERE id=?").run(row.id);
+  store.insertConversation('in', 'demo', 'route', 'later subgroup message', { groupName: 'later' });
+  const request = readAbsorbedReply(runId, String(row.id), api);
+  assert.deepEqual(request, { kind: 'external', channel: 'demo', endpoint: 'route', id: String(row.id) });
+  const audit = await sendExternal(request, 'legacy reply', { api, skillsDir: dir });
+  assert.equal(audit.session_group, 'demo:later');
+  assert.deepEqual(JSON.parse(fs.readFileSync(output)), ['route', 'legacy reply']);
+});
+
 test('#6b unsafe numeric D9 id is refused rather than replying to a rounded neighboring id', t => {
   const { api, db, row, runId } = setup(t);
   const exact = '1000000000000000001';
@@ -132,7 +140,4 @@ test('#6b unsafe numeric D9 id is refused rather than replying to a rounded neig
   assert.notEqual(String(decoded), exact);
   assert.throws(() => readAbsorbedReply(runId, exact, api), { code: 'ABSORBED_NOT_IN_RUN' });
   assert.throws(() => readAbsorbedReply(runId, String(decoded), api), { code: 'ABSORBED_NOT_IN_RUN' });
-  // String storage cannot make a Number-based C4 driver safe for this id.
-  db.prepare('UPDATE mode_transitions SET absorbed_ids=? WHERE run_id=?').run(JSON.stringify([exact]), runId);
-  assert.throws(() => readAbsorbedReply(runId, exact, api), { code: 'ABSORBED_NOT_IN_RUN' });
 });

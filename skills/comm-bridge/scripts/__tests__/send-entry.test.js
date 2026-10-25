@@ -61,7 +61,8 @@ test('IB-10 void requires environment ownership and retains delivered record wit
   store.insertConversation('in', 'demo', 'endpoint', 'group owner', { groupName: 'owned' });
   const grouped = recordVoid(request, 'group note', { api, env: { ZYLOS_SESSION_GROUP: 'demo:owned', ZYLOS_RUN_ID: 'run-a', ZYLOS_DIR: dir } });
   assert.equal(grouped.session_group, 'demo:owned');
-  assert.throws(() => recordVoid(request, 'empty group', { api, env: { ZYLOS_SESSION_GROUP: '', ZYLOS_RUN_ID: 'run-a' } }), { code: 'NO_SESSION_ENV' });
+  assert.throws(() => recordVoid(request, 'empty group', { api, env: { ZYLOS_SESSION_GROUP: '', ZYLOS_RUN_ID: 'run-a' } }), { code: 'UNKNOWN_GROUP' });
+  assert.equal(db.prepare('SELECT count(*) n FROM conversations').get().n, 3);
 });
 
 test('IF-68 precheck failures leave D1 D5 D6 empty and never invoke component', async t => {

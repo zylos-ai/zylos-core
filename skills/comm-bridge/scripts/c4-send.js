@@ -60,6 +60,7 @@ async function main() {
     if (error.message.startsWith('Usage:')) console.log(error.message);
     if (error.code === 'SEND_FAILED') {
       console.log(`[C4] Failed to send message via ${externalChannel} (exit code: ${error.exitCode})`);
+      console.error(`[C4] SEND_FAILED: ${error.message}`);
       process.exitCode = error.exitCode ?? 1;
       return;
     }

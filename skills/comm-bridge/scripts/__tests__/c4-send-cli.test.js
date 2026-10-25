@@ -137,6 +137,16 @@ describe('c4-send validation', () => {
 // -- void channel (#689) --
 
 describe('c4-send void channel', () => {
+  it('rejects a present empty group without falling back to the run id origin', () => {
+    withTmpDir(({ env }) => {
+      const result = cli(['void', 'handoff', '--stdin'], { ...env, ZYLOS_SESSION_GROUP: '', ZYLOS_RUN_ID: 'run-a' }, 'note');
+      assert.equal(result.status, 1);
+      assert.equal(result.stdout, '');
+      assert.equal(result.stderr, '[C4] UNKNOWN_GROUP: Unknown recording group\n');
+      assert.deepEqual(dbRecent(env), []);
+    });
+  });
+
   it('records the message in c4.db and exits 0 without a skill directory', () => {
     withTmpDir(({ env }) => {
       const { stdout, status } = cli(['void', 'session-handoff', 'handoff summary'], env);
@@ -202,7 +212,7 @@ describe('c4-send failed channel', () => {
       const result = cli(['bad-channel', '--stdin'], env, 'Hello');
       assert.equal(result.status, 3);
       assert.equal(result.stdout, '[C4] Failed to send message via bad-channel (exit code: 3)\n');
-      assert.equal(result.stderr, '');
+      assert.equal(result.stderr, '[C4] SEND_FAILED: Failed to send: component exit 3; audit retained; delivery unconfirmed\n');
       assert.equal(dbRecent(env)[0].status, 'delivered');
     });
   });

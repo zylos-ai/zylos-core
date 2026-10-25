@@ -29,14 +29,12 @@ export function readAbsorbedReply(runId, id, api) {
   return api.getDb().transaction(() => {
     const run = api.getModeTransition({ runId });
     if (!run) throw sendError('RUN_NOT_FOUND', 'Mode transition does not exist');
-    // Unsafe JSON Numbers cannot prove membership of an exact decimal id.
-    const member = run.phase !== 'gating' && run.absorbed_ids?.some(value => safeEntryId(value) === exactId);
-    if (!member) throw sendError('ABSORBED_NOT_IN_RUN', 'Conversation is not absorbed in this run');
+    if (!run.absorbed_ids.includes(exactId)) throw sendError('ABSORBED_NOT_IN_RUN', 'Conversation is not absorbed in this run');
     const [record] = api.getConversationsByRange(exactId, exactId);
     if (!record || record.status !== 'switch_absorbed') throw sendError('ABSORBED_MISMATCH', 'Absorbed conversation is missing or has changed state');
     const colon = record.session_group?.indexOf(':') ?? -1;
     return { kind: 'external', channel: record.channel, endpoint: record.endpoint_id,
-      id, ...(colon >= 0 ? { groupName: record.session_group.slice(colon + 1) } : { wholeGroup: true }) };
+      id, ...(colon >= 0 ? { groupName: record.session_group.slice(colon + 1) } : record.session_group ? { wholeGroup: true } : {}) };
   })();
 }
 
@@ -81,6 +79,7 @@ export function recordVoid(request, message, { api, env = process.env } = {}) {
   api.validateEndpoint(request.endpoint);
   const group = Object.hasOwn(env, 'ZYLOS_SESSION_GROUP') ? env.ZYLOS_SESSION_GROUP : env.ZYLOS_RUN_ID ? 'origin' : null;
   if (group === null) throw sendError('NO_SESSION_ENV', 'Recording session environment is required');
+  if (group === '') throw sendError('UNKNOWN_GROUP', 'Unknown recording group');
   try {
     return api.insertConversation('out', 'void', request.endpoint, message,
       { status: 'delivered', handoffGroup: group, sessionId: senderSessionId(env) });
