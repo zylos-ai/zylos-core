@@ -45,7 +45,8 @@ export function createTestEnvironment() {
 
   try {
     const home = path.join(root, 'home');
-    const zylos = path.join(root, 'zylos');
+    // Keep the normal ~/zylos layout for home-relative hook/config paths.
+    const zylos = path.join(home, 'zylos');
     fs.mkdirSync(home);
     fs.mkdirSync(zylos);
     assert(!isWithin(realHome, fs.realpathSync(home)), 'Test HOME must be outside the real home');
