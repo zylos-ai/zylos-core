@@ -9,6 +9,16 @@ import { RestartRequestStore } from '../restart-request-store.js';
 import { HealthStore } from '../health-store.js';
 import { readRuntimeHealth } from '../../../../cli/lib/session-state-reader.js';
 import { observeRuntimeProcess } from '../guardian.js';
+function registered(reply) {
+  assert.equal(reply.result, 'registered');
+  assert.equal(Object.hasOwn(reply, 'attemptCount'), false);
+  assert.equal(Object.hasOwn(reply, 'attemptAt'), false);
+}
+function scheduling(state) {
+  const s = state.scheduling;
+  return [s.restartFailureCount, s.lastRecoveryAt, s.lastDownCheckAt];
+}
+
 function variant(file, from, to, imports = {}) {
   const url = new URL(file, import.meta.url); let source = fs.readFileSync(url, 'utf8');
   if (from) { assert.equal(source.split(from).length, 2); source = source.replace(from, to); }
@@ -62,8 +72,8 @@ test('IF-29 composed owner four result branches and stale identity preserve pend
 async function appearance(t, create) {
   const f = fixture(t, create), state = f.store.read(); state.health = 'unavailable'; state.scheduling.restartFailureCount = 1; state.scheduling.lastRecoveryAt = 1792000000; f.store.write(state);
   f.clock(1792000060); const request = { version: 1, type: 'start_attempt', requestId: 'sa-1792000060000-123456789abc', runtime: 'claude', sessionGroup: f.scene.sessionGroup, runId: f.scene.runId };
-  assert.equal((await f.owner.health.registerStartAttempt(request)).attemptCount, 2);
-  const expected = [2, 1792000060], values = () => { const s = f.store.read().scheduling; return [s.restartFailureCount, s.lastRecoveryAt]; };
+  registered(await f.owner.health.registerStartAttempt(request));assert.deepEqual(scheduling(f.store.read()), [2, 1792000060, 0]);
+  const expected = [2, 1792000060, 0], values = () => scheduling(f.store.read());
   f.state.current.push({ ...f.scene, ready: false }); await f.owner.observer.observeScene(f.state.current[0]); assert.deepEqual(values(), expected);
   f.state.current[0].ready = true; await f.owner.observer.observeScene(f.state.current[0]); assert.deepEqual(values(), expected);
   await observeRuntimeProcess({ isRunning: async () => ({ tmux: true, process: true }) }, { tmuxName: 'isolated-fixture' }); assert.deepEqual(values(), expected);

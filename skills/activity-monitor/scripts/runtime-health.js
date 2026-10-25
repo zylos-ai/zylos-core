@@ -101,8 +101,7 @@ export class RuntimeHealthCoordinator {
       else { next.scheduling.restartFailureCount++; next.scheduling.lastRecoveryAt = now; }
       try { store.write(next); } catch { return reject('health_write_failed'); }
       this.associations.set(runtime, {sessionGroup:request.sessionGroup,runId:request.runId});
-      return {...envelope,ok:true,result:'registered',reason:accelerated ? 'user_message' : 'recovery_due',attemptAt:now,
-        ...(state.health === 'down' ? {} : {attemptCount:next.scheduling.restartFailureCount})};
+      return {...envelope,ok:true,result:'registered',reason:accelerated ? 'user_message' : 'recovery_due'};
     });
   }
   notifyUserMessage(runtime) {
