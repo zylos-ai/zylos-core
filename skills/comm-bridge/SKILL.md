@@ -70,7 +70,7 @@ The activity monitor writes `~/zylos/activity-monitor/agent-status.json` which i
 
 **Fail-open semantics**: If the status file is missing or malformed, health is assumed `ok` — intake is never blocked by a read failure.
 
-When health is not `ok`, `c4-receive.js` asks the activity monitor MessageRouter how to route the current message. Unhealthy messages are recorded as delivered and receive an immediate status reply when replies are enabled; `--no-reply` messages are accepted silently. If the MessageRouter IPC is unavailable, `c4-receive.js` falls back to the status file with the same delivered/current-message behavior.
+`c4-receive.js` asks the activity monitor for a route before committing inbound work. An explicit pending decision queues the message. Authentication rejection and unavailable routes create terminal failed rows, including when replies are suppressed or disabled. Status replies do not mean the inbound work was delivered. If IPC is unavailable, the entry reads only the target runtime's health record; a missing or unreadable record leaves work pending.
 
 ## Keystroke Delivery
 

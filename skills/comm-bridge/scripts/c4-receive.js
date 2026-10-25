@@ -1,336 +1,118 @@
 #!/usr/bin/env node
-/**
- * C4 Communication Bridge - Receive Interface
- * Receives messages from external channels and queues them for Claude
- */
-
-import path from 'path';
-import fs from 'fs';
-import net from 'net';
-import { fileURLToPath } from 'url';
-import {
-  insertConversation,
-  close,
-} from './c4-db.js';
+import { pathToFileURL } from 'node:url';
+import * as database from './c4-db.js';
 import { reserveStatusNotice, sendStatusNotice } from './status-notice.js';
-import { messageForStatus } from './status-notice-templates.js';
 import { validateChannel, validateEndpoint } from './c4-validate.js';
-import {
-  AGENT_STATUS_FILE,
-  ACTIVITY_MONITOR_DIR
-} from './c4-config.js';
+import { validateGroupName, composeSessionGroup, dataError } from './c4-session-group.js';
+import { appendEntryEvent } from './c4-entry-events.js';
+import { queryRoute } from './c4-entry-route.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const AM_SOCKET_PATH = path.join(ACTIVITY_MONITOR_DIR, 'am.sock');
-const ROUTER_IPC_TIMEOUT_MS = 30000;
-
-function printUsage() {
-  console.log('Usage: node c4-receive.js --channel <channel> [--endpoint <endpoint_id>] [--priority <1-3>] [--no-reply] [--block-queue-until-idle] [--json] --content "<message>"');
-  console.log('');
-  console.log('Options:');
-  console.log('  --no-reply       Mark as not needing a reply target (use for system messages)');
-  console.log('  --block-queue-until-idle');
-  console.log('                   Wait for sustained idle, then block subsequent dispatch until execution settles');
-  console.log('                   Legacy alias: --require-idle');
-  console.log('  --json           Output structured JSON');
-  console.log('');
-  console.log('Priority levels:');
-  console.log('  1 = Urgent (system messages)');
-  console.log('  2 = High (important user messages)');
-  console.log('  3 = Normal (default)');
-}
-
-function parseArgs(args) {
-  const result = {
-    channel: null,
-    endpoint: null,
-    content: null,
-    priority: 3,
-    noReply: false,
-    requireIdle: false,
-    json: false
-  };
-
+export function parseReceiveArgs(args) {
+  const result = { channel: null, endpoint: null, content: null, priority: 3,
+    noReply: false, requireIdle: false, json: false };
+  const values = { '--channel': 'channel', '--endpoint': 'endpoint', '--content': 'content',
+    '--priority': 'priority', '--session-group': 'groupName', '--core-source': 'coreSource' };
+  const flags = { '--no-reply': 'noReply', '--json': 'json', '--require-idle': 'requireIdle', '--block-queue-until-idle': 'requireIdle' };
   for (let i = 0; i < args.length; i++) {
-    switch (args[i]) {
-      case '--channel':
-        result.channel = args[++i];
-        break;
-      case '--endpoint':
-        result.endpoint = args[++i];
-        break;
-      case '--priority':
-        result.priority = parseInt(args[++i], 10);
-        break;
-      case '--no-reply':
-        result.noReply = true;
-        break;
-      case '--require-idle':
-      case '--block-queue-until-idle':
-        result.requireIdle = true;
-        break;
-      case '--json':
-        result.json = true;
-        break;
-      case '--content':
-        result.content = args[++i];
-        break;
-      default:
-        if (args[i].startsWith('--')) {
-          return { error: `Unknown option: ${args[i]}` };
-        }
-        return { error: `Unexpected argument: ${args[i]}` };
-    }
+    const arg = args[i];
+    if (flags[arg]) result[flags[arg]] = true;
+    else if (values[arg]) {
+      if (args[i + 1] === undefined || args[i + 1].startsWith('--')) throw dataError('INVALID_ARGS', `Missing value for ${arg}`);
+      result[values[arg]] = args[++i];
+    } else throw dataError('INVALID_ARGS', `Unknown option: ${arg}`);
   }
-
+  if (!result.content) throw dataError('INVALID_ARGS', '--content is required');
+  if (!result.channel && !result.noReply) throw dataError('INVALID_ARGS', '--channel is required unless --no-reply is set');
+  if (!/^[123]$/.test(String(result.priority))) throw dataError('INVALID_ARGS', '--priority must be an integer 1, 2, or 3');
+  result.priority = Number(result.priority);
+  if (result.coreSource !== undefined && result.coreSource !== 'scheduler') throw dataError('INVALID_ARGS', 'Unknown --core-source');
   return result;
 }
 
-function readHealthStatusFile() {
+export async function receive(args, dependencies = {}) {
+  const db = dependencies.db ?? database;
+  const routeQuery = dependencies.queryRoute ?? queryRoute;
+  const append = dependencies.appendEntryEvent ?? appendEntryEvent;
+  const reserve = dependencies.reserveStatusNotice ?? reserveStatusNotice;
+  const send = dependencies.sendStatusNotice ?? sendStatusNotice;
+  const diagnostic = dependencies.diagnostic ?? console.error;
+  const input = parseReceiveArgs(args);
+  const { channel: rawChannel, endpoint, content, noReply, priority, requireIdle, groupName, coreSource } = input;
+  if (endpoint !== null) {
+    try { validateEndpoint(endpoint); }
+    catch (error) { throw dataError('INVALID_ARGS', `invalid endpoint: ${error.message}`); }
+  }
   try {
-    if (!fs.existsSync(AGENT_STATUS_FILE)) {
-      return { health: 'ok' };
-    }
-    let status = null;
-    let lastErr = null;
-    for (let attempt = 0; attempt < 3; attempt++) {
+    if (rawChannel) (dependencies.validateChannel ?? validateChannel)(rawChannel, true);
+    if (groupName !== undefined) validateGroupName(groupName);
+  } catch (error) {
+    const code = error.code?.startsWith('SESSION_GROUP_') ? error.code : 'INVALID_ARGS';
+    await append({ event: 'group_rejected', conversation_id: null, channel: rawChannel || '', endpoint: endpoint || '',
+      session_group: '', runtime: '', reason_code: code, detail: '' });
+    throw dataError(code, code === 'INVALID_ARGS' ? `invalid channel or endpoint: ${error.message}` : error.message);
+  }
+  const channel = rawChannel || 'system';
+  const binding = rawChannel ? db.getChannelNamespace(rawChannel) : null;
+  const preGroup = rawChannel ? (binding ? composeSessionGroup(binding.namespace, groupName) : null) : 'origin';
+  const request = { version: 2, type: 'route', requestId: `${process.pid}-${Date.now()}`, channel,
+    endpoint, noReply, receivedAt: Date.now(), sessionGroup: preGroup, componentName: rawChannel,
+    ...(coreSource ? { coreSide: true, coreSource } : {}) };
+  const route = await routeQuery(request);
+  const pending = route.decision === 'pending';
+  const auth = route.decision === 'auth_rejected';
+  let record;
+  try {
+    record = db.insertConversation('in', channel, noReply ? null : endpoint, content, {
+      status: pending ? 'pending' : 'failed', priority, requireIdle,
+      ...(auth ? { deliveryAction: 'auth_rejected' } : {}),
+      ...(groupName !== undefined ? { groupName } : {}) });
+  } catch (error) {
+    throw dataError(error.code === 'DB_BUSY' ? 'DB_BUSY' : 'INTERNAL_ERROR', 'Failed to commit inbound message',
+      { persisted: error.persisted === undefined ? [] : error.persisted, cause: error });
+  }
+  const result = { ok: true, action: pending ? 'queued' : auth ? 'auth_rejected' : 'delivered',
+    id: record.id, sessionGroup: record.session_group, runtime: route.runtime };
+  if (auth) result.reasonLogged = await append({ event: 'auth_rejected', conversation_id: record.id,
+    channel: record.channel, endpoint: record.endpoint_id || '', session_group: record.session_group,
+    runtime: route.runtime, reason_code: route.auth.result === 'failed' ? 'auth_check_failed' : 'auth_check_unconfirmed',
+    detail: route.auth.detail });
+  if (pending || noReply) return result;
+  const persisted = ['D1'];
+  let claim;
+  const finalRoute = { ...route, sessionGroup: record.session_group };
+  try { claim = reserve(channel, endpoint, finalRoute); }
+  catch {
+    diagnostic(`status notice reservation failed after conversation ${record.id} committed`);
+    throw dataError('UNHEALTHY_NOTIFY_FAILED', 'Inbound committed; status notice reservation failed. Do not resend.', { persisted, id: record.id });
+  }
+  if (claim.suppressed) {
+    if (!auth) {
       try {
-        status = JSON.parse(fs.readFileSync(AGENT_STATUS_FILE, 'utf8'));
-        break;
-      } catch (err) {
-        lastErr = err;
-      }
+        if (!db.markStatusNoticeSuppressed(record.id, { sessionGroup: record.session_group,
+          channel: record.channel, endpointId: record.endpoint_id, health: route.health || 'unavailable', reason: route.reason || route.health || 'unavailable' })) {
+          diagnostic(`status notice suppression did not match conversation ${record.id}`);
+        }
+      } catch { diagnostic(`status notice suppression update failed for conversation ${record.id}`); }
+      result.action = 'suppressed';
     }
-    if (!status && lastErr) throw lastErr;
-    if (status && typeof status.health === 'string') {
-      return status;
-    }
-    return { health: 'ok' };
-  } catch {
-    // Fail-open by design: status read failures do not block intake.
-    return { health: 'ok' };
+    return result;
   }
+  const sent = send(claim, route.userMessage, finalRoute);
+  if (sent.outcome === 'sent') return result;
+  throw dataError(sent.outcome === 'failed' ? 'UNHEALTHY_NOTIFY_FAILED' : 'UNHEALTHY_NOTIFY_UNCERTAIN',
+    `Inbound committed; status notice ${sent.outcome}. Do not resend.`, { persisted, id: record.id });
 }
 
-function publicHealth(health) {
-  if (health === 'ok' || health === 'rate_limited' || health === 'auth_failed') {
-    return health;
-  }
-  return 'unavailable';
-}
-
-function buildFallbackMessage(status) {
-  return messageForStatus({ health: publicHealth(status.health), reason: status.unavailable_reason,
-    noticeCode:status.health_notice?.noticeCode, resetAt:status.health_notice?.resetAt });
-}
-
-function fallbackFileRoute() {
-  const status = readHealthStatusFile();
-  const health = publicHealth(status?.health);
-  if (!status || typeof status.health !== 'string' || health === 'ok') {
-    return { recovered: true, health: 'ok', fallback: true };
-  }
-  return {
-    recovered: false,
-    health,
-    reason: status.unavailable_reason || health,
-    healthEpisode: status.health_episode,
-    userMessage: buildFallbackMessage(status),
-    fallback: true
-  };
-}
-
-function ipcRoute(request) {
-  return new Promise((resolve, reject) => {
-    const socket = net.createConnection(AM_SOCKET_PATH);
-    let data = '';
-    let settled = false;
-
-    function settle(fn, value) {
-      if (settled) return;
-      settled = true;
-      socket.destroy();
-      fn(value);
-    }
-
-    function tryParseResponse(force = false) {
-      const newlineIndex = data.indexOf('\n');
-      if (newlineIndex === -1 && !force) return;
-      const raw = newlineIndex === -1 ? data : data.slice(0, newlineIndex);
-      try {
-        settle(resolve, JSON.parse(raw));
-      } catch {
-        settle(reject, new Error('IPC response parse error'));
-      }
-    }
-
-    socket.setTimeout(ROUTER_IPC_TIMEOUT_MS);
-    socket.on('connect', () => {
-      socket.write(`${JSON.stringify(request)}\n`);
-    });
-    socket.on('data', (chunk) => {
-      data += chunk;
-      tryParseResponse();
-    });
-    socket.on('end', () => {
-      tryParseResponse(true);
-    });
-    socket.on('timeout', () => {
-      settle(reject, new Error('IPC timeout'));
-    });
-    socket.on('error', (err) => settle(reject, err));
-  });
-}
-
-function isValidRouteDecision(decision, noReply) {
-  if (!decision || typeof decision.recovered !== 'boolean') return false;
-  if (decision.recovered) return true;
-  if (typeof decision.health !== 'string') return false;
-  if (noReply) return true;
-  return typeof decision.userMessage === 'string' && decision.userMessage.length > 0;
-}
-
-async function queryRoute(channel, endpoint, noReply) {
+export async function main(args = process.argv.slice(2)) {
+  const json = args.includes('--json');
   try {
-    const decision = await ipcRoute({
-      version: 1,
-      type: 'route',
-      requestId: `${process.pid}-${Date.now()}`,
-      channel,
-      endpoint,
-      noReply,
-      receivedAt: Date.now()
-    });
-    if (!isValidRouteDecision(decision, noReply)) {
-      throw new Error('IPC response invalid route decision');
-    }
-    return decision;
-  } catch {
-    return fallbackFileRoute();
-  }
+    const result = await receive(args);
+    console.log(json ? JSON.stringify(result) : `[C4] Message ${result.action === 'queued' ? 'queued' : 'handled'} (id=${result.id}, action=${result.action})`);
+  } catch (error) {
+    const code = error.code ?? 'INTERNAL_ERROR';
+    if (json) console.log(JSON.stringify({ ok: false, error: { code, message: error.message, persisted: error.persisted === undefined ? [] : error.persisted, ...(error.id ? { id: error.id } : {}) } }));
+    else console.error(`Error [${code}]: ${error.message}`);
+    process.exitCode = 1;
+  } finally { database.close(); }
 }
-
-function emitSuccess(json, recordId, action = 'queued') {
-  if (json) {
-    console.log(JSON.stringify({ ok: true, action, id: recordId }));
-    return;
-  }
-  if (action === 'queued') {
-    console.log(`[C4] Message queued (id=${recordId})`);
-  } else {
-    console.log(`[C4] Message handled (id=${recordId}, action=${action})`);
-  }
-}
-
-function emitError(json, code, message, exitCode = 1) {
-  if (json) {
-    console.log(JSON.stringify({
-      ok: false,
-      error: { code, message }
-    }));
-  } else {
-    console.error(`Error: ${message}`);
-  }
-  process.exit(exitCode);
-}
-
-function statusNoticeType(route) {
-  return publicHealth(route?.health);
-}
-
-function statusNoticeReason(route) {
-  return String(route?.reason || statusNoticeType(route) || 'default');
-}
-
-async function main() {
-  const parsed = parseArgs(process.argv.slice(2));
-  if (parsed.error) {
-    const asJson = process.argv.slice(2).includes('--json');
-    emitError(asJson, 'INVALID_ARGS', parsed.error);
-  }
-
-  const { channel: rawChannel, endpoint, content, priority, noReply, requireIdle, json } = parsed;
-  let channel = rawChannel;
-
-  if (!channel && noReply) {
-    channel = 'system';
-  }
-
-  if (!channel && !noReply) {
-    if (!json) printUsage();
-    emitError(json, 'INVALID_ARGS', '--channel is required unless --no-reply is set');
-  }
-
-  if (!content) {
-    if (!json) printUsage();
-    emitError(json, 'INVALID_ARGS', '--content is required');
-  }
-
-  if (!Number.isInteger(priority) || priority < 1 || priority > 3) {
-    if (!json) printUsage();
-    emitError(json, 'INVALID_ARGS', '--priority must be an integer 1, 2, or 3');
-  }
-
-  try {
-    validateChannel(channel, !noReply);
-  } catch (err) {
-    emitError(json, 'INVALID_ARGS', `invalid channel: ${err.message}`);
-  }
-
-  if (endpoint) {
-    try {
-      validateEndpoint(endpoint);
-    } catch (err) {
-      emitError(json, 'INVALID_ARGS', `invalid endpoint: ${err.message}`);
-    }
-  }
-
-  const route = await queryRoute(channel, endpoint, noReply);
-  const replyEndpoint = noReply ? null : endpoint;
-  let dbContent = content;
-  const dbStatus = route.recovered ? 'pending' : 'failed';
-  let cooldown = null;
-
-  if (!route.recovered && !noReply) {
-    try {
-      cooldown = reserveStatusNotice(channel, endpoint, route);
-    } catch (err) {
-      emitError(json, 'INTERNAL_ERROR', `failed to reserve status cooldown: ${err.message}`);
-    }
-    if (cooldown.suppressed) {
-      dbContent += `\n\n[C4] Status notification suppressed by cooldown or pending send (${cooldown.reason}) while health=${statusNoticeType(route)} reason=${statusNoticeReason(route)}.`;
-      try {
-        const record = insertConversation('in', channel, replyEndpoint, dbContent, dbStatus, priority, requireIdle, 'suppressed');
-        emitSuccess(json, record.id, 'suppressed');
-        return;
-      } catch (err) {
-        emitError(json, 'INTERNAL_ERROR', `failed to record suppressed unhealthy message: ${err.message}`);
-      } finally {
-        close();
-      }
-    }
-  }
-
-  try {
-    const record = insertConversation('in', channel, replyEndpoint, dbContent, dbStatus, priority, requireIdle);
-    if (route.recovered || noReply) {
-      emitSuccess(json, record.id, route.recovered ? 'queued' : 'delivered');
-      return;
-    }
-
-    const sendResult = sendStatusNotice(cooldown, route.userMessage, route);
-    if (sendResult.outcome === 'sent') {
-      emitSuccess(json, record.id, 'delivered');
-      return;
-    }
-    emitError(json, sendResult.outcome === 'uncertain' ? 'UNHEALTHY_NOTIFY_UNCERTAIN' : 'UNHEALTHY_NOTIFY_FAILED',
-      `Status notification ${sendResult.outcome}; no automatic resend (${sendResult.code}).`);
-  } catch (err) {
-    emitError(json, 'INTERNAL_ERROR', `failed to queue message: ${err.message}`);
-  } finally {
-    close();
-  }
-}
-
-main();
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) await main();

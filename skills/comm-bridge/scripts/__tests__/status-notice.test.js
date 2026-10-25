@@ -41,7 +41,7 @@ for (const mode of ['timeout', 'crash', 'missing', 'throw']) test(`sender ${mode
   const code = `import {spawnSync} from 'node:child_process';
     import {reserveStatusNotice,sendStatusNotice} from ${JSON.stringify(senderUrl)};
     import {close} from ${JSON.stringify(dbUrl)};
-    const claim=reserveStatusNotice('fake','group',{healthEpisode:'episode'});
+    const claim=reserveStatusNotice('fake','group',{sessionGroup:'fake',runtime:'claude'});
     const result=sendStatusNotice(claim,'notice',{}, {spawn:(cmd,args,options)=>{
       ${mode === 'crash' ? "process.kill(process.pid,'SIGKILL');" : mode === 'throw' ? "throw Error('injected');" : 'return spawnSync(cmd,args,{...options,timeout:500});'}
     }});console.log(JSON.stringify(result));close();`;
@@ -68,7 +68,7 @@ for (const mode of ['timeout', 'crash', 'missing', 'throw']) test(`sender ${mode
   try {
     assert.equal(db.prepare('SELECT COUNT(*) n FROM status_notice_cooldowns').get().n, mode === 'missing' ? 0 : 1);
     const row = db.prepare('SELECT * FROM status_notice_cooldowns').get();
-    const input = { key: statusNoticeKey('fake','group'), episode: 'episode', attemptId: 'replacement',
+    const input = { key: statusNoticeKey('fake','group','unavailable','unavailable','fake','claude'), episode: 'episode', attemptId: 'replacement',
       channel: 'fake', endpoint: 'group', normalizedEndpoint: 'group', now: row ? row.expires_at - 1 : Math.floor(Date.now() / 1000) };
     const next = claimStatusNotice(input, db);
     assert.equal(next.suppressed, mode !== 'missing');
@@ -98,7 +98,7 @@ test('a notice without an endpoint uses the sender stdin broadcast contract', t 
   fs.writeFileSync(path.join(channel, 'send.js'), `import fs from 'node:fs'; fs.writeFileSync(${JSON.stringify(marker)}, JSON.stringify(process.argv.slice(2)));`);
   const code = `import {reserveStatusNotice,sendStatusNotice} from ${JSON.stringify(new URL('../status-notice.js', import.meta.url).href)};
     import {close} from ${JSON.stringify(new URL('../c4-db.js', import.meta.url).href)};
-    const claim=reserveStatusNotice('fake',null,{healthEpisode:'episode'});
+    const claim=reserveStatusNotice('fake',null,{sessionGroup:'fake',runtime:'claude'});
     console.log(JSON.stringify(sendStatusNotice(claim,'broadcast notice',{}, {diagnostic:false})));close();`;
   const result = spawnSync(process.execPath, ['--input-type=module', '-e', code], {
     env: { ...process.env, ZYLOS_DIR: root }, encoding: 'utf8', timeout: 5000,
