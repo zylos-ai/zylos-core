@@ -32,5 +32,6 @@ const lifecycle = new SupervisorLifecycle({ db, observeGroup,
 await barrier('after-fence');
 // Test-only negative control: an unsafe restart discards the durable authority.
 if (pause === 'mutant-clear-fence') db.clearDrainFence('origin', { expectedReason: 'upgrade', expectedRunId: 'run-1' });
-const result = await lifecycle.advanceReclaim(db.getDrainFence('origin'), { configuration: { mode: 'multi' } });
+const result = await lifecycle.advanceReclaim(db.getDrainFence('origin'), { configuration: { mode: 'multi' },
+  transition: db.getModeTransition(), fences: db.listDrainFences(), restartRequests: [], scenes: [await observeGroup('origin')] });
 process.send({ result }); database.close();

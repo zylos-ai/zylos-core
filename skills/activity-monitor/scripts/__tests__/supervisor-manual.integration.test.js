@@ -20,7 +20,7 @@ function start(t, f, requestsFile, mode, pause) {
   return { child, exited, message };
 }
 // IF-36 / DM F9 / M4 2.12: real crash windows with durable intent + SQLite gate.
-// The pinned original object must be removed while a same-name replacement survives.
+// The Origin name plus runId is the target; renamed runs and replacements survive.
 for (const mode of ['single', 'multi']) for (const pause of ['after-intent', 'after-fence', 'after-stop', 'after-clear']) {
   test(`manual ${mode} resumes after SIGKILL ${pause} without stopping replacement`, { timeout: 15000 }, async t => {
     const f = readyTmuxTarget(t, { prefix: 'p05-manual-', mode });
@@ -45,7 +45,9 @@ for (const mode of ['single', 'multi']) for (const pause of ['after-intent', 'af
     assert.deepEqual(await second.message, { result: 'done' });
     assert.equal((await second.exited)[0], 0);
     assert.deepEqual(store.read(), []); assert.equal(db.getDrainFence(group), null);
-    assert.equal((await scenes.observeFixedTarget(original)).present, false);
+    if (['after-intent', 'after-fence'].includes(pause)) {
+      assert.equal(f.tmux('show-environment', '-t', '=old-renamed', 'ZYLOS_RUN_ID'), 'ZYLOS_RUN_ID=run-1');
+    }
     assert.equal(f.tmux('show-environment', '-t', '=zylos-group-origin', 'ZYLOS_RUN_ID'), 'ZYLOS_RUN_ID=replacement');
   });
 }

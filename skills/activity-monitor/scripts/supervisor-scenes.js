@@ -150,8 +150,6 @@ export class SupervisorScenes {
         readReady: this.readReady, readProcessTree: async () => [] });
       if (!target.present) return absent(group, this.env);
       return { sessionGroup: group, present: true, tmuxName: target.tmuxName,
-        runDir: groupRunDir(group ?? 'origin', this.env),
-        createdAt: target.createdAt * 1000, currentSessionTs: target.f3?.ts ?? null,
         runId: target.runId, runtime: target.runtime, sessionId: target.sessionId,
         ready: target.ready && scopeMatches(scope, target), launchConfig: target.launchConfig,
         tmuxTarget: descriptor(target) };
@@ -193,69 +191,6 @@ export class SupervisorScenes {
 
   async readScreen(scene) {
     return this.withTarget(scene, ({ connection, target, adapter }) => adapter.captureScreen({ connection, target }));
-  }
-
-  async fixedConnection(request) {
-    if (!validTarget(request.tmuxTarget) || typeof request.expectedRunId !== 'string' || !request.expectedRunId) {
-      throw fail('TARGET_SNAPSHOT_UNKNOWN', 'Saved target is invalid');
-    }
-    const connection = await this.open(this.connectionOptions);
-    try {
-      connection.bindTarget({ serverGeneration: request.tmuxTarget.serverGeneration,
-        tmuxSessionId: request.tmuxTarget.sessionId, paneId: request.tmuxTarget.paneId });
-      return connection;
-    } catch (error) { connection.close(); throw error; }
-  }
-
-  async verifyFixed(connection, request) {
-    const session = (await connection.command(['display-message', '-p', '-t', request.tmuxTarget.sessionId, '#{session_id}'], { kind: 'session' })).trim();
-    if (session !== request.tmuxTarget.sessionId) throw fail('TARGET_GONE', 'Original session is absent');
-    const environment = await connection.command(['show-environment', '-t', request.tmuxTarget.sessionId], { kind: 'session' });
-    const runId = environment.split('\n').find(line => line.startsWith('ZYLOS_RUN_ID='))?.slice('ZYLOS_RUN_ID='.length);
-    if (runId !== request.expectedRunId) throw fail('RUNID_MISMATCH', 'Original session run identity changed');
-    if (request.expectedSessionId !== undefined) {
-      const ready = await this.readReady('origin');
-      // F3 may already belong to a replacement Origin while the pinned old
-      // object still exists. Only an observed context change in the same run
-      // rejects this operation; an unreported /clear is not atomically fenced.
-      const validReady = ready && typeof ready.runId === 'string' && ready.runId &&
-        typeof ready.sessionId === 'string' && ready.sessionId && Number.isInteger(ready.ts) &&
-        Array.isArray(ready.startupControlIds) && ready.startupControlIds.every(Number.isInteger);
-      if (validReady && ready.runId === request.expectedRunId && ready.sessionId !== request.expectedSessionId) {
-        throw fail('TARGET_MISMATCH', 'Original run context changed');
-      }
-    }
-  }
-
-  async observeFixedTarget(request) {
-    let connection;
-    try {
-      connection = await this.fixedConnection(request);
-      await this.verifyFixed(connection, request);
-      return { present: true, runId: request.expectedRunId, tmuxTarget: request.tmuxTarget };
-    } catch (error) {
-      if (['TMUX_NO_SERVER', 'TARGET_GONE', 'GENERATION_CHANGED'].includes(error.code)) return { present: false };
-      throw error;
-    } finally { connection?.close(); }
-  }
-
-  async stopFixedTarget(request) {
-    let connection;
-    try {
-      connection = await this.fixedConnection(request);
-      await this.verifyFixed(connection, request);
-      await connection.command(['kill-session', '-t', request.tmuxTarget.sessionId], { kind: 'session' });
-      try {
-        await connection.command(['display-message', '-p', '-t', request.tmuxTarget.sessionId, '#{session_id}'], { kind: 'session' });
-      } catch (error) {
-        if (['TARGET_GONE', 'GENERATION_CHANGED', 'TMUX_NO_SERVER'].includes(error.code)) return;
-        throw error;
-      }
-      throw fail('STOP_UNCONFIRMED', 'Original session removal is unconfirmed');
-    } catch (error) {
-      if (['TARGET_GONE', 'GENERATION_CHANGED', 'TMUX_NO_SERVER'].includes(error.code)) return;
-      throw error;
-    } finally { connection?.close(); }
   }
 
   async stop(scene) {

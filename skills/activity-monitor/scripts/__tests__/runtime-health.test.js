@@ -44,7 +44,7 @@ test('start registration validates request and evaluates restrictions in order',
   f.setScene([]);assert.deepEqual((await f.health.registerStartAttempt(f.request())).code,'probe_inflight');
   assert.equal(Object.hasOwn(await f.health.registerStartAttempt(f.request()),'notBefore'),false);
   f.setProbe(false);assert.equal((await f.health.registerStartAttempt(f.request())).notBefore,f.now()+500000);
-  f.set({}, {cooldownUntil:0});f.setCache({version:2,runtime:'claude',health:'rate_limited',reason:'rate_limit_unclassified',expiresAt:f.now()+30000});
+  f.set({}, {cooldownUntil:0});f.setCache({version:2,recovered:false,runtime:'claude',health:'rate_limited',reason:'rate_limit_unclassified',expiresAt:f.now()+30000});
   assert.equal((await f.health.registerStartAttempt(f.request())).code,'probe_cache');
   f.setCache(null);const answer=await f.health.registerStartAttempt(f.request());
   registered(answer);assert.deepEqual(scheduling(f.read()),[1,f.now()/1000,0]);
@@ -186,13 +186,17 @@ test('down and recovering share the normalized negative cache across all recover
     const router = new MessageRouter({ healthCoordinator: f.health, now: f.now,
       cacheDirectory: path.join(f.root, 'cache'), resolveTargetRuntime: () => 'claude',
       requestProbe: () => { probes++; } });
-    f.health.readNegativeCache = (runtime, state) => router.readNegativeCache(runtime, state.health, state.reason);
+    f.health.readNegativeCache = runtime => router.readNegativeCache(runtime);
     const observer = new SupervisorHealthObserver({ coordinator: f.health, now: f.now });
-    router.writeNegativeCache('claude', 'unavailable', 'runtime_unavailable');
     const request = { version: 2, type: 'route', requestId: 'cache-regression', channel: null,
       endpoint: null, componentName: null, sessionGroup: 'telegram:one', noReply: true, receivedAt: f.now() };
+    assert.equal((await router.route(request)).cacheHit, undefined, health);
+    assert.equal(probes, 1, 'first inbound route must perform recovery');
+    const persisted = JSON.parse(fs.readFileSync(router.cachePath('claude'), 'utf8'));
+    assert.equal(persisted.health, 'unavailable', 'router must write normalized health');
+    assert.equal(persisted.recovered, false);
     assert.equal((await router.route(request)).cacheHit, true, health);
-    assert.equal(probes, 0);
+    assert.equal(probes, 1, 'second route must reuse the failure cache');
     assert.equal(await observer.due('claude'), false, health);
     const rejected = await f.health.registerStartAttempt(f.request());
     assert.equal(rejected.code, 'probe_cache', health);

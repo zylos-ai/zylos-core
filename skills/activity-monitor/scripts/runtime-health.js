@@ -19,7 +19,7 @@ export function recoveryEligibility(state, { runtime, cache = null, nowMs = Date
     return { eligible: false, code: 'rate_limit_cooldown', notBefore: budget.cooldownUntil * 1000 };
   }
   const health = normalizeHealth(state.health), reason = state.reason || health;
-  if (cache?.version === 2 && cache.runtime === runtime && cache.health === health &&
+  if (cache?.version === 2 && cache.runtime === runtime && cache.recovered === false && cache.health === health &&
       cache.reason === reason && cache.expiresAt > nowMs) {
     return { eligible: false, code: 'probe_cache', notBefore: cache.expiresAt };
   }

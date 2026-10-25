@@ -6,7 +6,6 @@ import path from 'node:path';
 import { SupervisorAdmission } from '../supervisor-admission.js';
 import { RestartRequestStore, validateRestartRequests } from '../restart-request-store.js';
 
-const target = { serverGeneration: '123:1792000000', sessionId: '$3', paneId: '%7' };
 const restart = id => ({ version: 1, type: 'restart_all', requestId: id, reason: 'upgrade' });
 const manual = (overrides = {}) => ({ version: 1, type: 'manual_restart', requestId: 'manual', expectedRunId: 'r1', ...overrides });
 const config = (overrides = {}) => ({ version: 1, type: 'ready_for_config_reclaim', requestId: 'config', expectedRunId: 'r1', sessionGroup: 'telegram:a', ...overrides });
@@ -14,7 +13,7 @@ function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'admission-')); t.after(() => fs.rmSync(root, {recursive: true, force: true}));
   const file = path.join(root, 'restart-requests.json'), store = new RestartRequestStore({ file });
   const state = { mode: 'multi', transition: null, fences: new Map(), runs: [{runId:'r1'}, {runId:'r2'}, {runId:'starting'}],
-    run: {runId:'r1', ready:true, tmuxTarget:target, launchConfig:{runtime:'claude',mode:'default'}}, expected:{runtime:'codex',mode:'default'}, events:[] };
+    run: {runId:'r1', ready:true, launchConfig:{runtime:'claude',mode:'default'}}, expected:{runtime:'codex',mode:'default'}, events:[] };
   const db = { getModeTransition: () => state.transition, getDrainFence: g => state.fences.get(g) ?? null,
     setDrainFence: (g,f) => { if (!state.fences.has(g)) state.fences.set(g,f); } };
   const deps = { store, db, readMode: () => ({mode:state.mode}), listRuns: () => state.runs, readRun: () => state.run,
@@ -57,9 +56,9 @@ test('IF-34 unknown live identity and write failures never return false accepted
   f.state.runs = [{runId:'r1'}]; f.store.publish = () => {throw Object.assign(new Error('disk'),{code:'EIO'});};
   await assert.rejects(f.admission.handle(restart('disk')), {code:'EIO'}); assert.deepEqual(f.store.read(), []);
 });
-test('IF-36 manual idempotence precedes all conflicts and stores fixed identity', async t => {
+test('IF-36 manual idempotence precedes all conflicts and stores the run identity', async t => {
   const f = fixture(t); assert.equal((await f.admission.handle(manual())).result, 'accepted');
-  const row = f.store.read()[0]; assert.deepEqual(row.tmuxTarget, target); assert.equal(row.mode,'multi');
+  const row = f.store.read()[0]; assert.equal(row.expectedRunId,'r1'); assert.equal(Object.hasOwn(row,'tmuxTarget'),false); assert.equal(row.mode,'multi');
   f.state.transition = {phase:'gating'}; f.state.fences.set('*',{reason:'transition'});
   assert.equal((await f.admission.handle(manual())).result,'already_accepted');
   assert.equal((await f.admission.handle(manual({expectedRunId:'new'}))).reason,'request_conflict');
@@ -79,8 +78,7 @@ test('IF-36 stale, incomplete and starting identity cannot become manual targets
   const f = fixture(t); f.state.run.runId='new';
   const stale=await f.admission.handle(manual()); assert.equal(stale.result,'stale_target'); assert.equal(stale.currentRunId,'new');
   f.state.run.runId=null; assert.equal((await f.admission.handle(manual())).reason,'identity_unavailable');
-  f.state.run.runId='r1'; f.state.run.tmuxTarget={sessionId:'$1',paneId:'%1'}; assert.equal((await f.admission.handle(manual())).reason,'identity_unavailable');
-  f.state.run.tmuxTarget=target; f.state.run.ready=false; assert.equal((await f.admission.handle(manual())).reason,'not_ready');
+  f.state.run.runId='r1'; f.state.run.ready=false; assert.equal((await f.admission.handle(manual())).reason,'not_ready');
   assert.deepEqual(f.store.read(),[]);
 });
 test('IF-35 config rechecks complete snapshot and current input; same run fence is idempotent', async t => {
@@ -152,4 +150,18 @@ test('P2 config reclaim missing or failed dependency cannot fence a receiving gr
  let calls=0;
  f.admission.preflightReclaim=async(scene,context)=>{calls++;assert.equal(scene.sessionGroup,'telegram:a');assert.equal(scene.runId,'r1');assert.equal(context.configuration.mode,'multi');assert.equal(f.state.fences.size,0);};
  assert.equal((await f.admission.handle(config())).result,'accepted');assert.equal(calls,1);
+});
+
+// B4 / IF-36: session identity is an admission check; the durable execution target is the run.
+test('manual admission checks optional sessionId once without requiring a tmux descriptor', async t => {
+  const f = fixture(t); f.state.run.sessionId='session-1';
+  assert.equal((await f.admission.handle(manual({expectedSessionId:'old-session'}))).reason,'identity_unavailable');
+  assert.deepEqual(f.store.read(),[]);
+  assert.equal((await f.admission.handle(manual({expectedSessionId:'session-1'}))).result,'accepted');
+  const [row] = f.store.read();
+  assert.deepEqual(row,{requestId:'manual',reason:'manual_restart',acceptedAt:1792000000123,runIds:['r1'],
+    mode:'multi',expectedRunId:'r1',expectedSessionId:'session-1'});
+  f.state.run.sessionId='session-2';
+  assert.equal((await f.admission.handle(manual({expectedSessionId:'session-1'}))).result,'already_accepted');
+  assert.equal(validateRestartRequests([{...row,tmuxTarget:{serverGeneration:'123:4',sessionId:'$1',paneId:'%1'}}]),false);
 });
