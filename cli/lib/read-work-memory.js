@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
-import { runDirFromEnv, groupMemoryDir, zylosRoot } from './session-group-paths.js';
+import { runDirFromEnv, groupMemoryDir, groupRunDir, zylosRoot } from './session-group-paths.js';
 import { withMemoryLock as memoryLock } from '../../skills/zylos-memory/scripts/sync-lock.js';
 
 const OUTPUT_LIMIT = 32 * 1024;
@@ -50,7 +50,7 @@ export async function readWorkMemory({
   if (waitMs < 0) throw fail('LOCK_TIMEOUT', 'Insufficient budget to wait for memory lock');
   let captured;
   try {
-    captured = await withMemoryLock(run.dir, () => {
+    captured = await withMemoryLock(groupRunDir(run.sessionGroup || 'origin', env), () => {
       const read = (file, part, optional = false) => {
         checkBudget();
         try { return Buffer.from(readFile(file)); }
