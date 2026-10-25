@@ -1,5 +1,5 @@
 import { loadCoreModule } from './core-modules.js';
-const { openTmuxConnection, serverGeneration } = await loadCoreModule('runtime/tmux-connection.js');
+const { openTmuxConnection } = await loadCoreModule('runtime/tmux-connection.js');
 
 export function parseServerAlertTarget(value) {
   if (typeof value !== 'string') return null;
@@ -14,25 +14,11 @@ export function parseServerAlertTarget(value) {
  * advance() MUST be invoked outside the lifecycle queue.
  */
 export class SupervisorServerObservation {
-  constructor(scenes, { guard, socketKey = 'default', open = openTmuxConnection,
-    readGeneration = serverGeneration } = {}) {
-    Object.assign(this, { scenes, guard, socketKey, open, readGeneration });
+  constructor(scenes, { guard, socketKey = 'default', open = openTmuxConnection } = {}) {
+    Object.assign(this, { scenes, guard, socketKey, open });
     this.cached = null;
     this.exits = new Map();
     this.reported = new Set();
-    // Preserve the scene provider interface and property injection without copying
-    // methods that rely on the provider's own identity or private state.
-    return new Proxy(this, {
-      get: (target, key) => {
-        const owner = key in target ? target : scenes;
-        const value = owner[key];
-        return typeof value === 'function' ? value.bind(owner) : value;
-      },
-      set: (target, key, value) => {
-        (key in target ? target : scenes)[key] = value;
-        return true;
-      },
-    });
   }
   recordExit(result) {
     if (result?.status !== 'old_server_gone' || this.reported.has(result.generation)) return;
@@ -53,12 +39,19 @@ export class SupervisorServerObservation {
   async success(scenes, replace) {
     let connection;
     try {
-      connection = await this.open(this.scenes.connectionOptions);
-      const result = await this.guard.observeSuccess({ socketKey: this.socketKey,
-        readGeneration: () => this.readGeneration(connection) });
-      if (scenes.some(scene => scene.ready && scene.tmuxTarget?.serverGeneration !== result.generation)) {
+      const generations = new Set(scenes.filter(scene => scene.present).map(scene => scene.tmuxTarget?.serverGeneration));
+      if (generations.size > 1 || generations.has(undefined)) {
         throw Object.assign(new Error('tmux changed during observation'), { code: 'TMUX_UNAVAILABLE', cause: 'error' });
       }
+      let generation = generations.values().next().value;
+      if (!generation) {
+        connection = await this.open(this.scenes.connectionOptions);
+        generation = connection.serverGeneration;
+      }
+      // Each scene was already revalidated on its bound connection. Reuse that
+      // generation instead of opening another executor and querying tmux twice.
+      const result = await this.guard.observeSuccess({ socketKey: this.socketKey,
+        readGeneration: () => generation });
       if (!result.cached) return;
       const matching = scenes.filter(scene => scene.tmuxTarget?.serverGeneration === result.generation);
       if (replace) this.cached = matching;
@@ -94,13 +87,26 @@ export class SupervisorServerObservation {
   async strict(method, args) {
     try {
       const result = await this.scenes[method](...args);
-      await this.success(Array.isArray(result) ? result : result ? [result] : [], method === 'listRuns');
+      const scenes = Array.isArray(result) ? result : result ? [result] : [];
+      const unavailable = scenes.find(scene => scene.observationError?.code === 'TMUX_UNAVAILABLE');
+      if (unavailable) throw unavailable.observationError;
+      await this.success(scenes, method === 'listRuns');
       return result;
     } catch (error) { await this.failure(error); throw error; }
   }
   observeGroup(...args) { return this.strict('observeGroup', args); }
   readRun(...args) { return this.strict('readRun', args); }
   listRuns(...args) { return this.strict('listRuns', args); }
+  readIdentity(...args) { return this.strict('readIdentity', args); }
+  async forward(method, args) {
+    try { return await this.scenes[method](...args); }
+    catch (error) { await this.failure(error); throw error; }
+  }
+  bindTarget(...args) { return this.forward('bindTarget', args); }
+  readScreen(...args) { return this.forward('readScreen', args); }
+  stop(...args) { return this.forward('stop', args); }
+  observeFixedTarget(...args) { return this.forward('observeFixedTarget', args); }
+  stopFixedTarget(...args) { return this.forward('stopFixedTarget', args); }
   async advance() {
     const result = await this.guard.advance({ socketKey: this.socketKey });
     this.recordExit(result);

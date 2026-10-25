@@ -630,7 +630,9 @@ export class HealthEngine {
   }
 
   onProcessRestarted(currentTime = Math.floor(Date.now() / 1000)) {
-    this.deps.log('Process restarted; durable recovery budget retained');
+    this.restartFailureCount = 0;
+    this.lastRecoveryAt = 0;
+    this.deps.log('Process restarted, recovery backoff reset');
 
     if (this.healthState !== 'ok') {
       this.signalDetectedAt = currentTime;

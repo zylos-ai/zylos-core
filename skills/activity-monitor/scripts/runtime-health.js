@@ -7,6 +7,31 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const REQUEST = /^sa-\d+-[0-9a-f]{12}$/;
 const RESTRICTED = new Set(['rate_limited', 'unavailable', 'recovering', 'down']);
 export const recoveryBackoff = n => n <= 0 ? 0 : Math.min(3600, 60 * 5 ** (n - 1));
+export const normalizeHealth = health => ['ok', 'rate_limited', 'auth_failed'].includes(health) ? health : 'unavailable';
+
+/** One recovery gate for registration, background demand and inbound routing. */
+export function recoveryEligibility(state, { runtime, cache = null, nowMs = Date.now() } = {}) {
+  if (state.health === 'ok') return { eligible: false, code: 'not_restricted' };
+  if (state.health === 'auth_failed') return { eligible: false, code: 'auth_blocked' };
+  if (!RESTRICTED.has(state.health)) return { eligible: false, code: 'invalid_request' };
+  const budget = state.scheduling ?? {}, now = Math.floor(nowMs / 1000);
+  if (state.health === 'rate_limited' && budget.cooldownUntil > now) {
+    return { eligible: false, code: 'rate_limit_cooldown', notBefore: budget.cooldownUntil * 1000 };
+  }
+  const health = normalizeHealth(state.health), reason = state.reason || health;
+  if (cache?.version === 2 && cache.runtime === runtime && cache.health === health &&
+      cache.reason === reason && cache.expiresAt > nowMs) {
+    return { eligible: false, code: 'probe_cache', notBefore: cache.expiresAt };
+  }
+  const down = state.health === 'down';
+  const last = (down ? budget.lastDownCheckAt : budget.lastRecoveryAt) || 0;
+  const accelerated = (budget.lastUserMessageRecoveryAt || 0) > last;
+  const due = last + (down ? 3600 : recoveryBackoff(budget.restartFailureCount || 0));
+  if (!accelerated && now < due) {
+    return { eligible: false, code: down ? 'down_retry_interval' : 'attempt_backoff', notBefore: due * 1000 };
+  }
+  return { eligible: true, accelerated };
+}
 
 /** Return matching facts only after both observations identify the same run. */
 export function classifyRecoveryResult({ runtime, runId, current, terminal, matches = {} }) {
@@ -21,10 +46,10 @@ export function classifyRecoveryResult({ runtime, runId, current, terminal, matc
 /** Rebuilt every tick; a failed authoritative read propagates, never becomes empty. */
 export async function aggregateRuntimeDemand({ mode, pendingGroups, fences = [], resolveTargetRuntime, baselineRuntime }) {
   const result = new Map();
-  const blocked = new Set(fences.map(row => row.sessionGroup ?? row.session_group ?? row));
+  const blocked = new Set(fences.map(row => row.sessionGroup));
   if (blocked.has('*')) return result;
   for (const item of pendingGroups) {
-    const group = mode === 'single' ? 'origin' : (item.sessionGroup ?? item.session_group ?? item);
+    const group = mode === 'single' ? 'origin' : item.sessionGroup;
     if (blocked.has(group)) continue;
     const runtime = mode === 'single' ? baselineRuntime : await resolveTargetRuntime(group);
     if (!RUNTIME.test(runtime)) throw new Error('Invalid resolved runtime');
@@ -86,22 +111,16 @@ export class RuntimeHealthCoordinator {
       if (state.health === 'auth_failed') return reject('auth_blocked');
       if ((await this.listScenes()).some(scene => scene.runtime === runtime)) return reject('scene_present');
       if (await this.probeInFlight(runtime)) return reject('probe_inflight');
-      const now = Math.floor(this.now() / 1000), budget = state.scheduling;
-      if (state.health === 'rate_limited' && budget.cooldownUntil > now) return reject('rate_limit_cooldown', budget.cooldownUntil * 1000);
+      const nowMs = this.now(), now = Math.floor(nowMs / 1000);
       const cache = await this.readNegativeCache(runtime, state);
-      if (cache && cache.version === 2 && cache.runtime === runtime && cache.expiresAt > this.now() &&
-          cache.health === state.health && cache.reason === state.reason) return reject('probe_cache', cache.expiresAt);
-      const last = state.health === 'down' ? budget.lastDownCheckAt : budget.lastRecoveryAt;
-      const accelerated = budget.lastUserMessageRecoveryAt > last;
-      const due = last + (state.health === 'down' ? 3600 : recoveryBackoff(budget.restartFailureCount));
-      if (!accelerated && now < due) return reject(state.health === 'down' ? 'down_retry_interval' : 'attempt_backoff', due * 1000);
-      if (!RESTRICTED.has(state.health)) return reject('invalid_request');
+      const gate = recoveryEligibility(state, { runtime, cache, nowMs });
+      if (!gate.eligible) return reject(gate.code, gate.notBefore);
       const next = structuredClone(state);
       if (state.health === 'down') next.scheduling.lastDownCheckAt = now;
       else { next.scheduling.restartFailureCount++; next.scheduling.lastRecoveryAt = now; }
       try { store.write(next); } catch { return reject('health_write_failed'); }
       this.associations.set(runtime, {sessionGroup:request.sessionGroup,runId:request.runId});
-      return {...envelope,ok:true,result:'registered',reason:accelerated ? 'user_message' : 'recovery_due'};
+      return {...envelope,ok:true,result:'registered',reason:gate.accelerated ? 'user_message' : 'recovery_due'};
     });
   }
   notifyUserMessage(runtime) {

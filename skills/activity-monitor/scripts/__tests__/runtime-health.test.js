@@ -6,6 +6,8 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { RuntimeHealthCoordinator, aggregateRuntimeDemand, classifyRecoveryResult } from '../runtime-health.js';
 import { HealthStore } from '../health-store.js';
+import { MessageRouter } from '../message-router.js';
+import { SupervisorHealthObserver } from '../supervisor-health-observer.js';
 
 function registered(reply) {
   assert.equal(reply.result, 'registered');
@@ -125,9 +127,9 @@ test('DM-63 auth success captures old targets and cannot clear independent limit
 });
 
 test('#16a demand aggregates runtime sets, excludes fences and never converts query errors to no demand',async()=>{
-  const options={mode:'multi',pendingGroups:['telegram:a','lark:b','telegram:a','lark:c'],fences:[{session_group:'lark:c'}],resolveTargetRuntime:()=> 'claude'};
+  const options={mode:'multi',pendingGroups:['telegram:a','lark:b','telegram:a','lark:c'].map(sessionGroup=>({sessionGroup})),fences:[{sessionGroup:'lark:c'}],resolveTargetRuntime:()=> 'claude'};
   const demand=await aggregateRuntimeDemand(options);assert.equal(demand.size,1);assert.deepEqual([...demand.get('claude')],['telegram:a','lark:b']);
-  assert.equal((await aggregateRuntimeDemand({...options,fences:['*']})).size,0);
+  assert.equal((await aggregateRuntimeDemand({...options,fences:[{sessionGroup:'*'}]})).size,0);
   await assert.rejects(aggregateRuntimeDemand({...options,resolveTargetRuntime:()=>{throw new Error('DB_BUSY');}}),/DB_BUSY/);
 });
 
@@ -173,4 +175,59 @@ test('T02 accepted current-process failure outranks conflicting screen evidence 
   await f.health.consumeHook('claude',{schema_version:1,source:'hook',runtime:'claude',...identity,event_id:randomUUID(),prompt_id:'prompt',event:'stop_failure',error:'authentication_failed',received_at:f.now()},{identity,sessionGroup:'telegram:a'});
   const answer=await f.health.applyProbeResult({runtime:'claude',runId,current:{runtime:'claude',runId},identity,terminal:'failed',matches:{rateLimit:{detected:true}}});
   assert.equal(answer.classification,'auth_error');assert.equal(f.read().health,'auth_failed');assert.equal(f.read().source,'hook');assert.equal(f.read().reason,'authentication_failed');
+});
+
+// ZYLO-99 P3-3 / DM-47: route writes public health, every recovery entry consumes it.
+test('down and recovering share the normalized negative cache across all recovery entries', async t => {
+  for (const health of ['down', 'recovering']) {
+    const f = fixture(t);
+    f.set({ health, reason: 'runtime_unavailable' });
+    let probes = 0;
+    const router = new MessageRouter({ healthCoordinator: f.health, now: f.now,
+      cacheDirectory: path.join(f.root, 'cache'), resolveTargetRuntime: () => 'claude',
+      requestProbe: () => { probes++; } });
+    f.health.readNegativeCache = (runtime, state) => router.readNegativeCache(runtime, state.health, state.reason);
+    const observer = new SupervisorHealthObserver({ coordinator: f.health, now: f.now });
+    router.writeNegativeCache('claude', 'unavailable', 'runtime_unavailable');
+    const request = { version: 2, type: 'route', requestId: 'cache-regression', channel: null,
+      endpoint: null, componentName: null, sessionGroup: 'telegram:one', noReply: true, receivedAt: f.now() };
+    assert.equal((await router.route(request)).cacheHit, true, health);
+    assert.equal(probes, 0);
+    assert.equal(await observer.due('claude'), false, health);
+    const rejected = await f.health.registerStartAttempt(f.request());
+    assert.equal(rejected.code, 'probe_cache', health);
+    assert.equal(rejected.notBefore, f.now() + 30000);
+    f.advance(30000);
+    assert.equal(await observer.due('claude'), true, health);
+    registered(await f.health.registerStartAttempt(f.request()));
+  }
+});
+
+// IF-62 / #17: all entrypoints honor cooldown then backoff, including exact boundary.
+test('registration, demand and inbound routing agree on cooldown and backoff boundaries', async t => {
+  for (const health of ['rate_limited', 'unavailable', 'down']) {
+    const f = fixture(t), seconds = f.now() / 1000;
+    const delay = health === 'down' ? 3600 : 60;
+    f.set({ health, reason: health === 'rate_limited' ? 'rate_limit_unclassified' : 'runtime_unavailable' },
+      { restartFailureCount: 1, lastRecoveryAt: seconds, lastDownCheckAt: seconds,
+        cooldownUntil: health === 'rate_limited' ? seconds + 30 : 0 });
+    let probes = 0;
+    const router = new MessageRouter({ healthCoordinator: f.health, now: f.now,
+      cacheDirectory: path.join(f.root, 'cache'), resolveTargetRuntime: () => 'claude',
+      requestProbe: () => { probes++; } });
+    const observer = new SupervisorHealthObserver({ coordinator: f.health, now: f.now });
+    const request = { version: 2, type: 'route', requestId: 'gate-regression', channel: null,
+      endpoint: null, componentName: null, sessionGroup: 'telegram:one', noReply: true, receivedAt: f.now() };
+    assert.equal(await observer.due('claude'), false);
+    assert.equal((await f.health.registerStartAttempt(f.request())).code,
+      health === 'rate_limited' ? 'rate_limit_cooldown' : health === 'down' ? 'down_retry_interval' : 'attempt_backoff');
+    await router.route(request); assert.equal(probes, 0);
+    f.advance(delay * 1000 - 1);
+    assert.equal(await observer.due('claude'), false);
+    await router.route(request); assert.equal(probes, 0);
+    f.advance(1);
+    assert.equal(await observer.due('claude'), true);
+    await router.route(request); assert.equal(probes, 1);
+    registered(await f.health.registerStartAttempt(f.request()));
+  }
 });

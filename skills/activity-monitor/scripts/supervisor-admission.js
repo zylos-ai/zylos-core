@@ -32,7 +32,6 @@ export class SupervisorAdmission {
     this.tail = result.catch(() => {});
     return result;
   }
-  serial(operation) { return this.serialize(operation); }
   restore() { const requests = this.store.read(); return { requests, manual: requests.find(row => row.reason === 'manual_restart') ?? null }; }
   openEntry() { this.open = true; }
   closeEntry() { this.open = false; }
@@ -119,7 +118,7 @@ export class SupervisorAdmission {
     if (!run.ready) return reject('not_ready');
     if (!validSnapshot(run.launchConfig)) return reject('snapshot_unavailable');
     const fence = await this.db.getDrainFence(request.sessionGroup);
-    if (fence && ((fence.reason !== 'model_config') || ((fence.runId ?? fence.run_id) !== request.expectedRunId))) return reject('other_fence');
+    if (fence && ((fence.reason !== 'model_config') || (fence.runId !== request.expectedRunId))) return reject('other_fence');
     if (request.sessionGroup === 'origin' && rows.some(row => row.reason === 'manual_restart')) return reject('manual_restart_pending');
     if (fence) return { ok: true, result: 'already_accepted' };
     const expected = await this.resolveLaunchConfig(request.sessionGroup);

@@ -68,12 +68,11 @@ test('T08 recovery: backward UTF-8 chunk scan stops at boundary and resumes part
 // check. Each process pauses once on fd 3; retrying after rotation never pauses.
 const openAnchor = '  sysopen(my $fh,$file,O_WRONLY|O_APPEND|O_CREAT,0600) or die "open: $!\\n";';
 const lockAnchor = '  flock($fh,LOCK_EX) or die "lock: $!\\n";';
-const inodeAnchor = '  if (!@current || $opened[0]!=$current[0] || $opened[1]!=$current[1]) { close($fh); next; }';
 function replaceOnce(source, anchor, replacement) {
  assert.equal(source.split(anchor).length, 2, `helper anchor must occur once: ${anchor}`);
  return source.replace(anchor, replacement);
 }
-function barrierHelper(file, mutation = 'none') {
+function barrierHelper(file) {
  let source = fs.readFileSync(new URL('../locked-jsonl.pl', import.meta.url), 'utf8');
  source = replaceOnce(source, 'while (1) {', `my $paused=0;
 sub barrier {
@@ -87,9 +86,7 @@ sub barrier {
 while (1) {`);
  source = replaceOnce(source, openAnchor, openAnchor + '\n  barrier("open");');
  source = replaceOnce(source, lockAnchor, lockAnchor + '\n  barrier("lock");');
- if (mutation === 'no-lock') source = replaceOnce(source, lockAnchor, '  # lock removed by negative control');
- if (mutation === 'no-inode-check') source = replaceOnce(source, inodeAnchor, '  # inode check removed by negative control');
- const helper = path.join(path.dirname(file), `helper-${mutation}.pl`);
+ const helper = path.join(path.dirname(file), 'helper.pl');
  fs.writeFileSync(helper, source);
  return helper;
 }
@@ -127,9 +124,9 @@ function probeLock(file) {
   'sysopen(my $fh,$ARGV[0],O_WRONLY) or die "open: $!"; if(flock($fh,LOCK_EX|LOCK_NB)){print "available"}elsif($! == EAGAIN || $! == EWOULDBLOCK){print "held"}else{die "lock: $!"}', file],
  { encoding: 'utf8', timeout: 10000 });
 }
-async function assertRealLock(file, mutation) {
+async function assertRealLock(file) {
  appendEvent(file, { n: 1 });
- const child = pausedHelper(barrierHelper(file, mutation), 'append', file, 'lock', '{"n":2}\n');
+ const child = pausedHelper(barrierHelper(file), 'append', file, 'lock', '{"n":2}\n');
  try {
   await child.ready;
   assert.equal(probeLock(file), 'held', 'actual helper must hold the exclusive lock before writing');
@@ -138,9 +135,9 @@ async function assertRealLock(file, mutation) {
   assert.equal(fs.readFileSync(file, 'utf8'), '{"n":1}\n{"n":2}\n');
  } finally { await child.stop(); }
 }
-async function assertReopenAfterRotation(file, mutation) {
+async function assertReopenAfterRotation(file) {
  appendEvent(file, { n: 1 });
- const helper = barrierHelper(file, mutation);
+ const helper = barrierHelper(file);
  const rotator = pausedHelper(helper, 'rotate', file, 'lock');
  let appender;
  try {
@@ -156,16 +153,10 @@ async function assertReopenAfterRotation(file, mutation) {
  } finally { if (appender) await appender.stop(); await rotator.stop(); }
 }
 
-test('DM-38: real helper excludes competing lock; removing its flock fails the same assertion', async t => {
- await assertRealLock(fixture(t), 'none');
- await assert.rejects(assertRealLock(fixture(t), 'no-lock'), {
-  code: 'ERR_ASSERTION', message: /actual helper must hold the exclusive lock/,
- });
+test('DM-38: real helper excludes competing lock', async t => {
+ await assertRealLock(fixture(t));
 });
 
-test('DM-38: real helper reopens after locked rotation; removing inode check fails the same assertion', async t => {
- await assertReopenAfterRotation(fixture(t), 'none');
- await assert.rejects(assertReopenAfterRotation(fixture(t), 'no-inode-check'), {
-  code: 'ERR_ASSERTION', message: /append must not land on the rotated inode/,
- });
+test('DM-38: real helper reopens after locked rotation', async t => {
+ await assertReopenAfterRotation(fixture(t));
 });

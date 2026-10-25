@@ -72,3 +72,29 @@ test('unknown process data remains unknown and unreadable tmux is never absent',
   const bad = service(f, { open: async () => { throw Object.assign(new Error('unobservable'), { code: 'TMUX_UNAVAILABLE' }); } });
   await assert.rejects(bad.readRun('origin'), { code: 'TMUX_UNAVAILABLE' });
 });
+
+// Complexity revision / T02: identity guards must not sample activity or liveness.
+test('identity-only checks skip process, usage and activity sampling and reject a changed run', { timeout: 15000 }, async t => {
+  const f = readyTmuxTarget(t, { prefix: 'p05-identity-', mode: 'multi' });
+  const unexpected = () => { throw Error('identity check sampled activity'); };
+  const scenes = service(f, { readProcessTree: unexpected, readActivity: unexpected, readUsage: unexpected, readContextSwitches: unexpected });
+  const old = await scenes.readIdentity('origin');
+  assert.equal(old.ready, true); assert.equal(old.runId, 'run-1');
+  assert.deepEqual(await scenes.bindTarget(old), { expectedRunId:'run-1', tmuxTarget:old.tmuxTarget });
+  assert.equal(typeof await scenes.readScreen(old), 'string');
+  f.tmux('set-environment', '-t', '=zylos-group-origin', 'ZYLOS_RUN_ID', 'replacement');
+  await assert.rejects(scenes.bindTarget(old), { code:'TARGET_MISMATCH' });
+});
+// T02 / IB-18: health stops use the adapter's run fence and confirmed session removal.
+test('health stop preserves a replacement run and confirms the original session is gone', { timeout:15000 }, async t => {
+  const f = readyTmuxTarget(t, { prefix:'p05-health-stop-', mode:'multi' });
+  f.tmux('new-session', '-d', '-s', 'fixture-keeper', 'sleep', '120');
+  const scenes = service(f), old = await scenes.readIdentity('origin');
+  f.tmux('set-environment', '-t', '=zylos-group-origin', 'ZYLOS_RUN_ID', 'replacement');
+  await assert.rejects(scenes.stop(old), {code:'RUNID_MISMATCH'});
+  assert.doesNotThrow(() => f.tmux('has-session', '-t', '=zylos-group-origin'));
+  f.tmux('set-environment', '-t', '=zylos-group-origin', 'ZYLOS_RUN_ID', old.runId);
+  await scenes.stop(old);
+  assert.equal((await scenes.readIdentity('origin')).present, false);
+  assert.doesNotThrow(() => f.tmux('has-session', '-t', '=fixture-keeper'));
+});

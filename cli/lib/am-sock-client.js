@@ -140,7 +140,7 @@ export async function lookupModeSwitch(target, { deadlineAt, now = Date.now, get
   }
   if (now() >= deadlineAt) return 'deadline_exceeded';
   const transition = await getModeTransition(); // The shared DB reader uses its ordinary lock budget.
-  if (transition && (transition.targetMode ?? transition.target_mode) === target) return 'accepted';
+  if (transition && transition.target_mode === target) return 'accepted';
   if (now() >= deadlineAt) return 'deadline_exceeded';
   return (await readMode()).mode === target ? 'done' : 'unknown';
 }
