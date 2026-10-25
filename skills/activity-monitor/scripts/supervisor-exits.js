@@ -21,8 +21,8 @@ export class SupervisorExits {
   async gated(scene) {
     return await this.db.getModeTransition() || await this.db.getDrainFence('*') || await this.db.getDrainFence(scene.sessionGroup);
   }
-  async advance(current, expired = []) {
-    const candidates = new Map(expired.filter(scene=>scene.ready && scene.runId && scene.sessionId).map(scene => [scene.sessionGroup, scene]));
+  async advance(current) {
+    const candidates = new Map();
     const observed = new Map(current.map(scene => [scene.sessionGroup, scene]));
     for (const [group, old] of this.previous) {
       const next = observed.get(group);
@@ -35,17 +35,12 @@ export class SupervisorExits {
     for (const [group, scene] of candidates) {
       try { await this.serialize(async () => {
         if (await this.gated(scene)) { this.previous.delete(group); return; }
-        // A vanished cached server proves only the original object disappeared.
-        const expiredObject = expired.some(old => old.runId === scene.runId && old.tmuxTarget?.serverGeneration === scene.tmuxTarget?.serverGeneration);
-        if (!expiredObject) {
-          const fresh = await this.scenes.observeGroup(group);
-          if (fresh.present && fresh.runId === scene.runId) {
-            if (!fresh.ready || fresh.processRunning !== false) return;
-            await this.scenes.stop(fresh);
-            const after = await this.scenes.observeFixedTarget({ expectedRunId: fresh.runId, tmuxTarget: fresh.tmuxTarget });
-            if (after.present !== false) throw Object.assign(new Error('Exited runtime cleanup is unconfirmed'),{code:'STOP_UNCONFIRMED'});
-          } else if (fresh.present !== false && !fresh.runId) return;
-        }
+        const fresh = await this.scenes.observeGroup(group);
+        if (fresh.present && fresh.runId === scene.runId) {
+          if (!fresh.ready || fresh.processRunning !== false) return;
+          // adapter.stop resolves only after confirming the requested run is gone.
+          await this.scenes.stop(fresh);
+        } else if (fresh.present !== false && !fresh.runId) return;
         await this.report(scene);
         if (this.previous.get(group)?.runId === scene.runId) this.previous.delete(group);
       }); } catch(error) { this.reportError(error,{phase:"runtime-exit",sessionGroup:group}); }

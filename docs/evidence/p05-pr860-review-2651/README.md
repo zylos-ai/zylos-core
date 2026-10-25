@@ -1,0 +1,9 @@
+# B review corrections
+
+- P2-1 / B3: exits trusts successful adapter.stop confirmation, removing the obsolete fixed-target read and synthetic expired-server input already removed in C. The real isolated fixture keeps a shell alive after its runtime child is killed, so the managed tmux session remains and cleanup must call stop. The old caller confirmation mutation fails this regression.
+- P3-2 / T01: transition advances before serial lifecycle work. Manual/config work precedes exits/publication; reclamation follows publication. Both serial sections share the same round context and scene sample; mutations retain their authority and identity rechecks. A transition present at round start suppresses producers for the entire round even if it completes. The transition owner has its own serialization; exits/health likewise run outside held serial sections. Quiet reads remain once per authority/scene.
+- P3-3 / B4: replacement after fence acquisition is preserved without calling stop; replacement after fresh observation makes the adapter return RUNID_MISMATCH and the old request completes with its fence cleared. Each new assertion detects its corresponding external mutation.
+
+Focused official isolated Node runner: 4 files, 61 passed, no failures/skips. Run `node scripts/run-node-tests.js skills/activity-monitor/scripts/__tests__/supervisor-loop.test.js skills/activity-monitor/scripts/__tests__/supervisor-lifecycle.test.js skills/activity-monitor/scripts/__tests__/supervisor-exits.test.js skills/activity-monitor/scripts/__tests__/supervisor-exits.integration.test.js`.
+
+External controls: `python3 run-mutants.py /path/to/checkout /path/to/disposable-output`. Mutations live only in disposable archived copies; three variants all fail the relevant positive tests. Independent selection and five-version matrix are recorded separately after parent integration.

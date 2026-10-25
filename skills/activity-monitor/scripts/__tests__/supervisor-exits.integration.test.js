@@ -16,8 +16,11 @@ function setup(t) {
 test('runtime SIGKILL removes only its exited managed session and records crash', {timeout:15000},async t=>{
  const {f,scenes,exits,events,errors}=setup(t);
  f.tmux('new-session','-d','-s','fixture-manual','sleep','120');
+ // Keep a shell alive after its runtime child exits so cleanup must call stop.
+ f.tmux('respawn-pane','-k','-t','=zylos-group-origin:0',`${f.root}/claude & wait; sleep 120`);
  const before=await scenes.observe();assert.equal(before[0].processRunning,true);await exits.advance(before);
  process.kill(before[0].runtimePid,'SIGKILL');
+ assert.doesNotThrow(()=>f.tmux('has-session','-t','=zylos-group-origin'));
  await exits.advance(await scenes.observe());
  assert.equal(events.length,1);assert.equal(events[0].event,'crash_detected');assert.deepEqual(errors,[]);
  assert.equal((await scenes.observeGroup('origin')).present,false);

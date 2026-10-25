@@ -485,3 +485,27 @@ test('unreadable intent blocks new lifecycle writes while authoritative D8 recla
   assert.equal(await f.lifecycle.advanceReclaim(fence, context), 'done');
   assert.deepEqual(f.stops, ['run-a']); assert.equal(f.fences.size, 0);
 });
+
+// B4 / M4 8.9: replacement races after the round snapshot, before the guarded stop.
+test('manual replacement after fence acquisition is preserved without calling stop', async () => {
+  const f = fixture(); f.scenes = [scene('origin')];
+  f.requests = [{ reason: 'manual_restart', requestId: 'manual', mode: 'multi', expectedRunId: 'run-origin' }];
+  const context = f.context, setFence = f.db.setDrainFence;
+  f.db.setDrainFence = (group, value) => { setFence(group, value); f.scenes = [scene('origin', { runId: 'replacement' })]; };
+  await f.lifecycle.advanceManual(context);
+  assert.deepEqual(f.stops, []); assert.equal(f.scenes[0].runId, 'replacement');
+  assert.equal(context.scenes[0].runId, 'replacement');
+  assert.equal(f.requests.length, 0); assert.equal(f.fences.size, 0);
+  assert.equal(f.events.at(-1).event, 'manual_restart_done');
+});
+
+test('manual adapter RUNID_MISMATCH after fresh observation completes old request and preserves replacement', async () => {
+  const f = fixture(); f.scenes = [scene('origin')];
+  f.requests = [{ reason: 'manual_restart', requestId: 'manual', mode: 'multi', expectedRunId: 'run-origin' }];
+  const context = f.context;
+  f.deps.stop = target => { f.stops.push(target.runId); f.scenes = [scene('origin', { runId: 'replacement' })]; throw Object.assign(new Error('run replaced before adapter stop'), { code: 'RUNID_MISMATCH' }); };
+  await f.lifecycle.advanceManual(context);
+  assert.deepEqual(f.stops, ['run-origin']); assert.equal(f.scenes[0].runId, 'replacement');
+  assert.equal(f.requests.length, 0); assert.equal(f.fences.size, 0);
+  assert.equal(f.events.at(-1).event, 'manual_restart_done');
+});

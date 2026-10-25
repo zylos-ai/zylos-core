@@ -58,11 +58,14 @@ export class SupervisorLoop {
 
   async runRound() {
     const d = this.deps;
+    // Transition owns its own serialization and must precede this round's work.
+    const transition = await d.getModeTransition();
+    if (transition) await d.advanceTransition(transition);
     let context;
     await d.lifecycleSerial(async () => {
       // Sample all round authorities and scenes while socket admission is excluded.
       this.configuration = await d.readConfiguration();
-      context = { configuration: this.configuration, transition: await d.getModeTransition(),
+      context = { configuration: this.configuration, transition,
         fences: await d.listDrainFences(), restartRequests: [] };
       try { context.restartRequests = await d.readRestartRequests(); }
       catch (error) {
@@ -82,6 +85,11 @@ export class SupervisorLoop {
           catch (error) { await d.reportError(error, { phase }); }
         }
       }
+    });
+    // These workers may acquire lifecycle serialization for their own mutations.
+    await d.observeExits?.(context.scenes);
+    await this.each(context.scenes, scene => d.probeAndPublish(scene, context), 'observe');
+    await d.lifecycleSerial(async () => {
       await this.each(context.fences, fence => d.advanceReclaim(fence, context), 'reclaim');
       if (context.transition) return;
       await this.each(context.scenes, scene => d.checkRotation(scene, context), 'rotation');
@@ -93,10 +101,6 @@ export class SupervisorLoop {
       try { await d.checkSync(context.scenes, context); }
       catch (error) { await d.reportError(error, { phase: 'sync' }); }
     });
-    // Transition and health workers may acquire their own lifecycle sections.
-    if (context.transition) await d.advanceTransition(context.transition);
-    await d.observeExits?.(context.scenes);
-    await this.each(context.scenes, scene => d.probeAndPublish(scene, context), 'observe');
     await d.writeMetricsAndMaintain(context);
   }
 
