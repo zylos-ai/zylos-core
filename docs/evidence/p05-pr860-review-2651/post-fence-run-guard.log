@@ -57,12 +57,12 @@ test at skills/activity-monitor/scripts/__tests__/supervisor-lifecycle.test.js:4
 ✖ manual replacement after fence acquisition is preserved without calling stop (1.544956ms)
   AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
   + actual - expected
-  
+
   + [
   +   'replacement'
   + ]
   - []
-  
+
       at TestContext.<anonymous> (file://<workspace>/p05-evidence-2651/b/post-fence-run-guard-ahzcs42b/skills/activity-monitor/scripts/__tests__/supervisor-lifecycle.test.js:496:10)
       at async Test.run (node:internal/test_runner/test:1409:7)
       at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
