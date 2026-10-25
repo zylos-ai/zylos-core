@@ -1,4 +1,4 @@
-import test from 'node:test';
+import test, { mock } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -108,4 +108,12 @@ test('C4 monitor signal handler reports stop rejection and exits unsuccessfully'
  await monitorMain({runtime,start:async()=>({stop:async()=>{throw Object.assign(new Error('stop failed'),{code:'STOP_FAILED'});}}),log:error=>errors.push(error)});
  runtime.emit('SIGTERM');await new Promise(resolve=>setImmediate(resolve));
  assert.deepEqual(errors,['STOP_FAILED']);assert.deepEqual(exits,[1]);
+});
+
+test('C4 canonical PM2 wrapper invokes the monitor entry even when imported indirectly',async t=>{
+ let starts=0;
+ const replacement=mock.module('../monitor.js',{namedExports:{main:async()=>{starts++;}}});
+ t.after(()=>replacement.restore());
+ await import('../activity-monitor.js');
+ assert.equal(starts,1);
 });
