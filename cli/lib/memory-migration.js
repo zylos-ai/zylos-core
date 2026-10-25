@@ -171,8 +171,13 @@ export function createMigration({ env = process.env, now = Date.now, version = V
         if (/^(?:memory\/)?reference\//.test(value)) indexed.push(value);
         return ' ';
       });
-    for (const match of remaining.matchAll(/(?<![\p{L}\p{N}_./\\~:@%+\-])(?:memory\/)?reference\/[^\s`<>\[\](){},;]+/gu)) {
-      indexed.push(match[0].replace(/[.,;:!?\u3002\uff0c\uff1b\uff1a\uff01\uff1f\u3001\uff09\u3011\u300b\u2019\u201d]+$/u, ''));
+    const bare = remaining.replace(/(?<![\p{L}\p{N}_./\\~:@%+\-])[*_]+(?=(?:memory\/)?reference\/)/gu, ' ');
+    const punctuation = /[.,;:!?\u3002\uff0c\uff1b\uff1a\uff01\uff1f\u3001\uff09\u3011\u300b\u2019\u201d]+$/u;
+    for (const match of bare.matchAll(/(?<![\p{L}\p{N}_./\\~:@%+\-])(?:memory\/)?reference\/[^\s`<>\[\](){},;]+/gu)) {
+      // Closing emphasis and adjacent emphasized prose are outside the path;
+      // keep internal glob characters for the wildcard filter below.
+      indexed.push(match[0].replace(punctuation, '').replace(/([*_]{1,3})[^/*_]*\1$/u, '')
+        .replace(/[*_]+$/u, '').replace(punctuation, ''));
     }
     const indexedPaths = [...new Set(indexed.filter(value => !/[*?\[\]]/.test(value))
       .map(value => `memory/${value.replace(/^memory\//, '')}`))];
@@ -316,7 +321,11 @@ export async function runCli(argv = process.argv.slice(2)) {
     const code = cause.code || 'INVALID_INPUT';
     if (json) console.log(JSON.stringify({ ok: false, error: { code, message: cause.message, persisted: cause.persisted ?? (cause.persisted === null ? null : []),
       ...(cause.missingPaths ? { missingPaths: cause.missingPaths } : {}), ...(cause.path ? { path: cause.path } : {}) } }));
-    else console.error(`Error [${code}]: ${cause.message}`);
+    else {
+      console.error(`Error [${code}]: ${cause.message}`);
+      for (const missing of cause.missingPaths || []) console.error(`Missing path: ${missing}`);
+      if (cause.path) console.error(`Backup path: ${cause.path}`);
+    }
     process.exitCode = code === 'LOCK_TIMEOUT' ? 2 : code === 'FRAGMENT_CONFLICT' ? 4 : 1;
   }
 }

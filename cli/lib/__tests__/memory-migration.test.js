@@ -62,6 +62,111 @@ function fixture(t, overrides = {}) {
 const init = f => f.service.ensure({ createdBy: 'upgrade' });
 const patch = { path: 'references.md', expected: 'original marker', replacement: 'new marker' };
 
+function cliFixture(t) {
+  const target = readyTmuxTarget(t, { prefix: 'p06-migrate-detail-', mode: 'multi' });
+  const references = path.join(target.root, 'memory/references.md');
+  fs.mkdirSync(path.dirname(references), { recursive: true });
+  fs.writeFileSync(references, 'original marker\n');
+  const env = { ...target.env, ZYLOS_SESSION_GROUP: 'origin', ZYLOS_RUN_ID: target.ready.runId,
+    ZYLOS_PACKAGE_ROOT: fileURLToPath(new URL('../../../', import.meta.url)) };
+  const run = (args, input = '') => childResult(spawn(process.execPath, [cliScript, ...args],
+    { env, stdio: ['pipe', 'pipe', 'pipe'] }), input);
+  return { ...target, references, run,
+    record: path.join(target.root, '.zylos/migrations/references-layout-v1.json'),
+    backup: path.join(target.root, '.zylos/migrations/references-layout-v1.backup') };
+}
+
+test('CLI text CHECK_FAILED reports every missing path and leaves completion pending', async t => {
+  const f = cliFixture(t), id = ['--id', 'references-layout-v1'];
+  assert.equal((await f.run(['ensure', ...id, '--created-by', 'upgrade'])).code, 0);
+  assert.equal((await f.run(['apply', ...id], JSON.stringify({ ...patch,
+    replacement: 'reference/one.md\nreference/two.md' }))).code, 0);
+  const result = await f.run(['complete', ...id, '--summary', '-'], 'reviewed');
+  assert.equal(result.code, 1); assert.equal(result.stdout, '');
+  assert.equal(result.stderr.split('\n')[0], 'Error [CHECK_FAILED]: Migration mechanical checks failed');
+  assert.match(result.stderr, /^Missing path: memory\/reference\/one\.md$/m);
+  assert.match(result.stderr, /^Missing path: memory\/reference\/two\.md$/m);
+  const record = JSON.parse(fs.readFileSync(f.record));
+  assert.equal(record.state, 'pending'); assert.equal(record.attempts, 1);
+});
+
+test('CLI text BACKUP_INVALID reports retained backup path without changing original files', async t => {
+  const f = cliFixture(t), id = ['--id', 'references-layout-v1'];
+  assert.equal((await f.run(['ensure', ...id, '--created-by', 'upgrade'])).code, 0);
+  fs.mkdirSync(f.backup); fs.writeFileSync(path.join(f.backup, 'retained'), 'invalid backup evidence');
+  const before = fs.readFileSync(f.record);
+  const result = await f.run(['apply', ...id], JSON.stringify(patch));
+  assert.equal(result.code, 1); assert.equal(result.stdout, '');
+  assert.equal(result.stderr.split('\n')[0], 'Error [BACKUP_INVALID]: Existing references backup is invalid');
+  assert.ok(result.stderr.split('\n').includes(`Backup path: ${f.backup}`));
+  assert.deepEqual(fs.readFileSync(f.record), before);
+  assert.equal(fs.readFileSync(f.references, 'utf8'), 'original marker\n');
+  assert.equal(fs.readFileSync(path.join(f.backup, 'retained'), 'utf8'), 'invalid backup evidence');
+});
+
+test('emphasized index paths are collected when present and reject completion when absent', async t => {
+  const forms = ['**reference/gone.md**', '*reference/gone.md*', '_reference/gone.md_',
+    '__reference/gone.md__', 'see reference/gone.md**bold**'];
+  for (const form of forms) {
+    for (const present of [false, true]) {
+      const f = fixture(t); init(f); await f.service.apply({ ...patch, replacement: form });
+      if (present) {
+        fs.mkdirSync(path.join(f.memory, 'reference'));
+        fs.writeFileSync(path.join(f.memory, 'reference/gone.md'), 'exists');
+        await f.service.complete('reviewed emphasis');
+        assert.deepEqual(JSON.parse(fs.readFileSync(f.record)).evidence.mechanical.indexedPaths,
+          ['memory/reference/gone.md'], form);
+      } else {
+        await assert.rejects(f.service.complete('reviewed emphasis'), e =>
+          e.code === 'CHECK_FAILED' && e.missingPaths.includes('memory/reference/gone.md'), form);
+        assert.equal(f.service.status().state, 'pending');
+      }
+      const fresh = fixture(t); fs.writeFileSync(fresh.references, form);
+      assert.equal(fresh.service.ensure({ createdBy: 'init', freshInstall: true }).state, 'pending', form);
+    }
+  }
+  const f = fixture(t); init(f);
+  await f.service.apply({ ...patch, replacement: 'reference/topic_part.md\nreference/miss*.md\nreference/**/absent.md' });
+  fs.mkdirSync(path.join(f.memory, 'reference')); fs.writeFileSync(path.join(f.memory, 'reference/topic_part.md'), 'exists');
+  await f.service.complete('reviewed internal filename and globs');
+  assert.deepEqual(JSON.parse(fs.readFileSync(f.record)).evidence.mechanical.indexedPaths, ['memory/reference/topic_part.md']);
+});
+
+test('backup readback rejects corrupted staging bytes before publication and reentry preserves original', async t => {
+  const f = fixture(t); init(f); const before = fs.readFileSync(f.record);
+  const service = createMigration({ ...f.settings, checkpoint: point => {
+    if (point === 'backup:copied') {
+      const parent = path.dirname(f.backup);
+      const staging = fs.readdirSync(parent).find(name => name.startsWith('references-layout-v1.backup.staging-'));
+      assert.ok(staging);
+      fs.writeFileSync(path.join(parent, staging, 'references.md'), 'corrupted backup bytes');
+    }
+  } });
+  await assert.rejects(service.apply(patch), { code: 'BACKUP_WRITE_FAILED', message: 'Backup readback differs', persisted: [] });
+  assert.equal(backupState(f.backup), 'absent'); assert.deepEqual(fs.readFileSync(f.record), before);
+  assert.equal(fs.readFileSync(f.references, 'utf8'), 'original marker\n');
+  await f.service.apply(patch);
+  assert.equal(fs.readFileSync(path.join(f.backup, 'references.md'), 'utf8'), 'original marker\n');
+});
+
+test('F8 inode replacement while waiting rejects before the migration action and leaves replacement intact', async t => {
+  const f = fixture(t); init(f); const before = fs.readFileSync(f.record);
+  const runDir = path.join(f.root, 'activity-monitor/session-groups/origin');
+  let release, entered; const barrier = new Promise(resolve => { release = resolve; });
+  const entering = new Promise(resolve => { entered = resolve; });
+  const holder = withMemoryLock(runDir, async () => { entered(); await barrier; }); await entering;
+  const lockPath = path.join(runDir, 'memory.lock');
+  const pending = f.service.apply(patch);
+  const rejected = assert.rejects(pending, { code: 'LOCK_UNAVAILABLE', persisted: [] });
+  try {
+    fs.renameSync(lockPath, `${lockPath}.retained`); fs.writeFileSync(lockPath, 'replacement inode');
+    release(); await holder; await rejected;
+    assert.equal(fs.readFileSync(lockPath, 'utf8'), 'replacement inode');
+    assert.equal(backupState(f.backup), 'absent'); assert.deepEqual(fs.readFileSync(f.record), before);
+    assert.equal(fs.readFileSync(f.references, 'utf8'), 'original marker\n');
+  } finally { release(); await holder; }
+});
+
 test('ensure preserves records, status is read-only, fresh install mechanically checked', t => {
   const f = fixture(t); assert.deepEqual(f.service.status(), { state: 'absent' });
   assert.equal(init(f).state, 'pending'); const original = fs.readFileSync(f.record);
