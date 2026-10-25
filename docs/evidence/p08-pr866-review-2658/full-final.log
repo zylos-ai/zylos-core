@@ -1,0 +1,395 @@
+Running 12 Node test files
+✔ historical c4-v0.1.0.sql: read-only plan, complete-chain data retention and no repeated migration (11.886224ms)
+✔ historical c4-v0.4.11.sql: read-only plan, complete-chain data retention and no repeated migration (5.031666ms)
+✔ historical c4-v0.5.2.sql: read-only plan, complete-chain data retention and no repeated migration (4.842673ms)
+✔ historical scheduler-v0.1.0.sql: read-only plan, complete-chain data retention and no repeated migration (3.147121ms)
+✔ historical web-console-v0.5.3.sql: read-only plan, complete-chain data retention and no repeated migration (1.514736ms)
+✔ historical C4 ALTER-added nullable raw_content shape backfills ACK suffix (3.502759ms)
+✔ synthetic version 0→2 executes complete remaining chain (1.305753ms)
+✔ synthetic version 1→2 executes complete remaining chain (1.338543ms)
+✔ synthetic later-step failure restores entire chain structure, data and starting version (1.492653ms)
+✔ missing or malformed later step is rejected before first callback or writes (1.148693ms)
+✔ invalid target layout after a step rolls back data and version (1.09972ms)
+✔ synthetic v1→v9 add, drop, rename and rebuild retain extension rows and columns (6.401131ms)
+✔ v1+ rebuild cannot silently discard a generated extension column (1.301413ms)
+✔ v1+ rebuild cannot change a retained column definition without declaration (1.248112ms)
+✔ declared v1+ core type, NOT NULL and default changes preserve extension definition and data (1.69849ms)
+✔ a name scheduled to become core later remains an extension in earlier steps (1.05332ms)
+✔ v1+ undeclared core definition change rolls back the rebuild (1.253766ms)
+✔ v1+ incomplete core declaration rolls back the rebuild (1.144366ms)
+✔ v1+ incorrect declared target definition rolls back the rebuild (1.32341ms)
+✔ v1+ extension definition change rolls back the rebuild (1.290003ms)
+✔ v1+ declaration for extension column rolls back the rebuild (0.877419ms)
+✔ core table extension NOT NULL lacks a usable default (0.515489ms)
+✔ core table extension NOT NULL DEFAULT NULL lacks a usable default (0.405734ms)
+✔ core table extension NOT NULL DEFAULT 'safe' has a usable default (0.330015ms)
+✔ core table extension NOT NULL DEFAULT 0 has a usable default (0.313856ms)
+✔ C4 v1 migrates to current schema and retains rows and user extensions (5.520644ms)
+✔ tagged scheduler v1 fixture migrates through current to a synthetic next version with rows and extensions retained (6.480418ms)
+✔ tagged web-console v1 fixture migrates through current to a synthetic next version with rows and extensions retained (2.764714ms)
+✔ v1+ drop-table declaration must match every existing column exactly (0.847023ms)
+✔ synthetic v1→v9 refuses added core column collision without writes (1.750783ms)
+✔ synthetic v1→v9 refuses renamed core column collision without writes (1.132096ms)
+✔ synthetic v1→v9 refuses dropped core table with extension field collision without writes (2.414382ms)
+✔ synthetic v1→v9 callback failure rolls back the entire chain (4.309454ms)
+✔ synthetic v1→v9 undeclared extension removal rolls back the entire chain (3.181042ms)
+✔ maybeColumns creates a missing column, accepts a matching one, and rejects a mismatched one (1.923052ms)
+✔ maybeTables creates a missing table, accepts a matching one, and rejects a mismatched one (2.781325ms)
+✔ rowChanges must declare an intentional row-count change (1.613522ms)
+✔ historical fixture bytes match recorded immutable provenance (1.637552ms)
+✔ actual deployed owner openers initialize and reopen known schemas without duplicate migrations (200.988654ms)
+✔ known C4 legacy fields/backfill/retag migrate together and only once (490.741436ms)
+✔ future versions are rejected before write pragmas and migration (367.427451ms)
+✔ version-zero adoption preserves an unknown legacy table while building the required baseline (1.043053ms)
+✔ failure rolls back schema, data and version; readonly inspection never migrates (1.56639ms)
+✔ lock re-read honors another initializer and rejects a newly future database (8.382756ms)
+✔ preflight is raw readonly, supports expected missing and rejects orphan sidecars (0.933648ms)
+✔ maintenance and malformed discovery blocks normal openers without initializing (1.165842ms)
+✔ missing stable maintenance cannot trust new_data_ready labels to release normal owner openers (58.647057ms)
+✔ missing stable maintenance cannot trust restored_complete labels to release normal owner openers (64.752477ms)
+✔ missing stable maintenance cannot trust aborted_before_install labels to release normal owner openers (57.116072ms)
+✔ missing stable maintenance rejects dangling .zylos/upgrade/active.json (0.59745ms)
+✔ missing stable maintenance rejects dangling .backup/self-upgrade (0.560347ms)
+✔ missing stable maintenance rejects dangling .zylos/upgrade (0.330902ms)
+✔ missing stable maintenance rejects dangling .zylos (0.366989ms)
+✔ missing stable maintenance rejects dangling .backup (0.319476ms)
+✔ first-adoption absence and empty active root permit schema initialization without fabricated protection (0.453102ms)
+✔ monitor reports schema incompatibility and fail-closes pending work (266.66873ms)
+✔ web-console rejects future C4 before stale session cleanup (258.081957ms)
+✔ all deployed owners recover existing zero-byte and initialized empty version-zero files (424.498665ms)
+✔ process death during initial migration leaves an empty database recoverable by the real owner (146.771868ms)
+✔ two processes initialize the same existing empty database under one writer lock (136.859135ms)
+✔ version-zero view reaches migration callback while readonly preflight never initializes empty files (1.364436ms)
+✔ version-zero migration needs no changes declaration and validates the complete v1 layout before commit (1.119457ms)
+✔ empty initialization requires owner capability and a regular file; malformed files remain unchanged (1.221478ms)
+✔ SQLite automatic transaction rollback preserves the original migration error (1.435867ms)
+✔ invalid schema versions are distinguished from future supported-range versions (0.502596ms)
+✔ ordinary owner openers permit symlink .zylos without recovery materials (132.160975ms)
+✔ ordinary owner openers permit symlink .backup without recovery materials (141.832035ms)
+✔ ordinary owner openers permit group writable without recovery materials (166.714454ms)
+✔ ordinary owner openers permit partial stable deployment without recovery materials (133.187027ms)
+✔ ordinary owner openers permit dangling stable helper without recovery materials (136.008974ms)
+✔ ordinary owner openers permit empty0775 without recovery materials (142.661573ms)
+✔ dangling stable helper with actual materials still blocks ordinary owners (0.483434ms)
+✔ ordinary owners accept additional tables and columns while upgrade inspection stays strict (311.980228ms)
+✔ ordinary owners reopen with an unsafe NOT NULL extension while upgrade inspection rejects it (261.20702ms)
+✔ upgrade inspection allows extra tables independently of extra columns for every core owner (201.06613ms)
+✔ migration planning and post-migration inspection preserve extension policy (0.867146ms)
+✔ each core owner migrates a legacy version while retaining extra table rows (4.794683ms)
+✔ extension allowance never bypasses required schema definitions or versions (0.563348ms)
+▶ cli add
+  ✔ creates a cron task with correct timezone column (277.758757ms)
+  ✔ creates a one-time task with --in (269.946477ms)
+  ✔ creates a one-time task with --at (266.915671ms)
+  ✔ creates an interval task with --every (240.957715ms)
+  ✔ sets priority correctly (217.803037ms)
+  ✔ sets require_idle and reply fields via --block-queue-until-idle (209.16495ms)
+  ✔ still accepts legacy --require-idle (196.505272ms)
+  ✔ sets custom miss_threshold (216.272511ms)
+  ✔ sets custom name (237.909191ms)
+  ✔ reports error without timing option (200.646666ms)
+  ✔ reports error without prompt (179.222507ms)
+✔ cli add (2515.20142ms)
+▶ cli list
+  ✔ shows empty list message (181.101511ms)
+  ✔ shows tasks with TZ header (370.465187ms)
+  ✔ --json outputs full task rows as a JSON array (368.070868ms)
+  ✔ --json outputs [] when no tasks match (194.903613ms)
+  ✔ --reply-channel filters rows in both output modes (934.13927ms)
+  ✔ --json still includes failed one-time tasks (374.260612ms)
+✔ cli list (2423.341567ms)
+▶ cli done
+  ✔ completes a task and updates history (350.743581ms)
+  ✔ reports error for non-existent task (170.611483ms)
+✔ cli done (521.566337ms)
+▶ cli pause and resume
+  ✔ pauses a pending task (509.806924ms)
+✔ cli pause and resume (509.913094ms)
+▶ cli remove
+  ✔ removes a task (358.218918ms)
+  ✔ reports error for non-existent task (172.181673ms)
+✔ cli remove (533.748366ms)
+▶ cli update
+  ✔ updates task name (346.472671ms)
+  ✔ updates priority (376.050153ms)
+  ✔ clears reply configuration (356.718364ms)
+  ✔ switches schedule type from cron to interval (374.677502ms)
+  ✔ disables require_idle via --no-block-queue-until-idle (356.872636ms)
+  ✔ still accepts legacy --no-require-idle (360.184389ms)
+  ✔ reports error with no update options (339.227656ms)
+✔ cli update (2510.608275ms)
+▶ cli history
+  ✔ shows empty history (187.962504ms)
+✔ cli history (188.079094ms)
+▶ cli next
+  ✔ shows upcoming tasks (332.625323ms)
+  ✔ shows empty message when no pending tasks (169.184457ms)
+✔ cli next (501.944316ms)
+▶ cli running
+  ✔ shows safe to compact when no running tasks (177.412858ms)
+✔ cli running (177.520455ms)
+▶ cli help
+  ✔ shows help with --help flag (170.519475ms)
+  ✔ shows help with help command (171.279803ms)
+  ✔ shows help and error for unknown command (168.263734ms)
+✔ cli help (510.340875ms)
+▶ cli partial ID match
+  ✔ supports partial task ID for done command (346.011287ms)
+✔ cli partial ID match (346.099561ms)
+▶ getDefaultTimezone
+  ✔ returns process.env.TZ when set (0.814615ms)
+  ✔ returns UTC when TZ is unset (0.208702ms)
+✔ getDefaultTimezone (2.204519ms)
+▶ isValidCron
+  ✔ returns true for standard 5-field expressions (17.386238ms)
+  ✔ returns false for invalid expressions (0.409146ms)
+✔ isValidCron (18.215061ms)
+▶ getNextRun
+  ✔ throws for invalid cron expression (0.715741ms)
+  ✔ returns a future timestamp (3.743938ms)
+  ✔ uses getDefaultTimezone when timezone is falsy (1.847188ms)
+✔ getNextRun (6.805195ms)
+▶ describeCron
+  ✔ describes known patterns (0.281488ms)
+  ✔ returns the expression itself for unknown patterns (0.154461ms)
+✔ describeCron (0.689014ms)
+[Scheduler] Dispatching task task-test (Test) #1
+[Scheduler] Task task-test already claimed/modified, skipping
+[Scheduler] Dispatching task task-test (Test) #1
+[Scheduler] Dispatch task-test #1: UNHEALTHY_NOTIFY_FAILED (C)
+[Scheduler] Task task-test already claimed/modified, skipping
+[Scheduler] Dispatching task task-test (Test) #1
+[Scheduler] Dispatch task-test #1: UNHEALTHY_NOTIFY_UNCERTAIN (C)
+[Scheduler] Task task-test already claimed/modified, skipping
+[Scheduler] Dispatching task task-test (Test) #2
+[Scheduler] Dispatch task-test #2: INVALID_ARGS (R)
+[Scheduler] Dispatching task task-test (Test) #2
+[2026-10-25T18:34:50.722Z] Updated next run for task-test: Oct 26, 2026, 02:35
+[Scheduler] Dispatch task-test #2: INVALID_ARGS (R)
+[Scheduler] Dispatching task task-test (Test) #2
+[2026-10-25T18:34:50.751Z] Updated next run for task-test: Oct 26, 2026, 02:35
+[Scheduler] Dispatch task-test #2: INVALID_ARGS (R)
+[Scheduler] Dispatching task task-test (Test) #1
+[Scheduler] Dispatch task-test #1: DB_BUSY (T)
+[Scheduler] Dispatching task task-test (Test) #2
+[Scheduler] Dispatch task-test #2: DB_BUSY (T)
+[Scheduler] Dispatching task task-test (Test) #1
+[Scheduler] Dispatch task-test #1: CONVERSATION_BOUND_UNAVAILABLE (T)
+[Scheduler] Dispatching task task-test (Test) #1
+[Scheduler] Dispatching task task-test (Test) #1
+[Scheduler] Dispatch task-test #1: RECEIVE_NOT_COMMITTED (T)
+[Scheduler] Dispatching task task-test (Test) #1
+[Scheduler] Dispatching task task-test (Test) #1
+[Scheduler] Dispatch task-test #1: RECEIVE_NOT_COMMITTED (T)
+[Scheduler] Dispatching task task-test (Test) #1
+[Scheduler] Dispatch task-test #1: RECEIVE_RESULT_UNKNOWN (U)
+[Scheduler] Dispatching task task-test (Test) #1
+[Scheduler] Dispatch task-test #1: TEST (R)
+[Scheduler] Dispatching task task-test (Test) #1
+[Scheduler] Dispatch task-test #1: TEST (T)
+[Scheduler] Dispatching task task-test (Test) #1
+[Scheduler] Dispatch task-test #1: TEST (C)
+[Scheduler] Dispatching task task-test (Test) #1
+[Scheduler] Dispatch task-test #1: RECEIVE_RESULT_UNKNOWN (U)
+[Scheduler] Dispatching task task-test (Test) #1
+[Scheduler] Dispatching task task-test (Test) #1
+[Scheduler] Task task-test already claimed/modified, skipping
+[Scheduler] Dispatching task task-single (Test) #1
+[Scheduler] Dispatching task task-multi (Test) #1
+[Scheduler] Dispatching task task-test (Test) #1
+[Scheduler] Dispatching task task-test (Test) #1
+[Scheduler] Dispatching task task-test (Test) #1
+[Scheduler] Dispatch task-test #1: DB_BUSY (T)
+[Scheduler] Task task-test (Test) missed execution window by 311s (threshold: 300s), skipping
+[Scheduler] Dispatching task task-test (Test) #1
+[Scheduler] Dispatch task-test #1: DB_BUSY (T)
+[Scheduler] Task task-test (Test) missed execution window by 311s (threshold: 300s), skipping
+[2033-05-18T03:38:21.000Z] Updated next run for task-test: May 18, 2033, 11:39
+[Scheduler] Dispatching task task-test (Test) #1
+[Scheduler] Dispatch task-test #1: UNCERTAIN (C)
+[Scheduler] Task task-test already claimed/modified, skipping
+[2033-05-18T04:33:21.000Z] Task task-test (Test) timed out after 3600s
+[Scheduler] Dispatching task task-test (Test) #1
+[Scheduler] Dispatch task-test #1: UNCERTAIN (C)
+[Scheduler] Task task-test already claimed/modified, skipping
+[2033-05-18T04:33:21.000Z] Task task-test (Test) timed out after 3600s
+[2033-05-18T04:33:21.000Z] Updated next run for task-test: May 18, 2033, 12:34
+[Scheduler] Dispatching task task-test (Test) #1
+[Scheduler] Dispatch task-test #1: RECEIVE_RESULT_UNKNOWN (U)
+[Scheduler] Task task-test already claimed/modified, skipping
+[2033-05-18T04:33:21.000Z] Task task-test (Test) timed out after 3600s
+[Scheduler] Dispatching task task-test (Test) #1
+[Scheduler] Dispatch task-test #1: RECEIVE_RESULT_UNKNOWN (U)
+[Scheduler] Task task-test already claimed/modified, skipping
+[2033-05-18T04:33:21.000Z] Task task-test (Test) timed out after 3600s
+[2033-05-18T04:33:21.000Z] Updated next run for task-test: May 18, 2033, 12:34
+[Scheduler] Dispatching task task-test (Test) #1
+[Scheduler] Dispatching task task-test (Test) #1
+[Scheduler] Dispatch task-test #1: DB_BUSY (T)
+[Scheduler] Task task-test (Test) missed execution window by 601s (threshold: 600s), skipping
+[2033-05-18T03:36:41.000Z] Updated next run for task-test: May 18, 2033, 11:37
+[Scheduler] Dispatching task task-test (Test) #1
+[Scheduler] Dispatch task-test #1: DB_BUSY (T)
+[Scheduler] Task task-test (Test) missed execution window by 311s (threshold: 300s), skipping
+✔ committed success remains running and does not resend (36.420364ms)
+✔ committed UNHEALTHY_NOTIFY_FAILED:["conversations"] remains running and does not resend (35.613355ms)
+✔ committed UNHEALTHY_NOTIFY_UNCERTAIN:["conversations"] remains running and does not resend (31.739774ms)
+✔ R fails exact execution and advances only recurring schedule: one-time (32.706617ms)
+✔ R fails exact execution and advances only recurring schedule: recurring (48.074314ms)
+✔ R fails exact execution and advances only recurring schedule: interval (28.957554ms)
+✔ T known zero commit retains original due time and retries with new execution id (71.778285ms)
+✔ failed pre-send lower bound never starts receive and rolls back execution to pending (2.19436ms)
+✔ unknown receipt finds exact execution in mixed D1 statuses and absorbed groups (29.656533ms)
+✔ full marker rejects old history, substrings, prefix and outbound false matches (2.255861ms)
+✔ actual child timeout, one readback found (505.383078ms)
+✔ actual child timeout, one readback absent (505.166775ms)
+✔ actual child timeout, one readback failed (506.457205ms)
+✔ late R accounting cannot overwrite done (1.981358ms)
+✔ late T accounting cannot overwrite done (1.797498ms)
+✔ late C accounting cannot overwrite done (1.757205ms)
+✔ late U accounting cannot overwrite done (2.480389ms)
+✔ late success accounting cannot overwrite done (1.691411ms)
+✔ claim and history insertion are one transaction (1.949131ms)
+✔ result accounting rolls back both writes and never resends on DB failure (1.83334ms)
+✔ main loop ignores actual single machine / origin / target status files (3.344187ms)
+✔ main loop ignores actual multi machine / origin / target status files (3.117416ms)
+✔ missed loop ignores actual single machine / origin / target status files (2.406258ms)
+✔ missed loop ignores actual multi machine / origin / target status files (2.075624ms)
+✔ zero-commit retries stop beyond miss window: one-time (2.37967ms)
+✔ zero-commit retries stop beyond miss window: interval (2.153267ms)
+✔ C retains execution until 3600s stale: one-time (1.994968ms)
+✔ C retains execution until 3600s stale: interval (2.147543ms)
+✔ U retains execution until 3600s stale: one-time (1.881704ms)
+✔ U retains execution until 3600s stale: interval (2.241886ms)
+✔ real P01 recent/range reads find full execution after a non-maximum-id lower bound (49.573344ms)
+✔ retry with extended window sends once per scheduler iteration, then expires (2.430745ms)
+✔ miss_threshold zero uses the default window, then expires (2.383341ms)
+✔ stale cleanup preserves done committed by another connection after enumeration (90.68187ms)
+✔ dispatch, duplicate claim and missed window remain observable in logs (2.730672ms)
+[2026-10-25T18:34:50.617Z] Updated next run for task-test-mvo63h3u-by4a: Oct 26, 2026, 17:00
+[2026-10-25T18:34:50.690Z] Updated next run for task-test-mvo63h6d-97o5: Oct 26, 2026, 04:34
+[2026-10-25T18:34:50.824Z] Updated next run for task-utc: Oct 26, 2026, 09:00
+[2026-10-25T18:34:50.826Z] Updated next run for task-sh: Oct 26, 2026, 01:00
+[2026-10-25T18:34:50.884Z] Updated next run for task-test-mvo63hbt-bvs5: Oct 26, 2026, 17:00
+[2026-10-25T18:34:50.972Z] Updated next run for task-test-mvo63hea-ivdw: Oct 26, 2026, 03:34
+[2026-10-25T18:34:51.084Z] Failed to reschedule task task-test-mvo63hhk-osvl: Invalid cron expression "invalid cron expr": Invalid characters, got value: invalid
+[2026-10-25T18:34:51.149Z] Updated next run for task-a: Oct 26, 2026, 17:00
+[2026-10-25T18:34:51.149Z] Updated next run for task-c: Oct 26, 2026, 03:04
+[2026-10-25T18:34:51.228Z] Task task-test-mvo63hl9-eock (test task) timed out after 3600s
+[2026-10-25T18:34:51.305Z] Task task-test-mvo63hnh-ylb3 (test task) timed out after 3600s
+[2026-10-25T18:34:51.503Z] Task task-ot (test task) timed out after 3600s
+[2026-10-25T18:34:51.503Z] Task task-rc (test task) timed out after 3600s
+[2026-10-25T18:34:51.504Z] Task task-iv (test task) timed out after 3600s
+▶ updateNextRunTime
+  ✔ schedules next cron run for recurring task (86.715375ms)
+  ✔ schedules next interval run for interval task (72.90197ms)
+  ✔ does nothing for one-time task (66.207756ms)
+  ✔ uses task timezone for cron calculation (63.112691ms)
+✔ updateNextRunTime (290.367299ms)
+▶ processCompletedTasks
+  ✔ reschedules completed recurring task (62.851901ms)
+  ✔ reschedules completed interval task (93.082942ms)
+  ✔ leaves completed one-time task unchanged (60.644053ms)
+  ✔ marks task as failed if rescheduling throws (42.937728ms)
+  ✔ handles multiple completed tasks (73.20279ms)
+✔ processCompletedTasks (333.26845ms)
+▶ handleStaleRunningTasks
+  ✔ marks stale one-time task as failed (78.653822ms)
+  ✔ marks stale recurring task as completed (for rescheduling) (74.397182ms)
+  ✔ ignores recently updated running tasks (69.27617ms)
+  ✔ ignores non-running tasks (65.981143ms)
+  ✔ handles multiple stale tasks with different types (55.93557ms)
+✔ handleStaleRunningTasks (344.618118ms)
+▶ generateId
+  ✔ starts with task- prefix (1.895835ms)
+  ✔ generates unique IDs (0.459093ms)
+  ✔ contains only alphanumeric and hyphens (0.298988ms)
+✔ generateId (4.065514ms)
+▶ now
+  ✔ returns current Unix timestamp in seconds (0.18613ms)
+  ✔ returns an integer (0.118166ms)
+✔ now (0.497071ms)
+▶ getDb
+  ✔ creates data directory and initializes schema (44.333138ms)
+✔ getDb (44.558294ms)
+▶ cleanupHistory
+  ✔ removes entries older than retention period (65.420127ms)
+  ✔ returns 0 when nothing to clean (40.621266ms)
+✔ cleanupHistory (106.369221ms)
+✔ four-way receive mapping: saved group and reply (36.621287ms)
+✔ four-way receive mapping: saved group without reply (34.743896ms)
+✔ four-way receive mapping: old null pair with reply (29.339098ms)
+✔ four-way receive mapping: old null pair without reply (30.100091ms)
+✔ four-way receive mapping: whole component (39.271431ms)
+✔ actual receive exit classification INVALID_ARGS:[] (33.771956ms)
+✔ actual receive exit classification SESSION_GROUP_INVALID:[] (29.823685ms)
+✔ actual receive exit classification SESSION_GROUP_TOO_LONG:[] (26.920631ms)
+✔ actual receive exit classification DB_BUSY:[] (37.018125ms)
+✔ actual receive exit classification INTERNAL_ERROR:[] (28.923129ms)
+✔ actual receive exit classification INTERNAL_ERROR:null (31.154666ms)
+✔ actual receive exit classification UNHEALTHY_NOTIFY_FAILED:["conversations"] (26.136756ms)
+✔ actual receive exit classification UNHEALTHY_NOTIFY_UNCERTAIN:["conversations"] (28.932278ms)
+✔ actual receive exit classification invalid (30.920978ms)
+✔ actual receive exit classification abnormal (25.240956ms)
+✔ actual receive exit classification signal (28.938243ms)
+✔ timeout preserves termination evidence and returns only after child exit (502.571828ms)
+✔ DM-58 actual add covers seven saved-target cases; no namespace allocation or D6 requirement (1699.567427ms)
+✔ DM-58 actual add/update reject malformed L, missing X and uninstalled/illegal X with no task or D5 mutation (2782.902921ms)
+✔ DM-58 update recomputes explicit target; clear and ordinary fields preserve saved values, including NULL (2046.025874ms)
+✔ DM-58 task INSERT failure leaves namespace bindings unchanged (411.410932ms)
+✔ DM-58 paired routes reject incomplete add/update without changing any task field (1600.258305ms)
+✔ DM-58 single mode ignores latest lark input and other-group tmux hints (638.97323ms)
+✔ DM-58 pure resolver never looks up explicit targets; environment lookup is readonly, clear does not infer editor group (0.558538ms)
+✔ DM-10 scheduler-v0.1.0.sql preserves bytes, no inferred group, repeat entry is inert (10.596847ms)
+✔ DM-10 scheduler-v0.9.0-v1.sql preserves bytes, no inferred group, repeat entry is inert (3.257646ms)
+✔ DM-10 DDL or version publish failure rolls back both new columns, rows and version (6.348868ms)
+▶ parseDuration
+  ✔ parses natural language durations (23.488574ms)
+  ✔ parses compound natural language (29.684428ms)
+  ✔ parses fractional hours (0.53865ms)
+  ✔ parses short form minutes (0.206675ms)
+  ✔ parses short form hours (0.22456ms)
+  ✔ parses short form days (0.31665ms)
+  ✔ parses pure number as seconds (0.347765ms)
+  ✔ returns null for unparseable input (0.27522ms)
+  ✔ returns null for empty string (0.195634ms)
+  ✔ returns null for negative number (0.250322ms)
+✔ parseDuration (57.099074ms)
+▶ parseTime
+  ✔ parses natural language time (4.212588ms)
+  ✔ returns null for unparseable input (0.993153ms)
+  ✔ parses ISO date string as fallback (0.379028ms)
+  ✔ parses partial ISO date (0.607956ms)
+✔ parseTime (6.418034ms)
+▶ formatTime
+  ✔ formats timestamp in UTC (13.687347ms)
+  ✔ formats timestamp in Asia/Shanghai (UTC+8) (0.268572ms)
+  ✔ falls back to UTC for invalid timezone (0.258485ms)
+  ✔ uses process.env.TZ as default timezone (0.259796ms)
+✔ formatTime (14.772301ms)
+▶ getRelativeTime
+  ✔ shows seconds for near future (0.481673ms)
+  ✔ shows minutes for minutes away (0.128173ms)
+  ✔ shows hours for hours away (0.09956ms)
+  ✔ shows days for days away (0.104606ms)
+  ✔ shows ago suffix for past timestamps (0.09552ms)
+  ✔ shows seconds ago for recent past (0.101121ms)
+  ✔ shows hours ago for hours past (0.093647ms)
+  ✔ shows days ago for days past (0.111316ms)
+✔ getRelativeTime (1.566065ms)
+▶ scheduler timezone behavior
+  ✔ parseTime interprets natural language using current TZ (52.384632ms)
+  ✔ getNextRun respects explicit timezone and DST transitions (25.69685ms)
+  ✔ loadTimezone validates and follows fallback chain (7.033008ms)
+  ✔ loadTimezone parses dotenv quoted values with inline comments (1.480566ms)
+  ✔ loadTimezone falls back when .env has no TZ key (1.115198ms)
+  ✔ cmdUpdate syncs timezone column when schedule changes (419.786869ms)
+✔ scheduler timezone behavior (508.892436ms)
+ℹ tests 240
+ℹ suites 27
+ℹ pass 240
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 10842.136579

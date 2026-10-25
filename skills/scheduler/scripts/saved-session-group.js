@@ -12,16 +12,30 @@ export function validateReplyTarget(options, { validate = validateChannel } = {}
   if (has(options, 'reply-channel')) {
     const channel = options['reply-channel'];
     try {
-      if (typeof channel !== 'string' || !channel || channel.includes('..') || /[/\\\0]/.test(channel)) throw new Error('invalid name');
       validate(channel, true);
     } catch (cause) { throw dataError('INVALID_ARGS', `invalid channel: ${String(channel)}`, { cause }); }
   }
-  if (has(options, 'reply-session-group')) validateGroupName(options['reply-session-group']);
+  if (has(options, 'reply-session-group')) {
+    try { validateGroupName(options['reply-session-group']); }
+    catch (cause) {
+      throw dataError(cause.code, cause.message.replace(/message was NOT stored/gi, 'Task was not created or updated'), { cause });
+    }
+  }
+}
+
+function validateReplyPair(channel, endpoint) {
+  if (Boolean(channel) !== Boolean(endpoint)) {
+    throw dataError('INVALID_ARGS', '--reply-channel and --reply-endpoint must both have values or both be absent');
+  }
 }
 
 /** Resolve only supplied routing facts. Never allocate a namespace or consult a session. */
 export function resolveSavedSessionGroup(options, { env = process.env, lookup = getComponentByNamespace, validate = validateChannel } = {}) {
   validateReplyTarget(options, { validate });
+  if (has(options, 'reply-channel') !== has(options, 'reply-endpoint')) {
+    throw dataError('INVALID_ARGS', '--reply-channel and --reply-endpoint must be supplied together');
+  }
+  validateReplyPair(options['reply-channel'], options['reply-endpoint']);
   if (has(options, 'reply-channel')) return { session_component: options['reply-channel'], session_group_name: options['reply-session-group'] ?? null };
   const group = env.ZYLOS_SESSION_GROUP;
   if (group === undefined) return empty();
@@ -38,9 +52,8 @@ export function updatedReplyTarget(task, options, deps = {}) {
   if (options['clear-reply']) return { reply_channel: null, reply_endpoint: null };
   if (!['reply-channel', 'reply-endpoint', 'reply-session-group'].some(key => has(options, key))) return {};
   const channel = has(options, 'reply-channel') ? options['reply-channel'] : task.reply_channel;
-  const endpoint = has(options, 'reply-endpoint') ? options['reply-endpoint'] : task.reply_endpoint;
-  // An endpoint alone cannot define a new execution target. Without an effective
-  // reply channel, preserve the saved pair; otherwise select that channel's group.
-  const saved = channel === null ? {} : { session_component: channel, session_group_name: options['reply-session-group'] ?? null };
+  const endpoint = has(options, 'reply-endpoint') ? options['reply-endpoint'] || null : task.reply_endpoint;
+  validateReplyPair(channel, endpoint);
+  const saved = { session_component: channel, session_group_name: options['reply-session-group'] ?? null };
   return { reply_channel: channel, reply_endpoint: endpoint, ...saved };
 }

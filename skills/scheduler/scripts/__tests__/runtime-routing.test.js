@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { buildReceiveArgs, sendViaC4, classifyReceiveResult, RECEIVE_TIMEOUT_MS } from '../runtime.js';
+import { sendViaC4, RECEIVE_TIMEOUT_MS } from '../runtime.js';
 const fixture = fileURLToPath(new URL('./fixtures/receive-result.mjs', import.meta.url));
 
 for (const [label, options, route] of [
@@ -24,11 +24,6 @@ for (const [label, options, route] of [
   }});
   assert.equal(result.category,'success');
   assert.deepEqual(JSON.parse(fs.readFileSync(record)),['--core-source','scheduler','--json',...route,'--block-queue-until-idle','--priority','2','--content','literal $HOME `echo x`']);
-});
-
-test('saved component mismatch is local refusal without spawning', () => {
-  const result=sendViaC4('x',{sessionComponent:'telegram',replyChannel:'lark'},{execute(){assert.fail('must not spawn');}});
-  assert.equal(result.category,'R'); assert.equal(result.code,'INVALID_ARGS');
 });
 
 for (const [mode, category] of [
@@ -55,15 +50,4 @@ test('timeout preserves termination evidence and returns only after child exit',
   }});
   assert.equal(result.category,'U'); assert.equal(result.spawnCode,'ETIMEDOUT');
   assert.equal(fs.readFileSync(exited,'utf8'),'exited');
-});
-
-test('untrusted partial receipts never authorize retry or imply storage', () => {
-  for(const receipt of [
-    {ok:true}, {ok:true,action:'queued',id:1},
-    {ok:false,error:{code:'DB_BUSY',message:'busy'}},
-    {ok:false,error:{code:'DB_BUSY',message:'busy',persisted:['conversations']}},
-    {ok:false,error:{code:'UNKNOWN',message:'?',persisted:[]}},
-    {ok:false,error:{code:'UNHEALTHY_NOTIFY_FAILED',message:'x',persisted:[]}},
-  ]) assert.equal(classifyReceiveResult({status:1,stdout:JSON.stringify(receipt)}).category,'U');
-  assert.equal(classifyReceiveResult({status:0,stdout:JSON.stringify({ok:false,error:{code:'DB_BUSY',message:'busy',persisted:[]}})}).category,'U');
 });

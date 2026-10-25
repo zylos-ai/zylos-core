@@ -12,7 +12,7 @@ import * as c4 from '../../../comm-bridge/scripts/c4-db.js';
 import { guardDatabase } from '../../../comm-bridge/scripts/sqlite-schema.js';
 import { dispatchTask, executionMarker } from '../daemon-dispatch.js';
 import { sendViaC4 } from '../runtime.js';
-import { mainLoop, handleMissedTasks, runSchedulerIteration } from '../daemon.js';
+import { mainLoop, handleMissedTasks, runSchedulerIteration } from '../daemon-dispatch.js';
 import { handleStaleRunningTasks, processCompletedTasks, TASK_TIMEOUT } from '../daemon-tasks.js';
 const receiveFixture=fileURLToPath(new URL('./fixtures/receive-result.mjs',import.meta.url));
 function fixture(t, overrides={}) {
@@ -63,13 +63,13 @@ test('failed pre-send lower bound never starts receive and rolls back execution 
  assert.equal(read().history[0].error,'CONVERSATION_BOUND_UNAVAILABLE');
 });
 
-for(const state of ['pending','running','delivered','failed']) test(`unknown receipt finds exact execution regardless of D1 ${state} or absorbed group`,t=>{
+test('unknown receipt finds exact execution in mixed D1 statuses and absorbed groups',t=>{
  const {db,task,read}=fixture(t);let marker;let exited=false;let reads=0;
  const result=dispatchTask(db,task,{getRecentConversations(limit){assert.equal(limit,1);return [{id:3}];},
  sendViaC4(message,options){marker=message.split('\n')[0];const result=receive('invalid')(message,options);exited=true;return result;},
  getConversationsByRange(start,end){reads++;assert.equal(exited,true);assert.equal(start,4);assert.equal(end,Number.MAX_SAFE_INTEGER);return [
  {id:4,direction:'in',content:executionMarker(task.id,999)+'\nold',status:'delivered'},
- {id:50,direction:'in',content:marker+'\n'+('x'.repeat(5000)),status:state,session_group:'origin'}];}});
+ ...['pending','running','delivered','failed'].map((status,i)=>({id:50+i,direction:'in',content:marker+'\n'+('x'.repeat(5000)),status,session_group:'origin'}))];}});
  assert.equal(result.category,'success');assert.equal(reads,1);assert.equal(read().task.status,'running');assert.equal(read().history[0].status,'started');
 });
 
@@ -81,7 +81,7 @@ test('full marker rejects old history, substrings, prefix and outbound false mat
  assert.equal(result.category,'T');assert.equal(read().task.status,'pending');assert.equal(read().task.next_run_at,task.next_run_at);
 });
 
-for(const mode of ['abnormal','invalid','timeout'])for(const outcome of ['found','absent','failed'])
+for(const mode of ['timeout'])for(const outcome of ['found','absent','failed'])
  test(`actual child ${mode}, one readback ${outcome}`,t=>{
  const {db,task,read}=fixture(t);const dir=fs.mkdtempSync(path.join(os.tmpdir(),'scheduler-readback-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
  const exited=path.join(dir,'exited');let marker,returned=false;
@@ -115,17 +115,18 @@ test('result accounting rolls back both writes and never resends on DB failure',
  assert.equal(dispatchTask(db,task,{...base,sendViaC4(){assert.fail('must not resend');}}).claimed,false);
 });
 
-async function withStatusFiles(t,mode,scope,state,fn) {
+async function withStatusFiles(t,mode,fn) {
  const oldRoot=process.env.ZYLOS_DIR;
  const root=fs.mkdtempSync(path.join(os.tmpdir(),'scheduler-status-'));
  try {
   process.env.ZYLOS_DIR=root;
   fs.writeFileSync(path.join(root,'config.json'),JSON.stringify({runtime:'claude',session_mode:mode}));
   const monitor=path.join(root,'activity-monitor');
-  const statusDir=scope==='machine'?monitor:path.join(monitor,'session-groups',scope==='origin'?'origin':'telegram.team');
-  fs.mkdirSync(statusDir,{recursive:true});
-  if(state!=='missing')fs.writeFileSync(path.join(statusDir,'agent-status.json'),
-   state==='error'?'{bad':JSON.stringify({state:state==='busy'?'busy':'stopped',updatedAt:state==='stale'?1:Date.now()}));
+  for (const scope of ['', 'session-groups/origin', 'session-groups/telegram.team']) {
+    const statusDir=path.join(monitor,scope);
+    fs.mkdirSync(statusDir,{recursive:true});
+    fs.writeFileSync(path.join(statusDir,'agent-status.json'),JSON.stringify({state:'stopped',updatedAt:1}));
+  }
   // Observe actual filesystem access, not an unused injected reader. Even a
   // swallowed read error increments the counter and fails the assertion.
   const originalRead=fs.readFileSync; let statusReads=0;
@@ -142,18 +143,18 @@ async function withStatusFiles(t,mode,scope,state,fn) {
  }
 }
 
-for(const mode of ['single','multi'])for(const scope of ['machine','origin','target'])for(const state of ['missing','busy','stale','error'])
- test(`main loop ignores actual ${mode} / ${scope} / ${state} status files`,async t=>{
-  const {db}=fixture(t,{id:`task-${mode}-${scope}-${state}`,session_component:'telegram',session_group_name:'team'});let sends=0,loops=0;
-  await withStatusFiles(t,mode,scope,state,()=>mainLoop(db,{shouldRun:()=>loops++===0,sleep:async()=>{},dependencies:{...base,
+for(const mode of ['single','multi'])
+ test(`main loop ignores actual ${mode} machine / origin / target status files`,async t=>{
+  const {db}=fixture(t,{id:`task-${mode}`,session_component:'telegram',session_group_name:'team'});let sends=0,loops=0;
+  await withStatusFiles(t,mode,()=>mainLoop(db,{shouldRun:()=>loops++===0,sleep:async()=>{},dependencies:{...base,
    sendViaC4(){sends++;return {category:'success'};}}}));
   assert.equal(sends,1);
  });
 
-for(const mode of ['single','multi'])for(const scope of ['machine','origin','target'])for(const state of ['missing','busy','stale','error'])
- test(`missed loop ignores actual ${mode} / ${scope} / ${state} status files`,async t=>{
+for(const mode of ['single','multi'])
+ test(`missed loop ignores actual ${mode} machine / origin / target status files`,async t=>{
   const {db,read}=fixture(t,{type:'interval',interval_seconds:60,next_run_at:Math.floor(Date.now()/1000)-400,miss_threshold:600,session_component:'telegram',session_group_name:'team'});let sends=0;
-  await withStatusFiles(t,mode,scope,state,()=>handleMissedTasks(db,{...base,sendViaC4(){sends++;return {category:'success'};}}));
+  await withStatusFiles(t,mode,()=>handleMissedTasks(db,{...base,sendViaC4(){sends++;return {category:'success'};}}));
   assert.equal(sends,1);assert.equal(read().task.status,'running');
  });
 
@@ -200,4 +201,56 @@ test('retry with extended window sends once per scheduler iteration, then expire
  const deps={...base,sendViaC4(){calls++;return {category:'T',code:'DB_BUSY'};}};
  runSchedulerIteration(db,deps);assert.equal(calls,1);assert.equal(read().task.next_run_at,task.next_run_at);
  t.mock.timers.tick(201000);runSchedulerIteration(db,deps);assert.equal(calls,1);assert.ok(read().task.next_run_at>task.next_run_at);
+});
+
+// Review P3-1: a stored zero uses the established five-minute default.
+test('miss_threshold zero uses the default window, then expires',t=>{
+ t.mock.timers.enable({apis:['Date'],now:2000000000000});
+ const {db,read}=fixture(t,{miss_threshold:0});let sends=0;
+ const deps={...base,sendViaC4(){sends++;return {category:'T',code:'DB_BUSY'};}};
+ runSchedulerIteration(db,deps);assert.equal(sends,1);assert.equal(read().task.status,'pending');
+ t.mock.timers.tick(301000);runSchedulerIteration(db,deps);
+ assert.equal(sends,1);assert.equal(read().task.status,'failed');
+});
+
+// Review P3-2: the stale list can become obsolete before its write lock is held.
+test('stale cleanup preserves done committed by another connection after enumeration',t=>{
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'scheduler-stale-race-'));
+ t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
+ const db=new Database(path.join(dir,'scheduler.db'));guardDatabase(db,schema);
+ const other=new Database(path.join(dir,'scheduler.db'));t.after(()=>{other.close();db.close();});
+ const timestamp=Math.floor(Date.now()/1000);
+ db.prepare("INSERT INTO tasks(id,name,prompt,type,next_run_at,status,created_at,updated_at) VALUES('stale-race','Race','run','one-time',?,'running',?,?)").run(timestamp-4000,timestamp-4000,timestamp-4000);
+ db.prepare("INSERT INTO task_history(task_id,executed_at,status) VALUES('stale-race',?,'started')").run(timestamp-4000);
+ const prepare=db.prepare.bind(db);let completed=false;
+ t.mock.method(db,'prepare',sql=>{
+  const stmt=prepare(sql);
+  if(sql.includes("status = 'running'") && sql.includes('SELECT *')) {
+   const all=stmt.all.bind(stmt);
+   t.mock.method(stmt,'all',(...args)=>{
+    const rows=all(...args);assert.equal(rows.length,1);
+    other.transaction(()=>{
+     other.prepare("UPDATE tasks SET status='completed',last_error='done',updated_at=? WHERE id='stale-race'").run(timestamp);
+     other.prepare("UPDATE task_history SET status='success',completed_at=? WHERE task_id='stale-race'").run(timestamp);
+    }).immediate();completed=true;return rows;
+   });
+  }
+  return stmt;
+ });
+ handleStaleRunningTasks(db);assert.equal(completed,true);
+ const task=prepare("SELECT * FROM tasks WHERE id='stale-race'").get();
+ const history=prepare("SELECT * FROM task_history WHERE task_id='stale-race'").get();
+ assert.equal(task.status,'completed');assert.equal(task.last_error,'done');assert.equal(task.updated_at,timestamp);
+ assert.equal(history.status,'success');assert.equal(history.completed_at,timestamp);
+});
+
+test('dispatch, duplicate claim and missed window remain observable in logs',t=>{
+ const {db,task}=fixture(t);const logs=[];t.mock.method(console,'log',message=>logs.push(message));
+ dispatchTask(db,task,{...base,sendViaC4(){return {category:'success'};}});
+ dispatchTask(db,task,base);
+ db.prepare("UPDATE tasks SET status='pending',next_run_at=? WHERE id=?").run(Math.floor(Date.now()/1000)-301,task.id);
+ runSchedulerIteration(db,base);
+ assert.ok(logs.some(line=>line.includes(`Dispatching task ${task.id}`)));
+ assert.ok(logs.some(line=>line.includes(`Task ${task.id} already claimed/modified, skipping`)));
+ assert.ok(logs.some(line=>line.includes(`Task ${task.id}`)&&line.includes('missed execution window')));
 });

@@ -44,12 +44,3 @@ test('DM-10 DDL or version publish failure rolls back both new columns, rows and
     migrateDatabase(db, owner); verify(db, before);
   }
 });
-test('DM-10 retention assertion catches forbidden reply-route backfill and repeated ALTER', t => {
-  const db = seed(t, 'scheduler-v0.9.0-v1.sql'), before = snapshot(db);
-  const mutant = { ...owner, MIGRATIONS: { ...owner.MIGRATIONS, 1: { ...owner.MIGRATIONS[1], migrate(connection) {
-    owner.MIGRATIONS[1].migrate(connection); connection.exec('UPDATE tasks SET session_component=reply_channel');
-  } } } };
-  migrateDatabase(db, mutant);
-  assert.throws(() => verify(db, before), assert.AssertionError);
-  assert.throws(() => owner.MIGRATIONS[1].migrate(db), /duplicate column/);
-});

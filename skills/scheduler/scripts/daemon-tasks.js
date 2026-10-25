@@ -71,8 +71,6 @@ export function handleStaleRunningTasks(db) {
   `).all(staleThreshold);
 
   for (const task of staleTasks) {
-    console.log(`[${new Date().toISOString()}] Task ${task.id} (${task.name}) timed out after ${TASK_TIMEOUT}s`);
-
     db.transaction(() => {
       // Recheck after acquiring the write lock: done may have won the race.
       const changed = db.prepare(`
@@ -80,6 +78,7 @@ export function handleStaleRunningTasks(db) {
         WHERE id = ? AND status = 'running' AND updated_at < ?
       `).run(task.type === 'one-time' ? 'failed' : 'completed', currentTime, task.id, staleThreshold);
       if (!changed.changes) return;
+      console.log(`[${new Date().toISOString()}] Task ${task.id} (${task.name}) timed out after ${TASK_TIMEOUT}s`);
       db.prepare(`
         UPDATE task_history SET status = 'timeout', completed_at = ?
         WHERE task_id = ? AND status = 'started'

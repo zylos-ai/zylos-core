@@ -746,7 +746,7 @@ function main() {
 
 try { main(); }
 catch (error) {
-  const code = error.code?.startsWith('SQLITE_') ? 'DB_WRITE_FAILED' : error.code ?? 'DB_WRITE_FAILED';
+  const code = error.code?.startsWith('SQLITE_') ? 'DB_WRITE_FAILED' : error.code ?? 'INTERNAL_ERROR';
   console.error(`Error: ${code}: ${error.message}`);
   process.exitCode = 1;
 }

@@ -73,12 +73,11 @@ Don't use for: user notifications, time-sensitive tasks, high-priority alerts.
 
 ### Reply Configuration
 
-`--reply-channel` and `--reply-endpoint` specify where results are sent.
+`--reply-channel` and `--reply-endpoint` specify where results are sent. Supply both with values or omit both; supplying only one returns `INVALID_ARGS` without creating a task.
 
 ```bash
 --reply-channel "telegram" --reply-endpoint "8101553026"     # Telegram user
 --reply-channel "lark" --reply-endpoint "chat_xxx topic_yyy" # Lark topic
---reply-channel "telegram"                                    # Overall component group; no reply endpoint
 ```
 
 Endpoint structure depends on channel implementation. Can contain multiple space-separated values.
@@ -87,7 +86,7 @@ Endpoint structure depends on channel implementation. Can contain multiple space
 
 An explicit `--reply-channel X` must name an installed component directory (no `send.js` requirement). It stores X and optional `--reply-session-group L` without allocating a namespace. This target takes precedence over the creating session. Without X, creation uses only `ZYLOS_SESSION_GROUP`: a known namespace is reverse-mapped read-only; origin or no variable saves no group. Unknown namespaces and malformed groups fail without creating a task. A target need not already have messages.
 
-Copy channel/endpoint from Core reply-via and rename its `--session-group L` option to `--reply-session-group L`. For another chat use `c4-db.js groups --match <text> --json`, selecting `componentName` and `sessionGroupName`; do not split the full namespace yourself. For a new chat use the component's `node scripts/session-group.js <endpoint>`; successful empty output means the overall group, while failure must not be treated as empty. If unavailable, follow component docs or ask for a message in that chat and query again. Never guess L or reject a target solely because groups has no row. Wrong L can execute in a different context even when the reply endpoint is right.
+For target discovery and copying Core reply-via, see [Target group and replies](../SKILL.md#target-group-and-replies).
 
 ```bash
 cli.js add "Report to this group" --in "1 hour" --reply-channel telegram --reply-endpoint "-1001" --reply-session-group "g-1001"
