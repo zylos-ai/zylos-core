@@ -30,13 +30,25 @@ test('DM-38: append and rename preserve complete long records and monotonic name
 
 test('DM-38: two real writers each append 200 complete lines during rotations',async t=>{
  const file=fixture(t);
- const worker=`import {appendEvent} from ${JSON.stringify(new URL('../event-log.js',import.meta.url).href)};for(let n=0;n<200;n++)appendEvent(process.argv[1],{writer:process.argv[2],n,payload:'x'.repeat(8192)});`;
- const run=writer=>new Promise((resolve,reject)=>{const child=spawn(process.execPath,['--input-type=module','-e',worker,file,writer],{stdio:['ignore','ignore','pipe']});let stderr='';child.stderr.on('data',chunk=>{stderr+=chunk;});child.on('error',reject);child.on('close',code=>code===0?resolve():reject(Error(stderr)));});
+ const worker=`import {appendEvent} from ${JSON.stringify(new URL('../event-log.js',import.meta.url).href)};
+ await new Promise(resolve=>{process.once('message',resolve);process.send('ready');});
+ for(let n=0;n<200;n++)appendEvent(process.argv[1],{writer:process.argv[2],n,payload:'x'.repeat(100*1024)});
+ process.disconnect();`;
+ const run=writer=>{
+  const child=spawn(process.execPath,['--input-type=module','-e',worker,file,writer],{stdio:['ignore','ignore','pipe','ipc']});
+  t.after(()=>{if(child.exitCode===null && child.signalCode===null)child.kill();});
+  let stderr='';child.stderr.on('data',chunk=>{stderr+=chunk;});
+  const ready=new Promise((resolve,reject)=>{child.once('message',resolve);child.once('error',reject);child.once('exit',()=>reject(Error('writer exited before ready')));});
+  const done=new Promise((resolve,reject)=>{child.once('error',reject);child.once('close',code=>code===0?resolve():reject(Error(stderr)));});
+  return {child,ready,done};
+ };
+ const writers=[run('a'),run('b')];
+ await Promise.all(writers.map(writer=>writer.ready));
  const timer=setInterval(()=>rotateEventLog(file,{maxBytes:1024*1024}),10);
- try{await Promise.all([run('a'),run('b')]);}finally{clearInterval(timer);}
+ try{for(const writer of writers)writer.child.send('start');await Promise.all(writers.map(writer=>writer.done));}finally{clearInterval(timer);}
  const warnings=[],reader=new EventLogReader(file,{warn:x=>warnings.push(x)});t.after(()=>reader.close());const rows=reader.read();
  assert.equal(rows.length,400,JSON.stringify(fs.readdirSync(path.dirname(file)).map(name=>({name,size:fs.statSync(path.join(path.dirname(file),name)).size}))) );assert.equal(new Set(rows.map(row=>`${row.writer}:${row.n}`)).size,400);assert.deepEqual(warnings,[]);
- for(const row of rows){assert.ok(['a','b'].includes(row.writer));assert.ok(Number.isInteger(row.n) && row.n>=0 && row.n<200);assert.equal(row.payload,'x'.repeat(8192));}
+ for(const row of rows){assert.ok(['a','b'].includes(row.writer));assert.ok(Number.isInteger(row.n) && row.n>=0 && row.n<200);assert.equal(row.payload,'x'.repeat(100*1024));}
 });
 
 test('DM-38 regression: maintenance never treats current filename as rotation timestamp zero',t=>{
@@ -54,29 +66,65 @@ test('T08 recovery: backward UTF-8 chunk scan stops at boundary and resumes part
  assert.deepEqual(reader.read().map(row=>row.n),[3,4]);assert.deepEqual(reader.read(),[]);
 });
 
-// DM-38: force an appender holding the old inode to finish after the reader's
-// first size snapshot. The second read at handoff must include this late line.
-test('DM-38: reader drains a late append on the renamed inode before switching',t=>{
+// DM-38: the writer can finish after the handoff read has returned.
+test('DM-38: next read drains a late append on the renamed inode exactly once',t=>{
  const file=fixture(t),reader=new EventLogReader(file);t.after(()=>reader.close());
  appendEvent(file,{n:1});assert.deepEqual(reader.read(),[{n:1}]);
  const writer=fs.openSync(file,'a');t.after(()=>fs.closeSync(writer));
  rotateEventLog(file,{maxBytes:0,now:100});appendEvent(file,{n:3});
- const oldFd=reader.fd,stat=fs.fstatSync;let late=true;
- t.mock.method(fs,'fstatSync',fd=>{
-  const snapshot=stat(fd);
-  if(fd===oldFd && late){late=false;fs.appendFileSync(writer,'{"n":2}\n');}
-  return snapshot;
- });
- assert.deepEqual(reader.read(),[{n:2},{n:3}]);assert.equal(late,false);
- assert.deepEqual(reader.read(),[]);
+ assert.deepEqual(reader.read(),[{n:3}]);
+ fs.appendFileSync(writer,'{"n":2}\n');appendEvent(file,{n:4});
+ assert.deepEqual(reader.read(),[{n:2},{n:4}]);assert.deepEqual(reader.read(),[]);
 });
 
-test('DM-38: a failed partial line is skipped with warning at rotation handoff',t=>{
+test('DM-38: partial old-inode write can finish before the next read without warning',t=>{
  const file=fixture(t),warnings=[],reader=new EventLogReader(file,{warn:x=>warnings.push(x)});t.after(()=>reader.close());
  appendEvent(file,{n:1});assert.deepEqual(reader.read(),[{n:1}]);
- fs.appendFileSync(file,'{"n":');
+ const writer=fs.openSync(file,'a');t.after(()=>fs.closeSync(writer));
+ rotateEventLog(file,{maxBytes:0,now:100});appendEvent(file,{n:3});fs.appendFileSync(writer,'{"n":');
+ assert.deepEqual(reader.read(),[{n:3}]);assert.deepEqual(warnings,[]);
+ fs.appendFileSync(writer,'2}\n');
+ assert.deepEqual(reader.read(),[{n:2}]);assert.deepEqual(reader.read(),[]);assert.deepEqual(warnings,[]);
+});
+
+test('DM-38: abandoned partial line warns only at next-read final drain',t=>{
+ const file=fixture(t),warnings=[],reader=new EventLogReader(file,{warn:x=>warnings.push(x)});t.after(()=>reader.close());
+ appendEvent(file,{n:1});assert.deepEqual(reader.read(),[{n:1}]);fs.appendFileSync(file,'{"n":');
  assert.deepEqual(reader.read(),[]);assert.deepEqual(warnings,[]);
  rotateEventLog(file,{maxBytes:0,now:100});appendEvent(file,{n:2});
- assert.deepEqual(reader.read(),[{n:2}]);assert.deepEqual(warnings,['event_log_invalid_line']);
- assert.deepEqual(reader.read(),[]);
+ assert.deepEqual(reader.read(),[{n:2}]);assert.deepEqual(warnings,[]);
+ assert.deepEqual(reader.read(),[]);assert.deepEqual(warnings,['event_log_invalid_line']);
+ assert.deepEqual(reader.read(),[]);assert.deepEqual(warnings,['event_log_invalid_line']);
+});
+
+test('DM-38: close releases current and deferred old descriptors',t=>{
+ const file=fixture(t),reader=new EventLogReader(file);t.after(()=>reader.close());
+ appendEvent(file,{n:1});reader.read();const old=reader.fd;
+ rotateEventLog(file,{maxBytes:0,now:100});appendEvent(file,{n:2});reader.read();const current=reader.fd;
+ assert.doesNotThrow(()=>fs.fstatSync(old));reader.close();
+ for(const fd of [old,current])assert.throws(()=>fs.fstatSync(fd),{code:'EBADF'});
+});
+
+test('DM-38: appendEvent surfaces a real write failure and later complete writes remain readable',t=>{
+ const file=fixture(t),reader=new EventLogReader(file);t.after(()=>reader.close());
+ appendEvent(file,{n:1});
+ // /dev/full opens normally but its actual write fails with ENOSPC on Linux.
+ if(process.platform!=='linux' || !fs.existsSync('/dev/full')){t.skip('/dev/full write-failure device is unavailable');return;}
+ assert.throws(()=>appendEvent('/dev/full',{n:2}),{code:'ENOSPC'});
+ appendEvent(file,{n:3});assert.deepEqual(reader.read(),[{n:1},{n:3}]);
+});
+
+// Multiple rotations in one reader round each retain their own outstanding writer.
+test('DM-38: next read drains every deferred rotation and closes all old descriptors',t=>{
+ const file=fixture(t),reader=new EventLogReader(file);t.after(()=>reader.close());
+ appendEvent(file,{n:1});reader.read();const firstReader=reader.fd;
+ const firstWriter=fs.openSync(file,'a');t.after(()=>fs.closeSync(firstWriter));
+ rotateEventLog(file,{maxBytes:0,now:100});appendEvent(file,{n:2});
+ const secondWriter=fs.openSync(file,'a');t.after(()=>fs.closeSync(secondWriter));
+ rotateEventLog(file,{maxBytes:0,now:101});appendEvent(file,{n:3});
+ assert.deepEqual(reader.read(),[{n:2},{n:3}]);
+ const deferred=reader.previous.map(cursor=>cursor.fd);assert.ok(deferred.includes(firstReader));assert.equal(deferred.length,2);
+ fs.appendFileSync(firstWriter,'{"n":4}\n');fs.appendFileSync(secondWriter,'{"n":5}\n');appendEvent(file,{n:6});
+ assert.deepEqual(reader.read(),[{n:4},{n:5},{n:6}]);assert.deepEqual(reader.read(),[]);
+ for(const fd of deferred)assert.throws(()=>fs.fstatSync(fd),{code:'EBADF'});
 });

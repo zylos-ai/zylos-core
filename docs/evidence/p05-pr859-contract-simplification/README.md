@@ -16,7 +16,7 @@ This directory is part of the same commit as the tested code. `source-sha256.jso
 
 - Server unavailability no longer triggers process termination or OS identity checks. Unknown scenes retain occupancy indefinitely; explicit no-server observations retain normal absence behavior.
 - The observer decorator issues no additional tmux/process probes; it keeps only occupancy fields for fallback.
-- Alerts begin at 60 seconds and repeat at most every ten minutes, with Web Console fallback; successful observation resets the episode.
+- Alerts begin at 60 seconds and repeat at most every thirty minutes under the subsequently approved interval, with Web Console fallback; successful observation resets the episode. The logs in this historical directory predate that interval correction; see `../p05-alert-interval-30m` for its current boundary tests.
 - Event logs use one appendFileSync call for a complete JSON line, with O_APPEND. Rotation uses rename; F1 config locking is unchanged.
 - Reader drains the old descriptor once more before switching inodes; deterministic late append coverage verifies ordering and exactly-once consumption.
 - Incomplete active lines wait; incomplete final tails and malformed complete lines are skipped with warnings.
