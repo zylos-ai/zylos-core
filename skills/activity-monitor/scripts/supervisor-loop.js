@@ -60,7 +60,10 @@ export class SupervisorLoop {
     const d = this.deps;
     // Transition owns its own serialization and must precede this round's work.
     const transition = await d.getModeTransition();
-    if (transition) await d.advanceTransition(transition);
+    if (transition) {
+      try { await d.advanceTransition(transition); }
+      catch (error) { await d.reportError(error, { phase: 'transition' }); }
+    }
     let context;
     await d.lifecycleSerial(async () => {
       // Sample all round authorities and scenes while socket admission is excluded.

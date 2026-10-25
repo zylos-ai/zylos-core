@@ -112,3 +112,22 @@ test('completed transition precedes serial work and keeps transition-round restr
   assert.equal(f.loop.configuration.mode, 'single');
   await f.loop.stop();
 });
+
+// Final-review P3-3 / T01: a failed transition cannot suppress required observation/reclaim.
+test('transition failure reports and continues exits, publication and existing reclamation each round', async () => {
+  const failure = Object.assign(new Error('transition temporarily unavailable'), { code: 'DEPENDENCY_UNAVAILABLE' });
+  const f = fixture({
+    getModeTransition: async () => ({ id: 'switch' }),
+    advanceTransition: async () => { f.calls.push('transition'); throw failure; },
+    reportError: async (error, context) => { assert.equal(error, failure); f.calls.push(`error:${context.phase}`); },
+    listDrainFences: async () => [{ sessionGroup: 'tg:one' }],
+  });
+  await f.loop.start();
+  const stages = ['transition','error:transition','observe','exits','probe:origin','probe:tg:one','reclaim','metrics'];
+  assert.deepEqual(f.calls, ['restore','open',...stages]);
+  f.calls.length = 0;
+  await f.loop.tick();
+  assert.deepEqual(f.calls, stages);
+  assert.equal(f.timers.length, 2);
+  await f.loop.stop();
+});
