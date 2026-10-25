@@ -5,7 +5,7 @@ const TERMINAL_CONTROLS = new Set(['done', 'timeout', 'superseded', 'failed', 'c
 const CAPACITY_REASONS = new Set(['ttl', 'evict', 'upgrade', 'auth']);
 const RECLAIM_REASONS = new Set([...CAPACITY_REASONS, 'mode_switch', 'model_config']);
 const error = (code, message) => Object.assign(new Error(message), { code });
-const modeOf = context => context.configuration.mode ?? context.configuration.session_mode ?? context.configuration.sessionMode;
+const modeOf = context => context.configuration.mode;
 const targetOf = group => group === null ? { machine: true } : { sessionGroup: group };
 const finite = value => Number.isFinite(value);
 

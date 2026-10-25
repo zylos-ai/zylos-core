@@ -14,8 +14,10 @@ function fixture() {
   const base = { connectionOptions: {}, observe: async () => { if (failed) throw unavailable(); return [scene]; },
     observeGroup: async () => { if (failed) throw unavailable(); return scene; },
     readRun: async () => { if (failed) throw unavailable(); return scene; },
+    readIdentity: async () => { if (failed) throw unavailable(); return scene; },
+    bindTarget: async () => { if (failed) throw unavailable(); return {expectedRunId:scene.runId,tmuxTarget:scene.tmuxTarget}; },
     listRuns: async () => { if (failed) throw unavailable(); return [scene]; } };
-  const provider = new SupervisorServerObservation(base, { guard, open: async () => ({ close() {} }), readGeneration: async () => generation });
+  const provider = new SupervisorServerObservation(base, { guard, open: async () => ({ serverGeneration: generation, close() {} }) });
   return { provider, base, guard, scene, alerts, killed, setFailure: v => failed = v,
     setIdentity: v => identity = v, setGeneration: v => generation = v, advance: ms => now += ms };
 }
@@ -24,7 +26,7 @@ test('T02 unknown socket retains occupancy but never exports cached ready identi
   const [unknown] = await f.provider.observe();
   assert.equal(unknown.present, true); assert.equal(unknown.ready, false);
   assert.equal(unknown.processRunning, undefined); assert.equal(unknown.runId, null);
-  for (const method of ['observeGroup', 'readRun', 'listRuns']) await assert.rejects(f.provider[method]('origin'), { code: 'TMUX_UNAVAILABLE' });
+  for (const method of ['observeGroup', 'readRun', 'readIdentity', 'bindTarget', 'listRuns']) await assert.rejects(f.provider[method]('origin'), { code: 'TMUX_UNAVAILABLE' });
   const cold = fixture(); cold.setFailure(true);
   await assert.rejects(cold.provider.observe(), { code: 'TMUX_UNAVAILABLE' });
 });
@@ -65,11 +67,30 @@ test('T02 F1 alert target splits at first colon and rejects invalid/control-char
   assert.deepEqual(parseServerAlertTarget('feishu:abc|type:p2p'), { channel: 'feishu', endpoint: 'abc|type:p2p' });
   for (const value of [null, '', ':foo', 'foo:', 'foo:bar\n']) assert.equal(parseServerAlertTarget(value), null);
 });
-test('T02 server replacement during observation cannot publish the old ready scene', async () => {
+test('T02 observations spanning server generations cannot publish mixed ready scenes', async () => {
   const f = fixture(); await f.provider.observe();
-  f.setGeneration('123:6');
+  const replacement = {...f.scene,sessionGroup:'second',tmuxTarget:{...f.scene.tmuxTarget,serverGeneration:'123:6'}};
+  f.base.observe = async () => [f.scene,replacement];
+  f.base.listRuns = f.base.observe;
   const [unknown] = await f.provider.observe(); assert.equal(unknown.ready, false); assert.equal(unknown.runId, null);
-  await assert.rejects(f.provider.observeGroup('origin'), { code: 'TMUX_UNAVAILABLE' });
+  await assert.rejects(f.provider.listRuns(), { code: 'TMUX_UNAVAILABLE' });
+});
+test('T02 bound generation avoids another tmux connection and bind/list failures reach server health', async () => {
+  const f = fixture();
+  f.provider.open = async () => { throw Error('identity was already observed'); };
+  await f.provider.observe(); await f.provider.observeGroup('origin'); await f.provider.readIdentity('origin');
+  assert.equal(f.guard.servers.get('default').cache.generation, '123:5');
+  f.setFailure(true);
+  await assert.rejects(f.provider.bindTarget(f.scene), {code:'TMUX_UNAVAILABLE'});
+  assert.ok(f.guard.servers.get('default').episode);
+  f.setFailure(false); await f.provider.observe();
+  f.base.listRuns = async () => [await f.base.observeGroup('origin')]; f.setFailure(true);
+  await assert.rejects(f.provider.listRuns(), {code:'TMUX_UNAVAILABLE'});
+  assert.ok(f.guard.servers.get('default').episode);
+  f.setFailure(false); await f.provider.observe();
+  f.base.listRuns = async () => [{...f.scene,observationError:unavailable()}];
+  await assert.rejects(f.provider.listRuns(), {code:'TMUX_UNAVAILABLE'});
+  assert.ok(f.guard.servers.get('default').episode);
 });
 test('T02 readable tmux identity remains usable when OS identity cannot be cached for termination', async () => {
   const f = fixture(); f.setIdentity({ present: null });

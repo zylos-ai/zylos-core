@@ -7,15 +7,8 @@ import { readScopedHealthQuota } from './health-quota.js';
 /** Keep an uncommitted batch in memory; process restart replays F6 against F10 markers. */
 export class HealthEventReader {
   constructor({coordinator,zylosDir,now=Date.now,warn=()=>{},createReader=file=>new EventLogReader(file,{warn}),quota}={}) {
-    Object.assign(this,{coordinator,zylosDir,now,createReader});this.streams=new Map();this.queues=new Map();
+    Object.assign(this,{coordinator,zylosDir,now,createReader});this.streams=new Map();
     this.quota=quota??((identity,scene)=>readScopedHealthQuota({identity,runDir:scene.runDir,runId:scene.runId,nowMs:now()}));
-  }
-  processScene(scene,identity) {
-    const previous=this.queues.get(scene.sessionGroup)??Promise.resolve();
-    const pending=previous.catch(()=>{}).then(()=>this.consumeScene(scene,identity));
-    this.queues.set(scene.sessionGroup,pending);
-    pending.finally(()=>{if(this.queues.get(scene.sessionGroup)===pending)this.queues.delete(scene.sessionGroup);}).catch(()=>{});
-    return pending;
   }
   async consumeScene(scene,identity) {
     if(!scene.runDir || !identity)return [];

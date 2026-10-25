@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { recoveryBackoff } from './runtime-health.js';
+import { recoveryEligibility } from './runtime-health.js';
 
 const TERMINAL = new Set(['done', 'failed', 'timeout', 'cancelled', 'superseded']);
 const fingerprint = text => createHash('sha256').update(String(text ?? '')).digest('hex');
@@ -53,14 +53,8 @@ export class SupervisorHealthObserver {
   }
   async due(runtime) {
     const state = await this.coordinator.restore(runtime);
-    if (state.health === 'ok' || state.health === 'auth_failed') return false;
-    const budget = state.scheduling, now = Math.floor(this.now()/1000);
-    if (state.health === 'rate_limited' && budget.cooldownUntil > now) return false;
     const cache = await this.coordinator.readNegativeCache(runtime, state);
-    if (cache?.version === 2 && cache.runtime === runtime && cache.health === state.health &&
-        cache.reason === state.reason && cache.expiresAt > this.now()) return false;
-    const last = state.health === 'down' ? budget.lastDownCheckAt : budget.lastRecoveryAt;
-    return budget.lastUserMessageRecoveryAt > last || now >= last + (state.health === 'down' ? 3600 : recoveryBackoff(budget.restartFailureCount));
+    return recoveryEligibility(state, { runtime, cache, nowMs: this.now() }).eligible;
   }
   requestProbe(runtime, {force=false,phase='recovery'} = {}) {
     if(this.stopped)return Promise.resolve({recovered:false,stopped:true});

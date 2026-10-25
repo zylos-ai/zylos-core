@@ -41,18 +41,6 @@ export async function readProcessContextSwitches(pid) {
   return null;
 }
 
-function nearestRuntimePid(rows, panePid, runtime) {
-  let layer = rows.filter(row => row.pid === panePid); const seen = new Set();
-  while (layer.length) {
-    const matches = layer.filter(row => ['claude', 'codex'].includes(row.name.replace(/\.exe$/, '')));
-    if (matches.length) return matches.length === 1 && matches[0].name.replace(/\.exe$/, '') === runtime ? matches[0].pid : undefined;
-    const parents = new Set(layer.map(row => row.pid));
-    for (const id of parents) seen.add(id);
-    layer = rows.filter(row => parents.has(row.ppid) && !seen.has(row.pid));
-  }
-  return undefined;
-}
-
 /** Current observations, not a session registry. Every action reacquires a bounded
  * executor and pins it to the original object before any mutating command.
  * Activity and usage providers must return facts for the supplied run/session.
@@ -74,8 +62,7 @@ export class SupervisorScenes {
   }
 
   async observe(context = {}) {
-    const modeValue = context.configuration?.mode ?? context.configuration?.session_mode ?? await this.readMode?.();
-    const mode = typeof modeValue === 'string' ? modeValue : modeValue?.mode ?? modeValue?.sessionMode;
+    const mode = (context.configuration ?? await this.readMode?.())?.mode;
     if (!['single', 'multi'].includes(mode)) throw fail('CONFIG_UNREADABLE', 'Session mode is unavailable');
     const rows = await this.listSessions(this.connectionOptions);
     // Preserve source groups during a transition, even after its F1 cutover.
@@ -93,8 +80,7 @@ export class SupervisorScenes {
   async observeGroup(group) {
     let connection;
     try {
-      const modeValue = group === 'origin' ? await this.readMode?.() : null;
-      const mode = typeof modeValue === 'string' ? modeValue : modeValue?.mode ?? modeValue?.sessionMode;
+      const mode = group === 'origin' ? (await this.readMode?.())?.mode : null;
       const scope = group === 'origin' && mode === 'single' ? null : group;
       let treePromise;
       const getTree = () => treePromise ??= this.readProcessTree();
@@ -111,8 +97,7 @@ export class SupervisorScenes {
         launchConfig: target.launchConfig, tmuxTarget: descriptor(target), state: 'unknown', idleSince: null, usagePercent: null,
         runtimeObservation: process.runtimeObservation };
       if (process.runtimeObservation === 'present') {
-        const panePid = Number((await connection.command(['display-message', '-p', '-t', target.paneId, '#{pane_pid}'])).trim());
-        scene.runtimePid = nearestRuntimePid(await getTree(), panePid, target.runtime);
+        scene.runtimePid = process.runtime === target.runtime ? process.runtimePid : undefined;
         if (Number.isSafeInteger(scene.runtimePid) && scene.runtimePid > 0) {
           const count = await this.readContextSwitches(scene.runtimePid), now = this.now();
           const key = scene.sessionGroup ?? 'origin';
@@ -153,6 +138,24 @@ export class SupervisorScenes {
     } finally { connection?.close(); }
   }
 
+  // Run/F2/F3 identity only: no process, activity, context or usage sampling.
+  async readIdentity(group) {
+    let connection;
+    try {
+      const mode = group === 'origin' ? (await this.readMode?.())?.mode : null;
+      const scope = group === 'origin' && mode === 'single' ? null : group;
+      try { connection = await this.open(this.connectionOptions); }
+      catch (error) { if (error.code === 'TMUX_NO_SERVER') return absent(group, this.env); throw error; }
+      const target = await this.observeTarget({ sessionGroup: scope, connection,
+        readReady: this.readReady, readProcessTree: async () => [] });
+      if (!target.present) return absent(group, this.env);
+      return { sessionGroup: group, present: true, tmuxName: target.tmuxName,
+        runId: target.runId, runtime: target.runtime, sessionId: target.sessionId,
+        ready: target.ready && scopeMatches(scope, target), launchConfig: target.launchConfig,
+        tmuxTarget: descriptor(target) };
+    } finally { connection?.close(); }
+  }
+
   async readRun(group) {
     const scene = await this.observeGroup(group);
     return scene.present ? scene : null;
@@ -165,7 +168,7 @@ export class SupervisorScenes {
   }
 
   async bindTarget(scene) {
-    const fresh = await this.observeGroup(scene.sessionGroup);
+    const fresh = await this.readIdentity(scene.sessionGroup);
     if (!fresh.present) throw fail('TARGET_NOT_RUNNING', 'Target session is absent');
     if (fresh.runId !== scene.runId || fresh.runtime !== scene.runtime) throw fail('TARGET_MISMATCH', 'Target run changed');
     if (!fresh.ready) throw fail('TARGET_NOT_READY', 'Target has not published a matching identity');
@@ -180,7 +183,7 @@ export class SupervisorScenes {
       connection.bindTarget({ serverGeneration: scene.tmuxTarget.serverGeneration,
         tmuxSessionId: scene.tmuxTarget.sessionId, paneId: scene.tmuxTarget.paneId });
       const target = await this.observeTarget({ sessionGroup: scene.sessionGroup, tmuxName: scene.tmuxName, connection,
-        readReady: this.readReady, readProcessTree: this.readProcessTree });
+        readReady: this.readReady, readProcessTree: async () => [] });
       if (!sameRun(scene, target)) throw fail('RUNID_MISMATCH', 'Pinned target changed');
       return await operation({ connection, target, adapter: this.adapterFor(target.runtime) });
     } finally { connection?.close(); }
@@ -254,6 +257,7 @@ export class SupervisorScenes {
   }
 
   async stop(scene) {
-    return this.stopFixedTarget({ expectedRunId: scene.runId, tmuxTarget: scene.tmuxTarget });
+    return this.adapterFor(scene.runtime, { tmux: this.connectionOptions, env: this.env })
+      .stop({ tmuxName: scene.tmuxName, expectedRunId: scene.runId });
   }
 }

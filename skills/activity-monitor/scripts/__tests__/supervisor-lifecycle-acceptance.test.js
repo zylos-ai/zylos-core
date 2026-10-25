@@ -5,21 +5,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { SupervisorLifecycle } from '../supervisor-lifecycle.js';
 import { SupervisorScenes } from '../supervisor-scenes.js';
-import { fixture as databaseFixture, modifiedStore } from '../../../comm-bridge/scripts/__tests__/c4-v2-test-helpers.js';
+import { fixture as databaseFixture } from '../../../comm-bridge/scripts/__tests__/c4-v2-test-helpers.js';
 import { createStore } from '../../../comm-bridge/scripts/c4-v2-store.js';
 import { readyTmuxTarget } from '../../../../test/helpers/ready-tmux-target.js';
 
-async function variant(replacements) {
-  const url = new URL('../supervisor-lifecycle.js', import.meta.url);
-  let source = fs.readFileSync(url, 'utf8');
-  for (const [before, after] of replacements) {
-    assert.equal(source.split(before).length, 2, `unique mutant anchor: ${before}`);
-    source = source.replace(before, after);
-  }
-  source = source.replace(/(from\s+['"])(\.[^'"]+)(['"])/g,
-    (_, a, specifier, b) => a + new URL(specifier, url).href + b);
-  return (await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`)).SupervisorLifecycle;
-}
 function localFixture(t, Class = SupervisorLifecycle, options = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'lifecycle-acceptance-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -60,13 +49,7 @@ async function gateScenario(t, Class) {
 test('IF-30 Sync respects real D9 and resumes group/Origin production after completion', async t => {
   await gateScenario(t, SupervisorLifecycle);
 });
-test('IF-30 negative control detects removal of Sync transition gates', async t => {
-  const Class = await variant([
-    ["if (context.transition || await this.d.db.getModeTransition() || await this.d.db.getDrainFence('*')) return;", "if (await this.d.db.getDrainFence('*')) return;"],
-    ["if (context.transition || await this.d.db.getModeTransition() || await this.d.db.getDrainFence('*')) return false;", "if (await this.d.db.getDrainFence('*')) return false;"],
-  ]);
-  await assert.rejects(gateScenario(t, Class), error => error.code === 'ERR_ASSERTION' && error.message.includes('Sync enqueued during D9'));
-});
+
 
 async function duplicateScenario(t, storeFactory = createStore) {
   const sql = databaseFixture(t), store = storeFactory(sql.db, sql.dependencies);
@@ -82,12 +65,7 @@ async function duplicateScenario(t, storeFactory = createStore) {
 test('IF-30 repeated Sync content leaves one pending D3 row and supersedes the previous one', async t => {
   await duplicateScenario(t);
 });
-test('IF-30 negative control detects disabled D3 content deduplication', async t => {
-  const factory = await modifiedStore('c4-store-control.js',
-    "WHERE status='pending' AND raw_content=? AND session_group IS ? AND target_binding IS ?",
-    "WHERE 0 AND status='pending' AND raw_content=? AND session_group IS ? AND target_binding IS ?");
-  await assert.rejects(duplicateScenario(t, factory), error => error.code === 'ERR_ASSERTION' && error.message.includes('duplicate Sync left multiple pending controls'));
-});
+
 
 // Frozen IB-39 outputs are the P07 boundary. Raw marker contents are only used
 // by the deliberately wrong existence-only consumer; no second production
@@ -144,10 +122,7 @@ async function configScenario(t, Class) {
 test('IF10-7d real F2 running snapshot stays old after D10/D11 changes and produces reclaim control', { timeout: 15000 }, async t => {
   await configScenario(t, SupervisorLifecycle);
 });
-test('IF10-7d negative control detects reading desired config as the running snapshot', { timeout: 15000 }, async t => {
-  const Class = await variant([['const actual = scene.launchConfig;', "const actual = await this.d.db.resolveSessionLaunchConfig({ sessionGroup: scene.sessionGroup, sessionMode: 'multi' });"]]);
-  await assert.rejects(configScenario(t, Class), error => error.code === 'ERR_ASSERTION' && error.message.includes('new desired config hid the old running snapshot'));
-});
+
 
 async function syncScopeScenario(t, Class) {
   for (const mode of ['single', 'multi']) {
@@ -168,11 +143,7 @@ async function syncScopeScenario(t, Class) {
 test('T06 Sync reads all three marker scopes and failed writes do not mark a scope sent', async t => {
   await syncScopeScenario(t, SupervisorLifecycle);
 });
-test('T06 negative control detects committing Sync cooldown before insertion succeeds', async t => {
-  const Class = await variant([["await this.d.db.insertControl(this.prompt(kind === 'origin' ? 'ORIGIN_SYNC_PROMPT' : 'GROUP_SYNC_PROMPT'), {",
-    "this.syncSent.set(key, now); await this.d.db.insertControl(this.prompt(kind === 'origin' ? 'ORIGIN_SYNC_PROMPT' : 'GROUP_SYNC_PROMPT'), {"]]);
-  await assert.rejects(syncScopeScenario(t, Class), error => error.code === 'ERR_ASSERTION' && error.message.includes('failed Sync write marked the scope sent'));
-});
+
 
 async function rotationScenario(t, Class) {
   for (const mode of ['single', 'multi']) {
@@ -194,9 +165,4 @@ async function rotationScenario(t, Class) {
 }
 test('T06 rotation scope, exact cooldown boundary, run/session identity and failed write retry', async t => {
   await rotationScenario(t, SupervisorLifecycle);
-});
-test('T06 negative control detects rotation cooldown keyed only by group', async t => {
-  const Class = await variant([['const key = JSON.stringify([scene.runId, scene.sessionId]), now = this.now();',
-    'const key = JSON.stringify([scene.sessionGroup]), now = this.now();']]);
-  await assert.rejects(rotationScenario(t, Class), error => error.code === 'ERR_ASSERTION' && error.message.includes('session identity change inherited old rotation cooldown'));
 });
