@@ -28,22 +28,19 @@ async function before(t,variant=''){
 test('IF-36 actual entry rejects already observed session change before manual acceptance; ignoring session fails',{timeout:20000},async t=>{await before(t);await assert.rejects(before(t,'ignore-admission-session'),{code:'ERR_ASSERTION'});});
 async function after(t,mode,variant=''){
  const f=await fixture(t,mode,variant);assert.equal((await f.submit()).kind,'accepted');f.change('new-session');
- const state=await f.command('tick');assert.equal(state.requests.length,1);assert.equal(state.requests[0].expectedSessionId,'session-1');
- // Identity mismatch is observed before acquiring a new manual fence.
- assert.deepEqual(state.fences,[]);assert.doesNotThrow(()=>f.tmux('has-session','-t','=zylos-group-origin'));
- assert.equal(state.alerts.length,1);assert.match(state.alerts[0].message,/requestId=observed-session/);assert.match(state.alerts[0].message,/reason=TARGET_MISMATCH/);
- const again=await f.command('tick');assert.equal(again.alerts.length,1);assert.equal(again.requests.length,1);
+ const state=await f.command('tick');assert.deepEqual(state.requests,[]);assert.deepEqual(state.fences,[]);
+ assert.throws(()=>f.tmux('has-session','-t','=zylos-group-origin'));
+ assert.doesNotThrow(()=>f.tmux('has-session','-t','=fixture-keeper'));
+ assert.deepEqual(state.alerts,[]);
  await f.stop();
 }
-for(const mode of ['single','multi'])test(`IF-36 ${mode} actual entry retains request and original after accepted run reports changed session`,{timeout:20000},async t=>{await after(t,mode);});
-test('IF-36 actual execution mismatch assertion rejects ignored F3 session guard',{timeout:20000},async t=>{await assert.rejects(after(t,'multi','ignore-execution-session'),{code:'ERR_ASSERTION'});});
+for(const mode of ['single','multi'])test(`IF-36 ${mode} actual entry stops accepted run after session changes without rechecking sessionId`,{timeout:20000},async t=>{await after(t,mode);});
 test('IF-36 missing post-acceptance hook marker retains run-level stop boundary without invented atomic session proof',{timeout:20000},async t=>{
  const f=await fixture(t);assert.equal((await f.submit()).kind,'accepted');fs.unlinkSync(f.readyPath);
  const state=await f.command('tick');assert.deepEqual(state.requests,[]);assert.deepEqual(state.fences,[]);assert.throws(()=>f.tmux('has-session','-t','=zylos-group-origin'));assert.doesNotThrow(()=>f.tmux('has-session','-t','=fixture-keeper'));await f.stop();
 });
 
-// Only a complete READY identity establishes an observed context change.
-// These are the malformed-marker counterexamples to the execution guard.
+// After admission, runId remains the execution boundary even if READY is missing or malformed.
 for(const [name,fields] of [
  ['empty session',{sessionId:''}],
  ['missing timestamp',{sessionId:'new-session',ts:undefined}],
@@ -58,13 +55,13 @@ for(const [name,fields] of [
  assert.throws(()=>f.tmux('has-session','-t','=zylos-group-origin'));assert.doesNotThrow(()=>f.tmux('has-session','-t','=fixture-keeper'));await f.stop();
 });
 
-test('IF-36 replacement READY identity preserves replacement and permits only pinned original cleanup',{timeout:20000},async t=>{
+test('IF-36 replacement READY identity preserves replacement and renamed original',{timeout:20000},async t=>{
  const f=await fixture(t);assert.equal((await f.submit()).kind,'accepted');
  f.tmux('rename-session','-t','=zylos-group-origin','fixture-original');
  f.tmux('new-session','-d','-s','zylos-group-origin','-e','ZYLOS_RUN_ID=replacement','-e','ZYLOS_SESSION_GROUP=origin','-e','ZYLOS_MODEL_CONFIG={"runtime":"claude","mode":"default"}',path.join(f.root,'claude'),'120');
  fs.writeFileSync(f.readyPath,JSON.stringify({...f.ready,runId:'replacement',sessionId:'replacement-session'}));
  const state=await f.command('tick');assert.deepEqual(state.requests,[]);assert.deepEqual(state.fences,[]);
- assert.throws(()=>f.tmux('has-session','-t','=fixture-original'));
+ assert.doesNotThrow(()=>f.tmux('has-session','-t','=fixture-original'));
  assert.doesNotThrow(()=>f.tmux('has-session','-t','=zylos-group-origin'));
  assert.equal(f.tmux('show-environment','-t','=zylos-group-origin','ZYLOS_RUN_ID'),'ZYLOS_RUN_ID=replacement');await f.stop();
 });

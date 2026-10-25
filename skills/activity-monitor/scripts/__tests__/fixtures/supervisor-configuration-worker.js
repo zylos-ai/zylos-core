@@ -23,7 +23,7 @@ const service = await startSupervisor({ db, now: () => now,
 try {
   if (service.supervisor.loop.configurationError) throw service.supervisor.loop.configurationError;
   const configuration = service.supervisor.loop.configuration;
-  const context = { configuration };
+  const context = { configuration,scenes:[scene],fences:db.listDrainFences(),restartRequests:[],transition:null };
   await service.supervisor.lifecycle.checkRotation(scene, context);
   await service.supervisor.lifecycle.checkTtl(scene, context);
   const file = path.join(process.env.ZYLOS_DIR, '.zylos/config.json');

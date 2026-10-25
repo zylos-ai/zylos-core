@@ -145,3 +145,32 @@ test('T08 assembly: metrics reuses scene and fence snapshots and excludes stoppe
  assert.deepEqual({ready:metrics.ready,starting:metrics.starting,reclaiming:metrics.reclaiming,waiting:metrics.waiting},
   {ready:1,starting:1,reclaiming:1,waiting:0});
 });
+
+// B2: confirmed health/exit cleanup must update the shared publication sample.
+for(const source of ['health','exit'])test(`T08 assembly: ${source} stop removes the run from subsequent round metrics`,async t=>{
+ const {supervisor,scenes,root}=fixture(t);
+ const scene={sessionGroup:'chat:stop',runtime:'claude',runId:'r',sessionId:'s',runDir:root,createdAt:100,present:true,ready:true,processRunning:source==='health'};
+ scenes.observe=async()=>[scene];scenes.readIdentity=async()=>scene;scenes.observeGroup=async()=>scene;
+ let stops=0;scenes.stop=async()=>{stops++;};
+ await supervisor.loop.deps.readConfiguration();
+ const context={fences:[]};context.scenes=await supervisor.loop.deps.observe(context);
+ if(source==='health')await supervisor.observer.stopScene(scene,'fixture-health-stop');
+ else await supervisor.loop.deps.observeExits(context.scenes);
+ assert.equal(stops,1);assert.equal(context.scenes[0].present,false);assert.equal(context.scenes[0].ready,false);
+ await supervisor.loop.deps.writeMetricsAndMaintain(context);
+ const metrics=JSON.parse(fs.readFileSync(path.join(root,'activity-monitor','pool-metrics.jsonl'),'utf8').trim());
+ assert.equal(metrics.ready,0);assert.equal(metrics.starting,0);
+});
+
+test('T08 assembly: single auth null scope invalidates only its matching Origin run',async t=>{
+ const {supervisor,scenes}=fixture(t);
+ const original={sessionGroup:'origin',runId:'old',present:true,ready:true};
+ scenes.observe=async()=>[original];scenes.stop=async()=>{};
+ await supervisor.loop.deps.readConfiguration();
+ const context={configuration:{mode:'single'},fences:[]};context.scenes=await supervisor.loop.deps.observe(context);
+ await supervisor.lifecycle.d.stop({sessionGroup:null,runId:'old'});
+ assert.equal(original.present,false);
+ context.scenes[0]={sessionGroup:'origin',runId:'replacement',present:true,ready:true};
+ await supervisor.lifecycle.d.stop({sessionGroup:null,runId:'old'});
+ assert.equal(context.scenes[0].present,true);assert.equal(context.scenes[0].runId,'replacement');
+});

@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { RuntimeHealthCoordinator } from '../runtime-health.js';
+import { RuntimeHealthCoordinator, recoveryEligibility } from '../runtime-health.js';
 import { MessageRouter } from '../message-router.js';
 
 const T = 1792000000;
@@ -113,9 +113,11 @@ async function cacheSequence(t, Router) {
   router.clearLegacyCache(legacy); assert.equal(fs.existsSync(legacy), false);
   const f = router.cachePath('claude'); const current = fs.readFileSync(f, 'utf8');
   fs.writeFileSync(f, JSON.stringify({ ...JSON.parse(current), version: 1 }));
-  assert.equal(router.readNegativeCache('claude', 'unavailable', 'runtime_unavailable'), null);
-  fs.writeFileSync(f, current); now += 29999; assert.ok(router.readNegativeCache('claude', 'unavailable', 'runtime_unavailable'));
-  now++; assert.equal(router.readNegativeCache('claude', 'unavailable', 'runtime_unavailable'), null);
+  const eligible=()=>recoveryEligibility({health:'unavailable',reason:'runtime_unavailable'},
+    {runtime:'claude',cache:router.readNegativeCache('claude'),nowMs:now});
+  assert.equal(eligible().eligible,true);
+  fs.writeFileSync(f, current); now += 29999; assert.equal(eligible().code,'probe_cache');
+  now++; assert.equal(eligible().eligible,true);
 }
 test('DM-47 runtime cache bytes, v1 rejection/removal, exact expiry and shared-path control', async t => {
   await cacheSequence(t, MessageRouter);

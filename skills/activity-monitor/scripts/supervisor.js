@@ -31,6 +31,12 @@ export function createSupervisor(deps) {
     return activity.read(now());
   };
   const listScenes=()=>scenes.observe({configuration});
+  const stopScene=async scene=>{
+    await scenes.stop(scene);
+    const group=value=>roundContext?.configuration?.mode==='single' && value===null?'origin':value;
+    const sampled=roundContext?.scenes?.find(current=>group(current.sessionGroup)===group(scene.sessionGroup) && current.runId===scene.runId);
+    if(sampled)Object.assign(sampled,{present:false,ready:false,processRunning:false});
+  };
   const health=new RuntimeHealthCoordinator({zylosDir:deps.zylosDir,now,readMode:async()=>(await readMode()).mode,
     resolveTargetRuntime:deps.resolveTargetRuntime,listScenes,probeInFlight:runtime=>observer.probeInFlight(runtime),
     readNegativeCache:(runtime,state)=>router.readNegativeCache(runtime,state.health,state.reason),clearNegativeCache:runtime=>router.clearCache(runtime),freezeNotice:deps.freezeNotice,log});
@@ -61,7 +67,7 @@ export function createSupervisor(deps) {
   };
   observer=new SupervisorHealthObserver({coordinator:health,listScenes,readIdentity:group=>scenes.readIdentity(group),readState:scene=>({...readActivity(scene),healthIdentity:scene.healthIdentity,contextSwitches:scene.contextSwitches}),
     readScreen:scene=>scenes.readScreen(scene),matchScreen:deps.matchScreen,insertControl:db.insertControl,getControlById:db.getControlById,
-    buildTargetBinding:scene=>scenes.bindTarget(scene),stop:scene=>guardedAction(scene,current=>scenes.stop(current)),
+    buildTargetBinding:scene=>scenes.bindTarget(scene),stop:scene=>guardedAction(scene,current=>stopScene(current)),
     readMode:async()=>(await readMode()).mode,getModeTransition:db.getModeTransition,getDrainFence:db.getDrainFence,manualPending,
     resolveToolRule:deps.resolveToolRule,interrupt:async(scene,key)=>({ok:await guardedAction(scene,async current=>{
       const mode=(await readMode()).mode;db.insertControl(`[KEYSTROKE]${key}`,{sessionGroup:mode==='single'?null:current.sessionGroup,
@@ -74,9 +80,9 @@ export function createSupervisor(deps) {
     resolveLaunchConfig:async group=>db.resolveSessionLaunchConfig({sessionGroup:group,sessionMode:(await readMode()).mode}),
     preflightReclaim:(scene,context)=>lifecycle.checkReclaimDependencies(scene,context),
     modeSwitch:deps.modeSwitch,startAttempt:request=>health.registerStartAttempt(request),diagnostic,now});
-  lifecycle=new SupervisorLifecycle({db,observeGroup:group=>scenes.observeGroup(group),observe:listScenes,stop:scene=>scenes.stop(scene),readSyncMarker,prompts,
+  lifecycle=new SupervisorLifecycle({db,observeGroup:group=>scenes.observeGroup(group),observe:listScenes,stop:stopScene,readSyncMarker,prompts,
     requests:admission.store,alert:deps.alert,bindTarget:scene=>scenes.bindTarget(scene),diagnostic,reportError},{now});
-  const exits=new SupervisorExits({scenes,db,serialize:operation=>admission.serialize(operation),readMode,diagnostic,reportError,env:deps.env});
+  const exits=new SupervisorExits({scenes:{observeGroup:group=>scenes.observeGroup(group),stop:stopScene},db,serialize:operation=>admission.serialize(operation),readMode,diagnostic,reportError,env:deps.env});
   const lifecycleMethods=Object.fromEntries(['advanceManual','advanceRestarts','reconcileConfiguration','advanceReclaim','checkRotation','checkTtl','checkEviction','checkSync'].map(name=>[name,(...args)=>lifecycle[name](...args)]));
   const loop=new SupervisorLoop({
     readConfiguration:async()=>{roundContext=null;configuration=await readConfiguration();return configuration;},

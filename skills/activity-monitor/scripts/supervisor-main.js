@@ -98,7 +98,7 @@ export async function startSupervisor({ env=process.env, log=message=>console.er
     },alert,log,...overrides,readMode,scenes,afterRound:async({context})=>{roundContext=context;await scenes.advance?.();try{await legacy.tick();}catch(error){log({error:error.code ?? error.message,phase:'legacy-status'});}await machineTasks.tick();await overrides.afterRound?.();},
   });
   legacy=overrides.legacyStatus ?? new SupervisorLegacyStatus({env,connectionOptions:baseScenes.connectionOptions ?? {},readHealth:runtime=>supervisor.health.store(runtime).read(),log});
-  machineTasks=overrides.machineTasks ?? new SupervisorMachineTasks({zylosDir:root,readMode,readConfig,readOriginState:async()=>roundContext?.scenes?.find(scene=>scene.sessionGroup==='origin' || scene.sessionGroup===null) ?? {present:false,ready:false,sampleValid:false},readHealth:runtime=>supervisor.health.store(runtime).read(),log});
+  machineTasks=overrides.machineTasks ?? new SupervisorMachineTasks({zylosDir:root,readMode,readConfig,readOriginState:async()=>{const scene=roundContext?.scenes?.find(scene=>scene.sessionGroup==='origin' || scene.sessionGroup===null);return scene?.present && scene.ready && !scene.observationError?scene:{present:false,ready:false,sampleValid:false,runtime:'unknown'};},readHealth:runtime=>supervisor.health.store(runtime).read(),log});
   const socketPath=path.join(directory,'am.sock');
   const sockets=new Set();
   const server=net.createServer(socket=>{
