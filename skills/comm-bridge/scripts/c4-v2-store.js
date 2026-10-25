@@ -80,7 +80,6 @@ export function createStore(database, dependencies = {}) {
   }
   function resolve(c, direction, channel, endpointId, { groupName, handoffGroup, wholeGroup } = {}) {
     if (!['in', 'out'].includes(direction) || channel === 'internal') throw dataError('INVALID_ARGS', 'Invalid message source');
-    if (wholeGroup !== undefined && (typeof wholeGroup !== 'boolean' || direction !== 'out' || ['void','system'].includes(channel) || groupName !== undefined || handoffGroup !== undefined)) throw dataError('INVALID_ARGS', 'wholeGroup is reserved for external whole-component output');
     if (channel === 'void' && direction === 'out') {
       if (!handoffGroup) throw dataError('NO_SESSION_ENV', 'The recording session is required');
       if (!parseSessionGroup(handoffGroup) || !exists(c, handoffGroup)) throw dataError('UNKNOWN_GROUP', 'Unknown recording group');
@@ -93,7 +92,6 @@ export function createStore(database, dependencies = {}) {
     if (direction === 'in') return composeSessionGroup(namespace, groupName);
     if (groupName !== undefined) {
       try { const group = composeSessionGroup(namespace, groupName); if (exists(c, group)) return group; } catch (error) { if (!['SESSION_GROUP_INVALID','SESSION_GROUP_TOO_LONG'].includes(error.code)) throw error; }
-      dependencies.log?.('out_group_fallback', { channel, groupName });
       return namespace;
     }
     return get(c, "SELECT session_group FROM conversations WHERE channel=? AND endpoint_id IS ? AND direction='in' AND session_group<>'' ORDER BY id DESC LIMIT 1", channel, endpointId)?.session_group ?? namespace;

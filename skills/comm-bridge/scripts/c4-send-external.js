@@ -5,6 +5,7 @@ import { pathToFileURL } from 'node:url';
 import { resolveCoreConfigModule } from './core-config-loader.js';
 import { sendError } from './c4-send-args.js';
 import { safeEntryId } from './c4-entry-id.js';
+import { appendOutGroupFallback } from './c4-outbound-events.js';
 
 const pathsModule = path.join(path.dirname(resolveCoreConfigModule()), 'session-group-paths.js');
 const { runDirFromEnv, legacyRunDir } = await import(pathToFileURL(pathsModule).href);
@@ -47,11 +48,10 @@ export function assertEndpointPassable(endpoint, id) {
 }
 
 export async function sendExternal(request, message, { api, skillsDir, env = process.env,
-  appendFallback } = {}) {
+  appendFallback = appendOutGroupFallback } = {}) {
   const { channel, endpoint, groupName, wholeGroup } = request;
   const script = path.join(skillsDir, channel, 'scripts', 'send.js');
   try {
-    api.validateChannel(channel, true);
     if (!fs.statSync(script, { throwIfNoEntry: false })?.isFile()) throw new Error('Channel script not found');
   } catch {
     throw sendError('INVALID_ARGS', 'Invalid channel: Channel script not found or component unavailable');
@@ -76,17 +76,8 @@ export async function sendExternal(request, message, { api, skillsDir, env = pro
 
 export function recordVoid(request, message, { api, env = process.env } = {}) {
   if (!request.endpoint) throw sendError('INVALID_ARGS', 'Endpoint is required for the void channel');
-  api.validateEndpoint(request.endpoint);
   const group = Object.hasOwn(env, 'ZYLOS_SESSION_GROUP') ? env.ZYLOS_SESSION_GROUP : env.ZYLOS_RUN_ID ? 'origin' : null;
-  if (group === null) throw sendError('NO_SESSION_ENV', 'Recording session environment is required');
   if (group === '') throw sendError('UNKNOWN_GROUP', 'Unknown recording group');
-  try {
-    return api.insertConversation('out', 'void', request.endpoint, message,
-      { status: 'delivered', handoffGroup: group, sessionId: senderSessionId(env) });
-  } catch (error) {
-    if (['SESSION_GROUP_INVALID', 'SESSION_GROUP_TOO_LONG', 'SESSION_GROUP_NOT_FOUND'].includes(error.code)) {
-      throw sendError('UNKNOWN_GROUP', 'Unknown recording group');
-    }
-    throw error;
-  }
+  return api.insertConversation('out', 'void', request.endpoint, message,
+    { status: 'delivered', handoffGroup: group, sessionId: senderSessionId(env) });
 }

@@ -18,8 +18,7 @@ function setup(t) {
   const marker = path.join(dir, 'component-started');
   fs.writeFileSync(script, `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'started')`);
   const api = { ...store, getDb: () => db,
-    getConversationsByRange: (a, b) => db.prepare('SELECT * FROM conversations WHERE id>=? AND id<=?').all(a, b),
-    validateChannel: () => {}, validateEndpoint: endpoint => assert.ok(endpoint) };
+    getConversationsByRange: (a, b) => db.prepare('SELECT * FROM conversations WHERE id>=? AND id<=?').all(a, b) };
   return { db, store, filename, dir, script, marker, api };
 }
 const request = { channel: 'demo', endpoint: 'endpoint' };

@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 import * as database from './c4-db.js';
 import { SKILLS_DIR } from './c4-config.js';
-import { validateChannel, validateEndpoint } from './c4-validate.js';
 import { parseSendArgs, sendError } from './c4-send-args.js';
 import { readAbsorbedReply, recordVoid, sendExternal } from './c4-send-external.js';
 
@@ -19,7 +18,7 @@ async function sendInternal(args, readBody) {
 
 async function main() {
   const args = process.argv.slice(2);
-  const api = { ...database, validateChannel, validateEndpoint };
+  const api = database;
   let internal = args[0] === 'internal';
   let externalChannel;
   try {
@@ -45,11 +44,7 @@ async function main() {
       return;
     }
     externalChannel = request.channel;
-    await sendExternal(request, message, { api, skillsDir: SKILLS_DIR,
-      appendFallback: async (record, groupName) => {
-        const { appendOutGroupFallback } = await import('./c4-outbound-events.js');
-        await appendOutGroupFallback(record, groupName);
-      } });
+    await sendExternal(request, message, { api, skillsDir: SKILLS_DIR });
     console.log(`[C4] Message sent via ${request.channel}`);
   } catch (error) {
     if (internal) {

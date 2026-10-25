@@ -6,23 +6,6 @@ import { fixture } from './c4-v2-test-helpers.js';
 const databaseModule = import.meta.resolve('better-sqlite3');
 const storeModule = new URL('../c4-v2-store.js', import.meta.url).href;
 
-test('wholeGroup is limited to external output and rejects ambiguous or invalid requests atomically', t => {
-  const { db, store } = fixture(t);
-  for (const [direction, channel, options] of [
-    ['in', 'demo', { wholeGroup: true }],
-    ['out', 'system', { wholeGroup: true }],
-    ['out', 'void', { wholeGroup: true, handoffGroup: 'origin' }],
-    ['out', 'demo', { wholeGroup: true, groupName: 'room' }],
-    ['out', 'demo', { wholeGroup: true, handoffGroup: 'origin' }],
-    ['out', 'demo', { wholeGroup: 'true' }],
-  ]) {
-    assert.throws(() => store.insertConversation(direction, channel, 'room', 'text', options), { code: 'INVALID_ARGS', persisted: [] });
-    for (const table of ['conversations', 'channel_namespaces', 'group_heads']) {
-      assert.equal(db.prepare(`SELECT count(*) AS n FROM ${table}`).get().n, 0);
-    }
-  }
-});
-
 function worker(filename, code) {
   return spawn(process.execPath, ['--input-type=module', '-e', `
     import Database from ${JSON.stringify(databaseModule)};

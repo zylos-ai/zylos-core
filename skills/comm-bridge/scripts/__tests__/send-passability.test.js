@@ -15,7 +15,7 @@ function setup(t) {
   fs.mkdirSync(path.dirname(script), { recursive: true });
   const marker = path.join(dir, 'component-started');
   fs.writeFileSync(script, `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'started')`);
-  return { ...result, dir, script, marker, api: { ...result.store, validateChannel: () => {} } };
+  return { ...result, dir, script, marker, api: result.store };
 }
 const request = { channel: 'demo', endpoint: 'private-route-value' };
 

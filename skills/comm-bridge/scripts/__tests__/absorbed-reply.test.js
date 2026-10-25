@@ -20,7 +20,7 @@ function setup(t, endpoint = 'route', options = { groupName: 'room' }) {
   const { runId } = result.store.beginModeTransition('single', 'multi');
   result.store.setDrainFence('*');
   result.store.absorbForTransition(runId);
-  const api = { ...result.store, getDb: () => result.db, validateChannel: () => {},
+  const api = { ...result.store, getDb: () => result.db,
     getConversationsByRange: (a, b) => result.db.prepare('SELECT * FROM conversations WHERE id>=? AND id<=? ORDER BY id').all(a, b) };
   return { ...result, dir, script, output, row, runId, api };
 }
