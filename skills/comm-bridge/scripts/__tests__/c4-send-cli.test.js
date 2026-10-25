@@ -32,7 +32,7 @@ function dbRecent(env, limit = 10) {
 
 function withTmpDir(fn) {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'c4-send-cli-'));
-  const env = { ZYLOS_DIR: tmpDir };
+  const env = { ZYLOS_DIR: tmpDir, ZYLOS_SESSION_GROUP: 'origin' };
   try {
     return fn({ tmpDir, env });
   } finally {

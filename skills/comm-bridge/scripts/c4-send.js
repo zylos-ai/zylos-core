@@ -1,185 +1,66 @@
 #!/usr/bin/env node
-/**
- * C4 Communication Bridge - Send Interface
- * Sends messages from Claude to external channels
- *
- * Usage:
- *   Recommended (stdin — safe for any content):
- *     node c4-send.js <channel> <endpoint_id> <<'EOF'
- *     message with "quotes", $vars, and special chars
- *     EOF
- *
- *   Simple messages (CLI arg — backward compatible):
- *     node c4-send.js <channel> [endpoint_id] "short message"
- *
- * When no message argument is provided, the message is read from stdin.
- * This avoids shell escaping issues with quotes and special characters.
- *
- * Special channel 'void' (#689): internal-only messages (e.g. session
- * handoffs). The message is recorded in c4.db like any other conversation
- * row — so session-init context injection and Memory Sync pick it up — but
- * it is never dispatched to a channel send script. The endpoint carries the
- * purpose/topic and is mandatory, e.g.:
- *   node c4-send.js void session-handoff <<'EOF'
- *   ...handoff summary...
- *   EOF
- */
-
-import path from 'path';
-import fs from 'fs';
-import { spawn } from 'child_process';
-import { insertConversation, close } from './c4-db.js';
+import * as database from './c4-db.js';
 import { SKILLS_DIR } from './c4-config.js';
 import { validateChannel, validateEndpoint } from './c4-validate.js';
+import { parseSendArgs, sendError } from './c4-send-args.js';
+import { readAbsorbedReply, recordVoid, sendExternal } from './c4-send-external.js';
 
-function printUsage() {
-  console.log('Usage: node c4-send.js <channel> <endpoint_id> <<\'EOF\'');
-  console.log('       message content');
-  console.log('       EOF');
-  console.log('       node c4-send.js <channel> [endpoint_id] "message"');
-  console.log('Example: node c4-send.js telegram 8101553026 "Hello!"');
-  process.exit(1);
+async function readStdin() {
+  process.stdin.setEncoding('utf8');
+  let content = '';
+  for await (const chunk of process.stdin) content += chunk;
+  return content;
 }
 
-/**
- * Read all data from stdin.
- */
-function readStdin() {
-  return new Promise((resolve, reject) => {
-    let data = '';
-    process.stdin.setEncoding('utf8');
-    process.stdin.on('data', chunk => { data += chunk; });
-    process.stdin.on('end', () => resolve(data));
-    process.stdin.on('error', reject);
-  });
+async function sendInternal(args, readBody) {
+  const { sendInternal: handler } = await import('./c4-send-internal.js');
+  return handler(args, readBody);
 }
 
 async function main() {
   const args = process.argv.slice(2);
-
-  if (args.length < 2) {
-    printUsage();
-  }
-
-  // Remove --stdin flag if present (backward compat)
-  const cleanArgs = args.filter(a => a !== '--stdin');
-  const hasStdinFlag = cleanArgs.length !== args.length;
-  const stdinAvailable = !process.stdin.isTTY;
-
-  const channel = cleanArgs[0];
-  let endpoint = null;
-  let message = null;
-
-  if (cleanArgs.length === 2 && (stdinAvailable || hasStdinFlag)) {
-    // 2 args (channel + endpoint) with piped stdin or --stdin flag: read from stdin
-    endpoint = cleanArgs[1];
-    message = (await readStdin()).trimEnd();
-  } else if (cleanArgs.length === 1 && (stdinAvailable || hasStdinFlag)) {
-    // 1 arg (channel only) with piped stdin: read from stdin
-    message = (await readStdin()).trimEnd();
-  } else if (cleanArgs.length === 2) {
-    // 2 args, no stdin: channel + message (no endpoint)
-    process.stderr.write('[c4-send] Deprecated: passing message as CLI argument. Use stdin/heredoc mode instead.\n');
-    message = cleanArgs[1];
-    // Unescape literal \n sequences that shell may have preserved when passing
-    // multi-line content as a CLI argument (defense-in-depth; prefer stdin mode)
-    message = message.replace(/\\n/g, '\n');
-  } else {
-    // 3+ args: channel + endpoint + message
-    process.stderr.write('[c4-send] Deprecated: passing message as CLI argument. Use stdin/heredoc mode instead.\n');
-    endpoint = cleanArgs[1];
-    message = cleanArgs[2];
-    // Same defense for the 3-arg form
-    message = message.replace(/\\n/g, '\n');
-  }
-
-  if (!message) {
-    console.error('Error: Message is required');
-    process.exit(1);
-  }
-
-  // Virtual 'void' channel (#689): record-only, never dispatched.
-  // No skill directory exists for it, so skip channel-path validation and
-  // the channel send script entirely.
-  if (channel === 'void') {
-    if (!endpoint) {
-      console.error('Error: Endpoint is required for the void channel (e.g. c4-send.js void session-handoff)');
-      process.exit(1);
-    }
-
-    try {
-      validateEndpoint(endpoint);
-    } catch (err) {
-      console.error(`[C4] Invalid endpoint: ${err.stack}`);
-      process.exit(1);
-    }
-
-    try {
-      insertConversation('out', 'void', endpoint, message);
-    } catch (err) {
-      // Unlike real channels (where the DB row is an audit trail), the DB
-      // write IS the delivery for void — fail loudly.
-      console.error(`[C4] Failed to record void message: ${err.stack}`);
-      process.exit(1);
-    } finally {
-      close();
-    }
-
-    console.log('[C4] Message recorded on void channel (not dispatched)');
-    process.exit(0);
-  }
-
+  const api = { ...database, validateChannel, validateEndpoint };
+  let internal = args[0] === 'internal';
   try {
-    validateChannel(channel, true);
-  } catch (err) {
-    console.error(`[C4] Invalid channel: ${err.stack}`);
-    process.exit(1);
-  }
-
-  if (endpoint) {
-    try {
-      validateEndpoint(endpoint);
-    } catch (err) {
-      console.error(`[C4] Invalid endpoint: ${err.stack}`);
-      process.exit(1);
+    if (internal) {
+      console.log(await sendInternal(args, readStdin));
+      return;
     }
-  }
-
-  try {
-    insertConversation('out', channel, endpoint, message);
-  } catch (err) {
-    console.error(`[C4] Warning: DB audit write failed: ${err.stack}`);
-  } finally {
-    close();
-  }
-
-  const channelScript = path.join(SKILLS_DIR, channel, 'scripts', 'send.js');
-
-  if (!fs.existsSync(channelScript)) {
-    console.error(`Error: Channel script not found: ${channelScript}`);
-    console.error('Channels must provide scripts/send.js (Node.js standard)');
-    process.exit(1);
-  }
-
-  const scriptArgs = endpoint ? [endpoint, message] : [message];
-
-  const child = spawn('node', [channelScript, ...scriptArgs], {
-    stdio: 'inherit'
-  });
-
-  child.on('close', (code) => {
-    if (code === 0) {
-      console.log(`[C4] Message sent via ${channel}`);
-    } else {
-      console.log(`[C4] Failed to send message via ${channel} (exit code: ${code})`);
+    let request = parseSendArgs(args, { isTTY: !!process.stdin.isTTY });
+    const message = (request.stdin ? await readStdin() : request.message).trimEnd();
+    if (!message) throw sendError('EMPTY_CONTENT', 'Message is required');
+    if (!request.stdin) console.error('[c4-send] Deprecated: passing message as CLI argument. Use stdin/heredoc mode instead.');
+    if (request.kind === 'absorbed') {
+      request = readAbsorbedReply(request.runId, request.id, api);
+      if (request.channel === 'internal') {
+        internal = true;
+        console.log(await sendInternal(['internal', request.endpoint], async () => message));
+        return;
+      }
     }
-    process.exit(code);
-  });
-
-  child.on('error', (err) => {
-    console.error(`[C4] Error executing channel script: ${err.stack}`);
-    process.exit(1);
-  });
+    if (request.kind === 'void') {
+      recordVoid(request, message, { api });
+      console.log('[C4] Message recorded on void channel (not dispatched)');
+      return;
+    }
+    await sendExternal(request, message, { api, skillsDir: SKILLS_DIR,
+      appendFallback: async (record, groupName) => {
+        if (groupName === undefined || record.session_group.includes(':')) return;
+        const { appendOutGroupFallback } = await import('./c4-entry-events.js');
+        await appendOutGroupFallback(record, groupName);
+      } });
+    console.log(`[C4] Message sent via ${request.channel}`);
+  } catch (error) {
+    if (internal) {
+      console.error(`Error: ${error.code || 'INTERNAL_ERROR'}: ${error.message}`);
+      process.exitCode = 1;
+      return;
+    }
+    if (error.message.startsWith('Usage:')) console.log(error.message);
+    if (error.code === 'SEND_FAILED') console.log('[C4] Failed to send message via component');
+    console.error(`[C4] ${error.code || 'INTERNAL_ERROR'}: ${error.message}`);
+    process.exitCode = 1;
+  } finally { database.close(); }
 }
 
-main();
+await main();
