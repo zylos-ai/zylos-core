@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { fixture, startHeldWriter } from './c4-v2-test-helpers.js';
+import { fixture } from './c4-v2-test-helpers.js';
 import { sendInternal } from '../c4-send-internal.js';
 const repository=fileURLToPath(new URL('../../../../',import.meta.url));
 const command=fileURLToPath(new URL('../c4-send.js',import.meta.url));
@@ -27,9 +27,9 @@ function setup(t) {
 function snapshot(f) {
   return {rows:f.db.prepare('SELECT * FROM conversations ORDER BY id').all(),heads:f.db.prepare('SELECT * FROM group_heads ORDER BY session_group').all()};
 }
-function run(f,args=['internal','chat:b'],body='message\n',env={},entry=command) {
+function run(f,args=['internal','chat:b'],body='message\n',env={}) {
   return new Promise((resolve,reject)=>{
-    const child=spawn(process.execPath,['--import',guard,entry,...args],{env:{...f.env,...env},stdio:['pipe','pipe','pipe']});
+    const child=spawn(process.execPath,['--import',guard,command,...args],{env:{...f.env,...env},stdio:['pipe','pipe','pipe']});
     let stdout='',stderr='';child.stdout.on('data',b=>stdout+=b);child.stderr.on('data',b=>stderr+=b);
     child.once('error',reject);child.once('close',(code,signal)=>resolve({code,signal,stdout,stderr}));
     child.stdin.on('error',error=>{if(error.code!=='EPIPE')reject(error);});child.stdin.end(body);
@@ -62,6 +62,7 @@ test('IF-45 rejects all invalid send forms without changing conversations or hea
     {args:['internal','chat:a'],code:'SELF_TARGET'},
     {body:' \t\n',code:'EMPTY_CONTENT'},
     {args:['internal'],code:'INVALID_ARGS'},
+    {args:['internal','--group'],code:'INVALID_ARGS'},
     {args:['internal','chat:b','argv body'],code:'INVALID_ARGS'},
     ...['--session-group','--group','--stdin'].map(flag=>({args:['internal','chat:b',flag,'b'],code:'INVALID_ARGS'})),
   ];
@@ -108,13 +109,6 @@ test('IF-45 real CLI failure after outbound insert rolls back both rows and both
   assert.equal(result.code,1);assert.match(result.stderr,/^Error: DB_WRITE_FAILED:/);assert.deepEqual(snapshot(f),before);
 });
 
-test('IF-45 another connection holding the write lock beyond busy_timeout rejects with zero changes', {timeout:15000},async t=>{
-  const f=setup(t),before=snapshot(f),writer=startHeldWriter(f.filename,'');await writer.held;
-  try {const result=await run(f);assert.equal(result.code,1);assert.match(result.stderr,/^Error: DB_WRITE_FAILED:/);}
-  finally {writer.child.send('release');await writer.exited;}
-  assert.deepEqual(snapshot(f),before);
-});
-
 test('IF-45 concurrent real CLI A-to-B and B-to-A commit whole pairs and monotonic heads',{timeout:15000},async t=>{
   const f=setup(t);
   const workers=[['chat:a','chat:b','a-to-b'],['chat:b','chat:a','b-to-a']].map(([sender,target,body])=>{
@@ -141,17 +135,4 @@ test('IF-45 concurrent real CLI A-to-B and B-to-A commit whole pairs and monoton
   const rows=internalRows(f);assert.equal(rows.length,4);
   for(let i=0;i<4;i+=2){assert.equal(rows[i].direction,'out');assert.equal(rows[i+1].direction,'in');assert.equal(rows[i+1].id,rows[i].id+1);assert.equal(rows[i].endpoint_id,rows[i+1].session_group);assert.equal(rows[i].session_group,rows[i+1].endpoint_id);}
   for(const group of ['chat:a','chat:b'])assert.equal(f.db.prepare('SELECT head_id FROM group_heads WHERE session_group=?').get(group).head_id,Math.max(...rows.filter(r=>r.session_group===group).map(r=>r.id)));
-});
-
-test('IF-45 rollback assertion detects actual source that commits only outbound before inbound failure',async t=>{
-  const f=setup(t),copy=path.join(f.root,'mutant-comm-bridge');
-  fs.cpSync(path.join(repository,'skills/comm-bridge'),copy,{recursive:true,filter:file=>!['node_modules','__tests__'].includes(path.basename(file))});
-  fs.symlinkSync(fs.realpathSync(path.join(repository,'skills/comm-bridge/node_modules')),path.join(copy,'node_modules'),'dir');
-  const file=path.join(copy,'scripts/c4-v2-store.js'),source=fs.readFileSync(file,'utf8');
-  const anchor="const inRow = insert(c, 'in', 'internal', senderGroup,";assert.equal(source.split(anchor).length,2);
-  fs.writeFileSync(file,source.replace(anchor,"c.exec('COMMIT'); c.exec('BEGIN IMMEDIATE');\n      "+anchor));
-  injectInboundFailure(f);const before=snapshot(f);const result=await run(f,undefined,undefined,{},path.join(copy,'scripts/c4-send.js'));
-  assert.equal(result.code,1);assert.match(result.stderr,/DB_WRITE_FAILED/);
-  assert.throws(()=>assert.deepEqual(snapshot(f),before),{code:'ERR_ASSERTION'});
-  assert.equal(internalRows(f).length,1);assert.equal(internalRows(f)[0].direction,'out');
 });

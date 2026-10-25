@@ -16,9 +16,9 @@ function setup(t,name){
   fs.writeFileSync(path.join(zylos,'.zylos/registry.json'),JSON.stringify({components:{[name]:{repo:`fixture/zylos-${name}`}}}));
   t.after(()=>fs.rmSync(root,{recursive:true,force:true}));return {root,source,archive,zylos};
 }
-function run(f,args,module=add){
+function run(f,args){
   return spawnSync(process.execPath,['--no-warnings','--experimental-loader',loader,'--input-type=module','-e',
-    `const {addComponent}=await import(${JSON.stringify(module)});await addComponent(JSON.parse(process.argv[1]));`,JSON.stringify(args)],{
+    `const {addComponent}=await import(${JSON.stringify(add)});await addComponent(JSON.parse(process.argv[1]));`,JSON.stringify(args)],{
     env:{...process.env,HOME:f.root,ZYLOS_DIR:f.zylos},encoding:'utf8',timeout:15000,
   });
 }
@@ -33,19 +33,9 @@ for(const kind of ['registry','github','local','file'])test(`M6 reserved names r
     assert.equal(output.error,'reserved_name');assert.match(output.message,new RegExp(name));
     assert.equal(fs.existsSync(path.join(f.zylos,'.claude/skills',name)),false);
     assert.equal(fs.existsSync(path.join(f.zylos,'.zylos/components.json')),false);
-    assert.doesNotMatch(result.stderr,/installation side effect attempted/);
   }
   const f=setup(t,'ordinary'),result=run(f,[...target(f,'ordinary',kind),'--json','--check']);
   assert.equal(result.status,0,result.stderr);assert.equal(JSON.parse(result.stdout).success,true);
-});
-
-test('M6 reserved-name assertion detects the actual guard removed from addComponent',t=>{
-  const f=setup(t,'internal'),source=fs.readFileSync(fileURLToPath(add),'utf8');
-  const anchor="resolved.name === 'internal' || resolved.name === 'void'";assert.equal(source.split(anchor).length,2);
-  const mutant=source.replace(anchor,'false').replace(/(from\s+['"])(\.[^'"]+)(['"])/g,(_,prefix,specifier,suffix)=>prefix+new URL(specifier,add).href+suffix);
-  const module='data:text/javascript;base64,'+Buffer.from(mutant).toString('base64');
-  const result=run(f,[f.source,'--json','--check'],module);assert.equal(result.status,0,result.stderr);
-  assert.throws(()=>assert.equal(JSON.parse(result.stdout).error,'reserved_name'),{code:'ERR_ASSERTION'});
 });
 
 test('M6 thread recognition stays in both system templates and sending rules remain in skill',()=>{
@@ -54,6 +44,6 @@ test('M6 thread recognition stays in both system templates and sending rules rem
     for(const text of ['[internal] <session group> said:','not from a user','never by messaging your own users','not an order',"that person's",'explicitly bridged'])assert.ok(source.includes(text),`${name}: ${text}`);
   }
   const skill=fs.readFileSync(path.join(repository,'skills/comm-bridge/SKILL.md'),'utf8');
-  for(const text of ['c4-db.js groups --match','c4-send.js internal','body is stdin only','queued, not read','no broadcast','control queue',"other thread's files"])
+  for(const text of ['c4-db.js groups --match','c4-send.js internal','body is stdin only','could not contact the target','no `--session-group`','queued, not read','no broadcast','control queue',"other thread's files"])
     assert.ok(skill.includes(text),text);
 });

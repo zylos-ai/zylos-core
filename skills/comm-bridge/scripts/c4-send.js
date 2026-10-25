@@ -61,7 +61,7 @@ async function main() {
   // Internal has a strict stdin-only protocol, independent of legacy parsing.
   if (args[0] === 'internal') {
     try { console.log(await sendInternal(args, readStdin)); }
-    catch (err) { console.error(`Error: ${err.code || 'DB_WRITE_FAILED'}: ${err.message}`); process.exitCode = 1; }
+    catch (err) { console.error(`Error: ${err.code || 'INTERNAL_ERROR'}: ${err.message}`); process.exitCode = 1; }
     finally { close(); }
     return;
   }
