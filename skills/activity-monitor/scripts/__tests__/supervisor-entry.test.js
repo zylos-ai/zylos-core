@@ -117,3 +117,15 @@ test('C4 canonical PM2 wrapper invokes the monitor entry even when imported indi
  await import('../activity-monitor.js');
  assert.equal(starts,1);
 });
+
+// C3 / P3-1: use the actual entry's missing P04 module, without capacity injection.
+test('C3 missing P04 reader logs once across six rounds and defers eviction without config-error spam',{timeout:15000},async t=>{
+ const root=prepare(t),w=launch(t,root);await w.next();
+ w.child.send('rounds');const result=await w.next();
+ assert.equal(result.configuration.capacityUnavailable,true);
+ assert.equal(Object.hasOwn(result.configuration,'capacity'),false);
+ assert.equal(result.logs.filter(row=>row?.dependency==='P04 pool configuration reader').length,1);
+ assert.equal(result.logs.filter(row=>row?.phase==='eviction').length,0);
+ assert.equal((await request(root,{version:1,type:'restart_all',requestId:'after-missing-p04',reason:'upgrade'})).result,'done_empty');
+ await stop(w);
+});

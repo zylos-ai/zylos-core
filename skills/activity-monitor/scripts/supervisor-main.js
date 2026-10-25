@@ -69,12 +69,12 @@ export async function startSupervisor({ env=process.env, log=message=>console.er
     readConfiguration:async()=>{
       const raw=await readConfig(), {mode,legacy}=await readMode();
       lifecycleConfiguration ??= parseSupervisorConfiguration(raw,env);
-      configuration={...raw,...lifecycleConfiguration,mode,legacy};
+      configuration={...raw,...lifecycleConfiguration,mode,legacy,capacityUnavailable:false};
       try {
         const pool=await loadCoreModule('session-pool-config.js');
         if(typeof pool.resolveSessionPoolSize!=='function')throw unavailable('P04 pool configuration reader');
         configuration.capacity=pool.resolveSessionPoolSize({env,config:raw});
-      }catch(error){if(!['ERR_MODULE_NOT_FOUND','DEPENDENCY_UNAVAILABLE'].includes(error.code))throw error;delete configuration.capacity;dependencyMissing('P04 pool configuration reader','eviction');}
+      }catch(error){if(!['ERR_MODULE_NOT_FOUND','DEPENDENCY_UNAVAILABLE'].includes(error.code))throw error;delete configuration.capacity;configuration.capacityUnavailable=true;dependencyMissing('P04 pool configuration reader','eviction');}
       return configuration;
     },
     advanceAutomaticMigration:async()=>{throw unavailable('P10 automatic migration owner');},

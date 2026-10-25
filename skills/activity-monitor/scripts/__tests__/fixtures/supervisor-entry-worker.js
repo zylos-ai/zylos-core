@@ -23,7 +23,7 @@ process.on('message',async message=>{
     try {await service.stop();await service.stop();process.send({stopped:true});process.disconnect();}
     catch(error){process.send({stopError:error.code ?? error.message});process.exitCode=1;process.disconnect();}
   }
-  if(message==='rounds') {for(let i=0;i<3;i++)await service.supervisor.loop.runRound();process.send({logs});}
+  if(message==='rounds') {for(let i=0;i<6;i++)await service.supervisor.loop.runRound();process.send({logs,configuration:service.supervisor.loop.configuration});}
   if(message==='freeze') {
     const store=service.supervisor.health.store('claude');
     const identity={runtime:'claude',session_id:'fixture-session',claude_pid:123};
