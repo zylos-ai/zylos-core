@@ -26,7 +26,7 @@ function fixture(t) {
   const db=new Database(':memory:');guardDatabase(db,schema);
   t.after(()=>{db.close();fs.rmSync(zylosDir,{recursive:true,force:true});});
   db.prepare("INSERT INTO conversations(direction,channel,endpoint_id,content,status) VALUES('in','fake','group','test','delivered')").run();
-  return new HealthStore({zylosDir,now:()=>now,freezeNotice:input=>freezeFirstFailureNotice(db,input)});
+  return new HealthStore({zylosDir,now:()=>now,freezeNotice:input=>freezeFirstFailureNotice(db,{...input,sessionGroup:null})});
 }
 
 test('verified exhausted windows outrank model prose, and both full windows use later reset', () => {
@@ -95,7 +95,7 @@ test('factual first failure notices are independent of persistent health transit
   }
 });
 
-test('matched evidence flows transactionally to first reply and identical inbound/fallback messages', async t => {
+test('IB-02 matched notice evidence remains durable while rate-limited inbound stays pending', async t => {
   const store=fixture(t);
   const result=store.consume({...base,quota:snapshot({five_hour:{used_percentage:100,resets_at:reset1}}),error_details:'PRIVATE'}, {identity});
   const intent=store.read().pending_notice;
@@ -103,11 +103,12 @@ test('matched evidence flows transactionally to first reply and identical inboun
   assert.doesNotMatch(fs.readFileSync(store.file,'utf8'),/PRIVATE/);
   const engine={health:'rate_limited',healthReason:result.state.reason,evidence:{store,refresh(){}},
     runRecoveryProbe:async()=>({recovered:false})};
-  const router=new MessageRouter({healthEngine:engine,now:()=>now});
-  const route=await router.route({version:1,type:'route',requestId:'test'});
+  const router=new MessageRouter({healthCoordinator:{store:()=>store,notifyUserMessage:()=>false},
+    resolveTargetRuntime:()=> 'claude',requestProbe:async()=>{},cacheDirectory:path.join(path.dirname(store.file),'probe-cache'),now:()=>now});
+  const route=await router.route({version:1,type:'route',requestId:'test',noReply:false,receivedAt:now});
   const status=buildStatusPayload({statusObj:{},healthEngine:engine});
-  assert.equal(route.userMessage,messageForStatus({health:status.health,...status.health_notice}));
-  assert.match(route.userMessage,/\d{4}-\d{2}-\d{2} \d{2}:\d{2} (?:UTC|[A-Za-z_]+\/[A-Za-z_]+)/);
+  assert.equal(route.decision,'pending');assert.equal(route.userMessage,undefined);
+  assert.match(messageForStatus({health:status.health,...status.health_notice}),/\d{4}-\d{2}-\d{2} \d{2}:\d{2} (?:UTC|[A-Za-z_]+\/[A-Za-z_]+)/);
   const revision=store.read().revision;
   store.transition('ok','',{identity,kind:'recovery',expectedRevision:revision});
   assert.equal(store.read().notice,undefined);

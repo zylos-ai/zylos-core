@@ -26,9 +26,9 @@ function fixture(t) {
   fs.mkdirSync(path.join(zylosDir,'comm-bridge'));
   const db=new Database(path.join(zylosDir,'comm-bridge','c4.db'));guardDatabase(db,schema);t.after(()=>db.close());
   let clock=Date.now();
-  const store=new HealthStore({zylosDir,now:()=>clock,freezeNotice:input=>freezeFirstFailureNotice(db,input)});
+  const store=new HealthStore({zylosDir,now:()=>clock,freezeNotice:input=>freezeFirstFailureNotice(db,{...input,sessionGroup:null})});
   const files=Object.fromEntries(['toolEvents','toolEventStreamState','sessionToolState','apiActivity','foregroundSession','statusline'].map(key=>[key,path.join(dir,key)]));
-  files.toolEvents=path.join(dir,'tool-events.jsonl');
+  files.toolEvents=path.join(dir,'events.jsonl');
   const {pipeline}=createToolPipeline({runtimeId:'claude'}, {}, {files,getRuntimeLaunchAtMs:()=>0,
     onHealthEvent:event=>store.consume(event,{identity})});
   const options={zylosDir,pid:process.pid,managedIdentity:()=>identity};
@@ -132,7 +132,7 @@ test('same-session recovery, normal Stop, new prompt and AM restart permit a new
   f.setTime(at+10);f.store.transition('ok','',{identity:f.identity,kind:'recovery'});
   f.setTime(at+20);f.collect({hook_event_name:'Stop',prompt_id:'normal'});f.tick();
   f.setTime(at+21);f.collect({hook_event_name:'UserPromptSubmit',prompt_id:'next'});f.tick();
-  const restarted=new HealthStore({zylosDir:f.zylosDir,now:f.now,freezeNotice:input=>freezeFirstFailureNotice(f.db,input)});
+  const restarted=new HealthStore({zylosDir:f.zylosDir,now:f.now,freezeNotice:input=>freezeFirstFailureNotice(f.db,{...input,sessionGroup:null})});
   f.db.prepare("INSERT INTO conversations(direction,channel,endpoint_id,content,status) VALUES('in','fake','next','test','delivered')").run();
   f.setTime(at+30);const next=f.collect({prompt_id:'next',error:'authentication_failed'});
   const result=restarted.consume(next,{identity:f.identity});
@@ -193,4 +193,66 @@ test('real isolated sender child captures one bilingual notice without writing t
   assert.ok(sent.args.includes('capture-only'));
   assert.match(fs.readFileSync(path.join(f.zylosDir,'activity-monitor/status-notices.log'),'utf8'),/first-failure/);
   assert.equal(await processFirstFailureNotices(options),0);
+});
+
+// P05 §4 health hook acceptance: preserve the recovered snapshot branch, then
+// prove a strictly later failure commits health, marker and new frozen route
+// together for the same PID/session. No identity change hides the regression.
+async function exactRecoveryRegression(t, Store = HealthStore) {
+  const f=fixture(t),at=f.now();
+  f.db.prepare("INSERT INTO conversations(direction,channel,endpoint_id,content,status) VALUES('in','fake','first','test','delivered')").run();
+  const first=f.collect();
+  f.store.consume({...first,event_id:randomUUID(),received_at:at-1,ts:at-1},{identity:f.identity,sessionGroup:'other'});
+  f.tick();
+  assert.equal(f.store.read().health,'rate_limited');
+  f.setTime(at+10);f.store.transition('ok','',{identity:f.identity,kind:'recovery'});
+  const recovered=fs.readFileSync(f.store.file,'utf8');
+  const recoveredDisk=JSON.parse(recovered);
+  assert.equal(recoveredDisk.hook.recovered.observedAt,at+10);
+  assert.equal(recoveredDisk.hook.groups.origin.lastProcessedAt,at);
+
+  // Independent branch from exactly the pre-Stop recovered bytes. Its event is
+  // newer than the terminal marker but not newer than recovery observation.
+  const branch=fixture(t);branch.setTime(at+30);
+  fs.mkdirSync(path.dirname(branch.store.file),{recursive:true});fs.writeFileSync(branch.store.file,recovered);
+  const old={...first,event_id:randomUUID(),received_at:at+5,ts:at+5};
+  assert.equal(branch.store.consume(old,{identity:f.identity}).reason,'pre_recovery_event');
+  assert.equal(fs.readFileSync(branch.store.file,'utf8'),recovered);
+
+  f.setTime(at+20);f.collect({hook_event_name:'Stop',prompt_id:'normal'});f.tick();
+  const afterStop=f.store.read();assert.equal(afterStop.health,'ok');
+  f.setTime(at+21);f.collect({hook_event_name:'UserPromptSubmit',prompt_id:'next'});f.tick();
+  assert.deepEqual(f.store.read().last_processed,afterStop.last_processed);
+  const restarted=new Store({zylosDir:f.zylosDir,now:f.now,freezeNotice:input=>freezeFirstFailureNotice(f.db,{...input,sessionGroup:null})});
+  f.db.prepare("INSERT INTO conversations(direction,channel,endpoint_id,content,status) VALUES('in','fake','next','test','delivered')").run();
+  f.setTime(at+30);const next=f.collect({prompt_id:'next',error:'authentication_failed'});
+  let publications=0;const publish=restarted.write.bind(restarted);
+  restarted.write=(...args)=>{publish(...args);publications++;};
+  assert.equal(restarted.consume(next,{identity:f.identity}).reason,'hook_failure');
+  assert.equal(publications,1);
+  const committed=JSON.parse(fs.readFileSync(restarted.file,'utf8'));
+  assert.equal(committed.health,'auth_failed');
+  assert.equal(committed.hook.groups.origin.lastProcessedAt,at+30);
+  assert.equal(committed.hook.groups.origin.lastProcessedEventId,next.event_id);
+  assert.equal(committed.hook.groups.origin.pendingNotice.endpoint,'next');
+  assert.equal(committed.hook.groups.origin.pendingNotice.eventId,next.event_id);
+  assert.deepEqual(committed.hook.groups.other,recoveredDisk.hook.groups.other);
+  const sent=[];
+  await processFirstFailureNotices({store:restarted,database:f.db,identity:()=>f.identity,now:f.now,
+    reserve:(channel,endpoint,route)=>claimStatusNotice({key:statusNoticeKey(channel,endpoint,route.health,route.reason),channel,endpoint,normalizedEndpoint:endpoint,...route,now:Math.floor(f.now()/1000)},f.db),
+    send:async(claim,message,route)=>{sent.push({endpoint:claim.endpoint,health:route.health});return {outcome:'sent'};}});
+  assert.deepEqual(sent,[{endpoint:'next',health:'auth_failed'}]);
+  const afterSend=fs.readFileSync(restarted.file,'utf8');
+  assert.equal(restarted.consume(next,{identity:f.identity}).reason,'replay');
+  assert.equal(fs.readFileSync(restarted.file,'utf8'),afterSend);
+}
+test('same-identity recovery rejects intervening old event but atomically commits later failure; old suppression mutant fails',async t=>{
+  await exactRecoveryRegression(t);
+  class SuppressAllRecovered extends HealthStore {
+    consume(event,options={}) {
+      if(this.read(options.sessionGroup).recovered) return {status:'ignored',reason:'pre_recovery_event'};
+      return super.consume(event,options);
+    }
+  }
+  await assert.rejects(exactRecoveryRegression(t,SuppressAllRecovered),{code:'ERR_ASSERTION'});
 });
