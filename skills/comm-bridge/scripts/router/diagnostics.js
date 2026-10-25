@@ -21,7 +21,7 @@ export function createRouterDiagnostics({ env = process.env, now = Date.now,
       decision: fields.decision ?? event, reason: fields.reason ?? null,
       ...(fields.session_id ?? sessionId ? { session_id: fields.session_id ?? sessionId } : {}),
     };
-    try { return stream.append(record).then(() => true, report); }
+    try { return Promise.resolve(stream.append(record)).then(() => true, report); }
     catch (error) { return Promise.resolve(report(error)); }
   }
   async function maintain() {
