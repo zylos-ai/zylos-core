@@ -97,7 +97,7 @@ export class SupervisorLoop {
     await this.each(context.scenes, scene => d.probeAndPublish(scene, context), 'observe');
     await d.lifecycleSerial(async () => {
       await this.each(context.fences, fence => d.advanceReclaim(fence, context), 'reclaim');
-      if (context.transition) return;
+      if (transition || context.transition) return;
       await this.each(context.scenes, scene => d.checkRotation(scene, context), 'rotation');
       if (context.configuration.mode === 'multi') {
         await this.each(context.scenes, scene => d.checkTtl(scene, context), 'ttl');

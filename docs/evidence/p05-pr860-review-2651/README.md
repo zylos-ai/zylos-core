@@ -9,3 +9,5 @@ Focused official isolated Node runner: 4 files, 61 passed, no failures/skips. Ru
 External controls: `python3 run-mutants.py /path/to/checkout /path/to/disposable-output`. Mutations live only in disposable archived copies; three variants all fail the relevant positive tests. Independent selection and five-version matrix are recorded separately after parent integration.
 
 After A integration: the 80-file independent selection passed (counts in selected.log). The B-only sessionId execution fixture no longer writes the removed F9 expectedSessionId field. Five-version matrix follows on this unchanged source.
+
+Round-start transition restriction also survives mutation-time authority refresh inside advanceReclaim; the completion regression deliberately clears context.transition there. Final independent result: 805 passed, 1 opt-in skip, 0 failed. The first matrix attempt was stopped after 3.2a suite/stress completed to strengthen this guard; final matrix runs against the resulting frozen source.

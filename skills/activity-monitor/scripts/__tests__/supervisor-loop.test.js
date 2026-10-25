@@ -101,6 +101,7 @@ test('completed transition precedes serial work and keeps transition-round restr
     advanceTransition: async () => { assert.equal(locked, false); f.calls.push('transition'); transition = null; mode = 'single'; },
     readConfiguration: async () => ({ mode }),
     listDrainFences: async () => [{ sessionGroup: 'tg:one' }],
+    advanceReclaim: async (fence, context) => { context.transition = null; f.calls.push('reclaim'); },
     lifecycleSerial: async action => { locked = true; try { return await action(); } finally { locked = false; } },
   });
   await f.loop.start();
