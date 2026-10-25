@@ -1,0 +1,22 @@
+Running 1 Node test files
+✔ T01 assembly: restore health before admission; no-launch empty round executes (8.888726ms)
+✔ DM-54 assembly: damaged F9 retained while existing lifecycle loop stays scheduled (2.815979ms)
+✔ IF-31 assembly: unwritable diagnostic output cannot block completed authentication recovery (33.870073ms)
+✔ T01/T02 assembly: one failed probe poll cannot starve another runtime or auth recovery (34.843959ms)
+✔ T01/IB-41 assembly: config reclaim resolves mode at admission, after F1 cutover (0.718933ms)
+✔ T02/T08 assembly: stopped, unknown, or no-longer-ready processes cannot refresh F4 (2.431493ms)
+✔ T02/T08 assembly: hooks and status share the round sample; replacement identity blocks publication (0.978643ms)
+✔ T01 shutdown: accepted lifecycle mutation finishes before Supervisor stop resolves (4.588916ms)
+✔ T01 shutdown: detached route auth and accepted health writes drain before return (1.287209ms)
+✔ T08 assembly: metrics reuses scene and fence snapshots and excludes stopped entries (1.37576ms)
+✔ T08 assembly: health stop removes the run from subsequent round metrics (1.174126ms)
+✔ T08 assembly: exit stop removes the run from subsequent round metrics (1.051259ms)
+✔ T08 assembly: single auth null scope invalidates only its matching Origin run (0.420878ms)
+ℹ tests 13
+ℹ suites 0
+ℹ pass 13
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 190.841043

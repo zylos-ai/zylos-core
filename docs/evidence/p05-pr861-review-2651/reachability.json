@@ -1,0 +1,48 @@
+{
+  "baseline": "da126d7c22afffda0cc397f1ca2c47e43bbebcab",
+  "production_source_count": 239,
+  "incoming_imports": {
+    "skills/activity-monitor/scripts/tool-pipeline.js": [
+      "skills/activity-monitor/scripts/adapters/runtime-components.js"
+    ],
+    "skills/activity-monitor/scripts/tasks/activity-monitor-tasks.js": [],
+    "skills/activity-monitor/scripts/adapters/runtime-components.js": [],
+    "skills/activity-monitor/scripts/tool-event-stream.js": [
+      "skills/activity-monitor/scripts/tool-pipeline.js"
+    ],
+    "skills/activity-monitor/scripts/proc-sampler.js": [],
+    "skills/activity-monitor/scripts/task-scheduler.js": [
+      "skills/activity-monitor/scripts/tasks/activity-monitor-tasks.js"
+    ],
+    "skills/activity-monitor/scripts/usage-monitor-file-reader.js": [],
+    "skills/activity-monitor/scripts/memory-sync-gate.js": [],
+    "skills/activity-monitor/scripts/usage-codex-rollout-reader.js": [],
+    "skills/activity-monitor/scripts/tool-lifecycle.js": [
+      "skills/activity-monitor/scripts/tool-pipeline.js"
+    ],
+    "skills/activity-monitor/scripts/tool-watchdog.js": []
+  },
+  "non_test_non_docs_text_references": {
+    "tool-pipeline": [
+      "skills/activity-monitor/scripts/adapters/runtime-components.js"
+    ],
+    "task-scheduler": [
+      "skills/activity-monitor/scripts/tasks/activity-monitor-tasks.js"
+    ],
+    "tool-lifecycle": [
+      "skills/activity-monitor/scripts/tool-pipeline.js"
+    ],
+    "tool-event-stream": [
+      "skills/activity-monitor/scripts/tool-pipeline.js"
+    ]
+  },
+  "entry_basis": [
+    "templates/pm2/ecosystem.config.cjs",
+    "skills/activity-monitor/scripts/monitor.js",
+    "skills/activity-monitor/package.json",
+    "cli",
+    "hooks",
+    "skills/*/SKILL.md"
+  ],
+  "conclusion": "Every incoming production import is within the deletion set; no outside production import or executable entry invocation found. m1-restart-confirmation retained for P10."
+}
