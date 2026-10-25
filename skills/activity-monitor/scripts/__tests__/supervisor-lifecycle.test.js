@@ -348,14 +348,41 @@ test('available held marker permits fencing but never permits an idle stop', asy
   assert.equal(await f.lifecycle.advanceReclaim(f.fences.get('a'), f.context), 'cancelled');
   assert.deepEqual(f.stops, []); assert.equal(f.fences.size, 0);
 });
-test('Sync observation failure after fencing clears exact ordinary/config fences without stopping', async () => {
+test('Sync observation failure cancels ordinary fences but retains accepted configuration fences', async () => {
   for (const reason of ['ttl', 'evict', 'upgrade', 'auth', 'mode_switch', 'model_config']) {
     const f = fixture(); await f.lifecycle.beginReclaim(f.scenes[0], reason, f.context);
     f.deps.readSyncMarker = () => { throw Object.assign(new Error('reader failed'), { code: 'DEPENDENCY_UNAVAILABLE' }); };
     await assert.rejects(f.lifecycle.advanceReclaim(f.fences.get('a'), f.context), { code: 'DEPENDENCY_UNAVAILABLE' });
-    assert.equal(f.fences.size, 0); assert.deepEqual(f.stops, []);
-    assert.ok(f.events.some(e => e.event === 'reclaim_cancelled' && e.reason === 'observation_error'));
+    assert.equal(f.fences.size, reason === 'model_config' ? 1 : 0); assert.deepEqual(f.stops, []);
+    assert.ok(f.events.some(e => reason === 'model_config'
+      ? e.event === 'reclaim_observation_unavailable'
+      : e.event === 'reclaim_cancelled' && e.reason === 'observation_error'));
   }
+});
+async function retainedConfigAssertion(Class) {
+  const f = fixture(Class), row = f.fence('model_config'), alerts = [];
+  f.deps.alert = event => alerts.push(event);
+  const observe = f.deps.observeGroup;
+  f.deps.observeGroup = () => { throw Object.assign(new Error('tmux unavailable'), { code: 'TMUX_UNAVAILABLE' }); };
+  for (let i = 0; i < 2; i++) {
+    await assert.rejects(f.lifecycle.advanceReclaim(row, f.context), { code: 'TMUX_UNAVAILABLE' });
+    assert.equal(f.fences.get('a'), row); assert.deepEqual(f.stops, []);
+  }
+  assert.equal(alerts.length, 1);
+  assert.equal(f.events.some(e => e.event === 'reclaim_cancelled'), false);
+  f.deps.observeGroup = observe;
+  assert.equal(await f.lifecycle.advanceReclaim(row, f.context), 'done');
+  assert.equal(f.fences.size, 0); assert.deepEqual(f.stops, ['run-a']);
+}
+test('model_config survives observation errors; reverting retention fails the same assertions', async () => {
+  await retainedConfigAssertion(SupervisorLifecycle);
+  const source = await fs.readFile(new URL('../supervisor-lifecycle.js', import.meta.url), 'utf8');
+  const anchor = "if (fence.reason === 'model_config') {\n        await this.warnReclaim(fence, cause);";
+  assert.equal(source.split(anchor).length, 2);
+  const mutated = source.replace(anchor, "if (false) {\n        await this.warnReclaim(fence, cause);")
+    .replace("'./launch-config-shape.js'", JSON.stringify(new URL('../launch-config-shape.js', import.meta.url).href));
+  const bad = await import(`data:text/javascript;base64,${Buffer.from(mutated).toString('base64')}`);
+  await assert.rejects(retainedConfigAssertion(bad.SupervisorLifecycle), { code: 'ERR_ASSERTION' });
 });
 test('observation cancellation cannot clear a replacement fence', async () => {
   const f = fixture(), row = f.fence();

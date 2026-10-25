@@ -29,7 +29,13 @@ const unavailable = name => Object.assign(new Error(`${name} is unavailable on t
 export async function startSupervisor({ env=process.env, log=message=>console.error(typeof message==='string'?message:JSON.stringify(message)), ...overrides }={}) {
   const root=zylosRoot(env), directory=path.join(root,'activity-monitor');
   fs.mkdirSync(directory,{recursive:true});
-  const db=overrides.db ?? defaultDb, readMode=overrides.readMode ?? readSessionMode, readConfig=overrides.readConfig ?? readZylosConfigOrThrow;
+  const db=overrides.db ?? defaultDb, readModeSource=overrides.readMode ?? readSessionMode, readConfig=overrides.readConfig ?? readZylosConfigOrThrow;
+  const normalizeMode=result=>{
+    if(result?.keyPresent===false && result.mode===null)return {...result,mode:'single',legacy:true};
+    if(!['single','multi'].includes(result?.mode))throw Object.assign(new Error('Session mode is unavailable'),{code:'CONFIG_UNREADABLE'});
+    return {...result,legacy:false};
+  };
+  const readMode=()=>{const result=readModeSource();return result?.then?result.then(normalizeMode):normalizeMode(result);};
   let supervisor,events,configuration,machineTasks,legacy,lifecycleConfiguration;
   const pendingAlerts=new Set(),pendingNotices=new Set();
   const sendAlert=overrides.sendAlert ?? ((target,message)=>new Promise((resolve,reject)=>{
@@ -61,10 +67,9 @@ export async function startSupervisor({ env=process.env, log=message=>console.er
   const healthIdentity=scene=>Number.isSafeInteger(scene.runtimePid)?{runtime:scene.runtime,session_id:scene.sessionId,claude_pid:scene.runtimePid}:null;
   supervisor=createSupervisor({env,zylosDir:root,db,scenes,readMode,requestStore:new RestartRequestStore({file:path.join(directory,'restart-requests.json')}),
     readConfiguration:async()=>{
-      const raw=await readConfig(), mode=(await readMode()).mode;
-      if(!mode)throw Object.assign(new Error('Session mode requires the migration owner'),{code:'CONFIG_UNREADABLE'});
+      const raw=await readConfig(), {mode,legacy}=await readMode();
       lifecycleConfiguration ??= parseSupervisorConfiguration(raw,env);
-      configuration={...raw,...lifecycleConfiguration,mode};
+      configuration={...raw,...lifecycleConfiguration,mode,legacy};
       try {
         const pool=await loadCoreModule('session-pool-config.js');
         if(typeof pool.resolveSessionPoolSize!=='function')throw unavailable('P04 pool configuration reader');
@@ -72,6 +77,7 @@ export async function startSupervisor({ env=process.env, log=message=>console.er
       }catch(error){if(!['ERR_MODULE_NOT_FOUND','DEPENDENCY_UNAVAILABLE'].includes(error.code))throw error;delete configuration.capacity;log({error:'DEPENDENCY_UNAVAILABLE',dependency:'P04 pool configuration reader',affected:'eviction'});}
       return configuration;
     },
+    advanceAutomaticMigration:async()=>{throw unavailable('P10 automatic migration owner');},
     resolveTargetRuntime:async group=>targetReader.resolveTargetRuntime(group==='origin' && (await readMode()).mode==='single'?null:group),
     checkAuth:runtime=>getSessionAdapter(runtime).checkAuth(),
     matchScreen:(runtime,screen)=>(runtime==='claude'?matchClaudeScreen:matchCodexScreen)(screen),
@@ -91,7 +97,7 @@ export async function startSupervisor({ env=process.env, log=message=>console.er
         identity:async()=>{const current=await scenes.observeGroup(scene.sessionGroup);return current.runId===scene.runId?healthIdentity(current):null;},
         quota:current=>readScopedHealthQuota({runDir:scene.runDir,runId:scene.runId,identity:current}),mutate:fn=>coordinator.serial(scene.runtime,fn),database:db.getDb(),zylosDir:root});
       pendingNotices.add(pending);pending.finally(()=>pendingNotices.delete(pending)).catch(log);
-    },alert,log,...overrides,scenes,afterRound:async()=>{await scenes.advance?.();try{await legacy.tick();}catch(error){log({error:error.code ?? error.message,phase:'legacy-status'});}await machineTasks.tick();await overrides.afterRound?.();},
+    },alert,log,...overrides,readMode,scenes,afterRound:async()=>{await scenes.advance?.();try{await legacy.tick();}catch(error){log({error:error.code ?? error.message,phase:'legacy-status'});}await machineTasks.tick();await overrides.afterRound?.();},
   });
   legacy=overrides.legacyStatus ?? new SupervisorLegacyStatus({env,connectionOptions:baseScenes.connectionOptions ?? {},readHealth:runtime=>supervisor.health.store(runtime).read(),log});
   machineTasks=overrides.machineTasks ?? new SupervisorMachineTasks({zylosDir:root,readMode,readConfig,readOriginState:async()=>scenes.observeGroup((await readMode()).mode==='single'?null:'origin'),readHealth:runtime=>supervisor.health.store(runtime).read(),log});

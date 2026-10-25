@@ -85,3 +85,34 @@ test('T02 entry freezes first-failure notice synchronously with correct single/m
     assert.equal(stored.hook.groups.origin.pendingNotice.endpoint,'frozen');
   }
 });
+
+// P05 T01 / F1: a missing key is a readable legacy instance, not corrupt F1.
+test('T01 legacy F1 opens actual entry as single and reports unavailable automatic migration separately', {timeout:15000}, async t=>{
+  const root=prepare(t,{runtime:'claude'}),w=launch(t,root);const ready=await w.next();
+  assert.equal(ready.admissionOpen,true);assert.equal(ready.configurationError,undefined);
+  assert.equal(ready.mode,'single');assert.equal(ready.legacy,true);
+  assert.ok(ready.logs.some(row=>row?.error==='DEPENDENCY_UNAVAILABLE' && row.phase==='automatic-migration'));
+  assert.equal((await request(root,{version:1,type:'restart_all',requestId:'legacy',reason:'upgrade'})).code,'single_mode');
+  await stop(w);
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(root,'.zylos/config.json'),'utf8')),{runtime:'claude'});
+  const explicit=prepare(t,{session_mode:'single',runtime:'claude'}),e=launch(t,explicit);const explicitReady=await e.next();
+  assert.equal(explicitReady.admissionOpen,true);assert.equal(explicitReady.legacy,false);
+  assert.equal(explicitReady.logs.some(row=>row?.phase==='automatic-migration'),false);await stop(e);
+});
+
+test('T01 legacy entry regression assertion rejects actual-source missing-key throw mutant', {timeout:15000}, async t=>{
+  const root=prepare(t,{runtime:'claude'}),skills=path.join(root,'mutant-skills');
+  fs.mkdirSync(skills);
+  fs.cpSync(path.join(repository,'skills/activity-monitor'),path.join(skills,'activity-monitor'),{
+    recursive:true,filter:file=>!['node_modules','__tests__'].includes(path.basename(file)),
+  });
+  for(const name of ['comm-bridge','zylos-memory'])fs.symlinkSync(path.join(repository,'skills',name),path.join(skills,name),'dir');
+  const mutatedEntry=path.join(skills,'activity-monitor/scripts/supervisor-main.js');
+  const original=fs.readFileSync(mutatedEntry,'utf8');
+  const target="if(result?.keyPresent===false && result.mode===null)return {...result,mode:'single',legacy:true};";
+  assert.equal(original.split(target).length,2,'mutation must target the actual missing-key branch exactly once');
+  fs.writeFileSync(mutatedEntry,original.replace(target,"if(result?.keyPresent===false && result.mode===null)throw Object.assign(new Error('Session mode requires the migration owner'),{code:'CONFIG_UNREADABLE'});"));
+  const w=launch(t,root,{entryFile:mutatedEntry});const ready=await w.next();
+  assert.throws(()=>assert.equal(ready.admissionOpen,true),{code:'ERR_ASSERTION'});
+  assert.equal(ready.configurationError,'CONFIG_UNREADABLE');await stop(w);
+});

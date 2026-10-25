@@ -107,6 +107,11 @@ export class SupervisorLifecycle {
   async reclaimObservation(fence, unfenced, operation) {
     try { return await operation(); }
     catch (cause) {
+      // Accepted configuration handoffs survive transient observation errors.
+      if (fence.reason === 'model_config') {
+        await this.warnReclaim(fence, cause);
+        throw cause;
+      }
       // A previous stop with an unknown outcome still requires confirmation.
       // Otherwise cancel only our exact fence; no stop was issued this round.
       if (this.reclaimStopPending.has(JSON.stringify([fence.sessionGroup, fence.runId, fence.reason]))) throw cause;

@@ -13,12 +13,14 @@ import { createSupervisorConnectionHandler } from './router-socket.js';
 const { appendEvent, rotateEventLog } = await loadCoreModule('event-log.js');
 const { supervisorDiagnosticPath, poolMetricsPath } = await loadCoreModule('session-group-paths.js');
 
+export const AUTH_DEMAND_RETRY_MS = 60000;
+
 /** Compose observation, runtime health and the single lifecycle queue. */
 export function createSupervisor(deps) {
   const { db, scenes, readConfiguration, readMode, readSyncMarker, prompts, now=Date.now, log=()=>{} }=deps;
   const activities=new Map();let configuration;let lastMetrics=null;let lastMaintenance=0;
   let observer,router,admission,lifecycle,stopping=false,stopPromise;
-  const authChecks=new Set();
+  const authChecks=new Set(),authFlights=new Map(),authRetryAt=new Map();
   const reportError=(error,context={})=>log({error:error.code || error.message,...context});
   const diagnostic=event=>{try{appendEvent(supervisorDiagnosticPath(deps.env),{v:1,ts:now(),session_group:event.sessionGroup ?? null,conversation_id:null,decision:event.decision ?? event.event,reason:event.reason ?? '',...event});}catch(error){reportError(error,{phase:'diagnostic'});}};
   const readActivity=scene=>{
@@ -39,14 +41,23 @@ export function createSupervisor(deps) {
     if(!current.present || !current.ready || current.runId!==scene.runId || current.runtime!==scene.runtime)return false;
     await action(current);return true;
   });
-  const checkAuth=runtime=>{
+  const checkAuth=(runtime,{background=false}={})=>{
     if(stopping)return Promise.resolve({status:'uncertain',reason:'supervisor_stopping'});
-    const task=(async()=>{
+    // Router, pane checks and pending demand share one actual adapter call.
+    if(authFlights.has(runtime))return authFlights.get(runtime);
+    // Real incoming messages may retry immediately (IB-33); the 1 s loop
+    // must not turn retained pending demand into repeated expensive CLI pings.
+    if(background && now()<(authRetryAt.get(runtime) ?? 0))return Promise.resolve({status:'uncertain',reason:'auth_retry_backoff'});
+    const task=Promise.resolve().then(async()=>{
       const result=await deps.checkAuth(runtime);
       if(!stopping && (result.status==='success' || result.result==='success'))await health.beginAuthRecovery(runtime,result,await listScenes());
       return result;
-    })();
-    authChecks.add(task);task.finally(()=>authChecks.delete(task)).catch(()=>{});return task;
+    });
+    authFlights.set(runtime,task);authChecks.add(task);
+    task.finally(()=>{
+      authRetryAt.set(runtime,now()+AUTH_DEMAND_RETRY_MS);
+      authFlights.delete(runtime);authChecks.delete(task);
+    }).catch(()=>{});return task;
   };
   observer=new SupervisorHealthObserver({coordinator:health,listScenes,readIdentity:group=>scenes.observeGroup(group),readState:scene=>({...readActivity(scene),healthIdentity:scene.healthIdentity,contextSwitches:scene.contextSwitches}),
     readScreen:scene=>scenes.readScreen(scene),matchScreen:deps.matchScreen,insertControl:db.insertControl,getControlById:db.getControlById,
@@ -75,6 +86,7 @@ export function createSupervisor(deps) {
       for(const runtime of ['claude','codex'])await health.restore(runtime);
       router.clearLegacyCache(path.join(deps.zylosDir,'activity-monitor','message-router-probe-cache.json'));await deps.restoreTransition?.();
     },openAdmission:()=>admission.openEntry(),reportError,getModeTransition:db.getModeTransition,listDrainFences:db.listDrainFences,
+    advanceAutomaticMigration:context=>deps.advanceAutomaticMigration?.(context),
     advanceTransition:async transition=>{if(deps.advanceTransition)await deps.advanceTransition(transition);else reportError(Object.assign(new Error('Mode transition owner unavailable'),{code:'DEPENDENCY_UNAVAILABLE'}),{phase:'transition'});},
     lifecycleSerial:operation=>admission.serialize(operation),checkManualFences:context=>lifecycle.checkManualFences(context),...lifecycleMethods,observe:listScenes,
     observeExits:current=>exits.advance(current,(scenes.takeServerExits?.() ?? []).flatMap(item=>item.scenes)),
@@ -119,7 +131,7 @@ export function createSupervisor(deps) {
         if(health.store(runtime).read().health!=='auth_failed')continue;
         if(!health.authRecoveries.has(runtime)) {
           if(!demand.has(runtime))continue;
-          const result=await checkAuth(runtime);
+          const result=await checkAuth(runtime,{background:true});
           if(result.status!=='success')continue;
         }
         const targets=health.authTargets(runtime);
