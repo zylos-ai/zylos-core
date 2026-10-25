@@ -3,12 +3,34 @@ import { test } from 'node:test';
 import { collectStatus } from '../status-view.js';
 import { showStatus } from '../../commands/service.js';
 import { collectHostStatus } from '../../commands/service.js';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 
 const absent = { identity: { present: false }, status: { valid: false, reason: 'not_running', sampledAt: null } };
 const live = (ready = true, reason = null) => ({ identity: { present: true, ready, runtime: 'codex', runId: 'run', sessionId: ready ? 'session' : null },
   status: { valid: ready && !reason, reason, sampledAt: reason === 'starting' ? null : 1000, value: { state: 'idle', idle_seconds: 4 } } });
 const fixture = (overrides = {}) => ({ mode: () => ({ mode: 'multi' }), list: async () => [{ sessionGroup: 'b' }, { sessionGroup: 'a' }, { sessionGroup: 'origin' }],
   session: async () => live(), health: () => ({ missing: true }), now: () => 2000, resolveRoot: () => {}, ...overrides });
+
+test('review P1: real text status uses the default PM2 collector without crashing', { timeout: 10000 }, t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'status-text-cli-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const zylos = path.join(root, 'zylos');
+  fs.mkdirSync(zylos);
+  fs.writeFileSync(path.join(root, 'pm2'), `#!${process.execPath}\nif(process.argv.slice(2).join(' ')!=='jlist')process.exit(71);console.log(JSON.stringify([{name:'fixture-scheduler',pm2_env:{status:'online'}}]));\n`, { mode: 0o755 });
+  const result = spawnSync(process.execPath, [new URL('../../zylos.js', import.meta.url).pathname, 'status'], {
+    env: { HOME: root, ZYLOS_DIR: zylos, PATH: root, NO_COLOR: '1' },
+    encoding: 'utf8', timeout: 5000,
+  });
+  assert.ifError(result.error);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Session mode: single/);
+  assert.match(result.stdout, /fixture-scheduler: online/);
+  assert.match(result.stdout, /Disk: \d+ GiB available \/ \d+ GiB total/);
+  assert.doesNotMatch(result.stderr, /ReferenceError/);
+});
 
 test('IF-56b single/null uses only null reader and preserves absent/running states', async () => {
   for (const mode of ['single', null]) {

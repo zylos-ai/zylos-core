@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { executeAuth } from '../../commands/auth.js';
 
-test('IF-47 auth rejects invalid arguments and missing CLI without native writes', async () => {
+test('IF-47 auth rejects invalid arguments and missing CLI without native writes', { timeout: 5000 }, async () => {
   let spawned = false;
   const deps = { exists: () => false, spawn: () => { spawned = true; } };
   for (const [args, code] of [[[], 'INVALID_ARGUMENT'], [['other'], 'RUNTIME_UNSUPPORTED'], [['codex', '--bad'], 'INVALID_ARGUMENT'], [['codex'], 'RUNTIME_NOT_INSTALLED']]) {
@@ -12,7 +12,7 @@ test('IF-47 auth rejects invalid arguments and missing CLI without native writes
   assert.equal(spawned, false);
 });
 
-test('IF-47 native auth stdio is interactive with stdout reserved; only confirmed auth succeeds', async () => {
+test('IF-47 native auth stdio is interactive with stdout reserved; only confirmed auth succeeds', { timeout: 5000 }, async () => {
   for (const runtime of ['claude', 'codex']) {
     for (const status of ['success', 'failure', 'uncertain']) {
       let calls = 0;
@@ -30,17 +30,21 @@ test('IF-47 native auth stdio is interactive with stdout reserved; only confirme
   }
 });
 
-test('review P2: Codex device-code option maps to native device auth without changing browser default', async () => {
+test('review P2: Codex device-code option maps to native device auth without changing browser default', { timeout: 5000 }, async () => {
   for (const flags of [[], ['--device-code']]) {
     const result = await executeAuth(['codex', ...flags, '--json'], { exists: () => true,
       spawn: (name, argv) => { assert.equal(name, 'codex'); assert.deepEqual(argv, ['login', ...(flags.length ? ['--device-auth'] : [])]); return { status: 0 }; },
       adapter: () => ({ checkAuth: () => ({ status: 'success' }) }) });
     assert.equal(result.ok, true);
   }
-  assert.equal((await executeAuth(['claude', '--device-code'])).error.code, 'INVALID_ARGUMENT');
+  assert.equal((await executeAuth(['claude', '--device-code'], {
+    exists: () => assert.fail('invalid flags must be rejected before CLI lookup'),
+    spawn: () => assert.fail('invalid flags must not start native auth'),
+    adapter: () => assert.fail('invalid flags must not probe auth'),
+  })).error.code, 'INVALID_ARGUMENT');
 });
 
-test('IF-47 native cancellation/failure preserves credential uncertainty and never probes success', async () => {
+test('IF-47 native cancellation/failure preserves credential uncertainty and never probes success', { timeout: 5000 }, async () => {
   for (const native of [{ status: 130 }, { signal: 'SIGINT' }, { status: 1 }, { error: new Error('spawn') }]) {
     const result = await executeAuth(['codex'], { exists: () => true, spawn: () => native,
       adapter: () => { throw new Error('must not probe'); } });

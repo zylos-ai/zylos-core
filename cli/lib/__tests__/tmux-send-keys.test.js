@@ -79,7 +79,7 @@ test('send failure propagates the original child-process error', () => {
 test('doctor text and JSON report enabled, legacy and unknown with reason', () => {
   const source = fs.readFileSync(new URL('../../commands/doctor.js', import.meta.url), 'utf8');
   let output;
-  const context = vm.createContext({ ACTIVE_RUNTIME: 'codex', API_HOST: 'example.test',
+  const context = vm.createContext({ ACTIVE_RUNTIME: 'codex', AGENT_DISPLAY: 'Codex', API_HOST: 'example.test',
     describeTmuxSendKeys, dim: s => s, red: s => s, logToFile: () => {},
     displayCheckGroup: (name, status, checks) => { output = checks; } });
   vm.runInContext(source.slice(source.indexOf('function buildDiagnosticJson('), source.indexOf('function displayAiGroup(')), context);
@@ -94,6 +94,8 @@ test('doctor text and JSON report enabled, legacy and unknown with reason', () =
     assert.equal(tmux.versionReason, capability.reason);
     context.displaySystemGroup(diag, json.groups.system);
     assert.equal(output[0], describeTmuxSendKeys(capability));
+    const missingCli = context.buildDiagnosticJson({ ...diag, ai: { ...diag.ai, cli: { installed: false } } }, { success: false });
+    assert.equal(missingCli.issues.find(issue => issue.id === 'cli_missing').label, 'Codex CLI not installed');
   }
 });
 test('dispatcher keystroke control executes shared gate and logs failure metadata', async () => {

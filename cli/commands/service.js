@@ -3,7 +3,7 @@
  */
 
 import { savePm2ProcessList } from '../lib/pm2-save.js';
-import { execSync, spawnSync, spawn } from 'node:child_process';
+import { execSync, execFileSync, spawnSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
