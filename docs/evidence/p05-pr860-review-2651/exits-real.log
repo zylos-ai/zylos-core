@@ -1,0 +1,11 @@
+Running 1 Node test files
+✔ runtime SIGKILL removes only its exited managed session and records crash (461.344946ms)
+✔ actual SQLite fence suppresses crash classification after runtime SIGKILL (154.420621ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 2
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 692.830459

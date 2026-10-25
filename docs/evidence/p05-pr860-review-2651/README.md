@@ -7,3 +7,5 @@
 Focused official isolated Node runner: 4 files, 61 passed, no failures/skips. Run `node scripts/run-node-tests.js skills/activity-monitor/scripts/__tests__/supervisor-loop.test.js skills/activity-monitor/scripts/__tests__/supervisor-lifecycle.test.js skills/activity-monitor/scripts/__tests__/supervisor-exits.test.js skills/activity-monitor/scripts/__tests__/supervisor-exits.integration.test.js`.
 
 External controls: `python3 run-mutants.py /path/to/checkout /path/to/disposable-output`. Mutations live only in disposable archived copies; three variants all fail the relevant positive tests. Independent selection and five-version matrix are recorded separately after parent integration.
+
+After A integration: the 80-file independent selection passed (counts in selected.log). The B-only sessionId execution fixture no longer writes the removed F9 expectedSessionId field. Five-version matrix follows on this unchanged source.

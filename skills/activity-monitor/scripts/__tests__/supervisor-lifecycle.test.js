@@ -458,7 +458,7 @@ test('failed scene snapshots preserve upgrade intent and block lifecycle produce
 // B4: execution identifies the run only; sessionId is an admission check.
 test('manual execution ignores a later sessionId change and updates round snapshot after stop', async () => {
   const f = fixture(); f.scenes = [scene('origin', { sessionId: 'new-session' })];
-  f.requests = [{ reason: 'manual_restart', requestId: 'manual', mode: 'multi', expectedRunId: 'run-origin', expectedSessionId: 'accepted-session' }];
+  f.requests = [{ reason: 'manual_restart', requestId: 'manual', mode: 'multi', expectedRunId: 'run-origin' }];
   const context = f.context;
   await f.lifecycle.advanceManual(context);
   assert.deepEqual(f.stops, ['run-origin']); assert.equal(context.scenes[0].present, false);

@@ -1,0 +1,7 @@
+{
+  "skills/activity-monitor/scripts/supervisor-loop.js": "e66f6db7cbde0e944c9cca0521f910bcd57ed9e8952bed2de98e2973457dc003",
+  "skills/activity-monitor/scripts/supervisor-exits.js": "dfcfef2253ac1cefb86998a693e0b9fc5df7e9cf7120d50406d355b623f5ccb6",
+  "skills/activity-monitor/scripts/__tests__/supervisor-loop.test.js": "49516a0f1f542ce465b670207262d2f9c6f07fc5960be1859e4ac2bf5fa1f225",
+  "skills/activity-monitor/scripts/__tests__/supervisor-exits.integration.test.js": "85915298b757a533b583b1e66601adb0d0531a64138bb9ff5c3c0125590e692c",
+  "skills/activity-monitor/scripts/__tests__/supervisor-lifecycle.test.js": "eee08b220b629302c7fc6545356589788a3c555704da31636e09f58f0763e2fe"
+}
