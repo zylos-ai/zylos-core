@@ -19,4 +19,3 @@ No production tmux command, format, parsing, observation or stop code changed in
 - External split-write variant detected in all 10 runs by the 100 KiB two-writer test with a common IPC start barrier. Mutations exist only in disposable copies; source/test hashes stayed unchanged.
 
 Reproduce using the file selection in a-selection.json with node scripts/run-node-tests.js. For external controls run `python3 run-event-log-mutants.py /path/to/checkout /path/to/disposable-evidence`; the old-source variant is pinned to the pre-fix commit. Tests never rewrite product source. Exact logs are retained alongside this file.
-
