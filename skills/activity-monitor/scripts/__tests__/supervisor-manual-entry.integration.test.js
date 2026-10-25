@@ -23,7 +23,7 @@ async function scenario(t,mode,mutant=''){
  const first=await launch(t,f,mode,'commit');await first.command('release');
  const pending=send(request);assert.deepEqual(await first.next(),{barrier:'committed'});await first.kill();assert.deepEqual(await pending,{kind:'no_reply',sent:true});
  const file=path.join(f.root,'activity-monitor/restart-requests.json'),record=JSON.parse(fs.readFileSync(file,'utf8'))[0];
- assert.equal(record.expectedRunId,'run-1');assert.equal(record.mode,mode);assert.equal(record.expectedSessionId,'session-1');assert.equal(Object.hasOwn(record,'tmuxTarget'),false);
+ assert.equal(record.expectedRunId,'run-1');assert.equal(record.mode,mode);assert.equal(Object.hasOwn(record,'expectedSessionId'),false);assert.equal(Object.hasOwn(record,'tmuxTarget'),false);
  f.tmux('rename-session','-t','=zylos-group-origin','fixture-original');
  f.tmux('new-session','-d','-s','zylos-group-origin','-e','ZYLOS_RUN_ID=replacement','-e','ZYLOS_MODEL_CONFIG={"runtime":"claude","mode":"default"}',...(mode==='multi'?['-e','ZYLOS_SESSION_GROUP=origin']:[]),path.join(f.root,'claude'),'120');
  const second=await launch(t,f,mode,mutant);
