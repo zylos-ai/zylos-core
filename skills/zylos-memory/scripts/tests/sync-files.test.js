@@ -16,7 +16,7 @@ async function fixture(t, group = 'telegram:test') {
   const scope = await memoryScope(env), kind = group === null ? 'global' : 'group';
   fs.mkdirSync(scope.memoryDir, { recursive: true }); fs.mkdirSync(scope.runDir, { recursive: true });
   const token = await acquire({ env, kind }, { currentRunId: async () => env.ZYLOS_RUN_ID });
-  const settings = { token, env }, warnings = [], deps = { currentRunId: async () => env.ZYLOS_RUN_ID, warning: value => warnings.push(value) };
+  const settings = { token, env }, warnings = [], deps = { warning: value => warnings.push(value) };
   const state = path.join(scope.memoryDir, 'state.md'), temporary = `${state}.${token}.tmp`;
   const skeleton = (ids = [], extra = {}) => renderStateSkeleton({ scope: scope.scope, syncedAt: '2026-10-19T05:30:02Z', absorbed: ids.length ? { runId: 'run-1', followUp: 'group', rows: ids.map(id => ({ id, timestamp: '2026-10-19 05:30:02', channel: 'telegram', endpointId: 'x', content: id === 2 ? '汉'.repeat(400) + '\nend' : `text ${id}` })) } : null, ...extra });
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));

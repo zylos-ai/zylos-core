@@ -14,7 +14,6 @@ function readOptional(file) {
 function names(dir) {
   try { return fs.readdirSync(dir); } catch (error) { if (error.code === 'ENOENT') return []; throw error; }
 }
-const locked = (settings, body, deps) => guard(settings, body, deps);
 
 export function extractAbsorbedBlock(text) {
   const all = lines(text), pending = all.findIndex(line => line.text === '## Pending');
@@ -62,7 +61,7 @@ function deleteSegments(dir, ids, warning = warn, tolerateFailure = false) {
 }
 
 export async function cleanup(settings = {}, deps = {}) {
-  return locked(settings, ({ memoryDir, scope }) => {
+  return guard(settings, ({ memoryDir, scope }) => {
     const header = parseStateHeader(readOptional(path.join(memoryDir, 'state.md')), { scope });
     if (header.valid) { deleteSegments(memoryDir, header.inboxCommitted, deps.warning); }
     else (deps.warning || warn)('Invalid state header; all inbox segments retained');
@@ -71,10 +70,10 @@ export async function cleanup(settings = {}, deps = {}) {
         fs.unlinkSync(path.join(memoryDir, name));
       }
     }
-  }, deps);
+  });
 }
 export async function rotate(settings = {}, deps = {}) {
-  return locked(settings, ({ memoryDir }) => {
+  return guard(settings, ({ memoryDir }) => {
     const inbox = path.join(memoryDir, 'inbox.md');
     let stat;
     try { stat = fs.statSync(inbox); } catch (error) { if (error.code === 'ENOENT') return null; throw error; }
@@ -84,7 +83,7 @@ export async function rotate(settings = {}, deps = {}) {
     while (fs.existsSync(path.join(memoryDir, `inbox.${chosen}.md`))) chosen = `${id}-${++suffix}`;
     fs.renameSync(inbox, path.join(memoryDir, `inbox.${chosen}.md`));
     return chosen;
-  }, deps);
+  });
 }
 export async function list({ env = process.env } = {}) {
   const { memoryDir, scope } = await memoryScope(env);
@@ -93,13 +92,13 @@ export async function list({ env = process.env } = {}) {
   return names(memoryDir).map(name => segment.exec(name)?.[1]).filter(id => id && !committed.has(id)).sort();
 }
 export async function checkpoint({ end, summary, noContent = false, ...settings }, deps = {}) {
-  return locked(settings, async ({ scope }) => {
+  return guard(settings, async ({ scope }) => {
     const database = deps.database || await import('../../comm-bridge/scripts/c4-db.js');
     return database.createCheckpoint(scope, end, noContent ? null : summary, { noContent });
-  }, deps);
+  });
 }
 export async function commit({ input, ...settings }, deps = {}) {
-  return locked(settings, ({ memoryDir, scope }) => {
+  return guard(settings, ({ memoryDir, scope }) => {
     const payload = typeof input === 'string' ? parseJson(input) : input;
     if (!payload || Array.isArray(payload) || typeof payload !== 'object' || !Array.isArray(payload.followedUpIds) || payload.followedUpIds.some(id => !Number.isSafeInteger(id) || id <= 0)) throw inputError('Expected {followedUpIds:[positive integer IDs]}');
     const officialPath = path.join(memoryDir, 'state.md'), temporaryPath = `${officialPath}.${settings.token}.tmp`;
@@ -115,7 +114,7 @@ export async function commit({ input, ...settings }, deps = {}) {
     // Publication is complete. A failed delete cannot roll back the state.
     deleteSegments(memoryDir, header.inboxCommitted, deps.warning, true);
     return { committed: true, inboxCommitted: header.inboxCommitted };
-  }, deps);
+  });
 }
 
 if (isMain(import.meta.url)) await runCli(async () => {
